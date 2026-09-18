@@ -66,7 +66,10 @@ TEST_F(ShilVmExecuteTest, RunsCachedAddWithoutUnderclock)
 	EXPECT_EQ(ctx->r[0], 2u);
 }
 
-TEST_F(ShilVmExecuteTest, PrefetchesStaticSuccessor)
+// Successors are compiled when they are first reached, never speculatively:
+// decoding a block the guest has not executed yet can raise an SH4 exception
+// for code that may not even be written to RAM at that point.
+TEST_F(ShilVmExecuteTest, CompilesStaticSuccessorOnlyWhenReached)
 {
 	const u32 next = START_PC + 8;
 	ctx->pc = START_PC;
@@ -80,14 +83,23 @@ TEST_F(ShilVmExecuteTest, PrefetchesStaticSuccessor)
 	ASSERT_TRUE(shilVmStepBlock());
 	EXPECT_EQ(ctx->r[0], 1u);
 	EXPECT_EQ(ctx->pc, next);
-	EXPECT_NE(bm_GetIrBlock(next), nullptr);
+	EXPECT_EQ(bm_GetIrBlock(next), nullptr);
 	const u32 afterFirst = shilVmCompileCount();
-	EXPECT_GE(afterFirst, 2u);
+	EXPECT_EQ(afterFirst, 1u);
 
 	ctx->cycle_counter = SH4_TIMESLICE;
 	ASSERT_TRUE(shilVmStepBlock());
 	EXPECT_EQ(ctx->r[0], 2u);
-	EXPECT_EQ(shilVmCompileCount(), afterFirst);
+	EXPECT_NE(bm_GetIrBlock(next), nullptr);
+	const u32 afterSecond = shilVmCompileCount();
+	EXPECT_EQ(afterSecond, 2u);
+
+	// The successor is now cached, so entering it again must not recompile.
+	ctx->pc = next;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_EQ(ctx->r[0], 3u);
+	EXPECT_EQ(shilVmCompileCount(), afterSecond);
 }
 
 TEST_F(ShilVmExecuteTest, SamePageDataWriteDoesNotRecompile)

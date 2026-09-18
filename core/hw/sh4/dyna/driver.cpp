@@ -170,44 +170,6 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 
 static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures);
 
-#if FEAT_SHREC == DYNAREC_IR
-static thread_local int irPrefetchDepth;
-static constexpr int IR_PREFETCH_DEPTH = 8;
-
-static void irPrefetch(u32 pc)
-{
-	if (pc == NullAddress || irPrefetchDepth >= IR_PREFETCH_DEPTH)
-		return;
-	if (bm_GetIrBlock(pc) != nullptr)
-		return;
-	const u32 saved = Sh4cntx.pc;
-	Sh4cntx.pc = pc;
-	irPrefetchDepth++;
-	compilePC(0);
-	irPrefetchDepth--;
-	Sh4cntx.pc = saved;
-}
-
-static void irPrefetchSuccessors(RuntimeBlockInfo *rbi)
-{
-	switch (BET_GET_CLS(rbi->BlockType))
-	{
-	case BET_CLS_Static:
-		if (rbi->BlockType == BET_StaticIntr)
-			irPrefetch(rbi->NextBlock);
-		else
-			irPrefetch(rbi->BranchBlock);
-		break;
-	case BET_CLS_COND:
-		irPrefetch(rbi->NextBlock);
-		irPrefetch(rbi->BranchBlock);
-		break;
-	default:
-		break;
-	}
-}
-#endif
-
 //Called to compile code @pc
 static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures)
 {
@@ -248,11 +210,6 @@ static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures)
 	verify(rbi->code != nullptr);
 
 	bm_AddBlock(rbi);
-
-#if FEAT_SHREC == DYNAREC_IR
-	if (irPrefetchDepth == 0)
-		irPrefetchSuccessors(rbi);
-#endif
 
 #if FEAT_SHREC == DYNAREC_JIT
 	codeBuffer.useTempBuffer(false);
