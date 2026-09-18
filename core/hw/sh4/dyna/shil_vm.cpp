@@ -152,31 +152,19 @@ static void writeMem(Sh4Context& ctx, u32 addr, u32 size, u32 value, u32 pc)
 	}
 }
 
-static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell& op)
+// Everything outside the hot set in executeCell. Kept out of line so that it
+// does not share instruction cache with the ops that actually run.
+__attribute__((noinline))
+static void executeCellRare(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell& op)
 {
 	switch (op.op)
 	{
-	case shop_mov32:
-	case vmop_mov_imm:
-		storeI(ctx, op.rd, load1(ctx, op));
-		break;
-
 	case shop_mov64:
 	{
 		u32 *src = GetRegPtr(ctx, op.rs1);
 		u32 *dst = GetRegPtr(ctx, op.rd);
 		dst[0] = src[0];
 		dst[1] = src[1];
-		break;
-	}
-
-	case shop_jdyn:
-	case shop_jcond:
-	{
-		u32 value = load1(ctx, op);
-		if (op.rs2Imm() || op.rs2 != SHIL_VM_NO_REG)
-			value += load2(ctx, op);
-		storeI(ctx, op.rd, value);
 		break;
 	}
 
@@ -188,52 +176,6 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 		if (ctx.sr.FD == 1 && OpDesc[opcode]->IsFloatingPoint())
 			throw SH4ThrownException(block->vaddr + op.guest_offs, Sh4Ex_FpuDisabled);
 		OpDesc[opcode]->oph(&ctx, opcode);
-		break;
-	}
-
-	case shop_readm:
-	case vmop_load:
-	{
-		const u32 addr = effectiveAddr(ctx, op);
-		const u32 pc = block->vaddr + op.guest_offs + 2;
-		if (op.size == 8)
-		{
-			u64 value;
-			if (mmu_enabled() || !shilVmRamRead64(s_ram, s_ramSize, s_ramMask, addr, &value))
-			{
-				ctx.pc = pc;
-				value = ReadMem64(addr);
-			}
-			u32 *dst = GetRegPtr(ctx, op.rd);
-			dst[0] = (u32)value;
-			dst[1] = (u32)(value >> 32);
-		}
-		else
-		{
-			storeI(ctx, op.rd, readMem(ctx, addr, op.size, pc));
-		}
-		break;
-	}
-
-	case shop_writem:
-	case vmop_store:
-	{
-		const u32 addr = effectiveAddr(ctx, op);
-		const u32 pc = block->vaddr + op.guest_offs + 2;
-		if (op.size == 8)
-		{
-			u32 *src = GetRegPtr(ctx, op.rs2);
-			u64 value = (u64)src[0] | ((u64)src[1] << 32);
-			if (mmu_enabled() || !shilVmRamWrite64(s_ram, s_ramSize, s_ramMask, addr, value))
-			{
-				ctx.pc = pc;
-				WriteMem64(addr, value);
-			}
-		}
-		else
-		{
-			writeMem(ctx, addr, op.size, load2(ctx, op), pc);
-		}
 		break;
 	}
 
@@ -258,14 +200,6 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 		break;
 	case shop_not:
 		storeI(ctx, op.rd, shil_opcl_not::f1::impl(load1(ctx, op)));
-		break;
-	case shop_add:
-	case vmop_add_imm:
-		storeI(ctx, op.rd, shil_opcl_add::f1::impl(load1(ctx, op), load2(ctx, op)));
-		break;
-	case shop_sub:
-	case vmop_sub_imm:
-		storeI(ctx, op.rd, shil_opcl_sub::f1::impl(load1(ctx, op), load2(ctx, op)));
 		break;
 	case shop_neg:
 		storeI(ctx, op.rd, shil_opcl_neg::f1::impl(load1(ctx, op)));
@@ -358,23 +292,8 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 	case shop_pref:
 		shil_opcl_pref::f1::impl(load1(ctx, op), &ctx);
 		break;
-	case shop_test:
-		storeI(ctx, op.rd, shil_opcl_test::f1::impl(load1(ctx, op), load2(ctx, op)));
-		break;
-	case shop_seteq:
-		storeI(ctx, op.rd, shil_opcl_seteq::f1::impl(load1(ctx, op), load2(ctx, op)));
-		break;
-	case shop_setge:
-		storeI(ctx, op.rd, shil_opcl_setge::f1::impl(load1(ctx, op), load2(ctx, op)));
-		break;
 	case shop_setgt:
 		storeI(ctx, op.rd, shil_opcl_setgt::f1::impl(load1(ctx, op), load2(ctx, op)));
-		break;
-	case shop_setae:
-		storeI(ctx, op.rd, shil_opcl_setae::f1::impl(load1(ctx, op), load2(ctx, op)));
-		break;
-	case shop_setab:
-		storeI(ctx, op.rd, shil_opcl_setab::f1::impl(load1(ctx, op), load2(ctx, op)));
 		break;
 	case shop_setpeq:
 		storeI(ctx, op.rd, shil_opcl_setpeq::f1::impl(load1(ctx, op), load2(ctx, op)));
@@ -445,6 +364,104 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 	default:
 		ERROR_LOG(DYNAREC, "SHIL VM unhandled op %d", op.op);
 		die("Unhandled SHIL opcode");
+		break;
+	}
+}
+
+// Thirteen opcodes account for over 95% of everything the VM executes on a
+// real game, and the dispatch loop is instruction-fetch bound - forcing extra
+// code into it measurably slows it down. So only those live here, and the
+// remaining ~90 sit behind a call that is taken a few percent of the time.
+static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell& op)
+{
+	switch (op.op)
+	{
+	case shop_readm:
+	case vmop_load:
+	{
+		const u32 addr = effectiveAddr(ctx, op);
+		const u32 pc = block->vaddr + op.guest_offs + 2;
+		if (op.size == 8)
+		{
+			u64 value;
+			if (mmu_enabled() || !shilVmRamRead64(s_ram, s_ramSize, s_ramMask, addr, &value))
+			{
+				ctx.pc = pc;
+				value = ReadMem64(addr);
+			}
+			u32 *dst = GetRegPtr(ctx, op.rd);
+			dst[0] = (u32)value;
+			dst[1] = (u32)(value >> 32);
+		}
+		else
+		{
+			storeI(ctx, op.rd, readMem(ctx, addr, op.size, pc));
+		}
+		break;
+	}
+
+	case shop_writem:
+	case vmop_store:
+	{
+		const u32 addr = effectiveAddr(ctx, op);
+		const u32 pc = block->vaddr + op.guest_offs + 2;
+		if (op.size == 8)
+		{
+			u32 *src = GetRegPtr(ctx, op.rs2);
+			u64 value = (u64)src[0] | ((u64)src[1] << 32);
+			if (mmu_enabled() || !shilVmRamWrite64(s_ram, s_ramSize, s_ramMask, addr, value))
+			{
+				ctx.pc = pc;
+				WriteMem64(addr, value);
+			}
+		}
+		else
+		{
+			writeMem(ctx, addr, op.size, load2(ctx, op), pc);
+		}
+		break;
+	}
+
+	case shop_jdyn:
+	case shop_jcond:
+	{
+		u32 value = load1(ctx, op);
+		if (op.rs2Imm() || op.rs2 != SHIL_VM_NO_REG)
+			value += load2(ctx, op);
+		storeI(ctx, op.rd, value);
+		break;
+	}
+
+	case shop_mov32:
+	case vmop_mov_imm:
+		storeI(ctx, op.rd, load1(ctx, op));
+		break;
+	case shop_add:
+	case vmop_add_imm:
+		storeI(ctx, op.rd, shil_opcl_add::f1::impl(load1(ctx, op), load2(ctx, op)));
+		break;
+	case shop_sub:
+	case vmop_sub_imm:
+		storeI(ctx, op.rd, shil_opcl_sub::f1::impl(load1(ctx, op), load2(ctx, op)));
+		break;
+	case shop_test:
+		storeI(ctx, op.rd, shil_opcl_test::f1::impl(load1(ctx, op), load2(ctx, op)));
+		break;
+	case shop_seteq:
+		storeI(ctx, op.rd, shil_opcl_seteq::f1::impl(load1(ctx, op), load2(ctx, op)));
+		break;
+	case shop_setge:
+		storeI(ctx, op.rd, shil_opcl_setge::f1::impl(load1(ctx, op), load2(ctx, op)));
+		break;
+	case shop_setae:
+		storeI(ctx, op.rd, shil_opcl_setae::f1::impl(load1(ctx, op), load2(ctx, op)));
+		break;
+	case shop_setab:
+		storeI(ctx, op.rd, shil_opcl_setab::f1::impl(load1(ctx, op), load2(ctx, op)));
+		break;
+
+	default:
+		executeCellRare(ctx, block, op);
 		break;
 	}
 }
