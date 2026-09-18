@@ -1,4 +1,5 @@
 #include "gtest/gtest.h"
+#include "types.h"
 #include "hw/arm7/arm7_cache.h"
 
 TEST(Arm7ICache, MissThenHit)
@@ -52,6 +53,16 @@ TEST(Arm7ICache, Sh4DmaWriteDropsCachedRange)
 	aica::arm::icacheOnSh4Write(0xA0802000, 8);
 	EXPECT_EQ(aica::arm::icacheFetch(0x2000, 3), 3u);
 	EXPECT_EQ(aica::arm::icacheFetch(0x2004, 4), 4u);
+}
+
+TEST(Arm7ICache, WritableAliasWriteDropsCachedOpcode)
+{
+	settings.platform.aram_size = 2_MB;
+	settings.platform.aram_mask = settings.platform.aram_size - 1;
+	aica::arm::icacheReset();
+	aica::arm::icacheFetch(0x1000, 0x11111111);
+	aica::arm::icacheOnSh4Write(0x20001000, 4);
+	EXPECT_EQ(aica::arm::icacheFetch(0x1000, 0x22222222), 0x22222222u);
 }
 
 TEST(Arm7ICache, ResetDropsCachedOpcode)
