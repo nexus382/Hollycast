@@ -56,8 +56,26 @@ inline bool shilVmRamWrite(u8 *ram, u32 ram_size, u32 ram_mask, u32 addr, u32 si
 {
 	if (!shilVmRamInRange(addr, size, ram_size, ram_mask))
 		return false;
-	memcpy(ram + shilVmRamOffset(addr, ram_mask), &value, size);
-	return true;
+	// Switch rather than memcpy(.., size): a runtime length cannot be inlined
+	// and leaves every guest store calling into libc's memmove.
+	u8 *ptr = ram + shilVmRamOffset(addr, ram_mask);
+	switch (size)
+	{
+	case 1:
+		*ptr = (u8)value;
+		return true;
+	case 2:
+	{
+		const u16 narrowed = (u16)value;
+		memcpy(ptr, &narrowed, 2);
+		return true;
+	}
+	case 4:
+		memcpy(ptr, &value, 4);
+		return true;
+	default:
+		return false;
+	}
 }
 
 inline bool shilVmRamRead64(const u8 *ram, u32 ram_size, u32 ram_mask, u32 addr, u64 *out)
