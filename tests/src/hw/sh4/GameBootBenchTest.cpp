@@ -64,15 +64,17 @@ protected:
 
 		config::UseReios.override(false);
 		config::DynarecEnabled.override(true);
-		config::AudioBackend.override("null");
 
 		if (!addrspace::reserve())
 			die("addrspace::reserve failed");
 		emu.init();
 		emu.loadGame(discPath.c_str());
-		// loadGame() applies per-game settings, which undoes overrides. Frames
-		// must be driven from this thread, and nothing may pace them.
+		// loadGame() applies per-game settings, which undoes overrides, so these
+		// have to be re-applied after it. Frames must be driven from this
+		// thread, and nothing may pace them — a real audio backend both costs
+		// time and throttles the emu thread on buffer backpressure.
 		config::ThreadedRendering.override(false);
+		config::AudioBackend.override("null");
 		// The guest drives rendering itself through PVR register writes, so a
 		// renderer has to exist even with no window. rend_init_renderer() keeps
 		// whichever renderer is already installed, so seeding it with the
@@ -111,6 +113,10 @@ TEST_F(GameBootBench, DISABLED_FramePace)
 	constexpr int WARMUP_FRAMES = 600;   // clear the BIOS logos and cold compiles
 	constexpr int TIMED_FRAMES = 900;
 
+	// One window only. Consecutive windows cover different parts of the boot
+	// sequence, so comparing them measures the content, not the emulator. To
+	// average out host noise, run the whole process again: it replays the same
+	// frames from reset.
 	runFrames(WARMUP_FRAMES);
 	const double seconds = runFrames(TIMED_FRAMES);
 
