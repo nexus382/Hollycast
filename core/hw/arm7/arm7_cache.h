@@ -22,7 +22,7 @@ inline void icacheOnSh4Write(u32 sh4_addr, u32 size)
 {
 	if (size == 0)
 		return;
-	const u32 p = sh4_addr & 0x1FFFFFFF;
+	const u32 p = sh4_addr & 0x3FFFFFFF;
 	const u32 a0 = p & 0x01FFFFFF;
 	u32 arm_addr;
 	if (a0 >= 0x00800000 && a0 < 0x01000000)
