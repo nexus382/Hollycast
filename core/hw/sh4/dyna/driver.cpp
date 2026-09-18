@@ -71,15 +71,20 @@ void Sh4CodeBuffer::reset(bool temporary)
 
 void Sh4Recompiler::clear_temp_cache(bool full)
 {
-	//printf("recSh4:Temp Code Cache clear at %08X\n", curr_pc);
+#if FEAT_SHREC == DYNAREC_JIT
 	codeBuffer.reset(true);
+#endif
 	bm_ResetTempCache(full);
 }
 
 void Sh4Recompiler::ResetCache()
 {
+#if FEAT_SHREC == DYNAREC_JIT
 	INFO_LOG(DYNAREC, "recSh4:Dynarec Cache clear at %08X free space %d", getContext()->pc, codeBuffer.getFreeSpace());
 	codeBuffer.reset(false);
+#else
+	INFO_LOG(DYNAREC, "SHIL VM cache clear at %08X", getContext()->pc);
+#endif
 	bm_ResetCache();
 	smc_hotspots.clear();
 	clear_temp_cache(true);
@@ -139,7 +144,13 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	oplist.clear();
 
 	try {
-		if (!dec_DecodeBlock(this, SH4_TIMESLICE / 2))
+		if (!dec_DecodeBlock(this,
+#if FEAT_SHREC == DYNAREC_IR
+				SH4_TIMESLICE
+#else
+				SH4_TIMESLICE / 2
+#endif
+				))
 			return false;
 	}
 	catch (const SH4ThrownException& ex) {
@@ -148,17 +159,68 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	}
 	SetProtectedFlags();
 
+#if FEAT_SHREC != DYNAREC_IR
+	// SSA is for native register allocation / constprop. The SHIL VM folds
+	// mov+ALU itself; skipping this cuts cold-compile hitches on boot/loads.
 	AnalyseBlock(this);
+#endif
 
 	return true;
 }
+
+static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures);
+
+#if FEAT_SHREC == DYNAREC_IR
+static thread_local int irPrefetchDepth;
+static constexpr int IR_PREFETCH_DEPTH = 8;
+
+static void irPrefetch(u32 pc)
+{
+	if (pc == NullAddress || irPrefetchDepth >= IR_PREFETCH_DEPTH)
+		return;
+	if (bm_GetIrBlock(pc) != nullptr)
+		return;
+	const u32 saved = Sh4cntx.pc;
+	Sh4cntx.pc = pc;
+	irPrefetchDepth++;
+	compilePC(0);
+	irPrefetchDepth--;
+	Sh4cntx.pc = saved;
+}
+
+static void irPrefetchSuccessors(RuntimeBlockInfo *rbi)
+{
+	switch (BET_GET_CLS(rbi->BlockType))
+	{
+	case BET_CLS_Static:
+		if (rbi->BlockType == BET_StaticIntr)
+			irPrefetch(rbi->NextBlock);
+		else
+			irPrefetch(rbi->BranchBlock);
+		break;
+	case BET_CLS_COND:
+		irPrefetch(rbi->NextBlock);
+		irPrefetch(rbi->BranchBlock);
+		break;
+	default:
+		break;
+	}
+}
+#endif
 
 //Called to compile code @pc
 static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures)
 {
 	const u32 pc = Sh4cntx.pc;
 
-	if (codeBuffer.getFreeSpace() < 32_KB || pc == 0x8c0000e0 || pc == 0xac010000 || pc == 0xac008300)
+	if (
+#if FEAT_SHREC == DYNAREC_JIT
+		codeBuffer.getFreeSpace() < 32_KB ||
+		pc == 0x8c0000e0 || pc == 0xac010000 || pc == 0xac008300
+#else
+		false
+#endif
+		)
 		Sh4Recompiler::Instance->ResetCache();
 
 	RuntimeBlockInfo* rbi = sh4Dynarec->allocateBlock();
@@ -171,9 +233,11 @@ static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures)
 	rbi->blockcheck_failures = blockcheck_failures;
 	if (smc_hotspots.find(rbi->addr) != smc_hotspots.end())
 	{
+#if FEAT_SHREC == DYNAREC_JIT
 		codeBuffer.useTempBuffer(true);
 		if (codeBuffer.getFreeSpace() < 32_KB)
 			Sh4Recompiler::Instance->clear_temp_cache(false);
+#endif
 		rbi->temp_block = true;
 		if (rbi->read_only)
 			INFO_LOG(DYNAREC, "WARNING: temp block %x (%x) is protected!", rbi->vaddr, rbi->addr);
@@ -185,7 +249,14 @@ static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures)
 
 	bm_AddBlock(rbi);
 
+#if FEAT_SHREC == DYNAREC_IR
+	if (irPrefetchDepth == 0)
+		irPrefetchSuccessors(rbi);
+#endif
+
+#if FEAT_SHREC == DYNAREC_JIT
 	codeBuffer.useTempBuffer(false);
+#endif
 
 	return rbi->code;
 }
@@ -218,26 +289,32 @@ DynarecCodeEntryPtr DYNACALL rdv_BlockCheckFail(u32 addr)
 {
 	DEBUG_LOG(DYNAREC, "rdv_BlockCheckFail @ %08x", addr);
 	u32 blockcheck_failures = 0;
-	if (mmu_enabled())
+	u32 compilePc = addr;
+	RuntimeBlockInfoPtr block = bm_GetBlock(addr);
+	if (block)
 	{
-		RuntimeBlockInfoPtr block = bm_GetBlock(addr);
-		if (block)
+		blockcheck_failures = block->blockcheck_failures + 1;
+		compilePc = block->vaddr;
+		if (blockcheck_failures > 5)
 		{
-			blockcheck_failures = block->blockcheck_failures + 1;
-			if (blockcheck_failures > 5)
-			{
-				bool inserted = smc_hotspots.insert(addr).second;
-				if (inserted)
-					DEBUG_LOG(DYNAREC, "rdv_BlockCheckFail SMC hotspot @ %08x fails %d", addr, blockcheck_failures);
-			}
-			bm_DiscardBlock(block.get());
+			bool inserted = smc_hotspots.insert(addr).second;
+			if (inserted)
+				DEBUG_LOG(DYNAREC, "rdv_BlockCheckFail SMC hotspot @ %08x fails %d", addr, blockcheck_failures);
 		}
+		bm_DiscardBlock(block.get());
 	}
-	else
+
+#if FEAT_SHREC == DYNAREC_JIT
+	if (!mmu_enabled())
 	{
+		// Native code lives in a linear buffer; punching one hole is harder than wiping it.
 		Sh4cntx.pc = addr;
 		Sh4Recompiler::Instance->ResetCache();
+		compilePc = addr;
 	}
+#endif
+
+	Sh4cntx.pc = compilePc;
 	return (DynarecCodeEntryPtr)CC_RW2RX(compilePC(blockcheck_failures));
 }
 
@@ -348,6 +425,7 @@ void Sh4Recompiler::Init()
 	if (addrspace::virtmemEnabled())
 		verify(&mem_b[0] == ((u8*)getContext()->sq_buffer + sizeof(Sh4Context) + 0x0C000000));
 
+#if FEAT_SHREC == DYNAREC_JIT
 	// Call the platform-specific magic to make the pages RWX
 	CodeCache = nullptr;
 #ifdef FEAT_NO_RWX_PAGES
@@ -356,10 +434,11 @@ void Sh4Recompiler::Init()
 	bool rc = virtmem::prepare_jit_block(SH4_TCB, FULL_SIZE, (void**)&CodeCache);
 #endif
 	verify(rc);
-	// Ensure the pointer returned is non-null
 	verify(CodeCache != nullptr);
 
 	TempCodeCache = CodeCache + CODE_SIZE;
+#endif
+	verify(sh4Dynarec != nullptr);
 	sh4Dynarec->init(*getContext(), codeBuffer);
 	bm_ResetCache();
 }
@@ -367,6 +446,7 @@ void Sh4Recompiler::Init()
 void Sh4Recompiler::Term()
 {
 	INFO_LOG(DYNAREC, "Sh4Recompiler::Term");
+#if FEAT_SHREC == DYNAREC_JIT
 #ifdef FEAT_NO_RWX_PAGES
 	if (CodeCache != nullptr)
 		virtmem::release_jit_block(CodeCache, (u8 *)CodeCache + cc_rx_offset, FULL_SIZE);
@@ -376,6 +456,7 @@ void Sh4Recompiler::Term()
 #endif
 	CodeCache = nullptr;
 	TempCodeCache = nullptr;
+#endif
 	bm_Term();
 	super::Term();
 }

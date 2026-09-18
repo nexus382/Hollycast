@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "option.h"
+#include "build.h"
 #include "network/net_handshake.h"
 #include "debug/gdb_server.h"
 #include "hw/pvr/Renderer_if.h"
@@ -112,7 +113,11 @@ std::array<Option<int>, 4> CrosshairColor {
 Option<int> CrosshairSize("rend.CrosshairSize", 40);
 Option<int> SkipFrame("ta.skip");
 Option<int> MaxThreads("pvr.MaxThreads", 3);
+#if defined(TARGET_SHIL_VM)
+Option<int> AutoSkipFrame("pvr.AutoSkipFrame", 1);
+#else
 Option<int> AutoSkipFrame("pvr.AutoSkipFrame", 0);
+#endif
 Option<int> RenderResolution("rend.Resolution", 480);
 Option<bool> IntegerScale("rend.IntegerScale", false);
 Option<bool> LinearInterpolation("rend.LinearInterpolation", true);

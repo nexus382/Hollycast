@@ -709,6 +709,7 @@ static bool dumpCallback(const char *dump_dir, const char *minidump_id, void *co
 #endif
 
 
+#ifndef FLYCAST_UNIT_TESTS
 /* Main entry point to executable - should *not* be SDL_main! */
 int main (int argc, char **argv)
 {
@@ -720,4 +721,5 @@ int main (int argc, char **argv)
     CustomApplicationMain (argc, argv);
     return 0;
 }
+#endif
 

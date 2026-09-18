@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <set>
 #include <map>
+#include <unordered_map>
 #include "blockmanager.h"
 #include "ngen.h"
 
@@ -41,16 +42,49 @@ static bm_Map blkmap;
 u32 protected_blocks;
 u32 unprotected_blocks;
 
-#define FPCA(x) ((DynarecCodeEntryPtr&)p_sh4rcb->fpcb[(x>>1)&FPCB_MASK])
+#if FEAT_SHREC == DYNAREC_IR
+// Cached SHIL VM: look up blocks by the full PC. The FPCB index ((addr>>1)&FPCB_MASK)
+// aliases unrelated addresses (boot ROM vs RAM, P0 vs P1/P2), which forced a full
+// cache wipe at 0x8c0000e0. A hashmap keyed by PC does not.
+static std::unordered_map<u32, DynarecCodeEntryPtr> irJumpTable;
 
-// addr must be a physical address
-// This returns an executable address
 static DynarecCodeEntryPtr DYNACALL bm_GetCode(u32 addr)
 {
-	DynarecCodeEntryPtr rv = FPCA(addr);
-
-	return rv;
+	auto it = irJumpTable.find(addr);
+	return it == irJumpTable.end() ? ngen_FailedToFindBlock : it->second;
 }
+
+static void bm_SetCode(u32 addr, DynarecCodeEntryPtr code)
+{
+	if (code == ngen_FailedToFindBlock)
+		irJumpTable.erase(addr);
+	else
+		irJumpTable[addr] = code;
+}
+
+RuntimeBlockInfo *bm_GetIrBlock(u32 addr)
+{
+	auto it = irJumpTable.find(addr);
+	if (it == irJumpTable.end() || it->second == ngen_FailedToFindBlock)
+		return nullptr;
+	auto *block = (RuntimeBlockInfo *)it->second;
+	if (block->addr != addr && block->vaddr != addr)
+		return nullptr;
+	return block;
+}
+#else
+#define FPCA(x) ((DynarecCodeEntryPtr&)p_sh4rcb->fpcb[(x>>1)&FPCB_MASK])
+
+static DynarecCodeEntryPtr DYNACALL bm_GetCode(u32 addr)
+{
+	return FPCA(addr);
+}
+
+static void bm_SetCode(u32 addr, DynarecCodeEntryPtr code)
+{
+	FPCA(addr) = code;
+}
+#endif
 
 // addr must be a virtual address
 // This returns an executable address
@@ -220,7 +254,7 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 	blkmap[(void*)block->code] = block;
 
 	verify((void*)bm_GetCode(block->addr) == (void*)ngen_FailedToFindBlock);
-	FPCA(block->addr) = (DynarecCodeEntryPtr)CC_RW2RX(block->code);
+	bm_SetCode(block->addr, (DynarecCodeEntryPtr)CC_RW2RX(block->code));
 
 #ifdef DYNA_OPROF
 	if (oprofHandle)
@@ -253,7 +287,7 @@ void bm_DiscardBlock(RuntimeBlockInfo* block)
 
 	// Remove from jump table
 	verify((void*)bm_GetCode(block_ptr->addr) == CC_RW2RX((void*)block_ptr->code));
-	FPCA(block_ptr->addr) = ngen_FailedToFindBlock;
+	bm_SetCode(block_ptr->addr, ngen_FailedToFindBlock);
 
 	if (block_ptr->temp_block)
 		all_temp_blocks.erase(block_ptr);
@@ -343,6 +377,9 @@ void bm_ResetCache()
 	}
 
 	blkmap.clear();
+#if FEAT_SHREC == DYNAREC_IR
+	irJumpTable.clear();
+#endif
 	// blkmap includes temp blocks as well
 	all_temp_blocks.clear();
 
@@ -371,7 +408,7 @@ void bm_ResetTempCache(bool full)
 	{
 		for (const auto& block : all_temp_blocks)
 		{
-			FPCA(block->addr) = ngen_FailedToFindBlock;
+			bm_SetCode(block->addr, ngen_FailedToFindBlock);
 			blkmap.erase((void*)block->code);
 		}
 	}

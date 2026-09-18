@@ -21,6 +21,7 @@
 //FEAT_SHREC, FEAT_AREC, FEAT_DSPREC
 #define DYNAREC_NONE	0x40000001
 #define DYNAREC_JIT		0x40000002
+#define DYNAREC_IR		0x40000003	// cached SHIL VM: decode/optimize once, no native codegen
 
 //automatic
 
@@ -47,7 +48,13 @@
 #endif
 #endif
 
-#if defined(TARGET_NO_REC)
+#if defined(TARGET_SHIL_VM)
+// App Store / jitless: SH4 uses a cached IR interpreter. AICA ARM and DSP stay
+// as interpreters. No PROT_EXEC, MAP_JIT, or runtime machine-code emission.
+#define FEAT_SHREC DYNAREC_IR
+#define FEAT_AREC DYNAREC_NONE
+#define FEAT_DSPREC DYNAREC_NONE
+#elif defined(TARGET_NO_REC)
 #define FEAT_SHREC DYNAREC_NONE
 #define FEAT_AREC DYNAREC_NONE
 #define FEAT_DSPREC DYNAREC_NONE

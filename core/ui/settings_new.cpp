@@ -7196,7 +7196,11 @@ void renderAdvancedTab()
 #if FEAT_SHREC != DYNAREC_NONE
 		// CPU Mode
 		{
+#if FEAT_SHREC == DYNAREC_IR
+			const char* cpuModeLabels[] = { T("Cached IR"), T("Interpreter") };
+#else
 			const char* cpuModeLabels[] = { T("Dynarec"), T("Interpreter") };
+#endif
 			int cpuModeSelection = config::DynarecEnabled.get() ? 0 : 1;
 
 			SettingsUI::PopupConfig cpuModeCfg {};
@@ -7211,17 +7215,25 @@ void renderAdvancedTab()
 			cpuModeCfg.options.onOptionHighlight = [](int idx, const char*)
 			{
 				const char* kHelp[] = {
+#if FEAT_SHREC == DYNAREC_IR
+					T(
+						"CPU Mode: Cached IR\n"
+						"Recommended. Decodes SH4 into cached blocks and runs them as C — no JIT, App Store legal.\n\n"
+						"Much faster than the opcode interpreter. Switch to Interpreter only to test compatibility issues."
+					),
+#else
 					T(
 						"CPU Mode: Dynarec\n"
 						"Recommended for almost everyone.\n"
 						"Uses the dynamic recompiler (JIT) for the best performance.\n\n"
 						"If a specific game is crashing or behaving incorrectly, switching to the Interpreter can be a useful compatibility test."
 					),
+#endif
 					T(
 						"CPU Mode: Interpreter\n"
 						"Highest compatibility, lowest performance.\n"
-						"Runs the SH4 in interpreter mode which is much slower than Dynarec.\n\n"
-						"Use this mainly for troubleshooting hard-to-reproduce bugs, or for rare titles that misbehave under Dynarec."
+						"Runs the SH4 in interpreter mode which is much slower than the cached path.\n\n"
+						"Use this mainly for troubleshooting hard-to-reproduce bugs, or for rare titles that misbehave under the faster CPU mode."
 					)
 				};
 				if (idx >= 0 && idx < (int)std::size(kHelp))
@@ -7234,15 +7246,29 @@ void renderAdvancedTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("CpuModeSetting"),
+#if FEAT_SHREC == DYNAREC_IR
+				T("Use cached IR blocks for speed, or interpreter for compatibility."),
+#else
 				T("Use the dynamic recompiler for speed, or interpreter for compatibility."),
+#endif
 				cpuModeCfg,
+#if FEAT_SHREC == DYNAREC_IR
+				T(
+					"CPU Mode\n"
+					"Controls how Hollycast emulates the SH4 CPU.\n\n"
+					"Cached IR is the App Store-legal fast path: decode once, execute as C, never emit native code.\n"
+					"Interpreter is much slower, but can be helpful for compatibility testing."
+				)
+#else
 				T(
 					"CPU Mode\n"
 					"Controls how Hollycast emulates the SH4 CPU.\n\n"
 					"Dynarec is dramatically faster and is the normal choice for gameplay.\n"
 					"Interpreter is much slower, but can be helpful for compatibility testing.\n\n"
 					"If you are troubleshooting a game-specific issue, switch modes and re-test the exact same scene to compare behavior."
-				));
+				)
+#endif
+				);
 		}
 
 		// SH4 Clock

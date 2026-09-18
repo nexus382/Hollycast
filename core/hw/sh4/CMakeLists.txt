@@ -9,6 +9,13 @@ target_sources(${PROJECT_NAME} PRIVATE
         dyna/shil_canonical.h
         dyna/shil.cpp
         dyna/shil.h
+        dyna/shil_vm.cpp
+        dyna/shil_vm.h
+        dyna/shil_vm_bytecode.cpp
+        dyna/shil_vm_bytecode.h
+        dyna/shil_vm_chain.h
+        dyna/shil_vm_mem.h
+        dyna/shil_vm_smc.h
         dyna/ssa.cpp
         dyna/ssa.h
         dyna/ssa_regalloc.h
