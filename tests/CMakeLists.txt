@@ -17,6 +17,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/Sh4InterpreterTest.cpp
         src/MmuTest.cpp
         src/IniFileTest.cpp
+        src/hw/mem/AddrSpaceTest.cpp
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp
         src/hw/sh4/modules/TimerTest.cpp
