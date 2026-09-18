@@ -471,9 +471,8 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 	}
 }
 
-static void endBlock(Sh4Context& ctx, RuntimeBlockInfo *block, bool *condTaken)
+static void endBlock(Sh4Context& ctx, RuntimeBlockInfo *block, ShilVmExitKind kind, bool *condTaken)
 {
-	const ShilVmExitKind kind = shilVmExitKind(block->BlockType);
 	bool taken = false;
 	u32 dynPc = ctx.jdyn;
 
@@ -702,8 +701,12 @@ public:
 			}
 		}
 
+		// Derived once and handed to both users: endBlock and the successor
+		// select each switched on BlockType, and with blocks averaging four
+		// cells that duplication is not lost in the noise.
+		const ShilVmExitKind kind = shilVmExitKind(block->BlockType);
 		bool taken = false;
-		endBlock(ctx, block, &taken);
+		endBlock(ctx, block, kind, &taken);
 
 		ShilVmChain chain;
 		chain.next = block->pNextBlock;
@@ -712,7 +715,6 @@ public:
 		// dynPc is BranchBlock for a static exit and the last observed target
 		// for a dynamic one, so the chain check needs no extra branch here.
 		chain.branchPc = irBlock->dynPc;
-		const ShilVmExitKind kind = shilVmExitKind(block->BlockType);
 		void *cached = shilVmSelectSuccessor(kind, taken, ctx.pc, chain);
 		if (cached != nullptr)
 			return (RuntimeBlockInfo *)cached;
