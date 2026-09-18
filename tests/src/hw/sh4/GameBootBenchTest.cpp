@@ -1,7 +1,6 @@
 #include "gtest/gtest.h"
 #include "build.h"
 
-#if FEAT_SHREC == DYNAREC_IR
 #include "cfg/option.h"
 #include "emulator.h"
 #include "hw/mem/addrspace.h"
@@ -18,6 +17,14 @@
 
 // The headless renderer, declared the same way Renderer_if.cpp declares it.
 Renderer *rend_norend();
+
+#if FEAT_SHREC == DYNAREC_IR
+#define CPU_BACKEND "shil-vm"
+#elif FEAT_SHREC == DYNAREC_JIT
+#define CPU_BACKEND "jit"
+#else
+#define CPU_BACKEND "interp"
+#endif
 
 // Headless, unthrottled boot benchmark. In-game frame rate is pinned to 60 by
 // the frame limiter, so it cannot show how much host time the SH4 actually
@@ -109,11 +116,10 @@ TEST_F(GameBootBench, DISABLED_FramePace)
 
 	const size_t slash = discPath.find_last_of("/\\");
 	const std::string name = slash == std::string::npos ? discPath : discPath.substr(slash + 1);
-	std::printf("  %-28s %7.1f fps   %6.3f ms/frame   (%d frames in %.2fs)\n",
-		name.c_str(), TIMED_FRAMES / seconds, seconds * 1000.0 / TIMED_FRAMES,
+	std::printf("  %-28s %-9s %7.1f fps   %6.3f ms/frame   (%d frames in %.2fs)\n",
+		name.c_str(), CPU_BACKEND, TIMED_FRAMES / seconds, seconds * 1000.0 / TIMED_FRAMES,
 		TIMED_FRAMES, seconds);
 	fflush(stdout);
 
 	EXPECT_GT(seconds, 0.0);
 }
-#endif

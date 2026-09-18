@@ -137,6 +137,21 @@
             }
         },
         {
+            "name": "darwin-jit-tests",
+            "description": "macOS arm64 JIT build with gtest, to benchmark against darwin-jitless-tests.",
+            "inherits": ["darwin"],
+            "binaryDir": "build-jit-tests",
+            "cacheVariables": {
+                "JITLESS": "OFF",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0",
+                "ENABLE_CTEST": "ON",
+                "USE_VULKAN": "OFF",
+                "USE_DISCORD": "OFF",
+                "MOLTENVK_DYLIB": "/opt/homebrew/lib/libMoltenVK.dylib"
+            }
+        },
+        {
             "name": "ios-jitless",
             "description": "iOS device build with cached SHIL VM (no JIT / no native codegen).",
             "inherits": ["base"],
