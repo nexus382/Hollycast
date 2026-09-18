@@ -48,6 +48,7 @@
 #include "ui/gui.h"
 #endif
 #include "oslib/i18n.h"
+#include <cstdio>
 #ifndef LIBRETRO
 #include <thread>
 #endif
@@ -534,10 +535,28 @@ void Emulator::init()
 	recompiler = Get_Sh4Recompiler();
 	recompiler->Init();
 	if(config::DynarecEnabled)
+#if FEAT_SHREC == DYNAREC_IR
+	{
+		INFO_LOG(DYNAREC, "Using cached SHIL VM");
+		if (getenv("HOLLYCAST_CPU_STATS"))
+			std::fprintf(stderr, "HOLLYCAST_CPU_MODE shil_vm\n");
+	}
+#else
+	{
 		INFO_LOG(DYNAREC, "Using Recompiler");
+		if (getenv("HOLLYCAST_CPU_STATS"))
+			std::fprintf(stderr, "HOLLYCAST_CPU_MODE jit\n");
+	}
+#endif
 	else
 #endif
+	{
 		INFO_LOG(INTERPRETER, "Using Interpreter");
+		if (getenv("HOLLYCAST_CPU_STATS"))
+			std::fprintf(stderr, "HOLLYCAST_CPU_MODE interpreter\n");
+	}
+	if (getenv("HOLLYCAST_CPU_STATS"))
+		std::fflush(stderr);
 	interpreter = Get_Sh4Interpreter();
 	interpreter->Init();
 	state = Init;
@@ -697,7 +716,6 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 		// reload settings so that all settings can be overridden
 		loadGameSpecificSettings();
 		NetworkHandshake::init();
-		settings.input.fastForwardMode = false;
 		EventManager::event(Event::Start);
 		if (!settings.content.path.empty())
 		{
