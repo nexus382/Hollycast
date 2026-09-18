@@ -148,4 +148,48 @@ TEST_F(ShilVmExecuteTest, OpcodePatchRecompilesOnlyThatBlock)
 	EXPECT_EQ(ctx->r[0], 8u);
 	EXPECT_EQ(shilVmCompileCount(), compiled + 1);
 }
+
+// A dynamic exit remembers its last target so that returns and register jumps
+// stop falling through to a hash lookup. That cache is keyed on the PC, so a
+// site that jumps to two different places must never be handed the target it
+// saw last time.
+TEST_F(ShilVmExecuteTest, DynamicJumpToNewTargetIsNotServedTheCachedOne)
+{
+	const u32 targetA = START_PC + 0x100;
+	const u32 targetB = START_PC + 0x200;
+	writeOp(START_PC, 0x412B);     // jmp @r1
+	writeOp(START_PC + 2, 0x0009); // nop, delay slot
+	writeLoop(targetA, 1);
+	writeLoop(targetB, 5);
+
+	// The VM only chains to blocks that already exist, so run both targets once
+	// to get them compiled. Otherwise every exit below reports no successor and
+	// the test passes for the wrong reason.
+	for (u32 target : { targetA, targetB })
+	{
+		ctx->pc = target;
+		ctx->cycle_counter = SH4_TIMESLICE;
+		ASSERT_TRUE(shilVmStepBlock());
+	}
+
+	// The successor the VM chains to is what matters here, not ctx.pc: the PC is
+	// recomputed on every exit and would look right even if the cache handed
+	// back a block for a different address.
+	ctx->r[1] = targetA;
+	ctx->pc = START_PC;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	EXPECT_EQ(shilVmStepToSuccessor(), targetA);
+
+	// Same jump, different target: the cached entry has to be rejected.
+	ctx->r[1] = targetB;
+	ctx->pc = START_PC;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	EXPECT_EQ(shilVmStepToSuccessor(), targetB);
+
+	// And back, so that re-caching is exercised in both directions.
+	ctx->r[1] = targetA;
+	ctx->pc = START_PC;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	EXPECT_EQ(shilVmStepToSuccessor(), targetA);
+}
 #endif

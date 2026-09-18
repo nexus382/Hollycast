@@ -18,6 +18,7 @@
 #include "shil_vm_chain.h"
 #include "shil_vm_mem.h"
 #include "shil_vm_smc.h"
+#include <algorithm>
 
 #include "hw/sh4/sh4_core.h"
 #include "hw/sh4/sh4_interrupts.h"
@@ -40,6 +41,10 @@ struct ShilRuntimeBlock : RuntimeBlockInfo
 	u32 smcAddr = 0;
 	u32 smcSize = 0;
 	bool smcEnabled = false;
+	// PC that pBranchBlock currently corresponds to. For a static exit this is
+	// just BranchBlock, but a dynamic exit has no BranchBlock to match on, so
+	// this is where the last observed target is remembered.
+	u32 dynPc = NullAddress;
 };
 
 static u8 *s_ram = nullptr;
@@ -499,6 +504,41 @@ static RuntimeBlockInfo *lookupBlock(u32 pc)
 	return found.get();
 }
 
+static bool isDynamicExit(ShilVmExitKind kind)
+{
+	return kind == ShilVmExitKind::Dynamic || kind == ShilVmExitKind::DynamicIntr;
+}
+
+// AddRef does not deduplicate. A static successor is only ever linked once, but
+// a dynamic one is relinked whenever the target changes, so the reference list
+// would grow without bound on a polymorphic site.
+static void addRefOnce(RuntimeBlockInfo *from, RuntimeBlockInfo *to)
+{
+	RuntimeBlockInfoPtr fromPtr = bm_GetBlock((void *)from->code);
+	RuntimeBlockInfoPtr toPtr = bm_GetBlock((void *)to->code);
+	if (!fromPtr || !toPtr)
+		return;
+	if (std::find(toPtr->pre_refs.begin(), toPtr->pre_refs.end(), fromPtr) == toPtr->pre_refs.end())
+		toPtr->AddRef(fromPtr);
+}
+
+// A dynamic exit - a return, or a jump through a register - has BranchBlock set
+// to NullAddress, so the static chain could never match it and every one of
+// them fell through to a hash lookup. That was 39% of all block exits.
+//
+// Remember the last target instead. Returns and indirect call sites are
+// overwhelmingly monomorphic in practice, so the next exit almost always goes
+// to the same place. pBranchBlock is unused for this exit kind, and storing the
+// target there means Discard() already clears it when the target is thrown
+// away: a stale dynPc is then harmless because the pointer it pairs with is
+// null, and the chain check requires both.
+static void cacheDynamicSuccessor(ShilRuntimeBlock *from, RuntimeBlockInfo *to, u32 pc)
+{
+	from->pBranchBlock = to;
+	from->dynPc = pc;
+	addRefOnce(from, to);
+}
+
 static void linkSuccessor(RuntimeBlockInfo *from, RuntimeBlockInfo *to)
 {
 	if (from == nullptr || to == nullptr)
@@ -515,12 +555,7 @@ static void linkSuccessor(RuntimeBlockInfo *from, RuntimeBlockInfo *to)
 		linked = true;
 	}
 	if (linked)
-	{
-		RuntimeBlockInfoPtr fromPtr = bm_GetBlock((void *)from->code);
-		RuntimeBlockInfoPtr toPtr = bm_GetBlock((void *)to->code);
-		if (fromPtr && toPtr)
-			toPtr->AddRef(fromPtr);
-	}
+		addRefOnce(from, to);
 }
 
 class ShilVm : public Sh4Dynarec
@@ -551,6 +586,7 @@ public:
 		irBlock->program = shilVmEncode(block->oplist);
 		block->host_opcodes = (u32)irBlock->program.cells.size();
 
+		irBlock->dynPc = block->BranchBlock;
 		irBlock->smcEnabled = smc_checks && block->sh4_code_size != 0 && shilVmIsRam(block->addr);
 		if (irBlock->smcEnabled)
 		{
@@ -673,18 +709,22 @@ public:
 		chain.next = block->pNextBlock;
 		chain.branch = block->pBranchBlock;
 		chain.nextPc = block->NextBlock;
-		chain.branchPc = block->BranchBlock;
-		void *cached = shilVmSelectSuccessor(shilVmExitKind(block->BlockType), taken, ctx.pc, chain);
+		// dynPc is BranchBlock for a static exit and the last observed target
+		// for a dynamic one, so the chain check needs no extra branch here.
+		chain.branchPc = irBlock->dynPc;
+		const ShilVmExitKind kind = shilVmExitKind(block->BlockType);
+		void *cached = shilVmSelectSuccessor(kind, taken, ctx.pc, chain);
 		if (cached != nullptr)
 			return (RuntimeBlockInfo *)cached;
 
 		RuntimeBlockInfo *found = lookupBlock(ctx.pc);
-		if (found != nullptr)
-		{
+		if (found == nullptr)
+			return nullptr;
+		if (isDynamicExit(kind))
+			cacheDynamicSuccessor(irBlock, found, ctx.pc);
+		else
 			linkSuccessor(block, found);
-			return found;
-		}
-		return nullptr;
+		return found;
 	}
 
 	Sh4Context *sh4ctx = nullptr;
@@ -705,6 +745,21 @@ bool shilVmStepBlock()
 	}
 	shilVm.runBlock(found, ctx);
 	return true;
+}
+
+u32 shilVmStepToSuccessor()
+{
+	Sh4Context& ctx = *shilVm.sh4ctx;
+	RuntimeBlockInfo *found = lookupBlock(ctx.pc);
+	if (found == nullptr)
+	{
+		rdv_FailedToFindBlock(ctx.pc);
+		found = lookupBlock(ctx.pc);
+		if (found == nullptr)
+			return NullAddress;
+	}
+	RuntimeBlockInfo *next = shilVm.runBlock(found, ctx);
+	return next != nullptr ? next->vaddr : NullAddress;
 }
 
 u32 shilVmCompileCount()
