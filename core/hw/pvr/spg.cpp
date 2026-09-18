@@ -6,6 +6,8 @@
 #include "serialize.h"
 #include "network/ggpo.h"
 #include "hw/pvr/Renderer_if.h"
+#include "hw/sh4/sh4_if.h"
+#include "hw/arm7/arm7.h"
 #include "stdclass.h"
 #include <array>
 #include <cstdlib>
@@ -234,9 +236,13 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 
 				if (cpuStatsEnabled())
 				{
+					const u32 pc = p_sh4rcb != nullptr ? Sh4cntx.pc : 0;
 					std::fprintf(stderr,
-						"HOLLYCAST_CPU_STATS mspf=%.2f sh4_mhz=%.2f sh4_pct=%.1f vblank=%.2f fps=%.2f skip=%.2f enough=%d\n",
-						mspdf, spd_cpu, spd_cpu * 100 / 200, spd_vbs, spd_fps, fskip / ts, (int)SH4FastEnough);
+						"HOLLYCAST_CPU_STATS mspf=%.2f sh4_mhz=%.2f sh4_pct=%.1f vblank=%.2f fps=%.2f skip=%.2f enough=%d pc=%08x arm=%d armpc=%08x gdst=%u\n",
+						mspdf, spd_cpu, spd_cpu * 100 / 200, spd_vbs, spd_fps, fskip / ts, (int)SH4FastEnough,
+						pc,
+						(int)aica::arm::Arm7Enabled, aica::arm::arm_Reg[aica::arm::R15_ARM_NEXT].I,
+						(u32)SB_GDST);
 					std::fflush(stderr);
 				}
 				INFO_LOG(COMMON, "SPG - %4.2f - %4.2f - V: %4.2f (%.2f, %s%s%4.2f) R: %4.2f+%4.2f",
