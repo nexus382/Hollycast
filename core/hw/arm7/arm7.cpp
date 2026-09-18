@@ -1,6 +1,7 @@
 #include "arm7.h"
 #include "arm_mem.h"
 #include "arm7_rec.h"
+#include "arm7_cache.h"
 
 namespace aica::arm
 {
@@ -70,7 +71,11 @@ static void runInterpreter(u32 CycleCount)
 		reg[15].I = armNextPC + 8;
 
 		int& clockTicks = arm7ClockTicks;
-		#include "arm-new.h"
+#define NO_OPCODE_READ
+		u32 opcode = icacheFetch(armNextPC, CPUReadMemoryQuick(armNextPC));
+		armNextPC += 4;
+#include "arm-new.h"
+#undef NO_OPCODE_READ
 	}
 }
 
@@ -108,6 +113,7 @@ void init()
 #if FEAT_AREC != DYNAREC_NONE
 	recompiler::init();
 #endif
+	icacheReset();
 	reset();
 }
 
@@ -295,6 +301,7 @@ void reset()
 	e68k_reg_M = 0;
 
 	Arm7Enabled = false;
+	icacheReset();
 	// clean registers
 	memset(&arm_Reg[0], 0, sizeof(arm_Reg));
 

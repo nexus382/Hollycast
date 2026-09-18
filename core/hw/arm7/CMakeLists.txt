@@ -1,6 +1,8 @@
 target_sources(${PROJECT_NAME} PRIVATE
         arm7.cpp
         arm7.h
+        arm7_cache.cpp
+        arm7_cache.h
         arm_mem.cpp
         arm_mem.h
         arm7_rec_arm32.cpp

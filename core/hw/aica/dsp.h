@@ -100,6 +100,8 @@ struct Instruction
 };
 
 void DecodeInst(const u32 *IPtr, Instruction *i);
+void decodeProgram(Instruction *out, const u32 *mpro);
+const Instruction *decodedProgram();
 u16 DYNACALL PACK(s32 val);
 s32 DYNACALL UNPACK(u16 val);
 

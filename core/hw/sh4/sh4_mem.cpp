@@ -11,6 +11,7 @@
 #include "hw/pvr/pvr_mem.h"
 #include "hw/mem/addrspace.h"
 #include "hw/sh4/modules/mmu.h"
+#include "hw/arm7/arm7_cache.h"
 #include "cfg/option.h"
 
 #ifdef STRICT_MODE
@@ -221,6 +222,7 @@ void WriteMemBlock_nommu_dma(u32 dst, u32 src, u32 size)
 		for (u32 i = 0; i < size; i += 4)
 			WriteMem32_nommu(dst + i, ReadMem32_nommu(src + i));
 	}
+	aica::arm::icacheOnSh4Write(dst, size);
 }
 
 void WriteMemBlock_nommu_ptr(u32 dst, const u32 *src, u32 size)
@@ -232,6 +234,7 @@ void WriteMemBlock_nommu_ptr(u32 dst, const u32 *src, u32 size)
 	if (dst_ismem)
 	{
 		memcpy(dst_ptr, src, size);
+		aica::arm::icacheOnSh4Write(dst, size);
 	}
 	else
 	{

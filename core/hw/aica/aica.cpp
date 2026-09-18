@@ -124,6 +124,7 @@ static void AicaInternalDMA()
 			u32 addr = ((CommonData->DMEA_hi << 16) | (CommonData->DMEA_lo << 2)) & ARAM_MASK;
 			u32 len = std::min(CommonData->DLG, ARAM_SIZE - addr);
 			memset(&aica_ram[addr], 0, len * 4);
+			arm::icacheInvalidate(addr, len * 4);
 		}
 		else
 		{
@@ -142,8 +143,10 @@ static void AicaInternalDMA()
 		if (CommonData->DDIR)
 		{
 			// reg to wave mem
+			const u32 dest = waddr;
 			for (u32 i = 0; i < len; i++, waddr += 4, raddr += 4)
 				*(u32*)&aica_ram[waddr] = readAicaReg<u32>(raddr);
+			arm::icacheInvalidate(dest, len * 4);
 		}
 		else
 		{

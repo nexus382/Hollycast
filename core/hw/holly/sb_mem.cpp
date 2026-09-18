@@ -16,6 +16,7 @@
 #include "hw/pvr/pvr_mem.h"
 #include "hw/mem/addrspace.h"
 #include "hw/bba/bba.h"
+#include "hw/arm7/arm7_cache.h"
 #include "cfg/option.h"
 
 //Area 0 mem map
@@ -243,6 +244,7 @@ void DYNACALL WriteMem_area0(u32 paddr, T data)
 	case 7:
 		// AICA ram
 		WriteMemArr(&aica::aica_ram[0], addr & ARAM_MASK, data);
+		aica::arm::icacheOnSh4Write(paddr, sz);
 		return;
 
 	default:

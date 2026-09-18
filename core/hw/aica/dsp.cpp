@@ -95,6 +95,19 @@ void DecodeInst(const u32 *IPtr, Instruction *i)
 	i->NXADR = IPtr[3] & 0x80;
 }
 
+void decodeProgram(Instruction *out, const u32 *mpro)
+{
+	for (int i = 0; i < 128; i++)
+		DecodeInst(mpro + i * 4, &out[i]);
+}
+
+static Instruction s_decoded[128];
+
+const Instruction *decodedProgram()
+{
+	return s_decoded;
+}
+
 #if FEAT_DSPREC == DYNAREC_NONE
 void recInit() {
 }
@@ -142,7 +155,10 @@ void step()
 				break;
 			}
 		if (!state.stopped)
+		{
+			decodeProgram(s_decoded, DSPData->MPRO);
 			recompile();
+		}
 	}
 	if (state.stopped)
 		return;
