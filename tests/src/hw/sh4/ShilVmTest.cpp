@@ -24,6 +24,11 @@ TEST(ShilVmTiming, AutoSkipDefaultsOn)
 #include "hw/sh4/sh4_sched.h"
 #include "hw/sh4/dyna/shil_vm.h"
 #include "hw/sh4/dyna/blockmanager.h"
+#include "hw/sh4/dyna/aot_table.h"
+#include "hw/sh4/dyna/aot_hot_dump.h"
+#include "hw/sh4/dyna/shil_vm_smc.h"
+#include <cstdio>
+#include <string>
 
 class ShilVmExecuteTest : public ::testing::Test {
 protected:
@@ -36,6 +41,18 @@ protected:
 		emu.dc_reset(true);
 		ctx = &p_sh4rcb->cntx;
 		shilVmResetCompileCount();
+		aotClearTableForTest();
+		aotResetDispatchCounts();
+		aotHotSetProfiling(false);
+		aotHotReset();
+	}
+
+	void TearDown() override
+	{
+		aotClearTableForTest();
+		aotResetDispatchCounts();
+		aotHotSetProfiling(false);
+		aotHotReset();
 	}
 
 	void writeOp(u32 pc, u16 op)
@@ -191,5 +208,95 @@ TEST_F(ShilVmExecuteTest, DynamicJumpToNewTargetIsNotServedTheCachedOne)
 	ctx->pc = START_PC;
 	ctx->cycle_counter = SH4_TIMESLICE;
 	EXPECT_EQ(shilVmStepToSuccessor(), targetA);
+}
+
+static int s_aotStubCalls = 0;
+static int aotStubNeverReached(void *)
+{
+	s_aotStubCalls++;
+	return 0;
+}
+
+TEST_F(ShilVmExecuteTest, AotLookupMissFallsBackToShilVm)
+{
+	aotClearTableForTest();
+	aotResetDispatchCounts();
+	s_aotStubCalls = 0;
+
+	EXPECT_EQ(aotLookup(START_PC, ctx->fpscr.full), nullptr);
+	EXPECT_EQ(aotClassify(START_PC, ctx->fpscr.full, 0), AotDispatch::Miss);
+
+	ctx->pc = START_PC;
+	ctx->r[0] = 1;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	writeLoop(START_PC, 1);
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_EQ(ctx->r[0], 2u);
+	EXPECT_EQ(s_aotStubCalls, 0);
+	EXPECT_GE(g_aotMissCount, 1u);
+	EXPECT_EQ(g_aotHitCount, 0u);
+	EXPECT_EQ(g_aotSmcMismatchCount, 0u);
+}
+
+TEST_F(ShilVmExecuteTest, AotSmcMismatchFallsBackToShilVmWithoutNative)
+{
+	aotResetDispatchCounts();
+	s_aotStubCalls = 0;
+
+	ctx->pc = START_PC;
+	ctx->r[0] = 0;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	writeLoop(START_PC, 1);
+
+	// Table claims this PC, but the expected hash cannot match guest RAM.
+	const AotTableEntry entry = {
+		START_PC,
+		ctx->fpscr.full,
+		0xdeadbeefu,
+		6u,
+		&aotStubNeverReached,
+	};
+	aotSetTableForTest(&entry, 1);
+
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_EQ(ctx->r[0], 1u);
+	EXPECT_EQ(s_aotStubCalls, 0);
+	EXPECT_EQ(g_aotHitCount, 0u);
+	EXPECT_GE(g_aotSmcMismatchCount, 1u);
+
+	aotClearTableForTest();
+}
+
+TEST_F(ShilVmExecuteTest, AotHotDumpWritesSchemaKeys)
+{
+	aotHotReset();
+	aotHotSetProfiling(true);
+
+	ctx->pc = START_PC;
+	ctx->r[0] = 0;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	writeLoop(START_PC, 1);
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_GE(aotHotTrackedCount(), 1u);
+
+	const std::string path = "/tmp/hollycast_aot_hot_dump_test.json";
+	ASSERT_TRUE(aotHotDumpTopN(path, 8));
+
+	FILE *f = fopen(path.c_str(), "rb");
+	ASSERT_NE(f, nullptr);
+	char buf[4096];
+	const size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = 0;
+	const std::string json(buf);
+	EXPECT_NE(json.find("\"pc\""), std::string::npos);
+	EXPECT_NE(json.find("\"sh4_hash\""), std::string::npos);
+	EXPECT_NE(json.find("\"sh4_bytes\""), std::string::npos);
+	EXPECT_NE(json.find("\"guest_cycles\""), std::string::npos);
+	EXPECT_NE(json.find("\"BlockType\""), std::string::npos);
+	EXPECT_NE(json.find("\"targets\""), std::string::npos);
+
+	aotHotSetProfiling(false);
+	aotHotReset();
 }
 #endif

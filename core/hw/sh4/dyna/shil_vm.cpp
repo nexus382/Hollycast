@@ -18,6 +18,8 @@
 #include "shil_vm_chain.h"
 #include "shil_vm_mem.h"
 #include "shil_vm_smc.h"
+#include "aot_table.h"
+#include "aot_hot_dump.h"
 #include <algorithm>
 
 #include "hw/sh4/sh4_core.h"
@@ -28,7 +30,11 @@
 #include "hw/sh4/modules/mmu.h"
 #include "debug/gdb_server.h"
 
+#include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #define SHIL_MODE 1
@@ -41,6 +47,10 @@ struct ShilRuntimeBlock : RuntimeBlockInfo
 	u32 smcAddr = 0;
 	u32 smcSize = 0;
 	bool smcEnabled = false;
+	// Build-time AOT native entry (readonly table). Null means SHIL VM body.
+	AotNativeEntry aotEntry = nullptr;
+	u32 aotSmcHash = 0;
+	u32 aotSmcSize = 0;
 	// PC that pBranchBlock currently corresponds to. For a static exit this is
 	// just BranchBlock, but a dynamic exit has no BranchBlock to match on, so
 	// this is where the last observed target is remembered.
@@ -51,6 +61,115 @@ static u8 *s_ram = nullptr;
 static u32 s_ramSize = 0;
 static u32 s_ramMask = 0;
 static u32 s_compileCount = 0;
+
+struct AotHotRec
+{
+	u32 pc = 0;
+	u32 sh4_hash = 0;
+	u32 guest_cycles = 0;
+	u32 blockType = 0;
+	u32 branch = NullAddress;
+	u32 next = NullAddress;
+	u64 visits = 0;
+	std::vector<u8> sh4_bytes;
+};
+
+static bool s_aotHotProfiling = false;
+static std::unordered_map<u32, AotHotRec> s_aotHot;
+
+void aotHotReset()
+{
+	s_aotHot.clear();
+}
+
+void aotHotSetProfiling(bool enabled)
+{
+	s_aotHotProfiling = enabled;
+}
+
+bool aotHotProfiling()
+{
+	return s_aotHotProfiling;
+}
+
+void aotHotNoteVisit(const RuntimeBlockInfo *block, u32 sh4_hash, const u8 *sh4_bytes, u32 sh4_len)
+{
+	if (!s_aotHotProfiling || block == nullptr)
+		return;
+	AotHotRec &rec = s_aotHot[block->vaddr];
+	if (rec.visits == 0)
+	{
+		rec.pc = block->vaddr;
+		rec.sh4_hash = sh4_hash;
+		rec.guest_cycles = block->guest_cycles;
+		rec.blockType = (u32)block->BlockType;
+		rec.branch = block->BranchBlock;
+		rec.next = block->NextBlock;
+		if (sh4_bytes != nullptr && sh4_len != 0)
+			rec.sh4_bytes.assign(sh4_bytes, sh4_bytes + sh4_len);
+	}
+	rec.visits++;
+}
+
+size_t aotHotTrackedCount()
+{
+	return s_aotHot.size();
+}
+
+static std::string hexBytes(const std::vector<u8> &bytes)
+{
+	static const char *kHex = "0123456789abcdef";
+	std::string out;
+	out.resize(bytes.size() * 2);
+	for (size_t i = 0; i < bytes.size(); i++)
+	{
+		out[i * 2] = kHex[bytes[i] >> 4];
+		out[i * 2 + 1] = kHex[bytes[i] & 0xf];
+	}
+	return out;
+}
+
+bool aotHotDumpTopN(const std::string &path, size_t n)
+{
+	std::vector<AotHotRec> ranked;
+	ranked.reserve(s_aotHot.size());
+	for (const auto &kv : s_aotHot)
+		ranked.push_back(kv.second);
+	std::sort(ranked.begin(), ranked.end(), [](const AotHotRec &a, const AotHotRec &b) {
+		if (a.visits != b.visits)
+			return a.visits > b.visits;
+		return a.pc < b.pc;
+	});
+	if (n > 0 && ranked.size() > n)
+		ranked.resize(n);
+
+	std::ofstream out(path);
+	if (!out)
+		return false;
+	out << "{\n  \"schema_version\": 1,\n  \"title\": \"Crazy Taxi hot SHIL blocks for offline AOT\",\n  \"blocks\": [\n";
+	for (size_t i = 0; i < ranked.size(); i++)
+	{
+		const AotHotRec &r = ranked[i];
+		char pcBuf[16], brBuf[16], nxBuf[16];
+		snprintf(pcBuf, sizeof(pcBuf), "0x%08x", r.pc);
+		snprintf(brBuf, sizeof(brBuf), "0x%08x", r.branch);
+		snprintf(nxBuf, sizeof(nxBuf), "0x%08x", r.next);
+		out << "    {\n"
+			<< "      \"pc\": \"" << pcBuf << "\",\n"
+			<< "      \"sh4_hash\": " << r.sh4_hash << ",\n"
+			<< "      \"sh4_bytes\": \"" << hexBytes(r.sh4_bytes) << "\",\n"
+			<< "      \"guest_cycles\": " << r.guest_cycles << ",\n"
+			<< "      \"BlockType\": " << r.blockType << ",\n"
+			<< "      \"targets\": {\n"
+			<< "        \"branch\": \"" << brBuf << "\",\n"
+			<< "        \"next\": \"" << nxBuf << "\"\n"
+			<< "      },\n"
+			<< "      \"visits\": " << r.visits << "\n"
+			<< "    }" << (i + 1 < ranked.size() ? "," : "") << "\n";
+	}
+	out << "  ]\n}\n";
+	return true;
+}
 
 // How many blocks one trip round a spin-wait may take. The loops that matter
 // are a handful of blocks calling out through jsr/rts and back.
@@ -719,6 +838,30 @@ public:
 		block->host_opcodes = (u32)block->oplist.size();
 
 		auto *irBlock = static_cast<ShilRuntimeBlock *>(block);
+		irBlock->aotEntry = nullptr;
+		irBlock->aotSmcHash = 0;
+		irBlock->aotSmcSize = 0;
+
+		// App-Store AOT: consult the readonly table before encoding SHIL bytecode.
+		// Hit → call native .text; miss / SMC mismatch → existing SHIL VM. Never
+		// allocate or write host opcodes here.
+		const u32 cfgBits = block->fpu_cfg.full;
+		const u32 liveHash = (block->sh4_code_size != 0 && shilVmIsRam(block->addr))
+			? shilVmHashRam(s_ram, s_ramSize, s_ramMask, block->addr, block->sh4_code_size)
+			: 0;
+		const AotDispatch disp = aotClassify(block->vaddr, cfgBits, liveHash);
+		aotNoteDispatch(disp);
+		if (disp == AotDispatch::Hit)
+		{
+			const AotTableEntry *e = aotLookup(block->vaddr, cfgBits);
+			irBlock->aotEntry = e->nativeEntry;
+			irBlock->aotSmcHash = e->expectedSmcHash;
+			irBlock->aotSmcSize = e->smcSize;
+			irBlock->dynPc = block->BranchBlock;
+			block->host_opcodes = 0;
+			return;
+		}
+
 		irBlock->program = shilVmEncode(block->oplist);
 		block->host_opcodes = (u32)irBlock->program.cells.size();
 
@@ -817,7 +960,21 @@ public:
 		}
 
 		auto *irBlock = static_cast<ShilRuntimeBlock *>(block);
-		if (irBlock->smcEnabled && !shilVmGuestMatches(s_ram, s_ramSize, s_ramMask, irBlock->smcAddr, irBlock->smcSize, irBlock->smcHash))
+		if (irBlock->aotEntry != nullptr)
+		{
+			if (irBlock->aotSmcSize != 0
+				&& !shilVmGuestMatches(s_ram, s_ramSize, s_ramMask, block->addr, irBlock->aotSmcSize, irBlock->aotSmcHash))
+			{
+				// Guest bytes drifted under an AOT binding: drop it and recompile
+				// via SHIL VM. Never write new native opcodes on device.
+				rdv_BlockCheckFail(block->addr);
+				RuntimeBlockInfo *fresh = lookupBlock(ctx.pc);
+				if (fresh == nullptr || fresh == block)
+					return nullptr;
+				return runBlock(fresh, ctx, allowIdleSkip);
+			}
+		}
+		else if (irBlock->smcEnabled && !shilVmGuestMatches(s_ram, s_ramSize, s_ramMask, irBlock->smcAddr, irBlock->smcSize, irBlock->smcHash))
 		{
 			rdv_BlockCheckFail(block->addr);
 			RuntimeBlockInfo *fresh = lookupBlock(ctx.pc);
@@ -834,6 +991,37 @@ public:
 
 		// Full SH4 timing — no interpreter CPU_RATIO underclock.
 		ctx.cycle_counter -= (int)block->guest_cycles;
+
+		if (s_aotHotProfiling)
+		{
+			u32 hash = 0;
+			const u8 *bytes = nullptr;
+			u32 len = 0;
+			if (block->sh4_code_size != 0 && shilVmIsRam(block->addr)
+				&& shilVmRamInRange(block->addr, block->sh4_code_size, s_ramSize, s_ramMask))
+			{
+				bytes = s_ram + shilVmRamOffset(block->addr, s_ramMask);
+				len = block->sh4_code_size;
+				hash = shilVmHashBytes(bytes, len);
+			}
+			aotHotNoteVisit(block, hash, bytes, len);
+		}
+
+		if (irBlock->aotEntry != nullptr)
+		{
+			const int rc = irBlock->aotEntry(&ctx);
+			if (rc != 0)
+			{
+				rdv_BlockCheckFail(block->addr);
+				RuntimeBlockInfo *fresh = lookupBlock(ctx.pc);
+				if (fresh == nullptr || fresh == block)
+					return nullptr;
+				return runBlock(fresh, ctx, allowIdleSkip);
+			}
+			// Native AOT owns the block body and exit PC. Return to the fixed
+			// dispatcher (lookup) — no runtime link patches.
+			return lookupBlock(ctx.pc);
+		}
 
 		executeCells<false>(ctx, block, irBlock->program.cells, nullptr);
 

@@ -12,6 +12,9 @@
 #include "ngen.h"
 #include "decoder.h"
 #include "oslib/virtmem.h"
+#if FEAT_SHREC == DYNAREC_IR
+#include "aot_hot_dump.h"
+#endif
 
 #if FEAT_SHREC != DYNAREC_NONE
 
@@ -88,6 +91,9 @@ void Sh4Recompiler::ResetCache()
 	bm_ResetCache();
 	smc_hotspots.clear();
 	clear_temp_cache(true);
+#if FEAT_SHREC == DYNAREC_IR
+	aotHotReset();
+#endif
 }
 
 void Sh4Recompiler::Run()
