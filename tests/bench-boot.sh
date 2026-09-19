@@ -13,6 +13,8 @@
 #   tests/bench-boot.sh /path/to/game.cdi [runs] [build-dir ...]
 set -euo pipefail
 
+. "$(dirname "$0")/bench-lib.sh"
+
 # Only one benchmark may run on the machine at a time. Two of these racing each
 # other halves both scores and inflates the spread past the size of the changes
 # being measured, which is how a real speedup gets read as a regression. The
@@ -38,6 +40,8 @@ trap 'rm -rf "$lock"' EXIT
 if [ "$waited" -gt 0 ]; then
     echo "bench: acquired lock after ${waited}s" >&2
 fi
+
+bench_check_quiet
 
 disc=${1:?usage: bench-boot.sh <disc> [runs] [build-dir ...]}
 runs=${2:-5}

@@ -13,6 +13,8 @@
 #   tests/bench-ab.sh <binA> <binB> [rounds] [labelA] [labelB]
 set -euo pipefail
 
+. "$(dirname "$0")/bench-lib.sh"
+
 binA=${1:?usage: bench-ab.sh <binA> <binB> [rounds] [labelA] [labelB]}
 binB=${2:?usage: bench-ab.sh <binA> <binB> [rounds] [labelA] [labelB]}
 rounds=${3:-6}
@@ -46,6 +48,8 @@ trap 'rm -rf "$lock"' EXIT
 if [ "$waited" -gt 0 ]; then
     echo "bench-ab: acquired lock after ${waited}s" >&2
 fi
+
+bench_check_quiet
 
 # Both binaries are run from the same app bundle, so they see identical
 # resources and the bundle layout cannot itself become a variable.
