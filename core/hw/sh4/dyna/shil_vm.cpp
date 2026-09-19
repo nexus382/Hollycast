@@ -54,9 +54,13 @@ static u32 s_compileCount = 0;
 
 // The slot is the operand's word offset from r[0], resolved when the cell was
 // encoded, so this is one indexed load with nothing to look up or test.
+//
+// The registers stored ahead of r[0] - the two FP banks and sq_buffer - have
+// negative slots, so walk the bytes of the whole context the way GetRegPtr()
+// does rather than indexing r[16] out of its bounds.
 static inline u32 *regPtr(Sh4Context& ctx, s16 slot)
 {
-	return ctx.r + slot;
+	return (u32 *)((u8 *)&ctx + SHIL_VM_SLOT_BASE + slot * (s32)sizeof(u32));
 }
 
 static inline u32 loadI(Sh4Context& ctx, bool isImm, s16 slot, u32 imm)
