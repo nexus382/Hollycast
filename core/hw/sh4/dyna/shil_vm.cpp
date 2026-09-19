@@ -2,7 +2,7 @@
 	Cached SHIL virtual machine.
 
 	SH4 → SHIL → compact cells (with superops), executed via a handler table.
-	No PROT_EXEC / MAP_JIT. Block chaining, RAM fast path, page-version SMC.
+	No PROT_EXEC / MAP_JIT. Block chaining, RAM fast path, exact-byte SMC.
 */
 
 #include "types.h"
@@ -44,9 +44,7 @@ struct ShilRuntimeBlock : RuntimeBlockInfo
 {
 	ShilVmProgram program;
 	ShilVmExitKind exitKind = ShilVmExitKind::Dynamic;
-	u32 smcHash = 0;
-	u32 smcAddr = 0;
-	u32 smcSize = 0;
+	ShilVmCodeGuard smcGuard;
 	bool smcEnabled = false;
 	// Build-time AOT native entry (readonly table). Null means SHIL VM body.
 	AotNativeEntry aotEntry = nullptr;
@@ -878,11 +876,7 @@ public:
 		irBlock->dynPc = block->BranchBlock;
 		irBlock->smcEnabled = smc_checks && block->sh4_code_size != 0 && shilVmIsRam(block->addr);
 		if (irBlock->smcEnabled)
-		{
-			irBlock->smcAddr = block->addr;
-			irBlock->smcSize = block->sh4_code_size;
-			irBlock->smcHash = shilVmHashRam(s_ram, s_ramSize, s_ramMask, irBlock->smcAddr, irBlock->smcSize);
-		}
+			irBlock->smcGuard.capture(s_ram, s_ramSize, s_ramMask, block->addr, block->sh4_code_size);
 	}
 
 	void reset() override
@@ -984,7 +978,7 @@ public:
 				return runBlock(fresh, ctx, allowIdleSkip);
 			}
 		}
-		else if (irBlock->smcEnabled && !shilVmGuestMatches(s_ram, s_ramSize, s_ramMask, irBlock->smcAddr, irBlock->smcSize, irBlock->smcHash))
+		else if (irBlock->smcEnabled && !irBlock->smcGuard.matches(s_ram, s_ramSize))
 		{
 			rdv_BlockCheckFail(block->addr);
 			RuntimeBlockInfo *fresh = lookupBlock(ctx.pc);
@@ -1122,7 +1116,7 @@ public:
 			return false;
 
 		auto *irBlock = static_cast<ShilRuntimeBlock *>(block);
-		if (irBlock->smcEnabled && !shilVmGuestMatches(s_ram, s_ramSize, s_ramMask, irBlock->smcAddr, irBlock->smcSize, irBlock->smcHash))
+		if (irBlock->smcEnabled && !irBlock->smcGuard.matches(s_ram, s_ramSize))
 			return false;
 		if (block->has_fpu_op && ctx.sr.FD)
 			return false;
