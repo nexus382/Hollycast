@@ -52,6 +52,24 @@ static u32 s_ramSize = 0;
 static u32 s_ramMask = 0;
 static u32 s_compileCount = 0;
 
+// How many blocks one trip round a spin-wait may take. The loops that matter
+// are a handful of blocks calling out through jsr/rts and back.
+static constexpr int IDLE_LOOP_MAX_BLOCKS = 16;
+// A wait is only skipped up to the next scheduled event, so a next event this
+// far off means nothing is scheduled that could plausibly end the wait: keep
+// emulating rather than freezing the guest until it comes round.
+static constexpr int IDLE_SKIP_MAX_CYCLES = SH4_MAIN_CLOCK / 50;	// 20ms
+// Timeslice boundaries between probes of a loop that turned out to be working.
+static constexpr int IDLE_PROBE_INTERVAL = 64;
+
+// The guest state a spin-wait must leave untouched: from the FP banks to the
+// shadow copies of sr and fpscr, which is the whole context bar the emulator's
+// own bookkeeping that follows it - the cycle counter, the scheduler countdown,
+// pending interrupts - and the store queue ahead of it, whose only writer is an
+// op the probe already refuses to vouch for.
+static constexpr u32 IDLE_STATE_OFFSET = offsetof(Sh4Context, xf);
+static constexpr u32 IDLE_STATE_SIZE = offsetof(Sh4Context, CpuRunning) - IDLE_STATE_OFFSET;
+
 // The slot is the operand's word offset from r[0], resolved when the cell was
 // encoded, so this is one indexed load with nothing to look up or test.
 //
@@ -159,6 +177,66 @@ static void writeMem(Sh4Context& ctx, u32 addr, u32 size, u32 value, u32 pc)
 		break;
 	default:
 		die("Invalid write size");
+		break;
+	}
+}
+
+// A store that puts back the value memory already holds - a register spilled to
+// the stack and reloaded on every iteration, say - leaves the guest as it found
+// it. The largest spin-wait in Crazy Taxi's boot saves and restores PR that way
+// every time round, so "wrote nothing" would miss it.
+static bool storeLeavesRamAsFound(Sh4Context& ctx, const ShilVmCell& op)
+{
+	const u32 addr = effectiveAddr(ctx, op);
+	if (!shilVmRamInRange(addr, op.size, s_ramSize, s_ramMask))
+		return false;
+	if (op.size == 8)
+	{
+		const u32 *src = regPtr(ctx, op.rs2);
+		u64 stored = 0;
+		shilVmRamRead64(s_ram, s_ramSize, s_ramMask, addr, &stored);
+		return stored == ((u64)src[0] | ((u64)src[1] << 32));
+	}
+	u32 stored = 0;
+	shilVmRamRead(s_ram, s_ramSize, s_ramMask, addr, op.size, &stored);
+	// The read sign extends and the store truncates, so only the bytes the store
+	// actually reaches can be compared.
+	const u32 mask = op.size >= 4 ? ~0u : (1u << (op.size * 8)) - 1;
+	return ((stored ^ load2(ctx, op)) & mask) == 0;
+}
+
+// Watches one cell on behalf of the idle-loop probe. Anything whose effect on
+// the guest cannot be seen from here makes the iteration impure and stops it
+// being skipped: an access outside system RAM, because a device read can have
+// side effects and a device write cannot be compared; the interpreter fallback,
+// which reaches memory through paths of its own; and the store queue.
+static void observeCell(Sh4Context& ctx, const ShilVmCell& op, bool& pure)
+{
+	switch (op.op)
+	{
+	case shop_readm:
+	case vmop_load:
+		if (!shilVmRamInRange(effectiveAddr(ctx, op), op.size, s_ramSize, s_ramMask))
+			pure = false;
+		break;
+
+	case shop_writem:
+	case vmop_store:
+		if (!storeLeavesRamAsFound(ctx, op))
+			pure = false;
+		break;
+
+	case shop_ifb:
+	case shop_pref:
+	case shop_sync_sr:
+	case shop_sync_fpscr:
+	case shop_illegal:
+	case shop_debug_1:
+	case shop_debug_3:
+		pure = false;
+		break;
+
+	default:
 		break;
 	}
 }
@@ -477,6 +555,26 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 	}
 }
 
+// Runs a block's cells. The probing instantiation also watches what they do;
+// the plain one compiles to the loop the VM has always run.
+template<bool Probing>
+static void executeCells(Sh4Context& ctx, RuntimeBlockInfo *block, const std::vector<ShilVmCell>& cells, bool *pure)
+{
+	for (const ShilVmCell& cell : cells)
+	{
+		try {
+			if constexpr (Probing)
+				observeCell(ctx, cell, *pure);
+			executeCell(ctx, block, cell);
+		}
+		catch (SH4ThrownException& ex) {
+			if (cell.delaySlot())
+				AdjustDelaySlotException(ex);
+			throw;
+		}
+	}
+}
+
 static void endBlock(Sh4Context& ctx, RuntimeBlockInfo *block, ShilVmExitKind kind, bool *condTaken)
 {
 	bool taken = false;
@@ -563,6 +661,39 @@ static void linkSuccessor(RuntimeBlockInfo *from, RuntimeBlockInfo *to)
 		addRefOnce(from, to);
 }
 
+// Decides when the VM should look for a spin-wait. Probing on spec is cheap -
+// a loop that turns out to be working costs a few dozen blocks run the slow way
+// against the thousands the guest gets through in between - so there is no need
+// for a cheaper filter in front of it. A loop that was idle is looked at again
+// at every boundary, because a wait normally outlasts many scheduled events.
+class ShilVmIdleWatch
+{
+public:
+	// Called once per timeslice boundary, which is where the VM is already off
+	// its hot path.
+	bool shouldProbe(u32 pc)
+	{
+		if (pc == idleHeader)
+			return true;
+		if (countdown != 0)
+		{
+			countdown--;
+			return false;
+		}
+		return true;
+	}
+
+	void probed(u32 header, bool idle)
+	{
+		idleHeader = idle ? header : NullAddress;
+		countdown = idle ? 0 : IDLE_PROBE_INTERVAL;
+	}
+
+private:
+	u32 idleHeader = NullAddress;
+	int countdown = IDLE_PROBE_INTERVAL;
+};
+
 class ShilVm : public Sh4Dynarec
 {
 public:
@@ -626,7 +757,7 @@ public:
 						}
 						block = found;
 					}
-					block = runBlock(block, ctx);
+					block = runBlock(block, ctx, true);
 				}
 				catch (SH4ThrownException& ex) {
 					Do_Exception(ex.epc, ex.expEvn);
@@ -659,7 +790,9 @@ public:
 	}
 	void canonFinish(const shil_opcode *) override {}
 
-	RuntimeBlockInfo *runBlock(RuntimeBlockInfo *block, Sh4Context& ctx)
+	// allowIdleSkip is only set by the mainloop: a single step must run the block
+	// in front of it rather than fast-forwarding past a wait.
+	RuntimeBlockInfo *runBlock(RuntimeBlockInfo *block, Sh4Context& ctx, bool allowIdleSkip = false)
 	{
 		if (ctx.cycle_counter <= 0)
 		{
@@ -668,6 +801,13 @@ public:
 				return nullptr;
 			if (UpdateSystem_INTC())
 				return nullptr;
+			if (allowIdleSkip && idleWatch.shouldProbe(ctx.pc))
+			{
+				skipIdleLoop(ctx);
+				// The probe ran blocks of its own, so the mainloop has to pick up
+				// from wherever the guest now is.
+				return nullptr;
+			}
 		}
 
 		if (mmu_enabled() && ctx.pc != block->vaddr)
@@ -695,17 +835,7 @@ public:
 		// Full SH4 timing — no interpreter CPU_RATIO underclock.
 		ctx.cycle_counter -= (int)block->guest_cycles;
 
-		for (const ShilVmCell& cell : irBlock->program.cells)
-		{
-			try {
-				executeCell(ctx, block, cell);
-			}
-			catch (SH4ThrownException& ex) {
-				if (cell.delaySlot())
-					AdjustDelaySlotException(ex);
-				throw;
-			}
-		}
+		executeCells<false>(ctx, block, irBlock->program.cells, nullptr);
 
 		// Derived once and handed to both users: endBlock and the successor
 		// select each switched on BlockType, and with blocks averaging four
@@ -735,7 +865,109 @@ public:
 		return found;
 	}
 
+	// Emulating a guest that is waiting is the largest single cost the VM pays:
+	// over Crazy Taxi's boot, seven block entries in eight belong to a spin-wait
+	// polling a flag that an interrupt handler will eventually set. Skipping one
+	// means proving that a trip round the loop leaves the guest exactly as it
+	// found it, then handing the cycles the loop would have burned straight to
+	// the scheduler and stopping at the next scheduled event - the only thing
+	// that can change what the loop is waiting on.
+	void skipIdleLoop(Sh4Context& ctx)
+	{
+		const u32 header = ctx.pc;
+		bool skipped = false;
+		while (probeIsIdle(ctx, header) && skipToNextEvent(ctx) && ctx.pc == header)
+			skipped = true;
+		idleWatch.probed(header, skipped);
+	}
+
+	// Two trips round the loop. The first finds where it comes back to and leaves
+	// anything it spills to the stack in place; the second is the one judged, so
+	// that a spill does not read as a change.
+	bool probeIsIdle(Sh4Context& ctx, u32 header)
+	{
+		bool pure = true;
+		if (!runIteration(ctx, header, pure))
+			return false;
+
+		u8 before[IDLE_STATE_SIZE];
+		const u8 *state = (const u8 *)&ctx + IDLE_STATE_OFFSET;
+		memcpy(before, state, sizeof(before));
+
+		pure = true;
+		if (!runIteration(ctx, header, pure) || !pure)
+			return false;
+		return memcmp(before, state, sizeof(before)) == 0;
+	}
+
+	// Runs the loop from its header round to it again, watching what it does.
+	// False if it did not come back, or if the VM had to do something on the way
+	// that the probe will not vouch for.
+	bool runIteration(Sh4Context& ctx, u32 header, bool& pure)
+	{
+		for (int entries = 0; entries < IDLE_LOOP_MAX_BLOCKS; entries++)
+		{
+			RuntimeBlockInfo *block = lookupBlock(ctx.pc);
+			if (block == nullptr || !runProbedBlock(block, ctx, pure))
+				return false;
+			if (ctx.pc == header)
+				return true;
+		}
+		return false;
+	}
+
+	// runBlock with its shortcuts removed: no chaining, and anything that would
+	// need the timeslice boundary or a recompile abandons the probe instead of
+	// being handled here. Crossing the boundary in particular would let the
+	// scheduler run in the middle of an iteration, which is exactly the case the
+	// probe must not mistake for the guest doing nothing.
+	bool runProbedBlock(RuntimeBlockInfo *block, Sh4Context& ctx, bool& pure)
+	{
+		if (mmu_enabled() || ctx.cycle_counter <= (int)block->guest_cycles)
+			return false;
+
+		auto *irBlock = static_cast<ShilRuntimeBlock *>(block);
+		if (irBlock->smcEnabled && !shilVmGuestMatches(s_ram, s_ramSize, s_ramMask, irBlock->smcAddr, irBlock->smcSize, irBlock->smcHash))
+			return false;
+		if (block->has_fpu_op && ctx.sr.FD)
+			return false;
+
+		ctx.cycle_counter -= (int)block->guest_cycles;
+		executeCells<true>(ctx, block, irBlock->program.cells, &pure);
+		endBlock(ctx, block, shilVmExitKind(block->BlockType), nullptr);
+		return true;
+	}
+
+	// Gives the wait's cycles to the scheduler without emulating it. sh4_sched
+	// only runs callbacks on a timeslice boundary, so stopping at the first
+	// boundary that ticks lands on the next scheduled event and never past it:
+	// a DMA completion, a device register the scheduler updates or an interrupt
+	// becoming pending all arrive there, and the loop is then re-examined with
+	// them in place. False when the guest has something to do again.
+	bool skipToNextEvent(Sh4Context& ctx)
+	{
+		if (ctx.sh4_sched_next > IDLE_SKIP_MAX_CYCLES)
+			return false;
+
+		while (ctx.CpuRunning)
+		{
+			// UpdateSystem_INTC() ticks the scheduler when this timeslice takes
+			// the countdown past zero, which is where the next event fires.
+			const bool reachesEvent = ctx.sh4_sched_next < SH4_TIMESLICE;
+			// The iterations not run still took guest time: charge the rest of
+			// the timeslice to them rather than dropping it, or the scheduler and
+			// the clocks that hang off it drift away from the emulated CPU.
+			ctx.cycle_counter = SH4_TIMESLICE;
+			if (UpdateSystem_INTC())
+				return false;
+			if (reachesEvent)
+				return true;
+		}
+		return false;
+	}
+
 	Sh4Context *sh4ctx = nullptr;
+	ShilVmIdleWatch idleWatch;
 };
 
 static ShilVm shilVm;
