@@ -51,11 +51,11 @@ protected:
 		write16(START_PC + 4, 0x2402);  // mov.l r0, @r4
 		write16(START_PC + 6, 0xAFFB);  // bra START
 		write16(START_PC + 8, 0x0009);  // nop
-		addrspace::write32(DATA_ADDR, 0);
 	}
 
-	void resetCpu(u32 r0)
+	void resetState(u32 r0)
 	{
+		addrspace::write32(DATA_ADDR, 0);
 		ctx->pc = START_PC;
 		ctx->r[0] = r0;
 		ctx->r[4] = DATA_ADDR;
@@ -66,7 +66,7 @@ protected:
 	template <typename Fn>
 	double secondsFor(u64 iters, Fn&& fn)
 	{
-		for (int i = 0; i < 64; i++)
+		for (int i = 0; i < WARMUP_ITERS; i++)
 			fn();
 		const auto t0 = std::chrono::steady_clock::now();
 		for (u64 i = 0; i < iters; i++)
@@ -88,6 +88,7 @@ protected:
 	Sh4Executor *interp = nullptr;
 	static constexpr u32 START_PC = 0xAC000000;
 	static constexpr u32 DATA_ADDR = 0xAC001000;
+	static constexpr int WARMUP_ITERS = 64;
 	static constexpr u64 ITERS = 40'000'000;
 };
 
@@ -95,27 +96,35 @@ TEST_F(ShilVmThroughputTest, AluLoopHostSpeed)
 {
 	writeAluLoop();
 
-	resetCpu(0);
+	resetState(0);
 	const double interpSec = secondsFor(ITERS, [&] {
 		interp->Step(); // add
 		interp->Step(); // bra + delay nop
 	});
 
-	resetCpu(0);
+	const u32 interpResult = ctx->r[0];
+	EXPECT_EQ(interpResult, ITERS + WARMUP_ITERS);
+	EXPECT_EQ(ctx->pc, START_PC);
+
+	resetState(0);
 	ASSERT_TRUE(shilVmStepBlock());
+	// Compilation executes the block; restore the same starting state.
+	resetState(0);
 	const double vmSec = secondsFor(ITERS, [&] {
 		shilVmStepBlock();
 	});
 
 	printRow("ALU", ITERS, 3, interpSec, vmSec);
-	EXPECT_GE(ctx->r[0], ITERS);
+	EXPECT_EQ(ctx->r[0], ITERS + WARMUP_ITERS);
+	EXPECT_EQ(ctx->r[0], interpResult);
+	EXPECT_EQ(ctx->pc, START_PC);
 }
 
 TEST_F(ShilVmThroughputTest, RamLoopHostSpeed)
 {
 	writeRamLoop();
 
-	resetCpu(0);
+	resetState(0);
 	const double interpSec = secondsFor(ITERS, [&] {
 		interp->Step(); // load
 		interp->Step(); // add
@@ -123,13 +132,23 @@ TEST_F(ShilVmThroughputTest, RamLoopHostSpeed)
 		interp->Step(); // bra + delay nop
 	});
 
-	resetCpu(0);
+	const u32 interpResult = ctx->r[0];
+	EXPECT_EQ(interpResult, ITERS + WARMUP_ITERS);
+	EXPECT_EQ(addrspace::read32(DATA_ADDR), interpResult);
+	EXPECT_EQ(ctx->pc, START_PC);
+
+	resetState(0);
 	ASSERT_TRUE(shilVmStepBlock());
+	// Compilation executes the block; restore the same starting state.
+	resetState(0);
 	const double vmSec = secondsFor(ITERS, [&] {
 		shilVmStepBlock();
 	});
 
 	printRow("RAM", ITERS, 5, interpSec, vmSec);
-	EXPECT_GE(addrspace::read32(DATA_ADDR), (u32)ITERS);
+	EXPECT_EQ(addrspace::read32(DATA_ADDR), ITERS + WARMUP_ITERS);
+	EXPECT_EQ(addrspace::read32(DATA_ADDR), interpResult);
+	EXPECT_EQ(ctx->r[0], interpResult);
+	EXPECT_EQ(ctx->pc, START_PC);
 }
 #endif
