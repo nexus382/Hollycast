@@ -17,7 +17,7 @@ static u64 tmu_mask[3];
 static u32 old_mode[3] = { 0xFFFF, 0xFFFF, 0xFFFF};
 
 static constexpr InterruptID tmu_intID[3] = { sh4_TMU0_TUNI0, sh4_TMU1_TUNI1, sh4_TMU2_TUNI2 };
-int tmu_sched[3];
+int tmu_sched[3] { -1, -1, -1 };
 static s64 tmu_ch_base[3];
 
 inline static u64 now() {
@@ -177,6 +177,16 @@ static int sched_tmu_cb(int ch, int sch_cycl, int jitter, void *arg)
 	return 0;	// already scheduled if needed
 }
 
+// Every channel must own a scheduler id before its counters are touched.
+// Done on reset and not only on init because term() releases the ids and the
+// TMU can be reset again afterwards.
+static void register_channels()
+{
+	for (std::size_t i = 0; i < std::size(tmu_sched); i++)
+		if (tmu_sched[i] == -1)
+			tmu_sched[i] = sh4_sched_register(i, &sched_tmu_cb);
+}
+
 //Init/Res/Term
 void TMURegisters::init()
 {
@@ -218,9 +228,6 @@ void TMURegisters::init()
 	//TMU TCPR2 0xFFD8002C 0x1FD8002C 32 Held Held Held Held Pclk
 	setHandlers<TMU_TCPR2_addr>(TMU_TCPR2_read, TMU_TCPR2_write);
 
-	for (std::size_t i = 0; i < std::size(tmu_sched); i++)
-		tmu_sched[i] = sh4_sched_register(i, &sched_tmu_cb);
-
 	reset();
 }
 
@@ -228,6 +235,7 @@ void TMURegisters::init()
 void TMURegisters::reset()
 {
 	super::reset();
+	register_channels();
 
 	memset(tmu_shift, 0, sizeof(tmu_shift));
 	memset(tmu_mask, 0, sizeof(tmu_mask));
