@@ -52,13 +52,18 @@ static u32 s_ramSize = 0;
 static u32 s_ramMask = 0;
 static u32 s_compileCount = 0;
 
-static inline u32 loadI(Sh4Context& ctx, bool isImm, u16 reg, u32 imm)
+// The slot is the operand's word offset from r[0], resolved when the cell was
+// encoded, so this is one indexed load with nothing to look up or test.
+static inline u32 *regPtr(Sh4Context& ctx, s16 slot)
+{
+	return ctx.r + slot;
+}
+
+static inline u32 loadI(Sh4Context& ctx, bool isImm, s16 slot, u32 imm)
 {
 	if (isImm)
 		return imm;
-	if (reg < 16)
-		return ctx.r[reg];
-	return *GetRegPtr(ctx, reg);
+	return *regPtr(ctx, slot);
 }
 
 static inline u32 load1(Sh4Context& ctx, const ShilVmCell& cell)
@@ -76,28 +81,25 @@ static inline u32 load3(Sh4Context& ctx, const ShilVmCell& cell)
 	return loadI(ctx, cell.rs3Imm(), cell.rs3, cell.src3());
 }
 
-static inline f32 loadF(Sh4Context& ctx, bool isImm, u16 reg, u32 imm)
+static inline f32 loadF(Sh4Context& ctx, bool isImm, s16 slot, u32 imm)
 {
-	u32 bits = loadI(ctx, isImm, reg, imm);
+	u32 bits = loadI(ctx, isImm, slot, imm);
 	f32 value;
 	memcpy(&value, &bits, sizeof(value));
 	return value;
 }
 
-static inline void storeI(Sh4Context& ctx, u16 rd, u32 value)
+static inline void storeI(Sh4Context& ctx, s16 rd, u32 value)
 {
-	if (rd < 16)
-		ctx.r[rd] = value;
-	else
-		*GetRegPtr(ctx, rd) = value;
+	*regPtr(ctx, rd) = value;
 }
 
-static inline void storeF(Sh4Context& ctx, u16 rd, f32 value)
+static inline void storeF(Sh4Context& ctx, s16 rd, f32 value)
 {
-	memcpy(GetRegPtr(ctx, rd), &value, sizeof(value));
+	memcpy(regPtr(ctx, rd), &value, sizeof(value));
 }
 
-static inline void storeU64(Sh4Context& ctx, u16 rd, u16 rd2, u64 value)
+static inline void storeU64(Sh4Context& ctx, s16 rd, s16 rd2, u64 value)
 {
 	storeI(ctx, rd, (u32)value);
 	if (rd2 != SHIL_VM_NO_REG)
@@ -166,8 +168,8 @@ static void executeCellRare(Sh4Context& ctx, RuntimeBlockInfo *block, const Shil
 	{
 	case shop_mov64:
 	{
-		u32 *src = GetRegPtr(ctx, op.rs1);
-		u32 *dst = GetRegPtr(ctx, op.rd);
+		u32 *src = regPtr(ctx, op.rs1);
+		u32 *dst = regPtr(ctx, op.rd);
 		dst[0] = src[0];
 		dst[1] = src[1];
 		break;
@@ -325,10 +327,10 @@ static void executeCellRare(Sh4Context& ctx, RuntimeBlockInfo *block, const Shil
 		storeF(ctx, op.rd, shil_opcl_fsqrt::f1::impl(loadF(ctx, op.rs1Imm(), op.rs1, op.src1())));
 		break;
 	case shop_fipr:
-		storeF(ctx, op.rd, shil_opcl_fipr::f1::impl((const float *)GetRegPtr(ctx, op.rs1), (const float *)GetRegPtr(ctx, op.rs2)));
+		storeF(ctx, op.rd, shil_opcl_fipr::f1::impl((const float *)regPtr(ctx, op.rs1), (const float *)regPtr(ctx, op.rs2)));
 		break;
 	case shop_ftrv:
-		shil_opcl_ftrv::f1::impl((float *)GetRegPtr(ctx, op.rd), (const float *)GetRegPtr(ctx, op.rs1), (const float *)GetRegPtr(ctx, op.rs2));
+		shil_opcl_ftrv::f1::impl((float *)regPtr(ctx, op.rd), (const float *)regPtr(ctx, op.rs1), (const float *)regPtr(ctx, op.rs2));
 		break;
 	case shop_fmac:
 		storeF(ctx, op.rd, shil_opcl_fmac::f1::impl(
@@ -340,7 +342,7 @@ static void executeCellRare(Sh4Context& ctx, RuntimeBlockInfo *block, const Shil
 		storeF(ctx, op.rd, shil_opcl_fsrra::f1::impl(loadF(ctx, op.rs1Imm(), op.rs1, op.src1())));
 		break;
 	case shop_fsca:
-		shil_opcl_fsca::fsca_impl::impl((float *)GetRegPtr(ctx, op.rd), load1(ctx, op));
+		shil_opcl_fsca::fsca_impl::impl((float *)regPtr(ctx, op.rd), load1(ctx, op));
 		break;
 	case shop_fseteq:
 		storeI(ctx, op.rd, shil_opcl_fseteq::f1::impl(loadF(ctx, op.rs1Imm(), op.rs1, op.src1()), loadF(ctx, op.rs2Imm(), op.rs2, op.src2())));
@@ -350,8 +352,8 @@ static void executeCellRare(Sh4Context& ctx, RuntimeBlockInfo *block, const Shil
 		break;
 	case shop_frswap:
 	{
-		u32 *const bank0 = GetRegPtr(ctx, op.rd);
-		u32 *const bank1 = GetRegPtr(ctx, op.rs1);
+		u32 *const bank0 = regPtr(ctx, op.rd);
+		u32 *const bank1 = regPtr(ctx, op.rs1);
 		for (int i = 0; i < 16; i++)
 		{
 			const u32 tmp = bank0[i];
@@ -394,7 +396,7 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 				ctx.pc = pc;
 				value = ReadMem64(addr);
 			}
-			u32 *dst = GetRegPtr(ctx, op.rd);
+			u32 *dst = regPtr(ctx, op.rd);
 			dst[0] = (u32)value;
 			dst[1] = (u32)(value >> 32);
 		}
@@ -412,7 +414,7 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 		const u32 pc = block->vaddr + op.guest_offs + 2;
 		if (op.size == 8)
 		{
-			u32 *src = GetRegPtr(ctx, op.rs2);
+			u32 *src = regPtr(ctx, op.rs2);
 			u64 value = (u64)src[0] | ((u64)src[1] << 32);
 			if (mmu_enabled() || !shilVmRamWrite64(s_ram, s_ramSize, s_ramMask, addr, value))
 			{
