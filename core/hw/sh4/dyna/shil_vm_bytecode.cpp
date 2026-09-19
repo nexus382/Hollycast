@@ -10,21 +10,21 @@ static void storeImm(ShilVmCell& cell, u32 value, int index)
 		cell.imm3 = value;
 }
 
-static void packParam(ShilVmCell& cell, const shil_param& param, u16& reg, u8 immBit, int& immIndex)
+static void packParam(ShilVmCell& cell, const shil_param& param, s16& slot, u8 immBit, int& immIndex)
 {
 	if (param.is_null())
 	{
-		reg = SHIL_VM_NO_REG;
+		slot = SHIL_VM_NO_REG;
 		return;
 	}
 	if (param.is_imm())
 	{
 		cell.flags |= immBit;
 		storeImm(cell, param._imm, immIndex++);
-		reg = SHIL_VM_NO_REG;
+		slot = SHIL_VM_NO_REG;
 		return;
 	}
-	reg = (u16)param._reg;
+	slot = shilVmRegSlot(param._reg);
 }
 
 ShilVmCell shilVmEncodeOp(const shil_opcode& op)
@@ -126,26 +126,28 @@ ShilVmProgram shilVmEncode(const std::vector<shil_opcode>& ops)
 	return program;
 }
 
-static bool loadGpr(const ShilVmCell& cell, const u32 r[16], bool isImm, u16 reg, u32 immValue, u32 *out, std::string *err)
+static bool loadGpr(const ShilVmCell& cell, const u32 r[16], bool isImm, s16 slot, u32 immValue, u32 *out, std::string *err)
 {
 	if (isImm)
 	{
 		*out = immValue;
 		return true;
 	}
-	if (reg == SHIL_VM_NO_REG)
+	if (slot == SHIL_VM_NO_REG)
 	{
 		if (err)
 			*err = "missing register operand";
 		return false;
 	}
-	if (reg > 15)
+	// Slots outside r0-r15 are some other part of Sh4Context, and slots before
+	// r[0] are negative, so both ends have to be rejected.
+	if (slot < 0 || slot > 15)
 	{
 		if (err)
 			*err = "not a GPR";
 		return false;
 	}
-	*out = r[reg];
+	*out = r[slot];
 	return true;
 }
 
@@ -219,7 +221,7 @@ bool shilVmEvalGpr(const std::vector<ShilVmCell>& cells, u32 r[16], std::string 
 			return false;
 		}
 
-		if (cell.rd > 15)
+		if (cell.rd < 0 || cell.rd > 15)
 		{
 			if (err)
 				*err = "destination is not a GPR";
