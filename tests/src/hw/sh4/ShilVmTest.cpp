@@ -122,6 +122,37 @@ TEST_F(ShilVmExecuteTest, CompilesStaticSuccessorOnlyWhenReached)
 	EXPECT_EQ(shilVmCompileCount(), afterSecond);
 }
 
+TEST_F(ShilVmExecuteTest, WrappedBlockRunsAndRecompilesAfterDelaySlotPatch)
+{
+	const u32 pc = START_PC + RAM_SIZE - 4;
+	// Exercise the writable SMC path, not OS page-protection invalidation.
+	bm_RamWriteAccess(pc);
+	writeOp(pc, 0x7001);     // add #1, r0
+	writeOp(pc + 2, 0xAFFD); // bra back to pc
+	writeOp(pc + 4, 0x0009); // nop delay slot at physical RAM offset zero
+	ctx->pc = pc;
+	ctx->r[0] = 0;
+	ctx->cycle_counter = SH4_TIMESLICE;
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_EQ(ctx->r[0], 1u);
+	EXPECT_EQ(ctx->pc, pc);
+	const u32 compiled = shilVmCompileCount();
+	ASSERT_EQ(compiled, 1u);
+	ASSERT_FALSE(bm_GetIrBlock(pc)->read_only);
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_EQ(ctx->r[0], 2u);
+	EXPECT_EQ(shilVmCompileCount(), compiled);
+
+	writeOp(pc + 4, 0x7004); // add #4, r0 in the wrapped delay slot
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_EQ(ctx->r[0], 7u);
+	EXPECT_EQ(ctx->pc, pc);
+	EXPECT_EQ(shilVmCompileCount(), compiled + 1);
+	ASSERT_TRUE(shilVmStepBlock());
+	EXPECT_EQ(ctx->r[0], 12u);
+	EXPECT_EQ(shilVmCompileCount(), compiled + 1);
+}
+
 TEST_F(ShilVmExecuteTest, SamePageDataWriteDoesNotRecompile)
 {
 	ctx->pc = START_PC;

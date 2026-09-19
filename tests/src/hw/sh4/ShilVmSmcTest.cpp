@@ -81,7 +81,7 @@ TEST(ShilVmSmc, ExactSnapshotRejectsInvalidAndReplacedStorage)
 	EXPECT_FALSE(guard.matches(replacement, 8));
 	memcpy(replacement, ram, 8);
 	EXPECT_TRUE(guard.matches(replacement, 8));
-	for (u32 size : { 0u, 3u, 0xffffffffu })
+	for (u32 size : { 0u, 9u, 0xffffffffu })
 	{
 		guard.capture(ram, 8, 7, 0x8C000006, size);
 		EXPECT_FALSE(guard.matches(ram, 8));
@@ -104,5 +104,44 @@ TEST(ShilVmSmc, ExactSnapshotRejectsHashCollision)
 	memcpy(ram, collision, 8);
 	EXPECT_FALSE(guard.matches(ram, 8));
 	guard.capture(ram, 8, 7, 0x8C000000, 8);
+	EXPECT_TRUE(guard.matches(ram, 8));
+}
+
+TEST(ShilVmSmc, ExactSnapshotWrapsAtPhysicalRamMask)
+{
+	// The backing allocation can exceed the masked guest RAM window.
+	u8 ram[16] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	ShilVmCodeGuard guard;
+	for (u32 addr : { 0x8C000006u, 0xAC000006u })
+	{
+		guard.capture(ram, 16, 7, addr, 5);
+		ASSERT_TRUE(guard.matches(ram, 16));
+		for (u32 offset : { 6u, 7u, 0u, 1u, 2u })
+		{
+			ram[offset] ^= 0x80;
+			EXPECT_FALSE(guard.matches(ram, 16)) << offset;
+			ram[offset] ^= 0x80;
+			EXPECT_TRUE(guard.matches(ram, 16));
+		}
+		ram[3] ^= 1;
+		ram[8] ^= 1;
+		EXPECT_TRUE(guard.matches(ram, 16));
+		EXPECT_FALSE(guard.matches(ram, 7));
+	}
+	// Covering the masked window more than once still checks every physical byte.
+	guard.capture(ram, 16, 7, 0x8C000006, 16);
+	ASSERT_TRUE(guard.matches(ram, 16));
+	for (u32 offset = 0; offset < 8; offset++)
+	{
+		ram[offset] ^= 1;
+		EXPECT_FALSE(guard.matches(ram, 16));
+		ram[offset] ^= 1;
+	}
+	// The physical RAM boundary itself is also a legal wrap, not a failed capture.
+	guard.capture(ram, 8, 7, 0xAC000007, 3);
+	ASSERT_TRUE(guard.matches(ram, 8));
+	ram[0] ^= 1;
+	EXPECT_FALSE(guard.matches(ram, 8));
+	guard.capture(ram, 8, 7, 0xAC000007, 3);
 	EXPECT_TRUE(guard.matches(ram, 8));
 }
