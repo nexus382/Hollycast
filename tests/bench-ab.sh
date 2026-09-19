@@ -22,18 +22,37 @@ labelB=${5:-B}
 disc="/Users/thomasswift/Downloads/crazy_taxi_extracted/Crazy Taxi/Crazy Taxi.cdi"
 slot=build-jitless-tests/RelWithDebInfo/Hollycast.app/Contents/MacOS/Hollycast
 
+# Take the machine-wide benchmark lock before touching anything shared. The
+# binary slot below is shared too, so a run that snapshotted or restored it
+# while waiting would swap the binary out from under the holder and report a
+# comparison between two binaries it never named.
+lock=/tmp/hollycast-bench.lock
+waited=0
+while ! mkdir "$lock" 2>/dev/null; do
+    # A worker killed mid-run would otherwise block every later benchmark, so
+    # take the lock back once it is far older than any honest run.
+    if [ -n "$(find "$lock" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+        echo "bench-ab: breaking stale lock $lock" >&2
+        rm -rf "$lock"
+        continue
+    fi
+    if [ "$waited" -eq 0 ]; then
+        echo "bench-ab: another benchmark is running, waiting for $lock" >&2
+    fi
+    sleep 15
+    waited=$((waited + 15))
+done
+trap 'rm -rf "$lock"' EXIT
+if [ "$waited" -gt 0 ]; then
+    echo "bench-ab: acquired lock after ${waited}s" >&2
+fi
+
 # Both binaries are run from the same app bundle, so they see identical
 # resources and the bundle layout cannot itself become a variable.
 saved=$(mktemp /tmp/hc-slot-XXXX)
 cp "$slot" "$saved"
 restore() { cp "$saved" "$slot"; rm -f "$saved"; rm -rf "$lock"; }
 trap restore EXIT
-
-lock=/tmp/hollycast-bench.lock
-while ! mkdir "$lock" 2>/dev/null; do
-    echo "bench-ab: waiting for $lock" >&2
-    sleep 15
-done
 
 run_one() {
     cp "$1" "$slot"
