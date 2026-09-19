@@ -11,18 +11,24 @@
 # figure means anything.
 #
 #   tests/bench-ab.sh <binA> <binB> [rounds] [labelA] [labelB]
+#   tests/bench-ab.sh --synthetic <jit-bin> <vm-bin> --rounds 6 [--output <dir>]
 set -euo pipefail
 
 . "$(dirname "$0")/bench-lib.sh"
+
+# Synthetic mode uses the same machine-wide lock, but runs each executable
+# directly without a shared app slot or game data.
+synthetic=0
+if [ "${1:-}" = "--synthetic" ]; then
+    shift
+    synthetic=1
+fi
 
 binA=${1:?usage: bench-ab.sh <binA> <binB> [rounds] [labelA] [labelB]}
 binB=${2:?usage: bench-ab.sh <binA> <binB> [rounds] [labelA] [labelB]}
 rounds=${3:-6}
 labelA=${4:-A}
 labelB=${5:-B}
-
-disc="/Users/thomasswift/Downloads/crazy_taxi_extracted/Crazy Taxi/Crazy Taxi.cdi"
-slot=build-jitless-tests/RelWithDebInfo/Hollycast.app/Contents/MacOS/Hollycast
 
 # Take the machine-wide benchmark lock before touching anything shared. The
 # binary slot below is shared too, so a run that snapshotted or restored it
@@ -50,6 +56,14 @@ if [ "$waited" -gt 0 ]; then
 fi
 
 bench_check_quiet
+
+if [ "$synthetic" -eq 1 ]; then
+    python3 "$(dirname "$0")/src/hw/sh4/check_backend_bench.py" "$@"
+    exit
+fi
+
+disc="/Users/thomasswift/Downloads/crazy_taxi_extracted/Crazy Taxi/Crazy Taxi.cdi"
+slot=build-jitless-tests/RelWithDebInfo/Hollycast.app/Contents/MacOS/Hollycast
 
 # Both binaries are run from the same app bundle, so they see identical
 # resources and the bundle layout cannot itself become a variable.

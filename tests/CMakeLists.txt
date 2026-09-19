@@ -26,6 +26,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/hw/sh4/ShilVmMemTest.cpp
         src/hw/sh4/ShilVmSmcTest.cpp
         src/hw/sh4/ShilVmTest.cpp
+        src/hw/sh4/Sh4BackendThroughputTest.cpp
         src/hw/sh4/ShilVmThroughputTest.cpp
         src/hw/sh4/GameBootBenchTest.cpp
         src/hw/aica/Arm7ICacheTest.cpp
