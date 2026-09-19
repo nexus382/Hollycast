@@ -13,6 +13,32 @@
 #   tests/bench-boot.sh /path/to/game.cdi [runs] [build-dir ...]
 set -euo pipefail
 
+# Only one benchmark may run on the machine at a time. Two of these racing each
+# other halves both scores and inflates the spread past the size of the changes
+# being measured, which is how a real speedup gets read as a regression. The
+# lock is machine-wide rather than per-checkout because parallel worktrees are
+# exactly the case that causes it.
+lock=/tmp/hollycast-bench.lock
+waited=0
+while ! mkdir "$lock" 2>/dev/null; do
+    # A worker killed mid-run would otherwise block every later benchmark, so
+    # take the lock back once it is far older than any honest run.
+    if [ -n "$(find "$lock" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+        echo "bench: breaking stale lock $lock" >&2
+        rm -rf "$lock"
+        continue
+    fi
+    if [ "$waited" -eq 0 ]; then
+        echo "bench: another benchmark is running, waiting for $lock" >&2
+    fi
+    sleep 15
+    waited=$((waited + 15))
+done
+trap 'rm -rf "$lock"' EXIT
+if [ "$waited" -gt 0 ]; then
+    echo "bench: acquired lock after ${waited}s" >&2
+fi
+
 disc=${1:?usage: bench-boot.sh <disc> [runs] [build-dir ...]}
 runs=${2:-5}
 shift 2 || shift 1
