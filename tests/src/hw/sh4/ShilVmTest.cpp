@@ -28,6 +28,9 @@ TEST(ShilVmTiming, AutoSkipDefaultsOn)
 #include "hw/sh4/dyna/aot_hot_dump.h"
 #include "hw/sh4/dyna/shil_vm_smc.h"
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <locale>
 #include <string>
 
 class ShilVmExecuteTest : public ::testing::Test {
@@ -279,8 +282,21 @@ TEST_F(ShilVmExecuteTest, AotHotDumpWritesSchemaKeys)
 	ASSERT_TRUE(shilVmStepBlock());
 	EXPECT_GE(aotHotTrackedCount(), 1u);
 
+	// Grouping locales (fr_FR) used to turn sh4_hash into "2 833 011 226"
+	// when streamed via iostream <<; dump must stay json.loads-clean.
+	std::locale previous = std::locale::global(std::locale::classic());
+	try
+	{
+		std::locale::global(std::locale("fr_FR.UTF-8"));
+	}
+	catch (const std::runtime_error &)
+	{
+		GTEST_SKIP() << "fr_FR.UTF-8 locale unavailable";
+	}
+
 	const std::string path = "/tmp/hollycast_aot_hot_dump_test.json";
 	ASSERT_TRUE(aotHotDumpTopN(path, 8));
+	std::locale::global(previous);
 
 	FILE *f = fopen(path.c_str(), "rb");
 	ASSERT_NE(f, nullptr);
@@ -295,6 +311,21 @@ TEST_F(ShilVmExecuteTest, AotHotDumpWritesSchemaKeys)
 	EXPECT_NE(json.find("\"guest_cycles\""), std::string::npos);
 	EXPECT_NE(json.find("\"BlockType\""), std::string::npos);
 	EXPECT_NE(json.find("\"targets\""), std::string::npos);
+	// Locale grouping inserts separators inside the number token.
+	EXPECT_EQ(json.find("\"sh4_hash\": "), json.rfind("\"sh4_hash\": ")); // exactly one
+	const size_t hashKey = json.find("\"sh4_hash\": ");
+	ASSERT_NE(hashKey, std::string::npos);
+	const size_t numStart = hashKey + strlen("\"sh4_hash\": ");
+	const size_t numEnd = json.find_first_of(",\n", numStart);
+	ASSERT_NE(numEnd, std::string::npos);
+	const std::string hashTok = json.substr(numStart, numEnd - numStart);
+	for (char c : hashTok)
+		EXPECT_TRUE(c >= '0' && c <= '9') << "sh4_hash token not a plain JSON number: [" << hashTok << "]";
+
+	const std::string py =
+		"python3 -c \"import json,sys; json.load(open(sys.argv[1])); print('json.loads ok')\" "
+		+ path;
+	ASSERT_EQ(system(py.c_str()), 0) << "python json.loads rejected hot dump at " << path;
 
 	aotHotSetProfiling(false);
 	aotHotReset();

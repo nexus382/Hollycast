@@ -7,6 +7,7 @@ this slice must land is present and stays App-Store-legal (no on-device emit).
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ AOT_TABLE = ROOT / "aot_table.h"
 HOT_DUMP = ROOT / "aot_hot_dump.h"
 ARTIFACT = ROOT / "crazy_taxi_hot_blocks.json"
 TEST_DIR = REPO / "tests" / "src" / "hw" / "sh4"
+SHIL_TEST = TEST_DIR / "ShilVmTest.cpp"
 
 FORBIDDEN = ("PROT_EXEC", "MAP_JIT", "PROT_WRITE | PROT_EXEC", "RWX", "mprotect")
 
@@ -28,7 +30,7 @@ def fail(msg: str) -> int:
 
 
 def main() -> int:
-	for path in (AOT_TABLE, HOT_DUMP, ARTIFACT, SHIL_VM):
+	for path in (AOT_TABLE, HOT_DUMP, ARTIFACT, SHIL_VM, SHIL_TEST):
 		if not path.is_file():
 			return fail(f"missing required file: {path.relative_to(REPO)}")
 
@@ -42,10 +44,16 @@ def main() -> int:
 		if needle not in dump:
 			return fail(f"{HOT_DUMP.name} missing `{needle}`")
 
-	artifact = ARTIFACT.read_text(encoding="utf-8")
+	artifact_text = ARTIFACT.read_text(encoding="utf-8")
 	for key in ('"pc"', '"sh4_hash"', '"sh4_bytes"', '"guest_cycles"', '"BlockType"', '"targets"'):
-		if key not in artifact:
+		if key not in artifact_text:
 			return fail(f"{ARTIFACT.name} schema missing key {key}")
+	try:
+		artifact = json.loads(artifact_text)
+	except json.JSONDecodeError as exc:
+		return fail(f"{ARTIFACT.name} fails json.loads: {exc}")
+	if not isinstance(artifact, dict) or "blocks" not in artifact:
+		return fail(f"{ARTIFACT.name} must be an object with a blocks array")
 
 	shil = SHIL_VM.read_text(encoding="utf-8")
 	if '#include "aot_table.h"' not in shil and "#include <aot_table.h>" not in shil:
@@ -59,6 +67,19 @@ def main() -> int:
 		consult_at = shil.find("aotLookup")
 	if encode_at < 0 or consult_at < 0 or consult_at > encode_at:
 		return fail("AOT table must be consulted before shilVmEncode in shil_vm.cpp")
+
+	# aotHotDumpTopN must snprintf integer fields — iostream << honors locale grouping.
+	fn_match = re.search(r"bool\s+aotHotDumpTopN\s*\(.*?\)\s*\{", shil, re.DOTALL)
+	if not fn_match:
+		return fail("aotHotDumpTopN definition not found in shil_vm.cpp")
+	body_start = fn_match.end()
+	next_fn = re.search(r"\n(?:static\s+)?(?:bool|void|size_t|u32|int)\s+\w+\s*\(", shil[body_start:])
+	body = shil[body_start : body_start + (next_fn.start() if next_fn else len(shil))]
+	for fmt in (r'snprintf\s*\([^;]*"%u"', r'snprintf\s*\([^;]*"%llu"'):
+		if not re.search(fmt, body, re.DOTALL):
+			return fail(f"aotHotDumpTopN must use snprintf with locale-safe integer formats")
+	if re.search(r"<<\s*r\.(sh4_hash|guest_cycles|blockType|visits)\b", body):
+		return fail("aotHotDumpTopN still streams integer fields with iostream <<")
 
 	# No new executable mapping / JIT emit in AOT scaffolding files.
 	for path in (AOT_TABLE, HOT_DUMP):
@@ -80,9 +101,18 @@ def main() -> int:
 	if not test_hits:
 		return fail("no test under tests/src/hw/sh4/ exercises the AOT lookup API")
 
+	# Hot-dump JSON must stay parseable under a grouping locale (json.loads regression).
+	shil_test = SHIL_TEST.read_text(encoding="utf-8")
+	if "aotHotDumpTopN" not in shil_test:
+		return fail("ShilVmTest.cpp must exercise aotHotDumpTopN")
+	if "fr_FR" not in shil_test:
+		return fail("ShilVmTest must dump under fr_FR (locale-grouped numbers)")
+	if "json.loads" not in shil_test:
+		return fail("ShilVmTest must invoke python json.loads on the dump")
+
 	print(
 		f"PASS: AOT infra present (table={AOT_TABLE.name}, dump={HOT_DUMP.name}, "
-		f"artifact={ARTIFACT.name}, tests={','.join(test_hits)})"
+		f"artifact={ARTIFACT.name}, tests={','.join(test_hits)}, json.loads=ok)"
 	)
 	return 0
 

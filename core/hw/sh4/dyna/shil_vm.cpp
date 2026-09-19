@@ -146,25 +146,32 @@ bool aotHotDumpTopN(const std::string &path, size_t n)
 	std::ofstream out(path);
 	if (!out)
 		return false;
+	// snprintf %u/%llu — never iostream << on integers (locale grouping
+	// corrupts JSON numbers, e.g. "2 833 011 226" under fr_FR).
 	out << "{\n  \"schema_version\": 1,\n  \"title\": \"Crazy Taxi hot SHIL blocks for offline AOT\",\n  \"blocks\": [\n";
 	for (size_t i = 0; i < ranked.size(); i++)
 	{
 		const AotHotRec &r = ranked[i];
 		char pcBuf[16], brBuf[16], nxBuf[16];
+		char hashBuf[16], cyclesBuf[16], typeBuf[16], visitsBuf[32];
 		snprintf(pcBuf, sizeof(pcBuf), "0x%08x", r.pc);
 		snprintf(brBuf, sizeof(brBuf), "0x%08x", r.branch);
 		snprintf(nxBuf, sizeof(nxBuf), "0x%08x", r.next);
+		snprintf(hashBuf, sizeof(hashBuf), "%u", r.sh4_hash);
+		snprintf(cyclesBuf, sizeof(cyclesBuf), "%u", r.guest_cycles);
+		snprintf(typeBuf, sizeof(typeBuf), "%u", r.blockType);
+		snprintf(visitsBuf, sizeof(visitsBuf), "%llu", (unsigned long long)r.visits);
 		out << "    {\n"
 			<< "      \"pc\": \"" << pcBuf << "\",\n"
-			<< "      \"sh4_hash\": " << r.sh4_hash << ",\n"
+			<< "      \"sh4_hash\": " << hashBuf << ",\n"
 			<< "      \"sh4_bytes\": \"" << hexBytes(r.sh4_bytes) << "\",\n"
-			<< "      \"guest_cycles\": " << r.guest_cycles << ",\n"
-			<< "      \"BlockType\": " << r.blockType << ",\n"
+			<< "      \"guest_cycles\": " << cyclesBuf << ",\n"
+			<< "      \"BlockType\": " << typeBuf << ",\n"
 			<< "      \"targets\": {\n"
 			<< "        \"branch\": \"" << brBuf << "\",\n"
 			<< "        \"next\": \"" << nxBuf << "\"\n"
 			<< "      },\n"
-			<< "      \"visits\": " << r.visits << "\n"
+			<< "      \"visits\": " << visitsBuf << "\n"
 			<< "    }" << (i + 1 < ranked.size() ? "," : "") << "\n";
 	}
 	out << "  ]\n}\n";
