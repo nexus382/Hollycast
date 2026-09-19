@@ -59,7 +59,11 @@ Synthetic mode retains the existing machine-wide benchmark lock and quiet-host
 check, runs the binaries directly, and needs no shared app bundle slot. Python
 3.9 or newer is required. The checker can also be invoked directly for correctness
 validation; the shell entry point provides benchmark locking. Ordering alternates
-JIT/VM and VM/JIT; summaries compare each backend's best throughput per workload.
+JIT/VM and VM/JIT; summaries report median elapsed time, median absolute
+deviation (MAD), full range, and paired VM/JIT ratios. Raw seconds and the
+explicit 0.75 target gate are retained in `summary.json`. Historical results
+below used the earlier best-run summary; see `SYNTHETIC_BACKEND_AUDIT.md` for
+the repeated median audit.
 
 The large, identical cycle budget keeps peripheral scheduling out of the timed
 loops. The final synthetic MMIO store stops the CPU and expires the timeslice;

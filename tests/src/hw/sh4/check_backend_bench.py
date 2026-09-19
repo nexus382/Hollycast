@@ -5,6 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
+import statistics
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -55,6 +56,31 @@ def run(binary, backend, directory, round_id):
     return {row['workload']: row for row in rows}
 
 
+def summarise(results):
+    summary = {}
+    for workload in ('ALU', 'RAM'):
+        row = {}
+        for backend in ('jit', 'shil_vm'):
+            values = [sample[workload]['seconds'] for sample in results[backend]]
+            median = statistics.median(values)
+            row[backend] = {
+                'seconds': values,
+                'median_seconds': median,
+                'median_ns_per_iteration': median * 1e9 / ITERS,
+                'mad_percent': 100 * statistics.median(abs(v - median) for v in values) / median,
+                'range_percent': 100 * (max(values) - min(values)) / median,
+            }
+        ratios = [a[workload]['seconds'] / b[workload]['seconds']
+                  for a, b in zip(results['jit'], results['shil_vm'])]
+        row['vm_jit_ratio'] = row['jit']['median_seconds'] / row['shil_vm']['median_seconds']
+        row['paired_ratio_median'] = statistics.median(ratios)
+        row['paired_ratio_min'] = min(ratios)
+        row['paired_ratio_max'] = max(ratios)
+        row['target_met'] = row['vm_jit_ratio'] >= 0.75
+        summary[workload] = row
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('jit')
@@ -80,10 +106,16 @@ def main():
             a, b = current['jit'][workload], current['shil_vm'][workload]
             for key in set(a) - {'backend', 'seconds', 'mops'}:
                 assert a[key] == b[key], (workload, key, a[key], b[key])
-    for workload in ('ALU', 'RAM'):
-        jit = max(rows[workload]['mops'] for rows in results['jit'])
-        vm = max(rows[workload]['mops'] for rows in results['shil_vm'])
-        print(f'{workload}: JIT {jit:.2f} Mops/s  SHIL VM {vm:.2f} Mops/s  VM/JIT {100 * vm / jit:.2f}%')
+    summary = summarise(results)
+    (directory / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    for workload, row in summary.items():
+        print(f"{workload}: median VM/JIT {100 * row['vm_jit_ratio']:.2f}% "
+              f"paired {100 * row['paired_ratio_median']:.2f}% "
+              f"target_met={row['target_met']}")
+        for backend in ('jit', 'shil_vm'):
+            stats = row[backend]
+            print(f"  {backend}: {stats['median_ns_per_iteration']:.3f} ns/iteration "
+                  f"MAD {stats['mad_percent']:.2f}% range {stats['range_percent']:.2f}%")
     print(f'PASS: identical {FILTER}; 2 passing tests/build/round; matching ALU/RAM work and results; logs {directory}')
 
 
