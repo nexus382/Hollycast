@@ -129,3 +129,27 @@ under the cell execution call and 55 additional executeCell samples, versus
 426 total VM-path samples. These are statistical stacks, not instrumented cycle
 counts; interpreter reference work is excluded. No title-specific inference or
 claim that this optimisation reaches the target is made.
+
+## Independent verifier follow-up
+
+The independent verifier reported a fresh ARM64 run with all 36 workload
+executions passing, matching hashes/final state, and 169/169 VM regression tests.
+Its independently measured median VM/JIT ratios were **9.611260% ALU** and
+**10.041380% RAM**. These are a separate run, not replacements for the retained
+nine-pair raw data above. The verifier also confirmed no runtime code generation
+or executable-memory calls in the SH4 VM path, and identified per-cell
+interpretation/dispatch plus block guard, lookup and successor overhead as the
+remaining universal bottleneck.
+
+The verifier marked the attempt failed solely because both workloads remained
+below 75%. That performance finding is confirmed, not fixed or waived as a
+performance result. The owner explicitly instructed completion of this
+verification slice with the unmet target documented; optimisation to attain
+75% is not this slice's task. Audit completion must not be presented as target
+attainment. No further benchmark was run in this follow-up.
+
+Reran `python3 tests/src/hw/sh4/check_integrated_vm.py /tmp/sh4-doctor-integrated`
+against the retained original raw logs: exit 0, the same 10.627917% / 9.805398%
+ratios, and `PASS: nine raw-log/XML pairs; independent guest hashes, final results
+and median ratios`. The explicit `--require-target` gate still exits 1; both
+runs independently establish that the >=75% target is unmet.
