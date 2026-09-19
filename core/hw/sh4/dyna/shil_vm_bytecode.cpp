@@ -90,6 +90,11 @@ static bool isAlu(shilop op)
 	}
 }
 
+// Dropping the mov is only sound when rs1 is the moved register's last reader:
+// any other operand naming it would then read the value from before the mov.
+// `mov Rm,Rn; add Rn,Rn` decodes to exactly that shape - mov32 rN, rM followed
+// by add rN, rN, rN - so the guard covers a legal SH4 pair, not a hypothetical
+// one, and must not rely on an SSA pass having rewritten `a+a` first.
 static std::vector<shil_opcode> foldMovIntoAlu(const std::vector<shil_opcode>& ops)
 {
 	std::vector<shil_opcode> out;
@@ -101,7 +106,9 @@ static std::vector<shil_opcode> foldMovIntoAlu(const std::vector<shil_opcode>& o
 			&& ops[i].rd.is_r32i()
 			&& isAlu(ops[i + 1].op)
 			&& sameReg(ops[i].rd, ops[i + 1].rd)
-			&& sameReg(ops[i].rd, ops[i + 1].rs1))
+			&& sameReg(ops[i].rd, ops[i + 1].rs1)
+			&& !sameReg(ops[i].rd, ops[i + 1].rs2)
+			&& !sameReg(ops[i].rd, ops[i + 1].rs3))
 		{
 			shil_opcode fused = ops[i + 1];
 			fused.rs1 = ops[i].rs1;
