@@ -73,6 +73,25 @@ if(CMAKE_CXX_COMPILER MATCHES "webos" OR
 	set(WEBOS ON)
 endif()
 
+# Developer tooling can be built without the emulator's optional dependencies:
+# cmake -S . -B build-aot -DFLYCAST_AOT_OFFLINE_TOOLING_ONLY=ON
+# cmake --build build-aot --target aot-offline-emit
+option(FLYCAST_AOT_OFFLINE_TOOLING "Build the offline ARM64 fixture emitter" OFF)
+option(FLYCAST_AOT_OFFLINE_TOOLING_ONLY "Configure only the offline fixture emitter" OFF)
+if(FLYCAST_AOT_OFFLINE_TOOLING_ONLY)
+	set(FLYCAST_AOT_OFFLINE_TOOLING ON)
+endif()
+if(FLYCAST_AOT_OFFLINE_TOOLING)
+	add_executable(aot-offline-emit
+		core/rec-ARM64/arm64_aot_offline.cpp
+		core/rec-ARM64/aot_offline_main.cpp)
+	target_compile_definitions(aot-offline-emit PRIVATE AOT_OFFLINE_EMITTER_ONLY)
+	target_include_directories(aot-offline-emit PRIVATE core core/deps core/deps/nowide/include)
+endif()
+if(FLYCAST_AOT_OFFLINE_TOOLING_ONLY)
+	return()
+endif()
+
 set(USE_HOST_SDL_DEFAULT OFF)
 if(NOT APPLE AND (NOT UNIX OR CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD|OpenBSD|NetBSD|Haiku"))
 	set(USE_HOST_SDL_DEFAULT ON)
@@ -1238,6 +1257,20 @@ if("arm64" IN_LIST ARCHITECTURE AND NOT JITLESS)
 		core/deps/vixl/utils-vixl.cc
 		core/deps/vixl/utils-vixl.h)
 	target_sources(${PROJECT_NAME} PRIVATE core/rec-ARM64/rec_arm64.cpp core/rec-ARM64/arm64_regalloc.h)
+endif()
+# Offline emission is developer tooling. Product builds have no linked corpus.
+option(FLYCAST_AOT_BENCH_FIXTURE "Link the synthetic ARM64 fixture for development" OFF)
+if("arm64" IN_LIST ARCHITECTURE)
+	target_sources(${PROJECT_NAME} PRIVATE core/rec-ARM64/arm64_aot_offline.cpp)
+endif()
+if(FLYCAST_AOT_BENCH_FIXTURE)
+	if(NOT FLYCAST_AOT_OFFLINE_TOOLING OR NOT ARCHITECTURE STREQUAL "arm64")
+		message(FATAL_ERROR "AOT bench fixture requires offline tooling and an ARM64-only build")
+	endif()
+	enable_language(ASM)
+	target_sources(${PROJECT_NAME} PRIVATE
+		core/rec-ARM64/aot_offline/aot_sh4_0000beef_1083127669.S
+		core/rec-ARM64/aot_offline_bench_table.cpp)
 endif()
 if(("x86" IN_LIST ARCHITECTURE OR "x86_64" IN_LIST ARCHITECTURE) AND NOT JITLESS)
 	add_subdirectory(core/deps/xbyak EXCLUDE_FROM_ALL)

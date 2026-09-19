@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "role": "bench_fixture",
+  "title": "bench fixture for offline AOT emit",
+  "note": "Synthetic guest block (MOV.L @R4,R1; ADD R1,R1; MOV.L R1,@R4). Not a title dump. Gameplay fps is measured by GameBootBench only.",
+  "blocks": [
+    {
+      "pc": "0x0000beef",
+      "sh4_hash": 1083127669,
+      "sh4_bytes": "42611c311224",
+      "guest_cycles": 3,
+      "BlockType": 0,
+      "targets": {
+        "branch": "0xffffffff",
+        "next": "0x0000bef5"
+      },
+      "visits": 0
+    }
+  ]
+}

@@ -21,6 +21,10 @@
 
 #if FEAT_SHREC == DYNAREC_JIT && HOST_CPU == CPU_ARM64
 
+// Before any `using namespace vixl::aarch64` (this file, arm64_unwind.h,
+// arm64_regalloc.h). shil_vm_mem.h's s8/s16 must bind to types.h, not VIXL regs.
+#include "hw/sh4/dyna/shil_vm_smc.h"
+
 #ifndef _M_ARM64
 #include <unistd.h>
 #endif
@@ -41,6 +45,7 @@ using namespace vixl::aarch64;
 #include "hw/sh4/sh4_mem.h"
 #include "hw/sh4/sh4_rom.h"
 #include "arm64_regalloc.h"
+#include "arm64_aot_offline.h"
 #include "hw/mem/addrspace.h"
 #include "oslib/virtmem.h"
 #include "emulator.h"
@@ -130,7 +135,12 @@ public:
 	: Arm64Assembler(sh4ctx, codeBuffer, codeBuffer.get()) { }
 
 	Arm64Assembler(Sh4Context& sh4ctx, Sh4CodeBuffer& codeBuffer, void *buffer)
-	: MacroAssembler((u8 *)buffer, codeBuffer.getFreeSpace()), regalloc(this), sh4ctx(sh4ctx), codeBuffer(codeBuffer)
+	: Arm64Assembler(sh4ctx, codeBuffer, buffer, codeBuffer.getFreeSpace()) { }
+
+	// Host-buffer ctor: capacity is the caller-owned emit buffer size (offline path),
+	// not CodeCache free space.
+	Arm64Assembler(Sh4Context& sh4ctx, Sh4CodeBuffer& codeBuffer, void *buffer, u32 capacity)
+	: MacroAssembler((u8 *)buffer, capacity), regalloc(this), sh4ctx(sh4ctx), codeBuffer(codeBuffer)
 	{
 		call_regs.push_back((const WRegister*)&w0);
 		call_regs.push_back((const WRegister*)&w1);
@@ -254,11 +264,65 @@ public:
 		return *ret_reg;
 	}
 
+	// RELOCATABLE OFFLINE mode (App-Store AOT). Default false keeps DYNAREC_JIT unchanged.
+	bool offlineRelocatable = false;
+	// Dump FNV-1a expected hash for SMC prologue (0 → hash live guest bytes at emit).
+	u32 offlineExpectedSmcHash = 0;
+
+	void setOfflineRelocatable(bool enable) { offlineRelocatable = enable; }
+	void setOfflineExpectedSmcHash(u32 hash) { offlineExpectedSmcHash = hash; }
+
+	// AotNativeEntry ABI epilogue. Matches the 160-byte offline prologue
+	// (same callee-saved set as mainloop). w0 = status (0=ran, nonzero=SMC).
+	void AotNativeReturn(u32 status)
+	{
+		Mov(w0, status);
+		Ldp(x29, x30, MemOperand(sp, 144));
+		Ldp(d12, d13, MemOperand(sp, 128));
+		Ldp(d10, d11, MemOperand(sp, 112));
+		Ldp(d8, d9, MemOperand(sp, 96));
+		Ldp(d14, d15, MemOperand(sp, 80));
+		Ldp(x27, x28, MemOperand(sp, 64));
+		Ldp(x25, x26, MemOperand(sp, 48));
+		Ldp(x23, x24, MemOperand(sp, 32));
+		Ldp(x21, x22, MemOperand(sp, 16));
+		Ldp(x19, x20, MemOperand(sp, 160, PostIndex));
+		Ret();
+	}
+
 	void compileBlock(RuntimeBlockInfo* block, bool force_checks, bool optimise)
 	{
 		//printf("REC-ARM64 compiling %08x\n", block->addr);
-		jitWriteProtect(codeBuffer, false);
+		// Offline emit writes a caller-owned host buffer / .S — never unlock CodeCache RWX.
+		if (!offlineRelocatable)
+			jitWriteProtect(codeBuffer, false);
 		this->block = block;
+		if (offlineRelocatable)
+		{
+			// Offline: never use rewrite-sized fast mem; always table helpers.
+			optimise = false;
+			// AotNativeEntry is called from C++. Save the callee-saved set this
+			// emitter clobbers (regalloc x19–x26 and d8–d15, context x28,
+			// guest PC x29, lr x30) before x28/w29 are overwritten.
+			Stp(x19, x20, MemOperand(sp, -160, PreIndex));
+			Stp(x21, x22, MemOperand(sp, 16));
+			Stp(x23, x24, MemOperand(sp, 32));
+			Stp(x25, x26, MemOperand(sp, 48));
+			Stp(x27, x28, MemOperand(sp, 64));
+			Stp(d14, d15, MemOperand(sp, 80));
+			Stp(d8, d9, MemOperand(sp, 96));
+			Stp(d10, d11, MemOperand(sp, 112));
+			Stp(d12, d13, MemOperand(sp, 128));
+			Stp(x29, x30, MemOperand(sp, 144));
+			Mov(x28, x0);
+			// Resolve dump/live FNV-1a at emit time (host) — baked as SMC immediate below.
+			if (offlineExpectedSmcHash == 0 && force_checks && block->sh4_code_size != 0)
+			{
+				u8 *ptr = GetMemPtr(block->addr, block->sh4_code_size);
+				if (ptr != nullptr)
+					offlineExpectedSmcHash = shilVmHashBytes(ptr, block->sh4_code_size);
+			}
+		}
 		CheckBlock(force_checks, block);
 		
 		// run register allocator
@@ -266,16 +330,25 @@ public:
 
 		// scheduler
 		Ldr(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
-		Cmp(w1, 0);
-		Label cycles_remaining;
-		B(&cycles_remaining, pl);
-		Mov(w0, block->vaddr);
-		GenCall(arm64_intc_sched);
-		Mov(w1, w0);
-		Bind(&cycles_remaining);
+		if (offlineRelocatable)
+		{
+			// No GenCall into JIT CodeCache stubs — plain cycle burn only.
+			Sub(w1, w1, block->guest_cycles);
+			Str(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
+		}
+		else
+		{
+			Cmp(w1, 0);
+			Label cycles_remaining;
+			B(&cycles_remaining, pl);
+			Mov(w0, block->vaddr);
+			GenCall(arm64_intc_sched);
+			Mov(w1, w0);
+			Bind(&cycles_remaining);
 
-		Sub(w1, w1, block->guest_cycles);
-		Str(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
+			Sub(w1, w1, block->guest_cycles);
+			Str(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
+		}
 
 		for (size_t i = 0; i < block->oplist.size(); i++)
 		{
@@ -982,10 +1055,14 @@ public:
 		block->relink_offset = (u32)GetBuffer()->GetCursorOffset();
 		block->relink_data = 0;
 
-		RelinkBlock(block);
+		if (offlineRelocatable)
+			RelinkBlockOffline(block);
+		else
+			RelinkBlock(block);
 
 		Finalize();
-		jitWriteProtect(codeBuffer, true);
+		if (!offlineRelocatable)
+			jitWriteProtect(codeBuffer, true);
 	}
 
 	void canonStart(const shil_opcode *op)
@@ -1161,6 +1238,59 @@ public:
 		verify(ops == 1 || ops == 2);
 		if (ops == 1)
 			Nop();
+	}
+
+	// RELOCATABLE OFFLINE: publish next PC and return via AotNativeEntry ABI.
+	// Never calls rdv_LinkBlock / link stubs / Relink patching / JIT mainloop.
+	u32 RelinkBlockOffline(RuntimeBlockInfo *block)
+	{
+		ptrdiff_t start_offset = GetBuffer()->GetCursorOffset();
+		u32 nextPc = block->NextBlock;
+		switch (block->BlockType)
+		{
+		case BET_StaticJump:
+		case BET_StaticCall:
+		case BET_Cond_0:
+		case BET_Cond_1:
+			nextPc = block->BranchBlock;
+			if (block->BlockType == BET_Cond_0 || block->BlockType == BET_Cond_1)
+			{
+				// Cond: write BranchBlock or NextBlock based on T/jdyn, then ret.
+				if (block->has_jcond)
+					Ldr(w11, sh4_context_mem_operand(&sh4ctx.jdyn));
+				else
+					Ldr(w11, sh4_context_mem_operand(&sh4ctx.sr.T));
+				Cmp(w11, block->BlockType & 1);
+				Label not_taken;
+				B(ne, &not_taken);
+				Mov(w29, block->BranchBlock);
+				Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
+				AotNativeReturn(0);
+				Bind(&not_taken);
+				Mov(w29, block->NextBlock);
+				Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
+				AotNativeReturn(0);
+				return GetBuffer()->GetCursorOffset() - start_offset;
+			}
+			break;
+		case BET_DynamicJump:
+		case BET_DynamicCall:
+		case BET_DynamicRet:
+		case BET_DynamicIntr:
+			// w29 already holds dynamic target from shop_jdyn
+			Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
+			AotNativeReturn(0);
+			return GetBuffer()->GetCursorOffset() - start_offset;
+		case BET_StaticIntr:
+			nextPc = block->NextBlock;
+			break;
+		default:
+			break;
+		}
+		Mov(w29, nextPc);
+		Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
+		AotNativeReturn(0);
+		return GetBuffer()->GetCursorOffset() - start_offset;
 	}
 
 	u32 RelinkBlock(RuntimeBlockInfo *block)
@@ -1344,13 +1474,18 @@ public:
 			block->host_code_size = GetBuffer()->GetSizeInBytes();
 			block->host_opcodes = GetLabelAddress<u32*>(&code_end) - GetBuffer()->GetStartAddress<u32*>();
 
-			codeBuffer.advance(block->host_code_size);
+			// Offline host-buffer emit must not advance the runtime CodeCache.
+			if (!offlineRelocatable)
+				codeBuffer.advance(block->host_code_size);
 		}
 
-		// Flush and invalidate caches
-		virtmem::flush_cache(
-			CC_RW2RX(GetBuffer()->GetStartAddress<void*>()), CC_RW2RX(GetBuffer()->GetEndAddress<void*>()),
-			GetBuffer()->GetStartAddress<void*>(), GetBuffer()->GetEndAddress<void*>());
+		if (!offlineRelocatable)
+		{
+			// Flush and invalidate caches (JIT CodeCache only)
+			virtmem::flush_cache(
+				CC_RW2RX(GetBuffer()->GetStartAddress<void*>()), CC_RW2RX(GetBuffer()->GetEndAddress<void*>()),
+				GetBuffer()->GetStartAddress<void*>(), GetBuffer()->GetEndAddress<void*>());
+		}
 #if 0
 		if (rewrite && block != NULL)
 		{
@@ -1765,6 +1900,9 @@ private:
 
 	bool GenReadMemoryImmediate(const shil_opcode& op)
 	{
+		if (offlineRelocatable)
+			return false; // table-based mem helpers only (aot_offline_read* / addrspace)
+
 		if (!op.rs1.is_imm())
 			return false;
 		void *ptr;
@@ -1948,6 +2086,9 @@ private:
 
 	bool GenWriteMemoryImmediate(const shil_opcode& op)
 	{
+		if (offlineRelocatable)
+			return false; // table-based mem helpers only
+
 		if (!op.rs1.is_imm())
 			return false;
 
@@ -2077,8 +2218,34 @@ private:
 		verify (GetCursorAddress<Instruction *>() - start_instruction == code_size * kInstructionSize);
 	}
 
+	void CheckBlockOffline(bool force_checks, RuntimeBlockInfo* block)
+	{
+		// Hash-based SMC via relocatable helper — never absolute host RAM pointers.
+		if (!force_checks || block->sh4_code_size == 0)
+			return;
+
+		// offlineExpectedSmcHash is the dump FNV-1a (or live hash resolved at emit).
+		// Zero is the legacy live-hash sentinel for this developer-only prototype.
+		Mov(x0, x28);
+		Mov(w1, block->addr);
+		Mov(w2, block->sh4_code_size);
+		Mov(w3, offlineExpectedSmcHash);
+		GenCallRuntime(aot_offline_smc_check);
+		Label smc_ok;
+		Cbz(w0, &smc_ok);
+		// AotNativeEntry ABI: restore lr and return nonzero to dispatcher (SHIL VM).
+		AotNativeReturn(1);
+		Bind(&smc_ok);
+	}
+
 	void CheckBlock(bool force_checks, RuntimeBlockInfo* block)
 	{
+		if (offlineRelocatable)
+		{
+			CheckBlockOffline(force_checks, block);
+			return;
+		}
+
 		if (mmu_enabled())
 		{
 			// Verify that pc == block->vaddr
@@ -2291,6 +2458,24 @@ public:
 
 		delete compiler;
 		compiler = nullptr;
+	}
+
+	// Developer probe: emit into a plain buffer (no CodeCache / RWX).
+	// These bytes may contain process-local helper addresses; do not ship them.
+	// The separate text emitter produces assemblable, link-time relocated output.
+	// expectedSmcHash is the dump FNV-1a; 0 hashes live guest bytes at emit time.
+	u32 compileOfflineRelocatable(RuntimeBlockInfo* block, bool smc_checks,
+		void *hostBuffer, u32 hostCapacity, u32 expectedSmcHash)
+	{
+		verify(hostBuffer != nullptr && hostCapacity >= 64);
+		compiler = new Arm64Assembler(*sh4ctx, *codeBuffer, hostBuffer, hostCapacity);
+		compiler->setOfflineRelocatable(true);
+		compiler->setOfflineExpectedSmcHash(expectedSmcHash);
+		compiler->compileBlock(block, smc_checks, false);
+		u32 size = block->host_code_size;
+		delete compiler;
+		compiler = nullptr;
+		return size;
 	}
 
 	void canonStart(const shil_opcode *op) override
