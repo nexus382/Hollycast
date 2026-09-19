@@ -1,16 +1,21 @@
 #include "gtest/gtest.h"
 #include "types.h"
+#include "emulator.h"
+#include "hw/mem/addrspace.h"
 #include "hw/sh4/modules/modules.h"
 #include "hw/sh4/sh4_if.h"
 #include "hw/sh4/sh4_mmr.h"
 #include "hw/sh4/sh4_sched.h"
 
 class TimerTest : public ::testing::Test {
+	// The TMU shares the sh4 scheduler and interrupt controller with the rest of the machine,
+	// so it can only be driven through a fully initialized emulator. Terminating it here would
+	// leave tmu_sched[] dangling for every suite that runs afterwards.
 	void SetUp() override {
-		tmu.init();
-	}
-	void TearDown() override {
-		tmu.term();
+		if (!addrspace::reserve())
+			die("addrspace::reserve failed");
+		emu.init();
+		emu.dc_reset(true);
 	}
 
 protected:
