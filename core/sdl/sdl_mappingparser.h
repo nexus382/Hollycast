@@ -53,6 +53,9 @@ public:
 		SDL_free(gcdb);
 	}
 
+	// Parses a mapping in SDL_GameControllerMapping() format
+	explicit SDLControllerMappingParser(const std::string& mapping) : gcMapping(mapping) {}
+
 	SDL_GameControllerButtonBind2 getBindForAxis(SDL_GameControllerAxis sdl_axis, int direction = 0)
 	{
 		SDL_GameControllerButtonBind2 bind{};
