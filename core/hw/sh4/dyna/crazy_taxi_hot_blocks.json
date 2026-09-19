@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "title": "Crazy Taxi hot SHIL blocks for offline AOT",
+  "note": "Filled by aotHotDumpTopN during GameBootBench.DISABLED_GameplayFramePace when HOLLYCAST_AOT_HOT_DUMP is set. Empty blocks[] until a profiled run writes over this file.",
+  "blocks": [
+    {
+      "pc": "0x00000000",
+      "sh4_hash": 0,
+      "sh4_bytes": "",
+      "guest_cycles": 0,
+      "BlockType": 0,
+      "targets": {
+        "branch": "0xffffffff",
+        "next": "0xffffffff"
+      },
+      "visits": 0
+    }
+  ]
+}

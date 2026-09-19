@@ -13,6 +13,10 @@
 #include "serialize.h"
 #include "stdclass.h"
 
+#if FEAT_SHREC == DYNAREC_IR
+#include "hw/sh4/dyna/aot_hot_dump.h"
+#endif
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -124,10 +128,21 @@ protected:
 		if (!statePath.empty())
 			loadState();
 		emu.start();
+#if FEAT_SHREC == DYNAREC_IR
+		if (gameplay && getenv("HOLLYCAST_AOT_HOT_DUMP") != nullptr)
+		{
+			aotHotReset();
+			aotHotSetProfiling(true);
+		}
+#endif
 	}
 
 	void TearDown() override
 	{
+#if FEAT_SHREC == DYNAREC_IR
+		aotHotSetProfiling(false);
+		aotHotReset();
+#endif
 		if (emu.running())
 			emu.stop();
 		emu.unloadGame(false);
@@ -252,4 +267,12 @@ TEST_F(GameBootBench, DISABLED_GameplayFramePace)
 	printResult(statePath, TIMED_FRAMES, seconds);
 
 	EXPECT_GT(seconds, 0.0);
+
+#if FEAT_SHREC == DYNAREC_IR
+	// Optional profile dump for offline AOT: top hot blocks by visit count.
+	if (const char *dumpPath = getenv("HOLLYCAST_AOT_HOT_DUMP"))
+	{
+		aotHotDumpTopN(dumpPath, 256);
+	}
+#endif
 }
