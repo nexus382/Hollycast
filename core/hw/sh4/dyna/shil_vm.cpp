@@ -43,6 +43,7 @@
 struct ShilRuntimeBlock : RuntimeBlockInfo
 {
 	ShilVmProgram program;
+	ShilVmExitKind exitKind = ShilVmExitKind::Dynamic;
 	u32 smcHash = 0;
 	u32 smcAddr = 0;
 	u32 smcSize = 0;
@@ -845,6 +846,8 @@ public:
 		block->host_opcodes = (u32)block->oplist.size();
 
 		auto *irBlock = static_cast<ShilRuntimeBlock *>(block);
+		// BlockType is fixed after decode; classify it once for all executions.
+		irBlock->exitKind = shilVmExitKind(block->BlockType);
 		irBlock->aotEntry = nullptr;
 		irBlock->aotSmcHash = 0;
 		irBlock->aotSmcSize = 0;
@@ -1032,10 +1035,7 @@ public:
 
 		executeCells<false>(ctx, block, irBlock->program.cells, nullptr);
 
-		// Derived once and handed to both users: endBlock and the successor
-		// select each switched on BlockType, and with blocks averaging four
-		// cells that duplication is not lost in the noise.
-		const ShilVmExitKind kind = shilVmExitKind(block->BlockType);
+		const ShilVmExitKind kind = irBlock->exitKind;
 		bool taken = false;
 		endBlock(ctx, block, kind, &taken);
 
@@ -1129,7 +1129,7 @@ public:
 
 		ctx.cycle_counter -= (int)block->guest_cycles;
 		executeCells<true>(ctx, block, irBlock->program.cells, &pure);
-		endBlock(ctx, block, shilVmExitKind(block->BlockType), nullptr);
+		endBlock(ctx, block, irBlock->exitKind, nullptr);
 		return true;
 	}
 

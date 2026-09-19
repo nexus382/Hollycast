@@ -41,6 +41,12 @@ TEST(ShilVmChain, ExitPcMatchesKind)
 TEST(ShilVmChain, MapsBlockEndTypes)
 {
 	EXPECT_EQ(shilVmExitKind(BET_StaticJump), ShilVmExitKind::StaticJump);
+	EXPECT_EQ(shilVmExitKind(BET_StaticCall), ShilVmExitKind::StaticCall);
+	EXPECT_EQ(shilVmExitKind(BET_StaticIntr), ShilVmExitKind::StaticIntr);
+	EXPECT_EQ(shilVmExitKind(BET_Cond_0), ShilVmExitKind::Cond0);
 	EXPECT_EQ(shilVmExitKind(BET_Cond_1), ShilVmExitKind::Cond1);
 	EXPECT_EQ(shilVmExitKind(BET_DynamicJump), ShilVmExitKind::Dynamic);
+	EXPECT_EQ(shilVmExitKind(BET_DynamicCall), ShilVmExitKind::Dynamic);
+	EXPECT_EQ(shilVmExitKind(BET_DynamicRet), ShilVmExitKind::Dynamic);
+	EXPECT_EQ(shilVmExitKind(BET_DynamicIntr), ShilVmExitKind::DynamicIntr);
 }
