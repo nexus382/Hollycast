@@ -100,6 +100,9 @@ public:
 			return bind;
 		}
 		// Axis
+		// bind.value is a union initialized through its first member (button),
+		// so the axis member must be zeroed before direction is left unset
+		bind.value.axis = {};
 		if (mapping[valuePos] == '+') {
 			bind.value.axis.direction = 1;
 			valuePos++;
