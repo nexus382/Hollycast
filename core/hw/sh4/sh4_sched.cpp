@@ -119,6 +119,7 @@ u64 sh4_sched_now64()
 
 void sh4_sched_request(int id, int cycles)
 {
+	verify(id >= 0 && id < (int)sch_list.size());
 	verify(cycles == -1 || (cycles >= 0 && cycles <= SH4_MAIN_CLOCK));
 
 	sched_list& sched = sch_list[id];
