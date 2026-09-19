@@ -159,11 +159,10 @@ bool RuntimeBlockInfo::Setup(u32 rpc,fpscr_t rfpu_cfg)
 	}
 	SetProtectedFlags();
 
-#if FEAT_SHREC != DYNAREC_IR
-	// SSA is for native register allocation / constprop. The SHIL VM folds
-	// mov+ALU itself; skipping this cuts cold-compile hitches on boot/loads.
+	// Worth it for the SHIL VM too, not just for native register allocation:
+	// constant folding and dead code removal cut the cells the VM executes,
+	// and compiling the whole of Crazy Taxi's boot costs ~19ms of SSA in total.
 	AnalyseBlock(this);
-#endif
 
 	return true;
 }
