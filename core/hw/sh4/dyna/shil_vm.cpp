@@ -21,6 +21,8 @@
 #include "aot_table.h"
 #include "aot_hot_dump.h"
 #include <algorithm>
+#include <array>
+#include <utility>
 
 #include "hw/sh4/sh4_core.h"
 #include "hw/sh4/sh4_interrupts.h"
@@ -40,9 +42,12 @@
 #define SHIL_MODE 1
 #include "shil_canonical.h"
 
+using ShilVmHandler = const ShilVmCell *(*)(Sh4Context&, RuntimeBlockInfo *, const ShilVmCell *);
+
 struct ShilRuntimeBlock : RuntimeBlockInfo
 {
 	ShilVmProgram program;
+	std::vector<ShilVmHandler> handlers;
 	ShilVmExitKind exitKind = ShilVmExitKind::Dynamic;
 	ShilVmCodeGuard smcGuard;
 	bool smcEnabled = false;
@@ -586,9 +591,10 @@ static void executeCellRare(Sh4Context& ctx, RuntimeBlockInfo *block, const Shil
 // real game, and the dispatch loop is instruction-fetch bound - forcing extra
 // code into it measurably slows it down. So only those live here, and the
 // remaining ~90 sit behind a call that is taken a few percent of the time.
-static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell& op)
+template<int Opcode = -1>
+static inline void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell& op)
 {
-	switch (op.op)
+	switch (Opcode < 0 ? op.op : Opcode)
 	{
 	case shop_readm:
 	case vmop_load:
@@ -680,8 +686,113 @@ static void executeCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCe
 	}
 }
 
-// Runs a block's cells. The probing instantiation also watches what they do;
-// the plain one compiles to the loop the VM has always run.
+// These handlers are ordinary compiler-emitted text. Grouping only removes
+// dispatch between adjacent cells; operands and exception boundaries stay intact.
+// Six common opcodes bound the text footprint to 36 pairs and 216 triples.
+static constexpr int pairedOpcodes[] = {
+	shop_mov32, shop_add, shop_sub, shop_readm, shop_writem,
+	shop_seteq
+};
+static constexpr size_t pairedOpcodeCount = sizeof(pairedOpcodes) / sizeof(pairedOpcodes[0]);
+
+template<int Opcode>
+static inline void executeFixedCell(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell& cell)
+{
+	try {
+		executeCell<Opcode>(ctx, block, cell);
+	}
+	catch (SH4ThrownException& ex) {
+		if (cell.delaySlot())
+			AdjustDelaySlotException(ex);
+		throw;
+	}
+}
+
+template<size_t Pair>
+static const ShilVmCell *executePair(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell *cell)
+{
+	executeFixedCell<pairedOpcodes[Pair / pairedOpcodeCount]>(ctx, block, cell[0]);
+	executeFixedCell<pairedOpcodes[Pair % pairedOpcodeCount]>(ctx, block, cell[1]);
+	return cell + 2;
+}
+
+template<size_t Triple>
+static const ShilVmCell *executeTriple(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell *cell)
+{
+	executeFixedCell<pairedOpcodes[Triple / (pairedOpcodeCount * pairedOpcodeCount)]>(ctx, block, cell[0]);
+	executeFixedCell<pairedOpcodes[(Triple / pairedOpcodeCount) % pairedOpcodeCount]>(ctx, block, cell[1]);
+	executeFixedCell<pairedOpcodes[Triple % pairedOpcodeCount]>(ctx, block, cell[2]);
+	return cell + 3;
+}
+
+template<size_t... Triple>
+static constexpr std::array<ShilVmHandler, sizeof...(Triple)> tripleHandlers(std::index_sequence<Triple...>)
+{
+	return {{ &executeTriple<Triple>... }};
+}
+
+static const ShilVmCell *executeSingle(Sh4Context& ctx, RuntimeBlockInfo *block, const ShilVmCell *cell)
+{
+	executeFixedCell<-1>(ctx, block, *cell);
+	return cell + 1;
+}
+
+template<size_t... Pair>
+static constexpr std::array<ShilVmHandler, sizeof...(Pair)> pairHandlers(std::index_sequence<Pair...>)
+{
+	return {{ &executePair<Pair>... }};
+}
+
+static int pairedOpcode(u16 opcode)
+{
+	switch (opcode)
+	{
+	case vmop_mov_imm: opcode = shop_mov32; break;
+	case vmop_add_imm: opcode = shop_add; break;
+	case vmop_sub_imm: opcode = shop_sub; break;
+	case vmop_load: opcode = shop_readm; break;
+	case vmop_store: opcode = shop_writem; break;
+	}
+	for (size_t i = 0; i < pairedOpcodeCount; i++)
+		if (opcode == pairedOpcodes[i])
+			return (int)i;
+	return -1;
+}
+
+static void compileHandlers(ShilRuntimeBlock& block)
+{
+	static constexpr auto pairs = pairHandlers(std::make_index_sequence<pairedOpcodeCount * pairedOpcodeCount>{});
+	static constexpr auto triples = tripleHandlers(std::make_index_sequence<pairedOpcodeCount * pairedOpcodeCount * pairedOpcodeCount>{});
+	block.handlers.clear();
+	const auto& cells = block.program.cells;
+	for (size_t i = 0; i < cells.size();)
+	{
+		const int first = pairedOpcode(cells[i].op);
+		const int second = i + 1 < cells.size() ? pairedOpcode(cells[i + 1].op) : -1;
+		if (first >= 0 && second >= 0)
+		{
+			const int third = i + 2 < cells.size() ? pairedOpcode(cells[i + 2].op) : -1;
+			if (third >= 0)
+			{
+				block.handlers.push_back(triples[(first * pairedOpcodeCount + second) * pairedOpcodeCount + third]);
+				i += 3;
+			}
+			else
+			{
+				block.handlers.push_back(pairs[first * pairedOpcodeCount + second]);
+				i += 2;
+			}
+		}
+		else
+		{
+			block.handlers.push_back(&executeSingle);
+			i++;
+		}
+	}
+}
+
+// Probes observe each original cell before executing it. The non-probing
+// instantiation also serves as the sequential reference in differential tests.
 template<bool Probing>
 static void executeCells(Sh4Context& ctx, RuntimeBlockInfo *block, const std::vector<ShilVmCell>& cells, bool *pure)
 {
@@ -871,6 +982,7 @@ public:
 		}
 
 		irBlock->program = shilVmEncode(block->oplist);
+		compileHandlers(*irBlock);
 		block->host_opcodes = (u32)irBlock->program.cells.size();
 
 		irBlock->dynPc = block->BranchBlock;
@@ -1027,7 +1139,9 @@ public:
 			return lookupBlock(ctx.pc);
 		}
 
-		executeCells<false>(ctx, block, irBlock->program.cells, nullptr);
+		const ShilVmCell *cell = irBlock->program.cells.data();
+		for (ShilVmHandler handler : irBlock->handlers)
+			cell = handler(ctx, block, cell);
 
 		const ShilVmExitKind kind = irBlock->exitKind;
 		bool taken = false;
@@ -1200,5 +1314,87 @@ void shilVmResetCompileCount()
 {
 	s_compileCount = 0;
 }
+
+#ifdef FLYCAST_UNIT_TESTS
+#include "gtest/gtest.h"
+
+// Kept beside the private handlers so the test exercises every static dispatch
+// entry without exposing VM implementation details through the public API.
+TEST(ShilVmSuperinstructions, AllGroupsMatchSequentialExecution)
+{
+	struct RestoreRam
+	{
+		u8 *ram = s_ram;
+		u32 size = s_ramSize;
+		u32 mask = s_ramMask;
+		~RestoreRam() { s_ram = ram; s_ramSize = size; s_ramMask = mask; }
+	} restore;
+	u8 sequential[256], grouped[256];
+	for (size_t length = 0; length <= 3; length++)
+	{
+		size_t combinations = 1;
+		for (size_t i = 0; i < length; i++)
+			combinations *= pairedOpcodeCount;
+		for (size_t group = 0; group < combinations; group++)
+		for (u32 trial = 0; trial < 128; trial++)
+		{
+			ShilRuntimeBlock block;
+			block.vaddr = 0xac002000;
+			Sh4Context reference{};
+			for (int r = 0; r < 16; r++)
+				reference.r[r] = (trial * 2654435761u) ^ (r * 1234567u);
+			reference.r[8] = 0xac000080;
+			for (int n = 0; n < 256; n++)
+				sequential[n] = grouped[n] = (u8)(n + trial);
+			size_t codes = group;
+			for (size_t n = 0; n < length; n++)
+			{
+				ShilVmCell cell;
+				cell.op = pairedOpcodes[codes % pairedOpcodeCount];
+				codes /= pairedOpcodeCount;
+				cell.rd = (s16)(n + 1);
+				cell.rs1 = (s16)n;
+				cell.rs2 = 2;
+				cell.guest_offs = (u16)(n * 2);
+				cell.flags = trial & 1 ? SHIL_VM_DELAY : 0;
+				cell.size = 1u << (trial % 4);
+				if (cell.op == shop_readm || cell.op == shop_writem)
+				{
+					cell.rs1 = 8;
+					if (trial & 8)
+						cell.op = cell.op == shop_readm ? vmop_load : vmop_store;
+				}
+				else if (trial & 2)
+				{
+					cell.flags |= SHIL_VM_RS2_IMM;
+					cell.imm = trial & 4 ? 0xffffffff : 0;
+				}
+				if (trial & 16)
+				{
+					if (cell.op == shop_add) cell.op = vmop_add_imm;
+					if (cell.op == shop_sub) cell.op = vmop_sub_imm;
+					if (cell.op == shop_mov32) cell.op = vmop_mov_imm;
+				}
+				block.program.cells.push_back(cell);
+			}
+			auto actual = reference;
+			s_ramSize = 256;
+			s_ramMask = 255;
+			s_ram = sequential;
+			executeCells<false>(reference, &block, block.program.cells, nullptr);
+			s_ram = grouped;
+			compileHandlers(block);
+			ASSERT_EQ(block.handlers.size(), length == 0 ? 0u : 1u);
+			const ShilVmCell *cell = block.program.cells.data();
+			for (ShilVmHandler handler : block.handlers)
+				cell = handler(actual, &block, cell);
+			if (length != 0)
+				ASSERT_EQ(cell, block.program.cells.data() + length);
+			ASSERT_EQ(memcmp(&reference, &actual, sizeof(actual)), 0) << length << ":" << group << ":" << trial;
+			ASSERT_EQ(memcmp(sequential, grouped, sizeof(grouped)), 0);
+		}
+	}
+}
+#endif
 
 #endif	// FEAT_SHREC == DYNAREC_IR
