@@ -82,7 +82,7 @@ def main():
             assert ('aot_sh4_0000beef_1083127669.S' in selected) == enabled
             assert '.json' not in selected and 'aot_offline_main.cpp' not in selected
         print('PASS: CMake default corpus empty; synthetic table/assembly require explicit opt-in')
-        source = REC / 'aot_offline/bench_fixture.json' 
+        source = REC / 'aot_offline/bench_fixture.json'
         fixture = json.loads(source.read_text())
         # Neither a special path nor a title identity is required for emission.
         renamed = tmp / 'synthetic.json'
