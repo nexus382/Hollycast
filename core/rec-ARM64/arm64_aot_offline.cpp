@@ -1,0 +1,322 @@
+/*
+	Relocatable offline AOT helpers + bench-fixture .S emit.
+	Runtime: table-based mem + SMC check (no codegen).
+	Build-time input: aot_offline/bench_fixture.json only.
+*/
+
+#include "arm64_aot_offline.h"
+
+#include "hw/sh4/sh4_if.h"
+#ifndef AOT_OFFLINE_EMITTER_ONLY
+#include "hw/sh4/sh4_mem.h"
+#include "hw/sh4/dyna/shil_vm_smc.h"
+#endif
+
+#ifdef AOT_OFFLINE_EMITTER_ONLY
+#include "json/json.hpp"
+#endif
+
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+static_assert(offsetof(Sh4Context, r[0]) == 192, "Sh4Context.r offset drift");
+static_assert(offsetof(Sh4Context, pc) == 328, "Sh4Context.pc offset drift");
+static_assert(offsetof(Sh4Context, cycle_counter) == 372, "Sh4Context.cycle_counter offset drift");
+
+#ifndef AOT_OFFLINE_EMITTER_ONLY
+extern "C" int aot_offline_smc_check(void * /*sh4ctx*/, u32 guestAddr, u32 smcSize, u32 expectedHash)
+{
+	if (smcSize == 0)
+		return 0;
+	u8 *ptr = GetMemPtr(guestAddr, smcSize);
+	if (ptr == nullptr)
+		return 1;
+	const u32 live = shilVmHashBytes(ptr, smcSize);
+	return live == expectedHash ? 0 : 1;
+}
+
+extern "C" u8 aot_offline_read8(u32 addr)
+{
+	return ReadMem8(addr);
+}
+extern "C" u16 aot_offline_read16(u32 addr)
+{
+	return ReadMem16(addr);
+}
+extern "C" u32 aot_offline_read32(u32 addr)
+{
+	return ReadMem32(addr);
+}
+extern "C" u64 aot_offline_read64(u32 addr)
+{
+	return ReadMem64(addr);
+}
+extern "C" void aot_offline_write8(u32 addr, u32 data)
+{
+	WriteMem8(addr, (u8)data);
+}
+extern "C" void aot_offline_write16(u32 addr, u32 data)
+{
+	WriteMem16(addr, (u16)data);
+}
+extern "C" void aot_offline_write32(u32 addr, u32 data)
+{
+	WriteMem32(addr, data);
+}
+extern "C" void aot_offline_write64(u32 addr, u64 data)
+{
+	WriteMem64(addr, data);
+}
+
+#else
+
+static std::string symbolName(u32 pc, u32 hash)
+{
+	char buf[64];
+	snprintf(buf, sizeof(buf), "aot_sh4_%08x_%u", pc, hash);
+	return buf;
+}
+
+static void emitMovW(std::ostream &out, const char *reg, u32 imm)
+{
+	out << "\tmov\t" << reg << ", #" << (imm & 0xffff) << "\n";
+	if (imm > 0xffff)
+		out << "\tmovk\t" << reg << ", #" << ((imm >> 16) & 0xffff) << ", lsl #16\n";
+}
+
+static size_t offRn(u32 n)
+{
+	return offsetof(Sh4Context, r[0]) + (size_t)n * sizeof(u32);
+}
+
+static void emitLoadRn(std::ostream &out, const char *wreg, u32 n)
+{
+	out << "\tldr\t" << wreg << ", [x28, #" << offRn(n) << "]\n";
+}
+
+static void emitStoreRn(std::ostream &out, const char *wreg, u32 n)
+{
+	out << "\tstr\t" << wreg << ", [x28, #" << offRn(n) << "]\n";
+}
+
+// Bench-fixture ops only: MOV.L @Rm,Rn / MOV.L Rm,@Rn / ADD Rm,Rn.
+// Anything else fails closed — no silent no-op body.
+static bool emitGuestBody(std::ostream &out, const u8 *bytes, u32 len)
+{
+	if (bytes == nullptr || len < 2)
+		return false;
+
+	out << "\t// guest body translated from sh4_bytes (" << len << " bytes)\n";
+	for (u32 i = 0; i + 1 < len; i += 2)
+	{
+		const u16 op = (u16)bytes[i] | ((u16)bytes[i + 1] << 8);
+		const u32 n = (op >> 8) & 0xf;
+		const u32 m = (op >> 4) & 0xf;
+		const u16 low = op & 0xf;
+
+		if ((op & 0xf00f) == 0x300c)
+		{
+			emitLoadRn(out, "w0", n);
+			emitLoadRn(out, "w1", m);
+			out << "\tadd\tw0, w0, w1\n";
+			emitStoreRn(out, "w0", n);
+			continue;
+		}
+		if ((op & 0xf00f) == 0x6002)
+		{
+			emitLoadRn(out, "w0", m);
+			out << "\tbl\tAOT_C(aot_offline_read32)\n";
+			emitStoreRn(out, "w0", n);
+			continue;
+		}
+		if ((op & 0xf00f) == 0x2002 && low == 2)
+		{
+			emitLoadRn(out, "w0", n);
+			emitLoadRn(out, "w1", m);
+			out << "\tbl\tAOT_C(aot_offline_write32)\n";
+			continue;
+		}
+		return false;
+	}
+	return true;
+}
+
+static u32 fnv1a(const u8 *p, u32 n)
+{
+	u32 h = 2166136261u;
+	for (u32 i = 0; i < n; i++)
+	{
+		h ^= p[i];
+		h *= 16777619u;
+	}
+	return h;
+}
+
+static std::vector<u8> parseHexBytes(const std::string &hex)
+{
+	std::vector<u8> out;
+	int nibble = -1;
+	for (unsigned char c : hex)
+	{
+		int v = -1;
+		if (c >= '0' && c <= '9')
+			v = c - '0';
+		else if (c >= 'a' && c <= 'f')
+			v = 10 + (c - 'a');
+		else if (c >= 'A' && c <= 'F')
+			v = 10 + (c - 'A');
+		else
+			return {};
+		if (nibble < 0)
+			nibble = v;
+		else
+		{
+			out.push_back((u8)((nibble << 4) | v));
+			nibble = -1;
+		}
+	}
+	return nibble < 0 ? out : std::vector<u8>{};
+}
+
+bool arm64AotEmitRelocatableOffline(const Arm64AotOfflineBlockDesc &desc,
+	const u8 *sh4Bytes, u32 sh4Len, const std::string &asmPath)
+{
+	if (sh4Bytes == nullptr || sh4Len == 0 || sh4Len % 2 != 0
+		|| desc.smcSize != sh4Len || desc.guestCycles == 0
+		|| desc.nextTarget == 0xffffffffu || desc.blockType != 0)
+		return false;
+	if (fnv1a(sh4Bytes, sh4Len) != desc.sh4Hash)
+		return false;
+
+	const std::string sym = symbolName(desc.guestPc, desc.sh4Hash);
+	const size_t offPc = offsetof(Sh4Context, pc);
+	const size_t offCycles = offsetof(Sh4Context, cycle_counter);
+
+	u32 nextPc = desc.nextTarget;
+	if (nextPc == 0xffffffffu)
+		nextPc = desc.branchTarget;
+
+	std::ostringstream out;
+	out << "// RELOCATABLE OFFLINE emit — generated by arm64AotEmitBenchFixture\n";
+	out << "// Bench fixture native entry (matches aot_table AotNativeEntry ABI).\n";
+	out << "// SMC via bl aot_offline_smc_check; mem via aot_offline_*; ret to dispatcher.\n";
+	out << "// No Relink / rdv_LinkBlock / absolute host RAM ptrs / RWX.\n";
+	out << "#if defined(__APPLE__)\n";
+	out << "#define AOT_C(name) _##name\n";
+	out << "#else\n";
+	out << "#define AOT_C(name) name\n";
+	out << "#endif\n";
+	out << "\t.text\n";
+	out << "\t.align 2\n";
+	out << "\t.globl AOT_C(" << sym << ")\n";
+	out << "AOT_C(" << sym << "):\n";
+	out << "\tstp\tx28, x29, [sp, #-32]!\n";
+	out << "\tstr\tx30, [sp, #16]\n";
+	out << "\tmov\tx29, sp\n";
+	out << "\tmov\tx28, x0\n";
+	out << "\t// SMC prologue — mismatch returns nonzero to dispatcher (SHIL VM fallback)\n";
+	out << "\tmov\tx0, x28\n";
+	emitMovW(out, "w1", desc.smcAddr ? desc.smcAddr : desc.guestPc);
+	emitMovW(out, "w2", desc.smcSize);
+	emitMovW(out, "w3", desc.sh4Hash);
+	out << "\tbl\tAOT_C(aot_offline_smc_check)\n";
+	out << "\tcbnz\tw0, 1f\n";
+
+	if (desc.guestCycles != 0)
+	{
+		out << "\tldr\tw1, [x28, #" << offCycles << "]\n";
+		emitMovW(out, "w2", desc.guestCycles);
+		out << "\tsub\tw1, w1, w2\n";
+		out << "\tstr\tw1, [x28, #" << offCycles << "]\n";
+	}
+
+	if (!emitGuestBody(out, sh4Bytes, sh4Len))
+		return false;
+
+	if (nextPc != 0xffffffffu)
+	{
+		out << "\t// dispatcher return: publish next guest PC (no rdv_LinkBlock)\n";
+		emitMovW(out, "w1", nextPc);
+		out << "\tstr\tw1, [x28, #" << offPc << "]\n";
+	}
+
+	out << "\tmov\tw0, #0\n";
+	out << "\tldr\tx30, [sp, #16]\n";
+	out << "\tldp\tx28, x29, [sp], #32\n";
+	out << "\tret\n";
+	out << "1:\n";
+	out << "\tmov\tw0, #1\n";
+	out << "\tldr\tx30, [sp, #16]\n";
+	out << "\tldp\tx28, x29, [sp], #32\n";
+	out << "\tret\n";
+
+	std::ofstream f(asmPath, std::ios::binary);
+	if (!f)
+		return false;
+	f << out.str();
+	return (bool)f;
+}
+
+// JSON is consumed only by the separate build-time executable.
+static u32 readU32(const nlohmann::json &value)
+{
+	if (value.is_number_unsigned())
+	{
+		const auto n = value.get<uint64_t>();
+		if (n <= UINT32_MAX)
+			return static_cast<u32>(n);
+	}
+	else if (value.is_string())
+	{
+		const auto text = value.get<std::string>();
+		size_t used = 0;
+		if (!text.empty() && text[0] != '-')
+		{
+			const auto n = std::stoull(text, &used, 0);
+			if (used == text.size() && n <= UINT32_MAX)
+				return static_cast<u32>(n);
+		}
+	}
+	throw std::invalid_argument("expected a uint32");
+}
+
+std::string arm64AotEmitBenchFixture(const std::string &fixtureJsonPath, const std::string &asmDir)
+{
+	try
+	{
+		std::ifstream in(fixtureJsonPath);
+		if (!in)
+			return {};
+		const auto fixture = nlohmann::json::parse(in);
+		if (fixture.at("schema_version") != 1 || fixture.at("role") != "bench_fixture")
+			return {};
+		const auto &blocks = fixture.at("blocks");
+		if (!blocks.is_array() || blocks.size() != 1)
+			return {};
+		const auto &block = blocks[0];
+		Arm64AotOfflineBlockDesc desc;
+		desc.guestPc = readU32(block.at("pc"));
+		desc.sh4Hash = readU32(block.at("sh4_hash"));
+		desc.guestCycles = readU32(block.at("guest_cycles"));
+		desc.blockType = readU32(block.at("BlockType"));
+		desc.nextTarget = readU32(block.at("targets").at("next"));
+		const auto bytes = parseHexBytes(block.at("sh4_bytes").get<std::string>());
+		if (bytes.empty() || bytes.size() > UINT32_MAX)
+			return {};
+		desc.smcAddr = desc.guestPc;
+		desc.smcSize = static_cast<u32>(bytes.size());
+		const auto path = asmDir + "/" + symbolName(desc.guestPc, desc.sh4Hash) + ".S";
+		if (arm64AotEmitRelocatableOffline(desc, bytes.data(), desc.smcSize, path))
+			return path;
+	}
+	catch (const std::exception &)
+	{
+		// Invalid fixture input fails closed and does not produce an object.
+	}
+	return {};
+}
+#endif

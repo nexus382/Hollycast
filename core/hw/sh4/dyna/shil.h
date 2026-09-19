@@ -127,8 +127,71 @@ enum Sh4RegType
 	NoReg=-1
 };
 
-u32 getRegOffset(Sh4RegType reg);
-u32* GetRegPtr(Sh4Context& ctx, u32 reg);
+// Byte offset of each register within Sh4Context. The SHIL VM resolves this for
+// every operand of every op it runs, so it is a table built at compile time
+// rather than a chain of range checks and a switch evaluated on each access.
+constexpr u16 SH4_REG_NO_OFFSET = 0xFFFF;
+
+struct Sh4RegOffsets
+{
+	u16 offsets[reg_sq_buffer + 1];
+};
+
+constexpr Sh4RegOffsets makeSh4RegOffsets()
+{
+	Sh4RegOffsets table{};
+	for (u32 i = 0; i <= (u32)reg_sq_buffer; i++)
+		table.offsets[i] = SH4_REG_NO_OFFSET;
+
+	for (u32 i = 0; i < 16; i++)
+	{
+		table.offsets[reg_r0 + i] = (u16)(offsetof(Sh4Context, r[0]) + i * sizeof(u32));
+		table.offsets[reg_fr_0 + i] = (u16)(offsetof(Sh4Context, fr[0]) + i * sizeof(float));
+		table.offsets[reg_xf_0 + i] = (u16)(offsetof(Sh4Context, xf[0]) + i * sizeof(float));
+	}
+	for (u32 i = 0; i < 8; i++)
+		table.offsets[reg_r0_Bank + i] = (u16)(offsetof(Sh4Context, r_bank[0]) + i * sizeof(u32));
+
+	table.offsets[reg_gbr] = offsetof(Sh4Context, gbr);
+	table.offsets[reg_vbr] = offsetof(Sh4Context, vbr);
+	table.offsets[reg_ssr] = offsetof(Sh4Context, ssr);
+	table.offsets[reg_spc] = offsetof(Sh4Context, spc);
+	table.offsets[reg_sgr] = offsetof(Sh4Context, sgr);
+	table.offsets[reg_dbr] = offsetof(Sh4Context, dbr);
+	table.offsets[reg_mach] = offsetof(Sh4Context, mac.h);
+	table.offsets[reg_macl] = offsetof(Sh4Context, mac.l);
+	table.offsets[reg_pr] = offsetof(Sh4Context, pr);
+	table.offsets[reg_fpul] = offsetof(Sh4Context, fpul);
+	table.offsets[reg_nextpc] = offsetof(Sh4Context, pc);
+	table.offsets[reg_sr_status] = offsetof(Sh4Context, sr.status);
+	table.offsets[reg_sr_T] = offsetof(Sh4Context, sr.T);
+	table.offsets[reg_old_fpscr] = offsetof(Sh4Context, old_fpscr.full);
+	table.offsets[reg_fpscr] = offsetof(Sh4Context, fpscr.full);
+	table.offsets[reg_pc_dyn] = offsetof(Sh4Context, jdyn);
+	table.offsets[reg_temp] = offsetof(Sh4Context, temp_reg);
+	table.offsets[reg_sq_buffer] = offsetof(Sh4Context, sq_buffer);
+
+	return table;
+}
+
+inline constexpr Sh4RegOffsets sh4RegOffsets = makeSh4RegOffsets();
+
+static_assert(sizeof(Sh4Context) < SH4_REG_NO_OFFSET, "Sh4Context offsets must fit in u16");
+
+[[noreturn]] void dieInvalidReg(u32 reg);
+
+inline u32 getRegOffset(Sh4RegType reg)
+{
+	const u32 offset = (u32)reg <= (u32)reg_sq_buffer ? sh4RegOffsets.offsets[reg] : SH4_REG_NO_OFFSET;
+	if (offset == SH4_REG_NO_OFFSET)
+		dieInvalidReg((u32)reg);
+	return offset;
+}
+
+inline u32* GetRegPtr(Sh4Context& ctx, u32 reg)
+{
+	return (u32 *)((u8 *)&ctx + getRegOffset((Sh4RegType)reg));
+}
 
 enum shil_param_type
 {

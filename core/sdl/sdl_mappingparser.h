@@ -53,6 +53,9 @@ public:
 		SDL_free(gcdb);
 	}
 
+	// Parses a mapping in SDL_GameControllerMapping() format
+	explicit SDLControllerMappingParser(const std::string& mapping) : gcMapping(mapping) {}
+
 	SDL_GameControllerButtonBind2 getBindForAxis(SDL_GameControllerAxis sdl_axis, int direction = 0)
 	{
 		SDL_GameControllerButtonBind2 bind{};
@@ -100,6 +103,9 @@ public:
 			return bind;
 		}
 		// Axis
+		// bind.value is a union initialized through its first member (button),
+		// so the axis member must be zeroed before direction is left unset
+		bind.value.axis = {};
 		if (mapping[valuePos] == '+') {
 			bind.value.axis.direction = 1;
 			valuePos++;

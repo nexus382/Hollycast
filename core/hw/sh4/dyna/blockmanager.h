@@ -72,6 +72,9 @@ DynarecCodeEntryPtr DYNACALL bm_GetCodeByVAddr(u32 addr);
 RuntimeBlockInfoPtr bm_GetBlock(void* dynarec_code);
 RuntimeBlockInfoPtr bm_GetStaleBlock(void* dynarec_code);
 RuntimeBlockInfoPtr DYNACALL bm_GetBlock(u32 addr);
+#if FEAT_SHREC == DYNAREC_IR
+RuntimeBlockInfo *bm_GetIrBlock(u32 addr);
+#endif
 
 void bm_AddBlock(RuntimeBlockInfo* blk);
 void bm_DiscardBlock(RuntimeBlockInfo* block);

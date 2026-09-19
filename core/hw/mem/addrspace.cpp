@@ -403,6 +403,11 @@ static void termMappings()
 
 void initMappings()
 {
+	// Content loading can reach here before flycast_init() has reserved the
+	// address space. Reserving here too keeps nvmem from being silently
+	// downgraded to the slow fallback buffers, which then disagree with
+	// virtmemEnabled() and trip the layout check in Sh4Recompiler::Init.
+	reserve();
 	termMappings();
 	// Fallback to statically allocated buffers, this results in slow-ops being generated.
 	if (ram_base == nullptr)

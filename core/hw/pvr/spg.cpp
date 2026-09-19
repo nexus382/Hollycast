@@ -6,8 +6,12 @@
 #include "serialize.h"
 #include "network/ggpo.h"
 #include "hw/pvr/Renderer_if.h"
+#include "hw/sh4/sh4_if.h"
+#include "hw/arm7/arm7.h"
 #include "stdclass.h"
 #include <array>
+#include <cstdlib>
+#include <cstdio>
 
 #ifdef TEST_AUTOMATION
 #include "input/gamepad_device.h"
@@ -19,10 +23,16 @@ static u32 clc_pvr_scanline;
 static u32 pvr_numscanlines = 512;
 static u32 prv_cur_scanline = -1;
 
-#if !defined(NDEBUG) || defined(DEBUGFAST)
 static u32 vblk_cnt;
 static u64 last_fps;
-#endif
+
+static bool cpuStatsEnabled()
+{
+	static int enabled = -1;
+	if (enabled < 0)
+		enabled = getenv("HOLLYCAST_CPU_STATS") != nullptr ? 1 : 0;
+	return enabled != 0;
+}
 
 // 27 mhz pixel clock
 constexpr int PIXEL_CLOCK = 27 * 1000 * 1000;
@@ -183,12 +193,17 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 			replay_input();
 #endif
 
-#if !defined(NDEBUG) || defined(DEBUGFAST)
 			vblk_cnt++;
-			if (getTimeMs() - last_fps >= 2000)
+			if ((cpuStatsEnabled()
+#if !defined(NDEBUG) || defined(DEBUGFAST)
+				 || true
+#endif
+				) && getTimeMs() - last_fps >= 2000)
 			{
 				static int Last_FC;
 				double ts = ((double)getTimeMs() - last_fps) / 1000.0;
+				if (ts <= 0)
+					ts = 0.001;
 				double spd_fps = (FrameCount - Last_FC) / ts;
 				double spd_vbs = vblk_cnt / ts;
 				double spd_cpu = spd_vbs * Frame_Cycles;
@@ -219,6 +234,17 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 
 				double full_rps = spd_fps + fskip / ts;
 
+				if (cpuStatsEnabled())
+				{
+					const u32 pc = p_sh4rcb != nullptr ? Sh4cntx.pc : 0;
+					std::fprintf(stderr,
+						"HOLLYCAST_CPU_STATS mspf=%.2f sh4_mhz=%.2f sh4_pct=%.1f vblank=%.2f fps=%.2f skip=%.2f enough=%d pc=%08x arm=%d armpc=%08x gdst=%u\n",
+						mspdf, spd_cpu, spd_cpu * 100 / 200, spd_vbs, spd_fps, fskip / ts, (int)SH4FastEnough,
+						pc,
+						(int)aica::arm::Arm7Enabled, aica::arm::arm_Reg[aica::arm::R15_ARM_NEXT].I,
+						(u32)SB_GDST);
+					std::fflush(stderr);
+				}
 				INFO_LOG(COMMON, "SPG - %4.2f - %4.2f - V: %4.2f (%.2f, %s%s%4.2f) R: %4.2f+%4.2f",
 					mspdf, spd_cpu * 100 / 200, spd_vbs,
 					spd_vbs / full_rps, mode, res, fullvbs,
@@ -227,7 +253,6 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 				fskip = 0;
 				last_fps = getTimeMs();
 			}
-#endif
 		}
 		if (lightgun_line != 0xffff && lightgun_line == prv_cur_scanline)
 		{

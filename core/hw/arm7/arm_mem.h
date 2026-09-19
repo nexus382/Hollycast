@@ -1,6 +1,7 @@
 #pragma once
 #include "types.h"
 #include "hw/aica/aica_if.h"
+#include "arm7_cache.h"
 
 namespace aica::arm
 {
@@ -37,6 +38,7 @@ static inline void DYNACALL writeMem(u32 addr, T data)
 	if (addr < 0x800000)
 	{
 		*(T *)&aica_ram[addr & (ARAM_MASK - (sizeof(T) - 1))] = data;
+		icacheInvalidate(addr, sizeof(T));
 	}
 	else
 	{

@@ -106,6 +106,72 @@
             "cacheVariables": {
                 "ENABLE_CTEST": "ON"
             }
+        },
+        {
+            "name": "darwin-jitless",
+            "description": "macOS arm64 build using the cached SHIL VM (no native codegen).",
+            "inherits": ["darwin"],
+            "binaryDir": "build-jitless",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
+            "cacheVariables": {
+                "JITLESS": "ON",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0",
+                "USE_BREAKPAD": "NO",
+                "MOLTENVK_DYLIB": "/opt/homebrew/lib/libMoltenVK.dylib"
+            }
+        },
+        {
+            "name": "darwin-jitless-tests",
+            "description": "macOS arm64 jitless build with gtest (cached SHIL VM).",
+            "inherits": ["darwin-jitless"],
+            "binaryDir": "build-jitless-tests",
+            "cacheVariables": {
+                "ENABLE_CTEST": "ON",
+                "USE_VULKAN": "OFF",
+                "USE_DISCORD": "OFF"
+            }
+        },
+        {
+            "name": "darwin-jit-tests",
+            "description": "macOS arm64 JIT build with gtest, to benchmark against darwin-jitless-tests.",
+            "inherits": ["darwin"],
+            "binaryDir": "build-jit-tests",
+            "cacheVariables": {
+                "JITLESS": "OFF",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0",
+                "ENABLE_CTEST": "ON",
+                "USE_VULKAN": "OFF",
+                "USE_DISCORD": "OFF",
+                "MOLTENVK_DYLIB": "/opt/homebrew/lib/libMoltenVK.dylib"
+            }
+        },
+        {
+            "name": "ios-jitless",
+            "description": "iOS device build with cached SHIL VM (no JIT / no native codegen).",
+            "inherits": ["base"],
+            "generator": "Xcode",
+            "binaryDir": "build-ios",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
+            "cacheVariables": {
+                "CMAKE_SYSTEM_NAME": "iOS",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "15.0",
+                "CMAKE_XCODE_GENERATE_SCHEME": "YES",
+                "JITLESS": "ON",
+                "USE_BREAKPAD": "NO",
+                "USE_VULKAN": "OFF",
+                "USE_DISCORD": "OFF"
+            }
         }
     ],
     "buildPresets": [
@@ -152,6 +218,21 @@
             "name": "linux-unit-tests-debug",
             "configurePreset": "linux-unit-tests-debug",
             "configuration": "Debug"
+        },
+        {
+            "name": "darwin-jitless",
+            "configurePreset": "darwin-jitless",
+            "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "darwin-jitless-tests",
+            "configurePreset": "darwin-jitless-tests",
+            "configuration": "Debug"
+        },
+        {
+            "name": "ios-jitless",
+            "configurePreset": "ios-jitless",
+            "configuration": "RelWithDebInfo"
         }
     ]
 }
