@@ -20,6 +20,8 @@
 
 #include <string>
 
+struct ImGuiStyle;
+
 namespace GuiMenu {
 
 // Menu state management
@@ -30,6 +32,12 @@ extern bool menuVisible;
 // Called each frame when the GUI is active
 // Renders all menu items and handles user interaction
 void renderMainMenuBar();
+
+#if defined(__ANDROID__)
+// Capture the Android menu geometry at its fixed, DPI-aware reference scale.
+// The menu uses this style without changing the scale of any other UI.
+void setAndroidMenuStyle(const ImGuiStyle& unscaledStyle, float referenceScale);
+#endif
 
 // Individual menu renderers
 // Each function renders a specific menu dropdown and handles its items
@@ -67,6 +75,11 @@ bool isMenuBarVisible();
 
 // Current effective menu bar height for laying out full-screen UI.
 float mainMenuBarHeight();
+
+// Returns whether an ImGui-space touch belongs to the gameplay menu or its
+// top reveal area. Android uses this before virtual-gamepad hit testing so
+// menu interactions have the same input priority as their draw order.
+bool isTouchTarget(float x, float y);
 
 // Shared menu actions. Native platform menus call these so behavior stays
 // aligned with the ImGui menu implementation.

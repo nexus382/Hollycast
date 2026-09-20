@@ -1047,6 +1047,7 @@ struct OpenGL4Renderer : OpenGLRenderer
 		texSamplers[0] = texSamplers[1] = 0;
 
 		TexCache.Clear();
+		clearGpuPreloadedTextures();
 		termGLCommon();
 		gl4_term();
 	}
@@ -1118,6 +1119,7 @@ bool OpenGL4Renderer::Init()
 	updateFogTable = true;
 	TextureCacheData::SetDirectXColorOrder(false);
 	TextureCacheData::setUploadToGPUFlavor();
+	custom_texture.setCapabilities(TextureCacheData::getCustomTextureCapabilities());
 
 	return true;
 }

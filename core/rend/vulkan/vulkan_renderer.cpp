@@ -27,6 +27,7 @@
 
 bool BaseVulkanRenderer::BaseInit(vk::RenderPass renderPass, int subpass)
 {
+	custom_texture.setCapabilities(Texture::getCustomTextureCapabilities());
 	texCommandPool.Init();
 	fbCommandPool.Init();
 	quadPipeline = std::make_unique<QuadPipeline>(false, false);
@@ -47,6 +48,7 @@ void BaseVulkanRenderer::Term()
 	framebufferDrawer.reset();
 	quadPipeline.reset();
 	textureCache.Clear();
+	clearGpuPreloadedTextures();
 	fogTexture = nullptr;
 	paletteTexture = nullptr;
 	texCommandPool.Term();
@@ -54,6 +56,38 @@ void BaseVulkanRenderer::Term()
 	framebufferTextures.clear();
 	framebufferTexIndex = 0;
 	shaderManager.term();
+}
+
+void BaseVulkanRenderer::processCustomTexturePreloads()
+{
+	custom_texture.processGpuPreloads([this](u32 hash,
+			const PreparedCustomTexture& texture) {
+		GpuPreloadedTexture::Ptr gpuTexture;
+		try
+		{
+			texCommandPool.BeginFrame();
+			vk::CommandBuffer commandBuffer = texCommandPool.Allocate();
+			commandBuffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+			gpuTexture = Texture::createGpuPreloadedTexture(texture, commandBuffer);
+			commandBuffer.end();
+			texCommandPool.EndFrameAndWait();
+		}
+		catch (const vk::SystemError& exception)
+		{
+			texCommandPool.abortFrame();
+			throw FlycastException(exception.what());
+		}
+		catch (...)
+		{
+			texCommandPool.abortFrame();
+			throw;
+		}
+		if (!gpuTexture)
+			return false;
+		Texture::releaseGpuPreloadStaging(gpuTexture);
+		addGpuPreloadedTexture(hash, std::move(gpuTexture));
+		return true;
+	});
 }
 
 BaseTextureCacheData *BaseVulkanRenderer::GetTexture(TSP tsp, TCW tcw, int area)
@@ -66,7 +100,7 @@ BaseTextureCacheData *BaseVulkanRenderer::GetTexture(TSP tsp, TCW tcw, int area)
 		// This kills performance when a frame is skipped and lots of texture updated each frame
 		//if (textureCache.IsInFlight(tf, true))
 		//	textureCache.DestroyLater(tf);
-		tf->SetCommandBuffer(texCommandBuffer);
+		tf->SetCommandBuffer(texCommandBuffer, &texCommandPool);
 		if (!tf->Update())
 		{
 			tf->SetCommandBuffer(nullptr);
@@ -75,11 +109,10 @@ BaseTextureCacheData *BaseVulkanRenderer::GetTexture(TSP tsp, TCW tcw, int area)
 	}
 	else if (tf->IsCustomTextureAvailable())
 	{
-		tf->deferDeleteResource(&texCommandPool);
-		tf->SetCommandBuffer(texCommandBuffer);
+		tf->SetCommandBuffer(texCommandBuffer, &texCommandPool);
 		tf->CheckCustomTexture();
 	}
-	tf->SetCommandBuffer(nullptr);
+	tf->SetCommandBuffer(nullptr, nullptr);
 	textureCache.SetInFlight(tf);
 
 	return tf;

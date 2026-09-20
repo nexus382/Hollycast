@@ -38,6 +38,7 @@
 #include "hw/maple/maple_devs.h"
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
+#include "hw/pvr/Renderer_if.h"
 #ifdef USE_DREAMLINK_DEVICES
 #include "sdl/dreamlink/dreamlinkgamepad.h"
 #endif
@@ -49,7 +50,8 @@
 #include "boxart/boxart.h"
 #include "IconsFontAwesome6.h"
 #include "mainui.h"
-#include "hw/pvr/Renderer_if.h"
+#include "oslib/oslib.h"
+#include "oslib/resources.h"
 #include "oslib/storage.h"
 #include "stdclass.h"
 #include "achievements/achievements.h"
@@ -57,6 +59,7 @@
 #include <cmath>
 #include <cstring>
 #include <cfloat>
+#include <memory>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -67,6 +70,7 @@ extern ImFont *largeFont;
 extern ImFont *settingsTitleFont;
 extern ImFont *settingsRightValueFont;
 extern ImFont *settingsIconFont;
+extern ImFont *aboutAsciiFont;
 
 namespace SettingsNew {
 
@@ -125,6 +129,20 @@ static bool g_mapleDevicesChangedInSettings = false;
 static bool g_scrollToBoxArtSection = false;
 static bool g_focusSettingsNavigation = false;
 static bool g_focusSettingsContent = false;
+static bool g_focusSettingsBack = false;
+static bool g_controllerPopupWasOpen = false;
+static int g_controllerPopupDepth = 0;
+static bool g_controllerEditing = false;
+static ImGuiWindow* g_navigationWindow = nullptr;
+static ImGuiWindow* g_contentWindow = nullptr;
+static ImGuiID g_backButtonId = 0;
+enum class ControllerSection { None, Tabs, Content, Back };
+static ControllerSection g_controllerSection = ControllerSection::None;
+static double g_tabSlideStart = -1.0;
+static SettingsTab g_tabSlideTarget = SettingsTab::General;
+static int g_tabSlideDirection = 0;
+static bool g_tabSlideFocusContent = false;
+static constexpr double kTabSlideSeconds = 0.18;
 static std::string g_settingsFooterText;
 static constexpr float kSettingsFooterHeightPx = 152.0f;
 
@@ -140,7 +158,7 @@ static SettingsAndroidScaleState& SettingsAndroidScaleStateCache()
 {
 	static SettingsAndroidScaleState state;
 
-	const float userScale = std::max(0.01f, static_cast<float>(config::UIScaling) / 100.0f);
+	const float userScale = uiUserScale();
 	if (state.activeUiScale != settings.display.uiScale)
 	{
 		state.activeUiScale = settings.display.uiScale;
@@ -160,12 +178,11 @@ static float SettingsAndroidBaseScale()
 static float SettingsTextPreviewScale()
 {
 #if defined(__ANDROID__)
-	const float userScale = std::max(0.01f, static_cast<float>(config::UIScaling) / 100.0f);
 	const float appliedUserScale = std::max(0.01f, SettingsAndroidScaleStateCache().appliedUserScale);
-	// Font atlas rebuilds only happen on Apply. This preview scale lets Android
-	// Settings text grow while dragging without also widening the nav rail or
-	// making the fixed footer taller.
-	return std::clamp(userScale / appliedUserScale, 0.5f, 2.0f);
+	// The font atlas contains the globally applied user scale. Compensate for it
+	// here so Settings text and geometry share the same bounded Android scale,
+	// both while previewing and after Apply rebuilds the atlas.
+	return uiUserScale() / appliedUserScale;
 #else
 	return 1.0f;
 #endif
@@ -180,13 +197,7 @@ static float SettingsPreviewFontSize(ImFont* font)
 static float SettingsLayoutScaled(float px)
 {
 #if defined(__ANDROID__)
-	const float userScale = std::max(0.01f, static_cast<float>(config::UIScaling) / 100.0f);
-	const float compressedUserScale = 1.0f + (userScale - 1.0f) * 0.20f;
-	// Keep the Settings layout responsive while dragging the UI Scaling slider,
-	// but cache the applied base scale. The slider changes config::UIScaling
-	// before mainui_reinit(), so recalculating the base from every pending value
-	// makes lower percentages grow the panels instead of shrinking them.
-	return px * SettingsAndroidBaseScale() * compressedUserScale;
+	return px * SettingsAndroidBaseScale() * uiUserScale();
 #else
 	return uiScaled(px);
 #endif
@@ -195,9 +206,7 @@ static float SettingsLayoutScaled(float px)
 static float SettingsFixedLayoutScaled(float px)
 {
 #if defined(__ANDROID__)
-	// Android Settings lets text scale up for readability, but fixed frame pieces
-	// like the left rail and bottom details panel must not grow into the content.
-	return px * SettingsAndroidBaseScale();
+	return SettingsLayoutScaled(px);
 #else
 	return uiScaled(px);
 #endif
@@ -215,7 +224,7 @@ static float SettingsFixedFooterScaled(float px)
 static float SettingsFixedNavigationScaled(float px)
 {
 #if defined(__ANDROID__)
-	return SettingsFixedLayoutScaled(px) * 0.90f;
+	return SettingsFixedLayoutScaled(px);
 #else
 	return uiScaled(px);
 #endif
@@ -234,9 +243,19 @@ static bool UseCompactSettingsLayout()
 
 static float SettingsFooterHeight()
 {
+#if defined(__ANDROID__)
+	const float displayHeight = ImGui::GetIO().DisplaySize.y;
+	const float maximumHeight = displayHeight * 0.24f;
+	if (!UseCompactSettingsLayout())
+		return std::min(SettingsFixedFooterScaled(kSettingsFooterHeightPx), maximumHeight);
+
+	const float minimumHeight = displayHeight * 0.14f;
+	return std::clamp(SettingsFixedFooterScaled(112.0f), minimumHeight, maximumHeight);
+#else
 	if (!UseCompactSettingsLayout())
 		return SettingsFixedFooterScaled(kSettingsFooterHeightPx);
 	return std::clamp(ImGui::GetIO().DisplaySize.y * 0.20f, SettingsFixedFooterScaled(104.0f), SettingsFixedFooterScaled(136.0f));
+#endif
 }
 
 static float SettingsFooterGap()
@@ -368,6 +387,8 @@ static const char* GetTabHelpText(SettingsTab tab)
 	{
 	case SettingsTab::General:
 		return T("System, content, interface, and storage behavior. Highlight or select a setting to see a fuller explanation here.");
+	case SettingsTab::Library:
+		return T("Library layout, artwork, scraped media, game metadata, and VMU save icons. Highlight or select a setting to see a fuller explanation here.");
 	case SettingsTab::Video:
 		return T("Graphics quality, renderer behavior, scaling, and performance tuning. Highlight or select a setting to see what it changes and why it matters.");
 	case SettingsTab::Audio:
@@ -400,6 +421,46 @@ static void SetSettingsFooterText(const char* text)
 static bool IsAnySettingsPopupOpen()
 {
 	return ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+}
+
+void prepareControllerNavigation()
+{
+	ImGuiContext& g = *GImGui;
+	// Capture before NewFrame closes popups: one B press must perform one step.
+	g_controllerPopupWasOpen = !g.OpenPopupStack.empty();
+	g_controllerPopupDepth = g.OpenPopupStack.Size;
+	g_controllerEditing = g.ActiveId != 0;
+	g_controllerSection = ControllerSection::None;
+	for (ImGuiWindow* window = g.NavWindow; window != nullptr; window = window->ParentWindow)
+	{
+		if (window == g_navigationWindow)
+		{
+			g_controllerSection = g.NavId == g_backButtonId ? ControllerSection::Back : ControllerSection::Tabs;
+			break;
+		}
+		if (window == g_contentWindow)
+		{
+			g_controllerSection = ControllerSection::Content;
+			break;
+		}
+	}
+	if (!g_controllerPopupWasOpen && g_controllerSection != ControllerSection::None)
+	{
+		const ImGuiID owner = ImHashStr("SettingsControllerNavigation");
+		ImGui::SetKeyOwner(ImGuiKey_GamepadFaceRight, owner);
+		if (!g_controllerEditing)
+			for (ImGuiKey key : {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight,
+					ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight})
+				ImGui::SetKeyOwner(key, owner);
+	}
+}
+
+static bool ControllerPopupCancelPressed()
+{
+	// A child popup may already have consumed B in NewFrame. Never cascade
+	// that press into the parent dialog as it renders later in the same frame.
+	return GImGui->BeginPopupStack.Size == g_controllerPopupDepth
+			&& ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
 }
 
 static void FocusCurrentSettingsItem()
@@ -571,7 +632,7 @@ static void RenderSettingsFooterBar()
 	const std::string displayTitle = titleLine.empty()
 		? std::string()
 		: std::string(T("Setting Details: ")) + titleLine;
-	const float titleSpacing = compactLayout ? uiScaled(3.0f) : uiScaled(5.0f);
+	const float titleSpacing = compactLayout ? SettingsLayoutScaled(3.0f) : SettingsLayoutScaled(5.0f);
 	const float availableHeight = std::max(0.0f, clipMax.y - clipMin.y);
 	float finalTitleSize = titleFontSize;
 	float finalBodySize = bodyFontSize;
@@ -998,6 +1059,43 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 	const std::string gamepadSettingsTitle = std::string(T("Gamepad Settings")) + "###Gamepad Settings";
 	if (ImGui::BeginPopupModal(gamepadSettingsTitle.c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_DragScrolling))
 	{
+		static int openingRumble = 0;
+		static float openingDeadzone = 0.0f;
+		static float openingSaturation = 1.0f;
+		static int openingVibration = 0;
+		static int openingTransparency = 0;
+		static std::string openingImage;
+		if (ImGui::IsWindowAppearing())
+		{
+			openingRumble = gamepad->get_rumble_power();
+			if (gamepad->has_analog_stick())
+			{
+				openingDeadzone = gamepad->get_dead_zone();
+				openingSaturation = gamepad->get_saturation();
+			}
+			openingVibration = config::VirtualGamepadVibration;
+			openingTransparency = config::VirtualGamepadTransparency;
+			// These are the platform-specific custom image keys used by vgamepad.
+			openingImage = config::loadStr("vgamepad", settings.platform.isConsole() ? "image" : "image_arcade");
+		}
+		if (ControllerPopupCancelPressed())
+		{
+			gamepad->set_rumble_power(openingRumble);
+			if (gamepad->has_analog_stick())
+			{
+				gamepad->set_dead_zone(openingDeadzone);
+				gamepad->set_saturation(openingSaturation);
+			}
+			if (gamepad->is_virtual_gamepad())
+			{
+				config::VirtualGamepadVibration = openingVibration;
+				config::VirtualGamepadTransparency = openingTransparency;
+				vgamepad::loadImage(openingImage);
+			}
+			ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+			return;
+		}
 		if (ImGui::Button(T("Done"), ScaledVec2(100, 30)))
 		{
 			gamepad->save_mapping();
@@ -1084,7 +1182,7 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 		{
 			header(T("Rumble"));
 			int power = gamepad->get_rumble_power();
-			ImGui::SetNextItemWidth(uiScaled(300));
+			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
 			if (ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%"))
 				gamepad->set_rumble_power(power);
 			ImGui::SameLine();
@@ -1094,13 +1192,13 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 		{
 			header(T("Thumbsticks"));
 			int deadzone = std::round(gamepad->get_dead_zone() * 100.f);
-			ImGui::SetNextItemWidth(uiScaled(300));
+			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
 			if (ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%"))
 				gamepad->set_dead_zone(deadzone / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Minimum deflection to register as input"));
 			int saturation = std::round(gamepad->get_saturation() * 100.f);
-			ImGui::SetNextItemWidth(uiScaled(300));
+			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
 			if (ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%"))
 				gamepad->set_saturation(saturation / 100.f);
 			ImGui::SameLine();
@@ -1604,7 +1702,7 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	{
 		ImGui::SameLine();
 		ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding,
-			ImVec2(ImGui::GetStyle().FramePadding.x, (uiScaled(30) - ImGui::GetFontSize()) / 2));
+			ImVec2(ImGui::GetStyle().FramePadding.x, (SettingsLayoutScaled(30) - ImGui::GetFontSize()) / 2));
 		portWidth = ImGui::CalcTextSize("AA").x + ImGui::GetStyle().ItemSpacing.x * 2.0f + ImGui::GetFontSize();
 		ImGui::SetNextItemWidth(portWidth);
 		if (ImGui::BeginCombo(T("Port"), kMaplePorts[g_gamepad_port_for_mapping + 1]))
@@ -1632,7 +1730,7 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	}
 
 	ImGui::SameLine(0, ImGui::GetContentRegionAvail().x - comboWidth - gameConfigWidth
-		- ImGui::GetStyle().ItemSpacing.x - uiScaled(100) * 2 - portWidth);
+		- ImGui::GetStyle().ItemSpacing.x - SettingsLayoutScaled(100) * 2 - portWidth);
 	ImGui::AlignTextToFramePadding();
 
 	if (!settings.content.gameId.empty())
@@ -1678,7 +1776,7 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 			}
 			ImGui::NewLine();
 			{
-				ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ImVec2(uiScaled(20), ImGui::GetStyle().ItemSpacing.y));
+				ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ImVec2(SettingsLayoutScaled(20), ImGui::GetStyle().ItemSpacing.y));
 				ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ScaledVec2(10, 10));
 				if (ImGui::Button(T("Yes")))
 				{
@@ -1687,7 +1785,7 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 					ImGui::CloseCurrentPopup();
 				}
 				ImGui::SameLine();
-				if (ImGui::Button(T("No")))
+				if (ImGui::Button(T("No")) || ControllerPopupCancelPressed())
 					ImGui::CloseCurrentPopup();
 			}
 			ImGui::EndPopup();
@@ -1701,7 +1799,7 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 
 	ImGui::SetNextItemWidth(comboWidth);
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-		ImVec2(ImGui::GetStyle().FramePadding.x, (uiScaled(30) - ImGui::GetFontSize()) / 2));
+		ImVec2(ImGui::GetStyle().FramePadding.x, (SettingsLayoutScaled(30) - ImGui::GetFontSize()) / 2));
 	ImGui::Combo("##arcadeMode", &item_current_map_idx, items, IM_ARRAYSIZE(items));
 	ImGui::PopStyleVar();
 	if (last_item_current_map_idx != 2 && item_current_map_idx != last_item_current_map_idx)
@@ -1859,7 +1957,8 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	ImGui::PopID();
 }
 
-static void manageSinglePath(const char* label, config::Option<std::string, false>& pathOption, const char* helpText)
+static void manageSinglePath(const char* label, config::Option<std::string, false>& pathOption, const char* helpText,
+		bool selectFile = false, const std::string& extension = "")
 {
 	ImGui::PushID(label);
 	const bool rowActivated = BeginTwoLineSettingRow("##row", helpText);
@@ -1907,9 +2006,26 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 		if (!cancelled)
 			pathOption.get() = selection;
 		return true;
-	});
+	}, selectFile, extension);
+#ifdef __ANDROID__
+	if (openPopup)
+	{
+		const char *mimeType = extension == ".xml" ? "application/xml" : "*/*";
+		const StoragePopupResult storageResult = select_storage_popup(!selectFile, false, popupName, [&pathOption](bool cancelled, const std::string& selection) {
+			if (!cancelled)
+			{
+				pathOption.get() = selection;
+				SaveSettings();
+			}
+			return true;
+		}, selectFile ? mimeType : "");
+		if (storageResult == StoragePopupResult::Unsupported)
+			ImGui::OpenPopup(popupName.c_str());
+	}
+#else
 	if (openPopup)
 		ImGui::OpenPopup(popupName.c_str());
+#endif
 }
 
 static void managePathList(const char* label, const std::string& singularLabel, std::vector<std::string>& paths, const char* helpText)
@@ -2162,19 +2278,23 @@ void renderTextureFilterLiveTuneOverlay()
 void resetState()
 {
 	g_state.currentTab = SettingsTab::General;
+	g_focusSettingsNavigation = true;
+	g_focusSettingsContent = g_focusSettingsBack = false;
+	g_tabSlideStart = -1.0;
 	ResetSettingsFooter();
 }
 
 void openTab(SettingsTab tab)
 {
 	g_state.currentTab = tab;
+	g_tabSlideStart = -1.0;
 	g_scrollToBoxArtSection = false;
 	ResetSettingsFooter();
 }
 
 void focusBoxArtSection()
 {
-	openTab(SettingsTab::General);
+	openTab(SettingsTab::Library);
 	g_scrollToBoxArtSection = true;
 }
 
@@ -2185,6 +2305,8 @@ const char* getTabName(SettingsTab tab)
 	{
 	case SettingsTab::General:
 		return T("General");
+	case SettingsTab::Library:
+		return T("Library");
 	case SettingsTab::Video:
 		return T("Video");
 	case SettingsTab::Audio:
@@ -2206,12 +2328,25 @@ static float SettingsNavigationWidth(const char* exitLabel)
 {
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 #if defined(__ANDROID__)
-	// On phones the navigation rail must remain a stable frame. Larger UI text is
-	// clipped inside the existing rail instead of making the content column shrink.
-	(void)exitLabel;
-	const float minWidth = SettingsFixedNavigationScaled(136.0f);
-	const float maxWidth = std::clamp(displaySize.x * 0.20f, minWidth, SettingsFixedNavigationScaled(310.0f));
-	const float desiredWidth = UseCompactSettingsLayout() ? displaySize.x * 0.16f : SettingsFixedNavigationScaled(225.0f);
+	const bool compactLayout = UseCompactSettingsLayout();
+	const float maxWidth = displaySize.x * (compactLayout ? 0.24f : 0.20f);
+	const float minWidth = std::min(maxWidth,
+		std::max(displaySize.x * 0.10f, SettingsFixedNavigationScaled(72.0f)));
+	const float layoutWidth = displaySize.x * (compactLayout ? 0.14f : 0.16f);
+
+	ImFont* navFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+	ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : navFont;
+	const float fontSize = SettingsPreviewFontSize(navFont);
+	float labelWidth = navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, exitLabel).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ARROW_LEFT).x
+			+ SettingsLayoutScaled(8.0f);
+	for (int i = 0; i < (int)SettingsTab::Count; i++)
+	{
+		const char* tabName = getTabName((SettingsTab)i);
+		labelWidth = std::max(labelWidth, navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabName).x);
+	}
+
+	const float desiredWidth = std::max(layoutWidth, labelWidth + SettingsLayoutScaled(24.0f));
 	return std::clamp(desiredWidth, minWidth, maxWidth);
 #else
 	const float minWidth = 136.0f;
@@ -2275,13 +2410,21 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 	// Left navigation rail: 225px wide child window
 	// Match the main content column height so the shared footer sits flush below both panels.
 	ImGui::BeginChild("NavigationRail", ImVec2(navWidth, -(footerHeight + footerGap)),
-	                  ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
+	                  ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
+	                  ImGuiWindowFlags_DragScrolling);
 	ImGui::SetWindowFontScale(SettingsTextPreviewScale());
 	g_focusSettingsNavigation = false;
 
 	ImGui::PushFont(settingsTitleFont);
+	g_navigationWindow = ImGui::GetCurrentWindow();
 	if (SettingsBackButton(ICON_FA_ARROW_LEFT, exitLabel))
 		exitSettings();
+	g_backButtonId = ImGui::GetItemID();
+	if (g_focusSettingsBack)
+	{
+		FocusCurrentSettingsItem();
+		g_focusSettingsBack = false;
+	}
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
@@ -2303,6 +2446,7 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 		if (ImGui::Selectable(tabName, isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0)))
 		{
 			g_state.currentTab = tab;
+			g_tabSlideStart = -1.0;
 			ResetSettingsFooter();
 		}
 		if (focusSelectedTab && isSelected)
@@ -2321,6 +2465,12 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			ResetSettingsFooter();
 		}
 	}
+
+	// Keep touch swipes that begin over a tab row as scrolling. This is the
+	// same path used by the content pane, so taps and controller activation
+	// retain their existing Selectable behavior.
+	scrollWhenDraggingOnVoid();
+	windowDragScroll();
 	ImGui::PopFont();
 
 	ImGui::EndChild();
@@ -2347,12 +2497,21 @@ static void renderContentArea()
 
 	if (focusContent)
 		ImGui::SetKeyboardFocusHere();
+	g_contentWindow = ImGui::GetCurrentWindow();
+	const bool sliding = g_tabSlideStart >= 0.0;
+	const int firstVertex = g_contentWindow->DrawList->VtxBuffer.Size;
+	// Animation changes presentation only. Input is disabled until the visual
+	// position agrees with the regular, stationary hit targets again.
+	ImGui::BeginDisabled(sliding);
 
 	// Call the appropriate tab renderer based on current selection
 	switch (g_state.currentTab)
 	{
 	case SettingsTab::General:
 		renderGeneralTab();
+		break;
+	case SettingsTab::Library:
+		renderLibraryTab();
 		break;
 	case SettingsTab::Video:
 		renderVideoTab();
@@ -2376,16 +2535,52 @@ static void renderContentArea()
 		break;
 	}
 
+	ImGui::EndDisabled();
+	if (sliding)
+	{
+		const float progress = std::clamp(float((ImGui::GetTime() - g_tabSlideStart) / kTabSlideSeconds), 0.0f, 1.0f);
+		const float phase = progress < 0.5f ? progress * 2.0f : (1.0f - progress) * 2.0f;
+		const float eased = phase * phase * (3.0f - 2.0f * phase);
+		const float offset = (progress < 0.5f ? -1.0f : 1.0f) * g_tabSlideDirection
+				* g_contentWindow->InnerRect.GetWidth() * eased;
+		for (ImGuiWindow* window : GImGui->Windows)
+		{
+			if (
+				!window->Active ||
+				(window != g_contentWindow && !ImGui::IsWindowChildOf(window, g_contentWindow, false))
+			) {
+				continue;
+			}
+
+			ImDrawList* draw = window->DrawList;
+			for (int i = window == g_contentWindow ? firstVertex : 0; i < draw->VtxBuffer.Size; ++i) {
+				draw->VtxBuffer[i].pos.x += offset;
+			}
+			// Nested lists move too, clipped to the stationary content pane.
+			if (window != g_contentWindow) {
+				for (ImDrawCmd& command : draw->CmdBuffer)
+				{
+					command.ClipRect.x = std::clamp(command.ClipRect.x + offset, g_contentWindow->InnerClipRect.Min.x, g_contentWindow->InnerClipRect.Max.x);
+					command.ClipRect.z = std::clamp(command.ClipRect.z + offset, command.ClipRect.x, g_contentWindow->InnerClipRect.Max.x);
+				}
+			}
+		}
+	}
+
 	// The content pane uses drag scrolling, but Android swipes often begin on
 	// selectable rows. Keep this after rendering rows so the helper can turn
 	// those finger drags into scrolling instead of row activation.
 	scrollWhenDraggingOnVoid();
+#if defined(__ANDROID__)
+	windowDragScroll(false);
+#else
 	windowDragScroll();
+#endif
 
 	if (!IsAnySettingsPopupOpen()
+		&& !g_controllerPopupWasOpen
 		&& ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows)
-		&& (ImGui::IsKeyPressed(ImGuiKey_Escape, false)
-			|| ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)))
+		&& ImGui::IsKeyPressed(ImGuiKey_Escape, false))
 	{
 		g_focusSettingsNavigation = true;
 	}
@@ -2415,7 +2610,7 @@ static bool RenderCollapsingHeader(
 		const float fontSize = ImGui::GetFontSize();
 		const float iconWidth = iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, labelIcon).x;
 		const float spaceWidth = std::max(1.0f, titleFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, " ").x);
-		const int spacerCount = std::max(2, static_cast<int>(std::ceil((iconWidth + uiScaled(2.0f)) / spaceWidth)));
+		const int spacerCount = std::max(2, static_cast<int>(std::ceil((iconWidth + SettingsLayoutScaled(2.0f)) / spaceWidth)));
 		labelStr.append(spacerCount, ' ');
 	}
 
@@ -2427,7 +2622,7 @@ static bool RenderCollapsingHeader(
 		labelStr += id;
 	}
 
-	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(uiScaled(8.0f), uiScaled(10.0f)));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(SettingsLayoutScaled(8.0f), SettingsLayoutScaled(10.0f)));
 	bool open = ImGui::CollapsingHeader(labelStr.c_str(), flags);
 	if (labelIcon && *labelIcon != '\0')
 	{
@@ -2453,10 +2648,12 @@ static bool RenderCollapsingHeader(
 }
 
 // Render General tab with all settings from settings_general.cpp
-void renderGeneralTab()
+static void renderSettingsContentTab(SettingsTab tab)
 {
 	using namespace SettingsUI;
 	ScopedTwoLineRowStyle generalRowStyle(12.0f, true, 0.5f);
+	if (tab == SettingsTab::General)
+	{
 
 	ImGui::TextDisabled("%s", T("General Configuration"));
 	ImGui::Separator();
@@ -2726,8 +2923,8 @@ void renderGeneralTab()
 			const float extraOffsetPx = refreshBtnWidthPx + 8.0f;
 			RenderGeneralRightValue(T("Select Path"), 280.0f, extraOffsetPx, true);
 
-			const float refreshButtonWidth = uiScaled(refreshBtnWidthPx);
-			const float refreshButtonHeight = uiScaled(refreshBtnHeightPx);
+			const float refreshButtonWidth = SettingsLayoutScaled(refreshBtnWidthPx);
+			const float refreshButtonHeight = SettingsLayoutScaled(refreshBtnHeightPx);
 			const float refreshVerticalOffset = (TwoLineSettingContentHeight() - refreshButtonHeight) * 0.5f;
 			ImGui::SameLine(RightColumnX(refreshButtonWidth));
 			ImVec2 refreshButtonPos = ImGui::GetCursorPos();
@@ -2918,6 +3115,13 @@ void renderGeneralTab()
 			uiUserScaleUpdated = false;
 			showApplyButtonForUIScaling = false;
 		};
+		uiScalingCfg.slider.onCancel = [&]() {
+			// The stored scale is restored before this runs. Rebuild any preview
+			// state too, so reopening the popup uses the original scale throughout.
+			mainui_reinit();
+			uiUserScaleUpdated = false;
+			showApplyButtonForUIScaling = false;
+		};
 
 		RenderGeneralPopupSettingRow(
 			Tnop("UIScalingSetting"),
@@ -2948,7 +3152,6 @@ void renderGeneralTab()
 			)
 		);
 	}
-
 #ifdef __ANDROID__
 	RenderGeneralToggleSettingRow(
 		"UseSafFilePicker",
@@ -2965,8 +3168,12 @@ void renderGeneralTab()
 	);
 #endif
 
+	}
+
+	if (tab == SettingsTab::Library)
+	{
 	// ========================================
-	// Box Art Section
+	// Library Section
 	// ========================================
 	if (RenderCollapsingHeader("BoxArtSection", ICON_FA_IMAGE, T("Box Art"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -2993,91 +3200,181 @@ void renderGeneralTab()
 
 		RenderGeneralPopupSettingRow(
 			Tnop("BoxartSourceSetting"),
-			T("Choose which box art source to display."),
+			T("Choose the base artwork source for each game."),
 			boxartSourceCfg,
 			T(
 				"Box Art Source\n"
-				"Selects which artwork source is shown in the game list.\n"
-				"Use Custom Boxart if you maintain your own images, or Original/Physical depending on your preference."
+				"Choose whether to use the default scraped artwork, physical-disc artwork pulled from the current ROM, or custom box art files you provide.\n\n"
+				"If you have a custom Scraper folder for ES-DE, you can use its `media` folder and subfolders for the full custom-artwork experience."
 			)
 		);
 
-		ImGui::PushID("CustomBoxartFolderRow");
+		const bool usingCustomBoxart = config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::CustomThenScraped);
+		ImGui::Indent();
+
+		const char* libraryImageSources[] = {
+			T("Current Artwork"),
+			T("VMU Save Icon"),
+			T("VMU Save Icon, then Current Artwork"),
+			T("Current Artwork, then VMU Save Icon"),
+		};
+		SettingsUI::PopupConfig libraryImageSourceCfg {};
+		libraryImageSourceCfg.type = SettingsUI::PopupType::Options;
+		libraryImageSourceCfg.options.label = T("VMU Icon Options");
+		libraryImageSourceCfg.options.icon = ICON_FA_IMAGE;
+		libraryImageSourceCfg.options.popupID = Tnop("LibraryImageSourcePopup");
+		libraryImageSourceCfg.options.options = libraryImageSources;
+		libraryImageSourceCfg.options.optionCount = IM_ARRAYSIZE(libraryImageSources);
+		libraryImageSourceCfg.options.currentValue = &config::LibraryImageSource.get();
+		libraryImageSourceCfg.options.valueWidth = 240.0f;
+		libraryImageSourceCfg.options.onChange = [](int) { return true; };
+		RenderGeneralPopupSettingRow(
+			Tnop("LibraryImageSource"),
+			T("Choose whether cached VMU icons appear in the library."),
+			libraryImageSourceCfg,
+			T("VMU Icon Options\n"
+			"Choose whether to exclude or use VMU save icons as cover art. When enabled, Hollycast captures the icon after you create a VMU save for a game, then makes it available for the library.\n"
+			"Choose how those icons are prioritized alongside your other artwork options."));
+
+		if (usingCustomBoxart)
+		{
+			ImGui::PushID("CustomBoxartFolderRow");
 			const bool rowActivated = BeginTwoLineSettingRow(
 				"##row",
 				T(
 					"Custom Boxart Folder\n"
-					"Folder containing custom box art images (png/jpg).\n"
-					"File names should match game names.\n"
-					"Use Refresh to rescan artwork sources."
+					"Choose the folder that contains your already-scraped game media.\n\n"
+					"For regular custom media, add an image to the custom folder using the same name as the ROM. For example, if the ROM is `Sonic Adventure.chd`, the image file should be `Sonic Adventure.png` or `Sonic Adventure.jpg`.\n\n"
+					"For existing ES-DE media folders, or for the full custom-artwork experience, choose the system media folder, such as `downloaded_media/dreamcast`. Hollycast reads supported subfolders within it, including `covers`, `miximages`, `physicalmedia`, `marquees`, `titlescreens`, `screenshots`, `fanart`, and `manuals`. This lets you reuse ES-DE scraped media without copying or renaming files.\n\n"
+					"Image/manual file names should match your ROM names. Use Refresh after adding or changing media files."
 				)
 			);
-		const ImVec2 line1Start = BeginTwoLineSettingRowContent();
+			const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
-		SettingIcon(ICON_FA_FOLDER_OPEN, SettingsLayoutSize(20.0f, 20.0f));
-		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
-		ImGui::PushFont(largeFont);
-		ImGui::TextUnformatted(T("Custom Boxart Folder"));
-		ImGui::PopFont();
+			SettingIcon(ICON_FA_FOLDER_OPEN, SettingsLayoutSize(20.0f, 20.0f));
+			ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+			ImGui::PushFont(largeFont);
+			ImGui::TextUnformatted(T("Custom Boxart Folder"));
+			ImGui::PopFont();
 
-		bool openPopup = rowActivated;
-		bool refreshPressed = false;
-		const bool hasPath = !config::BoxartPath.get().empty();
-		if (hasPath)
-		{
-			const float buttonWidthPx = 26.0f;
-			const float buttonHeightPx = 22.0f;
-			const float buttonSpacingPx = 8.0f;
-			const float extraOffsetPx = buttonWidthPx * 2.0f + buttonSpacingPx;
-			RenderGeneralRightValue(config::BoxartPath.get(), 280.0f, extraOffsetPx);
-
-			const float buttonWidth = uiScaled(buttonWidthPx);
-			const float buttonHeight = uiScaled(buttonHeightPx);
-			const float buttonSpacing = uiScaled(buttonSpacingPx);
-			const float verticalOffset = (TwoLineSettingContentHeight() - buttonHeight) * 0.5f;
-
-			ImGui::SameLine(RightColumnX(buttonWidth * 2.0f + buttonSpacing));
-			ImVec2 buttonPos = ImGui::GetCursorPos();
-			ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y + verticalOffset));
-			refreshPressed = SettingsIconButton("##BoxartRefreshBtn", ICON_FA_ARROWS_ROTATE, ImVec2(buttonWidth, buttonHeight));
-			if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
-				SetSettingsFooterText(T("Refresh downloaded box art and rescan artwork sources."));
-
-			ImGui::SameLine(0, buttonSpacing);
-			ImVec2 deletePos = ImGui::GetCursorPos();
-			ImGui::SetCursorPos(ImVec2(deletePos.x, buttonPos.y + verticalOffset));
-			if (SettingsIconButton("##ClearBoxartPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight)))
+			bool openPopup = rowActivated;
+			bool refreshPressed = false;
+			const bool hasPath = !config::BoxartPath.get().empty();
+			if (hasPath)
 			{
-				config::BoxartPath.get().clear();
-				openPopup = false;
+				const float buttonWidthPx = 26.0f;
+				const float buttonHeightPx = 22.0f;
+				const float buttonSpacingPx = 8.0f;
+				const float extraOffsetPx = buttonWidthPx * 2.0f + buttonSpacingPx;
+				RenderGeneralRightValue(config::BoxartPath.get(), 280.0f, extraOffsetPx);
+
+				const float buttonWidth = SettingsLayoutScaled(buttonWidthPx);
+				const float buttonHeight = SettingsLayoutScaled(buttonHeightPx);
+				const float buttonSpacing = SettingsLayoutScaled(buttonSpacingPx);
+				const float verticalOffset = (TwoLineSettingContentHeight() - buttonHeight) * 0.5f;
+
+				ImGui::SameLine(RightColumnX(buttonWidth * 2.0f + buttonSpacing));
+				ImVec2 buttonPos = ImGui::GetCursorPos();
+				ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y + verticalOffset));
+				refreshPressed = SettingsIconButton("##BoxartRefreshBtn", ICON_FA_ARROWS_ROTATE, ImVec2(buttonWidth, buttonHeight));
+				if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
+					SetSettingsFooterText(T("Refresh custom media after adding, removing, or renaming files in the selected Custom Boxart Folder."));
+
+				ImGui::SameLine(0, buttonSpacing);
+				ImVec2 deletePos = ImGui::GetCursorPos();
+				ImGui::SetCursorPos(ImVec2(deletePos.x, buttonPos.y + verticalOffset));
+				if (SettingsIconButton("##ClearBoxartPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight)))
+				{
+					config::BoxartPath.get().clear();
+					openPopup = false;
+				}
 			}
-		}
-		else
-		{
-			RenderGeneralRightValue(T("Set Path"), 280.0f, 0.0f, true);
+			else
+			{
+				RenderGeneralRightValue(T("Set Path"), 280.0f, 0.0f, true);
+			}
+
+			RenderTwoLineSettingDescription(line1Start, T("Folder containing custom box art images (png/jpg). File names should match game names"));
+			EndTwoLineSettingRow();
+			ImGui::PopID();
+
+			const std::string popupName = T("Select Custom Boxart Folder");
+#ifdef __ANDROID__
+			const auto isRawAndroidStoragePath = [](const std::string& path) {
+				return path.find("/storage/") == 0 || path.find("/sdcard/") == 0;
+			};
+			if (refreshPressed && isRawAndroidStoragePath(config::BoxartPath.get()))
+			{
+				openPopup = true;
+				refreshPressed = false;
+			}
+#else
+			select_file_popup(popupName.c_str(), [](bool cancelled, const std::string& selection) {
+				if (!cancelled)
+					config::BoxartPath.get() = selection;
+				return true;
+			}, false, "");
+#endif
+#ifdef __ANDROID__
+			if (openPopup)
+			{
+				const StoragePopupResult storageResult = select_storage_popup(true, false, popupName, [](bool cancelled, const std::string& selection) {
+					if (!cancelled)
+					{
+						config::BoxartPath.get() = selection;
+						SaveSettings();
+					}
+					return true;
+				});
+				if (storageResult == StoragePopupResult::Unsupported)
+					ImGui::OpenPopup(popupName.c_str());
+			}
+#else
+			if (openPopup)
+				ImGui::OpenPopup(popupName.c_str());
+#endif
+
+			static std::string lastBoxartPath;
+			if (lastBoxartPath != config::BoxartPath.get())
+			{
+				gui_refresh_custom_boxart(true);
+				lastBoxartPath = config::BoxartPath.get();
+			}
+			if (refreshPressed)
+				gui_refresh_custom_boxart(true);
+
+			const char* libraryCoverMediaSources[] = {
+				T("Current Artwork"),
+				T("Mix Image"),
+				T("Cover"),
+				T("Case / 3D Box"),
+				T("Screenshot"),
+				T("Marquee"),
+				T("Physical Media"),
+				T("Fan Art"),
+				T("Title Screen"),
+			};
+			SettingsUI::PopupConfig libraryCoverMediaCfg {};
+			libraryCoverMediaCfg.type = SettingsUI::PopupType::Options;
+			libraryCoverMediaCfg.options.label = T("Custom Boxart Source");
+			libraryCoverMediaCfg.options.icon = ICON_FA_IMAGE;
+			libraryCoverMediaCfg.options.popupID = Tnop("LibraryCoverMediaPopup");
+			libraryCoverMediaCfg.options.options = libraryCoverMediaSources;
+			libraryCoverMediaCfg.options.optionCount = IM_ARRAYSIZE(libraryCoverMediaSources);
+			libraryCoverMediaCfg.options.currentValue = &config::LibraryCoverMedia.get();
+			libraryCoverMediaCfg.options.valueWidth = 240.0f;
+			libraryCoverMediaCfg.options.onChange = [](int) { return true; };
+			RenderGeneralPopupSettingRow(
+				Tnop("LibraryCoverMedia"),
+				T("Choose which custom media category becomes the main library image."),
+				libraryCoverMediaCfg,
+				T("Custom Boxart Source\n"
+				"Choose Current Artwork when your Custom Boxart Folder contains one properly named image for each game.\n\n"
+				"The other options are for the full media-folder setup. They let you choose which of the multiple images available for each title becomes its visible library cover art.\n\n"
+				"Other media can still appear in the game hover-information panel when the matching folders and files are present."));
 		}
 
-		RenderTwoLineSettingDescription(line1Start, T("Folder containing custom box art images (png/jpg). File names should match game names"));
-		EndTwoLineSettingRow();
-		ImGui::PopID();
-
-		const std::string popupName = T("Select Custom Boxart Folder");
-		select_file_popup(popupName.c_str(), [](bool cancelled, const std::string& selection) {
-			if (!cancelled)
-				config::BoxartPath.get() = selection;
-			return true;
-		}, false, "");
-		if (openPopup)
-			ImGui::OpenPopup(popupName.c_str());
-
-		static std::string lastBoxartPath;
-		if (lastBoxartPath != config::BoxartPath.get())
-		{
-			gui_refresh_custom_boxart(true);
-			lastBoxartPath = config::BoxartPath.get();
-		}
-		if (refreshPressed)
-			gui_refresh_custom_boxart(true);
+		ImGui::Unindent();
 
 		ImGui::PushID("BoxartDatabaseReviewRow");
 		const bool refreshCacheRowActivated = BeginTwoLineSettingRow(
@@ -3101,6 +3398,45 @@ void renderGeneralTab()
 
 		if (refreshCacheRowActivated)
 			gui_refresh_boxart_cache();
+
+		const char* libraryDisplayStyles[] = { T("Classic"), T("List") };
+		SettingsUI::PopupConfig libraryDisplayStyleCfg {};
+		libraryDisplayStyleCfg.type = SettingsUI::PopupType::Options;
+		libraryDisplayStyleCfg.options.label = T("Library Display Style");
+		libraryDisplayStyleCfg.options.icon = ICON_FA_LIST;
+		libraryDisplayStyleCfg.options.popupID = Tnop("LibraryDisplayStylePopup");
+		libraryDisplayStyleCfg.options.options = libraryDisplayStyles;
+		libraryDisplayStyleCfg.options.optionCount = IM_ARRAYSIZE(libraryDisplayStyles);
+		libraryDisplayStyleCfg.options.currentValue = &config::LibraryDisplayStyle.get();
+		libraryDisplayStyleCfg.options.valueWidth = 220.0f;
+		libraryDisplayStyleCfg.options.onChange = [](int) { return true; };
+		RenderGeneralPopupSettingRow(
+			Tnop("LibraryDisplayStyle"),
+			T("Choose how the game library is displayed."),
+			libraryDisplayStyleCfg,
+			T("Library Display Style\n"
+			"Selects the visual layout for the game library.\n"
+			"Classic keeps the existing gallery/list behavior.\n"
+			"List uses a compact row/table layout with title and metadata columns."));
+
+		const char* vmuIconModes[] = { T("Static"), T("Active / Animated") };
+		SettingsUI::PopupConfig vmuIconModeCfg {};
+		vmuIconModeCfg.type = SettingsUI::PopupType::Options;
+		vmuIconModeCfg.options.label = T("VMU Icon Mode");
+		vmuIconModeCfg.options.icon = ICON_FA_BATTERY_FULL;
+		vmuIconModeCfg.options.popupID = Tnop("VMUIconModePopup");
+		vmuIconModeCfg.options.options = vmuIconModes;
+		vmuIconModeCfg.options.optionCount = IM_ARRAYSIZE(vmuIconModes);
+		vmuIconModeCfg.options.currentValue = &config::VmuIconMode.get();
+		vmuIconModeCfg.options.valueWidth = 220.0f;
+		vmuIconModeCfg.options.onChange = [](int) { return true; };
+		RenderGeneralPopupSettingRow(
+			Tnop("VMUIconMode"),
+			T("Set VMU icon playback behavior."),
+			vmuIconModeCfg,
+			T("VMU Icon Mode\n"
+			"Controls how cached VMU icons play after they have been captured from saves.\n"
+			"Static shows one frame; Active / Animated plays the BIOS-style icon frames."));
 
 		RenderGeneralToggleSettingRow(
 			"BoxartDisplayMode",
@@ -3131,8 +3467,26 @@ void renderGeneralTab()
 			),
 			physicalOnly
 		);
+
+#if !defined(TARGET_IPHONE)
+		manageSinglePath(T("Gamelist XML"), config::GameListPath,
+			T(
+				"Gamelist XML\n"
+				"Choose the exact `gamelist.xml` file that belongs to your Dreamcast ROM set.\n\n"
+				"This file provides the game info used by the library hover/profile screen: description, developer, genre, players, release date, and manual path.\n\n"
+				"For ES-DE, this is usually in a separate folder from the images, for example `gamelists/dreamcast/gamelist.xml`.\n"
+				"Hollycast will not guess this path. Set it here if you want game descriptions and details."
+			),
+			true,
+			"xml"
+		);
+		ImGui::Spacing();
+#endif
+	}
 	}
 
+	if (tab == SettingsTab::General)
+	{
 	// ========================================
 	// Automatic Save States Section
 	// ========================================
@@ -3432,8 +3786,18 @@ void renderGeneralTab()
 #endif  // !ANDROID
 	}
 #endif  // !IPHONE
+	}
 }
 
+void renderGeneralTab()
+{
+	renderSettingsContentTab(SettingsTab::General);
+}
+
+void renderLibraryTab()
+{
+	renderSettingsContentTab(SettingsTab::Library);
+}
 
 void renderVideoTab()
 {
@@ -3526,16 +3890,6 @@ void renderVideoTab()
 					"Note: Fog and Shadows are enabled on all preset tiers."
 				);
 			SetSettingsFooterText(help.c_str());
-		}
-
-		// Show "Custom" indicator if settings were manually changed
-		VideoPresetLevel currentLevel = detectCurrentPreset();
-		if (currentLevel == VideoPresetLevel::Custom && !presetJustApplied)
-		{
-			ImGui::SameLine();
-			ImGui::TextDisabled("%s", T("(Modified)"));
-			if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
-				SetSettingsFooterText(T("Settings have been manually modified from the last preset."));
 		}
 
 		ImGui::Separator();
@@ -3837,22 +4191,22 @@ void renderVideoTab()
 				"x3", "x3.5", "x4", "x4.5", "x5", "x5.5", "x6", "x7", "x8", "x9"
 			};
 
-			std::array<int, scalings.size()> horizontalRes {};
+			std::array<int, scalings.size()> verticalRes {};
 			std::array<std::string, scalings.size()> resolutionLabels {};
 			std::array<const char*, scalings.size()> resolutionLabelPtrs {};
 			int internalResSelection = 0;
 
 			for (size_t i = 0; i < scalings.size(); i++)
 			{
-				const int verticalRes = static_cast<int>(scalings[i] * 480.0f);
-				horizontalRes[i] = !config::Widescreen
+				verticalRes[i] = static_cast<int>(scalings[i] * 480.0f);
+				const int horizontalRes = !config::Widescreen
 					? static_cast<int>(scalings[i] * 640.0f)
 					: static_cast<int>(scalings[i] * 480.0f * 16.0f / 9.0f);
 
-				if (horizontalRes[i] == config::RenderResolution.get())
+				if (verticalRes[i] == config::RenderResolution.get())
 					internalResSelection = static_cast<int>(i);
 
-				resolutionLabels[i] = std::to_string(horizontalRes[i]) + "x" + std::to_string(verticalRes) + " (" + scalingNames[i] + ")";
+				resolutionLabels[i] = std::to_string(horizontalRes) + "x" + std::to_string(verticalRes[i]) + " (" + scalingNames[i] + ")";
 				resolutionLabelPtrs[i] = resolutionLabels[i].c_str();
 			}
 
@@ -3866,9 +4220,9 @@ void renderVideoTab()
 			internalResCfg.options.currentValue = &internalResSelection;
 			internalResCfg.options.valueWidth = 220.0f;
 			internalResCfg.options.onChange = [&](int selectedIndex) {
-				if (selectedIndex < 0 || selectedIndex >= static_cast<int>(horizontalRes.size()))
+				if (selectedIndex < 0 || selectedIndex >= static_cast<int>(verticalRes.size()))
 					return false;
-				config::RenderResolution.set(horizontalRes[selectedIndex]);
+				config::RenderResolution.set(verticalRes[selectedIndex]);
 				return true;
 			};
 
@@ -4000,25 +4354,51 @@ void renderVideoTab()
 			T(
 				"Load Custom Textures\n"
 				"Loads custom/high-res textures from `data/textures/<game id>`.\n"
-				"Great for community texture packs, but can increase load time and memory usage.\n\n"
+				"Great for community texture packs, but can increase load time and memory usage.\n"
+				"Supports KTX2/XUBC7, KTX2/XUASTC, KTX2/ETC1S, DDS/BC7, PNG, and JPEG.\n\n"
 				"If you see stutter from texture streaming, consider enabling Preload Custom Textures."
 			),
 			game_started);
 
+		const bool gpuPreloadSupported = rend_supports_gpu_texture_preload();
+		int configuredMode = static_cast<int>(config::customTexturePreloadMode());
+
+		std::vector<const char*> texturePreloadingOptions{T("Off"), T("System Memory")};
+
+		if (gpuPreloadSupported) {
+			// Assumption: (config::CustomTexturePreloadMode::VideoMemory) is 2 - not available when !gpuPreloadSupported
+			assert(texturePreloadingOptions.size() == static_cast<size_t>(config::CustomTexturePreloadMode::VideoMemory));
+			texturePreloadingOptions.push_back(T("Video Memory"));
+		}
+
+		SettingsUI::PopupConfig texturePreloadCfg {};
+		texturePreloadCfg.type = SettingsUI::PopupType::Options;
+		texturePreloadCfg.options.label = T("Preload Custom Textures");
+		texturePreloadCfg.options.icon = ICON_FA_DOWNLOAD;
+		texturePreloadCfg.options.popupID = Tnop("PreloadTexturesPopup");
+		texturePreloadCfg.options.options = texturePreloadingOptions.data();
+		texturePreloadCfg.options.optionCount = static_cast<int>(texturePreloadingOptions.size());
+		texturePreloadCfg.options.currentValue = &configuredMode;
+		texturePreloadCfg.options.valueWidth = 220.0f;
+		texturePreloadCfg.options.onChange = [&](int selectedType) {
+			if (selectedType < 0 || selectedType >= texturePreloadingOptions.size())
+				return false;
+			config::PreloadCustomTextures = selectedType;
+			return true;
+		};
+
 		ImGui::Indent();
-		RenderGeneralToggleSettingRow(
-			"PreloadTextures",
-			ICON_FA_DOWNLOAD,
-			T("Preload Custom Textures"),
+		RenderGeneralPopupSettingRow(
+			Tnop("PreloadTextures"),
 			T("Trade memory for fewer texture hitches."),
-			static_cast<bool>(config::PreloadCustomTextures),
-			[](bool enabled) { config::PreloadCustomTextures.set(enabled); },
+			texturePreloadCfg,
 			T(
 				"Preload Custom Textures\n"
 				"Preloads custom textures at game start.\n"
 				"Can reduce runtime stutter at the cost of increased memory usage and longer initial load times."
 			),
-			!config::CustomTextures);
+			!config::CustomTextures
+		);
 		ImGui::Unindent();
 	}
 
@@ -4281,8 +4661,8 @@ void renderVideoTab()
 		}
 
 		// 2x height toggle rows for Performance settings
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(uiScaled(8.0f), uiScaled(12.0f)));
-		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, uiScaled(8.0f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(SettingsLayoutScaled(8.0f), SettingsLayoutScaled(12.0f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, SettingsLayoutScaled(8.0f)));
 
 		// Shadows toggle
 		RenderGeneralToggleSettingRow(
@@ -4321,8 +4701,8 @@ void renderVideoTab()
 		ImGui::Spacing();
 
 		// 2x height toggle rows for Advanced settings
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(uiScaled(8.0f), uiScaled(12.0f)));
-		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, uiScaled(8.0f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(SettingsLayoutScaled(8.0f), SettingsLayoutScaled(12.0f)));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, SettingsLayoutScaled(8.0f)));
 
 		// Delay Frame Swapping
 		RenderGeneralToggleSettingRow(
@@ -4909,6 +5289,7 @@ void renderAudioTab()
 		|| (config::AudioBackend.get() != "auto" && config::AudioBackend.get() != "android"))
 	{
 		static int latencyTemp = (int)roundf(config::AudioBufferSize.get() * 1000.f / 44100.f);
+		static int openingAudioBufferSize = 0;
 
 		SettingsUI::PopupSliderConfig latencyConfig {};
 		latencyConfig.label = T("Audio Latency");
@@ -4924,6 +5305,15 @@ void renderAudioTab()
 		latencyConfig.format = "%d ms";
 		latencyConfig.applyButtonText = T("Apply");
 		latencyConfig.onApply = nullptr;
+		latencyConfig.onOpen = []() {
+			openingAudioBufferSize = config::AudioBufferSize.get();
+			latencyTemp = (int)roundf(openingAudioBufferSize * 1000.f / 44100.f);
+		};
+		latencyConfig.onCancel = []() {
+			// Milliseconds round the sample count. Restore the exact original
+			// samples rather than round-tripping through the displayed value.
+			config::AudioBufferSize.set(openingAudioBufferSize);
+		};
 		latencyConfig.onValueChange = []() {
 			config::AudioBufferSize.set((int)roundf(latencyTemp * 44100.f / 1000.f));
 		};
@@ -5157,6 +5547,664 @@ void renderAudioTab()
 	}
 }
 
+static std::string vmuSlotLabel(int bus, int slot)
+{
+	std::string label;
+	label.push_back(static_cast<char>('A' + bus));
+	label.push_back(static_cast<char>('1' + slot));
+	return label;
+}
+
+static std::string defaultVmuFileNameForSlot(int bus, int slot)
+{
+	return "vmu_save_" + vmuSlotLabel(bus, slot) + ".bin";
+}
+
+static bool isSharedVmuSlotActive(int bus, int slot)
+{
+	if (config::MapleMainDevices[bus] == MDT_None)
+		return false;
+	return config::MapleExpansionDevices[bus][slot] == MDT_SegaVMU;
+}
+
+static std::string normalizeVmuFileName(std::string name)
+{
+	if (name.find('.') == std::string::npos)
+		return name + ".bin";
+
+	std::string lower = name;
+	string_tolower(lower);
+	const bool hasVmuExtension = lower.size() >= 4
+		&& (lower.compare(lower.size() - 4, 4, ".bin") == 0
+			|| lower.compare(lower.size() - 4, 4, ".vmu") == 0);
+	if (!hasVmuExtension)
+		name += ".bin";
+	return name;
+}
+
+static bool isLikelyPerGameA1VmuFileName(const std::string& fileName)
+{
+	static constexpr std::string_view suffix = "_vmu_save_A1.bin";
+	return fileName.size() >= suffix.size()
+		&& fileName.compare(fileName.size() - suffix.size(), suffix.size(), suffix.data()) == 0;
+}
+
+static void setConfiguredVmuSlotFileName(int bus, int slot, const std::string& fileName)
+{
+	config::MapleVmuSlotFileNames[bus][slot].get() =
+		fileName == defaultVmuFileNameForSlot(bus, slot) ? "" : fileName;
+}
+
+static bool isManualVmuSlotEditable(int bus, int slot, bool perGameEnabled)
+{
+	return isSharedVmuSlotActive(bus, slot) && !(perGameEnabled && bus == 0 && slot == 0);
+}
+
+static std::string currentSlotVmuFileName(int bus, int slot)
+{
+	const std::string configuredName = config::MapleVmuSlotFileNames[bus][slot].get();
+	if (hostfs::isConfiguredVmuFileNameValid(configuredName))
+		return configuredName;
+	return defaultVmuFileNameForSlot(bus, slot);
+}
+
+static void applyVmuSlotSelection(int bus, int slot, const std::string& fileName)
+{
+	// Slot selection stores only the file name; getVmuPath resolves the active VMU folder.
+	setConfiguredVmuSlotFileName(bus, slot, fileName);
+	g_mapleDevicesChangedInSettings = true;
+}
+
+static std::string getVmuCardManagerFolder()
+{
+	const std::string customVmuPath = config::VMUPath.get();
+	return customVmuPath.empty() ? get_writable_data_path("") : customVmuPath;
+}
+
+static bool getVmuCardManagerFilePath(const std::string& fileName, std::string& fullPath, std::string& error)
+{
+	if (!hostfs::isConfiguredVmuFileNameValid(fileName))
+	{
+		error = T("Invalid file name.");
+		return false;
+	}
+
+	try {
+		const std::string customVmuPath = config::VMUPath.get();
+		fullPath = customVmuPath.empty()
+			? get_writable_data_path(fileName)
+			: hostfs::storage().getSubPath(customVmuPath, fileName);
+	} catch (const hostfs::StorageException&) {
+		error = T("Invalid VMU folder.");
+		return false;
+	}
+	return true;
+}
+
+static std::string makeVmuCopyFileName(const std::string& fileName)
+{
+	std::string base = fileName;
+	std::string extension = ".bin";
+	const size_t dot = fileName.find_last_of('.');
+	if (dot != std::string::npos)
+	{
+		base = fileName.substr(0, dot);
+		extension = fileName.substr(dot);
+	}
+
+	for (int i = 1; i < 1000; i++)
+	{
+		std::string candidate = base + (i == 1 ? "_copy" : "_copy" + std::to_string(i)) + extension;
+		std::string path;
+		std::string error;
+		if (!getVmuCardManagerFilePath(candidate, path, error) || !hostfs::storage().exists(path))
+			return candidate;
+	}
+
+	return base + "_copy" + extension;
+}
+
+static bool createBlankVmuFile(const std::string& fileName, std::string& error)
+{
+	std::string fullPath;
+	if (!getVmuCardManagerFilePath(fileName, fullPath, error))
+		return false;
+
+	if (hostfs::storage().exists(fullPath))
+	{
+		error = T("A file with that name already exists.");
+		return false;
+	}
+
+	FILE *f = nowide::fopen(fullPath.c_str(), "wb");
+	if (f == nullptr)
+	{
+		error = T("Failed to create file.");
+		return false;
+	}
+
+	std::array<u8, 128_KB> vmuImage {};
+	if (!buildDefaultVmuImage(vmuImage.data(), vmuImage.size()))
+	{
+		std::fclose(f);
+		nowide::remove(fullPath.c_str());
+		error = T("Failed to build default VMU image.");
+		return false;
+	}
+	if (std::fwrite(vmuImage.data(), 1, vmuImage.size(), f) != vmuImage.size())
+	{
+		std::fclose(f);
+		nowide::remove(fullPath.c_str());
+		error = T("Failed to write VMU image.");
+		return false;
+	}
+	std::fclose(f);
+	return true;
+}
+
+static bool copyVmuCardFile(const std::string& sourceName, const std::string& copyName, std::string& error)
+{
+	std::string sourcePath;
+	if (!getVmuCardManagerFilePath(sourceName, sourcePath, error))
+		return false;
+
+	std::string copyPath;
+	if (!getVmuCardManagerFilePath(copyName, copyPath, error))
+		return false;
+
+	if (hostfs::storage().exists(copyPath))
+	{
+		error = T("A file with that name already exists.");
+		return false;
+	}
+
+	{
+		std::unique_ptr<FILE, decltype(&fclose)> source(nowide::fopen(sourcePath.c_str(), "rb"), &fclose);
+		if (source == nullptr)
+		{
+			error = T("Failed to open source VMU.");
+			return false;
+		}
+
+		std::unique_ptr<FILE, decltype(&fclose)> copy(nowide::fopen(copyPath.c_str(), "wb"), &fclose);
+		if (copy == nullptr)
+		{
+			error = T("Failed to create copy.");
+			return false;
+		}
+
+		std::array<u8, 16 * 1024> buffer {};
+		while (true)
+		{
+			const size_t bytesRead = std::fread(buffer.data(), 1, buffer.size(), source.get());
+			if (bytesRead > 0 && std::fwrite(buffer.data(), 1, bytesRead, copy.get()) != bytesRead)
+			{
+				error = T("Failed to write VMU copy.");
+				break;
+			}
+			if (bytesRead < buffer.size())
+			{
+				if (std::ferror(source.get()))
+					error = T("Failed to read source VMU.");
+				break;
+			}
+		}
+	}
+
+	if (!error.empty())
+	{
+		nowide::remove(copyPath.c_str());
+		return false;
+	}
+	return true;
+}
+
+static bool isVmuCardFile(const hostfs::FileInfo& info)
+{
+	if (info.isDirectory)
+		return false;
+
+	size_t fileSize = info.size;
+	if (fileSize == 0)
+	{
+		try {
+			fileSize = hostfs::storage().getFileInfo(info.path).size;
+		} catch (const hostfs::StorageException&) {
+			return false;
+		}
+	}
+	return fileSize == 128_KB && hostfs::isConfiguredVmuFileNameValid(info.name);
+}
+
+static void listVmuCardFiles(std::vector<hostfs::FileInfo>& out)
+{
+	out.clear();
+	try {
+		const std::string dataDir = getVmuCardManagerFolder();
+		for (const auto& entry : hostfs::storage().listContent(dataDir)) {
+			if (isVmuCardFile(entry))
+				out.push_back(entry);
+		}
+	} catch (const hostfs::StorageException&) {
+	}
+
+	std::sort(out.begin(), out.end(), [](const hostfs::FileInfo& a, const hostfs::FileInfo& b) {
+		return a.name < b.name;
+	});
+}
+
+static void findAssignedVmuSlot(const std::string& fileName, bool perGameEnabled, int& sourceBus, int& sourceSlot);
+
+static bool renameVmuCardFile(const std::string& oldName, const std::string& newName, bool perGameEnabled,
+		std::string& error)
+{
+	std::string oldPath;
+	if (!getVmuCardManagerFilePath(oldName, oldPath, error))
+		return false;
+
+	std::string newPath;
+	if (!getVmuCardManagerFilePath(newName, newPath, error))
+		return false;
+	if (hostfs::storage().exists(newPath))
+	{
+		error = T("A file with that name already exists.");
+		return false;
+	}
+
+	int sourceBus = -1;
+	int sourceSlot = -1;
+	findAssignedVmuSlot(oldName, perGameEnabled, sourceBus, sourceSlot);
+
+	int targetBus = -1;
+	int targetSlot = -1;
+	findAssignedVmuSlot(newName, perGameEnabled, targetBus, targetSlot);
+
+	if (nowide::rename(oldPath.c_str(), newPath.c_str()) != 0)
+	{
+		error = T("Rename failed.");
+		return false;
+	}
+
+	// Keep rename consistent with Insert: one active VMU slot owns one file name.
+	if (sourceBus >= 0)
+	{
+		if (targetBus >= 0 && (targetBus != sourceBus || targetSlot != sourceSlot))
+			applyVmuSlotSelection(targetBus, targetSlot, oldName);
+		applyVmuSlotSelection(sourceBus, sourceSlot, newName);
+	}
+	return true;
+}
+
+static void findAssignedVmuSlot(const std::string& fileName, bool perGameEnabled, int& sourceBus, int& sourceSlot)
+{
+	sourceBus = -1;
+	sourceSlot = -1;
+	for (int bus = 0; bus < MAPLE_PORTS; bus++)
+	{
+		for (int slot = 0; slot < 2; slot++)
+		{
+			if (isManualVmuSlotEditable(bus, slot, perGameEnabled)
+					&& currentSlotVmuFileName(bus, slot) == fileName)
+			{
+				sourceBus = bus;
+				sourceSlot = slot;
+				return;
+			}
+		}
+	}
+}
+
+static void selectVmuCardAndRefresh(const std::string& fileName, std::string& selectedVmuName, bool& refreshVmuList)
+{
+	selectedVmuName = fileName;
+	refreshVmuList = true;
+}
+
+static void renderVmuCardManager()
+{
+	static std::string selectedVmuName;
+	static std::string createVmuName = "new_vmu.bin";
+	static std::string copyVmuName;
+	static std::string renameVmuName;
+	static std::string vmuOpError;
+	static std::vector<hostfs::FileInfo> cachedVmuFiles;
+	static bool refreshVmuList = true;
+
+	const bool perGameEnabled = static_cast<bool>(config::PerGameVmu);
+
+	ImGui::TextDisabled("%s", config::VMUPath.get().empty() ? T("Memory Cards (Data Folder)") : T("Memory Cards (VMU Folder)"));
+	if (perGameEnabled)
+		ImGui::TextDisabled("%s", T("Per Game VMU manages A1 automatically; other shared slots remain editable."));
+
+	if (refreshVmuList)
+	{
+		listVmuCardFiles(cachedVmuFiles);
+		refreshVmuList = false;
+	}
+
+	int selectedIndex = -1;
+	for (int i = 0; i < static_cast<int>(cachedVmuFiles.size()); i++)
+	{
+		if (cachedVmuFiles[i].name == selectedVmuName)
+		{
+			selectedIndex = i;
+			break;
+		}
+	}
+	const bool hasSelection = selectedIndex >= 0 && selectedIndex < static_cast<int>(cachedVmuFiles.size());
+	const std::string selectedName = hasSelection ? cachedVmuFiles[selectedIndex].name : "";
+
+	int selectedBus = -1;
+	int selectedSlot = -1;
+	if (hasSelection)
+		findAssignedVmuSlot(selectedName, perGameEnabled, selectedBus, selectedSlot);
+
+	const bool selectedLooksPerGameA1 = perGameEnabled && hasSelection && isLikelyPerGameA1VmuFileName(selectedName);
+	const bool selectedIsAssigned = selectedBus >= 0;
+	const bool selectedIsSlotDefault = selectedIsAssigned
+		&& selectedName == defaultVmuFileNameForSlot(selectedBus, selectedSlot);
+	const bool canEjectSelection = selectedIsAssigned && !selectedIsSlotDefault;
+
+	if (ImGui::Button(T("Refresh")))
+	{
+		vmuOpError.clear();
+		refreshVmuList = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::Button(T("Create New Card")))
+	{
+		vmuOpError.clear();
+		ImGui::OpenPopup(T("Create VMU Card"));
+	}
+	ImGui::SameLine();
+	{
+		DisabledScope renameDisabled(!hasSelection);
+		if (ImGui::Button(T("Rename")))
+		{
+			vmuOpError.clear();
+			renameVmuName = selectedName;
+			ImGui::OpenPopup(T("Rename VMU Card"));
+		}
+	}
+	ImGui::SameLine();
+	{
+		DisabledScope copyDisabled(!hasSelection);
+		if (ImGui::Button(T("Copy")))
+		{
+			vmuOpError.clear();
+			copyVmuName = makeVmuCopyFileName(selectedName);
+			ImGui::OpenPopup(T("Copy VMU Card"));
+		}
+	}
+	ImGui::SameLine();
+	{
+		DisabledScope insertDisabled(!hasSelection || selectedLooksPerGameA1);
+		if (ImGui::Button(T("Insert")))
+		{
+			vmuOpError.clear();
+			ImGui::OpenPopup(T("Insert VMU Card"));
+		}
+	}
+	if (selectedLooksPerGameA1 && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("%s", T("Copy this Per Game A1 VMU before inserting it into another slot."));
+	ImGui::SameLine();
+	{
+		DisabledScope ejectDisabled(!canEjectSelection);
+		if (ImGui::Button(T("Eject")))
+		{
+			vmuOpError.clear();
+			applyVmuSlotSelection(selectedBus, selectedSlot, defaultVmuFileNameForSlot(selectedBus, selectedSlot));
+			refreshVmuList = true;
+		}
+	}
+
+	auto slotLabelsForFile = [&](const std::string& fileName) {
+		std::string labels;
+		for (int bus = 0; bus < MAPLE_PORTS; bus++)
+		{
+			for (int slot = 0; slot < 2; slot++)
+			{
+				if (!isManualVmuSlotEditable(bus, slot, perGameEnabled)
+						|| currentSlotVmuFileName(bus, slot) != fileName) {
+					continue;
+				}
+				if (!labels.empty())
+					labels += ", ";
+				labels += vmuSlotLabel(bus, slot);
+			}
+		}
+		return labels;
+	};
+
+	const float listHeight = SettingsLayoutScaled(220.0f);
+	ImGui::BeginChild("VmuCardManager", ImVec2(0.0f, listHeight), true,
+		ImGuiWindowFlags_DragScrolling);
+	if (ImGui::BeginTable("VmuCardTable", 2,
+			ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoSavedSettings))
+	{
+		ImGui::TableSetupColumn(T("Name"), ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(T("Slot"), ImGuiTableColumnFlags_WidthFixed, SettingsLayoutScaled(90.0f));
+		ImGui::TableHeadersRow();
+
+		for (int i = 0; i < static_cast<int>(cachedVmuFiles.size()); i++)
+		{
+			const hostfs::FileInfo& info = cachedVmuFiles[i];
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+
+			const bool isSelected = i == selectedIndex;
+			if (ImGui::Selectable(info.name.c_str(), isSelected, ImGuiSelectableFlags_SpanAllColumns))
+				selectedVmuName = info.name;
+
+			ImGui::TableSetColumnIndex(1);
+			const std::string labels = slotLabelsForFile(info.name);
+			ImGui::TextUnformatted(labels.empty() ? "-" : labels.c_str());
+		}
+		ImGui::EndTable();
+	}
+	// Match the Settings panels: an Android finger drag starting over a card row
+	// scrolls this vertical list instead of selecting the row beneath the finger.
+	scrollWhenDraggingOnVoid();
+	windowDragScroll(false);
+	ImGui::EndChild();
+
+	if (ImGui::BeginPopupModal(T("Create VMU Card"), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		ImGui::InputText(T("File name"), &createVmuName);
+		if (!vmuOpError.empty())
+			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+
+		if (ImGui::Button(T("Create")))
+		{
+			const std::string name = normalizeVmuFileName(createVmuName);
+			std::string err;
+			if (createBlankVmuFile(name, err))
+			{
+				selectVmuCardAndRefresh(name, selectedVmuName, refreshVmuList);
+				ImGui::CloseCurrentPopup();
+			}
+			else
+			{
+				vmuOpError = err;
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(T("Cancel")) || ControllerPopupCancelPressed())
+			ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+
+	if (ImGui::BeginPopupModal(T("Copy VMU Card"), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		ImGui::InputText(T("New file name"), &copyVmuName);
+		if (!vmuOpError.empty())
+			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+
+		if (ImGui::Button(T("Copy")))
+		{
+			if (!hasSelection)
+			{
+				ImGui::CloseCurrentPopup();
+			}
+			else
+			{
+				const std::string newName = normalizeVmuFileName(copyVmuName);
+				if (!hostfs::isConfiguredVmuFileNameValid(newName))
+				{
+					vmuOpError = T("Invalid file name.");
+				}
+				else
+				{
+					std::string err;
+					if (copyVmuCardFile(selectedName, newName, err))
+					{
+						selectVmuCardAndRefresh(newName, selectedVmuName, refreshVmuList);
+						ImGui::CloseCurrentPopup();
+					}
+					else
+					{
+						vmuOpError = err;
+					}
+				}
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(T("Cancel")) || ControllerPopupCancelPressed())
+			ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+
+	if (ImGui::BeginPopupModal(T("Rename VMU Card"), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		const bool showPerGameRenameWarning = perGameEnabled
+			&& hasSelection
+			&& isLikelyPerGameA1VmuFileName(selectedName);
+		if (showPerGameRenameWarning)
+		{
+			ImVec4 warningColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered];
+			ImGui::TextColored(warningColor, "%s %s", ICON_FA_TRIANGLE_EXCLAMATION, T("Per Game VMU Rename Warning"));
+			ImGui::TextWrapped("%s", T(
+				"This looks like an auto-named Per Game VMU for A1.\n"
+				"Renaming it can stop Hollycast from auto-loading it while Per Game VMUs is enabled.\n"
+				"To restore automatic pickup later, rename it back to its original file name."));
+			ImGui::Separator();
+		}
+		ImGui::InputText(T("New name"), &renameVmuName);
+		if (!vmuOpError.empty())
+			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+
+		if (ImGui::Button(T("Apply")))
+		{
+			if (!hasSelection)
+			{
+				ImGui::CloseCurrentPopup();
+			}
+			else
+			{
+				const std::string oldName = cachedVmuFiles[selectedIndex].name;
+				const std::string newName = normalizeVmuFileName(renameVmuName);
+				if (newName == oldName)
+				{
+					ImGui::CloseCurrentPopup();
+				}
+				else if (!hostfs::isConfiguredVmuFileNameValid(newName))
+				{
+					vmuOpError = T("Invalid file name.");
+				}
+				else
+				{
+					std::string err;
+					if (renameVmuCardFile(oldName, newName, perGameEnabled, err))
+					{
+						selectVmuCardAndRefresh(newName, selectedVmuName, refreshVmuList);
+						ImGui::CloseCurrentPopup();
+					}
+					else
+					{
+						vmuOpError = err;
+					}
+				}
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(T("Cancel")) || ControllerPopupCancelPressed())
+			ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+
+	if (ImGui::BeginPopupModal(T("Insert VMU Card"), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		if (!hasSelection)
+		{
+			ImGui::TextUnformatted(T("No VMU selected."));
+		}
+		else
+		{
+			const std::string sourceName = cachedVmuFiles[selectedIndex].name;
+			ImGui::Text(T("Insert \"%s\" into:"), sourceName.c_str());
+			if (!vmuOpError.empty())
+				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+
+			if (perGameEnabled && isLikelyPerGameA1VmuFileName(sourceName))
+			{
+				ImGui::TextWrapped("%s", T(
+					"This looks like an auto-named Per Game VMU for A1.\n"
+					"Copy it first, then insert the copy into another slot."));
+			}
+			else
+			{
+				bool anySlot = false;
+				for (int bus = 0; bus < MAPLE_PORTS; bus++)
+				{
+					for (int slot = 0; slot < 2; slot++)
+					{
+						if (!isSharedVmuSlotActive(bus, slot))
+							continue;
+
+						const std::string label = vmuSlotLabel(bus, slot);
+						if (perGameEnabled && bus == 0 && slot == 0)
+						{
+							const std::string lockedLabel = label + " (" + T("Per Game VMU") + ")";
+							DisabledScope disabled(true);
+							ImGui::Selectable(lockedLabel.c_str());
+							continue;
+						}
+
+						anySlot = true;
+						if (ImGui::Selectable(label.c_str()))
+						{
+							int sourceBus = -1;
+							int sourceSlot = -1;
+							findAssignedVmuSlot(sourceName, perGameEnabled, sourceBus, sourceSlot);
+
+							if (sourceBus == bus && sourceSlot == slot)
+							{
+								ImGui::CloseCurrentPopup();
+								continue;
+							}
+
+							// Keep one active VMU slot per file so two emulated cards never write the same save.
+							const std::string targetName = currentSlotVmuFileName(bus, slot);
+							if (sourceBus >= 0)
+								applyVmuSlotSelection(sourceBus, sourceSlot, targetName);
+							applyVmuSlotSelection(bus, slot, sourceName);
+							refreshVmuList = true;
+							ImGui::CloseCurrentPopup();
+						}
+					}
+				}
+				if (!anySlot)
+					ImGui::TextDisabled("%s", T("No active shared VMU slots are available."));
+			}
+		}
+
+		ImGui::Spacing();
+		if (ImGui::Button(T("Close")) || ControllerPopupCancelPressed())
+			ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+}
+
 void renderControlsTab()
 {
 	uiLanguageHandler.init();
@@ -5185,10 +6233,10 @@ void renderControlsTab()
 			ImGui::TableSetupColumn(T("Port"), ImGuiTableColumnFlags_WidthFixed);
 
 			const float portComboWidth = ImGui::CalcTextSize("None").x + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
-			const ImVec2 deviceButtonSize(0.0f, uiScaled(24.0f));
+			const ImVec2 deviceButtonSize(0.0f, SettingsLayoutScaled(24.0f));
 			const ImVec4 gray(0.5f, 0.5f, 0.5f, 1.f);
 
-			ImGui::TableNextRow(ImGuiTableRowFlags_None, uiScaled(24.0f));
+			ImGui::TableNextRow(ImGuiTableRowFlags_None, SettingsLayoutScaled(24.0f));
 			ImGui::TableSetColumnIndex(0);
 			ImGui::TextColored(gray, "%s", T("System"));
 
@@ -5215,7 +6263,7 @@ void renderControlsTab()
 				ImguiID gamepadRowId(gamepad_row_id);
 				(void)gamepadRowId;
 
-				ImGui::TableNextRow(ImGuiTableRowFlags_None, uiScaled(24.0f));
+				ImGui::TableNextRow(ImGuiTableRowFlags_None, SettingsLayoutScaled(24.0f));
 				ImGui::TableSetColumnIndex(0);
 				ImGui::Text("%s", gamepad->api_name().c_str());
 
@@ -5270,7 +6318,7 @@ void renderControlsTab()
 				// Settings button for rumble/deadzone/saturation
 				if (gamepad->is_rumble_enabled() || gamepad->has_analog_stick() || gamepad->is_virtual_gamepad())
 				{
-					ImGui::SameLine(0, uiScaled(16.0f));
+					ImGui::SameLine(0, SettingsLayoutScaled(16.0f));
 					if (ImGui::Button(T("Settings"), deviceButtonSize))
 					{
 						g_currentGamepadForSettings = gamepad;
@@ -5422,7 +6470,7 @@ void renderControlsTab()
 		if (ImGui::BeginTable("dreamcastDevices", 4,
 				ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings
 				| ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersInnerV,
-				ImVec2(0, 0), uiScaled(8)))
+				ImVec2(0, 0), SettingsLayoutScaled(8)))
 		{
 			const float comboWidthPadding = ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
 			float mainComboWidth = comboWidthPadding;
@@ -5500,7 +6548,7 @@ void renderControlsTab()
 				else
 					selected_name = maple_device_name(config::MapleMainDevices[bus]);
 
-				ImGui::TableNextRow(ImGuiTableRowFlags_None, uiScaled(24.0f));
+				ImGui::TableNextRow(ImGuiTableRowFlags_None, SettingsLayoutScaled(24.0f));
 				ImGui::TableSetColumnIndex(0);
 				ImGui::Text(T("Port %c"), bus + 'A');
 
@@ -5519,6 +6567,11 @@ void renderControlsTab()
 
 				if (ImGui::BeginCombo(device_name, selected_name, ImGuiComboFlags_None))
 				{
+#if defined(__ANDROID__)
+					// BeginCombo has no window-flags argument. Opt this popup into
+					// the existing touch-drag handling before submitting its rows.
+					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
 					for (int i = 0; i < IM_ARRAYSIZE(maple_device_types); i++)
 					{
 						bool is_selected = config::MapleMainDevices[bus] == maple_device_type_from_index(i);
@@ -5530,6 +6583,10 @@ void renderControlsTab()
 						if (is_selected)
 							ImGui::SetItemDefaultFocus();
 					}
+#if defined(__ANDROID__)
+					scrollWhenDraggingOnVoid();
+					windowDragScroll(false);
+#endif
 					ImGui::EndCombo();
 				}
 
@@ -5574,6 +6631,10 @@ void renderControlsTab()
 
 					if (ImGui::BeginCombo(device_name, selectedDevIter->name, ImGuiComboFlags_None))
 					{
+#if defined(__ANDROID__)
+						// Expansion-device lists use the same vertical touch scrolling.
+						ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
 						for (const auto& devIter : maple_expansion_device_types)
 						{
 							bool is_selected = (selectedDevIter->deviceType == devIter.deviceType);
@@ -5603,6 +6664,10 @@ void renderControlsTab()
 							if (is_selected)
 								ImGui::SetItemDefaultFocus();
 						}
+#if defined(__ANDROID__)
+						scrollWhenDraggingOnVoid();
+						windowDragScroll(false);
+#endif
 						ImGui::EndCombo();
 					}
 				}
@@ -5625,7 +6690,7 @@ void renderControlsTab()
 
 					// Toggle switch (clickable row)
 					float rowHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
-					ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(8.0f));
+					ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, SettingsLayoutScaled(8.0f));
 					bool rowClicked = ImGui::Selectable("##crosshair_row", false,
 						ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
 						ImVec2(0, rowHeight));
@@ -5659,15 +6724,15 @@ void renderControlsTab()
 					ImGui::Text("%s", T("Crosshair"));
 
 					// Toggle switch
-					ImGui::SameLine(ImGui::GetContentRegionAvail().x - uiScaled(40));
-					float toggleHeight = settings.display.uiScale * 20;
+					ImGui::SameLine(ImGui::GetContentRegionAvail().x - SettingsLayoutScaled(40));
+					float toggleHeight = SettingsLayoutScaled(20.0f);
 					float verticalOffset = (rowHeight - toggleHeight) * 0.5f;
 					ImVec2 cursorPos = ImGui::GetCursorPos();
 					ImGui::SetCursorPos(ImVec2(cursorPos.x, cursorPos.y + verticalOffset));
 					RenderToggleSwitchVisual(enabled);
 
 					// Color picker on same line
-					ImGui::SameLine(0, uiScaled(16));
+					ImGui::SameLine(0, SettingsLayoutScaled(16));
 					bool colorChanged = ImGui::ColorEdit4("##crosshair_color", xhairColor,
 						ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf
 						| ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoLabel);
@@ -5760,6 +6825,8 @@ void renderControlsTab()
 				"When enabled, each game has its own VMU on port 1 of controller A.\n"
 				"Useful to prevent save-file conflicts between games."
 			));
+
+		renderVmuCardManager();
 
 #ifdef USE_DREAMLINK_DEVICES
 		RenderGeneralToggleSettingRow(
@@ -6640,10 +7707,9 @@ void renderAdvancedTab()
 	}
 
 	// Debugging Section
-#if defined(GDB_SERVER) || !defined(__ANDROID__)
 	if (RenderCollapsingHeader("DebuggingSection", ICON_FA_BUG, T("Debugging"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
-#if !defined(__ANDROID) && !defined(GDB_SERVER)
+#if !defined(__ANDROID__) && !defined(GDB_SERVER)
 		// Serial Console - 2x Row Pattern
 		RenderGeneralToggleSettingRow(
 			"SerialConsole",
@@ -6732,6 +7798,7 @@ void renderAdvancedTab()
 	#endif
 
 		// Log to File - 2x Row Pattern
+		// Android writes this log to its app-writable data directory.
 		const bool logToFileValue = cfgLoadBool("log", "LogToFile", false);
 		RenderGeneralToggleSettingRow(
 			"LogToFile",
@@ -6747,7 +7814,6 @@ void renderAdvancedTab()
 				"If you enable this, try to reproduce the issue, then disable it again to avoid unnecessary disk usage."
 			));
 	}
-#endif
 
 	// Logging Section (Debug builds only)
 #if !defined(NDEBUG) || defined(DEBUGFAST) || FC_PROFILER
@@ -6841,7 +7907,7 @@ void renderAdvancedTab()
 				ImGui::PushID(shortName.c_str());
 				float rowHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
 
-				ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(8.0f));
+				ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, SettingsLayoutScaled(8.0f));
 				bool rowClicked = ImGui::Selectable(("##" + shortName + "_row").c_str(), false,
 					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
 					ImVec2(0, rowHeight));
@@ -7115,6 +8181,113 @@ void renderAdvancedTab()
 	}
 }
 
+static constexpr char kHollycastAsciiTextPath[] = "picture/hollycast_ascii.txt";
+
+static const std::string& GetHollycastAsciiText()
+{
+	static const std::string text = [] {
+		size_t dataSize = 0;
+		std::unique_ptr<u8[]> data = resource::load(kHollycastAsciiTextPath, dataSize);
+		if (data == nullptr || dataSize == 0)
+			return std::string{};
+		return std::string(reinterpret_cast<const char*>(data.get()), dataSize);
+	}();
+	return text;
+}
+
+static void RenderHollycastAsciiText()
+{
+	const std::string& text = GetHollycastAsciiText();
+	ImFont* font = aboutAsciiFont != nullptr ? aboutAsciiFont : ImGui::GetFont();
+	const float availableWidth = ImGui::GetContentRegionAvail().x - 2.0f;
+	if (text.empty() || font == nullptr || availableWidth <= 0.0f)
+		return;
+
+	size_t maxColumns = 0;
+	size_t currentColumns = 0;
+	size_t lineCount = 0;
+	for (char character : text)
+	{
+		if (character == '\n')
+		{
+			maxColumns = std::max(maxColumns, currentColumns);
+			currentColumns = 0;
+			lineCount++;
+		}
+		else if (character != '\r')
+		{
+			currentColumns++;
+		}
+	}
+	if (text.back() != '\n')
+	{
+		maxColumns = std::max(maxColumns, currentColumns);
+		lineCount++;
+	}
+	if (maxColumns == 0 || lineCount == 0)
+		return;
+
+	const float referenceSize = font->LegacySize;
+	const char space = ' ';
+	const float columnWidth = font->CalcTextSizeA(referenceSize, FLT_MAX, 0.0f, &space, &space + 1).x;
+	if (referenceSize <= 0.0f || columnWidth <= 0.0f)
+		return;
+
+	// Follow Settings UI scaling, but never allow a row to exceed the content
+	// width. No wrapping is used because it would corrupt the ASCII artwork.
+#if defined(__ANDROID__)
+	constexpr float AsciiFontScale = 0.25f;
+	const float desiredFontSize = SettingsPreviewFontSize(font) * AsciiFontScale;
+#else
+	// Desktop artwork needs a larger lower bound to preserve the original glyph
+	// detail. Start at the previous mapping's size at UI scale 90 (effective
+	// scale 150). Each subsequent UI scale step adds half its normal amount
+	// to the artwork only; values below 50 cannot lower this baseline.
+	constexpr float AsciiFontScale = 0.375f;
+	constexpr float MinimumUiScale = 50.0f;
+	constexpr float MinimumAsciiUiScale = 150.0f;
+	constexpr float AsciiUiScaleStep = 0.5f;
+	const float uiScale = static_cast<float>(config::UIScaling);
+	const float effectiveUiScale = MinimumAsciiUiScale
+			+ std::max(0.0f, uiScale - MinimumUiScale) * AsciiUiScaleStep;
+	const float desiredFontSize = SettingsPreviewFontSize(font) * AsciiFontScale
+			* effectiveUiScale / std::max(uiScale, 1.0f);
+#endif
+	const float fittingFontSize = referenceSize * availableWidth / (columnWidth * maxColumns);
+	const float fontSize = std::min(desiredFontSize, fittingFontSize);
+	if (fontSize <= 0.0f)
+		return;
+
+	ImVec2 position = ImGui::GetCursorScreenPos();
+#if !defined(__ANDROID__)
+	// Center the complete monospaced row without modifying the supplied text.
+	const float artworkWidth = columnWidth * maxColumns * fontSize / referenceSize;
+	position.x += std::max(0.0f, (ImGui::GetContentRegionAvail().x - artworkWidth) * 0.5f);
+#endif
+	// Normal text leading separates the ASCII rows into visible horizontal
+	// bands. Draw the original lines closer together without reflowing them.
+	constexpr float AsciiLineSpacing = 0.75f;
+	const float lineAdvance = fontSize * AsciiLineSpacing;
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+	size_t lineStart = 0;
+	size_t row = 0;
+	while (lineStart < text.size())
+	{
+		const size_t newline = text.find('\n', lineStart);
+		const size_t lineEnd = newline == std::string::npos ? text.size() : newline;
+		drawList->AddText(font, fontSize,
+			ImVec2(position.x, position.y + static_cast<float>(row) * lineAdvance), color,
+			text.data() + lineStart, text.data() + lineEnd, 0.0f);
+		if (newline == std::string::npos)
+			break;
+		lineStart = newline + 1;
+		++row;
+	}
+	// Reserve the full last row too, so the next section cannot overlap it.
+	ImGui::Dummy(ImVec2(0.0f, lineAdvance * static_cast<float>(lineCount - 1) + fontSize));
+}
+
 void renderAboutTab()
 {
 	// Use TextDisabled for the title (theme-aware)
@@ -7124,21 +8297,8 @@ void renderAboutTab()
 	// Center content for better appearance
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ScaledVec2(20, 20));
 
-	// Logo/Title Section
 	ImGui::Spacing();
-	ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.5f, 0.5f));
-	const char* logoText = "  ____  __  __          _   _ ";
-	const char* logoText2 = " / ___||  \\/  | ___  __| | | |";
-	const char* logoText3 = " \\___ \\| |\\/| |/ _ \\/ _` | | |";
-	const char* logoText4 = "  ___) | |  | |  __/ (_| | |_|";
-	const char* logoText5 = " |____/|_|  |_|\\___|\\__,_|\\___/";
-
-	ImGui::TextUnformatted(logoText);
-	ImGui::TextUnformatted(logoText2);
-	ImGui::TextUnformatted(logoText3);
-	ImGui::TextUnformatted(logoText4);
-	ImGui::TextUnformatted(logoText5);
-	ImGui::PopStyleVar();
+	RenderHollycastAsciiText();
 
 	ImGui::Spacing();
 	ImGui::Spacing();
@@ -7300,12 +8460,72 @@ void renderAboutTab()
 // Main entry point - renders the entire settings UI
 void renderSettingsNew()
 {
+	if (!g_controllerPopupWasOpen && !IsAnySettingsPopupOpen()
+			&& g_controllerSection != ControllerSection::None)
+	{
+		if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+		{
+			ImGui::ClearActiveID();
+			ImGui::NavMoveRequestCancel();
+			if (g_tabSlideStart >= 0.0)
+				g_state.currentTab = g_tabSlideTarget;
+			g_tabSlideStart = -1.0;
+			g_focusSettingsContent = false;
+			g_focusSettingsNavigation = g_controllerSection == ControllerSection::Content;
+			g_focusSettingsBack = !g_focusSettingsNavigation;
+		}
+		// The navigation rail is for choosing a specific tab with A. Left and
+		// right only change tabs after entering that tab's content pane.
+		else if (!g_controllerEditing && g_controllerSection == ControllerSection::Content)
+		{
+			const bool left = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, true)
+					|| ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, true);
+			const bool right = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, true)
+					|| ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, true);
+			if (left != right)
+			{
+				ImGui::NavMoveRequestCancel();
+				if (g_tabSlideStart >= 0.0)
+					g_state.currentTab = g_tabSlideTarget;
+				g_tabSlideDirection = right ? 1 : -1;
+				g_tabSlideTarget = static_cast<SettingsTab>((static_cast<int>(g_state.currentTab)
+						+ g_tabSlideDirection + static_cast<int>(SettingsTab::Count)) % static_cast<int>(SettingsTab::Count));
+				g_tabSlideStart = ImGui::GetTime();
+				g_tabSlideFocusContent = g_controllerSection == ControllerSection::Content;
+				g_focusSettingsContent = false;
+			}
+		}
+	}
+	if (g_tabSlideStart >= 0.0)
+	{
+		const double elapsed = ImGui::GetTime() - g_tabSlideStart;
+		if (elapsed >= kTabSlideSeconds * 0.5 && g_state.currentTab != g_tabSlideTarget)
+		{
+			g_state.currentTab = g_tabSlideTarget;
+			if (g_contentWindow != nullptr)
+				ImGui::SetScrollY(g_contentWindow, 0.0f);
+			ResetSettingsFooter();
+		}
+		if (elapsed >= kTabSlideSeconds)
+		{
+			g_tabSlideStart = -1.0;
+			g_focusSettingsContent = g_tabSlideFocusContent;
+			g_focusSettingsNavigation = !g_focusSettingsContent;
+		}
+	}
 	if (g_settingsFooterText.empty())
 		ResetSettingsFooter();
 
+#if defined(__ANDROID__)
+	// Keep the Settings page internally consistent with its bounded scale without
+	// changing the global style used by the library, menus, or virtual controls.
+	const ImGuiStyle settingsStyleBackup = ImGui::GetStyle();
+	ImGui::GetStyle().ScaleAllSizes(SettingsTextPreviewScale());
+#endif
+
 	// Set up full-screen window
 	fullScreenWindow(false);
-	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
 	// Main settings window
 	const std::string settingsWindowTitle = std::string(T("Settings")) + "###Settings";
@@ -7340,7 +8560,7 @@ void renderSettingsNew()
 				gui_setState(GuiState::Main);
 		};
 
-		const char* backLabel = game_started ? T("Back to Game") : T("Back to Library");
+		const char* backLabel = game_started ? T("Back to Game") : T("Library");
 
 		// Split into left navigation rail and right content area
 		renderNavigationRail(exitSettings, backLabel);
@@ -7351,6 +8571,11 @@ void renderSettingsNew()
 			ImGui::PopFont();
 	}
 	ImGui::End();
+	ImGui::PopStyleVar();
+
+#if defined(__ANDROID__)
+	ImGui::GetStyle() = settingsStyleBackup;
+#endif
 }
 
 } // namespace SettingsNew

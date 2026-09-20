@@ -26,6 +26,7 @@ namespace SettingsNew {
 enum class SettingsTab
 {
 	General,
+	Library,
 	Video,
 	Audio,
 	Controls,
@@ -48,6 +49,9 @@ extern SettingsUIState g_state;
 // Renders the full-screen settings interface with navigation rail and content area
 void renderSettingsNew();
 
+// Reserve controller navigation before ImGui consumes its default navigation keys.
+void prepareControllerNavigation();
+
 // Reset state when entering settings screen
 void resetState();
 
@@ -56,6 +60,7 @@ const char* getTabName(SettingsTab tab);
 
 // Individual tab renderers
 void renderGeneralTab();
+void renderLibraryTab();
 void renderVideoTab();
 void renderAudioTab();
 void renderControlsTab();
