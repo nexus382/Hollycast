@@ -4998,7 +4998,7 @@ void renderOnScreenDisplayTab()
 		textSizeCfg.label = T("Text Size");
 		textSizeCfg.icon = ICON_FA_TEXT_HEIGHT;
 		textSizeCfg.popupID = Tnop("OverlayTextSizePopup");
-		textSizeCfg.description = T("Set the overlay text size.");
+		textSizeCfg.description = T("Set the maximum text size. The overlay shrinks when needed to keep every row and graph on screen.");
 		textSizeCfg.currentValue = &overlayTextSize;
 		textSizeCfg.minValue = 10;
 		textSizeCfg.maxValue = 48;
@@ -5011,7 +5011,7 @@ void renderOnScreenDisplayTab()
 		textSizePopup.type = SettingsUI::PopupType::Slider;
 		textSizePopup.slider = textSizeCfg;
 		RenderGeneralPopupSettingRow(Tnop("OverlayTextSizeSetting"), T("Choose the overlay font size."), textSizePopup,
-			T("Text Size\nControls the size of the overlay text."));
+			T("Text Size\nControls the maximum text size. All selected rows and graphs automatically fit inside the screen."));
 
 		// Keep the existing configuration key for compatibility. Its value has
 		// always represented opacity: larger percentages make the OSD less transparent.
@@ -5053,7 +5053,7 @@ void renderOnScreenDisplayTab()
 			return true;
 		};
 		RenderGeneralPopupSettingRow(Tnop("OverlayCornerSetting"), T("Choose where the overlay appears."), cornerCfg,
-			T("Screen Corner\nThe default is the top right corner."));
+			T("Screen Corner\nPosition 0, 0 defaults to 15 pixels from the right edge and below the menu bar, or the top edge when the menu is hidden."));
 
 		static int overlayOffsetX = cfgLoadInt("rend", "OverlayOffsetX", 0);
 		SettingsUI::PopupSliderConfig offsetXCfg {};
@@ -5073,7 +5073,7 @@ void renderOnScreenDisplayTab()
 		offsetXPopup.type = SettingsUI::PopupType::Slider;
 		offsetXPopup.slider = offsetXCfg;
 		RenderGeneralPopupSettingRow(Tnop("OverlayOffsetXSetting"), T("Adjust the overlay's horizontal position."), offsetXPopup,
-			T("Horizontal Position\nNegative values move left. Positive values move right."));
+			T("Horizontal Position\nZero starts 15 pixels from the selected edge. Negative values move left. Positive values move right. The overlay stays on screen."));
 
 		static int overlayOffsetY = cfgLoadInt("rend", "OverlayOffsetY", 0);
 		SettingsUI::PopupSliderConfig offsetYCfg {};
@@ -5093,7 +5093,7 @@ void renderOnScreenDisplayTab()
 		offsetYPopup.type = SettingsUI::PopupType::Slider;
 		offsetYPopup.slider = offsetYCfg;
 		RenderGeneralPopupSettingRow(Tnop("OverlayOffsetYSetting"), T("Adjust the overlay's vertical position."), offsetYPopup,
-			T("Vertical Position\nNegative values move up. Positive values move down."));
+			T("Vertical Position\nZero starts 15 pixels from the selected edge, below the menu bar for top corners. Negative values move up. Positive values move down. The overlay stays on screen and below the menu bar."));
 
 		int packedColor = config::loadInt("rend", "OverlayColor", 0xFFFFFFFF);
 		float overlayColor[4] {

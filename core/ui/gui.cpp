@@ -3063,8 +3063,6 @@ void gui_draw_osd()
 			}
 		}
 
-	performance_overlay::draw();
-
 	if (ggpo::active())
 	{
 		if (config::NetworkStats)
@@ -3079,6 +3077,8 @@ void gui_draw_osd()
 	vgamepad::draw();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
+	// Use this frame's effective bar height, including fullscreen auto-hide.
+	performance_overlay::draw();
 
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();

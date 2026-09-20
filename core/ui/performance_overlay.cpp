@@ -8,6 +8,7 @@
 #include "cfg/cfg.h"
 #include "cfg/option.h"
 #include "gui_font.h"
+#include "gui_menu.h"
 #include "gui_util.h"
 #include "hw/pvr/spg.h"
 #include "imgui.h"
@@ -693,7 +694,7 @@ std::string formatSh4ExecutionRate()
 }
 
 void drawFrameTimeGraph(ImDrawList *drawList, ImFont *font, float fontSize, const ImVec2& position, float width,
-	float height, ImU32 textColor, float opacity)
+	float height, ImU32 textColor, float opacity, float scale)
 {
 	if (metrics.frameTimeHistoryCount < 2)
 		return;
@@ -717,12 +718,13 @@ void drawFrameTimeGraph(ImDrawList *drawList, ImFont *font, float fontSize, cons
 		maximum += padding;
 	}
 
-	const float labelSize = std::max(10.f, fontSize * 0.65f);
-	const float labelHeight = labelSize + uiScaled(2.f);
-	const ImVec2 plotTopLeft = position + ImVec2(uiScaled(4.f), labelHeight);
-	const ImVec2 plotBottomRight = position + ImVec2(width - uiScaled(4.f), height - labelHeight);
+	const float labelSize = std::min(std::max(10.f * scale, fontSize * 0.65f), height * 0.25f);
+	const float padding = uiScaled(4.f) * scale;
+	const float labelHeight = labelSize + uiScaled(2.f) * scale;
+	const ImVec2 plotTopLeft = position + ImVec2(padding, labelHeight);
+	const ImVec2 plotBottomRight = position + ImVec2(width - padding, height - labelHeight);
 	const ImU32 backgroundColor = IM_COL32(0, 0, 0, static_cast<int>(64.f * opacity));
-	drawList->AddRectFilled(position, position + ImVec2(width, height), backgroundColor, uiScaled(6.f));
+	drawList->AddRectFilled(position, position + ImVec2(width, height), backgroundColor, uiScaled(6.f) * scale);
 
 	const float plotWidth = plotBottomRight.x - plotTopLeft.x;
 	const float plotHeight = plotBottomRight.y - plotTopLeft.y;
@@ -733,7 +735,7 @@ void drawFrameTimeGraph(ImDrawList *drawList, ImFont *font, float fontSize, cons
 		const float normalized = (metrics.frameTimeHistory[i] - minimum) / (maximum - minimum);
 		const ImVec2 current(x, plotBottomRight.y - normalized * plotHeight);
 		if (i != 0)
-			drawList->AddLine(previous, current, textColor, std::max(1.f, uiScaled(1.f)));
+			drawList->AddLine(previous, current, textColor, std::max(1.f, uiScaled(1.f) * scale));
 		previous = current;
 	}
 
@@ -741,26 +743,27 @@ void drawFrameTimeGraph(ImDrawList *drawList, ImFont *font, float fontSize, cons
 	char minimumLabel[16];
 	std::snprintf(maximumLabel, sizeof(maximumLabel), i18n::T("%.0f ms"), maximum);
 	std::snprintf(minimumLabel, sizeof(minimumLabel), i18n::T("%.0f ms"), minimum);
-	drawList->AddText(font, labelSize, position + ImVec2(uiScaled(4.f), 0.f), textColor, maximumLabel);
+	drawList->AddText(font, labelSize, position + ImVec2(padding, 0.f), textColor, maximumLabel);
 	const ImVec2 minimumSize = font->CalcTextSizeA(labelSize, FLT_MAX, 0.f, minimumLabel);
-	drawList->AddText(font, labelSize, position + ImVec2(width - minimumSize.x - uiScaled(4.f), height - labelSize), textColor,
+	drawList->AddText(font, labelSize, position + ImVec2(width - minimumSize.x - padding, height - labelSize), textColor,
 		minimumLabel);
 }
 
 void drawUsageGraph(ImDrawList *drawList, ImFont *font, float fontSize, const ImVec2& position, float width,
-	float height, ImU32 primaryColor, float opacity, const char *title, const MetricHistory& primary,
+	float height, ImU32 primaryColor, float opacity, float scale, const char *title, const MetricHistory& primary,
 	const MetricHistory *secondary = nullptr)
 {
 	if (primary.count < 2)
 		return;
 
-	const float labelSize = std::max(10.f, fontSize * 0.65f);
-	const float labelHeight = labelSize + uiScaled(2.f);
-	const ImVec2 plotTopLeft = position + ImVec2(uiScaled(4.f), labelHeight);
-	const ImVec2 plotBottomRight = position + ImVec2(width - uiScaled(4.f), height - labelSize);
+	const float labelSize = std::min(std::max(10.f * scale, fontSize * 0.65f), height * 0.25f);
+	const float padding = uiScaled(4.f) * scale;
+	const float labelHeight = labelSize + uiScaled(2.f) * scale;
+	const ImVec2 plotTopLeft = position + ImVec2(padding, labelHeight);
+	const ImVec2 plotBottomRight = position + ImVec2(width - padding, height - labelSize);
 	const ImU32 backgroundColor = IM_COL32(0, 0, 0, static_cast<int>(64.f * opacity));
 	const ImU32 secondaryColor = IM_COL32(92, 190, 255, static_cast<int>(255.f * opacity));
-	drawList->AddRectFilled(position, position + ImVec2(width, height), backgroundColor, uiScaled(6.f));
+	drawList->AddRectFilled(position, position + ImVec2(width, height), backgroundColor, uiScaled(6.f) * scale);
 	const float plotWidth = plotBottomRight.x - plotTopLeft.x;
 	const float plotHeight = plotBottomRight.y - plotTopLeft.y;
 	const float midY = plotBottomRight.y - plotHeight * 0.5f;
@@ -776,7 +779,7 @@ void drawUsageGraph(ImDrawList *drawList, ImFont *font, float fontSize, const Im
 			const float normalized = std::clamp(historyValue(history, i), 0.f, 100.f) / 100.f;
 			const ImVec2 current(x, plotBottomRight.y - normalized * plotHeight);
 			if (i != 0)
-				drawList->AddLine(previous, current, color, std::max(1.f, uiScaled(1.f)));
+				drawList->AddLine(previous, current, color, std::max(1.f, uiScaled(1.f) * scale));
 			previous = current;
 		}
 	};
@@ -791,10 +794,12 @@ void drawUsageGraph(ImDrawList *drawList, ImFont *font, float fontSize, const Im
 			historyValue(primary, primary.count - 1), historyValue(*secondary, secondary->count - 1));
 	else
 		std::snprintf(label, sizeof(label), i18n::T("%s: %.0f%%"), title, historyValue(primary, primary.count - 1));
-	drawList->AddText(font, labelSize, position + ImVec2(uiScaled(4.f), 0.f), primaryColor, label);
+	const float labelWidth = font->CalcTextSizeA(labelSize, FLT_MAX, 0.f, label).x;
+	const float titleSize = labelSize * std::min(1.f, (width - padding * 2.f) / std::max(1.f, labelWidth));
+	drawList->AddText(font, titleSize, position + ImVec2(padding, 0.f), primaryColor, label);
 	const char *zeroLabel = "0%";
 	const ImVec2 zeroLabelSize = font->CalcTextSizeA(labelSize, FLT_MAX, 0.f, zeroLabel);
-	drawList->AddText(font, labelSize, position + ImVec2(width - zeroLabelSize.x - uiScaled(4.f), height - labelSize), primaryColor, zeroLabel);
+	drawList->AddText(font, labelSize, position + ImVec2(width - zeroLabelSize.x - padding, height - labelSize), primaryColor, zeroLabel);
 }
 
 } // namespace
@@ -1061,23 +1066,29 @@ void draw()
 		return;
 
 	ImFont *font = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
-	const float fontSize = uiScaled(static_cast<float>(std::clamp(config::loadInt(Section, "OverlayTextSize", 16), 10, 48)));
+	float fontSize = uiScaled(static_cast<float>(std::clamp(config::loadInt(Section, "OverlayTextSize", 16), 10, 48)));
 	const float opacity = std::clamp(config::loadInt(Section, "OverlayTransparency", 85), 10, 100) / 100.f;
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-	const float margin = uiScaled(12.f);
+	// Position offsets are measured from this fixed screen inset, independent
+	// of menu scaling. Fit the complete block before applying those offsets.
+	constexpr float margin = 15.f;
+	const float topInset = GuiMenu::mainMenuBarHeight() + margin;
+	const float availableHeight = displaySize.y - topInset - margin;
+	if (displaySize.x <= margin * 2.f || availableHeight <= 0.f)
+		return;
 	const float lineSpacing = uiScaled(1.f);
-	const float lineHeight = fontSize + lineSpacing;
+	float lineHeight = fontSize + lineSpacing;
 	const bool showFrameTimeGraph = showFrameTimes && show("OverlayShowFrameTimeGraph", true) && metrics.frameTimeHistoryCount >= 2;
 	const bool showHostCpuGraph = overlayMode == 2 && show("OverlayShowHostCpuGraph", false)
 		&& metrics.hostProcessCpuHistory.count >= 2;
 	const bool showGpuGraph = overlayMode == 2 && show("OverlayShowGpuGraph", false) && metrics.gpuUsageHistory.count >= 2;
 	const int graphCount = static_cast<int>(showFrameTimeGraph) + static_cast<int>(showHostCpuGraph) + static_cast<int>(showGpuGraph);
-	const float graphWidth = graphCount != 0
+	float graphWidth = graphCount != 0
 		? std::clamp(uiScaled(200.f), uiScaled(120.f), std::max(uiScaled(120.f), displaySize.x - margin * 2.f)) : 0.f;
-	const float graphSpacing = graphCount != 0 ? uiScaled(5.f) : 0.f;
-	const float graphHeight = graphCount != 0 ? uiScaled(52.f) : 0.f;
+	float graphSpacing = graphCount != 0 ? uiScaled(5.f) : 0.f;
+	float graphHeight = graphCount != 0 ? uiScaled(52.f) : 0.f;
 	const float totalGraphHeight = graphCount == 0 ? 0.f : graphCount * (graphSpacing + graphHeight);
-	const float totalHeight = lineHeight * lines.size() - lineSpacing + totalGraphHeight;
+	float totalHeight = lineHeight * lines.size() + totalGraphHeight;
 	std::vector<float> lineWidths;
 	lineWidths.reserve(lines.size());
 	float blockWidth = graphWidth;
@@ -1087,25 +1098,38 @@ void draw()
 		lineWidths.push_back(width);
 		blockWidth = std::max(blockWidth, width);
 	}
+	// Treat the configured font size as a maximum: all selected rows and
+	// graphs must fit even in a small window or with a large UI scale.
+	const float layoutScale = std::min({ 1.f, (displaySize.x - margin * 2.f) / std::max(1.f, blockWidth),
+		availableHeight / totalHeight });
+	fontSize *= layoutScale;
+	lineHeight *= layoutScale;
+	graphWidth *= layoutScale;
+	graphSpacing *= layoutScale;
+	graphHeight *= layoutScale;
+	totalHeight *= layoutScale;
+	blockWidth *= layoutScale;
+	for (float& width : lineWidths)
+		width *= layoutScale;
 	const int corner = std::clamp(config::loadInt(Section, "OverlayCorner", 1), 0, 3);
-	const float offsetX = uiScaled(static_cast<float>(std::clamp(config::loadInt(Section, "OverlayOffsetX", 0), -1000, 1000)));
-	const float offsetY = uiScaled(static_cast<float>(std::clamp(config::loadInt(Section, "OverlayOffsetY", 0), -1000, 1000)));
+	const float offsetX = static_cast<float>(std::clamp(config::loadInt(Section, "OverlayOffsetX", 0), -1000, 1000));
+	const float offsetY = static_cast<float>(std::clamp(config::loadInt(Section, "OverlayOffsetY", 0), -1000, 1000));
 	float blockX = corner == 0 || corner == 2
 		? margin
 		: std::max(margin, displaySize.x - blockWidth - margin);
 	blockX = std::clamp(blockX + offsetX, margin, std::max(margin, displaySize.x - blockWidth - margin));
 	float y;
 	if (corner == 0 || corner == 1)
-		y = margin;
+		y = topInset;
 	else
-		y = std::max(margin, displaySize.y - totalHeight - margin);
-	y = std::clamp(y + offsetY, margin, std::max(margin, displaySize.y - totalHeight - margin));
+		y = std::max(topInset, displaySize.y - totalHeight - margin);
+	y = std::clamp(y + offsetY, topInset, std::max(topInset, displaySize.y - totalHeight - margin));
 
 	const u32 packedColor = static_cast<u32>(config::loadInt(Section, "OverlayColor", 0xFFFFFFFF));
 	const ImU32 textColor = IM_COL32((packedColor >> 0) & 0xFF, (packedColor >> 8) & 0xFF, (packedColor >> 16) & 0xFF,
 		static_cast<int>(((packedColor >> 24) & 0xFF) * opacity));
 	const ImU32 shadowColor = IM_COL32(0, 0, 0, static_cast<int>(190.f * opacity));
-	const float shadowOffset = std::max(1.f, uiScaled(0.75f));
+	const float shadowOffset = std::max(1.f, uiScaled(0.75f) * layoutScale);
 	ImDrawList *drawList = ImGui::GetBackgroundDrawList();
 	for (std::size_t i = 0; i < lines.size(); ++i)
 	{
@@ -1126,12 +1150,12 @@ void draw()
 			y += graphHeight;
 		};
 		if (showFrameTimeGraph)
-			drawNextGraph([&](const ImVec2& position) { drawFrameTimeGraph(drawList, font, fontSize, position, graphWidth, graphHeight, textColor, opacity); });
+			drawNextGraph([&](const ImVec2& position) { drawFrameTimeGraph(drawList, font, fontSize, position, graphWidth, graphHeight, textColor, opacity, layoutScale); });
 		if (showHostCpuGraph)
-			drawNextGraph([&](const ImVec2& position) { drawUsageGraph(drawList, font, fontSize, position, graphWidth, graphHeight, textColor, opacity,
+			drawNextGraph([&](const ImVec2& position) { drawUsageGraph(drawList, font, fontSize, position, graphWidth, graphHeight, textColor, opacity, layoutScale,
 				i18n::T("Host CPU"), metrics.hostProcessCpuHistory, metrics.hostSystemCpuHistory.count >= 2 ? &metrics.hostSystemCpuHistory : nullptr); });
 		if (showGpuGraph)
-			drawNextGraph([&](const ImVec2& position) { drawUsageGraph(drawList, font, fontSize, position, graphWidth, graphHeight, textColor, opacity,
+			drawNextGraph([&](const ImVec2& position) { drawUsageGraph(drawList, font, fontSize, position, graphWidth, graphHeight, textColor, opacity, layoutScale,
 				i18n::T("Host GPU"), metrics.gpuUsageHistory); });
 	}
 }

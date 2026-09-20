@@ -107,6 +107,14 @@ and Host GPU graph options use 152 one-second samples. The CPU graph has a
 HollyCast-process line and a total-device line; the GPU graph only appears
 when the backend is returning real timestamp samples.
 
+Position `0,0` defaults to the top right, 15 pixels from the right edge and
+15 pixels below the visible menu bar. When the bar is hidden, the top inset
+is 15 pixels. The overlay uses the bar's effective height for the current
+frame, including fullscreen auto-hide. All selected rows and graphs shrink
+together when needed to fit the available area; the configured text size is
+the maximum. Position offsets use screen pixels and keep the entire block
+below the menu bar and inside the screen.
+
 The renderer-statistics row reports texture uploads per second. It deliberately
 does not estimate live texture count or VRAM residency; those require
 authoritative backend or operating-system data.
