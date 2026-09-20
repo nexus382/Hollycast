@@ -196,27 +196,42 @@ vec2 projectTextureCoords(vec3 coords)
 #endif
 }
 
-vec4 sampleSourceTexel(sampler2D sourceTex, vec2 uv)
+// Decoding and effective alpha belong to the sampled area, not the whole polygon.
+struct TextureSampleState
 {
-#if pp_Palette == 0
-	return texture(sourceTex, uv);
-#else
-	return getPaletteEntry(texture(sourceTex, uv).r);
+	bool palette;
+	bool ignoreAlpha;
+};
+
+vec4 sampleSourceTexel(TextureSampleState state, sampler2D sourceTex, vec2 uv)
+{
+	vec4 color = texture(sourceTex, uv);
+#if pp_Palette != 0
+	if (state.palette)
+		color = getPaletteEntry(color.r);
 #endif
+	// IgnoreTexA must take effect before any alpha-weighted reconstruction.
+	if (state.ignoreAlpha)
+		color.a = 1.0;
+	return color;
 }
 
-vec4 legacyTextureSample(sampler2D sourceTex, vec3 coords)
+vec4 legacyTextureSample(TextureSampleState state, sampler2D sourceTex, vec3 coords)
 {
-#if pp_Palette == 0
-	#if DIV_POS_Z == 1
-		return texture(sourceTex, coords.xy);
-	#else
-		return textureProj(sourceTex, coords);
-	#endif
-#elif pp_Palette == 1
-	return palettePixel(sourceTex, coords);
+#if pp_Palette != 0
+	if (state.palette)
+	{
+#if pp_Palette == 1
+		return palettePixel(sourceTex, coords);
 #else
-	return palettePixelBilinear(sourceTex, coords);
+		return palettePixelBilinear(sourceTex, coords);
+#endif
+	}
+#endif
+#if DIV_POS_Z == 1
+	return texture(sourceTex, coords.xy);
+#else
+	return textureProj(sourceTex, coords);
 #endif
 }
 
@@ -245,7 +260,7 @@ vec4 jincResampler(vec4 x)
 	return vec4(zero.x ? wawb : a.x, zero.y ? wawb : a.y, zero.z ? wawb : a.z, zero.w ? wawb : a.w);
 }
 
-vec4 alphaWeightedBilinear(sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
+vec4 alphaWeightedBilinear(TextureSampleState state, sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
 {
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
 	vec2 pixCoord = uv * texSize - 0.5;
@@ -253,10 +268,10 @@ vec4 alphaWeightedBilinear(sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
 	vec2 sampleUV = (originPixCoord + 0.5) / texSize;
 	vec2 texel = vec2(1.0) / texSize;
 
-	vec4 c00 = sampleSourceTexel(sourceTex, sampleUV);
-	vec4 c10 = sampleSourceTexel(sourceTex, sampleUV + vec2(texel.x, 0.0));
-	vec4 c01 = sampleSourceTexel(sourceTex, sampleUV + vec2(0.0, texel.y));
-	vec4 c11 = sampleSourceTexel(sourceTex, sampleUV + texel);
+	vec4 c00 = sampleSourceTexel(state, sourceTex, sampleUV);
+	vec4 c10 = sampleSourceTexel(state, sourceTex, sampleUV + vec2(texel.x, 0.0));
+	vec4 c01 = sampleSourceTexel(state, sourceTex, sampleUV + vec2(0.0, texel.y));
+	vec4 c11 = sampleSourceTexel(state, sourceTex, sampleUV + texel);
 
 	vec2 weight = pixCoord - originPixCoord;
 	vec4 p00 = vec4(c00.rgb * c00.a, c00.a);
@@ -272,7 +287,7 @@ vec4 alphaWeightedBilinear(sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
 	return color;
 }
 
-vec4 jinc2Sample(sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
+vec4 jinc2Sample(TextureSampleState state, sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
 {
 	const float arStrength = 0.8;
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
@@ -290,22 +305,22 @@ vec4 jinc2Sample(sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
 	dx /= texSize;
 	dy /= texSize;
 
-	vec4 c00 = sampleSourceTexel(sourceTex, baseUV - dx - dy);
-	vec4 c10 = sampleSourceTexel(sourceTex, baseUV - dy);
-	vec4 c20 = sampleSourceTexel(sourceTex, baseUV + dx - dy);
-	vec4 c30 = sampleSourceTexel(sourceTex, baseUV + dx * 2.0 - dy);
-	vec4 c01 = sampleSourceTexel(sourceTex, baseUV - dx);
-	vec4 c11 = sampleSourceTexel(sourceTex, baseUV);
-	vec4 c21 = sampleSourceTexel(sourceTex, baseUV + dx);
-	vec4 c31 = sampleSourceTexel(sourceTex, baseUV + dx * 2.0);
-	vec4 c02 = sampleSourceTexel(sourceTex, baseUV - dx + dy);
-	vec4 c12 = sampleSourceTexel(sourceTex, baseUV + dy);
-	vec4 c22 = sampleSourceTexel(sourceTex, baseUV + dx + dy);
-	vec4 c32 = sampleSourceTexel(sourceTex, baseUV + dx * 2.0 + dy);
-	vec4 c03 = sampleSourceTexel(sourceTex, baseUV - dx + dy * 2.0);
-	vec4 c13 = sampleSourceTexel(sourceTex, baseUV + dy * 2.0);
-	vec4 c23 = sampleSourceTexel(sourceTex, baseUV + dx + dy * 2.0);
-	vec4 c33 = sampleSourceTexel(sourceTex, baseUV + dx * 2.0 + dy * 2.0);
+	vec4 c00 = sampleSourceTexel(state, sourceTex, baseUV - dx - dy);
+	vec4 c10 = sampleSourceTexel(state, sourceTex, baseUV - dy);
+	vec4 c20 = sampleSourceTexel(state, sourceTex, baseUV + dx - dy);
+	vec4 c30 = sampleSourceTexel(state, sourceTex, baseUV + dx * 2.0 - dy);
+	vec4 c01 = sampleSourceTexel(state, sourceTex, baseUV - dx);
+	vec4 c11 = sampleSourceTexel(state, sourceTex, baseUV);
+	vec4 c21 = sampleSourceTexel(state, sourceTex, baseUV + dx);
+	vec4 c31 = sampleSourceTexel(state, sourceTex, baseUV + dx * 2.0);
+	vec4 c02 = sampleSourceTexel(state, sourceTex, baseUV - dx + dy);
+	vec4 c12 = sampleSourceTexel(state, sourceTex, baseUV + dy);
+	vec4 c22 = sampleSourceTexel(state, sourceTex, baseUV + dx + dy);
+	vec4 c32 = sampleSourceTexel(state, sourceTex, baseUV + dx * 2.0 + dy);
+	vec4 c03 = sampleSourceTexel(state, sourceTex, baseUV - dx + dy * 2.0);
+	vec4 c13 = sampleSourceTexel(state, sourceTex, baseUV + dy * 2.0);
+	vec4 c23 = sampleSourceTexel(state, sourceTex, baseUV + dx + dy * 2.0);
+	vec4 c33 = sampleSourceTexel(state, sourceTex, baseUV + dx * 2.0 + dy * 2.0);
 
 	c00.rgb *= c00.a; c10.rgb *= c10.a; c20.rgb *= c20.a; c30.rgb *= c30.a;
 	c01.rgb *= c01.a; c11.rgb *= c11.a; c21.rgb *= c21.a; c31.rgb *= c31.a;
@@ -330,7 +345,7 @@ vec4 jinc2Sample(sampler2D sourceTex, vec2 uv, bool noEdgeBlend)
 
 )" R"(
 
-vec4 clampToSourceNeighborhood(sampler2D sourceTex, vec2 uv, vec4 color)
+vec4 clampToSourceNeighborhood(TextureSampleState state, sampler2D sourceTex, vec2 uv, vec4 color)
 {
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
 	vec2 base = floor(uv * texSize);
@@ -342,7 +357,7 @@ vec4 clampToSourceNeighborhood(sampler2D sourceTex, vec2 uv, vec4 color)
 	{
 		for (int x = -1; x <= 1; x++)
 		{
-			vec4 sampleColor = sampleSourceTexel(sourceTex, (base + vec2(x, y) + 0.5) * invTexSize);
+			vec4 sampleColor = sampleSourceTexel(state, sourceTex, (base + vec2(x, y) + 0.5) * invTexSize);
 			minColor = min(minColor, sampleColor);
 			maxColor = max(maxColor, sampleColor);
 		}
@@ -350,21 +365,21 @@ vec4 clampToSourceNeighborhood(sampler2D sourceTex, vec2 uv, vec4 color)
 	return clamp(color, minColor, maxColor);
 }
 
-vec4 sharpenAgainstCenter(sampler2D sourceTex, vec2 uv, vec4 color, float strength)
+vec4 sharpenAgainstCenter(TextureSampleState state, sampler2D sourceTex, vec2 uv, vec4 color, float strength)
 {
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
 	vec2 centerUV = (floor(uv * texSize) + 0.5) / texSize;
-	vec4 center = sampleSourceTexel(sourceTex, centerUV);
+	vec4 center = sampleSourceTexel(state, sourceTex, centerUV);
 	color.rgb += (color.rgb - center.rgb) * strength;
 	return color;
 }
 
-vec4 jinc2AntiRingSample(sampler2D sourceTex, vec2 uv, float sharpness)
+vec4 jinc2AntiRingSample(TextureSampleState state, sampler2D sourceTex, vec2 uv, float sharpness)
 {
-	vec4 color = jinc2Sample(sourceTex, uv, false);
+	vec4 color = jinc2Sample(state, sourceTex, uv, false);
 	if (sharpness > 0.0)
-		color = sharpenAgainstCenter(sourceTex, uv, color, sharpness);
-	return clampToSourceNeighborhood(sourceTex, uv, color);
+		color = sharpenAgainstCenter(state, sourceTex, uv, color, sharpness);
+	return clampToSourceNeighborhood(state, sourceTex, uv, color);
 }
 
 float sincWeight(float x)
@@ -382,18 +397,6 @@ float lanczosWeight(float x, float radius)
 	if (x >= radius)
 		return 0.0;
 	return sincWeight(x) * sincWeight(x / radius);
-}
-
-float spline36Weight(float x)
-{
-	x = abs(x);
-	if (x < 1.0)
-		return ((13.0 / 11.0 * x - 453.0 / 209.0) * x) * x + 1.0;
-	if (x < 2.0)
-		return ((-6.0 / 11.0 * x + 270.0 / 209.0) * x - 156.0 / 209.0) * x - 3.0 / 209.0;
-	if (x < 3.0)
-		return ((1.0 / 11.0 * x - 45.0 / 209.0) * x + 26.0 / 209.0) * x - 1.0 / 209.0;
-	return 0.0;
 }
 
 float cubicWeight(float x, float b, float c)
@@ -418,17 +421,15 @@ float reconstructionWeight(float x, int filterMode)
 	if (filterMode == 1)
 		return lanczosWeight(x, 3.0);
 	if (filterMode == 2)
-		return spline36Weight(x);
-	if (filterMode == 3)
 		return cubicWeight(x, 0.378215755, 0.310892122); // Robidoux
-	if (filterMode == 4)
+	if (filterMode == 3)
 		return cubicWeight(x, 0.262014512, 0.368992744); // Robidoux Sharp
-	if (filterMode == 5)
+	if (filterMode == 4)
 		return cubicWeight(x, 0.0, 0.5); // Catmull-Rom
 	return cubicWeight(x, 1.0 / 3.0, 1.0 / 3.0); // Mitchell-Netravali
 }
 
-vec4 separableReconstructionSample(sampler2D sourceTex, vec2 uv, int filterMode, bool antiRing)
+vec4 separableReconstructionSample(TextureSampleState state, sampler2D sourceTex, vec2 uv, int filterMode, bool antiRing)
 {
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
 	vec2 pc = uv * texSize - 0.5;
@@ -444,7 +445,7 @@ vec4 separableReconstructionSample(sampler2D sourceTex, vec2 uv, int filterMode,
 		for (int x = -2; x <= 3; x++)
 		{
 			float weight = reconstructionWeight(float(x) - f.x, filterMode) * wy;
-			vec4 sampleColor = sampleSourceTexel(sourceTex, (base + vec2(x, y) + 0.5) * invTexSize);
+			vec4 sampleColor = sampleSourceTexel(state, sourceTex, (base + vec2(x, y) + 0.5) * invTexSize);
 			sampleColor.rgb *= sampleColor.a;
 			color += sampleColor * weight;
 			weightSum += weight;
@@ -457,15 +458,15 @@ vec4 separableReconstructionSample(sampler2D sourceTex, vec2 uv, int filterMode,
 		color.rgb /= color.a;
 	color = clamp(color, 0.0, 1.0);
 	if (antiRing)
-		color = clampToSourceNeighborhood(sourceTex, uv, color);
+		color = clampToSourceNeighborhood(state, sourceTex, uv, color);
 	return color;
 }
 
 )" R"(
 
-uint packSourceTexel(sampler2D sourceTex, vec2 baseUV, vec2 texelOffset, vec2 invTexSize)
+uint packSourceTexel(TextureSampleState state, sampler2D sourceTex, vec2 baseUV, vec2 texelOffset, vec2 invTexSize)
 {
-	return packUnorm4x8(clamp(sampleSourceTexel(sourceTex, baseUV + texelOffset * invTexSize), 0.0, 1.0));
+	return packUnorm4x8(clamp(sampleSourceTexel(state, sourceTex, baseUV + texelOffset * invTexSize), 0.0, 1.0));
 }
 
 uint mmpxLuma(uint color)
@@ -475,10 +476,8 @@ uint mmpxLuma(uint color)
 }
 
 bool mmpxAllEq2(uint value, uint a, uint b) { return ((value ^ a) | (value ^ b)) == 0u; }
-bool mmpxAllEq3(uint value, uint a, uint b, uint c) { return ((value ^ a) | (value ^ b) | (value ^ c)) == 0u; }
 bool mmpxAllEq4(uint value, uint a, uint b, uint c, uint d) { return ((value ^ a) | (value ^ b) | (value ^ c) | (value ^ d)) == 0u; }
 bool mmpxAnyEq3(uint value, uint a, uint b, uint c) { return value == a || value == b || value == c; }
-bool mmpxNoneEq2(uint value, uint a, uint b) { return value != a && value != b; }
 bool mmpxNoneEq4(uint value, uint a, uint b, uint c, uint d) { return value != a && value != b && value != c && value != d; }
 
 vec4 mmpxResultColor(uint result, uint center)
@@ -489,7 +488,7 @@ vec4 mmpxResultColor(uint result, uint center)
 	return color;
 }
 
-vec4 mmpxSample(sampler2D sourceTex, vec2 uv)
+vec4 mmpxSample(TextureSampleState state, sampler2D sourceTex, vec2 uv)
 {
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
 	vec2 bcoords = floor(uv * texSize);
@@ -497,23 +496,23 @@ vec4 mmpxSample(sampler2D sourceTex, vec2 uv)
 	vec2 invTexSize = vec2(1.0) / texSize;
 
 	// MMPX is a MIT-licensed style-preserving pixel-art magnifier by Morgan McGuire and Mara Gagiu.
-	uint A = packSourceTexel(sourceTex, baseUV, vec2(-1.0, -1.0), invTexSize);
-	uint B = packSourceTexel(sourceTex, baseUV, vec2( 0.0, -1.0), invTexSize);
-	uint C = packSourceTexel(sourceTex, baseUV, vec2( 1.0, -1.0), invTexSize);
-	uint D = packSourceTexel(sourceTex, baseUV, vec2(-1.0,  0.0), invTexSize);
-	uint E = packSourceTexel(sourceTex, baseUV, vec2( 0.0,  0.0), invTexSize);
-	uint F = packSourceTexel(sourceTex, baseUV, vec2( 1.0,  0.0), invTexSize);
-	uint G = packSourceTexel(sourceTex, baseUV, vec2(-1.0,  1.0), invTexSize);
-	uint H = packSourceTexel(sourceTex, baseUV, vec2( 0.0,  1.0), invTexSize);
-	uint I = packSourceTexel(sourceTex, baseUV, vec2( 1.0,  1.0), invTexSize);
+	uint A = packSourceTexel(state, sourceTex, baseUV, vec2(-1.0, -1.0), invTexSize);
+	uint B = packSourceTexel(state, sourceTex, baseUV, vec2( 0.0, -1.0), invTexSize);
+	uint C = packSourceTexel(state, sourceTex, baseUV, vec2( 1.0, -1.0), invTexSize);
+	uint D = packSourceTexel(state, sourceTex, baseUV, vec2(-1.0,  0.0), invTexSize);
+	uint E = packSourceTexel(state, sourceTex, baseUV, vec2( 0.0,  0.0), invTexSize);
+	uint F = packSourceTexel(state, sourceTex, baseUV, vec2( 1.0,  0.0), invTexSize);
+	uint G = packSourceTexel(state, sourceTex, baseUV, vec2(-1.0,  1.0), invTexSize);
+	uint H = packSourceTexel(state, sourceTex, baseUV, vec2( 0.0,  1.0), invTexSize);
+	uint I = packSourceTexel(state, sourceTex, baseUV, vec2( 1.0,  1.0), invTexSize);
 	uint J = E, K = E, L = E, M = E;
 
 	if (((A ^ E) | (B ^ E) | (C ^ E) | (D ^ E) | (F ^ E) | (G ^ E) | (H ^ E) | (I ^ E)) != 0u)
 	{
-		uint P = packSourceTexel(sourceTex, baseUV, vec2( 0.0, -2.0), invTexSize);
-		uint Q = packSourceTexel(sourceTex, baseUV, vec2(-2.0,  0.0), invTexSize);
-		uint R = packSourceTexel(sourceTex, baseUV, vec2( 2.0,  0.0), invTexSize);
-		uint S = packSourceTexel(sourceTex, baseUV, vec2( 0.0,  2.0), invTexSize);
+		uint P = packSourceTexel(state, sourceTex, baseUV, vec2( 0.0, -2.0), invTexSize);
+		uint Q = packSourceTexel(state, sourceTex, baseUV, vec2(-2.0,  0.0), invTexSize);
+		uint R = packSourceTexel(state, sourceTex, baseUV, vec2( 2.0,  0.0), invTexSize);
+		uint S = packSourceTexel(state, sourceTex, baseUV, vec2( 0.0,  2.0), invTexSize);
 		uint Bl = mmpxLuma(B), Dl = mmpxLuma(D), El = mmpxLuma(E), Fl = mmpxLuma(F), Hl = mmpxLuma(H);
 
 		if ((D == B && D != H && D != F) && (El >= Dl || E == A) && mmpxAnyEq3(E, A, C, G) && ((El < Dl) || A != D || E != P || E != Q)) J = D;
@@ -523,10 +522,10 @@ vec4 mmpxSample(sampler2D sourceTex, vec2 uv)
 
 		if (pp_SampleTextureFilter == 7)
 		{
-			if ((E != F && mmpxAllEq4(E, C, I, D, Q) && mmpxAllEq2(F, B, H)) && (F != packSourceTexel(sourceTex, baseUV, vec2( 3.0,  0.0), invTexSize))) K = M = F;
-			if ((E != D && mmpxAllEq4(E, A, G, F, R) && mmpxAllEq2(D, B, H)) && (D != packSourceTexel(sourceTex, baseUV, vec2(-3.0,  0.0), invTexSize))) J = L = D;
-			if ((E != H && mmpxAllEq4(E, G, I, B, P) && mmpxAllEq2(H, D, F)) && (H != packSourceTexel(sourceTex, baseUV, vec2( 0.0,  3.0), invTexSize))) L = M = H;
-			if ((E != B && mmpxAllEq4(E, A, C, H, S) && mmpxAllEq2(B, D, F)) && (B != packSourceTexel(sourceTex, baseUV, vec2( 0.0, -3.0), invTexSize))) J = K = B;
+			if ((E != F && mmpxAllEq4(E, C, I, D, Q) && mmpxAllEq2(F, B, H)) && (F != packSourceTexel(state, sourceTex, baseUV, vec2( 3.0,  0.0), invTexSize))) K = M = F;
+			if ((E != D && mmpxAllEq4(E, A, G, F, R) && mmpxAllEq2(D, B, H)) && (D != packSourceTexel(state, sourceTex, baseUV, vec2(-3.0,  0.0), invTexSize))) J = L = D;
+			if ((E != H && mmpxAllEq4(E, G, I, B, P) && mmpxAllEq2(H, D, F)) && (H != packSourceTexel(state, sourceTex, baseUV, vec2( 0.0,  3.0), invTexSize))) L = M = H;
+			if ((E != B && mmpxAllEq4(E, A, C, H, S) && mmpxAllEq2(B, D, F)) && (B != packSourceTexel(state, sourceTex, baseUV, vec2( 0.0, -3.0), invTexSize))) J = K = B;
 			if (Bl < El && mmpxAllEq4(E, G, H, I, S) && mmpxNoneEq4(E, A, D, C, F)) J = K = B;
 			if (Hl < El && mmpxAllEq4(E, A, B, C, P) && mmpxNoneEq4(E, D, G, I, F)) L = M = H;
 			if (Fl < El && mmpxAllEq4(E, A, D, G, Q) && mmpxNoneEq4(E, B, C, I, H)) K = M = F;
@@ -539,45 +538,46 @@ vec4 mmpxSample(sampler2D sourceTex, vec2 uv)
 	return mmpxResultColor(result, E);
 }
 
-vec4 filteredTextureSample(sampler2D sourceTex, vec3 coords)
+vec4 filteredTextureSample(TextureSampleState state, sampler2D sourceTex, vec3 coords)
 {
-	if (!sampleTextureFilterEligible(sourceTex))
-		return legacyTextureSample(sourceTex, coords);
+	// Bump-map channels encode angles, not color or coverage.
+	if (pp_BumpMap != 0 || !sampleTextureFilterEligible(sourceTex))
+		return legacyTextureSample(state, sourceTex, coords);
 
 	vec2 uv = projectTextureCoords(coords);
+	if (pp_SampleTextureFilter == 19)
+		return sampleSourceTexel(state, sourceTex, uv);
 	if (pp_SampleTextureFilter == 1)
-		return alphaWeightedBilinear(sourceTex, uv, false);
+		return alphaWeightedBilinear(state, sourceTex, uv, false);
 	if (pp_SampleTextureFilter == 2)
-		return alphaWeightedBilinear(sourceTex, uv, true);
+		return alphaWeightedBilinear(state, sourceTex, uv, true);
 	if (pp_SampleTextureFilter == 3)
-		return jinc2Sample(sourceTex, uv, false);
+		return jinc2Sample(state, sourceTex, uv, false);
 	if (pp_SampleTextureFilter == 4)
-		return jinc2Sample(sourceTex, uv, true);
+		return jinc2Sample(state, sourceTex, uv, true);
 	if (pp_SampleTextureFilter == 5 || pp_SampleTextureFilter == 6 || pp_SampleTextureFilter == 7)
-		return mmpxSample(sourceTex, uv);
+		return mmpxSample(state, sourceTex, uv);
 	if (pp_SampleTextureFilter == 8)
-		return jinc2AntiRingSample(sourceTex, uv, 0.0);
+		return jinc2AntiRingSample(state, sourceTex, uv, 0.0);
 	if (pp_SampleTextureFilter == 9)
-		return jinc2AntiRingSample(sourceTex, uv, 0.18);
+		return jinc2AntiRingSample(state, sourceTex, uv, 0.18);
 	if (pp_SampleTextureFilter == 10)
-		return jinc2AntiRingSample(sourceTex, uv, 0.08);
+		return jinc2AntiRingSample(state, sourceTex, uv, 0.08);
 	if (pp_SampleTextureFilter == 11)
-		return jinc2AntiRingSample(sourceTex, uv, 0.22);
+		return jinc2AntiRingSample(state, sourceTex, uv, 0.22);
 	if (pp_SampleTextureFilter == 12)
-		return separableReconstructionSample(sourceTex, uv, 0, true);
+		return separableReconstructionSample(state, sourceTex, uv, 0, true);
 	if (pp_SampleTextureFilter == 13)
-		return separableReconstructionSample(sourceTex, uv, 1, true);
-	if (pp_SampleTextureFilter == 14)
-		return separableReconstructionSample(sourceTex, uv, 2, false);
+		return separableReconstructionSample(state, sourceTex, uv, 1, true);
 	if (pp_SampleTextureFilter == 15)
-		return separableReconstructionSample(sourceTex, uv, 3, false);
+		return separableReconstructionSample(state, sourceTex, uv, 2, false);
 	if (pp_SampleTextureFilter == 16)
-		return separableReconstructionSample(sourceTex, uv, 4, false);
+		return separableReconstructionSample(state, sourceTex, uv, 3, false);
 	if (pp_SampleTextureFilter == 17)
-		return separableReconstructionSample(sourceTex, uv, 5, false);
+		return separableReconstructionSample(state, sourceTex, uv, 4, false);
 	if (pp_SampleTextureFilter == 18)
-		return separableReconstructionSample(sourceTex, uv, 6, false);
-	return legacyTextureSample(sourceTex, coords);
+		return separableReconstructionSample(state, sourceTex, uv, 5, false);
+	return legacyTextureSample(state, sourceTex, coords);
 }
 
 #endif
@@ -608,7 +608,10 @@ void main()
 	#if pp_Texture == 1
 	{
 		#if pp_SampleTextureFilter != 0
-			vec4 texcol = filteredTextureSample(tex, vtx_uv);
+			TextureSampleState sampleState;
+			sampleState.palette = pp_Palette != 0;
+			sampleState.ignoreAlpha = pp_IgnoreTexA != 0;
+			vec4 texcol = filteredTextureSample(sampleState, tex, vtx_uv);
 		#else
 		#if pp_Palette == 0
 			#if DIV_POS_Z == 1

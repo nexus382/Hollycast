@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "dx11_shaders.h"
+#include "rend/sample_filter.h"
 #include "dx11context.h"
 #include "stdclass.h"
 #include "dx11_naomi2.h"
@@ -216,26 +217,39 @@ float4 palettePixelBilinear(Texture2D tex, sampler texSampler, float2 coords)
 
 #if pp_Texture == 1 && pp_SampleTextureFilter != 0
 
-float4 sampleSourceTexel(Texture2D sourceTex, sampler sourceSampler, float2 uv)
+// Decoding and effective alpha belong to the sampled area, not the whole polygon.
+struct TextureSampleState
 {
-#if pp_Palette == 0
-	return sourceTex.Sample(sourceSampler, uv);
-#else
-	return getPaletteEntry(sourceTex.Sample(sourceSampler, uv).a);
+	bool palette;
+	bool ignoreAlpha;
+};
+
+float4 sampleSourceTexel(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv)
+{
+	float4 color = sourceTex.Sample(sourceSampler, uv);
+#if pp_Palette != 0
+	if (state.palette)
+		color = getPaletteEntry(color.a);
 #endif
+	// IgnoreTexA must take effect before any alpha-weighted reconstruction.
+	if (state.ignoreAlpha)
+		color.a = 1.0;
+	return color;
 }
 
-float4 legacyTextureSample(Texture2D sourceTex, sampler sourceSampler, float2 uv)
+float4 legacyTextureSample(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv)
 {
-#if pp_Palette == 0
-	return sourceTex.Sample(sourceSampler, uv);
-#else
+#if pp_Palette != 0
+	if (state.palette)
+	{
 #if pp_Palette == 1
-	return palettePixel(sourceTex, sourceSampler, uv);
+		return palettePixel(sourceTex, sourceSampler, uv);
 #else
-	return palettePixelBilinear(sourceTex, sourceSampler, uv);
+		return palettePixelBilinear(sourceTex, sourceSampler, uv);
 #endif
+	}
 #endif
+	return sourceTex.Sample(sourceSampler, uv);
 }
 
 bool sampleTextureFilterEligible(Texture2D sourceTex)
@@ -264,7 +278,7 @@ float4 jincResampler(float4 x)
 	return float4(zero.x ? wawb : a.x, zero.y ? wawb : a.y, zero.z ? wawb : a.z, zero.w ? wawb : a.w);
 }
 
-float4 alphaWeightedBilinear(Texture2D sourceTex, sampler sourceSampler, float2 uv, bool noEdgeBlend)
+float4 alphaWeightedBilinear(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv, bool noEdgeBlend)
 {
 	uint texWidth, texHeight;
 	sourceTex.GetDimensions(texWidth, texHeight);
@@ -274,10 +288,10 @@ float4 alphaWeightedBilinear(Texture2D sourceTex, sampler sourceSampler, float2 
 	float2 sampleUV = (originPixCoord + 0.5f) / texSize;
 	float2 texel = float2(1.0f, 1.0f) / texSize;
 
-	float4 c00 = sampleSourceTexel(sourceTex, sourceSampler, sampleUV);
-	float4 c10 = sampleSourceTexel(sourceTex, sourceSampler, sampleUV + float2(texel.x, 0.0f));
-	float4 c01 = sampleSourceTexel(sourceTex, sourceSampler, sampleUV + float2(0.0f, texel.y));
-	float4 c11 = sampleSourceTexel(sourceTex, sourceSampler, sampleUV + texel);
+	float4 c00 = sampleSourceTexel(state, sourceTex, sourceSampler, sampleUV);
+	float4 c10 = sampleSourceTexel(state, sourceTex, sourceSampler, sampleUV + float2(texel.x, 0.0f));
+	float4 c01 = sampleSourceTexel(state, sourceTex, sourceSampler, sampleUV + float2(0.0f, texel.y));
+	float4 c11 = sampleSourceTexel(state, sourceTex, sourceSampler, sampleUV + texel);
 
 	float2 weight = pixCoord - originPixCoord;
 	float4 p00 = float4(c00.rgb * c00.a, c00.a);
@@ -293,7 +307,7 @@ float4 alphaWeightedBilinear(Texture2D sourceTex, sampler sourceSampler, float2 
 	return color;
 }
 
-float4 jinc2Sample(Texture2D sourceTex, sampler sourceSampler, float2 uv, bool noEdgeBlend)
+float4 jinc2Sample(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv, bool noEdgeBlend)
 {
 	const float arStrength = 0.8f;
 	uint texWidth, texHeight;
@@ -329,22 +343,22 @@ float4 jinc2Sample(Texture2D sourceTex, sampler sourceSampler, float2 uv, bool n
 	dx = float2(1.0f / texSize.x, 0.0f);
 	dy = float2(0.0f, 1.0f / texSize.y);
 
-	float4 c00 = sampleSourceTexel(sourceTex, sourceSampler, baseUV - dx - dy);
-	float4 c10 = sampleSourceTexel(sourceTex, sourceSampler, baseUV - dy);
-	float4 c20 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx - dy);
-	float4 c30 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx * 2.0f - dy);
-	float4 c01 = sampleSourceTexel(sourceTex, sourceSampler, baseUV - dx);
-	float4 c11 = sampleSourceTexel(sourceTex, sourceSampler, baseUV);
-	float4 c21 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx);
-	float4 c31 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx * 2.0f);
-	float4 c02 = sampleSourceTexel(sourceTex, sourceSampler, baseUV - dx + dy);
-	float4 c12 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dy);
-	float4 c22 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx + dy);
-	float4 c32 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx * 2.0f + dy);
-	float4 c03 = sampleSourceTexel(sourceTex, sourceSampler, baseUV - dx + dy * 2.0f);
-	float4 c13 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dy * 2.0f);
-	float4 c23 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx + dy * 2.0f);
-	float4 c33 = sampleSourceTexel(sourceTex, sourceSampler, baseUV + dx * 2.0f + dy * 2.0f);
+	float4 c00 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV - dx - dy);
+	float4 c10 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV - dy);
+	float4 c20 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx - dy);
+	float4 c30 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx * 2.0f - dy);
+	float4 c01 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV - dx);
+	float4 c11 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV);
+	float4 c21 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx);
+	float4 c31 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx * 2.0f);
+	float4 c02 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV - dx + dy);
+	float4 c12 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dy);
+	float4 c22 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx + dy);
+	float4 c32 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx * 2.0f + dy);
+	float4 c03 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV - dx + dy * 2.0f);
+	float4 c13 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dy * 2.0f);
+	float4 c23 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx + dy * 2.0f);
+	float4 c33 = sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + dx * 2.0f + dy * 2.0f);
 
 	c00.rgb *= c00.a; c10.rgb *= c10.a; c20.rgb *= c20.a; c30.rgb *= c30.a;
 	c01.rgb *= c01.a; c11.rgb *= c11.a; c21.rgb *= c21.a; c31.rgb *= c31.a;
@@ -370,7 +384,7 @@ float4 jinc2Sample(Texture2D sourceTex, sampler sourceSampler, float2 uv, bool n
 	return color;
 }
 
-float4 clampToSourceNeighborhood(Texture2D sourceTex, sampler sourceSampler, float2 uv, float4 color)
+float4 clampToSourceNeighborhood(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv, float4 color)
 {
 	uint texWidth, texHeight;
 	sourceTex.GetDimensions(texWidth, texHeight);
@@ -384,7 +398,7 @@ float4 clampToSourceNeighborhood(Texture2D sourceTex, sampler sourceSampler, flo
 	{
 		for (int x = -1; x <= 1; x++)
 		{
-			float4 sampleColor = sampleSourceTexel(sourceTex, sourceSampler, (base + float2((float)x, (float)y) + 0.5f) * invTexSize);
+			float4 sampleColor = sampleSourceTexel(state, sourceTex, sourceSampler, (base + float2((float)x, (float)y) + 0.5f) * invTexSize);
 			minColor = min(minColor, sampleColor);
 			maxColor = max(maxColor, sampleColor);
 		}
@@ -392,23 +406,23 @@ float4 clampToSourceNeighborhood(Texture2D sourceTex, sampler sourceSampler, flo
 	return clamp(color, minColor, maxColor);
 }
 
-float4 sharpenAgainstCenter(Texture2D sourceTex, sampler sourceSampler, float2 uv, float4 color, float strength)
+float4 sharpenAgainstCenter(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv, float4 color, float strength)
 {
 	uint texWidth, texHeight;
 	sourceTex.GetDimensions(texWidth, texHeight);
 	float2 texSize = float2((float)texWidth, (float)texHeight);
 	float2 centerUV = (floor(uv * texSize) + 0.5f) / texSize;
-	float4 center = sampleSourceTexel(sourceTex, sourceSampler, centerUV);
+	float4 center = sampleSourceTexel(state, sourceTex, sourceSampler, centerUV);
 	color.rgb += (color.rgb - center.rgb) * strength;
 	return color;
 }
 
-float4 jinc2AntiRingSample(Texture2D sourceTex, sampler sourceSampler, float2 uv, float sharpness)
+float4 jinc2AntiRingSample(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv, float sharpness)
 {
-	float4 color = jinc2Sample(sourceTex, sourceSampler, uv, false);
+	float4 color = jinc2Sample(state, sourceTex, sourceSampler, uv, false);
 	if (sharpness > 0.0f)
-		color = sharpenAgainstCenter(sourceTex, sourceSampler, uv, color, sharpness);
-	return clampToSourceNeighborhood(sourceTex, sourceSampler, uv, color);
+		color = sharpenAgainstCenter(state, sourceTex, sourceSampler, uv, color, sharpness);
+	return clampToSourceNeighborhood(state, sourceTex, sourceSampler, uv, color);
 }
 
 float sincWeight(float x)
@@ -427,18 +441,6 @@ float lanczosWeight(float x, float radius)
 	if (x >= radius)
 		return 0.0f;
 	return sincWeight(x) * sincWeight(x / radius);
-}
-
-float spline36Weight(float x)
-{
-	x = abs(x);
-	if (x < 1.0f)
-		return ((13.0f / 11.0f * x - 453.0f / 209.0f) * x) * x + 1.0f;
-	if (x < 2.0f)
-		return ((-6.0f / 11.0f * x + 270.0f / 209.0f) * x - 156.0f / 209.0f) * x - 3.0f / 209.0f;
-	if (x < 3.0f)
-		return ((1.0f / 11.0f * x - 45.0f / 209.0f) * x + 26.0f / 209.0f) * x - 1.0f / 209.0f;
-	return 0.0f;
 }
 
 float cubicWeight(float x, float b, float c)
@@ -463,17 +465,15 @@ float reconstructionWeight(float x, int filterMode)
 	if (filterMode == 1)
 		return lanczosWeight(x, 3.0f);
 	if (filterMode == 2)
-		return spline36Weight(x);
-	if (filterMode == 3)
 		return cubicWeight(x, 0.378215755f, 0.310892122f); // Robidoux
-	if (filterMode == 4)
+	if (filterMode == 3)
 		return cubicWeight(x, 0.262014512f, 0.368992744f); // Robidoux Sharp
-	if (filterMode == 5)
+	if (filterMode == 4)
 		return cubicWeight(x, 0.0f, 0.5f); // Catmull-Rom
 	return cubicWeight(x, 1.0f / 3.0f, 1.0f / 3.0f); // Mitchell-Netravali
 }
 
-float4 separableReconstructionSample(Texture2D sourceTex, sampler sourceSampler, float2 uv, int filterMode, bool antiRing)
+float4 separableReconstructionSample(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv, int filterMode, bool antiRing)
 {
 	uint texWidth, texHeight;
 	sourceTex.GetDimensions(texWidth, texHeight);
@@ -491,7 +491,7 @@ float4 separableReconstructionSample(Texture2D sourceTex, sampler sourceSampler,
 		for (int x = -2; x <= 3; x++)
 		{
 			float weight = reconstructionWeight(float(x) - f.x, filterMode) * wy;
-			float4 sampleColor = sampleSourceTexel(sourceTex, sourceSampler, (base + float2((float)x, (float)y) + 0.5f) * invTexSize);
+			float4 sampleColor = sampleSourceTexel(state, sourceTex, sourceSampler, (base + float2((float)x, (float)y) + 0.5f) * invTexSize);
 			sampleColor.rgb *= sampleColor.a;
 			color += sampleColor * weight;
 			weightSum += weight;
@@ -504,13 +504,13 @@ float4 separableReconstructionSample(Texture2D sourceTex, sampler sourceSampler,
 		color.rgb /= color.a;
 	color = clamp(color, 0.0f, 1.0f);
 	if (antiRing)
-		color = clampToSourceNeighborhood(sourceTex, sourceSampler, uv, color);
+		color = clampToSourceNeighborhood(state, sourceTex, sourceSampler, uv, color);
 	return color;
 }
 
-uint packSourceTexel(Texture2D sourceTex, sampler sourceSampler, float2 baseUV, float2 texelOffset, float2 invTexSize)
+uint packSourceTexel(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 baseUV, float2 texelOffset, float2 invTexSize)
 {
-	float4 value = clamp(sampleSourceTexel(sourceTex, sourceSampler, baseUV + texelOffset * invTexSize), 0.0f, 1.0f);
+	float4 value = clamp(sampleSourceTexel(state, sourceTex, sourceSampler, baseUV + texelOffset * invTexSize), 0.0f, 1.0f);
 	return (uint(round(value.r * 255.f))) | (uint(round(value.g * 255.f)) << 8) | (uint(round(value.b * 255.f)) << 16) | (uint(round(value.a * 255.f)) << 24);
 }
 
@@ -521,11 +521,9 @@ uint mmpxLuma(uint color)
 }
 
 bool mmpxAllEq2(uint value, uint a, uint b) { return ((value ^ a) | (value ^ b)) == 0u; }
-bool mmpxAllEq3(uint value, uint a, uint b, uint c) { return ((value ^ a) | (value ^ b) | (value ^ c)) == 0u; }
 bool mmpxAllEq4(uint value, uint a, uint b, uint c, uint d) { return ((value ^ a) | (value ^ b) | (value ^ c) | (value ^ d)) == 0u; }
 bool mmpxAnyEq3(uint value, uint a, uint b, uint c) { return value == a || value == b || value == c; }
 bool mmpxNoneEq4(uint value, uint a, uint b, uint c, uint d) { return value != a && value != b && value != c && value != d; }
-bool mmpxNoneEq2(uint value, uint a, uint b) { return value != a && value != b; }
 
 float4 unpackSourceTexel(in uint color)
 {
@@ -544,7 +542,7 @@ float4 mmpxResultColor(uint result, uint center)
 	return color;
 }
 
-float4 mmpxSample(Texture2D sourceTex, sampler sourceSampler, float2 uv)
+float4 mmpxSample(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv)
 {
 	uint texWidth, texHeight;
 	sourceTex.GetDimensions(texWidth, texHeight);
@@ -554,25 +552,25 @@ float4 mmpxSample(Texture2D sourceTex, sampler sourceSampler, float2 uv)
 	float2 invTexSize = float2(1.0f, 1.0f) / texSize;
 
 	// MMPX is a MIT-licensed style-preserving pixel-art magnifier by Morgan McGuire and Mara Gagiu.
-	uint A = packSourceTexel(sourceTex, sourceSampler, baseUV, float2(-1.0f, -1.0f), invTexSize);
-	uint B = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 0.0f, -1.0f), invTexSize);
-	uint C = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 1.0f, -1.0f), invTexSize);
-	uint D = packSourceTexel(sourceTex, sourceSampler, baseUV, float2(-1.0f,  0.0f), invTexSize);
-	uint E = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 0.0f,  0.0f), invTexSize);
-	uint F = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 1.0f,  0.0f), invTexSize);
-	uint G = packSourceTexel(sourceTex, sourceSampler, baseUV, float2(-1.0f,  1.0f), invTexSize);
-	uint H = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 0.0f,  1.0f), invTexSize);
-	uint I = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 1.0f,  1.0f), invTexSize);
+	uint A = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2(-1.0f, -1.0f), invTexSize);
+	uint B = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 0.0f, -1.0f), invTexSize);
+	uint C = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 1.0f, -1.0f), invTexSize);
+	uint D = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2(-1.0f,  0.0f), invTexSize);
+	uint E = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 0.0f,  0.0f), invTexSize);
+	uint F = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 1.0f,  0.0f), invTexSize);
+	uint G = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2(-1.0f,  1.0f), invTexSize);
+	uint H = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 0.0f,  1.0f), invTexSize);
+	uint I = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 1.0f,  1.0f), invTexSize);
 	uint J = E, K = E, L = E, M = E;
 
 	if (((A ^ E) | (B ^ E) | (C ^ E) | (D ^ E) | (F ^ E) | (G ^ E) | (H ^ E) | (I ^ E)) != 0u)
 	{
 )";
 const char * const PixelShaderCommonPart3 = R"(
-		uint P = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 0.0f, -2.0f), invTexSize);
-		uint Q = packSourceTexel(sourceTex, sourceSampler, baseUV, float2(-2.0f,  0.0f), invTexSize);
-		uint R = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 2.0f,  0.0f), invTexSize);
-		uint S = packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 0.0f,  2.0f), invTexSize);
+		uint P = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 0.0f, -2.0f), invTexSize);
+		uint Q = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2(-2.0f,  0.0f), invTexSize);
+		uint R = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 2.0f,  0.0f), invTexSize);
+		uint S = packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 0.0f,  2.0f), invTexSize);
 		uint Bl = mmpxLuma(B), Dl = mmpxLuma(D), El = mmpxLuma(E), Fl = mmpxLuma(F), Hl = mmpxLuma(H);
 
 		if ((D == B && D != H && D != F) && (El >= Dl || E == A) && mmpxAnyEq3(E, A, C, G) && ((El < Dl) || A != D || E != P || E != Q)) J = D;
@@ -582,10 +580,10 @@ const char * const PixelShaderCommonPart3 = R"(
 
 		if (pp_SampleTextureFilter == 7)
 		{
-			if ((E != F && mmpxAllEq4(E, C, I, D, Q) && mmpxAllEq2(F, B, H)) && (F != packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 3.0f,  0.0f), invTexSize))) K = M = F;
-			if ((E != D && mmpxAllEq4(E, A, G, F, R) && mmpxAllEq2(D, B, H)) && (D != packSourceTexel(sourceTex, sourceSampler, baseUV, float2(-3.0f,  0.0f), invTexSize))) J = L = D;
-			if ((E != H && mmpxAllEq4(E, G, I, B, P) && mmpxAllEq2(H, D, F)) && (H != packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 0.0f,  3.0f), invTexSize))) L = M = H;
-			if ((E != B && mmpxAllEq4(E, A, C, H, S) && mmpxAllEq2(B, D, F)) && (B != packSourceTexel(sourceTex, sourceSampler, baseUV, float2( 0.0f, -3.0f), invTexSize))) J = K = B;
+			if ((E != F && mmpxAllEq4(E, C, I, D, Q) && mmpxAllEq2(F, B, H)) && (F != packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 3.0f,  0.0f), invTexSize))) K = M = F;
+			if ((E != D && mmpxAllEq4(E, A, G, F, R) && mmpxAllEq2(D, B, H)) && (D != packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2(-3.0f,  0.0f), invTexSize))) J = L = D;
+			if ((E != H && mmpxAllEq4(E, G, I, B, P) && mmpxAllEq2(H, D, F)) && (H != packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 0.0f,  3.0f), invTexSize))) L = M = H;
+			if ((E != B && mmpxAllEq4(E, A, C, H, S) && mmpxAllEq2(B, D, F)) && (B != packSourceTexel(state, sourceTex, sourceSampler, baseUV, float2( 0.0f, -3.0f), invTexSize))) J = K = B;
 			if (Bl < El && mmpxAllEq4(E, G, H, I, S) && mmpxNoneEq4(E, A, D, C, F)) J = K = B;
 			if (Hl < El && mmpxAllEq4(E, A, B, C, P) && mmpxNoneEq4(E, D, G, I, F)) L = M = H;
 			if (Fl < El && mmpxAllEq4(E, A, D, G, Q) && mmpxNoneEq4(E, B, C, I, H)) K = M = F;
@@ -598,46 +596,47 @@ const char * const PixelShaderCommonPart3 = R"(
 	return mmpxResultColor(result, E);
 }
 
-float4 filteredTextureSample(Texture2D sourceTex, sampler sourceSampler, float2 uv)
+float4 filteredTextureSample(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv)
 {
-	if (!sampleTextureFilterEligible(sourceTex))
-		return legacyTextureSample(sourceTex, sourceSampler, uv);
+	// Bump-map channels encode angles, not color or coverage.
+	if (pp_BumpMap != 0 || !sampleTextureFilterEligible(sourceTex))
+		return legacyTextureSample(state, sourceTex, sourceSampler, uv);
 
+	if (pp_SampleTextureFilter == 19)
+		return sampleSourceTexel(state, sourceTex, sourceSampler, uv);
 	if (pp_SampleTextureFilter == 1)
-		return alphaWeightedBilinear(sourceTex, sourceSampler, uv, false);
+		return alphaWeightedBilinear(state, sourceTex, sourceSampler, uv, false);
 	if (pp_SampleTextureFilter == 2)
-		return alphaWeightedBilinear(sourceTex, sourceSampler, uv, true);
+		return alphaWeightedBilinear(state, sourceTex, sourceSampler, uv, true);
 	if (pp_SampleTextureFilter == 3)
-		return jinc2Sample(sourceTex, sourceSampler, uv, false);
+		return jinc2Sample(state, sourceTex, sourceSampler, uv, false);
 	if (pp_SampleTextureFilter == 4)
-		return jinc2Sample(sourceTex, sourceSampler, uv, true);
+		return jinc2Sample(state, sourceTex, sourceSampler, uv, true);
 	if (pp_SampleTextureFilter == 5 || pp_SampleTextureFilter == 6 || pp_SampleTextureFilter == 7)
-		return mmpxSample(sourceTex, sourceSampler, uv);
+		return mmpxSample(state, sourceTex, sourceSampler, uv);
 	if (pp_SampleTextureFilter == 8)
-		return jinc2AntiRingSample(sourceTex, sourceSampler, uv, 0.0f);
+		return jinc2AntiRingSample(state, sourceTex, sourceSampler, uv, 0.0f);
 	if (pp_SampleTextureFilter == 9)
-		return jinc2AntiRingSample(sourceTex, sourceSampler, uv, 0.18f);
+		return jinc2AntiRingSample(state, sourceTex, sourceSampler, uv, 0.18f);
 	if (pp_SampleTextureFilter == 10)
-		return jinc2AntiRingSample(sourceTex, sourceSampler, uv, 0.08f);
+		return jinc2AntiRingSample(state, sourceTex, sourceSampler, uv, 0.08f);
 	if (pp_SampleTextureFilter == 11)
-		return jinc2AntiRingSample(sourceTex, sourceSampler, uv, 0.22f);
+		return jinc2AntiRingSample(state, sourceTex, sourceSampler, uv, 0.22f);
 	if (pp_SampleTextureFilter == 12)
-		return separableReconstructionSample(sourceTex, sourceSampler, uv, 0, true);
+		return separableReconstructionSample(state, sourceTex, sourceSampler, uv, 0, true);
 )";
 const char * const PixelShaderCommonPart4 = R"(
 	if (pp_SampleTextureFilter == 13)
-		return separableReconstructionSample(sourceTex, sourceSampler, uv, 1, true);
-	if (pp_SampleTextureFilter == 14)
-		return separableReconstructionSample(sourceTex, sourceSampler, uv, 2, false);
+		return separableReconstructionSample(state, sourceTex, sourceSampler, uv, 1, true);
 	if (pp_SampleTextureFilter == 15)
-		return separableReconstructionSample(sourceTex, sourceSampler, uv, 3, false);
+		return separableReconstructionSample(state, sourceTex, sourceSampler, uv, 2, false);
 	if (pp_SampleTextureFilter == 16)
-		return separableReconstructionSample(sourceTex, sourceSampler, uv, 4, false);
+		return separableReconstructionSample(state, sourceTex, sourceSampler, uv, 3, false);
 	if (pp_SampleTextureFilter == 17)
-		return separableReconstructionSample(sourceTex, sourceSampler, uv, 5, false);
+		return separableReconstructionSample(state, sourceTex, sourceSampler, uv, 4, false);
 	if (pp_SampleTextureFilter == 18)
-		return separableReconstructionSample(sourceTex, sourceSampler, uv, 6, false);
-	return legacyTextureSample(sourceTex, sourceSampler, uv);
+		return separableReconstructionSample(state, sourceTex, sourceSampler, uv, 5, false);
+	return legacyTextureSample(state, sourceTex, sourceSampler, uv);
 }
 )";
 const char * const PixelShaderCommonPart5 = R"(
@@ -718,7 +717,10 @@ PSO main(in Pixel inpix)
 			uv /= inpix.uv.w;
 		#endif
 		#if pp_SampleTextureFilter != 0
-			float4 texcol = filteredTextureSample(texture0, sampler0, uv);
+			TextureSampleState sampleState;
+			sampleState.palette = pp_Palette != 0;
+			sampleState.ignoreAlpha = pp_IgnoreTexA != 0;
+			float4 texcol = filteredTextureSample(sampleState, texture0, sampler0, uv);
 		#else
 			#if pp_Palette == 0
 				float4 texcol = texture0.Sample(sampler0, uv);
@@ -973,8 +975,7 @@ const ComPtr<ID3D11PixelShader>& DX11Shaders::getShader(bool pp_Texture, bool pp
 			| (clipInside << 15)
 			| (divPosZ << 16)
 			| (dithering << 17)
-			| ((u64)sampleTextureFilter << 18);
-	hash ^= (u64)(u32)maxFilteredTextureSize + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+			| ((u64)sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 18);
 	auto& shader = shaders[hash];
 	if (shader == nullptr)
 	{
@@ -1274,6 +1275,10 @@ u64 CachedDX11Shaders::hashShader(const char* source, const char* function, cons
 	XXH3_64bits_reset(xxh);
 	XXH3_64bits_update(xxh, source, strlen(source));
 	XXH3_64bits_update(xxh, function, strlen(function));
+	XXH3_64bits_update(xxh, profile, strlen(profile));
+	// Included reconstruction code must invalidate the persistent shader cache too.
+	if (strstr(source, "pixel_common.hlsl") != nullptr)
+		XXH3_64bits_update(xxh, PixelShaderCommon.data(), PixelShaderCommon.size());
 	if (pDefines != nullptr)
 		for (const D3D_SHADER_MACRO *pDef = pDefines; pDef->Name != nullptr; pDef++)
 		{

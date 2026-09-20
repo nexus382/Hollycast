@@ -408,15 +408,10 @@ void PipelineManager::CreatePipeline(u32 listType, bool sortTriangles, const Pol
 	params.trilinear = pp.pcw.Texture && pp.tsp.FilterMode > 1 && listType != ListType_Punch_Through && pp.tcw.MipMapped == 1;
 	params.useAlpha = pp.tsp.UseAlpha;
 	params.palette = gpuPalette;
-	params.sampleTextureFilter = pp.pcw.Texture ? config::SampleTextureFilter.get() : 0;
-	if (params.sampleTextureFilter < 0 || params.sampleTextureFilter > 19)
-		params.sampleTextureFilter = 0;
-	params.maxFilteredTextureSize = params.sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-	if (params.maxFilteredTextureSize <= 0)
-	{
-		params.sampleTextureFilter = 0;
-		params.maxFilteredTextureSize = 0;
-	}
+	const sample_filter::Settings filter(pp.pcw.Texture && pp.tcw.PixelFmt != PixelBumpMap ? config::SampleTextureFilter.get() : 0,
+			config::MaxFilteredTextureSize.get());
+	params.sampleTextureFilter = filter.mode;
+	params.maxFilteredTextureSize = filter.maxSize;
 	params.divPosZ = divPosZ;
 	params.dithering = dithering;
 	vk::ShaderModule fragment_module = shaderManager->GetFragmentShader(params);

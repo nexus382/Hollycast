@@ -21,6 +21,7 @@
 */
 #pragma once
 #include "vulkan.h"
+#include "rend/sample_filter.h"
 
 #include <glm/glm.hpp>
 #include <map>
@@ -63,8 +64,7 @@ struct FragmentShaderParams
 			| ((u32)offset << 7) | ((u32)fog << 8) | ((u32)gouraud << 10)
 			| ((u32)bumpmap << 11) | ((u32)clamping << 12) | ((u32)trilinear << 13)
 			| ((u32)palette << 14) | ((u32)divPosZ << 16) | ((u32)dithering << 17)
-			| ((u32)sampleTextureFilter << 18);
-		hash ^= (u32)maxFilteredTextureSize + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 18);
 		return hash;
 	}
 };

@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -33,6 +34,12 @@ public:
 
 	ComPtr<ID3D11Texture2D> texture;
 	ComPtr<ID3D11ShaderResourceView> textureView;
+
+	unsigned sampledWidth() const {
+		D3D11_TEXTURE2D_DESC desc;
+		texture->GetDesc(&desc);
+		return desc.Width;
+	}
 
 	std::string GetId() override { return std::to_string((uintptr_t)texture.get()); }
 	void UploadToGPU(int width, int height, const u8* temp_tex_buffer, bool mipmapped,

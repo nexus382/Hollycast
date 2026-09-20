@@ -24,6 +24,7 @@
 #include "ui/gui.h"
 #include "rend/sorter.h"
 #include "rend/osd.h"
+#include "rend/sample_filter.h"
 
 #include <memory>
 
@@ -651,15 +652,8 @@ template <u32 Type, bool SortingEnabled>
 void DX11Renderer::setRenderState(const PolyParam *gp)
 {
 	PixelPolyConstants constants;
-	int sampleTextureFilter = gp->pcw.Texture ? config::SampleTextureFilter.get() : 0;
-	if (sampleTextureFilter < 1 || sampleTextureFilter > 19)
-		sampleTextureFilter = 0;
-	int maxFilteredTextureSize = sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-	if (maxFilteredTextureSize <= 0)
-	{
-		sampleTextureFilter = 0;
-		maxFilteredTextureSize = 0;
-	}
+	const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+			? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
 
 	if (gp->pcw.Texture && gp->tsp.FilterMode > 1 && Type != ListType_Punch_Through && gp->tcw.MipMapped == 1)
 	{
@@ -704,8 +698,8 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 			Type == ListType_Punch_Through,
 			clipmode == TileClipping::Inside,
 			dithering,
-			sampleTextureFilter,
-			maxFilteredTextureSize);
+			filter.mode,
+			filter.maxSize);
 	deviceContext->PSSetShader(pixelShader, nullptr, 0);
 
 	if (gpuPalette != 0)
@@ -737,8 +731,7 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 		bool linearFiltering;
 		if (gpuPalette != 0)
 			linearFiltering = false;
-		else if (sampleTextureFilter != 0
-				&& (maxFilteredTextureSize >= 1024 || texture->width <= (u32)maxFilteredTextureSize))
+		else if (filter.mode != 0 && filter.appliesTo(texture->sampledWidth()))
 			linearFiltering = false;
 		else if (config::TextureFiltering == 0)
 			linearFiltering = gp->tsp.FilterMode != 0;

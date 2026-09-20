@@ -50,8 +50,7 @@ static gl4PipelineShader *gl4GetProgram(bool cp_AlphaTest, bool pp_InsideClippin
 	rv <<= 1; rv |= (int)pp_BumpMap;
 	rv <<= 1; rv |= (int)fog_clamping;
 	rv <<= 2; rv |= palette;
-	rv <<= 5; rv |= sampleTextureFilter;
-	rv <<= 4; rv |= maxFilteredTextureSize >= 1024 ? 8 : std::min<int>(maxFilteredTextureSize / 8, 7);
+	rv <<= 9; rv |= sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key();
 	rv <<= 1; rv |= (int)naomi2;
 	rv <<= 2; rv |= (int)pass;
 	rv <<= 1; rv |= (int)(!settings.platform.isNaomi2() && config::NativeDepthInterpolation);
@@ -91,18 +90,6 @@ static void SetTextureRepeatMode(int index, GLuint dir, u32 clamp, u32 mirror)
 		glSamplerParameteri(texSamplers[index], dir, mirror ? GL_MIRRORED_REPEAT : GL_REPEAT);
 }
 
-static bool isSampleTextureFilterEligible(const TextureCacheData* texture)
-{
-	int sampleTextureFilter = config::SampleTextureFilter.get();
-	int maxFilteredTextureSize = sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-	if (sampleTextureFilter < 1 || sampleTextureFilter > 19)
-		sampleTextureFilter = 0;
-	if (maxFilteredTextureSize <= 0)
-		sampleTextureFilter = 0;
-	return sampleTextureFilter != 0 &&
-		(maxFilteredTextureSize >= 1024 || texture->width <= (u32)maxFilteredTextureSize);
-}
-
 static void SetBaseClipping()
 {
 	if (gl4ShaderUniforms.base_clipping.enabled)
@@ -139,10 +126,10 @@ static void SetGPState(const PolyParam* gp)
 		else if (config::TextureFiltering == 2)
 			gpuPalette = 2; // force linear
 	}
-	int sampleTextureFilter = config::SampleTextureFilter.get();
-	int maxFilteredTextureSize = sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-	if (sampleTextureFilter < 1 || sampleTextureFilter > 19 || maxFilteredTextureSize <= 0)
-		sampleTextureFilter = 0;
+	const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+			? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
+	const int sampleTextureFilter = filter.mode;
+	const int maxFilteredTextureSize = filter.maxSize;
 
 	if (pass == Pass::Depth)
 	{
@@ -252,9 +239,9 @@ static void SetGPState(const PolyParam* gp)
 				SetTextureRepeatMode(i, GL_TEXTURE_WRAP_T, tsp.ClampV, tsp.FlipV);
 
 				bool nearest_filter;
-				if (gpuPalette != 0)
+				if (texture->gpuPalette)
 					nearest_filter = true;
-				else if (isSampleTextureFilterEligible(texture))
+				else if (filter.appliesTo(texture->uploadedWidth))
 					nearest_filter = true;
 				else if (config::TextureFiltering == 0)
 					nearest_filter = tsp.FilterMode == 0;

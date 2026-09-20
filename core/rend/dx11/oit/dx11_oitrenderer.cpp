@@ -23,6 +23,7 @@
 #include "../dx11context.h"
 #include "../dx11_renderer.h"
 #include "rend/transform_matrix.h"
+#include "rend/sample_filter.h"
 #include "../dx11_texture.h"
 #include "dx11_oitshaders.h"
 #include "../dx11_renderstate.h"
@@ -167,15 +168,10 @@ struct DX11OITRenderer : public DX11Renderer
 		ComPtr<ID3D11VertexShader> vertexShader = shaders.getVertexShader(gp->pcw.Gouraud, gp->isNaomi2(), false, pass != DX11OITShaders::Depth);
 		deviceContext->VSSetShader(vertexShader, nullptr, 0);
 
-		int sampleTextureFilter = gp->pcw.Texture ? config::SampleTextureFilter.get() : 0;
-		if (sampleTextureFilter < 1 || sampleTextureFilter > 19)
-			sampleTextureFilter = 0;
-		int maxFilteredTextureSize = sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-		if (maxFilteredTextureSize <= 0)
-		{
-			sampleTextureFilter = 0;
-			maxFilteredTextureSize = 0;
-		}
+		const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+				? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
+		const int sampleTextureFilter = filter.mode;
+		const int maxFilteredTextureSize = filter.maxSize;
 
 		PixelPolyConstants constants;
 		if (gp->pcw.Texture && gp->tsp.FilterMode > 1 && Type != ListType_Punch_Through && gp->tcw.MipMapped == 1)
@@ -312,10 +308,9 @@ struct DX11OITRenderer : public DX11Renderer
 				deviceContext->PSSetShaderResources(slot, 1, &texture->textureView.get());
 				TSP tsp = i == 0 ? gp->tsp : gp->tsp1;
 				bool linearFiltering;
-				if (gpuPalette != 0)
+				if (texture->gpuPalette)
 					linearFiltering = false;
-				else if (sampleTextureFilter != 0
-						&& (maxFilteredTextureSize >= 1024 || texture->width <= (u32)maxFilteredTextureSize))
+				else if (filter.mode != 0 && filter.appliesTo(texture->sampledWidth()))
 					linearFiltering = false;
 				else if (config::TextureFiltering == 0)
 					linearFiltering = tsp.FilterMode != 0;

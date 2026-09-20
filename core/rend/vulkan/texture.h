@@ -23,6 +23,7 @@
 #include "vulkan_context.h"
 #include "buffer.h"
 #include "rend/TexCache.h"
+#include "rend/sample_filter.h"
 
 #include <algorithm>
 #include <map>
@@ -125,17 +126,12 @@ public:
 	{
 		TSP tsp = texture1 ? poly.tsp1 : poly.tsp;
 		BaseTextureCacheData *texture = texture1 ? poly.texture1 : poly.texture;
+		const sample_filter::Settings filter(config::SampleTextureFilter.get(), config::MaxFilteredTextureSize.get());
 		if (texture != nullptr && texture->gpuPalette)
 			tsp.FilterMode = 0;
-		else if (texture != nullptr)
-		{
-			int sampleTextureFilter = config::SampleTextureFilter.get();
-			int maxFilteredTextureSize = config::MaxFilteredTextureSize.get();
-			if (sampleTextureFilter > 0 && sampleTextureFilter <= 19
-					&& maxFilteredTextureSize > 0
-					&& (maxFilteredTextureSize >= 1024 || texture->width <= (u32)maxFilteredTextureSize))
-				tsp.FilterMode = 0;
-		}
+		else if (texture != nullptr && poly.tcw.PixelFmt != PixelBumpMap
+				&& filter.appliesTo(static_cast<Texture*>(texture)->getSize().width))
+			tsp.FilterMode = 0;
 		else if (config::TextureFiltering == 1)
 			tsp.FilterMode = 0;
 		else if (config::TextureFiltering == 2)

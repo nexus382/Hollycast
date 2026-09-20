@@ -76,20 +76,6 @@ const u32 SrcBlendGL[] =
 
 PipelineShader* CurrentShader;
 
-static bool isSampleTextureFilterEligible(const TextureCacheData* texture)
-{
-	if (gl.gl_version == nullptr || !strcmp(gl.gl_version, "GLES2") || !strcmp(gl.gl_version, "GL2"))
-		return false;
-	int sampleTextureFilter = config::SampleTextureFilter.get();
-	int maxFilteredTextureSize = sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-	if (sampleTextureFilter < 1 || sampleTextureFilter > 19)
-		sampleTextureFilter = 0;
-	if (maxFilteredTextureSize <= 0)
-		sampleTextureFilter = 0;
-	return sampleTextureFilter != 0 &&
-		(maxFilteredTextureSize >= 1024 || texture->width <= (u32)maxFilteredTextureSize);
-}
-
 void SetCull(u32 CullMode)
 {
 	if (CullModes[CullMode] == GL_NONE)
@@ -163,11 +149,9 @@ void SetGPState(const PolyParam* gp,u32 cflip=0)
 		else if (config::TextureFiltering == 2)
 			gpuPalette = 2; // force linear
 	}
-	int sampleTextureFilter = config::SampleTextureFilter.get();
-	int maxFilteredTextureSize = sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-	if (sampleTextureFilter < 1 || sampleTextureFilter > 19 || maxFilteredTextureSize <= 0
-			|| !strcmp(gl.gl_version, "GLES2") || !strcmp(gl.gl_version, "GL2"))
-		sampleTextureFilter = 0;
+	const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+			&& strcmp(gl.gl_version, "GLES2") && strcmp(gl.gl_version, "GL2")
+			? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
 
 	CurrentShader = GetProgram(Type == ListType_Punch_Through ? true : false,
 								  clipmode == TileClipping::Inside,
@@ -182,8 +166,8 @@ void SetGPState(const PolyParam* gp,u32 cflip=0)
 								  color_clamp,
 								  trilinear_alpha != 1.f,
 								  gpuPalette,
-								  sampleTextureFilter,
-								  maxFilteredTextureSize,
+								  filter.mode,
+								  filter.maxSize,
 								  gp->isNaomi2(),
 								  ShaderUniforms.dithering);
 	
@@ -227,7 +211,7 @@ void SetGPState(const PolyParam* gp,u32 cflip=0)
 		bool nearest_filter;
 		if (gpuPalette != 0)
 			nearest_filter = true;
-		else if (isSampleTextureFilterEligible(texture))
+		else if (filter.appliesTo(texture->uploadedWidth))
 			nearest_filter = true;
 		else if (config::TextureFiltering == 0)
 			nearest_filter = gp->tsp.FilterMode == 0;

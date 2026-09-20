@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "dx11_oitshaders.h"
+#include "rend/sample_filter.h"
 #include "../dx11context.h"
 #include "../dx11_naomi2.h"
 #include <algorithm>
@@ -406,17 +407,25 @@ PSO main(in VertexIn inpix)
 		#endif
 
 		float4 texcol;
+		#if pp_SampleTextureFilter != 0
+			TextureSampleState sampleState;
+			sampleState.palette = pp_Palette != 0 && !area1;
+			sampleState.ignoreAlpha = pp_IgnoreTexA != 0;
+			#if pp_TwoVolumes == 1
+				sampleState.ignoreAlpha = cur_ignore_tex_alpha;
+			#endif
+		#endif
 		#if pp_TwoVolumes == 1
 			if (area1)
 			#if pp_SampleTextureFilter != 0
-				texcol = filteredTextureSample(texture1, sampler1, uv);
+				texcol = filteredTextureSample(sampleState, texture1, sampler1, uv);
 			#else
 				texcol = texture1.Sample(sampler1, uv);
 			#endif
 			else
 		#endif
 		#if pp_SampleTextureFilter != 0
-				texcol = filteredTextureSample(texture0, sampler0, uv);
+				texcol = filteredTextureSample(sampleState, texture0, sampler0, uv);
 		#else
 		#if pp_Palette == 0
 				texcol = texture0.Sample(sampler0, uv);
@@ -843,7 +852,6 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool
 		int sampleTextureFilter, int maxFilteredTextureSize)
 {
 	bool divPosZ = !settings.platform.isNaomi2() && config::NativeDepthInterpolation;
-	const u32 maxFilteredTextureBucket = maxFilteredTextureSize >= 1024 ? 8 : std::min<int>(maxFilteredTextureSize / 8, 7);
 	const u32 hash = (int)pp_Texture
 			| ((int)pp_UseAlpha << 1)
 			| ((int)pp_IgnoreTexA << 2)
@@ -859,8 +867,7 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool
 			| ((int)twoVolumes << 15)
 			| ((int)pass << 16)
 			| ((int)divPosZ << 18)
-			| (sampleTextureFilter << 19)
-			| (maxFilteredTextureBucket << 24);
+			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 19);
 	auto& shader = shaders[hash];
 	if (shader == nullptr)
 	{

@@ -168,15 +168,10 @@ void OITPipelineManager::CreatePipeline(u32 listType, bool autosort, const PolyP
 	params.pass = pass;
 	params.twoVolume = twoVolume;
 	params.palette = gpuPalette;
-	params.sampleTextureFilter = pp.pcw.Texture ? config::SampleTextureFilter.get() : 0;
-	if (params.sampleTextureFilter < 0 || params.sampleTextureFilter > 19)
-		params.sampleTextureFilter = 0;
-	params.maxFilteredTextureSize = params.sampleTextureFilter == 0 ? 0 : config::MaxFilteredTextureSize.get();
-	if (params.maxFilteredTextureSize <= 0)
-	{
-		params.sampleTextureFilter = 0;
-		params.maxFilteredTextureSize = 0;
-	}
+	const sample_filter::Settings filter(pp.pcw.Texture && pp.tcw.PixelFmt != PixelBumpMap ? config::SampleTextureFilter.get() : 0,
+			config::MaxFilteredTextureSize.get());
+	params.sampleTextureFilter = filter.mode;
+	params.maxFilteredTextureSize = filter.maxSize;
 	params.divPosZ = divPosZ;
 	params.useBDA = useBDA;
 	vk::ShaderModule fragment_module = shaderManager->GetFragmentShader(params);

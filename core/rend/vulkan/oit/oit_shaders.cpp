@@ -273,12 +273,20 @@ void main()
 	{
 		vec4 texcol;
 		#if pp_SampleTextureFilter != 0
+			TextureSampleState sampleState;
+			sampleState.palette = pp_Palette != 0 && !area1;
+			sampleState.ignoreAlpha = pp_IgnoreTexA != 0;
+			#if pp_TwoVolumes == 1
+				sampleState.ignoreAlpha = cur_ignore_tex_alpha;
+			#endif
+		#endif
+		#if pp_SampleTextureFilter != 0
 			#if pp_TwoVolumes == 1
 				if (area1)
-					texcol = filteredTextureSample(tex1, vec3(vtx_uv1, vtx_uv.z));
+					texcol = filteredTextureSample(sampleState, tex1, vec3(vtx_uv1, vtx_uv.z));
 				else
 			#endif
-			texcol = filteredTextureSample(tex0, vtx_uv);
+			texcol = filteredTextureSample(sampleState, tex0, vtx_uv);
 		#else
 		#if pp_TwoVolumes == 1
 			if (area1)

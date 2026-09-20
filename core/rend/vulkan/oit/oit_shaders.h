@@ -23,6 +23,7 @@
 #include "../vulkan.h"
 #include "../utils.h"
 #include "cfg/option.h"
+#include "rend/sample_filter.h"
 
 #include <map>
 
@@ -73,8 +74,8 @@ public:
 				| ((u32)offset << 7) | ((u32)fog << 8) | ((u32)gouraud << 10)
 				| ((u32)bumpmap << 11) | ((u32)clamping << 12) | ((u32)twoVolume << 13)
 				| ((u32)palette << 14) | ((int)pass << 16) | ((u32)divPosZ << 18)
-				| ((u32)useBDA << 19) | ((u32)sampleTextureFilter << 20);
-			hash ^= (u32)maxFilteredTextureSize + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+				| ((u32)useBDA << 19)
+				| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 20);
 			return hash;
 		}
 	};

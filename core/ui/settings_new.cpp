@@ -2153,8 +2153,8 @@ static std::array<const char*, 19> getSampleTextureFilterLabels()
 	return {
 		T("Disabled"), T("Nearest-Neighbor"), T("Bilinear"), T("Bilinear / No Edge Blending"), T("Jinc2"),
 		T("Jinc2 / No Edge Blending"), T("MMPX"), T("MMPX Enhanced"), T("MMPX Advanced"),
-		T("Jinc2 Anti-Ring"), T("Jinc2 Sharp Anti-Ring"), T("EWA Lanczos / Jinc"),
-		T("EWA Lanczos Sharp Anti-Ring"), T("Lanczos2 Anti-Ring"), T("Lanczos3 Anti-Ring"),
+		T("Jinc2 Anti-Ring"), T("Jinc2 Sharp Anti-Ring"), T("Jinc2 Mild Anti-Ring"),
+		T("Jinc2 Extra Sharp Anti-Ring"), T("Lanczos2 Anti-Ring"), T("Lanczos3 Anti-Ring"),
 		T("Robidoux"), T("Robidoux Sharp"), T("Bicubic Catmull-Rom"),
 		T("Bicubic Mitchell")
 	};
@@ -4886,12 +4886,12 @@ void renderVideoTab()
 				"Sharper Jinc2-style reconstruction with anti-ringing. Advanced option for crisp Dreamcast-era texture sheets."
 			),
 			T(
-				"Sample Texture Filter: EWA Lanczos / Jinc\n"
-				"Jinc-style premium scaler inspired by EWA Lanczos behavior. Smooth high-quality whole-texture option."
+				"Sample Texture Filter: Jinc2 Mild Anti-Ring\n"
+				"Jinc2 reconstruction with mild sharpening and an anti-ringing clamp."
 			),
 			T(
-				"Sample Texture Filter: EWA Lanczos Sharp Anti-Ring\n"
-				"Sharper Jinc/EWA-style option with anti-ringing. Good for users who want crisp textures without MMPX-style edges."
+				"Sample Texture Filter: Jinc2 Extra Sharp Anti-Ring\n"
+				"Jinc2 reconstruction with stronger sharpening and an anti-ringing clamp."
 			),
 			T(
 				"Sample Texture Filter: Lanczos2 Anti-Ring\n"
@@ -4901,10 +4901,7 @@ void renderVideoTab()
 				"Sample Texture Filter: Lanczos3 Anti-Ring\n"
 				"Sharper larger-radius Lanczos reconstruction with halo clamp. High quality, but more likely to emphasize edges."
 			),
-			T(
-				"Sample Texture Filter: Spline36\n"
-				"High-quality spline reconstruction with less ringing than sharper Lanczos-style filters."
-			),
+			"", // Retired ID 14; keep persisted filter IDs stable.
 			T(
 				"Sample Texture Filter: Robidoux\n"
 				"Balanced cubic reconstruction. Good compromise for painted or photographic Dreamcast-era textures."
@@ -4994,6 +4991,7 @@ void renderVideoTab()
 			T(
 				"Max Filtered Texture Size\n"
 				"Controls the largest texture group affected by texture upscaling and sample texture filters.\n"
+				"Upscaling checks the original width. Sample filters check the uploaded width, including upscaling and replacement textures.\n"
 				"Buckets use texture width, so 8x8 includes 8x16 and 8x32, while 16x16 includes 16x8.\n"
 				"1024x1024+ includes larger texture-pack assets.\n\n"
 				"Live preview updates sample-time filtering immediately. Already-uploaded texture-upscale results may require a cache refresh or game restart."

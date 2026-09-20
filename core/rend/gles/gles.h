@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
+#include "rend/sample_filter.h"
 #include "hw/pvr/ta_structs.h"
 #include "hw/pvr/ta_ctx.h"
 #include "hw/pvr/elan_struct.h"
@@ -462,10 +463,13 @@ public:
 	}
 	TextureCacheData(TextureCacheData&& other) : BaseTextureCacheData(std::move(other)) {
 		std::swap(texID, other.texID);
+		std::swap(uploadedWidth, other.uploadedWidth);
 		std::swap(customTextureObject, other.customTextureObject);
 	}
 
 	GLuint texID = 0;   //gl texture
+	// Level-zero width, including upscaling, custom textures and render targets.
+	u32 uploadedWidth = 0;
 	bool customTextureObject = false;
 	std::string GetId() override { return std::to_string(texID); }
 	void UploadToGPU(int width, int height, const u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded = false) override;
