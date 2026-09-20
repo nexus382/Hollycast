@@ -107,6 +107,7 @@ static ScheduledThreadRunner<std::chrono::steady_clock::time_point> uiThreadRunn
 
 static void emuEventCallback(Event event, void *)
 {
+	performance_overlay::reset();
 	switch (event)
 	{
 	case Event::Resume:
@@ -148,6 +149,7 @@ void gui_init()
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
 
     EventManager::listen(Event::Resume, emuEventCallback);
+	EventManager::listen(Event::Pause, emuEventCallback);
     EventManager::listen(Event::Start, emuEventCallback);
 	EventManager::listen(Event::Terminate, emuEventCallback);
     ggpo::receiveChatMessages([](int playerNum, const std::string& msg) { chat.receive(playerNum, msg); });
@@ -1883,6 +1885,7 @@ void gui_term()
 		clearThumbnailCache();
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
+		EventManager::unlisten(Event::Pause, emuEventCallback);
 	    EventManager::unlisten(Event::Start, emuEventCallback);
 	    EventManager::unlisten(Event::Terminate, emuEventCallback);
 	    boxart.term();

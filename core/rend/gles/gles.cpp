@@ -1390,6 +1390,7 @@ void OpenGLRenderer::termGpuTiming()
 #endif
 	gpuTimingQueries = {};
 	gpuTimingEpochs = {};
+	gpuTimingDiscarded = {};
 	gpuTimingReadIndex = 0;
 	gpuTimingWriteIndex = 0;
 	gpuTimingWaitingCount = 0;
@@ -1400,12 +1401,15 @@ void OpenGLRenderer::termGpuTiming()
 void OpenGLRenderer::pollGpuTiming()
 {
 #if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
-	if (!gpuTimingAvailable)
+	if (!gpuTimingAvailable || gpuTimingWaitingCount == 0)
 		return;
 
-	while (gpuTimingWaitingCount != 0)
+	std::array<GLuint64, GpuTimingQueryCount> results {};
+	std::size_t readyCount = 0;
+	while (readyCount < gpuTimingWaitingCount)
 	{
-		const GLuint query = gpuTimingQueries[gpuTimingReadIndex];
+		const std::size_t slot = (gpuTimingReadIndex + readyCount) % GpuTimingQueryCount;
+		const GLuint query = gpuTimingQueries[slot];
 		GLuint ready = GL_FALSE;
 		if (gl.is_gles)
 			glGetQueryObjectuivEXT(query, GL_QUERY_RESULT_AVAILABLE_EXT, &ready);
@@ -1414,23 +1418,30 @@ void OpenGLRenderer::pollGpuTiming()
 		if (ready == GL_FALSE)
 			break;
 
-		bool valid = true;
-		if (gl.is_gles)
+		if (!gpuTimingDiscarded[slot])
 		{
-			GLint disjoint = GL_FALSE;
-			glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);
-			valid = disjoint == GL_FALSE;
-		}
-		if (valid)
-		{
-			GLuint64 nanoseconds = 0;
 			if (gl.is_gles)
-				glGetQueryObjectui64vEXT(query, GL_QUERY_RESULT_EXT, &nanoseconds);
+				glGetQueryObjectui64vEXT(query, GL_QUERY_RESULT_EXT, &results[slot]);
 			else
-				glGetQueryObjectui64v(query, GL_QUERY_RESULT, &nanoseconds);
-			performance_overlay::recordGpuTimingSample(
-				static_cast<std::uint64_t>(nanoseconds), gpuTimingEpochs[gpuTimingReadIndex]);
+				glGetQueryObjectui64v(query, GL_QUERY_RESULT, &results[slot]);
 		}
+		++readyCount;
+	}
+	if (gl.is_gles)
+	{
+		GLint disjoint = GL_FALSE;
+		glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);
+		// Check after fetching results: disjoint can occur while polling. This
+		// read clears the flag, so invalidate every outstanding query, including
+		// those not ready yet, and retire them before reusing their slots.
+		if (disjoint != GL_FALSE)
+			gpuTimingDiscarded.fill(true);
+	}
+	for (std::size_t i = 0; i < readyCount; ++i)
+	{
+		if (!gpuTimingDiscarded[gpuTimingReadIndex])
+			performance_overlay::recordGpuTimingSample(
+				static_cast<std::uint64_t>(results[gpuTimingReadIndex]), gpuTimingEpochs[gpuTimingReadIndex]);
 		gpuTimingReadIndex = (gpuTimingReadIndex + 1) % GpuTimingQueryCount;
 		--gpuTimingWaitingCount;
 	}
@@ -1453,6 +1464,7 @@ void OpenGLRenderer::beginGpuTiming()
 		return;
 	const GLuint query = gpuTimingQueries[gpuTimingWriteIndex];
 	gpuTimingEpochs[gpuTimingWriteIndex] = performance_overlay::getGpuTimingEpoch();
+	gpuTimingDiscarded[gpuTimingWriteIndex] = false;
 	if (gl.is_gles)
 		glBeginQueryEXT(GL_TIME_ELAPSED_EXT, query);
 	else

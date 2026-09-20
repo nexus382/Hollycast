@@ -274,13 +274,6 @@ private:
 		{
 			FC_PROFILE_SCOPE_NAMED("Renderer::Render");
 			try {
-#ifndef LIBRETRO
-				// Each renderer opts in only after it has started a valid timing query.
-				// RTT passes do not issue display-frame queries and must not overwrite
-				// the capability reported by the active display renderer.
-				if (!taContext->rend.isRTT)
-					performance_overlay::setGpuTimingSupported(false);
-#endif
 				renderer->Render();
 			} catch (...) {
 				if (!renderToScreen)
@@ -318,9 +311,6 @@ private:
 		if (renderer->Present())
 		{
 			presented = true;
-#ifndef LIBRETRO
-			performance_overlay::recordPresentedFrame();
-#endif
 			if (!config::ThreadedRendering && !ggpo::active())
 				emu.getSh4Executor()->Stop();
 #ifdef LIBRETRO

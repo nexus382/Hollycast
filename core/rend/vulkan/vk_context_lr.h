@@ -47,6 +47,7 @@ public:
 	// drawers still define the standalone timing boundaries.
 	void BeginGpuTiming(vk::CommandBuffer) {}
 	void EndGpuTiming(vk::CommandBuffer) {}
+	void ResetGpuTiming() {}
 
 	vk::PhysicalDevice GetPhysicalDevice() const { return physicalDevice; }
 	vk::Device GetDevice() const { return device; }

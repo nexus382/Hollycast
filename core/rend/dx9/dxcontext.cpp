@@ -270,6 +270,7 @@ void DXContext::Present()
 		WARN_LOG(RENDERER, "Present failed %x", result);
 	else
 	{
+		performance_overlay::recordPresentedFrame();
 		frameRendered = false;
 		if (swapOnVSync != (!settings.input.fastForwardMode && config::VSync))
 		{

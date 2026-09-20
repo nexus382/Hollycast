@@ -66,15 +66,14 @@ emulated GPU timing percentage.
 ## Closest HollyCast equivalents
 
 The current HollyCast implementation is in
-`core/ui/performance_overlay.cpp:80` (`updateMetrics`) and
-`core/ui/performance_overlay.cpp:340` (`draw`). The settings page is
-`core/ui/settings_new.cpp:4486` (`renderOnScreenDisplayTab`).
+`core/ui/performance_overlay.cpp` (`updateMetrics` and `draw`). The settings
+page is `core/ui/settings_new.cpp` (`renderOnScreenDisplayTab`).
 
 | DuckStation value | HollyCast value today | Important difference |
 | --- | --- | --- |
 | FPS | `metrics.gameFps`, from completed non-RTT PVR scenes | Counts distinct screen PVR scenes, matching DuckStation's internal game-frame meaning. |
 | VPS | `metrics.vps`, from `vblankCount` and `recordSh4Vblank()` | Counts Dreamcast vblank samples. This is an emulated timing signal. |
-| Output FPS | `metrics.outputFps`, from `recordPresentedFrame()` | Counts successful host presents. It is an optional display-cadence diagnostic, not DuckStation's FPS counter. |
+| Output FPS | `metrics.outputFps`, from `recordPresentedFrame()` | Counts successful host presentation calls, including Vulkan frame duplicates. SDL2 counts completed swap calls because it exposes no result. Native iOS reports unavailable because GLKView owns presentation. This is an optional display-cadence diagnostic, not DuckStation's FPS counter. |
 | Speed | `formatSpeed()` | Uses VPS against PAL/NTSC target and fast-forward settings. |
 | CPU | `Host CPU` and `Host CPU (SH4 Thread)` | `Host CPU` separates the HollyCast process share of all logical cores from total device use. The SH4-thread line samples the registered execution thread independently of vblank, so a stalled SH4 loop remains visible; it is still host single-core usage, not Dreamcast SH4 saturation. |
 | RNDR | `Host CPU (PVR Renderer)` | PVR renderer host-thread CPU work. It exposes emulator and driver-preparation cost, not hardware GPU utilization. |
@@ -83,7 +82,7 @@ The current HollyCast implementation is in
 | GPU | `Host GPU: percent (ms/rendered frame)` | Uses non-blocking timestamp queries on Vulkan, OpenGL/GLES, DirectX 11, and DirectX 9. It is GPU execution time for displayed, non-RTT renderer frames, not total device utilization. Standalone iOS OpenGLES reports unavailable because it does not use the GLAD timer-query implementation. |
 | GPU statistics | `formatGpuStatistics()` | Reports API, PVR primitive batches (`PVR P`), PVR vertices (`V`), PVR render passes (`RP`), and texture-upload rate (`TU/s`). These are not host API draw-call or copy counters. |
 | Resolution | `formatResolution()` | Reports raw, rendered, viewport, and output dimensions. |
-| Frame times | Present-interval average/min/max and 152-sample graph | These are successful-present intervals rather than full emulation frame-start intervals. |
+| Frame times | Present-interval average/min/max and 152-sample graph | Uses the same host presentation calls as Output FPS. These are API-level intervals, not physical scanout or full emulation frame-start intervals. Native iOS reports unavailable. |
 | Latency | `Latency: N/A (no end to end probe)` | No audio-buffer, active-frame, pre-frame, queue, or input-to-photon instrumentation is currently exposed. |
 | VRAM | DXGI per-process adapter memory | Shows HollyCast memory used/budget when Windows provides it. Fixed Dreamcast VRAM was removed because it never changes. |
 | RAM | HollyCast process resident memory | Changes with content, caches, and allocations. Fixed Dreamcast RAM was removed because it never changes. |
@@ -111,6 +110,29 @@ when the backend is returning real timestamp samples.
 The renderer-statistics row reports texture uploads per second. It deliberately
 does not estimate live texture count or VRAM residency; those require
 authoritative backend or operating-system data.
+
+## Collection and query lifetime
+
+Pause, resume, game start, and termination stop producers immediately and
+request a reset on the next overlay draw. The drawing thread clears counters,
+histories, and CPU baselines before starting a fresh interval. Paused time is
+excluded, and GPU query generations reject results from the previous interval.
+The SH4 sampler registers on the thread executing `Emulator::runInternal`,
+including shared-thread mode; it reacquires its native thread reference only
+after a stop or when a different thread begins execution. Apple process CPU
+time uses `getrusage` so completed worker threads remain in the process total.
+
+Vulkan timestamps start and end in the screen renderer's command buffer,
+before unrelated render-to-texture or presentation work. A later submission
+fence confirms completion without adding a GPU wait. Timestamp subtraction
+uses the queue's valid bit width so hardware counter wrap remains valid.
+Discarding renderer command buffers requires an idle queue and
+`VulkanContext::ResetGpuTiming` to reset their query ownership.
+
+GLES reads the disjoint flag once after collecting ready results. A disjoint
+event discards all outstanding timings, including queries that finish later;
+their slots remain reserved until completion. Both timer rings use bounded,
+nonblocking polling and perform no query polling when empty.
 
 ## Implementation plan
 

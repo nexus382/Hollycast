@@ -356,6 +356,9 @@ void DX11Context::Present()
 	else {
 		hr = swapchain->Present(0, allowTearing ? DXGI_PRESENT_ALLOW_TEARING : DXGI_PRESENT_DO_NOT_WAIT);
 	}
+	// Occluded and DO_NOT_WAIT failures do not submit a visible output frame.
+	if (hr == S_OK)
+		performance_overlay::recordPresentedFrame();
 	if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
 		WARN_LOG(RENDERER, "Present failed: device removed/reset");
 		handleDeviceLost();

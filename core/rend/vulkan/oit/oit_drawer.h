@@ -2,6 +2,7 @@
     Created on: Nov 6, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -161,6 +162,7 @@ public:
 		if (!frameStarted)
 			return;
 		frameStarted = false;
+		GetContext()->EndGpuTiming(currentCommandBuffer);
 		if (emulateFramebuffer) {
 			scaleAndWriteFramebuffer(currentCommandBuffer, colorAttachments[framebufferIndex].get());
 		}

@@ -749,6 +749,11 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 
 void Emulator::runInternal()
 {
+#ifndef LIBRETRO
+	// Android may resume from its UI thread. Register here, on the thread that
+	// actually executes SH4 work, including shared-thread rendering mode.
+	performance_overlay::resetSh4ThreadSample();
+#endif
 	runner.init();
 	try {
 		if (singleStep)
@@ -1097,9 +1102,6 @@ void Emulator::start()
 	else
 	{
 		stopRequested = false;
-#ifndef LIBRETRO
-		performance_overlay::resetSh4ThreadSample();
-#endif
 		InitAudio();
 	}
 

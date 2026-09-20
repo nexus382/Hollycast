@@ -50,6 +50,8 @@ constexpr const char *Section = "rend";
 constexpr std::size_t FrameTimeHistorySize = 152;
 
 std::atomic<bool> collectionEnabled { false };
+std::atomic<bool> resetPending { false };
+std::atomic<std::uint32_t> sh4ThreadEpoch { 1 };
 std::atomic<std::uint64_t> pvrWorkMicroseconds { 0 };
 std::atomic<std::uint32_t> vblankCount { 0 };
 std::atomic<std::uint32_t> gameFrameCount { 0 };
@@ -513,9 +515,14 @@ std::string formatFrameRate(bool includeRates, bool includeSpeed)
 
 std::string formatOutputFrameRate()
 {
+#ifdef TARGET_IPHONE
+	// GLKView owns presentation and does not expose its result to the renderer.
+	return i18n::T("Output FPS: unavailable (framework-managed presentation)");
+#else
 	char rate[32];
 	std::snprintf(rate, sizeof(rate), i18n::T("Output FPS: %.2f"), metrics.outputFps);
 	return rate;
+#endif
 }
 
 std::string formatResolution()
@@ -804,12 +811,28 @@ bool isCollectionEnabled()
 
 void resetSh4ThreadSample()
 {
-	sh4ThreadCpuSampler.registerCurrentThread();
+	// Shared-thread emulation enters once per frame. Only reacquire the native
+	// thread reference after a stop, or when execution moves to a new thread.
+	thread_local std::uint32_t registeredEpoch = 0;
+	const std::uint32_t epoch = sh4ThreadEpoch.load(std::memory_order_acquire);
+	if (registeredEpoch != epoch)
+	{
+		sh4ThreadCpuSampler.registerCurrentThread();
+		registeredEpoch = epoch;
+	}
 }
 
 void clearSh4ThreadSample()
 {
 	sh4ThreadCpuSampler.clear();
+	sh4ThreadEpoch.fetch_add(1, std::memory_order_release);
+}
+
+void reset()
+{
+	collectionEnabled.store(false, std::memory_order_release);
+	gpuTimingRequested.store(false, std::memory_order_release);
+	resetPending.store(true, std::memory_order_release);
 }
 
 void recordSh4Vblank()
@@ -949,6 +972,13 @@ std::uint64_t currentThreadCpuTimeMicroseconds()
 
 void draw()
 {
+	if (resetPending.exchange(false, std::memory_order_acq_rel))
+	{
+		metrics.lastSampleTime = 0;
+		metrics.lastMemorySampleTime = 0;
+		metrics.gpuAdapters.clear();
+		gpuTimingSupported.store(false, std::memory_order_relaxed);
+	}
 	const int overlayMode = mode();
 	if (overlayMode == 0)
 	{
@@ -1042,13 +1072,15 @@ void draw()
 		&& metrics.hostProcessCpuHistory.count >= 2;
 	const bool showGpuGraph = overlayMode == 2 && show("OverlayShowGpuGraph", false) && metrics.gpuUsageHistory.count >= 2;
 	const int graphCount = static_cast<int>(showFrameTimeGraph) + static_cast<int>(showHostCpuGraph) + static_cast<int>(showGpuGraph);
+	const float graphWidth = graphCount != 0
+		? std::clamp(uiScaled(200.f), uiScaled(120.f), std::max(uiScaled(120.f), displaySize.x - margin * 2.f)) : 0.f;
 	const float graphSpacing = graphCount != 0 ? uiScaled(5.f) : 0.f;
 	const float graphHeight = graphCount != 0 ? uiScaled(52.f) : 0.f;
 	const float totalGraphHeight = graphCount == 0 ? 0.f : graphCount * (graphSpacing + graphHeight);
 	const float totalHeight = lineHeight * lines.size() - lineSpacing + totalGraphHeight;
 	std::vector<float> lineWidths;
 	lineWidths.reserve(lines.size());
-	float blockWidth = 0.f;
+	float blockWidth = graphWidth;
 	for (const std::string& line : lines)
 	{
 		const float width = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, line.c_str()).x;
@@ -1087,8 +1119,7 @@ void draw()
 	}
 	if (graphCount != 0)
 	{
-		const float graphWidth = std::clamp(uiScaled(200.f), uiScaled(120.f), std::max(uiScaled(120.f), displaySize.x - margin * 2.f));
-		const float graphX = corner == 0 || corner == 2 ? blockX : displaySize.x - margin - graphWidth;
+		const float graphX = corner == 0 || corner == 2 ? blockX : blockX + blockWidth - graphWidth;
 		auto drawNextGraph = [&](const auto& drawGraph) {
 			y += graphSpacing;
 			drawGraph(ImVec2(graphX, y));

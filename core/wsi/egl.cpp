@@ -2,6 +2,7 @@
     Created on: Oct 18, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -23,6 +24,7 @@
 #ifdef USE_EGL
 #include "types.h"
 #include "cfg/option.h"
+#include "ui/performance_overlay.h"
 
 #ifdef __ANDROID__
 #include <android/native_window.h> // requires ndk r5 or newer
@@ -205,7 +207,8 @@ void EGLGraphicsContext::swap()
 {
 	do_swap_automation();
 	changeSwapInterval();
-	eglSwapBuffers(display, surface);
+	if (eglSwapBuffers(display, surface) == EGL_TRUE)
+		performance_overlay::recordPresentedFrame();
 }
 
 void EGLGraphicsContext::changeSwapInterval()

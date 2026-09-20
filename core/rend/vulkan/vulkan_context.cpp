@@ -590,9 +590,11 @@ bool VulkanContext::InitDevice()
 	    presentQueue = device->getQueue(presentQueueIndex, 0);
 	    swappyvk::setQueueFamilyIndex(googleTimingSupported, device.get(), presentQueue, presentQueueIndex);
 
-		gpuTimingAvailable = queueFamilyProperties[graphicsQueueIndex].timestampValidBits != 0
+		const u32 timestampValidBits = queueFamilyProperties[graphicsQueueIndex].timestampValidBits;
+		gpuTimingAvailable = timestampValidBits != 0
 			&& physicalDeviceProperties.limits.timestampPeriod > 0.f;
 		gpuTimestampPeriod = gpuTimingAvailable ? physicalDeviceProperties.limits.timestampPeriod : 0.0;
+		gpuTimestampMask = timestampValidBits >= 64 ? ~u64{0} : (u64{1} << timestampValidBits) - 1;
 		if (gpuTimingAvailable)
 		{
 			vk::QueryPoolCreateInfo queryPoolInfo {};
@@ -711,15 +713,7 @@ void VulkanContext::CreateSwapChain()
 				WARN_LOG(RENDERER, "VulkanContext::CreateSwapChain: waitForFences failed %d", (int)res);
 		}
 		inFlightObjects.clear();
-		// A resize waits for the graphics queue, but a PVR command buffer may have
-		// started a timestamp pair whose matching present command is discarded.
-		// Drop that incomplete sample before reusing query slots.
-		gpuTimingFenceIndices.fill(-1);
-		gpuTimingEpochs.fill(0);
-		gpuTimingReadIndex = 0;
-		gpuTimingWriteIndex = 0;
-		gpuTimingWaitingCount = 0;
-		gpuTimingActive = false;
+		ResetGpuTiming();
 		overlay->Term();
 		framebuffers.clear();
 		drawFences.clear();
@@ -1052,7 +1046,6 @@ void VulkanContext::EndFrame(vk::CommandBuffer overlayCmdBuffer)
 		return;
 	vk::CommandBuffer commandBuffer = *commandBuffers[currentImage];
 	commandBuffer.endRenderPass();
-	EndGpuTiming(commandBuffer);
 	commandBuffer.end();
 	vk::PipelineStageFlags wait_stage(vk::PipelineStageFlagBits::eColorAttachmentOutput);
 	std::vector<vk::CommandBuffer> allCmdBuffers;
@@ -1062,6 +1055,15 @@ void VulkanContext::EndFrame(vk::CommandBuffer overlayCmdBuffer)
 	vk::SubmitInfo submitInfo(*imageAcquiredSemaphores[currentSemaphore], wait_stage, allCmdBuffers, *renderCompleteSemaphores[currentSemaphore]);
 	device->resetFences(*drawFences[currentImage]);
 	graphicsQueue.submit(submitInfo, *drawFences[currentImage]);
+	// Both timestamps were written by earlier renderer submissions on this
+	// queue. This later fence proves those writes completed without extending
+	// the measured interval through presentation or unrelated RTT work.
+	for (std::size_t i = 0; i < gpuTimingWaitingCount; ++i)
+	{
+		const std::size_t slot = (gpuTimingReadIndex + i) % GpuTimingQueryCount;
+		if (gpuTimingFenceIndices[slot] < 0)
+			gpuTimingFenceIndices[slot] = static_cast<int>(currentImage);
+	}
 	assert(rendering);
 	rendering = false;
 	renderDone = true;
@@ -1083,9 +1085,12 @@ void VulkanContext::pollGpuTiming()
 		const vk::Result result = device->getQueryPoolResults(*gpuTimingQueryPool,
 			static_cast<std::uint32_t>(gpuTimingReadIndex * 2), 2, sizeof(timestamps), timestamps.data(), sizeof(std::uint64_t),
 			vk::QueryResultFlagBits::e64);
-		if (result == vk::Result::eSuccess && timestamps[1] >= timestamps[0])
+		if (result == vk::Result::eSuccess)
 		{
-			const double nanoseconds = static_cast<double>(timestamps[1] - timestamps[0]) * gpuTimestampPeriod;
+			// Timestamp counters wrap at the queue's valid bit width, which may
+			// be narrower than the 64-bit query result even on a 64-bit host.
+			const u64 ticks = (timestamps[1] - timestamps[0]) & gpuTimestampMask;
+			const double nanoseconds = static_cast<double>(ticks) * gpuTimestampPeriod;
 			performance_overlay::recordGpuTimingSample(
 				static_cast<std::uint64_t>(nanoseconds), gpuTimingEpochs[gpuTimingReadIndex]);
 		}
@@ -1126,11 +1131,24 @@ void VulkanContext::EndGpuTiming(vk::CommandBuffer commandBuffer)
 
 	const std::uint32_t firstQuery = static_cast<std::uint32_t>(gpuTimingWriteIndex * 2);
 	commandBuffer.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, *gpuTimingQueryPool, firstQuery + 1);
-	gpuTimingFenceIndices[gpuTimingWriteIndex] = static_cast<int>(currentImage);
+	// The presentation fence is assigned only after the renderer command
+	// buffer has been submitted. Never poll an old, still-signaled fence.
+	gpuTimingFenceIndices[gpuTimingWriteIndex] = -1;
 	gpuTimingWriteIndex = (gpuTimingWriteIndex + 1) % GpuTimingQueryCount;
 	++gpuTimingWaitingCount;
 	gpuTimingActive = false;
 #endif
+}
+
+void VulkanContext::ResetGpuTiming()
+{
+	gpuTimingFenceIndices.fill(-1);
+	gpuTimingEpochs.fill(0);
+	gpuTimingReadIndex = 0;
+	gpuTimingWriteIndex = 0;
+	gpuTimingWaitingCount = 0;
+	gpuTimingActive = false;
+	performance_overlay::setGpuTimingSupported(false);
 }
 
 void VulkanContext::Present() noexcept
@@ -1140,6 +1158,8 @@ void VulkanContext::Present() noexcept
 		try {
 			DoSwapAutomation();
 			vk::Result res = swappyvk::present(presentQueue, vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentSemaphore]), 1, &(*swapChain), &currentImage));
+			if (res == vk::Result::eSuccess || res == vk::Result::eSuboptimalKHR)
+				performance_overlay::recordPresentedFrame();
 #if defined(VK_USE_PLATFORM_METAL_EXT) || defined(__APPLE__)
 			// presentKHR lists eSuboptimalKHR as a success code so it is
 			// returned rather than thrown. Treat it as a request to
@@ -1162,6 +1182,8 @@ void VulkanContext::Present() noexcept
 				{
 					PresentFrame(vk::Image(), lastFrameView, lastFrameExtent, lastFrameAR);
 					res = presentQueue.presentKHR(vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentSemaphore]), 1, &(*swapChain), &currentImage));
+					if (res == vk::Result::eSuccess || res == vk::Result::eSuboptimalKHR)
+						performance_overlay::recordPresentedFrame();
 					currentSemaphore = (currentSemaphore + 1) % renderCompleteSemaphores.size();
 					if (res == vk::Result::eSuboptimalKHR)
 					{
@@ -1350,12 +1372,8 @@ void VulkanContext::term()
 	}
 	overlay.reset();
 	gpuTimingQueryPool.reset();
-	gpuTimingFenceIndices.fill(-1);
-	gpuTimingEpochs.fill(0);
-	gpuTimingWaitingCount = 0;
-	gpuTimingActive = false;
+	ResetGpuTiming();
 	gpuTimingAvailable = false;
-	performance_overlay::setGpuTimingSupported(false);
 	ShaderCompiler::Term();
 	swapChain.reset();
 	imageViews.clear();

@@ -2,6 +2,7 @@
     Created on: Oct 2, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -39,6 +40,7 @@ bool BaseVulkanRenderer::BaseInit(vk::RenderPass renderPass, int subpass)
 void BaseVulkanRenderer::Term()
 {
 	GetContext()->WaitIdle();
+	GetContext()->ResetGpuTiming();
 	GetContext()->PresentFrame(nullptr, nullptr, vk::Extent2D(), 0);
 #if defined(VIDEO_ROUTING) && defined(TARGET_MAC)
 	os_VideoRoutingTermVk();

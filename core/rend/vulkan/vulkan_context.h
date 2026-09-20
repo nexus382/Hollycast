@@ -111,6 +111,8 @@ public:
 	void EndFrame(vk::CommandBuffer cmdBuffer = vk::CommandBuffer());
 	void BeginGpuTiming(vk::CommandBuffer commandBuffer);
 	void EndGpuTiming(vk::CommandBuffer commandBuffer);
+	// Call only after the graphics queue is idle, before discarding renderer work.
+	void ResetGpuTiming();
 	void Present() noexcept;
 	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio) noexcept;
 	void PresentLastFrame();
@@ -282,6 +284,7 @@ private:
 	bool gpuTimingAvailable = false;
 	bool gpuTimingActive = false;
 	double gpuTimestampPeriod = 0.0;
+	u64 gpuTimestampMask = 0;
 
 	std::unique_ptr<QuadPipeline> quadPipelineWithAlpha;
 	std::unique_ptr<QuadPipeline> quadPipeline;

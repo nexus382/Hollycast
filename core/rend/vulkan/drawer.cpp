@@ -726,6 +726,7 @@ void ScreenDrawer::EndRenderPass()
 	if (!renderPassStarted)
 		return;
 	currentCommandBuffer.endRenderPass();
+	GetContext()->EndGpuTiming(currentCommandBuffer);
 	if (emulateFramebuffer)
 	{
 		scaleAndWriteFramebuffer(currentCommandBuffer, colorAttachments[GetCurrentImage()].get());

@@ -11,6 +11,9 @@ namespace performance_overlay {
 
 int mode();
 void draw();
+// May be called from emulator lifecycle callbacks. UI-owned history is reset
+// on the next draw; producers stop immediately while the emulator is paused.
+void reset();
 
 // Producers use this atomic gate before collecting diagnostics. It is
 // intentionally independent of config access so disabled collection stays

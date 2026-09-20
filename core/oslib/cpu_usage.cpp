@@ -12,6 +12,7 @@
 #include <windows.h>
 #elif defined(__APPLE__)
 #include <mach/mach.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #elif defined(__linux__) || defined(__ANDROID__)
 #include <fstream>
@@ -86,7 +87,8 @@ Snapshot readSnapshot()
 
 	host_cpu_load_info_data_t cpuInfo {};
 	mach_msg_type_number_t cpuInfoCount = HOST_CPU_LOAD_INFO_COUNT;
-	if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, reinterpret_cast<host_info_t>(&cpuInfo), &cpuInfoCount) == KERN_SUCCESS)
+	const mach_port_t host = mach_host_self();
+	if (host_statistics(host, HOST_CPU_LOAD_INFO, reinterpret_cast<host_info_t>(&cpuInfo), &cpuInfoCount) == KERN_SUCCESS)
 	{
 		snapshot.systemTotalTicks = static_cast<std::uint64_t>(cpuInfo.cpu_ticks[CPU_STATE_USER])
 			+ cpuInfo.cpu_ticks[CPU_STATE_NICE] + cpuInfo.cpu_ticks[CPU_STATE_SYSTEM] + cpuInfo.cpu_ticks[CPU_STATE_IDLE];
@@ -94,13 +96,16 @@ Snapshot readSnapshot()
 			+ cpuInfo.cpu_ticks[CPU_STATE_NICE] + cpuInfo.cpu_ticks[CPU_STATE_SYSTEM];
 		snapshot.systemValid = true;
 	}
+	mach_port_deallocate(mach_task_self(), host);
 
-	task_thread_times_info_data_t processInfo {};
-	mach_msg_type_number_t processInfoCount = TASK_THREAD_TIMES_INFO_COUNT;
-	if (task_info(mach_task_self(), TASK_THREAD_TIMES_INFO, reinterpret_cast<task_info_t>(&processInfo), &processInfoCount) == KERN_SUCCESS)
+	// RUSAGE_SELF includes exited workers; live-thread totals can go backwards
+	// when a worker ends and would lose its CPU work between samples.
+	rusage processInfo {};
+	if (getrusage(RUSAGE_SELF, &processInfo) == 0)
 	{
-		snapshot.processMicroseconds = static_cast<std::uint64_t>(processInfo.user_time.seconds + processInfo.system_time.seconds) * 1000000
-			+ processInfo.user_time.microseconds + processInfo.system_time.microseconds;
+		snapshot.processMicroseconds = (static_cast<std::uint64_t>(processInfo.ru_utime.tv_sec)
+			+ static_cast<std::uint64_t>(processInfo.ru_stime.tv_sec)) * 1000000
+			+ processInfo.ru_utime.tv_usec + processInfo.ru_stime.tv_usec;
 		snapshot.processValid = true;
 	}
 #elif defined(__linux__) || defined(__ANDROID__)
