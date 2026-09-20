@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -143,11 +144,8 @@ public:
 			}
 			ImTextureID texId = vkTex.textureId = (ImTextureID)ImGui_ImplVulkan_AddTexture(sampler, (VkImageView)vkTex.texture->GetImageView(),
 					VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-			// TODO update existing texture
-			//auto it = textures.find(name);
-			//if (it != textures.end() && it->second.texture != nullptr)
-			//	textureCache.DestroyLater(it->second.texture.get());
-
+			// Keep the old image and descriptor alive until in-flight draws finish.
+			deleteTexture(name);
 			textures[name] = std::move(vkTex);
 
 			return texId;

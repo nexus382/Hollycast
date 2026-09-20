@@ -163,16 +163,16 @@ static bool shouldShowMenuBar()
 	if (io.MouseSource == ImGuiMouseSource_TouchScreen)
 	{
 #if defined(__ANDROID__)
-		// Settings rows also use ImGui popups. Do not treat those popups as a
+		// Settings and the controller editor use ImGui popups. Do not treat them as a
 		// reason to reveal the top menu on Android: showing the menu changes the
 		// Settings window position between OpenPopup() and BeginPopup(), which can
 		// make row value popups flicker and fail unless the menu was already shown.
-		const bool settingsOwnsTouch = gui_state == GuiState::Settings;
+		const bool panelOwnsTouch = gui_state == GuiState::Settings || gui_state == GuiState::VJoyEditCommands;
 		// The temporary reveal timer is only for an idle gameplay menu. Once a
 		// gameplay popup is open, keep the menu bar in place until it closes so a
 		// nested menu can be selected without racing the timeout.
-		const bool gameplayPopupOpen = !settingsOwnsTouch && popupOpen;
-		if (!settingsOwnsTouch && !popupOpen && pointerAtTop && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+		const bool gameplayPopupOpen = !panelOwnsTouch && popupOpen;
+		if (!panelOwnsTouch && !popupOpen && pointerAtTop && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 			touchMenuVisibleUntil = ImGui::GetTime() + 5.0;
 		return gameplayPopupOpen || ImGui::GetTime() < touchMenuVisibleUntil;
 #else

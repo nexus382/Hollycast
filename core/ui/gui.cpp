@@ -3293,6 +3293,10 @@ void gui_setState(GuiState newState)
 {
 	if (gui_state != newState)
 	{
+		if ((gui_state == GuiState::VJoyEdit || gui_state == GuiState::VJoyEditCommands)
+				&& newState != GuiState::VJoyEdit && newState != GuiState::VJoyEditCommands)
+			// Menu navigation cancels unsaved edits; Done has already ended the session.
+			vgamepad::stopEditing(true);
 		if (newState == GuiState::Main && gui_state == GuiState::Closed)
 			clearVmuIconLookups();
 		resetLibraryLongPress();

@@ -86,6 +86,7 @@ void show();
 void hide();
 void draw();
 void startEditing();
+void stopEditing(bool canceled);
 void pauseEditing();
 void setEditMode(bool editing);
 void resetEditing();
@@ -110,6 +111,7 @@ static inline void show() {}
 static inline void hide() {}
 static inline void draw() {}
 static inline void startEditing() {}
+static inline void stopEditing(bool canceled) {}
 static inline void pauseEditing() {}
 static inline void displayCommands() {}
 static inline void applyUiScale() {}

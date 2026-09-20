@@ -45,16 +45,15 @@
 
 namespace vgamepad
 {
-static void stopEditing(bool canceled);
 static void loadLayout();
 static void drawCustomizePanel();
 static void drawSelectedElement();
 static void drawTouchIndicator(bool pointerOverUi);
 static void handleCustomizeDrag(bool pointerOverUi);
+static void switchEditingLayout(bool console);
 static Element controlToElement(ControlId control);
 static int getControlTransparency(ControlId control);
 static ImVec2 getControlHitPadding(ControlId control);
-static float getFingerHitPadding();
 
 struct Control
 {
@@ -71,6 +70,7 @@ struct Control
 static Control Controls[_Count];
 static bool Visible = true;
 static bool Editing;
+static bool EditConsoleLayout;
 static bool serviceMode;
 static float AlphaTrans = 1.f;
 static ImVec2 StickPos;	// analog stick position [-1, 1]
@@ -78,13 +78,14 @@ static Element SelectedElement = Elem_DPad;
 static Element DraggedElement = Elem_None;
 static ImVec2 LastDragMousePos;
 static std::string PendingImagePath;
+static bool DreamcastImageSwapsAB;
 constexpr float REFERENCE_WIDTH = 640.f;
 constexpr float REFERENCE_HEIGHT = 480.f;
 constexpr float MIN_ELEMENT_SCALE = 0.5f;
 constexpr float MAX_ELEMENT_SCALE = 1.8f;
 constexpr float MAX_TOUCH_PADDING = 24.f;
+constexpr float MAX_FINGER_PADDING = MAX_TOUCH_PADDING * 3.f;
 constexpr int MAX_PERCENT = 100;
-constexpr int MIN_TOUCH_SIZE = -50;
 constexpr s64 MAX_BUTTON_IMAGE_FILE_SIZE = 4 * 1024 * 1024;
 constexpr int MAX_BUTTON_IMAGE_WIDTH = 4096;
 constexpr int MAX_BUTTON_IMAGE_HEIGHT = 2048;
@@ -92,18 +93,57 @@ constexpr char const *BTN_PATH = "picture/buttons.png";
 constexpr char const *BTN_PATH_ARCADE = "picture/buttons-arcade.png";
 constexpr char const *CFG_SECTION = "vgamepad";
 
+struct ButtonImage {
+	const char *label;
+	const char *path;
+	bool swapsAB = false; // Some Dreamcast atlases use X/Y/A/B instead of X/Y/B/A.
+};
+static constexpr ButtonImage DreamcastImages[] {
+	{ Tnop("Default"), BTN_PATH },
+	{ Tnop("Black / Color"), "picture/blkclrDC.png", true },
+	{ Tnop("Dark Gray / White"), "picture/drkgreywhtsolidDC.png", true },
+	{ Tnop("Gray / White"), "picture/greywhitesolidDC.png", true },
+	{ Tnop("Bright Neon"), "picture/briteneonDC.png" },
+	{ Tnop("Dim Neon"), "picture/NeondimDC.png" },
+};
+static constexpr ButtonImage ArcadeImages[] {
+	{ Tnop("Default"), BTN_PATH_ARCADE },
+	{ Tnop("Black / Gray"), "picture/blkgryARC.png" },
+	{ Tnop("Black / Color"), "picture/blkcolorARC.png" },
+	{ Tnop("Gray / White"), "picture/grywhitesldARC.png" },
+	{ Tnop("White Outline"), "picture/whitelineARC.png" },
+	{ Tnop("Neon"), "picture/neonARC.png" },
+};
+
+static bool isConsoleLayout() {
+	// Preview either controller without changing the running game's platform.
+	return Editing ? EditConsoleLayout : settings.platform.isConsole();
+}
+
+static const char *getLayoutCfgSection() {
+	// Preserve existing Dreamcast layouts; arcade edits have their own storage.
+	return isConsoleLayout() ? CFG_SECTION : "vgamepad_arcade";
+}
+
 void displayCommands()
 {
-	draw();
+	// Apply preset changes and Done/Cancel before queuing any atlas draw calls.
 	drawCustomizePanel();
+	const bool pointerOverUi = ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)
+			|| ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+	handleCustomizeDrag(pointerOverUi);
+	draw();
+	if (!ImGui::IsAnyItemActive())
+		drawSelectedElement();
+	drawTouchIndicator(pointerOverUi);
 }
 
 static const char *getButtonsResPath() {
-	return settings.platform.isConsole() ? BTN_PATH : BTN_PATH_ARCADE;
+	return isConsoleLayout() ? BTN_PATH : BTN_PATH_ARCADE;
 }
 
 static const char *getButtonsCfgName() {
-	return settings.platform.isConsole() ? "image" : "image_arcade";
+	return isConsoleLayout() ? "image" : "image_arcade";
 }
 
 static bool isValidButtonImage(int width, int height)
@@ -142,6 +182,13 @@ static bool loadOSDButtonsResource(const char *path, ImTextureID *textureId = nu
 	if (imageData == nullptr)
 		return false;
 	const bool loaded = updateOSDButtons(imageData, width, height, textureId);
+	if (loaded && isConsoleLayout())
+		for (const auto& image : DreamcastImages)
+			if (strcmp(path, image.path) == 0)
+			{
+				DreamcastImageSwapsAB = image.swapsAB;
+				break;
+			}
 	stbi_image_free(imageData);
 	return loaded;
 }
@@ -150,6 +197,11 @@ static bool loadOSDButtons(const std::string& path)
 {
 	if (path.empty())
 		return false;
+	// Only load bundled atlases belonging to the active controller layout.
+	const auto& images = isConsoleLayout() ? DreamcastImages : ArcadeImages;
+	for (const auto& image : images)
+		if (path == image.path)
+			return loadOSDButtonsResource(image.path);
 	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
 	if (file == nullptr)
 		return false;
@@ -167,6 +219,8 @@ static bool loadOSDButtons(const std::string& path)
 	if (imageData == nullptr)
 		return false;
 	const bool loaded = updateOSDButtons(imageData, width, height);
+	if (loaded && isConsoleLayout())
+		DreamcastImageSwapsAB = false;
 	stbi_image_free(imageData);
 	return loaded;
 }
@@ -174,7 +228,7 @@ static bool loadOSDButtons(const std::string& path)
 static ImTextureID loadDefaultOSDButtons()
 {
 	ImTextureID id{};
-	if (settings.platform.isConsole())
+	if (isConsoleLayout())
 	{
 		// legacy buttons.png in data folder
 		if (loadOSDButtons(get_readonly_data_path("buttons.png")))
@@ -189,7 +243,7 @@ static ImTextureID loadDefaultOSDButtons()
 
 static ImTextureID loadOSDButtons()
 {
-	const std::string path = config::loadStr(CFG_SECTION, getButtonsCfgName());
+	const std::string path = Editing ? PendingImagePath : config::loadStr(CFG_SECTION, getButtonsCfgName());
 	if (loadOSDButtons(path))
 		return {};
 	return loadDefaultOSDButtons();
@@ -309,21 +363,18 @@ ControlId hitTest(float x, float y)
 
 	ControlId closestControl = None;
 	float closestDistanceSquared = std::numeric_limits<float>::max();
-	const float fingerPadding = getFingerHitPadding();
 	for (const auto& control : Controls)
 	{
 		const ControlId controlId = static_cast<ControlId>(&control - &Controls[0]);
-		const ImVec2 unitPadding = getControlHitPadding(controlId);
-		const ImVec2 padding = unitPadding + ImVec2(fingerPadding, fingerPadding);
+		const ImVec2 padding = getControlHitPadding(controlId);
 		if (control.disabled
 				|| x < control.pos.x - padding.x || x >= control.pos.x + control.size.x + padding.x
 				|| y < control.pos.y - padding.y || y >= control.pos.y + control.size.y + padding.y)
 			continue;
 
-		// Rank overlaps against the unexpanded target, including any user shrinkage.
-		const ImVec2 inset(-std::min(unitPadding.x, 0.f), -std::min(unitPadding.y, 0.f));
-		const float nearestX = std::clamp(x, control.pos.x + inset.x, control.pos.x + control.size.x - inset.x);
-		const float nearestY = std::clamp(y, control.pos.y + inset.y, control.pos.y + control.size.y - inset.y);
+		// Prefer the visible button nearest the touch when expanded targets overlap.
+		const float nearestX = std::clamp(x, control.pos.x, control.pos.x + control.size.x);
+		const float nearestY = std::clamp(y, control.pos.y, control.pos.y + control.size.y);
 		const float dx = x - nearestX;
 		const float dy = y - nearestY;
 		const float distanceSquared = dx * dx + dy * dy;
@@ -363,8 +414,8 @@ static u32 buttonMap[_Count] {
 
 void setButtonMap()
 {
-	const bool arcade = settings.platform.isArcade();
-	if (serviceMode)
+	const bool arcade = !isConsoleLayout();
+	if (serviceMode && !Editing)
 	{
 		buttonMap[A] = DC_BTN_D;
 		buttonMap[B] = DC_DPAD2_UP;
@@ -433,7 +484,13 @@ static void drawButtonDim(ImDrawList *drawList, const Control& control, int stat
 
 	const ImVec2* uv0 = &control.uv0;
 	const ImVec2* uv1 = &control.uv1;
-	if (serviceMode)
+	if (isConsoleLayout() && DreamcastImageSwapsAB && (controlId == A || controlId == B))
+	{
+		const Control& artwork = Controls[controlId == A ? B : A];
+		uv0 = &artwork.uv0;
+		uv1 = &artwork.uv1;
+	}
+	if (serviceMode && !Editing)
 		switch (controlId)
 		{
 		case A:
@@ -471,7 +528,9 @@ void draw()
 	}
 	if (!config::VirtualGamepadEnabled && !Editing)
 		return;
-		
+	// Resolve the active atlas before choosing any preset-specific UVs.
+	ImguiVGamepadTexture().getId();
+
 	ImDrawList *drawList = ImGui::GetBackgroundDrawList();
 	drawButton(drawList, Controls[Left], kcode[0] & buttonMap[Left]);
 	drawButton(drawList, Controls[Up], kcode[0] & buttonMap[Up]);
@@ -518,32 +577,29 @@ struct LayoutElement
 	float w, h;			// normalized coordinates [0, 1], scaled with uiScale
 	float scale;		// user scale
 	int transparency = 0;	// per-unit transparency [0, 100]
-	int touchSize = 0;		// target shrinkage [-50, 0] or extra padding [0, 100]
+	int touchSize = 0;		// extra padding [0, 100]; zero matches the rendered bounds
 
 	void load()
 	{
-		x = config::loadFloat(CFG_SECTION, name + "_x", x);
-		y = config::loadFloat(CFG_SECTION, name + "_y", y);
-		const float loadedScale = config::loadFloat(CFG_SECTION, name + "_scale", scale);
+		const char *section = getLayoutCfgSection();
+		x = config::loadFloat(section, name + "_x", x);
+		y = config::loadFloat(section, name + "_y", y);
+		const float loadedScale = config::loadFloat(section, name + "_scale", scale);
 		scale = std::isfinite(loadedScale)
 				? std::clamp(loadedScale, MIN_ELEMENT_SCALE, MAX_ELEMENT_SCALE)
 				: 1.f;
 		const int legacyTransparency = std::clamp(static_cast<int>(config::VirtualGamepadTransparency), 0, MAX_PERCENT);
-		transparency = std::clamp(config::loadInt(CFG_SECTION, name + "_transparency", legacyTransparency), 0, MAX_PERCENT);
-		touchSize = std::clamp(config::loadInt(CFG_SECTION, name + "_touch_size", touchSize), MIN_TOUCH_SIZE, MAX_PERCENT);
+		transparency = std::clamp(config::loadInt(section, name + "_transparency", legacyTransparency), 0, MAX_PERCENT);
+		touchSize = std::clamp(config::loadInt(section, name + "_touch_size", touchSize), 0, MAX_PERCENT);
 	}
 	void save() const
 	{
-		config::saveFloat(CFG_SECTION, name + "_x", x);
-		config::saveFloat(CFG_SECTION, name + "_y", y);
-		config::saveFloat(CFG_SECTION, name + "_scale", scale);
-		config::saveInt(CFG_SECTION, name + "_transparency", transparency);
-		config::saveInt(CFG_SECTION, name + "_touch_size", touchSize);
-	}
-
-	bool hitTest(float nx, float ny) const {
-		return nx >= x && nx < x + w * scale
-			&& ny >= y && ny < y + h * scale;
+		const char *section = getLayoutCfgSection();
+		config::saveFloat(section, name + "_x", x);
+		config::saveFloat(section, name + "_y", y);
+		config::saveFloat(section, name + "_scale", scale);
+		config::saveInt(section, name + "_transparency", transparency);
+		config::saveInt(section, name + "_touch_size", touchSize);
 	}
 
 	void applyUiScale()
@@ -601,9 +657,15 @@ struct LayoutState
 	int touchSize;
 };
 
-struct EditSessionState
+struct LayoutEditState
 {
 	std::array<LayoutState, Elem_Count> layout;
+	std::string imagePath;
+};
+
+struct EditSessionState
+{
+	std::array<LayoutEditState, 2> layouts;
 	bool enabled;
 	bool hapticFeedback;
 	bool visualFeedback;
@@ -611,9 +673,9 @@ struct EditSessionState
 	int transparency;
 	int idleTimeout;
 	int fingerSize;
-	std::string imagePath;
 };
 static EditSessionState EditSession;
+static std::array<LayoutEditState, 2> PendingLayouts;
 
 static bool isValidElement(Element element)
 {
@@ -679,20 +741,17 @@ static ImVec2 getControlHitPadding(ControlId control)
 	if (!isValidElement(element))
 		return ImVec2(0.f, 0.f);
 	const int touchSize = Layout[element].touchSize;
-	if (touchSize < 0)
-	{
-		// Contract each axis around the center, following the unit's visual scale.
-		// Keep the existing zero and positive settings unchanged for saved layouts.
-		return Controls[control].size * (0.5f * touchSize / MAX_PERCENT);
-	}
-	const float padding = MAX_TOUCH_PADDING * touchSize / MAX_PERCENT;
+	const float fingerPadding = MAX_FINGER_PADDING
+			* std::clamp(static_cast<int>(config::VirtualGamepadFingerSize), 0, MAX_PERCENT) / MAX_PERCENT;
+	// Scale all extra reach with the rendered button and Touch Size. Adding a
+	// fixed finger radius afterward would enlarge the target even at Touch Size 0.
+	const ImVec2 size = Controls[control].size;
+	// For the D-pad, stick and face buttons, 100 now equals the old 30.
+	const float range = element == Elem_DPad || element == Elem_Analog || element == Elem_Buttons
+			|| element == Elem_Btn4 || element == Elem_Btn5 ? 0.3f : 1.f;
+	const float padding = range * (MAX_TOUCH_PADDING + fingerPadding)
+			* (std::min(size.x, size.y) / 64.f) * touchSize / MAX_PERCENT;
 	return ImVec2(padding, padding);
-}
-
-static float getFingerHitPadding()
-{
-	return MAX_TOUCH_PADDING * std::clamp(static_cast<int>(config::VirtualGamepadFingerSize), 0, MAX_PERCENT)
-			/ MAX_PERCENT;
 }
 
 static void applyLayout()
@@ -826,12 +885,12 @@ static void resetElement(Element element)
 	applyLayout();
 }
 
-static void captureEditSession()
+static void captureLayoutEditState(LayoutEditState& state)
 {
 	for (int i = 0; i < Elem_Count; i++)
 	{
 		const LayoutElement& element = Layout[i];
-		EditSession.layout[i] = {
+		state.layout[i] = {
 			element.x,
 			element.y,
 			element.scale,
@@ -839,6 +898,29 @@ static void captureEditSession()
 			element.touchSize,
 		};
 	}
+	state.imagePath = PendingImagePath;
+}
+
+static void restoreLayoutEditState(const LayoutEditState& state)
+{
+	for (int i = 0; i < Elem_Count; i++)
+	{
+		LayoutElement& element = Layout[i];
+		const LayoutState& saved = state.layout[i];
+		element.x = saved.x;
+		element.y = saved.y;
+		element.scale = saved.scale;
+		element.transparency = saved.transparency;
+		element.touchSize = saved.touchSize;
+	}
+	PendingImagePath = state.imagePath;
+	applyLayout();
+	// Reload even an empty path so switching or Cancel also restores default art.
+	loadOSDButtons();
+}
+
+static void captureEditSession()
+{
 	EditSession.enabled = static_cast<bool>(config::VirtualGamepadEnabled);
 	EditSession.hapticFeedback = static_cast<bool>(config::VirtualGamepadHapticFeedback);
 	EditSession.visualFeedback = static_cast<bool>(config::VirtualGamepadVisualFeedback);
@@ -846,22 +928,21 @@ static void captureEditSession()
 	EditSession.transparency = static_cast<int>(config::VirtualGamepadTransparency);
 	EditSession.idleTimeout = static_cast<int>(config::VirtualGamepadIdleTimeout);
 	EditSession.fingerSize = static_cast<int>(config::VirtualGamepadFingerSize);
-	EditSession.imagePath = config::loadStr(CFG_SECTION, getButtonsCfgName(), "");
+	const bool console = EditConsoleLayout;
+	for (int i = 0; i < 2; i++)
+	{
+		EditConsoleLayout = i == 0;
+		loadLayout();
+		PendingImagePath = config::loadStr(CFG_SECTION, getButtonsCfgName(), "");
+		captureLayoutEditState(EditSession.layouts[i]);
+	}
+	PendingLayouts = EditSession.layouts;
+	EditConsoleLayout = console;
+	restoreLayoutEditState(PendingLayouts[console ? 0 : 1]);
 }
 
-static void restoreEditSession()
+static void restoreGlobalEditSettings()
 {
-	const bool imageChanged = PendingImagePath != EditSession.imagePath;
-	for (int i = 0; i < Elem_Count; i++)
-	{
-		LayoutElement& element = Layout[i];
-		const LayoutState& state = EditSession.layout[i];
-		element.x = state.x;
-		element.y = state.y;
-		element.scale = state.scale;
-		element.transparency = state.transparency;
-		element.touchSize = state.touchSize;
-	}
 	config::VirtualGamepadEnabled = EditSession.enabled;
 	config::VirtualGamepadHapticFeedback = EditSession.hapticFeedback;
 	config::VirtualGamepadVisualFeedback = EditSession.visualFeedback;
@@ -869,15 +950,6 @@ static void restoreEditSession()
 	config::VirtualGamepadTransparency = EditSession.transparency;
 	config::VirtualGamepadIdleTimeout = EditSession.idleTimeout;
 	config::VirtualGamepadFingerSize = EditSession.fingerSize;
-	saveCustomization(EditSession.imagePath);
-	if (imageChanged)
-	{
-		// The saved path is restored first so an unavailable custom image falls
-		// back to the default artwork instead of leaving the replacement active.
-		loadOSDButtons();
-	}
-	PendingImagePath = EditSession.imagePath;
-	applyLayout();
 }
 
 static bool getElementScreenBounds(Element element, ImVec2& min, ImVec2& max)
@@ -911,10 +983,8 @@ static bool getControlScreenBounds(ControlId controlId, ImVec2& min, ImVec2& max
 	min.x += screenOffsetX;
 	max = (control.pos + control.size) * screenScale;
 	max.x += screenOffsetX;
-	// Keep this calculation identical to hitTest(): blue outlines represent
-	// the actual target after unit resizing and finger expansion are combined.
-	const float fingerPadding = getFingerHitPadding();
-	const ImVec2 padding = (getControlHitPadding(controlId) + ImVec2(fingerPadding, fingerPadding)) * screenScale;
+	// Share the complete padding with hitTest() so the blue outlines match input.
+	const ImVec2 padding = getControlHitPadding(controlId) * screenScale;
 	min -= padding;
 	max += padding;
 	return true;
@@ -956,7 +1026,11 @@ static void drawTouchIndicator(bool pointerOverUi)
 
 	ImDrawList *drawList = ImGui::GetBackgroundDrawList();
 	const ImVec2 position = ImGui::GetIO().MousePos;
-	const float radius = getFingerHitPadding() * settings.display.height / REFERENCE_HEIGHT;
+	const float screenScale = settings.display.height / REFERENCE_HEIGHT;
+	const float screenOffsetX = (settings.display.width - screenScale * REFERENCE_WIDTH) / 2.f;
+	const ControlId control = hitTest((position.x - screenOffsetX) / screenScale, position.y / screenScale);
+	// Show the effective extra reach of this target, including its current scale.
+	const float radius = control == None ? 0.f : getControlHitPadding(control).x * screenScale;
 	drawList->AddCircleFilled(position, uiScaled(4.f), IM_COL32(255, 255, 255, 245), 24);
 	if (radius > 0.f)
 		drawList->AddCircle(position, radius, IM_COL32(255, 202, 67, 245), 32, uiScaled(2.f));
@@ -1023,26 +1097,19 @@ static void drawCustomizePanel()
 	ImGui::Begin(windowTitle.c_str(), nullptr,
 			ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
 
+	ImGui::TextUnformatted(i18n::T("Controller Layout"));
+	if (ImGui::RadioButton("Dreamcast", EditConsoleLayout))
+		switchEditingLayout(true);
+	ImGui::SameLine();
+	if (ImGui::RadioButton(i18n::T("Arcade"), !EditConsoleLayout))
+		switchEditingLayout(false);
+	ImGui::Separator();
+
 	if (!isValidElement(SelectedElement))
 		SelectedElement = Elem_DPad;
 
 	ImGui::Text("%s: %s", i18n::T("Selected"), getElementLabel(SelectedElement));
-	ImGui::SetNextItemWidth(-1.f);
-	if (ImGui::BeginCombo("##SelectedVirtualControllerUnit", getElementLabel(SelectedElement)))
-	{
-		for (int i = Elem_DPad; i < Elem_Count; i++)
-		{
-			const Element element = static_cast<Element>(i);
-			const bool selected = element == SelectedElement;
-			const std::string itemLabel = std::string(getElementLabel(element))
-					+ "###VirtualControllerUnit" + Layout[element].name;
-			if (ImGui::Selectable(itemLabel.c_str(), selected))
-				SelectedElement = element;
-			if (selected)
-				ImGui::SetItemDefaultFocus();
-		}
-		ImGui::EndCombo();
-	}
+	ImGui::TextWrapped("%s", i18n::T("Touch a button to select it. Drag to move it."));
 
 	ImGui::Separator();
 	bool enabled = static_cast<bool>(config::VirtualGamepadEnabled);
@@ -1081,8 +1148,8 @@ static void drawCustomizePanel()
 		selected.transparency = std::clamp(unitTransparency, 0, MAX_PERCENT);
 
 	int touchSize = selected.touchSize;
-	if (drawCustomizeSlider("VirtualControllerTouchSize", i18n::T("Touch Size"), touchSize, MIN_TOUCH_SIZE, MAX_PERCENT))
-		selected.touchSize = std::clamp(touchSize, MIN_TOUCH_SIZE, MAX_PERCENT);
+	if (drawCustomizeSlider("VirtualControllerTouchSize", i18n::T("Touch Size"), touchSize, 0, MAX_PERCENT))
+		selected.touchSize = std::clamp(touchSize, 0, MAX_PERCENT);
 
 	int scale = getElementScalePercent(SelectedElement);
 	if (drawCustomizeSlider("VirtualControllerScale", i18n::T("Scaling"), scale,
@@ -1099,7 +1166,32 @@ static void drawCustomizePanel()
 
 	const char *imagePickerLabel = i18n::T("Select a PNG file");
 	const std::string imagePickerTitle = std::string(imagePickerLabel) + "###VirtualControllerImagePicker";
-	if (drawCustomizeButton("VirtualControllerChooseImage", i18n::T("Choose Image..."), ImVec2(pairedButtonWidth, uiScaled(32))))
+	const auto& images = isConsoleLayout() ? DreamcastImages : ArcadeImages;
+	const char *preview = PendingImagePath.empty() ? i18n::T("Default") : i18n::T("Custom Image");
+	for (const auto& image : images)
+		if (PendingImagePath == image.path)
+			preview = i18n::T(image.label);
+	ImGui::Separator();
+	ImGui::TextUnformatted(isConsoleLayout() ? i18n::T("Dreamcast Images") : i18n::T("Arcade Images"));
+	ImGui::SetNextItemWidth(-1.f);
+	bool chooseImage = false;
+	if (ImGui::BeginCombo("##VirtualControllerImage", preview))
+	{
+		for (const auto& image : images)
+		{
+			ImguiID _(image.path);
+			const bool selected = PendingImagePath == image.path
+					|| (PendingImagePath.empty() && &image == &images[0]);
+			if (ImGui::Selectable(i18n::T(image.label), selected))
+				loadImage(image.path);
+			if (selected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::Separator();
+		chooseImage = ImGui::Selectable(i18n::T("CHOOSE IMG..."));
+		ImGui::EndCombo();
+	}
+	if (chooseImage)
 #ifdef __ANDROID__
 	{
 		if (!hostfs::addStorage(false, false, imagePickerLabel, [](bool cancelled, std::string path) {
@@ -1113,10 +1205,6 @@ static void drawCustomizePanel()
 		ImGui::OpenPopup(imagePickerTitle.c_str());
 	}
 #endif
-	ImGui::SameLine();
-	if (drawCustomizeButton("VirtualControllerDefaultImage", i18n::T("Use Default"), ImVec2(pairedButtonWidth, uiScaled(32))))
-		loadImage("");
-
 	select_file_popup(imagePickerTitle.c_str(), [](bool cancelled, std::string selection)
 			{
 				if (!cancelled)
@@ -1137,21 +1225,13 @@ static void drawCustomizePanel()
 		gui_setState(GuiState::Settings);
 	}
 
-	const bool panelControlsActive = ImGui::IsAnyItemActive();
-	const bool pointerOverUi = ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)
-			|| ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
 	ImGui::End();
-
-	handleCustomizeDrag(pointerOverUi);
-	if (!panelControlsActive)
-		drawSelectedElement();
-	drawTouchIndicator(pointerOverUi);
 }
 
 static void handleCustomizeDrag(bool pointerOverUi)
 {
 	ImGuiIO& io = ImGui::GetIO();
-	if (io.DisplaySize.x <= 0.f || io.DisplaySize.y <= 0.f)
+	if (!Editing || io.DisplaySize.x <= 0.f || io.DisplaySize.y <= 0.f)
 		return;
 
 	const ImVec2 mouse = io.MousePos;
@@ -1182,12 +1262,21 @@ Element layoutHitTest(float x, float y)
 	if (!std::isfinite(x) || !std::isfinite(y))
 		return Elem_None;
 
-	for (const auto& element : Layout)
-		if (element.hitTest(x, y))
+	const float dcw = REFERENCE_HEIGHT * static_cast<float>(settings.display.width) / settings.display.height;
+	x = x * dcw - (dcw - REFERENCE_WIDTH) / 2.f;
+	y *= REFERENCE_HEIGHT;
+	// Select only rendered controls, without invisible units or finger padding
+	// stealing a tap from the button the user can actually see.
+	for (int i = 0; i < _VisibleCount; i++)
+	{
+		const Control& control = Controls[i];
+		if (!control.disabled && x >= control.pos.x && x < control.pos.x + control.size.x
+				&& y >= control.pos.y && y < control.pos.y + control.size.y)
 		{
-			SelectedElement = static_cast<Element>(&element - &Layout[0]);
+			SelectedElement = controlToElement(static_cast<ControlId>(i));
 			return SelectedElement;
 		}
+	}
 	return Elem_None;
 }
 
@@ -1270,6 +1359,8 @@ static void disableControl(ControlId ctrlId)
 
 void startGame()
 {
+	// The previous game may have used the other platform's saved layout.
+	loadLayout();
 	enableAllControls();
 	serviceMode = false;
 	setButtonMap();
@@ -1494,29 +1585,59 @@ void startEditing()
 {
 	if (!Editing)
 	{
-		loadLayout();
+		EditConsoleLayout = settings.platform.isConsole();
+		Editing = true;
 		captureEditSession();
-		PendingImagePath = EditSession.imagePath;
+	}
+	switchEditingLayout(EditConsoleLayout);
+	show();
+	setEditMode(true);
+}
+
+static void switchEditingLayout(bool console)
+{
+	// Switching previews never saves: Done commits both layouts, Cancel restores both.
+	if (console != EditConsoleLayout)
+	{
+		captureLayoutEditState(PendingLayouts[EditConsoleLayout ? 0 : 1]);
+		EditConsoleLayout = console;
+		restoreLayoutEditState(PendingLayouts[console ? 0 : 1]);
 	}
 	enableAllControls();
-	show();
-	Editing = true;
-	setEditMode(true);
+	if (console)
+	{
+		disableControl(Btn4);
+		disableControl(Btn5);
+		disableControl(ServiceMode);
+		disableControl(InsertCard);
+	}
+	SelectedElement = Elem_DPad;
+	DraggedElement = Elem_None;
+	setButtonMap();
 }
 
 void pauseEditing() {
 	setEditMode(false);
 }
 
-static void stopEditing(bool canceled)
+void stopEditing(bool canceled)
 {
+	// A normal Done/Cancel is followed by the shared GUI exit cleanup.
+	if (!Editing)
+		return;
 	setEditMode(false);
 	DraggedElement = Elem_None;
+	captureLayoutEditState(PendingLayouts[EditConsoleLayout ? 0 : 1]);
 	if (canceled)
-		restoreEditSession();
-	else
+		restoreGlobalEditSettings();
+	for (int i = 0; i < 2; i++)
+	{
+		EditConsoleLayout = i == 0;
+		restoreLayoutEditState(canceled ? EditSession.layouts[i] : PendingLayouts[i]);
 		saveCustomization(PendingImagePath);
+	}
 	Editing = false;
+	startGame();
 }
 
 }	// namespace vgamepad
