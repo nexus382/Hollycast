@@ -107,6 +107,10 @@ and Host GPU graph options use 152 one-second samples. The CPU graph has a
 HollyCast-process line and a total-device line; the GPU graph only appears
 when the backend is returning real timestamp samples.
 
+Open the page directly through Settings > On Screen Display in the in-app
+dropdown or the macOS native menu. Both entries select the same settings tab;
+the native menu dispatches the action onto the existing UI thread queue.
+
 Position `0,0` defaults to the top right, 15 pixels from the right edge and
 15 pixels below the visible menu bar. When the bar is hidden, the top inset
 is 15 pixels. The overlay uses the bar's effective height for the current
@@ -120,6 +124,25 @@ does not estimate live texture count or VRAM residency; those require
 authoritative backend or operating-system data.
 
 ## Collection and query lifetime
+
+Visible text and its measured widths are cached between samples. Changes to
+metric selection, language, fonts, rendering dimensions, and live speed or
+renderer settings invalidate the relevant cache. Menu height, window bounds,
+and position offsets are applied each frame without rebuilding unchanged text.
+
+CPU, RAM, VRAM, and SH4 thread sampling only run when their readings are
+selected; CPU and GPU graphs also request their corresponding collectors.
+PVR CPU clock reads require the PVR work row, and presentation history requires
+Output FPS or frame times. A Full overlay with no selected rows or graphs
+stops collection. Changing selections starts fresh baselines and histories,
+so reenabled metrics exclude time spent hidden. CPU and GPU graphs can also
+be displayed without a text row.
+
+Windows discovers VRAM adapters in one background task on first use or when
+the adapter list changes. The drawing thread polls for a completed snapshot
+without waiting; pending or failed discovery leaves the reading unavailable.
+Completed adapter snapshots are reused for the regular memory queries. CPU,
+RAM, and VRAM values retain their one second sampling interval.
 
 Pause, resume, game start, and termination stop producers immediately and
 request a reset on the next overlay draw. The drawing thread clears counters,

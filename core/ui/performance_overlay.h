@@ -19,6 +19,8 @@ void reset();
 // intentionally independent of config access so disabled collection stays
 // cheap on emulation and renderer hot paths.
 bool isCollectionEnabled();
+// CPU clock reads are only needed while the renderer CPU row is visible.
+bool isPvrWorkRequested();
 
 void resetSh4ThreadSample();
 void clearSh4ThreadSample();

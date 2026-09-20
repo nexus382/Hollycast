@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -29,6 +30,7 @@ enum class GuiSettingsTab
 	General,
 	Library,
 	Video,
+	OnScreenDisplay,
 	Audio,
 	Controls,
 	Network,

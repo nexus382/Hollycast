@@ -184,7 +184,7 @@ private:
 	bool execute(Message msg)
 	{
 	#ifndef LIBRETRO
-		const bool measurePvrWork = performance_overlay::isCollectionEnabled()
+		const bool measurePvrWork = performance_overlay::isPvrWorkRequested()
 			&& (msg.type == Render || msg.type == RenderFramebuffer || msg.type == Present);
 		const std::uint64_t performanceStart = measurePvrWork
 			? performance_overlay::currentThreadCpuTimeMicroseconds()

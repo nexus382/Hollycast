@@ -9,6 +9,8 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include <chrono>
+#include <future>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -30,34 +32,55 @@ struct AdapterCache {
 	std::mutex mutex;
 	ComPtr<IDXGIFactory1> factory;
 	std::vector<Adapter> adapters;
+	std::future<std::pair<ComPtr<IDXGIFactory1>, std::vector<Adapter>>> refresh;
 
-	void refreshIfNeeded()
+	bool refreshIfNeeded()
 	{
-		if (factory != nullptr && factory->IsCurrent())
-			return;
-
-		ComPtr<IDXGIFactory1> newFactory;
-		if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&newFactory))))
-			return;
-
-		std::vector<Adapter> newAdapters;
-		for (UINT index = 0;; ++index)
+		try
 		{
-			ComPtr<IDXGIAdapter1> adapter;
-			if (newFactory->EnumAdapters1(index, &adapter) != S_OK)
-				break;
+			if (refresh.valid())
+			{
+				if (refresh.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+					return false;
+				auto result = refresh.get();
+				factory = std::move(result.first);
+				adapters = std::move(result.second);
+			}
+			if (factory != nullptr && factory->IsCurrent())
+				return true;
 
-			DXGI_ADAPTER_DESC1 description {};
-			if (FAILED(adapter->GetDesc1(&description)) || (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0)
-				continue;
+			// Factory creation and adapter discovery can take a frame or longer.
+			// Publish a completed snapshot without waiting or holding this mutex
+			// in the worker. A single task also covers display/adapter changes.
+			refresh = std::async(std::launch::async, [] {
+				ComPtr<IDXGIFactory1> newFactory;
+				std::vector<Adapter> newAdapters;
+				if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&newFactory))))
+				{
+					for (UINT index = 0;; ++index)
+					{
+						ComPtr<IDXGIAdapter1> adapter;
+						if (newFactory->EnumAdapters1(index, &adapter) != S_OK)
+							break;
 
-			ComPtr<IDXGIAdapter3> adapter3;
-			if (SUCCEEDED(adapter.As(&adapter3)))
-				newAdapters.push_back({ index, std::move(adapter3) });
+						DXGI_ADAPTER_DESC1 description {};
+						if (FAILED(adapter->GetDesc1(&description)) || (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0)
+							continue;
+
+						ComPtr<IDXGIAdapter3> adapter3;
+						if (SUCCEEDED(adapter.As(&adapter3)))
+							newAdapters.push_back({ index, std::move(adapter3) });
+					}
+				}
+				return std::make_pair(std::move(newFactory), std::move(newAdapters));
+			});
 		}
-
-		factory = std::move(newFactory);
-		adapters = std::move(newAdapters);
+		catch (const std::exception&)
+		{
+			// Diagnostics must remain optional if a worker cannot be started or
+			// completed. The next scheduled sample can retry discovery.
+		}
+		return false;
 	}
 };
 
@@ -71,7 +94,8 @@ Stats queryCurrentProcess()
 #if defined(_WIN32) && defined(HAVE_D3D11)
 	Stats stats;
 	std::lock_guard<std::mutex> lock(adapterCache.mutex);
-	adapterCache.refreshIfNeeded();
+	if (!adapterCache.refreshIfNeeded())
+		return stats;
 	for (const Adapter& adapter : adapterCache.adapters)
 	{
 		// Report every hardware adapter instead of guessing which adapter the

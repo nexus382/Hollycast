@@ -29,6 +29,7 @@
 #include <limits>
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
@@ -50,7 +51,18 @@ namespace {
 constexpr const char *Section = "rend";
 constexpr std::size_t FrameTimeHistorySize = 152;
 
+enum DisplayItem : std::uint32_t {
+	Fps = 1u << 0, OutputFps = 1u << 1, Speed = 1u << 2,
+	HostCpu = 1u << 3, HostGpu = 1u << 4, Sh4Rate = 1u << 5,
+	PvrPressure = 1u << 6, Threading = 1u << 7, Sh4Work = 1u << 8,
+	PvrWork = 1u << 9, Resolution = 1u << 10, FrameTimes = 1u << 11,
+	RendererStats = 1u << 12, Latency = 1u << 13, Vram = 1u << 14,
+	Ram = 1u << 15, FrameTimeGraph = 1u << 16, HostCpuGraph = 1u << 17,
+	HostGpuGraph = 1u << 18,
+};
+
 std::atomic<bool> collectionEnabled { false };
+std::atomic<std::uint32_t> requestedItems { 0 };
 std::atomic<bool> resetPending { false };
 std::atomic<std::uint32_t> sh4ThreadEpoch { 1 };
 std::atomic<std::uint64_t> pvrWorkMicroseconds { 0 };
@@ -295,28 +307,64 @@ struct Metrics {
 
 Metrics metrics;
 
-bool show(const char *key, bool defaultValue = true)
+std::uint32_t visibleItems(int overlayMode)
 {
-	return config::loadBool(Section, key, defaultValue);
+	if (overlayMode == 0)
+		return 0;
+	if (overlayMode == 1)
+		return Fps | Speed | HostCpu | Sh4Rate | Sh4Work | PvrWork;
+	static constexpr struct {
+		const char *key;
+		DisplayItem item;
+		bool defaultValue;
+	} options[] {
+		{ "OverlayShowFPS", Fps, true },
+		{ "OverlayShowOutputFPS", OutputFps, false },
+		{ "OverlayShowEmulationSpeed", Speed, true },
+		{ "OverlayShowHostCpuUsage", HostCpu, true },
+		{ "OverlayShowGpuUsage", HostGpu, true },
+		{ "OverlayShowSh4ExecutionRate", Sh4Rate, true },
+		{ "OverlayShowPvrTimingPressure", PvrPressure, true },
+		{ "OverlayShowThreadingState", Threading, true },
+		{ "OverlayShowCpuUsage", Sh4Work, false },
+		{ "OverlayShowPvrUsage", PvrWork, false },
+		{ "OverlayShowResolution", Resolution, true },
+		{ "OverlayShowFrameTimes", FrameTimes, true },
+		{ "OverlayShowGpuStatistics", RendererStats, true },
+		{ "OverlayShowLatencyStatistics", Latency, false },
+		{ "OverlayShowVram", Vram, true },
+		{ "OverlayShowRam", Ram, true },
+		{ "OverlayShowFrameTimeGraph", FrameTimeGraph, true },
+		{ "OverlayShowHostCpuGraph", HostCpuGraph, false },
+		{ "OverlayShowGpuGraph", HostGpuGraph, false },
+	};
+	std::uint32_t items = 0;
+	for (const auto& option : options)
+		if (config::loadBool(Section, option.key, option.defaultValue))
+			items |= option.item;
+	// The frame interval graph belongs to the frame times setting.
+	if ((items & FrameTimes) == 0)
+		items &= ~FrameTimeGraph;
+	return items;
 }
 
-void updateMetrics(bool queryGpuMemory)
+void updateMetrics(std::uint32_t items)
 {
 	const std::uint64_t now = getTimeMs();
 	if (metrics.lastMemorySampleTime == 0 || now - metrics.lastMemorySampleTime >= 1000)
 	{
-		const process_memory::Stats memory = process_memory::queryCurrentProcess();
-		const cpu_usage::Stats cpu = cpu_usage::queryCurrentProcessAndSystem();
+		const process_memory::Stats memory = (items & Ram) != 0 ? process_memory::queryCurrentProcess() : process_memory::Stats {};
+		const cpu_usage::Stats cpu = (items & (HostCpu | HostCpuGraph)) != 0
+			? cpu_usage::queryCurrentProcessAndSystem() : cpu_usage::Stats {};
 		metrics.processResidentBytes = memory.residentBytes;
 		metrics.processMemoryValid = memory.valid;
 		metrics.hostProcessCpuUsage = cpu.processPercent;
 		metrics.hostSystemCpuUsage = cpu.systemPercent;
 		metrics.hostProcessCpuValid = cpu.processValid;
 		metrics.hostSystemCpuValid = cpu.systemValid;
-		if (queryGpuMemory)
+		if ((items & Vram) != 0)
 		{
-			const gpu_memory::Stats gpu = gpu_memory::queryCurrentProcess();
-			metrics.gpuAdapters = gpu.adapters;
+			metrics.gpuAdapters = gpu_memory::queryCurrentProcess().adapters;
 		}
 		else
 			metrics.gpuAdapters.clear();
@@ -354,7 +402,8 @@ void updateMetrics(bool queryGpuMemory)
 		metrics.hostProcessCpuHistory = {};
 		metrics.hostSystemCpuHistory = {};
 		metrics.gpuUsageHistory = {};
-		sh4ThreadCpuSampler.resetBaseline();
+		if ((items & Sh4Work) != 0)
+			sh4ThreadCpuSampler.resetBaseline();
 		pvrWorkMicroseconds.exchange(0);
 		vblankCount.exchange(0);
 		gameFrameCount.exchange(0);
@@ -427,7 +476,7 @@ void updateMetrics(bool queryGpuMemory)
 	const std::uint32_t vblanks = vblankCount.exchange(0);
 	const std::uint32_t gameFrames = gameFrameCount.exchange(0);
 	std::uint64_t sh4Work = 0;
-	metrics.sh4ThreadCpuValid = sh4ThreadCpuSampler.sample(sh4Work);
+	metrics.sh4ThreadCpuValid = (items & Sh4Work) != 0 && sh4ThreadCpuSampler.sample(sh4Work);
 	metrics.sh4TimePerVblankValid = metrics.sh4ThreadCpuValid && vblanks != 0;
 	const std::uint64_t pvrWork = pvrWorkMicroseconds.exchange(0);
 	metrics.vps = static_cast<float>(vblanks) * 1000.f / static_cast<float>(elapsed);
@@ -833,6 +882,11 @@ void clearSh4ThreadSample()
 	sh4ThreadEpoch.fetch_add(1, std::memory_order_release);
 }
 
+bool isPvrWorkRequested()
+{
+	return isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & PvrWork) != 0;
+}
+
 void reset()
 {
 	collectionEnabled.store(false, std::memory_order_release);
@@ -848,7 +902,7 @@ void recordSh4Vblank()
 
 void recordPvrWork(std::uint64_t microseconds)
 {
-	if (isCollectionEnabled())
+	if (isPvrWorkRequested())
 		pvrWorkMicroseconds.fetch_add(microseconds, std::memory_order_relaxed);
 }
 
@@ -872,7 +926,7 @@ void recordOutputViewport(int width, int height)
 
 void recordPresentedFrame()
 {
-	if (!isCollectionEnabled())
+	if (!isCollectionEnabled() || (requestedItems.load(std::memory_order_relaxed) & (OutputFps | FrameTimes)) == 0)
 		return;
 	const std::uint64_t now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -985,8 +1039,10 @@ void draw()
 		gpuTimingSupported.store(false, std::memory_order_relaxed);
 	}
 	const int overlayMode = mode();
-	if (overlayMode == 0)
+	const std::uint32_t items = visibleItems(overlayMode);
+	if (items == 0)
 	{
+		requestedItems.store(0, std::memory_order_relaxed);
 		if (collectionEnabled.exchange(false, std::memory_order_acq_rel))
 		{
 			metrics.lastSampleTime = 0;
@@ -999,6 +1055,15 @@ void draw()
 		}
 		return;
 	}
+	if (requestedItems.load(std::memory_order_relaxed) != items)
+	{
+		// Restart the sampling interval when selections change, so a newly
+		// enabled collector never includes hidden time or a partial interval.
+		requestedItems.store(items, std::memory_order_relaxed);
+		metrics.lastSampleTime = 0;
+		metrics.lastMemorySampleTime = 0;
+		gpuTimingRequested.store(false, std::memory_order_release);
+	}
 	// Publish collection before producers inspect the gate. updateMetrics()
 	// resets every baseline on the first enabled draw, so no hidden interval is
 	// included when diagnostics are re-enabled.
@@ -1006,8 +1071,7 @@ void draw()
 	{
 		collectionEnabled.store(true, std::memory_order_release);
 	}
-	const bool requestGpuTiming = overlayMode == 2
-		&& (show("OverlayShowGpuUsage", true) || show("OverlayShowGpuGraph", false));
+	const bool requestGpuTiming = (items & (HostGpu | HostGpuGraph)) != 0;
 	const bool wasGpuTimingRequested = gpuTimingRequested.load(std::memory_order_relaxed);
 	if (requestGpuTiming && !wasGpuTimingRequested)
 	{
@@ -1015,54 +1079,68 @@ void draw()
 		// gpuTimingRequested therefore observes the matching epoch.
 		gpuTimingEpoch.fetch_add(1, std::memory_order_relaxed);
 	}
-	gpuTimingRequested.store(requestGpuTiming, std::memory_order_release);
+	if (requestGpuTiming != wasGpuTimingRequested)
+		gpuTimingRequested.store(requestGpuTiming, std::memory_order_release);
 
-	const bool showVram = overlayMode == 2 && show("OverlayShowVram", true);
-	updateMetrics(showVram);
+	const bool measurementsReset = metrics.lastSampleTime == 0;
+	updateMetrics(items);
 
-	std::vector<std::string> lines;
-	char text[128];
-	const auto add = [&lines](bool enabled, std::string value) {
-		if (enabled)
-			lines.push_back(std::move(value));
-	};
-
-	const bool showFrameRate = overlayMode == 1 || show("OverlayShowFPS");
-	const bool showOutputFrameRate = overlayMode == 2 && show("OverlayShowOutputFPS", false);
-	const bool showSpeed = overlayMode == 1 || show("OverlayShowEmulationSpeed");
-	const bool showFrameTimes = overlayMode == 2 && show("OverlayShowFrameTimes");
-	add(showFrameRate || showSpeed, formatFrameRate(showFrameRate, showSpeed));
-	add(showOutputFrameRate, formatOutputFrameRate());
-	if (overlayMode == 1)
+	// Most readings change once a second. Include live labels and dimensions
+	// in the key so hotkeys, resolution and language changes still show at once.
+	const auto textInputs = std::make_tuple(items, metrics.lastSampleTime, metrics.lastMemorySampleTime,
+		settings.input.fastForwardMode, config::FastForwardSpeedLimit.get(), SPG_CONTROL.isPAL(),
+		config::ThreadedRendering.get(), config::RendererType.get(), config::IntegerScale.get(), config::UILanguage.get(),
+		rawRenderWidth.load(std::memory_order_relaxed), rawRenderHeight.load(std::memory_order_relaxed),
+		renderedWidth.load(std::memory_order_relaxed), renderedHeight.load(std::memory_order_relaxed),
+		outputViewportWidth.load(std::memory_order_relaxed), outputViewportHeight.load(std::memory_order_relaxed),
+		settings.display.width, settings.display.height);
+	static auto cachedTextInputs = textInputs;
+	static std::vector<std::string> lines;
+	static bool widthsDirty = true;
+	const bool textChanged = measurementsReset || textInputs != cachedTextInputs;
+	if (textChanged)
 	{
-		add(true, formatHostCpu());
-		add(true, formatSh4ExecutionRate());
-		add(true, formatSh4Work());
-		add(true, formatPvrWork());
-	}
-	else
-	{
-		add(show("OverlayShowHostCpuUsage", true), formatHostCpu());
-		add(show("OverlayShowGpuUsage", true), formatGpuTiming());
-		add(show("OverlayShowSh4ExecutionRate", true), formatSh4ExecutionRate());
-		add(show("OverlayShowPvrTimingPressure", true), formatPvrRenderSchedule());
-		add(show("OverlayShowThreadingState"), formatThreadingState());
-		add(show("OverlayShowCpuUsage", false), formatSh4Work());
-		add(show("OverlayShowPvrUsage", false), formatPvrWork());
-		add(show("OverlayShowResolution"), formatResolution());
-		if (showFrameTimes && metrics.frameTimeValid)
-			std::snprintf(text, sizeof(text), i18n::T("Frame Times: %.2f ms Min | %.2f ms Avg | %.2f ms Max"), metrics.frameTimeMinimum,
-				metrics.frameTimeAverage, metrics.frameTimeMaximum);
-		else
-			std::snprintf(text, sizeof(text), "%s", i18n::T("Frame Times: unavailable"));
-		add(showFrameTimes, text);
-		add(show("OverlayShowGpuStatistics"), formatGpuStatistics());
-		add(show("OverlayShowLatencyStatistics", false), i18n::T("Latency: N/A (no end to end probe)"));
-		add(showVram, formatVram());
-		add(show("OverlayShowRam"), formatRam());
+		widthsDirty = true;
+		cachedTextInputs = textInputs;
+		lines.clear();
+		if ((items & (Fps | Speed)) != 0)
+			lines.push_back(formatFrameRate((items & Fps) != 0, (items & Speed) != 0));
+		// Call formatters only for visible rows, including in Minimal mode.
+		const auto add = [&](DisplayItem item, std::string (*format)()) {
+			if ((items & item) != 0)
+				lines.push_back(format());
+		};
+		add(OutputFps, formatOutputFrameRate);
+		add(HostCpu, formatHostCpu);
+		add(HostGpu, formatGpuTiming);
+		add(Sh4Rate, formatSh4ExecutionRate);
+		add(PvrPressure, formatPvrRenderSchedule);
+		add(Threading, formatThreadingState);
+		add(Sh4Work, formatSh4Work);
+		add(PvrWork, formatPvrWork);
+		add(Resolution, formatResolution);
+		if ((items & FrameTimes) != 0)
+		{
+			char text[128];
+			if (metrics.frameTimeValid)
+				std::snprintf(text, sizeof(text), i18n::T("Frame Times: %.2f ms Min | %.2f ms Avg | %.2f ms Max"), metrics.frameTimeMinimum,
+					metrics.frameTimeAverage, metrics.frameTimeMaximum);
+			else
+				std::snprintf(text, sizeof(text), "%s", i18n::T("Frame Times: unavailable"));
+			lines.emplace_back(text);
+		}
+		add(RendererStats, formatGpuStatistics);
+		if ((items & Latency) != 0)
+			lines.emplace_back(i18n::T("Latency: N/A (no end to end probe)"));
+		add(Vram, formatVram);
+		add(Ram, formatRam);
 	}
 
-	if (lines.empty())
+	const bool showFrameTimeGraph = (items & FrameTimeGraph) != 0 && metrics.frameTimeHistoryCount >= 2;
+	const bool showHostCpuGraph = (items & HostCpuGraph) != 0 && metrics.hostProcessCpuHistory.count >= 2;
+	const bool showGpuGraph = (items & HostGpuGraph) != 0 && metrics.gpuUsageHistory.count >= 2;
+	const int graphCount = static_cast<int>(showFrameTimeGraph) + static_cast<int>(showHostCpuGraph) + static_cast<int>(showGpuGraph);
+	if (lines.empty() && graphCount == 0)
 		return;
 
 	ImFont *font = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
@@ -1078,26 +1156,31 @@ void draw()
 		return;
 	const float lineSpacing = uiScaled(1.f);
 	float lineHeight = fontSize + lineSpacing;
-	const bool showFrameTimeGraph = showFrameTimes && show("OverlayShowFrameTimeGraph", true) && metrics.frameTimeHistoryCount >= 2;
-	const bool showHostCpuGraph = overlayMode == 2 && show("OverlayShowHostCpuGraph", false)
-		&& metrics.hostProcessCpuHistory.count >= 2;
-	const bool showGpuGraph = overlayMode == 2 && show("OverlayShowGpuGraph", false) && metrics.gpuUsageHistory.count >= 2;
-	const int graphCount = static_cast<int>(showFrameTimeGraph) + static_cast<int>(showHostCpuGraph) + static_cast<int>(showGpuGraph);
 	float graphWidth = graphCount != 0
 		? std::clamp(uiScaled(200.f), uiScaled(120.f), std::max(uiScaled(120.f), displaySize.x - margin * 2.f)) : 0.f;
 	float graphSpacing = graphCount != 0 ? uiScaled(5.f) : 0.f;
 	float graphHeight = graphCount != 0 ? uiScaled(52.f) : 0.f;
 	const float totalGraphHeight = graphCount == 0 ? 0.f : graphCount * (graphSpacing + graphHeight);
 	float totalHeight = lineHeight * lines.size() + totalGraphHeight;
-	std::vector<float> lineWidths;
-	lineWidths.reserve(lines.size());
-	float blockWidth = graphWidth;
-	for (const std::string& line : lines)
+	static std::vector<float> lineWidths;
+	static float textWidth = 0.f;
+	const auto fontInputs = std::make_tuple(font, font->FontId, font->CurrentRasterizerDensity, fontSize);
+	static auto cachedFontInputs = fontInputs;
+	if (widthsDirty || fontInputs != cachedFontInputs)
 	{
-		const float width = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, line.c_str()).x;
-		lineWidths.push_back(width);
-		blockWidth = std::max(blockWidth, width);
+		cachedFontInputs = fontInputs;
+		lineWidths.clear();
+		lineWidths.reserve(lines.size());
+		textWidth = 0.f;
+		for (const std::string& line : lines)
+		{
+			const float width = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, line.c_str()).x;
+			lineWidths.push_back(width);
+			textWidth = std::max(textWidth, width);
+		}
+		widthsDirty = false;
 	}
+	float blockWidth = std::max(graphWidth, textWidth);
 	// Treat the configured font size as a maximum: all selected rows and
 	// graphs must fit even in a small window or with a large UI scale.
 	const float layoutScale = std::min({ 1.f, (displaySize.x - margin * 2.f) / std::max(1.f, blockWidth),
@@ -1109,8 +1192,6 @@ void draw()
 	graphHeight *= layoutScale;
 	totalHeight *= layoutScale;
 	blockWidth *= layoutScale;
-	for (float& width : lineWidths)
-		width *= layoutScale;
 	const int corner = std::clamp(config::loadInt(Section, "OverlayCorner", 1), 0, 3);
 	const float offsetX = static_cast<float>(std::clamp(config::loadInt(Section, "OverlayOffsetX", 0), -1000, 1000));
 	const float offsetY = static_cast<float>(std::clamp(config::loadInt(Section, "OverlayOffsetY", 0), -1000, 1000));
@@ -1135,7 +1216,7 @@ void draw()
 	{
 		const float x = corner == 0 || corner == 2
 			? blockX
-			: blockX + blockWidth - lineWidths[i];
+			: blockX + blockWidth - lineWidths[i] * layoutScale;
 		const ImVec2 pos(x, y);
 		drawList->AddText(font, fontSize, pos + ImVec2(shadowOffset, shadowOffset), shadowColor, lines[i].c_str());
 		drawList->AddText(font, fontSize, pos, textColor, lines[i].c_str());
