@@ -307,9 +307,13 @@ vec4 legacyTextureSample(TextureSampleState state, sampler2D sourceTex, vec3 coo
 
 bool sampleTextureFilterEligible(sampler2D sourceTex)
 {
+#if pp_MaxFilteredTextureSize >= 1024
+	return true;
+#else
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
 	// Match the xBRZ width buckets: 8x16 matches 8x8, while 16x8 matches 16x16.
 	return pp_MaxFilteredTextureSize >= 1024 || texSize.x <= float(pp_MaxFilteredTextureSize);
+#endif
 }
 
 float jincDistance(vec2 a, vec2 b)

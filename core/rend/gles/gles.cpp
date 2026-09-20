@@ -413,9 +413,13 @@ lowp vec4 legacyTextureSample(TextureSampleState state, highp vec3 coords)
 
 bool sampleTextureFilterEligible()
 {
+#if pp_MaxFilteredTextureSize >= 1024
+	return true;
+#else
 	highp vec2 sourceTexSize = vec2(textureSize(tex, 0));
 	// Match the xBRZ width buckets: 8x16 matches 8x8, while 16x8 matches 16x16.
 	return pp_MaxFilteredTextureSize >= 1024 || sourceTexSize.x <= float(pp_MaxFilteredTextureSize);
+#endif
 }
 
 highp float jincDistance(highp vec2 a, highp vec2 b)

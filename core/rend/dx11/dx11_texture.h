@@ -30,16 +30,15 @@ public:
 	DX11Texture(DX11Texture&& other) : BaseTextureCacheData(std::move(other)) {
 		std::swap(texture, other.texture);
 		std::swap(textureView, other.textureView);
+		std::swap(uploadedWidth, other.uploadedWidth);
 	}
 
 	ComPtr<ID3D11Texture2D> texture;
 	ComPtr<ID3D11ShaderResourceView> textureView;
+	// Level-zero width used by the sample-filter size limit.
+	u32 uploadedWidth = 0;
 
-	unsigned sampledWidth() const {
-		D3D11_TEXTURE2D_DESC desc;
-		texture->GetDesc(&desc);
-		return desc.Width;
-	}
+	unsigned sampledWidth() const { return uploadedWidth; }
 
 	std::string GetId() override { return std::to_string((uintptr_t)texture.get()); }
 	void UploadToGPU(int width, int height, const u8* temp_tex_buffer, bool mipmapped,

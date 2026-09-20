@@ -1188,6 +1188,7 @@ void DX11Renderer::readRttRenderTarget(u32 texAddress)
 			DX11Texture* texture = texCache.getRTTexture(texAddress, rendContext->fb_W_CTRL.fb_packmode, wpo2, hpo2);
 
 			texture->texture = rttTexture;
+			texture->uploadedWidth = static_cast<u32>(wpo2);
 			rttTexture.reset();
 			rttRenderTarget.reset();
 			texture->textureView.reset();
