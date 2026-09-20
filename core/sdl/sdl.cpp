@@ -46,8 +46,10 @@
 static SDL_Window* window = NULL;
 static u32 windowFlags;
 
-#define WINDOW_WIDTH  640
-#define WINDOW_HEIGHT  480
+// Used only when no saved desktop window size exists.
+// These should match DEFAULT_WINDOW_WIDTH and DEFAULT_WINDOW_HEIGHT in core/linux-dist/x11.cpp
+#define WINDOW_WIDTH  800
+#define WINDOW_HEIGHT  600
 
 static std::unordered_map<u32, std::shared_ptr<SDLMouse>> sdl_mice;
 static std::shared_ptr<SDLKeyboardDevice> sdl_keyboard;
@@ -423,6 +425,7 @@ void input_sdl_handle()
 							return (sdl_keyboard->get_input_mapping()->get_button_id(0, inputSet) != EMU_BTN_NONE);
 						}
 					};
+
 					if (event.type == SDL_KEYDOWN)
 					{
 						// Alt-Return and F11 toggle full screen

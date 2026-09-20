@@ -259,8 +259,6 @@ elseif(LIBRETRO)
 	endif()
 elseif(ANDROID)
 	add_library(${PROJECT_NAME} SHARED core/emulator.cpp)
-	set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_RELEASE} -O3")
-	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 	target_compile_options(${PROJECT_NAME} PRIVATE -fno-stack-protector)
 	set(CMAKE_ANDROID_STL_TYPE "c++_static")
 elseif(WIN32)
@@ -287,6 +285,25 @@ endif()
 set_target_properties(${PROJECT_NAME} PROPERTIES
 		CMAKE_CXX_STANDARD 20
 		CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_library(flycast_basis_transcoder STATIC
+		core/deps/basis_universal/transcoder/basisu_transcoder.cpp
+		core/deps/basis_universal/zstd/zstddeclib.c)
+target_compile_features(flycast_basis_transcoder PRIVATE cxx_std_17)
+target_compile_definitions(flycast_basis_transcoder PRIVATE
+		BASISD_SUPPORT_KTX2=1
+		BASISD_SUPPORT_KTX2_ZSTD=1
+		BASISD_SUPPORT_DXT1=1
+		BASISD_SUPPORT_DXT5A=1
+		BASISD_SUPPORT_ETC2_EAC_A8=1
+		BASISD_SUPPORT_XUASTC=1)
+target_include_directories(flycast_basis_transcoder PUBLIC core/deps)
+set_target_properties(flycast_basis_transcoder PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+	target_compile_options(flycast_basis_transcoder PRIVATE
+			$<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>)
+endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE flycast_basis_transcoder)
 
 if(WINDOWS_STORE)
 	set(USE_OPENGL OFF)

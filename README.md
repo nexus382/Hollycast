@@ -1,5 +1,9 @@
 # Hollycast
 
+![Hollycast](banner.png)
+
+<sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>
+
 Hollycast is a multi-platform Sega Dreamcast, Naomi, Naomi 2, and Atomiswave emulator, derived from [Flycast](https://github.com/flyinghead/flycast), the open-source Sega Dreamcast emulator.
 
 Our mission is simple: follow upstream core emulation code while delivering a modern UI, more front-end features, and power-user controls.
@@ -45,6 +49,7 @@ Run the following to install all prerequisites.
 
 ```
 sudo apt-get update
+sudo apt-get -y install git cmake gcc g++
 sudo apt-get -y install ccache libao-dev libasound2-dev libevdev-dev libgl1-mesa-dev liblua5.3-dev libminiupnpc-dev libpulse-dev libsdl2-dev libudev-dev libzip-dev ninja-build libcurl4-openssl-dev libcdio-dev libfuse2 locales
 sudo apt-get -y install libwayland-dev libdecor-0-dev libaudio-dev libjack-dev libsndio-dev libsamplerate0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev
 ```
@@ -98,6 +103,14 @@ cmake --preset <PRESET>
 cmake --build --preset <PRESET>
 ```
 
+### Development Instructions for Android
+
+- Install [Android Studio](https://developer.android.com/studio/install).
+- Open directory `shell/android-studio` in Android Studio.
+- The Hollycast project should be picked up automatically, with "Android" sidebar on the left, and devices and run configurations in the top right.
+- `debug` build variant is used by default. If you want to build in release mode for better performance, then open **View > Tool Windows > Build Variants**, and select Active Build Variant `developerRelease`.
+   - Note that `release` variant does production code signing. It's only intended for store publishing.
+
 ### Build Instructions for Android
 
 Ensure Android Studio is installed, and then execute the following.
@@ -119,3 +132,17 @@ If the build gets stuck or encounters and error, run the following before trying
 # Remove all artifacts of previous build.
 ./gradlew clean
 ```
+
+### Segmentation fault (SIGSEGV) / Access Violation (AV) handling
+
+When debugging Hollycast, you may notice the debugger frequently breaking on memory access violations when running games. This is normal and expected. This is related to how the emulator's dynamic recompiler works and doesn't reflect any actual memory safety bug.
+
+It's recommended you adjust your debugger or exception settings as needed for the current platform, in order to prevent disruptive breaks during debugging.
+
+For example, with LLDB, pass the following startup command:
+- `process handle -s false -n false -p true SIGSEGV`
+
+For Android, if you hit the breakpoint for `art_sigsegv_fault` in disassembly, delete the breakpoint and resume debugging.
+
+For VS Code C/C++ on Windows, use the following filter string on the "All Exceptions" breakpoint:
+- `!0xC0000005`

@@ -308,6 +308,7 @@ struct gl_ctx
 	bool GL_OES_packed_depth_stencil_supported;
 	bool GL_OES_depth24_supported;
 	bool highp_float_supported;
+	bool textureStorageSupported;
 	float max_anisotropy;
 	bool mesa_nouveau;
 	bool mali;
@@ -378,6 +379,11 @@ enum ModifierVolumeMode { Xor, Or, Inclusion, Exclusion, ModeCount };
 
 void termGLCommon();
 void findGLVersion();
+bool hasGlExtension(const char *wanted);
+bool allocateImmutableTextureStorage(GLsizei levels, GLenum internalFormat,
+		GLsizei width, GLsizei height);
+void uploadCompressedTextureSubImage2D(GLint level, GLsizei width, GLsizei height,
+		GLenum format, GLsizei imageSize, const void *data);
 
 void SetCull(u32 CullMode);
 void SetMVS_Mode(ModifierVolumeMode mv_mode, ISP_Modvol ispc);
@@ -456,12 +462,18 @@ public:
 	}
 	TextureCacheData(TextureCacheData&& other) : BaseTextureCacheData(std::move(other)) {
 		std::swap(texID, other.texID);
+		std::swap(customTextureObject, other.customTextureObject);
 	}
 
 	GLuint texID = 0;   //gl texture
+	bool customTextureObject = false;
 	std::string GetId() override { return std::to_string(texID); }
 	void UploadToGPU(int width, int height, const u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded = false) override;
+	bool uploadCustomTexture(const PreparedCustomTexture& texture, bool mipmapped) override;
+	bool useGpuPreloadedTexture(const GpuPreloadedTexture::Ptr& texture) override;
 	bool Delete() override;
+	static GpuPreloadedTexture::Ptr createGpuPreloadedTexture(const PreparedCustomTexture& texture);
+	static CustomTextureCapabilities getCustomTextureCapabilities();
 
 	static void setUploadToGPUFlavor();
 
@@ -516,6 +528,8 @@ struct OpenGLRenderer : Renderer
 		return ret;
 	}
 	bool GetLastFrame(std::vector<u8>& data, int& width, int& height) override;
+	void processCustomTexturePreloads() override;
+	bool supportsGpuTexturePreload() const override { return gl.textureStorageSupported; }
 
 	BaseTextureCacheData *GetTexture(TSP tsp, TCW tcw, int area) override;
 
@@ -531,6 +545,12 @@ struct OpenGLRenderer : Renderer
 	}
 
 protected:
+	void clearTextureCache() override
+	{
+		TexCache.Clear();
+		TexCache.Cleanup();
+	}
+
 	virtual GLenum getFogTextureSlot() const {
 		return GL_TEXTURE1;
 	}

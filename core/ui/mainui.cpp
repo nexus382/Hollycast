@@ -26,6 +26,7 @@
 #include "wsi/context.h"
 #include "cfg/option.h"
 #include "emulator.h"
+#include "rend/CustomTexture.h"
 #include "imgui_driver.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
@@ -64,8 +65,6 @@ bool mainui_rend_frame()
 				return false;
 			if (config::ProfilerEnabled && config::ProfilerDrawToGUI)
 				gui_display_profiler();
-			// OSD and menu bar are rendered together
-			gui_draw_osd();
 		} catch (const RendererException& e) {
 			gui_error(i18n::Ts("Renderer error:") + "\n" + e.what() + "\n\n"
 					+ i18n::Ts("The game has been paused but it is recommended to restart Hollycast"));
@@ -146,6 +145,15 @@ void mainui_loop(bool forceStart)
 				}
 			}
 			mainui_init();
+			if (!gui_is_open() && custom_texture.needsRefresh())
+			{
+				try {
+					emu.stop();
+					gui_setState(GuiState::Loading);
+				} catch (const FlycastException& e) {
+					gui_stop_game(e.what());
+				}
+			}
 			forceReinit = false;
 			currentRenderer = config::RendererType;
 		}
