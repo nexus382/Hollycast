@@ -261,7 +261,7 @@ bool sampleTextureFilterEligible(Texture2D sourceTex)
 	sourceTex.GetDimensions(texWidth, texHeight);
 	float maxFilteredTextureSize = float(pp_MaxFilteredTextureSize);
 	// Match the xBRZ size buckets by texture width: 8x16 matches 8x8, while 16x8 matches 16x16.
-	return pp_MaxFilteredTextureSize >= 1024 || (float)texWidth <= maxFilteredTextureSize;
+	return (float)texWidth <= maxFilteredTextureSize;
 #endif
 }
 

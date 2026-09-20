@@ -243,7 +243,7 @@ bool sampleTextureFilterEligible(sampler2D sourceTex)
 	vec2 texSize = vec2(textureSize(sourceTex, 0));
 	float maxFilteredTextureSize = float(pp_MaxFilteredTextureSize);
 	// Match the xBRZ size buckets by texture width: 8x16 matches 8x8, while 16x8 matches 16x16.
-	return pp_MaxFilteredTextureSize >= 1024 || texSize.x <= maxFilteredTextureSize;
+	return texSize.x <= maxFilteredTextureSize;
 #endif
 }
 

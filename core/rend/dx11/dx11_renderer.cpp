@@ -1188,7 +1188,10 @@ void DX11Renderer::readRttRenderTarget(u32 texAddress)
 			DX11Texture* texture = texCache.getRTTexture(texAddress, rendContext->fb_W_CTRL.fb_packmode, wpo2, hpo2);
 
 			texture->texture = rttTexture;
-			texture->uploadedWidth = static_cast<u32>(wpo2);
+			// RTT resolution scaling can make the GPU texture wider than its native cache entry.
+			D3D11_TEXTURE2D_DESC desc;
+			rttTexture->GetDesc(&desc);
+			texture->uploadedWidth = desc.Width;
 			rttTexture.reset();
 			rttRenderTarget.reset();
 			texture->textureView.reset();
