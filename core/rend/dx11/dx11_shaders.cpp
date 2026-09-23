@@ -226,7 +226,8 @@ struct TextureSampleState
 
 float4 sampleSourceTexel(TextureSampleState state, Texture2D sourceTex, sampler sourceSampler, float2 uv)
 {
-	float4 color = sourceTex.Sample(sourceSampler, uv);
+	// Reconstruction coordinates and tap spacing are defined against mip level zero.
+	float4 color = sourceTex.SampleLevel(sourceSampler, uv, 0);
 #if pp_Palette != 0
 	if (state.palette)
 		color = getPaletteEntry(color.a);

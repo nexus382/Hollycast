@@ -205,7 +205,8 @@ struct TextureSampleState
 
 vec4 sampleSourceTexel(TextureSampleState state, sampler2D sourceTex, vec2 uv)
 {
-	vec4 color = texture(sourceTex, uv);
+	// Reconstruction coordinates and tap spacing are defined against mip level zero.
+	vec4 color = textureLod(sourceTex, uv, 0.0);
 #if pp_Palette != 0
 	if (state.palette)
 		color = getPaletteEntry(color.r);

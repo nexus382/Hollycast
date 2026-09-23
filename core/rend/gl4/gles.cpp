@@ -275,7 +275,8 @@ struct TextureSampleState
 
 vec4 sampleSourceTexel(TextureSampleState state, sampler2D sourceTex, vec2 uv)
 {
-	vec4 color = texture(sourceTex, uv);
+	// Reconstruction coordinates and tap spacing are defined against mip level zero.
+	vec4 color = textureLod(sourceTex, uv, 0.0);
 #if pp_Palette != 0
 	if (state.palette)
 		color = getPaletteEntry(color.r);
@@ -411,12 +412,13 @@ vec4 jinc2Sample(TextureSampleState state, sampler2D sourceTex, vec2 uv, bool no
 	return color;
 }
 
-bool colorEq(vec4 a, vec4 b) { return distance(a, b) < 0.001; }
+// MMPX compares decoded RGBA8 values, including adjacent byte values.
+bool colorEq(vec4 a, vec4 b) { return all(equal(floor(clamp(a, 0.0, 1.0) * 255.0 + 0.5), floor(clamp(b, 0.0, 1.0) * 255.0 + 0.5))); }
 bool mmpxAllEq2(vec4 value, vec4 a, vec4 b) { return colorEq(value, a) && colorEq(value, b); }
 bool mmpxAllEq4(vec4 value, vec4 a, vec4 b, vec4 c, vec4 d) { return colorEq(value, a) && colorEq(value, b) && colorEq(value, c) && colorEq(value, d); }
 bool mmpxAnyEq3(vec4 value, vec4 a, vec4 b, vec4 c) { return colorEq(value, a) || colorEq(value, b) || colorEq(value, c); }
 bool mmpxNoneEq4(vec4 value, vec4 a, vec4 b, vec4 c, vec4 d) { return !colorEq(value, a) && !colorEq(value, b) && !colorEq(value, c) && !colorEq(value, d); }
-highp float mmpxLuma(lowp vec4 color)
+highp float mmpxLuma(vec4 color)
 {
 	// Match the packed RGBA8 rule, including nonzero luma for opaque texels.
 	highp vec4 bytes = floor(clamp(color, 0.0, 1.0) * 255.0 + 0.5);

@@ -246,12 +246,22 @@ uniform highp float cp_AlphaTestValue;
 uniform lowp vec4 pp_ClipTest;
 uniform lowp vec3 sp_FOG_COL_RAM,sp_FOG_COL_VERT;
 uniform highp float sp_FOG_DENSITY;
-uniform sampler2D tex,fog_table;
+#if TARGET_GL == GLES3 && pp_SampleTextureFilter >= 5 && pp_SampleTextureFilter <= 7
+// MMPX compares RGBA8 bytes, so GLES reads must retain all eight bits.
+uniform highp sampler2D tex;
+#else
+uniform sampler2D tex;
+#endif
+uniform sampler2D fog_table;
 uniform lowp float trilinear_alpha;
 uniform lowp vec4 fog_clamp_min;
 uniform lowp vec4 fog_clamp_max;
 #if pp_Palette != 0
+#if TARGET_GL == GLES3 && pp_SampleTextureFilter >= 5 && pp_SampleTextureFilter <= 7
+uniform highp sampler2D palette;
+#else
 uniform sampler2D palette;
+#endif
 uniform mediump int palette_index;
 #if TARGET_GL == GLES2 || TARGET_GL == GL2
 uniform lowp vec2 texSize;
@@ -295,7 +305,11 @@ highp vec4 fog_clamp(lowp vec4 col)
 
 #if pp_Palette != 0
 
+#if TARGET_GL == GLES3 && pp_SampleTextureFilter >= 5 && pp_SampleTextureFilter <= 7
+highp vec4 getPaletteEntry(highp float colorIndex)
+#else
 lowp vec4 getPaletteEntry(highp float colorIndex)
+#endif
 {
 	highp int color_idx = int(floor(colorIndex * 255.0 + 0.5)) + palette_index;
 #if TARGET_GL == GLES2 || TARGET_GL == GL2
@@ -379,9 +393,10 @@ struct TextureSampleState
 	bool ignoreAlpha;
 };
 
-lowp vec4 sampleSourceTexel(TextureSampleState state, highp vec2 uv)
+highp vec4 sampleSourceTexel(TextureSampleState state, highp vec2 uv)
 {
-	lowp vec4 color = texture(tex, uv);
+	// Reconstruction coordinates and tap spacing are defined against mip level zero.
+	highp vec4 color = textureLod(tex, uv, 0.0);
 #if pp_Palette != 0
 	if (state.palette)
 		color = getPaletteEntry(color.FOG_CHANNEL);
@@ -517,20 +532,21 @@ lowp vec4 jinc2Sample(TextureSampleState state, highp vec2 uv, bool noEdgeBlend)
 	return color;
 }
 
-bool colorEq(lowp vec4 a, lowp vec4 b) { return distance(a, b) < 0.001; }
-bool mmpxAllEq2(lowp vec4 value, lowp vec4 a, lowp vec4 b) { return colorEq(value, a) && colorEq(value, b); }
-bool mmpxAllEq4(lowp vec4 value, lowp vec4 a, lowp vec4 b, lowp vec4 c, lowp vec4 d) { return colorEq(value, a) && colorEq(value, b) && colorEq(value, c) && colorEq(value, d); }
-bool mmpxAnyEq3(lowp vec4 value, lowp vec4 a, lowp vec4 b, lowp vec4 c) { return colorEq(value, a) || colorEq(value, b) || colorEq(value, c); }
-bool mmpxNoneEq4(lowp vec4 value, lowp vec4 a, lowp vec4 b, lowp vec4 c, lowp vec4 d) { return !colorEq(value, a) && !colorEq(value, b) && !colorEq(value, c) && !colorEq(value, d); }
-highp float mmpxLuma(lowp vec4 color)
+// MMPX compares decoded RGBA8 values, including adjacent byte values.
+bool colorEq(highp vec4 a, highp vec4 b) { return all(equal(floor(clamp(a, 0.0, 1.0) * 255.0 + 0.5), floor(clamp(b, 0.0, 1.0) * 255.0 + 0.5))); }
+bool mmpxAllEq2(highp vec4 value, highp vec4 a, highp vec4 b) { return colorEq(value, a) && colorEq(value, b); }
+bool mmpxAllEq4(highp vec4 value, highp vec4 a, highp vec4 b, highp vec4 c, highp vec4 d) { return colorEq(value, a) && colorEq(value, b) && colorEq(value, c) && colorEq(value, d); }
+bool mmpxAnyEq3(highp vec4 value, highp vec4 a, highp vec4 b, highp vec4 c) { return colorEq(value, a) || colorEq(value, b) || colorEq(value, c); }
+bool mmpxNoneEq4(highp vec4 value, highp vec4 a, highp vec4 b, highp vec4 c, highp vec4 d) { return !colorEq(value, a) && !colorEq(value, b) && !colorEq(value, c) && !colorEq(value, d); }
+highp float mmpxLuma(highp vec4 color)
 {
 	// Match the packed RGBA8 rule, including nonzero luma for opaque texels.
 	highp vec4 bytes = floor(clamp(color, 0.0, 1.0) * 255.0 + 0.5);
 	return (bytes.r + bytes.g + bytes.b + 1.0) * (256.0 - bytes.a);
 }
-lowp vec4 mmpxResultColor(lowp vec4 result, lowp vec4 center) { return pp_SampleTextureFilter == 6 && !colorEq(result, center) ? mix(result, center, 0.25) : result; }
+highp vec4 mmpxResultColor(highp vec4 result, highp vec4 center) { return pp_SampleTextureFilter == 6 && !colorEq(result, center) ? mix(result, center, 0.25) : result; }
 
-lowp vec4 mmpxSample(TextureSampleState state, highp vec2 uv)
+highp vec4 mmpxSample(TextureSampleState state, highp vec2 uv)
 {
 	highp vec2 sourceTexSize = vec2(textureSize(tex, 0));
 	highp vec2 bcoords = floor(uv * sourceTexSize);
@@ -538,23 +554,23 @@ lowp vec4 mmpxSample(TextureSampleState state, highp vec2 uv)
 	highp vec2 invTexSize = vec2(1.0) / sourceTexSize;
 
 	// MMPX is a MIT-licensed style-preserving pixel-art magnifier by Morgan McGuire and Mara Gagiu.
-	lowp vec4 A = sampleSourceTexel(state, baseUV + vec2(-1.0, -1.0) * invTexSize);
-	lowp vec4 B = sampleSourceTexel(state, baseUV + vec2( 0.0, -1.0) * invTexSize);
-	lowp vec4 C = sampleSourceTexel(state, baseUV + vec2( 1.0, -1.0) * invTexSize);
-	lowp vec4 D = sampleSourceTexel(state, baseUV + vec2(-1.0,  0.0) * invTexSize);
-	lowp vec4 E = sampleSourceTexel(state, baseUV);
-	lowp vec4 F = sampleSourceTexel(state, baseUV + vec2( 1.0,  0.0) * invTexSize);
-	lowp vec4 G = sampleSourceTexel(state, baseUV + vec2(-1.0,  1.0) * invTexSize);
-	lowp vec4 H = sampleSourceTexel(state, baseUV + vec2( 0.0,  1.0) * invTexSize);
-	lowp vec4 I = sampleSourceTexel(state, baseUV + vec2( 1.0,  1.0) * invTexSize);
-	lowp vec4 J = E, K = E, L = E, M = E;
+	highp vec4 A = sampleSourceTexel(state, baseUV + vec2(-1.0, -1.0) * invTexSize);
+	highp vec4 B = sampleSourceTexel(state, baseUV + vec2( 0.0, -1.0) * invTexSize);
+	highp vec4 C = sampleSourceTexel(state, baseUV + vec2( 1.0, -1.0) * invTexSize);
+	highp vec4 D = sampleSourceTexel(state, baseUV + vec2(-1.0,  0.0) * invTexSize);
+	highp vec4 E = sampleSourceTexel(state, baseUV);
+	highp vec4 F = sampleSourceTexel(state, baseUV + vec2( 1.0,  0.0) * invTexSize);
+	highp vec4 G = sampleSourceTexel(state, baseUV + vec2(-1.0,  1.0) * invTexSize);
+	highp vec4 H = sampleSourceTexel(state, baseUV + vec2( 0.0,  1.0) * invTexSize);
+	highp vec4 I = sampleSourceTexel(state, baseUV + vec2( 1.0,  1.0) * invTexSize);
+	highp vec4 J = E, K = E, L = E, M = E;
 
 	if (!mmpxAllEq4(E, A, B, C, D) || !mmpxAllEq4(E, F, G, H, I))
 	{
-		lowp vec4 P = sampleSourceTexel(state, baseUV + vec2( 0.0, -2.0) * invTexSize);
-		lowp vec4 Q = sampleSourceTexel(state, baseUV + vec2(-2.0,  0.0) * invTexSize);
-		lowp vec4 R = sampleSourceTexel(state, baseUV + vec2( 2.0,  0.0) * invTexSize);
-		lowp vec4 S = sampleSourceTexel(state, baseUV + vec2( 0.0,  2.0) * invTexSize);
+		highp vec4 P = sampleSourceTexel(state, baseUV + vec2( 0.0, -2.0) * invTexSize);
+		highp vec4 Q = sampleSourceTexel(state, baseUV + vec2(-2.0,  0.0) * invTexSize);
+		highp vec4 R = sampleSourceTexel(state, baseUV + vec2( 2.0,  0.0) * invTexSize);
+		highp vec4 S = sampleSourceTexel(state, baseUV + vec2( 0.0,  2.0) * invTexSize);
 		highp float Bl = mmpxLuma(B), Dl = mmpxLuma(D), El = mmpxLuma(E), Fl = mmpxLuma(F), Hl = mmpxLuma(H);
 
 		if ((colorEq(D, B) && !colorEq(D, H) && !colorEq(D, F)) && (El >= Dl || colorEq(E, A)) && mmpxAnyEq3(E, A, C, G) && ((El < Dl) || !colorEq(A, D) || !colorEq(E, P) || !colorEq(E, Q))) J = D;
@@ -576,7 +592,7 @@ lowp vec4 mmpxSample(TextureSampleState state, highp vec2 uv)
 	}
 
 	highp vec2 fpart = fract(uv * sourceTexSize);
-	lowp vec4 result = (fpart.x < 0.5) ? ((fpart.y < 0.5) ? J : L) : ((fpart.y < 0.5) ? K : M);
+	highp vec4 result = (fpart.x < 0.5) ? ((fpart.y < 0.5) ? J : L) : ((fpart.y < 0.5) ? K : M);
 	return mmpxResultColor(result, E);
 }
 
@@ -687,7 +703,11 @@ lowp vec4 separableReconstructionSample(TextureSampleState state, highp vec2 uv,
 	return color;
 }
 
+#if TARGET_GL == GLES3 && pp_SampleTextureFilter >= 5 && pp_SampleTextureFilter <= 7
+highp vec4 filteredTextureSample(TextureSampleState state, highp vec3 coords)
+#else
 lowp vec4 filteredTextureSample(TextureSampleState state, highp vec3 coords)
+#endif
 {
 	// Bump-map channels encode angles, not color or coverage.
 	if (pp_BumpMap != 0 || !sampleTextureFilterEligible())
@@ -749,7 +769,11 @@ void main()
 			TextureSampleState sampleState;
 			sampleState.palette = pp_Palette != 0;
 			sampleState.ignoreAlpha = pp_IgnoreTexA != 0;
-			lowp vec4 texcol = filteredTextureSample(sampleState, vtx_uv);
+			#if TARGET_GL == GLES3 && pp_SampleTextureFilter >= 5 && pp_SampleTextureFilter <= 7
+				highp vec4 texcol = filteredTextureSample(sampleState, vtx_uv);
+			#else
+				lowp vec4 texcol = filteredTextureSample(sampleState, vtx_uv);
+			#endif
 		#elif pp_Palette == 0
 		  #if TARGET_GL == GLES2 || TARGET_GL == GL2 || DIV_POS_Z == 1
 			lowp vec4 texcol = texture(tex, vtx_uv.xy);

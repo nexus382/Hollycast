@@ -307,10 +307,11 @@ struct DX11OITRenderer : public DX11Renderer
 				int slot = i == 0 ? 0 : 3;
 				deviceContext->PSSetShaderResources(slot, 1, &texture->textureView.get());
 				TSP tsp = i == 0 ? gp->tsp : gp->tsp1;
+				const bool reconstruct = filter.appliesTo(texture->sampledWidth());
 				bool linearFiltering;
 				if (texture->gpuPalette)
 					linearFiltering = false;
-				else if (filter.mode != 0 && filter.appliesTo(texture->sampledWidth()))
+				else if (reconstruct)
 					linearFiltering = false;
 				else if (config::TextureFiltering == 0)
 					linearFiltering = tsp.FilterMode != 0;
@@ -318,7 +319,7 @@ struct DX11OITRenderer : public DX11Renderer
 					linearFiltering = false;
 				else
 					linearFiltering = true;
-		        auto sampler = samplers->getSampler(linearFiltering, tsp.ClampU, tsp.ClampV, tsp.FlipU, tsp.FlipV, Type == ListType_Punch_Through);
+				auto sampler = samplers->getSampler(linearFiltering, tsp.ClampU, tsp.ClampV, tsp.FlipU, tsp.FlipV, Type == ListType_Punch_Through, reconstruct);
 		        deviceContext->PSSetSamplers(slot, 1, &sampler.get());
 			}
 		}
