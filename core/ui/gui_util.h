@@ -538,4 +538,9 @@ bool SettingPopup(
     std::function<void()> onApply = nullptr
 );
 
+struct TextFilter : public ImGuiTextFilter
+{
+	bool Draw(const char* label = "Filter (inc,-exc)", float width = 0.0f);
+};
+
 } // namespace SettingsUI
