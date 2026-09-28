@@ -2592,4 +2592,14 @@ bool SettingPopup(
     return SettingPopup(cfg);
 }
 
+bool TextFilter::Draw(const char* label, float width)
+{
+    if (width != 0.0f)
+        ImGui::SetNextItemWidth(width);
+    bool value_changed = InputText(label, InputBuf, IM_COUNTOF(InputBuf));
+    if (value_changed)
+        Build();
+    return value_changed;
+}
+
 } // namespace SettingsUI

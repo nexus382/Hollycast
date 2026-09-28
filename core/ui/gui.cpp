@@ -979,7 +979,7 @@ static void gui_display_commands()
 			}
 			else {
 				emu.openGdrom();
-				gui_setState(GuiState::Loading);
+				gui_resume_game();
 			}
 		}
 			// Settings
@@ -2172,7 +2172,7 @@ static void gui_display_content()
     ImGui::Text("%s", T("GAMES"));
     ImGui::Unindent(10.0f * libraryToolbarScale);
 
-    static ImGuiTextFilter filter;
+    static SettingsUI::TextFilter filter;
 	int libraryIconScale = std::clamp(config::LibraryIconScale.get(), 50, 200);
 	static bool libraryHoverSettingsInitialized = false;
 	static int lastLibraryIconScale = libraryIconScale;
@@ -2207,20 +2207,20 @@ static void gui_display_content()
 		lastBoxartDisplayMode = currentBoxartDisplayMode;
 	}
     IconButton settingsBtn(ICON_FA_GEAR, T("Settings"));
-#if !defined(TARGET_IPHONE) && !defined(TARGET_UWP) && !defined(__SWITCH__)
+	ImGui::SameLine(0, 32.0f * libraryToolbarScale);
 	const float iconScaleSliderWidth = 135.0f * libraryToolbarScale;
 	const char* iconScaleLabel = T("Icon Size");
-	const float iconScaleControlWidth = iconScaleSliderWidth + ImGui::GetStyle().ItemInnerSpacing.x
-			+ ImGui::CalcTextSize(iconScaleLabel).x;
-	const float settingsLeft = ImGui::GetContentRegionMax().x - settingsBtn.width();
-	const float sliderLeft = settingsLeft - 24.0f * libraryToolbarScale - iconScaleControlWidth;
-	ImGui::SameLine(0, 32.0f * libraryToolbarScale);
-	const float availableFilterWidth = sliderLeft - ImGui::GetCursorPosX()
-			- ImGui::GetStyle().ItemSpacing.x - ImGui::CalcTextSize(T("Filter")).x;
-	const float maxFilterWidth = std::max(80.0f * libraryToolbarScale,
-			std::min(availableFilterWidth, 520.0f * libraryToolbarScale));
-	const float filterWidth = std::clamp(availableFilterWidth * 0.5f,
-			80.0f * libraryToolbarScale, maxFilterWidth);
+	float filterWidth = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x
+			- settingsBtn.width() - ImGui::GetStyle().ItemSpacing.x - ImGui::CalcTextSize(T("Filter")).x
+			- ImGui::GetStyle().ItemSpacing.x - ImGui::CalcTextSize(iconScaleLabel).x
+			- ImGui::GetStyle().ItemSpacing.x - iconScaleSliderWidth;
+#ifdef TARGET_UWP
+	filterWidth -= ImGui::CalcTextSize(T("Load...")).x + ImGui::GetStyle().FramePadding.x * 2
+			+ ImGui::GetStyle().ItemSpacing.x;
+#elif defined(__SWITCH__)
+	IconButton exitBtn(ICON_FA_POWER_OFF, T("Exit"));
+	filterWidth -= exitBtn.width() + ImGui::GetStyle().ItemSpacing.x;
+#endif
 	filter.Draw(T("Filter"), filterWidth);
 	ImGui::SameLine(0, 24.0f * libraryToolbarScale);
 	ImGui::SetNextItemWidth(iconScaleSliderWidth);
@@ -2230,19 +2230,15 @@ static void gui_display_content()
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         config::LibraryIconScale.save();
     }
-#endif
     if (gui_state != GuiState::SelectDisk)
     {
 #ifdef TARGET_UWP
-		ImGui::SameLine(ImGui::GetContentRegionMax().x - settingsBtn.width()
-				- ImGui::GetStyle().FramePadding.x * 2.0f  - ImGui::GetStyle().ItemSpacing.x - ImGui::CalcTextSize(T("Load...")).x);
+    	ImGui::SameLine();
 		if (ImGui::Button(T("Load...")))
 			gui_load_game();
 		ImGui::SameLine();
 #elif defined(__SWITCH__)
-		IconButton exitBtn(ICON_FA_POWER_OFF, T("Exit"));
-		ImGui::SameLine(ImGui::GetContentRegionMax().x - settingsBtn.width()
-				- ImGui::GetStyle().ItemSpacing.x - exitBtn.width());
+		ImGui::SameLine();
 		if (exitBtn.realize())
 			dc_exit();
 		ImGui::SameLine();
@@ -2443,7 +2439,7 @@ static void gui_display_content()
 							{
 								try {
 									emu.insertGdrom(game.path);
-									gui_setState(GuiState::Closed);
+									gui_resume_game();
 								} catch (const FlycastException& e) {
 									gui_error(e.what());
 								}
@@ -2550,7 +2546,7 @@ static void gui_display_content()
 							{
 								try {
 									emu.insertGdrom(game.path);
-									gui_setState(GuiState::Closed);
+									gui_resume_game();
 								} catch (const FlycastException& e) {
 									gui_error(e.what());
 								}

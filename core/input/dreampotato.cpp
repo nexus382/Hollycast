@@ -691,8 +691,8 @@ void update()
 		u32 ports = (inPort1 ? 0x01 : 0) | (inPort2 ? 0x02 : 0);
 
 		if (
-			(inPort1 && maple_getPortCount(config::MapleMainDevices[bus]) >= 1) ||
-			(inPort2 && maple_getPortCount(config::MapleMainDevices[bus]) >= 2)
+			(inPort1 && maple_getPortCount(config::MapleMainDevices[bus], MaplePortType::built_in) >= 1) ||
+			(inPort2 && maple_getPortCount(config::MapleMainDevices[bus], MaplePortType::built_in) >= 2)
 		)
 		{
 			if (potato == nullptr) {
