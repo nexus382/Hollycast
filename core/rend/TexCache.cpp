@@ -422,7 +422,7 @@ BaseTextureCacheData::~BaseTextureCacheData() = default;
 void recordTextureUpload()
 {
 #ifndef LIBRETRO
-	if (performance_overlay::isCollectionEnabled())
+	if (performance_overlay::isRendererStatsRequested())
 		textureUploadCount.fetch_add(1, std::memory_order_relaxed);
 #endif
 }

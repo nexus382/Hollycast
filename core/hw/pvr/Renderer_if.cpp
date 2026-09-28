@@ -228,16 +228,18 @@ private:
 		// tile clipping is used to calculate framebuffer size in RTT below
 		setTileClipping(taContext->rend);
 		int width, height;
-		int rawWidth, rawHeight;
-		getPvrFramebufferSize(taContext->rend, rawWidth, rawHeight);
 		getScaledFramebufferSize(taContext->rend, width, height);
 		taContext->rend.framebufferWidth = width;
 		taContext->rend.framebufferHeight = height;
 		#ifndef LIBRETRO
 		// Keep both values so the OSD can distinguish Dreamcast source timing
 		// from the actual scaled framebuffer allocated by the active renderer.
-		if (!taContext->rend.isRTT && performance_overlay::isCollectionEnabled())
+		if (!taContext->rend.isRTT && performance_overlay::isResolutionRequested())
+		{
+			int rawWidth, rawHeight;
+			getPvrFramebufferSize(taContext->rend, rawWidth, rawHeight);
 			performance_overlay::recordRenderedResolution(rawWidth, rawHeight, width, height);
+		}
 		#endif
 		bool renderToScreen = !taContext->rend.isRTT && !config::EmulateFramebuffer;
 #ifdef LIBRETRO
@@ -263,11 +265,16 @@ private:
 		if (performance_overlay::isCollectionEnabled())
 		{
 			const rend_context& context = taContext->rend;
-			const std::uint32_t primitiveCount = static_cast<std::uint32_t>(
-				context.global_param_op.size() + context.global_param_pt.size() + context.global_param_tr.size()
-				+ context.global_param_mvo.size() + context.global_param_mvo_tr.size());
-			performance_overlay::recordPvrScene(!context.isRTT, primitiveCount, static_cast<std::uint32_t>(context.verts.size()));
-			performance_overlay::recordRendererPass(static_cast<std::uint32_t>(context.render_passes.size()));
+			if (performance_overlay::isRendererStatsRequested())
+			{
+				const std::uint32_t primitiveCount = static_cast<std::uint32_t>(
+					context.global_param_op.size() + context.global_param_pt.size() + context.global_param_tr.size()
+					+ context.global_param_mvo.size() + context.global_param_mvo_tr.size());
+				performance_overlay::recordPvrScene(!context.isRTT, primitiveCount, static_cast<std::uint32_t>(context.verts.size()));
+				performance_overlay::recordRendererPass(static_cast<std::uint32_t>(context.render_passes.size()));
+			}
+			else
+				performance_overlay::recordPvrScene(!context.isRTT, 0, 0);
 		}
 		#endif
 

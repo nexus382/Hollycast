@@ -619,7 +619,17 @@ bool VulkanContext::InitDevice()
 			vk::QueryPoolCreateInfo queryPoolInfo {};
 			queryPoolInfo.queryType = vk::QueryType::eTimestamp;
 			queryPoolInfo.queryCount = static_cast<u32>(GpuTimingQueryCount * 2);
-			gpuTimingQueryPool = device->createQueryPoolUnique(queryPoolInfo);
+			try {
+				gpuTimingQueryPool = device->createQueryPoolUnique(queryPoolInfo);
+			} catch (const vk::SystemError& error) {
+				// Timestamp storage is optional. Its allocation must not prevent
+				// rendering, but a lost device still needs the normal recovery path.
+				if (error.code().value() == static_cast<int>(vk::Result::eErrorDeviceLost))
+					throw;
+				gpuTimingAvailable = false;
+				gpuTimingQueryPool.reset();
+				WARN_LOG(RENDERER, "GPU timing unavailable: %s", error.what());
+			}
 		}
 
 	    // Descriptor pool

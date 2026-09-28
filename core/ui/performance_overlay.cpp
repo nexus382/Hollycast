@@ -300,6 +300,7 @@ struct Metrics {
 	bool hostSystemCpuValid = false;
 	bool sh4ThreadCpuValid = false;
 	bool sh4TimePerVblankValid = false;
+	bool pvrTimePerVblankValid = false;
 	bool frameTimeValid = false;
 	bool gpuTimingSupported = false;
 	bool gpuTimingValid = false;
@@ -391,6 +392,7 @@ void updateMetrics(std::uint32_t items)
 		metrics.textureUploadsPerSecond = 0.f;
 		metrics.sh4ThreadCpuValid = false;
 		metrics.sh4TimePerVblankValid = false;
+		metrics.pvrTimePerVblankValid = false;
 		metrics.frameTimeValid = false;
 		// The CPU sampler is delta-based. The call above establishes a new
 		// baseline after Off; do not display the hidden interval it replaced.
@@ -490,7 +492,10 @@ void updateMetrics(std::uint32_t items)
 	metrics.sh4TimePerVblank = metrics.sh4TimePerVblankValid
 		? static_cast<float>(sh4Work) / vblankSamples / 1000.f
 		: 0.f;
-	metrics.pvrTimePerVblank = static_cast<float>(pvrWork) / vblankSamples / 1000.f;
+	metrics.pvrTimePerVblankValid = vblanks != 0;
+	metrics.pvrTimePerVblank = metrics.pvrTimePerVblankValid
+		? static_cast<float>(pvrWork) / vblankSamples / 1000.f
+		: 0.f;
 	const std::uint64_t gpuNanoseconds = gpuTimingNanoseconds.exchange(0);
 	const std::uint32_t gpuSamples = gpuTimingSampleCount.exchange(0);
 	metrics.gpuTimingSupported = gpuTimingSupported.load(std::memory_order_relaxed);
@@ -591,14 +596,11 @@ std::string formatResolution()
 		? std::to_string(settings.display.width) + "x" + std::to_string(settings.display.height)
 		: i18n::T("unavailable");
 	std::string value = i18n::T("Rendered: ") + rendered + i18n::T(" | Raw: ") + raw;
-	if (config::IntegerScale)
-	{
-		const int viewportWidth = outputViewportWidth.load(std::memory_order_relaxed);
-		const int viewportHeight = outputViewportHeight.load(std::memory_order_relaxed);
-		if (viewportWidth > 0 && viewportHeight > 0
-				&& (viewportWidth != settings.display.width || viewportHeight != settings.display.height))
-			value += i18n::T(" | Viewport: ") + std::to_string(viewportWidth) + "x" + std::to_string(viewportHeight);
-	}
+	const int viewportWidth = outputViewportWidth.load(std::memory_order_relaxed);
+	const int viewportHeight = outputViewportHeight.load(std::memory_order_relaxed);
+	if (viewportWidth > 0 && viewportHeight > 0
+			&& (viewportWidth != settings.display.width || viewportHeight != settings.display.height))
+		value += i18n::T(" | Viewport: ") + std::to_string(viewportWidth) + "x" + std::to_string(viewportHeight);
 	return value + i18n::T(" | Output: ") + output;
 }
 
@@ -711,8 +713,14 @@ std::string formatSh4Work()
 std::string formatPvrWork()
 {
 #if defined(_WIN32) || defined(CLOCK_THREAD_CPUTIME_ID)
-	return formatThreadWork(static_cast<bool>(config::ThreadedRendering) ? i18n::T("Host CPU (PVR Renderer)") : i18n::T("Host CPU (PVR Portion)"), metrics.pvrUsage,
-		metrics.pvrTimePerVblank);
+	const char *label = config::ThreadedRendering ? i18n::T("Host CPU (PVR Renderer)") : i18n::T("Host CPU (PVR Portion)");
+	if (!metrics.pvrTimePerVblankValid)
+	{
+		char value[128];
+		std::snprintf(value, sizeof(value), i18n::T("%s: %.1f%% (no vblank)"), label, metrics.pvrUsage);
+		return value;
+	}
+	return formatThreadWork(label, metrics.pvrUsage, metrics.pvrTimePerVblank);
 #else
 	return i18n::T("PVR Renderer CPU Work: unavailable (no thread CPU timer)");
 #endif
@@ -887,6 +895,16 @@ bool isPvrWorkRequested()
 	return isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & PvrWork) != 0;
 }
 
+bool isRendererStatsRequested()
+{
+	return isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & RendererStats) != 0;
+}
+
+bool isResolutionRequested()
+{
+	return isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & Resolution) != 0;
+}
+
 void reset()
 {
 	collectionEnabled.store(false, std::memory_order_release);
@@ -896,7 +914,8 @@ void reset()
 
 void recordSh4Vblank()
 {
-	if (isCollectionEnabled())
+	// CPU-work rows also need this count for their per-VBlank denominator.
+	if (isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & (Fps | Speed | Sh4Work | PvrWork)) != 0)
 		vblankCount.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -908,7 +927,7 @@ void recordPvrWork(std::uint64_t microseconds)
 
 void recordRenderedResolution(int rawWidth, int rawHeight, int renderedWidth, int renderedHeight)
 {
-	if (!isCollectionEnabled())
+	if (!isResolutionRequested())
 		return;
 	rawRenderWidth.store(rawWidth, std::memory_order_relaxed);
 	rawRenderHeight.store(rawHeight, std::memory_order_relaxed);
@@ -918,7 +937,7 @@ void recordRenderedResolution(int rawWidth, int rawHeight, int renderedWidth, in
 
 void recordOutputViewport(int width, int height)
 {
-	if (!isCollectionEnabled())
+	if (!isResolutionRequested())
 		return;
 	outputViewportWidth.store(width, std::memory_order_relaxed);
 	outputViewportHeight.store(height, std::memory_order_relaxed);
@@ -953,16 +972,20 @@ void recordPvrScene(bool displayScene, std::uint32_t primitiveCount, std::uint32
 	// This mirrors DuckStation's internal-frame counter: a completed PVR scene
 	// for the Dreamcast display, excluding render-to-texture passes. It must not
 	// be derived from Present(), which can repeat or omit a host output frame.
-	if (displayScene)
+	const std::uint32_t items = requestedItems.load(std::memory_order_relaxed);
+	if (displayScene && (items & Fps) != 0)
 		gameFrameCount.fetch_add(1, std::memory_order_relaxed);
-	rendererSceneCount.fetch_add(1, std::memory_order_relaxed);
-	pvrPrimitiveCount.fetch_add(primitiveCount, std::memory_order_relaxed);
-	pvrVertexCount.fetch_add(vertexCount, std::memory_order_relaxed);
+	if ((items & RendererStats) != 0)
+	{
+		rendererSceneCount.fetch_add(1, std::memory_order_relaxed);
+		pvrPrimitiveCount.fetch_add(primitiveCount, std::memory_order_relaxed);
+		pvrVertexCount.fetch_add(vertexCount, std::memory_order_relaxed);
+	}
 }
 
 void recordRendererPass(std::uint32_t count)
 {
-	if (isCollectionEnabled())
+	if (isRendererStatsRequested())
 		rendererPassCount.fetch_add(count, std::memory_order_relaxed);
 }
 
@@ -997,14 +1020,14 @@ std::uint32_t getGpuTimingEpoch()
 
 void recordPvrRenderSchedule(std::uint32_t renderCycles)
 {
-	if (!isCollectionEnabled())
+	if (!isCollectionEnabled() || (requestedItems.load(std::memory_order_relaxed) & PvrPressure) == 0)
 		return;
 	pvrScheduledRenderCycles.fetch_add(renderCycles, std::memory_order_relaxed);
 }
 
 void recordPvrFrameBudget(std::uint32_t frameCycles)
 {
-	if (!isCollectionEnabled() || frameCycles == 0)
+	if (!isCollectionEnabled() || frameCycles == 0 || (requestedItems.load(std::memory_order_relaxed) & PvrPressure) == 0)
 		return;
 	pvrVideoFrameCycles.fetch_add(frameCycles, std::memory_order_relaxed);
 }

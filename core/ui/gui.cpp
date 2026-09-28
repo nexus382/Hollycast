@@ -126,28 +126,32 @@ static bool touchedLibraryItemThisFrame = false;
 
 static void emuEventCallback(Event event, void *)
 {
-	performance_overlay::reset();
 	switch (event)
 	{
 	case Event::Resume:
+		performance_overlay::reset();
 		boxart.resumePlaytime();
 		game_started = true;
 		vgamepad::startGame();
 		break;
 	case Event::Start:
+		performance_overlay::reset();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
 		GamepadDevice::load_system_mappings();
 		break;
 	case Event::Terminate:
+		performance_overlay::reset();
 		boxart.checkpointPlaytime(true);
 		GamepadDevice::load_system_mappings();
 		game_started = false;
 		break;
 	case Event::Pause:
+		performance_overlay::reset();
 		boxart.checkpointPlaytime(true);
 		break;
 	case Event::VBlank:
+		// VBlank checkpoints playtime without restarting the OSD sample interval.
 		boxart.checkpointPlaytime(false);
 		break;
 	default:
@@ -181,7 +185,6 @@ void gui_init()
 	EventManager::listen(Event::Pause, emuEventCallback);
     EventManager::listen(Event::Start, emuEventCallback);
 	EventManager::listen(Event::Terminate, emuEventCallback);
-	EventManager::listen(Event::Pause, emuEventCallback);
 	EventManager::listen(Event::VBlank, emuEventCallback);
     ggpo::receiveChatMessages([](int playerNum, const std::string& msg) { chat.receive(playerNum, msg); });
 
@@ -3145,7 +3148,6 @@ void gui_term()
 		EventManager::unlisten(Event::Pause, emuEventCallback);
 	    EventManager::unlisten(Event::Start, emuEventCallback);
 	    EventManager::unlisten(Event::Terminate, emuEventCallback);
-	    EventManager::unlisten(Event::Pause, emuEventCallback);
 	    EventManager::unlisten(Event::VBlank, emuEventCallback);
 	    clearVmuIconLookups();
 	    boxart.term();

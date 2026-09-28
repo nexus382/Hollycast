@@ -254,10 +254,16 @@ bool DX11Context::initGpuTiming()
 		D3D11_QUERY_DESC desc {};
 		desc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
 		if (FAILED(pDevice->CreateQuery(&desc, &query.disjoint.get())))
+		{
+			gpuTimingQueries = {};
 			return false;
+		}
 		desc.Query = D3D11_QUERY_TIMESTAMP;
 		if (FAILED(pDevice->CreateQuery(&desc, &query.start.get())) || FAILED(pDevice->CreateQuery(&desc, &query.end.get())))
+		{
+			gpuTimingQueries = {};
 			return false;
+		}
 	}
 	gpuTimingAvailable = true;
 	return true;

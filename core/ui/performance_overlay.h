@@ -21,6 +21,8 @@ void reset();
 bool isCollectionEnabled();
 // CPU clock reads are only needed while the renderer CPU row is visible.
 bool isPvrWorkRequested();
+bool isRendererStatsRequested();
+bool isResolutionRequested();
 
 void resetSh4ThreadSample();
 void clearSh4ThreadSample();
