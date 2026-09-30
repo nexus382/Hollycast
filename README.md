@@ -40,9 +40,7 @@ Hollycast aims to support every platform and release offered by Flycast. If Flyc
 
 ### Support Hollycast
 
-Support development via [PayPal](https://paypal.me/AnthonyScordino) or [Ko-fi](https://ko-fi.com/romrevival). You can also scan the PayPal QR code:
-
-<a href="https://paypal.me/AnthonyScordino"><img src="docs/paypal-qrcode.png" width="180" alt="PayPal donation QR code"></a>
+Support development via [PayPal](https://paypal.me/AnthonyScordino) or [Ko-fi](https://ko-fi.com/romrevival).
 
 ### Build Prerequisites for Windows
 
