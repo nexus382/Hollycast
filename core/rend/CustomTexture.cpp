@@ -1,5 +1,6 @@
 /*
 	 Copyright 2018 flyinghead
+	 Portions Copyright 2026 The Hollycast Authors
  
 	 This file is part of reicast.
  
@@ -974,7 +975,10 @@ void CustomTexture::processGpuPreloads(const GpuTextureUploader& uploader)
 					pending.first, exception.what());
 		}
 		if (uploaded)
+		{
+			recordTextureUpload();
 			preloadLoadedSize += pending.second->bytes.size();
+		}
 		else
 			reportError(CustomTextureException::Error::Upload);
 		preloadLoaded++;

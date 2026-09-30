@@ -2,6 +2,7 @@
 	Created on: Oct 8, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -668,6 +669,9 @@ vk::CommandBuffer ScreenDrawer::BeginRenderPass()
 		frameRendered = false;
 		vk::CommandBuffer commandBuffer = commandPool->Allocate(true);
 		commandBuffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+		// Measure only the displayed renderer frame. Render-to-texture scenes
+		// are separate work and must not inflate ms/rendered frame.
+		GetContext()->BeginGpuTiming(commandBuffer);
 		createAttachments(commandBuffer);
 
 		renderDelegate->beginRender(commandBuffer, GetCurrentImage());
@@ -689,6 +693,7 @@ void ScreenDrawer::EndRenderPass()
 	if (!renderPassStarted)
 		return;
 	renderDelegate->endRender(currentCommandBuffer);
+	GetContext()->EndGpuTiming(currentCommandBuffer);
 	FramebufferAttachment *colorAttachment = nullptr;
 	if (GetCurrentImage() < (int)colorAttachments.size())
 		colorAttachment = colorAttachments[GetCurrentImage()].get();

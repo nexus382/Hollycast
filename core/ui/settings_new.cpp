@@ -98,6 +98,11 @@ static void cfgSaveInt(const std::string& section, const std::string& key, int v
 	config::saveInt(section, key, value);
 }
 
+static int cfgLoadInt(const std::string& section, const std::string& key, int def)
+{
+	return config::loadInt(section, key, def);
+}
+
 static int getResourceMonitorMode()
 {
 	return config::loadInt("rend", "ResourceMonitorMode", 0);
@@ -390,6 +395,8 @@ static const char* GetTabHelpText(SettingsTab tab)
 		return T("Library layout, artwork, scraped media, game metadata, and VMU save icons. Highlight or select a setting to see a fuller explanation here.");
 	case SettingsTab::Video:
 		return T("Graphics quality, renderer behavior, scaling, and performance tuning. Highlight or select a setting to see what it changes and why it matters.");
+	case SettingsTab::OnScreenDisplay:
+		return T("In-game information, VMU displays, performance metrics, and overlay appearance. Highlight or select a setting to see what it changes and why it matters.");
 	case SettingsTab::Audio:
 		return T("Audio backend, latency, mixing, and output behavior. Highlight or select a setting for practical guidance before changing it.");
 	case SettingsTab::Controls:
@@ -2176,6 +2183,8 @@ const char* getTabName(SettingsTab tab)
 		return T("Library");
 	case SettingsTab::Video:
 		return T("Video");
+	case SettingsTab::OnScreenDisplay:
+		return T("On Screen Display");
 	case SettingsTab::Audio:
 		return T("Audio");
 	case SettingsTab::Controls:
@@ -2382,6 +2391,9 @@ static void renderContentArea()
 		break;
 	case SettingsTab::Video:
 		renderVideoTab();
+		break;
+	case SettingsTab::OnScreenDisplay:
+		renderOnScreenDisplayTab();
 		break;
 	case SettingsTab::Audio:
 		renderAudioTab();
@@ -4064,7 +4076,8 @@ void renderVideoTab()
 			std::array<int, scalings.size()> verticalRes {};
 			std::array<std::string, scalings.size()> resolutionLabels {};
 			std::array<const char*, scalings.size()> resolutionLabelPtrs {};
-			int internalResSelection = 0;
+			int internalResSelection = -1;
+			const int configuredRenderResolution = config::RenderResolution.get();
 
 			for (size_t i = 0; i < scalings.size(); i++)
 			{
@@ -4073,7 +4086,7 @@ void renderVideoTab()
 					? static_cast<int>(scalings[i] * 640.0f)
 					: static_cast<int>(scalings[i] * 480.0f * 16.0f / 9.0f);
 
-				if (verticalRes[i] == config::RenderResolution.get())
+				if (verticalRes[i] == configuredRenderResolution)
 					internalResSelection = static_cast<int>(i);
 
 				resolutionLabels[i] = std::to_string(horizontalRes) + "x" + std::to_string(verticalRes[i]) + " (" + scalingNames[i] + ")";
@@ -4088,10 +4101,23 @@ void renderVideoTab()
 			internalResCfg.options.options = resolutionLabelPtrs.data();
 			internalResCfg.options.optionCount = static_cast<int>(resolutionLabelPtrs.size());
 			internalResCfg.options.currentValue = &internalResSelection;
+			// Older and hand-edited configurations can contain resolutions outside
+			// the preset list. Show the stored vertical target instead of falsely
+			// presenting the first (Half) preset, and preserve it until a preset is
+			// explicitly selected.
+			const std::string customResolutionLabel = std::to_string(configuredRenderResolution)
+				+ "p (" + T("Custom") + ")";
+			internalResCfg.options.valueToString = [&, customResolutionLabel](int selectedIndex) {
+				if (selectedIndex >= 0 && selectedIndex < static_cast<int>(resolutionLabelPtrs.size()))
+					return resolutionLabelPtrs[selectedIndex];
+				return customResolutionLabel.c_str();
+			};
 			internalResCfg.options.valueWidth = 220.0f;
 			internalResCfg.options.onChange = [&](int selectedIndex) {
 				if (selectedIndex < 0 || selectedIndex >= static_cast<int>(verticalRes.size()))
 					return false;
+				// RenderResolution is the vertical target size; the renderer derives
+				// its scale from this value relative to the native 480-line output.
 				config::RenderResolution.set(verticalRes[selectedIndex]);
 				return true;
 			};
@@ -4186,19 +4212,6 @@ void renderVideoTab()
 
 		ImGui::Unindent();
 #endif
-
-		RenderGeneralToggleSettingRow(
-			"ShowVMU",
-			ICON_FA_GAMEPAD,
-			T("Show VMU In-Game"),
-			T("Show VMU LCD screens during gameplay."),
-			static_cast<bool>(config::FloatVMUs),
-			[](bool enabled) { config::FloatVMUs.set(enabled); },
-			T(
-				"Show VMU In-Game\n"
-				"Displays the VMU LCD screens while in-game.\n"
-				"Useful for games that rely on VMU info (status, menus, minigames)."
-			));
 
 		RenderGeneralToggleSettingRow(
 			"Framebuffer",
@@ -4713,19 +4726,6 @@ void renderVideoTab()
 				"For 2D/pixel-art, many users prefer Nearest-Neighbor. For 3D, Linear can look nicer."
 			));
 
-		// Show FPS Counter
-		RenderGeneralToggleSettingRow(
-			"ShowFPS",
-			ICON_FA_GAUGE_HIGH,
-			T("Show FPS Counter"),
-			T("Show FPS so you can tune for stable 30/60."),
-			static_cast<bool>(config::ShowFPS),
-			[](bool enabled) { config::ShowFPS.set(enabled); },
-			T(
-				"Show FPS Counter\n"
-				"Displays an on-screen frame rate counter.\n"
-				"Strongly recommended while tuning settings: aim for stable 30/60 FPS in real gameplay."
-			));
 	}
 
 #ifdef VIDEO_ROUTING
@@ -4875,6 +4875,248 @@ void renderVideoTab()
 		case 3:
 			config::RendererType = perPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
 			break;
+	}
+}
+
+void renderOnScreenDisplayTab()
+{
+	ScopedTwoLineRowStyle osdRowStyle(12.0f, true, 0.5f);
+
+	ImGui::TextDisabled("%s", T("On Screen Display"));
+	ImGui::Separator();
+
+	if (RenderCollapsingHeader("OsdInGameSection", ICON_FA_DISPLAY, T("In-Game Display"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderGeneralToggleSettingRow(
+			"ShowVMU",
+			ICON_FA_GAMEPAD,
+			T("Show VMU In-Game"),
+			T("Show VMU LCD screens during gameplay."),
+			static_cast<bool>(config::FloatVMUs),
+			[](bool enabled) { config::FloatVMUs.set(enabled); },
+			T("Show VMU In-Game\nDisplays the VMU LCD screens while in-game."));
+	}
+
+	if (RenderCollapsingHeader("OsdPerformanceSection", ICON_FA_CHART_LINE, T("Performance Overlay"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		const std::array<const char*, 3> overlayModeLabels { T("Off"), T("Minimal"), T("Full") };
+		int overlayModeSelection = std::clamp(getResourceMonitorMode(), 0, 2);
+		SettingsUI::PopupConfig overlayModeCfg {};
+		overlayModeCfg.type = SettingsUI::PopupType::Options;
+		overlayModeCfg.options.label = T("Overlay Mode");
+		overlayModeCfg.options.icon = ICON_FA_CHART_LINE;
+		overlayModeCfg.options.popupID = Tnop("ResourceMonitorModePopup");
+		overlayModeCfg.options.options = overlayModeLabels.data();
+		overlayModeCfg.options.optionCount = static_cast<int>(overlayModeLabels.size());
+		overlayModeCfg.options.currentValue = &overlayModeSelection;
+		overlayModeCfg.options.valueWidth = 220.0f;
+		overlayModeCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(overlayModeLabels.size()))
+				return false;
+			setResourceMonitorMode(selectedIndex);
+			return true;
+		};
+		RenderGeneralPopupSettingRow(
+			Tnop("ResourceMonitorMode"),
+			T("Choose the overlay density. Off can use the lightweight FPS counter; Full uses the metric selections below."),
+			overlayModeCfg,
+			T("Overlay Mode\nOff can show the lightweight FPS counter below. Minimal always shows a compact rate and CPU view. Full uses the diagnostic selections below, including separate host and Dreamcast timing domains."));
+
+		// The lightweight counter and performance overlay own different OSD
+		// layouts. Expose only the FPS control used by the active layout so a
+		// setting is never silently ignored or duplicated on screen.
+		if (overlayModeSelection == 0)
+		{
+			RenderGeneralToggleSettingRow(
+				"ShowFPS",
+				ICON_FA_GAUGE_HIGH,
+				T("Show Lightweight FPS Counter"),
+				T("Show a compact frame-rate counter without enabling performance monitoring."),
+				static_cast<bool>(config::ShowFPS),
+				[](bool enabled) { config::ShowFPS.set(enabled); },
+				T("Show Lightweight FPS Counter\nAvailable while the Performance Overlay is Off. Minimal includes frame rates automatically, while Full uses the Game FPS and VPS metric below."));
+		}
+		if (overlayModeSelection == 2)
+		{
+			struct OverlayMetric
+			{
+				const char* id;
+				const char* label;
+				const char* description;
+				bool defaultValue;
+			};
+			const std::array<OverlayMetric, 15> overlayMetrics {{
+				{ "OverlayShowFPS", T("Show Game FPS and VPS"), T("FPS counts completed non-render-to-texture PVR scenes: the game's internal rendered-frame rate, matching DuckStation's FPS meaning. VPS counts Dreamcast video blanks. A 30 FPS game normally shows 30 FPS and about 60 VPS on NTSC."), true },
+				{ "OverlayShowOutputFPS", T("Show Output FPS"), T("Counts successful frames presented to the screen. Compare it with Game FPS to identify repeated or omitted host output frames; it is display cadence, not the game's internal rendered-frame rate."), false },
+				{ "OverlayShowEmulationSpeed", T("Show Emulation Speed"), T("Shows current VPS relative to the active PAL or NTSC target and the configured speed limit. This is overall pace, not a CPU or GPU utilization meter."), true },
+				{ "OverlayShowThreadingState", T("Show Threading State"), T("Shows whether SH4 emulation and PVR rendering run on separate host threads. Threaded mode changes which thread can become the limiting host CPU core."), true },
+				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("Hollycast is the emulator process share of all logical CPU cores. Device is total CPU use from all apps. A single SH4 or renderer thread can still fill one core while Hollycast is low on an 8-core device."), true },
+				{ "OverlayShowGpuUsage", T("Show Host GPU"), T("Shows timestamped GPU work as a one-second share and milliseconds per timed render. Includes PVR screen renders and direct framebuffer uploads; full framebuffer emulation can perform both per video frame. It is backend GPU execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX 9, and DirectX 11 support it."), true },
+				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
+				{ "OverlayShowPvrTimingPressure", T("Show Dreamcast PVR Schedule"), T("Shows all emulated PVR renderer-complete delays scheduled during the sample as a share of the active Dreamcast video-frame budgets. Values above 100% mean scheduled render work exceeded one frame of budget on average. It is scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."), true },
+				{ "OverlayShowCpuUsage", T("Show Host SH4 Thread"), T("Shows host CPU time used by the thread running SH4 emulation. A value near 100% means that one host core is saturated; it does not directly mean the original Dreamcast SH4 is full."), false },
+				{ "OverlayShowPvrUsage", T("Show Host PVR Renderer Thread"), T("Shows host CPU time used by the PVR renderer thread or its shared-thread portion. It exposes emulator and graphics-driver preparation cost, not Dreamcast PVR pressure or hardware GPU use."), false },
+				{ "OverlayShowResolution", T("Show Resolution"), T("Shows native Dreamcast output, internal rendered size, host viewport, and final screen output. Higher rendered resolution can raise host GPU time without changing Dreamcast SH4 or PVR scheduling."), true },
+				{ "OverlayShowFrameTimes", T("Show Frame Times"), T("Shows minimum, average, and maximum intervals between successful host presents. Frame-time spikes expose stutter even when the one-second FPS average looks normal."), true },
+				{ "OverlayShowGpuStatistics", T("Show Renderer Statistics"), T("Shows API, PVR primitive batches, vertices, PVR render passes, and texture uploads per second. These are renderer work counters, not VRAM bytes, cache-resident texture count, or host draw/copy/readback counters."), true },
+				{ "OverlayShowVram", T("Show Host GPU Memory"), T("Shows the Windows DXGI memory attributed to Hollycast and its current adapter budget when the OS exposes it. It changes with allocations, but is not total GPU VRAM and is unavailable on platforms without an authoritative query."), true },
+				{ "OverlayShowRam", T("Show Hollycast RAM"), T("Shows the resident memory currently held by Hollycast according to the operating system. It changes with content, caches, and allocations. Fixed Dreamcast RAM and VRAM capacities are intentionally omitted."), true }
+			}};
+			for (const OverlayMetric& metric : overlayMetrics)
+			{
+				RenderGeneralToggleSettingRow(
+					metric.id,
+					ICON_FA_CHART_LINE,
+					metric.label,
+					metric.description,
+					cfgLoadBool("rend", metric.id, metric.defaultValue),
+					[metric](bool enabled) { cfgSaveBool("rend", metric.id, enabled); });
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("%s", T("History Graphs"));
+			const std::array<OverlayMetric, 3> overlayGraphs {{
+				{ "OverlayShowFrameTimeGraph", T("Show Frame-Time Graph"), T("Draw a rolling 152-sample graph of successful-present intervals. Spikes are long output frames."), true },
+				{ "OverlayShowHostCpuGraph", T("Show Host CPU Graph"), T("Draw rolling one-second samples. The main line is Hollycast's share of total CPU capacity; the blue line is overall device CPU use from all apps."), false },
+				{ "OverlayShowGpuGraph", T("Show Host GPU Graph"), T("Draw rolling one-second GPU timestamp samples. It is available only while the active backend supplies valid GPU timestamp queries."), false }
+			}};
+			for (const OverlayMetric& graph : overlayGraphs)
+			{
+				RenderGeneralToggleSettingRow(
+					graph.id,
+					ICON_FA_CHART_LINE,
+					graph.label,
+					graph.description,
+					cfgLoadBool("rend", graph.id, graph.defaultValue),
+					[graph](bool enabled) { cfgSaveBool("rend", graph.id, enabled); });
+			}
+		}
+	}
+
+	if (RenderCollapsingHeader("OsdAppearanceSection", ICON_FA_EYE, T("Appearance"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		static int overlayTextSize = cfgLoadInt("rend", "OverlayTextSize", 16);
+		SettingsUI::PopupSliderConfig textSizeCfg {};
+		textSizeCfg.label = T("Text Size");
+		textSizeCfg.icon = ICON_FA_TEXT_HEIGHT;
+		textSizeCfg.popupID = Tnop("OverlayTextSizePopup");
+		textSizeCfg.description = T("Set the maximum text size. The overlay shrinks when needed to keep every row and graph on screen.");
+		textSizeCfg.currentValue = &overlayTextSize;
+		textSizeCfg.minValue = 10;
+		textSizeCfg.maxValue = 48;
+		textSizeCfg.defaultValue = 16;
+		textSizeCfg.format = "%d px";
+		textSizeCfg.valueWidth = 220.0f;
+		textSizeCfg.sliderWidth = 320.0f;
+		textSizeCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayTextSize", overlayTextSize); };
+		SettingsUI::PopupConfig textSizePopup {};
+		textSizePopup.type = SettingsUI::PopupType::Slider;
+		textSizePopup.slider = textSizeCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayTextSizeSetting"), T("Choose the overlay font size."), textSizePopup,
+			T("Text Size\nControls the maximum text size. All selected rows and graphs automatically fit inside the screen."));
+
+		// Keep the existing configuration key for compatibility. Its value has
+		// always represented opacity: larger percentages make the OSD less transparent.
+		static int overlayOpacity = cfgLoadInt("rend", "OverlayTransparency", 85);
+		SettingsUI::PopupSliderConfig opacityCfg {};
+		opacityCfg.label = T("Opacity");
+		opacityCfg.icon = ICON_FA_EYE;
+		opacityCfg.popupID = Tnop("OverlayTransparencyPopup");
+		opacityCfg.description = T("Set the overlay opacity.");
+		opacityCfg.currentValue = &overlayOpacity;
+		opacityCfg.minValue = 10;
+		opacityCfg.maxValue = 100;
+		opacityCfg.defaultValue = 85;
+		opacityCfg.format = "%d%%";
+		opacityCfg.valueWidth = 220.0f;
+		opacityCfg.sliderWidth = 320.0f;
+		opacityCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayTransparency", overlayOpacity); };
+		SettingsUI::PopupConfig opacityPopup {};
+		opacityPopup.type = SettingsUI::PopupType::Slider;
+		opacityPopup.slider = opacityCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayTransparencySetting"), T("Set the overlay opacity."), opacityPopup,
+			T("Opacity\nControls the overlay text and background opacity."));
+
+		const std::array<const char*, 4> overlayCornerLabels { T("Top Left"), T("Top Right"), T("Bottom Left"), T("Bottom Right") };
+		int overlayCorner = std::clamp(config::loadInt("rend", "OverlayCorner", 1), 0, 3);
+		SettingsUI::PopupConfig cornerCfg {};
+		cornerCfg.type = SettingsUI::PopupType::Options;
+		cornerCfg.options.label = T("Screen Corner");
+		cornerCfg.options.icon = ICON_FA_LOCATION_DOT;
+		cornerCfg.options.popupID = Tnop("OverlayCornerPopup");
+		cornerCfg.options.options = overlayCornerLabels.data();
+		cornerCfg.options.optionCount = static_cast<int>(overlayCornerLabels.size());
+		cornerCfg.options.currentValue = &overlayCorner;
+		cornerCfg.options.valueWidth = 220.0f;
+		cornerCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(overlayCornerLabels.size()))
+				return false;
+			cfgSaveInt("rend", "OverlayCorner", selectedIndex);
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("OverlayCornerSetting"), T("Choose where the overlay appears."), cornerCfg,
+			T("Screen Corner\n15 pixels from the selected edges, and below the menu bar for the top corners."));
+
+		static int overlayOffsetX = cfgLoadInt("rend", "OverlayOffsetX", 0);
+		SettingsUI::PopupSliderConfig offsetXCfg {};
+		offsetXCfg.label = T("Horizontal Position");
+		offsetXCfg.icon = ICON_FA_ARROWS_LEFT_RIGHT;
+		offsetXCfg.popupID = Tnop("OverlayOffsetXPopup");
+		offsetXCfg.description = T("Move the complete overlay left or right.");
+		offsetXCfg.currentValue = &overlayOffsetX;
+		offsetXCfg.minValue = -1000;
+		offsetXCfg.maxValue = 1000;
+		offsetXCfg.defaultValue = 0;
+		offsetXCfg.format = "%+d px";
+		offsetXCfg.valueWidth = 220.0f;
+		offsetXCfg.sliderWidth = 320.0f;
+		offsetXCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayOffsetX", overlayOffsetX); };
+		SettingsUI::PopupConfig offsetXPopup {};
+		offsetXPopup.type = SettingsUI::PopupType::Slider;
+		offsetXPopup.slider = offsetXCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayOffsetXSetting"), T("Adjust the overlay's horizontal position."), offsetXPopup,
+			T("Horizontal Position\nZero starts 15 pixels from the selected edge. Negative values move left. Positive values move right. The overlay stays on screen."));
+
+		static int overlayOffsetY = cfgLoadInt("rend", "OverlayOffsetY", 0);
+		SettingsUI::PopupSliderConfig offsetYCfg {};
+		offsetYCfg.label = T("Vertical Position");
+		offsetYCfg.icon = ICON_FA_ARROWS_UP_DOWN;
+		offsetYCfg.popupID = Tnop("OverlayOffsetYPopup");
+		offsetYCfg.description = T("Move the complete overlay up or down.");
+		offsetYCfg.currentValue = &overlayOffsetY;
+		offsetYCfg.minValue = -1000;
+		offsetYCfg.maxValue = 1000;
+		offsetYCfg.defaultValue = 0;
+		offsetYCfg.format = "%+d px";
+		offsetYCfg.valueWidth = 220.0f;
+		offsetYCfg.sliderWidth = 320.0f;
+		offsetYCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayOffsetY", overlayOffsetY); };
+		SettingsUI::PopupConfig offsetYPopup {};
+		offsetYPopup.type = SettingsUI::PopupType::Slider;
+		offsetYPopup.slider = offsetYCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayOffsetYSetting"), T("Adjust the overlay's vertical position."), offsetYPopup,
+			T("Vertical Position\nZero starts 15 pixels from the selected edge, below the menu bar for top corners. Negative values move up. Positive values move down. The overlay stays on screen and below the menu bar."));
+
+		int packedColor = config::loadInt("rend", "OverlayColor", 0xFFFFFFFF);
+		float overlayColor[4] {
+			((packedColor >> 0) & 0xFF) / 255.0f,
+			((packedColor >> 8) & 0xFF) / 255.0f,
+			((packedColor >> 16) & 0xFF) / 255.0f,
+			((packedColor >> 24) & 0xFF) / 255.0f
+		};
+		RenderGeneralTextInputSettingRow(
+			"OverlayColor",
+			ICON_FA_EYE,
+			T("Text Color"),
+			T("Choose the overlay text color."),
+			[&]() {
+				if (ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs))
+					cfgSaveInt("rend", "OverlayColor", static_cast<int>(std::round(overlayColor[0] * 255.f))
+						| (static_cast<int>(std::round(overlayColor[1] * 255.f)) << 8)
+						| (static_cast<int>(std::round(overlayColor[2] * 255.f)) << 16)
+						| (static_cast<int>(std::round(overlayColor[3] * 255.f)) << 24));
+			},
+			T("Text Color\nControls the overlay text color."));
 	}
 }
 
@@ -7788,43 +8030,6 @@ void renderAdvancedTab()
 	const std::string developerToolsHeader = std::string(T("Developer Tools")) + "##Section";
 	if (ImGui::CollapsingHeader(developerToolsHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
 	{
-		const std::array<const char*, 3> monitorModeLabels {
-			T("Off"),
-			T("Minimal"),
-			T("Full")
-		};
-		int monitorModeSelection = getResourceMonitorMode();
-		if (monitorModeSelection < 0 || monitorModeSelection >= static_cast<int>(monitorModeLabels.size()))
-			monitorModeSelection = 0;
-
-		SettingsUI::PopupConfig monitorModeCfg {};
-		monitorModeCfg.type = SettingsUI::PopupType::Options;
-		monitorModeCfg.options.label = T("Overlay Mode");
-		monitorModeCfg.options.icon = ICON_FA_CHART_LINE;
-		monitorModeCfg.options.popupID = Tnop("ResourceMonitorModePopup");
-		monitorModeCfg.options.options = monitorModeLabels.data();
-		monitorModeCfg.options.optionCount = static_cast<int>(monitorModeLabels.size());
-		monitorModeCfg.options.currentValue = &monitorModeSelection;
-		monitorModeCfg.options.valueWidth = 220.0f;
-		monitorModeCfg.options.onChange = [&](int selectedIndex) {
-			if (selectedIndex < 0 || selectedIndex >= 3)
-				return false;
-			setResourceMonitorMode(selectedIndex);
-			return true;
-		};
-
-		RenderGeneralPopupSettingRow(
-			Tnop("ResourceMonitorMode"),
-			T("Real-time performance overlay updated once per second. Minimal: CPU/GPU/FPS. Full: CPU/GPU/frame time/FPS/VRAM/RAM."),
-			monitorModeCfg,
-			T(
-				"Resource Monitor Overlay\n"
-				"Displays a real-time performance overlay updated once per second.\n\n"
-				"Minimal shows CPU, GPU, and FPS.\n"
-				"Full also shows average frame time plus memory usage (VRAM/RAM).\n\n"
-				"Use this when tuning settings like Internal Resolution, Sorting, and Frame Skipping to keep performance stable."
-			));
-
 #ifdef USE_LUA
 		// Lua Scripting
 		ImGui::Text("%s", T("Lua Scripting"));

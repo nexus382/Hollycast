@@ -1,3 +1,6 @@
+/*
+	Portions Copyright 2026 The Hollycast Authors
+*/
 #include "Renderer_if.h"
 #include "spg.h"
 #include "rend/CustomTexture.h"
@@ -13,7 +16,11 @@
 #include "hw/sh4/sh4_sched.h"
 #include "profiler/fc_profiler.h"
 #include "network/ggpo.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 
+#include <cstdint>
 #include <cassert>
 #include <mutex>
 #include <deque>
@@ -174,22 +181,42 @@ private:
 
 	bool execute(Message msg)
 	{
+	#ifndef LIBRETRO
+		const bool measurePvrWork = performance_overlay::isPvrWorkRequested()
+			&& (msg.type == Render || msg.type == RenderFramebuffer || msg.type == Present);
+		std::uint64_t performanceStart = 0;
+		// A failed thread-time read must not produce a sample: recording a 0
+		// delta would print 0.0% instead of unavailable.
+		const bool performanceStartValid = measurePvrWork
+			&& performance_overlay::currentThreadCpuTimeMicroseconds(performanceStart);
+	#endif
+		bool executed = true;
 		switch (msg.type)
 		{
 		case Render:
 			render();
-			return true;
+			break;
 		case RenderFramebuffer:
 			renderFramebuffer(msg.config);
-			return true;
+			break;
 		case Present:
 			present();
-			return true;
+			break;
 		case Stop:
 		case NoMessage:
 		default:
-			return false;
+			executed = false;
+			break;
 		}
+	#ifndef LIBRETRO
+		if (performanceStartValid)
+		{
+			std::uint64_t performanceEnd = 0;
+			if (performance_overlay::currentThreadCpuTimeMicroseconds(performanceEnd))
+				performance_overlay::recordPvrWork(performanceEnd >= performanceStart ? performanceEnd - performanceStart : 0);
+		}
+	#endif
+		return executed;
 	}
 
 	void render()
@@ -207,6 +234,16 @@ private:
 		getScaledFramebufferSize(taContext->rend, width, height);
 		taContext->rend.framebufferWidth = width;
 		taContext->rend.framebufferHeight = height;
+		#ifndef LIBRETRO
+		// Keep both values so the OSD can distinguish Dreamcast source timing
+		// from the actual scaled framebuffer allocated by the active renderer.
+		if (!taContext->rend.isRTT && performance_overlay::isResolutionRequested())
+		{
+			int rawWidth, rawHeight;
+			getPvrFramebufferSize(taContext->rend, rawWidth, rawHeight);
+			performance_overlay::recordRenderedResolution(rawWidth, rawHeight, width, height);
+		}
+		#endif
 		bool renderToScreen = !taContext->rend.isRTT && !config::EmulateFramebuffer;
 #ifdef LIBRETRO
 		if (renderToScreen)
@@ -224,6 +261,25 @@ private:
 				throw;
 			}
 		}
+		#ifndef LIBRETRO
+		// These are Dreamcast PVR scene counters produced by ta_parse(), not
+		// host GPU-driver counters. Keep them separate from the backend draw
+		// count so the OSD does not imply that the two workloads are equivalent.
+		if (performance_overlay::isCollectionEnabled())
+		{
+			const rend_context& context = taContext->rend;
+			if (performance_overlay::isRendererStatsRequested())
+			{
+				const std::uint32_t primitiveCount = static_cast<std::uint32_t>(
+					context.global_param_op.size() + context.global_param_pt.size() + context.global_param_tr.size()
+					+ context.global_param_mvo.size() + context.global_param_mvo_tr.size());
+				performance_overlay::recordPvrScene(!context.isRTT, primitiveCount, static_cast<std::uint32_t>(context.verts.size()));
+				performance_overlay::recordRendererPass(static_cast<std::uint32_t>(context.render_passes.size()));
+			}
+			else
+				performance_overlay::recordPvrScene(!context.isRTT, 0, 0);
+		}
+		#endif
 
 		if (renderToScreen)
 			// If rendering to texture or in full framebuffer emulation, continue locking until the frame is rendered

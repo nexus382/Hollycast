@@ -3,6 +3,9 @@
 #include "gles.h"
 #include "quad.h"
 #include "rend/osd.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 #include "naomi2.h"
 #ifdef LIBRETRO
 #include "postprocess.h"
@@ -679,7 +682,11 @@ void OpenGLRenderer::drawStrips()
 void OpenGLRenderer::RenderFramebuffer(const FramebufferInfo& info)
 {
 	gl.rendContext = nullptr;
-	glReadFramebuffer(info);
+	ReadFramebuffer(info, gl.framebufferBuffer, gl.dcfb.width, gl.dcfb.height);
+	// Decode on the CPU before timing the upload, so an idle GPU cannot
+	// count the VRAM conversion time as framebuffer GPU work.
+	OpenGLGpuTimingScope gpuTiming(this, true);
+	glUploadFramebuffer();
 	saveCurrentFramebuffer();
 	initVideoRoutingFrameBuffer();
 	getVideoShift(gl.ofbo.shiftX, gl.ofbo.shiftY);
@@ -727,6 +734,11 @@ void OpenGLRenderer::RenderFramebuffer(const FramebufferInfo& info)
 	clearLastFrame = false;
 	renderVideoRouting();
 	restoreCurrentFramebuffer();
+#ifndef LIBRETRO
+	// Use the decoded image size (including 240p/interlace handling), rather
+	// than the PVR scene dimensions used by the normal rendering path.
+	performance_overlay::recordRenderedResolution(width, height, width, height);
+#endif
 }
 
 void writeFramebufferToVRAM()
@@ -808,6 +820,9 @@ bool OpenGLRenderer::renderLastFrame()
 	int dy = 0;
 	glcache.Disable(GL_SCISSOR_TEST);
 	getWindowboxDimensions(settings.display.width, outheight, gl.ofbo.aspectRatio, dx, dy, config::Rotate90);
+#ifndef LIBRETRO
+	performance_overlay::recordOutputViewport(settings.display.width - dx * 2, outheight - dy * 2);
+#endif
 
 	if (gl.bogusBlitFramebuffer || config::Rotate90)
 	{

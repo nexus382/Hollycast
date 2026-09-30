@@ -28,6 +28,7 @@ enum class SettingsTab
 	General,
 	Library,
 	Video,
+	OnScreenDisplay,
 	Audio,
 	Controls,
 	Network,
@@ -62,6 +63,7 @@ const char* getTabName(SettingsTab tab);
 void renderGeneralTab();
 void renderLibraryTab();
 void renderVideoTab();
+void renderOnScreenDisplayTab();
 void renderAudioTab();
 void renderControlsTab();
 void renderNetworkTab();

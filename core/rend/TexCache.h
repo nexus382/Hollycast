@@ -1,4 +1,6 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
+
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -42,6 +44,9 @@ struct vram_block
 
 bool VramLockedWriteOffset(size_t offset);
 bool VramLockedWrite(u8* address);
+// Call after an upload succeeds, including preloads, but not on texture reuse.
+void recordTextureUpload();
+u64 getTextureUploadCount();
 
 void UpscalexBRZ(int factor, u32* source, u32* dest, int width, int height, bool has_alpha);
 
@@ -165,7 +170,7 @@ public:
 	//true if : dirty or paletted texture and hashes don't match
 	bool NeedsUpdate();
 	virtual bool Delete();
-	virtual ~BaseTextureCacheData() = default;
+	virtual ~BaseTextureCacheData();
 	void protectVRam();
 	void unprotectVRam();
 	void invalidate();
@@ -186,6 +191,7 @@ public:
 				&& area == 0;
 	}
 	static void SetDirectXColorOrder(bool enabled);
+
 };
 
 template<typename Texture>

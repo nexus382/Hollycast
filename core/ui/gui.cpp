@@ -60,6 +60,7 @@
 #include "gui_font.h"
 using namespace i18n;
 #include "gui_menu.h"
+#include "performance_overlay.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -128,24 +129,29 @@ static void emuEventCallback(Event event, void *)
 	switch (event)
 	{
 	case Event::Resume:
+		performance_overlay::reset();
 		boxart.resumePlaytime();
 		game_started = true;
 		vgamepad::startGame();
 		break;
 	case Event::Start:
+		performance_overlay::reset();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
 		GamepadDevice::load_system_mappings();
 		break;
 	case Event::Terminate:
+		performance_overlay::reset();
 		boxart.checkpointPlaytime(true);
 		GamepadDevice::load_system_mappings();
 		game_started = false;
 		break;
 	case Event::Pause:
+		performance_overlay::reset();
 		boxart.checkpointPlaytime(true);
 		break;
 	case Event::VBlank:
+		// VBlank checkpoints playtime without restarting the OSD sample interval.
 		boxart.checkpointPlaytime(false);
 		break;
 	default:
@@ -176,9 +182,9 @@ void gui_init()
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
 
     EventManager::listen(Event::Resume, emuEventCallback);
+	EventManager::listen(Event::Pause, emuEventCallback);
     EventManager::listen(Event::Start, emuEventCallback);
 	EventManager::listen(Event::Terminate, emuEventCallback);
-	EventManager::listen(Event::Pause, emuEventCallback);
 	EventManager::listen(Event::VBlank, emuEventCallback);
     ggpo::receiveChatMessages([](int playerNum, const std::string& msg) { chat.receive(playerNum, msg); });
 
@@ -3006,7 +3012,11 @@ static float fps = -1;
 
 static std::string getFPSNotification()
 {
-	if (config::ShowFPS)
+	// Minimal and Full own the frame-rate presentation while active. Keeping
+	// the lightweight counter exclusive to Off avoids overlapping OSDs; the
+	// settings screen exposes the corresponding FPS control for each mode.
+	const bool showLightweightFps = config::ShowFPS && performance_overlay::mode() == 0;
+	if (showLightweightFps)
 	{
 		u64 now = getTimeMs();
 		if (now - LastFPSTime >= 1000) {
@@ -3066,6 +3076,8 @@ void gui_draw_osd()
 	vgamepad::draw();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
+	// Use this frame's effective bar height, including fullscreen auto-hide.
+	performance_overlay::draw();
 
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
@@ -3133,9 +3145,9 @@ void gui_term()
 		clearThumbnailCache();
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
+		EventManager::unlisten(Event::Pause, emuEventCallback);
 	    EventManager::unlisten(Event::Start, emuEventCallback);
 	    EventManager::unlisten(Event::Terminate, emuEventCallback);
-	    EventManager::unlisten(Event::Pause, emuEventCallback);
 	    EventManager::unlisten(Event::VBlank, emuEventCallback);
 	    clearVmuIconLookups();
 	    boxart.term();

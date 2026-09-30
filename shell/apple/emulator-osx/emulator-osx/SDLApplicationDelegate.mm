@@ -299,6 +299,11 @@ static void addMenuSeparator(NSMenu *menu)
 	runMenuAction([]() { GuiMenu::openVideoSettings(); });
 }
 
+- (void)openOnScreenDisplaySettings:(id)sender
+{
+	runMenuAction([]() { GuiMenu::openOnScreenDisplaySettings(); });
+}
+
 - (void)openAudioSettings:(id)sender
 {
 	runMenuAction([]() { GuiMenu::openAudioSettings(); });
@@ -473,6 +478,7 @@ static void setupHollycastMenus(void)
 	NSMenu *settingsMenu = [[NSMenu alloc] initWithTitle:@"Settings"];
 	addMenuItem(settingsMenu, @"General", @selector(openGeneralSettings:), @"", 0);
 	addMenuItem(settingsMenu, @"Video", @selector(openVideoSettings:), @"", 0);
+	addMenuItem(settingsMenu, @"On Screen Display", @selector(openOnScreenDisplaySettings:), @"", 0);
 	addMenuItem(settingsMenu, @"Audio", @selector(openAudioSettings:), @"", 0);
 	addMenuItem(settingsMenu, @"Controls", @selector(openControlsSettings:), @"", 0);
 	addMenuItem(settingsMenu, @"Network", @selector(openNetworkSettings:), @"", 0);

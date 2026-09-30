@@ -1,4 +1,6 @@
 #pragma once
+// Portions Copyright 2026 The Hollycast Authors
+
 #include "hw/pvr/ta_structs.h"
 #include "hw/pvr/ta_ctx.h"
 #include "hw/pvr/elan_struct.h"
@@ -11,6 +13,7 @@
 #include "ui/imgui_driver.h"
 #endif
 
+#include <array>
 #include <unordered_map>
 #include <glm/glm.hpp>
 
@@ -393,7 +396,7 @@ void uploadCompressedTextureSubImage2D(GLint level, GLsizei width, GLsizei heigh
 
 GlFramebuffer *BindRTT(bool withDepthBuffer = true);
 void ReadRTTBuffer();
-void glReadFramebuffer(const FramebufferInfo& info);
+void glUploadFramebuffer();
 GlFramebuffer *init_output_framebuffer(int width, int height);
 void writeFramebufferToVRAM();
 
@@ -508,6 +511,8 @@ extern GlTextureCache TexCache;
 
 struct OpenGLRenderer : Renderer
 {
+	friend class OpenGLGpuTimingScope;
+
 	bool Init() override;
 	void Term() override;
 
@@ -580,6 +585,12 @@ protected:
 	void renderVideoRouting();
 	void drawOSD();
 
+	void initGpuTiming();
+	void termGpuTiming();
+	void pollGpuTiming();
+	void beginGpuTiming();
+	void endGpuTiming();
+
 	virtual GlFramebuffer *getPrimaryFB() {
 		return outputFB;
 	}
@@ -604,6 +615,16 @@ protected:
 	}
 
 private:
+	static constexpr std::size_t GpuTimingQueryCount = 4;
+	std::array<GLuint, GpuTimingQueryCount> gpuTimingQueries {};
+	std::array<u32, GpuTimingQueryCount> gpuTimingEpochs {};
+	std::array<bool, GpuTimingQueryCount> gpuTimingDiscarded {};
+	std::size_t gpuTimingReadIndex = 0;
+	std::size_t gpuTimingWriteIndex = 0;
+	std::size_t gpuTimingWaitingCount = 0;
+	bool gpuTimingAvailable = false;
+	bool gpuTimingActive = false;
+
 	bool renderFrame(int width, int height);
 	void drawStrips();
 	template <u32 Type, bool SortingEnabled>
@@ -620,6 +641,30 @@ protected:
 	GlFramebuffer *outputFB = nullptr;
 	void initVideoRoutingFrameBuffer();
 	bool renderingToSecAccum = false;
+};
+
+// OpenGLRenderer::Render needs exception-safe query closure, mirroring DX11GpuTimingScope.
+class OpenGLGpuTimingScope
+{
+public:
+	explicit OpenGLGpuTimingScope(OpenGLRenderer *renderer, bool enabled)
+		: renderer(enabled ? renderer : nullptr)
+	{
+		if (this->renderer != nullptr)
+			this->renderer->beginGpuTiming();
+	}
+
+	~OpenGLGpuTimingScope()
+	{
+		if (renderer != nullptr)
+			renderer->endGpuTiming();
+	}
+
+	OpenGLGpuTimingScope(const OpenGLGpuTimingScope&) = delete;
+	OpenGLGpuTimingScope& operator=(const OpenGLGpuTimingScope&) = delete;
+
+private:
+	OpenGLRenderer *const renderer;
 };
 
 extern const char* ShaderCompatSource;

@@ -1,3 +1,5 @@
+// Portions Copyright 2026 The Hollycast Authors
+
 #include "glcache.h"
 #include "gles.h"
 #include "quad.h"
@@ -12,6 +14,9 @@
 #include "emulator.h"
 #include "naomi2.h"
 #include "oslib/i18n.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 
 #ifdef TEST_AUTOMATION
 #include "cfg/cfg.h"
@@ -1100,6 +1105,7 @@ bool OpenGLRenderer::Init()
 	glcache.EnableCache();
 
 	gl_create_resources();
+	initGpuTiming();
 
 #if 0
 	glEnable(GL_DEBUG_OUTPUT);
@@ -1448,6 +1454,7 @@ void OpenGLRenderer::initVideoRoutingFrameBuffer()
 
 void OpenGLRenderer::Term()
 {
+	termGpuTiming();
 	TexCache.Clear();
 	clearGpuPreloadedTextures();
 	gles_term();
@@ -1468,22 +1475,167 @@ void OpenGLRenderer::processCustomTexturePreloads()
 bool OpenGLRenderer::Render()
 {
 	saveCurrentFramebuffer();
-	renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
-	if (gl.rendContext->isRTT) {
-		restoreCurrentFramebuffer();
-		return false;
-	}
-
-	if (!config::EmulateFramebuffer)
+	const bool is_rtt = gl.rendContext->isRTT;
+	// The destructor closes the query when renderFrame, drawOSD, or
+	// renderVideoRouting throws, so later frames keep sampling.
 	{
-		frameRendered = true;
-		clearLastFrame = false;
-		drawOSD();
-		renderVideoRouting();
+		OpenGLGpuTimingScope gpuTiming(this, !is_rtt);
+		renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
+		if (is_rtt) {
+			restoreCurrentFramebuffer();
+			return false;
+		}
+
+		if (!config::EmulateFramebuffer)
+		{
+			frameRendered = true;
+			clearLastFrame = false;
+			drawOSD();
+			renderVideoRouting();
+		}
 	}
 	restoreCurrentFramebuffer();
 
 	return true;
+}
+
+void OpenGLRenderer::initGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	gpuTimingAvailable = gl.is_gles ? GLAD_GL_EXT_disjoint_timer_query : GLAD_GL_ARB_timer_query;
+	if (!gpuTimingAvailable)
+		return;
+	if (gl.is_gles)
+		glGenQueriesEXT(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+	else
+		glGenQueries(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+	for (const GLuint query : gpuTimingQueries)
+	{
+		if (query == 0)
+		{
+			termGpuTiming();
+			return;
+		}
+	}
+#elif !defined(LIBRETRO)
+	// iOS uses the native OpenGLES headers rather than GLAD. Keep GPU timing
+	// explicitly unavailable until a native timer-query implementation exists.
+	performance_overlay::setGpuTimingSupported(false);
+#endif
+}
+
+void OpenGLRenderer::termGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	if (gpuTimingQueries[0] != 0)
+	{
+		if (gl.is_gles)
+			glDeleteQueriesEXT(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+		else
+			glDeleteQueries(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+	}
+#endif
+#ifndef LIBRETRO
+	performance_overlay::setGpuTimingSupported(false);
+#endif
+	gpuTimingQueries = {};
+	gpuTimingEpochs = {};
+	gpuTimingDiscarded = {};
+	gpuTimingReadIndex = 0;
+	gpuTimingWriteIndex = 0;
+	gpuTimingWaitingCount = 0;
+	gpuTimingAvailable = false;
+	gpuTimingActive = false;
+}
+
+void OpenGLRenderer::pollGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	if (!gpuTimingAvailable || gpuTimingWaitingCount == 0)
+		return;
+
+	std::array<GLuint64, GpuTimingQueryCount> results {};
+	std::size_t readyCount = 0;
+	while (readyCount < gpuTimingWaitingCount)
+	{
+		const std::size_t slot = (gpuTimingReadIndex + readyCount) % GpuTimingQueryCount;
+		const GLuint query = gpuTimingQueries[slot];
+		GLuint ready = GL_FALSE;
+		if (gl.is_gles)
+			glGetQueryObjectuivEXT(query, GL_QUERY_RESULT_AVAILABLE_EXT, &ready);
+		else
+			glGetQueryObjectuiv(query, GL_QUERY_RESULT_AVAILABLE, &ready);
+		if (ready == GL_FALSE)
+			break;
+
+		if (!gpuTimingDiscarded[slot])
+		{
+			if (gl.is_gles)
+				glGetQueryObjectui64vEXT(query, GL_QUERY_RESULT_EXT, &results[slot]);
+			else
+				glGetQueryObjectui64v(query, GL_QUERY_RESULT, &results[slot]);
+		}
+		++readyCount;
+	}
+	if (gl.is_gles)
+	{
+		GLint disjoint = GL_FALSE;
+		glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);
+		// Check after fetching results: disjoint can occur while polling. This
+		// read clears the flag, so invalidate every outstanding query, including
+		// those not ready yet, and retire them before reusing their slots.
+		if (disjoint != GL_FALSE)
+			gpuTimingDiscarded.fill(true);
+	}
+	for (std::size_t i = 0; i < readyCount; ++i)
+	{
+		if (!gpuTimingDiscarded[gpuTimingReadIndex])
+			performance_overlay::recordGpuTimingSample(
+				static_cast<std::uint64_t>(results[gpuTimingReadIndex]), gpuTimingEpochs[gpuTimingReadIndex]);
+		gpuTimingReadIndex = (gpuTimingReadIndex + 1) % GpuTimingQueryCount;
+		--gpuTimingWaitingCount;
+	}
+#endif
+}
+
+void OpenGLRenderer::beginGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	// Retire completed queries even while timing is disabled so samples from a
+	// previous enabled interval cannot leak into a later one.
+	pollGpuTiming();
+	if (!performance_overlay::isGpuTimingRequested())
+		return;
+	performance_overlay::setGpuTimingSupported(gpuTimingAvailable);
+	if (!gpuTimingAvailable)
+		return;
+
+	if (gpuTimingActive || gpuTimingWaitingCount == GpuTimingQueryCount)
+		return;
+	const GLuint query = gpuTimingQueries[gpuTimingWriteIndex];
+	gpuTimingEpochs[gpuTimingWriteIndex] = performance_overlay::getGpuTimingEpoch();
+	gpuTimingDiscarded[gpuTimingWriteIndex] = false;
+	if (gl.is_gles)
+		glBeginQueryEXT(GL_TIME_ELAPSED_EXT, query);
+	else
+		glBeginQuery(GL_TIME_ELAPSED, query);
+	gpuTimingActive = true;
+#endif
+}
+
+void OpenGLRenderer::endGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	if (!gpuTimingActive)
+		return;
+	if (gl.is_gles)
+		glEndQueryEXT(GL_TIME_ELAPSED_EXT);
+	else
+		glEndQuery(GL_TIME_ELAPSED);
+	gpuTimingWriteIndex = (gpuTimingWriteIndex + 1) % GpuTimingQueryCount;
+	++gpuTimingWaitingCount;
+	gpuTimingActive = false;
+#endif
 }
 
 void OpenGLRenderer::renderVideoRouting()

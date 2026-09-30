@@ -308,6 +308,11 @@ void openVideoSettings()
 	openSettingsTab(GuiSettingsTab::Video);
 }
 
+void openOnScreenDisplaySettings()
+{
+	openSettingsTab(GuiSettingsTab::OnScreenDisplay);
+}
+
 void openAudioSettings()
 {
 	openSettingsTab(GuiSettingsTab::Audio);
@@ -590,6 +595,11 @@ void renderSettingsMenu()
 		if (ImGui::MenuItem(T("Video"), nullptr, false, true))
 		{
 			openVideoSettings();
+		}
+
+		if (ImGui::MenuItem(T("On Screen Display"), nullptr, false, true))
+		{
+			openOnScreenDisplaySettings();
 		}
 
 		// Audio

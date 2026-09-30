@@ -1,5 +1,6 @@
 /*
 	Copyright 2018 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -688,6 +689,7 @@ static void gl_create_resources()
 
 void OpenGL4Renderer::Term()
 {
+	termGpuTiming();
 	termABuffer();
 	framebuffers[0].reset();
 	framebuffers[1].reset();
@@ -703,18 +705,22 @@ void OpenGL4Renderer::Term()
 bool OpenGL4Renderer::Render()
 {
 	saveCurrentFramebuffer();
-	renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
-	if (gl.rendContext->isRTT) {
-		restoreCurrentFramebuffer();
-		return false;
-	}
-
-	if (!config::EmulateFramebuffer)
+	const bool is_rtt = gl.rendContext->isRTT;
 	{
-		frameRendered = true;
-		clearLastFrame = false;
-		drawOSD();
-		renderVideoRouting();
+		OpenGLGpuTimingScope gpuTiming(this, !is_rtt);
+		renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
+		if (is_rtt) {
+			restoreCurrentFramebuffer();
+			return false;
+		}
+
+		if (!config::EmulateFramebuffer)
+		{
+			frameRendered = true;
+			clearLastFrame = false;
+			drawOSD();
+			renderVideoRouting();
+		}
 	}
 	restoreCurrentFramebuffer();
 
@@ -743,6 +749,9 @@ bool OpenGL4Renderer::Init()
     //glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_TRUE);
 
 	gl_create_resources();
+	// Per-pixel sorting has its own renderer implementation, so it must opt
+	// into the same timestamp-query lifecycle as the standard OpenGL renderer.
+	initGpuTiming();
 
 	initABuffer();
 

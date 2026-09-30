@@ -21,6 +21,9 @@
 #include "hw/pvr/ta.h"
 #include "hw/pvr/pvr_mem.h"
 #include "ui/gui.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 #include "rend/sorter.h"
 #include "rend/osd.h"
 #include "oslib/i18n.h"
@@ -277,6 +280,7 @@ void D3DRenderer::RenderFramebuffer(const FramebufferInfo& info)
 		ReadFramebuffer<BGRAPacker>(info, pb, width, height);
 	}
 
+	DX9GpuTimingScope gpuTiming(DXContext::Instance(), true);
 	if (dcfbTexture)
 	{
 		D3DSURFACE_DESC desc;
@@ -317,6 +321,9 @@ void D3DRenderer::RenderFramebuffer(const FramebufferInfo& info)
 	frameRenderedOnce = true;
 	clearLastFrame = false;
 	DXContext::Instance()->setFrameRendered();
+#ifndef LIBRETRO
+	performance_overlay::recordRenderedResolution(width, height, width, height);
+#endif
 }
 
 void D3DRenderer::Process(TA_context* ctx)
@@ -995,7 +1002,8 @@ bool D3DRenderer::Render()
 	if (!DXContext::Instance()->isReady())
 		return false;
 
-	bool is_rtt = rendContext->isRTT;
+	const bool is_rtt = rendContext->isRTT;
+	DX9GpuTimingScope gpuTiming(DXContext::Instance(), !is_rtt);
 
 	backbuffer.reset();
 	bool rc = SUCCEEDED(device->GetRenderTarget(0, &backbuffer.get()));
@@ -1221,6 +1229,9 @@ void D3DRenderer::displayFramebuffer()
 	int dx = 0;
 	int dy = 0;
 	getWindowboxDimensions(settings.display.width, outheight, aspectRatio, dx, dy, config::Rotate90);
+#ifndef LIBRETRO
+	performance_overlay::recordOutputViewport(settings.display.width - dx * 2, outheight - dy * 2);
+#endif
 
 	float shiftX, shiftY;
 	getVideoShift(shiftX, shiftY);

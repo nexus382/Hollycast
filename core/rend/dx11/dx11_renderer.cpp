@@ -22,6 +22,9 @@
 #include "hw/pvr/ta.h"
 #include "hw/pvr/pvr_mem.h"
 #include "ui/gui.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 #include "rend/sorter.h"
 #include "rend/osd.h"
 
@@ -497,8 +500,11 @@ void DX11Renderer::setupPixelShaderConstants()
 
 bool DX11Renderer::Render()
 {
+	const bool is_rtt = rendContext->isRTT;
+#ifndef LIBRETRO
+	DX11GpuTimingScope gpuTiming(DX11Context::Instance(), !is_rtt);
+#endif
 	resetContextState();
-	bool is_rtt = rendContext->isRTT;
 	if (!is_rtt)
 	{
 		resize(rendContext->framebufferWidth, rendContext->framebufferHeight);
@@ -602,6 +608,9 @@ void DX11Renderer::displayFramebuffer()
 	float y = (float)dy;
 	float w = (float)(outwidth - leftInset - 2 * dx);
 	float h = (float)(outheight - topInset - 2 * dy);
+#ifndef LIBRETRO
+	performance_overlay::recordOutputViewport(static_cast<int>(std::round(w)), static_cast<int>(std::round(h)));
+#endif
 
 	// Normalize
 	x = x * 2.f / outwidth - 1.f;
@@ -1024,6 +1033,7 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 		ReadFramebuffer<BGRAPacker>(info, pb, width, height);
 	}
 
+	DX11GpuTimingScope gpuTiming(DX11Context::Instance(), true);
 	if (dcfbTexture)
 	{
 		D3D11_TEXTURE2D_DESC desc;
@@ -1091,6 +1101,7 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 	drawOSD();
 	renderVideoRouting();
 	DX11Context::Instance()->setFrameRendered();
+	performance_overlay::recordRenderedResolution(width, height, width, height);
 #else
 	ID3D11RenderTargetView *nullView = nullptr;
 	deviceContext->OMSetRenderTargets(1, &nullView, nullptr);

@@ -1,3 +1,6 @@
+/*
+	Portions Copyright 2026 The Hollycast Authors
+*/
 #include "spg.h"
 #include "hw/holly/holly_intc.h"
 #include "hw/holly/sb.h"
@@ -8,6 +11,10 @@
 #include "hw/pvr/Renderer_if.h"
 #include "stdclass.h"
 #include <array>
+#include <atomic>
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 
 #ifdef TEST_AUTOMATION
 #include "input/gamepad_device.h"
@@ -35,6 +42,7 @@ static std::array<double, 4> real_times;
 static std::array<u64, 4> cpu_cycles;
 static u32 cpu_time_idx;
 bool SH4FastEnough;
+static std::atomic<float> sh4ExecutionRate { 0.f };
 u32 fskip;
 
 static u32 lightgun_line = 0xffff;
@@ -66,6 +74,11 @@ void CalculateSync()
 #ifdef LIBRETRO
 	retro_refresh_av_info((double)SH4_MAIN_CLOCK / ((double)Line_Cycles * (double)pvr_numscanlines));
 #endif
+}
+
+u32 spg_getFrameCycles()
+{
+	return Frame_Cycles;
 }
 
 static int getNextSpgInterrupt()
@@ -157,6 +170,12 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 		// Vblank
 		if (prv_cur_scanline == 0)
 		{
+#ifndef LIBRETRO
+			// Accrue one active video-frame budget per vblank. Scheduled renders
+			// are accumulated independently, so multiple renders increase the
+			// pressure instead of being averaged away.
+			performance_overlay::recordPvrFrameBudget(spg_getFrameCycles());
+#endif
 			if (SPG_CONTROL.interlace)
 				SPG_STATUS.fieldnum = ~SPG_STATUS.fieldnum;
 			else
@@ -170,10 +189,12 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 			{
 				u32 cycle_span = (u32)(sh4_sched_now64() - cpu_cycles[cpu_time_idx]);
 				u64 time_span = now - real_times[cpu_time_idx];
-				float cpu_speed = ((float)cycle_span / time_span) / (SH4_MAIN_CLOCK / 100000);
-				SH4FastEnough = cpu_speed >= 85.f;
+				const float cpuSpeed = time_span == 0 ? 0.f : ((float)cycle_span / time_span) / (SH4_MAIN_CLOCK / 100000);
+				sh4ExecutionRate.store(cpuSpeed, std::memory_order_relaxed);
+				SH4FastEnough = cpuSpeed >= 85.f;
 			}
 			else {
+				sh4ExecutionRate.store(0.f, std::memory_order_relaxed);
 				SH4FastEnough = false;
 			}
 			cpu_cycles[cpu_time_idx] = sh4_sched_now64();
@@ -282,6 +303,7 @@ void spg_Reset(bool hard)
 	CalculateSync();
 
 	SH4FastEnough = false;
+	sh4ExecutionRate.store(0.f, std::memory_order_relaxed);
 	cpu_time_idx = 0;
 	cpu_cycles.fill(0);
 	real_times.fill(0.0);
@@ -306,7 +328,18 @@ void scheduleRenderDone(TA_context *cntx)
 			cycles = std::min(450000 + size * 100, 1500000);
 		}
 	}
+	#ifndef LIBRETRO
+	// This is the renderer-complete delay scheduled into Dreamcast time. It
+	// deliberately measures emulated PVR timing, not host GPU execution time.
+	if (cntx != nullptr)
+		performance_overlay::recordPvrRenderSchedule(static_cast<u32>(cycles));
+	#endif
 	sh4_sched_request(render_end_schid, cycles);
+}
+
+float spg_getSh4ExecutionRate()
+{
+	return sh4ExecutionRate.load(std::memory_order_relaxed);
 }
 
 void spg_Serialize(Serializer& ser)

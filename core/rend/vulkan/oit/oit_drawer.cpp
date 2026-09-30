@@ -2,6 +2,7 @@
     Created on: Nov 7, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -715,6 +716,9 @@ vk::CommandBuffer OITScreenDrawer::NewFrame()
 		NewImage();
 		currentCommandBuffer = commandPool->Allocate(true);
 		currentCommandBuffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+		// Measure only the displayed renderer frame. Render-to-texture scenes
+		// are separate work and must not inflate ms/rendered frame.
+		GetContext()->BeginGpuTiming(currentCommandBuffer);
 	}
 	matrices.CalcMatrices(rendContext, viewport.extent.width, viewport.extent.height);
 

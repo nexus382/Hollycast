@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -20,6 +21,7 @@
 #include "wsi/egl.h"
 #include "cfg/option.h"
 #include "jni_util.h"
+#include "ui/performance_overlay.h"
 #ifdef SWAPPY
 
 #define __eglext_h_ 1	// avoid multiply defined errors
@@ -85,10 +87,11 @@ void SwappyGLGC::swap()
 	activate(config::FramePacing);
 	do_swap_automation();
 	changeSwapInterval();
-	if (swapOnVSync && swappyAvailable)
-		SwappyGL_swap(display, surface);
-	else
-		eglSwapBuffers(display, surface);
+	const bool presented = swapOnVSync && swappyAvailable
+		? SwappyGL_swap(display, surface)
+		: eglSwapBuffers(display, surface) == EGL_TRUE;
+	if (presented)
+		performance_overlay::recordPresentedFrame();
 }
 
 void SwappyGLGC::changeSwapInterval()

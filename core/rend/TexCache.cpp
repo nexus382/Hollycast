@@ -1,4 +1,6 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
+
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -18,6 +20,9 @@
 #include "xbrz/xbrz.h"
 #include "hw/pvr/pvr_mem.h"
 #include "hw/mem/addrspace.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 
 #include <mutex>
 #include <new>
@@ -33,6 +38,13 @@
 #endif
 
 extern bool pal_needs_update;
+
+static std::atomic<u64> textureUploadCount { 0 };
+
+u64 getTextureUploadCount()
+{
+	return textureUploadCount.load(std::memory_order_relaxed);
+}
 
 // Rough approximation of LoD bias from D adjust param, only used to increase LoD
 const std::array<f32, 16> D_Adjust_LoD_Bias = {
@@ -405,6 +417,16 @@ BaseTextureCacheData::BaseTextureCacheData(TSP tsp, TCW tcw, int area)
 	}
 }
 
+BaseTextureCacheData::~BaseTextureCacheData() = default;
+
+void recordTextureUpload()
+{
+#ifndef LIBRETRO
+	if (performance_overlay::isRendererStatsRequested())
+		textureUploadCount.fetch_add(1, std::memory_order_relaxed);
+#endif
+}
+
 void BaseTextureCacheData::ComputeHash()
 {
 	// Include everything but texaddr, reserved and stride. Palette textures don't have ScanOrder
@@ -741,7 +763,10 @@ bool BaseTextureCacheData::Update()
 			tex_type = originalTextureType;
 	}
 	if (!customTextureUploaded)
+	{
 		UploadToGPU(upscaled_w, upscaled_h, (const u8 *)temp_tex_buffer, IsMipmapped(), mipmapped);
+		recordTextureUpload();
+	}
 	if (config::DumpTextures && !dumpReplacedTexture)
 	{
 		ComputeHash();
@@ -840,6 +865,7 @@ bool BaseTextureCacheData::CheckCustomTexture()
 		customRequestId = {};
 		return false;
 	}
+	recordTextureUpload();
 	tex_type = TextureType::_8888;
 	gpuPalette = false;
 	is_custom_replaced = true;

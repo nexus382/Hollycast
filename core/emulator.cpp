@@ -46,6 +46,7 @@
 #include "oslib/storage.h"
 #ifndef LIBRETRO
 #include "ui/gui.h"
+#include "ui/performance_overlay.h"
 #endif
 #include "oslib/i18n.h"
 #ifndef LIBRETRO
@@ -63,6 +64,28 @@
 settings_t settings;
 constexpr char const *BIOS_TITLE = "Dreamcast BIOS";
 static bool skipAutoSaveOnNextUnload = false;
+
+#ifndef LIBRETRO
+// The performance overlay keeps a native reference to the SH4 thread so it can
+// sample CPU time even when that thread is stalled before its next vblank.
+// Scope ownership guarantees the native reference is released on every exit.
+class Sh4ThreadSampleRegistration
+{
+public:
+	Sh4ThreadSampleRegistration()
+	{
+		performance_overlay::resetSh4ThreadSample();
+	}
+
+	~Sh4ThreadSampleRegistration()
+	{
+		performance_overlay::clearSh4ThreadSample();
+	}
+
+	Sh4ThreadSampleRegistration(const Sh4ThreadSampleRegistration&) = delete;
+	Sh4ThreadSampleRegistration& operator=(const Sh4ThreadSampleRegistration&) = delete;
+};
+#endif
 
 void dc_skipAutoSaveOnNextUnload()
 {
@@ -753,6 +776,11 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 
 void Emulator::runInternal()
 {
+#ifndef LIBRETRO
+	// Android may resume from its UI thread. Register here, on the thread that
+	// actually executes SH4 work, including shared-thread rendering mode.
+	performance_overlay::resetSh4ThreadSample();
+#endif
 	runner.init();
 	try {
 		if (singleStep)
@@ -887,6 +915,9 @@ void Emulator::stop()
 		TermAudio();
 		nvmem::saveFiles();
 		EventManager::event(Event::Pause);
+#endif
+#ifndef LIBRETRO
+		performance_overlay::clearSh4ThreadSample();
 #endif
 	}
 }
@@ -1037,6 +1068,11 @@ void Emulator::run()
 		if (ggpo::active())
 			ggpo::nextFrame();
 	} catch (const std::exception& e) {
+#ifndef LIBRETRO
+		// stop() skips cleanup once state becomes Error. Release the shared
+		// emulation thread's clock/handle before notifying pause listeners.
+		performance_overlay::clearSh4ThreadSample();
+#endif
 		ERROR_LOG(COMMON, "Exception: %s", e.what());
 		setNetworkState(false);
 		state = Error;
@@ -1069,6 +1105,9 @@ void Emulator::start()
 		getSh4Executor()->Start();
 		threadResult = std::async(std::launch::async, [this] {
 				ThreadName _("Flycast-emu");
+#ifndef LIBRETRO
+				const Sh4ThreadSampleRegistration sh4ThreadSampleRegistration;
+#endif
 				InitAudio();
 
 				try {
@@ -1151,6 +1190,9 @@ bool Emulator::render()
 
 void Emulator::vblank()
 {
+#ifndef LIBRETRO
+	performance_overlay::recordSh4Vblank();
+#endif
 	EventManager::event(Event::VBlank);
 	runner.execTasks(sh4_sched_now64());
 #ifndef LIBRETRO

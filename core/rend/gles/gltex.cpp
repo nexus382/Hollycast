@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "glcache.h"
 #include "gles.h"
 #include "hw/pvr/pvr_mem.h"
@@ -583,9 +584,8 @@ BaseTextureCacheData *OpenGLRenderer::GetTexture(TSP tsp, TCW tcw, int area)
 	return tf;
 }
 
-void glReadFramebuffer(const FramebufferInfo& info)
+void glUploadFramebuffer()
 {
-	ReadFramebuffer(info, gl.framebufferBuffer, gl.dcfb.width, gl.dcfb.height);
 	const bool resize = gl.dcfb.tex == 0
 			|| gl.dcfb.textureWidth != gl.dcfb.width
 			|| gl.dcfb.textureHeight != gl.dcfb.height;
