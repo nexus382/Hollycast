@@ -11,6 +11,7 @@ checks = parser.parse_args().output_directory.resolve()
 checks.mkdir(parents=True, exist_ok=True)
 overlay = (root / 'core/ui/performance_overlay.cpp').read_text()
 gui = (root / 'core/ui/gui.cpp').read_text()
+renderer = (root / 'core/hw/pvr/Renderer_if.cpp').read_text()
 
 def function(source, signature):
     start = source.index(signature)
@@ -26,6 +27,11 @@ shim = r'''
 // Portions Copyright 2026 The Hollycast Authors
 #include <cassert>
 #include <iostream>
+#include <map>
+#include <string>
+#ifndef _WIN32
+#include <time.h>
+#endif
 #include "oslib/cpu_usage.h"
 #include "oslib/process_memory.h"
 #include "oslib/gpu_memory.h"
@@ -33,6 +39,16 @@ using u64 = std::uint64_t;
 static u64 clockMs = 1000;
 static int cpuQueries = 0, memoryQueries = 0, vramQueries = 0;
 static std::uint32_t auditItems = 0;
+static int threadClockReads = 0, failThreadClockRead = 0;
+static u64 threadClockMicroseconds = 1000, threadClockStep = 500;
+int testClockGettime(clockid_t clock, timespec* value) {
+    assert(clock == CLOCK_THREAD_CPUTIME_ID);
+    if (++threadClockReads == failThreadClockRead) return -1;
+    value->tv_sec = threadClockMicroseconds / 1000000;
+    value->tv_nsec = (threadClockMicroseconds % 1000000) * 1000;
+    threadClockMicroseconds += threadClockStep;
+    return 0;
+}
 u64 getTimeMs() { return clockMs; }
 u64 getTextureUploadCount() { return 0; }
 float spg_getSh4ExecutionRate() { return 100; }
@@ -41,6 +57,13 @@ namespace process_memory { Stats queryCurrentProcess() { ++memoryQueries; return
 namespace gpu_memory { Stats queryCurrentProcess() { ++vramQueries; return {}; } }
 namespace i18n { const char* T(const char* p) { return p; } }
 namespace config { bool IntegerScale = false; bool ThreadedRendering = true; }
+namespace config {
+static std::map<std::string, bool> boolOverrides;
+bool loadBool(const char*, const char* key, bool defaultValue) {
+    auto it = boolOverrides.find(key);
+    return it != boolOverrides.end() ? it->second : defaultValue;
+}
+}
 struct Settings {
     struct { int width = 1920, height = 1080; } display;
     struct { int system = 0; } platform;
@@ -63,7 +86,9 @@ pieces = [shim, stdincludes, declarations,
           function(overlay, 'std::string formatPvrWork('),
           '} // anonymous namespace',
           'int mode() { return 2; }',
-          'std::uint32_t visibleItems(int) { return auditItems; }']
+          'std::uint32_t visibleItems(int) { return auditItems; }',
+          function(overlay, 'std::uint32_t visibleItems(').replace('visibleItems', 'realVisibleItems', 1),
+          function(overlay, 'bool currentThreadCpuTimeMicroseconds(').replace('clock_gettime(', 'testClockGettime(')]
 for signature in ['bool isCollectionEnabled(', 'bool isPvrWorkRequested(',
                   'bool isRendererStatsRequested(', 'bool isResolutionRequested(',
                   'bool isGpuTimingRequested(', 'std::uint32_t getGpuTimingEpoch(',
@@ -72,10 +97,23 @@ for signature in ['bool isCollectionEnabled(', 'bool isPvrWorkRequested(',
                   'void recordSh4Vblank(', 'void recordPvrWork(', 'void recordPvrScene(',
                   'void recordRendererPass(', 'void recordPvrRenderSchedule(',
                   'void recordPvrFrameBudget(']:
-    pieces.append(function(overlay, signature))
+    # Keep presentation intervals deterministic without sleeping between frames.
+    pieces.append(function(overlay, signature).replace(
+        'std::chrono::steady_clock::now()',
+        'std::chrono::steady_clock::time_point(std::chrono::milliseconds(clockMs))'))
 draw = overlay[overlay.index('void draw()'):overlay.index('\n\t// Most readings change once a second.')]
 pieces += [draw.replace('void draw()', 'void drawSample()', 1) + '\n}',
            '} // performance_overlay', function(gui, 'static void emuEventCallback(')]
+pieces += [r'''
+// Exercise the actual dispatch/timing boundary with injected OS-clock failures.
+struct TestRenderQueue {
+    enum Type { Render, RenderFramebuffer, Present, Stop, NoMessage };
+    struct Message { Type type; int config = 0; };
+    int dispatched = 0;
+    void render() { ++dispatched; }
+    void renderFramebuffer(int) { ++dispatched; }
+    void present() { ++dispatched; }
+''', function(renderer, 'bool execute(Message msg)'), '};']
 pieces.append(r'''
 int main() {
     using namespace performance_overlay;
@@ -128,7 +166,7 @@ int main() {
     clockMs += 1000;
     drawSample();
     assert(metrics.vps == 0 && metrics.pvrTimePerVblank == 0 && !metrics.pvrTimePerVblankValid);
-    assert(formatPvrWork().find("no vblank") != std::string::npos);
+    assert(formatPvrWork().find("no video frame") != std::string::npos);
     std::cout << "PASS no fabricated per-VBlank time: " << formatPvrWork() << '\n';
     renderedWidth = 640; renderedHeight = 480; rawRenderWidth = 640; rawRenderHeight = 480;
     outputViewportWidth = 1440; outputViewportHeight = 1080;
@@ -152,6 +190,61 @@ int main() {
     recordGpuTimingSample(1000000, getGpuTimingEpoch());
     assert(gpuTimingSampleCount == 1);
     std::cout << "PASS Off skips sampling and old GPU epochs are rejected after re-enable\n";
+    config::boolOverrides["OverlayShowFrameTimes"] = false;
+    config::boolOverrides["OverlayShowFrameTimeGraph"] = true;
+    assert((realVisibleItems(2) & FrameTimeGraph) != 0);
+    auditItems = FrameTimeGraph;
+    drawSample();
+    {
+        for (int frame = 0; frame < 3; ++frame) {
+            clockMs += 17;
+            recordPresentedFrame();
+        }
+        assert(presentSamples.presentCount == 3 && presentSamples.intervalHistoryCount == 2);
+        clockMs += 1000;
+        drawSample();
+        assert(metrics.frameTimeHistoryCount == 2 && metrics.frameTimeAverage == 17.f);
+    }
+    std::cout << "PASS frame-time graph collects without the frame times row\n";
+    config::boolOverrides.clear();
+    config::boolOverrides["OverlayShowLatencyStatistics"] = true;
+    // Bit 13 is the retired Latency row: a stale saved setting must not resurrect it.
+    assert((realVisibleItems(2) & (1u << 13)) == 0);
+    std::cout << "PASS retired latency key sets no row\n";
+    auditItems = PvrWork;
+    drawSample();
+    TestRenderQueue queue;
+    for (int failure : {1, 2}) {
+        threadClockReads = 0; failThreadClockRead = failure;
+        assert(queue.execute({TestRenderQueue::Render}));
+        assert(threadClockReads == failure && !pvrWorkSampled && pvrWorkMicroseconds == 0);
+        recordSh4Vblank(); clockMs += 1000; drawSample();
+        assert(!metrics.pvrThreadCpuValid && !metrics.pvrTimePerVblankValid);
+        assert(formatPvrWork().find("sampling thread usage") != std::string::npos);
+    }
+    assert(queue.dispatched == 2);
+    std::cout << "PASS failed start or end CPU-clock reads never display fabricated zero work\n";
+    failThreadClockRead = 0; threadClockReads = 0; threadClockStep = 0;
+    for (auto type : {TestRenderQueue::Render, TestRenderQueue::RenderFramebuffer, TestRenderQueue::Present})
+        assert(queue.execute({type}));
+    assert(!queue.execute({TestRenderQueue::Stop}) && !queue.execute({TestRenderQueue::NoMessage}));
+    assert(threadClockReads == 6 && queue.dispatched == 5 && pvrWorkSampled && pvrWorkMicroseconds == 0);
+    recordSh4Vblank(); clockMs += 1000; drawSample();
+    assert(metrics.pvrThreadCpuValid && metrics.pvrTimePerVblankValid && metrics.pvrUsage == 0.f);
+    assert(formatPvrWork().find("0.0%") != std::string::npos);
+    threadClockStep = 500;
+    assert(queue.execute({TestRenderQueue::Present}));
+    recordSh4Vblank(); clockMs += 1000; drawSample();
+    assert(metrics.pvrThreadCpuValid && metrics.pvrTimePerVblank == 0.5f);
+    // A later interval with failed reads must not reuse the previous validity.
+    threadClockReads = 0; failThreadClockRead = 1;
+    assert(queue.execute({TestRenderQueue::Present}));
+    clockMs += 1000; drawSample();
+    assert(!metrics.pvrThreadCpuValid && formatPvrWork().find("sampling") != std::string::npos);
+    auditItems = Ram; drawSample();
+    threadClockReads = 0;
+    assert(queue.execute({TestRenderQueue::Render}) && threadClockReads == 0);
+    std::cout << "PASS successful zero CPU work stays valid, recovery works, and hidden timing skips clock reads\n";
 }
 ''')
 output = checks / 'performance_overlay.cpp'

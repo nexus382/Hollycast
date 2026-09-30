@@ -4945,23 +4945,22 @@ void renderOnScreenDisplayTab()
 				const char* description;
 				bool defaultValue;
 			};
-			const std::array<OverlayMetric, 16> overlayMetrics {{
+			const std::array<OverlayMetric, 15> overlayMetrics {{
 				{ "OverlayShowFPS", T("Show Game FPS and VPS"), T("FPS counts completed non-render-to-texture PVR scenes: the game's internal rendered-frame rate, matching DuckStation's FPS meaning. VPS counts Dreamcast video blanks. A 30 FPS game normally shows 30 FPS and about 60 VPS on NTSC."), true },
-				{ "OverlayShowOutputFPS", T("Show Output FPS"), T("Counts successful frames presented to the phone or window. Compare it with Game FPS to identify repeated or omitted host output frames; it is display cadence, not the game's internal rendered-frame rate."), false },
+				{ "OverlayShowOutputFPS", T("Show Output FPS"), T("Counts successful frames presented to the screen. Compare it with Game FPS to identify repeated or omitted host output frames; it is display cadence, not the game's internal rendered-frame rate."), false },
 				{ "OverlayShowEmulationSpeed", T("Show Emulation Speed"), T("Shows current VPS relative to the active PAL or NTSC target and the configured speed limit. This is overall pace, not a CPU or GPU utilization meter."), true },
 				{ "OverlayShowThreadingState", T("Show Threading State"), T("Shows whether SH4 emulation and PVR rendering run on separate host threads. Threaded mode changes which thread can become the limiting host CPU core."), true },
-				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("HollyCast is the emulator process share of all logical CPU cores. Device is total CPU use from all apps. A single SH4 or renderer thread can still fill one core while HollyCast is low on an 8-core device."), true },
-				{ "OverlayShowGpuUsage", T("Show Host GPU"), T("Shows timestamped GPU work for HollyCast's displayed renderer frames as a one-second share and milliseconds per rendered frame. It is real backend GPU execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX 9, and DirectX 11 support it."), true },
-				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means HollyCast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
+				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("Hollycast is the emulator process share of all logical CPU cores. Device is total CPU use from all apps. A single SH4 or renderer thread can still fill one core while Hollycast is low on an 8-core device."), true },
+				{ "OverlayShowGpuUsage", T("Show Host GPU"), T("Shows timestamped GPU work for Hollycast's displayed renderer frames as a one-second share and milliseconds per rendered frame. It is real backend GPU execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX 9, and DirectX 11 support it."), true },
+				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
 				{ "OverlayShowPvrTimingPressure", T("Show Dreamcast PVR Schedule"), T("Shows all emulated PVR renderer-complete delays scheduled during the sample as a share of the active Dreamcast video-frame budgets. Values above 100% mean scheduled render work exceeded one frame of budget on average. It is scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."), true },
 				{ "OverlayShowCpuUsage", T("Show Host SH4 Thread"), T("Shows host CPU time used by the thread running SH4 emulation. A value near 100% means that one host core is saturated; it does not directly mean the original Dreamcast SH4 is full."), false },
 				{ "OverlayShowPvrUsage", T("Show Host PVR Renderer Thread"), T("Shows host CPU time used by the PVR renderer thread or its shared-thread portion. It exposes emulator and graphics-driver preparation cost, not Dreamcast PVR pressure or hardware GPU use."), false },
-				{ "OverlayShowResolution", T("Show Resolution"), T("Shows native Dreamcast output, internal rendered size, host viewport, and final phone/window output. Higher rendered resolution can raise host GPU time without changing Dreamcast SH4 or PVR scheduling."), true },
+				{ "OverlayShowResolution", T("Show Resolution"), T("Shows native Dreamcast output, internal rendered size, host viewport, and final screen output. Higher rendered resolution can raise host GPU time without changing Dreamcast SH4 or PVR scheduling."), true },
 				{ "OverlayShowFrameTimes", T("Show Frame Times"), T("Shows minimum, average, and maximum intervals between successful host presents. Frame-time spikes expose stutter even when the one-second FPS average looks normal."), true },
 				{ "OverlayShowGpuStatistics", T("Show Renderer Statistics"), T("Shows API, PVR primitive batches, vertices, PVR render passes, and texture uploads per second. These are renderer work counters, not VRAM bytes, cache-resident texture count, or host draw/copy/readback counters."), true },
-				{ "OverlayShowLatencyStatistics", T("Show Latency Statistics"), T("Reserved for future audio, queue, and input timing probes. HollyCast currently reports no end-to-end latency value, so leave this disabled."), false },
-				{ "OverlayShowVram", T("Show Host GPU Memory"), T("Shows the Windows DXGI memory attributed to HollyCast and its current adapter budget when the OS exposes it. It changes with allocations, but is not total GPU VRAM and is unavailable on platforms without an authoritative query."), true },
-				{ "OverlayShowRam", T("Show HollyCast RAM"), T("Shows the resident memory currently held by HollyCast according to the operating system. It changes with content, caches, and allocations. Fixed Dreamcast RAM and VRAM capacities are intentionally omitted."), true }
+				{ "OverlayShowVram", T("Show Host GPU Memory"), T("Shows the Windows DXGI memory attributed to Hollycast and its current adapter budget when the OS exposes it. It changes with allocations, but is not total GPU VRAM and is unavailable on platforms without an authoritative query."), true },
+				{ "OverlayShowRam", T("Show Hollycast RAM"), T("Shows the resident memory currently held by Hollycast according to the operating system. It changes with content, caches, and allocations. Fixed Dreamcast RAM and VRAM capacities are intentionally omitted."), true }
 			}};
 			for (const OverlayMetric& metric : overlayMetrics)
 			{
@@ -4977,8 +4976,8 @@ void renderOnScreenDisplayTab()
 			ImGui::Spacing();
 			ImGui::TextDisabled("%s", T("History Graphs"));
 			const std::array<OverlayMetric, 3> overlayGraphs {{
-				{ "OverlayShowFrameTimeGraph", T("Show Frame-Time Graph"), T("Draw a rolling 152-sample graph of successful-present intervals. This is the most useful stutter view; spikes are long output frames."), true },
-				{ "OverlayShowHostCpuGraph", T("Show Host CPU Graph"), T("Draw rolling one-second samples. The main line is HollyCast's share of total CPU capacity; the blue line is overall device CPU use from all apps."), false },
+				{ "OverlayShowFrameTimeGraph", T("Show Frame-Time Graph"), T("Draw a rolling 152-sample graph of successful-present intervals. Spikes are long output frames."), true },
+				{ "OverlayShowHostCpuGraph", T("Show Host CPU Graph"), T("Draw rolling one-second samples. The main line is Hollycast's share of total CPU capacity; the blue line is overall device CPU use from all apps."), false },
 				{ "OverlayShowGpuGraph", T("Show Host GPU Graph"), T("Draw rolling one-second GPU timestamp samples. It is available only while the active backend supplies valid GPU timestamp queries."), false }
 			}};
 			for (const OverlayMetric& graph : overlayGraphs)
@@ -5056,7 +5055,7 @@ void renderOnScreenDisplayTab()
 			return true;
 		};
 		RenderGeneralPopupSettingRow(Tnop("OverlayCornerSetting"), T("Choose where the overlay appears."), cornerCfg,
-			T("Screen Corner\nPosition 0, 0 defaults to 15 pixels from the right edge and below the menu bar, or the top edge when the menu is hidden."));
+			T("Screen Corner\n15 pixels from the selected edges, and below the menu bar for the top corners."));
 
 		static int overlayOffsetX = cfgLoadInt("rend", "OverlayOffsetX", 0);
 		SettingsUI::PopupSliderConfig offsetXCfg {};

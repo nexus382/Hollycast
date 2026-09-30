@@ -39,6 +39,8 @@ bool isGpuTimingRequested();
 std::uint32_t getGpuTimingEpoch();
 void recordPvrRenderSchedule(std::uint32_t renderCycles);
 void recordPvrFrameBudget(std::uint32_t frameCycles);
-std::uint64_t currentThreadCpuTimeMicroseconds();
+// Returns false when the thread CPU time cannot be read. Callers must skip
+// their sample on failure instead of recording a 0 delta.
+bool currentThreadCpuTimeMicroseconds(std::uint64_t& microseconds);
 
 } // namespace performance_overlay

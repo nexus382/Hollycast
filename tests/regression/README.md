@@ -2,8 +2,8 @@
 
 # Performance overlay regression checks
 
-These focused checks compile the current overlay sampling and GPU query
-allocation functions with deterministic clock and device adapters.
+These focused checks compile the current overlay sampling, render dispatch,
+GL render scope, and GPU query functions with deterministic clock and device adapters.
 Generated C++ stays outside the checkout.
 They require Python 3, a C++17 compiler, and the Vulkan-Headers submodule for the
 device failure checks. They do not require an emulator build or a connected GPU.
@@ -28,8 +28,11 @@ g++ -std=c++17 -O1 -g -pthread -fsanitize=address,undefined \
 Keep assertions enabled; do not pass `-DNDEBUG`.
 
 Coverage includes lifecycle sampling, hidden collectors, GPU sample generations,
-per-VBlank timing validity, viewport reporting and partial GPU query allocation.
+per-VBlank timing validity, viewport reporting, partial GPU query allocation,
+not-ready timestamp retention, frame-time graph independence, failed thread CPU
+reads versus valid zero work, GL query closure on render exceptions, and Vulkan
+query ownership through teardown reset.
 
-The device checks inject allocation failures. They do not exercise a real
+The device checks inject allocation and render failures. They do not exercise a real
 graphics driver or an emulated game. Platform builds and gameplay checks remain
 necessary before release.

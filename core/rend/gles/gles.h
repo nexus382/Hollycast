@@ -511,6 +511,8 @@ extern GlTextureCache TexCache;
 
 struct OpenGLRenderer : Renderer
 {
+	friend class OpenGLGpuTimingScope;
+
 	bool Init() override;
 	void Term() override;
 
@@ -639,6 +641,30 @@ protected:
 	GlFramebuffer *outputFB = nullptr;
 	void initVideoRoutingFrameBuffer();
 	bool renderingToSecAccum = false;
+};
+
+// OpenGLRenderer::Render needs exception-safe query closure, mirroring DX11GpuTimingScope.
+class OpenGLGpuTimingScope
+{
+public:
+	explicit OpenGLGpuTimingScope(OpenGLRenderer *renderer, bool enabled)
+		: renderer(enabled ? renderer : nullptr)
+	{
+		if (this->renderer != nullptr)
+			this->renderer->beginGpuTiming();
+	}
+
+	~OpenGLGpuTimingScope()
+	{
+		if (renderer != nullptr)
+			renderer->endGpuTiming();
+	}
+
+	OpenGLGpuTimingScope(const OpenGLGpuTimingScope&) = delete;
+	OpenGLGpuTimingScope& operator=(const OpenGLGpuTimingScope&) = delete;
+
+private:
+	OpenGLRenderer *const renderer;
 };
 
 extern const char* ShaderCompatSource;

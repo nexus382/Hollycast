@@ -184,9 +184,11 @@ private:
 	#ifndef LIBRETRO
 		const bool measurePvrWork = performance_overlay::isPvrWorkRequested()
 			&& (msg.type == Render || msg.type == RenderFramebuffer || msg.type == Present);
-		const std::uint64_t performanceStart = measurePvrWork
-			? performance_overlay::currentThreadCpuTimeMicroseconds()
-			: 0;
+		std::uint64_t performanceStart = 0;
+		// A failed thread-time read must not produce a sample: recording a 0
+		// delta would print 0.0% instead of unavailable.
+		const bool performanceStartValid = measurePvrWork
+			&& performance_overlay::currentThreadCpuTimeMicroseconds(performanceStart);
 	#endif
 		bool executed = true;
 		switch (msg.type)
@@ -207,10 +209,11 @@ private:
 			break;
 		}
 	#ifndef LIBRETRO
-		if (measurePvrWork)
+		if (performanceStartValid)
 		{
-			const std::uint64_t performanceEnd = performance_overlay::currentThreadCpuTimeMicroseconds();
-			performance_overlay::recordPvrWork(performanceEnd >= performanceStart ? performanceEnd - performanceStart : 0);
+			std::uint64_t performanceEnd = 0;
+			if (performance_overlay::currentThreadCpuTimeMicroseconds(performanceEnd))
+				performance_overlay::recordPvrWork(performanceEnd >= performanceStart ? performanceEnd - performanceStart : 0);
 		}
 	#endif
 		return executed;

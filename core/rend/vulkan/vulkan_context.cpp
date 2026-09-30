@@ -1108,6 +1108,12 @@ void VulkanContext::pollGpuTiming()
 		const vk::Result result = device->getQueryPoolResults(*gpuTimingQueryPool,
 			static_cast<std::uint32_t>(gpuTimingReadIndex * 2), 2, sizeof(timestamps), timestamps.data(), sizeof(std::uint64_t),
 			vk::QueryResultFlagBits::e64);
+		if (result == vk::Result::eNotReady)
+		{
+			// Keep the slot until its timestamps are available. Retiring it
+			// here would discard the sample and allow premature query reuse.
+			break;
+		}
 		if (result == vk::Result::eSuccess)
 		{
 			// Timestamp counters wrap at the queue's valid bit width, which may
@@ -1117,7 +1123,7 @@ void VulkanContext::pollGpuTiming()
 			performance_overlay::recordGpuTimingSample(
 				static_cast<std::uint64_t>(nanoseconds), gpuTimingEpochs[gpuTimingReadIndex]);
 		}
-		else if (result != vk::Result::eNotReady)
+		else
 		{
 			gpuTimingAvailable = false;
 			performance_overlay::setGpuTimingSupported(false);
@@ -1135,6 +1141,9 @@ void VulkanContext::BeginGpuTiming(vk::CommandBuffer commandBuffer)
 	if (!performance_overlay::isGpuTimingRequested())
 		return;
 	performance_overlay::setGpuTimingSupported(gpuTimingAvailable);
+	// An unfinished pair still belongs to its recorded command buffer.
+	// Renderer-error recovery discards it via ResetGpuTiming after WaitIdle;
+	// a later begin must not reset queries that those commands still reference.
 	if (!gpuTimingAvailable || !gpuTimingQueryPool || gpuTimingActive || gpuTimingWaitingCount == GpuTimingQueryCount)
 		return;
 

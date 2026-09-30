@@ -1476,22 +1476,24 @@ bool OpenGLRenderer::Render()
 {
 	saveCurrentFramebuffer();
 	const bool is_rtt = gl.rendContext->isRTT;
-	if (!is_rtt)
-		beginGpuTiming();
-	renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
-	if (is_rtt) {
-		restoreCurrentFramebuffer();
-		return false;
-	}
-
-	if (!config::EmulateFramebuffer)
+	// The destructor closes the query when renderFrame, drawOSD, or
+	// renderVideoRouting throws, so later frames keep sampling.
 	{
-		frameRendered = true;
-		clearLastFrame = false;
-		drawOSD();
-		renderVideoRouting();
+		OpenGLGpuTimingScope gpuTiming(this, !is_rtt);
+		renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
+		if (is_rtt) {
+			restoreCurrentFramebuffer();
+			return false;
+		}
+
+		if (!config::EmulateFramebuffer)
+		{
+			frameRendered = true;
+			clearLastFrame = false;
+			drawOSD();
+			renderVideoRouting();
+		}
 	}
-	endGpuTiming();
 	restoreCurrentFramebuffer();
 
 	return true;
