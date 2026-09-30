@@ -38,10 +38,6 @@ Hollycast aims to support every platform and release offered by Flycast. If Flyc
 
 > **Note:** Hollycast is under active development. If you'd like to contribute, please [join our Discord](https://discord.gg/pYVqGqvFJW) and open a Feature Request to discuss your plans before submitting code.
 
-### Support Hollycast
-
-Support development via [PayPal](https://paypal.me/AnthonyScordino) or [Ko-fi](https://ko-fi.com/romrevival).
-
 ### Build Prerequisites for Windows
 
 1. Install Visual Studio with MSVC and C++ CMake tools (under `Desktop development with C++` within the installer)
