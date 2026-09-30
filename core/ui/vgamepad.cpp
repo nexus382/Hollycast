@@ -614,7 +614,8 @@ struct LayoutElement
 	{
 		applyUiScale();
 		scale = 1.f;
-		transparency = 0;
+		// Match the legacy transparency inherited by layouts without per-unit settings.
+		transparency = std::clamp(static_cast<int>(config::VirtualGamepadTransparency), 0, MAX_PERCENT);
 		touchSize = 0;
 		const float dcw = REFERENCE_HEIGHT * (float)settings.display.width / settings.display.height;
 		const float uiscale = getUIScale();
