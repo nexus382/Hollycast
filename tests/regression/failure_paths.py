@@ -22,7 +22,9 @@ def function(source, signature):
 dx = (root / 'core/rend/dx11/dx11context.cpp').read_text()
 vulkan = (root / 'core/rend/vulkan/vulkan_context.cpp').read_text()
 gl = (root / 'core/rend/gles/gles.cpp').read_text()
+gl4 = (root / 'core/rend/gl4/gles.cpp').read_text()
 gl_header = (root / 'core/rend/gles/gles.h').read_text()
+emulator = (root / 'core/emulator.cpp').read_text()
 vulkan_pool = function(vulkan, 'if (gpuTimingAvailable)')
 shim = r'''
 // Portions Copyright 2026 The Hollycast Authors
@@ -37,6 +39,8 @@ using u32 = uint32_t;
 using u64 = uint64_t;
 constexpr std::size_t GpuTimingQueryCount = 4;
 #define WARN_LOG(category, ...) ((void)0)
+#define ERROR_LOG(category, ...) ((void)0)
+#define verify(condition) assert(condition)
 #define FAILED(result) ((result) < 0)
 static int liveQueries = 0;
 struct Query { Query() { ++liveQueries; } ~Query() { --liveQueries; } };
@@ -66,6 +70,9 @@ struct DX11Context {
     bool initGpuTiming();
 };
 namespace performance_overlay {
+static bool sh4Registered = false;
+static int sh4Releases = 0;
+void clearSh4ThreadSample() { sh4Registered = false; ++sh4Releases; }
 static int timingSamples = 0;
 static std::uint64_t lastNanoseconds = 0;
 static std::uint32_t lastEpoch = 0;
@@ -82,7 +89,10 @@ struct FakeFence {};
 struct FakePool {};
 struct CommandCounts { int resets = 0, writes = 0; };
 struct FakeCommandBuffer {
-    CommandCounts* counts;
+    CommandCounts* counts = nullptr;
+    explicit operator bool() const { return counts != nullptr; }
+    bool operator!=(const FakeCommandBuffer& other) const { return counts != other.counts; }
+    FakeCommandBuffer& operator=(std::nullptr_t) { counts = nullptr; return *this; }
     void resetQueryPool(FakePool&, std::uint32_t, std::uint32_t) { ++counts->resets; }
     void writeTimestamp(vk::PipelineStageFlagBits, FakePool&, std::uint32_t) { ++counts->writes; }
 };
@@ -100,7 +110,7 @@ struct FakeDevice {
 struct VulkanContext {
     FakeDevice* device = nullptr;
     bool gpuTimingAvailable = false;
-    bool gpuTimingActive = false;
+    FakeCommandBuffer gpuTimingCommandBuffer;
     FakePool* gpuTimingQueryPool = nullptr;
     std::size_t gpuTimingReadIndex = 0;
     std::size_t gpuTimingWriteIndex = 0;
@@ -142,6 +152,54 @@ protected:
     void beginGpuTiming() { assert(!timingActive); timingActive = true; ++begins; }
     void endGpuTiming() { assert(timingActive); timingActive = false; ++ends; }
 };
+struct OpenGL4Renderer : OpenGLRenderer { bool Render(); };
+static bool failNextFrame = false;
+namespace ggpo {
+bool active() { return true; }
+bool nextFrame() {
+    if (failNextFrame) throw std::runtime_error("nextFrame");
+    return true;
+}
+}
+int sh4_sched_now64() { return 0; }
+void setNetworkState(bool) {}
+enum class Event { Pause };
+struct EventManager {
+    static void event(Event) { assert(!performance_overlay::sh4Registered); }
+};
+struct Emulator {
+    enum { Running, Error } state = Running;
+    int startTime = 0, stepRangeTo = 0;
+    bool singleStep = false, failRun = false;
+    struct Executor { void Start() {} void Stop() {} } executor;
+    Executor* getSh4Executor() { return &executor; }
+    void runInternal() {
+        performance_overlay::sh4Registered = true;
+        if (failRun) throw std::runtime_error("runInternal");
+    }
+    void run();
+};
+template<typename Renderer>
+void testRenderScope() {
+    config::EmulateFramebuffer = false;
+    for (int failure = 0; failure <= 3; ++failure) {
+        Renderer renderer; renderer.failAt = failure;
+        bool threw = false;
+        try { assert(renderer.Render()); }
+        catch (const std::runtime_error&) { threw = true; }
+        assert(threw == (failure != 0) && !renderer.timingActive);
+        assert(renderer.begins == 1 && renderer.ends == 1 && renderer.restored == (failure == 0));
+        renderer.failAt = 0;
+        assert(renderer.Render() && renderer.begins == 2 && renderer.ends == 2);
+    }
+    Renderer renderer;
+    renderContext.isRTT = true;
+    assert(!renderer.Render() && renderer.begins == 0 && renderer.ends == 0 && renderer.restored == 1);
+    renderContext.isRTT = false;
+    config::EmulateFramebuffer = true;
+    renderer.failAt = 2;
+    assert(renderer.Render() && renderer.begins == 1 && renderer.ends == 1 && renderer.restored == 2);
+}
 '''
 tests = r'''
 int main() {
@@ -201,15 +259,21 @@ int main() {
         VulkanContext context;
         context.gpuTimingAvailable = true; context.gpuTimingQueryPool = &pool;
         context.BeginGpuTiming(commands);
-        assert(context.gpuTimingActive && counts.resets == 1 && counts.writes == 1);
+        assert(context.gpuTimingCommandBuffer && counts.resets == 1 && counts.writes == 1);
         context.BeginGpuTiming(commands);
-        assert(context.gpuTimingActive && counts.resets == 1 && counts.writes == 1);
+        assert(context.gpuTimingCommandBuffer && counts.resets == 1 && counts.writes == 1);
+        // A framebuffer upload must not close a screen pass's active query.
+        CommandCounts uploadCounts; FakeCommandBuffer upload {&uploadCounts};
+        context.BeginGpuTiming(upload);
+        context.EndGpuTiming(upload);
+        assert(context.gpuTimingCommandBuffer && context.gpuTimingWaitingCount == 0);
+        assert(uploadCounts.resets == 0 && uploadCounts.writes == 0 && counts.writes == 1);
         // Teardown calls this after WaitIdle and discards the abandoned buffers.
         context.ResetGpuTiming();
-        assert(!context.gpuTimingActive && context.gpuTimingWaitingCount == 0);
+        assert(!context.gpuTimingCommandBuffer && context.gpuTimingWaitingCount == 0);
         context.BeginGpuTiming(commands);
         context.EndGpuTiming(commands);
-        assert(!context.gpuTimingActive && counts.resets == 2 && counts.writes == 3);
+        assert(!context.gpuTimingCommandBuffer && counts.resets == 2 && counts.writes == 3);
         assert(context.gpuTimingWaitingCount == 1 && context.gpuTimingWriteIndex == 1);
         assert(context.gpuTimingEpochs[0] == 7 && context.gpuTimingFenceIndices[0] == -1);
         context.ResetGpuTiming();
@@ -217,26 +281,26 @@ int main() {
         assert(context.gpuTimingReadIndex == 0 && context.gpuTimingEpochs[0] == 0);
     }
     std::cout << "PASS Vulkan retains active-pair ownership until teardown reset and then resumes sampling\n";
-    for (int failure = 0; failure <= 3; ++failure) {
-        OpenGLRenderer renderer; renderer.failAt = failure;
-        bool threw = false;
-        try { assert(renderer.Render()); }
-        catch (const std::runtime_error&) { threw = true; }
-        assert(threw == (failure != 0) && !renderer.timingActive);
-        assert(renderer.begins == 1 && renderer.ends == 1 && renderer.restored == (failure == 0));
-        renderer.failAt = 0;
-        assert(renderer.Render() && renderer.begins == 2 && renderer.ends == 2);
-    }
-    {
-        OpenGLRenderer renderer;
-        renderContext.isRTT = true;
-        assert(!renderer.Render() && renderer.begins == 0 && renderer.ends == 0 && renderer.restored == 1);
-        renderContext.isRTT = false;
-        config::EmulateFramebuffer = true;
-        renderer.failAt = 2;
-        assert(renderer.Render() && renderer.begins == 1 && renderer.ends == 1 && renderer.restored == 2);
-    }
+    testRenderScope<OpenGLRenderer>();
     std::cout << "PASS GL closes queries on all render failures, preserves timing boundaries, and excludes RTT\n";
+    testRenderScope<OpenGL4Renderer>();
+    std::cout << "PASS GL4 closes queries on all render failures, preserves timing boundaries, and excludes RTT\n";
+    {
+        Emulator emulator;
+        emulator.run(); emulator.run();
+        assert(performance_overlay::sh4Registered && performance_overlay::sh4Releases == 0);
+        for (int failure = 0; failure < 2; ++failure) {
+            emulator.state = Emulator::Running;
+            emulator.failRun = failure == 0;
+            failNextFrame = failure == 1;
+            bool threw = false;
+            try { emulator.run(); }
+            catch (const std::runtime_error&) { threw = true; }
+            assert(threw && emulator.state == Emulator::Error && !performance_overlay::sh4Registered);
+            assert(performance_overlay::sh4Releases == failure + 1);
+        }
+    }
+    std::cout << "PASS non-threaded errors release SH4 sampling before pause; normal frames retain registration\n";
 }
 '''
 gpu_functions = '\n'.join(function(vulkan, signature).replace('vk::CommandBuffer', 'FakeCommandBuffer')
@@ -248,5 +312,7 @@ output = checks / 'failure_paths.cpp'
 output.write_text(shim + '\n' + function(dx, 'bool DX11Context::initGpuTiming()') + '\n' + gpu_functions + '\n'
                   + function(gl_header, 'class OpenGLGpuTimingScope\n') + ';\n'
                   + function(gl, 'bool OpenGLRenderer::Render()') + '\n'
+                  + function(gl4, 'bool OpenGL4Renderer::Render()') + '\n'
+                  + function(emulator, 'void Emulator::run()') + '\n'
                   + tests.replace('VULKAN_POOL', vulkan_pool))
 print('Generated:', output)

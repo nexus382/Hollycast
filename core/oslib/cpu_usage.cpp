@@ -19,6 +19,14 @@
 #include <sstream>
 #include <string>
 #include <unistd.h>
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#include <sys/types.h>
+#include <sys/resource.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
+#if defined(__NetBSD__) || defined(__OpenBSD__)
+#include <sys/sched.h>
+#endif
 #endif
 
 namespace cpu_usage {
@@ -97,17 +105,6 @@ Snapshot readSnapshot()
 		snapshot.systemValid = true;
 	}
 	mach_port_deallocate(mach_task_self(), host);
-
-	// RUSAGE_SELF includes exited workers; live-thread totals can go backwards
-	// when a worker ends and would lose its CPU work between samples.
-	rusage processInfo {};
-	if (getrusage(RUSAGE_SELF, &processInfo) == 0)
-	{
-		snapshot.processMicroseconds = (static_cast<std::uint64_t>(processInfo.ru_utime.tv_sec)
-			+ static_cast<std::uint64_t>(processInfo.ru_stime.tv_sec)) * 1000000
-			+ processInfo.ru_utime.tv_usec + processInfo.ru_stime.tv_usec;
-		snapshot.processValid = true;
-	}
 #elif defined(__linux__) || defined(__ANDROID__)
 	const long processorCount = sysconf(_SC_NPROCESSORS_ONLN);
 	snapshot.logicalProcessorCount = static_cast<std::uint32_t>(std::max(processorCount, 1L));
@@ -155,6 +152,49 @@ Snapshot readSnapshot()
 			}
 		}
 	}
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+	const long processorCount = sysconf(_SC_NPROCESSORS_ONLN);
+	if (processorCount > 0)
+		snapshot.logicalProcessorCount = static_cast<std::uint32_t>(processorCount);
+
+	// NetBSD exports fixed-width counters; FreeBSD and OpenBSD export longs.
+	// Request one aggregate across all CPUs, including interrupt/spin work.
+#if defined(__NetBSD__)
+	std::uint64_t ticks[CPUSTATES] {};
+#else
+	long ticks[CPUSTATES] {};
+#endif
+	size_t size = sizeof(ticks);
+#if defined(__FreeBSD__)
+	const bool systemRead = sysctlbyname("kern.cp_time", ticks, &size, nullptr, 0) == 0;
+#else
+#if defined(__NetBSD__)
+	int mib[] = { CTL_KERN, KERN_CP_TIME };
+#else
+	int mib[] = { CTL_KERN, KERN_CPTIME };
+#endif
+	const bool systemRead = sysctl(mib, 2, ticks, &size, nullptr, 0) == 0;
+#endif
+	if (systemRead && size == sizeof(ticks))
+	{
+		for (auto tick : ticks)
+			snapshot.systemTotalTicks += static_cast<std::uint64_t>(tick);
+		snapshot.systemBusyTicks = snapshot.systemTotalTicks - static_cast<std::uint64_t>(ticks[CP_IDLE]);
+		snapshot.systemValid = true;
+	}
+#endif
+
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+	// RUSAGE_SELF includes exited workers; live-thread totals can go backwards
+	// when a worker ends and would lose its CPU work between samples.
+	rusage processInfo {};
+	if (getrusage(RUSAGE_SELF, &processInfo) == 0)
+	{
+		snapshot.processMicroseconds = (static_cast<std::uint64_t>(processInfo.ru_utime.tv_sec)
+			+ static_cast<std::uint64_t>(processInfo.ru_stime.tv_sec)) * 1000000
+			+ processInfo.ru_utime.tv_usec + processInfo.ru_stime.tv_usec;
+		snapshot.processValid = true;
+	}
 #endif
 
 	return snapshot;
@@ -172,7 +212,8 @@ Stats queryCurrentProcessAndSystem()
 	result.logicalProcessorCount = current.logicalProcessorCount;
 	if (hasPrevious)
 	{
-		if (current.systemValid && previous.systemValid && current.systemTotalTicks > previous.systemTotalTicks)
+		if (current.systemValid && previous.systemValid && current.systemTotalTicks > previous.systemTotalTicks
+			&& current.systemBusyTicks >= previous.systemBusyTicks)
 		{
 			const std::uint64_t totalDelta = current.systemTotalTicks - previous.systemTotalTicks;
 			const std::uint64_t busyDelta = current.systemBusyTicks - previous.systemBusyTicks;

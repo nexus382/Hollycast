@@ -396,7 +396,7 @@ void uploadCompressedTextureSubImage2D(GLint level, GLsizei width, GLsizei heigh
 
 GlFramebuffer *BindRTT(bool withDepthBuffer = true);
 void ReadRTTBuffer();
-void glReadFramebuffer(const FramebufferInfo& info);
+void glUploadFramebuffer();
 GlFramebuffer *init_output_framebuffer(int width, int height);
 void writeFramebufferToVRAM();
 

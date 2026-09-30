@@ -190,6 +190,31 @@ int main() {
     recordGpuTimingSample(1000000, getGpuTimingEpoch());
     assert(gpuTimingSampleCount == 1);
     std::cout << "PASS Off skips sampling and old GPU epochs are rejected after re-enable\n";
+    auditItems = HostGpuGraph;
+    drawSample();
+    gpuTimingSupported = true;
+    for (int i = 0; i < 2; ++i) {
+        recordGpuTimingSample(2000000, getGpuTimingEpoch());
+        recordGpuTimingSample(1000000, getGpuTimingEpoch());
+        clockMs += 1000; drawSample();
+        assert(metrics.gpuTimingValid && metrics.gpuTimePerRender == 1.5f);
+    }
+    assert(metrics.gpuUsageHistory.count == 2);
+    clockMs += 1000; drawSample();
+    assert(!metrics.gpuTimingValid && metrics.gpuUsageHistory.count == 0);
+    recordGpuTimingSample(1000000, getGpuTimingEpoch());
+    clockMs += 1000; drawSample();
+    assert(metrics.gpuTimingValid && metrics.gpuUsageHistory.count == 1);
+    // A query can complete just before the backend loses timing support.
+    recordGpuTimingSample(1000000, getGpuTimingEpoch());
+    gpuTimingSupported = false;
+    clockMs += 1000; drawSample();
+    assert(!metrics.gpuTimingSupported && !metrics.gpuTimingValid && metrics.gpuUsageHistory.count == 0);
+    gpuTimingSupported = true;
+    recordGpuTimingSample(1000000, getGpuTimingEpoch());
+    clockMs += 1000; drawSample();
+    assert(metrics.gpuUsageHistory.count == 1);
+    std::cout << "PASS GPU graph drops stale history on gaps or support loss and restarts with fresh samples\n";
     config::boolOverrides["OverlayShowFrameTimes"] = false;
     config::boolOverrides["OverlayShowFrameTimeGraph"] = true;
     assert((realVisibleItems(2) & FrameTimeGraph) != 0);

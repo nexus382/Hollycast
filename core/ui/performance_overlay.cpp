@@ -277,7 +277,7 @@ struct Metrics {
 	float sh4TimePerVblank = 0.f;
 	float pvrTimePerVblank = 0.f;
 	float gpuUsage = 0.f;
-	float gpuTimePerRenderedFrame = 0.f;
+	float gpuTimePerRender = 0.f;
 	float pvrScheduledRenderPercent = 0.f;
 	float pvrPrimitivesPerScene = 0.f;
 	float pvrVerticesPerScene = 0.f;
@@ -382,7 +382,7 @@ void updateMetrics(std::uint32_t items)
 		metrics.sh4TimePerVblank = 0.f;
 		metrics.pvrTimePerVblank = 0.f;
 		metrics.gpuUsage = 0.f;
-		metrics.gpuTimePerRenderedFrame = 0.f;
+		metrics.gpuTimePerRender = 0.f;
 		metrics.pvrScheduledRenderPercent = 0.f;
 		metrics.pvrPrimitivesPerScene = 0.f;
 		metrics.pvrVerticesPerScene = 0.f;
@@ -500,13 +500,19 @@ void updateMetrics(std::uint32_t items)
 	const std::uint64_t gpuNanoseconds = gpuTimingNanoseconds.exchange(0);
 	const std::uint32_t gpuSamples = gpuTimingSampleCount.exchange(0);
 	metrics.gpuTimingSupported = gpuTimingSupported.load(std::memory_order_relaxed);
-	metrics.gpuTimingValid = gpuSamples != 0;
+	metrics.gpuTimingValid = metrics.gpuTimingSupported && gpuSamples != 0;
 	if (metrics.gpuTimingValid)
 	{
-		metrics.gpuTimePerRenderedFrame = static_cast<float>(gpuNanoseconds) / static_cast<float>(gpuSamples) / 1000000.f;
+		// Full framebuffer emulation can render a PVR scene and then upload
+		// its VRAM image. Each timed operation contributes once to this mean.
+		metrics.gpuTimePerRender = static_cast<float>(gpuNanoseconds) / static_cast<float>(gpuSamples) / 1000000.f;
 		metrics.gpuUsage = std::min(100.f, static_cast<float>(gpuNanoseconds) / (static_cast<float>(elapsed) * 1000000.f) * 100.f);
 		appendHistory(metrics.gpuUsageHistory, metrics.gpuUsage);
 	}
+	else
+		// A sampling gap must not leave an old utilization graph on screen or
+		// join it to unrelated samples after backend recovery.
+		metrics.gpuUsageHistory = {};
 	if (metrics.hostProcessCpuValid)
 		appendHistory(metrics.hostProcessCpuHistory, metrics.hostProcessCpuUsage);
 	if (metrics.hostSystemCpuValid)
@@ -623,8 +629,8 @@ std::string formatGpuTiming()
 	if (!metrics.gpuTimingValid)
 		return i18n::T("Host GPU: sampling timestamp queries");
 	char value[96];
-	std::snprintf(value, sizeof(value), i18n::T("Host GPU: %.1f%% (%.2f ms/rendered frame)"), metrics.gpuUsage,
-		metrics.gpuTimePerRenderedFrame);
+	std::snprintf(value, sizeof(value), i18n::T("Host GPU: %.1f%% (%.2f ms/render)"), metrics.gpuUsage,
+		metrics.gpuTimePerRender);
 	return value;
 }
 

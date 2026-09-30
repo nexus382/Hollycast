@@ -1144,21 +1144,23 @@ void VulkanContext::BeginGpuTiming(vk::CommandBuffer commandBuffer)
 	// An unfinished pair still belongs to its recorded command buffer.
 	// Renderer-error recovery discards it via ResetGpuTiming after WaitIdle;
 	// a later begin must not reset queries that those commands still reference.
-	if (!gpuTimingAvailable || !gpuTimingQueryPool || gpuTimingActive || gpuTimingWaitingCount == GpuTimingQueryCount)
+	if (!gpuTimingAvailable || !gpuTimingQueryPool || gpuTimingCommandBuffer || gpuTimingWaitingCount == GpuTimingQueryCount)
 		return;
 
 	const std::uint32_t firstQuery = static_cast<std::uint32_t>(gpuTimingWriteIndex * 2);
 	gpuTimingEpochs[gpuTimingWriteIndex] = performance_overlay::getGpuTimingEpoch();
 	commandBuffer.resetQueryPool(*gpuTimingQueryPool, firstQuery, 2);
 	commandBuffer.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, *gpuTimingQueryPool, firstQuery);
-	gpuTimingActive = true;
+	gpuTimingCommandBuffer = commandBuffer;
 #endif
 }
 
 void VulkanContext::EndGpuTiming(vk::CommandBuffer commandBuffer)
 {
 #ifndef LIBRETRO
-	if (!gpuTimingActive || !gpuTimingQueryPool)
+	// Direct framebuffer uploads use a different command pool. A skipped
+	// begin there must not end a pair still owned by a screen render pass.
+	if (!gpuTimingCommandBuffer || gpuTimingCommandBuffer != commandBuffer || !gpuTimingQueryPool)
 		return;
 
 	const std::uint32_t firstQuery = static_cast<std::uint32_t>(gpuTimingWriteIndex * 2);
@@ -1168,7 +1170,7 @@ void VulkanContext::EndGpuTiming(vk::CommandBuffer commandBuffer)
 	gpuTimingFenceIndices[gpuTimingWriteIndex] = -1;
 	gpuTimingWriteIndex = (gpuTimingWriteIndex + 1) % GpuTimingQueryCount;
 	++gpuTimingWaitingCount;
-	gpuTimingActive = false;
+	gpuTimingCommandBuffer = nullptr;
 #endif
 }
 
@@ -1179,7 +1181,7 @@ void VulkanContext::ResetGpuTiming()
 	gpuTimingReadIndex = 0;
 	gpuTimingWriteIndex = 0;
 	gpuTimingWaitingCount = 0;
-	gpuTimingActive = false;
+	gpuTimingCommandBuffer = nullptr;
 	performance_overlay::setGpuTimingSupported(false);
 }
 

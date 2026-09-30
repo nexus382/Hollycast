@@ -78,9 +78,9 @@ page is `core/ui/settings_new.cpp` (`renderOnScreenDisplayTab`).
 | RNDR | `Host CPU (PVR Renderer)` | PVR renderer host-thread CPU work. It exposes emulator and driver-preparation cost, not hardware GPU utilization. |
 | Emulated CPU | `Dreamcast SH4: target execution rate` | Emulated SH4 cycles advanced relative to the real-time target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. |
 | Emulated GPU `U` | `Dreamcast PVR: % of frame budget` | All renderer-complete delays scheduled during the sample divided by one active Dreamcast video-frame budget per vblank. Multiple renders accumulate, and values can exceed 100%. It is scheduler pressure, not a complete PVR busy-cycle percentage. |
-| GPU | `Host GPU: percent (ms/rendered frame)` | Uses non-blocking timestamp queries on Vulkan, OpenGL/GLES, DirectX 11, and DirectX 9. It is GPU execution time for displayed, non-RTT renderer frames, not total device utilization. Standalone iOS OpenGLES reports unavailable because it does not use the GLAD timer-query implementation. |
+| GPU | `Host GPU: percent (ms/render)` | Uses non-blocking timestamp queries on Vulkan, OpenGL/GLES, DirectX 11, and DirectX 9. A sample measures a PVR screen render or a direct framebuffer upload/render; RTT is excluded. Full framebuffer emulation can perform both operations per video frame, so the average is per timed render, not per presentation. The percentage sums their measured time over the sample interval, not total device utilization. Standalone iOS OpenGLES reports unavailable because it does not use the GLAD timer-query implementation. |
 | GPU statistics | `formatGpuStatistics()` | Reports API, PVR primitive batches, PVR vertices, PVR render passes, and texture uploads per second. These are not host API draw-call or copy counters. |
-| Resolution | `formatResolution()` | Reports raw, rendered, viewport, and output dimensions. |
+| Resolution | `formatResolution()` | Reports raw, rendered, viewport, and output dimensions. Direct framebuffer frames report the backend's decoded/uploaded image size for raw and rendered; this includes 240p/interlace handling and a 1x1 border image on backends that use it for blank video. |
 | Frame times | Present-interval average/min/max and 152-sample graph | Uses the same host presentation calls as Output FPS. These are API-level intervals, not physical scanout or full emulation frame-start intervals. Native iOS reports unavailable. |
 | Latency | No row is shown until a probe exists | No audio-buffer, active-frame, pre-frame, queue, or input-to-photon instrumentation is currently exposed. |
 | VRAM | DXGI per-process adapter memory | Shows Hollycast memory used/budget when Windows provides it. Fixed Dreamcast VRAM was removed because it never changes. |
@@ -93,8 +93,9 @@ The Full OSD starts with four intentionally separate readings:
 1. **Host CPU**: Hollycast's share of all logical CPU capacity and total device
    CPU use. Use the supporting SH4/PVR host-thread rows to find one saturated
    emulation thread on a multicore device.
-2. **Host GPU**: timestamped backend execution time. `ms/rendered frame` is the most
-   direct comparison with the 16.67 ms budget at 60 FPS.
+2. **Host GPU**: timestamped backend execution time. `ms/render` averages completed
+   timestamp intervals. Compare with the 16.67 ms budget at 60 FPS only when there
+   is one timed render per video frame.
 3. **Dreamcast SH4**: emulated SH4 execution rate versus its real-time target.
    It indicates whether SH4 time is advancing fast enough, not host CPU use.
 4. **Dreamcast PVR**: the emulated render-complete delay as a share of the

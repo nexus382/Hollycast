@@ -705,23 +705,23 @@ void OpenGL4Renderer::Term()
 bool OpenGL4Renderer::Render()
 {
 	saveCurrentFramebuffer();
-	// Render-to-texture passes do not contribute to displayed-frame timing.
-	if (!gl.rendContext->isRTT)
-		beginGpuTiming();
-	renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
-	if (gl.rendContext->isRTT) {
-		restoreCurrentFramebuffer();
-		return false;
-	}
-
-	if (!config::EmulateFramebuffer)
+	const bool is_rtt = gl.rendContext->isRTT;
 	{
-		frameRendered = true;
-		clearLastFrame = false;
-		drawOSD();
-		renderVideoRouting();
+		OpenGLGpuTimingScope gpuTiming(this, !is_rtt);
+		renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
+		if (is_rtt) {
+			restoreCurrentFramebuffer();
+			return false;
+		}
+
+		if (!config::EmulateFramebuffer)
+		{
+			frameRendered = true;
+			clearLastFrame = false;
+			drawOSD();
+			renderVideoRouting();
+		}
 	}
-	endGpuTiming();
 	restoreCurrentFramebuffer();
 
 	return true;

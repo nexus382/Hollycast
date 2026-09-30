@@ -1068,6 +1068,11 @@ void Emulator::run()
 		if (ggpo::active())
 			ggpo::nextFrame();
 	} catch (const std::exception& e) {
+#ifndef LIBRETRO
+		// stop() skips cleanup once state becomes Error. Release the shared
+		// emulation thread's clock/handle before notifying pause listeners.
+		performance_overlay::clearSh4ThreadSample();
+#endif
 		ERROR_LOG(COMMON, "Exception: %s", e.what());
 		setNetworkState(false);
 		state = Error;

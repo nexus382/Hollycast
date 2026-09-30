@@ -284,7 +284,7 @@ private:
 	std::size_t gpuTimingWriteIndex = 0;
 	std::size_t gpuTimingWaitingCount = 0;
 	bool gpuTimingAvailable = false;
-	bool gpuTimingActive = false;
+	vk::CommandBuffer gpuTimingCommandBuffer;
 	double gpuTimestampPeriod = 0.0;
 	u64 gpuTimestampMask = 0;
 

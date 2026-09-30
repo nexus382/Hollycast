@@ -1,7 +1,6 @@
 /*
 	Copyright 2021 flyinghead
 	Portions Copyright 2026 The Hollycast Authors
-	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -281,6 +280,7 @@ void D3DRenderer::RenderFramebuffer(const FramebufferInfo& info)
 		ReadFramebuffer<BGRAPacker>(info, pb, width, height);
 	}
 
+	DX9GpuTimingScope gpuTiming(DXContext::Instance(), true);
 	if (dcfbTexture)
 	{
 		D3DSURFACE_DESC desc;
@@ -321,6 +321,9 @@ void D3DRenderer::RenderFramebuffer(const FramebufferInfo& info)
 	frameRenderedOnce = true;
 	clearLastFrame = false;
 	DXContext::Instance()->setFrameRendered();
+#ifndef LIBRETRO
+	performance_overlay::recordRenderedResolution(width, height, width, height);
+#endif
 }
 
 void D3DRenderer::Process(TA_context* ctx)

@@ -1033,6 +1033,7 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 		ReadFramebuffer<BGRAPacker>(info, pb, width, height);
 	}
 
+	DX11GpuTimingScope gpuTiming(DX11Context::Instance(), true);
 	if (dcfbTexture)
 	{
 		D3D11_TEXTURE2D_DESC desc;
@@ -1100,6 +1101,7 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 	drawOSD();
 	renderVideoRouting();
 	DX11Context::Instance()->setFrameRendered();
+	performance_overlay::recordRenderedResolution(width, height, width, height);
 #else
 	ID3D11RenderTargetView *nullView = nullptr;
 	deviceContext->OMSetRenderTargets(1, &nullView, nullptr);
