@@ -4078,13 +4078,19 @@ void renderVideoTab()
 			std::array<const char*, scalings.size()> resolutionLabelPtrs {};
 			int internalResSelection = -1;
 			const int configuredRenderResolution = config::RenderResolution.get();
+			float widthScale = 1.f;
+			if (config::Widescreen && !config::Rotate90 && !config::EmulateFramebuffer)
+			{
+				widthScale = config::SuperWidescreen && settings.display.width > 0 && settings.display.height > 0
+					? static_cast<float>(settings.display.width) / settings.display.height / 4.f * 3.f
+					: 4.f / 3.f;
+			}
 
 			for (size_t i = 0; i < scalings.size(); i++)
 			{
 				verticalRes[i] = static_cast<int>(scalings[i] * 480.0f);
-				const int horizontalRes = !config::Widescreen
-					? static_cast<int>(scalings[i] * 640.0f)
-					: static_cast<int>(scalings[i] * 480.0f * 16.0f / 9.0f);
+				// Match the renderer's widescreen expansion and even-pixel width rounding.
+				const int horizontalRes = static_cast<int>(std::round(scalings[i] * 640.f * widthScale / 2.f) * 2.f);
 
 				if (verticalRes[i] == configuredRenderResolution)
 					internalResSelection = static_cast<int>(i);
