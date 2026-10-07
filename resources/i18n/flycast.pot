@@ -3194,3 +3194,47 @@ msgstr ""
 #: core/ui/vgamepad.cpp:1191
 msgid "CHOOSE IMG..."
 msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Grouped"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Turn off to move individual buttons. Turning on restores this group's default layout."
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Left"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Up"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Right"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Down"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button X"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button Y"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button B"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button A"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button C"
+msgstr ""

@@ -69,6 +69,15 @@ enum Element
 	Elem_Btn5,
 	Elem_ServiceMode,
 	Elem_InsertCard,
+	// Append individual controls to preserve the existing native gesture IDs.
+	Elem_DPadLeft,
+	Elem_DPadUp,
+	Elem_DPadRight,
+	Elem_DPadDown,
+	Elem_ButtonX,
+	Elem_ButtonY,
+	Elem_ButtonB,
+	Elem_ButtonA,
 	Elem_Count,
 };
 

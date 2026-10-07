@@ -76,6 +76,9 @@ static float AlphaTrans = 1.f;
 static ImVec2 StickPos;	// analog stick position [-1, 1]
 static Element SelectedElement = Elem_DPad;
 static Element DraggedElement = Elem_None;
+// Indexed by Elem_DPad/Elem_Buttons, with separate choices in each platform layout.
+static std::array<bool, 2> GroupedButtons { true, true };
+static bool LayoutLoaded;
 static ImVec2 LastDragMousePos;
 static std::string PendingImagePath;
 static bool DreamcastImageSwapsAB;
@@ -375,6 +378,10 @@ ControlId hitTest(float x, float y)
 		if (control.disabled)
 			continue;
 		const ControlId controlId = static_cast<ControlId>(&control - &Controls[0]);
+		// Invisible diagonal targets belong to an intact D-pad; separated directions
+		// use their own targets and can still be pressed together with multitouch.
+		if (!GroupedButtons[Elem_DPad] && controlId >= LeftUp && controlId <= RightDown)
+			continue;
 		const ImVec2 padding = getControlHitPadding(controlId);
 		const ImVec2 targetMin = control.pos - padding;
 		const ImVec2 targetMax = control.pos + control.size + padding;
@@ -540,13 +547,9 @@ static void drawButton(ImDrawList *drawList, const Control& control, bool state)
 
 void draw()
 {
-	if (Controls[Left].pos.x == 0.f)
-	{
+	// Zero is a valid position for an independently moved button.
+	if (!LayoutLoaded)
 		loadLayout();
-		if (Controls[Left].pos.x == 0.f)
-			// mark done
-			Controls[Left].pos.x = 1e-12f;
-	}
 	if (!config::VirtualGamepadEnabled && !Editing)
 		return;
 	// Resolve the active atlas before choosing any preset-specific UVs.
@@ -668,6 +671,16 @@ static LayoutElement Layout[Elem_Count] {
 	{ "btn5",     Tnop("Button 5"),   -152.f,-216.f,  64.f,  64.f },
 	{ "service",  Tnop("Service"),     -24.f,  96.f,  64.f,  64.f },
 	{ "inscard",  Tnop("Insert Card"),  40.f,-250.f,  64.f,  64.f },
+
+	// Individual buttons inherit their group's geometry when first ungrouped.
+	{ "dpad_left",  Tnop("D-pad Left"),  0.f, 0.f, 64.f, 64.f },
+	{ "dpad_up",    Tnop("D-pad Up"),    0.f, 0.f, 64.f, 64.f },
+	{ "dpad_right", Tnop("D-pad Right"), 0.f, 0.f, 64.f, 64.f },
+	{ "dpad_down",  Tnop("D-pad Down"),  0.f, 0.f, 64.f, 64.f },
+	{ "button_x",   Tnop("Button X"),   0.f, 0.f, 64.f, 64.f },
+	{ "button_y",   Tnop("Button Y"),   0.f, 0.f, 64.f, 64.f },
+	{ "button_b",   Tnop("Button B"),   0.f, 0.f, 64.f, 64.f },
+	{ "button_a",   Tnop("Button A"),   0.f, 0.f, 64.f, 64.f },
 };
 
 struct LayoutState
@@ -682,6 +695,7 @@ struct LayoutState
 struct LayoutEditState
 {
 	std::array<LayoutState, Elem_Count> layout;
+	std::array<bool, 2> groupedButtons;
 	std::string imagePath;
 };
 
@@ -706,7 +720,47 @@ static bool isValidElement(Element element)
 
 static const char *getElementLabel(Element element)
 {
+	if (!isConsoleLayout())
+	{
+		if (element == Elem_ButtonX)
+			return i18n::T("Button C");
+		if (element == Elem_ButtonY)
+			return i18n::T("Button X");
+	}
 	return isValidElement(element) ? i18n::T(Layout[element].label) : i18n::T("None");
+}
+
+static Element getButtonGroup(Element element)
+{
+	if (element == Elem_DPad || (element >= Elem_DPadLeft && element <= Elem_DPadDown))
+		return Elem_DPad;
+	if (element == Elem_Buttons || (element >= Elem_ButtonX && element <= Elem_ButtonA))
+		return Elem_Buttons;
+	return Elem_None;
+}
+
+static void resetIndividualButtons(Element element)
+{
+	const Element group = getButtonGroup(element);
+	if (group == Elem_None)
+		return;
+
+	const int groupFirst = group == Elem_DPad ? Elem_DPadLeft : Elem_ButtonX;
+	const int first = element >= Elem_DPadLeft ? element : groupFirst;
+	const int end = element >= Elem_DPadLeft ? first + 1 : groupFirst + 4;
+	constexpr std::array<ImVec2, 4> offsets { ImVec2(0.f, 1.f), ImVec2(1.f, 0.f),
+			ImVec2(2.f, 1.f), ImVec2(1.f, 2.f) };
+	const LayoutElement& parent = Layout[group];
+	for (int i = first; i < end; i++)
+	{
+		LayoutElement& button = Layout[i];
+		button.applyUiScale();
+		button.x = parent.x + offsets[i - groupFirst].x * button.w * parent.scale;
+		button.y = parent.y + offsets[i - groupFirst].y * button.h * parent.scale;
+		button.scale = parent.scale;
+		button.transparency = parent.transparency;
+		button.touchSize = parent.touchSize;
+	}
 }
 
 static Element controlToElement(ControlId control)
@@ -717,6 +771,8 @@ static Element controlToElement(ControlId control)
 	case Up:
 	case Right:
 	case Down:
+		return GroupedButtons[Elem_DPad] ? Elem_DPad
+				: static_cast<Element>(Elem_DPadLeft + control - Left);
 	case LeftUp:
 	case RightUp:
 	case LeftDown:
@@ -726,7 +782,8 @@ static Element controlToElement(ControlId control)
 	case Y:
 	case B:
 	case A:
-		return Elem_Buttons;
+		return GroupedButtons[Elem_Buttons] ? Elem_Buttons
+				: static_cast<Element>(Elem_ButtonX + control - X);
 	case Start:
 		return Elem_Start;
 	case LeftTrigger:
@@ -766,7 +823,7 @@ static ImVec2 getControlHitPadding(ControlId control)
 	// Touch Size scales with the button; Finger Size belongs to the input contact.
 	const ImVec2 size = Controls[control].size;
 	// For the D-pad, stick and face buttons, 100 now equals the old 30.
-	const float range = element == Elem_DPad || element == Elem_Analog || element == Elem_Buttons
+	const float range = getButtonGroup(element) != Elem_None || element == Elem_Analog
 			|| element == Elem_Btn4 || element == Elem_Btn5 ? 0.3f : 1.f;
 	const float padding = range * MAX_TOUCH_PADDING
 			* (std::min(size.x, size.y) / 64.f) * touchSize / MAX_PERCENT;
@@ -808,6 +865,18 @@ static void applyLayout()
 	Controls[A].pos =  { x + 64.f * scale, y + 128.f * scale };
 	for (int control = X; control <= A; control++)
 		Controls[control].size = { 64.f * scale, 64.f * scale };
+
+	// Keep the grouped geometry above as the legacy/default layout. Independent
+	// buttons override it only while their own group is unchecked.
+	for (int control = Left; control <= A; control++)
+	{
+		const Element element = controlToElement(static_cast<ControlId>(control));
+		if (element < Elem_DPadLeft)
+			continue;
+		const LayoutElement& button = Layout[element];
+		Controls[control].pos = { button.x * dcw - dx, button.y * REFERENCE_HEIGHT };
+		Controls[control].size = { button.dw * button.scale * uiscale, button.dh * button.scale * uiscale };
+	}
 
 	// Start
 	scale = Layout[Elem_Start].scale * uiscale;
@@ -866,11 +935,19 @@ void applyUiScale() {
 
 static void loadLayout()
 {
-	for (auto& element : Layout) {
-		element.reset();
-		element.load();
+	for (int i = 0; i < Elem_DPadLeft; i++) {
+		Layout[i].reset();
+		Layout[i].load();
 	}
+	resetIndividualButtons(Elem_DPad);
+	resetIndividualButtons(Elem_Buttons);
+	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
+		Layout[i].load();
+	// Old configurations remain grouped. Each platform layout stores its own choice.
+	GroupedButtons[Elem_DPad] = config::loadBool(getLayoutCfgSection(), "dpad_grouped", true);
+	GroupedButtons[Elem_Buttons] = config::loadBool(getLayoutCfgSection(), "buttons_grouped", true);
 	applyLayout();
+	LayoutLoaded = true;
 }
 
 static void saveCustomization(const std::string& imagePath)
@@ -878,6 +955,8 @@ static void saveCustomization(const std::string& imagePath)
 	config::setAutoSave(false);
 	for (auto& element : Layout)
 		element.save();
+	config::saveBool(getLayoutCfgSection(), "dpad_grouped", GroupedButtons[Elem_DPad]);
+	config::saveBool(getLayoutCfgSection(), "buttons_grouped", GroupedButtons[Elem_Buttons]);
 	config::VirtualGamepadEnabled.save();
 	config::VirtualGamepadHapticFeedback.save();
 	config::VirtualGamepadVisualFeedback.save();
@@ -891,8 +970,14 @@ static void saveCustomization(const std::string& imagePath)
 
 static void resetLayout()
 {
-	for (auto& element : Layout)
-		element.reset();
+	for (int i = 0; i < Elem_DPadLeft; i++)
+		Layout[i].reset();
+	GroupedButtons = { true, true };
+	resetIndividualButtons(Elem_DPad);
+	resetIndividualButtons(Elem_Buttons);
+	if (SelectedElement >= Elem_DPadLeft)
+		SelectedElement = getButtonGroup(SelectedElement);
+	DraggedElement = Elem_None;
 	applyLayout();
 }
 
@@ -900,7 +985,18 @@ static void resetElement(Element element)
 {
 	if (!isValidElement(element))
 		return;
-	Layout[element].reset();
+	if (element >= Elem_DPadLeft)
+		resetIndividualButtons(element);
+	else
+	{
+		Layout[element].reset();
+		const Element group = getButtonGroup(element);
+		if (group != Elem_None)
+		{
+			GroupedButtons[group] = true;
+			resetIndividualButtons(group);
+		}
+	}
 	applyLayout();
 }
 
@@ -917,6 +1013,7 @@ static void captureLayoutEditState(LayoutEditState& state)
 			element.touchSize,
 		};
 	}
+	state.groupedButtons = GroupedButtons;
 	state.imagePath = PendingImagePath;
 }
 
@@ -932,6 +1029,7 @@ static void restoreLayoutEditState(const LayoutEditState& state)
 		element.transparency = saved.transparency;
 		element.touchSize = saved.touchSize;
 	}
+	GroupedButtons = state.groupedButtons;
 	PendingImagePath = state.imagePath;
 	applyLayout();
 	// Reload even an empty path so switching or Cancel also restores default art.
@@ -1129,6 +1227,22 @@ static void drawCustomizePanel()
 
 	ImGui::Text("%s: %s", i18n::T("Selected"), getElementLabel(SelectedElement));
 	ImGui::TextWrapped("%s", i18n::T("Touch a button to select it. Drag to move it."));
+
+	const Element group = getButtonGroup(SelectedElement);
+	if (group != Elem_None)
+	{
+		bool& grouped = GroupedButtons[group];
+		if (drawCustomizeCheckbox("VirtualControllerGrouped", i18n::T("Grouped"), grouped))
+		{
+			if (grouped)
+				Layout[group].reset();
+			resetIndividualButtons(group);
+			SelectedElement = grouped ? group : (group == Elem_DPad ? Elem_DPadLeft : Elem_ButtonX);
+			DraggedElement = Elem_None;
+			applyLayout();
+		}
+		ImGui::TextWrapped("%s", i18n::T("Turn off to move individual buttons. Turning on restores this group's default layout."));
+	}
 
 	ImGui::Separator();
 	bool enabled = static_cast<bool>(config::VirtualGamepadEnabled);
@@ -1626,7 +1740,7 @@ static void switchEditingLayout(bool console)
 		disableControl(ServiceMode);
 		disableControl(InsertCard);
 	}
-	SelectedElement = Elem_DPad;
+	SelectedElement = GroupedButtons[Elem_DPad] ? Elem_DPad : Elem_DPadLeft;
 	DraggedElement = Elem_None;
 	setButtonMap();
 }
