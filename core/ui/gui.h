@@ -79,7 +79,6 @@ enum class GuiState {
 	Settings,
 	Main,
 	Onboarding,
-	VJoyEdit,
 	VJoyEditCommands,
 	SelectDisk,
 	Loading,

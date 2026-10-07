@@ -48,7 +48,7 @@ namespace vgamepad
 static void loadLayout();
 static void drawCustomizePanel();
 static void drawSelectedElement();
-static void drawTouchIndicator(bool pointerOverUi);
+static void drawTouchIndicator();
 static void handleCustomizeDrag(bool pointerOverUi);
 static void switchEditingLayout(bool console);
 static Element controlToElement(ControlId control);
@@ -84,7 +84,7 @@ constexpr float REFERENCE_HEIGHT = 480.f;
 constexpr float MIN_ELEMENT_SCALE = 0.5f;
 constexpr float MAX_ELEMENT_SCALE = 1.8f;
 constexpr float MAX_TOUCH_PADDING = 24.f;
-constexpr float MAX_FINGER_PADDING = MAX_TOUCH_PADDING * 3.f;
+constexpr float MAX_FINGER_RADIUS = MAX_TOUCH_PADDING * 3.f;
 constexpr int MAX_PERCENT = 100;
 constexpr s64 MAX_BUTTON_IMAGE_FILE_SIZE = 4 * 1024 * 1024;
 constexpr int MAX_BUTTON_IMAGE_WIDTH = 4096;
@@ -125,6 +125,11 @@ static const char *getLayoutCfgSection() {
 	return isConsoleLayout() ? CFG_SECTION : "vgamepad_arcade";
 }
 
+static float getFingerRadius() {
+	return MAX_FINGER_RADIUS
+			* std::clamp(static_cast<int>(config::VirtualGamepadFingerSize), 0, MAX_PERCENT) / MAX_PERCENT;
+}
+
 void displayCommands()
 {
 	// Apply preset changes and Done/Cancel before queuing any atlas draw calls.
@@ -135,7 +140,7 @@ void displayCommands()
 	draw();
 	if (!ImGui::IsAnyItemActive())
 		drawSelectedElement();
-	drawTouchIndicator(pointerOverUi);
+	drawTouchIndicator();
 }
 
 static const char *getButtonsResPath() {
@@ -363,14 +368,30 @@ ControlId hitTest(float x, float y)
 
 	ControlId closestControl = None;
 	float closestDistanceSquared = std::numeric_limits<float>::max();
+	const float fingerRadius = getFingerRadius();
+	const float fingerRadiusSquared = fingerRadius * fingerRadius;
 	for (const auto& control : Controls)
 	{
+		if (control.disabled)
+			continue;
 		const ControlId controlId = static_cast<ControlId>(&control - &Controls[0]);
 		const ImVec2 padding = getControlHitPadding(controlId);
-		if (control.disabled
-				|| x < control.pos.x - padding.x || x >= control.pos.x + control.size.x + padding.x
-				|| y < control.pos.y - padding.y || y >= control.pos.y + control.size.y + padding.y)
-			continue;
+		const ImVec2 targetMin = control.pos - padding;
+		const ImVec2 targetMax = control.pos + control.size + padding;
+		if (fingerRadius == 0.f)
+		{
+			// Preserve point-input boundaries when Finger Size is zero.
+			if (x < targetMin.x || x >= targetMax.x || y < targetMin.y || y >= targetMax.y)
+				continue;
+		}
+		else
+		{
+			// Intersect the circular finger contact with the independent button target.
+			const float dx = x - std::clamp(x, targetMin.x, targetMax.x);
+			const float dy = y - std::clamp(y, targetMin.y, targetMax.y);
+			if (dx * dx + dy * dy > fingerRadiusSquared)
+				continue;
+		}
 
 		// Prefer the visible button nearest the touch when expanded targets overlap.
 		const float nearestX = std::clamp(x, control.pos.x, control.pos.x + control.size.x);
@@ -742,15 +763,12 @@ static ImVec2 getControlHitPadding(ControlId control)
 	if (!isValidElement(element))
 		return ImVec2(0.f, 0.f);
 	const int touchSize = Layout[element].touchSize;
-	const float fingerPadding = MAX_FINGER_PADDING
-			* std::clamp(static_cast<int>(config::VirtualGamepadFingerSize), 0, MAX_PERCENT) / MAX_PERCENT;
-	// Scale all extra reach with the rendered button and Touch Size. Adding a
-	// fixed finger radius afterward would enlarge the target even at Touch Size 0.
+	// Touch Size scales with the button; Finger Size belongs to the input contact.
 	const ImVec2 size = Controls[control].size;
 	// For the D-pad, stick and face buttons, 100 now equals the old 30.
 	const float range = element == Elem_DPad || element == Elem_Analog || element == Elem_Buttons
 			|| element == Elem_Btn4 || element == Elem_Btn5 ? 0.3f : 1.f;
-	const float padding = range * (MAX_TOUCH_PADDING + fingerPadding)
+	const float padding = range * MAX_TOUCH_PADDING
 			* (std::min(size.x, size.y) / 64.f) * touchSize / MAX_PERCENT;
 	return ImVec2(padding, padding);
 }
@@ -984,7 +1002,7 @@ static bool getControlScreenBounds(ControlId controlId, ImVec2& min, ImVec2& max
 	min.x += screenOffsetX;
 	max = (control.pos + control.size) * screenScale;
 	max.x += screenOffsetX;
-	// Share the complete padding with hitTest() so the blue outlines match input.
+	// Show the button target independently of the finger contact used by hitTest().
 	const ImVec2 padding = getControlHitPadding(controlId) * screenScale;
 	min -= padding;
 	max += padding;
@@ -1020,21 +1038,21 @@ static void drawSelectedElement()
 	}
 }
 
-static void drawTouchIndicator(bool pointerOverUi)
+static void drawTouchIndicator()
 {
-	if (!Editing || pointerOverUi || !ImGui::GetIO().MouseDown[ImGuiMouseButton_Left])
+	const ImGuiIO& io = ImGui::GetIO();
+	if (!Editing || !io.MouseDown[ImGuiMouseButton_Left] || !ImGui::IsMousePosValid(&io.MousePos))
 		return;
 
-	ImDrawList *drawList = ImGui::GetBackgroundDrawList();
-	const ImVec2 position = ImGui::GetIO().MousePos;
+	// Preview Finger Size even over the settings panel or outside a button target.
+	// The blue target outlines still show the per-control Touch Size and scaling.
+	ImDrawList *drawList = ImGui::GetForegroundDrawList();
+	const ImVec2 position = io.MousePos;
 	const float screenScale = settings.display.height / REFERENCE_HEIGHT;
-	const float screenOffsetX = (settings.display.width - screenScale * REFERENCE_WIDTH) / 2.f;
-	const ControlId control = hitTest((position.x - screenOffsetX) / screenScale, position.y / screenScale);
-	// Show the effective extra reach of this target, including its current scale.
-	const float radius = control == None ? 0.f : getControlHitPadding(control).x * screenScale;
-	drawList->AddCircleFilled(position, uiScaled(4.f), IM_COL32(255, 255, 255, 245), 24);
+	const float radius = getFingerRadius() * screenScale;
 	if (radius > 0.f)
 		drawList->AddCircle(position, radius, IM_COL32(255, 202, 67, 245), 32, uiScaled(2.f));
+	drawList->AddCircleFilled(position, uiScaled(4.f), IM_COL32(255, 255, 255, 245), 24);
 }
 
 static int getElementScalePercent(Element element)
@@ -1099,7 +1117,7 @@ static void drawCustomizePanel()
 			ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
 
 	ImGui::TextUnformatted(i18n::T("Controller Layout"));
-	if (ImGui::RadioButton("Dreamcast", EditConsoleLayout))
+	if (ImGui::RadioButton(i18n::T("Dreamcast"), EditConsoleLayout))
 		switchEditingLayout(true);
 	ImGui::SameLine();
 	if (ImGui::RadioButton(i18n::T("Arcade"), !EditConsoleLayout))
@@ -1576,10 +1594,6 @@ void startGame()
 				touchMouse->set_maple_port(-1);
 		}
 	}
-}
-
-void resetEditing() {
-	resetLayout();
 }
 
 void startEditing()

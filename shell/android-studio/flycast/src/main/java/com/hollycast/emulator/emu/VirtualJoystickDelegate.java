@@ -22,7 +22,6 @@ package com.hollycast.emulator.emu;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.MotionEvent;
-import android.view.View;
 
 import com.hollycast.emulator.Emulator;
 import com.hollycast.emulator.periph.InputDeviceManager;
@@ -48,7 +47,7 @@ public class VirtualJoystickDelegate implements TouchEventHandler
     private int mousePid = -1;
     private int menuPointerId = -1;
 
-    public VirtualJoystickDelegate(View view) {
+    public VirtualJoystickDelegate() {
         vibratorThread = VibratorThread.getInstance();
     }
 

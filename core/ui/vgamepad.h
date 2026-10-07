@@ -89,7 +89,6 @@ void startEditing();
 void stopEditing(bool canceled);
 void pauseEditing();
 void setEditMode(bool editing);
-void resetEditing();
 void displayCommands();
 void loadImage(const std::string& path);
 void startGame();

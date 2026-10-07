@@ -502,13 +502,6 @@ void gui_open_settings()
 			chat.toggle();
 		}
 	}
-	else if (gui_state == GuiState::VJoyEdit)
-	{
-		vgamepad::pauseEditing();
-		// iOS: force a touch up event to make up for the one eaten by the tap gesture recognizer
-		mouseButtons &= ~1;
-		gui_setState(GuiState::VJoyEditCommands);
-	}
 	else if (gui_state == GuiState::Loading)
 	{
 		gameLoader.cancel();
@@ -2969,9 +2962,6 @@ void gui_display_ui()
 	case GuiState::Onboarding:
 		gui_display_onboarding();
 		break;
-	case GuiState::VJoyEdit:
-		vgamepad::draw();
-		break;
 	case GuiState::VJoyEditCommands:
 		vgamepad::displayCommands();
 		break;
@@ -3293,8 +3283,7 @@ void gui_setState(GuiState newState)
 {
 	if (gui_state != newState)
 	{
-		if ((gui_state == GuiState::VJoyEdit || gui_state == GuiState::VJoyEditCommands)
-				&& newState != GuiState::VJoyEdit && newState != GuiState::VJoyEditCommands)
+		if (gui_state == GuiState::VJoyEditCommands)
 			// Menu navigation cancels unsaved edits; Done has already ended the session.
 			vgamepad::stopEditing(true);
 		if (newState == GuiState::Main && gui_state == GuiState::Closed)

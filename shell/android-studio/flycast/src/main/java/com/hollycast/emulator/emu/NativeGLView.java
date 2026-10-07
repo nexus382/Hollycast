@@ -58,7 +58,7 @@ public class NativeGLView extends SurfaceView implements SurfaceHolder.Callback 
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         if (InputDeviceManager.getInstance().hasTouchscreen())
-            vjoyDelegate = new VirtualJoystickDelegate(this);
+            vjoyDelegate = new VirtualJoystickDelegate();
     }
 
     @Override
@@ -171,7 +171,7 @@ public class NativeGLView extends SurfaceView implements SurfaceHolder.Callback 
             return;
         if (vjoyDelegate != null)
             vjoyDelegate.stop();
-        vjoyDelegate = editing ? new EditVirtualJoystickDelegate(this) : new VirtualJoystickDelegate(this);
+        vjoyDelegate = editing ? new EditVirtualJoystickDelegate(this) : new VirtualJoystickDelegate();
     }
 
     public void showVGamepad() {
