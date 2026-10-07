@@ -4078,13 +4078,22 @@ void renderVideoTab()
 			std::array<const char*, scalings.size()> resolutionLabelPtrs {};
 			int internalResSelection = -1;
 			const int configuredRenderResolution = config::RenderResolution.get();
+			// Read both toggles every frame so labels also preview widescreen cheats before a game is loaded.
+			float widthScale = 1.f;
+			if ((config::Widescreen || config::WidescreenGameHacks)
+					&& !config::Rotate90 && !config::EmulateFramebuffer)
+			{
+				widthScale = config::Widescreen && config::SuperWidescreen
+						&& settings.display.width > 0 && settings.display.height > 0
+					? static_cast<float>(settings.display.width) / settings.display.height / 4.f * 3.f
+					: 4.f / 3.f;
+			}
 
 			for (size_t i = 0; i < scalings.size(); i++)
 			{
 				verticalRes[i] = static_cast<int>(scalings[i] * 480.0f);
-				const int horizontalRes = !config::Widescreen
-					? static_cast<int>(scalings[i] * 640.0f)
-					: static_cast<int>(scalings[i] * 480.0f * 16.0f / 9.0f);
+				// Keep the renderer's even-pixel width rounding for the selected aspect ratio.
+				const int horizontalRes = static_cast<int>(std::round(scalings[i] * 640.f * widthScale / 2.f) * 2.f);
 
 				if (verticalRes[i] == configuredRenderResolution)
 					internalResSelection = static_cast<int>(i);
@@ -4129,6 +4138,7 @@ void renderVideoTab()
 				T(
 					"Internal Resolution\n"
 					"This is the single biggest graphics performance setting.\n"
+					"Resolution labels update with the widescreen settings. With Widescreen Game Cheats alone, labels preview the stretched 16:9 output for supported games.\n\n"
 					"Lower values reduce GPU load (faster). Higher values improve clarity, reduce shimmer/aliasing, and act as a form of supersampling.\n\n"
 					"If you are not holding a stable 30/60 FPS, reduce Internal Resolution first before turning off visual features."
 				)
