@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 	Copyright (c) 2015 reicast. All rights reserved.
 
 	This file is part of Flycast.
@@ -23,7 +24,9 @@
 #import "PadViewController.h"
 #include "ios_gamepad.h"
 #include "cfg/cfg.h"
+#include "cfg/option.h"
 #include "ui/vgamepad.h"
+#include <algorithm>
 
 @interface PadViewController () {
 	UITouch *joyTouch;
@@ -83,11 +86,18 @@
 -(void)startHideTimer
 {
 	[hideTimer invalidate];
-	hideTimer = [NSTimer scheduledTimerWithTimeInterval:10
+	hideTimer = nil;
+	const int timeout = std::clamp(static_cast<int>(config::VirtualGamepadIdleTimeout), 0,
+			vgamepad::MAX_IDLE_TIMEOUT_SECONDS);
+	// Zero keeps the controller visible without scheduling a hide.
+	if (timeout > 0)
+	{
+		hideTimer = [NSTimer scheduledTimerWithTimeInterval:timeout
 												 target:self
 											   selector:@selector(hideTimer)
 											   userInfo:nil
 												repeats:NO];
+	}
 	vgamepad::show();
 }
 

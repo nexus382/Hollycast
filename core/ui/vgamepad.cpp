@@ -27,6 +27,7 @@
 #include "imgui_driver.h"
 #include "input/gamepad.h"
 #include "input/gamepad_device.h"
+#include "input/virtual_gamepad.h"
 #include "oslib/storage.h"
 #include "oslib/resources.h"
 #include "oslib/i18n.h"
@@ -1247,21 +1248,26 @@ static void drawCustomizePanel()
 	ImGui::Separator();
 	bool enabled = static_cast<bool>(config::VirtualGamepadEnabled);
 	bool visualFeedback = static_cast<bool>(config::VirtualGamepadVisualFeedback);
-	bool hapticFeedback = static_cast<bool>(config::VirtualGamepadHapticFeedback);
 	if (drawCustomizeCheckbox("VirtualControllerEnabled", i18n::T("Show Virtual Controller"), enabled))
 		config::VirtualGamepadEnabled = enabled;
 	if (drawCustomizeCheckbox("VirtualControllerVisualFeedback", i18n::T("Visual Feedback"), visualFeedback))
 		config::VirtualGamepadVisualFeedback = visualFeedback;
-	if (drawCustomizeCheckbox("VirtualControllerHapticFeedback", i18n::T("Vibration"), hapticFeedback))
-		config::VirtualGamepadHapticFeedback = hapticFeedback;
+	// The virtual controller's capability matters, even if a physical pad can rumble.
+	const auto virtualGamepad = GamepadDevice::GetGamepad<VirtualGamepad>();
+	if (virtualGamepad != nullptr && virtualGamepad->is_rumble_enabled())
+	{
+		bool hapticFeedback = static_cast<bool>(config::VirtualGamepadHapticFeedback);
+		if (drawCustomizeCheckbox("VirtualControllerHapticFeedback", i18n::T("Vibration"), hapticFeedback))
+			config::VirtualGamepadHapticFeedback = hapticFeedback;
 
-	int vibration = std::clamp(static_cast<int>(config::VirtualGamepadVibration), 0, MAX_PERCENT);
-	if (vibration != static_cast<int>(config::VirtualGamepadVibration))
-		config::VirtualGamepadVibration = vibration;
-	ImGui::BeginDisabled(!hapticFeedback);
-	if (drawCustomizeSlider("VirtualControllerVibrationPower", i18n::T("Vibration Power"), vibration, 0, MAX_PERCENT))
-		config::VirtualGamepadVibration = vibration;
-	ImGui::EndDisabled();
+		int vibration = std::clamp(static_cast<int>(config::VirtualGamepadVibration), 0, MAX_PERCENT);
+		if (vibration != static_cast<int>(config::VirtualGamepadVibration))
+			config::VirtualGamepadVibration = vibration;
+		ImGui::BeginDisabled(!hapticFeedback);
+		if (drawCustomizeSlider("VirtualControllerVibrationPower", i18n::T("Vibration Power"), vibration, 0, MAX_PERCENT))
+			config::VirtualGamepadVibration = vibration;
+		ImGui::EndDisabled();
+	}
 
 	int timeout = std::clamp(static_cast<int>(config::VirtualGamepadIdleTimeout), 0, MAX_IDLE_TIMEOUT_SECONDS);
 	if (drawCustomizeSlider("VirtualControllerIdleTimeout", i18n::T("Idle Timeout in Seconds"), timeout, 0,
@@ -1763,7 +1769,9 @@ void stopEditing(bool canceled)
 	{
 		EditConsoleLayout = i == 0;
 		restoreLayoutEditState(canceled ? EditSession.layouts[i] : PendingLayouts[i]);
-		saveCustomization(PendingImagePath);
+		// Cancel must preserve absent keys and their inherited defaults.
+		if (!canceled)
+			saveCustomization(PendingImagePath);
 	}
 	Editing = false;
 	startGame();
