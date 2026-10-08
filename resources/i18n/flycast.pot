@@ -3155,6 +3155,10 @@ msgstr ""
 msgid "Idle Timeout in Seconds"
 msgstr ""
 
+#: core/ui/vgamepad.cpp
+msgid "Never"
+msgstr ""
+
 #: core/ui/vgamepad.cpp:1139
 msgid "Finger Size"
 msgstr ""

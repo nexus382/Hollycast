@@ -21,6 +21,7 @@
 
 #include "vgamepad.h"
 #include "gui.h"
+#include "settings.h"
 #include "stdclass.h"
 #include "imgui.h"
 #include "rend/osd.h"
@@ -142,8 +143,7 @@ void displayCommands()
 			|| ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
 	handleCustomizeDrag(pointerOverUi);
 	draw();
-	if (!ImGui::IsAnyItemActive())
-		drawSelectedElement();
+	drawSelectedElement();
 	drawTouchIndicator();
 }
 
@@ -823,7 +823,7 @@ static ImVec2 getControlHitPadding(ControlId control)
 	const int touchSize = Layout[element].touchSize;
 	// Touch Size scales with the button; Finger Size belongs to the input contact.
 	const ImVec2 size = Controls[control].size;
-	// For the D-pad, stick and face buttons, 100 now equals the old 30.
+	// Keep the established 30% padding cap for D-pad, stick and face-button targets.
 	const float range = getButtonGroup(element) != Elem_None || element == Elem_Analog
 			|| element == Elem_Btn4 || element == Elem_Btn5 ? 0.3f : 1.f;
 	const float padding = range * MAX_TOUCH_PADDING
@@ -1203,23 +1203,26 @@ static bool drawCustomizeButton(const char *id, const char *label, const ImVec2&
 static void drawCustomizePanel()
 {
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-	if (displaySize.x <= 0.f || displaySize.y <= 0.f)
+	// Keep the panel clear of cutouts and system gestures as the safe area changes.
+	const ImVec2 safeSize(displaySize.x - insetLeft - insetRight, displaySize.y - insetTop - insetBottom);
+	if (safeSize.x <= 0.f || safeSize.y <= 0.f)
 		return;
 
 	const float margin = uiScaled(8.f);
-	const float width = std::max(1.f, std::min(displaySize.x - margin * 2.f, uiScaled(430.f)));
-	const float height = std::max(1.f, std::min(displaySize.y - margin * 2.f, uiScaled(680.f)));
-	ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, margin), ImGuiCond_Appearing, ImVec2(0.5f, 0.f));
+	const float width = std::max(1.f, std::min(safeSize.x - margin * 2.f, uiScaled(430.f)));
+	const float height = std::max(1.f, std::min(safeSize.y - margin * 2.f, uiScaled(680.f)));
+	ImGui::SetNextWindowPos(ImVec2(insetLeft + safeSize.x * 0.5f, insetTop + margin),
+			ImGuiCond_Always, ImVec2(0.5f, 0.f));
 	ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
 	const std::string windowTitle = std::string(i18n::T("Virtual Controller")) + "###VirtualControllerCustomize";
 	ImGui::Begin(windowTitle.c_str(), nullptr,
-			ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
+			ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
 
 	ImGui::TextUnformatted(i18n::T("Controller Layout"));
-	if (ImGui::RadioButton(i18n::T("Dreamcast"), EditConsoleLayout))
+	if (ImGui::RadioButton(i18n::T("Dreamcast"), EditConsoleLayout) && !EditConsoleLayout)
 		switchEditingLayout(true);
 	ImGui::SameLine();
-	if (ImGui::RadioButton(i18n::T("Arcade"), !EditConsoleLayout))
+	if (ImGui::RadioButton(i18n::T("Arcade"), !EditConsoleLayout) && EditConsoleLayout)
 		switchEditingLayout(false);
 	ImGui::Separator();
 
@@ -1271,7 +1274,8 @@ static void drawCustomizePanel()
 
 	int timeout = std::clamp(static_cast<int>(config::VirtualGamepadIdleTimeout), 0, MAX_IDLE_TIMEOUT_SECONDS);
 	if (drawCustomizeSlider("VirtualControllerIdleTimeout", i18n::T("Idle Timeout in Seconds"), timeout, 0,
-			MAX_IDLE_TIMEOUT_SECONDS, "%d") || timeout != static_cast<int>(config::VirtualGamepadIdleTimeout))
+			MAX_IDLE_TIMEOUT_SECONDS, timeout == 0 ? i18n::T("Never") : "%d")
+			|| timeout != static_cast<int>(config::VirtualGamepadIdleTimeout))
 		config::VirtualGamepadIdleTimeout = timeout;
 
 	int fingerSize = std::clamp(static_cast<int>(config::VirtualGamepadFingerSize), 0, MAX_PERCENT);
@@ -1319,10 +1323,11 @@ static void drawCustomizePanel()
 		for (const auto& image : images)
 		{
 			ImguiID _(image.path);
-			const bool selected = PendingImagePath == image.path
-					|| (PendingImagePath.empty() && &image == &images[0]);
+			// An empty image key preserves the legacy search for default artwork.
+			const bool isDefault = &image == &images[0];
+			const bool selected = isDefault ? PendingImagePath.empty() : PendingImagePath == image.path;
 			if (ImGui::Selectable(i18n::T(image.label), selected))
-				loadImage(image.path);
+				loadImage(isDefault ? "" : image.path);
 			if (selected)
 				ImGui::SetItemDefaultFocus();
 		}
