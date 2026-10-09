@@ -2,6 +2,7 @@
     Created on: Dec 13, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -156,6 +157,8 @@ void VulkanOverlay::Draw(vk::CommandBuffer commandBuffer, vk::Extent2D viewport,
 
 		for (size_t i = 0; i < vmuTextures.size(); i++)
 		{
+			if (vmu_window::ownsScreen(int(i)))
+				continue;
 			if (!vmuTextures[i])
 				continue;
 			float x;

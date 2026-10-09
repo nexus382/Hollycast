@@ -48,6 +48,9 @@ void push_vmu_screen(int bus_id, int bus_port, u8* buffer)
 	vmu_lcd_status[vmu_id] = true;
 #endif
 	vmuLastChanged[vmu_id] = getTimeMs();
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+	vmu_window::publishScreen(vmu_id, vmu_lcd_data[vmu_id], true);
+#endif
 }
 
 void reset_vmu_screen(int bus_id, int bus_port)
@@ -57,6 +60,9 @@ void reset_vmu_screen(int bus_id, int bus_port)
 	if (vmu_id < 0 || vmu_id >= (int)std::size(vmu_lcd_data))
 		return;
 	vmu_lcd_status[vmu_id] = false;
+#if defined(_WIN32) && !defined(TARGET_UWP)
+	vmu_window::publishScreen(vmu_id, nullptr, false);
+#endif
 #endif
 }
 

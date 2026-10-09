@@ -55,6 +55,7 @@
 #include "stdclass.h"
 #include "achievements/achievements.h"
 #include "vgamepad.h"
+#include "windows/vmu_window.h"
 #include <cmath>
 #include <cstring>
 #include <cfloat>
@@ -4905,6 +4906,29 @@ void renderOnScreenDisplayTab()
 			static_cast<bool>(config::FloatVMUs),
 			[](bool enabled) { config::FloatVMUs.set(enabled); },
 			T("Show VMU In-Game\nDisplays the VMU LCD screens while in-game."));
+#if defined(_WIN32) && !defined(TARGET_UWP)
+		RenderGeneralToggleSettingRow(
+			"MovableVMUs", ICON_FA_GAMEPAD, T("Movable VMU Windows"),
+			T("Drag VMU screens outside Hollycast or onto another monitor."),
+			config::MovableVMUs.get(),
+			[](bool enabled) {
+				config::MovableVMUs = enabled;
+				if (enabled)
+					config::FloatVMUs = true;
+				vmu_window::setPlacementEnabled(enabled);
+			},
+			T("Keeps the existing VMU transparency. Drag each LCD with the left mouse button. Positions are saved per VMU slot."));
+		if (config::MovableVMUs && config::FloatVMUs)
+		{
+			RenderGeneralToggleSettingRow(
+				"VmuPlacement", ICON_FA_ARROWS_UP_DOWN_LEFT_RIGHT, T("Adjust VMU Positions"),
+				T("Show the cursor and temporarily release mouse capture."),
+				vmu_window::placementEnabled(), vmu_window::setPlacementEnabled,
+				T("Resume the game to arrange the VMUs. Turn this off when finished to restore mouse capture. Ctrl+Shift+V also toggles placement."));
+			if (ImGui::Button(T("Reset VMU Positions"), ScaledVec2(240.f, 0.f)))
+				vmu_window::resetPositions();
+		}
+#endif
 	}
 
 	if (RenderCollapsingHeader("OsdPerformanceSection", ICON_FA_CHART_LINE, T("Performance Overlay"), ImGuiTreeNodeFlags_DefaultOpen))

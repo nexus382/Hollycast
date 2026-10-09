@@ -1365,7 +1365,7 @@ void ImguiVmuTexture::displayVmus(const ImVec2& pos)
 	ImVec2 cpos(pos + ScaledVec2(2.f, 0));	// 96 pixels wide + 2 * 2 -> 100
 	for (int i = 0; i < 8; i++)
 	{
-		if (!vmu_lcd_status[i])
+		if (!vmu_lcd_status[i] || vmu_window::ownsScreen(i))
 			continue;
 
 		ImTextureID texid = Vmus[i].getId();

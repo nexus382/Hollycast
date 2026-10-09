@@ -1487,6 +1487,9 @@ if(NOT LIBRETRO)
 		target_sources(${PROJECT_NAME} PRIVATE
 			core/windows/rawinput.cpp
 			core/windows/rawinput.h)
+		if(NOT WINDOWS_STORE)
+			target_sources(${PROJECT_NAME} PRIVATE core/windows/vmu_window.cpp core/windows/vmu_window.h)
+		endif()
 		if(NOT BUILD_TESTING)
 			target_sources(${PROJECT_NAME} PRIVATE core/windows/winmain.cpp)
 		endif()

@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -17,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "rawinput.h"
+#include "vmu_window.h"
 #ifndef TARGET_UWP
 #include <hidusage.h>
 #include <cfgmgr32.h>
@@ -225,6 +227,14 @@ void RawMouse::buttonInput(Button button, u16 flags, u16 downFlag, u16 upFlag)
 
 void RawMouse::updateState(RAWMOUSE* state)
 {
+	// Raw input can reach the foreground emulator before the VMU's click message.
+	// Hit-test the actual window, and clear held buttons so dragging cannot latch input.
+	if (vmu_window::blocksMouseInput())
+	{
+		for (Button button : {LEFT_BUTTON, MIDDLE_BUTTON, RIGHT_BUTTON, BUTTON_4, BUTTON_5})
+			setButton(button, false);
+		return;
+	}
 	if (state->usFlags & MOUSE_MOVE_ABSOLUTE)
 	{
 		bool isVirtualDesktop = (state->usFlags & MOUSE_VIRTUAL_DESKTOP) == MOUSE_VIRTUAL_DESKTOP;

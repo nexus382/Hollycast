@@ -51,6 +51,8 @@ void DX11Overlay::draw(u32 width, u32 height, bool vmu, bool crosshair)
 
 		for (size_t i = 0; i < vmuTextures.size(); i++)
 		{
+			if (vmu_window::ownsScreen(int(i)))
+				continue;
 			if (!vmu_lcd_status[i])
 			{
 				vmuTextureViews[i].reset();
