@@ -133,6 +133,16 @@ static bool isFullscreenMenuMode()
 
 static bool shouldShowMenuBar()
 {
+	// Explicit locks take priority over pointer position, timers and temporary toggles.
+	switch (static_cast<config::MenuBarMode>(config::MenuBarVisibility.get()))
+	{
+	case config::MenuBarMode::On:
+		return true;
+	case config::MenuBarMode::Off:
+		return false;
+	default:
+		break;
+	}
 	if (!menuVisible)
 		return false;
 	if (!isFullscreenMenuMode())
@@ -361,7 +371,9 @@ void renderMainMenuBar()
 		ImGui::PopFont();
 #endif
 		const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-		publishMenuTouchState(false, menuVisible && isFullscreenMenuMode(),
+		// A locked-off bar must not intercept touches in its hidden reveal strip.
+		publishMenuTouchState(false, menuVisible && isFullscreenMenuMode()
+				&& config::MenuBarVisibility != static_cast<int>(config::MenuBarMode::Off),
 				ImVec2(0.0f, 0.0f), ImVec2(displaySize.x, revealHeight));
 		return;
 	}

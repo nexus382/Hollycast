@@ -53,6 +53,7 @@ Option<int, false> LibraryIconScale("Dreamcast.LibraryIconScale", 100);
 Option<int, false> VmuIconMode("Dreamcast.VmuIconMode", 0);
 Option<int, false> UIScaling("UIScaling", 100);
 Option<int, false> UITheme("UITheme", 0);
+Option<int, false> MenuBarVisibility("MenuBarVisibility", static_cast<int>(MenuBarMode::Auto));
 
 // Sound
 

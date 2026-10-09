@@ -3242,3 +3242,30 @@ msgstr ""
 #: core/ui/vgamepad.cpp
 msgid "Button C"
 msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Auto"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "On"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Off"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Top Menu Bar"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Choose when the top menu bar is shown."
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid ""
+"Top Menu Bar\n"
+"On keeps the bar visible. Off keeps it hidden.\n"
+"Auto follows the normal mouse and touch reveal behavior."
+msgstr ""

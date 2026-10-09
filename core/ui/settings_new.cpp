@@ -2905,6 +2905,27 @@ static void renderSettingsContentTab(SettingsTab tab)
 		if (applyThemeAfterPopup)
 			applyCurrentTheme();
 
+#if !defined(TARGET_MAC)
+		const char* menuBarModes[] = { T("Auto"), T("On"), T("Off") };
+		SettingsUI::PopupConfig menuBarCfg {};
+		menuBarCfg.type = SettingsUI::PopupType::Options;
+		menuBarCfg.options.label = T("Top Menu Bar");
+		menuBarCfg.options.icon = ICON_FA_BARS;
+		menuBarCfg.options.popupID = Tnop("MenuBarVisibilityPopup");
+		menuBarCfg.options.options = menuBarModes;
+		menuBarCfg.options.optionCount = IM_ARRAYSIZE(menuBarModes);
+		menuBarCfg.options.currentValue = &config::MenuBarVisibility.get();
+		menuBarCfg.options.valueWidth = 220.0f;
+		RenderGeneralPopupSettingRow(
+			Tnop("MenuBarVisibilitySetting"),
+			T("Choose when the top menu bar is shown."),
+			menuBarCfg,
+			T("Top Menu Bar\n"
+				"On keeps the bar visible. Off keeps it hidden.\n"
+				"Auto follows the normal mouse and touch reveal behavior.")
+		);
+#endif
+
 		static bool showApplyButtonForUIScaling = false;
 		if (uiUserScaleUpdated && !showApplyButtonForUIScaling)
 			showApplyButtonForUIScaling = true;
