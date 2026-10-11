@@ -4919,6 +4919,22 @@ void renderOnScreenDisplayTab()
 			T("Keeps the existing VMU transparency. Drag each LCD with the left mouse button. Positions are saved per VMU slot. Left Ctrl+Left Alt toggles mouse capture."));
 		if (config::MovableVMUs && config::FloatVMUs)
 		{
+			SettingsUI::PopupConfig vmuSizeCfg {};
+			vmuSizeCfg.type = SettingsUI::PopupType::Slider;
+			vmuSizeCfg.slider.label = T("VMU Window Size");
+			vmuSizeCfg.slider.icon = ICON_FA_RULER_HORIZONTAL;
+			vmuSizeCfg.slider.popupID = Tnop("VmuWindowSizePopup");
+			vmuSizeCfg.slider.description = T("Resize all movable VMU windows live.");
+			vmuSizeCfg.slider.currentValue = &config::VmuWindowSize.get();
+			vmuSizeCfg.slider.minValue = 50;
+			vmuSizeCfg.slider.maxValue = 400;
+			vmuSizeCfg.slider.defaultValue = 100;
+			vmuSizeCfg.slider.format = "%d%%";
+			vmuSizeCfg.slider.valueWidth = 220.0f;
+			vmuSizeCfg.slider.sliderWidth = 320.0f;
+			RenderGeneralPopupSettingRow(Tnop("VmuWindowSizeSetting"),
+				T("Scale VMU windows independently of UI scaling."), vmuSizeCfg,
+				T("100% keeps the default VMU size for each monitor. Changes apply immediately and are saved with your settings."));
 			if (ImGui::Button(T("Reset VMU Positions"), ScaledVec2(240.f, 0.f)))
 				vmu_window::resetPositions();
 		}

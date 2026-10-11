@@ -508,6 +508,7 @@ extern Option<bool> Fog;
 extern Option<bool> FloatVMUs;
 #if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 extern Option<bool, false> MovableVMUs;
+extern Option<int, false> VmuWindowSize;
 #endif
 extern Option<bool> Rotate90;
 extern Option<bool> PerStripSorting;

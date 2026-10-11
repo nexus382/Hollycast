@@ -97,6 +97,7 @@ Option<bool> Fog("rend.Fog", true);
 Option<bool> FloatVMUs("rend.FloatVMUs");
 #if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 Option<bool, false> MovableVMUs("rend.MovableVMUs", false);
+Option<int, false> VmuWindowSize("rend.VmuWindowSize", 100);
 #endif
 Option<bool> Rotate90("rend.Rotate90");
 Option<bool> PerStripSorting("rend.PerStripSorting");

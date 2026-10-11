@@ -41,6 +41,7 @@ struct View {
 	HWND owner = nullptr;
 	RECT bounds {};
 	float scale = 1.f;
+	int sizePercent = 100;
 	UINT dpi = 96;
 	bool enabled = false;
 	bool visible = false;
@@ -86,7 +87,13 @@ public:
 		next.menu = gui_is_open();
 		next.interactive = pointerAvailable;
 		next.dimWhite = !next.menu && (isOpenGL(config::RendererType) || isVulkan(config::RendererType));
-		next.scale = std::clamp(settings.display.uiScale, 0.5f, 4.f);
+		// Match the existing size at default UI scaling, including its low-res cap,
+		// while keeping the user's VMU size independent of the UI scaling setting.
+		float defaultScale = std::max(1.f, settings.display.dpi / 100.f * 0.75f);
+		if (settings.display.width <= 640 || settings.display.height <= 480)
+			defaultScale = std::min(1.2f, defaultScale);
+		next.scale = std::clamp(defaultScale, 0.5f, 4.f);
+		next.sizePercent = std::clamp(config::VmuWindowSize.get(), 50, 400);
 		if (next.owner != nullptr)
 		{
 			GetClientRect(next.owner, &next.bounds);
@@ -426,8 +433,9 @@ private:
 			if (window.failed && reset == lastReset)
 				continue;
 			window.failed = false;
-			const float scale = window.handle == nullptr ? current.scale
+			const float monitorScale = window.handle == nullptr ? current.scale
 					: std::clamp(current.scale * windowDpi(window.handle) / current.dpi, 0.5f, 8.f);
+			const float scale = monitorScale * current.sizePercent / 100.f;
 			SIZE size {LONG(96 * scale), LONG(64 * scale)};
 			POINT fallback = defaultPosition(i, current, size);
 			if (window.handle == nullptr)
