@@ -4915,16 +4915,10 @@ void renderOnScreenDisplayTab()
 				config::MovableVMUs = enabled;
 				if (enabled)
 					config::FloatVMUs = true;
-				vmu_window::setPlacementEnabled(enabled);
 			},
-			T("Keeps the existing VMU transparency. Drag each LCD with the left mouse button. Positions are saved per VMU slot."));
+			T("Keeps the existing VMU transparency. Drag each LCD with the left mouse button. Positions are saved per VMU slot. Left Ctrl+Left Alt toggles mouse capture."));
 		if (config::MovableVMUs && config::FloatVMUs)
 		{
-			RenderGeneralToggleSettingRow(
-				"VmuPlacement", ICON_FA_ARROWS_UP_DOWN_LEFT_RIGHT, T("Adjust VMU Positions"),
-				T("Show the cursor and temporarily release mouse capture."),
-				vmu_window::placementEnabled(), vmu_window::setPlacementEnabled,
-				T("Resume the game to arrange the VMUs. Turn this off when finished to restore mouse capture. Ctrl+Shift+V also toggles placement."));
 			if (ImGui::Button(T("Reset VMU Positions"), ScaledVec2(240.f, 0.f)))
 				vmu_window::resetPositions();
 		}

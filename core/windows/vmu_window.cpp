@@ -95,11 +95,9 @@ public:
 		}
 		if (!next.enabled)
 		{
-			placement = false;
 			if (started)
 				stop();
 		}
-		interactive = next.enabled && next.visible && pointerAvailable;
 		{
 			std::lock_guard<std::mutex> lock(mutex);
 			view = next;
@@ -162,7 +160,6 @@ public:
 
 	std::atomic<u32> displayed {0};
 	std::atomic<bool> dragging {false};
-	std::atomic<bool> placement {false};
 	std::atomic<bool> interactive {false};
 
 private:
@@ -182,8 +179,23 @@ private:
 		bool moving = false;
 		bool failed = false;
 
+		void finishDrag()
+		{
+			if (!moving)
+				return;
+			// Clear first: ReleaseCapture synchronously sends WM_CAPTURECHANGED.
+			moving = false;
+			host->dragging = false;
+			if (GetCapture() == handle)
+				ReleaseCapture();
+			RECT rect;
+			if (GetWindowRect(handle, &rect))
+				host->remember(index, {rect.left, rect.top});
+		}
+
 		void destroy()
 		{
+			finishDrag();
 			if (handle != nullptr)
 				DestroyWindow(handle);
 			handle = nullptr;
@@ -284,16 +296,19 @@ private:
 			return TRUE;
 		case WM_LBUTTONDOWN:
 		{
-			if (!window->host->interactive)
+			if (!window->host->interactive
+					|| GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) != GetAncestor(handle, GA_ROOTOWNER))
 				return 0;
 			POINT cursor;
 			RECT rect;
-			GetCursorPos(&cursor);
-			GetWindowRect(handle, &rect);
+			if (!GetCursorPos(&cursor) || !GetWindowRect(handle, &rect))
+				return 0;
+			SetCapture(handle);
+			if (GetCapture() != handle)
+				return 0;
 			window->dragOffset = {cursor.x - rect.left, cursor.y - rect.top};
 			window->moving = true;
 			window->host->dragging = true;
-			SetCapture(handle);
 			return 0;
 		}
 		case WM_MOUSEMOVE:
@@ -306,17 +321,9 @@ private:
 			}
 			return 0;
 		case WM_LBUTTONUP:
-			ReleaseCapture();
-			return 0;
 		case WM_CAPTURECHANGED:
-			if (window->moving)
-			{
-				window->moving = false;
-				window->host->dragging = false;
-				RECT rect;
-				GetWindowRect(handle, &rect);
-				window->host->remember(window->index, {rect.left, rect.top});
-			}
+		case WM_CANCELMODE:
+			window->finishDrag();
 			return 0;
 		case WM_CLOSE:
 			// Visibility belongs to the Show VMU setting, never to emulator shutdown.
@@ -389,12 +396,21 @@ private:
 			locations = positions;
 			reset = resetRevision;
 		}
+		const bool focused = current.owner != nullptr
+				&& GetAncestor(GetForegroundWindow(), GA_ROOTOWNER) == current.owner;
+		const bool canInteract = current.enabled && current.visible && current.interactive && focused;
+		interactive = canInteract;
 		u32 mask = 0;
 		for (int i = 0; i < ScreenCount; ++i)
 		{
 			Window& window = windows[i];
-			if (window.moving && (!current.visible || !current.interactive))
-				ReleaseCapture();
+			if (window.moving)
+			{
+				// Async mouse state uses physical buttons, including swapped-button setups.
+				const int button = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+				if (!canInteract || GetCapture() != window.handle || (GetAsyncKeyState(button) & 0x8000) == 0)
+					window.finishDrag();
+			}
 			if (!current.enabled || !frames[i].active)
 			{
 				window.destroy();
@@ -437,16 +453,20 @@ private:
 			const BYTE white = current.dimWhite ? 191 : 255;
 			if (window.handle != nullptr)
 			{
-				// Hidden/captured gameplay cursors must pass through the LCD windows.
+				// Hidden/captured cursors and background applications pass through the LCDs.
 				// The extended style also handles hit testing across the two UI threads.
 				const LONG_PTR style = GetWindowLongPtrW(window.handle, GWL_EXSTYLE);
-				const LONG_PTR nextStyle = current.interactive ? style & ~WS_EX_TRANSPARENT : style | WS_EX_TRANSPARENT;
+				const LONG_PTR nextStyle = canInteract ? style & ~WS_EX_TRANSPARENT : style | WS_EX_TRANSPARENT;
 				if (style != nextStyle)
 				{
 					SetWindowLongPtrW(window.handle, GWL_EXSTYLE, nextStyle);
 					SetWindowPos(window.handle, nullptr, 0, 0, 0, 0,
 							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 				}
+				// Lower inactive LCDs without raising or moving their owner window.
+				if (((style & WS_EX_TOPMOST) != 0) != focused)
+					SetWindowPos(window.handle, focused ? HWND_TOPMOST : HWND_BOTTOM, 0, 0, 0, 0,
+							SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 			}
 			if (window.handle == nullptr || !window.allocate(size) || !window.paint(frames[i], opacity, white))
 			{
@@ -536,8 +556,6 @@ void publishScreen(int index, const u32 *pixels, bool active) { windows.publish(
 void update(bool pointerAvailable) { windows.update(pointerAvailable); }
 void shutdown() { windows.stop(); windows.savePositions(); }
 void resetPositions() { windows.reset(); }
-void setPlacementEnabled(bool enabled) { windows.placement = enabled; }
-bool placementEnabled() { return windows.placement; }
 
 bool ownsScreen(int index)
 {

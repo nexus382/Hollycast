@@ -101,9 +101,18 @@ static bool isWindowFullscreen()
 	return false;
 }
 
+static bool keepVmuCursorVisible()
+{
+#if defined(_WIN32) && !defined(TARGET_UWP)
+	return config::MovableVMUs && config::FloatVMUs && !mouseCaptured;
+#else
+	return false;
+#endif
+}
+
 static void updateFullscreenCursorVisibility(int mouseY)
 {
-	if (!isWindowFullscreen() || !gameRunning || mouseCaptured || vmu_window::placementEnabled())
+	if (!isWindowFullscreen() || !gameRunning || mouseCaptured || keepVmuCursorVisible())
 		return;
 
 	const ImGuiContext* context = ImGui::GetCurrentContext();
@@ -185,8 +194,6 @@ static void captureMouse(bool capture)
 {
 	if (window == nullptr || !gameRunning)
 		return;
-	if (capture && vmu_window::placementEnabled())
-		return;
 	if (!capture)
 	{
 		if (!config::UseRawInput)
@@ -228,7 +235,7 @@ static void emuEventCallback(Event event, void *)
 	case Event::Resume:
 		gameRunning = true;
 		captureMouse(mouseCaptured);
-		if (window_fullscreen && !mouseCaptured && !vmu_window::placementEnabled())
+		if (window_fullscreen && !mouseCaptured && !keepVmuCursorVisible())
 			SDL_ShowCursor(SDL_DISABLE);
 		resumeHaptic();
 		break;
@@ -388,31 +395,18 @@ void input_sdl_handle()
 {
 	SDLGamepad::UpdateRumble();
 #if defined(_WIN32) && !defined(TARGET_UWP)
-	if (!config::MovableVMUs || !config::FloatVMUs)
-		vmu_window::setPlacementEnabled(false);
-	static bool placementActive = false;
-	static bool captureBeforePlacement = false;
-	const bool placement = vmu_window::placementEnabled();
-	if (placement != placementActive)
+	static bool movableVmusActive = false;
+	const bool movableVmus = config::MovableVMUs && config::FloatVMUs;
+	if (movableVmus && !movableVmusActive)
 	{
-		if (placement)
-		{
-			captureBeforePlacement = mouseCaptured;
-			captureMouse(false);
-			// The pause callback already released capture, but retained its preference.
-			mouseCaptured = false;
-			SDL_ShowCursor(SDL_ENABLE);
-		}
-		else
-		{
-			mouseCaptured = captureBeforePlacement;
-			captureMouse(mouseCaptured);
-			if (window_fullscreen && gameRunning && !mouseCaptured)
-				SDL_ShowCursor(SDL_DISABLE);
-		}
-		placementActive = placement;
+		captureMouse(false);
+		// Enabling while paused must also clear the capture preference used on resume.
+		mouseCaptured = false;
 	}
-	const bool pointerAvailable = placement || !gameRunning
+	movableVmusActive = movableVmus;
+	if (keepVmuCursorVisible())
+		SDL_ShowCursor(SDL_ENABLE);
+	const bool pointerAvailable = !gameRunning
 			|| (!mouseCaptured && SDL_ShowCursor(SDL_QUERY) == SDL_ENABLE);
 	vmu_window::update(pointerAvailable);
 #endif
@@ -446,15 +440,6 @@ void input_sdl_handle()
 				checkRawInput();
 				if (event.key.repeat == 0)
 				{
-#if defined(_WIN32) && !defined(TARGET_UWP)
-					if (config::MovableVMUs && event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v
-							&& (event.key.keysym.mod & KMOD_CTRL) && (event.key.keysym.mod & KMOD_SHIFT)
-							&& !(event.key.keysym.mod & (KMOD_ALT | KMOD_GUI)))
-					{
-						vmu_window::setPlacementEnabled(!vmu_window::placementEnabled());
-						break;
-					}
-#endif
 					// Alt-Return and F11 toggle full screen
 					if (event.type == SDL_KEYDOWN
 							&& ((event.key.keysym.sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_ALT))
@@ -469,7 +454,7 @@ void input_sdl_handle()
 						else
 						{
 							SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-							if (gameRunning && !vmu_window::placementEnabled())
+							if (gameRunning && !keepVmuCursorVisible())
 								SDL_ShowCursor(SDL_DISABLE);
 						}
 						window_fullscreen = !window_fullscreen;
@@ -541,7 +526,7 @@ void input_sdl_handle()
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
 				{
-					if (window_fullscreen && gameRunning && !vmu_window::placementEnabled())
+					if (window_fullscreen && gameRunning && !keepVmuCursorVisible())
 						SDL_ShowCursor(SDL_DISABLE);
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
