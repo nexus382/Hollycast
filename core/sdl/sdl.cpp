@@ -104,7 +104,7 @@ static bool isWindowFullscreen()
 static bool keepVmuCursorVisible()
 {
 #if defined(_WIN32) && !defined(TARGET_UWP)
-	return config::MovableVMUs && config::FloatVMUs && !mouseCaptured;
+	return vmu_window::detachedActive() && !mouseCaptured
 #else
 	return false;
 #endif
@@ -396,7 +396,7 @@ void input_sdl_handle()
 	SDLGamepad::UpdateRumble();
 #if defined(_WIN32) && !defined(TARGET_UWP)
 	static bool movableVmusActive = false;
-	const bool movableVmus = config::MovableVMUs && config::FloatVMUs;
+	const bool movableVmus = vmu_window::detachedActive()
 	if (movableVmus && !movableVmusActive)
 	{
 		captureMouse(false);

@@ -79,7 +79,7 @@ public:
 	{
 		View next;
 		next.owner = getNativeHwnd();
-		next.enabled = config::MovableVMUs && config::FloatVMUs;
+		next.enabled = detachedActive();
 		next.visible = next.enabled && next.owner != nullptr && IsWindowVisible(next.owner)
 				&& !IsIconic(next.owner) && settings.platform.isConsole()
 				&& gui_state != GuiState::Main && gui_state != GuiState::Onboarding
@@ -157,12 +157,15 @@ public:
 			dirty = false;
 		}
 		// Configuration is never accessed by the worker or emulation thread.
+		// Each save rewrites emu.cfg, so batch all 16 writes into a single save.
+		config::setAutoSave(false);
 		for (int i = 0; i < ScreenCount; ++i)
 		{
 			const std::string prefix = std::to_string(i);
 			config::saveInt(PositionSection, prefix + ".left", saved[i].x);
 			config::saveInt(PositionSection, prefix + ".top", saved[i].y);
 		}
+		config::setAutoSave(true);
 	}
 
 	std::atomic<u32> displayed {0};
@@ -560,6 +563,10 @@ private:
 Windows windows;
 }
 
+bool detachedActive()
+{
+	return config::MovableVMUs && config::FloatVMUs && settings.platform.isConsole();
+}
 void publishScreen(int index, const u32 *pixels, bool active) { windows.publish(index, pixels, active); }
 void update(bool pointerAvailable) { windows.update(pointerAvailable); }
 void shutdown() { windows.stop(); windows.savePositions(); }
