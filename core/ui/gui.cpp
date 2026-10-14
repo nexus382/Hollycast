@@ -3178,7 +3178,7 @@ void reset_vmus() {
 	for (u32 i = 0; i < std::size(vmu_lcd_status); i++)
 	{
 		vmu_lcd_status[i] = false;
-#if defined(_WIN32) && !defined(TARGET_UWP)
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 		vmu_window::publishScreen(i, nullptr, false);
 #endif
 	}

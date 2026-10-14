@@ -55,7 +55,9 @@
 #include "stdclass.h"
 #include "achievements/achievements.h"
 #include "vgamepad.h"
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 #include "windows/vmu_window.h"
+#endif
 #include <cmath>
 #include <cstring>
 #include <cfloat>
@@ -4906,7 +4908,7 @@ void renderOnScreenDisplayTab()
 			static_cast<bool>(config::FloatVMUs),
 			[](bool enabled) { config::FloatVMUs.set(enabled); },
 			T("Show VMU In-Game\nDisplays the VMU LCD screens while in-game."));
-#if defined(_WIN32) && !defined(TARGET_UWP)
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 		RenderGeneralToggleSettingRow(
 			"MovableVMUs", ICON_FA_GAMEPAD, T("Movable VMU Windows"),
 			T("Drag VMU screens outside Hollycast or onto another monitor."),

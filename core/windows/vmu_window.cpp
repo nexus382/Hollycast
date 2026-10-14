@@ -474,7 +474,8 @@ private:
 					SetWindowPos(window.handle, nullptr, 0, 0, 0, 0,
 							SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 				}
-				// Lower inactive LCDs without raising or moving their owner window.
+				// HWND_BOTTOM clears topmost status and lowers inactive LCDs behind other
+				// applications without raising or moving their owner window.
 				if (((style & WS_EX_TOPMOST) != 0) != focused)
 					SetWindowPos(window.handle, focused ? HWND_TOPMOST : HWND_BOTTOM, 0, 0, 0, 0,
 							SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);

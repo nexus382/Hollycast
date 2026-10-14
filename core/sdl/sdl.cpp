@@ -21,7 +21,9 @@
 #include "emulator.h"
 #include "ui/gui.h"
 #include "stdclass.h"
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 #include "windows/vmu_window.h"
+#endif
 #include "imgui.h"
 #include "hw/naomi/card_reader.h"
 #include "hw/naomi/multiboard.h"
@@ -103,8 +105,8 @@ static bool isWindowFullscreen()
 
 static bool keepVmuCursorVisible()
 {
-#if defined(_WIN32) && !defined(TARGET_UWP)
-	return vmu_window::detachedActive() && !mouseCaptured
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+	return vmu_window::detachedActive() && !mouseCaptured;
 #else
 	return false;
 #endif
@@ -394,14 +396,27 @@ static std::shared_ptr<SDLMouse> getMouse(u32 mouseId)
 void input_sdl_handle()
 {
 	SDLGamepad::UpdateRumble();
-#if defined(_WIN32) && !defined(TARGET_UWP)
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 	static bool movableVmusActive = false;
-	const bool movableVmus = vmu_window::detachedActive()
+	static bool restoreVmuMouseCapture = false;
+	const bool movableVmus = vmu_window::detachedActive();
 	if (movableVmus && !movableVmusActive)
 	{
+		restoreVmuMouseCapture = mouseCaptured;
 		captureMouse(false);
 		// Enabling while paused must also clear the capture preference used on resume.
 		mouseCaptured = false;
+	}
+	else if (!movableVmus && movableVmusActive)
+	{
+		if (restoreVmuMouseCapture)
+		{
+			if (gameRunning)
+				captureMouse(true);
+			else
+				mouseCaptured = true;
+		}
+		restoreVmuMouseCapture = false;
 	}
 	movableVmusActive = movableVmus;
 	if (keepVmuCursorVisible())
@@ -414,7 +429,7 @@ void input_sdl_handle()
 	SDL_Event event;
 	while (SDL_PollEvent(&event))
 	{
-#if defined(_WIN32) && !defined(TARGET_UWP)
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 		if ((event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN
 				|| event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEWHEEL) && vmu_window::blocksMouseInput())
 		{
@@ -494,7 +509,14 @@ void input_sdl_handle()
 						if ((event.key.keysym.mod & KMOD_LALT) && (event.key.keysym.mod & KMOD_LCTRL)
 								&& !(is_key_mapped(SDL_SCANCODE_LALT) || is_key_mapped(SDL_SCANCODE_LCTRL)))
 						{
-							captureMouse(!mouseCaptured);
+							const bool wasCaptured = mouseCaptured;
+							captureMouse(!wasCaptured);
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+							// Only effective capture changes supersede the saved state (pause
+							// and a failed SDL capture leave the existing preference intact).
+							if (mouseCaptured != wasCaptured)
+								restoreVmuMouseCapture = false;
+#endif
 							break;
 						}
 						// Barcode scanner
@@ -947,7 +969,7 @@ bool sdl_recreate_window(u32 flags)
 
 	if (window != nullptr)
 	{
-#if defined(_WIN32) && !defined(TARGET_UWP)
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 		vmu_window::shutdown();
 #endif
 		SDL_DestroyWindow(window);
@@ -1110,7 +1132,7 @@ void sdl_window_create()
 
 void sdl_window_destroy()
 {
-#if defined(_WIN32) && !defined(TARGET_UWP)
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 	vmu_window::shutdown();
 #endif
 #ifndef __SWITCH__
