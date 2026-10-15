@@ -28,6 +28,7 @@ constexpr wchar_t WindowClass[] = L"HollycastVmuLcd";
 constexpr int ScreenCount = 8;
 constexpr int LcdWidth = 48;
 constexpr int LcdHeight = 32;
+constexpr ULONGLONG RetryDelayMs = 1000;
 constexpr LONG Unplaced = std::numeric_limits<LONG>::min();
 constexpr char PositionSection[] = "vmu-windows";
 
@@ -40,6 +41,7 @@ struct Screen {
 struct View {
 	HWND owner = nullptr;
 	RECT bounds {};
+	int topInset = 0;
 	float scale = 1.f;
 	int sizePercent = 100;
 	UINT dpi = 96;
@@ -85,6 +87,7 @@ public:
 				&& gui_state != GuiState::Main && gui_state != GuiState::Onboarding
 				&& gui_state != GuiState::Loading && gui_state != GuiState::NetworkStart;
 		next.menu = gui_is_open();
+		next.topInset = getScaledTopInset();
 		next.interactive = pointerAvailable;
 		next.dimWhite = !next.menu && (isOpenGL(config::RendererType) || isVulkan(config::RendererType));
 		// Match the existing size at default UI scaling, including its low-res cap,
@@ -102,21 +105,30 @@ public:
 		}
 		if (!next.enabled)
 		{
-			if (started)
+			if (worker.joinable())
 				stop();
 		}
 		{
 			std::lock_guard<std::mutex> lock(mutex);
 			view = next;
 		}
-		if (next.enabled && !started)
+		if (next.enabled && !started && GetTickCount64() >= retryAt)
 		{
+			// A completed thread must be joined before replacing it. Throttle failures
+			// so a temporary Windows resource shortage cannot create a restart loop.
+			if (worker.joinable())
+				worker.join();
 			loadPositions();
 			started = true;
 			stopping = false;
+			retryAt = GetTickCount64() + RetryDelayMs;
 			try {
-				worker = std::thread(&Windows::run, this);
+				worker = std::thread([this] {
+					run();
+					started = false;
+				});
 			} catch (const std::system_error& e) {
+				started = false;
 				WARN_LOG(RENDERER, "Cannot start VMU windows: %s", e.what());
 			}
 		}
@@ -136,6 +148,7 @@ public:
 		dragging = false;
 		interactive = false;
 		started = false;
+		retryAt = 0;
 	}
 
 	void reset()
@@ -187,7 +200,7 @@ private:
 		BYTE alpha = 0;
 		BYTE white = 0;
 		bool moving = false;
-		bool failed = false;
+		ULONGLONG retryAt = 0;
 
 		void finishDrag()
 		{
@@ -268,10 +281,26 @@ private:
 			const u32 channel = (whiteLevel * opacity + 127) / 255;
 			const u32 on = (u32(opacity) << 24) | channel * 0x010101u;
 			const u32 off = u32(opacity) << 24;
-			for (LONG y = 0; y < size.cy; ++y)
-				for (LONG x = 0; x < size.cx; ++x)
-					pixels[y * size.cx + x] = (screen.pixels[(LcdHeight - 1 - y * LcdHeight / size.cy) * LcdWidth
-							+ x * LcdWidth / size.cx] & 0x00ffffffu) != 0 ? on : off;
+			// Expand each of the 48x32 source pixels once, then copy repeated rows.
+			// This preserves exact nearest-neighbor sampling and alpha without doing
+			// integer division for millions of destination pixels at high DPI.
+			for (LONG y = 0; y < LcdHeight; ++y)
+			{
+				const LONG firstRow = (y * size.cy + LcdHeight - 1) / LcdHeight;
+				const LONG endRow = ((y + 1) * size.cy + LcdHeight - 1) / LcdHeight;
+				if (firstRow == endRow)
+					continue;
+				u32 *row = pixels + firstRow * size.cx;
+				for (LONG x = 0; x < LcdWidth; ++x)
+				{
+					const LONG first = (x * size.cx + LcdWidth - 1) / LcdWidth;
+					const LONG end = ((x + 1) * size.cx + LcdWidth - 1) / LcdWidth;
+					const u32 color = (screen.pixels[(LcdHeight - 1 - y) * LcdWidth + x] & 0x00ffffffu) != 0 ? on : off;
+					std::fill(row + first, row + end, color);
+				}
+				for (LONG repeat = firstRow + 1; repeat < endRow; ++repeat)
+					std::copy_n(row, size.cx, pixels + repeat * size.cx);
+			}
 			POINT source {};
 			BLENDFUNCTION blend {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
 			if (!UpdateLayeredWindow(handle, nullptr, nullptr, &size, dc, &source, 0, &blend, ULW_ALPHA))
@@ -368,7 +397,7 @@ private:
 		const LONG padding = LONG(8 * current.scale);
 		return {(index & 2) ? current.bounds.right - padding - size.cx : current.bounds.left + padding,
 				(index & 4) ? current.bounds.bottom - padding - size.cy - (index & 1) * (padding + size.cy)
-						: current.bounds.top + padding + (index & 1) * (padding + size.cy)};
+						: current.bounds.top + current.topInset + padding + (index & 1) * (padding + size.cy)};
 	}
 
 	POINT reachablePosition(POINT position, SIZE size, POINT fallback)
@@ -411,6 +440,7 @@ private:
 		const bool canInteract = current.enabled && current.visible && current.interactive && focused;
 		interactive = canInteract;
 		u32 mask = 0;
+		const ULONGLONG now = GetTickCount64();
 		for (int i = 0; i < ScreenCount; ++i)
 		{
 			Window& window = windows[i];
@@ -424,7 +454,7 @@ private:
 			if (!current.enabled || !frames[i].active)
 			{
 				window.destroy();
-				window.failed = false;
+				window.retryAt = 0;
 				continue;
 			}
 			if (!current.visible)
@@ -433,9 +463,9 @@ private:
 					ShowWindow(window.handle, SW_HIDE);
 				continue;
 			}
-			if (window.failed && reset == lastReset)
+			if (now < window.retryAt && reset == lastReset)
 				continue;
-			window.failed = false;
+			window.retryAt = 0;
 			const float monitorScale = window.handle == nullptr ? current.scale
 					: std::clamp(current.scale * windowDpi(window.handle) / current.dpi, 0.5f, 8.f);
 			const float scale = monitorScale * current.sizePercent / 100.f;
@@ -453,11 +483,15 @@ private:
 			{
 				RECT rect;
 				GetWindowRect(window.handle, &rect);
-				POINT location = reachablePosition(reset != lastReset ? POINT{Unplaced, Unplaced} : POINT{rect.left, rect.top}, size, fallback);
+				// Until dragged, default positions follow the menu inset, including a
+				// menu first drawn after the worker starts. Saved positions stay put.
+				const bool defaultPlacement = reset != lastReset || locations[i].x == Unplaced || locations[i].y == Unplaced;
+				POINT location = reachablePosition(defaultPlacement ? POINT{Unplaced, Unplaced} : POINT{rect.left, rect.top}, size, fallback);
 				if (location.x != rect.left || location.y != rect.top)
 				{
 					SetWindowPos(window.handle, nullptr, location.x, location.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
-					remember(i, location);
+					if (!defaultPlacement)
+						remember(i, location);
 				}
 			}
 			const BYTE opacity = current.menu ? 128 : 192;
@@ -484,7 +518,7 @@ private:
 			{
 				WARN_LOG(RENDERER, "Cannot display VMU window %d (Windows error %lu); using in-game overlay", i, GetLastError());
 				window.destroy();
-				window.failed = true;
+				window.retryAt = now + RetryDelayMs;
 				continue;
 			}
 			if (!IsWindowVisible(window.handle))
@@ -508,9 +542,18 @@ private:
 		const ATOM registered = RegisterClassW(&windowClass);
 		if (registered == 0)
 		{
-			WARN_LOG(RENDERER, "Cannot register VMU windows (Windows error %lu)", GetLastError());
-			threadId = 0;
-			return;
+			const DWORD error = GetLastError();
+			WNDCLASSW existing {};
+			// Reuse our class after an earlier run, but never bind our window data
+			// to an unrelated procedure that happens to use the same class name.
+			if (error != ERROR_CLASS_ALREADY_EXISTS
+					|| !GetClassInfoW(windowClass.hInstance, WindowClass, &existing)
+					|| existing.lpfnWndProc != procedure)
+			{
+				WARN_LOG(RENDERER, "Cannot register VMU windows (Windows error %lu)", error);
+				threadId = 0;
+				return;
+			}
 		}
 		const UINT_PTR timer = SetTimer(nullptr, 0, 16, nullptr);
 		std::array<Window, ScreenCount> windows;
@@ -544,8 +587,10 @@ private:
 			KillTimer(nullptr, timer);
 		for (Window& window : windows)
 			window.destroy();
-		UnregisterClassW(WindowClass, windowClass.hInstance);
+		if (registered != 0)
+			UnregisterClassW(WindowClass, windowClass.hInstance);
 		displayed = 0;
+		interactive = false;
 		threadId = 0;
 	}
 
@@ -555,7 +600,8 @@ private:
 	View view;
 	u64 resetRevision = 0;
 	bool dirty = false;
-	bool started = false;
+	std::atomic<bool> started {false};
+	ULONGLONG retryAt = 0;
 	std::thread worker;
 	std::atomic<DWORD> threadId {0};
 	std::atomic<bool> stopping {false};

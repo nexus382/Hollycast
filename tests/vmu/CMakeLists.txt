@@ -1,0 +1,35 @@
+# Portions Copyright 2026 The Hollycast Authors
+cmake_minimum_required(VERSION 3.20)
+project(VmuRegressionTests LANGUAGES CXX)
+enable_testing()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(capture_source "${CMAKE_CURRENT_BINARY_DIR}/capture.cpp")
+add_custom_command(OUTPUT "${capture_source}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_capture_test.py" "${capture_source}"
+    DEPENDS generate_capture_test.py ../../core/sdl/sdl.cpp ../../core/ui/gui.cpp ../../core/windows/vmu_window.cpp
+    VERBATIM)
+add_custom_target(vmu_capture_source DEPENDS "${capture_source}")
+foreach(platform windows libretro uwp other)
+    set(target vmu_capture_${platform})
+    add_executable(${target} "${capture_source}")
+    add_dependencies(${target} vmu_capture_source)
+    target_compile_features(${target} PRIVATE cxx_std_17)
+    if(platform STREQUAL "other")
+        target_compile_definitions(${target} PRIVATE VMU_TEST_OTHER)
+    elseif(platform STREQUAL "libretro")
+        target_compile_definitions(${target} PRIVATE LIBRETRO)
+    elseif(platform STREQUAL "uwp")
+        target_compile_definitions(${target} PRIVATE TARGET_UWP)
+    endif()
+    add_test(NAME ${target} COMMAND ${target})
+endforeach()
+
+if(WIN32)
+    add_executable(vmu_native_windows native_windows.cpp)
+    target_compile_features(vmu_native_windows PRIVATE cxx_std_17)
+    target_include_directories(vmu_native_windows PRIVATE fixtures)
+    target_link_libraries(vmu_native_windows PRIVATE user32 gdi32)
+    add_test(NAME vmu_native_windows COMMAND vmu_native_windows)
+    set_tests_properties(vmu_native_windows PROPERTIES LABELS interactive RUN_SERIAL TRUE TIMEOUT 120)
+endif()

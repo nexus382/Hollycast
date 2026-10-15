@@ -192,10 +192,10 @@ static void setWindowTitleGame()
 	SDL_SetWindowTitle(window, ("Hollycast - " + title).c_str());
 }
 
-static void captureMouse(bool capture)
+static bool captureMouse(bool capture)
 {
 	if (window == nullptr || !gameRunning)
-		return;
+		return false;
 	if (!capture)
 	{
 		if (!config::UseRawInput)
@@ -204,6 +204,7 @@ static void captureMouse(bool capture)
 			SDL_ShowCursor(SDL_ENABLE);
 		setWindowTitleGame();
 		mouseCaptured = false;
+		return true;
 	}
 	else
 	{
@@ -214,8 +215,10 @@ static void captureMouse(bool capture)
 				SDL_ShowCursor(SDL_DISABLE);
 			SDL_SetWindowTitle(window, "Hollycast - mouse capture");
 			mouseCaptured = true;
+			return true;
 		}
 	}
+	return false;
 }
 
 static void emuEventCallback(Event event, void *)
@@ -399,24 +402,32 @@ void input_sdl_handle()
 #if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 	static bool movableVmusActive = false;
 	static bool restoreVmuMouseCapture = false;
+	static Uint64 vmuCaptureRetryAt = 0;
 	const bool movableVmus = vmu_window::detachedActive();
 	if (movableVmus && !movableVmusActive)
 	{
-		restoreVmuMouseCapture = mouseCaptured;
+		restoreVmuMouseCapture = restoreVmuMouseCapture || mouseCaptured;
 		captureMouse(false);
 		// Enabling while paused must also clear the capture preference used on resume.
 		mouseCaptured = false;
 	}
-	else if (!movableVmus && movableVmusActive)
+	else if (!movableVmus && restoreVmuMouseCapture)
 	{
-		if (restoreVmuMouseCapture)
+		if (!gameRunning)
 		{
-			if (gameRunning)
-				captureMouse(true);
-			else
-				mouseCaptured = true;
+			mouseCaptured = true;
+			// Resume must not inherit a delay from an earlier failed attempt.
+			vmuCaptureRetryAt = 0;
 		}
-		restoreVmuMouseCapture = false;
+		else if (movableVmusActive || SDL_GetTicks64() >= vmuCaptureRetryAt)
+		{
+			// Keep the preference pending through pause and failed SDL recapture.
+			// Retry at most once a second until restored or explicitly overridden.
+			restoreVmuMouseCapture = !captureMouse(true);
+			if (restoreVmuMouseCapture)
+				mouseCaptured = false;
+			vmuCaptureRetryAt = SDL_GetTicks64() + 1000;
+		}
 	}
 	movableVmusActive = movableVmus;
 	if (keepVmuCursorVisible())
