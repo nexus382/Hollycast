@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -17,9 +18,25 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #pragma once
+#include <cmath>
 #include "gamepad_device.h"
 #include "ui/vgamepad.h"
 #include "oslib/i18n.h"
+
+// Limit stick deflection to the unit circle, preserving direction.
+// The physical Dreamcast stick travels in a circle; clamping X and Y
+// independently would allow square corners the real stick cannot reach
+// and would bend the reported direction near the edge.
+inline void limitStickToCircle(float& x, float& y)
+{
+	const float r2 = x * x + y * y;
+	if (r2 > 1.f)
+	{
+		const float scale = 1.f / std::sqrt(r2);
+		x *= scale;
+		y *= scale;
+	}
+}
 
 class VirtualGamepad : public GamepadDevice
 {
@@ -45,9 +62,10 @@ public:
 		return true;
 	};
 
-	// normalized coordinates [-1, 1]
+	// normalized coordinates within the unit circle
 	void joystickInput(float x, float y)
 	{
+		limitStickToCircle(x, y);
 		vgamepad::setAnalogStick(x, y);
 		int joyx = std::round(x * 32767.f);
 		int joyy = std::round(y * 32767.f);
