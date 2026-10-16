@@ -12,10 +12,11 @@
     "The two partial imports exclude boxart changes and the global logging default.",
     "Existing Hollycast fast-forward audio, command-line guards, render queue and OSD behavior are retained.",
     "The save-state format remains V61. Imported buffer validation and serial rescheduling do not adopt the held V62 format changes.",
-    "Hollycast copyright headers are retained or added. Fixture generation preserves the CUE attribution comments."
+    "Hollycast copyright headers are retained or added. Fixture generation preserves the CUE attribution comments.",
+    "Formatting-only changes in sector conversion are omitted. Imported CHD tests use scoped disc ownership to release resources on fatal assertion failures."
   ],
   "validation": {
-    "source_review": "Patch and dependency review only; no runtime verification.",
+    "source_review": "Standards and scope source reviews completed; imported CHD test ownership cleanup corrected. No runtime verification.",
     "builds": "not run",
     "tests": "not run"
   },
