@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	The test images are built by tests/files/test_chds/make_fixtures.py, which holds
 	the track layout of each one, writes the .bin and .cue files and runs chdman over
 	them. Every sector starts with a marker identifying its track and frame number;

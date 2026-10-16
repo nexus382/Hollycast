@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	gdrom, v3
 	Overly complex implementation of a very ugly device
 */

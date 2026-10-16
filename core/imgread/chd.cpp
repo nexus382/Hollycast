@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "common.h"
 #include "stdclass.h"
 #include "oslib/storage.h"

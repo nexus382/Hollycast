@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Portions Copyright 2026 The Hollycast Authors
 """Regenerates the .cue and .chd test images sitting in this directory.
 
     ./make_fixtures.py            (needs chdman from mame-tools)
@@ -66,7 +67,7 @@ def write_bin(path, track, frames):
 
 def build(name, tracks, chdman):
     bins = []
-    cue = []
+    cue = ["REM Portions Copyright 2026 The Hollycast Authors"]
     for header, track, track_type, pregap, frames in tracks:
         if header:
             cue.append(header)

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "addrspace.h"
 #include "hw/aica/aica_if.h"
 #include "hw/pvr/pvr_mem.h"

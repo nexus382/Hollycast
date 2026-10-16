@@ -1,0 +1,408 @@
+{
+  "snapshot_date": "2026-10-16",
+  "hollycast_repository": "https://github.com/nexus382/Hollycast",
+  "hollycast_base": "aede1de0887e655b1a1c987b9d408fc4491958d3",
+  "flycast_repository": "https://github.com/flyinghead/flycast",
+  "previous_full_sync": "36c975e39166df976581e4a5f68edc908a46c3d9",
+  "upstream_snapshot": "91c3084d52fc09e07d78cd1262f926e140d38b67",
+  "selection_rule": "Import independent backend fixes; hold rebuilt systems and changes needing integration for individual review.",
+  "integration_method": "Selective cherry-picks and explicit file selections. The upstream snapshot is not merged or marked fully integrated; use this ledger for subsequent syncs.",
+  "notes": [
+    "The CHD reader has no Hollycast changes. Its content matches the final upstream snapshot because the original commit predates an earlier upstream pregap fix; this avoids retaining both pregap implementations.",
+    "The two partial imports exclude boxart changes and the global logging default.",
+    "Existing Hollycast fast-forward audio, command-line guards, render queue and OSD behavior are retained.",
+    "The save-state format remains V61. Imported buffer validation and serial rescheduling do not adopt the held V62 format changes.",
+    "Hollycast copyright headers are retained or added. Fixture generation preserves the CUE attribution comments."
+  ],
+  "validation": {
+    "source_review": "Patch and dependency review only; no runtime verification.",
+    "builds": "not run",
+    "tests": "not run"
+  },
+  "review_queue": {
+    "library-ui": "Adapt controller navigation and image-button changes to the rebuilt library.",
+    "boxart": "Review retry and rate-limit behavior against Hollycast fetching stages and database ownership.",
+    "video-rendering": "Review Vulkan and swap-interval changes against OSD and custom textures; review Stretch to Fill in the custom settings UI.",
+    "android-lifecycle": "Review activity, frame pacing, EGL teardown and target SDK changes with the Android frontend.",
+    "gdrom-state-format": "Review the GD-ROM timer and CDDA series together with V62 serialization.",
+    "capcom-networking": "Review the complete modem/Capcom/libjuice series, dependency pin and build guards together.",
+    "platform-build": "Review platform build and macOS document-open changes against Hollycast targets and menus.",
+    "lua-disc-control": "Review new disc commands against Hollycast pause, resume and save protection behavior.",
+    "logging-default": "Review whether to change the default log verbosity.",
+    "arcade-input-label": "Review the WCCF button-label change separately.",
+    "documentation": "Keep Hollycast documentation; selectively adapt useful upstream instructions.",
+    "translations": "Review translations and generated libretro options separately from the backend batch.",
+    "merge-history": "History-only merge commits are not imported because their complete contents were not approved."
+  },
+  "commits": [
+    {
+      "sha": "c37be698dbeed9be3b4b44e21b138ece05cddb37",
+      "subject": "android: fix start up crash on android <= 8",
+      "status": "held",
+      "held_group": "android-lifecycle"
+    },
+    {
+      "sha": "149e651d24b3e3b3ddeff1d022f47813c40e9fc5",
+      "subject": "android: don't start swappy if g_activity is null",
+      "status": "held",
+      "held_group": "android-lifecycle"
+    },
+    {
+      "sha": "57e33d323a985caff7b50db1e74247f8363bbd24",
+      "subject": "ui: fix regression where dpad won't scroll up/down the game list",
+      "status": "held",
+      "held_group": "library-ui"
+    },
+    {
+      "sha": "71b739faeece0d985807bcb9305329122599de85",
+      "subject": "android: tentative fix for ANR when calling eglDestroyContext",
+      "status": "held",
+      "held_group": "android-lifecycle"
+    },
+    {
+      "sha": "12bb43652fe7a83a25e5831060e73c11573f4c03",
+      "subject": "Fix Monkey Ball minimap depth masking",
+      "status": "imported"
+    },
+    {
+      "sha": "8f511f89604243d9cd48040634e1d20da59c5fae",
+      "subject": "Remove macOS Homebrew from Install section",
+      "status": "held",
+      "held_group": "documentation"
+    },
+    {
+      "sha": "fd9d39b1274006065e295cc0fb5e6c2e1636a231",
+      "subject": "ci: build the Switch core here, with CMake (#2465)",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "d8a76809e57027da36d88bafb670983541de5ba1",
+      "subject": "OpenGL: fix per-frame VAO leak in the ImGui GL3 backend",
+      "status": "imported"
+    },
+    {
+      "sha": "9814e2fe40cd4a3c86b0cebe5b907c39ddb52c35",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "held",
+      "held_group": "translations"
+    },
+    {
+      "sha": "daa46ec63ee634247b3fc7d7d8a37a4c670a4d68",
+      "subject": "fix for switch (#2466)",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "a75d1cff5337732fcc64e5a5900751b4a68ce8f1",
+      "subject": "gitlab-ci: build the Switch core's combined archive (#2471)",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "52c8ecef1e67935b98e7ea3cfb0acd36eed787d6",
+      "subject": "gitlab-ci: the libnx image's cmake is too old for this tree",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "fa04b208374511f8c51157c2fbca7e2d559aeaae",
+      "subject": "cmake: the Switch archive was missing zstd and tinygettext",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "fb286f777ce690ef8acf3359a75ab84b61566ad9",
+      "subject": "cmake: keep the Switch archive's extracted objects apart",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "a9b451c6f20a8cb3ff49b253a211939a2100e785",
+      "subject": "ini: check if string empty before accessing 1st element",
+      "status": "imported"
+    },
+    {
+      "sha": "0abac3465dc9547dca5f30f3352fee10b67e34b2",
+      "subject": "chd: MIL-CD support for images with pregaps",
+      "status": "imported"
+    },
+    {
+      "sha": "3f70e47adb1804a69fcd80625bb13fb27606f60e",
+      "subject": "aica: store last sample and Q at loop start even with ADPCM stream",
+      "status": "imported"
+    },
+    {
+      "sha": "eddf2635867f0f16f64bebd3185db151c99c551c",
+      "subject": "windows: fix http request with path > 256 chars",
+      "status": "partial",
+      "imported_paths": [
+        "core/oslib/http_client.cpp"
+      ],
+      "held_group": "boxart"
+    },
+    {
+      "sha": "604ebd58fe6061f99ce936251296554dabe9cc64",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "held",
+      "held_group": "translations"
+    },
+    {
+      "sha": "b03335bca9494bb74ce405644968361d7056de99",
+      "subject": "pvr: swap interval detector improvements",
+      "status": "held",
+      "held_group": "video-rendering"
+    },
+    {
+      "sha": "93379c489fc77bb014ddba76e2ce2a5467733007",
+      "subject": "macOS: backport MoltenVK fixes and verify packaged artifacts (#2485)",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "b777c15fdca6c7e97a14bd0b8caab43172a3e275",
+      "subject": "docs: restore Homebrew installation via the Flycast tap (#2486)",
+      "status": "held",
+      "held_group": "documentation"
+    },
+    {
+      "sha": "ea22ee8723f66668adc850de1625869700cb5ddd",
+      "subject": "lua: expose openGdrom and insertGdrom as lua functions",
+      "status": "held",
+      "held_group": "lua-disc-control"
+    },
+    {
+      "sha": "9869ea8852cc6cd0b3af436d0becf468b233c8e3",
+      "subject": "gdrom: don't stop cdda when reading a sector",
+      "status": "held",
+      "held_group": "gdrom-state-format"
+    },
+    {
+      "sha": "04b74c3a1155b1583b6e747b731785184e2297e9",
+      "subject": "gdrom: stop cdda when reading a sector",
+      "status": "held",
+      "held_group": "gdrom-state-format"
+    },
+    {
+      "sha": "4509ee903ccc4e34cb1ff04f9db5fec6500a54a0",
+      "subject": "macOS: defer document loading until emulator initialization finishes (#2492)",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "8933f9fe0ccd3f7cbe2e77717ea3a6db8b472129",
+      "subject": "libretro: link libandroid, or the dynarec dies on the first memory access",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "c0fb036d601af586d21ca7a80413d55de58b7d9e",
+      "subject": "Fix stalled uploads in the picoTCP proxy (#2497)",
+      "status": "imported"
+    },
+    {
+      "sha": "215a5af1650c49b57fa12430d723fddb34b009cc",
+      "subject": "vmem: ignore the heap pointer tag when matching a fault address",
+      "status": "imported"
+    },
+    {
+      "sha": "6d73f7191c29d30f460134ee7c8ade96256098d6",
+      "subject": "minor changes (error logging)",
+      "status": "imported"
+    },
+    {
+      "sha": "dd7a5f06201a4f8960ed162e2c6a5b61659bb9cd",
+      "subject": "target android 16. Fix Back invoked handler",
+      "status": "held",
+      "held_group": "android-lifecycle"
+    },
+    {
+      "sha": "da5be1a0a7114cb0096576373ad847f6b471af96",
+      "subject": "Merge remote-tracking branch 'origin/master' into dev",
+      "status": "not-merged",
+      "held_group": "merge-history"
+    },
+    {
+      "sha": "49ad26a7e56d939b317c82fc2161cbce6de207ce",
+      "subject": "change default log level from debug to info. compilation warnings",
+      "status": "partial",
+      "imported_paths": [
+        "core/deps/imgui/backends/imgui_impl_opengl3.cpp",
+        "core/imgread/cue.cpp"
+      ],
+      "held_group": "logging-default"
+    },
+    {
+      "sha": "a99c8667b4c2ef1bd716c66f189a31655ee5b83e",
+      "subject": "vk: invalid attachment 1 initial layout when rttCopy2vram is on",
+      "status": "held",
+      "held_group": "video-rendering"
+    },
+    {
+      "sha": "e6707469d2018575544b5f2f3bbdb48e219cae0d",
+      "subject": "gdrom: improve SecNumber.Status handling with timer",
+      "status": "held",
+      "held_group": "gdrom-state-format"
+    },
+    {
+      "sha": "fff68b3f57fee88445d82a8580bfb8f51bbc2c98",
+      "subject": "gdrom: fix regressions",
+      "status": "held",
+      "held_group": "gdrom-state-format"
+    },
+    {
+      "sha": "2ac5c772f04d070ce733dce5575156b35cc21954",
+      "subject": "vk: ends rendering before clearing texture cache",
+      "status": "held",
+      "held_group": "video-rendering"
+    },
+    {
+      "sha": "628bd3dbb160ea2750230fc6b00c0bb8173cb1f6",
+      "subject": "macOS: queue document opens with an SDL user event",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "0a304f1396bd1b743f34b33ea3e64753eb195f02",
+      "subject": "Crowdin Translations (Simplified Chinese, Swedish)",
+      "status": "held",
+      "held_group": "translations"
+    },
+    {
+      "sha": "869038f40ac8cddc7741c3a35d545de057cc0dd5",
+      "subject": "scif: use scheduler only after it has been deserialized",
+      "status": "imported"
+    },
+    {
+      "sha": "ea087b9140ff5a3b1809e090da0f8d644ee2db95",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "held",
+      "held_group": "translations"
+    },
+    {
+      "sha": "e36e9df2dcc1487acdb1dc7725766f1f5ba029b5",
+      "subject": "vk oit: fix synchronization hazards between render passes and frames",
+      "status": "held",
+      "held_group": "video-rendering"
+    },
+    {
+      "sha": "b1b80d8849f1cdfbd4e5a34125bf9dde7e3cd994",
+      "subject": "Crowdin Translations (Chinese Simplified)",
+      "status": "held",
+      "held_group": "translations"
+    },
+    {
+      "sha": "fe04dd650367fe592be759350a6d692027adacb7",
+      "subject": "modem: answer mode. network: capcom direct support",
+      "status": "held",
+      "held_group": "capcom-networking"
+    },
+    {
+      "sha": "89b72a8e3ec873d8b6cd544e76749ab9a59e4557",
+      "subject": "windows: fix HTTP URL parsing race and GET status handling (#2509)",
+      "status": "imported"
+    },
+    {
+      "sha": "9d4c33734978f32a4643485c172fc837a0f07921",
+      "subject": "network: validate GGPO application data packets (#2510)",
+      "status": "imported"
+    },
+    {
+      "sha": "2ea7920fdc109d93a2eb8bb696328cd9aaa20f73",
+      "subject": "network: bound DCNet Ethernet frame sizes (#2511)",
+      "status": "imported"
+    },
+    {
+      "sha": "2a57c9ffd9780af1287d54ac556ff0234972c202",
+      "subject": "savestate: validate fixed buffer lengths (#2512)",
+      "status": "imported"
+    },
+    {
+      "sha": "98ce9fb5d7883314990d80c421dc8d486ccedbf1",
+      "subject": "Keep spaces inside -config section names (#2516)",
+      "status": "imported"
+    },
+    {
+      "sha": "04669ebe4164bb589e6a2050aa1559724aa94291",
+      "subject": "ci: fix libusb1 installation on netbsd",
+      "status": "held",
+      "held_group": "platform-build"
+    },
+    {
+      "sha": "59ed35a7ea7c1940d4c8ac221a662d0e6d6dc9ea",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "held",
+      "held_group": "translations"
+    },
+    {
+      "sha": "f83fda7069ee7a32e206cb5092c38fd0216d80af",
+      "subject": "New translations strings.xml (Spanish)",
+      "status": "held",
+      "held_group": "translations"
+    },
+    {
+      "sha": "5ff3f974d9e2d57c2b76bd552a303a0d21e0549b",
+      "subject": "Add stretch to fill screen option (#2515)",
+      "status": "held",
+      "held_group": "video-rendering"
+    },
+    {
+      "sha": "7d69c9cfd48143497bf03f0e17350b07f38b1c92",
+      "subject": "capcom: use libjuice for in-game p2p connection",
+      "status": "held",
+      "held_group": "capcom-networking"
+    },
+    {
+      "sha": "9ec8b7e65823ddb3847405e9d3252d194e7d05cd",
+      "subject": "Merge remote-tracking branch 'origin/master' into dev",
+      "status": "not-merged",
+      "held_group": "merge-history"
+    },
+    {
+      "sha": "552a86086b038f71f997e563ae9e4100e09ee0c7",
+      "subject": "win32 and switch build fixes",
+      "status": "held",
+      "held_group": "capcom-networking"
+    },
+    {
+      "sha": "4dca1988dab56f603c2309e8882e264252fa7c8f",
+      "subject": "capcom: fix battle code mem location in several games",
+      "status": "held",
+      "held_group": "capcom-networking"
+    },
+    {
+      "sha": "bc3b8c71da90dd1f716837f655784e8668a66bb6",
+      "subject": "capcom: support for sf3 MF 2000 v1 and v2. modem hang up",
+      "status": "held",
+      "held_group": "capcom-networking"
+    },
+    {
+      "sha": "ec56b5f2601891c6017ac20f7bbc39eef39980a5",
+      "subject": "sh4: remove penalty cycles for MMU memory access",
+      "status": "imported"
+    },
+    {
+      "sha": "6dafd41eaab99526d193109f497d505bef8c44cc",
+      "subject": "capcom: wrong battle code on win32. fix spawn and hmgeo end of match",
+      "status": "held",
+      "held_group": "capcom-networking"
+    },
+    {
+      "sha": "7422d1b831ae7a6e163634b08be120ea3a93235b",
+      "subject": "wccf: rename ENTER button to PRESSURE",
+      "status": "held",
+      "held_group": "arcade-input-label"
+    },
+    {
+      "sha": "506b4efd04ded3c2654a14afb5107ced87263a33",
+      "subject": "capcom: use peer-to-peer raw mode for in-game communication",
+      "status": "held",
+      "held_group": "capcom-networking"
+    },
+    {
+      "sha": "91c3084d52fc09e07d78cd1262f926e140d38b67",
+      "subject": "imgread: add 2336 to 2340 bytes sector conversion as used by Bleemcast",
+      "status": "imported"
+    }
+  ]
+}

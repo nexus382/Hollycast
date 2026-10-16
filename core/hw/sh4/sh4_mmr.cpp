@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Sh4 internal register routing (P4 & 'area 7')
 */
 #include "types.h"

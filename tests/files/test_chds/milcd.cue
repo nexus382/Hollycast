@@ -1,3 +1,4 @@
+REM Portions Copyright 2026 The Hollycast Authors
 REM SESSION 01
 FILE "milcd01.bin" BINARY
   TRACK 01 AUDIO

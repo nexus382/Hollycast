@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Tiny cute block manager. Doesn't keep block graphs or anything fancy ...
 	Its based on a simple hashed-lists idea
 */

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "ta_ctx.h"
 #include "spg.h"
 #include "cfg/option.h"

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "common.h"
 #include "hw/gdrom/gdromv3.h"
 #include "cfg/option.h"
