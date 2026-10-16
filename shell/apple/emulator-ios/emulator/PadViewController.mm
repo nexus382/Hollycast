@@ -187,11 +187,16 @@ static CGPoint translateCoords(const CGPoint& pos, const CGSize& size)
 			point.x -= joyBias.x;
 			point.y -= joyBias.y;
 			double sz = vgamepad::getControlWidth(vgamepad::AnalogStick);
-			point.x /= sz;
-			point.y /= sz;
-			// Circular travel like the physical stick: limit the vector
-			// magnitude instead of clamping each axis into a square.
+			if (!config::VirtualGamepadCircularStick)
 			{
+				point.x = std::max<CGFloat>(std::min<CGFloat>(1.0, point.x / sz), -1.0);
+				point.y = std::max<CGFloat>(std::min<CGFloat>(1.0, point.y / sz), -1.0);
+			}
+			else
+			{
+				point.x /= sz;
+				point.y /= sz;
+				// Circular travel preserves direction beyond the edge.
 				double r = std::hypot(point.x, point.y);
 				if (r > 1.0)
 				{

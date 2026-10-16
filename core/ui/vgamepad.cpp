@@ -706,6 +706,7 @@ struct EditSessionState
 	bool enabled;
 	bool hapticFeedback;
 	bool visualFeedback;
+	bool circularStick;
 	int vibration;
 	int transparency;
 	int idleTimeout;
@@ -961,6 +962,7 @@ static void saveCustomization(const std::string& imagePath)
 	config::VirtualGamepadEnabled.save();
 	config::VirtualGamepadHapticFeedback.save();
 	config::VirtualGamepadVisualFeedback.save();
+	config::VirtualGamepadCircularStick.save();
 	config::VirtualGamepadVibration.save();
 	config::VirtualGamepadTransparency.save();
 	config::VirtualGamepadIdleTimeout.save();
@@ -1042,6 +1044,7 @@ static void captureEditSession()
 	EditSession.enabled = static_cast<bool>(config::VirtualGamepadEnabled);
 	EditSession.hapticFeedback = static_cast<bool>(config::VirtualGamepadHapticFeedback);
 	EditSession.visualFeedback = static_cast<bool>(config::VirtualGamepadVisualFeedback);
+	EditSession.circularStick = static_cast<bool>(config::VirtualGamepadCircularStick);
 	EditSession.vibration = static_cast<int>(config::VirtualGamepadVibration);
 	EditSession.transparency = static_cast<int>(config::VirtualGamepadTransparency);
 	EditSession.idleTimeout = static_cast<int>(config::VirtualGamepadIdleTimeout);
@@ -1064,6 +1067,7 @@ static void restoreGlobalEditSettings()
 	config::VirtualGamepadEnabled = EditSession.enabled;
 	config::VirtualGamepadHapticFeedback = EditSession.hapticFeedback;
 	config::VirtualGamepadVisualFeedback = EditSession.visualFeedback;
+	config::VirtualGamepadCircularStick = EditSession.circularStick;
 	config::VirtualGamepadVibration = EditSession.vibration;
 	config::VirtualGamepadTransparency = EditSession.transparency;
 	config::VirtualGamepadIdleTimeout = EditSession.idleTimeout;
@@ -1255,6 +1259,11 @@ static void drawCustomizePanel()
 		config::VirtualGamepadEnabled = enabled;
 	if (drawCustomizeCheckbox("VirtualControllerVisualFeedback", i18n::T("Visual Feedback"), visualFeedback))
 		config::VirtualGamepadVisualFeedback = visualFeedback;
+	bool circularStick = static_cast<bool>(config::VirtualGamepadCircularStick);
+	if (drawCustomizeCheckbox("VirtualControllerCircularStick", i18n::T("Circular Stick Travel"), circularStick))
+		config::VirtualGamepadCircularStick = circularStick;
+	ImGui::TextWrapped("%s", i18n::T("Off uses the original square stick travel."));
+
 	// The virtual controller's capability matters, even if a physical pad can rumble.
 	const auto virtualGamepad = GamepadDevice::GetGamepad<VirtualGamepad>();
 	if (virtualGamepad != nullptr && virtualGamepad->is_rumble_enabled())

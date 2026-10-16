@@ -25,6 +25,7 @@ public class VGamepad
 
     public static native int getVibrationPower();
     public static native int getIdleTimeoutSeconds();
+    public static native boolean isCircularStickEnabled();
 
     public static native void show();
     public static native void hide();

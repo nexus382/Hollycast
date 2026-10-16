@@ -52,6 +52,10 @@ extern "C" JNIEXPORT jint JNICALL Java_com_hollycast_emulator_emu_VGamepad_getId
 			vgamepad::MAX_IDLE_TIMEOUT_SECONDS);
 }
 
+extern "C" JNIEXPORT jboolean JNICALL Java_com_hollycast_emulator_emu_VGamepad_isCircularStickEnabled(JNIEnv *env, jclass cls) {
+	return config::VirtualGamepadCircularStick;
+}
+
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_VGamepad_show(JNIEnv * env, jobject obj) {
 	vgamepad::show();
 }

@@ -244,15 +244,22 @@ public class VirtualJoystickDelegate implements TouchEventHandler
                         float dx = p.x - joyBiasX;
                         float dy = p.y - joyBiasY;
                         float sz = VGamepad.getControlWidth(CONTROL_ID_ANALOG_STICK);
-                        dx /= sz;
-                        dy /= sz;
-                        // Circular travel like the physical stick: limit the
-                        // vector magnitude instead of clamping each axis into a square.
-                        float r = (float) Math.hypot(dx, dy);
-                        if (r > 1.f)
+                        if (!VGamepad.isCircularStickEnabled())
                         {
-                            dx /= r;
-                            dy /= r;
+                            dx = Math.max(Math.min(1.f, dx / sz), -1.f);
+                            dy = Math.max(Math.min(1.f, dy / sz), -1.f);
+                        }
+                        else
+                        {
+                            dx /= sz;
+                            dy /= sz;
+                            // Circular travel preserves direction beyond the edge.
+                            float r = (float) Math.hypot(dx, dy);
+                            if (r > 1.f)
+                            {
+                                dx /= r;
+                                dy /= r;
+                            }
                         }
                         InputDeviceManager.getInstance().virtualJoystick(dx, dy);
                         continue;

@@ -22,6 +22,7 @@
 #include "gamepad_device.h"
 #include "ui/vgamepad.h"
 #include "oslib/i18n.h"
+#include "cfg/option.h"
 
 // Limit stick deflection to the unit circle, preserving direction.
 // The physical Dreamcast stick travels in a circle; clamping X and Y
@@ -62,10 +63,11 @@ public:
 		return true;
 	};
 
-	// normalized coordinates within the unit circle
+	// normalized coordinates [-1, 1]
 	void joystickInput(float x, float y)
 	{
-		limitStickToCircle(x, y);
+		if (config::VirtualGamepadCircularStick)
+			limitStickToCircle(x, y);
 		vgamepad::setAnalogStick(x, y);
 		int joyx = std::round(x * 32767.f);
 		int joyy = std::round(y * 32767.f);
