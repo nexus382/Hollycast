@@ -897,6 +897,7 @@ static void gui_display_commands()
 		GameMedia game;
 		game.path = settings.content.path;
 		game.fileName = settings.content.fileName;
+		game.arcade = settings.platform.isArcade();
 		GameBoxart art = boxart.getBoxart(game);
 		ImguiFileTexture tex(art.boxartPath);
 		// Use a fallback image when artwork is unavailable
@@ -1125,7 +1126,7 @@ static void contentpath_warning_popup()
             	config::ContentPath.get().clear();
                 config::ContentPath.get().push_back(selection);
             }
-            scanner.refresh();
+            gui_refresh_files();
             return true;
         });
     }
@@ -2666,6 +2667,7 @@ static void drawBoxartBackground()
 	GameMedia game;
 	game.path = settings.content.path;
 	game.fileName = settings.content.fileName;
+	game.arcade = settings.platform.isArcade();
 	GameBoxart art = boxart.getBoxart(game);
 	ImguiFileTexture tex(art.boxartPath);
 	ImDrawList *dl = ImGui::GetBackgroundDrawList();
@@ -3161,7 +3163,9 @@ void fatal_error(const char* text, ...)
 
 extern bool subfolders_read;
 
-void gui_refresh_files() {
+void gui_refresh_files(bool invalidateArtwork) {
+	if (invalidateArtwork)
+		boxart.invalidateOfflineArtwork();
 	scanner.refresh();
 	subfolders_read = false;
 }
@@ -3315,12 +3319,14 @@ std::string gui_getCurGameBoxartUrl()
 	GameMedia game;
 	game.fileName = settings.content.fileName;
 	game.path = settings.content.path;
+	game.arcade = settings.platform.isArcade();
 	GameBoxart art = boxart.getBoxart(game);
 	return art.boxartUrl;
 }
 
 void gui_refresh_custom_boxart(bool force)
 {
+	boxart.invalidateOfflineArtwork();
 	boxart.refreshLibraryPlaytimeDatabase();
 	boxart.refreshCustomBoxartIndex(force);
 }

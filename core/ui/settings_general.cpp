@@ -32,7 +32,7 @@ void addContentPathCallback(const std::string& path)
 		contentPath.push_back(path);
 		if (gui_state == GuiState::Main)
 			SaveSettings();
-		scanner.refresh();
+		gui_refresh_files();
 	}
 }
 

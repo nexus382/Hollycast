@@ -283,8 +283,10 @@ bool Disc::readSector(u32 FAD, u8 *dst, SectorFormat *sector_type, u8 *subcode, 
 	return false;
 }
 
-u32 Disc::ReadSectors(u32 FAD, u32 count, u8* dst, u32 fmt, bool stopOnMiss, LoadProgress *progress)
+u32 Disc::ReadSectors(u32 FAD, u32 count, u8* dst, u32 fmt, bool stopOnMiss, LoadProgress *progress, bool *readError)
 {
+	if (readError != nullptr)
+		*readError = false;
 	u8 temp[2448];
 	SectorFormat secfmt;
 	SubcodeFormat subfmt;
@@ -302,6 +304,8 @@ u32 Disc::ReadSectors(u32 FAD, u32 count, u8* dst, u32 fmt, bool stopOnMiss, Loa
 			return i;
 		if (!readSector(FAD, temp, &secfmt, q_subchannel, &subfmt))
 		{
+			if (readError != nullptr)
+				*readError = true;
 			WARN_LOG(GDROM, "Sector Read miss FAD: %d", FAD);
 			memset(temp, 0, sizeof(temp));
 			secfmt = SECFMT_2352;
@@ -326,6 +330,8 @@ u32 Disc::ReadSectors(u32 FAD, u32 count, u8* dst, u32 fmt, bool stopOnMiss, Loa
 			convertSector(temp, dst, 2448, fmt, FAD);
 		}
 		else {
+			if (readError != nullptr)
+				*readError = true;
 			WARN_LOG(GDROM, "ERROR: UNABLE TO CONVERT SECTOR. THIS IS FATAL. Format: %d Sector format: %d", fmt, secfmt);
 		}
 		dst += fmt;

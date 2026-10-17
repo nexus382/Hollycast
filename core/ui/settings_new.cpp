@@ -2804,7 +2804,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			EndTwoLineSettingRow();
 			addContentRequested = addRowActivated;
 			if (refreshPressed)
-				scanner.refresh();
+				gui_refresh_files();
 			ImGui::PopID();
 		}
 
@@ -2815,7 +2815,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		{
 			scanner.stop();
 			config::ContentPath.get().erase(config::ContentPath.get().begin() + to_delete);
-			scanner.refresh();
+			gui_refresh_files();
 		}
 	}
 
@@ -2918,7 +2918,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		RenderTwoLineSettingDescription(line1Start, T("Rescan all content folders"));
 		EndTwoLineSettingRow();
 		if (rescanRowActivated || refreshPressed)
-			scanner.refresh();
+			gui_refresh_files();
 		ImGui::PopID();
 	}
 #endif
@@ -3010,7 +3010,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			static_cast<bool>(config::HideLegacyNaomiRoms),
 			[](bool enabled) {
 				config::HideLegacyNaomiRoms = enabled;
-				scanner.refresh();
+				gui_refresh_files();
 			},
 			T(
 				"Hide Legacy Naomi ROMs\n"
@@ -3201,7 +3201,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 				ImGui::OpenPopup(popupName.c_str());
 #endif
 
-			static std::string lastBoxartPath;
+			static std::string lastBoxartPath = config::BoxartPath.get();
 			if (lastBoxartPath != config::BoxartPath.get())
 			{
 				gui_refresh_custom_boxart(true);

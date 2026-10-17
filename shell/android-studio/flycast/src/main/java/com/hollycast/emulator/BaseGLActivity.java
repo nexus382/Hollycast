@@ -107,7 +107,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Emulator app = (Emulator)getApplicationContext();
         app.getConfigurationPrefs();
         storage = new AndroidStorage(this);
-        setStorageDirectories();
+        setStorageDirectories(false);
 
         boolean externalStorageLegacy = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -188,7 +188,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         });
     }
 
-    private void setStorageDirectories()
+    private void setStorageDirectories(boolean refreshArtwork)
     {
         String android_home_directory = Environment.getExternalStorageDirectory().getAbsolutePath();
         List<String> pathList = new ArrayList<>();
@@ -201,7 +201,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Log.i("hollycast", "Storage dirs: " + pathList);
         if (storage != null)
             storage.setStorageDirectories(pathList);
-        JNIdc.setExternalStorageDirectories(pathList.toArray());
+        JNIdc.setExternalStorageDirectories(pathList.toArray(), refreshArtwork);
     }
 
     // Testing
@@ -441,7 +441,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         else if (requestCode == STORAGE_PERM_REQUEST) {
             Log.i("hollycast", "External storage permission granted");
             storagePermissionGranted = true;
-            setStorageDirectories();
+            setStorageDirectories(true);
             if (pendingIntentUrl != null) {
                 JNIdc.setGameUri(pendingIntentUrl);
                 pendingIntentUrl = null;
