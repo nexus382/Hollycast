@@ -6,12 +6,98 @@
 #include <stb_image.h>
 
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <thread>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 namespace {
+
+#ifndef _WIN32
+class PausedArcadeScan
+{
+public:
+	PausedArcadeScan(Boxart& boxart, const std::filesystem::path& path)
+		: boxart(boxart), path(path), fifoCreated(::mkfifo(path.c_str(), 0600) == 0)
+	{}
+
+	~PausedArcadeScan()
+	{
+		unblockReader();
+		if (refresh.valid())
+			refresh.wait();
+		boxart.term();
+		if (writer >= 0)
+			::close(writer);
+	}
+
+	bool created() const { return fifoCreated; }
+
+	bool waitForReader()
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		do {
+			writer = ::open(path.c_str(), O_WRONLY | O_NONBLOCK);
+			if (writer >= 0)
+				return true;
+			if (errno != ENXIO && errno != EINTR)
+				return false;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		} while (std::chrono::steady_clock::now() < deadline);
+		return false;
+	}
+
+	void startRefresh()
+	{
+		refresh = std::async(std::launch::async, [this]() { boxart.refreshCache(); });
+	}
+
+	void finishRefresh()
+	{
+		unblockReader();
+		refresh.get();
+	}
+
+private:
+	void unblockReader()
+	{
+		if (!fifoCreated || released)
+			return;
+		if (writer < 0)
+			writer = ::open(path.c_str(), O_RDWR | O_NONBLOCK);
+		if (writer < 0)
+			return;
+		std::string payload(0x20, ' ');
+		payload.replace(0, sizeof("STALE-SCAN") - 1, "STALE-SCAN");
+		size_t written = 0;
+		while (written < payload.size())
+		{
+			const ssize_t count = ::write(writer, payload.data() + written, payload.size() - written);
+			if (count < 0 && errno == EINTR)
+				continue;
+			if (count <= 0)
+				break;
+			written += count;
+		}
+		released = true;
+	}
+
+	Boxart& boxart;
+	std::filesystem::path path;
+	bool fifoCreated;
+	int writer = -1;
+	bool released = false;
+	std::future<void> refresh;
+};
+#endif
 
 class BoxartTest : public ::testing::Test
 {
@@ -180,6 +266,52 @@ TEST_F(BoxartTest, DatabaseReviewRetriesOfflineArtwork)
 	const GameBoxart refreshed = finishOfflineFetch();
 	EXPECT_EQ("TEST-0002", refreshed.uniqueId);
 	EXPECT_EQ("Replacement metadata", refreshed.searchName);
+}
+
+TEST_F(BoxartTest, RefreshDiscardsInFlightNoArtworkResult)
+{
+#ifdef _WIN32
+	GTEST_SKIP() << "Requires a POSIX FIFO to pause the physical artwork scan";
+#else
+	media.fileName = "paused.bin";
+	media.path = (directory / media.fileName).string();
+	media.arcade = true;
+	PausedArcadeScan scan(*boxart, media.path);
+	ASSERT_TRUE(scan.created());
+	ASSERT_TRUE(boxart->getBoxartAndLoad(media).busy);
+	ASSERT_TRUE(scan.waitForReader()) << "Physical artwork worker did not open the FIFO";
+
+	scan.startRefresh();
+	bool cancelled = false;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	do {
+		if (!boxart->getBoxart(media).busy)
+		{
+			cancelled = true;
+			break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	} while (std::chrono::steady_clock::now() < deadline);
+	scan.finishRefresh();
+
+	const GameBoxart refreshed = boxart->getBoxart(media);
+	EXPECT_TRUE(refreshed.uniqueId.empty()) << "Refresh published stale metadata " << refreshed.uniqueId;
+	EXPECT_FALSE(refreshed.busy);
+	EXPECT_TRUE(cancelled) << "Refresh did not cancel the in-flight artwork request";
+
+	ASSERT_TRUE(std::filesystem::remove(media.path));
+	std::ofstream replacement(media.path, std::ios::binary);
+	const std::string prefix(0x30, '\0');
+	std::string payload(0x20, ' ');
+	payload.replace(0, sizeof("FRESH-SCAN") - 1, "FRESH-SCAN");
+	replacement.write(prefix.data(), prefix.size());
+	replacement.write(payload.data(), payload.size());
+	replacement.close();
+	ASSERT_TRUE(replacement);
+	const GameBoxart fresh = finishOfflineFetch();
+	EXPECT_EQ("FRESH-SCAN", fresh.uniqueId);
+	EXPECT_FALSE(fresh.busy);
+#endif
 }
 
 TEST_F(BoxartTest, NoArtworkSurvivesRestartUntilRefresh)
