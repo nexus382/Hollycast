@@ -8,7 +8,6 @@
  */
 #include "gtest/gtest.h"
 #include "imgread/common.h"
-#include <memory>
 
 class ChdTest : public ::testing::Test {
 protected:
@@ -29,7 +28,7 @@ protected:
 // the track data (PGTYPE:V...), and a single data track in session 2 with no pregap of its own.
 TEST_F(ChdTest, LoadMilCd)
 {
-	std::unique_ptr<Disc> disc(OpenDisc(FLYCAST_TEST_FILES "/test_chds/milcd.chd"));
+	Disc *disc = OpenDisc(FLYCAST_TEST_FILES "/test_chds/milcd.chd");
 
 	ASSERT_EQ(CdRom_XA, disc->type);
 	ASSERT_EQ(4u, disc->tracks.size());
@@ -64,22 +63,23 @@ TEST_F(ChdTest, LoadMilCd)
 	ASSERT_EQ(12743u, disc->GetBaseFAD());
 
 	// the pregaps must not shift the track data
-	verifySector(disc.get(), 150, 1, 0);
-	verifySector(disc.get(), 449, 1, 299);
-	verifySector(disc.get(), 633, 2, 183);
-	verifySector(disc.get(), 932, 2, 482);
-	verifySector(disc.get(), 1143, 3, 210);
-	verifySector(disc.get(), 1342, 3, 409);
-	verifySector(disc.get(), 12743, 4, 0);
-	verifySector(disc.get(), 13192, 4, 449);
+	verifySector(disc, 150, 1, 0);
+	verifySector(disc, 449, 1, 299);
+	verifySector(disc, 633, 2, 183);
+	verifySector(disc, 932, 2, 482);
+	verifySector(disc, 1143, 3, 210);
+	verifySector(disc, 1342, 3, 409);
+	verifySector(disc, 12743, 4, 0);
+	verifySector(disc, 13192, 4, 449);
 
+	delete disc;
 }
 
 // Same disc but with the pregap of the second session's track stored in the image. The
 // session gap must then be shortened by as much, INDEX 01 sits at the very same FAD.
 TEST_F(ChdTest, LoadMilCdSessionPregap)
 {
-	std::unique_ptr<Disc> disc(OpenDisc(FLYCAST_TEST_FILES "/test_chds/milcd_pregap.chd"));
+	Disc *disc = OpenDisc(FLYCAST_TEST_FILES "/test_chds/milcd_pregap.chd");
 
 	ASSERT_EQ(CdRom_XA, disc->type);
 	ASSERT_EQ(2u, disc->tracks.size());
@@ -96,17 +96,18 @@ TEST_F(ChdTest, LoadMilCdSessionPregap)
 	ASSERT_EQ(12150u, disc->LeadOut.StartFAD);
 	ASSERT_EQ(11850u, disc->GetBaseFAD());
 
-	verifySector(disc.get(), 150, 1, 0);
-	verifySector(disc.get(), 11850, 2, 150);
-	verifySector(disc.get(), 12149, 2, 449);
+	verifySector(disc, 150, 1, 0);
+	verifySector(disc, 11850, 2, 150);
+	verifySector(disc, 12149, 2, 449);
 
+	delete disc;
 }
 
 // Pregap declared with a cue PREGAP command: chdman records it as PREGAP:150 with a PGTYPE
 // that isn't prefixed with 'V', meaning the sectors aren't stored in the image
 TEST_F(ChdTest, LoadMilCdUnstoredPregap)
 {
-	std::unique_ptr<Disc> disc(OpenDisc(FLYCAST_TEST_FILES "/test_chds/milcd_nogap.chd"));
+	Disc *disc = OpenDisc(FLYCAST_TEST_FILES "/test_chds/milcd_nogap.chd");
 
 	ASSERT_EQ(CdRom_XA, disc->type);
 	ASSERT_EQ(2u, disc->tracks.size());
@@ -124,16 +125,17 @@ TEST_F(ChdTest, LoadMilCdUnstoredPregap)
 	ASSERT_EQ(11850u, disc->sessions[1].StartFAD);
 	ASSERT_EQ(12150u, disc->LeadOut.StartFAD);
 
-	verifySector(disc.get(), 150, 1, 0);
-	verifySector(disc.get(), 11850, 2, 0);
-	verifySector(disc.get(), 12149, 2, 299);
+	verifySector(disc, 150, 1, 0);
+	verifySector(disc, 11850, 2, 0);
+	verifySector(disc, 12149, 2, 299);
 
+	delete disc;
 }
 
 // Single-session audio CD: no session gap must be inserted
 TEST_F(ChdTest, LoadAudioCd)
 {
-	std::unique_ptr<Disc> disc(OpenDisc(FLYCAST_TEST_FILES "/test_chds/audiocd.chd"));
+	Disc *disc = OpenDisc(FLYCAST_TEST_FILES "/test_chds/audiocd.chd");
 
 	ASSERT_EQ(CdRom, disc->type);
 	ASSERT_EQ(3u, disc->tracks.size());
@@ -147,8 +149,9 @@ TEST_F(ChdTest, LoadAudioCd)
 	ASSERT_EQ(599u, disc->tracks[2].EndFAD);
 	ASSERT_EQ(600u, disc->LeadOut.StartFAD);
 
-	verifySector(disc.get(), 150, 1, 0);
-	verifySector(disc.get(), 300, 2, 0);
-	verifySector(disc.get(), 599, 3, 149);
+	verifySector(disc, 150, 1, 0);
+	verifySector(disc, 300, 2, 0);
+	verifySector(disc, 599, 3, 149);
 
+	delete disc;
 }

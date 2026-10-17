@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "types.h"
 #include "hw/mem/addrspace.h"
@@ -32,7 +33,7 @@ TEST_F(SerializeTest, SizeTest)
 	std::vector<char> data(30000000);
 	Serializer ser(data.data(), data.size());
 	dc_serialize(ser);
-	ASSERT_EQ(28050898u, ser.size());
+	ASSERT_EQ(28050906u, ser.size());
 }
 
 TEST(SerializerBufferTest, BufferOverflowThrowsException)

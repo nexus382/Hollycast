@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -25,6 +26,10 @@ namespace net::modbba
 class RawModemService : public Service
 {
 public:
+	RawModemService(uint16_t port = 7657)
+		: port(port)
+	{}
+
 	bool start() override;
 	void stop() override;
 
@@ -33,6 +38,9 @@ public:
 	int modemAvailable() override;
 
 	void receiveEthFrame(const u8 *frame, u32 size) override {};
+
+private:
+	uint16_t port;
 };
 
 }

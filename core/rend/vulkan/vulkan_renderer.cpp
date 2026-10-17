@@ -340,7 +340,7 @@ public:
 				BaseInit(screenDrawer.GetRenderPass());
 				emulateFramebuffer = config::EmulateFramebuffer;
 			}
-			else if (ctx->rend.isRTT) {
+			else if (ctx->rend.isRTT || resetTextureCache) {
 				screenDrawer.EndRenderPass();
 			}
 			BaseVulkanRenderer::Process(ctx);
@@ -403,6 +403,12 @@ protected:
 		BaseVulkanRenderer::resize(w, h);
 		GetContext()->WaitIdle();
 		screenDrawer.Init(&samplerManager, &shaderManager, viewport);
+	}
+
+
+	void clearTextureCache() override {
+		screenDrawer.EndRenderPass();
+		BaseVulkanRenderer::clearTextureCache();
 	}
 
 private:

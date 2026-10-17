@@ -655,8 +655,8 @@ void    ImGui_ImplOpenGL3_DestroyDeviceObjects()
 {
     ImGui_ImplOpenGL3_Data* bd = ImGui_ImplOpenGL3_GetBackendData();
     if (bd == nullptr) {
-        WARN_LOG(RENDERER, "ImGui_ImplOpenGL3_DestroyDeviceObjects: backend data is null");
-        return;
+    	WARN_LOG(RENDERER, "ImGui_ImplOpenGL3_DestroyDeviceObjects: backend data is null");
+    	return;
     }
     if (bd->VboHandle)      { glDeleteBuffers(1, &bd->VboHandle); bd->VboHandle = 0; }
     if (bd->ElementsHandle) { glDeleteBuffers(1, &bd->ElementsHandle); bd->ElementsHandle = 0; }

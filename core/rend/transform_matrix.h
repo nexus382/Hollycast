@@ -2,6 +2,7 @@
     Created on: Oct 22, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -89,6 +90,9 @@ void getDCFramebufferReadSize(const FramebufferInfo& info, int& width, int& heig
 void getWriteFBToVramParams(const rend_context& ctx, glm::ivec2& scaledSize, Rect& finalClip);
 
 inline static float getDCFramebufferAspectRatio() {
+	if (config::StretchToFill)
+		return (float)settings.display.width / settings.display.height;
+
 	float aspectRatio = config::Rotate90 ? 3.f / 4.f : 4.f / 3.f;
 	return aspectRatio * config::ScreenStretching / 100.f;
 }

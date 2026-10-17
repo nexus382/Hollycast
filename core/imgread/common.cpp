@@ -34,20 +34,19 @@ static u8 bin2bcd(u32 v) {
 	return (u8)((v % 10) | ((v / 10) << 4));
 }
 
-static bool convertSector(u8* in_buff , u8* out_buff , int from , int to,int sector)
+static bool convertSector(u8* in_buff, u8* out_buff, int from, int to, int sector)
 {
 	//get subchannel data, if any
-	if (from == 2448)
-	{
+	if (from == 2448) {
 		memcpy(q_subchannel, in_buff + 2352, 96);
 		from -= 96;
 	}
-	else
+	else {
 		memset(q_subchannel, 0, sizeof(q_subchannel));
+	}
 
 	//if no conversion
-	if (to == from)
-	{
+	if (to == from) {
 		memcpy(out_buff, in_buff, to);
 		return true;
 	}
