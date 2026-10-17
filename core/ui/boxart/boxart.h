@@ -60,6 +60,8 @@ public:
 	void startFetch();
 
 private:
+	friend class BoxartWorkTest_AcceptsOnlyCurrentSourceRevision_Test;
+
 	enum class CustomIndexState
 	{
 		NotRequested,

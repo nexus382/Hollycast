@@ -19,6 +19,48 @@
 #include <unistd.h>
 #endif
 
+TEST(BoxartWorkTest, AcceptsOnlyCurrentSourceRevision)
+{
+	Boxart boxart;
+	GameBoxart request;
+	request.fileName = "game.cue";
+	request.gamePath = "/games/first/game.cue";
+	request.workRevision = 7;
+
+	EXPECT_FALSE(boxart.isCurrentWork(request)) << "An absent source must reject work";
+	boxart.games.emplace(request.sourceKey(), request);
+	EXPECT_TRUE(boxart.isCurrentWork(request)) << "The current source revision must accept work";
+
+	boxart.games.at(request.sourceKey()).workRevision = 8;
+	EXPECT_FALSE(boxart.isCurrentWork(request)) << "Replacing a revision must reject the older request";
+	request.workRevision = 8;
+	EXPECT_TRUE(boxart.isCurrentWork(request)) << "The replacement revision must accept its matching request";
+
+	GameBoxart futureRequest = request;
+	futureRequest.workRevision = 9;
+	EXPECT_FALSE(boxart.isCurrentWork(futureRequest)) << "A future revision must also reject work";
+
+	GameBoxart otherPathRequest = request;
+	otherPathRequest.gamePath = "/games/second/game.cue";
+	EXPECT_FALSE(boxart.isCurrentWork(otherPathRequest)) << "Matching basenames must not alias different paths";
+	EXPECT_TRUE(boxart.isCurrentWork(request)) << "The original path must remain current";
+
+	GameBoxart arcadeRequest = request;
+	arcadeRequest.arcade = true;
+	EXPECT_FALSE(boxart.isCurrentWork(arcadeRequest)) << "Arcade work must not match a disc source at the same path";
+	boxart.games.emplace(arcadeRequest.sourceKey(), arcadeRequest);
+	EXPECT_TRUE(boxart.isCurrentWork(arcadeRequest)) << "A matching arcade source must accept work";
+
+	GameBoxart completedRequest = request;
+	completedRequest.uniqueId = "SCRAPED-0001";
+	completedRequest.boxartPath = "/artwork/completed.png";
+	EXPECT_TRUE(boxart.isCurrentWork(completedRequest)) << "Worker output metadata must not change request eligibility";
+
+	boxart.games.erase(request.sourceKey());
+	EXPECT_FALSE(boxart.isCurrentWork(request)) << "Removing a source must reject its previously matching request";
+	EXPECT_TRUE(boxart.isCurrentWork(arcadeRequest)) << "Removing one source must leave another source current";
+}
+
 namespace {
 
 #ifndef _WIN32
