@@ -3143,6 +3143,14 @@ msgstr ""
 msgid "Visual Feedback"
 msgstr ""
 
+#: core/ui/vgamepad.cpp
+msgid "Circular Stick Travel"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Off uses the original square stick travel."
+msgstr ""
+
 #: core/ui/vgamepad.cpp:1122
 msgid "Vibration"
 msgstr ""

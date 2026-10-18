@@ -80,6 +80,8 @@ static Element SelectedElement = Elem_DPad;
 static Element DraggedElement = Elem_None;
 // Indexed by Elem_DPad/Elem_Buttons, with separate choices in each platform layout.
 static std::array<bool, 2> GroupedButtons { true, true };
+// Generated button positions are not a separate layout until the first split.
+static std::array<bool, 2> HasIndividualLayout {};
 static bool LayoutLoaded;
 static ImVec2 LastDragMousePos;
 static std::string PendingImagePath;
@@ -697,6 +699,7 @@ struct LayoutEditState
 {
 	std::array<LayoutState, Elem_Count> layout;
 	std::array<bool, 2> groupedButtons;
+	std::array<bool, 2> hasIndividualLayout;
 	std::string imagePath;
 };
 
@@ -937,17 +940,36 @@ void applyUiScale() {
 
 static void loadLayout()
 {
+	const char *section = getLayoutCfgSection();
 	for (int i = 0; i < Elem_DPadLeft; i++) {
 		Layout[i].reset();
 		Layout[i].load();
 	}
 	resetIndividualButtons(Elem_DPad);
 	resetIndividualButtons(Elem_Buttons);
-	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
-		Layout[i].load();
 	// Old configurations remain grouped. Each platform layout stores its own choice.
-	GroupedButtons[Elem_DPad] = config::loadBool(getLayoutCfgSection(), "dpad_grouped", true);
-	GroupedButtons[Elem_Buttons] = config::loadBool(getLayoutCfgSection(), "buttons_grouped", true);
+	GroupedButtons[Elem_DPad] = config::loadBool(section, "dpad_grouped", true);
+	GroupedButtons[Elem_Buttons] = config::loadBool(section, "buttons_grouped", true);
+	// Older saves have no marker, so preserve any stored individual settings.
+	HasIndividualLayout = {};
+	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
+	{
+		const Element group = getButtonGroup(static_cast<Element>(i));
+		if (HasIndividualLayout[group])
+			continue;
+		for (const char *suffix : { "_x", "_y", "_scale", "_transparency", "_touch_size" })
+			if (!config::loadStr(section, Layout[i].name + suffix).empty())
+			{
+				HasIndividualLayout[group] = true;
+				break;
+			}
+	}
+	for (int group = Elem_DPad; group <= Elem_Buttons; group++)
+		HasIndividualLayout[group] = !GroupedButtons[group] || config::loadBool(section,
+				Layout[group].name + "_individual_layout", HasIndividualLayout[group]);
+	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
+		if (HasIndividualLayout[getButtonGroup(static_cast<Element>(i))])
+			Layout[i].load();
 	applyLayout();
 	LayoutLoaded = true;
 }
@@ -959,6 +981,9 @@ static void saveCustomization(const std::string& imagePath)
 		element.save();
 	config::saveBool(getLayoutCfgSection(), "dpad_grouped", GroupedButtons[Elem_DPad]);
 	config::saveBool(getLayoutCfgSection(), "buttons_grouped", GroupedButtons[Elem_Buttons]);
+	// Done also saves generated coordinates; the markers keep first-split behavior.
+	config::saveBool(getLayoutCfgSection(), "dpad_individual_layout", HasIndividualLayout[Elem_DPad]);
+	config::saveBool(getLayoutCfgSection(), "buttons_individual_layout", HasIndividualLayout[Elem_Buttons]);
 	config::VirtualGamepadEnabled.save();
 	config::VirtualGamepadHapticFeedback.save();
 	config::VirtualGamepadVisualFeedback.save();
@@ -976,6 +1001,7 @@ static void resetLayout()
 	for (int i = 0; i < Elem_DPadLeft; i++)
 		Layout[i].reset();
 	GroupedButtons = { true, true };
+	HasIndividualLayout = {};
 	resetIndividualButtons(Elem_DPad);
 	resetIndividualButtons(Elem_Buttons);
 	if (SelectedElement >= Elem_DPadLeft)
@@ -998,6 +1024,7 @@ static void resetElement(Element element)
 		{
 			GroupedButtons[group] = true;
 			resetIndividualButtons(group);
+			HasIndividualLayout[group] = false;
 		}
 	}
 	applyLayout();
@@ -1017,6 +1044,7 @@ static void captureLayoutEditState(LayoutEditState& state)
 		};
 	}
 	state.groupedButtons = GroupedButtons;
+	state.hasIndividualLayout = HasIndividualLayout;
 	state.imagePath = PendingImagePath;
 }
 
@@ -1033,6 +1061,7 @@ static void restoreLayoutEditState(const LayoutEditState& state)
 		element.touchSize = saved.touchSize;
 	}
 	GroupedButtons = state.groupedButtons;
+	HasIndividualLayout = state.hasIndividualLayout;
 	PendingImagePath = state.imagePath;
 	applyLayout();
 	// Reload even an empty path so switching or Cancel also restores default art.
@@ -1244,7 +1273,11 @@ static void drawCustomizePanel()
 		{
 			if (grouped)
 				Layout[group].reset();
-			resetIndividualButtons(group);
+			else if (!HasIndividualLayout[group])
+			{
+				resetIndividualButtons(group);
+				HasIndividualLayout[group] = true;
+			}
 			SelectedElement = grouped ? group : (group == Elem_DPad ? Elem_DPadLeft : Elem_ButtonX);
 			DraggedElement = Elem_None;
 			applyLayout();
