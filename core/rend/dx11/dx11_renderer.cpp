@@ -1033,7 +1033,9 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 		ReadFramebuffer<BGRAPacker>(info, pb, width, height);
 	}
 
+#ifndef LIBRETRO
 	DX11GpuTimingScope gpuTiming(DX11Context::Instance(), true);
+#endif
 	if (dcfbTexture)
 	{
 		D3D11_TEXTURE2D_DESC desc;
