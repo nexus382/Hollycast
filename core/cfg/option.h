@@ -414,6 +414,13 @@ extern Option<int, false> LibraryIconScale;
 extern Option<int, false> VmuIconMode;
 extern Option<int, false> UIScaling;
 extern Option<int, false> UITheme;          // 0 -> Dark, 1 -> Light, 2 -> Dreamcast, 3 -> High Contrast, 4 -> Nintendo, 5 -> Aqua Chill
+enum class MenuBarMode
+{
+	Auto = 0,
+	On = 1,
+	Off = 2,
+};
+extern Option<int, false> MenuBarVisibility;
 
 // Sound
 
@@ -607,8 +614,14 @@ extern Option<bool> OmxAudioHdmi;
 // Maple
 
 extern Option<int> MouseSensitivity;
+extern Option<bool> VirtualGamepadEnabled;
+extern Option<bool> VirtualGamepadHapticFeedback;
+extern Option<bool> VirtualGamepadVisualFeedback;
+extern Option<bool> VirtualGamepadCircularStick;
 extern Option<int> VirtualGamepadVibration;
 extern Option<int> VirtualGamepadTransparency;
+extern Option<int> VirtualGamepadIdleTimeout;
+extern Option<int> VirtualGamepadFingerSize;
 extern std::array<Option<MapleDeviceType>, 4> MapleMainDevices;
 extern std::array<std::array<Option<MapleDeviceType>, 2>, 4> MapleExpansionDevices;
 extern std::array<std::array<Option<int>, 2>, 4> NetworkExpansionDevices;

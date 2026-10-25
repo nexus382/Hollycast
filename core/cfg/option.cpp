@@ -53,6 +53,7 @@ Option<int, false> LibraryIconScale("Dreamcast.LibraryIconScale", 100);
 Option<int, false> VmuIconMode("Dreamcast.VmuIconMode", 0);
 Option<int, false> UIScaling("UIScaling", 100);
 Option<int, false> UITheme("UITheme", 0);
+Option<int, false> MenuBarVisibility("MenuBarVisibility", static_cast<int>(MenuBarMode::Auto));
 
 // Sound
 
@@ -230,8 +231,15 @@ Option<bool> OmxAudioHdmi("audio_hdmi", true, "omx");
 // Maple
 
 Option<int> MouseSensitivity("MouseSensitivity", 100, "input");
+Option<bool> VirtualGamepadEnabled("VirtualGamepadEnabled", true, "input");
+Option<bool> VirtualGamepadHapticFeedback("VirtualGamepadHapticFeedback", true, "input");
+Option<bool> VirtualGamepadVisualFeedback("VirtualGamepadVisualFeedback", true, "input");
+// Preserve the original stick response for existing configurations.
+Option<bool> VirtualGamepadCircularStick("VirtualGamepadCircularStick", false, "input");
 Option<int> VirtualGamepadVibration("VirtualGamepadVibration", 20, "input");
 Option<int> VirtualGamepadTransparency("VirtualGamepadTransparency", 37, "input");
+Option<int> VirtualGamepadIdleTimeout("VirtualGamepadIdleTimeout", 10, "input");
+Option<int> VirtualGamepadFingerSize("VirtualGamepadFingerSize", 0, "input");
 
 std::array<Option<MapleDeviceType>, 4> MapleMainDevices {
 	Option<MapleDeviceType>("device1", MDT_SegaController, "input"),

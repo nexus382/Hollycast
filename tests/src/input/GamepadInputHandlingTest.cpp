@@ -2,6 +2,9 @@
 
 #include "input/gamepad_device.h"
 #include "input/mapping.h"
+#include "input/virtual_gamepad.h"
+
+#include <cmath>
 
 class TestGamepadDeviceStub : public GamepadDevice
 {
@@ -139,4 +142,45 @@ TEST_F(GamepadeInputHandlingTest, combo_multi_release)
     currentCode |= static_cast<u32>(DreamcastKey::DC_BTN_A);
     currentCode |= static_cast<u32>(DreamcastKey::DC_BTN_C);
     ASSERT_EQ(kcode[0], currentCode);
+}
+
+TEST(VirtualStickCircleTest, inside_circle_unchanged)
+{
+    float x = 0.3f, y = -0.4f;
+    limitStickToCircle(x, y);
+    EXPECT_NEAR(x, 0.3f, 1e-6f);
+    EXPECT_NEAR(y, -0.4f, 1e-6f);
+}
+
+TEST(VirtualStickCircleTest, on_circle_unchanged)
+{
+    float x = 0.6f, y = 0.8f;
+    limitStickToCircle(x, y);
+    EXPECT_NEAR(x, 0.6f, 1e-6f);
+    EXPECT_NEAR(y, 0.8f, 1e-6f);
+}
+
+TEST(VirtualStickCircleTest, corner_lands_on_circle_preserving_direction)
+{
+    float x = 1.f, y = 1.f;
+    limitStickToCircle(x, y);
+    const float inv = 1.f / std::sqrt(2.f);
+    EXPECT_NEAR(x, inv, 1e-6f);
+    EXPECT_NEAR(y, inv, 1e-6f);
+}
+
+TEST(VirtualStickCircleTest, beyond_edge_scales_onto_circle_preserving_direction)
+{
+    float x = 2.f, y = 1.f;
+    limitStickToCircle(x, y);
+    EXPECT_NEAR(std::hypot(x, y), 1.f, 1e-6f);
+    EXPECT_NEAR(y / x, 0.5f, 1e-6f);
+}
+
+TEST(VirtualStickCircleTest, rest_unchanged)
+{
+    float x = 0.f, y = 0.f;
+    limitStickToCircle(x, y);
+    EXPECT_EQ(x, 0.f);
+    EXPECT_EQ(y, 0.f);
 }
