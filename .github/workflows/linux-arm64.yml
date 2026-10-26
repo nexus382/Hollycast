@@ -1,0 +1,128 @@
+name: Linux ARM64 libretro
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and upload to (empty for artifacts only)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: libretro-aarch64-pc-linux-gnu
+    runs-on: ubuntu-22.04-arm
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils ccache cmake g++ libcdio-dev libgles2-mesa-dev ninja-build pkg-config python3 zip
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-libretro-aarch64-pc-linux-gnu-${{ github.sha }}
+          restore-keys: ccache-libretro-aarch64-pc-linux-gnu-
+
+      - name: Build OpenGL ES core
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/artifact" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DLIBRETRO=ON -DUSE_GLES=ON -DUSE_OPENGL=OFF \
+            -DUSE_VULKAN=OFF -DUSE_LIBCDIO=ON -DWITH_SYSTEM_ZSTD=OFF
+          cmake --build build --parallel 4
+          cmake --install build
+
+      - name: Verify ARM64 core and Libretro ABI
+        run: |
+          core=artifact/lib/libretro/Hollycast_libretro.so
+          strip --strip-unneeded "$core"
+          readelf --file-header "$core"
+          readelf --file-header "$core" | grep -Eq 'Machine:[[:space:]]+AArch64'
+          python3 - <<'PY'
+          import ctypes
+
+          class SystemInfo(ctypes.Structure):
+              _fields_ = [
+                  ("library_name", ctypes.c_char_p),
+                  ("library_version", ctypes.c_char_p),
+                  ("valid_extensions", ctypes.c_char_p),
+                  ("need_fullpath", ctypes.c_bool),
+                  ("block_extract", ctypes.c_bool),
+              ]
+
+          core = ctypes.CDLL("./artifact/lib/libretro/Hollycast_libretro.so")
+          core.retro_api_version.restype = ctypes.c_uint
+          if core.retro_api_version() != 1:
+              raise SystemExit("Unexpected Libretro API version")
+          core.retro_get_system_info.argtypes = [ctypes.POINTER(SystemInfo)]
+          core.retro_get_system_info.restype = None
+          info = SystemInfo()
+          core.retro_get_system_info(ctypes.byref(info))
+          if info.library_name != b"Hollycast" or not info.library_version:
+              raise SystemExit("Invalid Hollycast core metadata")
+          print(f"Loaded {info.library_name.decode()} {info.library_version.decode()}")
+          PY
+
+      - name: Package core
+        run: |
+          revision=$(git rev-parse HEAD)
+          printf 'Source: https://github.com/%s/commit/%s\nTarget: Linux aarch64, OpenGL ES 3\nBuild: Ubuntu 22.04 (glibc 2.35)\n' \
+            "$GITHUB_REPOSITORY" "$revision" > artifact/SOURCE.txt
+          zip -j artifact/Hollycast-linux-libretro-arm64.zip \
+            artifact/lib/libretro/Hollycast_libretro.so LICENSE artifact/SOURCE.txt
+          unzip -t artifact/Hollycast-linux-libretro-arm64.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Hollycast-libretro-aarch64-pc-linux-gnu
+          compression-level: 0
+          if-no-files-found: error
+          path: artifact/Hollycast-linux-libretro-arm64.zip
+
+  publish:
+    name: Attach ARM64 core to release
+    needs: build
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: Hollycast-libretro-aarch64-pc-linux-gnu
+          path: artifact
+
+      - name: Upload versioned package and checksum
+        run: |
+          case "$RELEASE_TAG" in
+            ''|*[!A-Za-z0-9._-]*) echo "Release tag cannot be used as an asset filename" >&2; exit 1 ;;
+          esac
+          gh release view "$RELEASE_TAG" --json tagName
+          package="Hollycast-${RELEASE_TAG}-linux-libretro-arm64.zip"
+          mv artifact/Hollycast-linux-libretro-arm64.zip "$package"
+          sha256sum "$package" > "$package.sha256"
+          gh release upload "$RELEASE_TAG" "$package" "$package.sha256" --clobber

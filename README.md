@@ -103,6 +103,25 @@ cmake --preset <PRESET>
 cmake --build --preset <PRESET>
 ```
 
+### Linux ARM64 Libretro Downloads
+
+The **Linux ARM64 libretro** GitHub Actions workflow builds `Hollycast_libretro.so`
+for 64-bit Linux RetroArch with OpenGL ES 3, including compatible H700 handheld
+firmware. Download `Hollycast-linux-libretro-arm64.zip` from the workflow's artifacts
+and extract the core into RetroArch's cores directory, then select it with **Load
+Core**. Keep the supplied Flycast core installed so you can switch between them.
+
+The build uses Ubuntu 22.04 and requires a compatible glibc 2.35 or newer runtime,
+the C++ and OpenMP runtimes, and libcdio. The firmware must provide a 64-bit RetroArch
+build and working OpenGL ES 3 drivers. ARM32 firmware and Android require different
+packages. Compilation and a native core-loading check run in CI; gameplay and
+performance still need testing on each device and firmware.
+
+When a release is published, the workflow builds its tagged source and attaches
+`Hollycast-<tag>-linux-libretro-arm64.zip` and its SHA-256 checksum. Maintainers can
+also run the workflow manually with an existing `release_tag` to add that package
+to an earlier release. Leave the tag empty to build an Actions artifact only.
+
 ### Development Instructions for Android
 
 - Install [Android Studio](https://developer.android.com/studio/install).
