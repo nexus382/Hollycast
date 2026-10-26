@@ -5,8 +5,9 @@ Published at https://nexus382.github.io/Hollycast/ by `.github/workflows/builds-
 The repository's Pages publishing source must be **GitHub Actions**.
 
 Automatic `master` and `dev` builds are the default view. Platform downloads for
-the same branch and commit share one compact, expandable row. Each row contains
-public download links and a changelog; visitors do not need a GitHub account.
+the same branch and commit share one table row, with a readable build title,
+branch, date, direct platform downloads, and a changelog link. Visitors do not
+need a GitHub account or have to expand a build to reach its downloads.
 Ordinary stable and development releases remain available through the filters.
 
 The publisher copies ZIP artifacts from successful platform push workflows into

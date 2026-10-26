@@ -34,7 +34,7 @@ export function releaseBuild(release, repository = 'nexus382/Hollycast') {
   // Reserved automatic tags must have valid provenance, not become ordinary releases.
   if (/^ci-(master|dev)-/.test(release.tag_name) && !ci) return null;
   return {
-    title: ci ? `${ci.branch} · ${ci.commit.slice(0, 8)}` : release.name || release.tag_name,
+    title: ci && typeof ci.title === 'string' && ci.title.trim() ? ci.title : release.name || release.tag_name,
     // Some historical .dev releases were published without GitHub's prerelease flag.
     channel: ci ? 'ci' : release.prerelease || /(?:^|[.-])(?:dev|alpha|beta|rc)(?:[.-]|\d|$)/i.test(release.tag_name) ? 'development' : 'stable',
     date: ci?.date || release.published_at,

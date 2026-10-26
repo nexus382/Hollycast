@@ -25,15 +25,25 @@ function link(text, url) {
 }
 
 function fileList(files) {
-  const ul = element('ul', '', 'downloads');
+  const links = element('div', '', 'downloads');
   for (const file of files) {
-    const item = element('li');
-    item.append(link(file.name, file.url));
+    const name = file.name.toLowerCase();
+    let label = file.support ? file.name : file.platform;
+    if (!file.support) {
+      if (/arm64|aarch64/.test(name)) label += ' ARM64';
+      else if (/x86_64|x64|amd64/.test(name)) label += ' x64';
+      else if (/i686|x86|win32/.test(name)) label += ' x86';
+      else if (/universal/.test(name)) label += ' Universal';
+      if (name.includes('libretro')) label += ' Libretro';
+      if (name.includes('msvc')) label += ' MSVC';
+      else if (name.includes('mingw')) label += ' MinGW';
+    }
+    const download = link(label, file.url);
     const size = file.size < 1048576 ? `${Math.ceil(file.size / 1024)} KB` : `${(file.size / 1048576).toFixed(1)} MB`;
-    item.append(element('span', size, 'file-size'));
-    ul.append(item);
+    download.title = `${file.name} · ${size}`;
+    links.append(download);
   }
-  return ul;
+  return links;
 }
 
 function render() {
@@ -47,42 +57,32 @@ function render() {
     const files = build.files.filter(file => platform.value === 'all' || file.platform === platform.value);
     if (!files.length || (query && !`${build.title} ${build.branch || ''} ${build.commit || ''} ${files.map(file => file.name).join(' ')}`.toLowerCase().includes(query))) continue;
     count++;
-    const row = element('details', '', 'build');
-    const heading = element('summary', '', 'build-heading');
-    heading.append(element('span', build.channel === 'ci' ? build.branch : build.channel, 'badge'),
-      element('span', build.channel === 'ci' ? build.commit.slice(0, 8) : build.title, 'build-title'));
+    const row = element('tr', '', 'build');
+    const title = element('th');
+    title.scope = 'row';
+    const release = link(build.title, build.url);
+    release.className = 'build-title';
+    title.append(release);
+    if (build.commit) title.append(element('span', build.commit.slice(0, 8), 'meta'));
+    const branch = element('td');
+    branch.append(element('span', build.branch || build.channel, 'badge'));
     const date = new Date(build.date);
-    const time = element('time', date.toLocaleString());
+    const time = element('time', date.toLocaleDateString());
     time.dateTime = date.toISOString();
-    time.className = 'meta';
-    const platforms = [...new Set(files.filter(file => !file.support).map(file => file.platform))].sort();
-    heading.append(time, element('span', platforms.join(' · '), 'platforms'), element('span', 'Downloads & changes', 'row-action'));
-    const content = element('div', '', 'build-content');
-    if (build.channel === 'ci') content.append(element('p', 'Public build archives. Extract the ZIP before use.', 'meta'));
+    time.title = date.toLocaleString();
+    const published = element('td', '', 'published');
+    published.append(time);
+    const content = element('td');
     content.append(fileList(files.filter(file => !file.support)));
     const supporting = files.filter(file => file.support);
     if (supporting.length) {
       const details = element('details');
-      details.append(element('summary', 'Checksums, certificates & installation files'), fileList(supporting));
+      details.append(element('summary', 'Checksums & extras'), fileList(supporting));
       content.append(details);
     }
-    const changelog = element('details');
-    changelog.append(element('summary', 'Changelog'));
-    const notes = element('div', '', 'notes');
-    const text = build.notes || 'No release notes were provided. See the source details on GitHub.';
-    let offset = 0;
-    // Link GitHub references without interpreting release-supplied HTML or scripts.
-    for (const match of text.matchAll(/\[([^\]\n]+)\]\((https:\/\/github\.com\/[^\s)]+)\)/g)) {
-      notes.append(text.slice(offset, match.index), link(match[1], match[2]));
-      offset = match.index + match[0].length;
-    }
-    notes.append(text.slice(offset));
-    changelog.append(notes);
-    const source = element('p');
-    source.append(link(build.compare ? 'View changes on GitHub ↗' : 'View full details on GitHub ↗', build.compare || build.url));
-    changelog.append(source);
-    content.append(changelog);
-    row.append(heading, content);
+    const changelog = element('td');
+    changelog.append(link('Changes ↗', build.compare || build.url));
+    row.append(title, branch, published, content, changelog);
     fragment.append(row);
   }
   list.replaceChildren(fragment);

@@ -18,7 +18,7 @@
       <p class="intro">The latest releases. The next improvements. Find your build.</p>
       <nav aria-label="Project"><a href="https://github.com/nexus382/Hollycast">Source code ↗</a><a href="https://github.com/nexus382/Hollycast/issues">Report an issue ↗</a></nav>
     </header>
-    <aside>Automatic master and dev builds are public downloads—no sign-in needed. These testing builds may be unstable. Expand a row for downloads and its changelog.</aside>
+    <aside>Automatic master and dev builds are public downloads—no sign-in needed. These testing builds may be unstable. Extract ZIP downloads before use.</aside>
     <section aria-labelledby="downloads-title">
       <div class="section-heading"><h2 id="downloads-title">Recent builds</h2><p id="updated"></p></div>
       <div class="filters">
@@ -27,7 +27,13 @@
         <label class="search">Find a build<input id="search" type="search" placeholder="Version, architecture, or commit…"></label>
       </div>
       <p id="status" role="status">Loading builds…</p>
-      <div id="builds"></div>
+      <div class="table-scroll" role="region" aria-label="Build downloads" tabindex="0">
+        <table>
+          <caption class="visually-hidden">Hollycast releases and builds with public downloads and changelogs</caption>
+          <thead><tr><th scope="col">Release / build</th><th scope="col">Branch</th><th scope="col">Date</th><th scope="col">Downloads</th><th scope="col">Changelog</th></tr></thead>
+          <tbody id="builds"></tbody>
+        </table>
+      </div>
       <noscript><p>Enable JavaScript to filter builds, or <a href="https://github.com/nexus382/Hollycast/releases">download from GitHub Releases</a>.</p></noscript>
     </section>
     <footer><p>Built from <a href="https://github.com/nexus382/Hollycast/releases">GitHub Releases</a> and successful master/dev builds. Updated automatically.</p><p>All product names and trademarks belong to their respective owners.</p></footer>

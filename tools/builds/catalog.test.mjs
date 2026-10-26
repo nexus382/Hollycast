@@ -20,7 +20,7 @@ test('platforms preserve libretro host and UWP distinctions', () => {
 });
 
 function automaticRelease(id, branch = 'dev', commit = 'a'.repeat(40)) {
-  const metadata = { branch, run: id, workflow: id, commit, date: '2026-10-26T12:00:00Z' };
+  const metadata = { branch, run: id, workflow: id, commit, title: 'Improve playback', date: '2026-10-26T12:00:00Z' };
   return {
     tag_name: `ci-${branch}-${id}`, html_url: `https://github.com/nexus382/Hollycast/releases/tag/ci-${branch}-${id}`,
     body: `<!-- hollycast-ci: ${JSON.stringify(metadata)} -->\n\nFixed playback.`,
@@ -39,6 +39,7 @@ test('public CI downloads survive artifact expiry and combine platforms by branc
   assert.equal(result.builds.length, 2);
   assert.equal(result.builds[0].files.length, 2);
   assert.equal(result.builds[0].notes, 'Fixed playback.');
+  assert.equal(result.builds[0].title, 'Improve playback');
   assert.equal(result.builds[0].branch, 'dev');
   assert.equal(result.builds[1].branch, 'master');
   assert.ok(result.builds.flatMap(build => build.files).every(file => file.url.includes('/releases/download/') && !file.expires));
