@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	aica interface
 		Handles RTC, Display mode reg && arm reset reg !
 	arm7 is handled on a separate arm plugin now
@@ -544,6 +545,9 @@ void serialize(Serializer& ser)
 	ser << aica_reg;
 
 	sgc::serialize(ser);
+	sh4_sched_serialize(ser, aica_schid);
+	sh4_sched_serialize(ser, rtc_schid);
+	sh4_sched_serialize(ser, dma_sched_id);
 }
 
 void deserialize(Deserializer& deser)
@@ -579,6 +583,11 @@ void deserialize(Deserializer& deser)
 	deser >> aica_reg;
 
 	sgc::deserialize(deser);
+	if (deser.version() >= Deserializer::V62) {
+		sh4_sched_deserialize(deser, aica_schid);
+		sh4_sched_deserialize(deser, rtc_schid);
+		sh4_sched_deserialize(deser, dma_sched_id);
+	}
 }
 
 } // namespace aica

@@ -4289,9 +4289,9 @@ void renderVideoTab()
 				"Super Widescreen\n"
 				"Uses the full width of the screen/window when the aspect ratio is wider than 16:9.\n"
 				"More likely to reveal out-of-bounds glitches than standard widescreen.\n\n"
-				"Not compatible with Integer Scaling."
+				"Not compatible with Integer Scaling or Stretch to Fill."
 			),
-			!config::Widescreen || config::IntegerScale);
+			(!config::Widescreen || config::IntegerScale || config::StretchToFill) && !config::SuperWidescreen);
 		ImGui::Unindent();
 
 		RenderGeneralToggleSettingRow(
@@ -4306,6 +4306,16 @@ void renderVideoTab()
 				"Modifies supported games to display in a 16:9 anamorphic format (game-specific patches).\n"
 				"Only some games are supported, but when it works it can be cleaner than geometry widescreen."
 			));
+
+		RenderGeneralToggleSettingRow(
+			"StretchToFill",
+			ICON_FA_EXPAND,
+			T("Stretch to Fill"),
+			T("Stretch the screen to fill the entire screen or window."),
+			static_cast<bool>(config::StretchToFill),
+			[](bool enabled) { config::StretchToFill.set(enabled); },
+			T("Stretch the screen to fill the entire screen or window."),
+			config::SuperWidescreen);
 
 		{
 			SettingsUI::PopupSliderConfig stretchCfg {};
@@ -4332,7 +4342,8 @@ void renderVideoTab()
 					"Horizontal Stretching\n"
 					"Stretches the image sideways.\n"
 					"132% is a common value for 16:9 correction, but the best value depends on your display and personal preference."
-				)
+				),
+				config::StretchToFill
 			);
 		}
 
@@ -7154,7 +7165,7 @@ void renderNetworkTab()
 		// Battle Cable Settings
 		else if (config::BattleCableEnable)
 		{
-#ifdef USE_ICE
+#if defined(USE_ICE) && defined(USE_WEBSOCKET)
 			if (ImGui::BeginTabBar("battleMode", ImGuiTabBarFlags_NoTooltip))
 			{
 				// Match Code Tab
@@ -7274,7 +7285,7 @@ void renderNetworkTab()
 						EndTwoLineSettingRow();
 						ImGui::PopID();
 					}
-#ifdef USE_ICE
+#if defined(USE_ICE) && defined(USE_WEBSOCKET)
 					ImGui::EndTabItem();
 				}
 				ImGui::EndTabBar();

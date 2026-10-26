@@ -2,8 +2,9 @@ name: Linux, macOS, Windows
 
 on:
   push:
-    branches-ignore:
-      - 'l10n_**'
+    branches:
+      - dev
+      - master
   pull_request:
 
 jobs:
@@ -36,7 +37,6 @@ jobs:
           brew list -1 | grep python | while read formula; do brew unlink $formula; brew link --overwrite $formula; done
           brew update || :
           brew install libao ldid pulseaudio
-          brew uninstall --ignore-dependencies zstd
 
           moltenvk_tag="v1.4.2"
           moltenvk_root="$RUNNER_TEMP/MoltenVK-$moltenvk_tag"

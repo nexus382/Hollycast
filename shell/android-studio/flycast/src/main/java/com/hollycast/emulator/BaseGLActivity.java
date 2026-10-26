@@ -135,9 +135,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Log.i("hollycast", "Initializing input devices");
         InputDeviceManager.getInstance().startListening(getApplicationContext());
         register(this);
-
         audioBackend = new AudioBackend();
-
         onConfigurationChanged(getResources().getConfiguration());
 
         // Predictive back gestures bypass onKeyDown(), so use the same handler as legacy back keys.
@@ -164,7 +162,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     }
 
 	// Called from native code
-    private void showAlertDialog(String message)
+    public void showAlertDialog(String message)
     {
         handler.post(new Runnable() {
             @Override

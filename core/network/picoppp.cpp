@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -403,7 +404,10 @@ private:
 		}
 		else {
 			DEBUG_LOG(NETWORK, "TcpSocket[%s] outbound %d bytes", name.c_str(), (int)len);
-			picoCallback(0);
+			// A read notification can cover more data than fits in sendbuf.
+			// Resume draining after the asynchronous write releases that buffer,
+			// even if no new packet (and therefore no new read event) arrives.
+			picoCallback(pico_sock != nullptr && pico.state != Closed ? PICO_SOCK_EV_RD : 0);
 		}
 	}
 

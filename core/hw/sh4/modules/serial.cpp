@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Dreamcast serial port.
 */
 #include <cerrno>
@@ -441,7 +442,6 @@ void SCIFSerialPort::deserialize(Deserializer& deser)
 		transmitting = false;
 	}
 	SCIF_SCBRR2 &= 0xff;	// work around previous issues with dynarecs
-	updateBaudRate();
 }
 
 struct PTYPipe : public SerialPort::Pipe

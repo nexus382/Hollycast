@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -49,6 +50,7 @@ static u8 GAPS_ram[GAPSPCI_RAM_SIZE];
 static u8 GAPS_regs[GAPSPCI_REGS_SIZE];
 static u32 dmaOffset;
 static bool interruptPending;
+static constexpr u32 MAX_ETH_FRAME_SIZE = 1514;
 
 static void setInterrupt()
 {
@@ -215,6 +217,8 @@ ssize_t qemu_send_packet(RTL8139State *s, const uint8_t *buf, int size)
 
 int bba_recv_frame(const u8 *data, u32 len)
 {
+	if (len < 6 || len > MAX_ETH_FRAME_SIZE)
+		return 0;
 	if (!rtl8139_can_receive(rtl8139device))
 		return 0;
 	rtl8139_receive(rtl8139device, data, len);

@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 option(BUILD_GMOCK "Builds the googlemock subproject" OFF)
 option(INSTALL_GTEST "Enable installation of googletest. (Projects embedding googletest may want to turn this OFF.)" OFF)
 if(WIN32)
@@ -21,6 +22,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp
         src/hw/sh4/modules/TimerTest.cpp
+        src/imgread/ChdTest.cpp
         src/imgread/CueTest.cpp
         src/imgread/GdiTest.cpp
         src/input/ButtonComboTest.cpp
