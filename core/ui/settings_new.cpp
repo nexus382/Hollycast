@@ -2536,6 +2536,10 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	ImGui::TextDisabled("%s", T("General Configuration"));
 	ImGui::Separator();
+	if (ImGui::Button(T("Ready to Play Checklist")))
+		gui_open_setup_checklist();
+	ImGui::TextWrapped("%s", T("Review game folders, firmware and controls."));
+	ImGui::Spacing();
 
 	// ========================================
 	// Language & Region Section

@@ -22,6 +22,7 @@ if(NOT LIBRETRO)
             mainui.h
             performance_overlay.cpp
             performance_overlay.h
+            readiness.h
             settings.cpp
             settings.h
             settings_about.cpp

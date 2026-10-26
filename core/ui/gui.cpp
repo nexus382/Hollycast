@@ -25,6 +25,9 @@
 #include "network/net_handshake.h"
 #include "network/ice.h"
 #include "input/gamepad_device.h"
+#include "input/keyboard_device.h"
+#include "input/mouse.h"
+#include "readiness.h"
 #include "gui_util.h"
 #include "gui_font.h"
 #include "imgread/common.h"
@@ -78,6 +81,8 @@ int insetLeft, insetRight, insetTop, insetBottom;
 std::unique_ptr<ImGuiDriver> imguiDriver;
 
 static bool inited = false;
+static bool setupChecklistRequested = false;
+static bool setupChecklistStartupChecked = false;
 GuiState gui_state = GuiState::Main;
 static bool commandLineStart;
 std::string launchOnExitUri;
@@ -87,6 +92,7 @@ static float mouseWheel;
 static bool mouseTouchscreen;
 static std::string error_msg;
 static bool error_msg_shown;
+static bool launch_error_help = false;
 static std::string osd_message;
 static u64 osd_message_end;
 static std::mutex osd_message_mutex;
@@ -1056,6 +1062,18 @@ void error_popup()
 		{
 			ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + uiScaled(400.f));
 			ImGui::TextWrapped("%s", error_msg.c_str());
+			if (launch_error_help)
+			{
+				ImGui::Spacing();
+				ImGui::TextWrapped("%s", T("Check the game image and any accompanying track files. Review firmware and controls in the setup checklist."));
+				if (ImGui::Button(T("Open Setup Checklist")))
+				{
+					error_msg.clear();
+					launch_error_help = false;
+					ImGui::CloseCurrentPopup();
+					gui_open_setup_checklist();
+				}
+			}
 			{
 				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(16, 3));
 				float currentwidth = ImGui::GetContentRegionAvail().x;
@@ -1063,6 +1081,7 @@ void error_popup()
 				if (ImGui::Button(T("OK"), ScaledVec2(80.f, 0)))
 				{
 					error_msg.clear();
+					launch_error_help = false;
 					ImGui::CloseCurrentPopup();
 				}
 			}
@@ -2663,6 +2682,85 @@ static void gui_display_onboarding()
 	select_file_popup(title, &systemdir_selected_callback);
 }
 
+void gui_open_setup_checklist()
+{
+	setupChecklistRequested = true;
+}
+
+static void gui_display_setup_checklist()
+{
+	const char* title = T("Ready to Play Checklist");
+	static bool biosChecked = false;
+	static bool bios = false;
+	static std::vector<std::string> checkedContentPaths, checkedBiosPaths;
+	if (setupChecklistRequested)
+	{
+		biosChecked = false;
+		ImGui::OpenPopup(title);
+		setupChecklistRequested = false;
+	}
+	centerNextWindow();
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	ImGui::SetNextWindowSize(ImVec2(std::min(uiScaled(460.f), display.x * 0.95f),
+		std::min(uiScaled(460.f), display.y * 0.90f)), ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_NoResize))
+	{
+		ImGui::BeginChild("##setup-checklist-content", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
+			false, ImGuiWindowFlags_DragScrolling);
+		bool controller = false, keyboard = false;
+		for (int i = 0; i < GamepadDevice::GetGamepadCount(); ++i)
+		{
+			auto device = GamepadDevice::GetGamepad(i);
+			if (!device) continue;
+			if (dynamic_cast<KeyboardDevice*>(device.get())) keyboard = true;
+			else if (!dynamic_cast<Mouse*>(device.get()) && !device->is_virtual_gamepad()) controller = true;
+		}
+#if defined(__ANDROID__) || defined(TARGET_IPHONE)
+		const bool touch = true;
+#else
+		const bool touch = false;
+#endif
+		if (!biosChecked || checkedContentPaths != config::ContentPath.get() || checkedBiosPaths != config::BiosPath.get())
+		{
+			checkedContentPaths = config::ContentPath.get();
+			checkedBiosPaths = config::BiosPath.get();
+			bios = !hostfs::findFlash("dc_", "%bios.bin;%boot.bin").empty();
+			biosChecked = true;
+		}
+		const auto checklist = readiness::evaluate({ !config::ContentPath.get().empty(), bios, controller, keyboard, touch });
+		ImGui::TextWrapped("%s", T("Setup is optional. You can return to this checklist from General settings."));
+		ImGui::Separator();
+		ImGui::Text("%s", T("1. Game folder"));
+		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
+			? T("A folder is configured. If your games are elsewhere, choose their folder below.")
+			: T("Choose a folder containing your games to add them to the library."));
+		bool addFolder = ImGui::Button(T("Choose Game Folder"));
+		addContentPath(addFolder);
+		ImGui::Spacing();
+		ImGui::Text("%s", T("2. Dreamcast firmware"));
+		ImGui::TextWrapped("%s", bios
+			? T("A file with a Dreamcast BIOS name was found; its contents have not been checked. Some games may work better with original firmware.")
+			: T("No Dreamcast BIOS was found. Hollycast can use its built-in HLE firmware for many games; some require a real BIOS. Add your own BIOS in General > Custom Paths > BIOS Folders if needed."));
+		ImGui::Spacing();
+		ImGui::Text("%s", T("3. Controls"));
+		ImGui::TextWrapped("%s", controller ? T("A controller is detected. Configure its mapping in Controls settings.")
+			: touch ? T("No controller detected. Touch controls are available; you can also connect a controller.")
+			: keyboard ? T("No controller detected. A keyboard is available; you can also connect a controller.")
+			: T("No controller detected. Connect a controller and configure it in Controls settings."));
+		ImGui::Separator();
+		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
+			? T("Next: return to the library and select a game. If none appear, check your game folder.")
+			: T("Next: choose a game folder, then select a game in the library."));
+		ImGui::EndChild();
+		if (ImGui::Button(T("Done")))
+		{
+			config::saveBool("hollycast", "SetupChecklistPending", false);
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
+	}
+}
+
 static void drawBoxartBackground()
 {
 	GameMedia game;
@@ -2885,6 +2983,11 @@ static void gui_display_loadscreen()
 			die("Game load failed");
 #endif
 			gui_stop_game(ex.what());
+			if (!commandLineStart && !error_msg.empty())
+			{
+				gui_error(Ts("Unable to start game.") + "\n\n" + ex.what());
+				launch_error_help = true;
+			}
 		}
     }
     ImGui::End();
@@ -2999,6 +3102,15 @@ void gui_display_ui()
 		die("Unknown UI state");
 		break;
 	}
+
+	if (gui_state == GuiState::Main && !setupChecklistStartupChecked)
+	{
+		setupChecklistStartupChecked = true;
+		if (config::loadBool("hollycast", "SetupChecklistPending", false))
+			gui_open_setup_checklist();
+	}
+	if (gui_state == GuiState::Main || gui_state == GuiState::Settings)
+		gui_display_setup_checklist();
 
 	finishFrame();
 
@@ -3180,6 +3292,7 @@ void reset_vmus() {
 }
 
 void gui_error(const std::string& what) {
+	launch_error_help = false;
 	error_msg = what;
 }
 
