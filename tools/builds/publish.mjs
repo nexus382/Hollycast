@@ -70,7 +70,6 @@ export async function publishRun(repository, run, api, upload, releases) {
     }
   }
   const metadata = { branch: run.head_branch, run: run.id, workflow: run.workflow_id,
-    title: run.head_commit?.message.split('\n')[0].trim() || `${run.name} #${run.run_number}`,
     commit: run.head_sha, date: run.run_started_at, ...(previousCommit ? { previous: previousCommit } : {}) };
   const source = `https://github.com/${repository}`;
   const body = `<!-- hollycast-ci: ${JSON.stringify(metadata)} -->\n\n${notes}\n\n` +

@@ -18,21 +18,28 @@
       <p class="intro">The latest releases. The next improvements. Find your build.</p>
       <nav aria-label="Project"><a href="https://github.com/nexus382/Hollycast">Source code ↗</a><a href="https://github.com/nexus382/Hollycast/issues">Report an issue ↗</a></nav>
     </header>
-    <aside>Automatic master and dev builds are public downloads—no sign-in needed. These testing builds may be unstable. Extract ZIP downloads before use.</aside>
+    <aside>
+      <strong>Which download should I choose?</strong>
+      <p>Choose <strong>Master</strong> for everyday use, or <strong>Dev</strong> to try the newest changes. Dev may have bugs. Pick the newest build in your chosen column.</p>
+      <ul>
+        <li><strong>Windows PC:</strong> Choose <strong>x64 MSVC</strong> if available, otherwise <strong>x64</strong>. Use x86 only for 32-bit Windows.</li>
+        <li><strong>Android phone or tablet:</strong> Choose the <strong>APK</strong>. If it comes in a ZIP, extract it first.</li>
+        <li><strong>Xbox:</strong> Choose <strong>Xbox / UWP x64</strong>. Xbox Developer Mode is required.</li>
+      </ul>
+      <p>Libretro downloads are for RetroArch. All downloads are public—no sign-in needed.</p>
+    </aside>
     <section aria-labelledby="downloads-title">
       <div class="section-heading"><h2 id="downloads-title">Recent builds</h2><p id="updated"></p></div>
       <div class="filters">
         <label>Channel<select id="channel" aria-label="Channel"><option value="ci">Automatic builds · master &amp; dev</option><option value="master">Master builds</option><option value="dev">Dev builds</option><option value="all">All builds &amp; releases</option><option value="stable">Stable releases</option><option value="development">Development releases</option></select></label>
-        <label>Platform<select id="platform" aria-label="Platform"><option value="all">All platforms</option><option>Android</option><option>Windows</option><option>Linux</option><option>macOS</option><option>Switch</option><option>UWP</option><option>Other</option></select></label>
-        <label class="search">Find a build<input id="search" type="search" placeholder="Version, architecture, or commit…"></label>
+        <label>Platform<select id="platform" aria-label="Platform"><option value="all">All platforms</option><option>Android</option><option>Windows</option><option>Linux</option><option>macOS</option><option>Switch</option><option value="UWP">Xbox / UWP</option><option>Other</option></select></label>
+        <label class="search">Find a build<input id="search" type="search" placeholder="Commit ID, version, or architecture…"></label>
       </div>
       <p id="status" role="status">Loading builds…</p>
-      <div class="table-scroll" role="region" aria-label="Build downloads" tabindex="0">
-        <table>
-          <caption class="visually-hidden">Hollycast releases and builds with public downloads and changelogs</caption>
-          <thead><tr><th scope="col">Release / build</th><th scope="col">Branch</th><th scope="col">Date</th><th scope="col">Downloads</th><th scope="col">Changelog</th></tr></thead>
-          <tbody id="builds"></tbody>
-        </table>
+      <div id="builds" class="build-columns">
+        <section id="master-column" aria-labelledby="master-title"><h3 id="master-title">Master builds</h3><div id="master-builds"></div></section>
+        <section id="dev-column" aria-labelledby="dev-title"><h3 id="dev-title">Dev builds</h3><div id="dev-builds"></div></section>
+        <section id="releases-column" class="tagged-releases" aria-labelledby="releases-title" hidden><h3 id="releases-title">Tagged releases</h3><div id="release-builds"></div></section>
       </div>
       <noscript><p>Enable JavaScript to filter builds, or <a href="https://github.com/nexus382/Hollycast/releases">download from GitHub Releases</a>.</p></noscript>
     </section>
