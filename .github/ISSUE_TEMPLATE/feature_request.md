@@ -1,20 +1,31 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: Suggest an idea for Hollycast
 title: ''
 labels: enhancement
 assignees: ''
-
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+## Problem or need
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+<!-- What would you like to do, or what problem are you experiencing? -->
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+## Proposed solution
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+<!-- Describe the feature or change you would like. -->
+
+## Alternatives
+
+<!-- What other solutions or workarounds have you considered, if any? -->
+
+## Platforms
+
+<!-- Which platforms would benefit, if relevant? -->
+
+## Related Flycast feature or discussion
+
+<!-- If you know of a relevant Flycast feature or upstream discussion, link it here. -->
+
+## Additional context
+
+<!-- Add any other details, screenshots, or examples that may help. -->
