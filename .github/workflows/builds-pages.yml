@@ -1,0 +1,68 @@
+# Portions Copyright 2026 The Hollycast Authors
+name: Build downloads page
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/builds/**'
+      - 'tools/builds/**'
+      - '.github/workflows/builds-pages.yml'
+  release:
+    types: [published, edited, deleted]
+  workflow_run:
+    workflows: [Android, 'Linux, macOS, Windows', 'Nintendo Switch', 'Xbox, UWP', BSD, 'Linux ARM64 libretro']
+    types: [completed]
+    branches: [master, dev]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: builds-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'nexus382/Hollycast'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      # Always use trusted default-branch code, never the workflow_run head or artifacts.
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+          persist-credentials: false
+          sparse-checkout: |
+            docs/builds
+            tools/builds
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node --test tools/builds/catalog.test.mjs
+      - name: Generate build catalog
+        run: node tools/builds/catalog.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/builds
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
