@@ -1,7 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCatalog, ciMetadata, platformFor, releaseBuild } from './catalog.mjs';
+import { buildCatalog, ciMetadata, platformFor, releaseBuild, standaloneDownloads } from './catalog.mjs';
 
 test('historical development tags remain development releases', () => {
   for (const tag of ['v0.1.1-dev.1', 'v0.1.0-beta.1.dev.1', 'v2.0-rc1']) {
@@ -37,7 +37,7 @@ test('public CI downloads survive artifact expiry and combine platforms by branc
   };
   const result = await buildCatalog('nexus382/Hollycast', api, new Date('2028-01-01T00:00:00Z'));
   assert.equal(result.builds.length, 2);
-  assert.equal(result.builds[0].files.length, 2);
+  assert.equal(result.builds[0].files.length, 1);
   assert.equal(result.builds[0].notes, 'Fixed playback.');
   assert.equal(result.builds[0].branch, 'dev');
   assert.equal(result.builds[1].branch, 'master');
@@ -66,4 +66,25 @@ test('release pagination preserves ordinary releases behind automatic builds', a
 
 test('API failures stop publication instead of replacing a working catalog', async () => {
   await assert.rejects(buildCatalog('nexus382/Hollycast', async () => { throw new Error('API unavailable'); }), /API unavailable/);
+});
+
+test('downloads match Flycast standalone platform variants, one per platform', () => {
+  const names = ['Hollycast-v1-windows-msvc-x64.zip', 'Hollycast-v1-windows-libretro-x64.zip',
+    'Hollycast-v1-windows-x64.zip', 'Hollycast-v1-windows-x64.zip', 'Hollycast-v1-android.apk',
+    'Hollycast-v1-android.aab', 'Hollycast-v1-linux-x64.AppImage', 'Hollycast-v1-linux-libretro-arm64.zip',
+    'Hollycast-v1-macos-universal.zip', 'Hollycast-v1-switch.nro', 'Hollycast-v1-switch-libretro.zip',
+    'Hollycast-v1-uwp-arm64.appx', 'Hollycast-v1-uwp-x86.appx', 'Hollycast-v1-uwp-x64.appx'];
+  const selected = standaloneDownloads(names.map(name => ({ name, platform: platformFor(name) })));
+  assert.deepEqual(selected.map(file => file.platform), ['Android', 'Windows', 'Linux', 'macOS', 'Switch', 'UWP']);
+  assert.equal(selected.find(file => file.platform === 'Windows').name, 'Hollycast-v1-windows-x64.zip');
+  assert.equal(selected.find(file => file.platform === 'UWP').name, 'Hollycast-v1-uwp-x64.appx');
+  assert.ok(selected.every(file => !/libretro|msvc|\.aab/i.test(file.name)));
+});
+
+test('legacy artifact wrappers retain the matching variant without falling back to MSVC', () => {
+  const names = ['1-Hollycast-release.apk.zip', '2-Hollycast-x86_64-w64-mingw32.zip.zip',
+    '3-Hollycast-x86_64-pc-linux-gnu.zip', '4-Hollycast-apple-darwin.zip.zip',
+    '5-Hollycast-switch-standalone.zip', '6-flycast-uwp-x64.zip'];
+  assert.equal(standaloneDownloads(names.map(name => ({ name, platform: platformFor(name) }))).length, 6);
+  assert.deepEqual(standaloneDownloads([{ name: 'Hollycast-windows-msvc-x64.zip', platform: 'Windows' }]), []);
 });

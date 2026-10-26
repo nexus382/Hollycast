@@ -23,29 +23,14 @@ function link(text, url) {
   return node;
 }
 
-function fileList(files, showPlatform = true) {
+function fileList(files) {
   const links = element('div', '', 'downloads');
   for (const file of files) {
-    const name = file.name.toLowerCase();
-    let label = '';
-    if (file.support) label = file.name;
-    else if (showPlatform) label = file.platform === 'UWP' ? 'Xbox / UWP' : file.platform;
-    if (!file.support) {
-      if (/arm64|aarch64/.test(name)) label += ' ARM64';
-      else if (/x86_64|x64|amd64/.test(name)) label += ' x64';
-      else if (/i686|x86|win32/.test(name)) label += ' x86';
-      else if (/universal/.test(name)) label += ' Universal';
-      if (name.includes('.apk')) label += ' APK';
-      else if (name.includes('.aab')) label += ' AAB';
-      else if (name.includes('.appimage')) label += ' AppImage';
-      if (name.includes('libretro')) label += ' Libretro';
-      if (name.includes('msvc')) label += ' MSVC';
-      else if (name.includes('mingw')) label += ' MinGW';
-    }
-    const download = link(label.trim() || 'Download', file.url);
+    const download = link(file.support ? file.name : 'Download', file.url);
     const size = file.size < 1048576 ? `${Math.ceil(file.size / 1024)} KB` : `${(file.size / 1048576).toFixed(1)} MB`;
     download.title = `${file.name} · ${size}`;
     links.append(download);
+    if (!file.support) links.append(element('span', size, 'file-size'));
   }
   return links;
 }
@@ -78,16 +63,12 @@ function render() {
     const content = element('div', '', 'build-content');
     if (build.channel === 'ci') content.append(element('p', 'Public ZIP archives. Extract before use.', 'meta'));
     const downloads = element('div', '', 'download-columns');
-    for (const device of ['Windows', 'Android', 'UWP', 'Linux', 'macOS', 'Switch', 'Other']) {
+    for (const [device, label] of [['Android', 'Android'], ['Windows', 'Windows x64'], ['Linux', 'Linux AppImage'],
+      ['macOS', 'macOS'], ['Switch', 'Switch'], ['UWP', 'Xbox One']]) {
       const deviceFiles = files.filter(file => !file.support && file.platform === device);
-      if (!deviceFiles.length) continue;
-      const standalone = deviceFiles.filter(file => !file.name.toLowerCase().includes('libretro'));
-      const primary = standalone.find(file => /x64|x86_64|amd64/i.test(file.name) && /msvc/i.test(file.name)) ||
-        standalone.find(file => /x64|x86_64|amd64/i.test(file.name)) || standalone[0];
       const column = element('section', '', 'download-platform');
-      column.append(element('h4', device === 'UWP' ? 'Xbox / UWP' : device));
-      if (device === 'UWP') column.append(element('p', 'Xbox uses x64.', 'meta'));
-      column.append(fileList(primary ? [primary, ...deviceFiles.filter(file => file !== primary)] : deviceFiles, false));
+      column.append(element('h4', label));
+      column.append(deviceFiles.length ? fileList(deviceFiles) : element('p', 'Unavailable', 'meta'));
       downloads.append(column);
     }
     content.append(downloads);

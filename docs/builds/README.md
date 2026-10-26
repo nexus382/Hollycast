@@ -13,6 +13,17 @@ the page explains the Windows, Android and Xbox choices. Visitors do not need a
 GitHub account.
 Ordinary stable and development releases remain available through the filters.
 
+The six download columns match Flycast's CI page: Android APK, standalone Windows
+x64 MinGW ZIP, Linux AppImage, macOS app ZIP, standalone Switch NRO and Xbox UWP
+x64. MSVC, 32-bit, ARM64 UWP, AAB and libretro alternatives are not substituted.
+All available platforms for the same branch and commit are grouped together;
+missing platforms stay marked unavailable rather than borrowing another commit.
+Actions artifact packages may add an outer ZIP around the matching build. Additional
+formats remain available on the linked GitHub release.
+
+Reference: [Flycast's CI page implementation](https://github.com/flyinghead/flycast-builds/blob/master/builds.js)
+and [its desktop build matrix](https://github.com/flyinghead/flycast/blob/master/.github/workflows/c-cpp.yml).
+
 The publisher copies ZIP artifacts from successful platform push workflows into
 automatic prereleases tagged `ci-<branch>-<run-id>`, targeting the exact source
 commit. It never extracts or executes artifacts. Archives retain GitHub's artifact
