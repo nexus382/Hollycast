@@ -39,6 +39,8 @@ inline void limitStickToCircle(float& x, float& y)
 	}
 }
 
+// Only mobile builds provide the on-screen control state used by this device.
+#if defined(__ANDROID__) || defined(TARGET_IPHONE)
 class VirtualGamepad : public GamepadDevice
 {
 public:
@@ -147,3 +149,4 @@ private:
 	u32 buttonState = 0;
 	bool previousFastForward = false;
 };
+#endif
