@@ -118,7 +118,7 @@ struct Disc
 	DiscType type = CdRom;
 	std::string catalog;
 
-	u32 ReadSectors(u32 FAD, u32 count, u8 *dst, u32 fmt, bool stopOnMiss = false, LoadProgress *progress = nullptr);
+	u32 ReadSectors(u32 FAD, u32 count, u8 *dst, u32 fmt, bool stopOnMiss = false, LoadProgress *progress = nullptr, bool *readError = nullptr);
 
 	virtual ~Disc() 
 	{

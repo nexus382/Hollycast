@@ -1,148 +1,205 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Hollycast
 
 ![Hollycast](banner.png)
 
 <sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>
 
-Hollycast is a multi-platform Sega Dreamcast, Naomi, Naomi 2, and Atomiswave emulator, derived from [Flycast](https://github.com/flyinghead/flycast), the open-source Sega Dreamcast emulator.
+[![Latest release](https://img.shields.io/github/v/release/nexus382/Hollycast?label=release)](https://github.com/nexus382/Hollycast/releases/latest)
+[![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pYVqGqvFJW)
+[![Website](https://img.shields.io/badge/web-hollycast.org-orange)](https://hollycast.org)
 
-Our mission is simple: follow upstream core emulation code while delivering a modern UI, more front-end features, and power-user controls.
+**Hollycast is a multi-platform Sega Dreamcast, Naomi, Naomi 2, and Atomiswave emulator.** It is built on [Flycast](https://github.com/flyinghead/flycast): it follows the upstream emulation core and adds a modern interface, more front-end features, and controls for power users.
 
-## Mission & Philosophy
+- [Download](#download)
+- [What Hollycast adds](#what-hollycast-adds)
+- [Why a fork?](#why-a-fork)
+- [Contributing](#contributing)
+- [Building from source](#building-from-source)
+- [Debugging](#debugging)
+- [Support the project](#support-the-project)
+- [License and credits](#license-and-credits)
 
-Hollycast tracks the Flycast core while providing a home for features and experiments that fall outside the upstream scope. The main reasons for this fork are to:
+## Download
 
-- Unlock functionality: We integrate community-requested features and experimental changes that Flycast chooses not to merge.
-- Developer freedom: We provide a stable sandbox for passion features and modernizations that keep the emulator evolving.
+Prebuilt binaries for every platform are on the **[latest release page](https://github.com/nexus382/Hollycast/releases/latest)**. Each release includes a `SHA256SUMS.txt` file so you can check your download.
 
-## Technical Standards
+| Platform | Release file |
+| --- | --- |
+| Windows (x64) | `Hollycast-<version>-windows-x64.zip`, or the MSVC builds `windows-msvc-x64.zip` / `windows-msvc-x86.zip` |
+| macOS (Intel and Apple Silicon) | `Hollycast-<version>-macos-universal.zip` |
+| Linux (x64) | `Hollycast-<version>-linux-x64.AppImage` |
+| Android | `Hollycast-<version>-android.apk` |
+| Xbox / UWP | `Hollycast-<version>-uwp-x64.appx` (also `x86` and `arm64`). Install steps are in `UWP-INSTALL.txt` on the release page. |
+| Nintendo Switch | `Hollycast-<version>-switch.nro` |
+| RetroArch (libretro core) | `windows-libretro-x64.zip`, `linux-libretro-x64.zip`, `linux-libretro-arm64.zip`, `switch-libretro.zip` |
 
-We are committed to maintaining the high bar for speed and precision set by the Flycast core.
+Releases tagged `-dev` are built from the `dev` branch and contain the newest, less-tested changes. Other releases are built from `master`.
 
-- Performance parity: We aim to match or exceed the performance benchmarks of the current Flycast core.
-- Verified accuracy: We use the core codebase's internal test suite alongside our own growing collection of tests to prevent regressions.
-- Core integrity: New features are built on a rock-solid foundation, ensuring that fun never comes at the cost of stability.
+## What Hollycast adds
 
-## Key Differences
+- **Modern interface.** A redesigned UI with a game library that shows box art and VMU icons.
+- **Ready to play.** Sensible defaults let new players start a game straight away, and the advanced settings are still there for power users.
+- **Performance overlay.** A configurable on-screen display with frame timing plus RAM and texture VRAM usage.
+- **Real hardware and VMU support.** [DreamLink](docs/DreamLink.md) connects Hollycast to DreamConn and DreamPicoPort controllers and to the [DreamPotato](docs/DreamPotato%20Integrated%20Mode.md) VMU emulator.
+- **Editable virtual controller.** The on-screen touch controls can be rearranged and resized on mobile.
+- **Frequent quality-of-life updates.** Old components are kept up to date, and new features come from requests by people who play every day.
 
-- Modern interface: A reimagined UI designed for clarity.
-- Out-of-the-box optimization: Sane defaults allow new users to grab and go, while keeping advanced controls accessible for power users.
-- Quality of life: Frequent updates to aged components and new features requested specifically by the daily-player community.
-- Pro gamer ready: Already playing many titles better than original hardware, you can aim for a vanilla experience or enjoy the extra enhancements that help you get the most out of your sessions.
-- Continued development updates: As Hollycast grows, bringing in updates from Flycast will get harder. The goal is to carry forward the performance improvements, enhancements, and features that fit Hollycast without introducing regressions.
+Everything Flycast offers is still included: the full Dreamcast, Naomi, Naomi 2 and Atomiswave core, RetroAchievements, upscaling and widescreen options, and the libretro core.
 
-## Compatibility & Contribution
+## Why a fork?
 
-Hollycast aims to support every platform and release offered by Flycast. If Flycast can do it, Hollycast will too, ideally with a newer looking and more feature rich environment while keeping the performance you have come to know and love from Flyinghead's hard work and dedication on Flycast.
+Hollycast follows the Flycast core and is a home for features and experiments that are outside Flycast's scope:
 
-> **Note:** Hollycast is under active development. If you'd like to contribute, please [join our Discord](https://discord.gg/pYVqGqvFJW) and open a Feature Request to discuss your plans before submitting code.
+- **More features.** It includes features the community asked for and experimental changes that Flycast chose not to merge.
+- **Room to experiment.** It gives developers a stable place to build features they care about and to modernize the emulator.
 
-### Build Prerequisites for Windows
+Its technical standards are the same as Flycast's:
 
-1. Install Visual Studio with MSVC and C++ CMake tools (under `Desktop development with C++` within the installer)
-2. Add the location of cmake.exe to your PATH environment variable (ex: C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\)
-3. Enable `Developer Mode` under System->Advanced within your Windows Settings in order to allow symlink creation without needing administrative privileges. **Warning:** this is generally considered to be a [vulnerability on Windows](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/create-symbolic-links#vulnerability), and it is currently only necessary to build for Android.
+- **Performance parity.** The aim is to match or beat the speed of the current Flycast core.
+- **Verified accuracy.** Flycast's own test suite runs alongside a growing set of Hollycast tests to catch regressions.
+- **Core integrity.** New features are built so that they don't make the core less stable.
 
-### Build Prerequisites for Linux
+Hollycast aims to support every platform and release that Flycast supports. Merging Flycast updates gets harder as the two projects drift apart, so changes from upstream are brought in when they fit Hollycast and don't cause regressions.
 
-Run the following to install all prerequisites.
+## Contributing
 
-```
+Hollycast is under active development. If you'd like to contribute, please [join our Discord](https://discord.gg/pYVqGqvFJW) and open a feature request to discuss your plans **before** you write code.
+
+Bugs can be reported with the [bug report template](https://github.com/nexus382/Hollycast/issues/new?template=bug_report.md).
+
+## Building from source
+
+### 1. Install prerequisites
+
+<details>
+<summary><b>Windows</b></summary>
+
+1. Install Visual Studio with MSVC and the C++ CMake tools. They are in the `Desktop development with C++` workload of the installer.
+2. Add the folder that contains `cmake.exe` to your `PATH`, for example `C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\`.
+3. *Android builds only:* turn on `Developer Mode` under **System > Advanced** in Windows Settings so that symlinks can be created without administrator rights. **Warning:** this setting is generally considered a [vulnerability on Windows](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/create-symbolic-links#vulnerability).
+
+</details>
+
+<details>
+<summary><b>Linux (Debian / Ubuntu)</b></summary>
+
+```bash
 sudo apt-get update
 sudo apt-get -y install git cmake gcc g++
 sudo apt-get -y install ccache libao-dev libasound2-dev libevdev-dev libgl1-mesa-dev liblua5.3-dev libminiupnpc-dev libpulse-dev libsdl2-dev libudev-dev libzip-dev ninja-build libcurl4-openssl-dev libcdio-dev libfuse2 locales
-sudo apt-get -y install libwayland-dev libdecor-0-dev libaudio-dev libjack-dev libsndio-dev libsamplerate0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev
+sudo apt-get -y install libwayland-dev libdecor-0-dev libaudio-dev libjack-dev libsndio-dev libsamplerate0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev fcitx-libs-dev
 ```
 
-### Build Prerequisites for macOS
+</details>
 
-1. Install Xcode application from app store
-2. Accept licensing for Xcode and do first launch initialization
-```bash
-sudo xcodebuild -runFirstLaunch
-```
-3. Execute:
-```bash
-xcodebuild -downloadComponent MetalToolchain
-```
-4. Install Homebrew
-5. Execute:
-```bash
-brew install cmake
-brew install molten-vk
-```
+<details>
+<summary><b>macOS</b></summary>
 
-### Repository Setup
+1. Install Xcode from the App Store, accept its license, and run its first-launch setup:
+   ```bash
+   sudo xcodebuild -runFirstLaunch
+   ```
+2. Download the Metal toolchain:
+   ```bash
+   xcodebuild -downloadComponent MetalToolchain
+   ```
+3. Install [Homebrew](https://brew.sh), then install CMake and MoltenVK:
+   ```bash
+   brew install cmake molten-vk
+   ```
 
-Run the following to pull down the repository and all submodules.
+</details>
+
+### 2. Get the source
 
 ```bash
-# Clone repo
-git clone https://github.com/OrangeFox86/Hollycast.git
+git clone https://github.com/nexus382/Hollycast.git
 cd Hollycast
 
-# Ensure symlinks are enabled for this project
+# Symlinks must be enabled for this project
 git config core.symlinks true
 
-# Update submodules (this needs to be manually performed when submodule versions are updated)
+# Fetch the submodules. Run this again whenever submodule versions change.
 git submodule update --init --recursive --force
 ```
 
-### Build Instructions for Windows/Linux/macOS
+`master` is the stable branch. New work lands on `dev` first (`git checkout dev`).
 
-The following assumes prerequisites are already installed and working directory is Hollycast.
+### 3. Build for Windows, Linux or macOS
+
+Run these commands from the `Hollycast` folder:
 
 ```bash
-# Find the desired CMake preset for the current platform
+# List the presets available on this platform
 cmake --list-presets
 
-# Run CMake configure. Rerunning this is usually only necessary when certain files like CMakeLists.txt change.
+# Configure. You usually only need to rerun this when files such as CMakeLists.txt change.
 cmake --preset <PRESET>
 
-# Run the build. Using the same preset name as for the configure will generally work.
+# Build, using the same preset name
 cmake --build --preset <PRESET>
 ```
 
-### Development Instructions for Android
+| Preset | Builds |
+| --- | --- |
+| `windows`, `linux`, `darwin` | Optimized build |
+| `windows-debug`, `linux-debug`, `darwin-debug` | Debug build |
+| `windows-unit-tests-debug`, `linux-unit-tests-debug` | Debug build with the unit tests. Running the resulting `Hollycast` executable runs the tests. |
 
-- Install [Android Studio](https://developer.android.com/studio/install).
-- Open directory `shell/android-studio` in Android Studio.
-- The Hollycast project should be picked up automatically, with "Android" sidebar on the left, and devices and run configurations in the top right.
-- `debug` build variant is used by default. If you want to build in release mode for better performance, then open **View > Tool Windows > Build Variants**, and select Active Build Variant `developerRelease`.
-   - Note that `release` variant does production code signing. It's only intended for store publishing.
+> **Apple Silicon:** the `darwin` preset looks for MoltenVK in `/usr/local/lib`, but Homebrew on Apple Silicon installs it under `/opt/homebrew`. Pass the path when you configure:
+> ```bash
+> cmake --preset darwin -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
+> ```
 
-### Build Instructions for Android
+### Android
 
-Ensure Android Studio is installed, and then execute the following.
+**Develop in Android Studio**
+
+1. Install [Android Studio](https://developer.android.com/studio/install).
+2. Open the `shell/android-studio` folder in Android Studio. The Hollycast project loads automatically, with the "Android" sidebar on the left and the devices and run configurations at the top right.
+3. The `debug` build variant is used by default. For a faster release build, open **View > Tool Windows > Build Variants** and set the active build variant to `developerRelease`.
+   - The `release` variant does production code signing and is only meant for store publishing.
+
+**Build from the command line**
 
 ```bash
-# Your working directory must be changed to shell/android-studio before building.
+# You must build from shell/android-studio
 cd shell/android-studio
 
-# Run the following to build for debug.
+# Debug build
 ./gradlew assembleDebug bundleDebug --parallel
 ```
 
-If the build gets stuck or encounters and error, run the following before trying again.
+If the build hangs or fails, run these commands and then try again:
 
 ```bash
-# Terminate all background Gradle Daemon processes started by gradle.
+# Stop all background Gradle daemons
 ./gradlew --stop
 
-# Remove all artifacts of previous build.
+# Remove all output from previous builds
 ./gradlew clean
 ```
 
-### Segmentation fault (SIGSEGV) / Access Violation (AV) handling
+## Debugging
 
-When debugging Hollycast, you may notice the debugger frequently breaking on memory access violations when running games. This is normal and expected. This is related to how the emulator's dynamic recompiler works and doesn't reflect any actual memory safety bug.
+### Segmentation faults (SIGSEGV) and access violations
 
-It's recommended you adjust your debugger or exception settings as needed for the current platform, in order to prevent disruptive breaks during debugging.
+When you debug Hollycast, the debugger will often stop on memory access violations while a game is running. This is normal and expected. The emulator's dynamic recompiler causes these on purpose, and they don't mean there is a memory safety bug. See [Dynarec Architecture](docs/Dynarec%20Architecture.md) for details.
 
-For example, with LLDB, pass the following startup command:
-- `process handle -s false -n false -p true SIGSEGV`
+Set your debugger to pass these signals through so they don't interrupt you:
 
-For Android, if you hit the breakpoint for `art_sigsegv_fault` in disassembly, delete the breakpoint and resume debugging.
+- **LLDB:** use the startup command `process handle -s false -n false -p true SIGSEGV`
+- **Android:** if the debugger stops at the `art_sigsegv_fault` breakpoint in the disassembly, delete that breakpoint and resume.
+- **VS Code C/C++ on Windows:** use the filter string `!0xC0000005` on the "All Exceptions" breakpoint.
 
-For VS Code C/C++ on Windows, use the following filter string on the "All Exceptions" breakpoint:
-- `!0xC0000005`
+## Support the project
+
+If you enjoy Hollycast, you can support its development on [Ko-fi](https://ko-fi.com/romrevival) or [PayPal](https://paypal.me/AnthonyScordino).
+
+## License and credits
+
+Hollycast is licensed under the [GNU General Public License v2.0](LICENSE).
+
+Hollycast exists because of [flyinghead](https://github.com/flyinghead) and the [Flycast](https://github.com/flyinghead/flycast) contributors, whose work on the core makes this project possible. Thanks as well to the authors of the libraries in [`core/deps`](core/deps) and to everyone who translates Hollycast on Crowdin.

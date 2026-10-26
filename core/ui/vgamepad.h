@@ -1,5 +1,6 @@
 /*
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of reicast.
 
@@ -68,7 +69,19 @@ enum Element
 	Elem_Btn5,
 	Elem_ServiceMode,
 	Elem_InsertCard,
+	// Append individual controls to preserve the existing native gesture IDs.
+	Elem_DPadLeft,
+	Elem_DPadUp,
+	Elem_DPadRight,
+	Elem_DPadDown,
+	Elem_ButtonX,
+	Elem_ButtonY,
+	Elem_ButtonB,
+	Elem_ButtonA,
+	Elem_Count,
 };
+
+constexpr int MAX_IDLE_TIMEOUT_SECONDS = 30;
 
 class ImguiVGamepadTexture : public ImguiTexture
 {
@@ -82,9 +95,9 @@ void show();
 void hide();
 void draw();
 void startEditing();
+void stopEditing(bool canceled);
 void pauseEditing();
 void setEditMode(bool editing);
-void resetEditing();
 void displayCommands();
 void loadImage(const std::string& path);
 void startGame();
@@ -106,6 +119,7 @@ static inline void show() {}
 static inline void hide() {}
 static inline void draw() {}
 static inline void startEditing() {}
+static inline void stopEditing(bool canceled) {}
 static inline void pauseEditing() {}
 static inline void displayCommands() {}
 static inline void applyUiScale() {}

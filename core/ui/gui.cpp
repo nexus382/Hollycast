@@ -508,13 +508,6 @@ void gui_open_settings()
 			chat.toggle();
 		}
 	}
-	else if (gui_state == GuiState::VJoyEdit)
-	{
-		vgamepad::pauseEditing();
-		// iOS: force a touch up event to make up for the one eaten by the tap gesture recognizer
-		mouseButtons &= ~1;
-		gui_setState(GuiState::VJoyEditCommands);
-	}
 	else if (gui_state == GuiState::Loading)
 	{
 		gameLoader.cancel();
@@ -903,6 +896,7 @@ static void gui_display_commands()
 		GameMedia game;
 		game.path = settings.content.path;
 		game.fileName = settings.content.fileName;
+		game.arcade = settings.platform.isArcade();
 		GameBoxart art = boxart.getBoxart(game);
 		ImguiFileTexture tex(art.boxartPath);
 		// Use a fallback image when artwork is unavailable
@@ -1131,7 +1125,7 @@ static void contentpath_warning_popup()
             	config::ContentPath.get().clear();
                 config::ContentPath.get().push_back(selection);
             }
-            scanner.refresh();
+            gui_refresh_files();
             return true;
         });
     }
@@ -2668,6 +2662,7 @@ static void drawBoxartBackground()
 	GameMedia game;
 	game.path = settings.content.path;
 	game.fileName = settings.content.fileName;
+	game.arcade = settings.platform.isArcade();
 	GameBoxart art = boxart.getBoxart(game);
 	ImguiFileTexture tex(art.boxartPath);
 	ImDrawList *dl = ImGui::GetBackgroundDrawList();
@@ -2971,9 +2966,6 @@ void gui_display_ui()
 	case GuiState::Onboarding:
 		gui_display_onboarding();
 		break;
-	case GuiState::VJoyEdit:
-		vgamepad::draw();
-		break;
 	case GuiState::VJoyEditCommands:
 		vgamepad::displayCommands();
 		break;
@@ -3169,7 +3161,9 @@ void fatal_error(const char* text, ...)
 
 extern bool subfolders_read;
 
-void gui_refresh_files() {
+void gui_refresh_files(bool invalidateArtwork) {
+	if (invalidateArtwork)
+		boxart.invalidateOfflineArtwork();
 	scanner.refresh();
 	subfolders_read = false;
 }
@@ -3301,6 +3295,9 @@ void gui_setState(GuiState newState)
 {
 	if (gui_state != newState)
 	{
+		if (gui_state == GuiState::VJoyEditCommands)
+			// Menu navigation cancels unsaved edits; Done has already ended the session.
+			vgamepad::stopEditing(true);
 		if (newState == GuiState::Main && gui_state == GuiState::Closed)
 			clearVmuIconLookups();
 		resetLibraryLongPress();
@@ -3323,12 +3320,14 @@ std::string gui_getCurGameBoxartUrl()
 	GameMedia game;
 	game.fileName = settings.content.fileName;
 	game.path = settings.content.path;
+	game.arcade = settings.platform.isArcade();
 	GameBoxart art = boxart.getBoxart(game);
 	return art.boxartUrl;
 }
 
 void gui_refresh_custom_boxart(bool force)
 {
+	boxart.invalidateOfflineArtwork();
 	boxart.refreshLibraryPlaytimeDatabase();
 	boxart.refreshCustomBoxartIndex(force);
 }
