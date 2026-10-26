@@ -23,6 +23,8 @@ if(NOT LIBRETRO)
             performance_overlay.cpp
             performance_overlay.h
             readiness.h
+            setup_checklist_lifecycle.h
+            setup_checklist_popup.h
             settings.cpp
             settings.h
             settings_about.cpp

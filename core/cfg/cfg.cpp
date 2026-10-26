@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "cfg.h"
 #include "ini.h"
 #include "stdclass.h"

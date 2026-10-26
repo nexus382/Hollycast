@@ -28,6 +28,7 @@
 #include "input/keyboard_device.h"
 #include "input/mouse.h"
 #include "readiness.h"
+#include "setup_checklist_popup.h"
 #include "gui_util.h"
 #include "gui_font.h"
 #include "imgread/common.h"
@@ -81,8 +82,7 @@ int insetLeft, insetRight, insetTop, insetBottom;
 std::unique_ptr<ImGuiDriver> imguiDriver;
 
 static bool inited = false;
-static bool setupChecklistRequested = false;
-static bool setupChecklistStartupChecked = false;
+static SetupChecklistLifecycle setupChecklist;
 GuiState gui_state = GuiState::Main;
 static bool commandLineStart;
 std::string launchOnExitUri;
@@ -548,6 +548,9 @@ void gui_start_game(const std::string& path)
 	if (gui_state != GuiState::Main && gui_state != GuiState::Closed && gui_state != GuiState::Commands
 			&& gui_state != GuiState::Pause)
 		return;
+	setupChecklist.gameLaunchStarted(config::loadBool("hollycast", "SetupChecklistPending", false), [](bool pending) {
+		config::saveBool("hollycast", "SetupChecklistPending", pending);
+	});
 	showExitSaveDialog = false;
 	showAutoLoadDialog = false;
 	emu.unloadGame();
@@ -2684,7 +2687,7 @@ static void gui_display_onboarding()
 
 void gui_open_setup_checklist()
 {
-	setupChecklistRequested = true;
+	setupChecklist.requestManual();
 }
 
 static void gui_display_setup_checklist()
@@ -2693,18 +2696,20 @@ static void gui_display_setup_checklist()
 	static bool biosChecked = false;
 	static bool bios = false;
 	static std::vector<std::string> checkedContentPaths, checkedBiosPaths;
-	if (setupChecklistRequested)
-	{
+	if (openSetupChecklistIfUnblocked(setupChecklist, title))
 		biosChecked = false;
-		ImGui::OpenPopup(title);
-		setupChecklistRequested = false;
-	}
 	centerNextWindow();
 	const ImVec2 display = ImGui::GetIO().DisplaySize;
 	ImGui::SetNextWindowSize(ImVec2(std::min(uiScaled(460.f), display.x * 0.95f),
 		std::min(uiScaled(460.f), display.y * 0.90f)), ImGuiCond_Appearing);
 	if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_NoResize))
 	{
+		if (setupChecklist.takeAutomaticCloseRequest())
+		{
+			ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+			return;
+		}
 		ImGui::BeginChild("##setup-checklist-content", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
 			false, ImGuiWindowFlags_DragScrolling);
 		bool controller = false, keyboard = false;
@@ -2754,7 +2759,9 @@ static void gui_display_setup_checklist()
 		ImGui::EndChild();
 		if (ImGui::Button(T("Done")))
 		{
-			config::saveBool("hollycast", "SetupChecklistPending", false);
+			setupChecklist.dismissed([](bool pending) {
+				config::saveBool("hollycast", "SetupChecklistPending", pending);
+			});
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
@@ -3103,12 +3110,8 @@ void gui_display_ui()
 		break;
 	}
 
-	if (gui_state == GuiState::Main && !setupChecklistStartupChecked)
-	{
-		setupChecklistStartupChecked = true;
-		if (config::loadBool("hollycast", "SetupChecklistPending", false))
-			gui_open_setup_checklist();
-	}
+	if (gui_state == GuiState::Main)
+		setupChecklist.libraryReady(config::loadBool("hollycast", "SetupChecklistPending", false));
 	if (gui_state == GuiState::Main || gui_state == GuiState::Settings)
 		gui_display_setup_checklist();
 

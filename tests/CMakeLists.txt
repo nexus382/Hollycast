@@ -33,6 +33,11 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/SDLControllerMappingTest.cpp
         src/oslib/I18nTest.cpp
         src/ui/ReadinessTest.cpp
+        src/ui/SetupChecklistLifecycleTest.cpp
         src/util/PeriodicThreadTest.cpp
         src/util/TsQueueTest.cpp
         src/util/WorkerThreadTest.cpp)
+
+if(NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp)
+endif()
