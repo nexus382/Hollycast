@@ -11,7 +11,8 @@
     "The CHD reader has no Hollycast changes. Its content matches the final upstream snapshot because the original commit predates an earlier upstream pregap fix; this avoids retaining both pregap implementations.",
     "Box-art behavior remains intentionally excluded. The previously partial logging commit is now complete: warning fixes were imported earlier, and the upstream INFO default was applied on 2026-10-17.",
     "Existing Hollycast fast-forward audio, command-line guards, render queue and OSD behavior are retained.",
-    "The save-state format is now upstream V62 after applying the GD-ROM timer and regression-fix pair on 2026-10-17. Supported older states remain readable; older V61 builds reject newly written V62 states. Hollycast DreamLink serialization is preserved.",
+    "The GD-ROM timer import originally used upstream V62. A follow-up saves the pending transition target in V63, which older V62 builds reject. Supported older states remain readable; V62 states with a pending transition settle on pause because they did not save the target. Hollycast DreamLink serialization is preserved.",
+    "Follow-up fixes also parse empty STUN responses safely and allow an active Super Widescreen setting to be turned off when its prerequisites are disabled.",
     "Hollycast copyright headers are retained or added. Fixture generation preserves the CUE attribution comments.",
     "Original upstream sector-conversion formatting and CHD test implementation are retained. Earlier optional cleanup departures were removed by the 2026-10-17 fidelity-alignment batch."
   ],

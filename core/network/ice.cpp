@@ -44,7 +44,7 @@ STUNConfig STUNConfig::get()
 	{
 		using namespace nlohmann;
 		try {
-			json v = json::parse((const char *)&content[0], (const char *)&content.back() + 1);
+			json v = json::parse(std::string(content.begin(), content.end()));
 			cfg.stun_host = v.at("stun_host").get<std::string>();
 			cfg.stun_port = v.at("stun_port").get<u16>();
 			cfg.turn_host = v.at("turn_host").get<std::string>();

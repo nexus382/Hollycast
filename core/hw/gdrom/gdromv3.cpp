@@ -1443,6 +1443,7 @@ void serialize(Serializer& ser)
 	ser << ByteCount;
 	sh4_sched_serialize(ser, gdrom_schid);
 	sh4_sched_serialize(ser, statusSchid);
+	ser << nextStatus;
 }
 
 void deserialize(Deserializer& deser)
@@ -1476,6 +1477,15 @@ void deserialize(Deserializer& deser)
 	if (deser.version() >= Deserializer::V62) {
 		sh4_sched_deserialize(deser, gdrom_schid);
 		sh4_sched_deserialize(deser, statusSchid);
+		// V62 did not save the target. A pending transition settles on pause.
+		if (deser.version() >= Deserializer::V63)
+			deser >> nextStatus;
+		else
+			nextStatus = GD_PAUSE;
+	}
+	else {
+		cddaCancelTransition();
+		nextStatus = -1;
 	}
 }
 

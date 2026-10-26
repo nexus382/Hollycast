@@ -4326,7 +4326,7 @@ void renderVideoTab()
 				"More likely to reveal out-of-bounds glitches than standard widescreen.\n\n"
 				"Not compatible with Integer Scaling or Stretch to Fill."
 			),
-			!config::Widescreen || config::IntegerScale || config::StretchToFill);
+			(!config::Widescreen || config::IntegerScale || config::StretchToFill) && !config::SuperWidescreen);
 		ImGui::Unindent();
 
 		RenderGeneralToggleSettingRow(
