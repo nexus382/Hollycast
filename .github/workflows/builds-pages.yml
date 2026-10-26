@@ -10,6 +10,11 @@ on:
       - '.github/workflows/builds-pages.yml'
   release:
     types: [published, edited, deleted]
+  pull_request:
+    paths:
+      - 'docs/builds/**'
+      - 'tools/builds/**'
+      - '.github/workflows/builds-pages.yml'
   workflow_run:
     workflows: [Android, 'Linux, macOS, Windows', 'Nintendo Switch', 'Xbox, UWP', BSD, 'Linux ARM64 libretro']
     types: [completed]
@@ -22,16 +27,52 @@ permissions:
   contents: read
 
 concurrency:
-  group: builds-pages
+  group: builds-pages-${{ github.event.pull_request.number || 'publish' }}
   cancel-in-progress: false
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'master' }}
+          persist-credentials: false
+          sparse-checkout: tools/builds
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node --test tools/builds/catalog.test.mjs tools/builds/publish.test.mjs
+
+  publish:
+    needs: check
+    if: github.repository == 'nexus382/Hollycast' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      # workflow_run has elevated permissions: only run code from trusted master.
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+          persist-credentials: false
+          sparse-checkout: tools/builds
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Publish public branch builds
+        run: node tools/builds/publish.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   build:
+    needs: publish
     if: github.repository == 'nexus382/Hollycast'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
     steps:
       # Always use trusted default-branch code, never the workflow_run head or artifacts.
       - uses: actions/checkout@v7
@@ -44,7 +85,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - run: node --test tools/builds/catalog.test.mjs
       - name: Generate build catalog
         run: node tools/builds/catalog.mjs
         env:

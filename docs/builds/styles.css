@@ -20,9 +20,17 @@ label { display: grid; gap: 6px; font-size: .8rem; color: #c1d0c5; flex: 1; min-
 .search { flex: 1.5; }
 select, input { width: 100%; font: inherit; font-size: .95rem; color: #e6eee8; background: #1a241d; border: 1px solid #43534a; border-radius: 6px; padding: 11px 12px; }
 :focus-visible { outline: 2px solid #a2f0b5; outline-offset: 4px; }
-article { background: #17201a; border: 1px solid #344039; border-radius: 10px; margin: 16px 0; padding: 24px; }
-.build-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; }
-h3 { margin: 0; font-size: 1.2rem; overflow-wrap: anywhere; }
+.build { background: #17201a; border: 1px solid #344039; border-radius: 6px; margin: 8px 0; padding: 0; }
+.build-heading { display: grid; grid-template-columns: 100px minmax(100px, 1fr) 190px; align-items: center; gap: 6px 16px; width: 100%; padding: 15px 18px; }
+.build-heading:hover { background: #1b2820; }
+.build-title { font-weight: 600; overflow-wrap: anywhere; }
+.build-heading .badge { justify-self: start; }
+.build-heading .meta { margin: 0; text-align: right; }
+.platforms { grid-column: 2; font-size: .8rem; color: #a7b7ac; }
+.row-action { font-size: .75rem; color: #9be6ac; text-align: right; }
+.build[open] .row-action::after { content: ' −'; }
+.build:not([open]) .row-action::after { content: ' +'; }
+.build-content { border-top: 1px solid #344039; padding: 18px; }
 .badge { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: #b8eac3; border: 1px solid #486d50; border-radius: 4px; padding: 2px 7px; }
 .meta { font-size: .85rem; margin: 8px 0 18px; }
 .downloads { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 10px; }
@@ -33,4 +41,4 @@ details { border-top: 1px solid #344039; margin-top: 20px; padding-top: 14px; }
 summary { cursor: pointer; color: #c5e6cd; width: fit-content; }
 .notes { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .9rem; color: #c6d2ca; }
 footer { border-top: 1px solid #344039; font-size: .8rem; margin-top: 36px; padding-top: 16px; }
-@media (max-width: 560px) { main { padding: 32px 16px 20px; } article { padding: 18px; } .filters { gap: 12px; } label { min-width: 100%; } }
+@media (max-width: 560px) { main { padding: 32px 16px 20px; } .filters { gap: 12px; } label { min-width: 100%; } .build-heading { grid-template-columns: 80px minmax(0, 1fr); padding: 12px; gap: 6px 10px; } .build-heading .meta { grid-column: 2; text-align: left; font-size: .75rem; } .platforms { grid-column: 1 / -1; } .row-action { grid-column: 1 / -1; text-align: left; } .build-content { padding: 12px; } }
