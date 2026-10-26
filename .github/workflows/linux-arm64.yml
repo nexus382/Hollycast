@@ -47,7 +47,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$PWD/artifact" \
             -DCMAKE_INSTALL_LIBDIR=lib \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DLIBRETRO=ON -DUSE_GLES=ON -DUSE_OPENGL=OFF \
+            -DLIBRETRO=ON -DUSE_GLES=ON -DUSE_OPENGL=ON \
             -DUSE_VULKAN=OFF -DUSE_LIBCDIO=ON -DWITH_SYSTEM_ZSTD=OFF
           cmake --build build --parallel 4
           cmake --install build
@@ -121,8 +121,8 @@ jobs:
           case "$RELEASE_TAG" in
             ''|*[!A-Za-z0-9._-]*) echo "Release tag cannot be used as an asset filename" >&2; exit 1 ;;
           esac
-          gh release view "$RELEASE_TAG" --json tagName
+          gh release view --json tagName -- "$RELEASE_TAG"
           package="Hollycast-${RELEASE_TAG}-linux-libretro-arm64.zip"
           mv artifact/Hollycast-linux-libretro-arm64.zip "$package"
           sha256sum "$package" > "$package.sha256"
-          gh release upload "$RELEASE_TAG" "$package" "$package.sha256" --clobber
+          gh release upload --clobber -- "$RELEASE_TAG" "$package" "$package.sha256"
