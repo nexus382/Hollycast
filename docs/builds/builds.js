@@ -1,7 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 'use strict';
 
-const list = document.querySelector('#builds');
 const status = document.querySelector('#status');
 const channel = document.querySelector('#channel');
 const platform = document.querySelector('#platform');
@@ -25,20 +24,21 @@ function link(text, url) {
 }
 
 function fileList(files) {
-  const ul = element('ul', '', 'downloads');
+  const links = element('div', '', 'downloads');
   for (const file of files) {
-    const item = element('li');
-    item.append(link(file.name, file.url));
+    const download = link(file.support ? file.name : 'Download', file.url);
     const size = file.size < 1048576 ? `${Math.ceil(file.size / 1024)} KB` : `${(file.size / 1048576).toFixed(1)} MB`;
-    item.append(element('span', size, 'file-size'));
-    ul.append(item);
+    download.title = `${file.name} · ${size}`;
+    links.append(download);
+    if (!file.support) links.append(element('span', size, 'file-size'));
   }
-  return ul;
+  return links;
 }
 
 function render() {
   if (!catalog) return;
-  const fragment = document.createDocumentFragment();
+  const fragments = { master: document.createDocumentFragment(), dev: document.createDocumentFragment(), releases: document.createDocumentFragment() };
+  const counts = { master: 0, dev: 0, releases: 0 };
   let count = 0;
   const query = search.value.trim().toLowerCase();
   for (const build of catalog.builds) {
@@ -47,23 +47,35 @@ function render() {
     const files = build.files.filter(file => platform.value === 'all' || file.platform === platform.value);
     if (!files.length || (query && !`${build.title} ${build.branch || ''} ${build.commit || ''} ${files.map(file => file.name).join(' ')}`.toLowerCase().includes(query))) continue;
     count++;
+    const group = build.channel === 'ci' ? build.branch : 'releases';
+    counts[group]++;
     const row = element('details', '', 'build');
     const heading = element('summary', '', 'build-heading');
-    heading.append(element('span', build.channel === 'ci' ? build.branch : build.channel, 'badge'),
-      element('span', build.channel === 'ci' ? build.commit.slice(0, 8) : build.title, 'build-title'));
+    const id = build.commit ? build.commit.slice(0, 8) : new URL(build.url).pathname.split('/').at(-1);
+    heading.append(element('code', id, 'build-id'));
     const date = new Date(build.date);
-    const time = element('time', date.toLocaleString());
+    const time = element('time', date.toLocaleDateString());
     time.dateTime = date.toISOString();
+    time.title = date.toLocaleString();
     time.className = 'meta';
-    const platforms = [...new Set(files.filter(file => !file.support).map(file => file.platform))].sort();
+    const platforms = [...new Set(files.filter(file => !file.support).map(file => file.platform === 'UWP' ? 'Xbox / UWP' : file.platform))].sort();
     heading.append(time, element('span', platforms.join(' · '), 'platforms'), element('span', 'Downloads & changes', 'row-action'));
     const content = element('div', '', 'build-content');
-    if (build.channel === 'ci') content.append(element('p', 'Public build archives. Extract the ZIP before use.', 'meta'));
-    content.append(fileList(files.filter(file => !file.support)));
+    if (build.channel === 'ci') content.append(element('p', 'Public ZIP archives. Extract before use.', 'meta'));
+    const downloads = element('div', '', 'download-columns');
+    for (const [device, label] of [['Android', 'Android'], ['Windows', 'Windows x64'], ['Linux', 'Linux AppImage'],
+      ['macOS', 'macOS'], ['Switch', 'Switch'], ['UWP', 'Xbox One']]) {
+      const deviceFiles = files.filter(file => !file.support && file.platform === device);
+      const column = element('section', '', 'download-platform');
+      column.append(element('h4', label));
+      column.append(deviceFiles.length ? fileList(deviceFiles) : element('p', 'Unavailable', 'meta'));
+      downloads.append(column);
+    }
+    content.append(downloads);
     const supporting = files.filter(file => file.support);
     if (supporting.length) {
       const details = element('details');
-      details.append(element('summary', 'Checksums, certificates & installation files'), fileList(supporting));
+      details.append(element('summary', 'Checksums & extras'), fileList(supporting));
       content.append(details);
     }
     const changelog = element('details');
@@ -77,15 +89,20 @@ function render() {
       offset = match.index + match[0].length;
     }
     notes.append(text.slice(offset));
-    changelog.append(notes);
     const source = element('p');
-    source.append(link(build.compare ? 'View changes on GitHub ↗' : 'View full details on GitHub ↗', build.compare || build.url));
-    changelog.append(source);
+    source.append(link('View changes on GitHub ↗', build.compare || build.url));
+    changelog.append(notes, source);
     content.append(changelog);
     row.append(heading, content);
-    fragment.append(row);
+    fragments[group].append(row);
   }
-  list.replaceChildren(fragment);
+  for (const group of ['master', 'dev', 'releases']) {
+    const visible = group === 'releases' ? ['all', 'stable', 'development'].includes(channel.value) :
+      ['ci', 'all', group].includes(channel.value);
+    document.querySelector(`#${group}-column`).hidden = !visible;
+    if (!counts[group]) fragments[group].append(element('p', 'No matching builds available.', 'meta'));
+    document.querySelector(group === 'releases' ? '#release-builds' : `#${group}-builds`).replaceChildren(fragments[group]);
+  }
   status.textContent = count ? `${count} ${count === 1 ? 'build' : 'builds'}` : 'No builds match these filters.';
 }
 

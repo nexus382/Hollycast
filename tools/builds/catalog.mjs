@@ -13,6 +13,24 @@ export function platformFor(name) {
   return 'Other';
 }
 
+export function standaloneDownloads(files) {
+  // Match the six standalone downloads in flyinghead/flycast-builds/builds.js.
+  // Legacy CI assets may wrap the same package in an additional artifact ZIP.
+  const targets = [
+    ['Android', /\.apk(?:\.zip)?$/i],
+    ['Windows', /(?:windows-x64|x86_64-w64-mingw32)(?:\.zip){1,2}$/i],
+    ['Linux', /(?:\.appimage(?:\.zip)?|x86_64-pc-linux-gnu\.zip)$/i],
+    ['macOS', /(?:macos-universal|apple-darwin|\.app)(?:\.zip){1,2}$/i],
+    ['Switch', /(?:switch(?:-standalone)?\.zip|\.nro(?:\.zip)?)$/i],
+    ['UWP', /(?:uwp|xbox)-x64(?:\.appx|\.msix)?(?:\.zip)?$/i],
+  ];
+  return targets.flatMap(([platform, pattern]) => {
+    const file = files.find(candidate => !candidate.support && candidate.platform === platform &&
+      !/libretro|msvc/i.test(candidate.name) && pattern.test(candidate.name));
+    return file ? [file] : [];
+  });
+}
+
 export function ciMetadata(release) {
   const tag = /^ci-(master|dev)-(\d+)$/.exec(release.tag_name);
   if (!tag) return null;
@@ -81,6 +99,9 @@ export async function buildCatalog(repository, api, now = new Date()) {
       }
     }
     if (releases.length < 100) break;
+  }
+  for (const build of builds) {
+    build.files = [...standaloneDownloads(build.files), ...build.files.filter(file => file.support)];
   }
   builds.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
   const counts = new Map();
