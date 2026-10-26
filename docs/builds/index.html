@@ -18,12 +18,12 @@
       <p class="intro">The latest releases. The next improvements. Find your build.</p>
       <nav aria-label="Project"><a href="https://github.com/nexus382/Hollycast">Source code ↗</a><a href="https://github.com/nexus382/Hollycast/issues">Report an issue ↗</a></nav>
     </header>
-    <aside>Development builds are for testing and may be unstable. Release downloads are public; CI downloads require a GitHub account and expire.</aside>
+    <aside>Automatic master and dev builds are public downloads—no sign-in needed. These testing builds may be unstable. Expand a row for downloads and its changelog.</aside>
     <section aria-labelledby="downloads-title">
       <div class="section-heading"><h2 id="downloads-title">Recent builds</h2><p id="updated"></p></div>
       <div class="filters">
-        <label>Channel<select id="channel"><option value="all">All releases</option><option value="stable">Stable releases</option><option value="development">Development releases</option><option value="ci">CI builds · GitHub sign-in</option></select></label>
-        <label>Platform<select id="platform"><option value="all">All platforms</option><option>Android</option><option>Windows</option><option>Linux</option><option>macOS</option><option>Switch</option><option>UWP</option><option>Other</option></select></label>
+        <label>Channel<select id="channel" aria-label="Channel"><option value="ci">Automatic builds · master &amp; dev</option><option value="master">Master builds</option><option value="dev">Dev builds</option><option value="all">All builds &amp; releases</option><option value="stable">Stable releases</option><option value="development">Development releases</option></select></label>
+        <label>Platform<select id="platform" aria-label="Platform"><option value="all">All platforms</option><option>Android</option><option>Windows</option><option>Linux</option><option>macOS</option><option>Switch</option><option>UWP</option><option>Other</option></select></label>
         <label class="search">Find a build<input id="search" type="search" placeholder="Version, architecture, or commit…"></label>
       </div>
       <p id="status" role="status">Loading builds…</p>

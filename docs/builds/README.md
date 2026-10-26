@@ -4,24 +4,45 @@
 Published at https://nexus382.github.io/Hollycast/ by `.github/workflows/builds-pages.yml`.
 The repository's Pages publishing source must be **GitHub Actions**.
 
-The catalog includes the latest 100 releases and eligible builds from the latest
-300 Actions artifacts. Development tags are recognized even when a historical
-release was not marked as a prerelease. Only successful pushes to this
-repository's `master` and `dev` branches appear as CI builds. Expired artifacts,
-pull requests and fork builds are excluded. CI ZIP downloads require GitHub
-sign-in; release assets are public downloads.
+Automatic `master` and `dev` builds are the default view. Platform downloads for
+the same branch and commit share one compact, expandable row. Each row contains
+public download links and a changelog; visitors do not need a GitHub account.
+Ordinary stable and development releases remain available through the filters.
 
-Updates run after releases and platform build completions, hourly (including
-artifact expiry and later release asset uploads), and on manual dispatch. Open
+The publisher copies ZIP artifacts from successful platform push workflows into
+automatic prereleases tagged `ci-<branch>-<run-id>`, targeting the exact source
+commit. It never extracts or executes artifacts. Archives retain GitHub's artifact
+ZIP layout, so users must extract them. Published assets are not replaced and do
+not expire with the original Actions artifact. Manual releases are not modified
+or displaced as GitHub's latest release.
+
+Only this repository's `master` and `dev` platform pushes are eligible. Failed,
+pull-request and fork builds are excluded. New releases remain drafts until all
+uploads succeed; retries reuse completed assets and remove only empty, unfinished
+assets belonging to that draft before uploading again.
+
+Updates run after releases and platform build completions, hourly, and on manual
+dispatch. Non-workflow-run events backfill the latest successful build of each
+platform on each branch from the most recent 100 successful runs per branch.
+Build completions publish that specific run. Expired source artifacts cannot be
+backfilled; the next successful build will provide fresh downloads. Open
 pages reload the static catalog every five minutes, without using visitors'
 GitHub API quotas. GitHub scheduling and deployments can add a short delay.
 
-Each release shows its release notes as plain text and links to the rendered
-GitHub notes. CI changelogs compare the previous available build from the same
-workflow and branch, with up to 100 commit messages and a full comparison link.
-Without an earlier build, the current commit message is shown explicitly.
+The catalog scans up to 1,000 releases and displays the latest 20 commits per
+branch plus 20 releases per release channel. Published downloads are retained on
+GitHub beyond this recent list. Development tags are recognized even when historical
+releases were not marked as prereleases. CI changelogs compare an earlier public
+build on the same branch, with up to 100 commit messages and a comparison link.
+Without linear earlier history, the current commit message is shown explicitly.
 
-Run `node --test tools/builds/catalog.test.mjs` and then
+Run `node --test tools/builds/catalog.test.mjs tools/builds/publish.test.mjs` and then
 `node tools/builds/catalog.mjs` from the repository root to generate the catalog.
 `GH_TOKEN` may be supplied for API access. Serve `docs/builds` with any static
 HTTP server for local preview. Generated `builds.json` is not committed.
+
+Publishing runs in a separate job with `contents: write` and `actions: read`;
+catalog generation and deployment do not receive release write access. Both
+privileged and catalog jobs check out trusted `master` code. Pull requests run
+only the checks, with read permissions. Workflow concurrency serializes publishing
+and deployment, avoiding competing draft releases and stale catalog deployments.

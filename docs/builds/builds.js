@@ -24,13 +24,13 @@ function link(text, url) {
   return node;
 }
 
-function fileList(files, ci) {
+function fileList(files) {
   const ul = element('ul', '', 'downloads');
   for (const file of files) {
     const item = element('li');
     item.append(link(file.name, file.url));
     const size = file.size < 1048576 ? `${Math.ceil(file.size / 1024)} KB` : `${(file.size / 1048576).toFixed(1)} MB`;
-    item.append(element('span', `${size}${ci ? ' · ZIP · GitHub sign-in required' : ''}`, 'file-size'));
+    item.append(element('span', size, 'file-size'));
     ul.append(item);
   }
   return ul;
@@ -42,29 +42,29 @@ function render() {
   let count = 0;
   const query = search.value.trim().toLowerCase();
   for (const build of catalog.builds) {
-    if (channel.value === 'all' ? build.channel === 'ci' : build.channel !== channel.value) continue;
-    const files = build.files.filter(file => (!file.expires || Date.parse(file.expires) > Date.now()) &&
-      (platform.value === 'all' || file.platform === platform.value));
-    if (!files.length || (query && !`${build.title} ${build.commit || ''} ${files.map(file => file.name).join(' ')}`.toLowerCase().includes(query))) continue;
+    if (['master', 'dev'].includes(channel.value) ? build.channel !== 'ci' || build.branch !== channel.value :
+      channel.value !== 'all' && build.channel !== channel.value) continue;
+    const files = build.files.filter(file => platform.value === 'all' || file.platform === platform.value);
+    if (!files.length || (query && !`${build.title} ${build.branch || ''} ${build.commit || ''} ${files.map(file => file.name).join(' ')}`.toLowerCase().includes(query))) continue;
     count++;
-    const article = element('article');
-    const heading = element('div', '', 'build-heading');
-    const title = element('h3');
-    title.append(link(build.title, build.url));
-    heading.append(title, element('span', build.channel === 'ci' ? `CI · ${build.branch}` : build.channel, 'badge'));
+    const row = element('details', '', 'build');
+    const heading = element('summary', '', 'build-heading');
+    heading.append(element('span', build.channel === 'ci' ? build.branch : build.channel, 'badge'),
+      element('span', build.channel === 'ci' ? build.commit.slice(0, 8) : build.title, 'build-title'));
     const date = new Date(build.date);
     const time = element('time', date.toLocaleString());
     time.dateTime = date.toISOString();
-    const meta = element('p', '', 'meta');
-    meta.append(time);
-    if (build.commit) meta.append(` · ${build.commit.slice(0, 8)}`);
-    article.append(heading, meta);
-    article.append(fileList(files.filter(file => !file.support), build.channel === 'ci'));
+    time.className = 'meta';
+    const platforms = [...new Set(files.filter(file => !file.support).map(file => file.platform))].sort();
+    heading.append(time, element('span', platforms.join(' · '), 'platforms'), element('span', 'Downloads & changes', 'row-action'));
+    const content = element('div', '', 'build-content');
+    if (build.channel === 'ci') content.append(element('p', 'Public build archives. Extract the ZIP before use.', 'meta'));
+    content.append(fileList(files.filter(file => !file.support)));
     const supporting = files.filter(file => file.support);
     if (supporting.length) {
       const details = element('details');
-      details.append(element('summary', 'Checksums, certificates & installation files'), fileList(supporting, false));
-      article.append(details);
+      details.append(element('summary', 'Checksums, certificates & installation files'), fileList(supporting));
+      content.append(details);
     }
     const changelog = element('details');
     changelog.append(element('summary', 'Changelog'));
@@ -81,8 +81,9 @@ function render() {
     const source = element('p');
     source.append(link(build.compare ? 'View changes on GitHub ↗' : 'View full details on GitHub ↗', build.compare || build.url));
     changelog.append(source);
-    article.append(changelog);
-    fragment.append(article);
+    content.append(changelog);
+    row.append(heading, content);
+    fragment.append(row);
   }
   list.replaceChildren(fragment);
   status.textContent = count ? `${count} ${count === 1 ? 'build' : 'builds'}` : 'No builds match these filters.';
