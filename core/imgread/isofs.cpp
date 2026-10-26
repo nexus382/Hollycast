@@ -34,24 +34,37 @@ IsoFs::IsoFs(Disc *disc) : disc(disc)
 	baseFad = disc->GetBaseFAD();
 }
 
-IsoFs::Directory *IsoFs::getRoot()
+IsoFs::Directory *IsoFs::getRoot(bool *valid)
 {
-	u8 temp[2048];
-	disc->ReadSectors(baseFad + 16, 1, temp, 2048);
+	if (valid != nullptr)
+		*valid = false;
+	u8 temp[2048]{};
+	bool readError = false;
+	const u32 descriptorCount = disc->ReadSectors(baseFad + 16, 1, temp, 2048,
+			valid != nullptr, nullptr, valid != nullptr ? &readError : nullptr);
 	// Primary Volume Descriptor
 	const iso9660_pvd_t *pvd = (const iso9660_pvd_t *)temp;
 
 	Directory *root = new Directory(this);
+	if (valid != nullptr && (descriptorCount != 1 || readError))
+		return root;
 	if (pvd->type == 1 && !memcmp(pvd->id, ISO_STANDARD_ID, strlen(ISO_STANDARD_ID)) && pvd->version == 1)
 	{
 		u32 lba = decode_iso733(pvd->root_directory_record.extent);
 		u32 len = decode_iso733(pvd->root_directory_record.size);
+		const u64 rootStart = 150ULL + lba;
+		const u64 sectorCount = (static_cast<u64>(len) + 2047) / 2048;
+		if (valid != nullptr && (len == 0 || rootStart + sectorCount > disc->LeadOut.StartFAD))
+			return root;
 
 		len = ((len + 2047) / 2048) * 2048;
 		root->data.resize(len);
 
 		DEBUG_LOG(GDROM, "iso9660 root directory FAD: %d, len: %d", 150 + lba, len);
-		disc->ReadSectors(150 + lba, len / 2048, root->data.data(), 2048);
+		const u32 readCount = disc->ReadSectors(150 + lba, len / 2048, root->data.data(), 2048,
+				valid != nullptr, nullptr, valid != nullptr ? &readError : nullptr);
+		if (valid != nullptr)
+			*valid = readCount == sectorCount && !readError;
 	}
 	else {
 		WARN_LOG(GDROM, "iso9660 PVD NOT found");

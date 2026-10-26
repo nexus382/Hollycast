@@ -74,7 +74,7 @@ public:
 	};
 
 	IsoFs(Disc *disc);
-	Directory *getRoot();
+	Directory *getRoot(bool *valid = nullptr);
 
 private:
 	Disc *disc;

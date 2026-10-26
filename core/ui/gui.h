@@ -34,7 +34,7 @@ void gui_display_profiler();
 void gui_open_onboarding();
 void gui_term();
 void gui_cancel_load();
-void gui_refresh_files();
+void gui_refresh_files(bool invalidateArtwork = true);
 void gui_cheats();
 void gui_keyboard_input(u32 wc);
 void gui_keyboard_inputUTF8(const std::string& s);

@@ -28,6 +28,8 @@
 
 using namespace nlohmann;
 
+enum class OfflineArtState { Pending, Complete, NoArtwork, Failed };
+
 struct GameBoxart
 {
 	std::string fileName;
@@ -45,7 +47,8 @@ struct GameBoxart
 	std::optional<u64> playTimeSeconds;
 
 	bool arcade = false;
-	bool parsed = false;
+	OfflineArtState offlineArtState = OfflineArtState::Pending;
+	u64 workRevision = 0;
 	bool scraped = false;
 	bool busy = false;
 
@@ -68,9 +71,11 @@ struct GameBoxart
 	GameBoxart(const json& j, const std::string& baseArtPath);
 
 	void setBoxartPath(const std::string& path) {
-		if (!boxartPath.empty())
-			nowide::remove(boxartPath.c_str());
 		boxartPath = path;
+	}
+
+	std::string sourceKey() const {
+		return gamePath.empty() ? "legacy:" + fileName : (arcade ? "arcade:" : "disc:") + gamePath;
 	}
 
 	bool isValid() const {
