@@ -75,9 +75,25 @@ jobs:
         if: matrix.config.shell == 'msys2 {0}'
 
       - name: Set up build environment (Windows, Visual Studio)
+        shell: pwsh
         run: |
-          choco install ccache directx-sdk
-          echo DXSDK_DIR=C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)>> %GITHUB_ENV%
+          $ErrorActionPreference = 'Stop'
+          choco install ccache --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Pin Microsoft's headers instead of relying on the legacy SDK installer.
+          $package = Join-Path $env:RUNNER_TEMP 'microsoft.dxsdk.d3dx.9.29.952.8.zip'
+          $sdk = Join-Path $env:RUNNER_TEMP 'microsoft.dxsdk.d3dx.9.29.952.8'
+          Invoke-WebRequest -Uri 'https://api.nuget.org/v3-flatcontainer/microsoft.dxsdk.d3dx/9.29.952.8/microsoft.dxsdk.d3dx.9.29.952.8.nupkg' -OutFile $package
+          if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ne 'EAD0906AE8A26C18A7525DA7490127A2110F7C58F18293738283E30E97C6EA4B') {
+            throw 'DirectX helper package checksum mismatch.'
+          }
+          Expand-Archive -LiteralPath $package -DestinationPath $sdk
+          $dxsdk = Join-Path $sdk 'build/native'
+          if (-not (Test-Path -LiteralPath (Join-Path $dxsdk 'include/d3dx9shader.h'))) {
+            throw 'DirectX shader headers were not installed.'
+          }
+          "DXSDK_DIR=$dxsdk" >> $env:GITHUB_ENV
         if: matrix.config.shell == 'cmd'
 
       - uses: ilammy/msvc-dev-cmd@v1
