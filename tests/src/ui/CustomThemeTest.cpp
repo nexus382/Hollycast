@@ -1,6 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/custom_theme.h"
+#include "ui/theme_font_validation.h"
 #include "oslib/resources.h"
 #include <filesystem>
 #include <fstream>
@@ -178,8 +179,25 @@ TEST(CustomThemeTest, RejectsUnsafeFilenames)
 {
 	CustomTheme::Theme theme;
 	std::string error;
-	for (const char* name : {"../theme.json", "subdir/theme.json", "subdir\\theme.json", "theme.txt", ""})
+	for (const char* name : {"../theme.json", "subdir/theme.json", "subdir\\theme.json", "C:Escape.json", "bad?.json", "CON.json", "theme.txt", ""})
 		EXPECT_FALSE(CustomTheme::load(name, theme, error)) << name;
+}
+
+TEST(CustomThemeTest, RejectsMalformedFontDirectoriesWithoutOverflow)
+{
+	std::vector<std::uint8_t> ttc(16, 0);
+	ttc[0] = 't'; ttc[1] = 't'; ttc[2] = 'c'; ttc[3] = 'f';
+	ttc[12] = 0xff; ttc[13] = 0xff; ttc[14] = 0xff; ttc[15] = 0xf8;
+	EXPECT_FALSE(validThemeFontDirectory(ttc.data(), ttc.size()));
+	ttc[12] = 0; ttc[13] = 0; ttc[14] = 0; ttc[15] = 12;
+	EXPECT_FALSE(validThemeFontDirectory(ttc.data(), ttc.size()));
+	std::vector<std::uint8_t> sfnt(28, 0);
+	sfnt[1] = 1; sfnt[5] = 1; // TrueType signature and one table
+	EXPECT_TRUE(validThemeFontDirectory(sfnt.data(), sfnt.size()));
+	sfnt[5] = 2; // Second table does not fit in the directory
+	EXPECT_FALSE(validThemeFontDirectory(sfnt.data(), sfnt.size()));
+	sfnt[5] = 1; sfnt[20] = 0xff; sfnt[21] = 0xff; sfnt[22] = 0xff; sfnt[23] = 0xf8;
+	EXPECT_FALSE(validThemeFontDirectory(sfnt.data(), sfnt.size()));
 }
 
 TEST(CustomThemeTest, DiscoversAndLoadsFilesByStableFilename)
@@ -786,6 +804,59 @@ TEST_F(ThemeFilesTest, SaveRefusesAccidentalReplacementAndReplacesOnlyOnExplicit
 	ASSERT_TRUE(CustomTheme::loadFromDirectory(CustomTheme::directory(), "saved.json", loaded, error)) << error;
 	EXPECT_EQ(loaded.base, 1);
 	EXPECT_NEAR(loaded.colors.front().second.x, 0xAB / 255.f, 0.0001f);
+}
+
+TEST_F(ThemeFilesTest, InvalidDraftCannotReplaceOrExportAnExistingTheme)
+{
+	struct RestorePath { std::string path = get_writable_config_path(""); ~RestorePath() { set_user_config_dir(path.empty() ? "." : path); } } restore;
+	set_user_config_dir(path);
+	CustomTheme::Theme theme;
+	std::string error;
+	ASSERT_TRUE(CustomTheme::parse(R"({"colors":{"Text":"#123456"}})", theme, error)) << error;
+	ASSERT_TRUE(CustomTheme::save("saved.json", theme, false, error)) << error;
+	const auto saved = std::filesystem::path(CustomTheme::directory()) / "saved.json";
+	std::ifstream input(saved, std::ios::binary);
+	const std::string before(std::istreambuf_iterator<char>(input), {});
+	input.close();
+	theme.scalars.emplace_back(&ImGuiStyle::Alpha, 0.f);
+	EXPECT_FALSE(CustomTheme::save("saved.json", theme, true, error));
+	EXPECT_NE(error.find("Alpha"), std::string::npos);
+	std::ifstream unchanged(saved, std::ios::binary);
+	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(unchanged), {}), before);
+	EXPECT_FALSE(CustomTheme::exportToDirectory(theme, "invalid.json", (root / "export").string(), error));
+	EXPECT_FALSE(std::filesystem::exists(root / "export/invalid.json"));
+}
+
+TEST_F(ThemeFilesTest, RejectsNonportableNamesBeforeCreatingFiles)
+{
+	struct RestorePath { std::string path = get_writable_config_path(""); ~RestorePath() { set_user_config_dir(path.empty() ? "." : path); } } restore;
+	set_user_config_dir(path);
+	CustomTheme::Theme theme;
+	std::string error;
+	ASSERT_TRUE(CustomTheme::parse(R"({"colors":{"Text":"#123456"}})", theme, error)) << error;
+	for (const char* name : {"C:Escape.json", "bad?.json", "CON.json", "subdir/theme.json"}) {
+		EXPECT_FALSE(CustomTheme::save(name, theme, false, error)) << name;
+		EXPECT_FALSE(CustomTheme::exportToDirectory(theme, name, (root / "export").string(), error)) << name;
+	}
+	EXPECT_FALSE(std::filesystem::exists(root / "export"));
+	EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(CustomTheme::directory()) / "C:Escape.json"));
+}
+
+TEST_F(ThemeFilesTest, WindowsAssetSeparatorsSurviveImportAndExport)
+{
+	write("source/fonts/body.ttf", "font");
+	write("source/Theme.json", R"({"fonts":{"body":"fonts\\body.ttf"}})");
+	std::string imported, error;
+	ASSERT_TRUE(CustomTheme::importFromFile(path + "source/Theme.json", path + "imported", imported, error)) << error;
+	CustomTheme::Theme theme;
+	ASSERT_TRUE(CustomTheme::loadFromDirectory(path + "imported/", imported, theme, error)) << error;
+	EXPECT_EQ(theme.assets.bodyFont, "assets/Theme/fonts/body.ttf");
+	ASSERT_TRUE(std::filesystem::exists(root / "imported/assets/Theme/fonts/body.ttf"));
+	ASSERT_TRUE(CustomTheme::exportToDirectory(theme, "Portable.json", path + "export", error)) << error;
+	EXPECT_TRUE(std::filesystem::exists(root / "export/assets/Theme/fonts/body.ttf"));
+	CustomTheme::Theme exported;
+	ASSERT_TRUE(CustomTheme::loadFromDirectory(path + "export/", "Portable.json", exported, error)) << error;
+	EXPECT_EQ(exported.assets.bodyFont, "assets/Theme/fonts/body.ttf");
 }
 
 TEST_F(ThemeFilesTest, Utf8PathsRoundTripThroughSaveExportAndImport)
