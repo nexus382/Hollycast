@@ -5,6 +5,7 @@ title: ''
 labels: bug
 assignees: ''
 ---
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 
 <!-- Please provide enough detail for us to reproduce and investigate the problem.
      If you don't know an answer, it's fine to say so. -->
