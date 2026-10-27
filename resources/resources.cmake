@@ -35,6 +35,8 @@ cmrc_add_resources(Hollycast-resources
 
 if(NOT LIBRETRO)
     cmrc_add_resources(Hollycast-resources
+            fonts/NotoSansCJK-Regular.ttc.zip
+            fonts/NotoSansCJK-LICENSE.txt
             fonts/Roboto-Medium.ttf.zip
             fonts/Roboto-Bold.ttf.zip
             fonts/Roboto-Regular.ttf.zip
