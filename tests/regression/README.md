@@ -52,3 +52,16 @@ The device checks inject allocation and render failures. They do not exercise a 
 graphics driver or an emulated game. BSD adapters do not check native BSD headers
 or kernel behavior. Platform builds and gameplay checks remain necessary before
 release.
+
+## macOS UI font coverage
+
+After building the macOS arm64 Debug application with Xcode, run:
+
+```sh
+python3 tests/regression/gui_fonts.py <xcode-build-dir> <temporary-output-dir>
+```
+
+This links the production font loader and checks that the built-in primary and
+CJK fonts cover the language picker and translated strings for each UI language,
+without relying on installed CJK fonts. It also rasterizes each tested glyph.
+It does not replace visual checks of the running application.

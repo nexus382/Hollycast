@@ -23,6 +23,7 @@
 #include "oslib/resources.h"
 #include "IconsFontAwesome6.h"
 #include "imgui/misc/freetype/imgui_freetype.h"
+#include <cctype>
 
 ImFont *boldFont;
 ImFont *largeFont;
@@ -183,7 +184,7 @@ static void registerFont(std::initializer_list<std::vector<FontEntry>*> targets,
 		registerFont(*target, entry);
 }
 
-static void loadFonts(const std::vector<FontEntry>& entries, const ImFontConfig& cfg)
+static void loadFonts(const std::vector<FontEntry>& entries, const ImFontConfig& cfg, float sizeScale = 1.f)
 {
 	std::unordered_set<std::string> satisfiedLangs;
 	satisfiedLangs.reserve(8);
@@ -206,13 +207,14 @@ static void loadFonts(const std::vector<FontEntry>& entries, const ImFontConfig&
 
 		for (const std::string& path : e.paths)
 		{
+			const float size = e.size * sizeScale;
 			ImFontConfig entryCfg = cfg;
 			entryCfg.FontNo = e.fontNo.value;
-			entryCfg.GlyphOffset.y = e.size * e.offsetY;
+			entryCfg.GlyphOffset.y = size * e.offsetY;
 			static ImWchar faRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
 			entryCfg.GlyphExcludeRanges = faRanges;
 
-			ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), e.size, &entryCfg, nullptr);
+			ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), size, &entryCfg, nullptr);
 			if (font)
 			{
 				loaded = true;
@@ -486,9 +488,6 @@ void gui_loadFonts()
 	// TODO BSD, iOS, ...
 #endif
 
-	loadFonts(fonts, fontConfig);
-	loadFonts(boldFonts, boldFontConfig);
-
 	// Settings UI fonts
 	static const ImWchar ranges[] =
 	{
@@ -524,6 +523,61 @@ void gui_loadFonts()
 		settingsValueFont = largeFont;
 	if (settingsRightValueFont == nullptr)
 		settingsRightValueFont = largeFont;
+
+	// One shared collection backs all text fonts. Choose its regional face for
+	// the current UI language, and keep the atlas as the sole owner of the data.
+	data = resource::load("fonts/NotoSansCJK-Regular.ttc", dataSize);
+	verify(data != nullptr);
+	void* cjkData = IM_ALLOC(dataSize);
+	verify(cjkData != nullptr);
+	memcpy(cjkData, data.get(), dataSize);
+	data.reset();
+	std::string locale = i18n::getCurrentLocale();
+	const size_t suffix = locale.find_first_of(".@");
+	if (suffix != std::string::npos)
+		locale.resize(suffix);
+	for (char& c : locale)
+		c = c == '-' ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	// Locale strings can include a script and region (e.g. zh-Hant-TW).
+	locale += '_';
+	int cjkFace = 0; // Japanese is also a useful default for game titles.
+	if (locale.rfind("ko_", 0) == 0) cjkFace = 1;
+	else if (locale.rfind("zh_", 0) == 0)
+	{
+		if (locale.find("_hk_") != std::string::npos || locale.find("_mo_") != std::string::npos) cjkFace = 4;
+		else if (locale.find("_tw_") != std::string::npos || locale.find("_hant_") != std::string::npos) cjkFace = 3;
+		else cjkFace = 2;
+	}
+	static const ImWchar iconExclude[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+	std::vector<ImFont*> targets;
+	for (ImFont* target : {regularFont, boldFont, largeFont, settingsTitleFont, settingsRightValueFont, settingsValueFont})
+		if (std::find(targets.begin(), targets.end(), target) == targets.end())
+			targets.push_back(target);
+	for (size_t i = 0; i < targets.size(); ++i)
+	{
+		ImFontConfig cjkConfig;
+		cjkConfig.MergeMode = true;
+		cjkConfig.DstFont = targets[i];
+		cjkConfig.FontNo = cjkFace;
+		cjkConfig.FontDataOwnedByAtlas = i + 1 == targets.size();
+		cjkConfig.GlyphExcludeRanges = iconExclude;
+		if (targets[i] == boldFont)
+			cjkConfig.FontLoaderFlags |= ImGuiFreeTypeLoaderFlags_Bold;
+		verify(io.Fonts->AddFontFromMemoryTTF(cjkData, (int)dataSize, targets[i]->LegacySize, &cjkConfig) != nullptr);
+	}
+
+	// System fonts provide additional scripts and emoji where available.
+	loadFonts(fonts, fontConfig);
+	loadFonts(boldFonts, boldFontConfig);
+	for (ImFont* target : targets)
+	{
+		if (target != regularFont && target != boldFont)
+		{
+			ImFontConfig fallbackConfig = fontConfig;
+			fallbackConfig.DstFont = target;
+			loadFonts(fonts, fallbackConfig, target->LegacySize / fontSize);
+		}
+	}
 
 	data = resource::load("fonts/" FONT_ICON_FILE_NAME_FAS, dataSize);
 	if (data != nullptr)
