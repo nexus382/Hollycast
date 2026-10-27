@@ -31,6 +31,8 @@ if(NOT LIBRETRO)
             settings_audio.cpp
             settings_controls.cpp
             settings_general.cpp
+            custom_theme.cpp
+            custom_theme.h
             settings_network.cpp
             settings_video.cpp
             settings_new.cpp
