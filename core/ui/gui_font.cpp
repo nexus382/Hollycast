@@ -28,8 +28,17 @@
 #include <array>
 #include <cctype>
 #include <cstring>
+#ifdef _MSC_VER
+// C++/CX reserves `generic`; FreeType uses it as a structure member.
+#pragma push_macro("generic")
+#undef generic
+#define generic __generic
+#endif
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#ifdef _MSC_VER
+#pragma pop_macro("generic")
+#endif
 
 ImFont *boldFont;
 ImFont *largeFont;
