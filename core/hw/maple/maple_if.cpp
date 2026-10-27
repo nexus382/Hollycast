@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "maple_if.h"
 #include "maple_cfg.h"
 #include "maple_helper.h"

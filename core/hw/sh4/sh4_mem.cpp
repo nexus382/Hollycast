@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Mostly buggy, old, glue code that somehow still works
 	Most of the work is now delegated on vtlb and only helpers are here
 */

@@ -1,5 +1,6 @@
 /*********************************************************************
    PicoTCP. Copyright (c) 2012-2017 Altran Intelligent Systems. Some rights reserved.
+   Portions Copyright 2026 The Hollycast Authors
    See COPYING, LICENSE.GPLv2 and LICENSE.GPLv3 for usage.
 
  *********************************************************************/

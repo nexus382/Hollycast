@@ -75,6 +75,8 @@ using namespace i18n;
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <limits>
 
 bool game_started;
 
@@ -82,6 +84,7 @@ int insetLeft, insetRight, insetTop, insetBottom;
 std::unique_ptr<ImGuiDriver> imguiDriver;
 
 static bool inited = false;
+static bool launchScreenPending = true;
 static SetupChecklistLifecycle setupChecklist;
 GuiState gui_state = GuiState::Main;
 static bool commandLineStart;
@@ -173,6 +176,7 @@ void gui_init()
 	if (inited)
 		return;
 	inited = true;
+	launchScreenPending = true;
 
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
@@ -2967,6 +2971,180 @@ static bool checkUWPProtocolActivation()
 }
 #endif
 
+static bool gui_display_launch_screen()
+{
+	static std::chrono::steady_clock::time_point started;
+	static bool startedAnimation = false;
+	static constexpr const char *textureName = "picture/hollycast-launch.png";
+#ifdef TEST_AUTOMATION
+	launchScreenPending = false;
+#endif
+	if (!launchScreenPending)
+		return false;
+
+	// Launching a game directly should not be delayed by the library intro.
+	if (!settings.content.path.empty() || settings.naomi.slave || !error_msg.empty()
+			|| (gui_state != GuiState::Main && gui_state != GuiState::Onboarding))
+	{
+		if (startedAnimation)
+			imguiDriver->deleteTexture(textureName);
+		launchScreenPending = false;
+		startedAnimation = false;
+		return false;
+	}
+
+	if (!startedAnimation)
+	{
+		started = std::chrono::steady_clock::now();
+		startedAnimation = true;
+	}
+	const float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - started).count();
+	constexpr float fadeStart = 2.05f;
+	constexpr float duration = 2.55f;
+	if (elapsed >= duration)
+	{
+		launchScreenPending = false;
+		startedAnimation = false;
+		imguiDriver->deleteTexture(textureName);
+		return false;
+	}
+
+	ImTextureID logo = imguiDriver->getTexture(textureName);
+	if (logo == ImTextureID())
+	{
+		size_t size = 0;
+		std::unique_ptr<u8[]> data = resource::load(textureName, size);
+		int width, height, channels;
+		stbi_set_flip_vertically_on_load_thread(0);
+		u8 *pixels = data && size <= static_cast<size_t>(std::numeric_limits<int>::max())
+				? stbi_load_from_memory(data.get(), static_cast<int>(size), &width, &height, &channels, STBI_rgb_alpha)
+				: nullptr;
+		if (pixels == nullptr)
+		{
+			launchScreenPending = false;
+			startedAnimation = false;
+			return false;
+		}
+		try {
+			logo = imguiDriver->updateTexture(textureName, pixels, width, height, false);
+		} catch (...) {
+			stbi_image_free(pixels);
+			throw;
+		}
+		stbi_image_free(pixels);
+		if (logo == ImTextureID())
+		{
+			// Vulkan defers uploads until its first frame has finished. Retry while
+			// the intro is pending; the duration above also bounds persistent failures.
+			return true;
+		}
+	}
+
+	auto smooth = [](float value) {
+		value = std::clamp(value, 0.f, 1.f);
+		return value * value * (3.f - 2.f * value);
+	};
+	const float emblemReveal = smooth(elapsed / .8f);
+	const float wordmarkReveal = smooth((elapsed - .38f) / .75f);
+	const float fade = 1.f - smooth((elapsed - fadeStart) / (duration - fadeStart));
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	ImDrawList *draw = ImGui::GetForegroundDrawList();
+	const int bgAlpha = static_cast<int>(255.f * fade);
+	draw->AddRectFilledMultiColor(ImVec2(0, 0), display, IM_COL32(9, 20, 30, bgAlpha),
+			IM_COL32(14, 26, 39, bgAlpha), IM_COL32(7, 13, 24, bgAlpha), IM_COL32(6, 19, 25, bgAlpha));
+
+	// The green spiral in the emblem becomes the centre of the whole sequence.
+	const float logoWidth = std::min(display.x * .82f, std::min(1000.f, display.y * 2.5f));
+	const float logoHeight = logoWidth * 226.f / 800.f;
+	const ImVec2 topLeft((display.x - logoWidth) * .5f, (display.y - logoHeight) * .5f);
+	const ImVec2 orbit(topLeft.x + logoWidth * .145f, topLeft.y + logoHeight * .43f);
+	const float unit = logoWidth / 800.f;
+	const float energy = smooth(elapsed / .55f) * fade;
+
+	// Layered transparent discs make a quiet pool of light, without an image asset.
+	for (int i = 12; i > 0; --i)
+	{
+		const float radius = unit * (72.f + i * 23.f);
+		draw->AddCircleFilled(orbit, radius, IM_COL32(28, 145, 116, static_cast<int>(2.f * energy)), 64);
+	}
+	constexpr float pi = 3.14159265f;
+	const float orbitAngle = elapsed * 1.15f - pi * .8f;
+	const float arcReveal = smooth(elapsed / .9f);
+	for (int i = 0; i < 3; ++i)
+	{
+		const float radius = unit * (112.f + 17.f * i);
+		const float start = orbitAngle + i * 1.65f;
+		draw->PathArcTo(orbit, radius, start, start + (1.25f - i * .22f) * arcReveal, 32);
+		draw->PathStroke(IM_COL32(85, 213, 166, static_cast<int>((70 - i * 16) * energy)), 0, std::max(1.f, unit));
+	}
+	const float sparkRadius = unit * 112.f;
+	const float sparkAngle = orbitAngle + 1.25f * arcReveal;
+	const ImVec2 spark(orbit.x + std::cos(sparkAngle) * sparkRadius, orbit.y + std::sin(sparkAngle) * sparkRadius);
+	for (int i = 5; i > 0; --i)
+	{
+		const float angle = sparkAngle - i * .065f;
+		const ImVec2 trail(orbit.x + std::cos(angle) * sparkRadius, orbit.y + std::sin(angle) * sparkRadius);
+		draw->AddCircleFilled(trail, unit * (2.2f - i * .25f),
+				IM_COL32(118, 255, 194, static_cast<int>((55 - i * 8) * energy)), 12);
+	}
+	draw->AddCircleFilled(spark, 4.f * unit, IM_COL32(118, 255, 194, static_cast<int>(95.f * energy)), 16);
+	draw->AddCircleFilled(spark, 1.8f * unit, IM_COL32(224, 255, 235, static_cast<int>(220.f * energy)), 12);
+
+	// Four colored lights spiral into the matching buttons in the emblem.
+	const int colors[4][3] = {{30, 235, 186}, {255, 197, 61}, {48, 145, 255}, {255, 78, 64}};
+	const ImVec2 buttonCenters[4] = {
+		ImVec2(topLeft.x + 213.f * unit, topLeft.y + 136.f * unit),
+		ImVec2(topLeft.x + 183.f * unit, topLeft.y + 161.f * unit),
+		ImVec2(topLeft.x + 237.f * unit, topLeft.y + 166.f * unit),
+		ImVec2(topLeft.x + 207.f * unit, topLeft.y + 187.f * unit)
+	};
+	auto particlePosition = [&](int i, float time) {
+		const float converge = smooth((time - .08f - i * .06f) / 1.f);
+		const float angle = i * pi * .5f - pi * .5f + time * 2.2f;
+		const float radius = unit * (210.f - 40.f * converge);
+		const ImVec2 start(orbit.x + std::cos(angle) * radius, orbit.y + std::sin(angle) * radius);
+		return ImVec2(start.x + (buttonCenters[i].x - start.x) * converge,
+				start.y + (buttonCenters[i].y - start.y) * converge);
+	};
+	for (int i = 0; i < 4; ++i)
+	{
+		const float particlesAlpha = smooth(elapsed / .22f)
+				* (1.f - smooth((elapsed - .92f - i * .06f) / .3f)) * fade;
+		for (int tail = 4; tail >= 0; --tail)
+		{
+			const ImVec2 tailPoint = particlePosition(i, std::max(0.f, elapsed - tail * .035f));
+			const int opacity = static_cast<int>((tail == 0 ? 220.f : 55.f - tail * 10.f) * particlesAlpha);
+			draw->AddCircleFilled(tailPoint, unit * (tail == 0 ? 3.5f : 2.f),
+					IM_COL32(colors[i][0], colors[i][1], colors[i][2], opacity), 12);
+		}
+	}
+
+	// Reveal the emblem first, then let the wordmark settle alongside it.
+	const float split = .375f;
+	const float emblemScale = .88f + .12f * emblemReveal;
+	const ImVec2 emblemCenter(topLeft.x + logoWidth * split * .5f, topLeft.y + logoHeight * .5f);
+	const ImVec2 emblemHalf(logoWidth * split * .5f * emblemScale, logoHeight * .5f * emblemScale);
+	draw->AddImage(logo, ImVec2(emblemCenter.x - emblemHalf.x, emblemCenter.y - emblemHalf.y),
+			ImVec2(emblemCenter.x + emblemHalf.x, emblemCenter.y + emblemHalf.y), ImVec2(0, 0), ImVec2(split, 1),
+			IM_COL32(255, 255, 255, static_cast<int>(255.f * emblemReveal * fade)));
+	const float wordOffset = (1.f - wordmarkReveal) * 28.f * unit;
+	draw->AddImage(logo, ImVec2(topLeft.x + logoWidth * split - wordOffset, topLeft.y),
+			ImVec2(topLeft.x + logoWidth - wordOffset, topLeft.y + logoHeight), ImVec2(split, 0), ImVec2(1, 1),
+			IM_COL32(255, 255, 255, static_cast<int>(255.f * wordmarkReveal * fade)));
+	for (int i = 0; i < 4; ++i)
+	{
+		const float impact = smooth((elapsed - .94f - i * .06f) / .12f)
+				* (1.f - smooth((elapsed - 1.06f - i * .06f) / .28f)) * fade;
+		draw->AddCircleFilled(buttonCenters[i], 13.f * unit,
+				IM_COL32(colors[i][0], colors[i][1], colors[i][2], static_cast<int>(45.f * impact)), 24);
+		draw->AddCircleFilled(buttonCenters[i], 3.f * unit,
+				IM_COL32(255, 255, 255, static_cast<int>(150.f * impact)), 16);
+	}
+
+	// In the last half-second, render the real UI underneath the fading artwork.
+	return elapsed < fadeStart;
+}
+
 static void gui_display_loadscreen()
 {
 	drawBoxartBackground();
@@ -3090,21 +3268,33 @@ void gui_display_ui()
 		ImguiFileTexture::resetLoadCount();
 	};
 
+#ifdef TARGET_UWP
+	// Resolve protocol-launched games before the intro can defer activation.
+	const bool protocolActivated = gui_state == GuiState::Main && checkUWPProtocolActivation();
+#endif
+
+	if (gui_display_launch_screen())
+	{
+		finishFrame();
+		return;
+	}
+
 	// Render menu bar BEFORE any early returns.
 	// Hide it for the full-screen GameInfo screen on Android.
 	if (gui_state != GuiState::GameInfo)
 		GuiMenu::renderMainMenuBar();
 
+#ifdef TARGET_UWP
+	if (protocolActivated)
+	{
+		finishFrame();
+		return;
+	}
+#endif
+
 	// Check for auto-start after menu bar is rendered
 	if (gui_state == GuiState::Main)
 	{
-#ifdef TARGET_UWP
-		if (checkUWPProtocolActivation())
-		{
-			finishFrame();
-			return;
-		}
-#endif
 		if (!settings.content.path.empty() || settings.naomi.slave)
 		{
 #ifndef __ANDROID__

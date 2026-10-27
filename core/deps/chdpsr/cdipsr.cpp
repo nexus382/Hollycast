@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Sh4 register storage/functions/utilities
 */
 

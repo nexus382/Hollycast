@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "types.h"
 #include "stdclass.h"
 #include "oslib/directory.h"

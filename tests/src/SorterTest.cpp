@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include <gtest/gtest.h>
 
 #include "hw/pvr/ta_ctx.h"

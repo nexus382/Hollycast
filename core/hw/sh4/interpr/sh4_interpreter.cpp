@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Highly inefficient and boring interpreter. Nothing special here
 */
 

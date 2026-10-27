@@ -8360,6 +8360,17 @@ void renderAboutTab()
 			"(at your option) any later version."
 		));
 		ImGui::Spacing();
+		if (ImGui::TreeNode("Noto Sans CJK (SIL Open Font License)"))
+		{
+			size_t licenseSize = 0;
+			auto license = resource::load("fonts/NotoSansCJK-LICENSE.txt", licenseSize);
+			if (license)
+			{
+				const std::string text(reinterpret_cast<const char*>(license.get()), licenseSize);
+				ImGui::TextWrapped("%s", text.c_str());
+			}
+			ImGui::TreePop();
+		}
 	}
 
 	// Credits

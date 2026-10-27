@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 #endif

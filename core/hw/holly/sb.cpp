@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	System bus registers
 	This doesn't implement any functionality, only routing
 */

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // serialize.cpp : save states
 #include "serialize.h"
 #include "types.h"

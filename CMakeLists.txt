@@ -1448,6 +1448,7 @@ if(NOT LIBRETRO)
 			target_sources(${PROJECT_NAME} PRIVATE
 					shell/apple/common/http_client.mm
 					shell/apple/common/util.mm)
+			# Test builds use gtest_main instead of the macOS app entry point.
 			if(NOT BUILD_TESTING)
 				add_subdirectory(core/deps/Syphon)
 				target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
@@ -1461,7 +1462,8 @@ if(NOT LIBRETRO)
 						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
 						shell/apple/emulator-osx/emulator-osx/osx-main.mm)
 				set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
-				target_sources(${PROJECT_NAME} PRIVATE ${ASSETS})
+				target_sources(${PROJECT_NAME} PRIVATE ${ASSETS} fonts/NotoSansCJK-LICENSE.txt)
+				set_source_files_properties(fonts/NotoSansCJK-LICENSE.txt PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 				source_group("Resources" FILES ${ASSETS})
 				set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 			endif()
@@ -1595,6 +1597,10 @@ elseif(LIBRETRO)
 	install(TARGETS ${PROJECT_NAME} DESTINATION "${CMAKE_INSTALL_LIBDIR}/libretro")
 else()
 	install(TARGETS ${PROJECT_NAME} DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
+
+if(NOT APPLE AND NOT LIBRETRO)
+	install(FILES fonts/NotoSansCJK-LICENSE.txt DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}")
 endif()
 
 if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT LIBRETRO)

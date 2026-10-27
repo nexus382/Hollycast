@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Lovely timers, its amazing how many times this module was bugged
 */
 

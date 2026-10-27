@@ -1,6 +1,7 @@
 /*
 	Basic gdrom syscall emulation
 	Adapted from some (very) old pre-nulldc hle code
+	Portions Copyright 2026 The Hollycast Authors
 	Bits and pieces from redream (https://github.com/inolen/redream)
 */
 
