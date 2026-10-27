@@ -28,6 +28,8 @@ permissions:
 
 concurrency:
   group: builds-pages-${{ github.event.pull_request.number || 'publish' }}
+  # Preserve waiting build-completion events while release uploads finish.
+  queue: max
   cancel-in-progress: false
 
 jobs:

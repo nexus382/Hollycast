@@ -37,8 +37,9 @@ uploads succeed; retries reuse completed assets and remove only empty, unfinishe
 assets belonging to that draft before uploading again.
 
 Updates run after releases and platform build completions, hourly, and on manual
-dispatch. Non-workflow-run events backfill the latest successful build of each
-platform on each branch from the most recent 100 successful runs per branch.
+dispatch. Publishing runs are serialized, and waiting build completions are queued
+instead of replacing one another. Non-workflow-run events backfill the latest
+successful build of each platform from the most recent 100 successful runs per branch.
 Build completions publish that specific run. Expired source artifacts cannot be
 backfilled; the next successful build will provide fresh downloads. Open
 pages reload the static catalog every five minutes, without using visitors'
