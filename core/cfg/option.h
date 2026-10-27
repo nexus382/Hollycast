@@ -413,7 +413,8 @@ extern Option<int, false> LibraryCoverMedia;
 extern Option<int, false> LibraryIconScale;
 extern Option<int, false> VmuIconMode;
 extern Option<int, false> UIScaling;
-extern Option<int, false> UITheme;          // 0 -> Dark, 1 -> Light, 2 -> Dreamcast, 3 -> High Contrast, 4 -> Nintendo, 5 -> Aqua Chill
+extern Option<int, false> UITheme;
+extern Option<std::string, false> UICustomTheme;
 enum class MenuBarMode
 {
 	Auto = 0,

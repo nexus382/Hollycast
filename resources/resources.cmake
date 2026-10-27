@@ -71,3 +71,12 @@ cmrc_add_resources(Hollycast-resources
 	resources/i18n/zh_CN.po
 	resources/i18n/zh_HK.po
 	resources/i18n/zh_TW.po)
+
+cmrc_add_resources(Hollycast-resources
+        WHENCE resources
+        resources/themes/Dark.json
+        resources/themes/Light.json
+        resources/themes/Dreamcast.json
+        "resources/themes/High Contrast.json"
+        resources/themes/Nintendo.json
+        "resources/themes/Aqua Chill.json")

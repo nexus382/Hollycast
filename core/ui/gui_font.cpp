@@ -23,6 +23,12 @@
 #include "oslib/resources.h"
 #include "IconsFontAwesome6.h"
 #include "imgui/misc/freetype/imgui_freetype.h"
+#include "custom_theme.h"
+#include "nowide/fstream.hpp"
+#include <array>
+#include <cstring>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 ImFont *boldFont;
 ImFont *largeFont;
@@ -31,6 +37,65 @@ ImFont *settingsValueFont;
 ImFont *settingsRightValueFont;
 ImFont *settingsIconFont;
 ImFont *aboutAsciiFont;
+
+namespace {
+std::unique_ptr<u8[]> loadThemeFont(const std::string& path, size_t& size)
+{
+	if (path.empty()) return {};
+	nowide::ifstream file(path, std::ios::binary | std::ios::ate);
+	if (!file) return {};
+	auto length = file.tellg();
+	if (length < 12 || length > 32 * 1024 * 1024) return {};
+	size = static_cast<size_t>(length);
+	auto bytes = std::make_unique<u8[]>(size);
+	file.seekg(0);
+	if (!file.read(reinterpret_cast<char*>(bytes.get()), length)) return {};
+	// Validate an SFNT directory and all table ranges before handing bytes to
+	// the font backend. This rejects truncated or malformed user files safely.
+	const u8* d = bytes.get();
+	const size_t offset = (d[0] == 't' && d[1] == 't' && d[2] == 'c' && d[3] == 'f' && size >= 16)
+			? ((size_t)d[12] << 24 | (size_t)d[13] << 16 | (size_t)d[14] << 8 | d[15]) : 0;
+	if (offset + 12 > size) return {};
+	const u32 signature = (u32)d[offset] << 24 | (u32)d[offset + 1] << 16 | (u32)d[offset + 2] << 8 | d[offset + 3];
+	if (signature != 0x00010000 && signature != 0x4f54544f && signature != 0x74727565) return {};
+	const unsigned count = (unsigned)d[offset + 4] << 8 | d[offset + 5];
+	if (count == 0 || count > 256 || offset + 12 + count * 16 > size) return {};
+	for (unsigned i = 0; i < count; ++i) {
+		const size_t entry = offset + 12 + i * 16;
+		const size_t tableOffset = (size_t)d[entry + 8] << 24 | (size_t)d[entry + 9] << 16 | (size_t)d[entry + 10] << 8 | d[entry + 11];
+		const size_t tableSize = (size_t)d[entry + 12] << 24 | (size_t)d[entry + 13] << 16 | (size_t)d[entry + 14] << 8 | d[entry + 15];
+		if (tableOffset > size || tableSize > size - tableOffset) return {};
+	}
+	FT_Library library = nullptr;
+	FT_Face face = nullptr;
+	const bool validFace = FT_Init_FreeType(&library) == 0
+			&& FT_New_Memory_Face(library, bytes.get(), static_cast<FT_Long>(size), 0, &face) == 0
+			&& FT_Get_Char_Index(face, 'A') != 0
+			&& FT_Load_Glyph(face, FT_Get_Char_Index(face, 'A'), FT_LOAD_DEFAULT) == 0;
+	if (face) FT_Done_Face(face);
+	if (library) FT_Done_FreeType(library);
+	if (!validFace) return {};
+	return bytes;
+}
+
+void* copyForAtlas(const u8* bytes, size_t size)
+{
+	void* atlasBytes = IM_ALLOC(size);
+	if (atlasBytes != nullptr)
+		std::memcpy(atlasBytes, bytes, size);
+	return atlasBytes;
+}
+
+ImFont* addThemeFont(ImFontAtlas* atlas, const std::string& path, float size,
+		const ImFontConfig* config = nullptr, const ImWchar* ranges = nullptr)
+{
+	size_t dataSize = 0;
+	auto data = loadThemeFont(path, dataSize);
+	if (!data) return nullptr;
+	void* ownedData = copyForAtlas(data.get(), dataSize);
+	return ownedData ? atlas->AddFontFromMemoryTTF(ownedData, (int)dataSize, size, config, ranges) : nullptr;
+}
+}
 
 namespace FontFace
 {
@@ -265,26 +330,35 @@ void gui_loadFonts()
 	ImGuiStyle& style = ImGui::GetStyle();
 	const float fontSize = uiScaled(17.f);
 
-	size_t dataSize;
-	std::unique_ptr<u8[]> data = resource::load("fonts/Roboto-Medium.ttf", dataSize);
+	size_t dataSize = 0;
+	std::unique_ptr<u8[]> data = loadThemeFont(CustomTheme::fontPath(false), dataSize);
+	const bool customRegular = data != nullptr;
+	if (!data) data = resource::load("fonts/Roboto-Medium.ttf", dataSize);
 	verify(data != nullptr);
-	ImFont *regularFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, nullptr, nullptr);
+	void* regularBytes = customRegular ? copyForAtlas(data.get(), dataSize) : data.release();
+	ImFont *regularFont = io.Fonts->AddFontFromMemoryTTF(regularBytes, (int)dataSize, fontSize, nullptr, nullptr);
 	ImFontConfig fontConfig;
 	fontConfig.MergeMode = true;
 	fontConfig.DstFont = regularFont;
 
 	// Bold font
-	data = resource::load("fonts/Roboto-Bold.ttf", dataSize);
+	data = loadThemeFont(CustomTheme::fontPath(true), dataSize);
+	const bool customBold = data != nullptr;
+	if (!data) data = resource::load("fonts/Roboto-Bold.ttf", dataSize);
 	verify(data != nullptr);
-	boldFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, nullptr, nullptr);
+	void* boldBytes = customBold ? copyForAtlas(data.get(), dataSize) : data.release();
+	boldFont = io.Fonts->AddFontFromMemoryTTF(boldBytes, (int)dataSize, fontSize, nullptr, nullptr);
 	ImFontConfig boldFontConfig;
 	boldFontConfig.MergeMode = true;
 	boldFontConfig.DstFont = boldFont;
 
 	// Large font
-	data = resource::load("fonts/Roboto-Regular.ttf", dataSize);
-	verify(data != nullptr);
-	largeFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(21.f), nullptr, nullptr);
+	largeFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), uiScaled(21.f));
+	if (largeFont == nullptr) {
+		data = resource::load("fonts/Roboto-Regular.ttf", dataSize);
+		verify(data != nullptr);
+		largeFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(21.f), nullptr, nullptr);
+	}
 
 	// Keep the About-page artwork isolated from the application fonts. The
 	// embedded vector font is monospaced. Avoid whole-pixel advance snapping
@@ -498,25 +572,32 @@ void gui_loadFonts()
 
 	const float largeFontSize = uiScaled(21.f);
 
-	data = resource::load("fonts/Jura-wght.ttf", dataSize);
-	if (data != nullptr)
+	ImFontConfig settingsTitleFontCfg;
+	settingsTitleFontCfg.RasterizerMultiply = 1.25f;
+	settingsTitleFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), fontSize, &settingsTitleFontCfg, ranges);
+	if (settingsTitleFont == nullptr)
 	{
-		ImFontConfig settingsTitleFontCfg;
-		settingsTitleFontCfg.RasterizerMultiply = 1.25f;
-		settingsTitleFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, &settingsTitleFontCfg, ranges);
+		data = resource::load("fonts/Jura-wght.ttf", dataSize);
+		if (data != nullptr)
+			settingsTitleFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, &settingsTitleFontCfg, ranges);
 	}
 
-	data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
-	if (data != nullptr)
+	ImFontConfig rightValueFontCfg;
+	rightValueFontCfg.RasterizerMultiply = 4.50f;
+	settingsRightValueFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), largeFontSize, &rightValueFontCfg, ranges);
+	if (settingsRightValueFont == nullptr)
 	{
-		ImFontConfig rightValueFontCfg;
-		rightValueFontCfg.RasterizerMultiply = 4.50f;
-		settingsRightValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, largeFontSize, &rightValueFontCfg, ranges);
+		data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
+		if (data != nullptr)
+			settingsRightValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, largeFontSize, &rightValueFontCfg, ranges);
 	}
 
-	data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
-	if (data != nullptr)
-		settingsValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(24.f), nullptr, ranges);
+	settingsValueFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), uiScaled(24.f), nullptr, ranges);
+	if (settingsValueFont == nullptr) {
+		data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
+		if (data != nullptr)
+			settingsValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(24.f), nullptr, ranges);
+	}
 
 	if (settingsTitleFont == nullptr)
 		settingsTitleFont = regularFont != nullptr ? regularFont : largeFont;

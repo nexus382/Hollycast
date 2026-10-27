@@ -59,6 +59,7 @@ TEST_F(IniFileTest, save)
 
 TEST_F(IniFileTest, getSet)
 {
+	struct RestoreLocale { std::locale original = std::locale(); ~RestoreLocale() { std::locale::global(original); } } restoreLocale;
 	std::locale::global(std::locale("fr_FR.UTF-8"));
 	IniFile ini;
 	ini.set("s", "e", 1);

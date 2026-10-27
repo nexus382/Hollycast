@@ -41,5 +41,5 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/util/WorkerThreadTest.cpp)
 
 if(NOT LIBRETRO)
-    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp src/ui/CustomThemeTest.cpp)
 endif()

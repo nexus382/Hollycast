@@ -26,6 +26,7 @@
 
 void gui_init();
 void gui_updateStyle();
+void gui_requestStyleReload();
 void gui_open_settings();
 void gui_display_ui();
 void gui_draw_osd();

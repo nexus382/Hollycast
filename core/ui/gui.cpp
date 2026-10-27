@@ -18,6 +18,7 @@
     along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "custom_theme.h"
 #include "rend/osd.h"
 #include "cfg/cfg.h"
 #include "imgui.h"
@@ -80,6 +81,7 @@ bool game_started;
 
 int insetLeft, insetRight, insetTop, insetBottom;
 std::unique_ptr<ImGuiDriver> imguiDriver;
+static bool styleReloadRequested;
 
 static bool inited = false;
 static SetupChecklistLifecycle setupChecklist;
@@ -253,6 +255,8 @@ static ImGuiKey keycodeToImGuiKey(u8 keycode)
 void gui_updateStyle()
 {
 	static float uiScale;
+	const bool forceReload = styleReloadRequested;
+	styleReloadRequested = false;
 
 	verify(inited);
 	uiThreadRunner.init();
@@ -274,7 +278,7 @@ void gui_updateStyle()
     	settings.display.uiScale = std::min(1.2f, settings.display.uiScale);
 #endif
     settings.display.uiScale *= uiUserScale();
-	if (settings.display.uiScale == uiScale && ImGui::GetIO().Fonts->IsBuilt())
+	if (!forceReload && settings.display.uiScale == uiScale && ImGui::GetIO().Fonts->IsBuilt())
 		return;
 	uiScale = settings.display.uiScale;
 
@@ -283,25 +287,15 @@ void gui_updateStyle()
 
 	// Apply the current theme
 	applyCurrentTheme();
-
-	ImGui::GetStyle().TabRounding = 5.0f;
-	ImGui::GetStyle().FrameRounding = 3.0f;
-	ImGui::GetStyle().ItemSpacing = ImVec2(8, 8);		// from 8,4
-	ImGui::GetStyle().ItemInnerSpacing = ImVec2(4, 6);	// from 4,4
-#if defined(__ANDROID__) || defined(TARGET_IPHONE) || defined(__SWITCH__)
-	ImGui::GetStyle().TouchExtraPadding = ImVec2(1, 1);	// from 0,0
-#endif
-#if defined(__ANDROID__)
-	GuiMenu::setAndroidMenuStyle(ImGui::GetStyle(), settings.display.uiScale);
-#endif
-	if (settings.display.uiScale != 1.f)
-		ImGui::GetStyle().ScaleAllSizes(settings.display.uiScale);
+	ImguiFileTexture::clearThemeImageFailures();
 
 	gui_loadFonts();
 
 	NOTICE_LOG(RENDERER, "Screen DPI is %.0f, size %d x %d. Scaling by %.2f", settings.display.dpi, settings.display.width, settings.display.height, settings.display.uiScale);
 	vgamepad::applyUiScale();
 }
+
+void gui_requestStyleReload() { styleReloadRequested = true; }
 
 void gui_keyboard_input(u32 wc)
 {
@@ -424,8 +418,6 @@ static void gui_newFrame()
 		dc_exit();  // Exit application
 		return;  // Skip the rest of this frame
 	}
-
-	ImGui::GetStyle().Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.06f, 0.06f, 0.06f, 0.94f);
 
 	if (showOnScreenKeyboard != nullptr)
 		showOnScreenKeyboard(io.WantTextInput);
@@ -845,7 +837,7 @@ static void render_auto_load_dialog()
 		const int autoSaveSlot = dc_getAutoSaveSlot();
 		const time_t savestateDate = dc_getStateCreationDate(autoSaveSlot);
 		if (savestateDate != 0)
-			ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.75f, 1.f), "%s", timeToShortDateTimeString(savestateDate).c_str());
+			ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", timeToShortDateTimeString(savestateDate).c_str());
 
 		ImGui::Spacing();
 		ImguiStateTexture savestatePic(autoSaveSlot);
@@ -919,7 +911,7 @@ static void gui_display_commands()
 			ImGui::Text("%s", art.name.c_str());
 			ImGui::PopFont();
 			{
-				ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.f));
+				ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 				ImGui::TextWrapped("%s", art.fileName.c_str());
 				if (!art.arcade && !art.uniqueId.empty())
 					ImGui::Text(T("UID: %s"), art.uniqueId.c_str());
@@ -1032,11 +1024,10 @@ static void gui_display_commands()
 			if (ImGui::ArrowButton("##next-slot", ImGuiDir_Right))
 				gui_cycleSaveStateSlot(1);
 			{
-				ImVec4 gray(0.75f, 0.75f, 0.75f, 1.f);
 				if (savestateDate == 0)
-					ImGui::TextColored(gray, "%s", T("Empty"));
+					ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", T("Empty"));
 				else
-					ImGui::TextColored(gray, "%s", timeToShortDateTimeString(savestateDate).c_str());
+					ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", timeToShortDateTimeString(savestateDate).c_str());
 			}
 			savestatePic.draw(ScaledVec2(buttonWidth, 0.f));
 		}
@@ -1214,6 +1205,25 @@ static void gameTooltip(const std::string& tip)
 
 static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animationClock);
 
+static ImVec4 blendThemeColor(ImGuiCol base, ImGuiCol accent, float accentWeight, float alpha = 1.0f)
+{
+	const ImVec4 a = ImGui::GetStyle().Colors[base];
+	const ImVec4 b = ImGui::GetStyle().Colors[accent];
+	return ImVec4(a.x + (b.x - a.x) * accentWeight,
+			a.y + (b.y - a.y) * accentWeight,
+			a.z + (b.z - a.z) * accentWeight, alpha);
+}
+
+static ImVec4 themeStatusColor(const char *role, const ImVec4& semantic, const char *widget = "media.status")
+{
+	const ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
+	constexpr float semanticWeight = 0.62f;
+	const ImVec4 fallback(accent.x + (semantic.x - accent.x) * semanticWeight,
+			accent.y + (semantic.y - accent.y) * semanticWeight,
+			accent.z + (semantic.z - accent.z) * semanticWeight, 1.0f);
+	return CustomTheme::roleColor(role, fallback, widget);
+}
+
 static const char *game_info_value(const std::string& value)
 {
 	return value.empty() ? T("Unknown") : value.c_str();
@@ -1239,7 +1249,7 @@ static std::string format_game_info_release_date(const std::string& value)
 static void draw_game_info_stat(const char *label, const std::string& value)
 {
 	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.52f, 0.70f, 0.82f, 1.0f), "%s", T(label));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T(label));
 	ImGui::TextWrapped("%s", game_info_value(value));
 	ImGui::PopFont();
 }
@@ -1272,10 +1282,9 @@ struct HoverGameInfoCache
 
 static void draw_game_info_media_label(const char *label, bool present)
 {
-	const ImVec4 presentColor(0.35f, 0.95f, 0.45f, 1.0f);
-	const ImVec4 missingColor(0.45f, 0.45f, 0.52f, 1.0f);
 	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(present ? presentColor : missingColor, "%s", label);
+	ImGui::TextColored(present ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
+			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status"), "%s", label);
 	const bool hasRoomForNextLabel = ImGui::GetContentRegionAvail().x > ImGui::CalcTextSize("Title Screen").x + uiScaled(18.0f);
 	ImGui::PopFont();
 	if (hasRoomForNextLabel)
@@ -1437,10 +1446,9 @@ static void draw_game_info_chip(const std::string& text)
 		return;
 	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, uiScaled(10.0f));
 	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ScaledVec2(10.0f, 4.0f));
-	ImguiStyleColor button(ImGuiCol_Button, ImVec4(0.06f, 0.12f, 0.16f, 0.92f));
-	ImguiStyleColor buttonHovered(ImGuiCol_ButtonHovered, ImVec4(0.08f, 0.18f, 0.22f, 0.95f));
-	ImguiStyleColor buttonActive(ImGuiCol_ButtonActive, ImVec4(0.08f, 0.18f, 0.22f, 0.95f));
-	ImguiStyleColor textColor(ImGuiCol_Text, ImVec4(0.72f, 0.86f, 0.92f, 1.0f));
+	ImguiStyleColor button(ImGuiCol_Button, blendThemeColor(ImGuiCol_FrameBg, ImGuiCol_ButtonActive, 0.24f, 0.92f));
+	ImguiStyleColor buttonHovered(ImGuiCol_ButtonHovered, blendThemeColor(ImGuiCol_FrameBgHovered, ImGuiCol_ButtonActive, 0.38f, 0.95f));
+	ImguiStyleColor buttonActive(ImGuiCol_ButtonActive, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
 	ImGui::Button(text.c_str());
 }
 
@@ -1482,12 +1490,12 @@ static void draw_game_info_chip_row(const GameMedia& game)
 static bool draw_game_info_badge(const GameInfoMediaEntry& media, int index)
 {
 	const bool found = !media.path.empty();
-	ImVec4 bg = media.selected ? ImVec4(0.08f, 0.34f, 0.45f, 1.0f)
-			: found ? ImVec4(0.04f, 0.20f, 0.10f, 0.88f)
-			: ImVec4(0.13f, 0.14f, 0.16f, 0.84f);
-	ImVec4 text = media.selected ? ImVec4(0.90f, 0.98f, 1.0f, 1.0f)
-			: found ? ImVec4(0.32f, 0.94f, 0.48f, 1.0f)
-			: ImVec4(0.50f, 0.53f, 0.58f, 1.0f);
+	const ImVec4 bg = media.selected ? blendThemeColor(ImGuiCol_Button, ImGuiCol_ButtonActive, 0.85f)
+			: found ? blendThemeColor(ImGuiCol_FrameBg, ImGuiCol_ButtonActive, 0.28f, 0.88f)
+			: ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+	const ImVec4 text = media.selected ? ImGui::GetStyle().Colors[ImGuiCol_Text]
+			: found ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
+			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status");
 
 	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, uiScaled(11.0f));
 	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ScaledVec2(9.0f, 4.0f));
@@ -1520,9 +1528,9 @@ static int draw_game_info_badge_wrap(const std::vector<GameInfoMediaEntry>& medi
 static void draw_game_info_detail_row(const char *label, const std::string& value)
 {
 	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T(label));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T(label));
 	ImGui::SameLine(uiScaled(110.0f));
-	ImGui::TextColored(ImVec4(0.86f, 0.89f, 0.92f, 1.0f), "%s", game_info_value(value));
+	ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", game_info_value(value));
 	ImGui::PopFont();
 }
 
@@ -1532,15 +1540,15 @@ static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameM
 	const ImVec2 p = ImGui::GetCursorScreenPos();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
 	dl->AddRectFilled(p + ScaledVec2(0.0f, 4.0f), p + heroSize + ScaledVec2(0.0f, 4.0f),
-			IM_COL32(0, 0, 0, 120), uiScaled(14.0f));
-	dl->AddRectFilled(p, p + heroSize, IM_COL32(5, 8, 11, 245), uiScaled(14.0f));
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_BorderShadow), 0.45f), uiScaled(14.0f));
+	dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.95f), uiScaled(14.0f));
 	if (draw_game_info_image_cover_cropped(best_game_info_hero_background_path(cache), dl, p, p + heroSize, IM_COL32(255, 255, 255, 62)))
-		dl->AddRectFilled(p, p + heroSize, IM_COL32(0, 0, 0, 142), uiScaled(14.0f));
+		dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f), uiScaled(14.0f));
 	dl->AddRectFilled(ImVec2(p.x, p.y + heroSize.y - uiScaled(48.0f)), p + heroSize,
-			IM_COL32(0, 0, 0, 112), uiScaled(14.0f));
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.44f), uiScaled(14.0f));
 	dl->AddRectFilled(p + ScaledVec2(24.0f, 16.0f), ImVec2(p.x + heroSize.x - uiScaled(24.0f), p.y + uiScaled(84.0f)),
-			IM_COL32(0, 170, 220, 24), uiScaled(18.0f));
-	dl->AddRect(p, p + heroSize, IM_COL32(18, 145, 205, 135), uiScaled(14.0f), 0, uiScaled(1.0f));
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_HeaderActive), 0.12f), uiScaled(18.0f));
+	dl->AddRect(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.82f), uiScaled(14.0f), 0, uiScaled(1.0f));
 
 	if (ImGui::BeginChild("##libraryHoverHero", heroSize, false,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
@@ -1575,7 +1583,7 @@ static void draw_library_hover_media_card(const HoverGameInfoCache& cache, const
 	}
 
 	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Media Preview"));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Media Preview"));
 	ImGui::PopFont();
 	const GameInfoMediaEntry *selected = selected_game_info_media(mediaEntries);
 	const std::string selectedPath = selected != nullptr ? selected->path : selected_game_info_media_path(mediaEntries);
@@ -1585,36 +1593,37 @@ static void draw_library_hover_media_card(const HoverGameInfoCache& cache, const
 	const ImVec2 previewSize(ImGui::GetContentRegionAvail().x, previewHeight);
 	const ImVec2 previewPos = ImGui::GetCursorScreenPos();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(previewPos, previewPos + previewSize, IM_COL32(4, 6, 8, 180), uiScaled(9.0f));
-	dl->AddRect(previewPos, previewPos + previewSize, IM_COL32(18, 145, 205, 80), uiScaled(9.0f));
+	dl->AddRectFilled(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.72f), uiScaled(9.0f));
+	dl->AddRect(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.55f), uiScaled(9.0f));
 	if (!draw_game_info_image_contained(selectedPath, previewSize, previewSize - ScaledVec2(14.0f, 14.0f)))
 	{
 		const std::string missingText = std::string(selectedLabel) + " missing";
 		const char *missing = missingText.c_str();
 		const ImVec2 textSize = ImGui::CalcTextSize(missing);
 		dl->AddCircle(previewPos + previewSize * 0.5f - ScaledVec2(0.0f, 22.0f), uiScaled(14.0f),
-				IM_COL32(120, 128, 140, 220), 32, uiScaled(2.0f));
+				alphaOverride(ImGui::GetColorU32(ImGuiCol_TextDisabled), 0.86f), 32, uiScaled(2.0f));
 		dl->AddText(previewPos + (previewSize - textSize) * 0.5f + ScaledVec2(0.0f, 18.0f),
-				IM_COL32(135, 140, 150, 255), missing);
+				ImGui::GetColorU32(ImGuiCol_TextDisabled), missing);
 	}
 
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
 	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T("Current Media"));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("Current Media"));
 	ImGui::SameLine(uiScaled(128.0f));
-	ImGui::TextColored(ImVec4(0.86f, 0.89f, 0.92f, 1.0f), "%s", selectedLabel);
-	ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T("Status"));
+	ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", selectedLabel);
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("Status"));
 	ImGui::SameLine(uiScaled(128.0f));
-	ImGui::TextColored(found ? ImVec4(0.32f, 0.94f, 0.48f, 1.0f) : ImVec4(0.50f, 0.53f, 0.58f, 1.0f),
+	ImGui::TextColored(found ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
+			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status"),
 			"%s", found ? T("Found") : T("Missing"));
 	if (found)
 	{
-		ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T("File"));
+		ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("File"));
 		ImGui::SameLine(uiScaled(128.0f));
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-		ImGui::TextColored(ImVec4(0.66f, 0.72f, 0.76f, 1.0f), "%s", game_info_path_filename(selectedPath).c_str());
+		ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", game_info_path_filename(selectedPath).c_str());
 		ImGui::PopTextWrapPos();
 	}
 	ImGui::PopFont();
@@ -1629,7 +1638,7 @@ static void draw_library_hover_description_card(const GameMedia& game, float hei
 		return;
 	}
 
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Details"));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Details"));
 	ImGui::Spacing();
 	draw_game_info_detail_row("Players", game.players);
 	draw_game_info_detail_row("Released", format_game_info_release_date(game.releaseDate));
@@ -1639,7 +1648,7 @@ static void draw_library_hover_description_card(const GameMedia& game, float hei
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Description"));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Description"));
 	ImGui::Spacing();
 	const float wrapWidth = std::min(ImGui::GetContentRegionAvail().x, uiScaled(760.0f));
 	if (ImGui::BeginChild("##libraryHoverDescriptionText", ImVec2(0.0f, 0.0f), false))
@@ -1672,9 +1681,9 @@ static int draw_library_hover_status_strip(const std::vector<GameInfoMediaEntry>
 	}
 
 	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Media"));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Media"));
 	ImGui::SameLine();
-	ImGui::TextColored(ImVec4(0.70f, 0.78f, 0.82f, 1.0f), "%d / %d found", foundCount, (int)mediaEntries.size());
+	ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%d / %d found", foundCount, (int)mediaEntries.size());
 	ImGui::PopFont();
 	int clickedIndex = -1;
 	if (ImGui::BeginChild("##libraryHoverMediaBadges", ImVec2(0.0f, uiScaled(34.0f)), false,
@@ -1778,7 +1787,8 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	hoverPanelMin = hoverPanelPos;
 	hoverPanelMax = hoverPanelPos + ImVec2(hoverWidth, hoverHeight);
 
-	ImGui::GetBackgroundDrawList()->AddRectFilled(viewport->Pos, viewport->Pos + viewport->Size, IM_COL32(0, 0, 0, 138));
+	ImGui::GetBackgroundDrawList()->AddRectFilled(viewport->Pos, viewport->Pos + viewport->Size,
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f));
 	ImGui::SetNextWindowPos(hoverPanelPos, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(hoverWidth, hoverHeight), ImGuiCond_Always);
 	ImguiStyleVar windowPadding(ImGuiStyleVar_WindowPadding, ScaledVec2(18.0f, 16.0f));
@@ -1788,9 +1798,9 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	ImguiStyleVar childRounding(ImGuiStyleVar_ChildRounding, uiScaled(10.0f));
 	ImguiStyleVar frameRounding(ImGuiStyleVar_FrameRounding, uiScaled(8.0f));
 	ImguiStyleVar borderSize(ImGuiStyleVar_WindowBorderSize, 0.0f);
-	ImguiStyleColor borderColor(ImGuiCol_Border, ImVec4(0.10f, 0.55f, 0.82f, 0.55f));
-	ImguiStyleColor childBgColor(ImGuiCol_ChildBg, ImVec4(0.035f, 0.040f, 0.045f, 0.94f));
-	ImguiStyleColor windowBgColor(ImGuiCol_WindowBg, ImVec4(0.015f, 0.018f, 0.022f, 0.97f));
+	ImguiStyleColor borderColor(ImGuiCol_Border, blendThemeColor(ImGuiCol_Border, ImGuiCol_HeaderActive, 0.35f, 0.65f));
+	ImguiStyleColor childBgColor(ImGuiCol_ChildBg, blendThemeColor(ImGuiCol_WindowBg, ImGuiCol_ChildBg, 0.45f, 0.96f));
+	ImguiStyleColor windowBgColor(ImGuiCol_WindowBg, ImGui::GetStyle().Colors[ImGuiCol_WindowBg]);
 	const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration
 			| ImGuiWindowFlags_NoSavedSettings
 			| ImGuiWindowFlags_NoNav
@@ -2000,8 +2010,9 @@ static bool gameImageButton(ImguiTexture& texture, const std::string& tooltip, I
 	// general UI scale. ImageButton otherwise inherits scaled FramePadding,
 	// which makes the artwork shrink inside an unchanged library card.
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f, 2.0f));
+	const float radius = CustomTheme::activeLayout().artworkCornerRadius;
 	bool pressed = texture.button("##imagebutton", size, gameName, ImVec4(0, 0, 0, 0), ImVec4(1, 1, 1, 1),
-			fallbackTitleSize);
+			fallbackTitleSize, radius < 0.0f ? 0.0f : uiScaled(radius));
 	ImGui::PopStyleVar();
 
     return pressed;
@@ -2171,6 +2182,39 @@ static void gui_display_content()
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
 
     ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration);
+	// Draw theme artwork first so all library controls remain above it. A dark
+	// wash preserves contrast even when users choose a bright background.
+	const std::string themeBackground = CustomTheme::assetPath("background");
+	bool libraryThemeBackgroundVisible = false;
+	if (!themeBackground.empty()) {
+		ImguiFileTexture background(themeBackground, true, true);
+		ImTextureID id = background.getId();
+		const bool hasThemeBackground = id != ImTextureID();
+		libraryThemeBackgroundVisible = hasThemeBackground;
+		if (hasThemeBackground) {
+			const ImVec2 min = ImGui::GetWindowPos();
+			const ImVec2 max(min.x + ImGui::GetWindowSize().x, min.y + ImGui::GetWindowSize().y);
+			ImVec2 imageMin = min, imageMax = max;
+			const float aspect = imguiDriver->getAspectRatio(id);
+			const float windowAspect = (max.x - min.x) / std::max(1.f, max.y - min.y);
+			const std::string fit = CustomTheme::backgroundFit();
+			if (fit != "stretch" && aspect > 0.f) {
+				const bool contain = fit == "contain";
+				if ((aspect > windowAspect) == contain) {
+					const float height = (max.x - min.x) / aspect;
+					imageMin.y += ((max.y - min.y) - height) * 0.5f;
+					imageMax.y = imageMin.y + height;
+				} else {
+					const float width = (max.y - min.y) * aspect;
+					imageMin.x += ((max.x - min.x) - width) * 0.5f;
+					imageMax.x = imageMin.x + width;
+				}
+			}
+			ImGui::GetWindowDrawList()->AddImage(id, imageMin, imageMax,
+					ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, (int)(CustomTheme::backgroundOpacity() * 255)));
+			ImGui::GetWindowDrawList()->AddRectFilled(min, max, IM_COL32(0, 0, 0, 72));
+		}
+	}
 
     // Keep the library toolbar cohesive at a larger size without coupling it to
     // the user-configured global UI Scaling value.
@@ -2264,7 +2308,25 @@ static void gui_display_content()
 #else
 		ImGui::SameLine(ImGui::GetContentRegionMax().x - settingsBtn.width());
 #endif
-			if (settingsBtn.realize())
+			const std::string settingsIcon = CustomTheme::assetPath("settings");
+			ImTextureID settingsIconId{};
+			if (!settingsIcon.empty()) {
+				ImguiFileTexture icon(settingsIcon, true, true);
+				settingsIconId = icon.getId();
+			}
+			const bool hasSettingsIcon = settingsIconId != ImTextureID();
+			const bool settingsPressed = hasSettingsIcon
+					? ImGui::Button("##LibrarySettings", ImVec2(settingsBtn.width(), 0))
+					: settingsBtn.realize();
+			if (hasSettingsIcon) {
+			const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+			const float iconSize = std::min(max.y - min.y - 12.f, 24.f * libraryToolbarScale);
+			const ImVec2 iconMin(min.x + 8.f, min.y + ((max.y - min.y) - iconSize) * 0.5f);
+			ImGui::GetWindowDrawList()->AddImage(settingsIconId, iconMin, ImVec2(iconMin.x + iconSize, iconMin.y + iconSize));
+			ImGui::GetWindowDrawList()->AddText(ImVec2(iconMin.x + iconSize + 8.f, min.y + ImGui::GetStyle().FramePadding.y),
+					ImGui::GetColorU32(ImGuiCol_Text), T("Settings"));
+			}
+			if (settingsPressed)
 			{
 				gui_setState(GuiState::Settings);
 			}
@@ -2283,7 +2345,9 @@ static void gui_display_content()
     scanner.fetch_game_list();
 
 	// Only if Filter and Settings aren't focused... ImGui::SetNextWindowFocus();
+	if (libraryThemeBackgroundVisible) ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
 	ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_DragScrolling);
+	if (libraryThemeBackgroundVisible) ImGui::PopStyleColor();
     {
 		const bool useListStyle = config::LibraryDisplayStyle.get() == static_cast<int>(config::LibraryDisplayStyleMode::List);
 		const float totalWidth = ImGui::GetContentRegionMax().x - (!ImGui::GetCurrentWindow()->ScrollbarY ? ImGui::GetStyle().ScrollbarSize : 0);
@@ -2304,10 +2368,18 @@ static void gui_display_content()
 
 		if (useListStyle)
 			ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(5, 4));
-		else if (config::BoxartDisplayMode)
-			ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.5f, 0.5f));
-		else
-			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 20));
+		else {
+			const auto& layout = CustomTheme::activeLayout();
+			const float density = layout.density;
+			const float currentSpacingX = ImGui::GetStyle().ItemSpacing.x;
+			const float currentSpacingY = ImGui::GetStyle().ItemSpacing.y;
+			const float spacingX = layout.libraryCoverSpacing >= 0.0f
+					? uiScaled(layout.libraryCoverSpacing) : (config::BoxartDisplayMode ? currentSpacingX : 8.0f);
+			const float spacingY = config::BoxartDisplayMode ? currentSpacingY : 20.0f;
+			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacingX * density, spacingY * density));
+			if (config::BoxartDisplayMode)
+				ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.5f, 0.5f));
+		}
 		const float tableTextSize = std::clamp(18.5f * libraryTextScaleFactor, 18.5f, 46.0f);
 		const float tableRowContentHeight = std::max(iconSize.y, tableTextSize);
 		const float tableRowHeight = tableRowContentHeight + ImGui::GetStyle().CellPadding.y * 2.0f;
@@ -2609,7 +2681,7 @@ static void gui_display_content()
 			ImGui::EndChild();
 		}
 #endif
-        ImGui::PopStyleVar();
+		ImGui::PopStyleVar(useListStyle || !config::BoxartDisplayMode ? 1 : 2);
         addContentPath(addContent);
     }
     scrollWhenDraggingOnVoid();
@@ -3043,7 +3115,7 @@ static void gui_display_loadscreen()
 					}
 				}
 
-				ImguiStyleColor _(ImGuiCol_PlotHistogram, ImVec4(0.557f, 0.268f, 0.965f, 1.f));
+				ImguiStyleColor _(ImGuiCol_PlotHistogram, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
 				ImGui::ProgressBar(progress, ImVec2(-1, uiScaled(20.f)), overlay);
 
 				float currentwidth = ImGui::GetContentRegionAvail().x;
@@ -3077,6 +3149,8 @@ void gui_display_ui()
 
 	// Initialize ImGui frame BEFORE any early returns
 	// This ensures the menu bar is always visible, even during auto-start
+	if (styleReloadRequested)
+		gui_updateStyle();
 	gui_newFrame();
 	if (gui_state == GuiState::Settings)
 		SettingsNew::prepareControllerNavigation();
@@ -3280,7 +3354,7 @@ void gui_display_profiler()
 	ImGui::Begin(profilerWindowTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBackground);
 
 	{
-		ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+		ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 
 		std::unique_lock<std::recursive_mutex> lock(fc_profiler::ProfileThread::s_allThreadsLock);
 
@@ -3704,7 +3778,7 @@ void render_save_state_slots(bool isSaving)
     }
 
     if (!isSaving && !hasEntries) {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", T("No Save States"));
+        ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", T("No Save States"));
     }
 }
 
