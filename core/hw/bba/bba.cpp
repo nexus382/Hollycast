@@ -61,12 +61,17 @@ static int rxDeliver(int tag, int cycles, int jitter, void *arg)
 	if (rtl8139device == nullptr)
 		return RX_POLL_CYCLES;
 	u8 frame[MAX_ETH_FRAME_SIZE];
-	while (rtl8139_can_receive(rtl8139device))
+	while (rtl8139device != nullptr)
 	{
+		// can_receive() is also true when the RTL8139 is disabled, where
+		// receive() discards packets. Keep that drop behavior while polling stays
+		// passive until the receiver is enabled.
+		if (rtl8139_rx_enabled(rtl8139device) && !rtl8139_can_receive(rtl8139device))
+			break;
 		const u32 size = net::modbba::sendEthFrame(frame);
 		if (size == 0)
 			break;
-		if (size < 6 || size > MAX_ETH_FRAME_SIZE)
+		if (size < 6 || size > MAX_ETH_FRAME_SIZE || !rtl8139_rx_enabled(rtl8139device))
 			continue;
 		rtl8139_receive(rtl8139device, frame, size);
 	}

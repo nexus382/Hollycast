@@ -51,6 +51,7 @@
 #include <zlib.h>
 #include <array>
 #include "rtl8139c.h"
+#include "network/netservice.h"
 #include "serialize.h"
 #include "hw/sh4/sh4_sched.h"
 
@@ -719,6 +720,14 @@ bool rtl8139_can_receive(RTL8139State *s)
     return avail == 0 || avail >= 1514 || (s->IntrMask & RxOverflow);
 }
 
+// Unlike rtl8139_can_receive(), this reports whether receive() will accept a
+// frame. can_receive() deliberately returns true when RX is disabled so callers
+// can dequeue and drop packets instead of applying backpressure.
+bool rtl8139_rx_enabled(RTL8139State *s)
+{
+    return s->clock_enabled && rtl8139_receiver_enabled(s);
+}
+
 static ssize_t rtl8139_do_receive(RTL8139State *s, const uint8_t *buf, size_t size_, int do_interrupt)
 {
     /* size is the length of the buffer passed to the driver */
@@ -992,6 +1001,7 @@ static void rtl8139_ChipCmd_write(RTL8139State *s, uint32_t val)
     val &= ~CmdReset;
 
     s->bChipCmdState = val;
+    net::modbba::startIfNeeded(rtl8139_rx_enabled(s));
 }
 
 static int rtl8139_RxBufferEmpty(RTL8139State *s)
@@ -1713,6 +1723,7 @@ static void rtl8139_io_writeb(void *opaque, uint8_t addr, uint32_t val)
             if (val == 'R')
             {
                 s->clock_enabled = 1;
+                net::modbba::startIfNeeded(rtl8139_rx_enabled(s));
             }
             else if (val == 'H')
             {

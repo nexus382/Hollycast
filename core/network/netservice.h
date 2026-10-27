@@ -31,6 +31,7 @@ public:
 };
 
 bool start();
+bool startIfNeeded(bool receiverEnabled);
 void stop();
 
 void writeModem(u8 b);

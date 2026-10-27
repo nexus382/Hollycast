@@ -46,6 +46,15 @@ bool start()
 	return service->start();
 }
 
+bool startIfNeeded(bool receiverEnabled)
+{
+	if (!receiverEnabled)
+		return false;
+	if (service != nullptr && settings.network.online)
+		return true;
+	return start();
+}
+
 void stop()
 {
 	if (service != nullptr)
@@ -83,6 +92,8 @@ int modemAvailable() {
 
 void receiveEthFrame(const u8 *frame, u32 size)
 {
+	// The guest's first transmitted frame is the point at which BBA networking
+	// is requested. Polling for receive frames must remain passive.
 	if (service == nullptr || !settings.network.online)
 		start();
 	if (service == nullptr)
@@ -92,8 +103,6 @@ void receiveEthFrame(const u8 *frame, u32 size)
 u32 sendEthFrame(u8 *frame)
 {
 	if (service == nullptr || !settings.network.online)
-		start();
-	if (service == nullptr)
 		return 0;
 	return service->sendEthFrame(frame);
 }
