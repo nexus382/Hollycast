@@ -65,6 +65,7 @@ function render() {
     const downloads = element('div', '', 'download-columns');
     for (const [device, label] of [['Android', 'Android'], ['Windows', 'Windows x64'], ['Linux', 'Linux AppImage'],
       ['macOS', 'macOS'], ['Switch', 'Switch'], ['UWP', 'Xbox One']]) {
+      if (platform.value !== 'all' && platform.value !== device) continue;
       const deviceFiles = files.filter(file => !file.support && file.platform === device);
       const column = element('section', '', 'download-platform');
       column.append(element('h4', label));
@@ -100,7 +101,7 @@ function render() {
     const visible = group === 'releases' ? ['all', 'stable', 'development'].includes(channel.value) :
       ['ci', 'all', group].includes(channel.value);
     document.querySelector(`#${group}-column`).hidden = !visible;
-    if (!counts[group]) fragments[group].append(element('p', 'No matching builds available.', 'meta'));
+    if (!counts[group]) fragments[group].append(element('p', 'No complete builds match these filters.', 'meta'));
     document.querySelector(group === 'releases' ? '#release-builds' : `#${group}-builds`).replaceChildren(fragments[group]);
   }
   status.textContent = count ? `${count} ${count === 1 ? 'build' : 'builds'}` : 'No builds match these filters.';
