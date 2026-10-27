@@ -43,6 +43,9 @@ if(NOT LIBRETRO)
             fonts/Jura-wght.ttf.zip
             fonts/EncodeSans-wdth-wght.ttf.zip
             fonts/fa-solid-900.ttf.zip)
+    cmrc_add_resources(Hollycast-resources
+            WHENCE resources
+            resources/picture/hollycast-launch.png)
     if(ANDROID OR IOS)
         cmrc_add_resources(Hollycast-resources
                 WHENCE resources

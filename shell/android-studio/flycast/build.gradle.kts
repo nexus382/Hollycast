@@ -19,7 +19,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.hollycast.emulator"
+        applicationId = "com.hollycast.emu"
         minSdk = 21
         targetSdk = 36
         versionCode = 8
