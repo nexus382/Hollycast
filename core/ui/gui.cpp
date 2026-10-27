@@ -2698,11 +2698,15 @@ static void gui_display_setup_checklist()
 	static std::vector<std::string> checkedContentPaths, checkedBiosPaths;
 	if (openSetupChecklistIfUnblocked(setupChecklist, title))
 		biosChecked = false;
+	ImguiStyleVar windowPadding(ImGuiStyleVar_WindowPadding, ScaledVec2(22.f, 18.f));
+	ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ScaledVec2(10.f, 8.f));
+	ImguiStyleVar cellPadding(ImGuiStyleVar_CellPadding, ScaledVec2(8.f, 6.f));
+	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ScaledVec2(12.f, 7.f));
 	centerNextWindow();
 	const ImVec2 display = ImGui::GetIO().DisplaySize;
-	ImGui::SetNextWindowSize(ImVec2(std::min(uiScaled(460.f), display.x * 0.95f),
-		std::min(uiScaled(460.f), display.y * 0.90f)), ImGuiCond_Appearing);
-	if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_NoResize))
+	ImGui::SetNextWindowSize(ImVec2(std::min(uiScaled(620.f), display.x * 0.95f),
+		std::min(uiScaled(680.f), display.y * 0.90f)), ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar))
 	{
 		if (setupChecklist.takeAutomaticCloseRequest())
 		{
@@ -2710,8 +2714,28 @@ static void gui_display_setup_checklist()
 			ImGui::EndPopup();
 			return;
 		}
-		ImGui::BeginChild("##setup-checklist-content", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
+		// Use the regular Roboto face for readable body copy; section labels use
+		// the existing bold face instead of inheriting the surrounding UI font.
+		ImGui::PushFont(largeFont, uiScaled(18.f));
+		const float footerHeight = uiScaled(42.f) + ImGui::GetStyle().ItemSpacing.y * 2.f + 1.f;
+		ImGui::BeginChild("##setup-checklist-content", ImVec2(0, -footerHeight),
 			false, ImGuiWindowFlags_DragScrolling);
+		auto sectionHeading = [](const char* label) {
+			ImGui::Dummy(ScaledVec2(0.f, 10.f));
+			ImGui::PushFont(boldFont, uiScaled(20.f));
+			ImGui::TextWrapped("%s", label);
+			ImGui::PopFont();
+			ImGui::Separator();
+		};
+		auto firmwareRow = [](const char* system, const char* filename) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::PushFont(boldFont, uiScaled(18.f));
+			ImGui::TextWrapped("%s", system);
+			ImGui::PopFont();
+			ImGui::TableNextColumn();
+			ImGui::TextWrapped("%s", filename);
+		};
 		bool controller = false, keyboard = false;
 		for (int i = 0; i < GamepadDevice::GetGamepadCount(); ++i)
 		{
@@ -2733,37 +2757,85 @@ static void gui_display_setup_checklist()
 			biosChecked = true;
 		}
 		const auto checklist = readiness::evaluate({ !config::ContentPath.get().empty(), bios, controller, keyboard, touch });
-		ImGui::TextWrapped("%s", T("Setup is optional. You can return to this checklist from General settings."));
-		ImGui::Separator();
-		ImGui::Text("%s", T("1. Game folder"));
+		ImGui::PushFont(boldFont, uiScaled(25.f));
+		ImGui::TextWrapped("%s", T("Ready to Play"));
+		ImGui::PopFont();
+		ImGui::TextWrapped("%s", T("Optional setup for games, firmware and controls. Reopen this checklist from General settings."));
+		sectionHeading(T("1. Game folder"));
 		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
 			? T("A folder is configured. If your games are elsewhere, choose their folder below.")
 			: T("Choose a folder containing your games to add them to the library."));
 		bool addFolder = ImGui::Button(T("Choose Game Folder"));
 		addContentPath(addFolder);
-		ImGui::Spacing();
-		ImGui::Text("%s", T("2. Dreamcast firmware"));
+		sectionHeading(T("2. BIOS and firmware"));
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		ImGui::TextUnformatted(T("Dreamcast"));
+		ImGui::PopFont();
+		ImGui::TextWrapped("%s", T("Place dc_boot.bin and dc_flash.bin in Hollycast's data folder, unless you have specified a custom BIOS folder."));
 		ImGui::TextWrapped("%s", bios
-			? T("A file with a Dreamcast BIOS name was found; its contents have not been checked. Some games may work better with original firmware.")
-			: T("No Dreamcast BIOS was found. Hollycast can use its built-in HLE firmware for many games; some require a real BIOS. Add your own BIOS in General > Custom Paths > BIOS Folders if needed."));
+			? T("A BIOS filename was found. Its contents have not been verified.")
+			: T("No original BIOS was found. Built-in HLE supports many games; some need an original BIOS."));
 		ImGui::Spacing();
-		ImGui::Text("%s", T("3. Controls"));
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		ImGui::TextUnformatted(T("Arcade systems"));
+		ImGui::PopFont();
+		const ImGuiTableFlags tableFlags = ImGuiTableFlags_SizingStretchSame
+			| ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_NoSavedSettings;
+		if (ImGui::BeginTable("##setup-arcade-bios", 2, tableFlags))
+		{
+			firmwareRow(T("NAOMI / GD-ROM"), "naomi.zip");
+			firmwareRow(T("NAOMI 2"), "naomi2.zip");
+			firmwareRow(T("Atomiswave"), "awbios.zip");
+			firmwareRow(T("System SP"), "segasp.zip");
+			ImGui::EndTable();
+		}
+		// Archive names and title-specific ROM selections follow naomi_roms.cpp
+		// and loadBios(); the naomi-jp-d and naomi-ko-h sets both use naomi.zip.
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		const bool showTitleBios = ImGui::TreeNodeEx(T("Title-specific BIOS requirements"), ImGuiTreeNodeFlags_SpanAvailWidth);
+		ImGui::PopFont();
+		if (showTitleBios)
+		{
+			if (ImGui::BeginTable("##setup-title-bios", 2, tableFlags))
+			{
+				firmwareRow(T("Airline Pilots"), "airlbios.zip");
+				firmwareRow(T("The House of the Dead 2"), "hod2bios.zip");
+				firmwareRow(T("F355 Challenge (twin) / Challenge 2"), "f355bios.zip");
+				firmwareRow(T("F355 Challenge (deluxe)"), "f355dlx.zip");
+				firmwareRow(T("Kasei Channel Mars TV"), T("naomi.zip containing epr-21576d.ic27"));
+				firmwareRow(T("Mushiking II / III / III+ (Korea)"), T("naomi.zip containing epr-21576h_multi.ic27"));
+				ImGui::EndTable();
+			}
+			ImGui::TreePop();
+		}
+		ImGui::TextWrapped("%s", T("Use the archive for your system or game. Keep ZIP or 7z archives packed; the matching BIOS data may already be included in your game or parent ROM set."));
+		ImGui::Spacing();
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		ImGui::TextUnformatted(T("BIOS location"));
+		ImGui::PopFont();
+		ImGui::TextWrapped("%s", T("Default location: Hollycast's data folder."));
+		ImGui::TextWrapped("%s", T("To use a custom folder instead, add it in General > Custom Paths > BIOS Folders."));
+		sectionHeading(T("3. Controls"));
 		ImGui::TextWrapped("%s", controller ? T("A controller is detected. Configure its mapping in Controls settings.")
 			: touch ? T("No controller detected. Touch controls are available; you can also connect a controller.")
 			: keyboard ? T("No controller detected. A keyboard is available; you can also connect a controller.")
 			: T("No controller detected. Connect a controller and configure it in Controls settings."));
-		ImGui::Separator();
+		ImGui::Spacing();
 		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
 			? T("Next: return to the library and select a game. If none appear, check your game folder.")
 			: T("Next: choose a game folder, then select a game in the library."));
 		ImGui::EndChild();
-		if (ImGui::Button(T("Done")))
+		ImGui::Separator();
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		if (ImGui::Button(T("Done"), ImVec2(-FLT_MIN, uiScaled(42.f))))
 		{
 			setupChecklist.dismissed([](bool pending) {
 				config::saveBool("hollycast", "SetupChecklistPending", pending);
 			});
 			ImGui::CloseCurrentPopup();
 		}
+		ImGui::PopFont();
+		ImGui::PopFont();
 		ImGui::EndPopup();
 	}
 }
