@@ -3034,9 +3034,9 @@ static bool gui_display_launch_screen()
 		stbi_image_free(pixels);
 		if (logo == ImTextureID())
 		{
-			launchScreenPending = false;
-			startedAnimation = false;
-			return false;
+			// Vulkan defers uploads until its first frame has finished. Retry while
+			// the intro is pending; the duration above also bounds persistent failures.
+			return true;
 		}
 	}
 
@@ -3268,6 +3268,11 @@ void gui_display_ui()
 		ImguiFileTexture::resetLoadCount();
 	};
 
+#ifdef TARGET_UWP
+	// Resolve protocol-launched games before the intro can defer activation.
+	const bool protocolActivated = gui_state == GuiState::Main && checkUWPProtocolActivation();
+#endif
+
 	if (gui_display_launch_screen())
 	{
 		finishFrame();
@@ -3279,16 +3284,17 @@ void gui_display_ui()
 	if (gui_state != GuiState::GameInfo)
 		GuiMenu::renderMainMenuBar();
 
+#ifdef TARGET_UWP
+	if (protocolActivated)
+	{
+		finishFrame();
+		return;
+	}
+#endif
+
 	// Check for auto-start after menu bar is rendered
 	if (gui_state == GuiState::Main)
 	{
-#ifdef TARGET_UWP
-		if (checkUWPProtocolActivation())
-		{
-			finishFrame();
-			return;
-		}
-#endif
 		if (!settings.content.path.empty() || settings.naomi.slave)
 		{
 #ifndef __ANDROID__
