@@ -16,8 +16,10 @@ Ordinary stable and development releases remain available through the filters.
 The six download columns match Flycast's CI page: Android APK, standalone Windows
 x64 MinGW ZIP, Linux AppImage, macOS app ZIP, standalone Switch NRO and Xbox UWP
 x64. MSVC, 32-bit, ARM64 UWP, AAB and libretro alternatives are not substituted.
-All available platforms for the same branch and commit are grouped together;
-missing platforms stay marked unavailable rather than borrowing another commit.
+The page lists a build only when all six matching platform downloads are uploaded.
+Automatic builds are grouped by branch and commit before checking completeness;
+downloads from another branch or commit cannot fill a missing platform. Incomplete
+automatic builds and tagged releases stay hidden until their downloads are ready.
 Actions artifact packages may add an outer ZIP around the matching build. Additional
 formats remain available on the linked GitHub release.
 
@@ -45,8 +47,8 @@ backfilled; the next successful build will provide fresh downloads. Open
 pages reload the static catalog every five minutes, without using visitors'
 GitHub API quotas. GitHub scheduling and deployments can add a short delay.
 
-The catalog scans up to 1,000 releases and displays the latest 20 commits per
-branch plus 20 releases per release channel. Published downloads are retained on
+The catalog scans up to 1,000 releases and displays the latest 20 complete commits
+per branch plus 20 complete releases per release channel. Published downloads are retained on
 GitHub beyond this recent list. Development tags are recognized even when historical
 releases were not marked as prereleases. CI changelogs compare an earlier public
 build on the same branch, with up to 100 commit messages and a comparison link.

@@ -100,12 +100,16 @@ export async function buildCatalog(repository, api, now = new Date()) {
     }
     if (releases.length < 100) break;
   }
-  for (const build of builds) {
-    build.files = [...standaloneDownloads(build.files), ...build.files.filter(file => file.support)];
-  }
-  builds.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  const complete = builds.filter(build => {
+    const downloads = standaloneDownloads(build.files);
+    // Wait for all six platforms after grouping runs from the same branch and commit.
+    if (downloads.length !== 6) return false;
+    build.files = [...downloads, ...build.files.filter(file => file.support)];
+    return true;
+  });
+  complete.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
   const counts = new Map();
-  const recent = builds.filter(build => {
+  const recent = complete.filter(build => {
     const key = build.channel === 'ci' ? `ci:${build.branch}` : build.channel;
     const count = (counts.get(key) || 0) + 1;
     counts.set(key, count);
