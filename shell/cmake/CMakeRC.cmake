@@ -1,3 +1,5 @@
+# Portions Copyright 2026 The Hollycast Authors
+
 # This block is executed when generating an intermediate resource file, not when
 # running in CMake configure mode
 if(_CMRC_GENERATE_MODE)
