@@ -50,6 +50,7 @@ Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
 Option<int, false> LibraryImageSource("Dreamcast.LibraryImageSource", 0);
 Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", 0);
 Option<int, false> LibraryIconScale("Dreamcast.LibraryIconScale", 100);
+Option<std::vector<std::string>, false> LibraryFavourites("LibraryFavourites", {}, "ui");
 Option<int, false> VmuIconMode("Dreamcast.VmuIconMode", 0);
 Option<int, false> UIScaling("UIScaling", 100);
 Option<int, false> UITheme("UITheme", 0);

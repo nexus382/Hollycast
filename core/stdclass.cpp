@@ -102,6 +102,11 @@ std::string get_writable_data_path(const std::string& filename)
 
 std::string get_readonly_data_path(const std::string& filename)
 {
+	return get_readonly_data_path(filename, settings.content.path);
+}
+
+std::string get_readonly_data_path(const std::string& filename, const std::string& contentPath)
+{
 	std::string user_filepath = get_writable_data_path(filename);
 	if (file_exists(user_filepath))
 		return user_filepath;
@@ -114,7 +119,7 @@ std::string get_readonly_data_path(const std::string& filename)
 	}
 	// Try the game directory
 	try {
-		std::string parent = hostfs::storage().getParentPath(settings.content.path);
+		std::string parent = hostfs::storage().getParentPath(contentPath);
 		std::string filepath = hostfs::storage().getSubPath(parent, filename);
 		if (hostfs::storage().exists(filepath))
 			return filepath;

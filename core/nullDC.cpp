@@ -381,6 +381,11 @@ void dc_loadstate(int index)
 time_t dc_getStateCreationDate(int index)
 {
 	std::string filename = hostfs::getSavestatePath(index, false);
+	return dc_getStateCreationDateForPath(filename);
+}
+
+time_t dc_getStateCreationDateForPath(const std::string& filename)
+{
 	if (filename != lastStateFile)
 	{
 		lastStateFile = filename;
@@ -411,16 +416,27 @@ time_t dc_getStateCreationDate(int index)
 
 void dc_getStateScreenshot(int index, std::vector<u8>& pngData)
 {
-	pngData.clear();
 	std::string filename = hostfs::getSavestatePath(index, false);
+	dc_getStateScreenshotForPath(filename, pngData);
+}
+
+void dc_getStateScreenshotForPath(const std::string& filename, std::vector<u8>& pngData)
+{
+	static constexpr u32 MAX_SAVESTATE_SCREENSHOT_SIZE = 64 * 1024 * 1024;
+	pngData.clear();
 	hostfs::File *f = hostfs::storage().openFile(filename, "rb");
 	if (f == nullptr)
 		return;
 	SavestateHeader header;
-	if (f->read(&header, sizeof(header), 1) == 1 && header.isValid() && header.pngSize != 0)
+	const s64 fileSize = f->size();
+	if (f->read(&header, sizeof(header), 1) == 1 && header.isValid()
+			&& header.pngSize >= 8 && header.pngSize <= MAX_SAVESTATE_SCREENSHOT_SIZE
+			&& fileSize >= (s64)sizeof(header) + header.pngSize)
 	{
 		pngData.resize(header.pngSize);
 		if (f->read(pngData.data(), 1, pngData.size()) != pngData.size())
+			pngData.clear();
+		else if (memcmp(pngData.data(), "\x89PNG\r\n\x1a\n", 8) != 0)
 			pngData.clear();
 	}
 	delete f;
