@@ -65,3 +65,11 @@ This links the production font loader and checks that the built-in primary and
 CJK fonts cover the language picker and translated strings for each UI language,
 without relying on installed CJK fonts. It also rasterizes each tested glyph.
 It does not replace visual checks of the running application.
+
+## OpenBSD resource embedding
+
+Run `python3 tests/regression/cmrc_openbsd.py <temporary-output-dir>` with
+CMake and a Clang supporting the x86-64 OpenBSD target. It checks the generated
+ELF payload and pointer relocations, unusual paths, cache invalidation after a
+same-size change, and fallback generation at the size threshold. This is a
+cross-target check and does not replace an OpenBSD build.
