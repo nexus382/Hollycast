@@ -3455,6 +3455,28 @@ static void renderSettingsContentTab(SettingsTab tab)
 				)
 			);
 
+#if defined(_WIN32) && !defined(TARGET_UWP)
+			RenderGeneralToggleSettingRow(
+				"AchievementsUseRAIntegration",
+				ICON_FA_SCREWDRIVER_WRENCH,
+				T("Windows Developer Tools"),
+				T("Enable RAIntegration-based achievement development tools on Windows."),
+				static_cast<bool>(config::AchievementsUseRAIntegration),
+				[](bool enabled) { config::AchievementsUseRAIntegration = enabled; },
+				T(
+					"Windows Developer Tools\n"
+					"How to turn this on:\n"
+					"1. Put `RA_Integration-x64.dll` next to `Flycast.exe`.\n"
+					"2. Enable RetroAchievements.\n"
+					"3. Log out of RetroAchievements if you are already logged in.\n"
+					"4. Turn this setting on, then restart Hollycast.\n"
+					"5. Log back in and open Tools > RetroAchievements Dev Tools.\n\n"
+					"This loads RAIntegration and exposes developer tools, including the memory inspector."
+				),
+				achievements::isLoggedOn()
+			);
+#endif
+
 			ImGui::Spacing();
 
 			// Username display and login/logout
