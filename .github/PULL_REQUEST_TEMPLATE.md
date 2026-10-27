@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 ## What changed?
 
 <!-- Describe the problem and the change in behavior. -->
