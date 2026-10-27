@@ -596,7 +596,7 @@ void startSession(int localPort, int localPlayerNum)
 		peerPort = atoi(config::NetworkServer.get().substr(colon + 1).c_str());
 	}
 	player.type = GGPO_PLAYERTYPE_REMOTE;
-	// GGPO only takes a dotted IPv4 address: resolve host names here
+	// GGPO expects a numeric IPv4 address, so resolve configured host names first.
 	in_addr peerAddr;
 	if (inet_pton(AF_INET, peerIp.c_str(), &peerAddr) != 1)
 	{

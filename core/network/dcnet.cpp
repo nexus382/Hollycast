@@ -23,6 +23,7 @@
 #include "util/tsqueue.h"
 #include "oslib/oslib.h"
 #include "emulator.h"
+#include "hw/bba/bba.h"
 #include "cfg/option.h"
 #include "stdclass.h"
 #include "oslib/i18n.h"
@@ -34,6 +35,7 @@
 #include <memory>
 #include <array>
 #include <chrono>
+#include <vector>
 #ifndef __ANDROID__
 //#define WIRESHARK_DUMP 1
 #endif
@@ -43,6 +45,7 @@ namespace net::modbba
 
 static TsQueue<u8> toModem;
 static constexpr size_t MAX_ETH_FRAME_SIZE = 1514;
+static constexpr size_t MAX_BBA_QUEUE_SIZE = 256;
 
 class DCNetService : public Service
 {
@@ -320,7 +323,8 @@ private:
 					*(u16 *)&recvBuffer[14], (int)len - 2);
 				*/
 				ethdump(&recvBuffer[2], len - 2);
-				bbaQueue.push(std::vector<u8>(&recvBuffer[2], &recvBuffer[len]));
+				if (bbaQueue.size() < MAX_BBA_QUEUE_SIZE)
+					bbaQueue.push(std::vector<u8>(&recvBuffer[2], &recvBuffer[len]));
 				if (len < recvBuffer.size())
 					recvBuffer.erase(recvBuffer.begin(), recvBuffer.begin() + len);
 				else
@@ -632,12 +636,16 @@ public:
 	void stop()
 	{
 		if (!thread.joinable())
+		{
+			bbaQueue.clear();
 			return;
+		}
 		io_context->stop();
 		thread.join();
 		pppSocket.reset();
 		ethSocket.reset();
 		io_context.reset();
+		bbaQueue.clear();
 		os_notify(i18n::T("DCNet disconnected"), 3000);
 	}
 
@@ -663,16 +671,13 @@ public:
 			start();
 		}
 	}
-
 	u32 recvEthFrame(u8 *frame)
 	{
-		if (bbaQueue.empty())
+		std::vector<u8> packet;
+		if (!bbaQueue.tryPop(packet) || packet.size() > MAX_ETH_FRAME_SIZE)
 			return 0;
-		const std::vector<u8> v = bbaQueue.pop();
-		if (v.size() > 1514)
-			return 0;
-		memcpy(frame, v.data(), v.size());
-		return v.size();
+		memcpy(frame, packet.data(), packet.size());
+		return packet.size();
 	}
 
 private:
@@ -751,7 +756,8 @@ void DCNetService::receiveEthFrame(u8 const *frame, unsigned int len)
 	thread.sendEthFrame(frame, len);
 }
 
-u32 DCNetService::sendEthFrame(u8 *frame) {
+u32 DCNetService::sendEthFrame(u8 *frame)
+{
 	return thread.recvEthFrame(frame);
 }
 

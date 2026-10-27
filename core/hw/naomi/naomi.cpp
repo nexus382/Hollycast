@@ -261,7 +261,8 @@ void naomi_reg_Term()
 	multiboard.reset();
 	m3comm.reset();
 	networkOutput.term();
-	sh4_sched_unregister(dmaSchedId);
+	if (dmaSchedId != -1)
+		sh4_sched_unregister(dmaSchedId);
 	dmaSchedId = -1;
 	midiffb::term();
 }

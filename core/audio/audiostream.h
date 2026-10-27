@@ -73,8 +73,6 @@ constexpr u32 SAMPLE_COUNT = 512;	// AudioBackend::push() is always called with 
 class RingBuffer
 {
 	std::vector<u8> buffer;
-	// The producer and the audio callback each update one cursor: keep them on
-	// separate cache lines.
 	alignas(64) std::atomic_int readCursor { 0 };
 	alignas(64) std::atomic_int writeCursor { 0 };
 

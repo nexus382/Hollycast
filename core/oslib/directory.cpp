@@ -22,8 +22,8 @@
 #include "nowide/stackstring.hpp"
 #include <string>
 #include <cstring>
-
 #include <windows.h>
+
 #ifdef TARGET_UWP
 // Define dirent type constants if not already defined
 #ifndef DT_DIR
@@ -285,7 +285,8 @@ int rename(const char *oldpath, const char *newpath)
     }
 	// _wrename() fails when newpath exists. Replace it, as POSIX rename() does.
 	if (!MoveFileExW(woldpath.get(), wnewpath.get(), MOVEFILE_REPLACE_EXISTING)) {
-		errno = GetLastError() == ERROR_FILE_NOT_FOUND ? ENOENT : EACCES;
+		const DWORD error = GetLastError();
+		errno = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? ENOENT : EACCES;
 		return -1;
 	}
 	return 0;

@@ -58,6 +58,8 @@ constexpr int RX_POLL_CYCLES = 5_sh4ms;
 
 static int rxDeliver(int tag, int cycles, int jitter, void *arg)
 {
+	if (rtl8139device == nullptr)
+		return RX_POLL_CYCLES;
 	u8 frame[MAX_ETH_FRAME_SIZE];
 	while (rtl8139_can_receive(rtl8139device))
 	{
@@ -94,7 +96,6 @@ static void bba_Init()
 	memset(&GAPS_regs[0], 0, sizeof(GAPS_regs));
 	memcpy(&GAPS_regs[0], "GAPSPCI_BRIDGE_2", 0x10);
 	memcpy(&GAPS_regs[0x1c], "SEGA", 4);
-
 	rxSchedId = sh4_sched_register(0, rxDeliver);
 	sh4_sched_request(rxSchedId, RX_POLL_CYCLES);
 }
@@ -107,8 +108,11 @@ void bba_Term()
 		rtl8139_destroy(rtl8139device);
 		rtl8139device = nullptr;
 	}
-	sh4_sched_unregister(rxSchedId);
-	rxSchedId = -1;
+	if (rxSchedId != -1)
+	{
+		sh4_sched_unregister(rxSchedId);
+		rxSchedId = -1;
+	}
 }
 
 void bba_Reset(bool hard)

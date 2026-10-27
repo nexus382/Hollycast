@@ -1024,20 +1024,16 @@ void WccfCameraImpl::OnSetup()
 				case '3':
 					// file "data/model/sprite_card_data.bin"
 					if (settings.content.fileName[7] == 'j')
-						// wccf341j, wccf310j?
 						offset = 0x3489A00;
 					else
-						// wccf322e and wccf331e have same offset
 						offset = 0x34A4A00;
 					offset += idx * 0x5b00;
 					break;
 				case '4':
 					// file "data/model/sprite_card_data.bin"
 					if (settings.content.fileName[5] == '0')
-						// 400j
 						offset = 0x370B480;
 					else
-						// 420e
 						offset = 0x3726480;
 					offset += idx * 0x1800;
 					break;

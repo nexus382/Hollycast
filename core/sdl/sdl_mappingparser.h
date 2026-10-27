@@ -100,8 +100,6 @@ public:
 			return bind;
 		}
 		// Axis
-		// bind{} only zeroes the union's first member (button); direction is
-		// read below even when no sign or '~' sets it.
 		bind.value.axis.axis = 0;
 		bind.value.axis.direction = 0;
 		if (mapping[valuePos] == '+') {

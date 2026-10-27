@@ -217,7 +217,6 @@ public:
 			MD5_Update(&ctx, buf, len);
 		return *this;
 	}
-
 	MD5Sum& add(hostfs::File *file);
 
 	template<typename T>

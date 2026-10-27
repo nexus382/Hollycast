@@ -2507,8 +2507,8 @@ size_t retro_serialize_size()
 {
 	DEBUG_LOG(SAVESTATE, "retro_serialize_size");
 	// A frontend may size its buffer once, but a state grows and shrinks with the
-	// devices plugged in and the frames being drawn. Report the memory regions plus
-	// the allowance GGPO makes for everything else, Naomi's for System SP too.
+	// devices plugged in and the frames being drawn. Report memory regions plus
+	// the allowance GGPO makes for everything else, including System SP media.
 	size_t size = settings.platform.ram_size + settings.platform.vram_size
 			+ settings.platform.aram_size;
 	if (settings.platform.isNaomi2())
@@ -2924,7 +2924,7 @@ static void updateLightgunCoordinates(u32 port)
 	lightgun_params[port].y = mo_y_abs[port];
 }
 
-static void updateLightgunCoordinatesFromAnalogStick(int port)
+void updateLightgunCoordinatesFromAnalogStick(int port)
 {
 	int x = input_cb(port, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
 	mo_x_abs[port] = 320 + x * 320 / 32767;
@@ -3914,6 +3914,7 @@ static bool read_m3u(const char *file)
 		log_cb(RETRO_LOG_ERROR, "Could not read file\n");
 		return false;
 	}
+
 	unsigned disk_index = 0;
 	while (filestream_gets(f, line, sizeof(line)) && disk_index <= disk_paths.size())
 	{

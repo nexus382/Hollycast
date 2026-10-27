@@ -7,9 +7,7 @@ endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE GTest::gtest_main)
 
-# HttpTest drives libcurl directly. The core only links curl where it is the
-# HTTP client (not on Apple, which uses NSURLConnection), so the test binary
-# needs it explicitly there. The macOS SDK ships libcurl.
+# HttpTest calls libcurl directly; Apple builds use the native HTTP client in the core.
 if(APPLE)
     find_package(CURL REQUIRED)
     target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
@@ -37,14 +35,17 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/ButtonComboTest.cpp
         src/input/GamepadInputHandlingTest.cpp
         src/input/MultiBindMappingTest.cpp
-        src/input/MouseTest.cpp
         src/input/InputDefTest.cpp
         src/input/InputMappingConfigFileTest.cpp
         src/input/InputSetTest.cpp
         src/input/SDLControllerMappingTest.cpp
+        src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
-        src/util/Md5SumTest.cpp
+        src/ui/BoxartTest.cpp
+        src/ui/ReadinessTest.cpp
+        src/ui/SetupChecklistLifecycleTest.cpp
         src/util/PeriodicThreadTest.cpp
+        src/util/Md5SumTest.cpp
         src/util/TsQueueTest.cpp
         src/util/WorkerThreadTest.cpp)
 

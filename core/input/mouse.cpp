@@ -152,8 +152,6 @@ void SetRelativeMousePosition(float xrel, float yrel, u32 mouseId)
 {
 	if (mouseId >= std::size(mo_x_delta))
 		return;
-	// Relative motion has a different coordinate space. Rebase the next absolute
-	// position instead of replaying movement since the last absolute event.
 	mo_x_prev[mouseId] = -1;
 	mo_y_prev[mouseId] = -1;
 	int width = mo_width;

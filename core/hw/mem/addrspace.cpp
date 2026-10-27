@@ -62,9 +62,6 @@ void *readConst(u32 addr, bool& ismem, u32 sz)
 	else
 	{
 		ismem = true;
-		// Only the low bits of iirf hold the mask shift. Shifting a 32-bit value by the
-		// whole tagged pointer is undefined, and GCC 16 on 32-bit ARM drops the
-		// address entirely (every access hits offset 0).
 		addr <<= (iirf & HANDLER_MAX);
 		addr >>= (iirf & HANDLER_MAX);
 
@@ -98,9 +95,6 @@ void *writeConst(u32 addr, bool& ismem, u32 sz)
 	else
 	{
 		ismem = true;
-		// Only the low bits of iirf hold the mask shift. Shifting a 32-bit value by the
-		// whole tagged pointer is undefined, and GCC 16 on 32-bit ARM drops the
-		// address entirely (every access hits offset 0).
 		addr <<= (iirf & HANDLER_MAX);
 		addr >>= (iirf & HANDLER_MAX);
 
@@ -119,9 +113,6 @@ T DYNACALL readt(u32 addr)
 
 	if (likely(ptr != nullptr))
 	{
-		// Only the low bits of iirf hold the mask shift. Shifting a 32-bit value by the
-		// whole tagged pointer is undefined, and GCC 16 on 32-bit ARM drops the
-		// address entirely (every access hits offset 0).
 		addr <<= (iirf & HANDLER_MAX);
 		addr >>= (iirf & HANDLER_MAX);
 
@@ -166,9 +157,6 @@ void DYNACALL writet(u32 addr, T data)
 
 	if (likely(ptr != nullptr))
 	{
-		// Only the low bits of iirf hold the mask shift. Shifting a 32-bit value by the
-		// whole tagged pointer is undefined, and GCC 16 on 32-bit ARM drops the
-		// address entirely (every access hits offset 0).
 		addr <<= (iirf & HANDLER_MAX);
 		addr >>= (iirf & HANDLER_MAX);
 
@@ -411,8 +399,6 @@ static void termMappings()
 		aica::aica_ram.free();
 		free_pages(elan::RAM);
 		elan::RAM = nullptr;
-		// Don't leave the address map pointing at freed memory. A null entry
-		// routes accesses to handler 0 (not mapped), which touches nothing.
 		memset(memInfo_ptr, 0, sizeof(memInfo_ptr));
 	}
 }

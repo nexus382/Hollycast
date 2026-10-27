@@ -20,7 +20,6 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
-#include <utility>
 
 template<typename T>
 class TsQueue

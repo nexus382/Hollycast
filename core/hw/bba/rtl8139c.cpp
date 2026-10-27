@@ -49,6 +49,7 @@
 
 /* For crc32 */
 #include <zlib.h>
+#include <array>
 #include "rtl8139c.h"
 #include "serialize.h"
 #include "hw/sh4/sh4_sched.h"
@@ -2343,8 +2344,31 @@ void rtl8139_destroy(RTL8139State *state)
 	free(state);
 }
 
+static constexpr size_t RTL8139_SERIALIZED_SIZE =
+		256 * 3 + sizeof(PCIDevice::io_regions)
+		+ 8 + 8 + 4 * 4 + 4 * 4
+		+ 4 + 4 + 4 + 4
+		+ 2 + 2
+		+ 4 + 4 + 4 + 2
+		+ 6
+		+ 2
+		+ 2
+		+ 5 * 2
+		+ sizeof(MACAddr)
+		+ 4
+		+ sizeof(EEprom9346::contents) + sizeof(EEprom9346::mode) + sizeof(EEprom9346::tick)
+		+ sizeof(EEprom9346::address) + sizeof(EEprom9346::input) + sizeof(EEprom9346::output) + 4
+		+ 4 + 4 + 8
+		+ 12;
+
 void rtl8139_serialize(RTL8139State *s, Serializer& ser)
 {
+	if (s == nullptr)
+	{
+		static const std::array<u8, RTL8139_SERIALIZED_SIZE> emptyState {};
+		ser.serialize(emptyState.data(), emptyState.size());
+		return;
+	}
 	ser.serialize(s->parent_obj.config, 256);
 	ser.serialize(s->parent_obj.cmask, 256);
 	ser.serialize(s->parent_obj.wmask, 256);
@@ -2413,21 +2437,7 @@ bool rtl8139_deserialize(RTL8139State *s, Deserializer& deser)
 {
 	if (s == nullptr)
 	{
-		deser.skip(256 * 3 + sizeof(PCIDevice::io_regions)
-				+ 8 + 8 + 4 * 4 + 4 * 4
-				+ 4 + 4 + 4 + 4
-				+ 2 + 2
-				+ 4 + 4 + 4 + 2
-				+ 6
-				+ 2
-				+ 2
-				+ 5 * 2
-				+ sizeof(MACAddr)
-				+ 4
-				+ sizeof(EEprom9346::contents) + sizeof(EEprom9346::mode) + sizeof(EEprom9346::tick)
-				+ sizeof(EEprom9346::address) + sizeof(EEprom9346::input) + sizeof(EEprom9346::output) + 4
-				+ 4 + 4 + 8
-				+ 12);
+		deser.skip(RTL8139_SERIALIZED_SIZE);
 		return false;
 	}
 	deser.deserialize(s->parent_obj.config, 256);

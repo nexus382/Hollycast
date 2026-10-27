@@ -1304,6 +1304,21 @@ msgstr ""
 msgid "Track your game achievements using RetroAchievements.org"
 msgstr ""
 
+#: core/ui/settings_new.cpp:3447
+msgid "Show Achievement Popups"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3448
+msgid "Show on-screen RetroAchievements notifications while playing."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3452
+msgid ""
+"Show Achievement Popups\n"
+"Controls achievement, progress, challenge, and leaderboard notifications "
+"shown over gameplay."
+msgstr ""
+
 #: core/ui/settings_general.cpp:414
 msgid ""
 "Enable RetroAchievements hardcore mode. Using cheats and loading a state are "

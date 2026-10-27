@@ -479,11 +479,13 @@ struct DX11OITRenderer : public DX11Renderer
         auto sampler = samplers->getSampler(false);
         deviceContext->PSSetSamplers(0, 1, &sampler.get());
 		D3D11_RECT rect {};
-		if (rendContext->isRTT) {
+		if (rendContext->isRTT)
+		{
 			rect.right = rendContext->framebufferWidth;
 			rect.bottom = rendContext->framebufferHeight;
 		}
-		else {
+		else
+		{
 			rect.right = width;
 			rect.bottom = height;
 		}

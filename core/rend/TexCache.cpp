@@ -662,8 +662,8 @@ bool BaseTextureCacheData::Update()
 			// xBRZ scaling
 			if (textureUpscaling)
 			{
-				// xBRZ only supports scale factors 2 to 6. Out of range, scale() returns
-				// without writing the destination buffer.
+				// xBRZ only supports scale factors 2 through 6. Keep the allocated
+				// buffer, scaling operation, and uploaded dimensions in agreement.
 				const int factor = std::clamp((int)config::TextureUpscale, 2, 6);
 				PixelBuffer<u32> tmp_buf;
 				tmp_buf.init(width * factor, height * factor);

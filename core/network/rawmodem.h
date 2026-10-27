@@ -37,6 +37,8 @@ public:
 	int readModem() override;
 	int modemAvailable() override;
 
+	void receiveEthFrame(const u8 *frame, u32 size) override {};
+
 private:
 	uint16_t port;
 };

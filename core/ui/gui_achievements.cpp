@@ -135,9 +135,8 @@ void Notification::hideLeaderboard(u32 id)
 
 bool Notification::draw()
 {
-	if (!config::ShowAchievementPopups) {
+	if (!config::ShowAchievementPopups)
 		return false;
-	}
 
 	std::lock_guard<std::mutex> _(mutex);
 	if (type == None)

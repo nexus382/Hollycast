@@ -54,7 +54,6 @@ extern "C" {
 #include "util/shared_this.h"
 
 #include <unordered_map>
-#include <deque>
 #include <mutex>
 #include <future>
 #include <vector>
@@ -68,8 +67,9 @@ static pico_device *pico_dev;
 
 static TsQueue<u8> in_buffer;
 static TsQueue<u8> out_buffer;
-
 static TsQueue<std::vector<u8>> bbaBuffer;
+static std::mutex bbaBufferMutex;
+static constexpr size_t BBA_QUEUE_MAX = 256;
 
 static pico_ip4 dcaddr;
 static pico_ip4 dnsaddr;
@@ -1182,8 +1182,6 @@ static void closeDumpFile()
 		pcapngDump = nullptr;
 	}
 }
-
-// BBA -> pico stack
 static void pico_receive_eth_frame(const u8 *frame, u32 size)
 {
 	if (pico_dev == nullptr) {
@@ -1195,14 +1193,15 @@ static void pico_receive_eth_frame(const u8 *frame, u32 size)
 	}
 }
 
-// pico stack -> BBA
-static int send_eth_frame(pico_device *dev, void *data, int len)
-{
+static int send_eth_frame(pico_device *dev, void *data, int len) {
 	dumpFrame((const u8 *)data, len);
 	if (len < 6 || len > 1514)
-		// discard
 		return len;
-	bbaBuffer.push(std::vector<u8>((const u8 *)data, (const u8 *)data + len));
+	{
+		std::lock_guard<std::mutex> _(bbaBufferMutex);
+		if (bbaBuffer.size() < BBA_QUEUE_MAX)
+			bbaBuffer.push(std::vector<u8>((const u8 *)data, (const u8 *)data + len));
+	}
 	return len;
 }
 
@@ -1297,7 +1296,10 @@ void PicoThread::run()
 	// Empty queues
 	in_buffer.clear();
 	out_buffer.clear();
-	bbaBuffer.clear();
+	{
+		std::lock_guard<std::mutex> _(bbaBufferMutex);
+		bbaBuffer.clear();
+	}
 
     // Find DNS ip address
 	{
@@ -1474,6 +1476,8 @@ static void stop_pico()
 	emu.setNetworkState(false);
 	pico_thread_running = false;
 	pico_thread.stop();
+	std::lock_guard<std::mutex> _(bbaBufferMutex);
+	bbaBuffer.clear();
 }
 
 // picotcp mutex implementation
@@ -1523,11 +1527,11 @@ void PicoTcpService::receiveEthFrame(const u8 *frame, u32 size) {
 
 u32 PicoTcpService::sendEthFrame(u8 *frame)
 {
-	if (bbaBuffer.empty())
+	std::vector<u8> packet;
+	if (!bbaBuffer.tryPop(packet))
 		return 0;
-	const std::vector<u8> v = bbaBuffer.pop();
-	memcpy(frame, v.data(), v.size());
-	return v.size();
+	memcpy(frame, packet.data(), packet.size());
+	return packet.size();
 }
 
 }

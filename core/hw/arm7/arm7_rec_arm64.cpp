@@ -460,13 +460,9 @@ class Arm7Compiler : public MacroAssembler
 				Bfi(x0, x14, 29, 1);		// C is bit 29 in NZCV
 			if (logical_op_set_flags)
 			{
-				// ARMv7 logical ops (AND, EOR, ORR, BIC, MOV, MVN, TST, TEQ) leave V alone.
-				// The AArch64 flag-setting equivalents (ANDS, BICS, TST) clear it, so put
-				// back the V the op started with. loadFlags() ran before the op, so the
-				// saved PSR still holds it.
 				Ldr(w3, arm_reg_operand(RN_PSR_FLAGS));
-				Ubfx(w3, w3, 28, 1);		// w3 = V
-				Bfi(x0, x3, 28, 1);			// V is bit 28 in NZCV
+				Ubfx(w3, w3, 28, 1);
+				Bfi(x0, x3, 28, 1);
 			}
 			Msr(NZCV, x0);
 		}

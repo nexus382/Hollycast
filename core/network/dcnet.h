@@ -33,6 +33,7 @@ public:
 	int modemAvailable() override;
 
 	void receiveEthFrame(const u8 *frame, u32 size) override;
+	u32 sendEthFrame(u8 *frame) override;
 };
 
 }

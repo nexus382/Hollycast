@@ -25,8 +25,8 @@
 
 MapleLinkRegistry& MapleLinkRegistry::Get()
 {
-    static MapleLinkRegistry singleton;
-    return singleton;
+	static MapleLinkRegistry *singleton = new MapleLinkRegistry();
+	return *singleton;
 }
 
 std::optional<MapleLink> MapleLinkRegistry::getMapleLink(int bus, int port, int linkBusOffset)

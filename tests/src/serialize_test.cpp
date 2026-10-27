@@ -10,6 +10,10 @@
 #include "hw/sh4/sh4_sched.h"
 #include "emulator.h"
 #include "cfg/option.h"
+#include "hw/bba/bba.h"
+#include "util/tsqueue.h"
+
+#include <vector>
 
 class SerializeTest : public ::testing::Test {
 protected:
@@ -185,6 +189,54 @@ TEST(SerializerBufferTest, ExactBufferSizeSucceeds)
 	Serializer ser(buffer.data(), buffer.size());
 	ASSERT_NO_THROW(ser.serialize(data.data(), data.size()));
 	ASSERT_EQ(ser.size(), buffer.size());
+}
+
+TEST_F(SerializeTest, BbaStateSkipsDevicePayloadWhenRuntimeDeviceIsMissing)
+{
+	if (!settings.platform.isConsole() && !settings.platform.isAtomiswave())
+		GTEST_SKIP() << "BBA device is unavailable on this platform";
+
+	struct BbaConfigRestore
+	{
+		bool enabled = config::EmulateBBA;
+		~BbaConfigRestore()
+		{
+			config::EmulateBBA = enabled;
+			bba_Reset(true);
+		}
+	} restore;
+
+	config::EmulateBBA = true;
+	bba_Reset(true);
+	std::vector<char> data(100000);
+	Serializer ser(data.data(), data.size());
+	bba_Serialize(ser);
+	data.resize(ser.size());
+
+	// Simulate loading a BBA-enabled V63 state where this runtime has no BBA.
+	bba_Term();
+	std::vector<char> noDeviceData(100000);
+	Serializer noDeviceSer(noDeviceData.data(), noDeviceData.size());
+	bba_Serialize(noDeviceSer);
+	EXPECT_EQ(ser.size(), noDeviceSer.size());
+	noDeviceData.resize(noDeviceSer.size());
+	Deserializer deser(data.data(), data.size());
+	EXPECT_NO_THROW(bba_Deserialize(deser));
+	EXPECT_EQ(ser.size(), deser.size());
+}
+
+TEST(NetworkFrameQueueTest, TryPopDrainsFramesInFifoOrder)
+{
+	TsQueue<std::vector<u8>> queue;
+	std::vector<u8> frame;
+	EXPECT_FALSE(queue.tryPop(frame));
+	queue.push(std::vector<u8>{ 1, 2, 3 });
+	queue.push(std::vector<u8>{ 4, 5 });
+	ASSERT_TRUE(queue.tryPop(frame));
+	EXPECT_EQ((std::vector<u8>{ 1, 2, 3 }), frame);
+	ASSERT_TRUE(queue.tryPop(frame));
+	EXPECT_EQ((std::vector<u8>{ 4, 5 }), frame);
+	EXPECT_FALSE(queue.tryPop(frame));
 }
 
 TEST(SerializerBufferTest, OffByOneOverflowThrowsException)

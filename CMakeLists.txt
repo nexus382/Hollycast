@@ -224,8 +224,8 @@ elseif(LIBRETRO)
 		if(NOT CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
 			set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
 		endif()
-		if(NOT WIN32)
-			# keep bundled libs like glslang from binding to the frontend's copies
+		if(UNIX AND NOT APPLE)
+			# Keep bundled libraries from binding to same-named symbols in the frontend.
 			target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/shell/libretro/link.T")
 		endif()
 	endif()
@@ -894,10 +894,7 @@ endif()
 set(TINYGETTEXT_WO_ICONV ON)
 add_subdirectory(core/deps/tinygettext EXCLUDE_FROM_ALL)
 if(MSVC)
-	# language.cpp holds the native language names as non-ASCII literals. MSVC
-	# decodes sources without a BOM using the active code page, so on a non-UTF-8
-	# system locale those literals break the build (C2001/C2064). The main target
-	# already passes /utf-8; this dependency needs it too.
+	# tinygettext contains native-language string literals in UTF-8 source files.
 	target_compile_options(tinygettext PRIVATE /utf-8)
 endif()
 target_include_directories(${PROJECT_NAME} PRIVATE core/deps/tinygettext/include)
@@ -1451,25 +1448,23 @@ if(NOT LIBRETRO)
 			target_sources(${PROJECT_NAME} PRIVATE
 					shell/apple/common/http_client.mm
 					shell/apple/common/util.mm)
-			# The app's main() lives in SDLApplicationDelegate.mm; the test binary
-			# gets its main() from gtest_main and stubs the rest (tests/src/test_stubs.cpp).
 			if(NOT BUILD_TESTING)
 				add_subdirectory(core/deps/Syphon)
 				target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
 				add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}
-					$<TARGET_FILE_DIR:flycast>/../Resources/)
+					$<TARGET_FILE_DIR:Hollycast>/../Resources/)
 				target_compile_definitions(${PROJECT_NAME} PRIVATE VIDEO_ROUTING)
 
 				target_sources(${PROJECT_NAME} PRIVATE
 						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.h
 						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
 						shell/apple/emulator-osx/emulator-osx/osx-main.mm)
+				set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
+				target_sources(${PROJECT_NAME} PRIVATE ${ASSETS})
+				source_group("Resources" FILES ${ASSETS})
+				set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 			endif()
-			set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
-			target_sources(${PROJECT_NAME} PRIVATE ${ASSETS})
-			source_group("Resources" FILES ${ASSETS})
-			set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 
 			set_target_properties(${PROJECT_NAME} PROPERTIES
 				OUTPUT_NAME "Hollycast"

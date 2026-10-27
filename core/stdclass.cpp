@@ -264,9 +264,10 @@ std::string timeToShortDateTimeString(time_t time) {
 	return i18n::formatShortDateTime(time);
 }
 
-
 MD5Sum& MD5Sum::add(hostfs::File *file)
 {
+	if (file == nullptr)
+		return *this;
 	file->seek(0, SEEK_SET);
 	char buf[4096];
 	size_t len;
@@ -274,3 +275,4 @@ MD5Sum& MD5Sum::add(hostfs::File *file)
 		MD5_Update(&ctx, buf, (unsigned long)len);
 	return *this;
 }
+

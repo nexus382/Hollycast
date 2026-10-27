@@ -22,17 +22,7 @@
 #include "oslib/i18n.h"
 #include "oslib/oslib.h"
 
-std::mutex& MapleLink::mutex()
-{
-	static std::mutex *m = new std::mutex();
-	return *m;
-}
-
-MapleLink::LinkTable& MapleLink::links()
-{
-	static LinkTable *l = new LinkTable();
-	return *l;
-}
+#include <memory>
 
 MapleLink::MapleLink(const DreamLink::Ptr& dreamlink, u32 bus, u32 port) :
 	dreamlink(dreamlink),
@@ -53,59 +43,127 @@ bool MapleLink::send(const MapleMsg& msg)
 
 bool MapleLink::sendReceive(const MapleMsg& txMsg, MapleMsg& rxMsg)
 {
-	std::size_t count = 0;
-	if (bus >= 0 && bus < (int)links().size())
-	{
-		std::lock_guard<std::mutex> _(mutex());
-		for (const std::list<MapleLink::Ptr>& list : links()[bus]) {
-			if (!list.empty() && list.front().get() == this)
-				++count;
+	return dreamlink->sendReceive(txMsg, rxMsg);
+}
+
+bool MapleLink::storageEnabled() const
+{
+	return dreamlink->storageEnabled();
+}
+
+bool MapleLink::isConnected()
+{
+	return dreamlink->isConnected();
+}
+
+u32 MapleLink::getFunctionCodesMask() const
+{
+	return dreamlink->getFunctionCodesMask(port);
+}
+
+std::shared_ptr<maple_device> MapleLink::createMapleDevice()
+{
+	return dreamlink->createMapleDevice(bus, port);
+}
+
+void MapleLinkDevice::deserializeVmu(
+	Deserializer &deser,
+	MapleLink& link,
+	maple_base& dev,
+	maple_sega_vmu& vmu,
+	bool usingExternalMemory
+)
+{
+	bool dataMatches = true;
+
+	u8 currentKnownFlash[sizeof(vmu.flash_data)];
+	memcpy(&currentKnownFlash[0], &vmu.flash_data[0], sizeof(currentKnownFlash));
+	u8 currentAccessedBlocks[sizeof(vmu.accessed_blocks)];
+	memcpy(&currentAccessedBlocks[0], &vmu.accessed_blocks[0], sizeof(currentAccessedBlocks));
+	vmu.maple_sega_vmu::deserialize(deser);
+
+	// Determine if the device needs to be reconnected
+	if (usingExternalMemory) {
+		if (!vmu.accessed_blocks_valid) {
+			// Legacy save file - cause reconnect
+			dataMatches = false;
+			os_notify(
+				i18n::T("ATTENTION: External storage differs from VMU memory in loaded state"),
+				6000,
+				i18n::T("VMU will appear to reconnect in-game")
+			);
+		} else if (vmu.loaded_us_since_write < 100000) {
+			// Less than 100 ms since last write, meaning write was in progress during save state - cause reconnect
+			dataMatches = false;
+			os_notify(
+				i18n::T("ATTENTION: VMU write was in progress during save"),
+				6000,
+				i18n::T("VMU will appear to reconnect in-game")
+			);
+		} else {
+			for (int block = static_cast<int>(sizeof(currentAccessedBlocks) - 1); block >= 0; --block) {
+				const bool isCached = (vmu.accessed_blocks[block] != 0);
+				if (isCached) {
+					if (!currentAccessedBlocks[block]) {
+						// Try up to 4 times to read this block
+						for (u32 j = 0; j < 4; ++j) {
+							std::optional<MapleMsg> rxMsg = sendRead(
+								link,
+								(dev.bus_id << 6) | (1 << dev.bus_port),
+								dev.bus_id << 6,
+								block
+							);
+
+							if (rxMsg.has_value() && rxMsg->size >= 130) {
+								// Something read!
+								memcpy(&currentKnownFlash[block * 512], &rxMsg->data[8], 512);
+								currentAccessedBlocks[block] = true;
+								break;
+							}
+						}
+					}
+
+					if (
+						!currentAccessedBlocks[block] ||
+						(memcmp(&currentKnownFlash[block * 512], &vmu.flash_data[block * 512], 512) != 0)
+					) {
+						os_notify(
+							i18n::T("ATTENTION: External storage differs from VMU memory in loaded state"),
+							6000,
+							i18n::T("VMU will appear to reconnect in-game")
+						);
+						dataMatches = false;
+						break;
+					}
+				}
+			}
 		}
 	}
 
-bool MapleLink::isGameStarted() const {
-	return GameState::started;
-}
-
-void MapleLink::registerLink(int bus, int port)
-{
-	if (bus >= 0 && bus < (int)links().size()
-			&& port >= 0 && port < (int)links()[0].size())
-	{
-		if (this->bus != bus) {
-			this->bus = bus;
-			this->ports = 0;
-		}
-		this->ports |= 1 << port;
-		std::lock_guard<std::mutex> _(mutex());
-		links()[bus][port].push_front(shared_from_this());
-	}
-}
-void MapleLink::unregisterLink(int bus, int port)
-{
-	if (bus >= 0 && bus < (int)links().size()
-			&& port >= 0 && port < (int)links()[0].size())
-	{
-		if (this->bus != bus) {
-			this->bus = -1;
-			this->ports = 0;
-		}
-		else {
-			this->ports &= ~(1 << port);
-		}
-		std::lock_guard<std::mutex> _(mutex());
-		links()[bus][port].remove_if([this](const Ptr& item) { return item.get() == this; });
+	if (dataMatches) {
+		mirrorLcd(link, dev, vmu);
+	} else {
+		dev.requestReconnect();
+		// Reset the virtual VMU data
+		vmu.accessed_blocks_valid = true;
+		memset(&vmu.flash_data[0], 0, sizeof(vmu.flash_data));
+		memset(&vmu.accessed_blocks[0], 0, sizeof(vmu.accessed_blocks));
 	}
 }
 
 std::optional<MapleMsg> MapleLinkDevice::sendRead(MapleLink& link, u8 dest, u8 origin, u8 block)
 {
-	std::lock_guard<std::mutex> _(mutex());
-	for (const auto& ports : links())
-	{
-		for (const std::list<MapleLink::Ptr>& list : ports)
-			if (!list.empty() && list.front()->storageEnabled())
-				return true;
+	MapleMsg msg{};
+	msg.command = MDCF_BlockRead;
+	msg.destAP = dest;
+	msg.originAP = origin;
+	msg.pushData(MFID_1_Storage);
+	const u32 locationWord = (block & 0xFF) << 24; // (BE) partition #, phase, block #
+	msg.pushData(locationWord);
+
+	MapleMsg rxMsg;
+	if (!link.sendReceive(msg, rxMsg)) {
+		return std::nullopt;
 	}
 
 	return rxMsg;

@@ -64,11 +64,9 @@ void setFirstProvokingVertex(rend_context& rendContext)
 	}
 	else
 	{
-		// Sorted triangles share vertices (tri0=(P0,P1,P2), tri1=(P2,P1,P3)), and
-		// they're processed in depth order, so copying colors can overwrite a
-		// source before it's read. Each triangle owns its 3 index slots though:
-		// rotate (a,b,c) -> (c,a,b), which keeps the winding and puts the
-		// provoking vertex first.
+		// Sorted triangles share vertices, so copying colors can overwrite a source before
+		// it is read. Each triangle owns its three index slots: rotate (a,b,c) -> (c,a,b)
+		// to keep the winding and move the provoking vertex to the front.
 		for (const SortedTriangle& tri : rendContext.sortedTriangles)
 		{
 			if (rendContext.global_param_tr[tri.polyIndex].pcw.Gouraud)

@@ -95,7 +95,6 @@ template <class T>
 T DYNACALL ReadMem_extdev_T(u32 addr)
 {
 	INFO_LOG(SH4, "Read<%d> ext. device (Area 5) undefined @ %08x", (int)sizeof(T), addr);
-	// This is what real hw returns
 	return (T)((addr >> 16) & 0x1fff);
 }
 

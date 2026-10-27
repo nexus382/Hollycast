@@ -103,7 +103,6 @@ void Sh4Interpreter::Reset(bool hard)
 
 	if (hard)
 	{
-		// in case ram base has changed
 		sh4cycles.init(ctx);
 		icache.init(ctx);
 		ocache.init(ctx);
