@@ -32,6 +32,8 @@ export async function publishRun(repository, run, api, upload, releases) {
     release = await api(`${base}/releases/tags/${tag}`);
   } catch (error) {
     if (error.status !== 404) throw error;
+    // The tag endpoint only returns published releases; drafts come from the list API.
+    release = releases.find(candidate => candidate.tag_name === tag);
   }
   if (release) {
     const provenance = ciMetadata(release);

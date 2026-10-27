@@ -62,16 +62,16 @@ test('failed uploads leave a draft and retries reuse uploaded assets', async () 
   const existing = release({ assets: [{ name: archiveName(artifact), state: 'uploaded', digest: artifact.digest }] });
   let publishCount = 0;
   const api = async (path, options) => {
-    if (path.includes('/tags/')) return existing;
+    if (path.includes('/tags/')) return notFound();
     if (path.includes('/artifacts?')) return { artifacts: [artifact, { ...artifact, id: 457 }] };
     assert.equal(options.method, 'PATCH');
     publishCount++;
     return release({ draft: false });
   };
-  await assert.rejects(publishRun(repository, run(), api, async () => { throw new Error('Network failure'); }, []), /Network failure/);
+  await assert.rejects(publishRun(repository, run(), api, async () => { throw new Error('Network failure'); }, [existing]), /Network failure/);
   assert.equal(publishCount, 0);
   const uploads = [];
-  await publishRun(repository, run(), api, async (_, item) => uploads.push(item.id), []);
+  await publishRun(repository, run(), api, async (_, item) => uploads.push(item.id), [existing]);
   assert.deepEqual(uploads, [457]);
   assert.equal(publishCount, 1);
 });
@@ -83,6 +83,8 @@ test('published builds are immutable and unrelated reserved tags are never overw
   }, () => assert.fail('Already published'), []);
   await assert.rejects(publishRun(repository, run(), async () => release({ body: 'Unrelated release' }),
     () => assert.fail('Unrelated release'), []), /Refusing to change unrelated release/);
+  await assert.rejects(publishRun(repository, run(), notFound, () => assert.fail('Unrelated draft'),
+    [release({ body: 'Unrelated draft' })]), /Refusing to change unrelated release/);
 });
 
 test('empty assets from interrupted draft uploads are removed before retrying', async () => {
