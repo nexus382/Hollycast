@@ -184,7 +184,7 @@ static void registerFont(std::initializer_list<std::vector<FontEntry>*> targets,
 		registerFont(*target, entry);
 }
 
-static void loadFonts(const std::vector<FontEntry>& entries, const ImFontConfig& cfg, float sizeScale = 1.f)
+static void loadFonts(const std::vector<FontEntry>& entries, const ImFontConfig& cfg)
 {
 	std::unordered_set<std::string> satisfiedLangs;
 	satisfiedLangs.reserve(8);
@@ -207,14 +207,13 @@ static void loadFonts(const std::vector<FontEntry>& entries, const ImFontConfig&
 
 		for (const std::string& path : e.paths)
 		{
-			const float size = e.size * sizeScale;
 			ImFontConfig entryCfg = cfg;
 			entryCfg.FontNo = e.fontNo.value;
-			entryCfg.GlyphOffset.y = size * e.offsetY;
+			entryCfg.GlyphOffset.y = e.size * e.offsetY;
 			static ImWchar faRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
 			entryCfg.GlyphExcludeRanges = faRanges;
 
-			ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), size, &entryCfg, nullptr);
+			ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), e.size, &entryCfg, nullptr);
 			if (font)
 			{
 				loaded = true;
@@ -566,18 +565,10 @@ void gui_loadFonts()
 		verify(io.Fonts->AddFontFromMemoryTTF(cjkData, (int)dataSize, targets[i]->LegacySize, &cjkConfig) != nullptr);
 	}
 
-	// System fonts provide additional scripts and emoji where available.
+	// The other text styles already have the shared bundled CJK fallback.
+	// Keep the existing system fallbacks for regular and bold text.
 	loadFonts(fonts, fontConfig);
 	loadFonts(boldFonts, boldFontConfig);
-	for (ImFont* target : targets)
-	{
-		if (target != regularFont && target != boldFont)
-		{
-			ImFontConfig fallbackConfig = fontConfig;
-			fallbackConfig.DstFont = target;
-			loadFonts(fonts, fallbackConfig, target->LegacySize / fontSize);
-		}
-	}
 
 	data = resource::load("fonts/" FONT_ICON_FILE_NAME_FAS, dataSize);
 	if (data != nullptr)
