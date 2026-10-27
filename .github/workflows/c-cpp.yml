@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 name: Linux, macOS, Windows
 
 on:
@@ -20,6 +21,8 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
 
     strategy:
+      # Keep independent platforms running when one job fails.
+      fail-fast: false
       matrix:
         config:
           - { name: i686-pc-windows-msvc, os: windows-2022, shell: cmd, arch: x86, cmakeArgs: -G Ninja, buildType: Release }
@@ -36,6 +39,7 @@ jobs:
           # Unlink and re-link to prevent errors when github mac runner images install python outside of brew. See https://github.com/actions/setup-python/issues/577
           brew list -1 | grep python | while read formula; do brew unlink $formula; brew link --overwrite $formula; done
           brew update || :
+          # Homebrew's curl needs zstd to download the universal dependencies.
           brew install libao ldid pulseaudio
 
           moltenvk_tag="v1.4.2"
