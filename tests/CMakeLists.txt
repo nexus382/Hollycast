@@ -20,6 +20,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/div32_test.cpp
         src/test_stubs.cpp
         src/serialize_test.cpp
+        src/LibretroHelpersTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
         src/SorterTest.cpp

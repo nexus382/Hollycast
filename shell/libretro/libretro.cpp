@@ -23,6 +23,7 @@
 #include <sys/time.h>
 #endif
 #include <mutex>
+#include "libretro_helpers.h"
 
 #ifdef __SWITCH__
 #include <stdlib.h>
@@ -188,6 +189,7 @@ static int maxFramebufferHeight;
 static float framebufferAspectRatio = 4.f / 3.f;
 static double fps_current;
 static double fps_spg;
+static PendingFps pending_fps_spg;
 
 float libretro_expected_audio_samples_per_run;
 unsigned libretro_vsync_swap_interval = 1;
@@ -768,7 +770,7 @@ bool setAVInfo(retro_system_av_info& avinfo)
 void retro_setfps(double fps)
 {
 	if (fps > 0 && fps < 100)
-		fps_spg = fps;
+		pending_fps_spg.publish(fps);
 }
 
 static bool retro_refresh_av_info()
@@ -1318,6 +1320,14 @@ void retro_run()
 	if (first_run)
 		emu.start();
 
+	// SPG timing is calculated on the emulation thread. Consume it here so
+	// fps_spg and frontend environment callbacks remain frontend-thread-only.
+	updatePendingFps(pending_fps_spg, fps_spg, [](double) {
+		retro_system_av_info avinfo;
+		if (setAVInfo(avinfo))
+			environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avinfo);
+	});
+
 	poll_cb();
 	os_UpdateInputState();
 	bool fastforward = false;
@@ -1392,6 +1402,9 @@ void retro_reset()
 	std::lock_guard<std::mutex> lock(mtx_serialization);
 
 	emu.unloadGame();
+	// unloadGame stops the emulation thread, but dc_reset may have queued one
+	// last timing update while shutting down the previous game.
+	resetPendingFps(pending_fps_spg, fps_spg);
 
 	config::ScreenStretching = 100;
 	loadGame();
@@ -2480,6 +2493,9 @@ void retro_unload_game()
 {
 	INFO_LOG(COMMON, "Hollycast unloading game");
 	emu.unloadGame();
+	// Clear timing only after the producer has stopped; unload/reset may
+	// calculate SPG timing as part of device teardown.
+	resetPendingFps(pending_fps_spg, fps_spg);
 	dreampotato::term();
 	game_data.clear();
 	disk_paths.clear();
@@ -2534,6 +2550,10 @@ bool retro_serialize(void *data, size_t size)
 	try {
 		Serializer ser(data, size);
 		dc_serialize(ser);
+		// serialize_size() intentionally includes frontend-safe headroom. Avoid
+		// exposing stale bytes from the frontend's larger buffer as part of the
+		// savestate payload.
+		clearSerializePadding(data, size, ser.size());
 		result = true;
 	} catch (const Serializer::Exception& e) {
 		ERROR_LOG(SAVESTATE, "Saving state failed: %s", e.what());

@@ -52,14 +52,14 @@
     {"sha":"e9f4020c566605f20ac1db5576bafc523a10d3f7","subject":"maplelink: keep the link registry alive through static destruction (#2577)","disposition":"applied","reason":"Registry lifetime extended to avoid shutdown-order destruction."},
     {"sha":"31697241b7c57c52df8382493e896667e654242c","subject":"sdl: initialize the axis direction in SDLControllerMappingParser","disposition":"applied","reason":"Axis direction now has a defined initial value."},
     {"sha":"78d5d09c1e5259f01edd6038c24e42dd6807df30","subject":"ci: fix sentry-cli on android builds","disposition":"deferred","reason":"Android workflow change requires CI-specific review."},
-    {"sha":"5543a95c4f711395fc000dac80ce6b1dc7e49606","subject":"bba: start polling only when needed. Increase poll interval to 1 ms","disposition":"applied","reason":"Polling lifecycle and interval updated with scheduler cleanup."},
+    {"sha":"5543a95c4f711395fc000dac80ce6b1dc7e49606","subject":"bba: start polling only when needed. Increase poll interval to 1 ms","disposition":"applied","reason":"BBA keeps the final 5_sh4ms cadence selected by the later service-queue follow-up; network startup is tied to guest TX or RX enable instead of empty receive polling."},
     {"sha":"a9bd1c74fd207aabdc917824afb93b3a571dd5c4","subject":"empty commit","disposition":"skipped","reason":"No tree changes."},
     {"sha":"620699865b7e90564a40f079c2c68533fe3202e9","subject":"Merge remote-tracking branch 'origin/master' into dev","disposition":"skipped","reason":"History-only merge; file changes are reviewed as individual commits."},
     {"sha":"db065c5700f4b7fab63ff97a86a9d37edc372337","subject":"audio: put the RingBuffer cursors on separate cache lines","disposition":"applied","reason":"RingBuffer cursors are cache-line aligned."},
     {"sha":"fa9d39a355ed06cbc27ea8d807f1cb6b8d766cf0","subject":"bba: skip deserialization if device doesn't exist","disposition":"applied","reason":"BBA deserialization skips absent runtime devices."},
     {"sha":"5f35ec7d72e8f349b3086aba19aea2822cb2fd82","subject":"Merge remote-tracking branch 'origin/master' into dev","disposition":"skipped","reason":"History-only merge; file changes are reviewed as individual commits."},
     {"sha":"de7597f0bc73747fe3dbd30397073a1e5b3d05c0","subject":"picotcp: fix race condition in enqueue/dequeue","disposition":"applied","reason":"PicoTCP queue operations are synchronized."},
-    {"sha":"c52e6ccf5651bfa0de98fb388ac2391a78d3e071","subject":"bba: move frame queueing to net services. Call service to rx frame","disposition":"applied","reason":"Final frame queueing uses service-level RX ownership."},
+    {"sha":"c52e6ccf5651bfa0de98fb388ac2391a78d3e071","subject":"bba: move frame queueing to net services. Call service to rx frame","disposition":"applied","reason":"Service-level RX ownership remains; receive polling is passive until guest TX or RTL8139 RX enable, disabled receivers drain-and-drop, and enabled receivers retain ring-buffer backpressure. The final 5_sh4ms poll cadence is preserved."},
     {"sha":"3a498b1cb5112253187591c914d2661476406046","subject":"initialize all scheduler ids to -1","disposition":"applied","reason":"Scheduler IDs and teardown paths are initialized/guarded across GD-ROM, Maple, modem, Naomi/SP, PVR, serial, ICE, and REIOS."},
     {"sha":"7c22066aa35cf5317d017228ad050f6937046dab","subject":"tests: build and link the unit test binary on macOS (#2575)","disposition":"applied","reason":"Mac test target omits app-only sources, uses test stubs, and links CURL; regression tests were registered."},
     {"sha":"fe58ee8c20830514af7bd41a3fc91b17ea8aed9e","subject":"add the ability to hide achievement popups","disposition":"applied","reason":"Added a separate persisted ShowAchievementPopups option and localized settings row; paired with e2f148 so suppressed popups do not block other OSD."},
@@ -73,12 +73,12 @@
     {"sha":"917a7552f9919162943438b47d4727871e876cc0","subject":"disable openmp on macos","disposition":"applied","reason":"Desktop Apple builds force OpenMP off and the macOS CI no longer installs the libomp formula."}
   ],
   "master_only": [
-    {"sha":"53efedbbe70d8066cbbe597bd1992422ba7edfe2","subject":"libretro: don't call the frontend on the emulator thread","disposition":"applied","reason":"PVR timing updates call retro_setfps only; AV-info frontend callbacks remain on the libretro frontend path. optionDefs is initialized to nullptr."}
+    {"sha":"53efedbbe70d8066cbbe597bd1992422ba7edfe2","subject":"libretro: don't call the frontend on the emulator thread","disposition":"applied","reason":"PVR timing changes are coalesced and delivered through the frontend callback path; queued timing is cleared across reset/game changes. optionDefs is initialized to nullptr."}
   ],
   "validation": {
     "source_review": "All 54 range commits plus master-only 53ef were dispositioned. Hollycast-specific customizations and V63 state compatibility were preserved.",
     "diff_check": "git diff --check passed for the integration paths.",
-    "tests": "Final macOS arm64 Ninja rerun passed 188/188 tests with --gtest_filter=-HttpTest.*. Six HttpTest cases were excluded because they make remote postb.in requests. The final build reported no work after the last source edits.",
+    "tests": "Final macOS arm64 Ninja run passed 197/197 tests with --gtest_filter=-*HttpTest*. Six HttpTest cases were excluded because they make remote postb.in requests. This includes 4 NetworkServiceTest cases and 5 LibretroHelpersTest cases, covering RX startup/reset/clock gating, timing coalescing/reset, and serialization padding. A separate macOS arm64 LIBRETRO=ON build of Hollycast_libretro succeeded; its standalone LibretroHelpersTest run passed 5/5. Enabling the full test target for LIBRETRO exposed missing imgui.h and SDL.h headers in unrelated existing tests, so those full tests were not run in that configuration.",
     "limitations": [
       "No Windows/UWP runtime build was available; MoveFileExW's UWP availability was checked against Microsoft Learn.",
       "No ARM64 hardware run was available for the deferred NEON framebuffer optimization.",
