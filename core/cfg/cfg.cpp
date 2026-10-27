@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "cfg.h"
 #include "ini.h"
 #include "stdclass.h"
@@ -51,6 +52,7 @@ bool open()
 		{
 			// Config file didn't exist
 			INFO_LOG(COMMON, "Creating new empty config file at '%s'", cfgPath.c_str());
+			cfgdb.set("hollycast", "SetupChecklistPending", true);
 			saveFile();
 		}
 	}
