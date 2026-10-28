@@ -45,7 +45,11 @@ jobs:
           moltenvk_root="$RUNNER_TEMP/MoltenVK-$moltenvk_tag"
           rm -rf "$moltenvk_root"
           mkdir -p "$moltenvk_root"
-          aria2c "https://github.com/KhronosGroup/MoltenVK/releases/download/$moltenvk_tag/MoltenVK-macos.tar" -d "$RUNNER_TEMP" -o "MoltenVK-macos-$moltenvk_tag.tar"
+          # Retry transient release-download failures without hiding persistent errors.
+          curl --fail --location --retry 5 --retry-delay 5 --retry-max-time 300 \
+            --connect-timeout 30 --max-time 180 \
+            --output "$RUNNER_TEMP/MoltenVK-macos-$moltenvk_tag.tar" \
+            "https://github.com/KhronosGroup/MoltenVK/releases/download/$moltenvk_tag/MoltenVK-macos.tar"
           tar -xf "$RUNNER_TEMP/MoltenVK-macos-$moltenvk_tag.tar" -C "$moltenvk_root"
           moltenvk_dylib="$(find "$moltenvk_root" -type f -path '*/macOS/*' -name libMoltenVK.dylib | head -n 1)"
           if [ -z "$moltenvk_dylib" ]; then
