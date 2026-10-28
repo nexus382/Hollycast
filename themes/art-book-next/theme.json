@@ -1,0 +1,343 @@
+{
+  "formatVersion": 1,
+  "id": "art-book-next",
+  "name": "Art Book Next",
+  "author": "Anthony Caccese; Hollycast port by the Hollycast contributors",
+  "description": "A dark, editorial game library adapted from Art Book Next for ES-DE.",
+  "baseTheme": 0,
+  "colors": {
+    "Text": "eeeeeeff",
+    "TextDisabled": "888888ff",
+    "WindowBg": "000000ff",
+    "ChildBg": "222222ff",
+    "PopupBg": "111111ff",
+    "Border": "444444ff",
+    "FrameBg": "111111ff",
+    "FrameBgHovered": "222222ff",
+    "FrameBgActive": "333333ff",
+    "Button": "222222ff",
+    "ButtonHovered": "333333ff",
+    "ButtonActive": "444444ff",
+    "Header": "333333ff",
+    "HeaderHovered": "444444ff",
+    "HeaderActive": "555555ff",
+    "Separator": "444444ff",
+    "TableHeaderBg": "111111ff",
+    "TableRowBg": "222222ff",
+    "TableRowBgAlt": "1a1a1aff",
+    "TextLink": "ddddddff",
+    "TextSelectedBg": "44444499"
+  },
+  "layouts": [
+    {
+      "id": "boxart-metadata",
+      "name": "List: Metadata & Boxart",
+      "mode": "list",
+      "browser": [
+        0.041,
+        0.26,
+        0.325,
+        0.57
+      ],
+      "spacing": 0,
+      "background": "222222ff",
+      "rowHeight": 0.073,
+      "textColor": "ffffff55",
+      "selectedTextColor": "ffffffff",
+      "selectorColor": "444444ff",
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0.025,
+            0.235,
+            0.355,
+            0.62
+          ],
+          "color": "111111ff",
+          "zIndex": -1
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.02110199,
+            0.0375,
+            0.1524033,
+            0.05
+          ],
+          "source": "assets/dreamcast-logo.png",
+          "fit": "contain",
+          "align": "left",
+          "color": "ffffffff",
+          "zIndex": 5
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.3,
+            0.042,
+            0.4,
+            0.04
+          ],
+          "source": "title",
+          "color": "eeeeeeff",
+          "fontSize": 0.033333,
+          "align": "center",
+          "zIndex": 5
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.41002344,
+            0.07291667,
+            0.55509965,
+            0.5625
+          ],
+          "source": "cover",
+          "fit": "contain",
+          "align": "center"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.41617819,
+            0.69791667,
+            0.35169988,
+            0.25
+          ],
+          "source": "description",
+          "color": "ffffffee",
+          "fontSize": 0.03333333
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.86049238,
+            0.775,
+            0.12,
+            0.04
+          ],
+          "source": "releaseDate",
+          "color": "ffffff88",
+          "fontSize": 0.02916667
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.86049238,
+            0.8375,
+            0.12,
+            0.04
+          ],
+          "source": "players",
+          "color": "ffffff88",
+          "fontSize": 0.02916667
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.86049238,
+            0.9,
+            0.12,
+            0.04
+          ],
+          "source": "playTime",
+          "color": "ffffff88",
+          "fontSize": 0.02916667
+        }
+      ],
+      "fontSize": 0.0375
+    },
+    {
+      "id": "screenshot-cover",
+      "name": "List: Screenshot & Cover",
+      "mode": "list",
+      "browser": [
+        0.041,
+        0.26,
+        0.325,
+        0.57
+      ],
+      "spacing": 0,
+      "background": "222222ff",
+      "rowHeight": 0.073,
+      "textColor": "ffffff55",
+      "selectedTextColor": "ffffffff",
+      "selectorColor": "444444ff",
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0.025,
+            0.235,
+            0.355,
+            0.62
+          ],
+          "color": "111111ff",
+          "zIndex": -1
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.02110199,
+            0.0375,
+            0.1524033,
+            0.05
+          ],
+          "source": "assets/dreamcast-logo.png",
+          "fit": "contain",
+          "align": "left",
+          "color": "ffffffff",
+          "zIndex": 5
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.3,
+            0.042,
+            0.4,
+            0.04
+          ],
+          "source": "title",
+          "color": "eeeeeeff",
+          "fontSize": 0.033333,
+          "align": "center",
+          "zIndex": 5
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.37514654,
+            0.0,
+            0.62485346,
+            0.63541667
+          ],
+          "source": "screenshot",
+          "fit": "cover",
+          "align": "center"
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.80691507,
+            0.33333334,
+            0.17584994,
+            0.33333333
+          ],
+          "source": "cover",
+          "fit": "contain",
+          "align": "center",
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.41617819,
+            0.69791667,
+            0.35169988,
+            0.25
+          ],
+          "source": "description",
+          "color": "ffffffee",
+          "fontSize": 0.03333333
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.86049238,
+            0.775,
+            0.12,
+            0.04
+          ],
+          "source": "releaseDate",
+          "color": "ffffff88",
+          "fontSize": 0.02916667
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.86049238,
+            0.8375,
+            0.12,
+            0.04
+          ],
+          "source": "players",
+          "color": "ffffff88",
+          "fontSize": 0.02916667
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.86049238,
+            0.9,
+            0.12,
+            0.04
+          ],
+          "source": "playTime",
+          "color": "ffffff88",
+          "fontSize": 0.02916667
+        }
+      ],
+      "fontSize": 0.0375
+    },
+    {
+      "id": "grid-cover",
+      "name": "Grid: Boxart",
+      "mode": "grid",
+      "browser": [
+        0.0,
+        0.11666667,
+        1.0,
+        0.88333333
+      ],
+      "columns": 6,
+      "itemAspect": 0.666667,
+      "spacing": 2,
+      "showTitles": true,
+      "background": "000000ff",
+      "fontSize": 0.03,
+      "textColor": "ffffffff",
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0.0,
+            0.0,
+            1.0,
+            0.11666667
+          ],
+          "color": "111111ff",
+          "zIndex": -1
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.02110199,
+            0.0375,
+            0.1524033,
+            0.05
+          ],
+          "source": "assets/dreamcast-logo.png",
+          "fit": "contain",
+          "align": "left",
+          "color": "ffffffff",
+          "zIndex": 5
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.3,
+            0.042,
+            0.4,
+            0.04
+          ],
+          "source": "title",
+          "color": "eeeeeeff",
+          "fontSize": 0.033333,
+          "align": "center",
+          "zIndex": 5
+        }
+      ]
+    }
+  ]
+}

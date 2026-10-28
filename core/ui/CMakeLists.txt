@@ -39,6 +39,11 @@ if(NOT LIBRETRO)
             settings_new.h
             video_preset.cpp
             video_preset.h
+            theme.h
+            theme.cpp
+            theme_parser.cpp
+            theme_library.h
+            theme_library.cpp
             boxart/arcade_scraper.h
             boxart/boxart.cpp
             boxart/boxart.h

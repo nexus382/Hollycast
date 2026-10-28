@@ -1,0 +1,342 @@
+{
+  "formatVersion": 1,
+  "id": "iconic",
+  "name": "Iconic",
+  "author": "Siddy212",
+  "description": "A Dreamcast character backdrop with selected game media and a right-side textlist or grid.",
+  "baseTheme": 0,
+  "colors": {
+    "Text": "ccccccff",
+    "TextDisabled": "999999ff",
+    "WindowBg": "090909ff",
+    "ChildBg": "090909cc",
+    "PopupBg": "090909f5",
+    "Border": "77777766",
+    "FrameBg": "333333ff",
+    "FrameBgHovered": "555555ff",
+    "FrameBgActive": "777777ff",
+    "Button": "333333ff",
+    "ButtonHovered": "555555ff",
+    "ButtonActive": "777777ff",
+    "Header": "555555ff",
+    "HeaderHovered": "666666ff",
+    "HeaderActive": "777777ff",
+    "Separator": "77777766",
+    "Tab": "333333ff",
+    "TabHovered": "555555ff",
+    "TabSelected": "777777ff",
+    "TextLink": "00c3e3ff",
+    "TextSelectedBg": "00c3e366",
+    "NavCursor": "00c3e3ff"
+  },
+  "layouts": [
+    {
+      "id": "textlist",
+      "name": "Textlist",
+      "mode": "list",
+      "browser": [
+        0.54,
+        0.08,
+        0.42,
+        0.84
+      ],
+      "spacing": 8,
+      "background": "090909ff",
+      "fontSize": 0.031,
+      "rowHeight": 0.052,
+      "textColor": "ccccccff",
+      "selectedTextColor": "ffffffff",
+      "selectorColor": "777777cc",
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/dreamcast-character.png",
+          "fit": "cover",
+          "align": "center",
+          "color": "ffffffcc",
+          "zIndex": -5
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "05091033",
+          "zIndex": -4
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.52,
+            0.055,
+            0.46,
+            0.89
+          ],
+          "color": "090909d9",
+          "zIndex": -1
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.03,
+            0.525,
+            0.46,
+            0.44
+          ],
+          "color": "090909b8",
+          "zIndex": -1
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.045,
+            0.105,
+            0.43,
+            0.41
+          ],
+          "source": "cover",
+          "fit": "contain",
+          "align": "center",
+          "color": "ffffffff"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.55,
+            0.41,
+            0.065
+          ],
+          "source": "title",
+          "color": "ffffffff",
+          "fontSize": 0.032
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.625,
+            0.19,
+            0.04
+          ],
+          "source": "genre",
+          "color": "bbbbbbff",
+          "fontSize": 0.021
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.27,
+            0.625,
+            0.21,
+            0.04
+          ],
+          "source": "releaseDate",
+          "color": "bbbbbbff",
+          "fontSize": 0.021
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.68,
+            0.41,
+            0.04
+          ],
+          "source": "developer",
+          "color": "bbbbbbff",
+          "fontSize": 0.021
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.735,
+            0.41,
+            0.12
+          ],
+          "source": "description",
+          "color": "eeeeeeff",
+          "fontSize": 0.02
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.065,
+            0.87,
+            0.27,
+            0.1
+          ],
+          "source": "assets/dreamcast-logo.png",
+          "fit": "cover",
+          "align": "left",
+          "color": "ffffffff"
+        }
+      ]
+    },
+    {
+      "id": "grid-boxart",
+      "name": "Grid: Boxart",
+      "mode": "grid",
+      "browser": [
+        0.52,
+        0.07,
+        0.46,
+        0.87
+      ],
+      "columns": 4,
+      "itemAspect": 0.72,
+      "spacing": 10,
+      "showTitles": true,
+      "background": "090909ff",
+      "fontSize": 0.026,
+      "textColor": "ccccccff",
+      "selectedTextColor": "ffffffff",
+      "selectorColor": "777777cc",
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/dreamcast-character.png",
+          "fit": "cover",
+          "align": "center",
+          "color": "ffffffcc",
+          "zIndex": -5
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "05091033",
+          "zIndex": -4
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.5,
+            0.045,
+            0.48,
+            0.92
+          ],
+          "color": "090909d9",
+          "zIndex": -1
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.03,
+            0.475,
+            0.46,
+            0.49
+          ],
+          "color": "090909b8",
+          "zIndex": -1
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.04,
+            0.09,
+            0.42,
+            0.38
+          ],
+          "source": "cover",
+          "fit": "contain",
+          "align": "center",
+          "color": "ffffffff"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.5,
+            0.39,
+            0.065
+          ],
+          "source": "title",
+          "color": "ffffffff",
+          "fontSize": 0.032
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.58,
+            0.19,
+            0.04
+          ],
+          "source": "genre",
+          "color": "bbbbbbff",
+          "fontSize": 0.021
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.27,
+            0.58,
+            0.21,
+            0.04
+          ],
+          "source": "releaseDate",
+          "color": "bbbbbbff",
+          "fontSize": 0.021
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.635,
+            0.39,
+            0.04
+          ],
+          "source": "developer",
+          "color": "bbbbbbff",
+          "fontSize": 0.021
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.065,
+            0.69,
+            0.39,
+            0.14
+          ],
+          "source": "description",
+          "color": "eeeeeeff",
+          "fontSize": 0.02
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.065,
+            0.85,
+            0.27,
+            0.1
+          ],
+          "source": "assets/dreamcast-logo.png",
+          "fit": "cover",
+          "align": "left",
+          "color": "ffffffff"
+        }
+      ]
+    }
+  ]
+}
