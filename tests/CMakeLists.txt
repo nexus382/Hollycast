@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 option(BUILD_GMOCK "Builds the googlemock subproject" OFF)
 option(INSTALL_GTEST "Enable installation of googletest. (Projects embedding googletest may want to turn this OFF.)" OFF)
 if(WIN32)
@@ -31,6 +32,12 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/InputSetTest.cpp
         src/input/SDLControllerMappingTest.cpp
         src/oslib/I18nTest.cpp
+        src/ui/ReadinessTest.cpp
+        src/ui/SetupChecklistLifecycleTest.cpp
         src/util/PeriodicThreadTest.cpp
         src/util/TsQueueTest.cpp
         src/util/WorkerThreadTest.cpp)
+
+if(NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp)
+endif()

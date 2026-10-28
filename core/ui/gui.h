@@ -32,6 +32,7 @@ void gui_draw_osd();
 void gui_display_osd();
 void gui_display_profiler();
 void gui_open_onboarding();
+void gui_open_setup_checklist();
 void gui_term();
 void gui_cancel_load();
 void gui_refresh_files();

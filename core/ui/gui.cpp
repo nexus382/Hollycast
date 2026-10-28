@@ -25,6 +25,10 @@
 #include "network/net_handshake.h"
 #include "network/ice.h"
 #include "input/gamepad_device.h"
+#include "input/keyboard_device.h"
+#include "input/mouse.h"
+#include "readiness.h"
+#include "setup_checklist_popup.h"
 #include "gui_util.h"
 #include "gui_font.h"
 #include "imgread/common.h"
@@ -78,6 +82,7 @@ int insetLeft, insetRight, insetTop, insetBottom;
 std::unique_ptr<ImGuiDriver> imguiDriver;
 
 static bool inited = false;
+static SetupChecklistLifecycle setupChecklist;
 GuiState gui_state = GuiState::Main;
 static bool commandLineStart;
 std::string launchOnExitUri;
@@ -87,6 +92,7 @@ static float mouseWheel;
 static bool mouseTouchscreen;
 static std::string error_msg;
 static bool error_msg_shown;
+static bool launch_error_help = false;
 static std::string osd_message;
 static u64 osd_message_end;
 static std::mutex osd_message_mutex;
@@ -542,6 +548,9 @@ void gui_start_game(const std::string& path)
 	if (gui_state != GuiState::Main && gui_state != GuiState::Closed && gui_state != GuiState::Commands
 			&& gui_state != GuiState::Pause)
 		return;
+	setupChecklist.gameLaunchStarted(config::loadBool("hollycast", "SetupChecklistPending", false), [](bool pending) {
+		config::saveBool("hollycast", "SetupChecklistPending", pending);
+	});
 	showExitSaveDialog = false;
 	showAutoLoadDialog = false;
 	emu.unloadGame();
@@ -1056,6 +1065,18 @@ void error_popup()
 		{
 			ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + uiScaled(400.f));
 			ImGui::TextWrapped("%s", error_msg.c_str());
+			if (launch_error_help)
+			{
+				ImGui::Spacing();
+				ImGui::TextWrapped("%s", T("Check the game image and any accompanying track files. Review firmware and controls in the setup checklist."));
+				if (ImGui::Button(T("Open Setup Checklist")))
+				{
+					error_msg.clear();
+					launch_error_help = false;
+					ImGui::CloseCurrentPopup();
+					gui_open_setup_checklist();
+				}
+			}
 			{
 				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(16, 3));
 				float currentwidth = ImGui::GetContentRegionAvail().x;
@@ -1063,6 +1084,7 @@ void error_popup()
 				if (ImGui::Button(T("OK"), ScaledVec2(80.f, 0)))
 				{
 					error_msg.clear();
+					launch_error_help = false;
 					ImGui::CloseCurrentPopup();
 				}
 			}
@@ -2663,6 +2685,161 @@ static void gui_display_onboarding()
 	select_file_popup(title, &systemdir_selected_callback);
 }
 
+void gui_open_setup_checklist()
+{
+	setupChecklist.requestManual();
+}
+
+static void gui_display_setup_checklist()
+{
+	const char* title = T("Ready to Play Checklist");
+	static bool biosChecked = false;
+	static bool bios = false;
+	static std::vector<std::string> checkedContentPaths, checkedBiosPaths;
+	if (openSetupChecklistIfUnblocked(setupChecklist, title))
+		biosChecked = false;
+	ImguiStyleVar windowPadding(ImGuiStyleVar_WindowPadding, ScaledVec2(22.f, 18.f));
+	ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ScaledVec2(10.f, 8.f));
+	ImguiStyleVar cellPadding(ImGuiStyleVar_CellPadding, ScaledVec2(8.f, 6.f));
+	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ScaledVec2(12.f, 7.f));
+	centerNextWindow();
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	ImGui::SetNextWindowSize(ImVec2(std::min(uiScaled(620.f), display.x * 0.95f),
+		std::min(uiScaled(680.f), display.y * 0.90f)), ImGuiCond_Appearing);
+	if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar))
+	{
+		if (setupChecklist.takeAutomaticCloseRequest())
+		{
+			ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+			return;
+		}
+		// Use the regular Roboto face for readable body copy; section labels use
+		// the existing bold face instead of inheriting the surrounding UI font.
+		ImGui::PushFont(largeFont, uiScaled(18.f));
+		const float footerHeight = uiScaled(42.f) + ImGui::GetStyle().ItemSpacing.y * 2.f + 1.f;
+		ImGui::BeginChild("##setup-checklist-content", ImVec2(0, -footerHeight),
+			false, ImGuiWindowFlags_DragScrolling);
+		auto sectionHeading = [](const char* label) {
+			ImGui::Dummy(ScaledVec2(0.f, 10.f));
+			ImGui::PushFont(boldFont, uiScaled(20.f));
+			ImGui::TextWrapped("%s", label);
+			ImGui::PopFont();
+			ImGui::Separator();
+		};
+		auto firmwareRow = [](const char* system, const char* filename) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::PushFont(boldFont, uiScaled(18.f));
+			ImGui::TextWrapped("%s", system);
+			ImGui::PopFont();
+			ImGui::TableNextColumn();
+			ImGui::TextWrapped("%s", filename);
+		};
+		bool controller = false, keyboard = false;
+		for (int i = 0; i < GamepadDevice::GetGamepadCount(); ++i)
+		{
+			auto device = GamepadDevice::GetGamepad(i);
+			if (!device) continue;
+			if (dynamic_cast<KeyboardDevice*>(device.get())) keyboard = true;
+			else if (!dynamic_cast<Mouse*>(device.get()) && !device->is_virtual_gamepad()) controller = true;
+		}
+#if defined(__ANDROID__) || defined(TARGET_IPHONE)
+		const bool touch = true;
+#else
+		const bool touch = false;
+#endif
+		if (!biosChecked || checkedContentPaths != config::ContentPath.get() || checkedBiosPaths != config::BiosPath.get())
+		{
+			checkedContentPaths = config::ContentPath.get();
+			checkedBiosPaths = config::BiosPath.get();
+			bios = !hostfs::findFlash("dc_", "%bios.bin;%boot.bin").empty();
+			biosChecked = true;
+		}
+		const auto checklist = readiness::evaluate({ !config::ContentPath.get().empty(), bios, controller, keyboard, touch });
+		ImGui::PushFont(boldFont, uiScaled(25.f));
+		ImGui::TextWrapped("%s", T("Ready to Play"));
+		ImGui::PopFont();
+		ImGui::TextWrapped("%s", T("Optional setup for games, firmware and controls. Reopen this checklist from General settings."));
+		sectionHeading(T("1. Game folder"));
+		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
+			? T("A folder is configured. If your games are elsewhere, choose their folder below.")
+			: T("Choose a folder containing your games to add them to the library."));
+		bool addFolder = ImGui::Button(T("Choose Game Folder"));
+		addContentPath(addFolder);
+		sectionHeading(T("2. BIOS and firmware"));
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		ImGui::TextUnformatted(T("Dreamcast"));
+		ImGui::PopFont();
+		ImGui::TextWrapped("%s", T("Place dc_boot.bin and dc_flash.bin in Hollycast's data folder, unless you have specified a custom BIOS folder."));
+		ImGui::TextWrapped("%s", bios
+			? T("A BIOS filename was found. Its contents have not been verified.")
+			: T("No original BIOS was found. Built-in HLE supports many games; some need an original BIOS."));
+		ImGui::Spacing();
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		ImGui::TextUnformatted(T("Arcade systems"));
+		ImGui::PopFont();
+		const ImGuiTableFlags tableFlags = ImGuiTableFlags_SizingStretchSame
+			| ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_NoSavedSettings;
+		if (ImGui::BeginTable("##setup-arcade-bios", 2, tableFlags))
+		{
+			firmwareRow(T("NAOMI / GD-ROM"), "naomi.zip");
+			firmwareRow(T("NAOMI 2"), "naomi2.zip");
+			firmwareRow(T("Atomiswave"), "awbios.zip");
+			firmwareRow(T("System SP"), "segasp.zip");
+			ImGui::EndTable();
+		}
+		// Archive names and title-specific ROM selections follow naomi_roms.cpp
+		// and loadBios(); the naomi-jp-d and naomi-ko-h sets both use naomi.zip.
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		const bool showTitleBios = ImGui::TreeNodeEx(T("Title-specific BIOS requirements"), ImGuiTreeNodeFlags_SpanAvailWidth);
+		ImGui::PopFont();
+		if (showTitleBios)
+		{
+			if (ImGui::BeginTable("##setup-title-bios", 2, tableFlags))
+			{
+				firmwareRow(T("Airline Pilots"), "airlbios.zip");
+				firmwareRow(T("The House of the Dead 2"), "hod2bios.zip");
+				firmwareRow(T("F355 Challenge (twin) / Challenge 2"), "f355bios.zip");
+				firmwareRow(T("F355 Challenge (deluxe)"), "f355dlx.zip");
+				firmwareRow(T("Kasei Channel Mars TV"), T("naomi.zip containing epr-21576d.ic27"));
+				firmwareRow(T("Mushiking II / III / III+ (Korea)"), T("naomi.zip containing epr-21576h_multi.ic27"));
+				ImGui::EndTable();
+			}
+			ImGui::TreePop();
+		}
+		ImGui::TextWrapped("%s", T("Use the archive for your system or game. Keep ZIP or 7z archives packed; the matching BIOS data may already be included in your game or parent ROM set."));
+		ImGui::Spacing();
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		ImGui::TextUnformatted(T("BIOS location"));
+		ImGui::PopFont();
+		ImGui::TextWrapped("%s", T("Default location: Hollycast's data folder."));
+		ImGui::TextWrapped("%s", T("To use a custom folder instead, add it in General > Custom Paths > BIOS Folders."));
+		sectionHeading(T("3. Controls"));
+		ImGui::TextWrapped("%s", controller ? T("A controller is detected. Configure its mapping in Controls settings.")
+			: touch ? T("No controller detected. Touch controls are available; you can also connect a controller.")
+			: keyboard ? T("No controller detected. A keyboard is available; you can also connect a controller.")
+			: T("No controller detected. Connect a controller and configure it in Controls settings."));
+		ImGui::Spacing();
+		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
+			? T("Next: return to the library and select a game. If none appear, check your game folder.")
+			: T("Next: choose a game folder, then select a game in the library."));
+		ImGui::EndChild();
+		ImGui::Separator();
+		ImGui::PushFont(boldFont, uiScaled(18.f));
+		if (ImGui::Button(T("Done"), ImVec2(-FLT_MIN, uiScaled(42.f))))
+		{
+			setupChecklist.dismissed([](bool pending) {
+				config::saveBool("hollycast", "SetupChecklistPending", pending);
+			});
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::PopFont();
+		ImGui::PopFont();
+		ImGui::EndPopup();
+	}
+}
+
 static void drawBoxartBackground()
 {
 	GameMedia game;
@@ -2885,6 +3062,11 @@ static void gui_display_loadscreen()
 			die("Game load failed");
 #endif
 			gui_stop_game(ex.what());
+			if (!commandLineStart && !error_msg.empty())
+			{
+				gui_error(Ts("Unable to start game.") + "\n\n" + ex.what());
+				launch_error_help = true;
+			}
 		}
     }
     ImGui::End();
@@ -2999,6 +3181,11 @@ void gui_display_ui()
 		die("Unknown UI state");
 		break;
 	}
+
+	if (gui_state == GuiState::Main)
+		setupChecklist.libraryReady(config::loadBool("hollycast", "SetupChecklistPending", false));
+	if (gui_state == GuiState::Main || gui_state == GuiState::Settings)
+		gui_display_setup_checklist();
 
 	finishFrame();
 
@@ -3180,6 +3367,7 @@ void reset_vmus() {
 }
 
 void gui_error(const std::string& what) {
+	launch_error_help = false;
 	error_msg = what;
 }
 

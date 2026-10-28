@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 name: Linux, macOS, Windows
 
 on:
@@ -19,6 +20,8 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
 
     strategy:
+      # Keep independent platforms running when one job fails.
+      fail-fast: false
       matrix:
         config:
           - { name: i686-pc-windows-msvc, os: windows-2022, shell: cmd, arch: x86, cmakeArgs: -G Ninja, buildType: Release }
@@ -35,14 +38,18 @@ jobs:
           # Unlink and re-link to prevent errors when github mac runner images install python outside of brew. See https://github.com/actions/setup-python/issues/577
           brew list -1 | grep python | while read formula; do brew unlink $formula; brew link --overwrite $formula; done
           brew update || :
+          # Homebrew's curl needs zstd to download the universal dependencies.
           brew install libao ldid pulseaudio
-          brew uninstall --ignore-dependencies zstd
 
           moltenvk_tag="v1.4.2"
           moltenvk_root="$RUNNER_TEMP/MoltenVK-$moltenvk_tag"
           rm -rf "$moltenvk_root"
           mkdir -p "$moltenvk_root"
-          aria2c "https://github.com/KhronosGroup/MoltenVK/releases/download/$moltenvk_tag/MoltenVK-macos.tar" -d "$RUNNER_TEMP" -o "MoltenVK-macos-$moltenvk_tag.tar"
+          # Retry transient release-download failures without hiding persistent errors.
+          curl --fail --location --retry 5 --retry-delay 5 --retry-max-time 300 \
+            --connect-timeout 30 --max-time 180 \
+            --output "$RUNNER_TEMP/MoltenVK-macos-$moltenvk_tag.tar" \
+            "https://github.com/KhronosGroup/MoltenVK/releases/download/$moltenvk_tag/MoltenVK-macos.tar"
           tar -xf "$RUNNER_TEMP/MoltenVK-macos-$moltenvk_tag.tar" -C "$moltenvk_root"
           moltenvk_dylib="$(find "$moltenvk_root" -type f -path '*/macOS/*' -name libMoltenVK.dylib | head -n 1)"
           if [ -z "$moltenvk_dylib" ]; then
@@ -71,9 +78,25 @@ jobs:
         if: matrix.config.shell == 'msys2 {0}'
 
       - name: Set up build environment (Windows, Visual Studio)
+        shell: pwsh
         run: |
-          choco install ccache directx-sdk
-          echo DXSDK_DIR=C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)>> %GITHUB_ENV%
+          $ErrorActionPreference = 'Stop'
+          choco install ccache --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Pin Microsoft's headers instead of relying on the legacy SDK installer.
+          $package = Join-Path $env:RUNNER_TEMP 'microsoft.dxsdk.d3dx.9.29.952.8.zip'
+          $sdk = Join-Path $env:RUNNER_TEMP 'microsoft.dxsdk.d3dx.9.29.952.8'
+          Invoke-WebRequest -Uri 'https://api.nuget.org/v3-flatcontainer/microsoft.dxsdk.d3dx/9.29.952.8/microsoft.dxsdk.d3dx.9.29.952.8.nupkg' -OutFile $package
+          if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -ne 'EAD0906AE8A26C18A7525DA7490127A2110F7C58F18293738283E30E97C6EA4B') {
+            throw 'DirectX helper package checksum mismatch.'
+          }
+          Expand-Archive -LiteralPath $package -DestinationPath $sdk
+          $dxsdk = Join-Path $sdk 'build/native'
+          if (-not (Test-Path -LiteralPath (Join-Path $dxsdk 'include/d3dx9shader.h'))) {
+            throw 'DirectX shader headers were not installed.'
+          }
+          "DXSDK_DIR=$dxsdk" >> $env:GITHUB_ENV
         if: matrix.config.shell == 'cmd'
 
       - uses: ilammy/msvc-dev-cmd@v1

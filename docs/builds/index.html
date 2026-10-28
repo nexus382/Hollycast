@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Portions Copyright 2026 The Hollycast Authors -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Download Hollycast releases and recent development builds, with changelogs for every release.">
+  <meta name="color-scheme" content="dark light">
+  <title>Hollycast Builds</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="builds.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">DREAMCAST &amp; NAOMI EMULATION</p>
+      <h1>Hollycast <span>Builds</span></h1>
+      <p class="intro">The latest releases. The next improvements. Find your build.</p>
+      <nav aria-label="Project"><a href="https://github.com/nexus382/Hollycast">Source code ↗</a><a href="https://github.com/nexus382/Hollycast/issues">Report an issue ↗</a></nav>
+    </header>
+    <aside>
+      <strong>Which download should I choose?</strong>
+      <p>Choose <strong>Master</strong> for everyday use, or <strong>Dev</strong> to try the newest changes. Dev may have bugs. Pick the newest build in your chosen column.</p>
+      <ul>
+        <li><strong>Windows PC:</strong> Use <strong>Windows x64</strong>—the standalone MinGW build, matching Flycast's CI page.</li>
+        <li><strong>Android phone or tablet:</strong> Choose the <strong>APK</strong>. If it comes in a ZIP, extract it first.</li>
+        <li><strong>Xbox One or Series:</strong> Use the <strong>Xbox One</strong> download (UWP x64). Xbox Developer Mode is required.</li>
+      </ul>
+      <p>Builds appear here once all six platform downloads are ready. Each build offers one download per platform. If a download is a ZIP, extract it first. No sign-in needed.</p>
+    </aside>
+    <section aria-labelledby="downloads-title">
+      <div class="section-heading"><h2 id="downloads-title">Recent builds</h2><p id="updated"></p></div>
+      <div class="filters">
+        <label>Channel<select id="channel" aria-label="Channel"><option value="ci">Automatic builds · master &amp; dev</option><option value="master">Master builds</option><option value="dev">Dev builds</option><option value="all">All builds &amp; releases</option><option value="stable">Stable releases</option><option value="development">Development releases</option></select></label>
+        <label>Platform<select id="platform" aria-label="Platform"><option value="all">All platforms</option><option>Android</option><option>Windows</option><option>Linux</option><option>macOS</option><option>Switch</option><option value="UWP">Xbox / UWP</option><option>Other</option></select></label>
+        <label class="search">Find a build<input id="search" type="search" placeholder="Commit ID, version, or architecture…"></label>
+      </div>
+      <p id="status" role="status">Loading builds…</p>
+      <div id="builds" class="build-columns">
+        <section id="master-column" aria-labelledby="master-title"><h3 id="master-title">Master builds</h3><div id="master-builds"></div></section>
+        <section id="dev-column" aria-labelledby="dev-title"><h3 id="dev-title">Dev builds</h3><div id="dev-builds"></div></section>
+        <section id="releases-column" class="tagged-releases" aria-labelledby="releases-title" hidden><h3 id="releases-title">Tagged releases</h3><div id="release-builds"></div></section>
+      </div>
+      <noscript><p>Enable JavaScript to filter builds, or <a href="https://github.com/nexus382/Hollycast/releases">download from GitHub Releases</a>.</p></noscript>
+    </section>
+    <footer><p>Built from <a href="https://github.com/nexus382/Hollycast/releases">GitHub Releases</a> and successful master/dev builds. Updated automatically.</p><p>All product names and trademarks belong to their respective owners.</p></footer>
+  </main>
+</body>
+</html>

@@ -2536,6 +2536,10 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	ImGui::TextDisabled("%s", T("General Configuration"));
 	ImGui::Separator();
+	if (ImGui::Button(T("Ready to Play Checklist")))
+		gui_open_setup_checklist();
+	ImGui::TextWrapped("%s", T("Review game folders, firmware and controls."));
+	ImGui::Spacing();
 
 	// ========================================
 	// Language & Region Section
@@ -2848,7 +2852,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"Data Folder\n"
 					"This is Hollycast's writable data directory on this platform.\n\n"
 					"It typically contains:\n"
-					"- BIOS/Flash files (for example: `dc_boot.bin`, `dc_flash.bin`)\n"
+					"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
 					"- Save data (VMU files) and save states\n\n"
 						"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Flycast looks for.\n"
 						"Custom Paths below can also override where some of these files are stored."
@@ -3577,8 +3581,8 @@ static void renderSettingsContentTab(SettingsTab tab)
 		managePathList(T("BIOS Folders"), T("BIOS Folder"), config::BiosPath.get(),
 			T(
 				"BIOS Folders\n"
-				"Folders that Hollycast searches for BIOS/Flash files (Dreamcast BIOS/Flash and arcade BIOS).\n\n"
-				"Typical Dreamcast files include `dc_boot.bin` and `dc_flash.bin`.\n"
+				"Folders that Hollycast searches for Dreamcast and arcade BIOS files.\n\n"
+				"Place `dc_boot.bin` and `dc_flash.bin` in Hollycast's data folder, unless you have specified a custom BIOS folder here.\n"
 				"If you keep multiple BIOS sets, you can add multiple folders and Hollycast will search all of them.\n"
 				"For troubleshooting, keep your BIOS files in a single known-good folder to avoid confusion."
 			)
