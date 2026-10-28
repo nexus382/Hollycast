@@ -44,6 +44,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
         src/ui/BoxartTest.cpp
+        src/ui/LibraryTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp
         src/util/PeriodicThreadTest.cpp
@@ -52,5 +53,5 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/util/WorkerThreadTest.cpp)
 
 if(NOT LIBRETRO)
-    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp src/ui/CustomThemeTest.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp src/ui/CustomThemeTest.cpp src/ui/LibrarySavestateTest.cpp)
 endif()

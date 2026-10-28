@@ -40,6 +40,7 @@ Releases tagged `-dev` are built from the `dev` branch and contain the newest, l
 ## What Hollycast adds
 
 - **Modern interface.** A redesigned UI with a game library that shows box art and VMU icons.
+- **Continue Playing and favourites.** Continue Playing lists every game with a save state, newest first, and Resume loads that title's newest manual state or autosave. Start Fresh boots without loading a state. Use the star on a game to keep it in Favourites. These choices do not change your automatic save-state settings.
 - **Ready to play.** Sensible defaults let new players start a game straight away, and the advanced settings are still there for power users.
 - **Performance overlay.** A configurable on-screen display with frame timing plus RAM and texture VRAM usage.
 - **Real hardware and VMU support.** [DreamLink](docs/DreamLink.md) connects Hollycast to DreamConn and DreamPicoPort controllers and to the [DreamPotato](docs/DreamPotato%20Integrated%20Mode.md) VMU emulator.
