@@ -13,6 +13,7 @@ namespace config {
 bool MovableVMUs = true, FloatVMUs = true;
 bool VmuLayoutEnabled = false;
 TestIntOption VmuWindowSize;
+TestIntOption VmuWindowTransparency {25};
 RenderType RendererType = RenderType::OpenGL;
 std::map<std::string, int> values;
 int loadInt(const std::string& section, const std::string& key, int fallback)
@@ -28,6 +29,7 @@ void testWarning(const char *, ...) {}
 bool failCreate = false, failPaint = false, pretendWayland = false;
 int creates = 0;
 int workAreaWidth = 0;
+float requestedOpacity = -1.f;
 Uint64 ticks = 1000;
 SDL_Window *testFocus = nullptr;
 SDL_Window *createWindow(const char *title, int x, int y, int w, int h, Uint32 flags)
@@ -36,6 +38,11 @@ SDL_Window *createWindow(const char *title, int x, int y, int w, int h, Uint32 f
 	return failCreate ? nullptr : SDL_CreateWindow(title, x, y, w, h, flags);
 }
 int updateSurface(SDL_Window *window) { return failPaint ? -1 : SDL_UpdateWindowSurface(window); }
+int setOpacity(SDL_Window *window, float alpha)
+{
+	requestedOpacity = alpha;
+	return SDL_SetWindowOpacity(window, alpha);
+}
 SDL_Window *keyboardFocus() { return testFocus; }
 Uint64 getTicks() { return ticks; }
 const char *videoDriver() { return pretendWayland ? "wayland" : SDL_GetCurrentVideoDriver(); }
@@ -49,6 +56,7 @@ int usableBounds(int display, SDL_Rect *area)
 
 #define SDL_CreateWindow createWindow
 #define SDL_UpdateWindowSurface updateSurface
+#define SDL_SetWindowOpacity setOpacity
 #define SDL_GetKeyboardFocus keyboardFocus
 #define SDL_GetTicks64 getTicks
 #define SDL_GetCurrentVideoDriver videoDriver
@@ -56,6 +64,7 @@ int usableBounds(int display, SDL_Rect *area)
 #include "../../core/sdl/vmu_window.cpp"
 #undef SDL_CreateWindow
 #undef SDL_UpdateWindowSurface
+#undef SDL_SetWindowOpacity
 #undef SDL_GetKeyboardFocus
 #undef SDL_GetTicks64
 #undef SDL_GetCurrentVideoDriver
@@ -102,6 +111,27 @@ int main()
 	update(parent, true);
 	require(ownsScreen(0) && !ownsScreen(-1) && !ownsScreen(8), "successful paint owns exactly the active LCD");
 	require(SDL_GL_GetCurrentContext() == context && SDL_GL_GetCurrentWindow() == parent, "SDL painting preserves owner GL context");
+	require(requestedOpacity == .75f, "default gameplay opacity is unchanged");
+	gui_state = GuiState::Commands;
+	update(parent, true);
+	require(requestedOpacity == .5f, "default menu opacity is unchanged");
+	gui_state = GuiState::Closed;
+	config::VmuWindowTransparency = 50;
+	update(parent, true);
+	require(requestedOpacity == .5f, "transparency changes live without publishing another LCD frame");
+	config::VmuWindowTransparency = -1;
+	update(parent, true);
+	require(requestedOpacity == 1.f, "invalid negative transparency clamps to solid");
+	config::VmuWindowTransparency = 101;
+	update(parent, true);
+	require(ownsScreen(0) && (SDL_GetWindowFlags(windows[0].window) & SDL_WINDOW_HIDDEN) != 0,
+		"full transparency hides the input target and suppresses the fallback LCD");
+	update(parent, false);
+	require(ownsScreen(0), "capture cannot revive the fallback for an intentionally hidden LCD");
+	config::VmuWindowTransparency = 25;
+	update(parent, true);
+	require(ownsScreen(0) && (SDL_GetWindowFlags(windows[0].window) & SDL_WINDOW_HIDDEN) == 0 && requestedOpacity == .75f,
+		"restoring transparency reuses the current LCD without republication");
 	SDL_Surface *surface = SDL_GetWindowSurface(windows[0].window);
 	require(surface != nullptr, "LCD window has a readable surface");
 	SDL_LockSurface(surface);
@@ -135,6 +165,10 @@ int main()
 	int lockedX, lockedY;
 	SDL_GetWindowPosition(testFocus, &lockedX, &lockedY);
 	require(lockedX == beforeLockX && lockedY == beforeLockY, "locking preserves the visible window position");
+	config::VmuWindowTransparency = 60;
+	update(parent, false);
+	require(std::abs(requestedOpacity - .4f) < .0001f, "locked LCD transparency remains adjustable");
+	config::VmuWindowTransparency = 25;
 	event.window.data1 = lockedX + 50;
 	event.window.data2 = lockedY + 50;
 	SDL_SetWindowPosition(testFocus, event.window.data1, event.window.data2);

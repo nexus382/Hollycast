@@ -19,6 +19,7 @@ struct TestIntOption
 	}
 };
 extern TestIntOption VmuWindowSize;
+extern TestIntOption VmuWindowTransparency;
 extern bool FloatVMUs;
 extern RenderType RendererType;
 int loadInt(const std::string &, const std::string &, int);

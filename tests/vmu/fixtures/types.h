@@ -1,6 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include <cstdint>
+using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 void testWarning(const char *, ...);

@@ -76,13 +76,23 @@ void update(bool visible)
 	enabled = visible && placementActive();
 	{
 		std::lock_guard<std::mutex> lock(layoutMutex);
-		layout.setMovable(config::MovableVMUs);
+		layout.setMovable(config::MovableVMUs && opacityByte(config::VmuWindowTransparency.get()) != 0);
 	}
 	if (!enabled)
 	{
 		std::lock_guard<std::mutex> lock(layoutMutex);
 		layout.setVisible(0);
-		displayed = 0;
+		unsigned hidden = 0;
+		if (placementActive() && opacityByte(config::VmuWindowTransparency.get()) == 0)
+		{
+			// Menus use the legacy LCD renderer and never call drawInApp(). Retain
+			// ownership here so opening a menu cannot revive an intentionally hidden LCD.
+			const auto screens = frames.snapshot();
+			for (int i = 0; i < ScreenCount; ++i)
+				if (screens[i].active)
+					hidden |= 1u << i;
+		}
+		displayed = hidden;
 	}
 	savePositions();
 }
@@ -92,6 +102,7 @@ void drawInApp()
 	if (!enabled || imguiDriver == nullptr)
 		return;
 	const auto screens = frames.snapshot();
+	const u8 alpha = opacityByte(config::VmuWindowTransparency.get());
 	const ImVec2 view = ImGui::GetIO().DisplaySize;
 	const float top = std::max(float(insetTop), GuiMenu::mainMenuBarHeight()) + 8.f;
 	const Bounds safe {float(insetLeft) + 8.f, top,
@@ -110,6 +121,12 @@ void drawInApp()
 	{
 		if (!screens[i].active || safe.width <= 0 || safe.height <= 0)
 			continue;
+		if (alpha == 0)
+		{
+			// An intentionally hidden LCD still owns its slot so the fallback stays hidden too.
+			visible |= 1u << i;
+			continue;
+		}
 		const std::string key = ":movable-vmu:" + std::to_string(i);
 		ImTextureID texture = imguiDriver->getTexture(key);
 		if (texture == ImTextureID() || uploaded[i] != screens[i].revision)
@@ -126,12 +143,12 @@ void drawInApp()
 			continue;
 		const Bounds& rect = rectangles[i];
 		ImGui::GetForegroundDrawList()->AddImage(texture, ImVec2(rect.x, rect.y),
-			ImVec2(rect.x + rect.width, rect.y + rect.height), ImVec2(0, 1), ImVec2(1, 0), 0xc0bfbfbf);
+			ImVec2(rect.x + rect.width, rect.y + rect.height), ImVec2(0, 1), ImVec2(1, 0), (u32(alpha) << 24) | 0x00bfbfbf);
 		visible |= 1u << i;
 	}
 	{
 		std::lock_guard<std::mutex> lock(layoutMutex);
-		layout.setVisible(visible);
+		layout.setVisible(alpha == 0 ? 0 : visible);
 	}
 	displayed = visible;
 }

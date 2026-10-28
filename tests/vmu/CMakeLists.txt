@@ -37,6 +37,22 @@ foreach(platform windows sdl libretro uwp other)
 endforeach()
 
 find_package(Threads REQUIRED)
+add_executable(vmu_appearance appearance.cpp)
+target_compile_features(vmu_appearance PRIVATE cxx_std_17)
+target_include_directories(vmu_appearance PRIVATE fixtures ../../core)
+add_test(NAME vmu_appearance COMMAND vmu_appearance)
+
+set(android_source "${CMAKE_CURRENT_BINARY_DIR}/android_vmu.cpp")
+add_custom_command(OUTPUT "${android_source}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_android_vmu_test.py" "${android_source}"
+    DEPENDS generate_android_vmu_test.py ../../core/rend/vmu_android.cpp
+    VERBATIM)
+add_executable(vmu_android_backend "${android_source}")
+target_compile_features(vmu_android_backend PRIVATE cxx_std_17)
+target_include_directories(vmu_android_backend PRIVATE fixtures ../../core)
+target_link_libraries(vmu_android_backend PRIVATE Threads::Threads)
+add_test(NAME vmu_android_backend COMMAND vmu_android_backend)
+
 add_executable(vmu_touch_layout touch_layout.cpp)
 target_compile_features(vmu_touch_layout PRIVATE cxx_std_17)
 target_include_directories(vmu_touch_layout PRIVATE ../../core)

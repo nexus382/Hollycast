@@ -104,6 +104,7 @@ Option<bool, false> MovableVMUs("rend.MovableVMUs", false);
 // Retain custom placement when the movement toggle is switched off.
 Option<bool, false> VmuLayoutEnabled("rend.VmuLayoutEnabled", false);
 Option<int, false> VmuWindowSize("rend.VmuWindowSize", vmu_window::DefaultSizePercent);
+Option<int, false> VmuWindowTransparency("rend.VmuWindowTransparency", vmu_window::DefaultTransparencyPercent);
 #endif
 Option<bool> Rotate90("rend.Rotate90");
 Option<bool> PerStripSorting("rend.PerStripSorting");
