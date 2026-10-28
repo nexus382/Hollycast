@@ -21,9 +21,7 @@
 #include "emulator.h"
 #include "ui/gui.h"
 #include "stdclass.h"
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
-#include "windows/vmu_window.h"
-#endif
+#include "rend/vmu_window.h"
 #include "imgui.h"
 #include "hw/naomi/card_reader.h"
 #include "hw/naomi/multiboard.h"
@@ -105,7 +103,7 @@ static bool isWindowFullscreen()
 
 static bool keepVmuCursorVisible()
 {
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 	return vmu_window::detachedActive() && !mouseCaptured;
 #else
 	return false;
@@ -428,7 +426,7 @@ bool sdl_queue_open_file(const char *path)
 void input_sdl_handle()
 {
 	SDLGamepad::UpdateRumble();
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 	static bool movableVmusActive = false;
 	static bool restoreVmuMouseCapture = false;
 	static Uint64 vmuCaptureRetryAt = 0;
@@ -463,7 +461,11 @@ void input_sdl_handle()
 		SDL_ShowCursor(SDL_ENABLE);
 	const bool pointerAvailable = !gameRunning
 			|| (!mouseCaptured && SDL_ShowCursor(SDL_QUERY) == SDL_ENABLE);
+#ifdef HAVE_SDL_VMUS
+	vmu_window::update(window, pointerAvailable);
+#else
 	vmu_window::update(pointerAvailable);
+#endif
 #endif
 
 	SDL_Event event;
@@ -475,6 +477,11 @@ void input_sdl_handle()
 			SDL_free(event.user.data1);
 			continue;
 		}
+#ifdef HAVE_SDL_VMUS
+		// Utility-window input and close/resize events belong to that VMU only.
+		if (vmu_window::handleEvent(event))
+			continue;
+#endif
 #if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 		if ((event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN
 				|| event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEWHEEL) && vmu_window::blocksMouseInput())
@@ -557,7 +564,7 @@ void input_sdl_handle()
 						{
 							const bool wasCaptured = mouseCaptured;
 							captureMouse(!wasCaptured);
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 							// Only effective capture changes supersede the saved state (pause
 							// and a failed SDL capture leave the existing preference intact).
 							if (mouseCaptured != wasCaptured)
@@ -580,6 +587,12 @@ void input_sdl_handle()
 
 			case SDL_WINDOWEVENT:
 			{
+#ifdef HAVE_SDL_VMUS
+				// With utility windows present SDL no longer synthesizes SDL_QUIT
+				// when the main window closes. VMU close events were consumed above.
+				if (event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window))
+					gui_request_exit_emulator();
+#endif
 				bool displayMetricsEvent = event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED
 						|| event.window.event == SDL_WINDOWEVENT_RESTORED
 						|| event.window.event == SDL_WINDOWEVENT_MINIMIZED
@@ -1028,7 +1041,7 @@ bool sdl_recreate_window(u32 flags)
 
 	if (window != nullptr)
 	{
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 		vmu_window::shutdown();
 #endif
 		SDL_DestroyWindow(window);
@@ -1191,7 +1204,7 @@ void sdl_window_create()
 
 void sdl_window_destroy()
 {
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 	vmu_window::shutdown();
 #endif
 #ifndef __SWITCH__

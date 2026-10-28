@@ -21,9 +21,7 @@
 #include "cfg/option.h"
 #include "ui/gui.h"
 #include <algorithm>
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
-#include "windows/vmu_window.h"
-#endif
+#include "rend/vmu_window.h"
 
 // Mouse buttons
 // bit 0: Button C
@@ -128,7 +126,7 @@ void SetMousePosition(int x, int y, int width, int height, u32 mouseId)
 {
 	if (mouseId >= std::size(mo_x_abs))
 		return;
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 	if (vmu_window::consumeMousePositionReset())
 	{
 		// SDL and absolute raw-input devices share these baselines. A native VMU

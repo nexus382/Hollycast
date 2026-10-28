@@ -56,9 +56,7 @@
 #include "stdclass.h"
 #include "achievements/achievements.h"
 #include "vgamepad.h"
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
-#include "windows/vmu_window.h"
-#endif
+#include "rend/vmu_window.h"
 #include <cmath>
 #include <cctype>
 #include <cstring>
@@ -5379,25 +5377,36 @@ void renderOnScreenDisplayTab()
 			static_cast<bool>(config::FloatVMUs),
 			[](bool enabled) { config::FloatVMUs.set(enabled); },
 			T("Show VMU In-Game\nDisplays the VMU LCD screens while in-game."));
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 		RenderGeneralToggleSettingRow(
+#ifdef __ANDROID__
+			"MovableVMUs", ICON_FA_GAMEPAD, T("Movable VMU Screens"),
+			T("Drag VMU screens anywhere inside Hollycast."),
+#else
 			"MovableVMUs", ICON_FA_GAMEPAD, T("Movable VMU Windows"),
 			T("Drag VMU screens outside Hollycast or onto another monitor."),
+#endif
 			config::MovableVMUs.get(),
 			[](bool enabled) {
 				config::MovableVMUs = enabled;
 				if (enabled)
 					config::FloatVMUs = true;
 			},
+#ifdef __ANDROID__
+			T("Touch and drag an LCD to move it. Positions are saved per VMU slot and stay on screen after rotation."));
+#elif defined(HAVE_SDL_VMUS)
+			T("Drag the title bar to move a VMU. Close its window to return that LCD to the game view. Left Ctrl+Left Alt toggles mouse capture; captured gameplay uses in-game LCDs. Wayland controls window placement."));
+#else
 			T("Keeps the existing VMU transparency. Drag each LCD with the left mouse button. Positions are saved per VMU slot. Left Ctrl+Left Alt toggles mouse capture."));
+#endif
 		if (config::MovableVMUs && config::FloatVMUs)
 		{
 			SettingsUI::PopupConfig vmuSizeCfg {};
 			vmuSizeCfg.type = SettingsUI::PopupType::Slider;
-			vmuSizeCfg.slider.label = T("VMU Window Size");
+			vmuSizeCfg.slider.label = T("VMU Size");
 			vmuSizeCfg.slider.icon = ICON_FA_RULER_HORIZONTAL;
 			vmuSizeCfg.slider.popupID = Tnop("VmuWindowSizePopup");
-			vmuSizeCfg.slider.description = T("Resize all movable VMU windows live.");
+			vmuSizeCfg.slider.description = T("Resize all movable VMU screens live.");
 			vmuSizeCfg.slider.currentValue = &config::VmuWindowSize.get();
 			vmuSizeCfg.slider.minValue = 50;
 			vmuSizeCfg.slider.maxValue = 400;
@@ -5406,8 +5415,8 @@ void renderOnScreenDisplayTab()
 			vmuSizeCfg.slider.valueWidth = 220.0f;
 			vmuSizeCfg.slider.sliderWidth = 320.0f;
 			RenderGeneralPopupSettingRow(Tnop("VmuWindowSizeSetting"),
-				T("Scale VMU windows independently of UI scaling."), vmuSizeCfg,
-				T("100% keeps the default VMU size for each monitor. Changes apply immediately and are saved with your settings."));
+				T("Scale VMU screens independently of UI scaling."), vmuSizeCfg,
+				T("100% keeps the default VMU size. Changes apply immediately and are saved with your settings."));
 			if (ImGui::Button(T("Reset VMU Positions"), ScaledVec2(240.f, 0.f)))
 				vmu_window::resetPositions();
 		}

@@ -35,3 +35,19 @@ ctest --test-dir build/vmu-tests -C Release --output-on-failure -L interactive
 The test restores the pointer/focus and releases held buttons on failure. The
 second-monitor drag is skipped when only one monitor is available. These tests
 do not cover fullscreen input inside a running game.
+
+The portable layout/frame tests cover touch hit testing, overlap priority, cancellation,
+rotation, safe areas, split-screen clamping, persistence, and concurrent LCD publication.
+The publication test compiles the actual push, blank and reset paths with the shared
+feature enabled, without a Windows platform define.
+With a JDK 11+ installed, `vmu_android_touch` compiles the actual Android touch delegate
+against small platform/JNI fakes and checks multi-touch ownership, menu priority,
+held-input release, lost pointers and view teardown. No Android device is needed.
+
+On macOS and Linux the suite also needs SDL 2.0.18+ development files. `vmu_native_sdl`
+creates real SDL windows and checks pixels, GL-context preservation, live sizing,
+event ownership, dismissal, failure recovery, and the Wayland placement policy.
+Its focus/clock/failure boundaries are controlled by the test. Run on a desktop,
+or use `xvfb-run -a ctest --test-dir build/vmu-tests --output-on-failure` on Linux.
+The Wayland cases exercise the backend policy with a simulated driver name;
+they are not a substitute for compositor or physical-device acceptance testing.

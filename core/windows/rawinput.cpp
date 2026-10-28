@@ -18,7 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "rawinput.h"
-#include "vmu_window.h"
+#include "rend/vmu_window.h"
 #ifndef TARGET_UWP
 #include <hidusage.h>
 #include <cfgmgr32.h>

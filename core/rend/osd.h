@@ -19,7 +19,7 @@
 
 #include "types.h"
 #include "cfg/option.h"
-#include "windows/vmu_window.h"
+#include "rend/vmu_window.h"
 
 // VMUs
 extern u32 vmu_lcd_data[8][48 * 32];
@@ -59,7 +59,7 @@ static inline void blankVmus()
 {
 	memset(vmu_lcd_data, 0, sizeof(vmu_lcd_data));
 	memset(vmuLastChanged, 0, sizeof(vmuLastChanged));
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 	for (int i = 0; i < 8; ++i)
 		vmu_window::publishScreen(i, vmu_lcd_data[i], vmu_lcd_status[i]);
 #endif

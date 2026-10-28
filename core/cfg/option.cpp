@@ -98,7 +98,7 @@ Option<int> ScreenStretching("rend.ScreenStretching", 100);
 Option<bool> StretchToFill("rend.StretchToFill");
 Option<bool> Fog("rend.Fog", true);
 Option<bool> FloatVMUs("rend.FloatVMUs");
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 Option<bool, false> MovableVMUs("rend.MovableVMUs", false);
 Option<int, false> VmuWindowSize("rend.VmuWindowSize", 100);
 #endif

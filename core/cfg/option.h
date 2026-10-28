@@ -19,6 +19,7 @@
 */
 #pragma once
 #include "cfg.h"
+#include "rend/vmu_window.h"
 #include "hw/maple/maple_cfg.h"
 #ifdef LIBRETRO
 #include <libretro.h>
@@ -515,7 +516,7 @@ extern Option<int> ScreenStretching;	// in percent. 150 means stretch from 4/3 t
 extern Option<bool> StretchToFill;
 extern Option<bool> Fog;
 extern Option<bool> FloatVMUs;
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
 extern Option<bool, false> MovableVMUs;
 extern Option<int, false> VmuWindowSize;
 #endif
