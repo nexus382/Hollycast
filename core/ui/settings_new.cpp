@@ -4320,13 +4320,9 @@ void renderVideoTab()
 		static int currentPresetIndex = 0;
 		static bool presetJustApplied = false;
 
-		// Auto-detect current preset
+		// Include Custom so manual changes cannot leave a stale preset label.
 		if (!presetJustApplied)
-		{
-			VideoPresetLevel detected = detectCurrentPreset();
-			if (detected != VideoPresetLevel::Custom)
-				currentPresetIndex = static_cast<int>(detected);
-		}
+			currentPresetIndex = static_cast<int>(detectCurrentPreset());
 
 		// Build preset labels
 		const char* presetLabels[] = {
