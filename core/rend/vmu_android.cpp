@@ -93,7 +93,7 @@ void drawInApp()
 	std::array<Bounds, ScreenCount> rectangles;
 	{
 		std::lock_guard<std::mutex> lock(layoutMutex);
-		layout.configure(view.x, view.y, safe, 96.f * scale * std::clamp(config::VmuWindowSize.get(), 50, 400) / 100.f);
+		layout.configure(view.x, view.y, safe, 96.f * scale * std::clamp(config::VmuWindowSize.get(), MinSizePercent, MaxSizePercent) / 100.f);
 		for (int i = 0; i < ScreenCount; ++i)
 			rectangles[i] = layout.bounds(i);
 	}

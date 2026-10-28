@@ -31,6 +31,10 @@ constexpr int LcdHeight = 32;
 constexpr ULONGLONG RetryDelayMs = 1000;
 constexpr LONG Unplaced = std::numeric_limits<LONG>::min();
 constexpr char PositionSection[] = "vmu-windows";
+// Match the in-game overlay's gameplay/menu opacity and GL/Vulkan white tint.
+constexpr BYTE GameOpacity = 192;
+constexpr BYTE MenuOpacity = 128;
+constexpr BYTE DimmedWhite = 191;
 
 struct Screen {
 	std::array<u32, LcdWidth * LcdHeight> pixels {};
@@ -43,7 +47,7 @@ struct View {
 	RECT bounds {};
 	int topInset = 0;
 	float scale = 1.f;
-	int sizePercent = 100;
+	int sizePercent = DefaultSizePercent;
 	UINT dpi = 96;
 	bool enabled = false;
 	bool visible = false;
@@ -79,11 +83,23 @@ public:
 
 	void update(bool pointerAvailable)
 	{
+		if (!detachedActive())
+		{
+			if (worker.joinable())
+				stop();
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				view = {};
+			}
+			// A settings reset must still persist when no worker is running.
+			savePositions();
+			return;
+		}
 		View next;
 		next.owner = getNativeHwnd();
-		next.enabled = detachedActive();
-		next.visible = next.enabled && next.owner != nullptr && IsWindowVisible(next.owner)
-				&& !IsIconic(next.owner) && settings.platform.isConsole()
+		next.enabled = true;
+		next.visible = next.owner != nullptr && IsWindowVisible(next.owner)
+				&& !IsIconic(next.owner)
 				&& gui_state != GuiState::Main && gui_state != GuiState::Onboarding
 				&& gui_state != GuiState::Loading && gui_state != GuiState::NetworkStart;
 		next.menu = gui_is_open();
@@ -96,23 +112,18 @@ public:
 		if (settings.display.width <= 640 || settings.display.height <= 480)
 			defaultScale = std::min(1.2f, defaultScale);
 		next.scale = std::clamp(defaultScale, 0.5f, 4.f);
-		next.sizePercent = std::clamp(config::VmuWindowSize.get(), 50, 400);
+		next.sizePercent = std::clamp(config::VmuWindowSize.get(), MinSizePercent, MaxSizePercent);
 		if (next.owner != nullptr)
 		{
 			GetClientRect(next.owner, &next.bounds);
 			MapWindowPoints(next.owner, nullptr, reinterpret_cast<POINT *>(&next.bounds), 2);
 			next.dpi = std::max(96u, windowDpi(next.owner));
 		}
-		if (!next.enabled)
-		{
-			if (worker.joinable())
-				stop();
-		}
 		{
 			std::lock_guard<std::mutex> lock(mutex);
 			view = next;
 		}
-		if (next.enabled && !started && GetTickCount64() >= retryAt)
+		if (!started && GetTickCount64() >= retryAt)
 		{
 			// A completed thread must be joined before replacing it. Throttle failures
 			// so a temporary Windows resource shortage cannot create a restart loop.
@@ -401,6 +412,7 @@ private:
 	POINT defaultPosition(int index, const View& current, SIZE size)
 	{
 		const LONG padding = LONG(8 * current.scale);
+		// Slot bits select right (2), bottom (4), and the second LCD inward (1).
 		return {(index & 2) ? current.bounds.right - padding - size.cx : current.bounds.left + padding,
 				(index & 4) ? current.bounds.bottom - padding - size.cy - (index & 1) * (padding + size.cy)
 						: current.bounds.top + current.topInset + padding + (index & 1) * (padding + size.cy)};
@@ -504,8 +516,8 @@ private:
 						SetWindowPos(window.handle, nullptr, location.x, location.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
 				}
 			}
-			const BYTE opacity = current.menu ? 128 : 192;
-			const BYTE white = current.dimWhite ? 191 : 255;
+			const BYTE opacity = current.menu ? MenuOpacity : GameOpacity;
+			const BYTE white = current.dimWhite ? DimmedWhite : 255;
 			if (window.handle != nullptr)
 			{
 				// Hidden/captured cursors and background applications pass through the LCDs.
@@ -631,7 +643,7 @@ void resetPositions() { windows.reset(); }
 
 bool ownsScreen(int index)
 {
-	return config::MovableVMUs && config::FloatVMUs && index >= 0 && index < ScreenCount
+	return detachedActive() && index >= 0 && index < ScreenCount
 			&& (windows.displayed.load() & (1u << index)) != 0;
 }
 

@@ -18,6 +18,11 @@ union SDL_Event;
 #endif
 
 namespace vmu_window {
+// Keep the option default, settings slider and platform clamps in agreement.
+constexpr int MinSizePercent = 50;
+constexpr int DefaultSizePercent = 100;
+constexpr int MaxSizePercent = 400;
+
 #ifdef HAVE_MOVABLE_VMUS
 // Producers publish copies. Window, texture and configuration work stays on the UI thread.
 bool detachedActive();

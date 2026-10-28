@@ -16,7 +16,7 @@ def between(text, start, end):
 capture = between(sdl, 'static bool captureMouse(bool capture)', 'static void emuEventCallback(')
 cursor = between(sdl, 'static bool keepVmuCursorVisible()', 'static void updateFullscreenCursorVisibility(')
 transition = between(sdl, 'void input_sdl_handle()', '\tSDL_Event event;')
-hotkey = between(sdl, '\t\t\t\t\t\t\tconst bool wasCaptured = mouseCaptured;', '\t\t\t\t\t\t\tbreak;')
+keyboard = between(sdl, '\t\t\tcase SDL_KEYDOWN:', '\t\t\tcase SDL_TEXTINPUT:')
 active = between(native, 'bool detachedActive()', 'void publishScreen(')
 reset = between(gui, 'void reset_vmus()', 'void gui_error(')
 events = between(sdl[sdl.index('void input_sdl_handle()'):], '\tSDL_Event event;', '\t\tswitch (event.type)')
@@ -35,13 +35,18 @@ prefix = r'''
 #include <mutex>
 #include <string>
 #include <cstring>
-#if defined(VMU_TEST_OTHER)
+#include <memory>
+#if defined(VMU_TEST_OTHER) || defined(VMU_TEST_SDL)
 #undef _WIN32
 #elif !defined(_WIN32)
 #define _WIN32
 #endif
 #if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 #define HAVE_MOVABLE_VMUS
+#endif
+#ifdef VMU_TEST_SDL
+#define HAVE_MOVABLE_VMUS
+#define HAVE_SDL_VMUS
 #endif
 using u32 = std::uint32_t;
 using s32 = std::int32_t;
@@ -51,13 +56,21 @@ Uint64 ticks = 0;
 Uint64 SDL_GetTicks64() { return ticks; }
 constexpr int SDL_FALSE=0, SDL_TRUE=1, SDL_DISABLE=0, SDL_ENABLE=1, SDL_QUERY=-1;
 void* window = reinterpret_cast<void*>(1);
+void* keyboardFocus = window;
+void* SDL_GetKeyboardFocus() { return keyboardFocus; }
+u32 SDL_GetWindowID(void* current) { return static_cast<u32>(reinterpret_cast<std::uintptr_t>(current)); }
+bool focusImmediately = true;
+int raises = 0;
+void SDL_RaiseWindow(void* next) { ++raises; if (focusImmediately) keyboardFocus=next; }
 bool gameRunning=true, mouseCaptured=false, relativeMouse=false, captureSucceeds=true;
+bool window_fullscreen=false;
 bool toggleRequested=false;
 int cursorVisible=SDL_ENABLE, published=0, checks=0, captureAttempts=0;
 bool vmu_lcd_status[8] {};
 struct {
  struct { bool console=true; bool isConsole() const { return console; } } platform;
  struct { int width=640, height=480; } display;
+ struct { bool slave=false; } naomi;
 } settings;
 namespace config {
  bool UseRawInput=false, MovableVMUs=false, FloatVMUs=true, Rotate90=false, StretchToFill=false;
@@ -70,12 +83,54 @@ int SDL_SetRelativeMouseMode(int enabled) {
 }
 int SDL_ShowCursor(int state) { if (state!=SDL_QUERY) cursorVisible=state; return cursorVisible; }
 void SDL_SetWindowTitle(void*,const char*) {}
+constexpr int SDL_WINDOW_FULLSCREEN_DESKTOP=1;
+void SDL_SetWindowFullscreen(void*,int) {}
 void setWindowTitleGame() {}
 struct SDLGamepad { static void UpdateRumble() {} };
+constexpr u32 SDL_MOUSEMOTION=1, SDL_MOUSEBUTTONDOWN=2, SDL_MOUSEBUTTONUP=3, SDL_MOUSEWHEEL=4;
+constexpr u32 SDL_KEYDOWN=5, SDL_KEYUP=6;
+constexpr int KMOD_LALT=1, KMOD_LCTRL=2, KMOD_ALT=1, KMOD_CTRL=2, KMOD_SHIFT=4, KMOD_GUI=8;
+constexpr int SDLK_RETURN=13, SDLK_F11=122, SDL_SCANCODE_LALT=226, SDL_SCANCODE_LCTRL=224, EMU_BTN_NONE=0;
+union SDL_Event {
+ u32 type;
+ struct { u32 type,which; int x,y,xrel,yrel; } motion;
+ struct { u32 type,which; int x,y,button; } button;
+ struct { u32 type; void* data1; } user;
+ struct { u32 type,windowID; int repeat; struct { int sym,scancode,mod; } keysym; } key;
+};
+bool altMapped=false, ctrlMapped=false;
+struct InputMapping {
+ struct InputDef { static u32 from_button(u32 code) { return code; } };
+ struct InputSet { u32 code; };
+ int get_button_id(int,InputSet set) {
+  return (set.code==SDL_SCANCODE_LALT && altMapped) || (set.code==SDL_SCANCODE_LCTRL && ctrlMapped);
+ }
+};
+InputMapping mapping;
+struct GamepadDevice {
+ virtual ~GamepadDevice() = default;
+ InputMapping* get_input_mapping() { return &mapping; }
+ static int GetGamepadCount() { return 0; }
+ static std::shared_ptr<GamepadDevice> GetGamepad(int) { return {}; }
+};
+namespace rawinput { struct RawKeyboard : GamepadDevice {}; }
+int keyboardInputs=0, multiboardInputs=0;
+struct Keyboard : GamepadDevice { void input(int,bool) { ++keyboardInputs; } } testKeyboard;
+Keyboard* sdl_keyboard=&testKeyboard;
+namespace Multiboard { void keyboardEvent(int,bool) { ++multiboardInputs; } }
+namespace card_reader { bool barcodeAvailable() { return false; } }
+bool handleBarcodeScanner(const SDL_Event&) { return false; }
 bool blockVmuMouse=false, pendingMouseReset=false;
 namespace vmu_window {
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#ifdef HAVE_MOVABLE_VMUS
+#ifdef HAVE_SDL_VMUS
+void update(void*,bool) {}
+bool handleEvent(const SDL_Event& event) {
+ return (event.type==SDL_KEYDOWN || event.type==SDL_KEYUP) && event.key.windowID!=1;
+}
+#else
 void update(bool) {}
+#endif
 void publishScreen(int,const u32*,bool) { ++published; }
 bool blocksMouseInput() {
  if (blockVmuMouse) pendingMouseReset=true;
@@ -108,13 +163,6 @@ public:
 };
 SDLMouse testMouse;
 SDLMouse* getMouse(u32) { return &testMouse; }
-constexpr u32 SDL_MOUSEMOTION=1, SDL_MOUSEBUTTONDOWN=2, SDL_MOUSEBUTTONUP=3, SDL_MOUSEWHEEL=4;
-union SDL_Event {
- u32 type;
- struct { u32 type,which; int x,y,xrel,yrel; } motion;
- struct { u32 type,which; int x,y,button; } button;
- struct { u32 type; void* data1; } user;
-};
 std::deque<SDL_Event> eventQueue;
 int SDL_PollEvent(SDL_Event* event) {
  if(eventQueue.empty()) return 0;
@@ -150,9 +198,15 @@ public:
 };
 '''
 prefix += raw_input + '#endif\n' + capture + cursor + transition
-prefix += ' if (toggleRequested) {\n' + hotkey + ' toggleRequested=false;\n }\n'
-# Include the real filtering and motion dispatch, not a duplicate of either path.
-prefix += events + '\t\tswitch (event.type) {\n' + motion + '\t\tdefault: break;\n\t\t}\n\t}\n}\n' + reset
+prefix += r'''
+ if (toggleRequested) {
+  SDL_Event event{}; event.key.type=SDL_KEYDOWN; event.key.windowID=1;
+  event.key.keysym.mod=KMOD_LALT|KMOD_LCTRL;
+  eventQueue.push_back(event); toggleRequested=false;
+ }
+'''
+# Include the real filtering, keyboard shortcuts and motion dispatch together.
+prefix += events + '\t\tswitch (event.type) {\n' + keyboard + motion + '\t\tdefault: break;\n\t\t}\n\t}\n}\n' + reset
 
 suffix = r'''
 void require(bool value, const char* label) {
@@ -162,6 +216,7 @@ void require(bool value, const char* label) {
 void prepare(bool captured) {
  config::MovableVMUs=false; config::FloatVMUs=true; settings.platform.console=true;
  gameRunning=true; captureSucceeds=true; config::UseRawInput=false;
+ keyboardFocus=window; focusImmediately=true;
  ticks += 1000;
  input_sdl_handle(); mouseCaptured=captured; relativeMouse=captured;
 }
@@ -175,8 +230,8 @@ int main() {
   eventQueue.push_back(event); input_sdl_handle();
  };
  reset_vmus();
-#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
- require(published==8,"standalone Windows reset publishes all slots");
+#ifdef HAVE_MOVABLE_VMUS
+ require(published==8,"supported standalone reset publishes all slots");
  prepare(true); config::MovableVMUs=true; input_sdl_handle();
  require(!mouseCaptured && !relativeMouse && keepVmuCursorVisible(),"enable releases capture and exposes the free pointer");
  input_sdl_handle(); require(!mouseCaptured,"stable active VMUs leave capture unchanged");
@@ -264,6 +319,7 @@ int main() {
  moveMouse(405,303);
  require(mo_x_delta[0]==5 && mo_y_delta[0]==3,"SDL motion resumes after the first rebased event");
  mo_x_delta[0]=mo_y_delta[0]=0;
+#ifdef _WIN32
  testMouse.buttons[Mouse::LEFT_BUTTON]=true; blockVmuMouse=true;
  moveMouse(500,350);
  require(mo_x_delta[0]==0 && !testMouse.buttons[Mouse::LEFT_BUTTON],"suppressed SDL motion clears buttons without reaching the game");
@@ -284,6 +340,65 @@ int main() {
  require(mo_x_delta[0]==0 && mo_y_delta[0]==0,"native-only drag also rebases the first absolute raw packet");
  raw.usFlags=0; raw.lLastX=7; raw.lLastY=-4; rawMouse.updateState(&raw);
  require(mo_x_delta[0]==7 && mo_y_delta[0]==-4,"ordinary relative raw packets retain their motion");
+#endif
+#ifdef HAVE_SDL_VMUS
+ auto keyEvent=[](u32 id,int modifiers,int symbol=0,u32 type=SDL_KEYDOWN,int repeat=0) {
+  SDL_Event event{}; event.key.type=type; event.key.windowID=id; event.key.repeat=repeat;
+  event.key.keysym.mod=modifiers; event.key.keysym.sym=symbol;
+  eventQueue.push_back(event); input_sdl_handle();
+ };
+ const int chord=KMOD_LALT|KMOD_LCTRL;
+ void* utility=reinterpret_cast<void*>(2);
+ prepare(false); config::MovableVMUs=true; input_sdl_handle(); keyboardFocus=utility;
+ int keysBefore=keyboardInputs, raisesBefore=raises;
+ keyEvent(2,chord);
+ require(mouseCaptured && relativeMouse && keyboardFocus==window && raises==raisesBefore+1,
+  "VMU CtrlAlt returns focus to the game before enabling capture");
+ require(keyboardInputs==keysBefore,"VMU capture shortcut never reaches the game keyboard");
+ keyEvent(1,chord);
+ require(!mouseCaptured && !relativeMouse,"CtrlAlt in the game releases capture after VMU focus transfer");
+ keyboardFocus=utility;
+ keyEvent(2,0); keyEvent(2,0,0,SDL_KEYUP); keyEvent(2,chord,0,SDL_KEYDOWN,1);
+ require(!mouseCaptured && keyboardInputs==keysBefore,"VMU ordinary keys, releases and repeats stay out of game input");
+ altMapped=true; keyEvent(2,chord); altMapped=false;
+ ctrlMapped=true; keyEvent(2,chord); ctrlMapped=false;
+ require(!mouseCaptured && raises==raisesBefore+1,"mapped Alt or Ctrl prevents the VMU capture shortcut");
+ keyEvent(99,chord);
+ require(!mouseCaptured && raises==raisesBefore+1,"stale utility keyboard events cannot trigger shortcuts");
+ keyEvent(2,0,SDLK_F11);
+ require(window_fullscreen,"F11 still toggles the game fullscreen while a VMU has focus");
+ keyEvent(2,KMOD_ALT,SDLK_RETURN);
+ require(!window_fullscreen,"AltReturn exits fullscreen while a VMU has focus");
+ settings.naomi.slave=true; int routedBefore=multiboardInputs; keyEvent(2,0);
+ require(multiboardInputs==routedBefore,"VMU keyboard events cannot reach the multiboard master");
+ settings.naomi.slave=false; keyboardFocus=window; keyEvent(1,0);
+ require(keyboardInputs==keysBefore+1,"ordinary game-window keyboard input remains available");
+
+ prepare(false); config::MovableVMUs=true; input_sdl_handle(); keyboardFocus=utility; focusImmediately=false;
+ attempts=captureAttempts; keyEvent(2,chord);
+ require(!mouseCaptured && !relativeMouse && captureAttempts==attempts,
+  "asynchronous focus transfer never enables relative mode on the VMU");
+ keyboardFocus=window; input_sdl_handle();
+ require(mouseCaptured && relativeMouse && captureAttempts==attempts+1,"deferred VMU shortcut captures when game focus arrives");
+ toggleRequested=true; input_sdl_handle(); config::MovableVMUs=false; input_sdl_handle();
+ require(!mouseCaptured,"deferred manual capture and release supersede automatic restoration");
+
+ prepare(true); config::MovableVMUs=true; input_sdl_handle(); keyboardFocus=utility; focusImmediately=false;
+ keyEvent(2,chord); keyboardFocus=window; captureSucceeds=false; input_sdl_handle();
+ require(!mouseCaptured,"failed deferred capture leaves the mouse free");
+ captureSucceeds=true; config::MovableVMUs=false; input_sdl_handle();
+ require(mouseCaptured,"failed deferred capture preserves the original restoration preference");
+
+ for (int cancel=0; cancel<3; ++cancel) {
+  prepare(false); config::MovableVMUs=true; input_sdl_handle(); keyboardFocus=utility; focusImmediately=false;
+  keyEvent(2,chord);
+  if (cancel==0) ticks+=1000;
+  else if (cancel==1) gameRunning=false;
+  else config::MovableVMUs=false;
+  input_sdl_handle(); gameRunning=true; keyboardFocus=window; input_sdl_handle();
+  require(!mouseCaptured && !relativeMouse,"expired, paused or disabled focus request cannot capture later");
+ }
+#endif
 #else
  require(published==0,"unsupported native VMU reset is excluded");
  prepare(true); config::MovableVMUs=true; input_sdl_handle();

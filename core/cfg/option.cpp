@@ -100,7 +100,7 @@ Option<bool> Fog("rend.Fog", true);
 Option<bool> FloatVMUs("rend.FloatVMUs");
 #ifdef HAVE_MOVABLE_VMUS
 Option<bool, false> MovableVMUs("rend.MovableVMUs", false);
-Option<int, false> VmuWindowSize("rend.VmuWindowSize", 100);
+Option<int, false> VmuWindowSize("rend.VmuWindowSize", vmu_window::DefaultSizePercent);
 #endif
 Option<bool> Rotate90("rend.Rotate90");
 Option<bool> PerStripSorting("rend.PerStripSorting");

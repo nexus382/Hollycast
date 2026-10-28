@@ -237,12 +237,14 @@ bool pointerAvailable = true;
 bool buttonHeld = false;
 int checks = 0;
 int menuInset = 30;
+int ownerQueries = 0;
 int getScaledTopInset()
 {
 	return menuInset;
 }
 HWND getNativeHwnd()
 {
+	++ownerQueries;
 	return owner;
 }
 void testWarning(const char *, ...) {}
@@ -424,9 +426,17 @@ int main()
 	frame.fill(0xff000000u);
 	for (int i = 0; i < 8; ++i)
 		vmu_window::publishScreen(i, frame.data(), true);
+	config::values["vmu-windows0.left"] = 123;
+	config::values["vmu-windows0.top"] = 456;
+	const int savesBeforeDisabledReset = config::fileSaves;
+	vmu_window::resetPositions();
 	for (int i = 0; i < 5; ++i)
 		pump();
 	require(lcds().empty(), "disabled mode creates no windows");
+	require(ownerQueries == 0, "disabled updates skip owner geometry and DPI queries");
+	require(config::fileSaves == savesBeforeDisabledReset + 1
+			&& config::values["vmu-windows0.left"] == LONG_MIN && config::values["vmu-windows0.top"] == LONG_MIN,
+			"disabled reset persists the cleared position once without starting a worker");
 	config::MovableVMUs = true;
 	require(until([] { return lcds().size() == 8 && vmu_window::ownsScreen(7); }),
 			"eight LCD windows and overlay ownership");
@@ -795,6 +805,7 @@ int main()
 	require(vmu_window::ownsScreen(0), "concurrent LCD publication remains live");
 	settings.platform.console = false;
 	require(!vmu_window::detachedActive(), "arcade platform disables detached VMU activation");
+	require(!vmu_window::ownsScreen(0), "arcade transition releases ownership before worker teardown");
 	require(until([] { return lcds().empty() && !vmu_window::ownsScreen(0); }),
 			"arcade platform restores original overlay ownership");
 	settings.platform.console = true;

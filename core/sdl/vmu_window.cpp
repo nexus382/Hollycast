@@ -171,7 +171,7 @@ void update(SDL_Window *parent, bool pointerAvailable)
 	if (parent != nullptr)
 		SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(parent), &dpi, nullptr, nullptr);
 	const float scale = std::clamp(dpi / 100.f * 0.75f, 1.f, 4.f)
-		* std::clamp(config::VmuWindowSize.get(), 50, 400) / 100.f;
+		* std::clamp(config::VmuWindowSize.get(), MinSizePercent, MaxSizePercent) / 100.f;
 	const int width = int(std::lround(96.f * scale));
 	const int height = int(std::lround(64.f * scale));
 	for (int i = 0; i < ScreenCount; ++i)

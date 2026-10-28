@@ -5388,9 +5388,9 @@ void renderOnScreenDisplayTab()
 #endif
 			config::MovableVMUs.get(),
 			[](bool enabled) {
-				config::MovableVMUs = enabled;
+				config::MovableVMUs.set(enabled);
 				if (enabled)
-					config::FloatVMUs = true;
+					config::FloatVMUs.set(true);
 			},
 #ifdef __ANDROID__
 			T("Touch and drag an LCD to move it. Positions are saved per VMU slot and stay on screen after rotation."));
@@ -5408,9 +5408,9 @@ void renderOnScreenDisplayTab()
 			vmuSizeCfg.slider.popupID = Tnop("VmuWindowSizePopup");
 			vmuSizeCfg.slider.description = T("Resize all movable VMU screens live.");
 			vmuSizeCfg.slider.currentValue = &config::VmuWindowSize.get();
-			vmuSizeCfg.slider.minValue = 50;
-			vmuSizeCfg.slider.maxValue = 400;
-			vmuSizeCfg.slider.defaultValue = 100;
+			vmuSizeCfg.slider.minValue = vmu_window::MinSizePercent;
+			vmuSizeCfg.slider.maxValue = vmu_window::MaxSizePercent;
+			vmuSizeCfg.slider.defaultValue = vmu_window::DefaultSizePercent;
 			vmuSizeCfg.slider.format = "%d%%";
 			vmuSizeCfg.slider.valueWidth = 220.0f;
 			vmuSizeCfg.slider.sliderWidth = 320.0f;

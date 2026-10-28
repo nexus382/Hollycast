@@ -431,6 +431,20 @@ void input_sdl_handle()
 	static bool restoreVmuMouseCapture = false;
 	static Uint64 vmuCaptureRetryAt = 0;
 	const bool movableVmus = vmu_window::detachedActive();
+#ifdef HAVE_SDL_VMUS
+	static Uint64 vmuCaptureFocusDeadline = 0;
+	if (vmuCaptureFocusDeadline != 0)
+	{
+		if (!gameRunning || !movableVmus || SDL_GetTicks64() >= vmuCaptureFocusDeadline)
+			vmuCaptureFocusDeadline = 0;
+		else if (SDL_GetKeyboardFocus() == window)
+		{
+			vmuCaptureFocusDeadline = 0;
+			if (captureMouse(true))
+				restoreVmuMouseCapture = false;
+		}
+	}
+#endif
 	if (movableVmus && !movableVmusActive)
 	{
 		restoreVmuMouseCapture = restoreVmuMouseCapture || mouseCaptured;
@@ -479,7 +493,12 @@ void input_sdl_handle()
 		}
 #ifdef HAVE_SDL_VMUS
 		// Utility-window input and close/resize events belong to that VMU only.
-		if (vmu_window::handleEvent(event))
+		// Let keyboard events reach application shortcuts before filtering game input.
+		const bool vmuEvent = vmu_window::handleEvent(event);
+		if (vmuEvent && event.type != SDL_KEYDOWN && event.type != SDL_KEYUP)
+			continue;
+		if (vmuEvent && (SDL_GetKeyboardFocus() == nullptr
+				|| event.key.windowID != SDL_GetWindowID(SDL_GetKeyboardFocus())))
 			continue;
 #endif
 #if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
@@ -530,6 +549,10 @@ void input_sdl_handle()
 					}
 					// Route other keyboard events to master in multiboard mode
 					if (settings.naomi.slave) {
+#ifdef HAVE_SDL_VMUS
+						if (vmuEvent)
+							break;
+#endif
 						Multiboard::keyboardEvent(event.key.keysym.scancode, event.type == SDL_KEYDOWN);
 						break;
 					}
@@ -556,22 +579,40 @@ void input_sdl_handle()
 						}
 					};
 
+					// Left-Alt + Left-CTRL toggles mouse capture
+					if (event.type == SDL_KEYDOWN && (event.key.keysym.mod & KMOD_LALT) && (event.key.keysym.mod & KMOD_LCTRL)
+							&& !(is_key_mapped(SDL_SCANCODE_LALT) || is_key_mapped(SDL_SCANCODE_LCTRL)))
+					{
+						const bool wasCaptured = mouseCaptured;
+#ifdef HAVE_SDL_VMUS
+						vmuCaptureFocusDeadline = 0;
+						if (!wasCaptured && vmuEvent && gameRunning)
+						{
+							// Raising can change focus asynchronously. Wait briefly for the
+							// game to gain focus instead of capturing the utility window.
+							SDL_RaiseWindow(window);
+							if (SDL_GetKeyboardFocus() != window)
+								vmuCaptureFocusDeadline = SDL_GetTicks64() + 1000;
+						}
+						// SDL attaches relative mode to the current keyboard-focus window.
+						if (vmuCaptureFocusDeadline != 0)
+							break;
+#endif
+						captureMouse(!wasCaptured);
+#ifdef HAVE_MOVABLE_VMUS
+						// Only effective capture changes supersede the saved state (pause
+						// and a failed SDL capture leave the existing preference intact).
+						if (mouseCaptured != wasCaptured)
+							restoreVmuMouseCapture = false;
+#endif
+						break;
+					}
+#ifdef HAVE_SDL_VMUS
+					if (vmuEvent)
+						break;
+#endif
 					if (event.type == SDL_KEYDOWN)
 					{
-						// Left-Alt + Left-CTRL toggles mouse capture
-						if ((event.key.keysym.mod & KMOD_LALT) && (event.key.keysym.mod & KMOD_LCTRL)
-								&& !(is_key_mapped(SDL_SCANCODE_LALT) || is_key_mapped(SDL_SCANCODE_LCTRL)))
-						{
-							const bool wasCaptured = mouseCaptured;
-							captureMouse(!wasCaptured);
-#ifdef HAVE_MOVABLE_VMUS
-							// Only effective capture changes supersede the saved state (pause
-							// and a failed SDL capture leave the existing preference intact).
-							if (mouseCaptured != wasCaptured)
-								restoreVmuMouseCapture = false;
-#endif
-							break;
-						}
 						// Barcode scanner
 						if (card_reader::barcodeAvailable() && handleBarcodeScanner(event))
 							break;
