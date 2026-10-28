@@ -40,7 +40,7 @@ inline AutoLoadAction initialAutoLoadAction(LaunchMode mode, bool stateAvailable
 struct Entry {
 	std::string path;
 	std::string name;
-	time_t lastPlayed = 0;
+	time_t latestStateDate = 0;
 	bool device = false;
 };
 
@@ -75,15 +75,15 @@ inline std::vector<size_t> selectGames(const std::vector<Entry>& entries, View v
 	{
 		const Entry& entry = entries[i];
 		if (view == View::All || (!entry.device && !entry.path.empty() &&
-				(view == View::ContinuePlaying ? entry.lastPlayed > 0 : isFavourite(entry.path, favourites))))
+				(view == View::ContinuePlaying ? entry.latestStateDate > 0 : isFavourite(entry.path, favourites))))
 			result.push_back(i);
 	}
 	if (view == View::ContinuePlaying)
 		std::stable_sort(result.begin(), result.end(), [&entries](size_t left, size_t right) {
 			const Entry& a = entries[left];
 			const Entry& b = entries[right];
-			if (a.lastPlayed != b.lastPlayed)
-				return a.lastPlayed > b.lastPlayed;
+			if (a.latestStateDate != b.latestStateDate)
+				return a.latestStateDate > b.latestStateDate;
 			if (a.name != b.name)
 				return a.name < b.name;
 			return a.path < b.path;

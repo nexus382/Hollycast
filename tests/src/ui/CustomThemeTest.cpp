@@ -1,6 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/custom_theme.h"
+#include "ui/theme_font_validation.h"
 #include "oslib/resources.h"
 #include <filesystem>
 #include <fstream>
@@ -12,6 +13,9 @@
 #include "cfg/cfg.h"
 #include "stdclass.h"
 #include "ui/settings.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 TEST(CustomThemeTest, ParsesBaseColorsAndStyle)
 {
@@ -156,7 +160,8 @@ TEST(CustomThemeTest, RejectsInvalidThemesWithoutChangingOutput)
 		R"({"widgets":{"media.status":{"warning":"red"}}})", R"({"colors":{"Text":[-0.1,0,0,1]}})",
 		R"({"colors":{"Text":[0,0,1.1,1]}})", R"({"colors":{"Text":[0,0,null,1]}})",
 		R"({"colors":{"Text":[0,0,true,1]}})", R"({"colors":{"Text":[0,0,1e999,1]}})",
-		R"({"colors":{"Text":[0,0,0,1,1]}})", R"({"colors":{"Text":[0,0,"0",1]}})"
+		R"({"colors":{"Text":[0,0,0,1,1]}})", R"({"colors":{"Text":[0,0,"0",1]}})",
+		R"({"assets":{"icons":{"":"icon.png"}}})", R"({"assets":{"icons":{"bad key":"icon.png"}}})"
 	};
 	for (auto input : invalid) {
 		CustomTheme::Theme theme;
@@ -178,8 +183,25 @@ TEST(CustomThemeTest, RejectsUnsafeFilenames)
 {
 	CustomTheme::Theme theme;
 	std::string error;
-	for (const char* name : {"../theme.json", "subdir/theme.json", "subdir\\theme.json", "theme.txt", ""})
+	for (const char* name : {"../theme.json", "subdir/theme.json", "subdir\\theme.json", "C:Escape.json", "bad?.json", "CON.json", "theme.txt", ""})
 		EXPECT_FALSE(CustomTheme::load(name, theme, error)) << name;
+}
+
+TEST(CustomThemeTest, RejectsMalformedFontDirectoriesWithoutOverflow)
+{
+	std::vector<std::uint8_t> ttc(16, 0);
+	ttc[0] = 't'; ttc[1] = 't'; ttc[2] = 'c'; ttc[3] = 'f';
+	ttc[12] = 0xff; ttc[13] = 0xff; ttc[14] = 0xff; ttc[15] = 0xf8;
+	EXPECT_FALSE(validThemeFontDirectory(ttc.data(), ttc.size()));
+	ttc[12] = 0; ttc[13] = 0; ttc[14] = 0; ttc[15] = 12;
+	EXPECT_FALSE(validThemeFontDirectory(ttc.data(), ttc.size()));
+	std::vector<std::uint8_t> sfnt(28, 0);
+	sfnt[1] = 1; sfnt[5] = 1; // TrueType signature and one table
+	EXPECT_TRUE(validThemeFontDirectory(sfnt.data(), sfnt.size()));
+	sfnt[5] = 2; // Second table does not fit in the directory
+	EXPECT_FALSE(validThemeFontDirectory(sfnt.data(), sfnt.size()));
+	sfnt[5] = 1; sfnt[20] = 0xff; sfnt[21] = 0xff; sfnt[22] = 0xff; sfnt[23] = 0xf8;
+	EXPECT_FALSE(validThemeFontDirectory(sfnt.data(), sfnt.size()));
 }
 
 TEST(CustomThemeTest, DiscoversAndLoadsFilesByStableFilename)
@@ -218,12 +240,13 @@ protected:
 	void write(const std::string& file, const std::string& contents) {
 		const auto target = std::filesystem::path(path + file);
 		std::filesystem::create_directories(target.parent_path());
-		std::ofstream output(target);
+		// Preserve asset bytes and the exact bundled-preset comparison on Windows.
+		std::ofstream output(target, std::ios::binary);
 		output << contents;
 		ASSERT_TRUE(output.good());
 	}
 	std::string read(const std::string& file) {
-		std::ifstream input(path + file);
+		std::ifstream input(path + file, std::ios::binary);
 		return std::string(std::istreambuf_iterator<char>(input), {});
 	}
 	std::filesystem::path root;
@@ -751,18 +774,24 @@ TEST_F(ThemeFilesTest, ImportAndExportReportMissingOrUnsafeAssetsWithoutWritingT
 
 TEST_F(ThemeFilesTest, ExportRejectsAssetSymlinksThatEscapeThemeFolder)
 {
-	const auto outside = root.parent_path() / (root.filename().string() + "-outside.png");
-	{ std::ofstream file(outside); file << "outside"; }
-	std::filesystem::create_symlink(outside, root / "escape.png");
+	// Keep the outside asset within the fixture so TearDown also cleans it on a skip.
+	write("outside.png", "outside");
+	const auto source = root / "source";
+	std::filesystem::create_directory(source);
+	std::error_code ec;
+	std::filesystem::create_symlink(root / "outside.png", source / "escape.png", ec);
+#ifdef _WIN32
+	if (ec == std::error_code(ERROR_PRIVILEGE_NOT_HELD, std::system_category()))
+		GTEST_SKIP() << "Windows requires symbolic-link privilege or Developer Mode";
+#endif
+	ASSERT_FALSE(ec) << ec.message();
 	CustomTheme::Theme theme;
 	std::string error;
 	ASSERT_TRUE(CustomTheme::parse(R"({"assets":{"background":"escape.png"}})", theme, error)) << error;
-	theme.assets.directory = path;
+	theme.assets.directory = source.string() + "/";
 	EXPECT_FALSE(CustomTheme::exportToDirectory(theme, "Escape.json", (root / "export").string(), error));
 	EXPECT_NE(error.find("outside"), std::string::npos);
 	EXPECT_FALSE(std::filesystem::exists(root / "export/Escape.json"));
-	std::error_code ec;
-	std::filesystem::remove(outside, ec);
 }
 
 TEST_F(ThemeFilesTest, SaveRefusesAccidentalReplacementAndReplacesOnlyOnExplicitRequest)
@@ -776,16 +805,95 @@ TEST_F(ThemeFilesTest, SaveRefusesAccidentalReplacementAndReplacesOnlyOnExplicit
 	const auto themePath = std::filesystem::path(CustomTheme::directory()) / "saved.json";
 	std::ifstream beforeFile(themePath, std::ios::binary);
 	const std::string before(std::istreambuf_iterator<char>(beforeFile), {});
+	// Windows read handles must be closed before testing atomic replacement.
+	beforeFile.close();
 	EXPECT_FALSE(CustomTheme::save("saved.json", theme, false, error));
 	EXPECT_NE(error.find("already exists"), std::string::npos);
 	std::ifstream afterFile(themePath, std::ios::binary);
 	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(afterFile), {}), before);
+	afterFile.close();
 	ASSERT_TRUE(CustomTheme::parse(R"({"base":"Light","colors":{"Text":"#ABCDEF"}})", theme, error)) << error;
 	ASSERT_TRUE(CustomTheme::save("saved.json", theme, true, error)) << error;
 	CustomTheme::Theme loaded;
 	ASSERT_TRUE(CustomTheme::loadFromDirectory(CustomTheme::directory(), "saved.json", loaded, error)) << error;
 	EXPECT_EQ(loaded.base, 1);
 	EXPECT_NEAR(loaded.colors.front().second.x, 0xAB / 255.f, 0.0001f);
+}
+
+TEST_F(ThemeFilesTest, InvalidDraftCannotReplaceOrExportAnExistingTheme)
+{
+	struct RestorePath { std::string path = get_writable_config_path(""); ~RestorePath() { set_user_config_dir(path.empty() ? "." : path); } } restore;
+	set_user_config_dir(path);
+	CustomTheme::Theme theme;
+	std::string error;
+	ASSERT_TRUE(CustomTheme::parse(R"({"colors":{"Text":"#123456"}})", theme, error)) << error;
+	ASSERT_TRUE(CustomTheme::save("saved.json", theme, false, error)) << error;
+	const auto saved = std::filesystem::path(CustomTheme::directory()) / "saved.json";
+	std::ifstream input(saved, std::ios::binary);
+	const std::string before(std::istreambuf_iterator<char>(input), {});
+	input.close();
+	const CustomTheme::Theme validTheme = theme;
+	theme.scalars.emplace_back(&ImGuiStyle::Alpha, 0.f);
+	EXPECT_FALSE(CustomTheme::save("saved.json", theme, true, error));
+	EXPECT_NE(error.find("Alpha"), std::string::npos);
+	std::ifstream unchanged(saved, std::ios::binary);
+	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(unchanged), {}), before);
+	EXPECT_FALSE(CustomTheme::exportToDirectory(theme, "invalid.json", (root / "export").string(), error));
+	EXPECT_FALSE(std::filesystem::exists(root / "export/invalid.json"));
+	unchanged.close();
+
+	write("icon.png", "icon data");
+	for (const char* name : {"", "bad key"}) {
+		CustomTheme::Theme invalid = validTheme;
+		invalid.assets.directory = path;
+		invalid.assets.icons[name] = "icon.png";
+		error.clear();
+		EXPECT_TRUE(CustomTheme::serialize(invalid, error).empty());
+		EXPECT_NE(error.find("icon"), std::string::npos);
+		error.clear();
+		EXPECT_FALSE(CustomTheme::save("saved.json", invalid, true, error));
+		EXPECT_NE(error.find("icon"), std::string::npos);
+		{
+			std::ifstream preserved(saved, std::ios::binary);
+			EXPECT_EQ(std::string(std::istreambuf_iterator<char>(preserved), {}), before);
+		}
+		error.clear();
+		EXPECT_FALSE(CustomTheme::exportToDirectory(invalid, "invalid-icons.json", (root / "export").string(), error));
+		EXPECT_NE(error.find("icon"), std::string::npos);
+		EXPECT_FALSE(std::filesystem::exists(root / "export/invalid-icons.json"));
+	}
+}
+
+TEST_F(ThemeFilesTest, RejectsNonportableNamesBeforeCreatingFiles)
+{
+	struct RestorePath { std::string path = get_writable_config_path(""); ~RestorePath() { set_user_config_dir(path.empty() ? "." : path); } } restore;
+	set_user_config_dir(path);
+	CustomTheme::Theme theme;
+	std::string error;
+	ASSERT_TRUE(CustomTheme::parse(R"({"colors":{"Text":"#123456"}})", theme, error)) << error;
+	for (const char* name : {"C:Escape.json", "bad?.json", "CON.json", "subdir/theme.json"}) {
+		EXPECT_FALSE(CustomTheme::save(name, theme, false, error)) << name;
+		EXPECT_FALSE(CustomTheme::exportToDirectory(theme, name, (root / "export").string(), error)) << name;
+	}
+	EXPECT_FALSE(std::filesystem::exists(root / "export"));
+	EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(CustomTheme::directory()) / "C:Escape.json"));
+}
+
+TEST_F(ThemeFilesTest, WindowsAssetSeparatorsSurviveImportAndExport)
+{
+	write("source/fonts/body.ttf", "font");
+	write("source/Theme.json", R"({"fonts":{"body":"fonts\\body.ttf"}})");
+	std::string imported, error;
+	ASSERT_TRUE(CustomTheme::importFromFile(path + "source/Theme.json", path + "imported", imported, error)) << error;
+	CustomTheme::Theme theme;
+	ASSERT_TRUE(CustomTheme::loadFromDirectory(path + "imported/", imported, theme, error)) << error;
+	EXPECT_EQ(theme.assets.bodyFont, "assets/Theme/fonts/body.ttf");
+	ASSERT_TRUE(std::filesystem::exists(root / "imported/assets/Theme/fonts/body.ttf"));
+	ASSERT_TRUE(CustomTheme::exportToDirectory(theme, "Portable.json", path + "export", error)) << error;
+	EXPECT_TRUE(std::filesystem::exists(root / "export/assets/Theme/fonts/body.ttf"));
+	CustomTheme::Theme exported;
+	ASSERT_TRUE(CustomTheme::loadFromDirectory(path + "export/", "Portable.json", exported, error)) << error;
+	EXPECT_EQ(exported.assets.bodyFont, "assets/Theme/fonts/body.ttf");
 }
 
 TEST_F(ThemeFilesTest, Utf8PathsRoundTripThroughSaveExportAndImport)

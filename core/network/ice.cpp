@@ -694,10 +694,7 @@ class StandardPipe : public IcePipe
 {
 public:
 	StandardPipe(IceSession& ice) : IcePipe(ice) {}
-	~StandardPipe() {
-		if (sh4SchedId != -1)
-			sh4_sched_unregister(sh4SchedId);
-	}
+	~StandardPipe() { sh4_sched_unregister(sh4SchedId); }
 
 	void onWrite() override
 	{
@@ -827,10 +824,7 @@ class VonotPipe : public IcePipe
 {
 public:
 	VonotPipe(IceSession& ice) : IcePipe(ice) {}
-	~VonotPipe() {
-		if (sh4SchedId != -1)
-			sh4_sched_unregister(sh4SchedId);
-	}
+	~VonotPipe() { sh4_sched_unregister(sh4SchedId); }
 
 	void onWrite() override
 	{

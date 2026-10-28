@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -25,6 +26,7 @@
 #include "achievements/achievements.h"
 #include "IconsFontAwesome6.h"
 #include "oslib/i18n.h"
+#include "cfg/option.h"
 #include <cmath>
 #include <sstream>
 using namespace i18n;
@@ -134,6 +136,9 @@ void Notification::hideLeaderboard(u32 id)
 
 bool Notification::draw()
 {
+	if (!config::ShowAchievementPopups)
+		return false;
+
 	std::lock_guard<std::mutex> _(mutex);
 	if (type == None)
 		return false;

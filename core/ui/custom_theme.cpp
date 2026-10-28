@@ -60,6 +60,20 @@ bool validAssetPath(const std::string& path)
 	return !part.empty() && part != "." && part != "..";
 }
 
+std::string portableAssetPath(std::string path)
+{
+	std::replace(path.begin(), path.end(), '\\', '/');
+	return path;
+}
+
+void normalizeAssetPaths(Theme::Assets& assets)
+{
+	assets.bodyFont = portableAssetPath(assets.bodyFont);
+	assets.boldFont = portableAssetPath(assets.boldFont);
+	assets.background = portableAssetPath(assets.background);
+	for (auto& icon : assets.icons) icon.second = portableAssetPath(icon.second);
+}
+
 bool validRole(const std::string& role)
 {
 	return role == "accent" || role == "success" || role == "warning" || role == "error";
@@ -114,9 +128,20 @@ bool number(const nlohmann::json& value, float max, float& result)
 
 bool validFilename(const std::string& filename)
 {
-	return filename.size() > 5 && filename.substr(filename.size() - 5) == ".json"
-			&& filename.find_first_of("/\\") == std::string::npos
-			&& filename != "." && filename != "..";
+	if (filename.size() <= 5 || filename.substr(filename.size() - 5) != ".json"
+			|| filename.find_first_of("<>:\"/\\|?*") != std::string::npos)
+		return false;
+	for (unsigned char c : filename)
+		if (c < 0x20) return false;
+	// Windows reserves these names even when followed by an extension.
+	std::string stem = filename.substr(0, filename.find('.'));
+	std::transform(stem.begin(), stem.end(), stem.begin(), [](unsigned char c) {
+		return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : static_cast<char>(c);
+	});
+	if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") return false;
+	if (stem.size() == 4 && (stem.compare(0, 3, "COM") == 0 || stem.compare(0, 3, "LPT") == 0)
+			&& stem[3] >= '1' && stem[3] <= '9') return false;
+	return true;
 }
 
 // Public path strings in the theme API are UTF-8. Keep conversion at the
@@ -192,7 +217,7 @@ bool parseContents(const std::string& contents, Theme& theme, std::string& error
 				output.clear();
 				return true;
 			}
-			output = value.get<std::string>();
+			output = portableAssetPath(value.get<std::string>());
 			return true;
 		};
 		if (json.contains("fonts")) {
@@ -219,7 +244,11 @@ bool parseContents(const std::string& contents, Theme& theme, std::string& error
 					if (!field.value().is_object()) { error = "Invalid assets.icons"; return false; }
 					for (auto icon = field.value().begin(); icon != field.value().end(); ++icon) {
 						std::string iconPath;
-						if (icon.key().empty() || icon.key().find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos || !parseAsset(icon.value(), "assets.icons." + icon.key(), iconPath)) return false;
+						if (icon.key().empty() || icon.key().find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos) {
+							error = "Invalid icon name: " + icon.key();
+							return false;
+						}
+						if (!parseAsset(icon.value(), "assets.icons." + icon.key(), iconPath)) return false;
 						if (!iconPath.empty()) parsed.assets.icons.emplace(icon.key(), std::move(iconPath));
 					}
 				}
@@ -583,14 +612,14 @@ std::string serialize(const Theme& theme, std::string& error)
 		}
 		if (!theme.assets.bodyFont.empty() || !theme.assets.boldFont.empty()) {
 			auto& fonts = json["fonts"] = nlohmann::json::object();
-			if (!theme.assets.bodyFont.empty()) fonts["body"] = theme.assets.bodyFont;
-			if (!theme.assets.boldFont.empty()) fonts["bold"] = theme.assets.boldFont;
+			if (!theme.assets.bodyFont.empty()) fonts["body"] = portableAssetPath(theme.assets.bodyFont);
+			if (!theme.assets.boldFont.empty()) fonts["bold"] = portableAssetPath(theme.assets.boldFont);
 		}
 		if (!theme.assets.background.empty() || !theme.assets.icons.empty()
 				|| theme.assets.backgroundOpacity != 0.22f || theme.assets.backgroundFit != "cover") {
 			auto& assets = json["assets"] = nlohmann::json::object();
-			if (!theme.assets.background.empty()) assets["background"] = theme.assets.background;
-			if (!theme.assets.icons.empty()) assets["icons"] = theme.assets.icons;
+			if (!theme.assets.background.empty()) assets["background"] = portableAssetPath(theme.assets.background);
+			for (const auto& icon : theme.assets.icons) assets["icons"][icon.first] = portableAssetPath(icon.second);
 			assets["backgroundOpacity"] = theme.assets.backgroundOpacity;
 			assets["backgroundFit"] = theme.assets.backgroundFit;
 		}
@@ -607,12 +636,15 @@ std::string serialize(const Theme& theme, std::string& error)
 			for (auto field = extensions.begin(); field != extensions.end(); ++field)
 				if (!json.contains(field.key())) json[field.key()] = field.value();
 		}
-		error.clear();
-		return json.dump(2) + "\n";
+		const std::string contents = json.dump(2) + "\n";
+		if (contents.size() > MaxThemeSize) { error = "Theme file is too large"; return {}; }
+		Theme validated;
+		if (!parseContents(contents, validated, error, true)) return {};
+		return contents;
 	} catch (const nlohmann::json::exception& e) { error = e.what(); return {}; }
 }
 
-void setActiveAssets(const Theme::Assets& assets) { ActiveAssets = assets; }
+void setActiveAssets(const Theme::Assets& assets) { ActiveAssets = assets; normalizeAssetPaths(ActiveAssets); }
 std::string assetPath(const std::string& name)
 {
 	std::string relative;
@@ -1084,9 +1116,11 @@ bool load(const std::string& filename, Theme& theme, std::string& error)
 	return loadFromDirectory(directory(), filename, theme, error);
 }
 
-bool save(const std::string& filename, const Theme& theme, bool replaceExisting, std::string& error)
+bool save(const std::string& filename, const Theme& original, bool replaceExisting, std::string& error)
 {
-	if (!validFilename(filename)) { error = "Theme name must be a .json filename without folder separators"; return false; }
+	if (!validFilename(filename)) { error = "Theme name must be a valid .json filename"; return false; }
+	Theme theme = original;
+	normalizeAssetPaths(theme.assets);
 	for (const std::string* asset : {&theme.assets.bodyFont, &theme.assets.boldFont, &theme.assets.background}) {
 		if (asset->empty()) continue;
 		if (!validAssetPath(*asset)) { error = "Unsafe asset path: " + *asset; return false; }
@@ -1105,7 +1139,7 @@ bool save(const std::string& filename, const Theme& theme, bool replaceExisting,
 		}
 	}
 	const std::string output = serialize(theme, error);
-	if (!error.empty()) return false;
+	if (output.empty() || !error.empty()) return false;
 	std::error_code ec;
 	const auto themeDirectory = utf8Path(directory());
 	std::filesystem::create_directories(themeDirectory, ec);
@@ -1144,8 +1178,10 @@ bool save(const std::string& filename, const Theme& theme, bool replaceExisting,
 bool exportToDirectory(const Theme& original, const std::string& filename,
 		const std::string& destination, std::string& error)
 {
-	if (!validFilename(filename)) { error = "Export name must be a .json filename without folder separators"; return false; }
+	if (!validFilename(filename)) { error = "Export name must be a valid .json filename"; return false; }
 	Theme theme = original;
+	normalizeAssetPaths(theme.assets);
+	if (serialize(theme, error).empty()) return false;
 	const auto root = utf8Path(destination);
 	std::error_code ec;
 	std::filesystem::create_directories(root, ec);
@@ -1200,7 +1236,7 @@ bool importFromFile(const std::string& source, const std::string& destination,
 		std::string& importedFilename, std::string& error)
 {
 	std::unique_ptr<hostfs::File> input(hostfs::storage().openFile(source, "rb"));
-	if (!input) { error = "Cannot open import file"; return false; }
+	if (!input) { error = "Cannot open import file: " + source; return false; }
 	const s64 size = input->size();
 	if (size < 0 || size > static_cast<s64>(MaxThemeSize)) { error = "Theme file is too large"; return false; }
 	std::string contents(static_cast<size_t>(size), '\0');
@@ -1234,6 +1270,7 @@ bool importFromFile(const std::string& source, const std::string& destination,
 	const auto extension = sourceLeaf.find_last_of('.');
 	const std::string stem = extension == std::string::npos ? sourceLeaf : sourceLeaf.substr(0, extension);
 	if (stem.empty()) { error = "Import filename has no theme name"; return false; }
+	if (!validFilename(stem + ".json")) { error = "Import filename contains unsupported characters"; return false; }
 	std::string candidate = stem;
 	std::error_code ec;
 	const auto destinationPath = utf8Path(destination);

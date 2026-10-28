@@ -2941,6 +2941,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		const int builtinCount = static_cast<int>(builtins.size());
 		static std::vector<std::string> customFiles;
 		static std::string themeError;
+		static std::string themeNotice;
 		static double nextThemeScan = 0;
 		ImGui::PushID("UIThemeSetting");
 		const bool themePopupOpen = ImGui::IsPopupOpen("UIThemePopup");
@@ -2979,6 +2980,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		themeCfg.options.valueWidth = 220.0f;
 		themeCfg.options.onChange = [&](int selected) {
 			themeError.clear();
+			themeNotice.clear();
 			const bool selectingBuiltin = selected >= 0 && selected < builtinCount;
 			const bool selectingCustom = selected >= builtinCount && selected - builtinCount < static_cast<int>(customFiles.size());
 			if (!selectingBuiltin && !selectingCustom)
@@ -3026,6 +3028,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 		if (!themeError.empty())
 			RenderGeneralInfoRow("CustomThemeError", ICON_FA_TRIANGLE_EXCLAMATION, T("Theme Error"),
 				T("The theme file could not be loaded. Built-in themes use their bundled defaults."), themeError, false, themeError.c_str());
+		if (!themeNotice.empty())
+			RenderGeneralInfoRow("CustomThemeNotice", ICON_FA_CHECK, T("Theme Import"),
+				T("The theme and its referenced assets are ready to use."), themeNotice, false, themeNotice.c_str());
 
 		// Theme authoring stays in settings so users can create a custom theme
 		// without editing JSON. The draft is previewed in the normal pre-frame
@@ -3063,20 +3068,20 @@ static void renderSettingsContentTab(SettingsTab tab)
 		if (ImGui::Button(T("Edit Selected Theme")) && canEditCustom) startThemeEditor(true);
 		if (!canEditCustom) ImGui::EndDisabled();
 		ImGui::SameLine();
-		if (ImGui::Button(T("Import Theme…"))) {
-			const char* importTitle = "Import Theme JSON";
-			select_file_popup(importTitle, [&](bool cancelled, const std::string& source) {
-				if (!cancelled) {
-					std::string imported;
-					if (CustomTheme::importFile(source, imported, themeError)) {
-						customFiles = CustomTheme::list();
-						themeError = "Imported " + imported;
-					}
-				}
-				return true;
-			}, true, "json");
+		const char* importTitle = "Import Theme JSON";
+		if (ImGui::Button(T("Import Theme…")))
 			ImGui::OpenPopup(importTitle);
-		}
+		select_file_popup(importTitle, [&](bool cancelled, const std::string& source) {
+			if (!cancelled) {
+				themeNotice.clear();
+				std::string imported;
+				if (CustomTheme::importFile(source, imported, themeError)) {
+					customFiles = CustomTheme::list();
+					themeNotice = "Imported " + imported;
+				}
+			}
+			return true;
+		}, true, "json");
 
 		if (g_themeEditor.open) {
 			const ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -3225,7 +3230,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					auto scalar = [&](const char* name, float ImGuiStyle::*member, float max) {
 						float value = previewStyle.*member;
 						const float upper = std::strstr(name, "BorderSize") != nullptr ? 20.f : max;
-						if (ImGui::SliderFloat(name, &value, 0.f, upper)) {
+						if (ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 							auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3233,7 +3238,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					};
 					auto vector = [&](const char* name, ImVec2 ImGuiStyle::*member, float max) {
 						ImVec2 value = previewStyle.*member;
-						if (ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max)) {
+						if (ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 							auto it = std::find_if(g_themeEditor.draft.vectors.begin(), g_themeEditor.draft.vectors.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.vectors.end()) g_themeEditor.draft.vectors.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3251,7 +3256,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					for (const auto& item : scalars) {
 						if (item.second == &ImGuiStyle::Alpha) {
 							float value = previewStyle.*item.second;
-							if (ImGui::SliderFloat(item.first, &value, 0.2f, 1.f)) {
+							if (ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
 								auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == item.second; });
 								if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(item.second, value); else it->second = value;
 								g_themeEditor.previewing = true;
@@ -3270,7 +3275,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 						ImGui::TextDisabled("%s", T("Hollycast layout"));
 					auto layoutSlider = [&](const char* name, float& value, float minimum, float maximum, float fallback, bool& present) {
 						float shown = present ? value : fallback;
-						if (ImGui::SliderFloat(name, &shown, minimum, maximum)) { value = shown; present = true; g_themeEditor.previewing = true; }
+						if (ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { value = shown; present = true; g_themeEditor.previewing = true; }
 					};
 					layoutSlider("Density", g_themeEditor.draft.layout.density, 0.75f, 1.5f, 1.f, g_themeEditor.draft.layout.hasDensity);
 					layoutSlider("Settings sidebar width", g_themeEditor.draft.layout.settingsSidebarWidth, 136.f, 310.f, 225.f, g_themeEditor.draft.layout.hasSettingsSidebarWidth);
@@ -3303,7 +3308,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 						g_themeEditor.previewing = true;
 					}
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
-					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
+					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
 					const char* fits[] = {"cover", "contain", "stretch"};
 					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
 					if (ImGui::Combo(T("Background fit"), &fit, fits, IM_ARRAYSIZE(fits))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
@@ -3911,6 +3916,21 @@ static void renderSettingsContentTab(SettingsTab tab)
 		if (config::EnableAchievements)
 		{
 			ImGui::Indent();
+
+			RenderGeneralToggleSettingRow(
+				"ShowAchievementPopups",
+				ICON_FA_BELL,
+				T("Show Achievement Popups"),
+				T("Show on-screen RetroAchievements notifications while playing."),
+				static_cast<bool>(config::ShowAchievementPopups),
+				[](bool enabled) { config::ShowAchievementPopups = enabled; },
+				T(
+					"Show Achievement Popups\n"
+					"Controls achievement, progress, challenge, and leaderboard notifications shown over gameplay."
+				)
+			);
+
+			ImGui::Spacing();
 
 			RenderGeneralToggleSettingRow(
 				"AchievementsHardcoreMode",
@@ -8816,6 +8836,17 @@ void renderAboutTab()
 			"(at your option) any later version."
 		));
 		ImGui::Spacing();
+		if (ImGui::TreeNode("Noto Sans CJK (SIL Open Font License)"))
+		{
+			size_t licenseSize = 0;
+			auto license = resource::load("fonts/NotoSansCJK-LICENSE.txt", licenseSize);
+			if (license)
+			{
+				const std::string text(reinterpret_cast<const char*>(license.get()), licenseSize);
+				ImGui::TextWrapped("%s", text.c_str());
+			}
+			ImGui::TreePop();
+		}
 	}
 
 	// Credits

@@ -1,5 +1,6 @@
 /*
 	Copyright 2018 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -526,9 +527,12 @@ void OpenGL4Renderer::drawStrips(int width, int height)
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		if (gl.rendContext->clearFramebuffer)
 		{
-			// Clear framebuffer
+			// Clear the color-pass framebuffer. The first framebuffer is used
+			// for depth and stencil; the color pass renders into the second one.
+			framebuffers[1]->bind();
 			glcache.ClearColor(VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f);
 			glClear(GL_COLOR_BUFFER_BIT);
+			framebuffers[0]->bind();
 		}
 		else
 		{

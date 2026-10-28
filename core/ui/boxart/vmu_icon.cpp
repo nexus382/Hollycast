@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 The Hollycast Authors
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Hollycast.
 
@@ -876,19 +877,6 @@ time_t getLibraryGameLastBooted(const GameMedia& media, const std::string& gameI
 
 	const std::string cachePath = appendPath(libraryDir, "cache.json");
 	return readLastBootedCacheEntry(getSharedIconCache(cachePath), key, media.path);
-}
-
-time_t getLibraryGameLastBootedForPath(const std::string& path)
-{
-	if (path.empty())
-		return 0;
-
-	std::lock_guard<std::mutex> lock(cacheMutex);
-	// This lookup runs for every title in Continue Playing. Reading the cached
-	// index does not need the directory checks used when writing VMU icons.
-	const std::string libraryDir = appendPath(appendPath(get_writable_data_path("boxart/"), "vmu-icons"), "library");
-	const std::string cachePath = appendPath(libraryDir, "cache.json");
-	return readLastBootedCacheEntry(getSharedIconCache(cachePath), "", path);
 }
 
 std::string getCachedVmuIconPath(const GameMedia& media, const std::string& gameId, bool animate, double animationClock)

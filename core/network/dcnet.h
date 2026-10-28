@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -33,6 +34,7 @@ public:
 	int modemAvailable() override;
 
 	void receiveEthFrame(const u8 *frame, u32 size) override;
+	u32 sendEthFrame(u8 *frame) override;
 };
 
 }

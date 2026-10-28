@@ -40,6 +40,13 @@ void flycast_term();
 void dc_exit();
 void dc_savestate(int index = 0, const u8 *pngData = nullptr, u32 pngSize = 0);
 void dc_loadstate(int index = 0);
+// Resume uses the exact file inspected in the library, independent of the active-slot path cache.
+bool dc_loadstateForPath(const std::string& statePath);
+struct SavestateInfo {
+	std::string path;
+	time_t creationDate = 0;
+};
+SavestateInfo dc_getLatestStateForGame(const std::string& contentPath);
 time_t dc_getStateCreationDate(int index);
 time_t dc_getStateCreationDateForPath(const std::string& statePath);
 void dc_getStateScreenshot(int index, std::vector<u8>& pngData);

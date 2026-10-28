@@ -270,10 +270,10 @@ fail:
 	// delete failed savestate?
 }
 
-void dc_loadstate(int index)
+static bool loadState(int index, const std::string& statePath)
 {
 	if (!dc_savestateAllowed() || settings.raHardcoreMode)
-		return;
+		return false;
 	u32 total_size = 0;
 
 	hostfs::File *f = nullptr;
@@ -289,7 +289,7 @@ void dc_loadstate(int index)
 #endif
 	{
 		// regular file savestate
-		filename = hostfs::getSavestatePath(index, false);
+		filename = statePath.empty() ? hostfs::getSavestatePath(index, false) : statePath;
 		f = hostfs::storage().openFile(filename, "rb");
 	}
 
@@ -297,7 +297,7 @@ void dc_loadstate(int index)
 	{
 		WARN_LOG(SAVESTATE, "Failed to load state - could not open %s for reading", filename.c_str());
 		os_notify(i18n::T("Save state not found"), 2000);
-		return;
+		return false;
 	}
 	SavestateHeader header;
 	if (f->read(&header, sizeof(header), 1) == 1)
@@ -341,7 +341,7 @@ void dc_loadstate(int index)
 			delete f;
 		else
 			zipFile.Close();
-		return;
+		return false;
 	}
 
 	size_t read_size;
@@ -360,12 +360,14 @@ void dc_loadstate(int index)
 		WARN_LOG(SAVESTATE, "Failed to load state - I/O error");
 		os_notify(i18n::T("Failed to load state"), 5000, i18n::T("I/O error"));
 		free(data);
-		return;
+		return false;
 	}
 
+	bool loaded = false;
 	try {
 		Deserializer deser(data, total_size);
 		emu.loadstate(deser);
+		loaded = true;
 	    NOTICE_LOG(SAVESTATE, "Loaded state ver %d from %s size %d", deser.version(), filename.c_str(), total_size);
 		if (deser.size() != total_size)
 			// Note: this isn't true for RA savestates
@@ -376,6 +378,17 @@ void dc_loadstate(int index)
 	}
 
 	free(data);
+	return loaded;
+}
+
+void dc_loadstate(int index)
+{
+	loadState(index, "");
+}
+
+bool dc_loadstateForPath(const std::string& statePath)
+{
+	return !statePath.empty() && loadState(0, statePath);
 }
 
 time_t dc_getStateCreationDate(int index)
@@ -412,6 +425,25 @@ time_t dc_getStateCreationDateForPath(const std::string& filename)
 		}
 	}
 	return lastStateTime;
+}
+
+SavestateInfo dc_getLatestStateForGame(const std::string& contentPath)
+{
+	SavestateInfo latest;
+	if (contentPath.empty())
+		return latest;
+	const int autoSaveSlot = dc_getAutoSaveSlot();
+	// Include every manual slot and the hidden autosave; never offer netplay or RAM states.
+	for (int slot = 0; slot <= autoSaveSlot; ++slot)
+	{
+		const std::string path = hostfs::getSavestatePathForGame(contentPath, "", slot);
+		const time_t creationDate = path.empty() ? 0 : dc_getStateCreationDateForPath(path);
+		// Autosave wins equal timestamps; otherwise keep the lowest numbered slot.
+		if (creationDate > latest.creationDate
+				|| (creationDate != 0 && creationDate == latest.creationDate && slot == autoSaveSlot))
+			latest = { path, creationDate };
+	}
+	return latest;
 }
 
 void dc_getStateScreenshot(int index, std::vector<u8>& pngData)

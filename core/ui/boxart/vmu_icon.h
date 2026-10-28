@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 The Hollycast Authors
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Hollycast.
 
@@ -27,6 +28,5 @@ struct GameMedia;
 bool cacheVmuIconFromFlash(const std::string& gameId, const std::string& gameTitle, const void *data, size_t size);
 void markLibraryGameBooted(const std::string& gameId, const std::string& gamePath);
 time_t getLibraryGameLastBooted(const GameMedia& media, const std::string& gameId);
-time_t getLibraryGameLastBootedForPath(const std::string& path);
 std::string getCachedVmuIconPath(const GameMedia& media, const std::string& gameId, bool animate = false, double animationClock = 0.0);
 void clearVmuIconLookups();

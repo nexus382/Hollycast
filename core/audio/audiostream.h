@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "types.h"
 
@@ -73,8 +74,8 @@ constexpr u32 SAMPLE_COUNT = 512;	// AudioBackend::push() is always called with 
 class RingBuffer
 {
 	std::vector<u8> buffer;
-	std::atomic_int readCursor { 0 };
-	std::atomic_int writeCursor { 0 };
+	alignas(64) std::atomic_int readCursor { 0 };
+	alignas(64) std::atomic_int writeCursor { 0 };
 
 	u32 readSize() {
 		return (u32)((writeCursor - readCursor + buffer.size()) % buffer.size());

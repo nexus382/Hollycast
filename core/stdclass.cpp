@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "types.h"
 #include "stdclass.h"
 #include "oslib/directory.h"
@@ -267,5 +268,17 @@ std::string timeToISO8601(time_t time)
 
 std::string timeToShortDateTimeString(time_t time) {
 	return i18n::formatShortDateTime(time);
+}
+
+MD5Sum& MD5Sum::add(hostfs::File *file)
+{
+	if (file == nullptr)
+		return *this;
+	file->seek(0, SEEK_SET);
+	char buf[4096];
+	size_t len;
+	while ((len = file->read(buf, 1, sizeof(buf))) > 0)
+		MD5_Update(&ctx, buf, (unsigned long)len);
+	return *this;
 }
 

@@ -78,6 +78,10 @@ using namespace i18n;
 #include <array>
 #include <cctype>
 #include <utility>
+#include <atomic>
+#include <unordered_map>
+#include <cmath>
+#include <limits>
 
 bool game_started;
 
@@ -86,11 +90,14 @@ std::unique_ptr<ImGuiDriver> imguiDriver;
 static bool styleReloadRequested;
 
 static bool inited = false;
+static bool launchScreenPending = true;
 static SetupChecklistLifecycle setupChecklist;
 GuiState gui_state = GuiState::Main;
 static bool commandLineStart;
 static library::LaunchMode libraryLaunchMode = library::LaunchMode::Default;
-static bool libraryAutosaveCacheInvalidated = false;
+static std::string libraryResumeStatePath;
+// Android storage callbacks can invalidate this cache off the render thread.
+static std::atomic<bool> librarySavestateCacheInvalidated{false};
 std::string launchOnExitUri;
 static u32 mouseButtons;
 static int mouseX, mouseY;
@@ -179,6 +186,7 @@ void gui_init()
 	if (inited)
 		return;
 	inited = true;
+	launchScreenPending = true;
 
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
@@ -538,7 +546,8 @@ void gui_start_game(const std::string& path)
 			&& gui_state != GuiState::Pause)
 		return;
 	libraryLaunchMode = library::LaunchMode::Default;
-	libraryAutosaveCacheInvalidated = true;
+	libraryResumeStatePath.clear();
+	librarySavestateCacheInvalidated = true;
 	setupChecklist.gameLaunchStarted(config::loadBool("hollycast", "SetupChecklistPending", false), [](bool pending) {
 		config::saveBool("hollycast", "SetupChecklistPending", pending);
 	});
@@ -556,20 +565,24 @@ void gui_start_game(const std::string& path)
 	gameLoader.load(path);
 }
 
-static void gui_start_library_game(const std::string& path, bool resume)
+static void gui_start_library_game(const std::string& path, bool resume, const std::string& statePath)
 {
 	const LockGuard lock(guiMutex);
 	if (gui_state != GuiState::Main)
 		return;
 	gui_start_game(path);
 	if (gui_state == GuiState::Loading)
+	{
 		libraryLaunchMode = resume ? library::LaunchMode::Resume : library::LaunchMode::Fresh;
+		libraryResumeStatePath = statePath;
+	}
 }
 
 void gui_stop_game(const std::string& message, bool allowAutoSave)
 {
 	const LockGuard lock(guiMutex);
 	libraryLaunchMode = library::LaunchMode::Default;
+	libraryResumeStatePath.clear();
 	showExitSaveDialog = false;
 	showAutoLoadDialog = false;
 	if (!commandLineStart)
@@ -676,16 +689,23 @@ void gui_request_initial_auto_load()
 {
 	// A library action applies to this boot only, never the saved auto-load preference.
 	const auto launchMode = std::exchange(libraryLaunchMode, library::LaunchMode::Default);
-	const int autoSaveSlot = dc_getAutoSaveSlot();
+	const std::string resumePath = std::exchange(libraryResumeStatePath, std::string{});
 	const bool stateAllowed = dc_savestateAllowed() && !settings.raHardcoreMode;
-	const bool stateAvailable = stateAllowed && dc_getStateCreationDate(autoSaveSlot) != 0;
-	if (launchMode == library::LaunchMode::Resume && !stateAvailable)
+	if (launchMode == library::LaunchMode::Resume)
 	{
-		gui_stop_game("", false);
-		gui_error(stateAllowed ? T("This auto-save is no longer available. Choose Start Fresh to play.")
-			: T("Auto-saves cannot be resumed in the current mode. Choose Start Fresh to play."));
+		if (!stateAllowed || !dc_loadstateForPath(resumePath))
+		{
+			// A rejected or failed Resume must not overwrite the user's state with a fresh boot.
+			gui_stop_game("", false);
+			gui_error(stateAllowed ? T("The selected save state could not be loaded. Choose Start Fresh to play.")
+				: T("Save states cannot be resumed in the current mode. Choose Start Fresh to play."));
+			return;
+		}
+		gui_setState(GuiState::Closed);
 		return;
 	}
+	const int autoSaveSlot = dc_getAutoSaveSlot();
+	const bool stateAvailable = stateAllowed && dc_getStateCreationDate(autoSaveSlot) != 0;
 	const auto action = library::initialAutoLoadAction(launchMode,
 		stateAvailable,
 		stateAllowed, config::AutoLoadState);
@@ -2153,8 +2173,7 @@ static bool drawLibraryFavouriteButton(const GameMedia& game, bool coverOverlay 
 {
 	if (gui_state == GuiState::SelectDisk || game.device || game.path.empty())
 		return false;
-	std::vector<std::string> favourites = config::LibraryFavourites.get();
-	const bool favourite = library::isFavourite(game.path, favourites);
+	const bool favourite = library::isFavourite(game.path, config::LibraryFavourites.get());
 	const char *label = favourite ? T("Remove from favourites") : T("Add to favourites");
 	const ImVec4 favouriteColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
 	if (coverOverlay)
@@ -2186,6 +2205,7 @@ static bool drawLibraryFavouriteButton(const GameMedia& game, bool coverOverlay 
 	}
 	if (!pressed)
 		return false;
+	std::vector<std::string> favourites = config::LibraryFavourites.get();
 	library::setFavourite(game.path, !favourite, favourites);
 	config::LibraryFavourites.set(favourites);
 	config::LibraryFavourites.save();
@@ -2230,52 +2250,43 @@ static bool drawLibraryCoverButton(ImguiTexture& texture, const std::string& too
 
 static void startLibraryGame(const GameMedia& game, const GameBoxart& art, bool resume)
 {
-	libraryAutosaveCacheInvalidated = true;
+	librarySavestateCacheInvalidated = true;
+	// Recheck on activation: another save may have been written since the card was rendered.
+	const SavestateInfo state = resume ? dc_getLatestStateForGame(game.path) : SavestateInfo{};
+	if (resume && state.path.empty())
+	{
+		gui_error(T("No save state is available for this game. Choose Start Fresh to play."));
+		return;
+	}
 	settings.content.title = art.name;
 	if (settings.content.title.empty() || settings.content.title == game.fileName)
 		settings.content.title = get_file_basename(game.fileName);
 	const std::string path = game.path;
 	scanner.get_mutex().unlock();
-	gui_start_library_game(path, resume);
+	gui_start_library_game(path, resume, state.path);
 	scanner.get_mutex().lock();
 }
 
-struct LibraryAutosaveInfo
-{
-	std::string path;
-	time_t modified = 0;
-	bool exists = false;
-};
-
-static std::vector<std::pair<std::string, LibraryAutosaveInfo>> libraryAutosaveCache;
+static std::unordered_map<std::string, SavestateInfo> librarySavestateCache;
 static bool libraryStateThumbnailCacheInvalidated = false;
 
-static LibraryAutosaveInfo getLibraryAutosaveInfo(const GameMedia& game, const GameBoxart& art)
+static const SavestateInfo& getLibrarySavestateInfo(const GameMedia& game)
 {
 	static std::vector<std::string> cachedSavestatePaths;
-	if (libraryAutosaveCacheInvalidated || cachedSavestatePaths != config::SavestatePath.get())
+	static std::string cachedDataPath;
+	const std::string dataPath = get_writable_data_path("");
+	if (librarySavestateCacheInvalidated.exchange(false) || cachedSavestatePaths != config::SavestatePath.get()
+			|| cachedDataPath != dataPath)
 	{
 		cachedSavestatePaths = config::SavestatePath.get();
-		libraryAutosaveCache.clear();
+		cachedDataPath = dataPath;
+		librarySavestateCache.clear();
 		libraryStateThumbnailCacheInvalidated = true;
-		libraryAutosaveCacheInvalidated = false;
 	}
-	auto cached = std::find_if(libraryAutosaveCache.begin(), libraryAutosaveCache.end(), [&game](const auto& entry) { return entry.first == game.path; });
-	if (cached != libraryAutosaveCache.end())
+	auto cached = librarySavestateCache.find(game.path);
+	if (cached != librarySavestateCache.end())
 		return cached->second;
-	const std::string statePath = hostfs::getSavestatePathForGame(game.path, art.uniqueId, dc_getAutoSaveSlot());
-	LibraryAutosaveInfo info;
-	info.path = statePath;
-	if (!statePath.empty())
-		info.modified = dc_getStateCreationDateForPath(statePath);
-	info.exists = info.modified != 0;
-	libraryAutosaveCache.emplace_back(game.path, info);
-	return info;
-}
-
-static bool libraryGameHasAutosave(const GameMedia& game, const GameBoxart& art)
-{
-	return getLibraryAutosaveInfo(game, art).exists;
+	return librarySavestateCache.emplace(game.path, dc_getLatestStateForGame(game.path)).first->second;
 }
 
 static bool libraryResumeRestricted()
@@ -2296,7 +2307,7 @@ static void drawLibraryResumeRestrictionTooltip()
 class LibraryStateThumbnail : public ImguiTexture
 {
 public:
-	LibraryStateThumbnail(const LibraryAutosaveInfo& state) : path(state.path), modified(state.modified) {}
+	LibraryStateThumbnail(const SavestateInfo& state) : path(state.path), modified(state.creationDate) {}
 
 	ImTextureID getId() override
 	{
@@ -2316,13 +2327,11 @@ public:
 		{
 			if (found->modified == modified)
 			{
+				// Keep failed previews cached; retry only when a previously uploaded texture was lost.
+				if (found->id == ImTextureID{})
+					return {};
+				found->id = imguiDriver->getTexture(textureName);
 				if (found->id != ImTextureID{})
-				{
-					found->id = imguiDriver->getTexture(textureName);
-					if (found->id == ImTextureID{})
-						found->attempted = false;
-				}
-				if (found->id != ImTextureID{} || found->attempted)
 					return found->id;
 				cache.erase(found);
 			}
@@ -2338,7 +2347,7 @@ public:
 			cache.erase(cache.begin());
 		}
 
-		Entry entry { path, modified, {}, true };
+		Entry entry { path, modified, {} };
 		std::vector<u8> pngData;
 		dc_getStateScreenshotForPath(path, pngData);
 		int width = 0, height = 0, channels = 0;
@@ -2364,10 +2373,23 @@ public:
 	}
 
 private:
-	struct Entry { std::string path; time_t modified; ImTextureID id; bool attempted; };
+	struct Entry { std::string path; time_t modified; ImTextureID id; };
 	std::string path;
 	time_t modified;
 };
+
+static void drawLibraryStatePreview(const SavestateInfo& state)
+{
+	if (!ImGui::IsItemHovered())
+		return;
+	LibraryStateThumbnail texture(state);
+	if (texture.getId() != ImTextureID{})
+	{
+		ImGui::BeginTooltip();
+		texture.draw(ImVec2(uiScaled(240.0f), uiScaled(135.0f)));
+		ImGui::EndTooltip();
+	}
+}
 
 static void centerTableCellCursor(const ImVec2& contentSize, float rowContentHeight, bool centerX)
 {
@@ -2503,7 +2525,10 @@ static void gui_display_content()
 			if (selected)
 				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
 			if (ImGui::Button(viewLabels[i]))
+			{
 				libraryView = viewValues[i];
+				librarySavestateCacheInvalidated = true;
+			}
 			if (selected)
 				ImGui::PopStyleColor();
 		}
@@ -2678,9 +2703,9 @@ static void gui_display_content()
 		const float regionColumnWidth = calcLibraryColumnWidth(regionLabel, "JP/US/EU");
 		const char* formatLabel = T("Format");
 		const char* timePlayedLabel = T("Time Played");
-		const char* lastBootedLabel = T("Last Booted");
+		const char* dateLabel = showContinueActions ? T("Latest Save") : T("Last Booted");
 		const float formatColumnWidth = calcLibraryColumnWidth(formatLabel, "Unknown");
-		const float lastBootedColumnWidth = calcLibraryTextWidth("12/31/2026 12:59:59 PM")
+		const float dateColumnWidth = calcLibraryTextWidth("12/31/2026 12:59:59 PM")
 				+ ImGui::GetStyle().CellPadding.x * 2.0f;
 		const float timePlayedColumnWidth = std::max(calcLibraryTextWidth(T("Time Played")), calcLibraryTextWidth("999h 59m"))
 				+ ImGui::GetStyle().CellPadding.x * 2.0f;
@@ -2701,7 +2726,7 @@ static void gui_display_content()
 			for (const GameMedia& game : gameList)
 				libraryEntries.push_back({ game.path, game.name,
 						visibleView == library::View::ContinuePlaying && !game.device
-								? getLibraryGameLastBootedForPath(game.path) : 0, game.device });
+								? getLibrarySavestateInfo(game).creationDate : 0, game.device });
 			const std::vector<size_t> visibleGames = library::selectGames(libraryEntries, visibleView,
 					config::LibraryFavourites.get());
 			libraryViewEmpty = visibleGames.empty();
@@ -2709,8 +2734,7 @@ static void gui_display_content()
 			if (useListStyle)
 			{
 				ImGui::PushFont(largeFont, tableTextSize);
-				const int columnCount = gui_state == GuiState::SelectDisk ? 8
-						: visibleView == library::View::ContinuePlaying ? 11 : 9;
+				const int columnCount = gui_state == GuiState::SelectDisk ? 8 : showContinueActions ? 11 : 9;
 				if (ImGui::BeginTable("libraryTable", columnCount, ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_Borders
 						| ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit
 						| ImGuiTableFlags_ScrollY, ImVec2(0.0f, 0.0f)))
@@ -2721,11 +2745,11 @@ static void gui_display_content()
 					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed, regionColumnWidth);
 					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed, formatColumnWidth);
 					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed, timePlayedColumnWidth);
-					ImGui::TableSetupColumn(lastBootedLabel, ImGuiTableColumnFlags_WidthFixed, lastBootedColumnWidth);
+					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed, dateColumnWidth);
 					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed, sizeColumnWidth);
 					if (gui_state != GuiState::SelectDisk)
 						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, uiScaled(48.0f));
-					if (visibleView == library::View::ContinuePlaying)
+					if (showContinueActions)
 					{
 						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
 						ImGui::TableSetupColumn(T("Start Fresh"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Start Fresh")) + ImGui::GetStyle().CellPadding.x * 2.0f);
@@ -2733,7 +2757,7 @@ static void gui_display_content()
 					ImGui::TableSetupScrollFreeze(0, 1);
 					ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
 					const char *const libraryColumnHeaders[] = {
-						iconLabel, productIdLabel, titleLabel, regionLabel, formatLabel, timePlayedLabel, lastBootedLabel, sizeLabel,
+						iconLabel, productIdLabel, titleLabel, regionLabel, formatLabel, timePlayedLabel, dateLabel, sizeLabel,
 						T("Favourite"), T("Resume"), T("Start Fresh")
 					};
 					for (int column = 0; column < columnCount; ++column)
@@ -2815,9 +2839,10 @@ static void gui_display_content()
 								? formatLibraryPlaytime(*art.playTimeSeconds) : std::string();
 						textTableCellCentered(timePlayed, tableRowContentHeight);
 						ImGui::TableSetColumnIndex(6);
-						const time_t lastBootedTime = getLibraryGameLastBooted(game, art.uniqueId);
-						const std::string lastBooted = lastBootedTime == 0 ? std::string() : formatShortDateTime(lastBootedTime);
-						textTableCellCentered(lastBooted, tableRowContentHeight);
+						const time_t date = showContinueActions ? getLibrarySavestateInfo(game).creationDate
+								: getLibraryGameLastBooted(game, art.uniqueId);
+						const std::string dateText = date == 0 ? std::string() : formatShortDateTime(date);
+						textTableCellCentered(dateText, tableRowContentHeight);
 						ImGui::TableSetColumnIndex(7);
 						const std::string size = formatLibrarySize(game.size);
 						textTableCellCentered(size, tableRowContentHeight);
@@ -2827,41 +2852,34 @@ static void gui_display_content()
 							ImGui::TableSetColumnIndex(8);
 							favouritePressed = drawLibraryFavouriteButton(game);
 						}
-						bool libraryActionPressed = false;
-						if (visibleView == library::View::ContinuePlaying)
+						if (showContinueActions && !game.device && !game.path.empty())
 						{
-							const bool hasAutosave = libraryGameHasAutosave(game, art);
+							const SavestateInfo& stateInfo = getLibrarySavestateInfo(game);
 							ImGui::TableSetColumnIndex(9);
-							if (hasAutosave)
+							const bool restricted = libraryResumeRestricted();
+							if (restricted) ImGui::BeginDisabled();
+							const bool resumePressed = ImGui::Button((std::string(T("Resume")) + "##resume_" + game.path).c_str());
+							if (restricted)
 							{
-								const bool restricted = libraryResumeRestricted();
-								if (restricted) ImGui::BeginDisabled();
-								libraryActionPressed = ImGui::Button((std::string(T("Resume")) + "##resume_" + game.path).c_str());
-								if (restricted)
-								{
-									ImGui::EndDisabled();
-									drawLibraryResumeRestrictionTooltip();
-								}
+								ImGui::EndDisabled();
+								drawLibraryResumeRestrictionTooltip();
 							}
 							else
-								ImGui::TextUnformatted("—");
-							if (libraryActionPressed)
+								drawLibraryStatePreview(stateInfo);
+							if (resumePressed)
 							{
 								startLibraryGame(game, art, true);
 								return true;
 							}
 							ImGui::TableSetColumnIndex(10);
-							const char *startLabel = hasAutosave ? T("Start Fresh") : T("Play");
-							const bool freshPressed = ImGui::Button((std::string(startLabel) + "##fresh_" + game.path).c_str());
-							if (freshPressed)
+							if (ImGui::Button((std::string(T("Start Fresh")) + "##fresh_" + game.path).c_str()))
 							{
 								startLibraryGame(game, art, false);
 								return true;
 							}
-							libraryActionPressed = libraryActionPressed || freshPressed;
 						}
 
-						if (rowPressed && !favouritePressed && !libraryActionPressed)
+						if (rowPressed && !favouritePressed)
 						{
 							if (gui_state == GuiState::SelectDisk)
 							{
@@ -2874,7 +2892,7 @@ static void gui_display_content()
 							}
 							else
 							{
-								libraryAutosaveCacheInvalidated = true;
+								librarySavestateCacheInvalidated = true;
 								settings.content.title = art.name;
 								if (settings.content.title.empty() || settings.content.title == game.fileName)
 									settings.content.title = get_file_basename(game.fileName);
@@ -2950,15 +2968,6 @@ static void gui_display_content()
 							gameName = art.name;
 						passFilter = passFilter || filter.PassFilter(gameName.c_str());
 					}
-					LibraryAutosaveInfo autosaveInfo;
-					bool hasAutosave = false;
-					if (visibleView == library::View::ContinuePlaying && !game.device)
-					{
-						if (art.uniqueId.empty())
-							art = boxart.getBoxart(game);
-						autosaveInfo = getLibraryAutosaveInfo(game, art);
-						hasAutosave = autosaveInfo.exists;
-					}
 					if (passFilter)
 					{
 						displayedGameCount++;
@@ -2974,9 +2983,11 @@ static void gui_display_content()
 							counter++;
 							ImGui::BeginGroup();
 							ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-							if (ImGui::BeginChild("continueCard", ImVec2(responsiveBoxSize, 0.0f), ImGuiChildFlags_AutoResizeY,
+							if (ImGui::BeginChild("libraryCard", ImVec2(responsiveBoxSize, 0.0f), ImGuiChildFlags_AutoResizeY,
 									ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 							{
+								// Preview the same newest state used to include and order this card.
+								const SavestateInfo& stateInfo = getLibrarySavestateInfo(game);
 								ImguiFileTexture artTexture(art.boxartPath);
 								pressed = drawLibraryCoverButton(artTexture, game.name, responsiveBoxVec2, gameName, gridTextSize,
 										game, &art, favouritePressed);
@@ -2988,57 +2999,41 @@ static void gui_display_content()
 								ImGui::TextWrapped("%s", gameName.c_str());
 								ImGui::PopTextWrapPos();
 								ImGui::PopFont();
-								const time_t lastPlayed = getLibraryGameLastBootedForPath(game.path);
-								if (lastPlayed != 0)
+								const time_t savedAt = stateInfo.creationDate;
+								if (savedAt != 0)
 								{
-									const std::string lastPlayedLabel = formatShortDateTime(lastPlayed);
+									const std::string savedAtLabel = formatShortDateTime(savedAt);
 									ImGui::PushFont(nullptr, std::clamp(uiScaled(12.0f * libraryTextScaleFactor), uiScaled(12.0f), uiScaled(18.0f)));
 									ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + responsiveBoxSize);
-									ImGui::TextDisabled("%s: %s", T("Last played"), lastPlayedLabel.c_str());
+									ImGui::TextDisabled("%s: %s", T("Saved"), savedAtLabel.c_str());
 									ImGui::PopTextWrapPos();
 									ImGui::PopFont();
 								}
 
 								const float actionGap = ImGui::GetStyle().ItemSpacing.x;
 								const float framePad = ImGui::GetStyle().FramePadding.x * 2.0f;
-								const float resumeMinWidth = ImGui::CalcTextSize(T("Resume")).x + framePad;
-								const char *startLabel = hasAutosave ? T("Start Fresh") : T("Play");
-								const float startMinWidth = ImGui::CalcTextSize(startLabel).x + framePad;
-								const float requiredWidth = startMinWidth + (hasAutosave ? actionGap + resumeMinWidth : 0.0f);
+								const float requiredWidth = ImGui::CalcTextSize(T("Resume")).x
+										+ ImGui::CalcTextSize(T("Start Fresh")).x + framePad * 2.0f + actionGap;
 								const bool sideBySide = responsiveBoxSize >= requiredWidth;
-								const float actionWidth = sideBySide
-										? (responsiveBoxSize - (hasAutosave ? actionGap : 0.0f)) / (hasAutosave ? 2.0f : 1.0f)
-										: responsiveBoxSize;
-								if (hasAutosave)
+								const float actionWidth = sideBySide ? (responsiveBoxSize - actionGap) / 2.0f : responsiveBoxSize;
+								const bool restricted = libraryResumeRestricted();
+								if (restricted) ImGui::BeginDisabled();
+								if (ImGui::Button((std::string(T("Resume")) + "##resume_" + game.path).c_str(), ImVec2(actionWidth, 0.0f)))
 								{
-									const bool restricted = libraryResumeRestricted();
-									if (restricted) ImGui::BeginDisabled();
-									const bool resumePressed = ImGui::Button((std::string(T("Resume")) + "##resume_" + game.path).c_str(), ImVec2(actionWidth, 0.0f));
-									if (restricted)
-									{
-										ImGui::EndDisabled();
-										drawLibraryResumeRestrictionTooltip();
-									}
-									if (resumePressed)
-									{
-										resumeRequested = true;
-										libraryActionPressed = true;
-									}
-									if (ImGui::IsItemHovered() && !restricted)
-									{
-										LibraryStateThumbnail stateTexture(autosaveInfo);
-										if (stateTexture.getId() != ImTextureID{})
-										{
-											ImGui::BeginTooltip();
-											stateTexture.draw(ImVec2(uiScaled(240.0f), uiScaled(135.0f)));
-											ImGui::EndTooltip();
-										}
-									}
+									resumeRequested = true;
+									libraryActionPressed = true;
 								}
-								if (hasAutosave && sideBySide)
+								if (restricted)
+								{
+									ImGui::EndDisabled();
+									drawLibraryResumeRestrictionTooltip();
+								}
+								else
+									drawLibraryStatePreview(stateInfo);
+								if (sideBySide)
 									ImGui::SameLine(0.0f, actionGap);
 								ImguiStyleColor secondaryAction(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_FrameBg]);
-								if (ImGui::Button((std::string(startLabel) + "##fresh_" + game.path).c_str(), ImVec2(actionWidth, 0.0f)))
+								if (ImGui::Button((std::string(T("Start Fresh")) + "##fresh_" + game.path).c_str(), ImVec2(actionWidth, 0.0f)))
 								{
 									resumeRequested = false;
 									libraryActionPressed = true;
@@ -3086,7 +3081,7 @@ static void gui_display_content()
 							startLibraryGame(game, art, resumeRequested);
 							break;
 						}
-						if (pressed && !favouritePressed && !libraryActionPressed)
+						if (pressed && !favouritePressed)
 						{
 							if (!config::BoxartDisplayMode)
 								art = boxart.getBoxart(game);
@@ -3104,7 +3099,7 @@ static void gui_display_content()
 							}
 							else
 							{
-								libraryAutosaveCacheInvalidated = true;
+								librarySavestateCacheInvalidated = true;
 								std::string gamePath(game.path);
 								scanner.get_mutex().unlock();
 								gui_start_game(gamePath);
@@ -3145,10 +3140,10 @@ static void gui_display_content()
 		if (!gameListEmpty && (libraryViewEmpty || noFilteredResults) && gui_state != GuiState::SelectDisk)
 		{
 			const char *label = filter.IsActive() ? T("No games match this filter") : libraryView == library::View::ContinuePlaying
-					? T("No games to continue yet") : libraryView == library::View::Favourites
+					? T("No saved games yet") : libraryView == library::View::Favourites
 					? T("No favourites yet") : T("No games match this filter");
 			const char *detail = filter.IsActive() ? "" : libraryView == library::View::ContinuePlaying
-					? T("Play a game from All Games and it will show up here.") : libraryView == library::View::Favourites
+					? T("Games with a save state or autosave will appear here.") : libraryView == library::View::Favourites
 					? T("Use the star on a game to add it to Favourites.") : "";
 			ImGui::PushFont(nullptr, uiLargeFontSize());
 			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + uiScaled(24.0f));
@@ -3517,6 +3512,180 @@ static bool checkUWPProtocolActivation()
 }
 #endif
 
+static bool gui_display_launch_screen()
+{
+	static std::chrono::steady_clock::time_point started;
+	static bool startedAnimation = false;
+	static constexpr const char *textureName = "picture/hollycast-launch.png";
+#ifdef TEST_AUTOMATION
+	launchScreenPending = false;
+#endif
+	if (!launchScreenPending)
+		return false;
+
+	// Launching a game directly should not be delayed by the library intro.
+	if (!settings.content.path.empty() || settings.naomi.slave || !error_msg.empty()
+			|| (gui_state != GuiState::Main && gui_state != GuiState::Onboarding))
+	{
+		if (startedAnimation)
+			imguiDriver->deleteTexture(textureName);
+		launchScreenPending = false;
+		startedAnimation = false;
+		return false;
+	}
+
+	if (!startedAnimation)
+	{
+		started = std::chrono::steady_clock::now();
+		startedAnimation = true;
+	}
+	const float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - started).count();
+	constexpr float fadeStart = 2.05f;
+	constexpr float duration = 2.55f;
+	if (elapsed >= duration)
+	{
+		launchScreenPending = false;
+		startedAnimation = false;
+		imguiDriver->deleteTexture(textureName);
+		return false;
+	}
+
+	ImTextureID logo = imguiDriver->getTexture(textureName);
+	if (logo == ImTextureID())
+	{
+		size_t size = 0;
+		std::unique_ptr<u8[]> data = resource::load(textureName, size);
+		int width, height, channels;
+		stbi_set_flip_vertically_on_load_thread(0);
+		u8 *pixels = data && size <= static_cast<size_t>(std::numeric_limits<int>::max())
+				? stbi_load_from_memory(data.get(), static_cast<int>(size), &width, &height, &channels, STBI_rgb_alpha)
+				: nullptr;
+		if (pixels == nullptr)
+		{
+			launchScreenPending = false;
+			startedAnimation = false;
+			return false;
+		}
+		try {
+			logo = imguiDriver->updateTexture(textureName, pixels, width, height, false);
+		} catch (...) {
+			stbi_image_free(pixels);
+			throw;
+		}
+		stbi_image_free(pixels);
+		if (logo == ImTextureID())
+		{
+			// Vulkan defers uploads until its first frame has finished. Retry while
+			// the intro is pending; the duration above also bounds persistent failures.
+			return true;
+		}
+	}
+
+	auto smooth = [](float value) {
+		value = std::clamp(value, 0.f, 1.f);
+		return value * value * (3.f - 2.f * value);
+	};
+	const float emblemReveal = smooth(elapsed / .8f);
+	const float wordmarkReveal = smooth((elapsed - .38f) / .75f);
+	const float fade = 1.f - smooth((elapsed - fadeStart) / (duration - fadeStart));
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	ImDrawList *draw = ImGui::GetForegroundDrawList();
+	const int bgAlpha = static_cast<int>(255.f * fade);
+	draw->AddRectFilledMultiColor(ImVec2(0, 0), display, IM_COL32(9, 20, 30, bgAlpha),
+			IM_COL32(14, 26, 39, bgAlpha), IM_COL32(7, 13, 24, bgAlpha), IM_COL32(6, 19, 25, bgAlpha));
+
+	// The green spiral in the emblem becomes the centre of the whole sequence.
+	const float logoWidth = std::min(display.x * .82f, std::min(1000.f, display.y * 2.5f));
+	const float logoHeight = logoWidth * 226.f / 800.f;
+	const ImVec2 topLeft((display.x - logoWidth) * .5f, (display.y - logoHeight) * .5f);
+	const ImVec2 orbit(topLeft.x + logoWidth * .145f, topLeft.y + logoHeight * .43f);
+	const float unit = logoWidth / 800.f;
+	const float energy = smooth(elapsed / .55f) * fade;
+
+	// Layered transparent discs make a quiet pool of light, without an image asset.
+	for (int i = 12; i > 0; --i)
+	{
+		const float radius = unit * (72.f + i * 23.f);
+		draw->AddCircleFilled(orbit, radius, IM_COL32(28, 145, 116, static_cast<int>(2.f * energy)), 64);
+	}
+	constexpr float pi = 3.14159265f;
+	const float orbitAngle = elapsed * 1.15f - pi * .8f;
+	const float arcReveal = smooth(elapsed / .9f);
+	for (int i = 0; i < 3; ++i)
+	{
+		const float radius = unit * (112.f + 17.f * i);
+		const float start = orbitAngle + i * 1.65f;
+		draw->PathArcTo(orbit, radius, start, start + (1.25f - i * .22f) * arcReveal, 32);
+		draw->PathStroke(IM_COL32(85, 213, 166, static_cast<int>((70 - i * 16) * energy)), 0, std::max(1.f, unit));
+	}
+	const float sparkRadius = unit * 112.f;
+	const float sparkAngle = orbitAngle + 1.25f * arcReveal;
+	const ImVec2 spark(orbit.x + std::cos(sparkAngle) * sparkRadius, orbit.y + std::sin(sparkAngle) * sparkRadius);
+	for (int i = 5; i > 0; --i)
+	{
+		const float angle = sparkAngle - i * .065f;
+		const ImVec2 trail(orbit.x + std::cos(angle) * sparkRadius, orbit.y + std::sin(angle) * sparkRadius);
+		draw->AddCircleFilled(trail, unit * (2.2f - i * .25f),
+				IM_COL32(118, 255, 194, static_cast<int>((55 - i * 8) * energy)), 12);
+	}
+	draw->AddCircleFilled(spark, 4.f * unit, IM_COL32(118, 255, 194, static_cast<int>(95.f * energy)), 16);
+	draw->AddCircleFilled(spark, 1.8f * unit, IM_COL32(224, 255, 235, static_cast<int>(220.f * energy)), 12);
+
+	// Four colored lights spiral into the matching buttons in the emblem.
+	const int colors[4][3] = {{30, 235, 186}, {255, 197, 61}, {48, 145, 255}, {255, 78, 64}};
+	const ImVec2 buttonCenters[4] = {
+		ImVec2(topLeft.x + 213.f * unit, topLeft.y + 136.f * unit),
+		ImVec2(topLeft.x + 183.f * unit, topLeft.y + 161.f * unit),
+		ImVec2(topLeft.x + 237.f * unit, topLeft.y + 166.f * unit),
+		ImVec2(topLeft.x + 207.f * unit, topLeft.y + 187.f * unit)
+	};
+	auto particlePosition = [&](int i, float time) {
+		const float converge = smooth((time - .08f - i * .06f) / 1.f);
+		const float angle = i * pi * .5f - pi * .5f + time * 2.2f;
+		const float radius = unit * (210.f - 40.f * converge);
+		const ImVec2 start(orbit.x + std::cos(angle) * radius, orbit.y + std::sin(angle) * radius);
+		return ImVec2(start.x + (buttonCenters[i].x - start.x) * converge,
+				start.y + (buttonCenters[i].y - start.y) * converge);
+	};
+	for (int i = 0; i < 4; ++i)
+	{
+		const float particlesAlpha = smooth(elapsed / .22f)
+				* (1.f - smooth((elapsed - .92f - i * .06f) / .3f)) * fade;
+		for (int tail = 4; tail >= 0; --tail)
+		{
+			const ImVec2 tailPoint = particlePosition(i, std::max(0.f, elapsed - tail * .035f));
+			const int opacity = static_cast<int>((tail == 0 ? 220.f : 55.f - tail * 10.f) * particlesAlpha);
+			draw->AddCircleFilled(tailPoint, unit * (tail == 0 ? 3.5f : 2.f),
+					IM_COL32(colors[i][0], colors[i][1], colors[i][2], opacity), 12);
+		}
+	}
+
+	// Reveal the emblem first, then let the wordmark settle alongside it.
+	const float split = .375f;
+	const float emblemScale = .88f + .12f * emblemReveal;
+	const ImVec2 emblemCenter(topLeft.x + logoWidth * split * .5f, topLeft.y + logoHeight * .5f);
+	const ImVec2 emblemHalf(logoWidth * split * .5f * emblemScale, logoHeight * .5f * emblemScale);
+	draw->AddImage(logo, ImVec2(emblemCenter.x - emblemHalf.x, emblemCenter.y - emblemHalf.y),
+			ImVec2(emblemCenter.x + emblemHalf.x, emblemCenter.y + emblemHalf.y), ImVec2(0, 0), ImVec2(split, 1),
+			IM_COL32(255, 255, 255, static_cast<int>(255.f * emblemReveal * fade)));
+	const float wordOffset = (1.f - wordmarkReveal) * 28.f * unit;
+	draw->AddImage(logo, ImVec2(topLeft.x + logoWidth * split - wordOffset, topLeft.y),
+			ImVec2(topLeft.x + logoWidth - wordOffset, topLeft.y + logoHeight), ImVec2(split, 0), ImVec2(1, 1),
+			IM_COL32(255, 255, 255, static_cast<int>(255.f * wordmarkReveal * fade)));
+	for (int i = 0; i < 4; ++i)
+	{
+		const float impact = smooth((elapsed - .94f - i * .06f) / .12f)
+				* (1.f - smooth((elapsed - 1.06f - i * .06f) / .28f)) * fade;
+		draw->AddCircleFilled(buttonCenters[i], 13.f * unit,
+				IM_COL32(colors[i][0], colors[i][1], colors[i][2], static_cast<int>(45.f * impact)), 24);
+		draw->AddCircleFilled(buttonCenters[i], 3.f * unit,
+				IM_COL32(255, 255, 255, static_cast<int>(150.f * impact)), 16);
+	}
+
+	// In the last half-second, render the real UI underneath the fading artwork.
+	return elapsed < fadeStart;
+}
+
 static void gui_display_loadscreen()
 {
 	drawBoxartBackground();
@@ -3642,21 +3811,33 @@ void gui_display_ui()
 		ImguiFileTexture::resetLoadCount();
 	};
 
+#ifdef TARGET_UWP
+	// Resolve protocol-launched games before the intro can defer activation.
+	const bool protocolActivated = gui_state == GuiState::Main && checkUWPProtocolActivation();
+#endif
+
+	if (gui_display_launch_screen())
+	{
+		finishFrame();
+		return;
+	}
+
 	// Render menu bar BEFORE any early returns.
 	// Hide it for the full-screen GameInfo screen on Android.
 	if (gui_state != GuiState::GameInfo)
 		GuiMenu::renderMainMenuBar();
 
+#ifdef TARGET_UWP
+	if (protocolActivated)
+	{
+		finishFrame();
+		return;
+	}
+#endif
+
 	// Check for auto-start after menu bar is rendered
 	if (gui_state == GuiState::Main)
 	{
-#ifdef TARGET_UWP
-		if (checkUWPProtocolActivation())
-		{
-			finishFrame();
-			return;
-		}
-#endif
 		if (!settings.content.path.empty() || settings.naomi.slave)
 		{
 #ifndef __ANDROID__
@@ -3901,6 +4082,7 @@ void fatal_error(const char* text, ...)
 extern bool subfolders_read;
 
 void gui_refresh_files(bool invalidateArtwork) {
+	librarySavestateCacheInvalidated = true;
 	if (invalidateArtwork)
 		boxart.invalidateOfflineArtwork();
 	scanner.refresh();

@@ -46,33 +46,65 @@ bool start()
 	return service->start();
 }
 
+bool startIfNeeded(bool receiverEnabled)
+{
+	if (!receiverEnabled)
+		return false;
+	if (service != nullptr && settings.network.online)
+		return true;
+	return start();
+}
+
 void stop()
 {
 	if (service != nullptr)
 		service->stop();
 }
 
-void setCustomService(Service *service) {
+
+void setCustomService(Service *service)
+{
+	if (service == nullptr && net::modbba::service == customService)
+		net::modbba::service = nullptr;
+	else if (service != nullptr)
+		net::modbba::service = service;
 	customService = service;
-	net::modbba::service = service;
 }
 
 void writeModem(u8 b) {
+	if (service == nullptr)
+		start();
 	verify(service != nullptr);
 	service->writeModem(b);
 }
 int readModem() {
+	if (service == nullptr)
+		start();
 	verify(service != nullptr);
 	return service->readModem();
 }
 int modemAvailable() {
+	if (service == nullptr)
+		start();
 	verify(service != nullptr);
 	return service->modemAvailable();
 }
 
-void receiveEthFrame(const u8 *frame, u32 size) {
-	start();
+void receiveEthFrame(const u8 *frame, u32 size)
+{
+	// The guest's first transmitted frame is the point at which BBA networking
+	// is requested. Polling for receive frames must remain passive.
+	if (service == nullptr || !settings.network.online)
+		start();
+	if (service == nullptr)
+		return;
 	service->receiveEthFrame(frame, size);
+}
+u32 sendEthFrame(u8 *frame)
+{
+	if (service == nullptr || !settings.network.online)
+		return 0;
+	return service->sendEthFrame(frame);
 }
 
 }

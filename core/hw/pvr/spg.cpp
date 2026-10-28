@@ -35,8 +35,8 @@ static u64 last_fps;
 constexpr int PIXEL_CLOCK = 27 * 1000 * 1000;
 static u32 Line_Cycles;
 static u32 Frame_Cycles;
-int render_end_schid;
-int vblank_schid;
+int render_end_schid = -1;
+int vblank_schid = -1;
 
 static std::array<double, 4> real_times;
 static std::array<u64, 4> cpu_cycles;
@@ -50,7 +50,7 @@ static u32 lightgun_hpos;
 static bool maple_int_pending;
 
 #ifdef LIBRETRO
-extern bool retro_refresh_av_info(double fps);
+extern void retro_setfps(double fps);
 #endif
 
 void CalculateSync()
@@ -72,7 +72,7 @@ void CalculateSync()
 	sh4_sched_request(vblank_schid, Line_Cycles);
 
 #ifdef LIBRETRO
-	retro_refresh_av_info((double)SH4_MAIN_CLOCK / ((double)Line_Cycles * (double)pvr_numscanlines));
+	retro_setfps((double)SH4_MAIN_CLOCK / ((double)Line_Cycles * (double)pvr_numscanlines));
 #endif
 }
 

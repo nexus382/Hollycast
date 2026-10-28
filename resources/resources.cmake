@@ -35,12 +35,17 @@ cmrc_add_resources(Hollycast-resources
 
 if(NOT LIBRETRO)
     cmrc_add_resources(Hollycast-resources
+            fonts/NotoSansCJK-Regular.ttc.zip
+            fonts/NotoSansCJK-LICENSE.txt
             fonts/Roboto-Medium.ttf.zip
             fonts/Roboto-Bold.ttf.zip
             fonts/Roboto-Regular.ttf.zip
             fonts/Jura-wght.ttf.zip
             fonts/EncodeSans-wdth-wght.ttf.zip
             fonts/fa-solid-900.ttf.zip)
+    cmrc_add_resources(Hollycast-resources
+            WHENCE resources
+            resources/picture/hollycast-launch.png)
     if(ANDROID OR IOS)
         cmrc_add_resources(Hollycast-resources
                 WHENCE resources

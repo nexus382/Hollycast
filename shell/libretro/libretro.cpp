@@ -23,6 +23,7 @@
 #include <sys/time.h>
 #endif
 #include <mutex>
+#include "libretro_helpers.h"
 
 #ifdef __SWITCH__
 #include <stdlib.h>
@@ -56,6 +57,8 @@
 #include "hw/sh4/sh4_sched.h"
 #include "keyboard_map.h"
 #include "hw/maple/maple_cfg.h"
+#include "hw/naomi/systemsp.h"
+#include "hw/pvr/elan.h"
 #include "hw/maple/maple_if.h"
 #include "hw/pvr/pvr_regs.h"
 #include "hw/pvr/Renderer_if.h"
@@ -186,6 +189,7 @@ static int maxFramebufferHeight;
 static float framebufferAspectRatio = 4.f / 3.f;
 static double fps_current;
 static double fps_spg;
+static PendingFps pending_fps_spg;
 
 float libretro_expected_audio_samples_per_run;
 unsigned libretro_vsync_swap_interval = 1;
@@ -442,6 +446,8 @@ void retro_deinit()
 	emu.term();
 #endif
 	libretro_supports_bitmasks = false;
+	led_state_cb = NULL;
+	memset(retro_led_state, 0, sizeof(retro_led_state));
 	categoriesSupported = false;
 	platformIsDreamcast = true;
 	platformIsArcade = false;
@@ -761,15 +767,18 @@ bool setAVInfo(retro_system_av_info& avinfo)
 	return true;
 }
 
-bool retro_refresh_av_info(double fps)
+void retro_setfps(double fps)
+{
+	if (fps > 0 && fps < 100)
+		pending_fps_spg.publish(fps);
+}
+
+static bool retro_refresh_av_info()
 {
 	retro_system_av_info avinfo;
 
 	if (first_run || game_data.empty())
 		return false;
-
-	if (fps > 0 && fps < 100)
-		fps_spg = fps;
 
 	if (setAVInfo(avinfo))
 	{
@@ -802,7 +811,7 @@ void retro_resize_renderer(int w, int h, float aspectRatio)
 	else
 	{
 		// Check if timing change is needed instead
-		if (retro_refresh_av_info(0))
+		if (retro_refresh_av_info())
 			return;
 
 		retro_game_geometry geometry;
@@ -1311,6 +1320,14 @@ void retro_run()
 	if (first_run)
 		emu.start();
 
+	// SPG timing is calculated on the emulation thread. Consume it here so
+	// fps_spg and frontend environment callbacks remain frontend-thread-only.
+	updatePendingFps(pending_fps_spg, fps_spg, [](double) {
+		retro_system_av_info avinfo;
+		if (setAVInfo(avinfo))
+			environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avinfo);
+	});
+
 	poll_cb();
 	os_UpdateInputState();
 	bool fastforward = false;
@@ -1385,6 +1402,9 @@ void retro_reset()
 	std::lock_guard<std::mutex> lock(mtx_serialization);
 
 	emu.unloadGame();
+	// unloadGame stops the emulation thread, but dc_reset may have queued one
+	// last timing update while shutting down the previous game.
+	resetPendingFps(pending_fps_spg, fps_spg);
 
 	config::ScreenStretching = 100;
 	loadGame();
@@ -2473,6 +2493,9 @@ void retro_unload_game()
 {
 	INFO_LOG(COMMON, "Hollycast unloading game");
 	emu.unloadGame();
+	// Clear timing only after the producer has stopped; unload/reset may
+	// calculate SPG timing as part of device teardown.
+	resetPendingFps(pending_fps_spg, fps_spg);
 	dreampotato::term();
 	game_data.clear();
 	disk_paths.clear();
@@ -2499,22 +2522,16 @@ size_t retro_get_memory_size(unsigned type)
 size_t retro_serialize_size()
 {
 	DEBUG_LOG(SAVESTATE, "retro_serialize_size");
-	std::lock_guard<std::mutex> lock(mtx_serialization);
-
-	if (!first_run)
-		try {
-			emu.stop();
-		} catch (const FlycastException& e) {
-			ERROR_LOG(COMMON, "%s", e.what());
-			return 0;
-		}
-
-	Serializer ser;
-	dc_serialize(ser);
-	if (!first_run)
-		emu.start();
-
-	return ser.size();
+	// A frontend may size its buffer once, but a state grows and shrinks with the
+	// devices plugged in and the frames being drawn. Report memory regions plus
+	// the allowance GGPO makes for everything else, including System SP media.
+	size_t size = settings.platform.ram_size + settings.platform.vram_size
+			+ settings.platform.aram_size;
+	if (settings.platform.isNaomi2())
+		size += elan::ERAM_SIZE;
+	if (settings.platform.isSystemSP() && systemsp::SystemSpCart::Instance != nullptr)
+		size += systemsp::SystemSpCart::Instance->getSerializedMediaSize();
+	return size + (settings.platform.isNaomi() || settings.platform.isSystemSP() ? 20_MB : 10_MB);
 }
 
 bool retro_serialize(void *data, size_t size)
@@ -2533,6 +2550,10 @@ bool retro_serialize(void *data, size_t size)
 	try {
 		Serializer ser(data, size);
 		dc_serialize(ser);
+		// serialize_size() intentionally includes frontend-safe headroom. Avoid
+		// exposing stale bytes from the frontend's larger buffer as part of the
+		// savestate payload.
+		clearSerializePadding(data, size, ser.size());
 		result = true;
 	} catch (const Serializer::Exception& e) {
 		ERROR_LOG(SAVESTATE, "Saving state failed: %s", e.what());
@@ -3914,6 +3935,7 @@ static bool read_m3u(const char *file)
 		return false;
 	}
 
+	unsigned disk_index = 0;
 	while (filestream_gets(f, line, sizeof(line)) && disk_index <= disk_paths.size())
 	{
 		if (line[0] == '#')

@@ -24,8 +24,10 @@
 #include "IconsFontAwesome6.h"
 #include "imgui/misc/freetype/imgui_freetype.h"
 #include "custom_theme.h"
+#include "theme_font_validation.h"
 #include "nowide/fstream.hpp"
 #include <array>
+#include <cctype>
 #include <cstring>
 #ifdef _MSC_VER
 // C++/CX reserves `generic`; FreeType uses it as a structure member.
@@ -61,20 +63,7 @@ std::unique_ptr<u8[]> loadThemeFont(const std::string& path, size_t& size)
 	if (!file.read(reinterpret_cast<char*>(bytes.get()), length)) return {};
 	// Validate an SFNT directory and all table ranges before handing bytes to
 	// the font backend. This rejects truncated or malformed user files safely.
-	const u8* d = bytes.get();
-	const size_t offset = (d[0] == 't' && d[1] == 't' && d[2] == 'c' && d[3] == 'f' && size >= 16)
-			? ((size_t)d[12] << 24 | (size_t)d[13] << 16 | (size_t)d[14] << 8 | d[15]) : 0;
-	if (offset + 12 > size) return {};
-	const u32 signature = (u32)d[offset] << 24 | (u32)d[offset + 1] << 16 | (u32)d[offset + 2] << 8 | d[offset + 3];
-	if (signature != 0x00010000 && signature != 0x4f54544f && signature != 0x74727565) return {};
-	const unsigned count = (unsigned)d[offset + 4] << 8 | d[offset + 5];
-	if (count == 0 || count > 256 || offset + 12 + count * 16 > size) return {};
-	for (unsigned i = 0; i < count; ++i) {
-		const size_t entry = offset + 12 + i * 16;
-		const size_t tableOffset = (size_t)d[entry + 8] << 24 | (size_t)d[entry + 9] << 16 | (size_t)d[entry + 10] << 8 | d[entry + 11];
-		const size_t tableSize = (size_t)d[entry + 12] << 24 | (size_t)d[entry + 13] << 16 | (size_t)d[entry + 14] << 8 | d[entry + 15];
-		if (tableOffset > size || tableSize > size - tableOffset) return {};
-	}
+	if (!validThemeFontDirectory(bytes.get(), size)) return {};
 	FT_Library library = nullptr;
 	FT_Face face = nullptr;
 	const bool validFace = FT_Init_FreeType(&library) == 0
@@ -569,9 +558,6 @@ void gui_loadFonts()
 	// TODO BSD, iOS, ...
 #endif
 
-	loadFonts(fonts, fontConfig);
-	loadFonts(boldFonts, boldFontConfig);
-
 	// Settings UI fonts
 	static const ImWchar ranges[] =
 	{
@@ -614,6 +600,53 @@ void gui_loadFonts()
 		settingsValueFont = largeFont;
 	if (settingsRightValueFont == nullptr)
 		settingsRightValueFont = largeFont;
+
+	// One shared collection backs all text fonts. Choose its regional face for
+	// the current UI language, and keep the atlas as the sole owner of the data.
+	data = resource::load("fonts/NotoSansCJK-Regular.ttc", dataSize);
+	verify(data != nullptr);
+	void* cjkData = IM_ALLOC(dataSize);
+	verify(cjkData != nullptr);
+	memcpy(cjkData, data.get(), dataSize);
+	data.reset();
+	std::string locale = i18n::getCurrentLocale();
+	const size_t suffix = locale.find_first_of(".@");
+	if (suffix != std::string::npos)
+		locale.resize(suffix);
+	for (char& c : locale)
+		c = c == '-' ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	// Locale strings can include a script and region (e.g. zh-Hant-TW).
+	locale += '_';
+	int cjkFace = 0; // Japanese is also a useful default for game titles.
+	if (locale.rfind("ko_", 0) == 0) cjkFace = 1;
+	else if (locale.rfind("zh_", 0) == 0)
+	{
+		if (locale.find("_hk_") != std::string::npos || locale.find("_mo_") != std::string::npos) cjkFace = 4;
+		else if (locale.find("_tw_") != std::string::npos || locale.find("_hant_") != std::string::npos) cjkFace = 3;
+		else cjkFace = 2;
+	}
+	static const ImWchar iconExclude[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+	std::vector<ImFont*> targets;
+	for (ImFont* target : {regularFont, boldFont, largeFont, settingsTitleFont, settingsRightValueFont, settingsValueFont})
+		if (std::find(targets.begin(), targets.end(), target) == targets.end())
+			targets.push_back(target);
+	for (size_t i = 0; i < targets.size(); ++i)
+	{
+		ImFontConfig cjkConfig;
+		cjkConfig.MergeMode = true;
+		cjkConfig.DstFont = targets[i];
+		cjkConfig.FontNo = cjkFace;
+		cjkConfig.FontDataOwnedByAtlas = i + 1 == targets.size();
+		cjkConfig.GlyphExcludeRanges = iconExclude;
+		if (targets[i] == boldFont)
+			cjkConfig.FontLoaderFlags |= ImGuiFreeTypeLoaderFlags_Bold;
+		verify(io.Fonts->AddFontFromMemoryTTF(cjkData, (int)dataSize, targets[i]->LegacySize, &cjkConfig) != nullptr);
+	}
+
+	// The other text styles already have the shared bundled CJK fallback.
+	// Keep the existing system fallbacks for regular and bold text.
+	loadFonts(fonts, fontConfig);
+	loadFonts(boldFonts, boldFontConfig);
 
 	data = resource::load("fonts/" FONT_ICON_FILE_NAME_FAS, dataSize);
 	if (data != nullptr)

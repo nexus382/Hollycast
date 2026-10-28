@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -700,16 +701,20 @@ public:
 			case 0x11: // sz 8 arg 6: 00 00 00 00 00 00
 				sendCmd(0x11);
 				break;
-			case 0x14: // sz 0 arg 1400:
-				// when returning arg=0x20 in cmd 10
-				sendCmd(0x14);
+			case 0x14: // NFC field status?
+				// Called after returning arg=0x20 in cmd 10.
+				sendCmd(0x14, 0, cardInserted);
 				break;
 			case 0x20: // Select card slot
 				// sz 8 arg 1: 00 00 00 00 00 00
 				// arg is selected card slot#. Normally 1 but set to 0 to access other card
 				// expects arg=0, no payload
-				cardIndex = arg;
-				sendCmd(0x20);
+				if (!cardInserted || (!cardExpired && arg == 0))
+					sendCmd(0x20, 0, 0x8000);
+				else {
+					cardIndex = arg;
+					sendCmd(0x20);
+				}
 				break;
 			case 0x21: // sz 10 arg 0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 				// Returning arg=1 indicates that 2 cards are in the reader
@@ -735,6 +740,10 @@ public:
 			case 0x24: // Read single block
 				{
 					// sz 8 arg 0: 00 04 00 00 00 00
+					if (!cardInserted) {
+						sendCmd(0x24, 0, 0x8000);
+						break;
+					}
 					sendCmd(0x24, 8);
 					u32 offset = inBuffer[7] * 8;
 					for (int i = 0; i < 8; i++)
@@ -748,14 +757,24 @@ public:
 				}
 			case 0x25: // Write single block
 				// sz 10 arg 0: 00 00 00 04 95 71 25 76 12 34 56 78 00 00
-				writeCard(arg, inBuffer[9], 1, &inBuffer[10]);
-				sendCmd(0x25);
+				if (!cardInserted)
+					sendCmd(0x25, 0, 0x8000);
+				else if (inBuffer[9] < 6)
+					sendCmd(0x25, 0, 0x8001);
+				else {
+					writeCard(arg, inBuffer[9], 1, &inBuffer[10]);
+					sendCmd(0x25);
+				}
 				break;
 
 			case 0x26:	// Decrement remaining writes
 				// sz 8 arg 800: 00 05 00 01 00 00
 				// sz 8 arg 800: 00 05 ff fd 00 00 after resigning
 				{
+					if (!cardInserted) {
+						sendCmd(0x26, 0, 0x8000);
+						break;
+					}
 					u8 *p = &cardData[arg][inBuffer[7] * 8];
 					u16 remain = (p[0] << 8) | p[1];
 					const u16 count = (inBuffer[8] << 8) | inBuffer[9];
@@ -779,6 +798,10 @@ public:
 			case 0x33: // Get remaining writes
 				{
 					// sz 8 arg 0: 00 05 00 00 00 00
+					if (!cardInserted) {
+						sendCmd(0x33, 0, 0x8000);
+						break;
+					}
 					// expects arg=8008 or 0
 					sendCmd(0x33, 8);
 					// must be ffff for blank cards
@@ -794,6 +817,10 @@ public:
 			case 0x34: // Read card
 				{
 					// sz 8 arg 0: 00 08 00 1e 00 00
+					if (!cardInserted) {
+						sendCmd(0x34, 0, 0x8000);
+						break;
+					}
 					//            offset size (in 8-byte blocks)
 					const u32 offset = ((inBuffer[6] << 8) | inBuffer[7]) * 8;
 					u32 size = ((inBuffer[8] << 8) | inBuffer[9]) * 8;
@@ -804,9 +831,20 @@ public:
 					break;
 				}
 			case 0x35: // Write card
-				writeCard(arg, (inBuffer[6] << 8) | inBuffer[7],
-						(inBuffer[8] << 8) | inBuffer[9], &inBuffer[10]);
-				sendCmd(0x35);
+				{
+					if (!cardInserted)
+						sendCmd(0x35, 0, 0x8000);
+					else {
+						const u32 block = (inBuffer[6] << 8) | inBuffer[7];
+						if (block < 6)
+							sendCmd(0x35, 0, 0x8001);
+						else {
+							writeCard(arg, block, (inBuffer[8] << 8) | inBuffer[9], &inBuffer[10]);
+							sendCmd(0x35);
+						}
+					}
+					break;
+				}
 				break;
 
 			default:
@@ -890,11 +928,13 @@ private:
 	void initCard(int index)
 	{
 		u8 *card = cardData[index];
-		// Must start with 95 71 25 7x ?? ?? ?? ??
+		memset(card, 0, CARD_SZ);
+		for (int i = 0; i < 8; i++)
+			card[i] = rand() & 0xff;
+		// Block 4 must start with 95 71 25 7x ?? ?? ?? ??
 		// ? can be any digit [0-9]
 		// x must be the sum of all ? digits % 10
 		static constexpr u8 UID[] = { 0x95, 0x71, 0x25, 0x70 };
-		memset(card, 0, CARD_SZ);
 		const u32 offset = 4 * 8;
 		memcpy(&card[offset], UID, sizeof(UID));
 		int sum = 0;
@@ -908,6 +948,7 @@ private:
 		card[offset + 3] = (card[offset + 3] & 0xf0) | (sum % 10);
 		card[0x28] = 0xff;
 		card[0x29] = 0xff;
+		memcpy(card + 0x30, card, 8);
 		NOTICE_LOG(NAOMI, "WCCF IC card %d created: %02x %02x %02x %02x %02x", index, card[offset + 3],
 				card[offset + 4], card[offset + 5],
 				card[offset + 6], card[offset + 7]);

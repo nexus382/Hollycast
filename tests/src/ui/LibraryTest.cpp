@@ -1,17 +1,13 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/library.h"
-#include "ui/boxart/vmu_icon.h"
 #include "cfg/cfg.h"
 #include "cfg/option.h"
-#include "stdclass.h"
 #include <algorithm>
-#include <chrono>
-#include <filesystem>
 
 using namespace library;
 
-TEST(LibraryTest, AllPreservesOrderingAndContinuePlayingSortsAndFilters)
+TEST(LibraryTest, AllPreservesOrderingAndContinuePlayingSortsSavedGames)
 {
 	const std::vector<Entry> entries = {
 		{"/games/z.cdi", "Zulu", 40},
@@ -109,25 +105,17 @@ TEST(LibraryTest, ExplicitLaunchChoicesOverrideAutomaticLoadAndRequireAllowedSta
 	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, true, false, true), AutoLoadAction::StartFresh);
 }
 
-TEST(LibraryTest, ExactPathBootHistoryDoesNotMatchSameBasenameInAnotherFolder)
+TEST(LibraryTest, ContinuePlayingIncludesUnplayedSavedGamesAndLeavesOtherViewsUnchanged)
 {
-	const std::string originalDataPath = get_writable_data_path("");
-	const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-	const auto directory = std::filesystem::temp_directory_path()
-			/ ("hollycast-library-history-" + std::to_string(nonce));
-	std::filesystem::create_directories(directory);
-	set_user_data_dir(directory.string());
-
-	const std::string firstPath = (directory / "first" / "game.gdi").string();
-	const std::string otherPath = (directory / "second" / "game.gdi").string();
-	markLibraryGameBooted("", firstPath);
-
-	EXPECT_EQ(getLibraryGameLastBootedForPath(otherPath), 0);
-	EXPECT_NE(getLibraryGameLastBootedForPath(firstPath), 0);
-
-	markLibraryGameBooted("", otherPath);
-	EXPECT_NE(getLibraryGameLastBootedForPath(otherPath), 0);
-
-	set_user_data_dir(originalDataPath);
-	std::filesystem::remove_all(directory);
+	const std::vector<Entry> entries = {
+		{"/games/played.cdi", "Played without a state", 0},
+		{"/games/manual.cdi", "Unplayed with manual state", 300},
+		{"/games/auto.cdi", "Unplayed with autosave", 400},
+		{"/games/old.cdi", "Older saved game", 100},
+		{"/device", "Device", 500, true},
+	};
+	EXPECT_EQ(selectGames(entries, View::ContinuePlaying, {}), (std::vector<size_t>{2, 1, 3}));
+	EXPECT_EQ(selectGames(entries, View::All, {}), (std::vector<size_t>{0, 1, 2, 3, 4}));
+	EXPECT_EQ(selectGames(entries, View::Favourites, {"/games/played.cdi", "/games/manual.cdi"}),
+			(std::vector<size_t>{0, 1}));
 }

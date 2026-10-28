@@ -152,6 +152,8 @@ void SetRelativeMousePosition(float xrel, float yrel, u32 mouseId)
 {
 	if (mouseId >= std::size(mo_x_delta))
 		return;
+	mo_x_prev[mouseId] = -1;
+	mo_y_prev[mouseId] = -1;
 	int width = mo_width;
 	int height = mo_height;
 	if (config::Rotate90)
