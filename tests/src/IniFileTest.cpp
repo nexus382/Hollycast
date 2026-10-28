@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "cfg/ini.h"
 #include "types.h"
@@ -59,6 +60,7 @@ TEST_F(IniFileTest, save)
 
 TEST_F(IniFileTest, getSet)
 {
+	struct RestoreLocale { std::locale original = std::locale(); ~RestoreLocale() { std::locale::global(original); } } restoreLocale;
 	std::locale::global(std::locale("fr_FR.UTF-8"));
 	IniFile ini;
 	ini.set("s", "e", 1);

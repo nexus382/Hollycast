@@ -647,14 +647,24 @@ void input_sdl_handle()
 				}
 				break;
 
-			case SDL_MOUSEWHEEL:
+			case SDL_MOUSEWHEEL: {
+				// Use SDL's precise delta on macOS so trackpad motion stays smooth.
+				// A 1:1 ImGui wheel scale also avoids multiplying fractional trackpad
+				// motion by the legacy 35/16 factor. SDL does not identify the device
+				// source, so conventional mouse wheels use this scale too.
+#if defined(TARGET_MAC)
+				const float preciseY = event.wheel.preciseY != 0 ? event.wheel.preciseY : (float)event.wheel.y;
+				gui_set_mouse_wheel(-preciseY * 16);
+#else
 				gui_set_mouse_wheel(-event.wheel.y * 35);
+#endif
 				checkRawInput();
 				if (!config::UseRawInput) {
 					auto mouse = getMouse(event.wheel.which);
 					mouse->setWheel(-event.wheel.y);
 				}
 				break;
+			}
 
 			case SDL_JOYDEVICEADDED:
 				sdl_open_joystick(event.jdevice.which);

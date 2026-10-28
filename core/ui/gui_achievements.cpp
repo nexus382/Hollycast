@@ -304,7 +304,7 @@ void achievementList()
 		std::string str = strprintf(T("You have unlocked %d of %d achievements and %d of %d points."),
 				game.unlockedAchievements, game.totalAchievements, game.points, game.totalPoints);
 		{
-			ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.f));
+			ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 			ImGui::TextWrapped("%s", str.c_str());
 		}
 		if (settings.raHardcoreMode)
@@ -349,7 +349,7 @@ void achievementList()
 			ImGui::PopFont();
 
 			{
-				ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.f));
+				ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 				ImGui::TextWrapped("%s", ach.description.c_str());
 				ImGui::TextWrapped("%s", ach.status.c_str());
 			}
