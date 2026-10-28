@@ -25,14 +25,19 @@ namespace library {
 
 enum class View { All, ContinuePlaying, Favourites };
 enum class LaunchMode { Default, Resume, Fresh };
-enum class AutoLoadAction { StartFresh, Load, Ask };
+enum class AutoLoadAction { StartFresh, Load, Ask, StartNetwork, RejectResume };
 
 inline AutoLoadAction initialAutoLoadAction(LaunchMode mode, bool stateAvailable,
-		bool stateAllowed, bool automaticLoad)
+		bool stateAllowed, bool automaticLoad, bool networkStartup = false)
 {
+	// Only the loaded game's effective settings can decide Resume eligibility.
+	if (mode == LaunchMode::Resume)
+		return stateAllowed && stateAvailable && !networkStartup ? AutoLoadAction::Load : AutoLoadAction::RejectResume;
+	if (networkStartup)
+		return AutoLoadAction::StartNetwork;
 	if (!stateAllowed || !stateAvailable || mode == LaunchMode::Fresh)
 		return AutoLoadAction::StartFresh;
-	if (mode == LaunchMode::Resume || automaticLoad)
+	if (automaticLoad)
 		return AutoLoadAction::Load;
 	return AutoLoadAction::Ask;
 }

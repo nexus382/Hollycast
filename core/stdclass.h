@@ -78,7 +78,8 @@ std::string get_writable_config_path(const std::string& filename);
 std::string get_writable_data_path(const std::string& filename);
 std::string get_readonly_config_path(const std::string& filename);
 std::string get_readonly_data_path(const std::string& filename);
-std::string get_readonly_data_path(const std::string& filename, const std::string& contentPath);
+// Snapshot the default search order for background file inspection.
+std::vector<std::string> get_readonly_data_dirs();
 bool file_exists(const std::string& filename);
 bool make_directory(const std::string& path);
 

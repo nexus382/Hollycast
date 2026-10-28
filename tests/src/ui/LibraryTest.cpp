@@ -101,8 +101,31 @@ TEST(LibraryTest, ExplicitLaunchChoicesOverrideAutomaticLoadAndRequireAllowedSta
 	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Fresh, true, true, true), AutoLoadAction::StartFresh);
 	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Default, true, true, false), AutoLoadAction::Ask);
 	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Default, true, true, true), AutoLoadAction::Load);
-	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, false, true, true), AutoLoadAction::StartFresh);
-	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, true, false, true), AutoLoadAction::StartFresh);
+	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, false, true, true), AutoLoadAction::RejectResume);
+	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, true, false, true), AutoLoadAction::RejectResume);
+}
+
+TEST(LibraryTest, ResumeUsesLoadedEligibilityAndCannotFallThroughToNetworkStartup)
+{
+	const bool previousAchievements = config::EnableAchievements;
+	const bool previousHardcore = config::AchievementsHardcoreMode;
+	const bool previousRollback = config::GGPOEnable;
+	config::EnableAchievements = true;
+	config::AchievementsHardcoreMode = true;
+	config::GGPOEnable = true;
+	// Global preferences must not override the selected title's effective eligibility.
+	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, true, true, false), AutoLoadAction::Load);
+	EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, true, false, false), AutoLoadAction::RejectResume);
+	config::EnableAchievements = previousAchievements;
+	config::AchievementsHardcoreMode = previousHardcore;
+	config::GGPOEnable = previousRollback;
+
+	for (bool automaticLoad : {false, true})
+	{
+		EXPECT_EQ(initialAutoLoadAction(LaunchMode::Resume, true, true, automaticLoad, true), AutoLoadAction::RejectResume);
+		EXPECT_EQ(initialAutoLoadAction(LaunchMode::Default, true, true, automaticLoad, true), AutoLoadAction::StartNetwork);
+		EXPECT_EQ(initialAutoLoadAction(LaunchMode::Fresh, true, true, automaticLoad, true), AutoLoadAction::StartNetwork);
+	}
 }
 
 TEST(LibraryTest, ContinuePlayingIncludesUnplayedSavedGamesAndLeavesOtherViewsUnchanged)
