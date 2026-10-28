@@ -1,5 +1,6 @@
 # Flycast Message File
 # Copyright (C) 2025 Flyinghead
+# Portions Copyright 2026 The Hollycast Authors
 # This file is distributed under the same license as Flycast.
 #
 #, fuzzy
@@ -1301,6 +1302,21 @@ msgstr ""
 
 #: core/ui/settings_general.cpp:409
 msgid "Track your game achievements using RetroAchievements.org"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3447
+msgid "Show Achievement Popups"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3448
+msgid "Show on-screen RetroAchievements notifications while playing."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3452
+msgid ""
+"Show Achievement Popups\n"
+"Controls achievement, progress, challenge, and leaderboard notifications "
+"shown over gameplay."
 msgstr ""
 
 #: core/ui/settings_general.cpp:414
@@ -3056,4 +3072,223 @@ msgstr ""
 
 #: shell/switch/switch_main.cpp:86
 msgid "Not supported on Switch"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:103 core/ui/vgamepad.cpp:112
+msgid "Black / Color"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:104
+msgid "Dark Gray / White"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:105 core/ui/vgamepad.cpp:113
+msgid "Gray / White"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:106
+msgid "Bright Neon"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:107
+msgid "Dim Neon"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:111
+msgid "Black / Gray"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:114
+msgid "White Outline"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:115
+msgid "Neon"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:636
+msgid "D-pad"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:637
+msgid "Face Buttons"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:640
+msgid "LT"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:641
+msgid "RT"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:642
+msgid "Analog Stick"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:643
+msgid "Fast Forward"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1096
+msgid "Virtual Controller"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1100
+msgid "Controller Layout"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1104
+msgid "Arcade"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1111
+msgid "Selected"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1112
+msgid "Touch a button to select it. Drag to move it."
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1118
+msgid "Show Virtual Controller"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1120
+msgid "Visual Feedback"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Circular Stick Travel"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Off uses the original square stick travel."
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1122
+msgid "Vibration"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1129
+msgid "Vibration Power"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1134
+msgid "Idle Timeout in Seconds"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Never"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1139
+msgid "Finger Size"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1146
+msgid "Unit Transparency"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1151
+msgid "Touch Size"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1155
+msgid "Scaling"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1161
+msgid "Reset Unit"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1164
+msgid "Reset Layout"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1170
+msgid "Custom Image"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1175
+msgid "Dreamcast Images"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1175
+msgid "Arcade Images"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1191
+msgid "CHOOSE IMG..."
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Grouped"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Turn off to move individual buttons. Turning on restores this group's default layout."
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Left"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Up"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Right"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "D-pad Down"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button X"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button Y"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button B"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button A"
+msgstr ""
+
+#: core/ui/vgamepad.cpp
+msgid "Button C"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Auto"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "On"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Off"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Top Menu Bar"
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid "Choose when the top menu bar is shown."
+msgstr ""
+
+#: core/ui/settings_new.cpp
+msgid ""
+"Top Menu Bar\n"
+"On keeps the bar visible. Off keeps it hidden.\n"
+"Auto follows the normal mouse and touch reveal behavior."
 msgstr ""

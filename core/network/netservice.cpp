@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -27,11 +28,12 @@ namespace net::modbba
 {
 
 static Service *service;
-static bool usingDCNet;
+// Special service installed by CapComDirect, which manages its lifecycle and starting/stopping
+static Service *customService;
 
 bool start()
 {
-	if (service == nullptr || usingDCNet != config::UseDCNet)
+	if (customService == nullptr)
 	{
 		delete service;
 		if (settings.content.gameId == "HDR0010")	// Sega Rally 2 (JP)
@@ -40,32 +42,69 @@ bool start()
 			service = new DCNetService();
 		else
 			service = new PicoTcpService();
-		usingDCNet = config::UseDCNet;
 	}
 	return service->start();
 }
 
-void stop() {
+bool startIfNeeded(bool receiverEnabled)
+{
+	if (!receiverEnabled)
+		return false;
+	if (service != nullptr && settings.network.online)
+		return true;
+	return start();
+}
+
+void stop()
+{
 	if (service != nullptr)
 		service->stop();
 }
 
+
+void setCustomService(Service *service)
+{
+	if (service == nullptr && net::modbba::service == customService)
+		net::modbba::service = nullptr;
+	else if (service != nullptr)
+		net::modbba::service = service;
+	customService = service;
+}
+
 void writeModem(u8 b) {
+	if (service == nullptr)
+		start();
 	verify(service != nullptr);
 	service->writeModem(b);
 }
 int readModem() {
+	if (service == nullptr)
+		start();
 	verify(service != nullptr);
 	return service->readModem();
 }
 int modemAvailable() {
+	if (service == nullptr)
+		start();
 	verify(service != nullptr);
 	return service->modemAvailable();
 }
 
-void receiveEthFrame(const u8 *frame, u32 size) {
-	start();
+void receiveEthFrame(const u8 *frame, u32 size)
+{
+	// The guest's first transmitted frame is the point at which BBA networking
+	// is requested. Polling for receive frames must remain passive.
+	if (service == nullptr || !settings.network.online)
+		start();
+	if (service == nullptr)
+		return;
 	service->receiveEthFrame(frame, size);
+}
+u32 sendEthFrame(u8 *frame)
+{
+	if (service == nullptr || !settings.network.online)
+		return 0;
+	return service->sendEthFrame(frame);
 }
 
 }

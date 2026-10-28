@@ -7,6 +7,7 @@
 #include <cwchar>
 #include <stdexcept>
 #include <cstdint>
+#include <climits>
 
 extern HWND owner;
 namespace faults
@@ -19,7 +20,9 @@ enum class Failure
 	Create,
 	Allocate,
 	Paint,
-	Exception
+	Exception,
+	Cursor,
+	Rectangle
 };
 std::atomic<Failure> failure{Failure::None};
 std::atomic<bool> persistent{false};
@@ -30,6 +33,8 @@ std::atomic<bool> pixelsMatch{false};
 std::atomic<int> pixelChecks{0};
 std::atomic<LONG> paintedWidth{0}, paintedHeight{0};
 std::atomic<unsigned> expectedOpacity{192}, expectedWhite{255};
+std::atomic<LONG> workAreaRight{LONG_MAX}, unavailableLeft{LONG_MIN};
+std::atomic<bool> primaryReleased{false};
 
 bool fail(Failure point)
 {
@@ -121,6 +126,47 @@ FARPROC WINAPI getProcAddress(HMODULE module, LPCSTR name)
 		return reinterpret_cast<FARPROC>(windowDpi);
 	return GetProcAddress(module, name);
 }
+
+BOOL WINAPI cursorPosition(POINT *point)
+{
+	if (fail(Failure::Cursor))
+	{
+		*point = {-50000, -50000};
+		return FALSE;
+	}
+	return GetCursorPos(point);
+}
+
+BOOL WINAPI windowRectangle(HWND window, RECT *rect)
+{
+	if (fail(Failure::Rectangle))
+	{
+		*rect = {-50000, -50000, -49904, -49936};
+		return FALSE;
+	}
+	return GetWindowRect(window, rect);
+}
+
+BOOL WINAPI monitorInfo(HMONITOR monitor, MONITORINFO *info)
+{
+	if (!GetMonitorInfoW(monitor, info))
+		return FALSE;
+	if (info->rcWork.right > workAreaRight)
+		info->rcWork.right = workAreaRight;
+	return TRUE;
+}
+
+HMONITOR WINAPI monitorFromRect(const RECT *rect, DWORD flags)
+{
+	return rect->left == unavailableLeft ? nullptr : MonitorFromRect(rect, flags);
+}
+
+SHORT WINAPI asyncKeyState(int key)
+{
+	if (primaryReleased && (key == VK_LBUTTON || key == VK_RBUTTON))
+		return 0;
+	return GetAsyncKeyState(key);
+}
 } // namespace faults
 
 // Fault injection stays in this translation unit; production needs no test hooks.
@@ -130,6 +176,11 @@ FARPROC WINAPI getProcAddress(HMODULE module, LPCSTR name)
 #define CreateDIBSection faults::createDib
 #define UpdateLayeredWindow faults::updateLayered
 #define GetProcAddress faults::getProcAddress
+#define GetCursorPos faults::cursorPosition
+#define GetWindowRect faults::windowRectangle
+#define GetMonitorInfoW faults::monitorInfo
+#define MonitorFromRect faults::monitorFromRect
+#define GetAsyncKeyState faults::asyncKeyState
 #include "../../core/windows/vmu_window.cpp"
 #undef RegisterClassW
 #undef SetTimer
@@ -137,6 +188,11 @@ FARPROC WINAPI getProcAddress(HMODULE module, LPCSTR name)
 #undef CreateDIBSection
 #undef UpdateLayeredWindow
 #undef GetProcAddress
+#undef GetCursorPos
+#undef GetWindowRect
+#undef GetMonitorInfoW
+#undef MonitorFromRect
+#undef GetAsyncKeyState
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -319,6 +375,15 @@ void releaseButton()
 	for (int i = 0; i < 4; ++i)
 		pump();
 }
+void dragTo(HWND window, POINT position)
+{
+	startDrag(window);
+	SetCursorPos(position.x + 12, position.y + 12);
+	require(until([&] {
+		RECT rect{};
+		return GetWindowRect(window, &rect) && rect.left == position.x && rect.top == position.y;
+	}), "drag moves the LCD away from its default position");
+}
 void moveAway()
 {
 	SetCursorPos(450, 350);
@@ -480,6 +545,44 @@ int main()
 	require(!vmu_window::blocksMouseInput(), "release restores normal emulator clicks");
 	require(config::values["vmu-windows0.left"] == moved.left, "dragged position is saved by slot");
 	require(config::fileSaves == savesBeforeDrag + 1, "one completed drag batches positions into one config save");
+	const POINT preferred{moved.left, moved.top};
+	const int savesBeforeRecovery = config::fileSaves;
+	// Simulate a smaller work area and a missing monitor without changing the desktop.
+	faults::workAreaRight = preferred.x + 96;
+	config::VmuWindowSize = 400;
+	require(until([&] {
+		RECT rect{};
+		return GetWindowRect(first, &rect) && rect.left == preferred.x - 288 && rect.right - rect.left == 384;
+	}), "larger LCD temporarily clamps to the reduced work area");
+	require(config::values["vmu-windows0.left"] == preferred.x && config::values["vmu-windows0.top"] == preferred.y
+			&& config::fileSaves == savesBeforeRecovery, "automatic clamping preserves the saved placement without a config write");
+	config::VmuWindowSize = 100;
+	require(until([&] {
+		RECT rect{};
+		return GetWindowRect(first, &rect) && rect.left == preferred.x && rect.top == preferred.y;
+	}), "shrinking the LCD restores its preferred placement");
+	faults::workAreaRight = preferred.x + 48;
+	require(until([&] {
+		RECT rect{};
+		return GetWindowRect(first, &rect) && rect.left == preferred.x - 48;
+	}), "work-area changes clamp an already placed LCD");
+	faults::workAreaRight = LONG_MAX;
+	require(until([&] {
+		RECT rect{};
+		return GetWindowRect(first, &rect) && rect.left == preferred.x && rect.top == preferred.y;
+	}), "restoring the work area restores the preferred placement");
+	faults::unavailableLeft = preferred.x;
+	require(until([&] {
+		RECT rect{};
+		return GetWindowRect(first, &rect) && rect.left == client.left + 8;
+	}), "missing monitor temporarily moves the LCD to its default corner");
+	require(config::values["vmu-windows0.left"] == preferred.x && config::values["vmu-windows0.top"] == preferred.y
+			&& config::fileSaves == savesBeforeRecovery, "missing monitor preserves the saved preference");
+	faults::unavailableLeft = LONG_MIN;
+	require(until([&] {
+		RECT rect{};
+		return GetWindowRect(first, &rect) && rect.left == preferred.x && rect.top == preferred.y;
+	}), "returning monitor restores the preferred placement");
 	menuInset = 60;
 	for (int i = 0; i < 5; ++i)
 		pump();
@@ -544,6 +647,68 @@ int main()
 				}),
 			"reset restores reachable placement");
 	require(moved.top == client.top + menuInset + 8, "reset placement also clears the menu bar");
+	enum class Cancellation { Capture, Focus, MissingRelease };
+	for (Cancellation cancellation : {Cancellation::Capture, Cancellation::Focus, Cancellation::MissingRelease})
+	{
+		vmu_window::resetPositions();
+		require(until([&] {
+			RECT rect{};
+			return GetWindowRect(first, &rect) && rect.left == client.left + 8 && rect.top == client.top + menuInset + 8
+					&& config::values["vmu-windows0.left"] == LONG_MIN;
+		}), "cancellation regression starts with an unplaced slot");
+		const POINT target{client.left + 220, client.top + 180};
+		vmu_window::consumeMousePositionReset();
+		dragTo(first, target);
+		require(vmu_window::consumeMousePositionReset(), "native drag requests a mouse baseline reset without SDL events");
+		if (cancellation == Cancellation::Capture)
+			pointerAvailable = false;
+		else if (cancellation == Cancellation::Focus)
+		{
+			ShowWindow(other, SW_SHOW);
+			SetForegroundWindow(other);
+		}
+		else
+			faults::primaryReleased = true;
+		require(until([&] {
+			GUITHREADINFO info{sizeof(GUITHREADINFO)};
+			return GetGUIThreadInfo(GetWindowThreadProcessId(first, nullptr), &info) && info.hwndCapture == nullptr
+					&& config::values["vmu-windows0.left"] == target.x && config::values["vmu-windows0.top"] == target.y;
+		}), "cancelled first drag persists its final moved position");
+		GetWindowRect(first, &moved);
+		require(moved.left == target.x && moved.top == target.y, "cancelled first drag keeps visible and saved positions equal");
+		require(vmu_window::consumeMousePositionReset(), "native drag completion leaves a pending mouse baseline reset");
+		require(!vmu_window::consumeMousePositionReset(), "mouse baseline reset is consumed once");
+		releaseButton();
+		faults::primaryReleased = false;
+		pointerAvailable = true;
+		SetForegroundWindow(owner);
+		require(until([&] {
+			return GetForegroundWindow() == owner && (GetWindowLongPtrW(first, GWL_EXSTYLE) & WS_EX_TRANSPARENT) == 0;
+		}), "cancellation regression restores interactive windows");
+	}
+	startDrag(first);
+	GetWindowRect(first, &moved);
+	faults::persistent = true;
+	faults::failure = faults::Failure::Cursor;
+	int queryAttempts = faults::attempts;
+	SendMessageW(first, WM_MOUSEMOVE, MK_LBUTTON, 0);
+	RECT afterFailure{};
+	GetWindowRect(first, &afterFailure);
+	require(faults::attempts > queryAttempts && afterFailure.left == moved.left && afterFailure.top == moved.top,
+			"failed cursor query does not move the dragged LCD");
+	SendMessageW(first, WM_CANCELMODE, 0, 0);
+	faults::failure = faults::Failure::None;
+	releaseButton();
+	faults::failure = faults::Failure::Rectangle;
+	queryAttempts = faults::attempts;
+	const int savesBeforeQueryFailure = config::fileSaves;
+	require(until([&] { return faults::attempts > queryAttempts; }), "placement rectangle query failure is exercised");
+	GetWindowRect(first, &afterFailure);
+	require(afterFailure.left == moved.left && afterFailure.top == moved.top
+			&& config::fileSaves == savesBeforeQueryFailure && vmu_window::ownsScreen(0),
+			"failed rectangle query preserves visible placement, saved coordinates and overlay ownership");
+	faults::failure = faults::Failure::None;
+	faults::persistent = false;
 	startDrag(first);
 	SendMessageW(first, WM_CANCELMODE, 0, 0);
 	moveAway();

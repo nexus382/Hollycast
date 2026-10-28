@@ -1,4 +1,5 @@
 /*
+    Portions Copyright 2026 The Hollycast Authors
     This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -829,6 +830,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "Dump Textures",
       NULL,
       "Every time a new texture is used by the game, it will be saved as a .png file in the 'system/dc/texdump/<game-id>/' folder.",
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      "Discard Video and Animated Textures",
+      NULL,
+      "Skip dumping video (YUV) and already updated textures.",
       NULL,
       "hacks",
       {

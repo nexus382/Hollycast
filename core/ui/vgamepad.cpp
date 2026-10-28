@@ -1,5 +1,6 @@
 /*
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of reicast.
 
@@ -20,27 +21,41 @@
 
 #include "vgamepad.h"
 #include "gui.h"
+#include "settings.h"
 #include "stdclass.h"
 #include "imgui.h"
 #include "rend/osd.h"
 #include "imgui_driver.h"
 #include "input/gamepad.h"
 #include "input/gamepad_device.h"
+#include "input/virtual_gamepad.h"
 #include "oslib/storage.h"
 #include "oslib/resources.h"
 #include "oslib/i18n.h"
 #include "cfg/cfg.h"
-#include "input/gamepad.h"
+#include "cfg/option.h"
 #include "input/mouse.h"
 #include "hw/naomi/naomi_cart.h"
 #include "hw/naomi/card_reader.h"
 #include "hw/maple/maple_devs.h"
 #include "stbi.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+
 namespace vgamepad
 {
-static void stopEditing(bool canceled);
 static void loadLayout();
+static void drawCustomizePanel();
+static void drawSelectedElement();
+static void drawTouchIndicator();
+static void handleCustomizeDrag(bool pointerOverUi);
+static void switchEditingLayout(bool console);
+static Element controlToElement(ControlId control);
+static int getControlTransparency(ControlId control);
+static ImVec2 getControlHitPadding(ControlId control);
 
 struct Control
 {
@@ -56,82 +71,175 @@ struct Control
 };
 static Control Controls[_Count];
 static bool Visible = true;
+static bool Editing;
+static bool EditConsoleLayout;
 static bool serviceMode;
 static float AlphaTrans = 1.f;
 static ImVec2 StickPos;	// analog stick position [-1, 1]
+static Element SelectedElement = Elem_DPad;
+static Element DraggedElement = Elem_None;
+// Indexed by Elem_DPad/Elem_Buttons, with separate choices in each platform layout.
+static std::array<bool, 2> GroupedButtons { true, true };
+// Generated button positions are not a separate layout until the first split.
+static std::array<bool, 2> HasIndividualLayout {};
+static bool LayoutLoaded;
+static ImVec2 LastDragMousePos;
+static std::string PendingImagePath;
+static bool DreamcastImageSwapsAB;
+constexpr float REFERENCE_WIDTH = 640.f;
+constexpr float REFERENCE_HEIGHT = 480.f;
+constexpr float MIN_ELEMENT_SCALE = 0.5f;
+constexpr float MAX_ELEMENT_SCALE = 1.8f;
+constexpr float MAX_TOUCH_PADDING = 24.f;
+constexpr float MAX_FINGER_RADIUS = MAX_TOUCH_PADDING * 3.f;
+constexpr int MAX_PERCENT = 100;
+constexpr s64 MAX_BUTTON_IMAGE_FILE_SIZE = 4 * 1024 * 1024;
+constexpr int MAX_BUTTON_IMAGE_WIDTH = 4096;
+constexpr int MAX_BUTTON_IMAGE_HEIGHT = 2048;
 constexpr char const *BTN_PATH = "picture/buttons.png";
 constexpr char const *BTN_PATH_ARCADE = "picture/buttons-arcade.png";
 constexpr char const *CFG_SECTION = "vgamepad";
 
+struct ButtonImage {
+	const char *label;
+	const char *path;
+	bool swapsAB = false; // Some Dreamcast atlases use X/Y/A/B instead of X/Y/B/A.
+};
+static constexpr ButtonImage DreamcastImages[] {
+	{ Tnop("Default"), BTN_PATH },
+	{ Tnop("Black / Color"), "picture/blkclrDC.png", true },
+	{ Tnop("Dark Gray / White"), "picture/drkgreywhtsolidDC.png", true },
+	{ Tnop("Gray / White"), "picture/greywhitesolidDC.png", true },
+	{ Tnop("Bright Neon"), "picture/briteneonDC.png" },
+	{ Tnop("Dim Neon"), "picture/NeondimDC.png" },
+};
+static constexpr ButtonImage ArcadeImages[] {
+	{ Tnop("Default"), BTN_PATH_ARCADE },
+	{ Tnop("Black / Gray"), "picture/blkgryARC.png" },
+	{ Tnop("Black / Color"), "picture/blkcolorARC.png" },
+	{ Tnop("Gray / White"), "picture/grywhitesldARC.png" },
+	{ Tnop("White Outline"), "picture/whitelineARC.png" },
+	{ Tnop("Neon"), "picture/neonARC.png" },
+};
+
+static bool isConsoleLayout() {
+	// Preview either controller without changing the running game's platform.
+	return Editing ? EditConsoleLayout : settings.platform.isConsole();
+}
+
+static const char *getLayoutCfgSection() {
+	// Preserve existing Dreamcast layouts; arcade edits have their own storage.
+	return isConsoleLayout() ? CFG_SECTION : "vgamepad_arcade";
+}
+
+static float getFingerRadius() {
+	return MAX_FINGER_RADIUS
+			* std::clamp(static_cast<int>(config::VirtualGamepadFingerSize), 0, MAX_PERCENT) / MAX_PERCENT;
+}
+
 void displayCommands()
 {
+	// Apply preset changes and Done/Cancel before queuing any atlas draw calls.
+	drawCustomizePanel();
+	const bool pointerOverUi = ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)
+			|| ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+	handleCustomizeDrag(pointerOverUi);
 	draw();
-    centerNextWindow();
-
-    ImGui::Begin("##vgamepad", nullptr, ImGuiWindowFlags_NoDecoration);
-
-	if (ImGui::Button(i18n::T("Save"), ScaledVec2(150, 50)))
-	{
-		stopEditing(false);
-		gui_setState(GuiState::Settings);
-	}
-	ImGui::SameLine();
-	if (ImGui::Button(i18n::T("Reset"), ScaledVec2(150, 50)))
-	{
-		resetEditing();
-		startEditing();
-		gui_setState(GuiState::VJoyEdit);
-	}
-
-	ImGui::SameLine();
-	if (ImGui::Button(i18n::T("Cancel"), ScaledVec2(150, 50)))
-	{
-		stopEditing(true);
-		gui_setState(GuiState::Settings);
-	}
-    ImGui::End();
+	drawSelectedElement();
+	drawTouchIndicator();
 }
 
 static const char *getButtonsResPath() {
-	return settings.platform.isConsole() ? BTN_PATH : BTN_PATH_ARCADE;
+	return isConsoleLayout() ? BTN_PATH : BTN_PATH_ARCADE;
 }
 
 static const char *getButtonsCfgName() {
-	return settings.platform.isConsole() ? "image" : "image_arcade";
+	return isConsoleLayout() ? "image" : "image_arcade";
+}
+
+static bool isValidButtonImage(int width, int height)
+{
+	return width > 0 && height > 0
+			&& width <= MAX_BUTTON_IMAGE_WIDTH && height <= MAX_BUTTON_IMAGE_HEIGHT
+			&& width == height * 2;
+}
+
+static bool updateOSDButtons(const u8 *imageData, int width, int height, ImTextureID *textureId = nullptr)
+{
+	if (!isValidButtonImage(width, height))
+		return false;
+	try {
+		const ImTextureID id = imguiDriver->updateTexture(getButtonsResPath(), imageData, width, height, false);
+		if (textureId != nullptr)
+			*textureId = id;
+		return true;
+	} catch (...) {
+		// Vulkan can throw while the surface is resizing.
+		return false;
+	}
+}
+
+static bool loadOSDButtonsResource(const char *path, ImTextureID *textureId = nullptr)
+{
+	size_t size;
+	std::unique_ptr<u8[]> data = resource::load(path, size);
+	if (data == nullptr || size > static_cast<size_t>(std::numeric_limits<int>::max()))
+		return false;
+
+	stbi_set_flip_vertically_on_load_thread(1);
+	int width, height, channels;
+	u8 *imageData = stbi_load_from_memory(data.get(), static_cast<int>(size), &width, &height, &channels,
+			STBI_rgb_alpha);
+	if (imageData == nullptr)
+		return false;
+	const bool loaded = updateOSDButtons(imageData, width, height, textureId);
+	if (loaded && isConsoleLayout())
+		for (const auto& image : DreamcastImages)
+			if (strcmp(path, image.path) == 0)
+			{
+				DreamcastImageSwapsAB = image.swapsAB;
+				break;
+			}
+	stbi_image_free(imageData);
+	return loaded;
 }
 
 static bool loadOSDButtons(const std::string& path)
 {
 	if (path.empty())
 		return false;
-	hostfs::File *file = hostfs::storage().openFile(path, "rb");
+	// Only load bundled atlases belonging to the active controller layout.
+	const auto& images = isConsoleLayout() ? DreamcastImages : ArcadeImages;
+	for (const auto& image : images)
+		if (path == image.path)
+			return loadOSDButtonsResource(image.path);
+	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
 	if (file == nullptr)
+		return false;
+	const s64 fileSize = file->size();
+	if (fileSize <= 0 || fileSize > MAX_BUTTON_IMAGE_FILE_SIZE)
 		return false;
 
 	stbi_set_flip_vertically_on_load_thread(1);
-    int width, height, n;
-	u8 *image_data = stbi_load_from_file(file, &width, &height, &n, STBI_rgb_alpha);
-	delete file;
-	if (image_data == nullptr)
+	int width, height, channels;
+	if (!stbi_info_from_callbacks(&STBI::callbacks, file.get(), &width, &height, &channels)
+			|| !isValidButtonImage(width, height) || file->seek(0, SEEK_SET) != 0)
 		return false;
-    try {
-        imguiDriver->updateTexture(getButtonsResPath(), image_data, width, height, false);
-    } catch (...) {
-        // vulkan can throw during resizing
-    }
-    free(image_data);
 
-    return true;
+	u8 *imageData = stbi_load_from_file(file.get(), &width, &height, &channels, STBI_rgb_alpha);
+	if (imageData == nullptr)
+		return false;
+	const bool loaded = updateOSDButtons(imageData, width, height);
+	if (loaded && isConsoleLayout())
+		DreamcastImageSwapsAB = false;
+	stbi_image_free(imageData);
+	return loaded;
 }
 
-static ImTextureID loadOSDButtons()
+static ImTextureID loadDefaultOSDButtons()
 {
 	ImTextureID id{};
-	// custom image
-	std::string path = config::loadStr(CFG_SECTION, getButtonsCfgName());
-	if (loadOSDButtons(path))
-		return id;
-	if (settings.platform.isConsole())
+	if (isConsoleLayout())
 	{
 		// legacy buttons.png in data folder
 		if (loadOSDButtons(get_readonly_data_path("buttons.png")))
@@ -140,22 +248,16 @@ static ImTextureID loadOSDButtons()
 		if (loadOSDButtons(get_readonly_config_path("buttons.png")))
 			return id;
 	}
-	// default in resource
-	size_t size;
-	std::unique_ptr<u8[]> data = resource::load(getButtonsResPath(), size);
-	stbi_set_flip_vertically_on_load_thread(1);
-	int width, height, n;
-	u8 *image_data = stbi_load_from_memory(data.get(), (int)size, &width, &height, &n, STBI_rgb_alpha);
-    if (image_data != nullptr)
-    {
-        try {
-            id = imguiDriver->updateTexture(getButtonsResPath(), image_data, width, height, false);
-        } catch (...) {
-            // vulkan can throw during resizing
-        }
-        free(image_data);
-    }
-    return id;
+	loadOSDButtonsResource(getButtonsResPath(), &id);
+	return id;
+}
+
+static ImTextureID loadOSDButtons()
+{
+	const std::string path = Editing ? PendingImagePath : config::loadStr(CFG_SECTION, getButtonsCfgName());
+	if (loadOSDButtons(path))
+		return {};
+	return loadDefaultOSDButtons();
 }
 
 ImTextureID ImguiVGamepadTexture::getId()
@@ -267,12 +369,53 @@ void hide() {
 
 ControlId hitTest(float x, float y)
 {
+	if (!config::VirtualGamepadEnabled && !Editing)
+		return None;
+
+	ControlId closestControl = None;
+	float closestDistanceSquared = std::numeric_limits<float>::max();
+	const float fingerRadius = getFingerRadius();
+	const float fingerRadiusSquared = fingerRadius * fingerRadius;
 	for (const auto& control : Controls)
-		if (!control.disabled
-				&& x >= control.pos.x && x < control.pos.x + control.size.x
-				&& y >= control.pos.y && y < control.pos.y + control.size.y)
-			return static_cast<ControlId>(&control - &Controls[0]);
-	return None;
+	{
+		if (control.disabled)
+			continue;
+		const ControlId controlId = static_cast<ControlId>(&control - &Controls[0]);
+		// Invisible diagonal targets belong to an intact D-pad; separated directions
+		// use their own targets and can still be pressed together with multitouch.
+		if (!GroupedButtons[Elem_DPad] && controlId >= LeftUp && controlId <= RightDown)
+			continue;
+		const ImVec2 padding = getControlHitPadding(controlId);
+		const ImVec2 targetMin = control.pos - padding;
+		const ImVec2 targetMax = control.pos + control.size + padding;
+		if (fingerRadius == 0.f)
+		{
+			// Preserve point-input boundaries when Finger Size is zero.
+			if (x < targetMin.x || x >= targetMax.x || y < targetMin.y || y >= targetMax.y)
+				continue;
+		}
+		else
+		{
+			// Intersect the circular finger contact with the independent button target.
+			const float dx = x - std::clamp(x, targetMin.x, targetMax.x);
+			const float dy = y - std::clamp(y, targetMin.y, targetMax.y);
+			if (dx * dx + dy * dy > fingerRadiusSquared)
+				continue;
+		}
+
+		// Prefer the visible button nearest the touch when expanded targets overlap.
+		const float nearestX = std::clamp(x, control.pos.x, control.pos.x + control.size.x);
+		const float nearestY = std::clamp(y, control.pos.y, control.pos.y + control.size.y);
+		const float dx = x - nearestX;
+		const float dy = y - nearestY;
+		const float distanceSquared = dx * dx + dy * dy;
+		if (distanceSquared < closestDistanceSquared)
+		{
+			closestControl = controlId;
+			closestDistanceSquared = distanceSquared;
+		}
+	}
+	return closestControl;
 }
 
 static u32 buttonMap[_Count] {
@@ -302,8 +445,8 @@ static u32 buttonMap[_Count] {
 
 void setButtonMap()
 {
-	const bool arcade = settings.platform.isArcade();
-	if (serviceMode)
+	const bool arcade = !isConsoleLayout();
+	if (serviceMode && !Editing)
 	{
 		buttonMap[A] = DC_BTN_D;
 		buttonMap[B] = DC_DPAD2_UP;
@@ -354,8 +497,10 @@ static void drawButtonDim(ImDrawList *drawList, const Control& control, int stat
 {
 	if (control.disabled)
 		return;
-	float scale_h = settings.display.height / 480.f;
-	float offs_x = (settings.display.width - scale_h * 640.f) / 2.f;
+	if (!config::VirtualGamepadVisualFeedback)
+		state = 0;
+	float scale_h = settings.display.height / REFERENCE_HEIGHT;
+	float offs_x = (settings.display.width - scale_h * REFERENCE_WIDTH) / 2.f;
 	ImVec2 pos = control.pos * scale_h;
 	ImVec2 size = control.size * scale_h;
 	pos.x += offs_x;
@@ -364,12 +509,19 @@ static void drawButtonDim(ImDrawList *drawList, const Control& control, int stat
 		pos += StickPos * size;
 
 	float col = (0.5f - 0.25f * state / 255) * AlphaTrans;
-	float alpha = (100.f - config::VirtualGamepadTransparency) / 100.f * AlphaTrans;
+	const float elementAlpha = (MAX_PERCENT - getControlTransparency(controlId)) / static_cast<float>(MAX_PERCENT);
+	float alpha = elementAlpha * AlphaTrans;
 	ImVec4 color(col, col, col, alpha);
 
 	const ImVec2* uv0 = &control.uv0;
 	const ImVec2* uv1 = &control.uv1;
-	if (serviceMode)
+	if (isConsoleLayout() && DreamcastImageSwapsAB && (controlId == A || controlId == B))
+	{
+		const Control& artwork = Controls[controlId == A ? B : A];
+		uv0 = &artwork.uv0;
+		uv1 = &artwork.uv1;
+	}
+	if (serviceMode && !Editing)
 		switch (controlId)
 		{
 		case A:
@@ -398,14 +550,14 @@ static void drawButton(ImDrawList *drawList, const Control& control, bool state)
 
 void draw()
 {
-	if (Controls[Left].pos.x == 0.f)
-	{
+	// Zero is a valid position for an independently moved button.
+	if (!LayoutLoaded)
 		loadLayout();
-		if (Controls[Left].pos.x == 0.f)
-			// mark done
-			Controls[Left].pos.x = 1e-12f;
-	}
-		
+	if (!config::VirtualGamepadEnabled && !Editing)
+		return;
+	// Resolve the active atlas before choosing any preset-specific UVs.
+	ImguiVGamepadTexture().getId();
+
 	ImDrawList *drawList = ImGui::GetBackgroundDrawList();
 	drawButton(drawList, Controls[Left], kcode[0] & buttonMap[Left]);
 	drawButton(drawList, Controls[Up], kcode[0] & buttonMap[Up]);
@@ -444,44 +596,55 @@ static float getUIScale() {
 struct LayoutElement
 {
 	const std::string name;
+	const char *label;
 	const float dx, dy;	// default pos in dc coords, relative to sides (or middle if 0)
 	const float dw, dh;	// default size in dc coords
 
 	float x, y;			// normalized coordinates [0, 1]
 	float w, h;			// normalized coordinates [0, 1], scaled with uiScale
 	float scale;		// user scale
+	int transparency = 0;	// per-unit transparency [0, 100]
+	int touchSize = 0;		// extra padding [0, 100]; zero matches the rendered bounds
 
 	void load()
 	{
-		x = config::loadFloat(CFG_SECTION, name + "_x", x);
-		y = config::loadFloat(CFG_SECTION, name + "_y", y);
-		scale = config::loadFloat(CFG_SECTION, name + "_scale", scale);
+		const char *section = getLayoutCfgSection();
+		x = config::loadFloat(section, name + "_x", x);
+		y = config::loadFloat(section, name + "_y", y);
+		const float loadedScale = config::loadFloat(section, name + "_scale", scale);
+		scale = std::isfinite(loadedScale)
+				? std::clamp(loadedScale, MIN_ELEMENT_SCALE, MAX_ELEMENT_SCALE)
+				: 1.f;
+		const int legacyTransparency = std::clamp(static_cast<int>(config::VirtualGamepadTransparency), 0, MAX_PERCENT);
+		transparency = std::clamp(config::loadInt(section, name + "_transparency", legacyTransparency), 0, MAX_PERCENT);
+		touchSize = std::clamp(config::loadInt(section, name + "_touch_size", touchSize), 0, MAX_PERCENT);
 	}
 	void save() const
 	{
-		config::saveFloat(CFG_SECTION, name + "_x", x);
-		config::saveFloat(CFG_SECTION, name + "_y", y);
-		config::saveFloat(CFG_SECTION, name + "_scale", scale);
-	}
-
-	bool hitTest(float nx, float ny) const {
-		return nx >= x && nx < x + w * scale
-			&& ny >= y && ny < y + h * scale;
+		const char *section = getLayoutCfgSection();
+		config::saveFloat(section, name + "_x", x);
+		config::saveFloat(section, name + "_y", y);
+		config::saveFloat(section, name + "_scale", scale);
+		config::saveInt(section, name + "_transparency", transparency);
+		config::saveInt(section, name + "_touch_size", touchSize);
 	}
 
 	void applyUiScale()
 	{
-		const float dcw = 480.f * (float)settings.display.width / settings.display.height;
+		const float dcw = REFERENCE_HEIGHT * (float)settings.display.width / settings.display.height;
 		const float uiscale = getUIScale();
 		w = dw / dcw * uiscale;
-		h = dh / 480.f * uiscale;
+		h = dh / REFERENCE_HEIGHT * uiscale;
 	}
 
 	void reset()
 	{
 		applyUiScale();
 		scale = 1.f;
-		const float dcw = 480.f * (float)settings.display.width / settings.display.height;
+		// Match the legacy transparency inherited by layouts without per-unit settings.
+		transparency = std::clamp(static_cast<int>(config::VirtualGamepadTransparency), 0, MAX_PERCENT);
+		touchSize = 0;
+		const float dcw = REFERENCE_HEIGHT * (float)settings.display.width / settings.display.height;
 		const float uiscale = getUIScale();
 		if (dx == 0)
 			x = 0.5f - w / 2;
@@ -492,36 +655,196 @@ struct LayoutElement
 		if (dy == 0)
 			y = 0.5f - h / 2;
 		else if (dy > 0)
-			y = dy / 480.f * uiscale;
+			y = dy / REFERENCE_HEIGHT * uiscale;
 		else
-			y = 1.f - h + dy / 480.f * uiscale;
+			y = 1.f - h + dy / REFERENCE_HEIGHT * uiscale;
 	}
 };
-static LayoutElement Layout[] {
-	{ "dpad",      32.f, -24.f, 192.f, 192.f },
-	{ "buttons",  -24.f, -24.f, 192.f, 192.f },
-	{ "start",      0.f, -24.f,  64.f,  64.f },
-	{ "LT",      -134.f,-240.f,  90.f,  64.f },
-	{ "RT",       -32.f,-240.f,  90.f,  64.f },
-	{ "analog",    40.f,-320.f, 128.f, 128.f },
-	{ "fforward", -24.f,  24.f,  64.f,  64.f },
+static LayoutElement Layout[Elem_Count] {
+	{ "dpad",     Tnop("D-pad"),        32.f, -24.f, 192.f, 192.f },
+	{ "buttons",  Tnop("Face Buttons"),-24.f, -24.f, 192.f, 192.f },
+	{ "start",    Tnop("Start"),         0.f, -24.f,  64.f,  64.f },
+	// The shared default keeps the triggers clear of buttons 4 and 5 in arcade games.
+	{ "LT",       Tnop("LT"),         -134.f,-288.f,  90.f,  64.f },
+	{ "RT",       Tnop("RT"),          -32.f,-288.f,  90.f,  64.f },
+	{ "analog",   Tnop("Analog Stick"), 40.f,-320.f, 128.f, 128.f },
+	{ "fforward", Tnop("Fast Forward"),-24.f,  24.f,  64.f,  64.f },
 
-	{ "btn4",     -24.f,-216.f,  64.f,  64.f },
-	{ "btn5",    -152.f,-216.f,  64.f,  64.f },
-	{ "service",  -24.f,  96.f,  64.f,  64.f },
-	{ "inscard",   40.f,-250.f,  64.f,  64.f },
+	{ "btn4",     Tnop("Button 4"),    -24.f,-216.f,  64.f,  64.f },
+	{ "btn5",     Tnop("Button 5"),   -152.f,-216.f,  64.f,  64.f },
+	{ "service",  Tnop("Service"),     -24.f,  96.f,  64.f,  64.f },
+	{ "inscard",  Tnop("Insert Card"),  40.f,-250.f,  64.f,  64.f },
+
+	// Individual buttons inherit their group's geometry when first ungrouped.
+	{ "dpad_left",  Tnop("D-pad Left"),  0.f, 0.f, 64.f, 64.f },
+	{ "dpad_up",    Tnop("D-pad Up"),    0.f, 0.f, 64.f, 64.f },
+	{ "dpad_right", Tnop("D-pad Right"), 0.f, 0.f, 64.f, 64.f },
+	{ "dpad_down",  Tnop("D-pad Down"),  0.f, 0.f, 64.f, 64.f },
+	{ "button_x",   Tnop("Button X"),   0.f, 0.f, 64.f, 64.f },
+	{ "button_y",   Tnop("Button Y"),   0.f, 0.f, 64.f, 64.f },
+	{ "button_b",   Tnop("Button B"),   0.f, 0.f, 64.f, 64.f },
+	{ "button_a",   Tnop("Button A"),   0.f, 0.f, 64.f, 64.f },
 };
+
+struct LayoutState
+{
+	float x;
+	float y;
+	float scale;
+	int transparency;
+	int touchSize;
+};
+
+struct LayoutEditState
+{
+	std::array<LayoutState, Elem_Count> layout;
+	std::array<bool, 2> groupedButtons;
+	std::array<bool, 2> hasIndividualLayout;
+	std::string imagePath;
+};
+
+struct EditSessionState
+{
+	std::array<LayoutEditState, 2> layouts;
+	bool enabled;
+	bool hapticFeedback;
+	bool visualFeedback;
+	bool circularStick;
+	int vibration;
+	int transparency;
+	int idleTimeout;
+	int fingerSize;
+};
+static EditSessionState EditSession;
+static std::array<LayoutEditState, 2> PendingLayouts;
+
+static bool isValidElement(Element element)
+{
+	return element >= Elem_DPad && element < Elem_Count;
+}
+
+static const char *getElementLabel(Element element)
+{
+	if (!isConsoleLayout())
+	{
+		if (element == Elem_ButtonX)
+			return i18n::T("Button C");
+		if (element == Elem_ButtonY)
+			return i18n::T("Button X");
+	}
+	return isValidElement(element) ? i18n::T(Layout[element].label) : i18n::T("None");
+}
+
+static Element getButtonGroup(Element element)
+{
+	if (element == Elem_DPad || (element >= Elem_DPadLeft && element <= Elem_DPadDown))
+		return Elem_DPad;
+	if (element == Elem_Buttons || (element >= Elem_ButtonX && element <= Elem_ButtonA))
+		return Elem_Buttons;
+	return Elem_None;
+}
+
+static void resetIndividualButtons(Element element)
+{
+	const Element group = getButtonGroup(element);
+	if (group == Elem_None)
+		return;
+
+	const int groupFirst = group == Elem_DPad ? Elem_DPadLeft : Elem_ButtonX;
+	const int first = element >= Elem_DPadLeft ? element : groupFirst;
+	const int end = element >= Elem_DPadLeft ? first + 1 : groupFirst + 4;
+	constexpr std::array<ImVec2, 4> offsets { ImVec2(0.f, 1.f), ImVec2(1.f, 0.f),
+			ImVec2(2.f, 1.f), ImVec2(1.f, 2.f) };
+	const LayoutElement& parent = Layout[group];
+	for (int i = first; i < end; i++)
+	{
+		LayoutElement& button = Layout[i];
+		button.applyUiScale();
+		button.x = parent.x + offsets[i - groupFirst].x * button.w * parent.scale;
+		button.y = parent.y + offsets[i - groupFirst].y * button.h * parent.scale;
+		button.scale = parent.scale;
+		button.transparency = parent.transparency;
+		button.touchSize = parent.touchSize;
+	}
+}
+
+static Element controlToElement(ControlId control)
+{
+	switch (control)
+	{
+	case Left:
+	case Up:
+	case Right:
+	case Down:
+		return GroupedButtons[Elem_DPad] ? Elem_DPad
+				: static_cast<Element>(Elem_DPadLeft + control - Left);
+	case LeftUp:
+	case RightUp:
+	case LeftDown:
+	case RightDown:
+		return Elem_DPad;
+	case X:
+	case Y:
+	case B:
+	case A:
+		return GroupedButtons[Elem_Buttons] ? Elem_Buttons
+				: static_cast<Element>(Elem_ButtonX + control - X);
+	case Start:
+		return Elem_Start;
+	case LeftTrigger:
+		return Elem_LT;
+	case RightTrigger:
+		return Elem_RT;
+	case AnalogArea:
+	case AnalogStick:
+		return Elem_Analog;
+	case FastForward:
+		return Elem_FForward;
+	case Btn4:
+		return Elem_Btn4;
+	case Btn5:
+		return Elem_Btn5;
+	case ServiceMode:
+		return Elem_ServiceMode;
+	case InsertCard:
+		return Elem_InsertCard;
+	default:
+		return Elem_None;
+	}
+}
+
+static int getControlTransparency(ControlId control)
+{
+	const Element element = controlToElement(control);
+	return isValidElement(element) ? Layout[element].transparency : 0;
+}
+
+static ImVec2 getControlHitPadding(ControlId control)
+{
+	const Element element = controlToElement(control);
+	if (!isValidElement(element))
+		return ImVec2(0.f, 0.f);
+	const int touchSize = Layout[element].touchSize;
+	// Touch Size scales with the button; Finger Size belongs to the input contact.
+	const ImVec2 size = Controls[control].size;
+	// Keep the established 30% padding cap for D-pad, stick and face-button targets.
+	const float range = getButtonGroup(element) != Elem_None || element == Elem_Analog
+			|| element == Elem_Btn4 || element == Elem_Btn5 ? 0.3f : 1.f;
+	const float padding = range * MAX_TOUCH_PADDING
+			* (std::min(size.x, size.y) / 64.f) * touchSize / MAX_PERCENT;
+	return ImVec2(padding, padding);
+}
 
 static void applyLayout()
 {
-	const float dcw = 480.f * (float)settings.display.width / settings.display.height;
-	const float dx = (dcw - 640.f) / 2;
+	const float dcw = REFERENCE_HEIGHT * (float)settings.display.width / settings.display.height;
+	const float dx = (dcw - REFERENCE_WIDTH) / 2;
 	const float uiscale = getUIScale();
 	float x, y, scale;
 
 	// DPad
 	x = Layout[Elem_DPad].x * dcw - dx;
-	y = Layout[Elem_DPad].y * 480.f;
+	y = Layout[Elem_DPad].y * REFERENCE_HEIGHT;
 	scale = Layout[Elem_DPad].scale * uiscale;
 	Controls[Left].pos =   { x + 0.f * scale, y + 64.f * scale };
 	Controls[Up].pos =     { x + 64.f * scale, y + 0.f * scale };
@@ -539,7 +862,7 @@ static void applyLayout()
 
 	// Buttons
 	x = Layout[Elem_Buttons].x * dcw - dx;
-	y = Layout[Elem_Buttons].y * 480.f;
+	y = Layout[Elem_Buttons].y * REFERENCE_HEIGHT;
 	scale = Layout[Elem_Buttons].scale * uiscale;
 	Controls[X].pos =  { x + 0.f * scale, y + 64.f * scale };
 	Controls[Y].pos =  { x + 64.f * scale, y + 0.f * scale };
@@ -548,24 +871,36 @@ static void applyLayout()
 	for (int control = X; control <= A; control++)
 		Controls[control].size = { 64.f * scale, 64.f * scale };
 
+	// Keep the grouped geometry above as the legacy/default layout. Independent
+	// buttons override it only while their own group is unchecked.
+	for (int control = Left; control <= A; control++)
+	{
+		const Element element = controlToElement(static_cast<ControlId>(control));
+		if (element < Elem_DPadLeft)
+			continue;
+		const LayoutElement& button = Layout[element];
+		Controls[control].pos = { button.x * dcw - dx, button.y * REFERENCE_HEIGHT };
+		Controls[control].size = { button.dw * button.scale * uiscale, button.dh * button.scale * uiscale };
+	}
+
 	// Start
 	scale = Layout[Elem_Start].scale * uiscale;
-	Controls[Start].pos =   { Layout[Elem_Start].x * dcw - dx, Layout[Elem_Start].y * 480.f };
+	Controls[Start].pos =   { Layout[Elem_Start].x * dcw - dx, Layout[Elem_Start].y * REFERENCE_HEIGHT };
 	Controls[Start].size =  { Layout[Elem_Start].dw * scale, Layout[Elem_Start].dh * scale };
 
 	// Left trigger
 	scale = Layout[Elem_LT].scale * uiscale;
-	Controls[LeftTrigger].pos = { Layout[Elem_LT].x * dcw - dx, Layout[Elem_LT].y * 480.f };
+	Controls[LeftTrigger].pos = { Layout[Elem_LT].x * dcw - dx, Layout[Elem_LT].y * REFERENCE_HEIGHT };
 	Controls[LeftTrigger].size = { Layout[Elem_LT].dw * scale, Layout[Elem_LT].dh * scale };
 
 	// Right trigger
 	scale = Layout[Elem_RT].scale * uiscale;
-	Controls[RightTrigger].pos =  { Layout[Elem_RT].x * dcw - dx, Layout[Elem_RT].y * 480.f };
+	Controls[RightTrigger].pos =  { Layout[Elem_RT].x * dcw - dx, Layout[Elem_RT].y * REFERENCE_HEIGHT };
 	Controls[RightTrigger].size = { Layout[Elem_RT].dw * scale, Layout[Elem_RT].dh * scale };
 
 	// Analog
 	x = Layout[Elem_Analog].x * dcw - dx;
-	y = Layout[Elem_Analog].y * 480.f;
+	y = Layout[Elem_Analog].y * REFERENCE_HEIGHT;
 	scale = Layout[Elem_Analog].scale * uiscale;
 	Controls[AnalogArea].pos =   { x, y };
 	Controls[AnalogArea].size =  { Layout[Elem_Analog].dw * scale, Layout[Elem_Analog].dh * scale };
@@ -574,27 +909,27 @@ static void applyLayout()
 
 	// Fast forward
 	scale = Layout[Elem_FForward].scale * uiscale;
-	Controls[FastForward].pos =  { Layout[Elem_FForward].x * dcw - dx, Layout[Elem_FForward].y * 480.f };
+	Controls[FastForward].pos =  { Layout[Elem_FForward].x * dcw - dx, Layout[Elem_FForward].y * REFERENCE_HEIGHT };
 	Controls[FastForward].size = { Layout[Elem_FForward].dw * scale, Layout[Elem_FForward].dh * scale };
 
 	// ARCADE
 	// Button 4
 	scale = Layout[Elem_Btn4].scale * uiscale;
-	Controls[Btn4].pos =  { Layout[Elem_Btn4].x * dcw - dx, Layout[Elem_Btn4].y * 480.f };
+	Controls[Btn4].pos =  { Layout[Elem_Btn4].x * dcw - dx, Layout[Elem_Btn4].y * REFERENCE_HEIGHT };
 	Controls[Btn4].size = { Layout[Elem_Btn4].dw * scale, Layout[Elem_Btn4].dh * scale };
 	// Button 5
 	scale = Layout[Elem_Btn5].scale * uiscale;
-	Controls[Btn5].pos =  { Layout[Elem_Btn5].x * dcw - dx, Layout[Elem_Btn5].y * 480.f };
+	Controls[Btn5].pos =  { Layout[Elem_Btn5].x * dcw - dx, Layout[Elem_Btn5].y * REFERENCE_HEIGHT };
 	Controls[Btn5].size = { Layout[Elem_Btn5].dw * scale, Layout[Elem_Btn5].dh * scale };
 
 	// Service Mode
 	scale = Layout[Elem_ServiceMode].scale * uiscale;
-	Controls[ServiceMode].pos =  { Layout[Elem_ServiceMode].x * dcw - dx, Layout[Elem_ServiceMode].y * 480.f };
+	Controls[ServiceMode].pos =  { Layout[Elem_ServiceMode].x * dcw - dx, Layout[Elem_ServiceMode].y * REFERENCE_HEIGHT };
 	Controls[ServiceMode].size = { Layout[Elem_ServiceMode].dw * scale, Layout[Elem_ServiceMode].dh * scale };
 
 	// Insert Card
 	scale = Layout[Elem_InsertCard].scale * uiscale;
-	Controls[InsertCard].pos =  { Layout[Elem_InsertCard].x * dcw - dx, Layout[Elem_InsertCard].y * 480.f };
+	Controls[InsertCard].pos =  { Layout[Elem_InsertCard].x * dcw - dx, Layout[Elem_InsertCard].y * REFERENCE_HEIGHT };
 	Controls[InsertCard].size = { Layout[Elem_InsertCard].dw * scale, Layout[Elem_InsertCard].dh * scale };
 }
 
@@ -605,38 +940,537 @@ void applyUiScale() {
 
 static void loadLayout()
 {
-	for (auto& element : Layout) {
-		element.reset();
-		element.load();
+	const char *section = getLayoutCfgSection();
+	for (int i = 0; i < Elem_DPadLeft; i++) {
+		Layout[i].reset();
+		Layout[i].load();
 	}
+	resetIndividualButtons(Elem_DPad);
+	resetIndividualButtons(Elem_Buttons);
+	// Old configurations remain grouped. Each platform layout stores its own choice.
+	GroupedButtons[Elem_DPad] = config::loadBool(section, "dpad_grouped", true);
+	GroupedButtons[Elem_Buttons] = config::loadBool(section, "buttons_grouped", true);
+	// Older saves have no marker, so preserve any stored individual settings.
+	HasIndividualLayout = {};
+	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
+	{
+		const Element group = getButtonGroup(static_cast<Element>(i));
+		if (HasIndividualLayout[group])
+			continue;
+		for (const char *suffix : { "_x", "_y", "_scale", "_transparency", "_touch_size" })
+			if (!config::loadStr(section, Layout[i].name + suffix).empty())
+			{
+				HasIndividualLayout[group] = true;
+				break;
+			}
+	}
+	for (int group = Elem_DPad; group <= Elem_Buttons; group++)
+		HasIndividualLayout[group] = !GroupedButtons[group] || config::loadBool(section,
+				Layout[group].name + "_individual_layout", HasIndividualLayout[group]);
+	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
+		if (HasIndividualLayout[getButtonGroup(static_cast<Element>(i))])
+			Layout[i].load();
 	applyLayout();
+	LayoutLoaded = true;
 }
 
-static void saveLayout()
+static void saveCustomization(const std::string& imagePath)
 {
 	config::setAutoSave(false);
 	for (auto& element : Layout)
 		element.save();
-	config::setAutoSave(false);
+	config::saveBool(getLayoutCfgSection(), "dpad_grouped", GroupedButtons[Elem_DPad]);
+	config::saveBool(getLayoutCfgSection(), "buttons_grouped", GroupedButtons[Elem_Buttons]);
+	// Done also saves generated coordinates; the markers keep first-split behavior.
+	config::saveBool(getLayoutCfgSection(), "dpad_individual_layout", HasIndividualLayout[Elem_DPad]);
+	config::saveBool(getLayoutCfgSection(), "buttons_individual_layout", HasIndividualLayout[Elem_Buttons]);
+	config::VirtualGamepadEnabled.save();
+	config::VirtualGamepadHapticFeedback.save();
+	config::VirtualGamepadVisualFeedback.save();
+	config::VirtualGamepadCircularStick.save();
+	config::VirtualGamepadVibration.save();
+	config::VirtualGamepadTransparency.save();
+	config::VirtualGamepadIdleTimeout.save();
+	config::VirtualGamepadFingerSize.save();
+	config::saveStr(CFG_SECTION, getButtonsCfgName(), imagePath);
+	config::setAutoSave(true);
 }
 
 static void resetLayout()
 {
-	for (auto& element : Layout)
-		element.reset();
+	for (int i = 0; i < Elem_DPadLeft; i++)
+		Layout[i].reset();
+	GroupedButtons = { true, true };
+	HasIndividualLayout = {};
+	resetIndividualButtons(Elem_DPad);
+	resetIndividualButtons(Elem_Buttons);
+	if (SelectedElement >= Elem_DPadLeft)
+		SelectedElement = getButtonGroup(SelectedElement);
+	DraggedElement = Elem_None;
 	applyLayout();
+}
+
+static void resetElement(Element element)
+{
+	if (!isValidElement(element))
+		return;
+	if (element >= Elem_DPadLeft)
+		resetIndividualButtons(element);
+	else
+	{
+		Layout[element].reset();
+		const Element group = getButtonGroup(element);
+		if (group != Elem_None)
+		{
+			GroupedButtons[group] = true;
+			resetIndividualButtons(group);
+			HasIndividualLayout[group] = false;
+		}
+	}
+	applyLayout();
+}
+
+static void captureLayoutEditState(LayoutEditState& state)
+{
+	for (int i = 0; i < Elem_Count; i++)
+	{
+		const LayoutElement& element = Layout[i];
+		state.layout[i] = {
+			element.x,
+			element.y,
+			element.scale,
+			element.transparency,
+			element.touchSize,
+		};
+	}
+	state.groupedButtons = GroupedButtons;
+	state.hasIndividualLayout = HasIndividualLayout;
+	state.imagePath = PendingImagePath;
+}
+
+static void restoreLayoutEditState(const LayoutEditState& state)
+{
+	for (int i = 0; i < Elem_Count; i++)
+	{
+		LayoutElement& element = Layout[i];
+		const LayoutState& saved = state.layout[i];
+		element.x = saved.x;
+		element.y = saved.y;
+		element.scale = saved.scale;
+		element.transparency = saved.transparency;
+		element.touchSize = saved.touchSize;
+	}
+	GroupedButtons = state.groupedButtons;
+	HasIndividualLayout = state.hasIndividualLayout;
+	PendingImagePath = state.imagePath;
+	applyLayout();
+	// Reload even an empty path so switching or Cancel also restores default art.
+	loadOSDButtons();
+}
+
+static void captureEditSession()
+{
+	EditSession.enabled = static_cast<bool>(config::VirtualGamepadEnabled);
+	EditSession.hapticFeedback = static_cast<bool>(config::VirtualGamepadHapticFeedback);
+	EditSession.visualFeedback = static_cast<bool>(config::VirtualGamepadVisualFeedback);
+	EditSession.circularStick = static_cast<bool>(config::VirtualGamepadCircularStick);
+	EditSession.vibration = static_cast<int>(config::VirtualGamepadVibration);
+	EditSession.transparency = static_cast<int>(config::VirtualGamepadTransparency);
+	EditSession.idleTimeout = static_cast<int>(config::VirtualGamepadIdleTimeout);
+	EditSession.fingerSize = static_cast<int>(config::VirtualGamepadFingerSize);
+	const bool console = EditConsoleLayout;
+	for (int i = 0; i < 2; i++)
+	{
+		EditConsoleLayout = i == 0;
+		loadLayout();
+		PendingImagePath = config::loadStr(CFG_SECTION, getButtonsCfgName(), "");
+		captureLayoutEditState(EditSession.layouts[i]);
+	}
+	PendingLayouts = EditSession.layouts;
+	EditConsoleLayout = console;
+	restoreLayoutEditState(PendingLayouts[console ? 0 : 1]);
+}
+
+static void restoreGlobalEditSettings()
+{
+	config::VirtualGamepadEnabled = EditSession.enabled;
+	config::VirtualGamepadHapticFeedback = EditSession.hapticFeedback;
+	config::VirtualGamepadVisualFeedback = EditSession.visualFeedback;
+	config::VirtualGamepadCircularStick = EditSession.circularStick;
+	config::VirtualGamepadVibration = EditSession.vibration;
+	config::VirtualGamepadTransparency = EditSession.transparency;
+	config::VirtualGamepadIdleTimeout = EditSession.idleTimeout;
+	config::VirtualGamepadFingerSize = EditSession.fingerSize;
+}
+
+static bool getElementScreenBounds(Element element, ImVec2& min, ImVec2& max)
+{
+	if (!isValidElement(element))
+		return false;
+
+	const LayoutElement& layout = Layout[element];
+	const float dcw = REFERENCE_HEIGHT * static_cast<float>(settings.display.width) / settings.display.height;
+	const float dcOffsetX = (dcw - REFERENCE_WIDTH) / 2.f;
+	const float screenScale = settings.display.height / REFERENCE_HEIGHT;
+	const float screenOffsetX = (settings.display.width - screenScale * REFERENCE_WIDTH) / 2.f;
+	const ImVec2 dcMin(layout.x * dcw - dcOffsetX, layout.y * REFERENCE_HEIGHT);
+	const ImVec2 dcSize(layout.w * layout.scale * dcw, layout.h * layout.scale * REFERENCE_HEIGHT);
+	min = dcMin * screenScale;
+	min.x += screenOffsetX;
+	max = (dcMin + dcSize) * screenScale;
+	max.x += screenOffsetX;
+	return true;
+}
+
+static bool getControlScreenBounds(ControlId controlId, ImVec2& min, ImVec2& max)
+{
+	if (controlId < Left || controlId >= _Count || Controls[controlId].disabled)
+		return false;
+
+	const Control& control = Controls[controlId];
+	const float screenScale = settings.display.height / REFERENCE_HEIGHT;
+	const float screenOffsetX = (settings.display.width - screenScale * REFERENCE_WIDTH) / 2.f;
+	min = control.pos * screenScale;
+	min.x += screenOffsetX;
+	max = (control.pos + control.size) * screenScale;
+	max.x += screenOffsetX;
+	// Show the button target independently of the finger contact used by hitTest().
+	const ImVec2 padding = getControlHitPadding(controlId) * screenScale;
+	min -= padding;
+	max += padding;
+	return true;
+}
+
+static void drawSelectedElement()
+{
+	if (!Editing || !isValidElement(SelectedElement))
+		return;
+
+	ImVec2 min;
+	ImVec2 max;
+	if (!getElementScreenBounds(SelectedElement, min, max))
+		return;
+
+	const float outlinePadding = uiScaled(4.f);
+	min -= ImVec2(outlinePadding, outlinePadding);
+	max += ImVec2(outlinePadding, outlinePadding);
+	ImDrawList *drawList = ImGui::GetBackgroundDrawList();
+	drawList->AddRect(min, max, IM_COL32(34, 161, 110, 230), uiScaled(8.f), 0, uiScaled(2.f));
+
+	for (int control = Left; control < _Count; control++)
+	{
+		const ControlId controlId = static_cast<ControlId>(control);
+		if (controlToElement(controlId) != SelectedElement)
+			continue;
+
+		ImVec2 touchMin;
+		ImVec2 touchMax;
+		if (getControlScreenBounds(controlId, touchMin, touchMax))
+			drawList->AddRect(touchMin, touchMax, IM_COL32(64, 196, 255, 210), uiScaled(8.f), 0, uiScaled(2.f));
+	}
+}
+
+static void drawTouchIndicator()
+{
+	const ImGuiIO& io = ImGui::GetIO();
+	if (!Editing || !io.MouseDown[ImGuiMouseButton_Left] || !ImGui::IsMousePosValid(&io.MousePos))
+		return;
+
+	// Preview Finger Size even over the settings panel or outside a button target.
+	// The blue target outlines still show the per-control Touch Size and scaling.
+	ImDrawList *drawList = ImGui::GetForegroundDrawList();
+	const ImVec2 position = io.MousePos;
+	const float screenScale = settings.display.height / REFERENCE_HEIGHT;
+	const float radius = getFingerRadius() * screenScale;
+	if (radius > 0.f)
+		drawList->AddCircle(position, radius, IM_COL32(255, 202, 67, 245), 32, uiScaled(2.f));
+	drawList->AddCircleFilled(position, uiScaled(4.f), IM_COL32(255, 255, 255, 245), 24);
+}
+
+static int getElementScalePercent(Element element)
+{
+	return isValidElement(element) ? std::lround(Layout[element].scale * MAX_PERCENT) : MAX_PERCENT;
+}
+
+static void setElementScale(Element element, float scale)
+{
+	if (!isValidElement(element) || !std::isfinite(scale))
+		return;
+
+	LayoutElement& selected = Layout[element];
+	const float clampedScale = std::clamp(scale, MIN_ELEMENT_SCALE, MAX_ELEMENT_SCALE);
+	if (clampedScale == selected.scale)
+		return;
+
+	// Use the clamped scale delta so the unit stays centered at either limit.
+	selected.x += selected.w * (selected.scale - clampedScale) / 2.f;
+	selected.y += selected.h * (selected.scale - clampedScale) / 2.f;
+	selected.scale = clampedScale;
+	applyLayout();
+}
+
+static bool drawCustomizeSlider(const char *id, const char *label, int& value, int min, int max,
+		const char *format = "%d%%")
+{
+	ImGui::TextUnformatted(label);
+	ImGui::SetNextItemWidth(-1.f);
+	ImguiID _(id);
+	return ImGui::SliderInt("##Value", &value, min, max, format);
+}
+
+static bool drawCustomizeCheckbox(const char *id, const char *label, bool& value)
+{
+	ImguiID _(id);
+	const bool changed = ImGui::Checkbox("##Value", &value);
+	ImGui::SameLine();
+	ImGui::TextUnformatted(label);
+	return changed;
+}
+
+static bool drawCustomizeButton(const char *id, const char *label, const ImVec2& size)
+{
+	const std::string widgetLabel = std::string(label) + "###" + id;
+	return ImGui::Button(widgetLabel.c_str(), size);
+}
+
+static void drawCustomizePanel()
+{
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	// Keep the panel clear of cutouts and system gestures as the safe area changes.
+	const ImVec2 safeSize(displaySize.x - insetLeft - insetRight, displaySize.y - insetTop - insetBottom);
+	if (safeSize.x <= 0.f || safeSize.y <= 0.f)
+		return;
+
+	const float margin = uiScaled(8.f);
+	const float width = std::max(1.f, std::min(safeSize.x - margin * 2.f, uiScaled(430.f)));
+	const float height = std::max(1.f, std::min(safeSize.y - margin * 2.f, uiScaled(680.f)));
+	ImGui::SetNextWindowPos(ImVec2(insetLeft + safeSize.x * 0.5f, insetTop + margin),
+			ImGuiCond_Always, ImVec2(0.5f, 0.f));
+	ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
+	const std::string windowTitle = std::string(i18n::T("Virtual Controller")) + "###VirtualControllerCustomize";
+	ImGui::Begin(windowTitle.c_str(), nullptr,
+			ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
+
+	ImGui::TextUnformatted(i18n::T("Controller Layout"));
+	if (ImGui::RadioButton(i18n::T("Dreamcast"), EditConsoleLayout) && !EditConsoleLayout)
+		switchEditingLayout(true);
+	ImGui::SameLine();
+	if (ImGui::RadioButton(i18n::T("Arcade"), !EditConsoleLayout) && EditConsoleLayout)
+		switchEditingLayout(false);
+	ImGui::Separator();
+
+	if (!isValidElement(SelectedElement))
+		SelectedElement = Elem_DPad;
+
+	ImGui::Text("%s: %s", i18n::T("Selected"), getElementLabel(SelectedElement));
+	ImGui::TextWrapped("%s", i18n::T("Touch a button to select it. Drag to move it."));
+
+	const Element group = getButtonGroup(SelectedElement);
+	if (group != Elem_None)
+	{
+		bool& grouped = GroupedButtons[group];
+		if (drawCustomizeCheckbox("VirtualControllerGrouped", i18n::T("Grouped"), grouped))
+		{
+			if (grouped)
+				Layout[group].reset();
+			else if (!HasIndividualLayout[group])
+			{
+				resetIndividualButtons(group);
+				HasIndividualLayout[group] = true;
+			}
+			SelectedElement = grouped ? group : (group == Elem_DPad ? Elem_DPadLeft : Elem_ButtonX);
+			DraggedElement = Elem_None;
+			applyLayout();
+		}
+		ImGui::TextWrapped("%s", i18n::T("Turn off to move individual buttons. Turning on restores this group's default layout."));
+	}
+
+	ImGui::Separator();
+	bool enabled = static_cast<bool>(config::VirtualGamepadEnabled);
+	bool visualFeedback = static_cast<bool>(config::VirtualGamepadVisualFeedback);
+	if (drawCustomizeCheckbox("VirtualControllerEnabled", i18n::T("Show Virtual Controller"), enabled))
+		config::VirtualGamepadEnabled = enabled;
+	if (drawCustomizeCheckbox("VirtualControllerVisualFeedback", i18n::T("Visual Feedback"), visualFeedback))
+		config::VirtualGamepadVisualFeedback = visualFeedback;
+	bool circularStick = static_cast<bool>(config::VirtualGamepadCircularStick);
+	if (drawCustomizeCheckbox("VirtualControllerCircularStick", i18n::T("Circular Stick Travel"), circularStick))
+		config::VirtualGamepadCircularStick = circularStick;
+	ImGui::TextWrapped("%s", i18n::T("Off uses the original square stick travel."));
+
+	// The virtual controller's capability matters, even if a physical pad can rumble.
+	const auto virtualGamepad = GamepadDevice::GetGamepad<VirtualGamepad>();
+	if (virtualGamepad != nullptr && virtualGamepad->is_rumble_enabled())
+	{
+		bool hapticFeedback = static_cast<bool>(config::VirtualGamepadHapticFeedback);
+		if (drawCustomizeCheckbox("VirtualControllerHapticFeedback", i18n::T("Vibration"), hapticFeedback))
+			config::VirtualGamepadHapticFeedback = hapticFeedback;
+
+		int vibration = std::clamp(static_cast<int>(config::VirtualGamepadVibration), 0, MAX_PERCENT);
+		if (vibration != static_cast<int>(config::VirtualGamepadVibration))
+			config::VirtualGamepadVibration = vibration;
+		ImGui::BeginDisabled(!hapticFeedback);
+		if (drawCustomizeSlider("VirtualControllerVibrationPower", i18n::T("Vibration Power"), vibration, 0, MAX_PERCENT))
+			config::VirtualGamepadVibration = vibration;
+		ImGui::EndDisabled();
+	}
+
+	int timeout = std::clamp(static_cast<int>(config::VirtualGamepadIdleTimeout), 0, MAX_IDLE_TIMEOUT_SECONDS);
+	if (drawCustomizeSlider("VirtualControllerIdleTimeout", i18n::T("Idle Timeout in Seconds"), timeout, 0,
+			MAX_IDLE_TIMEOUT_SECONDS, timeout == 0 ? i18n::T("Never") : "%d")
+			|| timeout != static_cast<int>(config::VirtualGamepadIdleTimeout))
+		config::VirtualGamepadIdleTimeout = timeout;
+
+	int fingerSize = std::clamp(static_cast<int>(config::VirtualGamepadFingerSize), 0, MAX_PERCENT);
+	if (drawCustomizeSlider("VirtualControllerFingerSize", i18n::T("Finger Size"), fingerSize, 0, MAX_PERCENT)
+			|| fingerSize != static_cast<int>(config::VirtualGamepadFingerSize))
+		config::VirtualGamepadFingerSize = fingerSize;
+
+	ImGui::Separator();
+	LayoutElement& selected = Layout[SelectedElement];
+	int unitTransparency = selected.transparency;
+	if (drawCustomizeSlider("VirtualControllerUnitTransparency", i18n::T("Unit Transparency"),
+			unitTransparency, 0, MAX_PERCENT))
+		selected.transparency = std::clamp(unitTransparency, 0, MAX_PERCENT);
+
+	int touchSize = selected.touchSize;
+	if (drawCustomizeSlider("VirtualControllerTouchSize", i18n::T("Touch Size"), touchSize, 0, MAX_PERCENT))
+		selected.touchSize = std::clamp(touchSize, 0, MAX_PERCENT);
+
+	int scale = getElementScalePercent(SelectedElement);
+	if (drawCustomizeSlider("VirtualControllerScale", i18n::T("Scaling"), scale,
+			static_cast<int>(MIN_ELEMENT_SCALE * MAX_PERCENT), static_cast<int>(MAX_ELEMENT_SCALE * MAX_PERCENT)))
+		setElementScale(SelectedElement, scale / static_cast<float>(MAX_PERCENT));
+
+	const float pairedButtonWidth = std::max(1.f,
+			(ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2.f);
+	if (drawCustomizeButton("VirtualControllerResetUnit", i18n::T("Reset Unit"), ImVec2(pairedButtonWidth, uiScaled(32))))
+		resetElement(SelectedElement);
+	ImGui::SameLine();
+	if (drawCustomizeButton("VirtualControllerResetLayout", i18n::T("Reset Layout"), ImVec2(pairedButtonWidth, uiScaled(32))))
+		resetLayout();
+
+	const char *imagePickerLabel = i18n::T("Select a PNG file");
+	const std::string imagePickerTitle = std::string(imagePickerLabel) + "###VirtualControllerImagePicker";
+	const auto& images = isConsoleLayout() ? DreamcastImages : ArcadeImages;
+	const char *preview = PendingImagePath.empty() ? i18n::T("Default") : i18n::T("Custom Image");
+	for (const auto& image : images)
+		if (PendingImagePath == image.path)
+			preview = i18n::T(image.label);
+	ImGui::Separator();
+	ImGui::TextUnformatted(isConsoleLayout() ? i18n::T("Dreamcast Images") : i18n::T("Arcade Images"));
+	ImGui::SetNextItemWidth(-1.f);
+	bool chooseImage = false;
+	if (ImGui::BeginCombo("##VirtualControllerImage", preview))
+	{
+		for (const auto& image : images)
+		{
+			ImguiID _(image.path);
+			// An empty image key preserves the legacy search for default artwork.
+			const bool isDefault = &image == &images[0];
+			const bool selected = isDefault ? PendingImagePath.empty() : PendingImagePath == image.path;
+			if (ImGui::Selectable(i18n::T(image.label), selected))
+				loadImage(isDefault ? "" : image.path);
+			if (selected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::Separator();
+		chooseImage = ImGui::Selectable(i18n::T("CHOOSE IMG..."));
+		ImGui::EndCombo();
+	}
+	if (chooseImage)
+#ifdef __ANDROID__
+	{
+		if (!hostfs::addStorage(false, false, imagePickerLabel, [](bool cancelled, std::string path) {
+			if (!cancelled)
+				gui_runOnUiThread([path]() { loadImage(path); });
+		}, Tnop("image/png")))
+			ImGui::OpenPopup(imagePickerTitle.c_str());
+	}
+#else
+	{
+		ImGui::OpenPopup(imagePickerTitle.c_str());
+	}
+#endif
+	select_file_popup(imagePickerTitle.c_str(), [](bool cancelled, std::string selection)
+			{
+				if (!cancelled)
+					gui_runOnUiThread([selection]() { loadImage(selection); });
+				return true;
+			}, true, Tnop("png"));
+
+	ImGui::Separator();
+	if (drawCustomizeButton("VirtualControllerDone", i18n::T("Done"), ImVec2(pairedButtonWidth, uiScaled(36))))
+	{
+		stopEditing(false);
+		gui_setState(GuiState::Settings);
+	}
+	ImGui::SameLine();
+	if (drawCustomizeButton("VirtualControllerCancel", i18n::T("Cancel"), ImVec2(pairedButtonWidth, uiScaled(36))))
+	{
+		stopEditing(true);
+		gui_setState(GuiState::Settings);
+	}
+
+	ImGui::End();
+}
+
+static void handleCustomizeDrag(bool pointerOverUi)
+{
+	ImGuiIO& io = ImGui::GetIO();
+	if (!Editing || io.DisplaySize.x <= 0.f || io.DisplaySize.y <= 0.f)
+		return;
+
+	const ImVec2 mouse = io.MousePos;
+	if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	{
+		DraggedElement = pointerOverUi
+				? Elem_None
+				: layoutHitTest(mouse.x / io.DisplaySize.x, mouse.y / io.DisplaySize.y);
+		LastDragMousePos = mouse;
+	}
+	else if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && isValidElement(DraggedElement))
+	{
+		if (!pointerOverUi)
+		{
+			const ImVec2 delta = mouse - LastDragMousePos;
+			translateElement(DraggedElement, delta.x / io.DisplaySize.x, delta.y / io.DisplaySize.y);
+		}
+		LastDragMousePos = mouse;
+	}
+	else if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+	{
+		DraggedElement = Elem_None;
+	}
 }
 
 Element layoutHitTest(float x, float y)
 {
-	for (const auto& element : Layout)
-		if (element.hitTest(x, y))
-			return static_cast<Element>(&element - &Layout[0]);
+	if (!std::isfinite(x) || !std::isfinite(y))
+		return Elem_None;
+
+	const float dcw = REFERENCE_HEIGHT * static_cast<float>(settings.display.width) / settings.display.height;
+	x = x * dcw - (dcw - REFERENCE_WIDTH) / 2.f;
+	y *= REFERENCE_HEIGHT;
+	// Select only rendered controls, without invisible units or finger padding
+	// stealing a tap from the button the user can actually see.
+	for (int i = 0; i < _VisibleCount; i++)
+	{
+		const Control& control = Controls[i];
+		if (!control.disabled && x >= control.pos.x && x < control.pos.x + control.size.x
+				&& y >= control.pos.y && y < control.pos.y + control.size.y)
+		{
+			SelectedElement = controlToElement(static_cast<ControlId>(i));
+			return SelectedElement;
+		}
+	}
 	return Elem_None;
 }
 
 void translateElement(Element element, float dx, float dy)
 {
+	if (!isValidElement(element) || !std::isfinite(dx) || !std::isfinite(dy) || (dx == 0.f && dy == 0.f))
+		return;
+
 	LayoutElement& e = Layout[element];
 	e.x += dx;
 	e.y += dy;
@@ -645,22 +1479,24 @@ void translateElement(Element element, float dx, float dy)
 
 void scaleElement(Element element, float factor)
 {
-	LayoutElement& e = Layout[element];
-	float dx = e.w * e.scale * (factor - 1.f) / 2.f;
-	float dy = e.h * e.scale * (factor - 1.f) / 2.f;
-	e.scale *= factor;
-	// keep centered
-	translateElement(element, -dx, -dy);
+	if (!isValidElement(element) || !std::isfinite(factor) || factor <= 0.f)
+		return;
+	setElementScale(element, Layout[element].scale * factor);
 }
 
 void loadImage(const std::string& path)
 {
-	if (path.empty()) {
-		config::saveStr(CFG_SECTION, getButtonsCfgName(), "");
-		loadOSDButtons();
+	if (!Editing)
+		return;
+
+	if (path.empty())
+	{
+		loadDefaultOSDButtons();
+		PendingImagePath.clear();
 	}
-	else if (loadOSDButtons(path)) {
-		config::saveStr(CFG_SECTION, getButtonsCfgName(), path);
+	else if (loadOSDButtons(path))
+	{
+		PendingImagePath = path;
 	}
 }
 
@@ -709,6 +1545,8 @@ static void disableControl(ControlId ctrlId)
 
 void startGame()
 {
+	// The previous game may have used the other platform's saved layout.
+	loadLayout();
 	enableAllControls();
 	serviceMode = false;
 	setButtonMap();
@@ -925,28 +1763,65 @@ void startGame()
 	}
 }
 
-void resetEditing() {
-	resetLayout();
-}
-
 void startEditing()
 {
-	enableAllControls();
+	if (!Editing)
+	{
+		EditConsoleLayout = settings.platform.isConsole();
+		Editing = true;
+		captureEditSession();
+	}
+	switchEditingLayout(EditConsoleLayout);
 	show();
 	setEditMode(true);
+}
+
+static void switchEditingLayout(bool console)
+{
+	// Switching previews never saves: Done commits both layouts, Cancel restores both.
+	if (console != EditConsoleLayout)
+	{
+		captureLayoutEditState(PendingLayouts[EditConsoleLayout ? 0 : 1]);
+		EditConsoleLayout = console;
+		restoreLayoutEditState(PendingLayouts[console ? 0 : 1]);
+	}
+	enableAllControls();
+	if (console)
+	{
+		disableControl(Btn4);
+		disableControl(Btn5);
+		disableControl(ServiceMode);
+		disableControl(InsertCard);
+	}
+	SelectedElement = GroupedButtons[Elem_DPad] ? Elem_DPad : Elem_DPadLeft;
+	DraggedElement = Elem_None;
+	setButtonMap();
 }
 
 void pauseEditing() {
 	setEditMode(false);
 }
 
-static void stopEditing(bool canceled)
+void stopEditing(bool canceled)
 {
+	// A normal Done/Cancel is followed by the shared GUI exit cleanup.
+	if (!Editing)
+		return;
 	setEditMode(false);
+	DraggedElement = Elem_None;
+	captureLayoutEditState(PendingLayouts[EditConsoleLayout ? 0 : 1]);
 	if (canceled)
-		loadLayout();
-	else
-		saveLayout();
+		restoreGlobalEditSettings();
+	for (int i = 0; i < 2; i++)
+	{
+		EditConsoleLayout = i == 0;
+		restoreLayoutEditState(canceled ? EditSession.layouts[i] : PendingLayouts[i]);
+		// Cancel must preserve absent keys and their inherited defaults.
+		if (!canceled)
+			saveCustomization(PendingImagePath);
+	}
+	Editing = false;
+	startGame();
 }
 
 }	// namespace vgamepad

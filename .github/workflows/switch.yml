@@ -2,8 +2,9 @@ name: Nintendo Switch
 
 on:
   push:
-    branches-ignore:
-      - 'l10n_**'
+    branches:
+      - dev
+      - master
   pull_request:
 
 jobs:

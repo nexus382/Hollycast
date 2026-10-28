@@ -89,6 +89,7 @@ option(USE_HOST_GLSLANG "Use host glslang" OFF)
 option(USE_HOST_LIBZIP "Use host libzip" ON)
 option(USE_HOST_SDL "Use host SDL library" ${USE_HOST_SDL_DEFAULT})
 option(USE_HOST_LIBCHDR "Use host libchdr" OFF)
+option(USE_HOST_LIBJUICE "Use host libjuice" OFF)
 option(USE_OPENMP "Use OpenMP if available" ON)
 option(USE_VULKAN "Build with Vulkan support" ON)
 set(MOLTENVK_DYLIB "" CACHE FILEPATH "Path to macOS MoltenVK dylib for macOS Vulkan builds")
@@ -167,10 +168,14 @@ else()
 endif()
 
 if(WINDOWS_STORE)
-	string(REGEX REPLACE "[Vv]" "" MS_VERSION ${GIT_VERSION})
-	string(REPLACE "-" "." MS_VERSION ${MS_VERSION})
-	string(REGEX REPLACE "\.g[0-9a-f]+" "" MS_VERSION ${MS_VERSION})
-	string(REGEX MATCHALL "[0-9]+" VERSION_PARTS ${MS_VERSION})
+	string(REGEX REPLACE "^[Vv]" "" MS_VERSION "${GIT_VERSION}")
+	string(REGEX REPLACE "-g[0-9a-f]+$" "" MS_VERSION "${MS_VERSION}")
+	string(REPLACE "-" "." MS_VERSION "${MS_VERSION}")
+	# Untagged checkouts return a Git hash; Appx versions require four numeric parts.
+	if(NOT MS_VERSION MATCHES "^[0-9]+\\.[0-9]+(\\.[0-9]+)?(\\.[0-9]+)?$")
+		set(MS_VERSION "0.0.0.0")
+	endif()
+	string(REPLACE "." ";" VERSION_PARTS "${MS_VERSION}")
 	list(LENGTH VERSION_PARTS VERSION_PARTS_LENGTH)
 	if(VERSION_PARTS_LENGTH EQUAL 2)
 		string(APPEND MS_VERSION ".0.0")
@@ -219,6 +224,10 @@ elseif(LIBRETRO)
 		if(NOT CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
 			set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
 		endif()
+		if(UNIX AND NOT APPLE)
+			# Keep bundled libraries from binding to same-named symbols in the frontend.
+			target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/shell/libretro/link.T")
+		endif()
 	endif()
 	set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "Hollycast_libretro"
 	  XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
@@ -233,6 +242,9 @@ elseif(LIBRETRO)
 	endif()
 	if(ANDROID OR USE_GLES)
 		target_compile_definitions(${PROJECT_NAME} PRIVATE GLES GLES3 HAVE_OPENGLES HAVE_OPENGLES3 HAVE_OPENGLES_3_1 HAVE_OIT)
+		if(ANDROID)
+			target_link_libraries(${PROJECT_NAME} PRIVATE android)
+		endif()
     elseif(IOS)
 		target_compile_definitions(${PROJECT_NAME} PRIVATE GLES GLES3 HAVE_OPENGLES HAVE_OPENGLES3)
 		find_library(OPENGLES OpenGLES)
@@ -283,6 +295,7 @@ elseif(WIN32)
 		set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
 	endif()
 elseif(APPLE)
+	set(USE_OPENMP OFF CACHE BOOL "Force openmp off" FORCE)
 	add_executable(${PROJECT_NAME} MACOSX_BUNDLE core/emulator.cpp)
 else()
 	add_executable(${PROJECT_NAME} core/emulator.cpp)
@@ -459,10 +472,6 @@ if(USE_BREAKPAD AND NOT LIBRETRO)
 endif()
 
 if(USE_OPENMP)
-	if(APPLE AND IS_DIRECTORY "/opt/homebrew/opt/libomp")
-		list(PREPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/libomp")
-		message(STATUS "Found and using Homebrew libomp hint.")
-	endif()
 	find_package(OpenMP)
 	if(OpenMP_CXX_FOUND)
 		if(MINGW)
@@ -579,11 +588,6 @@ if(NOT LIBRETRO)
 
 		target_compile_definitions(${PROJECT_NAME} PRIVATE USE_SDL USE_SDL_AUDIO)
 		add_subdirectory(core/sdl)
-
-		if((UNIX AND NOT APPLE) OR NINTENDO_SWITCH)
-			find_package(CURL REQUIRED)
-			target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
-		endif()
 	endif()
 
 	find_package(ZLIB)
@@ -601,6 +605,18 @@ if(NOT LIBRETRO)
 			target_link_libraries(${PROJECT_NAME} PRIVATE ${LUA_LIBRARIES})
 		endif()
 	endif()
+endif()
+
+# http
+if((UNIX AND NOT APPLE AND NOT ANDROID) OR NINTENDO_SWITCH)
+	find_package(CURL REQUIRED)
+	target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
+elseif(LIBRETRO AND ANDROID)
+	# libretro needs to enable prefab and add dependency 'implementation("io.github.vvb2060.ndk:curl:8.18.0")'
+	find_package(curl REQUIRED CONFIG)
+	target_link_libraries(${PROJECT_NAME} PRIVATE curl::curl_static)
+elseif(LIBRETRO AND WIN32)
+	target_link_libraries(${PROJECT_NAME} PRIVATE wininet)
 endif()
 
 find_package(PkgConfig)
@@ -839,18 +855,27 @@ if(WIN32)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/dirent)
 endif()
 
-if(NOT LIBRETRO AND NOT NINTENDO_SWITCH)
-	target_compile_definitions(${PROJECT_NAME} PRIVATE USE_ICE)
-	# libjuice
+# libjuice
+target_compile_definitions(${PROJECT_NAME} PRIVATE USE_ICE)
+if (USE_HOST_LIBJUICE AND UNIX AND NOT APPLE AND NOT ANDROID)
+	find_package(LibJuice)
+endif()
+if(NOT TARGET LibJuice::LibJuiceStatic)
 	option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 	option(NO_SERVER "Disable server support" ON)
 	option(NO_TESTS "Disable tests build" ON)
 	add_subdirectory(core/deps/libjuice EXCLUDE_FROM_ALL)
-	target_link_libraries(${PROJECT_NAME} PRIVATE LibJuice::LibJuiceStatic)
+	if(NINTENDO_SWITCH)
+		target_include_directories(juice-static SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/shell/switch)
+		target_compile_definitions(juice-static PRIVATE getnameinfo=getnameinfo_fixed)
+	endif()
+endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE LibJuice::LibJuiceStatic)
 
-	# websocket++
+# websocket++
+if(NOT LIBRETRO AND NOT NINTENDO_SWITCH)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/websocketpp)
-	target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE USE_WEBSOCKET)
 	if (MSVC)
 		target_compile_definitions(${PROJECT_NAME} PRIVATE
 			_WEBSOCKETPP_CPP11_FUNCTIONAL_
@@ -865,8 +890,13 @@ if(NOT LIBRETRO AND NOT NINTENDO_SWITCH)
 	endif()
 endif()
 
+# tinygettext
 set(TINYGETTEXT_WO_ICONV ON)
 add_subdirectory(core/deps/tinygettext EXCLUDE_FROM_ALL)
+if(MSVC)
+	# tinygettext contains native-language string literals in UTF-8 source files.
+	target_compile_options(tinygettext PRIVATE /utf-8)
+endif()
 target_include_directories(${PROJECT_NAME} PRIVATE core/deps/tinygettext/include)
 target_link_libraries(${PROJECT_NAME} PRIVATE tinygettext::tinygettext)
 
@@ -1022,7 +1052,9 @@ if(LIBRETRO)
 		shell/libretro/storage.cpp
 		shell/libretro/vmu_xhair.cpp)
 	if(APPLE)
-		target_sources(${PROJECT_NAME} PRIVATE shell/libretro/oslib_apple.mm)
+		target_sources(${PROJECT_NAME} PRIVATE
+			shell/libretro/oslib_apple.mm
+			shell/apple/common/http_client.mm)
 	endif()
 	if(WIN32)
 		target_link_libraries(${PROJECT_NAME} PRIVATE mswsock)
@@ -1413,23 +1445,28 @@ if(NOT LIBRETRO)
 				COMMAND ${CMAKE_COMMAND} -E tar "cfv" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>-${CMAKE_OSX_SYSROOT}/Hollycast.ipa" --format=zip ${CMAKE_CURRENT_BINARY_DIR}/Payload)
 		else()
 
-			add_subdirectory(core/deps/Syphon)
-			target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
-			add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}
-				$<TARGET_FILE_DIR:Hollycast>/../Resources/)
-			target_compile_definitions(${PROJECT_NAME} PRIVATE VIDEO_ROUTING)
-
 			target_sources(${PROJECT_NAME} PRIVATE
 					shell/apple/common/http_client.mm
-					shell/apple/common/util.mm
-					shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.h
-					shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
-					shell/apple/emulator-osx/emulator-osx/osx-main.mm)
-			set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
-			target_sources(${PROJECT_NAME} PRIVATE ${ASSETS})
-			source_group("Resources" FILES ${ASSETS})
-			set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+					shell/apple/common/util.mm)
+			# Test builds use gtest_main instead of the macOS app entry point.
+			if(NOT BUILD_TESTING)
+				add_subdirectory(core/deps/Syphon)
+				target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
+				add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}
+					$<TARGET_FILE_DIR:Hollycast>/../Resources/)
+				target_compile_definitions(${PROJECT_NAME} PRIVATE VIDEO_ROUTING)
+
+				target_sources(${PROJECT_NAME} PRIVATE
+						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.h
+						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
+						shell/apple/emulator-osx/emulator-osx/osx-main.mm)
+				set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
+				target_sources(${PROJECT_NAME} PRIVATE ${ASSETS} fonts/NotoSansCJK-LICENSE.txt)
+				set_source_files_properties(fonts/NotoSansCJK-LICENSE.txt PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+				source_group("Resources" FILES ${ASSETS})
+				set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+			endif()
 
 			set_target_properties(${PROJECT_NAME} PROPERTIES
 				OUTPUT_NAME "Hollycast"
@@ -1563,6 +1600,10 @@ elseif(LIBRETRO)
 	install(TARGETS ${PROJECT_NAME} DESTINATION "${CMAKE_INSTALL_LIBDIR}/libretro")
 else()
 	install(TARGETS ${PROJECT_NAME} DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
+
+if(NOT APPLE AND NOT LIBRETRO)
+	install(FILES fonts/NotoSansCJK-LICENSE.txt DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}")
 endif()
 
 if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT LIBRETRO)

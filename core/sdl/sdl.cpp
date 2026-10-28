@@ -396,6 +396,35 @@ static std::shared_ptr<SDLMouse> getMouse(u32 mouseId)
 	return mouse;
 }
 
+static u32 openFileEventType()
+{
+	static const u32 eventType = SDL_RegisterEvents(1);
+	return eventType;
+}
+
+// Queue a game to be started from the main loop.
+// A user event is used rather than SDL_DROPFILE because sdl2-compat doesn't carry over
+// the file name of drop events pushed by the application, and crashes when converting them back.
+bool sdl_queue_open_file(const char *path)
+{
+	if (openFileEventType() == (u32)-1)
+		return false;
+	if (SDL_WasInit(SDL_INIT_EVENTS) == 0 && SDL_InitSubSystem(SDL_INIT_EVENTS) != 0)
+		return false;
+
+	SDL_Event event = {};
+	event.type = openFileEventType();
+	event.user.data1 = SDL_strdup(path);
+	if (event.user.data1 == nullptr)
+		return false;
+	if (SDL_PushEvent(&event) != 1)
+	{
+		SDL_free(event.user.data1);
+		return false;
+	}
+	return true;
+}
+
 void input_sdl_handle()
 {
 	SDLGamepad::UpdateRumble();
@@ -440,6 +469,12 @@ void input_sdl_handle()
 	SDL_Event event;
 	while (SDL_PollEvent(&event))
 	{
+		if (event.type == openFileEventType())
+		{
+			gui_start_game((const char *)event.user.data1);
+			SDL_free(event.user.data1);
+			continue;
+		}
 #if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
 		if ((event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN
 				|| event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEWHEEL) && vmu_window::blocksMouseInput())
@@ -686,14 +721,24 @@ void input_sdl_handle()
 				}
 				break;
 
-			case SDL_MOUSEWHEEL:
+			case SDL_MOUSEWHEEL: {
+				// Use SDL's precise delta on macOS so trackpad motion stays smooth.
+				// A 1:1 ImGui wheel scale also avoids multiplying fractional trackpad
+				// motion by the legacy 35/16 factor. SDL does not identify the device
+				// source, so conventional mouse wheels use this scale too.
+#if defined(TARGET_MAC)
+				const float preciseY = event.wheel.preciseY != 0 ? event.wheel.preciseY : (float)event.wheel.y;
+				gui_set_mouse_wheel(-preciseY * 16);
+#else
 				gui_set_mouse_wheel(-event.wheel.y * 35);
+#endif
 				checkRawInput();
 				if (!config::UseRawInput) {
 					auto mouse = getMouse(event.wheel.which);
 					mouse->setWheel(-event.wheel.y);
 				}
 				break;
+			}
 
 			case SDL_JOYDEVICEADDED:
 				sdl_open_joystick(event.jdevice.which);
@@ -705,6 +750,7 @@ void input_sdl_handle()
 
 			case SDL_DROPFILE:
 				gui_start_game(event.drop.file);
+				SDL_free(event.drop.file);
 				break;
 
 			// Switch touchscreen support
@@ -746,7 +792,9 @@ void input_sdl_handle()
 
 void sdlReceiveSlaveKeyboardEvent(u16 scancode, bool pressed)
 {
-	sdl_keyboard->input((SDL_Scancode)scancode, pressed);
+	if (sdl_keyboard != nullptr)
+		// TODO raw input support
+		sdl_keyboard->input((SDL_Scancode)scancode, pressed);
 	if (pressed)
 	{
 		u32 flags = SDL_GetWindowFlags(window);

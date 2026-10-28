@@ -184,6 +184,7 @@ public:
 	std::atomic<u32> displayed {0};
 	std::atomic<bool> dragging {false};
 	std::atomic<bool> interactive {false};
+	std::atomic<bool> mousePositionReset {false};
 
 private:
 	struct Window {
@@ -208,6 +209,9 @@ private:
 				return;
 			// Clear first: ReleaseCapture synchronously sends WM_CAPTURECHANGED.
 			moving = false;
+			// Native dragging may consume every SDL mouse event. Keep the reset
+			// pending until the input thread receives absolute motion again.
+			host->mousePositionReset = true;
 			host->dragging = false;
 			if (GetCapture() == handle)
 				ReleaseCapture();
@@ -347,6 +351,7 @@ private:
 				return 0;
 			window->dragOffset = {cursor.x - rect.left, cursor.y - rect.top};
 			window->moving = true;
+			window->host->mousePositionReset = true;
 			window->host->dragging = true;
 			return 0;
 		}
@@ -354,7 +359,8 @@ private:
 			if (window->moving)
 			{
 				POINT cursor;
-				GetCursorPos(&cursor);
+				if (!GetCursorPos(&cursor))
+					return 0;
 				SetWindowPos(handle, nullptr, cursor.x - window->dragOffset.x, cursor.y - window->dragOffset.y,
 						0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
 			}
@@ -449,7 +455,13 @@ private:
 				// Async mouse state uses physical buttons, including swapped-button setups.
 				const int button = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
 				if (!canInteract || GetCapture() != window.handle || (GetAsyncKeyState(button) & 0x8000) == 0)
+				{
 					window.finishDrag();
+					// finishDrag publishes a placement after this tick's snapshot.
+					// Use it now so cancelling a first drag cannot restore the default.
+					std::lock_guard<std::mutex> lock(mutex);
+					locations[i] = positions[i];
+				}
 			}
 			if (!current.enabled || !frames[i].active)
 			{
@@ -482,16 +494,14 @@ private:
 			else if (!window.moving)
 			{
 				RECT rect;
-				GetWindowRect(window.handle, &rect);
-				// Until dragged, default positions follow the menu inset, including a
-				// menu first drawn after the worker starts. Saved positions stay put.
-				const bool defaultPlacement = reset != lastReset || locations[i].x == Unplaced || locations[i].y == Unplaced;
-				POINT location = reachablePosition(defaultPlacement ? POINT{Unplaced, Unplaced} : POINT{rect.left, rect.top}, size, fallback);
-				if (location.x != rect.left || location.y != rect.top)
+				if (GetWindowRect(window.handle, &rect))
 				{
-					SetWindowPos(window.handle, nullptr, location.x, location.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
-					if (!defaultPlacement)
-						remember(i, location);
+					// Clamp only the visible placement. Retain the user's preferred
+					// coordinates so size/work-area changes and returning monitors recover it.
+					const POINT preferred = reset != lastReset ? POINT{Unplaced, Unplaced} : locations[i];
+					const POINT location = reachablePosition(preferred, size, fallback);
+					if (location.x != rect.left || location.y != rect.top)
+						SetWindowPos(window.handle, nullptr, location.x, location.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
 				}
 			}
 			const BYTE opacity = current.menu ? 128 : 192;
@@ -628,15 +638,26 @@ bool ownsScreen(int index)
 bool blocksMouseInput()
 {
 	if (windows.dragging)
+	{
+		windows.mousePositionReset = true;
 		return true;
+	}
 	if (!windows.interactive || windows.displayed == 0)
 		return false;
 	POINT cursor;
 	if (!GetCursorPos(&cursor))
 		return false;
 	wchar_t name[64];
-	return GetClassNameW(WindowFromPoint(cursor), name, int(std::size(name))) != 0
+	const bool blocked = GetClassNameW(WindowFromPoint(cursor), name, int(std::size(name))) != 0
 			&& std::wcscmp(name, WindowClass) == 0;
+	if (blocked)
+		windows.mousePositionReset = true;
+	return blocked;
+}
+
+bool consumeMousePositionReset()
+{
+	return windows.mousePositionReset.exchange(false);
 }
 }
 #endif

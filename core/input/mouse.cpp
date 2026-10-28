@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -19,6 +20,10 @@
 #include "mouse.h"
 #include "cfg/option.h"
 #include "ui/gui.h"
+#include <algorithm>
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+#include "windows/vmu_window.h"
+#endif
 
 // Mouse buttons
 // bit 0: Button C
@@ -96,7 +101,12 @@ void SystemMouse::setWheel(int delta) {
 static void screenToNative(int& x, int& y, int width, int height)
 {
 	float fx, fy;
-	if (!config::Rotate90)
+	if (config::StretchToFill)
+	{
+		fx = x * 640.f / width;
+		fy = y * 480.f / height;
+	}
+	else if (!config::Rotate90)
 	{
 		float scale = 480.f / height;
 		fy = y * scale;
@@ -118,6 +128,15 @@ void SetMousePosition(int x, int y, int width, int height, u32 mouseId)
 {
 	if (mouseId >= std::size(mo_x_abs))
 		return;
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+	if (vmu_window::consumeMousePositionReset())
+	{
+		// SDL and absolute raw-input devices share these baselines. A native VMU
+		// drag can finish without delivering any intermediate motion to either.
+		std::fill(std::begin(mo_x_prev), std::end(mo_x_prev), -1);
+		std::fill(std::begin(mo_y_prev), std::end(mo_y_prev), -1);
+	}
+#endif
 	mo_width = width;
 	mo_height = height;
 
@@ -146,6 +165,8 @@ void SetRelativeMousePosition(float xrel, float yrel, u32 mouseId)
 {
 	if (mouseId >= std::size(mo_x_delta))
 		return;
+	mo_x_prev[mouseId] = -1;
+	mo_y_prev[mouseId] = -1;
 	int width = mo_width;
 	int height = mo_height;
 	if (config::Rotate90)

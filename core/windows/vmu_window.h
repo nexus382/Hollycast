@@ -15,6 +15,8 @@ void shutdown();
 void resetPositions();
 bool ownsScreen(int index);
 bool blocksMouseInput();
+// Consume on the input thread before resuming absolute mouse motion.
+bool consumeMousePositionReset();
 #else
 inline bool ownsScreen(int) { return false; }
 #endif

@@ -22,12 +22,17 @@ if(NOT LIBRETRO)
             mainui.h
             performance_overlay.cpp
             performance_overlay.h
+            readiness.h
+            setup_checklist_lifecycle.h
+            setup_checklist_popup.h
             settings.cpp
             settings.h
             settings_about.cpp
             settings_audio.cpp
             settings_controls.cpp
             settings_general.cpp
+            custom_theme.cpp
+            custom_theme.h
             settings_network.cpp
             settings_video.cpp
             settings_new.cpp

@@ -1,9 +1,11 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "maple_cfg.h"
 #include "maple_helper.h"
 #include "maple_if.h"
 #include "hw/naomi/naomi_cart.h"
 #include "hw/naomi/card_reader.h"
 #include "hw/sh4/modules/modules.h"
+#include "hw/sh4/sh4_sched.h"
 #include "cfg/option.h"
 #include "stdclass.h"
 #include "serialize.h"
@@ -17,6 +19,7 @@ MapleInputState mapleInputState[4];
 extern bool maple_ddt_pending_reset;
 extern std::vector<std::pair<u32, std::vector<u32>>> mapleDmaOut;
 extern bool SDCKBOccupied;
+extern int maple_schid;
 
 void (*MapleConfigMap::UpdateVibration)(u32 port, float power, float inclination, u32 duration_ms);
 
@@ -238,7 +241,8 @@ static void mcfg_Create(MapleDeviceType type, u32 bus, u32 port, s32 player_num 
 		return;
 
 	std::shared_ptr<maple_device> dev = maple_Create(type);
-	dev->Setup(bus, port, player_num);
+	if (dev != nullptr)
+		dev->Setup(bus, port, player_num);
 }
 
 void createDreamLinkDevices(
@@ -622,6 +626,8 @@ void mcfg_SerializeDevices(Serializer& ser)
 {
 	ser << maple_ddt_pending_reset;
 	ser << SDCKBOccupied;
+	sh4_sched_serialize(ser, maple_schid);
+
 	ser << (u32)mapleDmaOut.size();
 	for (const auto& pair : mapleDmaOut)
 	{
@@ -650,6 +656,9 @@ void mcfg_DeserializeDevices(Deserializer& deser)
 	deser >> maple_ddt_pending_reset;
 	if (deser.version() >= Deserializer::V47)
 		deser >> SDCKBOccupied;
+	if (deser.version() >= Deserializer::V62)
+		sh4_sched_deserialize(deser, maple_schid);
+
 	mapleDmaOut.clear();
 	u32 size;
 	deser >> size;

@@ -1,4 +1,5 @@
 ﻿/*
+    Portions Copyright 2026 The Hollycast Authors
     This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -252,6 +253,8 @@ extern "C" {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_AR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_AR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_AR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_AR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_AR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_AR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_AR NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_AR NULL
@@ -1165,6 +1168,21 @@ struct retro_core_option_v2_definition option_defs_ar[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_AR,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_AR,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_AR,
@@ -2352,6 +2370,8 @@ struct retro_core_options_v2 options_ar = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_AST NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_AST NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_AST NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_AST NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_AST NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_AST NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_AST NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_AST NULL
@@ -3265,6 +3285,21 @@ struct retro_core_option_v2_definition option_defs_ast[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_AST,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_AST,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_AST,
@@ -4452,6 +4487,8 @@ struct retro_core_options_v2 options_ast = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_BE NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_BE "Здымаць дамп тэкстур"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_BE "Пры кожным выкарыстанні гульнёй новай тэкстуры яна будзе захоўвацца ў файл .png у тэчцы 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_BE NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_BE NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_BE NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_BE NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_BE "Мёртвая зона аналагавага стыку"
@@ -5365,6 +5402,21 @@ struct retro_core_option_v2_definition option_defs_be[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_BE,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_BE,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_BE,
@@ -6552,6 +6604,8 @@ struct retro_core_options_v2 options_be = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_BG NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_BG NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_BG NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_BG NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_BG NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_BG NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_BG NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_BG NULL
@@ -7465,6 +7519,21 @@ struct retro_core_option_v2_definition option_defs_bg[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_BG,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_BG,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_BG,
@@ -8652,6 +8721,8 @@ struct retro_core_options_v2 options_bg = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_CA "Carrega les textures personalitzades a l'inici. Pot millorar el rendiment però augment l'ús de memòria."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_CA "Abocar textures"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_CA "Cada vegada que un joc faci servir una nova textura, aquesta es desarà en un fitxer .png a la carpeta 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CA "Descarta el vídeo i les textures animades"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CA "Omet l'abocament de vídeo (YUV) i de les textures actualitzades."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CA "Substitueix les textures"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_CA "Sempre aboca les textures que son reemplaçades per les textures personalitzades."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_CA "Zona morta palanca analògica"
@@ -9565,6 +9636,21 @@ struct retro_core_option_v2_definition option_defs_ca[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CA,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CA,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CA,
@@ -10649,7 +10735,7 @@ struct retro_core_options_v2 options_ca = {
 #define OPTION_VAL_PER_PIXEL_ACCURATE_CHS "按像素（精确，但最慢）"
 #define CORE_OPTION_NAME_OIT_ABUFFER_SIZE_LABEL_CHS "累积像素缓冲区大小"
 #define CORE_OPTION_NAME_OIT_ABUFFER_SIZE_INFO_0_CHS "更高的值可能在更高分辨率下才能正确输出。"
-#define OPTION_VAL_512MB_CHS "512M"
+#define OPTION_VAL_512MB_CHS NULL
 #define OPTION_VAL_1GB_CHS NULL
 #define OPTION_VAL_2GB_CHS NULL
 #define OPTION_VAL_4GB_CHS NULL
@@ -10748,12 +10834,14 @@ struct retro_core_options_v2 options_ca = {
 #define OPTION_VAL_500_CHS NULL
 #define CORE_OPTION_NAME_CUSTOM_TEXTURES_LABEL_CHS "加载自定义纹理"
 #define CORE_OPTION_NAME_CUSTOM_TEXTURES_INFO_0_CHS "加载位于 'system/dc/textures/<游戏ID>/' 文件夹中的自定义纹理。"
-#define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_LABEL_CHS NULL
-#define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_CHS NULL
+#define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_LABEL_CHS "预加载自定义纹理"
+#define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_CHS "游戏启动时预先加载自定义纹理贴图。这可能提升性能，但会增加内存占用。"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_CHS "转储纹理"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_CHS "每当游戏使用一个新纹理时，它将被保存为一个 .png 文件，存放于 'system/dc/texdump/<游戏ID>/' 文件夹中。"
-#define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CHS NULL
-#define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_CHS NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CHS "丢弃视频和动画纹理"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CHS "跳过转储视频的 YUV 数据和已更新纹理。"
+#define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CHS "转储已被替换的纹理"
+#define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_CHS "总是转储已经被自定义纹理替换的原始纹理"
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_CHS "模拟摇杆死区"
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_INFO_0_CHS "选择在摇杆开始被处理前需要推动多远的距离。"
 #define OPTION_VAL_0_CHS NULL
@@ -10834,8 +10922,8 @@ struct retro_core_options_v2 options_ca = {
 #define CORE_OPTION_NAME_VMU_SOUND_LABEL_CHS "视觉内存单元/系统（VMU）声音"
 #define CORE_OPTION_NAME_VMU_SOUND_LABEL_CAT_CHS "VMU 声音"
 #define CORE_OPTION_NAME_VMU_SOUND_INFO_0_CHS "启用时，会播放 VMU 的“哔”声。"
-#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_LABEL_CHS NULL
-#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_INFO_0_CHS NULL
+#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_LABEL_CHS "DreamPotato VMU 存储"
+#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_INFO_0_CHS "在已连接的 DreamPotato 仿真器上启用VMU 数据存储。启用时，不使用本地VMU 保存文件。"
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_LABEL_CHS "显示视觉内存单元/系统（VMU）屏幕设置"
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_LABEL_CAT_CHS "显示 VMU 屏幕设置"
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_INFO_0_CHS "启用对模拟 VMU LCD 屏幕可见性、大小、位置和颜色的配置。注意：快速菜单可能需要切换才能使此设置生效。"
@@ -11665,6 +11753,21 @@ struct retro_core_option_v2_definition option_defs_chs[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CHS,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CHS,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CHS,
@@ -12852,6 +12955,8 @@ struct retro_core_options_v2 options_chs = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_CHT NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_CHT NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_CHT NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CHT NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CHT NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CHT NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_CHT NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_CHT NULL
@@ -13765,6 +13870,21 @@ struct retro_core_option_v2_definition option_defs_cht[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CHT,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CHT,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CHT,
@@ -14952,6 +15072,8 @@ struct retro_core_options_v2 options_cht = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_CS "Načíst vlastní textury při spuštění hry. Může zlepšit výkon, ale zvyšuje využití paměti."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_CS "Skladiště Textur"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_CS "Pokaždé, když hra použije novou texturu, uloží ji jako soubor .png do složky 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CS NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CS NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CS "Vymazat nahrazené textury"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_CS "Vždy vymažte textury, které již byly nahrazeny vlastními texturami."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_CS "Analogova Páčka Mrtvé Zóny"
@@ -15865,6 +15987,21 @@ struct retro_core_option_v2_definition option_defs_cs[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CS,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CS,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CS,
@@ -17052,6 +17189,8 @@ struct retro_core_options_v2 options_cs = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_CY NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_CY NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_CY NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CY NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CY NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CY NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_CY NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_CY NULL
@@ -17965,6 +18104,21 @@ struct retro_core_option_v2_definition option_defs_cy[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_CY,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_CY,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_CY,
@@ -19152,6 +19306,8 @@ struct retro_core_options_v2 options_cy = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_DA NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_DA NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_DA NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_DA NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_DA NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_DA NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_DA NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_DA NULL
@@ -20065,6 +20221,21 @@ struct retro_core_option_v2_definition option_defs_da[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_DA,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_DA,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_DA,
@@ -21252,6 +21423,8 @@ struct retro_core_options_v2 options_da = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_DE "Eigene Texturen beim Start von Spielen vorabladen. Dies kann die Leistung verbessern, erhöht jedoch den Speicherverbrauch."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_DE "Texturen dumpen"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_DE "Jedes Mal, wenn eine neue Textur vom Spiel verwendet wird, wird sie als .png-Datei im Ordner „system/dc/texdump/<game-id>/“ gespeichert."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_DE "Videotexturen und animierte Texturen verwerfen"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_DE "Das Dumpen von Videodaten (YUV) und bereits aktualisierten Texturen überspringen."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_DE "Ersetzte Texturen aus Speicher entfernen"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_DE "Bereits durch eigene, ersetzte Texturen immer aus dem Speicher entfernen."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_DE "Analog-Stick Totzone"
@@ -22165,6 +22338,21 @@ struct retro_core_option_v2_definition option_defs_de[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_DE,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_DE,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_DE,
@@ -23352,6 +23540,8 @@ struct retro_core_options_v2 options_de = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_EL NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_EL NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_EL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_EL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_EL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_EL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_EL NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_EL NULL
@@ -24265,6 +24455,21 @@ struct retro_core_option_v2_definition option_defs_el[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_EL,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_EL,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_EL,
@@ -25452,6 +25657,8 @@ struct retro_core_options_v2 options_el = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_EN NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_EN NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_EN NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_EN NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_EN NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_EN NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_EN NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_EN "Analogue Stick Dead-zone"
@@ -26365,6 +26572,21 @@ struct retro_core_option_v2_definition option_defs_en[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_EN,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_EN,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_EN,
@@ -27552,6 +27774,8 @@ struct retro_core_options_v2 options_en = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_EO "Antaŭŝargi proprajn teksturojn ĉe starto de ludo. Povus plibonigi rendimenton sed pliigas uzon de memoro."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_EO "Elŝuti teksturojn"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_EO "Ĉiam, kiam nova teksturo estas uzata de la ludo, ĝi estos konservita kiel dosiero .png en la dosierujo \"system/dc/texdump/<identigilo-de-ludo>/\"."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_EO NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_EO NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_EO "Ŝuti anstataŭigitaj teksturoj"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_EO "Ĉiam ŝuti teksturojn, kiuj jam estas anstataŭigitaj de propraj teksturoj."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_EO "Analogstanga malviva zono"
@@ -28465,6 +28689,21 @@ struct retro_core_option_v2_definition option_defs_eo[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_EO,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_EO,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_EO,
@@ -29555,8 +29794,8 @@ struct retro_core_options_v2 options_eo = {
 #define OPTION_VAL_4GB_ES "4 GB"
 #define CORE_OPTION_NAME_OIT_LAYERS_LABEL_ES "N.º máximo de capas transparentes"
 #define CORE_OPTION_NAME_OIT_LAYERS_INFO_0_ES "Las escenas más complejas podrían necesitar un valor más alto."
-#define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_LABEL_ES "Emulación completa del framebuffer"
-#define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_INFO_0_ES "Activa la emulación completa del framebuffer dentro de la VRAM. Ideal para aquellos juegos que lean o escriban directamente al framebuffer en la VRAM. Al activar esta opción, se forzará una resolución interna de 640 × 480 y el rendimiento podría verse gravemente afectado."
+#define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_LABEL_ES "Emulación completa del búfer de fotogramas"
+#define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_INFO_0_ES "Activa la emulación completa del búfer de fotogramas dentro de la VRAM. Ideal para aquellos juegos que lean o escriban directamente al búfer de fotogramas de la VRAM. Al activar esta opción, se forzará una resolución interna de 640 × 480 y el rendimiento podría verse gravemente afectado."
 #define CORE_OPTION_NAME_ENABLE_RTTB_LABEL_ES "Activar el búfer RTT (renderizado a texturas)"
 #define CORE_OPTION_NAME_ENABLE_RTTB_INFO_0_ES "Copia las texturas renderizadas en la GPU de vuelta a la VRAM. Esta opción suele dejarse activada para aquellos juegos que la requieran. Al activar esta opción, se desactivará el escalado de texturas y el rendimiento podría verse afectado."
 #define CORE_OPTION_NAME_MIPMAPPING_LABEL_ES "«Mipmapping»"
@@ -29652,6 +29891,8 @@ struct retro_core_options_v2 options_eo = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_ES "Carga las texturas personalizadas al ejecutar un juego. Podría mejorar el rendimiento, pero aumentará el consumo de memoria."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_ES "Volcar texturas"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_ES "Cada vez que aparezca una textura nueva en el juego, se guardará en formato .PNG dentro de la carpeta «system/dc/texdump/<id-del-juego>/»."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_ES "Omitir vídeos y texturas animadas"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_ES "Omite el volcado de vídeos (formato YUV) y de texturas que ya hayan sido actualizadas."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_ES "Volcar texturas ya reemplazadas"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_ES "Vuelca siempre las texturas que ya hayan sido reemplazadas por otras personalizadas."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_ES "Zona muerta del stick analógico"
@@ -30565,6 +30806,21 @@ struct retro_core_option_v2_definition option_defs_es[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_ES,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_ES,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_ES,
@@ -31752,6 +32008,8 @@ struct retro_core_options_v2 options_es = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_FA NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_FA NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_FA NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_FA NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_FA NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_FA NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_FA NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_FA NULL
@@ -32665,6 +32923,21 @@ struct retro_core_option_v2_definition option_defs_fa[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_FA,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_FA,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_FA,
@@ -33852,6 +34125,8 @@ struct retro_core_options_v2 options_fa = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_FI NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_FI NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_FI NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_FI NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_FI NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_FI NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_FI NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_FI NULL
@@ -34765,6 +35040,21 @@ struct retro_core_option_v2_definition option_defs_fi[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_FI,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_FI,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_FI,
@@ -35802,33 +36092,33 @@ struct retro_core_options_v2 options_fi = {
 #define CORE_OPTION_NAME_DCNET_INFO_0_FR "Utilisez le service cloud DCNet pour l'accès à internet de la Dreamcast."
 #define CORE_OPTION_NAME_INTERNAL_RESOLUTION_LABEL_FR "Résolution interne"
 #define CORE_OPTION_NAME_INTERNAL_RESOLUTION_INFO_0_FR "Modifier la résolution de rendu."
-#define OPTION_VAL_320X240_FR "320x240 (Moitié)"
-#define OPTION_VAL_640X480_FR "640x480 (Natif)"
-#define OPTION_VAL_800X600_FR "800x600 (1,25x)"
-#define OPTION_VAL_960X720_FR "960x720 (1,5x)"
-#define OPTION_VAL_1024X768_FR "1024x768 (1,6x)"
-#define OPTION_VAL_1280X960_FR "1280x960 (2x)"
-#define OPTION_VAL_1440X1080_FR "1440x1080 (2,25x)"
-#define OPTION_VAL_1600X1200_FR "1600x1200 (2,5x)"
-#define OPTION_VAL_1920X1440_FR "1920x1440 (3x)"
-#define OPTION_VAL_2560X1920_FR "2560x1920 (4x)"
-#define OPTION_VAL_2880X2160_FR "2880x2160 (4,5x)"
-#define OPTION_VAL_3200X2400_FR "3200x2400 (5x)"
-#define OPTION_VAL_3840X2880_FR "3840x2880 (6x)"
-#define OPTION_VAL_4480X3360_FR "4480x3360 (7x)"
-#define OPTION_VAL_5120X3840_FR "5120x3840 (8x)"
-#define OPTION_VAL_5760X4320_FR "5760x4320 (9x)"
-#define OPTION_VAL_6400X4800_FR "6400x4800 (10x)"
-#define OPTION_VAL_7040X5280_FR "7040x5280 (11x)"
-#define OPTION_VAL_7680X5760_FR "7680x5760 (12x)"
-#define OPTION_VAL_8320X6240_FR "8320x6240 (13x)"
-#define OPTION_VAL_8960X6720_FR "8960x6720 (14x)"
-#define OPTION_VAL_9600X7200_FR "9600x7200 (15x)"
-#define OPTION_VAL_10240X7680_FR "10240x7680 (16x)"
-#define OPTION_VAL_10880X8160_FR "10880x8160 (17x)"
-#define OPTION_VAL_11520X8640_FR "11520x8640 (18x)"
-#define OPTION_VAL_12160X9120_FR "12160x9120 (19x)"
-#define OPTION_VAL_12800X9600_FR "12800x9600 (20x)"
+#define OPTION_VAL_320X240_FR "320 x 240 (Moitié)"
+#define OPTION_VAL_640X480_FR "640 x 480 (Natif)"
+#define OPTION_VAL_800X600_FR "800 x 600 (x1,25)"
+#define OPTION_VAL_960X720_FR "960 x 720 (x1,5)"
+#define OPTION_VAL_1024X768_FR "1024 x 768 (x1,6)"
+#define OPTION_VAL_1280X960_FR "1280 x 960 (x2)"
+#define OPTION_VAL_1440X1080_FR "1440 x 1080 (x2,25)"
+#define OPTION_VAL_1600X1200_FR "1600 x 1200 (x2,5)"
+#define OPTION_VAL_1920X1440_FR "1920 x 1440 (x3)"
+#define OPTION_VAL_2560X1920_FR "2560 x 1920 (x4)"
+#define OPTION_VAL_2880X2160_FR "2880 x 2160 (x4,5)"
+#define OPTION_VAL_3200X2400_FR "3200 x 2400 (x5)"
+#define OPTION_VAL_3840X2880_FR "3840 x 2880 (x6)"
+#define OPTION_VAL_4480X3360_FR "4480 x 3360 (x7)"
+#define OPTION_VAL_5120X3840_FR "5120 x 3840 (x8)"
+#define OPTION_VAL_5760X4320_FR "5760 x 4320 (x9)"
+#define OPTION_VAL_6400X4800_FR "6400 x 4800 (x10)"
+#define OPTION_VAL_7040X5280_FR "7040 x 5280 (x11)"
+#define OPTION_VAL_7680X5760_FR "7680 x 5760 (x12)"
+#define OPTION_VAL_8320X6240_FR "8320 x 6240 (x13)"
+#define OPTION_VAL_8960X6720_FR "8960 x 6720 (x14)"
+#define OPTION_VAL_9600X7200_FR "9600 x 7200 (x15)"
+#define OPTION_VAL_10240X7680_FR "10240 x 7680 (x16)"
+#define OPTION_VAL_10880X8160_FR "10880 x 8160 (x17)"
+#define OPTION_VAL_11520X8640_FR "11520 x 8640 (x18)"
+#define OPTION_VAL_12160X9120_FR "12160 x 9120 (x19)"
+#define OPTION_VAL_12800X9600_FR "12800 x 9600 (x20)"
 #define CORE_OPTION_NAME_CABLE_TYPE_LABEL_FR "Type de câble"
 #define CORE_OPTION_NAME_CABLE_TYPE_INFO_0_FR "Le type de signal de sortie. 'TV (Composite)' est le plus largement pris en charge."
 #define OPTION_VAL_VGA_FR NULL
@@ -35856,7 +36146,7 @@ struct retro_core_options_v2 options_fi = {
 #define CORE_OPTION_NAME_OIT_LAYERS_LABEL_FR "Calques transparents maximum"
 #define CORE_OPTION_NAME_OIT_LAYERS_INFO_0_FR "Des valeurs plus élevées peuvent être requises pour les scènes complexes."
 #define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_LABEL_FR "Émulation complète du tampon d'image"
-#define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_INFO_0_FR "Active l'émulation complète du tampon d'image dans la VRAM. Ceci est utile pour les jeux qui lisent ou écrivent directement le framebuffer dans la VRAM. Lorsque cette option est activée, la résolution interne est forcée à 640x480 et les performances peuvent être sévèrement affectées."
+#define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_INFO_0_FR "Active l'émulation complète du tampon d'image dans la VRAM. Ceci est utile pour les jeux qui lisent ou écrivent directement le framebuffer dans la VRAM. Lorsque cette option est activée, la résolution interne est forcée à 640 x 480 et les performances peuvent être sévèrement affectées."
 #define CORE_OPTION_NAME_ENABLE_RTTB_LABEL_FR "Activer la mémoire tampon du RTT (rendu vers texture)"
 #define CORE_OPTION_NAME_ENABLE_RTTB_INFO_0_FR "Copier les textures rendues depuis le processeur graphique vers la VRAM. Cette option est normalement activée pour les jeux qui en ont besoin. Lorsque cette option est activée, la mise à l'échelle du rendu des textures est désactivée et les performances peuvent être impactées."
 #define CORE_OPTION_NAME_MIPMAPPING_LABEL_FR NULL
@@ -35952,6 +36242,8 @@ struct retro_core_options_v2 options_fi = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_FR "Précharge les textures personnalisées au lancement du jeu. Peut améliorer les performances mais augmente l'utilisation de la mémoire."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_FR "Importer les textures"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_FR "Chaque fois qu'une nouvelle texture est utilisée par le jeu, elle sera sauvegardée en tant que fichier .png dans le dossier 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_FR "Ignorer les vidéos et les textures animées"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_FR "Ignorer l'importation de la vidéo (YUV) et des textures déjà mises à jour."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_FR "Importer les textures remplacées"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_FR "Toujours importer les textures qui sont déjà remplacées par des textures personnalisées."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_FR "Deadzone du stick analogique"
@@ -36865,6 +37157,21 @@ struct retro_core_option_v2_definition option_defs_fr[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_FR,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_FR,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_FR,
@@ -38052,6 +38359,8 @@ struct retro_core_options_v2 options_fr = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_GA "Réamhlódáil uigeachtaí saincheaptha ag tús an chluiche. Féadfaidh sé feidhmíocht a fheabhsú ach méadaíonn sé úsáid cuimhne."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_GA "Uigeachtaí Dumpála"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_GA "Gach uair a úsáideann an cluiche uigeacht nua, sábhálfar í mar chomhad .png sa bhfillteán 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_GA "Caith amach físeáin agus uigeachtaí beoite"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_GA "Ná déan dumpáil ar an bhfíseán (YUV) ná ar na huigeachtaí atá nuashonraithe cheana féin."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_GA "Uigeachtaí Athsholáthraithe Dumpála"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_GA "Dumpáil uigeachtaí atá curtha ina n-áit cheana féin le huigeachtaí saincheaptha i gcónaí."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_GA "Crios Marbh Bata Analógach"
@@ -38965,6 +39274,21 @@ struct retro_core_option_v2_definition option_defs_ga[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_GA,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_GA,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_GA,
@@ -40152,16 +40476,18 @@ struct retro_core_options_v2 options_ga = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_GL "Precarga as texturas personalizadas ao iniciar o xogo. Pode mellorar o rendemento, pero aumenta o uso de memoria."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_GL "Texturas de volcado"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_GL "Cada vez que o xogo use unha textura nova, gardarase como ficheiro .png no cartafol 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_GL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_GL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_GL "Exportar texturas substituídas"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_GL "Exporta sempre as texturas que xa foron substituídas por texturas personalizadas."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_GL "Zona morta panca analóxica"
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_INFO_0_GL "Selecciona ata onde tes que empuxar o stick analóxico antes de que comece a procesarse."
 #define OPTION_VAL_0_GL "0 %"
 #define OPTION_VAL_5_GL "5 %"
-#define OPTION_VAL_10_GL NULL
+#define OPTION_VAL_10_GL "10 %"
 #define OPTION_VAL_15_GL NULL
 #define OPTION_VAL_20_GL NULL
-#define OPTION_VAL_25_GL NULL
+#define OPTION_VAL_25_GL "25 %"
 #define OPTION_VAL_30_GL NULL
 #define CORE_OPTION_NAME_TRIGGER_DEADZONE_LABEL_GL "Activar zona morta"
 #define CORE_OPTION_NAME_TRIGGER_DEADZONE_INFO_0_GL "Seleccione canto ten que premer o gatillo antes de comezar a procesarse."
@@ -41065,6 +41391,21 @@ struct retro_core_option_v2_definition option_defs_gl[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_GL,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_GL,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_GL,
@@ -42252,6 +42593,8 @@ struct retro_core_options_v2 options_gl = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_HE NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_HE NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_HE NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_HE NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_HE NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_HE NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_HE NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_HE NULL
@@ -43165,6 +43508,21 @@ struct retro_core_option_v2_definition option_defs_he[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_HE,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_HE,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_HE,
@@ -44352,6 +44710,8 @@ struct retro_core_options_v2 options_he = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_HR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_HR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_HR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_HR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_HR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_HR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_HR NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_HR "Mrtva zona analogne palice"
@@ -45265,6 +45625,21 @@ struct retro_core_option_v2_definition option_defs_hr[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_HR,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_HR,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_HR,
@@ -46452,6 +46827,8 @@ struct retro_core_options_v2 options_hr = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_HU "A játék indításakor előre betölti az egyéni textúrákat. Javíthatja a teljesítményt, de növeli a memóriahasználatot."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_HU "Textúrák lementése"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_HU "A textúrák lementése .png fájlként a 'system/dc/texdump/<game-id>/' mappába, amint a játék új textúrát használ."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_HU NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_HU NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_HU "Lecserélt textúrák kimentése"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_HU "Az egyéni textúrák által lecserélt textúrák kiírása."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_HU "Analóg kar holtsávja"
@@ -47365,6 +47742,21 @@ struct retro_core_option_v2_definition option_defs_hu[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_HU,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_HU,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_HU,
@@ -48552,6 +48944,8 @@ struct retro_core_options_v2 options_hu = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_ID NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_ID "Dump Tekstur"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_ID NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_ID NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_ID NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_ID NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_ID NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_ID NULL
@@ -49465,6 +49859,21 @@ struct retro_core_option_v2_definition option_defs_id[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_ID,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_ID,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_ID,
@@ -50652,6 +51061,8 @@ struct retro_core_options_v2 options_id = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_IT "Precarica texture personalizzate all'avvio del gioco. Può migliorare le prestazioni, ma aumenta l'utilizzo della memoria."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_IT "Scarica Texture"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_IT "Ogni volta che un nuovo texture viene utilizzato dal gioco, verrà salvato come file .png nella cartella 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_IT NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_IT NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_IT "Scarica Texture sostituite"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_IT "Scarica sempre le texture che sono già sostituite da texture personalizzate."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_IT "Zona morta dello sticl analogico"
@@ -51565,6 +51976,21 @@ struct retro_core_option_v2_definition option_defs_it[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_IT,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_IT,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_IT,
@@ -52752,6 +53178,8 @@ struct retro_core_options_v2 options_it = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_JA NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_JA "テクスチャをダンプ"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_JA "ゲームで新しいテクスチャが使用されるたび、テクスチャを .png ファイルとして [system/dc/texdump/<game-id>] フォルダに保存します。"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_JA NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_JA NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_JA NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_JA NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_JA "アナログスティックデッドゾーン"
@@ -53665,6 +54093,21 @@ struct retro_core_option_v2_definition option_defs_ja[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_JA,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_JA,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_JA,
@@ -54852,6 +55295,8 @@ struct retro_core_options_v2 options_ja = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_KO "커스텀 텍스처를 게임 시작 시에 미리 불러옵니다. 성능이 향상될 수 있지만 메모리 사용량이 늘어납니다."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_KO "텍스쳐 덤프하기"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_KO "게임이 새로운 텍스처를 사용할 때마다, 'system/dc/texdump/<game-id>/' 폴더 안에 .png 파일로 저장되게 합니다."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_KO NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_KO NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_KO "교체된 텍스처 덤프하기"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_KO "커스텀 텍스처로 교체된 텍스처를 항상 덤프합니다."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_KO "아날로그 스틱 데드존"
@@ -55765,6 +56210,21 @@ struct retro_core_option_v2_definition option_defs_ko[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_KO,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_KO,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_KO,
@@ -56952,6 +57412,8 @@ struct retro_core_options_v2 options_ko = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_NL NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_NL NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_NL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_NL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_NL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_NL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_NL NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_NL NULL
@@ -57865,6 +58327,21 @@ struct retro_core_option_v2_definition option_defs_nl[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_NL,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_NL,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_NL,
@@ -59052,6 +59529,8 @@ struct retro_core_options_v2 options_nl = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_NO NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_NO NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_NO NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_NO NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_NO NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_NO NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_NO NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_NO NULL
@@ -59965,6 +60444,21 @@ struct retro_core_option_v2_definition option_defs_no[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_NO,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_NO,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_NO,
@@ -61152,6 +61646,8 @@ struct retro_core_options_v2 options_no = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_OR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_OR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_OR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_OR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_OR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_OR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_OR NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_OR NULL
@@ -62065,6 +62561,21 @@ struct retro_core_option_v2_definition option_defs_or[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_OR,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_OR,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_OR,
@@ -63252,6 +63763,8 @@ struct retro_core_options_v2 options_or = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_PL "Wstępnie załaduj niestandardowe tekstury przy starcie gry. Może poprawić wydajność, ale zwiększa zużycie pamięci."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_PL "Zgraj tekstury"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_PL "Za każdym razem, gdy nowa tekstura jest używana przez grę, zostanie zapisana jako plik .png w folderze 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_PL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_PL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_PL "Zgrywaj zamienione tekstury"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_PL "Zawsze zgrywaj tekstury, które są już zastąpione przez niestandardowe tekstury."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_PL "Martwa strefa drążka analogowego"
@@ -64165,6 +64678,21 @@ struct retro_core_option_v2_definition option_defs_pl[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_PL,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_PL,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_PL,
@@ -65352,6 +65880,8 @@ struct retro_core_options_v2 options_pl = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_PT_BR "Pré-carrega as texturas personalizadas ao iniciar um jogo. Otimiza o desempenho, mas aumenta o uso de memória."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_PT_BR "Descarregar texturas"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_PT_BR "Toda vez que uma nova textura for usada pelo jogo, a textura será salva como um .PNG na pasta \"system/dc/texdump/<game-id>/\"."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_PT_BR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_PT_BR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_PT_BR "Descarregar texturas substituídas"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_PT_BR "Descarrega as texturas que já foram substituídas pelas texturas personalizadas."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_PT_BR "Zona morta do direcional analógico"
@@ -66265,6 +66795,21 @@ struct retro_core_option_v2_definition option_defs_pt_br[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_PT_BR,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_PT_BR,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_PT_BR,
@@ -67452,6 +67997,8 @@ struct retro_core_options_v2 options_pt_br = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_PT_PT NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_PT_PT NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_PT_PT NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_PT_PT NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_PT_PT NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_PT_PT NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_PT_PT NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_PT_PT NULL
@@ -68365,6 +68912,21 @@ struct retro_core_option_v2_definition option_defs_pt_pt[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_PT_PT,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_PT_PT,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_PT_PT,
@@ -69552,6 +70114,8 @@ struct retro_core_options_v2 options_pt_pt = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_RU "Использовать предзагрузку кастомных текстур при запуске игры. Может улучшить производительность, но увеличивает расход памяти."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_RU "Дамп текстур"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_RU "При каждом использовании игрой новой текстуры она будет сохраняться в файл .png в папке 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_RU NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_RU NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_RU "Выгружать заменяемые текстуры"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_RU "Всегда создавать дамп текстур, для которых загружены кастомные текстуры."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_RU "Мёртвая зона аналогового стика"
@@ -70465,6 +71029,21 @@ struct retro_core_option_v2_definition option_defs_ru[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_RU,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_RU,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_RU,
@@ -71652,6 +72231,8 @@ struct retro_core_options_v2 options_ru = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_SK "Predčíta vlastné textúry pri spustení hry. Môže zlepšiť výkon, ale zvyšuje využitie pamäte."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_SK "Dumpovať textúry"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_SK "Vždy, keď hra použije novú textúru, sa uloží ako súbor .png v priečinku 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_SK "Vynechať video a animované textúry"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_SK "Pri ukladaní textúr preskočí video (YUV) a už aktualizované textúry."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_SK "Dumpovať nahradené textúry"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_SK "Vždy dumpovať textúry, ktoré sú už nahradené vlastnými textúrami."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_SK "Mŕtva zóna analógovej páčky"
@@ -72565,6 +73146,21 @@ struct retro_core_option_v2_definition option_defs_sk[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_SK,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_SK,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_SK,
@@ -73752,6 +74348,8 @@ struct retro_core_options_v2 options_sk = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_SR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_SR NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_SR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_SR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_SR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_SR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_SR NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_SR NULL
@@ -74665,6 +75263,21 @@ struct retro_core_option_v2_definition option_defs_sr[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_SR,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_SR,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_SR,
@@ -75852,6 +76465,8 @@ struct retro_core_options_v2 options_sr = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_SV "Förinläs anpassade texturer vid spelstart. Kan förbättra prestanda men ökar minnesanvändningen."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_SV "Dumpa texturer"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_SV "Varje gång en ny textur används av spelet sparas den som en .png-fil i mappen 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_SV "Ignorera video och animerade texturer"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_SV "Hoppa över dumpning av video (YUV) och redan uppdaterade texturer."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_SV "Dumpa ersatta texturer"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_SV "Dumpa alltid texturer som redan ersatts av anpassade texturer."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_SV "Analoga spakens dödzon"
@@ -76765,6 +77380,21 @@ struct retro_core_option_v2_definition option_defs_sv[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_SV,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_SV,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_SV,
@@ -77952,6 +78582,8 @@ struct retro_core_options_v2 options_sv = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_TH "โหลดพื้นผิวแบบกำหนดเองล่วงหน้า เมื่อเริ่มเกม อาจช่วยปรับปรุงประสิทธิภาพให้ดีขึ้น แต่จะใช้ RAM เพิ่มมากขึ้น"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_TH NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_TH "ทุกครั้งที่มีการใช้งานพื้นผิวใหม่ในเกม ไฟล์นั้นจะถูกบันทึกเป็นไฟล์ .png ไว้ในโฟลเดอร์ 'system/dc/texdump/<game-id>/'"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_TH NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_TH NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_TH "ดัมป์พื้นผิวที่ถูกแทนที่"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_TH "ดัมป์พื้นผิวที่ถูกแทนที่ด้วยพื้นผิวแบบกำหนดเองเสมอ"
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_TH "ระยะหยุดการทำงานของก้านอะนาล็อก"
@@ -78865,6 +79497,21 @@ struct retro_core_option_v2_definition option_defs_th[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_TH,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_TH,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_TH,
@@ -80052,6 +80699,8 @@ struct retro_core_options_v2 options_th = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_TR "Oyun başlangıcında özel dokuları önceden yükleyin. Bu, performansı artırabilir ancak bellek kullanımını yükseltir."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_TR "Dokuları Sakla"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_TR "Oyun tarafından her yeni doku kullanıldığında, 'system/dc/texdump/<game-id>/' klasörüne .png dosyası olarak kaydedilecektir."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_TR NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_TR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_TR NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_TR NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_TR "Analog Çubuğu Ölü Bölge"
@@ -80965,6 +81614,21 @@ struct retro_core_option_v2_definition option_defs_tr[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_TR,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_TR,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_TR,
@@ -82152,6 +82816,8 @@ struct retro_core_options_v2 options_tr = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_TT NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_TT NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_TT NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_TT NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_TT NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_TT NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_TT NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_TT NULL
@@ -83065,6 +83731,21 @@ struct retro_core_option_v2_definition option_defs_tt[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_TT,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_TT,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_TT,
@@ -84252,6 +84933,8 @@ struct retro_core_options_v2 options_tt = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_UK "При запуску гри попередньо завантажуйте спеціальні текстури. Може покращити продуктивність, але збільшує використання пам'яті."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_UK "Дамп текстур"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_UK "Кожного разу, коли гра використовує нову текстуру, вона буде збережена як файл .png у теці 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_UK NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_UK NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_UK "Дамп замінених текстур"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_UK "Завжди вивантажувати текстури, які вже замінені спеціальними текстами."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_UK "Аналоговий стік Deadzone"
@@ -84334,8 +85017,8 @@ struct retro_core_options_v2 options_tt = {
 #define CORE_OPTION_NAME_VMU_SOUND_LABEL_UK "Звуки візуальної пам'яті/системи (VMU)"
 #define CORE_OPTION_NAME_VMU_SOUND_LABEL_CAT_UK "Звук VMU"
 #define CORE_OPTION_NAME_VMU_SOUND_INFO_0_UK "Коли увімкнено, відео відтворюються VMU біки."
-#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_LABEL_UK NULL
-#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_INFO_0_UK NULL
+#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_LABEL_UK "Збереження DreamPotato VMU"
+#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_INFO_0_UK "Увімкнути збереження даних VMU на підключеному емуляторі DreamPotato. Якщо ця опція увімкнена, локальний файл збереження VMU не використовується."
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_LABEL_UK "Показати параметри показу юніту/системи (VMU)"
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_LABEL_CAT_UK "Показати параметри показу vMU"
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_INFO_0_UK "Увімкніть конфігурацію емуляції видимості екрана VMU LCD, розміру, позиції та кольору. Примітка: Швидке Меню потрібно перемкнути для застосування цього параметру."
@@ -85165,6 +85848,21 @@ struct retro_core_option_v2_definition option_defs_uk[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_UK,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_UK,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_UK,
@@ -86352,6 +87050,8 @@ struct retro_core_options_v2 options_uk = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_VAL NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_VAL NULL
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_VAL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_VAL NULL
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_VAL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_VAL NULL
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_VAL NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_VAL NULL
@@ -87265,6 +87965,21 @@ struct retro_core_option_v2_definition option_defs_val[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_VAL,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_VAL,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_VAL,
@@ -88266,7 +88981,7 @@ struct retro_core_options_v2 options_val = {
 #define CATEGORY_HACKS_LABEL_VN "Thủ thuật giả lập"
 #define CATEGORY_HACKS_INFO_0_VN "Cấu hình chế độ màn hình rộng, tốc độ tải GD-ROM và thay thế Kết cấu."
 #define CATEGORY_INPUT_LABEL_VN "Đều khiển"
-#define CATEGORY_INPUT_INFO_0_VN "Cấu hình tay cầm và súng ánh sáng."
+#define CATEGORY_INPUT_INFO_0_VN "Cấu hình tay cầm và Súng quang."
 #define CATEGORY_EXPANSIONS_LABEL_VN "Khe mở rộng tay cầm"
 #define CATEGORY_EXPANSIONS_INFO_0_VN "Chọn thiết bị (VMU, thiết bị rung) cắm vào mỗi khe mở rộng tay cầm."
 #define CATEGORY_VMU_LABEL_VN "Bộ nhớ trực quan Vmu"
@@ -88452,6 +89167,8 @@ struct retro_core_options_v2 options_val = {
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_VN "Nạp sẵn các kết cấu tùy chỉnh ngay khi game bắt đầu. Có thể giúp tăng hiệu năng nhưng sẽ sử dụng nhiều bộ nhớ hơn."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_VN "Xuất kết cấu"
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_VN "Mỗi khi trò chơi sử dụng một kết cấu mới, nó sẽ được lưu dưới dạng tệp .png trong thư mục 'system/dc/texdump/<game-id>/'."
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_VN "Bỏ qua video và kết cấu động"
+#define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_VN "Bỏ qua việc trích xuất video (YUV) và các kết cấu đã được cập nhật."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_VN "Xuất Kết cấu Đã Thay Thế"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_VN "Luôn xuất các Kết cấu đã được thay thế bằng Kết cấu tùy chỉnh."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_VN "Vùng chết của Analog"
@@ -88469,7 +89186,7 @@ struct retro_core_options_v2 options_val = {
 #define CORE_OPTION_NAME_DIGITAL_TRIGGERS_INFO_0_VN "Khi bật, các trigger sẽ hoạt động như Phím thường, nghĩa là chỉ được xử lý ở trạng thái nhấn hoàn toàn hoặc không nhấn, không có mức trung gian."
 #define CORE_OPTION_NAME_NETWORK_OUTPUT_LABEL_VN "Phát tín hiệu Digital Outputs"
 #define CORE_OPTION_NAME_NETWORK_OUTPUT_INFO_0_VN "Phát tín hiệu digital và trạng thái phản hồi lực qua cổng TCP 8000. Tương thích với tùy chọn \"-output network\" của MAME."
-#define CORE_OPTION_NAME_SHOW_LIGHTGUN_SETTINGS_LABEL_VN "Hiển thị Cài đặt Súng Ánh Sáng"
+#define CORE_OPTION_NAME_SHOW_LIGHTGUN_SETTINGS_LABEL_VN "Hiển thị Cài đặt Súng quang"
 #define CORE_OPTION_NAME_SHOW_LIGHTGUN_SETTINGS_INFO_0_VN "Bật cấu hình các tùy chọn hiển thị con trỏ súng. Lưu ý: Có thể cần mở Quick Menu để thiết lập này có hiệu lực."
 #define CORE_OPTION_NAME_LIGHTGUN_CROSSHAIR_SIZE_SCALING_LABEL_VN "Tỉ lệ kích thước con trỏ súng"
 #define OPTION_VAL_50_VN NULL
@@ -89365,6 +90082,21 @@ struct retro_core_option_v2_definition option_defs_vn[] = {
       },
       "disabled",
    },
+   {
+      CORE_OPTION_NAME "_dump_unique_textures",
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_VN,
+      NULL,
+      CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_VN,
+      NULL,
+      "hacks",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
+         { NULL, NULL },
+      },
+      "disabled",
+   },
+
    {
       CORE_OPTION_NAME "_dump_replaced_textures",
       CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_VN,

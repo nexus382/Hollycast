@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -52,6 +53,8 @@ static void activate(bool enable)
 	{
 		if (settings.input.fastForwardMode || !config::VSync || !googleTimingSupported)
 			return;
+		if (g_activity == nullptr)
+			return;
 
 		// Fake call to make swappy use google timing for this device
 		VkExtensionProperties prop { { VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME } };
@@ -83,9 +86,9 @@ static void activate(bool enable)
 		SwappyVk_setAutoPipelineMode(false);
 		SwappyVk_setSwapIntervalNS((VkDevice)device, (VkSwapchainKHR)swapchain, SWAPPY_SWAP_60FPS);
 	}
-	else {
-		if (swapchain)
-			SwappyVk_destroySwapchain((VkDevice)device, (VkSwapchainKHR)swapchain);
+	else if (swapchain) {
+		SwappyVk_setWindow((VkDevice)device, (VkSwapchainKHR)swapchain, nullptr);
+		SwappyVk_destroySwapchain((VkDevice)device, (VkSwapchainKHR)swapchain);
 	}
 }
 

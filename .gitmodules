@@ -1,3 +1,5 @@
+# Portions Copyright 2026 The Hollycast Authors
+
 [submodule "core/deps/SDL"]
 	path = core/deps/SDL
 	url = https://github.com/libsdl-org/SDL.git
@@ -49,7 +51,7 @@
 	url = https://github.com/herumi/xbyak.git
 [submodule "core/deps/libjuice"]
 	path = core/deps/libjuice
-	url = https://github.com/paullouisageneau/libjuice.git
+	url = https://github.com/flyinghead/libjuice.git
 [submodule "core/deps/websocketpp"]
 	path = core/deps/websocketpp
 	url = https://github.com/zaphoyd/websocketpp.git
