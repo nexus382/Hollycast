@@ -71,6 +71,7 @@ void focusBoxArtSection();
 void openTab(SettingsTab tab);
 
 bool textureFilterLiveTuneActive();
+void stopTextureFilterLiveTune();
 void renderTextureFilterLiveTuneOverlay();
 
 } // namespace SettingsNew

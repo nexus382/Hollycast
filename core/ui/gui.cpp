@@ -133,11 +133,13 @@ static void emuEventCallback(Event event, void *)
 		vgamepad::startGame();
 		break;
 	case Event::Start:
+		SettingsNew::stopTextureFilterLiveTune();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
 		GamepadDevice::load_system_mappings();
 		break;
 	case Event::Terminate:
+		SettingsNew::stopTextureFilterLiveTune();
 		boxart.checkpointPlaytime(true);
 		GamepadDevice::load_system_mappings();
 		game_started = false;
@@ -340,7 +342,9 @@ void gui_set_mouse_position(int x, int y, bool touchscreen)
 
 bool gui_is_menu_touch_target(float x, float y)
 {
-	return GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
+	// Reuse Android's gesture capture so virtual controls never consume panel taps.
+	return SettingsNew::textureFilterLiveTuneActive()
+			|| GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
 			std::round(y * settings.display.pointScale));
 }
 
@@ -468,7 +472,7 @@ void gui_plot_render_time(int width, int height)
 }
 #endif
 
-static bool gui_resume_game()
+bool gui_resume_game()
 {
 	if (custom_texture.needsRefresh())
 	{
@@ -3083,8 +3087,9 @@ void gui_draw_osd()
 	}
 	if (!settings.raHardcoreMode)
 		lua::overlay();
-	vgamepad::draw();
 	SettingsNew::renderTextureFilterLiveTuneOverlay();
+	if (!SettingsNew::textureFilterLiveTuneActive())
+		vgamepad::draw();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
 

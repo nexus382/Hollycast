@@ -22,6 +22,7 @@
 #include "../dx11context.h"
 #include "../dx11_naomi2.h"
 #include <algorithm>
+#include <array>
 #include <cstdio>
 
 extern const std::string PixelShaderCommon;
@@ -824,8 +825,7 @@ enum PixelMacroEnum {
 	MacroMaxFilteredTextureSize,
 };
 
-static D3D_SHADER_MACRO PixelMacros[]
-{
+static const std::array<D3D_SHADER_MACRO, MacroMaxFilteredTextureSize + 2> DefaultPixelMacros {{
 	{ "pp_Gouraud", "1" },
 	{ "pp_TwoVolumes", "0" },
 	{ "DIV_POS_Z", "0" },
@@ -844,7 +844,7 @@ static D3D_SHADER_MACRO PixelMacros[]
 	{ "pp_SampleTextureFilter", "0" },
 	{ "pp_MaxFilteredTextureSize", "0" },
 	{ nullptr, nullptr }
-};
+}};
 
 const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr,
 		bool pp_Offset, u32 pp_FogCtrl, bool pp_BumpMap, bool fog_clamping,
@@ -875,29 +875,31 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool
 		verify(pp_FogCtrl < std::size(MacroValues));
 		verify(pass < (int)std::size(MacroValues));
 		verify(sampleTextureFilter >= 0 && sampleTextureFilter <= 19);
+		// Never retain stack-owned filter definitions for later modifier-volume compilation.
+		auto pixelMacros = DefaultPixelMacros;
 		char sampleFilterMacro[4];
 		char maxFilteredTextureMacro[8];
 		snprintf(sampleFilterMacro, sizeof(sampleFilterMacro), "%d", sampleTextureFilter);
 		snprintf(maxFilteredTextureMacro, sizeof(maxFilteredTextureMacro), "%d", maxFilteredTextureSize);
-		PixelMacros[MacroGouraud].Definition = MacroValues[gouraud];
-		PixelMacros[MacroTexture].Definition = MacroValues[pp_Texture];
-		PixelMacros[MacroUseAlpha].Definition = MacroValues[pp_UseAlpha];
-		PixelMacros[MacroIgnoreTexA].Definition = MacroValues[pp_IgnoreTexA];
-		PixelMacros[MacroShadInstr].Definition = MacroValues[pp_ShadInstr];
-		PixelMacros[MacroOffset].Definition = MacroValues[pp_Offset];
-		PixelMacros[MacroFogCtrl].Definition = MacroValues[pp_FogCtrl];
-		PixelMacros[MacroBumpMap].Definition = MacroValues[pp_BumpMap];
-		PixelMacros[MacroFogClamping].Definition = MacroValues[fog_clamping];
-		PixelMacros[MacroPalette].Definition = MacroValues[palette];
-		PixelMacros[MacroAlphaTest].Definition = MacroValues[alphaTest];
-		PixelMacros[MacroClipInside].Definition = MacroValues[clipInside];
-		PixelMacros[MacroTwoVolumes].Definition = MacroValues[twoVolumes];
-		PixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
-		PixelMacros[MacroPass].Definition = MacroValues[pass];
-		PixelMacros[MacroSampleTextureFilter].Definition = sampleFilterMacro;
-		PixelMacros[MacroMaxFilteredTextureSize].Definition = maxFilteredTextureMacro;
+		pixelMacros[MacroGouraud].Definition = MacroValues[gouraud];
+		pixelMacros[MacroTexture].Definition = MacroValues[pp_Texture];
+		pixelMacros[MacroUseAlpha].Definition = MacroValues[pp_UseAlpha];
+		pixelMacros[MacroIgnoreTexA].Definition = MacroValues[pp_IgnoreTexA];
+		pixelMacros[MacroShadInstr].Definition = MacroValues[pp_ShadInstr];
+		pixelMacros[MacroOffset].Definition = MacroValues[pp_Offset];
+		pixelMacros[MacroFogCtrl].Definition = MacroValues[pp_FogCtrl];
+		pixelMacros[MacroBumpMap].Definition = MacroValues[pp_BumpMap];
+		pixelMacros[MacroFogClamping].Definition = MacroValues[fog_clamping];
+		pixelMacros[MacroPalette].Definition = MacroValues[palette];
+		pixelMacros[MacroAlphaTest].Definition = MacroValues[alphaTest];
+		pixelMacros[MacroClipInside].Definition = MacroValues[clipInside];
+		pixelMacros[MacroTwoVolumes].Definition = MacroValues[twoVolumes];
+		pixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
+		pixelMacros[MacroPass].Definition = MacroValues[pass];
+		pixelMacros[MacroSampleTextureFilter].Definition = sampleFilterMacro;
+		pixelMacros[MacroMaxFilteredTextureSize].Definition = maxFilteredTextureMacro;
 
-		shader = compilePS(PixelShader, "main", PixelMacros);
+		shader = compilePS(PixelShader, "main", pixelMacros.data());
 		verify(shader != nullptr);
 	}
 	return shader;
@@ -969,8 +971,9 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getModVolShader()
 	auto& modVolShader = modVolShaders[divPosZ];
 	if (!modVolShader)
 	{
-		PixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
-		modVolShader = compilePS(PixelShader, "modifierVolume", PixelMacros);
+		auto pixelMacros = DefaultPixelMacros;
+		pixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
+		modVolShader = compilePS(PixelShader, "modifierVolume", pixelMacros.data());
 	}
 
 	return modVolShader;

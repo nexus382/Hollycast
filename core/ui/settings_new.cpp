@@ -56,6 +56,7 @@
 #include "stdclass.h"
 #include "achievements/achievements.h"
 #include "vgamepad.h"
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <cfloat>
@@ -2142,7 +2143,26 @@ static void managePathList(const char* label, const std::string& singularLabel, 
 // Global state instance
 SettingsUIState g_state;
 
-static bool g_textureFilterLiveTune;
+// Input polling and Android touch dispatch read this flag from other threads.
+static std::atomic<bool> g_textureFilterLiveTune{false};
+
+static void applyPendingSettings()
+{
+	dreampotato::update();
+	if (g_mapleDevicesChangedInSettings)
+	{
+		g_mapleDevicesChangedInSettings = false;
+		if (game_started && settings.platform.isConsole())
+		{
+#if defined(USE_DREAMLINK_DEVICES)
+			reconnectDreamLinks();
+#endif
+			maple_ReconnectDevices();
+			reset_vmus();
+		}
+	}
+	SaveSettings();
+}
 
 // Preserve the stored renderer IDs so old settings files cannot silently select a different filter.
 // ID 14 was Spline36 and is intentionally no longer exposed.
@@ -2177,13 +2197,24 @@ static std::array<const char*, 8> getMaxFilteredTextureSizeLabels()
 
 bool textureFilterLiveTuneActive()
 {
-	return g_textureFilterLiveTune && game_started;
+	return g_textureFilterLiveTune.load(std::memory_order_relaxed);
+}
+
+void stopTextureFilterLiveTune()
+{
+	g_textureFilterLiveTune.store(false, std::memory_order_relaxed);
 }
 
 void renderTextureFilterLiveTuneOverlay()
 {
 	if (!textureFilterLiveTuneActive())
 		return;
+	// Recheck the session, but reserve the stateful canPause() check for a pause request.
+	if (!game_started || ggpo::active())
+	{
+		stopTextureFilterLiveTune();
+		return;
+	}
 
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
@@ -2265,12 +2296,12 @@ void renderTextureFilterLiveTuneOverlay()
 
 	if (returnToSettings)
 	{
-		g_textureFilterLiveTune = false;
+		stopTextureFilterLiveTune();
 		gui_open_texture_filter_settings();
 	}
 	else if (!open)
 	{
-		g_textureFilterLiveTune = false;
+		stopTextureFilterLiveTune();
 	}
 }
 
@@ -5002,9 +5033,11 @@ void renderVideoTab()
 			ImGui::BeginDisabled();
 		if (ImGui::Button(T("Texture Filtering Live Tune"), ScaledVec2(260.f, 34.f)))
 		{
-			g_textureFilterLiveTune = true;
-			SaveSettings();
-			gui_setState(GuiState::Closed);
+			applyPendingSettings();
+			GamepadDevice::load_system_mappings();
+			g_textureFilterLiveTune.store(true, std::memory_order_relaxed);
+			// Resume through Loading when replacement textures need a refresh or preload.
+			gui_resume_game();
 		}
 		if (!canLiveTune)
 			ImGui::EndDisabled();
@@ -8536,21 +8569,7 @@ void renderSettingsNew()
 			ImGui::PushFont(settingsTitleFont);
 
 		const std::function<void()> exitSettings = [&]() {
-			dreampotato::update();
-			if (g_mapleDevicesChangedInSettings)
-			{
-				g_mapleDevicesChangedInSettings = false;
-				if (game_started && settings.platform.isConsole())
-				{
-#if defined(USE_DREAMLINK_DEVICES)
-					reconnectDreamLinks();
-#endif
-					maple_ReconnectDevices();
-					reset_vmus();
-				}
-			}
-
-			SaveSettings();
+			applyPendingSettings();
 
 			if (game_started)
 				gui_setState(GuiState::Commands);

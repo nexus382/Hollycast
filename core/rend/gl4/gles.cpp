@@ -560,10 +560,12 @@ vec4 separableReconstructionSample(TextureSampleState state, sampler2D sourceTex
 	vec4 color = vec4(0.0);
 	float weightSum = 0.0;
 
-	for (int y = -2; y <= 3; y++)
+	// Only Lanczos3 needs six taps per axis; the other kernels have radius two.
+	int radius = filterMode == 1 ? 3 : 2;
+	for (int y = 1 - radius; y <= radius; y++)
 	{
 		float wy = reconstructionWeight(float(y) - f.y, filterMode);
-		for (int x = -2; x <= 3; x++)
+		for (int x = 1 - radius; x <= radius; x++)
 		{
 			float weight = reconstructionWeight(float(x) - f.x, filterMode) * wy;
 			vec4 sampleColor = sampleSourceTexel(state, sourceTex, (base + vec2(x, y) + 0.5) * invTexSize);

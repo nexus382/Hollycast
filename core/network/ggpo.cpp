@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -25,6 +26,9 @@
 #include "cfg/option.h"
 #include "oslib/oslib.h"
 #include "oslib/i18n.h"
+#ifndef LIBRETRO
+#include "ui/settings_new.h"
+#endif
 #include <algorithm>
 
 namespace ggpo
@@ -36,6 +40,9 @@ static void getLocalInput(MapleInputState inputState[4])
 {
 	if (!config::ThreadedRendering)
 		os_UpdateInputState();
+#ifndef LIBRETRO
+	const bool captureInput = SettingsNew::textureFilterLiveTuneActive();
+#endif
 	std::lock_guard<std::mutex> lock(relPosMutex);
 	for (int player = 0; player < 4; player++)
 	{
@@ -65,6 +72,12 @@ static void getLocalInput(MapleInputState inputState[4])
 		mo_x_delta[player] -= relX;
 		mo_y_delta[player] -= relY;
 		mo_wheel_delta[player] -= wheel;
+#ifndef LIBRETRO
+		// Keep raw controls available to ImGui, but discard gameplay input and mouse
+		// deltas while tuning so they cannot leak into the game or accumulate on resume.
+		if (captureInput)
+			state = {};
+#endif
 	}
 }
 
