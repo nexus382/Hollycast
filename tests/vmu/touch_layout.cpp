@@ -30,6 +30,21 @@ int main()
 	require(layout.takeDirty() == 1, "release saves only the dragged slot");
 	const Position saved = layout.position(0);
 	require(saved.x > .5f && saved.y > .5f, "drag uses the original finger offset");
+	Bounds locked = layout.bounds(0);
+	require(layout.begin((locked.x + 5) / 1000, (locked.y + 5) / 600), "begin drag before locking");
+	layout.move(.6f, .6f);
+	layout.setMovable(false);
+	const Position lockedPosition = layout.position(0);
+	layout.move(.1f, .1f);
+	require(layout.position(0).x == lockedPosition.x && layout.takeDirty() == 1,
+		"locking ends a drag and saves its final position");
+	locked = layout.bounds(0);
+	require(!layout.begin((locked.x + 5) / 1000, (locked.y + 5) / 600), "locked LCD ignores new drags");
+	layout.reset();
+	require(layout.position(0).x == 0 && !layout.begin(.03f, .08f), "reset restores default placement without unlocking");
+	layout.setMovable(true);
+	layout.setPosition(0, saved);
+	layout.takeDirty();
 	layout.configure(600, 1000, {30, 60, 540, 900}, 96);
 	Bounds rect = layout.bounds(0);
 	require(rect.x >= 30 && rect.x + rect.width <= 570 && rect.y >= 60 && rect.y + rect.height <= 960,

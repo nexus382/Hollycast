@@ -49,6 +49,10 @@ bool detachedActive()
 {
 	return config::MovableVMUs && config::FloatVMUs && settings.platform.isConsole();
 }
+bool placementActive()
+{
+	return (config::MovableVMUs || config::VmuLayoutEnabled) && config::FloatVMUs && settings.platform.isConsole();
+}
 
 void publishScreen(int index, const u32 *pixels, bool active) { frames.publish(index, pixels, active); }
 
@@ -69,7 +73,11 @@ void update(bool visible)
 		}
 		loaded = true;
 	}
-	enabled = visible && detachedActive();
+	enabled = visible && placementActive();
+	{
+		std::lock_guard<std::mutex> lock(layoutMutex);
+		layout.setMovable(config::MovableVMUs);
+	}
 	if (!enabled)
 	{
 		std::lock_guard<std::mutex> lock(layoutMutex);

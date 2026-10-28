@@ -518,6 +518,7 @@ extern Option<bool> Fog;
 extern Option<bool> FloatVMUs;
 #ifdef HAVE_MOVABLE_VMUS
 extern Option<bool, false> MovableVMUs;
+extern Option<bool, false> VmuLayoutEnabled;
 extern Option<int, false> VmuWindowSize;
 #endif
 extern Option<bool> Rotate90;

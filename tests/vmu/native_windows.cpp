@@ -205,6 +205,7 @@ GuiState gui_state = GuiState::Closed;
 namespace config
 {
 bool MovableVMUs = false;
+bool VmuLayoutEnabled = false;
 TestIntOption VmuWindowSize;
 bool FloatVMUs = true;
 RenderType RendererType = RenderType::DirectX11;
@@ -811,7 +812,21 @@ int main()
 	settings.platform.console = true;
 	require(until([] { return lcds().size() == 8 && vmu_window::ownsScreen(0); }),
 			"console platform restores movable VMUs");
+	first = firstLcd();
+	GetWindowRect(first, &placed);
+	config::VmuLayoutEnabled = true;
 	config::MovableVMUs = false;
+	require(until([&] { return vmu_window::ownsScreen(0)
+			&& (GetWindowLongPtrW(first, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0; }),
+			"turning off movement keeps the placed LCD visible and passes input through");
+	GetWindowRect(first, &moved);
+	require(placed.left == moved.left && placed.top == moved.top, "locking preserves the current position");
+	vmu_window::resetPositions();
+	require(until([&] { GetWindowRect(first, &moved); return moved.left == client.left + 8
+			&& moved.top == client.top + menuInset + 8; }), "reset restores defaults while movement is locked");
+	vmu_window::shutdown();
+	require(until([] { return vmu_window::ownsScreen(0); }), "locked placement survives worker recreation");
+	config::VmuLayoutEnabled = false;
 	require(until([] { return lcds().empty() && !vmu_window::ownsScreen(0); }),
 			"disable restores original overlay ownership");
 	vmu_window::shutdown();

@@ -11,6 +11,7 @@ TestSettings settings;
 GuiState gui_state = GuiState::Closed;
 namespace config {
 bool MovableVMUs = true, FloatVMUs = true;
+bool VmuLayoutEnabled = false;
 TestIntOption VmuWindowSize;
 RenderType RendererType = RenderType::OpenGL;
 std::map<std::string, int> values;
@@ -26,6 +27,7 @@ void testWarning(const char *, ...) {}
 
 bool failCreate = false, failPaint = false, pretendWayland = false;
 int creates = 0;
+int workAreaWidth = 0;
 Uint64 ticks = 1000;
 SDL_Window *testFocus = nullptr;
 SDL_Window *createWindow(const char *title, int x, int y, int w, int h, Uint32 flags)
@@ -37,18 +39,27 @@ int updateSurface(SDL_Window *window) { return failPaint ? -1 : SDL_UpdateWindow
 SDL_Window *keyboardFocus() { return testFocus; }
 Uint64 getTicks() { return ticks; }
 const char *videoDriver() { return pretendWayland ? "wayland" : SDL_GetCurrentVideoDriver(); }
+int usableBounds(int display, SDL_Rect *area)
+{
+	const int result = SDL_GetDisplayUsableBounds(display, area);
+	if (result == 0 && workAreaWidth > 0)
+		area->w = workAreaWidth;
+	return result;
+}
 
 #define SDL_CreateWindow createWindow
 #define SDL_UpdateWindowSurface updateSurface
 #define SDL_GetKeyboardFocus keyboardFocus
 #define SDL_GetTicks64 getTicks
 #define SDL_GetCurrentVideoDriver videoDriver
+#define SDL_GetDisplayUsableBounds usableBounds
 #include "../../core/sdl/vmu_window.cpp"
 #undef SDL_CreateWindow
 #undef SDL_UpdateWindowSurface
 #undef SDL_GetKeyboardFocus
 #undef SDL_GetTicks64
 #undef SDL_GetCurrentVideoDriver
+#undef SDL_GetDisplayUsableBounds
 
 int checks = 0;
 void require(bool condition, const char *message)
@@ -113,13 +124,62 @@ int main()
 	update(parent, true);
 	require(config::values["vmu-sdl/0.left"] == 320 && config::values["vmu-sdl/0.top"] == 240, "user placement is saved");
 	require(consumeMousePositionReset() && !consumeMousePositionReset(), "returning to game rebases the mouse once");
+	SDL_SetWindowPosition(testFocus, 320, 240);
+	int beforeLockX, beforeLockY;
+	SDL_GetWindowPosition(testFocus, &beforeLockX, &beforeLockY);
+	config::VmuLayoutEnabled = true;
+	config::MovableVMUs = false;
+	update(parent, false);
+	require(ownsScreen(0) && (SDL_GetWindowFlags(testFocus) & SDL_WINDOW_BORDERLESS) != 0,
+		"locked LCD remains visible during captured gameplay without a drag title bar");
+	int lockedX, lockedY;
+	SDL_GetWindowPosition(testFocus, &lockedX, &lockedY);
+	require(lockedX == beforeLockX && lockedY == beforeLockY, "locking preserves the visible window position");
+	event.window.data1 = lockedX + 50;
+	event.window.data2 = lockedY + 50;
+	SDL_SetWindowPosition(testFocus, event.window.data1, event.window.data2);
+	handleEvent(event);
+	int restoredX, restoredY;
+	SDL_GetWindowPosition(testFocus, &restoredX, &restoredY);
+	require(lockedX == restoredX && lockedY == restoredY, "locked window rejects window-manager movement");
+	require(config::values["vmu-sdl/0.left"] == 320, "locked movement cannot overwrite the saved placement");
+	workAreaWidth = 150;
+	event.window.data1 = 0;
+	handleEvent(event);
+	SDL_GetWindowPosition(testFocus, &restoredX, &restoredY);
+	SDL_Rect workArea;
+	usableBounds(SDL_GetWindowDisplayIndex(parent), &workArea);
+	int lcdWidth, lcdHeight;
+	SDL_GetWindowSize(testFocus, &lcdWidth, &lcdHeight);
+	require(restoredX >= workArea.x && restoredX + lcdWidth <= workArea.x + workArea.w,
+		"locked LCD recovers into a smaller work area");
+	require(windows[0].left == lockedX && config::values["vmu-sdl/0.left"] == 320,
+		"temporary recovery preserves the preferred locked and saved coordinates");
+	workAreaWidth = 0;
+	event.window.data1 = restoredX;
+	handleEvent(event);
+	SDL_GetWindowPosition(testFocus, &restoredX, &restoredY);
+	require(restoredX == lockedX && restoredY == lockedY, "locked placement returns when its work area is restored");
+	resetPositions();
+	testFocus = parent;
+	update(parent, true);
+	require(ownsScreen(0) && !config::MovableVMUs, "reset restores a visible default LCD without unlocking movement");
+	config::MovableVMUs = true;
+	config::VmuLayoutEnabled = false;
+	update(parent, true);
+	update(parent, true); // Border-change events settle before the next user drag.
+	testFocus = windows[0].window;
+	event = windowEvent(testFocus, SDL_WINDOWEVENT_MOVED, 320, 240);
+	handleEvent(event);
+	ticks += 250;
+	update(parent, true);
 	pretendWayland = true;
 	update(parent, true);
 	event.window.data1 = 0;
 	event.window.data2 = 0;
 	handleEvent(event);
 	require(config::values["vmu-sdl/0.left"] == 320, "Wayland synthetic coordinates never overwrite desktop preference");
-	require(initialPosition(0, 96, 64).x == SDL_WINDOWPOS_UNDEFINED, "Wayland leaves placement to compositor");
+	require(reachablePosition(0, 96, 64).x == SDL_WINDOWPOS_UNDEFINED, "Wayland leaves placement to compositor");
 	pretendWayland = false;
 	event = {};
 	event.type = SDL_MOUSEBUTTONDOWN;

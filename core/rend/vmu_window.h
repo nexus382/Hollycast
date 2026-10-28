@@ -26,6 +26,8 @@ constexpr int MaxSizePercent = 400;
 #ifdef HAVE_MOVABLE_VMUS
 // Producers publish copies. Window, texture and configuration work stays on the UI thread.
 bool detachedActive();
+// A placed LCD remains visible when movement is locked.
+bool placementActive();
 void publishScreen(int index, const u32 *pixels, bool active);
 void shutdown();
 void resetPositions();
@@ -35,6 +37,8 @@ bool consumeMousePositionReset();
 #ifdef HAVE_SDL_VMUS
 void update(SDL_Window *parent, bool pointerAvailable);
 bool handleEvent(const SDL_Event& event);
+// Return focus only from one of our utility windows; never steal another app's focus.
+bool focusGameWindow();
 #elif defined(__ANDROID__)
 void update(bool visible);
 void drawInApp();

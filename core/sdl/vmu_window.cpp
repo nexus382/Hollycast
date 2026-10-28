@@ -12,7 +12,7 @@
 
 namespace vmu_window {
 #ifdef __APPLE__
-void configureMacWindow(SDL_Window *window);
+void configureMacWindow(SDL_Window *window, bool movable);
 #endif
 namespace {
 struct LcdWindow
@@ -88,15 +88,18 @@ bool isVmuWindow(SDL_Window *window)
 	return false;
 }
 
-SDL_Point initialPosition(int index, int width, int height)
+SDL_Point reachablePosition(int index, int width, int height, int x = INT_MIN, int y = INT_MIN)
 {
 	// Wayland deliberately has no global placement API. Let its compositor place
 	// the utility window; never persist synthetic coordinates returned by SDL.
 	if (wayland)
 		return {SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED};
 	const std::string key = std::to_string(index);
-	int x = config::loadInt("vmu-sdl", key + ".left", INT_MIN);
-	int y = config::loadInt("vmu-sdl", key + ".top", INT_MIN);
+	if (x == INT_MIN && y == INT_MIN)
+	{
+		x = config::loadInt("vmu-sdl", key + ".left", INT_MIN);
+		y = config::loadInt("vmu-sdl", key + ".top", INT_MIN);
+	}
 	SDL_Rect area;
 	int display = SDL_GetWindowDisplayIndex(owner);
 	if (x != INT_MIN && y != INT_MIN)
@@ -149,6 +152,10 @@ bool detachedActive()
 {
 	return config::MovableVMUs && config::FloatVMUs && settings.platform.isConsole();
 }
+bool placementActive()
+{
+	return (config::MovableVMUs || config::VmuLayoutEnabled) && config::FloatVMUs && settings.platform.isConsole();
+}
 
 void publishScreen(int index, const u32 *pixels, bool active) { frames.publish(index, pixels, active); }
 
@@ -159,11 +166,11 @@ void update(SDL_Window *parent, bool pointerAvailable)
 	savePositions(false);
 	const char *driver = SDL_GetCurrentVideoDriver();
 	wayland = driver != nullptr && std::strcmp(driver, "wayland") == 0;
-	const bool enabled = detachedActive();
+	const bool enabled = placementActive();
 	const auto screens = frames.snapshot();
 	SDL_Window *focus = SDL_GetKeyboardFocus();
 	const bool focused = focus == parent || isVmuWindow(focus);
-	const bool visible = enabled && parent != nullptr && pointerAvailable && focused
+	const bool visible = enabled && parent != nullptr && (pointerAvailable || !config::MovableVMUs) && focused
 		&& (SDL_GetWindowFlags(parent) & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0
 		&& gui_state != GuiState::Main && gui_state != GuiState::Onboarding
 		&& gui_state != GuiState::Loading && gui_state != GuiState::NetworkStart;
@@ -196,7 +203,7 @@ void update(SDL_Window *parent, bool pointerAvailable)
 			if (SDL_GetTicks64() < lcd.retryAt)
 				continue;
 			lcd.retryAt = SDL_GetTicks64() + 1000;
-			const SDL_Point pos = initialPosition(i, width, height);
+			const SDL_Point pos = reachablePosition(i, width, height);
 			const std::string title = "Hollycast VMU " + std::string(1, char('A' + i / 2)) + std::to_string(i % 2 + 1);
 			lcd.window = SDL_CreateWindow(title.c_str(), pos.x, pos.y, width, height,
 				SDL_WINDOW_HIDDEN | SDL_WINDOW_UTILITY | SDL_WINDOW_SKIP_TASKBAR | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -207,10 +214,26 @@ void update(SDL_Window *parent, bool pointerAvailable)
 			}
 			lcd.placing = true;
 #ifdef __APPLE__
-			configureMacWindow(lcd.window);
+			configureMacWindow(lcd.window, config::MovableVMUs);
 #endif
 		}
 		int oldWidth, oldHeight;
+		const bool bordered = (SDL_GetWindowFlags(lcd.window) & SDL_WINDOW_BORDERLESS) == 0;
+		if (bordered != bool(config::MovableVMUs))
+		{
+			// Removing the drag title bar locks the window without recreating it.
+			int x, y;
+			SDL_GetWindowPosition(lcd.window, &x, &y);
+			lcd.left = x;
+			lcd.top = y;
+			SDL_SetWindowBordered(lcd.window, config::MovableVMUs ? SDL_TRUE : SDL_FALSE);
+#ifdef __APPLE__
+			configureMacWindow(lcd.window, config::MovableVMUs);
+#endif
+			if (!wayland)
+				SDL_SetWindowPosition(lcd.window, x, y);
+			lcd.placing = true;
+		}
 		SDL_GetWindowSize(lcd.window, &oldWidth, &oldHeight);
 		if (oldWidth != width || oldHeight != height)
 		{
@@ -283,6 +306,21 @@ bool handleEvent(const SDL_Event& event)
 				lcd.repaint = true;
 				break;
 			case SDL_WINDOWEVENT_MOVED:
+				if (!config::MovableVMUs)
+				{
+					// Also undo window-manager move shortcuts while locked. Wayland
+					// owns global placement and does not support restoring coordinates.
+					if (!wayland)
+					{
+						int width, height;
+						SDL_GetWindowSize(lcd.window, &width, &height);
+						// Clamp only the visible target if its monitor/work area changed.
+						const SDL_Point pos = reachablePosition(i, width, height, lcd.left, lcd.top);
+						if (event.window.data1 != pos.x || event.window.data2 != pos.y)
+							SDL_SetWindowPosition(lcd.window, pos.x, pos.y);
+					}
+					break;
+				}
 				if (!wayland && !lcd.placing && SDL_GetKeyboardFocus() == lcd.window)
 				{
 					// Window managers send many move events per drag. Save after it
@@ -308,6 +346,15 @@ bool handleEvent(const SDL_Event& event)
 bool ownsScreen(int index)
 {
 	return index >= 0 && index < ScreenCount && windows[index].displayed;
+}
+
+bool focusGameWindow()
+{
+	if (owner == nullptr)
+		return false;
+	if (isVmuWindow(SDL_GetKeyboardFocus()))
+		SDL_RaiseWindow(owner);
+	return SDL_GetKeyboardFocus() == owner;
 }
 
 bool consumeMousePositionReset() { return mouseReset.exchange(false); }

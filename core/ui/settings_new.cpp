@@ -5378,28 +5378,43 @@ void renderOnScreenDisplayTab()
 			[](bool enabled) { config::FloatVMUs.set(enabled); },
 			T("Show VMU In-Game\nDisplays the VMU LCD screens while in-game."));
 #ifdef HAVE_MOVABLE_VMUS
-		RenderGeneralToggleSettingRow(
-#ifdef __ANDROID__
-			"MovableVMUs", ICON_FA_GAMEPAD, T("Movable VMU Screens"),
-			T("Drag VMU screens anywhere inside Hollycast."),
-#else
-			"MovableVMUs", ICON_FA_GAMEPAD, T("Movable VMU Windows"),
-			T("Drag VMU screens outside Hollycast or onto another monitor."),
-#endif
-			config::MovableVMUs.get(),
-			[](bool enabled) {
-				config::MovableVMUs.set(enabled);
-				if (enabled)
-					config::FloatVMUs.set(true);
-			},
-#ifdef __ANDROID__
-			T("Touch and drag an LCD to move it. Positions are saved per VMU slot and stay on screen after rotation."));
-#elif defined(HAVE_SDL_VMUS)
-			T("Drag the title bar to move a VMU. Close its window to return that LCD to the game view. Left Ctrl+Left Alt toggles mouse capture; captured gameplay uses in-game LCDs. Wayland controls window placement."));
-#else
-			T("Keeps the existing VMU transparency. Drag each LCD with the left mouse button. Positions are saved per VMU slot. Left Ctrl+Left Alt toggles mouse capture."));
-#endif
-		if (config::MovableVMUs && config::FloatVMUs)
+		ImGui::PushID("MovableVMUs");
+		const bool moveRowActivated = BeginTwoLineSettingRow("##row",
+			T("Enable to move VMU screens. Turn off to lock them in place. Use reset to restore their default positions."));
+		const ImVec2 moveLineStart = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_GAMEPAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Move VMU"));
+		ImGui::PopFont();
+		const float resetWidth = SettingsLayoutScaled(26.0f);
+		const float resetHeight = SettingsLayoutScaled(22.0f);
+		const float toggleWidth = SettingsLayoutScaled(50.0f);
+		ImGui::SameLine(RightColumnX(toggleWidth + resetWidth + SettingsLayoutScaled(8.0f)));
+		const ImVec2 togglePos = ImGui::GetCursorPos();
+		ImGui::SetCursorPos(ImVec2(togglePos.x,
+			togglePos.y + (TwoLineSettingContentHeight() - SettingsLayoutScaled(24.0f)) * 0.5f));
+		RenderToggleSwitchVisual(config::MovableVMUs);
+		ImGui::SameLine(RightColumnX(resetWidth));
+		ImGui::SetCursorPosY(moveLineStart.y + (TwoLineSettingContentHeight() - resetHeight) * 0.5f);
+		const bool resetPressed = SettingsIconButton("##ResetVmuPositions", ICON_FA_ARROWS_ROTATE, ImVec2(resetWidth, resetHeight));
+		const bool resetHovered = ImGui::IsItemHovered();
+		if (resetHovered || ImGui::IsItemFocused())
+			SetSettingsFooterText(T("Reset VMU screens to their default positions."));
+		// The reset is a separate action inside the selectable row.
+		if (moveRowActivated && !resetHovered && !resetPressed)
+		{
+			config::VmuLayoutEnabled.set(true);
+			config::MovableVMUs.set(!config::MovableVMUs.get());
+			if (config::MovableVMUs)
+				config::FloatVMUs.set(true);
+		}
+		if (resetPressed)
+			vmu_window::resetPositions();
+		RenderTwoLineSettingDescription(moveLineStart, T("Turn off to lock VMU screens in place."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
+		if ((config::MovableVMUs || config::VmuLayoutEnabled) && config::FloatVMUs)
 		{
 			SettingsUI::PopupConfig vmuSizeCfg {};
 			vmuSizeCfg.type = SettingsUI::PopupType::Slider;
@@ -5417,8 +5432,6 @@ void renderOnScreenDisplayTab()
 			RenderGeneralPopupSettingRow(Tnop("VmuWindowSizeSetting"),
 				T("Scale VMU screens independently of UI scaling."), vmuSizeCfg,
 				T("100% keeps the default VMU size. Changes apply immediately and are saved with your settings."));
-			if (ImGui::Button(T("Reset VMU Positions"), ScaledVec2(240.f, 0.f)))
-				vmu_window::resetPositions();
 		}
 #endif
 	}

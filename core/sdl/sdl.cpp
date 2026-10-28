@@ -435,7 +435,7 @@ void input_sdl_handle()
 	static Uint64 vmuCaptureFocusDeadline = 0;
 	if (vmuCaptureFocusDeadline != 0)
 	{
-		if (!gameRunning || !movableVmus || SDL_GetTicks64() >= vmuCaptureFocusDeadline)
+		if (!gameRunning || !vmu_window::placementActive() || SDL_GetTicks64() >= vmuCaptureFocusDeadline)
 			vmuCaptureFocusDeadline = 0;
 		else if (SDL_GetKeyboardFocus() == window)
 		{
@@ -456,7 +456,12 @@ void input_sdl_handle()
 	{
 		if (!gameRunning)
 		{
+#ifdef HAVE_SDL_VMUS
+			// Resume must not bind relative mode to a focused utility window.
+			mouseCaptured = SDL_GetKeyboardFocus() == window;
+#else
 			mouseCaptured = true;
+#endif
 			// Resume must not inherit a delay from an earlier failed attempt.
 			vmuCaptureRetryAt = 0;
 		}
@@ -464,7 +469,11 @@ void input_sdl_handle()
 		{
 			// Keep the preference pending through pause and failed SDL recapture.
 			// Retry at most once a second until restored or explicitly overridden.
+#ifdef HAVE_SDL_VMUS
+			restoreVmuMouseCapture = !vmu_window::focusGameWindow() || !captureMouse(true);
+#else
 			restoreVmuMouseCapture = !captureMouse(true);
+#endif
 			if (restoreVmuMouseCapture)
 				mouseCaptured = false;
 			vmuCaptureRetryAt = SDL_GetTicks64() + 1000;
@@ -590,8 +599,7 @@ void input_sdl_handle()
 						{
 							// Raising can change focus asynchronously. Wait briefly for the
 							// game to gain focus instead of capturing the utility window.
-							SDL_RaiseWindow(window);
-							if (SDL_GetKeyboardFocus() != window)
+							if (!vmu_window::focusGameWindow())
 								vmuCaptureFocusDeadline = SDL_GetTicks64() + 1000;
 						}
 						// SDL attaches relative mode to the current keyboard-focus window.

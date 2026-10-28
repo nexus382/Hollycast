@@ -100,6 +100,8 @@ Option<bool> Fog("rend.Fog", true);
 Option<bool> FloatVMUs("rend.FloatVMUs");
 #ifdef HAVE_MOVABLE_VMUS
 Option<bool, false> MovableVMUs("rend.MovableVMUs", false);
+// Retain custom placement when the movement toggle is switched off.
+Option<bool, false> VmuLayoutEnabled("rend.VmuLayoutEnabled", false);
 Option<int, false> VmuWindowSize("rend.VmuWindowSize", vmu_window::DefaultSizePercent);
 #endif
 Option<bool> Rotate90("rend.Rotate90");

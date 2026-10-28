@@ -15,6 +15,12 @@ struct Bounds { float x = 0.f, y = 0.f, width = 0.f, height = 0.f; };
 class TouchLayout
 {
 public:
+	void setMovable(bool enabled)
+	{
+		movable = enabled;
+		if (!movable)
+			end(); // Locking mid-drag commits the last position without hiding the LCD.
+	}
 	void configure(float width, float height, Bounds safeArea, float lcdWidth)
 	{
 		const float size = std::max(0.f, std::min({lcdWidth, safeArea.width, safeArea.height * 1.5f}));
@@ -44,7 +50,7 @@ public:
 
 	bool begin(float x, float y)
 	{
-		if (!std::isfinite(x) || !std::isfinite(y) || viewWidth <= 0 || viewHeight <= 0 || screenWidth <= 0)
+		if (!movable || !std::isfinite(x) || !std::isfinite(y) || viewWidth <= 0 || viewHeight <= 0 || screenWidth <= 0)
 			return false;
 		x *= viewWidth;
 		y *= viewHeight;
@@ -109,5 +115,6 @@ private:
 	unsigned visible = 0, dirty = 0;
 	int dragged = -1;
 	bool moved = false;
+	bool movable = true;
 };
 }

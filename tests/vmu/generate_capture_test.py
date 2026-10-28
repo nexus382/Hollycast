@@ -8,6 +8,7 @@ gui = (root / 'core/ui/gui.cpp').read_text(encoding='utf-8')
 native = (root / 'core/windows/vmu_window.cpp').read_text(encoding='utf-8')
 mouse = (root / 'core/input/mouse.cpp').read_text(encoding='utf-8')
 raw = (root / 'core/windows/rawinput.cpp').read_text(encoding='utf-8')
+utility = (root / 'core/sdl/vmu_window.cpp').read_text(encoding='utf-8')
 
 def between(text, start, end):
     begin = text.index(start)
@@ -23,6 +24,7 @@ events = between(sdl[sdl.index('void input_sdl_handle()'):], '\tSDL_Event event;
 motion = between(sdl, '\t\t\tcase SDL_MOUSEMOTION:', '\t\t\tcase SDL_MOUSEBUTTONDOWN:')
 position = between(mouse, 'static void screenToNative(', 'void SetRelativeMousePosition(')
 raw_input = between(raw, 'void RawMouse::buttonInput(', 'static LRESULT CALLBACK rawWindowProc(')
+focus = between(utility, 'bool focusGameWindow()', 'bool consumeMousePositionReset()')
 
 prefix = r'''
 #include <cstdint>
@@ -73,7 +75,7 @@ struct {
  struct { bool slave=false; } naomi;
 } settings;
 namespace config {
- bool UseRawInput=false, MovableVMUs=false, FloatVMUs=true, Rotate90=false, StretchToFill=false;
+ bool UseRawInput=false, MovableVMUs=false, VmuLayoutEnabled=false, FloatVMUs=true, Rotate90=false, StretchToFill=false;
  int MouseSensitivity=100, ScreenStretching=100;
 }
 int SDL_SetRelativeMouseMode(int enabled) {
@@ -125,6 +127,11 @@ namespace vmu_window {
 #ifdef HAVE_MOVABLE_VMUS
 #ifdef HAVE_SDL_VMUS
 void update(void*,bool) {}
+void* owner=window;
+bool isVmuWindow(void* current) { return current==reinterpret_cast<void*>(2); }
+'''
+prefix += focus
+prefix += r'''
 bool handleEvent(const SDL_Event& event) {
  return (event.type==SDL_KEYDOWN || event.type==SDL_KEYUP) && event.key.windowID!=1;
 }
@@ -388,6 +395,35 @@ int main() {
  require(!mouseCaptured,"failed deferred capture leaves the mouse free");
  captureSucceeds=true; config::MovableVMUs=false; input_sdl_handle();
  require(mouseCaptured,"failed deferred capture preserves the original restoration preference");
+
+ prepare(true); config::MovableVMUs=true; input_sdl_handle(); keyboardFocus=utility; focusImmediately=false;
+ config::VmuLayoutEnabled=true; config::MovableVMUs=false; attempts=captureAttempts;
+ input_sdl_handle();
+ require(!mouseCaptured && captureAttempts==attempts,"locking with VMU focus defers automatic capture until the game has focus");
+ keyboardFocus=window; ticks+=1000; input_sdl_handle();
+ require(mouseCaptured,"locking restores previous capture after the game receives focus");
+ config::VmuLayoutEnabled=false;
+
+ prepare(true); config::MovableVMUs=true; input_sdl_handle(); gameRunning=false;
+ keyboardFocus=utility; focusImmediately=false; config::VmuLayoutEnabled=true; config::MovableVMUs=false;
+ input_sdl_handle();
+ require(!mouseCaptured,"locking while paused does not arm resume capture on the utility window");
+ gameRunning=true; captureMouse(mouseCaptured); attempts=captureAttempts; input_sdl_handle();
+ require(!mouseCaptured && captureAttempts==attempts,"resuming with VMU focus leaves restoration pending");
+ keyboardFocus=window; ticks+=1000; input_sdl_handle();
+ require(mouseCaptured,"paused lock restores capture after resume and game focus");
+ config::VmuLayoutEnabled=false;
+
+ prepare(false); config::VmuLayoutEnabled=true; keyboardFocus=utility; focusImmediately=false;
+ keyEvent(2,chord); keyboardFocus=window; input_sdl_handle();
+ require(mouseCaptured,"locked VMU shortcut also waits for asynchronous game focus");
+ config::VmuLayoutEnabled=false;
+
+ prepare(true); config::MovableVMUs=true; input_sdl_handle(); keyboardFocus=reinterpret_cast<void*>(3);
+ raisesBefore=raises; config::MovableVMUs=false; input_sdl_handle();
+ require(raises==raisesBefore && !mouseCaptured,"automatic restoration never steals focus from another application");
+ keyboardFocus=window; ticks+=1000; input_sdl_handle();
+ require(mouseCaptured,"automatic restoration remains pending while another application has focus");
 
  for (int cancel=0; cancel<3; ++cancel) {
   prepare(false); config::MovableVMUs=true; input_sdl_handle(); keyboardFocus=utility; focusImmediately=false;

@@ -83,7 +83,7 @@ public:
 
 	void update(bool pointerAvailable)
 	{
-		if (!detachedActive())
+		if (!placementActive())
 		{
 			if (worker.joinable())
 				stop();
@@ -104,7 +104,7 @@ public:
 				&& gui_state != GuiState::Loading && gui_state != GuiState::NetworkStart;
 		next.menu = gui_is_open();
 		next.topInset = getScaledTopInset();
-		next.interactive = pointerAvailable;
+		next.interactive = pointerAvailable && config::MovableVMUs;
 		next.dimWhite = !next.menu && (isOpenGL(config::RendererType) || isVulkan(config::RendererType));
 		// Match the existing size at default UI scaling, including its low-res cap,
 		// while keeping the user's VMU size independent of the UI scaling setting.
@@ -636,6 +636,10 @@ bool detachedActive()
 {
 	return config::MovableVMUs && config::FloatVMUs && settings.platform.isConsole();
 }
+bool placementActive()
+{
+	return (config::MovableVMUs || config::VmuLayoutEnabled) && config::FloatVMUs && settings.platform.isConsole();
+}
 void publishScreen(int index, const u32 *pixels, bool active) { windows.publish(index, pixels, active); }
 void update(bool pointerAvailable) { windows.update(pointerAvailable); }
 void shutdown() { windows.stop(); windows.savePositions(); }
@@ -643,7 +647,7 @@ void resetPositions() { windows.reset(); }
 
 bool ownsScreen(int index)
 {
-	return detachedActive() && index >= 0 && index < ScreenCount
+	return placementActive() && index >= 0 && index < ScreenCount
 			&& (windows.displayed.load() & (1u << index)) != 0;
 }
 

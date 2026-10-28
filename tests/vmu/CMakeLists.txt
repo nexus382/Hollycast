@@ -8,7 +8,7 @@ set(capture_source "${CMAKE_CURRENT_BINARY_DIR}/capture.cpp")
 add_custom_command(OUTPUT "${capture_source}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_capture_test.py" "${capture_source}"
     DEPENDS generate_capture_test.py ../../core/sdl/sdl.cpp ../../core/ui/gui.cpp ../../core/windows/vmu_window.cpp
-        ../../core/input/mouse.cpp ../../core/windows/rawinput.cpp
+        ../../core/input/mouse.cpp ../../core/windows/rawinput.cpp ../../core/sdl/vmu_window.cpp
     VERBATIM)
 add_custom_target(vmu_capture_source DEPENDS "${capture_source}")
 set(publish_source "${CMAKE_CURRENT_BINARY_DIR}/publish.cpp")

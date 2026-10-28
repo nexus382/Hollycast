@@ -5,6 +5,7 @@
 namespace config
 {
 extern bool MovableVMUs;
+extern bool VmuLayoutEnabled;
 struct TestIntOption
 {
 	int value = 100;
