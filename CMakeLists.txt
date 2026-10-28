@@ -224,6 +224,10 @@ elseif(LIBRETRO)
 		if(NOT CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
 			set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
 		endif()
+		if(UNIX AND NOT APPLE)
+			# Keep bundled libraries from binding to same-named symbols in the frontend.
+			target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/shell/libretro/link.T")
+		endif()
 	endif()
 	set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "Hollycast_libretro"
 	  XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
@@ -291,6 +295,7 @@ elseif(WIN32)
 		set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
 	endif()
 elseif(APPLE)
+	set(USE_OPENMP OFF CACHE BOOL "Force openmp off" FORCE)
 	add_executable(${PROJECT_NAME} MACOSX_BUNDLE core/emulator.cpp)
 else()
 	add_executable(${PROJECT_NAME} core/emulator.cpp)
@@ -467,10 +472,6 @@ if(USE_BREAKPAD AND NOT LIBRETRO)
 endif()
 
 if(USE_OPENMP)
-	if(APPLE AND IS_DIRECTORY "/opt/homebrew/opt/libomp")
-		list(PREPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/libomp")
-		message(STATUS "Found and using Homebrew libomp hint.")
-	endif()
 	find_package(OpenMP)
 	if(OpenMP_CXX_FOUND)
 		if(MINGW)
@@ -892,6 +893,10 @@ endif()
 # tinygettext
 set(TINYGETTEXT_WO_ICONV ON)
 add_subdirectory(core/deps/tinygettext EXCLUDE_FROM_ALL)
+if(MSVC)
+	# tinygettext contains native-language string literals in UTF-8 source files.
+	target_compile_options(tinygettext PRIVATE /utf-8)
+endif()
 target_include_directories(${PROJECT_NAME} PRIVATE core/deps/tinygettext/include)
 target_link_libraries(${PROJECT_NAME} PRIVATE tinygettext::tinygettext)
 
@@ -1440,24 +1445,28 @@ if(NOT LIBRETRO)
 				COMMAND ${CMAKE_COMMAND} -E tar "cfv" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>-${CMAKE_OSX_SYSROOT}/Hollycast.ipa" --format=zip ${CMAKE_CURRENT_BINARY_DIR}/Payload)
 		else()
 
-			add_subdirectory(core/deps/Syphon)
-			target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
-			add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}
-				$<TARGET_FILE_DIR:Hollycast>/../Resources/)
-			target_compile_definitions(${PROJECT_NAME} PRIVATE VIDEO_ROUTING)
-
 			target_sources(${PROJECT_NAME} PRIVATE
 					shell/apple/common/http_client.mm
-					shell/apple/common/util.mm
-					shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.h
-					shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
-					shell/apple/emulator-osx/emulator-osx/osx-main.mm)
-			set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
-			target_sources(${PROJECT_NAME} PRIVATE ${ASSETS} fonts/NotoSansCJK-LICENSE.txt)
-			set_source_files_properties(fonts/NotoSansCJK-LICENSE.txt PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
-			source_group("Resources" FILES ${ASSETS})
-			set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+					shell/apple/common/util.mm)
+			# Test builds use gtest_main instead of the macOS app entry point.
+			if(NOT BUILD_TESTING)
+				add_subdirectory(core/deps/Syphon)
+				target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
+				add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}
+					$<TARGET_FILE_DIR:Hollycast>/../Resources/)
+				target_compile_definitions(${PROJECT_NAME} PRIVATE VIDEO_ROUTING)
+
+				target_sources(${PROJECT_NAME} PRIVATE
+						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.h
+						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
+						shell/apple/emulator-osx/emulator-osx/osx-main.mm)
+				set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
+				target_sources(${PROJECT_NAME} PRIVATE ${ASSETS} fonts/NotoSansCJK-LICENSE.txt)
+				set_source_files_properties(fonts/NotoSansCJK-LICENSE.txt PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+				source_group("Resources" FILES ${ASSETS})
+				set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+			endif()
 
 			set_target_properties(${PROJECT_NAME} PROPERTIES
 				OUTPUT_NAME "Hollycast"

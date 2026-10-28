@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -1782,10 +1783,8 @@ void reset(bool hard)
 
 void term()
 {
-	if (schedId != -1) {
-		sh4_sched_unregister(schedId);
-		schedId = -1;
-	}
+	sh4_sched_unregister(schedId);
+	schedId = -1;
 }
 
 void vmem_init()

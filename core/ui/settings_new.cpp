@@ -3442,6 +3442,21 @@ static void renderSettingsContentTab(SettingsTab tab)
 			ImGui::Indent();
 
 			RenderGeneralToggleSettingRow(
+				"ShowAchievementPopups",
+				ICON_FA_BELL,
+				T("Show Achievement Popups"),
+				T("Show on-screen RetroAchievements notifications while playing."),
+				static_cast<bool>(config::ShowAchievementPopups),
+				[](bool enabled) { config::ShowAchievementPopups = enabled; },
+				T(
+					"Show Achievement Popups\n"
+					"Controls achievement, progress, challenge, and leaderboard notifications shown over gameplay."
+				)
+			);
+
+			ImGui::Spacing();
+
+			RenderGeneralToggleSettingRow(
 				"AchievementsHardcoreMode",
 				ICON_FA_FIRE,
 				T("Hardcore Mode"),
