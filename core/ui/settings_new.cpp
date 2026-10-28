@@ -57,6 +57,7 @@
 #include "stdclass.h"
 #include "achievements/achievements.h"
 #include "vgamepad.h"
+#include "rend/vmu_window.h"
 #include <atomic>
 #include <cmath>
 #include <cctype>
@@ -5707,6 +5708,63 @@ void renderOnScreenDisplayTab()
 			static_cast<bool>(config::FloatVMUs),
 			[](bool enabled) { config::FloatVMUs.set(enabled); },
 			T("Show VMU In-Game\nDisplays the VMU LCD screens while in-game."));
+#ifdef HAVE_MOVABLE_VMUS
+		ImGui::PushID("MovableVMUs");
+		const bool moveRowActivated = BeginTwoLineSettingRow("##row",
+			T("Enable to move VMU screens. Turn off to lock them in place. Use reset to restore their default positions."));
+		const ImVec2 moveLineStart = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_GAMEPAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Move VMU"));
+		ImGui::PopFont();
+		const float resetWidth = SettingsLayoutScaled(26.0f);
+		const float resetHeight = SettingsLayoutScaled(22.0f);
+		const float toggleWidth = SettingsLayoutScaled(50.0f);
+		ImGui::SameLine(RightColumnX(toggleWidth + resetWidth + SettingsLayoutScaled(8.0f)));
+		const ImVec2 togglePos = ImGui::GetCursorPos();
+		ImGui::SetCursorPos(ImVec2(togglePos.x,
+			togglePos.y + (TwoLineSettingContentHeight() - SettingsLayoutScaled(24.0f)) * 0.5f));
+		RenderToggleSwitchVisual(config::MovableVMUs);
+		ImGui::SameLine(RightColumnX(resetWidth));
+		ImGui::SetCursorPosY(moveLineStart.y + (TwoLineSettingContentHeight() - resetHeight) * 0.5f);
+		const bool resetPressed = SettingsIconButton("##ResetVmuPositions", ICON_FA_ARROWS_ROTATE, ImVec2(resetWidth, resetHeight));
+		const bool resetHovered = ImGui::IsItemHovered();
+		if (resetHovered || ImGui::IsItemFocused())
+			SetSettingsFooterText(T("Reset VMU screens to their default positions."));
+		// The reset is a separate action inside the selectable row.
+		if (moveRowActivated && !resetHovered && !resetPressed)
+		{
+			config::VmuLayoutEnabled.set(true);
+			config::MovableVMUs.set(!config::MovableVMUs.get());
+			if (config::MovableVMUs)
+				config::FloatVMUs.set(true);
+		}
+		if (resetPressed)
+			vmu_window::resetPositions();
+		RenderTwoLineSettingDescription(moveLineStart, T("Turn off to lock VMU screens in place."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
+		if ((config::MovableVMUs || config::VmuLayoutEnabled) && config::FloatVMUs)
+		{
+			SettingsUI::PopupConfig vmuSizeCfg {};
+			vmuSizeCfg.type = SettingsUI::PopupType::Slider;
+			vmuSizeCfg.slider.label = T("VMU Size");
+			vmuSizeCfg.slider.icon = ICON_FA_RULER_HORIZONTAL;
+			vmuSizeCfg.slider.popupID = Tnop("VmuWindowSizePopup");
+			vmuSizeCfg.slider.description = T("Resize all movable VMU screens live.");
+			vmuSizeCfg.slider.currentValue = &config::VmuWindowSize.get();
+			vmuSizeCfg.slider.minValue = vmu_window::MinSizePercent;
+			vmuSizeCfg.slider.maxValue = vmu_window::MaxSizePercent;
+			vmuSizeCfg.slider.defaultValue = vmu_window::DefaultSizePercent;
+			vmuSizeCfg.slider.format = "%d%%";
+			vmuSizeCfg.slider.valueWidth = 220.0f;
+			vmuSizeCfg.slider.sliderWidth = 320.0f;
+			RenderGeneralPopupSettingRow(Tnop("VmuWindowSizeSetting"),
+				T("Scale VMU screens independently of UI scaling."), vmuSizeCfg,
+				T("100% keeps the default VMU size. Changes apply immediately and are saved with your settings."));
+		}
+#endif
 	}
 
 	if (RenderCollapsingHeader("OsdPerformanceSection", ICON_FA_CHART_LINE, T("Performance Overlay"), ImGuiTreeNodeFlags_DefaultOpen))

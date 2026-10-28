@@ -334,27 +334,19 @@ std::string getSavestatePath(int index, bool writable)
 	}
 }
 
-std::string getSavestatePathForGame(const std::string& contentPath, const std::string& gameId, int index)
+SavestateFolders getSavestateFolders()
 {
-	(void)gameId; // Savestates are keyed by the content filename in the live loader.
-	std::string stateFile;
-	if (!contentPath.empty())
-	{
-		try {
-			const hostfs::FileInfo info = hostfs::storage().getFileInfo(contentPath);
-			if (!info.name.empty())
-				stateFile = makeSavestateFileName(info.name, index);
-		} catch (const hostfs::StorageException&) {
-		}
-		// Naomi slave content can use the original path as fileName when storage
-		// metadata is unavailable; mirror that runtime fallback exactly.
-		if (stateFile.empty())
-			stateFile = makeSavestateFileName(contentPath, index);
-	}
-	if (stateFile.empty())
-		return "";
+	return {config::SavestatePath.get(), get_readonly_data_dirs()};
+}
 
-	for (const auto& userPath : config::SavestatePath.get())
+std::string getSavestatePathForGame(const std::string& contentPath, const std::string& fileName,
+		int index, const SavestateFolders& folders)
+{
+	if (contentPath.empty() || fileName.empty())
+		return "";
+	const std::string stateFile = makeSavestateFileName(fileName, index);
+
+	for (const auto& userPath : folders.custom)
 	{
 		if (userPath.empty())
 			continue;
@@ -365,8 +357,17 @@ std::string getSavestatePathForGame(const std::string& contentPath, const std::s
 		} catch (const hostfs::StorageException&) {
 		}
 	}
+	// Preserve the live loader's order: custom folders, default data folders,
+	// then the game's directory. Default data paths are native filesystem paths.
+	for (const auto& dataPath : folders.data)
+	{
+		const std::string fullPath = dataPath + stateFile;
+		if (file_exists(fullPath))
+			return fullPath;
+	}
 	try {
-		std::string fullPath = get_readonly_data_path(stateFile, contentPath);
+		const std::string parent = hostfs::storage().getParentPath(contentPath);
+		std::string fullPath = hostfs::storage().getSubPath(parent, stateFile);
 		if (hostfs::storage().exists(fullPath))
 			return fullPath;
 	} catch (const hostfs::StorageException&) {
@@ -374,7 +375,7 @@ std::string getSavestatePathForGame(const std::string& contentPath, const std::s
 
 	// Match the live resolver's fallback: return the writable location even if
 	// no state exists yet. The caller checks the file before offering Resume.
-	return get_writable_data_path(stateFile);
+	return folders.data.empty() ? "" : folders.data.front() + stateFile;
 }
 
 std::string getShaderCachePath(const std::string& filename)

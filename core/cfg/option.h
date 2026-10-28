@@ -19,6 +19,7 @@
 */
 #pragma once
 #include "cfg.h"
+#include "rend/vmu_window.h"
 #include "hw/maple/maple_cfg.h"
 #ifdef LIBRETRO
 #include <libretro.h>
@@ -516,6 +517,11 @@ extern Option<int> ScreenStretching;	// in percent. 150 means stretch from 4/3 t
 extern Option<bool> StretchToFill;
 extern Option<bool> Fog;
 extern Option<bool> FloatVMUs;
+#ifdef HAVE_MOVABLE_VMUS
+extern Option<bool, false> MovableVMUs;
+extern Option<bool, false> VmuLayoutEnabled;
+extern Option<int, false> VmuWindowSize;
+#endif
 extern Option<bool> Rotate90;
 extern Option<bool> PerStripSorting;
 extern Option<bool> DelayFrameSwapping;	// Delay swapping frame until FB_R_SOF matches FB_W_SOF

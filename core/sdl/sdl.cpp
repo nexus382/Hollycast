@@ -21,6 +21,7 @@
 #include "emulator.h"
 #include "ui/gui.h"
 #include "stdclass.h"
+#include "rend/vmu_window.h"
 #include "imgui.h"
 #include "hw/naomi/card_reader.h"
 #include "hw/naomi/multiboard.h"
@@ -100,9 +101,18 @@ static bool isWindowFullscreen()
 	return false;
 }
 
+static bool keepVmuCursorVisible()
+{
+#ifdef HAVE_MOVABLE_VMUS
+	return vmu_window::detachedActive() && !mouseCaptured;
+#else
+	return false;
+#endif
+}
+
 static void updateFullscreenCursorVisibility(int mouseY)
 {
-	if (!isWindowFullscreen() || !gameRunning || mouseCaptured)
+	if (!isWindowFullscreen() || !gameRunning || mouseCaptured || keepVmuCursorVisible())
 		return;
 
 	const ImGuiContext* context = ImGui::GetCurrentContext();
@@ -180,10 +190,10 @@ static void setWindowTitleGame()
 	SDL_SetWindowTitle(window, ("Hollycast - " + title).c_str());
 }
 
-static void captureMouse(bool capture)
+static bool captureMouse(bool capture)
 {
 	if (window == nullptr || !gameRunning)
-		return;
+		return false;
 	if (!capture)
 	{
 		if (!config::UseRawInput)
@@ -192,6 +202,7 @@ static void captureMouse(bool capture)
 			SDL_ShowCursor(SDL_ENABLE);
 		setWindowTitleGame();
 		mouseCaptured = false;
+		return true;
 	}
 	else
 	{
@@ -202,8 +213,10 @@ static void captureMouse(bool capture)
 				SDL_ShowCursor(SDL_DISABLE);
 			SDL_SetWindowTitle(window, "Hollycast - mouse capture");
 			mouseCaptured = true;
+			return true;
 		}
 	}
+	return false;
 }
 
 static void emuEventCallback(Event event, void *)
@@ -225,7 +238,7 @@ static void emuEventCallback(Event event, void *)
 	case Event::Resume:
 		gameRunning = true;
 		captureMouse(mouseCaptured);
-		if (window_fullscreen && !mouseCaptured)
+		if (window_fullscreen && !mouseCaptured && !keepVmuCursorVisible())
 			SDL_ShowCursor(SDL_DISABLE);
 		resumeHaptic();
 		break;
@@ -413,6 +426,70 @@ bool sdl_queue_open_file(const char *path)
 void input_sdl_handle()
 {
 	SDLGamepad::UpdateRumble();
+#ifdef HAVE_MOVABLE_VMUS
+	static bool movableVmusActive = false;
+	static bool restoreVmuMouseCapture = false;
+	static Uint64 vmuCaptureRetryAt = 0;
+	const bool movableVmus = vmu_window::detachedActive();
+#ifdef HAVE_SDL_VMUS
+	static Uint64 vmuCaptureFocusDeadline = 0;
+	if (vmuCaptureFocusDeadline != 0)
+	{
+		if (!gameRunning || !vmu_window::placementActive() || SDL_GetTicks64() >= vmuCaptureFocusDeadline)
+			vmuCaptureFocusDeadline = 0;
+		else if (SDL_GetKeyboardFocus() == window)
+		{
+			vmuCaptureFocusDeadline = 0;
+			if (captureMouse(true))
+				restoreVmuMouseCapture = false;
+		}
+	}
+#endif
+	if (movableVmus && !movableVmusActive)
+	{
+		restoreVmuMouseCapture = restoreVmuMouseCapture || mouseCaptured;
+		captureMouse(false);
+		// Enabling while paused must also clear the capture preference used on resume.
+		mouseCaptured = false;
+	}
+	else if (!movableVmus && restoreVmuMouseCapture)
+	{
+		if (!gameRunning)
+		{
+#ifdef HAVE_SDL_VMUS
+			// Resume must not bind relative mode to a focused utility window.
+			mouseCaptured = SDL_GetKeyboardFocus() == window;
+#else
+			mouseCaptured = true;
+#endif
+			// Resume must not inherit a delay from an earlier failed attempt.
+			vmuCaptureRetryAt = 0;
+		}
+		else if (movableVmusActive || SDL_GetTicks64() >= vmuCaptureRetryAt)
+		{
+			// Keep the preference pending through pause and failed SDL recapture.
+			// Retry at most once a second until restored or explicitly overridden.
+#ifdef HAVE_SDL_VMUS
+			restoreVmuMouseCapture = !vmu_window::focusGameWindow() || !captureMouse(true);
+#else
+			restoreVmuMouseCapture = !captureMouse(true);
+#endif
+			if (restoreVmuMouseCapture)
+				mouseCaptured = false;
+			vmuCaptureRetryAt = SDL_GetTicks64() + 1000;
+		}
+	}
+	movableVmusActive = movableVmus;
+	if (keepVmuCursorVisible())
+		SDL_ShowCursor(SDL_ENABLE);
+	const bool pointerAvailable = !gameRunning
+			|| (!mouseCaptured && SDL_ShowCursor(SDL_QUERY) == SDL_ENABLE);
+#ifdef HAVE_SDL_VMUS
+	vmu_window::update(window, pointerAvailable);
+#else
+	vmu_window::update(pointerAvailable);
+#endif
+#endif
 
 	SDL_Event event;
 	while (SDL_PollEvent(&event))
@@ -423,6 +500,31 @@ void input_sdl_handle()
 			SDL_free(event.user.data1);
 			continue;
 		}
+#ifdef HAVE_SDL_VMUS
+		// Utility-window input and close/resize events belong to that VMU only.
+		// Let keyboard events reach application shortcuts before filtering game input.
+		const bool vmuEvent = vmu_window::handleEvent(event);
+		if (vmuEvent && event.type != SDL_KEYDOWN && event.type != SDL_KEYUP)
+			continue;
+		if (vmuEvent && (SDL_GetKeyboardFocus() == nullptr
+				|| event.key.windowID != SDL_GetWindowID(SDL_GetKeyboardFocus())))
+			continue;
+#endif
+#if defined(_WIN32) && !defined(TARGET_UWP) && !defined(LIBRETRO)
+		if ((event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN
+				|| event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEWHEEL) && vmu_window::blocksMouseInput())
+		{
+			for (int button = 0; button < 3; ++button)
+				gui_set_mouse_button(button, false, false);
+			if (!config::UseRawInput)
+			{
+				auto mouse = getMouse(event.button.which);
+				for (Mouse::Button button : {Mouse::LEFT_BUTTON, Mouse::MIDDLE_BUTTON, Mouse::RIGHT_BUTTON, Mouse::BUTTON_4, Mouse::BUTTON_5})
+					mouse->setButton(button, false);
+			}
+			continue;
+		}
+#endif
 		switch (event.type)
 		{
 			case SDL_QUIT:
@@ -448,7 +550,7 @@ void input_sdl_handle()
 						else
 						{
 							SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
-							if (gameRunning)
+							if (gameRunning && !keepVmuCursorVisible())
 								SDL_ShowCursor(SDL_DISABLE);
 						}
 						window_fullscreen = !window_fullscreen;
@@ -456,6 +558,10 @@ void input_sdl_handle()
 					}
 					// Route other keyboard events to master in multiboard mode
 					if (settings.naomi.slave) {
+#ifdef HAVE_SDL_VMUS
+						if (vmuEvent)
+							break;
+#endif
 						Multiboard::keyboardEvent(event.key.keysym.scancode, event.type == SDL_KEYDOWN);
 						break;
 					}
@@ -482,15 +588,39 @@ void input_sdl_handle()
 						}
 					};
 
+					// Left-Alt + Left-CTRL toggles mouse capture
+					if (event.type == SDL_KEYDOWN && (event.key.keysym.mod & KMOD_LALT) && (event.key.keysym.mod & KMOD_LCTRL)
+							&& !(is_key_mapped(SDL_SCANCODE_LALT) || is_key_mapped(SDL_SCANCODE_LCTRL)))
+					{
+						const bool wasCaptured = mouseCaptured;
+#ifdef HAVE_SDL_VMUS
+						vmuCaptureFocusDeadline = 0;
+						if (!wasCaptured && vmuEvent && gameRunning)
+						{
+							// Raising can change focus asynchronously. Wait briefly for the
+							// game to gain focus instead of capturing the utility window.
+							if (!vmu_window::focusGameWindow())
+								vmuCaptureFocusDeadline = SDL_GetTicks64() + 1000;
+						}
+						// SDL attaches relative mode to the current keyboard-focus window.
+						if (vmuCaptureFocusDeadline != 0)
+							break;
+#endif
+						captureMouse(!wasCaptured);
+#ifdef HAVE_MOVABLE_VMUS
+						// Only effective capture changes supersede the saved state (pause
+						// and a failed SDL capture leave the existing preference intact).
+						if (mouseCaptured != wasCaptured)
+							restoreVmuMouseCapture = false;
+#endif
+						break;
+					}
+#ifdef HAVE_SDL_VMUS
+					if (vmuEvent)
+						break;
+#endif
 					if (event.type == SDL_KEYDOWN)
 					{
-						// Left-Alt + Left-CTRL toggles mouse capture
-						if ((event.key.keysym.mod & KMOD_LALT) && (event.key.keysym.mod & KMOD_LCTRL)
-								&& !(is_key_mapped(SDL_SCANCODE_LALT) || is_key_mapped(SDL_SCANCODE_LCTRL)))
-						{
-							captureMouse(!mouseCaptured);
-							break;
-						}
 						// Barcode scanner
 						if (card_reader::barcodeAvailable() && handleBarcodeScanner(event))
 							break;
@@ -506,6 +636,12 @@ void input_sdl_handle()
 
 			case SDL_WINDOWEVENT:
 			{
+#ifdef HAVE_SDL_VMUS
+				// With utility windows present SDL no longer synthesizes SDL_QUIT
+				// when the main window closes. VMU close events were consumed above.
+				if (event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window))
+					gui_request_exit_emulator();
+#endif
 				bool displayMetricsEvent = event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED
 						|| event.window.event == SDL_WINDOWEVENT_RESTORED
 						|| event.window.event == SDL_WINDOWEVENT_MINIMIZED
@@ -520,7 +656,7 @@ void input_sdl_handle()
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
 				{
-					if (window_fullscreen && gameRunning)
+					if (window_fullscreen && gameRunning && !keepVmuCursorVisible())
 						SDL_ShowCursor(SDL_DISABLE);
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
@@ -954,6 +1090,9 @@ bool sdl_recreate_window(u32 flags)
 
 	if (window != nullptr)
 	{
+#ifdef HAVE_MOVABLE_VMUS
+		vmu_window::shutdown();
+#endif
 		SDL_DestroyWindow(window);
 		window = nullptr;
 	}
@@ -1114,6 +1253,9 @@ void sdl_window_create()
 
 void sdl_window_destroy()
 {
+#ifdef HAVE_MOVABLE_VMUS
+	vmu_window::shutdown();
+#endif
 #ifndef __SWITCH__
 	if (!settings.naomi.slave && settings.naomi.drivingSimSlave == 0)
 	{

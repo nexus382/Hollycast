@@ -1111,7 +1111,7 @@ void drawVmusAndCrosshairs(int width, int height)
 	if (settings.platform.isConsole() && showVmus)
 	{
 		for (int i = 0; i < 8 ; i++)
-			if (vmu_lcd_status[i])
+			if (vmu_lcd_status[i] && !vmu_window::ownsScreen(i))
 				drawVmuTexture(i, width, height);
 	}
 

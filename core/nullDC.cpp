@@ -394,40 +394,49 @@ bool dc_loadstateForPath(const std::string& statePath)
 time_t dc_getStateCreationDate(int index)
 {
 	std::string filename = hostfs::getSavestatePath(index, false);
-	return dc_getStateCreationDateForPath(filename);
-}
-
-time_t dc_getStateCreationDateForPath(const std::string& filename)
-{
 	if (filename != lastStateFile)
 	{
 		lastStateFile = filename;
-		hostfs::File *f = hostfs::storage().openFile(filename, "rb");
-		if (f == nullptr)
-			lastStateTime = 0;
-		else
-		{
-			SavestateHeader header;
-			if (f->read(&header, sizeof(header), 1) != 1 || !header.isValid())
-			{
-				delete f;
-				try {
-					hostfs::FileInfo fileInfo = hostfs::storage().getFileInfo(filename);
-					lastStateTime = fileInfo.updateTime;
-				} catch (...) {
-					lastStateTime = 0;
-				}
-			}
-			else {
-				delete f;
-				lastStateTime = (time_t)header.creationDate;
-			}
-		}
+		lastStateTime = dc_getStateCreationDateForPath(filename);
 	}
 	return lastStateTime;
 }
 
+time_t dc_getStateCreationDateForPath(const std::string& filename)
+{
+	// Background library scans must not share the active slot's mutable cache.
+	hostfs::File *f = hostfs::storage().openFile(filename, "rb");
+	if (f == nullptr)
+		return 0;
+	SavestateHeader header;
+	const bool validHeader = f->read(&header, sizeof(header), 1) == 1 && header.isValid();
+	delete f;
+	if (validHeader)
+		return (time_t)header.creationDate;
+	try {
+		return hostfs::storage().getFileInfo(filename).updateTime;
+	} catch (...) {
+		return 0;
+	}
+}
+
 SavestateInfo dc_getLatestStateForGame(const std::string& contentPath)
+{
+	if (contentPath.empty())
+		return {};
+	std::string fileName = contentPath;
+	try {
+		const hostfs::FileInfo info = hostfs::storage().getFileInfo(contentPath);
+		if (!info.name.empty())
+			fileName = info.name;
+	} catch (const hostfs::StorageException&) {
+		// Match the live loader's fallback for Naomi slave content.
+	}
+	return dc_getLatestStateForGame(contentPath, fileName, hostfs::getSavestateFolders());
+}
+
+SavestateInfo dc_getLatestStateForGame(const std::string& contentPath, const std::string& fileName,
+		const hostfs::SavestateFolders& folders)
 {
 	SavestateInfo latest;
 	if (contentPath.empty())
@@ -436,7 +445,7 @@ SavestateInfo dc_getLatestStateForGame(const std::string& contentPath)
 	// Include every manual slot and the hidden autosave; never offer netplay or RAM states.
 	for (int slot = 0; slot <= autoSaveSlot; ++slot)
 	{
-		const std::string path = hostfs::getSavestatePathForGame(contentPath, "", slot);
+		const std::string path = hostfs::getSavestatePathForGame(contentPath, fileName, slot, folders);
 		const time_t creationDate = path.empty() ? 0 : dc_getStateCreationDateForPath(path);
 		// Autosave wins equal timestamps; otherwise keep the lowest numbered slot.
 		if (creationDate > latest.creationDate

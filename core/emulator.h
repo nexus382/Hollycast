@@ -46,7 +46,10 @@ struct SavestateInfo {
 	std::string path;
 	time_t creationDate = 0;
 };
+namespace hostfs { struct SavestateFolders; }
 SavestateInfo dc_getLatestStateForGame(const std::string& contentPath);
+SavestateInfo dc_getLatestStateForGame(const std::string& contentPath, const std::string& fileName,
+		const hostfs::SavestateFolders& folders);
 time_t dc_getStateCreationDate(int index);
 time_t dc_getStateCreationDateForPath(const std::string& statePath);
 void dc_getStateScreenshot(int index, std::vector<u8>& pngData);

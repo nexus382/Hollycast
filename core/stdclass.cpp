@@ -103,11 +103,6 @@ std::string get_writable_data_path(const std::string& filename)
 
 std::string get_readonly_data_path(const std::string& filename)
 {
-	return get_readonly_data_path(filename, settings.content.path);
-}
-
-std::string get_readonly_data_path(const std::string& filename, const std::string& contentPath)
-{
 	std::string user_filepath = get_writable_data_path(filename);
 	if (file_exists(user_filepath))
 		return user_filepath;
@@ -120,7 +115,7 @@ std::string get_readonly_data_path(const std::string& filename, const std::strin
 	}
 	// Try the game directory
 	try {
-		std::string parent = hostfs::storage().getParentPath(contentPath);
+		std::string parent = hostfs::storage().getParentPath(settings.content.path);
 		std::string filepath = hostfs::storage().getSubPath(parent, filename);
 		if (hostfs::storage().exists(filepath))
 			return filepath;
@@ -128,6 +123,13 @@ std::string get_readonly_data_path(const std::string& filename, const std::strin
 
 	// Not found, so we return the user variant
 	return user_filepath;
+}
+
+std::vector<std::string> get_readonly_data_dirs()
+{
+	std::vector<std::string> paths{user_data_dir};
+	paths.insert(paths.end(), system_data_dirs.begin(), system_data_dirs.end());
+	return paths;
 }
 
 size_t get_last_slash_pos(const std::string& path)
