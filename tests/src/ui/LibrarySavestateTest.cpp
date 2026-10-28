@@ -6,6 +6,7 @@
 #include "oslib/storage.h"
 #include "stdclass.h"
 #include "types.h"
+#include "ui/library_savestates.h"
 
 #include <algorithm>
 #include <chrono>
@@ -106,7 +107,7 @@ TEST_F(LibrarySavestateTest, CustomSavestateFolderMatchesRuntimeFilenameAndSlot)
 	config::SavestatePath = std::vector<std::string>{customDirectory.string()};
 
 	const std::string expected = hostfs::getSavestatePath(2, false);
-	EXPECT_EQ(expected, hostfs::getSavestatePathForGame(contentPath.string(), settings.content.gameId, 2));
+	EXPECT_EQ(expected, hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 2, hostfs::getSavestateFolders()));
 	EXPECT_EQ(stateFile(customDirectory, "My Game_2.state").string(), expected);
 }
 
@@ -114,12 +115,12 @@ TEST_F(LibrarySavestateTest, GameDirectoryAndMissingStateMatchRuntimeResolver)
 {
 	std::ofstream(stateFile(gameDirectory)) << "state";
 	EXPECT_EQ(hostfs::getSavestatePath(0, false),
-			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.gameId, 0));
+			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 0, hostfs::getSavestateFolders()));
 
 	std::filesystem::remove(stateFile(gameDirectory));
 	(void)hostfs::getSavestatePath(0, true); // Clear the live resolver's path cache for this fixture.
 	EXPECT_EQ(hostfs::getSavestatePath(0, false),
-			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.gameId, 0));
+			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 0, hostfs::getSavestateFolders()));
 }
 
 TEST_F(LibrarySavestateTest, GameIdAloneDoesNotAdvertiseAStateTheLoaderCannotOpen)
@@ -128,9 +129,9 @@ TEST_F(LibrarySavestateTest, GameIdAloneDoesNotAdvertiseAStateTheLoaderCannotOpe
 	std::ofstream(stateFile(directory, "TEST-GAME-ID.state")) << "state";
 
 	EXPECT_EQ(hostfs::getSavestatePath(0, false),
-			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.gameId, 0));
+			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 0, hostfs::getSavestateFolders()));
 	EXPECT_NE(stateFile(directory, "TEST-GAME-ID.state").string(),
-			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.gameId, 0));
+			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 0, hostfs::getSavestateFolders()));
 }
 
 TEST_F(LibrarySavestateTest, InspectionDoesNotChangeCurrentGameSettings)
@@ -138,7 +139,7 @@ TEST_F(LibrarySavestateTest, InspectionDoesNotChangeCurrentGameSettings)
 	const auto activePath = settings.content.path;
 	const auto activeFileName = settings.content.fileName;
 	const auto activeGameId = settings.content.gameId;
-	(void)hostfs::getSavestatePathForGame(contentPath.string(), "OTHER-GAME", 0);
+	(void)hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 0, hostfs::getSavestateFolders());
 	EXPECT_EQ(activePath, settings.content.path);
 	EXPECT_EQ(activeFileName, settings.content.fileName);
 	EXPECT_EQ(activeGameId, settings.content.gameId);
@@ -257,6 +258,111 @@ TEST_F(LibrarySavestateTest, ExplicitMissingResumeStateReportsFailure)
 	ASSERT_TRUE(dc_savestateAllowed());
 	EXPECT_FALSE(dc_loadstateForPath(""));
 	EXPECT_FALSE(dc_loadstateForPath(stateFile(directory, "missing.state").string()));
+}
+
+TEST_F(LibrarySavestateTest, BackgroundInspectionUsesCapturedFoldersAndDecodedFilename)
+{
+	const auto captured = hostfs::getSavestateFolders();
+	const auto saved = stateFile(directory, "Decoded Game_10.state");
+	writeState(saved, 500);
+	const auto changedDirectory = directory / "changed";
+	std::filesystem::create_directory(changedDirectory);
+	config::SavestatePath = std::vector<std::string>{changedDirectory.string()};
+	set_user_data_dir(changedDirectory.string());
+
+	// The scanner already supplies the decoded filename; no ROM metadata lookup
+	// or access to the changed global folders is needed on the worker.
+	const auto state = dc_getLatestStateForGame("content://provider/document/opaque-id", "Decoded Game.cdi", captured);
+	EXPECT_EQ(saved, std::filesystem::path(state.path));
+	EXPECT_EQ(500, state.creationDate);
+}
+
+TEST_F(LibrarySavestateTest, PathInspectionReadsReplacedAndDeletedFilesWithoutASharedCache)
+{
+	const auto saved = stateFile(directory);
+	writeState(saved, 100);
+	EXPECT_EQ(100, dc_getStateCreationDateForPath(saved.string()));
+	writeState(saved, 200);
+	EXPECT_EQ(200, dc_getStateCreationDateForPath(saved.string()));
+	std::filesystem::remove(saved);
+	EXPECT_EQ(0, dc_getStateCreationDateForPath(saved.string()));
+}
+
+SavestateInfo waitForCachedState(LibrarySavestateCache& cache, const std::string& path)
+{
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	SavestateInfo state;
+	do {
+		state = cache.get(path, "Game.cdi");
+		if (!cache.busy())
+			return state;
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	} while (std::chrono::steady_clock::now() < deadline);
+	ADD_FAILURE() << "Background save inspection did not complete";
+	return state;
+}
+
+TEST(LibrarySavestateCacheTest, SlowStorageDoesNotBlockTheCallerOrQueueTheWholeLibrary)
+{
+	std::promise<void> entered;
+	std::promise<void> release;
+	const auto gate = release.get_future().share();
+	std::atomic<int> calls{0};
+	LibrarySavestateCache cache;
+	cache.reset([&](const std::string& path, const std::string&) {
+		++calls;
+		entered.set_value();
+		gate.wait();
+		return SavestateInfo{path + ".state", 100};
+	});
+	auto lookup = std::async(std::launch::async, [&] { return cache.get("first", "Game.cdi"); });
+	const auto started = entered.get_future().wait_for(std::chrono::seconds(5));
+	const auto returned = lookup.wait_for(std::chrono::seconds(1));
+	// Release even on a regression so a failing assertion cannot strand the worker.
+	if (returned == std::future_status::ready)
+		for (int i = 0; i < 100; ++i)
+			cache.get("other" + std::to_string(i), "Game.cdi");
+	release.set_value();
+	EXPECT_EQ(std::future_status::ready, started);
+	EXPECT_EQ(std::future_status::ready, returned);
+	EXPECT_TRUE(lookup.get().path.empty());
+	EXPECT_EQ("first.state", waitForCachedState(cache, "first").path);
+	EXPECT_EQ(1, calls.load());
+}
+
+TEST(LibrarySavestateCacheTest, RefreshDiscardsAnInFlightResult)
+{
+	std::promise<void> entered;
+	std::promise<void> release;
+	const auto gate = release.get_future().share();
+	LibrarySavestateCache cache;
+	cache.reset([&](const std::string&, const std::string&) {
+		entered.set_value();
+		gate.wait();
+		return SavestateInfo{"old.state", 100};
+	});
+	cache.get("game", "Game.cdi");
+	const auto started = entered.get_future().wait_for(std::chrono::seconds(5));
+	cache.reset([](const std::string&, const std::string&) { return SavestateInfo{"new.state", 200}; });
+	release.set_value();
+	EXPECT_EQ(std::future_status::ready, started);
+	const auto state = waitForCachedState(cache, "game");
+	EXPECT_EQ("new.state", state.path);
+	EXPECT_EQ(200, state.creationDate);
+}
+
+TEST(LibrarySavestateCacheTest, StorageFailureIsCachedUntilRefresh)
+{
+	std::atomic<int> calls{0};
+	LibrarySavestateCache cache;
+	cache.reset([&](const std::string&, const std::string&) -> SavestateInfo {
+		++calls;
+		throw hostfs::StorageException("Storage was disconnected");
+	});
+	EXPECT_TRUE(waitForCachedState(cache, "game").path.empty());
+	EXPECT_TRUE(cache.get("game", "Game.cdi").path.empty());
+	EXPECT_FALSE(cache.busy());
+	EXPECT_EQ(1, calls.load());
 }
 
 TEST_F(LibrarySavestateTest, ScreenshotReaderAcceptsValidPngAndRejectsTruncatedOrOversizedHeaders)

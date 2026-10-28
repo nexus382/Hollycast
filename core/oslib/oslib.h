@@ -94,8 +94,14 @@ namespace hostfs
 	std::string findNaomiBios(const std::string& name);
 
 	std::string getSavestatePath(int index, bool writable);
-	// Resolve a game's savestate without changing the currently loaded game or settings.
-	std::string getSavestatePathForGame(const std::string& contentPath, const std::string& gameId, int index);
+	struct SavestateFolders {
+		std::vector<std::string> custom;
+		std::vector<std::string> data;
+	};
+	SavestateFolders getSavestateFolders();
+	// Uses a decoded filename and folder snapshot, independent of the loaded game.
+	std::string getSavestatePathForGame(const std::string& contentPath, const std::string& fileName,
+			int index, const SavestateFolders& folders);
 
 	std::string getTextureLoadPath(const std::string& gameId);
 	std::string getTextureDumpPath();
