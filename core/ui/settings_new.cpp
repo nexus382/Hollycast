@@ -5432,6 +5432,22 @@ void renderOnScreenDisplayTab()
 			RenderGeneralPopupSettingRow(Tnop("VmuWindowSizeSetting"),
 				T("Scale VMU screens independently of UI scaling."), vmuSizeCfg,
 				T("100% keeps the default VMU size. Changes apply immediately and are saved with your settings."));
+			SettingsUI::PopupConfig vmuTransparencyCfg {};
+			vmuTransparencyCfg.type = SettingsUI::PopupType::Slider;
+			vmuTransparencyCfg.slider.label = T("VMU Transparency");
+			vmuTransparencyCfg.slider.icon = ICON_FA_EYE;
+			vmuTransparencyCfg.slider.popupID = Tnop("VmuWindowTransparencyPopup");
+			vmuTransparencyCfg.slider.description = T("Adjust how transparent VMU screens are.");
+			vmuTransparencyCfg.slider.currentValue = &config::VmuWindowTransparency.get();
+			vmuTransparencyCfg.slider.minValue = vmu_window::MinTransparencyPercent;
+			vmuTransparencyCfg.slider.maxValue = vmu_window::MaxTransparencyPercent;
+			vmuTransparencyCfg.slider.defaultValue = vmu_window::DefaultTransparencyPercent;
+			vmuTransparencyCfg.slider.format = "%d%%";
+			vmuTransparencyCfg.slider.valueWidth = 220.0f;
+			vmuTransparencyCfg.slider.sliderWidth = 320.0f;
+			RenderGeneralPopupSettingRow(Tnop("VmuWindowTransparencySetting"),
+				T("0% is solid. 100% is invisible."), vmuTransparencyCfg,
+				T("25% keeps the default transparency. Desktop VMUs dim further in menus. Changes apply immediately and are saved with your settings."));
 		}
 #endif
 	}

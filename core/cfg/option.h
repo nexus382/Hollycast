@@ -521,6 +521,7 @@ extern Option<bool> FloatVMUs;
 extern Option<bool, false> MovableVMUs;
 extern Option<bool, false> VmuLayoutEnabled;
 extern Option<int, false> VmuWindowSize;
+extern Option<int, false> VmuWindowTransparency;
 #endif
 extern Option<bool> Rotate90;
 extern Option<bool> PerStripSorting;

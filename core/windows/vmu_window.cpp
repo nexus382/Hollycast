@@ -31,9 +31,7 @@ constexpr int LcdHeight = 32;
 constexpr ULONGLONG RetryDelayMs = 1000;
 constexpr LONG Unplaced = std::numeric_limits<LONG>::min();
 constexpr char PositionSection[] = "vmu-windows";
-// Match the in-game overlay's gameplay/menu opacity and GL/Vulkan white tint.
-constexpr BYTE GameOpacity = 192;
-constexpr BYTE MenuOpacity = 128;
+// Match the in-game overlay's GL/Vulkan white tint.
 constexpr BYTE DimmedWhite = 191;
 
 struct Screen {
@@ -48,10 +46,10 @@ struct View {
 	int topInset = 0;
 	float scale = 1.f;
 	int sizePercent = DefaultSizePercent;
+	BYTE alpha = opacityByte(DefaultTransparencyPercent);
 	UINT dpi = 96;
 	bool enabled = false;
 	bool visible = false;
-	bool menu = false;
 	bool dimWhite = false;
 	bool interactive = false;
 };
@@ -102,10 +100,11 @@ public:
 				&& !IsIconic(next.owner)
 				&& gui_state != GuiState::Main && gui_state != GuiState::Onboarding
 				&& gui_state != GuiState::Loading && gui_state != GuiState::NetworkStart;
-		next.menu = gui_is_open();
+		const bool menu = gui_is_open();
+		next.alpha = opacityByte(config::VmuWindowTransparency.get(), menu);
 		next.topInset = getScaledTopInset();
-		next.interactive = pointerAvailable && config::MovableVMUs;
-		next.dimWhite = !next.menu && (isOpenGL(config::RendererType) || isVulkan(config::RendererType));
+		next.interactive = pointerAvailable && config::MovableVMUs && next.alpha != 0;
+		next.dimWhite = !menu && (isOpenGL(config::RendererType) || isVulkan(config::RendererType));
 		// Match the existing size at default UI scaling, including its low-res cap,
 		// while keeping the user's VMU size independent of the UI scaling setting.
 		float defaultScale = std::max(1.f, settings.display.dpi / 100.f * 0.75f);
@@ -487,6 +486,14 @@ private:
 					ShowWindow(window.handle, SW_HIDE);
 				continue;
 			}
+			if (current.alpha == 0)
+			{
+				// Keep ownership to suppress the fallback LCD, but leave no invisible input target.
+				if (window.handle != nullptr && IsWindowVisible(window.handle))
+					ShowWindow(window.handle, SW_HIDE);
+				mask |= 1u << i;
+				continue;
+			}
 			if (now < window.retryAt && reset == lastReset)
 				continue;
 			window.retryAt = 0;
@@ -516,7 +523,7 @@ private:
 						SetWindowPos(window.handle, nullptr, location.x, location.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
 				}
 			}
-			const BYTE opacity = current.menu ? MenuOpacity : GameOpacity;
+			const BYTE opacity = current.alpha;
 			const BYTE white = current.dimWhite ? DimmedWhite : 255;
 			if (window.handle != nullptr)
 			{

@@ -207,6 +207,7 @@ namespace config
 bool MovableVMUs = false;
 bool VmuLayoutEnabled = false;
 TestIntOption VmuWindowSize;
+TestIntOption VmuWindowTransparency {25};
 bool FloatVMUs = true;
 RenderType RendererType = RenderType::DirectX11;
 std::map<std::string, int> values;
@@ -899,6 +900,35 @@ int main()
 				"scaled bitmap matches nearest sampling, tint, orientation and alpha at every pixel");
 	}
 	faults::inspectPixels = false;
+	settings.display.dpi = 96;
+	faults::dpiRatio = 0;
+	config::VmuWindowSize = 100;
+	config::VmuLayoutEnabled = true;
+	config::MovableVMUs = false;
+	config::RendererType = RenderType::DirectX11;
+	faults::expectedWhite = 255;
+	struct AlphaCase { int transparency; unsigned alpha; bool menu; };
+	for (const auto test : {AlphaCase{0, 255, false}, AlphaCase{50, 128, false}, AlphaCase{80, 51, false},
+			AlphaCase{-1, 255, false}, AlphaCase{25, 128, true}, AlphaCase{50, 85, true}})
+	{
+		faults::expectedOpacity = test.alpha;
+		config::VmuWindowTransparency = test.transparency;
+		gui_state = test.menu ? GuiState::Commands : GuiState::Closed;
+		const int before = faults::pixelChecks;
+		faults::inspectPixels = true;
+		require(until([&] { return faults::pixelChecks > before && faults::pixelsMatch; }),
+			"locked LCD repaints every pixel with the selected alpha without frame republication");
+		faults::inspectPixels = false;
+	}
+	const HWND alphaWindow = firstLcd();
+	config::MovableVMUs = true;
+	config::VmuWindowTransparency = INT_MAX;
+	require(until([&] { return !IsWindowVisible(alphaWindow) && vmu_window::ownsScreen(0) && !vmu_window::blocksMouseInput(); }),
+		"full transparency removes the input target while suppressing the fallback LCD");
+	config::VmuWindowTransparency = 25;
+	gui_state = GuiState::Closed;
+	require(until([&] { return IsWindowVisible(alphaWindow) && vmu_window::ownsScreen(0); }),
+		"restoring transparency shows the existing LCD without republication");
 	vmu_window::shutdown();
 	require(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= initialGdi, "shutdown releases VMU GDI resources");
 	if (GetForegroundWindow() != owner)

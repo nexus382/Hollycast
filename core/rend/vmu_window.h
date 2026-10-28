@@ -2,6 +2,7 @@
 #pragma once
 
 #include "types.h"
+#include <algorithm>
 
 #if !defined(LIBRETRO) && !defined(TARGET_UWP)
 #if defined(_WIN32) || defined(__ANDROID__)
@@ -22,6 +23,22 @@ namespace vmu_window {
 constexpr int MinSizePercent = 50;
 constexpr int DefaultSizePercent = 100;
 constexpr int MaxSizePercent = 400;
+constexpr int MinTransparencyPercent = 0;
+constexpr int DefaultTransparencyPercent = 25;
+constexpr int MaxTransparencyPercent = 100;
+
+inline float opacity(int transparency, bool menu = false)
+{
+	const float alpha = (100 - std::clamp(transparency, MinTransparencyPercent, MaxTransparencyPercent)) / 100.f;
+	// Desktop VMUs retain their existing dimming while a menu is open.
+	return menu ? alpha * (2.f / 3.f) : alpha;
+}
+
+inline u8 opacityByte(int transparency, bool menu = false)
+{
+	// Preserve the existing 192/128 alpha bytes at the default transparency.
+	return static_cast<u8>(std::min(255, int(opacity(transparency, menu) * 256.f + 0.5f)));
+}
 
 #ifdef HAVE_MOVABLE_VMUS
 // Producers publish copies. Window, texture and configuration work stays on the UI thread.

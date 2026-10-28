@@ -167,6 +167,7 @@ void update(SDL_Window *parent, bool pointerAvailable)
 	const char *driver = SDL_GetCurrentVideoDriver();
 	wayland = driver != nullptr && std::strcmp(driver, "wayland") == 0;
 	const bool enabled = placementActive();
+	const float alpha = opacity(config::VmuWindowTransparency.get(), gui_is_open());
 	const auto screens = frames.snapshot();
 	SDL_Window *focus = SDL_GetKeyboardFocus();
 	const bool focused = focus == parent || isVmuWindow(focus);
@@ -189,6 +190,17 @@ void update(SDL_Window *parent, bool pointerAvailable)
 		{
 			destroy(lcd);
 			lcd.dismissed = false;
+			continue;
+		}
+		if (alpha == 0.f)
+		{
+			// Hide even when the compositor cannot set opacity, and suppress the fallback LCD.
+			if (lcd.window != nullptr)
+			{
+				focusGameWindow();
+				SDL_HideWindow(lcd.window);
+			}
+			lcd.displayed = true;
 			continue;
 		}
 		if (!visible || lcd.dismissed)
@@ -242,7 +254,7 @@ void update(SDL_Window *parent, bool pointerAvailable)
 			lcd.placing = true;
 		}
 		// Opacity and always-on-top are best effort on compositors that restrict them.
-		SDL_SetWindowOpacity(lcd.window, gui_is_open() ? 0.5f : 0.75f);
+		SDL_SetWindowOpacity(lcd.window, alpha);
 		SDL_SetWindowAlwaysOnTop(lcd.window, SDL_TRUE);
 		if ((SDL_GetWindowFlags(lcd.window) & SDL_WINDOW_HIDDEN) != 0)
 		{
