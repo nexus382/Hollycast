@@ -56,4 +56,5 @@ target_sources(${PROJECT_NAME} PRIVATE
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp src/ui/CustomThemeTest.cpp src/ui/LibrarySavestateTest.cpp)
     target_sources(${PROJECT_NAME} PRIVATE src/ui/VideoPresetTest.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE src/ui/AndroidMenuPopupTest.cpp)
 endif()
