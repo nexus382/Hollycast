@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "imgread/common.h"
 #include <locale>

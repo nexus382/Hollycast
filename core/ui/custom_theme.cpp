@@ -244,7 +244,11 @@ bool parseContents(const std::string& contents, Theme& theme, std::string& error
 					if (!field.value().is_object()) { error = "Invalid assets.icons"; return false; }
 					for (auto icon = field.value().begin(); icon != field.value().end(); ++icon) {
 						std::string iconPath;
-						if (icon.key().empty() || icon.key().find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos || !parseAsset(icon.value(), "assets.icons." + icon.key(), iconPath)) return false;
+						if (icon.key().empty() || icon.key().find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos) {
+							error = "Invalid icon name: " + icon.key();
+							return false;
+						}
+						if (!parseAsset(icon.value(), "assets.icons." + icon.key(), iconPath)) return false;
 						if (!iconPath.empty()) parsed.assets.icons.emplace(icon.key(), std::move(iconPath));
 					}
 				}
@@ -1135,7 +1139,7 @@ bool save(const std::string& filename, const Theme& original, bool replaceExisti
 		}
 	}
 	const std::string output = serialize(theme, error);
-	if (!error.empty()) return false;
+	if (output.empty() || !error.empty()) return false;
 	std::error_code ec;
 	const auto themeDirectory = utf8Path(directory());
 	std::filesystem::create_directories(themeDirectory, ec);

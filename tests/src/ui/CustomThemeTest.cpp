@@ -157,7 +157,8 @@ TEST(CustomThemeTest, RejectsInvalidThemesWithoutChangingOutput)
 		R"({"widgets":{"media.status":{"warning":"red"}}})", R"({"colors":{"Text":[-0.1,0,0,1]}})",
 		R"({"colors":{"Text":[0,0,1.1,1]}})", R"({"colors":{"Text":[0,0,null,1]}})",
 		R"({"colors":{"Text":[0,0,true,1]}})", R"({"colors":{"Text":[0,0,1e999,1]}})",
-		R"({"colors":{"Text":[0,0,0,1,1]}})", R"({"colors":{"Text":[0,0,"0",1]}})"
+		R"({"colors":{"Text":[0,0,0,1,1]}})", R"({"colors":{"Text":[0,0,"0",1]}})",
+		R"({"assets":{"icons":{"":"icon.png"}}})", R"({"assets":{"icons":{"bad key":"icon.png"}}})"
 	};
 	for (auto input : invalid) {
 		CustomTheme::Theme theme;
@@ -818,6 +819,7 @@ TEST_F(ThemeFilesTest, InvalidDraftCannotReplaceOrExportAnExistingTheme)
 	std::ifstream input(saved, std::ios::binary);
 	const std::string before(std::istreambuf_iterator<char>(input), {});
 	input.close();
+	const CustomTheme::Theme validTheme = theme;
 	theme.scalars.emplace_back(&ImGuiStyle::Alpha, 0.f);
 	EXPECT_FALSE(CustomTheme::save("saved.json", theme, true, error));
 	EXPECT_NE(error.find("Alpha"), std::string::npos);
@@ -825,6 +827,28 @@ TEST_F(ThemeFilesTest, InvalidDraftCannotReplaceOrExportAnExistingTheme)
 	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(unchanged), {}), before);
 	EXPECT_FALSE(CustomTheme::exportToDirectory(theme, "invalid.json", (root / "export").string(), error));
 	EXPECT_FALSE(std::filesystem::exists(root / "export/invalid.json"));
+	unchanged.close();
+
+	write("icon.png", "icon data");
+	for (const char* name : {"", "bad key"}) {
+		CustomTheme::Theme invalid = validTheme;
+		invalid.assets.directory = path;
+		invalid.assets.icons[name] = "icon.png";
+		error.clear();
+		EXPECT_TRUE(CustomTheme::serialize(invalid, error).empty());
+		EXPECT_NE(error.find("icon"), std::string::npos);
+		error.clear();
+		EXPECT_FALSE(CustomTheme::save("saved.json", invalid, true, error));
+		EXPECT_NE(error.find("icon"), std::string::npos);
+		{
+			std::ifstream preserved(saved, std::ios::binary);
+			EXPECT_EQ(std::string(std::istreambuf_iterator<char>(preserved), {}), before);
+		}
+		error.clear();
+		EXPECT_FALSE(CustomTheme::exportToDirectory(invalid, "invalid-icons.json", (root / "export").string(), error));
+		EXPECT_NE(error.find("icon"), std::string::npos);
+		EXPECT_FALSE(std::filesystem::exists(root / "export/invalid-icons.json"));
+	}
 }
 
 TEST_F(ThemeFilesTest, RejectsNonportableNamesBeforeCreatingFiles)
