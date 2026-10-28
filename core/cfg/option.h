@@ -411,6 +411,7 @@ extern Option<int, false> LibraryDisplayStyle;
 extern Option<int, false> LibraryImageSource;
 extern Option<int, false> LibraryCoverMedia;
 extern Option<int, false> LibraryIconScale;
+extern Option<std::vector<std::string>, false> LibraryFavourites;
 extern Option<int, false> VmuIconMode;
 extern Option<int, false> UIScaling;
 extern Option<int, false> UITheme;

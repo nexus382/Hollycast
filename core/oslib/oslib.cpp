@@ -44,6 +44,7 @@
 #include "input/gamepad_device.h"
 #include "input/dreampotato.h"
 #include "i18n.h"
+#include <algorithm>
 
 namespace hostfs
 {
@@ -268,19 +269,25 @@ std::string findNaomiBios(const std::string& name)
 	return "";
 }
 
+static std::string makeSavestateFileName(const std::string& fileName, int index)
+{
+	std::string stateFile = get_file_basename(fileName);
+	char indexStr[4] = "";
+	if (index > 0) // When index is 0, use same name before multiple states is added
+		snprintf(indexStr, sizeof(indexStr), "_%d", std::min(99, index));
+
+	stateFile += indexStr;
+	stateFile += ".state";
+	if (index == -1)
+		stateFile += ".net";
+	if (index == -2)
+		stateFile += ".tmp";
+	return stateFile;
+}
+
 std::string getSavestatePath(int index, bool writable)
 {
-	std::string state_file = get_file_basename(settings.content.fileName);
-
-	char index_str[4] = "";
-	if (index > 0) // When index is 0, use same name before multiple states is added
-		snprintf(index_str, sizeof(index_str), "_%d", std::min(99, index));
-
-	state_file = state_file + index_str + ".state";
-	if (index == -1)
-		state_file += ".net";
-	if (index == -2)
-		state_file += ".tmp";
+	const std::string state_file = makeSavestateFileName(settings.content.fileName, index);
 
 	static std::string lastFile;
 	static std::string lastPath;
@@ -325,6 +332,49 @@ std::string getSavestatePath(int index, bool writable)
 		}
 		return lastPath;
 	}
+}
+
+std::string getSavestatePathForGame(const std::string& contentPath, const std::string& gameId, int index)
+{
+	(void)gameId; // Savestates are keyed by the content filename in the live loader.
+	std::string stateFile;
+	if (!contentPath.empty())
+	{
+		try {
+			const hostfs::FileInfo info = hostfs::storage().getFileInfo(contentPath);
+			if (!info.name.empty())
+				stateFile = makeSavestateFileName(info.name, index);
+		} catch (const hostfs::StorageException&) {
+		}
+		// Naomi slave content can use the original path as fileName when storage
+		// metadata is unavailable; mirror that runtime fallback exactly.
+		if (stateFile.empty())
+			stateFile = makeSavestateFileName(contentPath, index);
+	}
+	if (stateFile.empty())
+		return "";
+
+	for (const auto& userPath : config::SavestatePath.get())
+	{
+		if (userPath.empty())
+			continue;
+		try {
+			std::string fullPath = hostfs::storage().getSubPath(userPath, stateFile);
+			if (hostfs::storage().exists(fullPath))
+				return fullPath;
+		} catch (const hostfs::StorageException&) {
+		}
+	}
+	try {
+		std::string fullPath = get_readonly_data_path(stateFile, contentPath);
+		if (hostfs::storage().exists(fullPath))
+			return fullPath;
+	} catch (const hostfs::StorageException&) {
+	}
+
+	// Match the live resolver's fallback: return the writable location even if
+	// no state exists yet. The caller checks the file before offering Resume.
+	return get_writable_data_path(stateFile);
 }
 
 std::string getShaderCachePath(const std::string& filename)
