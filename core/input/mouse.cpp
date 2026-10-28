@@ -20,6 +20,8 @@
 #include "mouse.h"
 #include "cfg/option.h"
 #include "ui/gui.h"
+#include <algorithm>
+#include "rend/vmu_window.h"
 
 // Mouse buttons
 // bit 0: Button C
@@ -124,6 +126,15 @@ void SetMousePosition(int x, int y, int width, int height, u32 mouseId)
 {
 	if (mouseId >= std::size(mo_x_abs))
 		return;
+#ifdef HAVE_MOVABLE_VMUS
+	if (vmu_window::consumeMousePositionReset())
+	{
+		// SDL and absolute raw-input devices share these baselines. A native VMU
+		// drag can finish without delivering any intermediate motion to either.
+		std::fill(std::begin(mo_x_prev), std::end(mo_x_prev), -1);
+		std::fill(std::begin(mo_y_prev), std::end(mo_y_prev), -1);
+	}
+#endif
 	mo_width = width;
 	mo_height = height;
 

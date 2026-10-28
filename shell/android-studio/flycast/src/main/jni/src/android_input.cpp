@@ -22,6 +22,7 @@
 #include "ui/vgamepad.h"
 #include "cfg/option.h"
 #include "hw/maple/maple_if.h"
+#include "rend/vmu_window.h"
 
 #include <algorithm>
 
@@ -41,6 +42,21 @@ jmethodID inputDeviceManager_rumble;
 //
 // VGamepad
 //
+extern "C" JNIEXPORT jboolean JNICALL Java_com_hollycast_emulator_emu_JNIdc_vmuTouch(JNIEnv *, jclass,
+		jint action, jfloat x, jfloat y)
+{
+	// Only the layout mutex is touched here; texture uploads and config saves run
+	// on the render thread, never Android's MotionEvent callback thread.
+	switch (action)
+	{
+	case 0: return vmu_window::touchDown(x, y);
+	case 2: vmu_window::touchMove(x, y); break;
+	case 1: case 3: vmu_window::touchUp(); break;
+	default: return false;
+	}
+	return true;
+}
+
 extern "C" JNIEXPORT jint JNICALL Java_com_hollycast_emulator_emu_VGamepad_getVibrationPower(JNIEnv *env, jobject obj) {
 	return config::VirtualGamepadHapticFeedback
 			? std::clamp(static_cast<int>(config::VirtualGamepadVibration), 0, MAX_VIBRATION_POWER)

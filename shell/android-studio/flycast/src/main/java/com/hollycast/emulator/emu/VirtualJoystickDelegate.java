@@ -46,6 +46,8 @@ public class VirtualJoystickDelegate implements TouchEventHandler
     private final int[] mousePos = { -32768, -32768 };
     private int mousePid = -1;
     private int menuPointerId = -1;
+    private int vmuPointerId = -1;
+    private boolean vmuGesture;
 
     public VirtualJoystickDelegate() {
         vibratorThread = VibratorThread.getInstance();
@@ -59,6 +61,9 @@ public class VirtualJoystickDelegate implements TouchEventHandler
             vibratorThread = null;
         }
         menuPointerId = -1;
+        JNIdc.vmuTouch(MotionEvent.ACTION_CANCEL, 0.f, 0.f);
+        vmuPointerId = -1;
+        vmuGesture = false;
     }
 
     private boolean routeMenuTouchEvent(MotionEvent event)
@@ -89,6 +94,50 @@ public class VirtualJoystickDelegate implements TouchEventHandler
                 || ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
                 && event.getPointerId(actionIndex) == menuPointerId))
             menuPointerId = -1;
+        return true;
+    }
+
+    private boolean routeVmuTouchEvent(MotionEvent event, int width, int height)
+    {
+        final int action = event.getActionMasked();
+        final int actionIndex = event.getActionIndex();
+        if (width <= 0 || height <= 0) {
+            JNIdc.vmuTouch(MotionEvent.ACTION_CANCEL, 0.f, 0.f);
+            vmuPointerId = -1;
+            return vmuGesture;
+        }
+        if (!vmuGesture) {
+            if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_POINTER_DOWN)
+                return false;
+            if (!JNIdc.vmuTouch(MotionEvent.ACTION_DOWN,
+                    event.getX(actionIndex) / width, event.getY(actionIndex) / height))
+                return false;
+            vmuGesture = true;
+            vmuPointerId = event.getPointerId(actionIndex);
+            // A VMU can overlap a control. Release its existing input before
+            // taking the stream, including a mouse/lightgun held by another finger.
+            pidToControlId.clear();
+            joyPointerId = -1;
+            InputDeviceManager.getInstance().virtualReleaseAll();
+            mousePid = -1;
+            mouseButtons = 0;
+            InputDeviceManager.getInstance().touchMouseEvent(mousePos[0], mousePos[1], 0);
+        }
+        final int pointerIndex = event.findPointerIndex(vmuPointerId);
+        if (pointerIndex >= 0 && (action == MotionEvent.ACTION_MOVE
+                || ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
+                && event.getPointerId(actionIndex) == vmuPointerId)))
+            JNIdc.vmuTouch(MotionEvent.ACTION_MOVE,
+                    event.getX(pointerIndex) / width, event.getY(pointerIndex) / height);
+        if (pointerIndex < 0 || action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_UP
+                || (action == MotionEvent.ACTION_POINTER_UP && event.getPointerId(actionIndex) == vmuPointerId)) {
+            JNIdc.vmuTouch(MotionEvent.ACTION_UP, 0.f, 0.f);
+            vmuPointerId = -1;
+        }
+        // Do not turn the remaining fingers into game input after the drag finger
+        // lifts. They must start a fresh gesture after every finger is released.
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
+            vmuGesture = false;
         return true;
     }
 
@@ -173,10 +222,19 @@ public class VirtualJoystickDelegate implements TouchEventHandler
     @Override
     public boolean onTouchEvent(MotionEvent event, int width, int height)
     {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && vmuGesture) {
+            JNIdc.vmuTouch(MotionEvent.ACTION_CANCEL, 0.f, 0.f);
+            vmuPointerId = -1;
+            vmuGesture = false;
+        }
+        if (vmuGesture)
+            return routeVmuTouchEvent(event, width, height);
         if (routeMenuTouchEvent(event))
             return true;
         if (JNIdc.guiIsOpen())
             return touchMouseEvent(event);
+        if (routeVmuTouchEvent(event, width, height))
+            return true;
         show();
 
         int actionIndex = event.getActionIndex();

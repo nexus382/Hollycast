@@ -3955,6 +3955,9 @@ void gui_draw_osd()
 	GuiMenu::renderMainMenuBar();
 	// Use this frame's effective bar height, including fullscreen auto-hide.
 	performance_overlay::draw();
+#if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
+	vmu_window::drawInApp();
+#endif
 
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
@@ -4057,7 +4060,12 @@ void gui_refresh_files(bool invalidateArtwork) {
 
 void reset_vmus() {
 	for (u32 i = 0; i < std::size(vmu_lcd_status); i++)
+	{
 		vmu_lcd_status[i] = false;
+#ifdef HAVE_MOVABLE_VMUS
+		vmu_window::publishScreen(i, nullptr, false);
+#endif
+	}
 }
 
 void gui_error(const std::string& what) {
