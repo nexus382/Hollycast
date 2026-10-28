@@ -2188,6 +2188,7 @@ static bool drawLibraryFavouriteButton(const GameMedia& game, bool coverOverlay 
 	const ImVec4 favouriteColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
 	if (coverOverlay)
 	{
+		const float scale = size.x / uiScaled(34.0f);
 		ImVec4 buttonColor = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
 		ImVec4 hoveredColor = ImGui::GetStyle().Colors[ImGuiCol_FrameBgHovered];
 		ImVec4 activeColor = ImGui::GetStyle().Colors[ImGuiCol_FrameBgActive];
@@ -2201,12 +2202,15 @@ static bool drawLibraryFavouriteButton(const GameMedia& game, bool coverOverlay 
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeColor);
 		ImGui::PushStyleColor(ImGuiCol_Border, borderColor);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(5.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(5.0f) * scale);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, scale);
+		ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * scale);
 	}
 	ImGui::PushStyleColor(ImGuiCol_Text, favourite ? favouriteColor : ImGui::GetStyle().Colors[ImGuiCol_Text]);
 	const bool pressed = ImGui::Button((std::string(ICON_FA_STAR) + "##favourite_" + game.path).c_str(), size);
 	ImGui::PopStyleColor();
+	if (coverOverlay)
+		ImGui::PopFont();
 	gameTooltip(label);
 	if (coverOverlay)
 	{
@@ -2224,7 +2228,7 @@ static bool drawLibraryFavouriteButton(const GameMedia& game, bool coverOverlay 
 
 static bool drawLibraryCoverButton(ImguiTexture& texture, const std::string& tooltip, const ImVec2& size,
 		const std::string& title, float fallbackTitleSize, const GameMedia& game, const GameBoxart *art,
-		bool& favouritePressed)
+		float overlayScale, bool& favouritePressed)
 {
 	if (gui_state == GuiState::SelectDisk || game.device || game.path.empty())
 	{
@@ -2236,8 +2240,8 @@ static bool drawLibraryCoverButton(ImguiTexture& texture, const std::string& too
 	}
 
 	const ImVec2 coverMin = ImGui::GetCursorScreenPos();
-	const ImVec2 buttonSize(uiScaled(34.0f), uiScaled(34.0f));
-	const float inset = uiScaled(6.0f);
+	const ImVec2 buttonSize(uiScaled(34.0f) * overlayScale, uiScaled(34.0f) * overlayScale);
+	const float inset = uiScaled(6.0f) * overlayScale;
 	const ImVec2 starMin(coverMin.x + size.x - buttonSize.x - inset, coverMin.y + inset);
 	ImDrawList *drawList = ImGui::GetWindowDrawList();
 	ImDrawListSplitter splitter;
@@ -2915,6 +2919,11 @@ static void gui_display_content()
 				const int itemsPerLine = std::max<int>(totalWidth / (gridBoxBaseSize + ImGui::GetStyle().ItemSpacing.x), 1);
 				const float responsiveBoxSize = totalWidth / itemsPerLine - ImGui::GetStyle().FramePadding.x * 2;
 				const ImVec2 responsiveBoxVec2 = ImVec2(responsiveBoxSize, responsiveBoxSize);
+				// Keep the current star size at 200%, then follow the actual cover size as columns change.
+				const float maxGridBoxBaseSize = libraryIconBaseInches * settings.display.dpi * 2.0f;
+				const int maxScaleItemsPerLine = std::max<int>(totalWidth / (maxGridBoxBaseSize + ImGui::GetStyle().ItemSpacing.x), 1);
+				const float maxScaleBoxSize = std::max(1.0f, totalWidth / maxScaleItemsPerLine - ImGui::GetStyle().FramePadding.x * 2);
+				const float overlayScale = std::max(1.0f, responsiveBoxSize) / maxScaleBoxSize;
 				const float gridTextSize = std::clamp(13.0f * libraryTextScaleFactor, 13.0f, 38.0f);
 
 				for (size_t visibleIndex : visibleGames)
@@ -2971,7 +2980,7 @@ static void gui_display_content()
 								const SavestateInfo& stateInfo = librarySavestateCache.get(game.path, game.fileName);
 								ImguiFileTexture artTexture(art.boxartPath);
 								pressed = drawLibraryCoverButton(artTexture, game.name, responsiveBoxVec2, gameName, gridTextSize,
-										game, &art, favouritePressed);
+										game, &art, overlayScale, favouritePressed);
 								ImguiStyleVar compactSpacing(ImGuiStyleVar_ItemSpacing, ScaledVec2(6.0f, 6.0f));
 								ImguiStyleVar compactPadding(ImGuiStyleVar_FramePadding, ScaledVec2(8.0f, 4.0f));
 								ImGui::PushFont(largeFont, uiScaled(14.0f));
@@ -3033,7 +3042,7 @@ static void gui_display_content()
 								{
 									ImguiFileTexture artTexture(art.boxartPath);
 									pressed = drawLibraryCoverButton(artTexture, game.name, responsiveBoxVec2, gameName, gridTextSize,
-											game, &art, favouritePressed);
+											game, &art, overlayScale, favouritePressed);
 								}
 								ImGui::EndChild();
 							}
