@@ -93,6 +93,7 @@ Option<bool> VSync("", true);
 Option<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", true);
 Option<int> AnisotropicFiltering(CORE_OPTION_NAME "_anisotropic_filtering");
 Option<int> TextureFiltering(CORE_OPTION_NAME "_texture_filtering");
+Option<int> SampleTextureFilter("", 0); // Keep reconstruction disabled until exposed as a core option.
 Option<bool> PowerVR2Filter(CORE_OPTION_NAME "_pvr2_filtering");
 Option<int64_t> PixelBufferSize("", 512_MB);
 IntOption PerPixelLayers(CORE_OPTION_NAME "_oit_layers");
