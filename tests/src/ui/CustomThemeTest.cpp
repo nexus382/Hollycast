@@ -13,6 +13,9 @@
 #include "cfg/cfg.h"
 #include "stdclass.h"
 #include "ui/settings.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 TEST(CustomThemeTest, ParsesBaseColorsAndStyle)
 {
@@ -237,12 +240,13 @@ protected:
 	void write(const std::string& file, const std::string& contents) {
 		const auto target = std::filesystem::path(path + file);
 		std::filesystem::create_directories(target.parent_path());
-		std::ofstream output(target);
+		// Preserve asset bytes and the exact bundled-preset comparison on Windows.
+		std::ofstream output(target, std::ios::binary);
 		output << contents;
 		ASSERT_TRUE(output.good());
 	}
 	std::string read(const std::string& file) {
-		std::ifstream input(path + file);
+		std::ifstream input(path + file, std::ios::binary);
 		return std::string(std::istreambuf_iterator<char>(input), {});
 	}
 	std::filesystem::path root;
@@ -770,18 +774,24 @@ TEST_F(ThemeFilesTest, ImportAndExportReportMissingOrUnsafeAssetsWithoutWritingT
 
 TEST_F(ThemeFilesTest, ExportRejectsAssetSymlinksThatEscapeThemeFolder)
 {
-	const auto outside = root.parent_path() / (root.filename().string() + "-outside.png");
-	{ std::ofstream file(outside); file << "outside"; }
-	std::filesystem::create_symlink(outside, root / "escape.png");
+	// Keep the outside asset within the fixture so TearDown also cleans it on a skip.
+	write("outside.png", "outside");
+	const auto source = root / "source";
+	std::filesystem::create_directory(source);
+	std::error_code ec;
+	std::filesystem::create_symlink(root / "outside.png", source / "escape.png", ec);
+#ifdef _WIN32
+	if (ec == std::error_code(ERROR_PRIVILEGE_NOT_HELD, std::system_category()))
+		GTEST_SKIP() << "Windows requires symbolic-link privilege or Developer Mode";
+#endif
+	ASSERT_FALSE(ec) << ec.message();
 	CustomTheme::Theme theme;
 	std::string error;
 	ASSERT_TRUE(CustomTheme::parse(R"({"assets":{"background":"escape.png"}})", theme, error)) << error;
-	theme.assets.directory = path;
+	theme.assets.directory = source.string() + "/";
 	EXPECT_FALSE(CustomTheme::exportToDirectory(theme, "Escape.json", (root / "export").string(), error));
 	EXPECT_NE(error.find("outside"), std::string::npos);
 	EXPECT_FALSE(std::filesystem::exists(root / "export/Escape.json"));
-	std::error_code ec;
-	std::filesystem::remove(outside, ec);
 }
 
 TEST_F(ThemeFilesTest, SaveRefusesAccidentalReplacementAndReplacesOnlyOnExplicitRequest)
@@ -795,10 +805,13 @@ TEST_F(ThemeFilesTest, SaveRefusesAccidentalReplacementAndReplacesOnlyOnExplicit
 	const auto themePath = std::filesystem::path(CustomTheme::directory()) / "saved.json";
 	std::ifstream beforeFile(themePath, std::ios::binary);
 	const std::string before(std::istreambuf_iterator<char>(beforeFile), {});
+	// Windows read handles must be closed before testing atomic replacement.
+	beforeFile.close();
 	EXPECT_FALSE(CustomTheme::save("saved.json", theme, false, error));
 	EXPECT_NE(error.find("already exists"), std::string::npos);
 	std::ifstream afterFile(themePath, std::ios::binary);
 	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(afterFile), {}), before);
+	afterFile.close();
 	ASSERT_TRUE(CustomTheme::parse(R"({"base":"Light","colors":{"Text":"#ABCDEF"}})", theme, error)) << error;
 	ASSERT_TRUE(CustomTheme::save("saved.json", theme, true, error)) << error;
 	CustomTheme::Theme loaded;
