@@ -1,6 +1,7 @@
 /*
 	Basic gdrom syscall emulation
 	Adapted from some (very) old pre-nulldc hle code
+	Portions Copyright 2026 The Hollycast Authors
 	Bits and pieces from redream (https://github.com/inolen/redream)
 */
 
@@ -138,8 +139,7 @@ void gdrom_hle_reset() {
 
 void reios_term()
 {
-	if (schedId != -1)
-		sh4_sched_unregister(schedId);
+	sh4_sched_unregister(schedId);
 	schedId = -1;
 }
 

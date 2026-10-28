@@ -857,7 +857,6 @@ void maple_microphone::deserialize(Deserializer& deser)
 	deser >> gain;
 	deser >> sampling;
 	deser >> eight_khz;
-	deser.skip(480 - sizeof(u32) - sizeof(bool) * 2, Deserializer::V23);
 	if (sampling)
 		StartAudioRecording(eight_khz);
 }
@@ -1892,7 +1891,6 @@ std::shared_ptr<maple_device> maple_Create(MapleDeviceType type)
 
 	default:
 		ERROR_LOG(MAPLE, "Invalid device type %d", type);
-		die("Invalid maple device type");
 		break;
 	}
 	return nullptr;

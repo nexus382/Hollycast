@@ -413,7 +413,15 @@ extern Option<int, false> LibraryCoverMedia;
 extern Option<int, false> LibraryIconScale;
 extern Option<int, false> VmuIconMode;
 extern Option<int, false> UIScaling;
-extern Option<int, false> UITheme;          // 0 -> Dark, 1 -> Light, 2 -> Dreamcast, 3 -> High Contrast, 4 -> Nintendo, 5 -> Aqua Chill
+extern Option<int, false> UITheme;
+extern Option<std::string, false> UICustomTheme;
+enum class MenuBarMode
+{
+	Auto = 0,
+	On = 1,
+	Off = 2,
+};
+extern Option<int, false> MenuBarVisibility;
 
 // Sound
 
@@ -504,6 +512,7 @@ extern Option<bool> DumpTextures;
 extern Option<bool> DumpUniqueTextures;
 extern Option<bool> DumpReplacedTextures;
 extern Option<int> ScreenStretching;	// in percent. 150 means stretch from 4/3 to 6/3
+extern Option<bool> StretchToFill;
 extern Option<bool> Fog;
 extern Option<bool> FloatVMUs;
 extern Option<bool> Rotate90;
@@ -608,8 +617,14 @@ extern Option<bool> OmxAudioHdmi;
 // Maple
 
 extern Option<int> MouseSensitivity;
+extern Option<bool> VirtualGamepadEnabled;
+extern Option<bool> VirtualGamepadHapticFeedback;
+extern Option<bool> VirtualGamepadVisualFeedback;
+extern Option<bool> VirtualGamepadCircularStick;
 extern Option<int> VirtualGamepadVibration;
 extern Option<int> VirtualGamepadTransparency;
+extern Option<int> VirtualGamepadIdleTimeout;
+extern Option<int> VirtualGamepadFingerSize;
 extern std::array<Option<MapleDeviceType>, 4> MapleMainDevices;
 extern std::array<std::array<Option<MapleDeviceType>, 2>, 4> MapleExpansionDevices;
 extern std::array<std::array<Option<int>, 2>, 4> NetworkExpansionDevices;
@@ -634,6 +649,7 @@ extern Option<std::string, false> LuaFileName;
 // RetroAchievements
 
 extern Option<bool> EnableAchievements;
+extern Option<bool> ShowAchievementPopups;
 extern Option<bool> AchievementsHardcoreMode;
 extern OptionString AchievementsUserName;
 extern OptionString AchievementsToken;

@@ -358,6 +358,7 @@ PSO main(in VertexIn inpix)
 			discard;
 	#endif
 
+#if SECACCUM == 0
 	float4 color = inpix.col;
 	float4 specular = inpix.spec;
 	bool area1 = false;
@@ -495,6 +496,10 @@ PSO main(in VertexIn inpix)
 			discard;
 		color.a = 1.0f;
 	#endif
+#else
+	// SECACCUM == 1
+	float4 color = secAccum[uint2(inpix.pos.xy)];
+#endif
 
 	#if PASS == PASS_COLOR 
 		pso.col = color;
@@ -821,6 +826,7 @@ enum PixelMacroEnum {
 	MacroAlphaTest,
 	MacroClipInside,
 	MacroPass,
+	MacroSecAccum,
 	MacroSampleTextureFilter,
 	MacroMaxFilteredTextureSize,
 };
@@ -841,6 +847,7 @@ static const std::array<D3D_SHADER_MACRO, MacroMaxFilteredTextureSize + 2> Defau
 	{ "cp_AlphaTest", "0" },
 	{ "pp_ClipInside", "0" },
 	{ "PASS", "0" },
+	{ "SECACCUM", "0" },
 	{ "pp_SampleTextureFilter", "0" },
 	{ "pp_MaxFilteredTextureSize", "0" },
 	{ nullptr, nullptr }
@@ -848,7 +855,7 @@ static const std::array<D3D_SHADER_MACRO, MacroMaxFilteredTextureSize + 2> Defau
 
 const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr,
 		bool pp_Offset, u32 pp_FogCtrl, bool pp_BumpMap, bool fog_clamping,
-		int palette, bool gouraud, bool alphaTest, bool clipInside, bool twoVolumes, Pass pass,
+		int palette, bool gouraud, bool alphaTest, bool clipInside, bool twoVolumes, bool secAccum, Pass pass,
 		int sampleTextureFilter, int maxFilteredTextureSize)
 {
 	bool divPosZ = !settings.platform.isNaomi2() && config::NativeDepthInterpolation;
@@ -867,7 +874,8 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool
 			| ((int)twoVolumes << 15)
 			| ((int)pass << 16)
 			| ((int)divPosZ << 18)
-			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 19);
+			| ((int)secAccum << 19)
+			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 20);
 	auto& shader = shaders[hash];
 	if (shader == nullptr)
 	{
@@ -898,6 +906,7 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool
 		pixelMacros[MacroPass].Definition = MacroValues[pass];
 		pixelMacros[MacroSampleTextureFilter].Definition = sampleFilterMacro;
 		pixelMacros[MacroMaxFilteredTextureSize].Definition = maxFilteredTextureMacro;
+		pixelMacros[MacroSecAccum].Definition = MacroValues[secAccum];
 
 		shader = compilePS(PixelShader, "main", pixelMacros.data());
 		verify(shader != nullptr);

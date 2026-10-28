@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -96,7 +97,12 @@ void SystemMouse::setWheel(int delta) {
 static void screenToNative(int& x, int& y, int width, int height)
 {
 	float fx, fy;
-	if (!config::Rotate90)
+	if (config::StretchToFill)
+	{
+		fx = x * 640.f / width;
+		fy = y * 480.f / height;
+	}
+	else if (!config::Rotate90)
 	{
 		float scale = 480.f / height;
 		fy = y * scale;
@@ -146,6 +152,8 @@ void SetRelativeMousePosition(float xrel, float yrel, u32 mouseId)
 {
 	if (mouseId >= std::size(mo_x_delta))
 		return;
+	mo_x_prev[mouseId] = -1;
+	mo_y_prev[mouseId] = -1;
 	int width = mo_width;
 	int height = mo_height;
 	if (config::Rotate90)

@@ -1,41 +1,49 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report a problem with Hollycast
 title: ''
 labels: bug
 assignees: ''
-
 ---
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 
-**Please Note: This form is the minimum required information for submitting bugs.**  
-**Removing this form may lead to your issue being closed until it is completed.**
+<!-- Please provide enough detail for us to reproduce and investigate the problem.
+     If you don't know an answer, it's fine to say so. -->
 
-Platform / OS / Hardware: 
+## Description
 
-Flycast version: 
+<!-- What happened? -->
 
-Hardware: 
+## Steps to reproduce
 
-**_Description of the Issue_**
+1.
+2.
+3.
 
-Add a short, concise description of the issue here
+## Expected behavior
 
-**_Debugging Steps Tested_**
+<!-- What did you expect to happen? -->
 
-  * Fill in any steps already tried here
-  * Begin each new line with an asterisk
-  * If no steps are required, please skip
+## Actual behavior
 
-**_Logs Gathered_**
+<!-- What happened instead? -->
 
-```
+## Environment
 
-Please paste the contents of the log / logs here
-You may leave this field blank if you have none.
+- Hollycast version or commit, and whether it is a release or development build:
+- Platform and OS version:
+- Device, CPU, and GPU, if relevant:
 
-```
+## Game and configuration
 
+<!-- If relevant, include the game title and region, renderer, and any
+     non-default settings involved. -->
 
-**_Screenshots_**
+## Regression information
 
-(Replace this line with any issue screenshots)
+<!-- If known, which Hollycast version last worked? Does the issue also occur
+     in Flycast? -->
+
+## Logs and media
+
+<!-- If available, add logs, screenshots, or video. Attach long logs as files. -->

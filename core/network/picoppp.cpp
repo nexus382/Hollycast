@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -51,11 +52,11 @@ extern "C" {
 #include "oslib/oslib.h"
 #include "util/tsqueue.h"
 #include "util/shared_this.h"
-#include "hw/bba/bba.h"
 
 #include <unordered_map>
 #include <mutex>
 #include <future>
+#include <vector>
 
 #define RESOLVER1_OPENDNS_COM "208.67.222.222"
 #define AFO_ORIG_IP 0x83f2fb3f		// 63.251.242.131 in network order
@@ -66,6 +67,9 @@ static pico_device *pico_dev;
 
 static TsQueue<u8> in_buffer;
 static TsQueue<u8> out_buffer;
+static TsQueue<std::vector<u8>> bbaBuffer;
+static std::mutex bbaBufferMutex;
+static constexpr size_t BBA_QUEUE_MAX = 256;
 
 static pico_ip4 dcaddr;
 static pico_ip4 dnsaddr;
@@ -280,8 +284,10 @@ public:
 		return socket;
 	}
 
-	void close() {
+	void close()
+	{
 		closeAll();
+		detachPicoSocket();
 		directPlay.reset();
 	}
 
@@ -403,7 +409,10 @@ private:
 		}
 		else {
 			DEBUG_LOG(NETWORK, "TcpSocket[%s] outbound %d bytes", name.c_str(), (int)len);
-			picoCallback(0);
+			// A read notification can cover more data than fits in sendbuf.
+			// Resume draining after the asynchronous write releases that buffer,
+			// even if no new packet (and therefore no new read event) arrives.
+			picoCallback(pico_sock != nullptr && pico.state != Closed ? PICO_SOCK_EV_RD : 0);
 		}
 	}
 
@@ -1186,7 +1195,14 @@ static void pico_receive_eth_frame(const u8 *frame, u32 size)
 
 static int send_eth_frame(pico_device *dev, void *data, int len) {
 	dumpFrame((const u8 *)data, len);
-	return bba_recv_frame((const u8 *)data, len);
+	if (len < 6 || len > 1514)
+		return len;
+	{
+		std::lock_guard<std::mutex> _(bbaBufferMutex);
+		if (bbaBuffer.size() < BBA_QUEUE_MAX)
+			bbaBuffer.push(std::vector<u8>((const u8 *)data, (const u8 *)data + len));
+	}
+	return len;
 }
 
 static void picoTick(const std::error_code& ec, asio::steady_timer *timer)
@@ -1280,6 +1296,10 @@ void PicoThread::run()
 	// Empty queues
 	in_buffer.clear();
 	out_buffer.clear();
+	{
+		std::lock_guard<std::mutex> _(bbaBufferMutex);
+		bbaBuffer.clear();
+	}
 
     // Find DNS ip address
 	{
@@ -1456,6 +1476,8 @@ static void stop_pico()
 	emu.setNetworkState(false);
 	pico_thread_running = false;
 	pico_thread.stop();
+	std::lock_guard<std::mutex> _(bbaBufferMutex);
+	bbaBuffer.clear();
 }
 
 // picotcp mutex implementation
@@ -1501,6 +1523,15 @@ int PicoTcpService::modemAvailable() {
 
 void PicoTcpService::receiveEthFrame(const u8 *frame, u32 size) {
 	pico_receive_eth_frame(frame, size);
+}
+
+u32 PicoTcpService::sendEthFrame(u8 *frame)
+{
+	std::vector<u8> packet;
+	if (!bbaBuffer.tryPop(packet))
+		return 0;
+	memcpy(frame, packet.data(), packet.size());
+	return packet.size();
 }
 
 }

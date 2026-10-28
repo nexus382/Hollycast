@@ -149,6 +149,7 @@ private:
 	void writeFramebufferToVRAM();
 	void drawOSD();
 	TileClipping setTileClip(u32 tileclip, Rect& rect);
+	void makeSecAccumSurface();
 
 	RenderStateCache devCache;
 	ComPtr<IDirect3DDevice9> device;
@@ -173,6 +174,11 @@ private:
 	ComPtr<IDirect3DSurface9> depthSurface;
 	ComPtr<IDirect3DTexture9> fbScaledTexture;
 	ComPtr<IDirect3DSurface9> fbScaledSurface;
+	ComPtr<IDirect3DTexture9> secAccumTexture;
+	ComPtr<IDirect3DSurface9> secAccumSurface;
+	ComPtr<IDirect3DSurface9> primAccumSurface;
+	u32 secAccumWidth = 0;
+	u32 secAccumHeight = 0;
 
 	u32 width = 0;
 	u32 height = 0;

@@ -40,7 +40,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <future>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace i18n;
@@ -1177,7 +1179,7 @@ void ImguiTexture::draw(ImDrawList *drawList, const ImVec2& pos, const ImVec2& s
 }
 
 bool ImguiTexture::button(const char* str_id, const ImVec2& image_size, const std::string& title,
-		const ImVec4& bg_col, const ImVec4& tint_col, float fallbackTitleSize)
+		const ImVec4& bg_col, const ImVec4& tint_col, float fallbackTitleSize, float rounding)
 {
 	ImTextureID id = getId();
 	if (id == ImTextureID{})
@@ -1226,11 +1228,19 @@ bool ImguiTexture::button(const char* str_id, const ImVec2& image_size, const st
 		const ImVec2 size = image_size - ImGui::GetStyle().FramePadding * 2;
 		ImVec2 uv0, uv1;
 		setUV(ar / size.x * size.y, uv0, uv1);
+		if (rounding > 0.0f) {
+			const bool pressed = ImGui::Button(str_id, image_size);
+			const ImVec2 min = ImGui::GetItemRectMin() + ImGui::GetStyle().FramePadding;
+			const ImVec2 max = ImGui::GetItemRectMax() - ImGui::GetStyle().FramePadding;
+			const ImU32 tint = ImGui::ColorConvertFloat4ToU32(tint_col);
+			ImGui::GetWindowDrawList()->AddImageRounded(id, min, max, uv0, uv1, tint, std::min(rounding, std::min(size.x, size.y) * 0.5f));
+			return pressed;
+		}
 		return ImGui::ImageButton(str_id, id, size, uv0, uv1, bg_col, tint_col);
 	}
 }
 
-static u8 *loadImage(const std::string& path, int& width, int& height)
+static u8 *loadImage(const std::string& path, int& width, int& height, bool boundedImage = false)
 {
 	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
 	if (file == nullptr)
@@ -1239,15 +1249,84 @@ static u8 *loadImage(const std::string& path, int& width, int& height)
 	int channels;
 	stbi_set_flip_vertically_on_load_thread(0);
 	const s64 fileSize = file->size();
-	if (fileSize <= 0)
+	if (fileSize <= 0 || (boundedImage && fileSize > 16 * 1024 * 1024))
 		return nullptr;
 	std::vector<u8> data(fileSize);
 	if (file->read(data.data(), 1, data.size()) != data.size())
 		return nullptr;
+	if (boundedImage) {
+		int sourceWidth = 0, sourceHeight = 0, sourceChannels = 0;
+		if (!stbi_info_from_memory(data.data(), (int)data.size(), &sourceWidth, &sourceHeight, &sourceChannels)
+				|| sourceWidth <= 0 || sourceHeight <= 0 || sourceWidth > 4096 || sourceHeight > 4096
+				|| (u64)sourceWidth * (u64)sourceHeight > 16 * 1024 * 1024)
+			return nullptr;
+	}
 	return stbi_load_from_memory(data.data(), data.size(), &width, &height, &channels, STBI_rgb_alpha);
 }
 
 int ImguiFileTexture::textureLoadCount;
+
+namespace {
+struct ThemeImageFileStamp
+{
+	bool exists = false;
+	size_t size = 0;
+	u64 updateTime = 0;
+
+	bool operator==(const ThemeImageFileStamp& other) const {
+		return exists == other.exists && size == other.size && updateTime == other.updateTime;
+	}
+};
+
+static std::map<std::string, ThemeImageFileStamp> failedThemeImages;
+static constexpr size_t MaxFailedThemeImages = 64;
+struct DecodedThemeImage
+{
+	ThemeImageFileStamp stamp;
+	int width = 0;
+	int height = 0;
+	std::vector<u8> pixels;
+};
+static std::map<std::string, DecodedThemeImage> decodedThemeImages;
+static constexpr size_t MaxDecodedThemeImageBytes = 32 * 1024 * 1024;
+static size_t decodedThemeImageBytes;
+
+static void eraseDecodedThemeImage(std::map<std::string, DecodedThemeImage>::iterator image)
+{
+	decodedThemeImageBytes -= image->second.pixels.size();
+	decodedThemeImages.erase(image);
+}
+
+static void cacheThemeImageFailure(const std::string& path, const ThemeImageFileStamp& stamp)
+{
+	if (failedThemeImages.size() >= MaxFailedThemeImages)
+		failedThemeImages.erase(failedThemeImages.begin());
+	failedThemeImages[path] = stamp;
+}
+
+static ThemeImageFileStamp themeImageFileStamp(const std::string& path)
+{
+	ThemeImageFileStamp stamp;
+	stamp.exists = hostfs::storage().exists(path);
+	if (stamp.exists) {
+		try {
+			const hostfs::FileInfo info = hostfs::storage().getFileInfo(path);
+			stamp.size = info.size;
+			stamp.updateTime = info.updateTime;
+		} catch (...) {
+			// A stat failure is still cached as an existing but unknown file.
+		}
+	}
+	return stamp;
+}
+}
+
+void ImguiFileTexture::clearThemeImageFailures()
+{
+	failedThemeImages.clear();
+	decodedThemeImages.clear();
+	decodedThemeImageBytes = 0;
+}
 
 ImTextureID ImguiFileTexture::getId()
 {
@@ -1256,20 +1335,75 @@ ImTextureID ImguiFileTexture::getId()
 	ImTextureID id = imguiDriver->getTexture(path);
 	if (id == ImTextureID())
 	{
+		ThemeImageFileStamp fileStamp;
+		if (themeAsset) {
+			fileStamp = themeImageFileStamp(path);
+			auto failure = failedThemeImages.find(path);
+			if (failure != failedThemeImages.end()) {
+				if (failure->second == fileStamp)
+					return {};
+				failedThemeImages.erase(failure);
+			}
+			auto decoded = decodedThemeImages.find(path);
+			if (decoded != decodedThemeImages.end() && !(decoded->second.stamp == fileStamp)) {
+				eraseDecodedThemeImage(decoded);
+			}
+		}
 		constexpr int MaxTextureLoadsPerFrame = 5;
 		if (textureLoadCount < MaxTextureLoadsPerFrame)
 		{
 			textureLoadCount++;
-			int width, height;
-			u8 *imgData = loadImage(path, width, height);
-			if (imgData != nullptr)
+			int width = 0, height = 0;
+			u8 *imgData = nullptr;
+			std::map<std::string, DecodedThemeImage>::iterator decoded;
+			if (themeAsset && (decoded = decodedThemeImages.find(path)) != decodedThemeImages.end()) {
+				width = decoded->second.width;
+				height = decoded->second.height;
+				imgData = decoded->second.pixels.data();
+			} else {
+				imgData = loadImage(path, width, height, boundedImage);
+			}
+			if (imgData == nullptr)
 			{
+				// Only read/decode failures are stable enough to negative-cache.
+				if (themeAsset)
+					cacheThemeImageFailure(path, fileStamp);
+			}
+			else
+			{
+				const bool hasDecodedCache = themeAsset && decodedThemeImages.find(path) != decodedThemeImages.end();
+				bool cachedNewDecode = false;
+				if (themeAsset && !hasDecodedCache) {
+					const size_t pixelBytes = (size_t)width * height * 4;
+					if (pixelBytes <= MaxDecodedThemeImageBytes) {
+						while (!decodedThemeImages.empty() && decodedThemeImageBytes + pixelBytes > MaxDecodedThemeImageBytes)
+							eraseDecodedThemeImage(decodedThemeImages.begin());
+						DecodedThemeImage image;
+						image.stamp = fileStamp;
+						image.width = width;
+						image.height = height;
+						image.pixels.assign(imgData, imgData + pixelBytes);
+						free(imgData);
+						// Keep decoded pixels across upload failures so a transient GPU error
+						// does not force the theme file to be read and decoded every frame.
+						auto inserted = decodedThemeImages.emplace(path, std::move(image));
+						decodedThemeImageBytes += pixelBytes;
+						decoded = inserted.first;
+						imgData = decoded->second.pixels.data();
+						cachedNewDecode = true;
+					}
+				}
 				try {
 					id = imguiDriver->updateTextureAndAspectRatio(path, imgData, width, height, nearestSampling);
 				} catch (...) {
 					// vulkan can throw during resizing
 				}
-				free(imgData);
+				if (cachedNewDecode || hasDecodedCache) {
+					if (id != ImTextureID())
+						eraseDecodedThemeImage(decodedThemeImages.find(path));
+				} else {
+					free(imgData);
+				}
 			}
 		}
 	}
@@ -1729,16 +1863,7 @@ bool ToggleSwitch(const char* label, bool* value, const char* helpText)
 	knob_pos.x = ImLerp(bb.Min.x + radius, bb.Max.x - radius, anim);
 	knob_pos.y = bb.Min.y + radius;
 
-	// Detect light vs dark theme
-	ImGuiStyle& guiStyle = ImGui::GetStyle();
-	float bgLuminance = (guiStyle.Colors[ImGuiCol_WindowBg].x
-	                   + guiStyle.Colors[ImGuiCol_WindowBg].y
-	                   + guiStyle.Colors[ImGuiCol_WindowBg].z) / 3.0f;
-	bool isLightTheme = bgLuminance > 0.5f;
-
-	ImU32 knobColor = isLightTheme
-		? ImGui::GetColorU32(ImGuiCol_Text)  // Dark text color for light themes
-		: IM_COL32(255, 255, 255, 255);      // White for dark themes
+	const ImU32 knobColor = ImGui::GetColorU32(ImGuiCol_Text);
 	draw_list->AddCircleFilled(knob_pos, radius - 1.0f, knobColor);
 
 	return pressed;
@@ -1789,66 +1914,18 @@ namespace Layout {
     constexpr float POPUP_VALUE_RIGHT_PADDING = 28.0f;
 }
 
-// Color helper functions (DuckStation-style)
-static inline ImVec4 ModAlpha(const ImVec4& v, float a)
-{
-    return ImVec4(v.x, v.y, v.z, a);
-}
-
-static inline u32 ModAlpha(u32 col32, float a)
-{
-    return (col32 & ~IM_COL32_A_MASK) | (static_cast<u32>(a * 255.0f) << IM_COL32_A_SHIFT);
-}
-
-static inline ImVec4 DarkerColor(const ImVec4& v, float f = 0.8f)
-{
-    return ImVec4(std::max(v.x, 1.0f / 255.0f) * f,
-                std::max(v.y, 1.0f / 255.0f) * f,
-                std::max(v.z, 1.0f / 255.0f) * f, v.w);
-}
-
-static inline float ColorLuminance(const ImVec4& v)
-{
-    return v.x * 0.299f + v.y * 0.587f + v.z * 0.114f;
-}
-
-static inline ImVec4 BlendColor(const ImVec4& color, const ImVec4& target, float amount)
-{
-    return ImVec4(
-        color.x + (target.x - color.x) * amount,
-        color.y + (target.y - color.y) * amount,
-        color.z + (target.z - color.z) * amount,
-        color.w
-    );
-}
-
 static ImVec4 ReadablePopupTextColor(const ImVec4& bg)
 {
-    return ColorLuminance(bg) > 0.50f
-        ? ImVec4(0.06f, 0.06f, 0.07f, 1.00f)
-        : ImVec4(0.95f, 0.95f, 0.97f, 1.00f);
+    // Keep the authored foreground colors, but preserve their intended alpha
+    // relationship to translucent theme popup surfaces.
+    const ImVec4 text = ImGui::GetStyle().Colors[ImGuiCol_Text];
+    return ImVec4(text.x, text.y, text.z, std::max(text.w, bg.w));
 }
 
 static ImVec4 ReadablePopupDisabledTextColor(const ImVec4& bg)
 {
-    return ColorLuminance(bg) > 0.50f
-        ? ImVec4(0.32f, 0.32f, 0.36f, 1.00f)
-        : ImVec4(0.72f, 0.72f, 0.76f, 1.00f);
-}
-
-static ImVec4 ReadablePopupFillColor(ImVec4 fill, const ImVec4& text)
-{
-    const bool lightText = ColorLuminance(text) > 0.50f;
-    const ImVec4 target = lightText ? ImVec4(0.0f, 0.0f, 0.0f, fill.w) : ImVec4(1.0f, 1.0f, 1.0f, fill.w);
-    const float limit = lightText ? 0.42f : 0.58f;
-    for (int i = 0; i < 4; i++)
-    {
-        const float luminance = ColorLuminance(fill);
-        if ((lightText && luminance <= limit) || (!lightText && luminance >= limit))
-            break;
-        fill = BlendColor(fill, target, 0.25f);
-    }
-    return fill;
+    const ImVec4 text = ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
+    return ImVec4(text.x, text.y, text.z, std::max(text.w, bg.w));
 }
 
 // Helper: Apply DuckStation-style popup styling
@@ -1861,19 +1938,16 @@ struct PopupStyleScope {
         ImVec4 popupText = ReadablePopupTextColor(popupBg);
         ImVec4 popupTextDisabled = ReadablePopupDisabledTextColor(popupBg);
 
-        // DuckStation-style popup background with full opacity
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, ModAlpha(popupBg, 1.0f));
+        // Preserve the theme's popup alpha and foreground colors for contrast.
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, popupBg);
         ImGui::PushStyleColor(ImGuiCol_Text, popupText);
         ImGui::PushStyleColor(ImGuiCol_TextDisabled, popupTextDisabled);
-        ImGui::PushStyleColor(ImGuiCol_Header, ReadablePopupFillColor(style.Colors[ImGuiCol_Header], popupText));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ReadablePopupFillColor(style.Colors[ImGuiCol_HeaderHovered], popupText));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ReadablePopupFillColor(style.Colors[ImGuiCol_HeaderActive], popupText));
-        // Button active state (darker for pressed state)
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ModAlpha(DarkerColor(popupBg, 1.8f), 1.0f));
-        // Button hovered state (medium dark)
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ModAlpha(DarkerColor(popupBg, 1.3f), 1.0f));
-        // Frame background for input widgets
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ModAlpha(DarkerColor(popupBg, 0.8f), 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_Header, style.Colors[ImGuiCol_Header]);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, style.Colors[ImGuiCol_HeaderHovered]);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, style.Colors[ImGuiCol_HeaderActive]);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, style.Colors[ImGuiCol_ButtonActive]);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, style.Colors[ImGuiCol_ButtonHovered]);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, style.Colors[ImGuiCol_FrameBg]);
 
         // DuckStation-style window padding and rounding
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(uiScaled(padding), uiScaled(padding)));
@@ -2601,6 +2675,16 @@ bool SettingPopup(
     cfg.slider.format = format;
     cfg.slider.onApply = std::move(onApply);
     return SettingPopup(cfg);
+}
+
+bool TextFilter::Draw(const char* label, float width)
+{
+    if (width != 0.0f)
+        ImGui::SetNextItemWidth(width);
+    bool value_changed = InputText(label, InputBuf, IM_COUNTOF(InputBuf));
+    if (value_changed)
+        Build();
+    return value_changed;
 }
 
 } // namespace SettingsUI

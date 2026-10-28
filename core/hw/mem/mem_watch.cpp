@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -41,9 +42,10 @@ void AicaRamWatcher::unprotectMem(u32 addr, u32 size)
 
 u32 AicaRamWatcher::getMemOffset(void *p)
 {
-	if ((u8 *)p < &aica::aica_ram[0] || (u8 *)p >= &aica::aica_ram[ARAM_SIZE])
+	uintptr_t offset = virtmem::untag(p) - virtmem::untag(&aica::aica_ram[0]);
+	if (offset >= ARAM_SIZE)
 		return -1;
-	return (u32)((u8 *)p - &aica::aica_ram[0]);
+	return (u32)offset;
 }
 
 void ElanRamWatcher::protectMem(u32 addr, u32 size)
@@ -69,9 +71,10 @@ void ElanRamWatcher::unprotectMem(u32 addr, u32 size)
 u32 ElanRamWatcher::getMemOffset(void *p)
 {
 	using namespace elan;
-	if ((u8 *)p < RAM || (u8 *)p >= &RAM[ERAM_SIZE])
+	uintptr_t offset = virtmem::untag(p) - virtmem::untag(RAM);
+	if (offset >= ERAM_SIZE)
 		return -1;
-	return (u32)((u8 *)p - RAM);
+	return (u32)offset;
 }
 
 }

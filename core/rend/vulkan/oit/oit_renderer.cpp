@@ -2,6 +2,7 @@
     Created on: Nov 7, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -76,7 +77,7 @@ public:
 				BaseInit(screenDrawer.GetRenderPass(), 2);
 				emulateFramebuffer = config::EmulateFramebuffer;
 			}
-			else if (ctx->rend.isRTT) {
+			else if (ctx->rend.isRTT || resetTextureCache) {
 				screenDrawer.EndFrame();
 			}
 			BaseVulkanRenderer::Process(ctx);
@@ -139,6 +140,11 @@ protected:
 		BaseVulkanRenderer::resize(w, h);
 		GetContext()->WaitIdle();
 		screenDrawer.Init(&samplerManager, &oitShaderManager, &oitBuffers, viewport);
+	}
+
+	void clearTextureCache() override {
+		screenDrawer.EndFrame();
+		BaseVulkanRenderer::clearTextureCache();
 	}
 
 private:

@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 cmrc_add_resource_library(Hollycast-resources ALIAS Hollycast::res NAMESPACE Hollycast)
 
 cmrc_add_resources(Hollycast-resources
@@ -34,17 +35,32 @@ cmrc_add_resources(Hollycast-resources
 
 if(NOT LIBRETRO)
     cmrc_add_resources(Hollycast-resources
+            fonts/NotoSansCJK-Regular.ttc.zip
+            fonts/NotoSansCJK-LICENSE.txt
             fonts/Roboto-Medium.ttf.zip
             fonts/Roboto-Bold.ttf.zip
             fonts/Roboto-Regular.ttf.zip
             fonts/Jura-wght.ttf.zip
             fonts/EncodeSans-wdth-wght.ttf.zip
             fonts/fa-solid-900.ttf.zip)
+    cmrc_add_resources(Hollycast-resources
+            WHENCE resources
+            resources/picture/hollycast-launch.png)
     if(ANDROID OR IOS)
         cmrc_add_resources(Hollycast-resources
                 WHENCE resources
                 resources/picture/buttons.png
-                resources/picture/buttons-arcade.png)
+                resources/picture/buttons-arcade.png
+                resources/picture/blkclrDC.png
+                resources/picture/drkgreywhtsolidDC.png
+                resources/picture/greywhitesolidDC.png
+                resources/picture/briteneonDC.png
+                resources/picture/NeondimDC.png
+                resources/picture/blkgryARC.png
+                resources/picture/blkcolorARC.png
+                resources/picture/grywhitesldARC.png
+                resources/picture/whitelineARC.png
+                resources/picture/neonARC.png)
     endif()
 endif()
 
@@ -60,3 +76,12 @@ cmrc_add_resources(Hollycast-resources
 	resources/i18n/zh_CN.po
 	resources/i18n/zh_HK.po
 	resources/i18n/zh_TW.po)
+
+cmrc_add_resources(Hollycast-resources
+        WHENCE resources
+        resources/themes/Dark.json
+        resources/themes/Light.json
+        resources/themes/Dreamcast.json
+        "resources/themes/High Contrast.json"
+        resources/themes/Nintendo.json
+        "resources/themes/Aqua Chill.json")

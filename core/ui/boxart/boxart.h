@@ -50,6 +50,7 @@ public:
 	std::string getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode);
 	void term();
 	void refreshCache();
+	void invalidateOfflineArtwork();
 	void refreshLibraryPlaytimeDatabase();
 	void startPlaytime(const std::string& gameId, const std::string& gamePath);
 	void resumePlaytime();
@@ -59,6 +60,8 @@ public:
 	void startFetch();
 
 private:
+	friend class BoxartWorkTest_AcceptsOnlyCurrentSourceRevision_Test;
+
 	enum class CustomIndexState
 	{
 		NotRequested,
@@ -73,6 +76,8 @@ private:
 			bool *indexReady = nullptr);
 	GameBoxart getBoxartAndQueue(const GameMedia& media, bool startFetch);
 	bool shouldFetchOnline() const;
+	GameBoxart& gameForMedia(const GameMedia& media);
+	bool isCurrentWork(const GameBoxart& item) const;
 	void loadDatabase();
 	void loadLibraryPlaytimeDatabase();
 	//! @pre playtimeMutex must be locked.
@@ -120,8 +125,10 @@ private:
 	std::mutex mutex;
 	std::unique_ptr<Scraper> scraper;
 	std::unique_ptr<Scraper> arcadeScraper;
+	u64 nextWorkRevision = 0;
 	bool databaseLoaded = false;
 	bool databaseDirty = false;
+	std::mutex databaseWriteMutex;
 	// Incremented while mutex is held so a completed save never clears a newer update.
 	u64 databaseGeneration = 0;
 	bool customIndexLoaded = false;

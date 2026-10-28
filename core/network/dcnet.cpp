@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -34,6 +35,7 @@
 #include <memory>
 #include <array>
 #include <chrono>
+#include <vector>
 #ifndef __ANDROID__
 //#define WIRESHARK_DUMP 1
 #endif
@@ -42,6 +44,8 @@ namespace net::modbba
 {
 
 static TsQueue<u8> toModem;
+static constexpr size_t MAX_ETH_FRAME_SIZE = 1514;
+static constexpr size_t MAX_BBA_QUEUE_SIZE = 256;
 
 class DCNetService : public Service
 {
@@ -54,6 +58,7 @@ public:
 	int modemAvailable() override;
 
 	void receiveEthFrame(const u8 *frame, u32 size) override;
+	u32 sendEthFrame(u8 *frame) override;
 };
 
 class PPPSocket
@@ -235,9 +240,9 @@ private:
 class EthSocket
 {
 public:
-	EthSocket(asio::io_context& io_context, const asio::ip::tcp::endpoint& endpoint,
+	EthSocket(asio::io_context& io_context, TsQueue<std::vector<u8>>& bbaQueue, const asio::ip::tcp::endpoint& endpoint,
 			const std::string& endpointName = "")
-		: socket(io_context)
+		: socket(io_context), bbaQueue(bbaQueue)
 	{
 		asio::error_code ec;
 		socket.connect(endpoint, ec);
@@ -280,6 +285,8 @@ private:
 		iterator i = begin;
 		uint16_t len = (uint8_t)*i++;
 		len |= uint8_t(*i++) << 8;
+		if (len > MAX_ETH_FRAME_SIZE)
+			return std::make_pair(begin + 2, true);
 		len += 2;
 		if (end - begin < len)
 			return std::make_pair(begin, false);
@@ -299,6 +306,14 @@ private:
 					socket.close(ignored);
 					return;
 				}
+				uint16_t frameLen = recvBuffer[0] | recvBuffer[1] << 8;
+				if (frameLen > MAX_ETH_FRAME_SIZE || len != (size_t)frameLen + 2)
+				{
+					ERROR_LOG(NETWORK, "Invalid Ethernet frame size: %d", frameLen);
+					std::error_code ignored;
+					socket.close(ignored);
+					return;
+				}
 				/*
 				verify(len - 2 == *(u16 *)&recvBuffer[0]);
 				printf("In frame: dest %02x:%02x:%02x:%02x:%02x:%02x "
@@ -308,7 +323,8 @@ private:
 					*(u16 *)&recvBuffer[14], (int)len - 2);
 				*/
 				ethdump(&recvBuffer[2], len - 2);
-				bba_recv_frame(&recvBuffer[2], len - 2);
+				if (bbaQueue.size() < MAX_BBA_QUEUE_SIZE)
+					bbaQueue.push(std::vector<u8>(&recvBuffer[2], &recvBuffer[len]));
 				if (len < recvBuffer.size())
 					recvBuffer.erase(recvBuffer.begin(), recvBuffer.begin() + len);
 				else
@@ -403,6 +419,7 @@ private:
 	std::array<u8, 1600> sendBuffer;
 	u32 sendBufferIdx = 0;
 	bool sending = false;
+	TsQueue<std::vector<u8>>& bbaQueue;
 
 	FILE *dumpfp = nullptr;
 };
@@ -422,7 +439,7 @@ public:
 		this->handler = std::function<void(const std::error_code&, const asio::ip::address&, const std::string&)>(handler);
 		try {
 			asio::ip::udp::resolver resolver(io_context);
-			auto it = resolver.resolve("dcnet.flyca.st", std::to_string(PORT));
+			auto it = resolver.resolve(asio::ip::udp::v4(), "dcnet.flyca.st", std::to_string(PORT));
 			if (it.empty()) {
 				finish();
 				return;
@@ -619,12 +636,16 @@ public:
 	void stop()
 	{
 		if (!thread.joinable())
+		{
+			bbaQueue.clear();
 			return;
+		}
 		io_context->stop();
 		thread.join();
 		pppSocket.reset();
 		ethSocket.reset();
 		io_context.reset();
+		bbaQueue.clear();
 		os_notify(i18n::T("DCNet disconnected"), 3000);
 	}
 
@@ -650,6 +671,14 @@ public:
 			start();
 		}
 	}
+	u32 recvEthFrame(u8 *frame)
+	{
+		std::vector<u8> packet;
+		if (!bbaQueue.tryPop(packet) || packet.size() > MAX_ETH_FRAME_SIZE)
+			return 0;
+		memcpy(frame, packet.data(), packet.size());
+		return packet.size();
+	}
 
 private:
 	void run();
@@ -659,6 +688,7 @@ private:
 	std::unique_ptr<asio::io_context> io_context;
 	std::unique_ptr<PPPSocket> pppSocket;
 	std::unique_ptr<EthSocket> ethSocket;
+	TsQueue<std::vector<u8>> bbaQueue;
 
 	static constexpr uint16_t PPP_PORT = 7654;
 	static constexpr uint16_t TAP_PORT = 7655;
@@ -726,6 +756,11 @@ void DCNetService::receiveEthFrame(u8 const *frame, unsigned int len)
 	thread.sendEthFrame(frame, len);
 }
 
+u32 DCNetService::sendEthFrame(u8 *frame)
+{
+	return thread.recvEthFrame(frame);
+}
+
 void DCNetThread::connect(const asio::ip::address& address, const std::string& apname)
 {
 	const bool powerSmash = settings.content.gameId == "HDR-0113"	// Power Smash
@@ -765,7 +800,7 @@ void DCNetThread::connect(const asio::ip::address& address, const std::string& a
 			endpoint.port(PPP_PORT);
 	}
 	if (config::EmulateBBA)
-		ethSocket = std::make_unique<EthSocket>(*io_context, endpoint, apname);
+		ethSocket = std::make_unique<EthSocket>(*io_context, bbaQueue, endpoint, apname);
 	else if (powerSmash)
 		pppSocket = std::make_unique<PowerSmashPPPSocket>(*io_context, endpoint, apname);
 	else
@@ -775,6 +810,7 @@ void DCNetThread::connect(const asio::ip::address& address, const std::string& a
 void DCNetThread::run()
 {
 	toModem.clear();
+	bbaQueue.clear();
 	try {
 		std::string hostname;
 #ifndef LIBRETRO

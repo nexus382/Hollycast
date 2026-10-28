@@ -13,6 +13,9 @@
 #include "emulator.h"
 #include "naomi2.h"
 #include "oslib/i18n.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 
 #ifdef TEST_AUTOMATION
 #include "cfg/cfg.h"
@@ -95,8 +98,8 @@ void findTextureStorageSupport()
 #if defined(TARGET_IPHONE)
 	gl.textureStorageSupported = core;
 #else
-	const char *procName = core || arb ? "glTexStorage2D" : "glTexStorage2DEXT";
 #if defined(LIBRETRO)
+	const char *procName = core || arb ? "glTexStorage2D" : "glTexStorage2DEXT";
 	glsm_ctx_proc_address_t procAddress{};
 	if (glsm_ctl(GLSM_CTL_PROC_ADDRESS_GET, &procAddress) && procAddress.addr != nullptr)
 	{
@@ -269,6 +272,12 @@ uniform lowp vec2 texSize;
 #endif
 #if DITHERING == 1
 uniform lowp vec4 ditherDivisor;
+#endif
+#if SECACCUM == 1
+uniform sampler2D secAccum;
+#if TARGET_GL == GLES2 || TARGET_GL == GL2
+uniform lowp vec2 secAccumSize;
+#endif
 #endif
 
 /* Vertex input*/
@@ -753,6 +762,7 @@ void main()
 			discard;
 	#endif
 	
+#if SECACCUM == 0
 	highp vec4 color = vtx_base;
 	highp vec4 offset = vtx_offs;
 	#if pp_Gouraud == 1 && TARGET_GL != GLES2 && DIV_POS_Z != 1
@@ -844,9 +854,16 @@ void main()
 		if (cp_AlphaTestValue > color.a)
 			discard;
 		color.a = 1.0;
-	#endif 
-
+	#endif
 	//color.rgb = vec3(vtx_uv.z * sp_FOG_DENSITY / 128.0);
+#else
+	// SECACCUM == 1
+	#if TARGET_GL != GLES2 && TARGET_GL != GL2
+		mediump vec2 secAccumSize = vec2(textureSize(secAccum, 0));
+	#endif
+	highp vec4 color = texture(secAccum, gl_FragCoord.xy / secAccumSize);
+#endif
+
 #if TARGET_GL != GLES2
 #if DIV_POS_Z == 1
 	highp float w = 100000.0 / vtx_uv.z;
@@ -974,6 +991,7 @@ void termGLCommon()
 	gl.ofbo2.framebuffer.reset();
 	gl.fbscaling.framebuffer.reset();
 	gl.videorouting.framebuffer.reset();
+	gl.secondaryBuffer.reset();
 	termVmuLightgun();
 #ifdef LIBRETRO
 	postProcessor.term();
@@ -1211,7 +1229,7 @@ GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader)
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
-		int palette, int sampleTextureFilter, int maxFilteredTextureSize, bool naomi2, bool dithering)
+		int palette, int sampleTextureFilter, int maxFilteredTextureSize, bool naomi2, bool dithering, bool secAccum)
 {
 	u32 rv=0;
 
@@ -1232,6 +1250,7 @@ PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 	rv <<= 1; rv |= naomi2;
 	rv <<= 1, rv |= !settings.platform.isNaomi2() && config::NativeDepthInterpolation;
 	rv <<= 1; rv |= dithering;
+	rv <<= 1; rv |= secAccum;
 
 	PipelineShader *shader = &gl.shaders[rv];
 	if (shader->program == 0)
@@ -1254,6 +1273,7 @@ PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		shader->naomi2 = naomi2;
 		shader->divPosZ = !settings.platform.isNaomi2() && config::NativeDepthInterpolation;
 		shader->dithering = dithering;
+		shader->secAccum = secAccum;
 		CompilePipelineShader(shader);
 	}
 
@@ -1295,6 +1315,7 @@ public:
 		addConstant("pp_MaxFilteredTextureSize", s->maxFilteredTextureSize);
 		addConstant("DIV_POS_Z", s->divPosZ);
 		addConstant("DITHERING", s->dithering);
+		addConstant("SECACCUM", s->secAccum);
 
 		addSource(PixelCompatShader);
 		addSource(GouraudSource);
@@ -1365,6 +1386,12 @@ bool CompilePipelineShader(PipelineShader* s)
 	s->ndcMat = glGetUniformLocation(s->program, "ndcMat");
 	s->ditherDivisor = glGetUniformLocation(s->program, "ditherDivisor");
 	s->texSize = glGetUniformLocation(s->program, "texSize");
+
+	// Set secAccum uniform to texture slot 3
+	gu = glGetUniformLocation(s->program, "secAccum");
+	if (gu != -1)
+		glUniform1i(gu, 3);
+	s->secAccumSize = glGetUniformLocation(s->program, "secAccumSize");
 
 	if (s->naomi2)
 		initN2Uniforms(s);
@@ -1468,6 +1495,7 @@ bool OpenGLRenderer::Init()
 	glcache.EnableCache();
 
 	gl_create_resources();
+	initGpuTiming();
 
 #if 0
 	glEnable(GL_DEBUG_OUTPUT);
@@ -1507,14 +1535,14 @@ static void updateFogTexture(u8 *fog_table, GLenum texture_slot, GLint fog_image
 	if (fogTextureId == 0)
 	{
 		fogTextureId = glcache.GenTexture();
-		glcache.BindTexture(GL_TEXTURE_2D, fogTextureId);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glBindTexture(GL_TEXTURE_2D, fogTextureId);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	}
 	else {
-		glcache.BindTexture(GL_TEXTURE_2D, fogTextureId);
+		glBindTexture(GL_TEXTURE_2D, fogTextureId);
 	}
 
 	u8 temp_tex_buffer[256];
@@ -1538,14 +1566,14 @@ static void updatePaletteTexture(GLenum texture_slot)
 	if (paletteTextureId == 0)
 	{
 		paletteTextureId = glcache.GenTexture();
-		glcache.BindTexture(GL_TEXTURE_2D, paletteTextureId);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glBindTexture(GL_TEXTURE_2D, paletteTextureId);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	}
 	else {
-		glcache.BindTexture(GL_TEXTURE_2D, paletteTextureId);
+		glBindTexture(GL_TEXTURE_2D, paletteTextureId);
 	}
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -1699,10 +1727,8 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 #endif
 #endif
 	//setup render target first
-	if (is_rtt)
-	{
-		if (BindRTT() == 0)
-			return false;
+	if (is_rtt) {
+		outputFB = BindRTT();
 	}
 	else
 	{
@@ -1710,21 +1736,22 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 		this->height = height;
 		getVideoShift(gl.ofbo.shiftX, gl.ofbo.shiftY);
 #ifdef LIBRETRO
-		if (config::EmulateFramebuffer)
-		{
-			if (init_output_framebuffer(width, height) == 0)
-				return false;
+		if (config::EmulateFramebuffer) {
+			outputFB = init_output_framebuffer(width, height);
 		}
 		else
 		{
-			glBindFramebuffer(GL_FRAMEBUFFER, postProcessor.getFramebuffer(width, height));
+			outputFB = postProcessor.getFramebuffer(width, height);
+			if (outputFB != nullptr)
+				outputFB->bind();
 			glViewport(0, 0, width, height);
 		}
 #else
-		if (init_output_framebuffer(width, height) == 0)
-			return false;
+		outputFB = init_output_framebuffer(width, height);
 #endif
 	}
+	if (outputFB == nullptr)
+		return false;
 
 	//Color is cleared by the background plane
 
@@ -1777,7 +1804,7 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 		glcache.Enable(GL_SCISSOR_TEST);
 	}
 
-	DrawStrips();
+	drawStrips();
 #ifdef LIBRETRO
 	if (!is_rtt && !config::EmulateFramebuffer)
 		postProcessor.render(glsm_get_current_framebuffer());
@@ -1817,6 +1844,7 @@ void OpenGLRenderer::initVideoRoutingFrameBuffer()
 
 void OpenGLRenderer::Term()
 {
+	termGpuTiming();
 	TexCache.Clear();
 	clearGpuPreloadedTextures();
 	gles_term();
@@ -1837,22 +1865,167 @@ void OpenGLRenderer::processCustomTexturePreloads()
 bool OpenGLRenderer::Render()
 {
 	saveCurrentFramebuffer();
-	renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
-	if (gl.rendContext->isRTT) {
-		restoreCurrentFramebuffer();
-		return false;
-	}
-
-	if (!config::EmulateFramebuffer)
+	const bool is_rtt = gl.rendContext->isRTT;
+	// The destructor closes the query when renderFrame, drawOSD, or
+	// renderVideoRouting throws, so later frames keep sampling.
 	{
-		frameRendered = true;
-		clearLastFrame = false;
-		drawOSD();
-		renderVideoRouting();
+		OpenGLGpuTimingScope gpuTiming(this, !is_rtt);
+		renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
+		if (is_rtt) {
+			restoreCurrentFramebuffer();
+			return false;
+		}
+
+		if (!config::EmulateFramebuffer)
+		{
+			frameRendered = true;
+			clearLastFrame = false;
+			drawOSD();
+			renderVideoRouting();
+		}
 	}
 	restoreCurrentFramebuffer();
 
 	return true;
+}
+
+void OpenGLRenderer::initGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	gpuTimingAvailable = gl.is_gles ? GLAD_GL_EXT_disjoint_timer_query : GLAD_GL_ARB_timer_query;
+	if (!gpuTimingAvailable)
+		return;
+	if (gl.is_gles)
+		glGenQueriesEXT(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+	else
+		glGenQueries(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+	for (const GLuint query : gpuTimingQueries)
+	{
+		if (query == 0)
+		{
+			termGpuTiming();
+			return;
+		}
+	}
+#elif !defined(LIBRETRO)
+	// iOS uses the native OpenGLES headers rather than GLAD. Keep GPU timing
+	// explicitly unavailable until a native timer-query implementation exists.
+	performance_overlay::setGpuTimingSupported(false);
+#endif
+}
+
+void OpenGLRenderer::termGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	if (gpuTimingQueries[0] != 0)
+	{
+		if (gl.is_gles)
+			glDeleteQueriesEXT(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+		else
+			glDeleteQueries(static_cast<GLsizei>(gpuTimingQueries.size()), gpuTimingQueries.data());
+	}
+#endif
+#ifndef LIBRETRO
+	performance_overlay::setGpuTimingSupported(false);
+#endif
+	gpuTimingQueries = {};
+	gpuTimingEpochs = {};
+	gpuTimingDiscarded = {};
+	gpuTimingReadIndex = 0;
+	gpuTimingWriteIndex = 0;
+	gpuTimingWaitingCount = 0;
+	gpuTimingAvailable = false;
+	gpuTimingActive = false;
+}
+
+void OpenGLRenderer::pollGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	if (!gpuTimingAvailable || gpuTimingWaitingCount == 0)
+		return;
+
+	std::array<GLuint64, GpuTimingQueryCount> results {};
+	std::size_t readyCount = 0;
+	while (readyCount < gpuTimingWaitingCount)
+	{
+		const std::size_t slot = (gpuTimingReadIndex + readyCount) % GpuTimingQueryCount;
+		const GLuint query = gpuTimingQueries[slot];
+		GLuint ready = GL_FALSE;
+		if (gl.is_gles)
+			glGetQueryObjectuivEXT(query, GL_QUERY_RESULT_AVAILABLE_EXT, &ready);
+		else
+			glGetQueryObjectuiv(query, GL_QUERY_RESULT_AVAILABLE, &ready);
+		if (ready == GL_FALSE)
+			break;
+
+		if (!gpuTimingDiscarded[slot])
+		{
+			if (gl.is_gles)
+				glGetQueryObjectui64vEXT(query, GL_QUERY_RESULT_EXT, &results[slot]);
+			else
+				glGetQueryObjectui64v(query, GL_QUERY_RESULT, &results[slot]);
+		}
+		++readyCount;
+	}
+	if (gl.is_gles)
+	{
+		GLint disjoint = GL_FALSE;
+		glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);
+		// Check after fetching results: disjoint can occur while polling. This
+		// read clears the flag, so invalidate every outstanding query, including
+		// those not ready yet, and retire them before reusing their slots.
+		if (disjoint != GL_FALSE)
+			gpuTimingDiscarded.fill(true);
+	}
+	for (std::size_t i = 0; i < readyCount; ++i)
+	{
+		if (!gpuTimingDiscarded[gpuTimingReadIndex])
+			performance_overlay::recordGpuTimingSample(
+				static_cast<std::uint64_t>(results[gpuTimingReadIndex]), gpuTimingEpochs[gpuTimingReadIndex]);
+		gpuTimingReadIndex = (gpuTimingReadIndex + 1) % GpuTimingQueryCount;
+		--gpuTimingWaitingCount;
+	}
+#endif
+}
+
+void OpenGLRenderer::beginGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	// Retire completed queries even while timing is disabled so samples from a
+	// previous enabled interval cannot leak into a later one.
+	pollGpuTiming();
+	if (!performance_overlay::isGpuTimingRequested())
+		return;
+	performance_overlay::setGpuTimingSupported(gpuTimingAvailable);
+	if (!gpuTimingAvailable)
+		return;
+
+	if (gpuTimingActive || gpuTimingWaitingCount == GpuTimingQueryCount)
+		return;
+	const GLuint query = gpuTimingQueries[gpuTimingWriteIndex];
+	gpuTimingEpochs[gpuTimingWriteIndex] = performance_overlay::getGpuTimingEpoch();
+	gpuTimingDiscarded[gpuTimingWriteIndex] = false;
+	if (gl.is_gles)
+		glBeginQueryEXT(GL_TIME_ELAPSED_EXT, query);
+	else
+		glBeginQuery(GL_TIME_ELAPSED, query);
+	gpuTimingActive = true;
+#endif
+}
+
+void OpenGLRenderer::endGpuTiming()
+{
+#if !defined(LIBRETRO) && !defined(TARGET_IPHONE)
+	if (!gpuTimingActive)
+		return;
+	if (gl.is_gles)
+		glEndQueryEXT(GL_TIME_ELAPSED_EXT);
+	else
+		glEndQuery(GL_TIME_ELAPSED);
+	gpuTimingWriteIndex = (gpuTimingWriteIndex + 1) % GpuTimingQueryCount;
+	++gpuTimingWaitingCount;
+	gpuTimingActive = false;
+#endif
 }
 
 void OpenGLRenderer::renderVideoRouting()

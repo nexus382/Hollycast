@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "imgread/common.h"
 #include <locale>
@@ -35,6 +36,7 @@ TEST_F(GdiTest, LoadA)
 
 TEST_F(GdiTest, LoadB)
 {
+	struct RestoreLocale { std::locale original = std::locale(); ~RestoreLocale() { std::locale::global(original); } } restoreLocale;
 	std::locale::global(std::locale("fr_FR.UTF-8"));
 	Disc *disk = OpenDisc(FLYCAST_TEST_FILES "/test_gdis/b/cs.gdi");
 	verifyDisk(disk);

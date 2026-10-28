@@ -30,7 +30,7 @@ namespace SettingsNew {
 
 static const PresetSetting potatoSettings[] = {
 	{"Sh4Clock", 200},                            // 100% SH4 clock
-	{"RenderResolution", 320},                    // Ultra-low resolution
+	{"RenderResolution", 240},                    // 0.5x - 320x240
 	{"AnisotropicFiltering", 1},                  // 2x
 	{"AutoSkipFrame", 2},                         // Maximum skip
 	{"SkipFrame", 0},                             // No fixed skip

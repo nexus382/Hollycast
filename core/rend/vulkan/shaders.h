@@ -36,7 +36,6 @@ struct VertexShaderParams
 	u32 hash() { return (u32)gouraud | ((u32)naomi2 << 1) | ((u32)divPosZ << 2) | ((u32)texture << 3); }
 };
 
-// alpha test, clip test, use alpha, texture, ignore alpha, shader instr, offset, fog, gouraud, bump, clamp, trilinear
 struct FragmentShaderParams
 {
 	bool alphaTest;
@@ -56,6 +55,7 @@ struct FragmentShaderParams
 	int maxFilteredTextureSize;
 	bool divPosZ;
 	bool dithering;
+	bool secAccum;
 
 	u32 hash()
 	{
@@ -64,7 +64,8 @@ struct FragmentShaderParams
 			| ((u32)offset << 7) | ((u32)fog << 8) | ((u32)gouraud << 10)
 			| ((u32)bumpmap << 11) | ((u32)clamping << 12) | ((u32)trilinear << 13)
 			| ((u32)palette << 14) | ((u32)divPosZ << 16) | ((u32)dithering << 17)
-			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 18);
+			| ((u32)secAccum << 18)
+			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 19);
 		return hash;
 	}
 };

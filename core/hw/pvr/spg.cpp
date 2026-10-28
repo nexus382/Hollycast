@@ -1,3 +1,6 @@
+/*
+	Portions Copyright 2026 The Hollycast Authors
+*/
 #include "spg.h"
 #include "hw/holly/holly_intc.h"
 #include "hw/holly/sb.h"
@@ -8,6 +11,10 @@
 #include "hw/pvr/Renderer_if.h"
 #include "stdclass.h"
 #include <array>
+#include <atomic>
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 
 #ifdef TEST_AUTOMATION
 #include "input/gamepad_device.h"
@@ -28,13 +35,14 @@ static u64 last_fps;
 constexpr int PIXEL_CLOCK = 27 * 1000 * 1000;
 static u32 Line_Cycles;
 static u32 Frame_Cycles;
-int render_end_schid;
-int vblank_schid;
+int render_end_schid = -1;
+int vblank_schid = -1;
 
 static std::array<double, 4> real_times;
 static std::array<u64, 4> cpu_cycles;
 static u32 cpu_time_idx;
 bool SH4FastEnough;
+static std::atomic<float> sh4ExecutionRate { 0.f };
 u32 fskip;
 
 static u32 lightgun_line = 0xffff;
@@ -42,7 +50,7 @@ static u32 lightgun_hpos;
 static bool maple_int_pending;
 
 #ifdef LIBRETRO
-extern bool retro_refresh_av_info(double fps);
+extern void retro_setfps(double fps);
 #endif
 
 void CalculateSync()
@@ -64,8 +72,13 @@ void CalculateSync()
 	sh4_sched_request(vblank_schid, Line_Cycles);
 
 #ifdef LIBRETRO
-	retro_refresh_av_info((double)SH4_MAIN_CLOCK / ((double)Line_Cycles * (double)pvr_numscanlines));
+	retro_setfps((double)SH4_MAIN_CLOCK / ((double)Line_Cycles * (double)pvr_numscanlines));
 #endif
+}
+
+u32 spg_getFrameCycles()
+{
+	return Frame_Cycles;
 }
 
 static int getNextSpgInterrupt()
@@ -157,6 +170,12 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 		// Vblank
 		if (prv_cur_scanline == 0)
 		{
+#ifndef LIBRETRO
+			// Accrue one active video-frame budget per vblank. Scheduled renders
+			// are accumulated independently, so multiple renders increase the
+			// pressure instead of being averaged away.
+			performance_overlay::recordPvrFrameBudget(spg_getFrameCycles());
+#endif
 			if (SPG_CONTROL.interlace)
 				SPG_STATUS.fieldnum = ~SPG_STATUS.fieldnum;
 			else
@@ -170,10 +189,12 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 			{
 				u32 cycle_span = (u32)(sh4_sched_now64() - cpu_cycles[cpu_time_idx]);
 				u64 time_span = now - real_times[cpu_time_idx];
-				float cpu_speed = ((float)cycle_span / time_span) / (SH4_MAIN_CLOCK / 100000);
-				SH4FastEnough = cpu_speed >= 85.f;
+				const float cpuSpeed = time_span == 0 ? 0.f : ((float)cycle_span / time_span) / (SH4_MAIN_CLOCK / 100000);
+				sh4ExecutionRate.store(cpuSpeed, std::memory_order_relaxed);
+				SH4FastEnough = cpuSpeed >= 85.f;
 			}
 			else {
+				sh4ExecutionRate.store(0.f, std::memory_order_relaxed);
 				SH4FastEnough = false;
 			}
 			cpu_cycles[cpu_time_idx] = sh4_sched_now64();
@@ -282,6 +303,7 @@ void spg_Reset(bool hard)
 	CalculateSync();
 
 	SH4FastEnough = false;
+	sh4ExecutionRate.store(0.f, std::memory_order_relaxed);
 	cpu_time_idx = 0;
 	cpu_cycles.fill(0);
 	real_times.fill(0.0);
@@ -306,7 +328,18 @@ void scheduleRenderDone(TA_context *cntx)
 			cycles = std::min(450000 + size * 100, 1500000);
 		}
 	}
+	#ifndef LIBRETRO
+	// This is the renderer-complete delay scheduled into Dreamcast time. It
+	// deliberately measures emulated PVR timing, not host GPU execution time.
+	if (cntx != nullptr)
+		performance_overlay::recordPvrRenderSchedule(static_cast<u32>(cycles));
+	#endif
 	sh4_sched_request(render_end_schid, cycles);
+}
+
+float spg_getSh4ExecutionRate()
+{
+	return sh4ExecutionRate.load(std::memory_order_relaxed);
 }
 
 void spg_Serialize(Serializer& ser)
@@ -319,11 +352,12 @@ void spg_Serialize(Serializer& ser)
 	ser << Frame_Cycles;
 	ser << lightgun_line;
 	ser << lightgun_hpos;
+	sh4_sched_serialize(ser, vblank_schid);
+	sh4_sched_serialize(ser, render_end_schid);
 }
+
 void spg_Deserialize(Deserializer& deser)
 {
-	if (deser.version() < Deserializer::V30)
-		deser.skip<u32>(); // in_vblank
 	deser >> clc_pvr_scanline;
 	deser >> maple_int_pending;
 	deser >> pvr_numscanlines;
@@ -332,4 +366,8 @@ void spg_Deserialize(Deserializer& deser)
 	deser >> Frame_Cycles;
 	deser >> lightgun_line;
 	deser >> lightgun_hpos;
+	if (deser.version() >= Deserializer::V62) {
+		sh4_sched_deserialize(deser, vblank_schid);
+		sh4_sched_deserialize(deser, render_end_schid);
+	}
 }

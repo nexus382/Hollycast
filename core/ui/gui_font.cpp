@@ -23,6 +23,23 @@
 #include "oslib/resources.h"
 #include "IconsFontAwesome6.h"
 #include "imgui/misc/freetype/imgui_freetype.h"
+#include "custom_theme.h"
+#include "theme_font_validation.h"
+#include "nowide/fstream.hpp"
+#include <array>
+#include <cctype>
+#include <cstring>
+#ifdef _MSC_VER
+// C++/CX reserves `generic`; FreeType uses it as a structure member.
+#pragma push_macro("generic")
+#undef generic
+#define generic __generic
+#endif
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#ifdef _MSC_VER
+#pragma pop_macro("generic")
+#endif
 
 ImFont *boldFont;
 ImFont *largeFont;
@@ -31,6 +48,52 @@ ImFont *settingsValueFont;
 ImFont *settingsRightValueFont;
 ImFont *settingsIconFont;
 ImFont *aboutAsciiFont;
+
+namespace {
+std::unique_ptr<u8[]> loadThemeFont(const std::string& path, size_t& size)
+{
+	if (path.empty()) return {};
+	nowide::ifstream file(path, std::ios::binary | std::ios::ate);
+	if (!file) return {};
+	auto length = file.tellg();
+	if (length < 12 || length > 32 * 1024 * 1024) return {};
+	size = static_cast<size_t>(length);
+	auto bytes = std::make_unique<u8[]>(size);
+	file.seekg(0);
+	if (!file.read(reinterpret_cast<char*>(bytes.get()), length)) return {};
+	// Validate an SFNT directory and all table ranges before handing bytes to
+	// the font backend. This rejects truncated or malformed user files safely.
+	if (!validThemeFontDirectory(bytes.get(), size)) return {};
+	FT_Library library = nullptr;
+	FT_Face face = nullptr;
+	const bool validFace = FT_Init_FreeType(&library) == 0
+			&& FT_New_Memory_Face(library, bytes.get(), static_cast<FT_Long>(size), 0, &face) == 0
+			&& FT_Get_Char_Index(face, 'A') != 0
+			&& FT_Load_Glyph(face, FT_Get_Char_Index(face, 'A'), FT_LOAD_DEFAULT) == 0;
+	if (face) FT_Done_Face(face);
+	if (library) FT_Done_FreeType(library);
+	if (!validFace) return {};
+	return bytes;
+}
+
+void* copyForAtlas(const u8* bytes, size_t size)
+{
+	void* atlasBytes = IM_ALLOC(size);
+	if (atlasBytes != nullptr)
+		std::memcpy(atlasBytes, bytes, size);
+	return atlasBytes;
+}
+
+ImFont* addThemeFont(ImFontAtlas* atlas, const std::string& path, float size,
+		const ImFontConfig* config = nullptr, const ImWchar* ranges = nullptr)
+{
+	size_t dataSize = 0;
+	auto data = loadThemeFont(path, dataSize);
+	if (!data) return nullptr;
+	void* ownedData = copyForAtlas(data.get(), dataSize);
+	return ownedData ? atlas->AddFontFromMemoryTTF(ownedData, (int)dataSize, size, config, ranges) : nullptr;
+}
+}
 
 namespace FontFace
 {
@@ -265,26 +328,35 @@ void gui_loadFonts()
 	ImGuiStyle& style = ImGui::GetStyle();
 	const float fontSize = uiScaled(17.f);
 
-	size_t dataSize;
-	std::unique_ptr<u8[]> data = resource::load("fonts/Roboto-Medium.ttf", dataSize);
+	size_t dataSize = 0;
+	std::unique_ptr<u8[]> data = loadThemeFont(CustomTheme::fontPath(false), dataSize);
+	const bool customRegular = data != nullptr;
+	if (!data) data = resource::load("fonts/Roboto-Medium.ttf", dataSize);
 	verify(data != nullptr);
-	ImFont *regularFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, nullptr, nullptr);
+	void* regularBytes = customRegular ? copyForAtlas(data.get(), dataSize) : data.release();
+	ImFont *regularFont = io.Fonts->AddFontFromMemoryTTF(regularBytes, (int)dataSize, fontSize, nullptr, nullptr);
 	ImFontConfig fontConfig;
 	fontConfig.MergeMode = true;
 	fontConfig.DstFont = regularFont;
 
 	// Bold font
-	data = resource::load("fonts/Roboto-Bold.ttf", dataSize);
+	data = loadThemeFont(CustomTheme::fontPath(true), dataSize);
+	const bool customBold = data != nullptr;
+	if (!data) data = resource::load("fonts/Roboto-Bold.ttf", dataSize);
 	verify(data != nullptr);
-	boldFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, nullptr, nullptr);
+	void* boldBytes = customBold ? copyForAtlas(data.get(), dataSize) : data.release();
+	boldFont = io.Fonts->AddFontFromMemoryTTF(boldBytes, (int)dataSize, fontSize, nullptr, nullptr);
 	ImFontConfig boldFontConfig;
 	boldFontConfig.MergeMode = true;
 	boldFontConfig.DstFont = boldFont;
 
 	// Large font
-	data = resource::load("fonts/Roboto-Regular.ttf", dataSize);
-	verify(data != nullptr);
-	largeFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(21.f), nullptr, nullptr);
+	largeFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), uiScaled(21.f));
+	if (largeFont == nullptr) {
+		data = resource::load("fonts/Roboto-Regular.ttf", dataSize);
+		verify(data != nullptr);
+		largeFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(21.f), nullptr, nullptr);
+	}
 
 	// Keep the About-page artwork isolated from the application fonts. The
 	// embedded vector font is monospaced. Avoid whole-pixel advance snapping
@@ -486,9 +558,6 @@ void gui_loadFonts()
 	// TODO BSD, iOS, ...
 #endif
 
-	loadFonts(fonts, fontConfig);
-	loadFonts(boldFonts, boldFontConfig);
-
 	// Settings UI fonts
 	static const ImWchar ranges[] =
 	{
@@ -498,25 +567,32 @@ void gui_loadFonts()
 
 	const float largeFontSize = uiScaled(21.f);
 
-	data = resource::load("fonts/Jura-wght.ttf", dataSize);
-	if (data != nullptr)
+	ImFontConfig settingsTitleFontCfg;
+	settingsTitleFontCfg.RasterizerMultiply = 1.25f;
+	settingsTitleFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), fontSize, &settingsTitleFontCfg, ranges);
+	if (settingsTitleFont == nullptr)
 	{
-		ImFontConfig settingsTitleFontCfg;
-		settingsTitleFontCfg.RasterizerMultiply = 1.25f;
-		settingsTitleFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, &settingsTitleFontCfg, ranges);
+		data = resource::load("fonts/Jura-wght.ttf", dataSize);
+		if (data != nullptr)
+			settingsTitleFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, &settingsTitleFontCfg, ranges);
 	}
 
-	data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
-	if (data != nullptr)
+	ImFontConfig rightValueFontCfg;
+	rightValueFontCfg.RasterizerMultiply = 4.50f;
+	settingsRightValueFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), largeFontSize, &rightValueFontCfg, ranges);
+	if (settingsRightValueFont == nullptr)
 	{
-		ImFontConfig rightValueFontCfg;
-		rightValueFontCfg.RasterizerMultiply = 4.50f;
-		settingsRightValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, largeFontSize, &rightValueFontCfg, ranges);
+		data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
+		if (data != nullptr)
+			settingsRightValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, largeFontSize, &rightValueFontCfg, ranges);
 	}
 
-	data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
-	if (data != nullptr)
-		settingsValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(24.f), nullptr, ranges);
+	settingsValueFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), uiScaled(24.f), nullptr, ranges);
+	if (settingsValueFont == nullptr) {
+		data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
+		if (data != nullptr)
+			settingsValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(24.f), nullptr, ranges);
+	}
 
 	if (settingsTitleFont == nullptr)
 		settingsTitleFont = regularFont != nullptr ? regularFont : largeFont;
@@ -524,6 +600,53 @@ void gui_loadFonts()
 		settingsValueFont = largeFont;
 	if (settingsRightValueFont == nullptr)
 		settingsRightValueFont = largeFont;
+
+	// One shared collection backs all text fonts. Choose its regional face for
+	// the current UI language, and keep the atlas as the sole owner of the data.
+	data = resource::load("fonts/NotoSansCJK-Regular.ttc", dataSize);
+	verify(data != nullptr);
+	void* cjkData = IM_ALLOC(dataSize);
+	verify(cjkData != nullptr);
+	memcpy(cjkData, data.get(), dataSize);
+	data.reset();
+	std::string locale = i18n::getCurrentLocale();
+	const size_t suffix = locale.find_first_of(".@");
+	if (suffix != std::string::npos)
+		locale.resize(suffix);
+	for (char& c : locale)
+		c = c == '-' ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+	// Locale strings can include a script and region (e.g. zh-Hant-TW).
+	locale += '_';
+	int cjkFace = 0; // Japanese is also a useful default for game titles.
+	if (locale.rfind("ko_", 0) == 0) cjkFace = 1;
+	else if (locale.rfind("zh_", 0) == 0)
+	{
+		if (locale.find("_hk_") != std::string::npos || locale.find("_mo_") != std::string::npos) cjkFace = 4;
+		else if (locale.find("_tw_") != std::string::npos || locale.find("_hant_") != std::string::npos) cjkFace = 3;
+		else cjkFace = 2;
+	}
+	static const ImWchar iconExclude[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+	std::vector<ImFont*> targets;
+	for (ImFont* target : {regularFont, boldFont, largeFont, settingsTitleFont, settingsRightValueFont, settingsValueFont})
+		if (std::find(targets.begin(), targets.end(), target) == targets.end())
+			targets.push_back(target);
+	for (size_t i = 0; i < targets.size(); ++i)
+	{
+		ImFontConfig cjkConfig;
+		cjkConfig.MergeMode = true;
+		cjkConfig.DstFont = targets[i];
+		cjkConfig.FontNo = cjkFace;
+		cjkConfig.FontDataOwnedByAtlas = i + 1 == targets.size();
+		cjkConfig.GlyphExcludeRanges = iconExclude;
+		if (targets[i] == boldFont)
+			cjkConfig.FontLoaderFlags |= ImGuiFreeTypeLoaderFlags_Bold;
+		verify(io.Fonts->AddFontFromMemoryTTF(cjkData, (int)dataSize, targets[i]->LegacySize, &cjkConfig) != nullptr);
+	}
+
+	// The other text styles already have the shared bundled CJK fallback.
+	// Keep the existing system fallbacks for regular and bold text.
+	loadFonts(fonts, fontConfig);
+	loadFonts(boldFonts, boldFontConfig);
 
 	data = resource::load("fonts/" FONT_ICON_FILE_NAME_FAS, dataSize);
 	if (data != nullptr)

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "maple_if.h"
 #include "maple_cfg.h"
 #include "maple_helper.h"
@@ -21,7 +22,7 @@ enum MaplePattern
 
 std::shared_ptr<maple_device> MapleDevices[MAPLE_PORTS][MAPLE_DEVS_PER_PORT];
 
-int maple_schid;
+int maple_schid = -1;
 
 /*
 	Maple host controller
@@ -219,7 +220,7 @@ static void maple_DoDma()
 			// and send everything to the main device.
 			auto pDevice = MapleDevices[bus][5];
 			if (pDevice != nullptr
-					&& maple_getPortCount(pDevice->get_device_type()) != 0)
+					&& maple_getPortCount(pDevice->get_device_type(), MaplePortType::built_in) != 0)
 			{
 				port = getPort(reci);
 				if (port != 5)
