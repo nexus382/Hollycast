@@ -1231,6 +1231,11 @@ bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::s
 	const std::unordered_map<std::string, std::string> hostDefines {
 		{ "__RESHADE__", "60000" },
 		{ "__RESHADE_FXC__", "1" },
+		// Effects use shader-model-5 semantics before translation to the active API.
+		// Feature guards must not discard valid compute entry points as a legacy path.
+		{ "__RENDERER__", "0xb000" },
+		{ "BUFFER_COLOR_FORMAT", "28" },
+		{ "BUFFER_COLOR_SPACE", "1" },
 		{ "BUFFER_WIDTH", "FinalViewportSize.x" },
 		{ "BUFFER_HEIGHT", "FinalViewportSize.y" },
 		{ "BUFFER_RCP_WIDTH", "(1.0 / FinalViewportSize.x)" },

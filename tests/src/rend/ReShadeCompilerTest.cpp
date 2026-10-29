@@ -187,3 +187,19 @@ TEST(ReShadeCompilerTest, SeparatesEffectLocalsFromHostUniformNames)
 	std::string hlsl;
 	EXPECT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, source.slangParameters, {}, 1, hlsl, error)) << error;
 }
+TEST(ReShadeCompilerTest, AdvertisesThePortableComputeLanguageProfile)
+{
+	const std::string effect =
+		"#if __RENDERER__ < 0xb000\n#error A shader-model-5 profile is required\n#endif\n"
+		"#if BUFFER_COLOR_FORMAT != 28 || BUFFER_COLOR_SPACE != 1\n#error Invalid buffer profile\n#endif\n"
+		"texture2D Target { Width=1; Height=1; Format=RGBA8; };\n"
+		"storage2D Output { Texture=Target; };\n"
+		"void Compute(uint3 id : SV_DispatchThreadID) { tex2Dstore(Output, int2(id.xy), float4(1,0,0,1)); }\n"
+		"technique Profile { pass { ComputeShader=Compute<1,1,1>; DispatchSizeX=1; DispatchSizeY=1; } }\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
+	EXPECT_FALSE(source.compute.empty());
+	std::string hlsl;
+	EXPECT_TRUE(postprocess::translateGlslComputeToHlsl(source, {}, {}, hlsl, error)) << error;
+}
