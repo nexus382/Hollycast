@@ -6,13 +6,7 @@
 
 #include "effect_symbol_table.hpp"
 #include <cassert>
-#ifdef _MSC_VER
-#include <malloc.h> // _alloca
-#elif defined(__NetBSD__)
-#include <stdlib.h> // NetBSD declares alloca here and does not provide alloca.h.
-#else
-#include <alloca.h> // alloca is not declared by malloc.h on macOS
-#endif
+#include <vector>
 #include <algorithm> // std::upper_bound, std::sort
 #include <functional> // std::greater
 
@@ -323,7 +317,9 @@ static int compare_functions(const std::vector<reshadefx::expression> &arguments
 
 	// Check if the first function matches the argument types
 	bool function1_viable = true;
-	const auto function1_ranks = static_cast<unsigned int *>(alloca(num_arguments * sizeof(unsigned int)));
+	// Shader argument counts must not depend on host stack-allocation limits
+	// or platform-specific alloca headers.
+	std::vector<unsigned int> function1_ranks(num_arguments);
 	for (size_t i = 0; i < num_arguments; ++i)
 	{
 		if ((function1_ranks[i] = reshadefx::type::rank(arguments[i].type, function1->parameter_list[i].type)) == 0)
@@ -339,7 +335,7 @@ static int compare_functions(const std::vector<reshadefx::expression> &arguments
 
 	// Check if the second function matches the argument types
 	bool function2_viable = true;
-	const auto function2_ranks = static_cast<unsigned int *>(alloca(num_arguments * sizeof(unsigned int)));
+	std::vector<unsigned int> function2_ranks(num_arguments);
 	for (size_t i = 0; i < num_arguments; ++i)
 	{
 		if ((function2_ranks[i] = reshadefx::type::rank(arguments[i].type, function2->parameter_list[i].type)) == 0)
@@ -354,8 +350,8 @@ static int compare_functions(const std::vector<reshadefx::expression> &arguments
 		return function2_viable - function1_viable;
 
 	// Both functions are possible, so find the one with the higher ranking
-	std::sort(function1_ranks, function1_ranks + num_arguments, std::greater<unsigned int>());
-	std::sort(function2_ranks, function2_ranks + num_arguments, std::greater<unsigned int>());
+	std::sort(function1_ranks.begin(), function1_ranks.end(), std::greater<unsigned int>());
+	std::sort(function2_ranks.begin(), function2_ranks.end(), std::greater<unsigned int>());
 
 	for (size_t i = 0; i < num_arguments; ++i)
 		if (function1_ranks[i] > function2_ranks[i])
