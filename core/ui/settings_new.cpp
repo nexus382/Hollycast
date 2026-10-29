@@ -2237,6 +2237,11 @@ void renderTextureFilterLiveTuneOverlay()
 		int filterSelection = getSampleTextureFilterOptionIndex(config::SampleTextureFilter.get());
 		if (ImGui::BeginCombo(T("Sample Texture Filter"), filterLabels[filterSelection]))
 		{
+#if defined(__ANDROID__)
+			// Combo popups need the same drag-scroll opt-in as Settings lists,
+			// before their selectable rows can hand a finger swipe to the popup.
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
 			for (int index = 0; index < static_cast<int>(filterLabels.size()); ++index)
 			{
 				const bool selected = index == filterSelection;
@@ -2248,6 +2253,10 @@ void renderTextureFilterLiveTuneOverlay()
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
 			ImGui::EndCombo();
 		}
 
@@ -2261,6 +2270,9 @@ void renderTextureFilterLiveTuneOverlay()
 		const auto sizeLabels = getMaxFilteredTextureSizeLabels();
 		if (ImGui::BeginCombo(T("Filter Resolution Limit"), sizeLabels[sizeSelection]))
 		{
+#if defined(__ANDROID__)
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
 			for (int index = 0; index < static_cast<int>(sizeLabels.size()); ++index)
 			{
 				const bool selected = index == sizeSelection;
@@ -2272,6 +2284,10 @@ void renderTextureFilterLiveTuneOverlay()
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
 			ImGui::EndCombo();
 		}
 		ImGui::TextDisabled("%s", T("Filter resolution limit uses the texture width bucket. Larger textures are left on the normal sampler path."));
