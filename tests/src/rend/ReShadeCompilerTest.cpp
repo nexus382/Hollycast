@@ -234,3 +234,20 @@ TEST(ReShadeCompilerTest, KeepsFloatingShaderSyntaxIndependentOfHostLocale)
 	std::string hlsl;
 	EXPECT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, source.slangParameters, {}, 1, hlsl, error)) << error;
 }
+
+TEST(ReShadeCompilerTest, PreservesTheSignOfFoldedInfinityConstants)
+{
+	for (bool negative : { false, true }) {
+		const std::string effect =
+			"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return float4("
+			+ std::string(negative ? "-1.0" : "1.0") + " / 0.0, 0, 0, 1); }\n"
+			"technique Infinity { pass { PixelShader = Pixel; } }\n";
+		postprocess::ShaderPassSource source;
+		std::string error;
+		ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
+		EXPECT_NE(std::string::npos, source.fragment.find(negative ? "/*-inf*/" : "/*inf*/"));
+		EXPECT_EQ(std::string::npos, source.fragment.find(negative ? "/*inf*/" : "/*-inf*/"));
+		std::string hlsl;
+		EXPECT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, source.slangParameters, {}, 1, hlsl, error)) << error;
+	}
+}

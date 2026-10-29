@@ -549,7 +549,7 @@ protected:
 					break;
 				}
 				if (std::isinf(data.as_float[i])) {
-					s += std::signbit(data.as_float[i]) ? "1.0/0.0/*inf*/" : "-1.0/0.0/*-inf*/";
+					s += std::signbit(data.as_float[i]) ? "-1.0/0.0/*-inf*/" : "1.0/0.0/*inf*/";
 					break;
 				}
 				append_float_literal(s, data.as_float[i]);
