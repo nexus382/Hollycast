@@ -26,6 +26,7 @@
 #include "oslib/storage.h"
 #include "cfg/option.h"
 #include "arcade_scraper.h"
+#include "launchbox.h"
 #include <nowide/convert.hpp>
 #include <nowide/stackstring.hpp>
 #include <algorithm>
@@ -702,6 +703,14 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 		std::lock_guard<std::mutex> guard(mutex);
 		GameBoxart& record = gameForMedia(media);
 		boxart = record;
+		if (boxart.scraped && boxart.scrapedProvider != config::BoxartOnlineSource.get())
+		{
+			boxart.scraped = false;
+			boxart.busy = false;
+			boxart.workRevision = ++nextWorkRevision;
+			record = boxart;
+			markDatabaseDirty();
+		}
 		const bool missingBoxartFile = isMissingBoxartFile(boxart);
 		const bool missingScrapedBoxartFile = isMissingScrapedBoxartFile(boxart);
 		if (missingBoxartFile || missingScrapedBoxartFile)
@@ -1124,17 +1133,22 @@ void Boxart::fetchBoxart()
 		boxart = std::vector<GameBoxart>(toFetch.begin(), toFetch.begin() + size);
 		toFetch.erase(toFetch.begin(), toFetch.begin() + size);
 	}
-	onlineFetching = std::async(std::launch::async, [this, wantOnline, allowOnline, useScreenScraper, boxart = std::move(boxart)]() mutable {
+	const int provider = config::BoxartOnlineSource.get();
+	onlineFetching = std::async(std::launch::async, [this, provider, wantOnline, allowOnline, useScreenScraper, boxart = std::move(boxart)]() mutable {
 		ThreadName _("BoxArt-online");
 		DEBUG_LOG(COMMON, "Scraping online boxart for %d games", (int)boxart.size());
 		if (allowOnline)
 		{
-			if (!useScreenScraper && scraper == nullptr)
+			if (!useScreenScraper && (scraper == nullptr || scraperProvider != provider))
 			{
-				scraper = std::unique_ptr<Scraper>(new TheGamesDb());
+				scraperProvider = provider;
+				if (provider == static_cast<int>(config::OnlineArtworkSource::LaunchBox))
+					scraper = std::make_unique<LaunchBox>();
+				else
+					scraper = std::make_unique<TheGamesDb>();
 				if (!scraper->initialize(getSaveDirectory()))
 				{
-					ERROR_LOG(COMMON, "thegamesdb scraper initialization failed");
+					ERROR_LOG(COMMON, "Artwork provider initialization failed");
 					scraper.reset();
 					std::lock_guard<std::mutex> guard(mutex);
 					for (const GameBoxart& b : boxart)
@@ -1148,7 +1162,7 @@ void Boxart::fetchBoxart()
 				arcadeScraper->initialize(getSaveDirectory());
 			}
 			try {
-				arcadeScraper->scrape(boxart);
+				if (provider == 0 || useScreenScraper) arcadeScraper->scrape(boxart);
 				if (!useScreenScraper)
 				{
 					scraper->scrape(boxart);
@@ -1156,7 +1170,10 @@ void Boxart::fetchBoxart()
 				{
 					std::lock_guard<std::mutex> guard(mutex);
 					for (GameBoxart& b : boxart)
-						completeArtworkWork(b, useScreenScraper && wantOnline && !b.arcade, useScreenScraper && !b.arcade);
+						{
+							b.scrapedProvider = provider;
+							completeArtworkWork(b, useScreenScraper && wantOnline && !b.arcade, useScreenScraper && !b.arcade);
+						}
 				}
 			} catch (const std::exception& e) {
 				if (*e.what() != '\0')

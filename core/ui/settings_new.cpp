@@ -4144,6 +4144,26 @@ static void renderSettingsContentTab(SettingsTab tab)
 		);
 
 		const bool physicalOnly = config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+		const char* onlineSources[] = { T("TheGamesDB"), T("LaunchBox") };
+		SettingsUI::PopupConfig onlineSourceCfg {};
+		onlineSourceCfg.type = SettingsUI::PopupType::Options;
+		onlineSourceCfg.options.label = T("Online Artwork Source");
+		onlineSourceCfg.options.icon = ICON_FA_DOWNLOAD;
+		onlineSourceCfg.options.popupID = Tnop("OnlineArtworkSourcePopup");
+		onlineSourceCfg.options.options = onlineSources;
+		onlineSourceCfg.options.optionCount = IM_ARRAYSIZE(onlineSources);
+		onlineSourceCfg.options.currentValue = &config::BoxartOnlineSource.get();
+		onlineSourceCfg.options.disabled = physicalOnly;
+		onlineSourceCfg.options.onChange = [](int) {
+			gui_refresh_custom_boxart(false);
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("OnlineArtworkSource"),
+			T("Choose where Hollycast downloads game covers."), onlineSourceCfg,
+			T("Online Artwork Source\n"
+				"LaunchBox matches the game's title and platform, then prefers covers for its region. "
+				"The first lookup downloads its catalog, which can take a little time. Covers and matches are saved locally.\n\n"
+				"Dreamcast games use their internal disc title and product ID, so renaming the ROM file keeps the match."));
 		RenderGeneralToggleSettingRow(
 			"FetchBoxart",
 			ICON_FA_DOWNLOAD,

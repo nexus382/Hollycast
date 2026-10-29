@@ -52,6 +52,8 @@ struct GameBoxart
 	std::string gamePath;
 	std::string boxartPath;
 	std::string boxartUrl;
+	int scrapedProvider = 0;
+	int launchboxId = 0;
 	// Populated from the read-only Library play-time database; never persisted in the boxart database.
 	std::optional<u64> playTimeSeconds;
 

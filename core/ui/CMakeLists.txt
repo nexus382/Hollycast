@@ -72,6 +72,8 @@ if(NOT LIBRETRO)
             boxart/gamesdb.h
             boxart/screenscraper.cpp
             boxart/screenscraper.h
+            boxart/launchbox.cpp
+            boxart/launchbox.h
             boxart/pvrparser.h
             boxart/scraper.cpp
             boxart/scraper.h

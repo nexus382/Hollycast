@@ -137,6 +137,7 @@ private:
 	std::string requestedCustomBoxartRoot;
 	std::mutex mutex;
 	std::unique_ptr<Scraper> scraper;
+	int scraperProvider = -1;
 	std::unique_ptr<Scraper> arcadeScraper;
 	u64 nextWorkRevision = 0;
 	bool databaseLoaded = false;

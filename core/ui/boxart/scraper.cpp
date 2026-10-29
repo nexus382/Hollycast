@@ -71,6 +71,8 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 		{ "screenscraper_match_version", screenScraperMatchVersion },
 		{ "boxart_path", artPath },
 		{ "boxart_url", boxartUrl },
+		{ "scraped_provider", scrapedProvider },
+		{ "launchbox_id", launchboxId },
 		{ "parsed", offlineArtState == OfflineArtState::Complete || offlineArtState == OfflineArtState::NoArtwork },
 		{ "offline_art_state", offlineArtState == OfflineArtState::Complete ? "complete"
 				: offlineArtState == OfflineArtState::NoArtwork ? "no_artwork" : "pending" },
@@ -115,6 +117,8 @@ GameBoxart::GameBoxart(const json& j, const std::string& baseArtPath)
 			media.second = baseArtPath + media.second;
 	loadProperty(boxartPath, j, "boxart_path");
 	loadProperty(boxartUrl, j, "boxart_url");
+	loadProperty(scrapedProvider, j, "scraped_provider");
+	loadProperty(launchboxId, j, "launchbox_id");
 	loadProperty(gamePath, j, "game_path");
 	std::string state;
 	loadProperty(state, j, "offline_art_state");
