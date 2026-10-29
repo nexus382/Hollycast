@@ -19,6 +19,7 @@
  */
 #include "settings_new.h"
 #include "custom_theme.h"
+#include "theme.h"
 #include "gui_util.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -63,6 +64,8 @@
 #include <cfloat>
 #include <memory>
 #include <filesystem>
+#include <mutex>
+#include <stdexcept>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -3008,6 +3011,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 				config::UITheme = CustomTheme::CustomThemeId;
 				config::UICustomTheme = filename;
 			}
+			// The UI palette/editor and library package palette are separate choices.
+			// Selecting a UI theme clears a package so its palette cannot mask it.
+			config::CustomTheme.get().clear();
+			config::ThemeLayout.get().clear();
+			SaveSettings();
 			applyThemeAfterPopup = true;
 			g_reloadThemeFontsAfterSettings = true;
 			return true;
@@ -3375,8 +3383,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 						g_themeEditor.error = "Saved " + filename + ", but could not select it. " + migrationError
 								+ ". Close this editor, resolve the migration error, then select this theme from UI Theme.";
 					} else {
+						config::CustomTheme.get().clear();
+						config::ThemeLayout.get().clear();
 						config::UITheme = CustomTheme::CustomThemeId;
 						config::UICustomTheme = filename;
+						SaveSettings();
 						setThemePreview(nullptr);
 						g_applyThemeAfterSettings = true;
 						g_reloadThemeFontsAfterSettings = true;
@@ -3400,6 +3411,183 @@ static void renderSettingsContentTab(SettingsTab tab)
 			g_reloadThemeFontsAfterSettings |= g_themeEditor.fontChanged;
 			g_themeEditor.open = false;
 		}
+
+
+		// Installed library themes package a palette and a library layout. Keep this
+		// selector separate from the UI theme editor above.
+		std::vector<std::string> libraryThemeLabelStorage;
+		std::vector<std::string> libraryThemeIds;
+		libraryThemeLabelStorage.emplace_back(T("App UI Theme"));
+		libraryThemeIds.emplace_back();
+		for (const themes::CatalogEntry& entry : themes::catalog())
+		{
+			if (!entry.error.empty())
+				continue;
+			libraryThemeLabelStorage.push_back(entry.name.empty() ? entry.id : entry.name);
+			libraryThemeIds.push_back(entry.id);
+		}
+		std::vector<const char*> libraryThemeLabels;
+		for (const std::string& label : libraryThemeLabelStorage)
+			libraryThemeLabels.push_back(label.c_str());
+
+		int selectedLibraryThemeIndex = 0;
+		if (!config::CustomTheme.get().empty())
+		{
+			auto selected = std::find(libraryThemeIds.begin(), libraryThemeIds.end(), config::CustomTheme.get());
+			if (selected != libraryThemeIds.end())
+				selectedLibraryThemeIndex = static_cast<int>(selected - libraryThemeIds.begin());
+		}
+		SettingsUI::PopupConfig libraryThemeCfg {};
+		libraryThemeCfg.type = SettingsUI::PopupType::Options;
+		libraryThemeCfg.options.label = T("Library Theme");
+		libraryThemeCfg.options.icon = ICON_FA_SWATCHBOOK;
+		libraryThemeCfg.options.popupID = Tnop("LibraryThemePopup");
+		libraryThemeCfg.options.options = libraryThemeLabels.data();
+		libraryThemeCfg.options.optionCount = static_cast<int>(libraryThemeLabels.size());
+		libraryThemeCfg.options.currentValue = &selectedLibraryThemeIndex;
+		libraryThemeCfg.options.valueWidth = 220.0f;
+		libraryThemeCfg.options.onChange = [&](int index) {
+			if (index < 0 || index >= static_cast<int>(libraryThemeIds.size()))
+				return false;
+			config::CustomTheme.get() = libraryThemeIds[index];
+			config::ThemeLayout.get().clear();
+			SaveSettings();
+			g_applyThemeAfterSettings = true;
+			return true;
+		};
+		RenderGeneralPopupSettingRow(
+			Tnop("LibraryThemeSetting"),
+			T("Choose a library theme package, or use the selected UI theme and default library layout."),
+			libraryThemeCfg,
+			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
+
+		if (const themes::Theme* activeTheme = themes::current())
+		{
+			ImGui::Indent(SettingsLayoutScaled(28.0f));
+			ImGui::TextWrapped(T("%s%s%s"), activeTheme->name.c_str(),
+				activeTheme->author.empty() ? "" : " — ", activeTheme->author.c_str());
+			if (!activeTheme->description.empty())
+				ImGui::TextWrapped("%s", activeTheme->description.c_str());
+			ImGui::Unindent(SettingsLayoutScaled(28.0f));
+
+			if (!activeTheme->layouts.empty())
+			{
+				std::vector<std::string> layoutLabelStorage;
+				std::vector<const char*> layoutLabels;
+				int selectedLayoutIndex = 0;
+				for (size_t i = 0; i < activeTheme->layouts.size(); ++i)
+				{
+					const themes::Layout& layout = activeTheme->layouts[i];
+					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
+					if (layout.id == config::ThemeLayout.get())
+						selectedLayoutIndex = static_cast<int>(i);
+				}
+				for (const std::string& label : layoutLabelStorage)
+					layoutLabels.push_back(label.c_str());
+				SettingsUI::PopupConfig layoutCfg {};
+				layoutCfg.type = SettingsUI::PopupType::Options;
+				layoutCfg.options.label = T("Library Layout");
+				layoutCfg.options.icon = ICON_FA_TABLE_CELLS_LARGE;
+				layoutCfg.options.popupID = Tnop("LibraryLayoutPopup");
+				layoutCfg.options.options = layoutLabels.data();
+				layoutCfg.options.optionCount = static_cast<int>(layoutLabels.size());
+				layoutCfg.options.currentValue = &selectedLayoutIndex;
+				layoutCfg.options.valueWidth = 220.0f;
+				layoutCfg.options.onChange = [&](int index) {
+					if (index >= 0 && index < static_cast<int>(activeTheme->layouts.size()))
+					{
+						config::ThemeLayout.get() = activeTheme->layouts[index].id;
+						SaveSettings();
+					}
+					return true;
+				};
+				RenderGeneralPopupSettingRow(
+					Tnop("LibraryLayoutSetting"),
+					T("Choose the library layout supplied by this theme."),
+					layoutCfg);
+			}
+		}
+
+		static std::string libraryThemeActionError;
+		static std::mutex pendingLibraryThemeInstallMutex;
+		static std::string pendingLibraryThemeInstallPath;
+		static bool pendingLibraryThemeInstall = false;
+		bool openLibraryThemeFolderPicker = false;
+		if (ImGui::Button(T("Install Library Theme Folder")))
+			openLibraryThemeFolderPicker = true;
+		ImGui::SameLine();
+		if (ImGui::Button(T("Reload Library Themes")))
+		{
+			try
+			{
+				themes::reload();
+				libraryThemeActionError.clear();
+			}
+			catch (const std::runtime_error& error)
+			{
+				libraryThemeActionError = error.what();
+			}
+			g_applyThemeAfterSettings = true;
+		}
+		const std::string libraryThemePopupName = T("Install Library Theme Folder");
+		auto installSelectedLibraryThemeFolder = [](bool cancelled, const std::string& selection) {
+			if (!cancelled)
+			{
+				std::lock_guard<std::mutex> lock(pendingLibraryThemeInstallMutex);
+				pendingLibraryThemeInstallPath = selection;
+				pendingLibraryThemeInstall = true;
+			}
+			return true;
+		};
+#ifdef __ANDROID__
+		if (openLibraryThemeFolderPicker)
+		{
+			const StoragePopupResult storageResult = select_storage_popup(true, false, libraryThemePopupName,
+				installSelectedLibraryThemeFolder);
+			if (storageResult == StoragePopupResult::Unsupported)
+				ImGui::OpenPopup(libraryThemePopupName.c_str());
+		}
+		select_file_popup(libraryThemePopupName.c_str(), installSelectedLibraryThemeFolder, false, "");
+#else
+		select_file_popup(libraryThemePopupName.c_str(), installSelectedLibraryThemeFolder, false, "");
+		if (openLibraryThemeFolderPicker)
+			ImGui::OpenPopup(libraryThemePopupName.c_str());
+#endif
+		std::string selectedLibraryThemeFolder;
+		{
+			std::lock_guard<std::mutex> lock(pendingLibraryThemeInstallMutex);
+			if (pendingLibraryThemeInstall)
+			{
+				selectedLibraryThemeFolder.swap(pendingLibraryThemeInstallPath);
+				pendingLibraryThemeInstall = false;
+			}
+		}
+		if (!selectedLibraryThemeFolder.empty())
+		{
+			try
+			{
+				config::CustomTheme.get() = themes::install(selectedLibraryThemeFolder);
+				config::ThemeLayout.get().clear();
+				SaveSettings();
+				themes::reload();
+				libraryThemeActionError.clear();
+				g_applyThemeAfterSettings = true;
+			}
+			catch (const std::runtime_error& error)
+			{
+				libraryThemeActionError = error.what();
+			}
+		}
+		ImGui::TextWrapped(T("Library themes folder: %s"), themes::directory().c_str());
+		if (const std::string& error = themes::error(); !error.empty())
+			ImGui::TextWrapped(T("Library theme error: %s"), error.c_str());
+		for (const themes::CatalogEntry& entry : themes::catalog())
+		{
+			if (!entry.error.empty())
+				ImGui::TextWrapped(T("%s: %s"), entry.name.empty() ? entry.id.c_str() : entry.name.c_str(), entry.error.c_str());
+		}
+		if (!libraryThemeActionError.empty())
+			ImGui::TextWrapped(T("Library theme action error: %s"), libraryThemeActionError.c_str());
 
 #if !defined(TARGET_MAC)
 		const char* menuBarModes[] = { T("Auto"), T("On"), T("Off") };

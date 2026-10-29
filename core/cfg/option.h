@@ -417,6 +417,8 @@ extern Option<int, false> VmuIconMode;
 extern Option<int, false> UIScaling;
 extern Option<int, false> UITheme;
 extern Option<std::string, false> UICustomTheme;
+extern Option<std::string, false> CustomTheme; // Library package ID; empty uses the selected UI theme.
+extern Option<std::string, false> ThemeLayout; // Layout ID; empty uses the theme's first layout.
 enum class MenuBarMode
 {
 	Auto = 0,

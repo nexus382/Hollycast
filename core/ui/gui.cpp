@@ -44,6 +44,7 @@
 #include "implot.h"
 #endif
 #include "boxart/boxart.h"
+#include "theme_library.h"
 #include "boxart/vmu_icon.h"
 #include "profiler/fc_profiler.h"
 #include "hw/naomi/card_reader.h"
@@ -296,10 +297,7 @@ void gui_updateStyle()
 		return;
 	uiScale = settings.display.uiScale;
 
-	// Setup Dear ImGui style
-	ImGui::GetStyle() = ImGuiStyle{};
-
-	// Apply the current theme
+	// The theme applies metrics at the current DPI, including on live switches.
 	applyCurrentTheme();
 	ImguiFileTexture::clearThemeImageFailures();
 
@@ -2423,6 +2421,223 @@ void gui_load_game()
 }
 #endif
 
+static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& layout,
+		const SettingsUI::TextFilter& filter, library::View view)
+{
+	std::vector<GameMedia> games;
+	std::vector<library::Entry> libraryEntries;
+	{
+		std::lock_guard<std::mutex> lock(scanner.get_mutex());
+		games = scanner.get_game_list();
+		if (view == library::View::ContinuePlaying)
+		{
+			static hostfs::SavestateFolders cachedFolders;
+			const auto folders = hostfs::getSavestateFolders();
+			if (librarySavestateCacheInvalidated.exchange(false)
+					|| folders.custom != cachedFolders.custom || folders.data != cachedFolders.data)
+			{
+				cachedFolders = folders;
+				librarySavestateCache.reset([folders](const std::string& path, const std::string& fileName) {
+					return dc_getLatestStateForGame(path, fileName, folders);
+				});
+				libraryStateThumbnailCacheInvalidated = true;
+			}
+		}
+
+		libraryEntries.reserve(games.size());
+		for (const GameMedia& game : games)
+		{
+			const time_t latestStateDate = view == library::View::ContinuePlaying && !game.device
+					? librarySavestateCache.get(game.path, game.fileName).creationDate : 0;
+			libraryEntries.push_back({game.path, game.name, latestStateDate, game.device});
+		}
+	}
+
+	static library::View lastLibraryView = view;
+	if (lastLibraryView != view)
+	{
+		resetLibraryGameInfoHover();
+		lastLibraryView = view;
+	}
+	const std::vector<size_t> candidates = library::selectGames(libraryEntries, view,
+			config::LibraryFavourites.get());
+	std::vector<GameMedia> visibleGames;
+	std::vector<GameBoxart> artwork;
+	std::vector<themes::LibraryItem> items;
+	const double animationClock = getLibraryIconAnimationClock();
+	for (size_t gameIndex : candidates)
+	{
+		const GameMedia& game = games[gameIndex];
+		GameBoxart art = getLibraryDisplayArtwork(game, animationClock);
+		std::string title = art.name.empty() ? game.name : art.name;
+		if (view == library::View::ContinuePlaying)
+		{
+			if (!art.name.empty())
+				title = art.name;
+			if (!art.searchName.empty() && (title.empty() || title == game.fileName
+					|| title == get_file_basename(game.fileName)))
+				title = art.searchName;
+		}
+		const std::string searchable = title + '\n' + game.name;
+		if (!filter.PassFilter(searchable.c_str()))
+			continue;
+
+		themes::LibraryItem item;
+		item.id = game.path.empty() ? "bios" : game.path;
+		item.title = title;
+		item.image = art.boxartPath;
+		item.metadata = {
+			{"title", title}, {"description", game.desc.empty() ? art.overview : game.desc},
+			{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
+			{"players", game.players.empty() ? T("Unknown") : game.players},
+			{"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
+			{"productId", art.uniqueId}, {"region", formatLibraryRegion(art.region)},
+			{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
+			{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
+			{"lastPlayed", ""}, {"size", formatLibrarySize(game.size)}
+		};
+		const time_t lastPlayed = getLibraryGameLastBooted(game, art.uniqueId);
+		if (lastPlayed != 0)
+			item.metadata["lastPlayed"] = formatShortDateTime(lastPlayed);
+
+		// Resolve only artwork bindings actually used by this layout.
+		for (const auto& element : layout.elements)
+		{
+			if (element.type != "artwork" || element.source.empty())
+				continue;
+			const std::string key = "artwork." + element.source;
+			if (item.metadata.count(key))
+				continue;
+			config::LibraryCoverMediaMode media = config::LibraryCoverMediaMode::Cover;
+			if (element.source == "miximage") media = config::LibraryCoverMediaMode::MixImage;
+			else if (element.source == "screenshot") media = config::LibraryCoverMediaMode::Screenshot;
+			else if (element.source == "fanart") media = config::LibraryCoverMediaMode::FanArt;
+			else if (element.source == "title") media = config::LibraryCoverMediaMode::Title;
+			else if (element.source == "physical") media = config::LibraryCoverMediaMode::Physical;
+			item.metadata[key] = boxart.getCustomMediaPath(game, media);
+			if (item.metadata[key].empty())
+				item.metadata[key] = item.image;
+		}
+		items.push_back(std::move(item));
+		artwork.push_back(std::move(art));
+		visibleGames.push_back(game);
+	}
+
+	int contextAction = -1;
+	int favouriteAction = -1;
+	bool contextResume = false;
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const int activated = themes::renderLibrary(layout, theme.directory, items, [&](size_t index) {
+		const GameMedia& game = visibleGames[index];
+		const ImVec2 itemMin = ImGui::GetItemRectMin();
+		const ImVec2 itemMax = ImGui::GetItemRectMax();
+		const ImVec2 nextCursor = ImGui::GetCursorScreenPos();
+		const bool itemActive = ImGui::IsItemActive();
+		const bool itemHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly | ImGuiHoveredFlags_NoNavOverride);
+
+		// Keep per-game actions available when a theme replaces the stock table/cards.
+		const bool contextOpen = ImGui::BeginPopupContextItem();
+		if (contextOpen)
+		{
+			ImGui::TextUnformatted(items[index].title.c_str());
+			ImGui::Separator();
+			if (view == library::View::ContinuePlaying && !game.device && !game.path.empty())
+			{
+				const SavestateInfo& state = librarySavestateCache.get(game.path, game.fileName);
+				const bool canResume = !state.path.empty();
+				if (ImGui::MenuItem(T("Resume"), nullptr, false, canResume))
+				{
+					contextAction = static_cast<int>(index);
+					contextResume = true;
+				}
+				drawLibraryStatePreview(state);
+				if (ImGui::MenuItem(T("Start Fresh")))
+				{
+					contextAction = static_cast<int>(index);
+					contextResume = false;
+				}
+			}
+			if (!game.device && !game.path.empty())
+			{
+				const bool favourite = library::isFavourite(game.path, config::LibraryFavourites.get());
+				if (ImGui::MenuItem(favourite ? T("Remove from favourites") : T("Add to favourites")))
+				{
+					std::vector<std::string> favourites = config::LibraryFavourites.get();
+					library::setFavourite(game.path, !favourite, favourites);
+					config::LibraryFavourites.set(favourites);
+					config::LibraryFavourites.save();
+					resetLibraryGameInfoHover();
+				}
+			}
+			ImGui::EndPopup();
+		}
+
+		const ImVec2 favouriteSize(uiScaled(32.0f), uiScaled(32.0f));
+		const ImVec2 favouriteMin(itemMax.x - favouriteSize.x - uiScaled(6.0f), itemMin.y + uiScaled(4.0f));
+		const ImVec2 mouse = ImGui::GetIO().MousePos;
+		const bool mouseOverFavourite = mouse.x >= favouriteMin.x && mouse.x <= favouriteMin.x + favouriteSize.x
+				&& mouse.y >= favouriteMin.y && mouse.y <= favouriteMin.y + favouriteSize.y;
+		updateLibraryLongPress(game, items[index].id, itemActive && !mouseOverFavourite);
+		if (!contextOpen && itemHovered && !mouseOverFavourite && !ImGui::GetIO().NavVisible)
+			draw_library_game_info_hover(game, !game.device ? &artwork[index] : nullptr);
+		if (!contextOpen && !game.device && !game.path.empty())
+		{
+			ImGui::SetCursorScreenPos(favouriteMin);
+			if (drawLibraryFavouriteButton(game, true, favouriteSize))
+			{
+				favouriteAction = static_cast<int>(index);
+				resetLibraryGameInfoHover();
+			}
+			ImGui::SetCursorScreenPos(nextCursor);
+		}
+	});
+
+	auto startThemedGame = [&](size_t index, bool resume) {
+		const GameMedia& game = visibleGames[index];
+		const GameBoxart& art = artwork[index];
+		std::string statePath;
+		if (resume)
+		{
+			const SavestateInfo state = dc_getLatestStateForGame(game.path);
+			if (state.path.empty())
+			{
+				gui_error(T("No save state is available for this game. Choose Start Fresh to play."));
+				return;
+			}
+			statePath = state.path;
+		}
+		settings.content.title = art.name;
+		if (settings.content.title.empty() || settings.content.title == game.fileName)
+			settings.content.title = get_file_basename(game.fileName);
+		librarySavestateCacheInvalidated = true;
+		gui_start_library_game(game.path, resume, statePath);
+	};
+
+	if (contextAction >= 0)
+		startThemedGame(static_cast<size_t>(contextAction), contextResume);
+	else if (favouriteAction < 0 && activated >= 0)
+	{
+		settings.content.title = artwork[activated].name;
+		if (settings.content.title.empty() || settings.content.title == visibleGames[activated].fileName)
+			settings.content.title = get_file_basename(visibleGames[activated].fileName);
+		librarySavestateCacheInvalidated = true;
+		gui_start_game(visibleGames[activated].path);
+	}
+#if defined(__ANDROID__)
+	if (!ImGui::GetIO().MouseDown[ImGuiMouseButton_Left] || !touchedLibraryItemThisFrame)
+		resetLibraryLongPress();
+#endif
+	bool addFolder = false;
+#if !defined(TARGET_IPHONE)
+	if (games.empty())
+	{
+		ImGui::SetCursorScreenPos(origin + ScaledVec2(20, 20));
+		addFolder = ImGui::Button(T("Add Game Folder"));
+	}
+#endif
+	addContentPath(addFolder);
+}
+
 static void gui_display_content()
 {
 #if defined(__ANDROID__)
@@ -2433,6 +2648,7 @@ static void gui_display_content()
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
 
     ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration);
+	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
 	// Draw theme artwork first so all library controls remain above it. A dark
 	// wash preserves contrast even when users choose a bright background.
 	const std::string themeBackground = CustomTheme::assetPath("background");
@@ -2554,8 +2770,8 @@ static void gui_display_content()
 	const char* iconScaleLabel = T("Icon Size");
 	float filterWidth = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x
 			- settingsBtn.width() - ImGui::GetStyle().ItemSpacing.x - ImGui::CalcTextSize(T("Filter")).x
-			- ImGui::GetStyle().ItemSpacing.x - ImGui::CalcTextSize(iconScaleLabel).x
-			- ImGui::GetStyle().ItemSpacing.x - iconScaleSliderWidth;
+			- (customLayout == nullptr ? ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize(iconScaleLabel).x
+					+ ImGui::GetStyle().ItemSpacing.x + iconScaleSliderWidth : 0.f);
 #ifdef TARGET_UWP
 	filterWidth -= ImGui::CalcTextSize(T("Load...")).x + ImGui::GetStyle().FramePadding.x * 2
 			+ ImGui::GetStyle().ItemSpacing.x;
@@ -2564,6 +2780,8 @@ static void gui_display_content()
 	filterWidth -= exitBtn.width() + ImGui::GetStyle().ItemSpacing.x;
 #endif
 	filter.Draw(T("Filter"), filterWidth);
+	if (customLayout == nullptr)
+	{
 	ImGui::SameLine(0, 24.0f * libraryToolbarScale);
 	ImGui::SetNextItemWidth(iconScaleSliderWidth);
 	if (ImGui::SliderInt(iconScaleLabel, &libraryIconScale, 50, 200, "%d%%")) {
@@ -2572,6 +2790,7 @@ static void gui_display_content()
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         config::LibraryIconScale.save();
     }
+	}
     if (gui_state != GuiState::SelectDisk)
     {
 #ifdef TARGET_UWP
@@ -2622,6 +2841,13 @@ static void gui_display_content()
 
     boxart.refreshCustomBoxartIndex(false);
     scanner.fetch_game_list();
+	if (customLayout != nullptr)
+	{
+		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
+		ImGui::End();
+		contentpath_warning_popup();
+		return;
+	}
 
 	// Only if Filter and Settings aren't focused... ImGui::SetNextWindowFocus();
 	if (libraryThemeBackgroundVisible) ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));

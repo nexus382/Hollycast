@@ -53,5 +53,11 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/util/WorkerThreadTest.cpp)
 
 if(NOT LIBRETRO)
-    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp src/ui/CustomThemeTest.cpp src/ui/LibrarySavestateTest.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE
+        src/ui/SetupChecklistPopupTest.cpp
+        src/ui/CustomThemeTest.cpp
+        src/ui/LibrarySavestateTest.cpp
+        src/ui/ThemeTest.cpp
+        src/ui/ThemeLibraryTest.cpp
+        src/ui/ThemeInstallTest.cpp)
 endif()
