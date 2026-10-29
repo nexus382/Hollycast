@@ -1,5 +1,6 @@
 #include "Renderer_if.h"
 #include "spg.h"
+#include "rend/CustomTexture.h"
 #include "rend/texconv.h"
 #include "rend/transform_matrix.h"
 #include "cfg/option.h"
@@ -12,6 +13,7 @@
 #include "profiler/fc_profiler.h"
 #include "network/ggpo.h"
 
+#include <cassert>
 #include <mutex>
 #include <deque>
 
@@ -196,9 +198,10 @@ private:
 	{
 		FC_PROFILE_SCOPE;
 
-		TA_context *taContext = DequeueRender();
+		TA_context *taContext = GetRender();
 		if (taContext == nullptr)
 			return;
+		renderer->processGpuCleanupOperations();
 
 		int width, height;
 		getScaledFramebufferSize(taContext->rend, width, height);
@@ -217,7 +220,7 @@ private:
 			} catch (...) {
 				renderEnd.Set();
 				rend_allow_rollback();
-				FinishRender(taContext);
+				FinishRender(true);
 				throw;
 			}
 		}
@@ -233,7 +236,7 @@ private:
 			} catch (...) {
 				if (!renderToScreen)
 					renderEnd.Set();
-				FinishRender(taContext);
+				FinishRender(true);
 				throw;
 			}
 		}
@@ -244,12 +247,13 @@ private:
 			present();
 
 		//clear up & free data ..
-		FinishRender(taContext);
+		FinishRender(true);
 	}
 
 	void renderFramebuffer(const FramebufferInfo& config)
 	{
 		FC_PROFILE_SCOPE;
+		renderer->processGpuCleanupOperations();
 
 #ifdef LIBRETRO
 		int w, h;
@@ -474,15 +478,68 @@ void rend_term_renderer()
 
 	if (renderer != nullptr)
 	{
+		custom_texture.invalidateGpuPreloads();
 		renderer->Term();
 		delete renderer;
 		renderer = nullptr;
 	}
 }
 
+void rend_process_custom_texture_preloads()
+{
+	if (renderer != nullptr)
+	{
+		renderer->processGpuCleanupOperations();
+		renderer->processCustomTexturePreloads();
+	}
+}
+
+bool rend_supports_gpu_texture_preload()
+{
+	return renderer != nullptr && renderer->supportsGpuTexturePreload();
+}
+
+std::shared_ptr<GpuPreloadedTexture> Renderer::findGpuPreloadedTexture(
+		u32 currentHash, u32 oldVqHash, u32 oldHash) const
+{
+	const auto find = [this](u32 hash) -> std::shared_ptr<GpuPreloadedTexture> {
+		const auto found = gpuPreloadedTextures.find(hash);
+		return found == gpuPreloadedTextures.end() ? nullptr : found->second;
+	};
+	if (auto texture = find(currentHash))
+		return texture;
+	if (oldVqHash != 0)
+		if (auto texture = find(oldVqHash))
+			return texture;
+	if (oldHash != 0)
+		return find(oldHash);
+	return nullptr;
+}
+
+void Renderer::addGpuPreloadedTexture(u32 hash, std::shared_ptr<GpuPreloadedTexture> texture)
+{
+	assert(texture);
+	gpuPreloadedTextures.emplace(hash, std::move(texture));
+}
+
+void Renderer::clearGpuPreloadedTextures()
+{
+	gpuPreloadedTextures.clear();
+}
+
+void Renderer::processGpuCleanupOperations()
+{
+	if (custom_texture.consumeGpuCleanupOperations())
+	{
+		clearTextureCache();
+		clearGpuPreloadedTextures();
+		resetTextureCache = false;
+	}
+}
+
 void rend_reset()
 {
-	FinishRender(DequeueRender());
+	FinishRender(true);
 	render_called = false;
 	pend_rend = false;
 	FrameCount = 1;
@@ -565,7 +622,7 @@ void rend_start_render()
 			ctx->rend.swapInterval = 1;
 	}
 
-	if (QueueRender(ctx))
+	if (SetRender(ctx))
 	{
 		palette_update();
 		pend_rend = true;
@@ -628,7 +685,7 @@ void rend_cancel_emu_wait()
 {
 	if (config::ThreadedRendering)
 	{
-		FinishRender(NULL);
+		FinishRender(false);
 		renderEnd.Set();
 		rend_allow_rollback();
 		pvrQueue.cancelEnqueue();

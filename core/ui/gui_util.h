@@ -81,7 +81,7 @@ static inline void centerNextWindow()
 }
 
 void fullScreenWindow(bool modal);
-void windowDragScroll();
+void windowDragScroll(bool allowHorizontal = true);
 
 class BackgroundGameLoader
 {
@@ -132,6 +132,21 @@ private:
 
 static inline float uiScaled(float f) {
 	return f * settings.display.uiScale;
+}
+
+static inline float uiPlatformScaleFactor() {
+#if defined(__ANDROID__)
+	return 0.65f;
+#elif defined(_WIN32) || (defined(__APPLE__) && !defined(TARGET_IPHONE)) || defined(__linux__)
+	return 1.20f;
+#else
+	return 1.0f;
+#endif
+}
+
+static inline float uiUserScale() {
+	return std::max(0.01f, static_cast<float>(config::UIScaling) / 100.0f)
+			* uiPlatformScaleFactor();
 }
 
 static inline float uiLargeFontSize()
@@ -228,7 +243,7 @@ public:
 	void draw(ImDrawList *drawList, const ImVec2& pos, const ImVec2& size,
 			const ImVec2& uv0 = ImVec2(0, 0), const ImVec2& uv1 = ImVec2(1, 1), const ImVec4& color = ImVec4(1, 1, 1, 1));
 	bool button(const char* str_id, const ImVec2& image_size, const std::string& title = {}, const ImVec4& bg_col = ImVec4(0, 0, 0, 0),
-			const ImVec4& tint_col = ImVec4(1, 1, 1, 1));
+			const ImVec4& tint_col = ImVec4(1, 1, 1, 1), float fallbackTitleSize = 0.0f);
 
 	operator ImTextureID() {
 		return getId();
@@ -465,6 +480,10 @@ struct PopupSliderConfig {
     // Optional: Custom apply button
     const char* applyButtonText = "Apply";
     std::function<void()> onApply = nullptr;
+	// Capture any backing state not represented exactly by the displayed integer.
+	std::function<void()> onOpen = nullptr;
+	// Called after restoring the opening value on cancellation, for preview cleanup.
+	std::function<void()> onCancel = nullptr;
 
     // Optional: Callback for value change
     std::function<void()> onValueChange = nullptr;

@@ -49,6 +49,11 @@ else()
 	project(Hollycast)
 endif()
 
+option(FLYCAST_PRESEED_DARWIN_XCODE_CHECKS "Pre-seed stable macOS feature checks for faster Xcode generation" ON)
+if(FLYCAST_PRESEED_DARWIN_XCODE_CHECKS)
+	include(DarwinXcodeProbeCache)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(CMAKE_SYSTEM_NAME MATCHES "NetBSD|Haiku" OR NINTENDO_SWITCH)
@@ -86,6 +91,7 @@ option(USE_HOST_SDL "Use host SDL library" ${USE_HOST_SDL_DEFAULT})
 option(USE_HOST_LIBCHDR "Use host libchdr" OFF)
 option(USE_OPENMP "Use OpenMP if available" ON)
 option(USE_VULKAN "Build with Vulkan support" ON)
+set(MOLTENVK_DYLIB "" CACHE FILEPATH "Path to macOS MoltenVK dylib for macOS Vulkan builds")
 option(USE_DX9 "Build with Direct3D 9 support" ON)
 option(USE_DX11 "Build with Direct3D 11 support" ON)
 option(LIBRETRO "Build libretro core" OFF)
@@ -102,6 +108,11 @@ option(ENABLE_DC_PROFILER "Build with support for target machine (SH4) profiler"
 option(ENABLE_FC_PROFILER "Build with support for host app (Hollycast) profiler" OFF)
 option(USE_DISCORD "Use Discord Presence API" OFF)
 option(USE_LIBCDIO "Use libcdio for CDROM access" OFF)
+
+if(ASAN AND MSVC)
+	add_compile_options(/fsanitize=address)
+	add_link_options(/INCREMENTAL:NO)
+endif()
 
 if(IOS AND NOT LIBRETRO)
 	set(USE_VULKAN OFF CACHE BOOL "Force vulkan off" FORCE)
@@ -248,8 +259,6 @@ elseif(LIBRETRO)
 	endif()
 elseif(ANDROID)
 	add_library(${PROJECT_NAME} SHARED core/emulator.cpp)
-	set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_RELEASE} -O3")
-	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 	target_compile_options(${PROJECT_NAME} PRIVATE -fno-stack-protector)
 	set(CMAKE_ANDROID_STL_TYPE "c++_static")
 elseif(WIN32)
@@ -276,6 +285,25 @@ endif()
 set_target_properties(${PROJECT_NAME} PROPERTIES
 		CMAKE_CXX_STANDARD 20
 		CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_library(flycast_basis_transcoder STATIC
+		core/deps/basis_universal/transcoder/basisu_transcoder.cpp
+		core/deps/basis_universal/zstd/zstddeclib.c)
+target_compile_features(flycast_basis_transcoder PRIVATE cxx_std_17)
+target_compile_definitions(flycast_basis_transcoder PRIVATE
+		BASISD_SUPPORT_KTX2=1
+		BASISD_SUPPORT_KTX2_ZSTD=1
+		BASISD_SUPPORT_DXT1=1
+		BASISD_SUPPORT_DXT5A=1
+		BASISD_SUPPORT_ETC2_EAC_A8=1
+		BASISD_SUPPORT_XUASTC=1)
+target_include_directories(flycast_basis_transcoder PUBLIC core/deps)
+set_target_properties(flycast_basis_transcoder PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+	target_compile_options(flycast_basis_transcoder PRIVATE
+			$<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>)
+endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE flycast_basis_transcoder)
 
 if(WINDOWS_STORE)
 	set(USE_OPENGL OFF)
@@ -698,7 +726,28 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
 endif()
 
 if(ASAN)
-	if(ANDROID)
+	if(MSVC)
+		# Copy address sanitizer runtime dll to output
+		if(ARCHITECTURE STREQUAL "x86_64")
+			set(MSVC_ASAN_ARCH x86_64)
+		elseif(ARCHITECTURE STREQUAL "x86")
+			set(MSVC_ASAN_ARCH i386)
+		elseif(ARCHITECTURE STREQUAL "arm64")
+			set(MSVC_ASAN_ARCH aarch64)
+		else()
+			message(FATAL_ERROR "MSVC AddressSanitizer is not supported for ${ARCHITECTURE}")
+		endif()
+		get_filename_component(MSVC_COMPILER_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+		set(MSVC_ASAN_RUNTIME "${MSVC_COMPILER_DIR}/clang_rt.asan_dynamic-${MSVC_ASAN_ARCH}.dll")
+		if(NOT EXISTS "${MSVC_ASAN_RUNTIME}")
+			message(FATAL_ERROR "MSVC AddressSanitizer runtime not found: ${MSVC_ASAN_RUNTIME}")
+		endif()
+		add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${MSVC_ASAN_RUNTIME}"
+				"$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+			VERBATIM)
+	elseif(ANDROID)
 		target_compile_options(${PROJECT_NAME} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
 		set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS -fsanitize=address)
 	else()
@@ -1420,26 +1469,15 @@ if(NOT LIBRETRO)
 				${IOSURFACE_LIBRARY}
 				${MULTITOUCH_SUPPORT_LIBRARY})
 
-			# Determine the source path of MoltenVK
-			if(NOT "$ENV{VULKAN_SDK}" STREQUAL "")
-				message(STATUS "Searching for MoltenVK under VULKAN_SDK: $ENV{VULKAN_SDK}")
-				set(MOLTENVK_SRC "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
-			else()
-				# Fallback assumption (default location after: brew install molten-vk)
-				set(MOLTENVK_SRC "/usr/local/lib/libMoltenVK.dylib")
+			if(USE_VULKAN)
+				set(MOLTENVK_DYLIB_PATH "${MOLTENVK_DYLIB}")
+				if(NOT MOLTENVK_DYLIB_PATH OR NOT EXISTS "${MOLTENVK_DYLIB_PATH}")
+					message(FATAL_ERROR "A macOS MoltenVK dylib is required for macOS Vulkan builds. Run shell/apple/generate_xcode_project.command to download the configured MoltenVK release, or pass -DMOLTENVK_DYLIB=/path/to/libMoltenVK.dylib.")
+				endif()
+				add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy "${MOLTENVK_DYLIB_PATH}"
+					$<TARGET_FILE_DIR:Hollycast>/../Frameworks/libMoltenVK.dylib)
 			endif()
-
-			if(NOT EXISTS "${MOLTENVK_SRC}")
-				message(
-					FATAL_ERROR
-					"MoltenVK library not found! Set VULKAN_SDK in environment or install with: brew install molten-vk"
-				)
-			endif()
-			message(STATUS "Found MoltenVK at: ${MOLTENVK_SRC}")
-
-			add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy "${MOLTENVK_SRC}"
-				$<TARGET_FILE_DIR:Hollycast>/../Frameworks/libvulkan.dylib)
 		endif()
 	elseif(UNIX)
 		if(NOT BUILD_TESTING)
