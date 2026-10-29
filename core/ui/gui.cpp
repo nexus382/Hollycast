@@ -55,6 +55,7 @@
 #include "vgamepad.h"
 #include "settings.h"
 #include "settings_new.h"
+#include "rend/postprocess/shader_chain.h"
 #include "oslib/i18n.h"
 #include "gui_font.h"
 using namespace i18n;
@@ -275,6 +276,9 @@ void gui_keyboard_inputUTF8(const std::string& s)
 
 void gui_keyboard_key(u8 keyCode, bool pressed)
 {
+#ifndef LIBRETRO
+	postprocess::setShaderHostKey(keyCode, pressed);
+#endif
 	if (!inited)
 		return;
 	ImGuiKey key = keycodeToImGuiKey(keyCode);
@@ -304,6 +308,9 @@ void gui_set_mouse_position(int x, int y, bool touchscreen)
 	mouseX = std::round(x * settings.display.pointScale);
 	mouseY = std::round(y * settings.display.pointScale);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 void gui_set_mouse_button(int button, bool pressed, bool touchscreen)
@@ -313,10 +320,16 @@ void gui_set_mouse_button(int button, bool pressed, bool touchscreen)
 	else
 		mouseButtons &= ~(1 << button);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 void gui_set_mouse_wheel(float delta) {
 	mouseWheel += delta;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons, delta);
+#endif
 	mouseTouchscreen = false;
 }
 

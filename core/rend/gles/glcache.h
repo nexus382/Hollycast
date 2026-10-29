@@ -28,6 +28,9 @@ public:
 		_texture = 0xFFFFFFFFu;
 	}
 
+	// Indexed shader blending bypasses the legacy single-attachment cache.
+	void InvalidateBlendState() { _src_blend_factor = _dst_blend_factor = _blend_equation = 0xFFFFFFFFu; _en_blend = 0xFF; }
+
 	void BlendFunc(GLenum sfactor, GLenum dfactor) {
 		if (sfactor != _src_blend_factor || dfactor != _dst_blend_factor || _disable_cache) {
 			_src_blend_factor = sfactor;

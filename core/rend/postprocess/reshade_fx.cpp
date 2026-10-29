@@ -9,6 +9,7 @@
 	(at your option) any later version.
 */
 #include "reshade_fx.h"
+#include "effect_preprocessor.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -522,6 +523,20 @@ bool preprocess(const std::string& source,
 		++lineNumber;
 		if (!line.empty() && line.back() == '\r')
 			line.pop_back();
+		// Splice physical lines before classifying comments or directives. Shader
+		// libraries use continued function macros to instantiate typed helpers.
+		while (!line.empty() && line.back() == '\\') {
+			std::string continuation;
+			if (!std::getline(lines, continuation)) {
+				error = "line " + std::to_string(lineNumber) + ": unterminated shader line continuation.";
+				return false;
+			}
+			++lineNumber;
+			if (!continuation.empty() && continuation.back() == '\r')
+				continuation.pop_back();
+			line.pop_back();
+			line += continuation;
+		}
 		const bool startsInBlockComment = inBlockComment;
 		const std::vector<bool> mask = codeMask(line, startsInBlockComment, &inBlockComment);
 		size_t directiveStart = 0;
@@ -690,7 +705,13 @@ bool lex(const std::string& source, std::vector<Token>& tokens, std::string& err
 		if (current == '#') {
 			while (index < source.size() && source[index] != '\n')
 				++index;
-			tokens.push_back({ TokenKind::Directive, source.substr(begin, index - begin), begin, index, tokenLine });
+			const std::string directive = source.substr(begin, index - begin);
+			// The preprocessor emits #line between adjacent annotation strings and
+			// macro-expanded declaration tokens. It is source bookkeeping, not part
+			// of the declaration grammar; keep offsets but omit it from metadata.
+			static const std::regex lineDirective(R"(^#\s*line\b)");
+			if (!std::regex_search(directive, lineDirective))
+				tokens.push_back({ TokenKind::Directive, directive, begin, index, tokenLine });
 			continue;
 		}
 		if (isIdentifierStart(current)) {
@@ -799,6 +820,7 @@ private:
 		}
 		if (match(";"))
 			return true;
+		if (isSymbol("[")) { size_t begin, end; return consumeBalanced("[", "]", begin, end); }
 		if (isIdentifier("namespace"))
 			return parseNamespace();
 		if (isIdentifier("uniform"))
@@ -858,6 +880,7 @@ private:
 	{
 		if (!isSymbol("<"))
 			return true;
+		const size_t annotationBegin = current().begin;
 		++position;
 		while (!isEnd() && !isSymbol(">")) {
 		std::string name;
@@ -899,6 +922,7 @@ private:
 		}
 		if (!match(">"))
 			return fail("unterminated annotation block.");
+		effect.annotationRanges.emplace_back(annotationBegin, tokens[position - 1].end);
 		return true;
 	}
 	bool skipArraySuffix()
@@ -1013,16 +1037,34 @@ private:
 		if (!parseAnnotations(annotations) || !match("{"))
 			return isSymbol("{") ? false : fail("expected pass state block.");
 		const size_t bodyBegin = tokens[position - 1].end;
+		pass.bodyBegin = bodyBegin;
 		while (!isEnd() && !isSymbol("}")) {
-			if (isIdentifier("VertexShader") || isIdentifier("PixelShader")) {
+			if (isIdentifier("VertexShader") || isIdentifier("PixelShader") || isIdentifier("ComputeShader")) {
 				const bool pixelShader = isIdentifier("PixelShader");
+				const bool computeShader = isIdentifier("ComputeShader");
 				++position;
 				if (!match("="))
 					return fail("expected '=' in pass shader assignment.");
 				std::string entryPoint;
-				if (!takeIdentifier(entryPoint, "shader entry point") || !match(";"))
+				if (!takeIdentifier(entryPoint, "shader entry point"))
 					return false;
-				if (pixelShader)
+				while (match("::")) {
+					std::string member;
+					if (!takeIdentifier(member, "qualified shader entry point"))
+						return false;
+					entryPoint += "::" + member;
+				}
+				// Compute workgroup sizes may be attached to the pass entry point.
+				if (isSymbol("<")) {
+					size_t begin, end;
+					if (!consumeBalanced("<", ">", begin, end))
+						return false;
+				}
+				if (!match(";"))
+					return fail("expected ';' after shader entry point.");
+				if (computeShader)
+					pass.computeShader = std::move(entryPoint);
+				else if (pixelShader)
 					pass.pixelShader = std::move(entryPoint);
 				else
 					pass.vertexShader = std::move(entryPoint);
@@ -1078,9 +1120,13 @@ private:
 		if (!consumeStatement(declarationBegin, definition))
 			return false;
 		if (isTextureType(typeName))
-			effect.textures.push_back({ std::move(typeName), std::move(name), std::move(definition), std::move(annotations) });
+			effect.textures.push_back({ std::move(typeName), std::move(name), std::move(definition), std::move(annotations),
+					declarationBegin, tokens[position - 1].end });
+		else if (lowercase(typeName).find("storage") != std::string::npos)
+			effect.storages.push_back({ std::move(typeName), std::move(name), std::move(definition), std::move(annotations), declarationBegin, tokens[position - 1].end });
 		else
-			effect.samplers.push_back({ std::move(typeName), std::move(name), std::move(definition), std::move(annotations) });
+			effect.samplers.push_back({ std::move(typeName), std::move(name), std::move(definition), std::move(annotations),
+					declarationBegin, tokens[position - 1].end });
 		return true;
 	}
 	bool parseFunction(const std::string& returnType, const std::string& name, size_t declarationBegin)
@@ -1122,7 +1168,8 @@ private:
 	{
 		for (size_t techniqueIndex = 0; techniqueIndex < effect.techniques.size(); ++techniqueIndex) {
 			for (size_t passIndex = 0; passIndex < effect.techniques[techniqueIndex].passes.size(); ++passIndex) {
-				if (!effect.techniques[techniqueIndex].passes[passIndex].pixelShader.empty()) {
+				if (!effect.techniques[techniqueIndex].passes[passIndex].pixelShader.empty()
+						|| !effect.techniques[techniqueIndex].passes[passIndex].computeShader.empty()) {
 					effect.selectedTechnique = techniqueIndex;
 					effect.selectedPass = passIndex;
 					return;
@@ -1136,6 +1183,12 @@ private:
 		if (type == "bool") return ReShadeValueType::Bool;
 		if (type == "int") return ReShadeValueType::Int;
 		if (type == "uint") return ReShadeValueType::UInt;
+		if (type == "int2") return ReShadeValueType::Int2;
+		if (type == "int3") return ReShadeValueType::Int3;
+		if (type == "int4") return ReShadeValueType::Int4;
+		if (type == "uint2") return ReShadeValueType::UInt2;
+		if (type == "uint3") return ReShadeValueType::UInt3;
+		if (type == "uint4") return ReShadeValueType::UInt4;
 		if (type == "float") return ReShadeValueType::Float;
 		if (type == "float2") return ReShadeValueType::Float2;
 		if (type == "float3") return ReShadeValueType::Float3;
@@ -1152,7 +1205,7 @@ private:
 	static bool isResourceType(const std::string& typeName)
 	{
 		const std::string type = lowercase(typeName);
-		return type.find("texture") != std::string::npos || type.find("sampler") != std::string::npos;
+		return type.find("texture") != std::string::npos || type.find("sampler") != std::string::npos || type.find("storage") != std::string::npos;
 	}
 
 	const std::string& source;
@@ -1173,25 +1226,31 @@ bool preprocessShaderSource(const std::string& source,
 
 bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::string& error)
 {
-	if (std::regex_search(source, std::regex(
-			R"(\bReShade\s*::\s*(?:DepthBuffer|GetLinearizedDepth)\b)"))) {
-		error = "ReShade FX requires a depth buffer, which is unavailable to display shader chains.";
-		return false;
-	}
 	// Advertise the fixed host profile implemented by HollyCast. Buffer values
-	// remain expressions so every backend receives the current pass dimensions.
+	// remain expressions so every backend receives the current backbuffer dimensions.
 	const std::unordered_map<std::string, std::string> hostDefines {
 		{ "__RESHADE__", "60000" },
 		{ "__RESHADE_FXC__", "1" },
-		{ "BUFFER_WIDTH", "OutputSize.x" },
-		{ "BUFFER_HEIGHT", "OutputSize.y" },
-		{ "BUFFER_RCP_WIDTH", "(1.0 / OutputSize.x)" },
-		{ "BUFFER_RCP_HEIGHT", "(1.0 / OutputSize.y)" },
+		{ "BUFFER_WIDTH", "FinalViewportSize.x" },
+		{ "BUFFER_HEIGHT", "FinalViewportSize.y" },
+		{ "BUFFER_RCP_WIDTH", "(1.0 / FinalViewportSize.x)" },
+		{ "BUFFER_RCP_HEIGHT", "(1.0 / FinalViewportSize.y)" },
 		{ "BUFFER_COLOR_BIT_DEPTH", "8" },
 	};
-	std::string preprocessed;
-	if (!preprocessShaderSource(source, hostDefines, preprocessed, error))
+	// Package loading resolves includes inside its validated root before the
+	// compiler sees source. Never let the compiler open an arbitrary include.
+	if (std::regex_search(source, std::regex(R"((^|\n)[ \t]*#[ \t]*include\b)"))) {
+		error = "ReShade FX includes must be resolved by the shader package loader.";
 		return false;
+	}
+	reshadefx::preprocessor preprocessor;
+	for (const auto& define : hostDefines)
+		preprocessor.add_macro_definition(define.first, define.second);
+	if (!preprocessor.append_string(source)) {
+		error = preprocessor.errors();
+		return false;
+	}
+	const std::string& preprocessed = preprocessor.output();
 	std::vector<Token> tokens;
 	if (!lex(preprocessed, tokens, error))
 		return false;
@@ -1199,6 +1258,7 @@ bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::s
 	Parser parser(preprocessed, tokens, parsed, error);
 	if (!parser.parse())
 		return false;
+	parsed.preprocessedSource = preprocessed;
 	effect = std::move(parsed);
 	error.clear();
 	return true;

@@ -168,16 +168,17 @@ bool parseBlendFactor(const std::string& value, ShaderBlendFactor& factor)
 {
 	std::string upper = value;
 	std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char character) { return static_cast<char>(std::toupper(character)); });
+	upper.erase(std::remove(upper.begin(), upper.end(), '_'), upper.end());
 	if (upper == "ZERO") factor = ShaderBlendFactor::Zero;
 	else if (upper == "ONE") factor = ShaderBlendFactor::One;
-	else if (upper == "SRC_COLOR") factor = ShaderBlendFactor::SourceColor;
-	else if (upper == "INV_SRC_COLOR") factor = ShaderBlendFactor::OneMinusSourceColor;
-	else if (upper == "DEST_COLOR") factor = ShaderBlendFactor::DestinationColor;
-	else if (upper == "INV_DEST_COLOR") factor = ShaderBlendFactor::OneMinusDestinationColor;
-	else if (upper == "SRC_ALPHA") factor = ShaderBlendFactor::SourceAlpha;
-	else if (upper == "INV_SRC_ALPHA") factor = ShaderBlendFactor::OneMinusSourceAlpha;
-	else if (upper == "DEST_ALPHA") factor = ShaderBlendFactor::DestinationAlpha;
-	else if (upper == "INV_DEST_ALPHA") factor = ShaderBlendFactor::OneMinusDestinationAlpha;
+	else if (upper == "SRCCOLOR") factor = ShaderBlendFactor::SourceColor;
+	else if (upper == "INVSRCCOLOR") factor = ShaderBlendFactor::OneMinusSourceColor;
+	else if (upper == "DESTCOLOR") factor = ShaderBlendFactor::DestinationColor;
+	else if (upper == "INVDESTCOLOR") factor = ShaderBlendFactor::OneMinusDestinationColor;
+	else if (upper == "SRCALPHA") factor = ShaderBlendFactor::SourceAlpha;
+	else if (upper == "INVSRCALPHA") factor = ShaderBlendFactor::OneMinusSourceAlpha;
+	else if (upper == "DESTALPHA") factor = ShaderBlendFactor::DestinationAlpha;
+	else if (upper == "INVDESTALPHA") factor = ShaderBlendFactor::OneMinusDestinationAlpha;
 	else return false;
 	return true;
 }
@@ -204,7 +205,12 @@ bool fail(std::string& error, const std::string& message);
 bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std::string& error)
 {
 	static const std::unordered_set<std::string> supportedStates {
-		"blendenable", "srcblend", "destblend", "blendop", "vertexshader", "pixelshader"
+		"blendenable", "srcblend", "destblend", "blendop", "vertexshader", "pixelshader", "computeshader",
+		"srcblendalpha", "destblendalpha", "blendopalpha", "colorwritemask", "rendertargetwritemask",
+		"clearrendertargets", "generatemipmaps", "srgbwriteenable", "stencilenable", "stencilreadmask",
+		"stencilwritemask", "stencilref", "stencilfunc", "stencilpass", "stencilfail", "stencilzfail",
+		"stencilmask", "stencilpassop", "stencilfailop", "stencildepthfail", "stencildepthfailop", "primitivetype",
+		"viewportwidth", "viewportheight", "dispatchsizex", "dispatchsizey", "dispatchsizez", "vertexcount", "primitivetopology"
 	};
 	static const std::regex renderTargetState(R"(rendertarget[0-7]?)", std::regex::icase);
 	const std::regex assignment(R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*=)");
@@ -214,7 +220,8 @@ bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std:
 		std::transform(name.begin(), name.end(), name.begin(),
 				[](unsigned char character) { return static_cast<char>(std::tolower(character)); });
 		if (supportedStates.find(name) == supportedStates.end()
-				&& !std::regex_match(name, renderTargetState))
+				&& !std::regex_match(name, renderTargetState)
+				&& !std::regex_match(name, std::regex(R"((?:blendenable|srcblend|destblend|blendop|srcblendalpha|destblendalpha|blendopalpha|colorwritemask|rendertargetwritemask)[0-7])")))
 			return fail(error, "ReShade FX pass state '" + (*it)[1].str() + "' is not supported.");
 	}
 
@@ -264,8 +271,7 @@ bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std:
 			return false;
 		}
 	}
-	if (pass.blendEnabled && pass.outputs.size() > 1)
-		return fail(error, "ReShade FX blending with multiple render targets is not supported.");
+
 	return true;
 }
 
@@ -284,20 +290,9 @@ bool configureReShadeOutputFormat(const ReShadeEffect& effect, ShaderPassOutput&
 	std::transform(format.begin(), format.end(), format.begin(), [](unsigned char character) {
 		return static_cast<char>(std::toupper(character));
 	});
-	if (format == "RGBA8" || format == "RGBA8_UNORM")
-		output.targetFormatName = "R8G8B8A8_UNORM";
-	else if (format == "RGBA8_SRGB" || format == "SRGBA8")
-		output.targetFormatName = "R8G8B8A8_SRGB";
-	else if (format == "RGBA16F" || format == "RGBA16_FLOAT")
-		output.targetFormatName = "R16G16B16A16_SFLOAT";
-	else if (format == "RGBA16" || format == "RGBA16_UNORM")
-		output.targetFormatName = "R16G16B16A16_UNORM";
-	else if (format == "RGBA32F" || format == "RGBA32_FLOAT")
-		output.targetFormatName = "R32G32B32A32_SFLOAT";
-	else {
-		error = "ReShade FX render target '" + output.alias + "' uses unsupported format '" + formatMatch[1].str() + "'.";
-		return false;
-	}
+	output.targetFormatName = canonicalShaderFormat(format);
+	if (output.targetFormatName.empty())
+		return fail(error, "Unknown shader texture format: " + format);
 	return true;
 }
 
@@ -324,7 +319,12 @@ bool fail(std::string& error, const std::string& message)
 bool findPassOutput(const ShaderChain& chain, const std::string& alias, size_t lastPass,
 		uint32_t& sourcePass, uint32_t& sourceOutput)
 {
-	for (size_t index = 0; index <= lastPass && index < chain.passes.size(); ++index) {
+	if (chain.passes.empty())
+		return false;
+	// A named FX render target can be overwritten. Readers observe the most
+	// recent producer, while feedback reads the final producer of the last frame.
+	for (size_t remaining = std::min(lastPass, chain.passes.size() - 1) + 1; remaining != 0; --remaining) {
+		const size_t index = remaining - 1;
 		const ShaderPass& pass = chain.passes[index];
 		if (pass.alias == alias) {
 			sourcePass = static_cast<uint32_t>(index);
@@ -378,7 +378,7 @@ bool parseIndexedSemantic(const std::string& value, const char *prefix, uint32_t
 }
 
 bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
-		const ShaderPassSource& source, std::string& error)
+		const ShaderPassSource& source, std::string& error, bool allowExternalFxTargets = false)
 {
 	ShaderPass& pass = chain.passes[passIndex];
 	pass.inputs.clear();
@@ -387,6 +387,11 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 		ShaderPassInput input;
 		input.bindingName = resource.name;
 		input.resourceName = resource.alias;
+		input.type = resource.type;
+		if (input.type >= SlangResourceType::Texture1D && input.type <= SlangResourceType::TextureCube)
+			input.type = static_cast<SlangResourceType>(static_cast<unsigned>(input.type) - static_cast<unsigned>(SlangResourceType::Texture1D));
+		input.numericType = resource.numericType;
+		input.formatName = resource.formatName;
 		if (source.retroArchGlsl) {
 			if (resource.name == "OrigTexture") {
 				input.kind = ShaderInputKind::Original;
@@ -403,12 +408,44 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 				uint32_t distance;
 				if (!parseShaderUnsigned(previousPass[1].str(), distance))
 					return fail(error, "RetroArch GLSL resource '" + resource.name + "' has an invalid pass distance.");
-				if (distance >= passIndex)
+				// PassPrev1 is the immediately preceding result. PassPrevN with
+				// N equal to the current one-based pass number is the original frame.
+				if (distance > passIndex + 1)
+					return fail(error, "GLSL previous-pass texture precedes the original frame.");
+				if (passIndex == 0 || distance == passIndex + 1)
 					input.kind = ShaderInputKind::Original;
 				else {
 					input.kind = ShaderInputKind::PassOutput;
-					input.sourcePass = static_cast<uint32_t>(passIndex - distance - 1);
+					input.sourcePass = static_cast<uint32_t>(passIndex - std::max(1u, distance));
 				}
+				pass.inputs.push_back(std::move(input));
+				continue;
+			}
+			std::smatch indexed;
+			if (std::regex_match(resource.name, indexed, std::regex(R"(Pass([1-9][0-9]*)Texture)"))) {
+				uint32_t number;
+				if (!parseShaderUnsigned(indexed[1].str(), number) || number > passIndex)
+					return fail(error, "GLSL pass texture must reference an earlier pass.");
+				input.kind = ShaderInputKind::PassOutput;
+				input.sourcePass = number - 1;
+				pass.inputs.push_back(std::move(input));
+				continue;
+			}
+			if (std::regex_match(resource.name, indexed, std::regex(R"(Prev([0-9]*)Texture)"))) {
+				uint32_t number = 0;
+				if ((!indexed[1].str().empty() && !parseShaderUnsigned(indexed[1].str(), number))
+						|| number >= MaxHistoryFrames - 1)
+					return fail(error, "GLSL history texture exceeds the supported frame count.");
+				input.kind = ShaderInputKind::History;
+				input.historyOffset = number + 1;
+				pass.inputs.push_back(std::move(input));
+				continue;
+			}
+			if (resource.name == "FeedbackTexture") {
+				if (chain.feedbackPass == InvalidShaderPass)
+					return fail(error, "GLSL FeedbackTexture requires a preset feedback_pass.");
+				input.kind = ShaderInputKind::Feedback;
+				input.sourcePass = chain.feedbackPass;
 				pass.inputs.push_back(std::move(input));
 				continue;
 			}
@@ -419,6 +456,9 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 			break;
 		case SlangResourceConvention::Original:
 			input.kind = ShaderInputKind::Original;
+			break;
+		case SlangResourceConvention::Depth:
+			input.kind = ShaderInputKind::Depth;
 			break;
 		case SlangResourceConvention::PassAlias: {
 			uint32_t semanticIndex;
@@ -442,9 +482,14 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 				break;
 			}
 			input.kind = ShaderInputKind::PassOutput;
-			if (!findPassOutput(chain, resource.alias, passIndex, input.sourcePass, input.sourceOutput)
-					|| input.sourcePass >= passIndex)
-				return fail(error, "Slang resource '" + resource.name + "' must reference an earlier pass alias or preset texture.");
+			if (!findPassOutput(chain, resource.alias, passIndex == 0 ? 0 : passIndex - 1, input.sourcePass, input.sourceOutput)
+					|| input.sourcePass >= passIndex) {
+				// Techniques from one FX file can bracket other layers and share a
+				// named target. Resolve that target after this layer joins the stack.
+				input.sourcePass = InvalidShaderPass;
+				if (!allowExternalFxTargets || pass.format != ShaderFormat::ReShadeFX)
+					return fail(error, "Shader resource '" + resource.name + "' must reference an earlier pass alias or preset texture.");
+			}
 			break;
 		}
 		case SlangResourceConvention::History:
@@ -457,7 +502,7 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 			input.kind = ShaderInputKind::History;
 			input.historyOffset = resource.historyOffset;
 			if (resource.alias != "Original" && resource.alias != "Source") {
-				if (!findPassOutput(chain, resource.alias, passIndex, input.sourcePass, input.sourceOutput)
+				if (!findPassOutput(chain, resource.alias, passIndex == 0 ? 0 : passIndex - 1, input.sourcePass, input.sourceOutput)
 						|| input.sourcePass >= passIndex)
 					return fail(error, "Slang history resource '" + resource.name + "' must reference an earlier pass alias.");
 			}
@@ -473,6 +518,19 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 				return fail(error, "Slang feedback resource '" + resource.name + "' has no matching pass alias.");
 			break;
 		}
+		if (input.kind == ShaderInputKind::PassOutput || input.kind == ShaderInputKind::Feedback
+				|| (input.kind == ShaderInputKind::History && input.sourcePass != InvalidShaderPass)) {
+			if (input.sourcePass != InvalidShaderPass) {
+				const auto& producer = chain.passes[input.sourcePass];
+				const auto& output = producer.outputs.empty() ? ShaderPassOutput{} : producer.outputs[input.sourceOutput];
+				const auto format = output.targetFormatName.empty() ? producer.targetFormatName : output.targetFormatName;
+				if (input.type != output.type || input.numericType != shaderFormatNumericType(format))
+					return fail(error, "Shader resource '" + resource.name + "' has a different dimension or texel type from its producer.");
+			}
+		}
+		else if (input.kind != ShaderInputKind::LookupTexture
+				&& (input.type != SlangResourceType::Sampler2D || input.numericType != ShaderNumericType::Float))
+			return fail(error, "Host frame and depth inputs require floating-point sampler2D bindings.");
 		pass.inputs.push_back(std::move(input));
 	}
 	return true;
@@ -532,7 +590,7 @@ bool isReShadeLookupTexture(const ReShadeEffect& effect, const std::string& text
 }
 
 struct ReShadeSamplerState {
-	std::optional<bool> linearFilter;
+	std::optional<bool> linearFilter = true;
 	bool useMipmaps = false;
 	std::optional<ShaderWrapMode> wrapMode;
 };
@@ -749,7 +807,7 @@ void removePortableInterfaceDeclarations(std::string& source, const std::vector<
 			R"(^\s*(?:layout\s*\([^\n]*\)\s*)?(?:in|out)\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?[^;\n]*\b(?:vTexCoord|FragColor)\s*;\s*$)",
 			std::regex::icase);
 	const std::regex frameDeclaration(
-			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:sampler2D|vec2|int)\s+(?:Source|SourceSize|OriginalSize|OutputSize|FrameCount|Rotation)\s*;\s*$)",
+			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:sampler2D|vec2|int)\s+(?:Source|SourceSize|OriginalSize|OutputSize|FinalViewportSize|FrameCount|Rotation)\s*;\s*$)",
 			std::regex::icase);
 	const std::regex parameterDeclaration(
 			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:float|int|bool)\s+([^;]+)\s*;\s*$)",
@@ -841,6 +899,8 @@ bool mergeShaderParameter(ShaderChain& chain, const ShaderParameter& reflected, 
 		existing->maximumValues = reflected.maximumValues;
 		existing->stepValues = reflected.stepValues;
 		existing->choiceLabels = reflected.choiceLabels;
+		existing->hostSource = reflected.hostSource; existing->hostKey = reflected.hostKey;
+		existing->hostToggle = reflected.hostToggle; existing->hostPress = reflected.hostPress;
 		if (preservePresetValue) {
 			existing->value = presetValue;
 			existing->values = presetValues;
@@ -884,15 +944,15 @@ bool normalizeShaderParameterValue(const ShaderParameter& parameter, uint32_t co
 	return true;
 }
 
-enum class DuckStationOptionType {
+enum class DisplayOptionType {
 	Invalid,
 	Bool,
 	Float,
 	Int,
 };
 
-struct DuckStationOption {
-	DuckStationOptionType type = DuckStationOptionType::Invalid;
+struct DisplayOption {
+	DisplayOptionType type = DisplayOptionType::Invalid;
 	std::string name;
 	std::string label;
 	std::array<float, 4> minimum {};
@@ -905,7 +965,7 @@ struct DuckStationOption {
 	uint32_t stepCount = 0;
 };
 
-bool parseDuckStationOptionValues(const std::string& text, std::array<float, 4>& values,
+bool parseDisplayOptionValues(const std::string& text, std::array<float, 4>& values,
 		uint32_t& count)
 {
 	std::string normalized = text;
@@ -920,21 +980,21 @@ bool parseDuckStationOptionValues(const std::string& text, std::array<float, 4>&
 	return count != 0;
 }
 
-bool appendDuckStationOption(DuckStationOption& option, std::vector<ShaderParameter>& parameters,
+bool appendDisplayOption(DisplayOption& option, std::vector<ShaderParameter>& parameters,
 		std::string& error)
 {
-	if (option.type == DuckStationOptionType::Invalid)
+	if (option.type == DisplayOptionType::Invalid)
 		return true;
 	if (!isValidIdentifier(option.name))
-		return fail(error, "DuckStation GLSL option has an invalid or missing OptionName.");
+		return fail(error, "Display GLSL option has an invalid or missing OptionName.");
 	if (std::any_of(parameters.begin(), parameters.end(), [&](const ShaderParameter& parameter) {
 		return parameter.name == option.name;
 	}))
-		return fail(error, "Duplicate DuckStation GLSL option '" + option.name + "'.");
+		return fail(error, "Duplicate Display GLSL option '" + option.name + "'.");
 
-	if (option.type == DuckStationOptionType::Bool) {
+	if (option.type == DisplayOptionType::Bool) {
 		if (option.valueCount != 1)
-			return fail(error, "DuckStation GLSL boolean options require one DefaultValue.");
+			return fail(error, "Display GLSL boolean options require one DefaultValue.");
 		option.minimum[0] = 0.f;
 		option.maximum[0] = 1.f;
 		option.step[0] = 1.f;
@@ -942,15 +1002,15 @@ bool appendDuckStationOption(DuckStationOption& option, std::vector<ShaderParame
 	}
 	const uint32_t components = option.valueCount;
 	if (components == 0 || option.minimumCount != components || option.maximumCount != components
-			|| option.stepCount != components || (option.type == DuckStationOptionType::Int && components != 1))
-		return fail(error, "DuckStation GLSL option ranges must use matching scalar or vector component counts.");
+			|| option.stepCount != components || (option.type == DisplayOptionType::Int && components != 1))
+		return fail(error, "Display GLSL option ranges must use matching scalar or vector component counts.");
 
 	ShaderParameter parameter;
 	parameter.name = option.name;
 	parameter.label = option.label.empty() ? option.name : option.label;
 	parameter.componentCount = components;
-	parameter.type = option.type == DuckStationOptionType::Bool ? SlangParameterType::Bool
-			: option.type == DuckStationOptionType::Int ? SlangParameterType::Int
+	parameter.type = option.type == DisplayOptionType::Bool ? SlangParameterType::Bool
+			: option.type == DisplayOptionType::Int ? SlangParameterType::Int
 			: components == 2 ? SlangParameterType::Float2
 			: components == 3 ? SlangParameterType::Float3
 			: components == 4 ? SlangParameterType::Float4 : SlangParameterType::Float;
@@ -960,7 +1020,7 @@ bool appendDuckStationOption(DuckStationOption& option, std::vector<ShaderParame
 				|| option.minimum[component] > option.maximum[component]
 				|| option.value[component] < option.minimum[component]
 				|| option.value[component] > option.maximum[component] || option.step[component] <= 0.f)
-			return fail(error, "DuckStation GLSL option '" + option.name + "' has an invalid range.");
+			return fail(error, "Display GLSL option '" + option.name + "' has an invalid range.");
 		parameter.minimumValues[component] = option.minimum[component];
 		parameter.maximumValues[component] = option.maximum[component];
 		parameter.values[component] = option.value[component];
@@ -975,7 +1035,7 @@ bool appendDuckStationOption(DuckStationOption& option, std::vector<ShaderParame
 	return true;
 }
 
-bool parseDuckStationOptions(const std::string& shaderText, std::vector<ShaderParameter>& parameters,
+bool parseDisplayOptions(const std::string& shaderText, std::vector<ShaderParameter>& parameters,
 		std::string& error)
 {
 	constexpr std::string_view Start = "[configuration]";
@@ -985,59 +1045,59 @@ bool parseDuckStationOptions(const std::string& shaderText, std::vector<ShaderPa
 	if (begin == std::string::npos && end == std::string::npos)
 		return true;
 	if (begin == std::string::npos || end == std::string::npos || end < begin + Start.size())
-		return fail(error, "DuckStation GLSL has a malformed configuration block.");
+		return fail(error, "Display GLSL has a malformed configuration block.");
 
-	DuckStationOption option;
+	DisplayOption option;
 	std::istringstream lines(shaderText.substr(begin + Start.size(), end - begin - Start.size()));
 	for (std::string line; std::getline(lines, line);) {
 		line = trim_ws(line, " \t\r");
 		if (line.empty())
 			continue;
 		if (line.front() == '[' && line.back() == ']') {
-			if (!appendDuckStationOption(option, parameters, error))
+			if (!appendDisplayOption(option, parameters, error))
 				return false;
 			const std::string section = line.substr(1, line.size() - 2);
-			option.type = section == "OptionBool" ? DuckStationOptionType::Bool
-					: section == "OptionRangeFloat" ? DuckStationOptionType::Float
-					: section == "OptionRangeInteger" ? DuckStationOptionType::Int
-					: DuckStationOptionType::Invalid;
-			if (option.type == DuckStationOptionType::Invalid)
-				return fail(error, "DuckStation GLSL uses unsupported option section '" + section + "'.");
+			option.type = section == "OptionBool" ? DisplayOptionType::Bool
+					: section == "OptionRangeFloat" ? DisplayOptionType::Float
+					: section == "OptionRangeInteger" ? DisplayOptionType::Int
+					: DisplayOptionType::Invalid;
+			if (option.type == DisplayOptionType::Invalid)
+				return fail(error, "Display GLSL uses unsupported option section '" + section + "'.");
 			continue;
 		}
-		if (option.type == DuckStationOptionType::Invalid)
+		if (option.type == DisplayOptionType::Invalid)
 			continue;
 		const size_t separator = line.find('=');
 		if (separator == std::string::npos)
-			return fail(error, "DuckStation GLSL option contains a malformed setting.");
+			return fail(error, "Display GLSL option contains a malformed setting.");
 		const std::string key = trim_ws(line.substr(0, separator), " \t");
 		const std::string value = trim_ws(line.substr(separator + 1), " \t");
 		if (key == "GUIName") option.label = value;
 		else if (key == "OptionName") option.name = value;
 		else if (key == "DependentOption") continue;
 		else if (key == "MinValue") {
-			if (!parseDuckStationOptionValues(value, option.minimum, option.minimumCount))
-				return fail(error, "DuckStation GLSL option has an invalid MinValue.");
+			if (!parseDisplayOptionValues(value, option.minimum, option.minimumCount))
+				return fail(error, "Display GLSL option has an invalid MinValue.");
 		}
 		else if (key == "MaxValue") {
-			if (!parseDuckStationOptionValues(value, option.maximum, option.maximumCount))
-				return fail(error, "DuckStation GLSL option has an invalid MaxValue.");
+			if (!parseDisplayOptionValues(value, option.maximum, option.maximumCount))
+				return fail(error, "Display GLSL option has an invalid MaxValue.");
 		}
 		else if (key == "DefaultValue") {
-			if (!parseDuckStationOptionValues(value, option.value, option.valueCount))
-				return fail(error, "DuckStation GLSL option has an invalid DefaultValue.");
+			if (!parseDisplayOptionValues(value, option.value, option.valueCount))
+				return fail(error, "Display GLSL option has an invalid DefaultValue.");
 		}
 		else if (key == "StepAmount") {
-			if (!parseDuckStationOptionValues(value, option.step, option.stepCount))
-				return fail(error, "DuckStation GLSL option has an invalid StepAmount.");
+			if (!parseDisplayOptionValues(value, option.step, option.stepCount))
+				return fail(error, "Display GLSL option has an invalid StepAmount.");
 		}
 		else
-			return fail(error, "DuckStation GLSL option uses unsupported setting '" + key + "'.");
+			return fail(error, "Display GLSL option uses unsupported setting '" + key + "'.");
 	}
-	return appendDuckStationOption(option, parameters, error);
+	return appendDisplayOption(option, parameters, error);
 }
 
-bool isDuckStationGlsl(const std::string& source)
+bool isDisplayGlsl(const std::string& source)
 {
 	return source.find("[configuration]") != std::string::npos
 			|| (std::regex_search(source, std::regex(R"(\bSetOutput\s*\()"))
@@ -1048,7 +1108,7 @@ void removePreprocessorDirectives(std::string& source)
 {
 	// The portable preprocessor has already evaluated conditionals and expanded
 	// macros. Keep line breaks for useful compiler diagnostics, but do not pass
-	// the consumed DuckStation/DolphinFX directives to backend compilers.
+	// the consumed compatibility directives to backend compilers.
 	size_t lineStart = 0;
 	while (lineStart < source.size()) {
 		const size_t lineEnd = source.find('\n', lineStart);
@@ -1060,13 +1120,13 @@ void removePreprocessorDirectives(std::string& source)
 	}
 }
 
-bool parseDuckStationGlsl(const std::string& shaderText, ShaderPassSource& source, std::string& error)
+bool parseDisplayGlsl(const std::string& shaderText, ShaderPassSource& source, std::string& error)
 {
 	ShaderPassSource parsed;
-	if (!parseDuckStationOptions(shaderText, parsed.parameters, error))
+	if (!parseDisplayOptions(shaderText, parsed.parameters, error))
 		return false;
 
-	// DuckStation and its DolphinFX imports are written against a small host API.
+	// Display effects are written against a small host API.
 	// Expand the language aliases once here so GL, Vulkan, and DX compile the
 	// exact same backend-neutral shader body.
 	constexpr char CompatibilityDefines[] = R"(
@@ -1158,7 +1218,7 @@ vec4 HollycastSample() { return texture(Source, vTexCoord); }
 	// UV so all backends use the same pixel center and orientation.
 	replaceAll(normalized, std::regex(R"(\bgl_FragCoord\s*\.\s*xy\b)"), "HollycastGetFragCoord()");
 	parsed.fragment = std::move(normalized);
-	parsed.duckStationGlsl = true;
+	parsed.displayGlsl = true;
 	source = std::move(parsed);
 	error.clear();
 	return true;
@@ -1206,8 +1266,6 @@ std::vector<std::string> configuredShaderPaths()
 	if (paths.empty() && !config::PostProcessShader.get().empty())
 		paths.push_back(config::PostProcessShader.get());
 	paths.erase(std::remove_if(paths.begin(), paths.end(), [](const std::string& path) { return path.empty(); }), paths.end());
-	for (size_t index = 0; index < paths.size(); ++index)
-		paths.erase(std::remove(paths.begin() + index + 1, paths.end(), paths[index]), paths.end());
 	return paths;
 }
 
@@ -1234,6 +1292,10 @@ bool resolveTargetSize(const ShaderPass& pass, const ShaderFrameInfo& frame,
 	if (!resolveDimension(pass.scaleTypeX, pass.scaleX, frame.sourceWidth, frame.viewportWidth, width, error)
 			|| !resolveDimension(pass.scaleTypeY, pass.scaleY, frame.sourceHeight, frame.viewportHeight, height, error))
 		return false;
+	if (!pass.widthExpression.empty() && !resolveShaderSizeExpression(pass.widthExpression, frame, width, error)) return false;
+	if (!pass.heightExpression.empty() && !resolveShaderSizeExpression(pass.heightExpression, frame, height, error)) return false;
+	if (!pass.outputs.empty() && pass.outputs.front().type == SlangResourceType::Sampler1D)
+		height = 1;
 	error.clear();
 	return true;
 }
@@ -1252,8 +1314,9 @@ std::vector<std::vector<bool>> resolveShaderPassOutputMipmaps(const ShaderChain&
 		const ShaderPass& consumer = chain.passes[consumerIndex];
 		if (!consumer.useMipmaps)
 			continue;
-		if (consumerIndex != 0)
-			requirements[consumerIndex - 1][0] = true;
+		size_t source = consumerIndex;
+		while (source > 0 && !chain.passes[source - 1].updatesSource) --source;
+		if (source > 0) requirements[source - 1][0] = true;
 		for (const ShaderPassInput& input : consumer.inputs) {
 			if ((input.kind != ShaderInputKind::PassOutput && input.kind != ShaderInputKind::History
 						&& input.kind != ShaderInputKind::Feedback)
@@ -1380,10 +1443,13 @@ void applyShaderChainParameterValues(ShaderChain& chain, const std::string& valu
 			continue;
 		std::copy_n(normalized.begin(), parameter->componentCount, parameter->values.begin());
 		parameter->value = parameter->values[0];
-		for (ShaderPassSource& source : chain.sources)
-			for (SlangParameter& reflected : source.slangParameters)
-				if (reflected.name == name)
+		for (size_t passIndex = 0; passIndex < chain.sources.size(); ++passIndex) {
+			if (chain.passes[passIndex].layerIndex != parameter->layerIndex)
+				continue;
+			for (SlangParameter& reflected : chain.sources[passIndex].slangParameters)
+				if (reflected.name == parameter->name)
 					std::copy_n(parameter->values.begin(), parameter->componentCount, reflected.defaultValue.values.begin());
+		}
 	}
 }
 
@@ -1393,6 +1459,7 @@ std::string serializeShaderChainParameterValues(const std::vector<ShaderParamete
 	values.imbue(std::locale::classic());
 	values << std::setprecision(std::numeric_limits<float>::max_digits10);
 	for (const ShaderParameter& parameter : parameters) {
+		if (!parameter.hostSource.empty()) continue;
 		const std::string& key = shaderParameterKey(parameter);
 		if (!isValidIdentifier(key) || parameter.componentCount == 0 || parameter.componentCount > 16)
 			continue;
@@ -1427,7 +1494,7 @@ bool getPresetFloat(const config::IniFile& preset, const std::string& key,
 
 static bool parsePreset(const std::string& presetText, const std::string& presetPath,
 		ShaderFormat passFormat, const char *presetName, const char *passExtension,
-		ShaderChain& chain, std::string& error)
+		ShaderChain& chain, std::string& error, const std::string& packageRoot = {})
 {
 	// RetroArch's repositories use CRLF presets. IniFile retains carriage returns,
 	// which would otherwise become part of paths and enum-like values.
@@ -1442,6 +1509,7 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 	const std::string basePath = parentPath(presetPath);
 	if (basePath.empty())
 		return fail(error, std::string("Unable to resolve the ") + presetName + " folder.");
+	const std::string root = packageRoot.empty() ? basePath : packageRoot;
 
 	ShaderChain parsedChain;
 	parsedChain.packagePath = presetPath;
@@ -1452,23 +1520,30 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 		const std::string& source = preset.getString("", "shader" + suffix);
 		if (source.empty())
 			return fail(error, std::string(presetName) + " is missing shader" + suffix + ".");
-		if (!isSafeRelativePath(source))
+		if (packageRoot.empty() && !isSafeRelativePath(source))
 			return fail(error, std::string(presetName) + " shader paths must be relative to the preset.");
 
 		ShaderPass pass;
-		pass.sourcePath = hostfs::storage().getSubPath(basePath, source);
-		pass.packageRoot = basePath;
-		if (!isWithinPackageRoot(pass.sourcePath, basePath))
+		pass.sourcePath = isAbsolutePath(source) ? source : hostfs::storage().getSubPath(basePath, source);
+		pass.packageRoot = root;
+		if (!isWithinPackageRoot(pass.sourcePath, root))
 			return fail(error, std::string(presetName) + " pass " + suffix + " escapes its package root.");
 		pass.format = detectFormat(pass.sourcePath);
 		if (pass.format != passFormat)
 			return fail(error, std::string(presetName) + " pass " + suffix + " must reference a " + passExtension + " shader.");
 		pass.alias = preset.getString("", "alias" + suffix);
 		pass.linearFilter = preset.getBool("", "filter_linear" + suffix);
+		if (!parseWrapMode(preset.getString("", "wrap_mode" + suffix, "clamp_to_border"), pass.wrapMode))
+			return fail(error, std::string(presetName) + " contains an unsupported wrap mode.");
 		pass.useMipmaps = preset.getBool("", "mipmap_input" + suffix);
 		pass.frameCountModulo = static_cast<uint32_t>(std::max(0, preset.getInt("", "frame_count_mod" + suffix)));
-		if (!getPresetFloat(preset, "scale_x" + suffix, 1.f, pass.scaleX, error)
-				|| !getPresetFloat(preset, "scale_y" + suffix, pass.scaleX, pass.scaleY, error))
+		if (preset.hasEntry("", "scale" + suffix)) {
+			if (!getPresetFloat(preset, "scale" + suffix, 1.f, pass.scaleX, error))
+				return false;
+			pass.scaleY = pass.scaleX;
+		}
+		else if (!getPresetFloat(preset, "scale_x" + suffix, 1.f, pass.scaleX, error)
+				|| !getPresetFloat(preset, "scale_y" + suffix, 1.f, pass.scaleY, error))
 			return false;
 		const bool floatTarget = preset.getBool("", "float_framebuffer" + suffix);
 		const bool srgbTarget = preset.getBool("", "srgb_framebuffer" + suffix);
@@ -1482,10 +1557,16 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 
 		if (pass.scaleX <= 0.f || pass.scaleY <= 0.f)
 			return fail(error, std::string(presetName) + " scale values must be positive.");
-		if (!parseScaleType(preset.getString("", "scale_type_x" + suffix,
-				preset.getString("", "scale_type" + suffix)), pass.scaleTypeX)
-				|| !parseScaleType(preset.getString("", "scale_type_y" + suffix,
-				preset.getString("", "scale_type" + suffix)), pass.scaleTypeY))
+		const bool explicitScale = preset.hasEntry("", "scale_type" + suffix)
+				|| preset.hasEntry("", "scale_type_x" + suffix) || preset.hasEntry("", "scale_type_y" + suffix)
+				|| preset.hasEntry("", "scale" + suffix) || preset.hasEntry("", "scale_x" + suffix)
+				|| preset.hasEntry("", "scale_y" + suffix);
+		const std::string defaultScale = index + 1 == passCount && !explicitScale ? "viewport" : "source";
+		// A combined scale type overrides the per-axis keys in the preset format.
+		if (!parseScaleType(preset.getString("", "scale_type" + suffix,
+				preset.getString("", "scale_type_x" + suffix, defaultScale)), pass.scaleTypeX)
+				|| !parseScaleType(preset.getString("", "scale_type" + suffix,
+				preset.getString("", "scale_type_y" + suffix, defaultScale)), pass.scaleTypeY))
 			return fail(error, std::string(presetName) + " contains an unsupported scale type.");
 
 		parsedChain.passes.push_back(std::move(pass));
@@ -1519,16 +1600,16 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 		if (!textureNames.emplace(name).second)
 			return fail(error, std::string(presetName) + " contains duplicate texture '" + name + "'.");
 		const std::string& texturePath = preset.getString("", name);
-		if (!isSafeRelativePath(texturePath))
+		if (texturePath.empty() || (packageRoot.empty() && !isSafeRelativePath(texturePath)))
 			return fail(error, std::string(presetName) + " texture paths must be relative to the preset.");
 		ShaderPresetTexture texture;
 		texture.name = name;
-		texture.path = hostfs::storage().getSubPath(basePath, texturePath);
-		if (!isWithinPackageRoot(texture.path, basePath))
+		texture.path = isAbsolutePath(texturePath) ? texturePath : hostfs::storage().getSubPath(basePath, texturePath);
+		if (!isWithinPackageRoot(texture.path, root))
 			return fail(error, std::string(presetName) + " texture '" + name + "' escapes its package root.");
-		texture.linearFilter = preset.getBool("", name + "_linear");
+		texture.linearFilter = preset.getBool("", name + "_linear", true);
 		texture.useMipmaps = preset.getBool("", name + "_mipmap");
-		if (!parseWrapMode(preset.getString("", name + "_wrap_mode"), texture.wrapMode))
+		if (!parseWrapMode(preset.getString("", name + "_wrap_mode", "clamp_to_border"), texture.wrapMode))
 			return fail(error, std::string(presetName) + " texture '" + name + "' has an unsupported wrap mode.");
 		parsedChain.textures.push_back(std::move(texture));
 	}
@@ -1554,12 +1635,8 @@ bool accumulateShaderTargetBytes(int width, int height, ShaderTargetFormat forma
 {
 	if (width <= 0 || height <= 0 || width > MaxShaderTargetDimension || height > MaxShaderTargetDimension)
 		return fail(error, "Shader target dimensions exceed the 16384 pixel limit.");
-	uint64_t bytesPerPixel = format == ShaderTargetFormat::Float ? 8u : 4u;
-	if (formatName == "R32G32B32A32_SFLOAT")
-		bytesPerPixel = 16;
-	else if (formatName == "R16G16B16A16_SFLOAT" || formatName == "R16G16B16A16_UNORM"
-			|| formatName == "RGBA16F")
-		bytesPerPixel = 8;
+	const uint64_t bytesPerPixel = formatName.empty() ? (format == ShaderTargetFormat::Float ? 8u : 4u) : shaderFormatBytes(formatName);
+	if (bytesPerPixel == 0) return fail(error, "Unknown shader target format: " + formatName);
 	uint64_t bytes = static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * bytesPerPixel;
 	if (mipmapped)
 		bytes += (bytes + 2) / 3;
@@ -1622,38 +1699,49 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 {
 	if (shaderText.empty() || shaderText.find('\0') != std::string::npos)
 		return fail(error, "GLSL source is empty or contains NUL bytes.");
-	if (isDuckStationGlsl(shaderText))
-		return parseDuckStationGlsl(shaderText, source, error);
+	if (isDisplayGlsl(shaderText))
+		return parseDisplayGlsl(shaderText, source, error);
 
 	ShaderPassSource parsed;
 	std::string cleaned;
 	std::istringstream lines(shaderText);
 	const std::regex parameterDirective(R"(^\s*#\s*pragma\s+parameter\b)", std::regex::icase);
+	bool inBlockComment = false;
 	for (std::string line; std::getline(lines, line);) {
 		// std::getline removes LF but retains CR. Normalize here so line-based
 		// interface stripping works identically for upstream Windows shader packs.
 		if (!line.empty() && line.back() == '\r')
 			line.pop_back();
-		if (std::regex_search(line, parameterDirective)) {
-			std::istringstream declaration(line);
-			std::string pragma;
-			std::string keyword;
+		const std::string directive = stripCommentsForDirective(line, inBlockComment);
+		if (std::regex_search(directive, parameterDirective)) {
+			std::istringstream declaration(std::regex_replace(directive, parameterDirective, ""));
 			ShaderParameter parameter;
-			if (!(declaration >> pragma >> keyword >> parameter.name >> std::quoted(parameter.label)
-					>> parameter.value >> parameter.minimum >> parameter.maximum >> parameter.step)
-					|| pragma != "#pragma" || keyword != "parameter" || !isValidIdentifier(parameter.name)
+			if (!(declaration >> parameter.name >> std::quoted(parameter.label)
+					>> parameter.value >> parameter.minimum >> parameter.maximum) || !isValidIdentifier(parameter.name)
 					|| !std::isfinite(parameter.value) || !std::isfinite(parameter.minimum)
-					|| !std::isfinite(parameter.maximum) || !std::isfinite(parameter.step)
+					|| !std::isfinite(parameter.maximum)
 					|| parameter.minimum > parameter.maximum || parameter.value < parameter.minimum
-					|| parameter.value > parameter.maximum || parameter.step <= 0.f)
+					|| parameter.value > parameter.maximum)
 				return fail(error, "Malformed RetroArch GLSL #pragma parameter declaration.");
+			declaration >> std::ws;
+			parameter.step = (parameter.maximum - parameter.minimum) * 0.1f;
+			if (!declaration.eof() && !(declaration >> parameter.step))
+				return fail(error, "Malformed RetroArch GLSL parameter step.");
+			if (!std::isfinite(parameter.step) || parameter.step < 0.f)
+				return fail(error, "Invalid RetroArch GLSL parameter step.");
 			declaration >> std::ws;
 			if (!declaration.eof())
 				return fail(error, "Malformed RetroArch GLSL #pragma parameter declaration.");
-			if (std::any_of(parsed.parameters.begin(), parsed.parameters.end(), [&](const ShaderParameter& value) {
+			const auto existing = std::find_if(parsed.parameters.begin(), parsed.parameters.end(), [&](const ShaderParameter& value) {
 				return value.name == parameter.name;
-			}))
-				return fail(error, "Duplicate GLSL parameter '" + parameter.name + "'.");
+			});
+			if (existing != parsed.parameters.end()) {
+				if (existing->label != parameter.label || existing->value != parameter.value
+						|| existing->minimum != parameter.minimum || existing->maximum != parameter.maximum
+						|| existing->step != parameter.step)
+					return fail(error, "Conflicting GLSL parameter '" + parameter.name + "'.");
+				continue;
+			}
 			parameter.values[0] = parameter.value;
 			parameter.minimumValues[0] = parameter.minimum;
 			parameter.maximumValues[0] = parameter.maximum;
@@ -1726,7 +1814,7 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 
 	if (retroArchContract) {
 		const std::regex resourceDeclaration(
-				R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:sampler2D|vec2|int|mat4)\s+(?:Texture|InputSize|OrigInputSize|TextureSize|OutputSize|FrameDirection|FrameCount|Rotation|MVPMatrix)\s*;\s*$)",
+				R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:sampler2D|vec2|int|mat4)\s+(?:Texture|InputSize|OrigInputSize|OrigTextureSize|TextureSize|OutputSize|FinalViewportSize|FrameDirection|FrameCount|Rotation|MVPMatrix)\s*;\s*$)",
 				std::regex::icase);
 		const std::regex interfaceDeclaration(
 				R"(^\s*(?:layout\s*\([^)]*\)\s*)?(?:in|out|attribute|varying|COMPAT_ATTRIBUTE|COMPAT_VARYING)\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:vec2|vec3|vec4)\s+(?:VertexCoord|TexCoord|TEX0|vTexCoord|FragColor|COLOR|COL0)\s*;\s*$)",
@@ -1736,19 +1824,41 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 				std::regex::icase);
 		const std::regex sourceSizeDefine(R"(^\s*#\s*define\s+SourceSize\b.*$)", std::regex::icase);
 		const std::regex outputSizeDefine(R"(^\s*#\s*define\s+(?:OutSize|OutputSize)\b.*$)", std::regex::icase);
+		const std::regex textureSizeDeclaration(
+				R"(^\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?vec2\s+([A-Za-z_][A-Za-z0-9_]*)(InputSize|TextureSize)\s*;\s*$)");
 		auto normalize = [&](std::string& stageSource, bool vertex) {
 			std::string normalized;
 			std::istringstream stageLines(stageSource);
 			bool hasSourceSizeAlias = false;
 			bool hasOutputSizeAlias = false;
+			std::vector<std::pair<std::string, std::string>> textureSizes;
 			for (std::string line; std::getline(stageLines, line);) {
 				hasSourceSizeAlias = hasSourceSizeAlias || std::regex_match(line, sourceSizeDefine);
 				hasOutputSizeAlias = hasOutputSizeAlias || std::regex_match(line, outputSizeDefine);
+				std::smatch size;
+				if (!std::regex_match(line, resourceDeclaration) && std::regex_match(line, size, textureSizeDeclaration)) {
+					const std::string name = size[1].str() + "Texture";
+					textureSizes.emplace_back(size[1].str() + size[2].str(), name);
+					if (std::none_of(parsed.slangResources.begin(), parsed.slangResources.end(),
+							[&](const SlangResource& resource) { return resource.name == name; })) {
+						SlangResource resource;
+						resource.name = name;
+						resource.alias = size[1].str();
+						parsed.slangResources.push_back(std::move(resource));
+					}
+					continue;
+				}
 				if (!std::regex_match(line, resourceDeclaration) && !std::regex_match(line, interfaceDeclaration)
 						&& !std::regex_match(line, compatibilityDefine))
 					normalized += line + '\n';
 			}
 			stageSource = std::move(normalized);
+			// Texture and input extents coincide because chain render targets are
+			// not padded. Query the selected resource, not the current pass input:
+			// earlier passes may have a completely different scale.
+			for (const auto& size : textureSizes)
+				replaceAll(stageSource, std::regex("\\b" + size.first + "\\b"),
+						("vec2(textureSize(" + size.second + ", 0))").c_str());
 			if (hasSourceSizeAlias)
 				replaceAll(stageSource, std::regex(R"(\bSourceSize\b)", std::regex::icase), "HollycastSourceSize4");
 			if (hasOutputSizeAlias)
@@ -1756,7 +1866,7 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 						"HollycastOutputSize4");
 			replaceAll(stageSource, std::regex(R"(\bCOMPAT_TEXTURE\b)"), "texture");
 			replaceAll(stageSource, std::regex(R"(\bTexture\b)"), "Source");
-			replaceAll(stageSource, std::regex(R"(\bOrigInputSize\b)"), "OriginalSize");
+			replaceAll(stageSource, std::regex(R"(\b(?:OrigInputSize|OrigTextureSize)\b)"), "OriginalSize");
 			replaceAll(stageSource, std::regex(R"(\b(?:InputSize|TextureSize)\b)"), "SourceSize");
 			replaceAll(stageSource, std::regex(R"(\bFrameDirection\b)"), "(1)");
 			if (vertex) {
@@ -1805,6 +1915,8 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 				SlangResource resource;
 				resource.name = name;
 				resource.alias = name;
+				if (resource.alias.size() > 7 && resource.alias.compare(resource.alias.size() - 7, 7, "Texture") == 0)
+					resource.alias.resize(resource.alias.size() - 7);
 				parsed.slangResources.push_back(std::move(resource));
 			}
 			stageSource = std::move(normalized);
@@ -1816,6 +1928,21 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 	else
 		removePortableInterfaceDeclarations(parsed.fragment, parsed.parameters);
 
+	// Desktop legacy shaders use pre-1.30 texture entry points. Normalize them
+	// once so Vulkan, OpenGL core and the DX11 compiler receive the same calls.
+	const std::pair<const char *, const char *> textureFunctions[] {
+		{ R"(\btexture2D\b)", "texture" },
+		{ R"(\btexture2DProj\b)", "textureProj" },
+		{ R"(\btexture2DLod(?:EXT|ARB)?\b)", "textureLod" },
+		{ R"(\btexture2DProjLod(?:EXT|ARB)?\b)", "textureProjLod" },
+		{ R"(\btexture2DGrad(?:EXT|ARB)?\b)", "textureGrad" },
+		{ R"(\btexture2DProjGrad(?:EXT|ARB)?\b)", "textureProjGrad" },
+	};
+	for (const auto& function : textureFunctions) {
+		const std::regex name(function.first);
+		replaceAll(parsed.vertex, name, function.second);
+		replaceAll(parsed.fragment, name, function.second);
+	}
 	source = std::move(parsed);
 	error.clear();
 	return true;
@@ -1837,15 +1964,95 @@ bool parseSlangShader(const std::string& shaderText, SlangShaderSource& shader, 
 	return true;
 }
 
+static bool loadPresetDocument(const std::string& path, const std::string& root,
+		ShaderFormat format, std::unordered_set<std::string>& stack, uint32_t& fileCount,
+		size_t& sourceBytes, config::IniFile& document, std::string& error)
+{
+	if (stack.size() >= 16 || ++fileCount > MaxShaderIncludeFiles || !isWithinPackageRoot(path, root))
+		return fail(error, "Shader preset references exceed their package boundary or nesting limit.");
+	std::error_code filesystemError;
+	const std::string identity = std::filesystem::weakly_canonical(std::filesystem::u8path(path), filesystemError).u8string();
+	if (filesystemError || !stack.emplace(identity).second)
+		return fail(error, "Shader preset reference cycle or invalid path: " + path);
+	std::string text;
+	if (!readTextFile(path, text, error))
+		return false;
+	if (text.size() > MaxExpandedShaderSourceBytes - sourceBytes)
+		return fail(error, "Referenced shader presets exceed the 32 MiB source limit.");
+	sourceBytes += text.size();
+	std::istringstream lines(text);
+	std::string ownText;
+	const std::regex reference(R"ref(^\s*#\s*reference\s+"([^"]+)"\s*(?:#.*|//.*)?$)ref");
+	const std::regex referenceDirective(R"(^\s*#\s*reference\b)");
+	for (std::string line; std::getline(lines, line);) {
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		std::smatch match;
+		if (!std::regex_search(line, referenceDirective)) {
+			ownText += line + '\n';
+			continue;
+		}
+		if (!std::regex_match(line, match, reference))
+			return fail(error, "Malformed shader preset #reference directive.");
+		const std::string referenced = isAbsolutePath(match[1].str()) ? match[1].str()
+				: hostfs::storage().getSubPath(parentPath(path), match[1].str());
+		if (detectFormat(referenced) != format && get_file_extension(referenced) != "params")
+			return fail(error, "Shader preset references must use the same preset format or a .params file.");
+		config::IniFile inherited;
+		if (!loadPresetDocument(referenced, root, format, stack, fileCount, sourceBytes, inherited, error))
+			return false;
+		for (const std::string& name : inherited.getEntryNames(""))
+			document.set("", name, inherited.getString("", name));
+	}
+	config::IniFile own;
+	own.load(ownText);
+	// Resolve paths at the file that authored them before applying overrides.
+	// Otherwise a simple preset in a different folder misresolves every inherited
+	// stage and lookup image relative to itself.
+	const std::vector<std::string> textures = splitParameters(own.getString("", "textures", document.getString("", "textures")));
+	const std::regex shaderPathKey(R"(shader[0-9]+)");
+	for (const std::string& name : own.getEntryNames("")) {
+		std::string value = own.getString("", name);
+		if (std::regex_match(name, shaderPathKey)
+				|| std::find(textures.begin(), textures.end(), name) != textures.end()) {
+			if (value.empty())
+				return fail(error, "Shader preset contains an empty resource path.");
+			if (!isAbsolutePath(value))
+				value = hostfs::storage().getSubPath(parentPath(path), value);
+			if (!isWithinPackageRoot(value, root))
+				return fail(error, "Shader preset resource escapes its package root.");
+		}
+		document.set("", name, value);
+	}
+	stack.erase(identity);
+	return true;
+}
+
+static bool loadPresetFile(const std::string& presetPath, ShaderFormat format,
+		ShaderChain& chain, std::string& error)
+{
+	std::string root = parentPath(presetPath);
+	const std::string& configuredRoot = config::PostProcessShaderDirectory.get();
+	if (!configuredRoot.empty() && isWithinPackageRoot(presetPath, configuredRoot))
+		root = configuredRoot;
+	config::IniFile document;
+	std::unordered_set<std::string> stack;
+	uint32_t fileCount = 0;
+	size_t sourceBytes = 0;
+	if (!loadPresetDocument(presetPath, root, format, stack, fileCount, sourceBytes, document, error))
+		return false;
+	std::string presetText;
+	document.save(presetText);
+	return format == ShaderFormat::SlangPreset
+			? parsePreset(presetText, presetPath, ShaderFormat::Slang, "Slang preset", ".slang", chain, error, root)
+			: parsePreset(presetText, presetPath, ShaderFormat::GLSL, "GLSL preset", ".glsl", chain, error, root);
+}
+
 bool loadSlangPreset(const std::string& presetPath, ShaderChain& chain, std::string& error)
 {
 	if (detectFormat(presetPath) != ShaderFormat::SlangPreset)
 		return fail(error, "Expected a .slangp preset.");
-
-	std::string presetText;
-	if (!readTextFile(presetPath, presetText, error))
-		return false;
-	return parseSlangPreset(presetText, presetPath, chain, error);
+	return loadPresetFile(presetPath, ShaderFormat::SlangPreset, chain, error);
 }
 
 bool loadGlslPreset(const std::string& presetPath, ShaderChain& chain, std::string& error)
@@ -1853,10 +2060,7 @@ bool loadGlslPreset(const std::string& presetPath, ShaderChain& chain, std::stri
 	if (detectFormat(presetPath) != ShaderFormat::GlslPreset)
 		return fail(error, "Expected a .glslp preset.");
 
-	std::string presetText;
-	if (!readTextFile(presetPath, presetText, error))
-		return false;
-	return parseGlslPreset(presetText, presetPath, chain, error);
+	return loadPresetFile(presetPath, ShaderFormat::GlslPreset, chain, error);
 }
 
 bool parseReShadeFx(const std::string& effectText, ShaderPassSource& source, std::string& error)
@@ -1891,14 +2095,46 @@ bool loadShaderPassSource(const ShaderPass& pass, ShaderPassSource& source, std:
 			return false;
 		source.vertex = std::move(slang.vertex.source);
 		source.fragment = std::move(slang.fragment.source);
+		source.compute = std::move(slang.compute.source);
 		source.displayName = std::move(slang.displayName);
 		source.targetFormatName = std::move(slang.format);
 		source.slangParameters = std::move(slang.parameters);
-		source.slangResources = std::move(slang.resources);
+		for (auto& resource : slang.resources) {
+			if (!isShaderStorageResource(resource.type)) {
+				source.slangResources.push_back(std::move(resource));
+				continue;
+			}
+			if (source.compute.empty() || resource.arrayCount != 1)
+				return fail(error, "Writable Slang images require a compute stage and a single image binding.");
+			ShaderPassOutput output;
+			output.alias = resource.name;
+			output.targetFormatName = canonicalShaderFormat(resource.formatName);
+			if (output.targetFormatName.empty())
+				return fail(error, "Slang storage images must declare a supported layout format.");
+			output.type = resource.type == SlangResourceType::Image1D ? SlangResourceType::Sampler1D
+					: resource.type == SlangResourceType::Image3D ? SlangResourceType::Sampler3D
+					: resource.type == SlangResourceType::Image2DArray ? SlangResourceType::Sampler2DArray : SlangResourceType::Sampler2D;
+			source.storageBindings.emplace_back(resource.name, static_cast<uint32_t>(source.storageOutputs.size()));
+			source.storageOutputs.push_back(std::move(output));
+		}
+		if (!source.compute.empty()) {
+			if (source.storageOutputs.empty() || source.storageOutputs[0].type != SlangResourceType::Sampler2D)
+				return fail(error, "Slang compute passes must expose a primary 2D storage output.");
+			source.outputCount = source.colorOutputCount = 0;
+			std::smatch size;
+			for (uint32_t axis = 0; axis < 3; ++axis) {
+				const std::string key = std::string("local_size_") + "xyz"[axis];
+				if (std::regex_search(source.compute, size, std::regex(key + R"(\s*=\s*([0-9]+))"))
+						&& (!parseShaderUnsigned(size[1].str(), source.localSize[axis]) || source.localSize[axis] == 0))
+					return fail(error, "Invalid Slang compute workgroup size.");
+			}
+		}
 		for (const SlangParameter& parameter : source.slangParameters) {
 			source.parameters.push_back(projectParameter(parameter));
 		}
+		removePortableInterfaceDeclarations(source.vertex, source.parameters);
 		removePortableInterfaceDeclarations(source.fragment, source.parameters);
+		removePortableInterfaceDeclarations(source.compute, source.parameters);
 		return true;
 	}
 	case ShaderFormat::ReShadeFX:
@@ -1918,8 +2154,39 @@ bool loadShaderPassSource(const ShaderPass& pass, ShaderPassSource& source, std:
 	}
 }
 
+static void resolveShaderOutputVersions(ShaderChain& chain)
+{
+	for (size_t passIndex = 0; passIndex < chain.passes.size(); ++passIndex) {
+		auto& pass = chain.passes[passIndex];
+		for (auto& output : pass.outputs) {
+			output.previousPass = InvalidShaderPass;
+			if (pass.format != ShaderFormat::ReShadeFX || output.alias.empty() || pass.renderState.clearRenderTargets)
+				continue;
+			// A named effect texture retains the last writer, even when techniques
+			// from the same file bracket other layers in the stack.
+			for (size_t distance = 1; distance <= chain.passes.size(); ++distance) {
+				const size_t candidateIndex = (passIndex + chain.passes.size() - distance) % chain.passes.size();
+				const auto& candidate = chain.passes[candidateIndex];
+				if (candidate.sourcePath != pass.sourcePath)
+					continue;
+				for (size_t attachment = 0; attachment < candidate.outputs.size(); ++attachment) {
+					const auto& previous = candidate.outputs[attachment];
+					if (previous.alias != output.alias)
+						continue;
+					output.previousPass = static_cast<uint32_t>(candidateIndex);
+					output.previousOutput = static_cast<uint32_t>(attachment);
+					output.previousFrame = candidateIndex >= passIndex;
+					break;
+				}
+				if (output.previousPass != InvalidShaderPass)
+					break;
+			}
+		}
+	}
+}
+
 static bool loadShaderChainInternal(const std::string& path, const std::string& requestedTechnique,
-		ShaderChain& chain, std::string& error)
+		ShaderChain& chain, std::string& error, bool allowExternalFxTargets = false)
 {
 	chain = {};
 	const ShaderFormat format = detectFormat(path);
@@ -1969,7 +2236,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		const ReShadeTechnique& technique = effect.techniques[selectedTechnique];
 		for (size_t passIndex = 0; passIndex < technique.passes.size(); ++passIndex) {
 			const ReShadePass& effectPass = technique.passes[passIndex];
-			if (effectPass.pixelShader.empty())
+			if (effectPass.pixelShader.empty() && effectPass.computeShader.empty())
 				continue;
 			ShaderPass pass;
 			pass.sourcePath = path;
@@ -1977,6 +2244,17 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			pass.format = format;
 			pass.effectTechnique = static_cast<uint32_t>(selectedTechnique);
 			pass.effectPass = static_cast<uint32_t>(passIndex);
+			const auto targetName = [&]() -> std::string {
+				std::smatch match;
+				if (std::regex_search(effectPass.stateBlock, match, std::regex(R"(RenderTarget0?\s*=\s*(\w+))", std::regex::icase))) return match[1].str();
+				return {};
+			}();
+			for (const auto& texture : effect.textures) if (texture.name == targetName) {
+				std::smatch size;
+				if (std::regex_search(texture.definition, size, std::regex(R"(\bWidth\s*=\s*([^;]+))"))) pass.widthExpression = size[1].str();
+				if (std::regex_search(texture.definition, size, std::regex(R"(\bHeight\s*=\s*([^;]+))"))) pass.heightExpression = size[1].str();
+			}
+
 			const std::regex renderTarget(R"(\bRenderTarget([0-9]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)", std::regex::icase);
 			for (std::sregex_iterator it(effectPass.stateBlock.begin(), effectPass.stateBlock.end(), renderTarget), end; it != end; ++it) {
 				const std::string indexText = (*it)[1].str();
@@ -2009,14 +2287,9 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			parsed.passes.push_back(std::move(pass));
 		}
 		if (parsed.passes.empty())
-			return fail(error, "ReShade FX technique has no runnable PixelShader passes.");
-		std::unordered_set<std::string> outputAliases;
+			return fail(error, "ReShade FX technique has no runnable graphics or compute passes.");
 		for (const ShaderPass& pass : parsed.passes) {
-			if (pass.outputs.empty()) {
-				if (!outputAliases.emplace(pass.alias).second)
-					return fail(error, "ReShade FX contains duplicate pass output alias '" + pass.alias + "'.");
-				continue;
-			}
+			std::unordered_set<std::string> outputAliases;
 			for (const ShaderPassOutput& output : pass.outputs)
 				if (output.alias.empty() || !outputAliases.emplace(output.alias).second)
 					return fail(error, "ReShade FX contains an empty or duplicate render target alias.");
@@ -2031,6 +2304,11 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 				return fail(error, "ReShade FX lookup texture paths must be package-relative.");
 			ShaderPresetTexture lookup;
 			lookup.name = texture.name;
+			std::smatch dimension;
+			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bDepth\s*=\s*([0-9]+))"))) parseShaderUnsigned(dimension[1].str(), lookup.depth);
+			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bWidth\s*=\s*([0-9]+)\s*;)"))) parseShaderUnsigned(dimension[1].str(), lookup.width);
+			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bHeight\s*=\s*([0-9]+)\s*;)"))) parseShaderUnsigned(dimension[1].str(), lookup.height);
+
 			lookup.path = hostfs::storage().getSubPath(effectRoot, annotation->value);
 			if (!shaderFileExists(lookup.path)) {
 				const std::string conventionalPath = hostfs::storage().getSubPath(
@@ -2059,7 +2337,14 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		ShaderPass& pass = parsed.passes.emplace_back();
 		pass.sourcePath = path;
 		pass.packageRoot = parentPath(path);
+		const std::string& configuredRoot = config::PostProcessShaderDirectory.get();
+		if (!configuredRoot.empty() && isWithinPackageRoot(path, configuredRoot))
+			pass.packageRoot = configuredRoot;
 		pass.format = format;
+		if (format == ShaderFormat::Slang) {
+			pass.scaleTypeX = pass.scaleTypeY = ScaleType::Viewport;
+			pass.wrapMode = ShaderWrapMode::ClampToBorder;
+		}
 		chain = std::move(parsed);
 	}
 	else {
@@ -2078,6 +2363,14 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		ShaderPassSource passSource;
 		if (!loadShaderPassSource(pass, passSource, error))
 			return false;
+		if (format == ShaderFormat::GLSL && passSource.retroArchGlsl) {
+			// A raw combined GLSL stage has the same input/output sizing contract
+			// as a single-pass preset, even when selected without its preset file.
+			chain.wantsUnscaledInput = true;
+			pass.composeDisplayInput = false;
+			pass.scaleTypeX = pass.scaleTypeY = ScaleType::Viewport;
+			pass.wrapMode = ShaderWrapMode::ClampToBorder;
+		}
 		if (pass.alias.empty() && !passSource.displayName.empty()) {
 			if (!isValidIdentifier(passSource.displayName))
 				return fail(error, "Slang #pragma name must be a valid pass alias.");
@@ -2091,30 +2384,78 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 				return fail(error, "Slang preset target format conflicts with the shader #pragma format declaration.");
 			pass.targetFormatName = passSource.targetFormatName;
 		}
+		if (format == ShaderFormat::ReShadeFX) {
+			pass.renderState = passSource.renderState;
+			pass.compute = !passSource.compute.empty(); pass.updatesSource = passSource.updatesSource;
+			pass.localSize = passSource.localSize; pass.dispatchZ = passSource.dispatchZ;
+			pass.dispatchExpressions = passSource.dispatchExpressions;
+			pass.colorOutputCount = passSource.colorOutputCount;
+			if (!passSource.widthExpression.empty()) pass.widthExpression = passSource.widthExpression;
+			if (!passSource.heightExpression.empty()) pass.heightExpression = passSource.heightExpression;
+			if (pass.compute) pass.outputs.clear();
+			else if (pass.outputs.empty() && !passSource.storageOutputs.empty()) pass.outputs.push_back({ pass.alias });
+			for (const auto& binding : passSource.storageBindings)
+				pass.storageBindings.emplace_back(binding.first, static_cast<uint32_t>(pass.outputs.size()) + binding.second);
+			pass.outputs.insert(pass.outputs.end(), passSource.storageOutputs.begin(), passSource.storageOutputs.end());
+			pass.blendEnabled = pass.updatesSource || std::any_of(pass.renderState.attachments.begin(), pass.renderState.attachments.end(), [](const auto& a) { return a.blendEnabled || a.writeMask != 15; });
+			if (pass.renderState.srgbWrite && pass.outputs.empty())
+				pass.targetFormatName = "R8G8B8A8_SRGB";
+			const auto& first = pass.renderState.attachments[0];
+			pass.sourceBlend = first.source; pass.destinationBlend = first.destination; pass.blendOperation = first.operation;
+		}
+		if (format != ShaderFormat::ReShadeFX && !passSource.compute.empty()) {
+			pass.compute = true; pass.updatesSource = true; pass.colorOutputCount = 0;
+			pass.localSize = passSource.localSize; pass.storageBindings = passSource.storageBindings; pass.outputs = passSource.storageOutputs;
+		}
 		for (ShaderPassOutput& output : pass.outputs) {
 			if (output.targetFormat == ShaderTargetFormat::Default && output.targetFormatName.empty())
 				output.targetFormat = pass.targetFormat;
 			if (output.targetFormatName.empty())
 				output.targetFormatName = pass.targetFormatName;
 			output.useMipmaps = output.useMipmaps || pass.useMipmaps;
+			if (pass.renderState.srgbWrite && (&output - pass.outputs.data()) < pass.colorOutputCount) {
+				if (output.targetFormatName.empty() || output.targetFormatName == "R8G8B8A8_UNORM")
+					output.targetFormatName = "R8G8B8A8_SRGB";
+				else if (output.targetFormatName != "R8G8B8A8_SRGB")
+					return fail(error, "SRGBWriteEnable requires an RGBA8 color attachment.");
+			}
 		}
 		if (pass.outputs.empty()) {
-			if (passSource.outputCount != 1)
+			if (!pass.compute && passSource.outputCount != 1)
 				return fail(error, "A multi-output shader pass must declare RenderTarget0 through RenderTargetN.");
 		}
-		else if (pass.outputs.size() != passSource.outputCount) {
+		else if (pass.outputs.size() != passSource.outputCount + passSource.storageOutputs.size()) {
 			return fail(error, "ReShade FX PixelShader outputs do not match its RenderTarget state block.");
 		}
-		if (!resolveShaderPassInputs(chain, passIndex, passSource, error))
-			return false;
 		for (const ShaderParameter& reflected : passSource.parameters)
 			if (!mergeShaderParameter(chain, reflected, error))
 				return false;
-		const size_t passSourceBytes = passSource.vertex.size() + passSource.fragment.size();
+		const size_t passSourceBytes = passSource.vertex.size() + passSource.fragment.size() + passSource.compute.size();
 		if (passSourceBytes > MaxExpandedShaderSourceBytes - totalSourceBytes)
 			return fail(error, "Compiled shader sources exceed the 32 MiB chain limit.");
 		totalSourceBytes += passSourceBytes;
+		for (const auto& resource : passSource.slangResources)
+			for (auto& texture : chain.textures) if (texture.name == resource.alias) {
+				texture.type = resource.type; texture.numericType = resource.numericType;
+			}
+		for (const auto& resource : passSource.slangResources)
+			if (resource.numericType != ShaderNumericType::Float) {
+				for (auto& sampler : pass.samplers)
+					if (sampler.bindingName == resource.name) { sampler.linearFilter = false; sampler.useMipmaps = false; }
+				for (auto& texture : chain.textures)
+					if (texture.name == resource.alias) { texture.linearFilter = false; texture.useMipmaps = false; }
+			}
 		chain.sources.push_back(std::move(passSource));
+	}
+	// Later passes may supply a named feedback target via their own pragma.
+	// Resolve the graph after every source has contributed its alias metadata.
+	std::unordered_set<std::string> aliases;
+	for (size_t index = 0; index < chain.passes.size(); ++index) {
+		if (format != ShaderFormat::ReShadeFX && !chain.passes[index].alias.empty()
+				&& !aliases.emplace(chain.passes[index].alias).second)
+			return fail(error, "Shader chain contains duplicate pass alias '" + chain.passes[index].alias + "'.");
+		if (!resolveSlangResourceInputs(chain, index, chain.sources[index], error, allowExternalFxTargets))
+			return false;
 	}
 	const uint32_t parameterComponents = std::accumulate(chain.parameters.begin(), chain.parameters.end(), 0u,
 			[](uint32_t count, const ShaderParameter& parameter) { return count + parameter.componentCount; });
@@ -2124,6 +2465,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 	for (const ShaderParameter& parameter : chain.parameters)
 		if (!isValidIdentifier(parameter.name))
 			return fail(error, "Shader parameter names must be valid identifiers.");
+	resolveShaderOutputVersions(chain);
 	error.clear();
 	return true;
 }
@@ -2146,7 +2488,6 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 	if (paths.size() == 1)
 		return loadShaderChain(paths.front(), chain, error);
 
-	std::unordered_set<std::string> selectedPaths;
 	const std::string configuredTechniques = config::PostProcessShaderTechnique.get();
 	const std::unordered_map<size_t, std::string> techniqueSelections =
 			parseStackTechniqueSelections(configuredTechniques);
@@ -2156,8 +2497,8 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 	chain.packagePath = shaderSelectionLabel(paths);
 	for (size_t layerIndex = 0; layerIndex < paths.size(); ++layerIndex) {
 		const std::string& path = paths[layerIndex];
-		if (path.empty() || !selectedPaths.emplace(path).second)
-			return fail(error, "Shader stacks cannot contain empty or duplicate layers.");
+		if (path.empty())
+			return fail(error, "Shader stacks cannot contain empty layers.");
 
 		ShaderChain layer;
 		std::string layerError;
@@ -2167,7 +2508,7 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 		else if (effectLayerCount == 1 && detectFormat(path) == ShaderFormat::ReShadeFX
 				&& !configuredTechniques.empty() && !startsWith(configuredTechniques, "stack:"))
 			requestedTechnique = configuredTechniques;
-		if (!loadShaderChainInternal(path, requestedTechnique, layer, layerError))
+		if (!loadShaderChainInternal(path, requestedTechnique, layer, layerError, true))
 			return fail(error, "Shader layer " + std::to_string(layerIndex + 1) + " failed: " + layerError);
 		if (layer.techniques.size() > 1) {
 			ShaderTechniqueGroup group;
@@ -2183,22 +2524,66 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 
 		for (ShaderPass& pass : layer.passes) {
 			pass.layerIndex = static_cast<uint32_t>(layerIndex);
-			for (ShaderPassInput& input : pass.inputs)
+			for (ShaderPassInput& input : pass.inputs) {
 				if (input.sourcePass != InvalidShaderPass)
 					input.sourcePass += passOffset;
+				else if (input.kind == ShaderInputKind::PassOutput) {
+					// Share explicit FX targets only with another technique from
+					// the same file; an unrelated effect may reuse the texture name.
+					for (size_t remaining = chain.passes.size(); remaining != 0; --remaining) {
+						const ShaderPass& producer = chain.passes[remaining - 1];
+						if (producer.format != ShaderFormat::ReShadeFX
+								|| std::filesystem::path(producer.sourcePath).lexically_normal()
+										!= std::filesystem::path(pass.sourcePath).lexically_normal())
+							continue;
+						for (size_t output = 0; output < producer.outputs.size(); ++output)
+							if (producer.outputs[output].alias == input.resourceName) {
+								input.sourcePass = static_cast<uint32_t>(remaining - 1);
+								input.sourceOutput = static_cast<uint32_t>(output);
+								break;
+							}
+						if (input.sourcePass != InvalidShaderPass)
+							break;
+					}
+					if (input.sourcePass == InvalidShaderPass)
+						return fail(error, "Shader layer " + std::to_string(layerIndex + 1)
+								+ " requires an earlier technique from the same effect to write texture '"
+								+ input.resourceName + "'.");
+				}
+				else if (input.kind == ShaderInputKind::History && passOffset != 0)
+					// Original history belongs to this layer's input, which is the
+					// preceding layer's final output rather than the raw game frame.
+					{
+						size_t source = passOffset;
+						while (source > 0 && !chain.passes[source - 1].updatesSource) --source;
+						input.sourcePass = source > 0 ? static_cast<uint32_t>(source - 1) : InvalidShaderPass;
+					}
+			}
 		}
 		if (chain.feedbackPass == InvalidShaderPass && layer.feedbackPass != InvalidShaderPass)
 			chain.feedbackPass = layer.feedbackPass + passOffset;
 
-		for (const ShaderPresetTexture& texture : layer.textures) {
+		for (ShaderPresetTexture& texture : layer.textures) {
 			const auto existing = std::find_if(chain.textures.begin(), chain.textures.end(), [&](const ShaderPresetTexture& value) {
 				return value.name == texture.name;
 			});
 			if (existing == chain.textures.end())
 				chain.textures.push_back(texture);
 			else if (existing->path != texture.path || existing->linearFilter != texture.linearFilter
-					|| existing->useMipmaps != texture.useMipmaps || existing->wrapMode != texture.wrapMode)
-				return fail(error, "Shader layers define incompatible lookup textures named '" + texture.name + "'.");
+					|| existing->useMipmaps != texture.useMipmaps || existing->wrapMode != texture.wrapMode) {
+				// Sampler names are local to a shader package. Namespace only the
+				// graph resource when another layer uses that name for a different LUT.
+				const std::string originalName = texture.name;
+				texture.name = "Layer" + std::to_string(layerIndex + 1) + "__" + originalName;
+				while (std::any_of(chain.textures.begin(), chain.textures.end(),
+						[&](const ShaderPresetTexture& value) { return value.name == texture.name; }))
+					texture.name += '_';
+				for (ShaderPass& pass : layer.passes)
+					for (ShaderPassInput& input : pass.inputs)
+						if (input.kind == ShaderInputKind::LookupTexture && input.resourceName == originalName)
+							input.resourceName = texture.name;
+				chain.textures.push_back(texture);
+			}
 		}
 		if (chain.textures.size() > MaxShaderLookupTextures)
 			return fail(error, "Combined shader stacks may declare at most 64 lookup textures.");
@@ -2222,13 +2607,19 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 				std::make_move_iterator(layer.sources.end()));
 	}
 
+	const uint32_t parameterComponents = std::accumulate(chain.parameters.begin(), chain.parameters.end(), 0u,
+			[](uint32_t count, const ShaderParameter& parameter) { return count + parameter.componentCount; });
+	if (parameterComponents > MaxShaderParameterComponents)
+		return fail(error, "Combined shader stacks may expose at most " + std::to_string(MaxShaderParameterComponents)
+				+ " parameter components.");
 	size_t totalSourceBytes = 0;
 	for (const ShaderPassSource& source : chain.sources) {
-		const size_t sourceBytes = source.vertex.size() + source.fragment.size();
+		const size_t sourceBytes = source.vertex.size() + source.fragment.size() + source.compute.size();
 		if (sourceBytes > MaxExpandedShaderSourceBytes - totalSourceBytes)
 			return fail(error, "Combined shader layer sources exceed the 32 MiB chain limit.");
 		totalSourceBytes += sourceBytes;
 	}
+	resolveShaderOutputVersions(chain);
 	error.clear();
 	return true;
 }

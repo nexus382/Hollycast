@@ -9,6 +9,7 @@
 	(at your option) any later version.
 */
 #include "slang_frontend.h"
+#include "reshade_fx.h"
 
 #include <algorithm>
 #include <cctype>
@@ -19,6 +20,7 @@
 #include <regex>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 namespace postprocess {
 
@@ -49,6 +51,60 @@ bool parseShaderUnsigned(std::string_view text, uint32_t& value)
 	}
 	value = static_cast<uint32_t>(parsed);
 	return true;
+}
+
+uint32_t shaderParameterComponentCount(SlangParameterType type)
+{
+	switch (type) {
+	case SlangParameterType::Float2: return 2;
+	case SlangParameterType::Float3: return 3;
+	case SlangParameterType::Float4: return 4;
+	case SlangParameterType::Float2x2: return 4;
+	case SlangParameterType::Float3x3: return 9;
+	case SlangParameterType::Float4x4: return 16;
+	case SlangParameterType::Float2x3: case SlangParameterType::Float3x2: return 6;
+	case SlangParameterType::Float2x4: case SlangParameterType::Float4x2: return 8;
+	case SlangParameterType::Float3x4: case SlangParameterType::Float4x3: return 12;
+	default: return 1;
+	}
+}
+const char *shaderParameterGlslType(SlangParameterType type)
+{
+	switch (type) {
+	case SlangParameterType::Int: return "int";
+	case SlangParameterType::Bool: return "bool";
+	case SlangParameterType::Float2: return "vec2";
+	case SlangParameterType::Float3: return "vec3";
+	case SlangParameterType::Float4: return "vec4";
+	case SlangParameterType::Float2x2: return "mat2";
+	case SlangParameterType::Float3x3: return "mat3";
+	case SlangParameterType::Float4x4: return "mat4";
+	case SlangParameterType::Float2x3: return "mat2x3";
+	case SlangParameterType::Float2x4: return "mat2x4";
+	case SlangParameterType::Float3x2: return "mat3x2";
+	case SlangParameterType::Float3x4: return "mat3x4";
+	case SlangParameterType::Float4x2: return "mat4x2";
+	case SlangParameterType::Float4x3: return "mat4x3";
+	default: return "float";
+	}
+}
+const char *shaderResourceGlslType(SlangResourceType type, ShaderNumericType numeric)
+{
+	static const char *names[][3] = {
+		{ "sampler1D", "isampler1D", "usampler1D" }, { "sampler2D", "isampler2D", "usampler2D" },
+		{ "sampler2DArray", "isampler2DArray", "usampler2DArray" }, { "sampler3D", "isampler3D", "usampler3D" },
+		{ "samplerCube", "isamplerCube", "usamplerCube" },
+		{ "sampler1D", "isampler1D", "usampler1D" }, { "sampler2D", "isampler2D", "usampler2D" },
+		{ "sampler2DArray", "isampler2DArray", "usampler2DArray" }, { "sampler3D", "isampler3D", "usampler3D" },
+		{ "samplerCube", "isamplerCube", "usamplerCube" },
+		{ "image1D", "iimage1D", "uimage1D" }, { "image2D", "iimage2D", "uimage2D" },
+		{ "image2DArray", "iimage2DArray", "uimage2DArray" }, { "image3D", "iimage3D", "uimage3D" }
+	};
+	return names[static_cast<size_t>(type)][static_cast<size_t>(numeric)];
+}
+bool isShaderStorageResource(SlangResourceType type)
+{
+	return type >= SlangResourceType::Image1D;
 }
 
 namespace {
@@ -175,21 +231,19 @@ bool parseParameterType(const std::string& token, SlangParameterType& type)
 	else if (token == "float2x2" || token == "mat2") type = SlangParameterType::Float2x2;
 	else if (token == "float3x3" || token == "mat3") type = SlangParameterType::Float3x3;
 	else if (token == "float4x4" || token == "mat4") type = SlangParameterType::Float4x4;
+	else if (token == "float2x3" || token == "mat2x3") type = SlangParameterType::Float2x3;
+	else if (token == "float2x4" || token == "mat2x4") type = SlangParameterType::Float2x4;
+	else if (token == "float3x2" || token == "mat3x2") type = SlangParameterType::Float3x2;
+	else if (token == "float3x4" || token == "mat3x4") type = SlangParameterType::Float3x4;
+	else if (token == "float4x2" || token == "mat4x2") type = SlangParameterType::Float4x2;
+	else if (token == "float4x3" || token == "mat4x3") type = SlangParameterType::Float4x3;
 	else return false;
 	return true;
 }
 
 uint32_t componentCount(SlangParameterType type)
 {
-	switch (type) {
-	case SlangParameterType::Float2: return 2;
-	case SlangParameterType::Float3: return 3;
-	case SlangParameterType::Float4: return 4;
-	case SlangParameterType::Float2x2: return 4;
-	case SlangParameterType::Float3x3: return 9;
-	case SlangParameterType::Float4x4: return 16;
-	default: return 1;
-	}
+	return shaderParameterComponentCount(type);
 }
 
 bool parseScalar(const std::string& text, SlangParameterType type, float& value)
@@ -242,16 +296,27 @@ bool parseParameter(const std::string& pragma, SlangParameter& parameter, std::s
 		parameter.type = type;
 		++index;
 	}
-	if (tokens.size() != index + 6 || !isIdentifier(tokens[index]))
-		return fail(error, "Slang #pragma parameter needs a name, label, default, minimum, maximum, and step.");
+	if ((tokens.size() != index + 5 && tokens.size() != index + 6) || !isIdentifier(tokens[index]))
+		return fail(error, "Slang #pragma parameter needs a name, label, default, minimum, maximum, and optional step.");
 	parameter.name = tokens[index++];
 	parameter.label = tokens[index++];
 	if (parameter.label.empty()
 			|| !parseParameterValue(tokens[index++], parameter.type, parameter.defaultValue)
 			|| !parseParameterValue(tokens[index++], parameter.type, parameter.minimum)
-			|| !parseParameterValue(tokens[index++], parameter.type, parameter.maximum)
-			|| !parseParameterValue(tokens[index++], parameter.type, parameter.step))
+			|| !parseParameterValue(tokens[index++], parameter.type, parameter.maximum))
 		return fail(error, "Slang #pragma parameter has an invalid typed value.");
+	if (index < tokens.size()) {
+		if (!parseParameterValue(tokens[index], parameter.type, parameter.step))
+			return fail(error, "Slang #pragma parameter has an invalid step.");
+	}
+	else {
+		parameter.step.componentCount = componentCount(parameter.type);
+		for (uint32_t component = 0; component < parameter.step.componentCount; ++component) {
+			const float range = parameter.maximum.values[component] - parameter.minimum.values[component];
+			parameter.step.values[component] = parameter.type == SlangParameterType::Bool ? 1.f
+					: parameter.type == SlangParameterType::Int ? std::max(1.f, std::floor(range * 0.1f)) : range * 0.1f;
+		}
+	}
 	return validateSlangParameter(parameter, error);
 }
 
@@ -320,10 +385,16 @@ void classifyResource(SlangResource& resource)
 
 bool parseResource(const std::string& line, SlangResource& resource)
 {
-	static const std::regex declaration(R"(^\s*(?:layout\s*\(([^)]*)\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?((?:sampler|texture|image)(?:2DArray|1D|2D|3D|Cube))\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[\s*([1-9][0-9]*)\s*\])?\s*;\s*$)");
+	static const std::regex declaration(R"(^\s*(?:layout\s*\(([^)]*)\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?((?:[iu]?sampler|texture|[iu]?image)(?:2DArray|1D|2D|3D|Cube))\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[\s*([1-9][0-9]*)\s*\])?\s*;\s*$)");
 	std::smatch match;
-	if (!std::regex_match(line, match, declaration) || !parseResourceType(match[2].str(), resource.type))
-		return false;
+	if (!std::regex_match(line, match, declaration)) return false;
+	std::string resourceType = match[2].str();
+	if (resourceType.rfind("usampler", 0) == 0 || resourceType.rfind("isampler", 0) == 0
+			|| resourceType.rfind("uimage", 0) == 0 || resourceType.rfind("iimage", 0) == 0) {
+		resource.numericType = resourceType.front() == 'u' ? ShaderNumericType::UnsignedInteger : ShaderNumericType::SignedInteger;
+		resourceType.erase(0, 1);
+	}
+	if (!parseResourceType(resourceType, resource.type)) return false;
 	resource.name = match[3].str();
 	if (match[4].matched) {
 		const std::string countText = match[4].str();
@@ -338,6 +409,13 @@ bool parseResource(const std::string& line, SlangResource& resource)
 	if (match[1].matched) {
 		std::smatch bindingMatch;
 		const std::string layout = match[1].str();
+		std::smatch format;
+		if (std::regex_search(layout, format, std::regex(R"(\b(rgba|rg|r)(8|16|32)(f|ui|i)?\b)"))) {
+			resource.formatName = format[0].str();
+			std::transform(resource.formatName.begin(), resource.formatName.end(), resource.formatName.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+			if (resource.formatName.size() > 2 && resource.formatName.substr(resource.formatName.size()-2) == "UI") resource.formatName.pop_back();
+		}
+
 		if (std::regex_search(layout, bindingMatch, std::regex(R"(\bset\s*=\s*([0-9]+))", std::regex::icase))) {
 			if (!parseShaderUnsigned(bindingMatch[1].str(), resource.bindingSet))
 				return false;
@@ -355,8 +433,120 @@ bool parseResource(const std::string& line, SlangResource& resource)
 
 bool looksLikeResourceDeclaration(const std::string& line)
 {
-	static const std::regex resourceStart(R"(^\s*(?:layout\s*\([^)]*\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?(?:sampler|texture|image))");
+	// Sampling calls may start a continuation line inside a shader function.
+	// A resource declaration needs a type followed by its identifier.
+	static const std::regex resourceStart(R"(^\s*(?:layout\s*\([^)]*\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?(?:[iu]?sampler|texture|[iu]?image)[A-Za-z0-9_]*\s+[A-Za-z_])");
 	return std::regex_search(line, resourceStart);
+}
+
+bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader, std::string& error)
+{
+	if (source.empty())
+		return true;
+	std::string preprocessed;
+	if (!preprocessShaderSource(source, { { "__VERSION__", "450" }, { "PARAMETER_UNIFORM", "1" } },
+			preprocessed, error))
+		return false;
+	// Macro expansion has already happened. Keeping the definitions would expand
+	// normalized host symbols a second time in the backend compiler.
+	std::istringstream lines(preprocessed);
+	std::string normalized;
+	bool inComment = false;
+	for (std::string line; std::getline(lines, line);) {
+		const std::string code = trim(stripComments(line, inComment));
+		if (std::regex_search(code, std::regex(R"(^#\s*(?:define|undef)\b)")))
+			continue;
+		SlangResource resource;
+		if (parseResource(code, resource)) {
+			const auto existing = std::find_if(shader.resources.begin(), shader.resources.end(),
+					[&](const SlangResource& value) { return value.name == resource.name; });
+			if (existing == shader.resources.end())
+				shader.resources.push_back(std::move(resource));
+			else if (existing->type != resource.type || existing->numericType != resource.numericType
+					|| existing->formatName != resource.formatName || existing->arrayCount != resource.arrayCount
+					|| (existing->hasExplicitBinding && resource.hasExplicitBinding
+							&& (existing->bindingSet != resource.bindingSet || existing->binding != resource.binding)))
+				return fail(error, "Slang stages declare incompatible bindings for '" + resource.name + "'.");
+			else if (resource.hasExplicitBinding)
+				*existing = std::move(resource);
+		}
+		else if (looksLikeResourceDeclaration(code))
+			return fail(error, "Malformed or unsupported Slang resource declaration.");
+		normalized += line + '\n';
+	}
+	source = std::move(normalized);
+
+	// Presets describe resources by semantic names, regardless of whether an
+	// author placed them in a uniform block or a push-constant block. Flatten
+	// those names into the common host interface before any API compiles them.
+	const std::regex block(R"((?:layout\s*\([^)]*\)\s*)?uniform\s+[A-Za-z_][A-Za-z0-9_]*\s*\{([^{}]*)\}\s*([A-Za-z_][A-Za-z0-9_]*)?\s*;)");
+	const std::regex member(R"(^\s*(?:layout\s*\([^)]*\)\s*)?(float|int|uint|bool|vec[234]|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\s*$)");
+	std::vector<std::pair<std::string, std::string>> replacements;
+	std::smatch match;
+	while (std::regex_search(source, match, block)) {
+		std::string declarations;
+		std::istringstream blockLines(match[1].str());
+		bool blockComment = false;
+		for (std::string line; std::getline(blockLines, line);)
+			declarations += stripComments(line, blockComment) + '\n';
+		std::istringstream members(declarations);
+		for (std::string declaration; std::getline(members, declaration, ';');) {
+			if (trim(declaration).empty())
+				continue;
+			std::smatch field;
+			if (!std::regex_match(declaration, field, member))
+				return fail(error, "Unsupported Slang uniform-block member: " + trim(declaration));
+			const std::string type = field[1].str();
+			const std::string name = field[2].str();
+			std::string expression;
+			if (name == "MVP" || name == "MVPMatrix")
+				expression = "mat4(1.0)";
+			else if (name == "SourceSize" || name == "OriginalSize" || name == "OutputSize" || name == "FinalViewportSize")
+				expression = type == "vec4" ? "vec4(" + name + ", vec2(1.0) / " + name + ")" : name;
+			else if (name == "FrameCount" || name == "Rotation")
+				expression = type + "(" + name + ")";
+			else if (name == "FrameDirection")
+				expression = type + "(1)";
+			else if (name == "OriginalAspect")
+				expression = "(OriginalSize.x / OriginalSize.y)";
+			else if (name == "OriginalAspectRotated")
+				expression = "((Rotation % 2) == 0 ? OriginalSize.x / OriginalSize.y : OriginalSize.y / OriginalSize.x)";
+			else if (std::any_of(shader.parameters.begin(), shader.parameters.end(),
+					[&](const SlangParameter& parameter) { return parameter.name == name; }))
+				expression = name;
+			else if (type == "vec4" && endsWith(name, "Size")) {
+				const std::string textureName = name.substr(0, name.size() - 4);
+				if (std::none_of(shader.resources.begin(), shader.resources.end(),
+						[&](const SlangResource& resource) { return resource.name == textureName; })) {
+					SlangResource resource;
+					resource.name = textureName;
+					classifyResource(resource);
+					shader.resources.push_back(std::move(resource));
+				}
+				const std::string dimensions = "vec2(textureSize(" + textureName + ", 0))";
+				expression = "vec4(" + dimensions + ", vec2(1.0) / " + dimensions + ")";
+			}
+			else
+				return fail(error, "Unsupported Slang uniform semantic '" + name + "'.");
+			const std::string binding = match[2].matched ? match[2].str() + "\\s*\\.\\s*" + name : name;
+			replacements.emplace_back(binding, "(" + expression + ")");
+		}
+		source.erase(match.position(), match.length());
+	}
+	for (const auto& replacement : replacements)
+		source = std::regex_replace(source, std::regex("\\b" + replacement.first + "\\b"), replacement.second);
+	if (vertex) {
+		const std::regex input(R"((?:layout\s*\([^)]*\)\s*)?in\s+(vec[234])\s+(Position|VertexCoord|TexCoord)\s*;)");
+		while (std::regex_search(source, match, input)) {
+			const std::string name = match[2].str();
+			const std::string type = match[1].str();
+			source.erase(match.position(), match.length());
+			const std::string value = name == "TexCoord" ? "in_uv"
+					: type == "vec4" ? "vec4(in_pos, 1.0)" : type == "vec2" ? "in_pos.xy" : "in_pos";
+			source = std::regex_replace(source, std::regex("\\b" + name + "\\b"), "(" + value + ")");
+		}
+	}
+	return true;
 }
 
 } // namespace
@@ -404,12 +594,14 @@ bool parseSlangFrontend(const std::string& shaderText, SlangShaderIR& shader, st
 	std::string commonSource;
 	std::string vertexSource;
 	std::string fragmentSource;
+	std::string computeSource;
 	bool inBlockComment = false;
 	bool versionSeen = false;
 	bool stageSeen = false;
 	bool vertexSeen = false;
 	bool fragmentSeen = false;
-	enum class Stage { None, Vertex, Fragment } stage = Stage::None;
+	bool computeSeen = false;
+	enum class Stage { None, Vertex, Fragment, Compute } stage = Stage::None;
 
 	std::istringstream stream(shaderText);
 	std::string rawLine;
@@ -430,8 +622,17 @@ bool parseSlangFrontend(const std::string& shaderText, SlangShaderIR& shader, st
 			SlangParameter parameter;
 			if (!parseParameter(line, parameter, error))
 				return false;
-			if (std::any_of(parsed.parameters.begin(), parsed.parameters.end(), [&](const SlangParameter& value) { return value.name == parameter.name; }))
-				return fail(error, "Duplicate Slang parameter '" + parameter.name + "'.");
+			const auto existing = std::find_if(parsed.parameters.begin(), parsed.parameters.end(),
+					[&](const SlangParameter& value) { return value.name == parameter.name; });
+			if (existing != parsed.parameters.end()) {
+				if (existing->label != parameter.label || existing->type != parameter.type
+						|| existing->defaultValue.values != parameter.defaultValue.values
+						|| existing->minimum.values != parameter.minimum.values
+						|| existing->maximum.values != parameter.maximum.values
+						|| existing->step.values != parameter.step.values)
+					return fail(error, "Conflicting Slang parameter '" + parameter.name + "'.");
+				continue;
+			}
 			parsed.parameters.push_back(std::move(parameter));
 			continue;
 		}
@@ -442,19 +643,20 @@ bool parseSlangFrontend(const std::string& shaderText, SlangShaderIR& shader, st
 			if (tokens.size() != 3 || tokens[0] != "#pragma" || tokens[1] != "stage")
 				return fail(error, "Malformed Slang #pragma stage declaration.");
 			stageSeen = true;
-			if (tokens[2] == "vertex" && !vertexSeen) {
+			if (tokens[2] == "vertex" && !vertexSeen && !computeSeen) {
 				stage = Stage::Vertex;
 				vertexSeen = true;
 			}
-			else if (tokens[2] == "fragment" && !fragmentSeen) {
+			else if (tokens[2] == "fragment" && !fragmentSeen && !computeSeen) {
 				stage = Stage::Fragment;
 				fragmentSeen = true;
 			}
+			else if (tokens[2] == "compute" && !computeSeen && !vertexSeen && !fragmentSeen) { stage = Stage::Compute; computeSeen = true; }
 			else
-				return fail(error, "Slang stages must be one vertex and one fragment block.");
+				return fail(error, "Slang must declare graphics stages or a single compute stage.");
 			continue;
 		}
-		if (startsWith(line, "#pragma name")) {
+		if (startsWith(line, "#pragma name") || startsWith(line, "#pragma alias")) {
 			std::vector<std::string> tokens;
 			if (!tokenize(line, tokens, error) || tokens.size() != 3 || !parsed.displayName.empty())
 				return fail(error, "Malformed or duplicate Slang #pragma name declaration.");
@@ -469,17 +671,7 @@ bool parseSlangFrontend(const std::string& shaderText, SlangShaderIR& shader, st
 			continue;
 		}
 
-		SlangResource resource;
-		if (parseResource(line, resource)) {
-			if (std::any_of(parsed.resources.begin(), parsed.resources.end(), [&](const SlangResource& value) { return value.name == resource.name; }))
-				return fail(error, "Duplicate Slang resource '" + resource.name + "'.");
-			parsed.resources.push_back(std::move(resource));
-		}
-		else if (looksLikeResourceDeclaration(line)) {
-			return fail(error, "Malformed or unsupported Slang resource declaration.");
-		}
-
-		std::string *destination = stage == Stage::Vertex ? &vertexSource : stage == Stage::Fragment ? &fragmentSource : &commonSource;
+		std::string *destination = stage == Stage::Vertex ? &vertexSource : stage == Stage::Fragment ? &fragmentSource : stage == Stage::Compute ? &computeSource : &commonSource;
 		*destination += rawLine + '\n';
 	}
 	if (inBlockComment)
@@ -489,12 +681,17 @@ bool parseSlangFrontend(const std::string& shaderText, SlangShaderIR& shader, st
 	if (!stageSeen) {
 		parsed.fragment = { commonSource, true };
 	}
+	else if (computeSeen && !vertexSeen && !fragmentSeen) { parsed.compute = { commonSource + computeSource, true }; }
 	else if (!fragmentSeen || fragmentSource.empty())
 		return fail(error, "Slang source must declare a non-empty fragment stage.");
 	else {
 		parsed.vertex = { vertexSeen ? commonSource + vertexSource : std::string(), vertexSeen };
 		parsed.fragment = { commonSource + fragmentSource, true };
 	}
+	if (!lowerStageInterface(parsed.vertex.source, true, parsed, error)
+			|| !lowerStageInterface(parsed.fragment.source, false, parsed, error)
+			|| !lowerStageInterface(parsed.compute.source, false, parsed, error))
+		return false;
 	shader = std::move(parsed);
 	return true;
 }

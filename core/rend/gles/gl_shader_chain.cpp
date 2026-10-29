@@ -52,6 +52,7 @@ const char *postProcessGlslVersion()
 	// The normal renderer keeps a GLSL 1.30 baseline for older OpenGL drivers.
 	// Shader packages are allowed to use modern local expressions, so use the
 	// full language version when the active context is already OpenGL 4.3+.
+	if (gl.is_gles && gl.gl_major >= 3 && gl.gl_minor >= 1) return "#version 310 es";
 	if (!gl.is_gles && (gl.gl_major > 4 || (gl.gl_major == 4 && gl.gl_minor >= 3)))
 		return "#version 430";
 	if (!gl.is_gles && (gl.gl_major > 3 || (gl.gl_major == 3 && gl.gl_minor >= 3)))
@@ -62,10 +63,13 @@ const char *postProcessGlslVersion()
 class PostProcessSource final : public ShaderSource
 {
 public:
-	PostProcessSource() : ShaderSource(postProcessGlslVersion())
+	explicit PostProcessSource(bool nativeStages = false) : ShaderSource(postProcessGlslVersion())
 	{
 		addConstant("TARGET_GL", gl.gl_version);
-		addSource(ShaderCompatSource);
+		if (!nativeStages)
+			addSource(ShaderCompatSource);
+		else if (gl.is_gles)
+			addSource("precision highp float;\nprecision highp int;\n");
 	}
 };
 
@@ -80,18 +84,7 @@ void removeVersionDirective(std::string& source)
 
 const char *glslType(postprocess::SlangParameterType type)
 {
-	switch (type) {
-	case postprocess::SlangParameterType::Float: return "float";
-	case postprocess::SlangParameterType::Int: return "int";
-	case postprocess::SlangParameterType::Bool: return "bool";
-	case postprocess::SlangParameterType::Float2: return "vec2";
-	case postprocess::SlangParameterType::Float3: return "vec3";
-	case postprocess::SlangParameterType::Float4: return "vec4";
-	case postprocess::SlangParameterType::Float2x2: return "mat2";
-	case postprocess::SlangParameterType::Float3x3: return "mat3";
-	case postprocess::SlangParameterType::Float4x4: return "mat4";
-	}
-	return "float";
+	return postprocess::shaderParameterGlslType(type);
 }
 
 bool hasUniformDeclaration(const std::string& source, const std::string& name)
@@ -106,27 +99,33 @@ bool hasInputDeclaration(const std::string& source, const std::string& name)
 	return std::regex_search(source, declaration);
 }
 
-std::string fragmentPreamble(const std::vector<postprocess::ShaderParameter>& parameters,
+// A custom stage may supply its own varying at zero. Avoid injecting an unused
+// convenience UV beside that interface while retaining it for portable shaders.
+bool needsDefaultTexCoord(const std::string& source, const char *direction)
+{
+	if (std::regex_search(source, std::regex(R"(\bvTexCoord\b)")))
+		return true;
+	const std::regex customZero("\\blayout\\s*\\(\\s*location\\s*=\\s*0\\s*\\)\\s*"
+			"(?:(?:flat|noperspective|centroid)\\s+)?" + std::string(direction) + "\\s+");
+	return !std::regex_search(source, customZero);
+}
+
+std::string uniformPreamble(const std::vector<postprocess::ShaderParameter>& parameters,
 		const std::vector<postprocess::SlangParameter>& slangParameters,
-		const std::vector<postprocess::SlangResource>& resources, const std::string& source, uint32_t outputCount)
+		const std::vector<postprocess::SlangResource>& resources, const std::string& source)
 {
 	std::string preamble;
-	if (outputCount == 1)
-		preamble = "#define FxOutput0 gl_FragColor\n";
-	else
-		for (uint32_t output = 0; output < outputCount; ++output)
-			preamble += "layout(location = " + std::to_string(output) + ") out vec4 FxOutput" + std::to_string(output) + ";\n";
-	if (!hasInputDeclaration(source, "vTexCoord"))
-		preamble += "in mediump vec2 vTexCoord;\n";
 	bool hasSource = false;
 	for (const postprocess::SlangResource& resource : resources) {
-		preamble += "uniform sampler2D " + resource.name + ";\n";
+		preamble += "uniform " + std::string(postprocess::shaderResourceGlslType(resource.type, resource.numericType)) + " " + resource.name + ";\n";
 		hasSource = hasSource || resource.name == "Source";
 	}
 	if (!hasSource && !hasUniformDeclaration(source, "Source")) preamble += "uniform sampler2D Source;\n";
 	if (!hasUniformDeclaration(source, "SourceSize")) preamble += "uniform mediump vec2 SourceSize;\n";
 	if (!hasUniformDeclaration(source, "OriginalSize")) preamble += "uniform mediump vec2 OriginalSize;\n";
 	if (!hasUniformDeclaration(source, "OutputSize")) preamble += "uniform mediump vec2 OutputSize;\n";
+	if (!hasUniformDeclaration(source, "FinalViewportSize")) preamble += "uniform mediump vec2 FinalViewportSize;\n";
+	if (!hasUniformDeclaration(source, "HasDepth")) preamble += "uniform int HasDepth;\n";
 	if (!hasUniformDeclaration(source, "FrameCount")) preamble += "uniform int FrameCount;\n";
 	if (!hasUniformDeclaration(source, "Rotation")) preamble += "uniform int Rotation;\n";
 	std::unordered_set<std::string> emittedParameters;
@@ -139,9 +138,24 @@ std::string fragmentPreamble(const std::vector<postprocess::ShaderParameter>& pa
 	return preamble;
 }
 
+std::string fragmentPreamble(const std::vector<postprocess::ShaderParameter>& parameters,
+		const std::vector<postprocess::SlangParameter>& slangParameters,
+		const std::vector<postprocess::SlangResource>& resources, const std::string& source, uint32_t outputCount)
+{
+	std::string preamble = uniformPreamble(parameters, slangParameters, resources, source);
+	if (outputCount == 1)
+		preamble += "#define FxOutput0 gl_FragColor\n";
+	else
+		for (uint32_t output = 0; output < outputCount; ++output)
+			preamble += "layout(location = " + std::to_string(output) + ") out vec4 FxOutput" + std::to_string(output) + ";\n";
+	if (!hasInputDeclaration(source, "vTexCoord") && needsDefaultTexCoord(source, "in"))
+		preamble += "in mediump vec2 vTexCoord;\n";
+	return preamble;
+}
+
 void removeResourceDeclarations(std::string& source)
 {
-	static const std::regex resource(R"(^\s*(?:layout\s*\([^\n]*\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?(?:sampler|texture|image)(?:2DArray|1D|2D|3D|Cube)\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[\s*[1-9][0-9]*\s*\])?\s*;\s*$)");
+	static const std::regex resource(R"(^\s*(?:layout\s*\([^\n]*\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?(?:[iu]?sampler|texture)(?:2DArray|1D|2D|3D|Cube)\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[\s*[1-9][0-9]*\s*\])?\s*;\s*$)");
 	std::string cleaned;
 	std::istringstream stream(source);
 	for (std::string line; std::getline(stream, line);)
@@ -150,19 +164,52 @@ void removeResourceDeclarations(std::string& source)
 	source = std::move(cleaned);
 }
 
-std::string vertexResourcePreamble(const std::vector<postprocess::SlangResource>& resources)
+std::string vertexResourcePreamble(const std::vector<postprocess::ShaderParameter>& parameters,
+		const std::vector<postprocess::SlangParameter>& slangParameters,
+		const std::vector<postprocess::SlangResource>& resources, const std::string& source)
 {
 	// Portable custom stages have their interface declarations stripped before
 	// backend compilation, so recreate the fixed fullscreen varying here.
-	std::string preamble = "out mediump vec2 vTexCoord;\n";
-	for (const postprocess::SlangResource& resource : resources)
-		preamble += "uniform sampler2D " + resource.name + ";\n";
+	std::string preamble = needsDefaultTexCoord(source, "out") ? "out mediump vec2 vTexCoord;\n" : "";
+	preamble += uniformPreamble(parameters, slangParameters, resources, source);
 	return preamble;
 }
 
 bool isTexture2D(postprocess::SlangResourceType type)
 {
 	return type == postprocess::SlangResourceType::Sampler2D || type == postprocess::SlangResourceType::Texture2D;
+}
+
+GLenum shaderTextureTarget(postprocess::SlangResourceType type)
+{
+	switch (type) {
+#ifndef GLES
+	case postprocess::SlangResourceType::Sampler1D: case postprocess::SlangResourceType::Texture1D: return GL_TEXTURE_1D;
+#endif
+#ifndef GLES2
+	case postprocess::SlangResourceType::Sampler3D: case postprocess::SlangResourceType::Texture3D: return GL_TEXTURE_3D;
+	case postprocess::SlangResourceType::Sampler2DArray: case postprocess::SlangResourceType::Texture2DArray: return GL_TEXTURE_2D_ARRAY;
+#endif
+	case postprocess::SlangResourceType::SamplerCube: case postprocess::SlangResourceType::TextureCube: return GL_TEXTURE_CUBE_MAP;
+	default: return GL_TEXTURE_2D;
+	}
+}
+
+GLuint compileComputeShader(const std::string& source, std::string& error)
+{
+#ifdef GL_COMPUTE_SHADER
+	if (glDispatchCompute == nullptr || glBindImageTexture == nullptr) { error = "Compute effects require OpenGL 4.3 or GLES 3.1."; return 0; }
+	const char *text = source.c_str();
+	const GLuint shader = glCreateShader(GL_COMPUTE_SHADER); glShaderSource(shader, 1, &text, nullptr); glCompileShader(shader);
+	GLint valid = 0; glGetShaderiv(shader, GL_COMPILE_STATUS, &valid);
+	if (!valid) { char log[8192] {}; glGetShaderInfoLog(shader, sizeof(log), nullptr, log); error = log; glDeleteShader(shader); return 0; }
+	const GLuint program = glCreateProgram(); glAttachShader(program, shader); glLinkProgram(program); glDeleteShader(shader);
+	glGetProgramiv(program, GL_LINK_STATUS, &valid);
+	if (!valid) { char log[8192] {}; glGetProgramInfoLog(program, sizeof(log), nullptr, log); error = log; glDeleteProgram(program); return 0; }
+	return program;
+#else
+	error = "Compute effects require OpenGL 4.3 or GLES 3.1."; return 0;
+#endif
 }
 
 GLint glWrapMode(postprocess::ShaderWrapMode mode)
@@ -215,6 +262,22 @@ GLenum glBlendOperation(postprocess::ShaderBlendOperation operation)
 bool glTargetFormat(const postprocess::ShaderPass& pass, GLenum& internalFormat, GLenum& pixelFormat,
 		GLenum& pixelType, std::string& error)
 {
+#ifndef GLES2
+	if (pass.targetFormatName == "R8_UNORM") { internalFormat = GL_R8; pixelFormat = GL_RED; pixelType = GL_UNSIGNED_BYTE; return true; }
+	if (pass.targetFormatName == "R16_UNORM") { internalFormat = GL_R16; pixelFormat = GL_RED; pixelType = GL_UNSIGNED_SHORT; return true; }
+	if (pass.targetFormatName == "R16_SFLOAT") { internalFormat = GL_R16F; pixelFormat = GL_RED; pixelType = GL_HALF_FLOAT; return true; }
+	if (pass.targetFormatName == "R32_SFLOAT") { internalFormat = GL_R32F; pixelFormat = GL_RED; pixelType = GL_FLOAT; return true; }
+	if (pass.targetFormatName == "R32_SINT") { internalFormat = GL_R32I; pixelFormat = GL_RED_INTEGER; pixelType = GL_INT; return true; }
+	if (pass.targetFormatName == "R32_UINT") { internalFormat = GL_R32UI; pixelFormat = GL_RED_INTEGER; pixelType = GL_UNSIGNED_INT; return true; }
+	if (pass.targetFormatName == "R8G8_UNORM") { internalFormat = GL_RG8; pixelFormat = GL_RG; pixelType = GL_UNSIGNED_BYTE; return true; }
+	if (pass.targetFormatName == "R16G16_UNORM") { internalFormat = GL_RG16; pixelFormat = GL_RG; pixelType = GL_UNSIGNED_SHORT; return true; }
+	if (pass.targetFormatName == "R16G16_SFLOAT") { internalFormat = GL_RG16F; pixelFormat = GL_RG; pixelType = GL_HALF_FLOAT; return true; }
+	if (pass.targetFormatName == "R32G32_SFLOAT") { internalFormat = GL_RG32F; pixelFormat = GL_RG; pixelType = GL_FLOAT; return true; }
+	if (pass.targetFormatName == "R32G32B32A32_SINT") { internalFormat = GL_RGBA32I; pixelFormat = GL_RGBA_INTEGER; pixelType = GL_INT; return true; }
+	if (pass.targetFormatName == "R32G32B32A32_UINT") { internalFormat = GL_RGBA32UI; pixelFormat = GL_RGBA_INTEGER; pixelType = GL_UNSIGNED_INT; return true; }
+	if (pass.targetFormatName == "A2B10G10R10_UNORM_PACK32") { internalFormat = GL_RGB10_A2; pixelFormat = GL_RGBA; pixelType = GL_UNSIGNED_INT_2_10_10_10_REV; return true; }
+	if (pass.targetFormatName == "B10G11R11_UFLOAT_PACK32") { internalFormat = GL_R11F_G11F_B10F; pixelFormat = GL_RGB; pixelType = GL_UNSIGNED_INT_10F_11F_11F_REV; return true; }
+#endif
 	if (!pass.targetFormatName.empty() && pass.targetFormatName != "R8G8B8A8_UNORM"
 			&& pass.targetFormatName != "R8G8B8A8_SRGB" && pass.targetFormatName != "R16G16B16A16_SFLOAT"
 			&& pass.targetFormatName != "R16G16B16A16_UNORM" && pass.targetFormatName != "R32G32B32A32_SFLOAT") {
@@ -251,7 +314,7 @@ bool glTargetFormat(const postprocess::ShaderPass& pass, GLenum& internalFormat,
 		pixelType = GL_UNSIGNED_BYTE;
 		return true;
 	}
-	internalFormat = GL_RGBA;
+	internalFormat = gl.gl_major >= 3 ? GL_RGBA8 : GL_RGBA;
 	pixelFormat = GL_RGBA;
 	pixelType = GL_UNSIGNED_BYTE;
 	return true;
@@ -281,6 +344,95 @@ std::unique_ptr<GlFramebuffer> createTarget(const postprocess::ShaderPass& pass,
 
 } // namespace
 
+namespace {
+void attachOutputImage(GLenum framebufferTarget, GLenum textureTarget, GLuint texture, uint32_t layer)
+{
+#ifndef GLES
+	if (textureTarget == GL_TEXTURE_1D) {
+		glFramebufferTexture1D(framebufferTarget, GL_COLOR_ATTACHMENT0, textureTarget, texture, 0);
+		return;
+	}
+#endif
+#ifndef GLES2
+	if (textureTarget == GL_TEXTURE_3D || textureTarget == GL_TEXTURE_2D_ARRAY) {
+		glFramebufferTextureLayer(framebufferTarget, GL_COLOR_ATTACHMENT0, texture, 0, layer);
+		return;
+	}
+#endif
+	glFramebufferTexture2D(framebufferTarget, GL_COLOR_ATTACHMENT0, textureTarget, texture, 0);
+}
+} // namespace
+
+bool GlShaderChain::clearOutput(OutputTarget& destination, std::string& error)
+{
+	if (!transferDrawFramebuffer) glGenFramebuffers(1, &transferDrawFramebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, transferDrawFramebuffer);
+	glcache.Disable(GL_SCISSOR_TEST);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glcache.InvalidateBlendState();
+	for (uint32_t layer = 0; layer < destination.depth; ++layer) {
+		attachOutputImage(GL_FRAMEBUFFER, destination.target, destination.getTexture(), layer);
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			error = "OpenGL cannot clear the requested shader image format.";
+			return false;
+		}
+#ifndef GLES2
+		const auto numeric = postprocess::shaderFormatNumericType(destination.formatName);
+		if (numeric == postprocess::ShaderNumericType::UnsignedInteger) {
+			const GLuint zero[4] {}; glClearBufferuiv(GL_COLOR, 0, zero);
+		}
+		else if (numeric == postprocess::ShaderNumericType::SignedInteger) {
+			const GLint zero[4] {}; glClearBufferiv(GL_COLOR, 0, zero);
+		}
+		else {
+			const GLfloat zero[4] {}; glClearBufferfv(GL_COLOR, 0, zero);
+		}
+#else
+		glcache.ClearColor(0, 0, 0, 0);
+		glClear(GL_COLOR_BUFFER_BIT);
+#endif
+	}
+	attachOutputImage(GL_FRAMEBUFFER, destination.target, 0, 0);
+	return true;
+}
+
+bool GlShaderChain::copyOutput(const OutputTarget& source, OutputTarget& destination, std::string& error)
+{
+	if (source.width != destination.width || source.height != destination.height || source.depth != destination.depth
+			|| source.target != destination.target)
+		return true; // A resize starts a new, zero-initialized texture version.
+#if defined(GL_VERSION_4_3) || defined(GL_ES_VERSION_3_2)
+	if (glCopyImageSubData) {
+		glCopyImageSubData(source.getTexture(), source.target, 0, 0, 0, 0, destination.getTexture(), destination.target,
+				0, 0, 0, 0, source.width, source.height, source.depth);
+		return true;
+	}
+#endif
+#ifndef GLES2
+	if (!transferReadFramebuffer) glGenFramebuffers(1, &transferReadFramebuffer);
+	if (!transferDrawFramebuffer) glGenFramebuffers(1, &transferDrawFramebuffer);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, transferReadFramebuffer);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, transferDrawFramebuffer);
+	glcache.Disable(GL_SCISSOR_TEST);
+	for (uint32_t layer = 0; layer < source.depth; ++layer) {
+		attachOutputImage(GL_READ_FRAMEBUFFER, source.target, source.getTexture(), layer);
+		attachOutputImage(GL_DRAW_FRAMEBUFFER, destination.target, destination.getTexture(), layer);
+		if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE
+				|| glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			error = "OpenGL cannot copy a persistent shader image on this context.";
+			return false;
+		}
+		glBlitFramebuffer(0, 0, source.width, source.height, 0, 0, destination.width, destination.height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	}
+	attachOutputImage(GL_READ_FRAMEBUFFER, source.target, 0, 0);
+	attachOutputImage(GL_DRAW_FRAMEBUFFER, destination.target, 0, 0);
+	return true;
+#else
+	error = "Persistent effect textures require OpenGL or GLES 3.0.";
+	return false;
+#endif
+}
+
 bool GlShaderChain::ensureMrtTarget(MrtTarget& target, const postprocess::ShaderPass& pass,
 		int width, int height, std::string& error)
 {
@@ -292,10 +444,10 @@ bool GlShaderChain::ensureMrtTarget(MrtTarget& target, const postprocess::Shader
 	}
 	const uint32_t outputCount = pass.outputs.empty() ? 1u : static_cast<uint32_t>(pass.outputs.size());
 	const bool matching = target.outputs.size() == outputCount && std::all_of(target.outputs.begin(), target.outputs.end(),
-			[&](const std::unique_ptr<GlFramebuffer>& output) {
+			[&](const std::unique_ptr<OutputTarget>& output) {
 				return output != nullptr && output->getWidth() == width && output->getHeight() == height;
 			});
-	if (matching && target.framebuffer != 0)
+	if (matching && (pass.compute || target.framebuffer != 0))
 		return true;
 	target.initialized = false;
 	if (target.framebuffer != 0) {
@@ -310,19 +462,44 @@ bool GlShaderChain::ensureMrtTarget(MrtTarget& target, const postprocess::Shader
 			outputPass.targetFormat = pass.outputs[output].targetFormat;
 			outputPass.targetFormatName = pass.outputs[output].targetFormatName;
 		}
-		std::unique_ptr<GlFramebuffer> framebuffer = createTarget(outputPass, width, height, error);
-		if (framebuffer == nullptr)
-			return false;
-		target.outputs.push_back(std::move(framebuffer));
+		auto resource = std::make_unique<OutputTarget>();
+		resource->width = width; resource->height = height;
+		resource->depth = pass.outputs.empty() ? 1u : pass.outputs[output].depth;
+		resource->formatName = outputPass.targetFormatName;
+		const auto type = pass.outputs.empty() ? postprocess::SlangResourceType::Sampler2D : pass.outputs[output].type;
+		resource->target = shaderTextureTarget(type);
+		if (resource->target == GL_TEXTURE_2D) {
+			resource->framebuffer = createTarget(outputPass, width, height, error);
+			if (!resource->framebuffer) return false;
+		} else {
+#ifndef GLES2
+			GLenum format, pixels, pixelType;
+			if (!glTargetFormat(outputPass, format, pixels, pixelType, error)) return false;
+			glGenTextures(1, &resource->texture); glBindTexture(resource->target, resource->texture);
+			const uint32_t texelBytes = postprocess::shaderFormatBytes(resource->formatName);
+			std::vector<uint8_t> zeros(static_cast<size_t>(width) * height * resource->depth * (texelBytes ? texelBytes : 4u));
+			glTexParameteri(resource->target, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(resource->target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+#ifndef GLES
+			if (resource->target == GL_TEXTURE_1D) glTexImage1D(resource->target, 0, format, width, 0, pixels, pixelType, zeros.data());
+			else
+#endif
+			glTexImage3D(resource->target, 0, format, width, height, pass.outputs[output].depth, 0, pixels, pixelType, zeros.data());
+#else
+			error = "This shader texture dimension requires GLES 3.0 or desktop GL."; return false;
+#endif
+		}
+		if (!clearOutput(*resource, error)) return false;
+		target.outputs.push_back(std::move(resource));
 	}
+	if (pass.compute) return true;
 	glGenFramebuffers(1, &target.framebuffer);
 	glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
 	std::array<GLenum, 8> attachments {};
-	for (uint32_t output = 0; output < outputCount; ++output) {
+	for (uint32_t output = 0; output < pass.colorOutputCount; ++output) {
 		attachments[output] = GL_COLOR_ATTACHMENT0 + output;
 		glFramebufferTexture2D(GL_FRAMEBUFFER, attachments[output], GL_TEXTURE_2D, target.outputs[output]->getTexture(), 0);
 	}
-	if (outputCount > 1)
+	if (pass.colorOutputCount > 1)
 	{
 #ifdef GLES2
 		error = "OpenGL MRT shader passes require OpenGL or GLES 3.0.";
@@ -333,14 +510,14 @@ bool GlShaderChain::ensureMrtTarget(MrtTarget& target, const postprocess::Shader
 #else
 		GLint maxDrawBuffers = 0;
 		glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
-		if (maxDrawBuffers < static_cast<GLint>(outputCount)) {
+		if (maxDrawBuffers < static_cast<GLint>(pass.colorOutputCount)) {
 			error = "OpenGL does not provide enough draw buffers for this shader pass.";
 			glDeleteFramebuffers(1, &target.framebuffer);
 			target.framebuffer = 0;
 			target.outputs.clear();
 			return false;
 		}
-		glDrawBuffers(outputCount, attachments.data());
+		glDrawBuffers(pass.colorOutputCount, attachments.data());
 #endif
 	}
 	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -356,8 +533,7 @@ bool GlShaderChain::ensureMrtTarget(MrtTarget& target, const postprocess::Shader
 	else
 		glcache.Disable(GL_FRAMEBUFFER_SRGB);
 #endif
-	glcache.ClearColor(0.f, 0.f, 0.f, 0.f);
-	glClear(GL_COLOR_BUFFER_BIT);
+	// Each attachment was initialized through its own typed view above.
 #ifndef GLES2
 	glcache.Disable(GL_FRAMEBUFFER_SRGB);
 #endif
@@ -448,54 +624,39 @@ bool GlShaderChain::ensureLookupTextures(std::string& error)
 
 bool GlShaderChain::ensureLookupTextures(std::vector<LookupTexture>& textures, std::string& error)
 {
-	uint64_t lookupBytes = 0;
-	for (LookupTexture& lookup : textures) {
-		if (lookup.texture != 0)
-			continue;
-		std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(lookup.config.path, "rb"));
-		if (!file) {
-			error = "Unable to open post-processing lookup texture: " + lookup.config.path;
-			return false;
-		}
-		const s64 fileSize = file->size();
-		if (fileSize < 0 || static_cast<uint64_t>(fileSize) > postprocess::MaxShaderLookupFileBytes) {
-			error = "Post-processing lookup texture exceeds the 64 MiB file limit: " + lookup.config.path;
-			return false;
-		}
-		int width = 0;
-		int height = 0;
-		int channels = 0;
-		u8 *pixels = stbi_load_from_file(file.get(), &width, &height, &channels, STBI_rgb_alpha);
-		if (!pixels || width <= 0 || height <= 0) {
-			stbi_image_free(pixels);
-			error = "Unable to decode post-processing lookup texture: " + lookup.config.path;
-			return false;
-		}
-		if (!postprocess::validateShaderLookupTexture(width, height, error)) {
-			stbi_image_free(pixels);
-			return false;
-		}
-		if (!postprocess::accumulateShaderTargetBytes(width, height,
-				postprocess::ShaderTargetFormat::Default, {}, lookup.config.useMipmaps,
-				1, lookupBytes, error)) {
-			stbi_image_free(pixels);
-			return false;
-		}
-		glGenTextures(1, &lookup.texture);
-		glActiveTexture(GL_TEXTURE0);
-		glcache.InvalidateTextureBinding();
-		glcache.BindTexture(GL_TEXTURE_2D, lookup.texture);
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-		stbi_image_free(pixels);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-				lookup.config.useMipmaps
-						? (lookup.config.linearFilter ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR)
-						: lookup.config.linearFilter ? GL_LINEAR : GL_NEAREST);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, lookup.config.linearFilter ? GL_LINEAR : GL_NEAREST);
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glWrapMode(lookup.config.wrapMode));
-		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, glWrapMode(lookup.config.wrapMode));
-		if (lookup.config.useMipmaps)
-			glGenerateMipmap(GL_TEXTURE_2D);
+	uint64_t bytes = 0;
+	for (auto& lookup : textures) {
+		if (lookup.texture) continue;
+		postprocess::ShaderTextureData data;
+		if (!postprocess::loadShaderTexture(lookup.config, data, error)) return false;
+		if (data.pixels.size() > postprocess::MaxShaderChainTargetBytes - bytes) { error = "Shader lookups exceed the chain memory budget."; return false; }
+		bytes += data.pixels.size();
+		postprocess::ShaderPass formatPass; formatPass.targetFormatName = data.formatName;
+		GLenum format, pixels, pixelType;
+		if (!glTargetFormat(formatPass, format, pixels, pixelType, error)) return false;
+		const GLenum target = shaderTextureTarget(data.type);
+		if (lookup.config.numericType != postprocess::ShaderNumericType::Float && (lookup.config.linearFilter || lookup.config.useMipmaps)) { error = "Integer textures require nearest filtering without generated mipmaps."; return false; }
+		glGenTextures(1, &lookup.texture); glActiveTexture(GL_TEXTURE0); glcache.InvalidateTextureBinding(); glBindTexture(target, lookup.texture);
+#ifndef GLES
+		if (target == GL_TEXTURE_1D) glTexImage1D(target, 0, format, data.width, 0, pixels, pixelType, data.pixels.data());
+		else
+#endif
+		if (target == GL_TEXTURE_CUBE_MAP) {
+			const size_t faceBytes = static_cast<size_t>(data.width) * data.height * postprocess::shaderFormatBytes(data.formatName);
+			for (GLuint face = 0; face < 6; ++face) glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, format, data.width, data.height, 0, pixels, pixelType, data.pixels.data() + face * faceBytes);
+		} else if (target == GL_TEXTURE_2D) glTexImage2D(target, 0, format, data.width, data.height, 0, pixels, pixelType, data.pixels.data());
+#ifndef GLES2
+		else glTexImage3D(target, 0, format, data.width, data.height, data.depth * data.layers, 0, pixels, pixelType, data.pixels.data());
+#else
+		else { error = "This texture dimension requires GLES 3.0 or desktop GL."; return false; }
+#endif
+		glTexParameteri(target, GL_TEXTURE_MIN_FILTER, lookup.config.useMipmaps ? (lookup.config.linearFilter ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST) : lookup.config.linearFilter ? GL_LINEAR : GL_NEAREST);
+		glTexParameteri(target, GL_TEXTURE_MAG_FILTER, lookup.config.linearFilter ? GL_LINEAR : GL_NEAREST);
+		glTexParameteri(target, GL_TEXTURE_WRAP_S, glWrapMode(lookup.config.wrapMode)); glTexParameteri(target, GL_TEXTURE_WRAP_T, glWrapMode(lookup.config.wrapMode));
+#ifndef GLES2
+		if (target != GL_TEXTURE_2D) glTexParameteri(target, GL_TEXTURE_WRAP_R, glWrapMode(lookup.config.wrapMode));
+#endif
+		if (lookup.config.useMipmaps) glGenerateMipmap(target);
 	}
 	return true;
 }
@@ -531,49 +692,129 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 		std::string vertexBody = passSource->vertex;
 		removeVersionDirective(vertexBody);
 		removeResourceDeclarations(vertexBody);
+		if (passSource->nativeFxStages) {
+			// Keep top-left effect UVs aligned with the renderer's GL texture origin.
+			vertexBody = "#define main HollycastEffectVertexMain\n" + vertexBody
+					+ "\n#undef main\nvoid main() { HollycastEffectVertexMain(); gl_Position.y = -gl_Position.y; }\n";
+		}
 		const uint32_t outputCount = pass.outputs.empty() ? 1u : static_cast<uint32_t>(pass.outputs.size());
+		if (gl.is_gles && (std::any_of(passSource->slangResources.begin(), passSource->slangResources.end(), [](const auto& resource) {
+			return resource.type == postprocess::SlangResourceType::Sampler1D || resource.type == postprocess::SlangResourceType::Texture1D;
+		}) || std::any_of(pass.outputs.begin(), pass.outputs.end(), [](const auto& output) {
+			return output.type == postprocess::SlangResourceType::Sampler1D;
+		}))) {
+			error = "GLES does not expose native one-dimensional shader images.";
+			deletePrograms(candidate); return false;
+		}
+#if defined(GL_VERSION_4_0) || defined(GL_ES_VERSION_3_2)
+		if (pass.renderState.reflected && pass.colorOutputCount > 1 && (!glBlendFuncSeparatei || !glBlendEquationSeparatei || !glColorMaski || !glEnablei || !glDisablei)) {
+			const auto& first = pass.renderState.attachments[0];
+			for (uint32_t i = 1; i < pass.colorOutputCount; ++i) {
+				const auto& a = pass.renderState.attachments[i];
+				if (a.blendEnabled != first.blendEnabled || a.source != first.source || a.destination != first.destination || a.sourceAlpha != first.sourceAlpha || a.destinationAlpha != first.destinationAlpha || a.operation != first.operation || a.alphaOperation != first.alphaOperation || a.writeMask != first.writeMask) {
+					error = "This effect requires independent per-target blend state unavailable on this GL context."; deletePrograms(candidate); return false;
+				}
+			}
+		}
+#endif
 		const bool supportsExplicitMrtLocations = gl.is_gles ? gl.gl_major >= 3
 				: gl.gl_major > 3 || (gl.gl_major == 3 && gl.gl_minor >= 3);
-		if (outputCount > 1 && !supportsExplicitMrtLocations) {
+		if (pass.colorOutputCount > 1 && !supportsExplicitMrtLocations) {
 			error = "OpenGL MRT shader passes require OpenGL 3.3 or GLES 3.0.";
 			deletePrograms(candidate);
 			return false;
 		}
 
+		if (!pass.storageBindings.empty()) {
+#ifdef GL_COMPUTE_SHADER
+			if (!glBindImageTexture || !glMemoryBarrier) {
+				error = "Writable shader images require OpenGL 4.2 or GLES 3.1.";
+				deletePrograms(candidate);
+				return false;
+			}
+			if (pass.compute) {
+				GLint invocations = 0; glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &invocations);
+				for (GLuint axis = 0; axis < 3; ++axis) {
+					GLint size = 0; glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, axis, &size);
+					if (pass.localSize[axis] == 0 || pass.localSize[axis] > static_cast<uint32_t>(size)) {
+						error = "Shader workgroup dimensions exceed this OpenGL device's compute limits.";
+						deletePrograms(candidate); return false;
+					}
+				}
+				if (static_cast<uint64_t>(pass.localSize[0]) * pass.localSize[1] * pass.localSize[2] > static_cast<uint32_t>(invocations)) {
+					error = "Shader workgroup invocations exceed this OpenGL device's compute limit.";
+					deletePrograms(candidate); return false;
+				}
+			}
+			GLint imageUnits = 0;
+			glGetIntegerv(GL_MAX_IMAGE_UNITS, &imageUnits);
+			if (pass.storageBindings.size() > static_cast<size_t>(imageUnits)) {
+				error = "Shader storage images exceed the device image-unit limit.";
+				deletePrograms(candidate);
+				return false;
+			}
+#else
+			error = "Writable shader images are unavailable on this OpenGL build.";
+			deletePrograms(candidate);
+			return false;
+#endif
+		}
 		try {
 			std::vector<postprocess::ShaderParameter> passParameters;
 			std::copy_if(chain.parameters.begin(), chain.parameters.end(), std::back_inserter(passParameters),
 					[&](const postprocess::ShaderParameter& parameter) {
 						return parameter.layerIndex == pass.layerIndex;
 					});
-			PostProcessSource vertexSource;
-			vertexSource.addSource(VertexCompatShader);
-			if (vertexBody.empty())
+			PostProcessSource vertexSource(passSource->nativeFxStages);
+			if (!passSource->nativeFxStages)
+				vertexSource.addSource(VertexCompatShader);
+			if (passSource->nativeFxStages)
+				vertexSource.addSource(uniformPreamble(passParameters, passSource->slangParameters,
+						passSource->slangResources, vertexBody)).addSource(vertexBody);
+			else if (vertexBody.empty())
 				vertexSource.addSource(FullscreenVertexShader);
 			else {
-				// Slang's common vertex names are aliases for HollyCast's fixed fullscreen VBO.
-				// This preserves custom transforms without asking shader packages for backend attributes.
+				// Portable stages use the fixed fullscreen VBO after their package
+				// input declarations have been normalized by the frontend.
+				if (!hasInputDeclaration(vertexBody, "in_pos"))
+					vertexSource.addSource("in highp vec3 in_pos;\n");
+				if (!hasInputDeclaration(vertexBody, "in_uv"))
+					vertexSource.addSource("in mediump vec2 in_uv;\n");
 				vertexSource.addSource(passSource->retroArchGlsl
-						? "in highp vec3 in_pos;\nin mediump vec2 in_uv;\n"
-						  "#define VertexCoord vec4(in_pos, 1.0)\n#define Position VertexCoord\n#define TexCoord in_uv\n#define aTexCoord in_uv\n"
+						? "#define VertexCoord vec4(in_pos, 1.0)\n#define Position VertexCoord\n#define TexCoord in_uv\n#define aTexCoord in_uv\n"
 						: "#define VertexCoord in_pos\n#define Position in_pos\n#define TexCoord in_uv\n#define aTexCoord in_uv\n")
-						.addSource(vertexResourcePreamble(passSource->slangResources))
+						.addSource(vertexResourcePreamble(passParameters, passSource->slangParameters,
+								passSource->slangResources, vertexBody))
 						.addSource(vertexBody);
 			}
-			PostProcessSource fragmentSource;
-			fragmentSource.addSource(PixelCompatShader)
-					.addSource(fragmentPreamble(passParameters, passSource->slangParameters,
-							passSource->slangResources, shaderBody, outputCount))
-					.addSource(shaderBody);
+			PostProcessSource fragmentSource(passSource->nativeFxStages);
+			if (passSource->nativeFxStages)
+				fragmentSource.addSource(uniformPreamble(passParameters, passSource->slangParameters,
+						passSource->slangResources, shaderBody));
+			else
+				fragmentSource.addSource(PixelCompatShader)
+						.addSource(fragmentPreamble(passParameters, passSource->slangParameters,
+								passSource->slangResources, shaderBody, pass.colorOutputCount));
+			fragmentSource.addSource(shaderBody);
 			Program program;
-			program.duckStationGlsl = passSource->duckStationGlsl;
+			program.displayGlsl = passSource->displayGlsl;
+			program.nativeFxStages = passSource->nativeFxStages;
 			const std::string vertexShader = vertexSource.generate();
-			program.handle = gl_CompileAndLink(vertexShader.c_str(), fragmentSource.generate().c_str(), &error);
+			if (pass.compute) {
+				std::string compute = passSource->compute; removeVersionDirective(compute); removeResourceDeclarations(compute);
+				// Compute entry points keep their native image declarations and local-size layout.
+				PostProcessSource computeSource(true);
+				computeSource.addSource(uniformPreamble(passParameters, passSource->slangParameters, passSource->slangResources, compute)).addSource(compute);
+				program.handle = compileComputeShader(computeSource.generate(), error);
+				if (!program.handle) { deletePrograms(candidate); return false; }
+			} else program.handle = gl_CompileAndLink(vertexShader.c_str(), fragmentSource.generate().c_str(), &error);
 			program.pass = pass;
 			program.sourceUniform = glGetUniformLocation(program.handle, "Source");
 			program.sourceSizeUniform = glGetUniformLocation(program.handle, "SourceSize");
 			program.originalSizeUniform = glGetUniformLocation(program.handle, "OriginalSize");
 			program.outputSizeUniform = glGetUniformLocation(program.handle, "OutputSize");
+			program.finalViewportSizeUniform = glGetUniformLocation(program.handle, "FinalViewportSize");
+			program.hasDepthUniform = glGetUniformLocation(program.handle, "HasDepth");
 			program.frameCountUniform = glGetUniformLocation(program.handle, "FrameCount");
 			program.rotationUniform = glGetUniformLocation(program.handle, "Rotation");
 			for (const postprocess::ShaderParameter& parameter : passParameters)
@@ -591,7 +832,7 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 			GLuint textureUnit = 0;
 			bool hasSource = false;
 			for (const postprocess::SlangResource& resource : passSource->slangResources) {
-				if (!isTexture2D(resource.type) || resource.arrayCount != 1) {
+				if (resource.arrayCount != 1) {
 					error = "OpenGL supports only single sampler2D resources; '" + resource.name + "' is unsupported.";
 					glcache.DeleteProgram(program.handle);
 					deletePrograms(candidate);
@@ -628,6 +869,7 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 				ResourceUniform binding { glGetUniformLocation(program.handle, resource.name.c_str()), input->kind,
 						input->sourcePass, input->sourceOutput, input->historyOffset, input->resourceName,
 						lookupIndex, textureUnit++ };
+				binding.textureTarget = shaderTextureTarget(resource.type);
 				const auto samplerConfig = std::find_if(pass.samplers.begin(), pass.samplers.end(), [&](const auto& sampler) {
 					return sampler.bindingName == resource.name;
 				});
@@ -715,6 +957,7 @@ bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string&
 	deletePrograms(programs);
 	deleteLookupTextures();
 	programs = std::move(candidate);
+	hostParameters = chain.parameters;
 	lookupTextures = std::move(candidateLookupTextures);
 	sourceHistoryDepth = 1;
 	needsSourceHistory = false;
@@ -734,8 +977,14 @@ bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string&
 						std::max(programs[input.sourcePass].historyDepth, requiredDepth);
 			}
 		}
+	for (const auto& program : programs)
+		for (const auto& output : program.pass.outputs)
+			if (output.previousFrame && output.previousPass != postprocess::InvalidShaderPass)
+				programs[output.previousPass].historyDepth = std::max(2u, programs[output.previousPass].historyDepth);
 	targets.clear();
+	stencilTargets.clear();
 	displayInput.reset();
+	depthInput.reset();
 	mipmapInput.reset();
 	sourceHistory.clear();
 	error.clear();
@@ -757,6 +1006,7 @@ void GlShaderChain::updateConfiguredChain()
 		deleteLookupTextures();
 		targets.clear();
 		displayInput.reset();
+		depthInput.reset();
 		mipmapInput.reset();
 		sourceHistory.clear();
 		activePath.clear();
@@ -784,12 +1034,25 @@ void GlShaderChain::updateConfiguredChain()
 }
 
 GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::ShaderFrameInfo& frame,
-		bool& presentationTransformApplied)
+		bool& presentationTransformApplied, GLuint depthTexture, int depthWidth, int depthHeight)
 {
+	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
+	if (stencilFrameSize != currentStencilSize) { stencilTargets.clear(); stencilFrameSize = currentStencilSize; }
+
 	presentationTransformApplied = false;
+	bool composedDisplayInput = false;
 	updateConfiguredChain();
 	if (programs.empty() || sourceTexture == 0 || !ensureResources())
 		return nullptr;
+	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
+		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceUniform& resource) {
+			return resource.kind == postprocess::ShaderInputKind::Depth;
+		});
+	});
+	if (needsDepth && depthTexture == 0) {
+		postprocess::reportShaderChainStatus(activePath, "This frame has no scene depth available for the selected shader.");
+		return nullptr;
+	}
 	std::string lookupError;
 	if (!ensureLookupTextures(lookupError)) {
 		postprocess::reportShaderChainStatus(activePath, lookupError);
@@ -815,6 +1078,9 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	}
 	if (targets.size() != programs.size())
 		targets.resize(programs.size());
+	postprocess::updateShaderHostParameters(hostParameters, frame);
+	for (auto& program : programs) for (auto& uniform : program.parameters)
+		for (const auto& host : hostParameters) if (!host.hostSource.empty() && host.name == uniform.name && host.layerIndex == uniform.layerIndex) uniform.values = host.values;
 	GLuint inputTexture = sourceTexture;
 	GLuint originalTexture = sourceTexture;
 	bool inputHasMipmaps = false;
@@ -850,6 +1116,96 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapT);
 		}
 	} sourceTextureState { sourceTexture };
+	// Composition and copy passes also adjust filtering; preserve the renderer's
+	// texture state before any of those passes can touch the source texture.
+	sourceTextureState.capture();
+	SourceTextureState depthTextureState { depthTexture };
+	if (needsDepth)
+		depthTextureState.capture();
+	uint64_t depthTargetBytes = 0;
+	bool depthInputRotated = false;
+	if (depthWidth <= 0) depthWidth = frame.sourceWidth;
+	if (depthHeight <= 0) depthHeight = frame.sourceHeight;
+	if (needsDepth && (depthWidth < frame.sourceWidth || depthHeight < frame.sourceHeight)) {
+		postprocess::reportShaderChainStatus(activePath, "Scene depth is smaller than the current color frame.");
+		return nullptr;
+	}
+	const bool rotateDepth = frame.rotationPending && std::any_of(programs.begin(), programs.end(),
+			[](const Program& program) { return program.pass.composeDisplayInput; });
+	if (needsDepth && (depthWidth != frame.sourceWidth || depthHeight != frame.sourceHeight || rotateDepth)) {
+#ifndef GLES2
+		// The OIT renderer reuses large depth surfaces. Snapshot its current
+		// rectangle so normalized depth coordinates stay aligned after resizing.
+		const int width = rotateDepth ? frame.sourceHeight : frame.sourceWidth;
+		const int height = rotateDepth ? frame.sourceWidth : frame.sourceHeight;
+		std::string error;
+		if (!postprocess::accumulateShaderTargetBytes(width, height,
+				postprocess::ShaderTargetFormat::Default, {}, false, 1, depthTargetBytes, error)) {
+			postprocess::reportShaderChainStatus(activePath, error);
+			return nullptr;
+		}
+		if (depthCopyProgram == 0) {
+			PostProcessSource vertexSource;
+			vertexSource.addSource(VertexCompatShader).addSource(FullscreenVertexShader);
+			PostProcessSource fragmentSource;
+			fragmentSource.addSource(PixelCompatShader).addSource(
+					"in mediump vec2 vTexCoord;\nuniform highp sampler2D Source;\n"
+					"uniform highp vec2 DepthUVScale;\nuniform int RotateDepth;\n"
+					"void main() { vec2 uv = RotateDepth != 0 ? vec2(vTexCoord.y, 1.0 - vTexCoord.x) : vTexCoord;"
+					" gl_FragColor = vec4(texture(Source, uv * DepthUVScale).r, 0.0, 0.0, 1.0); }\n");
+			try {
+				depthCopyProgram = gl_CompileAndLink(vertexSource.generate().c_str(), fragmentSource.generate().c_str(), &error);
+			} catch (const RendererException&) {
+				postprocess::reportShaderChainStatus(activePath, "OpenGL scene-depth copy shader failed: " + error);
+				return nullptr;
+			}
+			if (depthCopyProgram == 0) {
+				postprocess::reportShaderChainStatus(activePath, "OpenGL scene-depth copy shader failed: " + error);
+				return nullptr;
+			}
+			depthCopySourceUniform = glGetUniformLocation(depthCopyProgram, "Source");
+			depthCopyScaleUniform = glGetUniformLocation(depthCopyProgram, "DepthUVScale");
+			depthCopyRotateUniform = glGetUniformLocation(depthCopyProgram, "RotateDepth");
+		}
+		if (!depthInput || depthInput->getWidth() != width || depthInput->getHeight() != height)
+			depthInput = std::make_unique<GlFramebuffer>(width, height, false, 0, GL_R32F, GL_RED, GL_FLOAT);
+		depthInput->bind();
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			postprocess::reportShaderChainStatus(activePath, "OpenGL cannot render a float scene-depth snapshot.");
+			return nullptr;
+		}
+		glcache.Disable(GL_SCISSOR_TEST);
+		glcache.Disable(GL_DEPTH_TEST);
+		glcache.Disable(GL_STENCIL_TEST);
+		glcache.Disable(GL_CULL_FACE);
+		glcache.Disable(GL_BLEND);
+		glcache.Disable(GL_FRAMEBUFFER_SRGB);
+		glViewport(0, 0, width, height);
+		glcache.UseProgram(depthCopyProgram);
+		glActiveTexture(GL_TEXTURE0);
+		if (glBindSampler != nullptr)
+			glBindSampler(0, 0);
+		glcache.InvalidateTextureBinding();
+		glcache.BindTexture(GL_TEXTURE_2D, depthTexture);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glUniform1i(depthCopySourceUniform, 0);
+		glUniform2f(depthCopyScaleUniform, static_cast<float>(frame.sourceWidth) / depthWidth,
+				static_cast<float>(frame.sourceHeight) / depthHeight);
+		glUniform1i(depthCopyRotateUniform, rotateDepth ? 1 : 0);
+		vertexArray.bind(vertexBuffer.get());
+		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+		GlVertexArray::unbind();
+		depthInputRotated = rotateDepth;
+		if (!rotateDepth)
+			depthTexture = depthInput->getTexture();
+#else
+		postprocess::reportShaderChainStatus(activePath, "Scene-depth snapshots require OpenGL or GLES 3.0.");
+		return nullptr;
+#endif
+	}
+	else
+		depthInput.reset();
 	bool displaySpaceReached = false;
 	int originalWidth = passFrame.sourceWidth;
 	int originalHeight = passFrame.sourceHeight;
@@ -891,7 +1247,9 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		passFrame.sourceHeight = frame.viewportHeight;
 		originalWidth = passFrame.sourceWidth;
 		originalHeight = passFrame.sourceHeight;
-		presentationTransformApplied = true;
+		if (depthInputRotated)
+			depthTexture = depthInput->getTexture();
+		composedDisplayInput = true;
 		return true;
 	};
 	if (programs.front().pass.composeDisplayInput && !composeDisplayInput())
@@ -899,7 +1257,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 
 	postprocess::ShaderFrameInfo sizeFrame = frame;
 	bool sizeDisplaySpaceReached = false;
-	uint64_t targetBytes = 0;
+	uint64_t targetBytes = depthTargetBytes;
 	std::string targetBudgetError;
 	const auto displayBoundary = std::find_if(programs.begin(), programs.end(), [](const Program& program) {
 		return program.pass.composeDisplayInput;
@@ -932,8 +1290,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			postprocess::reportShaderChainStatus(activePath, error);
 			return nullptr;
 		}
-		sizeFrame.sourceWidth = programs[index].targetWidth;
-		sizeFrame.sourceHeight = programs[index].targetHeight;
+		if (programs[index].pass.updatesSource) { sizeFrame.sourceWidth = programs[index].targetWidth; sizeFrame.sourceHeight = programs[index].targetHeight; }
 		const uint32_t outputCount = programs[index].pass.outputs.empty()
 				? 1u : static_cast<uint32_t>(programs[index].pass.outputs.size());
 		for (uint32_t output = 0; output < outputCount; ++output) {
@@ -945,11 +1302,12 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 					? programs[index].pass.targetFormatName : config.targetFormatName;
 			if (!postprocess::accumulateShaderTargetBytes(programs[index].targetWidth, programs[index].targetHeight,
 					format, formatName, programs[index].outputNeedsMipmaps[output],
-					programs[index].historyDepth, targetBytes, targetBudgetError)) {
+					programs[index].historyDepth * (programs[index].pass.outputs.empty() ? 1u : programs[index].pass.outputs[output].depth), targetBytes, targetBudgetError)) {
 				postprocess::reportShaderChainStatus(activePath, targetBudgetError);
 				return nullptr;
 			}
 		}
+		if (programs[index].pass.renderState.stencilEnabled && !postprocess::accumulateShaderTargetBytes(programs[index].targetWidth, programs[index].targetHeight, postprocess::ShaderTargetFormat::Default, "R32_UINT", false, 1, targetBytes, targetBudgetError)) { postprocess::reportShaderChainStatus(activePath, targetBudgetError); return nullptr; }
 		MrtTargetRing& targetRing = targets[index];
 		if (targetRing.size() != programs[index].historyDepth)
 			targetRing.resize(programs[index].historyDepth);
@@ -1005,6 +1363,16 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		historyTarget.renderedFrame = frame.frameCount;
 		historyTarget.initialized = true;
 	}
+	struct RestoreAttachmentState {
+		GLuint count = 1;
+		~RestoreAttachmentState() {
+			glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+#if defined(GL_VERSION_4_0) || defined(GL_ES_VERSION_3_2)
+			if (glColorMaski && glDisablei) for (GLuint i = 0; i < count; ++i) { glColorMaski(i, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE); glDisablei(GL_BLEND, i); }
+#endif
+			glcache.InvalidateBlendState();
+		}
+	} restoreAttachmentState;
 	GlFramebuffer *output = nullptr;
 	const auto disableFramebufferSrgb = [] {
 #ifndef GLES2
@@ -1013,8 +1381,14 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	};
 	for (size_t index = 0; index < programs.size(); ++index) {
 		Program& program = programs[index];
+		restoreAttachmentState.count = std::max(restoreAttachmentState.count, program.pass.colorOutputCount);
 		if (program.pass.composeDisplayInput && !composeDisplayInput())
 			return nullptr;
+		if (index == 0 || program.pass.layerIndex != programs[index - 1].pass.layerIndex) {
+			originalTexture = inputTexture;
+			originalWidth = passFrame.sourceWidth;
+			originalHeight = passFrame.sourceHeight;
+		}
 		if (program.pass.useMipmaps && !inputHasMipmaps) {
 			if (inputTexture == sourceTexture) {
 				if (mipmapInput == nullptr || mipmapInput->getWidth() != passFrame.sourceWidth
@@ -1057,6 +1431,27 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		MrtTargetRing& targetRing = targets[index];
 		MrtTarget *target = targetRing[currentTarget].get();
 
+		for (size_t outputIndex = 0; outputIndex < target->outputs.size(); ++outputIndex) {
+			const auto& config = program.pass.outputs.empty() ? postprocess::ShaderPassOutput{} : program.pass.outputs[outputIndex];
+			if (config.previousPass != postprocess::InvalidShaderPass && (!config.previousFrame || frame.frameCount != 0)) {
+				const uint32_t requestedFrame = frame.frameCount - (config.previousFrame ? 1u : 0u);
+				const auto& previous = targets[config.previousPass][requestedFrame % programs[config.previousPass].historyDepth];
+				if (previous && previous->initialized && previous->renderedFrame == requestedFrame
+						&& !copyOutput(*previous->outputs[config.previousOutput], *target->outputs[outputIndex], error)) {
+					postprocess::reportShaderChainStatus(activePath, error);
+					return nullptr;
+				}
+			}
+			if (!target->initialized && program.outputNeedsMipmaps[outputIndex]) {
+				const auto& image = *target->outputs[outputIndex];
+				glActiveTexture(GL_TEXTURE0); glcache.InvalidateTextureBinding();
+				glBindTexture(image.target, image.getTexture()); glGenerateMipmap(image.target);
+			}
+			if (program.pass.renderState.clearRenderTargets && !clearOutput(*target->outputs[outputIndex], error)) {
+				postprocess::reportShaderChainStatus(activePath, error);
+				return nullptr;
+			}
+		}
 		glcache.Disable(GL_SCISSOR_TEST);
 		glcache.Disable(GL_DEPTH_TEST);
 		glcache.Disable(GL_STENCIL_TEST);
@@ -1069,7 +1464,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			glcache.Disable(GL_FRAMEBUFFER_SRGB);
 #endif
 		glViewport(0, 0, outputWidth, outputHeight);
-		if (program.pass.blendEnabled) {
+		if (program.pass.blendEnabled && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
 			// ReShade blends against the current backbuffer. Seed HollyCast's
 			// private pass target with the current input before applying the pass.
 			glcache.Disable(GL_BLEND);
@@ -1092,6 +1487,41 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		}
 		else
 			glcache.Disable(GL_BLEND);
+		if (!program.pass.compute && program.pass.renderState.reflected) {
+			const auto& state = program.pass.renderState;
+			const auto apply = [&](const postprocess::ShaderAttachmentState& attachment, GLuint index) {
+#if defined(GL_VERSION_4_0) || defined(GL_ES_VERSION_3_2)
+				if (glBlendFuncSeparatei && glBlendEquationSeparatei && glColorMaski && glEnablei && glDisablei) {
+					if (attachment.blendEnabled) glEnablei(GL_BLEND, index); else glDisablei(GL_BLEND, index);
+					glBlendFuncSeparatei(index, glBlendFactor(attachment.source), glBlendFactor(attachment.destination), glBlendFactor(attachment.sourceAlpha), glBlendFactor(attachment.destinationAlpha));
+					glBlendEquationSeparatei(index, glBlendOperation(attachment.operation), glBlendOperation(attachment.alphaOperation));
+					glColorMaski(index, attachment.writeMask & 1, attachment.writeMask & 2, attachment.writeMask & 4, attachment.writeMask & 8);
+					return;
+				}
+#endif
+				if (attachment.blendEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+				glBlendFuncSeparate(glBlendFactor(attachment.source), glBlendFactor(attachment.destination), glBlendFactor(attachment.sourceAlpha), glBlendFactor(attachment.destinationAlpha));
+				glBlendEquationSeparate(glBlendOperation(attachment.operation), glBlendOperation(attachment.alphaOperation));
+				glColorMask(attachment.writeMask & 1, attachment.writeMask & 2, attachment.writeMask & 4, attachment.writeMask & 8);
+			};
+			for (uint32_t i = 0; i < program.pass.colorOutputCount; ++i) apply(state.attachments[i], i);
+			glcache.InvalidateBlendState();
+			if (state.stencilEnabled) {
+				auto& stencil = stencilTargets[{outputWidth, outputHeight}];
+				if (!stencil.buffer) {
+					glGenRenderbuffers(1, &stencil.buffer); glBindRenderbuffer(GL_RENDERBUFFER, stencil.buffer);
+					glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, outputWidth, outputHeight);
+				}
+				glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, stencil.buffer);
+				if (!stencil.initialized || stencil.frame != frame.frameCount || stencil.layerIndex != program.pass.layerIndex) {
+					glcache.StencilMask(255); glClearStencil(0); glClear(GL_STENCIL_BUFFER_BIT); stencil.frame = frame.frameCount; stencil.layerIndex = program.pass.layerIndex; stencil.initialized = true;
+				}
+				const GLenum operations[] { GL_ZERO, GL_KEEP, GL_REPLACE, GL_INCR, GL_DECR, GL_INVERT, GL_INCR_WRAP, GL_DECR_WRAP };
+				glcache.Enable(GL_STENCIL_TEST); glcache.StencilMask(state.stencilWriteMask);
+				glcache.StencilFunc(GL_NEVER + static_cast<GLenum>(state.stencilComparison), state.stencilReference, state.stencilReadMask);
+				glcache.StencilOp(operations[static_cast<unsigned>(state.stencilFail)], operations[static_cast<unsigned>(state.stencilDepthFail)], operations[static_cast<unsigned>(state.stencilPass)]);
+			}
+		}
 		glcache.UseProgram(program.handle);
 		for (const ResourceUniform& resource : program.resources) {
 			GLuint texture = inputTexture;
@@ -1116,6 +1546,9 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			case postprocess::ShaderInputKind::Original:
 				texture = originalTexture;
 				break;
+			case postprocess::ShaderInputKind::Depth:
+				texture = depthTexture;
+				break;
 			case postprocess::ShaderInputKind::PassOutput: {
 				MrtTarget *sourceTarget = targets[resource.sourcePass]
 						[frame.frameCount % programs[resource.sourcePass].historyDepth].get();
@@ -1134,7 +1567,8 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			{
 				const uint32_t offset = resource.kind == postprocess::ShaderInputKind::Feedback ? 1 : resource.historyOffset;
 				if (frame.frameCount < offset) {
-					texture = originalTexture;
+					texture = program.nativeFxStages && resource.sourcePass != postprocess::InvalidShaderPass
+							? targets[resource.sourcePass][programs[resource.sourcePass].historyDepth - 1]->outputs[resource.sourceOutput]->getTexture() : originalTexture;
 					break;
 				}
 				const uint32_t requestedFrame = frame.frameCount - offset;
@@ -1147,7 +1581,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 					const uint32_t sourceDepth = programs[resource.sourcePass].historyDepth;
 					const MrtTarget *history = targets[resource.sourcePass][requestedFrame % sourceDepth].get();
 					texture = history->initialized && history->renderedFrame == requestedFrame
-							? history->outputs[resource.sourceOutput]->getTexture() : originalTexture;
+							? history->outputs[resource.sourceOutput]->getTexture() : program.nativeFxStages ? history->outputs[resource.sourceOutput]->getTexture() : originalTexture;
 					resourceHasMipmaps = history->initialized && history->renderedFrame == requestedFrame
 							&& programs[resource.sourcePass].outputNeedsMipmaps[resource.sourceOutput];
 				}
@@ -1165,7 +1599,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			}
 			glActiveTexture(GL_TEXTURE0 + resource.unit);
 			glcache.InvalidateTextureBinding();
-			glcache.BindTexture(GL_TEXTURE_2D, texture);
+			glcache.BindTexture(resource.textureTarget, texture);
 			if (texture == sourceTexture)
 				sourceTextureState.capture();
 			const bool linearFilter = lookup != nullptr ? lookup->config.linearFilter
@@ -1173,14 +1607,14 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			const bool sampleMipmaps = resourceHasMipmaps && (lookup != nullptr ? lookup->config.useMipmaps
 					: resource.hasSamplerState ? resource.useMipmaps : true);
 			const postprocess::ShaderWrapMode wrapMode = lookup != nullptr ? lookup->config.wrapMode
-					: resource.hasSamplerState ? resource.wrapMode : postprocess::ShaderWrapMode::ClampToEdge;
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+					: resource.hasSamplerState ? resource.wrapMode : program.pass.wrapMode;
+			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_MIN_FILTER,
 					sampleMipmaps ? (linearFilter ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST)
 							: linearFilter ? GL_LINEAR : GL_NEAREST);
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_MAG_FILTER,
 					linearFilter ? GL_LINEAR : GL_NEAREST);
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glWrapMode(wrapMode));
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, glWrapMode(wrapMode));
+			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_S, glWrapMode(wrapMode));
+			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_T, glWrapMode(wrapMode));
 #ifndef GLES2
 			if (glBindSampler != nullptr)
 				glBindSampler(resource.unit, resource.sampler == 0 ? 0
@@ -1195,10 +1629,14 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			glUniform2f(program.sourceSizeUniform, static_cast<float>(passFrame.sourceWidth), static_cast<float>(passFrame.sourceHeight));
 		if (program.originalSizeUniform != -1)
 			glUniform2f(program.originalSizeUniform,
-					static_cast<float>(program.duckStationGlsl ? frame.sourceWidth : originalWidth),
-					static_cast<float>(program.duckStationGlsl ? frame.sourceHeight : originalHeight));
+					static_cast<float>(program.displayGlsl ? frame.sourceWidth : originalWidth),
+					static_cast<float>(program.displayGlsl ? frame.sourceHeight : originalHeight));
 		if (program.outputSizeUniform != -1)
 			glUniform2f(program.outputSizeUniform, static_cast<float>(outputWidth), static_cast<float>(outputHeight));
+		if (program.finalViewportSizeUniform != -1)
+			glUniform2f(program.finalViewportSizeUniform, static_cast<float>(frame.viewportWidth), static_cast<float>(frame.viewportHeight));
+		if (program.hasDepthUniform != -1)
+			glUniform1i(program.hasDepthUniform, depthTexture != 0 ? 1 : 0);
 		if (program.frameCountUniform != -1)
 			glUniform1i(program.frameCountUniform, static_cast<GLint>(program.pass.frameCountModulo == 0
 					? frame.frameCount : frame.frameCount % program.pass.frameCountModulo));
@@ -1217,48 +1655,96 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			case postprocess::SlangParameterType::Float2x2: glUniformMatrix2fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
 			case postprocess::SlangParameterType::Float3x3: glUniformMatrix3fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
 			case postprocess::SlangParameterType::Float4x4: glUniformMatrix4fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
+#ifndef GLES2
+			case postprocess::SlangParameterType::Float2x3: glUniformMatrix2x3fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
+			case postprocess::SlangParameterType::Float2x4: glUniformMatrix2x4fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
+			case postprocess::SlangParameterType::Float3x2: glUniformMatrix3x2fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
+			case postprocess::SlangParameterType::Float3x4: glUniformMatrix3x4fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
+			case postprocess::SlangParameterType::Float4x2: glUniformMatrix4x2fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
+			case postprocess::SlangParameterType::Float4x3: glUniformMatrix4x3fv(parameter.location, 1, GL_FALSE, parameter.values.data()); break;
+#endif
 			}
 		}
 
-		vertexArray.bind(vertexBuffer.get());
-		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-		GlVertexArray::unbind();
+#ifdef GL_COMPUTE_SHADER
+		for (uint32_t unit = 0; unit < program.pass.storageBindings.size(); ++unit) {
+			const auto& binding = program.pass.storageBindings[unit];
+			postprocess::ShaderPass formatPass; formatPass.targetFormatName = program.pass.outputs[binding.second].targetFormatName;
+			GLenum format, pixels, type; if (!glTargetFormat(formatPass, format, pixels, type, error)) return nullptr;
+			const auto& image = target->outputs[binding.second];
+			glBindImageTexture(unit, image->getTexture(), 0, image->target == GL_TEXTURE_3D || image->target == GL_TEXTURE_2D_ARRAY, 0, GL_READ_WRITE, format);
+			const GLint location = glGetUniformLocation(program.handle, binding.first.c_str()); if (location >= 0) glUniform1i(location, unit);
+		}
+		if (program.pass.compute) {
+			std::array<uint32_t, 3> groups;
+			if (!postprocess::resolveShaderDispatchGroups(program.pass, passFrame, groups, error)) {
+				postprocess::reportShaderChainStatus(activePath, error); return nullptr;
+			}
+			glDispatchCompute(groups[0], groups[1], groups[2]);
+		} else
+#endif
+		{
+			vertexArray.bind(vertexBuffer.get());
+			const GLenum topologies[] { GL_POINTS, GL_POINTS, GL_LINES, GL_LINE_STRIP, GL_TRIANGLES, GL_TRIANGLE_STRIP };
+			glDrawArrays(program.nativeFxStages ? topologies[static_cast<unsigned>(program.pass.renderState.topology)] : GL_TRIANGLE_STRIP,
+					0, program.nativeFxStages ? program.pass.renderState.vertexCount : 4);
+			GlVertexArray::unbind();
+		}
+#ifdef GL_COMPUTE_SHADER
+		if (!program.pass.storageBindings.empty()) {
+			glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+			for (uint32_t unit = 0; unit < program.pass.storageBindings.size(); ++unit) glBindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32F);
+		}
+#endif
 #ifndef GLES2
 		if (glBindSampler != nullptr)
 			for (const ResourceUniform& resource : program.resources)
 				glBindSampler(resource.unit, 0);
 #endif
 		for (uint32_t outputIndex = 0; outputIndex < target->outputs.size(); ++outputIndex) {
-			if (program.outputNeedsMipmaps[outputIndex]) {
+			if (program.outputNeedsMipmaps[outputIndex] && program.pass.renderState.generateMipmaps) {
 				glActiveTexture(GL_TEXTURE0);
 				glcache.InvalidateTextureBinding();
-				glcache.BindTexture(GL_TEXTURE_2D, target->outputs[outputIndex]->getTexture());
-				glGenerateMipmap(GL_TEXTURE_2D);
+				const auto& image = *target->outputs[outputIndex];
+				glBindTexture(image.target, image.getTexture());
+				glGenerateMipmap(image.target);
 			}
 		}
 
 		target->renderedFrame = frame.frameCount;
 		target->initialized = true;
+		if (program.pass.updatesSource) {
 		inputTexture = target->outputs[0]->getTexture();
 		inputHasMipmaps = program.outputNeedsMipmaps[0];
 		passFrame.sourceWidth = outputWidth;
 		passFrame.sourceHeight = outputHeight;
-		output = target->outputs[0].get();
+		output = target->outputs[0]->framebuffer.get();
+		}
 	}
 	disableFramebufferSrgb();
 	glCheck();
+	presentationTransformApplied = composedDisplayInput;
 	return output;
 }
 
 void GlShaderChain::term()
 {
+	if (transferReadFramebuffer) glDeleteFramebuffers(1, &transferReadFramebuffer);
+	if (transferDrawFramebuffer) glDeleteFramebuffers(1, &transferDrawFramebuffer);
+	transferReadFramebuffer = transferDrawFramebuffer = 0;
 	deletePrograms(programs);
 	deleteLookupTextures();
 	targets.clear();
+	stencilTargets.clear();
 	displayInput.reset();
+	depthInput.reset();
 	mipmapInput.reset();
 	sourceHistory.clear();
 	vertexBuffer.reset();
+	if (depthCopyProgram != 0)
+		glcache.DeleteProgram(depthCopyProgram);
+	depthCopyProgram = 0;
+	depthCopySourceUniform = depthCopyScaleUniform = depthCopyRotateUniform = -1;
 	if (copyProgram != 0)
 		glcache.DeleteProgram(copyProgram);
 	if (copyRotateProgram != 0)

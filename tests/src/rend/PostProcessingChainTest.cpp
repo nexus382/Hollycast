@@ -27,19 +27,27 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <locale>
 #include <regex>
+#include <sstream>
 #include <gtest/gtest.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <d3dcompiler.h>
+#include <d3d11shader.h>
+#ifdef HAVE_D3D11
+#include <d3d11.h>
+#include <wrl/client.h>
+#endif
 
 namespace {
 
-bool compileHlsl(const std::string& source, const char *target, std::string& error)
+bool compileHlsl(const std::string& source, const char *target, std::string& error, D3D11_SHADER_VARIABLE_DESC *parameterLayout = nullptr)
 {
 	using CompileFunction = HRESULT (WINAPI *)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO *, ID3DInclude *,
 			LPCSTR, LPCSTR, UINT, UINT, ID3DBlob **, ID3DBlob **);
@@ -56,6 +64,30 @@ bool compileHlsl(const std::string& source, const char *target, std::string& err
 	if (FAILED(result))
 		error = diagnostics != nullptr ? static_cast<const char *>(diagnostics->GetBufferPointer())
 				: "D3DCompile failed without diagnostics.";
+	if (SUCCEEDED(result) && parameterLayout != nullptr) {
+		using ReflectFunction = HRESULT (WINAPI *)(LPCVOID, SIZE_T, REFIID, void **);
+		const auto reflect = reinterpret_cast<ReflectFunction>(GetProcAddress(compilerModule, "D3DReflect"));
+		ID3D11ShaderReflection *reflection = nullptr;
+		if (reflect != nullptr && SUCCEEDED(reflect(shader->GetBufferPointer(), shader->GetBufferSize(),
+				__uuidof(ID3D11ShaderReflection), reinterpret_cast<void **>(&reflection)))) {
+			D3D11_SHADER_DESC shaderDescription {};
+			reflection->GetDesc(&shaderDescription);
+			for (UINT buffer = 0; buffer < shaderDescription.ConstantBuffers; ++buffer) {
+				auto constants = reflection->GetConstantBufferByIndex(buffer);
+				D3D11_SHADER_BUFFER_DESC description {};
+				constants->GetDesc(&description);
+				for (UINT variable = 0; variable < description.Variables; ++variable) {
+					D3D11_SHADER_VARIABLE_DESC value {};
+					constants->GetVariableByIndex(variable)->GetDesc(&value);
+					if (value.Name != nullptr && std::string(value.Name).find("Parameters") != std::string::npos) {
+						*parameterLayout = value;
+						parameterLayout->Name = nullptr; // Reflection owns this string.
+					}
+				}
+			}
+			reflection->Release();
+		}
+	}
 	if (diagnostics != nullptr)
 		diagnostics->Release();
 	if (shader != nullptr)
@@ -67,6 +99,24 @@ bool compileHlsl(const std::string& source, const char *target, std::string& err
 } // namespace
 #endif
 
+static void expectHlslCompiles(const std::string& source, const char *target)
+{
+#ifdef _WIN32
+	std::string error;
+	const bool compiled = compileHlsl(source, target, error);
+	if (!compiled) {
+		if (const char *directory = std::getenv("HOLLYCAST_SHADER_DIAGNOSTICS")) {
+			std::filesystem::create_directories(directory);
+			const auto filename = std::filesystem::path(directory)
+					/ (std::to_string(std::hash<std::string>{}(source)) + "." + target + ".hlsl");
+			std::ofstream(filename) << source;
+		}
+	}
+	EXPECT_TRUE(compiled) << error;
+#else
+	EXPECT_FALSE(source.empty());
+#endif
+}
 TEST(PostProcessingChainTest, ParsesSlangPresetPassesAndParameters)
 {
 	const std::string preset =
@@ -204,6 +254,94 @@ TEST(PostProcessingChainTest, ParsesRetroArchGlslPreset)
 	EXPECT_NE(std::string::npos, error.find("relative"));
 }
 
+TEST(PostProcessingChainTest, PreservesPresetScalingPrecedenceAndSamplingDefaults)
+{
+	const std::string preset =
+		"shaders = 3\nshader0 = first.glsl\nshader1 = second.glsl\nshader2 = final.glsl\n"
+		"scale0 = 2\nscale_x0 = 3\nscale_y0 = 4\nscale_type0 = source\nscale_type_x0 = absolute\n"
+		"scale_x1 = 0.5\nwrap_mode1 = repeat\ntextures = LUT\nLUT = lookup.png\n";
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseGlslPreset(preset, "C:/Shaders/test.glslp", chain, error)) << error;
+	ASSERT_EQ(3u, chain.passes.size());
+	EXPECT_FLOAT_EQ(2.f, chain.passes[0].scaleX);
+	EXPECT_FLOAT_EQ(2.f, chain.passes[0].scaleY);
+	EXPECT_EQ(postprocess::ScaleType::Source, chain.passes[0].scaleTypeX);
+	EXPECT_FLOAT_EQ(0.5f, chain.passes[1].scaleX);
+	EXPECT_FLOAT_EQ(1.f, chain.passes[1].scaleY);
+	EXPECT_EQ(postprocess::ScaleType::Viewport, chain.passes[2].scaleTypeX);
+	EXPECT_EQ(postprocess::ScaleType::Viewport, chain.passes[2].scaleTypeY);
+	EXPECT_EQ(postprocess::ShaderWrapMode::ClampToBorder, chain.passes[0].wrapMode);
+	EXPECT_EQ(postprocess::ShaderWrapMode::Repeat, chain.passes[1].wrapMode);
+	ASSERT_EQ(1u, chain.textures.size());
+	EXPECT_TRUE(chain.textures[0].linearFilter);
+	EXPECT_EQ(postprocess::ShaderWrapMode::ClampToBorder, chain.textures[0].wrapMode);
+}
+
+TEST(PostProcessingChainTest, LoadsReferencedPresetsWithinSelectedShaderFolder)
+{
+	struct TemporaryDirectory {
+		std::filesystem::path path;
+		std::string previousRoot = config::PostProcessShaderDirectory.get();
+		~TemporaryDirectory() {
+			config::PostProcessShaderDirectory.get() = previousRoot;
+			std::error_code error;
+			std::filesystem::remove_all(path, error);
+		}
+	};
+	TemporaryDirectory directory {
+		std::filesystem::temp_directory_path() / ("hollycast_preset_references_"
+				+ std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))
+	};
+	std::filesystem::create_directories(directory.path / "base");
+	std::filesystem::create_directories(directory.path / "custom");
+	config::PostProcessShaderDirectory.get() = directory.path.string();
+	std::ofstream(directory.path / "shared.glsl")
+			<< "#pragma parameter GAIN \"Gain\" 0.5 0 1 0.1\n"
+			"void main() { FragColor = texture(Source, vTexCoord) * GAIN; }\n";
+	std::ofstream(directory.path / "base" / "original.glslp")
+			<< "shaders = 1\nshader0 = ../shared.glsl\nparameters = GAIN\nGAIN = 0.25\n";
+	const auto selected = directory.path / "custom" / "selected.glslp";
+	std::ofstream(selected) << "#reference \"../base/original.glslp\"\nGAIN = 0.75\n";
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(selected.string(), chain, error)) << error;
+	ASSERT_EQ(1u, chain.passes.size());
+	ASSERT_EQ(1u, chain.parameters.size());
+	EXPECT_FLOAT_EQ(0.75f, chain.parameters[0].value);
+	EXPECT_EQ(directory.path.string(), chain.passes[0].packageRoot);
+	EXPECT_TRUE(std::filesystem::equivalent(directory.path / "shared.glsl", chain.passes[0].sourcePath));
+	std::ofstream(selected) << "#reference \"selected.glslp\"\n";
+	EXPECT_FALSE(postprocess::loadShaderChain(selected.string(), chain, error));
+	EXPECT_NE(std::string::npos, error.find("cycle"));
+	std::ofstream(selected) << "#reference \"../../outside.glslp\"\n";
+	EXPECT_FALSE(postprocess::loadShaderChain(selected.string(), chain, error));
+	EXPECT_NE(std::string::npos, error.find("boundary"));
+}
+
+TEST(PostProcessingChainTest, ResolvesAbsolutePassHistoryAndFeedbackSamplers)
+{
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseGlslShader(
+		"#ifdef FRAGMENT\n"
+		"uniform sampler2D Pass1Texture;\nuniform sampler2D PrevTexture;\n"
+		"uniform sampler2D Prev2Texture;\nuniform sampler2D FeedbackTexture;\n"
+		"void main() { FragColor = texture(Pass1Texture, vTexCoord); }\n#endif\n", source, error)) << error;
+	postprocess::ShaderChain chain;
+	chain.passes.resize(3);
+	chain.feedbackPass = 1;
+	ASSERT_TRUE(postprocess::resolveShaderPassInputs(chain, 2, source, error)) << error;
+	ASSERT_EQ(4u, chain.passes[2].inputs.size());
+	EXPECT_EQ(postprocess::ShaderInputKind::PassOutput, chain.passes[2].inputs[0].kind);
+	EXPECT_EQ(0u, chain.passes[2].inputs[0].sourcePass);
+	EXPECT_EQ(postprocess::ShaderInputKind::History, chain.passes[2].inputs[1].kind);
+	EXPECT_EQ(1u, chain.passes[2].inputs[1].historyOffset);
+	EXPECT_EQ(3u, chain.passes[2].inputs[2].historyOffset);
+	EXPECT_EQ(postprocess::ShaderInputKind::Feedback, chain.passes[2].inputs[3].kind);
+	EXPECT_EQ(1u, chain.passes[2].inputs[3].sourcePass);
+}
+
 TEST(PostProcessingChainTest, ParsesCrLfRetroArchPresetAndCommaSeparatedParameters)
 {
 	const std::string preset =
@@ -269,7 +407,8 @@ TEST(PostProcessingChainTest, CombinesSelectedShaderFilesAsOrderedLayers)
 	EXPECT_EQ(1u, chain.passes[1].layerIndex);
 	EXPECT_TRUE(chain.wantsUnscaledInput);
 	ASSERT_EQ(3u, chain.passes.size());
-	EXPECT_TRUE(chain.passes[0].composeDisplayInput);
+	EXPECT_FALSE(chain.passes[0].composeDisplayInput);
+	EXPECT_EQ(postprocess::ScaleType::Viewport, chain.passes[0].scaleTypeX);
 	EXPECT_FALSE(chain.passes[1].composeDisplayInput);
 	EXPECT_FALSE(chain.passes[2].composeDisplayInput);
 	ASSERT_EQ(3u, chain.sources.size());
@@ -284,7 +423,8 @@ TEST(PostProcessingChainTest, CombinesSelectedShaderFilesAsOrderedLayers)
 	ASSERT_EQ(3u, chain.passes.size());
 	EXPECT_FALSE(chain.passes[0].composeDisplayInput);
 	EXPECT_FALSE(chain.passes[1].composeDisplayInput);
-	EXPECT_TRUE(chain.passes[2].composeDisplayInput);
+	EXPECT_FALSE(chain.passes[2].composeDisplayInput);
+	EXPECT_EQ(postprocess::ScaleType::Viewport, chain.passes[2].scaleTypeX);
 }
 
 TEST(PostProcessingChainTest, AllowsCombinedLayerParametersWithinEachLayerLimit)
@@ -426,23 +566,23 @@ TEST(PostProcessingChainTest, ValidatesAndReflectsReShadeRenderStates)
 	const auto disabledBlend = directory.path / "disabled-blend.fx";
 	const auto enabledBlend = directory.path / "enabled-blend.fx";
 	std::ofstream(unsupportedPass) <<
-			"float4 MainPS() : SV_Target { return float4(1.0); }\n"
+			"float4 MainPS() : SV_Target { return (float4)1.0; }\n"
 			"technique Main { pass { PixelShader = MainPS; StencilEnable = true; } }\n";
 	std::ofstream(supportedSampler) <<
 			"texture2D SourceTex < source = \"color\"; > { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; };\n"
 			"sampler2D SourceSampler { Texture = SourceTex; Filter = MIN_MAG_MIP_LINEAR; };\n"
-			"float4 MainPS() : SV_Target { return float4(1.0); }\n"
+			"float4 MainPS() : SV_Target { return (float4)1.0; }\n"
 			"technique Main { pass { PixelShader = MainPS; } }\n";
 	std::ofstream(customSampler) <<
 			"texture2D SourceTex < source = \"color\"; > { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; };\n"
 			"sampler2D SourceSampler { Texture = SourceTex; AddressU = WRAP; };\n"
-			"float4 MainPS() : SV_Target { return float4(1.0); }\n"
+			"float4 MainPS() : SV_Target { return (float4)1.0; }\n"
 			"technique Main { pass { PixelShader = MainPS; } }\n";
 	std::ofstream(disabledBlend) <<
-			"float4 MainPS() : SV_Target { return float4(1.0); }\n"
+			"float4 MainPS() : SV_Target { return (float4)1.0; }\n"
 			"technique Main { pass { PixelShader = MainPS; BlendEnable = false; SrcBlend = SRC_ALPHA; } }\n";
 	std::ofstream(enabledBlend) <<
-			"float4 MainPS() : SV_Target { return float4(1.0); }\n"
+			"float4 MainPS() : SV_Target { return (float4)1.0; }\n"
 			"technique Main { pass { PixelShader = MainPS; BlendEnable = true; SrcBlend = SRC_ALPHA; DestBlend = INV_SRC_ALPHA; } }\n";
 
 	postprocess::ShaderChain chain;
@@ -542,7 +682,7 @@ TEST(PostProcessingChainTest, FunctionMacroArgumentsDoNotRewriteInjectedSwizzles
 #endif
 }
 
-TEST(PostProcessingChainTest, CompilesDuckStationGlslHostContract)
+TEST(PostProcessingChainTest, CompilesDisplayGlslHostContract)
 {
 	const std::string shader = R"(
 /*
@@ -589,7 +729,7 @@ void main()
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
-	EXPECT_TRUE(source.duckStationGlsl);
+	EXPECT_TRUE(source.displayGlsl);
 	ASSERT_EQ(2u, source.parameters.size());
 	EXPECT_EQ(postprocess::SlangParameterType::Float, source.parameters[0].type);
 	EXPECT_EQ(postprocess::SlangParameterType::Int, source.parameters[1].type);
@@ -642,7 +782,7 @@ TEST(PostProcessingChainTest, ResolvesRetroArchPreviousPassSamplers)
 	ASSERT_EQ(4u, chain.passes[2].inputs.size());
 	EXPECT_EQ(postprocess::ShaderInputKind::Source, chain.passes[2].inputs[0].kind);
 	EXPECT_EQ(postprocess::ShaderInputKind::PassOutput, chain.passes[2].inputs[1].kind);
-	EXPECT_EQ(0u, chain.passes[2].inputs[1].sourcePass);
+	EXPECT_EQ(1u, chain.passes[2].inputs[1].sourcePass);
 	EXPECT_EQ(postprocess::ShaderInputKind::Original, chain.passes[2].inputs[2].kind);
 	EXPECT_EQ(postprocess::ShaderInputKind::Original, chain.passes[2].inputs[3].kind);
 }
@@ -749,11 +889,8 @@ TEST(PostProcessingChainTest, LoadsExternalReShadeFxCompatibilityPack)
 			continue;
 		postprocess::ShaderChain chain;
 		std::string error;
-		if (!postprocess::loadShaderChain(entry.path().string(), chain, error)) {
-			ASSERT_NE(std::string::npos, error.find("requires a depth buffer"))
-					<< entry.path().string() << ": " << error;
-			continue;
-		}
+		ASSERT_TRUE(postprocess::loadShaderChain(entry.path().string(), chain, error))
+				<< entry.path().string() << ": " << error;
 		for (size_t passIndex = 0; passIndex < chain.passes.size(); ++passIndex) {
 			const postprocess::ShaderPass& pass = chain.passes[passIndex];
 			const postprocess::ShaderPassSource& source = chain.sources[passIndex];
@@ -775,7 +912,7 @@ TEST(PostProcessingChainTest, LoadsExternalReShadeFxCompatibilityPack)
 #endif
 			if (!source.vertex.empty()) {
 				ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, source.slangParameters,
-						inputs, hlsl, error)) << entry.path().string() << ": " << error;
+						inputs, hlsl, error, source.nativeFxStages)) << entry.path().string() << ": " << error;
 #ifdef _WIN32
 				ASSERT_TRUE(compileHlsl(hlsl, "vs_4_0", error)) << entry.path().string() << ": " << error;
 #endif
@@ -851,9 +988,11 @@ void main() {
 	EXPECT_FLOAT_EQ(0.05f, source.parameters[0].step);
 	std::string hlsl;
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(source.fragment, source.parameters, hlsl, error)) << error;
-	EXPECT_NE(std::string::npos, hlsl.find("Source.Sample(SourceSampler, vTexCoord)"));
+
+	expectHlslCompiles(hlsl, "ps_4_0");
 	ASSERT_TRUE(postprocess::translateGlslVertexToHlsl(source.vertex, {}, hlsl, error)) << error;
-	EXPECT_NE(std::string::npos, hlsl.find("output.position = gl_Position"));
+
+	expectHlslCompiles(hlsl, "vs_4_0");
 }
 
 TEST(PostProcessingChainTest, LowersStandardRetroArchCompatibilityMacros)
@@ -929,9 +1068,11 @@ void main() {
 	std::string hlsl;
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(source.fragment, source.parameters, hlsl, error))
 			<< error << '\n' << source.fragment;
-	EXPECT_NE(std::string::npos, hlsl.find("Source.Sample(SourceSampler, vTexCoord)"));
+
+	expectHlslCompiles(hlsl, "ps_4_0");
 	ASSERT_TRUE(postprocess::translateGlslVertexToHlsl(source.vertex, {}, hlsl, error)) << error;
-	EXPECT_NE(std::string::npos, hlsl.find("output.position = gl_Position"));
+
+	expectHlslCompiles(hlsl, "vs_4_0");
 }
 
 TEST(PostProcessingChainTest, CompilesRepresentativeShaderForDx11AndVulkan)
@@ -1228,9 +1369,7 @@ TEST(PostProcessingChainTest, TranslatesPortableGlslFragmentBodiesToHlsl)
 	std::string error;
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(
 			"void main() { gl_FragColor = mix(texture(Source, vTexCoord), vec4(1.0), 0.25); }", hlsl, error)) << error;
-	EXPECT_NE(std::string::npos, hlsl.find("float4 main(PixelInput input)"));
-	EXPECT_NE(std::string::npos, hlsl.find("Source.Sample(SourceSampler, vTexCoord)"));
-	EXPECT_NE(std::string::npos, hlsl.find("lerp("));
+	expectHlslCompiles(hlsl, "ps_4_0");
 }
 
 TEST(PostProcessingChainTest, TranslatesPortableScanlineShaderToHlsl)
@@ -1240,19 +1379,17 @@ TEST(PostProcessingChainTest, TranslatesPortableScanlineShaderToHlsl)
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(
 			"void main() { vec4 color = texture(Source, vTexCoord); float scanlineFactor = mix(0.55, 1.0, mod(floor(vTexCoord.y * OutputSize.y), 2.0)); gl_FragColor = vec4(color.rgb * scanlineFactor, color.a); }",
 			hlsl, error)) << error;
-	EXPECT_NE(std::string::npos, hlsl.find("GlslMod(floor(vTexCoord.y * OutputSize.y), 2.0)"));
-	EXPECT_NE(std::string::npos, hlsl.find("float4 main(PixelInput input) : SV_TARGET"));
+	expectHlslCompiles(hlsl, "ps_4_0");
 }
 
-TEST(PostProcessingChainTest, TranslatesGlslScalarVectorConstructorsToHlslCasts)
+TEST(PostProcessingChainTest, TranslatesGlslScalarVectorConstructors)
 {
 	std::string hlsl;
 	std::string error;
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(
 			"void main() { float luminance = 0.5; gl_FragColor = vec4(vec3(luminance), 1.0); }",
 			hlsl, error)) << error;
-	EXPECT_NE(std::string::npos, hlsl.find("(float3)(luminance)"));
-	EXPECT_NE(std::string::npos, hlsl.find("float4((float3)(luminance), 1.0)"));
+	expectHlslCompiles(hlsl, "ps_4_0");
 }
 
 TEST(PostProcessingChainTest, PacksDx11ParametersContiguously)
@@ -1266,10 +1403,14 @@ TEST(PostProcessingChainTest, PacksDx11ParametersContiguously)
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(
 			"void main() { gl_FragColor = texture(Source, vTexCoord) * vec4(RED, GREEN, BLUE, 1.0); }",
 			parameters, hlsl, error)) << error;
-	EXPECT_NE(std::string::npos, hlsl.find("float4 Parameters[64]"));
-	EXPECT_NE(std::string::npos, hlsl.find("static float RED = Parameters[0].x;"));
-	EXPECT_NE(std::string::npos, hlsl.find("static float GREEN = Parameters[0].y;"));
-	EXPECT_NE(std::string::npos, hlsl.find("static float BLUE = Parameters[0].z;"));
+#ifdef _WIN32
+	D3D11_SHADER_VARIABLE_DESC parameterLayout {};
+	ASSERT_TRUE(compileHlsl(hlsl, "ps_4_0", error, &parameterLayout)) << error;
+	EXPECT_EQ(48u, parameterLayout.StartOffset);
+	EXPECT_EQ(64u * 16u, parameterLayout.Size);
+#else
+	expectHlslCompiles(hlsl, "ps_4_0");
+#endif
 }
 
 TEST(PostProcessingChainTest, RejectsUnbindableGlslResourcesForHlslTranslation)
@@ -1291,15 +1432,14 @@ TEST(PostProcessingChainTest, LowersReShadeFxStructsHelpersResourcesAndControlFl
 		"sampler2D SourceSampler { Texture = SourceTex; Filter = MIN_MAG_MIP_LINEAR; };\n"
 		"struct PixelData { float2 texcoord : TEXCOORD0; };\n"
 		"float4 ApplyBloom(float4 color) { for (int i = 0; i < 1; ++i) color = lerp(color, Tint, BLOOM); return saturate(color); }\n"
-		"technique Main { pass { PixelShader = MainPS; } }\n"
-		"float4 MainPS(PixelData input) : SV_Target { return ApplyBloom(tex2D(SourceSampler, input.texcoord)); }\n";
+		"float4 MainPS(PixelData input) : SV_Target { return ApplyBloom(tex2D(SourceSampler, input.texcoord)); }\n"
+		"technique Main { pass { PixelShader = MainPS; } }\n";
 
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::parseReShadeFx(effect, source, error)) << error;
 	EXPECT_NE(std::string::npos, source.fragment.find("void main"));
-	EXPECT_NE(std::string::npos, source.fragment.find("texture(SourceSampler, fxInput.texcoord)"));
-	EXPECT_NE(std::string::npos, source.fragment.find("for (int i = 0"));
+	EXPECT_TRUE(source.nativeFxStages);
 	EXPECT_NE(std::string::npos, source.fragment.find("ApplyBloom"));
 	ASSERT_EQ(2u, source.parameters.size());
 	EXPECT_EQ("BLOOM", source.parameters[0].name);
@@ -1418,7 +1558,7 @@ TEST(PostProcessingChainTest, ParsesReShadeFxIntoBackendNeutralSyntaxIr)
 	postprocess::ReShadeEffect parsed;
 	std::string error;
 	ASSERT_TRUE(postprocess::parseReShadeEffect(effect, parsed, error)) << error;
-	ASSERT_EQ(1u, parsed.preprocessorDirectives.size());
+	EXPECT_FALSE(parsed.preprocessedSource.empty());
 	ASSERT_EQ(1u, parsed.uniforms.size());
 	EXPECT_EQ(postprocess::ReShadeValueType::Float4, parsed.uniforms[0].valueType);
 	EXPECT_EQ("Tint Color", parsed.uniforms[0].annotations[0].value);
@@ -1445,9 +1585,9 @@ TEST(PostProcessingChainTest, AppliesReShadeFxConditionalPreprocessingBeforePars
 	const std::string effect =
 		"#define ENABLE_EFFECT 1\n"
 		"#if ENABLE_EFFECT\n"
-		"float4 EnabledPS() : SV_Target { return float4(1.0); }\n"
+		"float4 EnabledPS() : SV_Target { return (float4)1.0; }\n"
 		"#else\n"
-		"float4 DisabledPS() : SV_Target { return float4(0.0); }\n"
+		"float4 DisabledPS() : SV_Target { return (float4)0.0; }\n"
 		"#endif\n"
 		"technique Main { pass { PixelShader = EnabledPS; } }\n";
 	postprocess::ReShadeEffect parsed;
@@ -1462,18 +1602,19 @@ TEST(PostProcessingChainTest, AppliesReShadeFxCompoundPreprocessorExpressionsAnd
 	const std::string effect =
 		"#define QUALITY 2\n"
 		"#define ENABLED 1\n"
-		"#define COLOR(value) float4(value)\n"
+		"#define COLOR(value) ((float4)(value))\n"
 		"#if defined(ENABLED) && QUALITY >= 2 && !defined(DISABLED)\n"
 		"#define RETURN_COLOR COLOR(1.0)\n"
 		"#else\n"
-		"#define RETURN_COLOR float4(0.0)\n"
+		"#define RETURN_COLOR (float4)0.0\n"
 		"#endif\n"
 		"float4 MainPS() : SV_Target { return RETURN_COLOR; }\n"
 		"technique Main { pass { PixelShader = MainPS; } }\n";
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::parseReShadeFx(effect, source, error)) << error;
-	EXPECT_NE(std::string::npos, source.fragment.find("vec4(1.0)")) << source.fragment;
+	EXPECT_TRUE(source.nativeFxStages);
+	EXPECT_EQ(1u, source.outputCount);
 }
 
 TEST(PostProcessingChainTest, AppliesReShadeFxFunctionMacrosInArithmeticConditions)
@@ -1482,18 +1623,19 @@ TEST(PostProcessingChainTest, AppliesReShadeFxFunctionMacrosInArithmeticConditio
 		"#define VERSION(major,minor,build) (10000 * (major) + 100 * (minor) + (build))\n"
 		"#define SUPPORTED(major,minor,build) (__RESHADE__ >= VERSION(major,minor,build))\n"
 		"#if SUPPORTED(4, 0, 1)\n"
-		"float4 MainPS() : SV_Target { return float4(1.0); }\n"
+		"float4 MainPS() : SV_Target { return (float4)1.0; }\n"
 		"#else\n"
-		"float4 MainPS() : SV_Target { return float4(0.0); }\n"
+		"float4 MainPS() : SV_Target { return (float4)0.0; }\n"
 		"#endif\n"
 		"technique Main { pass { PixelShader = MainPS; } }\n";
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::parseReShadeFx(effect, source, error)) << error;
-	EXPECT_NE(std::string::npos, source.fragment.find("vec4(1.0)")) << source.fragment;
+	EXPECT_TRUE(source.nativeFxStages);
+	EXPECT_EQ(1u, source.outputCount);
 }
 
-TEST(PostProcessingChainTest, LowersReShadeNamespacesAndRejectsDisplayDepthResources)
+TEST(PostProcessingChainTest, LowersReShadeNamespacesAndReflectsSceneDepth)
 {
 	const std::string header =
 		"namespace ReShade {\n"
@@ -1510,12 +1652,14 @@ TEST(PostProcessingChainTest, LowersReShadeNamespacesAndRejectsDisplayDepthResou
 	ASSERT_EQ(1u, source.slangResources.size());
 	EXPECT_EQ(postprocess::SlangResourceConvention::Source, source.slangResources[0].convention);
 	EXPECT_EQ(std::string::npos, source.fragment.find("ReShade::"));
-	EXPECT_NE(std::string::npos, source.fragment.find("FxOutput0 = vec4("));
+	EXPECT_TRUE(source.nativeFxStages);
+	EXPECT_EQ(1u, source.outputCount);
 
-	EXPECT_FALSE(postprocess::parseReShadeFx(header
+	ASSERT_TRUE(postprocess::parseReShadeFx(header
 			+ "float MainPS(float2 uv : TEXCOORD) : SV_Target { return tex2D(ReShade::DepthBuffer, uv).r; }\n"
-			+ "technique Main { pass { PixelShader = MainPS; } }\n", source, error));
-	EXPECT_NE(std::string::npos, error.find("requires a depth buffer"));
+			+ "technique Main { pass { PixelShader = MainPS; } }\n", source, error)) << error;
+	ASSERT_EQ(1u, source.slangResources.size());
+	EXPECT_EQ(postprocess::SlangResourceConvention::Depth, source.slangResources[0].convention);
 }
 
 TEST(PostProcessingChainTest, LowersReShadeOutTargetsAndHlslVectorSplatsAcrossBackends)
@@ -1534,23 +1678,17 @@ TEST(PostProcessingChainTest, LowersReShadeOutTargetsAndHlslVectorSplatsAcrossBa
 		"  float3 input = tex2D(BackBuffer, texcoord).rgb;\n"
 		"  float2 scale = 1.0;\n"
 		"  float amount = Enabled * (scale.x > 0.0 && scale.y > 0.0);\n"
-		"  result = float4(lerp(Helper(input), 0.0, amount) + float3(dot(input, 0.0) + PI * 0.0 + NativePixelSize.x * 0.0 + HostFrame * 0.0 + HostTimer * 0.0), 1.0);\n"
+		"  result = float4(lerp(Helper(input), 0.0, amount) + (float3)(dot(input, 0.0) + PI * 0.0 + NativePixelSize.x * 0.0 + HostFrame * 0.0 + HostTimer * 0.0), 1.0);\n"
 		"}\n"
 		"technique Main { pass { PixelShader = main; } }\n";
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::parseReShadeFx(effect, source, error)) << error;
 	EXPECT_EQ(1u, source.outputCount);
-	ASSERT_EQ(1u, source.parameters.size());
+	ASSERT_EQ(2u, source.parameters.size());
 	EXPECT_EQ("Enabled", source.parameters[0].name);
-	EXPECT_NE(std::string::npos, source.fragment.find("#define NativePixelSize"));
-	EXPECT_NE(std::string::npos, source.fragment.find("#define HostFrame"));
-	EXPECT_NE(std::string::npos, source.fragment.find("out vec4 result"));
-	EXPECT_NE(std::string::npos, source.fragment.find("vec2 scale = vec2(1.0)"));
-	EXPECT_EQ(std::string::npos, source.fragment.find("float3 input"));
-	EXPECT_NE(std::string::npos, source.fragment.find("void fxMain"));
-	EXPECT_NE(std::string::npos, source.fragment.find("const float PI"));
-	EXPECT_LT(source.fragment.find("vec3 Helper"), source.fragment.find("void fxMain"));
+	EXPECT_EQ("timer", source.parameters[1].hostSource);
+	EXPECT_TRUE(source.nativeFxStages);
 
 	const std::vector<postprocess::ShaderPassInput> inputs {
 		{ "Source", postprocess::ShaderInputKind::Source, {}, postprocess::InvalidShaderPass },
@@ -1642,7 +1780,7 @@ TEST(PostProcessingChainTest, ResolvesReShadeRenderTargetFeedbackAndRuntimeUiBou
 	EXPECT_EQ(static_cast<float>(postprocess::MaxShaderTargetDimension), chain.parameters[0].maximum);
 }
 
-TEST(PostProcessingChainTest, EnforcesReShadeParameterComponentLimitAndStrictDefaults)
+TEST(PostProcessingChainTest, EnforcesReShadeParameterComponentLimitAndEvaluatesConstantDefaults)
 {
 	auto effect = [](uint32_t uniformCount, const std::string& firstDefault) {
 		std::string source;
@@ -1660,8 +1798,11 @@ TEST(PostProcessingChainTest, EnforcesReShadeParameterComponentLimitAndStrictDef
 	EXPECT_EQ(maxUniforms, source.parameters.size());
 	EXPECT_FALSE(postprocess::parseReShadeFx(effect(maxUniforms + 1, "float4(0.0, 0.0, 0.0, 0.0)"), source, error));
 	EXPECT_NE(std::string::npos, error.find(std::to_string(postprocess::MaxShaderParameterComponents) + " uniform components"));
-	EXPECT_FALSE(postprocess::parseReShadeFx(effect(1, "float4(1.0 + 2.0, 0.0, 0.0, 0.0)"), source, error));
-	EXPECT_NE(std::string::npos, error.find("invalid default value"));
+	ASSERT_TRUE(postprocess::parseReShadeFx(effect(1, "float4(1.0 + 2.0, 0.0, 0.0, 0.0)"), source, error)) << error;
+	ASSERT_EQ(1u, source.parameters.size());
+	EXPECT_FLOAT_EQ(3.f, source.parameters[0].values[0]);
+	EXPECT_FALSE(postprocess::parseReShadeFx(effect(1, "float4(Unknown, 0.0, 0.0, 0.0)"), source, error));
+	EXPECT_FALSE(error.empty());
 }
 
 TEST(PostProcessingChainTest, RejectsInvalidTypedSlangParameterRanges)
@@ -1707,8 +1848,8 @@ TEST(PostProcessingChainTest, LowersReShadeFxResourcesForBackendBinding)
 	EXPECT_TRUE(postprocess::parseReShadeFx(
 			"texture2D SourceTex < source = \"color\"; > { Width = BUFFER_WIDTH; };\n"
 			"sampler2D SourceSampler { Texture = SourceTex; };\n"
-			"technique Main { pass { PixelShader = MainPS; } }\n"
-			"float4 MainPS(float2 uv : TEXCOORD) : SV_Target { return tex2D(SourceSampler, uv); }\n", source, error));
+			"float4 MainPS(float2 uv : TEXCOORD) : SV_Target { return tex2D(SourceSampler, uv); }\n"
+			"technique Main { pass { PixelShader = MainPS; } }\n", source, error));
 	EXPECT_TRUE(error.empty());
 	ASSERT_EQ(1u, source.slangResources.size());
 	EXPECT_EQ("SourceSampler", source.slangResources[0].name);
@@ -1726,26 +1867,27 @@ TEST(PostProcessingChainTest, LowersSelectedReShadeTechniquePassAndVertexStage)
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
-	EXPECT_NE(std::string::npos, source.vertex.find("fxVertexResult"));
+	EXPECT_TRUE(source.nativeFxStages);
+	EXPECT_FALSE(source.vertex.empty());
 	EXPECT_NE(std::string::npos, source.fragment.find("FirstPS"));
 	ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 1, source, error)) << error;
-	EXPECT_TRUE(source.vertex.empty());
+	EXPECT_FALSE(source.vertex.empty());
 	EXPECT_NE(std::string::npos, source.fragment.find("SecondPS"));
 
 	const std::string vertexIdEffect =
 		"struct Varyings { float2 scale : TEXCOORD1; };\n"
-		"void PostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD0, out Varyings values) { texcoord = float2(id == 2 ? 2.0 : 0.0, id == 1 ? 2.0 : 0.0); position = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0); values.scale = float2(1.0); }\n"
+		"void PostProcessVS(in uint id : SV_VertexID, out float4 position : SV_Position, out float2 texcoord : TEXCOORD0, out Varyings values) { texcoord = float2(id == 2 ? 2.0 : 0.0, id == 1 ? 2.0 : 0.0); position = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0); values.scale = (float2)1.0; }\n"
 		"float4 MainPS(float2 texcoord : TEXCOORD0, Varyings values) : SV_Target { return float4(texcoord * values.scale, 0.0, 1.0); }\n"
 		"technique Main { pass { VertexShader = PostProcessVS; PixelShader = MainPS; } }\n";
 	ASSERT_TRUE(postprocess::compileReShadeFxPass(vertexIdEffect, 0, 0, source, error)) << error;
-	EXPECT_NE(std::string::npos, source.vertex.find("gl_Position = vec4(VertexCoord.xyz, 1.0)"));
-	EXPECT_NE(std::string::npos, source.vertex.find("FxVarying0"));
+	EXPECT_NE(std::string::npos, source.vertex.find("gl_VertexID"));
+	EXPECT_NE(std::string::npos, source.vertex.find("layout(location = 1)"));
 	const std::vector<postprocess::ShaderPassInput> inputs {
 		{ "Source", postprocess::ShaderInputKind::Source, {}, postprocess::InvalidShaderPass }
 	};
 	std::string hlsl;
 	ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, source.slangParameters,
-			inputs, hlsl, error)) << error;
+			inputs, hlsl, error, source.nativeFxStages)) << error;
 #ifdef _WIN32
 	ASSERT_TRUE(compileHlsl(hlsl, "vs_4_0", error)) << error;
 	ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, source.slangParameters,
@@ -1765,14 +1907,16 @@ TEST(PostProcessingChainTest, LowersSelectedReShadeTechniquePassAndVertexStage)
 TEST(PostProcessingChainTest, ReflectsAndRoutesReShadeMultiRenderTargets)
 {
 	const std::string effect =
+		"texture ColorTarget { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA8; };\n"
+		"texture BloomTarget { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA8; };\n"
 		"struct Outputs { float4 color : SV_Target0; float4 bloom : SV_Target1; };\n"
-		"Outputs MainPS() { Outputs output; output.color = float4(1.0); output.bloom = float4(0.5); return output; }\n"
+		"Outputs MainPS() { Outputs output; output.color = (float4)1.0; output.bloom = (float4)0.5; return output; }\n"
 		"technique Main { pass { PixelShader = MainPS; RenderTarget0 = ColorTarget; RenderTarget1 = BloomTarget; } }\n";
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
 	EXPECT_EQ(2u, source.outputCount);
-	EXPECT_NE(std::string::npos, source.fragment.find("FxOutput1"));
+	EXPECT_TRUE(source.nativeFxStages);
 
 	postprocess::ShaderChain chain;
 	chain.passes.resize(2);
@@ -1791,3 +1935,428 @@ TEST(PostProcessingChainTest, ReflectsAndRoutesReShadeMultiRenderTargets)
 	EXPECT_EQ(0u, chain.passes[1].inputs[0].sourcePass);
 	EXPECT_EQ(1u, chain.passes[1].inputs[0].sourceOutput);
 }
+
+TEST(PostProcessingChainTest, CompilesCompleteExternalShaderInventory)
+{
+	const char *roots = std::getenv("HOLLYCAST_SHADER_TEST_ROOTS");
+	if (roots == nullptr || *roots == '\0')
+		GTEST_SKIP() << "Set HOLLYCAST_SHADER_TEST_ROOTS to shader folders or preset files separated by semicolons.";
+	struct InventoryFixture {
+		std::string previousTechnique = config::PostProcessShaderTechnique.get();
+		std::filesystem::path directory = std::filesystem::temp_directory_path()
+				/ ("hollycast_shader_inventory_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		~InventoryFixture() {
+			config::PostProcessShaderTechnique.get() = previousTechnique;
+			std::error_code error;
+			std::filesystem::remove_all(directory, error);
+		}
+	} fixture;
+	std::filesystem::create_directories(fixture.directory);
+	const auto middleEffect = fixture.directory / "middle.glsl";
+	std::ofstream(middleEffect) << "void main() { FragColor = texture(Source, vTexCoord) * 0.5; }\n";
+	std::vector<std::filesystem::path> files;
+	std::istringstream rootList(roots);
+	for (std::string root; std::getline(rootList, root, ';');) {
+		const std::filesystem::path path(root);
+		if (std::filesystem::is_regular_file(path))
+			files.push_back(path);
+		else if (std::filesystem::is_directory(path)) {
+			for (const auto& entry : std::filesystem::recursive_directory_iterator(path))
+				if (entry.is_regular_file() && postprocess::detectFormat(entry.path().string()) != postprocess::ShaderFormat::Unknown)
+					files.push_back(entry.path());
+		}
+		else
+			ADD_FAILURE() << "Shader inventory path does not exist: " << root;
+	}
+	std::sort(files.begin(), files.end());
+	files.erase(std::unique(files.begin(), files.end()), files.end());
+	EXPECT_FALSE(files.empty());
+#if defined(USE_VULKAN)
+	ShaderCompiler::Init();
+#endif
+	size_t compiledPasses = 0;
+	for (const auto& path : files) {
+		SCOPED_TRACE(path.string());
+		config::PostProcessShaderTechnique.get().clear();
+		postprocess::ShaderChain chain;
+		std::string error;
+		if (!postprocess::loadShaderChain(path.string(), chain, error)) {
+			ADD_FAILURE() << error;
+			continue;
+		}
+		std::vector<std::string> techniques = chain.techniques;
+		if (techniques.empty())
+			techniques.emplace_back();
+		for (const std::string& technique : techniques) {
+			SCOPED_TRACE(technique);
+			config::PostProcessShaderTechnique.get() = technique;
+			bool loaded;
+			if (technique == "UIMask_Bottom") {
+				// This technique restores pixels saved before the intervening
+				// effects. It cannot run alone without its matching producer.
+				config::PostProcessShaderTechnique.get() = "stack:0=UIMask_Top;2=UIMask_Bottom";
+				loaded = postprocess::loadShaderChain(
+						std::vector<std::string> { path.string(), middleEffect.string(), path.string() }, chain, error);
+			}
+			else
+				loaded = postprocess::loadShaderChain(path.string(), chain, error);
+			if (!loaded) {
+				ADD_FAILURE() << error;
+				continue;
+			}
+			for (size_t passIndex = 0; passIndex < chain.passes.size(); ++passIndex) {
+				SCOPED_TRACE(passIndex);
+				const auto& pass = chain.passes[passIndex];
+				const auto& source = chain.sources[passIndex];
+				std::vector<postprocess::SlangParameter> parameters = source.slangParameters;
+				if (parameters.empty())
+					for (const auto& parameter : chain.parameters) {
+						if (parameter.layerIndex != pass.layerIndex)
+							continue;
+						postprocess::SlangParameter typed;
+						typed.name = parameter.name;
+						typed.type = parameter.type;
+						parameters.push_back(std::move(typed));
+					}
+				std::vector<postprocess::ShaderPassInput> inputs = pass.inputs;
+				if (std::none_of(inputs.begin(), inputs.end(), [](const auto& input) { return input.bindingName == "Source"; }))
+					inputs.push_back({ "Source", postprocess::ShaderInputKind::Source, {}, postprocess::InvalidShaderPass });
+				std::stable_sort(inputs.begin(), inputs.end(), [](const auto& left, const auto& right) {
+					return left.bindingName == "Source" && right.bindingName != "Source";
+				});
+				const uint32_t outputCount = pass.colorOutputCount;
+				std::string hlsl;
+				if (pass.compute ? postprocess::translateGlslComputeToHlsl(source, parameters, inputs, hlsl, error)
+						: postprocess::translateGlslGraphFragmentToHlsl(source, parameters, inputs, outputCount, hlsl, error))
+					expectHlslCompiles(hlsl, pass.compute ? "cs_5_0" : "ps_5_0");
+				else
+					ADD_FAILURE() << "DirectX fragment: " << error;
+				if (!source.vertex.empty()) {
+					if (postprocess::translateGlslGraphVertexToHlsl(source.vertex, parameters, inputs, hlsl, error,
+							source.nativeFxStages, source.retroArchGlsl))
+						expectHlslCompiles(hlsl, "vs_4_0");
+					else
+						ADD_FAILURE() << "DirectX vertex: " << error;
+				}
+#if defined(USE_VULKAN)
+				std::vector<postprocess::ShaderPassInput> bindings(inputs.begin() + 1, inputs.end());
+				std::string fragment;
+				std::string vertex;
+				if (pass.compute ? postprocess::buildVulkanComputeSource(source, parameters, bindings, fragment, error)
+						: postprocess::buildVulkanShaderSources(source, parameters, bindings, outputCount, fragment, vertex, error)) {
+					EXPECT_TRUE(ShaderCompiler::Validate(pass.compute ? vk::ShaderStageFlagBits::eCompute : vk::ShaderStageFlagBits::eFragment, fragment, error)) << error;
+					if (!vertex.empty())
+						EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eVertex, vertex, error)) << error;
+				}
+				else
+					ADD_FAILURE() << "Vulkan stages: " << error;
+#endif
+				++compiledPasses;
+			}
+		}
+	}
+#if defined(USE_VULKAN)
+	ShaderCompiler::Term();
+#endif
+	RecordProperty("shader_files", static_cast<int>(files.size()));
+	RecordProperty("shader_passes", static_cast<int>(compiledPasses));
+	EXPECT_GT(compiledPasses, 0u);
+}
+TEST(PostProcessingChainTest, UsesTheReferencedGlslTextureForEarlierPassSizes)
+{
+	const std::string shader =
+		"#ifdef FRAGMENT\n"
+		"uniform sampler2D Texture;\n"
+		"uniform sampler2D PassPrev1Texture;\n"
+		"uniform vec2 PassPrev1InputSize;\n"
+		"uniform vec2 PassPrev1TextureSize;\n"
+		"uniform vec2 InputSize;\n"
+		"varying vec2 TEX0;\n"
+		"void main() { gl_FragColor = texture2D(PassPrev1Texture, TEX0.xy)"
+		" * vec4(PassPrev1InputSize / PassPrev1TextureSize, InputSize / PassPrev1InputSize); }\n"
+		"#endif\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
+	EXPECT_NE(std::string::npos, source.fragment.find("textureSize(PassPrev1Texture, 0)"));
+	postprocess::ShaderChain chain;
+	chain.passes.resize(3);
+	ASSERT_TRUE(postprocess::resolveShaderPassInputs(chain, 2, source, error)) << error;
+	const auto input = std::find_if(chain.passes[2].inputs.begin(), chain.passes[2].inputs.end(),
+			[](const postprocess::ShaderPassInput& value) { return value.bindingName == "PassPrev1Texture"; });
+	ASSERT_NE(chain.passes[2].inputs.end(), input);
+	EXPECT_EQ(postprocess::ShaderInputKind::PassOutput, input->kind);
+	EXPECT_EQ(1u, input->sourcePass);
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, {}, chain.passes[2].inputs, 1, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+}
+TEST(PostProcessingChainTest, CompilesUndefinedGlslFallthroughReturnsForDirectX)
+{
+	const std::string shader =
+		"vec3 mask(float mode) { if (mode == 0.0) return vec3(1.0); if (mode == 1.0) return vec3(0.5); }\n"
+		"void main() { gl_FragColor = vec4(mask(SourceSize.x), 1.0); }\n";
+	std::string hlsl;
+	std::string error;
+	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(shader, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+}
+
+TEST(PostProcessingChainTest, PreservesCustomDirectXLocationZeroVaryings)
+{
+	postprocess::ShaderPassSource source;
+	source.vertex = "layout(location=0) out vec2 uv;\nvoid main() { uv = TexCoord; gl_Position = vec4(VertexCoord, 1.0); }";
+	source.fragment = "layout(location=0) in vec2 uv;\nvoid main() { gl_FragColor = texture(Source, uv); }";
+	std::string hlsl;
+	std::string error;
+	ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, {}, {}, 1, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+	ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, {}, {}, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "vs_4_0");
+}
+
+namespace {
+struct ShaderResourceDirectory {
+	std::filesystem::path path = std::filesystem::temp_directory_path()
+			/ ("hollycast_shader_resources_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+	ShaderResourceDirectory() { std::filesystem::create_directory(path); }
+	~ShaderResourceDirectory() { std::error_code error; std::filesystem::remove_all(path, error); }
+};
+constexpr char ComputeGradientEffect[] =
+	"uniform float weights[2] = { 0.25, 0.75 };\n"
+	"texture2D Image { Width = 16; Height = 8; Format = RGBA32F; };\n"
+	"storage2D WriteImage { Texture = Image; };\n"
+	"sampler2D ReadImage { Texture = Image; MinFilter = POINT; MagFilter = POINT; };\n"
+	"[numthreads(8,4,1)] void Compute(uint3 id : SV_DispatchThreadID) { tex2Dstore(WriteImage, int2(id.xy), float4(weights[0], weights[1], id.x, id.y)); }\n"
+	"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return tex2D(ReadImage, uv); }\n"
+	"technique ComputeGradient { pass Write { ComputeShader = Compute; DispatchSizeX = 2; DispatchSizeY = 2; }"
+	" pass Modify { ComputeShader = Compute<8,4>; DispatchSizeX = 2; DispatchSizeY = 2; }"
+	" pass Present { PixelShader = Pixel; } }\n";
+} // namespace
+
+TEST(PostProcessingChainTest, PreservesComputeTextureVersionsAndDispatchGroupCounts)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "compute.fx";
+	std::ofstream(path) << ComputeGradientEffect;
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	ASSERT_EQ(3u, chain.passes.size());
+	const auto& first = chain.passes[0];
+	const auto& second = chain.passes[1];
+	EXPECT_TRUE(first.compute);
+	EXPECT_FALSE(first.updatesSource);
+	EXPECT_FALSE(second.updatesSource);
+	EXPECT_TRUE(chain.passes[2].updatesSource);
+	ASSERT_EQ(1u, first.outputs.size());
+	EXPECT_EQ(1u, first.outputs[0].previousPass);
+	EXPECT_TRUE(first.outputs[0].previousFrame);
+	EXPECT_EQ(0u, second.outputs[0].previousPass);
+	EXPECT_FALSE(second.outputs[0].previousFrame);
+	ASSERT_EQ(1u, chain.passes[2].inputs.size());
+	EXPECT_EQ(1u, chain.passes[2].inputs[0].sourcePass);
+	postprocess::ShaderFrameInfo frame { 640, 480, 1280, 720, 3 };
+	int width, height;
+	ASSERT_TRUE(postprocess::resolveTargetSize(first, frame, width, height, error)) << error;
+	EXPECT_EQ(16, width); EXPECT_EQ(8, height);
+	std::array<uint32_t, 3> groups;
+	ASSERT_TRUE(postprocess::resolveShaderDispatchGroups(first, frame, groups, error)) << error;
+	EXPECT_EQ((std::array<uint32_t, 3>{2, 2, 1}), groups);
+	const auto& source = chain.sources[0];
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslComputeToHlsl(source, source.slangParameters, {}, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "cs_5_0");
+#if defined(USE_VULKAN)
+	std::string compute;
+	ASSERT_TRUE(postprocess::buildVulkanComputeSource(source, source.slangParameters, {}, compute, error)) << error;
+	ShaderCompiler::Init();
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eCompute, compute, error)) << error;
+	ShaderCompiler::Term();
+#endif
+}
+
+TEST(PostProcessingChainTest, LoadsSlangComputeOutputsAndRoundedDispatchGeometry)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "compute.slang";
+	std::ofstream(path) << "#version 450\n#pragma stage compute\n"
+		"layout(local_size_x=8, local_size_y=4, local_size_z=1) in;\n"
+		"layout(set=0, binding=3, rgba32f) uniform image2D Result;\n"
+		"void main() { imageStore(Result, ivec2(gl_GlobalInvocationID.xy), vec4(1)); }\n";
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	ASSERT_EQ(1u, chain.passes.size());
+	const auto& pass = chain.passes[0];
+	EXPECT_TRUE(pass.compute); EXPECT_TRUE(pass.updatesSource);
+	EXPECT_EQ(0u, pass.colorOutputCount);
+	std::array<uint32_t, 3> groups;
+	ASSERT_TRUE(postprocess::resolveShaderDispatchGroups(pass, {17, 9, 17, 9}, groups, error)) << error;
+	EXPECT_EQ((std::array<uint32_t, 3>{3, 3, 1}), groups);
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslComputeToHlsl(chain.sources[0], {}, {}, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "cs_5_0");
+#if defined(USE_VULKAN)
+	std::string compute;
+	ASSERT_TRUE(postprocess::buildVulkanComputeSource(chain.sources[0], {}, {}, compute, error)) << error;
+	ShaderCompiler::Init();
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eCompute, compute, error)) << error;
+	ShaderCompiler::Term();
+#endif
+}
+
+TEST(PostProcessingChainTest, ProvidesRealTimeAndKeyMouseSourceSemantics)
+{
+	const std::string effect =
+		"uniform float Timer < source = \"timer\"; >;\n"
+		"uniform float Delta < source = \"frametime\"; >;\n"
+		"uniform bool Held < source = \"key\"; keycode = 0x41; >;\n"
+		"uniform bool Pressed < source = \"key\"; keycode = 0x41; mode = \"press\"; >;\n"
+		"uniform bool Toggled < source = \"key\"; keycode = 0x41; mode = \"toggle\"; >;\n"
+		"uniform float2 Point < source = \"mousepoint\"; >;\n"
+		"uniform float2 Movement < source = \"mousedelta\"; >;\n"
+		"uniform float2 Wheel < source = \"mousewheel\"; min = 0; max = 10; > = float2(1, 0);\n"
+		"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return Timer + Delta + Held + Pressed + Toggled + Point.x + Movement.x + Wheel.x; }\n"
+		"technique Inputs { pass { PixelShader = Pixel; } }\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
+	ASSERT_EQ(8u, source.parameters.size());
+	auto& parameters = source.parameters;
+	postprocess::setShaderHostKey(4, false);
+	postprocess::setShaderHostMouse(10, 20, 0);
+	postprocess::updateShaderHostParameters(parameters, {});
+	EXPECT_GE(parameters[0].value, 0.f); EXPECT_GE(parameters[1].value, 0.f);
+	postprocess::setShaderHostKey(4, true);
+	postprocess::setShaderHostMouse(13, 24, 0, 2);
+	postprocess::updateShaderHostParameters(parameters, {});
+	EXPECT_FLOAT_EQ(1.f, parameters[2].value); EXPECT_FLOAT_EQ(1.f, parameters[3].value);
+	const float toggle = parameters[4].value;
+	EXPECT_FLOAT_EQ(13.f, parameters[5].values[0]); EXPECT_FLOAT_EQ(24.f, parameters[5].values[1]);
+	EXPECT_FLOAT_EQ(3.f, parameters[6].values[0]); EXPECT_FLOAT_EQ(4.f, parameters[6].values[1]);
+	EXPECT_FLOAT_EQ(3.f, parameters[7].values[0]); EXPECT_FLOAT_EQ(2.f, parameters[7].values[1]);
+	postprocess::updateShaderHostParameters(parameters, {});
+	EXPECT_FLOAT_EQ(1.f, parameters[2].value); EXPECT_FLOAT_EQ(0.f, parameters[3].value);
+	EXPECT_FLOAT_EQ(toggle, parameters[4].value);
+	EXPECT_FLOAT_EQ(3.f, parameters[7].values[0]); EXPECT_FLOAT_EQ(0.f, parameters[7].values[1]);
+	postprocess::setShaderHostKey(4, false);
+	postprocess::setShaderHostKey(4, true);
+	postprocess::updateShaderHostParameters(parameters, {});
+	EXPECT_FLOAT_EQ(1.f - toggle, parameters[4].value);
+	postprocess::setShaderHostKey(4, false);
+}
+
+TEST(PostProcessingChainTest, PreflightsMissingImagesAndDecodesCubeFacesAndIntegerSlices)
+{
+	ShaderResourceDirectory directory;
+	postprocess::ShaderPresetTexture texture;
+	texture.name = "Required"; texture.path = (directory.path / "required.tga").string();
+	postprocess::ShaderChain chain; chain.textures.push_back(texture);
+	std::string error;
+	EXPECT_FALSE(postprocess::preflightShaderAssets(chain, error));
+	EXPECT_NE(std::string::npos, error.find("required.tga"));
+	std::vector<uint8_t> tga(18 + 6 * 4, 0);
+	tga[2] = 2; tga[12] = 6; tga[14] = 1; tga[16] = 32; tga[17] = 0x28;
+	for (unsigned face = 0; face < 6; ++face) { tga[18 + face * 4 + 2] = static_cast<uint8_t>(face * 20); tga[18 + face * 4 + 3] = 255; }
+	std::ofstream(texture.path, std::ios::binary).write(reinterpret_cast<const char*>(tga.data()), tga.size());
+	texture.type = postprocess::SlangResourceType::SamplerCube;
+	postprocess::ShaderTextureData data;
+	ASSERT_TRUE(postprocess::loadShaderTexture(texture, data, error)) << error;
+	EXPECT_EQ(1u, data.width); EXPECT_EQ(1u, data.height); EXPECT_EQ(6u, data.layers);
+	ASSERT_EQ(24u, data.pixels.size()); EXPECT_EQ(100u, data.pixels[20]);
+	texture.type = postprocess::SlangResourceType::Sampler3D;
+	texture.width = texture.height = 1; texture.depth = 6;
+	texture.numericType = postprocess::ShaderNumericType::UnsignedInteger;
+	ASSERT_TRUE(postprocess::loadShaderTexture(texture, data, error)) << error;
+	EXPECT_EQ(6u, data.depth); EXPECT_EQ("R32G32B32A32_UINT", data.formatName);
+	ASSERT_EQ(96u, data.pixels.size());
+	uint32_t red; std::memcpy(&red, data.pixels.data() + 5 * 16, sizeof(red)); EXPECT_EQ(100u, red);
+	// Header dimensions are rejected before decoding a potentially huge image.
+	tga[12] = tga[13] = tga[14] = tga[15] = 255;
+	std::ofstream(texture.path, std::ios::binary).write(reinterpret_cast<const char*>(tga.data()), tga.size());
+	EXPECT_FALSE(postprocess::loadShaderTexture(texture, data, error));
+}
+
+TEST(PostProcessingChainTest, DecodesThreeDimensionalCubeLutsWithValidatedEntryCounts)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "lookup.cube";
+	{
+		std::ofstream file(path);
+		file << "TITLE \"test\"\nLUT_3D_SIZE 2\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n";
+		for (int i = 0; i < 8; ++i) file << (i & 1) << ' ' << ((i >> 1) & 1) << ' ' << ((i >> 2) & 1) << '\n';
+	}
+	postprocess::ShaderPresetTexture texture;
+	texture.path = path.string(); texture.type = postprocess::SlangResourceType::Sampler3D;
+	postprocess::ShaderTextureData data;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderTexture(texture, data, error)) << error;
+	EXPECT_EQ(2u, data.width); EXPECT_EQ(2u, data.height); EXPECT_EQ(2u, data.depth);
+	EXPECT_EQ("R32G32B32A32_SFLOAT", data.formatName);
+	ASSERT_EQ(8u * 4u * sizeof(float), data.pixels.size());
+	float last[4]; std::memcpy(last, data.pixels.data() + data.pixels.size() - sizeof(last), sizeof(last));
+	for (float component : last) EXPECT_FLOAT_EQ(1.f, component);
+	std::ofstream(path, std::ios::app) << "1 1 1\n";
+	EXPECT_FALSE(postprocess::loadShaderTexture(texture, data, error));
+}
+
+TEST(PostProcessingChainTest, RoutesSourceMipmapsAroundAuxiliaryEffectPasses)
+{
+	postprocess::ShaderChain chain; chain.passes.resize(3);
+	chain.passes[1].updatesSource = false;
+	chain.passes[2].useMipmaps = true;
+	const auto mipmaps = postprocess::resolveShaderPassOutputMipmaps(chain);
+	EXPECT_TRUE(mipmaps[0][0]); EXPECT_FALSE(mipmaps[1][0]);
+}
+
+#if defined(_WIN32) && defined(HAVE_D3D11)
+TEST(PostProcessingChainTest, ExecutesTranslatedComputeShaderAndReadsBackArrayParameters)
+{
+	using Microsoft::WRL::ComPtr;
+	postprocess::ShaderPassSource source;
+	std::string error, hlsl;
+	ASSERT_TRUE(postprocess::compileReShadeFxPass(ComputeGradientEffect, 0, 0, source, error)) << error;
+	ASSERT_TRUE(postprocess::translateGlslComputeToHlsl(source, source.slangParameters, {}, hlsl, error)) << error;
+	ComPtr<ID3DBlob> code, diagnostics;
+	HRESULT result = D3DCompile(hlsl.data(), hlsl.size(), nullptr, nullptr, nullptr, "main", "cs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &code, &diagnostics);
+	ASSERT_TRUE(SUCCEEDED(result)) << (diagnostics ? static_cast<const char*>(diagnostics->GetBufferPointer()) : "D3DCompile failed");
+	ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context;
+	const D3D_FEATURE_LEVEL requested = D3D_FEATURE_LEVEL_11_0;
+	result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, &requested, 1, D3D11_SDK_VERSION, &device, nullptr, &context);
+	ASSERT_TRUE(SUCCEEDED(result)) << "Unable to create the DirectX software device: " << result;
+	ComPtr<ID3D11ComputeShader> compute;
+	ASSERT_TRUE(SUCCEEDED(device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &compute)));
+	D3D11_TEXTURE2D_DESC description {};
+	description.Width = 16; description.Height = 8; description.MipLevels = description.ArraySize = description.SampleDesc.Count = 1;
+	description.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; description.Usage = D3D11_USAGE_DEFAULT; description.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+	ComPtr<ID3D11Texture2D> image;
+	ASSERT_TRUE(SUCCEEDED(device->CreateTexture2D(&description, nullptr, &image)));
+	ComPtr<ID3D11UnorderedAccessView> output;
+	ASSERT_TRUE(SUCCEEDED(device->CreateUnorderedAccessView(image.Get(), nullptr, &output)));
+	std::array<float, 12 + postprocess::MaxShaderParameterComponents> uniforms {};
+	uint32_t offset = 12;
+	for (const auto& parameter : source.parameters) {
+		std::copy_n(parameter.values.begin(), parameter.componentCount, uniforms.begin() + offset); offset += parameter.componentCount;
+	}
+	D3D11_BUFFER_DESC bufferDescription {};
+	bufferDescription.ByteWidth = sizeof(uniforms); bufferDescription.Usage = D3D11_USAGE_IMMUTABLE; bufferDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	D3D11_SUBRESOURCE_DATA initial { uniforms.data(), 0, 0 };
+	ComPtr<ID3D11Buffer> constants;
+	ASSERT_TRUE(SUCCEEDED(device->CreateBuffer(&bufferDescription, &initial, &constants)));
+	context->CSSetShader(compute.Get(), nullptr, 0);
+	ID3D11Buffer *rawConstants = constants.Get(); context->CSSetConstantBuffers(0, 1, &rawConstants);
+	ID3D11UnorderedAccessView *rawOutput = output.Get(); context->CSSetUnorderedAccessViews(0, 1, &rawOutput, nullptr);
+	context->Dispatch(2, 2, 1);
+	rawOutput = nullptr; context->CSSetUnorderedAccessViews(0, 1, &rawOutput, nullptr);
+	description.Usage = D3D11_USAGE_STAGING; description.BindFlags = 0; description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	ComPtr<ID3D11Texture2D> readback;
+	ASSERT_TRUE(SUCCEEDED(device->CreateTexture2D(&description, nullptr, &readback)));
+	context->CopyResource(readback.Get(), image.Get());
+	D3D11_MAPPED_SUBRESOURCE mapped {};
+	ASSERT_TRUE(SUCCEEDED(context->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &mapped)));
+	const float *pixel = reinterpret_cast<const float*>(static_cast<const uint8_t*>(mapped.pData) + 7 * mapped.RowPitch + 15 * sizeof(float) * 4);
+	EXPECT_FLOAT_EQ(0.25f, pixel[0]); EXPECT_FLOAT_EQ(0.75f, pixel[1]); EXPECT_FLOAT_EQ(15.f, pixel[2]); EXPECT_FLOAT_EQ(7.f, pixel[3]);
+	context->Unmap(readback.Get(), 0);
+}
+#endif

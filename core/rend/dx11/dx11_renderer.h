@@ -31,9 +31,7 @@
 #include "dx11_naomi2.h"
 #ifndef LIBRETRO
 #include "dx11_driver.h"
-#ifndef LIBRETRO
 #include "dx11_shader_chain.h"
-#endif
 #endif
 
 struct DX11Renderer : public Renderer
@@ -113,6 +111,11 @@ protected:
 	ComPtr<ID3D11DeviceContext> deviceContext;
 	ComPtr<ID3D11Texture2D> depthTex;
 	ComPtr<ID3D11DepthStencilView> depthTexView;
+#ifndef LIBRETRO
+	ComPtr<ID3D11Texture2D> shaderDepthTexture;
+	ComPtr<ID3D11ShaderResourceView> shaderDepthView;
+	bool sceneDepthValid = false;
+#endif
 	ComPtr<ID3D11InputLayout> mainInputLayout;
 	ComPtr<ID3D11InputLayout> modVolInputLayout;
 	ComPtr<ID3D11Buffer> pxlPolyConstants;

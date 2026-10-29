@@ -195,6 +195,9 @@ void DX11Renderer::Term()
 	fbScaledTexture.reset();
 #ifndef LIBRETRO
 	shaderChain.reset();
+	shaderDepthView.reset();
+	shaderDepthTexture.reset();
+	sceneDepthValid = false;
 #endif
 	quad.reset();
 	deviceContext.reset();
@@ -218,6 +221,13 @@ void DX11Renderer::createDepthTexAndView(ComPtr<ID3D11Texture2D>& texture, ComPt
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | bindFlags;
+#ifndef LIBRETRO
+	// Keep the same depth/stencil precision while allowing display effects to
+	// sample the completed scene through a separate read-only depth view.
+	if (desc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT)
+		desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+	desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+#endif
 	HRESULT hr = device->CreateTexture2D(&desc, nullptr, &texture.get());
 	if (FAILED(hr))
 		WARN_LOG(RENDERER, "Depth/stencil creation failed");
@@ -488,6 +498,9 @@ bool DX11Renderer::Render()
 	bool is_rtt = rendContext->isRTT;
 	if (!is_rtt)
 	{
+#ifndef LIBRETRO
+		sceneDepthValid = true;
+#endif
 		resize(rendContext->framebufferWidth, rendContext->framebufferHeight);
 		deviceContext->OMSetRenderTargets(1, &fbRenderTarget.get(), depthTexView);
 		deviceContext->ClearDepthStencilView(depthTexView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 0.f, 0);
@@ -579,12 +592,29 @@ void DX11Renderer::displayFramebuffer()
 	float w = (float)viewportWidth;
 	float h = (float)viewportHeight;
 	bool presentationTransformApplied = false;
-	if (shaderChain)
+	if (shaderChain) {
+		if (shaderDepthTexture.get() != depthTex.get()) {
+			shaderDepthView.reset();
+			shaderDepthTexture = depthTex;
+			if (depthTex) {
+				D3D11_TEXTURE2D_DESC depthDescription {};
+				depthTex->GetDesc(&depthDescription);
+				D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDescription {};
+				depthViewDescription.Format = depthDescription.Format == DXGI_FORMAT_R32G8X24_TYPELESS
+						? DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS : DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+				depthViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+				depthViewDescription.Texture2D.MipLevels = 1;
+				if (FAILED(device->CreateShaderResourceView(depthTex, &depthViewDescription, &shaderDepthView.get())))
+					WARN_LOG(RENDERER, "Scene depth is unavailable for display shaders");
+			}
+		}
 		shaderChain->render(fbTextureView,
 				{ static_cast<int>(width), static_cast<int>(height),
 						config::Rotate90 ? viewportHeight : viewportWidth,
 						config::Rotate90 ? viewportWidth : viewportHeight,
-						FrameCount, config::Rotate90 }, displayTexture, presentationTransformApplied);
+						FrameCount, config::Rotate90 }, displayTexture, presentationTransformApplied,
+				sceneDepthValid ? shaderDepthView : ComPtr<ID3D11ShaderResourceView> {});
+	}
 
 	// Shader passes bind their own intermediate render targets. The final blit
 	// and OSD must always return to the swapchain target.
@@ -1047,6 +1077,9 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 
 #ifndef LIBRETRO
 	ID3D11ShaderResourceView *nullResView = nullptr;
+	// VRAM framebuffer uploads contain color only; an older 3D depth surface
+	// must never masquerade as depth for this image.
+	sceneDepthValid = false;
     deviceContext->PSSetShaderResources(0, 1, &nullResView);
 	resize(width, height);
 	deviceContext->OMSetRenderTargets(1, &fbRenderTarget.get(), nullptr);

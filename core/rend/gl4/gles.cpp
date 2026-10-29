@@ -944,6 +944,9 @@ bool OpenGL4Renderer::renderFrame(int rendering_width, int rendering_height)
 		gl.ofbo.aspectRatio = getOutputFramebufferAspectRatio();
 #ifndef LIBRETRO
 		gl.ofbo2.ready = false;
+		gl.postProcessDepthTexture = depthTexId;
+		gl.postProcessDepthWidth = max_image_width;
+		gl.postProcessDepthHeight = max_image_height;
 		renderLastFrame();
 #endif
 	}

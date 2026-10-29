@@ -28,7 +28,7 @@ class Quad
 public:
 	// Post-processing may expose up to 256 scalar controls in addition to its
 	// eight frame-metadata scalars. Other quad users upload only their own prefix.
-	static constexpr size_t ConstantBufferBytes = sizeof(float) * 264;
+	static constexpr size_t ConstantBufferBytes = sizeof(float) * 268;
 
 	void init(const ComPtr<ID3D11Device>& device, ComPtr<ID3D11DeviceContext> deviceContext, DX11Shaders *shaders)
 	{
@@ -83,8 +83,8 @@ public:
 		// Constant buffer
 		{
 			D3D11_BUFFER_DESC desc{};
-			// Post-processing supplies a 128-byte frame block; ordinary quad draws
-			// still write their four-float color at the beginning of this buffer.
+			// Post-processing supplies 48 bytes of frame data and 256 floats of parameters;
+			// ordinary quad draws write their four-float color at the beginning.
 			desc.ByteWidth = ConstantBufferBytes;
 			desc.Usage = D3D11_USAGE_DYNAMIC;
 			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
@@ -119,13 +119,15 @@ public:
 
 	void drawWithShaders(const std::vector<ComPtr<ID3D11ShaderResourceView>>& textureViews,
 			const std::vector<ComPtr<ID3D11SamplerState>>& samplers, ID3D11VertexShader *customVertexShader,
-			ID3D11PixelShader *customPixelShader, const void *constants, size_t constantsSize)
+			ID3D11PixelShader *customPixelShader, const void *constants, size_t constantsSize, UINT vertexCount = 4, ID3D11DepthStencilState *stencil = nullptr, UINT stencilReference = 0,
+			D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, bool generatedVertices = false)
 	{
 		if (textureViews.empty() || textureViews.size() != samplers.size()) {
 			WARN_LOG(RENDERER, "Quad requires matching non-empty texture and sampler lists");
 			return;
 		}
-		drawInternal(textureViews, samplers, customVertexShader, customPixelShader, constants, constantsSize, -1.f, -1.f, 2.f, 2.f, false);
+		drawInternal(textureViews, samplers, customVertexShader, customPixelShader, constants, constantsSize,
+				-1.f, -1.f, 2.f, 2.f, false, vertexCount, stencil, stencilReference, topology, generatedVertices);
 	}
 
 private:
@@ -140,7 +142,8 @@ private:
 
 	void drawInternal(const std::vector<ComPtr<ID3D11ShaderResourceView>>& textureViews,
 			const std::vector<ComPtr<ID3D11SamplerState>>& samplers, ID3D11VertexShader *customVertexShader, ID3D11PixelShader *customPixelShader,
-			const void *constants, size_t constantsSize, float x, float y, float w, float h, bool rotate)
+			const void *constants, size_t constantsSize, float x, float y, float w, float h, bool rotate, UINT vertexCount = 4, ID3D11DepthStencilState *stencil = nullptr, UINT stencilReference = 0,
+			D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, bool generatedVertices = false)
 	{
 		if (constantsSize > ConstantBufferBytes) {
 			WARN_LOG(RENDERER, "Quad constant data exceeds the allocated constant buffer");
@@ -159,13 +162,14 @@ private:
 		deviceContext->Unmap(vertexBuffer, 0);
 	    unsigned int stride = sizeof(Vertex);
 	    unsigned int offset = 0;
-		deviceContext->IASetInputLayout(inputLayout);
+		// Native effect stages generate their fullscreen triangle from SV_VertexID.
+		deviceContext->IASetInputLayout(generatedVertices ? nullptr : inputLayout.get());
 		deviceContext->IASetVertexBuffers(0, 1, &vertexBuffer.get(), &stride, &offset);
 
 		// Render states
-		deviceContext->OMSetDepthStencilState(depthStencilState, 0);
+		deviceContext->OMSetDepthStencilState(stencil != nullptr ? stencil : static_cast<ID3D11DepthStencilState *>(depthStencilState), stencilReference);
 		deviceContext->RSSetState(rasterizerState);
-		deviceContext->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+		deviceContext->IASetPrimitiveTopology(topology);
 		deviceContext->VSSetShader(customVertexShader != nullptr ? customVertexShader : (rotate ? rotateVertexShader : vertexShader), nullptr, 0);
 		deviceContext->PSSetShader(customPixelShader, nullptr, 0);
 		deviceContext->GSSetShader(nullptr, nullptr, 0);
@@ -196,7 +200,7 @@ private:
 		// Binding both stages keeps Slang and ReShade behavior identical to Vulkan/GL.
 		deviceContext->VSSetShaderResources(0, static_cast<UINT>(rawTextureViews.size()), rawTextureViews.data());
 		deviceContext->VSSetSamplers(0, static_cast<UINT>(rawSamplers.size()), rawSamplers.data());
-        deviceContext->Draw(4, 0);
+		deviceContext->Draw(vertexCount, 0);
 	}
 	struct Vertex {
 		float x, y, u, v;

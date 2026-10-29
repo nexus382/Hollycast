@@ -790,7 +790,10 @@ bool OpenGLRenderer::renderLastFrame()
 	{
 		if (GlFramebuffer *processed = gl.shaderChain->render(framebuffer->getTexture(),
 				{ sourceWidth, sourceHeight, settings.display.width - dx * 2, outheight - dy * 2,
-						FrameCount, config::Rotate90 }, presentationTransformApplied))
+						FrameCount, config::Rotate90 }, presentationTransformApplied,
+				gl.ofbo2.ready ? 0 : gl.postProcessDepthTexture != 0
+						? gl.postProcessDepthTexture : framebuffer->getDepthTexture(),
+				gl.postProcessDepthWidth, gl.postProcessDepthHeight))
 		{
 			framebuffer = processed;
 			// Display shifts are measured in source pixels. Scale them after a pass

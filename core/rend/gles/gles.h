@@ -179,6 +179,7 @@ public:
 	int getHeight() const { return height; }
 
 	GLuint getTexture() const { return texture; }
+	GLuint getDepthTexture() const { return depthTexture; }
 	GLuint detachTexture() {
 		GLuint t = texture;
 		texture = 0;
@@ -195,6 +196,7 @@ private:
 	GLuint framebuffer = 0;
 	GLuint colorBuffer = 0;
 	GLuint depthBuffer = 0;
+	GLuint depthTexture = 0;
 };
 
 class GlVertexArray
@@ -303,6 +305,9 @@ struct gl_ctx
 	std::unique_ptr<GlQuadDrawer> quadDrawer;
 #ifndef LIBRETRO
 	std::unique_ptr<GlShaderChain> shaderChain;
+	GLuint postProcessDepthTexture = 0;
+	int postProcessDepthWidth = 0;
+	int postProcessDepthHeight = 0;
 #endif
 	const char *gl_version;
 	const char *glsl_version_header;
@@ -399,7 +404,7 @@ PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
 		int palette, bool naomi2, bool dithering);
 
-GLuint gl_CompileShader(const char* shader, GLuint type);
+GLuint gl_CompileShader(const char* shader, GLuint type, std::string *diagnostics = nullptr);
 GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader,
 		std::string *diagnostics = nullptr);
 bool CompilePipelineShader(PipelineShader* s);

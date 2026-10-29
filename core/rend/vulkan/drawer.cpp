@@ -2,6 +2,7 @@
 	Created on: Oct 8, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -598,8 +599,14 @@ void ScreenDrawer::Init(SamplerManager *samplerManager, ShaderManager *shaderMan
 	{
 		depthAttachment = std::make_unique<FramebufferAttachment>(
 				GetContext()->GetPhysicalDevice(), GetContext()->GetDevice());
-		depthAttachment->Init(viewport.width, viewport.height, GetContext()->GetDepthFormat(),
-				vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransientAttachment,
+		vk::ImageUsageFlags depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransientAttachment;
+#ifndef LIBRETRO
+		// Display shaders borrow the completed scene depth. Sampled attachments
+		// cannot use transient allocation, which may discard depth after the pass.
+		if (GetContext()->CanSampleDepth())
+			depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
+#endif
+		depthAttachment->Init(viewport.width, viewport.height, GetContext()->GetDepthFormat(), depthUsage,
 				"DEPTH ATTACHMENT");
 	}
 
@@ -618,6 +625,10 @@ void ScreenDrawer::Init(SamplerManager *samplerManager, ShaderManager *shaderMan
 						vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
 						vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal),
 		};
+#ifndef LIBRETRO
+		if (GetContext()->CanSampleDepth())
+			attachmentDescriptions[1].storeOp = vk::AttachmentStoreOp::eStore;
+#endif
 		vk::AttachmentReference colorReference(0, vk::ImageLayout::eColorAttachmentOptimal);
 		vk::AttachmentReference depthReference(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
 

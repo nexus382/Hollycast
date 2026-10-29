@@ -434,6 +434,8 @@ bool VulkanContext::InitDevice()
 			ERROR_LOG(RENDERER, "Could not find a queue for graphics or present");
 			return false;
 		}
+
+		graphicsComputeSupported = static_cast<bool>(queueFamilyProperties[graphicsQueueIndex].queueFlags & vk::QueueFlagBits::eCompute);
 		if (graphicsQueueIndex == presentQueueIndex)
 			DEBUG_LOG(RENDERER, "Using Graphics+Present queue family");
 		else
@@ -592,7 +594,7 @@ bool VulkanContext::InitDevice()
             vk::DescriptorPoolSize(vk::DescriptorType::eSampler, 2),
             vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 40000),
             vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, 2),
-            vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, 12),
+            vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, 4096),
             vk::DescriptorPoolSize(vk::DescriptorType::eUniformTexelBuffer, 2),
 			vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, 2),
             vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, 80000),
@@ -861,6 +863,9 @@ void VulkanContext::CreateSwapChain()
 			SetWindowSize(0, 0);
 			throw InvalidVulkanContext();
 		}
+
+		depthSamplingSupported = static_cast<bool>(physicalDevice.getFormatProperties(depthFormat).optimalTilingFeatures
+				& vk::FormatFeatureFlagBits::eSampledImage);
 
 	    // Render pass
 	    vk::AttachmentDescription attachmentDescription = vk::AttachmentDescription(vk::AttachmentDescriptionFlags(), presentFormat, vk::SampleCountFlagBits::e1,
@@ -1175,7 +1180,8 @@ vk::CommandBuffer VulkanContext::PrepareOverlay(bool vmu, bool crosshair)
 
 extern Renderer *renderer;
 
-void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio) noexcept
+void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
+		vk::Image depthImage, vk::ImageView depthView) noexcept
 {
 	lastFrameView = imageView;
 	lastFrameExtent = extent;
@@ -1195,7 +1201,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 						{ static_cast<int>(extent.width), static_cast<int>(extent.height),
 								static_cast<int>(presentRect.extent.width), static_cast<int>(presentRect.extent.height),
 								static_cast<uint32_t>(FrameCount), config::Rotate90 }, processedView,
-						presentationTransformApplied);
+						presentationTransformApplied, depthImage, depthView);
 				if (processed)
 					imageView = processedView;
 				if (processed && presentationTransformApplied)

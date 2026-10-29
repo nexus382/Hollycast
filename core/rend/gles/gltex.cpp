@@ -387,7 +387,23 @@ void GlFramebuffer::makeFramebuffer(bool withDepth)
 	glGenFramebuffers(1, &framebuffer);
 	bind();
 
-	if (withDepth)
+#if !defined(LIBRETRO) && defined(GL_DEPTH24_STENCIL8)
+	if (withDepth && (!gl.is_gles || gl.gl_major >= 3)) {
+		// A texture preserves the completed scene's depth for display effects;
+		// older GLES contexts retain their existing renderbuffer path below.
+		depthTexture = glcache.GenTexture();
+		glcache.BindTexture(GL_TEXTURE_2D, depthTexture);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width, height, 0,
+				GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTexture, 0);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depthTexture, 0);
+	}
+#endif
+	if (withDepth && depthTexture == 0)
 	{
 		// Generate and bind a render buffer which will become a depth buffer
 		glGenRenderbuffers(1, &depthBuffer);
@@ -478,6 +494,8 @@ GlFramebuffer::~GlFramebuffer()
 {
 	glDeleteFramebuffers(1, &framebuffer);
 	glDeleteRenderbuffers(1, &depthBuffer);
+	if (depthTexture != 0)
+		glcache.DeleteTextures(1, &depthTexture);
 	glcache.DeleteTextures(1, &texture);
 	glDeleteRenderbuffers(1, &colorBuffer);
 }

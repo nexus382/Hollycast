@@ -466,6 +466,8 @@ void termGLCommon()
 #endif
 #ifndef LIBRETRO
 	gl.shaderChain.reset();
+	gl.postProcessDepthTexture = 0;
+	gl.postProcessDepthWidth = gl.postProcessDepthHeight = 0;
 #endif
 	gl.quadDrawer.reset();
 
@@ -628,7 +630,7 @@ void findGLVersion()
 
 struct ShaderUniforms_t ShaderUniforms;
 
-void appendShaderDiagnostic(std::string *diagnostics, const char *stage, const std::string& message)
+static void appendShaderDiagnostic(std::string *diagnostics, const char *stage, const std::string& message)
 {
 	if (diagnostics == nullptr || diagnostics->size() >= 4096)
 		return;
@@ -640,7 +642,7 @@ void appendShaderDiagnostic(std::string *diagnostics, const char *stage, const s
 	diagnostics->append(entry, 0, entry.size() < remaining ? entry.size() : remaining);
 }
 
-void logShaderExcerpt(const char *label, const char *source)
+static void logShaderExcerpt(const char *label, const char *source)
 {
 	constexpr size_t MaxLoggedShaderBytes = 2048;
 	const size_t length = std::char_traits<char>::length(source);
@@ -968,7 +970,6 @@ static void gl_create_resources()
 #endif
 }
 
-GLuint gl_CompileShader(const char* shader,GLuint type);
 
 //setup
 

@@ -21,6 +21,9 @@
 */
 #include "compiler.h"
 #include "vulkan_context.h"
+#ifndef LIBRETRO
+#include "rend/postprocess/shader_chain.h"
+#endif
 
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -30,16 +33,22 @@ int ShaderCompiler::initCount;
 
 void ShaderCompiler::Init()
 {
+#ifdef LIBRETRO
 	if (initCount++ == 0) {
 		bool rc = glslang::InitializeProcess();
 		verify(rc);
 	}
+#else
+	verify(postprocess::initializeShaderCompiler());
+#endif
 }
 void ShaderCompiler::Term()
 {
+#ifdef LIBRETRO
 	if (--initCount == 0)
 		glslang::FinalizeProcess();
 	initCount = std::max(initCount, 0);
+#endif
 }
 
 static EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)

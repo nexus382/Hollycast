@@ -18,6 +18,7 @@
 #include "windows/comptr.h"
 
 #include <array>
+#include <map>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -29,7 +30,8 @@ class Dx11ShaderChain
 public:
 	void init(const ComPtr<ID3D11Device>& device, const ComPtr<ID3D11DeviceContext>& deviceContext, Quad *quad);
 	bool render(ComPtr<ID3D11ShaderResourceView>& sourceView, const postprocess::ShaderFrameInfo& frame,
-			ComPtr<ID3D11ShaderResourceView>& outputView, bool& presentationTransformApplied);
+			ComPtr<ID3D11ShaderResourceView>& outputView, bool& presentationTransformApplied,
+			const ComPtr<ID3D11ShaderResourceView>& depthView = {});
 	void term();
 
 private:
@@ -39,10 +41,19 @@ private:
 		int frameCount;
 		int rotation;
 		float originalSize[2];
+		float finalViewportSize[2];
+		int hasDepth;
+		int padding;
 		float parameters[postprocess::MaxShaderParameterComponents];
 	};
 	struct Target {
 		ComPtr<ID3D11Texture2D> texture;
+		ComPtr<ID3D11Texture1D> line;
+		ComPtr<ID3D11Texture3D> volume;
+		ComPtr<ID3D11UnorderedAccessView> storage;
+		ID3D11Resource *resource() const { return volume ? static_cast<ID3D11Resource *>(static_cast<ID3D11Texture3D *>(volume)) : line ? static_cast<ID3D11Resource *>(static_cast<ID3D11Texture1D *>(line)) : static_cast<ID3D11Resource *>(static_cast<ID3D11Texture2D *>(texture)); }
+		postprocess::SlangResourceType type = postprocess::SlangResourceType::Sampler2D;
+		uint32_t depth = 1;
 		ComPtr<ID3D11RenderTargetView> view;
 		ComPtr<ID3D11ShaderResourceView> shaderView;
 		int width = 0;
@@ -69,6 +80,8 @@ private:
 		postprocess::ShaderPass pass;
 		ComPtr<ID3D11VertexShader> vertexShader;
 		ComPtr<ID3D11PixelShader> pixelShader;
+		ComPtr<ID3D11ComputeShader> computeShader;
+		ComPtr<ID3D11DepthStencilState> stencilState;
 		ComPtr<ID3D11BlendState> blendState;
 		std::vector<ResourceBinding> resources;
 		std::vector<postprocess::SlangParameter> parameters;
@@ -77,17 +90,26 @@ private:
 		std::vector<ComPtr<ID3D11SamplerState>> samplers;
 		std::vector<bool> outputNeedsMipmaps;
 		std::vector<DXGI_FORMAT> outputFormats;
-		bool duckStationGlsl = false;
+		bool displayGlsl = false;
+		bool nativeFxStages = false;
 		uint32_t historyDepth = 1;
 		int targetWidth = 0;
 		int targetHeight = 0;
 	};
+	struct StencilTarget {
+		ComPtr<ID3D11Texture2D> texture;
+		ComPtr<ID3D11DepthStencilView> view;
+		uint32_t frame = 0, layerIndex = postprocess::InvalidShaderPass;
+		bool initialized = false;
+	};
+	std::map<std::pair<int, int>, StencilTarget> stencilTargets;
 	using TargetRing = std::vector<Target>;
 	using PassTargets = std::vector<TargetRing>;
 
 	bool updateConfiguredChain();
 	bool compileCandidate(const postprocess::ShaderChain& chain, std::vector<Program>& candidate, std::string& error) const;
-	bool ensureTarget(Target& target, int width, int height, DXGI_FORMAT format, bool mipmapped);
+	bool ensureTarget(Target& target, int width, int height, DXGI_FORMAT format, bool mipmapped, bool storage = false,
+			postprocess::SlangResourceType type = postprocess::SlangResourceType::Sampler2D, uint32_t depth = 1);
 	bool prepareMipmappedSource(ComPtr<ID3D11ShaderResourceView>& sourceView, int width, int height,
 			ComPtr<ID3D11ShaderResourceView>& mipmappedView);
 	bool ensureLookupTextures(std::string& error);
@@ -103,10 +125,14 @@ private:
 	ComPtr<ID3D11SamplerState> mipNearestSampler;
 	std::vector<PassTargets> targets;
 	Target displayInput;
+	Target depthInput;
+	ComPtr<ID3D11PixelShader> depthCopyShader;
+	ComPtr<ID3D11Buffer> computeConstants;
 	Target mipmapSource;
 	TargetRing sourceHistory;
 	uint32_t sourceHistoryDepth = 1;
 	bool needsSourceHistory = false;
+	std::array<int, 4> stencilFrameSize {};
 	std::vector<Program> programs;
 	std::vector<LookupTexture> lookupTextures;
 	std::vector<postprocess::ShaderParameter> parameters;

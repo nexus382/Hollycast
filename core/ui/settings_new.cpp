@@ -4787,7 +4787,8 @@ static bool rebuildShaderPreview()
 		return true;
 
 	postprocess::ShaderChain candidate;
-	if (!postprocess::loadShaderChain(g_shaderPreview.paths, candidate, g_shaderPreview.error))
+	if (!postprocess::loadShaderChain(g_shaderPreview.paths, candidate, g_shaderPreview.error)
+			|| !postprocess::preflightShaderAssets(candidate, g_shaderPreview.error))
 		return false;
 	g_shaderPreview.defaults = candidate.parameters;
 	postprocess::applyShaderChainParameterValues(candidate, g_shaderPreview.overrides);
@@ -4919,6 +4920,24 @@ static void renderShaderActivationStatus()
 		shaderTextWrapped(ImVec4(1.f, .75f, .25f, 1.f), "%s", T("Parsed successfully; waiting for gameplay to activate."));
 }
 
+static void applyShaderTechniqueSelection(std::string technique)
+{
+	const std::string previousTechnique = config::PostProcessShaderTechnique.get();
+	ShaderPreviewState previousPreview = std::move(g_shaderPreview);
+	config::PostProcessShaderTechnique.get() = std::move(technique);
+	if (!rebuildShaderPreview()) {
+		// Keep the working technique and its controls when a consumer is chosen
+		// without the producer layer it requires.
+		const std::string error = g_shaderPreview.error;
+		config::PostProcessShaderTechnique.get() = previousTechnique;
+		g_shaderPreview = std::move(previousPreview);
+		gui_error(error);
+		return;
+	}
+	requestShaderActivation();
+	SaveSettings();
+}
+
 static void renderShaderParameterControls()
 {
 	for (postprocess::ShaderTechniqueGroup& group : g_shaderPreview.chain.techniqueGroups) {
@@ -4928,15 +4947,15 @@ static void renderShaderParameterControls()
 				&& group.selectedTechnique < static_cast<int>(group.techniques.size())
 				? group.selectedTechnique : 0;
 		ImGui::PushID(static_cast<int>(group.layerIndex));
-		bool changed = false;
+		std::string selection;
 		if (ImGui::BeginCombo(group.label.c_str(), group.techniques[selectedTechnique].c_str())) {
 			for (size_t index = 0; index < group.techniques.size(); ++index) {
 				const bool selected = static_cast<int>(index) == selectedTechnique;
 				if (ImGui::Selectable(group.techniques[index].c_str(), selected) && !selected) {
+					const int previousIndex = group.selectedTechnique;
 					group.selectedTechnique = static_cast<int>(index);
-					config::PostProcessShaderTechnique.get() =
-							postprocess::serializeShaderTechniqueSelections(g_shaderPreview.chain.techniqueGroups);
-					changed = true;
+					selection = postprocess::serializeShaderTechniqueSelections(g_shaderPreview.chain.techniqueGroups);
+					group.selectedTechnique = previousIndex;
 				}
 				if (selected)
 					ImGui::SetItemDefaultFocus();
@@ -4944,10 +4963,8 @@ static void renderShaderParameterControls()
 			ImGui::EndCombo();
 		}
 		ImGui::PopID();
-		if (changed) {
-			rebuildShaderPreview();
-			requestShaderActivation();
-			SaveSettings();
+		if (!selection.empty()) {
+			applyShaderTechniqueSelection(std::move(selection));
 			break;
 		}
 	}
@@ -4955,22 +4972,20 @@ static void renderShaderParameterControls()
 		const int selectedTechnique = g_shaderPreview.chain.selectedTechnique >= 0
 				&& g_shaderPreview.chain.selectedTechnique < static_cast<int>(g_shaderPreview.chain.techniques.size())
 				? g_shaderPreview.chain.selectedTechnique : 0;
+		std::string selection;
 		if (ImGui::BeginCombo(T("Technique"), g_shaderPreview.chain.techniques[selectedTechnique].c_str())) {
 			for (size_t index = 0; index < g_shaderPreview.chain.techniques.size(); ++index) {
 				const bool selected = static_cast<int>(index) == selectedTechnique;
-				if (ImGui::Selectable(g_shaderPreview.chain.techniques[index].c_str(), selected) && !selected) {
-					config::PostProcessShaderTechnique.get() = g_shaderPreview.chain.techniques[index];
-					rebuildShaderPreview();
-					requestShaderActivation();
-					SaveSettings();
-				}
+				if (ImGui::Selectable(g_shaderPreview.chain.techniques[index].c_str(), selected) && !selected)
+					selection = g_shaderPreview.chain.techniques[index];
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
 			ImGui::EndCombo();
 		}
+		if (!selection.empty())
+			applyShaderTechniqueSelection(std::move(selection));
 	}
-
 	if (g_shaderPreview.chain.parameters.empty()) {
 		ImGui::TextDisabled("%s", T("This shader stack exposes no adjustable parameters."));
 		return;
@@ -4980,6 +4995,8 @@ static void renderShaderParameterControls()
 	ImGui::Separator();
 
 	for (postprocess::ShaderParameter& parameter : g_shaderPreview.chain.parameters) {
+		if (!parameter.hostSource.empty())
+			continue;
 		ImGui::PushID(postprocess::shaderParameterKey(parameter).c_str());
 		if (!parameter.key.empty())
 			ImGui::TextDisabled(T("Layer %u"), parameter.layerIndex + 1);
@@ -4995,8 +5012,8 @@ static void renderShaderParameterControls()
 				saveAfterEdit = changed;
 			}
 			else if (!parameter.choiceLabels.empty()) {
-				const int selected = std::clamp(static_cast<int>(std::lround(value)), 0,
-						static_cast<int>(parameter.choiceLabels.size() - 1));
+				const int selected = static_cast<int>(std::clamp(std::round(static_cast<double>(value)),
+						0.0, static_cast<double>(parameter.choiceLabels.size() - 1)));
 				ImGui::TextWrapped("%s", parameter.label.c_str());
 				ImGui::SetNextItemWidth(-1.f);
 				if (ImGui::BeginCombo("##choice", parameter.choiceLabels[selected].c_str())) {
@@ -5016,21 +5033,23 @@ static void renderShaderParameterControls()
 			else if (parameter.minimum < parameter.maximum) {
 				const double range = static_cast<double>(parameter.maximum) - parameter.minimum;
 				if (parameter.type == postprocess::SlangParameterType::Int) {
-					const int minimum = static_cast<int>(std::lround(parameter.minimum));
-					const int maximum = static_cast<int>(std::lround(parameter.maximum));
-					const int step = parameter.step > 0.f ? std::max(1, static_cast<int>(std::lround(parameter.step)))
-							: std::max(1, (maximum - minimum + 99) / 100);
-					const int stepCount = std::max(1, (maximum - minimum + step - 1) / step);
-					int stepIndex = std::clamp(static_cast<int>(std::lround((value - minimum) / step)), 0, stepCount);
-					ImGui::TextWrapped("%s: %d", parameter.label.c_str(), static_cast<int>(std::lround(value)));
+					// Shader annotations are external data. Bound the slider before
+					// converting to int so large ranges cannot overflow the UI.
+					const double minimum = std::ceil(static_cast<double>(parameter.minimum));
+					const double maximum = std::max(minimum, std::floor(static_cast<double>(parameter.maximum)));
+					const double step = parameter.step > 0.f ? std::max(1.0, std::round(static_cast<double>(parameter.step)))
+							: std::max(1.0, std::ceil((maximum - minimum) / 100.0));
+					const int stepCount = static_cast<int>(std::clamp(std::ceil((maximum - minimum) / step), 1.0, 1000000.0));
+					int stepIndex = static_cast<int>(std::clamp(std::round((value - minimum) / step), 0.0, static_cast<double>(stepCount)));
+					ImGui::TextWrapped("%s: %.0f", parameter.label.c_str(), static_cast<double>(value));
 					ImGui::SetNextItemWidth(-1.f);
 					changed = ImGui::SliderInt("##value", &stepIndex, 0, stepCount, "");
 					value = static_cast<float>(std::min(maximum, minimum + stepIndex * step));
 				}
 				else {
 					const double step = parameter.step > 0.f ? parameter.step : range / 100.0;
-					const int stepCount = std::clamp(static_cast<int>(std::ceil(range / step)), 1, 1000000);
-					int stepIndex = std::clamp(static_cast<int>(std::lround((value - parameter.minimum) / step)), 0, stepCount);
+					const int stepCount = static_cast<int>(std::clamp(std::ceil(range / step), 1.0, 1000000.0));
+					int stepIndex = static_cast<int>(std::clamp(std::round((value - parameter.minimum) / step), 0.0, static_cast<double>(stepCount)));
 					ImGui::TextWrapped("%s: %.3f", parameter.label.c_str(), value);
 					ImGui::SetNextItemWidth(-1.f);
 					changed = ImGui::SliderInt("##value", &stepIndex, 0, stepCount, "");
@@ -5080,17 +5099,84 @@ static void renderShaderParameterControls()
 	}
 }
 
-static void applyShaderSelection(const std::vector<std::string>& paths, bool resetOverrides = true)
+static void applyShaderSelection(const std::vector<std::string>& paths,
+		std::vector<size_t> previousLayers = {})
 {
+	const std::vector<std::string> previousPaths = g_shaderPreview.paths;
+	const std::vector<postprocess::ShaderParameter> previousParameters = g_shaderPreview.chain.parameters;
+	// Explicit indices preserve identity when two layers use the same effect.
+	// Browser changes match each old occurrence once; new layers start at defaults.
+	if (previousLayers.size() != paths.size()) {
+		previousLayers.assign(paths.size(), previousPaths.size());
+		std::vector<bool> used(previousPaths.size(), false);
+		for (size_t layer = 0; layer < paths.size(); ++layer)
+			for (size_t previous = 0; previous < previousPaths.size(); ++previous)
+				if (!used[previous] && previousPaths[previous] == paths[layer]) {
+					previousLayers[layer] = previous;
+					used[previous] = true;
+					break;
+				}
+	}
+	std::vector<postprocess::ShaderTechniqueGroup> previousTechniques = g_shaderPreview.chain.techniqueGroups;
+	if (previousTechniques.empty() && previousPaths.size() == 1 && !g_shaderPreview.chain.techniques.empty())
+		previousTechniques.push_back({ 0, {}, g_shaderPreview.chain.techniques, g_shaderPreview.chain.selectedTechnique });
+	std::vector<postprocess::ShaderTechniqueGroup> techniques;
+	for (size_t layer = 0; layer < paths.size(); ++layer)
+		for (const auto& previous : previousTechniques)
+			if (previous.layerIndex == previousLayers[layer]) {
+				techniques.push_back(previous);
+				techniques.back().layerIndex = layer;
+				break;
+			}
+	const auto previousConfiguredPaths = config::PostProcessShaders.get();
+	const std::string previousSinglePath = config::PostProcessShader.get();
+	const std::string previousTechnique = config::PostProcessShaderTechnique.get();
+	const std::string previousOverrides = config::PostProcessShaderParameters.get();
+	ShaderPreviewState previousPreview = std::move(g_shaderPreview);
 	config::PostProcessShaders.get() = paths;
 	// Keep old single-path configurations interoperable with older builds.
 	config::PostProcessShader.get() = paths.size() == 1 ? paths.front() : std::string();
-	if (resetOverrides) {
-		config::PostProcessShaderParameters.get().clear();
-		config::PostProcessShaderTechnique.get().clear();
+	if (paths.size() == 1 && !techniques.empty() && techniques.front().selectedTechnique >= 0
+			&& techniques.front().selectedTechnique < static_cast<int>(techniques.front().techniques.size()))
+		config::PostProcessShaderTechnique.get() = techniques.front().techniques[techniques.front().selectedTechnique];
+	else
+		config::PostProcessShaderTechnique.get() = postprocess::serializeShaderTechniqueSelections(techniques);
+	config::PostProcessShaderParameters.get().clear();
+	if (!rebuildShaderPreview()) {
+		// An invalid ordering must not erase settings from the working stack.
+		const std::string error = g_shaderPreview.error;
+		config::PostProcessShaders.get() = previousConfiguredPaths;
+		config::PostProcessShader.get() = previousSinglePath;
+		config::PostProcessShaderTechnique.get() = previousTechnique;
+		config::PostProcessShaderParameters.get() = previousOverrides;
+		g_shaderPreview = std::move(previousPreview);
+		gui_error(error);
+		return;
 	}
-	rebuildShaderPreview();
+	for (postprocess::ShaderParameter& parameter : g_shaderPreview.chain.parameters) {
+		if (!parameter.hostSource.empty())
+			continue;
+		if (parameter.layerIndex >= previousLayers.size())
+			continue;
+		const size_t previousLayer = previousLayers[parameter.layerIndex];
+		const auto previous = std::find_if(previousParameters.begin(), previousParameters.end(), [&](const auto& value) {
+			return value.layerIndex == previousLayer && value.name == parameter.name
+					&& value.type == parameter.type && value.componentCount == parameter.componentCount;
+		});
+		if (previous == previousParameters.end())
+			continue;
+		for (uint32_t component = 0; component < parameter.componentCount; ++component) {
+			const float minimum = parameter.componentCount == 1 ? parameter.minimum : parameter.minimumValues[component];
+			const float maximum = parameter.componentCount == 1 ? parameter.maximum : parameter.maximumValues[component];
+			parameter.values[component] = minimum < maximum
+					? std::clamp(previous->values[component], minimum, maximum) : previous->values[component];
+		}
+		parameter.value = parameter.values[0];
+	}
+	config::PostProcessShaderParameters.get() = postprocess::serializeShaderChainParameterValues(g_shaderPreview.chain.parameters);
+	g_shaderPreview.overrides = config::PostProcessShaderParameters.get();
 	requestShaderActivation();
+	SaveSettings();
 }
 
 static std::string selectedShaderLabel(const std::string& path)
@@ -5238,7 +5324,7 @@ void renderShaderTab()
 	{
 		ImGui::TextWrapped("%s", T("Layers run from top to bottom. A preset remains one selectable layer even when it contains several internal passes."));
 		if (selectedPaths.size() > 1)
-			ImGui::TextDisabled("%s", T("Parameters with the same name are shared across selected layers."));
+			ImGui::TextDisabled("%s", T("Each layer keeps its own parameter settings."));
 		if (selectedPaths.empty())
 			ImGui::TextDisabled("%s", T("No shader layers selected."));
 		else if (ImGui::BeginTable("SelectedShaderLayers", 4,
@@ -5250,6 +5336,7 @@ void renderShaderTab()
 			int moveFrom = -1;
 			int moveTo = -1;
 			int removeIndex = -1;
+			int duplicateIndex = -1;
 			for (size_t index = 0; index < selectedPaths.size(); ++index) {
 				ImGui::PushID(static_cast<int>(index));
 				ImGui::TableNextRow();
@@ -5276,18 +5363,35 @@ void renderShaderTab()
 				if (index + 1 == selectedPaths.size())
 					ImGui::EndDisabled();
 				ImGui::TableSetColumnIndex(3);
+				if (selectedPaths.size() >= postprocess::MaxShaderLayers)
+					ImGui::BeginDisabled();
+				if (ImGui::SmallButton(T("Duplicate")))
+					duplicateIndex = static_cast<int>(index);
+				if (selectedPaths.size() >= postprocess::MaxShaderLayers)
+					ImGui::EndDisabled();
+				ImGui::SameLine();
 				if (ImGui::SmallButton(T("Remove")))
 					removeIndex = static_cast<int>(index);
 				ImGui::PopID();
 			}
 			ImGui::EndTable();
+			std::vector<size_t> previousLayers(selectedPaths.size());
+			for (size_t layer = 0; layer < previousLayers.size(); ++layer)
+				previousLayers[layer] = layer;
 			if (removeIndex >= 0) {
 				selectedPaths.erase(selectedPaths.begin() + removeIndex);
-				applyShaderSelection(selectedPaths);
+				previousLayers.erase(previousLayers.begin() + removeIndex);
+				applyShaderSelection(selectedPaths, previousLayers);
 			}
 			else if (moveFrom >= 0 && moveTo >= 0) {
 				std::swap(selectedPaths[moveFrom], selectedPaths[moveTo]);
-				applyShaderSelection(selectedPaths, false);
+				std::swap(previousLayers[moveFrom], previousLayers[moveTo]);
+				applyShaderSelection(selectedPaths, previousLayers);
+			}
+			else if (duplicateIndex >= 0) {
+				selectedPaths.insert(selectedPaths.begin() + duplicateIndex + 1, selectedPaths[duplicateIndex]);
+				previousLayers.insert(previousLayers.begin() + duplicateIndex + 1, duplicateIndex);
+				applyShaderSelection(selectedPaths, previousLayers);
 			}
 		}
 

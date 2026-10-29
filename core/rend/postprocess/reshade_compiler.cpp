@@ -10,16 +10,18 @@
 */
 #include "shader_chain.h"
 #include "reshade_fx.h"
+#include "effect_codegen.hpp"
+#include "effect_parser.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
+#include <charconv>
 #include <cmath>
+#include <memory>
 #include <regex>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace postprocess {
 namespace {
@@ -28,97 +30,6 @@ std::string lowercase(std::string value)
 {
 	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 	return value;
-}
-
-void replaceAll(std::string& value, const std::regex& pattern, const std::string& replacement)
-{
-	value = std::regex_replace(value, pattern, replacement);
-}
-
-void lowerModuloOperators(std::string& source)
-{
-	struct Replacement {
-		size_t begin;
-		size_t end;
-		std::string value;
-	};
-	std::vector<Replacement> replacements;
-	bool lineComment = false;
-	bool blockComment = false;
-	bool stringLiteral = false;
-	for (size_t position = 0; position < source.size(); ++position) {
-		const char current = source[position];
-		const char next = position + 1 < source.size() ? source[position + 1] : '\0';
-		if (lineComment) {
-			lineComment = current != '\n';
-			continue;
-		}
-		if (blockComment) {
-			if (current == '*' && next == '/') {
-				blockComment = false;
-				++position;
-			}
-			continue;
-		}
-		if (!stringLiteral && current == '/' && next == '/') {
-			lineComment = true;
-			++position;
-			continue;
-		}
-		if (!stringLiteral && current == '/' && next == '*') {
-			blockComment = true;
-			++position;
-			continue;
-		}
-		if (current == '"' && (position == 0 || source[position - 1] != '\\')) {
-			stringLiteral = !stringLiteral;
-			continue;
-		}
-		if (stringLiteral || current != '%' || position == 0 || source[position - 1] == '=' || next == '=')
-			continue;
-
-		size_t leftEnd = source.find_last_not_of(" \t\r\n", position - 1);
-		size_t rightBegin = source.find_first_not_of(" \t\r\n", position + 1);
-		if (leftEnd == std::string::npos || rightBegin == std::string::npos)
-			continue;
-		size_t leftBegin = leftEnd;
-		if (source[leftEnd] == ')') {
-			int depth = 1;
-			while (leftBegin > 0 && depth != 0) {
-				--leftBegin;
-				if (source[leftBegin] == ')') ++depth;
-				else if (source[leftBegin] == '(') --depth;
-			}
-			if (depth != 0)
-				continue;
-		}
-		else {
-			while (leftBegin > 0 && (std::isalnum(static_cast<unsigned char>(source[leftBegin - 1]))
-					|| source[leftBegin - 1] == '_' || source[leftBegin - 1] == '.'))
-				--leftBegin;
-		}
-
-		size_t rightEnd = rightBegin;
-		if (source[rightBegin] == '(') {
-			int depth = 1;
-			while (++rightEnd < source.size() && depth != 0) {
-				if (source[rightEnd] == '(') ++depth;
-				else if (source[rightEnd] == ')') --depth;
-			}
-			if (depth != 0)
-				continue;
-		}
-		else {
-			while (rightEnd + 1 < source.size() && (std::isalnum(static_cast<unsigned char>(source[rightEnd + 1]))
-					|| source[rightEnd + 1] == '_' || source[rightEnd + 1] == '.'))
-				++rightEnd;
-		}
-		replacements.push_back({ leftBegin, rightEnd + 1,
-				"FxMod(" + source.substr(leftBegin, leftEnd - leftBegin + 1) + ", "
-						+ source.substr(rightBegin, rightEnd - rightBegin + 1) + ")" });
-	}
-	for (auto replacement = replacements.rbegin(); replacement != replacements.rend(); ++replacement)
-		source.replace(replacement->begin, replacement->end - replacement->begin, replacement->value);
 }
 
 std::string glslType(const std::string& type)
@@ -136,82 +47,18 @@ std::string glslType(const std::string& type)
 	if (lower == "int2") return "ivec2";
 	if (lower == "int3") return "ivec3";
 	if (lower == "int4") return "ivec4";
+	if (lower == "bool2") return "bvec2";
+	if (lower == "bool3") return "bvec3";
+	if (lower == "bool4") return "bvec4";
+	if (lower.size() == 8 && lower.compare(0, 5, "float") == 0 && lower[6] == 'x')
+		return "mat" + std::string(1, lower[5]) + "x" + lower[7];
 	return type;
 }
 
-void lowerLanguage(std::string& source)
-{
-	lowerModuloOperators(source);
-	// GLSL has no namespaces. The FX parser keeps namespace members in one
-	// validated effect scope, so qualified references can be lowered directly.
-	replaceAll(source, std::regex(R"(\b(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)+)"), "");
-	// ReShade effects commonly use these legal HLSL identifiers for locals,
-	// but GLSL reserves them. Rename whole tokens before backend compilation.
-	replaceAll(source, std::regex(R"(\binput\b)"), "fxInput");
-	replaceAll(source, std::regex(R"(\boutput\b)"), "fxOutput");
-	replaceAll(source, std::regex(R"(\bmain\b)"), "fxMain");
-	// `point` is accepted as an ordinary identifier by FX compilers but is a
-	// reserved geometry-shader token when the generated GLSL is lowered to HLSL.
-	replaceAll(source, std::regex(R"(\bpoint\b)"), "fxPoint");
-	replaceAll(source, std::regex(R"(\bstatic\s+const\b)"), "const");
-	replaceAll(source, std::regex(R"(\bfloat2x2\b)"), "mat2");
-	replaceAll(source, std::regex(R"(\bfloat3x3\b)"), "mat3");
-	replaceAll(source, std::regex(R"(\bfloat4x4\b)"), "mat4");
-	replaceAll(source, std::regex(R"(\bfloat4x3\b)"), "mat4x3");
-	replaceAll(source, std::regex(R"(\bfloat2\b)"), "vec2");
-	replaceAll(source, std::regex(R"(\bfloat3\b)"), "vec3");
-	replaceAll(source, std::regex(R"(\bfloat4\b)"), "vec4");
-	replaceAll(source, std::regex(R"(\buint2\b)"), "uvec2");
-	replaceAll(source, std::regex(R"(\buint3\b)"), "uvec3");
-	replaceAll(source, std::regex(R"(\buint4\b)"), "uvec4");
-	replaceAll(source, std::regex(R"(\bint2\b)"), "ivec2");
-	replaceAll(source, std::regex(R"(\bint3\b)"), "ivec3");
-	replaceAll(source, std::regex(R"(\bint4\b)"), "ivec4");
-	replaceAll(source, std::regex(R"(\bsampler\b)"), "sampler2D");
-	// HLSL splats scalar initializers across vectors, while GLSL requires an
-	// explicit constructor. This covers the common single-expression form.
-	replaceAll(source, std::regex(R"(\b(vec[234]|ivec[234]|uvec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^,;{}]+);)"),
-			"$1 $2 = $1($3);");
-	replaceAll(source, std::regex(R"(\blerp\s*\()"), "FxMix(");
-	replaceAll(source, std::regex(R"(\bpow\s*\()"), "FxPow(");
-	replaceAll(source, std::regex(R"(\bfrac\s*\()"), "fract(");
-	replaceAll(source, std::regex(R"(\brsqrt\s*\()"), "inversesqrt(");
-	replaceAll(source, std::regex(R"(\btex2D\s*\()"), "texture(");
-	replaceAll(source, std::regex(R"(\btex2Dgrad\s*\()"), "textureGrad(");
-	replaceAll(source, std::regex(R"(\btex2Dlod\s*\()"), "textureLod(");
-	replaceAll(source, std::regex(R"(\bdot\s*\()"), "FxDot(");
-	// Semantics have already been reflected into wrapper inputs and outputs.
-	replaceAll(source, std::regex(R"(\s*:\s*(?:SV_[A-Za-z0-9_]+|POSITION[0-9]*|TEXCOORD[0-9]*|COLOR[0-9]*))",
-			std::regex::icase), "");
-}
-
-SlangParameterType parameterType(ReShadeValueType type)
-{
-	switch (type) {
-	case ReShadeValueType::Bool: return SlangParameterType::Bool;
-	case ReShadeValueType::Int:
-	case ReShadeValueType::UInt: return SlangParameterType::Int;
-	case ReShadeValueType::Float2: return SlangParameterType::Float2;
-	case ReShadeValueType::Float3: return SlangParameterType::Float3;
-	case ReShadeValueType::Float4: return SlangParameterType::Float4;
-	case ReShadeValueType::Float2x2: return SlangParameterType::Float2x2;
-	case ReShadeValueType::Float3x3: return SlangParameterType::Float3x3;
-	case ReShadeValueType::Float4x4: return SlangParameterType::Float4x4;
-	default: return SlangParameterType::Float;
-	}
-}
 
 uint32_t componentCount(SlangParameterType type)
 {
-	switch (type) {
-	case SlangParameterType::Float2: return 2;
-	case SlangParameterType::Float3: return 3;
-	case SlangParameterType::Float4:
-	case SlangParameterType::Float2x2: return 4;
-	case SlangParameterType::Float3x3: return 9;
-	case SlangParameterType::Float4x4: return 16;
-	default: return 1;
-	}
+	return postprocess::shaderParameterComponentCount(type);
 }
 
 bool matchesConstructor(const std::string& name, SlangParameterType type)
@@ -221,12 +68,19 @@ bool matchesConstructor(const std::string& name, SlangParameterType type)
 	case SlangParameterType::Float: return value == "float";
 	case SlangParameterType::Int: return value == "int" || value == "uint";
 	case SlangParameterType::Bool: return value == "bool";
-	case SlangParameterType::Float2: return value == "float2" || value == "vec2";
-	case SlangParameterType::Float3: return value == "float3" || value == "vec3";
-	case SlangParameterType::Float4: return value == "float4" || value == "vec4";
+	case SlangParameterType::Float2: return value == "float2" || value == "vec2" || value == "int2" || value == "uint2" || value == "bool2" || value == "bvec2";
+	case SlangParameterType::Float3: return value == "float3" || value == "vec3" || value == "int3" || value == "uint3" || value == "bool3" || value == "bvec3";
+	case SlangParameterType::Float4: return value == "float4" || value == "vec4" || value == "int4" || value == "uint4" || value == "bool4" || value == "bvec4";
 	case SlangParameterType::Float2x2: return value == "float2x2" || value == "mat2";
 	case SlangParameterType::Float3x3: return value == "float3x3" || value == "mat3";
 	case SlangParameterType::Float4x4: return value == "float4x4" || value == "mat4";
+	case SlangParameterType::Float2x3: return value == "float2x3" || value == "mat2x3";
+	case SlangParameterType::Float2x4: return value == "float2x4" || value == "mat2x4";
+	case SlangParameterType::Float3x2: return value == "float3x2" || value == "mat3x2";
+	case SlangParameterType::Float3x4: return value == "float3x4" || value == "mat3x4";
+	case SlangParameterType::Float4x2: return value == "float4x2" || value == "mat4x2";
+	case SlangParameterType::Float4x3: return value == "float4x3" || value == "mat4x3";
+
 	}
 	return false;
 }
@@ -267,7 +121,7 @@ bool parseValues(const std::string& expression, SlangParameterType type, SlangPa
 		if (token.empty() || index >= result.componentCount)
 			return false;
 		float value;
-		if (!parseShaderFloat(token, value)
+		if (!(token == "true" ? (value = 1.f, true) : token == "false" ? (value = 0.f, true) : parseShaderFloat(token, value))
 				|| (type == SlangParameterType::Int && std::floor(value) != value)
 				|| (type == SlangParameterType::Bool && value != 0.f && value != 1.f))
 			return false;
@@ -276,7 +130,9 @@ bool parseValues(const std::string& expression, SlangParameterType type, SlangPa
 			break;
 		begin = separator + 1;
 	}
-	return index == result.componentCount;
+	if (index == 1 && result.componentCount > 1)
+		std::fill_n(result.values.begin() + 1, result.componentCount - 1, result.values[0]);
+	return index == result.componentCount || index == 1;
 }
 
 std::vector<std::string> splitChoiceLabels(const std::string& values)
@@ -292,341 +148,6 @@ std::vector<std::string> splitChoiceLabels(const std::string& values)
 		begin = end + 1;
 	}
 	return labels;
-}
-
-const ReShadeFunction *findFunction(const ReShadeEffect& effect, const std::string& name)
-{
-	const auto function = std::find_if(effect.functions.begin(), effect.functions.end(), [&](const ReShadeFunction& value) {
-		return value.name == name;
-	});
-	return function == effect.functions.end() ? nullptr : &*function;
-}
-
-struct FunctionParameter {
-	std::string type;
-	std::string name;
-	std::string semantic;
-	bool output = false;
-	bool inout = false;
-	uint32_t arrayCount = 0;
-};
-
-std::vector<std::string> splitArguments(const std::string& value)
-{
-	std::vector<std::string> result;
-	size_t begin = 0;
-	int depth = 0;
-	for (size_t index = 0; index <= value.size(); ++index) {
-		const char c = index < value.size() ? value[index] : ',';
-		if (c == '(' || c == '[' || c == '<') ++depth;
-		else if (c == ')' || c == ']' || c == '>') --depth;
-		else if (c == ',' && depth == 0) {
-			result.push_back(value.substr(begin, index - begin));
-			begin = index + 1;
-		}
-	}
-	return result;
-}
-
-bool parseFunctionParameters(const ReShadeFunction& function, std::vector<FunctionParameter>& parameters, std::string& error)
-{
-	const size_t open = function.signature.find('(');
-	const size_t close = function.signature.rfind(')');
-	if (open == std::string::npos || close == std::string::npos || close < open) {
-		error = "ReShade FX function '" + function.name + "' has a malformed signature.";
-		return false;
-	}
-	std::string list = function.signature.substr(open + 1, close - open - 1);
-	replaceAll(list, std::regex(R"(//[^\r\n]*)"), "");
-	replaceAll(list, std::regex(R"(/\*[\s\S]*?\*/)"), "");
-	if (std::regex_match(list, std::regex(R"(\s*(?:void)?\s*)")))
-		return true;
-	for (std::string argument : splitArguments(list)) {
-		const bool inout = std::regex_search(argument, std::regex(R"(\binout\b)"));
-		const bool output = inout || std::regex_search(argument, std::regex(R"(\bout\b)"));
-		replaceAll(argument, std::regex(R"(\b(?:in|out|inout|const|static)\b)"), " ");
-		std::smatch match;
-		const std::regex declaration(R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\[\s*([1-9][0-9]*)\s*\])?(?:\s*:\s*([A-Za-z_][A-Za-z0-9_]*))?\s*$)");
-		if (!std::regex_match(argument, match, declaration)) {
-			error = "ReShade FX function '" + function.name + "' has an unsupported parameter declaration.";
-			return false;
-		}
-		uint32_t arrayCount = 0;
-		if (match[3].matched && !parseShaderUnsigned(match[3].str(), arrayCount)) {
-			error = "ReShade FX function '" + function.name + "' has an invalid array parameter size.";
-			return false;
-		}
-		parameters.push_back({ match[1].str(), match[2].str(), match[4].str(), output, inout, arrayCount });
-	}
-	return true;
-}
-
-struct StructField {
-	std::string type;
-	std::string name;
-	std::string semantic;
-};
-
-struct VertexVarying {
-	std::string type;
-	std::string semantic;
-	std::string name;
-	std::string source;
-};
-
-std::vector<StructField> structFields(const ReShadeEffect& effect, const std::string& type)
-{
-	const auto structure = std::find_if(effect.structs.begin(), effect.structs.end(), [&](const ReShadeStruct& value) {
-		return value.name == type;
-	});
-	if (structure == effect.structs.end())
-		return {};
-	std::vector<StructField> fields;
-	const std::regex field(R"(([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]+\])?\s*(?::\s*([A-Za-z_][A-Za-z0-9_]*))?\s*;)");
-	for (std::sregex_iterator it(structure->body.begin(), structure->body.end(), field), end; it != end; ++it)
-		fields.push_back({ (*it)[1].str(), (*it)[2].str(), (*it)[3].str() });
-	return fields;
-}
-
-std::string semanticValue(const std::string& type, const std::string& semantic, bool vertex)
-{
-	const std::string lower = lowercase(semantic);
-	if (lower.rfind("texcoord", 0) == 0)
-		return vertex ? "TexCoord" : "vTexCoord";
-	if (lower.rfind("position", 0) == 0 || lower == "sv_position") {
-		if (!vertex)
-			return glslType(type) == "vec2" ? "vTexCoord * OutputSize" : "vec4(vTexCoord * OutputSize, 0.0, 1.0)";
-		if (glslType(type) == "vec2")
-			return "VertexCoord.xy";
-		if (glslType(type) == "vec3")
-			return "VertexCoord.xyz";
-		return "vec4(VertexCoord.xyz, 1.0)";
-	}
-	if (lower.rfind("color", 0) == 0)
-		return glslType(type) + "(1.0)";
-	return glslType(type) + "(0.0)";
-}
-
-bool buildCall(const ReShadeEffect& effect, const ReShadeFunction& function, bool vertex,
-		std::string& setup, std::string& arguments, std::string& error,
-		std::vector<FunctionParameter> *reflectedParameters = nullptr,
-		const std::unordered_map<std::string, std::string> *varyingInputs = nullptr)
-{
-	const auto varyingValue = [&](const std::string& semantic) -> const std::string * {
-		if (varyingInputs == nullptr)
-			return nullptr;
-		const auto varying = varyingInputs->find(lowercase(semantic));
-		return varying == varyingInputs->end() ? nullptr : &varying->second;
-	};
-	std::vector<FunctionParameter> parameters;
-	if (!parseFunctionParameters(function, parameters, error))
-		return false;
-	for (size_t parameterIndex = 0; parameterIndex < parameters.size(); ++parameterIndex) {
-		FunctionParameter& parameter = parameters[parameterIndex];
-		const std::string lowerName = lowercase(parameter.name);
-		if (parameter.output && (lowerName == "texcoord" || lowerName == "vertexcoord"
-				|| lowerName == "vtexcoord" || lowerName == "gl_position" || lowerName == "fragcolor"))
-			parameter.name = "fxOutputParameter" + std::to_string(parameterIndex);
-		if (parameter.arrayCount != 0) {
-			error = "ReShade FX entry function '" + function.name + "' cannot use array parameters.";
-			return false;
-		}
-		if (!arguments.empty())
-			arguments += ", ";
-		const std::vector<StructField> fields = structFields(effect, parameter.type);
-		if (parameter.output) {
-			setup += "\t" + (fields.empty() ? glslType(parameter.type) : parameter.type) + " " + parameter.name;
-			if (parameter.inout && fields.empty())
-				setup += " = " + semanticValue(parameter.type, parameter.semantic, vertex);
-			setup += ";\n";
-			arguments += parameter.name;
-			continue;
-		}
-		if (fields.empty()) {
-			const std::string *varying = varyingValue(parameter.semantic);
-			arguments += varying != nullptr ? *varying : semanticValue(parameter.type, parameter.semantic, vertex);
-			continue;
-		}
-		setup += "\t" + parameter.type + " " + parameter.name + ";\n";
-		for (const StructField& field : fields) {
-			const std::string *varying = varyingValue(field.semantic);
-			setup += "\t" + parameter.name + "." + field.name + " = "
-					+ (varying != nullptr ? *varying : semanticValue(field.type, field.semantic, vertex)) + ";\n";
-		}
-		arguments += parameter.name;
-	}
-	if (reflectedParameters != nullptr)
-		*reflectedParameters = parameters;
-	return true;
-}
-
-std::string resultField(const ReShadeEffect& effect, const std::string& type, const std::regex& semantic)
-{
-	for (const StructField& field : structFields(effect, type))
-		if (std::regex_match(field.semantic, semantic))
-			return field.name;
-	return {};
-}
-
-uint32_t semanticIndex(const std::string& semantic)
-{
-	const size_t firstDigit = semantic.find_first_of("0123456789");
-	if (firstDigit == std::string::npos)
-		return 0;
-	uint32_t index;
-	return parseShaderUnsigned(semantic.substr(firstDigit), index) ? index : InvalidShaderPass;
-}
-
-bool collectVertexVaryings(const ReShadeEffect& effect, const ReShadeFunction& vertex,
-		const std::vector<FunctionParameter>& parameters, std::vector<VertexVarying>& varyings,
-		std::unordered_map<std::string, std::string>& inputs, std::string& error)
-{
-	const auto add = [&](const std::string& type, const std::string& semantic,
-			const std::string& source) -> bool {
-		const std::string key = lowercase(semantic);
-		if (key.empty() || key == "sv_position" || key.rfind("position", 0) == 0 || key == "texcoord"
-				|| key == "texcoord0")
-			return true;
-		const std::string varyingType = glslType(type);
-		if (varyingType != "float" && varyingType != "vec2" && varyingType != "vec3" && varyingType != "vec4") {
-			error = "ReShade FX vertex varying '" + semantic + "' must be a float or float vector.";
-			return false;
-		}
-		const auto existing = inputs.find(key);
-		if (existing != inputs.end()) {
-			const auto varying = std::find_if(varyings.begin(), varyings.end(), [&](const VertexVarying& value) {
-				return value.name == existing->second;
-			});
-			if (varying == varyings.end() || varying->type != varyingType) {
-				error = "ReShade FX vertex varying '" + semantic + "' has conflicting types.";
-				return false;
-			}
-			return true;
-		}
-		VertexVarying varying { varyingType, key, "FxVarying" + std::to_string(varyings.size()), source };
-		inputs.emplace(key, varying.name);
-		varyings.push_back(std::move(varying));
-		return true;
-	};
-
-	if (lowercase(vertex.returnType) != "void") {
-		for (const StructField& field : structFields(effect, vertex.returnType))
-			if (!add(field.type, field.semantic, "fxVertexResult." + field.name))
-				return false;
-	}
-	for (const FunctionParameter& parameter : parameters) {
-		if (!parameter.output)
-			continue;
-		const std::vector<StructField> fields = structFields(effect, parameter.type);
-		if (fields.empty()) {
-			if (!add(parameter.type, parameter.semantic, parameter.name))
-				return false;
-		}
-		else {
-			for (const StructField& field : fields)
-				if (!add(field.type, field.semantic, parameter.name + "." + field.name))
-					return false;
-		}
-	}
-	return true;
-}
-
-bool outputExpression(const std::string& type, const std::string& value, std::string& expression)
-{
-	const std::string outputType = glslType(type);
-	if (outputType == "vec4") expression = value;
-	else if (outputType == "vec3") expression = "vec4(" + value + ", 1.0)";
-	else if (outputType == "vec2") expression = "vec4(" + value + ", 0.0, 1.0)";
-	else if (outputType == "float") expression = "vec4(vec3(" + value + "), 1.0)";
-	else return false;
-	return true;
-}
-
-std::vector<const ReShadeFunction *> reachableFunctions(const ReShadeEffect& effect,
-		std::initializer_list<const ReShadeFunction *> roots)
-{
-	std::vector<const ReShadeFunction *> reachable;
-	auto add = [&](const ReShadeFunction *function) {
-		if (function != nullptr && std::find(reachable.begin(), reachable.end(), function) == reachable.end())
-			reachable.push_back(function);
-	};
-	for (const ReShadeFunction *root : roots)
-		add(root);
-	for (size_t index = 0; index < reachable.size(); ++index) {
-		const std::string& body = reachable[index]->body;
-		for (const ReShadeFunction& candidate : effect.functions)
-			if (std::regex_search(body, std::regex("\\b" + candidate.name + "\\s*\\(")))
-				add(&candidate);
-	}
-	std::vector<const ReShadeFunction *> ordered;
-	ordered.reserve(reachable.size());
-	for (const ReShadeFunction& function : effect.functions)
-		if (std::find(reachable.begin(), reachable.end(), &function) != reachable.end())
-			ordered.push_back(&function);
-	return ordered;
-}
-
-std::string loweredFunctionName(const ReShadeFunction& function)
-{
-	return lowercase(function.name) == "main" ? "fxMain" : function.name;
-}
-
-bool referencesIdentifier(const std::vector<const ReShadeFunction *>& functions, const std::string& name)
-{
-	const std::regex identifier("\\b" + name + "\\b");
-	return std::any_of(functions.begin(), functions.end(), [&](const ReShadeFunction *function) {
-		return std::regex_search(function->signature, identifier) || std::regex_search(function->body, identifier);
-	});
-}
-
-void renameHostInterfaceShadows(std::string& signature, std::string& body)
-{
-	// Frame metadata is exposed through macros on GL/Vulkan. Rename effect-local
-	// variables that legally shadow those names before macro expansion can turn
-	// their declarations into malformed member expressions.
-	static constexpr std::array<const char *, 5> Names {
-		"SourceSize", "OutputSize", "OriginalSize", "FrameCount", "Rotation"
-	};
-	for (const char *name : Names) {
-		const std::regex declaration("\\b(?:bool|int|uint|float|[biu]?vec[234]|mat(?:[234]|[234]x[234]))\\s+"
-				+ std::string(name) + "\\b");
-		if (!std::regex_search(signature, declaration) && !std::regex_search(body, declaration))
-			continue;
-		const std::regex identifier("\\b" + std::string(name) + "\\b");
-		replaceAll(signature, identifier, "FxLocal" + std::string(name));
-		replaceAll(body, identifier, "FxLocal" + std::string(name));
-	}
-}
-
-std::string emitFunction(const ReShadeFunction& function)
-{
-	std::string signature = function.signature;
-	std::string body = function.body;
-	lowerLanguage(signature);
-	lowerLanguage(body);
-	renameHostInterfaceShadows(signature, body);
-	const std::string returnType = glslType(function.returnType);
-	if (returnType == "vec2" || returnType == "vec3" || returnType == "vec4"
-			|| returnType == "ivec2" || returnType == "ivec3" || returnType == "ivec4"
-			|| returnType == "uvec2" || returnType == "uvec3" || returnType == "uvec4")
-		replaceAll(body, std::regex(R"(\breturn\s+([^;]+);)"), "return " + returnType + "($1);");
-	return signature + "\n{\n" + body + "\n}\n";
-}
-
-void lowerBooleanArithmetic(std::string& source, const ReShadeEffect& effect)
-{
-	for (const ReShadeUniform& uniform : effect.uniforms) {
-		if (uniform.valueType != ReShadeValueType::Bool)
-			continue;
-		const std::string value = "(" + uniform.name + " ? 1.0 : 0.0)";
-		replaceAll(source, std::regex("\\b" + uniform.name + R"(\b\s*\*)"), value + " *");
-		replaceAll(source, std::regex(R"(\*\s*\b)" + uniform.name + "\\b"), "* " + value);
-		replaceAll(source, std::regex(R"(([+\-*/]=)\s*\b)" + uniform.name + "\\b"), "$1 " + value);
-	}
-	// HLSL implicitly converts a parenthesized boolean expression used in
-	// arithmetic to 0/1. GLSL requires that conversion to be explicit.
-	replaceAll(source, std::regex(R"((\*\s*)\(([^()]*(?:&&|\|\||==|!=|<=|>=|<|>)[^()]*)\))"),
-			"$1(($2) ? 1.0 : 0.0)");
 }
 
 std::string samplerTexture(const ReShadeSampler& sampler)
@@ -657,36 +178,47 @@ bool isSourceTexture(const ReShadeEffect& effect, const std::string& texture, co
 	});
 }
 
-size_t renderTargetProducer(const ReShadeEffect& effect, size_t techniqueIndex, const std::string& texture)
+size_t renderTargetProducer(const reshadefx::effect_module& module, size_t techniqueIndex, size_t consumer,
+		const std::string& texture)
 {
-	if (techniqueIndex >= effect.techniques.size())
-		return InvalidShaderPass;
-	const std::regex assignment(R"(\bRenderTarget[0-9]*\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)",
-			std::regex::icase);
-	const auto& passes = effect.techniques[techniqueIndex].passes;
-	for (size_t passIndex = 0; passIndex < passes.size(); ++passIndex)
-		for (std::sregex_iterator it(passes[passIndex].stateBlock.begin(), passes[passIndex].stateBlock.end(), assignment), end;
-				it != end; ++it)
-			if ((*it)[1].str() == texture)
-				return passIndex;
-	return InvalidShaderPass;
+	const auto& passes = module.techniques[techniqueIndex].passes;
+	size_t previous = InvalidShaderPass, final = InvalidShaderPass;
+	for (size_t passIndex = 0; passIndex < passes.size(); ++passIndex) {
+		const auto& pass = passes[passIndex];
+		bool writes = std::find(std::begin(pass.render_target_names), std::end(pass.render_target_names), texture) != std::end(pass.render_target_names);
+		for (const auto& storage : pass.storage_bindings)
+			writes = writes || (storage.index < module.storages.size() && module.storages[storage.index].texture_name == texture);
+		if (writes) {
+			final = passIndex;
+			if (passIndex < consumer) previous = passIndex;
+		}
+	}
+	return previous != InvalidShaderPass ? previous : final;
 }
 
-bool parseUiMaximum(const std::string& expression, SlangParameterType type, SlangParameterValue& result)
+bool parseUiBound(const std::string& expression, SlangParameterType type, SlangParameterValue& result)
 {
 	if (parseValues(expression, type, result))
 		return true;
 	std::string compact = expression;
 	compact.erase(std::remove_if(compact.begin(), compact.end(),
 			[](unsigned char c) { return std::isspace(c); }), compact.end());
-	if (compact != "OutputSize.x" && compact != "OutputSize.y")
+	float sign = 1.f;
+	if (!compact.empty() && compact.front() == '-') {
+		sign = -1.f;
+		compact.erase(0, 1);
+	}
+	if (compact != "OutputSize.x" && compact != "OutputSize.y" && compact != "FinalViewportSize.x" && compact != "FinalViewportSize.y"
+			&& !(type == SlangParameterType::Float2 && (compact == "float2(OutputSize.x,OutputSize.y)" || compact == "float2(FinalViewportSize.x,FinalViewportSize.y)")))
 		return false;
+	// Runtime-size UI bounds cannot be evaluated while loading a package. Use
+	// the same supported dimension limit as target allocation, with the original
+	// sign preserved for pixel offsets that can move in either direction.
 	result = {};
 	result.componentCount = componentCount(type);
-	std::fill_n(result.values.begin(), result.componentCount, static_cast<float>(MaxShaderTargetDimension));
+	std::fill_n(result.values.begin(), result.componentCount, sign * static_cast<float>(MaxShaderTargetDimension));
 	return true;
 }
-
 bool reShadeHostUniformExpression(const ReShadeUniform& uniform, bool& hostProvided,
 		std::string& expression, std::string& error)
 {
@@ -715,21 +247,11 @@ bool reShadeHostUniformExpression(const ReShadeUniform& uniform, bool& hostProvi
 	};
 	if (source == "zero")
 		expression = type + "(0.0)";
-	else if (source == "has_depth")
-		expression = type == "bool" ? "false" : type + "(0.0)";
+	else if (source == "has_depth" || source == "bufready_depth")
+		expression = type + "(HasDepth)";
 	else if (source == "framecount") {
 		if (!requireScalar()) return false;
 		expression = type + "(FrameCount)";
-	}
-	else if (source == "timer") {
-		if (!requireScalar()) return false;
-		// Shader chains do not own wall-clock timing. Frame-derived time is stable
-		// across pauses, deterministic replays, and every graphics backend.
-		expression = type + "(float(FrameCount) * (1.0 / 60.0))";
-	}
-	else if (source == "random") {
-		if (!requireScalar()) return false;
-		expression = type + "(fract(sin(float(FrameCount) * 12.9898) * 43758.5453) * 32767.0)";
 	}
 	else if (source == "bufferwidth" || source == "viewportwidth") {
 		if (!requireScalar()) return false;
@@ -778,10 +300,293 @@ bool reShadeHostUniformExpression(const ReShadeUniform& uniform, bool& hostProvi
 	return true;
 }
 
+
 bool fail(std::string& error, const std::string& message)
 {
 	error = message;
 	return false;
+}
+
+struct SourceReplacement {
+	size_t begin;
+	size_t end;
+	std::string text;
+};
+
+bool prepareCompilerSource(const ReShadeEffect& effect, std::string& source, std::string& error)
+{
+	std::vector<SourceReplacement> replacements;
+	for (const auto& range : effect.annotationRanges)
+		replacements.push_back({ range.first, range.second, {} });
+	for (const ReShadeTexture& texture : effect.textures) {
+		// Target allocation belongs to the render graph. Keep dimensions as runtime
+		// expressions there, but use valid placeholders in the language compiler's
+		// texture declarations, whose properties require constant expressions.
+		static const std::regex dimensions(R"(\b(Width|Height|Depth|MipLevels)\s*=\s*([^;]+);)", std::regex::icase);
+		for (std::sregex_iterator it(texture.definition.begin(), texture.definition.end(), dimensions), end;
+				it != end; ++it) {
+			const size_t begin = texture.sourceBegin + static_cast<size_t>((*it).position(2));
+			replacements.push_back({ begin, begin + static_cast<size_t>((*it).length(2)), "1" });
+		}
+	}
+	for (const ReShadeSampler& sampler : effect.samplers) {
+		// Older packages use the combined D3D filter spelling. The render graph
+		// already retains it; spell out the equivalent ReShade language properties.
+		static const std::regex filter(R"(\bFilter\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase);
+		static constexpr const char *modes[] = {
+			"MIN_MAG_MIP_POINT", "MIN_MAG_POINT_MIP_LINEAR",
+			"MIN_POINT_MAG_LINEAR_MIP_POINT", "MIN_POINT_MAG_MIP_LINEAR",
+			"MIN_LINEAR_MAG_MIP_POINT", "MIN_LINEAR_MAG_POINT_MIP_LINEAR",
+			"MIN_MAG_LINEAR_MIP_POINT", "MIN_MAG_MIP_LINEAR"
+		};
+		for (std::sregex_iterator it(sampler.definition.begin(), sampler.definition.end(), filter), end; it != end; ++it) {
+			const std::string value = lowercase((*it)[1].str());
+			unsigned mode = 0;
+			for (; mode < 8 && lowercase(modes[mode]) != value; ++mode) {}
+			if (mode == 8)
+				return fail(error, "ReShade FX sampler '" + sampler.name + "' has an unsupported combined filter.");
+			const size_t begin = sampler.sourceBegin + static_cast<size_t>((*it).position());
+			const std::string text = std::string("MinFilter = ") + ((mode & 4) ? "LINEAR" : "POINT")
+					+ "; MagFilter = " + ((mode & 2) ? "LINEAR" : "POINT")
+					+ "; MipFilter = " + ((mode & 1) ? "LINEAR" : "POINT") + ";";
+			replacements.push_back({ begin, begin + static_cast<size_t>((*it).length()), text });
+		}
+	}
+	bool needsDefaultVertex = false;
+	for (const ReShadeTechnique& technique : effect.techniques)
+		for (const ReShadePass& pass : technique.passes) {
+			static const std::regex viewport(R"(\b(ViewportWidth|ViewportHeight|DispatchSizeX|DispatchSizeY)\s*=\s*([^;]+);)", std::regex::icase);
+			for (std::sregex_iterator it(pass.stateBlock.begin(), pass.stateBlock.end(), viewport), end; it != end; ++it) {
+				const size_t begin = pass.bodyBegin + static_cast<size_t>((*it).position(2));
+				replacements.push_back({begin, begin + static_cast<size_t>((*it).length(2)), "1"});
+			}
+
+			// Preserve graph-supported legacy spellings while feeding the language
+			// compiler its canonical render-state enum names.
+			static const std::regex blendState(R"(\b(?:SrcBlend|DestBlend|BlendOp)\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase);
+			for (std::sregex_iterator it(pass.stateBlock.begin(), pass.stateBlock.end(), blendState), end; it != end; ++it) {
+				std::string canonical = (*it)[1].str();
+				if (canonical.find('_') == std::string::npos)
+					continue;
+				std::transform(canonical.begin(), canonical.end(), canonical.begin(),
+						[](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+				canonical.erase(std::remove(canonical.begin(), canonical.end(), '_'), canonical.end());
+				if (canonical == "REVERSESUBTRACT")
+					canonical = "REVSUBTRACT";
+				const size_t begin = pass.bodyBegin + static_cast<size_t>((*it).position(1));
+				replacements.push_back({ begin, begin + static_cast<size_t>((*it).length(1)), std::move(canonical) });
+			}
+			if (pass.vertexShader.empty() && !pass.pixelShader.empty()) {
+				replacements.push_back({ pass.bodyBegin, pass.bodyBegin, "\nVertexShader = HollyPostProcessVS;\n" });
+				needsDefaultVertex = true;
+			}
+		}
+	std::sort(replacements.begin(), replacements.end(), [](const SourceReplacement& left, const SourceReplacement& right) {
+		return left.begin > right.begin;
+	});
+	source = effect.preprocessedSource;
+	size_t next = source.size();
+	for (const SourceReplacement& replacement : replacements) {
+		if (replacement.begin > replacement.end || replacement.end > next)
+			return fail(error, "ReShade FX contains overlapping metadata declarations.");
+		source.replace(replacement.begin, replacement.end - replacement.begin, replacement.text);
+		next = replacement.begin;
+	}
+	std::string host;
+	for (const char *name : { "OutputSize", "SourceSize", "OriginalSize", "FinalViewportSize" })
+		if (std::none_of(effect.uniforms.begin(), effect.uniforms.end(),
+				[&](const ReShadeUniform& uniform) { return uniform.name == name; }))
+			host += std::string("uniform float2 ") + name + ";\n";
+	if (std::none_of(effect.uniforms.begin(), effect.uniforms.end(),
+			[](const ReShadeUniform& uniform) { return uniform.name == "FrameCount"; }))
+		host += "uniform uint FrameCount;\n";
+	if (needsDefaultVertex)
+		host +=
+			"void HollyPostProcessVS(uint id : SV_VertexID, out float4 position : SV_Position, out float2 uv : TEXCOORD0)\n"
+			"{ uv = float2(id == 2 ? 2.0 : 0.0, id == 1 ? 2.0 : 0.0);"
+			" position = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0); }\n";
+	source.insert(0, host);
+	return true;
+}
+
+SlangParameterType reflectedParameterType(const reshadefx::type& type)
+{
+	if (type.cols > 1) {
+		static const SlangParameterType matrices[3][3] {
+			{ SlangParameterType::Float2x2, SlangParameterType::Float2x3, SlangParameterType::Float2x4 },
+			{ SlangParameterType::Float3x2, SlangParameterType::Float3x3, SlangParameterType::Float3x4 },
+			{ SlangParameterType::Float4x2, SlangParameterType::Float4x3, SlangParameterType::Float4x4 }
+		};
+		return matrices[type.rows - 2][type.cols - 2];
+	}
+	if (type.rows > 1) return type.rows == 2 ? SlangParameterType::Float2 : type.rows == 3 ? SlangParameterType::Float3 : SlangParameterType::Float4;
+	return type.base == reshadefx::type::t_bool ? SlangParameterType::Bool
+			: type.is_integral() ? SlangParameterType::Int : SlangParameterType::Float;
+}
+
+bool reflectParameters(const ReShadeEffect& effect, const reshadefx::effect_module& module,
+		ShaderPassSource& compiled, std::unordered_map<std::string, std::string>& expressions, std::string& error)
+{
+	uint32_t components = 0;
+	for (const auto& uniform : effect.uniforms) {
+		const auto value = std::find_if(module.uniforms.begin(), module.uniforms.end(), [&](const auto& item) { return item.name == uniform.name; });
+		if (value == module.uniforms.end()) return fail(error, "FX uniform was not reflected: " + uniform.name);
+		if (!value->type.is_numeric() || value->type.rows > 4 || value->type.cols > 4
+				|| (value->type.cols > 1 && value->type.rows < 2))
+			return fail(error, "FX uniform has an invalid numeric shape: " + uniform.name);
+		std::string hostSource;
+		uint32_t hostKey = 0;
+		bool hostToggle = false, hostPress = false;
+		std::string uiType, uiItems, label = uniform.name;
+		for (const auto& annotation : uniform.annotations) {
+			const auto name = lowercase(annotation.name);
+			if (name == "source") hostSource = lowercase(annotation.value);
+			else if (name == "keycode" || name == "button") {
+				std::string_view key = annotation.value;
+				const int base = key.size() > 2 && key[0] == '0' && (key[1] == 'x' || key[1] == 'X') ? 16 : 10;
+				if (base == 16) key.remove_prefix(2);
+				const auto parsed = std::from_chars(key.data(), key.data() + key.size(), hostKey, base);
+				if (parsed.ec != std::errc() || parsed.ptr != key.data() + key.size() || hostKey > 255)
+					return fail(error, "Invalid host input key: " + uniform.name);
+			}
+			else if (name == "mode") {
+				const auto mode = lowercase(annotation.value);
+				if (!mode.empty() && mode != "toggle" && mode != "press") return fail(error, "Unknown host input mode: " + uniform.name);
+				hostToggle = mode == "toggle"; hostPress = mode == "press";
+			}
+			else if (name == "ui_label") label = annotation.value;
+			else if (name == "ui_type") uiType = lowercase(annotation.value);
+			else if (name == "ui_items") uiItems = annotation.value;
+		}
+		const bool dynamic = hostSource == "timer" || hostSource == "frametime" || hostSource == "random" || hostSource == "date"
+				|| hostSource == "key" || hostSource == "mousepoint" || hostSource == "mousedelta" || hostSource == "mousebutton" || hostSource == "mousewheel";
+		if (!dynamic) {
+			bool provided = false;
+			std::string expression;
+			if (!reShadeHostUniformExpression(uniform, provided, expression, error)) return false;
+			if (provided) { expressions.emplace(uniform.name, std::move(expression)); continue; }
+		}
+		if (dynamic) {
+			const bool pair = hostSource == "mousepoint" || hostSource == "mousedelta" || hostSource == "mousewheel";
+			const uint32_t expected = hostSource == "date" ? 4u : pair ? 2u : 1u;
+			if (value->type.is_array() || value->type.cols != 1 || value->type.rows != expected)
+				return fail(error, "Host uniform has the wrong shape for source '" + hostSource + "': " + uniform.name);
+			if (hostSource == "mousebutton" && hostKey > 4)
+				return fail(error, "Host mouse-button indices must be in the range 0..4.");
+		}
+		const bool array = value->type.is_array();
+		const uint32_t count = array ? value->type.array_length : 1;
+		const auto type = reflectedParameterType(value->type);
+		const uint32_t size = componentCount(type);
+		if (count == 0 || count > MaxShaderParameterComponents / size || components + count * size > MaxShaderParameterComponents)
+			return fail(error, "FX uniforms exceed the 256-component parameter budget.");
+		std::string expression = array ? glslType(uniform.typeName) + "[" + std::to_string(count) + "](" : "";
+		for (uint32_t element = 0; element < count; ++element) {
+			SlangParameter parameter;
+			parameter.type = type;
+			parameter.name = !array ? uniform.name : "HollycastArray_" + uniform.name + "_" + std::to_string(element);
+			parameter.label = label + (!array ? "" : "[" + std::to_string(element) + "]");
+			parameter.defaultValue.componentCount = parameter.minimum.componentCount = parameter.maximum.componentCount = parameter.step.componentCount = size;
+			const reshadefx::constant *initial = &value->initializer_value;
+			if (value->type.is_array()) initial = element < value->initializer_value.array_data.size() ? &value->initializer_value.array_data[element] : nullptr;
+			for (uint32_t c = 0; initial && c < size; ++c) {
+				parameter.defaultValue.values[c] = value->type.base == reshadefx::type::t_int ? static_cast<float>(initial->as_int[c])
+						: value->type.is_integral() ? static_cast<float>(initial->as_uint[c]) : initial->as_float[c];
+			}
+			parameter.minimum = parameter.maximum = parameter.defaultValue;
+			if (type == SlangParameterType::Bool) {
+				parameter.minimum.values[0] = 0; parameter.maximum.values[0] = parameter.step.values[0] = 1;
+			}
+			for (const auto& annotation : uniform.annotations) {
+				const auto name = lowercase(annotation.name);
+				if (name == "ui_min" && !parseUiBound(annotation.value, type, parameter.minimum)) return fail(error, "Invalid ui_min: " + uniform.name);
+				if (name == "ui_max" && !parseUiBound(annotation.value, type, parameter.maximum)) return fail(error, "Invalid ui_max: " + uniform.name);
+				if (name == "ui_step" && !parseValues(annotation.value, type, parameter.step)) return fail(error, "Invalid ui_step: " + uniform.name);
+			}
+			if (value->type.is_integral()) for (uint32_t c = 0; c < size; ++c) if (parameter.step.values[c] == 0) parameter.step.values[c] = 1;
+			if (!dynamic && !validateSlangParameter(parameter, error)) return false;
+			ShaderParameter visible;
+			visible.name = parameter.name; visible.label = parameter.label; visible.type = type; visible.componentCount = size;
+			visible.value = parameter.defaultValue.values[0]; visible.minimum = parameter.minimum.values[0];
+			visible.maximum = parameter.maximum.values[0]; visible.step = parameter.step.values[0];
+			visible.values = parameter.defaultValue.values; visible.minimumValues = parameter.minimum.values;
+			visible.maximumValues = parameter.maximum.values; visible.stepValues = parameter.step.values;
+			if (dynamic) { visible.hostSource = hostSource; visible.hostKey = hostKey; visible.hostToggle = hostToggle; visible.hostPress = hostPress; }
+			if (hostSource == "random" || hostSource == "mousewheel") {
+				visible.minimum = 0; visible.maximum = hostSource == "random" ? 32767.f : 0.f;
+				for (const auto& annotation : uniform.annotations) {
+					if (lowercase(annotation.name) == "min" && !parseShaderFloat(annotation.value, visible.minimum)) return fail(error, "Invalid host-source minimum: " + uniform.name);
+					if (lowercase(annotation.name) == "max" && !parseShaderFloat(annotation.value, visible.maximum)) return fail(error, "Invalid host-source maximum: " + uniform.name);
+				}
+				if (visible.minimum > visible.maximum) return fail(error, "Host-source minimum exceeds its maximum: " + uniform.name);
+			}
+			if (size == 1 && type == SlangParameterType::Int && (uiType == "combo" || uiType == "radio")) {
+				visible.choiceLabels = splitChoiceLabels(uiItems);
+				if (!visible.choiceLabels.empty()) { visible.minimum = visible.minimumValues[0] = 0; visible.maximum = visible.maximumValues[0] = static_cast<float>(visible.choiceLabels.size() - 1); visible.step = visible.stepValues[0] = 1; }
+			}
+			std::string elementExpression = parameter.name;
+			if (value->type.is_integral() && value->type.rows > 1) elementExpression = glslType(uniform.typeName) + "(" + elementExpression + ")";
+			else if (value->type.base == reshadefx::type::t_uint) elementExpression = "uint(" + elementExpression + ")";
+			if (element) expression += ", ";
+			expression += elementExpression;
+			compiled.parameters.push_back(std::move(visible)); compiled.slangParameters.push_back(std::move(parameter));
+		}
+		if (array) expression += ")";
+		expressions.emplace(uniform.name, std::move(expression)); components += count * size;
+	}
+	return true;
+}
+
+std::string normalizeStage(std::string stage, const reshadefx::effect_module& module,
+		const ReShadeEffect& effect, const std::unordered_map<std::string, std::string>& hostExpressions,
+		const ShaderPassSource& compiled)
+{
+	stage = std::regex_replace(stage, std::regex(R"(^#version[^\n]*\n)"), "");
+	stage = std::regex_replace(stage,
+			std::regex(R"(layout\s*\([^)]*\)\s*uniform\s+_Globals\s*\{[^}]*\}\s*;)"), "");
+	std::string declarations;
+	for (const auto& parameter : compiled.slangParameters)
+		declarations += std::string("uniform ") + shaderParameterGlslType(parameter.type) + " " + parameter.name + ";\n";
+	for (const reshadefx::uniform& uniform : module.uniforms) {
+		const auto host = hostExpressions.find(uniform.name);
+		std::string expression;
+		if (host != hostExpressions.end()) {
+			expression = host->second;
+		}
+		else if (uniform.name == "OutputSize" || uniform.name == "SourceSize" || uniform.name == "OriginalSize"
+				|| uniform.name == "FrameCount" || uniform.name == "FinalViewportSize") {
+			expression = uniform.name;
+		}
+		else {
+			const auto reflected = std::find_if(effect.uniforms.begin(), effect.uniforms.end(),
+					[&](const ReShadeUniform& candidate) { return candidate.name == uniform.name; });
+			if (reflected == effect.uniforms.end())
+				continue;
+			std::string storageType = glslType(reflected->typeName);
+			expression = uniform.name;
+			if (uniform.type.is_integral() && uniform.type.is_vector()) {
+				storageType = "vec" + std::to_string(uniform.type.rows);
+				expression = glslType(reflected->typeName) + "(" + uniform.name + ")";
+			}
+			else if (uniform.type.base == reshadefx::type::t_uint) {
+				storageType = "int";
+				expression = "uint(" + uniform.name + ")";
+			}
+			declarations += "uniform " + storageType + " " + uniform.name + ";\n";
+		}
+		declarations += "#define " + uniform.unique_name + " (" + expression + ")\n";
+	}
+	for (const reshadefx::sampler& sampler : module.samplers) {
+		const std::regex declaration("layout\\s*\\([^)]*\\)\\s*uniform\\s+[iu]?sampler[123]D\\s+" + sampler.unique_name + "\\s*;");
+		if (!std::regex_search(stage, declaration))
+			continue;
+		stage = std::regex_replace(stage, declaration, "");
+		const auto resource = std::find_if(compiled.slangResources.begin(), compiled.slangResources.end(), [&](const auto& r) { return r.name == sampler.name; });
+		if (resource != compiled.slangResources.end())
+			declarations += "uniform " + std::string(shaderResourceGlslType(resource->type, resource->numericType)) + " " + sampler.name + ";\n";
+		declarations += "#define " + sampler.unique_name + " " + sampler.name + "\n";
+	}
+	return declarations + stage;
 }
 
 } // namespace
@@ -794,403 +599,154 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 		return false;
 	if (techniqueIndex >= effect.techniques.size() || passIndex >= effect.techniques[techniqueIndex].passes.size())
 		return fail(error, "ReShade FX selected an invalid technique pass.");
-	const ReShadePass& pass = effect.techniques[techniqueIndex].passes[passIndex];
-	const ReShadeFunction *pixel = findFunction(effect, pass.pixelShader);
-	if (pixel == nullptr)
-		return fail(error, "ReShade FX PixelShader entry point '" + pass.pixelShader + "' has no definition.");
-	const ReShadeFunction *vertex = pass.vertexShader.empty() ? nullptr : findFunction(effect, pass.vertexShader);
-	if (!pass.vertexShader.empty() && vertex == nullptr)
-		return fail(error, "ReShade FX VertexShader entry point '" + pass.vertexShader + "' has no definition.");
-	const std::vector<const ReShadeFunction *> functions = reachableFunctions(effect, { pixel, vertex });
-	std::vector<const ReShadeSampler *> samplers;
-	for (const ReShadeSampler& sampler : effect.samplers) {
-		if (!referencesIdentifier(functions, sampler.name))
-			continue;
-		const std::string texture = samplerTexture(sampler);
-		if (lowercase(sampler.name) == "depthbuffer" || lowercase(texture) == "depthbuffertex")
-			return fail(error, "ReShade FX requires a depth buffer, which is unavailable to display shader chains.");
-		samplers.push_back(&sampler);
-	}
+
+	std::string compilerSource;
+	if (!prepareCompilerSource(effect, compilerSource, error))
+		return false;
+	std::unique_ptr<reshadefx::codegen> compiler(reshadefx::create_codegen_glsl(false, false, false));
+	reshadefx::parser parser;
+	if (!parser.parse(std::move(compilerSource), compiler.get()))
+		return fail(error, "ReShade FX compilation failed:\n" + parser.errors());
+	const reshadefx::effect_module& module = compiler->module();
+	if (techniqueIndex >= module.techniques.size() || passIndex >= module.techniques[techniqueIndex].passes.size())
+		return fail(error, "ReShade FX compiler returned inconsistent technique metadata.");
+	const reshadefx::pass& pass = module.techniques[techniqueIndex].passes[passIndex];
+
 
 	ShaderPassSource compiled;
-	std::string declarations;
-	std::vector<const ReShadeUniform *> reflectedUniforms;
-	uint32_t parameterComponents = 0;
-	for (const ReShadeUniform& uniform : effect.uniforms) {
-		if (uniform.valueType == ReShadeValueType::Unknown)
-			return fail(error, "ReShade FX uniform '" + uniform.name + "' has an unsupported type.");
-		bool hostProvided;
-		std::string hostExpression;
-		if (!reShadeHostUniformExpression(uniform, hostProvided, hostExpression, error))
-			return false;
-		if (hostProvided) {
-			const std::string name = lowercase(uniform.name);
-			// These names are already supplied by every backend preamble. Re-declaring
-			// them as source annotations would create a recursive or conflicting macro.
-			if (name != "sourcesize" && name != "outputsize" && name != "originalsize"
-					&& name != "framecount" && name != "rotation")
-				declarations += "#define " + uniform.name + " (" + hostExpression + ")\n";
-			continue;
+	compiled.nativeFxStages = true;
+	compiled.displayName = effect.techniques[techniqueIndex].name;
+	compiled.updatesSource = pass.cs_entry_point.empty() && pass.render_target_names[0].empty();
+	compiled.colorOutputCount = pass.cs_entry_point.empty() ? 1u : 0u;
+	const auto& passText = effect.techniques[techniqueIndex].passes[passIndex].stateBlock;
+	std::smatch dispatch;
+	if (!pass.cs_entry_point.empty()) {
+		for (uint32_t axis = 0; axis < 3; ++axis) {
+			const std::string stateName = std::string("DispatchSize") + "XYZ"[axis];
+			if (std::regex_search(passText, dispatch, std::regex(stateName + R"(\s*=\s*([^;]+))", std::regex::icase)))
+				compiled.dispatchExpressions[axis] = dispatch[1].str();
+			else compiled.dispatchExpressions[axis] = "1";
 		}
-		SlangParameter parameter;
-		parameter.type = parameterType(uniform.valueType);
-		parameter.name = uniform.name;
-		parameter.label = uniform.name;
-		if (!parseValues(uniform.defaultValue, parameter.type, parameter.defaultValue))
-			return fail(error, "ReShade FX uniform '" + uniform.name + "' has an invalid default value.");
-		parameter.minimum = parameter.maximum = parameter.defaultValue;
-		parameter.step.componentCount = componentCount(parameter.type);
-		std::string uiType;
-		std::string uiItems;
-		for (const ReShadeAnnotation& annotation : uniform.annotations) {
-			const std::string name = lowercase(annotation.name);
-			if (name == "ui_label") parameter.label = annotation.value;
-			else if (name == "ui_type") uiType = lowercase(annotation.value);
-			else if (name == "ui_items") uiItems = annotation.value;
-			else if (name == "ui_min" && !parseValues(annotation.value, parameter.type, parameter.minimum))
-				return fail(error, "ReShade FX uniform '" + uniform.name + "' has an invalid ui_min value.");
-			else if (name == "ui_max" && !parseUiMaximum(annotation.value, parameter.type, parameter.maximum))
-				return fail(error, "ReShade FX uniform '" + uniform.name + "' has an invalid ui_max value.");
-			else if (name == "ui_step" && !parseValues(annotation.value, parameter.type, parameter.step))
-				return fail(error, "ReShade FX uniform '" + uniform.name + "' has an invalid ui_step value.");
-		}
-		if (!validateSlangParameter(parameter, error))
-			return false;
-		parameterComponents += componentCount(parameter.type);
-		if (parameterComponents > MaxShaderParameterComponents)
-			return fail(error, "ReShade FX uses more than " + std::to_string(MaxShaderParameterComponents)
-					+ " uniform components in one pass.");
-		ShaderParameter visible;
-		visible.name = parameter.name;
-		visible.label = parameter.label;
-		visible.value = parameter.defaultValue.values[0];
-		visible.minimum = parameter.minimum.values[0];
-		visible.maximum = parameter.maximum.values[0];
-		visible.step = parameter.step.values[0];
-		visible.values = parameter.defaultValue.values;
-		visible.minimumValues = parameter.minimum.values;
-		visible.maximumValues = parameter.maximum.values;
-		visible.stepValues = parameter.step.values;
-		visible.componentCount = componentCount(parameter.type);
-		visible.type = parameter.type;
-		if (visible.componentCount == 1 && parameter.type == SlangParameterType::Int
-				&& (uiType == "combo" || uiType == "radio")) {
-			visible.choiceLabels = splitChoiceLabels(uiItems);
-			if (!visible.choiceLabels.empty()) {
-				visible.minimum = visible.minimumValues[0] = 0.f;
-				visible.maximum = visible.maximumValues[0] = static_cast<float>(visible.choiceLabels.size() - 1);
-				visible.step = visible.stepValues[0] = 1.f;
-				if (visible.value < visible.minimum || visible.value > visible.maximum)
-					return fail(error, "ReShade FX uniform '" + uniform.name + "' has a choice default outside ui_items.");
-			}
-		}
-		if (parameter.type == SlangParameterType::Bool) {
-			visible.minimum = visible.minimumValues[0] = 0.f;
-			visible.maximum = visible.maximumValues[0] = 1.f;
-			visible.step = visible.stepValues[0] = 1.f;
-		}
-		compiled.parameters.push_back(std::move(visible));
-		compiled.slangParameters.push_back(std::move(parameter));
-		reflectedUniforms.push_back(&uniform);
+	}
+	auto& state = compiled.renderState;
+	state.reflected = true;
+	state.clearRenderTargets = pass.clear_render_targets;
+	state.srgbWrite = pass.srgb_write_enable;
+	state.generateMipmaps = pass.generate_mipmaps;
+	state.topology = static_cast<ShaderPrimitiveTopology>(pass.topology);
+	state.vertexCount = pass.num_vertices;
+	if (state.vertexCount == 0 || state.vertexCount > 1048576
+			|| static_cast<unsigned>(state.topology) < 1 || static_cast<unsigned>(state.topology) > 5)
+		return fail(error, "FX pass has an invalid vertex count or primitive topology.");
+	state.stencilEnabled = pass.stencil_enable;
+	state.stencilReadMask = pass.stencil_read_mask; state.stencilWriteMask = pass.stencil_write_mask;
+	state.stencilReference = pass.stencil_reference_value;
+	state.stencilComparison = static_cast<ShaderComparison>(pass.stencil_comparison_func);
+	state.stencilPass = static_cast<ShaderStencilOperation>(pass.stencil_pass_op);
+	state.stencilFail = static_cast<ShaderStencilOperation>(pass.stencil_fail_op);
+	state.stencilDepthFail = static_cast<ShaderStencilOperation>(pass.stencil_depth_fail_op);
+	for (size_t i = 0; i < state.attachments.size(); ++i) {
+		auto& attachment = state.attachments[i];
+		attachment.blendEnabled = pass.blend_enable[i];
+		attachment.source = static_cast<ShaderBlendFactor>(pass.source_color_blend_factor[i]);
+		attachment.destination = static_cast<ShaderBlendFactor>(pass.dest_color_blend_factor[i]);
+		attachment.sourceAlpha = static_cast<ShaderBlendFactor>(pass.source_alpha_blend_factor[i]);
+		attachment.destinationAlpha = static_cast<ShaderBlendFactor>(pass.dest_alpha_blend_factor[i]);
+		attachment.operation = static_cast<ShaderBlendOperation>(static_cast<int>(pass.color_blend_op[i]) - 1);
+		attachment.alphaOperation = static_cast<ShaderBlendOperation>(static_cast<int>(pass.alpha_blend_op[i]) - 1);
+		attachment.writeMask = pass.render_target_write_mask[i];
 	}
 
-	for (size_t index = 0; index < compiled.slangParameters.size(); ++index)
-		declarations += "uniform " + glslType(reflectedUniforms[index]->typeName)
-				+ " " + compiled.slangParameters[index].name + ";\n";
-	for (const ReShadeSampler *sampler : samplers) {
-		const std::string texture = samplerTexture(*sampler);
+	std::unordered_map<std::string, std::string> hostExpressions;
+	if (!reflectParameters(effect, module, compiled, hostExpressions, error))
+		return false;
+
+	for (const reshadefx::sampler_binding& binding : pass.sampler_bindings) {
+		if (binding.index >= module.samplers.size())
+			return fail(error, "ReShade FX compiler returned an invalid sampler binding.");
+		const reshadefx::sampler& sampler = module.samplers[binding.index];
+
+		const auto metadata = std::find_if(effect.samplers.begin(), effect.samplers.end(),
+				[&](const ReShadeSampler& candidate) { return candidate.name == sampler.name; });
+		if (metadata == effect.samplers.end())
+			return fail(error, "ReShade FX compiler returned an unknown sampler.");
+		const std::string texture = samplerTexture(*metadata);
+		const auto textureInfo = std::find_if(module.textures.begin(), module.textures.end(),
+				[&](const reshadefx::texture& candidate) { return candidate.unique_name == sampler.texture_name; });
 		SlangResource resource;
-		resource.type = SlangResourceType::Sampler2D;
-		resource.name = sampler->name;
+		resource.type = sampler.type.texture_dimension() == 1 ? SlangResourceType::Sampler1D
+				: sampler.type.texture_dimension() == 3 ? SlangResourceType::Sampler3D : SlangResourceType::Sampler2D;
+		resource.numericType = sampler.type.is_integral() ? (sampler.type.is_signed() ? ShaderNumericType::SignedInteger : ShaderNumericType::UnsignedInteger) : ShaderNumericType::Float;
+		resource.name = sampler.name;
 		resource.alias = texture;
-		if (isSourceTexture(effect, texture, sampler->name))
+		if (textureInfo != module.textures.end() && lowercase(textureInfo->semantic) == "depth")
+			resource.convention = SlangResourceConvention::Depth;
+		else if ((textureInfo != module.textures.end() && lowercase(textureInfo->semantic) == "color")
+				|| isSourceTexture(effect, texture, sampler.name))
 			resource.convention = SlangResourceConvention::Source;
 		else {
-			const size_t producer = renderTargetProducer(effect, techniqueIndex, texture);
+			const size_t producer = renderTargetProducer(module, techniqueIndex, passIndex, sampler.texture_name);
 			resource.convention = producer != InvalidShaderPass && producer >= passIndex
 					? SlangResourceConvention::Feedback : SlangResourceConvention::PassAlias;
 		}
 		compiled.slangResources.push_back(std::move(resource));
-		declarations += "uniform sampler2D " + sampler->name + ";\n";
-	}
-	if (samplers.empty())
-		declarations += "uniform sampler2D Source;\n";
-
-	std::string common;
-	for (const std::string& directive : effect.preprocessorDirectives) {
-		if (!std::regex_match(directive, std::regex(R"(\s*#\s*(?:define|undef|if|ifdef|ifndef|elif|else|endif|line|pragma)\b.*)")))
-			return fail(error, "ReShade FX uses an unsupported preprocessor directive: " + directive);
-		// The clean-room preprocessor has already expanded definitions and selected
-		// conditional branches. Only source-location directives remain meaningful.
-		if (std::regex_match(directive, std::regex(R"(\s*#\s*line\b.*)")))
-			common += directive + "\n";
-	}
-	common += "#define saturate(value) clamp((value), 0.0, 1.0)\n";
-	// HLSL's mul(a, b) uses row/column order opposite GLSL for vector/matrix
-	// operands. Typed overloads preserve that behavior, including CRT shaders'
-	// common non-square float4x3 color matrices.
-	common += "#define mul(left, right) FxMul((left), (right))\n"
-			"float FxMul(float left, float right) { return left * right; }\n"
-			"vec2 FxMul(vec2 left, float right) { return left * right; }\n"
-			"vec3 FxMul(vec3 left, float right) { return left * right; }\n"
-			"vec4 FxMul(vec4 left, float right) { return left * right; }\n"
-			"vec2 FxMul(float left, vec2 right) { return left * right; }\n"
-			"vec3 FxMul(float left, vec3 right) { return left * right; }\n"
-			"vec4 FxMul(float left, vec4 right) { return left * right; }\n"
-			"vec2 FxMul(vec2 left, mat2 right) { return right * left; }\n"
-			"vec3 FxMul(vec3 left, mat3 right) { return right * left; }\n"
-			"vec4 FxMul(vec4 left, mat4 right) { return right * left; }\n"
-			"vec2 FxMul(mat2 left, vec2 right) { return right * left; }\n"
-			"vec3 FxMul(mat3 left, vec3 right) { return right * left; }\n"
-			"vec4 FxMul(mat4 left, vec4 right) { return right * left; }\n"
-			"mat2 FxMul(mat2 left, mat2 right) { return right * left; }\n"
-			"mat3 FxMul(mat3 left, mat3 right) { return right * left; }\n"
-			"mat4 FxMul(mat4 left, mat4 right) { return right * left; }\n"
-			"vec3 FxMul(vec4 left, mat4x3 right) { return right * left; }\n"
-			"vec4 FxMul(mat4x3 left, vec3 right) { return right * left; }\n";
-	common += "#define rcp(value) (1.0 / (value))\n";
-	common += "float FxMod(float left, float right) { return mod(left, right); }\n"
-			"vec2 FxMod(vec2 left, float right) { return mod(left, right); }\n"
-			"vec3 FxMod(vec3 left, float right) { return mod(left, right); }\n"
-			"vec4 FxMod(vec4 left, float right) { return mod(left, right); }\n"
-			"vec2 FxMod(vec2 left, vec2 right) { return mod(left, right); }\n"
-			"vec3 FxMod(vec3 left, vec3 right) { return mod(left, right); }\n"
-			"vec4 FxMod(vec4 left, vec4 right) { return mod(left, right); }\n"
-			"int FxMod(int left, int right) { return left % right; }\n"
-			"uint FxMod(uint left, uint right) { return left % right; }\n";
-	common += "float FxPow(float base, float exponent) { return pow(base, exponent); }\n"
-			"vec2 FxPow(vec2 base, vec2 exponent) { return pow(base, exponent); }\n"
-			"vec3 FxPow(vec3 base, vec3 exponent) { return pow(base, exponent); }\n"
-			"vec4 FxPow(vec4 base, vec4 exponent) { return pow(base, exponent); }\n"
-			"vec2 FxPow(vec2 base, float exponent) { return pow(base, vec2(exponent)); }\n"
-			"vec3 FxPow(vec3 base, float exponent) { return pow(base, vec3(exponent)); }\n"
-			"vec4 FxPow(vec4 base, float exponent) { return pow(base, vec4(exponent)); }\n"
-			"vec2 FxPow(float base, vec2 exponent) { return pow(vec2(base), exponent); }\n"
-			"vec3 FxPow(float base, vec3 exponent) { return pow(vec3(base), exponent); }\n"
-			"vec4 FxPow(float base, vec4 exponent) { return pow(vec4(base), exponent); }\n"
-			"float FxMix(float left, float right, float amount) { return mix(left, right, amount); }\n"
-			"vec2 FxMix(vec2 left, vec2 right, float amount) { return mix(left, right, amount); }\n"
-			"vec3 FxMix(vec3 left, vec3 right, float amount) { return mix(left, right, amount); }\n"
-			"vec4 FxMix(vec4 left, vec4 right, float amount) { return mix(left, right, amount); }\n"
-			"vec2 FxMix(vec2 left, vec2 right, vec2 amount) { return mix(left, right, amount); }\n"
-			"vec3 FxMix(vec3 left, vec3 right, vec3 amount) { return mix(left, right, amount); }\n"
-			"vec4 FxMix(vec4 left, vec4 right, vec4 amount) { return mix(left, right, amount); }\n"
-			"vec2 FxMix(vec2 left, float right, float amount) { return mix(left, vec2(right), amount); }\n"
-			"vec3 FxMix(vec3 left, float right, float amount) { return mix(left, vec3(right), amount); }\n"
-			"vec4 FxMix(vec4 left, float right, float amount) { return mix(left, vec4(right), amount); }\n"
-			"vec2 FxMix(float left, vec2 right, float amount) { return mix(vec2(left), right, amount); }\n"
-			"vec3 FxMix(float left, vec3 right, float amount) { return mix(vec3(left), right, amount); }\n"
-			"vec4 FxMix(float left, vec4 right, float amount) { return mix(vec4(left), right, amount); }\n"
-			"float FxMix(float left, float right, bool amount) { return amount ? right : left; }\n"
-			"vec2 FxMix(vec2 left, vec2 right, bool amount) { return amount ? right : left; }\n"
-			"vec3 FxMix(vec3 left, vec3 right, bool amount) { return amount ? right : left; }\n"
-			"vec4 FxMix(vec4 left, vec4 right, bool amount) { return amount ? right : left; }\n";
-	common += "float FxDot(float left, float right) { return left * right; }\n"
-			"float FxDot(vec2 left, vec2 right) { return dot(left, right); }\n"
-			"float FxDot(vec3 left, vec3 right) { return dot(left, right); }\n"
-			"float FxDot(vec4 left, vec4 right) { return dot(left, right); }\n"
-			"float FxDot(vec2 left, float right) { return dot(left, vec2(right)); }\n"
-			"float FxDot(vec3 left, float right) { return dot(left, vec3(right)); }\n"
-			"float FxDot(vec4 left, float right) { return dot(left, vec4(right)); }\n"
-			"float FxDot(float left, vec2 right) { return dot(vec2(left), right); }\n"
-			"float FxDot(float left, vec3 right) { return dot(vec3(left), right); }\n"
-			"float FxDot(float left, vec4 right) { return dot(vec4(left), right); }\n";
-	std::string effectCode;
-	for (const std::string& global : effect.globals) {
-		std::string declaration = global;
-		lowerLanguage(declaration);
-		effectCode += declaration + "\n";
-	}
-	for (const ReShadeStruct& structure : effect.structs) {
-		std::string body = structure.body;
-		lowerLanguage(body);
-		effectCode += "struct " + structure.name + " {\n" + body + "\n};\n";
-	}
-	// FX permits a function to call one declared later in the file. Emit GLSL
-	// prototypes so source order never changes reachability or compilation.
-	for (const ReShadeFunction *function : functions) {
-		std::string signature = function->signature;
-		lowerLanguage(signature);
-		effectCode += signature + ";\n";
-	}
-	for (const ReShadeFunction *function : functions)
-		effectCode += emitFunction(*function);
-	lowerBooleanArithmetic(effectCode, effect);
-	common += effectCode;
-
-	std::vector<FunctionParameter> vertexParameters;
-	std::vector<VertexVarying> vertexVaryings;
-	std::unordered_map<std::string, std::string> varyingInputs;
-	std::string vertexSetup;
-	std::string vertexArguments;
-	if (!pass.vertexShader.empty()) {
-		if (!buildCall(effect, *vertex, true, vertexSetup, vertexArguments, error, &vertexParameters)
-				|| !collectVertexVaryings(effect, *vertex, vertexParameters, vertexVaryings, varyingInputs, error))
-			return false;
-	}
-	std::string fragmentVaryingDeclarations;
-	std::string vertexVaryingDeclarations;
-	for (const VertexVarying& varying : vertexVaryings) {
-		fragmentVaryingDeclarations += "in " + varying.type + " " + varying.name + ";\n";
-		vertexVaryingDeclarations += "out " + varying.type + " " + varying.name + ";\n";
 	}
 
-	std::string setup;
-	std::string arguments;
-	std::vector<FunctionParameter> pixelParameters;
-	if (!buildCall(effect, *pixel, false, setup, arguments, error, &pixelParameters,
-			varyingInputs.empty() ? nullptr : &varyingInputs))
-		return false;
-	std::string assignments;
-	std::vector<StructField> outputs;
-	std::vector<FunctionParameter> parameterOutputs;
-	for (const FunctionParameter& parameter : pixelParameters)
-		if (parameter.output
-				&& std::regex_match(parameter.semantic, std::regex(R"((?:SV_Target|COLOR)[0-9]*)", std::regex::icase)))
-			parameterOutputs.push_back(parameter);
-	const bool returnsVoid = lowercase(pixel->returnType) == "void";
-	if (returnsVoid) {
-		if (parameterOutputs.empty())
-			return fail(error, "ReShade FX void pixel shader has no out SV_Target or COLOR parameter.");
-		std::sort(parameterOutputs.begin(), parameterOutputs.end(), [](const FunctionParameter& left,
-				const FunctionParameter& right) {
-			return semanticIndex(left.semantic) < semanticIndex(right.semantic);
-		});
-		assignments = "\t" + loweredFunctionName(*pixel) + "(" + arguments + ");\n";
-		for (size_t index = 0; index < parameterOutputs.size(); ++index) {
-			if (semanticIndex(parameterOutputs[index].semantic) != index || index >= 8)
-				return fail(error, "ReShade FX pixel output semantics must be contiguous from SV_Target0 to SV_Target7.");
-			std::string expression;
-			if (!outputExpression(parameterOutputs[index].type, parameterOutputs[index].name, expression))
-				return fail(error, "ReShade FX pixel shader has an unsupported out parameter type.");
-			assignments += "\tFxOutput" + std::to_string(index) + " = " + expression + ";\n";
+	std::string assembly;
+	if (!pass.cs_entry_point.empty()) {
+		if (!compiler->assemble_code_for_entry_point(pass.cs_entry_point, compiled.compute, assembly, error)) return false;
+		compiled.compute = normalizeStage(std::move(compiled.compute), module, effect, hostExpressions, compiled);
+		std::smatch local;
+		const std::regex size(R"(local_size_x\s*=\s*([0-9]+)\s*,\s*local_size_y\s*=\s*([0-9]+)\s*,\s*local_size_z\s*=\s*([0-9]+))");
+		if (!std::regex_search(compiled.compute, local, size)) return fail(error, "Compute entry point has no local workgroup size.");
+		for (uint32_t i = 0; i < 3; ++i) if (!parseShaderUnsigned(local[i + 1].str(), compiled.localSize[i]) || compiled.localSize[i] == 0) return fail(error, "Invalid compute workgroup size.");
+		compiled.outputCount = 0;
+	} else {
+		if (pass.ps_entry_point.empty() || pass.vs_entry_point.empty()
+				|| !compiler->assemble_code_for_entry_point(pass.ps_entry_point, compiled.fragment, assembly, error)
+				|| !compiler->assemble_code_for_entry_point(pass.vs_entry_point, compiled.vertex, assembly, error))
+			return fail(error, "FX could not generate the selected graphics entry points.");
+		compiled.fragment = normalizeStage(std::move(compiled.fragment), module, effect, hostExpressions, compiled);
+		compiled.vertex = normalizeStage(std::move(compiled.vertex), module, effect, hostExpressions, compiled);
+		static const std::regex output(R"(layout\s*\(\s*location\s*=\s*([0-9]+)\s*\)\s*(?:(?:flat|noperspective|centroid)\s+)*out\b)");
+		compiled.outputCount = 0;
+		for (std::sregex_iterator it(compiled.fragment.begin(), compiled.fragment.end(), output), end; it != end; ++it)
+			compiled.outputCount = std::max(compiled.outputCount, static_cast<uint32_t>(std::stoul((*it)[1].str()) + 1));
+		if (compiled.outputCount == 0 || compiled.outputCount > 8) return fail(error, "FX color outputs exceed the attachment limit.");
+		compiled.colorOutputCount = compiled.outputCount;
+	}
+	for (const auto& binding : pass.storage_bindings) {
+		if (binding.index >= module.storages.size()) return fail(error, "Invalid FX storage binding.");
+		const auto& storage = module.storages[binding.index];
+		if (storage.level != 0)
+			return fail(error, "Writable FX views at nonzero mip levels are not supported by the current render graph.");
+		const auto texture = std::find_if(module.textures.begin(), module.textures.end(), [&](const auto& item) { return item.unique_name == storage.texture_name; });
+		if (texture == module.textures.end()) return fail(error, "Unknown FX storage texture.");
+		ShaderPassOutput output;
+		output.alias = texture->name;
+		output.type = texture->type == reshadefx::texture_type::texture_3d ? SlangResourceType::Sampler3D
+				: texture->type == reshadefx::texture_type::texture_1d ? SlangResourceType::Sampler1D : SlangResourceType::Sampler2D;
+		const auto metadata = std::find_if(effect.textures.begin(), effect.textures.end(), [&](const auto& item) { return item.name == texture->name; });
+		if (metadata == effect.textures.end()) return fail(error, "Missing FX storage metadata.");
+		std::smatch property;
+		if (std::regex_search(metadata->definition, property, std::regex(R"(\bFormat\s*=\s*(\w+))"))) output.targetFormatName = canonicalShaderFormat(property[1].str());
+		if (output.targetFormatName.empty()) output.targetFormatName = "R8G8B8A8_UNORM";
+		if (std::regex_search(metadata->definition, property, std::regex(R"(\bDepth\s*=\s*([0-9]+))"))) parseShaderUnsigned(property[1].str(), output.depth);
+		if (compiled.storageOutputs.empty() && compiled.widthExpression.empty() && compiled.heightExpression.empty()) {
+			if (std::regex_search(metadata->definition, property, std::regex(R"(\bWidth\s*=\s*([^;]+))"))) compiled.widthExpression = property[1].str();
+			if (std::regex_search(metadata->definition, property, std::regex(R"(\bHeight\s*=\s*([^;]+))"))) compiled.heightExpression = property[1].str();
 		}
+		if (std::any_of(compiled.storageOutputs.begin(), compiled.storageOutputs.end(), [&](const auto& previous) { return previous.alias == output.alias; }))
+			return fail(error, "An FX pass cannot bind overlapping writable views of the same image.");
+		const uint32_t slot = static_cast<uint32_t>(compiled.storageOutputs.size());
+		compiled.storageBindings.emplace_back(storage.unique_name, slot);
+		if (output.depth == 0 || output.depth > MaxShaderTargetDimension) return fail(error, "Invalid storage texture depth.");
+		compiled.storageOutputs.push_back(std::move(output));
 	}
-	else if (!parameterOutputs.empty()) {
-		return fail(error, "ReShade FX pixel shaders cannot mix return values with out target parameters.");
+	if (!compiled.compute.empty() && compiled.storageOutputs.empty()) {
+		compiled.storageOutputs.emplace_back();
+		compiled.widthExpression = compiled.heightExpression = "1";
 	}
-	for (const StructField& field : structFields(effect, pixel->returnType))
-		if (std::regex_match(field.semantic, std::regex(R"((?:SV_Target|COLOR)[0-9]*)", std::regex::icase)))
-			outputs.push_back(field);
-	if (!returnsVoid && outputs.empty()) {
-		if (!structFields(effect, pixel->returnType).empty())
-			return fail(error, "ReShade FX pixel output struct has no SV_Target or COLOR field.");
-		std::string expression;
-		if (!outputExpression(pixel->returnType, loweredFunctionName(*pixel) + "(" + arguments + ")", expression))
-			return fail(error, "ReShade FX pixel shader returns an unsupported output type.");
-		assignments = "\tFxOutput0 = " + expression + ";\n";
-	}
-	else if (!returnsVoid) {
-		std::sort(outputs.begin(), outputs.end(), [](const StructField& left, const StructField& right) {
-			return semanticIndex(left.semantic) < semanticIndex(right.semantic);
-		});
-		const std::string result = "fxPixelResult";
-		assignments = "\t" + pixel->returnType + " " + result + " = " + loweredFunctionName(*pixel)
-				+ "(" + arguments + ");\n";
-		for (size_t index = 0; index < outputs.size(); ++index) {
-			if (semanticIndex(outputs[index].semantic) != index || index >= 8)
-				return fail(error, "ReShade FX pixel output semantics must be contiguous from SV_Target0 to SV_Target7.");
-			std::string expression;
-			if (!outputExpression(outputs[index].type, result + "." + outputs[index].name, expression))
-				return fail(error, "ReShade FX pixel shader has an unsupported output field type.");
-			assignments += "\tFxOutput" + std::to_string(index) + " = " + expression + ";\n";
-		}
-	}
-	compiled.outputCount = static_cast<uint32_t>(returnsVoid ? parameterOutputs.size() : (outputs.empty() ? 1 : outputs.size()));
-	compiled.fragment = declarations + fragmentVaryingDeclarations + common
-			+ "\nvoid main()\n{\n" + setup + assignments + "}\n";
-	std::unordered_set<std::string> declaredSamplers { "Source" };
-	for (const ReShadeSampler *sampler : samplers)
-		declaredSamplers.insert(sampler->name);
-	for (const ReShadeFunction *function : functions) {
-		std::vector<FunctionParameter> parameters;
-		if (!parseFunctionParameters(*function, parameters, error))
-			return false;
-		for (const FunctionParameter& parameter : parameters)
-			if (lowercase(parameter.type) == "sampler" || lowercase(parameter.type) == "sampler2d")
-				declaredSamplers.insert(parameter.name);
-	}
-	const std::regex textureCall(R"(\b(?:texture|textureLod|textureGrad)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*))");
-	for (std::sregex_iterator it(compiled.fragment.begin(), compiled.fragment.end(), textureCall), end; it != end; ++it)
-		if (declaredSamplers.count((*it)[1].str()) == 0)
-			return fail(error, "ReShade FX samples undeclared sampler '" + (*it)[1].str() + "'.");
-
-	if (!pass.vertexShader.empty()) {
-		setup = vertexSetup;
-		arguments = vertexArguments;
-		const std::regex positionSemantic(R"((?:SV_Position|POSITION)[0-9]*)", std::regex::icase);
-		const std::regex texcoordSemantic(R"(TEXCOORD[0-9]*)", std::regex::icase);
-		std::string assignments;
-		std::string invocation;
-		if (lowercase(vertex->returnType) == "void") {
-			const auto position = std::find_if(vertexParameters.begin(), vertexParameters.end(), [&](const auto& parameter) {
-				return parameter.output && std::regex_match(parameter.semantic, positionSemantic);
-			});
-			if (position == vertexParameters.end())
-				return fail(error, "ReShade FX void vertex shader has no position output semantic.");
-			const auto texcoord = std::find_if(vertexParameters.begin(), vertexParameters.end(), [&](const auto& parameter) {
-				return parameter.output && std::regex_match(parameter.semantic, texcoordSemantic);
-			});
-			const bool usesVertexId = std::any_of(vertexParameters.begin(), vertexParameters.end(), [](const auto& parameter) {
-				return !parameter.output && lowercase(parameter.semantic) == "sv_vertexid";
-			});
-			if (usesVertexId && vertexVaryings.empty()) {
-				// ReShade's shared vertex helper generates a three-vertex full-screen triangle,
-				// while HollyCast presents post-processing passes with a four-vertex strip.
-				// Preserve the equivalent host geometry instead of invoking it with incompatible IDs.
-				setup.clear();
-				assignments = "\tgl_Position = vec4(VertexCoord.xyz, 1.0);\n\tvTexCoord = TexCoord;\n";
-			}
-			else if (usesVertexId) {
-				// The pass still needs its custom vertex outputs, but its full-screen triangle
-				// position convention does not match HollyCast's four-vertex strip.
-				invocation = "\t" + loweredFunctionName(*vertex) + "(" + arguments + ");\n";
-				assignments = "\tgl_Position = vec4(VertexCoord.xyz, 1.0);\n\tvTexCoord = TexCoord;\n";
-			}
-			else {
-				const std::string positionType = glslType(position->type);
-				if (positionType == "vec4")
-					assignments += "\tgl_Position = " + position->name + ";\n";
-				else if (positionType == "vec3")
-					assignments += "\tgl_Position = vec4(" + position->name + ", 1.0);\n";
-				else if (positionType == "vec2")
-					assignments += "\tgl_Position = vec4(" + position->name + ", 0.0, 1.0);\n";
-				else
-					return fail(error, "ReShade FX vertex position output must be a float vector.");
-
-				if (texcoord == vertexParameters.end())
-					assignments += "\tvTexCoord = TexCoord;\n";
-				else if (glslType(texcoord->type) == "vec2")
-					assignments += "\tvTexCoord = " + texcoord->name + ";\n";
-				else if (glslType(texcoord->type) == "vec3" || glslType(texcoord->type) == "vec4")
-					assignments += "\tvTexCoord = " + texcoord->name + ".xy;\n";
-				else
-					return fail(error, "ReShade FX vertex texture-coordinate output must be a float vector.");
-				invocation = "\t" + loweredFunctionName(*vertex) + "(" + arguments + ");\n";
-			}
-		}
-		else {
-			const std::string position = resultField(effect, vertex->returnType, positionSemantic);
-			const std::string texcoord = resultField(effect, vertex->returnType, texcoordSemantic);
-			const std::string result = "fxVertexResult";
-			if (position.empty() && structFields(effect, vertex->returnType).empty())
-				assignments += "\tgl_Position = " + result + ";\n";
-			else if (!position.empty())
-				assignments += "\tgl_Position = " + result + "." + position + ";\n";
-			else
-				return fail(error, "ReShade FX vertex output has no position semantic.");
-			assignments += texcoord.empty() ? "\tvTexCoord = TexCoord;\n"
-					: "\tvTexCoord = " + result + "." + texcoord + ";\n";
-			invocation = "\t" + glslType(vertex->returnType) + " " + result + " = "
-					+ loweredFunctionName(*vertex) + "(" + arguments + ");\n";
-		}
-		for (const VertexVarying& varying : vertexVaryings)
-			assignments += "\t" + varying.name + " = " + varying.source + ";\n";
-		compiled.vertex = declarations + vertexVaryingDeclarations + common
-				+ "\nvoid main()\n{\n" + setup + invocation + assignments + "}\n";
-	}
-
-	compiled.displayName = effect.techniques[techniqueIndex].name;
 	source = std::move(compiled);
 	error.clear();
 	return true;

@@ -16,6 +16,7 @@
 #include "texture.h"
 
 #include <array>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -23,6 +24,8 @@ namespace postprocess {
 
 // Builds the exact GLSL submitted by the Vulkan executor. Keeping this pure
 // lets package validation catch front-end failures before device activation.
+bool buildVulkanComputeSource(const ShaderPassSource& source, const std::vector<SlangParameter>& parameters,
+		const std::vector<ShaderPassInput>& bindings, std::string& compute, std::string& error);
 bool buildVulkanShaderSources(const ShaderPassSource& source, const std::vector<SlangParameter>& parameters,
 		const std::vector<ShaderPassInput>& bindings, uint32_t outputCount,
 		std::string& fragmentSource, std::string& vertexSource, std::string& error);
@@ -38,7 +41,7 @@ public:
 	// OutputSize and FrameCount, matching the OpenGL executor contract.
 	bool render(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
-			bool& presentationTransformApplied);
+			bool& presentationTransformApplied, vk::Image depthImage = {}, vk::ImageView depthView = {});
 	void term();
 
 private:
@@ -51,6 +54,9 @@ private:
 		// Source-history copies remain single-target and use this framebuffer.
 		vk::UniqueFramebuffer framebuffer;
 		vk::Extent2D extent {};
+		uint32_t depth = 1, layers = 1;
+		postprocess::SlangResourceType type = postprocess::SlangResourceType::Sampler2D;
+		bool storage = false;
 		vk::Format format = vk::Format::eUndefined;
 		uint32_t mipLevels = 1;
 		uint32_t renderedFrame = 0;
@@ -80,9 +86,12 @@ private:
 		postprocess::ShaderPass pass;
 		vk::UniqueShaderModule vertexShader;
 		vk::UniqueShaderModule fragmentShader;
+		vk::UniqueShaderModule computeShader;
 		vk::UniqueRenderPass renderPass;
 		vk::UniquePipeline pipeline;
 		vk::UniquePipeline blendCopyPipeline;
+		vk::UniqueSampler sampler;
+		vk::UniqueSampler mipSampler;
 		std::vector<Output> outputs;
 		std::vector<Binding> bindings;
 		std::vector<postprocess::SlangParameter> parameters;
@@ -94,35 +103,46 @@ private:
 		std::vector<std::unique_ptr<BufferData>> parameterBuffers;
 		std::vector<vk::ClearValue> clearColors;
 		std::vector<vk::ImageMemoryBarrier> blendBarriers;
-		bool duckStationGlsl = false;
+		bool displayGlsl = false;
+		bool nativeFxStages = false;
 		uint32_t historyDepth = 1;
 		uint32_t targetWidth = 0;
 		uint32_t targetHeight = 0;
 	};
 	struct LookupTexture {
 		postprocess::ShaderPresetTexture config;
-		std::unique_ptr<Texture> texture;
+		Target image;
+		std::unique_ptr<BufferData> staging;
 		vk::UniqueSampler sampler;
 	};
 
 	bool updateConfiguredChain();
 	bool renderInternal(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
-			bool& presentationTransformApplied);
+			bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView);
 	bool compileCandidate(const postprocess::ShaderChain& chain, std::vector<Program>& candidate, std::string& error);
-	bool ensureTarget(Target& target, const vk::Extent2D& extent, vk::Format format, bool mipmapped);
+	bool ensureTarget(Target& target, const vk::Extent2D& extent, vk::Format format, bool mipmapped, bool storage = false, postprocess::SlangResourceType type = postprocess::SlangResourceType::Sampler2D, uint32_t depth = 1, uint32_t layers = 1);
 	bool ensureTargetSet(TargetSet& targets, const Program& program, const vk::Extent2D& extent);
 	const Target *findSourceHistoryTarget(uint32_t frameCount) const;
 	const TargetSet *findPassHistoryTarget(uint32_t passIndex, uint32_t frameCount) const;
 	void generateMipmaps(vk::CommandBuffer commandBuffer, const Target& target, bool existingContents) const;
 	vk::UniquePipeline createPipeline(vk::ShaderModule vertexShader, vk::ShaderModule fragmentShader, vk::RenderPass renderPass,
 			const postprocess::ShaderPass& pass, size_t colorAttachmentCount) const;
-	vk::UniqueRenderPass createRenderPass(const std::vector<vk::Format>& formats, bool preserveContents = false) const;
+	vk::UniqueRenderPass createRenderPass(const std::vector<vk::Format>& formats, bool preserveContents = false, bool stencil = false, bool clear = false) const;
 	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::string& error);
 	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::vector<LookupTexture>& textures,
 			std::string& error);
 	bool validateLookupTextures(const std::vector<LookupTexture>& textures, std::string& error) const;
 	void ensureResources();
+
+	struct StencilTarget {
+		Allocation allocation;
+		vk::UniqueImage image;
+		vk::UniqueImageView view;
+		uint32_t frame = 0, layerIndex = postprocess::InvalidShaderPass;
+		bool initialized = false;
+	};
+	std::vector<std::map<std::pair<uint32_t, uint32_t>, StencilTarget>> stencilTargets;
 
 	vk::UniqueRenderPass renderPass;
 	vk::UniqueDescriptorSetLayout descriptorSetLayout;
@@ -134,14 +154,20 @@ private:
 	vk::UniqueShaderModule copyFragmentShader;
 	vk::UniquePipeline copyPipeline;
 	vk::UniquePipeline copyRotatePipeline;
+	// Allocated only when a depth consumer needs the display rotation applied.
+	vk::UniqueRenderPass depthRotateRenderPass;
+	vk::UniquePipeline depthRotatePipeline;
 	std::unique_ptr<QuadBuffer> quadBuffer;
 	std::vector<std::vector<vk::UniqueDescriptorSet>> descriptorSets;
 	std::vector<vk::UniqueDescriptorSet> sourceDescriptorSets;
 	std::vector<vk::UniqueDescriptorSet> displayDescriptorSets;
+	std::vector<vk::UniqueDescriptorSet> depthRotateDescriptorSets;
 	std::vector<std::vector<std::vector<TargetSet>>> targets;
 	std::vector<std::vector<Target>> sourceTargets;
 	std::vector<Target> displayTargets;
+	std::vector<Target> depthRotateTargets;
 	uint32_t sourceHistoryDepth = 1;
+	std::array<int, 4> stencilFrameSize {};
 	std::vector<Program> programs;
 	std::vector<LookupTexture> lookupTextures;
 	std::vector<postprocess::ShaderParameter> parameters;

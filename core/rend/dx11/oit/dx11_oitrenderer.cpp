@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -641,6 +642,10 @@ struct DX11OITRenderer : public DX11Renderer
 	{
 		resetContextState();
 		bool is_rtt = rendContext->isRTT;
+#ifndef LIBRETRO
+		if (!is_rtt)
+			sceneDepthValid = true;
+#endif
 
 		if (!is_rtt)
 			resize(rendContext->framebufferWidth, rendContext->framebufferHeight);

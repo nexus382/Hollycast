@@ -33,7 +33,11 @@ enum class SlangParameterType {
 	Float2x2,
 	Float3x3,
 	Float4x4,
+	Float2x3, Float2x4, Float3x2, Float3x4, Float4x2, Float4x3,
 };
+
+uint32_t shaderParameterComponentCount(SlangParameterType type);
+const char *shaderParameterGlslType(SlangParameterType type);
 
 struct SlangParameterValue {
 	std::array<float, 16> values {};
@@ -70,9 +74,14 @@ enum class SlangResourceType {
 	Image3D,
 };
 
+enum class ShaderNumericType { Float, SignedInteger, UnsignedInteger };
+const char *shaderResourceGlslType(SlangResourceType type, ShaderNumericType numeric = ShaderNumericType::Float);
+bool isShaderStorageResource(SlangResourceType type);
+
 enum class SlangResourceConvention {
 	Source,
 	Original,
+	Depth,
 	PassAlias,
 	History,
 	Feedback,
@@ -89,6 +98,8 @@ struct SlangResource {
 	bool hasExplicitBinding = false;
 	// History2 means two completed frames ago. Plain History is offset one.
 	uint32_t historyOffset = 1;
+	ShaderNumericType numericType = ShaderNumericType::Float;
+	std::string formatName;
 };
 
 struct SlangStageSource {
@@ -104,6 +115,7 @@ struct SlangShaderIR {
 	std::string format;
 	SlangStageSource vertex;
 	SlangStageSource fragment;
+	SlangStageSource compute;
 	std::vector<SlangParameter> parameters;
 	std::vector<SlangResource> resources;
 };

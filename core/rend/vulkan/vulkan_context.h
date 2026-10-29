@@ -104,13 +104,15 @@ public:
 
 	VkInstance GetInstance() const { return static_cast<VkInstance>(instance.get()); }
 	u32 GetGraphicsQueueFamilyIndex() const { return graphicsQueueIndex; }
+	bool SupportsGraphicsCompute() const { return graphicsComputeSupported; }
 	void resize() override { resized = true; }
 	bool IsValid() { return width != 0 && height != 0; }
 	void NewFrame();
 	void BeginRenderPass();
 	void EndFrame(vk::CommandBuffer cmdBuffer = vk::CommandBuffer());
 	void Present() noexcept;
-	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio) noexcept;
+	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
+			vk::Image depthImage = {}, vk::ImageView depthView = {}) noexcept;
 	void PresentLastFrame();
 	bool GetLastFrame(std::vector<u8>& data, int& width, int& height);
 
@@ -153,6 +155,7 @@ public:
 	}
 	void setSwapInterval(int interval) override;
 	vk::Format GetDepthFormat() const { return depthFormat; }
+	bool CanSampleDepth() const { return depthSamplingSupported; }
 	ShaderManager *GetShaderManager() const { return shaderManager.get(); }
 	static VulkanContext *Instance() { return static_cast<VulkanContext *>(GraphicsContext::Instance()); }
 	bool SupportsSamplerAnisotropy() const { return samplerAnisotropy; }
@@ -226,6 +229,7 @@ private:
 	vk::PhysicalDevice physicalDevice;
 
 	u32 graphicsQueueIndex = 0;
+	bool graphicsComputeSupported = false;
 	u32 presentQueueIndex = 0;
 	vk::DeviceSize uniformBufferAlignment = 0;
 	vk::DeviceSize storageBufferAlignment = 0;
@@ -258,6 +262,7 @@ private:
 	vk::UniqueRenderPass renderPass;
 
 	vk::Format depthFormat = vk::Format::eUndefined;
+	bool depthSamplingSupported = false;
 
 	std::vector<vk::UniqueCommandPool> commandPools;
 	std::vector<vk::UniqueCommandBuffer> commandBuffers;

@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace postprocess {
@@ -23,6 +24,12 @@ enum class ReShadeValueType {
 	Bool,
 	Int,
 	UInt,
+	Int2,
+	Int3,
+	Int4,
+	UInt2,
+	UInt3,
+	UInt4,
 	Float,
 	Float2,
 	Float3,
@@ -50,6 +57,8 @@ struct ReShadeTexture {
 	std::string name;
 	std::string definition;
 	std::vector<ReShadeAnnotation> annotations;
+	size_t sourceBegin = 0;
+	size_t sourceEnd = 0;
 };
 
 struct ReShadeSampler {
@@ -57,6 +66,8 @@ struct ReShadeSampler {
 	std::string name;
 	std::string definition;
 	std::vector<ReShadeAnnotation> annotations;
+	size_t sourceBegin = 0;
+	size_t sourceEnd = 0;
 };
 
 struct ReShadeStruct {
@@ -76,8 +87,10 @@ struct ReShadePass {
 	std::string name;
 	std::string vertexShader;
 	std::string pixelShader;
+	std::string computeShader;
 	std::string stateBlock;
 	size_t line = 0;
+	size_t bodyBegin = 0;
 };
 
 struct ReShadeTechnique {
@@ -89,10 +102,15 @@ struct ReShadeTechnique {
 // This is a syntax IR, not a compiler. It deliberately preserves declarations
 // and bodies so later backend emitters can lower one validated representation.
 struct ReShadeEffect {
+	// Preserve complete namespaced source for the language compiler. Metadata
+	// extraction only records host-owned annotations and resource declarations.
+	std::string preprocessedSource;
+	std::vector<std::pair<size_t, size_t>> annotationRanges;
 	std::vector<std::string> preprocessorDirectives;
 	std::vector<ReShadeUniform> uniforms;
 	std::vector<ReShadeTexture> textures;
 	std::vector<ReShadeSampler> samplers;
+	std::vector<ReShadeSampler> storages;
 	std::vector<ReShadeStruct> structs;
 	std::vector<std::string> globals;
 	std::vector<ReShadeFunction> functions;

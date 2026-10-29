@@ -1,49 +1,29 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 
-# Shader System Implementation Checkpoint
+# Shader system
 
-Checkpoint: 2026-07-13
-Branch: `Shadr-Systm-Implementation`
-State: local work only; nothing staged, committed, pushed, or stashed.
+Display effects run as ordered layers. Each layer can be a GLSL shader, a GLSL preset (`.glslp`), a Slang stage, a Slang preset (`.slangp`), or a ReShade FX effect. Preset passes execute in their declared order before the next layer receives the result.
 
-## Completed before this checkpoint
+## Compilation and resources
 
-- Phases 1 through 4: shared ordered Slang chains, safe package-root Slang includes, GL/Vulkan/DX11 pass execution, scaling/filtering/mipmaps/frame modulo, LUTs, aliases, feedback, typed parameters, and portable custom Slang vertex stages.
-- Windows `flycast` build passed after the checkpoint changes below.
+ReShade FX uses the upstream standalone effect compiler in `core/deps/reshadefx`, with its license and pinned revision kept alongside the sources. GLSL-to-HLSL compilation uses glslang, SPIR-V, and SPIRV-Cross instead of expression substitutions. The same expanded shader sources and reflected parameters feed the graphics backends. Uniform arrays retain each element, and numeric vectors and square or rectangular matrices use the shared parameter layout. Runtime timer, frame-time, date, keyboard, and mouse sources are sampled by the host and excluded from saved controls.
 
-## Phase 5 through 9 work completed in this pass
+The graph tracks pass outputs, aliases, previous-frame inputs, feedback, lookup textures, filtering, wrap modes, mipmaps, and per-axis scaling. Preset references retain the directory of inherited resources. Resources from unrelated layers remain separate. Parameters and technique selections follow their layer when it is moved or removed.
 
-- Replaced two-frame pass history with indexed history rings on GL, Vulkan, and DX11. Names such as `FirstHistory2` now request two completed frames ago.
-- Added Vulkan and DX11 source-history rings; Vulkan source history is copied before chain execution.
-- Added matrix parameter types and backend binding support for 2x2, 3x3, and 4x4 values.
-- Added persistent scalar parameter configuration plus an explicit Reload Shader action.
-- Added same-path reload generation so edited packages can be recompiled without changing the selected path.
-- Added the clean-room ReShade compiler source and wired typed uniforms, structs, helper functions, control flow source, samplers, texture aliases, custom vertex entry points, and ordered technique passes into chain loading.
-- Added ReShade package LUT discovery from texture `source` annotations.
-- Added typed FX annotations, so standard forms such as `string source = "color"` resolve correctly.
-- Cached validated pass sources in the shared chain. GL, Vulkan, and DX11 now compile exactly the source that validation expanded and reflected, without a second file read or include expansion.
-- Confirmed renderer teardown recreates each backend chain with the device/context lifecycle; a new device reloads the selected package through its normal generation path.
-- Added true ordered MRT graph support: ReShade `RenderTarget0` through `RenderTarget7` are reflected as named outputs, later passes select an exact producer attachment, and GL/GLES3, Vulkan, and DX11 allocate, render, history-route, and blend each attachment.
-- Preserved each ReShade render target's declared `RGBA8`, `RGBA8_SRGB`, or `RGBA16F` format instead of applying one pass-wide format to every attachment.
-- Added GL per-output mip-chain generation, GL/GLES3 draw-buffer capability checks, and Vulkan checks for both fragment-output limits and linear-blit mip support.
-- Preserved typed vector and matrix parameter values through configuration, the UI, and GL/Vulkan/DX11 runtime binding. Values serialize as comma-separated components while scalar settings remain backward compatible.
-- Added named ReShade technique discovery and selection through rend.PostProcessShaderTechnique, with a settings combo and renderer reload generation.
-- Added ReShade object-like and function-like macro expansion plus compound #if/#elif expressions with defined, comparisons, arithmetic, and boolean operators.
-- Added ReShade subtract, reverse-subtract, minimum, and maximum blend operations across GL, Vulkan, and DX11.
-- Added explicit Slang layout(set=..., binding=...) metadata retention for standard resource declarations and expanded custom vertex aliases for common Position/TexCoord names.
-- Added a versioned, mtime/size keyed package source cache under the writable Flycast config directory. Cache corruption or stale metadata falls back to the source file.
-- Added common RGBA16_UNORM and RGBA32_FLOAT target format mappings across all three backends.
+A shader may appear in multiple layers. Use **Duplicate** in Active Shader Layers and choose the technique for each copy. Effects that save and restore an image around other effects need their producer technique first and their consumer technique later. For example, a UI mask uses a top layer, the effects to mask, and a bottom layer from the same FX file. Its mask image must be supplied by the shader package; a missing image is an error.
 
-## Exact remaining work
+Graphics passes retain independent color and alpha blending, per-target write masks, clear state, stencil state, primitive topology, and vertex count. Named effect textures inherit their preceding write across passes and frames. A pass writing an auxiliary texture leaves the current backbuffer available to subsequent passes.
 
-1. The FX path is still a clean-room compiler, not a complete HLSL/FX implementation. It now handles substantially more preprocessing and blend state, but full overload/type/resource/control-flow lowering still needs a real backend-neutral expression IR.
-2. Slang sampler arrays, cube/3D resource execution, and arbitrary stage interfaces still need backend descriptor/view support; explicit binding metadata is retained and validated but not yet used to override each backend's safe graph bindings.
-   Standard Slang push-constant blocks, MVP uniform blocks, and custom vertex varyings also still need backend-neutral lowering before packages such as the upstream scanline preset can be claimed as supported on every backend.
-3. The source package cache is persistent and shared before compilation, but compiled GL/DX11 binaries are still driver-owned and require backend-specific disk caches keyed by driver and shader source.
-4. Run the focused unit target once the unrelated local curl/DX9 test dependencies are available, then perform live GPU validation on GL/GLES, Vulkan, and DX11 plus release builds on Windows, Android, Linux, and macOS.
+Compute passes retain their local workgroup sizes and explicit dispatch group counts. Writable images are synchronized before subsequent sampling. Floating-point and integer target formats retain their texel type. Lookup assets support 1D, 2D, array, cube-face, and 3D image layouts, including normalized-domain `.cube` LUTs. Selection preflight reports missing or undecodable assets before activation.
 
-## Resume point
+Depth effects receive the renderer's scene depth where that renderer exposes a sampleable depth surface. Depth effects require a rendered scene with sampleable depth. If a frame has none, the backend reports that limitation and presents the original image. Depth reconstruction settings remain specific to the effect and rendering API.
 
-Start with a backend-neutral FX expression IR and Slang descriptor-array lowering. Do not claim full ReShade compatibility until the compiler can lower the required FX language constructs. Preserve core/deps/gamesdk/; it is unrelated user work.
+## Boundaries
 
-Validation: `cmake --build BUILD-WINDOWS-DEV --target flycast --parallel 4` passed after the final GL/Vulkan capability and format changes. The focused `G:\tmp\shader_compiler_smoke.exe` and `G:\tmp\shader_preprocess_smoke.exe` passed with conditional preprocessing, function-like macros, typed annotations, helpers, control flow, and two reflected FX outputs. `git diff --check` reports no whitespace errors; only normal Git LF/CRLF conversion warnings remain. The first 16-way attempt exhausted MSVC heap in unrelated `dx11_renderstate.cpp`; the lower-parallel retry completed and linked `flycast.exe`.
+Compatibility is determined by the shader's required resources, render state, and graphics API capabilities. This is not a promise that every third-party shader package works. Compute needs DirectX feature level 11, OpenGL 4.3 / GLES 3.1, or a Vulkan graphics queue with compute support. GLES cannot provide native 1D images. Resource binding arrays and writable FX views above mip level zero are currently rejected. Per-binding sampler states outside the supported filter/wrap profile are also rejected. The UI and backend report unsupported requirements rather than silently changing the effect. External textures and includes must be present within the shader library's allowed package paths.
+
+## Regression coverage
+
+The shader tests cover parsing, graph dependencies, parameter packing, preset references, resource isolation, and generated graphics and compute stages, resource preflight, host input sources, and native pass states. On Windows, generated HLSL is checked with Microsoft's D3D compiler and the parameter buffer layout is inspected through reflection. A Windows software-device regression also executes a translated compute stage and checks its pixels through readback.
+
+Set `HOLLYCAST_SHADER_TEST_ROOTS` to semicolon-separated shader directories or preset files to compile an external inventory in the test executable. This also checks Vulkan stages when Vulkan is enabled. Compiler checks do not replace live rendering checks for image orientation, depth, feedback, blending, and presentation.

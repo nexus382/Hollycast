@@ -73,6 +73,7 @@ enum class ShaderWrapMode {
 enum class ShaderInputKind {
 	Source,
 	Original,
+	Depth,
 	PassOutput,
 	History,
 	Feedback,
@@ -109,6 +110,9 @@ struct ShaderPresetTexture {
 	bool linearFilter = false;
 	bool useMipmaps = false;
 	ShaderWrapMode wrapMode = ShaderWrapMode::ClampToEdge;
+	SlangResourceType type = SlangResourceType::Sampler2D;
+	ShaderNumericType numericType = ShaderNumericType::Float;
+	uint32_t width = 0, height = 0, depth = 1;
 };
 
 // A resolved input remains symbolic until a renderer binds it. sourcePass is
@@ -122,6 +126,9 @@ struct ShaderPassInput {
 	// meaning while named MRT targets can be sampled independently.
 	uint32_t sourceOutput = 0;
 	uint32_t historyOffset = 1;
+	SlangResourceType type = SlangResourceType::Sampler2D;
+	ShaderNumericType numericType = ShaderNumericType::Float;
+	std::string formatName;
 };
 
 struct ShaderPassSampler {
@@ -139,6 +146,12 @@ struct ShaderPassOutput {
 	ShaderTargetFormat targetFormat = ShaderTargetFormat::Default;
 	std::string targetFormatName;
 	bool useMipmaps = false;
+	SlangResourceType type = SlangResourceType::Sampler2D;
+	uint32_t depth = 1;
+	// FX textures are persistent resources. Each writer inherits the latest
+	// version, including the preceding frame when this is the first writer.
+	uint32_t previousPass = InvalidShaderPass, previousOutput = 0;
+	bool previousFrame = false;
 };
 
 struct ShaderParameter {
@@ -166,6 +179,36 @@ struct ShaderParameter {
 	// that distinction while later passes contribute the parameter metadata.
 	bool hasPresetValue = false;
 	uint32_t layerIndex = 0;
+	// Host values are sampled at render time and excluded from saved user controls.
+	std::string hostSource;
+	uint32_t hostKey = 0;
+	bool hostToggle = false, hostPress = false;
+};
+
+struct ShaderAttachmentState {
+	bool blendEnabled = false;
+	ShaderBlendFactor source = ShaderBlendFactor::One, destination = ShaderBlendFactor::Zero;
+	ShaderBlendFactor sourceAlpha = ShaderBlendFactor::One, destinationAlpha = ShaderBlendFactor::Zero;
+	ShaderBlendOperation operation = ShaderBlendOperation::Add, alphaOperation = ShaderBlendOperation::Add;
+	uint8_t writeMask = 15;
+};
+
+enum class ShaderPrimitiveTopology { Points = 1, Lines, LineStrip, Triangles, TriangleStrip };
+
+enum class ShaderStencilOperation { Zero, Keep, Replace, IncrementClamp, DecrementClamp, Invert, IncrementWrap, DecrementWrap };
+enum class ShaderComparison { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
+
+struct ShaderRenderState {
+	std::array<ShaderAttachmentState, 8> attachments {};
+	bool reflected = false, clearRenderTargets = false, stencilEnabled = false, srgbWrite = false;
+	bool generateMipmaps = true;
+	ShaderPrimitiveTopology topology = ShaderPrimitiveTopology::Triangles;
+	uint32_t vertexCount = 3;
+	uint8_t stencilReadMask = 255, stencilWriteMask = 255, stencilReference = 0;
+	ShaderComparison stencilComparison = ShaderComparison::Always;
+	ShaderStencilOperation stencilPass = ShaderStencilOperation::Keep;
+	ShaderStencilOperation stencilFail = ShaderStencilOperation::Keep;
+	ShaderStencilOperation stencilDepthFail = ShaderStencilOperation::Keep;
 };
 
 struct ShaderPass {
@@ -183,6 +226,7 @@ struct ShaderPass {
 	bool linearFilter = false;
 	bool useMipmaps = false;
 	uint32_t frameCountModulo = 0;
+	ShaderWrapMode wrapMode = ShaderWrapMode::ClampToEdge;
 	ShaderTargetFormat targetFormat = ShaderTargetFormat::Default;
 	std::string targetFormatName;
 	bool feedbackTarget = false;
@@ -203,6 +247,16 @@ struct ShaderPass {
 	// ReShade effects can expose multiple ordered passes from one source file.
 	uint32_t effectTechnique = InvalidShaderPass;
 	uint32_t effectPass = InvalidShaderPass;
+	ShaderRenderState renderState;
+	bool compute = false;
+	bool updatesSource = true;
+	uint32_t colorOutputCount = 1;
+	std::array<uint32_t, 3> localSize { 1, 1, 1 };
+	uint32_t dispatchZ = 1;
+	std::array<std::string, 3> dispatchExpressions;
+	std::string widthExpression, heightExpression;
+	// Storage bindings address the current pass output, not an earlier SRV.
+	std::vector<std::pair<std::string, uint32_t>> storageBindings;
 };
 
 struct ShaderTechniqueGroup {
@@ -252,9 +306,22 @@ struct ShaderPassSource {
 	// RetroArch GLSL uses a vec4 fullscreen position, while HollyCast's native
 	// portable vertex contract exposes the underlying vec3 attribute.
 	bool retroArchGlsl = false;
-	// DuckStation's legacy GLSL dialect receives a host-provided helper API and
+	// Legacy display GLSL receives a host-provided helper API and
 	// keeps native input sizing even after the display-composition boundary.
-	bool duckStationGlsl = false;
+	bool displayGlsl = false;
+	// Compiler-produced FX stages retain their explicit interfaces and generate
+	// a fullscreen triangle from the vertex index without a vertex buffer.
+	bool nativeFxStages = false;
+	std::string compute;
+	ShaderRenderState renderState;
+	std::vector<ShaderPassOutput> storageOutputs;
+	std::vector<std::pair<std::string, uint32_t>> storageBindings;
+	std::array<uint32_t, 3> localSize { 1, 1, 1 };
+	uint32_t dispatchZ = 1;
+	std::array<std::string, 3> dispatchExpressions;
+	std::string widthExpression, heightExpression;
+	bool updatesSource = true;
+	uint32_t colorOutputCount = 1;
 	std::vector<ShaderParameter> parameters;
 	std::vector<SlangParameter> slangParameters;
 	std::vector<SlangResource> slangResources;
@@ -277,11 +344,30 @@ struct ShaderChain {
 	bool wantsUnscaledInput = false;
 };
 
+// Shared texture decoding preserves dimensionality and texel type for all APIs.
+struct ShaderTextureData {
+	uint32_t width = 0, height = 0, depth = 1, layers = 1;
+	SlangResourceType type = SlangResourceType::Sampler2D;
+	std::string formatName = "R8G8B8A8_UNORM";
+	std::vector<uint8_t> pixels;
+};
+bool loadShaderTexture(const ShaderPresetTexture& texture, ShaderTextureData& data, std::string& error);
+bool preflightShaderAssets(const ShaderChain& chain, std::string& error);
+std::string canonicalShaderFormat(const std::string& format);
+uint32_t shaderFormatBytes(const std::string& format);
+ShaderNumericType shaderFormatNumericType(const std::string& format);
+void updateShaderHostParameters(std::vector<ShaderParameter>& parameters, const ShaderFrameInfo& frame);
+void setShaderHostKey(uint8_t hidKey, bool pressed);
+void setShaderHostMouse(float x, float y, uint32_t buttons, float wheel = 0.f);
+
 ShaderFormat detectFormat(const std::string& path);
 const char *formatName(ShaderFormat format);
 
 // Resolves one pass target before a backend allocates it. Fractional sizes are
 // rounded to the nearest pixel so all backends use identical chain geometry.
+bool resolveShaderSizeExpression(const std::string& expression, const ShaderFrameInfo& frame, int& size, std::string& error, int maximum = MaxShaderTargetDimension);
+bool resolveShaderDispatchGroups(const ShaderPass& pass, const ShaderFrameInfo& frame,
+		std::array<uint32_t, 3>& groups, std::string& error);
 bool resolveTargetSize(const ShaderPass& pass, const ShaderFrameInfo& frame,
 		int& width, int& height, std::string& error);
 bool accumulateShaderTargetBytes(int width, int height, ShaderTargetFormat format,
@@ -356,21 +442,22 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 std::vector<std::string> configuredShaderPaths();
 std::string shaderSelectionLabel(const std::vector<std::string>& paths);
 
-// Loads one pass into HollyCast's portable fragment-body contract. Shader
-// includes are expanded only within the pass package; FX is lowered by the
-// clean-room, deliberately small compatibility compiler.
+// Loads and reflects one pass. Includes stay within the shader package; FX
+// stages are compiled with the bundled effect-language compiler.
 bool loadShaderPassSource(const ShaderPass& pass, ShaderPassSource& source, std::string& error);
 
-// Lowers the supported ReShade FX subset to the same portable fragment-body
-// contract used by the GLSL executor. Unsupported effects are rejected before
-// activation rather than producing backend-specific behavior.
+// Compiles ReShade FX stages and reflects their parameters and graph resources.
+// Unsupported renderer state is rejected before activation.
 bool parseReShadeFx(const std::string& effectText, ShaderPassSource& source, std::string& error);
 bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, size_t passIndex,
 		ShaderPassSource& source, std::string& error);
 
-// Translates the portable GLSL fragment-body contract to HLSL used by DX11.
-// The intentionally narrow subset rejects declarations and texture sources
-// that HollyCast cannot bind consistently across backends.
+// Compiles GLSL to SPIR-V and translates its typed representation to DX11 HLSL.
+// Compiler initialization is shared with the Vulkan renderer for process lifetime.
+bool initializeShaderCompiler();
+bool translateGlslComputeToHlsl(const ShaderPassSource& source,
+		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
+		std::string& hlsl, std::string& error);
 bool translateGlslFragmentToHlsl(const std::string& glslSource, std::string& hlslSource, std::string& error);
 bool translateGlslFragmentToHlsl(const std::string& glslSource, const std::vector<SlangParameter>& parameters,
 		std::string& hlslSource, std::string& error, uint32_t outputCount = 1);
@@ -386,6 +473,6 @@ bool translateGlslGraphFragmentToHlsl(const ShaderPassSource& source,
 		uint32_t outputCount, std::string& hlslSource, std::string& error);
 bool translateGlslGraphVertexToHlsl(const std::string& vertexSource,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
-		std::string& hlslSource, std::string& error);
+		std::string& hlslSource, std::string& error, bool nativeFxStages = false, bool retroArchGlsl = false);
 
 } // namespace postprocess

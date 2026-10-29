@@ -2,6 +2,7 @@
 	Created on: Oct 8, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -315,7 +316,12 @@ public:
 			return false;
 		frameRendered = false;
 		GetContext()->PresentFrame(colorAttachments[GetCurrentImage()]->GetImage(),
-				colorAttachments[GetCurrentImage()]->GetImageView(), viewport, aspectRatio);
+				colorAttachments[GetCurrentImage()]->GetImageView(), viewport, aspectRatio
+#ifndef LIBRETRO
+				, GetContext()->CanSampleDepth() ? depthAttachment->GetImage() : vk::Image {},
+				GetContext()->CanSampleDepth() ? depthAttachment->GetImageView() : vk::ImageView {}
+#endif
+		);
 
 		return true;
 	}

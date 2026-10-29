@@ -16,11 +16,14 @@ target_sources(${PROJECT_NAME} PRIVATE
         norend/norend.cpp)
 
 if(NOT LIBRETRO)
+    add_subdirectory(../deps/reshadefx "${CMAKE_CURRENT_BINARY_DIR}/reshadefx")
+    target_link_libraries(${PROJECT_NAME} PRIVATE hollycast-reshadefx)
     target_sources(${PROJECT_NAME} PRIVATE
             postprocess/glsl_hlsl_translator.cpp
             postprocess/reshade_fx.cpp
             postprocess/reshade_fx.h
             postprocess/reshade_compiler.cpp
+            postprocess/shader_resources.cpp
             postprocess/shader_chain.cpp
             postprocess/shader_chain.h
             postprocess/slang_frontend.cpp

@@ -26,12 +26,13 @@
 
 namespace {
 
-constexpr char FragmentPreamble[] = R"(
-layout (location = 0) in vec2 vTexCoord;
+constexpr char FramePreamble[] = R"(
 layout (push_constant) uniform ShaderFrame
 {
 	vec4 sizes;
 	uvec4 frame;
+	vec2 viewportSize;
+	uint hasDepth;
 } shaderFrame;
 layout (set = 0, binding = 16) uniform ShaderParameters
 {
@@ -42,6 +43,11 @@ layout (set = 0, binding = 16) uniform ShaderParameters
 #define FrameCount int(shaderFrame.frame.x)
 #define Rotation int(shaderFrame.frame.y)
 #define OriginalSize vec2(shaderFrame.frame.zw)
+#define FinalViewportSize shaderFrame.viewportSize
+#define HasDepth int(shaderFrame.hasDepth)
+)";
+
+constexpr char FragmentPreamble[] = R"(
 layout (location = 0) out vec4 FragColor;
 #define gl_FragColor FragColor
 )";
@@ -49,29 +55,24 @@ layout (location = 0) out vec4 FragColor;
 constexpr char VertexPreamble[] = R"(
 layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec2 in_uv;
-layout (location = 0) out vec2 vTexCoord;
-layout (push_constant) uniform ShaderFrame
-{
-	vec4 sizes;
-	uvec4 frame;
-} shaderFrame;
-layout (set = 0, binding = 16) uniform ShaderParameters
-{
-	vec4 parameters[64];
-} shaderParameters;
-#define SourceSize shaderFrame.sizes.xy
-#define OutputSize shaderFrame.sizes.zw
-#define FrameCount int(shaderFrame.frame.x)
-#define Rotation int(shaderFrame.frame.y)
-#define OriginalSize vec2(shaderFrame.frame.zw)
 #define VertexCoord in_pos
 #define TexCoord in_uv
 )";
 
 constexpr uint32_t MaxShaderInputs = 16;
+constexpr uint32_t MaxShaderStorage = 8;
 // Custom vertex stages may sample the same graph resources as fragment stages.
-constexpr vk::PipelineStageFlags ShaderReadStages =
-		vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader;
+vk::PipelineStageFlags shaderReadStages()
+{
+	const auto graphics = vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader;
+	return VulkanContext::Instance()->SupportsGraphicsCompute() ? graphics | vk::PipelineStageFlagBits::eComputeShader : graphics;
+}
+
+vk::ShaderStageFlags shaderStages()
+{
+	const auto graphics = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+	return VulkanContext::Instance()->SupportsGraphicsCompute() ? graphics | vk::ShaderStageFlagBits::eCompute : graphics;
+}
 
 vk::SamplerAddressMode samplerAddressMode(postprocess::ShaderWrapMode mode)
 {
@@ -98,6 +99,8 @@ struct ShaderFrameUniforms {
 	uint32_t rotation;
 	uint32_t originalWidth;
 	uint32_t originalHeight;
+	float viewportSize[2];
+	uint32_t hasDepth;
 };
 
 struct alignas(16) ShaderParameterUniforms {
@@ -116,15 +119,7 @@ bool isSampled2D(postprocess::SlangResourceType type)
 
 uint32_t parameterComponentCount(postprocess::SlangParameterType type)
 {
-	switch (type) {
-	case postprocess::SlangParameterType::Float2: return 2;
-	case postprocess::SlangParameterType::Float3: return 3;
-	case postprocess::SlangParameterType::Float4: return 4;
-	case postprocess::SlangParameterType::Float2x2: return 4;
-	case postprocess::SlangParameterType::Float3x3: return 9;
-	case postprocess::SlangParameterType::Float4x4: return 16;
-	default: return 1;
-	}
+	return postprocess::shaderParameterComponentCount(type);
 }
 
 vk::BlendFactor blendFactor(postprocess::ShaderBlendFactor factor)
@@ -186,22 +181,12 @@ std::string glslParameterValue(const postprocess::SlangParameter& parameter, uin
 
 const char *glslParameterType(postprocess::SlangParameterType type)
 {
-	switch (type) {
-	case postprocess::SlangParameterType::Int: return "int";
-	case postprocess::SlangParameterType::Bool: return "bool";
-	case postprocess::SlangParameterType::Float2: return "vec2";
-	case postprocess::SlangParameterType::Float3: return "vec3";
-	case postprocess::SlangParameterType::Float4: return "vec4";
-	case postprocess::SlangParameterType::Float2x2: return "mat2";
-	case postprocess::SlangParameterType::Float3x3: return "mat3";
-	case postprocess::SlangParameterType::Float4x4: return "mat4";
-	default: return "float";
-	}
+	return postprocess::shaderParameterGlslType(type);
 }
 
 void removeResourceDeclarations(std::string& source, const std::vector<postprocess::SlangParameter>& parameters)
 {
-	static const std::regex resource(R"(^\s*(?:layout\s*\([^\n]*\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?(?:sampler|texture|image)(?:2DArray|1D|2D|3D|Cube)\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[\s*[1-9][0-9]*\s*\])?\s*;\s*$)");
+	static const std::regex resource(R"(^\s*(?:layout\s*\([^\n]*\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?(?:[iu]?sampler|texture|[iu]?image)(?:2DArray|1D|2D|3D|Cube)\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[\s*[1-9][0-9]*\s*\])?\s*;\s*$)");
 	static const std::regex numericUniform(
 			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?(?:float|int|uint|bool|[iu]?vec[2-4]|mat(?:[2-4]|[2-4]x[2-4]))\s+[A-Za-z_][A-Za-z0-9_]*\s*;\s*$)",
 			std::regex::icase);
@@ -236,10 +221,6 @@ bool collectVaryingLocations(const std::string& source, const char *direction,
 			return false;
 		}
 		const std::string name = match[2].str();
-		if (location == 0 && name != "vTexCoord") {
-			error = "Vulkan shader varying location zero is reserved for vTexCoord.";
-			return false;
-		}
 		if (const auto existing = locations.find(name); existing != locations.end() && existing->second != location) {
 			error = "Vulkan shader varying '" + name + "' changes explicit location between stages.";
 			return false;
@@ -282,6 +263,20 @@ void addVaryingLocations(std::string& source, const char *direction,
 vk::Format resolveTargetFormat(postprocess::ShaderTargetFormat targetFormat, const std::string& targetFormatName, std::string& error)
 {
 	if (!targetFormatName.empty()) {
+		if (targetFormatName == "R8_UNORM") return vk::Format::eR8Unorm;
+		if (targetFormatName == "R16_UNORM") return vk::Format::eR16Unorm;
+		if (targetFormatName == "R16_SFLOAT") return vk::Format::eR16Sfloat;
+		if (targetFormatName == "R32_SFLOAT") return vk::Format::eR32Sfloat;
+		if (targetFormatName == "R32_SINT") return vk::Format::eR32Sint;
+		if (targetFormatName == "R32_UINT") return vk::Format::eR32Uint;
+		if (targetFormatName == "R8G8_UNORM") return vk::Format::eR8G8Unorm;
+		if (targetFormatName == "R16G16_UNORM") return vk::Format::eR16G16Unorm;
+		if (targetFormatName == "R16G16_SFLOAT") return vk::Format::eR16G16Sfloat;
+		if (targetFormatName == "R32G32_SFLOAT") return vk::Format::eR32G32Sfloat;
+		if (targetFormatName == "R32G32B32A32_SINT") return vk::Format::eR32G32B32A32Sint;
+		if (targetFormatName == "R32G32B32A32_UINT") return vk::Format::eR32G32B32A32Uint;
+		if (targetFormatName == "A2B10G10R10_UNORM_PACK32") return vk::Format::eA2B10G10R10UnormPack32;
+		if (targetFormatName == "B10G11R11_UFLOAT_PACK32") return vk::Format::eB10G11R11UfloatPack32;
 		if (targetFormatName == "R8G8B8A8_UNORM")
 			return vk::Format::eR8G8B8A8Unorm;
 		if (targetFormatName == "R8G8B8A8_SRGB")
@@ -303,16 +298,22 @@ vk::Format resolveTargetFormat(postprocess::ShaderTargetFormat targetFormat, con
 }
 
 std::string fragmentPreamble(const std::vector<postprocess::SlangParameter>& parameters,
-		const std::vector<postprocess::ShaderPassInput>& bindings, uint32_t outputCount)
+		const std::vector<postprocess::ShaderPassInput>& bindings, uint32_t outputCount, bool nativeStages = false,
+		bool includeTexCoord = true)
 {
 	std::string preamble = "layout (set = 0, binding = 0) uniform sampler2D Source;\n";
 	for (size_t index = 0; index < bindings.size(); ++index)
 		preamble += "layout (set = 0, binding = " + std::to_string(index + 1)
-				+ ") uniform sampler2D " + bindings[index].bindingName + ";\n";
-	preamble += FragmentPreamble;
-	preamble += "#define FxOutput0 FragColor\n";
-	for (uint32_t index = 1; index < outputCount; ++index)
-		preamble += "layout (location = " + std::to_string(index) + ") out vec4 FxOutput" + std::to_string(index) + ";\n";
+				+ ") uniform " + std::string(postprocess::shaderResourceGlslType(bindings[index].type, bindings[index].numericType)) + " " + bindings[index].bindingName + ";\n";
+	preamble += FramePreamble;
+	if (!nativeStages) {
+		if (includeTexCoord)
+			preamble += "layout (location = 0) in vec2 vTexCoord;\n";
+		preamble += FragmentPreamble;
+		preamble += "#define FxOutput0 FragColor\n";
+		for (uint32_t index = 1; index < outputCount; ++index)
+			preamble += "layout (location = " + std::to_string(index) + ") out vec4 FxOutput" + std::to_string(index) + ";\n";
+	}
 	uint32_t parameterOffset = 0;
 	for (const postprocess::SlangParameter& parameter : parameters) {
 		if (parameterOffset + parameterComponentCount(parameter.type) > postprocess::MaxShaderParameterComponents)
@@ -325,14 +326,20 @@ std::string fragmentPreamble(const std::vector<postprocess::SlangParameter>& par
 }
 
 std::string vertexPreamble(const std::vector<postprocess::SlangParameter>& parameters,
-		const std::vector<postprocess::ShaderPassInput>& bindings, bool retroArchGlsl)
+		const std::vector<postprocess::ShaderPassInput>& bindings, bool retroArchGlsl, bool nativeStages,
+		bool includeTexCoord)
 {
 	std::string preamble = "layout (set = 0, binding = 0) uniform sampler2D Source;\n";
 	for (size_t index = 0; index < bindings.size(); ++index)
 		preamble += "layout (set = 0, binding = " + std::to_string(index + 1)
-				+ ") uniform sampler2D " + bindings[index].bindingName + ";\n";
-	preamble += VertexPreamble;
-	if (retroArchGlsl)
+				+ ") uniform " + std::string(postprocess::shaderResourceGlslType(bindings[index].type, bindings[index].numericType)) + " " + bindings[index].bindingName + ";\n";
+	preamble += FramePreamble;
+	if (!nativeStages) {
+		preamble += VertexPreamble;
+		if (includeTexCoord)
+			preamble += "layout (location = 0) out vec2 vTexCoord;\n";
+	}
+	if (retroArchGlsl && !nativeStages)
 		preamble += "#undef VertexCoord\n#define VertexCoord vec4(in_pos, 1.0)\n";
 	uint32_t parameterOffset = 0;
 	for (const postprocess::SlangParameter& parameter : parameters) {
@@ -345,6 +352,20 @@ std::string vertexPreamble(const std::vector<postprocess::SlangParameter>& param
 	return preamble;
 }
 
+std::string storageDeclarations(const std::string& source, const postprocess::ShaderPassSource& pass)
+{
+	std::string result;
+	for (uint32_t i = 0; i < pass.storageBindings.size(); ++i) {
+		const auto& name = pass.storageBindings[i].first;
+		std::smatch match;
+		if (!std::regex_search(source, match, std::regex("layout\\s*\\(([^)]*)\\)\\s*uniform\\s+([iu]?image(?:1D|2DArray|2D|3D))\\s+" + name + "\\s*;"))) continue;
+		std::string format = std::regex_replace(match[1].str(), std::regex(R"((?:set|binding)\s*=\s*[0-9]+\s*,?\s*)"), "");
+		while (!format.empty() && (format.back() == ',' || std::isspace(static_cast<unsigned char>(format.back())))) format.pop_back();
+		result += "layout(set=0, binding=" + std::to_string(MaxShaderInputs + 1 + i) + (format.empty() ? "" : ", " + format) + ") uniform " + match[2].str() + " " + name + ";\n";
+	}
+	return result;
+}
+
 } // namespace
 
 bool postprocess::buildVulkanShaderSources(const ShaderPassSource& source,
@@ -354,20 +375,40 @@ bool postprocess::buildVulkanShaderSources(const ShaderPassSource& source,
 	std::string fragment = source.fragment;
 	removeVersionDirective(fragment);
 	removeResourceDeclarations(fragment, parameters);
+	fragment = storageDeclarations(source.fragment, source) + fragment;
 	std::string vertex = source.vertex;
 	std::unordered_map<std::string, uint32_t> varyingLocations;
 	std::unordered_set<uint32_t> usedVaryingLocations { 0 };
 	if (!vertex.empty()) {
 		removeVersionDirective(vertex);
 		removeResourceDeclarations(vertex, parameters);
+		vertex = storageDeclarations(source.vertex, source) + vertex;
+		if (source.nativeFxStages) {
+			vertex = std::regex_replace(vertex, std::regex(R"(\bgl_VertexID\b)"), "gl_VertexIndex");
+			// Native effect coordinates use top-left UVs; the renderer's positive
+			// Vulkan viewport maps UV zero to clip-space minus one.
+			vertex = "#define main HollycastEffectVertexMain\n" + vertex
+					+ "\n#undef main\nvoid main() { HollycastEffectVertexMain(); gl_Position.y = -gl_Position.y; }\n";
+		}
 	}
-	if ((!vertex.empty() && !collectVaryingLocations(vertex, "out", varyingLocations, usedVaryingLocations, error))
-			|| !collectVaryingLocations(fragment, "in", varyingLocations, usedVaryingLocations, error))
-		return false;
-	if (!vertex.empty())
-		addVaryingLocations(vertex, "out", varyingLocations, usedVaryingLocations);
-	addVaryingLocations(fragment, "in", varyingLocations, usedVaryingLocations);
-	const std::string fragmentHeader = fragmentPreamble(parameters, bindings, outputCount);
+	// Native effect stages already carry their complete stage interface, including
+	// location zero. Preserve it instead of reserving that location for vTexCoord.
+	if (!source.nativeFxStages) {
+		if ((!vertex.empty() && !collectVaryingLocations(vertex, "out", varyingLocations, usedVaryingLocations, error))
+				|| !collectVaryingLocations(fragment, "in", varyingLocations, usedVaryingLocations, error))
+			return false;
+		if (!vertex.empty())
+			addVaryingLocations(vertex, "out", varyingLocations, usedVaryingLocations);
+		addVaryingLocations(fragment, "in", varyingLocations, usedVaryingLocations);
+	}
+	// Slang stages may own location zero with a differently named varying.
+	// Keep the convenience UV only when the shader uses it or leaves zero free.
+	const bool customLocationZero = std::any_of(varyingLocations.begin(), varyingLocations.end(),
+			[](const auto& varying) { return varying.second == 0 && varying.first != "vTexCoord"; });
+	const std::regex texCoordName(R"(\bvTexCoord\b)");
+	const bool includeTexCoord = !customLocationZero || std::regex_search(vertex, texCoordName)
+			|| std::regex_search(fragment, texCoordName);
+	const std::string fragmentHeader = fragmentPreamble(parameters, bindings, outputCount, source.nativeFxStages, includeTexCoord);
 	if (fragmentHeader.empty()) {
 		error = "Vulkan shader chains may use at most "
 				+ std::to_string(postprocess::MaxShaderParameterComponents) + " parameter components per pass.";
@@ -376,7 +417,7 @@ bool postprocess::buildVulkanShaderSources(const ShaderPassSource& source,
 	fragmentSource = VulkanSource().addSource(fragmentHeader).addSource(fragment).generate();
 	vertexSource.clear();
 	if (!vertex.empty()) {
-		const std::string vertexHeader = vertexPreamble(parameters, bindings, source.retroArchGlsl);
+		const std::string vertexHeader = vertexPreamble(parameters, bindings, source.retroArchGlsl, source.nativeFxStages, includeTexCoord);
 		if (vertexHeader.empty()) {
 			error = "Vulkan shader chains may use at most "
 					+ std::to_string(postprocess::MaxShaderParameterComponents) + " parameter components per pass.";
@@ -385,6 +426,16 @@ bool postprocess::buildVulkanShaderSources(const ShaderPassSource& source,
 		vertexSource = VulkanSource().addSource(vertexHeader).addSource(vertex).generate();
 	}
 	error.clear();
+	return true;
+}
+
+bool postprocess::buildVulkanComputeSource(const ShaderPassSource& source, const std::vector<SlangParameter>& parameters,
+		const std::vector<ShaderPassInput>& bindings, std::string& compute, std::string& error)
+{
+	if (source.compute.empty()) { error = "Compute entry point is empty."; return false; }
+	std::string body = source.compute; removeVersionDirective(body); removeResourceDeclarations(body, parameters);
+	compute = VulkanSource().addSource(fragmentPreamble(parameters, bindings, 0, true, false))
+			.addSource(storageDeclarations(source.compute, source)).addSource(body).generate();
 	return true;
 }
 
@@ -401,15 +452,16 @@ void VulkanShaderChain::ensureResources()
 	VulkanContext *context = VulkanContext::Instance();
 	renderPass = createRenderPass({ vk::Format::eR8G8B8A8Unorm });
 
-	std::array<vk::DescriptorSetLayoutBinding, MaxShaderInputs + 1> bindings;
+	std::array<vk::DescriptorSetLayoutBinding, MaxShaderInputs + 1 + MaxShaderStorage> bindings;
 	for (uint32_t index = 0; index < MaxShaderInputs; ++index)
 		bindings[index] = vk::DescriptorSetLayoutBinding(index, vk::DescriptorType::eCombinedImageSampler, 1,
-				vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
+				shaderStages());
 	bindings[MaxShaderInputs] = vk::DescriptorSetLayoutBinding(MaxShaderInputs,
 			vk::DescriptorType::eUniformBuffer, 1,
-			vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
+			shaderStages());
+	for (uint32_t i = 0; i < MaxShaderStorage; ++i) bindings[MaxShaderInputs + 1 + i] = vk::DescriptorSetLayoutBinding(MaxShaderInputs + 1 + i, vk::DescriptorType::eStorageImage, 1, shaderStages());
 	descriptorSetLayout = context->GetDevice().createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo({}, bindings));
-	const vk::PushConstantRange pushConstants(vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(ShaderFrameUniforms));
+	const vk::PushConstantRange pushConstants(shaderStages(), 0, sizeof(ShaderFrameUniforms));
 	pipelineLayout = context->GetDevice().createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo({}, descriptorSetLayout.get(), pushConstants));
 	linearSampler = context->GetDevice().createSamplerUnique(vk::SamplerCreateInfo({}, vk::Filter::eLinear, vk::Filter::eLinear,
 			vk::SamplerMipmapMode::eNearest, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
@@ -434,27 +486,33 @@ void VulkanShaderChain::ensureResources()
 			copyFragmentShader.get(), renderPass.get(), copyPass, 1);
 }
 
-vk::UniqueRenderPass VulkanShaderChain::createRenderPass(const std::vector<vk::Format>& formats, bool preserveContents) const
+vk::UniqueRenderPass VulkanShaderChain::createRenderPass(const std::vector<vk::Format>& formats, bool preserveContents, bool stencil, bool clear) const
 {
 	VulkanContext *context = VulkanContext::Instance();
 	std::vector<vk::AttachmentDescription> attachments;
 	std::vector<vk::AttachmentReference> colorAttachments;
-	attachments.reserve(formats.size());
+	attachments.reserve(formats.size() + (stencil ? 1u : 0u));
 	colorAttachments.reserve(formats.size());
 	for (size_t index = 0; index < formats.size(); ++index) {
 		attachments.emplace_back(vk::AttachmentDescription({}, formats[index], vk::SampleCountFlagBits::e1,
-				preserveContents ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eDontCare,
+				clear ? vk::AttachmentLoadOp::eClear : preserveContents ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eDontCare,
 				vk::AttachmentStoreOp::eStore,
 				vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare,
 				vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::eShaderReadOnlyOptimal));
 		colorAttachments.emplace_back(static_cast<uint32_t>(index), vk::ImageLayout::eColorAttachmentOptimal);
 	}
+	vk::AttachmentReference stencilAttachment(static_cast<uint32_t>(formats.size()), vk::ImageLayout::eDepthStencilAttachmentOptimal);
+	if (stencil) attachments.emplace_back(vk::AttachmentDescription({}, context->GetDepthFormat(), vk::SampleCountFlagBits::e1,
+			vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare, vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore,
+			vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal));
 	const vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, 0, nullptr,
 			static_cast<uint32_t>(colorAttachments.size()), colorAttachments.data(),
-			nullptr, nullptr, 0, nullptr);
+			nullptr, stencil ? &stencilAttachment : nullptr, 0, nullptr);
 	const vk::SubpassDependency dependency(0, VK_SUBPASS_EXTERNAL,
-			vk::PipelineStageFlagBits::eColorAttachmentOutput, ShaderReadStages,
-			vk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eShaderRead);
+			vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eLateFragmentTests,
+			shaderReadStages() | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+			vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+			vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite);
 	return context->GetDevice().createRenderPassUnique(vk::RenderPassCreateInfo({}, static_cast<uint32_t>(attachments.size()),
 			attachments.data(), 1, &subpass, 1, &dependency));
 }
@@ -464,16 +522,31 @@ vk::UniquePipeline VulkanShaderChain::createPipeline(vk::ShaderModule vertexShad
 {
 	VulkanContext *context = VulkanContext::Instance();
 	const vk::PipelineVertexInputStateCreateInfo vertexInput = GetQuadInputStateCreateInfo(true);
-	const vk::PipelineInputAssemblyStateCreateInfo inputAssembly({}, vk::PrimitiveTopology::eTriangleStrip);
+	const vk::PrimitiveTopology topologies[] { vk::PrimitiveTopology::ePointList, vk::PrimitiveTopology::ePointList,
+		vk::PrimitiveTopology::eLineList, vk::PrimitiveTopology::eLineStrip, vk::PrimitiveTopology::eTriangleList, vk::PrimitiveTopology::eTriangleStrip };
+	const vk::PipelineInputAssemblyStateCreateInfo inputAssembly({}, pass.renderState.reflected
+			? topologies[static_cast<unsigned>(pass.renderState.topology)] : vk::PrimitiveTopology::eTriangleStrip);
 	const vk::PipelineViewportStateCreateInfo viewportState({}, 1, nullptr, 1, nullptr);
 	vk::PipelineRasterizationStateCreateInfo rasterization;
 	rasterization.lineWidth = 1.f;
 	const vk::PipelineMultisampleStateCreateInfo multisample;
-	const vk::PipelineDepthStencilStateCreateInfo depthStencil;
-	const vk::PipelineColorBlendAttachmentState colorBlend(pass.blendEnabled, blendFactor(pass.sourceBlend), blendFactor(pass.destinationBlend),
-			blendOperation(pass.blendOperation), vk::BlendFactor::eOne, vk::BlendFactor::eZero, blendOperation(pass.blendOperation),
-			vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
-	const std::vector<vk::PipelineColorBlendAttachmentState> colorBlends(colorAttachmentCount, colorBlend);
+	vk::PipelineDepthStencilStateCreateInfo depthStencil;
+	depthStencil.stencilTestEnable = pass.renderState.stencilEnabled;
+	const vk::StencilOp operations[] { vk::StencilOp::eZero, vk::StencilOp::eKeep, vk::StencilOp::eReplace,
+		vk::StencilOp::eIncrementAndClamp, vk::StencilOp::eDecrementAndClamp, vk::StencilOp::eInvert, vk::StencilOp::eIncrementAndWrap, vk::StencilOp::eDecrementAndWrap };
+	const auto& state = pass.renderState;
+	depthStencil.front = depthStencil.back = vk::StencilOpState(operations[static_cast<unsigned>(state.stencilFail)],
+			operations[static_cast<unsigned>(state.stencilPass)], operations[static_cast<unsigned>(state.stencilDepthFail)],
+			static_cast<vk::CompareOp>(state.stencilComparison), state.stencilReadMask, state.stencilWriteMask, state.stencilReference);
+	std::vector<vk::PipelineColorBlendAttachmentState> colorBlends;
+	for (size_t i = 0; i < colorAttachmentCount; ++i) {
+		const auto& a = state.attachments[i];
+		colorBlends.emplace_back(state.reflected ? a.blendEnabled : pass.blendEnabled,
+				blendFactor(state.reflected ? a.source : pass.sourceBlend), blendFactor(state.reflected ? a.destination : pass.destinationBlend),
+				blendOperation(state.reflected ? a.operation : pass.blendOperation), blendFactor(a.sourceAlpha), blendFactor(a.destinationAlpha),
+				blendOperation(a.alphaOperation), static_cast<vk::ColorComponentFlags>(a.writeMask));
+	}
+
 	const vk::PipelineColorBlendStateCreateInfo blendState({}, false, vk::LogicOp::eNoOp, colorBlends);
 	const std::array<vk::DynamicState, 2> dynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
 	const vk::PipelineDynamicStateCreateInfo dynamicState({}, dynamicStates);
@@ -514,18 +587,62 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 		std::vector<postprocess::ShaderPassOutput> outputs = pass.outputs;
 		if (outputs.empty())
 			outputs.push_back({ pass.alias, pass.targetFormat, pass.targetFormatName, false });
-		if (passSource->outputCount != outputs.size()) {
+		if (passSource->outputCount + passSource->storageOutputs.size() != outputs.size()) {
 			error = "Vulkan post-processing shader output count does not match its configured render targets.";
 			return false;
 		}
 		const vk::PhysicalDeviceLimits& limits = context->GetPhysicalDevice().getProperties().limits;
-		if (outputs.size() > limits.maxColorAttachments || outputs.size() > limits.maxFragmentOutputAttachments) {
+		if (pass.colorOutputCount > limits.maxColorAttachments || pass.colorOutputCount > limits.maxFragmentOutputAttachments) {
 			error = "Vulkan post-processing shader uses more color targets than the device supports.";
 			return false;
 		}
+		const auto features = context->GetPhysicalDevice().getFeatures();
+		if (pass.storageBindings.size() > MaxShaderStorage || pass.storageBindings.size() > limits.maxPerStageDescriptorStorageImages
+				|| (!pass.compute && !pass.storageBindings.empty() && !features.fragmentStoresAndAtomics)) {
+			error = "Shader storage images exceed this Vulkan device's supported stage or binding limits.";
+			return false;
+		}
+		if (pass.compute && (!context->SupportsGraphicsCompute()
+				|| pass.localSize[0] > limits.maxComputeWorkGroupSize[0] || pass.localSize[1] > limits.maxComputeWorkGroupSize[1]
+				|| pass.localSize[2] > limits.maxComputeWorkGroupSize[2]
+				|| static_cast<uint64_t>(pass.localSize[0]) * pass.localSize[1] * pass.localSize[2] > limits.maxComputeWorkGroupInvocations)) {
+			error = "Shader workgroup size exceeds this Vulkan queue's compute capabilities.";
+			return false;
+		}
+		if (!features.independentBlend && pass.renderState.reflected) {
+			const auto& first = pass.renderState.attachments[0];
+			for (uint32_t i = 1; i < pass.colorOutputCount; ++i) {
+				const auto& a = pass.renderState.attachments[i];
+				if (a.blendEnabled != first.blendEnabled || a.source != first.source || a.destination != first.destination
+						|| a.sourceAlpha != first.sourceAlpha || a.destinationAlpha != first.destinationAlpha
+						|| a.operation != first.operation || a.alphaOperation != first.alphaOperation || a.writeMask != first.writeMask) {
+					error = "This Vulkan device does not support independent attachment blend states.";
+					return false;
+				}
+			}
+		}
 		Program program;
 		program.pass = pass;
-		program.duckStationGlsl = passSource->duckStationGlsl;
+		program.displayGlsl = passSource->displayGlsl;
+		program.nativeFxStages = passSource->nativeFxStages;
+		if (pass.wrapMode != postprocess::ShaderWrapMode::ClampToEdge) {
+			vk::SamplerCreateInfo samplerInfo;
+			samplerInfo.magFilter = pass.linearFilter ? vk::Filter::eLinear : vk::Filter::eNearest;
+			samplerInfo.minFilter = samplerInfo.magFilter;
+			samplerInfo.mipmapMode = vk::SamplerMipmapMode::eNearest;
+			samplerInfo.addressModeU = samplerAddressMode(pass.wrapMode);
+			samplerInfo.addressModeV = samplerInfo.addressModeW = samplerInfo.addressModeU;
+			samplerInfo.borderColor = vk::BorderColor::eFloatTransparentBlack;
+			try {
+				program.sampler = context->GetDevice().createSamplerUnique(samplerInfo);
+				samplerInfo.mipmapMode = pass.linearFilter ? vk::SamplerMipmapMode::eLinear : vk::SamplerMipmapMode::eNearest;
+				samplerInfo.maxLod = vk::LodClampNone;
+				program.mipSampler = context->GetDevice().createSamplerUnique(samplerInfo);
+			} catch (const vk::SystemError& exception) {
+				error = "Vulkan could not create shader pass samplers: " + std::string(exception.what());
+				return false;
+			}
+		}
 		program.parameters = std::move(typedParameters);
 		for (const postprocess::SlangParameter& parameter : program.parameters) {
 			const auto configured = std::find_if(chain.parameters.begin(), chain.parameters.end(), [&](const postprocess::ShaderParameter& value) {
@@ -542,7 +659,7 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 			if (targetFormat == vk::Format::eUndefined)
 				return false;
 			const vk::FormatFeatureFlags formatFeatures = context->GetPhysicalDevice().getFormatProperties(targetFormat).optimalTilingFeatures;
-			if (!(formatFeatures & vk::FormatFeatureFlagBits::eColorAttachment) || !(formatFeatures & vk::FormatFeatureFlagBits::eSampledImage)) {
+			if (!(formatFeatures & (program.outputs.size() >= pass.colorOutputCount ? vk::FormatFeatureFlagBits::eStorageImage : vk::FormatFeatureFlagBits::eColorAttachment)) || !(formatFeatures & vk::FormatFeatureFlagBits::eSampledImage)) {
 				error = "Vulkan does not support a requested post-processing target format.";
 				return false;
 			}
@@ -554,12 +671,12 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 				return false;
 			}
 			program.outputs.push_back({ output, targetFormat, output.useMipmaps, supportsMipmaps });
-			targetFormats.push_back(targetFormat);
+			if (program.outputs.size() <= pass.colorOutputCount) targetFormats.push_back(targetFormat);
 		}
 		std::vector<postprocess::ShaderPassInput> shaderBindings;
 		for (const postprocess::SlangResource& resource : passSource->slangResources) {
-			if (!isSampled2D(resource.type) || resource.arrayCount != 1) {
-				error = "Vulkan post-processing currently supports only non-array sampler2D Slang resources.";
+			if (resource.arrayCount != 1) {
+				error = "Vulkan post-processing does not support arrays of sampled resource bindings.";
 				return false;
 			}
 			// Binding zero is the canonical Source name. SourceTexture and FX
@@ -581,8 +698,7 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 		}
 		std::string source;
 		std::string vertexSource;
-		if (!postprocess::buildVulkanShaderSources(*passSource, program.parameters, shaderBindings,
-				static_cast<uint32_t>(program.outputs.size()), source, vertexSource, error))
+		if (!(pass.compute ? postprocess::buildVulkanComputeSource(*passSource, program.parameters, shaderBindings, source, error) : postprocess::buildVulkanShaderSources(*passSource, program.parameters, shaderBindings, pass.colorOutputCount, source, vertexSource, error)))
 			return false;
 		for (size_t index = 0; index < shaderBindings.size(); ++index) {
 			uint32_t lookupIndex = postprocess::InvalidShaderPass;
@@ -631,25 +747,32 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 		}
 		program.targetWasInitialized.reserve(program.outputs.size());
 		program.targetBarriers.reserve(program.outputs.size());
-		program.imageInfos.reserve(program.bindings.size() + 1);
-		program.descriptorWrites.reserve(program.bindings.size() + 1);
+		program.imageInfos.reserve(program.bindings.size() + 1 + pass.storageBindings.size());
+		program.descriptorWrites.reserve(program.bindings.size() + 1 + pass.storageBindings.size());
 		program.clearColors.assign(program.outputs.size(),
-				vk::ClearValue(vk::ClearColorValue(std::array<float, 4> { 0.f, 0.f, 0.f, 1.f })));
+				vk::ClearValue(vk::ClearColorValue(std::array<uint32_t, 4> { 0, 0, 0, 0 })));
 		program.blendBarriers.reserve(program.outputs.size());
 		if (!vertexSource.empty()) {
 			if (!ShaderCompiler::TryCompile(vk::ShaderStageFlagBits::eVertex,
 					vertexSource, program.vertexShader, error))
 				return false;
 		}
-		if (!ShaderCompiler::TryCompile(vk::ShaderStageFlagBits::eFragment, source, program.fragmentShader, error))
+		if (!ShaderCompiler::TryCompile(pass.compute ? vk::ShaderStageFlagBits::eCompute : vk::ShaderStageFlagBits::eFragment, source, pass.compute ? program.computeShader : program.fragmentShader, error))
 			return false;
 		try {
-			program.renderPass = createRenderPass(targetFormats, program.pass.blendEnabled);
+			if (pass.compute) {
+				const auto queues = context->GetPhysicalDevice().getQueueFamilyProperties();
+				if (!(queues[context->GetGraphicsQueueFamilyIndex()].queueFlags & vk::QueueFlagBits::eCompute)) { error = "The active Vulkan graphics queue does not support compute."; return false; }
+				program.pipeline = context->GetDevice().createComputePipelineUnique(context->GetPipelineCache(),
+						vk::ComputePipelineCreateInfo({}, vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eCompute, program.computeShader.get(), "main"), pipelineLayout.get())).value;
+			} else {
+			program.renderPass = createRenderPass(targetFormats, program.pass.blendEnabled || !pass.updatesSource, pass.renderState.stencilEnabled, pass.renderState.clearRenderTargets);
 			program.pipeline = createPipeline(program.vertexShader.get(), program.fragmentShader.get(), program.renderPass.get(),
-					program.pass, program.outputs.size());
-			if (program.pass.blendEnabled)
+					program.pass, pass.colorOutputCount);
+			if (program.pass.blendEnabled && program.pass.updatesSource && !pass.renderState.clearRenderTargets)
 				program.blendCopyPipeline = createPipeline({}, copyFragmentShader.get(), program.renderPass.get(),
-						postprocess::ShaderPass {}, program.outputs.size());
+						postprocess::ShaderPass {}, pass.colorOutputCount);
+			}
 		} catch (const vk::SystemError& exception) {
 			error = exception.what();
 			return false;
@@ -669,18 +792,23 @@ bool VulkanShaderChain::updateConfiguredChain()
 	auto releaseActiveResources = [&] {
 		if (programs.empty() && targets.empty() && sourceTargets.empty() && displayTargets.empty()
 				&& lookupTextures.empty() && descriptorSets.empty() && sourceDescriptorSets.empty()
-				&& displayDescriptorSets.empty())
+				&& displayDescriptorSets.empty() && depthRotateTargets.empty() && depthRotateDescriptorSets.empty())
 			return;
 		// A live reload can retire resources referenced by any swapchain image.
 		// Waiting only on this rare transition keeps normal frames stall-free.
 		VulkanContext::Instance()->GetDevice().waitIdle();
 		targets.clear();
+		stencilTargets.clear();
 		sourceTargets.clear();
 		displayTargets.clear();
+		depthRotateTargets.clear();
 		lookupTextures.clear();
 		descriptorSets.clear();
 		sourceDescriptorSets.clear();
 		displayDescriptorSets.clear();
+		depthRotateDescriptorSets.clear();
+		depthRotatePipeline.reset();
+		depthRotateRenderPass.reset();
 		programs.clear();
 	};
 	configuredPaths = requestedPaths;
@@ -760,6 +888,10 @@ bool VulkanShaderChain::updateConfiguredChain()
 			else
 				programs[input.sourcePass].historyDepth = std::max(programs[input.sourcePass].historyDepth, requiredDepth);
 		}
+	for (const auto& program : programs)
+		for (const auto& output : program.pass.outputs)
+			if (output.previousFrame && output.previousPass != postprocess::InvalidShaderPass)
+				programs[output.previousPass].historyDepth = std::max(2u, programs[output.previousPass].historyDepth);
 	lookupTextures = std::move(candidateLookupTextures);
 	activePath = requestedLabel;
 	postprocess::reportShaderChainStatus(activePath, {}, parameters,
@@ -769,15 +901,15 @@ bool VulkanShaderChain::updateConfiguredChain()
 }
 
 bool VulkanShaderChain::ensureTarget(Target& target, const vk::Extent2D& extent, vk::Format format,
-		bool mipmapped)
+		bool mipmapped, bool storage, postprocess::SlangResourceType type, uint32_t depth, uint32_t layers)
 {
 	const uint32_t maxDimension = VulkanContext::Instance()->GetPhysicalDevice().getProperties().limits.maxImageDimension2D;
 	if (extent.width == 0 || extent.height == 0 || extent.width > maxDimension || extent.height > maxDimension)
 		throw std::runtime_error("Vulkan post-processing target exceeds the device texture-size limit.");
 	uint32_t mipLevels = 1;
-	for (uint32_t dimension = std::max(extent.width, extent.height); mipmapped && dimension > 1; dimension >>= 1)
+	for (uint32_t dimension = std::max({extent.width, extent.height, depth}); mipmapped && dimension > 1; dimension >>= 1)
 		++mipLevels;
-	if (target.image && target.extent == extent && target.format == format && target.mipLevels == mipLevels)
+	if (target.image && target.extent == extent && target.format == format && target.mipLevels == mipLevels && target.type == type && target.depth == depth && target.layers == layers && target.storage == storage)
 		return false;
 	target.framebuffer.reset();
 	target.sampleView.reset();
@@ -786,21 +918,27 @@ bool VulkanShaderChain::ensureTarget(Target& target, const vk::Extent2D& extent,
 	target.allocation = {};
 
 	VulkanContext *context = VulkanContext::Instance();
-	vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+	vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc;
+	usage |= storage ? vk::ImageUsageFlagBits::eStorage : vk::ImageUsageFlagBits::eColorAttachment;
+	const bool volume = type == postprocess::SlangResourceType::Sampler3D || type == postprocess::SlangResourceType::Texture3D;
+	const bool line = type == postprocess::SlangResourceType::Sampler1D || type == postprocess::SlangResourceType::Texture1D;
+	const bool cube = type == postprocess::SlangResourceType::SamplerCube || type == postprocess::SlangResourceType::TextureCube;
+	const vk::ImageType imageType = volume ? vk::ImageType::e3D : line ? vk::ImageType::e1D : vk::ImageType::e2D;
+	const vk::ImageViewType viewType = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D : cube ? vk::ImageViewType::eCube : layers > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
 	if (mipLevels > 1)
 		usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
-	target.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo({}, vk::ImageType::e2D,
-			format, vk::Extent3D(extent, 1), mipLevels, 1, vk::SampleCountFlagBits::e1,
+	target.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo(cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), imageType,
+			format, vk::Extent3D(extent.width, line ? 1u : extent.height, volume ? depth : 1u), mipLevels, layers, vk::SampleCountFlagBits::e1,
 			vk::ImageTiling::eOptimal, usage));
 	VmaAllocationCreateInfo allocationInfo = { VmaAllocationCreateFlags(), VmaMemoryUsage::VMA_MEMORY_USAGE_GPU_ONLY };
 	target.allocation = context->GetAllocator().AllocateForImage(target.image.get(), allocationInfo);
-	const vk::ImageSubresourceRange renderRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+	const vk::ImageSubresourceRange renderRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, layers);
 	target.renderView = context->GetDevice().createImageViewUnique(vk::ImageViewCreateInfo({}, target.image.get(),
-			vk::ImageViewType::e2D, format, {}, renderRange));
-	const vk::ImageSubresourceRange sampleRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, 1);
+			viewType, format, {}, renderRange));
+	const vk::ImageSubresourceRange sampleRange(vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0, layers);
 	target.sampleView = context->GetDevice().createImageViewUnique(vk::ImageViewCreateInfo({}, target.image.get(),
-			vk::ImageViewType::e2D, format, {}, sampleRange));
-	target.extent = extent;
+			viewType, format, {}, sampleRange));
+	target.extent = extent; target.type = type; target.depth = depth; target.layers = layers; target.storage = storage;
 	target.format = format;
 	target.mipLevels = mipLevels;
 	target.renderedFrame = 0;
@@ -815,16 +953,30 @@ bool VulkanShaderChain::ensureTargetSet(TargetSet& targetSet, const Program& pro
 		targetSet.outputs.resize(program.outputs.size());
 	for (size_t index = 0; index < program.outputs.size(); ++index)
 		changed = ensureTarget(targetSet.outputs[index], extent, program.outputs[index].format,
-				program.outputs[index].needsMipmaps) || changed;
-	if (!changed)
+				program.outputs[index].needsMipmaps, index >= program.pass.colorOutputCount, program.outputs[index].config.type, program.outputs[index].config.depth) || changed;
+	if (!changed && (program.pass.compute || targetSet.framebuffer))
 		return false;
 	targetSet.renderedFrame = 0;
 	targetSet.initialized = false;
 	targetSet.framebuffer.reset();
+	if (program.pass.compute) return true;
 	std::vector<vk::ImageView> attachments;
-	attachments.reserve(targetSet.outputs.size());
-	for (const Target& target : targetSet.outputs)
-		attachments.push_back(target.renderView.get());
+	for (uint32_t i = 0; i < program.pass.colorOutputCount; ++i) attachments.push_back(targetSet.outputs[i].renderView.get());
+	if (program.pass.renderState.stencilEnabled) {
+		auto *context = VulkanContext::Instance();
+		const size_t imageIndex = context->GetCurrentImageIndex();
+		if (stencilTargets.size() <= imageIndex) stencilTargets.resize(imageIndex + 1);
+		auto& stencil = stencilTargets[imageIndex][{extent.width, extent.height}];
+		if (!stencil.image) {
+			stencil.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo({}, vk::ImageType::e2D, context->GetDepthFormat(), vk::Extent3D(extent, 1), 1, 1,
+					vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransferDst));
+			VmaAllocationCreateInfo info { {}, VMA_MEMORY_USAGE_GPU_ONLY };
+			stencil.allocation = context->GetAllocator().AllocateForImage(stencil.image.get(), info);
+			stencil.view = context->GetDevice().createImageViewUnique(vk::ImageViewCreateInfo({}, stencil.image.get(), vk::ImageViewType::e2D, context->GetDepthFormat(), {},
+					vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1)));
+		}
+		attachments.push_back(stencil.view.get());
+	}
 	targetSet.framebuffer = VulkanContext::Instance()->GetDevice().createFramebufferUnique(vk::FramebufferCreateInfo({},
 			program.renderPass.get(), attachments, extent.width, extent.height, 1));
 	return true;
@@ -858,35 +1010,37 @@ void VulkanShaderChain::generateMipmaps(vk::CommandBuffer commandBuffer, const T
 {
 	if (target.mipLevels == 1)
 		return;
-	const vk::ImageSubresourceRange baseRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
-	vk::ImageMemoryBarrier baseBarrier(vk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eTransferRead,
+	const vk::ImageSubresourceRange baseRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, target.layers);
+	vk::ImageMemoryBarrier baseBarrier(target.storage ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eTransferRead,
 			vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
 			VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, target.image.get(), baseRange);
-	commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eTransfer,
+	commandBuffer.pipelineBarrier(target.storage ? shaderReadStages() : vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput), vk::PipelineStageFlagBits::eTransfer,
 			{}, nullptr, nullptr, baseBarrier);
 
 	uint32_t sourceWidth = target.extent.width;
 	uint32_t sourceHeight = target.extent.height;
+	uint32_t sourceDepth = target.type == postprocess::SlangResourceType::Sampler3D ? target.depth : 1u;
 	for (uint32_t level = 1; level < target.mipLevels; ++level) {
-		const vk::ImageSubresourceRange destinationRange(vk::ImageAspectFlagBits::eColor, level, 1, 0, 1);
+		const vk::ImageSubresourceRange destinationRange(vk::ImageAspectFlagBits::eColor, level, 1, 0, target.layers);
 		const vk::ImageMemoryBarrier destinationBarrier(existingContents ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags(),
 				vk::AccessFlagBits::eTransferWrite, existingContents ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
 				vk::ImageLayout::eTransferDstOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, target.image.get(), destinationRange);
-		commandBuffer.pipelineBarrier(existingContents ? ShaderReadStages : vk::PipelineStageFlagBits::eTopOfPipe,
+		commandBuffer.pipelineBarrier(existingContents ? shaderReadStages() : vk::PipelineStageFlagBits::eTopOfPipe,
 				vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr, destinationBarrier);
 		const uint32_t destinationWidth = std::max(sourceWidth >> 1, 1u);
 		const uint32_t destinationHeight = std::max(sourceHeight >> 1, 1u);
-		const vk::ImageBlit blit(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level - 1, 0, 1),
-				{ { vk::Offset3D(), vk::Offset3D(static_cast<int>(sourceWidth), static_cast<int>(sourceHeight), 1) } },
-				vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level, 0, 1),
-				{ { vk::Offset3D(), vk::Offset3D(static_cast<int>(destinationWidth), static_cast<int>(destinationHeight), 1) } });
+		const uint32_t destinationDepth = std::max(sourceDepth >> 1, 1u);
+		const vk::ImageBlit blit(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level - 1, 0, target.layers),
+				{ { vk::Offset3D(), vk::Offset3D(static_cast<int>(sourceWidth), static_cast<int>(sourceHeight), static_cast<int>(sourceDepth)) } },
+				vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level, 0, target.layers),
+				{ { vk::Offset3D(), vk::Offset3D(static_cast<int>(destinationWidth), static_cast<int>(destinationHeight), static_cast<int>(destinationDepth)) } });
 		commandBuffer.blitImage(target.image.get(), vk::ImageLayout::eTransferSrcOptimal, target.image.get(),
 				vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
-		const vk::ImageSubresourceRange sourceRange(vk::ImageAspectFlagBits::eColor, level - 1, 1, 0, 1);
+		const vk::ImageSubresourceRange sourceRange(vk::ImageAspectFlagBits::eColor, level - 1, 1, 0, target.layers);
 		const vk::ImageMemoryBarrier sourceBarrier(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eShaderRead,
 				vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
 				VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, target.image.get(), sourceRange);
-		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, ShaderReadStages,
+		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(),
 				{}, nullptr, nullptr, sourceBarrier);
 		baseBarrier = vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead,
 				vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
@@ -894,13 +1048,13 @@ void VulkanShaderChain::generateMipmaps(vk::CommandBuffer commandBuffer, const T
 		commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer,
 				{}, nullptr, nullptr, baseBarrier);
 		sourceWidth = destinationWidth;
-		sourceHeight = destinationHeight;
+		sourceHeight = destinationHeight; sourceDepth = destinationDepth;
 	}
-	const vk::ImageSubresourceRange lastRange(vk::ImageAspectFlagBits::eColor, target.mipLevels - 1, 1, 0, 1);
+	const vk::ImageSubresourceRange lastRange(vk::ImageAspectFlagBits::eColor, target.mipLevels - 1, 1, 0, target.layers);
 	const vk::ImageMemoryBarrier lastBarrier(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eShaderRead,
 			vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
 			VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, target.image.get(), lastRange);
-	commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, ShaderReadStages,
+	commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(),
 			{}, nullptr, nullptr, lastBarrier);
 }
 
@@ -911,109 +1065,87 @@ bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commandBuffer, st
 
 bool VulkanShaderChain::validateLookupTextures(const std::vector<LookupTexture>& textures, std::string& error) const
 {
-	uint64_t lookupBytes = 0;
-	for (const LookupTexture& lookup : textures) {
-		std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(lookup.config.path, "rb"));
-		if (!file) {
-			error = "Unable to open post-processing lookup texture: " + lookup.config.path;
-			return false;
-		}
-		const s64 fileSize = file->size();
-		if (fileSize < 0 || static_cast<uint64_t>(fileSize) > postprocess::MaxShaderLookupFileBytes) {
-			error = "Post-processing lookup texture exceeds the 64 MiB file limit: " + lookup.config.path;
-			return false;
-		}
-		int width;
-		int height;
-		int channels;
-		u8 *pixels = stbi_load_from_file(file.get(), &width, &height, &channels, STBI_rgb_alpha);
-		if (!pixels) {
-			error = "Unable to decode post-processing lookup texture: " + lookup.config.path;
-			return false;
-		}
-		if (!postprocess::validateShaderLookupTexture(width, height, error)
-				|| !postprocess::accumulateShaderTargetBytes(width, height,
-						postprocess::ShaderTargetFormat::Default, {}, lookup.config.useMipmaps,
-						1, lookupBytes, error)) {
-			stbi_image_free(pixels);
-			return false;
-		}
-		stbi_image_free(pixels);
+	uint64_t bytes = 0;
+	for (const auto& lookup : textures) {
+		postprocess::ShaderTextureData data;
+		if (!postprocess::loadShaderTexture(lookup.config, data, error)) return false;
+		// Upload storage remains alive until the chain retires, so account for it.
+		if (data.pixels.size() > (postprocess::MaxShaderChainTargetBytes - bytes) / 2) { error = "Shader lookup GPU/upload storage exceeds the chain budget."; return false; }
+		bytes += data.pixels.size() * 2;
 	}
 	return true;
 }
 
-bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commandBuffer,
-		std::vector<LookupTexture>& textures, std::string& error)
+bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commands, std::vector<LookupTexture>& textures, std::string& error)
 {
-	uint64_t lookupBytes = 0;
-	for (LookupTexture& lookup : textures) {
-		if (lookup.texture)
-			continue;
-		std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(lookup.config.path, "rb"));
-		if (!file) {
-			error = "Unable to open post-processing lookup texture: " + lookup.config.path;
-			return false;
-		}
-		const s64 fileSize = file->size();
-		if (fileSize < 0 || static_cast<uint64_t>(fileSize) > postprocess::MaxShaderLookupFileBytes) {
-			error = "Post-processing lookup texture exceeds the 64 MiB file limit: " + lookup.config.path;
-			return false;
-		}
-		int width;
-		int height;
-		int channels;
-		u8 *pixels = stbi_load_from_file(file.get(), &width, &height, &channels, STBI_rgb_alpha);
-		if (!pixels || width <= 0 || height <= 0) {
-			if (pixels)
-				stbi_image_free(pixels);
-			error = "Unable to decode post-processing lookup texture: " + lookup.config.path;
-			return false;
-		}
-		if (!postprocess::validateShaderLookupTexture(width, height, error)) {
-			stbi_image_free(pixels);
-			return false;
-		}
-		if (!postprocess::accumulateShaderTargetBytes(width, height,
-				postprocess::ShaderTargetFormat::Default, {}, lookup.config.useMipmaps,
-				1, lookupBytes, error)) {
-			stbi_image_free(pixels);
-			return false;
-		}
+	auto *context = VulkanContext::Instance();
+	for (auto& lookup : textures) {
+		if (lookup.image.image) continue;
+		postprocess::ShaderTextureData data;
+		if (!postprocess::loadShaderTexture(lookup.config, data, error)) return false;
+		if (lookup.config.numericType != postprocess::ShaderNumericType::Float && (lookup.config.linearFilter || lookup.config.useMipmaps)) { error = "Integer textures require nearest filtering without generated mipmaps."; return false; }
 		try {
-			lookup.texture = std::make_unique<Texture>();
-			lookup.texture->tex_type = TextureType::_8888;
-			lookup.texture->SetCommandBuffer(commandBuffer);
-			lookup.texture->UploadToGPU(width, height, pixels, lookup.config.useMipmaps);
-			lookup.texture->SetCommandBuffer(nullptr);
-			vk::SamplerCreateInfo samplerInfo;
-			samplerInfo.magFilter = lookup.config.linearFilter ? vk::Filter::eLinear : vk::Filter::eNearest;
-			samplerInfo.minFilter = samplerInfo.magFilter;
-			samplerInfo.mipmapMode = lookup.config.useMipmaps ? vk::SamplerMipmapMode::eLinear : vk::SamplerMipmapMode::eNearest;
-			samplerInfo.addressModeU = lookup.config.wrapMode == postprocess::ShaderWrapMode::Repeat ? vk::SamplerAddressMode::eRepeat
-					: lookup.config.wrapMode == postprocess::ShaderWrapMode::MirroredRepeat ? vk::SamplerAddressMode::eMirroredRepeat
-					: lookup.config.wrapMode == postprocess::ShaderWrapMode::ClampToBorder ? vk::SamplerAddressMode::eClampToBorder : vk::SamplerAddressMode::eClampToEdge;
-			samplerInfo.addressModeV = samplerInfo.addressModeW = samplerInfo.addressModeU;
-			samplerInfo.borderColor = vk::BorderColor::eFloatTransparentBlack;
-			samplerInfo.maxLod = lookup.config.useMipmaps ? vk::LodClampNone : 0.f;
-			lookup.sampler = VulkanContext::Instance()->GetDevice().createSamplerUnique(samplerInfo);
-		} catch (const std::exception& exception) {
-			stbi_image_free(pixels);
-			lookup.texture.reset();
-			error = exception.what();
-			return false;
-		}
-		stbi_image_free(pixels);
+			auto& image = lookup.image;
+			image.format = resolveTargetFormat(postprocess::ShaderTargetFormat::Default, data.formatName, error);
+			if (image.format == vk::Format::eUndefined) return false;
+			const auto features = context->GetPhysicalDevice().getFormatProperties(image.format).optimalTilingFeatures;
+			if (!(features & vk::FormatFeatureFlagBits::eSampledImage) || (lookup.config.linearFilter && !(features & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))) { error = "Vulkan does not support the requested lookup texture format/filter."; return false; }
+			const bool volume = data.type == postprocess::SlangResourceType::Sampler3D || data.type == postprocess::SlangResourceType::Texture3D;
+			const bool line = data.type == postprocess::SlangResourceType::Sampler1D || data.type == postprocess::SlangResourceType::Texture1D;
+			const bool cube = data.type == postprocess::SlangResourceType::SamplerCube || data.type == postprocess::SlangResourceType::TextureCube;
+			image.extent = vk::Extent2D(data.width, data.height); image.depth = data.depth; image.layers = data.layers; image.type = data.type;
+			image.mipLevels = 1; if (lookup.config.useMipmaps) for (uint32_t n = std::max({data.width, data.height, data.depth}); n > 1; n >>= 1) ++image.mipLevels;
+			if (image.mipLevels > 1 && (!(features & vk::FormatFeatureFlagBits::eBlitSrc) || !(features & vk::FormatFeatureFlagBits::eBlitDst) || !(features & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))) { error = "Vulkan cannot generate the requested lookup mip chain."; return false; }
+			const vk::ImageType type = volume ? vk::ImageType::e3D : line ? vk::ImageType::e1D : vk::ImageType::e2D;
+			const vk::ImageViewType view = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D : cube ? vk::ImageViewType::eCube : data.layers > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+			image.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo(cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), type, image.format,
+					vk::Extent3D(data.width, data.height, data.depth), image.mipLevels, data.layers, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc));
+			VmaAllocationCreateInfo allocationInfo { {}, VMA_MEMORY_USAGE_GPU_ONLY };
+			image.allocation = context->GetAllocator().AllocateForImage(image.image.get(), allocationInfo);
+			const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, image.mipLevels, 0, data.layers);
+			image.sampleView = context->GetDevice().createImageViewUnique(vk::ImageViewCreateInfo({}, image.image.get(), view, image.format, {}, range));
+			lookup.staging = std::make_unique<BufferData>(data.pixels.size(), vk::BufferUsageFlagBits::eTransferSrc);
+			lookup.staging->upload(static_cast<u32>(data.pixels.size()), data.pixels.data());
+			commands.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier({}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), range));
+			const vk::BufferImageCopy copy(0, 0, 0, vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, data.layers), {}, vk::Extent3D(data.width, data.height, data.depth));
+			commands.copyBufferToImage(lookup.staging->buffer.get(), image.image.get(), vk::ImageLayout::eTransferDstOptimal, copy);
+			vk::Extent3D extent(data.width, data.height, data.depth);
+			for (uint32_t level = 1; level < image.mipLevels; ++level) {
+				const vk::ImageSubresourceRange previous(vk::ImageAspectFlagBits::eColor, level - 1, 1, 0, data.layers);
+				commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+						vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), previous));
+				const vk::Extent3D next(std::max(1u, extent.width / 2), std::max(1u, extent.height / 2), std::max(1u, extent.depth / 2));
+				const std::array<vk::Offset3D,2> from { vk::Offset3D(), vk::Offset3D(extent.width, extent.height, extent.depth) };
+				const std::array<vk::Offset3D,2> to { vk::Offset3D(), vk::Offset3D(next.width, next.height, next.depth) };
+				const vk::ImageBlit blit(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level - 1, 0, data.layers), from,
+						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level, 0, data.layers), to);
+				commands.blitImage(image.image.get(), vk::ImageLayout::eTransferSrcOptimal, image.image.get(), vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
+				commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
+						vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), previous));
+				extent = next;
+			}
+			commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, image.mipLevels - 1, 1, 0, data.layers)));
+			vk::SamplerCreateInfo sampler;
+			sampler.magFilter = sampler.minFilter = lookup.config.linearFilter ? vk::Filter::eLinear : vk::Filter::eNearest;
+			sampler.mipmapMode = lookup.config.linearFilter ? vk::SamplerMipmapMode::eLinear : vk::SamplerMipmapMode::eNearest;
+			sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = samplerAddressMode(lookup.config.wrapMode);
+			sampler.maxLod = static_cast<float>(image.mipLevels - 1);
+			sampler.borderColor = lookup.config.numericType == postprocess::ShaderNumericType::Float ? vk::BorderColor::eFloatTransparentBlack : vk::BorderColor::eIntTransparentBlack;
+			lookup.sampler = context->GetDevice().createSamplerUnique(sampler);
+		} catch (const std::exception& exception) { error = exception.what(); return false; }
 	}
 	return true;
 }
 
 bool VulkanShaderChain::render(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 		const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
-		bool& presentationTransformApplied)
+		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView)
 {
 	try {
-		return renderInternal(sourceImage, sourceView, extent, frame, outputView, presentationTransformApplied);
+		return renderInternal(sourceImage, sourceView, extent, frame, outputView, presentationTransformApplied, depthImage, depthView);
 	} catch (const std::exception& exception) {
 		try {
 			postprocess::reportShaderChainStatus(activePath, exception.what());
@@ -1029,13 +1161,63 @@ bool VulkanShaderChain::render(vk::Image sourceImage, vk::ImageView sourceView, 
 
 bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 		const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
-		bool& presentationTransformApplied)
+		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView)
 {
+	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
+	if (stencilFrameSize != currentStencilSize) {
+		if (!targets.empty() || !sourceTargets.empty() || !displayTargets.empty()) {
+			VulkanContext::Instance()->GetDevice().waitIdle();
+			targets.clear(); sourceTargets.clear(); displayTargets.clear(); depthRotateTargets.clear();
+			stencilTargets.clear();
+		}
+		stencilFrameSize = currentStencilSize;
+	}
+
 	presentationTransformApplied = false;
+	bool composedDisplayInput = false;
 	if (!updateConfiguredChain() || !sourceImage || !sourceView || extent.width == 0 || extent.height == 0)
 		return false;
 	VulkanContext *context = VulkanContext::Instance();
 	vk::CommandBuffer commandBuffer = context->GetCurrentCommandBuffer();
+	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
+		return std::any_of(program.bindings.begin(), program.bindings.end(), [](const Binding& binding) {
+			return binding.input.kind == postprocess::ShaderInputKind::Depth;
+		});
+	});
+	if (needsDepth && (!depthImage || !depthView)) {
+		postprocess::reportShaderChainStatus(activePath, "This frame has no scene depth available for the selected shader.");
+		return false;
+	}
+	// Restore the renderer's depth layout on every exit, including a failed pass.
+	// The borrowed image remains owned by the scene renderer throughout the draw.
+	struct DepthReadScope {
+		vk::CommandBuffer commands;
+		vk::Image image;
+		DepthReadScope(vk::CommandBuffer commands, vk::Image image) : commands(commands), image(image)
+		{
+			if (!image)
+				return;
+			const vk::ImageMemoryBarrier barrier(vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+					vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eDepthStencilAttachmentOptimal,
+					vk::ImageLayout::eDepthStencilReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+					image, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1));
+			commands.pipelineBarrier(vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
+					shaderReadStages(), {}, nullptr, nullptr, barrier);
+		}
+		~DepthReadScope()
+		{
+			if (!image)
+				return;
+			const vk::ImageMemoryBarrier barrier(vk::AccessFlagBits::eShaderRead,
+					vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+					vk::ImageLayout::eDepthStencilReadOnlyOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal,
+					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image,
+					vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1));
+			commands.pipelineBarrier(shaderReadStages(),
+					vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
+					{}, nullptr, nullptr, barrier);
+		}
+	} depthRead(commandBuffer, needsDepth ? depthImage : vk::Image {});
 	const size_t imageIndex = static_cast<size_t>(context->GetCurrentImageIndex());
 	if (targets.size() <= imageIndex)
 		targets.resize(imageIndex + 1);
@@ -1053,7 +1235,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
 			VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, sourceImage,
 			vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-	commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, ShaderReadStages,
+	commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, shaderReadStages(),
 			{}, nullptr, nullptr, sourceBarrier);
 	if (descriptorSets.size() <= imageIndex)
 		descriptorSets.resize(imageIndex + 1);
@@ -1069,6 +1251,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		if (status.activePath == activePath && status.error.empty())
 			parameters = status.parameters;
 	}
+	postprocess::updateShaderHostParameters(parameters, frame);
 	uint64_t targetBytes = 0;
 	std::string targetBudgetError;
 	const uint32_t swapchainCopies = std::max(1u, context->GetSwapChainSize());
@@ -1076,6 +1259,15 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	const auto displayBoundary = std::find_if(programs.begin(), programs.end(), [](const Program& program) {
 		return program.pass.composeDisplayInput;
 	});
+	const bool rotateDepth = needsDepth && frame.rotationPending && displayBoundary != programs.end()
+			&& postprocess::shouldComposeDisplayInput(frame, false);
+	// R32F retains scene-depth precision; it uses four bytes per pixel, just like
+	// the default color format used by the shared target budget calculation.
+	if (rotateDepth && !postprocess::accumulateShaderTargetBytes(extent.height, extent.width,
+			postprocess::ShaderTargetFormat::Default, {}, false, swapchainCopies, targetBytes, targetBudgetError)) {
+		postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+		return false;
+	}
 	if (displayBoundary != programs.end() && postprocess::shouldComposeDisplayInput(frame, false)) {
 		if (!postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
 				postprocess::ShaderTargetFormat::Default, {}, displayBoundary->pass.useMipmaps,
@@ -1115,15 +1307,23 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		for (const Program::Output& output : program.outputs)
 			if (!postprocess::accumulateShaderTargetBytes(width, height, output.config.targetFormat,
 					output.config.targetFormatName, output.needsMipmaps,
-					program.historyDepth * swapchainCopies, targetBytes, targetBudgetError)) {
+					program.historyDepth * swapchainCopies * output.config.depth, targetBytes, targetBudgetError)) {
 				postprocess::reportShaderChainStatus(activePath, targetBudgetError);
 				return false;
 			}
-		budgetFrame.sourceWidth = width;
-		budgetFrame.sourceHeight = height;
+		if (program.pass.renderState.stencilEnabled
+				&& !postprocess::accumulateShaderTargetBytes(width, height, postprocess::ShaderTargetFormat::Default,
+						"R32_UINT", false, swapchainCopies, targetBytes, targetBudgetError)) {
+			postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+			return false;
+		}
+
+		if (program.pass.updatesSource) { budgetFrame.sourceWidth = width; budgetFrame.sourceHeight = height; }
 	}
 	vk::ImageView inputView = sourceView;
 	vk::ImageView originalView = sourceView;
+	vk::ImageView effectiveDepthView = depthView;
+	vk::ImageLayout effectiveDepthLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
 	vk::Extent2D inputExtent = extent;
 	vk::Extent2D originalExtent = extent;
 	bool inputHasMipmaps = false;
@@ -1146,11 +1346,11 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					vk::Format::eR8G8B8A8Unorm, needsMipmaps);
 			const bool initialized = displayTarget.initialized && !allocated;
 			const vk::ImageMemoryBarrier targetBarrier(initialized ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags(),
-					vk::AccessFlagBits::eColorAttachmentWrite,
+					(outputIndex >= program.pass.colorOutputCount ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite : vk::AccessFlagBits::eColorAttachmentWrite),
 					initialized ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
 					vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 					displayTarget.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-			commandBuffer.pipelineBarrier(initialized ? ShaderReadStages : vk::PipelineStageFlagBits::eTopOfPipe,
+			commandBuffer.pipelineBarrier(initialized ? shaderReadStages() : vk::PipelineStageFlagBits::eTopOfPipe,
 					vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, nullptr, nullptr, targetBarrier);
 			if (!displayDescriptorSets[imageIndex])
 				displayDescriptorSets[imageIndex] = std::move(context->GetDevice().allocateDescriptorSetsUnique(
@@ -1183,6 +1383,60 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				generateMipmaps(commandBuffer, displayTarget, initialized);
 			displayTarget.renderedFrame = frame.frameCount;
 			displayTarget.initialized = true;
+			if (rotateDepth) {
+				// Apply the exact vertex transform used for color at the same graph
+				// boundary. Earlier raw-input passes still see the original depth.
+				if (!depthRotateRenderPass) {
+					const auto features = context->GetPhysicalDevice().getFormatProperties(vk::Format::eR32Sfloat).optimalTilingFeatures;
+					const vk::FormatFeatureFlags required = vk::FormatFeatureFlagBits::eColorAttachment | vk::FormatFeatureFlagBits::eSampledImage;
+					if ((features & required) != required)
+						throw std::runtime_error("Vulkan rotated depth requires sampled R32F color-attachment support.");
+					depthRotateRenderPass = createRenderPass({ vk::Format::eR32Sfloat });
+				}
+				if (!depthRotatePipeline)
+					depthRotatePipeline = createPipeline(context->GetShaderManager()->GetQuadVertexShader(true),
+							copyFragmentShader.get(), depthRotateRenderPass.get(), postprocess::ShaderPass {}, 1);
+				if (depthRotateTargets.size() <= imageIndex)
+					depthRotateTargets.resize(imageIndex + 1);
+				if (depthRotateDescriptorSets.size() <= imageIndex)
+					depthRotateDescriptorSets.resize(imageIndex + 1);
+				Target& depthTarget = depthRotateTargets[imageIndex];
+				const vk::Extent2D depthExtent(extent.height, extent.width);
+				ensureTarget(depthTarget, depthExtent, vk::Format::eR32Sfloat, false);
+				const vk::ImageMemoryBarrier depthBarrier(depthTarget.initialized ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags(),
+						vk::AccessFlagBits::eColorAttachmentWrite,
+						depthTarget.initialized ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
+						vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+						depthTarget.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+				commandBuffer.pipelineBarrier(depthTarget.initialized ? shaderReadStages() : vk::PipelineStageFlagBits::eTopOfPipe,
+						vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, nullptr, nullptr, depthBarrier);
+				if (!depthRotateDescriptorSets[imageIndex])
+					depthRotateDescriptorSets[imageIndex] = std::move(context->GetDevice().allocateDescriptorSetsUnique(
+							vk::DescriptorSetAllocateInfo(context->GetDescriptorPool(), descriptorSetLayout.get())).front());
+				const vk::DescriptorImageInfo depthInfo(nearestSampler.get(), depthView, vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+				context->GetDevice().updateDescriptorSets(vk::WriteDescriptorSet(depthRotateDescriptorSets[imageIndex].get(), 0, 0,
+						vk::DescriptorType::eCombinedImageSampler, depthInfo), nullptr);
+				if (!depthTarget.framebuffer) {
+					const std::array<vk::ImageView, 1> attachments = { depthTarget.renderView.get() };
+					depthTarget.framebuffer = context->GetDevice().createFramebufferUnique(vk::FramebufferCreateInfo({},
+							depthRotateRenderPass.get(), attachments, depthExtent.width, depthExtent.height, 1));
+				}
+				commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(depthRotateRenderPass.get(), depthTarget.framebuffer.get(),
+						vk::Rect2D({}, depthExtent), clearColor), vk::SubpassContents::eInline);
+				commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, depthRotatePipeline.get());
+				commandBuffer.setViewport(0, vk::Viewport(0.f, 0.f, static_cast<float>(depthExtent.width),
+						static_cast<float>(depthExtent.height), 0.f, 1.f));
+				commandBuffer.setScissor(0, vk::Rect2D({}, depthExtent));
+				commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0,
+						depthRotateDescriptorSets[imageIndex].get(), nullptr);
+				quadBuffer->Bind(commandBuffer);
+				quadBuffer->Draw(commandBuffer);
+				commandBuffer.endRenderPass();
+				depthTarget.initialized = true;
+				depthTarget.renderedFrame = frame.frameCount;
+				effectiveDepthView = depthTarget.sampleView.get();
+				effectiveDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			}
 		} catch (const std::exception& exception) {
 			postprocess::reportShaderChainStatus(activePath, exception.what());
 			WARN_LOG(RENDERER, "Post-processing display composition failed: %s", exception.what());
@@ -1195,7 +1449,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		inputHasMipmaps = needsMipmaps;
 		passFrame.sourceWidth = frame.viewportWidth;
 		passFrame.sourceHeight = frame.viewportHeight;
-		presentationTransformApplied = true;
+		composedDisplayInput = true;
 		return true;
 	};
 	if (programs.front().pass.composeDisplayInput
@@ -1223,7 +1477,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				sourceWasInitialized ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
 				vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 				sourceTarget.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-		commandBuffer.pipelineBarrier(sourceWasInitialized ? ShaderReadStages : vk::PipelineStageFlagBits::eTopOfPipe,
+		commandBuffer.pipelineBarrier(sourceWasInitialized ? shaderReadStages() : vk::PipelineStageFlagBits::eTopOfPipe,
 				vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, nullptr, nullptr, targetBarrier);
 		if (!sourceDescriptorSets[imageIndex]) {
 			sourceDescriptorSets[imageIndex] = std::move(context->GetDevice().allocateDescriptorSetsUnique(
@@ -1255,7 +1509,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		uniforms.rotation = frame.rotationPending ? 1u : 0u;
 		uniforms.originalWidth = originalExtent.width;
 		uniforms.originalHeight = originalExtent.height;
-		commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+		commandBuffer.pushConstants(pipelineLayout.get(), shaderStages(),
 				0, sizeof(uniforms), &uniforms);
 		quadBuffer->Update();
 		quadBuffer->Bind(commandBuffer);
@@ -1274,6 +1528,10 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		Program& program = programs[index];
 		if (program.pass.composeDisplayInput && !composeDisplayInput(program.pass.useMipmaps))
 			return false;
+		if (index == 0 || program.pass.layerIndex != programs[index - 1].pass.layerIndex) {
+			originalView = inputView;
+			originalExtent = inputExtent;
+		}
 		const int outputWidth = static_cast<int>(program.targetWidth);
 		const int outputHeight = static_cast<int>(program.targetHeight);
 		std::string error;
@@ -1296,6 +1554,17 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		program.targetWasInitialized.clear();
 		for (const Target& target : targetSet.outputs)
 			program.targetWasInitialized.push_back(target.initialized);
+		for (const auto& target : targetSet.outputs) {
+			if (target.initialized || target.mipLevels == 1) continue;
+			const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 1, target.mipLevels - 1, 0, target.layers);
+			commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier({}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+							VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, target.image.get(), range));
+			commandBuffer.clearColorImage(target.image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ClearColorValue(std::array<uint32_t, 4>{}), range);
+			commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+							vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, target.image.get(), range));
+		}
 		program.targetBarriers.clear();
 		bool hasInitializedTarget = false;
 		for (size_t outputIndex = 0; outputIndex < targetSet.outputs.size(); ++outputIndex) {
@@ -1303,24 +1572,99 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			const bool initialized = program.targetWasInitialized[outputIndex];
 			hasInitializedTarget = hasInitializedTarget || initialized;
 			program.targetBarriers.emplace_back(initialized ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags(),
-					vk::AccessFlagBits::eColorAttachmentWrite,
+					(outputIndex >= program.pass.colorOutputCount ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite : vk::AccessFlags(vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite)),
 					initialized ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
-					vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+					(outputIndex >= program.pass.colorOutputCount ? vk::ImageLayout::eGeneral : vk::ImageLayout::eColorAttachmentOptimal), VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 					target.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 		}
-		commandBuffer.pipelineBarrier(hasInitializedTarget ? ShaderReadStages : vk::PipelineStageFlagBits::eTopOfPipe,
-				vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, nullptr, nullptr, program.targetBarriers);
+		commandBuffer.pipelineBarrier(hasInitializedTarget ? shaderReadStages() : vk::PipelineStageFlagBits::eTopOfPipe,
+				vk::PipelineStageFlagBits::eColorAttachmentOutput | shaderReadStages(), {}, nullptr, nullptr, program.targetBarriers);
+		for (size_t i = 0; i < targetSet.outputs.size(); ++i) {
+			if (program.targetWasInitialized[i] && !program.pass.renderState.clearRenderTargets) continue;
+			const bool storage = i >= program.pass.colorOutputCount;
+			if (!storage && !program.pass.blendEnabled && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) continue;
+			const auto& image = targetSet.outputs[i];
+			const auto layout = storage ? vk::ImageLayout::eGeneral : vk::ImageLayout::eColorAttachmentOptimal;
+			const auto access = storage ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite : vk::AccessFlagBits::eColorAttachmentWrite;
+			const auto stages = storage ? shaderReadStages() : vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+			const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, image.layers);
+			commandBuffer.pipelineBarrier(stages, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(access, vk::AccessFlagBits::eTransferWrite, layout, vk::ImageLayout::eTransferDstOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), range));
+			commandBuffer.clearColorImage(image.image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ClearColorValue(std::array<uint32_t,4>{0,0,0,0}), range);
+			commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stages, {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, access, vk::ImageLayout::eTransferDstOptimal, layout, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), range));
+		}
+		for (size_t outputIndex = 0; outputIndex < program.pass.outputs.size(); ++outputIndex) {
+			const auto& config = program.pass.outputs[outputIndex];
+			if (config.previousPass == postprocess::InvalidShaderPass || (config.previousFrame && frame.frameCount == 0))
+				continue;
+			const uint32_t requestedFrame = frame.frameCount - (config.previousFrame ? 1u : 0u);
+			const TargetSet *previous = config.previousFrame ? findPassHistoryTarget(config.previousPass, requestedFrame)
+					: &targets[imageIndex][config.previousPass][requestedFrame % programs[config.previousPass].historyDepth];
+			if (!previous || !previous->initialized || previous->renderedFrame != requestedFrame)
+				continue;
+			const auto& source = previous->outputs[config.previousOutput];
+			const auto& destination = targetSet.outputs[outputIndex];
+			if (source.extent != destination.extent || source.depth != destination.depth || source.type != destination.type || source.format != destination.format)
+				continue; // A resized texture starts from its cleared initial contents.
+			const bool storage = outputIndex >= program.pass.colorOutputCount;
+			const auto layout = storage ? vk::ImageLayout::eGeneral : vk::ImageLayout::eColorAttachmentOptimal;
+			const auto stages = storage ? shaderReadStages() : vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+			const auto access = storage ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
+					: vk::AccessFlags(vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite);
+			const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, source.layers);
+			const std::array<vk::ImageMemoryBarrier, 2> before {
+				vk::ImageMemoryBarrier(vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eTransferRead,
+						vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, source.image.get(), range),
+				vk::ImageMemoryBarrier(access, vk::AccessFlagBits::eTransferWrite, layout, vk::ImageLayout::eTransferDstOptimal,
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, destination.image.get(), range)
+			};
+			commandBuffer.pipelineBarrier(shaderReadStages() | stages, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr, before);
+			const vk::ImageSubresourceLayers layers(vk::ImageAspectFlagBits::eColor, 0, 0, source.layers);
+			commandBuffer.copyImage(source.image.get(), vk::ImageLayout::eTransferSrcOptimal, destination.image.get(), vk::ImageLayout::eTransferDstOptimal,
+					vk::ImageCopy(layers, {}, layers, {}, vk::Extent3D(source.extent, source.depth)));
+			const std::array<vk::ImageMemoryBarrier, 2> after {
+				vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eShaderRead,
+						vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, source.image.get(), range),
+				vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, access, vk::ImageLayout::eTransferDstOptimal, layout,
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, destination.image.get(), range)
+			};
+			commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages() | stages, {}, nullptr, nullptr, after);
+		}
+		if (program.pass.renderState.stencilEnabled) {
+			auto& stencil = stencilTargets[imageIndex][{targetExtent.width, targetExtent.height}];
+			const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1);
+			if (!stencil.initialized || stencil.frame != frame.frameCount || stencil.layerIndex != program.pass.layerIndex) {
+				commandBuffer.pipelineBarrier(stencil.initialized ? vk::PipelineStageFlagBits::eLateFragmentTests : vk::PipelineStageFlagBits::eTopOfPipe,
+						vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+						vk::ImageMemoryBarrier(stencil.initialized ? vk::AccessFlagBits::eDepthStencilAttachmentWrite : vk::AccessFlags(), vk::AccessFlagBits::eTransferWrite,
+								stencil.initialized ? vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+								VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, stencil.image.get(), range));
+				commandBuffer.clearDepthStencilImage(stencil.image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ClearDepthStencilValue(1.f, 0), range);
+				commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests, {}, nullptr, nullptr,
+						vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+								vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, stencil.image.get(), range));
+				stencil.frame = frame.frameCount; stencil.layerIndex = program.pass.layerIndex; stencil.initialized = true;
+			} else commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eLateFragmentTests, vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests, {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(vk::AccessFlagBits::eDepthStencilAttachmentWrite, vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+							vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, stencil.image.get(), range));
+		}
 		if (!descriptorSets[imageIndex][index]) {
 			descriptorSets[imageIndex][index] = std::move(context->GetDevice().allocateDescriptorSetsUnique(
 					vk::DescriptorSetAllocateInfo(context->GetDescriptorPool(), descriptorSetLayout.get())).front());
 		}
-		const vk::Sampler sampler = program.pass.linearFilter
+		const vk::Sampler sampler = program.sampler
+				? (inputHasMipmaps ? program.mipSampler.get() : program.sampler.get())
+				: program.pass.linearFilter
 				? (inputHasMipmaps ? mipLinearSampler.get() : linearSampler.get())
 				: (inputHasMipmaps ? mipNearestSampler.get() : nearestSampler.get());
 		program.imageInfos.clear();
 		program.descriptorWrites.clear();
-		auto bindImage = [&](uint32_t binding, vk::Sampler imageSampler, vk::ImageView view) {
-			program.imageInfos.emplace_back(imageSampler, view, vk::ImageLayout::eShaderReadOnlyOptimal);
+		auto bindImage = [&](uint32_t binding, vk::Sampler imageSampler, vk::ImageView view,
+				vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal) {
+			program.imageInfos.emplace_back(imageSampler, view, layout);
 			program.descriptorWrites.emplace_back(descriptorSets[imageIndex][index].get(), binding, 0, 1,
 					vk::DescriptorType::eCombinedImageSampler, &program.imageInfos.back());
 		};
@@ -1336,6 +1680,10 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				break;
 			case postprocess::ShaderInputKind::Original:
 				view = originalView;
+				break;
+			case postprocess::ShaderInputKind::Depth:
+				view = effectiveDepthView;
+				resourceSampler = nearestSampler.get();
 				break;
 			case postprocess::ShaderInputKind::PassOutput: {
 				const Program& sourceProgram = programs[binding.input.sourcePass];
@@ -1360,6 +1708,26 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				const Target *history = historySet != nullptr && binding.input.sourceOutput < historySet->outputs.size()
 						? &historySet->outputs[binding.input.sourceOutput] : nullptr;
 				// Startup or a missing exact frame falls back to Original deterministically.
+				if ((!history || !history->initialized) && program.nativeFxStages) {
+					const auto& producer = programs[binding.input.sourcePass];
+					auto& ring = targets[imageIndex][binding.input.sourcePass];
+					if (ring.size() != producer.historyDepth) ring.resize(producer.historyDepth);
+					auto& fallback = ring[(frame.frameCount + producer.historyDepth - 1) % producer.historyDepth];
+					ensureTargetSet(fallback, producer, vk::Extent2D(producer.targetWidth, producer.targetHeight));
+					auto& image = fallback.outputs[binding.input.sourceOutput];
+					if (!image.initialized) {
+						const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, image.mipLevels, 0, image.layers);
+						commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+								vk::ImageMemoryBarrier({}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+										VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), range));
+						commandBuffer.clearColorImage(image.image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ClearColorValue(std::array<uint32_t, 4>{}), range);
+						commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
+								vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eTransferDstOptimal,
+										vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), range));
+						image.initialized = true;
+					}
+					history = &image;
+				}
 				view = history != nullptr && history->initialized ? history->sampleView.get() : originalView;
 				resourceHasMipmaps = history != nullptr && history->initialized
 						&& programs[binding.input.sourcePass].outputs[binding.input.sourceOutput].needsMipmaps;
@@ -1367,12 +1735,12 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			}
 			case postprocess::ShaderInputKind::LookupTexture: {
 				if (binding.lookupIndex >= lookupTextures.size()
-						|| !lookupTextures[binding.lookupIndex].texture || !lookupTextures[binding.lookupIndex].sampler) {
+						|| !lookupTextures[binding.lookupIndex].image.image || !lookupTextures[binding.lookupIndex].sampler) {
 					error = "Vulkan lookup texture '" + binding.input.resourceName + "' is unavailable.";
 					postprocess::reportShaderChainStatus(activePath, error);
 					return false;
 				}
-				view = lookupTextures[binding.lookupIndex].texture->GetImageView();
+				view = lookupTextures[binding.lookupIndex].image.sampleView.get();
 				resourceSampler = lookupTextures[binding.lookupIndex].sampler.get();
 				break;
 			}
@@ -1382,16 +1750,21 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				postprocess::reportShaderChainStatus(activePath, error);
 				return false;
 			}
-			if (binding.input.kind != postprocess::ShaderInputKind::LookupTexture) {
+			if (binding.input.kind != postprocess::ShaderInputKind::LookupTexture
+					&& binding.input.kind != postprocess::ShaderInputKind::Depth) {
 				if (binding.sampler)
 					resourceSampler = binding.useMipmaps && resourceHasMipmaps
 							? binding.mipSampler.get() : binding.sampler.get();
 				else
-					resourceSampler = program.pass.linearFilter
+					resourceSampler = program.sampler
+							? (resourceHasMipmaps ? program.mipSampler.get() : program.sampler.get())
+							: program.pass.linearFilter
 							? (resourceHasMipmaps ? mipLinearSampler.get() : linearSampler.get())
 							: (resourceHasMipmaps ? mipNearestSampler.get() : nearestSampler.get());
 			}
-			bindImage(binding.descriptorBinding, resourceSampler, view);
+			bindImage(binding.descriptorBinding, resourceSampler, view,
+					binding.input.kind == postprocess::ShaderInputKind::Depth
+							? effectiveDepthLayout : vk::ImageLayout::eShaderReadOnlyOptimal);
 		}
 		ShaderParameterUniforms parameterUniforms {};
 		uint32_t parameterOffset = 0;
@@ -1418,12 +1791,17 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			WARN_LOG(RENDERER, "Post-processing parameter-buffer allocation failed: %s", exception.what());
 			return false;
 		}
+		for (uint32_t i = 0; i < program.pass.storageBindings.size(); ++i) {
+			const auto& binding = program.pass.storageBindings[i];
+			program.imageInfos.emplace_back(vk::Sampler(), targetSet.outputs[binding.second].renderView.get(), vk::ImageLayout::eGeneral);
+			program.descriptorWrites.emplace_back(descriptorSets[imageIndex][index].get(), MaxShaderInputs + 1 + i, 0, 1, vk::DescriptorType::eStorageImage, &program.imageInfos.back());
+		}
 		context->GetDevice().updateDescriptorSets(program.descriptorWrites, nullptr);
 		const vk::DescriptorBufferInfo parameterInfo(program.parameterBuffers[imageIndex]->buffer.get(),
 				0, sizeof(ShaderParameterUniforms));
 		context->GetDevice().updateDescriptorSets(vk::WriteDescriptorSet(descriptorSets[imageIndex][index].get(),
 				MaxShaderInputs, 0, vk::DescriptorType::eUniformBuffer, nullptr, parameterInfo), nullptr);
-		if (program.pass.blendEnabled) {
+		if (program.pass.blendEnabled && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
 			// ReShade blends against the current backbuffer. Populate the private
 			// target first, then load those pixels for the blended pass.
 			commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(program.renderPass.get(), targetSet.framebuffer.get(),
@@ -1439,21 +1817,27 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			quadBuffer->Draw(commandBuffer);
 			commandBuffer.endRenderPass();
 			program.blendBarriers.clear();
-			for (const Target& target : targetSet.outputs)
+			for (uint32_t i = 0; i < program.pass.colorOutputCount; ++i)
 				program.blendBarriers.emplace_back(vk::AccessFlagBits::eColorAttachmentWrite,
 						vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite,
 						vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eColorAttachmentOptimal,
-						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, target.image.get(),
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, targetSet.outputs[i].image.get(),
 						vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 			commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
 					vk::PipelineStageFlagBits::eColorAttachmentOutput, {}, nullptr, nullptr, program.blendBarriers);
 		}
+		if (!program.pass.compute) {
 		commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(program.renderPass.get(), targetSet.framebuffer.get(),
 				vk::Rect2D({}, targetExtent), program.clearColors), vk::SubpassContents::eInline);
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, program.pipeline.get());
 		commandBuffer.setViewport(0, vk::Viewport(0.f, 0.f, static_cast<float>(outputWidth), static_cast<float>(outputHeight), 0.f, 1.f));
 		commandBuffer.setScissor(0, vk::Rect2D({}, targetExtent));
 		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, descriptorSets[imageIndex][index].get(), nullptr);
+		} else {
+			commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, program.pipeline.get());
+			commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout.get(), 0, descriptorSets[imageIndex][index].get(), nullptr);
+		}
+
 		ShaderFrameUniforms uniforms {};
 		uniforms.sizes[0] = static_cast<float>(passFrame.sourceWidth);
 		uniforms.sizes[1] = static_cast<float>(passFrame.sourceHeight);
@@ -1461,29 +1845,53 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		uniforms.sizes[3] = static_cast<float>(outputHeight);
 		uniforms.frameCount = program.pass.frameCountModulo == 0 ? frame.frameCount : frame.frameCount % program.pass.frameCountModulo;
 		uniforms.rotation = frame.rotationPending ? 1u : 0u;
-		uniforms.originalWidth = program.duckStationGlsl ? static_cast<uint32_t>(frame.sourceWidth) : originalExtent.width;
-		uniforms.originalHeight = program.duckStationGlsl ? static_cast<uint32_t>(frame.sourceHeight) : originalExtent.height;
-		commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+		uniforms.originalWidth = program.displayGlsl ? static_cast<uint32_t>(frame.sourceWidth) : originalExtent.width;
+		uniforms.originalHeight = program.displayGlsl ? static_cast<uint32_t>(frame.sourceHeight) : originalExtent.height;
+		uniforms.viewportSize[0] = static_cast<float>(frame.viewportWidth);
+		uniforms.viewportSize[1] = static_cast<float>(frame.viewportHeight);
+		uniforms.hasDepth = depthView ? 1u : 0u;
+		commandBuffer.pushConstants(pipelineLayout.get(), shaderStages(),
 				0, sizeof(uniforms), &uniforms);
+		if (program.pass.compute) {
+			std::array<uint32_t, 3> groups;
+			if (!postprocess::resolveShaderDispatchGroups(program.pass, passFrame, groups, error)) {
+				postprocess::reportShaderChainStatus(activePath, error); return false;
+			}
+			commandBuffer.dispatch(groups[0], groups[1], groups[2]);
+		} else {
 		quadBuffer->Update();
 		quadBuffer->Bind(commandBuffer);
-		quadBuffer->Draw(commandBuffer);
+		if (program.nativeFxStages)
+			commandBuffer.draw(program.pass.renderState.vertexCount, 1, 0, 0);
+		else
+			quadBuffer->Draw(commandBuffer);
 		commandBuffer.endRenderPass();
+		}
+		for (const auto& binding : program.pass.storageBindings) {
+			const auto& image = targetSet.outputs[binding.second];
+			commandBuffer.pipelineBarrier(shaderReadStages(), shaderReadStages(), {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal,
+							VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, image.layers)));
+		}
+
 		for (size_t outputIndex = 0; outputIndex < targetSet.outputs.size(); ++outputIndex) {
 			Target& target = targetSet.outputs[outputIndex];
-			if (program.outputs[outputIndex].needsMipmaps)
-				generateMipmaps(commandBuffer, target, program.targetWasInitialized[outputIndex]);
+			if (program.outputs[outputIndex].needsMipmaps && program.pass.renderState.generateMipmaps)
+				generateMipmaps(commandBuffer, target, true);
 			target.initialized = true;
 		}
 		targetSet.renderedFrame = frame.frameCount;
 		targetSet.initialized = true;
+		if (program.pass.updatesSource) {
 		inputView = targetSet.outputs[0].sampleView.get();
 		inputExtent = targetExtent;
 		inputHasMipmaps = program.outputs[0].needsMipmaps;
 		passFrame.sourceWidth = outputWidth;
 		passFrame.sourceHeight = outputHeight;
+		}
 	}
 	outputView = inputView;
+	presentationTransformApplied = composedDisplayInput;
 	return true;
 }
 
@@ -1491,13 +1899,18 @@ void VulkanShaderChain::term()
 {
 	sourceTargets.clear();
 	displayTargets.clear();
+	depthRotateTargets.clear();
 	targets.clear();
+	stencilTargets.clear();
 	sourceDescriptorSets.clear();
 	displayDescriptorSets.clear();
+	depthRotateDescriptorSets.clear();
 	descriptorSets.clear();
 	quadBuffer.reset();
 	programs.clear();
 	parameters.clear();
+	depthRotatePipeline.reset();
+	depthRotateRenderPass.reset();
 	copyRotatePipeline.reset();
 	copyPipeline.reset();
 	copyFragmentShader.reset();

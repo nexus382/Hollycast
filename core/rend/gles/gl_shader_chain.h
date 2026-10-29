@@ -14,6 +14,7 @@
 #include "rend/postprocess/shader_chain.h"
 
 #include <array>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -30,7 +31,7 @@ public:
 	// The previous chain remains available when loading or compilation fails.
 	bool activate(const postprocess::ShaderChain& chain, std::string& error);
 	GlFramebuffer *render(GLuint sourceTexture, const postprocess::ShaderFrameInfo& frame,
-			bool& presentationTransformApplied);
+			bool& presentationTransformApplied, GLuint depthTexture = 0, int depthWidth = 0, int depthHeight = 0);
 	bool hasActiveChain() const { return !programs.empty(); }
 	void term();
 
@@ -63,6 +64,7 @@ private:
 		postprocess::ShaderWrapMode wrapMode = postprocess::ShaderWrapMode::ClampToEdge;
 		GLuint sampler = 0;
 		GLuint mipSampler = 0;
+		GLenum textureTarget = GL_TEXTURE_2D;
 	};
 	struct LookupTexture {
 		postprocess::ShaderPresetTexture config;
@@ -75,9 +77,12 @@ private:
 		GLint sourceSizeUniform = -1;
 		GLint originalSizeUniform = -1;
 		GLint outputSizeUniform = -1;
+		GLint finalViewportSizeUniform = -1;
+		GLint hasDepthUniform = -1;
 		GLint frameCountUniform = -1;
 		GLint rotationUniform = -1;
-		bool duckStationGlsl = false;
+		bool displayGlsl = false;
+		bool nativeFxStages = false;
 		std::vector<ParameterUniform> parameters;
 		std::vector<ResourceUniform> resources;
 		std::vector<bool> outputNeedsMipmaps;
@@ -85,8 +90,28 @@ private:
 		int targetWidth = 0;
 		int targetHeight = 0;
 	};
+	struct OutputTarget {
+		std::unique_ptr<GlFramebuffer> framebuffer;
+		GLuint texture = 0;
+		GLenum target = GL_TEXTURE_2D;
+		int width = 0, height = 0;
+		uint32_t depth = 1;
+		std::string formatName;
+		~OutputTarget() { if (texture) glcache.DeleteTextures(1, &texture); }
+		GLuint getTexture() const { return framebuffer ? framebuffer->getTexture() : texture; }
+		int getWidth() const { return width; }
+		int getHeight() const { return height; }
+	};
+	struct StencilTarget {
+		GLuint buffer = 0;
+		uint32_t frame = 0, layerIndex = postprocess::InvalidShaderPass;
+		bool initialized = false;
+		~StencilTarget() { if (buffer) glDeleteRenderbuffers(1, &buffer); }
+	};
+	std::map<std::pair<int, int>, StencilTarget> stencilTargets;
+	std::vector<postprocess::ShaderParameter> hostParameters;
 	struct MrtTarget {
-		std::vector<std::unique_ptr<GlFramebuffer>> outputs;
+		std::vector<std::unique_ptr<OutputTarget>> outputs;
 		GLuint framebuffer = 0;
 		uint32_t renderedFrame = 0;
 		bool initialized = false;
@@ -102,6 +127,9 @@ private:
 	};
 	using MrtTargetRing = std::vector<std::unique_ptr<MrtTarget>>;
 
+	GLuint transferReadFramebuffer = 0, transferDrawFramebuffer = 0;
+	bool copyOutput(const OutputTarget& source, OutputTarget& destination, std::string& error);
+	bool clearOutput(OutputTarget& destination, std::string& error);
 	bool ensureResources();
 	bool ensureMrtTarget(MrtTarget& target, const postprocess::ShaderPass& pass, int width, int height, std::string& error);
 	bool ensureLookupTextures(std::string& error);
@@ -112,12 +140,14 @@ private:
 	bool compileCandidate(const postprocess::ShaderChain& chain, std::vector<Program>& candidate, std::string& error);
 	static void deletePrograms(std::vector<Program>& programs);
 
+	std::array<int, 4> stencilFrameSize {};
 	std::vector<Program> programs;
 	std::vector<std::string> configuredPaths;
 	uint64_t configuredGeneration = 0;
 	std::string activePath;
 	std::vector<MrtTargetRing> targets;
 	std::unique_ptr<GlFramebuffer> displayInput;
+	std::unique_ptr<GlFramebuffer> depthInput;
 	std::unique_ptr<GlFramebuffer> mipmapInput;
 	std::vector<HistoryTarget> sourceHistory;
 	uint32_t sourceHistoryDepth = 1;
@@ -125,6 +155,10 @@ private:
 	uint64_t parameterGeneration = 0;
 	std::vector<LookupTexture> lookupTextures;
 	std::unique_ptr<GlBuffer> vertexBuffer;
+	GLuint depthCopyProgram = 0;
+	GLint depthCopySourceUniform = -1;
+	GLint depthCopyScaleUniform = -1;
+	GLint depthCopyRotateUniform = -1;
 	GLuint copyProgram = 0;
 	GLuint copyRotateProgram = 0;
 	GLint copySourceUniform = -1;
