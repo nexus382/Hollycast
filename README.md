@@ -1,3 +1,5 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
+
 # Hollycast
 
 ![Hollycast](banner.png)
@@ -35,7 +37,7 @@ We are committed to maintaining the high bar for speed and precision set by the 
 
 Hollycast aims to support every platform and release offered by Flycast. If Flycast can do it, Hollycast will too, ideally with a newer looking and more feature rich environment while keeping the performance you have come to know and love from Flyinghead's hard work and dedication on Flycast.
 
-> **Note:** Hollycast is under active development. If you'd like to contribute, please [join our Discord](https://discord.gg/pYVqGqvFJW) and open a Feature Request to discuss your plans before submitting code.
+> **Note:** Hollycast is under active development. If you'd like to contribute, please [join our Discord](https://discord.gg/8s8Ecc2BxR) and open a Feature Request to discuss your plans before submitting code.
 
 ### Build Prerequisites for Windows
 
@@ -78,7 +80,7 @@ Run the following to pull down the repository and all submodules.
 
 ```bash
 # Clone repo
-git clone https://github.com/OrangeFox86/Hollycast.git
+git clone https://github.com/nexus382/Hollycast.git
 cd Hollycast
 
 # Ensure symlinks are enabled for this project

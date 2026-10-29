@@ -8334,13 +8334,13 @@ void renderAboutTab()
 		ImGui::Text("%s", T("Website"));
 		ImGui::PopStyleColor();
 		ImGui::SameLine();
-		ImGui::TextDisabled("https://github.com/OrangeFox86/HollyCast#readme");
+		ImGui::TextDisabled("https://github.com/nexus382/Hollycast#readme");
 
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
 		ImGui::Text("%s", T("Source Code"));
 		ImGui::PopStyleColor();
 		ImGui::SameLine();
-		ImGui::TextDisabled("https://github.com/OrangeFox86/HollyCast");
+		ImGui::TextDisabled("https://github.com/nexus382/Hollycast");
 		ImGui::Spacing();
 	}
 
