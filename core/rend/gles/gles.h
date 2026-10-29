@@ -1,6 +1,6 @@
-#pragma once
 // Portions Copyright 2026 The Hollycast Authors
-
+#pragma once
+#include "rend/sample_filter.h"
 #include "hw/pvr/ta_structs.h"
 #include "hw/pvr/ta_ctx.h"
 #include "hw/pvr/elan_struct.h"
@@ -117,6 +117,8 @@ struct PipelineShader
 	bool fog_clamping;
 	bool trilinear;
 	int palette;	// 1 if nearest, 2 if bilinear
+	int sampleTextureFilter;
+	int maxFilteredTextureSize;
 	bool naomi2;
 	bool divPosZ;
 	bool dithering;
@@ -403,7 +405,7 @@ void writeFramebufferToVRAM();
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
-		int palette, bool naomi2, bool dithering, bool secAccum);
+		int palette, int sampleTextureFilter, int maxFilteredTextureSize, bool naomi2, bool dithering, bool secAccum);
 
 GLuint gl_CompileShader(const char* shader, GLuint type);
 GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader);
@@ -468,10 +470,13 @@ public:
 	}
 	TextureCacheData(TextureCacheData&& other) : BaseTextureCacheData(std::move(other)) {
 		std::swap(texID, other.texID);
+		std::swap(uploadedWidth, other.uploadedWidth);
 		std::swap(customTextureObject, other.customTextureObject);
 	}
 
 	GLuint texID = 0;   //gl texture
+	// Level-zero width, including upscaling, custom textures and render targets.
+	u32 uploadedWidth = 0;
 	bool customTextureObject = false;
 	std::string GetId() override { return std::to_string(texID); }
 	void UploadToGPU(int width, int height, const u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded = false) override;

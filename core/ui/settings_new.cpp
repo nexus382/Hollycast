@@ -46,6 +46,7 @@
 #include "log/LogManager.h"
 #include "hw/mem/addrspace.h"
 #include "settings.h"
+#include "emulator.h"
 #include "gui.h"
 #include "boxart/boxart.h"
 #include "IconsFontAwesome6.h"
@@ -57,6 +58,7 @@
 #include "achievements/achievements.h"
 #include "vgamepad.h"
 #include "rend/vmu_window.h"
+#include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstring>
@@ -2125,6 +2127,184 @@ static void managePathList(const char* label, const std::string& singularLabel, 
 // Global state instance
 SettingsUIState g_state;
 
+// Input polling and Android touch dispatch read this flag from other threads.
+static std::atomic<bool> g_textureFilterLiveTune{false};
+
+static void applyPendingSettings()
+{
+	dreampotato::update();
+	if (g_mapleDevicesChangedInSettings)
+	{
+		g_mapleDevicesChangedInSettings = false;
+		if (game_started && settings.platform.isConsole())
+		{
+#if defined(USE_DREAMLINK_DEVICES)
+			reconnectDreamLinks();
+#endif
+			maple_ReconnectDevices();
+			reset_vmus();
+		}
+	}
+	SaveSettings();
+}
+
+// Preserve the stored renderer IDs so old settings files cannot silently select a different filter.
+// ID 14 was Spline36 and is intentionally no longer exposed.
+static constexpr std::array<int, 19> sampleTextureFilterValues { 0, 19, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18 };
+
+static std::array<const char*, 19> getSampleTextureFilterLabels()
+{
+	return {
+		T("Disabled"), T("Nearest-Neighbor"), T("Bilinear"), T("Bilinear / No Edge Blending"), T("Jinc2"),
+		T("Jinc2 / No Edge Blending"), T("MMPX"), T("MMPX Enhanced"), T("MMPX Advanced"),
+		T("Jinc2 Anti-Ring"), T("Jinc2 Sharp Anti-Ring"), T("Jinc2 Mild Anti-Ring"),
+		T("Jinc2 Extra Sharp Anti-Ring"), T("Lanczos2 Anti-Ring"), T("Lanczos3 Anti-Ring"),
+		T("Robidoux"), T("Robidoux Sharp"), T("Bicubic Catmull-Rom"),
+		T("Bicubic Mitchell")
+	};
+}
+
+static int getSampleTextureFilterOptionIndex(int value)
+{
+	for (size_t index = 0; index < sampleTextureFilterValues.size(); ++index)
+		if (sampleTextureFilterValues[index] == value)
+			return static_cast<int>(index);
+	return 0;
+}
+
+static constexpr std::array<int, 8> maxFilteredTextureSizeValues { 8, 16, 32, 64, 128, 256, 512, 1024 };
+
+static std::array<const char*, 8> getMaxFilteredTextureSizeLabels()
+{
+	return { T("8x8"), T("16x16"), T("32x32"), T("64x64"), T("128x128"), T("256x256"), T("512x512"), T("1024x1024+") };
+}
+
+bool textureFilterLiveTuneActive()
+{
+	return g_textureFilterLiveTune.load(std::memory_order_relaxed);
+}
+
+void stopTextureFilterLiveTune()
+{
+	g_textureFilterLiveTune.store(false, std::memory_order_relaxed);
+}
+
+void renderTextureFilterLiveTuneOverlay()
+{
+	if (!textureFilterLiveTuneActive())
+		return;
+	// Recheck the session, but reserve the stateful canPause() check for a pause request.
+	if (!game_started || ggpo::active())
+	{
+		stopTextureFilterLiveTune();
+		return;
+	}
+
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+#ifdef __ANDROID__
+	const float panelHeight = std::max(displaySize.y * .42f, uiScaled(250.f));
+	ImGui::SetNextWindowPos(ImVec2(0.f, displaySize.y - panelHeight), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(displaySize.x, panelHeight), ImGuiCond_Always);
+	flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+#else
+	const float margin = uiScaled(18.f);
+	const ImVec2 panelSize(std::min(uiScaled(620.f), std::max(1.f, displaySize.x - margin * 2.f)),
+			std::min(uiScaled(330.f), std::max(1.f, displaySize.y - uiScaled(96.f))));
+	ImGui::SetNextWindowPos(ImVec2(displaySize.x - panelSize.x - margin, uiScaled(48.f)), ImGuiCond_Once);
+	ImGui::SetNextWindowSize(panelSize, ImGuiCond_Once);
+#endif
+	ImGui::SetNextWindowBgAlpha(.94f);
+
+	bool open = true;
+	bool returnToSettings = false;
+	if (ImGui::Begin(T("Texture Filtering Live Tune###TextureFilteringLiveTune"), &open, flags))
+	{
+		if (ImGui::Button(T("Back to Video Settings")))
+			returnToSettings = true;
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", T("live game preview"));
+		ImGui::Separator();
+		ImGui::TextWrapped("%s", T("Try the filter and its texture-size limit while the game continues behind this panel."));
+		ImGui::Spacing();
+
+		const auto filterLabels = getSampleTextureFilterLabels();
+		if (config::SampleTextureFilter.get() == 14)
+		{
+			config::SampleTextureFilter.set(0);
+			SaveSettings();
+		}
+		int filterSelection = getSampleTextureFilterOptionIndex(config::SampleTextureFilter.get());
+		if (ImGui::BeginCombo(T("Sample Texture Filter"), filterLabels[filterSelection]))
+		{
+#if defined(__ANDROID__)
+			// Combo popups need the same drag-scroll opt-in as Settings lists,
+			// before their selectable rows can hand a finger swipe to the popup.
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
+			for (int index = 0; index < static_cast<int>(filterLabels.size()); ++index)
+			{
+				const bool selected = index == filterSelection;
+				if (ImGui::Selectable(filterLabels[index], selected))
+				{
+					config::SampleTextureFilter.set(sampleTextureFilterValues[index]);
+					SaveSettings();
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
+			ImGui::EndCombo();
+		}
+
+		int sizeSelection = 0;
+		for (size_t index = 0; index < maxFilteredTextureSizeValues.size(); ++index)
+			if (maxFilteredTextureSizeValues[index] == config::MaxFilteredTextureSize.get())
+			{
+				sizeSelection = static_cast<int>(index);
+				break;
+			}
+		const auto sizeLabels = getMaxFilteredTextureSizeLabels();
+		if (ImGui::BeginCombo(T("Filter Resolution Limit"), sizeLabels[sizeSelection]))
+		{
+#if defined(__ANDROID__)
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
+			for (int index = 0; index < static_cast<int>(sizeLabels.size()); ++index)
+			{
+				const bool selected = index == sizeSelection;
+				if (ImGui::Selectable(sizeLabels[index], selected))
+				{
+					config::MaxFilteredTextureSize.set(maxFilteredTextureSizeValues[index]);
+					SaveSettings();
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled("%s", T("Filter resolution limit uses the texture width bucket. Larger textures are left on the normal sampler path."));
+	}
+	ImGui::End();
+
+	if (returnToSettings)
+	{
+		stopTextureFilterLiveTune();
+		gui_open_texture_filter_settings();
+	}
+	else if (!open)
+	{
+		stopTextureFilterLiveTune();
+	}
+}
+
 // Reset state when entering settings screen
 void resetState()
 {
@@ -4157,13 +4337,9 @@ void renderVideoTab()
 		static int currentPresetIndex = 0;
 		static bool presetJustApplied = false;
 
-		// Auto-detect current preset
+		// Include Custom so manual changes cannot leave a stale preset label.
 		if (!presetJustApplied)
-		{
-			VideoPresetLevel detected = detectCurrentPreset();
-			if (detected != VideoPresetLevel::Custom)
-				currentPresetIndex = static_cast<int>(detected);
-		}
+			currentPresetIndex = static_cast<int>(detectCurrentPreset());
 
 		// Build preset labels
 		const char* presetLabels[] = {
@@ -5170,7 +5346,7 @@ void renderVideoTab()
 				));
 		}
 
-		// Texture Filtering
+		// Texture Sampling (legacy sampler override)
 		const std::array<const char*, 3> textureFilterLabels {
 			T("Default"),
 			T("Force Nearest-Neighbor"),
@@ -5182,7 +5358,7 @@ void renderVideoTab()
 
 		SettingsUI::PopupConfig textureFilterCfg {};
 		textureFilterCfg.type = SettingsUI::PopupType::Options;
-		textureFilterCfg.options.label = T("Filtering Mode");
+		textureFilterCfg.options.label = T("Sampler Override");
 		textureFilterCfg.options.icon = ICON_FA_FILTER;
 		textureFilterCfg.options.popupID = Tnop("TextureFilteringPopup");
 		textureFilterCfg.options.options = textureFilterLabels.data();
@@ -5198,15 +5374,186 @@ void renderVideoTab()
 
 		RenderGeneralPopupSettingRow(
 			Tnop("TextureFilteringSetting"),
-			T("Override how textures are filtered (sampled)."),
+			T("Override the sampler mode used when textures are sampled."),
 			textureFilterCfg,
 			T(
-				"Texture Filtering\n"
+				"Texture Sampling Override\n"
 				"Default: uses game behavior.\n"
 				"Force Nearest-Neighbor: crisp/pixelated look.\n"
 				"Force Linear: smoother/blurrier look.\n\n"
 				"For 2D/pixel-art, many users prefer Nearest-Neighbor. For 3D, Linear can look nicer."
 			));
+
+		const auto sampleTextureFilterLabels = getSampleTextureFilterLabels();
+		const std::array<const char*, 20> sampleTextureFilterDescriptions {
+			T(
+				"Sample Texture Filter: Disabled\n"
+				"Uses HollyCast's legacy texture sampling behavior."
+			),
+			T(
+				"Sample Texture Filter: Bilinear\n"
+				"Smooths texture samples with alpha-weighted bilinear interpolation. Good simple baseline."
+			),
+			T(
+				"Sample Texture Filter: Bilinear / No Edge Blending\n"
+				"Smooth bilinear filtering with harder alpha edges to reduce transparent-edge bleeding."
+			),
+			T(
+				"Sample Texture Filter: Jinc2\n"
+				"Windowed Jinc-style reconstruction. Premium smooth option, but sharp edges can show mild ringing."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 / No Edge Blending\n"
+				"Jinc2 reconstruction with harder alpha edges for sprites, UI, and texture-sheet borders."
+			),
+			T(
+				"Sample Texture Filter: MMPX\n"
+				"Pixel-art style reconstruction that preserves hard shapes. Best for 2D artwork, not natural textures."
+			),
+			T(
+				"Sample Texture Filter: MMPX Enhanced\n"
+				"Softer MMPX variant that blends reconstructed pixels back toward the source."
+			),
+			T(
+				"Sample Texture Filter: MMPX Advanced\n"
+				"More aggressive MMPX edge rules. Useful for pixel-art tests, but can be stylized."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Anti-Ring\n"
+				"Jinc2-style reconstruction with halo clamping. Better for signs, logos, HUD art, decals, and alpha edges."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Sharp Anti-Ring\n"
+				"Sharper Jinc2-style reconstruction with anti-ringing. Advanced option for crisp Dreamcast-era texture sheets."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Mild Anti-Ring\n"
+				"Jinc2 reconstruction with mild sharpening and an anti-ringing clamp."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Extra Sharp Anti-Ring\n"
+				"Jinc2 reconstruction with stronger sharpening and an anti-ringing clamp."
+			),
+			T(
+				"Sample Texture Filter: Lanczos2 Anti-Ring\n"
+				"Sharp sinc/Lanczos reconstruction with a smaller radius and halo clamp. Strong everyday texture option."
+			),
+			T(
+				"Sample Texture Filter: Lanczos3 Anti-Ring\n"
+				"Sharper larger-radius Lanczos reconstruction with halo clamp. High quality, but more likely to emphasize edges."
+			),
+			"", // Retired ID 14; keep persisted filter IDs stable.
+			T(
+				"Sample Texture Filter: Robidoux\n"
+				"Balanced cubic reconstruction. Good compromise for painted or photographic Dreamcast-era textures."
+			),
+			T(
+				"Sample Texture Filter: Robidoux Sharp\n"
+				"Sharper Robidoux-style cubic filter. A good candidate for texture packs and detailed environment art."
+			),
+			T(
+				"Sample Texture Filter: Bicubic Catmull-Rom\n"
+				"Classic sharper bicubic reconstruction. Crisp, familiar, and cheaper than the heavier premium filters."
+			),
+			T(
+				"Sample Texture Filter: Bicubic Mitchell\n"
+				"Softer Mitchell-Netravali bicubic reconstruction. Smooth low-ringing option for UI and texture sheets."
+			),
+			T(
+				"Sample Texture Filter: Nearest-Neighbor\n"
+				"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the selected size limit and leaves Flycast's global sampler override at Default."
+			)
+		};
+		if (config::SampleTextureFilter.get() == 14)
+			config::SampleTextureFilter.set(0);
+		int sampleTextureFilterSelection = getSampleTextureFilterOptionIndex(config::SampleTextureFilter.get());
+
+		SettingsUI::PopupConfig sampleTextureFilterCfg {};
+		sampleTextureFilterCfg.type = SettingsUI::PopupType::Options;
+		sampleTextureFilterCfg.options.label = T("Sample Texture Filter");
+		sampleTextureFilterCfg.options.icon = ICON_FA_FILTER;
+		sampleTextureFilterCfg.options.popupID = Tnop("SampleTextureFilterPopup");
+		sampleTextureFilterCfg.options.options = sampleTextureFilterLabels.data();
+		sampleTextureFilterCfg.options.optionCount = static_cast<int>(sampleTextureFilterLabels.size());
+		sampleTextureFilterCfg.options.currentValue = &sampleTextureFilterSelection;
+		sampleTextureFilterCfg.options.valueWidth = 270.0f;
+		sampleTextureFilterCfg.options.description = sampleTextureFilterDescriptions[sampleTextureFilterValues[sampleTextureFilterSelection]];
+		sampleTextureFilterCfg.options.onOptionHighlight = [&](int selectedIndex, const char*) {
+			if (selectedIndex >= 0 && selectedIndex < static_cast<int>(sampleTextureFilterValues.size()))
+				SetSettingsFooterText(sampleTextureFilterDescriptions[sampleTextureFilterValues[selectedIndex]]);
+		};
+		sampleTextureFilterCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(sampleTextureFilterLabels.size()))
+				return false;
+			config::SampleTextureFilter.set(sampleTextureFilterValues[selectedIndex]);
+			return true;
+		};
+
+		const bool sampleTextureFilterSupported = config::RendererType != RenderType::DirectX9;
+		RenderGeneralPopupSettingRow(
+			Tnop("SampleTextureFilterSetting"),
+			T("Choose the sample-time texture filtering algorithm."),
+			sampleTextureFilterCfg,
+			sampleTextureFilterSupported
+				? sampleTextureFilterDescriptions[sampleTextureFilterValues[sampleTextureFilterSelection]]
+				: T("Sample-time filtering is not available on DirectX 9."),
+			!sampleTextureFilterSupported);
+		const auto maxFilteredTextureSizeLabels = getMaxFilteredTextureSizeLabels();
+		int maxFilteredTextureSizeSelection = 5;
+		for (size_t i = 0; i < maxFilteredTextureSizeValues.size(); i++)
+		{
+			if (maxFilteredTextureSizeValues[i] == config::MaxFilteredTextureSize.get())
+			{
+				maxFilteredTextureSizeSelection = static_cast<int>(i);
+				break;
+			}
+		}
+
+		SettingsUI::PopupConfig maxFilteredTextureSizeCfg {};
+		maxFilteredTextureSizeCfg.type = SettingsUI::PopupType::Options;
+		maxFilteredTextureSizeCfg.options.label = T("Max Filtered Texture Size");
+		maxFilteredTextureSizeCfg.options.icon = ICON_FA_EXPAND;
+		maxFilteredTextureSizeCfg.options.popupID = Tnop("MaxFilteredTextureSizePopup");
+		maxFilteredTextureSizeCfg.options.options = maxFilteredTextureSizeLabels.data();
+		maxFilteredTextureSizeCfg.options.optionCount = static_cast<int>(maxFilteredTextureSizeLabels.size());
+		maxFilteredTextureSizeCfg.options.currentValue = &maxFilteredTextureSizeSelection;
+		maxFilteredTextureSizeCfg.options.valueWidth = 170.0f;
+		maxFilteredTextureSizeCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(maxFilteredTextureSizeValues.size()))
+				return false;
+			config::MaxFilteredTextureSize.set(maxFilteredTextureSizeValues[selectedIndex]);
+			return true;
+		};
+
+		RenderGeneralPopupSettingRow(
+			Tnop("MaxFilteredTextureSizeSetting"),
+			T("Limit filtering to smaller texture groups."),
+			maxFilteredTextureSizeCfg,
+			T(
+				"Max Filtered Texture Size\n"
+				"Controls the largest texture group affected by texture upscaling and sample texture filters.\n"
+				"Upscaling checks the original width. Sample filters check the uploaded width, including upscaling and replacement textures.\n"
+				"Buckets use texture width, so 8x8 includes 8x16 and 8x32, while 16x16 includes 16x8.\n"
+				"1024x1024+ includes larger texture-pack assets.\n\n"
+				"Live preview updates sample-time filtering immediately. Already-uploaded texture-upscale results may require a cache refresh or game restart."
+			));
+		ImGui::Spacing();
+		const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause());
+		if (!canLiveTune)
+			ImGui::BeginDisabled();
+		if (ImGui::Button(T("Texture Filtering Live Tune"), ScaledVec2(260.f, 34.f)))
+		{
+			applyPendingSettings();
+			GamepadDevice::load_system_mappings();
+			g_textureFilterLiveTune.store(true, std::memory_order_relaxed);
+			// Resume through Loading when replacement textures need a refresh or preload.
+			gui_resume_game();
+		}
+		if (!canLiveTune)
+			ImGui::EndDisabled();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("%s", !game_started ? T("Start a game to tune texture filtering over its current frame.")
+					: T("The current game must be pausable for live texture filtering."));
 
 	}
 
@@ -9019,21 +9366,7 @@ void renderSettingsNew()
 			ImGui::PushFont(settingsTitleFont);
 
 		const std::function<void()> exitSettings = [&]() {
-			dreampotato::update();
-			if (g_mapleDevicesChangedInSettings)
-			{
-				g_mapleDevicesChangedInSettings = false;
-				if (game_started && settings.platform.isConsole())
-				{
-#if defined(USE_DREAMLINK_DEVICES)
-					reconnectDreamLinks();
-#endif
-					maple_ReconnectDevices();
-					reset_vmus();
-				}
-			}
-
-			SaveSettings();
+			applyPendingSettings();
 
 			if (game_started)
 				gui_setState(GuiState::Commands);

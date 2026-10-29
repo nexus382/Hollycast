@@ -2136,6 +2136,8 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
         // DuckStation-style menu button layout
         {
             BeginMenuButtons menuButtons;
+            int highlightedStorageIdx = -1;
+            const char* highlightedOptionText = nullptr;
 
             for (int i = 0; i < cfg.optionCount; i++) {
                 int storageIdx = cfg.storageIndexMap ? cfg.storageIndexMap(i) : i;
@@ -2172,7 +2174,16 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
                 if (isSelected) {
                     ImGui::SetItemDefaultFocus();
                 }
+                if (ImGui::IsItemHovered() || ImGui::IsItemFocused()) {
+                    highlightedStorageIdx = storageIdx;
+                    highlightedOptionText = cfg.options[i];
+                } else if (isSelected && highlightedStorageIdx < 0) {
+                    highlightedStorageIdx = storageIdx;
+                    highlightedOptionText = cfg.options[i];
+                }
             }
+            if (cfg.onOptionHighlight && highlightedStorageIdx >= 0)
+                cfg.onOptionHighlight(highlightedStorageIdx, highlightedOptionText);
         } // End menu buttons
 
         ImGui::EndPopup();

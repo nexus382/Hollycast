@@ -2,6 +2,7 @@
     Created on: Nov 6, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -208,7 +209,10 @@ private:
 		hash |= ((u64)gpuPalette << 26) | ((u64)pass << 28) | ((u64)pp->isNaomi2() << 30);
 		hash |= (u64)(!settings.platform.isNaomi2() && config::NativeDepthInterpolation) << 31;
 		hash |= (u64)(pp->tcw.PixelFmt == PixelBumpMap) << 32;
-		hash |= (u64)useBDA << 33;
+		hash |= (u64)useBDA << 34;
+		const sample_filter::Settings filter(pp->pcw.Texture && pp->tcw.PixelFmt != PixelBumpMap ? config::SampleTextureFilter.get() : 0,
+				config::MaxFilteredTextureSize.get());
+		hash |= (u64)filter.key() << 35;
 
 		return hash;
 	}

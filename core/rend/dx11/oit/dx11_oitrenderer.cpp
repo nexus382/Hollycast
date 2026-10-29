@@ -23,6 +23,7 @@
 #include "../dx11context.h"
 #include "../dx11_renderer.h"
 #include "rend/transform_matrix.h"
+#include "rend/sample_filter.h"
 #include "../dx11_texture.h"
 #include "dx11_oitshaders.h"
 #include "../dx11_renderstate.h"
@@ -167,6 +168,11 @@ struct DX11OITRenderer : public DX11Renderer
 		ComPtr<ID3D11VertexShader> vertexShader = shaders.getVertexShader(gp->pcw.Gouraud, gp->isNaomi2(), false, pass != DX11OITShaders::Depth);
 		deviceContext->VSSetShader(vertexShader, nullptr, 0);
 
+		const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+				? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
+		const int sampleTextureFilter = filter.mode;
+		const int maxFilteredTextureSize = filter.maxSize;
+
 		PixelPolyConstants constants;
 		if (gp->pcw.Texture && gp->tsp.FilterMode > 1 && Type != ListType_Punch_Through && gp->tcw.MipMapped == 1)
 		{
@@ -233,7 +239,9 @@ struct DX11OITRenderer : public DX11Renderer
 					clipmode == TileClipping::Inside,
 					two_volumes_mode,
 					false,
-					pass);
+					pass,
+					useTexture ? sampleTextureFilter : 0,
+					useTexture ? maxFilteredTextureSize : 0);
 		}
 		else
 		{
@@ -257,7 +265,9 @@ struct DX11OITRenderer : public DX11Renderer
 					clipmode == TileClipping::Inside,
 					two_volumes_mode,
 					gp->tsp.SrcSelect == 1 && Type == ListType_Translucent && !SortingEnabled,
-					pass);
+					pass,
+					useTexture ? sampleTextureFilter : 0,
+					useTexture ? maxFilteredTextureSize : 0);
 
 		}
 		deviceContext->PSSetShader(pixelShader, nullptr, 0);
@@ -319,8 +329,11 @@ struct DX11OITRenderer : public DX11Renderer
 				int slot = i == 0 ? 0 : 3;
 				deviceContext->PSSetShaderResources(slot, 1, &texture->textureView.get());
 				TSP tsp = i == 0 ? gp->tsp : gp->tsp1;
+				const bool reconstruct = filter.appliesTo(texture->sampledWidth());
 				bool linearFiltering;
-				if (gpuPalette != 0)
+				if (texture->gpuPalette)
+					linearFiltering = false;
+				else if (reconstruct)
 					linearFiltering = false;
 				else if (config::TextureFiltering == 0)
 					linearFiltering = tsp.FilterMode != 0;
@@ -328,7 +341,7 @@ struct DX11OITRenderer : public DX11Renderer
 					linearFiltering = false;
 				else
 					linearFiltering = true;
-		        auto sampler = samplers->getSampler(linearFiltering, tsp.ClampU, tsp.ClampV, tsp.FlipU, tsp.FlipV, Type == ListType_Punch_Through);
+				auto sampler = samplers->getSampler(linearFiltering, tsp.ClampU, tsp.ClampV, tsp.FlipU, tsp.FlipV, Type == ListType_Punch_Through, reconstruct);
 		        deviceContext->PSSetSamplers(slot, 1, &sampler.get());
 			}
 		}
