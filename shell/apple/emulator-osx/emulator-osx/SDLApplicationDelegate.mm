@@ -341,7 +341,7 @@ static void addMenuSeparator(NSMenu *menu)
 
 - (void)checkForUpdates:(id)sender
 {
-	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://flyinghead.github.io/flycast-builds/"]];
+	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://nexus382.github.io/Hollycast/"]];
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem
