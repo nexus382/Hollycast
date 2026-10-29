@@ -46,6 +46,7 @@ Option<bool> ForceFreePlay("ForceFreePlay", true);
 Option<bool, false> FetchBoxart("FetchBoxart", true);
 Option<bool, false> BoxartDisplayMode("BoxartDisplayMode", true);
 Option<int, false> BoxartSourceMode("BoxartSourceMode", 0);
+Option<int, false> BoxartOnlineSource("BoxartOnlineSource", 0);
 Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
 Option<int, false> LibraryImageSource("Dreamcast.LibraryImageSource", 0);
 Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", 0);

@@ -34,6 +34,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/SDLControllerMappingTest.cpp
         src/oslib/I18nTest.cpp
         src/ui/BoxartTest.cpp
+        src/ui/LaunchBoxTest.cpp
         src/ui/LibraryTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp

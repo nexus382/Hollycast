@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include "ui/boxart/boxart.h"
+#include "ui/boxart/launchbox.h"
 #include "ui/game_scanner.h"
 #include "reios/reios.h"
 #include "imgread/isofs.h"
@@ -149,6 +150,7 @@ protected:
 		oldDataPath = get_writable_data_path("");
 		oldFetchBoxart = config::FetchBoxart;
 		oldSourceMode = config::BoxartSourceMode;
+		oldOnlineSource = config::BoxartOnlineSource;
 		oldBoxartPath = config::BoxartPath;
 		directory = std::filesystem::temp_directory_path()
 				/ ("hollycast-boxart-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -156,6 +158,7 @@ protected:
 		set_user_data_dir(directory.string());
 		config::FetchBoxart = false;
 		config::BoxartSourceMode = static_cast<int>(BoxartSourceMode::ScrapedOnly);
+		config::BoxartOnlineSource = static_cast<int>(config::OnlineArtworkSource::TheGamesDB);
 		config::BoxartPath = "";
 		boxart = std::make_unique<Boxart>();
 		media.name = "No artwork";
@@ -170,6 +173,7 @@ protected:
 		boxart.reset();
 		config::FetchBoxart = oldFetchBoxart;
 		config::BoxartSourceMode = oldSourceMode;
+		config::BoxartOnlineSource = oldOnlineSource;
 		config::BoxartPath = oldBoxartPath;
 		set_user_data_dir(oldDataPath);
 		std::filesystem::remove_all(directory);
@@ -235,7 +239,7 @@ protected:
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 		GameBoxart art;
 		do {
-			art = boxart->getBoxart(game);
+			art = boxart->getBoxartAndLoad(game);
 			if (!art.busy)
 				return art;
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -278,8 +282,59 @@ protected:
 	std::string oldDataPath;
 	bool oldFetchBoxart;
 	int oldSourceMode;
+	int oldOnlineSource;
 	std::string oldBoxartPath;
 };
+
+TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
+{
+	const GameBoxart offline = finishOfflineFetch();
+	const std::string image = (directory / "boxart" / "launchbox.png").string();
+	std::ofstream(image) << "cached cover";
+	const json matches = {{LaunchBoxCatalog::identity(offline), {
+		{"id", 2416}, {"name", "Matched game"}, {"url", "https://images.launchbox-app.com/cover.png"}, {"path", image}}}};
+	std::ofstream(directory / "boxart" / "launchbox-matches.json")
+		<< json({{"version", 1}, {"matches", matches}}).dump();
+	config::BoxartOnlineSource = static_cast<int>(config::OnlineArtworkSource::LaunchBox);
+	config::FetchBoxart = true;
+	boxart->invalidateOfflineArtwork();
+	const GameBoxart original = finishOfflineFetch();
+	ASSERT_EQ(2416, original.launchboxId);
+	ASSERT_EQ(image, original.boxartPath);
+	restart();
+	std::filesystem::rename(media.path, directory / "A renamed game.cue");
+	media.fileName = "A renamed game.cue";
+	media.name = "An arbitrary display name";
+	media.path = (directory / media.fileName).string();
+	const GameBoxart renamed = finishOfflineFetch();
+	EXPECT_EQ("TEST-0001", renamed.uniqueId);
+	EXPECT_EQ("Metadata survives", renamed.searchName);
+	EXPECT_EQ(2416, renamed.launchboxId);
+	EXPECT_EQ(image, renamed.boxartPath);
+	EXPECT_EQ(static_cast<int>(config::OnlineArtworkSource::LaunchBox), renamed.scrapedProvider);
+	restart();
+	EXPECT_EQ(2416, boxart->getBoxart(media).launchboxId);
+}
+
+TEST_F(BoxartTest, SwitchingProviderRearmsExistingOnlineResult)
+{
+	finishOfflineFetch();
+	json database = readDatabase();
+	database[0]["scraped"] = true;
+	database[0]["scraped_provider"] = 0;
+	const std::string image = (directory / "old.png").string();
+	std::ofstream(image) << "previous artwork";
+	database[0]["boxart_path"] = image;
+	database[0]["boxart_url"] = "https://example.test/old.png";
+	writeDatabase(database);
+	restart();
+	config::BoxartOnlineSource = static_cast<int>(config::OnlineArtworkSource::LaunchBox);
+	boxart->queueBoxart(media);
+	const GameBoxart pending = boxart->getBoxart(media);
+	EXPECT_FALSE(pending.scraped);
+	EXPECT_EQ(image, pending.boxartPath);
+	EXPECT_EQ(OfflineArtState::NoArtwork, pending.offlineArtState);
+}
 
 TEST_F(BoxartTest, NoArtworkDoesNotRepeatOfflineFetchAndPreservesMetadata)
 {

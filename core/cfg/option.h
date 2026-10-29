@@ -372,6 +372,8 @@ extern Option<bool> ForceFreePlay;
 extern Option<bool, false> FetchBoxart;
 extern Option<bool, false> BoxartDisplayMode;
 extern Option<int, false> BoxartSourceMode; // 0 -> Scraped, 1 -> Physical Media, 2 -> Custom with scraped fallback
+enum class OnlineArtworkSource { TheGamesDB = 0, LaunchBox = 1 };
+extern Option<int, false> BoxartOnlineSource;
 enum class LibraryDisplayStyleMode
 {
 	Classic = 0,
