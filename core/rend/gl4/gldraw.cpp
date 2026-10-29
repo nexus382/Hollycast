@@ -501,10 +501,9 @@ OITFramebuffer::OITFramebuffer(int width, int height, GLuint texId, GLuint depth
 	bind();
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texId, 0);
 
-	// These textures are owned by gl4CreateTextures/gl4DeleteTextures. Keep
-	// them separate from renderbuffers so secondary accumulation can share depth.
+	// OIT owns a depth/stencil texture rather than a renderbuffer. Expose it
+	// for display effects and the secondary accumulation target to share.
 	this->depthTexture = depth != 0 ? depth : stencil;
-	this->ownsDepthAttachment = false;
 	glcache.BindTexture(GL_TEXTURE_2D, this->depthTexture); glCheck();
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
