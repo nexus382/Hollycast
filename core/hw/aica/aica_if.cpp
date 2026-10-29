@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	aica interface
 		Handles RTC, Display mode reg && arm reset reg !
 	arm7 is handled on a separate arm plugin now
@@ -402,7 +403,7 @@ static void Write_SB_ADST(u32 addr, u32 data)
 			SB_ADSUSP &= ~0x10;
 
 			// Schedule the end of DMA transfer interrupt
-			int cycles = len * (SH4_MAIN_CLOCK / 2 / G2_BUS_CLOCK);       // 16 bits @ 25 MHz
+			int cycles = len * (SH4_MAIN_CLOCK / 2 / G2_BUS_CLOCK) * 2;
 			if (cycles <= 512)
 				dma_end_sched(0, 0, 0, nullptr);
 			else
@@ -544,6 +545,9 @@ void serialize(Serializer& ser)
 	ser << aica_reg;
 
 	sgc::serialize(ser);
+	sh4_sched_serialize(ser, aica_schid);
+	sh4_sched_serialize(ser, rtc_schid);
+	sh4_sched_serialize(ser, dma_sched_id);
 }
 
 void deserialize(Deserializer& deser)
@@ -559,10 +563,7 @@ void deserialize(Deserializer& deser)
 	deser >> arm::armFiqEnable;
 	deser >> arm::armMode;
 	deser >> arm::Arm7Enabled;
-	if (deser.version() >= Deserializer::V19)
-		deser >> arm::arm7ClockTicks;
-	else
-		arm::arm7ClockTicks = 0;
+	deser >> arm::arm7ClockTicks;
 
 	dsp::state.deserialize(deser);
 
@@ -573,11 +574,7 @@ void deserialize(Deserializer& deser)
 	}
 
 	if (!deser.rollback())
-	{
 		aica_ram.deserialize(deser);
-		if (settings.platform.isAtomiswave())
-			deser.skip(6_MB, Deserializer::V30);
-	}
 	deser >> VREG;
 	deser >> ARMRST;
 	deser >> rtc_EN;
@@ -586,6 +583,11 @@ void deserialize(Deserializer& deser)
 	deser >> aica_reg;
 
 	sgc::deserialize(deser);
+	if (deser.version() >= Deserializer::V62) {
+		sh4_sched_deserialize(deser, aica_schid);
+		sh4_sched_deserialize(deser, rtc_schid);
+		sh4_sched_deserialize(deser, dma_sched_id);
+	}
 }
 
 } // namespace aica

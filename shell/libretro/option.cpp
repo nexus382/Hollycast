@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -69,6 +70,7 @@ Option<bool> DumpTextures(CORE_OPTION_NAME "_dump_textures");
 Option<bool> DumpUniqueTextures(CORE_OPTION_NAME "_dump_unique_textures");
 Option<bool> DumpReplacedTextures(CORE_OPTION_NAME "_dump_replaced_textures");
 Option<int> ScreenStretching("", 100);
+Option<bool> StretchToFill("");
 Option<bool> Fog(CORE_OPTION_NAME "_fog", true);
 Option<bool> FloatVMUs("");
 Option<bool> Rotate90("");
@@ -91,6 +93,7 @@ Option<bool> VSync("", true);
 Option<bool> ThreadedRendering(CORE_OPTION_NAME "_threaded_rendering", true);
 Option<int> AnisotropicFiltering(CORE_OPTION_NAME "_anisotropic_filtering");
 Option<int> TextureFiltering(CORE_OPTION_NAME "_texture_filtering");
+Option<int> SampleTextureFilter("", 0); // Keep reconstruction disabled until exposed as a core option.
 Option<bool> PowerVR2Filter(CORE_OPTION_NAME "_pvr2_filtering");
 Option<int64_t> PixelBufferSize("", 512_MB);
 IntOption PerPixelLayers(CORE_OPTION_NAME "_oit_layers");

@@ -23,6 +23,7 @@
 #include "../dx11context.h"
 #include "../dx11_renderer.h"
 #include "rend/transform_matrix.h"
+#include "rend/sample_filter.h"
 #include "../dx11_texture.h"
 #include "dx11_oitshaders.h"
 #include "../dx11_renderstate.h"
@@ -167,6 +168,11 @@ struct DX11OITRenderer : public DX11Renderer
 		ComPtr<ID3D11VertexShader> vertexShader = shaders.getVertexShader(gp->pcw.Gouraud, gp->isNaomi2(), false, pass != DX11OITShaders::Depth);
 		deviceContext->VSSetShader(vertexShader, nullptr, 0);
 
+		const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+				? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
+		const int sampleTextureFilter = filter.mode;
+		const int maxFilteredTextureSize = filter.maxSize;
+
 		PixelPolyConstants constants;
 		if (gp->pcw.Texture && gp->tsp.FilterMode > 1 && Type != ListType_Punch_Through && gp->tcw.MipMapped == 1)
 		{
@@ -175,8 +181,9 @@ struct DX11OITRenderer : public DX11Renderer
 				// Trilinear pass A
 				constants.trilinearAlpha = 1.f - constants.trilinearAlpha;
 		}
-		else
+		else {
 			constants.trilinearAlpha = 1.f;
+		}
 
 		Rect clip_rect;
 		TileClipping clipmode = setTileClip(gp->tileclip, clip_rect);
@@ -189,7 +196,26 @@ struct DX11OITRenderer : public DX11Renderer
 			else if (config::TextureFiltering == 2)
 				gpuPalette = 2; // force linear
 		}
-
+		if constexpr (pass == DX11OITShaders::Color && Type == ListType_Translucent && !SortingEnabled)
+		{
+			if (gp->tsp.DstSelect == 1)
+			{
+				if (!renderingToSecAccum)
+				{
+					renderingToSecAccum = true;
+					makeSecondAccumFB();
+					ID3D11ShaderResourceView * const nullView = nullptr;
+					deviceContext->PSSetShaderResources(6, 1, &nullView);
+					deviceContext->OMSetRenderTargetsAndUnorderedAccessViews(1, &fbSecondAccum.get(), depthTexView, 0, D3D11_KEEP_UNORDERED_ACCESS_VIEWS, nullptr, nullptr);
+				}
+			}
+			else if (renderingToSecAccum)
+			{
+				renderingToSecAccum = false;
+				deviceContext->OMSetRenderTargetsAndUnorderedAccessViews(1, &opaqueRenderTarget.get(), depthTexView, 0, D3D11_KEEP_UNORDERED_ACCESS_VIEWS, nullptr, nullptr);
+				deviceContext->PSSetShaderResources(6, 1, &fbSecondAccumView.get());
+			}
+		}
 		// Two volumes mode only supported for OP and PT
 		bool two_volumes_mode = (gp->tsp1.full != (u32)-1) && Type != ListType_Translucent;
 		bool useTexture;
@@ -212,7 +238,10 @@ struct DX11OITRenderer : public DX11Renderer
 					useTexture,
 					clipmode == TileClipping::Inside,
 					two_volumes_mode,
-					pass);
+					false,
+					pass,
+					useTexture ? sampleTextureFilter : 0,
+					useTexture ? maxFilteredTextureSize : 0);
 		}
 		else
 		{
@@ -235,7 +264,10 @@ struct DX11OITRenderer : public DX11Renderer
 					Type == ListType_Punch_Through,
 					clipmode == TileClipping::Inside,
 					two_volumes_mode,
-					pass);
+					gp->tsp.SrcSelect == 1 && Type == ListType_Translucent && !SortingEnabled,
+					pass,
+					useTexture ? sampleTextureFilter : 0,
+					useTexture ? maxFilteredTextureSize : 0);
 
 		}
 		deviceContext->PSSetShader(pixelShader, nullptr, 0);
@@ -297,8 +329,11 @@ struct DX11OITRenderer : public DX11Renderer
 				int slot = i == 0 ? 0 : 3;
 				deviceContext->PSSetShaderResources(slot, 1, &texture->textureView.get());
 				TSP tsp = i == 0 ? gp->tsp : gp->tsp1;
+				const bool reconstruct = filter.appliesTo(texture->sampledWidth());
 				bool linearFiltering;
-				if (gpuPalette != 0)
+				if (texture->gpuPalette)
+					linearFiltering = false;
+				else if (reconstruct)
 					linearFiltering = false;
 				else if (config::TextureFiltering == 0)
 					linearFiltering = tsp.FilterMode != 0;
@@ -306,7 +341,7 @@ struct DX11OITRenderer : public DX11Renderer
 					linearFiltering = false;
 				else
 					linearFiltering = true;
-		        auto sampler = samplers->getSampler(linearFiltering, tsp.ClampU, tsp.ClampV, tsp.FlipU, tsp.FlipV, Type == ListType_Punch_Through);
+				auto sampler = samplers->getSampler(linearFiltering, tsp.ClampU, tsp.ClampV, tsp.FlipU, tsp.FlipV, Type == ListType_Punch_Through, reconstruct);
 		        deviceContext->PSSetSamplers(slot, 1, &sampler.get());
 			}
 		}
@@ -456,7 +491,18 @@ struct DX11OITRenderer : public DX11Renderer
 		deviceContext->PSSetShaderResources(0, 1, &opaqueTextureView.get());
         auto sampler = samplers->getSampler(false);
         deviceContext->PSSetSamplers(0, 1, &sampler.get());
-		deviceContext->RSSetScissorRects(1, &scissorRect);
+		D3D11_RECT rect {};
+		if (rendContext->isRTT)
+		{
+			rect.right = rendContext->framebufferWidth;
+			rect.bottom = rendContext->framebufferHeight;
+		}
+		else
+		{
+			rect.right = width;
+			rect.bottom = height;
+		}
+		deviceContext->RSSetScissorRects(1, &rect);
 		deviceContext->OMSetDepthStencilState(depthStencilStates.getState(false, false, 0, false), 0);
 		setCullMode(0);
 
@@ -593,6 +639,7 @@ struct DX11OITRenderer : public DX11Renderer
 			{
 				deviceContext->OMSetRenderTargetsAndUnorderedAccessViews(1, &opaqueRenderTarget.get(), depthTexView, 0, D3D11_KEEP_UNORDERED_ACCESS_VIEWS, nullptr, nullptr);
 				drawList<ListType_Translucent, false, DX11OITShaders::Color>(rendContext->global_param_tr, previous_pass.tr_count, tr_count);
+				renderingToSecAccum = false;
 			}
 			if (render_pass < render_pass_count - 1)
 			{
@@ -640,8 +687,11 @@ struct DX11OITRenderer : public DX11Renderer
 
 	bool Render() override
 	{
+		const bool is_rtt = rendContext->isRTT;
+#ifndef LIBRETRO
+		DX11GpuTimingScope gpuTiming(DX11Context::Instance(), !is_rtt);
+#endif
 		resetContextState();
-		bool is_rtt = rendContext->isRTT;
 #ifndef LIBRETRO
 		if (!is_rtt)
 			sceneDepthValid = true;

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "types.h"
 #include "md5/md5.h"
@@ -11,6 +12,7 @@
 #include <thread>
 #include <vector>
 #include <functional>
+#include <type_traits>
 #include <cassert>
 #include <ctime>
 
@@ -76,6 +78,8 @@ std::string get_writable_config_path(const std::string& filename);
 std::string get_writable_data_path(const std::string& filename);
 std::string get_readonly_config_path(const std::string& filename);
 std::string get_readonly_data_path(const std::string& filename);
+// Snapshot the default search order for background file inspection.
+std::vector<std::string> get_readonly_data_dirs();
 bool file_exists(const std::string& filename);
 bool make_directory(const std::string& path);
 
@@ -103,6 +107,9 @@ public:
 
 	void zero() {
 		std::memset(data, 0, size);
+	}
+	size_t getSize() const {
+		return size;
 	}
 
 	u8& operator [](size_t i) {
@@ -187,6 +194,10 @@ std::string strprintf(const char *format, Args ... args)
 	return out;
 }
 
+namespace hostfs {
+class File;
+}
+
 class MD5Sum
 {
 	MD5_CTX ctx;
@@ -209,9 +220,11 @@ public:
 			MD5_Update(&ctx, buf, len);
 		return *this;
 	}
+	MD5Sum& add(hostfs::File *file);
 
 	template<typename T>
 	MD5Sum& add(const T& v) {
+		static_assert(!std::is_pointer<T>::value, "MD5Sum::add() would hash the pointer value, not the data it points to");
 		MD5_Update(&ctx, &v, (unsigned long)sizeof(T));
 		return *this;
 	}

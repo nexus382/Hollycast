@@ -1,4 +1,5 @@
 #pragma once
+/* Portions Copyright 2026 The Hollycast Authors */
 #include "types.h"
 #include "ta_structs.h"
 #include "pvr_regs.h"
@@ -415,6 +416,7 @@ u32 ta_get_list_type();
 void ta_set_list_type(u32 listType);
 void ta_parse_reset();
 void getRegionTileAddrAndSize(u32& address, u32& size);
+void setTileClipping(rend_context& ctx);
 
 void sortTriangles(rend_context& ctx, RenderPass& pass, const RenderPass& previousPass);
 void sortPolyParams(std::vector<PolyParam>& polys, int first, int end, rend_context& ctx);

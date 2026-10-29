@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -25,6 +26,10 @@
 #include "cfg/option.h"
 #include "oslib/oslib.h"
 #include "oslib/i18n.h"
+#ifndef LIBRETRO
+#include "ui/settings_new.h"
+#endif
+#include "net_platform.h"
 #include <algorithm>
 
 namespace ggpo
@@ -36,6 +41,9 @@ static void getLocalInput(MapleInputState inputState[4])
 {
 	if (!config::ThreadedRendering)
 		os_UpdateInputState();
+#ifndef LIBRETRO
+	const bool captureInput = SettingsNew::liveTuneActive();
+#endif
 	std::lock_guard<std::mutex> lock(relPosMutex);
 	for (int player = 0; player < 4; player++)
 	{
@@ -65,6 +73,12 @@ static void getLocalInput(MapleInputState inputState[4])
 		mo_x_delta[player] -= relX;
 		mo_y_delta[player] -= relY;
 		mo_wheel_delta[player] -= wheel;
+#ifndef LIBRETRO
+		// Keep raw controls available to ImGui, but discard gameplay input and mouse
+		// deltas while tuning so they cannot leak into the game or accumulate on resume.
+		if (captureInput)
+			state = {};
+#endif
 	}
 }
 
@@ -595,6 +609,25 @@ void startSession(int localPort, int localPlayerNum)
 		peerPort = atoi(config::NetworkServer.get().substr(colon + 1).c_str());
 	}
 	player.type = GGPO_PLAYERTYPE_REMOTE;
+	// GGPO expects a numeric IPv4 address, so resolve configured host names first.
+	in_addr peerAddr;
+	if (inet_pton(AF_INET, peerIp.c_str(), &peerAddr) != 1)
+	{
+		addrinfo hints {};
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_DGRAM;
+		addrinfo *result = nullptr;
+		if (getaddrinfo(peerIp.c_str(), nullptr, &hints, &result) != 0 || result == nullptr)
+		{
+			stopSession();
+			throw FlycastException(strprintf(i18n::T("GGPO: unknown peer address %s"), peerIp.c_str()));
+		}
+		char address[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &((sockaddr_in *)result->ai_addr)->sin_addr, address, sizeof(address));
+		freeaddrinfo(result);
+		NOTICE_LOG(NETWORK, "GGPO: peer %s resolved to %s", peerIp.c_str(), address);
+		peerIp = address;
+	}
 	strcpy(player.u.remote.ip_address, peerIp.c_str());
 	player.u.remote.port = peerPort;
 	player.player_num = (1 - localPlayerNum) + 1;

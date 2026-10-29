@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -34,6 +35,8 @@ SettingsNew::SettingsTab toSettingsNewTab(GuiSettingsTab tab)
 		return SettingsNew::SettingsTab::Library;
 	case GuiSettingsTab::Video:
 		return SettingsNew::SettingsTab::Video;
+	case GuiSettingsTab::OnScreenDisplay:
+		return SettingsNew::SettingsTab::OnScreenDisplay;
 	case GuiSettingsTab::Audio:
 		return SettingsNew::SettingsTab::Audio;
 	case GuiSettingsTab::Controls:

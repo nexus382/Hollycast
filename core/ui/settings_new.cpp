@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "settings_new.h"
+#include "custom_theme.h"
 #include "gui_util.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -45,6 +46,7 @@
 #include "log/LogManager.h"
 #include "hw/mem/addrspace.h"
 #include "settings.h"
+#include "emulator.h"
 #include "gui.h"
 #include "boxart/boxart.h"
 #include "IconsFontAwesome6.h"
@@ -57,8 +59,10 @@
 #include "stdclass.h"
 #include "achievements/achievements.h"
 #include "vgamepad.h"
+#include "rend/vmu_window.h"
 #include <atomic>
 #include <cmath>
+#include <cctype>
 #include <cstring>
 #include <cfloat>
 #include <cctype>
@@ -67,6 +71,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <filesystem>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -80,6 +85,64 @@ extern ImFont *settingsIconFont;
 extern ImFont *aboutAsciiFont;
 
 namespace SettingsNew {
+
+static bool g_applyThemeAfterSettings = false;
+static bool g_reloadThemeFontsAfterSettings = false;
+
+struct ThemeEditorState {
+	bool open = false;
+	bool editing = false;
+	bool previewing = false;
+	bool fontChanged = false;
+	bool fontReloadPending = false;
+	std::string filename;
+	std::string newFilename = "My Theme.json";
+	std::string exportFolder;
+	std::string error;
+	std::string colorSearch;
+	CustomTheme::Theme draft;
+};
+static ThemeEditorState g_themeEditor;
+
+static std::string themeFilenameWithExtension(std::string filename)
+{
+	if (filename.size() < 5 || filename.compare(filename.size() - 5, 5, ".json") != 0)
+		filename += ".json";
+	return filename;
+}
+
+static bool completePendingThemeMigration(std::string& error)
+{
+	const std::string directory = CustomTheme::directory();
+	int id = -1;
+	std::string filename;
+	std::string migrationError;
+	if (!CustomTheme::readPendingBuiltinMigration(directory, id, filename, migrationError)) {
+		if (migrationError.empty())
+			return true;
+		error = "Failed to read pending theme migration: " + migrationError;
+		return false;
+	}
+	if (!CustomTheme::markLegacyBuiltinMigrationComplete(directory, id, filename, migrationError)) {
+		error = "Failed to record theme migration completion: " + migrationError;
+		return false;
+	}
+	if (CustomTheme::clearPendingBuiltinMigration(directory, migrationError))
+		return true;
+	error = "Failed to clear pending theme migration: " + migrationError;
+	return false;
+}
+
+static ImVec4 SettingsErrorColor()
+{
+	const ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
+	const ImVec4 error(0.88f, 0.26f, 0.24f, 1.0f);
+	constexpr float errorWeight = 0.62f;
+	const ImVec4 fallback(accent.x + (error.x - accent.x) * errorWeight,
+			accent.y + (error.y - accent.y) * errorWeight,
+			accent.z + (error.z - accent.z) * errorWeight, 1.0f);
+	return CustomTheme::roleColor("error", fallback, "settings.feedback");
+}
 
 static std::string cfgLoadStr(const std::string& section, const std::string& key, const std::string& def)
 {
@@ -104,6 +167,11 @@ static void cfgSaveBool(const std::string& section, const std::string& key, bool
 static void cfgSaveInt(const std::string& section, const std::string& key, int value)
 {
 	config::saveInt(section, key, value);
+}
+
+static int cfgLoadInt(const std::string& section, const std::string& key, int def)
+{
+	return config::loadInt(section, key, def);
 }
 
 static int getResourceMonitorMode()
@@ -306,17 +374,8 @@ static void RenderToggleSwitchVisual(bool value)
 	knob_pos.x = ImLerp(bb.Min.x + radius, bb.Max.x - radius, anim);
 	knob_pos.y = bb.Min.y + radius;
 
-	// Detect light vs dark theme based on window background luminance
-	ImGuiStyle& guiStyle = ImGui::GetStyle();
-	float bgLuminance = (guiStyle.Colors[ImGuiCol_WindowBg].x
-	                   + guiStyle.Colors[ImGuiCol_WindowBg].y
-	                   + guiStyle.Colors[ImGuiCol_WindowBg].z) / 3.0f;
-	bool isLightTheme = bgLuminance > 0.5f;
-
-	// Use CheckMark color for knob (theme's accent color) or contrasting color
-	ImU32 knobColor = isLightTheme
-		? ImGui::GetColorU32(ImGuiCol_Text)  // Dark text color for light themes
-		: IM_COL32(255, 255, 255, 255);      // White for dark themes
+	// Use the theme's text color for a knob that contrasts with both surfaces.
+	ImU32 knobColor = ImGui::GetColorU32(ImGuiCol_Text);
 	draw_list->AddCircleFilled(knob_pos, radius - 1.0f, knobColor);
 }
 
@@ -400,6 +459,8 @@ static const char* GetTabHelpText(SettingsTab tab)
 		return T("Graphics quality, renderer behavior, scaling, and performance tuning. Highlight or select a setting to see what it changes and why it matters.");
 	case SettingsTab::Shader:
 		return T("Choose, order, and adjust display shader layers. Every selected layer must compile before the active stack is replaced.");
+	case SettingsTab::OnScreenDisplay:
+		return T("In-game information, VMU displays, performance metrics, and overlay appearance. Highlight or select a setting to see what it changes and why it matters.");
 	case SettingsTab::Audio:
 		return T("Audio backend, latency, mixing, and output behavior. Highlight or select a setting for practical guidance before changing it.");
 	case SettingsTab::Controls:
@@ -562,10 +623,7 @@ static void RenderSettingsFooterBar()
 	const ImVec2 clipMax(textBoxMax.x - textPadX, textBoxMax.y - textPadY);
 	const ImVec2 bodyPos(clipMin.x, clipMin.y);
 	const float wrapWidth = std::max(0.0f, clipMax.x - clipMin.x);
-	const float bgLuminance = (textBoxBg.x + textBoxBg.y + textBoxBg.z) / 3.0f;
-	const ImVec4 bodyColor = bgLuminance > 0.5f
-		? ImVec4(0.08f, 0.08f, 0.08f, 1.0f)
-		: ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+	const ImVec4 bodyColor = ImGui::GetStyle().Colors[ImGuiCol_Text];
 	const char* bodyStart = footerText;
 	std::string titleLine;
 	if (const char* nl = strchr(footerText, '\n'); nl != nullptr)
@@ -710,11 +768,10 @@ static void RenderSettingsFooterBar()
 	drawList->PushClipRect(clipMin, clipMax, true);
 	if (!displayTitle.empty())
 	{
-		const ImVec4 titleColor2 = ImVec4(
-			std::min(bodyColor.x + 0.15f, 1.0f),
-			std::min(bodyColor.y + 0.15f, 1.0f),
-			std::min(bodyColor.z + 0.15f, 1.0f),
-			1.0f);
+		const ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_HeaderActive];
+		const ImVec4 titleColor2(bodyColor.x + (accent.x - bodyColor.x) * 0.3f,
+				bodyColor.y + (accent.y - bodyColor.y) * 0.3f,
+				bodyColor.z + (accent.z - bodyColor.z) * 0.3f, 1.0f);
 		AddWeightedFooterText(
 			drawList,
 			titleFont,
@@ -856,27 +913,11 @@ static void RenderTwoLineSettingDescription(const ImVec2& line1Start, const char
 	));
 	ImGui::PushFont(settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont());
 
-	// Determine if we're on a light or dark theme
-	ImGuiStyle& guiStyle = ImGui::GetStyle();
-	float bgLuminance = (guiStyle.Colors[ImGuiCol_WindowBg].x
-	                   + guiStyle.Colors[ImGuiCol_WindowBg].y
-	                   + guiStyle.Colors[ImGuiCol_WindowBg].z) / 3.0f;
-	bool isLightTheme = bgLuminance > 0.5f;
-
-	// For dark themes: use solid white text
-	// For light themes: blend with disabled color for secondary text
-	ImVec4 textColor;
-	if (isLightTheme) {
-		ImVec4 normalColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-		ImVec4 disabledColor = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-		textColor.x = (normalColor.x + disabledColor.x) * 0.5f;
-		textColor.y = (normalColor.y + disabledColor.y) * 0.5f;
-		textColor.z = (normalColor.z + disabledColor.z) * 0.5f;
-		textColor.w = 1.0f;
-	} else {
-		// Solid white for dark themes
-		textColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-	}
+	const ImVec4 normalColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	const ImVec4 disabledColor = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+	const ImVec4 textColor((normalColor.x + disabledColor.x) * 0.5f,
+			(normalColor.y + disabledColor.y) * 0.5f,
+			(normalColor.z + disabledColor.z) * 0.5f, 1.0f);
 	ImGui::PushStyleColor(ImGuiCol_Text, textColor);
 	const float wrapWidth = std::max(SettingsLayoutScaled(80.0f),
 		g_twoLineRowEndScreenX - ImGui::GetCursorScreenPos().x - SettingsLayoutScaled(16.0f));
@@ -1057,8 +1098,8 @@ static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, c
 	ImGui::PopID();
 }
 
-// Gamepad Settings Popup (ported from settings_controls.cpp)
-// Handles rumble, deadzone, saturation, and virtual gamepad settings
+// Physical gamepad settings popup (ported from settings_controls.cpp)
+// Handles rumble, deadzone, and saturation.
 static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 {
 	centerNextWindow();
@@ -1071,9 +1112,6 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 		static int openingRumble = 0;
 		static float openingDeadzone = 0.0f;
 		static float openingSaturation = 1.0f;
-		static int openingVibration = 0;
-		static int openingTransparency = 0;
-		static std::string openingImage;
 		if (ImGui::IsWindowAppearing())
 		{
 			openingRumble = gamepad->get_rumble_power();
@@ -1082,10 +1120,6 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 				openingDeadzone = gamepad->get_dead_zone();
 				openingSaturation = gamepad->get_saturation();
 			}
-			openingVibration = config::VirtualGamepadVibration;
-			openingTransparency = config::VirtualGamepadTransparency;
-			// These are the platform-specific custom image keys used by vgamepad.
-			openingImage = config::loadStr("vgamepad", settings.platform.isConsole() ? "image" : "image_arcade");
 		}
 		if (ControllerPopupCancelPressed())
 		{
@@ -1094,12 +1128,6 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			{
 				gamepad->set_dead_zone(openingDeadzone);
 				gamepad->set_saturation(openingSaturation);
-			}
-			if (gamepad->is_virtual_gamepad())
-			{
-				config::VirtualGamepadVibration = openingVibration;
-				config::VirtualGamepadTransparency = openingTransparency;
-				vgamepad::loadImage(openingImage);
 			}
 			ImGui::CloseCurrentPopup();
 			ImGui::EndPopup();
@@ -1144,50 +1172,7 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			return;
 		}
 		ImGui::NewLine();
-		if (gamepad->is_virtual_gamepad())
-		{
-			if (gamepad->is_rumble_enabled()) {
-				header(T("Haptic"));
-				OptionSlider(T("Power"), config::VirtualGamepadVibration, 0, 100, T("Haptic feedback power"), "%d%%");
-			}
-			header(T("View"));
-			OptionSlider(T("Transparency"), config::VirtualGamepadTransparency, 0, 100, T("Virtual gamepad buttons transparency"), "%d%%");
-
-#if defined(__ANDROID__) || defined(TARGET_IPHONE)
-			vgamepad::ImguiVGamepadTexture tex;
-			ImGui::Image(tex.getId(), ScaledVec2(300.f, 150.f), ImVec2(0, 1), ImVec2(1, 0));
-#endif
-			const char *gamepadPngTitle = T("Select a PNG file");
-			if (ImGui::Button(T("Choose Image..."), ScaledVec2(150, 30)))
-#ifdef __ANDROID__
-			{
-				if (!hostfs::addStorage(false, false, gamepadPngTitle, [](bool cancelled, std::string path) {
-					if (!cancelled)
-						gui_runOnUiThread([path]() {
-							vgamepad::loadImage(path);
-						});
-				}, Tnop("image/png")))
-					ImGui::OpenPopup(gamepadPngTitle);
-			}
-#else
-			{
-				ImGui::OpenPopup(gamepadPngTitle);
-			}
-#endif
-			ImGui::SameLine();
-			if (ImGui::Button(T("Use Default"), ScaledVec2(150, 30)))
-				vgamepad::loadImage(Tnop(""));
-
-			select_file_popup(gamepadPngTitle, [](bool cancelled, std::string selection)
-				{
-					if (!cancelled)
-						gui_runOnUiThread([selection]() {
-							vgamepad::loadImage(selection);
-						});
-					return true;
-				}, true, Tnop("png"));
-		}
-		else if (gamepad->is_rumble_enabled())
+		if (gamepad->is_rumble_enabled())
 		{
 			header(T("Rumble"));
 			int power = gamepad->get_rumble_power();
@@ -1880,7 +1865,7 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 			if ((systemMapping->key & DC_BTN_GROUP_MASK) == DC_AXIS_STICKS
 				|| (systemMapping->key & DC_BTN_GROUP_MASK) == DC_AXIS_TRIGGERS)
 			{
-				ImguiStyleColor plotColor(ImGuiCol_PlotHistogram, ImVec4(0.557f, 0.268f, 0.965f, 1.f));
+				ImguiStyleColor plotColor(ImGuiCol_PlotHistogram, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
 				const float v = getAxisValue(gamepad, systemMapping->key);
 				char s[32];
 				snprintf(s, sizeof(s), "%.0f%%", v * 100.f);
@@ -2151,6 +2136,184 @@ static void managePathList(const char* label, const std::string& singularLabel, 
 // Global state instance
 SettingsUIState g_state;
 
+// Input polling and Android touch dispatch read this flag from other threads.
+static std::atomic<bool> g_textureFilterLiveTune{false};
+
+static void applyPendingSettings()
+{
+	dreampotato::update();
+	if (g_mapleDevicesChangedInSettings)
+	{
+		g_mapleDevicesChangedInSettings = false;
+		if (game_started && settings.platform.isConsole())
+		{
+#if defined(USE_DREAMLINK_DEVICES)
+			reconnectDreamLinks();
+#endif
+			maple_ReconnectDevices();
+			reset_vmus();
+		}
+	}
+	SaveSettings();
+}
+
+// Preserve the stored renderer IDs so old settings files cannot silently select a different filter.
+// ID 14 was Spline36 and is intentionally no longer exposed.
+static constexpr std::array<int, 19> sampleTextureFilterValues { 0, 19, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18 };
+
+static std::array<const char*, 19> getSampleTextureFilterLabels()
+{
+	return {
+		T("Disabled"), T("Nearest-Neighbor"), T("Bilinear"), T("Bilinear / No Edge Blending"), T("Jinc2"),
+		T("Jinc2 / No Edge Blending"), T("MMPX"), T("MMPX Enhanced"), T("MMPX Advanced"),
+		T("Jinc2 Anti-Ring"), T("Jinc2 Sharp Anti-Ring"), T("Jinc2 Mild Anti-Ring"),
+		T("Jinc2 Extra Sharp Anti-Ring"), T("Lanczos2 Anti-Ring"), T("Lanczos3 Anti-Ring"),
+		T("Robidoux"), T("Robidoux Sharp"), T("Bicubic Catmull-Rom"),
+		T("Bicubic Mitchell")
+	};
+}
+
+static int getSampleTextureFilterOptionIndex(int value)
+{
+	for (size_t index = 0; index < sampleTextureFilterValues.size(); ++index)
+		if (sampleTextureFilterValues[index] == value)
+			return static_cast<int>(index);
+	return 0;
+}
+
+static constexpr std::array<int, 8> maxFilteredTextureSizeValues { 8, 16, 32, 64, 128, 256, 512, 1024 };
+
+static std::array<const char*, 8> getMaxFilteredTextureSizeLabels()
+{
+	return { T("8x8"), T("16x16"), T("32x32"), T("64x64"), T("128x128"), T("256x256"), T("512x512"), T("1024x1024+") };
+}
+
+bool textureFilterLiveTuneActive()
+{
+	return g_textureFilterLiveTune.load(std::memory_order_relaxed);
+}
+
+void stopTextureFilterLiveTune()
+{
+	g_textureFilterLiveTune.store(false, std::memory_order_relaxed);
+}
+
+void renderTextureFilterLiveTuneOverlay()
+{
+	if (!textureFilterLiveTuneActive())
+		return;
+	// Recheck the session, but reserve the stateful canPause() check for a pause request.
+	if (!game_started || ggpo::active())
+	{
+		stopTextureFilterLiveTune();
+		return;
+	}
+
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+#ifdef __ANDROID__
+	const float panelHeight = std::max(displaySize.y * .42f, uiScaled(250.f));
+	ImGui::SetNextWindowPos(ImVec2(0.f, displaySize.y - panelHeight), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(displaySize.x, panelHeight), ImGuiCond_Always);
+	flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+#else
+	const float margin = uiScaled(18.f);
+	const ImVec2 panelSize(std::min(uiScaled(620.f), std::max(1.f, displaySize.x - margin * 2.f)),
+			std::min(uiScaled(330.f), std::max(1.f, displaySize.y - uiScaled(96.f))));
+	ImGui::SetNextWindowPos(ImVec2(displaySize.x - panelSize.x - margin, uiScaled(48.f)), ImGuiCond_Once);
+	ImGui::SetNextWindowSize(panelSize, ImGuiCond_Once);
+#endif
+	ImGui::SetNextWindowBgAlpha(.94f);
+
+	bool open = true;
+	bool returnToSettings = false;
+	if (ImGui::Begin(T("Texture Filtering Live Tune###TextureFilteringLiveTune"), &open, flags))
+	{
+		if (ImGui::Button(T("Back to Video Settings")))
+			returnToSettings = true;
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", T("live game preview"));
+		ImGui::Separator();
+		ImGui::TextWrapped("%s", T("Try the filter and its texture-size limit while the game continues behind this panel."));
+		ImGui::Spacing();
+
+		const auto filterLabels = getSampleTextureFilterLabels();
+		if (config::SampleTextureFilter.get() == 14)
+		{
+			config::SampleTextureFilter.set(0);
+			SaveSettings();
+		}
+		int filterSelection = getSampleTextureFilterOptionIndex(config::SampleTextureFilter.get());
+		if (ImGui::BeginCombo(T("Sample Texture Filter"), filterLabels[filterSelection]))
+		{
+#if defined(__ANDROID__)
+			// Combo popups need the same drag-scroll opt-in as Settings lists,
+			// before their selectable rows can hand a finger swipe to the popup.
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
+			for (int index = 0; index < static_cast<int>(filterLabels.size()); ++index)
+			{
+				const bool selected = index == filterSelection;
+				if (ImGui::Selectable(filterLabels[index], selected))
+				{
+					config::SampleTextureFilter.set(sampleTextureFilterValues[index]);
+					SaveSettings();
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
+			ImGui::EndCombo();
+		}
+
+		int sizeSelection = 0;
+		for (size_t index = 0; index < maxFilteredTextureSizeValues.size(); ++index)
+			if (maxFilteredTextureSizeValues[index] == config::MaxFilteredTextureSize.get())
+			{
+				sizeSelection = static_cast<int>(index);
+				break;
+			}
+		const auto sizeLabels = getMaxFilteredTextureSizeLabels();
+		if (ImGui::BeginCombo(T("Filter Resolution Limit"), sizeLabels[sizeSelection]))
+		{
+#if defined(__ANDROID__)
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
+			for (int index = 0; index < static_cast<int>(sizeLabels.size()); ++index)
+			{
+				const bool selected = index == sizeSelection;
+				if (ImGui::Selectable(sizeLabels[index], selected))
+				{
+					config::MaxFilteredTextureSize.set(maxFilteredTextureSizeValues[index]);
+					SaveSettings();
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled("%s", T("Filter resolution limit uses the texture width bucket. Larger textures are left on the normal sampler path."));
+	}
+	ImGui::End();
+
+	if (returnToSettings)
+	{
+		stopTextureFilterLiveTune();
+		gui_open_texture_filter_settings();
+	}
+	else if (!open)
+	{
+		stopTextureFilterLiveTune();
+	}
+}
+
 // Reset state when entering settings screen
 void resetState()
 {
@@ -2188,6 +2351,8 @@ const char* getTabName(SettingsTab tab)
 		return T("Video");
 	case SettingsTab::Shader:
 		return T("Shader");
+	case SettingsTab::OnScreenDisplay:
+		return T("On Screen Display");
 	case SettingsTab::Audio:
 		return T("Audio");
 	case SettingsTab::Controls:
@@ -2206,6 +2371,7 @@ const char* getTabName(SettingsTab tab)
 static float SettingsNavigationWidth(const char* exitLabel)
 {
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	const auto& themeLayout = CustomTheme::activeLayout();
 #if defined(__ANDROID__)
 	const bool compactLayout = UseCompactSettingsLayout();
 	const float maxWidth = displaySize.x * (compactLayout ? 0.24f : 0.20f);
@@ -2225,7 +2391,9 @@ static float SettingsNavigationWidth(const char* exitLabel)
 		labelWidth = std::max(labelWidth, navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabName).x);
 	}
 
-	const float desiredWidth = std::max(layoutWidth, labelWidth + SettingsLayoutScaled(24.0f));
+	const float themedWidth = themeLayout.settingsSidebarWidth > 0.0f
+			? SettingsLayoutScaled(themeLayout.settingsSidebarWidth) : layoutWidth;
+	const float desiredWidth = std::max(themedWidth, labelWidth + SettingsLayoutScaled(24.0f));
 	return std::clamp(desiredWidth, minWidth, maxWidth);
 #else
 	const float minWidth = 136.0f;
@@ -2244,7 +2412,9 @@ static float SettingsNavigationWidth(const char* exitLabel)
 		labelWidth = std::max(labelWidth, navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabName).x);
 	}
 
-	const float desiredWidth = std::max(layoutWidth, labelWidth + ImGui::GetStyle().WindowPadding.x * 2.0f);
+	const float themedWidth = themeLayout.settingsSidebarWidth > 0.0f
+			? uiScaled(themeLayout.settingsSidebarWidth) : layoutWidth;
+	const float desiredWidth = std::max(themedWidth, labelWidth + ImGui::GetStyle().WindowPadding.x * 2.0f);
 	return std::clamp(desiredWidth, minWidth, maxWidth);
 #endif
 }
@@ -2282,12 +2452,15 @@ static bool SettingsBackButton(const char* icon, const char* label)
 static void renderNavigationRail(const std::function<void()>& exitSettings, const char* exitLabel)
 {
 	const float navWidth = SettingsNavigationWidth(exitLabel);
+	const float density = CustomTheme::activeLayout().density;
 	const float footerGap = SettingsFooterGap();
 	const float footerHeight = SettingsFooterHeight();
 	const bool focusSelectedTab = g_focusSettingsNavigation;
 
 	// Left navigation rail: 225px wide child window
 	// Match the main content column height so the shared footer sits flush below both panels.
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, ImGui::GetStyle().ItemSpacing.y * density));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, ImGui::GetStyle().FramePadding.y * density));
 	ImGui::BeginChild("NavigationRail", ImVec2(navWidth, -(footerHeight + footerGap)),
 	                  ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
 	                  ImGuiWindowFlags_DragScrolling);
@@ -2353,12 +2526,14 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 	ImGui::PopFont();
 
 	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
 }
 
 // Render right content area (remaining width for settings content)
 // This displays the actual settings for the currently selected tab
 static void renderContentArea()
 {
+	const float density = CustomTheme::activeLayout().density;
 	const float footerGap = SettingsFooterGap();
 	const float footerHeight = SettingsFooterHeight();
 	const bool focusContent = g_focusSettingsContent;
@@ -2368,6 +2543,8 @@ static void renderContentArea()
 	// No width specified means it takes all remaining space
 	if (focusContent)
 		ImGui::SetNextWindowFocus();
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, ImGui::GetStyle().ItemSpacing.y * density));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, ImGui::GetStyle().FramePadding.y * density));
 	ImGui::BeginChild("ContentArea", ImVec2(0, -(footerHeight + footerGap)),
 	                  ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
 	                  ImGuiWindowFlags_DragScrolling);
@@ -2397,6 +2574,9 @@ static void renderContentArea()
 		break;
 	case SettingsTab::Shader:
 		renderShaderTab();
+		break;
+	case SettingsTab::OnScreenDisplay:
+		renderOnScreenDisplayTab();
 		break;
 	case SettingsTab::Audio:
 		renderAudioTab();
@@ -2468,6 +2648,7 @@ static void renderContentArea()
 	}
 
 	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
 	ImGui::Dummy(ImVec2(0.0f, footerGap));
 	RenderSettingsFooterBar();
 }
@@ -2539,6 +2720,10 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	ImGui::TextDisabled("%s", T("General Configuration"));
 	ImGui::Separator();
+	if (ImGui::Button(T("Ready to Play Checklist")))
+		gui_open_setup_checklist();
+	ImGui::TextWrapped("%s", T("Review game folders, firmware and controls."));
+	ImGui::Spacing();
 
 	// ========================================
 	// Language & Region Section
@@ -2560,6 +2745,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 				{ Tnop("日本語"), "ja" },
 				{ Tnop("Português (Brasil)"), "pt_BR" },
 				{ Tnop("Svenska"), "sv" },
+				{ Tnop("Türkçe"), "tr" },
+				{ Tnop("简体中文"), "zh_CN" },
+				{ Tnop("正體中文"), "zh_TW" },
 			};
 
 			const char* uiLanguageLabels[IM_ARRAYSIZE(uiLanguageOptions)];
@@ -2819,7 +3007,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			EndTwoLineSettingRow();
 			addContentRequested = addRowActivated;
 			if (refreshPressed)
-				scanner.refresh();
+				gui_refresh_files();
 			ImGui::PopID();
 		}
 
@@ -2830,7 +3018,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		{
 			scanner.stop();
 			config::ContentPath.get().erase(config::ContentPath.get().begin() + to_delete);
-			scanner.refresh();
+			gui_refresh_files();
 		}
 	}
 
@@ -2848,7 +3036,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"Data Folder\n"
 					"This is Hollycast's writable data directory on this platform.\n\n"
 					"It typically contains:\n"
-					"- BIOS/Flash files (for example: `dc_boot.bin`, `dc_flash.bin`)\n"
+					"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
 					"- Save data (VMU files) and save states\n\n"
 						"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Flycast looks for.\n"
 						"Custom Paths below can also override where some of these files are stored."
@@ -2933,7 +3121,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		RenderTwoLineSettingDescription(line1Start, T("Rescan all content folders"));
 		EndTwoLineSettingRow();
 		if (rescanRowActivated || refreshPressed)
-			scanner.refresh();
+			gui_refresh_files();
 		ImGui::PopID();
 	}
 #endif
@@ -2944,22 +3132,78 @@ static void renderSettingsContentTab(SettingsTab tab)
 	// ========================================
 	if (RenderCollapsingHeader("UISettingsSection", ICON_FA_GEAR, T("UI Settings"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
-		const char* themes[] = { T("Dark"), T("Light"), T("Dreamcast"), T("High Contrast"), T("Nintendo"), T("Aqua Chill") };
+		const auto& builtins = CustomTheme::builtins();
+		const int builtinCount = static_cast<int>(builtins.size());
+		static std::vector<std::string> customFiles;
+		static std::string themeError;
+		static std::string themeNotice;
+		static double nextThemeScan = 0;
+		ImGui::PushID("UIThemeSetting");
+		const bool themePopupOpen = ImGui::IsPopupOpen("UIThemePopup");
+		ImGui::PopID();
+		if (!themePopupOpen && ImGui::GetTime() >= nextThemeScan) {
+			customFiles = CustomTheme::list();
+			nextThemeScan = ImGui::GetTime() + 2.0;
+		}
+		std::vector<std::string> labels;
+		std::vector<const char*> themes;
+		for (const auto& builtin : builtins) themes.push_back(T(builtin.name));
+		for (const auto& file : customFiles)
+			labels.push_back(file.substr(0, file.size() - 5) + " (Custom)");
+		int selection = config::UITheme.get();
+		if (selection == CustomTheme::CustomThemeId) {
+			auto selected = std::find(customFiles.begin(), customFiles.end(), config::UICustomTheme.get());
+			if (selected != customFiles.end())
+				selection = builtinCount + static_cast<int>(selected - customFiles.begin());
+			else {
+				selection = builtinCount + static_cast<int>(labels.size());
+				labels.push_back(config::UICustomTheme.get() + " (Missing)");
+			}
+		} else if (selection < 0 || selection >= builtinCount) {
+			selection = 0;
+		}
+		for (const auto& label : labels) themes.push_back(label.c_str());
 		bool applyThemeAfterPopup = false;
 		SettingsUI::PopupConfig themeCfg {};
 		themeCfg.type = SettingsUI::PopupType::Options;
 		themeCfg.options.label = T("UI Theme");
 		themeCfg.options.icon = ICON_FA_PALETTE;
 		themeCfg.options.popupID = Tnop("UIThemePopup");
-		themeCfg.options.options = themes;
-		themeCfg.options.optionCount = IM_ARRAYSIZE(themes);
-		themeCfg.options.currentValue = &config::UITheme.get();
+		themeCfg.options.options = themes.data();
+		themeCfg.options.optionCount = static_cast<int>(themes.size());
+		themeCfg.options.currentValue = &selection;
 		themeCfg.options.valueWidth = 220.0f;
-		themeCfg.options.onChange = [&applyThemeAfterPopup](int) {
-			// The option popup pushes temporary popup text/header colors. Applying
-			// a full theme inside that style scope lets the later pop restore stale
-			// colors over the new theme, leaving light backgrounds with dark-theme text.
+		themeCfg.options.onChange = [&](int selected) {
+			themeError.clear();
+			themeNotice.clear();
+			const bool selectingBuiltin = selected >= 0 && selected < builtinCount;
+			const bool selectingCustom = selected >= builtinCount && selected - builtinCount < static_cast<int>(customFiles.size());
+			if (!selectingBuiltin && !selectingCustom)
+				return true;
+			CustomTheme::Theme candidate;
+			if (selectingBuiltin) {
+				CustomTheme::loadBuiltinFromDirectory(CustomTheme::directory(), builtins[selected].id, candidate, themeError);
+			} else {
+				const auto& filename = customFiles[selected - builtinCount];
+				if (!CustomTheme::load(filename, candidate, themeError)) {
+					themeError = filename + ": " + themeError;
+					return true;
+				}
+			}
+			std::string migrationError;
+			if (!completePendingThemeMigration(migrationError)) {
+				themeError = migrationError;
+				return true;
+			}
+			if (selectingBuiltin) {
+				config::UITheme = builtins[selected].id;
+			} else {
+				const auto& filename = customFiles[selected - builtinCount];
+				config::UITheme = CustomTheme::CustomThemeId;
+				config::UICustomTheme = filename;
+			}
 			applyThemeAfterPopup = true;
+			g_reloadThemeFontsAfterSettings = true;
 			return true;
 		};
 
@@ -2967,14 +3211,410 @@ static void renderSettingsContentTab(SettingsTab tab)
 			Tnop("UIThemeSetting"),
 			T("Choose the UI theme colors."),
 			themeCfg,
-			T(
-				"UI Theme\n"
-				"Changes the overall look and contrast of the UI.\n"
-				"If readability is an issue, try High Contrast."
-			)
+			T("UI Theme\nChanges the overall look and contrast of the UI. Built-in themes are bundled presets.\n"
+			  "Use Create Theme to copy the selected preset or custom theme and customize your own version.\n"
+			  "Custom themes are saved in the themes folder in the configuration directory.")
 		);
 		if (applyThemeAfterPopup)
-			applyCurrentTheme();
+			g_applyThemeAfterSettings = true;
+		const std::string themeDirectory = CustomTheme::directory();
+		RenderGeneralInfoRow("CustomThemeFolder", ICON_FA_FOLDER_OPEN, T("Custom Theme Folder"),
+			T("Add JSON theme files here, then select them above."), themeDirectory, false, themeDirectory.c_str());
+		if (!themeError.empty())
+			RenderGeneralInfoRow("CustomThemeError", ICON_FA_TRIANGLE_EXCLAMATION, T("Theme Error"),
+				T("The theme file could not be loaded. Built-in themes use their bundled defaults."), themeError, false, themeError.c_str());
+		if (!themeNotice.empty())
+			RenderGeneralInfoRow("CustomThemeNotice", ICON_FA_CHECK, T("Theme Import"),
+				T("The theme and its referenced assets are ready to use."), themeNotice, false, themeNotice.c_str());
+
+		// Theme authoring stays in settings so users can create a custom theme
+		// without editing JSON. The draft is previewed in the normal pre-frame
+		// theme reload path; the selected theme/config is untouched until Save.
+		auto startThemeEditor = [&](bool editSelected) {
+			g_themeEditor = ThemeEditorState{};
+			g_themeEditor.open = true;
+			g_themeEditor.editing = editSelected;
+			g_themeEditor.exportFolder = CustomTheme::directory();
+			g_themeEditor.newFilename = editSelected ? config::UICustomTheme.get() : "My Theme.json";
+			if (config::UITheme == CustomTheme::CustomThemeId) {
+				const std::string selectedFilename = config::UICustomTheme.get();
+				if (!CustomTheme::load(selectedFilename, g_themeEditor.draft, g_themeEditor.error)) {
+					themeError = g_themeEditor.error;
+					g_themeEditor.open = false;
+					return;
+				}
+				if (editSelected)
+					g_themeEditor.filename = selectedFilename;
+			} else {
+				g_themeEditor.draft.base = config::UITheme.get() >= 0 && config::UITheme.get() < builtinCount
+						? config::UITheme.get() : 0;
+				g_themeEditor.filename.clear();
+				g_themeEditor.editing = false;
+				g_themeEditor.error.clear();
+			}
+			g_themeEditor.draft.assets.directory = CustomTheme::directory();
+			ImGui::OpenPopup("ThemeEditorPopup");
+		};
+		if (ImGui::Button(T("Create Theme"))) startThemeEditor(false);
+		ImGui::SameLine();
+		const bool canEditCustom = config::UITheme == CustomTheme::CustomThemeId
+				&& std::find(customFiles.begin(), customFiles.end(), config::UICustomTheme.get()) != customFiles.end();
+		if (!canEditCustom) ImGui::BeginDisabled();
+		if (ImGui::Button(T("Edit Selected Theme")) && canEditCustom) startThemeEditor(true);
+		if (!canEditCustom) ImGui::EndDisabled();
+		ImGui::SameLine();
+		const char* importTitle = "Import Theme JSON";
+		if (ImGui::Button(T("Import Theme…")))
+			ImGui::OpenPopup(importTitle);
+		select_file_popup(importTitle, [&](bool cancelled, const std::string& source) {
+			if (!cancelled) {
+				themeNotice.clear();
+				std::string imported;
+				if (CustomTheme::importFile(source, imported, themeError)) {
+					customFiles = CustomTheme::list();
+					themeNotice = "Imported " + imported;
+				}
+			}
+			return true;
+		}, true, "json");
+
+		if (g_themeEditor.open) {
+			const ImVec2 display = ImGui::GetIO().DisplaySize;
+			ImGui::SetNextWindowSize(ImVec2(std::max(1.0f, std::min(uiScaled(760.0f), display.x - uiScaled(24.0f))),
+					std::max(1.0f, std::min(uiScaled(650.0f), display.y - uiScaled(24.0f)))));
+		}
+		const std::string editorTitle = std::string(T(g_themeEditor.editing ? "Edit theme" : "Create theme")) + "###ThemeEditorPopup";
+		if (g_themeEditor.open && ImGui::BeginPopupModal(editorTitle.c_str(), nullptr,
+				ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+			ImGui::TextDisabled("%s", T("Changes preview as you edit. Cancel restores the previous theme."));
+			ImGui::Spacing();
+			const auto& builtinList = CustomTheme::builtins();
+			int baseIndex = g_themeEditor.draft.base;
+			std::vector<const char*> baseNames;
+			for (const auto& item : builtinList) baseNames.push_back(T(item.name));
+			if (g_themeEditor.editing) {
+				ImGui::Text("%s: %s", T("Theme"), g_themeEditor.filename.c_str());
+			} else {
+				ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
+				ImGui::InputText(T("Theme name"), &g_themeEditor.newFilename);
+			}
+			ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
+			if (ImGui::Combo(T("Base theme"), &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()))) {
+				g_themeEditor.draft.base = baseIndex;
+				g_themeEditor.previewing = true;
+			}
+			ImGui::Spacing();
+			const ImGuiStyle& editorStyle = ImGui::GetStyle();
+			const float editorActionHeight = ImGui::GetTextLineHeight() + editorStyle.FramePadding.y * 2.0f;
+			const bool stackThemeActions = ImGui::GetContentRegionAvail().x < uiScaled(220.0f);
+			const float editorActionsHeight = editorActionHeight * (stackThemeActions ? 2.0f : 1.0f)
+					+ (stackThemeActions ? editorStyle.ItemSpacing.y : 0.0f);
+			// Keep enough space for the bounded error panel, separator and all action
+			// rows before sizing the tab child. This also covers errors created during
+			// the current frame (for example, by Export).
+			const float editorFooterReserve = editorActionsHeight + uiScaled(72.0f) + editorStyle.ItemSpacing.y * 2.0f + 1.0f;
+			ImGuiStyle previewStyle{};
+			CustomTheme::Theme baseTheme;
+			std::string baseError;
+			if (CustomTheme::loadBundled(g_themeEditor.draft.base, baseTheme, baseError))
+				CustomTheme::applyStyle(baseTheme, previewStyle);
+			CustomTheme::applyStyle(g_themeEditor.draft, previewStyle);
+			ImGui::TextDisabled("%s", T("Preview"));
+			ImGui::SameLine();
+			const int previewColors[] = {ImGuiCol_WindowBg, ImGuiCol_ChildBg, ImGuiCol_FrameBg, ImGuiCol_ButtonActive, ImGuiCol_Text};
+			for (int i = 0; i < IM_ARRAYSIZE(previewColors); ++i) {
+				if (i != 0) ImGui::SameLine(0, uiScaled(4.0f));
+				ImGui::PushID(i);
+				ImGui::ColorButton("##preview", previewStyle.Colors[previewColors[i]],
+						ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop | ImGuiColorEditFlags_NoPicker,
+						ImVec2(uiScaled(30.0f), uiScaled(18.0f)));
+				ImGui::PopID();
+			}
+			ImGui::Spacing();
+			if (ImGui::BeginTabBar("ThemeEditorTabs")) {
+				if (ImGui::BeginTabItem(T("Colors"))) {
+					const float editorHeight = std::max(1.0f, ImGui::GetContentRegionAvail().y - editorFooterReserve);
+					if (ImGui::BeginChild("ThemeColorsList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
+						if (ImGui::CollapsingHeader(T("Key colors"), ImGuiTreeNodeFlags_DefaultOpen)) {
+							ImGui::TextWrapped("%s", T("Choose which colors to override. Unchecked colors use the theme defaults."));
+							const char* roles[] = {"accent", "success", "warning", "error"};
+							const char* labels[] = {T("Accent"), T("Success"), T("Warning"), T("Error")};
+							const ImVec4 suggestions[] = {previewStyle.Colors[ImGuiCol_ButtonActive], ImVec4(0.20f, 0.76f, 0.38f, 1.f),
+									ImVec4(0.94f, 0.71f, 0.25f, 1.f), ImVec4(0.88f, 0.26f, 0.24f, 1.f)};
+							for (int i = 0; i < IM_ARRAYSIZE(roles); ++i) {
+								const char* role = roles[i];
+								ImGui::PushID(role);
+								auto found = g_themeEditor.draft.roles.find(role);
+								bool enabled = found != g_themeEditor.draft.roles.end();
+								if (ImGui::Checkbox(labels[i], &enabled)) {
+									if (enabled) {
+										auto inherited = baseTheme.roles.find(role);
+										g_themeEditor.draft.roles[role] = inherited != baseTheme.roles.end() ? inherited->second : suggestions[i];
+									} else g_themeEditor.draft.roles.erase(role);
+									g_themeEditor.previewing = true;
+								}
+								found = g_themeEditor.draft.roles.find(role);
+								if (found != g_themeEditor.draft.roles.end()) {
+									ImVec4 value = found->second;
+									if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) {
+										found->second = value;
+										g_themeEditor.previewing = true;
+									}
+								} else {
+									ImGui::SameLine();
+									ImGui::TextDisabled("%s", T("Using theme default"));
+								}
+								ImGui::PopID();
+							}
+						}
+						if (ImGui::CollapsingHeader(T("Advanced interface colors"))) {
+							ImGui::SetNextItemWidth(-FLT_MIN);
+							ImGui::InputTextWithHint("##colorSearch", T("Search colors"), &g_themeEditor.colorSearch);
+							std::string query = g_themeEditor.colorSearch;
+							std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+							for (int i = 0; i < ImGuiCol_COUNT; ++i) {
+								const char* name = ImGui::GetStyleColorName(i);
+								std::string searchable = name;
+								std::transform(searchable.begin(), searchable.end(), searchable.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+								if (!query.empty() && searchable.find(query) == std::string::npos) continue;
+								ImVec4 value = previewStyle.Colors[i];
+								if (ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar)) {
+									auto found = std::find_if(g_themeEditor.draft.colors.begin(), g_themeEditor.draft.colors.end(), [i](const auto& c) { return c.first == i; });
+									if (found == g_themeEditor.draft.colors.end()) g_themeEditor.draft.colors.emplace_back(i, value); else found->second = value;
+									g_themeEditor.previewing = true;
+								}
+							}
+						}
+						if (ImGui::CollapsingHeader(T("Widget-specific colors"))) {
+							const char* widgetKeys[] = {"media.status", "settings.feedback"};
+							const char* roleNames[] = {"accent", "success", "warning", "error"};
+							for (const char* widget : widgetKeys) {
+								ImGui::TextUnformatted(widget);
+								for (const char* role : roleNames) {
+									auto& roles = g_themeEditor.draft.widgetRoles[widget];
+									auto found = roles.find(role);
+									bool enabled = found != roles.end();
+									ImGui::PushID(widget);
+									ImGui::PushID(role);
+									if (ImGui::Checkbox(role, &enabled)) {
+										if (enabled) {
+											auto global = g_themeEditor.draft.roles.find(role);
+											auto inherited = baseTheme.roles.find(role);
+											roles[role] = global != g_themeEditor.draft.roles.end() ? global->second
+												: inherited != baseTheme.roles.end() ? inherited->second : ImGui::GetStyle().Colors[ImGuiCol_Text];
+										} else roles.erase(role);
+										g_themeEditor.previewing = true;
+									}
+									found = roles.find(role);
+									if (found != roles.end()) {
+										ImVec4 value = found->second;
+										if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) { found->second = value; g_themeEditor.previewing = true; }
+									}
+									ImGui::PopID();
+									ImGui::PopID();
+								}
+							}
+						}
+					}
+					ImGui::EndChild();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem(T("Style & layout"))) {
+					const float editorHeight = std::max(1.0f, ImGui::GetContentRegionAvail().y - editorFooterReserve);
+					if (ImGui::BeginChild("ThemeStyleList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
+					auto scalar = [&](const char* name, float ImGuiStyle::*member, float max) {
+						float value = previewStyle.*member;
+						const float upper = std::strstr(name, "BorderSize") != nullptr ? 20.f : max;
+						if (ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+							auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == member; });
+							if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(member, value); else it->second = value;
+							g_themeEditor.previewing = true;
+						}
+					};
+					auto vector = [&](const char* name, ImVec2 ImGuiStyle::*member, float max) {
+						ImVec2 value = previewStyle.*member;
+						if (ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+							auto it = std::find_if(g_themeEditor.draft.vectors.begin(), g_themeEditor.draft.vectors.end(), [&](const auto& v) { return v.first == member; });
+							if (it == g_themeEditor.draft.vectors.end()) g_themeEditor.draft.vectors.emplace_back(member, value); else it->second = value;
+							g_themeEditor.previewing = true;
+						}
+					};
+						ImGui::TextDisabled("%s", T("Spacing, rounding, padding and control proportions"));
+					const std::pair<const char*, float ImGuiStyle::*> scalars[] = {
+						{"Alpha", &ImGuiStyle::Alpha}, {"DisabledAlpha", &ImGuiStyle::DisabledAlpha},
+						{"WindowRounding", &ImGuiStyle::WindowRounding}, {"WindowBorderSize", &ImGuiStyle::WindowBorderSize},
+						{"ChildRounding", &ImGuiStyle::ChildRounding}, {"PopupRounding", &ImGuiStyle::PopupRounding},
+						{"FrameRounding", &ImGuiStyle::FrameRounding}, {"FrameBorderSize", &ImGuiStyle::FrameBorderSize},
+						{"ScrollbarSize", &ImGuiStyle::ScrollbarSize}, {"ScrollbarRounding", &ImGuiStyle::ScrollbarRounding},
+						{"GrabMinSize", &ImGuiStyle::GrabMinSize}, {"GrabRounding", &ImGuiStyle::GrabRounding}, {"TabRounding", &ImGuiStyle::TabRounding}
+					};
+					for (const auto& item : scalars) {
+						if (item.second == &ImGuiStyle::Alpha) {
+							float value = previewStyle.*item.second;
+							if (ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+								auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == item.second; });
+								if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(item.second, value); else it->second = value;
+								g_themeEditor.previewing = true;
+							}
+						} else {
+							scalar(item.first, item.second, item.second == &ImGuiStyle::DisabledAlpha ? 1.f : 40.f);
+						}
+					}
+					vector("WindowPadding", &ImGuiStyle::WindowPadding, 50.f);
+					vector("FramePadding", &ImGuiStyle::FramePadding, 40.f);
+					vector("ItemSpacing", &ImGuiStyle::ItemSpacing, 50.f);
+					vector("ItemInnerSpacing", &ImGuiStyle::ItemInnerSpacing, 50.f);
+					vector("CellPadding", &ImGuiStyle::CellPadding, 50.f);
+					vector("ButtonTextAlign", &ImGuiStyle::ButtonTextAlign, 1.f);
+					ImGui::Separator();
+						ImGui::TextDisabled("%s", T("Hollycast layout"));
+					auto layoutSlider = [&](const char* name, float& value, float minimum, float maximum, float fallback, bool& present) {
+						float shown = present ? value : fallback;
+						if (ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { value = shown; present = true; g_themeEditor.previewing = true; }
+					};
+					layoutSlider("Density", g_themeEditor.draft.layout.density, 0.75f, 1.5f, 1.f, g_themeEditor.draft.layout.hasDensity);
+					layoutSlider("Settings sidebar width", g_themeEditor.draft.layout.settingsSidebarWidth, 136.f, 310.f, 225.f, g_themeEditor.draft.layout.hasSettingsSidebarWidth);
+					layoutSlider("Library cover spacing", g_themeEditor.draft.layout.libraryCoverSpacing, 0.f, 48.f, 8.f, g_themeEditor.draft.layout.hasLibraryCoverSpacing);
+					layoutSlider("Artwork corner radius", g_themeEditor.draft.layout.artworkCornerRadius, 0.f, 32.f, 0.f, g_themeEditor.draft.layout.hasArtworkCornerRadius);
+					}
+					ImGui::EndChild();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem(T("Fonts & assets"))) {
+					const float editorHeight = std::max(1.0f, ImGui::GetContentRegionAvail().y - editorFooterReserve);
+					if (ImGui::BeginChild("ThemeAssetsList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
+					ImGui::TextWrapped("%s", T("Use paths relative to the custom theme folder. Copy files there first; import and export copy referenced files automatically."));
+					ImGui::Spacing();
+					auto assetInput = [&](const char* label, std::string& value, bool font = false) {
+						const bool changed = ImGui::InputText(label, &value);
+						const bool editCommitted = font && ImGui::IsItemDeactivatedAfterEdit();
+						if (changed) { g_themeEditor.previewing = true; g_themeEditor.fontChanged |= font; }
+						if (editCommitted) { g_themeEditor.previewing = true; g_themeEditor.fontReloadPending = true; }
+					};
+					assetInput(T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
+					assetInput(T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
+					assetInput(T("Background image path"), g_themeEditor.draft.assets.background);
+					std::string settingsIconPath;
+					auto settingsIcon = g_themeEditor.draft.assets.icons.find("settings");
+					if (settingsIcon != g_themeEditor.draft.assets.icons.end()) settingsIconPath = settingsIcon->second;
+					if (ImGui::InputText(T("Settings icon path"), &settingsIconPath)) {
+						if (settingsIconPath.empty()) g_themeEditor.draft.assets.icons.erase("settings");
+						else g_themeEditor.draft.assets.icons["settings"] = settingsIconPath;
+						g_themeEditor.previewing = true;
+					}
+					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
+					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
+					const char* fits[] = {"cover", "contain", "stretch"};
+					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
+					if (ImGui::Combo(T("Background fit"), &fit, fits, IM_ARRAYSIZE(fits))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
+					ImGui::InputText(T("Export folder"), &g_themeEditor.exportFolder);
+					if (ImGui::Button(T("Export theme and assets"))) {
+						const std::string exportName = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
+						if (CustomTheme::exportToDirectory(g_themeEditor.draft, exportName, g_themeEditor.exportFolder, g_themeEditor.error))
+							g_themeEditor.error = "Exported " + exportName + " and its referenced assets.";
+					}
+					}
+					ImGui::EndChild();
+					ImGui::EndTabItem();
+				}
+				ImGui::EndTabBar();
+			}
+			if (g_themeEditor.previewing) {
+				g_themeEditor.previewing = false;
+				// A zero ImGuiStyle::Alpha makes the whole application invisible. Clamp
+				// only the preview copy so existing themes retain their saved values.
+				CustomTheme::Theme previewTheme = g_themeEditor.draft;
+				for (auto& scalar : previewTheme.scalars) {
+					if (scalar.first == &ImGuiStyle::Alpha)
+						scalar.second = std::isfinite(scalar.second) ? std::max(0.2f, scalar.second) : 1.f;
+				}
+				setThemePreview(&previewTheme);
+				g_applyThemeAfterSettings = true;
+				g_reloadThemeFontsAfterSettings |= g_themeEditor.fontReloadPending;
+				g_themeEditor.fontReloadPending = false;
+			}
+			ImGui::Separator();
+			if (!g_themeEditor.error.empty()) {
+				const float availableHeight = std::max(0.0f, ImGui::GetContentRegionAvail().y - editorActionsHeight
+						- editorStyle.ItemSpacing.y * 2.0f - 1.0f);
+				const float errorHeight = std::min(uiScaled(72.0f), availableHeight);
+				if (errorHeight > 0.0f) {
+					if (ImGui::BeginChild("ThemeEditorError", ImVec2(0, errorHeight), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar))
+						ImGui::TextWrapped("%s", g_themeEditor.error.c_str());
+					ImGui::EndChild();
+				}
+			}
+			const float availableWidth = ImGui::GetContentRegionAvail().x;
+			const float desiredButtonWidth = std::max(uiScaled(96.0f), std::max(ImGui::CalcTextSize(T("Save theme")).x,
+					ImGui::CalcTextSize(T("Cancel")).x) + ImGui::GetStyle().FramePadding.x * 2.0f);
+			const bool stackButtons = stackThemeActions;
+			const float buttonWidth = stackButtons ? availableWidth
+					: std::min(desiredButtonWidth, (availableWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
+			if (!stackButtons)
+				ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - (buttonWidth * 2.0f + ImGui::GetStyle().ItemSpacing.x)));
+			const bool cancelTheme = ImGui::Button(T("Cancel"), ImVec2(buttonWidth, 0)) || ControllerPopupCancelPressed();
+			if (!stackButtons) ImGui::SameLine();
+			const bool saveTheme = ImGui::Button(T("Save theme"), ImVec2(buttonWidth, 0));
+			if (saveTheme && !cancelTheme) {
+				const std::string filename = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
+				g_themeEditor.draft.assets.directory = CustomTheme::directory();
+				std::string validationError;
+				CustomTheme::serialize(g_themeEditor.draft, validationError);
+				std::string migrationError;
+				if (!validationError.empty()) {
+					g_themeEditor.error = validationError;
+				} else if (CustomTheme::save(filename, g_themeEditor.draft, g_themeEditor.editing, g_themeEditor.error)) {
+					customFiles = CustomTheme::list();
+					if (!completePendingThemeMigration(migrationError)) {
+						g_themeEditor.error = "Saved " + filename + ", but could not select it. " + migrationError
+								+ ". Close this editor, resolve the migration error, then select this theme from UI Theme.";
+					} else {
+						config::UITheme = CustomTheme::CustomThemeId;
+						config::UICustomTheme = filename;
+						setThemePreview(nullptr);
+						g_applyThemeAfterSettings = true;
+						g_reloadThemeFontsAfterSettings = true;
+						g_themeEditor.open = false;
+						ImGui::CloseCurrentPopup();
+					}
+				}
+			}
+			if (cancelTheme) {
+				setThemePreview(nullptr);
+				g_applyThemeAfterSettings = true;
+				g_reloadThemeFontsAfterSettings |= g_themeEditor.fontChanged;
+				g_themeEditor.open = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
+		if (g_themeEditor.open && !ImGui::IsPopupOpen("ThemeEditorPopup")) {
+			setThemePreview(nullptr);
+			g_applyThemeAfterSettings = true;
+			g_reloadThemeFontsAfterSettings |= g_themeEditor.fontChanged;
+			g_themeEditor.open = false;
+		}
+
+#if !defined(TARGET_MAC)
+		const char* menuBarModes[] = { T("Auto"), T("On"), T("Off") };
+		SettingsUI::PopupConfig menuBarCfg {};
+		menuBarCfg.type = SettingsUI::PopupType::Options;
+		menuBarCfg.options.label = T("Top Menu Bar");
+		menuBarCfg.options.icon = ICON_FA_BARS;
+		menuBarCfg.options.popupID = Tnop("MenuBarVisibilityPopup");
+		menuBarCfg.options.options = menuBarModes;
+		menuBarCfg.options.optionCount = IM_ARRAYSIZE(menuBarModes);
+		menuBarCfg.options.currentValue = &config::MenuBarVisibility.get();
+		menuBarCfg.options.valueWidth = 220.0f;
+		RenderGeneralPopupSettingRow(
+			Tnop("MenuBarVisibilitySetting"),
+			T("Choose when the top menu bar is shown."),
+			menuBarCfg,
+			T("Top Menu Bar\n"
+				"On keeps the bar visible. Off keeps it hidden.\n"
+				"Auto follows the normal mouse and touch reveal behavior.")
+		);
+#endif
 
 		static bool showApplyButtonForUIScaling = false;
 		if (uiUserScaleUpdated && !showApplyButtonForUIScaling)
@@ -3025,7 +3665,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			static_cast<bool>(config::HideLegacyNaomiRoms),
 			[](bool enabled) {
 				config::HideLegacyNaomiRoms = enabled;
-				scanner.refresh();
+				gui_refresh_files();
 			},
 			T(
 				"Hide Legacy Naomi ROMs\n"
@@ -3216,7 +3856,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 				ImGui::OpenPopup(popupName.c_str());
 #endif
 
-			static std::string lastBoxartPath;
+			static std::string lastBoxartPath = config::BoxartPath.get();
 			if (lastBoxartPath != config::BoxartPath.get())
 			{
 				gui_refresh_custom_boxart(true);
@@ -3473,6 +4113,21 @@ static void renderSettingsContentTab(SettingsTab tab)
 			ImGui::Indent();
 
 			RenderGeneralToggleSettingRow(
+				"ShowAchievementPopups",
+				ICON_FA_BELL,
+				T("Show Achievement Popups"),
+				T("Show on-screen RetroAchievements notifications while playing."),
+				static_cast<bool>(config::ShowAchievementPopups),
+				[](bool enabled) { config::ShowAchievementPopups = enabled; },
+				T(
+					"Show Achievement Popups\n"
+					"Controls achievement, progress, challenge, and leaderboard notifications shown over gameplay."
+				)
+			);
+
+			ImGui::Spacing();
+
+			RenderGeneralToggleSettingRow(
 				"AchievementsHardcoreMode",
 				ICON_FA_FIRE,
 				T("Hardcore Mode"),
@@ -3577,8 +4232,8 @@ static void renderSettingsContentTab(SettingsTab tab)
 		managePathList(T("BIOS Folders"), T("BIOS Folder"), config::BiosPath.get(),
 			T(
 				"BIOS Folders\n"
-				"Folders that Hollycast searches for BIOS/Flash files (Dreamcast BIOS/Flash and arcade BIOS).\n\n"
-				"Typical Dreamcast files include `dc_boot.bin` and `dc_flash.bin`.\n"
+				"Folders that Hollycast searches for Dreamcast and arcade BIOS files.\n\n"
+				"Place `dc_boot.bin` and `dc_flash.bin` in Hollycast's data folder, unless you have specified a custom BIOS folder here.\n"
 				"If you keep multiple BIOS sets, you can add multiple folders and Hollycast will search all of them.\n"
 				"For troubleshooting, keep your BIOS files in a single known-good folder to avoid confusion."
 			)
@@ -3696,13 +4351,9 @@ void renderVideoTab()
 		static int currentPresetIndex = 0;
 		static bool presetJustApplied = false;
 
-		// Auto-detect current preset
+		// Include Custom so manual changes cannot leave a stale preset label.
 		if (!presetJustApplied)
-		{
-			VideoPresetLevel detected = detectCurrentPreset();
-			if (detected != VideoPresetLevel::Custom)
-				currentPresetIndex = static_cast<int>(detected);
-		}
+			currentPresetIndex = static_cast<int>(detectCurrentPreset());
 
 		// Build preset labels
 		const char* presetLabels[] = {
@@ -4076,16 +4727,26 @@ void renderVideoTab()
 			std::array<int, scalings.size()> verticalRes {};
 			std::array<std::string, scalings.size()> resolutionLabels {};
 			std::array<const char*, scalings.size()> resolutionLabelPtrs {};
-			int internalResSelection = 0;
+			int internalResSelection = -1;
+			const int configuredRenderResolution = config::RenderResolution.get();
+			// Read both toggles every frame so labels also preview widescreen cheats before a game is loaded.
+			float widthScale = 1.f;
+			if ((config::Widescreen || config::WidescreenGameHacks)
+					&& !config::Rotate90 && !config::EmulateFramebuffer)
+			{
+				widthScale = config::Widescreen && config::SuperWidescreen
+						&& settings.display.width > 0 && settings.display.height > 0
+					? static_cast<float>(settings.display.width) / settings.display.height / 4.f * 3.f
+					: 4.f / 3.f;
+			}
 
 			for (size_t i = 0; i < scalings.size(); i++)
 			{
 				verticalRes[i] = static_cast<int>(scalings[i] * 480.0f);
-				const int horizontalRes = !config::Widescreen
-					? static_cast<int>(scalings[i] * 640.0f)
-					: static_cast<int>(scalings[i] * 480.0f * 16.0f / 9.0f);
+				// Keep the renderer's even-pixel width rounding for the selected aspect ratio.
+				const int horizontalRes = static_cast<int>(std::round(scalings[i] * 640.f * widthScale / 2.f) * 2.f);
 
-				if (verticalRes[i] == config::RenderResolution.get())
+				if (verticalRes[i] == configuredRenderResolution)
 					internalResSelection = static_cast<int>(i);
 
 				resolutionLabels[i] = std::to_string(horizontalRes) + "x" + std::to_string(verticalRes[i]) + " (" + scalingNames[i] + ")";
@@ -4100,10 +4761,23 @@ void renderVideoTab()
 			internalResCfg.options.options = resolutionLabelPtrs.data();
 			internalResCfg.options.optionCount = static_cast<int>(resolutionLabelPtrs.size());
 			internalResCfg.options.currentValue = &internalResSelection;
+			// Older and hand-edited configurations can contain resolutions outside
+			// the preset list. Show the stored vertical target instead of falsely
+			// presenting the first (Half) preset, and preserve it until a preset is
+			// explicitly selected.
+			const std::string customResolutionLabel = std::to_string(configuredRenderResolution)
+				+ "p (" + T("Custom") + ")";
+			internalResCfg.options.valueToString = [&, customResolutionLabel](int selectedIndex) {
+				if (selectedIndex >= 0 && selectedIndex < static_cast<int>(resolutionLabelPtrs.size()))
+					return resolutionLabelPtrs[selectedIndex];
+				return customResolutionLabel.c_str();
+			};
 			internalResCfg.options.valueWidth = 220.0f;
 			internalResCfg.options.onChange = [&](int selectedIndex) {
 				if (selectedIndex < 0 || selectedIndex >= static_cast<int>(verticalRes.size()))
 					return false;
+				// RenderResolution is the vertical target size; the renderer derives
+				// its scale from this value relative to the native 480-line output.
 				config::RenderResolution.set(verticalRes[selectedIndex]);
 				return true;
 			};
@@ -4115,6 +4789,7 @@ void renderVideoTab()
 				T(
 					"Internal Resolution\n"
 					"This is the single biggest graphics performance setting.\n"
+					"Resolution labels update with the widescreen settings. With Widescreen Game Cheats alone, labels preview the stretched 16:9 output for supported games.\n\n"
 					"Lower values reduce GPU load (faster). Higher values improve clarity, reduce shimmer/aliasing, and act as a form of supersampling.\n\n"
 					"If you are not holding a stable 30/60 FPS, reduce Internal Resolution first before turning off visual features."
 				)
@@ -4198,19 +4873,6 @@ void renderVideoTab()
 
 		ImGui::Unindent();
 #endif
-
-		RenderGeneralToggleSettingRow(
-			"ShowVMU",
-			ICON_FA_GAMEPAD,
-			T("Show VMU In-Game"),
-			T("Show VMU LCD screens during gameplay."),
-			static_cast<bool>(config::FloatVMUs),
-			[](bool enabled) { config::FloatVMUs.set(enabled); },
-			T(
-				"Show VMU In-Game\n"
-				"Displays the VMU LCD screens while in-game.\n"
-				"Useful for games that rely on VMU info (status, menus, minigames)."
-			));
 
 		RenderGeneralToggleSettingRow(
 			"Framebuffer",
@@ -4313,9 +4975,9 @@ void renderVideoTab()
 				"Super Widescreen\n"
 				"Uses the full width of the screen/window when the aspect ratio is wider than 16:9.\n"
 				"More likely to reveal out-of-bounds glitches than standard widescreen.\n\n"
-				"Not compatible with Integer Scaling."
+				"Not compatible with Integer Scaling or Stretch to Fill."
 			),
-			!config::Widescreen || config::IntegerScale);
+			(!config::Widescreen || config::IntegerScale || config::StretchToFill) && !config::SuperWidescreen);
 		ImGui::Unindent();
 
 		RenderGeneralToggleSettingRow(
@@ -4330,6 +4992,16 @@ void renderVideoTab()
 				"Modifies supported games to display in a 16:9 anamorphic format (game-specific patches).\n"
 				"Only some games are supported, but when it works it can be cleaner than geometry widescreen."
 			));
+
+		RenderGeneralToggleSettingRow(
+			"StretchToFill",
+			ICON_FA_EXPAND,
+			T("Stretch to Fill"),
+			T("Stretch the screen to fill the entire screen or window."),
+			static_cast<bool>(config::StretchToFill),
+			[](bool enabled) { config::StretchToFill.set(enabled); },
+			T("Stretch the screen to fill the entire screen or window."),
+			config::SuperWidescreen);
 
 		{
 			SettingsUI::PopupSliderConfig stretchCfg {};
@@ -4356,7 +5028,8 @@ void renderVideoTab()
 					"Horizontal Stretching\n"
 					"Stretches the image sideways.\n"
 					"132% is a common value for 16:9 correction, but the best value depends on your display and personal preference."
-				)
+				),
+				config::StretchToFill
 			);
 		}
 
@@ -4687,7 +5360,7 @@ void renderVideoTab()
 				));
 		}
 
-		// Texture Filtering
+		// Texture Sampling (legacy sampler override)
 		const std::array<const char*, 3> textureFilterLabels {
 			T("Default"),
 			T("Force Nearest-Neighbor"),
@@ -4699,7 +5372,7 @@ void renderVideoTab()
 
 		SettingsUI::PopupConfig textureFilterCfg {};
 		textureFilterCfg.type = SettingsUI::PopupType::Options;
-		textureFilterCfg.options.label = T("Filtering Mode");
+		textureFilterCfg.options.label = T("Sampler Override");
 		textureFilterCfg.options.icon = ICON_FA_FILTER;
 		textureFilterCfg.options.popupID = Tnop("TextureFilteringPopup");
 		textureFilterCfg.options.options = textureFilterLabels.data();
@@ -4715,29 +5388,188 @@ void renderVideoTab()
 
 		RenderGeneralPopupSettingRow(
 			Tnop("TextureFilteringSetting"),
-			T("Override how textures are filtered (sampled)."),
+			T("Override the sampler mode used when textures are sampled."),
 			textureFilterCfg,
 			T(
-				"Texture Filtering\n"
+				"Texture Sampling Override\n"
 				"Default: uses game behavior.\n"
 				"Force Nearest-Neighbor: crisp/pixelated look.\n"
 				"Force Linear: smoother/blurrier look.\n\n"
 				"For 2D/pixel-art, many users prefer Nearest-Neighbor. For 3D, Linear can look nicer."
 			));
 
-		// Show FPS Counter
-		RenderGeneralToggleSettingRow(
-			"ShowFPS",
-			ICON_FA_GAUGE_HIGH,
-			T("Show FPS Counter"),
-			T("Show FPS so you can tune for stable 30/60."),
-			static_cast<bool>(config::ShowFPS),
-			[](bool enabled) { config::ShowFPS.set(enabled); },
+		const auto sampleTextureFilterLabels = getSampleTextureFilterLabels();
+		const std::array<const char*, 20> sampleTextureFilterDescriptions {
 			T(
-				"Show FPS Counter\n"
-				"Displays an on-screen frame rate counter.\n"
-				"Strongly recommended while tuning settings: aim for stable 30/60 FPS in real gameplay."
+				"Sample Texture Filter: Disabled\n"
+				"Uses HollyCast's legacy texture sampling behavior."
+			),
+			T(
+				"Sample Texture Filter: Bilinear\n"
+				"Smooths texture samples with alpha-weighted bilinear interpolation. Good simple baseline."
+			),
+			T(
+				"Sample Texture Filter: Bilinear / No Edge Blending\n"
+				"Smooth bilinear filtering with harder alpha edges to reduce transparent-edge bleeding."
+			),
+			T(
+				"Sample Texture Filter: Jinc2\n"
+				"Windowed Jinc-style reconstruction. Premium smooth option, but sharp edges can show mild ringing."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 / No Edge Blending\n"
+				"Jinc2 reconstruction with harder alpha edges for sprites, UI, and texture-sheet borders."
+			),
+			T(
+				"Sample Texture Filter: MMPX\n"
+				"Pixel-art style reconstruction that preserves hard shapes. Best for 2D artwork, not natural textures."
+			),
+			T(
+				"Sample Texture Filter: MMPX Enhanced\n"
+				"Softer MMPX variant that blends reconstructed pixels back toward the source."
+			),
+			T(
+				"Sample Texture Filter: MMPX Advanced\n"
+				"More aggressive MMPX edge rules. Useful for pixel-art tests, but can be stylized."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Anti-Ring\n"
+				"Jinc2-style reconstruction with halo clamping. Better for signs, logos, HUD art, decals, and alpha edges."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Sharp Anti-Ring\n"
+				"Sharper Jinc2-style reconstruction with anti-ringing. Advanced option for crisp Dreamcast-era texture sheets."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Mild Anti-Ring\n"
+				"Jinc2 reconstruction with mild sharpening and an anti-ringing clamp."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Extra Sharp Anti-Ring\n"
+				"Jinc2 reconstruction with stronger sharpening and an anti-ringing clamp."
+			),
+			T(
+				"Sample Texture Filter: Lanczos2 Anti-Ring\n"
+				"Sharp sinc/Lanczos reconstruction with a smaller radius and halo clamp. Strong everyday texture option."
+			),
+			T(
+				"Sample Texture Filter: Lanczos3 Anti-Ring\n"
+				"Sharper larger-radius Lanczos reconstruction with halo clamp. High quality, but more likely to emphasize edges."
+			),
+			"", // Retired ID 14; keep persisted filter IDs stable.
+			T(
+				"Sample Texture Filter: Robidoux\n"
+				"Balanced cubic reconstruction. Good compromise for painted or photographic Dreamcast-era textures."
+			),
+			T(
+				"Sample Texture Filter: Robidoux Sharp\n"
+				"Sharper Robidoux-style cubic filter. A good candidate for texture packs and detailed environment art."
+			),
+			T(
+				"Sample Texture Filter: Bicubic Catmull-Rom\n"
+				"Classic sharper bicubic reconstruction. Crisp, familiar, and cheaper than the heavier premium filters."
+			),
+			T(
+				"Sample Texture Filter: Bicubic Mitchell\n"
+				"Softer Mitchell-Netravali bicubic reconstruction. Smooth low-ringing option for UI and texture sheets."
+			),
+			T(
+				"Sample Texture Filter: Nearest-Neighbor\n"
+				"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the selected size limit and leaves Flycast's global sampler override at Default."
+			)
+		};
+		if (config::SampleTextureFilter.get() == 14)
+			config::SampleTextureFilter.set(0);
+		int sampleTextureFilterSelection = getSampleTextureFilterOptionIndex(config::SampleTextureFilter.get());
+
+		SettingsUI::PopupConfig sampleTextureFilterCfg {};
+		sampleTextureFilterCfg.type = SettingsUI::PopupType::Options;
+		sampleTextureFilterCfg.options.label = T("Sample Texture Filter");
+		sampleTextureFilterCfg.options.icon = ICON_FA_FILTER;
+		sampleTextureFilterCfg.options.popupID = Tnop("SampleTextureFilterPopup");
+		sampleTextureFilterCfg.options.options = sampleTextureFilterLabels.data();
+		sampleTextureFilterCfg.options.optionCount = static_cast<int>(sampleTextureFilterLabels.size());
+		sampleTextureFilterCfg.options.currentValue = &sampleTextureFilterSelection;
+		sampleTextureFilterCfg.options.valueWidth = 270.0f;
+		sampleTextureFilterCfg.options.description = sampleTextureFilterDescriptions[sampleTextureFilterValues[sampleTextureFilterSelection]];
+		sampleTextureFilterCfg.options.onOptionHighlight = [&](int selectedIndex, const char*) {
+			if (selectedIndex >= 0 && selectedIndex < static_cast<int>(sampleTextureFilterValues.size()))
+				SetSettingsFooterText(sampleTextureFilterDescriptions[sampleTextureFilterValues[selectedIndex]]);
+		};
+		sampleTextureFilterCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(sampleTextureFilterLabels.size()))
+				return false;
+			config::SampleTextureFilter.set(sampleTextureFilterValues[selectedIndex]);
+			return true;
+		};
+
+		const bool sampleTextureFilterSupported = config::RendererType != RenderType::DirectX9;
+		RenderGeneralPopupSettingRow(
+			Tnop("SampleTextureFilterSetting"),
+			T("Choose the sample-time texture filtering algorithm."),
+			sampleTextureFilterCfg,
+			sampleTextureFilterSupported
+				? sampleTextureFilterDescriptions[sampleTextureFilterValues[sampleTextureFilterSelection]]
+				: T("Sample-time filtering is not available on DirectX 9."),
+			!sampleTextureFilterSupported);
+		const auto maxFilteredTextureSizeLabels = getMaxFilteredTextureSizeLabels();
+		int maxFilteredTextureSizeSelection = 5;
+		for (size_t i = 0; i < maxFilteredTextureSizeValues.size(); i++)
+		{
+			if (maxFilteredTextureSizeValues[i] == config::MaxFilteredTextureSize.get())
+			{
+				maxFilteredTextureSizeSelection = static_cast<int>(i);
+				break;
+			}
+		}
+
+		SettingsUI::PopupConfig maxFilteredTextureSizeCfg {};
+		maxFilteredTextureSizeCfg.type = SettingsUI::PopupType::Options;
+		maxFilteredTextureSizeCfg.options.label = T("Max Filtered Texture Size");
+		maxFilteredTextureSizeCfg.options.icon = ICON_FA_EXPAND;
+		maxFilteredTextureSizeCfg.options.popupID = Tnop("MaxFilteredTextureSizePopup");
+		maxFilteredTextureSizeCfg.options.options = maxFilteredTextureSizeLabels.data();
+		maxFilteredTextureSizeCfg.options.optionCount = static_cast<int>(maxFilteredTextureSizeLabels.size());
+		maxFilteredTextureSizeCfg.options.currentValue = &maxFilteredTextureSizeSelection;
+		maxFilteredTextureSizeCfg.options.valueWidth = 170.0f;
+		maxFilteredTextureSizeCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(maxFilteredTextureSizeValues.size()))
+				return false;
+			config::MaxFilteredTextureSize.set(maxFilteredTextureSizeValues[selectedIndex]);
+			return true;
+		};
+
+		RenderGeneralPopupSettingRow(
+			Tnop("MaxFilteredTextureSizeSetting"),
+			T("Limit filtering to smaller texture groups."),
+			maxFilteredTextureSizeCfg,
+			T(
+				"Max Filtered Texture Size\n"
+				"Controls the largest texture group affected by texture upscaling and sample texture filters.\n"
+				"Upscaling checks the original width. Sample filters check the uploaded width, including upscaling and replacement textures.\n"
+				"Buckets use texture width, so 8x8 includes 8x16 and 8x32, while 16x16 includes 16x8.\n"
+				"1024x1024+ includes larger texture-pack assets.\n\n"
+				"Live preview updates sample-time filtering immediately. Already-uploaded texture-upscale results may require a cache refresh or game restart."
 			));
+		ImGui::Spacing();
+		const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause());
+		if (!canLiveTune)
+			ImGui::BeginDisabled();
+		if (ImGui::Button(T("Texture Filtering Live Tune"), ScaledVec2(260.f, 34.f)))
+		{
+			applyPendingSettings();
+			GamepadDevice::load_system_mappings();
+			closeShaderLiveTune();
+			g_textureFilterLiveTune.store(true, std::memory_order_relaxed);
+			// Resume through Loading when replacement textures need a refresh or preload.
+			gui_resume_game();
+		}
+		if (!canLiveTune)
+			ImGui::EndDisabled();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("%s", !game_started ? T("Start a game to tune texture filtering over its current frame.")
+					: T("The current game must be pausable for live texture filtering."));
+
 	}
 
 #ifdef VIDEO_ROUTING
@@ -5783,14 +6615,16 @@ void renderShaderTab()
 			if (ImGui::Button(T("Clear All")))
 				applyShaderSelection({});
 			ImGui::SameLine();
-			const bool canLiveTune = game_started && !ggpo::active() && achievements::canPause()
+			const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause())
 					&& g_shaderPreview.error.empty();
 			if (!canLiveTune)
 				ImGui::BeginDisabled();
 			if (ImGui::Button(T("Live Tune"))) {
+				applyPendingSettings();
+				GamepadDevice::load_system_mappings();
+				stopTextureFilterLiveTune();
 				g_shaderLiveTune = true;
-				SaveSettings();
-				gui_setState(GuiState::Closed);
+				gui_resume_game();
 			}
 			if (!canLiveTune)
 				ImGui::EndDisabled();
@@ -5809,8 +6643,12 @@ void renderShaderTab()
 
 void renderShaderLiveTuneOverlay()
 {
-	if (!g_shaderLiveTune || !game_started)
+	if (!g_shaderLiveTune)
 		return;
+	if (!game_started || ggpo::active()) {
+		closeShaderLiveTune();
+		return;
+	}
 	ensureShaderPreview();
 
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
@@ -5855,9 +6693,329 @@ void renderShaderLiveTuneOverlay()
 		g_shaderLiveTune = false;
 }
 
+bool liveTuneActive()
+{
+	return textureFilterLiveTuneActive() || g_shaderLiveTune.load(std::memory_order_relaxed);
+}
+
 void closeShaderLiveTune()
 {
 	g_shaderLiveTune = false;
+}
+
+void renderOnScreenDisplayTab()
+{
+	ScopedTwoLineRowStyle osdRowStyle(12.0f, true, 0.5f);
+
+	ImGui::TextDisabled("%s", T("On Screen Display"));
+	ImGui::Separator();
+
+	if (RenderCollapsingHeader("OsdInGameSection", ICON_FA_DISPLAY, T("In-Game Display"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderGeneralToggleSettingRow(
+			"ShowVMU",
+			ICON_FA_GAMEPAD,
+			T("Show VMU In-Game"),
+			T("Show VMU LCD screens during gameplay."),
+			static_cast<bool>(config::FloatVMUs),
+			[](bool enabled) { config::FloatVMUs.set(enabled); },
+			T("Show VMU In-Game\nDisplays the VMU LCD screens while in-game."));
+#ifdef HAVE_MOVABLE_VMUS
+		ImGui::PushID("MovableVMUs");
+		const bool moveRowActivated = BeginTwoLineSettingRow("##row",
+			T("Enable to move VMU screens. Turn off to lock them in place. Use reset to restore their default positions."));
+		const ImVec2 moveLineStart = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_GAMEPAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Move VMU"));
+		ImGui::PopFont();
+		const float resetWidth = SettingsLayoutScaled(26.0f);
+		const float resetHeight = SettingsLayoutScaled(22.0f);
+		const float toggleWidth = SettingsLayoutScaled(50.0f);
+		ImGui::SameLine(RightColumnX(toggleWidth + resetWidth + SettingsLayoutScaled(8.0f)));
+		const ImVec2 togglePos = ImGui::GetCursorPos();
+		ImGui::SetCursorPos(ImVec2(togglePos.x,
+			togglePos.y + (TwoLineSettingContentHeight() - SettingsLayoutScaled(24.0f)) * 0.5f));
+		RenderToggleSwitchVisual(config::MovableVMUs);
+		ImGui::SameLine(RightColumnX(resetWidth));
+		ImGui::SetCursorPosY(moveLineStart.y + (TwoLineSettingContentHeight() - resetHeight) * 0.5f);
+		const bool resetPressed = SettingsIconButton("##ResetVmuPositions", ICON_FA_ARROWS_ROTATE, ImVec2(resetWidth, resetHeight));
+		const bool resetHovered = ImGui::IsItemHovered();
+		if (resetHovered || ImGui::IsItemFocused())
+			SetSettingsFooterText(T("Reset VMU screens to their default positions."));
+		// The reset is a separate action inside the selectable row.
+		if (moveRowActivated && !resetHovered && !resetPressed)
+		{
+			config::VmuLayoutEnabled.set(true);
+			config::MovableVMUs.set(!config::MovableVMUs.get());
+			if (config::MovableVMUs)
+				config::FloatVMUs.set(true);
+		}
+		if (resetPressed)
+			vmu_window::resetPositions();
+		RenderTwoLineSettingDescription(moveLineStart, T("Turn off to lock VMU screens in place."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
+		if ((config::MovableVMUs || config::VmuLayoutEnabled) && config::FloatVMUs)
+		{
+			SettingsUI::PopupConfig vmuSizeCfg {};
+			vmuSizeCfg.type = SettingsUI::PopupType::Slider;
+			vmuSizeCfg.slider.label = T("VMU Size");
+			vmuSizeCfg.slider.icon = ICON_FA_RULER_HORIZONTAL;
+			vmuSizeCfg.slider.popupID = Tnop("VmuWindowSizePopup");
+			vmuSizeCfg.slider.description = T("Resize all movable VMU screens live.");
+			vmuSizeCfg.slider.currentValue = &config::VmuWindowSize.get();
+			vmuSizeCfg.slider.minValue = vmu_window::MinSizePercent;
+			vmuSizeCfg.slider.maxValue = vmu_window::MaxSizePercent;
+			vmuSizeCfg.slider.defaultValue = vmu_window::DefaultSizePercent;
+			vmuSizeCfg.slider.format = "%d%%";
+			vmuSizeCfg.slider.valueWidth = 220.0f;
+			vmuSizeCfg.slider.sliderWidth = 320.0f;
+			RenderGeneralPopupSettingRow(Tnop("VmuWindowSizeSetting"),
+				T("Scale VMU screens independently of UI scaling."), vmuSizeCfg,
+				T("100% keeps the default VMU size. Changes apply immediately and are saved with your settings."));
+			SettingsUI::PopupConfig vmuTransparencyCfg {};
+			vmuTransparencyCfg.type = SettingsUI::PopupType::Slider;
+			vmuTransparencyCfg.slider.label = T("VMU Transparency");
+			vmuTransparencyCfg.slider.icon = ICON_FA_EYE;
+			vmuTransparencyCfg.slider.popupID = Tnop("VmuWindowTransparencyPopup");
+			vmuTransparencyCfg.slider.description = T("Adjust how transparent VMU screens are.");
+			vmuTransparencyCfg.slider.currentValue = &config::VmuWindowTransparency.get();
+			vmuTransparencyCfg.slider.minValue = vmu_window::MinTransparencyPercent;
+			vmuTransparencyCfg.slider.maxValue = vmu_window::MaxTransparencyPercent;
+			vmuTransparencyCfg.slider.defaultValue = vmu_window::DefaultTransparencyPercent;
+			vmuTransparencyCfg.slider.format = "%d%%";
+			vmuTransparencyCfg.slider.valueWidth = 220.0f;
+			vmuTransparencyCfg.slider.sliderWidth = 320.0f;
+			RenderGeneralPopupSettingRow(Tnop("VmuWindowTransparencySetting"),
+				T("0% is solid. 100% is invisible."), vmuTransparencyCfg,
+				T("25% keeps the default transparency. Desktop VMUs dim further in menus. Changes apply immediately and are saved with your settings."));
+		}
+#endif
+	}
+
+	if (RenderCollapsingHeader("OsdPerformanceSection", ICON_FA_CHART_LINE, T("Performance Overlay"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		const std::array<const char*, 3> overlayModeLabels { T("Off"), T("Minimal"), T("Full") };
+		int overlayModeSelection = std::clamp(getResourceMonitorMode(), 0, 2);
+		SettingsUI::PopupConfig overlayModeCfg {};
+		overlayModeCfg.type = SettingsUI::PopupType::Options;
+		overlayModeCfg.options.label = T("Overlay Mode");
+		overlayModeCfg.options.icon = ICON_FA_CHART_LINE;
+		overlayModeCfg.options.popupID = Tnop("ResourceMonitorModePopup");
+		overlayModeCfg.options.options = overlayModeLabels.data();
+		overlayModeCfg.options.optionCount = static_cast<int>(overlayModeLabels.size());
+		overlayModeCfg.options.currentValue = &overlayModeSelection;
+		overlayModeCfg.options.valueWidth = 220.0f;
+		overlayModeCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(overlayModeLabels.size()))
+				return false;
+			setResourceMonitorMode(selectedIndex);
+			return true;
+		};
+		RenderGeneralPopupSettingRow(
+			Tnop("ResourceMonitorMode"),
+			T("Choose the overlay density. Off can use the lightweight FPS counter; Full uses the metric selections below."),
+			overlayModeCfg,
+			T("Overlay Mode\nOff can show the lightweight FPS counter below. Minimal always shows a compact rate and CPU view. Full uses the diagnostic selections below, including separate host and Dreamcast timing domains."));
+
+		// The lightweight counter and performance overlay own different OSD
+		// layouts. Expose only the FPS control used by the active layout so a
+		// setting is never silently ignored or duplicated on screen.
+		if (overlayModeSelection == 0)
+		{
+			RenderGeneralToggleSettingRow(
+				"ShowFPS",
+				ICON_FA_GAUGE_HIGH,
+				T("Show Lightweight FPS Counter"),
+				T("Show a compact frame-rate counter without enabling performance monitoring."),
+				static_cast<bool>(config::ShowFPS),
+				[](bool enabled) { config::ShowFPS.set(enabled); },
+				T("Show Lightweight FPS Counter\nAvailable while the Performance Overlay is Off. Minimal includes frame rates automatically, while Full uses the Game FPS and VPS metric below."));
+		}
+		if (overlayModeSelection == 2)
+		{
+			struct OverlayMetric
+			{
+				const char* id;
+				const char* label;
+				const char* description;
+				bool defaultValue;
+			};
+			const std::array<OverlayMetric, 15> overlayMetrics {{
+				{ "OverlayShowFPS", T("Show Game FPS and VPS"), T("FPS counts completed non-render-to-texture PVR scenes: the game's internal rendered-frame rate. VPS counts Dreamcast video blanks. A 30 FPS game normally shows 30 FPS and about 60 VPS on NTSC."), true },
+				{ "OverlayShowOutputFPS", T("Show Output FPS"), T("Counts successful frames presented to the screen. Compare it with Game FPS to identify repeated or omitted host output frames; it is display cadence, not the game's internal rendered-frame rate."), false },
+				{ "OverlayShowEmulationSpeed", T("Show Emulation Speed"), T("Shows current VPS relative to the active PAL or NTSC target and the configured speed limit. This is overall pace, not a CPU or GPU utilization meter."), true },
+				{ "OverlayShowThreadingState", T("Show Threading State"), T("Shows whether SH4 emulation and PVR rendering run on separate host threads. Threaded mode changes which thread can become the limiting host CPU core."), true },
+				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("Hollycast is the emulator process share of all logical CPU cores. Device is total CPU use from all apps. A single SH4 or renderer thread can still fill one core while Hollycast is low on an 8-core device."), true },
+				{ "OverlayShowGpuUsage", T("Show Host GPU"), T("Shows timestamped GPU work as a one-second share and milliseconds per timed render. Includes PVR screen renders and direct framebuffer uploads; full framebuffer emulation can perform both per video frame. It is backend GPU execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX 9, and DirectX 11 support it."), true },
+				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
+				{ "OverlayShowPvrTimingPressure", T("Show Dreamcast PVR Schedule"), T("Shows all emulated PVR renderer-complete delays scheduled during the sample as a share of the active Dreamcast video-frame budgets. Values above 100% mean scheduled render work exceeded one frame of budget on average. It is scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."), true },
+				{ "OverlayShowCpuUsage", T("Show Host SH4 Thread"), T("Shows host CPU time used by the thread running SH4 emulation. A value near 100% means that one host core is saturated; it does not directly mean the original Dreamcast SH4 is full."), false },
+				{ "OverlayShowPvrUsage", T("Show Host PVR Renderer Thread"), T("Shows host CPU time used by the PVR renderer thread or its shared-thread portion. It exposes emulator and graphics-driver preparation cost, not Dreamcast PVR pressure or hardware GPU use."), false },
+				{ "OverlayShowResolution", T("Show Resolution"), T("Shows native Dreamcast output, internal rendered size, host viewport, and final screen output. Higher rendered resolution can raise host GPU time without changing Dreamcast SH4 or PVR scheduling."), true },
+				{ "OverlayShowFrameTimes", T("Show Frame Times"), T("Shows minimum, average, and maximum intervals between successful host presents. Frame-time spikes expose stutter even when the one-second FPS average looks normal."), true },
+				{ "OverlayShowGpuStatistics", T("Show Renderer Statistics"), T("Shows API, PVR primitive batches, vertices, PVR render passes, and texture uploads per second. These are renderer work counters, not VRAM bytes, cache-resident texture count, or host draw/copy/readback counters."), true },
+				{ "OverlayShowVram", T("Show Host GPU Memory"), T("Shows the Windows DXGI memory attributed to Hollycast and its current adapter budget when the OS exposes it. It changes with allocations, but is not total GPU VRAM and is unavailable on platforms without an authoritative query."), true },
+				{ "OverlayShowRam", T("Show Hollycast RAM"), T("Shows the resident memory currently held by Hollycast according to the operating system. It changes with content, caches, and allocations. Fixed Dreamcast RAM and VRAM capacities are intentionally omitted."), true }
+			}};
+			for (const OverlayMetric& metric : overlayMetrics)
+			{
+				RenderGeneralToggleSettingRow(
+					metric.id,
+					ICON_FA_CHART_LINE,
+					metric.label,
+					metric.description,
+					cfgLoadBool("rend", metric.id, metric.defaultValue),
+					[metric](bool enabled) { cfgSaveBool("rend", metric.id, enabled); });
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("%s", T("History Graphs"));
+			const std::array<OverlayMetric, 3> overlayGraphs {{
+				{ "OverlayShowFrameTimeGraph", T("Show Frame-Time Graph"), T("Draw a rolling 152-sample graph of successful-present intervals. Spikes are long output frames."), true },
+				{ "OverlayShowHostCpuGraph", T("Show Host CPU Graph"), T("Draw rolling one-second samples. The main line is Hollycast's share of total CPU capacity; the blue line is overall device CPU use from all apps."), false },
+				{ "OverlayShowGpuGraph", T("Show Host GPU Graph"), T("Draw rolling one-second GPU timestamp samples. It is available only while the active backend supplies valid GPU timestamp queries."), false }
+			}};
+			for (const OverlayMetric& graph : overlayGraphs)
+			{
+				RenderGeneralToggleSettingRow(
+					graph.id,
+					ICON_FA_CHART_LINE,
+					graph.label,
+					graph.description,
+					cfgLoadBool("rend", graph.id, graph.defaultValue),
+					[graph](bool enabled) { cfgSaveBool("rend", graph.id, enabled); });
+			}
+		}
+	}
+
+	if (RenderCollapsingHeader("OsdAppearanceSection", ICON_FA_EYE, T("Appearance"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		static int overlayTextSize = cfgLoadInt("rend", "OverlayTextSize", 16);
+		SettingsUI::PopupSliderConfig textSizeCfg {};
+		textSizeCfg.label = T("Text Size");
+		textSizeCfg.icon = ICON_FA_TEXT_HEIGHT;
+		textSizeCfg.popupID = Tnop("OverlayTextSizePopup");
+		textSizeCfg.description = T("Set the maximum text size. The overlay shrinks when needed to keep every row and graph on screen.");
+		textSizeCfg.currentValue = &overlayTextSize;
+		textSizeCfg.minValue = 10;
+		textSizeCfg.maxValue = 48;
+		textSizeCfg.defaultValue = 16;
+		textSizeCfg.format = "%d px";
+		textSizeCfg.valueWidth = 220.0f;
+		textSizeCfg.sliderWidth = 320.0f;
+		textSizeCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayTextSize", overlayTextSize); };
+		SettingsUI::PopupConfig textSizePopup {};
+		textSizePopup.type = SettingsUI::PopupType::Slider;
+		textSizePopup.slider = textSizeCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayTextSizeSetting"), T("Choose the overlay font size."), textSizePopup,
+			T("Text Size\nControls the maximum text size. All selected rows and graphs automatically fit inside the screen."));
+
+		// Keep the existing configuration key for compatibility. Its value has
+		// always represented opacity: larger percentages make the OSD less transparent.
+		static int overlayOpacity = cfgLoadInt("rend", "OverlayTransparency", 85);
+		SettingsUI::PopupSliderConfig opacityCfg {};
+		opacityCfg.label = T("Opacity");
+		opacityCfg.icon = ICON_FA_EYE;
+		opacityCfg.popupID = Tnop("OverlayTransparencyPopup");
+		opacityCfg.description = T("Set the overlay opacity.");
+		opacityCfg.currentValue = &overlayOpacity;
+		opacityCfg.minValue = 10;
+		opacityCfg.maxValue = 100;
+		opacityCfg.defaultValue = 85;
+		opacityCfg.format = "%d%%";
+		opacityCfg.valueWidth = 220.0f;
+		opacityCfg.sliderWidth = 320.0f;
+		opacityCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayTransparency", overlayOpacity); };
+		SettingsUI::PopupConfig opacityPopup {};
+		opacityPopup.type = SettingsUI::PopupType::Slider;
+		opacityPopup.slider = opacityCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayTransparencySetting"), T("Set the overlay opacity."), opacityPopup,
+			T("Opacity\nControls the overlay text and background opacity."));
+
+		const std::array<const char*, 4> overlayCornerLabels { T("Top Left"), T("Top Right"), T("Bottom Left"), T("Bottom Right") };
+		int overlayCorner = std::clamp(config::loadInt("rend", "OverlayCorner", 1), 0, 3);
+		SettingsUI::PopupConfig cornerCfg {};
+		cornerCfg.type = SettingsUI::PopupType::Options;
+		cornerCfg.options.label = T("Screen Corner");
+		cornerCfg.options.icon = ICON_FA_LOCATION_DOT;
+		cornerCfg.options.popupID = Tnop("OverlayCornerPopup");
+		cornerCfg.options.options = overlayCornerLabels.data();
+		cornerCfg.options.optionCount = static_cast<int>(overlayCornerLabels.size());
+		cornerCfg.options.currentValue = &overlayCorner;
+		cornerCfg.options.valueWidth = 220.0f;
+		cornerCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(overlayCornerLabels.size()))
+				return false;
+			cfgSaveInt("rend", "OverlayCorner", selectedIndex);
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("OverlayCornerSetting"), T("Choose where the overlay appears."), cornerCfg,
+			T("Screen Corner\n15 pixels from the selected edges, and below the menu bar for the top corners."));
+
+		static int overlayOffsetX = cfgLoadInt("rend", "OverlayOffsetX", 0);
+		SettingsUI::PopupSliderConfig offsetXCfg {};
+		offsetXCfg.label = T("Horizontal Position");
+		offsetXCfg.icon = ICON_FA_ARROWS_LEFT_RIGHT;
+		offsetXCfg.popupID = Tnop("OverlayOffsetXPopup");
+		offsetXCfg.description = T("Move the complete overlay left or right.");
+		offsetXCfg.currentValue = &overlayOffsetX;
+		offsetXCfg.minValue = -1000;
+		offsetXCfg.maxValue = 1000;
+		offsetXCfg.defaultValue = 0;
+		offsetXCfg.format = "%+d px";
+		offsetXCfg.valueWidth = 220.0f;
+		offsetXCfg.sliderWidth = 320.0f;
+		offsetXCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayOffsetX", overlayOffsetX); };
+		SettingsUI::PopupConfig offsetXPopup {};
+		offsetXPopup.type = SettingsUI::PopupType::Slider;
+		offsetXPopup.slider = offsetXCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayOffsetXSetting"), T("Adjust the overlay's horizontal position."), offsetXPopup,
+			T("Horizontal Position\nZero starts 15 pixels from the selected edge. Negative values move left. Positive values move right. The overlay stays on screen."));
+
+		static int overlayOffsetY = cfgLoadInt("rend", "OverlayOffsetY", 0);
+		SettingsUI::PopupSliderConfig offsetYCfg {};
+		offsetYCfg.label = T("Vertical Position");
+		offsetYCfg.icon = ICON_FA_ARROWS_UP_DOWN;
+		offsetYCfg.popupID = Tnop("OverlayOffsetYPopup");
+		offsetYCfg.description = T("Move the complete overlay up or down.");
+		offsetYCfg.currentValue = &overlayOffsetY;
+		offsetYCfg.minValue = -1000;
+		offsetYCfg.maxValue = 1000;
+		offsetYCfg.defaultValue = 0;
+		offsetYCfg.format = "%+d px";
+		offsetYCfg.valueWidth = 220.0f;
+		offsetYCfg.sliderWidth = 320.0f;
+		offsetYCfg.onValueChange = [&]() { cfgSaveInt("rend", "OverlayOffsetY", overlayOffsetY); };
+		SettingsUI::PopupConfig offsetYPopup {};
+		offsetYPopup.type = SettingsUI::PopupType::Slider;
+		offsetYPopup.slider = offsetYCfg;
+		RenderGeneralPopupSettingRow(Tnop("OverlayOffsetYSetting"), T("Adjust the overlay's vertical position."), offsetYPopup,
+			T("Vertical Position\nZero starts 15 pixels from the selected edge, below the menu bar for top corners. Negative values move up. Positive values move down. The overlay stays on screen and below the menu bar."));
+
+		int packedColor = config::loadInt("rend", "OverlayColor", 0xFFFFFFFF);
+		float overlayColor[4] {
+			((packedColor >> 0) & 0xFF) / 255.0f,
+			((packedColor >> 8) & 0xFF) / 255.0f,
+			((packedColor >> 16) & 0xFF) / 255.0f,
+			((packedColor >> 24) & 0xFF) / 255.0f
+		};
+		RenderGeneralTextInputSettingRow(
+			"OverlayColor",
+			ICON_FA_EYE,
+			T("Text Color"),
+			T("Choose the overlay text color."),
+			[&]() {
+				if (ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs))
+					cfgSaveInt("rend", "OverlayColor", static_cast<int>(std::round(overlayColor[0] * 255.f))
+						| (static_cast<int>(std::round(overlayColor[1] * 255.f)) << 8)
+						| (static_cast<int>(std::round(overlayColor[2] * 255.f)) << 16)
+						| (static_cast<int>(std::round(overlayColor[3] * 255.f)) << 24));
+			},
+			T("Text Color\nControls the overlay text color."));
+	}
 }
 
 void renderAudioTab()
@@ -6693,7 +7851,7 @@ static void renderVmuCardManager()
 	{
 		ImGui::InputText(T("File name"), &createVmuName);
 		if (!vmuOpError.empty())
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+			ImGui::TextColored(SettingsErrorColor(), "%s", vmuOpError.c_str());
 
 		if (ImGui::Button(T("Create")))
 		{
@@ -6719,7 +7877,7 @@ static void renderVmuCardManager()
 	{
 		ImGui::InputText(T("New file name"), &copyVmuName);
 		if (!vmuOpError.empty())
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+			ImGui::TextColored(SettingsErrorColor(), "%s", vmuOpError.c_str());
 
 		if (ImGui::Button(T("Copy")))
 		{
@@ -6762,7 +7920,7 @@ static void renderVmuCardManager()
 			&& isLikelyPerGameA1VmuFileName(selectedName);
 		if (showPerGameRenameWarning)
 		{
-			ImVec4 warningColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered];
+			ImVec4 warningColor = CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered], "settings.feedback");
 			ImGui::TextColored(warningColor, "%s %s", ICON_FA_TRIANGLE_EXCLAMATION, T("Per Game VMU Rename Warning"));
 			ImGui::TextWrapped("%s", T(
 				"This looks like an auto-named Per Game VMU for A1.\n"
@@ -6772,7 +7930,7 @@ static void renderVmuCardManager()
 		}
 		ImGui::InputText(T("New name"), &renameVmuName);
 		if (!vmuOpError.empty())
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+			ImGui::TextColored(SettingsErrorColor(), "%s", vmuOpError.c_str());
 
 		if (ImGui::Button(T("Apply")))
 		{
@@ -6824,7 +7982,7 @@ static void renderVmuCardManager()
 			const std::string sourceName = cachedVmuFiles[selectedIndex].name;
 			ImGui::Text(T("Insert \"%s\" into:"), sourceName.c_str());
 			if (!vmuOpError.empty())
-				ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", vmuOpError.c_str());
+				ImGui::TextColored(SettingsErrorColor(), "%s", vmuOpError.c_str());
 
 			if (perGameEnabled && isLikelyPerGameA1VmuFileName(sourceName))
 			{
@@ -6915,7 +8073,7 @@ void renderControlsTab()
 
 			const float portComboWidth = ImGui::CalcTextSize("None").x + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
 			const ImVec2 deviceButtonSize(0.0f, SettingsLayoutScaled(24.0f));
-			const ImVec4 gray(0.5f, 0.5f, 0.5f, 1.f);
+			const ImVec4 gray = ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
 
 			ImGui::TableNextRow(ImGuiTableRowFlags_None, SettingsLayoutScaled(24.0f));
 			ImGui::TableSetColumnIndex(0);
@@ -6996,14 +8154,25 @@ void renderControlsTab()
 					ImGui::OpenPopup(T("Controller Mapping"));
 				}
 
-				// Settings button for rumble/deadzone/saturation
+				// Virtual controllers open the live editor; physical controllers keep
+				// the rumble, deadzone, and saturation popup.
 				if (gamepad->is_rumble_enabled() || gamepad->has_analog_stick() || gamepad->is_virtual_gamepad())
 				{
 					ImGui::SameLine(0, SettingsLayoutScaled(16.0f));
 					if (ImGui::Button(T("Settings"), deviceButtonSize))
 					{
-						g_currentGamepadForSettings = gamepad;
-						ImGui::OpenPopup(T("Gamepad Settings"));
+						if (gamepad->is_virtual_gamepad())
+						{
+							g_currentGamepadForSettings.reset();
+							vgamepad::startEditing();
+							vgamepad::pauseEditing();
+							gui_setState(GuiState::VJoyEditCommands);
+						}
+						else
+						{
+							g_currentGamepadForSettings = gamepad;
+							ImGui::OpenPopup(T("Gamepad Settings"));
+						}
 					}
 				}
 
@@ -7283,7 +8452,7 @@ void renderControlsTab()
 				}
 				else
 				{
-					port_count = maple_getPortCount(config::MapleMainDevices[bus]);
+					port_count = maple_getPortCount(config::MapleMainDevices[bus], MaplePortType::user_accessible);
 				}
 
 				for (int port = 0; port < port_count; port++)
@@ -7540,7 +8709,7 @@ void renderControlsTab()
 
 		if (config::DreamPotatoIntegratedMode && hostfs::getDreamPotatoPath().empty())
 		{
-			ImVec4 warningColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered];
+			ImVec4 warningColor = CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered], "settings.feedback");
 			ImGui::TextColored(warningColor, "%s", T("(!) DreamPotato executable not found. Please set DreamPotato Path in General > Custom Paths."));
 		}
 #endif
@@ -7908,7 +9077,7 @@ void renderNetworkTab()
 		// Battle Cable Settings
 		else if (config::BattleCableEnable)
 		{
-#ifdef USE_ICE
+#if defined(USE_ICE) && defined(USE_WEBSOCKET)
 			if (ImGui::BeginTabBar("battleMode", ImGuiTabBarFlags_NoTooltip))
 			{
 				// Match Code Tab
@@ -8028,7 +9197,7 @@ void renderNetworkTab()
 						EndTwoLineSettingRow();
 						ImGui::PopID();
 					}
-#ifdef USE_ICE
+#if defined(USE_ICE) && defined(USE_WEBSOCKET)
 					ImGui::EndTabItem();
 				}
 				ImGui::EndTabBar();
@@ -8713,7 +9882,7 @@ void renderAdvancedTab()
 	if (ImGui::CollapsingHeader(experimentalFeaturesHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		// Texture Dumping (with warning)
-		ImVec4 warningColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered];
+		ImVec4 warningColor = CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered], "settings.feedback");
 		ImGui::TextColored(warningColor, "%s", T("(!) Texture Dumping"));
 		ImGui::Indent();
 		RenderGeneralToggleSettingRow(
@@ -8770,43 +9939,6 @@ void renderAdvancedTab()
 	const std::string developerToolsHeader = std::string(T("Developer Tools")) + "##Section";
 	if (ImGui::CollapsingHeader(developerToolsHeader.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
 	{
-		const std::array<const char*, 3> monitorModeLabels {
-			T("Off"),
-			T("Minimal"),
-			T("Full")
-		};
-		int monitorModeSelection = getResourceMonitorMode();
-		if (monitorModeSelection < 0 || monitorModeSelection >= static_cast<int>(monitorModeLabels.size()))
-			monitorModeSelection = 0;
-
-		SettingsUI::PopupConfig monitorModeCfg {};
-		monitorModeCfg.type = SettingsUI::PopupType::Options;
-		monitorModeCfg.options.label = T("Overlay Mode");
-		monitorModeCfg.options.icon = ICON_FA_CHART_LINE;
-		monitorModeCfg.options.popupID = Tnop("ResourceMonitorModePopup");
-		monitorModeCfg.options.options = monitorModeLabels.data();
-		monitorModeCfg.options.optionCount = static_cast<int>(monitorModeLabels.size());
-		monitorModeCfg.options.currentValue = &monitorModeSelection;
-		monitorModeCfg.options.valueWidth = 220.0f;
-		monitorModeCfg.options.onChange = [&](int selectedIndex) {
-			if (selectedIndex < 0 || selectedIndex >= 3)
-				return false;
-			setResourceMonitorMode(selectedIndex);
-			return true;
-		};
-
-		RenderGeneralPopupSettingRow(
-			Tnop("ResourceMonitorMode"),
-			T("Real-time performance overlay updated once per second. Minimal: CPU/GPU/FPS. Full: CPU/GPU/frame time/FPS/VRAM/RAM."),
-			monitorModeCfg,
-			T(
-				"Resource Monitor Overlay\n"
-				"Displays a real-time performance overlay updated once per second.\n\n"
-				"Minimal shows CPU, GPU, and FPS.\n"
-				"Full also shows average frame time plus memory usage (VRAM/RAM).\n\n"
-				"Use this when tuning settings like Internal Resolution, Sorting, and Frame Skipping to keep performance stable."
-			));
-
 #ifdef USE_LUA
 		// Lua Scripting
 		ImGui::Text("%s", T("Lua Scripting"));
@@ -9097,13 +10229,13 @@ void renderAboutTab()
 		ImGui::Text("%s", T("Website"));
 		ImGui::PopStyleColor();
 		ImGui::SameLine();
-		ImGui::TextDisabled("https://github.com/OrangeFox86/HollyCast#readme");
+		ImGui::TextDisabled("https://github.com/nexus382/Hollycast#readme");
 
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
 		ImGui::Text("%s", T("Source Code"));
 		ImGui::PopStyleColor();
 		ImGui::SameLine();
-		ImGui::TextDisabled("https://github.com/OrangeFox86/HollyCast");
+		ImGui::TextDisabled("https://github.com/nexus382/Hollycast");
 		ImGui::Spacing();
 	}
 
@@ -9121,6 +10253,17 @@ void renderAboutTab()
 			"(at your option) any later version."
 		));
 		ImGui::Spacing();
+		if (ImGui::TreeNode("Noto Sans CJK (SIL Open Font License)"))
+		{
+			size_t licenseSize = 0;
+			auto license = resource::load("fonts/NotoSansCJK-LICENSE.txt", licenseSize);
+			if (license)
+			{
+				const std::string text(reinterpret_cast<const char*>(license.get()), licenseSize);
+				ImGui::TextWrapped("%s", text.c_str());
+			}
+			ImGui::TreePop();
+		}
 	}
 
 	// Credits
@@ -9219,21 +10362,7 @@ void renderSettingsNew()
 			ImGui::PushFont(settingsTitleFont);
 
 		const std::function<void()> exitSettings = [&]() {
-			dreampotato::update();
-			if (g_mapleDevicesChangedInSettings)
-			{
-				g_mapleDevicesChangedInSettings = false;
-				if (game_started && settings.platform.isConsole())
-				{
-#if defined(USE_DREAMLINK_DEVICES)
-					reconnectDreamLinks();
-#endif
-					maple_ReconnectDevices();
-					reset_vmus();
-				}
-			}
-
-			SaveSettings();
+			applyPendingSettings();
 
 			if (game_started)
 				gui_setState(GuiState::Commands);
@@ -9257,6 +10386,14 @@ void renderSettingsNew()
 #if defined(__ANDROID__)
 	ImGui::GetStyle() = settingsStyleBackup;
 #endif
+	if (g_applyThemeAfterSettings) {
+		g_applyThemeAfterSettings = false;
+		applyCurrentTheme();
+		if (g_reloadThemeFontsAfterSettings) {
+			g_reloadThemeFontsAfterSettings = false;
+			gui_requestStyleReload();
+		}
+	}
 }
 
 } // namespace SettingsNew

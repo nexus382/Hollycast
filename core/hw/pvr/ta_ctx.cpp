@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "ta_ctx.h"
 #include "spg.h"
 #include "cfg/option.h"
@@ -7,6 +8,8 @@
 
 #include <mutex>
 #include <vector>
+
+/* Portions Copyright 2026 The Hollycast Authors */
 
 extern u32 fskip;
 static int RenderCount;
@@ -236,18 +239,14 @@ static void deserializeContext(Deserializer& deser, TA_context **pctx)
 		*pctx = nullptr;
 		return;
 	}
-	*pctx = tactx_Find(address, true);
 	u32 size;
 	deser >> size;
+	if (size > TA_DATA_SIZE)
+		throw Deserializer::Exception("Invalid TA context size");
+	*pctx = tactx_Find(address, true);
 	tad_context& tad = (*pctx)->tad;
 	deser.deserialize(tad.thd_root, size);
 	tad.thd_data = tad.thd_root + size;
-	if (deser.version() < Deserializer::V26)
-	{
-		u32 render_pass_count;
-		deser >> render_pass_count;
-		deser.skip(sizeof(u32) * render_pass_count);
-	}
 }
 
 void SerializeTAContext(Serializer& ser)
@@ -267,30 +266,18 @@ void DeserializeTAContext(Deserializer& deser)
 {
 	if (::ta_ctx != nullptr)
 		SetCurrentTARC(TACTX_NONE);
-	if (deser.version() >= Deserializer::V25)
+	u32 listSize;
+	deser >> listSize;
+	for (const auto& ctx : ctx_list)
+		tactx_Recycle(ctx);
+	ctx_list.clear();
+	for (u32 i = 0; i < listSize; i++)
 	{
-		u32 listSize;
-		deser >> listSize;
-		for (const auto& ctx : ctx_list)
-			tactx_Recycle(ctx);
-		ctx_list.clear();
-		for (u32 i = 0; i < listSize; i++)
-		{
-			TA_context *ctx;
-			deserializeContext(deser, &ctx);
-		}
-		int curCtx;
-		deser >> curCtx;
-		if (curCtx >= 0 && curCtx < (int)ctx_list.size())
-			SetCurrentTARC(ctx_list[curCtx]->Address);
+		TA_context *ctx;
+		deserializeContext(deser, &ctx);
 	}
-	else
-	{
-		TA_context *ta_cur_ctx;
-		deserializeContext(deser, &ta_cur_ctx);
-		if (ta_cur_ctx != nullptr)
-			SetCurrentTARC(ta_cur_ctx->Address);
-		if (deser.version() >= Deserializer::V20)
-			deserializeContext(deser, &ta_cur_ctx);
-	}
+	int curCtx;
+	deser >> curCtx;
+	if (curCtx >= 0 && curCtx < (int)ctx_list.size())
+		SetCurrentTARC(ctx_list[curCtx]->Address);
 }

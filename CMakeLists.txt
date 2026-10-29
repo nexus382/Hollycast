@@ -89,6 +89,7 @@ option(USE_HOST_GLSLANG "Use host glslang" OFF)
 option(USE_HOST_LIBZIP "Use host libzip" ON)
 option(USE_HOST_SDL "Use host SDL library" ${USE_HOST_SDL_DEFAULT})
 option(USE_HOST_LIBCHDR "Use host libchdr" OFF)
+option(USE_HOST_LIBJUICE "Use host libjuice" OFF)
 option(USE_OPENMP "Use OpenMP if available" ON)
 option(USE_VULKAN "Build with Vulkan support" ON)
 set(MOLTENVK_DYLIB "" CACHE FILEPATH "Path to macOS MoltenVK dylib for macOS Vulkan builds")
@@ -108,6 +109,7 @@ option(ENABLE_DC_PROFILER "Build with support for target machine (SH4) profiler"
 option(ENABLE_FC_PROFILER "Build with support for host app (Hollycast) profiler" OFF)
 option(USE_DISCORD "Use Discord Presence API" OFF)
 option(USE_LIBCDIO "Use libcdio for CDROM access" OFF)
+option(USE_DREAMLINK_DEVICES "Use DreamLink devices" ON)
 
 if(ASAN AND MSVC)
 	add_compile_options(/fsanitize=address)
@@ -126,6 +128,11 @@ if(WEBOS)
 		set(USE_OPENMP OFF CACHE BOOL "Force openmp off" FORCE)
 	endif()
 	set(USE_VULKAN OFF CACHE BOOL "Force vulkan off" FORCE)
+endif()
+
+if(ANDROID OR IOS OR NINTENDO_SWITCH OR LIBRETRO)
+	# DreamLink only available for non-mobile Linux, MacOS, and Windows
+	set(USE_DREAMLINK_DEVICES OFF CACHE BOOL "Force DreamLink devices off" FORCE)
 endif()
 
 include(GNUInstallDirs)
@@ -161,10 +168,14 @@ else()
 endif()
 
 if(WINDOWS_STORE)
-	string(REGEX REPLACE "[Vv]" "" MS_VERSION ${GIT_VERSION})
-	string(REPLACE "-" "." MS_VERSION ${MS_VERSION})
-	string(REGEX REPLACE "\.g[0-9a-f]+" "" MS_VERSION ${MS_VERSION})
-	string(REGEX MATCHALL "[0-9]+" VERSION_PARTS ${MS_VERSION})
+	string(REGEX REPLACE "^[Vv]" "" MS_VERSION "${GIT_VERSION}")
+	string(REGEX REPLACE "-g[0-9a-f]+$" "" MS_VERSION "${MS_VERSION}")
+	string(REPLACE "-" "." MS_VERSION "${MS_VERSION}")
+	# Untagged checkouts return a Git hash; Appx versions require four numeric parts.
+	if(NOT MS_VERSION MATCHES "^[0-9]+\\.[0-9]+(\\.[0-9]+)?(\\.[0-9]+)?$")
+		set(MS_VERSION "0.0.0.0")
+	endif()
+	string(REPLACE "." ";" VERSION_PARTS "${MS_VERSION}")
 	list(LENGTH VERSION_PARTS VERSION_PARTS_LENGTH)
 	if(VERSION_PARTS_LENGTH EQUAL 2)
 		string(APPEND MS_VERSION ".0.0")
@@ -213,6 +224,10 @@ elseif(LIBRETRO)
 		if(NOT CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
 			set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
 		endif()
+		if(UNIX AND NOT APPLE)
+			# Keep bundled libraries from binding to same-named symbols in the frontend.
+			target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/shell/libretro/link.T")
+		endif()
 	endif()
 	set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "Hollycast_libretro"
 	  XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
@@ -226,7 +241,10 @@ elseif(LIBRETRO)
 		target_link_libraries(${PROJECT_NAME} PRIVATE ${FOUNDATION})
 	endif()
 	if(ANDROID OR USE_GLES)
-		target_compile_definitions(${PROJECT_NAME} PRIVATE GLES GLES3 HAVE_OPENGLES HAVE_OPENGLES3 HAVE_OIT)
+		target_compile_definitions(${PROJECT_NAME} PRIVATE GLES GLES3 HAVE_OPENGLES HAVE_OPENGLES3 HAVE_OPENGLES_3_1 HAVE_OIT)
+		if(ANDROID)
+			target_link_libraries(${PROJECT_NAME} PRIVATE android)
+		endif()
     elseif(IOS)
 		target_compile_definitions(${PROJECT_NAME} PRIVATE GLES GLES3 HAVE_OPENGLES HAVE_OPENGLES3)
 		find_library(OPENGLES OpenGLES)
@@ -277,6 +295,7 @@ elseif(WIN32)
 		set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
 	endif()
 elseif(APPLE)
+	set(USE_OPENMP OFF CACHE BOOL "Force openmp off" FORCE)
 	add_executable(${PROJECT_NAME} MACOSX_BUNDLE core/emulator.cpp)
 else()
 	add_executable(${PROJECT_NAME} core/emulator.cpp)
@@ -453,10 +472,6 @@ if(USE_BREAKPAD AND NOT LIBRETRO)
 endif()
 
 if(USE_OPENMP)
-	if(APPLE AND IS_DIRECTORY "/opt/homebrew/opt/libomp")
-		list(PREPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/libomp")
-		message(STATUS "Found and using Homebrew libomp hint.")
-	endif()
 	find_package(OpenMP)
 	if(OpenMP_CXX_FOUND)
 		if(MINGW)
@@ -497,6 +512,37 @@ if(USE_VULKAN OR NOT LIBRETRO)
 	target_link_libraries(${PROJECT_NAME} PRIVATE glslang::glslang-default-resource-limits glslang::SPIRV)
 endif()
 
+if(USE_DREAMLINK_DEVICES)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE USE_DREAMLINK_DEVICES=1)
+
+	if (WINDOWS_STORE)
+		# Use winrt implementation of the DreamPicoPort-API
+		option(DREAMPICOPORT_WITH_LIBUSB "Use libusb to access DreamPicoPort-API" OFF)
+	elseif (CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD|NetBSD|OpenBSD|Haiku")
+		find_package(PkgConfig REQUIRED)
+		pkg_check_modules(LIBUSB REQUIRED libusb-1.0)
+
+		set(DREAMPICOPORT_LIBUSB_LIBRARIES "${LIBUSB_LIBRARIES}" CACHE STRING "Name of the libusb library to link against")
+		set(DREAMPICOPORT_LIBUSB_INCLUDE_DIRS "${LIBUSB_INCLUDE_DIRS}" CACHE STRING "Path to libusb include directory, when applicable")
+	else()
+		if(MINGW)
+			# Shim 'windowsapp' to prevent libusb from linking against the UWP library
+			# and link against standard desktop libraries instead for Windows 7 support.
+			if(NOT TARGET windowsapp)
+				add_library(windowsapp INTERFACE)
+				target_link_libraries(windowsapp INTERFACE advapi32 ole32 shell32 user32)
+			endif()
+		endif()
+		# libusb
+		add_subdirectory(core/deps/DreamPicoPort-API/ext/libusb-cmake)
+	endif()
+
+	# DreamPicoPort-API
+	option(DREAMPICOPORT_ADD_LIBUSB "Add internal libusb library" OFF) # Already included above, when applicable
+	add_subdirectory(core/deps/DreamPicoPort-API EXCLUDE_FROM_ALL)
+	target_link_libraries(${PROJECT_NAME} PRIVATE dream_pico_port_api)
+endif()
+
 if(NOT LIBRETRO)
     add_subdirectory(core/deps/spirv-cross)
     target_link_libraries(${PROJECT_NAME} PRIVATE hollycast-spirv-cross)
@@ -521,39 +567,6 @@ if(NOT LIBRETRO)
 	endif()
 
 	if(NOT ANDROID AND NOT IOS)
-		if (NOT NINTENDO_SWITCH)
-			# DreamLink enabled for non-mobile Linux, MacOS, and Windows
-			target_compile_definitions(${PROJECT_NAME} PRIVATE USE_DREAMLINK_DEVICES=1)
-			set(USE_DREAMLINK_DEVICES ON) # Must be set before adding core/sdl
-
-			if (WINDOWS_STORE)
-				# Use winrt implementation of the DreamPicoPort-API
-				option(DREAMPICOPORT_WITH_LIBUSB "Use libusb to access DreamPicoPort-API" OFF)
-			elseif (CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD|NetBSD|OpenBSD|Haiku")
-				find_package(PkgConfig REQUIRED)
-   	 			pkg_check_modules(LIBUSB REQUIRED libusb-1.0)
-
-				set(DREAMPICOPORT_LIBUSB_LIBRARIES "${LIBUSB_LIBRARIES}" CACHE STRING "Name of the libusb library to link against")
-				set(DREAMPICOPORT_LIBUSB_INCLUDE_DIRS "${LIBUSB_INCLUDE_DIRS}" CACHE STRING "Path to libusb include directory, when applicable")
-			else()
-				if(MINGW)
-					# Shim 'windowsapp' to prevent libusb from linking against the UWP library
-					# and link against standard desktop libraries instead for Windows 7 support.
-					if(NOT TARGET windowsapp)
-						add_library(windowsapp INTERFACE)
-						target_link_libraries(windowsapp INTERFACE advapi32 ole32 shell32 user32)
-					endif()
-				endif()
-				# libusb
-				add_subdirectory(core/deps/DreamPicoPort-API/ext/libusb-cmake)
-			endif()
-
-			# DreamPicoPort-API
-			option(DREAMPICOPORT_ADD_LIBUSB "Add internal libusb library" OFF) # Already included above, when applicable
-			add_subdirectory(core/deps/DreamPicoPort-API EXCLUDE_FROM_ALL)
-			target_link_libraries(${PROJECT_NAME} PRIVATE dream_pico_port_api)
-		endif()
-
 		if(USE_HOST_SDL)
 			find_package(SDL2 2.0.18)
 		endif()
@@ -579,12 +592,13 @@ if(NOT LIBRETRO)
 		endif()
 
 		target_compile_definitions(${PROJECT_NAME} PRIVATE USE_SDL USE_SDL_AUDIO)
-		add_subdirectory(core/sdl)
-
-		if((UNIX AND NOT APPLE) OR NINTENDO_SWITCH)
-			find_package(CURL REQUIRED)
-			target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
+		if((APPLE AND NOT IOS) OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+			target_sources(${PROJECT_NAME} PRIVATE core/sdl/vmu_window.cpp)
+			if(APPLE)
+				target_sources(${PROJECT_NAME} PRIVATE core/sdl/vmu_window_macos.mm)
+			endif()
 		endif()
+		add_subdirectory(core/sdl)
 	endif()
 
 	find_package(ZLIB)
@@ -602,6 +616,18 @@ if(NOT LIBRETRO)
 			target_link_libraries(${PROJECT_NAME} PRIVATE ${LUA_LIBRARIES})
 		endif()
 	endif()
+endif()
+
+# http
+if((UNIX AND NOT APPLE AND NOT ANDROID) OR NINTENDO_SWITCH)
+	find_package(CURL REQUIRED)
+	target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
+elseif(LIBRETRO AND ANDROID)
+	# libretro needs to enable prefab and add dependency 'implementation("io.github.vvb2060.ndk:curl:8.18.0")'
+	find_package(curl REQUIRED CONFIG)
+	target_link_libraries(${PROJECT_NAME} PRIVATE curl::curl_static)
+elseif(LIBRETRO AND WIN32)
+	target_link_libraries(${PROJECT_NAME} PRIVATE wininet)
 endif()
 
 find_package(PkgConfig)
@@ -840,18 +866,27 @@ if(WIN32)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/dirent)
 endif()
 
-if(NOT LIBRETRO AND NOT NINTENDO_SWITCH)
-	target_compile_definitions(${PROJECT_NAME} PRIVATE USE_ICE)
-	# libjuice
+# libjuice
+target_compile_definitions(${PROJECT_NAME} PRIVATE USE_ICE)
+if (USE_HOST_LIBJUICE AND UNIX AND NOT APPLE AND NOT ANDROID)
+	find_package(LibJuice)
+endif()
+if(NOT TARGET LibJuice::LibJuiceStatic)
 	option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 	option(NO_SERVER "Disable server support" ON)
 	option(NO_TESTS "Disable tests build" ON)
 	add_subdirectory(core/deps/libjuice EXCLUDE_FROM_ALL)
-	target_link_libraries(${PROJECT_NAME} PRIVATE LibJuice::LibJuiceStatic)
+	if(NINTENDO_SWITCH)
+		target_include_directories(juice-static SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/shell/switch)
+		target_compile_definitions(juice-static PRIVATE getnameinfo=getnameinfo_fixed)
+	endif()
+endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE LibJuice::LibJuiceStatic)
 
-	# websocket++
+# websocket++
+if(NOT LIBRETRO AND NOT NINTENDO_SWITCH)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/websocketpp)
-	target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE USE_WEBSOCKET)
 	if (MSVC)
 		target_compile_definitions(${PROJECT_NAME} PRIVATE
 			_WEBSOCKETPP_CPP11_FUNCTIONAL_
@@ -866,8 +901,13 @@ if(NOT LIBRETRO AND NOT NINTENDO_SWITCH)
 	endif()
 endif()
 
+# tinygettext
 set(TINYGETTEXT_WO_ICONV ON)
 add_subdirectory(core/deps/tinygettext EXCLUDE_FROM_ALL)
+if(MSVC)
+	# tinygettext contains native-language string literals in UTF-8 source files.
+	target_compile_options(tinygettext PRIVATE /utf-8)
+endif()
 target_include_directories(${PROJECT_NAME} PRIVATE core/deps/tinygettext/include)
 target_link_libraries(${PROJECT_NAME} PRIVATE tinygettext::tinygettext)
 
@@ -1023,7 +1063,9 @@ if(LIBRETRO)
 		shell/libretro/storage.cpp
 		shell/libretro/vmu_xhair.cpp)
 	if(APPLE)
-		target_sources(${PROJECT_NAME} PRIVATE shell/libretro/oslib_apple.mm)
+		target_sources(${PROJECT_NAME} PRIVATE
+			shell/libretro/oslib_apple.mm
+			shell/apple/common/http_client.mm)
 	endif()
 	if(WIN32)
 		target_link_libraries(${PROJECT_NAME} PRIVATE mswsock)
@@ -1305,6 +1347,7 @@ if(NOT LIBRETRO)
 		core/deps/ggpo/lib/ggpo/network/udp.h)
 
 	if(ANDROID)
+		target_sources(${PROJECT_NAME} PRIVATE core/rend/vmu_android.cpp)
 		target_compile_definitions(${PROJECT_NAME} PRIVATE GLES GLES3)
 		add_subdirectory(shell/android-studio/flycast/src/main/jni/src)
 		target_link_libraries(${PROJECT_NAME} PRIVATE android log)
@@ -1414,23 +1457,28 @@ if(NOT LIBRETRO)
 				COMMAND ${CMAKE_COMMAND} -E tar "cfv" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>-${CMAKE_OSX_SYSROOT}/Hollycast.ipa" --format=zip ${CMAKE_CURRENT_BINARY_DIR}/Payload)
 		else()
 
-			add_subdirectory(core/deps/Syphon)
-			target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
-			add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}
-				$<TARGET_FILE_DIR:Hollycast>/../Resources/)
-			target_compile_definitions(${PROJECT_NAME} PRIVATE VIDEO_ROUTING)
-
 			target_sources(${PROJECT_NAME} PRIVATE
 					shell/apple/common/http_client.mm
-					shell/apple/common/util.mm
-					shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.h
-					shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
-					shell/apple/emulator-osx/emulator-osx/osx-main.mm)
-			set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
-			target_sources(${PROJECT_NAME} PRIVATE ${ASSETS})
-			source_group("Resources" FILES ${ASSETS})
-			set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+					shell/apple/common/util.mm)
+			# Test builds use gtest_main instead of the macOS app entry point.
+			if(NOT BUILD_TESTING)
+				add_subdirectory(core/deps/Syphon)
+				target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
+				add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}
+					$<TARGET_FILE_DIR:Hollycast>/../Resources/)
+				target_compile_definitions(${PROJECT_NAME} PRIVATE VIDEO_ROUTING)
+
+				target_sources(${PROJECT_NAME} PRIVATE
+						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.h
+						shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm
+						shell/apple/emulator-osx/emulator-osx/osx-main.mm)
+				set(ASSETS shell/apple/emulator-osx/emulator-osx/Images.xcassets)
+				target_sources(${PROJECT_NAME} PRIVATE ${ASSETS} fonts/NotoSansCJK-LICENSE.txt)
+				set_source_files_properties(fonts/NotoSansCJK-LICENSE.txt PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+				source_group("Resources" FILES ${ASSETS})
+				set_source_files_properties(${ASSETS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+			endif()
 
 			set_target_properties(${PROJECT_NAME} PROPERTIES
 				OUTPUT_NAME "Hollycast"
@@ -1488,6 +1536,9 @@ if(NOT LIBRETRO)
 		target_sources(${PROJECT_NAME} PRIVATE
 			core/windows/rawinput.cpp
 			core/windows/rawinput.h)
+		if(NOT WINDOWS_STORE)
+			target_sources(${PROJECT_NAME} PRIVATE core/windows/vmu_window.cpp core/rend/vmu_window.h)
+		endif()
 		if(NOT BUILD_TESTING)
 			target_sources(${PROJECT_NAME} PRIVATE core/windows/winmain.cpp)
 		endif()
@@ -1561,6 +1612,10 @@ elseif(LIBRETRO)
 	install(TARGETS ${PROJECT_NAME} DESTINATION "${CMAKE_INSTALL_LIBDIR}/libretro")
 else()
 	install(TARGETS ${PROJECT_NAME} DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()
+
+if(NOT APPLE AND NOT LIBRETRO)
+	install(FILES fonts/NotoSansCJK-LICENSE.txt DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}")
 endif()
 
 if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT LIBRETRO)

@@ -1,5 +1,6 @@
 /*
 	Copyright 2023 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -342,17 +343,9 @@ public:
 		deser >> size;
 		recvBuffer.resize(size);
 		deser.deserialize(recvBuffer.data(), recvBuffer.size());
-		if (deser.version() >= Deserializer::V41)
-		{
-			deser >> state;
-			deser >> rowCounter;
-			deser.deserialize(cardData.data(), cardData.size());
-		}
-		else
-		{
-			state = Off;
-			rowCounter = 0;
-		}
+		deser >> state;
+		deser >> rowCounter;
+		deser.deserialize(cardData.data(), cardData.size());
 	}
 
 private:
@@ -683,7 +676,7 @@ private:
 	SerialPort *port;
 	std::deque<u8> toSend;
 	std::vector<u8> recvBuffer;
-	int schedId = 0;
+	int schedId = -1;
 	u32 lastPosX = ~0;
 	u32 lastPosY = ~0;
 	bool lastButton = false;

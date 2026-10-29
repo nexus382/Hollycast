@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -18,6 +19,7 @@
 #include "oslib/oslib.h"
 #include "stdclass.h"
 #include "oslib/storage.h"
+#include "oslib/directory.h"
 
 bool MemChip::Load(const std::string& file)
 {
@@ -42,15 +44,31 @@ void MemChip::Load(const u8 *data, size_t size)
 
 void WritableChip::Save(const std::string& file)
 {
-	FILE *f = nowide::fopen(file.c_str(), "wb");
+	// Keep the existing save intact until the complete replacement is ready.
+	const std::string tmpFile = file + ".tmp";
+	FILE *f = nowide::fopen(tmpFile.c_str(), "wb");
 	if (f == nullptr)
 	{
-		ERROR_LOG(FLASHROM, "Cannot save flash/nvmem to file '%s'", file.c_str());
+		ERROR_LOG(FLASHROM, "Cannot open temp save file '%s'", tmpFile.c_str());
 		return;
 	}
-	if (std::fwrite(data + write_protect_size, 1, size - write_protect_size, f) != size - write_protect_size)
-		ERROR_LOG(FLASHROM, "Failed or truncated write to flash file '%s'", file.c_str());
-	std::fclose(f);
+	bool ok = std::fwrite(data + write_protect_size, 1, size - write_protect_size, f)
+			== size - write_protect_size;
+	if (ok && std::fflush(f) != 0)
+		ok = false;
+	if (std::fclose(f) != 0)
+		ok = false;
+	if (!ok)
+	{
+		ERROR_LOG(FLASHROM, "Failed or truncated write to flash temp file '%s'", tmpFile.c_str());
+		flycast::unlink(tmpFile.c_str());
+		return;
+	}
+	if (flycast::rename(tmpFile.c_str(), file.c_str()) != 0)
+	{
+		ERROR_LOG(FLASHROM, "Failed to commit flash/nvmem save (rename '%s' -> '%s')", tmpFile.c_str(), file.c_str());
+		flycast::unlink(tmpFile.c_str());
+	}
 }
 
 bool MemChip::Load(const std::string &prefix, const std::string &names_ro, const std::string &title)

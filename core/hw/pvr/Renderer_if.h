@@ -1,4 +1,5 @@
 #pragma once
+/* Portions Copyright 2026 The Hollycast Authors */
 #include "types.h"
 #include "ta_ctx.h"
 #include "emulator.h"
@@ -117,11 +118,6 @@ private:
 
 extern Renderer* renderer;
 
-extern u32 fb_watch_addr_start;
-extern u32 fb_watch_addr_end;
-extern bool fb_dirty;
-
-void check_framebuffer_write();
 static inline void rend_updatePalette() {
 	if (renderer != nullptr)
 		renderer->updatePalette = true;

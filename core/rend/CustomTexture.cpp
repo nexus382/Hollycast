@@ -977,7 +977,10 @@ void CustomTexture::processGpuPreloads(const GpuTextureUploader& uploader)
 					pending.first, exception.what());
 		}
 		if (uploaded)
+		{
+			recordTextureUpload();
 			preloadLoadedSize += pending.second->bytes.size();
+		}
 		else
 			reportError(CustomTextureException::Error::Upload);
 		preloadLoaded++;

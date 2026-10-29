@@ -2,6 +2,7 @@
  * QEMU RTL8139 emulation
  *
  * Copyright (c) 2006 Igor Kovalenko
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -49,7 +50,9 @@
 
 /* For crc32 */
 #include <zlib.h>
+#include <array>
 #include "rtl8139c.h"
+#include "network/netservice.h"
 #include "serialize.h"
 #include "hw/sh4/sh4_sched.h"
 
@@ -718,6 +721,14 @@ bool rtl8139_can_receive(RTL8139State *s)
     return avail == 0 || avail >= 1514 || (s->IntrMask & RxOverflow);
 }
 
+// Unlike rtl8139_can_receive(), this reports whether receive() will accept a
+// frame. can_receive() deliberately returns true when RX is disabled so callers
+// can dequeue and drop packets instead of applying backpressure.
+bool rtl8139_rx_enabled(RTL8139State *s)
+{
+    return s->clock_enabled && rtl8139_receiver_enabled(s);
+}
+
 static ssize_t rtl8139_do_receive(RTL8139State *s, const uint8_t *buf, size_t size_, int do_interrupt)
 {
     /* size is the length of the buffer passed to the driver */
@@ -991,6 +1002,7 @@ static void rtl8139_ChipCmd_write(RTL8139State *s, uint32_t val)
     val &= ~CmdReset;
 
     s->bChipCmdState = val;
+    net::modbba::startIfNeeded(rtl8139_rx_enabled(s));
 }
 
 static int rtl8139_RxBufferEmpty(RTL8139State *s)
@@ -1712,6 +1724,7 @@ static void rtl8139_io_writeb(void *opaque, uint8_t addr, uint32_t val)
             if (val == 'R')
             {
                 s->clock_enabled = 1;
+                net::modbba::startIfNeeded(rtl8139_rx_enabled(s));
             }
             else if (val == 'H')
             {
@@ -2343,8 +2356,31 @@ void rtl8139_destroy(RTL8139State *state)
 	free(state);
 }
 
+static constexpr size_t RTL8139_SERIALIZED_SIZE =
+		256 * 3 + sizeof(PCIDevice::io_regions)
+		+ 8 + 8 + 4 * 4 + 4 * 4
+		+ 4 + 4 + 4 + 4
+		+ 2 + 2
+		+ 4 + 4 + 4 + 2
+		+ 6
+		+ 2
+		+ 2
+		+ 5 * 2
+		+ sizeof(MACAddr)
+		+ 4
+		+ sizeof(EEprom9346::contents) + sizeof(EEprom9346::mode) + sizeof(EEprom9346::tick)
+		+ sizeof(EEprom9346::address) + sizeof(EEprom9346::input) + sizeof(EEprom9346::output) + 4
+		+ 4 + 4 + 8
+		+ 12;
+
 void rtl8139_serialize(RTL8139State *s, Serializer& ser)
 {
+	if (s == nullptr)
+	{
+		static const std::array<u8, RTL8139_SERIALIZED_SIZE> emptyState {};
+		ser.serialize(emptyState.data(), emptyState.size());
+		return;
+	}
 	ser.serialize(s->parent_obj.config, 256);
 	ser.serialize(s->parent_obj.cmask, 256);
 	ser.serialize(s->parent_obj.wmask, 256);
@@ -2411,6 +2447,11 @@ void rtl8139_serialize(RTL8139State *s, Serializer& ser)
 
 bool rtl8139_deserialize(RTL8139State *s, Deserializer& deser)
 {
+	if (s == nullptr)
+	{
+		deser.skip(RTL8139_SERIALIZED_SIZE);
+		return false;
+	}
 	deser.deserialize(s->parent_obj.config, 256);
 	deser.deserialize(s->parent_obj.cmask, 256);
 	deser.deserialize(s->parent_obj.wmask, 256);
@@ -2472,8 +2513,7 @@ bool rtl8139_deserialize(RTL8139State *s, Deserializer& deser)
 	deser >> s->TimerInt;
 	deser >> s->TCTR_base;
 
-	if (deser.version() >= Deserializer::V38)
-		sh4_sched_deserialize(deser, s->schedId);
+	sh4_sched_deserialize(deser, s->schedId);
 
 	return s->bChipCmdState & CmdRxEnb;
 }

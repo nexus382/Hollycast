@@ -337,7 +337,7 @@ int boxartMergeScore(const GameBoxart& boxart)
 		score += hasBoxartFile ? 100 : 70;
 	if (hasBoxartFile)
 		score += 20;
-	if (boxart.parsed)
+	if (boxart.offlineArtState != OfflineArtState::Pending)
 		score += 10;
 	if (boxart.scraped)
 		score += 5;
@@ -516,6 +516,50 @@ bool isGeneratedVmuIconPath(const std::string& root, const std::string& path)
 
 } // namespace
 
+GameBoxart& Boxart::gameForMedia(const GameMedia& media)
+{
+	const GameBoxart source = makeMediaBoxart(media);
+	const std::string key = source.sourceKey();
+	auto current = games.find(key);
+	if (current != games.end())
+		return current->second;
+	GameBoxart record = source;
+	auto legacy = games.find("legacy:" + media.fileName);
+	if (legacy != games.end() && legacy->second.arcade == media.arcade)
+	{
+		record = std::move(legacy->second);
+		games.erase(legacy);
+		record.gamePath = media.path;
+	}
+	record.workRevision = ++nextWorkRevision;
+	markDatabaseDirty();
+	return games.emplace(key, std::move(record)).first->second;
+}
+
+bool Boxart::isCurrentWork(const GameBoxart& item) const
+{
+	const auto current = games.find(item.sourceKey());
+	return current != games.end() && current->second.workRevision == item.workRevision;
+}
+
+void Boxart::invalidateOfflineArtwork()
+{
+	loadDatabase();
+	std::lock_guard<std::mutex> guard(mutex);
+	for (auto& entry : games)
+	{
+		GameBoxart& record = entry.second;
+		record.workRevision = ++nextWorkRevision;
+		record.busy = false;
+		if (record.offlineArtState == OfflineArtState::NoArtwork || record.offlineArtState == OfflineArtState::Failed)
+			record.offlineArtState = OfflineArtState::Pending;
+	}
+	physicalCache.clear();
+	++nextWorkRevision;
+	toFetch.clear();
+	markDatabaseDirty();
+}
+
 GameBoxart Boxart::getBoxart(const GameMedia& media)
 {
 	loadDatabase();
@@ -527,11 +571,7 @@ GameBoxart Boxart::getBoxart(const GameMedia& media)
 
 	{
 		std::lock_guard<std::mutex> guard(mutex);
-		auto it = games.find(media.fileName);
-
-		if (it != games.end()) {
-			boxart = it->second;
-		}
+		boxart = gameForMedia(media);
 	}
 
 	if (!boxart.isValid()) {
@@ -588,41 +628,29 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch)
 	GameBoxart boxart;
 	{
 		std::lock_guard<std::mutex> guard(mutex);
-		auto it = games.find(media.fileName);
-		if (it != games.end())
+		GameBoxart& record = gameForMedia(media);
+		boxart = record;
+		const bool missingBoxartFile = isMissingBoxartFile(boxart);
+		const bool missingScrapedBoxartFile = isMissingScrapedBoxartFile(boxart);
+		if (missingBoxartFile || missingScrapedBoxartFile)
 		{
-			boxart = it->second;
-			const bool missingBoxartFile = isMissingBoxartFile(boxart);
-			const bool missingScrapedBoxartFile = isMissingScrapedBoxartFile(boxart);
-			const bool missingPhysicalBoxart = boxart.parsed && boxart.boxartPath.empty() && !boxart.scraped;
-			if (missingBoxartFile || missingScrapedBoxartFile || missingPhysicalBoxart)
-			{
-				boxart.boxartPath.clear();
-				if (missingBoxartFile || missingPhysicalBoxart)
-					boxart.parsed = false;
-				if (missingScrapedBoxartFile)
-					boxart.scraped = false;
-				it->second = boxart;
-				markDatabaseDirty();
-			}
-			const bool wantOnline = shouldFetchOnline();
-			const bool needsOffline = !boxart.parsed;
-			const bool needsOnline = wantOnline && !boxart.scraped;
-			if (queueScrape && !boxart.busy && (needsOffline || needsOnline))
-			{
-				boxart.busy = it->second.busy = true;
-				boxart.gamePath = media.path;
-				boxart.arcade = media.arcade;
-				toFetch.push_back(boxart);
-			}
+			boxart.boxartPath.clear();
+			if (missingBoxartFile && boxart.offlineArtState == OfflineArtState::Complete)
+				boxart.offlineArtState = OfflineArtState::Pending;
+			if (missingScrapedBoxartFile)
+				boxart.scraped = false;
+			boxart.workRevision = ++nextWorkRevision;
+			boxart.busy = false;
+			record = boxart;
+			markDatabaseDirty();
 		}
-		else
+		const bool needsOffline = boxart.offlineArtState == OfflineArtState::Pending;
+		const bool needsOnline = shouldFetchOnline() && !boxart.scraped;
+		if (queueScrape && !boxart.busy && (needsOffline || needsOnline))
 		{
-			boxart = makeMediaBoxart(media);
-			boxart.busy = queueScrape;
-			games[boxart.fileName] = boxart;
-			if (queueScrape)
-				toFetch.push_back(boxart);
+			boxart.busy = record.busy = true;
+			boxart.workRevision = record.workRevision = ++nextWorkRevision;
+			toFetch.push_back(boxart);
 		}
 	}
 
@@ -655,34 +683,56 @@ bool Boxart::shouldFetchOnline() const
 GameBoxart Boxart::getPhysicalBoxart(const GameMedia& media)
 {
 	GameBoxart boxart;
-
+	bool needsWork = false;
 	{
 		std::lock_guard<std::mutex> guard(mutex);
-		auto it = physicalCache.find(media.fileName);
-		if (it != physicalCache.end()) {
+		const std::string key = makeMediaBoxart(media).sourceKey();
+		auto it = physicalCache.find(key);
+		if (it != physicalCache.end())
 			boxart = it->second;
+		else
+		{
+			GameBoxart& record = gameForMedia(media);
+			record.workRevision = ++nextWorkRevision;
+			boxart = record;
+			boxart.boxartPath.clear();
+			boxart.boxartUrl.clear();
+			boxart.scraped = false;
+			if (boxart.offlineArtState == OfflineArtState::Complete)
+				boxart.offlineArtState = OfflineArtState::Pending;
+			physicalCache[key] = boxart;
+			needsWork = boxart.offlineArtState == OfflineArtState::Pending;
 		}
 	}
-
-	if (!boxart.isValid()) {
-		boxart = makeMediaBoxart(media);
-
+	if (needsWork)
+	{
 		OfflineScraper physicalScraper;
 		physicalScraper.initialize(getSaveDirectory());
 		physicalScraper.scrape(boxart);
-
 		{
 			std::lock_guard<std::mutex> guard(mutex);
-			physicalCache[boxart.fileName] = boxart;
-
+			auto current = physicalCache.find(boxart.sourceKey());
+			if (current != physicalCache.end() && current->second.workRevision == boxart.workRevision && isCurrentWork(boxart))
+			{
+				current->second = boxart;
+				GameBoxart& record = games.at(boxart.sourceKey());
+				record.offlineArtState = boxart.offlineArtState;
+				record.uniqueId = boxart.uniqueId;
+				record.searchName = boxart.searchName;
+				record.region = boxart.region;
+				if (!record.scraped && !boxart.boxartPath.empty())
+					record.boxartPath = boxart.boxartPath;
+				markDatabaseDirty();
+			}
+			else
+				boxart = makeMediaBoxart(media);
 		}
+		saveDatabase();
 	}
-
 	{
 		std::lock_guard<std::mutex> guard(playtimeMutex);
 		applyLibraryPlaytimeUnlocked(boxart);
 	}
-
 	return boxart;
 }
 
@@ -777,7 +827,7 @@ void Boxart::fetchBoxart()
 		{
 			std::lock_guard<std::mutex> guard(mutex);
 			for (const GameBoxart& item : toFetch)
-				if (!item.parsed)
+				if (item.offlineArtState == OfflineArtState::Pending)
 				{
 					hasPhysicalBoxart = true;
 					break;
@@ -799,7 +849,7 @@ void Boxart::fetchBoxart()
 						remaining.reserve(toFetch.size());
 						for (GameBoxart& item : toFetch)
 						{
-							if (!item.parsed && physicalBoxart.size() < kPhysicalBoxartBatchSize)
+							if (item.offlineArtState == OfflineArtState::Pending && physicalBoxart.size() < kPhysicalBoxartBatchSize)
 							{
 								physicalBoxart.push_back(std::move(item));
 							}
@@ -818,25 +868,16 @@ void Boxart::fetchBoxart()
 					{
 						std::lock_guard<std::mutex> guard(mutex);
 						for (GameBoxart& b : physicalBoxart)
-							if (b.scraped || b.parsed)
-							{
-								auto existing = games.find(b.fileName);
-								if (existing != games.end())
-								{
-									if (b.boxartPath.empty() && !existing->second.boxartPath.empty())
-										b.boxartPath = existing->second.boxartPath;
-									if (!existing->second.boxartUrl.empty())
-										b.boxartUrl = existing->second.boxartUrl;
-									if (existing->second.scraped)
-										b.scraped = true;
-								}
-								if (wantOnline && !b.scraped)
-									toFetch.push_back(b);
-								else
-									b.busy = false;
-								games[b.fileName] = b;
-								markDatabaseDirty();
-							}
+						{
+							if (!isCurrentWork(b))
+								continue;
+							if (wantOnline && !b.scraped)
+								toFetch.push_back(b);
+							else
+								b.busy = false;
+							games[b.sourceKey()] = b;
+							markDatabaseDirty();
+						}
 					}
 					saveDatabase();
 				}
@@ -846,14 +887,13 @@ void Boxart::fetchBoxart()
 
 	if (physicalFetching.valid() || onlineFetching.valid())
 		return;
-	if (toFetch.empty())
-		return;
-
 	std::vector<GameBoxart> boxart;
 	{
 		std::lock_guard<std::mutex> guard(mutex);
+		if (toFetch.empty())
+			return;
 		for (const GameBoxart& item : toFetch)
-			if (!item.parsed)
+			if (item.offlineArtState == OfflineArtState::Pending)
 				return;
 
 		size_t size = std::min(toFetch.size(), kOnlineBoxartBatchSize);
@@ -874,7 +914,9 @@ void Boxart::fetchBoxart()
 					ERROR_LOG(COMMON, "thegamesdb scraper initialization failed");
 					scraper.reset();
 					std::lock_guard<std::mutex> guard(mutex);
-					toFetch.insert(toFetch.begin(), boxart.begin(), boxart.end());
+					for (const GameBoxart& b : boxart)
+						if (isCurrentWork(b))
+							toFetch.push_back(b);
 					return;
 				}
 			}
@@ -889,8 +931,10 @@ void Boxart::fetchBoxart()
 					std::lock_guard<std::mutex> guard(mutex);
 					for (GameBoxart& b : boxart)
 					{
+						if (!isCurrentWork(b))
+							continue;
 						b.busy = false;
-						games[b.fileName] = b;
+						games[b.sourceKey()] = b;
 					}
 					markDatabaseDirty();
 				}
@@ -901,10 +945,12 @@ void Boxart::fetchBoxart()
 					// put back failed items into toFetch array
 					std::lock_guard<std::mutex> guard(mutex);
 					for (GameBoxart& b : boxart)
-						if (b.scraped)
+						if (!isCurrentWork(b))
+							continue;
+						else if (b.scraped)
 						{
 							b.busy = false;
-							games[b.fileName] = b;
+							games[b.sourceKey()] = b;
 							markDatabaseDirty();
 						}
 						else
@@ -919,8 +965,10 @@ void Boxart::fetchBoxart()
 			std::lock_guard<std::mutex> guard(mutex);
 			for (GameBoxart& b : boxart)
 			{
+				if (!isCurrentWork(b))
+					continue;
 				b.busy = false;
-				games[b.fileName] = b;
+				games[b.sourceKey()] = b;
 			}
 		}
 		saveDatabase();
@@ -954,6 +1002,7 @@ void Boxart::markDatabaseDirty()
 
 void Boxart::saveDatabase()
 {
+	std::lock_guard<std::mutex> writeGuard(databaseWriteMutex);
 	std::vector<GameBoxart> snapshot;
 	u64 savedGeneration = 0;
 	const std::string artworkDir = getSaveDirectory();
@@ -964,7 +1013,7 @@ void Boxart::saveDatabase()
 		savedGeneration = databaseGeneration;
 		snapshot.reserve(games.size());
 		for (const auto& game : games)
-			if (game.second.scraped || game.second.parsed || game.second.isValid())
+			if (game.second.scraped || game.second.offlineArtState != OfflineArtState::Pending || game.second.isValid())
 				snapshot.push_back(game.second);
 	}
 
@@ -1051,10 +1100,7 @@ void Boxart::recoverDatabases(const std::string& databaseDir, const std::string&
 					if (imageIt != imagePathsByName.end())
 						candidate.boxartPath = imageIt->second;
 				}
-				if (candidate.boxartPath.empty() && !candidate.scraped)
-					candidate.parsed = false;
-
-				const std::string key = candidate.fileName.empty() ? candidate.name : candidate.fileName;
+				const std::string key = candidate.sourceKey();
 				auto existing = mergedGames.find(key);
 				if (existing == mergedGames.end() || boxartMergeScore(candidate) > boxartMergeScore(existing->second))
 					mergedGames[key] = candidate;
@@ -1130,12 +1176,16 @@ void Boxart::loadDatabase()
 			loadedGames.emplace_back(o, artworkDir);
 		std::lock_guard<std::mutex> guard(mutex);
 		for (GameBoxart& game : loadedGames)
-			games[game.fileName] = std::move(game);
+		{
+			game.workRevision = ++nextWorkRevision;
+			games[game.sourceKey()] = std::move(game);
+		}
 		if (loadedLegacyDatabase)
 			markDatabaseDirty();
 	} catch (const json::exception& e) {
 		WARN_LOG(COMMON, "Corrupted database file: %s", e.what());
 	}
+	reviewDatabaseArtwork();
 	refreshCustomBoxartIndex(false);
 }
 
@@ -1345,17 +1395,13 @@ void Boxart::reviewDatabaseArtwork()
 			if (usableImage)
 				continue;
 			game.second.boxartPath.clear();
+			if (game.second.offlineArtState == OfflineArtState::Complete)
+				game.second.offlineArtState = OfflineArtState::Pending;
 			if (!game.second.boxartUrl.empty())
 				game.second.scraped = false;
 			markDatabaseDirty();
 		}
 
-		if (game.second.parsed && game.second.boxartPath.empty() && !game.second.scraped)
-		{
-			game.second.parsed = false;
-			game.second.busy = false;
-			markDatabaseDirty();
-		}
 		if (game.second.boxartPath.empty() && game.second.scraped)
 		{
 			game.second.scraped = false;
@@ -1367,6 +1413,7 @@ void Boxart::reviewDatabaseArtwork()
 
 void Boxart::refreshCache()
 {
+	invalidateOfflineArtwork();
 	{
 		std::lock_guard<std::mutex> guard(mutex);
 		customIndexShuttingDown = true;
@@ -1432,6 +1479,7 @@ void Boxart::term()
 		physicalFetching.get();
 	if (onlineFetching.valid())
 		onlineFetching.get();
+	saveDatabase();
 }
 
 void Boxart::refreshCustomBoxartIndex(bool force)

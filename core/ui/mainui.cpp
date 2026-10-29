@@ -28,6 +28,7 @@
 #include "emulator.h"
 #include "rend/CustomTexture.h"
 #include "imgui_driver.h"
+#include "rend/vmu_window.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
 
@@ -44,6 +45,9 @@ bool mainui_rend_frame()
 
 	os_DoEvents();
 	os_UpdateInputState();
+#if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
+	vmu_window::update(!gui_is_open());
+#endif
 
 	if (gui_is_open())
 	{
@@ -93,6 +97,9 @@ void mainui_init()
 
 void mainui_term()
 {
+#if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
+	vmu_window::shutdown();
+#endif
 	rend_term_renderer();
 }
 

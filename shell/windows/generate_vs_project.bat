@@ -1,4 +1,5 @@
 @echo off
+REM Portions Copyright 2026 The Hollycast Authors
 setlocal EnableDelayedExpansion
 
 set "ROOT=%~dp0..\.."
@@ -160,10 +161,10 @@ if errorlevel 1 exit /b 1
 
 "!GIT_EXE!" remote get-url origin >nul 2>&1
 if errorlevel 1 (
-    "!GIT_EXE!" remote add origin https://github.com/flyinghead/flycast.git
+    "!GIT_EXE!" remote add origin https://github.com/nexus382/Hollycast.git
     if errorlevel 1 exit /b 1
 ) else (
-    "!GIT_EXE!" remote set-url origin https://github.com/flyinghead/flycast.git
+    "!GIT_EXE!" remote set-url origin https://github.com/nexus382/Hollycast.git
     if errorlevel 1 exit /b 1
 )
 

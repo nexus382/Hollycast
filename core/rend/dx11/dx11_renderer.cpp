@@ -22,10 +22,14 @@
 #include "hw/pvr/ta.h"
 #include "hw/pvr/pvr_mem.h"
 #include "ui/gui.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 #include "rend/sorter.h"
 #include "cfg/option.h"
 #include "rend/postprocess/shader_chain.h"
 #include "rend/osd.h"
+#include "rend/sample_filter.h"
 
 #include <memory>
 
@@ -203,6 +207,9 @@ void DX11Renderer::Term()
 	shaderDepthTexture.reset();
 	sceneDepthValid = false;
 #endif
+	fbSecondAccum.reset();
+	fbSecondAccumView.reset();
+	fbSecondAccumTex.reset();
 	quad.reset();
 	deviceContext.reset();
 	device.reset();
@@ -513,8 +520,11 @@ void DX11Renderer::setupPixelShaderConstants()
 
 bool DX11Renderer::Render()
 {
+	const bool is_rtt = rendContext->isRTT;
+#ifndef LIBRETRO
+	DX11GpuTimingScope gpuTiming(DX11Context::Instance(), !is_rtt);
+#endif
 	resetContextState();
-	bool is_rtt = rendContext->isRTT;
 	if (!is_rtt)
 	{
 #ifndef LIBRETRO
@@ -610,6 +620,9 @@ void DX11Renderer::displayFramebuffer()
 	const int viewportHeight = outheight - topInset - 2 * dy;
 	float w = (float)viewportWidth;
 	float h = (float)viewportHeight;
+#ifndef LIBRETRO
+	performance_overlay::recordOutputViewport(viewportWidth, viewportHeight);
+#endif
 	bool presentationTransformApplied = false;
 	if (shaderChain) {
 		if (shaderDepthTexture.get() != depthTex.get()) {
@@ -714,6 +727,9 @@ template <u32 Type, bool SortingEnabled>
 void DX11Renderer::setRenderState(const PolyParam *gp)
 {
 	PixelPolyConstants constants;
+	const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+			? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
+
 	if (gp->pcw.Texture && gp->tsp.FilterMode > 1 && Type != ListType_Punch_Through && gp->tcw.MipMapped == 1)
 	{
 		constants.trilinearAlpha = 0.25f * (gp->tsp.MipMapD & 0x3);
@@ -721,8 +737,9 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 			// Trilinear pass A
 			constants.trilinearAlpha = 1.f - constants.trilinearAlpha;
 	}
-	else
+	else {
 		constants.trilinearAlpha = 1.f;
+	}
 
 	bool color_clamp = gp->tsp.ColorClamp && (rendContext->fog_clamp_min.full != 0 || rendContext->fog_clamp_max.full != 0xffffffff);
 	int fog_ctrl = config::Fog ? gp->tsp.FogCtrl : 2;
@@ -738,6 +755,27 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 			gpuPalette = 1; // force nearest
 		else if (config::TextureFiltering == 2)
 			gpuPalette = 2; // force linear
+	}
+
+	if (gp->tsp.DstSelect == 1)
+	{
+		if (!renderingToSecAccum)
+		{
+			renderingToSecAccum = true;
+			makeSecondAccumFB();
+			ID3D11ShaderResourceView * const nullView = nullptr;
+			deviceContext->PSSetShaderResources(6, 1, &nullView);
+			deviceContext->OMSetRenderTargets(1, &fbSecondAccum.get(), depthTexView);
+		}
+	}
+	else if (renderingToSecAccum)
+	{
+		renderingToSecAccum = false;
+		if (rendContext->isRTT)
+			deviceContext->OMSetRenderTargets(1, &rttRenderTarget.get(), depthTexView);
+		else
+			deviceContext->OMSetRenderTargets(1, &fbRenderTarget.get(), depthTexView);
+		deviceContext->PSSetShaderResources(6, 1, &fbSecondAccumView.get());
 	}
 
 	ComPtr<ID3D11VertexShader> vertexShader = shaders->getVertexShader(gp->pcw.Gouraud, gp->isNaomi2());
@@ -756,7 +794,10 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 			gp->pcw.Gouraud,
 			Type == ListType_Punch_Through,
 			clipmode == TileClipping::Inside,
-			dithering);
+			dithering,
+			filter.mode,
+			filter.maxSize,
+			gp->tsp.SrcSelect == 1);
 	deviceContext->PSSetShader(pixelShader, nullptr, 0);
 
 	if (gpuPalette != 0)
@@ -785,8 +826,11 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 	if (texture != nullptr)
 	{
         deviceContext->PSSetShaderResources(0, 1, &texture->textureView.get());
+		const bool reconstruct = filter.appliesTo(texture->sampledWidth());
 		bool linearFiltering;
 		if (gpuPalette != 0)
+			linearFiltering = false;
+		else if (reconstruct)
 			linearFiltering = false;
 		else if (config::TextureFiltering == 0)
 			linearFiltering = gp->tsp.FilterMode != 0;
@@ -794,7 +838,7 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 			linearFiltering = false;
 		else
 			linearFiltering = true;
-        auto sampler = samplers->getSampler(linearFiltering, gp->tsp.ClampU, gp->tsp.ClampV, gp->tsp.FlipU, gp->tsp.FlipV, Type == ListType_Punch_Through);
+		auto sampler = samplers->getSampler(linearFiltering, gp->tsp.ClampU, gp->tsp.ClampV, gp->tsp.FlipU, gp->tsp.FlipV, Type == ListType_Punch_Through, reconstruct);
         deviceContext->PSSetSamplers(0, 1, &sampler.get());
 	}
 
@@ -889,6 +933,9 @@ void DX11Renderer::drawSorted(int first, int count, bool multipass)
 				true,
 				false,
 				false,
+				false,
+				0,
+				0,
 				false);
 		deviceContext->PSSetShader(pixelShader, nullptr, 0);
 
@@ -996,6 +1043,7 @@ void DX11Renderer::drawModVols(int first, int count)
 
 void DX11Renderer::drawStrips()
 {
+	renderingToSecAccum = false;
 	RenderPass previous_pass {};
     for (int render_pass = 0; render_pass < (int)rendContext->render_passes.size(); render_pass++)
     {
@@ -1059,6 +1107,9 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 		ReadFramebuffer<BGRAPacker>(info, pb, width, height);
 	}
 
+#ifndef LIBRETRO
+	DX11GpuTimingScope gpuTiming(DX11Context::Instance(), true);
+#endif
 	if (dcfbTexture)
 	{
 		D3D11_TEXTURE2D_DESC desc;
@@ -1129,6 +1180,7 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 	drawOSD();
 	renderVideoRouting();
 	DX11Context::Instance()->setFrameRendered();
+	performance_overlay::recordRenderedResolution(width, height, width, height);
 #else
 	ID3D11RenderTargetView *nullView = nullptr;
 	deviceContext->OMSetRenderTargets(1, &nullView, nullptr);
@@ -1244,6 +1296,10 @@ void DX11Renderer::readRttRenderTarget(u32 texAddress)
 			DX11Texture* texture = texCache.getRTTexture(texAddress, rendContext->fb_W_CTRL.fb_packmode, wpo2, hpo2);
 
 			texture->texture = rttTexture;
+			// RTT resolution scaling can make the GPU texture wider than its native cache entry.
+			D3D11_TEXTURE2D_DESC desc;
+			rttTexture->GetDesc(&desc);
+			texture->uploadedWidth = desc.Width;
 			rttTexture.reset();
 			rttRenderTarget.reset();
 			texture->textureView.reset();
@@ -1565,6 +1621,40 @@ void DX11Renderer::renderVideoRouting()
 		os_VideoRoutingTermDX();
 	}
 #endif
+}
+
+void DX11Renderer::makeSecondAccumFB()
+{
+	u32 width, height;
+	if (rendContext->isRTT) {
+		width = rendContext->framebufferWidth;
+		height = rendContext->framebufferHeight;
+	}
+	else {
+		width = this->width;
+		height = this->height;
+	}
+	if (fbSecondAccumTex != nullptr)
+	{
+		D3D11_TEXTURE2D_DESC desc;
+		fbSecondAccumTex->GetDesc(&desc);
+		if (desc.Width != width || desc.Height != height)
+		{
+			fbSecondAccumTex.reset();
+			fbSecondAccum.reset();
+			fbSecondAccumView.reset();
+		}
+	}
+	if (fbSecondAccumTex == nullptr)
+	{
+		createTexAndRenderTarget(fbSecondAccumTex, fbSecondAccum, width, height);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+		viewDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		viewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		viewDesc.Texture2D.MipLevels = 1;
+		device->CreateShaderResourceView(fbSecondAccumTex, &viewDesc, &fbSecondAccumView.get());
+	}
 }
 
 Renderer *rend_DirectX11()

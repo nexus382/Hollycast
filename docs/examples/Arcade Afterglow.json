@@ -1,0 +1,161 @@
+{
+  "base": "Dark",
+  "colors": {
+    "Text": "#FFF1E6",
+    "TextDisabled": "#B9A5B8",
+    "WindowBg": "#171221",
+    "ChildBg": "#21182C",
+    "PopupBg": "#2C2039",
+    "Border": "#80637D",
+    "BorderShadow": "#0C071180",
+    "FrameBg": "#382A45",
+    "FrameBgHovered": "#57405B",
+    "FrameBgActive": "#704B62",
+    "TitleBg": "#1C1427",
+    "TitleBgActive": "#51333C",
+    "TitleBgCollapsed": "#1C1427CC",
+    "MenuBarBg": "#241A30",
+    "ScrollbarBg": "#1A1324",
+    "ScrollbarGrab": "#705066",
+    "ScrollbarGrabHovered": "#A1676A",
+    "ScrollbarGrabActive": "#C47B67",
+    "Separator": "#75566F",
+    "SeparatorHovered": "#D18A73",
+    "SeparatorActive": "#FFC18C",
+    "ResizeGrip": "#9A6E8399",
+    "ResizeGripHovered": "#DA967DCC",
+    "ResizeGripActive": "#FFC18C",
+    "InputTextCursor": "#FFE1B8",
+    "TabHovered": "#805067",
+    "Tab": "#35273F",
+    "TabSelected": "#7E4350",
+    "TabSelectedOverline": "#FFC18C",
+    "TabDimmed": "#251B30",
+    "TabDimmedSelected": "#543647",
+    "TabDimmedSelectedOverline": "#BA8278",
+    "PlotLines": "#7FD3C8",
+    "PlotLinesHovered": "#B2F2E2",
+    "PlotHistogram": "#F2A66C",
+    "PlotHistogramHovered": "#FFD299",
+    "TableHeaderBg": "#4C3348",
+    "TableBorderStrong": "#86667A",
+    "TableBorderLight": "#5A4359",
+    "TableRowBg": "#241B3000",
+    "TableRowBgAlt": "#D98A7814",
+    "TextLink": "#97E2D2",
+    "TextSelectedBg": "#B6685880",
+    "TreeLines": "#987185",
+    "DragDropTarget": "#FFE2AD",
+    "DragDropTargetBg": "#E7A36A40",
+    "UnsavedMarker": "#FFCA89",
+    "NavCursor": "#FFDA9F",
+    "NavWindowingHighlight": "#FFE4C6",
+    "NavWindowingDimBg": "#0D0818A0",
+    "ModalWindowDimBg": "#0D0818B8",
+    "accent": "#F2946C",
+    "success": "#7FE2BE",
+    "warning": "#FFD277",
+    "error": "#FF8294"
+  },
+  "style": {
+    "Alpha": 1.0,
+    "DisabledAlpha": 0.62,
+    "WindowRounding": 10,
+    "WindowBorderSize": 1,
+    "ChildRounding": 7,
+    "ChildBorderSize": 1,
+    "PopupRounding": 12,
+    "PopupBorderSize": 1,
+    "FrameRounding": 7,
+    "FrameBorderSize": 1,
+    "IndentSpacing": 24,
+    "ScrollbarSize": 17,
+    "ScrollbarRounding": 9,
+    "ScrollbarPadding": 2,
+    "GrabMinSize": 14,
+    "GrabRounding": 7,
+    "TabRounding": 7,
+    "TabBorderSize": 1,
+    "TabMinWidthBase": 0,
+    "TabMinWidthShrink": 20,
+    "TabBarBorderSize": 1,
+    "TabBarOverlineSize": 2,
+    "SeparatorTextBorderSize": 1,
+    "WindowPadding": [
+      12,
+      10
+    ],
+    "WindowMinSize": [
+      32,
+      32
+    ],
+    "WindowTitleAlign": [
+      0.5,
+      0.5
+    ],
+    "FramePadding": [
+      9,
+      5
+    ],
+    "ItemSpacing": [
+      9,
+      8
+    ],
+    "ItemInnerSpacing": [
+      6,
+      5
+    ],
+    "CellPadding": [
+      8,
+      5
+    ],
+    "TouchExtraPadding": [
+      1,
+      1
+    ],
+    "ButtonTextAlign": [
+      0.5,
+      0.5
+    ],
+    "SelectableTextAlign": [
+      0,
+      0
+    ],
+    "SeparatorTextAlign": [
+      0,
+      0.5
+    ],
+    "SeparatorTextPadding": [
+      14,
+      4
+    ]
+  },
+  "widgets": {
+    "media.status": {
+      "success": "#76E0CC",
+      "warning": "#FFBC75"
+    },
+    "settings.feedback": {
+      "warning": "#F9CF7B",
+      "error": "#FF8BA9"
+    }
+  },
+  "fonts": {
+    "body": "assets/arcade-afterglow/Jura.ttf",
+    "bold": "assets/arcade-afterglow/EncodeSans.ttf"
+  },
+  "assets": {
+    "background": "assets/arcade-afterglow/background.png",
+    "backgroundFit": "cover",
+    "backgroundOpacity": 0.64,
+    "icons": {
+      "settings": "assets/arcade-afterglow/settings.png"
+    }
+  },
+  "layout": {
+    "density": 1.15,
+    "settingsSidebarWidth": 270,
+    "libraryCoverSpacing": 24,
+    "artworkCornerRadius": 18
+  }
+}

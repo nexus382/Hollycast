@@ -24,6 +24,7 @@
 #ifdef USE_VULKAN
 #include "vulkan.h"
 
+#include <array>
 #include <stdexcept>
 
 class InvalidVulkanContext : public std::runtime_error {
@@ -110,6 +111,10 @@ public:
 	void NewFrame();
 	void BeginRenderPass();
 	void EndFrame(vk::CommandBuffer cmdBuffer = vk::CommandBuffer());
+	void BeginGpuTiming(vk::CommandBuffer commandBuffer);
+	void EndGpuTiming(vk::CommandBuffer commandBuffer);
+	// Call only after the graphics queue is idle, before discarding renderer work.
+	void ResetGpuTiming();
 	void Present() noexcept;
 	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
 			vk::Image depthImage = {}, vk::ImageView depthView = {}) noexcept;
@@ -162,6 +167,7 @@ public:
 	float GetMaxSamplerAnisotropy() const { return samplerAnisotropy ? maxSamplerAnisotropy : 1.f; }
 	bool SupportsDedicatedAllocation() const { return dedicatedAllocationSupported; }
 	bool SupportsBufferDeviceAddress() const { return bufferDeviceAddressSupported; }
+	bool supportsDynamicLocalRead() const { return dynamicLocalReadSupported; }
 	const VMAllocator& GetAllocator() const { return allocator; }
 	vk::DeviceSize GetMaxMemoryAllocationSize() const { return maxMemoryAllocationSize; }
 	u32 GetMaxStorageBufferRange() const { return maxStorageBufferRange; }
@@ -213,6 +219,7 @@ private:
 	void DoSwapAutomation();
 	void DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
 			bool presentationTransformApplied = false);
+	void pollGpuTiming();
 	vk::SurfaceKHR GetSurface() const { return *surface; }
 
 	bool HasSurfaceDimensionChanged() const;
@@ -244,6 +251,7 @@ private:
 	bool dedicatedAllocationSupported = false;
 	bool provokingVertexSupported = false;
 	bool bufferDeviceAddressSupported = false;
+	bool dynamicLocalReadSupported = false;
 	u32 vendorID = 0;
 	int swapInterval = 1;
 	vk::UniqueDevice device;
@@ -275,6 +283,18 @@ private:
 	u32 currentSemaphore = 0;
 
 	vk::UniquePipelineCache pipelineCache;
+
+	static constexpr std::size_t GpuTimingQueryCount = 4;
+	vk::UniqueQueryPool gpuTimingQueryPool;
+	std::array<int, GpuTimingQueryCount> gpuTimingFenceIndices { -1, -1, -1, -1 };
+	std::array<u32, GpuTimingQueryCount> gpuTimingEpochs {};
+	std::size_t gpuTimingReadIndex = 0;
+	std::size_t gpuTimingWriteIndex = 0;
+	std::size_t gpuTimingWaitingCount = 0;
+	bool gpuTimingAvailable = false;
+	vk::CommandBuffer gpuTimingCommandBuffer;
+	double gpuTimestampPeriod = 0.0;
+	u64 gpuTimestampMask = 0;
 
 	std::unique_ptr<QuadPipeline> quadPipelineWithAlpha;
 	std::unique_ptr<QuadPipeline> quadPipeline;

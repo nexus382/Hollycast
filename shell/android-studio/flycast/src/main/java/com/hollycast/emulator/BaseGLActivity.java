@@ -1,3 +1,5 @@
+// Portions Copyright 2026 The Hollycast Authors
+
 package com.hollycast.emulator;
 
 import android.Manifest;
@@ -107,7 +109,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Emulator app = (Emulator)getApplicationContext();
         app.getConfigurationPrefs();
         storage = new AndroidStorage(this);
-        setStorageDirectories();
+        setStorageDirectories(false);
 
         boolean externalStorageLegacy = true;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -133,20 +135,14 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Log.i("hollycast", "Initializing input devices");
         InputDeviceManager.getInstance().startListening(getApplicationContext());
         register(this);
-
         audioBackend = new AudioBackend();
-
         onConfigurationChanged(getResources().getConfiguration());
 
-        // Ignore the Back button on Android 13+.
-        // This is apparently required on Android 16 since returning true from onKeyDown() is ignored.
-        /*
+        // Predictive back gestures bypass onKeyDown(), so use the same handler as legacy back keys.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> {
-                // Ignore the Back button. It is handled in onKeyDown()
-            });
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::onBackKey);
         }
-        */
 
         // When viewing a resource, pass its URI to the native code for opening
         Intent intent = getIntent();
@@ -166,7 +162,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     }
 
 	// Called from native code
-    private void showAlertDialog(String message)
+    public void showAlertDialog(String message)
     {
         handler.post(new Runnable() {
             @Override
@@ -188,7 +184,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         });
     }
 
-    private void setStorageDirectories()
+    private void setStorageDirectories(boolean refreshArtwork)
     {
         String android_home_directory = Environment.getExternalStorageDirectory().getAbsolutePath();
         List<String> pathList = new ArrayList<>();
@@ -201,7 +197,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Log.i("hollycast", "Storage dirs: " + pathList);
         if (storage != null)
             storage.setStorageDirectories(pathList);
-        JNIdc.setExternalStorageDirectories(pathList.toArray());
+        JNIdc.setExternalStorageDirectories(pathList.toArray(), refreshArtwork);
     }
 
     // Testing
@@ -367,17 +363,21 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         return super.onKeyUp(keyCode, event);
     }
 
+    private void onBackKey() {
+        if (JNIdc.guiIsContentBrowser()) {
+            finish();
+        }
+        else {
+            showMenu();
+        }
+    }
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         keyCode = scrubKeyCode(keyCode, event);
         if (event.getRepeatCount() == 0) {
             if (keyCode == KeyEvent.KEYCODE_BACK) {
-                if (JNIdc.guiIsContentBrowser()) {
-                    finish();
-                }
-                else {
-                    showMenu();
-                }
+                onBackKey();
                 return true;
             }
             InputDeviceManager deviceManager = InputDeviceManager.getInstance();
@@ -441,7 +441,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         else if (requestCode == STORAGE_PERM_REQUEST) {
             Log.i("hollycast", "External storage permission granted");
             storagePermissionGranted = true;
-            setStorageDirectories();
+            setStorageDirectories(true);
             if (pendingIntentUrl != null) {
                 JNIdc.setGameUri(pendingIntentUrl);
                 pendingIntentUrl = null;

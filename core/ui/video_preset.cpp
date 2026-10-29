@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 The Hollycast Authors
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Hollycast.
 
@@ -29,7 +30,7 @@ namespace SettingsNew {
 
 static const PresetSetting potatoSettings[] = {
 	{"Sh4Clock", 200},                            // 100% SH4 clock
-	{"RenderResolution", 320},                    // Ultra-low resolution
+	{"RenderResolution", 240},                    // 0.5x - 320x240
 	{"AnisotropicFiltering", 1},                  // 2x
 	{"AutoSkipFrame", 2},                         // Maximum skip
 	{"SkipFrame", 0},                             // No fixed skip
@@ -39,6 +40,7 @@ static const PresetSetting potatoSettings[] = {
 	{"RenderToTextureBuffer", false},             // Disable RTT buffer
 	{"ThreadedRendering", true},                  // Enable threading
 	{"TextureFiltering", 0},                      // Default
+	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
 	{"TextureUpscale", 1},                        // Off/1x
 	{"MaxFilteredTextureSize", 256},              // Small filtered textures only
 	{"PerPixelLayers", 32},                       // Default layer budget
@@ -60,6 +62,7 @@ static const PresetSetting potatoSettings[] = {
 };
 
 static const PresetSetting lowSettings[] = {
+	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
 	{"Sh4Clock", 190},                            // Underclock SH4
 	{"RenderResolution", 480},                    // 1x - 640x480 (Native)
 	{"AnisotropicFiltering", 0},                  // Disabled
@@ -75,6 +78,7 @@ static const PresetSetting lowSettings[] = {
 };
 
 static const PresetSetting mediumSettings[] = {
+	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
 	{"Sh4Clock", 215},                            // Mild SH4 overclock
 	{"RenderResolution", 720},                    // 1.5x - 960x720
 	{"AnisotropicFiltering", 4},                  // 16x
@@ -91,6 +95,7 @@ static const PresetSetting mediumSettings[] = {
 };
 
 static const PresetSetting highSettings[] = {
+	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
 	{"Sh4Clock", 220},                            // Overclock SH4
 	{"RenderResolution", 1200},                   // 2.5x - 1600x1200
 	{"AnisotropicFiltering", 3},                  // 8x
@@ -107,6 +112,7 @@ static const PresetSetting highSettings[] = {
 };
 
 static const PresetSetting godModeSettings[] = {
+	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
 	{"Sh4Clock", 250},                            // Overclock SH4
 	{"RenderResolution", 1920},                   // 4x - 2560x1920
 	{"AnisotropicFiltering", 4},                  // 16x (max)
@@ -211,6 +217,9 @@ static void applySetting(const PresetSetting& setting) {
 	}
 	else if (name == "TextureFiltering") {
 		config::TextureFiltering.set(std::get<int>(setting.value));
+	}
+	else if (name == "SampleTextureFilter") {
+		config::SampleTextureFilter.set(std::get<int>(setting.value));
 	}
 	else if (name == "TextureUpscale") {
 		config::TextureUpscale.set(std::get<int>(setting.value));
@@ -350,6 +359,10 @@ VideoPresetLevel detectCurrentPreset() {
 			}
 			else if (name == "TextureFiltering") {
 				if (config::TextureFiltering.get() != std::get<int>(setting.value))
+					match = false;
+			}
+			else if (name == "SampleTextureFilter") {
+				if (config::SampleTextureFilter.get() != std::get<int>(setting.value))
 					match = false;
 			}
 			else if (name == "TextureUpscale") {

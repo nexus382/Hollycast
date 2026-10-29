@@ -29,6 +29,7 @@ enum class SettingsTab
 	Library,
 	Video,
 	Shader,
+	OnScreenDisplay,
 	Audio,
 	Controls,
 	Network,
@@ -68,6 +69,7 @@ void renderShaderTab();
 // The same parameter editor is shared with the Shader settings page.
 void renderShaderLiveTuneOverlay();
 void closeShaderLiveTune();
+void renderOnScreenDisplayTab();
 void renderAudioTab();
 void renderControlsTab();
 void renderNetworkTab();
@@ -75,5 +77,11 @@ void renderAdvancedTab();
 void renderAboutTab();
 void focusBoxArtSection();
 void openTab(SettingsTab tab);
+
+// Either tuning panel owns gameplay input while its controls are open.
+bool liveTuneActive();
+bool textureFilterLiveTuneActive();
+void stopTextureFilterLiveTune();
+void renderTextureFilterLiveTuneOverlay();
 
 } // namespace SettingsNew

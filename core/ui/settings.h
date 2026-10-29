@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -24,11 +25,14 @@
 #include <array>
 using namespace i18n;
 
+namespace CustomTheme { struct Theme; }
+
 enum class GuiSettingsTab
 {
 	General,
 	Library,
 	Video,
+	OnScreenDisplay,
 	Audio,
 	Controls,
 	Network,
@@ -46,6 +50,7 @@ void gui_focus_boxart_settings_section();
 // Keep these symbols for compatibility and upstream merge stability.
 void gui_settings_general();
 void applyCurrentTheme();
+void setThemePreview(const CustomTheme::Theme* theme);
 void addContentPath(bool start);
 void gui_settings_controls(std::array<bool, 4>& mapleDevicesChanges, std::array<std::array<bool, 2>, 4>& expDevicesChanges);
 void gui_settings_video();

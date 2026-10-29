@@ -2,6 +2,7 @@
     Created on: Oct 18, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -21,6 +22,7 @@
 #if defined(USE_SDL)
 #include "sdl.h"
 #include "ui/gui.h"
+#include "ui/performance_overlay.h"
 #include "sdl/sdl.h"
 #include "cfg/option.h"
 
@@ -120,6 +122,8 @@ void SDLGLGraphicsContext::swap()
 	do_swap_automation();
 	changeGLSwapInterval();
 	SDL_GL_SwapWindow((SDL_Window *)window);
+	// SDL2 exposes no swap result; count completed swap calls, not render requests.
+	performance_overlay::recordPresentedFrame();
 
 	// Check if drawable has been resized
 	SDL_GL_GetDrawableSize((SDL_Window *)window, &settings.display.width, &settings.display.height);

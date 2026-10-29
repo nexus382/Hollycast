@@ -26,16 +26,21 @@
 
 void gui_init();
 void gui_updateStyle();
+void gui_requestStyleReload();
 void gui_open_settings();
 void gui_open_shader_settings();
+void gui_open_texture_filter_settings();
+// Selects Loading when custom textures need refreshing; otherwise closes the UI.
+bool gui_resume_game();
 void gui_display_ui();
 void gui_draw_osd();
 void gui_display_osd();
 void gui_display_profiler();
 void gui_open_onboarding();
+void gui_open_setup_checklist();
 void gui_term();
 void gui_cancel_load();
-void gui_refresh_files();
+void gui_refresh_files(bool invalidateArtwork = true);
 void gui_cheats();
 void gui_keyboard_input(u32 wc);
 void gui_keyboard_inputUTF8(const std::string& s);
@@ -80,7 +85,6 @@ enum class GuiState {
 	Settings,
 	Main,
 	Onboarding,
-	VJoyEdit,
 	VJoyEditCommands,
 	SelectDisk,
 	Loading,

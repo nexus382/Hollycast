@@ -1,0 +1,73 @@
+// Portions Copyright 2026 The Hollycast Authors
+#pragma once
+
+#include "types.h"
+#include <algorithm>
+
+#if !defined(LIBRETRO) && !defined(TARGET_UWP)
+#if defined(_WIN32) || defined(__ANDROID__)
+#define HAVE_MOVABLE_VMUS
+#elif defined(USE_SDL) && (defined(__linux__) || (defined(__APPLE__) && !defined(TARGET_IPHONE)))
+#define HAVE_MOVABLE_VMUS
+#define HAVE_SDL_VMUS
+#endif
+#endif
+
+#ifdef HAVE_SDL_VMUS
+struct SDL_Window;
+union SDL_Event;
+#endif
+
+namespace vmu_window {
+// Keep the option default, settings slider and platform clamps in agreement.
+constexpr int MinSizePercent = 50;
+constexpr int DefaultSizePercent = 100;
+constexpr int MaxSizePercent = 400;
+constexpr int MinTransparencyPercent = 0;
+constexpr int DefaultTransparencyPercent = 25;
+constexpr int MaxTransparencyPercent = 100;
+
+inline float opacity(int transparency, bool menu = false)
+{
+	const float alpha = (100 - std::clamp(transparency, MinTransparencyPercent, MaxTransparencyPercent)) / 100.f;
+	// Desktop VMUs retain their existing dimming while a menu is open.
+	return menu ? alpha * (2.f / 3.f) : alpha;
+}
+
+inline u8 opacityByte(int transparency, bool menu = false)
+{
+	// Preserve the existing 192/128 alpha bytes at the default transparency.
+	return static_cast<u8>(std::min(255, int(opacity(transparency, menu) * 256.f + 0.5f)));
+}
+
+#ifdef HAVE_MOVABLE_VMUS
+// Producers publish copies. Window, texture and configuration work stays on the UI thread.
+bool detachedActive();
+// A placed LCD remains visible when movement is locked.
+bool placementActive();
+void publishScreen(int index, const u32 *pixels, bool active);
+void shutdown();
+void resetPositions();
+bool ownsScreen(int index);
+// Rebase absolute game input after an interaction consumed by a VMU.
+bool consumeMousePositionReset();
+#ifdef HAVE_SDL_VMUS
+void update(SDL_Window *parent, bool pointerAvailable);
+bool handleEvent(const SDL_Event& event);
+// Return focus only from one of our utility windows; never steal another app's focus.
+bool focusGameWindow();
+#elif defined(__ANDROID__)
+void update(bool visible);
+void drawInApp();
+// Coordinates are relative to the Android view, independent of its pixel density.
+bool touchDown(float x, float y);
+void touchMove(float x, float y);
+void touchUp();
+#else
+void update(bool pointerAvailable);
+bool blocksMouseInput();
+#endif
+#else
+inline bool ownsScreen(int) { return false; }
+#endif
+}

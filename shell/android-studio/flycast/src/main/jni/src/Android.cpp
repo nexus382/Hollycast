@@ -189,7 +189,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_hollycast_emulator_emu_JNIdc_initE
 	}
 }
 
-extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_setExternalStorageDirectories(JNIEnv *env, jobject obj, jobjectArray jpathList)
+extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_setExternalStorageDirectories(JNIEnv *env, jobject obj, jobjectArray jpathList, jboolean refreshArtwork)
 {
 	jni::ObjectArray<jni::String> pathList(jpathList, false);
     std::string paths;
@@ -201,7 +201,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_setExter
         paths += pathList[i].to_string();
     }
     setenv("FLYCAST_HOME", paths.c_str(), 1);
-    gui_refresh_files();
+    gui_refresh_files(refreshArtwork == JNI_TRUE);
 }
 
 static bool stopEmu()

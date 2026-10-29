@@ -307,6 +307,9 @@ void getScaledFramebufferSize(const rend_context& rendCtx, int& width, int& heig
 
 float getOutputFramebufferAspectRatio()
 {
+	if (config::StretchToFill)
+		return static_cast<float>(settings.display.width) / settings.display.height;
+
 	const bool manualWidescreen = cheatManager.hasManualWidescreenCheat();
 	float aspectRatio;
 	if (config::Rotate90)
@@ -338,6 +341,9 @@ float getOutputFramebufferAspectRatio()
 
 float getDCFramebufferAspectRatio()
 {
+	if (config::StretchToFill)
+		return static_cast<float>(settings.display.width) / settings.display.height;
+
 	const bool widescreen = cheatManager.hasManualWidescreenCheat();
 	const float aspectRatio = config::Rotate90
 			? (widescreen ? 9.f / 16.f : 3.f / 4.f)
@@ -468,7 +474,21 @@ void getVideoShift(float& x, float& y)
 		x *= config::RenderResolution / 480.f;
 		y *= config::RenderResolution / 480.f;
 	}
-	x *= config::ScreenStretching / 100.f;
+	if (config::StretchToFill)
+	{
+		float aspectRatio = config::Rotate90 ? 3.f / 4.f : 4.f / 3.f;
+
+		if (!config::Rotate90 && config::Widescreen && !config::EmulateFramebuffer)
+			aspectRatio = config::SuperWidescreen
+					? (float)settings.display.width / settings.display.height
+					: 16.f / 9.f;
+
+		x *= ((float)settings.display.width / settings.display.height) / aspectRatio;
+	}
+	else
+	{
+		x *= config::ScreenStretching / 100.f;
+	}
 }
 
 void getWriteFBToVramParams(const rend_context& ctx, glm::ivec2& scaledSize, Rect& finalClip)

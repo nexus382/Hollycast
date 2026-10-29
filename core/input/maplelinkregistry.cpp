@@ -1,8 +1,9 @@
 /*
 	Copyright 2026 The Hollycast Authors
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Hollycast.
-	https://github.com/OrangeFox86/Hollycast
+	https://github.com/nexus382/Hollycast
 
 	Hollycast is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -25,8 +26,8 @@
 
 MapleLinkRegistry& MapleLinkRegistry::Get()
 {
-    static MapleLinkRegistry singleton;
-    return singleton;
+	static MapleLinkRegistry *singleton = new MapleLinkRegistry();
+	return *singleton;
 }
 
 std::optional<MapleLink> MapleLinkRegistry::getMapleLink(int bus, int port, int linkBusOffset)

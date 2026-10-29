@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -17,10 +18,14 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "dx11_oitshaders.h"
+#include "rend/sample_filter.h"
 #include "../dx11context.h"
 #include "../dx11_naomi2.h"
+#include <algorithm>
+#include <array>
+#include <cstdio>
 
-extern const char * const PixelShaderCommon;
+extern const std::string PixelShaderCommon;
 
 const char * const VertexShader = R"(
 #if pp_Gouraud == 1
@@ -353,6 +358,7 @@ PSO main(in VertexIn inpix)
 			discard;
 	#endif
 
+#if SECACCUM == 0
 	float4 color = inpix.col;
 	float4 specular = inpix.spec;
 	bool area1 = false;
@@ -403,17 +409,33 @@ PSO main(in VertexIn inpix)
 		#endif
 
 		float4 texcol;
+		#if pp_SampleTextureFilter != 0
+			TextureSampleState sampleState;
+			sampleState.palette = pp_Palette != 0 && !area1;
+			sampleState.ignoreAlpha = pp_IgnoreTexA != 0;
+			#if pp_TwoVolumes == 1
+				sampleState.ignoreAlpha = cur_ignore_tex_alpha;
+			#endif
+		#endif
 		#if pp_TwoVolumes == 1
 			if (area1)
+			#if pp_SampleTextureFilter != 0
+				texcol = filteredTextureSample(sampleState, texture1, sampler1, uv);
+			#else
 				texcol = texture1.Sample(sampler1, uv);
+			#endif
 			else
 		#endif
+		#if pp_SampleTextureFilter != 0
+				texcol = filteredTextureSample(sampleState, texture0, sampler0, uv);
+		#else
 		#if pp_Palette == 0
 				texcol = texture0.Sample(sampler0, uv);
 		#elif pp_Palette == 1
 				texcol = palettePixel(texture0, sampler0, uv);
 		#else
 				texcol = palettePixelBilinear(texture0, sampler0, uv);
+		#endif
 		#endif
 		#if pp_BumpMap == 1
 			float s = PI / 2.0f * (texcol.a * 15.0f * 16.0f + texcol.r * 15.0f) / 255.0f;
@@ -474,6 +496,10 @@ PSO main(in VertexIn inpix)
 			discard;
 		color.a = 1.0f;
 	#endif
+#else
+	// SECACCUM == 1
+	float4 color = secAccum[uint2(inpix.pos.xy)];
+#endif
 
 	#if PASS == PASS_COLOR 
 		pso.col = color;
@@ -750,7 +776,7 @@ struct OITIncludeManager : public ID3DInclude
 		if (!strcmp(pFileName, "oit_header.hlsl"))
 			src = OITShaderHeader;
 		else if (!strcmp(pFileName, "pixel_common.hlsl"))
-			src = PixelShaderCommon;
+			src = PixelShaderCommon.c_str();
 		if (src != nullptr)
 		{
 			*ppData = src;
@@ -799,11 +825,13 @@ enum PixelMacroEnum {
 	MacroPalette,
 	MacroAlphaTest,
 	MacroClipInside,
-	MacroPass
+	MacroPass,
+	MacroSecAccum,
+	MacroSampleTextureFilter,
+	MacroMaxFilteredTextureSize,
 };
 
-static D3D_SHADER_MACRO PixelMacros[]
-{
+static const std::array<D3D_SHADER_MACRO, MacroMaxFilteredTextureSize + 2> DefaultPixelMacros {{
 	{ "pp_Gouraud", "1" },
 	{ "pp_TwoVolumes", "0" },
 	{ "DIV_POS_Z", "0" },
@@ -819,12 +847,16 @@ static D3D_SHADER_MACRO PixelMacros[]
 	{ "cp_AlphaTest", "0" },
 	{ "pp_ClipInside", "0" },
 	{ "PASS", "0" },
+	{ "SECACCUM", "0" },
+	{ "pp_SampleTextureFilter", "0" },
+	{ "pp_MaxFilteredTextureSize", "0" },
 	{ nullptr, nullptr }
-};
+}};
 
 const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr,
 		bool pp_Offset, u32 pp_FogCtrl, bool pp_BumpMap, bool fog_clamping,
-		int palette, bool gouraud, bool alphaTest, bool clipInside, bool twoVolumes, Pass pass)
+		int palette, bool gouraud, bool alphaTest, bool clipInside, bool twoVolumes, bool secAccum, Pass pass,
+		int sampleTextureFilter, int maxFilteredTextureSize)
 {
 	bool divPosZ = !settings.platform.isNaomi2() && config::NativeDepthInterpolation;
 	const u32 hash = (int)pp_Texture
@@ -841,30 +873,42 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getShader(bool pp_Texture, bool
 			| ((int)clipInside << 14)
 			| ((int)twoVolumes << 15)
 			| ((int)pass << 16)
-			| ((int)divPosZ << 18);
+			| ((int)divPosZ << 18)
+			| ((int)secAccum << 19)
+			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 20);
 	auto& shader = shaders[hash];
 	if (shader == nullptr)
 	{
 		verify(pp_ShadInstr < std::size(MacroValues));
 		verify(pp_FogCtrl < std::size(MacroValues));
 		verify(pass < (int)std::size(MacroValues));
-		PixelMacros[MacroGouraud].Definition = MacroValues[gouraud];
-		PixelMacros[MacroTexture].Definition = MacroValues[pp_Texture];
-		PixelMacros[MacroUseAlpha].Definition = MacroValues[pp_UseAlpha];
-		PixelMacros[MacroIgnoreTexA].Definition = MacroValues[pp_IgnoreTexA];
-		PixelMacros[MacroShadInstr].Definition = MacroValues[pp_ShadInstr];
-		PixelMacros[MacroOffset].Definition = MacroValues[pp_Offset];
-		PixelMacros[MacroFogCtrl].Definition = MacroValues[pp_FogCtrl];
-		PixelMacros[MacroBumpMap].Definition = MacroValues[pp_BumpMap];
-		PixelMacros[MacroFogClamping].Definition = MacroValues[fog_clamping];
-		PixelMacros[MacroPalette].Definition = MacroValues[palette];
-		PixelMacros[MacroAlphaTest].Definition = MacroValues[alphaTest];
-		PixelMacros[MacroClipInside].Definition = MacroValues[clipInside];
-		PixelMacros[MacroTwoVolumes].Definition = MacroValues[twoVolumes];
-		PixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
-		PixelMacros[MacroPass].Definition = MacroValues[pass];
+		verify(sampleTextureFilter >= 0 && sampleTextureFilter <= 19);
+		// Never retain stack-owned filter definitions for later modifier-volume compilation.
+		auto pixelMacros = DefaultPixelMacros;
+		char sampleFilterMacro[4];
+		char maxFilteredTextureMacro[8];
+		snprintf(sampleFilterMacro, sizeof(sampleFilterMacro), "%d", sampleTextureFilter);
+		snprintf(maxFilteredTextureMacro, sizeof(maxFilteredTextureMacro), "%d", maxFilteredTextureSize);
+		pixelMacros[MacroGouraud].Definition = MacroValues[gouraud];
+		pixelMacros[MacroTexture].Definition = MacroValues[pp_Texture];
+		pixelMacros[MacroUseAlpha].Definition = MacroValues[pp_UseAlpha];
+		pixelMacros[MacroIgnoreTexA].Definition = MacroValues[pp_IgnoreTexA];
+		pixelMacros[MacroShadInstr].Definition = MacroValues[pp_ShadInstr];
+		pixelMacros[MacroOffset].Definition = MacroValues[pp_Offset];
+		pixelMacros[MacroFogCtrl].Definition = MacroValues[pp_FogCtrl];
+		pixelMacros[MacroBumpMap].Definition = MacroValues[pp_BumpMap];
+		pixelMacros[MacroFogClamping].Definition = MacroValues[fog_clamping];
+		pixelMacros[MacroPalette].Definition = MacroValues[palette];
+		pixelMacros[MacroAlphaTest].Definition = MacroValues[alphaTest];
+		pixelMacros[MacroClipInside].Definition = MacroValues[clipInside];
+		pixelMacros[MacroTwoVolumes].Definition = MacroValues[twoVolumes];
+		pixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
+		pixelMacros[MacroPass].Definition = MacroValues[pass];
+		pixelMacros[MacroSampleTextureFilter].Definition = sampleFilterMacro;
+		pixelMacros[MacroMaxFilteredTextureSize].Definition = maxFilteredTextureMacro;
+		pixelMacros[MacroSecAccum].Definition = MacroValues[secAccum];
 
-		shader = compilePS(PixelShader, "main", PixelMacros);
+		shader = compilePS(PixelShader, "main", pixelMacros.data());
 		verify(shader != nullptr);
 	}
 	return shader;
@@ -936,8 +980,9 @@ const ComPtr<ID3D11PixelShader>& DX11OITShaders::getModVolShader()
 	auto& modVolShader = modVolShaders[divPosZ];
 	if (!modVolShader)
 	{
-		PixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
-		modVolShader = compilePS(PixelShader, "modifierVolume", PixelMacros);
+		auto pixelMacros = DefaultPixelMacros;
+		pixelMacros[MacroDivPosZ].Definition = MacroValues[divPosZ];
+		modVolShader = compilePS(PixelShader, "modifierVolume", pixelMacros.data());
 	}
 
 	return modVolShader;

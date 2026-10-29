@@ -2,6 +2,7 @@
     Created on: Oct 2, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -23,6 +24,9 @@
 #include "drawer.h"
 #include "hw/pvr/ta.h"
 #include "rend/transform_matrix.h"
+#ifndef LIBRETRO
+#include "ui/performance_overlay.h"
+#endif
 
 bool BaseVulkanRenderer::BaseInit(vk::RenderPass renderPass, int subpass)
 {
@@ -40,6 +44,7 @@ bool BaseVulkanRenderer::BaseInit(vk::RenderPass renderPass, int subpass)
 void BaseVulkanRenderer::Term()
 {
 	GetContext()->WaitIdle();
+	GetContext()->ResetGpuTiming();
 	GetContext()->PresentFrame(nullptr, nullptr, vk::Extent2D(), 0);
 #if defined(VIDEO_ROUTING) && defined(TARGET_MAC)
 	os_VideoRoutingTermVk();
@@ -156,49 +161,64 @@ void BaseVulkanRenderer::ReInitOSD()
 
 void BaseVulkanRenderer::RenderFramebuffer(const FramebufferInfo& info)
 {
-	rendContext = nullptr;
-	framebufferTexIndex = (framebufferTexIndex + 1) % GetContext()->GetSwapChainSize();
+	try {
+		rendContext = nullptr;
+		framebufferTexIndex = (framebufferTexIndex + 1) % GetContext()->GetSwapChainSize();
 
-	if (framebufferTextures.size() != GetContext()->GetSwapChainSize())
-		framebufferTextures.resize(GetContext()->GetSwapChainSize());
-	std::unique_ptr<Texture>& curTexture = framebufferTextures[framebufferTexIndex];
-	if (!curTexture)
-	{
-		curTexture = std::make_unique<Texture>();
-		curTexture->tex_type = TextureType::_8888;
-	}
-
-	fbCommandPool.BeginFrame();
-	vk::CommandBuffer commandBuffer = fbCommandPool.Allocate();
-
-	commandBuffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
-	curTexture->SetCommandBuffer(commandBuffer);
-	{
-		static const float scopeColor[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
-		CommandBufferDebugScope _(commandBuffer, "RenderFramebuffer", scopeColor);
-
-		if (info.fb_r_ctrl.fb_enable == 0 || info.vo_control.blank_video == 1)
+		if (framebufferTextures.size() != GetContext()->GetSwapChainSize())
+			framebufferTextures.resize(GetContext()->GetSwapChainSize());
+		std::unique_ptr<Texture>& curTexture = framebufferTextures[framebufferTexIndex];
+		if (!curTexture)
 		{
-			// Video output disabled
-			u8 rgba[]{ (u8)info.vo_border_col._red, (u8)info.vo_border_col._green, (u8)info.vo_border_col._blue, 255 };
-			curTexture->UploadToGPU(1, 1, rgba, false);
-		}
-		else
-		{
-			PixelBuffer<u32> pb;
-			int width;
-			int height;
-			ReadFramebuffer(info, pb, width, height);
-
-			curTexture->UploadToGPU(width, height, (u8*)pb.data(), false);
+			curTexture = std::make_unique<Texture>();
+			curTexture->tex_type = TextureType::_8888;
 		}
 
+		fbCommandPool.BeginFrame();
+		vk::CommandBuffer commandBuffer = fbCommandPool.Allocate();
+
+		commandBuffer.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+		GetContext()->BeginGpuTiming(commandBuffer);
+		curTexture->SetCommandBuffer(commandBuffer);
+		{
+			static const float scopeColor[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
+			CommandBufferDebugScope _(commandBuffer, "RenderFramebuffer", scopeColor);
+
+			if (info.fb_r_ctrl.fb_enable == 0 || info.vo_control.blank_video == 1)
+			{
+				// Video output disabled
+				u8 rgba[]{ (u8)info.vo_border_col._red, (u8)info.vo_border_col._green, (u8)info.vo_border_col._blue, 255 };
+				curTexture->UploadToGPU(1, 1, rgba, false);
+			}
+			else
+			{
+				PixelBuffer<u32> pb;
+				int width;
+				int height;
+				ReadFramebuffer(info, pb, width, height);
+
+				curTexture->UploadToGPU(width, height, (u8*)pb.data(), false);
+			}
+		}
+		curTexture->SetCommandBuffer(nullptr);
+		GetContext()->EndGpuTiming(commandBuffer);
+		commandBuffer.end();
+		fbCommandPool.EndFrame();
+		framebufferRendered = true;
+		clearLastFrame = false;
+#ifndef LIBRETRO
+		const vk::Extent2D size = curTexture->getSize();
+		performance_overlay::recordRenderedResolution(size.width, size.height, size.width, size.height);
+#endif
+	} catch (const vk::OutOfDeviceMemoryError& e) {
+		ERROR_LOG(RENDERER, "Vulkan out of device memory: %s", e.what());
+		throw RendererException("Out of device memory");
+	} catch (const vk::SystemError& e) {
+		// Recovery discards failed command buffers and their queries together.
+		// Do not synthesize an end timestamp while unwinding a failed upload.
+		ERROR_LOG(RENDERER, "Vulkan system error %s", e.what());
+		throw RendererException("Vulkan system error");
 	}
-	curTexture->SetCommandBuffer(nullptr);
-	commandBuffer.end();
-	fbCommandPool.EndFrame();
-	framebufferRendered = true;
-	clearLastFrame = false;
 }
 
 void BaseVulkanRenderer::RenderVideoRouting()
@@ -320,7 +340,7 @@ public:
 				BaseInit(screenDrawer.GetRenderPass());
 				emulateFramebuffer = config::EmulateFramebuffer;
 			}
-			else if (ctx->rend.isRTT) {
+			else if (ctx->rend.isRTT || resetTextureCache) {
 				screenDrawer.EndRenderPass();
 			}
 			BaseVulkanRenderer::Process(ctx);
@@ -383,6 +403,12 @@ protected:
 		BaseVulkanRenderer::resize(w, h);
 		GetContext()->WaitIdle();
 		screenDrawer.Init(&samplerManager, &shaderManager, viewport);
+	}
+
+
+	void clearTextureCache() override {
+		screenDrawer.EndRenderPass();
+		BaseVulkanRenderer::clearTextureCache();
 	}
 
 private:

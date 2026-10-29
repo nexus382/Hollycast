@@ -2,6 +2,7 @@
     Created on: Nov 29, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -42,6 +43,11 @@ public:
 	u32 GetGraphicsQueueFamilyIndex() const { return retro_render_if->queue_index; }
 	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio);
 	bool GetLastFrame(std::vector<u8>& data, int& width, int& height) { return false; }
+	// The performance overlay is not part of libretro builds, but the shared
+	// drawers still define the standalone timing boundaries.
+	void BeginGpuTiming(vk::CommandBuffer) {}
+	void EndGpuTiming(vk::CommandBuffer) {}
+	void ResetGpuTiming() {}
 
 	vk::PhysicalDevice GetPhysicalDevice() const { return physicalDevice; }
 	vk::Device GetDevice() const { return device; }
@@ -91,6 +97,7 @@ public:
 	bool SupportsSamplerAnisotropy() const { return samplerAnisotropy; }
 	bool SupportsDedicatedAllocation() const { return dedicatedAllocationSupported; }
 	bool SupportsBufferDeviceAddress() const { return bufferDeviceAddressSupported; }
+	bool supportsDynamicLocalRead() const { return dynamicLocalReadSupported; }
 	bool hasPerPixel() override { return fragmentStoresAndAtomics; }
 	bool hasProvokingVertex() { return provokingVertexSupported; }
 	const VMAllocator& GetAllocator() const { return allocator; }
@@ -140,6 +147,8 @@ public:
 	static bool dedicatedAllocationSupported;
 	static bool provokingVertexSupported;
 	static bool bufferDeviceAddressSupported;
+	static bool dynamicLocalReadSupported;
+
 private:
 	u32 vendorID = 0;
 

@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -16,14 +17,13 @@
     You should have received a copy of the GNU General Public License
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
-// Portions Copyright 2026 The Hollycast Authors
 package com.hollycast.emulator.emu;
 
-import android.content.Context;
 import android.os.Handler;
+import android.os.Looper;
 import android.view.MotionEvent;
-import android.view.View;
 
+import com.hollycast.emulator.Emulator;
 import com.hollycast.emulator.periph.InputDeviceManager;
 import com.hollycast.emulator.periph.VibratorThread;
 
@@ -32,39 +32,38 @@ import java.util.Map;
 
 public class VirtualJoystickDelegate implements TouchEventHandler
 {
-    private static final int CTLID_ANARING = 11;
-    private static final int CTLID_ANASTICK = 12;
+    private static final int CONTROL_ID_ANALOG_AREA = 11;
+    private static final int CONTROL_ID_ANALOG_STICK = 12;
+    private static final long MILLISECONDS_PER_SECOND = 1000L;
 
     private VibratorThread vibratorThread;
-    private Handler handler = new Handler();
-    private Runnable hideVGamepadRunnable = new Runnable() {
-        @Override
-        public void run() {
-            VGamepad.hide();
-        }
-    };
-    private Context context;
-    private View view;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable hideVGamepadRunnable = VGamepad::hide;
     private int joyPointerId = -1;
     private float joyBiasX, joyBiasY;
-    private Map<Integer, Integer> pidToControlId = new HashMap<>();
+    private final Map<Integer, Integer> pidToControlId = new HashMap<>();
     private int mouseButtons = 0;
-    private int[] mousePos = { -32768, -32768 };
+    private final int[] mousePos = { -32768, -32768 };
     private int mousePid = -1;
     private int menuPointerId = -1;
+    private int vmuPointerId = -1;
+    private boolean vmuGesture;
 
-    public VirtualJoystickDelegate(View view) {
-        this.view = view;
-        this.context = view.getContext();
-
+    public VirtualJoystickDelegate() {
         vibratorThread = VibratorThread.getInstance();
     }
 
     @Override
     public void stop() {
-        vibratorThread.stopThread();
-        vibratorThread = null;
+        handler.removeCallbacks(hideVGamepadRunnable);
+        if (vibratorThread != null) {
+            vibratorThread.stopThread();
+            vibratorThread = null;
+        }
         menuPointerId = -1;
+        JNIdc.vmuTouch(MotionEvent.ACTION_CANCEL, 0.f, 0.f);
+        vmuPointerId = -1;
+        vmuGesture = false;
     }
 
     private boolean routeMenuTouchEvent(MotionEvent event)
@@ -95,6 +94,50 @@ public class VirtualJoystickDelegate implements TouchEventHandler
                 || ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
                 && event.getPointerId(actionIndex) == menuPointerId))
             menuPointerId = -1;
+        return true;
+    }
+
+    private boolean routeVmuTouchEvent(MotionEvent event, int width, int height)
+    {
+        final int action = event.getActionMasked();
+        final int actionIndex = event.getActionIndex();
+        if (width <= 0 || height <= 0) {
+            JNIdc.vmuTouch(MotionEvent.ACTION_CANCEL, 0.f, 0.f);
+            vmuPointerId = -1;
+            return vmuGesture;
+        }
+        if (!vmuGesture) {
+            if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_POINTER_DOWN)
+                return false;
+            if (!JNIdc.vmuTouch(MotionEvent.ACTION_DOWN,
+                    event.getX(actionIndex) / width, event.getY(actionIndex) / height))
+                return false;
+            vmuGesture = true;
+            vmuPointerId = event.getPointerId(actionIndex);
+            // A VMU can overlap a control. Release its existing input before
+            // taking the stream, including a mouse/lightgun held by another finger.
+            pidToControlId.clear();
+            joyPointerId = -1;
+            InputDeviceManager.getInstance().virtualReleaseAll();
+            mousePid = -1;
+            mouseButtons = 0;
+            InputDeviceManager.getInstance().touchMouseEvent(mousePos[0], mousePos[1], 0);
+        }
+        final int pointerIndex = event.findPointerIndex(vmuPointerId);
+        if (pointerIndex >= 0 && (action == MotionEvent.ACTION_MOVE
+                || ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
+                && event.getPointerId(actionIndex) == vmuPointerId)))
+            JNIdc.vmuTouch(MotionEvent.ACTION_MOVE,
+                    event.getX(pointerIndex) / width, event.getY(pointerIndex) / height);
+        if (pointerIndex < 0 || action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_UP
+                || (action == MotionEvent.ACTION_POINTER_UP && event.getPointerId(actionIndex) == vmuPointerId)) {
+            JNIdc.vmuTouch(MotionEvent.ACTION_UP, 0.f, 0.f);
+            vmuPointerId = -1;
+        }
+        // Do not turn the remaining fingers into game input after the drag finger
+        // lifts. They must start a fresh gesture after every finger is released.
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
+            vmuGesture = false;
         return true;
     }
 
@@ -179,10 +222,19 @@ public class VirtualJoystickDelegate implements TouchEventHandler
     @Override
     public boolean onTouchEvent(MotionEvent event, int width, int height)
     {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && vmuGesture) {
+            JNIdc.vmuTouch(MotionEvent.ACTION_CANCEL, 0.f, 0.f);
+            vmuPointerId = -1;
+            vmuGesture = false;
+        }
+        if (vmuGesture)
+            return routeVmuTouchEvent(event, width, height);
         if (routeMenuTouchEvent(event))
             return true;
         if (JNIdc.guiIsOpen())
             return touchMouseEvent(event);
+        if (routeVmuTouchEvent(event, width, height))
+            return true;
         show();
 
         int actionIndex = event.getActionIndex();
@@ -214,7 +266,7 @@ public class VirtualJoystickDelegate implements TouchEventHandler
                 if (control != -1)
                 {
                     int pid = event.getPointerId(actionIndex);
-                    if (control == CTLID_ANARING || control == CTLID_ANASTICK)
+                    if (control == CONTROL_ID_ANALOG_AREA || control == CONTROL_ID_ANALOG_STICK)
                     {
                          if (joyPointerId == -1)
                          {
@@ -249,9 +301,24 @@ public class VirtualJoystickDelegate implements TouchEventHandler
                         // Analog stick
                         float dx = p.x - joyBiasX;
                         float dy = p.y - joyBiasY;
-                        float sz = VGamepad.getControlWidth(CTLID_ANASTICK);
-                        dx = Math.max(Math.min(1.f, dx / sz), -1.f);
-                        dy = Math.max(Math.min(1.f, dy / sz), -1.f);
+                        float sz = VGamepad.getControlWidth(CONTROL_ID_ANALOG_STICK);
+                        if (!VGamepad.isCircularStickEnabled())
+                        {
+                            dx = Math.max(Math.min(1.f, dx / sz), -1.f);
+                            dy = Math.max(Math.min(1.f, dy / sz), -1.f);
+                        }
+                        else
+                        {
+                            dx /= sz;
+                            dy /= sz;
+                            // Circular travel preserves direction beyond the edge.
+                            float r = (float) Math.hypot(dx, dy);
+                            if (r > 1.f)
+                            {
+                                dx /= r;
+                                dy /= r;
+                            }
+                        }
                         InputDeviceManager.getInstance().virtualJoystick(dx, dy);
                         continue;
                     }
@@ -266,7 +333,7 @@ public class VirtualJoystickDelegate implements TouchEventHandler
                         InputDeviceManager.getInstance().virtualButtonInput(oldControl, false);
                         pidToControlId.remove(pid);
                     }
-                    if (control != -1 && control != CTLID_ANARING && control != CTLID_ANASTICK)
+                    if (control != -1 && control != CONTROL_ID_ANALOG_AREA && control != CONTROL_ID_ANALOG_STICK)
                     {
                         // New button down
                         InputDeviceManager.getInstance().virtualButtonInput(control, true);
@@ -302,8 +369,11 @@ public class VirtualJoystickDelegate implements TouchEventHandler
     @Override
     public void show()
     {
+        Emulator.vibrationPower = VGamepad.getVibrationPower();
         VGamepad.show();
-        this.handler.removeCallbacks(hideVGamepadRunnable);
-        this.handler.postDelayed(hideVGamepadRunnable, 10000);
+        handler.removeCallbacks(hideVGamepadRunnable);
+        int timeoutSeconds = VGamepad.getIdleTimeoutSeconds();
+        if (timeoutSeconds > 0)
+            handler.postDelayed(hideVGamepadRunnable, timeoutSeconds * MILLISECONDS_PER_SECOND);
     }
 }

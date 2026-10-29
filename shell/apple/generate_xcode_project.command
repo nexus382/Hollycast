@@ -1,4 +1,5 @@
 #!/bin/bash
+# Portions Copyright 2026 The Hollycast Authors
 
 set -euo pipefail
 
@@ -48,7 +49,7 @@ init_submodules() {
         fi
     else
         git init
-        git remote add origin https://github.com/flyinghead/flycast.git
+        git remote add origin https://github.com/nexus382/Hollycast.git
         git fetch --depth 1 origin master
         git reset --hard FETCH_HEAD
         git submodule update --init --recursive

@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -22,9 +23,9 @@
 #include "nowide/stackstring.hpp"
 #include <string>
 #include <cstring>
+#include <windows.h>
 
 #ifdef TARGET_UWP
-#include <windows.h>
 // Define dirent type constants if not already defined
 #ifndef DT_DIR
 #define DT_DIR 4
@@ -283,7 +284,13 @@ int rename(const char *oldpath, const char *newpath)
     	errno = EINVAL;
     	return -1;
     }
-	return ::_wrename(woldpath.get(), wnewpath.get());
+	// _wrename() fails when newpath exists. Replace it, as POSIX rename() does.
+	if (!MoveFileExW(woldpath.get(), wnewpath.get(), MOVEFILE_REPLACE_EXISTING)) {
+		const DWORD error = GetLastError();
+		errno = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? ENOENT : EACCES;
+		return -1;
+	}
+	return 0;
 }
 
 int unlink(const char *path)

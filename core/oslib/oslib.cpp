@@ -44,6 +44,7 @@
 #include "input/gamepad_device.h"
 #include "input/dreampotato.h"
 #include "i18n.h"
+#include <algorithm>
 
 namespace hostfs
 {
@@ -268,19 +269,25 @@ std::string findNaomiBios(const std::string& name)
 	return "";
 }
 
+static std::string makeSavestateFileName(const std::string& fileName, int index)
+{
+	std::string stateFile = get_file_basename(fileName);
+	char indexStr[4] = "";
+	if (index > 0) // When index is 0, use same name before multiple states is added
+		snprintf(indexStr, sizeof(indexStr), "_%d", std::min(99, index));
+
+	stateFile += indexStr;
+	stateFile += ".state";
+	if (index == -1)
+		stateFile += ".net";
+	if (index == -2)
+		stateFile += ".tmp";
+	return stateFile;
+}
+
 std::string getSavestatePath(int index, bool writable)
 {
-	std::string state_file = get_file_basename(settings.content.fileName);
-
-	char index_str[4] = "";
-	if (index > 0) // When index is 0, use same name before multiple states is added
-		snprintf(index_str, sizeof(index_str), "_%d", std::min(99, index));
-
-	state_file = state_file + index_str + ".state";
-	if (index == -1)
-		state_file += ".net";
-	if (index == -2)
-		state_file += ".tmp";
+	const std::string state_file = makeSavestateFileName(settings.content.fileName, index);
 
 	static std::string lastFile;
 	static std::string lastPath;
@@ -325,6 +332,50 @@ std::string getSavestatePath(int index, bool writable)
 		}
 		return lastPath;
 	}
+}
+
+SavestateFolders getSavestateFolders()
+{
+	return {config::SavestatePath.get(), get_readonly_data_dirs()};
+}
+
+std::string getSavestatePathForGame(const std::string& contentPath, const std::string& fileName,
+		int index, const SavestateFolders& folders)
+{
+	if (contentPath.empty() || fileName.empty())
+		return "";
+	const std::string stateFile = makeSavestateFileName(fileName, index);
+
+	for (const auto& userPath : folders.custom)
+	{
+		if (userPath.empty())
+			continue;
+		try {
+			std::string fullPath = hostfs::storage().getSubPath(userPath, stateFile);
+			if (hostfs::storage().exists(fullPath))
+				return fullPath;
+		} catch (const hostfs::StorageException&) {
+		}
+	}
+	// Preserve the live loader's order: custom folders, default data folders,
+	// then the game's directory. Default data paths are native filesystem paths.
+	for (const auto& dataPath : folders.data)
+	{
+		const std::string fullPath = dataPath + stateFile;
+		if (file_exists(fullPath))
+			return fullPath;
+	}
+	try {
+		const std::string parent = hostfs::storage().getParentPath(contentPath);
+		std::string fullPath = hostfs::storage().getSubPath(parent, stateFile);
+		if (hostfs::storage().exists(fullPath))
+			return fullPath;
+	} catch (const hostfs::StorageException&) {
+	}
+
+	// Match the live resolver's fallback: return the writable location even if
+	// no state exists yet. The caller checks the file before offering Resume.
+	return folders.data.empty() ? "" : folders.data.front() + stateFile;
 }
 
 std::string getShaderCachePath(const std::string& filename)

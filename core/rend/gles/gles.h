@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
+#include "rend/sample_filter.h"
 #include "hw/pvr/ta_structs.h"
 #include "hw/pvr/ta_ctx.h"
 #include "hw/pvr/elan_struct.h"
@@ -12,6 +13,7 @@
 #include "ui/imgui_driver.h"
 #endif
 
+#include <array>
 #include <unordered_map>
 #include <glm/glm.hpp>
 
@@ -44,8 +46,6 @@
 // Naomi2
 #define VERTEX_NORM_ARRAY 7
 
-void DrawStrips();
-
 struct PipelineShader
 {
 	GLuint program;
@@ -62,6 +62,7 @@ struct PipelineShader
 	GLint palette_index;
 	GLint ditherDivisor;
 	GLint texSize;
+	GLint secAccumSize;
 
 	// Naomi2
 	GLint mvMat;
@@ -116,9 +117,12 @@ struct PipelineShader
 	bool fog_clamping;
 	bool trilinear;
 	int palette;	// 1 if nearest, 2 if bilinear
+	int sampleTextureFilter;
+	int maxFilteredTextureSize;
 	bool naomi2;
 	bool divPosZ;
 	bool dithering;
+	bool secAccum;
 };
 
 class GlBuffer
@@ -169,6 +173,7 @@ public:
 	GlFramebuffer(int width, int height, bool withDepth, bool withTexture);
 	GlFramebuffer(int width, int height, bool withDepth, GLuint texture, GLenum internalFormat,
 			GLenum pixelFormat, GLenum pixelType);
+	explicit GlFramebuffer(int width, int height, GLuint depthBuffer, GLuint depthTexture = 0);
 	~GlFramebuffer();
 
 	void bind(GLenum type = GL_FRAMEBUFFER) const {
@@ -186,9 +191,11 @@ public:
 		return t;
 	}
 	GLuint getFramebuffer() const { return framebuffer; }
+	GLuint getDepthBuffer() const { return depthBuffer; }
 
-private:
-	void makeFramebuffer(bool withDepth);
+protected:
+	GlFramebuffer() = default;
+	void makeFramebuffer(bool withDepth, GLuint depthBuffer = 0);
 
 	int width;
 	int height;
@@ -197,6 +204,7 @@ private:
 	GLuint colorBuffer = 0;
 	GLuint depthBuffer = 0;
 	GLuint depthTexture = 0;
+	bool ownsDepthAttachment = true;
 };
 
 class GlVertexArray
@@ -281,10 +289,13 @@ struct gl_ctx
 
 	struct
 	{
-		GLuint tex;
-		int width;
-		int height;
+		GLuint tex = 0;
+		int width = 0;
+		int height = 0;
+		int textureWidth = 0;
+		int textureHeight = 0;
 	} dcfb;
+	PixelBuffer<u32> framebufferBuffer;
 
 	struct
 	{
@@ -301,6 +312,8 @@ struct gl_ctx
 	{
 		std::unique_ptr<GlFramebuffer> framebuffer;
 	} videorouting;
+
+	std::unique_ptr<GlFramebuffer> secondaryBuffer;
 
 	std::unique_ptr<GlQuadDrawer> quadDrawer;
 #ifndef LIBRETRO
@@ -396,19 +409,16 @@ bool allocateImmutableTextureStorage(GLsizei levels, GLenum internalFormat,
 void uploadCompressedTextureSubImage2D(GLint level, GLsizei width, GLsizei height,
 		GLenum format, GLsizei imageSize, const void *data);
 
-void SetCull(u32 CullMode);
-void SetMVS_Mode(ModifierVolumeMode mv_mode, ISP_Modvol ispc);
-
-GLuint BindRTT(bool withDepthBuffer = true);
+GlFramebuffer *BindRTT(bool withDepthBuffer = true);
 void ReadRTTBuffer();
-void glReadFramebuffer(const FramebufferInfo& info);
-GLuint init_output_framebuffer(int width, int height);
+void glUploadFramebuffer();
+GlFramebuffer *init_output_framebuffer(int width, int height);
 void writeFramebufferToVRAM();
 
 PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
-		int palette, bool naomi2, bool dithering);
+		int palette, int sampleTextureFilter, int maxFilteredTextureSize, bool naomi2, bool dithering, bool secAccum);
 
 GLuint gl_CompileShader(const char* shader, GLuint type, std::string *diagnostics = nullptr);
 GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader,
@@ -474,10 +484,13 @@ public:
 	}
 	TextureCacheData(TextureCacheData&& other) : BaseTextureCacheData(std::move(other)) {
 		std::swap(texID, other.texID);
+		std::swap(uploadedWidth, other.uploadedWidth);
 		std::swap(customTextureObject, other.customTextureObject);
 	}
 
 	GLuint texID = 0;   //gl texture
+	// Level-zero width, including upscaling, custom textures and render targets.
+	u32 uploadedWidth = 0;
 	bool customTextureObject = false;
 	std::string GetId() override { return std::to_string(texID); }
 	void UploadToGPU(int width, int height, const u8 *temp_tex_buffer, bool mipmapped, bool mipmapsIncluded = false) override;
@@ -515,11 +528,10 @@ private:
 };
 extern GlTextureCache TexCache;
 
-extern const u32 Zfunction[8];
-extern const u32 SrcBlendGL[], DstBlendGL[];
-
 struct OpenGLRenderer : Renderer
 {
+	friend class OpenGLGpuTimingScope;
+
 	bool Init() override;
 	void Term() override;
 
@@ -556,6 +568,12 @@ struct OpenGLRenderer : Renderer
 		return true;
 	}
 
+	static void setCull(u32 CullMode);
+	static void setModVolMode(ModifierVolumeMode mv_mode, ISP_Modvol ispc);
+	static GLenum depthModeToGL(u32 depthMode);
+	static GLenum srcBlendToGL(u32 mode);
+	static GLenum dstBlendToGL(u32 mode);
+
 protected:
 	void clearTextureCache() override
 	{
@@ -586,14 +604,87 @@ protected:
 	void renderVideoRouting();
 	void drawOSD();
 
+	void initGpuTiming();
+	void termGpuTiming();
+	void pollGpuTiming();
+	void beginGpuTiming();
+	void endGpuTiming();
+
+	virtual GlFramebuffer *getPrimaryFB() {
+		return outputFB;
+	}
+
+	GlFramebuffer *getSecondaryAccum()
+	{
+		std::unique_ptr<GlFramebuffer>& secAccum = gl.secondaryBuffer;
+		GlFramebuffer *primaryFB = getPrimaryFB();
+		verify(primaryFB != nullptr);
+		if (secAccum == nullptr || secAccum->getWidth() != primaryFB->getWidth()
+				|| secAccum->getHeight() != primaryFB->getHeight()
+				|| secAccum->getDepthBuffer() != primaryFB->getDepthBuffer()
+				|| secAccum->getDepthTexture() != primaryFB->getDepthTexture())
+		{
+			secAccum.reset();
+			secAccum = std::make_unique<GlFramebuffer>(primaryFB->getWidth(), primaryFB->getHeight(),
+					primaryFB->getDepthBuffer(), primaryFB->getDepthTexture());
+			glcache.Disable(GL_SCISSOR_TEST);
+			glcache.ClearColor(0.f, 0.f, 0.f, 0.f);
+			glClear(GL_COLOR_BUFFER_BIT);
+		}
+		return secAccum.get();
+	}
+
 private:
+	static constexpr std::size_t GpuTimingQueryCount = 4;
+	std::array<GLuint, GpuTimingQueryCount> gpuTimingQueries {};
+	std::array<u32, GpuTimingQueryCount> gpuTimingEpochs {};
+	std::array<bool, GpuTimingQueryCount> gpuTimingDiscarded {};
+	std::size_t gpuTimingReadIndex = 0;
+	std::size_t gpuTimingWriteIndex = 0;
+	std::size_t gpuTimingWaitingCount = 0;
+	bool gpuTimingAvailable = false;
+	bool gpuTimingActive = false;
+
 	bool renderFrame(int width, int height);
+	void drawStrips();
+	template <u32 Type, bool SortingEnabled>
+	void drawList(const std::vector<PolyParam>& gply, int first, int count);
+	void drawSorted(int first, int count, bool multipass);
+	template <u32 Type, bool SortingEnabled>
+	void setGPState(const PolyParam *gp, u32 cflip = 0);
+	void drawModVols(int first, int count);
 
 protected:
 	bool frameRendered = false;
 	int width = 640;
 	int height = 480;
+	GlFramebuffer *outputFB = nullptr;
 	void initVideoRoutingFrameBuffer();
+	bool renderingToSecAccum = false;
+};
+
+// OpenGLRenderer::Render needs exception-safe query closure, mirroring DX11GpuTimingScope.
+class OpenGLGpuTimingScope
+{
+public:
+	explicit OpenGLGpuTimingScope(OpenGLRenderer *renderer, bool enabled)
+		: renderer(enabled ? renderer : nullptr)
+	{
+		if (this->renderer != nullptr)
+			this->renderer->beginGpuTiming();
+	}
+
+	~OpenGLGpuTimingScope()
+	{
+		if (renderer != nullptr)
+			renderer->endGpuTiming();
+	}
+
+	OpenGLGpuTimingScope(const OpenGLGpuTimingScope&) = delete;
+	OpenGLGpuTimingScope& operator=(const OpenGLGpuTimingScope&) = delete;
+
+private:
+	OpenGLRenderer *const renderer;
 };
 
 extern const char* ShaderCompatSource;

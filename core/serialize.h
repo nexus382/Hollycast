@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -32,33 +33,7 @@ public:
 	};
 	
 	enum Version : int32_t {
-		V16 = 811,
-		V17,
-		V18,
-		V19,
-		V20,
-		V21,
-		V22,
-		V23,
-		V24,
-		V25,
-		V26,
-		V27,
-		V28,
-		V29,
-		V30,
-		V31,
-		V32,
-		V33,
-		V34,
-		V35,
-		V36,
-		V37,
-		V38,
-		V39,
-		V40,
-		V41,
-		V42,
+		V42 = 837,
 		V43,
 		V44,
 		V45,
@@ -77,7 +52,10 @@ public:
 		V58,
 		V59,
 		V60,
-		Current = V60,
+		V61,
+		V62,
+		V63,
+		Current = V63,
 
 		Next = Current + 1,
 	};

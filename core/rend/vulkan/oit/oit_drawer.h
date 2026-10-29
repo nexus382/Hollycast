@@ -162,6 +162,7 @@ public:
 		if (!frameStarted)
 			return;
 		frameStarted = false;
+		GetContext()->EndGpuTiming(currentCommandBuffer);
 		if (emulateFramebuffer) {
 			scaleAndWriteFramebuffer(currentCommandBuffer, colorAttachments[framebufferIndex].get());
 		}
