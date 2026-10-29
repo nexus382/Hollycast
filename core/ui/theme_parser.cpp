@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "theme.h"
@@ -166,7 +167,7 @@ const std::set<std::string>& metadataFields()
 
 const std::set<std::string>& artworkSources()
 {
-	static const std::set<std::string> values = {"", "cover", "screenshot", "fanart", "title", "physical"};
+	static const std::set<std::string> values = {"", "cover", "miximage", "screenshot", "fanart", "title", "physical"};
 	return values;
 }
 
@@ -302,7 +303,7 @@ Theme parse(const std::string& json, const std::string& directory)
 					if (!metadataFields().count(element.source)) invalid(ep + ".source", "must name a supported metadata field");
 				}
 				else if (element.type == "artwork" && !artworkSources().count(element.source))
-					invalid(ep + ".source", "must be empty, cover, screenshot, fanart, title, or physical");
+					invalid(ep + ".source", "must be empty, cover, miximage, screenshot, fanart, title, or physical");
 				layout.elements.push_back(std::move(element));
 			}
 		}

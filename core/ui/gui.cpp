@@ -2489,7 +2489,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		item.metadata = {
 			{"title", title}, {"description", game.desc.empty() ? art.overview : game.desc},
 			{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
-			{"players", game.players}, {"releaseDate", game.releaseDate.empty() ? art.releaseDate : game.releaseDate},
+			{"players", game.players.empty() ? T("Unknown") : game.players},
+			{"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
 			{"productId", art.uniqueId}, {"region", formatLibraryRegion(art.region)},
 			{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
 			{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
@@ -2508,7 +2509,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			if (item.metadata.count(key))
 				continue;
 			config::LibraryCoverMediaMode media = config::LibraryCoverMediaMode::Cover;
-			if (element.source == "screenshot") media = config::LibraryCoverMediaMode::Screenshot;
+			if (element.source == "miximage") media = config::LibraryCoverMediaMode::MixImage;
+			else if (element.source == "screenshot") media = config::LibraryCoverMediaMode::Screenshot;
 			else if (element.source == "fanart") media = config::LibraryCoverMediaMode::FanArt;
 			else if (element.source == "title") media = config::LibraryCoverMediaMode::Title;
 			else if (element.source == "physical") media = config::LibraryCoverMediaMode::Physical;

@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Hollycast themes
 
 Hollycast theme packages are JSON descriptions of the app palette and game-library layouts. This is Hollycast's own **theme format version 1**; an ES-DE theme or theme pack is not compatible.
@@ -106,7 +107,7 @@ Element types:
 
 - **`panel`** fills its rectangle with `color`.
 - **`image`** draws a package image using `fit` and `color`. Its `source` is a relative file path inside the package, such as `images/panel.png`. Use PNG or JPEG; SVG and WebP must be rasterized or decoded first. Absolute paths, `..`, and paths escaping through symlinks are rejected. The referenced file must exist.
-- **`artwork`** draws the selected game's artwork, preserving aspect ratio. `source` can be empty (default artwork), `cover`, `screenshot`, `fanart`, `title`, or `physical`. Named sources use local library media and fall back to the game's current artwork. If neither is available, the rectangle is empty.
+- **`artwork`** draws the selected game's artwork, preserving aspect ratio. `source` can be empty (default artwork), `cover`, `miximage`, `screenshot`, `fanart`, `title`, or `physical`. Named sources use local library media and fall back to the game's current artwork. `miximage` selects ES-DE mixed artwork independently of the library cover-media setting. Background and detail artwork follow mouse hover and keyboard/controller focus. If neither is available, the rectangle is empty.
 - **`text`** draws the literal `text` value.
 - **`metadata`** draws the selected game's value for `source`; a missing value draws nothing. Supported fields: `title`, `description`, `developer`, `publisher`, `genre`, `players`, `releaseDate`, `productId`, `region`, `format`, `playTime`, `lastPlayed`, and `size`.
 

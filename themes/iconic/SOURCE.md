@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Iconic theme source and port notes
 
 This Hollycast package is a static adaptation of **Iconic (ES-DE Version)** by Siddy212. The source repository was pinned to the commit returned by GitHub for `main`: `0a549ffbe5a392bd818ee4c11a7175b2372591e4`. Source files were read through raw URLs using this SHA; no repository clone is included.
@@ -9,21 +10,14 @@ This Hollycast package is a static adaptation of **Iconic (ES-DE Version)** by S
 
 ## Port mapping
 
-- `Textlist` follows the detailed 16:9 `textlist` variant: selected game cover art and metadata are on the left, with the game list on a tall dark translucent panel on the right. The selected cover uses Hollycast's dynamic `cover` artwork element; title, genre, release date, developer, and description use selected-game metadata elements.
-- `Grid: Boxart` translates the detailed `grid-boxart` variant: selected game cover and metadata stay on the left while the interactive cover grid fills the right panel.
-- Both layouts use the full Dreamcast character background without cropping at the source's 16:9 aspect ratio. They add the original Dreamcast wordmark at the lower left. The wordmark uses `cover` fitting to crop the carousel texture's transparent vertical padding while retaining its full visible width. Alpha overlays keep the source character art visible while providing contrast behind game media and list/grid content.
-- The colors follow Iconic's dark-modern scheme in `colors.xml`: near-black `090909` background, `cccccc` primary text, `bbbbbb` metadata, white selected text, gray `777777` list selector, and the source cyan `00C3E3` accent.
-- Hollycast's static manifest cannot reproduce ES-DE's dynamic aspect/color scheme switching, custom fonts, badges, video/miximage selection, carousel, or per-system asset loading. It does support the selected cover artwork and metadata used here. The Dreamcast character background and Dreamcast wordmark are static assets for this package.
+- `Textlist` keeps the selected game's front cover and details on the left, with the interactive list on the right.
+- `Grid: Boxart` keeps the same details beside a three-column grid. The grid uses the user's selected library artwork.
+- Both layouts replace the fixed Dreamcast character background with the highlighted game's local ES-DE miximage. Mouse hover and keyboard/controller navigation update the backdrop and details together. Missing miximages fall back to current library artwork.
+- The front cover remains a separate `cover` binding. A dark translucent panel separates the title, release date, player count, developer, and description from the backdrop. Platform branding and the lower-left Dreamcast wordmark are omitted.
+- Colors retain Iconic's dark-modern palette and cyan accent. Hollycast uses its application font; ES-DE custom fonts, video playback, carousels, and dynamic aspect/color scheme switching are not reproduced.
 
-## Original assets included
+## Media and attribution
 
-The WebP originals below are copied byte-for-byte from the pinned upstream repository. Each is decoded to a PNG for Hollycast's current image loader; the source WebPs are retained beside the PNGs. The PNGs were produced with Pillow 12.3.0 using `Image.open(source).save(destination, format="PNG", optimize=False, compress_level=9)`; no artwork edits or resampling were applied. Source URLs use the pinned commit rather than the moving `main` branch.
+Game media comes from the user's configured custom artwork directory. The former static Dreamcast character and wordmark assets are no longer bundled or referenced by this adaptation.
 
-| Package path | Upstream path / derivation | Source URL | SHA-256 |
-| --- | --- | --- | --- |
-| `assets/dreamcast-character.webp` | `_inc/systems/alternate-backgrounds/dreamcast.webp` (byte-for-byte original) | https://raw.githubusercontent.com/Siddy212/iconic-es-de/0a549ffbe5a392bd818ee4c11a7175b2372591e4/_inc/systems/alternate-backgrounds/dreamcast.webp | `5cc2b40b7e762109a884d0b847b77cb36a96b398b005f51e4b2170622f199c4a` |
-| `assets/dreamcast-character.png` | PNG decoded from the WebP above | same as above | `9aa3e6f52625e3179b8effd3660041b29b232b31c93f3a7825820202e9ce1149` |
-| `assets/dreamcast-logo.webp` | `_inc/systems/carousel-icons/dreamcast.webp` (byte-for-byte original) | https://raw.githubusercontent.com/Siddy212/iconic-es-de/0a549ffbe5a392bd818ee4c11a7175b2372591e4/_inc/systems/carousel-icons/dreamcast.webp | `e00ac12499ff4ff5ba1fd52d8ceee03a39249aaedb12fcab8d820214e621ebcc` |
-| `assets/dreamcast-logo.png` | PNG decoded from the WebP above | same as above | `ecd73d03af9cd9ae7b84aeb2c072531337b1d0257b874f8f65edb91c97c63f29` |
-
-All upstream credits remain in the included, unmodified `README.md`. The README identifies broad artwork contributions and notes that other publicly available character art is credited to its original creators; no more specific creator attribution for the selected Dreamcast files was identified in the source files inspected.
+The upstream, unmodified `README.md` and `LICENSE` retain their notices and credits. These Hollycast layout changes do not replace those notices.

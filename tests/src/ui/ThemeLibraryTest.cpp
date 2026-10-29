@@ -42,6 +42,10 @@ protected:
 			bounds[index] = ImVec4(min.x, min.y, max.x, max.y);
 			itemIds[index] = ImGui::GetItemID();
 		});
+		const auto& vertices = ImGui::GetWindowDrawList()->VtxBuffer;
+		backgroundVertices = std::count_if(vertices.begin(), vertices.end(), [](const ImDrawVert& vertex) {
+			return vertex.col == IM_COL32(0xe1, 0x5a, 0x77, 0xff);
+		});
 		ImGui::End();
 		ImGui::EndFrame();
 		return result;
@@ -51,6 +55,7 @@ protected:
 	std::vector<themes::LibraryItem> items{{"first", "First", {}, {}}, {"second", "Second", {}, {}}};
 	std::vector<ImVec4> bounds;
 	std::vector<ImGuiID> itemIds;
+	size_t backgroundVertices = 0;
 };
 
 TEST_F(ThemeLibraryTest, GridWidgetActivatesTheClickedStableItem)
@@ -173,4 +178,64 @@ TEST_F(ThemeLibraryTest, CompactListUsesConfiguredRowHeightAndRestoresFontAndSty
 	ASSERT_GT(bounds[0].w - bounds[0].y, 0.f);
 	EXPECT_NEAR(bounds[0].w - bounds[0].y,
 			std::max(callbackFontSize + 8.f, layout.rowHeight * canvasHeight), 1.0f);
+}
+
+// A uniquely colored title lets us check the selected background item without
+// a GPU/texture driver. One visible glyph emits four vertices.
+TEST_F(ThemeLibraryTest, BackgroundFollowsMouseHoverInTheSameFrameForListAndGrid)
+{
+	items[0].title = "A";
+	items[1].title = "BBBB";
+	for (auto& item : items)
+		item.metadata["title"] = item.title;
+	for (const char* mode : {"list", "grid"})
+	{
+		SCOPED_TRACE(mode);
+		layout.id = std::string("hover-background-") + mode;
+		layout.mode = mode;
+		layout.columns = 2;
+		layout.browser = {0, 0, 0.5f, 0.5f};
+		layout.elements = {{"metadata", {0.55f, 0.55f, 0.4f, 0.2f}, "title", {}, 0xe15a77ff, 0.035f, -1}};
+		renderFrame(ImVec2(-1, -1), false);
+		for (size_t index : {1u, 0u})
+		{
+			const ImVec4 rect = bounds[index];
+			const ImVec2 center((rect.x + rect.z) / 2, (rect.y + rect.w) / 2);
+			EXPECT_EQ(renderFrame(center, false), -1);
+			EXPECT_EQ(backgroundVertices, index == 0 ? 4u : 16u);
+		}
+	}
+}
+
+TEST_F(ThemeLibraryTest, BackgroundFollowsGamepadNavigationAndThenMouseHover)
+{
+	layout.id = "gamepad-background";
+	layout.mode = "list";
+	layout.browser = {0, 0, 0.5f, 0.5f};
+	layout.elements = {{"metadata", {0.55f, 0.55f, 0.4f, 0.2f}, "title", {}, 0xe15a77ff, 0.035f, -1}};
+	items[0].title = "A";
+	items[1].title = "BBBB";
+	for (auto& item : items)
+		item.metadata["title"] = item.title;
+	auto& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+	io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+	const ImVec2 away(-1, -1);
+	renderFrame(away, false);
+	renderFrame(away, false);
+	io.AddKeyEvent(ImGuiKey_Tab, true);
+	renderFrame(away, false);
+	io.AddKeyEvent(ImGuiKey_Tab, false);
+	renderFrame(away, false);
+	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, true);
+	EXPECT_EQ(renderFrame(away, false), -1);
+	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, false);
+	EXPECT_EQ(renderFrame(away, false), -1);
+	EXPECT_EQ(backgroundVertices, 16u);
+
+	// Mouse movement must take precedence over the previous navigation focus.
+	const ImVec4 rect = bounds[0];
+	const ImVec2 center((rect.x + rect.z) / 2, (rect.y + rect.w) / 2);
+	EXPECT_EQ(renderFrame(center, false), -1);
+	EXPECT_EQ(backgroundVertices, 4u);
 }

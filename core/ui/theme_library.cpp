@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "theme_library.h"
 
@@ -43,6 +44,8 @@ std::string artworkPath(const LibraryItem& item, const std::string& source)
 	}
 	if (source == "artwork.cover" || source == "cover")
 		return item.metadata.count("artwork.cover") ? item.metadata.at("artwork.cover") : item.image;
+	if (source == "artwork.miximage" || source == "miximage")
+		return item.metadata.count("artwork.miximage") ? item.metadata.at("artwork.miximage") : item.image;
 	if (source == "artwork.screenshot" || source == "screenshot")
 		return item.metadata.count("artwork.screenshot") ? item.metadata.at("artwork.screenshot") : std::string();
 	if (source == "artwork.fanart" || source == "fanart")
@@ -197,6 +200,7 @@ ImU32 browserTextColor(const Layout& layout, bool selected)
 
 // Negative zIndex elements are drawn behind the browser; zero and positive
 // elements are drawn over it. All element geometry uses the full content canvas.
+// IsItemHovered follows active mouse/navigation highlighting; focus alone persists after mouse movement.
 int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::vector<LibraryItem>& items, const std::function<void(size_t)>& afterItem)
 {
@@ -220,14 +224,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		selected = 0;
 		selectedId = itemKey(items.front(), 0);
 	}
-	const LibraryItem* current = selected >= 0 ? &items[selected] : nullptr;
 
 	const ImVec2 canvasOrigin = ImGui::GetCursorScreenPos();
 	const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
 	const Canvas canvas{canvasOrigin, canvasSize, ImVec2(canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y)};
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	drawList->AddRectFilled(canvas.origin, canvas.max, color(layout.background));
-	drawElements(layout, canvas, themeDirectory, current, drawList, true);
 
 	const ImRect browser = normalizedRect(canvas, layout.browser);
 	const ImVec2 browserPos(ImMax(browser.Min.x, canvas.origin.x), ImMax(browser.Min.y, canvas.origin.y));
@@ -263,9 +265,8 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 					const bool isSelected = selectedId == key;
 					const bool pressed = browserSelectable(layout, isSelected, ImVec2(0.0f, rowHeight));
 					const bool hovered = ImGui::IsItemHovered();
-					const bool focused = ImGui::IsItemFocused();
 					const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-					if (hovered || focused || pressed)
+					if (hovered || pressed)
 					{
 						selected = i;
 						selectedId = key;
@@ -316,9 +317,8 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 						const bool isSelected = selectedId == key;
 						const bool pressed = browserSelectable(layout, isSelected, ImVec2(cellWidth, cellHeight));
 						const bool hovered = ImGui::IsItemHovered();
-						const bool focused = ImGui::IsItemFocused();
 						const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-						if (hovered || focused || pressed)
+						if (hovered || pressed)
 						{
 							selected = i;
 							selectedId = key;
@@ -358,7 +358,10 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	if (layout.fontSize > 0)
 		ImGui::PopFont();
 	ImGui::EndChild();
-	current = selected >= 0 ? &items[selected] : nullptr;
+	const LibraryItem* current = selected >= 0 ? &items[selected] : nullptr;
+	// Resolve background media after hover/navigation so both layers show the same game.
+	// The parent draw list is rendered beneath the browser child, regardless of submission order.
+	drawElements(layout, canvas, themeDirectory, current, drawList, true);
 	ImGui::SetCursorScreenPos(canvas.origin);
 	ImGui::BeginChild("##themeLibraryOverlay", canvas.size, ImGuiChildFlags_None,
 			ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBringToFrontOnFocus

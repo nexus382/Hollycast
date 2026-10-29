@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "gtest/gtest.h"
@@ -128,6 +129,15 @@ TEST(ThemeParserTest, ParsesLayoutsElementsAndPalette)
 	EXPECT_EQ(theme.layouts[1].mode, "list");
 }
 
+TEST(ThemeParserTest, AcceptsMiximageArtworkBinding)
+{
+	TempDirectory package;
+	fs::create_directories(package.path / "art");
+	std::ofstream(package.path / "art" / "overlay.png", std::ios::binary) << "fixture";
+	const auto theme = parseFixture(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"miximage\""), package.path);
+	EXPECT_EQ(theme.layouts[0].elements[2].source, "miximage");
+}
+
 TEST(ThemeParserTest, RejectsUnsupportedVersionUnknownFieldsAndInvalidNumbers)
 {
 	expectRejected(replaceOnce(kManifest, "\"formatVersion\": 1", "\"formatVersion\": 2"), "must be between 1 and 1");
@@ -193,7 +203,7 @@ TEST(ThemeParserTest, RejectsDuplicateLayoutIdsAndUnsupportedElementsOrBindings)
 	expectRejected(replaceOnce(kManifest, "\"compact-list\"", "\"main-grid\""), "must be unique within the theme");
 	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, or metadata");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"developer\"", "\"source\": \"command\""), "supported metadata field");
-	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "must be empty, cover, screenshot, fanart, title, or physical");
+	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "must be empty, cover, miximage, screenshot, fanart, title, or physical");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"art/overlay.png\"", "\"source\": \"\""), "is required for image elements");
 }
 
