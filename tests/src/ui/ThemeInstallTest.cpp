@@ -287,7 +287,7 @@ TEST_F(ThemeInstallTest, MissingExternalPackageRestoresTheSelectedAppCustomTheme
 }
 
 #ifdef FLYCAST_TEST_FILES
-TEST_F(ThemeInstallTest, PortedThemesValidateAssetsNoticesLimitsAndEveryInstalledLayout)
+TEST_F(ThemeInstallTest, PreviewThemesValidateAssetsNoticesLimitsAndEveryInstalledLayout)
 {
 	struct PackageExpectation
 	{
@@ -297,9 +297,12 @@ TEST_F(ThemeInstallTest, PortedThemesValidateAssetsNoticesLimitsAndEveryInstalle
 		std::vector<const char*> notices;
 	};
 	const std::vector<PackageExpectation> packages = {
-		{"art-book-next", "art-book-next", 3, {"SOURCE.md", "UPSTREAM.md", "CC-BY-NC-SA-2.0.html"}},
-		{"iconic", "iconic", 2, {"SOURCE.md", "LICENSE", "README.md"}},
-		{"linear", "linear", 3, {"SOURCE.md", "LICENSE", "CREDITS.md", "source/LICENSE", "source/CREDITS.md"}},
+		{"preview-art-book-next", "preview-art-book-next", 1, {"SOURCE.md"}},
+		{"preview-epic-noir-list", "preview-epic-noir-list", 1, {"SOURCE.md"}},
+		{"preview-fanart-disc", "preview-fanart-disc", 1, {"SOURCE.md"}},
+		{"preview-horizon-grid", "preview-horizon-grid", 1, {"SOURCE.md"}},
+		{"preview-iconic-dark-grid", "preview-iconic-dark-grid", 1, {"SOURCE.md"}},
+		{"preview-iconic-light-list", "preview-iconic-light-list", 1, {"SOURCE.md"}},
 	};
 	const fs::path repoThemes = fs::path(FLYCAST_TEST_FILES).parent_path().parent_path() / "themes";
 	ASSERT_TRUE(fs::is_directory(repoThemes)) << repoThemes;

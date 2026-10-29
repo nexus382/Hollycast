@@ -3,7 +3,7 @@
 
 The six `preview-*` packages are original JSON implementations of the requested Hollycast mockups. They contain no upstream images, fonts, XML, logos or generated media. The JSON layouts use Hollycast's GPL-2.0-or-later license. Game art is loaded from the user's configured local ES-DE media and remains subject to its own rights.
 
-Visual references were the game-list views in the [ES-DE theme catalog](https://gitlab.com/es-de/themes/themes-list/): Iconic by Siddy212, Horizon, Epic Noir (Revisited), and Art Book Next. The existing Iconic and Art Book Next ports retain their separate notices in their own directories. Reference theme names identify the requested design direction; these previews are not endorsed or supplied by those theme authors.
+Visual references were the game-list views in the [ES-DE theme catalog](https://gitlab.com/es-de/themes/themes-list/): Iconic by Siddy212, Horizon, Epic Noir (Revisited), and Art Book Next. Reference theme names identify the requested design direction; these previews are not endorsed or supplied by those theme authors.
 
 Only internal game lists are covered. The application retains its existing toolbar, filters, favourites and per-game actions. No console picker, video player, ratings, new scraping source or hardcoded sample game data is introduced. A `*` in each display name distinguishes these layouts for local review.
 

@@ -42,9 +42,7 @@ This is the smallest useful `theme.json`:
 }
 ```
 
-The complete example package is [themes/midnight/theme.json](../themes/midnight/theme.json). It demonstrates two distinct layouts: a four-column gallery with selected-game details beside it, and a compact list beside a larger artwork and details panel.
-
-Ports of Art Book Next, Iconic, and Linear are available in [the theme collection](../themes/README.md). Each includes its upstream attribution, license notices, source references, and notes about the features adapted for Hollycast.
+The [theme collection](../themes/README.md) contains six starred examples using grids, lists, selected-game artwork and metadata. Each package includes its source notes.
 
 ## Manifest reference
 
