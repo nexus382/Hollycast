@@ -50,8 +50,10 @@ std::string glslType(const std::string& type)
 	if (lower == "bool2") return "bvec2";
 	if (lower == "bool3") return "bvec3";
 	if (lower == "bool4") return "bvec4";
-	if (lower.size() == 8 && lower.compare(0, 5, "float") == 0 && lower[6] == 'x')
-		return "mat" + std::string(1, lower[5]) + "x" + lower[7];
+	const auto matrix = lower.find('x');
+	if (matrix != std::string::npos && matrix >= 1 && matrix + 2 == lower.size()
+			&& lower[matrix - 1] >= '2' && lower[matrix - 1] <= '4' && lower[matrix + 1] >= '2' && lower[matrix + 1] <= '4')
+		return "mat" + std::string(1, lower[matrix - 1]) + "x" + lower[matrix + 1];
 	return type;
 }
 
@@ -494,8 +496,11 @@ bool reflectParameters(const ReShadeEffect& effect, const reshadefx::effect_modu
 						: value->type.is_integral() ? static_cast<float>(initial->as_uint[c]) : initial->as_float[c];
 			}
 			parameter.minimum = parameter.maximum = parameter.defaultValue;
-			if (type == SlangParameterType::Bool) {
-				parameter.minimum.values[0] = 0; parameter.maximum.values[0] = parameter.step.values[0] = 1;
+			if (value->type.base == reshadefx::type::t_bool) {
+				for (uint32_t c = 0; c < size; ++c) {
+					parameter.minimum.values[c] = 0;
+					parameter.maximum.values[c] = parameter.step.values[c] = 1;
+				}
 			}
 			for (const auto& annotation : uniform.annotations) {
 				const auto name = lowercase(annotation.name);
@@ -525,8 +530,8 @@ bool reflectParameters(const ReShadeEffect& effect, const reshadefx::effect_modu
 				if (!visible.choiceLabels.empty()) { visible.minimum = visible.minimumValues[0] = 0; visible.maximum = visible.maximumValues[0] = static_cast<float>(visible.choiceLabels.size() - 1); visible.step = visible.stepValues[0] = 1; }
 			}
 			std::string elementExpression = parameter.name;
-			if (value->type.is_integral() && value->type.rows > 1) elementExpression = glslType(uniform.typeName) + "(" + elementExpression + ")";
-			else if (value->type.base == reshadefx::type::t_uint) elementExpression = "uint(" + elementExpression + ")";
+			if (value->type.is_integral() && value->type.rows > 1 && value->type.cols == 1) elementExpression = glslType(uniform.typeName) + "(" + elementExpression + ")";
+			else if (value->type.base == reshadefx::type::t_uint && value->type.cols == 1) elementExpression = "uint(" + elementExpression + ")";
 			if (element) expression += ", ";
 			expression += elementExpression;
 			compiled.parameters.push_back(std::move(visible)); compiled.slangParameters.push_back(std::move(parameter));
@@ -638,6 +643,10 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 	if (state.vertexCount == 0 || state.vertexCount > 1048576
 			|| static_cast<unsigned>(state.topology) < 1 || static_cast<unsigned>(state.topology) > 5)
 		return fail(error, "FX pass has an invalid vertex count or primitive topology.");
+	if (static_cast<unsigned>(pass.stencil_comparison_func) > 7
+			|| static_cast<unsigned>(pass.stencil_pass_op) > 7 || static_cast<unsigned>(pass.stencil_fail_op) > 7
+			|| static_cast<unsigned>(pass.stencil_depth_fail_op) > 7)
+		return fail(error, "FX pass contains an invalid stencil state.");
 	state.stencilEnabled = pass.stencil_enable;
 	state.stencilReadMask = pass.stencil_read_mask; state.stencilWriteMask = pass.stencil_write_mask;
 	state.stencilReference = pass.stencil_reference_value;
@@ -646,6 +655,11 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 	state.stencilFail = static_cast<ShaderStencilOperation>(pass.stencil_fail_op);
 	state.stencilDepthFail = static_cast<ShaderStencilOperation>(pass.stencil_depth_fail_op);
 	for (size_t i = 0; i < state.attachments.size(); ++i) {
+		if (static_cast<unsigned>(pass.source_color_blend_factor[i]) > 9 || static_cast<unsigned>(pass.dest_color_blend_factor[i]) > 9
+				|| static_cast<unsigned>(pass.source_alpha_blend_factor[i]) > 9 || static_cast<unsigned>(pass.dest_alpha_blend_factor[i]) > 9
+				|| static_cast<unsigned>(pass.color_blend_op[i]) < 1 || static_cast<unsigned>(pass.color_blend_op[i]) > 5
+				|| static_cast<unsigned>(pass.alpha_blend_op[i]) < 1 || static_cast<unsigned>(pass.alpha_blend_op[i]) > 5)
+			return fail(error, "FX pass contains an invalid attachment blend state.");
 		auto& attachment = state.attachments[i];
 		attachment.blendEnabled = pass.blend_enable[i];
 		attachment.source = static_cast<ShaderBlendFactor>(pass.source_color_blend_factor[i]);
@@ -654,7 +668,7 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 		attachment.destinationAlpha = static_cast<ShaderBlendFactor>(pass.dest_alpha_blend_factor[i]);
 		attachment.operation = static_cast<ShaderBlendOperation>(static_cast<int>(pass.color_blend_op[i]) - 1);
 		attachment.alphaOperation = static_cast<ShaderBlendOperation>(static_cast<int>(pass.alpha_blend_op[i]) - 1);
-		attachment.writeMask = pass.render_target_write_mask[i];
+		attachment.writeMask = pass.render_target_write_mask[i] & 15;
 	}
 
 	std::unordered_map<std::string, std::string> hostExpressions;
@@ -732,10 +746,14 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 		if (std::regex_search(metadata->definition, property, std::regex(R"(\bFormat\s*=\s*(\w+))"))) output.targetFormatName = canonicalShaderFormat(property[1].str());
 		if (output.targetFormatName.empty()) output.targetFormatName = "R8G8B8A8_UNORM";
 		if (std::regex_search(metadata->definition, property, std::regex(R"(\bDepth\s*=\s*([0-9]+))"))) parseShaderUnsigned(property[1].str(), output.depth);
+		std::string width = "1", height = "1";
+		if (std::regex_search(metadata->definition, property, std::regex(R"(\bWidth\s*=\s*([^;]+))"))) width = property[1].str();
+		if (std::regex_search(metadata->definition, property, std::regex(R"(\bHeight\s*=\s*([^;]+))"))) height = property[1].str();
 		if (compiled.storageOutputs.empty() && compiled.widthExpression.empty() && compiled.heightExpression.empty()) {
-			if (std::regex_search(metadata->definition, property, std::regex(R"(\bWidth\s*=\s*([^;]+))"))) compiled.widthExpression = property[1].str();
-			if (std::regex_search(metadata->definition, property, std::regex(R"(\bHeight\s*=\s*([^;]+))"))) compiled.heightExpression = property[1].str();
+			compiled.widthExpression = width; compiled.heightExpression = height;
 		}
+		else if (compiled.widthExpression != width || compiled.heightExpression != height)
+			return fail(error, "Writable images within an FX pass must use matching base dimensions.");
 		if (std::any_of(compiled.storageOutputs.begin(), compiled.storageOutputs.end(), [&](const auto& previous) { return previous.alias == output.alias; }))
 			return fail(error, "An FX pass cannot bind overlapping writable views of the same image.");
 		const uint32_t slot = static_cast<uint32_t>(compiled.storageOutputs.size());

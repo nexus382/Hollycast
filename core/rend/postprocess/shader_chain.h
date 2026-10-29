@@ -250,6 +250,7 @@ struct ShaderPass {
 	ShaderRenderState renderState;
 	bool compute = false;
 	bool updatesSource = true;
+	bool preserveBackbuffer = false;
 	uint32_t colorOutputCount = 1;
 	std::array<uint32_t, 3> localSize { 1, 1, 1 };
 	uint32_t dispatchZ = 1;

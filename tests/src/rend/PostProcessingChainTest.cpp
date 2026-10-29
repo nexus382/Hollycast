@@ -560,12 +560,12 @@ TEST(PostProcessingChainTest, ValidatesAndReflectsReShadeRenderStates)
 				+ std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))
 	};
 	std::filesystem::create_directories(directory.path);
-	const auto unsupportedPass = directory.path / "unsupported-pass.fx";
+	const auto stencilPass = directory.path / "stencil-pass.fx";
 	const auto supportedSampler = directory.path / "supported-sampler.fx";
 	const auto customSampler = directory.path / "custom-sampler.fx";
 	const auto disabledBlend = directory.path / "disabled-blend.fx";
 	const auto enabledBlend = directory.path / "enabled-blend.fx";
-	std::ofstream(unsupportedPass) <<
+	std::ofstream(stencilPass) <<
 			"float4 MainPS() : SV_Target { return (float4)1.0; }\n"
 			"technique Main { pass { PixelShader = MainPS; StencilEnable = true; } }\n";
 	std::ofstream(supportedSampler) <<
@@ -587,8 +587,8 @@ TEST(PostProcessingChainTest, ValidatesAndReflectsReShadeRenderStates)
 
 	postprocess::ShaderChain chain;
 	std::string error;
-	EXPECT_FALSE(postprocess::loadShaderChain(unsupportedPass.string(), chain, error));
-	EXPECT_NE(std::string::npos, error.find("StencilEnable"));
+	ASSERT_TRUE(postprocess::loadShaderChain(stencilPass.string(), chain, error)) << error;
+	EXPECT_TRUE(chain.passes[0].renderState.stencilEnabled);
 	ASSERT_TRUE(postprocess::loadShaderChain(supportedSampler.string(), chain, error)) << error;
 	ASSERT_EQ(1u, chain.passes.size());
 	ASSERT_EQ(1u, chain.passes[0].samplers.size());
@@ -601,6 +601,8 @@ TEST(PostProcessingChainTest, ValidatesAndReflectsReShadeRenderStates)
 	ASSERT_TRUE(postprocess::loadShaderChain(disabledBlend.string(), chain, error)) << error;
 	ASSERT_EQ(1u, chain.passes.size());
 	EXPECT_FALSE(chain.passes[0].blendEnabled);
+	EXPECT_FALSE(chain.passes[0].renderState.attachments[0].blendEnabled);
+	EXPECT_TRUE(chain.passes[0].preserveBackbuffer);
 	ASSERT_TRUE(postprocess::loadShaderChain(enabledBlend.string(), chain, error)) << error;
 	ASSERT_EQ(1u, chain.passes.size());
 	EXPECT_TRUE(chain.passes[0].blendEnabled);
@@ -1797,7 +1799,7 @@ TEST(PostProcessingChainTest, EnforcesReShadeParameterComponentLimitAndEvaluates
 	ASSERT_TRUE(postprocess::parseReShadeFx(effect(maxUniforms, "float4(0.0, 0.0, 0.0, 0.0)"), source, error)) << error;
 	EXPECT_EQ(maxUniforms, source.parameters.size());
 	EXPECT_FALSE(postprocess::parseReShadeFx(effect(maxUniforms + 1, "float4(0.0, 0.0, 0.0, 0.0)"), source, error));
-	EXPECT_NE(std::string::npos, error.find(std::to_string(postprocess::MaxShaderParameterComponents) + " uniform components"));
+	EXPECT_NE(std::string::npos, error.find("256-component parameter budget"));
 	ASSERT_TRUE(postprocess::parseReShadeFx(effect(1, "float4(1.0 + 2.0, 0.0, 0.0, 0.0)"), source, error)) << error;
 	ASSERT_EQ(1u, source.parameters.size());
 	EXPECT_FLOAT_EQ(3.f, source.parameters[0].values[0]);

@@ -158,9 +158,15 @@ void removeResourceDeclarations(std::string& source)
 	static const std::regex resource(R"(^\s*(?:layout\s*\([^\n]*\)\s*)?(?:uniform\s+)?(?:(?:lowp|mediump|highp)\s+)?(?:[iu]?sampler|texture)(?:2DArray|1D|2D|3D|Cube)\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[\s*[1-9][0-9]*\s*\])?\s*;\s*$)");
 	std::string cleaned;
 	std::istringstream stream(source);
-	for (std::string line; std::getline(stream, line);)
-		if (!std::regex_match(line, resource))
-			cleaned += line + '\n';
+	for (std::string line; std::getline(stream, line);) {
+		if (std::regex_match(line, resource))
+			continue;
+		// Descriptor sets belong to the Vulkan dialect; GL retains the image
+		// format and binding while the executor assigns its actual image unit.
+		line = std::regex_replace(line, std::regex(R"(\bset\s*=\s*[0-9]+\s*,\s*)"), "");
+		line = std::regex_replace(line, std::regex(R"(,\s*set\s*=\s*[0-9]+)"), "");
+		cleaned += line + '\n';
+	}
 	source = std::move(cleaned);
 }
 
@@ -1464,7 +1470,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			glcache.Disable(GL_FRAMEBUFFER_SRGB);
 #endif
 		glViewport(0, 0, outputWidth, outputHeight);
-		if (program.pass.blendEnabled && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
+		if ((program.pass.preserveBackbuffer || program.pass.blendEnabled) && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
 			// ReShade blends against the current backbuffer. Seed HollyCast's
 			// private pass target with the current input before applying the pass.
 			glcache.Disable(GL_BLEND);

@@ -44,8 +44,18 @@ D3D11_TEXTURE_ADDRESS_MODE textureAddressMode(postprocess::ShaderWrapMode mode)
 	return D3D11_TEXTURE_ADDRESS_CLAMP;
 }
 
-D3D11_BLEND blendFactor(postprocess::ShaderBlendFactor factor)
+D3D11_BLEND blendFactor(postprocess::ShaderBlendFactor factor, bool alpha = false)
 {
+	// DirectX restricts alpha blend factors to their alpha-channel spellings.
+	if (alpha) {
+		switch (factor) {
+		case postprocess::ShaderBlendFactor::SourceColor: factor = postprocess::ShaderBlendFactor::SourceAlpha; break;
+		case postprocess::ShaderBlendFactor::OneMinusSourceColor: factor = postprocess::ShaderBlendFactor::OneMinusSourceAlpha; break;
+		case postprocess::ShaderBlendFactor::DestinationColor: factor = postprocess::ShaderBlendFactor::DestinationAlpha; break;
+		case postprocess::ShaderBlendFactor::OneMinusDestinationColor: factor = postprocess::ShaderBlendFactor::OneMinusDestinationAlpha; break;
+		default: break;
+		}
+	}
 	switch (factor) {
 	case postprocess::ShaderBlendFactor::Zero: return D3D11_BLEND_ZERO;
 	case postprocess::ShaderBlendFactor::One: return D3D11_BLEND_ONE;
@@ -299,8 +309,8 @@ bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, st
 				renderTarget.SrcBlend = blendFactor(pass.renderState.reflected ? attachment.source : pass.sourceBlend);
 				renderTarget.DestBlend = blendFactor(pass.renderState.reflected ? attachment.destination : pass.destinationBlend);
 				renderTarget.BlendOp = blendOperation(pass.renderState.reflected ? attachment.operation : pass.blendOperation);
-				renderTarget.SrcBlendAlpha = blendFactor(attachment.sourceAlpha);
-				renderTarget.DestBlendAlpha = blendFactor(attachment.destinationAlpha);
+				renderTarget.SrcBlendAlpha = blendFactor(attachment.sourceAlpha, true);
+				renderTarget.DestBlendAlpha = blendFactor(attachment.destinationAlpha, true);
 				renderTarget.BlendOpAlpha = blendOperation(attachment.alphaOperation);
 				renderTarget.RenderTargetWriteMask = attachment.writeMask;
 			}
@@ -810,6 +820,11 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 				return false;
 			}
 		}
+		if (program.pass.renderState.stencilEnabled
+				&& !postprocess::accumulateShaderTargetBytes(program.targetWidth, program.targetHeight,
+						postprocess::ShaderTargetFormat::Default, "R32_UINT", false, 1, targetBytes, targetBudgetError)) {
+			postprocess::reportShaderChainStatus(activePath, targetBudgetError); return false;
+		}
 		PassTargets& passTargets = targets[index];
 		if (passTargets.size() != outputCount)
 			passTargets.resize(outputCount);
@@ -914,7 +929,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		for (uint32_t output = 0; output < program.pass.colorOutputCount; ++output)
 			renderTargets[output] = passTargets[output][currentTarget].view.get();
 		deviceContext->OMSetRenderTargets(program.pass.colorOutputCount, renderTargets.data(), stencilView);
-		if (program.pass.blendEnabled && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
+		if ((program.pass.preserveBackbuffer || program.pass.blendEnabled) && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
 			// ReShade blends against the current backbuffer. Seed HollyCast's
 			// private target before enabling the pass blend state.
 			deviceContext->OMSetBlendState(nullptr, nullptr, 0xffffffff);

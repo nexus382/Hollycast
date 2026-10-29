@@ -1,5 +1,6 @@
 /*
 	 Copyright 2018 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
  
 	 This file is part of reicast.
  
@@ -42,6 +43,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_PNG
+#define STBI_ONLY_TGA
+#define STBI_ONLY_BMP
 #include "stbi.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>

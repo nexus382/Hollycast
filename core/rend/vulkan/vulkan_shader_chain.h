@@ -16,6 +16,7 @@
 #include "texture.h"
 
 #include <array>
+#include <deque>
 #include <map>
 #include <memory>
 #include <vector>
@@ -142,7 +143,8 @@ private:
 		uint32_t frame = 0, layerIndex = postprocess::InvalidShaderPass;
 		bool initialized = false;
 	};
-	std::vector<std::map<std::pair<uint32_t, uint32_t>, StencilTarget>> stencilTargets;
+	// A deque never asks MSVC to copy maps containing unique Vulkan handles.
+	std::deque<std::map<std::pair<uint32_t, uint32_t>, StencilTarget>> stencilTargets;
 
 	vk::UniqueRenderPass renderPass;
 	vk::UniqueDescriptorSetLayout descriptorSetLayout;

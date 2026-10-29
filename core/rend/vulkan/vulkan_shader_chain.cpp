@@ -452,14 +452,15 @@ void VulkanShaderChain::ensureResources()
 	VulkanContext *context = VulkanContext::Instance();
 	renderPass = createRenderPass({ vk::Format::eR8G8B8A8Unorm });
 
-	std::array<vk::DescriptorSetLayoutBinding, MaxShaderInputs + 1 + MaxShaderStorage> bindings;
+	const uint32_t storageLimit = std::min(MaxShaderStorage, context->GetPhysicalDevice().getProperties().limits.maxPerStageDescriptorStorageImages);
+	std::vector<vk::DescriptorSetLayoutBinding> bindings(MaxShaderInputs + 1 + storageLimit);
 	for (uint32_t index = 0; index < MaxShaderInputs; ++index)
 		bindings[index] = vk::DescriptorSetLayoutBinding(index, vk::DescriptorType::eCombinedImageSampler, 1,
 				shaderStages());
 	bindings[MaxShaderInputs] = vk::DescriptorSetLayoutBinding(MaxShaderInputs,
 			vk::DescriptorType::eUniformBuffer, 1,
 			shaderStages());
-	for (uint32_t i = 0; i < MaxShaderStorage; ++i) bindings[MaxShaderInputs + 1 + i] = vk::DescriptorSetLayoutBinding(MaxShaderInputs + 1 + i, vk::DescriptorType::eStorageImage, 1, shaderStages());
+	for (uint32_t i = 0; i < storageLimit; ++i) bindings[MaxShaderInputs + 1 + i] = vk::DescriptorSetLayoutBinding(MaxShaderInputs + 1 + i, vk::DescriptorType::eStorageImage, 1, shaderStages());
 	descriptorSetLayout = context->GetDevice().createDescriptorSetLayoutUnique(vk::DescriptorSetLayoutCreateInfo({}, bindings));
 	const vk::PushConstantRange pushConstants(shaderStages(), 0, sizeof(ShaderFrameUniforms));
 	pipelineLayout = context->GetDevice().createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo({}, descriptorSetLayout.get(), pushConstants));
@@ -766,10 +767,10 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 				program.pipeline = context->GetDevice().createComputePipelineUnique(context->GetPipelineCache(),
 						vk::ComputePipelineCreateInfo({}, vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eCompute, program.computeShader.get(), "main"), pipelineLayout.get())).value;
 			} else {
-			program.renderPass = createRenderPass(targetFormats, program.pass.blendEnabled || !pass.updatesSource, pass.renderState.stencilEnabled, pass.renderState.clearRenderTargets);
+			program.renderPass = createRenderPass(targetFormats, pass.preserveBackbuffer || program.pass.blendEnabled || !pass.updatesSource, pass.renderState.stencilEnabled, pass.renderState.clearRenderTargets);
 			program.pipeline = createPipeline(program.vertexShader.get(), program.fragmentShader.get(), program.renderPass.get(),
 					program.pass, pass.colorOutputCount);
-			if (program.pass.blendEnabled && program.pass.updatesSource && !pass.renderState.clearRenderTargets)
+			if ((program.pass.preserveBackbuffer || program.pass.blendEnabled) && program.pass.updatesSource && !pass.renderState.clearRenderTargets)
 				program.blendCopyPipeline = createPipeline({}, copyFragmentShader.get(), program.renderPass.get(),
 						postprocess::ShaderPass {}, pass.colorOutputCount);
 			}
@@ -1346,7 +1347,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					vk::Format::eR8G8B8A8Unorm, needsMipmaps);
 			const bool initialized = displayTarget.initialized && !allocated;
 			const vk::ImageMemoryBarrier targetBarrier(initialized ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags(),
-					(outputIndex >= program.pass.colorOutputCount ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite : vk::AccessFlagBits::eColorAttachmentWrite),
+					vk::AccessFlagBits::eColorAttachmentWrite,
 					initialized ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
 					vk::ImageLayout::eColorAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 					displayTarget.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
@@ -1582,7 +1583,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		for (size_t i = 0; i < targetSet.outputs.size(); ++i) {
 			if (program.targetWasInitialized[i] && !program.pass.renderState.clearRenderTargets) continue;
 			const bool storage = i >= program.pass.colorOutputCount;
-			if (!storage && !program.pass.blendEnabled && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) continue;
+			if (!storage && !(program.pass.preserveBackbuffer || program.pass.blendEnabled) && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) continue;
 			const auto& image = targetSet.outputs[i];
 			const auto layout = storage ? vk::ImageLayout::eGeneral : vk::ImageLayout::eColorAttachmentOptimal;
 			const auto access = storage ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite : vk::AccessFlagBits::eColorAttachmentWrite;
@@ -1801,7 +1802,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				0, sizeof(ShaderParameterUniforms));
 		context->GetDevice().updateDescriptorSets(vk::WriteDescriptorSet(descriptorSets[imageIndex][index].get(),
 				MaxShaderInputs, 0, vk::DescriptorType::eUniformBuffer, nullptr, parameterInfo), nullptr);
-		if (program.pass.blendEnabled && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
+		if ((program.pass.preserveBackbuffer || program.pass.blendEnabled) && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
 			// ReShade blends against the current backbuffer. Populate the private
 			// target first, then load those pixels for the blended pass.
 			commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(program.renderPass.get(), targetSet.framebuffer.get(),

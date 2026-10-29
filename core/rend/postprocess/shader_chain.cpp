@@ -2397,7 +2397,8 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			for (const auto& binding : passSource.storageBindings)
 				pass.storageBindings.emplace_back(binding.first, static_cast<uint32_t>(pass.outputs.size()) + binding.second);
 			pass.outputs.insert(pass.outputs.end(), passSource.storageOutputs.begin(), passSource.storageOutputs.end());
-			pass.blendEnabled = pass.updatesSource || std::any_of(pass.renderState.attachments.begin(), pass.renderState.attachments.end(), [](const auto& a) { return a.blendEnabled || a.writeMask != 15; });
+			pass.preserveBackbuffer = pass.updatesSource;
+			pass.blendEnabled = std::any_of(pass.renderState.attachments.begin(), pass.renderState.attachments.end(), [](const auto& a) { return a.blendEnabled; });
 			if (pass.renderState.srgbWrite && pass.outputs.empty())
 				pass.targetFormatName = "R8G8B8A8_SRGB";
 			const auto& first = pass.renderState.attachments[0];
