@@ -660,7 +660,7 @@ void renderHelpMenu()
 
 		if (ImGui::MenuItem(T("Check for Updates"), nullptr, false, canOpenLinks))
 		{
-			if (!openUrlInShell("https://flyinghead.github.io/flycast-builds/"))
+			if (!openUrlInShell("https://nexus382.github.io/Hollycast/"))
 				WARN_LOG(COMMON, "Unable to open updates page from Help menu");
 		}
 		if (!canOpenLinks && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
