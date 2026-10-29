@@ -6,7 +6,12 @@
 
 #include "effect_lexer.hpp"
 #include <cassert>
+#ifdef HOLLYCAST_HAVE_FLOAT_FROM_CHARS
 #include <charconv> // std::from_chars
+#else
+#include <locale>
+#include <sstream>
+#endif
 #include <string_view>
 #include <unordered_map> // Used for static lookup tables
 
@@ -1182,38 +1187,14 @@ void reshadefx::lexer::parse_numeric_literal(token &tok) const
 	}
 	else
 	{
-#if 0
-		exponent += decimal_location - mantissa_size;
-
-		const bool exponent_negative = exponent < 0;
-		if (exponent_negative)
-			exponent = -exponent;
-
-		// Limit exponent
-		if (exponent > 511)
-			exponent = 511;
-
-		// Quick exponent calculation
-		double e = 1.0;
-		const double powers_of_10[] = {
-			10.,
-			100.,
-			1.0e4,
-			1.0e8,
-			1.0e16,
-			1.0e32,
-			1.0e64,
-			1.0e128,
-			1.0e256
-		};
-
-		for (auto d = powers_of_10; exponent != 0; exponent >>= 1, d++)
-			if (exponent & 1)
-				e *= *d;
-
-		tok.literal_as_float = exponent_negative ? mantissa / static_cast<float>(e) : mantissa * static_cast<float>(e);
-#else
+#ifdef HOLLYCAST_HAVE_FLOAT_FROM_CHARS
 		std::from_chars(begin, end, tok.literal_as_float);
+#else
+		// Keep shader decimal syntax independent of the host locale on older
+		// standard libraries without floating-point from_chars.
+		std::istringstream literal(std::string(begin, end));
+		literal.imbue(std::locale::classic());
+		literal >> tok.literal_as_float;
 #endif
 	}
 

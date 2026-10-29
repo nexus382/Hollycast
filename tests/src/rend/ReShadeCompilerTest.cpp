@@ -6,6 +6,8 @@
 #include "rend/postprocess/shader_chain.h"
 
 #include <gtest/gtest.h>
+#include "effect_lexer.hpp"
+#include <locale>
 
 TEST(ReShadeCompilerTest, PreservesIntegerVectorControlsAndSignedViewportBounds)
 {
@@ -202,4 +204,23 @@ TEST(ReShadeCompilerTest, AdvertisesThePortableComputeLanguageProfile)
 	EXPECT_FALSE(source.compute.empty());
 	std::string hlsl;
 	EXPECT_TRUE(postprocess::translateGlslComputeToHlsl(source, {}, {}, hlsl, error)) << error;
+}
+
+TEST(ReShadeCompilerTest, ParsesFloatingLiteralsWithACommaDecimalHostLocale)
+{
+	struct DecimalComma : std::numpunct<char> {
+		char do_decimal_point() const override { return ','; }
+	};
+	struct RestoreLocale {
+		std::locale previous = std::locale();
+		~RestoreLocale() { std::locale::global(previous); }
+	} restoreLocale;
+	std::locale::global(std::locale(std::locale::classic(), new DecimalComma));
+
+	reshadefx::lexer lexer("0.125f 6.25e-2 .5 16777215.0");
+	for (float expected : { 0.125f, 0.0625f, 0.5f, 16777215.f }) {
+		const reshadefx::token token = lexer.lex();
+		ASSERT_EQ(reshadefx::tokenid::float_literal, token.id);
+		EXPECT_FLOAT_EQ(expected, token.literal_as_float);
+	}
 }

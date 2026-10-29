@@ -10,6 +10,9 @@
 #include <cstdio> // fclose, fopen, fread, fseek
 #include <cassert>
 #include <algorithm> // std::find_if
+#ifdef _WIN32
+#include <share.h> // Windows CRT file-sharing modes are not declared by every stdio header.
+#endif
 
 #ifndef _WIN32
 	// On Linux systems the native path encoding is UTF-8 already, so no conversion necessary
@@ -69,7 +72,7 @@ static bool read_file(const std::filesystem::path &path, std::string &file_data)
 #ifndef _WIN32
 	FILE *const file = fopen(path.c_str(), "rb");
 #else
-	FILE *const file = _wfsopen(path.c_str(), L"rb", SH_DENYWR);
+	FILE *const file = _wfsopen(path.c_str(), L"rb", _SH_DENYWR);
 #endif
 	if (file == nullptr)
 		return false;

@@ -8,6 +8,8 @@
 #include <cassert>
 #ifdef _MSC_VER
 #include <malloc.h> // _alloca
+#elif defined(__NetBSD__)
+#include <stdlib.h> // NetBSD declares alloca here and does not provide alloca.h.
 #else
 #include <alloca.h> // alloca is not declared by malloc.h on macOS
 #endif
