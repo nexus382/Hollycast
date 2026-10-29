@@ -1567,8 +1567,20 @@ void Boxart::buildCustomBoxartIndex()
 						newIndex[key] = entry.path;
 
 					const size_t modeIndex = static_cast<size_t>(alias->mode);
-					if (mediaModeIndexes[modeIndex].find(key) == mediaModeIndexes[modeIndex].end())
-						mediaModeIndexes[modeIndex][key] = entry.path;
+					auto& mediaIndex = mediaModeIndexes[modeIndex];
+					const auto existing = mediaIndex.find(key);
+					if (existing == mediaIndex.end())
+						mediaIndex.emplace(key, entry.path);
+					else
+					{
+						// ES-DE's canonical folders precede scraper aliases and the legacy
+						// images folder. Filesystem traversal order must not pick the artwork.
+						const std::string previousFolder = toLowerString(getParentPath(root, existing->second));
+						const auto priority = std::find(alias->aliases.begin(), alias->aliases.end(), firstFolder);
+						const auto previousPriority = std::find(alias->aliases.begin(), alias->aliases.end(), previousFolder);
+						if (priority < previousPriority || (priority == previousPriority && entry.path < existing->second))
+							existing->second = entry.path;
+					}
 				}
 			}
 		} catch (const std::exception& e) {

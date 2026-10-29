@@ -4,6 +4,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cfloat>
 
 class ThemeLibraryTest : public ::testing::Test
 {
@@ -43,6 +44,7 @@ protected:
 			itemIds[index] = ImGui::GetItemID();
 		});
 		const auto& vertices = ImGui::GetWindowDrawList()->VtxBuffer;
+		backgroundMesh.assign(vertices.begin(), vertices.end());
 		backgroundVertices = std::count_if(vertices.begin(), vertices.end(), [](const ImDrawVert& vertex) {
 			return vertex.col == IM_COL32(0xe1, 0x5a, 0x77, 0xff);
 		});
@@ -56,6 +58,7 @@ protected:
 	std::vector<ImVec4> bounds;
 	std::vector<ImGuiID> itemIds;
 	size_t backgroundVertices = 0;
+	std::vector<ImDrawVert> backgroundMesh;
 };
 
 TEST_F(ThemeLibraryTest, GridWidgetActivatesTheClickedStableItem)
@@ -238,4 +241,69 @@ TEST_F(ThemeLibraryTest, BackgroundFollowsGamepadNavigationAndThenMouseHover)
 	const ImVec2 center((rect.x + rect.z) / 2, (rect.y + rect.w) / 2);
 	EXPECT_EQ(renderFrame(center, false), -1);
 	EXPECT_EQ(backgroundVertices, 4u);
+}
+
+TEST_F(ThemeLibraryTest, RoundedGradientPreservesOpacityInBothDirections)
+{
+	items.clear();
+	themes::Element panel;
+	panel.type = "panel";
+	panel.rect = {0.1f, 0.1f, 0.8f, 0.8f};
+	panel.color = 0xe15a7700;
+	panel.endColor = 0xe15a77ff;
+	panel.rounding = 12.f;
+	panel.zIndex = -1;
+	for (const char* direction : {"vertical", "horizontal"})
+	{
+		SCOPED_TRACE(direction);
+		panel.gradient = direction;
+		layout.elements = {panel};
+		renderFrame(ImVec2(-1, -1), false);
+		float transparentEdge = FLT_MAX;
+		float opaqueEdge = -FLT_MAX;
+		for (const auto& vertex : backgroundMesh)
+		{
+			if ((vertex.col & ~IM_COL32_A_MASK) != (IM_COL32(0xe1, 0x5a, 0x77, 0) & ~IM_COL32_A_MASK))
+				continue;
+			const auto alpha = (vertex.col >> IM_COL32_A_SHIFT) & 0xff;
+			const float position = panel.gradient == "horizontal" ? vertex.pos.x : vertex.pos.y;
+			if (alpha == 0) transparentEdge = std::min(transparentEdge, position);
+			if (alpha == 255) opaqueEdge = std::max(opaqueEdge, position);
+		}
+		EXPECT_LT(transparentEdge, opaqueEdge);
+	}
+}
+
+TEST_F(ThemeLibraryTest, RoundedThumbnailListRetainsNavigationAndItemBounds)
+{
+	layout.id = "rounded-thumbnail-list";
+	layout.mode = "list";
+	layout.showArtwork = true;
+	layout.rounding = 8;
+	layout.selectorColor = 0x234567aa;
+	layout.selectorBorderColor = 0xabcdefee;
+	layout.separatorColor = 0x12345677;
+	layout.rowHeight = 0.08f;
+	items[1].title = "An extremely long title that must not cover the neighbouring row or its controls";
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec4 rect = bounds[1];
+	EXPECT_LE(bounds[0].w, rect.y);
+	const ImVec2 center((rect.x + rect.z) / 2, (rect.y + rect.w) / 2);
+	EXPECT_EQ(renderFrame(center, true), -1);
+	EXPECT_EQ(renderFrame(center, false), 1);
+}
+
+TEST(ThemeLibraryMediaTest, IconMediaSupportsEveryImageCategoryAndRestoresThemeDefault)
+{
+	const std::array<const char*, 9> sources{
+		"", "miximage", "cover", "case", "screenshot", "title", "physical", "fanart", "titlescreen"
+	};
+	for (size_t i = 0; i < sources.size(); ++i)
+	{
+		const auto source = themes::iconArtworkSource(static_cast<int>(i));
+		ASSERT_TRUE(source.has_value());
+		EXPECT_EQ(*source, sources[i]);
+	}
+	for (int invalid : {-2, -1, 9, 100})
+		EXPECT_FALSE(themes::iconArtworkSource(invalid).has_value());
 }

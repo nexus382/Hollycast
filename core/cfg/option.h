@@ -419,6 +419,7 @@ extern Option<int, false> UITheme;
 extern Option<std::string, false> UICustomTheme;
 extern Option<std::string, false> CustomTheme; // Library package ID; empty uses the selected UI theme.
 extern Option<std::string, false> ThemeLayout; // Layout ID; empty uses the theme's first layout.
+extern Option<int, false> ThemeIconMedia; // -1 uses the theme default; otherwise LibraryCoverMediaMode.
 enum class MenuBarMode
 {
 	Auto = 0,

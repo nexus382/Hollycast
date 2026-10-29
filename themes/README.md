@@ -1,7 +1,7 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 # Hollycast theme collection
 
-These are native Hollycast adaptations of three established ES-DE themes. Extract a theme folder, then use **Settings > General > UI Settings > Install Library Theme Folder**. A package is self-contained; keep its assets and notices alongside `theme.json`.
+These are native Hollycast adaptations of three established ES-DE themes. Extract a theme folder, then use **Settings > Library > Library Themes > Install Library Theme Folder**. A package is self-contained; keep its assets and notices alongside `theme.json`.
 
 | Theme | Original author | Style | Source and port notes |
 | --- | --- | --- | --- |
@@ -14,3 +14,18 @@ The ports cover static game-library views. Hollycast's menus and toolbar remain 
 Theme files retain their own upstream licenses. Art Book Next uses CC BY-NC-SA 2.0. Iconic's upstream README and LICENSE carry differing notices; both are included, and the port retains the README's attribution and noncommercial share-alike terms. Linear includes its MIT license and upstream asset credits. These theme assets are separate from Hollycast's GPL-licensed application code.
 
 [Midnight](midnight/theme.json) is the original Hollycast example for authors. See the [theme author guide](../docs/Themes.md) to create or modify a package.
+
+## Starred preview layouts
+
+These six additional packages implement the Hollycast game-list mockups. Their names end in `*` so they are easy to find beside the existing ports. They require the renderer features documented in the current author guide. Existing packages keep their original IDs and files.
+
+| Package | Media and layout |
+| --- | --- |
+| [Iconic Dark Grid *](preview-iconic-dark-grid/theme.json) | Selected miximage backdrop, independent front cover, dark details panel and right cover grid. |
+| [Iconic Light List *](preview-iconic-light-list/theme.json) | Miximage backdrop with a pale gradient, centered front cover, white information cards and right list. |
+| [Horizon Grid *](preview-horizon-grid/theme.json) | Blue-to-navy gradient, screenshot with overlapping front cover, right cover grid. |
+| [Epic Noir List *](preview-epic-noir-list/theme.json) | Left list, large precomposed miximage and details beneath. |
+| [Art Book Next *](preview-art-book-next/theme.json) | Selected cover background, left list, and a large miximage above a scraped front cover and details. |
+| [Fanart & Disc *](preview-fanart-disc/theme.json) | Fanart backdrop, screenshot, front cover, disc and marquee, with a right thumbnail list. |
+
+The previews use the user's configured ES-DE media and real game metadata. No generated game art or example text is bundled. Missing screenshots try miximages; decorative discs and marquees disappear when missing. These are native Hollycast interpretations of the requested concepts, not complete ES-DE ports. See [preview sources and scope](PREVIEW-NOTES.md).

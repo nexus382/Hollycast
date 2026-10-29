@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/boxart/boxart.h"
 #include "ui/game_scanner.h"
@@ -583,6 +584,48 @@ TEST_F(BoxartTest, NoArtworkStillQueuesIndependentOnlineFallback)
 	EXPECT_EQ("Metadata survives", queued.searchName);
 	EXPECT_FALSE(queued.scraped);
 	config::FetchBoxart = false;
+}
+
+TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
+{
+	namespace fs = std::filesystem;
+	const fs::path root = directory / "downloaded_media";
+	// Windows produces backslash paths here, matching a folder chosen by the user.
+	config::BoxartPath = root.string();
+	media.fileName = "A Game (USA).chd";
+	media.name = "A different display title";
+	media.gameName.clear();
+	for (const char* folder : {"images", "miximg", "miximages", "cover", "covers", "screenshotS",
+			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens"})
+	{
+		fs::create_directories(root / folder);
+		std::ofstream(root / folder / "A Game (USA).png", std::ios::binary) << folder;
+	}
+	boxart->refreshCustomBoxartIndex(true);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	std::string cover;
+	do {
+		cover = boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover);
+		if (!cover.empty()) break;
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	} while (std::chrono::steady_clock::now() < deadline);
+	ASSERT_FALSE(cover.empty()) << "The configured media directory was not indexed";
+	EXPECT_EQ(fs::path(cover).lexically_normal(), (root / "covers" / "A Game (USA).png").lexically_normal());
+	const std::pair<config::LibraryCoverMediaMode, const char*> expected[] = {
+		{config::LibraryCoverMediaMode::MixImage, "miximages"},
+		{config::LibraryCoverMediaMode::Screenshot, "screenshotS"},
+		{config::LibraryCoverMediaMode::Title, "marquees"},
+		{config::LibraryCoverMediaMode::Case, "3dboxes"},
+		{config::LibraryCoverMediaMode::Physical, "physicalmedia"},
+		{config::LibraryCoverMediaMode::TitleScreen, "titlescreens"}
+	};
+	for (const auto& source : expected)
+		EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, source.first)).lexically_normal(),
+				(root / source.second / "A Game (USA).png").lexically_normal());
+	// A missing category must stay empty, rather than borrowing an old default image.
+	EXPECT_TRUE(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::FanArt).empty());
+	media.fileName = "Not scraped.chd";
+	EXPECT_TRUE(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover).empty());
 }
 
 }

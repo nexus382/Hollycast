@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 
@@ -25,6 +26,13 @@ struct Element
 	std::string resolvedAsset; // Validated at load time; never resolved during rendering.
 	std::string fit = "contain";
 	std::string align = "left";
+	std::optional<uint32_t> endColor; // Panel gradient, including alpha.
+	std::string gradient = "vertical";
+	float rounding = 0; // Logical UI pixels, for panels and images.
+	bool bold = false;
+	bool wrap = true; // False renders one line with an ellipsis.
+	std::string fallback = "default"; // Artwork source, default library art, or none.
+	std::string requiresArtwork; // Hide an overlay when its companion source is missing.
 };
 struct Layout
 {
@@ -40,6 +48,13 @@ struct Layout
 	float fontSize = 0; // Fraction of canvas height; zero inherits the application font.
 	float rowHeight = 0; // Fraction of canvas height; zero uses automatic list sizing.
 	std::optional<uint32_t> textColor, selectedTextColor, selectorColor;
+	std::string artworkSource; // Empty inherits the library media preference.
+	float rounding = 0;
+	float inactiveOpacity = 1;
+	std::optional<uint32_t> selectorBorderColor, separatorColor;
+	bool showArtwork = false; // Optional square thumbnail in list rows.
+	bool compactControls = false; // Show favourite buttons on hover/focus or favourites.
+	bool showInfoTooltip = true;
 };
 struct Theme
 {

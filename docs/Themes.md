@@ -12,11 +12,13 @@ midnight/
 └── theme.json
 ```
 
-To install from Hollycast, open **Settings > General > UI Settings**, click **Install Library Theme Folder**, then select the theme folder. The app validates and copies it into the themes directory shown below the controls. Install does not overwrite a package with the same ID. Packages may contain at most 256 entries, 64 MiB of files, and eight nested directory levels. The installer rejects symbolic links. To replace or remove an installed package, edit or delete its folder, then use **Reload Library Themes**.
+To install from Hollycast, open **Settings > Library > Library Themes**, click **Install Library Theme Folder**, then select the theme folder. The app validates and copies it into the themes directory shown below the controls. Install does not overwrite a package with the same ID. Packages may contain at most 256 entries, 64 MiB of files, and eight nested directory levels. The installer rejects symbolic links. To replace or remove an installed package, edit or delete its folder, then use **Reload Library Themes**.
 
 You can also copy a package folder directly into the themes directory shown in settings. Choose it under **Library Theme**, then choose one of its layouts under **Library Layout**. **Reload Library Themes** rescans the directory after manual changes. Selecting **App UI Theme** restores the selected UI theme and the default library layout.
 
 Library packages live under `library-themes/` in the app data directory, separately from the UI editor's JSON theme files. Selecting or saving a UI theme clears the library package selection. Opening the UI editor temporarily previews that UI theme; cancelling restores the library package.
+
+With a library theme active, **Theme Icon Media** beside the layout selector chooses the scraped media used in its grid or list thumbnails. Choices include covers, miximages, 3D boxes, screenshots, marquees, discs, fanart and title screens. **Theme Default** restores the package's choice. Selecting a source also enables thumbnails in text-list layouts. This setting affects browser icons independently of the selected game's background and detail images. Explicit media bindings prefer the matching ES-DE folders; missing files fall back to the existing library artwork. Canonical folders such as `covers`, `miximages` and `marquees` take priority over aliases and legacy `images` files.
 
 The app loads only immediate child folders of the library themes directory. A broken package is reported in theme settings and is not selectable. If a selected theme or layout is unavailable, Hollycast falls back to the selected UI theme or the first layout in the selected package. The installed-theme folder is user data; keep its `id` and containing folder name identical.
 
@@ -84,8 +86,16 @@ Each layout is an object. Unknown fields are errors. Required fields are `id`, `
 | `showTitles` | Whether grid cells show their title, default `true`. List rows always show the game title. |
 | `background` | Library canvas color, 6- or 8-digit hex; default `151820ff`. |
 | `elements` | Optional array of up to 64 decorative or selected-game elements. |
+| `artworkSource` | Browser artwork: empty (default library media), `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, or `titlescreen`. Missing media falls back to the library artwork. |
+| `rounding` | Browser selection/image corner radius in logical UI pixels, 0–48; default `0`. |
+| `inactiveOpacity` | Unselected grid artwork opacity, 0.1–1; default `1`. |
+| `selectorBorderColor` | Optional selection outline color, separate from the selection fill. |
+| `separatorColor` | Optional list-row divider color. |
+| `showArtwork` | Show square artwork thumbnails beside list titles; default `false`. |
+| `compactControls` | Show favourite buttons only on hovered/focused items or saved favourites; default `false`. Context-menu actions remain available. |
+| `showInfoTooltip` | Show the app's hover information popup; default `true`. Layouts with their own details can disable it. |
 
-Grid cells show the game's primary library artwork and optionally its title. List rows show titles and use the selected UI row. The browser is the interactive region. Elements are decorative or display data for the currently selected item; they do not create interactive controls.
+Grid cells show `artworkSource` and optionally a title. With `showTitles: false`, artwork uses the entire cell; an item with no artwork still displays its title. List titles stay on one line and use an ellipsis when necessary, with room reserved for favourite controls. The browser is the interactive region. Elements are decorative or display data for the currently selected item; they do not create interactive controls.
 
 ## Elements
 
@@ -102,12 +112,19 @@ Every element is an object with required `type` and `rect`. Element rectangles u
 | `align` | Text alignment: `left` (default), `center`, or `right`. Applies to the wrapped text block. |
 | `fontSize` | Text height as a fraction of the library canvas height, from `0.01` to `0.15`; default `0.035`. At render time it is clamped to 10–96 UI pixels. Uses the app font; custom fonts are not supported. |
 | `zIndex` | Integer from `-100` to `100`; default `0`. Negative elements draw behind the browser. Zero or positive elements draw above it and can obscure its visuals. Elements are not interactive. |
+| `endColor` | Optional second panel color, including alpha, for a smooth gradient from `color`. |
+| `gradient` | Panel gradient direction: `vertical` (top to bottom, default) or `horizontal` (left to right). |
+| `rounding` | Panel/image/artwork corner radius in logical UI pixels, 0–48; default `0`. |
+| `bold` | Use the app's bold font for text or metadata; default `false`. |
+| `wrap` | Wrap text into the rectangle, default `true`. Set `false` for one line with an ellipsis. Wrapped text clips at complete lines. |
+| `fallback` | Missing artwork: `default` uses the game's library art; `none` leaves the element empty. A named artwork source tries that source before default art. Defaults to `default`. |
+| `requiresArtwork` | Optional artwork source that must be present before drawing this artwork element. For example, require `screenshot` on cover/disc/logo overlays so they disappear when a hero uses a precomposed miximage instead. Empty (default) has no condition. |
 
 Element types:
 
-- **`panel`** fills its rectangle with `color`.
+- **`panel`** fills its rectangle with `color`, optionally grading into `endColor`, with rounded corners when requested.
 - **`image`** draws a package image using `fit` and `color`. Its `source` is a relative file path inside the package, such as `images/panel.png`. Use PNG or JPEG; SVG and WebP must be rasterized or decoded first. Absolute paths, `..`, and paths escaping through symlinks are rejected. The referenced file must exist.
-- **`artwork`** draws the selected game's artwork, preserving aspect ratio. `source` can be empty (default artwork), `cover`, `miximage`, `screenshot`, `fanart`, `title`, or `physical`. Named sources use local library media and fall back to the game's current artwork. `miximage` selects ES-DE mixed artwork independently of the library cover-media setting. Background and detail artwork follow mouse hover and keyboard/controller focus. If neither is available, the rectangle is empty.
+- **`artwork`** draws the selected game's artwork using `fit`. `source` can be empty (default artwork), `cover`, `miximage`, `case` (3D box), `screenshot`, `fanart`, `title` (marquee/wheel), `physical` (disc/cartridge), or `titlescreen`. Named sources use local library media and obey `fallback`. For decorative marquees and discs, use `fallback: "none"` to avoid duplicated covers. `miximage` selects ES-DE mixed artwork independently of the library cover-media setting. Background and detail artwork follow mouse hover and keyboard/controller focus. If no applicable media is available, the rectangle is empty.
 - **`text`** draws the literal `text` value.
 - **`metadata`** draws the selected game's value for `source`; a missing value draws nothing. Supported fields: `title`, `description`, `developer`, `publisher`, `genre`, `players`, `releaseDate`, `productId`, `region`, `format`, `playTime`, `lastPlayed`, and `size`.
 

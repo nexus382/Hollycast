@@ -198,12 +198,81 @@ TEST(ThemeParserTest, RejectsInvalidLayoutTypographyColorsAndElementPresentation
 	expectRejected(replaceOnce(kManifest, "\"source\": \"art/overlay.png\"", "\"source\": \"art/overlay.png\", \"align\": \"justify\""), "must be left, center, or right");
 }
 
+TEST(ThemeParserTest, ParsesMediaPresentationAndPreservesLegacyDefaults)
+{
+	const auto theme = themes::parse(R"({"formatVersion":1,"id":"preview","name":"Preview *","layouts":[
+		{"id":"grid","name":"Grid","mode":"grid","browser":[0,0,1,1],"artworkSource":"cover",
+		"rounding":12,"inactiveOpacity":0.65,"selectorBorderColor":"abcdef","separatorColor":"12345680",
+		"showArtwork":true,"compactControls":true,"showInfoTooltip":false,
+		"elements":[{"type":"panel","rect":[0,0,1,1],"color":"10203000","endColor":"102030ff","gradient":"horizontal","rounding":14},
+		{"type":"artwork","source":"physical","fallback":"none","requiresArtwork":"screenshot","rect":[0,0,0.2,0.2]},
+		{"type":"metadata","source":"title","rect":[0,0,1,0.2],"bold":true,"wrap":false}]},
+		{"id":"old","name":"Old","mode":"list","browser":[0,0,1,1],"elements":[{"type":"artwork","rect":[0,0,1,1]}]}]})", "");
+	const auto& layout = theme.layouts[0];
+	EXPECT_EQ(layout.artworkSource, "cover");
+	EXPECT_FLOAT_EQ(layout.rounding, 12.f);
+	EXPECT_FLOAT_EQ(layout.inactiveOpacity, 0.65f);
+	EXPECT_EQ(layout.selectorBorderColor, 0xabcdefff);
+	EXPECT_EQ(layout.separatorColor, 0x12345680);
+	EXPECT_TRUE(layout.showArtwork);
+	EXPECT_TRUE(layout.compactControls);
+	EXPECT_FALSE(layout.showInfoTooltip);
+	EXPECT_EQ(layout.elements[0].endColor, 0x102030ff);
+	EXPECT_EQ(layout.elements[0].gradient, "horizontal");
+	EXPECT_FLOAT_EQ(layout.elements[0].rounding, 14.f);
+	EXPECT_EQ(layout.elements[1].fallback, "none");
+	EXPECT_EQ(layout.elements[1].requiresArtwork, "screenshot");
+	EXPECT_TRUE(layout.elements[2].bold);
+	EXPECT_FALSE(layout.elements[2].wrap);
+	const auto& old = theme.layouts[1];
+	EXPECT_TRUE(old.artworkSource.empty());
+	EXPECT_FLOAT_EQ(old.rounding, 0.f);
+	EXPECT_FLOAT_EQ(old.inactiveOpacity, 1.f);
+	EXPECT_FALSE(old.showArtwork);
+	EXPECT_FALSE(old.compactControls);
+	EXPECT_TRUE(old.showInfoTooltip);
+	EXPECT_EQ(old.elements[0].fallback, "default");
+}
+
+TEST(ThemeParserTest, RejectsInvalidMediaPresentation)
+{
+	for (const std::string& field : {"\"rounding\":-1", "\"rounding\":49", "\"inactiveOpacity\":0", "\"inactiveOpacity\":1.1",
+			"\"artworkSource\":\"../outside.png\"", "\"showArtwork\":1", "\"compactControls\":\"yes\"", "\"showInfoTooltip\":1"})
+		expectRejected(replaceOnce(kManifest, "\"mode\": \"grid\",", "\"mode\": \"grid\"," + field + ","), "");
+	for (const std::string& field : {"\"gradient\":\"diagonal\"", "\"rounding\":49", "\"endColor\":\"red\"",
+			"\"bold\":1", "\"wrap\":\"no\"", "\"fallback\":\"../secret.png\"", "\"fallback\":\"\"", "\"requiresArtwork\":\"../secret.png\""})
+		expectRejected(replaceOnce(kManifest, "\"type\": \"panel\",", "\"type\": \"panel\"," + field + ","), "");
+}
+
+TEST(ThemeParserTest, LoadsAllBundledPackagesIncludingSixStarredPreviews)
+{
+	const fs::path collection = fs::path(FLYCAST_TEST_FILES).parent_path().parent_path() / "themes";
+	int previews = 0;
+	for (const auto& entry : fs::directory_iterator(collection))
+	{
+		if (!entry.is_directory() || !fs::is_regular_file(entry.path() / "theme.json"))
+			continue;
+		SCOPED_TRACE(entry.path().u8string());
+		const auto theme = themes::load(entry.path().u8string());
+		EXPECT_EQ(theme.id, entry.path().filename().u8string());
+		if (theme.id.find("preview-") == 0)
+		{
+			++previews;
+			ASSERT_FALSE(theme.name.empty());
+			EXPECT_EQ(theme.name.back(), '*');
+			ASSERT_EQ(theme.layouts.size(), 1u);
+			EXPECT_FALSE(theme.layouts[0].showInfoTooltip);
+		}
+	}
+	EXPECT_EQ(previews, 6);
+}
+
 TEST(ThemeParserTest, RejectsDuplicateLayoutIdsAndUnsupportedElementsOrBindings)
 {
 	expectRejected(replaceOnce(kManifest, "\"compact-list\"", "\"main-grid\""), "must be unique within the theme");
 	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, or metadata");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"developer\"", "\"source\": \"command\""), "supported metadata field");
-	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "must be empty, cover, miximage, screenshot, fanart, title, or physical");
+	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "supported artwork source");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"art/overlay.png\"", "\"source\": \"\""), "is required for image elements");
 }
 

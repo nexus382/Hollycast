@@ -2464,6 +2464,24 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	std::vector<GameMedia> visibleGames;
 	std::vector<GameBoxart> artwork;
 	std::vector<themes::LibraryItem> items;
+	const auto iconSource = themes::iconArtworkSource(config::ThemeIconMedia.get());
+	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
+	// Resolve each requested media type once per game, including explicit fallbacks.
+	std::vector<std::string> mediaSources;
+	if (!browserSource.empty())
+		mediaSources.push_back(browserSource);
+	for (const auto& element : layout.elements)
+		if (element.type == "artwork")
+		{
+			if (!element.source.empty())
+				mediaSources.push_back(element.source);
+			if (element.fallback != "default" && element.fallback != "none")
+				mediaSources.push_back(element.fallback);
+			if (!element.requiresArtwork.empty())
+				mediaSources.push_back(element.requiresArtwork);
+		}
+	std::sort(mediaSources.begin(), mediaSources.end());
+	mediaSources.erase(std::unique(mediaSources.begin(), mediaSources.end()), mediaSources.end());
 	const double animationClock = getLibraryIconAnimationClock();
 	for (size_t gameIndex : candidates)
 	{
@@ -2500,23 +2518,18 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		if (lastPlayed != 0)
 			item.metadata["lastPlayed"] = formatShortDateTime(lastPlayed);
 
-		// Resolve only artwork bindings actually used by this layout.
-		for (const auto& element : layout.elements)
+		for (const std::string& source : mediaSources)
 		{
-			if (element.type != "artwork" || element.source.empty())
-				continue;
-			const std::string key = "artwork." + element.source;
-			if (item.metadata.count(key))
-				continue;
 			config::LibraryCoverMediaMode media = config::LibraryCoverMediaMode::Cover;
-			if (element.source == "miximage") media = config::LibraryCoverMediaMode::MixImage;
-			else if (element.source == "screenshot") media = config::LibraryCoverMediaMode::Screenshot;
-			else if (element.source == "fanart") media = config::LibraryCoverMediaMode::FanArt;
-			else if (element.source == "title") media = config::LibraryCoverMediaMode::Title;
-			else if (element.source == "physical") media = config::LibraryCoverMediaMode::Physical;
-			item.metadata[key] = boxart.getCustomMediaPath(game, media);
-			if (item.metadata[key].empty())
-				item.metadata[key] = item.image;
+			if (source == "miximage") media = config::LibraryCoverMediaMode::MixImage;
+			else if (source == "case") media = config::LibraryCoverMediaMode::Case;
+			else if (source == "screenshot") media = config::LibraryCoverMediaMode::Screenshot;
+			else if (source == "fanart") media = config::LibraryCoverMediaMode::FanArt;
+			else if (source == "title") media = config::LibraryCoverMediaMode::Title;
+			else if (source == "physical") media = config::LibraryCoverMediaMode::Physical;
+			else if (source == "titlescreen") media = config::LibraryCoverMediaMode::TitleScreen;
+			// Keep missing sources empty: decorative discs/logos can opt out of cover fallback.
+			item.metadata["artwork." + source] = boxart.getCustomMediaPath(game, media);
 		}
 		items.push_back(std::move(item));
 		artwork.push_back(std::move(art));
@@ -2534,6 +2547,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		const ImVec2 nextCursor = ImGui::GetCursorScreenPos();
 		const bool itemActive = ImGui::IsItemActive();
 		const bool itemHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly | ImGuiHoveredFlags_NoNavOverride);
+		const bool itemFocused = ImGui::GetIO().NavVisible && ImGui::IsItemFocused();
 
 		// Keep per-game actions available when a theme replaces the stock table/cards.
 		const bool contextOpen = ImGui::BeginPopupContextItem();
@@ -2572,15 +2586,19 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			ImGui::EndPopup();
 		}
 
-		const ImVec2 favouriteSize(uiScaled(32.0f), uiScaled(32.0f));
-		const ImVec2 favouriteMin(itemMax.x - favouriteSize.x - uiScaled(6.0f), itemMin.y + uiScaled(4.0f));
+		const bool showFavourite = !layout.compactControls || itemHovered || itemFocused
+				|| library::isFavourite(game.path, config::LibraryFavourites.get());
+		const float favouriteSide = std::max(1.f, std::min(uiScaled(32.f), itemMax.y - itemMin.y - uiScaled(8.f)));
+		const ImVec2 favouriteSize(favouriteSide, favouriteSide);
+		const ImVec2 favouriteMin(itemMax.x - favouriteSize.x - uiScaled(6.0f),
+				itemMin.y + (layout.mode == "list" ? (itemMax.y - itemMin.y - favouriteSide) * 0.5f : uiScaled(4.f)));
 		const ImVec2 mouse = ImGui::GetIO().MousePos;
-		const bool mouseOverFavourite = mouse.x >= favouriteMin.x && mouse.x <= favouriteMin.x + favouriteSize.x
+		const bool mouseOverFavourite = showFavourite && mouse.x >= favouriteMin.x && mouse.x <= favouriteMin.x + favouriteSize.x
 				&& mouse.y >= favouriteMin.y && mouse.y <= favouriteMin.y + favouriteSize.y;
 		updateLibraryLongPress(game, items[index].id, itemActive && !mouseOverFavourite);
-		if (!contextOpen && itemHovered && !mouseOverFavourite && !ImGui::GetIO().NavVisible)
+		if (layout.showInfoTooltip && !contextOpen && itemHovered && !mouseOverFavourite && !ImGui::GetIO().NavVisible)
 			draw_library_game_info_hover(game, !game.device ? &artwork[index] : nullptr);
-		if (!contextOpen && !game.device && !game.path.empty())
+		if (showFavourite && !contextOpen && !game.device && !game.path.empty())
 		{
 			ImGui::SetCursorScreenPos(favouriteMin);
 			if (drawLibraryFavouriteButton(game, true, favouriteSize))
@@ -2590,7 +2608,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			}
 			ImGui::SetCursorScreenPos(nextCursor);
 		}
-	});
+	}, iconSource);
 
 	auto startThemedGame = [&](size_t index, bool resume) {
 		const GameMedia& game = visibleGames[index];
