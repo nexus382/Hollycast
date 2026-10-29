@@ -638,7 +638,7 @@ void renderHelpMenu()
 		const bool canOpenLinks = ImGui::GetPlatformIO().Platform_OpenInShellFn != nullptr;
 		if (ImGui::MenuItem(T("Discord"), nullptr, false, canOpenLinks))
 		{
-			if (!openUrlInShell("https://discord.gg/X8YWP8w"))
+			if (!openUrlInShell("https://discord.gg/8s8Ecc2BxR"))
 				WARN_LOG(COMMON, "Unable to open Discord URL from Help menu");
 		}
 		if (!canOpenLinks && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -646,7 +646,7 @@ void renderHelpMenu()
 
 		if (ImGui::MenuItem(T("Report Bug"), nullptr, false, canOpenLinks))
 		{
-			if (!openUrlInShell("https://github.com/flyinghead/flycast/issues/new/choose"))
+			if (!openUrlInShell("https://github.com/nexus382/Hollycast/issues/new/choose"))
 				WARN_LOG(COMMON, "Unable to open bug report URL from Help menu");
 		}
 		if (!canOpenLinks && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
