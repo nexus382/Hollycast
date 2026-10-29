@@ -12,8 +12,32 @@
 #include <charconv> // std::from_chars, std::to_chars
 #include <algorithm> // std::find, std::find_if, std::max
 #include <unordered_set>
+#ifndef HOLLYCAST_HAVE_FLOAT_CHARCONV
+#include <iomanip>
+#include <locale>
+#include <sstream>
+#endif
 
 using namespace reshadefx;
+
+static void append_float_literal(std::string &target, float value)
+{
+#ifdef HOLLYCAST_HAVE_FLOAT_CHARCONV
+	char temp[64];
+	const std::to_chars_result result = std::to_chars(temp, temp + sizeof(temp), value, std::chars_format::scientific, 8);
+	if (result.ec == std::errc())
+		target.append(temp, result.ptr);
+	else
+		assert(false);
+#else
+	// Nine significant digits round-trip finite floats; keep decimal punctuation
+	// independent of the host locale in generated GLSL.
+	std::ostringstream literal;
+	literal.imbue(std::locale::classic());
+	literal << std::scientific << std::setprecision(8) << value;
+	target += literal.str();
+#endif
+}
 
 inline char to_digit(unsigned int value)
 {
@@ -151,16 +175,7 @@ protected:
 						preamble += std::to_string(initializer_value.as_uint[i]);
 						break;
 					case type::t_float:
-						char temp[64];
-						const std::to_chars_result res = std::to_chars(temp, temp + sizeof(temp), initializer_value.as_float[i]
-#if !defined(_HAS_COMPLETE_CHARCONV) || _HAS_COMPLETE_CHARCONV
-							, std::chars_format::scientific, 8
-#endif
-						);
-						if (res.ec == std::errc())
-							preamble.append(temp, res.ptr);
-						else
-							assert(false);
+						append_float_literal(preamble, initializer_value.as_float[i]);
 						break;
 					}
 
@@ -537,18 +552,7 @@ protected:
 					s += std::signbit(data.as_float[i]) ? "1.0/0.0/*inf*/" : "-1.0/0.0/*-inf*/";
 					break;
 				}
-				{
-					char temp[64];
-					const std::to_chars_result res = std::to_chars(temp, temp + sizeof(temp), data.as_float[i]
-#if !defined(_HAS_COMPLETE_CHARCONV) || _HAS_COMPLETE_CHARCONV
-						, std::chars_format::scientific, 8
-#endif
-						);
-					if (res.ec == std::errc())
-						s.append(temp, res.ptr);
-					else
-						assert(false);
-				}
+				append_float_literal(s, data.as_float[i]);
 				break;
 			default:
 				assert(false);

@@ -206,7 +206,7 @@ TEST(ReShadeCompilerTest, AdvertisesThePortableComputeLanguageProfile)
 	EXPECT_TRUE(postprocess::translateGlslComputeToHlsl(source, {}, {}, hlsl, error)) << error;
 }
 
-TEST(ReShadeCompilerTest, ParsesFloatingLiteralsWithACommaDecimalHostLocale)
+TEST(ReShadeCompilerTest, KeepsFloatingShaderSyntaxIndependentOfHostLocale)
 {
 	struct DecimalComma : std::numpunct<char> {
 		char do_decimal_point() const override { return ','; }
@@ -223,4 +223,14 @@ TEST(ReShadeCompilerTest, ParsesFloatingLiteralsWithACommaDecimalHostLocale)
 		ASSERT_EQ(reshadefx::tokenid::float_literal, token.id);
 		EXPECT_FLOAT_EQ(expected, token.literal_as_float);
 	}
+
+	const std::string effect =
+		"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return float4(1.25, 0.0625, 0.5, 1.0); }\n"
+		"technique Numeric { pass { PixelShader = Pixel; } }\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
+	EXPECT_NE(std::string::npos, source.fragment.find("1.25000000e+00"));
+	std::string hlsl;
+	EXPECT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, source.slangParameters, {}, 1, hlsl, error)) << error;
 }

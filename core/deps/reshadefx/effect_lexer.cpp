@@ -6,7 +6,7 @@
 
 #include "effect_lexer.hpp"
 #include <cassert>
-#ifdef HOLLYCAST_HAVE_FLOAT_FROM_CHARS
+#ifdef HOLLYCAST_HAVE_FLOAT_CHARCONV
 #include <charconv> // std::from_chars
 #else
 #include <locale>
@@ -1187,7 +1187,7 @@ void reshadefx::lexer::parse_numeric_literal(token &tok) const
 	}
 	else
 	{
-#ifdef HOLLYCAST_HAVE_FLOAT_FROM_CHARS
+#ifdef HOLLYCAST_HAVE_FLOAT_CHARCONV
 		std::from_chars(begin, end, tok.literal_as_float);
 #else
 		// Keep shader decimal syntax independent of the host locale on older
