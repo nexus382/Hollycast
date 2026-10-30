@@ -594,25 +594,10 @@ std::string normalizeStage(std::string stage, const reshadefx::effect_module& mo
 	return declarations + stage;
 }
 
-} // namespace
-
-bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, size_t passIndex,
-		ShaderPassSource& source, std::string& error)
+bool extractReShadeFxPass(const ReShadeEffect& effect, reshadefx::codegen& compiler,
+		size_t techniqueIndex, size_t passIndex, ShaderPassSource& source, std::string& error)
 {
-	ReShadeEffect effect;
-	if (!parseReShadeEffect(effectText, effect, error))
-		return false;
-	if (techniqueIndex >= effect.techniques.size() || passIndex >= effect.techniques[techniqueIndex].passes.size())
-		return fail(error, "ReShade FX selected an invalid technique pass.");
-
-	std::string compilerSource;
-	if (!prepareCompilerSource(effect, compilerSource, error))
-		return false;
-	std::unique_ptr<reshadefx::codegen> compiler(reshadefx::create_codegen_glsl(false, false, false));
-	reshadefx::parser parser;
-	if (!parser.parse(std::move(compilerSource), compiler.get()))
-		return fail(error, "ReShade FX compilation failed:\n" + parser.errors());
-	const reshadefx::effect_module& module = compiler->module();
+	const reshadefx::effect_module& module = compiler.module();
 	if (techniqueIndex >= module.techniques.size() || passIndex >= module.techniques[techniqueIndex].passes.size())
 		return fail(error, "ReShade FX compiler returned inconsistent technique metadata.");
 	const reshadefx::pass& pass = module.techniques[techniqueIndex].passes[passIndex];
@@ -708,7 +693,7 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 
 	std::string assembly;
 	if (!pass.cs_entry_point.empty()) {
-		if (!compiler->assemble_code_for_entry_point(pass.cs_entry_point, compiled.compute, assembly, error)) return false;
+		if (!compiler.assemble_code_for_entry_point(pass.cs_entry_point, compiled.compute, assembly, error)) return false;
 		compiled.compute = normalizeStage(std::move(compiled.compute), module, effect, hostExpressions, compiled);
 		std::smatch local;
 		const std::regex size(R"(local_size_x\s*=\s*([0-9]+)\s*,\s*local_size_y\s*=\s*([0-9]+)\s*,\s*local_size_z\s*=\s*([0-9]+))");
@@ -717,8 +702,8 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 		compiled.outputCount = 0;
 	} else {
 		if (pass.ps_entry_point.empty() || pass.vs_entry_point.empty()
-				|| !compiler->assemble_code_for_entry_point(pass.ps_entry_point, compiled.fragment, assembly, error)
-				|| !compiler->assemble_code_for_entry_point(pass.vs_entry_point, compiled.vertex, assembly, error))
+				|| !compiler.assemble_code_for_entry_point(pass.ps_entry_point, compiled.fragment, assembly, error)
+				|| !compiler.assemble_code_for_entry_point(pass.vs_entry_point, compiled.vertex, assembly, error))
 			return fail(error, "FX could not generate the selected graphics entry points.");
 		compiled.fragment = normalizeStage(std::move(compiled.fragment), module, effect, hostExpressions, compiled);
 		compiled.vertex = normalizeStage(std::move(compiled.vertex), module, effect, hostExpressions, compiled);
@@ -768,6 +753,49 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 	source = std::move(compiled);
 	error.clear();
 	return true;
+}
+
+} // namespace
+
+bool compileReShadeFxTechnique(const ReShadeEffect& effect, size_t techniqueIndex,
+		std::vector<ShaderPassSource>& sources, std::string& error)
+{
+	if (techniqueIndex >= effect.techniques.size())
+		return fail(error, "ReShade FX selected an invalid technique.");
+	std::string compilerSource;
+	if (!prepareCompilerSource(effect, compilerSource, error))
+		return false;
+	std::unique_ptr<reshadefx::codegen> compiler(reshadefx::create_codegen_glsl(false, false, false));
+	reshadefx::parser parser;
+	if (!parser.parse(std::move(compilerSource), compiler.get()))
+		return fail(error, "ReShade FX compilation failed:\n" + parser.errors());
+	// Parse and generate the effect once, then extract each selected entry point.
+	// A compiler owns the module only for this load, so explicit reloads see edits.
+	std::vector<ShaderPassSource> compiled(effect.techniques[techniqueIndex].passes.size());
+	for (size_t index = 0; index < compiled.size(); ++index) {
+		const auto& pass = effect.techniques[techniqueIndex].passes[index];
+		if (pass.pixelShader.empty() && pass.computeShader.empty()) continue;
+		if (!extractReShadeFxPass(effect, *compiler, techniqueIndex, index, compiled[index], error)) return false;
+	}
+	sources = std::move(compiled);
+	return true;
+}
+
+bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, size_t passIndex,
+		ShaderPassSource& source, std::string& error)
+{
+	ReShadeEffect effect;
+	if (!parseReShadeEffect(effectText, effect, error)) return false;
+	if (techniqueIndex >= effect.techniques.size() || passIndex >= effect.techniques[techniqueIndex].passes.size())
+		return fail(error, "ReShade FX selected an invalid technique pass.");
+	std::string compilerSource;
+	if (!prepareCompilerSource(effect, compilerSource, error))
+		return false;
+	std::unique_ptr<reshadefx::codegen> compiler(reshadefx::create_codegen_glsl(false, false, false));
+	reshadefx::parser parser;
+	if (!parser.parse(std::move(compilerSource), compiler.get()))
+		return fail(error, "ReShade FX compilation failed:\n" + parser.errors());
+	return extractReShadeFxPass(effect, *compiler, techniqueIndex, passIndex, source, error);
 }
 
 } // namespace postprocess

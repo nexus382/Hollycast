@@ -131,6 +131,8 @@ private:
 	Target mipmapSource;
 	TargetRing sourceHistory;
 	uint32_t sourceHistoryDepth = 1;
+	// Count completed display-chain frames, independently of PVR render-to-texture work.
+	uint32_t renderedFrames = 0;
 	bool needsSourceHistory = false;
 	std::array<int, 4> stencilFrameSize {};
 	std::vector<Program> programs;

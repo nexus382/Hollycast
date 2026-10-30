@@ -156,6 +156,9 @@ bool reshadefx::preprocessor::append_string(std::string source_code, const std::
 	// Only consider new errors added below for the success of this call
 	const size_t errors_offset = _errors.length();
 
+	// Cache the root too, so a recursive include honors its pragma once.
+	if (!path.empty()) _file_cache[path.u8string()] = source_code;
+
 	// Give this push a name, so that lexer location starts at a new line
 	// This is necessary in case this string starts with a preprocessor directive, since the lexer only reports those as such if they appear at the beginning of a new line
 	// But without a name, the lexer location is set to the last token location, which most likely will not be at the start of the line
@@ -733,37 +736,29 @@ void reshadefx::preprocessor::parse_include()
 		return;
 	}
 
-	std::filesystem::path file_name = std::filesystem::u8path(_token.literal_as_string);
-	std::filesystem::path file_path = std::filesystem::u8path(_output_location.source);
-	file_path.replace_filename(file_name);
-
-	std::error_code ec;
-	if (!std::filesystem::exists(file_path, ec))
-		for (const std::filesystem::path &include_path : _include_paths)
-			if (std::filesystem::exists(file_path = include_path / file_name, ec))
-				break;
-
-	const std::string file_path_string = file_path.u8string();
-
-	// Detect recursive include and abort to avoid infinite loop
-	if (std::find_if(_input_stack.begin(), _input_stack.end(),
-			[&file_path_string](const input_level &level) {
-				return level.name == file_path_string;
-			}) != _input_stack.end())
-		return error(_token.location, "recursive #include");
-
-	std::string input;
-
-	if (const auto file_it = _file_cache.find(file_path_string);
-		file_it != _file_cache.end())
-	{
-		input = file_it->second;
+	const std::string name = _token.literal_as_string;
+	std::string file_path_string, input;
+	if (_include_handler) {
+		if (!_include_handler(keyword_location.source, name, file_path_string, input))
+			return error(keyword_location, "could not resolve included file '" + name + '\'');
+	} else {
+		std::filesystem::path file_path = std::filesystem::u8path(keyword_location.source);
+		file_path.replace_filename(std::filesystem::u8path(name));
+		std::error_code ec;
+		if (!std::filesystem::exists(file_path, ec))
+			for (const auto &include_path : _include_paths)
+				if (std::filesystem::exists(file_path = include_path / std::filesystem::u8path(name), ec)) break;
+		file_path_string = file_path.u8string();
+		if (!_file_cache.count(file_path_string) && !read_file(file_path, input))
+			return error(keyword_location, "could not open included file '" + name + '\'');
 	}
-	else
-	{
-		if (!read_file(file_path, input))
-			return error(keyword_location, "could not open included file '" + file_name.u8string() + '\'');
-
+	// Permit guarded recursive headers; an active unguarded cycle still has a finite limit.
+	if (std::count_if(_input_stack.begin(), _input_stack.end(), [](const input_level &level) { return !level.name.empty(); }) > 16)
+		return error(keyword_location, "include cycle or nesting exceeds 16 files");
+	if (const auto found = _file_cache.find(file_path_string); found != _file_cache.end())
+		input = found->second;
+	else {
+		if (input.empty() || input.back() != '\n') input += '\n';
 		_file_cache.emplace(file_path_string, input);
 	}
 

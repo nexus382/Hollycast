@@ -133,7 +133,7 @@ private:
 	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::string& error);
 	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::vector<LookupTexture>& textures,
 			std::string& error);
-	bool validateLookupTextures(const std::vector<LookupTexture>& textures, std::string& error) const;
+	bool validateLookupTextures(std::vector<LookupTexture>& textures, std::string& error) const;
 	void ensureResources();
 
 	struct StencilTarget {
@@ -169,6 +169,8 @@ private:
 	std::vector<Target> displayTargets;
 	std::vector<Target> depthRotateTargets;
 	uint32_t sourceHistoryDepth = 1;
+	// PVR scene counts also include render-to-texture work. History counts completed display frames.
+	uint32_t renderedFrames = 0;
 	std::array<int, 4> stencilFrameSize {};
 	std::vector<Program> programs;
 	std::vector<LookupTexture> lookupTextures;

@@ -499,17 +499,25 @@ bool loadShaderTexture(const ShaderPresetTexture &config, ShaderTextureData &res
 	result = std::move(data);
 	return true;
 }
-bool preflightShaderAssets(const ShaderChain &chain, std::string &error)
+std::shared_ptr<const ShaderTextureData> loadShaderTextureData(const ShaderPresetTexture& texture, std::string& error)
+{
+	if (texture.decoded) return texture.decoded;
+	auto data = std::make_shared<ShaderTextureData>();
+	if (!loadShaderTexture(texture, *data, error)) return {};
+	return data;
+}
+
+bool preflightShaderAssets(ShaderChain &chain, std::string &error)
 {
 	uint64_t bytes = 0;
-	for (const auto &texture : chain.textures)
+	for (auto &texture : chain.textures)
 	{
-		ShaderTextureData data;
-		if (!loadShaderTexture(texture, data, error))
-			return false;
-		if (data.pixels.size() > MaxShaderChainTargetBytes - bytes)
+		auto data = loadShaderTextureData(texture, error);
+		if (!data) return false;
+		if (data->pixels.size() > MaxShaderChainTargetBytes - bytes)
 			return fail(error, "Shader assets exceed the 512 MiB chain budget.");
-		bytes += data.pixels.size();
+		bytes += data->pixels.size();
+		texture.decoded = std::move(data);
 	}
 	return true;
 }

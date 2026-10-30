@@ -84,11 +84,15 @@ std::mutex statusMutex;
 ShaderChainStatus status;
 std::atomic<uint64_t> statusGeneration { 0 };
 std::atomic<uint64_t> reloadGeneration { 1 };
+std::unique_ptr<ShaderChain> preparedChain;
+std::vector<std::string> preparedPaths;
+std::string preparedTechnique, preparedDirectory;
+uint64_t preparedGeneration = 0;
 
 bool isAbsolutePath(const std::string& path)
 {
 	return !path.empty()
-			&& (path[0] == '/' || path[0] == '\\'
+			&& (path.find("://") != std::string::npos || path[0] == '/' || path[0] == '\\'
 					|| (path.size() > 2 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':'));
 }
 
@@ -120,10 +124,38 @@ bool startsWith(const std::string& value, std::string_view prefix)
 	return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
 }
 
+// A selected SAF tree and its root document are two URI spellings of the same directory.
+std::string documentPath(const std::string& path)
+{
+	const size_t tree = path.find("/tree/");
+	if (startsWith(path, "content://") && tree != std::string::npos && path.find("/document/") == std::string::npos)
+		return path + "/document/" + path.substr(tree + 6);
+	return path;
+}
+
 std::string parentPath(const std::string& path)
 {
+	if (startsWith(path, "content://"))
+		return hostfs::storage().getParentPath(documentPath(path));
 	const size_t separator = path.find_last_of("/\\");
 	return separator == std::string::npos ? std::string() : path.substr(0, separator);
+}
+
+std::string relativeShaderPath(const std::string& base, std::string relative)
+{
+	if (!startsWith(base, "content://"))
+		return hostfs::storage().getSubPath(base, relative);
+	std::replace(relative.begin(), relative.end(), '\\', '/');
+	std::string result = documentPath(base);
+	std::istringstream components(relative);
+	for (std::string component; std::getline(components, component, '/');) {
+		if (component.empty() || component == ".")
+			continue;
+		result = component == ".." ? parentPath(result) : hostfs::storage().getSubPath(result, component);
+		if (result.empty())
+			throw hostfs::StorageException("Shader path escapes its document tree.");
+	}
+	return result;
 }
 
 bool parseScaleType(const std::string& value, ScaleType& type)
@@ -185,6 +217,25 @@ bool parseBlendFactor(const std::string& value, ShaderBlendFactor& factor)
 
 bool isWithinPackageRoot(const std::string& path, const std::string& packageRoot)
 {
+	if (startsWith(path, "content://") || startsWith(packageRoot, "content://")) {
+		if (!startsWith(path, "content://") || !startsWith(packageRoot, "content://"))
+			return false;
+		try {
+			const std::string root = documentPath(packageRoot);
+			std::string candidate = documentPath(path);
+			for (unsigned depth = 0; depth <= 64 && !candidate.empty(); ++depth) {
+				if (candidate == root)
+					return true;
+				const std::string parent = parentPath(candidate);
+				if (parent == candidate)
+					break;
+				candidate = parent;
+			}
+		} catch (const hostfs::StorageException&) {
+			return false;
+		}
+		return false;
+	}
 	std::error_code error;
 	const std::filesystem::path root = std::filesystem::weakly_canonical(
 			std::filesystem::u8path(packageRoot), error);
@@ -737,66 +788,36 @@ std::string stripCommentsForDirective(const std::string& line, bool& inBlockComm
 	return code;
 }
 
-bool expandPackageIncludesInternal(const std::string& path, const std::string& packageRoot, int depth,
-		uint32_t& fileCount, std::unordered_set<std::string>& includeStack,
-		std::string& expanded, std::string& error)
+std::string shaderSourceIdentity(const std::string& path)
 {
-	if (depth > 16)
-		return fail(error, "Shader include nesting exceeds 16 files.");
-	if (++fileCount > MaxShaderIncludeFiles)
-		return fail(error, "Shader packages may include at most 256 source files.");
-	if (!isWithinPackageRoot(path, packageRoot))
-		return fail(error, "Shader source escapes its package root.");
-	if (!includeStack.emplace(path).second)
-		return fail(error, "Shader include cycle detected: " + path);
+	return startsWith(path, "content://") ? documentPath(path)
+			: std::filesystem::weakly_canonical(std::filesystem::u8path(path)).u8string();
+}
 
-	std::string text;
-	if (!readTextFile(path, text, error)) {
-		includeStack.erase(path);
-		return false;
-	}
-
-	const std::regex includePattern(R"include(^\s*#\s*include\s*"([^"]+)"\s*$)include");
-	const std::regex includeDirective(R"(^\s*#\s*include\b)");
-	std::istringstream stream(text);
-	bool inBlockComment = false;
-	for (std::string line; std::getline(stream, line);) {
-		const std::string directive = stripCommentsForDirective(line, inBlockComment);
-		if (!std::regex_search(directive, includeDirective)) {
-			if (line.size() + 1 > MaxExpandedShaderSourceBytes - expanded.size()) {
-				includeStack.erase(path);
-				return fail(error, "Expanded shader source exceeds the 32 MiB package limit.");
-			}
-			expanded += line + '\n';
-			continue;
+ShaderIncludeResolver shaderIncludeResolver(const std::string& packageRoot)
+{
+	return [packageRoot, fileCount = uint32_t(0), totalBytes = size_t(0)](
+			const std::string& parent, const std::string& name, std::string& path,
+			std::string& text, std::string& error) mutable {
+		if (name.empty() || isAbsolutePath(name))
+			return fail(error, "Shader includes must use a relative path inside the package.");
+		if (++fileCount > MaxShaderIncludeFiles)
+			return fail(error, "Shader packages may include at most 256 source files.");
+		path = relativeShaderPath(parentPath(parent), name);
+		if (!shaderFileExists(path)) {
+			const std::string conventional = relativeShaderPath(relativeShaderPath(packageRoot, "Shaders"), name);
+			if (shaderFileExists(conventional)) path = conventional;
 		}
-		std::smatch match;
-		if (!std::regex_match(directive, match, includePattern)
-				|| match[1].str().empty() || isAbsolutePath(match[1].str())) {
-			includeStack.erase(path);
-			return fail(error, "Shader includes must use a quoted path inside the package.");
-		}
-		std::string includePath = hostfs::storage().getSubPath(parentPath(path), match[1].str());
-		if (!shaderFileExists(includePath)) {
-			const std::string conventionalPath = hostfs::storage().getSubPath(
-					hostfs::storage().getSubPath(packageRoot, "Shaders"), match[1].str());
-			if (shaderFileExists(conventionalPath))
-				includePath = conventionalPath;
-		}
-		// Relative parent segments are common in ReShade packs. Resolve them first,
-		// then enforce the canonical package boundary so they cannot escape it.
-		if (!isWithinPackageRoot(includePath, packageRoot)) {
-			includeStack.erase(path);
+		if (!isWithinPackageRoot(path, packageRoot))
 			return fail(error, "Shader include escapes its package root.");
-		}
-		if (!expandPackageIncludesInternal(includePath, packageRoot, depth + 1, fileCount,
-				includeStack, expanded, error)) {
-			includeStack.erase(path);
-			return false;
-		}
-	}
-	includeStack.erase(path);
-	return true;
+		// Stable identities let include guards and pragma once work with ../ aliases.
+		path = shaderSourceIdentity(path);
+		if (!readTextFile(path, text, error)) return false;
+		if (text.size() > MaxExpandedShaderSourceBytes - totalBytes)
+			return fail(error, "Expanded shader source exceeds the 32 MiB package limit.");
+		totalBytes += text.size();
+		return true;
+	};
 }
 
 void removePortableInterfaceDeclarations(std::string& source, const std::vector<ShaderParameter>& parameters)
@@ -910,11 +931,38 @@ bool mergeShaderParameter(ShaderChain& chain, const ShaderParameter& reflected, 
 	return true;
 }
 
-bool expandPackageIncludes(const std::string& path, const std::string& packageRoot, int depth,
-		std::unordered_set<std::string>& includeStack, std::string& expanded, std::string& error)
+bool expandPackageIncludes(const std::string& path, const std::string& packageRoot,
+		std::string& expanded, std::string& error)
 {
-	uint32_t fileCount = 0;
-	return expandPackageIncludesInternal(path, packageRoot, depth, fileCount, includeStack, expanded, error);
+	if (!isWithinPackageRoot(path, packageRoot))
+		return fail(error, "Shader source escapes its package root.");
+	std::string text;
+	if (!readTextFile(path, text, error)) return false;
+	if (detectFormat(path) == ShaderFormat::ReShadeFX) {
+		ReShadeEffect effect;
+		if (!parseReShadeEffect(text, effect, error, shaderIncludeResolver(packageRoot), shaderSourceIdentity(path))) return false;
+		expanded = std::move(effect.preprocessedSource);
+		return true;
+	}
+	const bool slang = detectFormat(path) == ShaderFormat::Slang;
+	const std::unordered_map<std::string, std::string> defines {
+		{ "__VERSION__", slang ? "450" : "130" }, { "PARAMETER_UNIFORM", "1" }, { "GL_core_profile", "1" }
+	};
+	if (slang)
+		return preprocessShaderSource(text, defines, expanded, error, shaderIncludeResolver(packageRoot), shaderSourceIdentity(path), true, true);
+
+	// Combined GLSL has independent preprocessor state in each stage. Resolve
+	// includes with those states before the existing frontend reflects interfaces.
+	std::string stages[2];
+	for (unsigned stage = 0; stage < 2; ++stage) {
+		auto stageDefines = defines;
+		stageDefines.emplace(stage == 0 ? "VERTEX" : "FRAGMENT", "1");
+		if (!preprocessShaderSource(text, stageDefines, stages[stage], error,
+				shaderIncludeResolver(packageRoot), shaderSourceIdentity(path), true)) return false;
+	}
+	if (stages[0] == stages[1]) expanded = std::move(stages[1]);
+	else expanded = "#if defined(VERTEX)\n" + stages[0] + "#elif defined(FRAGMENT)\n" + stages[1] + "#endif\n";
+	return true;
 }
 
 bool normalizeShaderParameterValue(const ShaderParameter& parameter, uint32_t component,
@@ -1260,6 +1308,12 @@ const char *formatName(ShaderFormat format)
 	}
 }
 
+std::string shaderLibraryDirectory()
+{
+	return config::PostProcessShaderDirectory.get().empty()
+			? get_writable_data_path("shaders/") : config::PostProcessShaderDirectory.get();
+}
+
 std::vector<std::string> configuredShaderPaths()
 {
 	std::vector<std::string> paths = config::PostProcessShaders.get();
@@ -1355,9 +1409,22 @@ void reportShaderChainStatus(const std::string& activePath, const std::string& e
 	std::lock_guard<std::mutex> lock(statusMutex);
 	status.activePath = activePath;
 	status.error = error;
+	status.frameError = false;
 	status.parameters = parameters;
 	status.techniques = techniques;
 	status.selectedTechnique = selectedTechnique;
+	statusGeneration.fetch_add(1, std::memory_order_release);
+}
+
+void reportShaderFrameStatus(const std::string& activePath, const std::string& error)
+{
+	std::lock_guard<std::mutex> lock(statusMutex);
+	// A successful frame from the previous graph must not hide a rejected reload.
+	if (status.activePath != activePath || (!status.error.empty() && !status.frameError)
+			|| status.error == error)
+		return;
+	status.error = error;
+	status.frameError = !error.empty();
 	statusGeneration.fetch_add(1, std::memory_order_release);
 }
 
@@ -1397,14 +1464,37 @@ bool setShaderChainParameterComponents(const std::string& name, const float *val
 	return true;
 }
 
-void requestShaderChainReload()
+void requestShaderChainReload(const ShaderChain* prepared)
 {
-	reloadGeneration.fetch_add(1, std::memory_order_relaxed);
+	std::lock_guard<std::mutex> lock(statusMutex);
+	preparedChain = prepared ? std::make_unique<ShaderChain>(*prepared) : nullptr;
+	preparedPaths = prepared ? configuredShaderPaths() : std::vector<std::string>();
+	preparedTechnique = config::PostProcessShaderTechnique.get();
+	preparedDirectory = shaderLibraryDirectory();
+	preparedGeneration = reloadGeneration.fetch_add(1, std::memory_order_release) + 1;
+}
+
+bool loadConfiguredShaderChain(const std::vector<std::string>& paths, uint64_t generation,
+		ShaderChain& chain, std::string& error)
+{
+	{
+		std::lock_guard<std::mutex> lock(statusMutex);
+		if (preparedChain && preparedGeneration == generation && preparedPaths == paths
+				&& preparedTechnique == config::PostProcessShaderTechnique.get()
+				&& preparedDirectory == shaderLibraryDirectory()) {
+			chain = std::move(*preparedChain);
+			preparedChain.reset();
+			error.clear();
+			return true;
+		}
+		if (preparedGeneration <= generation) preparedChain.reset();
+	}
+	return loadShaderChain(paths, chain, error);
 }
 
 uint64_t shaderChainReloadGeneration()
 {
-	return reloadGeneration.load(std::memory_order_relaxed);
+	return reloadGeneration.load(std::memory_order_acquire);
 }
 
 void applyShaderChainParameterValues(ShaderChain& chain, const std::string& values)
@@ -1524,7 +1614,7 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 			return fail(error, std::string(presetName) + " shader paths must be relative to the preset.");
 
 		ShaderPass pass;
-		pass.sourcePath = isAbsolutePath(source) ? source : hostfs::storage().getSubPath(basePath, source);
+		pass.sourcePath = isAbsolutePath(source) ? source : relativeShaderPath(basePath, source);
 		pass.packageRoot = root;
 		if (!isWithinPackageRoot(pass.sourcePath, root))
 			return fail(error, std::string(presetName) + " pass " + suffix + " escapes its package root.");
@@ -1604,7 +1694,7 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 			return fail(error, std::string(presetName) + " texture paths must be relative to the preset.");
 		ShaderPresetTexture texture;
 		texture.name = name;
-		texture.path = isAbsolutePath(texturePath) ? texturePath : hostfs::storage().getSubPath(basePath, texturePath);
+		texture.path = isAbsolutePath(texturePath) ? texturePath : relativeShaderPath(basePath, texturePath);
 		if (!isWithinPackageRoot(texture.path, root))
 			return fail(error, std::string(presetName) + " texture '" + name + "' escapes its package root.");
 		texture.linearFilter = preset.getBool("", name + "_linear", true);
@@ -1971,7 +2061,8 @@ static bool loadPresetDocument(const std::string& path, const std::string& root,
 	if (stack.size() >= 16 || ++fileCount > MaxShaderIncludeFiles || !isWithinPackageRoot(path, root))
 		return fail(error, "Shader preset references exceed their package boundary or nesting limit.");
 	std::error_code filesystemError;
-	const std::string identity = std::filesystem::weakly_canonical(std::filesystem::u8path(path), filesystemError).u8string();
+	const std::string identity = startsWith(path, "content://") ? documentPath(path)
+			: std::filesystem::weakly_canonical(std::filesystem::u8path(path), filesystemError).u8string();
 	if (filesystemError || !stack.emplace(identity).second)
 		return fail(error, "Shader preset reference cycle or invalid path: " + path);
 	std::string text;
@@ -1995,7 +2086,7 @@ static bool loadPresetDocument(const std::string& path, const std::string& root,
 		if (!std::regex_match(line, match, reference))
 			return fail(error, "Malformed shader preset #reference directive.");
 		const std::string referenced = isAbsolutePath(match[1].str()) ? match[1].str()
-				: hostfs::storage().getSubPath(parentPath(path), match[1].str());
+				: relativeShaderPath(parentPath(path), match[1].str());
 		if (detectFormat(referenced) != format && get_file_extension(referenced) != "params")
 			return fail(error, "Shader preset references must use the same preset format or a .params file.");
 		config::IniFile inherited;
@@ -2018,7 +2109,7 @@ static bool loadPresetDocument(const std::string& path, const std::string& root,
 			if (value.empty())
 				return fail(error, "Shader preset contains an empty resource path.");
 			if (!isAbsolutePath(value))
-				value = hostfs::storage().getSubPath(parentPath(path), value);
+				value = relativeShaderPath(parentPath(path), value);
 			if (!isWithinPackageRoot(value, root))
 				return fail(error, "Shader preset resource escapes its package root.");
 		}
@@ -2032,7 +2123,7 @@ static bool loadPresetFile(const std::string& presetPath, ShaderFormat format,
 		ShaderChain& chain, std::string& error)
 {
 	std::string root = parentPath(presetPath);
-	const std::string& configuredRoot = config::PostProcessShaderDirectory.get();
+	const std::string configuredRoot = shaderLibraryDirectory();
 	if (!configuredRoot.empty() && isWithinPackageRoot(presetPath, configuredRoot))
 		root = configuredRoot;
 	config::IniFile document;
@@ -2079,16 +2170,14 @@ bool loadShaderPassSource(const ShaderPass& pass, ShaderPassSource& source, std:
 	std::string text;
 	switch (pass.format) {
 	case ShaderFormat::GLSL: {
-		std::unordered_set<std::string> includeStack;
 		const std::string root = pass.packageRoot.empty() ? parentPath(pass.sourcePath) : pass.packageRoot;
-		if (!expandPackageIncludes(pass.sourcePath, root, 0, includeStack, text, error))
+		if (!expandPackageIncludes(pass.sourcePath, root, text, error))
 			return false;
 		return parseGlslShader(text, source, error);
 	}
 	case ShaderFormat::Slang: {
-		std::unordered_set<std::string> includeStack;
 		const std::string root = pass.packageRoot.empty() ? parentPath(pass.sourcePath) : pass.packageRoot;
-		if (!expandPackageIncludes(pass.sourcePath, root, 0, includeStack, text, error))
+		if (!expandPackageIncludes(pass.sourcePath, root, text, error))
 			return false;
 		SlangShaderIR slang;
 		if (!parseSlangFrontend(text, slang, error))
@@ -2139,9 +2228,8 @@ bool loadShaderPassSource(const ShaderPass& pass, ShaderPassSource& source, std:
 	}
 	case ShaderFormat::ReShadeFX:
 		{
-			std::unordered_set<std::string> includeStack;
-			const std::string root = pass.packageRoot.empty() ? parentPath(pass.sourcePath) : pass.packageRoot;
-			if (!expandPackageIncludes(pass.sourcePath, root, 0, includeStack, text, error))
+				const std::string root = pass.packageRoot.empty() ? parentPath(pass.sourcePath) : pass.packageRoot;
+			if (!expandPackageIncludes(pass.sourcePath, root, text, error))
 				return false;
 		}
 		if (text.empty())
@@ -2189,6 +2277,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		ShaderChain& chain, std::string& error, bool allowExternalFxTargets = false)
 {
 	chain = {};
+	std::vector<ShaderPassSource> effectSources;
 	const ShaderFormat format = detectFormat(path);
 	if (format == ShaderFormat::SlangPreset || format == ShaderFormat::GlslPreset) {
 		if (!(format == ShaderFormat::SlangPreset ? loadSlangPreset(path, chain, error)
@@ -2197,27 +2286,27 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 	}
 	else if (format == ShaderFormat::ReShadeFX) {
 		std::string text;
-		std::unordered_set<std::string> includeStack;
 		const std::string effectRoot = parentPath(path);
 		std::string packageRoot = effectRoot;
 		// Standard ReShade packages place effects and lookup images in sibling
 		// Shaders/ and Textures/ directories. Effects may live below Shaders/, so
 		// locate that ancestor while keeping every include inside the package root.
-		for (std::filesystem::path directory(effectRoot); !directory.empty(); directory = directory.parent_path()) {
-			std::string folderName = directory.filename().string();
+		for (std::string directory = effectRoot; !directory.empty();) {
+			std::string folderName = startsWith(directory, "content://")
+					? hostfs::storage().getFileInfo(directory).name : std::filesystem::u8path(directory).filename().u8string();
 			std::transform(folderName.begin(), folderName.end(), folderName.begin(),
 					[](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+			const std::string parent = parentPath(directory);
 			if (folderName == "shaders") {
-				packageRoot = directory.parent_path().string();
+				if (!parent.empty()) packageRoot = parent;
 				break;
 			}
-			if (directory == directory.root_path())
-				break;
+			if (parent == directory) break;
+			directory = parent;
 		}
-		if (!expandPackageIncludes(path, packageRoot, 0, includeStack, text, error))
-			return false;
+		if (!readTextFile(path, text, error)) return false;
 		ReShadeEffect effect;
-		if (!parseReShadeEffect(text, effect, error) || !effect.selectedTechnique
+		if (!parseReShadeEffect(text, effect, error, shaderIncludeResolver(packageRoot), shaderSourceIdentity(path)) || !effect.selectedTechnique
 				|| !validateReShadeSamplerStates(effect, error))
 			return false;
 		ShaderChain parsed;
@@ -2232,6 +2321,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 				return fail(error, "ReShade FX technique '" + requestedTechnique + "' was not found.");
 			selectedTechnique = static_cast<size_t>(std::distance(parsed.techniques.begin(), selected));
 		}
+		if (!compileReShadeFxTechnique(effect, selectedTechnique, effectSources, error)) return false;
 		parsed.selectedTechnique = static_cast<int>(selectedTechnique);
 		const ReShadeTechnique& technique = effect.techniques[selectedTechnique];
 		for (size_t passIndex = 0; passIndex < technique.passes.size(); ++passIndex) {
@@ -2309,10 +2399,10 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bWidth\s*=\s*([0-9]+)\s*;)"))) parseShaderUnsigned(dimension[1].str(), lookup.width);
 			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bHeight\s*=\s*([0-9]+)\s*;)"))) parseShaderUnsigned(dimension[1].str(), lookup.height);
 
-			lookup.path = hostfs::storage().getSubPath(effectRoot, annotation->value);
+			lookup.path = relativeShaderPath(effectRoot, annotation->value);
 			if (!shaderFileExists(lookup.path)) {
-				const std::string conventionalPath = hostfs::storage().getSubPath(
-						hostfs::storage().getSubPath(packageRoot, "Textures"), annotation->value);
+				const std::string conventionalPath = relativeShaderPath(
+						relativeShaderPath(packageRoot, "Textures"), annotation->value);
 				if (shaderFileExists(conventionalPath))
 					lookup.path = conventionalPath;
 			}
@@ -2337,7 +2427,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		ShaderPass& pass = parsed.passes.emplace_back();
 		pass.sourcePath = path;
 		pass.packageRoot = parentPath(path);
-		const std::string& configuredRoot = config::PostProcessShaderDirectory.get();
+		const std::string configuredRoot = shaderLibraryDirectory();
 		if (!configuredRoot.empty() && isWithinPackageRoot(path, configuredRoot))
 			pass.packageRoot = configuredRoot;
 		pass.format = format;
@@ -2358,10 +2448,13 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 	chain.sources.clear();
 	chain.sources.reserve(chain.passes.size());
 	size_t totalSourceBytes = 0;
+	std::unordered_map<std::string, std::pair<SlangResourceType, ShaderNumericType>> lookupTypes;
 	for (size_t passIndex = 0; passIndex < chain.passes.size(); ++passIndex) {
 		ShaderPass& pass = chain.passes[passIndex];
 		ShaderPassSource passSource;
-		if (!loadShaderPassSource(pass, passSource, error))
+		if (format == ShaderFormat::ReShadeFX)
+			passSource = std::move(effectSources[pass.effectPass]);
+		else if (!loadShaderPassSource(pass, passSource, error))
 			return false;
 		if (format == ShaderFormat::GLSL && passSource.retroArchGlsl) {
 			// A raw combined GLSL stage has the same input/output sizing contract
@@ -2437,7 +2530,14 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		totalSourceBytes += passSourceBytes;
 		for (const auto& resource : passSource.slangResources)
 			for (auto& texture : chain.textures) if (texture.name == resource.alias) {
-				texture.type = resource.type; texture.numericType = resource.numericType;
+				SlangResourceType sampledType = resource.type;
+				if (sampledType >= SlangResourceType::Texture1D && sampledType <= SlangResourceType::TextureCube)
+					sampledType = static_cast<SlangResourceType>(static_cast<unsigned>(sampledType) - static_cast<unsigned>(SlangResourceType::Texture1D));
+				const auto type = std::make_pair(sampledType, resource.numericType);
+				const auto [previous, inserted] = lookupTypes.emplace(texture.name, type);
+				if (!inserted && previous->second != type)
+					return fail(error, "Lookup texture '" + texture.name + "' uses incompatible types between passes.");
+				texture.type = sampledType; texture.numericType = resource.numericType;
 			}
 		for (const auto& resource : passSource.slangResources)
 			if (resource.numericType != ShaderNumericType::Float) {
@@ -2471,15 +2571,20 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 	return true;
 }
 
-bool loadShaderChain(const std::string& path, ShaderChain& chain, std::string& error)
+bool loadShaderChain(const std::string& path, ShaderChain& chain, std::string& error) try
 {
 	std::string requestedTechnique = config::PostProcessShaderTechnique.get();
 	if (startsWith(requestedTechnique, "stack:"))
 		requestedTechnique.clear();
 	return loadShaderChainInternal(path, requestedTechnique, chain, error);
 }
+catch (const std::exception& exception)
+{
+	chain = {};
+	return fail(error, std::string("Could not load shader package: ") + exception.what());
+}
 
-bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, std::string& error)
+bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, std::string& error) try
 {
 	chain = {};
 	if (paths.empty())
@@ -2571,7 +2676,9 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 			if (existing == chain.textures.end())
 				chain.textures.push_back(texture);
 			else if (existing->path != texture.path || existing->linearFilter != texture.linearFilter
-					|| existing->useMipmaps != texture.useMipmaps || existing->wrapMode != texture.wrapMode) {
+					|| existing->useMipmaps != texture.useMipmaps || existing->wrapMode != texture.wrapMode
+					|| existing->type != texture.type || existing->numericType != texture.numericType
+					|| existing->width != texture.width || existing->height != texture.height || existing->depth != texture.depth) {
 				// Sampler names are local to a shader package. Namespace only the
 				// graph resource when another layer uses that name for a different LUT.
 				const std::string originalName = texture.name;
@@ -2623,6 +2730,11 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 	resolveShaderOutputVersions(chain);
 	error.clear();
 	return true;
+}
+catch (const std::exception& exception)
+{
+	chain = {};
+	return fail(error, std::string("Could not load shader package: ") + exception.what());
 }
 
 } // namespace postprocess

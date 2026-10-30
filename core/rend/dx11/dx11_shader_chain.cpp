@@ -199,10 +199,16 @@ bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, st
 				error = "DirectX 11 does not support arrays of sampled resources; '" + resource.name + "' is unsupported.";
 				return false;
 			}
+		const auto level = device->GetFeatureLevel();
+		const uint32_t shaderModel = level >= D3D_FEATURE_LEVEL_11_0 ? 50 : level >= D3D_FEATURE_LEVEL_10_1 ? 41 : 40;
+		if (shaderModel < 50 && !pass.storageBindings.empty()) {
+			error = "Writable shader images require DirectX feature level 11.";
+			return false;
+		}
 		std::string hlslSource;
 		const uint32_t outputCount = pass.outputs.empty() ? 1u : static_cast<uint32_t>(pass.outputs.size());
 		if (!(pass.compute ? postprocess::translateGlslComputeToHlsl(*passSource, typedParameters, inputs, hlslSource, error)
-				: postprocess::translateGlslGraphFragmentToHlsl(*passSource, typedParameters, inputs, pass.colorOutputCount, hlslSource, error)))
+				: postprocess::translateGlslGraphFragmentToHlsl(*passSource, typedParameters, inputs, pass.colorOutputCount, hlslSource, error, shaderModel)))
 			return false;
 		if (pass.storageBindings.size() > D3D11_PS_CS_UAV_REGISTER_COUNT
 				|| (!pass.compute && pass.colorOutputCount + pass.storageBindings.size() > D3D11_PS_CS_UAV_REGISTER_COUNT)) {
@@ -218,7 +224,7 @@ bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, st
 		ComPtr<ID3DBlob> shaderBlob;
 		ComPtr<ID3DBlob> errorBlob;
 		const HRESULT result = compiler(hlslSource.data(), hlslSource.size(), pass.sourcePath.c_str(), nullptr, nullptr,
-				"main", pass.compute ? "cs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &shaderBlob.get(), &errorBlob.get());
+				"main", pass.compute ? "cs_5_0" : shaderModel == 50 ? "ps_5_0" : shaderModel == 41 ? "ps_4_1" : "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &shaderBlob.get(), &errorBlob.get());
 		if (FAILED(result)) {
 			error = errorBlob ? static_cast<const char *>(errorBlob->GetBufferPointer()) : "DirectX 11 HLSL compilation failed.";
 			return false;
@@ -335,12 +341,12 @@ bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, st
 			std::string vertexSource = passSource->vertex;
 			std::string hlslVertex;
 			if (!postprocess::translateGlslGraphVertexToHlsl(vertexSource, program.parameters, inputs,
-					hlslVertex, error, passSource->nativeFxStages, passSource->retroArchGlsl))
+					hlslVertex, error, passSource->nativeFxStages, passSource->retroArchGlsl, shaderModel))
 				return false;
 			ComPtr<ID3DBlob> vertexBlob;
 			ComPtr<ID3DBlob> vertexErrorBlob;
 			const HRESULT vertexResult = compiler(hlslVertex.data(), hlslVertex.size(), pass.sourcePath.c_str(), nullptr, nullptr,
-					"main", "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &vertexBlob.get(), &vertexErrorBlob.get());
+					"main", shaderModel == 50 ? "vs_5_0" : shaderModel == 41 ? "vs_4_1" : "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &vertexBlob.get(), &vertexErrorBlob.get());
 			if (FAILED(vertexResult)) {
 				error = vertexErrorBlob ? static_cast<const char *>(vertexErrorBlob->GetBufferPointer()) : "DirectX 11 vertex shader compilation failed.";
 				return false;
@@ -382,7 +388,7 @@ bool Dx11ShaderChain::updateConfiguredChain()
 	}
 	std::string error;
 	postprocess::ShaderChain chain;
-	if (!postprocess::loadShaderChain(requestedPaths, chain, error)) {
+	if (!postprocess::loadConfiguredShaderChain(requestedPaths, generation, chain, error)) {
 		postprocess::reportShaderChainStatus(activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not loaded: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
@@ -409,6 +415,7 @@ bool Dx11ShaderChain::updateConfiguredChain()
 		return !programs.empty();
 	}
 	programs = std::move(candidate);
+	renderedFrames = 0;
 	parameters = std::move(chain.parameters);
 	sourceHistoryDepth = 1;
 	needsSourceHistory = false;
@@ -453,8 +460,9 @@ bool Dx11ShaderChain::ensureLookupTextures(std::vector<LookupTexture>& textures,
 	uint64_t bytes = 0;
 	for (auto& lookup : textures) {
 		if (lookup.view) continue;
-		postprocess::ShaderTextureData data;
-		if (!postprocess::loadShaderTexture(lookup.config, data, error)) return false;
+		const auto decoded = postprocess::loadShaderTextureData(lookup.config, error);
+		if (!decoded) return false;
+		const auto& data = *decoded;
 		if (data.pixels.size() > postprocess::MaxShaderChainTargetBytes - bytes) { error = "Shader lookup images exceed the chain budget."; return false; }
 		bytes += data.pixels.size();
 		postprocess::ShaderPass formatPass; formatPass.targetFormatName = data.formatName;
@@ -493,13 +501,20 @@ bool Dx11ShaderChain::ensureLookupTextures(std::vector<LookupTexture>& textures,
 			deviceContext->UpdateSubresource(resource, layer * levels, nullptr,
 					data.pixels.data() + static_cast<size_t>(layer) * data.width * data.height * pixelBytes,
 					data.width * pixelBytes, data.width * data.height * pixelBytes);
-		if (FAILED(device->CreateShaderResourceView(resource, nullptr, &lookup.view.get()))) { error = "Unable to create typed shader lookup view."; return false; }
+		const bool array = data.type == postprocess::SlangResourceType::Sampler2DArray || data.type == postprocess::SlangResourceType::Texture2DArray;
+		D3D11_SHADER_RESOURCE_VIEW_DESC view {};
+		view.Format = format;
+		view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+		view.Texture2DArray.MipLevels = levels;
+		view.Texture2DArray.ArraySize = data.layers;
+		if (FAILED(device->CreateShaderResourceView(resource, array ? &view : nullptr, &lookup.view.get()))) { error = "Unable to create typed shader lookup view."; return false; }
 		if (mipmaps) deviceContext->GenerateMips(lookup.view);
 		D3D11_SAMPLER_DESC sampler {};
 		sampler.Filter = lookup.config.linearFilter ? D3D11_FILTER_MIN_MAG_MIP_LINEAR : D3D11_FILTER_MIN_MAG_MIP_POINT;
 		sampler.AddressU = sampler.AddressV = sampler.AddressW = textureAddressMode(lookup.config.wrapMode);
 		sampler.MaxLOD = mipmaps ? D3D11_FLOAT32_MAX : 0;
 		if (FAILED(device->CreateSamplerState(&sampler, &lookup.sampler.get()))) { error = "Unable to create shader lookup sampler."; return false; }
+		lookup.config.decoded.reset();
 	}
 	return true;
 }
@@ -519,11 +534,23 @@ bool Dx11ShaderChain::ensureTarget(Target& target, int width, int height, DXGI_F
 			D3D11_TEXTURE1D_DESC d { static_cast<UINT>(width), levels, 1, format, D3D11_USAGE_DEFAULT, flags, 0, misc };
 			result = device->CreateTexture1D(&d, nullptr, &target.line.get());
 		} else {
-			D3D11_TEXTURE2D_DESC d {}; d.Width = width; d.Height = height; d.MipLevels = levels; d.ArraySize = d.SampleDesc.Count = 1; d.Format = format; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = flags; d.MiscFlags = misc;
+			D3D11_TEXTURE2D_DESC d {}; d.Width = width; d.Height = height; d.MipLevels = levels; d.ArraySize = type == postprocess::SlangResourceType::Sampler2DArray ? depth : 1; d.SampleDesc.Count = 1; d.Format = format; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = flags; d.MiscFlags = misc;
 			result = device->CreateTexture2D(&d, nullptr, &target.texture.get());
 		}
-		if (FAILED(result) || FAILED(device->CreateShaderResourceView(target.resource(), nullptr, &target.shaderView.get()))
-				|| FAILED(device->CreateUnorderedAccessView(target.resource(), nullptr, &target.storage.get()))) { target = {}; return false; }
+		// Default views collapse a one-layer array to Texture2D; preserve its declared type.
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv {};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uav {};
+		const bool array = type == postprocess::SlangResourceType::Sampler2DArray;
+		if (array) {
+			srv.Format = uav.Format = format;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+			srv.Texture2DArray.MipLevels = mipmapped ? UINT(-1) : 1;
+			srv.Texture2DArray.ArraySize = depth;
+			uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+			uav.Texture2DArray.ArraySize = depth;
+		}
+		if (FAILED(result) || FAILED(device->CreateShaderResourceView(target.resource(), array ? &srv : nullptr, &target.shaderView.get()))
+				|| FAILED(device->CreateUnorderedAccessView(target.resource(), array ? &uav : nullptr, &target.storage.get()))) { target = {}; return false; }
 		const UINT zero[4] {}; deviceContext->ClearUnorderedAccessViewUint(target.storage, zero);
 		if (mipmapped) deviceContext->GenerateMips(target.shaderView);
 	}
@@ -609,10 +636,11 @@ bool Dx11ShaderChain::prepareMipmappedSource(ComPtr<ID3D11ShaderResourceView>& s
 	return true;
 }
 
-bool Dx11ShaderChain::render(ComPtr<ID3D11ShaderResourceView>& sourceView, const postprocess::ShaderFrameInfo& frame,
+bool Dx11ShaderChain::render(ComPtr<ID3D11ShaderResourceView>& sourceView, const postprocess::ShaderFrameInfo& inputFrame,
 		ComPtr<ID3D11ShaderResourceView>& outputView, bool& presentationTransformApplied,
 		const ComPtr<ID3D11ShaderResourceView>& depthView)
 {
+	postprocess::ShaderFrameInfo frame = inputFrame;
 	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
 	if (stencilFrameSize != currentStencilSize) { stencilTargets.clear(); stencilFrameSize = currentStencilSize; }
 
@@ -623,18 +651,19 @@ bool Dx11ShaderChain::render(ComPtr<ID3D11ShaderResourceView>& sourceView, const
 	bool composedDisplayInput = false;
 	if (!updateConfiguredChain() || !sourceView || frame.sourceWidth <= 0 || frame.sourceHeight <= 0)
 		return false;
+	frame.frameCount = renderedFrames;
 	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
 		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceBinding& resource) {
 			return resource.input.kind == postprocess::ShaderInputKind::Depth;
 		});
 	});
 	if (needsDepth && !depthView) {
-		postprocess::reportShaderChainStatus(activePath, "This frame has no scene depth available for the selected shader.");
+		postprocess::reportShaderFrameStatus(activePath, "This frame has no scene depth available for the selected shader.");
 		return false;
 	}
 	std::string lookupError;
 	if (!ensureLookupTextures(lookupError)) {
-		postprocess::reportShaderChainStatus(activePath, lookupError);
+		postprocess::reportShaderFrameStatus(activePath, lookupError);
 		WARN_LOG(RENDERER, "%s", lookupError.c_str());
 		return false;
 	}
@@ -649,13 +678,13 @@ bool Dx11ShaderChain::render(ComPtr<ID3D11ShaderResourceView>& sourceView, const
 		ComPtr<ID3D11Texture2D> texture;
 		depthView->GetResource(&resource.get());
 		if (!resource || FAILED(resource.as(texture))) {
-			postprocess::reportShaderChainStatus(activePath, "Scene depth is not a two-dimensional texture.");
+			postprocess::reportShaderFrameStatus(activePath, "Scene depth is not a two-dimensional texture.");
 			return false;
 		}
 		D3D11_TEXTURE2D_DESC description {};
 		texture->GetDesc(&description);
 		if (description.Width < static_cast<UINT>(frame.sourceWidth) || description.Height < static_cast<UINT>(frame.sourceHeight)) {
-			postprocess::reportShaderChainStatus(activePath, "Scene depth is smaller than the current color frame.");
+			postprocess::reportShaderFrameStatus(activePath, "Scene depth is smaller than the current color frame.");
 			return false;
 		}
 		const bool rotateDepth = frame.rotationPending && std::any_of(programs.begin(), programs.end(),
@@ -669,7 +698,7 @@ bool Dx11ShaderChain::render(ComPtr<ID3D11ShaderResourceView>& sourceView, const
 			std::string error;
 			if (!postprocess::accumulateShaderTargetBytes(width, height,
 					postprocess::ShaderTargetFormat::Default, {}, false, 1, depthTargetBytes, error)) {
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				return false;
 			}
 			if (!depthCopyShader) {
@@ -690,12 +719,12 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 						"main", "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &shaderBlob.get(), &errorBlob.get()))
 						|| FAILED(device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(),
 								nullptr, &depthCopyShader.get()))) {
-					postprocess::reportShaderChainStatus(activePath, "DirectX 11 could not compile the scene-depth copy shader.");
+					postprocess::reportShaderFrameStatus(activePath, "DirectX 11 could not compile the scene-depth copy shader.");
 					return false;
 				}
 			}
 			if (!ensureTarget(depthInput, width, height, DXGI_FORMAT_R32_FLOAT, false)) {
-				postprocess::reportShaderChainStatus(activePath, "DirectX 11 could not allocate the scene-depth copy target.");
+				postprocess::reportShaderFrameStatus(activePath, "DirectX 11 could not allocate the scene-depth copy target.");
 				return false;
 			}
 			const D3D11_VIEWPORT viewport { 0.f, 0.f, static_cast<float>(width), static_cast<float>(height), 0.f, 1.f };
@@ -775,14 +804,14 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		}) && postprocess::shouldComposeDisplayInput(frame, false)
 			&& !postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
 					postprocess::ShaderTargetFormat::Default, {}, false, 1, targetBytes, targetBudgetError)) {
-		postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		WARN_LOG(RENDERER, "%s", targetBudgetError.c_str());
 		return false;
 	}
 	if (programs.front().pass.useMipmaps
 			&& !postprocess::accumulateShaderTargetBytes(passFrame.sourceWidth, passFrame.sourceHeight,
 					postprocess::ShaderTargetFormat::Default, {}, true, 1, targetBytes, targetBudgetError)) {
-		postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		WARN_LOG(RENDERER, "%s", targetBudgetError.c_str());
 		return false;
 	}
@@ -798,7 +827,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		std::string error;
 		if (!postprocess::resolveTargetSize(program.pass, sizeFrame,
 				program.targetWidth, program.targetHeight, error)) {
-			postprocess::reportShaderChainStatus(activePath, error);
+			postprocess::reportShaderFrameStatus(activePath, error);
 			WARN_LOG(RENDERER, "%s", error.c_str());
 			return false;
 		}
@@ -815,7 +844,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 			if (!postprocess::accumulateShaderTargetBytes(program.targetWidth, program.targetHeight,
 					format, formatName, program.outputNeedsMipmaps[output], program.historyDepth * (program.pass.outputs.empty() ? 1u : program.pass.outputs[output].depth),
 					targetBytes, targetBudgetError)) {
-				postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+				postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 				WARN_LOG(RENDERER, "%s", targetBudgetError.c_str());
 				return false;
 			}
@@ -823,7 +852,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		if (program.pass.renderState.stencilEnabled
 				&& !postprocess::accumulateShaderTargetBytes(program.targetWidth, program.targetHeight,
 						postprocess::ShaderTargetFormat::Default, "R32_UINT", false, 1, targetBytes, targetBudgetError)) {
-			postprocess::reportShaderChainStatus(activePath, targetBudgetError); return false;
+			postprocess::reportShaderFrameStatus(activePath, targetBudgetError); return false;
 		}
 		PassTargets& passTargets = targets[index];
 		if (passTargets.size() != outputCount)
@@ -839,7 +868,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 					program.pass.outputs.empty() ? 1u : program.pass.outputs[output].depth);
 			})) {
 				error = "DirectX 11 post-processing target creation failed.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				WARN_LOG(RENDERER, "%s", error.c_str());
 				return false;
 			}
@@ -849,7 +878,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		if (!postprocess::accumulateShaderTargetBytes(passFrame.sourceWidth, passFrame.sourceHeight,
 				postprocess::ShaderTargetFormat::Default, {}, false, sourceHistoryDepth,
 				targetBytes, targetBudgetError)) {
-			postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+			postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 			WARN_LOG(RENDERER, "%s", targetBudgetError.c_str());
 			return false;
 		}
@@ -859,7 +888,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 			return !ensureTarget(target, passFrame.sourceWidth, passFrame.sourceHeight, DXGI_FORMAT_B8G8R8A8_UNORM, false);
 		})) {
 			const std::string error = "DirectX 11 post-processing source history target creation failed.";
-			postprocess::reportShaderChainStatus(activePath, error);
+			postprocess::reportShaderFrameStatus(activePath, error);
 			WARN_LOG(RENDERER, "%s", error.c_str());
 			return false;
 		}
@@ -897,7 +926,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		if (program.pass.useMipmaps && !inputHasMipChain) {
 			if (!prepareMipmappedSource(inputView, passFrame.sourceWidth, passFrame.sourceHeight, inputView)) {
 				error = "DirectX 11 post-processing mip source creation failed.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				WARN_LOG(RENDERER, "%s", error.c_str());
 				return false;
 			}
@@ -917,7 +946,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 				D3D11_TEXTURE2D_DESC desc {}; desc.Width = outputWidth; desc.Height = outputHeight; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
 				desc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
 				if (FAILED(device->CreateTexture2D(&desc, nullptr, &stencil.texture.get())) || FAILED(device->CreateDepthStencilView(stencil.texture, nullptr, &stencil.view.get()))) {
-					postprocess::reportShaderChainStatus(activePath, "Unable to allocate FX stencil target."); return false;
+					postprocess::reportShaderFrameStatus(activePath, "Unable to allocate FX stencil target."); return false;
 				}
 			}
 			if (!stencil.initialized || stencil.frame != frame.frameCount || stencil.layerIndex != program.pass.layerIndex) {
@@ -976,7 +1005,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 			const uint32_t components = parameterComponentCount(parameter.type);
 			if (parameterOffset + components > std::size(uniforms.parameters)) {
 				error = "DirectX 11 shader parameter storage overflow.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				WARN_LOG(RENDERER, "%s", error.c_str());
 				return false;
 			}
@@ -998,7 +1027,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 					&& (binding.input.sourcePass >= targets.size()
 							|| binding.input.sourceOutput >= targets[binding.input.sourcePass].size())) {
 				error = "DirectX 11 shader graph references an invalid pass output.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				WARN_LOG(RENDERER, "%s", error.c_str());
 				return false;
 			}
@@ -1019,7 +1048,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 						[frame.frameCount % sourceDepth];
 				if (!sourceTarget.initialized || sourceTarget.renderedFrame != frame.frameCount) {
 					error = "DirectX 11 shader pass input was not rendered for the current frame.";
-					postprocess::reportShaderChainStatus(activePath, error);
+					postprocess::reportShaderFrameStatus(activePath, error);
 					WARN_LOG(RENDERER, "%s", error.c_str());
 					return false;
 				}
@@ -1063,7 +1092,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 			}
 			if (!view) {
 				error = "DirectX 11 shader resource '" + binding.input.bindingName + "' is unavailable.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				WARN_LOG(RENDERER, "%s", error.c_str());
 				return false;
 			}
@@ -1080,7 +1109,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		if (program.pass.compute) {
 			if (!computeConstants) {
 				D3D11_BUFFER_DESC desc {}; desc.ByteWidth = sizeof(uniforms); desc.Usage = D3D11_USAGE_DYNAMIC; desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER; desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-				if (FAILED(device->CreateBuffer(&desc, nullptr, &computeConstants.get()))) { postprocess::reportShaderChainStatus(activePath, "Unable to allocate compute uniforms."); return false; }
+				if (FAILED(device->CreateBuffer(&desc, nullptr, &computeConstants.get()))) { postprocess::reportShaderFrameStatus(activePath, "Unable to allocate compute uniforms."); return false; }
 			}
 			D3D11_MAPPED_SUBRESOURCE mapped {};
 			if (FAILED(deviceContext->Map(computeConstants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return false;
@@ -1094,7 +1123,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 			deviceContext->CSSetShader(program.computeShader, nullptr, 0);
 			std::array<uint32_t, 3> groups;
 			if (!postprocess::resolveShaderDispatchGroups(program.pass, passFrame, groups, error)) {
-				postprocess::reportShaderChainStatus(activePath, error); return false;
+				postprocess::reportShaderFrameStatus(activePath, error); return false;
 			}
 			deviceContext->Dispatch(groups[0], groups[1], groups[2]);
 			std::fill(writes.begin(), writes.end(), nullptr);
@@ -1129,6 +1158,8 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 	}
 	outputView = inputView;
 	presentationTransformApplied = composedDisplayInput;
+	++renderedFrames;
+	postprocess::reportShaderFrameStatus(activePath, {});
 	return true;
 }
 

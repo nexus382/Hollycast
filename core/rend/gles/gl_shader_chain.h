@@ -151,6 +151,8 @@ private:
 	std::unique_ptr<GlFramebuffer> mipmapInput;
 	std::vector<HistoryTarget> sourceHistory;
 	uint32_t sourceHistoryDepth = 1;
+	// Count completed display-chain frames, independently of PVR render-to-texture work.
+	uint32_t renderedFrames = 0;
 	bool needsSourceHistory = false;
 	uint64_t parameterGeneration = 0;
 	std::vector<LookupTexture> lookupTextures;

@@ -18,6 +18,16 @@ Compute passes retain their local workgroup sizes and explicit dispatch group co
 
 Depth effects receive the renderer's scene depth where that renderer exposes a sampleable depth surface. Depth effects require a rendered scene with sampleable depth. If a frame has none, the backend reports that limitation and presents the original image. Depth reconstruction settings remain specific to the effect and rendering API.
 
+Includes follow the active preprocessor branches, macro definitions, include guards, and stage boundaries. Native paths and Android document-provider paths use their own path operations. The default shader library is also the package boundary for sibling preset resources. Explicit reloads read the current files; activation can consume the graph and decoded images already checked by the settings page. FX techniques compile once before their individual stages are extracted.
+
+Temporal inputs count completed shader frames independently of off-screen scene renders. Temporary frame errors preserve parameter controls and clear when rendering recovers, while rejected reloads remain visible. DirectX graphics stages target the device's supported shader model. Array resources retain their array views even with one layer, and lookup declarations with different shapes or numeric types remain separate across layers.
+
+## Preview while adjusting
+
+Start a title, open **Settings > Shader**, and select **Preview and Adjust**. The complete game image is fitted beside the editor on wide windows, or above it on narrow screens. The **Parameters** tab applies changes immediately; **Shader Stack** provides the library, layers, and technique controls without leaving the preview. The active layer/pass count reports renderer activation.
+
+The game continues running while the preview is open, with gameplay input captured by the editor. **Done** restores the full game viewport and gameplay input. **Back to Settings** returns to the paused Shader page. Online sessions do not offer live tuning.
+
 ## Boundaries
 
 Compatibility is determined by the shader's required resources, render state, and graphics API capabilities. This is not a promise that every third-party shader package works. Compute needs DirectX feature level 11, OpenGL 4.3 / GLES 3.1, or a Vulkan graphics queue with compute support. GLES cannot provide native 1D images. Resource binding arrays, overlapping writable FX views, and writable FX views above mip level zero are currently rejected. Writable images within one FX pass must share their base dimensions. Per-binding sampler states outside the supported filter/wrap profile are also rejected. The UI and backend report unsupported requirements rather than silently changing the effect. External textures and includes must be present within the shader library's allowed package paths.

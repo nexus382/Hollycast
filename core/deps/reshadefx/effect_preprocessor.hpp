@@ -9,6 +9,7 @@
 #include "effect_token.hpp"
 #include <memory> // std::unique_ptr
 #include <filesystem>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -28,6 +29,10 @@ namespace reshadefx
 			bool is_variadic = false;
 			bool is_function_like = false;
 		};
+
+		using include_handler = std::function<bool(const std::string &, const std::string &, std::string &, std::string &)>;
+		// The host can supply virtual storage and constrain all include reads.
+		void set_include_handler(include_handler handler) { _include_handler = std::move(handler); }
 
 		// Define constructor explicitly because lexer class is not included here
 		preprocessor();
@@ -138,6 +143,7 @@ namespace reshadefx
 		void expand_macro(const std::string &name, const macro &definition, const std::vector<std::string> &arguments);
 		void create_macro_replacement_list(macro &definition);
 
+		include_handler _include_handler;
 		std::string _output, _errors;
 
 		std::vector<input_level> _input_stack;

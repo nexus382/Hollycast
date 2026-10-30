@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <functional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -119,15 +120,21 @@ struct ReShadeEffect {
 	std::optional<size_t> selectedPass;
 };
 
-// Shared deterministic preprocessor used by ReShade FX and RetroArch GLSL.
-// Includes are resolved by the package loader before this function is called.
+// The package loader resolves only active includes and enforces its storage boundary.
+using ShaderIncludeResolver = std::function<bool(const std::string& parent, const std::string& name,
+		std::string& path, std::string& text, std::string& error)>;
 bool preprocessShaderSource(const std::string& source,
 		const std::unordered_map<std::string, std::string>& initialDefines,
-		std::string& output, std::string& error);
+		std::string& output, std::string& error, const ShaderIncludeResolver& includeResolver = {},
+		const std::string& sourcePath = {}, bool preserveSource = false, bool stageScopes = false);
 
-// Lexes and parses ReShade FX declarations into a backend-neutral syntax IR.
-// Includes are rejected because effect packages are not trusted to escape their
-// selected root. Compilation and backend emission intentionally happen later.
-bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::string& error);
+// Compiles all selected passes with a single effect compiler.
+struct ShaderPassSource;
+bool compileReShadeFxTechnique(const ReShadeEffect& effect, size_t techniqueIndex,
+		std::vector<ShaderPassSource>& sources, std::string& error);
+
+// Lexes and parses FX declarations after preprocessing inside the selected package.
+bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::string& error,
+		const ShaderIncludeResolver& includeResolver = {}, const std::string& sourcePath = {});
 
 } // namespace postprocess

@@ -9,6 +9,8 @@
 #include "naomi2.h"
 #ifndef LIBRETRO
 #include "gl_shader_chain.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
 #include "hw/pvr/Renderer_if.h"
 #endif
 #ifdef LIBRETRO
@@ -826,25 +828,34 @@ bool OpenGLRenderer::renderLastFrame()
 	// Adjust 'glViewport(.., height)' and 'glBlitFramebuffer(.., dstY0, ..)' arguments
 	// to avoid framebuffer overlapping with the menu bar
 	int topInset = getScaledTopInset();
+	int outwidth = settings.display.width;
 	int outheight = settings.display.height - topInset;
+#ifndef LIBRETRO
+	if (SettingsNew::shaderLiveTuneActive()) {
+		const auto layout = SettingsNew::shaderPreviewLayout(settings.display.width, settings.display.height, topInset);
+		outwidth = layout.gameWidth;
+		outheight = layout.gameHeight;
+	}
+#endif
+	const int bottomInset = settings.display.height - topInset - outheight;
 
 	int dx = 0;
 	int dy = 0;
 	glcache.Disable(GL_SCISSOR_TEST);
-	getWindowboxDimensions(settings.display.width, outheight, gl.ofbo.aspectRatio, dx, dy, config::Rotate90);
+	getWindowboxDimensions(outwidth, outheight, gl.ofbo.aspectRatio, dx, dy, config::Rotate90);
 	const int sourceWidth = framebuffer->getWidth();
 	const int sourceHeight = framebuffer->getHeight();
 	float presentShiftX = gl.ofbo.shiftX;
 	float presentShiftY = gl.ofbo.shiftY;
 	bool presentationTransformApplied = false;
 #ifndef LIBRETRO
-	performance_overlay::recordOutputViewport(settings.display.width - dx * 2, outheight - dy * 2);
+	performance_overlay::recordOutputViewport(outwidth - dx * 2, outheight - dy * 2);
 	// GL4 shares this presentation path. During context teardown, it may reach
 	// here before the chain is recreated, so leave the unprocessed frame intact.
 	if (gl.shaderChain != nullptr)
 	{
 		if (GlFramebuffer *processed = gl.shaderChain->render(framebuffer->getTexture(),
-				{ sourceWidth, sourceHeight, settings.display.width - dx * 2, outheight - dy * 2,
+				{ sourceWidth, sourceHeight, outwidth - dx * 2, outheight - dy * 2,
 						FrameCount, config::Rotate90 }, presentationTransformApplied,
 				gl.ofbo2.ready ? 0 : gl.postProcessDepthTexture != 0
 						? gl.postProcessDepthTexture : framebuffer->getDepthTexture(),
@@ -862,7 +873,7 @@ bool OpenGLRenderer::renderLastFrame()
 	const bool rotateAtPresentation = config::Rotate90 && !presentationTransformApplied;
 	if (gl.bogusBlitFramebuffer || rotateAtPresentation)
 	{
-		glViewport(dx, dy, settings.display.width - dx * 2, outheight - dy * 2);
+		glViewport(dx, bottomInset + dy, outwidth - dx * 2, outheight - dy * 2);
 		glBindFramebuffer(GL_FRAMEBUFFER, gl.ofbo.origFbo);
 		glcache.ClearColor(VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f);
 		glClear(GL_COLOR_BUFFER_BIT);
@@ -894,7 +905,7 @@ bool OpenGLRenderer::renderLastFrame()
 		glcache.ClearColor(VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glBlitFramebuffer(-presentShiftX, -presentShiftY, framebuffer->getWidth() - presentShiftX, framebuffer->getHeight() - presentShiftY,
-				dx, outheight - dy, settings.display.width - dx, dy,
+				dx, bottomInset + outheight - dy, outwidth - dx, bottomInset + dy,
 				GL_COLOR_BUFFER_BIT, config::LinearInterpolation ? GL_LINEAR : GL_NEAREST);
     	glBindFramebuffer(GL_FRAMEBUFFER, gl.ofbo.origFbo);
 #endif

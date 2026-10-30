@@ -145,7 +145,7 @@ void assignVaryingLocations(std::string& source, const std::string& companion, c
 bool compileStage(const std::string& body, const std::string& companion,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
 		bool vertex, bool nativeStages, bool retroArchGlsl, uint32_t outputs,
-		std::string& hlsl, std::string& error, const ShaderPassSource *computeSource = nullptr)
+		std::string& hlsl, std::string& error, const ShaderPassSource *computeSource = nullptr, uint32_t shaderModel = 50)
 {
 	hlsl.clear();
 	if ((!computeSource && outputs == 0) || outputs > 8 || inputs.size() > 16) {
@@ -292,7 +292,7 @@ bool compileStage(const std::string& body, const std::string& companion,
 		}
 		spirv_cross::CompilerHLSL compiler(std::move(ir));
 		spirv_cross::CompilerHLSL::Options options;
-		options.shader_model = 50;
+		options.shader_model = shaderModel;
 		compiler.set_hlsl_options(options);
 		if (computeSource && computeSource->compute.empty())
 			for (uint32_t i = 0; i < computeSource->storageBindings.size(); ++i) {
@@ -355,17 +355,17 @@ bool translateGlslVertexToHlsl(const std::string& source, const std::vector<Slan
 
 bool translateGlslGraphFragmentToHlsl(const ShaderPassSource& source,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
-		uint32_t outputCount, std::string& hlsl, std::string& error)
+		uint32_t outputCount, std::string& hlsl, std::string& error, uint32_t shaderModel)
 {
 	return compileStage(source.fragment, source.vertex, parameters, inputs, false,
-			source.nativeFxStages, source.retroArchGlsl, outputCount, hlsl, error, source.storageBindings.empty() ? nullptr : &source);
+			source.nativeFxStages, source.retroArchGlsl, outputCount, hlsl, error, source.storageBindings.empty() ? nullptr : &source, shaderModel);
 }
 
 bool translateGlslGraphVertexToHlsl(const std::string& source,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
-		std::string& hlsl, std::string& error, bool nativeFxStages, bool retroArchGlsl)
+		std::string& hlsl, std::string& error, bool nativeFxStages, bool retroArchGlsl, uint32_t shaderModel)
 {
-	return compileStage(source, {}, parameters, inputs, true, nativeFxStages, retroArchGlsl, 1, hlsl, error);
+	return compileStage(source, {}, parameters, inputs, true, nativeFxStages, retroArchGlsl, 1, hlsl, error, nullptr, shaderModel);
 }
 
 bool translateGlslComputeToHlsl(const ShaderPassSource& source,

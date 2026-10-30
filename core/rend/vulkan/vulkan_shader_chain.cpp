@@ -823,7 +823,7 @@ bool VulkanShaderChain::updateConfiguredChain()
 	}
 	std::string error;
 	postprocess::ShaderChain chain;
-	if (!postprocess::loadShaderChain(requestedPaths, chain, error)) {
+	if (!postprocess::loadConfiguredShaderChain(requestedPaths, generation, chain, error)) {
 		postprocess::reportShaderChainStatus(activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not loaded: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
@@ -875,6 +875,7 @@ bool VulkanShaderChain::updateConfiguredChain()
 	}
 	releaseActiveResources();
 	programs = std::move(candidate);
+	renderedFrames = 0;
 	parameters = std::move(chain.parameters);
 	sourceHistoryDepth = 1;
 	for (const postprocess::ShaderPass& pass : chain.passes)
@@ -925,7 +926,8 @@ bool VulkanShaderChain::ensureTarget(Target& target, const vk::Extent2D& extent,
 	const bool line = type == postprocess::SlangResourceType::Sampler1D || type == postprocess::SlangResourceType::Texture1D;
 	const bool cube = type == postprocess::SlangResourceType::SamplerCube || type == postprocess::SlangResourceType::TextureCube;
 	const vk::ImageType imageType = volume ? vk::ImageType::e3D : line ? vk::ImageType::e1D : vk::ImageType::e2D;
-	const vk::ImageViewType viewType = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D : cube ? vk::ImageViewType::eCube : layers > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+	const bool array = type == postprocess::SlangResourceType::Sampler2DArray || type == postprocess::SlangResourceType::Texture2DArray;
+	const vk::ImageViewType viewType = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D : cube ? vk::ImageViewType::eCube : array ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
 	if (mipLevels > 1)
 		usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 	target.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo(cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), imageType,
@@ -954,7 +956,9 @@ bool VulkanShaderChain::ensureTargetSet(TargetSet& targetSet, const Program& pro
 		targetSet.outputs.resize(program.outputs.size());
 	for (size_t index = 0; index < program.outputs.size(); ++index)
 		changed = ensureTarget(targetSet.outputs[index], extent, program.outputs[index].format,
-				program.outputs[index].needsMipmaps, index >= program.pass.colorOutputCount, program.outputs[index].config.type, program.outputs[index].config.depth) || changed;
+				program.outputs[index].needsMipmaps, index >= program.pass.colorOutputCount, program.outputs[index].config.type,
+				program.outputs[index].config.type == postprocess::SlangResourceType::Sampler3D ? program.outputs[index].config.depth : 1,
+				program.outputs[index].config.type == postprocess::SlangResourceType::Sampler2DArray ? program.outputs[index].config.depth : 1) || changed;
 	if (!changed && (program.pass.compute || targetSet.framebuffer))
 		return false;
 	targetSet.renderedFrame = 0;
@@ -1064,15 +1068,17 @@ bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commandBuffer, st
 	return ensureLookupTextures(commandBuffer, lookupTextures, error);
 }
 
-bool VulkanShaderChain::validateLookupTextures(const std::vector<LookupTexture>& textures, std::string& error) const
+bool VulkanShaderChain::validateLookupTextures(std::vector<LookupTexture>& textures, std::string& error) const
 {
 	uint64_t bytes = 0;
-	for (const auto& lookup : textures) {
-		postprocess::ShaderTextureData data;
-		if (!postprocess::loadShaderTexture(lookup.config, data, error)) return false;
+	for (auto& lookup : textures) {
+		const auto decoded = postprocess::loadShaderTextureData(lookup.config, error);
+		if (!decoded) return false;
+		const auto& data = *decoded;
 		// Upload storage remains alive until the chain retires, so account for it.
 		if (data.pixels.size() > (postprocess::MaxShaderChainTargetBytes - bytes) / 2) { error = "Shader lookup GPU/upload storage exceeds the chain budget."; return false; }
 		bytes += data.pixels.size() * 2;
+		lookup.config.decoded = decoded;
 	}
 	return true;
 }
@@ -1082,8 +1088,9 @@ bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commands, std::ve
 	auto *context = VulkanContext::Instance();
 	for (auto& lookup : textures) {
 		if (lookup.image.image) continue;
-		postprocess::ShaderTextureData data;
-		if (!postprocess::loadShaderTexture(lookup.config, data, error)) return false;
+		const auto decoded = postprocess::loadShaderTextureData(lookup.config, error);
+		if (!decoded) return false;
+		const auto& data = *decoded;
 		if (lookup.config.numericType != postprocess::ShaderNumericType::Float && (lookup.config.linearFilter || lookup.config.useMipmaps)) { error = "Integer textures require nearest filtering without generated mipmaps."; return false; }
 		try {
 			auto& image = lookup.image;
@@ -1098,7 +1105,7 @@ bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commands, std::ve
 			image.mipLevels = 1; if (lookup.config.useMipmaps) for (uint32_t n = std::max({data.width, data.height, data.depth}); n > 1; n >>= 1) ++image.mipLevels;
 			if (image.mipLevels > 1 && (!(features & vk::FormatFeatureFlagBits::eBlitSrc) || !(features & vk::FormatFeatureFlagBits::eBlitDst) || !(features & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))) { error = "Vulkan cannot generate the requested lookup mip chain."; return false; }
 			const vk::ImageType type = volume ? vk::ImageType::e3D : line ? vk::ImageType::e1D : vk::ImageType::e2D;
-			const vk::ImageViewType view = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D : cube ? vk::ImageViewType::eCube : data.layers > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+			const vk::ImageViewType view = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D : cube ? vk::ImageViewType::eCube : (data.type == postprocess::SlangResourceType::Sampler2DArray || data.type == postprocess::SlangResourceType::Texture2DArray) ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
 			image.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo(cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), type, image.format,
 					vk::Extent3D(data.width, data.height, data.depth), image.mipLevels, data.layers, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
 					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc));
@@ -1136,6 +1143,7 @@ bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commands, std::ve
 			sampler.maxLod = static_cast<float>(image.mipLevels - 1);
 			sampler.borderColor = lookup.config.numericType == postprocess::ShaderNumericType::Float ? vk::BorderColor::eFloatTransparentBlack : vk::BorderColor::eIntTransparentBlack;
 			lookup.sampler = context->GetDevice().createSamplerUnique(sampler);
+			lookup.config.decoded.reset();
 		} catch (const std::exception& exception) { error = exception.what(); return false; }
 	}
 	return true;
@@ -1149,7 +1157,7 @@ bool VulkanShaderChain::render(vk::Image sourceImage, vk::ImageView sourceView, 
 		return renderInternal(sourceImage, sourceView, extent, frame, outputView, presentationTransformApplied, depthImage, depthView);
 	} catch (const std::exception& exception) {
 		try {
-			postprocess::reportShaderChainStatus(activePath, exception.what());
+			postprocess::reportShaderFrameStatus(activePath, exception.what());
 			WARN_LOG(RENDERER, "Vulkan post-processing failed: %s", exception.what());
 		} catch (...) {
 			// PresentFrame is noexcept; diagnostics must never turn recovery into termination.
@@ -1161,9 +1169,10 @@ bool VulkanShaderChain::render(vk::Image sourceImage, vk::ImageView sourceView, 
 }
 
 bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
-		const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
+		const postprocess::ShaderFrameInfo& inputFrame, vk::ImageView& outputView,
 		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView)
 {
+	postprocess::ShaderFrameInfo frame = inputFrame;
 	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
 	if (stencilFrameSize != currentStencilSize) {
 		if (!targets.empty() || !sourceTargets.empty() || !displayTargets.empty()) {
@@ -1178,6 +1187,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	bool composedDisplayInput = false;
 	if (!updateConfiguredChain() || !sourceImage || !sourceView || extent.width == 0 || extent.height == 0)
 		return false;
+	frame.frameCount = renderedFrames;
 	VulkanContext *context = VulkanContext::Instance();
 	vk::CommandBuffer commandBuffer = context->GetCurrentCommandBuffer();
 	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
@@ -1186,7 +1196,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		});
 	});
 	if (needsDepth && (!depthImage || !depthView)) {
-		postprocess::reportShaderChainStatus(activePath, "This frame has no scene depth available for the selected shader.");
+		postprocess::reportShaderFrameStatus(activePath, "This frame has no scene depth available for the selected shader.");
 		return false;
 	}
 	// Restore the renderer's depth layout on every exit, including a failed pass.
@@ -1228,7 +1238,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		sourceTargets.resize(imageIndex + 1);
 	std::string lookupError;
 	if (!ensureLookupTextures(commandBuffer, lookupError)) {
-		postprocess::reportShaderChainStatus(activePath, lookupError);
+		postprocess::reportShaderFrameStatus(activePath, lookupError);
 		WARN_LOG(RENDERER, "Post-processing lookup texture failed: %s", lookupError.c_str());
 		return false;
 	}
@@ -1266,14 +1276,14 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	// the default color format used by the shared target budget calculation.
 	if (rotateDepth && !postprocess::accumulateShaderTargetBytes(extent.height, extent.width,
 			postprocess::ShaderTargetFormat::Default, {}, false, swapchainCopies, targetBytes, targetBudgetError)) {
-		postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		return false;
 	}
 	if (displayBoundary != programs.end() && postprocess::shouldComposeDisplayInput(frame, false)) {
 		if (!postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
 				postprocess::ShaderTargetFormat::Default, {}, displayBoundary->pass.useMipmaps,
 				swapchainCopies, targetBytes, targetBudgetError)) {
-			postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+			postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 			return false;
 		}
 		if (displayBoundary == programs.begin()) {
@@ -1285,7 +1295,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			&& !postprocess::accumulateShaderTargetBytes(budgetFrame.sourceWidth, budgetFrame.sourceHeight,
 					postprocess::ShaderTargetFormat::Default, {}, programs.front().pass.useMipmaps,
 					sourceHistoryDepth * swapchainCopies, targetBytes, targetBudgetError)) {
-		postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		return false;
 	}
 	bool budgetDisplaySpaceReached = false;
@@ -1300,7 +1310,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		int width;
 		int height;
 		if (!postprocess::resolveTargetSize(program.pass, budgetFrame, width, height, targetBudgetError)) {
-			postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+			postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 			return false;
 		}
 		program.targetWidth = static_cast<uint32_t>(width);
@@ -1309,13 +1319,13 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			if (!postprocess::accumulateShaderTargetBytes(width, height, output.config.targetFormat,
 					output.config.targetFormatName, output.needsMipmaps,
 					program.historyDepth * swapchainCopies * output.config.depth, targetBytes, targetBudgetError)) {
-				postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+				postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 				return false;
 			}
 		if (program.pass.renderState.stencilEnabled
 				&& !postprocess::accumulateShaderTargetBytes(width, height, postprocess::ShaderTargetFormat::Default,
 						"R32_UINT", false, swapchainCopies, targetBytes, targetBudgetError)) {
-			postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+			postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 			return false;
 		}
 
@@ -1439,7 +1449,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				effectiveDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 			}
 		} catch (const std::exception& exception) {
-			postprocess::reportShaderChainStatus(activePath, exception.what());
+			postprocess::reportShaderFrameStatus(activePath, exception.what());
 			WARN_LOG(RENDERER, "Post-processing display composition failed: %s", exception.what());
 			return false;
 		}
@@ -1469,7 +1479,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					vk::Format::eR8G8B8A8Unorm, sourceNeedsMipmaps);
 			sourceWasInitialized = sourceTarget.initialized && !allocated;
 		} catch (const std::exception& exception) {
-			postprocess::reportShaderChainStatus(activePath, exception.what());
+			postprocess::reportShaderFrameStatus(activePath, exception.what());
 			WARN_LOG(RENDERER, "Post-processing source target allocation failed: %s", exception.what());
 			return false;
 		}
@@ -1548,7 +1558,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			for (TargetSet& historyTarget : targetHistory)
 				ensureTargetSet(historyTarget, program, targetExtent);
 		} catch (const std::exception& exception) {
-			postprocess::reportShaderChainStatus(activePath, exception.what());
+			postprocess::reportShaderFrameStatus(activePath, exception.what());
 			WARN_LOG(RENDERER, "Post-processing target allocation failed: %s", exception.what());
 			return false;
 		}
@@ -1576,7 +1586,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					(outputIndex >= program.pass.colorOutputCount ? vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite : vk::AccessFlags(vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite)),
 					initialized ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined,
 					(outputIndex >= program.pass.colorOutputCount ? vk::ImageLayout::eGeneral : vk::ImageLayout::eColorAttachmentOptimal), VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					target.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+					target.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, target.layers));
 		}
 		commandBuffer.pipelineBarrier(hasInitializedTarget ? shaderReadStages() : vk::PipelineStageFlagBits::eTopOfPipe,
 				vk::PipelineStageFlagBits::eColorAttachmentOutput | shaderReadStages(), {}, nullptr, nullptr, program.targetBarriers);
@@ -1738,7 +1748,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				if (binding.lookupIndex >= lookupTextures.size()
 						|| !lookupTextures[binding.lookupIndex].image.image || !lookupTextures[binding.lookupIndex].sampler) {
 					error = "Vulkan lookup texture '" + binding.input.resourceName + "' is unavailable.";
-					postprocess::reportShaderChainStatus(activePath, error);
+					postprocess::reportShaderFrameStatus(activePath, error);
 					return false;
 				}
 				view = lookupTextures[binding.lookupIndex].image.sampleView.get();
@@ -1748,7 +1758,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			}
 			if (!view) {
 				error = "Vulkan shader resource '" + binding.input.bindingName + "' is unavailable.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				return false;
 			}
 			if (binding.input.kind != postprocess::ShaderInputKind::LookupTexture
@@ -1788,7 +1798,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 						sizeof(ShaderParameterUniforms), vk::BufferUsageFlagBits::eUniformBuffer);
 			program.parameterBuffers[imageIndex]->upload(sizeof(parameterUniforms), &parameterUniforms);
 		} catch (const std::exception& exception) {
-			postprocess::reportShaderChainStatus(activePath, exception.what());
+			postprocess::reportShaderFrameStatus(activePath, exception.what());
 			WARN_LOG(RENDERER, "Post-processing parameter-buffer allocation failed: %s", exception.what());
 			return false;
 		}
@@ -1856,7 +1866,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		if (program.pass.compute) {
 			std::array<uint32_t, 3> groups;
 			if (!postprocess::resolveShaderDispatchGroups(program.pass, passFrame, groups, error)) {
-				postprocess::reportShaderChainStatus(activePath, error); return false;
+				postprocess::reportShaderFrameStatus(activePath, error); return false;
 			}
 			commandBuffer.dispatch(groups[0], groups[1], groups[2]);
 		} else {
@@ -1893,6 +1903,8 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	}
 	outputView = inputView;
 	presentationTransformApplied = composedDisplayInput;
+	++renderedFrames;
+	postprocess::reportShaderFrameStatus(activePath, {});
 	return true;
 }
 

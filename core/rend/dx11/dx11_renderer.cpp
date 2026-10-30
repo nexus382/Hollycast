@@ -24,6 +24,8 @@
 #include "ui/gui.h"
 #ifndef LIBRETRO
 #include "ui/performance_overlay.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
 #endif
 #include "rend/sorter.h"
 #include "cfg/option.h"
@@ -616,8 +618,21 @@ void DX11Renderer::displayFramebuffer()
 	
 	float x = (float)dx;
 	float y = (float)dy;
-	const int viewportWidth = outwidth - leftInset - 2 * dx;
-	const int viewportHeight = outheight - topInset - 2 * dy;
+	int viewportWidth = outwidth - leftInset - 2 * dx;
+	int viewportHeight = outheight - topInset - 2 * dy;
+	const bool shaderPreview = SettingsNew::shaderLiveTuneActive();
+	int previewX = 0, previewY = 0, previewWidth = 0, previewHeight = 0;
+	if (shaderPreview) {
+		const auto layout = SettingsNew::shaderPreviewLayout(settings.display.width, settings.display.height, getScaledTopInset());
+		int previewDx = 0, previewDy = 0;
+		getWindowboxDimensions(layout.gameWidth, layout.gameHeight, aspectRatio, previewDx, previewDy, config::Rotate90);
+		previewX = previewDx;
+		previewY = getScaledTopInset() + previewDy;
+		previewWidth = layout.gameWidth - previewDx * 2;
+		previewHeight = layout.gameHeight - previewDy * 2;
+		viewportWidth = config::Rotate90 ? previewHeight : previewWidth;
+		viewportHeight = config::Rotate90 ? previewWidth : previewHeight;
+	}
 	float w = (float)viewportWidth;
 	float h = (float)viewportHeight;
 #ifndef LIBRETRO
@@ -682,6 +697,23 @@ void DX11Renderer::displayFramebuffer()
 		x = rotatedX;
 		y = rotatedY;
 		std::swap(w, h);
+	}
+	if (shaderPreview) {
+		const float outputWidth = static_cast<float>(settings.display.width);
+		const float outputHeight = static_cast<float>(settings.display.height);
+		x = previewX * 2.f / outputWidth - 1.f;
+		y = 1.f - (previewY + previewHeight) * 2.f / outputHeight;
+		w = previewWidth * 2.f / outputWidth;
+		h = previewHeight * 2.f / outputHeight;
+		x += (config::Rotate90 ? -shiftY : shiftX) * previewWidth / outputWidth;
+		y += (config::Rotate90 ? shiftX : shiftY) * previewHeight / outputHeight;
+		if (config::Rotate90 && !presentationTransformApplied) {
+			// Invert the presenter's rotation so the final rectangle stays in its pane.
+			const float beforeRotationX = y;
+			y = -(x + w);
+			x = beforeRotationX;
+			std::swap(w, h);
+		}
 	}
 	deviceContext->OMSetBlendState(blendStates.getState(false), nullptr, 0xffffffff);
 	quad->draw(displayTexture, samplers->getSampler(config::LinearInterpolation), nullptr, x, y, w, h,

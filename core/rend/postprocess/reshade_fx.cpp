@@ -18,6 +18,7 @@
 #include <regex>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace postprocess {
 namespace {
@@ -364,7 +365,7 @@ bool evaluateCondition(const std::string& expression, const std::unordered_map<s
 	return PreprocessorExpressionParser(expression, defines).evaluate(result);
 }
 
-std::vector<bool> codeMask(const std::string& line, bool startsInBlockComment, bool *endsInBlockComment = nullptr)
+std::vector<bool> codeMask(const std::string& line, bool startsInBlockComment, bool *endsInBlockComment = nullptr, bool keepStrings = false)
 {
 	std::vector<bool> mask(line.size(), false);
 	bool inBlockComment = startsInBlockComment;
@@ -385,6 +386,7 @@ std::vector<bool> codeMask(const std::string& line, bool startsInBlockComment, b
 			continue;
 		}
 		if (line[index] == '"' || line[index] == '\'') {
+			const size_t begin = index;
 			const char quote = line[index++];
 			while (index < line.size()) {
 				if (line[index] == '\\' && index + 1 < line.size())
@@ -392,6 +394,7 @@ std::vector<bool> codeMask(const std::string& line, bool startsInBlockComment, b
 				else if (line[index++] == quote)
 					break;
 			}
+			if (keepStrings) std::fill(mask.begin() + begin, mask.begin() + std::min(index, mask.size()), true);
 			continue;
 		}
 		mask[index++] = true;
@@ -503,7 +506,8 @@ void expandFunctionMacros(std::string& line, const std::unordered_map<std::strin
 
 bool preprocess(const std::string& source,
 		const std::unordered_map<std::string, std::string>& initialDefines,
-		std::string& output, std::string& error)
+		std::string& output, std::string& error, const ShaderIncludeResolver& includeResolver,
+		const std::string& sourcePath, bool preserveSource, bool stageScopes)
 {
 	struct Conditional {
 		bool parentActive;
@@ -512,14 +516,24 @@ bool preprocess(const std::string& source,
 	};
 	std::unordered_map<std::string, std::string> defines = initialDefines;
 	std::unordered_map<std::string, FunctionMacro> functionDefines;
+	std::unordered_set<std::string> onceFiles;
+	std::unordered_map<std::string, std::string> commonDefines;
+	std::unordered_map<std::string, FunctionMacro> commonFunctionDefines;
+	std::unordered_set<std::string> commonOnceFiles;
+	bool stageSeen = false;
+	output.clear();
+	std::function<bool(const std::string&, const std::string&, unsigned)> process;
+	process = [&](const std::string& source, const std::string& path, unsigned depth) {
+	if (onceFiles.count(path)) return true;
+	if (depth > 16) { error = "Shader include cycle or nesting exceeds 16 files."; return false; }
 	std::vector<Conditional> conditionals;
 	auto active = [&] { return conditionals.empty() || conditionals.back().active; };
 	std::istringstream lines(source);
 	std::string line;
 	bool inBlockComment = false;
-	output.clear();
 	size_t lineNumber = 0;
 	while (std::getline(lines, line)) {
+		if (output.size() + line.size() + 1 > 32 * 1024 * 1024) { error = "Expanded shader source exceeds the 32 MiB package limit."; return false; }
 		++lineNumber;
 		if (!line.empty() && line.back() == '\r')
 			line.pop_back();
@@ -531,6 +545,7 @@ bool preprocess(const std::string& source,
 				error = "line " + std::to_string(lineNumber) + ": unterminated shader line continuation.";
 				return false;
 			}
+			if (output.size() + line.size() + 1 > 32 * 1024 * 1024) { error = "Expanded shader source exceeds the 32 MiB package limit."; return false; }
 			++lineNumber;
 			if (!continuation.empty() && continuation.back() == '\r')
 				continuation.pop_back();
@@ -544,25 +559,37 @@ bool preprocess(const std::string& source,
 				|| std::isspace(static_cast<unsigned char>(line[directiveStart]))))
 			++directiveStart;
 		if (directiveStart == line.size() || line[directiveStart] != '#') {
-			if (active()) {
-				expandFunctionMacros(line, functionDefines, startsInBlockComment);
-				expandObjectMacros(line, defines, startsInBlockComment);
-				expandFunctionMacros(line, functionDefines, startsInBlockComment);
+			if (active() || preserveSource) {
+				if (!preserveSource) {
+					expandFunctionMacros(line, functionDefines, startsInBlockComment);
+					expandObjectMacros(line, defines, startsInBlockComment);
+					expandFunctionMacros(line, functionDefines, startsInBlockComment);
+				}
+				if (line.size() + 1 > 32 * 1024 * 1024 - output.size()) {
+					error = "Expanded shader source exceeds the 32 MiB package limit.";
+					return false;
+				}
 				output += line + '\n';
 			}
 			continue;
 		}
-		const std::string stripped = trim(line.substr(directiveStart));
+		// Strip comments for directive parsing without changing quoted include paths.
+		const auto directiveMask = codeMask(line, startsInBlockComment, nullptr, true);
+		std::string stripped = line.substr(directiveStart);
+		for (size_t i = 0; i < stripped.size(); ++i)
+			if (!directiveMask[directiveStart + i]) stripped[i] = ' ';
+		stripped = trim(stripped);
 		std::istringstream directive(stripped.substr(1));
 		std::string command;
 		directive >> command;
 		std::string argument;
 		std::getline(directive, argument);
 		argument = trim(argument);
-		if (lowercase(command) == "include") {
-			error = "line " + std::to_string(lineNumber) + ": includes must be resolved by the shader package loader.";
-			return false;
-		}
+		// Include expansion keeps fallback declarations for metadata reflection.
+		// The frontend later preprocesses these branches for its selected stage.
+		if (preserveSource && (command == "if" || command == "ifdef" || command == "ifndef"
+				|| command == "elif" || command == "else" || command == "endif"))
+			output += line + '\n';
 		if (command == "if" || command == "ifdef" || command == "ifndef") {
 			const bool parentActive = active();
 			bool condition = false;
@@ -615,45 +642,65 @@ bool preprocess(const std::string& source,
 			conditionals.pop_back();
 			continue;
 		}
-		if (!active())
+		if (!active()) {
+			if (preserveSource && command != "include") output += line + '\n';
 			continue;
+		}
+		if (command == "include") {
+			expandObjectMacros(argument, defines, false);
+			const auto includeMask = codeMask(argument, false, nullptr, true);
+			// Quoted paths are data; allow a trailing comment but no extra tokens.
+			const size_t first = argument.find('"');
+			const size_t last = first == std::string::npos ? first : argument.find('"', first + 1);
+			bool valid = first == 0 && last != std::string::npos;
+			if (valid) for (size_t i = last + 1; i < argument.size(); ++i)
+				valid = valid && (!includeMask[i] || std::isspace(static_cast<unsigned char>(argument[i])));
+			if (!valid || !includeResolver) { error = "Shader includes require a quoted path and a package resolver."; return false; }
+			std::string includedPath, includedText;
+			if (!includeResolver(path, argument.substr(first + 1, last - first - 1), includedPath, includedText, error)
+					|| !process(includedText, includedPath, depth + 1)) return false;
+			continue;
+		}
+		if (command == "pragma" && argument == "once") {
+			onceFiles.insert(path);
+			continue;
+		}
+		if (stageScopes && command == "pragma" && argument.rfind("stage ", 0) == 0) {
+			// Slang stages inherit common declarations, not macros from a sibling stage.
+			if (!stageSeen) { commonDefines = defines; commonFunctionDefines = functionDefines; commonOnceFiles = onceFiles; stageSeen = true; }
+			else { defines = commonDefines; functionDefines = commonFunctionDefines; onceFiles = commonOnceFiles; }
+		}
+		if (command == "error") { error = argument; return false; }
 		if (command == "define") {
-			std::istringstream definition(argument);
-			std::string name;
-			definition >> name;
-			std::string value;
-			std::getline(definition, value);
-			// Comments are removed before macro replacement by a real C
-			// preprocessor. Keeping one here comments out the caller's suffix.
-			if (const size_t comment = value.find("//"); comment != std::string::npos)
-				value.erase(comment);
-			const size_t open = name.find('(');
-			if (open != std::string::npos && name.back() == ')') {
+			size_t nameEnd = 0;
+			while (nameEnd < argument.size() && isIdentifierPart(argument[nameEnd])) ++nameEnd;
+			const std::string name = argument.substr(0, nameEnd);
+			if (name.empty() || !isIdentifierStart(name.front())) {
+				error = "Invalid shader macro name.";
+				return false;
+			}
+			// Function-like macros require an adjacent opening parenthesis, but
+			// whitespace is legal between their parameters.
+			if (nameEnd < argument.size() && argument[nameEnd] == '(') {
+				const size_t close = argument.find(')', nameEnd + 1);
+				if (close == std::string::npos) { error = "Unterminated shader macro parameters."; return false; }
 				FunctionMacro macro;
-				std::istringstream arguments(name.substr(open + 1, name.size() - open - 2));
+				std::istringstream arguments(argument.substr(nameEnd + 1, close - nameEnd - 1));
 				for (std::string parameter; std::getline(arguments, parameter, ',');)
 					macro.arguments.push_back(trim(parameter));
 				if (macro.arguments.size() == 1 && macro.arguments[0].empty()) macro.arguments.clear();
-				if (std::all_of(macro.arguments.begin(), macro.arguments.end(), [](const std::string& parameter) {
-						return !parameter.empty() && isIdentifierStart(parameter.front())
-								&& std::all_of(parameter.begin() + 1, parameter.end(), isIdentifierPart);
-				})) {
-					macro.body = trim(value);
-					functionDefines[name.substr(0, open)] = std::move(macro);
-					// Keep function-like macro names visible to defined() without
-					// letting object-macro expansion replace the call with a number.
-					defines[name.substr(0, open)] = name.substr(0, open);
-				}
-				else
-				{
-					error = "line " + std::to_string(lineNumber) + ": invalid function-like macro declaration.";
-					return false;
-				}
+				if (!std::all_of(macro.arguments.begin(), macro.arguments.end(), [](const std::string& parameter) {
+					return !parameter.empty() && isIdentifierStart(parameter.front())
+							&& std::all_of(parameter.begin() + 1, parameter.end(), isIdentifierPart);
+				})) { error = "Invalid function-like shader macro declaration."; return false; }
+				macro.body = trim(argument.substr(close + 1));
+				functionDefines[name] = std::move(macro);
+				defines[name] = name;
 			}
-			else
-				// Empty object macros are qualifiers in many RetroArch shaders.
-				// Preserve their real C-preprocessor meaning: expand to nothing.
-				defines[name] = trim(value);
+			else {
+				functionDefines.erase(name);
+				defines[name] = trim(argument.substr(nameEnd));
+			}
 		}
 		else if (command == "undef") {
 			defines.erase(argument);
@@ -666,6 +713,8 @@ bool preprocess(const std::string& source,
 		return false;
 	}
 	return true;
+	};
+	return process(source, sourcePath, 0);
 }
 
 bool lex(const std::string& source, std::vector<Token>& tokens, std::string& error)
@@ -1219,13 +1268,16 @@ private:
 
 bool preprocessShaderSource(const std::string& source,
 		const std::unordered_map<std::string, std::string>& initialDefines,
-		std::string& output, std::string& error)
+		std::string& output, std::string& error, const ShaderIncludeResolver& includeResolver,
+		const std::string& sourcePath, bool preserveSource, bool stageScopes)
 {
-	return preprocess(source, initialDefines, output, error);
+	return preprocess(source, initialDefines, output, error, includeResolver, sourcePath, preserveSource, stageScopes);
 }
 
-bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::string& error)
+bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::string& error,
+		const ShaderIncludeResolver& includeResolver, const std::string& sourcePath)
 {
+	error.clear();
 	// Advertise the fixed host profile implemented by HollyCast. Buffer values
 	// remain expressions so every backend receives the current backbuffer dimensions.
 	const std::unordered_map<std::string, std::string> hostDefines {
@@ -1242,17 +1294,17 @@ bool parseReShadeEffect(const std::string& source, ReShadeEffect& effect, std::s
 		{ "BUFFER_RCP_HEIGHT", "(1.0 / FinalViewportSize.y)" },
 		{ "BUFFER_COLOR_BIT_DEPTH", "8" },
 	};
-	// Package loading resolves includes inside its validated root before the
-	// compiler sees source. Never let the compiler open an arbitrary include.
-	if (std::regex_search(source, std::regex(R"((^|\n)[ \t]*#[ \t]*include\b)"))) {
-		error = "ReShade FX includes must be resolved by the shader package loader.";
-		return false;
-	}
 	reshadefx::preprocessor preprocessor;
+	// Always intercept includes, including direct parser calls without a package.
+	preprocessor.set_include_handler([&](const std::string& parent, const std::string& name,
+			std::string& path, std::string& text) {
+		if (!includeResolver) { error = "ReShade FX includes require a shader package resolver."; return false; }
+		return includeResolver(parent, name, path, text, error);
+	});
 	for (const auto& define : hostDefines)
 		preprocessor.add_macro_definition(define.first, define.second);
-	if (!preprocessor.append_string(source)) {
-		error = preprocessor.errors();
+	if (!preprocessor.append_string(source + "\n", std::filesystem::u8path(sourcePath))) {
+		if (error.empty()) error = preprocessor.errors();
 		return false;
 	}
 	const std::string& preprocessed = preprocessor.output();

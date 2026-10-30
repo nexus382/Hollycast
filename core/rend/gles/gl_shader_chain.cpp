@@ -633,8 +633,9 @@ bool GlShaderChain::ensureLookupTextures(std::vector<LookupTexture>& textures, s
 	uint64_t bytes = 0;
 	for (auto& lookup : textures) {
 		if (lookup.texture) continue;
-		postprocess::ShaderTextureData data;
-		if (!postprocess::loadShaderTexture(lookup.config, data, error)) return false;
+		const auto decoded = postprocess::loadShaderTextureData(lookup.config, error);
+		if (!decoded) return false;
+		const auto& data = *decoded;
 		if (data.pixels.size() > postprocess::MaxShaderChainTargetBytes - bytes) { error = "Shader lookups exceed the chain memory budget."; return false; }
 		bytes += data.pixels.size();
 		postprocess::ShaderPass formatPass; formatPass.targetFormatName = data.formatName;
@@ -663,6 +664,7 @@ bool GlShaderChain::ensureLookupTextures(std::vector<LookupTexture>& textures, s
 		if (target != GL_TEXTURE_2D) glTexParameteri(target, GL_TEXTURE_WRAP_R, glWrapMode(lookup.config.wrapMode));
 #endif
 		if (lookup.config.useMipmaps) glGenerateMipmap(target);
+		lookup.config.decoded.reset();
 	}
 	return true;
 }
@@ -963,6 +965,7 @@ bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string&
 	deletePrograms(programs);
 	deleteLookupTextures();
 	programs = std::move(candidate);
+	renderedFrames = 0;
 	hostParameters = chain.parameters;
 	lookupTextures = std::move(candidateLookupTextures);
 	sourceHistoryDepth = 1;
@@ -1022,7 +1025,7 @@ void GlShaderChain::updateConfiguredChain()
 
 	std::string error;
 	postprocess::ShaderChain candidate;
-	if (!postprocess::loadShaderChain(requestedPaths, candidate, error)) {
+	if (!postprocess::loadConfiguredShaderChain(requestedPaths, generation, candidate, error)) {
 		postprocess::reportShaderChainStatus(activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not loaded: %s", requestedLabel.c_str(), error.c_str());
 		return;
@@ -1039,9 +1042,10 @@ void GlShaderChain::updateConfiguredChain()
 	parameterGeneration = postprocess::shaderChainStatusGeneration();
 }
 
-GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::ShaderFrameInfo& frame,
+GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::ShaderFrameInfo& inputFrame,
 		bool& presentationTransformApplied, GLuint depthTexture, int depthWidth, int depthHeight)
 {
+	postprocess::ShaderFrameInfo frame = inputFrame;
 	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
 	if (stencilFrameSize != currentStencilSize) { stencilTargets.clear(); stencilFrameSize = currentStencilSize; }
 
@@ -1050,18 +1054,19 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	updateConfiguredChain();
 	if (programs.empty() || sourceTexture == 0 || !ensureResources())
 		return nullptr;
+	frame.frameCount = renderedFrames;
 	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
 		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceUniform& resource) {
 			return resource.kind == postprocess::ShaderInputKind::Depth;
 		});
 	});
 	if (needsDepth && depthTexture == 0) {
-		postprocess::reportShaderChainStatus(activePath, "This frame has no scene depth available for the selected shader.");
+		postprocess::reportShaderFrameStatus(activePath, "This frame has no scene depth available for the selected shader.");
 		return nullptr;
 	}
 	std::string lookupError;
 	if (!ensureLookupTextures(lookupError)) {
-		postprocess::reportShaderChainStatus(activePath, lookupError);
+		postprocess::reportShaderFrameStatus(activePath, lookupError);
 		WARN_LOG(RENDERER, "Post-processing lookup texture was not loaded: %s", lookupError.c_str());
 		return nullptr;
 	}
@@ -1133,7 +1138,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	if (depthWidth <= 0) depthWidth = frame.sourceWidth;
 	if (depthHeight <= 0) depthHeight = frame.sourceHeight;
 	if (needsDepth && (depthWidth < frame.sourceWidth || depthHeight < frame.sourceHeight)) {
-		postprocess::reportShaderChainStatus(activePath, "Scene depth is smaller than the current color frame.");
+		postprocess::reportShaderFrameStatus(activePath, "Scene depth is smaller than the current color frame.");
 		return nullptr;
 	}
 	const bool rotateDepth = frame.rotationPending && std::any_of(programs.begin(), programs.end(),
@@ -1147,7 +1152,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		std::string error;
 		if (!postprocess::accumulateShaderTargetBytes(width, height,
 				postprocess::ShaderTargetFormat::Default, {}, false, 1, depthTargetBytes, error)) {
-			postprocess::reportShaderChainStatus(activePath, error);
+			postprocess::reportShaderFrameStatus(activePath, error);
 			return nullptr;
 		}
 		if (depthCopyProgram == 0) {
@@ -1162,11 +1167,11 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			try {
 				depthCopyProgram = gl_CompileAndLink(vertexSource.generate().c_str(), fragmentSource.generate().c_str(), &error);
 			} catch (const RendererException&) {
-				postprocess::reportShaderChainStatus(activePath, "OpenGL scene-depth copy shader failed: " + error);
+				postprocess::reportShaderFrameStatus(activePath, "OpenGL scene-depth copy shader failed: " + error);
 				return nullptr;
 			}
 			if (depthCopyProgram == 0) {
-				postprocess::reportShaderChainStatus(activePath, "OpenGL scene-depth copy shader failed: " + error);
+				postprocess::reportShaderFrameStatus(activePath, "OpenGL scene-depth copy shader failed: " + error);
 				return nullptr;
 			}
 			depthCopySourceUniform = glGetUniformLocation(depthCopyProgram, "Source");
@@ -1177,7 +1182,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			depthInput = std::make_unique<GlFramebuffer>(width, height, false, 0, GL_R32F, GL_RED, GL_FLOAT);
 		depthInput->bind();
 		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-			postprocess::reportShaderChainStatus(activePath, "OpenGL cannot render a float scene-depth snapshot.");
+			postprocess::reportShaderFrameStatus(activePath, "OpenGL cannot render a float scene-depth snapshot.");
 			return nullptr;
 		}
 		glcache.Disable(GL_SCISSOR_TEST);
@@ -1206,7 +1211,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		if (!rotateDepth)
 			depthTexture = depthInput->getTexture();
 #else
-		postprocess::reportShaderChainStatus(activePath, "Scene-depth snapshots require OpenGL or GLES 3.0.");
+		postprocess::reportShaderFrameStatus(activePath, "Scene-depth snapshots require OpenGL or GLES 3.0.");
 		return nullptr;
 #endif
 	}
@@ -1272,14 +1277,14 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			&& !postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
 					postprocess::ShaderTargetFormat::Default, {}, displayBoundary->pass.useMipmaps,
 					1, targetBytes, targetBudgetError)) {
-		postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		return nullptr;
 	}
 	if (programs.front().pass.useMipmaps
 			&& !(programs.front().pass.composeDisplayInput && postprocess::shouldComposeDisplayInput(frame, false))
 			&& !postprocess::accumulateShaderTargetBytes(frame.sourceWidth, frame.sourceHeight,
 					postprocess::ShaderTargetFormat::Default, {}, true, 1, targetBytes, targetBudgetError)) {
-		postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		return nullptr;
 	}
 	for (size_t index = 0; index < programs.size(); ++index) {
@@ -1293,7 +1298,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		std::string error;
 		if (!postprocess::resolveTargetSize(programs[index].pass, sizeFrame,
 				programs[index].targetWidth, programs[index].targetHeight, error)) {
-			postprocess::reportShaderChainStatus(activePath, error);
+			postprocess::reportShaderFrameStatus(activePath, error);
 			return nullptr;
 		}
 		if (programs[index].pass.updatesSource) { sizeFrame.sourceWidth = programs[index].targetWidth; sizeFrame.sourceHeight = programs[index].targetHeight; }
@@ -1309,11 +1314,11 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			if (!postprocess::accumulateShaderTargetBytes(programs[index].targetWidth, programs[index].targetHeight,
 					format, formatName, programs[index].outputNeedsMipmaps[output],
 					programs[index].historyDepth * (programs[index].pass.outputs.empty() ? 1u : programs[index].pass.outputs[output].depth), targetBytes, targetBudgetError)) {
-				postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+				postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 				return nullptr;
 			}
 		}
-		if (programs[index].pass.renderState.stencilEnabled && !postprocess::accumulateShaderTargetBytes(programs[index].targetWidth, programs[index].targetHeight, postprocess::ShaderTargetFormat::Default, "R32_UINT", false, 1, targetBytes, targetBudgetError)) { postprocess::reportShaderChainStatus(activePath, targetBudgetError); return nullptr; }
+		if (programs[index].pass.renderState.stencilEnabled && !postprocess::accumulateShaderTargetBytes(programs[index].targetWidth, programs[index].targetHeight, postprocess::ShaderTargetFormat::Default, "R32_UINT", false, 1, targetBytes, targetBudgetError)) { postprocess::reportShaderFrameStatus(activePath, targetBudgetError); return nullptr; }
 		MrtTargetRing& targetRing = targets[index];
 		if (targetRing.size() != programs[index].historyDepth)
 			targetRing.resize(programs[index].historyDepth);
@@ -1322,7 +1327,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 				target = std::make_unique<MrtTarget>();
 			if (!ensureMrtTarget(*target, programs[index].pass, programs[index].targetWidth,
 					programs[index].targetHeight, error)) {
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				return nullptr;
 			}
 		}
@@ -1331,7 +1336,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		if (!postprocess::accumulateShaderTargetBytes(passFrame.sourceWidth, passFrame.sourceHeight,
 				postprocess::ShaderTargetFormat::Default, {}, false, sourceHistoryDepth,
 				targetBytes, targetBudgetError)) {
-			postprocess::reportShaderChainStatus(activePath, targetBudgetError);
+			postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 			return nullptr;
 		}
 		if (sourceHistory.size() != sourceHistoryDepth)
@@ -1444,7 +1449,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 				const auto& previous = targets[config.previousPass][requestedFrame % programs[config.previousPass].historyDepth];
 				if (previous && previous->initialized && previous->renderedFrame == requestedFrame
 						&& !copyOutput(*previous->outputs[config.previousOutput], *target->outputs[outputIndex], error)) {
-					postprocess::reportShaderChainStatus(activePath, error);
+					postprocess::reportShaderFrameStatus(activePath, error);
 					return nullptr;
 				}
 			}
@@ -1454,7 +1459,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 				glBindTexture(image.target, image.getTexture()); glGenerateMipmap(image.target);
 			}
 			if (program.pass.renderState.clearRenderTargets && !clearOutput(*target->outputs[outputIndex], error)) {
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				return nullptr;
 			}
 		}
@@ -1541,7 +1546,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 							|| targets[resource.sourcePass].empty()
 							|| resource.sourceOutput >= targets[resource.sourcePass].front()->outputs.size())) {
 				error = "OpenGL shader graph references an invalid pass output.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderFrameStatus(activePath, error);
 				disableFramebufferSrgb();
 				return nullptr;
 			}
@@ -1560,7 +1565,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 						[frame.frameCount % programs[resource.sourcePass].historyDepth].get();
 				if (!sourceTarget->initialized || sourceTarget->renderedFrame != frame.frameCount) {
 					error = "OpenGL shader pass input was not rendered for the current frame.";
-					postprocess::reportShaderChainStatus(activePath, error);
+					postprocess::reportShaderFrameStatus(activePath, error);
 					disableFramebufferSrgb();
 					return nullptr;
 				}
@@ -1684,7 +1689,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		if (program.pass.compute) {
 			std::array<uint32_t, 3> groups;
 			if (!postprocess::resolveShaderDispatchGroups(program.pass, passFrame, groups, error)) {
-				postprocess::reportShaderChainStatus(activePath, error); return nullptr;
+				postprocess::reportShaderFrameStatus(activePath, error); return nullptr;
 			}
 			glDispatchCompute(groups[0], groups[1], groups[2]);
 		} else
@@ -1730,6 +1735,8 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	disableFramebufferSrgb();
 	glCheck();
 	presentationTransformApplied = composedDisplayInput;
+	++renderedFrames;
+	postprocess::reportShaderFrameStatus(activePath, {});
 	return output;
 }
 

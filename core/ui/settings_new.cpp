@@ -18,6 +18,8 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "settings_new.h"
+#include "shader_preview_layout.h"
+#include "gui_menu.h"
 #include "custom_theme.h"
 #include "gui_util.h"
 #include "imgui.h"
@@ -5779,15 +5781,9 @@ struct ShaderPreviewState
 static ShaderPreviewState g_shaderPreview;
 static std::atomic_bool g_shaderLiveTune { false };
 
-static std::string defaultShaderDirectory()
-{
-	return get_writable_data_path("shaders/");
-}
-
 static std::string configuredShaderDirectory()
 {
-	return config::PostProcessShaderDirectory.get().empty()
-			? defaultShaderDirectory() : config::PostProcessShaderDirectory.get();
+	return postprocess::shaderLibraryDirectory();
 }
 
 static std::string lowercaseAscii(std::string value)
@@ -6012,8 +6008,11 @@ static void ensureShaderPreview()
 	const std::vector<std::string> paths = postprocess::configuredShaderPaths();
 	if (!g_shaderPreview.initialized || paths != g_shaderPreview.paths
 			|| config::PostProcessShaderTechnique.get() != g_shaderPreview.technique
-			|| config::PostProcessShaderParameters.get() != g_shaderPreview.overrides)
+			|| config::PostProcessShaderParameters.get() != g_shaderPreview.overrides) {
 		rebuildShaderPreview();
+		// Merely inspecting controls does not need to retain CPU image copies.
+		for (auto& texture : g_shaderPreview.chain.textures) texture.decoded.reset();
+	}
 }
 
 static void requestShaderActivation()
@@ -6023,7 +6022,8 @@ static void requestShaderActivation()
 	// newly selected one while the game is paused between rendered frames.
 	g_shaderPreview.activationStatusGeneration = postprocess::shaderChainStatusGeneration();
 	g_shaderPreview.activationPending = true;
-	postprocess::requestShaderChainReload();
+	postprocess::requestShaderChainReload(g_shaderPreview.error.empty() ? &g_shaderPreview.chain : nullptr);
+	for (auto& texture : g_shaderPreview.chain.textures) texture.decoded.reset();
 }
 
 static bool shaderActivationPending()
@@ -6039,7 +6039,7 @@ static bool previewMatchesActiveShader()
 	if (shaderActivationPending() || g_shaderPreview.paths.empty())
 		return false;
 	const postprocess::ShaderChainStatus status = postprocess::getShaderChainStatus();
-	return status.error.empty() && !status.activePath.empty()
+	return (status.error.empty() || status.frameError) && !status.activePath.empty()
 			&& status.activePath == postprocess::shaderSelectionLabel(g_shaderPreview.paths)
 			&& status.parameters.size() == g_shaderPreview.chain.parameters.size();
 }
@@ -6105,7 +6105,7 @@ static void resetShaderParameters()
 	SaveSettings();
 }
 
-static void renderShaderActivationStatus()
+static void renderShaderActivationStatus(bool compact = false)
 {
 	if (g_shaderPreview.paths.empty()) {
 		ImGui::TextDisabled("%s", T("No display shader selected."));
@@ -6124,9 +6124,17 @@ static void renderShaderActivationStatus()
 
 	const postprocess::ShaderChainStatus status = postprocess::getShaderChainStatus();
 	if (!status.error.empty())
-		shaderTextWrapped(ImVec4(1.f, .35f, .35f, 1.f), T("Rejected: %s"), status.error.c_str());
-	else if (status.activePath == postprocess::shaderSelectionLabel(g_shaderPreview.paths))
-		shaderTextWrapped(ImVec4(.35f, 1.f, .55f, 1.f), T("Active: %s"), status.activePath.c_str());
+		shaderTextWrapped(ImVec4(1.f, .35f, .35f, 1.f), status.frameError ? T("Frame unavailable: %s") : T("Rejected: %s"), status.error.c_str());
+	else if (status.activePath == postprocess::shaderSelectionLabel(g_shaderPreview.paths)) {
+		if (compact) {
+			shaderTextWrapped(ImVec4(.35f, 1.f, .55f, 1.f), T("Active: %u layer(s), %u pass(es)"),
+					static_cast<unsigned>(g_shaderPreview.paths.size()), static_cast<unsigned>(g_shaderPreview.chain.passes.size()));
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", status.activePath.c_str());
+		}
+		else
+			shaderTextWrapped(ImVec4(.35f, 1.f, .55f, 1.f), T("Active: %s"), status.activePath.c_str());
+	}
 	else
 		shaderTextWrapped(ImVec4(1.f, .75f, .25f, 1.f), "%s", T("Parsed successfully; waiting for gameplay to activate."));
 }
@@ -6406,6 +6414,24 @@ void renderShaderTab()
 	ImGui::TextDisabled("%s", T("Shader Configuration"));
 	ImGui::Separator();
 	ensureShaderPreview();
+	if (!shaderLiveTuneActive()) {
+		const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause());
+		if (!canLiveTune)
+			ImGui::BeginDisabled();
+		if (ImGui::Button(T("Preview and Adjust"))) {
+			applyPendingSettings();
+			GamepadDevice::load_system_mappings();
+			stopTextureFilterLiveTune();
+			g_shaderLiveTune = true;
+			gui_resume_game();
+		}
+		if (!canLiveTune)
+			ImGui::EndDisabled();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("%s", !game_started ? T("Start a game to preview shader changes.")
+					: T("See shader changes beside the running game. Gameplay must be pausable."));
+		ImGui::Separator();
+	}
 
 	const std::string directory = configuredShaderDirectory();
 	if (!g_shaderBrowserInitialized || directory != g_shaderBrowserDirectory)
@@ -6608,29 +6634,12 @@ void renderShaderTab()
 
 		if (!selectedPaths.empty()) {
 			if (ImGui::Button(T("Reload Active Stack"))) {
-				requestShaderActivation();
 				rebuildShaderPreview();
+				requestShaderActivation();
 			}
 			ImGui::SameLine();
 			if (ImGui::Button(T("Clear All")))
 				applyShaderSelection({});
-			ImGui::SameLine();
-			const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause())
-					&& g_shaderPreview.error.empty();
-			if (!canLiveTune)
-				ImGui::BeginDisabled();
-			if (ImGui::Button(T("Live Tune"))) {
-				applyPendingSettings();
-				GamepadDevice::load_system_mappings();
-				stopTextureFilterLiveTune();
-				g_shaderLiveTune = true;
-				gui_resume_game();
-			}
-			if (!canLiveTune)
-				ImGui::EndDisabled();
-			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-				ImGui::SetTooltip("%s", !game_started ? T("Start a game to tune shader parameters live.")
-						: T("The selected stack must parse successfully and gameplay must be pausable."));
 		}
 	}
 
@@ -6652,36 +6661,38 @@ void renderShaderLiveTuneOverlay()
 	ensureShaderPreview();
 
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
-#ifdef __ANDROID__
-	const float panelHeight = std::max(displaySize.y * .48f, uiScaled(260.f));
-	ImGui::SetNextWindowPos(ImVec2(0.f, displaySize.y - panelHeight), ImGuiCond_Always);
-	ImGui::SetNextWindowSize(ImVec2(displaySize.x, panelHeight), ImGuiCond_Always);
-	flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
-#else
-	const float margin = uiScaled(18.f);
-	const ImVec2 maximumSize(std::max(1.f, displaySize.x - margin * 2.f),
-			std::max(1.f, displaySize.y - uiScaled(96.f)));
-	const ImVec2 panelSize(std::min(uiScaled(820.f), maximumSize.x),
-			std::min(uiScaled(440.f), maximumSize.y));
-	const ImVec2 minimumSize(std::min(uiScaled(560.f), maximumSize.x),
-			std::min(uiScaled(260.f), maximumSize.y));
-	ImGui::SetNextWindowPos(ImVec2(displaySize.x - panelSize.x - margin, uiScaled(48.f)), ImGuiCond_Once);
-	ImGui::SetNextWindowSize(panelSize, ImGuiCond_Once);
-	ImGui::SetNextWindowSizeConstraints(minimumSize, maximumSize);
-#endif
-	ImGui::SetNextWindowBgAlpha(.94f);
+	const ShaderPreviewLayout layout = shaderPreviewLayout(static_cast<int>(displaySize.x),
+			static_cast<int>(displaySize.y), static_cast<int>(GuiMenu::mainMenuBarHeight()));
+	if (layout.controlsWidth <= 0 || layout.controlsHeight <= 0)
+		return;
+	ImGui::SetNextWindowPos(ImVec2(layout.controlsX, layout.controlsY), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(layout.controlsWidth, layout.controlsHeight), ImGuiCond_Always);
 	bool open = true;
 	bool returnToSettings = false;
-	if (ImGui::Begin(T("Shader Live Tune###ShaderLiveTune"), &open, flags)) {
-		if (ImGui::Button(T("Back to Shader Page")))
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove
+			| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+	if (ImGui::Begin(T("Shader Preview###ShaderLiveTune"), &open, flags)) {
+		if (ImGui::Button(T("Back to Settings")))
 			returnToSettings = true;
 		ImGui::SameLine();
-		ImGui::TextDisabled(T("%u layer(s)"), static_cast<unsigned>(g_shaderPreview.paths.size()));
+		if (ImGui::Button(T("Done")))
+			open = false;
+		ImGui::TextWrapped("%s", T("Live game preview. Changes apply as you adjust the controls."));
+		ImGui::TextWrapped("%s", T("Game inputs are held while this editor is open."));
 		ImGui::Separator();
-		renderShaderActivationStatus();
-		ImGui::Separator();
-		renderShaderParameterControls();
+		if (ImGui::BeginTabBar("ShaderPreviewTabs")) {
+			if (ImGui::BeginTabItem(T("Parameters"))) {
+				renderShaderActivationStatus(true);
+				ImGui::Separator();
+				renderShaderParameterControls();
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem(T("Shader Stack"))) {
+				renderShaderTab();
+				ImGui::EndTabItem();
+			}
+			ImGui::EndTabBar();
+		}
 	}
 	ImGui::End();
 
@@ -6693,9 +6704,14 @@ void renderShaderLiveTuneOverlay()
 		g_shaderLiveTune = false;
 }
 
+bool shaderLiveTuneActive()
+{
+	return g_shaderLiveTune.load(std::memory_order_relaxed);
+}
+
 bool liveTuneActive()
 {
-	return textureFilterLiveTuneActive() || g_shaderLiveTune.load(std::memory_order_relaxed);
+	return textureFilterLiveTuneActive() || shaderLiveTuneActive();
 }
 
 void closeShaderLiveTune()

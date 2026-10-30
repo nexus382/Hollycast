@@ -4,10 +4,35 @@
 	SPDX-License-Identifier: GPL-2.0-or-later
 */
 #include "rend/postprocess/shader_chain.h"
+#include "rend/postprocess/reshade_fx.h"
 
 #include <gtest/gtest.h>
 #include "effect_lexer.hpp"
 #include <locale>
+
+TEST(ReShadeCompilerTest, ExtractsDistinctPassesFromOneCompiledTechnique)
+{
+	const std::string text =
+		"uniform float Gain = 0.5;\n"
+		"float4 First() : SV_Target { return Gain; }\n"
+		"float4 Second() : SV_Target { return 1.0 - Gain; }\n"
+		"technique Main { pass { PixelShader = First; } pass { PixelShader = Second; } }\n";
+	postprocess::ReShadeEffect effect;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseReShadeEffect(text, effect, error)) << error;
+	std::vector<postprocess::ShaderPassSource> sources;
+	ASSERT_TRUE(postprocess::compileReShadeFxTechnique(effect, 0, sources, error)) << error;
+	ASSERT_EQ(2u, sources.size());
+	for (size_t i = 0; i < sources.size(); ++i) {
+		postprocess::ShaderPassSource separate;
+		ASSERT_TRUE(postprocess::compileReShadeFxPass(text, 0, i, separate, error)) << error;
+		EXPECT_EQ(separate.fragment, sources[i].fragment);
+		EXPECT_EQ(separate.vertex, sources[i].vertex);
+		ASSERT_EQ(1u, sources[i].parameters.size());
+		EXPECT_FLOAT_EQ(0.5f, sources[i].parameters[0].value);
+	}
+	EXPECT_NE(sources[0].fragment, sources[1].fragment);
+}
 
 TEST(ReShadeCompilerTest, PreservesIntegerVectorControlsAndSignedViewportBounds)
 {

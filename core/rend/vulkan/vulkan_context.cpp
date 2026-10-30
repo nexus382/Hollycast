@@ -27,6 +27,8 @@
 #include "ui/gui.h"
 #ifndef LIBRETRO
 #include "ui/performance_overlay.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
 #endif
 #ifdef USE_SDL
 #include <sdl/sdl.h>
@@ -1261,12 +1263,18 @@ void VulkanContext::Present() noexcept
 static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspectRatio)
 {
 	const int topInset = getScaledTopInset();
-	const int drawableHeight = outputHeight - topInset;
+	int drawableWidth = outputWidth;
+	int drawableHeight = outputHeight - topInset;
+	if (SettingsNew::shaderLiveTuneActive()) {
+		const auto layout = SettingsNew::shaderPreviewLayout(outputWidth, outputHeight, topInset);
+		drawableWidth = layout.gameWidth;
+		drawableHeight = layout.gameHeight;
+	}
 	int dx = 0;
 	int dy = 0;
-	getWindowboxDimensions(outputWidth, drawableHeight, aspectRatio, dx, dy, config::Rotate90);
+	getWindowboxDimensions(drawableWidth, drawableHeight, aspectRatio, dx, dy, config::Rotate90);
 	return vk::Rect2D(vk::Offset2D(dx, dy + topInset),
-			vk::Extent2D(outputWidth - dx * 2, drawableHeight - dy * 2));
+			vk::Extent2D(drawableWidth - dx * 2, drawableHeight - dy * 2));
 }
 
 void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,

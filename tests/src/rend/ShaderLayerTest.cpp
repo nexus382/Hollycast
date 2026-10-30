@@ -117,4 +117,56 @@ TEST_F(ShaderLayerTest, AcceptsNativeAndLegacyFxBlendFactorSpellings)
 		EXPECT_EQ(postprocess::ShaderBlendFactor::OneMinusSourceAlpha, chain.passes[0].destinationBlend);
 	}
 }
+TEST_F(ShaderLayerTest, KeepsDifferentLookupTypesSeparateAcrossLayers)
+{
+	const char* types[] { "sampler2D", "usampler2D", "sampler3D" };
+	std::vector<std::string> paths;
+	for (unsigned i = 0; i < 3; ++i) {
+		const auto shader = directory / (std::to_string(i) + ".slang");
+		std::ofstream(shader) << "#version 450\nuniform " << types[i] << " LUT;\nvoid main() { FragColor = vec4(texture(LUT, "
+			<< (i == 2 ? "vec3(0.5)" : "vec2(0.5)") << ")); }\n";
+		const auto preset = directory / (std::to_string(i) + ".slangp");
+		std::ofstream(preset) << "shaders = 1\nshader0 = " << shader.filename().string()
+			<< "\ntextures = LUT\nLUT = shared.tga\n";
+		paths.push_back(preset.string());
+	}
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(paths, chain, error)) << error;
+	ASSERT_EQ(3u, chain.textures.size());
+	EXPECT_EQ(postprocess::SlangResourceType::Sampler2D, chain.textures[0].type);
+	EXPECT_EQ(postprocess::ShaderNumericType::UnsignedInteger, chain.textures[1].numericType);
+	EXPECT_EQ(postprocess::SlangResourceType::Sampler3D, chain.textures[2].type);
+	for (unsigned i = 0; i < 3; ++i) {
+		const auto input = std::find_if(chain.passes[i].inputs.begin(), chain.passes[i].inputs.end(), [](const auto& value) {
+			return value.kind == postprocess::ShaderInputKind::LookupTexture;
+		});
+		ASSERT_NE(chain.passes[i].inputs.end(), input);
+		EXPECT_EQ(chain.textures[i].name, input->resourceName);
+	}
+	const auto incompatible = directory / "incompatible.slangp";
+	std::ofstream(incompatible) << "shaders = 2\nshader0 = 0.slang\nshader1 = 1.slang\ntextures = LUT\nLUT = shared.tga\n";
+	EXPECT_FALSE(postprocess::loadShaderChain(incompatible.string(), chain, error));
+	EXPECT_NE(std::string::npos, error.find("incompatible types"));
+}
+
+TEST_F(ShaderLayerTest, KeepsDifferentLookupDimensionsSeparateAcrossEffects)
+{
+	config::PostProcessShaderTechnique.get().clear();
+	std::vector<std::string> paths;
+	for (unsigned width : { 2u, 4u }) {
+		const auto effect = directory / (std::to_string(width) + ".fx");
+		std::ofstream(effect) << "texture3D LUT < source = \"shared.tga\"; > { Width = " << width
+			<< "; Height = 2; Depth = 2; };\nsampler3D ReadLUT { Texture = LUT; };\n"
+			"float4 Pixel() : SV_Target { return tex3D(ReadLUT, float3(0.5, 0.5, 0.5)); }\n"
+			"technique Main { pass { PixelShader = Pixel; } }\n";
+		paths.push_back(effect.string());
+	}
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(paths, chain, error)) << error;
+	ASSERT_EQ(2u, chain.textures.size());
+	EXPECT_EQ(2u, chain.textures[0].width);
+	EXPECT_EQ(4u, chain.textures[1].width);
+}
 } // namespace

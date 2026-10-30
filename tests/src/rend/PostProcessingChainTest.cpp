@@ -19,6 +19,7 @@
 #include "rend/postprocess/shader_chain.h"
 #include "rend/postprocess/reshade_fx.h"
 #include "cfg/option.h"
+#include "stdclass.h"
 #if defined(USE_VULKAN)
 #include "rend/vulkan/compiler.h"
 #include "rend/vulkan/vulkan_shader_chain.h"
@@ -2310,6 +2311,172 @@ TEST(PostProcessingChainTest, RoutesSourceMipmapsAroundAuxiliaryEffectPasses)
 	chain.passes[2].useMipmaps = true;
 	const auto mipmaps = postprocess::resolveShaderPassOutputMipmaps(chain);
 	EXPECT_TRUE(mipmaps[0][0]); EXPECT_FALSE(mipmaps[1][0]);
+}
+
+TEST(PostProcessingChainTest, RecoversFrameErrorsWithoutLosingControlsOrHidingRejectedReloads)
+{
+	postprocess::ShaderParameter gain;
+	gain.name = gain.label = "Gain";
+	gain.minimum = 0.f; gain.maximum = 1.f; gain.step = 0.1f;
+	postprocess::reportShaderChainStatus("active", {}, { gain }, { "Main" }, 0);
+	postprocess::reportShaderFrameStatus("active", "Depth unavailable");
+	EXPECT_TRUE(postprocess::getShaderChainStatus().frameError);
+	ASSERT_TRUE(postprocess::setShaderChainParameter("Gain", 0.7f));
+	postprocess::reportShaderFrameStatus("active", {});
+	auto status = postprocess::getShaderChainStatus();
+	ASSERT_EQ(1u, status.parameters.size());
+	EXPECT_FLOAT_EQ(0.7f, status.parameters[0].value);
+	EXPECT_EQ(0, status.selectedTechnique);
+	EXPECT_TRUE(status.error.empty());
+	EXPECT_FALSE(status.frameError);
+	postprocess::reportShaderChainStatus("active", "Reload rejected");
+	postprocess::reportShaderFrameStatus("active", {});
+	EXPECT_EQ("Reload rejected", postprocess::getShaderChainStatus().error);
+	postprocess::reportShaderChainStatus({}, {});
+}
+
+TEST(PostProcessingChainTest, ResolvesOnlyActiveIncludesAndPermitsGuardedRecursion)
+{
+	ShaderResourceDirectory directory;
+	std::ofstream(directory.path / "a.inc") <<
+		"#ifndef HEADER_A // guard comments are legal\n#define HEADER_A\n#include \"b.inc\"\n#define GAIN 0.5\n#endif\n";
+	std::ofstream(directory.path / "b.inc") << "#pragma once\n#include \"a.inc\"\n";
+	for (const char* extension : { ".glsl", ".slang", ".fx" }) {
+		const auto path = directory.path / (std::string("guarded") + extension);
+		std::ofstream file(path);
+		if (std::string(extension) == ".slang") file << "#version 450\n";
+		file << "#if 0\n#include \"missing.inc\"\n#endif\n"
+			"#define SUM(x, y) ((x) + (y))\n#define HEADER \"a.inc\"\n"
+			"#if SUM(1, 2) == 3\n#include HEADER // active macro include\n#endif\n";
+		if (std::string(extension) == ".fx")
+			file << "float4 Pixel() : SV_Target { return GAIN; }\ntechnique Main { pass { PixelShader = Pixel; } }\n";
+		else
+			file << "void main() { FragColor = vec4(GAIN); }\n";
+		file.close();
+		postprocess::ShaderChain chain;
+		std::string error, hlsl;
+		ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << extension << ": " << error;
+		ASSERT_EQ(1u, chain.sources.size());
+		ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(chain.sources[0], {}, chain.passes[0].inputs, 1, hlsl, error)) << error;
+		expectHlslCompiles(hlsl, "ps_5_0");
+	}
+}
+
+TEST(PostProcessingChainTest, RejectsActiveMissingEscapedAndUnguardedIncludes)
+{
+	ShaderResourceDirectory directory;
+	for (const char* extension : { ".glsl", ".slang", ".fx" }) {
+		const auto path = directory.path / (std::string("invalid") + extension);
+		for (const char* include : { "missing.inc", "../escaped.inc", "cycle.inc" }) {
+			std::ofstream(directory.path / "cycle.inc") << "#include \"cycle.inc\"\n";
+			std::ofstream(path) << "#include \"" << include << "\"\n";
+			postprocess::ShaderChain chain;
+			std::string error;
+			EXPECT_FALSE(postprocess::loadShaderChain(path.string(), chain, error)) << extension << include;
+			EXPECT_FALSE(error.empty());
+		}
+	}
+}
+
+TEST(PostProcessingChainTest, KeepsIndependentIncludeStateForGlslAndSlangStages)
+{
+	ShaderResourceDirectory directory;
+	std::ofstream(directory.path / "shared.inc") << "#pragma once\nfloat stageValue() { return 0.5; }\n";
+	for (const char* extension : { ".glsl", ".slang" }) {
+		const bool slang = std::string(extension) == ".slang";
+		const auto path = directory.path / (std::string("stages") + extension);
+		std::ofstream file(path);
+		if (slang) file << "#version 450\n";
+		file << (slang ? "#pragma stage vertex\n" : "#if defined(VERTEX)\n")
+			<< "#include \"shared.inc\"\n#define VERTEX_ONLY\n"
+			"void main() { gl_Position = vec4(stageValue()); }\n"
+			<< (slang ? "#pragma stage fragment\n" : "#elif defined(FRAGMENT)\n")
+			<< "#ifdef VERTEX_ONLY\n#include \"must-not-load.inc\"\n#endif\n"
+			"#include \"shared.inc\"\nvoid main() { FragColor = vec4(stageValue()); }\n"
+			<< (slang ? "" : "#endif\n");
+		file.close();
+		postprocess::ShaderChain chain;
+		std::string error;
+		ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << extension << ": " << error;
+		ASSERT_EQ(1u, chain.sources.size());
+		EXPECT_NE(std::string::npos, chain.sources[0].vertex.find("float stageValue()"));
+		EXPECT_NE(std::string::npos, chain.sources[0].fragment.find("float stageValue()"));
+	}
+}
+
+TEST(PostProcessingChainTest, UsesDefaultLibraryBoundaryForSiblingPresetSources)
+{
+	ShaderResourceDirectory directory;
+	struct RestoreConfig {
+		std::string data = get_writable_data_path("");
+		std::string library = config::PostProcessShaderDirectory.get();
+		~RestoreConfig() { set_user_data_dir(data); config::PostProcessShaderDirectory.get() = library; }
+	} restore;
+	set_user_data_dir(directory.path.string());
+	config::PostProcessShaderDirectory.get().clear();
+	const auto library = directory.path / "shaders";
+	std::filesystem::create_directories(library / "presets");
+	std::filesystem::create_directories(library / "shared");
+	std::ofstream(library / "shared" / "gain.inc") << "#define GAIN 0.5\n";
+	std::ofstream(library / "shared" / "pass.slang") << "#version 450\n#include \"gain.inc\"\nvoid main() { FragColor = vec4(GAIN); }\n";
+	const auto preset = library / "presets" / "example.slangp";
+	std::ofstream(preset) << "shaders = 1\nshader0 = ../shared/pass.slang\n";
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(preset.string(), chain, error)) << error;
+	EXPECT_TRUE(std::filesystem::equivalent(library, chain.passes[0].packageRoot));
+}
+
+TEST(PostProcessingChainTest, ReusesPreparedSourcesAndImagesOnlyUntilExplicitReload)
+{
+	ShaderResourceDirectory directory;
+	struct RestoreConfig {
+		std::vector<std::string> paths = config::PostProcessShaders.get();
+		std::string technique = config::PostProcessShaderTechnique.get();
+		~RestoreConfig() {
+			config::PostProcessShaders.get() = paths;
+			config::PostProcessShaderTechnique.get() = technique;
+			postprocess::requestShaderChainReload();
+		}
+	} restore;
+	const auto path = directory.path / "cached.glsl";
+	std::ofstream(path) << "void main() { FragColor = vec4(0.5); }\n";
+	config::PostProcessShaders.get() = { path.string() };
+	config::PostProcessShaderTechnique.get().clear();
+	postprocess::ShaderChain prepared;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), prepared, error)) << error;
+	const auto image = directory.path / "lookup.tga";
+	std::vector<uint8_t> tga(22, 255);
+	std::fill_n(tga.begin(), 18, 0);
+	tga[2] = 2; tga[12] = tga[14] = 1; tga[16] = 32; tga[17] = 0x28;
+	std::ofstream(image, std::ios::binary).write(reinterpret_cast<const char*>(tga.data()), tga.size());
+	prepared.textures.push_back({ "Lookup", image.string() });
+	ASSERT_TRUE(postprocess::preflightShaderAssets(prepared, error)) << error;
+	const auto pixels = prepared.textures[0].decoded;
+	ASSERT_TRUE(pixels);
+	postprocess::requestShaderChainReload(&prepared);
+	std::filesystem::remove(path);
+	std::filesystem::remove(image);
+	postprocess::ShaderChain active;
+	const std::vector<std::string> paths { path.string() };
+	ASSERT_TRUE(postprocess::loadConfiguredShaderChain(paths, postprocess::shaderChainReloadGeneration(), active, error)) << error;
+	ASSERT_EQ(1u, active.textures.size());
+	EXPECT_EQ(pixels, postprocess::loadShaderTextureData(active.textures[0], error));
+	postprocess::requestShaderChainReload(&prepared);
+	postprocess::requestShaderChainReload();
+	EXPECT_FALSE(postprocess::loadConfiguredShaderChain(paths, postprocess::shaderChainReloadGeneration(), active, error));
+}
+
+TEST(PostProcessingChainTest, TranslatesForSupportedDirectXFeatureLevels)
+{
+	postprocess::ShaderPassSource source;
+	source.fragment = "void main() { FragColor = texture(Source, vTexCoord); }";
+	std::string hlsl, error;
+	for (uint32_t model : { 40u, 41u, 50u }) {
+		ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, {}, {}, 1, hlsl, error, model)) << error;
+		expectHlslCompiles(hlsl, model == 40 ? "ps_4_0" : model == 41 ? "ps_4_1" : "ps_5_0");
+	}
 }
 
 #if defined(_WIN32) && defined(HAVE_D3D11)

@@ -23,6 +23,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -104,6 +105,8 @@ enum class ShaderBlendOperation {
 constexpr uint32_t InvalidShaderPass = static_cast<uint32_t>(-1);
 constexpr size_t MaxShaderLayers = 8;
 
+struct ShaderTextureData;
+
 struct ShaderPresetTexture {
 	std::string name;
 	std::string path;
@@ -113,6 +116,8 @@ struct ShaderPresetTexture {
 	SlangResourceType type = SlangResourceType::Sampler2D;
 	ShaderNumericType numericType = ShaderNumericType::Float;
 	uint32_t width = 0, height = 0, depth = 1;
+	// Shared only between preflight and activation; released after GPU upload.
+	std::shared_ptr<const ShaderTextureData> decoded;
 };
 
 // A resolved input remains symbolic until a renderer binds it. sourcePass is
@@ -283,6 +288,8 @@ struct ShaderFrameInfo {
 struct ShaderChainStatus {
 	std::string activePath;
 	std::string error;
+	// Frame failures can recover without replacing the active graph or controls.
+	bool frameError = false;
 	std::vector<ShaderParameter> parameters;
 	std::vector<std::string> techniques;
 	int selectedTechnique = -1;
@@ -353,7 +360,8 @@ struct ShaderTextureData {
 	std::vector<uint8_t> pixels;
 };
 bool loadShaderTexture(const ShaderPresetTexture& texture, ShaderTextureData& data, std::string& error);
-bool preflightShaderAssets(const ShaderChain& chain, std::string& error);
+std::shared_ptr<const ShaderTextureData> loadShaderTextureData(const ShaderPresetTexture& texture, std::string& error);
+bool preflightShaderAssets(ShaderChain& chain, std::string& error);
 std::string canonicalShaderFormat(const std::string& format);
 uint32_t shaderFormatBytes(const std::string& format);
 ShaderNumericType shaderFormatNumericType(const std::string& format);
@@ -396,10 +404,14 @@ uint64_t shaderChainStatusGeneration();
 void reportShaderChainStatus(const std::string& activePath, const std::string& error,
 		const std::vector<ShaderParameter>& parameters = {},
 		const std::vector<std::string>& techniques = {}, int selectedTechnique = -1);
+void reportShaderFrameStatus(const std::string& activePath, const std::string& error);
 bool setShaderChainParameter(const std::string& name, float value);
 bool setShaderChainParameterComponents(const std::string& name, const float *values, uint32_t componentCount);
 const std::string& shaderParameterKey(const ShaderParameter& parameter);
-void requestShaderChainReload();
+void requestShaderChainReload(const ShaderChain* prepared = nullptr);
+// Consumes a matching UI preflight once; explicit reloads always discard it.
+bool loadConfiguredShaderChain(const std::vector<std::string>& paths, uint64_t generation,
+		ShaderChain& chain, std::string& error);
 uint64_t shaderChainReloadGeneration();
 
 // Config stores parameter overrides as a compact name=value list. Invalid or
@@ -440,6 +452,7 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 
 // Reads the new ordered selection while preserving existing single-shader
 // configurations created before the Shader page was introduced.
+std::string shaderLibraryDirectory();
 std::vector<std::string> configuredShaderPaths();
 std::string shaderSelectionLabel(const std::vector<std::string>& paths);
 
@@ -468,12 +481,12 @@ bool translateGlslVertexToHlsl(const std::string& glslSource, const std::vector<
 		std::string& hlslSource, std::string& error);
 
 // Translates a fully resolved render-graph pass, including named texture
-// resources and GLSL sampler parameters, to Shader Model 4 compatible HLSL.
+// resources and GLSL sampler parameters, to the requested HLSL shader model.
 bool translateGlslGraphFragmentToHlsl(const ShaderPassSource& source,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
-		uint32_t outputCount, std::string& hlslSource, std::string& error);
+		uint32_t outputCount, std::string& hlslSource, std::string& error, uint32_t shaderModel = 50);
 bool translateGlslGraphVertexToHlsl(const std::string& vertexSource,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
-		std::string& hlslSource, std::string& error, bool nativeFxStages = false, bool retroArchGlsl = false);
+		std::string& hlslSource, std::string& error, bool nativeFxStages = false, bool retroArchGlsl = false, uint32_t shaderModel = 50);
 
 } // namespace postprocess
