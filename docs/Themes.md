@@ -205,3 +205,58 @@ Artwork availability comes from the shared library. LaunchBox, ScreenScraper and
 - Ensure each layout ID is unique and every normalized rectangle stays within the canvas.
 - Verify referenced image files exist inside the theme folder. Avoid symlinks that point outside it.
 - After editing or copying a package manually, press **Reload Library Themes**. A failed package appears with its validation error and is skipped.
+
+## Paged grids, play-history stats, and selection effects
+
+[Warning!](../themes/warning/theme.json) combines these optional primitives. Existing
+layouts retain their scrolling browser and decorative behavior when they omit them.
+
+A `grid` layout can add `pagedGrid: {"rows": 4, "padding": 4}`. This fits a fixed
+number of rows into the browser and submits only the selected page, keeping large
+libraries bounded. The normal adaptive `columns`, `spacing`, and library icon scale
+still apply. `rows` is an integer from 1–12, and `padding` is 0–24 logical pixels
+inside each cell. Optional `frame` and `unplayedFrame` are package image overlays;
+the latter applies only to games without recorded play history. Device entries
+use the regular frame. Both paths use the standard package path validation.
+
+The `previousPage` and `nextPage` button actions require `pagedGrid`. They stop at
+the first and last pages. Wheel and Page Up / Page Down page the browser; arrows
+and controller navigation can cross a page boundary. Click selects, and activation
+still follows `activation`, including double-click and controller confirm.
+
+Two decorative element types, `stat` and `meter`, require a numeric `source`:
+
+| Source | Value |
+| --- | --- |
+| `gameCount`, `favouriteCount`, `unplayedCount` | Counts in the current filtered view, excluding BIOS/devices. Unplayed means no recorded duration or launch. |
+| `totalPlayHours`, `maxPlayHours` | Total and greatest recorded game duration, in hours. |
+| `playHours` | Selected game's recorded hours; absent for a device. |
+| `neglect` | Selected game's `log2(days since launch + 1) / 9`, clamped to 0.05–1; 1 for an unplayed game, absent when a played game's launch date is unknown. Future dates clamp to zero days. |
+| `position`, `page`, `pageCount` | One-based entry/page position, and total pages (including device entries). Empty views return zero. Pages use the actual adaptive grid capacity. |
+
+A `stat` shows the integer part of its value times optional `valueScale`
+(0.001–1,000,000, default 1), with optional `digits` zero padding (0–12, default 0).
+It accepts normal text size, color, alignment, wrapping, and bold styling. `text`
+is the fallback for an absent selected-game value. A `meter` fills its rectangle
+horizontally by `value * valueScale / maximum`, clipped to 0–1. `maximum` is
+0.001–1,000,000,000, default 1. A panel beneath can provide its empty track.
+Numbers come from raw play history rather than localized metadata strings.
+
+Decorative elements can add `anchor: "selection"` to center their rectangle on
+the selected item, or `"selectionX"` to follow its horizontal center while keeping
+the authored vertical position. `"selectionTrail"` uses the authored width and
+vertical start as a narrow strip from the selected item's bottom to that start.
+These elements have no input region, hide when the selected item has no visible
+rectangle, and cannot combine with `bleed`. They work with any browser mode.
+
+`onSelection` (0.05–5 seconds) limits a decoration to a brief period after the
+selection changes, with a fade during its final quarter. It retriggers on a new
+selection, not every frame. New `when` conditions `played` and `unplayed` limit
+it to the selected game's recorded history and exclude devices. Combine them
+for event banners. Interactive `button` and `details` elements cannot use these
+visibility or anchor fields.
+
+An image can add `tileSeconds` (0.5–600) to scroll repeated copies down its
+rectangle seamlessly, one image-height per period, preserving its aspect ratio.
+It cannot combine with `spin` or `sweepSeconds`. This uses package artwork and
+shares the usual asset validation; themes still execute no scripts.

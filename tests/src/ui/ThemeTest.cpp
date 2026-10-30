@@ -683,7 +683,7 @@ TEST(ThemeParserTest, RackAllowsNarrowSpinesWithoutChangingGridLimits)
 TEST(ThemeParserTest, RejectsDuplicateLayoutIdsAndUnsupportedElementsOrBindings)
 {
 	expectRejected(replaceOnce(kManifest, "\"compact-list\"", "\"main-grid\""), "must be unique within the theme");
-	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, metadata, details, or button");
+	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, metadata, details, button, stat, or meter");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"developer\"", "\"source\": \"command\""), "supported metadata field");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "supported artwork source");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"art/overlay.png\"", "\"source\": \"\""), "is required for image elements");
@@ -746,4 +746,47 @@ TEST(ThemeParserTest, LoadRejectsManifestSymlinkOutsideThemeDirectory)
 	if (ec)
 		GTEST_SKIP() << "Symlinks are unavailable in this test environment: " << ec.message();
 	EXPECT_THROW(themes::load(package.path.u8string()), std::runtime_error);
+}
+
+TEST(ThemeParserTest, PagedGridAndSelectionDecorationsAreOptionalAndValidated)
+{
+	const std::string json = R"({"formatVersion":1,"id":"paged","name":"Paged","layouts":[{
+		"id":"main","name":"Main","mode":"grid","browser":[0,0,1,1],
+		"pagedGrid":{"rows":4,"padding":3},"elements":[
+		{"type":"panel","rect":[0.4,0.8,0.01,0.02],"anchor":"selectionTrail","onSelection":0.25},
+		{"type":"text","rect":[0,0.3,1,0.1],"text":"New","when":"unplayed","onSelection":1.3},
+		{"type":"stat","rect":[0,0,0.2,0.1],"source":"totalPlayHours","digits":7,"valueScale":1000},
+		{"type":"meter","rect":[0,0.9,0.2,0.02],"source":"neglect","maximum":1},
+		{"type":"button","rect":[0.7,0.8,0.2,0.1],"action":"nextPage"}]}]})";
+	const auto layout = themes::parse(json, fs::temp_directory_path().u8string()).layouts.front();
+	EXPECT_EQ(layout.pagedGrid.rows, 4);
+	EXPECT_EQ(layout.elements[0].anchor, "selectionTrail");
+	EXPECT_FLOAT_EQ(layout.elements[0].onSelection, .25f);
+	EXPECT_EQ(layout.elements[2].digits, 7);
+	EXPECT_FLOAT_EQ(layout.elements[2].valueScale, 1000);
+	EXPECT_EQ(themes::Layout{}.pagedGrid.rows, 0);
+	EXPECT_EQ(themes::Element{}.onSelection, 0);
+	EXPECT_TRUE(themes::Element{}.anchor.empty());
+	expectRejected(replaceOnce(json, "\"rows\":4", "\"rows\":0"), "pagedGrid.rows");
+	expectRejected(replaceOnce(json, "\"rows\":4", "\"rows\":4.5"), "pagedGrid.rows");
+	expectRejected(replaceOnce(json, "\"mode\":\"grid\"", "\"mode\":\"list\""), "requires grid");
+	expectRejected(replaceOnce(json, "\"anchor\":\"selectionTrail\"", "\"anchor\":\"arbitrary\""), "anchor");
+	expectRejected(replaceOnce(json, "\"onSelection\":0.25", "\"onSelection\":0"), "onSelection");
+	expectRejected(replaceOnce(json, "\"source\":\"neglect\"", "\"source\":\"madeUp\""), "numeric statistic");
+	expectRejected(replaceOnce(json, "\"maximum\":1", "\"maximum\":0"), "maximum");
+	expectRejected(replaceOnce(json, "\"digits\":7", "\"digits\":100"), "digits");
+	expectRejected(replaceOnce(json, "\"pagedGrid\":{\"rows\":4,\"padding\":3},", ""), "require pagedGrid");
+	expectRejected(replaceOnce(json, "\"action\":\"nextPage\"", "\"action\":\"nextPage\",\"anchor\":\"selection\""), "interactive");
+}
+
+TEST(ThemeParserTest, TiledImagesKeepPackagePathAndMotionValidation)
+{
+	TempDirectory package;
+	std::ofstream(package.path / "stars.png") << "fixture";
+	const std::string json = R"({"formatVersion":1,"id":"stars","name":"Stars","layouts":[{
+		"id":"main","name":"Main","mode":"grid","browser":[0,0,1,1],"elements":[
+		{"type":"image","rect":[0,0,1,1],"source":"stars.png","tileSeconds":8}]}]})";
+	EXPECT_EQ(themes::parse(json, package.path.u8string()).layouts[0].elements[0].tileSeconds, 8);
+	EXPECT_THROW(themes::parse(replaceOnce(json, "\"tileSeconds\":8", "\"tileSeconds\":8,\"sweepSeconds\":2"), package.path.u8string()), std::runtime_error);
+	EXPECT_THROW(themes::parse(replaceOnce(json, "stars.png", "../stars.png"), package.path.u8string()), std::runtime_error);
 }

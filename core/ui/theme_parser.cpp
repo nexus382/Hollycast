@@ -173,6 +173,12 @@ const std::set<std::string>& artworkSources()
 	return values;
 }
 
+const std::set<std::string>& statSources()
+{
+	static const std::set<std::string> values = {"gameCount", "favouriteCount", "unplayedCount", "totalPlayHours", "maxPlayHours", "playHours", "neglect", "page", "pageCount", "position"};
+	return values;
+}
+
 std::vector<std::string> metadataFieldList(const Json& value, const std::string& path)
 {
 	if (!value.is_array() || value.empty() || value.size() > metadataFields().size())
@@ -295,7 +301,7 @@ Theme parse(const std::string& json, const std::string& directory)
 	{
 		const std::string lp = "layouts[" + std::to_string(i) + "]";
 		const Json& item = layouts[i];
-		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch"});
+		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch", "pagedGrid"});
 		Layout layout;
 		layout.id = stringValue(required(item, "id", lp), lp + ".id", false);
 		if (!validId(layout.id)) invalid(lp + ".id", "must contain 1 to 64 lowercase letters, digits, hyphens, or underscores");
@@ -412,6 +418,21 @@ Theme parse(const std::string& json, const std::string& directory)
 					layout.rail.badges.push_back(metadataFieldList(badge, rp + ".badges"));
 			}
 		}
+		if (auto it = item.find("pagedGrid"); it != item.end())
+		{
+			const std::string gp = lp + ".pagedGrid";
+			if (layout.mode != "grid") invalid(gp, "requires grid mode");
+			objectFields(*it, gp, {"rows", "padding", "frame", "unplayedFrame"});
+			layout.pagedGrid.rows = integerValue(required(*it, "rows", gp), gp + ".rows", 1, 12);
+			if (auto field = it->find("padding"); field != it->end()) layout.pagedGrid.padding = static_cast<float>(numberValue(*field, gp + ".padding", 0, 24));
+			for (auto binding : {std::pair{"frame", &layout.pagedGrid.frame}, std::pair{"unplayedFrame", &layout.pagedGrid.unplayedFrame}})
+				if (auto field = it->find(binding.first); field != it->end())
+				{
+					*binding.second = assetPath(directory, stringValue(*field, gp + "." + binding.first, false));
+					std::error_code ec;
+					if (!fs::is_regular_file(fs::u8path(*binding.second), ec) || ec) invalid(gp + "." + binding.first, "must reference an image inside the package");
+				}
+		}
 		if (auto it = item.find("sounds"); it != item.end())
 		{
 			const std::string sp = lp + ".sounds";
@@ -439,10 +460,10 @@ Theme parse(const std::string& json, const std::string& directory)
 			{
 				const std::string ep = lp + ".elements[" + std::to_string(j) + "]";
 				const Json& source = (*it)[j];
-				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "fallbackImage", "separator", "when", "launchFadeFrom", "bleed", "image", "hoverImage", "selectedImage", "selectedHoverImage", "slant", "marqueeSeconds", "sweepSeconds", "spin"});
+				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "fallbackImage", "separator", "when", "launchFadeFrom", "bleed", "image", "hoverImage", "selectedImage", "selectedHoverImage", "slant", "marqueeSeconds", "sweepSeconds", "spin", "anchor", "onSelection", "tileSeconds", "maximum", "valueScale", "digits"});
 				Element element;
 				element.type = stringValue(required(source, "type", ep), ep + ".type", false);
-				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "metadata" && element.type != "details" && element.type != "button") invalid(ep + ".type", "must be panel, image, artwork, text, metadata, details, or button");
+				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "metadata" && element.type != "details" && element.type != "button" && element.type != "stat" && element.type != "meter") invalid(ep + ".type", "must be panel, image, artwork, text, metadata, details, button, stat, or meter");
 				element.rect = parseRect(required(source, "rect", ep), ep + ".rect", element.type == "panel" ? 0.001 : 0.01);
 				if (auto field = source.find("source"); field != source.end()) element.source = stringValue(*field, ep + ".source");
 				if (auto field = source.find("text"); field != source.end()) element.text = stringValue(*field, ep + ".text");
@@ -462,7 +483,7 @@ Theme parse(const std::string& json, const std::string& directory)
 				if (auto field = source.find("when"); field != source.end())
 				{
 					element.when = stringValue(*field, ep + ".when");
-					if (element.when != "attract" && element.when != "interactive" && element.when != "launching") invalid(ep + ".when", "must be attract, interactive, or launching");
+					if (element.when != "attract" && element.when != "interactive" && element.when != "launching" && element.when != "unplayed" && element.when != "played") invalid(ep + ".when", "must be attract, interactive, launching, unplayed, or played");
 					if (element.type == "button" || element.type == "details") invalid(ep + ".when", "is not valid on interactive elements");
 				}
 				if (auto field = source.find("bleed"); field != source.end())
@@ -475,7 +496,32 @@ Theme parse(const std::string& json, const std::string& directory)
 					if (element.when != "launching") invalid(ep + ".launchFadeFrom", "requires when to be launching");
 					element.launchFadeFrom = static_cast<float>(numberValue(*field, ep + ".launchFadeFrom", 0, 0.99));
 				}
-				const bool textElement = element.type == "text" || element.type == "metadata";
+				const bool textElement = element.type == "text" || element.type == "metadata" || element.type == "stat";
+				if (auto field = source.find("anchor"); field != source.end())
+				{
+					if (element.type == "button" || element.type == "details") invalid(ep + ".anchor", "is not valid on interactive elements");
+					element.anchor = stringValue(*field, ep + ".anchor", false);
+					if (element.anchor != "selection" && element.anchor != "selectionX" && element.anchor != "selectionTrail") invalid(ep + ".anchor", "must be selection, selectionX, or selectionTrail");
+					if (element.bleed) invalid(ep + ".anchor", "cannot be combined with bleed");
+				}
+				if (auto field = source.find("onSelection"); field != source.end())
+				{
+					if (element.type == "button" || element.type == "details") invalid(ep + ".onSelection", "is not valid on interactive elements");
+					element.onSelection = static_cast<float>(numberValue(*field, ep + ".onSelection", 0.05, 5));
+				}
+				if (auto field = source.find("tileSeconds"); field != source.end())
+				{
+					if (element.type != "image" || source.count("spin") || source.count("sweepSeconds")) invalid(ep + ".tileSeconds", "requires an image without spin or sweepSeconds");
+					element.tileSeconds = static_cast<float>(numberValue(*field, ep + ".tileSeconds", 0.5, 600));
+				}
+				if (element.type == "stat" || element.type == "meter")
+				{
+					if (!statSources().count(element.source)) invalid(ep + ".source", "must name a supported numeric statistic");
+					if (auto field = source.find("maximum"); field != source.end()) element.maximum = static_cast<float>(numberValue(*field, ep + ".maximum", 0.001, 1000000000));
+					if (auto field = source.find("valueScale"); field != source.end()) element.valueScale = static_cast<float>(numberValue(*field, ep + ".valueScale", 0.001, 1000000));
+					if (auto field = source.find("digits"); field != source.end()) element.digits = integerValue(*field, ep + ".digits", 0, 12);
+				}
+				else if (source.count("maximum") || source.count("valueScale") || source.count("digits")) invalid(ep, "numeric appearance fields require a stat or meter");
 				if (auto field = source.find("slant"); field != source.end())
 				{
 					if (!textElement) invalid(ep + ".slant", "is only valid on text and metadata elements");
@@ -607,9 +653,11 @@ Theme parse(const std::string& json, const std::string& directory)
 					invalid(ep + ".source", "must name a supported artwork source or preview");
 				else if (element.type == "button")
 				{
-					if (element.action != "previous" && element.action != "next" && element.action != "up" && element.action != "down" && element.action != "activate" && element.action != "artwork" && element.action != "favourite")
-						invalid(ep + ".action", "must be previous, next, up, down, activate, artwork, or favourite");
+					if (element.action != "previous" && element.action != "next" && element.action != "up" && element.action != "down" && element.action != "activate" && element.action != "artwork" && element.action != "favourite" && element.action != "previousPage" && element.action != "nextPage")
+						invalid(ep + ".action", "must be previous, next, up, down, activate, artwork, favourite, previousPage, or nextPage");
 					if (element.zIndex < 0) invalid(ep + ".zIndex", "buttons must draw above the browser");
+					if ((element.action == "previousPage" || element.action == "nextPage") && layout.pagedGrid.rows == 0)
+						invalid(ep + ".action", "page buttons require pagedGrid");
 					if (element.action == "artwork" && (element.source.empty() || !artworkSources().count(element.source)))
 						invalid(ep + ".source", "artwork buttons require a named artwork source");
 					if (element.action != "artwork" && !element.source.empty())

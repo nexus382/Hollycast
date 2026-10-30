@@ -2528,6 +2528,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		item.image = art.boxartPath;
 		item.canFavourite = !game.device && !game.path.empty();
 		item.favourite = item.canFavourite && library::isFavourite(game.path, config::LibraryFavourites.get());
+		item.isGame = item.canFavourite;
+		item.playTimeSeconds = art.playTimeSeconds.value_or(0);
 		item.metadata = {
 			{"title", title}, {"description", game.desc},
 			{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
@@ -2538,6 +2540,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			{"lastPlayed", ""}, {"size", formatLibrarySize(game.size)}
 		};
 		const time_t lastPlayed = getLibraryGameLastBooted(game, art.uniqueId);
+		item.lastPlayed = lastPlayed;
 		if (lastPlayed != 0)
 			item.metadata["lastPlayed"] = formatShortDateTime(lastPlayed);
 

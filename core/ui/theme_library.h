@@ -12,7 +12,14 @@ struct LibraryItem
 	std::string id, title, image;
 	std::map<std::string, std::string> metadata;
 	bool favourite = false, canFavourite = false;
+	bool isGame = true; // BIOS/device entries are excluded from play-history statistics.
+	double playTimeSeconds = 0;
+	int64_t lastPlayed = 0; // Unix seconds; zero means no recorded launch.
 };
+bool hasPlayed(const LibraryItem& item);
+// Numeric bindings use raw play history, never parse localized display strings.
+std::optional<double> libraryStat(const std::string& source, const std::vector<LibraryItem>& items,
+		int selected, int pageSize, int64_t now);
 // Media IDs follow LibraryCoverMediaMode; manuals and invalid values use the theme default.
 std::optional<std::string> iconArtworkSource(int mediaMode);
 // A game's rail tags, in manifest order. A tag with no value for this game is left out.

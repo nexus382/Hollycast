@@ -21,7 +21,7 @@ struct PixelArt
 };
 struct Element
 {
-	std::string type; // panel, image, artwork, text, metadata, details, button
+	std::string type; // panel, image, artwork, text, metadata, details, button, stat, meter
 	Rect rect;
 	std::string source; // package-relative image path, or metadata field
 	std::string text;
@@ -51,7 +51,7 @@ struct Element
 	std::optional<uint32_t> borderColor, selectedBorderColor;
 	// Validated package artwork that replaces a button's drawn background, by state.
 	std::string buttonImage, buttonHoverImage, buttonSelectedImage, buttonSelectedHoverImage;
-	std::string when; // Empty, attract, interactive, or launching: limits drawing to that state.
+	std::string when; // Empty, attract, interactive, launching, played, or unplayed.
 	float launchFadeFrom = -1; // While launching, fades in from this fraction of the launch; negative disables.
 	bool bleed = false; // Rect and spin use the whole library area, past a fixed-aspect canvas.
 	float slant = 0; // Text shear, as horizontal shift per unit of height.
@@ -62,6 +62,19 @@ struct Element
 	float spinCenterX = 0.5f, spinCenterY = 0.5f; // Canvas fractions; may lie outside the canvas.
 	float spinRadius = 0; // Fraction of canvas width.
 	float spinHole = -1; // Cuts the image to a round disc with this fraction of its radius open; negative keeps it square.
+	std::string anchor; // selection, selectionX, or selectionTrail; empty uses the authored rectangle.
+	float onSelection = 0; // Show briefly after selection changes; zero is persistent.
+	float tileSeconds = 0; // Seamlessly tile an image downward; zero leaves it still.
+	float maximum = 1; // Meter's full-scale value.
+	float valueScale = 1; // Multiplier for numeric stat text.
+	int digits = 0; // Minimum zero-padded digits for stat text.
+};
+// Optional fixed rows per grid page. Zero keeps the ordinary scrolling grid.
+struct PagedGrid
+{
+	int rows = 0;
+	float padding = 4;
+	std::string frame, unplayedFrame; // Validated package cell overlays.
 };
 // A perspective list that keeps the selected game at its center.
 struct Rail
@@ -126,6 +139,7 @@ struct Layout
 	std::string launchSound; // Validated package sound that opens a launch sequence.
 	float launchSeconds = 0; // Delay between choosing a game and starting it; zero starts at once.
 	Attract attract;
+	PagedGrid pagedGrid;
 };
 struct Theme
 {

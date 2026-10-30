@@ -74,15 +74,21 @@ protected:
 		const auto& vertices = ImGui::GetWindowDrawList()->VtxBuffer;
 		backgroundMesh.assign(vertices.begin(), vertices.end());
 		detailsMesh.clear();
+		overlayMesh.clear();
 		detailsWindow = nullptr;
 		const ImGuiID detailsId = ImGui::GetCurrentWindow()->GetID("##themeLibraryDetails");
+		const ImGuiID overlayId = ImGui::GetCurrentWindow()->GetID("##themeLibraryOverlay");
 		for (ImGuiWindow* child : ImGui::GetCurrentWindow()->DC.ChildWindows)
+		{
+			if (child->ChildId == overlayId)
+				overlayMesh.assign(child->DrawList->VtxBuffer.begin(), child->DrawList->VtxBuffer.end());
 			if (child->ChildId == detailsId)
 			{
 				detailsWindow = child;
 				detailsMesh.assign(child->DrawList->VtxBuffer.begin(), child->DrawList->VtxBuffer.end());
 				backgroundMesh.insert(backgroundMesh.end(), detailsMesh.begin(), detailsMesh.end());
 			}
+		}
 		backgroundVertices = std::count_if(backgroundMesh.begin(), backgroundMesh.end(), [](const ImDrawVert& vertex) {
 			return vertex.col == IM_COL32(0xe1, 0x5a, 0x77, 0xff);
 		});
@@ -98,6 +104,7 @@ protected:
 	std::vector<ImGuiID> itemIds;
 	size_t backgroundVertices = 0;
 	std::vector<ImDrawVert> backgroundMesh, browserMesh;
+	std::vector<ImDrawVert> overlayMesh;
 	float iconScale = 1.f;
 	std::filesystem::path artworkRoot;
 	bool useLibraryUi = false;
@@ -1693,4 +1700,141 @@ TEST_F(ThemeLibraryTest, PassiveFavouriteStarTracksStateWithoutAddingInteractive
  EXPECT_EQ(markerVertices(), 0); EXPECT_EQ(ids, itemIds);
  items[1].favourite = true; layout.showFavouriteMarker = false; renderFrame(ImVec2(-1, -1), false);
  EXPECT_EQ(markerVertices(), 0); EXPECT_EQ(ids, itemIds);
+}
+
+TEST(ThemeStatsTest, CountsActualGamesAndUsesRawHistory)
+{
+	std::vector<themes::LibraryItem> games(4);
+	games[0].isGame = false;
+	games[0].favourite = true; games[0].playTimeSeconds = 360000;
+	games[1].favourite = true; games[1].playTimeSeconds = 7200; games[1].lastPlayed = 1000;
+	games[2].playTimeSeconds = 1800; // Duration without a recorded timestamp is still played.
+	EXPECT_EQ(themes::libraryStat("gameCount", games, 1, 16, 2000), 3);
+	EXPECT_EQ(themes::libraryStat("favouriteCount", games, 1, 16, 2000), 1);
+	EXPECT_EQ(themes::libraryStat("unplayedCount", games, 1, 16, 2000), 1);
+	EXPECT_EQ(themes::libraryStat("totalPlayHours", games, 1, 16, 2000), 2.5);
+	EXPECT_EQ(themes::libraryStat("maxPlayHours", games, 1, 16, 2000), 2);
+	EXPECT_EQ(themes::libraryStat("playHours", games, 2, 16, 2000), .5);
+	EXPECT_FALSE(themes::libraryStat("playHours", games, 0, 16, 2000));
+	EXPECT_FALSE(themes::libraryStat("neglect", games, 2, 16, 2000));
+	EXPECT_FALSE(themes::libraryStat("unrecognized", games, 0, 16, 2000));
+}
+
+TEST(ThemeStatsTest, RecencyAndPageStatisticsHandleEmptyFutureAndOldHistory)
+{
+	std::vector<themes::LibraryItem> games(33);
+	const int64_t now = 100000000;
+	EXPECT_EQ(themes::libraryStat("neglect", games, 0, 16, now), 1);
+	games[0].lastPlayed = now + 60;
+	EXPECT_EQ(themes::libraryStat("neglect", games, 0, 16, now), .05);
+	games[0].lastPlayed = now - 86400 * 800;
+	EXPECT_EQ(themes::libraryStat("neglect", games, 0, 16, now), 1);
+	EXPECT_EQ(themes::libraryStat("page", games, 32, 16, now), 3);
+	EXPECT_EQ(themes::libraryStat("pageCount", games, 32, 16, now), 3);
+	EXPECT_EQ(themes::libraryStat("position", games, 32, 16, now), 33);
+	EXPECT_EQ(themes::libraryStat("pageCount", {}, -1, 16, now), 0);
+	EXPECT_EQ(themes::libraryStat("page", {}, -1, 16, now), 0);
+	EXPECT_FALSE(themes::libraryStat("neglect", {}, -1, 16, now));
+}
+
+TEST_F(ThemeLibraryTest, PagedGridSubmitsOneWaveAndPageButtonsReachThePartialLastWave)
+{
+	layout.id = "paged-grid-buttons";
+	layout.browser = {0,0,.6f,1}; layout.columns = 2; layout.minItemWidth = 32;
+	layout.pagedGrid.rows = 2; layout.activation = "doubleClick";
+	items.clear();
+	for (int i=0; i<9; ++i) items.push_back({std::to_string(i), "Game " + std::to_string(i), {}, {}});
+	layout.elements = {{"button", {.65f,.3f,.3f,.15f}, {}, "Next"}};
+	layout.elements[0].action = "nextPage";
+	const ImVec2 away(-1,-1);
+	renderFrame(away,false);
+	EXPECT_NE(itemIds[0],0u); EXPECT_NE(itemIds[3],0u); EXPECT_EQ(itemIds[4],0u);
+	const ImVec2 next(canvasOrigin.x+canvasSize.x*.8f,canvasOrigin.y+canvasSize.y*.375f);
+	for (int page=0; page<2; ++page)
+	{
+		renderFrame(next,false); renderFrame(next,true); EXPECT_EQ(renderFrame(next,false),-1);
+		renderFrame(away,false);
+	}
+	EXPECT_EQ(itemIds[0],0u); EXPECT_EQ(itemIds[7],0u); EXPECT_NE(itemIds[8],0u);
+	layout.elements[0].action = "previousPage";
+	renderFrame(next,false); renderFrame(next,true); renderFrame(next,false); renderFrame(away,false);
+	EXPECT_NE(itemIds[4],0u); EXPECT_NE(itemIds[7],0u); EXPECT_EQ(itemIds[8],0u);
+}
+
+TEST_F(ThemeLibraryTest, PagedGridKeyboardMovesAcrossWaveBoundaryAndConfirmsActualGame)
+{
+	layout.id = "paged-grid-keys";
+	layout.browser = {0,0,1,1}; layout.columns = 2; layout.pagedGrid.rows = 2;
+	layout.activation = "doubleClick";
+	items.clear();
+	for (int i=0; i<8; ++i) items.push_back({std::to_string(i), "Game", {}, {}});
+	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	const ImVec2 away(-1,-1);
+	renderFrame(away,false); renderFrame(away,false);
+	for (int i=0; i<2; ++i)
+	{
+		ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow,true); renderFrame(away,false);
+		ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow,false); renderFrame(away,false);
+	}
+	EXPECT_NE(itemIds[4],0u);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter,true);
+	EXPECT_EQ(renderFrame(away,false),4);
+}
+
+TEST_F(ThemeLibraryTest, SelectionAnchorsFollowTheChosenCellAndTimedUnplayedBannerExpires)
+{
+	layout.id = "selection-effect-geometry";
+	layout.browser = {0,0,1,.7f}; layout.columns = 2; layout.pagedGrid.rows = 1;
+	layout.activation = "doubleClick"; items[0].playTimeSeconds = 1;
+	themes::Element follower{"panel", {.4f,.8f,.03f,.05f}, {}, {}, 0x07ea92ff};
+	follower.anchor = "selectionX";
+	themes::Element banner{"panel", {.1f,.5f,.8f,.1f}, {}, {}, 0xea0792ff};
+	banner.when = "unplayed"; banner.onSelection = .25f;
+	layout.elements = {follower,banner};
+	const auto colored = [&](ImU32 col) {
+		std::vector<ImVec2> points;
+		for (const auto& vertex: overlayMesh) if (vertex.col == col) points.push_back(vertex.pos);
+		return points;
+	};
+	const ImU32 green=IM_COL32(7,234,146,255), pink=IM_COL32(234,7,146,255);
+	renderFrame(ImVec2(-1,-1),false);
+	const auto first = colored(green);
+	ASSERT_FALSE(first.empty()); EXPECT_TRUE(colored(pink).empty());
+	const ImVec4 box = bounds[1]; const ImVec2 second((box.x+box.z)/2,(box.y+box.w)/2);
+	renderFrame(second,false); renderFrame(second,true); renderFrame(second,false);
+	const auto moved = colored(green);
+	ASSERT_FALSE(moved.empty()); EXPECT_GT(moved.front().x,first.front().x);
+	EXPECT_FALSE(colored(pink).empty());
+	ImGui::GetIO().DeltaTime = .4f; renderFrame(ImVec2(-1,-1),false);
+	EXPECT_TRUE(colored(pink).empty()); EXPECT_FALSE(colored(green).empty());
+	items[1].isGame = false;
+	layout.id = "selection-device-not-a-boss";
+	renderFrame(second,true); renderFrame(second,false);
+	EXPECT_TRUE(colored(pink).empty());
+}
+
+TEST_F(ThemeLibraryTest, PagedGridFitsItsRowsAtLargeIconScaleAndTabCanLeaveIt)
+{
+	layout.id = "paged-grid-large-scale"; layout.browser={0,0,.6f,1};
+	layout.columns=2; layout.minItemWidth=32; layout.pagedGrid.rows=4;
+	layout.spacing=48; iconScale=2;
+	items.resize(4);
+	for (int i=0;i<4;++i) items[i].id=std::to_string(i);
+	layout.elements={{"button",{.65f,.3f,.3f,.15f},{},"Next"}};
+	layout.elements[0].action="next";
+	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	const ImVec2 away(-1,-1);
+	renderFrame(away,false); renderFrame(away,false);
+	for (size_t i=0;i<items.size();++i)
+	{
+		ASSERT_NE(itemIds[i],0u);
+		EXPECT_GE(bounds[i].y,browserViewport.y-1);
+		EXPECT_LE(bounds[i].w,browserViewport.w+1);
+	}
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab,true); renderFrame(away,false);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab,false); renderFrame(away,false);
+	const ImGuiID before=GImGui->NavId;
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab,true); renderFrame(away,false);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab,false); renderFrame(away,false);
+	EXPECT_NE(GImGui->NavId,before);
 }
