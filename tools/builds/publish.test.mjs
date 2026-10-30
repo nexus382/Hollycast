@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { archiveName, eligibleRun, publishBuilds, publishRun, uploadArtifact } from './publish.mjs';
+import { archiveName, eligibleRun, publishBuilds, publishRun, uploadArtifact, uploadReleaseAsset } from './publish.mjs';
 
 const repository = 'nexus382/Hollycast';
 function run(overrides = {}) {
@@ -136,6 +136,29 @@ test('changelogs compare earlier branch commits and tolerate history disappearin
     await publishRun(repository, run(), api, async () => {}, [prior]);
     assert.match(body, gone ? /previous commit is no longer available/ : /Fix audio/);
   }
+});
+
+test('rolling release transfers verify original release ZIPs and upload checksums as text', async () => {
+  const bytes = Buffer.from('original ZIP bytes');
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  const release = { upload_url: `https://uploads.github.com/repos/${repository}/releases/99/assets{?name,label}` };
+  let uploads = 0;
+  const fetchImpl = async (url, options) => {
+    if (options.method !== 'POST') {
+      assert.equal(url, `https://api.github.com/repos/${repository}/releases/assets/123`);
+      assert.equal(options.headers.Accept, 'application/octet-stream');
+      return new Response(bytes);
+    }
+    uploads++;
+    if (options.headers['Content-Type'] === 'text/plain') assert.equal(options.body, 'checksum text\n');
+    else assert.deepEqual(Buffer.from(await options.body.arrayBuffer()), bytes);
+    return new Response('', { status: 201 });
+  };
+  await uploadReleaseAsset(repository, 'test-token', release, { id: 123, digest, size: bytes.length }, 'Hollycast-linux-x64.zip', fetchImpl);
+  await uploadReleaseAsset(repository, 'test-token', release, { text: 'checksum text\n' }, 'SHA256SUMS.txt', fetchImpl);
+  assert.equal(uploads, 2);
+  await assert.rejects(uploadReleaseAsset(repository, 'test-token', release, { id: 123, digest: artifact.digest }, 'bad.zip', fetchImpl), /digest mismatch/);
+  assert.equal(uploads, 2);
 });
 
 test('backfill selects the latest successful run of each platform for both branches', async () => {

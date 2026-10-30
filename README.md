@@ -6,6 +6,10 @@
 
 <sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>
 
+[![Latest Dev](https://img.shields.io/badge/latest%20dev-download-orange)](https://github.com/nexus382/Hollycast/releases/tag/latest-dev)
+
+The [latest development release](https://github.com/nexus382/Hollycast/releases/tag/latest-dev) updates when Android, Windows, Linux, macOS, Switch and Xbox / UWP downloads are all ready for the same `dev` commit. If a platform is still building or fails, the previous complete build stays available. These builds may be unstable.
+
 Hollycast is a multi-platform Sega Dreamcast, Naomi, Naomi 2, and Atomiswave emulator, derived from [Flycast](https://github.com/flyinghead/flycast), the open-source Sega Dreamcast emulator.
 
 Our mission is simple: follow upstream core emulation code while delivering a modern UI, more front-end features, and power-user controls.

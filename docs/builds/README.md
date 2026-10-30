@@ -33,6 +33,24 @@ ZIP layout, so users must extract them. Published assets are not replaced and do
 not expire with the original Actions artifact. Manual releases are not modified
 or displaced as GitHub's latest release.
 
+The [Latest Development Build](https://github.com/nexus382/Hollycast/releases/tag/latest-dev)
+is a rolling prerelease sourced exclusively from `dev`. It uses the same six-platform,
+same-commit completeness rule as the catalog. Newer incomplete commits, master builds,
+drafts and unfinished assets cannot fill missing platforms or displace the current
+complete dev build. Older completions cannot roll it back.
+
+The publisher copies the six selected CI release archives into a separate draft using
+consistent filenames, verifies their SHA256 digests, and adds `SHA256SUMS.txt`. Existing
+downloads stay available during staging; retries reuse verified draft assets. Once
+all seven assets are verified, the previous rolling release is retained under
+`latest-dev-<commit>`, the `latest-dev` Git tag moves to the new source commit, and the
+draft is promoted. A failed promotion attempts to restore the previous release and
+tag; retry the workflow if GitHub is unavailable during recovery. Rolling releases
+and their archives are excluded from the catalog to avoid duplicating CI history.
+Notes include the source commit, build date and changelog. ZIP contents are copied
+without extraction, including any existing outer artifact ZIP. Stable releases
+keep GitHub's official Latest designation.
+
 Only this repository's `master` and `dev` platform pushes are eligible. Failed,
 pull-request and fork builds are excluded. New releases remain drafts until all
 uploads succeed; retries reuse completed assets and remove only empty, unfinished
@@ -54,7 +72,7 @@ releases were not marked as prereleases. CI changelogs compare an earlier public
 build on the same branch, with up to 100 commit messages and a comparison link.
 Without linear earlier history, the current commit message is shown explicitly.
 
-Run `node --test tools/builds/catalog.test.mjs tools/builds/publish.test.mjs` and then
+Run `node --test tools/builds/*.test.mjs` and then
 `node tools/builds/catalog.mjs` from the repository root to generate the catalog.
 `GH_TOKEN` may be supplied for API access. Serve `docs/builds` with any static
 HTTP server for local preview. Generated `builds.json` is not committed.
