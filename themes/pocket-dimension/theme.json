@@ -1,0 +1,832 @@
+{
+  "formatVersion": 1,
+  "id": "pocket-dimension",
+  "name": "Pocket Dimension",
+  "author": "Hollycast contributors",
+  "description": "A tactile VMU library with LCD artwork, physical browse buttons, and a photo of the selected game.",
+  "baseTheme": 1,
+  "colors": {
+    "Text": "334238",
+    "TextDisabled": "67785f",
+    "WindowBg": "eeede5",
+    "ChildBg": "eeede5",
+    "PopupBg": "f4f2e6",
+    "Border": "bcc6af",
+    "Separator": "c7cbb9",
+    "FrameBg": "e1e5d5",
+    "FrameBgHovered": "d3dcc7",
+    "FrameBgActive": "c3d0b4",
+    "Button": "eeede5",
+    "ButtonHovered": "d0dac3",
+    "ButtonActive": "60745a",
+    "Header": "cad6bf",
+    "HeaderHovered": "bccdaf",
+    "HeaderActive": "a6bc97",
+    "CheckMark": "536c47",
+    "SliderGrab": "68815b",
+    "SliderGrabActive": "455e39",
+    "NavCursor": "455e39",
+    "ScrollbarBg": "9eae9100",
+    "ScrollbarGrab": "71886699",
+    "ScrollbarGrabHovered": "536e48",
+    "ScrollbarGrabActive": "354e2d",
+    "TitleBg": "dce2d0",
+    "TitleBgActive": "cad6bf",
+    "TableHeaderBg": "d5dfca",
+    "TextLink": "3e6434"
+  },
+  "fonts": {
+    "body": "assets/SpaceMono-Regular.ttf",
+    "bold": "assets/SpaceMono-Regular.ttf"
+  },
+  "layouts": [
+    {
+      "id": "pocket",
+      "name": "Pocket library",
+      "mode": "grid",
+      "browser": [
+        0.092891,
+        0.287461,
+        0.223828,
+        0.263613
+      ],
+      "columns": 3,
+      "itemAspect": 1.06,
+      "spacing": 6,
+      "minItemWidth": 42,
+      "showTitles": true,
+      "fontSize": 0.019,
+      "titleStyle": "initials",
+      "textColor": "26392d",
+      "selectedTextColor": "26392d",
+      "selectorColor": "26392d",
+      "selectorStyle": "outline",
+      "background": "eeede5",
+      "canvasAspect": 1.65,
+      "toolbar": "compact",
+      "toolbarSelectedTextColor": "f5f4e9",
+      "activation": "doubleClick",
+      "toolbarLogo": "assets/hollycast-logo.png",
+      "toolbarLogoHeight": 50,
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "previewSource": "cover",
+      "pixelArt": {
+        "resolution": 24,
+        "dark": "26392d",
+        "light": "a1b88f"
+      },
+      "placeholder": "assets/lcd-placeholder.png",
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/paper.png",
+          "fit": "stretch",
+          "zIndex": -10
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.005,
+            0,
+            0.4,
+            0.99
+          ],
+          "source": "assets/device-polished-v1.png",
+          "fit": "stretch",
+          "zIndex": -2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.093281,
+            0.250723,
+            0.222656,
+            0.022559
+          ],
+          "text": "GAME SELECT",
+          "fontSize": 0.019,
+          "color": "26392d"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.093281,
+            0.277148,
+            0.222656,
+            0.002578
+          ],
+          "color": "455d3e"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.069453,
+            0.727031,
+            0.037109,
+            0.06123
+          ],
+          "action": "previous",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.130781,
+            0.727031,
+            0.037109,
+            0.06123
+          ],
+          "action": "next",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.099922,
+            0.676758,
+            0.037109,
+            0.06123
+          ],
+          "action": "up",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.099922,
+            0.778594,
+            0.037109,
+            0.06123
+          ],
+          "action": "down",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.289375,
+            0.689648,
+            0.056641,
+            0.093457
+          ],
+          "action": "artwork",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.5,
+          "source": "cover"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.230781,
+            0.750234,
+            0.056641,
+            0.093457
+          ],
+          "action": "artwork",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.5,
+          "source": "screenshot"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.45,
+            0.055,
+            0.36,
+            0.035
+          ],
+          "text": "Selected game",
+          "fontSize": 0.019,
+          "color": "64775c"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.89,
+            0.05,
+            0.085,
+            0.038
+          ],
+          "color": "dce2d2"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.89,
+            0.058,
+            0.085,
+            0.027
+          ],
+          "source": "format",
+          "text": "Game",
+          "fontSize": 0.017,
+          "color": "3c503f",
+          "align": "center"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.45,
+            0.108,
+            0.525,
+            0.11
+          ],
+          "source": "title",
+          "text": "",
+          "fontSize": 0.057,
+          "color": "26392d"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.44,
+            0.227,
+            0.54,
+            0.46
+          ],
+          "source": "assets/display-frame.png",
+          "fit": "stretch"
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.457,
+            0.25,
+            0.506,
+            0.393
+          ],
+          "source": "preview",
+          "fit": "cover",
+          "color": "b1c29b36",
+          "zIndex": 1
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.47,
+            0.259,
+            0.48,
+            0.376
+          ],
+          "source": "preview",
+          "fit": "contain",
+          "fallbackImage": "assets/artwork-placeholder.png",
+          "zIndex": 2
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.45,
+            0.712,
+            0.525,
+            0.151
+          ],
+          "columns": 2,
+          "fontSize": 0.018,
+          "color": "334238",
+          "fields": [
+            "developer",
+            "publisher",
+            "genre",
+            "players",
+            "releaseDate",
+            "region",
+            "format",
+            "productId",
+            "playTime",
+            "lastPlayed",
+            "size",
+            "description"
+          ]
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.45,
+            0.873,
+            0.525,
+            0.0015
+          ],
+          "color": "c5cbbb"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.86,
+            0.896,
+            0.115,
+            0.077
+          ],
+          "action": "activate",
+          "text": "Play",
+          "color": "f7f5ea",
+          "background": "526b4e",
+          "fontSize": 0.024,
+          "rounding": 0.3
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.71,
+            0.909,
+            0.14,
+            0.052
+          ],
+          "action": "favourite",
+          "text": "Favourite",
+          "color": "445c42",
+          "background": "e3e8da",
+          "fontSize": 0.02,
+          "selectedText": "Favourited",
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "borderColor": "91a189",
+          "selectedBorderColor": "526b4e",
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "526b4e",
+          "rounding": 0.5
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.04,
+            0.964,
+            0.365,
+            0.031
+          ],
+          "text": "< > Browse   A Cover   B Screenshot",
+          "fontSize": 0.019,
+          "color": "64775c"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.45,
+            0.909,
+            0.06,
+            0.052
+          ],
+          "action": "artwork",
+          "text": "Cover",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.017,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "cover"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.51,
+            0.909,
+            0.097,
+            0.052
+          ],
+          "action": "artwork",
+          "text": "Screenshot",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.017,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "screenshot"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.607,
+            0.909,
+            0.043,
+            0.052
+          ],
+          "action": "artwork",
+          "text": "Mix",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.017,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "miximage"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.65,
+            0.909,
+            0.05,
+            0.052
+          ],
+          "action": "artwork",
+          "text": "Disc",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.017,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "physical"
+        }
+      ],
+      "narrowLayout": "pocket-portrait",
+      "narrowAspect": 1.15
+    },
+    {
+      "id": "pocket-portrait",
+      "name": "Pocket library (portrait)",
+      "mode": "grid",
+      "browser": [
+        0.32623,
+        0.148521,
+        0.346934,
+        0.1362
+      ],
+      "columns": 3,
+      "itemAspect": 1.06,
+      "spacing": 6,
+      "minItemWidth": 32,
+      "showTitles": true,
+      "fontSize": 0.016,
+      "titleStyle": "initials",
+      "textColor": "26392d",
+      "selectedTextColor": "26392d",
+      "selectorColor": "26392d",
+      "selectorStyle": "outline",
+      "background": "eeede5",
+      "canvasAspect": 0.55,
+      "toolbar": "compact",
+      "toolbarSelectedTextColor": "f5f4e9",
+      "activation": "doubleClick",
+      "toolbarLogo": "assets/hollycast-logo.png",
+      "toolbarLogoHeight": 50,
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "previewSource": "cover",
+      "pixelArt": {
+        "resolution": 24,
+        "dark": "26392d",
+        "light": "a1b88f"
+      },
+      "placeholder": "assets/lcd-placeholder.png",
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/paper.png",
+          "fit": "stretch",
+          "zIndex": -10
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.19,
+            0,
+            0.62,
+            0.5115
+          ],
+          "source": "assets/device-polished-v1.png",
+          "fit": "stretch",
+          "zIndex": -2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.326836,
+            0.12954,
+            0.345117,
+            0.011655
+          ],
+          "text": "GAME SELECT",
+          "fontSize": 0.016,
+          "color": "26392d"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.326836,
+            0.143193,
+            0.345117,
+            0.001332
+          ],
+          "color": "455d3e"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.289902,
+            0.375633,
+            0.05752,
+            0.031636
+          ],
+          "action": "previous",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.384961,
+            0.375633,
+            0.05752,
+            0.031636
+          ],
+          "action": "next",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.337129,
+            0.349658,
+            0.05752,
+            0.031636
+          ],
+          "action": "up",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.337129,
+            0.402273,
+            0.05752,
+            0.031636
+          ],
+          "action": "down",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.12
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.630781,
+            0.356318,
+            0.087793,
+            0.048286
+          ],
+          "action": "artwork",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.5,
+          "source": "cover"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.539961,
+            0.387621,
+            0.087793,
+            0.048286
+          ],
+          "action": "artwork",
+          "text": "",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.024,
+          "rounding": 0.5,
+          "source": "screenshot"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.07,
+            0.52,
+            0.86,
+            0.058
+          ],
+          "source": "title",
+          "text": "",
+          "fontSize": 0.027,
+          "color": "26392d"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.06,
+            0.584,
+            0.88,
+            0.191
+          ],
+          "source": "assets/display-frame.png",
+          "fit": "stretch"
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.085,
+            0.596,
+            0.83,
+            0.159
+          ],
+          "source": "preview",
+          "fit": "cover",
+          "color": "b1c29b36",
+          "zIndex": 1
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.105,
+            0.601,
+            0.79,
+            0.149
+          ],
+          "source": "preview",
+          "fit": "contain",
+          "fallbackImage": "assets/artwork-placeholder.png",
+          "zIndex": 2
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.07,
+            0.79,
+            0.86,
+            0.12
+          ],
+          "columns": 1,
+          "fontSize": 0.015,
+          "color": "334238",
+          "fields": [
+            "developer",
+            "publisher",
+            "genre",
+            "players",
+            "releaseDate",
+            "region",
+            "format",
+            "productId",
+            "playTime",
+            "lastPlayed",
+            "size",
+            "description"
+          ]
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.7,
+            0.951,
+            0.23,
+            0.041
+          ],
+          "action": "activate",
+          "text": "Play",
+          "color": "f7f5ea",
+          "background": "526b4e",
+          "fontSize": 0.024,
+          "rounding": 0.3
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.07,
+            0.951,
+            0.6,
+            0.041
+          ],
+          "action": "favourite",
+          "text": "Favourite",
+          "color": "445c42",
+          "background": "e3e8da",
+          "fontSize": 0.016,
+          "selectedText": "Favourited",
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "borderColor": "91a189",
+          "selectedBorderColor": "526b4e",
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "526b4e",
+          "rounding": 0.5
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.07,
+            0.916,
+            0.18,
+            0.029
+          ],
+          "action": "artwork",
+          "text": "Cover",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.014,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "cover"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.25,
+            0.916,
+            0.32,
+            0.029
+          ],
+          "action": "artwork",
+          "text": "Screenshot",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.014,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "screenshot"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.57,
+            0.916,
+            0.18,
+            0.029
+          ],
+          "action": "artwork",
+          "text": "Mix",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.014,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "miximage"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.75,
+            0.916,
+            0.18,
+            0.029
+          ],
+          "action": "artwork",
+          "text": "Disc",
+          "color": "334238",
+          "background": "00000000",
+          "fontSize": 0.014,
+          "selectedColor": "f5f4e9",
+          "selectedBackground": "60745a",
+          "rounding": 0.5,
+          "source": "physical"
+        }
+      ]
+    }
+  ]
+}

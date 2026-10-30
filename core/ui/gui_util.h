@@ -28,6 +28,7 @@
 #include "oslib/oslib.h"
 #include "oslib/i18n.h"
 #include "stdclass.h"
+#include "theme.h"
 
 #include <algorithm>
 #include <chrono>
@@ -290,6 +291,7 @@ public:
 	ImTextureID getId() override;
 	// Reads dimensions without decoding/uploading off-screen library artwork. Zero means unavailable.
 	float getAspectRatio() const;
+	void setPixelArt(const themes::PixelArt& style) { pixelArt = style; }
 
 	static void resetLoadCount() {
 		textureLoadCount = 0;
@@ -300,6 +302,7 @@ private:
 	std::string path;
 	bool boundedImage = false;
 	bool themeAsset = false;
+	themes::PixelArt pixelArt;
 	static int textureLoadCount;
 };
 

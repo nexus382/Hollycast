@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 #include "ui/theme.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -151,6 +152,154 @@ TEST(ThemeParserTest, RejectsUnsupportedVersionUnknownFieldsAndInvalidNumbers)
 	expectRejected(replaceOnce(kManifest, "\"Text\": \"112233\"", "\"Text\": \"12xz33\""), "hexadecimal digits");
 }
 
+TEST(ThemeParserTest, PresentationExtensionsAreOptionalAndKeepLegacyDefaults)
+{
+	const auto theme = parseFixture(R"({"formatVersion":1,"id":"plain","name":"Plain","layouts":[{"id":"grid","name":"Grid","mode":"grid","browser":[0,0,1,1]}]})");
+	ASSERT_EQ(theme.layouts.size(), 1u);
+	const auto& layout = theme.layouts.front();
+	EXPECT_EQ(layout.toolbar, "standard");
+	EXPECT_EQ(layout.activation, "singleClick");
+	EXPECT_EQ(layout.titleStyle, "full");
+	EXPECT_EQ(layout.selectorStyle, "fill");
+	EXPECT_EQ(layout.pixelArt.resolution, 0);
+	EXPECT_FLOAT_EQ(layout.canvasAspect, 0);
+	EXPECT_FLOAT_EQ(layout.minItemWidth, 96);
+	EXPECT_TRUE(layout.showItemActions);
+	EXPECT_FALSE(layout.showFavouriteMarker);
+	EXPECT_TRUE(layout.hoverDetails);
+	EXPECT_TRUE(layout.narrowLayout.empty());
+	EXPECT_FALSE(layout.toolbarSelectedTextColor.has_value());
+	EXPECT_TRUE(layout.toolbarLogoAsset.empty());
+	EXPECT_FLOAT_EQ(layout.toolbarLogoHeight, 0);
+	EXPECT_TRUE(theme.fonts.empty());
+}
+
+TEST(ThemeParserTest, BrandingAndArtworkFallbackStayInsideThePackage)
+{
+	TempDirectory package;
+	fs::create_directories(package.path / "art");
+	std::ofstream(package.path / "art" / "overlay.png", std::ios::binary) << "fixture";
+	const std::string branded = replaceOnce(replaceOnce(kManifest,
+			"\"columns\": 5", "\"toolbarLogo\":\"art/overlay.png\",\"toolbarLogoHeight\":50,\"columns\":5"),
+			"\"source\": \"cover\"", "\"source\":\"cover\",\"fallbackImage\":\"art/overlay.png\"");
+	const auto theme = parseFixture(branded, package.path);
+	EXPECT_EQ(theme.layouts[0].toolbarLogoAsset, fs::canonical(package.path / "art" / "overlay.png").u8string());
+	EXPECT_FLOAT_EQ(theme.layouts[0].toolbarLogoHeight, 50);
+	EXPECT_EQ(theme.layouts[0].elements[2].resolvedFallbackAsset, theme.layouts[0].toolbarLogoAsset);
+	expectRejected(replaceOnce(branded, "\"toolbarLogo\":\"art/overlay.png\"", "\"toolbarLogo\":\"../outside.png\""), "parent traversal");
+	expectRejected(replaceOnce(branded, "\"toolbarLogo\":\"art/overlay.png\"", "\"toolbarLogo\":\"missing.png\""), "image inside");
+	expectRejected(replaceOnce(branded, "\"fallbackImage\":\"art/overlay.png\"", "\"fallbackImage\":\"../outside.png\""), "parent traversal");
+	expectRejected(replaceOnce(branded, "\"fallbackImage\":\"art/overlay.png\"", "\"fallbackImage\":\"missing.png\""), "image inside");
+	expectRejected(replaceOnce(branded, "\"toolbarLogoHeight\":50", "\"toolbarLogoHeight\":0"), "between");
+	expectRejected(replaceOnce(kManifest, "\"text\": \"Hello\"", "\"text\":\"Hello\",\"fallbackImage\":\"art/overlay.png\""), "only valid on artwork");
+}
+
+TEST(ThemeParserTest, DetailsPanelsDeclareTheirMetadataFieldsAndColumnCount)
+{
+	const std::string minimal = R"({"formatVersion":1,"id":"details-demo","name":"Details","layouts":[{"id":"main","name":"Main","mode":"grid","browser":[0,0,0.4,1],"elements":[{"type":"details","rect":[0.5,0,0.5,1],"fields":["developer","publisher","players","description"],"columns":2}]}]})";
+	const auto theme = parseFixture(minimal);
+	EXPECT_EQ(theme.layouts[0].elements[0].fields.size(), 4u);
+	EXPECT_EQ(theme.layouts[0].elements[0].columns, 2);
+	expectRejected(replaceOnce(minimal, "\"developer\"", "\"remote-data\""), "supported metadata");
+	expectRejected(replaceOnce(minimal, "\"publisher\"", "\"developer\""), "unique");
+	expectRejected(replaceOnce(minimal, "\"columns\":2", "\"columns\":4"), "between");
+	expectRejected(replaceOnce(minimal, "\"type\":\"details\"", "\"type\":\"text\""), "only valid on details");
+	expectRejected(replaceOnce(minimal, "\"columns\":2", "\"columns\":2,\"zIndex\":-1"), "above the browser");
+}
+
+TEST(ThemeParserTest, FavouriteActionsAndSelectedLabelsAreReusableButtonOptions)
+{
+	const std::string manifest = R"({"formatVersion":1,"id":"actions-demo","name":"Actions","layouts":[{"id":"main","name":"Main","mode":"grid","browser":[0,0,0.6,1],"elements":[{"type":"button","rect":[0.7,0.1,0.2,0.1],"action":"favourite","text":"Favourite","selectedText":"Favourited"}]}]})";
+	const auto theme = parseFixture(manifest);
+	EXPECT_EQ(theme.layouts[0].elements[0].action, "favourite");
+	EXPECT_EQ(theme.layouts[0].elements[0].selectedText, "Favourited");
+	expectRejected(replaceOnce(manifest, "\"type\":\"button\"", "\"type\":\"text\""), "only valid on buttons");
+}
+
+TEST(ThemeParserTest, ButtonIconsAndBordersAreOptInAndValidated)
+{
+	const std::string manifest = R"({"formatVersion":1,"id":"icon-demo","name":"Icons","layouts":[{"id":"main","name":"Main","mode":"list","browser":[0,0,0.6,1],"elements":[{"type":"button","rect":[0.7,0.1,0.2,0.1],"action":"favourite","text":"Favourite","icon":"star","selectedIcon":"star-filled","borderColor":"91a189","selectedBorderColor":"526b4e"}]}]})";
+	const auto theme = parseFixture(manifest);
+	const auto& button = theme.layouts[0].elements[0];
+	EXPECT_EQ(button.icon, "star");
+	EXPECT_EQ(button.selectedIcon, "star-filled");
+	EXPECT_EQ(button.borderColor, 0x91a189ff);
+	EXPECT_EQ(button.selectedBorderColor, 0x526b4eff);
+	expectRejected(replaceOnce(manifest, "\"icon\":\"star\"", "\"icon\":\"unknown\""), "star or star-filled");
+	expectRejected(replaceOnce(manifest, "\"selectedIcon\":\"star-filled\"", "\"selectedIcon\":\"unknown\""), "star or star-filled");
+	expectRejected(replaceOnce(manifest, "\"type\":\"button\"", "\"type\":\"text\""), "only valid on buttons");
+	const auto plain = parseFixture(replaceOnce(manifest,
+			",\"icon\":\"star\",\"selectedIcon\":\"star-filled\",\"borderColor\":\"91a189\",\"selectedBorderColor\":\"526b4e\"", ""));
+	EXPECT_TRUE(plain.layouts[0].elements[0].icon.empty());
+	EXPECT_FALSE(plain.layouts[0].elements[0].borderColor);
+}
+
+TEST(ThemeParserTest, ParsesReusablePresentationControlsAndResponsiveFallback)
+{
+	const auto theme = parseFixture(R"({"formatVersion":1,"id":"lcd-demo","name":"LCD demo","layouts":[
+	 {"id":"wide","name":"Wide","mode":"grid","browser":[0.1,0.1,0.4,0.4],"canvasAspect":1.6,"toolbar":"compact","toolbarSelectedTextColor":"ffffff","activation":"doubleClick","minItemWidth":42,"titleStyle":"initials","selectorStyle":"outline","showItemActions":false,"showFavouriteMarker":true,"hoverDetails":false,"pixelArt":{"resolution":24,"dark":"102030","light":"aabbcc"},"previewSource":"screenshot","narrowLayout":"tall","narrowAspect":1.15,"elements":[{"type":"button","rect":[0.6,0.1,0.1,0.1],"action":"artwork","source":"cover","background":"00000000","rounding":0.5,"selectedColor":"ffffff","selectedBackground":"60745a"},{"type":"artwork","rect":[0.6,0.3,0.3,0.3],"source":"preview"}]},
+	 {"id":"tall","name":"Tall","mode":"list","browser":[0,0,1,1]}]})");
+	const auto& layout = theme.layouts[0];
+	EXPECT_EQ(layout.pixelArt.resolution, 24);
+	EXPECT_EQ(layout.pixelArt.dark, 0x102030ff);
+	EXPECT_TRUE(layout.showFavouriteMarker);
+	EXPECT_EQ(layout.titleStyle, "initials");
+	EXPECT_EQ(layout.elements[0].action, "artwork");
+	EXPECT_EQ(*layout.elements[0].background, 0u);
+	EXPECT_FLOAT_EQ(*layout.elements[0].buttonRounding, 0.5f);
+	EXPECT_EQ(*layout.elements[0].selectedColor, 0xffffffff);
+	EXPECT_EQ(*layout.elements[0].selectedBackground, 0x60745aff);
+	EXPECT_EQ(*layout.toolbarSelectedTextColor, 0xffffffff);
+	EXPECT_EQ(&themes::responsiveLayout(theme, layout, 1.6f), &theme.layouts[0]);
+	EXPECT_EQ(&themes::responsiveLayout(theme, layout, 0.6f), &theme.layouts[1]);
+	EXPECT_EQ(&themes::responsiveLayout(theme, theme.layouts[1], 0.6f), &theme.layouts[1]);
+}
+
+TEST(ThemeParserTest, RejectsMalformedPresentationExtensionsInsteadOfSilentlyIgnoringThem)
+{
+	const std::string minimal = R"({"formatVersion":1,"id":"test","name":"Test","layouts":[{"id":"grid","name":"Grid","mode":"grid","browser":[0,0,1,1], EXTRA}]})";
+	for (const std::string& value : {
+			R"("canvasAspect":0)", R"("toolbar":"hidden")", R"("activation":"never")",
+			R"("minItemWidth":1)", R"("titleStyle":"guess")", R"("selectorStyle":"invalid")",
+			R"("pixelArt":{"resolution":1024})", R"("pixelArt":{"resolution":24,"typo":true})",
+			R"("narrowLayout":"missing")", R"("narrowLayout":"grid")", R"("narrowAspect":1.2)",
+			R"("elements":[{"type":"button","rect":[0,0,0.2,0.2],"action":"script"}])",
+			R"("elements":[{"type":"button","rect":[0,0,0.2,0.2],"action":"artwork","source":"remote"}])",
+			R"("elements":[{"type":"button","rect":[0,0,0.2,0.2],"action":"next","zIndex":-1}])",
+			R"("elements":[{"type":"button","rect":[0,0,0.2,0.2],"action":"next","rounding":0.6}])",
+			R"("elements":[{"type":"text","rect":[0,0,0.2,0.2],"action":"next"}])"})
+		expectRejected(replaceOnce(minimal, "EXTRA", value), "");
+	expectRejected(replaceOnce(kManifest, "\"baseTheme\": 2", "\"fonts\":{\"body\":\"../outside.ttf\"},\"baseTheme\":2"), "parent traversal");
+	expectRejected(replaceOnce(kManifest, "\"baseTheme\": 2", "\"fonts\":{\"body\":\"missing.ttf\"},\"baseTheme\":2"), "package font");
+}
+
+TEST(ThemeParserTest, BundledPocketDimensionUsesGenericExtensionsAndLocalAssets)
+{
+	const auto root = fs::path(FLYCAST_TEST_FILES).parent_path().parent_path();
+	const auto theme = themes::load((root / "themes" / "pocket-dimension").u8string());
+	EXPECT_EQ(theme.id, "pocket-dimension");
+	ASSERT_EQ(theme.layouts.size(), 2u);
+	EXPECT_EQ(theme.layouts[0].toolbar, "compact");
+	EXPECT_EQ(theme.layouts[0].pixelArt.resolution, 24);
+	EXPECT_EQ(theme.fonts.size(), 2u);
+	EXPECT_EQ(themes::responsiveLayout(theme, theme.layouts[0], 0.6f).id, "pocket-portrait");
+	for (const auto& layout : theme.layouts)
+		for (const char* media : {"cover", "screenshot", "miximage", "physical"})
+			EXPECT_TRUE(std::any_of(layout.elements.begin(), layout.elements.end(), [&](const themes::Element& e) {
+				return e.type == "button" && e.action == "artwork" && e.source == media;
+			})) << layout.id << ": " << media;
+	for (const char* id : {"preview-iconic-dark-grid", "preview-horizon-grid", "preview-cd-rack"})
+	{
+		const auto existing = themes::load((root / "themes" / id).u8string());
+		for (const auto& layout : existing.layouts)
+		{
+			EXPECT_EQ(layout.toolbar, "standard");
+			EXPECT_EQ(layout.activation, "singleClick");
+			EXPECT_EQ(layout.pixelArt.resolution, 0);
+		}
+	}
+}
+
 TEST(ThemeParserTest, AcceptsRectanglesEndingAtNormalizedBoundary)
 {
 	TempDirectory package;
@@ -286,7 +435,7 @@ TEST(ThemeParserTest, RackAllowsNarrowSpinesWithoutChangingGridLimits)
 TEST(ThemeParserTest, RejectsDuplicateLayoutIdsAndUnsupportedElementsOrBindings)
 {
 	expectRejected(replaceOnce(kManifest, "\"compact-list\"", "\"main-grid\""), "must be unique within the theme");
-	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, or metadata");
+	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, metadata, details, or button");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"developer\"", "\"source\": \"command\""), "supported metadata field");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "supported artwork source");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"art/overlay.png\"", "\"source\": \"\""), "is required for image elements");

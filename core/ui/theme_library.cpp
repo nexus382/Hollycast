@@ -2,6 +2,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "theme_library.h"
+#include "theme_artwork.h"
 
 #include "gui_util.h"
 #include "gui_font.h"
@@ -60,11 +61,12 @@ std::string itemKey(const LibraryItem& item, size_t index)
 }
 
 void drawFittedImage(ImDrawList* drawList, const ImRect& rect, const std::string& path,
-		const std::string& fit = "contain", uint32_t tint = 0xffffffff, float rounding = 0)
+		const std::string& fit = "contain", uint32_t tint = 0xffffffff, float rounding = 0, const PixelArt& pixelArt = {})
 {
 	if (!imguiDriver || path.empty() || rect.GetWidth() <= 0 || rect.GetHeight() <= 0)
 		return;
-	ImguiFileTexture texture(path);
+	ImguiFileTexture texture(path, pixelArt.resolution > 0);
+	texture.setPixelArt(pixelArt);
 	const ImTextureID id = texture.getId();
 	if (id == ImTextureID{})
 		return;
@@ -176,13 +178,13 @@ std::string elementText(const Element& element, const LibraryItem& item)
 	if (element.type == "metadata")
 	{
 		const auto it = item.metadata.find(element.source);
-		return it == item.metadata.end() ? std::string() : it->second;
+		return it == item.metadata.end() || it->second.empty() ? element.text : it->second;
 	}
 	return {};
 }
 
 void drawElement(const Element& element, const Canvas& canvas, const std::string& themeDirectory,
-		const LibraryItem* item, ImDrawList* drawList)
+		const LibraryItem* item, ImDrawList* drawList, const std::string& previewSource)
 {
 	const ImRect rect = normalizedRect(canvas, element.rect);
 	const ImRect visible(ImMax(rect.Min, canvas.origin), ImMin(rect.Max, canvas.max));
@@ -216,11 +218,13 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 	}
 	else if (item && element.type == "artwork")
 	{
-		// A miximage already contains its own cover/logo/disc. Do not duplicate those
-		// overlays when the hero falls back from a standalone screenshot to a miximage.
 		if (!element.requiresArtwork.empty() && artworkPath(*item, element.requiresArtwork, "none").empty())
 			return;
-		drawFittedImage(drawList, visible, artworkPath(*item, element.source, element.fallback), element.fit, element.color, element.rounding);
+		const std::string& source = element.source == "preview" ? previewSource : element.source;
+		const std::string fallback = element.source == "preview" && source != "cover" ? "none" : element.fallback;
+		std::string path = artworkPath(*item, source, fallback);
+		if (path.empty()) path = element.resolvedFallbackAsset;
+		drawFittedImage(drawList, visible, path, element.fit, element.color, element.rounding);
 	}
 	else if (element.type == "text" || (item && element.type == "metadata"))
 	{
@@ -253,7 +257,7 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 }
 
 void drawElements(const Layout& layout, const Canvas& canvas, const std::string& themeDirectory,
-		const LibraryItem* item, ImDrawList* drawList, bool beforeBrowser, const Rect& details, bool detailsOnly)
+		const LibraryItem* item, ImDrawList* drawList, bool beforeBrowser, const Rect& details, bool detailsOnly, const std::string& previewSource)
 {
 	std::vector<const Element*> sorted;
 	sorted.reserve(layout.elements.size());
@@ -268,27 +272,28 @@ void drawElements(const Layout& layout, const Canvas& canvas, const std::string&
 		return a->zIndex < b->zIndex;
 	});
 	for (const Element* element : sorted)
-		drawElement(*element, canvas, themeDirectory, item, drawList);
+		drawElement(*element, canvas, themeDirectory, item, drawList, previewSource);
 }
 
 bool browserSelectable(const Layout& layout, bool selected, const ImVec2& size)
 {
-	const bool customSelector = layout.selectorColor.has_value() || layout.rounding > 0;
+	const bool customSelector = layout.selectorColor.has_value() || layout.rounding > 0 || layout.selectorStyle == "outline";
 	const ImVec4 selector = layout.selectorColor
 			? ImGui::ColorConvertU32ToFloat4(color(*layout.selectorColor)) : ImGui::GetStyleColorVec4(ImGuiCol_Header);
 	if (customSelector)
 	{
 		ImVec4 fill = selector;
-		if (layout.rounding > 0) fill.w = 0;
+		if (layout.rounding > 0 || layout.selectorStyle == "outline") fill.w = 0;
 		ImGui::PushStyleColor(ImGuiCol_Header, fill);
 		ImGui::PushStyleColor(ImGuiCol_HeaderActive, fill);
 		fill.w *= 0.65f;
 		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, fill);
 	}
-	const bool pressed = ImGui::Selectable("##libraryItem", selected, ImGuiSelectableFlags_None, size);
+	const ImGuiSelectableFlags flags = layout.activation == "doubleClick" ? ImGuiSelectableFlags_AllowDoubleClick : ImGuiSelectableFlags_None;
+	const bool pressed = ImGui::Selectable("##libraryItem", selected, flags, size);
 	if (customSelector)
 		ImGui::PopStyleColor(3);
-	if (layout.rounding > 0 && (selected || ImGui::IsItemHovered()))
+	if (layout.rounding > 0 && layout.selectorStyle != "outline" && (selected || ImGui::IsItemHovered()))
 	{
 		ImVec4 fill = selector;
 		if (!selected && !pressed) fill.w *= 0.65f;
@@ -296,6 +301,235 @@ bool browserSelectable(const Layout& layout, bool selected, const ImVec2& size)
 				ImGui::ColorConvertFloat4ToU32(fill), uiScaled(layout.rounding));
 	}
 	return pressed;
+}
+
+bool activatesItem(const Layout& layout, bool pressed)
+{
+	return pressed && (layout.activation == "singleClick" || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+			|| GImGui->NavActivateId == ImGui::GetItemID());
+}
+
+const char* metadataLabel(const std::string& field)
+{
+	static const std::map<std::string, const char*> labels = {
+		{"title", "Title"}, {"developer", "Developer"}, {"publisher", "Publisher"},
+		{"genre", "Genre"}, {"players", "Players"}, {"releaseDate", "Released"},
+		{"productId", "Product ID"}, {"region", "Region"}, {"format", "Format"},
+		{"playTime", "Play time"}, {"lastPlayed", "Last played"}, {"size", "File size"}
+	};
+	const auto label = labels.find(field);
+	return label == labels.end() ? field.c_str() : i18n::T(label->second);
+}
+
+void drawDetails(const Layout& layout, const Canvas& canvas, const LibraryItem* item)
+{
+	for (size_t i = 0; i < layout.elements.size(); ++i)
+	{
+		const Element& element = layout.elements[i];
+		if (element.type != "details") continue;
+		const ImRect rect = normalizedRect(canvas, element.rect);
+		ImGui::SetCursorScreenPos(rect.Min);
+		ImguiID id("theme-details-" + std::to_string(i));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+		const bool visible = ImGui::BeginChild("##details", rect.GetSize(), ImGuiChildFlags_None,
+				ImGuiWindowFlags_NoBackground);
+		if (visible && item)
+		{
+			ImGui::PushFont(nullptr, std::clamp(element.fontSize * canvas.size.y, 10.f, 96.f));
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(color(element.color)));
+			ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(uiScaled(5), uiScaled(6)));
+			const ImGuiID itemId = ImGui::GetID(item->id.c_str());
+			ImGuiStorage* state = ImGui::GetStateStorage();
+			if (state->GetInt(ImGui::GetID("selectedItem")) != static_cast<int>(itemId))
+			{
+				ImGui::SetScrollY(0);
+				state->SetInt(ImGui::GetID("selectedItem"), static_cast<int>(itemId));
+			}
+			bool hasData = false;
+			std::string description;
+			if (ImGui::BeginTable("##metadata", element.columns * 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings))
+			{
+				for (int col = 0; col < element.columns; ++col)
+				{
+					ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch, 0.36f);
+					ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch, 0.64f);
+				}
+				for (const std::string& field : element.fields)
+				{
+					const auto value = item->metadata.find(field);
+					if (value == item->metadata.end() || value->second.empty()) continue;
+					if (field == "description") { description = value->second; continue; }
+					ImGui::TableNextColumn();
+					ImGui::TextDisabled("%s", metadataLabel(field));
+					ImGui::TableNextColumn();
+					ImGui::TextWrapped("%s", value->second.c_str());
+					hasData = true;
+				}
+				ImGui::EndTable();
+			}
+			if (!description.empty())
+			{
+				if (hasData) ImGui::Separator();
+				ImGui::TextWrapped("%s", description.c_str());
+			}
+			else if (!hasData)
+				ImGui::TextDisabled("%s", element.text.empty() ? i18n::T("No game details available.") : element.text.c_str());
+			ImGui::PopStyleVar();
+			ImGui::PopStyleColor();
+			ImGui::PopFont();
+		}
+		ImGui::EndChild();
+		ImGui::PopStyleVar();
+	}
+}
+
+void drawFavouriteMarker(const Layout& layout, const ImRect& rect, ImDrawList* drawList)
+{
+ const float padding = uiScaled(4.f);
+ const float side = std::min({ImGui::GetFontSize() * 1.2f, rect.GetWidth() - padding * 2, rect.GetHeight() - padding * 2});
+ if (side < 7.f) return;
+ const ImU32 ink = color(layout.pixelArt.resolution > 0 ? layout.pixelArt.dark : layout.textColor.value_or(0xffffffff));
+ drawList->PushClipRect(rect.Min, rect.Max, true);
+ if (layout.pixelArt.resolution > 0)
+ {
+  // A seven-dot LCD star stays sharp at small VMU sizes.
+  static constexpr const char* rows[] = {"0001000", "0011100", "1111111", "0111110", "0011100", "0110110", "1100011"};
+  const float dot = std::max(1.f, std::floor(side / 7.f));
+  const ImVec2 origin(std::floor(rect.Max.x - padding - dot * 7), std::floor(rect.Max.y - padding - dot * 7));
+  drawList->AddRectFilled(ImVec2(origin.x - dot, origin.y - dot), ImVec2(origin.x + dot * 8, origin.y + dot * 8), color(layout.pixelArt.light));
+  for (int y = 0; y < 7; ++y)
+   for (int x = 0; x < 7; ++x)
+    if (rows[y][x] == '1')
+     drawList->AddRectFilled(ImVec2(origin.x + x * dot, origin.y + y * dot), ImVec2(origin.x + (x + 1) * dot, origin.y + (y + 1) * dot), ink);
+ }
+ else
+ {
+  const ImVec2 center(rect.Max.x - padding - side * 0.5f, rect.Max.y - padding - side * 0.5f);
+  ImVec2 points[10];
+  for (int i = 0; i < 10; ++i) {
+   const float angle = -IM_PI * 0.5f + i * IM_PI * 0.2f;
+   const float radius = side * (i % 2 ? 0.23f : 0.5f);
+   points[i] = ImVec2(center.x + std::cos(angle) * radius, center.y + std::sin(angle) * radius);
+  }
+  drawList->AddConcavePolyFilled(points, 10, ink);
+ }
+ drawList->PopClipRect();
+}
+
+void drawButtonContents(const ImRect& rect, const std::string& label, const std::string& icon)
+{
+	const float fontSize = ImGui::GetFontSize();
+	const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+	const float iconSize = fontSize;
+	const float gap = label.empty() ? 0.f : fontSize * 0.45f;
+	const float width = iconSize + gap + textSize.x;
+	const ImVec2 center(rect.Min.x + (rect.GetWidth() - width + iconSize) * 0.5f,
+			rect.Min.y + rect.GetHeight() * 0.5f);
+	ImVec2 points[10];
+	for (int i = 0; i < 10; ++i)
+	{
+		const float angle = -IM_PI * 0.5f + i * IM_PI * 0.2f;
+		const float radius = iconSize * (i % 2 == 0 ? 0.5f : 0.23f);
+		points[i] = ImVec2(center.x + std::cos(angle) * radius, center.y + std::sin(angle) * radius);
+	}
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImU32 foreground = ImGui::GetColorU32(ImGuiCol_Text);
+	drawList->PushClipRect(rect.Min, rect.Max, true);
+	if (icon == "star-filled")
+		drawList->AddConcavePolyFilled(points, 10, foreground);
+	drawList->AddPolyline(points, 10, foreground, ImDrawFlags_Closed, std::max(1.f, fontSize * 0.075f));
+	drawList->AddText(ImVec2(center.x + iconSize * 0.5f + gap,
+			rect.Min.y + (rect.GetHeight() - textSize.y) * 0.5f), foreground, label.c_str());
+	drawList->PopClipRect();
+}
+
+void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<LibraryItem>& items,
+		int columns, int& selected, std::string& previewSource, bool& scrollSelection, int& activated,
+		const std::function<void(size_t)>& toggleFavourite)
+{
+	const size_t count = items.size();
+	for (size_t i = 0; i < layout.elements.size(); ++i)
+	{
+		const Element& element = layout.elements[i];
+		if (element.type != "button") continue;
+		const ImRect rect = normalizedRect(canvas, element.rect);
+		ImGui::SetCursorScreenPos(rect.Min);
+		ImguiID id("theme-action-" + std::to_string(i));
+		// A small input window gives a button its own hit region without a full-canvas
+		// overlay stealing mouse input from the game browser underneath.
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+		ImGui::BeginChild("##action", rect.GetSize(), ImGuiChildFlags_NavFlattened,
+				ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+		if (element.buttonRounding) ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, *element.buttonRounding * std::min(rect.GetWidth(), rect.GetHeight()));
+		const LibraryItem* item = selected >= 0 ? &items[selected] : nullptr;
+		const bool selectedButton = (element.action == "artwork" && element.source == previewSource)
+				|| (element.action == "favourite" && item && item->favourite);
+		const bool missingArtwork = element.action == "artwork" && item && artworkPath(*item, element.source, element.source == "cover" ? "default" : "none").empty();
+		const bool disabled = count == 0 || missingArtwork
+				|| (element.action == "favourite" && (!item || !item->canFavourite || !toggleFavourite));
+		const uint32_t textColor = selectedButton && element.selectedColor ? *element.selectedColor : element.color;
+		const auto buttonBackground = selectedButton && element.selectedBackground ? element.selectedBackground : element.background;
+		const auto borderColor = selectedButton && element.selectedBorderColor ? element.selectedBorderColor : element.borderColor;
+		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(color(textColor)));
+		if (borderColor)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(color(*borderColor)));
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, uiScaled(1.f));
+		}
+		if (buttonBackground)
+		{
+			const ImVec4 background = ImGui::ColorConvertU32ToFloat4(color(*buttonBackground));
+			ImVec4 hovered = background;
+			hovered.w = std::max(hovered.w, 0.15f);
+			// Opt-in outlined controls get visible hover feedback even with opaque fills.
+			if (borderColor)
+			{
+				const ImVec4 foreground = ImGui::ColorConvertU32ToFloat4(color(textColor));
+				hovered.x += (foreground.x - hovered.x) * 0.1f;
+				hovered.y += (foreground.y - hovered.y) * 0.1f;
+				hovered.z += (foreground.z - hovered.z) * 0.1f;
+			}
+			ImGui::PushStyleColor(ImGuiCol_Button, background);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hovered);
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, hovered);
+		}
+		ImGui::PushFont(nullptr, std::clamp(element.fontSize * canvas.size.y, 10.f, 96.f));
+		const std::string& label = selectedButton && !element.selectedText.empty() ? element.selectedText : element.text;
+		const std::string& icon = selectedButton && !element.selectedIcon.empty() ? element.selectedIcon : element.icon;
+		const float contentWidth = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetFontSize() * (label.empty() ? 1.f : 1.45f);
+		const bool fitIconLabel = !icon.empty() && contentWidth > rect.GetWidth() - uiScaled(16.f);
+		if (fitIconLabel) ImGui::PushFont(nullptr, ImGui::GetFontSize() * std::max(0.1f, rect.GetWidth() - uiScaled(16.f)) / contentWidth);
+		ImGui::BeginDisabled(disabled);
+		// Keep the widget ID stable when its visible label changes after a toggle.
+		const bool pressed = ImGui::Button(((icon.empty() ? label : std::string()) + "###control").c_str(), rect.GetSize());
+		if (!icon.empty()) drawButtonContents(rect, label, icon);
+		ImGui::EndDisabled();
+		if (fitIconLabel) ImGui::PopFont();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		{
+			if (missingArtwork)
+				ImGui::SetTooltip("%s", i18n::T("This artwork is not available for this game."));
+			else if (element.action == "favourite" && item && item->canFavourite)
+				ImGui::SetTooltip("%s", i18n::T(item->favourite ? "Remove from favourites" : "Add to favourites"));
+		}
+		ImGui::PopFont();
+		ImGui::PopStyleColor((buttonBackground ? 4 : 1) + (borderColor ? 1 : 0));
+		ImGui::PopStyleVar((element.buttonRounding ? 2 : 1) + (borderColor ? 1 : 0));
+		ImGui::EndChild();
+		ImGui::PopStyleVar();
+		if (!pressed || count == 0) continue;
+		if (element.action == "activate") activated = selected;
+		else if (element.action == "artwork") previewSource = element.source;
+		else if (element.action == "favourite") toggleFavourite(static_cast<size_t>(selected));
+		else
+		{
+			const int step = element.action == "previous" ? -1 : element.action == "up" ? -columns : element.action == "down" ? columns : 1;
+			const int length = static_cast<int>(count);
+			selected = ((selected + step) % length + length) % length;
+			scrollSelection = true;
+		}
+	}
 }
 
 ImU32 browserTextColor(const Layout& layout, bool selected)
@@ -321,18 +555,23 @@ std::optional<std::string> iconArtworkSource(int mediaMode)
 
 int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::vector<LibraryItem>& items, const std::function<void(size_t)>& afterItem,
-		const std::optional<std::string>& iconSource, float iconScale)
+		const std::optional<std::string>& iconSource, float iconScale,
+		const std::string& stateLayoutId, const std::function<void(size_t)>& toggleFavourite)
 {
 	iconScale = std::clamp(iconScale, 0.5f, 2.f);
 	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
 	static std::string selectedId;
 	static std::string selectedLayoutId;
-	const std::string layoutKey = themeDirectory + '/' + layout.id;
+	static std::string previewSource;
+	static bool scrollSelection = false;
+	const std::string layoutKey = themeDirectory + '/' + (stateLayoutId.empty() ? layout.id : stateLayoutId);
 	const bool layoutChanged = selectedLayoutId != layoutKey;
 	if (layoutChanged)
 	{
 		selectedLayoutId = layoutKey;
 		selectedId.clear();
+		previewSource = layout.previewSource;
+		scrollSelection = false;
 	}
 	int selected = -1;
 	for (int i = 0; i < static_cast<int>(items.size()); ++i)
@@ -347,12 +586,22 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		selectedId = itemKey(items.front(), 0);
 	}
 	const std::string selectionBeforeBrowsing = selectedId;
+	const LibraryItem* initial = selected >= 0 ? &items[selected] : nullptr;
+	if (initial && artworkPath(*initial, previewSource, previewSource == "cover" ? "default" : "none").empty() && !artworkPath(*initial, "cover").empty())
+		previewSource = "cover";
 
-	const ImVec2 canvasOrigin = ImGui::GetCursorScreenPos();
-	const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+	const ImVec2 contentOrigin = ImGui::GetCursorScreenPos();
+	const ImVec2 contentSize = ImGui::GetContentRegionAvail();
+	ImVec2 canvasOrigin = contentOrigin, canvasSize = contentSize;
+	if (layout.canvasAspect > 0 && canvasSize.x > 0 && canvasSize.y > 0)
+	{
+		canvasSize.x = std::min(canvasSize.x, canvasSize.y * layout.canvasAspect);
+		canvasSize.y = canvasSize.x / layout.canvasAspect;
+		canvasOrigin = canvasOrigin + (contentSize - canvasSize) * 0.5f;
+	}
 	const Canvas canvas{canvasOrigin, canvasSize, ImVec2(canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y), iconScale};
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
-	drawList->AddRectFilled(canvas.origin, canvas.max, color(layout.background));
+	drawList->AddRectFilled(contentOrigin, contentOrigin + contentSize, color(layout.background));
 
 	const ImRect browser = normalizedRect(canvas, layout.browser);
 	const ImVec2 browserPos(ImMax(browser.Min.x, canvas.origin.x), ImMax(browser.Min.y, canvas.origin.y));
@@ -369,6 +618,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(layout.mode == "rack" ? 0.f : previousItemSpacing.x, 0.f));
 	ImDrawList* browserDrawList = ImGui::GetWindowDrawList();
 	int activated = -1;
+	int browserColumns = 1;
 	if (childVisible && !items.empty())
 	{
 		const float spacing = std::max(0.0f, uiScaled(layout.spacing) * iconScale);
@@ -397,7 +647,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 						selected = i;
 						selectedId = key;
 					}
-					if (pressed)
+					if (activatesItem(layout, pressed))
 						activated = i;
 					const float padding = uiScaled(8.f);
 					float textLeft = itemRect.Min.x + padding;
@@ -421,9 +671,11 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 								ImVec2(itemRect.Max.x - padding, itemRect.Max.y), color(*layout.separatorColor));
 					if (layout.selectorBorderColor && (selectedId == key || hovered))
 						browserDrawList->AddRect(itemRect.Min, itemRect.Max, color(*layout.selectorBorderColor), uiScaled(layout.rounding));
+					if (layout.showFavouriteMarker && item.favourite) drawFavouriteMarker(layout, itemRect, browserDrawList);
 					// Draw per-game controls after the artwork/title, retaining the selectable's item data.
 					if (afterItem)
 						afterItem(static_cast<size_t>(i));
+					if (scrollSelection && i == selected) { ImGui::SetScrollHereY(); scrollSelection = false; }
 				}
 		}
 		else
@@ -433,14 +685,15 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 			const float availHeight = ImGui::GetContentRegionAvail().y;
 			const int desiredColumns = std::max(1, static_cast<int>(std::round(layout.columns / iconScale)));
 			const int columns = std::clamp(desiredColumns, 1, std::max(1, static_cast<int>((availWidth + spacing)
-					/ (uiScaled(rack ? 12.f : 96.f) * iconScale + (rack ? spacing : 0.f)))));
+					/ (uiScaled(rack ? 12.f : layout.minItemWidth) * iconScale + (rack ? spacing : 0.f)))));
+			browserColumns = columns;
 			const float cellWidth = std::max(1.0f, (availWidth - spacing * (columns - 1)) / columns);
 			const float aspect = std::clamp(layout.itemAspect, rack ? 0.03f : 0.3f, 3.0f);
 			const float rowSpacing = rack ? std::max(spacing, uiScaled(26.f)) : spacing;
 			// Always fit a complete jewel case and shelf in the browser viewport.
 			const float cellHeight = rack ? std::min(std::max(1.f, availHeight - rowSpacing),
 					std::clamp(cellWidth / aspect, uiScaled(140.f) * iconScale, uiScaled(280.f) * iconScale))
-					: std::max(uiScaled(70.0f), cellWidth / aspect);
+					: std::max(uiScaled(std::min(70.f, layout.minItemWidth)), cellWidth / aspect);
 			std::vector<float> spineWidths;
 			std::vector<int> shelfStarts;
 			if (rack && browserSource == "spine")
@@ -511,17 +764,20 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 							selected = i;
 							selectedId = key;
 						}
-						if (pressed)
+						if (activatesItem(layout, pressed))
 							activated = i;
 
-						const ImRect imageRect(itemRect.Min,
-								ImVec2(itemRect.Max.x, itemRect.Min.y + cellHeight * (layout.showTitles ? 0.78f : 1.f)));
-						const std::string image = artworkPath(item, browserSource, rack ? "none" : "default");
+						const float titleHeight = layout.showTitles
+								? std::max(cellHeight * 0.22f, ImGui::GetFontSize() + uiScaled(6.f)) : 0.f;
+						const ImRect imageRect(itemRect.Min, ImVec2(itemRect.Max.x,
+								itemRect.Min.y + std::max(1.f, cellHeight - titleHeight)));
+						std::string image = artworkPath(item, browserSource, rack ? "none" : "default");
+						if (image.empty() && !rack) image = layout.placeholderAsset;
 						const uint32_t tint = 0xffffff00 | static_cast<uint32_t>(255.f * ((selectedId == key || hovered) ? 1.f : layout.inactiveOpacity));
 						if (rack)
 							drawSpine(browserDrawList, itemRect, item, browserSource, selectedId == key || hovered, tint);
 						else
-							drawFittedImage(browserDrawList, imageRect, image, "contain", tint, layout.rounding);
+							drawFittedImage(browserDrawList, imageRect, image, "contain", tint, layout.rounding, layout.pixelArt);
 						if (selectedId == key || hovered)
 							browserDrawList->AddRect(itemRect.Min, itemRect.Max,
 									layout.selectorBorderColor ? color(*layout.selectorBorderColor)
@@ -536,15 +792,18 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 						{
 							const ImRect titleRect(ImVec2(itemRect.Min.x, imageRect.Max.y), itemRect.Max);
 							browserDrawList->PushClipRect(titleRect.Min, titleRect.Max, true);
+							const std::string label = layout.titleStyle == "initials" ? titleInitials(item.title) : item.title;
 							browserDrawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
 									ImVec2(titleRect.Min.x + uiScaled(4.0f), titleRect.Min.y + uiScaled(3.0f)),
-									browserTextColor(layout, selectedId == key || hovered), item.title.c_str(), nullptr,
+									browserTextColor(layout, selectedId == key || hovered), label.c_str(), nullptr,
 									std::max(0.0f, titleRect.GetWidth() - uiScaled(8.0f)));
 							browserDrawList->PopClipRect();
 						}
+						if (layout.showFavouriteMarker && item.favourite) drawFavouriteMarker(layout, itemRect, browserDrawList);
 						if (afterItem)
 							afterItem(static_cast<size_t>(i));
 						x += itemWidth + spacing;
+						if (scrollSelection && i == selected) { ImGui::SetScrollHereY(); scrollSelection = false; }
 					}
 					ImGui::SetCursorPos(ImVec2(rowX, rowY + cellHeight + rowSpacing));
 				}
@@ -563,15 +822,16 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	// while the cover and metadata share a vertically scrollable scaled column.
 	const bool detailsOnRight = layout.browser.x + layout.browser.w * 0.5f <= 0.5f;
 	const float split = detailsOnRight ? layout.browser.x + layout.browser.w : layout.browser.x;
-	const Rect details{detailsOnRight ? split : 0.f, 0.f, detailsOnRight ? 1.f - split : split, 1.f};
+	const bool authoredDetails = std::any_of(layout.elements.begin(), layout.elements.end(), [](const Element& element) { return element.type == "details"; });
+	const Rect details{detailsOnRight ? split : 0.f, 0.f, authoredDetails ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
 	// Resolve background media after hover/navigation so both layers show the same game.
 	// The parent draw list is rendered beneath the browser child, regardless of submission order.
-	drawElements(layout, canvas, themeDirectory, current, drawList, true, details, false);
+	drawElements(layout, canvas, themeDirectory, current, drawList, true, details, false, previewSource);
 	ImGui::SetCursorScreenPos(canvas.origin);
 	ImGui::BeginChild("##themeLibraryOverlay", canvas.size, ImGuiChildFlags_None,
 			ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBringToFrontOnFocus
 					| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-	drawElements(layout, canvas, themeDirectory, current, ImGui::GetWindowDrawList(), false, details, false);
+	drawElements(layout, canvas, themeDirectory, current, ImGui::GetWindowDrawList(), false, details, false, previewSource);
 	ImGui::EndChild();
 	if (details.w > 0.f && canvasSize.y > 0.f)
 	{
@@ -589,14 +849,18 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 			const ImVec2 size(width / details.w, canvasSize.y * iconScale);
 			const ImVec2 offset(origin.x - details.x * size.x, origin.y);
 			const Canvas detailCanvas{offset, size, offset + size};
-			drawElements(layout, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), true, details, true);
-			drawElements(layout, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), false, details, true);
+			drawElements(layout, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), true, details, true, previewSource);
+			drawElements(layout, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), false, details, true, previewSource);
 			ImGui::Dummy(ImVec2(width, size.y));
 		}
 		ImGui::EndChild();
 		ImGui::PopStyleVar();
 	}
-	ImGui::SetCursorScreenPos(canvas.max);
+	drawDetails(layout, canvas, current);
+	drawButtons(layout, canvas, items, browserColumns, selected, previewSource, scrollSelection, activated, toggleFavourite);
+	if (selected >= 0) selectedId = itemKey(items[selected], static_cast<size_t>(selected));
+	ImGui::SetCursorScreenPos(contentOrigin);
+	ImGui::Dummy(contentSize);
 	return activated;
 }
 } // namespace themes

@@ -212,6 +212,10 @@ void applyCurrentTheme()
 			else
 				WARN_LOG(COMMON, "Cannot load library theme base palette: %s", baseError.c_str());
 			themes::applyPalette();
+			const auto body = libraryTheme->fonts.find("body");
+			const auto bold = libraryTheme->fonts.find("bold");
+			CustomTheme::setActiveFontOverrides(body == libraryTheme->fonts.end() ? "" : body->second,
+					bold == libraryTheme->fonts.end() ? "" : bold->second);
 		}
 	}
 	// Preserve the original metrics; undoing a scaled style loses pixel precision.

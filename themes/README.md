@@ -13,4 +13,6 @@ These seven starred packages provide Hollycast game-list layouts. To install one
 | [Fanart & Disc *](preview-fanart-disc/theme.json) | Fanart backdrop, screenshot, front cover, disc and marquee, with a right thumbnail list. |
 | [CD Rack *](preview-cd-rack/theme.json) | Scrollable jewel-case spines on shaded shelves, selected miximage and front cover on the right, with title metadata. Missing spines have vertical title labels. |
 
+- [Pocket Dimension](pocket-dimension/) — a tactile VMU library with live LCD tiles, artwork controls, and a portrait layout.
+
 The previews use the user's configured ES-DE media and real game metadata. No generated game art or example text is bundled. Missing screenshots try miximages; decorative discs and marquees disappear when missing. These are native Hollycast interpretations of the requested concepts, not complete ES-DE ports. See [preview sources and scope](PREVIEW-NOTES.md).

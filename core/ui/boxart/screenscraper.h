@@ -2,6 +2,7 @@
 #pragma once
 
 #include "scraper.h"
+#include "artwork_media.h"
 #include "cfg/option.h"
 #include <array>
 #include <chrono>
@@ -13,31 +14,28 @@
 
 namespace screenscraper {
 
-struct MediaType
+struct MediaType : artwork::MediaType
 {
-	const char *name;
-	const char *label;
 	const char *type;
 	const char *alternate;
-	config::LibraryCoverMediaMode mode;
 };
 
 // These bits are persisted in settings and the artwork database. Append new types.
 inline constexpr std::array<MediaType, 11> mediaTypes{{
-	{"cover", "Cover", "box-2D", "", config::LibraryCoverMediaMode::Cover},
-	{"miximage", "Mix Image", "mixrbv2", "mixrbv1", config::LibraryCoverMediaMode::MixImage},
-	{"title", "Wheel / Marquee", "wheel-hd", "wheel", config::LibraryCoverMediaMode::Title},
-	{"banner", "Banner", "screenmarquee", "", config::LibraryCoverMediaMode::Banner},
-	{"physical", "Physical Media", "support-2D", "", config::LibraryCoverMediaMode::Physical},
-	{"fanart", "Fan Art", "fanart", "", config::LibraryCoverMediaMode::FanArt},
-	{"screenshot", "Screenshot", "ss", "", config::LibraryCoverMediaMode::Screenshot},
-	{"titlescreen", "Title Screen", "sstitle", "", config::LibraryCoverMediaMode::TitleScreen},
-	{"case", "Case / 3D Box", "box-3D", "", config::LibraryCoverMediaMode::Case},
-	{"backcover", "Back Cover", "box-2D-back", "", config::LibraryCoverMediaMode::BackCover},
-	{"spine", "Spine", "box-2D-side", "", config::LibraryCoverMediaMode::Spine},
+	{artwork::mediaTypes[0], "box-2D", ""},
+	{artwork::mediaTypes[1], "mixrbv2", "mixrbv1"},
+	{artwork::mediaTypes[2], "wheel-hd", "wheel"},
+	{artwork::mediaTypes[3], "screenmarquee", ""},
+	{artwork::mediaTypes[4], "support-2D", ""},
+	{artwork::mediaTypes[5], "fanart", ""},
+	{artwork::mediaTypes[6], "ss", ""},
+	{artwork::mediaTypes[7], "sstitle", ""},
+	{artwork::mediaTypes[8], "box-3D", ""},
+	{artwork::mediaTypes[9], "box-2D-back", ""},
+	{artwork::mediaTypes[10], "box-2D-side", ""},
 }};
-inline constexpr u32 allMedia = (1u << mediaTypes.size()) - 1;
-inline constexpr u32 coverMedia = 1u;
+using artwork::allMedia;
+using artwork::coverMedia;
 
 struct Credentials
 {

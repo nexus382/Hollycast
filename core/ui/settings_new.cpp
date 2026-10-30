@@ -50,6 +50,8 @@
 #include "gui.h"
 #include "boxart/boxart.h"
 #include "boxart/screenscraper.h"
+#include "boxart/gamesdb.h"
+#include "boxart/artwork_adapter.h"
 #include "IconsFontAwesome6.h"
 #include "mainui.h"
 #include "oslib/oslib.h"
@@ -3738,7 +3740,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
 	{
-		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper")};
+		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper"), T("LaunchBox")};
 		SettingsUI::PopupConfig providerCfg {};
 		providerCfg.type = SettingsUI::PopupType::Options;
 		providerCfg.options.label = T("Artwork Provider");
@@ -3754,7 +3756,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			return true;
 		};
 		RenderGeneralPopupSettingRow("ArtworkProviderSetting",
-			T("Choose the online source for library artwork. Existing local media remains available."), providerCfg);
+			T("Choose the preferred online artwork source. TheGamesDB fills missing supported types. Existing local media remains available."), providerCfg);
 		if (config::ArtworkProvider.get() == 1)
 		{
 			ImGui::TextWrapped("%s", T("Basic list and icon views automatically download missing covers and game metadata. Use Download All Required Media for hover details, themes, CD spines, and other expanded artwork."));
@@ -3802,58 +3804,73 @@ static void renderSettingsContentTab(SettingsTab tab)
 				ImGui::Text(T("Requests/minute: %llu | Download allowance: %llu KB/s (0 = unspecified)"),
 					static_cast<unsigned long long>(account.requestsPerMinute), static_cast<unsigned long long>(account.downloadKBPerSecond));
 			}
-			std::array<const char*, screenscraper::mediaTypes.size()> mediaLabels;
-			const u32 selection = static_cast<u32>(config::ScreenScraperMedia.get()) & screenscraper::allMedia;
-			unsigned selectedCount = 0;
-			for (size_t i = 0; i < screenscraper::mediaTypes.size(); ++i)
-			{
-				mediaLabels[i] = T(screenscraper::mediaTypes[i].label);
-				if (selection & (1u << i)) ++selectedCount;
-			}
-			const std::string selectionSummary = std::to_string(selectedCount) + " / "
-				+ std::to_string(mediaLabels.size()) + " " + T("selected");
-			SettingsUI::PopupConfig mediaCfg {};
-			mediaCfg.type = SettingsUI::PopupType::Options;
-			mediaCfg.options.label = T("Images to Download");
-			mediaCfg.options.icon = ICON_FA_IMAGES;
-			mediaCfg.options.popupID = "ScreenScraperMediaPopup";
-			mediaCfg.options.description = T("Choose the types for Download Selected Media. Automatic scraping stays cover-only. Download All Required Media fetches every supported image type. Existing images are kept.");
-			mediaCfg.options.options = mediaLabels.data();
-			mediaCfg.options.optionCount = static_cast<int>(mediaLabels.size());
-			mediaCfg.options.currentValue = &config::ScreenScraperMedia.get();
-			mediaCfg.options.multiSelect = true;
-			mediaCfg.options.selectionPresets = {
-				{T("Covers + Banners"), 1 | (1 << 3)},
-				{T("Select All"), static_cast<int>(screenscraper::allMedia)},
-				{T("Clear Selection"), 0}
-			};
-			mediaCfg.options.valueWidth = 220.0f;
-			mediaCfg.options.valueToString = [&selectionSummary](int) { return selectionSummary.c_str(); };
-			mediaCfg.options.onChange = [](int) {
-				SaveSettings();
-				return true;
-			};
-			RenderGeneralPopupSettingRow("ScreenScraperMediaSetting",
-				T("Choose image types for the manual Download Selected Media action."), mediaCfg);
-			const bool canDownload = account.connected && config::FetchBoxart
-				&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
-			ImGui::BeginDisabled(!canDownload);
-			if (ImGui::Button(T("Download All Required Media"), ImVec2(-FLT_MIN, 0)))
-				gui_download_library_media(screenscraper::allMedia);
-			ImGui::BeginDisabled(!(config::ScreenScraperMedia.get() & screenscraper::allMedia));
-			if (ImGui::Button(T("Download Selected Media")))
-				gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & screenscraper::allMedia);
-			ImGui::SameLine();
-			if (ImGui::Button(T("Retry Unmatched / Unavailable Media")))
-				gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & screenscraper::allMedia, true);
-			ImGui::EndDisabled();
-			ImGui::EndDisabled();
-			if (!config::FetchBoxart)
-				ImGui::TextWrapped("%s", T("Enable Fetch Box Art below to allow downloads."));
-			if (config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
-				ImGui::TextWrapped("%s", T("Choose Original Box Art or Custom Boxart below to use downloaded media."));
-			ImGui::TextWrapped("%s", T("Only unambiguous Dreamcast title matches are downloaded. Games without a match keep their existing artwork."));
 		}
+		if (config::ArtworkProvider.get() == 0)
+		{
+			ImGui::TextWrapped("%s", T("TheGamesDB downloads original-resolution covers, screenshots, fanart, logos, banners, title screens and back covers. Disc scans, miximages, 3D boxes and spines are not supplied by this provider. Existing local images remain available."));
+			gui_display_library_download_progress();
+		}
+		if (config::ArtworkProvider.get() == 2)
+  {
+   ImGui::TextWrapped("%s", T("LaunchBox supplies original covers, disc scans, 3D boxes, back covers, spines, screenshots, title screens, logos, banners and fanart. The first lookup downloads its public catalog. TheGamesDB fills unavailable supported types."));
+   gui_display_library_download_progress();
+  }
+  const u32 supported = ArtworkAdapter::supportedMedia(config::ArtworkProvider.get());
+		std::vector<const char*> mediaLabels;
+		std::vector<int> mediaBits;
+		const u32 selection = static_cast<u32>(config::ScreenScraperMedia.get()) & supported;
+		unsigned selectedCount = 0;
+		for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+		{
+			if (!(supported & (1u << i))) continue;
+			mediaLabels.push_back(T(artwork::mediaTypes[i].label));
+			mediaBits.push_back(static_cast<int>(i));
+			if (selection & (1u << i)) ++selectedCount;
+		}
+		const std::string selectionSummary = std::to_string(selectedCount) + " / "
+			+ std::to_string(mediaLabels.size()) + " " + T("selected");
+		SettingsUI::PopupConfig mediaCfg {};
+		mediaCfg.type = SettingsUI::PopupType::Options;
+		mediaCfg.options.label = T("Images to Download");
+		mediaCfg.options.icon = ICON_FA_IMAGES;
+		mediaCfg.options.popupID = "ArtworkMediaPopup";
+		mediaCfg.options.description = T("Choose the types for Download Selected Media. Automatic scraping stays cover-only. Download All Required Media fetches every type supported by this provider. Existing images are kept.");
+		mediaCfg.options.options = mediaLabels.data();
+		mediaCfg.options.optionCount = static_cast<int>(mediaLabels.size());
+		mediaCfg.options.currentValue = &config::ScreenScraperMedia.get();
+		mediaCfg.options.multiSelect = true;
+		mediaCfg.options.storageIndexMap = [mediaBits](int index) { return mediaBits[index]; };
+		mediaCfg.options.selectionPresets = {
+			{T("Covers + Banners"), 1 | (1 << 3)},
+			{T("Select All"), static_cast<int>(supported)},
+			{T("Clear Selection"), 0}
+		};
+		mediaCfg.options.valueWidth = 220.0f;
+		mediaCfg.options.valueToString = [&selectionSummary](int) { return selectionSummary.c_str(); };
+		mediaCfg.options.onChange = [](int) {
+			SaveSettings();
+			return true;
+		};
+		RenderGeneralPopupSettingRow("ArtworkMediaSetting",
+			T("Choose image types for the manual Download Selected Media action."), mediaCfg);
+		const bool canDownload = (config::ArtworkProvider.get() != 1 || screenscraper::status().connected) && config::FetchBoxart
+			&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+		ImGui::BeginDisabled(!canDownload);
+		if (ImGui::Button(T("Download All Required Media"), ImVec2(-FLT_MIN, 0)))
+			gui_download_library_media(supported);
+		ImGui::BeginDisabled(!(config::ScreenScraperMedia.get() & supported));
+		if (ImGui::Button(T("Download Selected Media")))
+			gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & supported);
+		ImGui::SameLine();
+		if (ImGui::Button(T("Retry Unmatched / Unavailable Media")))
+			gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & supported, true);
+		ImGui::EndDisabled();
+		ImGui::EndDisabled();
+		if (!config::FetchBoxart)
+			ImGui::TextWrapped("%s", T("Enable Fetch Box Art below to allow downloads."));
+		if (config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
+			ImGui::TextWrapped("%s", T("Choose Original Box Art or Custom Boxart below to use downloaded media."));
+		ImGui::TextWrapped("%s", T("Only unambiguous Dreamcast title matches are downloaded. Games without a match keep their existing artwork."));
 	}
 
 	if (RenderCollapsingHeader("BoxArtSection", ICON_FA_IMAGE, T("Box Art"), ImGuiTreeNodeFlags_DefaultOpen))
@@ -4144,26 +4161,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		);
 
 		const bool physicalOnly = config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
-		const char* onlineSources[] = { T("TheGamesDB"), T("LaunchBox") };
-		SettingsUI::PopupConfig onlineSourceCfg {};
-		onlineSourceCfg.type = SettingsUI::PopupType::Options;
-		onlineSourceCfg.options.label = T("Online Artwork Source");
-		onlineSourceCfg.options.icon = ICON_FA_DOWNLOAD;
-		onlineSourceCfg.options.popupID = Tnop("OnlineArtworkSourcePopup");
-		onlineSourceCfg.options.options = onlineSources;
-		onlineSourceCfg.options.optionCount = IM_ARRAYSIZE(onlineSources);
-		onlineSourceCfg.options.currentValue = &config::BoxartOnlineSource.get();
-		onlineSourceCfg.options.disabled = physicalOnly;
-		onlineSourceCfg.options.onChange = [](int) {
-			gui_refresh_custom_boxart(false);
-			return true;
-		};
-		RenderGeneralPopupSettingRow(Tnop("OnlineArtworkSource"),
-			T("Choose where Hollycast downloads game covers."), onlineSourceCfg,
-			T("Online Artwork Source\n"
-				"LaunchBox matches the game's title and platform, then prefers covers for its region. "
-				"The first lookup downloads its catalog, which can take a little time. Covers and matches are saved locally.\n\n"
-				"Dreamcast games use their internal disc title and product ID, so renaming the ROM file keeps the match."));
+
 		RenderGeneralToggleSettingRow(
 			"FetchBoxart",
 			ICON_FA_DOWNLOAD,

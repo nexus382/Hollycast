@@ -371,13 +371,11 @@ extern Option<bool> SaveProtection;
 extern Option<int, false> SavestateSlot;
 extern Option<bool> ForceFreePlay;
 extern Option<bool, false> FetchBoxart;
-extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper.
+extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper, 2 -> LaunchBox. TGDB fills missing supported media.
 extern Option<std::string, false> ScreenScraperUser;
-extern Option<int, false> ScreenScraperMedia; // Manual download choices; stable bits from screenscraper::mediaTypes.
+extern Option<int, false> ScreenScraperMedia; // Shared manual media choices; legacy config key, stable artwork::mediaTypes bits.
 extern Option<bool, false> BoxartDisplayMode;
 extern Option<int, false> BoxartSourceMode; // 0 -> Scraped, 1 -> Physical Media, 2 -> Custom with scraped fallback
-enum class OnlineArtworkSource { TheGamesDB = 0, LaunchBox = 1 };
-extern Option<int, false> BoxartOnlineSource;
 enum class LibraryDisplayStyleMode
 {
 	Classic = 0,

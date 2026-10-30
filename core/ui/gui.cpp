@@ -46,6 +46,7 @@
 #include "boxart/boxart.h"
 #include "boxart/screenscraper.h"
 #include "theme_library.h"
+#include <set>
 #include "boxart/vmu_icon.h"
 #include "profiler/fc_profiler.h"
 #include "hw/naomi/card_reader.h"
@@ -2433,9 +2434,12 @@ void gui_load_game()
 }
 #endif
 
-static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& layout,
+static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& requestedLayout,
 		const SettingsUI::TextFilter& filter, library::View view)
 {
+	const ImVec2 available = ImGui::GetContentRegionAvail();
+	const themes::Layout& layout = themes::responsiveLayout(theme, requestedLayout,
+			available.x / std::max(1.f, available.y));
 	std::vector<GameMedia> games;
 	std::vector<library::Entry> libraryEntries;
 	{
@@ -2486,12 +2490,15 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		if (element.type == "artwork")
 		{
 			if (!element.source.empty())
-				mediaSources.push_back(element.source);
+				mediaSources.push_back(element.source == "preview" ? layout.previewSource : element.source);
 			if (element.fallback != "default" && element.fallback != "none")
 				mediaSources.push_back(element.fallback);
 			if (!element.requiresArtwork.empty())
 				mediaSources.push_back(element.requiresArtwork);
 		}
+	for (const auto& element : layout.elements)
+		if (element.type == "button" && element.action == "artwork")
+			mediaSources.push_back(element.source);
 	std::sort(mediaSources.begin(), mediaSources.end());
 	mediaSources.erase(std::unique(mediaSources.begin(), mediaSources.end()), mediaSources.end());
 	const double animationClock = getLibraryIconAnimationClock();
@@ -2517,11 +2524,12 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		item.id = game.path.empty() ? "bios" : game.path;
 		item.title = title;
 		item.image = art.boxartPath;
+		item.canFavourite = !game.device && !game.path.empty();
+		item.favourite = item.canFavourite && library::isFavourite(game.path, config::LibraryFavourites.get());
 		item.metadata = {
 			{"title", title}, {"description", game.desc},
 			{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
-			{"players", game.players.empty() ? T("Unknown") : game.players},
-			{"releaseDate", format_game_info_release_date(game.releaseDate)},
+			{"players", game.players}, {"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
 			{"productId", art.uniqueId}, {"region", formatLibraryRegion(art.region)},
 			{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
 			{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
@@ -2602,8 +2610,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			ImGui::EndPopup();
 		}
 
-		const bool showFavourite = !layout.compactControls || itemHovered || itemFocused
-				|| library::isFavourite(game.path, config::LibraryFavourites.get());
+		const bool showFavourite = layout.showItemActions && (!layout.compactControls || itemHovered || itemFocused
+				|| library::isFavourite(game.path, config::LibraryFavourites.get()));
 		const float favouriteSide = std::max(1.f, std::min({uiScaled(32.f), itemMax.y - itemMin.y - uiScaled(8.f),
 				itemMax.x - itemMin.x - uiScaled(8.f)}));
 		const ImVec2 favouriteSize(favouriteSide, favouriteSide);
@@ -2613,7 +2621,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		const bool mouseOverFavourite = showFavourite && mouse.x >= favouriteMin.x && mouse.x <= favouriteMin.x + favouriteSize.x
 				&& mouse.y >= favouriteMin.y && mouse.y <= favouriteMin.y + favouriteSize.y;
 		updateLibraryLongPress(game, items[index].id, itemActive && !mouseOverFavourite);
-		if (layout.showInfoTooltip && !contextOpen && itemHovered && !mouseOverFavourite && !ImGui::GetIO().NavVisible)
+		if (layout.showInfoTooltip && layout.hoverDetails && !contextOpen && itemHovered && !mouseOverFavourite && !ImGui::GetIO().NavVisible)
 			draw_library_game_info_hover(game, !game.device ? &artwork[index] : nullptr);
 		if (showFavourite && !contextOpen && !game.device && !game.path.empty())
 		{
@@ -2625,7 +2633,15 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			}
 			ImGui::SetCursorScreenPos(nextCursor);
 		}
-	}, iconSource, std::clamp(config::LibraryIconScale.get(), 50, 200) / 100.f);
+	}, iconSource, std::clamp(config::LibraryIconScale.get(), 50, 200) / 100.f, requestedLayout.id, [&](size_t index) {
+		const GameMedia& game = visibleGames[index];
+		std::vector<std::string> favourites = config::LibraryFavourites.get();
+		library::setFavourite(game.path, !library::isFavourite(game.path, favourites), favourites);
+		config::LibraryFavourites.set(favourites);
+		config::LibraryFavourites.save();
+		favouriteAction = static_cast<int>(index);
+		resetLibraryGameInfoHover();
+	});
 
 	auto startThemedGame = [&](size_t index, bool resume) {
 		const GameMedia& game = visibleGames[index];
@@ -2686,9 +2702,12 @@ static void gui_display_content()
 
     ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration);
 	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
+	static library::View libraryView = library::View::All;
+	static SettingsUI::TextFilter filter;
 	// Draw theme artwork first so all library controls remain above it. A dark
 	// wash preserves contrast even when users choose a bright background.
-	const std::string themeBackground = CustomTheme::assetPath("background");
+	const std::string themeBackground = customLayout != nullptr && customLayout->toolbar == "compact"
+			? std::string() : CustomTheme::assetPath("background");
 	bool libraryThemeBackgroundVisible = false;
 	if (!themeBackground.empty()) {
 		ImguiFileTexture background(themeBackground, true, true);
@@ -2720,7 +2739,85 @@ static void gui_display_content()
 		}
 	}
 
-    // Keep the library toolbar cohesive at a larger size without coupling it to
+	if (customLayout != nullptr && customLayout->toolbar == "compact")
+	{
+		// Compact chrome is a shared layout option, independent of package identity.
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 6));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(16));
+		ImGui::PushFont(largeFont, uiScaled(15.f));
+		const float brandY = ImGui::GetCursorPosY();
+		float brandHeight = ImGui::GetFrameHeight();
+		ImTextureID brand = {};
+		if (!customLayout->toolbarLogoAsset.empty())
+			brand = ImguiFileTexture(customLayout->toolbarLogoAsset, true, true).getId();
+		if (brand != ImTextureID{})
+		{
+			if (customLayout->toolbarLogoHeight > 0) brandHeight = uiScaled(customLayout->toolbarLogoHeight);
+			ImGui::Image(brand, ImVec2(brandHeight * imguiDriver->getAspectRatio(brand), brandHeight));
+		}
+		else
+		{
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted("Hollycast");
+		}
+		const float controlsY = brandY + std::max(0.f, (brandHeight - ImGui::GetFrameHeight()) * 0.5f);
+		auto placeInline = [controlsY](const char* label) {
+			const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+			if (ImGui::GetItemRectMax().x + width + ImGui::GetStyle().ItemSpacing.x
+					< ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
+			{
+				ImGui::SameLine();
+				ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), controlsY));
+			}
+		};
+		const char* labels[] = {T("All Games"), T("Continue Playing"), T("Favourites")};
+		const library::View views[] = {library::View::All, library::View::ContinuePlaying, library::View::Favourites};
+		const float spacing = ImGui::GetStyle().ItemSpacing.x;
+		float controlsWidth = ImGui::CalcTextSize(ICON_FA_MAGNIFYING_GLASS).x + ImGui::CalcTextSize(ICON_FA_GEAR).x
+				+ ImGui::GetStyle().FramePadding.x * 10 + spacing * 6;
+		for (const char* label : labels) controlsWidth += ImGui::CalcTextSize(label).x;
+		const float startX = ImGui::GetWindowContentRegionMax().x - controlsWidth;
+		const bool alignRight = ImGui::GetItemRectMax().x + spacing < ImGui::GetWindowPos().x + startX;
+		for (int i = 0; i < 3; ++i)
+		{
+			if (i == 0 && alignRight) ImGui::SameLine(startX);
+			else placeInline(labels[i]);
+			if (i == 0 && alignRight) ImGui::SetCursorPosY(controlsY);
+			const bool selected = libraryView == views[i];
+			if (selected)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+				if (customLayout->toolbarSelectedTextColor)
+				{
+					const uint32_t rgba = *customLayout->toolbarSelectedTextColor;
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4((rgba >> 24) / 255.f, ((rgba >> 16) & 255) / 255.f,
+							((rgba >> 8) & 255) / 255.f, (rgba & 255) / 255.f));
+				}
+			}
+			const bool pressed = ImGui::Button(labels[i]);
+			if (selected) ImGui::PopStyleColor(customLayout->toolbarSelectedTextColor ? 2 : 1);
+			if (pressed) { libraryView = views[i]; librarySavestateCacheInvalidated = true; }
+		}
+		static bool showFilter = false;
+		placeInline(ICON_FA_MAGNIFYING_GLASS);
+		if (ImGui::Button(ICON_FA_MAGNIFYING_GLASS "##themeFilter")) showFilter = !showFilter;
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Filter"));
+		placeInline(ICON_FA_GEAR);
+		if (ImGui::Button(ICON_FA_GEAR "##themeSettings")) gui_setState(GuiState::Settings);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
+		if (showFilter || filter.IsActive()) filter.Draw(T("Filter"), ImGui::GetContentRegionAvail().x - uiScaled(60));
+		ImGui::PopFont();
+		ImGui::PopStyleVar(2);
+		ImGui::Separator();
+		boxart.refreshCustomBoxartIndex(false);
+		scanner.fetch_game_list();
+		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
+		ImGui::End();
+		contentpath_warning_popup();
+		return;
+	}
+
+	// Keep the library toolbar cohesive at a larger size without coupling it to
     // the user-configured global UI Scaling value.
     constexpr float libraryToolbarScale = 4.0f / 3.0f;
     const ImVec2 itemSpacing = ImGui::GetStyle().ItemSpacing;
@@ -2739,7 +2836,6 @@ static void gui_display_content()
     ImGui::Text("%s", T("GAMES"));
     ImGui::Unindent(10.0f * libraryToolbarScale);
 
-	static library::View libraryView = library::View::All;
 	if (gui_state != GuiState::SelectDisk)
 	{
 		const char *viewLabels[] = { T("All Games"), T("Continue Playing"), T("Favourites") };
@@ -2767,7 +2863,6 @@ static void gui_display_content()
 		ImGui::NewLine();
 	}
 
-    static SettingsUI::TextFilter filter;
 	int libraryIconScale = std::clamp(config::LibraryIconScale.get(), 50, 200);
 	static bool libraryHoverSettingsInitialized = false;
 	static int lastLibraryIconScale = libraryIconScale;
@@ -4031,13 +4126,15 @@ void gui_display_ui()
 	// list clipper. Switching to settings must not leave the downloader starved.
 	static u64 queuedLibraryGeneration = 0;
 	static bool automaticCoversEnabled = false;
-	const bool queueCovers = config::FetchBoxart && config::ArtworkProvider.get() == 1
+	static int queuedArtworkProvider = -1;
+	const bool queueCovers = config::FetchBoxart
 		&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
 	const u64 generation = scanner.get_generation();
-	if (queueCovers && generation && (!automaticCoversEnabled || queuedLibraryGeneration != generation))
+	if (queueCovers && generation && (!automaticCoversEnabled || queuedLibraryGeneration != generation || queuedArtworkProvider != config::ArtworkProvider.get()))
 	{
 		gui_download_library_media(screenscraper::coverMedia);
 		queuedLibraryGeneration = generation;
+		queuedArtworkProvider = config::ArtworkProvider.get();
 	}
 	automaticCoversEnabled = queueCovers;
 	// Apply settings/session changes even when the visible library is filtered out.
@@ -4546,7 +4643,7 @@ void gui_display_library_download_progress()
 void gui_download_library_media(u32 requestedMedia, bool retryUnavailable)
 {
 	if (retryUnavailable)
-		boxart.retryScreenScraperMedia();
+		boxart.retryArtworkMedia();
 	std::vector<GameMedia> libraryGames;
 	{
 		std::lock_guard<std::mutex> guard(scanner.get_mutex());

@@ -27,6 +27,7 @@
 #include "cfg/option.h"
 #include "arcade_scraper.h"
 #include "launchbox.h"
+#include "artwork_adapter.h"
 #include <nowide/convert.hpp>
 #include <nowide/stackstring.hpp>
 #include <algorithm>
@@ -49,6 +50,17 @@
 #endif
 
 namespace {
+
+void selectProviderCover(GameBoxart& item)
+{
+ const int preferred = config::ArtworkProvider.get();
+ for (int provider : {preferred, 0, 1, 2})
+ {
+  const auto& media = item.mediaForProvider(provider);
+  const auto cover = media.find("cover");
+  if (cover != media.end() && file_exists(cover->second)) { item.boxartPath = cover->second; return; }
+ }
+}
 
 static constexpr size_t kOnlineBoxartBatchSize = 10;
 static constexpr size_t kPhysicalBoxartBatchSize = 40;
@@ -553,17 +565,20 @@ bool Boxart::isCurrentWork(const GameBoxart& item) const
 	return current != games.end() && current->second.workRevision == item.workRevision;
 }
 
-void Boxart::completeArtworkWork(GameBoxart& item, bool queueOnline, bool useScreenScraper)
+void Boxart::completeArtworkWork(GameBoxart& item, bool queueOnline, int provider)
 {
 	if (!isCurrentWork(item))
 	{
 		artworkWake.notify_all();
 		return;
 	}
-	if (useScreenScraper)
-		item.requestedMedia |= games.at(item.sourceKey()).requestedMedia;
-	item.busy = queueOnline && (useScreenScraper
-		? screenscraper::needsMedia(item, item.requestedMedia) : !item.scraped);
+ const auto& current = games.at(item.sourceKey());
+ if (!item.arcade) item.requestedMedia |= current.requestedMedia;
+ item.requestedProvider = current.requestedProvider < 0 ? provider : current.requestedProvider;
+ // A newly selected provider inherits requests made while the old job ran.
+ if (item.requestedProvider != provider && current.busy) queueOnline = true;
+ item.busy = queueOnline && ArtworkAdapter::needsMedia(item, item.requestedProvider, item.requestedMedia);
+
 	if (item.busy)
 		toFetch.push_back(item);
 	else
@@ -622,6 +637,7 @@ GameBoxart Boxart::getBoxart(const GameMedia& media)
 		applyLibraryPlaytimeUnlocked(boxart);
 	}
 
+	selectProviderCover(boxart);
 	if (sourceMode == static_cast<int>(BoxartSourceMode::CustomThenScraped))
 	{
 		const std::string customPath = getCustomBoxartPath(media);
@@ -649,7 +665,7 @@ void Boxart::startFetch()
 	fetchBoxart();
 }
 
-void Boxart::retryScreenScraperMedia()
+void Boxart::retryArtworkMedia()
 {
 	loadDatabase();
 	std::lock_guard<std::mutex> guard(mutex);
@@ -659,15 +675,19 @@ void Boxart::retryScreenScraperMedia()
 	{
 		auto& record = entry.second;
 		if (record.arcade) continue;
-		record.screenScraperCheckedMedia = 0;
-		record.screenScraperSearched = false;
-		// Preserve successful downloads while allowing a new lookup for unavailable types.
-		for (size_t i = 0; i < screenscraper::mediaTypes.size(); ++i)
-		{
-			const auto media = record.screenScraperMedia.find(screenscraper::mediaTypes[i].name);
-			if (media != record.screenScraperMedia.end() && file_exists(media->second))
-				record.screenScraperCheckedMedia |= 1u << i;
-		}
+  const int primary = config::ArtworkProvider.get();
+  for (int provider : (primary == 0 ? std::vector<int>{0} : std::vector<int>{primary, 0}))
+  {
+   u32& checked = record.checkedMediaForProvider(provider);
+   checked = 0;
+   record.searchedForProvider(provider) = false;
+   const auto& cached = record.mediaForProvider(provider);
+   for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+   {
+    const auto media = cached.find(artwork::mediaTypes[i].name);
+    if (media != cached.end() && file_exists(media->second)) checked |= 1u << i;
+   }
+  }
 		record.workRevision = ++nextWorkRevision;
 		record.busy = false;
 		record.requestedMedia = 0;
@@ -688,10 +708,11 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 	std::string customPath;
 	if (useCustomBoxart)
 		customPath = getCustomBoxartPathForMediaMode(media, config::LibraryCoverMediaMode::CurrentArtwork, &customIndexReady);
-	const bool useScreenScraper = config::ArtworkProvider.get() == 1 && !media.arcade;
-	requestedMedia &= screenscraper::allMedia;
+	const int provider = media.arcade && config::ArtworkProvider.get() == 1 ? 0 : config::ArtworkProvider.get();
+ const bool useScreenScraper = provider == 1;
+ requestedMedia &= ArtworkAdapter::supportedMedia(provider);
 	const bool wantOnline = shouldFetchOnline(media.arcade);
-	const bool expandedRequest = useScreenScraper && requestedMedia != screenscraper::coverMedia;
+	const bool expandedRequest = !media.arcade && requestedMedia && requestedMedia != artwork::coverMedia;
 	// Covers can be prepared while account discovery is still connecting.
 	const bool queueOnline = wantOnline || (useScreenScraper && config::FetchBoxart);
 	// Preserve basic cover-fetching rules; an explicit bulk request may also need other artwork.
@@ -703,14 +724,7 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 		std::lock_guard<std::mutex> guard(mutex);
 		GameBoxart& record = gameForMedia(media);
 		boxart = record;
-		if (boxart.scraped && boxart.scrapedProvider != config::BoxartOnlineSource.get())
-		{
-			boxart.scraped = false;
-			boxart.busy = false;
-			boxart.workRevision = ++nextWorkRevision;
-			record = boxart;
-			markDatabaseDirty();
-		}
+
 		const bool missingBoxartFile = isMissingBoxartFile(boxart);
 		const bool missingScrapedBoxartFile = isMissingScrapedBoxartFile(boxart);
 		if (missingBoxartFile || missingScrapedBoxartFile)
@@ -726,11 +740,11 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 			markDatabaseDirty();
 		}
 		const bool needsOffline = boxart.offlineArtState == OfflineArtState::Pending;
-		const bool needsOnline = queueOnline && (useScreenScraper
-			? screenscraper::needsMedia(boxart, requestedMedia) : !boxart.scraped);
+		const bool needsOnline = queueOnline && ArtworkAdapter::needsMedia(boxart, provider, requestedMedia);
 		if (queueScrape && (needsOffline || needsOnline))
 		{
-			if (useScreenScraper)
+   boxart.requestedProvider = record.requestedProvider = provider;
+			if (!media.arcade)
 				boxart.requestedMedia = record.requestedMedia |= requestedMedia;
 			if (!boxart.busy)
 			{
@@ -747,6 +761,7 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 		applyLibraryPlaytimeUnlocked(boxart);
 	}
 
+	selectProviderCover(boxart);
 	if (useCustomBoxart)
 	{
 		if (!customPath.empty())
@@ -854,12 +869,15 @@ std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCo
 	loadDatabase();
 	std::lock_guard<std::mutex> guard(mutex);
 	const auto& record = gameForMedia(media);
-	for (const auto& kind : screenscraper::mediaTypes)
+	for (const auto& kind : artwork::mediaTypes)
 		if (kind.mode == mediaMode)
 		{
-			const auto it = record.screenScraperMedia.find(kind.name);
-			if (it != record.screenScraperMedia.end() && file_exists(it->second))
-				return it->second;
+   for (int provider : {config::ArtworkProvider.get(), 0, 1, 2})
+   {
+    const auto& cached = record.mediaForProvider(provider);
+    const auto it = cached.find(kind.name);
+    if (it != cached.end() && file_exists(it->second)) return it->second;
+   }
 			break;
 		}
 	return {};
@@ -913,7 +931,7 @@ Boxart::DownloadProgress Boxart::downloadProgress()
 		{
 			++result.games;
 			if ((entry.second.requestedMedia & screenscraper::coverMedia)
-					&& screenscraper::needsMedia(entry.second, screenscraper::coverMedia))
+					&& ArtworkAdapter::needsMedia(entry.second, config::ArtworkProvider.get(), artwork::coverMedia))
 				++result.covers;
 		}
 	return result;
@@ -932,13 +950,13 @@ bool Boxart::takeScreenScraperWork(GameBoxart& item, u64 generation)
 		const bool coversPending = std::any_of(games.begin(), games.end(), [](const auto& entry) {
 			const auto& game = entry.second;
 			return game.busy && (game.requestedMedia & screenscraper::coverMedia)
-				&& screenscraper::needsMedia(game, screenscraper::coverMedia);
+				&& ArtworkAdapter::needsMedia(game, 1, artwork::coverMedia);
 		});
 		const auto next = std::find_if(toFetch.begin(), toFetch.end(), [&](const GameBoxart& queued) {
 			if (queued.arcade || queued.offlineArtState == OfflineArtState::Pending) return false;
 			const auto& current = games.at(queued.sourceKey());
 			return !coversPending || ((current.requestedMedia & screenscraper::coverMedia)
-				&& screenscraper::needsMedia(current, screenscraper::coverMedia));
+				&& ArtworkAdapter::needsMedia(current, 1, artwork::coverMedia));
 		});
 		if (next != toFetch.end())
 		{
@@ -958,7 +976,7 @@ bool Boxart::takeScreenScraperWork(GameBoxart& item, u64 generation)
 void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> session, u64 generation,
 		const std::string& directory)
 {
-	ScreenScraper scraper(session);
+	ArtworkAdapter scraper(1, std::make_unique<ScreenScraper>(session));
 	if (!scraper.initialize(directory))
 	{
 		session->pause("ScreenScraper cannot open its artwork cache. Retrying after one minute.");
@@ -972,7 +990,7 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 			{
 				// Only API backoff waits here. Queue refill and worker completion wake
 				// immediately and never depend on rendering another UI frame.
-				while (!session->ready())
+				while (!session->ready() || !scraper.ready())
 				{
 					if (screenGeneration != generation || !session->status().connected) return;
 					std::unique_lock<std::mutex> lock(mutex);
@@ -1000,7 +1018,8 @@ void Boxart::fetchBoxart()
 {
 	// Snapshot UI-owned configuration before launching either worker.
 	const bool wantOnline = shouldFetchOnline();
-	const bool useScreenScraper = config::ArtworkProvider.get() == 1;
+	const int selectedProvider = config::ArtworkProvider.get();
+ const bool useScreenScraper = selectedProvider == 1;
 	const bool allowOnline = config::FetchBoxart
 		&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
 	const auto screenSession = useScreenScraper && allowOnline ? screenscraper::currentSession() : nullptr;
@@ -1056,7 +1075,7 @@ void Boxart::fetchBoxart()
 				std::lock_guard<std::mutex> guard(mutex);
 				physicalWorking = true;
 			}
-			physicalFetching = std::async(std::launch::async, [this, wantOnline, allowOnline, retainOnlineWork, useScreenScraper]() {
+			physicalFetching = std::async(std::launch::async, [this, wantOnline, allowOnline, retainOnlineWork, useScreenScraper, selectedProvider]() {
 				ThreadName _("BoxArt-physical");
 				try {
 					while (true)
@@ -1087,7 +1106,7 @@ void Boxart::fetchBoxart()
 						DEBUG_LOG(COMMON, "Scraping physical boxart for %d games", (int)physicalBoxart.size());
 						scrapePhysicalBoxart(physicalBoxart, getSaveDirectory(), [&](GameBoxart& item) {
 							std::lock_guard<std::mutex> guard(mutex);
-							completeArtworkWork(item, wantOnline || retainOnlineWork || (allowOnline && item.arcade), useScreenScraper && !item.arcade);
+							completeArtworkWork(item, wantOnline || retainOnlineWork || (allowOnline && item.arcade), item.arcade && useScreenScraper ? 0 : selectedProvider);
 						});
 						saveDatabase();
 					}
@@ -1113,6 +1132,7 @@ void Boxart::fetchBoxart()
 	}
 	if (onlineFetching.valid())
 		return;
+	if (!useScreenScraper && scraper && scraperProvider == selectedProvider && !scraper->ready()) return;
 	// Backoff and daily-limit pauses retain the rest of a manually queued library.
 	// Disabling downloads or signing out still releases queued work normally.
 	std::vector<GameBoxart> boxart;
@@ -1133,7 +1153,7 @@ void Boxart::fetchBoxart()
 		boxart = std::vector<GameBoxart>(toFetch.begin(), toFetch.begin() + size);
 		toFetch.erase(toFetch.begin(), toFetch.begin() + size);
 	}
-	const int provider = config::BoxartOnlineSource.get();
+	const int provider = useScreenScraper ? 0 : selectedProvider;
 	onlineFetching = std::async(std::launch::async, [this, provider, wantOnline, allowOnline, useScreenScraper, boxart = std::move(boxart)]() mutable {
 		ThreadName _("BoxArt-online");
 		DEBUG_LOG(COMMON, "Scraping online boxart for %d games", (int)boxart.size());
@@ -1142,10 +1162,10 @@ void Boxart::fetchBoxart()
 			if (!useScreenScraper && (scraper == nullptr || scraperProvider != provider))
 			{
 				scraperProvider = provider;
-				if (provider == static_cast<int>(config::OnlineArtworkSource::LaunchBox))
-					scraper = std::make_unique<LaunchBox>();
-				else
-					scraper = std::make_unique<TheGamesDb>();
+				std::unique_ptr<Scraper> primary;
+    if (provider == 2) primary = std::make_unique<LaunchBox>();
+    else primary = std::make_unique<TheGamesDb>();
+    scraper = std::make_unique<ArtworkAdapter>(provider, std::move(primary));
 				if (!scraper->initialize(getSaveDirectory()))
 				{
 					ERROR_LOG(COMMON, "Artwork provider initialization failed");
@@ -1171,9 +1191,9 @@ void Boxart::fetchBoxart()
 					std::lock_guard<std::mutex> guard(mutex);
 					for (GameBoxart& b : boxart)
 						{
-							b.scrapedProvider = provider;
-							completeArtworkWork(b, useScreenScraper && wantOnline && !b.arcade, useScreenScraper && !b.arcade);
-						}
+       b.scrapedProvider = provider;
+       completeArtworkWork(b, wantOnline && (!b.arcade || provider == 2), provider);
+      }
 				}
 			} catch (const std::exception& e) {
 				if (*e.what() != '\0')
@@ -1182,7 +1202,7 @@ void Boxart::fetchBoxart()
 					// Preserve partial media and requests added while this batch was running.
 					std::lock_guard<std::mutex> guard(mutex);
 					for (GameBoxart& b : boxart)
-						completeArtworkWork(b, true, useScreenScraper && !b.arcade);
+						completeArtworkWork(b, true, provider);
 				}
 			}
 		}
@@ -1190,7 +1210,7 @@ void Boxart::fetchBoxart()
 		{
 			std::lock_guard<std::mutex> guard(mutex);
 			for (GameBoxart& b : boxart)
-				completeArtworkWork(b, false, useScreenScraper && !b.arcade);
+				completeArtworkWork(b, false, provider);
 		}
 		saveDatabase();
 	});

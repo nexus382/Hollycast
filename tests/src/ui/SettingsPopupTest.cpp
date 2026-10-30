@@ -177,3 +177,14 @@ TEST_F(SettingsPopupTest, SingleChoiceStillAppliesImmediately)
 	EXPECT_EQ(changes, 1);
 	EXPECT_EQ(popup(), nullptr);
 }
+
+TEST_F(SettingsPopupTest, FilteredProviderChoicesRetainTheirSharedStorageBits)
+{
+	cfg.options.optionCount = 2;
+	labels[0] = "Cover"; labels[1] = "Screenshot";
+	cfg.options.storageIndexMap = [](int index) { return index == 0 ? 0 : 6; };
+	frame(true); frame();
+	toggle(1); button("Apply");
+	EXPECT_EQ(value, 1 | (1 << 6));
+	EXPECT_EQ(changes, 1);
+}

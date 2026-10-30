@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "theme.h"
+#include "theme_font_validation.h"
 
 #include "json.hpp"
 
@@ -211,7 +212,7 @@ Theme parse(const std::string& json, const std::string& directory)
 	Json root;
 	try { root = Json::parse(json); }
 	catch (const std::exception& e) { invalid("theme.json", std::string("invalid JSON: ") + e.what()); }
-	objectFields(root, "theme", {"formatVersion", "id", "name", "author", "description", "baseTheme", "colors", "layouts"});
+	objectFields(root, "theme", {"formatVersion", "id", "name", "author", "description", "baseTheme", "colors", "layouts", "fonts"});
 	if (integerValue(required(root, "formatVersion", "theme"), "formatVersion", 1, 1) != 1)
 		invalid("formatVersion", "unsupported format version");
 
@@ -233,6 +234,24 @@ Theme parse(const std::string& json, const std::string& directory)
 			theme.colors.emplace(color.key(), colorValue(color.value(), "colors." + color.key()));
 		}
 	}
+	if (auto it = root.find("fonts"); it != root.end())
+	{
+		objectFields(*it, "fonts", {"body", "bold"});
+		for (auto font = it->begin(); font != it->end(); ++font)
+		{
+			const std::string field = "fonts." + font.key();
+			const std::string path = assetPath(directory, stringValue(font.value(), field, false));
+			std::error_code ec;
+			const auto size = fs::file_size(fs::u8path(path), ec);
+			if (ec || size < 12 || size > 32 * 1024 * 1024)
+				invalid(field, "must reference a package font no larger than 32 MiB");
+			std::ifstream input(fs::u8path(path), std::ios::binary);
+			std::vector<uint8_t> bytes(static_cast<size_t>(size));
+			if (!input.read(reinterpret_cast<char*>(bytes.data()), bytes.size()) || !validThemeFontDirectory(bytes.data(), bytes.size()))
+				invalid(field, "must reference a valid TrueType/OpenType font");
+			theme.fonts.emplace(font.key(), path);
+		}
+	}
 
 	const Json& layouts = required(root, "layouts", "theme");
 	if (!layouts.is_array() || layouts.empty() || layouts.size() > 16)
@@ -242,7 +261,7 @@ Theme parse(const std::string& json, const std::string& directory)
 	{
 		const std::string lp = "layouts[" + std::to_string(i) + "]";
 		const Json& item = layouts[i];
-		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip"});
+		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect"});
 		Layout layout;
 		layout.id = stringValue(required(item, "id", lp), lp + ".id", false);
 		if (!validId(layout.id)) invalid(lp + ".id", "must contain 1 to 64 lowercase letters, digits, hyphens, or underscores");
@@ -273,6 +292,70 @@ Theme parse(const std::string& json, const std::string& directory)
 		if (auto it = item.find("showArtwork"); it != item.end()) layout.showArtwork = boolValue(*it, lp + ".showArtwork");
 		if (auto it = item.find("compactControls"); it != item.end()) layout.compactControls = boolValue(*it, lp + ".compactControls");
 		if (auto it = item.find("showInfoTooltip"); it != item.end()) layout.showInfoTooltip = boolValue(*it, lp + ".showInfoTooltip");
+		if (auto it = item.find("toolbarSelectedTextColor"); it != item.end()) layout.toolbarSelectedTextColor = colorValue(*it, lp + ".toolbarSelectedTextColor");
+		if (auto it = item.find("toolbarLogo"); it != item.end())
+		{
+			layout.toolbarLogoAsset = assetPath(directory, stringValue(*it, lp + ".toolbarLogo", false));
+			std::error_code ec;
+			if (!fs::is_regular_file(fs::u8path(layout.toolbarLogoAsset), ec) || ec)
+				invalid(lp + ".toolbarLogo", "must reference an image inside the package");
+		}
+		if (auto it = item.find("toolbarLogoHeight"); it != item.end())
+		{
+			if (layout.toolbarLogoAsset.empty()) invalid(lp + ".toolbarLogoHeight", "requires toolbarLogo");
+			layout.toolbarLogoHeight = static_cast<float>(numberValue(*it, lp + ".toolbarLogoHeight", 16, 96));
+		}
+		if (auto it = item.find("canvasAspect"); it != item.end()) layout.canvasAspect = static_cast<float>(numberValue(*it, lp + ".canvasAspect", 0.4, 3));
+		if (auto it = item.find("minItemWidth"); it != item.end()) layout.minItemWidth = static_cast<float>(numberValue(*it, lp + ".minItemWidth", 32, 256));
+		if (auto it = item.find("showItemActions"); it != item.end()) layout.showItemActions = boolValue(*it, lp + ".showItemActions");
+		if (auto it = item.find("showFavouriteMarker"); it != item.end()) layout.showFavouriteMarker = boolValue(*it, lp + ".showFavouriteMarker");
+		if (auto it = item.find("hoverDetails"); it != item.end()) layout.hoverDetails = boolValue(*it, lp + ".hoverDetails");
+		if (auto it = item.find("placeholder"); it != item.end())
+		{
+			layout.placeholderAsset = assetPath(directory, stringValue(*it, lp + ".placeholder", false));
+			std::error_code ec;
+			if (!fs::is_regular_file(fs::u8path(layout.placeholderAsset), ec) || ec)
+				invalid(lp + ".placeholder", "must reference an image inside the package");
+		}
+		if (auto it = item.find("toolbar"); it != item.end())
+		{
+			layout.toolbar = stringValue(*it, lp + ".toolbar");
+			if (layout.toolbar != "standard" && layout.toolbar != "compact") invalid(lp + ".toolbar", "must be standard or compact");
+		}
+		if (auto it = item.find("activation"); it != item.end())
+		{
+			layout.activation = stringValue(*it, lp + ".activation");
+			if (layout.activation != "singleClick" && layout.activation != "doubleClick") invalid(lp + ".activation", "must be singleClick or doubleClick");
+		}
+		if (auto it = item.find("titleStyle"); it != item.end())
+		{
+			layout.titleStyle = stringValue(*it, lp + ".titleStyle");
+			if (layout.titleStyle != "full" && layout.titleStyle != "initials") invalid(lp + ".titleStyle", "must be full or initials");
+		}
+		if (auto it = item.find("selectorStyle"); it != item.end())
+		{
+			layout.selectorStyle = stringValue(*it, lp + ".selectorStyle");
+			if (layout.selectorStyle != "fill" && layout.selectorStyle != "outline") invalid(lp + ".selectorStyle", "must be fill or outline");
+		}
+		if (auto it = item.find("previewSource"); it != item.end())
+		{
+			layout.previewSource = stringValue(*it, lp + ".previewSource");
+			if (!artworkSources().count(layout.previewSource)) invalid(lp + ".previewSource", "must name an artwork source");
+		}
+		if (auto it = item.find("narrowLayout"); it != item.end()) layout.narrowLayout = stringValue(*it, lp + ".narrowLayout", false);
+		if (auto it = item.find("narrowAspect"); it != item.end())
+		{
+			if (layout.narrowLayout.empty()) invalid(lp + ".narrowAspect", "requires narrowLayout");
+			layout.narrowAspect = static_cast<float>(numberValue(*it, lp + ".narrowAspect", 0.4, 3));
+		}
+		if (auto it = item.find("pixelArt"); it != item.end())
+		{
+			const std::string pp = lp + ".pixelArt";
+			objectFields(*it, pp, {"resolution", "dark", "light"});
+			layout.pixelArt.resolution = integerValue(required(*it, "resolution", pp), pp + ".resolution", 4, 128);
+			if (auto field = it->find("dark"); field != it->end()) layout.pixelArt.dark = colorValue(*field, pp + ".dark");
+			if (auto field = it->find("light"); field != it->end()) layout.pixelArt.light = colorValue(*field, pp + ".light");
+		}
 		if (auto it = item.find("elements"); it != item.end())
 		{
 			if (!it->is_array() || it->size() > 64) invalid(lp + ".elements", "must be an array containing at most 64 elements");
@@ -280,18 +363,32 @@ Theme parse(const std::string& json, const std::string& directory)
 			{
 				const std::string ep = lp + ".elements[" + std::to_string(j) + "]";
 				const Json& source = (*it)[j];
-				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork"});
+				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "fallbackImage"});
 				Element element;
 				element.type = stringValue(required(source, "type", ep), ep + ".type", false);
-				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "metadata") invalid(ep + ".type", "must be panel, image, artwork, text, or metadata");
+				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "metadata" && element.type != "details" && element.type != "button") invalid(ep + ".type", "must be panel, image, artwork, text, metadata, details, or button");
 				element.rect = parseRect(required(source, "rect", ep), ep + ".rect", element.type == "panel" ? 0.001 : 0.01);
 				if (auto field = source.find("source"); field != source.end()) element.source = stringValue(*field, ep + ".source");
 				if (auto field = source.find("text"); field != source.end()) element.text = stringValue(*field, ep + ".text");
+				if (auto field = source.find("selectedText"); field != source.end())
+				{
+					if (element.type != "button") invalid(ep + ".selectedText", "is only valid on buttons");
+					element.selectedText = stringValue(*field, ep + ".selectedText");
+				}
+				if (auto field = source.find("fallbackImage"); field != source.end())
+				{
+					if (element.type != "artwork") invalid(ep + ".fallbackImage", "is only valid on artwork elements");
+					element.resolvedFallbackAsset = assetPath(directory, stringValue(*field, ep + ".fallbackImage", false));
+					std::error_code ec;
+					if (!fs::is_regular_file(fs::u8path(element.resolvedFallbackAsset), ec) || ec)
+						invalid(ep + ".fallbackImage", "must reference an image inside the package");
+				}
 				if (auto field = source.find("color"); field != source.end()) element.color = colorValue(*field, ep + ".color");
 				if (auto field = source.find("fontSize"); field != source.end()) element.fontSize = static_cast<float>(numberValue(*field, ep + ".fontSize", 0.01, 0.15));
 				if (auto field = source.find("zIndex"); field != source.end()) element.zIndex = integerValue(*field, ep + ".zIndex", -100, 100);
 				if (auto field = source.find("endColor"); field != source.end()) element.endColor = colorValue(*field, ep + ".endColor");
-				if (auto field = source.find("rounding"); field != source.end()) element.rounding = static_cast<float>(numberValue(*field, ep + ".rounding", 0, 48));
+				if (element.type != "button")
+					if (auto field = source.find("rounding"); field != source.end()) element.rounding = static_cast<float>(numberValue(*field, ep + ".rounding", 0, 48));
 				if (auto field = source.find("bold"); field != source.end()) element.bold = boolValue(*field, ep + ".bold");
 				if (auto field = source.find("wrap"); field != source.end()) element.wrap = boolValue(*field, ep + ".wrap");
 				if (auto field = source.find("gradient"); field != source.end())
@@ -312,6 +409,40 @@ Theme parse(const std::string& json, const std::string& directory)
 					if (!artworkSources().count(element.requiresArtwork))
 						invalid(ep + ".requiresArtwork", "must name a supported artwork source");
 				}
+				if (element.type == "details")
+				{
+					const Json& fields = required(source, "fields", ep);
+					if (!fields.is_array() || fields.empty() || fields.size() > metadataFields().size())
+						invalid(ep + ".fields", "must contain supported metadata fields");
+					std::set<std::string> seen;
+					for (const auto& value : fields)
+					{
+						const std::string field = stringValue(value, ep + ".fields", false);
+						if (!metadataFields().count(field) || !seen.insert(field).second)
+							invalid(ep + ".fields", "must contain unique supported metadata fields");
+						element.fields.push_back(field);
+					}
+					if (auto field = source.find("columns"); field != source.end()) element.columns = integerValue(*field, ep + ".columns", 1, 3);
+					if (element.zIndex < 0) invalid(ep + ".zIndex", "details must draw above the browser");
+				}
+				else if (source.count("fields") || source.count("columns")) invalid(ep, "fields and columns are only valid on details elements");
+				if (auto field = source.find("action"); field != source.end()) element.action = stringValue(*field, ep + ".action", false);
+				if (auto field = source.find("background"); field != source.end()) element.background = colorValue(*field, ep + ".background");
+				if (auto field = source.find("selectedColor"); field != source.end()) element.selectedColor = colorValue(*field, ep + ".selectedColor");
+				if (auto field = source.find("selectedBackground"); field != source.end()) element.selectedBackground = colorValue(*field, ep + ".selectedBackground");
+				if (auto field = source.find("borderColor"); field != source.end()) element.borderColor = colorValue(*field, ep + ".borderColor");
+				if (auto field = source.find("selectedBorderColor"); field != source.end()) element.selectedBorderColor = colorValue(*field, ep + ".selectedBorderColor");
+				for (const auto& binding : {std::pair{"icon", &element.icon}, std::pair{"selectedIcon", &element.selectedIcon}})
+					if (auto field = source.find(binding.first); field != source.end())
+					{
+						*binding.second = stringValue(*field, ep + "." + binding.first, false);
+						if (*binding.second != "star" && *binding.second != "star-filled")
+							invalid(ep + "." + binding.first, "must be star or star-filled");
+					}
+				if (element.type == "button")
+					if (auto field = source.find("rounding"); field != source.end()) element.buttonRounding = static_cast<float>(numberValue(*field, ep + ".rounding", 0, 0.5));
+				if (element.type != "button" && (!element.action.empty() || element.background || element.selectedColor || element.selectedBackground || element.buttonRounding || !element.icon.empty() || !element.selectedIcon.empty() || element.borderColor || element.selectedBorderColor))
+					invalid(ep, "action and button appearance fields are only valid on buttons");
 				if (auto field = source.find("fit"); field != source.end())
 				{
 					element.fit = stringValue(*field, ep + ".fit");
@@ -336,14 +467,39 @@ Theme parse(const std::string& json, const std::string& directory)
 				{
 					if (!metadataFields().count(element.source)) invalid(ep + ".source", "must name a supported metadata field");
 				}
-				else if (element.type == "artwork" && !artworkSources().count(element.source))
-					invalid(ep + ".source", "must name a supported artwork source");
+				else if (element.type == "artwork" && element.source != "preview" && !artworkSources().count(element.source))
+					invalid(ep + ".source", "must name a supported artwork source or preview");
+				else if (element.type == "button")
+				{
+					if (element.action != "previous" && element.action != "next" && element.action != "up" && element.action != "down" && element.action != "activate" && element.action != "artwork" && element.action != "favourite")
+						invalid(ep + ".action", "must be previous, next, up, down, activate, artwork, or favourite");
+					if (element.zIndex < 0) invalid(ep + ".zIndex", "buttons must draw above the browser");
+					if (element.action == "artwork" && (element.source.empty() || !artworkSources().count(element.source)))
+						invalid(ep + ".source", "artwork buttons require a named artwork source");
+					if (element.action != "artwork" && !element.source.empty())
+						invalid(ep + ".source", "only artwork buttons accept a source");
+				}
 				layout.elements.push_back(std::move(element));
 			}
 		}
 		theme.layouts.push_back(std::move(layout));
 	}
+	for (const auto& layout : theme.layouts)
+		if (!layout.narrowLayout.empty())
+		{
+			if (layout.narrowLayout == layout.id || !layoutIds.count(layout.narrowLayout))
+				invalid("layouts." + layout.id + ".narrowLayout", "must reference a different layout in this package");
+		}
 	return theme;
+}
+
+const Layout& responsiveLayout(const Theme& theme, const Layout& layout, float aspect)
+{
+	if (!layout.narrowLayout.empty() && aspect < layout.narrowAspect)
+		for (const auto& candidate : theme.layouts)
+			if (candidate.id == layout.narrowLayout)
+				return candidate;
+	return layout;
 }
 
 Theme load(const std::string& directory)

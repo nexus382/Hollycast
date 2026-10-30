@@ -7,7 +7,7 @@ The basic list and icon views automatically fetch missing front covers when
 content is added or browsed, following the existing artwork-source rules.
 Choosing extra media or switching themes never silently starts a full scrape.
 Existing ES-DE media folders, cached artwork and disc-art fallbacks remain usable.
-The separate arcade cover source and the explicit TheGamesDB option are retained.
+The separate arcade cover source is retained. [TheGamesDB](thegamesdb.md) uses the same media slots and download controls for its supported image categories; it does not require ScreenScraper credentials.
 
 ScreenScraper requires Hollycast's approved application credentials. Official
 builds receive `HOLLYCAST_SCREENSCRAPER_DEV_ID` and
@@ -40,7 +40,7 @@ are not logged or cached.
 ## Media choices
 
 Open **Settings → Library → Artwork Downloads → Images to Download** for the
-checkbox popup. It uses the same themed dialog as the other settings options;
+checkbox popup. Both artwork providers share these controls; the popup lists the selected provider's supported categories. It uses the same themed dialog as the other settings options;
 the settings row shows how many types are selected. Tick several types without
 closing the popup, then choose **Apply** to save or **Cancel** to discard changes.
 Escape, controller Back, and clicking outside also discard unsaved selections.
@@ -145,3 +145,5 @@ titles are remembered to avoid repeat calls on every frame. Retry Unmatched /
 Unavailable Media clears those attempts while preserving successful downloads.
 
 API reference: [ScreenScraper API v2](https://www.screenscraper.fr/webapi2.php).
+
+The shared artwork adapter uses TheGamesDB as its automatic fallback for missing supported categories, unmatched games and failed lookups. Primary images and metadata retain priority; automatic requests remain cover-only. LaunchBox also uses these same slots, including disc scans (`physical`) and box artwork (`cover`, `case`, `backcover`, `spine`).

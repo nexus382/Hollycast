@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "ui/boxart/screenscraper.h"
 #include "ui/boxart/boxart.h"
+#include "ui/boxart/gamesdb.h"
 #include "ui/game_scanner.h"
 #include "oslib/http_client.h"
 #include <stb_image_write.h>
@@ -623,7 +624,7 @@ protected:
 		boxart.toFetch.erase(boxart.toFetch.begin());
 		return item;
 	}
-	void finish(GameBoxart& item) { boxart.completeArtworkWork(item, true, !item.arcade); }
+	void finish(GameBoxart& item) { if (config::ArtworkProvider.get() != 0) item.tgdbCheckedMedia = TheGamesDb::supportedMedia; boxart.completeArtworkWork(item, true, item.arcade ? 0 : config::ArtworkProvider.get()); }
 	void seedArcadeRequest()
 	{
 		GameBoxart arcade;
@@ -673,6 +674,25 @@ TEST_F(ScreenScraperQueueTest, FullMediaRequestSurvivesAnInFlightCoverJob)
 	EXPECT_EQ(record().requestedMedia, 0u);
 }
 
+TEST_F(ScreenScraperQueueTest, TheGamesDbMergesExpandedMediaIntoAnInFlightCoverJob)
+{
+	config::ArtworkProvider = 0;
+	queue();
+	auto coverJob = takeWork();
+	queue(artwork::allMedia);
+	EXPECT_EQ(queued(), 0u);
+	coverJob.offlineArtState = OfflineArtState::NoArtwork;
+	coverJob.tgdbCheckedMedia = artwork::coverMedia;
+	finish(coverJob);
+	ASSERT_EQ(queued(), 1u);
+	auto expanded = takeWork();
+	EXPECT_EQ(expanded.requestedMedia, TheGamesDb::supportedMedia);
+	expanded.tgdbCheckedMedia = TheGamesDb::supportedMedia;
+	finish(expanded);
+	EXPECT_EQ(queued(), 0u);
+	EXPECT_FALSE(record().busy);
+}
+
 TEST_F(ScreenScraperQueueTest, AddingAnotherGameAfterBulkRequestStillQueuesOnlyCover)
 {
 	queue(screenscraper::allMedia);
@@ -686,7 +706,7 @@ TEST_F(ScreenScraperQueueTest, RetryingDreamcastMediaPreservesArcadeRequests)
 {
 	queue();
 	seedArcadeRequest();
-	boxart.retryScreenScraperMedia();
+	boxart.retryArtworkMedia();
 	ASSERT_EQ(queued(), 1u);
 	EXPECT_TRUE(takeWork().arcade);
 }

@@ -4,6 +4,8 @@
 #include "archive/ZipArchive.h"
 #include "oslib/oslib.h"
 #include <stb_image.h>
+#include <stb_image_write.h>
+#include <ctime>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -13,7 +15,7 @@
 
 namespace {
 const std::string fixture = R"xml(<?xml version="1.0"?><LaunchBox>
-<Game><Name>Sonic Adventure</Name><DatabaseID>2416</DatabaseID><Platform>Sega Dreamcast</Platform></Game>
+<Game><Name>Sonic Adventure</Name><DatabaseID>2416</DatabaseID><Platform>Sega Dreamcast</Platform><Developer>Sonic Team</Developer><Publisher>Sega</Publisher><Genres>Platform</Genres><MaxPlayers>1</MaxPlayers><Overview>Fixture description</Overview><ReleaseDate>1998-12-23</ReleaseDate></Game>
 <Game><Name>Sonic Adventure</Name><DatabaseID>9000</DatabaseID><Platform>Windows</Platform></Game>
 <Game><Name>Sonic Adventure</Name><DatabaseID>100</DatabaseID><Platform>Arcade</Platform></Game>
 <Game><Name>Virtua Tennis</Name><DatabaseID>5894</DatabaseID><Platform>Sega Dreamcast</Platform></Game>
@@ -28,6 +30,14 @@ const std::string fixture = R"xml(<?xml version="1.0"?><LaunchBox>
 <GameImage><DatabaseID>100</DatabaseID><FileName>arcade.png</FileName><Type>Advertisement Flyer - Front</Type><Region /></GameImage>
 <GameImage><DatabaseID>5894</DatabaseID><FileName>tennis.png</FileName><Type>Box - Front</Type><Region>World</Region></GameImage>
 <GameImage><DatabaseID>200</DatabaseID><FileName>foo.png</FileName><Type>Box - Front</Type><Region>World</Region></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>disc.png</FileName><Type>Disc</Type><Region>Japan</Region></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>case.png</FileName><Type>Box - 3D</Type><Region>Japan</Region></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>spine.png</FileName><Type>Box - Spine</Type><Region>Japan</Region></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>screen.png</FileName><Type>Screenshot - Gameplay</Type></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>title.png</FileName><Type>Screenshot - Game Title</Type></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>logo.png</FileName><Type>Clear Logo</Type></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>banner.png</FileName><Type>Banner</Type></GameImage>
+<GameImage><DatabaseID>2416</DatabaseID><FileName>fanart.png</FileName><Type>Fanart - Background</Type></GameImage>
 </LaunchBox>)xml";
 
 void readXml(LaunchBoxCatalog& catalog, const std::string& xml, size_t chunkSize = 65536)
@@ -187,6 +197,14 @@ TEST(LaunchBoxCatalogTest, LocalExportSmokeCheck)
 	EXPECT_NE(0, match.id);
 	EXPECT_EQ("Sonic Adventure", match.name);
 	EXPECT_FALSE(match.url.empty());
+ EXPECT_TRUE(match.media.count("physical"));
+ EXPECT_TRUE(match.media.count("case"));
+ EXPECT_TRUE(match.media.count("spine"));
+ if (const char *output = std::getenv("HOLLYCAST_LAUNCHBOX_EXPORT_INDEX"))
+ {
+  json data = catalog.toJson(); data["downloaded_at"] = std::time(nullptr);
+  std::ofstream(output) << data.dump();
+ }
 }
 
 // Explicitly opt in: this downloads the current public catalog and one cover.
@@ -223,4 +241,81 @@ TEST(LaunchBoxCacheTest, LiveProviderSmokeCheck)
 	EXPECT_EQ(item.boxartPath, renamed.boxartPath);
 	EXPECT_FALSE(std::filesystem::exists(directory / "launchbox-catalog.json"));
 	std::filesystem::remove_all(directory);
+}
+
+namespace {
+class LaunchBoxMediaTest : public ::testing::Test {
+protected:
+ void SetUp() override {
+  root = std::filesystem::temp_directory_path() / ("hollycast-launchbox-media-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(root);
+  LaunchBoxCatalog catalog; readXml(catalog, fixture);
+  auto data = catalog.toJson(); data["downloaded_at"] = std::time(nullptr);
+  std::ofstream(root / "launchbox-catalog.json") << data.dump();
+  item = sonic();
+ }
+ void TearDown() override { std::filesystem::remove_all(root); }
+ LaunchBox source() {
+  return LaunchBox([&](const std::string& url, std::vector<u8>& bytes, std::string& type) {
+   ++downloads;
+   if (url.find("Metadata.zip") != std::string::npos) { ADD_FAILURE() << "The cached catalog should be reused"; return 500; }
+   if (failLogo && url.find("logo.png") != std::string::npos) return 503;
+   type = "image/png"; const u8 pixel[] = {1, 2, 3, 255};
+   stbi_write_png_to_func([](void* context, void* data, int size) {
+    auto& bytes = *static_cast<std::vector<u8>*>(context);
+    const auto *first = static_cast<u8*>(data); bytes.insert(bytes.end(), first, first + size);
+   }, &bytes, 1, 1, 4, pixel, 4);
+   return 200;
+  });
+ }
+ std::filesystem::path root; GameBoxart item; int downloads = 0; bool failLogo = false;
+};
+
+TEST_F(LaunchBoxMediaTest, CoversStayAutomaticAndManualRequestsFillDistinctSlots)
+{
+ auto scraper = source(); ASSERT_TRUE(scraper.initialize(root.string()));
+ scraper.scrape(item);
+ ASSERT_EQ(1, downloads); ASSERT_EQ(1u, item.launchboxMedia.size());
+ const auto cover = item.boxartPath;
+ item.requestedMedia = artwork::allMedia; scraper.scrape(item);
+ EXPECT_EQ(10, downloads); EXPECT_EQ(10u, item.launchboxMedia.size());
+ EXPECT_EQ(cover, item.boxartPath);
+ EXPECT_NE(item.launchboxMedia.at("physical"), item.launchboxMedia.at("case"));
+ EXPECT_NE(item.launchboxMedia.at("backcover"), item.launchboxMedia.at("spine"));
+ EXPECT_EQ("Sonic Team", item.developer); EXPECT_EQ("1", item.players);
+ EXPECT_EQ("Fixture description", item.overview);
+ GameBoxart restored(item.to_json(root.string() + '/'), root.string() + '/');
+ EXPECT_EQ(item.launchboxMedia, restored.launchboxMedia);
+ EXPECT_EQ(LaunchBox::supportedMedia, restored.launchboxCheckedMedia);
+ EXPECT_FALSE(LaunchBox::needsMedia(restored, artwork::allMedia));
+ // Rename and remove the catalog: the expanded match, images and metadata survive.
+ std::filesystem::remove(root / "launchbox-catalog.json");
+ GameBoxart renamed = sonic(); renamed.fileName = "Renamed.chd"; renamed.requestedMedia = artwork::allMedia;
+ auto restarted = source(); ASSERT_TRUE(restarted.initialize(root.string())); restarted.scrape(renamed);
+ EXPECT_EQ(item.launchboxMedia, renamed.launchboxMedia);
+ EXPECT_EQ(item.developer, renamed.developer); EXPECT_EQ(10, downloads);
+}
+
+TEST_F(LaunchBoxMediaTest, PartialFailureKeepsCompletedMediaAndRetriesOnlyPendingTypes)
+{
+ failLogo = true; item.requestedMedia = artwork::allMedia;
+ auto scraper = source(); ASSERT_TRUE(scraper.initialize(root.string()));
+ EXPECT_THROW(scraper.scrape(item), std::runtime_error);
+ EXPECT_EQ(1u, item.launchboxMedia.count("cover"));
+ EXPECT_FALSE(item.launchboxCheckedMedia & (1u << 2)); EXPECT_FALSE(scraper.ready());
+ failLogo = false; auto retry = source(); ASSERT_TRUE(retry.initialize(root.string())); retry.scrape(item);
+ EXPECT_EQ(10u, item.launchboxMedia.size()); EXPECT_EQ(11, downloads);
+}
+
+TEST(LaunchBoxCatalogTest, SharedSlotsHaveDiscAndBoxImagesAndKeepMixUnavailable)
+{
+ LaunchBoxCatalog catalog; readXml(catalog, fixture, 17);
+ const auto match = catalog.match(sonic());
+ EXPECT_EQ(10u, match.media.size());
+ EXPECT_EQ("https://images.launchbox-app.com/disc.png", match.media.at("physical"));
+ EXPECT_EQ("https://images.launchbox-app.com/case.png", match.media.at("case"));
+ EXPECT_EQ("https://images.launchbox-app.com/back.jpg", match.media.at("backcover"));
+ EXPECT_EQ("https://images.launchbox-app.com/spine.png", match.media.at("spine"));
+ EXPECT_EQ(0u, match.media.count("miximage"));
+}
 }

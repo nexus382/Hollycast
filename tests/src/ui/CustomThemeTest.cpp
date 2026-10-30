@@ -111,6 +111,23 @@ TEST(CustomThemeTest, ParsesLocalFontAndImageAssetsAndRejectsTraversalPerAsset)
 	EXPECT_TRUE(theme.assets.icons.empty());
 }
 
+TEST(CustomThemeTest, LibraryFontOverridesResetWhenAnotherThemeOrPreviewIsApplied)
+{
+	CustomTheme::Theme::Assets assets;
+	assets.directory = "/tmp/fonts/";
+	assets.bodyFont = "body.ttf";
+	CustomTheme::setActiveAssets(assets);
+	const auto inherited = CustomTheme::fontPath(false);
+	CustomTheme::setActiveFontOverrides("/tmp/package/mono.ttf", "/tmp/package/bold.ttf");
+	EXPECT_EQ(CustomTheme::fontPath(false), "/tmp/package/mono.ttf");
+	EXPECT_EQ(CustomTheme::fontPath(true), "/tmp/package/bold.ttf");
+	CustomTheme::setActiveAssets(assets);
+	EXPECT_EQ(CustomTheme::fontPath(false), inherited);
+	CustomTheme::setActiveAssets({});
+	EXPECT_TRUE(CustomTheme::fontPath(false).empty());
+	EXPECT_TRUE(CustomTheme::fontPath(true).empty());
+}
+
 TEST(CustomThemeTest, ParsesSemanticAndWidgetRolesWithHexAndRgba)
 {
 	CustomTheme::Theme theme;

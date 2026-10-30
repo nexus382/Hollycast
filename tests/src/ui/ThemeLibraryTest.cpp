@@ -4,6 +4,7 @@
 #include "ui/gui_util.h"
 #include "imgui.h"
 #include <stb_image_write.h>
+#include "imgui_internal.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -53,16 +54,20 @@ protected:
 		ImGui::SetNextWindowPos(ImVec2(0, 0));
 		ImGui::SetNextWindowSize(ImVec2(500, 400));
 		ImGui::Begin("Theme Library");
+		canvasOrigin = ImGui::GetCursorScreenPos();
+		canvasSize = ImGui::GetContentRegionAvail();
 		bounds.resize(items.size());
 		itemIds.assign(items.size(), 0);
 		const int result = themes::renderLibrary(layout, {}, items, [&](size_t index) {
 			const auto min = ImGui::GetItemRectMin();
 			const auto max = ImGui::GetItemRectMax();
 			bounds[index] = ImVec4(min.x, min.y, max.x, max.y);
+			const auto& browserVertices = ImGui::GetWindowDrawList()->VtxBuffer;
+			browserMesh.assign(browserVertices.begin(), browserVertices.end());
 			itemIds[index] = ImGui::GetItemID();
 			const ImRect viewport = ImGui::GetCurrentWindow()->InnerRect;
 			browserViewport = ImVec4(viewport.Min.x, viewport.Min.y, viewport.Max.x, viewport.Max.y);
-		}, std::nullopt, iconScale);
+		}, std::nullopt, iconScale, stateLayoutId, favouriteHandler);
 		const auto& vertices = ImGui::GetWindowDrawList()->VtxBuffer;
 		backgroundMesh.assign(vertices.begin(), vertices.end());
 		detailsMesh.clear();
@@ -89,7 +94,7 @@ protected:
 	std::vector<ImVec4> bounds;
 	std::vector<ImGuiID> itemIds;
 	size_t backgroundVertices = 0;
-	std::vector<ImDrawVert> backgroundMesh;
+	std::vector<ImDrawVert> backgroundMesh, browserMesh;
 	float iconScale = 1.f;
 	std::filesystem::path artworkRoot;
 	bool useLibraryUi = false;
@@ -99,6 +104,9 @@ protected:
 	ImVec4 browserViewport;
 	ImGuiWindow* detailsWindow = nullptr;
 	std::vector<ImDrawVert> detailsMesh;
+	ImVec2 canvasOrigin, canvasSize;
+	std::string stateLayoutId;
+	std::function<void(size_t)> favouriteHandler;
 };
 
 TEST_F(ThemeLibraryTest, GridWidgetActivatesTheClickedStableItem)
@@ -280,6 +288,220 @@ TEST_F(ThemeLibraryTest, RackCasesFitTheViewportAtEveryLibraryScale)
 	}
 }
 
+TEST_F(ThemeLibraryTest, OptInDoubleClickPreviewsOnSingleClickAndActivatesOnDoubleClick)
+{
+	layout.id = "double-click";
+	layout.activation = "doubleClick";
+	layout.columns = 2;
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec4 rect = bounds[1];
+	const ImVec2 center((rect.x + rect.z) * 0.5f, (rect.y + rect.w) * 0.5f);
+	EXPECT_EQ(renderFrame(center, false), -1);
+	EXPECT_EQ(renderFrame(center, true), -1);
+	EXPECT_EQ(renderFrame(center, false), -1);
+	EXPECT_EQ(renderFrame(center, true), 1);
+	EXPECT_EQ(renderFrame(center, false), -1);
+}
+
+TEST_F(ThemeLibraryTest, AssetBackedNextAndPlayButtonsNavigateWithoutBlockingTheBrowser)
+{
+	layout.id = "button-controls";
+	layout.activation = "doubleClick";
+	layout.browser = {0, 0, 0.6f, 0.8f};
+	themes::Element next, play;
+	next.type = "button"; next.rect = {0.7f, 0.15f, 0.2f, 0.15f}; next.action = "next";
+	next.background = 0; // Empty labels support controls painted into a package image.
+	play = next; play.rect.y = 0.5f; play.action = "activate"; play.text = "Play";
+	layout.elements = {next, play};
+	const ImVec2 away(-1, -1);
+	renderFrame(away, false);
+	renderFrame(away, false);
+	const ImVec2 nextCenter(canvasOrigin.x + canvasSize.x * 0.8f, canvasOrigin.y + canvasSize.y * 0.225f);
+	EXPECT_EQ(renderFrame(nextCenter, false), -1);
+	EXPECT_EQ(renderFrame(nextCenter, true), -1);
+	EXPECT_EQ(renderFrame(nextCenter, false), -1);
+	const ImVec2 playCenter(canvasOrigin.x + canvasSize.x * 0.8f, canvasOrigin.y + canvasSize.y * 0.575f);
+	renderFrame(playCenter, false);
+	EXPECT_EQ(renderFrame(playCenter, true), -1);
+	EXPECT_EQ(renderFrame(playCenter, false), 1);
+	// The overlapping decorative layer and separate action windows leave tiles clickable.
+	const ImVec4 first = bounds[0];
+	const ImVec2 tile((first.x + first.z) / 2, (first.y + first.w) / 2);
+	renderFrame(tile, false);
+	renderFrame(tile, true);
+	EXPECT_EQ(renderFrame(tile, false), -1);
+	// A row step larger than the library still wraps to a valid item.
+	layout.columns = 3;
+	layout.minItemWidth = 42;
+	layout.elements[0].action = "up";
+	renderFrame(nextCenter, false);
+	renderFrame(nextCenter, true);
+	renderFrame(nextCenter, false);
+	renderFrame(playCenter, false);
+	renderFrame(playCenter, true);
+	EXPECT_EQ(renderFrame(playCenter, false), 1);
+}
+
+TEST_F(ThemeLibraryTest, VisibleFavouriteButtonTogglesTheSelectedGameAndKeepsItsWidgetId)
+{
+	layout.id = "favourite-controls";
+	layout.activation = "doubleClick";
+	layout.browser = {0, 0, 0.6f, 1};
+	items[1].canFavourite = true;
+	themes::Element favourite;
+	favourite.type = "button"; favourite.action = "favourite";
+	favourite.text = "Favourite"; favourite.selectedText = "Favourited";
+	favourite.icon = "star"; favourite.selectedIcon = "star-filled";
+	favourite.borderColor = 0x91a189ff; favourite.selectedBorderColor = 0x526b4eff;
+	favourite.rect = {0.7f, 0.1f, 0.25f, 0.18f};
+	layout.elements.push_back(favourite);
+	int toggles = 0;
+	favouriteHandler = [&](size_t index) { EXPECT_EQ(index, 1u); items[index].favourite = !items[index].favourite; ++toggles; };
+	renderFrame(ImVec2(-1, -1), false);
+	renderFrame(ImVec2(-1, -1), false);
+	const auto second = bounds[1];
+	const ImVec2 tile((second.x + second.z) / 2, (second.y + second.w) / 2);
+	renderFrame(tile, false);
+	renderFrame(tile, true);
+	renderFrame(tile, false);
+	const ImVec2 control(canvasOrigin.x + canvasSize.x * 0.825f, canvasOrigin.y + canvasSize.y * 0.19f);
+	renderFrame(control, false);
+	renderFrame(control, true);
+	renderFrame(control, false);
+	EXPECT_EQ(toggles, 1);
+	EXPECT_TRUE(items[1].favourite);
+	renderFrame(control, false);
+	renderFrame(control, true);
+	renderFrame(control, false);
+	EXPECT_EQ(toggles, 2);
+	EXPECT_FALSE(items[1].favourite);
+	items[1].canFavourite = false;
+	renderFrame(control, true);
+	renderFrame(control, false);
+	EXPECT_EQ(toggles, 2);
+}
+
+TEST_F(ThemeLibraryTest, ArtworkChoicesSwitchWhenAvailableAndDisableMissingMedia)
+{
+	layout.id = "artwork-controls";
+	layout.mode = "list";
+	layout.browser = {0, 0, 0.6f, 1};
+	items[0].image = "cover.png";
+	items[0].metadata["artwork.screenshot"] = "screenshot.png";
+	themes::Element cover;
+	cover.type = "button"; cover.action = "artwork"; cover.source = "cover";
+	cover.text = "Cover"; cover.background = 0; cover.selectedBackground = 0xab1234ff;
+	cover.rect = {0.7f, 0.1f, 0.25f, 0.15f};
+	themes::Element screenshot = cover;
+	screenshot.source = "screenshot"; screenshot.text = "Screenshot";
+	screenshot.rect.y = 0.35f; screenshot.selectedBackground = 0x12ab34ff;
+	layout.elements = {cover, screenshot};
+	auto hasColor = [](ImU32 wanted) {
+		for (auto* window : ImGui::GetCurrentContext()->Windows)
+			for (const auto& vertex : window->DrawList->VtxBuffer)
+				if (vertex.col == wanted) return true;
+		return false;
+	};
+	const ImVec2 away(-1, -1);
+	renderFrame(away, false);
+	renderFrame(away, false);
+	EXPECT_TRUE(hasColor(IM_COL32(0xab, 0x12, 0x34, 0xff)));
+	const ImVec2 control(canvasOrigin.x + canvasSize.x * 0.825f, canvasOrigin.y + canvasSize.y * 0.425f);
+	renderFrame(control, false);
+	renderFrame(control, true);
+	renderFrame(control, false);
+	renderFrame(away, false);
+	EXPECT_TRUE(hasColor(IM_COL32(0x12, 0xab, 0x34, 0xff)));
+	items[0].metadata["artwork.screenshot"].clear();
+	renderFrame(away, false);
+	EXPECT_TRUE(hasColor(IM_COL32(0xab, 0x12, 0x34, 0xff)));
+	renderFrame(control, false);
+	renderFrame(control, true);
+	renderFrame(control, false);
+	renderFrame(away, false);
+	EXPECT_TRUE(hasColor(IM_COL32(0xab, 0x12, 0x34, 0xff)));
+	EXPECT_FALSE(hasColor(IM_COL32(0x12, 0xab, 0x34, 0xff)));
+}
+
+TEST_F(ThemeLibraryTest, ResponsiveFallbackPreservesTheSelectedGame)
+{
+	layout.id = "wide-state";
+	stateLayoutId = layout.id;
+	layout.columns = 2;
+	layout.activation = "doubleClick";
+	const ImVec2 away(-1, -1);
+	renderFrame(away, false);
+	const ImVec4 second = bounds[1];
+	const ImVec2 tile((second.x + second.z) / 2, (second.y + second.w) / 2);
+	renderFrame(tile, false);
+	renderFrame(tile, true);
+	renderFrame(tile, false);
+	layout.id = "portrait-state";
+	layout.canvasAspect = 0.55f;
+	layout.browser = {0, 0, 1, 0.7f};
+	themes::Element play;
+	play.type = "button"; play.action = "activate"; play.text = "Play";
+	play.rect = {0, 0.8f, 1, 0.15f};
+	layout.elements.push_back(play);
+	renderFrame(away, false);
+	renderFrame(away, false);
+	const ImVec2 playCenter(canvasOrigin.x + canvasSize.x * 0.5f, canvasOrigin.y + canvasSize.y * 0.875f);
+	renderFrame(playCenter, false);
+	renderFrame(playCenter, true);
+	EXPECT_EQ(renderFrame(playCenter, false), 1);
+}
+
+TEST_F(ThemeLibraryTest, LongGameDetailsScrollWithoutBlockingTilesAndResetForTheNextGame)
+{
+	layout.id = "scrollable-details";
+	layout.activation = "doubleClick";
+	layout.browser = {0, 0, 0.45f, 1};
+	themes::Element details;
+	details.type = "details"; details.rect = {0.5f, 0, 0.5f, 0.5f};
+	details.fields = {"developer", "publisher", "players", "description"}; details.columns = 2;
+	layout.elements.push_back(details);
+	items[0].metadata["developer"] = "Developer";
+	for (int i = 0; i < 100; ++i) items[0].metadata["description"] += "A long game description. ";
+	const ImVec2 away(-1, -1);
+	renderFrame(away, false);
+	renderFrame(away, false);
+	ImGuiWindow* detailWindow = nullptr;
+	for (auto* window : ImGui::GetCurrentContext()->Windows)
+		if (std::string(window->Name).find("##details_") != std::string::npos) detailWindow = window;
+	ASSERT_NE(detailWindow, nullptr);
+	ASSERT_GT(detailWindow->ScrollMax.y, 0);
+	const ImVec2 detailCenter(detailWindow->Pos.x + detailWindow->Size.x / 2, detailWindow->Pos.y + detailWindow->Size.y / 2);
+	renderFrame(detailCenter, false);
+	ImGui::GetIO().AddMouseWheelEvent(0, -3);
+	renderFrame(detailCenter, false);
+	renderFrame(detailCenter, false);
+	EXPECT_GT(detailWindow->Scroll.y, 0);
+	const auto second = bounds[1];
+	const ImVec2 tile((second.x + second.z) / 2, (second.y + second.w) / 2);
+	renderFrame(tile, false);
+	renderFrame(tile, true);
+	renderFrame(tile, false);
+	renderFrame(away, false);
+	EXPECT_FLOAT_EQ(detailWindow->Scroll.y, 0);
+}
+
+TEST_F(ThemeLibraryTest, SmallGridCellsAndAspectFitAreExplicitLayoutOptions)
+{
+	layout.id = "small-cells";
+	layout.canvasAspect = 2;
+	layout.browser = {0, 0, 0.5f, 1};
+	layout.columns = 3;
+	layout.minItemWidth = 42;
+	items.push_back({"third", "Third", {}, {}});
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_NEAR(bounds[0].y, bounds[2].y, 1.f);
+	EXPECT_GT(bounds[2].x, bounds[0].x);
+	EXPECT_GT(bounds[0].y, canvasOrigin.y);
+	layout.minItemWidth = 96;
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_GT(bounds[2].y, bounds[0].y);
+}
+
 TEST_F(ThemeLibraryTest, KeyboardCanNavigateAndActivateAListItem)
 {
 	layout.mode = "list";
@@ -344,6 +566,8 @@ TEST_F(ThemeLibraryTest, CompactListUsesConfiguredRowHeightAndRestoresFontAndSty
 		const ImVec2 min = ImGui::GetItemRectMin();
 		const ImVec2 max = ImGui::GetItemRectMax();
 		bounds[index] = ImVec4(min.x, min.y, max.x, max.y);
+			const auto& browserVertices = ImGui::GetWindowDrawList()->VtxBuffer;
+			browserMesh.assign(browserVertices.begin(), browserVertices.end());
 		// Context-menu work can temporarily customize its text without leaking it.
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0, 1, 1));
 		ImGui::PushFont(nullptr, ImGui::GetFontSize() + 1.f);
@@ -574,4 +798,22 @@ TEST_F(ThemeLibraryTest, RegionalSpinesReserveFullHeightProportionalSlotsAndWrap
 	renderFrame(point, false);
 	EXPECT_EQ(renderFrame(point, true), -1);
 	EXPECT_EQ(renderFrame(point, false), static_cast<int>(nextShelf));
+}
+
+TEST_F(ThemeLibraryTest, PassiveFavouriteStarTracksStateWithoutAddingInteractiveControls)
+{
+ layout.id = "passive-favourites"; layout.browser = {0, 0, 1, 1}; layout.columns = 2;
+ layout.showItemActions = false; layout.showFavouriteMarker = true;
+ layout.pixelArt.resolution = 24; layout.pixelArt.dark = 0xe15a77ff;
+ items[1].favourite = true;
+ renderFrame(ImVec2(-1, -1), false); renderFrame(ImVec2(-1, -1), false);
+ const auto ids = itemIds;
+ auto markerVertices = [&] {
+  return std::count_if(browserMesh.begin(), browserMesh.end(), [](const ImDrawVert& v) { return v.col == IM_COL32(0xe1, 0x5a, 0x77, 0xff); });
+ };
+ EXPECT_GT(markerVertices(), 0);
+ items[1].favourite = false; renderFrame(ImVec2(-1, -1), false);
+ EXPECT_EQ(markerVertices(), 0); EXPECT_EQ(ids, itemIds);
+ items[1].favourite = true; layout.showFavouriteMarker = false; renderFrame(ImVec2(-1, -1), false);
+ EXPECT_EQ(markerVertices(), 0); EXPECT_EQ(ids, itemIds);
 }

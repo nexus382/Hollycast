@@ -62,7 +62,7 @@ public:
 	// Bit 0 is the front cover. Expanded masks are explicit user download actions.
 	void queueBoxart(const GameMedia& media, u32 requestedMedia = 1);
 	void startFetch();
-	void retryScreenScraperMedia();
+	void retryArtworkMedia();
 	struct DownloadProgress { size_t games = 0, covers = 0; };
 	DownloadProgress downloadProgress();
 
@@ -87,7 +87,7 @@ private:
 	GameBoxart& gameForMedia(const GameMedia& media);
 	bool isCurrentWork(const GameBoxart& item) const;
 	//! @pre mutex must be locked. Merge requests added while a worker was running.
-	void completeArtworkWork(GameBoxart& item, bool queueOnline, bool useScreenScraper);
+	void completeArtworkWork(GameBoxart& item, bool queueOnline, int provider);
 	bool takeScreenScraperWork(GameBoxart& item, u64 generation);
 	void runScreenScraperQueue(std::shared_ptr<screenscraper::Session> session, u64 generation,
 			const std::string& directory);

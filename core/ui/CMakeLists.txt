@@ -65,9 +65,13 @@ if(NOT LIBRETRO)
             theme_parser.cpp
             theme_library.h
             theme_library.cpp
+            theme_artwork.h
+            theme_artwork.cpp
             boxart/arcade_scraper.h
             boxart/boxart.cpp
             boxart/boxart.h
+            boxart/artwork_adapter.cpp
+            boxart/artwork_adapter.h
             boxart/gamesdb.cpp
             boxart/gamesdb.h
             boxart/screenscraper.cpp

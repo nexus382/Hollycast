@@ -44,12 +44,11 @@ Option<bool> SaveProtection("Dreamcast.SaveProtection", true);
 Option<int, false> SavestateSlot("Dreamcast.SavestateSlot");
 Option<bool> ForceFreePlay("ForceFreePlay", true);
 Option<bool, false> FetchBoxart("FetchBoxart", true);
-Option<int, false> ArtworkProvider("ArtworkProvider", 1);
+Option<int, false> ArtworkProvider("ArtworkProvider", 0); // Default source and fallback for other providers.
 Option<std::string, false> ScreenScraperUser("ScreenScraperUser");
 Option<int, false> ScreenScraperMedia("ScreenScraperMedia", 2047); // Manual selections; automatic requests are always cover-only.
 Option<bool, false> BoxartDisplayMode("BoxartDisplayMode", true);
 Option<int, false> BoxartSourceMode("BoxartSourceMode", 0);
-Option<int, false> BoxartOnlineSource("BoxartOnlineSource", 0);
 Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
 Option<int, false> LibraryImageSource("Dreamcast.LibraryImageSource", 0);
 Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", 0);

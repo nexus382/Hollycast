@@ -28,6 +28,9 @@
 #include "reios/reios.h"
 #include "pvrparser.h"
 #include <stb_image_write.h>
+#include <stb_image.h>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <random>
 #include <memory>
@@ -69,10 +72,12 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 		{ "screenscraper_checked_media", screenScraperCheckedMedia },
 		{ "screenscraper_searched", screenScraperSearched },
 		{ "screenscraper_match_version", screenScraperMatchVersion },
+		{ "tgdb_id", tgdbId }, { "tgdb_checked_media", tgdbCheckedMedia }, { "tgdb_searched", tgdbSearched },
 		{ "boxart_path", artPath },
 		{ "boxart_url", boxartUrl },
 		{ "scraped_provider", scrapedProvider },
 		{ "launchbox_id", launchboxId },
+  { "launchbox_checked_media", launchboxCheckedMedia }, { "launchbox_searched", launchboxSearched },
 		{ "parsed", offlineArtState == OfflineArtState::Complete || offlineArtState == OfflineArtState::NoArtwork },
 		{ "offline_art_state", offlineArtState == OfflineArtState::Complete ? "complete"
 				: offlineArtState == OfflineArtState::NoArtwork ? "no_artwork" : "pending" },
@@ -84,7 +89,13 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 	for (const auto& media : screenScraperMedia)
 		j["screenscraper_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
 			? media.second.substr(baseArtPath.size()) : media.second;
-	return j;
+	for (const auto& media : tgdbMedia)
+		j["tgdb_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
+			? media.second.substr(baseArtPath.size()) : media.second;
+ for (const auto& media : launchboxMedia)
+  j["launchbox_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
+   ? media.second.substr(baseArtPath.size()) : media.second;
+ return j;
 }
 
 GameBoxart::GameBoxart(const json& j, const std::string& baseArtPath)
@@ -115,10 +126,21 @@ GameBoxart::GameBoxart(const json& j, const std::string& baseArtPath)
 	for (auto& media : screenScraperMedia)
 		if (!media.second.empty() && !isAbsolutePath(media.second))
 			media.second = baseArtPath + media.second;
+	loadProperty(tgdbId, j, "tgdb_id");
+	loadProperty(tgdbCheckedMedia, j, "tgdb_checked_media");
+	loadProperty(tgdbSearched, j, "tgdb_searched");
+	loadProperty(tgdbMedia, j, "tgdb_media");
+	for (auto& media : tgdbMedia)
+		if (!media.second.empty() && !isAbsolutePath(media.second)) media.second = baseArtPath + media.second;
 	loadProperty(boxartPath, j, "boxart_path");
 	loadProperty(boxartUrl, j, "boxart_url");
 	loadProperty(scrapedProvider, j, "scraped_provider");
 	loadProperty(launchboxId, j, "launchbox_id");
+ loadProperty(launchboxCheckedMedia, j, "launchbox_checked_media");
+ loadProperty(launchboxSearched, j, "launchbox_searched");
+ loadProperty(launchboxMedia, j, "launchbox_media");
+ for (auto& media : launchboxMedia)
+  if (!media.second.empty() && !isAbsolutePath(media.second)) media.second = baseArtPath + media.second;
 	loadProperty(gamePath, j, "game_path");
 	std::string state;
 	loadProperty(state, j, "offline_art_state");
@@ -328,4 +350,35 @@ void OfflineScraper::scrape(GameBoxart& item)
 	} catch (...) {
 		WARN_LOG(COMMON, "Physical boxart failed for %s", item.gamePath.c_str());
 	}
+}
+
+bool Scraper::downloadMediaImage(const std::string& url, const std::string& path, const Transport& transport)
+{
+    std::vector<u8> bytes;
+    std::string type;
+    const int status = transport ? transport(url, bytes, type) : http::get(url, bytes, type);
+    if (status == 404) return false;
+    int width = 0, height = 0, channels = 0;
+    if (!http::success(status) || bytes.empty() || bytes.size() > 64 * 1024 * 1024
+            || type.substr(0, 6) != "image/" || !stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, &channels)
+            || width <= 0 || height <= 0 || static_cast<u64>(width) * height > 32 * 1024 * 1024)
+    {
+        throw std::runtime_error("Artwork download failed. Retrying after one minute.");
+    }
+    u8* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, &channels, 4);
+    if (!pixels) {
+        throw std::runtime_error("Artwork provider returned an incomplete image.");
+    }
+    stbi_image_free(pixels);
+    const auto temporary = std::filesystem::u8path(path + ".part");
+    std::ofstream file(temporary, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    file.close();
+    std::error_code error;
+    if (file) std::filesystem::rename(temporary, std::filesystem::u8path(path), error);
+    if (!file || error) {
+        std::filesystem::remove(temporary, error);
+        throw std::runtime_error("Artwork provider could not save artwork. Check the writable data folder.");
+    }
+    return true;
 }

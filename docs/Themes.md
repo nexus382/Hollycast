@@ -42,7 +42,7 @@ This is the smallest useful `theme.json`:
 }
 ```
 
-The [theme collection](../themes/README.md) contains seven starred examples using grids, lists, CD racks, selected-game artwork and metadata. Each package includes its source notes.
+The [theme collection](../themes/README.md) contains Pocket Dimension and seven starred examples using grids, lists, CD racks, selected-game artwork and metadata. Each package includes its source notes.
 
 ## Manifest reference
 
@@ -57,6 +57,7 @@ The root must be a JSON object. Unknown fields are errors. The UTF-8 `theme.json
 | `description` | No | Short description shown in settings. |
 | `baseTheme` | No | Base palette before `colors` overrides it. Integer 0–5; defaults to `0`. See below. |
 | `colors` | No | Object of ImGui color names and 6- or 8-digit hexadecimal strings. Six digits imply opaque alpha. Names omit the `ImGuiCol_` prefix. |
+| `fonts` | No | Optional `body` and `bold` package-relative TrueType/OpenType font paths. Omit to retain the application fonts. Each file must have a valid SFNT directory and be at most 32 MiB. The normal font loader validates the font and retains existing language/emoji fallbacks. |
 | `layouts` | Yes | Array of 1–16 layouts. |
 
 Base palette numbers are `0` Dark, `1` Light, `2` Dreamcast, `3` High Contrast, `4` Nintendo, and `5` Aqua Chill. A custom theme starts from this palette, then applies each entry in `colors`.
@@ -98,8 +99,25 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `showArtwork` | Show square artwork thumbnails beside list titles; default `false`. |
 | `compactControls` | Show favourite buttons only on hovered/focused items or saved favourites; default `false`. Context-menu actions remain available. |
 | `showInfoTooltip` | Show the app's hover information popup; default `true`. Layouts with their own details can disable it. |
+| `canvasAspect` | Optional fixed canvas width/height ratio, `0.4`–`3`. The canvas fits and centers within the content area, preserving authored asset proportions. Omit to use the complete content area as before. |
+| `toolbar` | `standard` (default) or `compact`. Compact uses smaller shared library controls and a **Filter** button that expands search. All Games, Continue Playing, Favourites, and Settings remain available. |
+| `toolbarSelectedTextColor` | Optional foreground for the selected compact-toolbar view. Omit to inherit app text. The selected fill uses the app palette's `ButtonActive`. |
+| `toolbarLogo` | Optional package-relative image replacing the compact toolbar's text brand. It retains its aspect ratio at the toolbar control height. Omit to keep text branding. |
+| `toolbarLogoHeight` | Optional logo height in logical UI pixels, `16`–`96`. Requires `toolbarLogo`; its original aspect ratio is preserved. Omit to match the control height. |
+| `activation` | `singleClick` (default) or `doubleClick`. In double-click mode, a single click selects/previews; double-click, Enter/controller confirm, or an `activate` button launches the game. |
+| `minItemWidth` | Minimum grid-cell width in logical UI pixels, `32`–`256`; defaults to `96`. This controls when the renderer reduces the requested column count. |
+| `titleStyle` | `full` (default) or `initials`. Initials shorten grid labels only; titles used by metadata, search, and game actions remain complete. Whole UTF-8 characters are retained. |
+| `selectorStyle` | `fill` (default) or `outline`. Outline preserves artwork contrast on low-color displays. |
+| `pixelArt` | Optional object with required integer `resolution` (`4`–`128`) and optional `dark`/`light` hex colors. The browser converts artwork to four tones at that maximum pixel dimension and samples it with nearest-neighbor filtering. The effect has its own texture-cache key; it never changes the original image or other theme views. Omit for original artwork. |
+| `placeholder` | Optional package-relative image used by grid items with no artwork. Omit for the existing empty-artwork behavior. |
+| `showFavouriteMarker` | Optional passive star for favourited browser items, default `false`. Uses the layout text color, or a dot-grid star in the `pixelArt` palette. Adds no interactive control. |
+| `showItemActions` | Whether to draw favourite buttons on tiles, default `true`. Disabling them retains context-menu and long-press game actions. |
+| `hoverDetails` | Whether to show the standard game-details tooltip, default `true`. Themes with their own details panel can disable it. |
+| `previewSource` | Initial named artwork for `source: "preview"` elements; defaults to `cover`. The shared artwork buttons can switch it. |
+| `narrowLayout` | Optional ID of another layout in the same package, used automatically when the available content width/height falls below `narrowAspect`. It does not change the saved layout selection. The fallback is resolved once; it does not recursively follow other fallbacks. |
+| `narrowAspect` | Threshold for `narrowLayout`, `0.4`–`3`; defaults to `1.1`. Requires `narrowLayout`. |
 
-Grid cells show `artworkSource` and optionally a title. With `showTitles: false`, artwork uses the entire cell; an item with no artwork still displays its title. List titles stay on one line and use an ellipsis when necessary, with room reserved for favourite controls. The browser is the interactive region. Elements are decorative or display data for the currently selected item; they do not create interactive controls.
+Grid cells use the selected browser artwork source and optional titles. List rows retain native navigation and ellipsized titles. Optional button elements provide explicit shared library actions.
 
 ## Elements
 
@@ -107,34 +125,47 @@ Every element is an object with required `type` and `rect`. Element rectangles u
 
 | Field | Meaning and bounds |
 | --- | --- |
-| `type` | `panel`, `image`, `artwork`, `text`, or `metadata`. |
+| `type` | `panel`, `image`, `artwork`, `text`, `metadata`, `details`, or `button`. |
 | `rect` | `[x, y, width, height]` normalized to the full library content area. |
 | `source` | Required for `image`; a library artwork name for `artwork`; a metadata field for `metadata`. |
-| `text` | Literal string for `text`. |
+| `text` | Literal string for `text`; optional fallback for a `metadata` field that is absent or empty. Omit to leave missing metadata blank. |
+| `fallbackImage` | Optional package-relative image for `artwork` when the requested library media path is empty. Omit to preserve an empty artwork region. Uses the same fit/tint and path validation as other package images. |
 | `color` | 6- or 8-digit hexadecimal string; default `ffffffff`. Panel/text color or image/artwork tint, including alpha. |
 | `fit` | `contain` (default), `cover`, or `stretch`. Images and artwork either fit inside the rectangle, crop centrally to fill it, or stretch to its dimensions. |
 | `align` | Text alignment: `left` (default), `center`, or `right`. Applies to the wrapped text block. |
-| `fontSize` | Text height as a fraction of the library canvas height, from `0.01` to `0.15`; default `0.035`. At render time it is clamped to 10–96 UI pixels. Uses the app font; custom fonts are not supported. |
-| `zIndex` | Integer from `-100` to `100`; default `0`. Negative elements draw behind the browser. Zero or positive elements draw above it and can obscure its visuals. Elements are not interactive. |
 | `endColor` | Optional second panel color, including alpha, for a smooth gradient from `color`. |
 | `gradient` | Panel gradient direction: `vertical` (top to bottom, default) or `horizontal` (left to right). |
-| `rounding` | Panel/image/artwork corner radius in logical UI pixels, 0–48; default `0`. |
 | `bold` | Use the app's bold font for text or metadata; default `false`. |
 | `wrap` | Wrap text into the rectangle, default `true`. Set `false` for one line with an ellipsis. Wrapped text clips at complete lines. |
 | `fallback` | Missing artwork: `default` uses the game's library art; `none` leaves the element empty. A named artwork source tries that source before default art. Defaults to `default`. |
 | `requiresArtwork` | Optional artwork source that must be present before drawing this artwork element. For example, require `screenshot` on cover/disc/logo overlays so they disappear when a hero uses a precomposed miximage instead. Empty (default) has no condition. |
+| `fontSize` | Text height as a fraction of the library canvas height, from `0.01` to `0.15`; default `0.035`. At render time it is clamped to 10–96 UI pixels. Uses the application font, including optional package fonts. |
+| `zIndex` | Integer from `-100` to `100`; default `0`. Negative elements draw behind the browser. Zero or positive decorative elements draw above it and can obscure its visuals. Buttons draw after decoration. |
+| `action` | Required only for `button`: `previous`, `next`, `up`, `down`, `activate`, `artwork`, or `favourite`. Buttons require a nonnegative `zIndex` and render as independent input regions above decoration. |
+| `background` | Optional button fill color. `00000000` permits a transparent hit region over a package image, such as a physical button. Omit to use the selected app palette. `color` controls button text. |
+| `selectedColor`, `selectedBackground` | Optional text/fill overrides for a selected artwork choice or a game marked as favourite. They allow shared-state controls without a theme-specific widget. |
+| `selectedText` | Optional visible label for a selected artwork/favourite button. The control keeps its stable widget ID when this text changes. |
+| `icon`, `selectedIcon` | Optional vector button icon, `star` (outline) or `star-filled`. `selectedIcon` overrides `icon` for a selected artwork/favourite button. Icons inherit the text color, sit beside the label, and require no icon font. Icon and label scale together to fit a narrow button. |
+| `borderColor`, `selectedBorderColor` | Optional button outline and selected-state override. Uses a one-logical-pixel border and the button's rounding. Outlined controls with an explicit fill also get tinted hover feedback. Omit to retain the app's existing border style. |
+| `rounding` | For panels/images/artwork: logical-pixel corner radius, `0`–`48`, default `0`. For buttons: optional fraction of the smaller dimension, `0`–`0.5`; omit to inherit the app style. |
+| `fields` | Required for `details`: a nonempty array of unique supported metadata field names, in display order. Absent or empty game values are hidden. Description wraps below the other fields. Only valid on `details`. |
+| `columns` | Optional number of label/value pairs per `details` row, integer `1`–`3`; default `1`. Only valid on `details`. |
 
 Element types:
 
 - **`panel`** fills its rectangle with `color`, optionally grading into `endColor`, with rounded corners when requested.
 - **`image`** draws a package image using `fit` and `color`. Its `source` is a relative file path inside the package, such as `images/panel.png`. Use PNG or JPEG; SVG and WebP must be rasterized or decoded first. Absolute paths, `..`, and paths escaping through symlinks are rejected. The referenced file must exist.
-- **`artwork`** draws the selected game's artwork using `fit`. `source` can be empty (default artwork), `cover`, `miximage`, `case` (3D box), `screenshot`, `fanart`, `title` (marquee/wheel), `physical` (disc/cartridge), or `titlescreen`. Named sources use local library media and obey `fallback`. For decorative marquees and discs, use `fallback: "none"` to avoid duplicated covers. `miximage` selects ES-DE mixed artwork independently of the library cover-media setting. Background and detail artwork follow mouse hover and keyboard/controller focus. If no applicable media is available, the rectangle is empty.
+- **`artwork`** draws selected-game media using `fit`: default art, `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, or `spine`. Named slots prefer matching local media, then the selected provider and TGDB fallback, and obey `fallback`. `preview` follows the selected artwork button; unavailable non-cover choices remain empty instead of borrowing cover art. A `fallbackImage` package asset can fill an empty region. Backgrounds and details follow mouse and keyboard/controller selection.
 - **`text`** draws the literal `text` value.
 - **`metadata`** draws the selected game's value for `source`; a missing value draws nothing. Supported fields: `title`, `description`, `developer`, `publisher`, `genre`, `players`, `releaseDate`, `productId`, `region`, `format`, `playTime`, `lastPlayed`, and `size`.
+- **`details`** displays selected-game metadata with translated field labels in its own scrollable rectangle. `fields` chooses the content and order; `columns` controls density. Empty fields are omitted, long values wrap, and the panel scrolls back to the top when the selected game changes. It requires a nonnegative `zIndex`, and retains normal mouse, keyboard, and controller scrolling. Other themes have no details panel unless they add this element.
+- **`button`** uses the same normalized rectangles as other elements. `previous` and `next` wrap through filtered games; `up` and `down` move by the current grid column count (one row in a list). Navigation scrolls the selected game into view. `activate` launches it using the normal library path. An `artwork` button requires a named artwork `source` and switches `preview` elements to that source; unavailable choices are disabled with an explanatory tooltip. `favourite` toggles the selected game's persistent favourite state, including in the Favourites view. BIOS/device entries disable that action. Empty libraries disable the controls. `text` may be empty for an asset-backed hit region. Keyboard/controller activation and focus remain native ImGui widgets.
 
-The current selected item is shown in detail areas outside the browser rectangle. Put background panels there at a negative `zIndex`, and keep text and artwork in that area at `zIndex: 0` or greater. Elements above the browser are not clipped to the browser and can obscure its items.
+Explicit `details` elements retain their own authored scrollable regions; layouts without them use the shared scaled cover/information column. The current selected item is shown in detail areas outside the browser rectangle. Put background panels there at a negative `zIndex`, and keep text and artwork in that area at `zIndex: 0` or greater. Elements above the browser are not clipped to the browser and can obscure its items.
 
-Themes do not run scripts, load remote resources, or supply fonts. Keep a package self-contained and use only relative image paths for static assets.
+Themes do not run scripts or load remote resources. Keep a package self-contained and use only package-relative paths for images and fonts. Every presentation extension above is optional; existing manifests keep their previous behavior. [Pocket Dimension](../themes/pocket-dimension/theme.json) demonstrates them together without any package-specific renderer code.
+
+Artwork availability comes from the shared library. LaunchBox, ScreenScraper and TheGamesDB use the same named theme bindings, while keeping their provider caches separate. Matching local ES-DE artwork keeps priority, followed by the selected provider and TheGamesDB fallback; existing images from another provider remain usable. Automatic downloads request covers only. **Settings > Library > Artwork Downloads > Download All Required Media** fetches the selected provider's supported categories. Themes never silently trigger a bulk scrape. Disc scans use `physical`; front box artwork uses `cover`, 3D boxes use `case`, and back covers and spines use `backcover` and `spine`. These bindings are reusable and opt-in for every theme. LaunchBox supplies ten categories including discs and box artwork; ScreenScraper also supplies `miximage`. TheGamesDB supplies seven categories and automatically fills missing supported types or unavailable lookups, without replacing the primary provider's images. See [LaunchBox artwork](launchbox-artwork.md), [TheGamesDB media](thegamesdb.md) and [ScreenScraper setup](screenscraper.md).
 
 ## Troubleshooting
 

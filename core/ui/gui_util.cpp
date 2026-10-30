@@ -18,6 +18,7 @@
     along with reicast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui_util.h"
+#include "theme_artwork.h"
 #include "types.h"
 #include "stdclass.h"
 #include "oslib/oslib.h"
@@ -1384,7 +1385,9 @@ ImTextureID ImguiFileTexture::getId()
 {
 	if (path.empty())
 		return {};
-	ImTextureID id = imguiDriver->getTexture(path);
+	const std::string textureKey = pixelArt.resolution == 0 ? path : path + "#pixel-art/"
+			+ std::to_string(pixelArt.resolution) + "/" + std::to_string(pixelArt.dark) + "/" + std::to_string(pixelArt.light);
+	ImTextureID id = imguiDriver->getTexture(textureKey);
 	if (id == ImTextureID())
 	{
 		ThemeImageFileStamp fileStamp;
@@ -1446,7 +1449,14 @@ ImTextureID ImguiFileTexture::getId()
 					}
 				}
 				try {
-					id = imguiDriver->updateTextureAndAspectRatio(path, imgData, width, height, nearestSampling);
+					if (pixelArt.resolution > 0)
+					{
+						const auto pixels = themes::makePixelArtwork(imgData, width, height, pixelArt);
+						if (!pixels.pixels.empty())
+							id = imguiDriver->updateTextureAndAspectRatio(textureKey, pixels.pixels.data(), pixels.width, pixels.height, true);
+					}
+					else
+						id = imguiDriver->updateTextureAndAspectRatio(textureKey, imgData, width, height, nearestSampling);
 				} catch (...) {
 					// vulkan can throw during resizing
 				}

@@ -1,61 +1,51 @@
-# LaunchBox artwork
+<!-- Copyright 2026 The Hollycast Authors -->
+# LaunchBox artwork and shared provider adapter
 
-In **Settings → Library**, select **LaunchBox** under **Online Artwork Source**
-and enable **Fetch Box Art**. This works with **Original Box Art** and as the
-fallback for **Custom Boxart**. **Physical Media** continues to use disc artwork.
+Select **Settings > Library > Artwork Downloads > Artwork Provider > LaunchBox**.
+LaunchBox uses the same image choices, download actions, retry control, progress,
+metadata and theme bindings as ScreenScraper and TheGamesDB. The separate PR-era
+Online Artwork Source selector has been folded into this shared provider selector.
+No LaunchBox login or ScreenScraper key is required.
 
-The first lookup downloads LaunchBox's public `Metadata.zip` catalog (currently
-about 103 MiB). Hollycast reads the XML incrementally and saves a smaller local
-index containing only Dreamcast and arcade games, alternate names and covers.
-When the index is over a week old, a lookup that needs the catalog attempts to
-update it. A failed update keeps the existing index usable.
+| Shared slot | LaunchBox category |
+| --- | --- |
+| `cover` | Box - Front, then reconstructed front or advertisement flyer |
+| `physical` | Disc scan (cartridge fronts for arcade records) |
+| `case` | Box - 3D |
+| `backcover` | Box - Back, then reconstructed back or advertisement flyer |
+| `spine` | Box - Spine |
+| `screenshot` | Screenshot - Gameplay |
+| `titlescreen` | Screenshot - Game Title |
+| `title` | Clear Logo, or Arcade - Marquee |
+| `banner` | Banner |
+| `fanart` | Fanart - Background |
 
-Matching uses the disc's internal title first, then its library name and ROM
-filename, restricted to the Dreamcast or arcade platform. Punctuation, case and
-trailing ROM-set annotations are normalized. Alternate names are included, and
-ambiguous matches are skipped. Covers for the detected region are preferred,
-then worldwide artwork, then other regions. Within each region preference,
-original front covers take priority over reconstructed covers and arcade flyers.
+These are distinct, provider-independent fields. Any theme may opt into them with
+an artwork element's `source`, browser `artworkSource`, or artwork button. Missing
+discs and box scans are never substituted with a front cover. LaunchBox has no
+native composite miximage category. An existing local/other-provider mix can still
+be displayed. One image per category is selected, with matching regions preferred
+before worldwide and other-region artwork. Original image files are downloaded.
 
-Selected covers are downloaded at their original CDN resolution. Both the
-LaunchBox database ID and the downloaded file are cached locally. TheGamesDB
-remains the default provider; changing providers reopens the online lookup while
-keeping existing artwork visible until a replacement is available.
+TheGamesDB is the automatic fallback for supported categories missing from the
+primary provider, unmatched titles, and failed primary lookups. Existing primary
+images and metadata retain priority. Fallback follows the current request mask:
+automatic browsing is cover-only; expanded categories require a manual action.
+TGDB cannot supply discs, 3D cases, spines or miximages. Failed primary work remains
+retryable while any successfully downloaded fallback art stays visible.
 
-## Renaming games
+The public catalog (about 104 MiB compressed) is read incrementally. A compact
+Dreamcast/arcade index is cached for a week; a failed refresh retains a usable
+expanded index. The index also stores overview, release date, developer,
+publisher, genre and player count. Configured gamelist values retain priority.
 
-For Dreamcast discs with a valid product ID, the persistent LaunchBox match is
-keyed by that ID and the disc's region. Renaming or moving the ROM does not alter
-this identity. The next scan reads the same disc header and reuses the saved
-match and cover, including after restarting Hollycast. With no valid product ID,
-Hollycast uses the internal title and region when available.
+Matches use the internal title and platform, including alternate names. Product
+ID plus region, or internal title when no valid ID exists, persists the identity
+across renamed/moved images. Ambiguous matches do not replace artwork. Matches,
+metadata, separate media paths and checked/unavailable category bits survive
+restarts. The old cover-only match cache can be read and upgraded. Manual expanded
+downloads upgrade the older catalog format. Downloads are decoded and validated,
+then atomically published; partial successes remain cached after a failure.
 
-Keep multi-file disc references valid when renaming a CUE/GDI and its tracks.
-Unreadable discs cannot supply their internal identity. Arbitrarily renamed
-arcade ZIP/7z files remain subject to the existing arcade scanner, which expects
-recognized ROM-set filenames.
-
-## Implementation and verification
-
-For a local macOS preview, run `./script/build_and_run.sh` or use the Codex
-**Run** action. This builds a native OpenGL development app in
-`build-launchbox-app/Hollycast.app`. Add `--build-only` to build without opening
-it, or `--verify` to check that it remains running after launch.
-
-The provider uses the catalog's database IDs and image filenames. Website page
-IDs are a separate identifier and are not used. Metadata and match caches live
-beside the normal artwork database as `launchbox-catalog.json` and
-`launchbox-matches.json`. Cached covers and matches can be reused offline.
-
-The metadata format and image-download method are described in the
-[LaunchBox developer discussion](https://forums.launchbox-app.com/topic/54163-is-there-a-public-way-to-get-images-from-the-launchbox-games-database/).
-
-The normal `LaunchBox*` and `Boxart*` tests exercise region/platform selection,
-alternate names, partial downloads, ambiguous matches, persistence, provider
-changes and renamed discs. Optional checks:
-
-- Set `HOLLYCAST_LAUNCHBOX_EXPORT` to a local `Metadata.zip` to run
-  `LaunchBoxCatalogTest.LocalExportSmokeCheck` against the full export.
-- Set `HOLLYCAST_LAUNCHBOX_LIVE=1` to run
-  `LaunchBoxCacheTest.LiveProviderSmokeCheck`, which downloads the public catalog
-  and one cover into a temporary directory, then verifies cache reuse.
+The optional tests use `HOLLYCAST_LAUNCHBOX_EXPORT` for an existing `Metadata.zip`,
+and `HOLLYCAST_LAUNCHBOX_LIVE=1` for a public network smoke check.

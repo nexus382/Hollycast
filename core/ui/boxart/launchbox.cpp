@@ -11,6 +11,7 @@
 #include <ctime>
 #include <memory>
 #include <string_view>
+#include <filesystem>
 
 namespace {
 constexpr const char *metadataUrl = "https://gamesdb.launchbox-app.com/Metadata.zip";
@@ -85,9 +86,27 @@ bool supportedPlatform(const std::string& platform)
 	return platform == "Sega Dreamcast" || platform == "Arcade";
 }
 
-bool supportedCover(const std::string& type)
+// The position is the shared persisted artwork bit, independent of provider.
+std::pair<int, int> imageCategory(const std::string& type)
 {
-	return type == "Box - Front" || type == "Box - Front - Reconstructed" || type == "Advertisement Flyer - Front";
+ if (type == "Box - Front") return {0, 30};
+ if (type == "Box - Front - Reconstructed") return {0, 20};
+ if (type == "Advertisement Flyer - Front") return {0, 10};
+ if (type == "Clear Logo") return {2, 30};
+ if (type == "Arcade - Marquee") return {2, 20};
+ if (type == "Banner") return {3, 30};
+ if (type == "Disc") return {4, 30};
+ if (type == "Cart - Front") return {4, 20};
+ if (type == "Fanart - Background") return {5, 30};
+ if (type == "Screenshot - Gameplay") return {6, 30};
+ if (type == "Screenshot - Game Title") return {7, 30};
+ if (type == "Box - 3D") return {8, 30};
+ if (type == "Cart - 3D") return {8, 20};
+ if (type == "Box - Back") return {9, 30};
+ if (type == "Box - Back - Reconstructed") return {9, 20};
+ if (type == "Advertisement Flyer - Back") return {9, 10};
+ if (type == "Box - Spine") return {10, 30};
+ return {-1, 0};
 }
 
 bool validImageFile(const std::string& file)
@@ -200,6 +219,9 @@ void LaunchBoxCatalog::read(const Reader& reader)
 					game.id = std::stoi(field(record, "DatabaseID"));
 					game.name = field(record, "Name");
 					game.platform = platform;
+     for (const auto& entry : {std::pair{"release_date", "ReleaseDate"}, {"overview", "Overview"},
+       {"developer", "Developer"}, {"publisher", "Publisher"}, {"genre", "Genres"}, {"players", "MaxPlayers"}})
+      game.metadata[entry.first] = field(record, entry.second);
 					if (game.id > 0 && !game.name.empty())
 						parsed.games.emplace(game.id, std::move(game));
 				}
@@ -214,9 +236,9 @@ void LaunchBoxCatalog::read(const Reader& reader)
 						game->second.aliases.push_back(field(record, "AlternateName"));
 					else
 					{
-						Cover cover{field(record, "FileName"), field(record, "Region"), field(record, "Type")};
-						if (supportedCover(cover.type) && validImageFile(cover.file))
-							game->second.covers.push_back(std::move(cover));
+						Image image{field(record, "FileName"), field(record, "Region"), field(record, "Type")};
+      if (imageCategory(image.type).first >= 0 && validImageFile(image.file))
+       game->second.images.push_back(std::move(image));
 					}
 				}
 			}
@@ -253,17 +275,17 @@ json LaunchBoxCatalog::toJson() const
 	json records = json::array();
 	for (const auto& [id, game] : games)
 	{
-		json covers = json::array();
-		for (const Cover& cover : game.covers)
-			covers.push_back({{"file", cover.file}, {"region", cover.region}, {"type", cover.type}});
-		records.push_back({{"id", id}, {"name", game.name}, {"platform", game.platform}, {"aliases", game.aliases}, {"covers", covers}});
+		json images = json::array();
+		for (const Image& image : game.images)
+   images.push_back({{"file", image.file}, {"region", image.region}, {"type", image.type}});
+		records.push_back({{"id", id}, {"name", game.name}, {"platform", game.platform}, {"aliases", game.aliases}, {"images", images}, {"metadata", game.metadata}});
 	}
-	return {{"version", 1}, {"games", records}};
+	return {{"version", 2}, {"games", records}};
 }
 
 void LaunchBoxCatalog::loadJson(const json& data)
 {
-	if (data.at("version") != 1)
+	if (data.at("version") != 1 && data.at("version") != 2)
 		throw std::runtime_error("Unsupported LaunchBox catalog version");
 	LaunchBoxCatalog parsed;
 	for (const auto& record : data.at("games"))
@@ -273,10 +295,11 @@ void LaunchBoxCatalog::loadJson(const json& data)
 		game.name = record.at("name");
 		game.platform = record.at("platform");
 		game.aliases = record.at("aliases").get<std::vector<std::string>>();
-		for (const auto& image : record.at("covers"))
+		game.metadata = record.value("metadata", json::object());
+  for (const auto& image : record.at(data.at("version") == 1 ? "covers" : "images"))
 		{
-			Cover cover{image.at("file"), image.at("region"), image.at("type")};
-			if (supportedCover(cover.type) && validImageFile(cover.file)) game.covers.push_back(std::move(cover));
+			Image candidate{image.at("file"), image.at("region"), image.at("type")};
+   if (imageCategory(candidate.type).first >= 0 && validImageFile(candidate.file)) game.images.push_back(std::move(candidate));
 		}
 		if (game.id > 0 && supportedPlatform(game.platform)) parsed.games.emplace(game.id, std::move(game));
 	}
@@ -300,19 +323,30 @@ LaunchBoxCatalog::Match LaunchBoxCatalog::match(const GameBoxart& item) const
 			game = &games.at(id);
 		}
 		if (ambiguous || game == nullptr) continue;
-		const Cover *best = nullptr;
-		int bestScore = -1;
-		for (const Cover& cover : game->covers)
-		{
-			const int typeScore = cover.type == "Box - Front" ? 30 : cover.type == "Box - Front - Reconstructed" ? 20 : 10;
-			const int score = 100 * regionScore(cover.region, item.region) + typeScore;
-			if (score > bestScore || (score == bestScore && best != nullptr && cover.file < best->file))
-			{
-				best = &cover;
-				bestScore = score;
-			}
-		}
-		if (best != nullptr) return {game->id, game->name, imageBaseUrl + best->file};
+  Match result;
+  result.id = game->id;
+  result.name = game->name;
+  result.metadata = game->metadata;
+  for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+  {
+   const Image *best = nullptr;
+   int bestScore = -1;
+   for (const Image& image : game->images)
+   {
+    const auto category = imageCategory(image.type);
+    if (category.first != static_cast<int>(i)) continue;
+    const int score = 100 * regionScore(image.region, item.region) + category.second;
+    if (score > bestScore || (score == bestScore && best && image.file < best->file))
+    {
+     best = &image;
+     bestScore = score;
+    }
+   }
+   if (best) result.media[artwork::mediaTypes[i].name] = imageBaseUrl + best->file;
+  }
+  const auto cover = result.media.find("cover");
+  if (cover != result.media.end()) result.url = cover->second;
+  return result;
 	}
 	return {};
 }
@@ -330,11 +364,15 @@ bool LaunchBox::initialize(const std::string& saveDirectory)
 {
 	Scraper::initialize(saveDirectory);
 	directory = saveDirectory;
-	if (!file_exists(directory) && !make_directory(directory)) return false;
+ if (!directory.empty() && directory.back() != '/') directory += '/';
+ imageDirectory = directory + "launchbox/";
+ std::error_code error;
+ std::filesystem::create_directories(std::filesystem::u8path(imageDirectory), error);
+ if (error) return false;
 	http::init();
 	try {
 		const json saved = readJson(directory + "launchbox-matches.json");
-		if (saved.is_object() && saved.value("version", 0) == 1 && saved.contains("matches") && saved["matches"].is_object())
+		if (saved.is_object() && (saved.value("version", 0) == 1 || saved.value("version", 0) == 2) && saved.contains("matches") && saved["matches"].is_object())
 			matches = saved["matches"];
 	} catch (const json::exception& e) {
 		WARN_LOG(COMMON, "Ignoring invalid LaunchBox match cache: %s", e.what());
@@ -350,12 +388,13 @@ void LaunchBox::loadCatalog()
 	try {
 		catalog.loadJson(saved);
 		catalogLoaded = true;
-		if (std::time(nullptr) - saved.value("downloaded_at", std::time_t(0)) < 7 * 24 * 60 * 60)
+		if (saved.value("version", 0) >= 2 && std::time(nullptr) - saved.value("downloaded_at", std::time_t(0)) < 7 * 24 * 60 * 60)
 			return;
 	} catch (const std::exception&) { }
 	try {
 		std::vector<u8> data;
-		const int status = http::get(metadataUrl, data);
+		std::string contentType;
+  const int status = transport ? transport(metadataUrl, data, contentType) : http::get(metadataUrl, data, contentType);
 		if (!http::success(status)) throw std::runtime_error("LaunchBox catalog HTTP " + std::to_string(status));
 		ZipArchive archive;
 		if (!archive.Open(data.data(), data.size())) throw std::runtime_error("Invalid LaunchBox ZIP");
@@ -367,58 +406,123 @@ void LaunchBox::loadCatalog()
 		index["downloaded_at"] = std::time(nullptr);
 		writeJson(path, index);
 	} catch (const std::exception& e) {
-		if (!catalogLoaded) throw;
+		if (!catalogLoaded || saved.value("version", 0) < 2) throw;
 		WARN_LOG(COMMON, "Using cached LaunchBox catalog: %s", e.what());
 	}
 }
 
 void LaunchBox::saveMatches()
 {
-	writeJson(directory + "launchbox-matches.json", {{"version", 1}, {"matches", matches}});
+	writeJson(directory + "launchbox-matches.json", {{"version", 2}, {"matches", matches}});
+}
+
+bool LaunchBox::ready() const
+{
+ return std::chrono::steady_clock::now() >= retryAfter;
+}
+
+bool LaunchBox::needsMedia(const GameBoxart& item, u32 selection)
+{
+ selection &= supportedMedia;
+ for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+ {
+  if (!(selection & (1u << i))) continue;
+  const auto cached = item.launchboxMedia.find(artwork::mediaTypes[i].name);
+  if (!(item.launchboxCheckedMedia & (1u << i))
+    || (cached != item.launchboxMedia.end() && !file_exists(cached->second))) return true;
+ }
+ return false;
 }
 
 void LaunchBox::scrape(GameBoxart& item)
 {
-	if (item.scraped) return;
-	if (std::chrono::steady_clock::now() < retryAfter) throw std::runtime_error("");
-	try {
-		const std::string key = LaunchBoxCatalog::identity(item);
-		LaunchBoxCatalog::Match match;
-		std::string imagePath;
-		const auto cached = matches.find(key);
-		if (cached != matches.end() && cached->is_object())
-		{
-			match = {cached->value("id", 0), cached->value("name", ""), cached->value("url", "")};
-			imagePath = cached->value("path", "");
-			if (match.url.find(imageBaseUrl) != 0 || !validImageFile(match.url.substr(std::char_traits<char>::length(imageBaseUrl))))
-				match = {};
-		}
-		if (match.id == 0)
-		{
-			loadCatalog();
-			match = catalog.match(item);
-			imagePath.clear();
-		}
-		if (match.id != 0)
-		{
-			if (imagePath.empty() || !file_exists(imagePath))
-			{
-				imagePath = makeUniqueFilename(match.url);
-				if (!downloadImage(match.url, imagePath)) throw std::runtime_error("LaunchBox artwork download failed");
-			}
-			item.name = match.name;
-			item.launchboxId = match.id;
-			item.setBoxartPath(imagePath);
-			item.boxartUrl = match.url;
-			if (!key.empty())
-			{
-				matches[key] = {{"id", match.id}, {"name", match.name}, {"url", match.url}, {"path", imagePath}};
-				saveMatches();
-			}
-		}
-		item.scraped = true;
-	} catch (const std::exception& e) {
-		retryAfter = std::chrono::steady_clock::now() + std::chrono::minutes(1);
-		throw std::runtime_error(e.what());
-	}
+ const u32 selection = (item.requestedMedia ? item.requestedMedia : artwork::coverMedia) & supportedMedia;
+ if (!needsMedia(item, selection)) return;
+ if (!ready()) throw std::runtime_error("");
+ try {
+  const std::string key = LaunchBoxCatalog::identity(item);
+  LaunchBoxCatalog::Match match;
+  json cachedImages = json::object();
+  const auto cached = matches.find(key);
+  bool expanded = false;
+  if (cached != matches.end() && cached->is_object())
+  {
+   match.id = cached->value("id", 0);
+   match.name = cached->value("name", "");
+   match.metadata = cached->value("metadata", json::object());
+   expanded = cached->value("expanded", false);
+   cachedImages = cached->value("media", json::object());
+   // Upgrade the PR's original cover-only match cache without a new download.
+   if (!cached->value("url", "").empty())
+    cachedImages["cover"] = {{"url", cached->value("url", "")}, {"path", cached->value("path", "")}};
+   for (const auto& image : cachedImages.items())
+   {
+    const std::string url = image.value().value("url", "");
+    if (url.find(imageBaseUrl) == 0 && validImageFile(url.substr(std::char_traits<char>::length(imageBaseUrl))))
+     match.media[image.key()] = url;
+   }
+  }
+  if (!match.id || (!expanded && (selection & ~artwork::coverMedia)))
+  {
+   loadCatalog();
+   match = catalog.match(item);
+   expanded = true;
+  }
+  if (match.id)
+  {
+   item.launchboxId = match.id;
+   if (!match.name.empty()) item.name = match.name;
+   for (const auto& field : {std::pair{"release_date", &item.releaseDate}, {"overview", &item.overview},
+     {"developer", &item.developer}, {"publisher", &item.publisher}, {"genre", &item.genre}, {"players", &item.players}})
+   {
+    const auto value = match.metadata.find(field.first);
+    if (value != match.metadata.end() && value->is_string() && !value->get_ref<const std::string&>().empty())
+     *field.second = value->get<std::string>();
+   }
+   for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+   {
+    const u32 bit = 1u << i;
+    if (!(selection & bit)) continue;
+    const std::string kind = artwork::mediaTypes[i].name;
+    const auto existing = item.launchboxMedia.find(kind);
+    if ((item.launchboxCheckedMedia & bit) && (existing == item.launchboxMedia.end() || file_exists(existing->second))) continue;
+    const auto remote = match.media.find(kind);
+    if (remote != match.media.end())
+    {
+     std::string path;
+     const auto prior = cachedImages.find(kind);
+     if (prior != cachedImages.end() && prior->value("url", "") == remote->second)
+      path = prior->value("path", "");
+     if (path.empty() || !file_exists(path))
+     {
+      path = imageDirectory + std::to_string(match.id) + "-" + kind + "." + get_file_extension(remote->second);
+      if (!file_exists(path) && !downloadMediaImage(remote->second, path, transport)) path.clear();
+     }
+     if (!path.empty())
+     {
+      item.launchboxMedia[kind] = path;
+      cachedImages[kind] = {{"url", remote->second}, {"path", path}};
+      if (i == 0) { item.boxartPath = path; item.boxartUrl.clear(); }
+     }
+    }
+    const auto remaining = item.launchboxMedia.find(kind);
+    if (remaining != item.launchboxMedia.end() && !file_exists(remaining->second)) item.launchboxMedia.erase(remaining);
+    item.launchboxCheckedMedia |= bit;
+    // Persist each successful category before another request can fail.
+    if (!key.empty())
+    {
+     for (const auto& remote : match.media)
+      cachedImages[remote.first]["url"] = remote.second;
+     matches[key] = {{"id", match.id}, {"name", match.name}, {"metadata", match.metadata}, {"expanded", expanded}, {"media", cachedImages}};
+     saveMatches();
+    }
+   }
+  }
+  else item.launchboxCheckedMedia |= supportedMedia;
+  item.launchboxSearched = true;
+  item.scraped = true;
+ } catch (const std::exception&) {
+  retryAfter = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+  throw;
+ }
 }

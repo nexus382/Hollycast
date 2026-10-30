@@ -46,6 +46,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/ui/BoxartTest.cpp
         src/ui/ScreenScraperTest.cpp
         src/ui/LaunchBoxTest.cpp
+        src/ui/ArtworkAdapterTest.cpp
+        src/ui/TheGamesDbTest.cpp
         src/ui/LibraryTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp
@@ -62,5 +64,6 @@ if(NOT LIBRETRO)
         src/ui/LibrarySavestateTest.cpp
         src/ui/ThemeTest.cpp
         src/ui/ThemeLibraryTest.cpp
+        src/ui/ThemeArtworkTest.cpp
         src/ui/ThemeInstallTest.cpp)
 endif()
