@@ -1,4 +1,6 @@
 build*/
+!tools/builds/
+!docs/builds/
 artifact/
 
 # macOS

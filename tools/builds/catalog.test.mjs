@@ -10,6 +10,12 @@ test('historical development tags remain development releases', () => {
   assert.equal(releaseBuild({ tag_name: 'v0.1.1', assets: [] }).channel, 'stable');
 });
 
+test('rolling development releases and their archives do not duplicate CI history', () => {
+  for (const tag_name of ['latest-dev', `latest-dev-${'a'.repeat(40)}`]) {
+    assert.equal(releaseBuild({ tag_name, assets: [] }), null);
+  }
+});
+
 test('platforms preserve libretro host and UWP distinctions', () => {
   for (const [name, expected] of Object.entries({
     'Hollycast-release.apk': 'Android', 'Hollycast-linux-libretro-arm64.zip': 'Linux',

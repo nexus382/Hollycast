@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { ciMetadata, githubApi } from './catalog.mjs';
+import { publishLatestDev } from './latest-dev.mjs';
 
 const workflows = new Set(['android.yml', 'c-cpp.yml', 'switch.yml', 'uwp.yml', 'bsd.yml', 'linux-arm64.yml']
   .map(name => `.github/workflows/${name}`));
@@ -137,37 +138,56 @@ export async function publishBuilds(repository, api, upload, runId) {
   return count;
 }
 
-export async function uploadArtifact(repository, token, release, artifact, name, fetchImpl = fetch) {
-  if (artifact.size_in_bytes > 2 * 1024 ** 3) throw new Error(`Artifact exceeds GitHub's release asset limit: ${name}`);
+async function uploadFile(repository, token, release, name, body, contentType, fetchImpl) {
+  const url = new URL(release.upload_url.split('{')[0]);
+  if (url.origin !== 'https://uploads.github.com' || !url.pathname.startsWith(`/repos/${repository}/releases/`)) throw new Error('Unexpected upload URL');
+  url.searchParams.set('name', name);
+  const uploaded = await fetchImpl(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
+    body,
+    signal: AbortSignal.timeout(10 * 60 * 1000),
+  });
+  if (!uploaded.ok) throw new Error(`Upload failed (${uploaded.status}): ${name}`);
+  await uploaded.body?.cancel();
+}
+
+async function uploadArchive(repository, token, release, source, name, fetchImpl) {
+  if (source.size > 2 * 1024 ** 3) throw new Error(`Artifact exceeds GitHub's release asset limit: ${name}`);
   const directory = await mkdtemp(join(tmpdir(), 'hollycast-publish-'));
   try {
     const file = join(directory, 'artifact.zip');
-    const response = await fetchImpl(`https://api.github.com/repos/${repository}/actions/artifacts/${artifact.id}/zip`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    const response = await fetchImpl(source.url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: source.accept },
       signal: AbortSignal.timeout(10 * 60 * 1000),
     });
     if (!response.ok) throw new Error(`Download failed (${response.status}): ${name}`);
     // Archives remain opaque data: never extract or execute build-provided content.
     await pipeline(response.body, createWriteStream(file));
-    if (artifact.digest) {
+    if (source.digest) {
       const hash = createHash('sha256');
       for await (const chunk of createReadStream(file)) hash.update(chunk);
-      if (`sha256:${hash.digest('hex')}` !== artifact.digest) throw new Error(`Artifact digest mismatch: ${name}`);
+      if (`sha256:${hash.digest('hex')}` !== source.digest) throw new Error(`Artifact digest mismatch: ${name}`);
     }
-    const url = new URL(release.upload_url.split('{')[0]);
-    if (url.origin !== 'https://uploads.github.com' || !url.pathname.startsWith(`/repos/${repository}/releases/`)) throw new Error('Unexpected upload URL');
-    url.searchParams.set('name', name);
-    const uploaded = await fetchImpl(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/zip' },
-      body: await openAsBlob(file),
-      signal: AbortSignal.timeout(10 * 60 * 1000),
-    });
-    if (!uploaded.ok) throw new Error(`Upload failed (${uploaded.status}): ${name}`);
-    await uploaded.body?.cancel();
+    await uploadFile(repository, token, release, name, await openAsBlob(file), 'application/zip', fetchImpl);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+export function uploadArtifact(repository, token, release, artifact, name, fetchImpl = fetch) {
+  return uploadArchive(repository, token, release, {
+    url: `https://api.github.com/repos/${repository}/actions/artifacts/${artifact.id}/zip`,
+    size: artifact.size_in_bytes, digest: artifact.digest, accept: 'application/vnd.github+json',
+  }, name, fetchImpl);
+}
+
+export function uploadReleaseAsset(repository, token, release, asset, name, fetchImpl = fetch) {
+  if (asset.text !== undefined) return uploadFile(repository, token, release, name, asset.text, 'text/plain', fetchImpl);
+  return uploadArchive(repository, token, release, {
+    url: `https://api.github.com/repos/${repository}/releases/assets/${asset.id}`,
+    size: asset.size, digest: asset.digest, accept: 'application/octet-stream',
+  }, name, fetchImpl);
 }
 
 async function main() {
@@ -179,9 +199,13 @@ async function main() {
     const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
     runId = event.workflow_run.id;
   }
-  const count = await publishBuilds(repository, githubApi(token),
+  const api = githubApi(token);
+  const count = await publishBuilds(repository, api,
     (release, artifact, name) => uploadArtifact(repository, token, release, artifact, name), runId);
   console.log(`Public build releases available: ${count}`);
+  const latest = await publishLatestDev(repository, api,
+    (release, asset, name) => uploadReleaseAsset(repository, token, release, asset, name));
+  console.log(`Latest dev release: ${latest?.html_url || 'waiting for a complete dev build'}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

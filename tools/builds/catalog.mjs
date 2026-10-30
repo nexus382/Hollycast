@@ -48,6 +48,8 @@ export function ciMetadata(release) {
 }
 
 export function releaseBuild(release, repository = 'nexus382/Hollycast') {
+  // Rolling releases duplicate CI downloads; keep them out of build history.
+  if (/^latest-dev(?:-|$)/.test(release.tag_name)) return null;
   const ci = ciMetadata(release);
   // Reserved automatic tags must have valid provenance, not become ordinary releases.
   if (/^ci-(master|dev)-/.test(release.tag_name) && !ci) return null;
@@ -73,32 +75,37 @@ export function releaseBuild(release, repository = 'nexus382/Hollycast') {
   };
 }
 
-export async function buildCatalog(repository, api, now = new Date()) {
-  const base = `repos/${repository}`;
-  const builds = [];
-  const commits = new Map();
+export async function listReleases(repository, api) {
+  const releases = [];
   // Scan beyond automatic releases so ordinary releases stay visible as CI history grows.
   for (let page = 1; page <= 10; page++) {
-    const releases = await api(`${base}/releases?per_page=100&page=${page}`);
-    for (const release of releases) {
-      if (release.draft) continue;
-      const build = releaseBuild(release, repository);
-      if (!build?.files.length) continue;
-      if (build.channel !== 'ci') {
-        builds.push(build);
-        continue;
-      }
-      const key = `${build.branch}:${build.commit}`;
-      const existing = commits.get(key);
-      if (existing) {
-        const urls = new Set(existing.files.map(file => file.url));
-        existing.files.push(...build.files.filter(file => !urls.has(file.url)));
-      } else {
-        commits.set(key, build);
-        builds.push(build);
-      }
+    const batch = await api(`repos/${repository}/releases?per_page=100&page=${page}`);
+    releases.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return releases;
+}
+
+export function completeBuilds(releases, repository) {
+  const builds = [];
+  const commits = new Map();
+  for (const release of releases) {
+    if (release.draft) continue;
+    const build = releaseBuild(release, repository);
+    if (!build?.files.length) continue;
+    if (build.channel !== 'ci') {
+      builds.push(build);
+      continue;
     }
-    if (releases.length < 100) break;
+    const key = `${build.branch}:${build.commit}`;
+    const existing = commits.get(key);
+    if (existing) {
+      const urls = new Set(existing.files.map(file => file.url));
+      existing.files.push(...build.files.filter(file => !urls.has(file.url)));
+    } else {
+      commits.set(key, build);
+      builds.push(build);
+    }
   }
   const complete = builds.filter(build => {
     const downloads = standaloneDownloads(build.files);
@@ -108,6 +115,11 @@ export async function buildCatalog(repository, api, now = new Date()) {
     return true;
   });
   complete.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  return complete;
+}
+
+export async function buildCatalog(repository, api, now = new Date()) {
+  const complete = completeBuilds(await listReleases(repository, api), repository);
   const counts = new Map();
   const recent = complete.filter(build => {
     const key = build.channel === 'ci' ? `ci:${build.branch}` : build.channel;
