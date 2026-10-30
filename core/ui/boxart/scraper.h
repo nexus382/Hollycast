@@ -23,12 +23,16 @@
 #include "json.hpp"
 
 #include <optional>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 using namespace nlohmann;
 
 enum class OfflineArtState { Pending, Complete, NoArtwork, Failed };
+
+struct GameMedia;
 
 struct GameBoxart
 {
@@ -39,6 +43,11 @@ struct GameBoxart
 	u32 region = 0;
 	std::string releaseDate;
 	std::string overview;
+	std::string developer, publisher, genre, players;
+	u32 screenScraperId = 0;
+	u32 screenScraperCheckedMedia = 0;
+	bool screenScraperSearched = false;
+	std::map<std::string, std::string> screenScraperMedia;
 
 	std::string gamePath;
 	std::string boxartPath;
@@ -49,12 +58,18 @@ struct GameBoxart
 	bool arcade = false;
 	OfflineArtState offlineArtState = OfflineArtState::Pending;
 	u64 workRevision = 0;
+	// Per-job ScreenScraper bits; never persisted or inferred from the current theme.
+	u32 requestedMedia = 0;
+	// Sanitized lookup data shared between cover and extra-media phases; never persisted.
+	std::shared_ptr<const json> screenScraperDetails;
 	bool scraped = false;
 	bool busy = false;
 
 	enum Region { JAPAN = 1, USA = 2, EUROPE = 4 };
 
 	json to_json(const std::string& baseArtPath) const;
+	// Fill display metadata without overwriting configured gamelist values.
+	void applyMetadata(GameMedia& media) const;
 
 	template<typename T>
 	static void loadProperty(T& i, const json& j, const std::string& propName)

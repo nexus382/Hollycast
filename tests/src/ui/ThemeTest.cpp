@@ -244,7 +244,7 @@ TEST(ThemeParserTest, RejectsInvalidMediaPresentation)
 		expectRejected(replaceOnce(kManifest, "\"type\": \"panel\",", "\"type\": \"panel\"," + field + ","), "");
 }
 
-TEST(ThemeParserTest, LoadsAllBundledPackagesIncludingSixStarredPreviews)
+TEST(ThemeParserTest, LoadsAllBundledPackagesIncludingStarredPreviews)
 {
 	const fs::path collection = fs::path(FLYCAST_TEST_FILES).parent_path().parent_path() / "themes";
 	int previews = 0;
@@ -264,7 +264,23 @@ TEST(ThemeParserTest, LoadsAllBundledPackagesIncludingSixStarredPreviews)
 			EXPECT_FALSE(theme.layouts[0].showInfoTooltip);
 		}
 	}
-	EXPECT_EQ(previews, 6);
+	EXPECT_EQ(previews, 7);
+}
+
+TEST(ThemeParserTest, RackAllowsNarrowSpinesWithoutChangingGridLimits)
+{
+	TempDirectory package;
+	fs::create_directories(package.path / "art");
+	std::ofstream(package.path / "art" / "overlay.png", std::ios::binary) << "fixture";
+	std::string json = replaceOnce(kManifest, "\"mode\": \"grid\"", "\"mode\": \"rack\"");
+	json = replaceOnce(json, "\"columns\": 5", "\"columns\": 22");
+	json = replaceOnce(json, "\"itemAspect\": 0.75", "\"itemAspect\": 0.13");
+	const auto rack = parseFixture(json, package.path).layouts.front();
+	EXPECT_EQ(rack.mode, "rack");
+	EXPECT_EQ(rack.columns, 22);
+	EXPECT_FLOAT_EQ(rack.itemAspect, 0.13f);
+	expectRejected(replaceOnce(json, "\"columns\": 22", "\"columns\": 65"), "columns");
+	expectRejected(replaceOnce(json, "\"itemAspect\": 0.13", "\"itemAspect\": 0.01"), "itemAspect");
 }
 
 TEST(ThemeParserTest, RejectsDuplicateLayoutIdsAndUnsupportedElementsOrBindings)

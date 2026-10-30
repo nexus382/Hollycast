@@ -16,7 +16,8 @@ struct LibraryItem
 std::optional<std::string> iconArtworkSource(int mediaMode);
 // Draws within the current ImGui content area. Returns activated item index or -1.
 // afterItem runs immediately after each item's widget for existing context menus.
+// iconScale also scales the cover/metadata column, which scrolls when needed.
 int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::vector<LibraryItem>& items, const std::function<void(size_t)>& afterItem,
-		const std::optional<std::string>& iconSource = std::nullopt);
+		const std::optional<std::string>& iconSource = std::nullopt, float iconScale = 1.f);
 }

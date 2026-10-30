@@ -456,7 +456,10 @@ void GameScanner::fetch_game_list()
 					game_list.insert(game_list.begin(), { i18n::T("Dreamcast BIOS") });
 			}
 			if (running)
+			{
 				scan_done = true;
+				++generation;
+			}
 			running = false;
 		});
 }

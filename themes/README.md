@@ -1,7 +1,7 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 # Hollycast theme collection
 
-These six starred packages implement the Hollycast game-list mockups. To install one, use **Settings > Library > Library Themes > Install Library Theme Folder**. Keep its source notice alongside `theme.json`. See the [theme author guide](../docs/Themes.md) for the format.
+These seven starred packages provide Hollycast game-list layouts. To install one, use **Settings > Library > Library Themes > Install Library Theme Folder**. Keep its source notice alongside `theme.json`. See the [theme author guide](../docs/Themes.md) for the format.
 
 | Package | Media and layout |
 | --- | --- |
@@ -11,5 +11,6 @@ These six starred packages implement the Hollycast game-list mockups. To install
 | [Epic Noir List *](preview-epic-noir-list/theme.json) | Left list, large precomposed miximage and details beneath. |
 | [Art Book Next *](preview-art-book-next/theme.json) | Selected cover background, left list, and a large miximage above a scraped front cover and details. |
 | [Fanart & Disc *](preview-fanart-disc/theme.json) | Fanart backdrop, screenshot, front cover, disc and marquee, with a right thumbnail list. |
+| [CD Rack *](preview-cd-rack/theme.json) | Scrollable jewel-case spines on shaded shelves, selected miximage and front cover on the right, with title metadata. Missing spines have vertical title labels. |
 
 The previews use the user's configured ES-DE media and real game metadata. No generated game art or example text is bundled. Missing screenshots try miximages; decorative discs and marquees disappear when missing. These are native Hollycast interpretations of the requested concepts, not complete ES-DE ports. See [preview sources and scope](PREVIEW-NOTES.md).

@@ -25,6 +25,7 @@
 #include "oslib/storage.h"
 #include "imgui_driver.h"
 #include "theme.h"
+#include "gui_util.h"
 #include <map>
 
 namespace {
@@ -213,6 +214,8 @@ void applyCurrentTheme()
 			themes::applyPalette();
 		}
 	}
+	// Preserve the original metrics; undoing a scaled style loses pixel precision.
+	LibraryUiScope::setBaseStyle(style);
 #if defined(__ANDROID__)
 	GuiMenu::setAndroidMenuStyle(ImGui::GetStyle(), settings.display.uiScale);
 #endif

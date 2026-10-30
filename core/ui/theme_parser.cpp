@@ -167,7 +167,7 @@ const std::set<std::string>& metadataFields()
 
 const std::set<std::string>& artworkSources()
 {
-	static const std::set<std::string> values = {"", "cover", "miximage", "case", "screenshot", "fanart", "title", "physical", "titlescreen"};
+	static const std::set<std::string> values = {"", "cover", "miximage", "case", "screenshot", "fanart", "title", "physical", "titlescreen", "banner", "backcover", "spine"};
 	return values;
 }
 
@@ -249,10 +249,10 @@ Theme parse(const std::string& json, const std::string& directory)
 		if (!layoutIds.insert(layout.id).second) invalid(lp + ".id", "must be unique within the theme");
 		layout.name = stringValue(required(item, "name", lp), lp + ".name", false);
 		layout.mode = stringValue(required(item, "mode", lp), lp + ".mode", false);
-		if (layout.mode != "grid" && layout.mode != "list") invalid(lp + ".mode", "must be grid or list");
+		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack") invalid(lp + ".mode", "must be grid, list, or rack");
 		layout.browser = parseRect(required(item, "browser", lp), lp + ".browser", 0.1);
-		if (auto it = item.find("columns"); it != item.end()) layout.columns = integerValue(*it, lp + ".columns", 1, 12);
-		if (auto it = item.find("itemAspect"); it != item.end()) layout.itemAspect = static_cast<float>(numberValue(*it, lp + ".itemAspect", 0.3, 3));
+		if (auto it = item.find("columns"); it != item.end()) layout.columns = integerValue(*it, lp + ".columns", 1, layout.mode == "rack" ? 64 : 12);
+		if (auto it = item.find("itemAspect"); it != item.end()) layout.itemAspect = static_cast<float>(numberValue(*it, lp + ".itemAspect", layout.mode == "rack" ? 0.03 : 0.3, 3));
 		if (auto it = item.find("spacing"); it != item.end()) layout.spacing = static_cast<float>(numberValue(*it, lp + ".spacing", 0, 48));
 		if (auto it = item.find("showTitles"); it != item.end()) layout.showTitles = boolValue(*it, lp + ".showTitles");
 		if (auto it = item.find("background"); it != item.end()) layout.background = colorValue(*it, lp + ".background");

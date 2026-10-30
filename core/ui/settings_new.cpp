@@ -49,6 +49,7 @@
 #include "settings.h"
 #include "gui.h"
 #include "boxart/boxart.h"
+#include "boxart/screenscraper.h"
 #include "IconsFontAwesome6.h"
 #include "mainui.h"
 #include "oslib/oslib.h"
@@ -3613,9 +3614,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 			const char* iconMediaLabels[] = {
 				T("Theme Default"), T("Default Artwork"), T("Mix Image"), T("Scraped Cover"),
-				T("Case / 3D Box"), T("Screenshot"), T("Marquee"), T("Physical Media"), T("Fan Art"), T("Title Screen")
+				T("Case / 3D Box"), T("Screenshot"), T("Wheel / Marquee"), T("Physical Media"), T("Fan Art"), T("Title Screen"),
+				T("Banner"), T("Back Cover"), T("Spine")
 			};
-			int selectedIconMedia = config::ThemeIconMedia.get() + 1;
+			const int iconMedia = config::ThemeIconMedia.get();
+			int selectedIconMedia = iconMedia >= 10 ? iconMedia : iconMedia + 1; // Manual (9) is not image artwork.
 			if (selectedIconMedia < 0 || selectedIconMedia >= IM_ARRAYSIZE(iconMediaLabels))
 				selectedIconMedia = 0;
 			SettingsUI::PopupConfig iconMediaCfg {};
@@ -3628,13 +3631,25 @@ static void renderSettingsContentTab(SettingsTab tab)
 			iconMediaCfg.options.currentValue = &selectedIconMedia;
 			iconMediaCfg.options.valueWidth = 220.0f;
 			iconMediaCfg.options.onChange = [](int index) {
-				config::ThemeIconMedia = index - 1;
+				config::ThemeIconMedia = index >= 10 ? index : index - 1;
 				gui_refresh_custom_boxart(true);
 				SaveSettings();
 				return true;
 			};
 			RenderGeneralPopupSettingRow(Tnop("ThemeIconMediaSetting"),
 				T("Choose the artwork used by theme grid icons and list thumbnails. Theme Default restores the layout's choice."), iconMediaCfg);
+			SettingsUI::PopupConfig iconSizeCfg {};
+			iconSizeCfg.type = SettingsUI::PopupType::Slider;
+			iconSizeCfg.slider.label = T("Library Scale");
+			iconSizeCfg.slider.icon = ICON_FA_IMAGE;
+			iconSizeCfg.slider.popupID = "ThemeIconSizePopup";
+			iconSizeCfg.slider.description = T("Resize library icons, shelves, covers and game information. The library toolbar has the same Icon Size control. General UI Scaling does not change library sizes.");
+			iconSizeCfg.slider.currentValue = &config::LibraryIconScale.get();
+			iconSizeCfg.slider.minValue = 50;
+			iconSizeCfg.slider.maxValue = 200;
+			iconSizeCfg.slider.defaultValue = 100;
+			iconSizeCfg.slider.onApply = [] { config::LibraryIconScale.save(); };
+			RenderGeneralPopupSettingRow("ThemeIconSizeSetting", T("Set the library scale, including cover art and game information."), iconSizeCfg);
 		}
 
 		static std::string libraryThemeActionError;
@@ -3719,6 +3734,126 @@ static void renderSettingsContentTab(SettingsTab tab)
 		if (!libraryThemeActionError.empty())
 			ImGui::TextWrapped(T("Library theme action error: %s"), libraryThemeActionError.c_str());
 
+	}
+
+	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
+	{
+		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper")};
+		SettingsUI::PopupConfig providerCfg {};
+		providerCfg.type = SettingsUI::PopupType::Options;
+		providerCfg.options.label = T("Artwork Provider");
+		providerCfg.options.icon = ICON_FA_IMAGE;
+		providerCfg.options.popupID = "ArtworkProviderPopup";
+		providerCfg.options.options = providers;
+		providerCfg.options.optionCount = IM_ARRAYSIZE(providers);
+		providerCfg.options.currentValue = &config::ArtworkProvider.get();
+		providerCfg.options.valueWidth = 220.0f;
+		providerCfg.options.onChange = [](int provider) {
+			if (provider != 1) screenscraper::disconnect();
+			SaveSettings();
+			return true;
+		};
+		RenderGeneralPopupSettingRow("ArtworkProviderSetting",
+			T("Choose the online source for library artwork. Existing local media remains available."), providerCfg);
+		if (config::ArtworkProvider.get() == 1)
+		{
+			ImGui::TextWrapped("%s", T("Basic list and icon views automatically download missing covers and game metadata. Use Download All Required Media for hover details, themes, CD spines, and other expanded artwork."));
+			static char password[256] = {};
+			const auto account = screenscraper::status();
+			const bool configured = screenscraper::developerConfigured();
+			ImGui::BeginDisabled(account.connecting);
+			RenderGeneralTextInputSettingRow("ScreenScraperUsername", ICON_FA_USER, T("ScreenScraper Username"),
+				T("Use your ScreenScraper screen name, not your email address, for your account's download and thread allowances."), [] {
+					InputText("##SSUsername", &config::ScreenScraperUser.get(), ImGuiInputTextFlags_None);
+				});
+			RenderGeneralTextInputSettingRow("ScreenScraperPassword", ICON_FA_LOCK, T("Password"),
+				T("Kept for this session; sign in again after restarting Hollycast."), [&] {
+					InputText("##SSPassword", password, sizeof(password), ImGuiInputTextFlags_Password);
+				});
+			ImGui::BeginDisabled(!configured || config::ScreenScraperUser.get().empty() || !password[0]);
+			if (ImGui::Button(T("Sign In / Refresh Account")))
+			{
+				screenscraper::connect(trim_ws(config::ScreenScraperUser.get()), password);
+				std::fill(std::begin(password), std::end(password), '\0');
+				SaveSettings();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			ImGui::BeginDisabled(!configured);
+			if (ImGui::Button(account.personalAccount ? T("Sign Out / Use Guest Access") : T("Reconnect Guest Access")))
+			{
+				screenscraper::connect("", "");
+				std::fill(std::begin(password), std::end(password), '\0');
+			}
+			ImGui::EndDisabled();
+			ImGui::EndDisabled();
+			if (!configured)
+				ImGui::TextWrapped("%s", T("ScreenScraper application access is not configured in this build. Use a provisioned Hollycast build to download media. Your media choices and existing local artwork remain available."));
+			if (!account.message.empty())
+				ImGui::TextWrapped("%s", account.message.c_str());
+			if (account.connected)
+			{
+				ImGui::TextUnformatted(account.personalAccount ? T("Personal account") : T("Guest access; sign in for your account's allowances."));
+				ImGui::Text(T("Account threads: %d | Active requests: %d"), account.maxThreads, account.activeRequests);
+				gui_display_library_download_progress();
+				ImGui::Text(T("Requests today: %llu / %llu | Unmatched: %llu / %llu"),
+					static_cast<unsigned long long>(account.requestsToday), static_cast<unsigned long long>(account.requestsPerDay),
+					static_cast<unsigned long long>(account.missesToday), static_cast<unsigned long long>(account.missesPerDay));
+				ImGui::Text(T("Requests/minute: %llu | Download allowance: %llu KB/s (0 = unspecified)"),
+					static_cast<unsigned long long>(account.requestsPerMinute), static_cast<unsigned long long>(account.downloadKBPerSecond));
+			}
+			std::array<const char*, screenscraper::mediaTypes.size()> mediaLabels;
+			const u32 selection = static_cast<u32>(config::ScreenScraperMedia.get()) & screenscraper::allMedia;
+			unsigned selectedCount = 0;
+			for (size_t i = 0; i < screenscraper::mediaTypes.size(); ++i)
+			{
+				mediaLabels[i] = T(screenscraper::mediaTypes[i].label);
+				if (selection & (1u << i)) ++selectedCount;
+			}
+			const std::string selectionSummary = std::to_string(selectedCount) + " / "
+				+ std::to_string(mediaLabels.size()) + " " + T("selected");
+			SettingsUI::PopupConfig mediaCfg {};
+			mediaCfg.type = SettingsUI::PopupType::Options;
+			mediaCfg.options.label = T("Images to Download");
+			mediaCfg.options.icon = ICON_FA_IMAGES;
+			mediaCfg.options.popupID = "ScreenScraperMediaPopup";
+			mediaCfg.options.description = T("Choose the types for Download Selected Media. Automatic scraping stays cover-only. Download All Required Media fetches every supported image type. Existing images are kept.");
+			mediaCfg.options.options = mediaLabels.data();
+			mediaCfg.options.optionCount = static_cast<int>(mediaLabels.size());
+			mediaCfg.options.currentValue = &config::ScreenScraperMedia.get();
+			mediaCfg.options.multiSelect = true;
+			mediaCfg.options.selectionPresets = {
+				{T("Covers + Banners"), 1 | (1 << 3)},
+				{T("Select All"), static_cast<int>(screenscraper::allMedia)},
+				{T("Clear Selection"), 0}
+			};
+			mediaCfg.options.valueWidth = 220.0f;
+			mediaCfg.options.valueToString = [&selectionSummary](int) { return selectionSummary.c_str(); };
+			mediaCfg.options.onChange = [](int) {
+				SaveSettings();
+				return true;
+			};
+			RenderGeneralPopupSettingRow("ScreenScraperMediaSetting",
+				T("Choose image types for the manual Download Selected Media action."), mediaCfg);
+			const bool canDownload = account.connected && config::FetchBoxart
+				&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+			ImGui::BeginDisabled(!canDownload);
+			if (ImGui::Button(T("Download All Required Media"), ImVec2(-FLT_MIN, 0)))
+				gui_download_library_media(screenscraper::allMedia);
+			ImGui::BeginDisabled(!(config::ScreenScraperMedia.get() & screenscraper::allMedia));
+			if (ImGui::Button(T("Download Selected Media")))
+				gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & screenscraper::allMedia);
+			ImGui::SameLine();
+			if (ImGui::Button(T("Retry Unmatched / Unavailable Media")))
+				gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & screenscraper::allMedia, true);
+			ImGui::EndDisabled();
+			ImGui::EndDisabled();
+			if (!config::FetchBoxart)
+				ImGui::TextWrapped("%s", T("Enable Fetch Box Art below to allow downloads."));
+			if (config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
+				ImGui::TextWrapped("%s", T("Choose Original Box Art or Custom Boxart below to use downloaded media."));
+			ImGui::TextWrapped("%s", T("Only unambiguous Dreamcast title matches are downloaded. Games without a match keep their existing artwork."));
+		}
 	}
 
 	if (RenderCollapsingHeader("BoxArtSection", ICON_FA_IMAGE, T("Box Art"), ImGuiTreeNodeFlags_DefaultOpen))
@@ -3895,11 +4030,18 @@ static void renderSettingsContentTab(SettingsTab tab)
 				T("Cover"),
 				T("Case / 3D Box"),
 				T("Screenshot"),
-				T("Marquee"),
+				T("Wheel / Marquee"),
 				T("Physical Media"),
 				T("Fan Art"),
 				T("Title Screen"),
+				T("Banner"),
+				T("Back Cover"),
+				T("Spine"),
 			};
+			const int coverMedia = config::LibraryCoverMedia.get();
+			int selectedCoverMedia = coverMedia == 9 ? 0 : coverMedia >= 10 ? coverMedia - 1 : coverMedia;
+			if (selectedCoverMedia < 0 || selectedCoverMedia >= IM_ARRAYSIZE(libraryCoverMediaSources))
+				selectedCoverMedia = 0;
 			SettingsUI::PopupConfig libraryCoverMediaCfg {};
 			libraryCoverMediaCfg.type = SettingsUI::PopupType::Options;
 			libraryCoverMediaCfg.options.label = T("Custom Boxart Source");
@@ -3907,9 +4049,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryCoverMediaCfg.options.popupID = Tnop("LibraryCoverMediaPopup");
 			libraryCoverMediaCfg.options.options = libraryCoverMediaSources;
 			libraryCoverMediaCfg.options.optionCount = IM_ARRAYSIZE(libraryCoverMediaSources);
-			libraryCoverMediaCfg.options.currentValue = &config::LibraryCoverMedia.get();
+			libraryCoverMediaCfg.options.currentValue = &selectedCoverMedia;
 			libraryCoverMediaCfg.options.valueWidth = 240.0f;
-			libraryCoverMediaCfg.options.onChange = [](int) { return true; };
+			libraryCoverMediaCfg.options.onChange = [](int index) {
+				config::LibraryCoverMedia = index >= 9 ? index + 1 : index; // Skip the manual/PDF slot.
+				return true;
+			};
 			RenderGeneralPopupSettingRow(
 				Tnop("LibraryCoverMedia"),
 				T("Choose which custom media category becomes the main library image."),
@@ -4003,12 +4148,13 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"FetchBoxart",
 			ICON_FA_DOWNLOAD,
 			T("Fetch Box Art"),
-			T("Fetch cover images from TheGamesDB.net."),
+			T("Automatically download missing covers for the basic library views."),
 			static_cast<bool>(config::FetchBoxart),
 			[](bool enabled) { config::FetchBoxart = enabled; },
 			T(
 				"Fetch Box Art\n"
-				"Downloads cover images from TheGamesDB.net.\n"
+				"Automatically downloads missing covers from the provider selected in Artwork Downloads.\n"
+				"Additional hover and theme images are downloaded only through the manual media buttons.\n"
 				"Disable if you only want physical media images, custom artwork, or to avoid network fetching."
 			),
 			physicalOnly

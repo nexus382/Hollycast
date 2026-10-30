@@ -30,8 +30,11 @@
 #include <unordered_map>
 #include <vector>
 #include <chrono>
+#include <atomic>
+#include <condition_variable>
 
 struct GameMedia;
+namespace screenscraper { class Session; }
 
 enum class BoxartSourceMode
 {
@@ -44,7 +47,7 @@ enum class BoxartSourceMode
 class Boxart
 {
 public:
-	GameBoxart getBoxartAndLoad(const GameMedia& media);
+	GameBoxart getBoxartAndLoad(const GameMedia& media, bool startFetch = true);
 	GameBoxart getBoxart(const GameMedia& media);
 	std::string getLibraryCoverMediaPath(const GameMedia& media);
 	std::string getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode);
@@ -56,11 +59,16 @@ public:
 	void resumePlaytime();
 	void checkpointPlaytime(bool isPaused);
 	void refreshCustomBoxartIndex(bool force = false);
-	void queueBoxart(const GameMedia& media);
+	// Bit 0 is the front cover. Expanded masks are explicit user download actions.
+	void queueBoxart(const GameMedia& media, u32 requestedMedia = 1);
 	void startFetch();
+	void retryScreenScraperMedia();
+	struct DownloadProgress { size_t games = 0, covers = 0; };
+	DownloadProgress downloadProgress();
 
 private:
 	friend class BoxartWorkTest_AcceptsOnlyCurrentSourceRevision_Test;
+	friend class ScreenScraperQueueTest;
 
 	enum class CustomIndexState
 	{
@@ -74,10 +82,15 @@ private:
 	std::string getCustomBoxartPath(const GameMedia& media);
 	std::string getCustomBoxartPathForMediaMode(const GameMedia& media, config::LibraryCoverMediaMode mediaMode,
 			bool *indexReady = nullptr);
-	GameBoxart getBoxartAndQueue(const GameMedia& media, bool startFetch);
-	bool shouldFetchOnline() const;
+	GameBoxart getBoxartAndQueue(const GameMedia& media, bool startFetch, u32 requestedMedia = 1);
+	bool shouldFetchOnline(bool arcade = false) const;
 	GameBoxart& gameForMedia(const GameMedia& media);
 	bool isCurrentWork(const GameBoxart& item) const;
+	//! @pre mutex must be locked. Merge requests added while a worker was running.
+	void completeArtworkWork(GameBoxart& item, bool queueOnline, bool useScreenScraper);
+	bool takeScreenScraperWork(GameBoxart& item, u64 generation);
+	void runScreenScraperQueue(std::shared_ptr<screenscraper::Session> session, u64 generation,
+			const std::string& directory);
 	void loadDatabase();
 	void loadLibraryPlaytimeDatabase();
 	//! @pre playtimeMutex must be locked.
@@ -137,8 +150,15 @@ private:
 	bool customIndexShuttingDown = false;
 
 	std::vector<GameBoxart> toFetch;
+	std::condition_variable artworkWake;
+	std::atomic<u64> screenGeneration{0};
+	std::shared_ptr<screenscraper::Session> screenSessionSnapshot; // UI-thread owned.
+	bool physicalWorking = false; // Protected by mutex; producer can overlap network workers.
+	size_t activeScreenJobs = 0; // Protected by mutex; keep idle workers alive until the queue drains.
+	// Futures are destroyed first, while the queue's synchronization state still exists.
 	std::future<void> physicalFetching;
 	std::future<void> onlineFetching;
+	std::future<void> screenFetching;
 	std::future<void> customIndexFetching;
 
 	static constexpr char const *DB_NAME = "flycast-gamedb.json";

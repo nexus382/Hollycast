@@ -34,7 +34,7 @@
 #include "IconsFontAwesome6.h"
 #include "stdclass.h"
 #include "rend/osd.h"
-#include <stb_image.h>
+#include "stbi.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -46,6 +46,31 @@
 #include <vector>
 
 using namespace i18n;
+
+namespace {
+ImGuiStyle libraryBaseStyle;
+}
+
+void LibraryUiScope::setBaseStyle(const ImGuiStyle& style)
+{
+	libraryBaseStyle = style;
+}
+
+LibraryUiScope::LibraryUiScope(float baselineScale)
+	: previousStyle(ImGui::GetStyle()), previousScale(settings.display.uiScale)
+{
+	settings.display.uiScale = std::max(0.01f, baselineScale);
+	ImGui::GetStyle() = libraryBaseStyle;
+	ImGui::GetStyle().ScaleAllSizes(settings.display.uiScale);
+	ImGui::PushFont(nullptr, uiScaled(17.f));
+}
+
+LibraryUiScope::~LibraryUiScope()
+{
+	ImGui::PopFont();
+	ImGui::GetStyle() = previousStyle;
+	settings.display.uiScale = previousScale;
+}
 
 static std::string select_current_directory = "**home**";
 static std::vector<hostfs::FileInfo> subfolders;
@@ -1279,6 +1304,7 @@ struct ThemeImageFileStamp
 };
 
 static std::map<std::string, ThemeImageFileStamp> failedThemeImages;
+static std::map<std::string, float> fileImageAspects;
 static constexpr size_t MaxFailedThemeImages = 64;
 struct DecodedThemeImage
 {
@@ -1326,6 +1352,32 @@ void ImguiFileTexture::clearThemeImageFailures()
 	failedThemeImages.clear();
 	decodedThemeImages.clear();
 	decodedThemeImageBytes = 0;
+	fileImageAspects.clear();
+}
+
+float ImguiFileTexture::getAspectRatio() const
+{
+	if (path.empty())
+		return 0.f;
+	if (imguiDriver)
+	{
+		const ImTextureID id = imguiDriver->getTexture(path);
+		if (id != ImTextureID{})
+			return imguiDriver->getAspectRatio(id);
+	}
+	const auto cached = fileImageAspects.find(path);
+	if (cached != fileImageAspects.end())
+		return cached->second;
+	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
+	int width = 0, height = 0, channels;
+	if (!file || !stbi_info_from_callbacks(&STBI::callbacks, file.get(), &width, &height, &channels)
+			|| width <= 0 || height <= 0)
+		return 0.f;
+	// Successful headers share the texture cache's lifetime. Do not cache missing files:
+	// a queued scrape may publish that path while the library is still open.
+	const float aspect = static_cast<float>(width) / height;
+	fileImageAspects.emplace(path, aspect);
+	return aspect;
 }
 
 ImTextureID ImguiFileTexture::getId()
@@ -1988,6 +2040,7 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 {
 	static ImGuiID editingPopup = 0;
 	static int openingValue = 0;
+	static int pendingSelection = 0;
 	static int openingFrame = -1;
 	const ImGuiID ownerPopup = ImGui::GetID(cfg.popupID);
 	const bool isOpen = ImGui::IsPopupOpen(cfg.popupID);
@@ -2000,11 +2053,12 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 			editingPopup = ownerPopup;
 			openingFrame = popup.OpenFrameCount;
 			openingValue = *cfg.currentValue;
+			pendingSelection = openingValue;
 		}
 	}
 
 	if (editingPopup == ownerPopup && isTopmost && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
-		const bool changed = *cfg.currentValue != openingValue;
+		const bool changed = !cfg.multiSelect && *cfg.currentValue != openingValue;
 		*cfg.currentValue = openingValue;
 		if (changed && cfg.onChange)
 			cfg.onChange(openingValue);
@@ -2096,18 +2150,18 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 
     // Configure popup window BEFORE opening (DuckStation-style)
     centerNextWindow();
-    float maxWidth = ImGui::GetIO().DisplaySize.x * 0.5f;
-    float maxHeight = ImGui::GetIO().DisplaySize.y * 0.7f;
+    float maxWidth = ImGui::GetIO().DisplaySize.x * (cfg.multiSelect ? 0.9f : 0.5f);
+    float maxHeight = ImGui::GetIO().DisplaySize.y * (cfg.multiSelect ? 0.85f : 0.7f);
 
     // Set fixed width for DuckStation-style choice dialog
     ImGui::SetNextWindowSizeConstraints(
-        ImVec2(uiScaled(Layout::POPUP_MIN_WIDTH), 0),
+        ImVec2(cfg.multiSelect ? std::min(uiScaled(Layout::POPUP_MIN_WIDTH), maxWidth) : uiScaled(Layout::POPUP_MIN_WIDTH), 0),
         ImVec2(maxWidth, maxHeight)
     );
     ImGui::SetNextWindowSize(ImVec2(uiScaled(Layout::POPUP_WIDTH), 0), ImGuiCond_Always);
 
     PopupStyleScope style;
-    if (ImGui::BeginPopup(cfg.popupID, ImGuiWindowFlags_NoScrollbar)) {
+    if (ImGui::BeginPopup(cfg.popupID, cfg.multiSelect ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoScrollbar)) {
         const char* popupTitle = (cfg.title != nullptr && cfg.title[0] != '\0') ? cfg.title : rowLabel;
         const char* popupDescription = (cfg.description != nullptr && cfg.description[0] != '\0') ? cfg.description : cfg.tooltip;
         const bool hasHeader = (popupTitle != nullptr && popupTitle[0] != '\0')
@@ -2133,12 +2187,49 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
             ImGui::Spacing();
         }
 
+        if (cfg.multiSelect) {
+            for (size_t i = 0; i < cfg.selectionPresets.size(); ++i) {
+                const auto& preset = cfg.selectionPresets[i];
+                const float width = ImGui::CalcTextSize(preset.first).x + ImGui::GetStyle().FramePadding.x * 2;
+                const float nextX = ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x;
+                const float rightX = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+                if (i != 0 && nextX + width <= rightX)
+                    ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Button(preset.first))
+                    pendingSelection = preset.second;
+                ImGui::PopID();
+            }
+            ImGui::Spacing();
+        }
+
         // DuckStation-style menu button layout
         {
             BeginMenuButtons menuButtons;
 
+            if (cfg.multiSelect) {
+                // Bound only the choices so Apply/Cancel stay reachable on small screens.
+                const float rowHeight = ImGui::GetFrameHeight();
+                const float footerHeight = rowHeight + uiScaled(32.0f);
+                const float availableHeight = maxHeight - ImGui::GetCursorPosY()
+                    - ImGui::GetStyle().WindowPadding.y - footerHeight;
+                const float listHeight = std::min(rowHeight * cfg.optionCount, std::max(rowHeight, availableHeight));
+                ImGui::BeginChild("##choices", ImVec2(0, listHeight), ImGuiChildFlags_NavFlattened);
+            }
+
             for (int i = 0; i < cfg.optionCount; i++) {
                 int storageIdx = cfg.storageIndexMap ? cfg.storageIndexMap(i) : i;
+
+                if (cfg.multiSelect) {
+                    if (storageIdx < 0 || storageIdx >= 31)
+                        continue;
+                    ImGui::PushID(i);
+                    ImGui::CheckboxFlags(cfg.options[i], &pendingSelection, 1 << storageIdx);
+                    if (i == 0)
+                        ImGui::SetItemDefaultFocus();
+                    ImGui::PopID();
+                    continue;
+                }
                 bool isSelected = (*cfg.currentValue == storageIdx);
 
                 // Render selectable with proper sizing
@@ -2173,7 +2264,28 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
                     ImGui::SetItemDefaultFocus();
                 }
             }
+            if (cfg.multiSelect)
+                ImGui::EndChild();
         } // End menu buttons
+
+        if (cfg.multiSelect) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            if (ImGui::Button(T("Apply"))) {
+                valueChanged = *cfg.currentValue != pendingSelection;
+                *cfg.currentValue = pendingSelection;
+                if (!cfg.onChange || cfg.onChange(pendingSelection)) {
+                    editingPopup = 0;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(T("Cancel"))) {
+                editingPopup = 0;
+                ImGui::CloseCurrentPopup();
+            }
+        }
 
         ImGui::EndPopup();
     }

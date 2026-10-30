@@ -371,6 +371,9 @@ extern Option<bool> SaveProtection;
 extern Option<int, false> SavestateSlot;
 extern Option<bool> ForceFreePlay;
 extern Option<bool, false> FetchBoxart;
+extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper.
+extern Option<std::string, false> ScreenScraperUser;
+extern Option<int, false> ScreenScraperMedia; // Manual download choices; stable bits from screenscraper::mediaTypes.
 extern Option<bool, false> BoxartDisplayMode;
 extern Option<int, false> BoxartSourceMode; // 0 -> Scraped, 1 -> Physical Media, 2 -> Custom with scraped fallback
 enum class LibraryDisplayStyleMode
@@ -399,7 +402,10 @@ enum class LibraryCoverMediaMode
 	FanArt = 7,
 	TitleScreen = 8,
 	Manual = 9,
-	Count = 10,
+	Banner = 10,
+	BackCover = 11,
+	Spine = 12,
+	Count = 13,
 };
 
 enum class VmuIconPlaybackMode

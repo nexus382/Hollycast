@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "scraper.h"
+#include "ui/game_scanner.h"
 #include "oslib/http_client.h"
 #include "oslib/storage.h"
 #include "stdclass.h"
@@ -30,6 +31,22 @@
 #include <mutex>
 #include <random>
 #include <memory>
+
+void GameBoxart::applyMetadata(GameMedia& media) const
+{
+	if (!name.empty() && (media.name.empty() || media.name == media.fileName
+			|| media.name == get_file_basename(media.fileName)))
+		media.name = name;
+	if (media.desc.empty()) media.desc = overview;
+	if (media.releaseDate.empty()) media.releaseDate = releaseDate;
+	if (media.developer.empty()) media.developer = developer;
+	if (media.publisher.empty()) media.publisher = publisher;
+	if (media.genre.empty()) media.genre = genre;
+	if (media.players.empty()) media.players = players;
+}
+
+// Bump when matching improvements should retry older negative results only.
+static constexpr u32 screenScraperMatchVersion = 2;
 
 json GameBoxart::to_json(const std::string& baseArtPath) const
 {
@@ -47,6 +64,11 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 		{ "region", region },
 		{ "release_date", releaseDate },
 		{ "overview", overview },
+		{ "developer", developer }, { "publisher", publisher }, { "genre", genre }, { "players", players },
+		{ "screenscraper_id", screenScraperId },
+		{ "screenscraper_checked_media", screenScraperCheckedMedia },
+		{ "screenscraper_searched", screenScraperSearched },
+		{ "screenscraper_match_version", screenScraperMatchVersion },
 		{ "boxart_path", artPath },
 		{ "boxart_url", boxartUrl },
 		{ "parsed", offlineArtState == OfflineArtState::Complete || offlineArtState == OfflineArtState::NoArtwork },
@@ -56,6 +78,10 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 		{ "scraped", scraped },
 		{ "arcade", arcade },
 	};
+	// Only local paths are persisted. ScreenScraper download URLs contain passwords.
+	for (const auto& media : screenScraperMedia)
+		j["screenscraper_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
+			? media.second.substr(baseArtPath.size()) : media.second;
 	return j;
 }
 
@@ -68,6 +94,25 @@ GameBoxart::GameBoxart(const json& j, const std::string& baseArtPath)
 	loadProperty(region, j, "region");
 	loadProperty(releaseDate, j, "release_date");
 	loadProperty(overview, j, "overview");
+	loadProperty(developer, j, "developer");
+	loadProperty(publisher, j, "publisher");
+	loadProperty(genre, j, "genre");
+	loadProperty(players, j, "players");
+	loadProperty(screenScraperId, j, "screenscraper_id");
+	loadProperty(screenScraperCheckedMedia, j, "screenscraper_checked_media");
+	loadProperty(screenScraperSearched, j, "screenscraper_searched");
+	u32 matchVersion = 0;
+	loadProperty(matchVersion, j, "screenscraper_match_version");
+	if (screenScraperSearched && !screenScraperId && matchVersion < screenScraperMatchVersion)
+	{
+		// Keep successful downloads; only obsolete unmatched records need another lookup.
+		screenScraperSearched = false;
+		screenScraperCheckedMedia = 0;
+	}
+	loadProperty(screenScraperMedia, j, "screenscraper_media");
+	for (auto& media : screenScraperMedia)
+		if (!media.second.empty() && !isAbsolutePath(media.second))
+			media.second = baseArtPath + media.second;
 	loadProperty(boxartPath, j, "boxart_path");
 	loadProperty(boxartUrl, j, "boxart_url");
 	loadProperty(gamePath, j, "game_path");

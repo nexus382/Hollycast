@@ -42,7 +42,7 @@ This is the smallest useful `theme.json`:
 }
 ```
 
-The [theme collection](../themes/README.md) contains six starred examples using grids, lists, selected-game artwork and metadata. Each package includes its source notes.
+The [theme collection](../themes/README.md) contains seven starred examples using grids, lists, CD racks, selected-game artwork and metadata. Each package includes its source notes.
 
 ## Manifest reference
 
@@ -67,14 +67,20 @@ Supported `colors` names are: `Text`, `TextDisabled`, `WindowBg`, `ChildBg`, `Po
 
 Each layout is an object. Unknown fields are errors. Required fields are `id`, `name`, `mode`, and `browser`.
 
+The library uses a General UI Scaling baseline of 100%, retaining platform/DPI
+scaling. Library Scale (also labelled Icon Size in the toolbar) controls browser
+artwork and the opposite cover/information column. That column scrolls when
+enlarged content exceeds the viewport; full-canvas backgrounds stay fixed.
+Rack cases remain bounded to fit a complete case and shelf on screen.
+
 | Field | Meaning and bounds |
 | --- | --- |
 | `id` | Unique within the package; 1–64 lowercase ASCII letters, digits, hyphens, or underscores. |
 | `name` | Display label used by **Library Layout**. |
-| `mode` | `grid` or `list`. |
+| `mode` | `grid`, `list`, or `rack` (vertical jewel-case spines on scrollable shelves). |
 | `browser` | `[x, y, width, height]` rectangle for the interactive game browser. Coordinates are fractions of the library content area. Position and size must fit wholly inside 0–1; width and height must each be at least `0.1`. |
-| `columns` | Grid column count, integer 1–12. Default `4`; list mode ignores it. |
-| `itemAspect` | Grid cell width divided by height, from `0.3` to `3`. Default `0.8`; list mode ignores it. |
+| `columns` | Grid column count, integer 1–12, or 1–64 for racks. Default `4`; list mode ignores it. The library Icon Size control adjusts the displayed column count to resize artwork. |
+| `itemAspect` | Cell width divided by height, from `0.3` to `3`, or `0.03` to `3` for racks. Default `0.8`; list mode ignores it. Rack heights are bounded to keep spines readable. |
 | `spacing` | Logical UI pixels between browser items, from `0` to `48`. Default `12`. |
 | `fontSize` | Optional browser text height as a fraction of canvas height, from `0.01` to `0.08`; clamped to 10–96 screen pixels. Omit to inherit the application font size. |
 | `rowHeight` | Optional list row height as a fraction of canvas height, from `0.02` to `0.2`. Rows stay large enough to fit their text and padding. Omit for automatic sizing. |
@@ -84,11 +90,11 @@ Each layout is an object. Unknown fields are errors. Required fields are `id`, `
 | `showTitles` | Whether grid cells show their title, default `true`. List rows always show the game title. |
 | `background` | Library canvas color, 6- or 8-digit hex; default `151820ff`. |
 | `elements` | Optional array of up to 64 decorative or selected-game elements. |
-| `artworkSource` | Browser artwork: empty (default library media), `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, or `titlescreen`. Missing media falls back to the library artwork. |
+| `artworkSource` | Browser artwork: empty (default library media), `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, or `spine`. Missing media falls back to library artwork, except racks, which show a vertical title label. Rack spines fill the case height with proportional widths and wrap onto shelves; horizontal scans rotate to fit. |
 | `rounding` | Browser selection/image corner radius in logical UI pixels, 0–48; default `0`. |
 | `inactiveOpacity` | Unselected grid artwork opacity, 0.1–1; default `1`. |
 | `selectorBorderColor` | Optional selection outline color, separate from the selection fill. |
-| `separatorColor` | Optional list-row divider color. |
+| `separatorColor` | Optional list-row divider or rack shelf-edge color. |
 | `showArtwork` | Show square artwork thumbnails beside list titles; default `false`. |
 | `compactControls` | Show favourite buttons only on hovered/focused items or saved favourites; default `false`. Context-menu actions remain available. |
 | `showInfoTooltip` | Show the app's hover information popup; default `true`. Layouts with their own details can disable it. |

@@ -596,7 +596,7 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 	media.name = "A different display title";
 	media.gameName.clear();
 	for (const char* folder : {"images", "miximg", "miximages", "cover", "covers", "screenshotS",
-			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens"})
+			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens", "box-2d-side", "spines"})
 	{
 		fs::create_directories(root / folder);
 		std::ofstream(root / folder / "A Game (USA).png", std::ios::binary) << folder;
@@ -617,7 +617,8 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 		{config::LibraryCoverMediaMode::Title, "marquees"},
 		{config::LibraryCoverMediaMode::Case, "3dboxes"},
 		{config::LibraryCoverMediaMode::Physical, "physicalmedia"},
-		{config::LibraryCoverMediaMode::TitleScreen, "titlescreens"}
+		{config::LibraryCoverMediaMode::TitleScreen, "titlescreens"},
+		{config::LibraryCoverMediaMode::Spine, "spines"}
 	};
 	for (const auto& source : expected)
 		EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, source.first)).lexically_normal(),

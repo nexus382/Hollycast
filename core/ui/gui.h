@@ -64,6 +64,8 @@ void gui_cycleSaveStateSlot(int step);
 void gui_togglePause();
 std::string gui_getCurGameBoxartUrl();
 void gui_refresh_boxart_cache();
+void gui_download_library_media(u32 requestedMedia, bool retryUnavailable = false);
+void gui_display_library_download_progress();
 void gui_refresh_custom_boxart(bool force = true);
 void gui_takeScreenshot();
 void gui_runOnUiThread(std::function<void()> function);

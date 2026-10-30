@@ -35,6 +35,8 @@
 #include <functional>
 #include <string>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 using StringCallback = std::function<bool(bool cancelled, const std::string& selection)>;
 
@@ -234,6 +236,22 @@ public:
 	}
 };
 
+// Library metrics use the theme at General UI Scaling 100%, without rebuilding
+// the font atlas or leaking temporary styles into Settings and other screens.
+class LibraryUiScope
+{
+public:
+	explicit LibraryUiScope(float baselineScale);
+	~LibraryUiScope();
+	LibraryUiScope(const LibraryUiScope&) = delete;
+	LibraryUiScope& operator=(const LibraryUiScope&) = delete;
+	static void setBaseStyle(const ImGuiStyle& style);
+
+private:
+	ImGuiStyle previousStyle;
+	float previousScale;
+};
+
 class ImguiTexture
 {
 public:
@@ -270,6 +288,8 @@ public:
 		return other.path == path;
 	}
 	ImTextureID getId() override;
+	// Reads dimensions without decoding/uploading off-screen library artwork. Zero means unavailable.
+	float getAspectRatio() const;
 
 	static void resetLoadCount() {
 		textureLoadCount = 0;
@@ -435,6 +455,10 @@ struct PopupOptionsConfig {
     const char* const* options = nullptr;
     int optionCount = 0;
     int* currentValue = nullptr;
+
+    // Multiple selection edits a draft bitmask until Apply; storage indexes are bits 0..30.
+    bool multiSelect = false;
+    std::vector<std::pair<const char*, int>> selectionPresets;
 
     // Optional: Custom value-to-string conversion
     std::function<const char*(int)> valueToString = nullptr;

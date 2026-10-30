@@ -44,6 +44,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
         src/ui/BoxartTest.cpp
+        src/ui/ScreenScraperTest.cpp
         src/ui/LibraryTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp
@@ -55,6 +56,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/ui/SetupChecklistPopupTest.cpp
+        src/ui/SettingsPopupTest.cpp
         src/ui/CustomThemeTest.cpp
         src/ui/LibrarySavestateTest.cpp
         src/ui/ThemeTest.cpp
