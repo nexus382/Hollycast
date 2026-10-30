@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "audio/ui_sound.h"
 #include "mainui.h"
 #include "hw/pvr/Renderer_if.h"
 #include "gui.h"
@@ -114,6 +115,7 @@ void mainui_loop(bool forceStart)
 	while (mainui_enabled)
 	{
 		fc_profiler::startThread("main");
+		tickUiSound();
 
 		if (mainui_rend_frame() && imguiDriver != nullptr)
 		{

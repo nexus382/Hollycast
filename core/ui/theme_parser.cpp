@@ -4,6 +4,7 @@
 
 #include "theme.h"
 #include "theme_font_validation.h"
+#include "audio/ui_sound.h"
 
 #include "json.hpp"
 
@@ -162,14 +163,30 @@ Rect parseRect(const Json& value, const std::string& path, double minSize)
 
 const std::set<std::string>& metadataFields()
 {
-	static const std::set<std::string> values = {"title", "description", "developer", "publisher", "genre", "players", "releaseDate", "productId", "region", "format", "playTime", "lastPlayed", "size"};
+	static const std::set<std::string> values = {"title", "description", "developer", "publisher", "genre", "players", "releaseDate", "productId", "region", "format", "playTime", "lastPlayed", "size", "system"};
 	return values;
 }
 
 const std::set<std::string>& artworkSources()
 {
-	static const std::set<std::string> values = {"", "cover", "miximage", "case", "screenshot", "fanart", "title", "physical", "titlescreen", "banner", "backcover", "spine"};
+	static const std::set<std::string> values = {"", "cover", "miximage", "case", "screenshot", "fanart", "title", "physical", "titlescreen", "banner", "backcover", "spine", "disc"};
 	return values;
+}
+
+std::vector<std::string> metadataFieldList(const Json& value, const std::string& path)
+{
+	if (!value.is_array() || value.empty() || value.size() > metadataFields().size())
+		invalid(path, "must contain supported metadata fields");
+	std::vector<std::string> result;
+	std::set<std::string> seen;
+	for (const auto& entry : value)
+	{
+		const std::string field = stringValue(entry, path, false);
+		if (!metadataFields().count(field) || !seen.insert(field).second)
+			invalid(path, "must contain unique supported metadata fields");
+		result.push_back(field);
+	}
+	return result;
 }
 
 bool pathWithin(const fs::path& root, const fs::path& path)
@@ -182,6 +199,8 @@ bool pathWithin(const fs::path& root, const fs::path& path)
 	return true;
 }
 } // namespace
+
+static std::string soundPath(const std::string& directory, const Json& value, const std::string& path);
 
 std::string assetPath(const std::string& directory, const std::string& relative)
 {
@@ -205,6 +224,21 @@ std::string assetPath(const std::string& directory, const std::string& relative)
 	if (!pathWithin(root, candidate))
 		invalid("asset", "path resolves outside the theme directory");
 	return candidate.u8string();
+}
+
+static std::string soundPath(const std::string& directory, const Json& value, const std::string& path)
+{
+	const std::string resolved = assetPath(directory, stringValue(value, path, false));
+	std::error_code ec;
+	const auto size = fs::file_size(fs::u8path(resolved), ec);
+	if (ec || size > 1024 * 1024)
+		invalid(path, "must reference a package sound no larger than 1 MiB");
+	std::ifstream input(fs::u8path(resolved), std::ios::binary);
+	std::vector<u8> bytes(static_cast<size_t>(size));
+	std::vector<s16> decoded;
+	if (!input.read(reinterpret_cast<char*>(bytes.data()), bytes.size()) || !decodeUiSound(bytes.data(), bytes.size(), decoded))
+		invalid(path, "must be a 44.1 kHz 16-bit PCM mono or stereo WAV file");
+	return resolved;
 }
 
 Theme parse(const std::string& json, const std::string& directory)
@@ -261,14 +295,14 @@ Theme parse(const std::string& json, const std::string& directory)
 	{
 		const std::string lp = "layouts[" + std::to_string(i) + "]";
 		const Json& item = layouts[i];
-		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect"});
+		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch"});
 		Layout layout;
 		layout.id = stringValue(required(item, "id", lp), lp + ".id", false);
 		if (!validId(layout.id)) invalid(lp + ".id", "must contain 1 to 64 lowercase letters, digits, hyphens, or underscores");
 		if (!layoutIds.insert(layout.id).second) invalid(lp + ".id", "must be unique within the theme");
 		layout.name = stringValue(required(item, "name", lp), lp + ".name", false);
 		layout.mode = stringValue(required(item, "mode", lp), lp + ".mode", false);
-		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack") invalid(lp + ".mode", "must be grid, list, or rack");
+		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail") invalid(lp + ".mode", "must be grid, list, rack, or rail");
 		layout.browser = parseRect(required(item, "browser", lp), lp + ".browser", 0.1);
 		if (auto it = item.find("columns"); it != item.end()) layout.columns = integerValue(*it, lp + ".columns", 1, layout.mode == "rack" ? 64 : 12);
 		if (auto it = item.find("itemAspect"); it != item.end()) layout.itemAspect = static_cast<float>(numberValue(*it, lp + ".itemAspect", layout.mode == "rack" ? 0.03 : 0.3, 3));
@@ -356,6 +390,48 @@ Theme parse(const std::string& json, const std::string& directory)
 			if (auto field = it->find("dark"); field != it->end()) layout.pixelArt.dark = colorValue(*field, pp + ".dark");
 			if (auto field = it->find("light"); field != it->end()) layout.pixelArt.light = colorValue(*field, pp + ".light");
 		}
+		if (auto it = item.find("rail"); it != item.end())
+		{
+			const std::string rp = lp + ".rail";
+			if (layout.mode != "rail") invalid(rp, "requires rail mode");
+			objectFields(*it, rp, {"visible", "center", "tilt", "skew", "falloff", "fade", "rowColor", "numbers", "favouriteMark", "badges"});
+			if (auto field = it->find("visible"); field != it->end()) layout.rail.visible = integerValue(*field, rp + ".visible", 1, 8);
+			if (auto field = it->find("center"); field != it->end()) layout.rail.center = static_cast<float>(numberValue(*field, rp + ".center", 0.1, 0.9));
+			if (auto field = it->find("tilt"); field != it->end()) layout.rail.tilt = static_cast<float>(numberValue(*field, rp + ".tilt", 0, 0.1));
+			if (auto field = it->find("skew"); field != it->end()) layout.rail.skew = static_cast<float>(numberValue(*field, rp + ".skew", 0, 0.1));
+			if (auto field = it->find("falloff"); field != it->end()) layout.rail.falloff = static_cast<float>(numberValue(*field, rp + ".falloff", 0, 0.1));
+			if (auto field = it->find("fade"); field != it->end()) layout.rail.fade = static_cast<float>(numberValue(*field, rp + ".fade", 0, 0.25));
+			if (auto field = it->find("rowColor"); field != it->end()) layout.rail.rowColor = colorValue(*field, rp + ".rowColor");
+			if (auto field = it->find("numbers"); field != it->end()) layout.rail.numbers = boolValue(*field, rp + ".numbers");
+			if (auto field = it->find("favouriteMark"); field != it->end()) layout.rail.favouriteMark = boolValue(*field, rp + ".favouriteMark");
+			if (auto badges = it->find("badges"); badges != it->end())
+			{
+				if (!badges->is_array() || badges->empty() || badges->size() > 4)
+					invalid(rp + ".badges", "must contain 1 to 4 lists of metadata fields");
+				for (const auto& badge : *badges)
+					layout.rail.badges.push_back(metadataFieldList(badge, rp + ".badges"));
+			}
+		}
+		if (auto it = item.find("sounds"); it != item.end())
+		{
+			const std::string sp = lp + ".sounds";
+			objectFields(*it, sp, {"move", "launch"});
+			if (auto field = it->find("move"); field != it->end()) layout.moveSound = soundPath(directory, *field, sp + ".move");
+			if (auto field = it->find("launch"); field != it->end()) layout.launchSound = soundPath(directory, *field, sp + ".launch");
+		}
+		if (auto it = item.find("launch"); it != item.end())
+		{
+			const std::string ap = lp + ".launch";
+			objectFields(*it, ap, {"seconds"});
+			layout.launchSeconds = static_cast<float>(numberValue(required(*it, "seconds", ap), ap + ".seconds", 0.1, 5));
+		}
+		if (auto it = item.find("attract"); it != item.end())
+		{
+			const std::string ap = lp + ".attract";
+			objectFields(*it, ap, {"idleSeconds", "intervalSeconds"});
+			layout.attract.idleSeconds = static_cast<float>(numberValue(required(*it, "idleSeconds", ap), ap + ".idleSeconds", 1, 3600));
+			if (auto field = it->find("intervalSeconds"); field != it->end()) layout.attract.intervalSeconds = static_cast<float>(numberValue(*field, ap + ".intervalSeconds", 0.5, 600));
+		}
 		if (auto it = item.find("elements"); it != item.end())
 		{
 			if (!it->is_array() || it->size() > 64) invalid(lp + ".elements", "must be an array containing at most 64 elements");
@@ -363,7 +439,7 @@ Theme parse(const std::string& json, const std::string& directory)
 			{
 				const std::string ep = lp + ".elements[" + std::to_string(j) + "]";
 				const Json& source = (*it)[j];
-				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "fallbackImage"});
+				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "fallbackImage", "separator", "when", "launchFadeFrom", "bleed", "image", "hoverImage", "selectedImage", "selectedHoverImage", "slant", "marqueeSeconds", "sweepSeconds", "spin"});
 				Element element;
 				element.type = stringValue(required(source, "type", ep), ep + ".type", false);
 				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "metadata" && element.type != "details" && element.type != "button") invalid(ep + ".type", "must be panel, image, artwork, text, metadata, details, or button");
@@ -382,6 +458,53 @@ Theme parse(const std::string& json, const std::string& directory)
 					std::error_code ec;
 					if (!fs::is_regular_file(fs::u8path(element.resolvedFallbackAsset), ec) || ec)
 						invalid(ep + ".fallbackImage", "must reference an image inside the package");
+				}
+				if (auto field = source.find("when"); field != source.end())
+				{
+					element.when = stringValue(*field, ep + ".when");
+					if (element.when != "attract" && element.when != "interactive" && element.when != "launching") invalid(ep + ".when", "must be attract, interactive, or launching");
+					if (element.type == "button" || element.type == "details") invalid(ep + ".when", "is not valid on interactive elements");
+				}
+				if (auto field = source.find("bleed"); field != source.end())
+				{
+					if (element.type == "button" || element.type == "details") invalid(ep + ".bleed", "is not valid on interactive elements");
+					element.bleed = boolValue(*field, ep + ".bleed");
+				}
+				if (auto field = source.find("launchFadeFrom"); field != source.end())
+				{
+					if (element.when != "launching") invalid(ep + ".launchFadeFrom", "requires when to be launching");
+					element.launchFadeFrom = static_cast<float>(numberValue(*field, ep + ".launchFadeFrom", 0, 0.99));
+				}
+				const bool textElement = element.type == "text" || element.type == "metadata";
+				if (auto field = source.find("slant"); field != source.end())
+				{
+					if (!textElement) invalid(ep + ".slant", "is only valid on text and metadata elements");
+					element.slant = static_cast<float>(numberValue(*field, ep + ".slant", 0, 0.5));
+				}
+				if (auto field = source.find("marqueeSeconds"); field != source.end())
+				{
+					if (!textElement) invalid(ep + ".marqueeSeconds", "is only valid on text and metadata elements");
+					element.marqueeSeconds = static_cast<float>(numberValue(*field, ep + ".marqueeSeconds", 0.5, 600));
+				}
+				if (auto field = source.find("sweepSeconds"); field != source.end())
+				{
+					if (element.type != "image") invalid(ep + ".sweepSeconds", "is only valid on image elements");
+					element.sweepSeconds = static_cast<float>(numberValue(*field, ep + ".sweepSeconds", 0.5, 600));
+				}
+				if (auto spin = source.find("spin"); spin != source.end())
+				{
+					const std::string sp = ep + ".spin";
+					if (element.type != "image" && element.type != "artwork") invalid(sp, "is only valid on image and artwork elements");
+					if (element.sweepSeconds > 0) invalid(sp, "cannot be combined with sweepSeconds");
+					objectFields(*spin, sp, {"seconds", "launchSeconds", "center", "radius", "hole"});
+					if (auto field = spin->find("hole"); field != spin->end()) element.spinHole = static_cast<float>(numberValue(*field, sp + ".hole", 0, 0.9));
+					if (auto field = spin->find("launchSeconds"); field != spin->end()) element.spinLaunchSeconds = static_cast<float>(numberValue(*field, sp + ".launchSeconds", 0.02, 600));
+					element.spinSeconds = static_cast<float>(numberValue(required(*spin, "seconds", sp), sp + ".seconds", 0.5, 600));
+					const Json& center = required(*spin, "center", sp);
+					if (!center.is_array() || center.size() != 2) invalid(sp + ".center", "must be [x, y]");
+					element.spinCenterX = static_cast<float>(numberValue(center[0], sp + ".center[0]", -1, 2));
+					element.spinCenterY = static_cast<float>(numberValue(center[1], sp + ".center[1]", -1, 2));
+					element.spinRadius = static_cast<float>(numberValue(required(*spin, "radius", sp), sp + ".radius", 0.01, 2));
 				}
 				if (auto field = source.find("color"); field != source.end()) element.color = colorValue(*field, ep + ".color");
 				if (auto field = source.find("fontSize"); field != source.end()) element.fontSize = static_cast<float>(numberValue(*field, ep + ".fontSize", 0.01, 0.15));
@@ -411,21 +534,22 @@ Theme parse(const std::string& json, const std::string& directory)
 				}
 				if (element.type == "details")
 				{
-					const Json& fields = required(source, "fields", ep);
-					if (!fields.is_array() || fields.empty() || fields.size() > metadataFields().size())
-						invalid(ep + ".fields", "must contain supported metadata fields");
-					std::set<std::string> seen;
-					for (const auto& value : fields)
-					{
-						const std::string field = stringValue(value, ep + ".fields", false);
-						if (!metadataFields().count(field) || !seen.insert(field).second)
-							invalid(ep + ".fields", "must contain unique supported metadata fields");
-						element.fields.push_back(field);
-					}
+					element.fields = metadataFieldList(required(source, "fields", ep), ep + ".fields");
 					if (auto field = source.find("columns"); field != source.end()) element.columns = integerValue(*field, ep + ".columns", 1, 3);
 					if (element.zIndex < 0) invalid(ep + ".zIndex", "details must draw above the browser");
 				}
-				else if (source.count("fields") || source.count("columns")) invalid(ep, "fields and columns are only valid on details elements");
+				else if (source.count("columns")) invalid(ep + ".columns", "is only valid on details elements");
+				else if (auto field = source.find("fields"); field != source.end())
+				{
+					if (element.type != "metadata") invalid(ep + ".fields", "is only valid on details and metadata elements");
+					if (source.count("source")) invalid(ep + ".fields", "cannot be combined with source");
+					element.fields = metadataFieldList(*field, ep + ".fields");
+				}
+				if (auto field = source.find("separator"); field != source.end())
+				{
+					if (element.type != "metadata" || element.fields.empty()) invalid(ep + ".separator", "requires a metadata element with fields");
+					element.separator = stringValue(*field, ep + ".separator");
+				}
 				if (auto field = source.find("action"); field != source.end()) element.action = stringValue(*field, ep + ".action", false);
 				if (auto field = source.find("background"); field != source.end()) element.background = colorValue(*field, ep + ".background");
 				if (auto field = source.find("selectedColor"); field != source.end()) element.selectedColor = colorValue(*field, ep + ".selectedColor");
@@ -443,6 +567,18 @@ Theme parse(const std::string& json, const std::string& directory)
 					if (auto field = source.find("rounding"); field != source.end()) element.buttonRounding = static_cast<float>(numberValue(*field, ep + ".rounding", 0, 0.5));
 				if (element.type != "button" && (!element.action.empty() || element.background || element.selectedColor || element.selectedBackground || element.buttonRounding || !element.icon.empty() || !element.selectedIcon.empty() || element.borderColor || element.selectedBorderColor))
 					invalid(ep, "action and button appearance fields are only valid on buttons");
+				const std::pair<const char*, std::string Element::*> buttonImages[] = {
+					{"image", &Element::buttonImage}, {"hoverImage", &Element::buttonHoverImage},
+					{"selectedImage", &Element::buttonSelectedImage}, {"selectedHoverImage", &Element::buttonSelectedHoverImage}};
+				for (const auto& [name, member] : buttonImages)
+					if (auto field = source.find(name); field != source.end())
+					{
+						if (element.type != "button") invalid(ep + "." + name, "is only valid on buttons");
+						std::string resolved = assetPath(directory, stringValue(*field, ep + "." + name, false));
+						std::error_code ec;
+						if (!fs::is_regular_file(fs::u8path(resolved), ec) || ec) invalid(ep + "." + name, "must reference an image inside the package");
+						element.*member = std::move(resolved);
+					}
 				if (auto field = source.find("fit"); field != source.end())
 				{
 					element.fit = stringValue(*field, ep + ".fit");
@@ -465,7 +601,7 @@ Theme parse(const std::string& json, const std::string& directory)
 				}
 				else if (element.type == "metadata")
 				{
-					if (!metadataFields().count(element.source)) invalid(ep + ".source", "must name a supported metadata field");
+					if (element.fields.empty() && !metadataFields().count(element.source)) invalid(ep + ".source", "must name a supported metadata field");
 				}
 				else if (element.type == "artwork" && element.source != "preview" && !artworkSources().count(element.source))
 					invalid(ep + ".source", "must name a supported artwork source or preview");

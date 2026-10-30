@@ -21,6 +21,18 @@
 #include <unistd.h>
 #endif
 
+TEST(DiscLabelTest, EachGameKeepsItsLabelUnderANameThatSurvivesRestarts)
+{
+	const std::string path = discLabelCachePath("/art/", "/games/Crazy Taxi.cue");
+	EXPECT_EQ(path, "/art/disc-labels/" + path.substr(17, 16) + ".png");
+	EXPECT_EQ(path.size(), std::string("/art/disc-labels/").size() + 16 + 4);
+	EXPECT_EQ(discLabelCachePath("/art/", "/games/Crazy Taxi.cue"), path);
+	EXPECT_NE(discLabelCachePath("/art/", "/games/Crazy Taxi 2.cue"), path);
+	// Pinned: a change here would orphan every label already saved.
+	EXPECT_EQ(discLabelCachePath("/art/", ""), "/art/disc-labels/cbf29ce484222325.png");
+	EXPECT_EQ(discLabelCachePath("/art/", "a"), "/art/disc-labels/af63dc4c8601ec8c.png");
+}
+
 TEST(BoxartWorkTest, AcceptsOnlyCurrentSourceRevision)
 {
 	Boxart boxart;
@@ -782,4 +794,20 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 	EXPECT_TRUE(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover).empty());
 }
 
+}
+
+TEST(GameScannerSystemTest, NamesTheBoardAnArcadeRomRunsOn)
+{
+	Game game{};
+	EXPECT_STREQ(arcadeSystemName(game), "Naomi");
+	game.bios = "naomi";
+	EXPECT_STREQ(arcadeSystemName(game), "Naomi");
+	game.bios = "naomi2";
+	EXPECT_STREQ(arcadeSystemName(game), "Naomi 2");
+	game.bios = "segasp";
+	EXPECT_STREQ(arcadeSystemName(game), "System SP");
+	game.bios = nullptr;
+	game.cart_type = AW;
+	EXPECT_STREQ(arcadeSystemName(game), "Atomiswave");
+	EXPECT_EQ(GameMedia{}.system, "Dreamcast");
 }

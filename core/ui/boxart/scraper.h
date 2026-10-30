@@ -155,3 +155,8 @@ class OfflineScraper : public Scraper
 public:
 	void scrape(GameBoxart& item) override;
 };
+
+struct Disc;
+enum class DiscLabelResult { Saved, Missing, Failed };
+// Writes the label art a Dreamcast disc carries in its 0GDTEX.PVR to a PNG file.
+DiscLabelResult saveDiscLabel(Disc& disc, const std::string& path);

@@ -18,6 +18,7 @@
     along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "audio/ui_sound.h"
 #include "custom_theme.h"
 #include "rend/osd.h"
 #include "cfg/cfg.h"
@@ -557,6 +558,7 @@ void gui_start_game(const std::string& path)
 	});
 	showExitSaveDialog = false;
 	showAutoLoadDialog = false;
+	cancelUiSound(); // The game's audio is about to take over the backend.
 	emu.unloadGame();
 	reset_vmus();
     chat.reset();
@@ -2529,8 +2531,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		item.metadata = {
 			{"title", title}, {"description", game.desc},
 			{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
-			{"players", game.players}, {"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
-			{"productId", art.uniqueId}, {"region", formatLibraryRegion(art.region)},
+			{"players", game.players}, {"system", game.system}, {"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
+			{"productId", art.uniqueId}, {"region", art.region == 0 ? std::string() : formatLibraryRegion(art.region)},
 			{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
 			{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
 			{"lastPlayed", ""}, {"size", formatLibrarySize(game.size)}
@@ -2541,6 +2543,12 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 
 		for (const std::string& source : mediaSources)
 		{
+			if (source == "disc")
+			{
+				// No cover standing in here: the theme's own disc shows until there is real art.
+				item.metadata["artwork.disc"] = boxart.getDiscArtPath(game);
+				continue;
+			}
 			config::LibraryCoverMediaMode media = config::LibraryCoverMediaMode::Cover;
 			if (source == "miximage") media = config::LibraryCoverMediaMode::MixImage;
 			else if (source == "case") media = config::LibraryCoverMediaMode::Case;
@@ -2641,6 +2649,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		config::LibraryFavourites.save();
 		favouriteAction = static_cast<int>(index);
 		resetLibraryGameInfoHover();
+	}, [](const std::string& sound) {
+		playUiSound(sound);
 	});
 
 	auto startThemedGame = [&](size_t index, bool resume) {
@@ -2742,17 +2752,20 @@ static void gui_display_content()
 	if (customLayout != nullptr && customLayout->toolbar == "compact")
 	{
 		// Compact chrome is a shared layout option, independent of package identity.
+		const ImVec2 toolbarArea = ImGui::GetContentRegionAvail();
+		const themes::Layout& toolbarLayout = themes::responsiveLayout(*themes::current(), *customLayout,
+				toolbarArea.x / std::max(1.f, toolbarArea.y));
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 6));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(16));
 		ImGui::PushFont(largeFont, uiScaled(15.f));
 		const float brandY = ImGui::GetCursorPosY();
 		float brandHeight = ImGui::GetFrameHeight();
 		ImTextureID brand = {};
-		if (!customLayout->toolbarLogoAsset.empty())
-			brand = ImguiFileTexture(customLayout->toolbarLogoAsset, true, true).getId();
+		if (!toolbarLayout.toolbarLogoAsset.empty())
+			brand = ImguiFileTexture(toolbarLayout.toolbarLogoAsset, true, true).getId();
 		if (brand != ImTextureID{})
 		{
-			if (customLayout->toolbarLogoHeight > 0) brandHeight = uiScaled(customLayout->toolbarLogoHeight);
+			if (toolbarLayout.toolbarLogoHeight > 0) brandHeight = uiScaled(toolbarLayout.toolbarLogoHeight);
 			ImGui::Image(brand, ImVec2(brandHeight * imguiDriver->getAspectRatio(brand), brandHeight));
 		}
 		else
@@ -2786,16 +2799,19 @@ static void gui_display_content()
 			const bool selected = libraryView == views[i];
 			if (selected)
 			{
-				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-				if (customLayout->toolbarSelectedTextColor)
+				// The selected fill holds on hover: its text color was chosen to suit this fill alone.
+				const ImVec4 selectedFill = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+				ImGui::PushStyleColor(ImGuiCol_Button, selectedFill);
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selectedFill);
+				if (toolbarLayout.toolbarSelectedTextColor)
 				{
-					const uint32_t rgba = *customLayout->toolbarSelectedTextColor;
+					const uint32_t rgba = *toolbarLayout.toolbarSelectedTextColor;
 					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4((rgba >> 24) / 255.f, ((rgba >> 16) & 255) / 255.f,
 							((rgba >> 8) & 255) / 255.f, (rgba & 255) / 255.f));
 				}
 			}
 			const bool pressed = ImGui::Button(labels[i]);
-			if (selected) ImGui::PopStyleColor(customLayout->toolbarSelectedTextColor ? 2 : 1);
+			if (selected) ImGui::PopStyleColor(toolbarLayout.toolbarSelectedTextColor ? 3 : 2);
 			if (pressed) { libraryView = views[i]; librarySavestateCacheInvalidated = true; }
 		}
 		static bool showFilter = false;

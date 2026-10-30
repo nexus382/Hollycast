@@ -212,6 +212,44 @@ std::string Scraper::makeUniqueFilename(const std::string& url)
 	return path;
 }
 
+DiscLabelResult saveDiscLabel(Disc& disc, const std::string& path)
+{
+	IsoFs isofs(&disc);
+	bool valid = false;
+	std::unique_ptr<IsoFs::Directory> root(isofs.getRoot(&valid));
+	if (!valid || root == nullptr)
+		return DiscLabelResult::Failed;
+	std::unique_ptr<IsoFs::Entry> entry(root->getEntry("0GDTEX.PVR"));
+	if (entry == nullptr || entry->isDirectory())
+		return DiscLabelResult::Missing;
+	auto *file = static_cast<IsoFs::File *>(entry.get());
+	std::vector<u8> data(file->getSize());
+	if (file->read(data.data(), data.size()) != data.size())
+		return DiscLabelResult::Failed;
+	std::vector<u8> out;
+	u32 w, h;
+	if (!pvrParse(data.data(), data.size(), w, h, out))
+		return DiscLabelResult::Failed;
+	FILE *output = nowide::fopen(path.c_str(), "wb");
+	if (output == nullptr)
+		return DiscLabelResult::Failed;
+	struct PngOutput { FILE *file; bool failed = false; } context{output};
+	const auto save = [](void *opaque, void *bytes, int size) {
+		auto& output = *static_cast<PngOutput *>(opaque);
+		if (fwrite(bytes, 1, size, output.file) != static_cast<size_t>(size))
+			output.failed = true;
+	};
+	stbi_flip_vertically_on_write(0);
+	const bool encoded = stbi_write_png_to_func(save, &context, w, h, 4, out.data(), 0) != 0;
+	const bool closed = fclose(output) == 0;
+	if (!encoded || context.failed || !closed)
+	{
+		nowide::remove(path.c_str());
+		return DiscLabelResult::Failed;
+	}
+	return DiscLabelResult::Saved;
+}
+
 void OfflineScraper::scrape(GameBoxart& item)
 {
 	if (item.offlineArtState != OfflineArtState::Pending)
@@ -272,43 +310,12 @@ void OfflineScraper::scrape(GameBoxart& item)
 				item.offlineArtState = OfflineArtState::Complete;
 				return;
 			}
-			IsoFs isofs(disc.get());
-			bool valid = false;
-			std::unique_ptr<IsoFs::Directory> root(isofs.getRoot(&valid));
-			if (!valid || root == nullptr)
-				return;
-			std::unique_ptr<IsoFs::Entry> entry(root->getEntry("0GDTEX.PVR"));
-			if (entry == nullptr || entry->isDirectory())
-			{
-				item.offlineArtState = OfflineArtState::NoArtwork;
-				return;
-			}
-			auto *file = static_cast<IsoFs::File *>(entry.get());
-			std::vector<u8> data(file->getSize());
-			if (file->read(data.data(), data.size()) != data.size())
-				return;
-			std::vector<u8> out;
-			u32 w, h;
-			if (!pvrParse(data.data(), data.size(), w, h, out))
-				return;
 			const std::string path = makeUniqueFilename("gdtex.png");
-			FILE *output = nowide::fopen(path.c_str(), "wb");
-			if (output == nullptr)
+			const DiscLabelResult label = saveDiscLabel(*disc, path);
+			if (label == DiscLabelResult::Missing)
+				item.offlineArtState = OfflineArtState::NoArtwork;
+			if (label != DiscLabelResult::Saved)
 				return;
-			struct PngOutput { FILE *file; bool failed = false; } context{output};
-			const auto save = [](void *opaque, void *bytes, int size) {
-				auto& output = *static_cast<PngOutput *>(opaque);
-				if (fwrite(bytes, 1, size, output.file) != static_cast<size_t>(size))
-					output.failed = true;
-			};
-			stbi_flip_vertically_on_write(0);
-			const bool encoded = stbi_write_png_to_func(save, &context, w, h, 4, out.data(), 0) != 0;
-			const bool closed = fclose(output) == 0;
-			if (!encoded || context.failed || !closed)
-			{
-				nowide::remove(path.c_str());
-				return;
-			}
 			item.setBoxartPath(path);
 			item.offlineArtState = OfflineArtState::Complete;
 		}

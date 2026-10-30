@@ -64,6 +64,10 @@ private:
 void InitAudio();
 void TermAudio();
 void WriteSample(s16 right, s16 left);
+// Plays interleaved stereo frames while no game is running, opening the backend if needed.
+void PushUiAudio(const s16 *frames, u32 count);
+// Closes a backend opened by PushUiAudio. A running game's backend is left alone.
+void StopUiAudio();
 
 void StartAudioRecording(bool eight_khz);
 u32 RecordAudio(void *buffer, u32 samples);

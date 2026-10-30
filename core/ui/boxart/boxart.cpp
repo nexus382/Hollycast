@@ -28,6 +28,8 @@
 #include "arcade_scraper.h"
 #include "launchbox.h"
 #include "artwork_adapter.h"
+#include "emulator.h"
+#include "imgread/common.h"
 #include <nowide/convert.hpp>
 #include <nowide/stackstring.hpp>
 #include <algorithm>
@@ -1708,6 +1710,89 @@ void Boxart::refreshCache()
 	saveDatabase();
 }
 
+std::string discLabelCachePath(const std::string& saveDirectory, const std::string& gamePath)
+{
+	// FNV-1a: std::hash may differ between runs, and these files outlive them.
+	u64 hash = 0xcbf29ce484222325ull;
+	for (const unsigned char c : gamePath)
+		hash = (hash ^ c) * 0x100000001b3ull;
+	char name[32];
+	snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash));
+	return saveDirectory + "disc-labels/" + name + ".png";
+}
+
+static std::string readDiscLabel(const std::string& saveDirectory, const std::string& gamePath)
+{
+	const std::string path = discLabelCachePath(saveDirectory, gamePath);
+	const std::string none = path + ".none";
+	if (file_exists(path))
+		return path;
+	const std::string folder = saveDirectory + "disc-labels";
+	if (file_exists(none) || !(file_exists(folder) || make_directory(folder)))
+		return {};
+	try {
+		std::unique_ptr<Disc> disc(OpenDisc(gamePath));
+		if (disc == nullptr)
+			return {};
+		// Only a finished file may take the final name, as its presence means it is complete.
+		const std::string partial = path + ".tmp";
+		const DiscLabelResult label = saveDiscLabel(*disc, partial);
+		if (label == DiscLabelResult::Missing)
+		{
+			if (FILE *marker = nowide::fopen(none.c_str(), "wb"))
+				fclose(marker);
+		}
+		if (label == DiscLabelResult::Saved && nowide::rename(partial.c_str(), path.c_str()) == 0)
+			return path;
+	} catch (const std::exception& e) {
+		WARN_LOG(COMMON, "Can't read the disc label of %s: %s", gamePath.c_str(), e.what());
+	}
+	return {};
+}
+
+std::string Boxart::getDiscArtPath(const GameMedia& media)
+{
+	const std::string physical = getCustomMediaPath(media, config::LibraryCoverMediaMode::Physical);
+	if (!physical.empty())
+		return physical;
+	if (media.path.empty() || getGamePlatform(media.fileName) != DC_PLATFORM_DREAMCAST)
+		return {};
+	std::lock_guard<std::mutex> guard(mutex);
+	std::string label;
+	if (const auto known = discLabels.find(media.path); known != discLabels.end())
+		label = known->second;
+	else
+	{
+		discLabels[media.path];
+		discLabelQueue.push_back(media.path);
+	}
+	// One reader at a time. It stops when the queue runs dry, and the next call restarts it.
+	const bool idle = !discLabelFetching.valid() || discLabelFetching.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+	if (idle && !discLabelQueue.empty() && !discLabelsShuttingDown)
+	{
+		if (discLabelFetching.valid())
+			discLabelFetching.get();
+		discLabelFetching = std::async(std::launch::async, [this, saveDirectory = getSaveDirectory()] {
+			ThreadName _("BoxArt-disc");
+			while (true)
+			{
+				std::string gamePath;
+				{
+					std::lock_guard<std::mutex> guard(mutex);
+					if (discLabelQueue.empty() || discLabelsShuttingDown)
+						return;
+					gamePath = std::move(discLabelQueue.back());
+					discLabelQueue.pop_back();
+				}
+				const std::string found = readDiscLabel(saveDirectory, gamePath);
+				std::lock_guard<std::mutex> guard(mutex);
+				discLabels[gamePath] = found;
+			}
+		});
+	}
+	return label;
+}
+
 void Boxart::term()
 {
 	{
@@ -1721,7 +1806,10 @@ void Boxart::term()
 		std::lock_guard<std::mutex> guard(mutex);
 		customIndexShuttingDown = true;
 		++customIndexGeneration;
+		discLabelsShuttingDown = true;
 	}
+	if (discLabelFetching.valid())
+		discLabelFetching.get();
 	if (customIndexFetching.valid())
 		customIndexFetching.get();
 	if (physicalFetching.valid())

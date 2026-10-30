@@ -78,7 +78,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | --- | --- |
 | `id` | Unique within the package; 1–64 lowercase ASCII letters, digits, hyphens, or underscores. |
 | `name` | Display label used by **Library Layout**. |
-| `mode` | `grid`, `list`, or `rack` (vertical jewel-case spines on scrollable shelves). |
+| `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), or `rail`. See [Rail mode](#rail-mode). |
 | `browser` | `[x, y, width, height]` rectangle for the interactive game browser. Coordinates are fractions of the library content area. Position and size must fit wholly inside 0–1; width and height must each be at least `0.1`. |
 | `columns` | Grid column count, integer 1–12, or 1–64 for racks. Default `4`; list mode ignores it. The library Icon Size control adjusts the displayed column count to resize artwork. |
 | `itemAspect` | Cell width divided by height, from `0.3` to `3`, or `0.03` to `3` for racks. Default `0.8`; list mode ignores it. Rack heights are bounded to keep spines readable. |
@@ -115,9 +115,30 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `hoverDetails` | Whether to show the standard game-details tooltip, default `true`. Themes with their own details panel can disable it. |
 | `previewSource` | Initial named artwork for `source: "preview"` elements; defaults to `cover`. The shared artwork buttons can switch it. |
 | `narrowLayout` | Optional ID of another layout in the same package, used automatically when the available content width/height falls below `narrowAspect`. It does not change the saved layout selection. The fallback is resolved once; it does not recursively follow other fallbacks. |
-| `narrowAspect` | Threshold for `narrowLayout`, `0.4`–`3`; defaults to `1.1`. Requires `narrowLayout`. |
+| `narrowAspect` | Threshold for `narrowLayout`, `0.4`–`3`; defaults to `1.1`. Requires `narrowLayout`. The compact toolbar uses the fallback's logo settings too. |
+| `rail` | Optional appearance of a `rail` browser. Only valid in rail mode. See [Rail mode](#rail-mode). |
+| `sounds` | Optional object of package WAV files: `move` plays when the player selects another game, by any input, and `launch` plays at the start of a `launch` sequence. Each must be 44.1 kHz 16-bit PCM, mono or stereo, and at most 1 MiB. Sounds follow the app's audio volume and never play in attract mode or during a game. A launch sound is cut off when the game starts, so keep it no longer than the sequence. |
+| `launch` | Optional object with required `seconds` (`0.1`–`5`): a short sequence between choosing a game and starting it, for elements with `when: "launching"` to play in. Nothing else can be chosen meanwhile, and any fresh press skips straight to the game. Omit to start games at once. |
+| `attract` | Optional object with required `idleSeconds` (`1`–`3600`) and optional `intervalSeconds` (`0.5`–`600`, default `3.5`). After that long without player input, the selection steps through the library and wraps at the end, in any browser mode. Any input, open menu, or text field stops it at once. Omit to disable. |
 
 Grid cells use the selected browser artwork source and optional titles. List rows retain native navigation and ellipsized titles. Optional button elements provide explicit shared library actions.
+
+## Rail mode
+
+`"mode": "rail"` draws a perspective list that keeps the selected game at the center of the `browser` rectangle. Rows select when pressed or focused, never on hover, so a row sliding under a resting pointer cannot change the selection. Clicks, the wheel, and drags move along the rail, stopping at each end. Up and Down, on the keyboard or D-pad, step one game at a time and only leave the rail at its ends, so controls above and below stay reachable. Right moves to the layout's first enabled button, and returning to the rail never changes the selection. `rowHeight` sets the center row's height; omit it to fit `visible` rows on each side. `fontSize`, `textColor`, `selectedTextColor`, `selectorColor` (the selected row's fill), and `activation` work as they do for lists.
+
+| `rail` field | Meaning and bounds |
+| --- | --- |
+| `visible` | Rows drawn on each side of the selection, `1`–`8`; default `4`. |
+| `center` | Where the selected row sits, as a fraction of browser height, `0.1`–`0.9`; default `0.5`. A value nearer the top keeps a short library from leaving a gap above it. |
+| `tilt` | Row inset per row of distance, as a fraction of browser width, `0`–`0.1`; default `0.03`. |
+| `skew` | Right-edge slant of each row, as a fraction of browser width, `0`–`0.1`; default `0.03`. |
+| `falloff` | Scale lost per row of distance, `0`–`0.1`; default `0.05`. |
+| `fade` | Opacity lost per row of distance, `0`–`0.25`; default `0.14`. |
+| `rowColor` | Fill of unselected rows. Omit to use the app palette's `FrameBg`. |
+| `numbers` | Whether rows show their position in the current view; default `true`. |
+| `favouriteMark` | Whether to draw a star on the rows of favourite games; default `false`. |
+| `badges` | Optional array of 1–4 tags for each row, drawn left to right. Each tag is an array of metadata fields and shows the first with a value, such as `[["system"], ["genre", "region", "format"]]`. A tag with no value is left out, and a long value is clipped so the title keeps most of the row. Omit for no tags. |
 
 ## Elements
 
@@ -144,6 +165,16 @@ Every element is an object with required `type` and `rect`. Element rectangles u
 | `action` | Required only for `button`: `previous`, `next`, `up`, `down`, `activate`, `artwork`, or `favourite`. Buttons require a nonnegative `zIndex` and render as independent input regions above decoration. |
 | `background` | Optional button fill color. `00000000` permits a transparent hit region over a package image, such as a physical button. Omit to use the selected app palette. `color` controls button text. |
 | `selectedColor`, `selectedBackground` | Optional text/fill overrides for a selected artwork choice or a game marked as favourite. They allow shared-state controls without a theme-specific widget. |
+| `launchFadeFrom` | Requires `when: "launching"`. Fades the element in from this fraction of the launch sequence to its end, `0`–`0.99`. |
+| `when` | Limits a decorative element to one state: `attract` while attract mode is running, `interactive` otherwise, or `launching` during a `launch` sequence. Launching elements with a nonnegative `zIndex` draw over everything, including buttons. Not valid on `button` or `details`. Omit to always draw it. |
+| `bleed` | When `true`, `rect` and `spin` use the whole library area instead of the `canvasAspect` canvas, so backgrounds and bands can reach the window edges. Not valid on `button` or `details`. Defaults to `false`. |
+| `slant` | Text and metadata only. Shears the text like an italic, as horizontal shift per unit of height, `0`–`0.5`. Useful because bundled fonts may have no italic. |
+| `marqueeSeconds` | Text and metadata only. Scrolls one line from right to left, taking this many seconds to travel the rectangle's width, `0.5`–`600`, then repeats. Any length of text moves at the same speed, and new text starts again from the right edge. |
+| `sweepSeconds` | Images only. Moves the image from above to below its rectangle in this many seconds, `0.5`–`600`, then repeats, clipped to the rectangle. The image keeps its aspect ratio at the rectangle's width. |
+| `spin` | Images and artwork; not combinable with `sweepSeconds`. An object with required `seconds` per turn (`0.5`–`600`), optional `launchSeconds` (`0.02`–`600`), the period it accelerates to during a `launch` sequence, `center` as `[x, y]` canvas fractions (`-1`–`2`, so a disc can hang off the canvas edge), `radius` as a fraction of canvas width (`0.01`–`2`), and optional `hole` (`0`–`0.9`), which cuts the image to a round disc with that fraction of its radius left open, so square art still spins as a disc. The rectangle clips the result. Spinning artwork with no image and no `fallback` draws nothing, so an image beneath it can stand in. |
+| `fields` | `details` (required) or `metadata`. On `metadata`, replaces `source` with an ordered array of metadata fields whose values are joined; fields with no value are skipped. If none has a value, `text` is shown instead. |
+| `separator` | `metadata` with `fields` only. The text placed between values; default `  /  `. |
+| `image`, `hoverImage`, `selectedImage`, `selectedHoverImage` | Buttons only. Package images that replace the button's drawn background, stretched to its rectangle. `image` is required for the others to apply. Hover images also show on keyboard or controller focus, and each state falls back to the closest one given. A disabled button dims its image. |
 | `selectedText` | Optional visible label for a selected artwork/favourite button. The control keeps its stable widget ID when this text changes. |
 | `icon`, `selectedIcon` | Optional vector button icon, `star` (outline) or `star-filled`. `selectedIcon` overrides `icon` for a selected artwork/favourite button. Icons inherit the text color, sit beside the label, and require no icon font. Icon and label scale together to fit a narrow button. |
 | `borderColor`, `selectedBorderColor` | Optional button outline and selected-state override. Uses a one-logical-pixel border and the button's rounding. Outlined controls with an explicit fill also get tinted hover feedback. Omit to retain the app's existing border style. |
@@ -155,9 +186,9 @@ Element types:
 
 - **`panel`** fills its rectangle with `color`, optionally grading into `endColor`, with rounded corners when requested.
 - **`image`** draws a package image using `fit` and `color`. Its `source` is a relative file path inside the package, such as `images/panel.png`. Use PNG or JPEG; SVG and WebP must be rasterized or decoded first. Absolute paths, `..`, and paths escaping through symlinks are rejected. The referenced file must exist.
-- **`artwork`** draws selected-game media using `fit`: default art, `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, or `spine`. Named slots prefer matching local media, then the selected provider and TGDB fallback, and obey `fallback`. `preview` follows the selected artwork button; unavailable non-cover choices remain empty instead of borrowing cover art. A `fallbackImage` package asset can fill an empty region. Backgrounds and details follow mouse and keyboard/controller selection.
+- **`artwork`** draws selected-game media using `fit`: default art, `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, `spine`, or `disc`. Named slots prefer matching local media, then the selected provider and TGDB fallback, and obey `fallback`. `preview` follows the selected artwork button; unavailable non-cover choices remain empty instead of borrowing cover art. `disc` is the game's physical media artwork, otherwise the label stored on a Dreamcast disc (read in the background and cached under `boxart/disc-labels`); pair it with `"fallback": "none"` so that a game without one does not borrow its cover. A `fallbackImage` package asset can fill an empty region. Backgrounds and details follow mouse and keyboard/controller selection.
 - **`text`** draws the literal `text` value.
-- **`metadata`** draws the selected game's value for `source`; a missing value draws nothing. Supported fields: `title`, `description`, `developer`, `publisher`, `genre`, `players`, `releaseDate`, `productId`, `region`, `format`, `playTime`, `lastPlayed`, and `size`.
+- **`metadata`** draws the selected game's value for `source`; a missing value draws nothing. Supported fields: `title`, `description`, `developer`, `publisher`, `genre`, `players`, `releaseDate`, `productId`, `region`, `format`, `playTime`, `lastPlayed`, `size`, and `system`, which names the hardware a game runs on: `Dreamcast`, `Naomi`, `Naomi 2`, `Atomiswave`, or `System SP`.
 - **`details`** displays selected-game metadata with translated field labels in its own scrollable rectangle. `fields` chooses the content and order; `columns` controls density. Empty fields are omitted, long values wrap, and the panel scrolls back to the top when the selected game changes. It requires a nonnegative `zIndex`, and retains normal mouse, keyboard, and controller scrolling. Other themes have no details panel unless they add this element.
 - **`button`** uses the same normalized rectangles as other elements. `previous` and `next` wrap through filtered games; `up` and `down` move by the current grid column count (one row in a list). Navigation scrolls the selected game into view. `activate` launches it using the normal library path. An `artwork` button requires a named artwork `source` and switches `preview` elements to that source; unavailable choices are disabled with an explanatory tooltip. `favourite` toggles the selected game's persistent favourite state, including in the Favourites view. BIOS/device entries disable that action. Empty libraries disable the controls. `text` may be empty for an asset-backed hit region. Keyboard/controller activation and focus remain native ImGui widgets.
 

@@ -43,11 +43,45 @@ struct Element
 	std::optional<uint32_t> selectedColor, selectedBackground;
 	std::optional<float> buttonRounding; // Fraction of the smaller button dimension, 0–0.5.
 	std::string resolvedFallbackAsset; // Optional artwork image when library media is unavailable.
-	std::vector<std::string> fields; // Ordered metadata bindings for a scrollable details element.
+	std::vector<std::string> fields; // Ordered metadata bindings for a details or metadata element.
+	std::string separator = "  /  "; // Joins the values of a multi-field metadata element.
 	int columns = 1; // Number of label/value pairs per details row.
 	std::string selectedText; // Optional label for a selected artwork/favourite button.
 	std::string icon, selectedIcon; // Optional vector button icons: star or star-filled.
 	std::optional<uint32_t> borderColor, selectedBorderColor;
+	// Validated package artwork that replaces a button's drawn background, by state.
+	std::string buttonImage, buttonHoverImage, buttonSelectedImage, buttonSelectedHoverImage;
+	std::string when; // Empty, attract, interactive, or launching: limits drawing to that state.
+	float launchFadeFrom = -1; // While launching, fades in from this fraction of the launch; negative disables.
+	bool bleed = false; // Rect and spin use the whole library area, past a fixed-aspect canvas.
+	float slant = 0; // Text shear, as horizontal shift per unit of height.
+	float marqueeSeconds = 0; // Seconds for text to travel one rectangle width, right to left.
+	float sweepSeconds = 0; // Image travels down its rectangle in this period.
+	float spinSeconds = 0; // Image rotates around spinCenter once in this period, clipped to rect.
+	float spinLaunchSeconds = 0; // Period the spin accelerates to during a launch; zero keeps its pace.
+	float spinCenterX = 0.5f, spinCenterY = 0.5f; // Canvas fractions; may lie outside the canvas.
+	float spinRadius = 0; // Fraction of canvas width.
+	float spinHole = -1; // Cuts the image to a round disc with this fraction of its radius open; negative keeps it square.
+};
+// A perspective list that keeps the selected game at its center.
+struct Rail
+{
+	int visible = 4; // Rows drawn on each side of the selection.
+	float center = 0.5f; // Where the selected row sits, as a fraction of browser height.
+	float tilt = 0.03f; // Row inset per row of distance, as a fraction of browser width.
+	float skew = 0.03f; // Right-edge slant of each row, as a fraction of browser width.
+	float falloff = 0.05f; // Scale lost per row of distance.
+	float fade = 0.14f; // Opacity lost per row of distance.
+	std::optional<uint32_t> rowColor;
+	bool numbers = true;
+	bool favouriteMark = false; // Draw a star on rows of favourite games.
+	std::vector<std::vector<std::string>> badges; // One tag per entry: the first of its fields with a value.
+};
+// Steps through the library after a period without player input.
+struct Attract
+{
+	float idleSeconds = 0; // Zero disables attract mode.
+	float intervalSeconds = 3.5f;
 };
 struct Layout
 {
@@ -87,6 +121,11 @@ struct Layout
 	std::string previewSource = "cover";
 	std::string narrowLayout;
 	float narrowAspect = 1.1f;
+	Rail rail; // Used by rail mode only.
+	std::string moveSound; // Validated package sound for moving to another game.
+	std::string launchSound; // Validated package sound that opens a launch sequence.
+	float launchSeconds = 0; // Delay between choosing a game and starting it; zero starts at once.
+	Attract attract;
 };
 struct Theme
 {

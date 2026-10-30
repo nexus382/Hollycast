@@ -28,6 +28,7 @@
 #include <array>
 #include <string>
 #include <unordered_map>
+#include <map>
 #include <vector>
 #include <chrono>
 #include <atomic>
@@ -51,6 +52,9 @@ public:
 	GameBoxart getBoxart(const GameMedia& media);
 	std::string getLibraryCoverMediaPath(const GameMedia& media);
 	std::string getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode);
+	// Art of the game's disc: its physical media if known, otherwise the label on the disc
+	// itself. Empty until that has been read, which happens in the background.
+	std::string getDiscArtPath(const GameMedia& media);
 	void term();
 	void refreshCache();
 	void invalidateOfflineArtwork();
@@ -162,5 +166,13 @@ private:
 	std::future<void> screenFetching;
 	std::future<void> customIndexFetching;
 
+	std::map<std::string, std::string> discLabels; // By game path. Empty until read, or when there is none.
+	std::vector<std::string> discLabelQueue;
+	std::future<void> discLabelFetching;
+	bool discLabelsShuttingDown = false;
+
 	static constexpr char const *DB_NAME = "flycast-gamedb.json";
 };
+
+// Where a game's on-disc label is kept. A ".none" file beside it records a disc without one.
+std::string discLabelCachePath(const std::string& saveDirectory, const std::string& gamePath);

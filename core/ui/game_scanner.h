@@ -20,6 +20,7 @@
 #pragma once
 #include "types.h"
 #include "hw/naomi/naomi_roms.h"
+#include <string_view>
 #include <vector>
 #include <mutex>
 #include <memory>
@@ -57,8 +58,21 @@ struct GameMedia
 	std::string manualPath;
 	bool arcade = false;	// Arcade game (naomi, atomiswave, system sp, ...)
 	bool device = false;	// Corresponds to a physical cdrom device
+	std::string system = "Dreamcast";	// Hardware the game runs on
 	size_t size = 0;		// File size, if available from the storage backend
 };
+
+// The arcade board a known ROM set runs on; follows naomi_cart_GetPlatform.
+inline const char* arcadeSystemName(const Game& game)
+{
+	if (game.cart_type == AW)
+		return "Atomiswave";
+	if (game.bios != nullptr && std::string_view(game.bios) == "naomi2")
+		return "Naomi 2";
+	if (game.bios != nullptr && std::string_view(game.bios) == "segasp")
+		return "System SP";
+	return "Naomi";
+}
 
 class GameScanner
 {

@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "ui/theme_library.h"
 #include "ui/gui_util.h"
+#include "ui/theme.h"
 #include "imgui.h"
 #include <stb_image_write.h>
 #include "imgui_internal.h"
@@ -10,6 +11,8 @@
 #include <cfloat>
 #include <chrono>
 #include <filesystem>
+#include <cmath>
+#include <string>
 
 class ThemeLibraryTest : public ::testing::Test
 {
@@ -483,6 +486,880 @@ TEST_F(ThemeLibraryTest, LongGameDetailsScrollWithoutBlockingTilesAndResetForThe
 	renderFrame(tile, false);
 	renderFrame(away, false);
 	EXPECT_FLOAT_EQ(detailWindow->Scroll.y, 0);
+}
+
+class ThemeRailTest : public ThemeLibraryTest
+{
+protected:
+	void SetUp() override
+	{
+		ThemeLibraryTest::SetUp();
+		layout.mode = "rail";
+		layout.browser = {0, 0, 1, 1};
+		layout.rowHeight = 0.1f;
+		layout.rail.visible = 2;
+		items = {{"a", "A", {}, {}}, {"b", "B", {}, {}}, {"c", "C", {}, {}}, {"d", "D", {}, {}}};
+	}
+	void settle(ImVec2 mouse = ImVec2(-1, -1), int frames = 60)
+	{
+		for (int i = 0; i < frames; ++i)
+			renderFrame(mouse, false);
+	}
+	// The selected game is the row the rail has centered.
+	int centeredRow() const
+	{
+		const float center = canvasOrigin.y + canvasSize.y / 2;
+		int best = -1;
+		float nearest = 1e9f;
+		for (size_t i = 0; i < bounds.size(); ++i)
+		{
+			const float distance = std::fabs((bounds[i].y + bounds[i].w) / 2 - center);
+			if (bounds[i].w > bounds[i].y && distance < nearest)
+			{
+				nearest = distance;
+				best = static_cast<int>(i);
+			}
+		}
+		return best;
+	}
+	ImVec2 rowCenter(int index) const
+	{
+		return ImVec2((bounds[index].x + bounds[index].z) / 2, (bounds[index].y + bounds[index].w) / 2);
+	}
+	int overlayVertices() const
+	{
+		for (ImGuiWindow* window : GImGui->Windows)
+			if (std::string(window->Name).find("themeLibraryOverlay") != std::string::npos)
+				return window->DrawList->VtxBuffer.Size;
+		return -1;
+	}
+};
+
+TEST_F(ThemeRailTest, SelectedRowSitsAtTheConfiguredHeight)
+{
+	layout.id = "rail-center";
+	layout.rail.center = 0.25f;
+	settle();
+	const float rowMiddle = (bounds[0].y + bounds[0].w) / 2;
+	EXPECT_NEAR(rowMiddle, canvasOrigin.y + canvasSize.y * 0.25f, 2.f);
+}
+
+TEST_F(ThemeRailTest, CentersTheSelectionAndIgnoresHover)
+{
+	layout.id = "rail-hover";
+	settle();
+	ASSERT_EQ(centeredRow(), 0);
+	const ImVec2 next = rowCenter(1);
+	settle(next);
+	EXPECT_EQ(centeredRow(), 0);
+}
+
+TEST_F(ThemeRailTest, PressSelectsAndDoubleClickModeDoesNotLaunch)
+{
+	layout.id = "rail-press";
+	layout.activation = "doubleClick";
+	settle();
+	const ImVec2 next = rowCenter(1);
+	EXPECT_EQ(renderFrame(next, false), -1);
+	EXPECT_EQ(renderFrame(next, true), -1);
+	EXPECT_EQ(renderFrame(next, false), -1);
+	settle();
+	EXPECT_EQ(centeredRow(), 1);
+}
+
+TEST_F(ThemeRailTest, SingleClickModeLaunchesThePressedRow)
+{
+	layout.id = "rail-launch";
+	settle();
+	const ImVec2 next = rowCenter(1);
+	EXPECT_EQ(renderFrame(next, false), -1);
+	EXPECT_EQ(renderFrame(next, true), -1);
+	EXPECT_EQ(renderFrame(next, false), 1);
+}
+
+TEST_F(ThemeRailTest, WheelStepsAndStopsAtTheEnds)
+{
+	layout.id = "rail-wheel";
+	settle();
+	const ImVec2 inside(canvasOrigin.x + canvasSize.x / 2, canvasOrigin.y + canvasSize.y / 2);
+	renderFrame(inside, false);
+	ImGui::GetIO().AddMouseWheelEvent(0, -1);
+	settle(inside);
+	EXPECT_EQ(centeredRow(), 1);
+	ImGui::GetIO().AddMouseWheelEvent(0, 10);
+	settle(inside);
+	EXPECT_EQ(centeredRow(), 0);
+}
+
+TEST_F(ThemeRailTest, DragStepsWithoutLaunching)
+{
+	layout.id = "rail-drag";
+	settle();
+	const ImVec2 start = rowCenter(0);
+	EXPECT_EQ(renderFrame(start, false), -1);
+	EXPECT_EQ(renderFrame(start, true), -1);
+	EXPECT_EQ(renderFrame(ImVec2(start.x, start.y - 30), true), -1);
+	EXPECT_EQ(renderFrame(ImVec2(start.x, start.y - 60), true), -1);
+	EXPECT_EQ(renderFrame(ImVec2(start.x, start.y - 60), false), -1);
+	settle();
+	EXPECT_EQ(centeredRow(), 1);
+}
+
+TEST_F(ThemeRailTest, DoubleClickLaunchesTheRowThatWasClickedBeforeTheRailMoves)
+{
+	layout.id = "rail-double";
+	layout.activation = "doubleClick";
+	settle();
+	const ImVec2 next = rowCenter(2);
+	EXPECT_EQ(renderFrame(next, false), -1);
+	EXPECT_EQ(renderFrame(next, true), -1);
+	EXPECT_EQ(renderFrame(next, false), -1);
+	EXPECT_EQ(renderFrame(next, false), -1);
+	// ImGui reports a double-click on the second press.
+	EXPECT_EQ(renderFrame(next, true), 2);
+	renderFrame(next, false);
+}
+
+TEST_F(ThemeRailTest, TheRailStartsMovingAsSoonAsARowIsPressed)
+{
+	layout.id = "rail-prompt";
+	layout.activation = "doubleClick";
+	settle();
+	const ImVec2 next = rowCenter(1);
+	const float before = next.y;
+	renderFrame(next, false);
+	renderFrame(next, true);
+	renderFrame(next, true);
+	renderFrame(next, false);
+	renderFrame(next, false);
+	EXPECT_LT(rowCenter(1).y, before - 1); // Four frames on, well inside the double-click window.
+}
+
+TEST_F(ThemeRailTest, ASecondClickLaunchesTheFirstRowEvenWithAnotherRowNowUnderThePointer)
+{
+	layout.id = "rail-double-moved";
+	layout.activation = "doubleClick";
+	layout.moveSound = {};
+	items = {{"a", "A", {}, {}}, {"b", "B", {}, {}}, {"c", "C", {}, {}}, {"d", "D", {}, {}},
+			{"e", "E", {}, {}}, {"f", "F", {}, {}}, {"g", "G", {}, {}}};
+	settle();
+	const ImVec2 spot = rowCenter(2);
+	renderFrame(spot, false);
+	renderFrame(spot, true);
+	renderFrame(spot, false);
+	for (int i = 0; i < 12; ++i) // 0.2 seconds, within the double-click window: the rail has arrived.
+		renderFrame(spot, false);
+	EXPECT_LT(std::fabs(rowCenter(2).y - (canvasOrigin.y + canvasSize.y / 2)), std::fabs(spot.y - (canvasOrigin.y + canvasSize.y / 2)) / 2);
+	EXPECT_EQ(renderFrame(spot, true), 2);
+	EXPECT_EQ(renderFrame(spot, false), -1);
+	settle();
+	EXPECT_EQ(centeredRow(), 2); // The row that slid under the pointer was not selected either.
+}
+
+TEST_F(ThemeRailTest, ASlowSecondClickIsAnOrdinaryClickOnTheRowThere)
+{
+	layout.id = "rail-double-slow";
+	layout.activation = "doubleClick";
+	items = {{"a", "A", {}, {}}, {"b", "B", {}, {}}, {"c", "C", {}, {}}, {"d", "D", {}, {}},
+			{"e", "E", {}, {}}, {"f", "F", {}, {}}, {"g", "G", {}, {}}};
+	settle();
+	const ImVec2 spot = rowCenter(2);
+	renderFrame(spot, false);
+	renderFrame(spot, true);
+	renderFrame(spot, false);
+	settle(spot, 40); // Two thirds of a second.
+	EXPECT_EQ(renderFrame(spot, true), -1);
+	EXPECT_EQ(renderFrame(spot, false), -1);
+	settle();
+	EXPECT_EQ(centeredRow(), 4);
+}
+
+TEST_F(ThemeRailTest, MoveCallbackFiresForThePlayerButNotAttractOrTheFirstFrame)
+{
+	layout.id = "rail-move";
+	layout.moveSound = "move";
+	layout.attract.idleSeconds = 1;
+	layout.attract.intervalSeconds = 0.5f;
+	int moves = 0;
+	const auto render = [&](ImVec2 mouse, bool down) {
+		auto& io = ImGui::GetIO();
+		io.MousePos = mouse;
+		io.MouseDown[0] = down;
+		ImGui::NewFrame();
+		ImGui::SetNextWindowPos(ImVec2(0, 0));
+		ImGui::SetNextWindowSize(ImVec2(500, 400));
+		ImGui::Begin("Theme Library");
+		canvasOrigin = ImGui::GetCursorScreenPos();
+		canvasSize = ImGui::GetContentRegionAvail();
+		bounds.resize(items.size());
+		const int result = themes::renderLibrary(layout, {}, items, [&](size_t index) {
+			const auto min = ImGui::GetItemRectMin();
+			const auto max = ImGui::GetItemRectMax();
+			bounds[index] = ImVec4(min.x, min.y, max.x, max.y);
+		}, std::nullopt, 1.f, {}, {}, [&](const std::string&) { ++moves; });
+		ImGui::End();
+		ImGui::EndFrame();
+		return result;
+	};
+	const ImVec2 away(10, 10);
+	for (int i = 0; i < 30; ++i)
+		render(away, false);
+	EXPECT_EQ(moves, 0);
+	const ImVec2 next = rowCenter(1);
+	render(next, false);
+	render(next, true);
+	render(next, false);
+	EXPECT_EQ(moves, 1);
+	render(away, false);
+	render(away, false);
+	EXPECT_EQ(moves, 1); // The selection held still.
+	for (int i = 0; i < 135; ++i) // Two steps: four would wrap back to this row.
+		render(away, false);
+	EXPECT_NE(centeredRow(), 1); // Attract mode moved on, silently.
+	EXPECT_EQ(moves, 1);
+}
+
+class ThemeRailKeyboardTest : public ThemeRailTest
+{
+protected:
+	void SetUp() override
+	{
+		ThemeRailTest::SetUp();
+		auto& io = ImGui::GetIO();
+		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+		io.DisplaySize = ImVec2(1400, 800);
+		const themes::Theme theme = themes::load(std::string(FLYCAST_TEST_FILES) + "/../../themes/demo-disc");
+		layout = theme.layouts[0];
+		// The real layout's controls compete for focus; its images need a graphics driver.
+		std::vector<themes::Element> kept;
+		for (auto element : layout.elements)
+			if (element.type != "image" && element.type != "artwork")
+			{
+				element.buttonImage.clear();
+				kept.push_back(element);
+			}
+		layout.elements = kept;
+		layout.attract.idleSeconds = 0;
+	}
+	void games(int count)
+	{
+		items.clear();
+		for (int i = 0; i < count; ++i)
+			items.push_back({"game" + std::to_string(i), "game" + std::to_string(i), {}, {}});
+	}
+	void frame(ImVec2 mouse = ImVec2(-1, -1), bool down = false)
+	{
+		auto& io = ImGui::GetIO();
+		io.MousePos = mouse;
+		io.MouseDown[0] = down;
+		ImGui::NewFrame();
+		ImGui::SetNextWindowPos(ImVec2(0, 0));
+		ImGui::SetNextWindowSize(ImVec2(1400, 800));
+		ImGui::Begin("Theme Library", nullptr, ImGuiWindowFlags_NoDecoration);
+		bounds.assign(items.size(), ImVec4(0, 0, 0, 0));
+		const int result = themes::renderLibrary(layout, {}, items, [&](size_t index) {
+			const auto min = ImGui::GetItemRectMin();
+			const auto max = ImGui::GetItemRectMax();
+			bounds[index] = ImVec4(min.x, min.y, max.x, max.y);
+			browserCenter = ImGui::GetCurrentWindow()->Pos.y + ImGui::GetCurrentWindow()->Size.y / 2;
+		}, std::nullopt, 1.f, {}, [&](size_t index) {
+			++favouriteHandlerCalls;
+			favouriteTarget = static_cast<int>(index);
+		});
+		if (result >= 0)
+			started.push_back(result);
+		ImGui::End();
+		ImGui::EndFrame();
+	}
+	std::vector<int> started;
+	void press(ImGuiKey key, int held, int after)
+	{
+		auto& io = ImGui::GetIO();
+		io.AddKeyEvent(key, true);
+		for (int i = 0; i < 1 + held; ++i)
+			frame();
+		io.AddKeyEvent(key, false);
+		for (int i = 0; i < after; ++i)
+			frame();
+	}
+	int selectedRow() const
+	{
+		int best = -1;
+		float nearest = 1e9f;
+		for (size_t i = 0; i < bounds.size(); ++i)
+			if (bounds[i].w > bounds[i].y)
+			{
+				const float distance = std::fabs((bounds[i].y + bounds[i].w) / 2 - browserCenter);
+				if (distance < nearest)
+				{
+					nearest = distance;
+					best = static_cast<int>(i);
+				}
+			}
+		return best;
+	}
+	void settleRail()
+	{
+		for (int i = 0; i < 60; ++i)
+			frame();
+	}
+	bool focusOnRow() const
+	{
+		return GImGui->NavWindow != nullptr && std::string(GImGui->NavWindow->Name).find("Browser") != std::string::npos;
+	}
+	float browserCenter = 0;
+	int favouriteHandlerCalls = 0, favouriteTarget = -1;
+};
+
+TEST_F(ThemeRailKeyboardTest, DownReachesEveryGameAtAnySpeed)
+{
+	int run = 0;
+	for (int count : {2, 3, 4, 5, 8, 16})
+		for (int gap : {1, 2, 3, 4, 6, 10, 20, 40})
+			for (int held : {0, 25})
+				for (bool clickFirst : {false, true})
+				{
+					layout.id = "keyboard-" + std::to_string(run++);
+					games(count);
+					settleRail();
+					// Holding Down in the last run may have left the rail.
+					ImGui::FocusWindow(ImGui::FindWindowByName("Theme Library"));
+					GImGui->NavId = 0;
+					settleRail();
+					if (clickFirst)
+					{
+						const ImVec2 row((bounds[0].x + bounds[0].z) / 2, (bounds[0].y + bounds[0].w) / 2);
+						frame(row);
+						frame(row, true);
+						frame(row);
+						frame();
+						settleRail();
+					}
+					// Key repeat may step further than one per press, never fewer.
+					for (int i = 0; i < count - 1; ++i)
+						press(ImGuiKey_DownArrow, held, gap);
+					settleRail();
+					EXPECT_EQ(selectedRow(), count - 1) << "count " << count << " gap " << gap << " held " << held << " click " << clickFirst;
+				}
+}
+
+TEST_F(ThemeRailKeyboardTest, TheFirstPressWorksWithNothingFocused)
+{
+	layout.id = "keyboard-first";
+	games(4);
+	ImGui::FocusWindow(nullptr);
+	settleRail();
+	press(ImGuiKey_DownArrow, 0, 40);
+	EXPECT_EQ(selectedRow(), 1);
+}
+
+TEST_F(ThemeRailKeyboardTest, ArrowsDriveTheRailWhileFocusIsUnseenElsewhere)
+{
+	layout.id = "keyboard-unseen";
+	games(4);
+	settleRail();
+	press(ImGuiKey_RightArrow, 0, 10); // Focus moves to a button.
+	ASSERT_FALSE(focusOnRow());
+	GImGui->NavCursorVisible = false; // As after using the mouse.
+	press(ImGuiKey_DownArrow, 0, 40);
+	EXPECT_EQ(selectedRow(), 1);
+	press(ImGuiKey_DownArrow, 0, 40);
+	EXPECT_EQ(selectedRow(), 2);
+}
+
+TEST_F(ThemeRailKeyboardTest, EachPressStepsExactlyOneGame)
+{
+	layout.id = "keyboard-steps";
+	games(5);
+	settleRail();
+	for (int expected = 1; expected < 5; ++expected)
+	{
+		press(ImGuiKey_DownArrow, 0, 40);
+		EXPECT_EQ(selectedRow(), expected);
+	}
+	for (int expected = 3; expected >= 0; --expected)
+	{
+		press(ImGuiKey_UpArrow, 0, 40);
+		EXPECT_EQ(selectedRow(), expected);
+	}
+}
+
+TEST_F(ThemeRailKeyboardTest, EndsLeaveTheRailAndComingBackKeepsTheSelection)
+{
+	layout.id = "keyboard-ends";
+	games(4);
+	settleRail();
+	for (int i = 0; i < 3; ++i)
+		press(ImGuiKey_DownArrow, 0, 40);
+	ASSERT_EQ(selectedRow(), 3);
+	EXPECT_TRUE(focusOnRow());
+	press(ImGuiKey_DownArrow, 0, 40); // On past the last game, to the buttons below.
+	EXPECT_FALSE(focusOnRow());
+	EXPECT_EQ(selectedRow(), 3);
+	press(ImGuiKey_UpArrow, 0, 40);
+	EXPECT_TRUE(focusOnRow());
+	EXPECT_EQ(selectedRow(), 3);
+	press(ImGuiKey_UpArrow, 0, 40);
+	EXPECT_EQ(selectedRow(), 2); // Stepping carries on from the selection.
+}
+
+TEST_F(ThemeRailKeyboardTest, RightReachesTheButtonsAndUpReturnsWithoutJumping)
+{
+	layout.id = "keyboard-return";
+	games(8);
+	settleRail();
+	press(ImGuiKey_DownArrow, 0, 40);
+	press(ImGuiKey_DownArrow, 0, 40);
+	ASSERT_EQ(selectedRow(), 2);
+	press(ImGuiKey_RightArrow, 0, 40);
+	EXPECT_FALSE(focusOnRow());
+	EXPECT_EQ(selectedRow(), 2);
+	press(ImGuiKey_UpArrow, 0, 40); // Lands on whichever row is nearest.
+	settleRail();
+	EXPECT_TRUE(focusOnRow());
+	EXPECT_EQ(selectedRow(), 2);
+	press(ImGuiKey_DownArrow, 0, 40);
+	EXPECT_EQ(selectedRow(), 3); // Stepping carries on from the selection.
+}
+
+TEST_F(ThemeLibraryTest, ButtonTooltipDoesNotInheritTheButtonsTextColor)
+{
+	layout.id = "tooltip-color";
+	layout.browser = {0, 0, 1, 0.5f};
+	themes::Element button;
+	button.type = "button";
+	button.action = "favourite";
+	button.rect = {0, 0.6f, 0.5f, 0.2f};
+	button.text = "Favourite";
+	button.selectedColor = 0xff00ffff; // Magenta: no default style color matches it.
+	button.background = 0x000000ff;
+	layout.elements.push_back(button);
+	items[0].favourite = true;
+	items[0].canFavourite = true;
+	favouriteHandler = [](size_t) {};
+	renderFrame(ImVec2(-1, -1), false);
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec4 expected = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	const ImVec2 over(canvasOrigin.x + canvasSize.x * 0.25f, canvasOrigin.y + canvasSize.y * 0.7f);
+	const auto& g = *GImGui;
+	for (int i = 0; i < 3; ++i)
+		renderFrame(over, false);
+	EXPECT_EQ(g.ColorStack.Size, 0); // Nothing the tooltip or later widgets could inherit.
+	EXPECT_FLOAT_EQ(ImGui::GetStyleColorVec4(ImGuiCol_Text).x, expected.x);
+	bool tooltip = false;
+	for (ImGuiWindow* window : g.Windows)
+		if (std::string(window->Name).find("##Tooltip") != std::string::npos && window->Active)
+		{
+			tooltip = true;
+			ASSERT_GT(window->DrawList->CmdBuffer.Size, 0);
+			for (const ImDrawVert& vertex : window->DrawList->VtxBuffer)
+				EXPECT_NE(vertex.col, IM_COL32(255, 0, 255, 255)); // The button's text color stayed behind.
+		}
+	EXPECT_TRUE(tooltip);
+}
+
+TEST_F(ThemeRailKeyboardTest, EnterStartsTheSelectedGameAfterSteppingWithTheArrows)
+{
+	layout.id = "keyboard-enter";
+	layout.launchSeconds = 0;
+	games(8);
+	settleRail();
+	press(ImGuiKey_DownArrow, 0, 40);
+	press(ImGuiKey_DownArrow, 0, 40);
+	ASSERT_EQ(selectedRow(), 2);
+	press(ImGuiKey_Enter, 0, 10);
+	EXPECT_EQ(started, std::vector<int>{2});
+}
+
+TEST_F(ThemeRailKeyboardTest, EnterStartsTheSelectedGameBeforeAnyOtherInput)
+{
+	layout.id = "keyboard-enter-first";
+	layout.launchSeconds = 0;
+	games(8);
+	settleRail();
+	press(ImGuiKey_Enter, 0, 10);
+	EXPECT_EQ(started, std::vector<int>{0});
+}
+
+TEST_F(ThemeRailKeyboardTest, EnterStartsTheGameOnceWhenTheCursorIsVisibleOnARow)
+{
+	layout.id = "keyboard-enter-visible";
+	layout.launchSeconds = 0;
+	games(8);
+	settleRail();
+	press(ImGuiKey_DownArrow, 0, 40);
+	ASSERT_TRUE(focusOnRow());
+	ImGui::SetNavCursorVisible(true); // ImGui now confirms the row by itself, and the rail must not as well.
+	press(ImGuiKey_Enter, 0, 10);
+	EXPECT_EQ(started, std::vector<int>{1});
+}
+
+TEST_F(ThemeRailKeyboardTest, EnterPlaysTheLaunchSequenceBeforeTheGameStarts)
+{
+	layout.id = "keyboard-enter-launch";
+	layout.launchSeconds = 0.5f;
+	games(8);
+	settleRail();
+	press(ImGuiKey_DownArrow, 0, 40);
+	press(ImGuiKey_Enter, 0, 0);
+	EXPECT_TRUE(started.empty());
+	for (int i = 0; i < 40; ++i)
+		frame();
+	EXPECT_EQ(started, std::vector<int>{1});
+}
+
+TEST_F(ThemeRailKeyboardTest, FavouriteIsReachableMidRail)
+{
+	layout.id = "keyboard-favourite";
+	games(8);
+	for (auto& item : items)
+		item.canFavourite = true;
+	favouriteHandlerCalls = -1;
+	settleRail();
+	press(ImGuiKey_DownArrow, 0, 40);
+	press(ImGuiKey_DownArrow, 0, 40);
+	ASSERT_EQ(selectedRow(), 2);
+	favouriteHandlerCalls = 0;
+	press(ImGuiKey_RightArrow, 0, 40); // Play.
+	press(ImGuiKey_RightArrow, 0, 40); // Favourite.
+	press(ImGuiKey_Enter, 0, 10);
+	EXPECT_EQ(favouriteHandlerCalls, 1);
+	EXPECT_EQ(favouriteTarget, 2);
+}
+
+TEST(ThemeDiscRingTest, TheOutlineStaysRoundWhileTheImageTurns)
+{
+	constexpr int segments = 32;
+	const auto still = themes::discRing(100, 200, 50, 0.2f, 0, segments);
+	const auto turned = themes::discRing(100, 200, 50, 0.2f, IM_PI / 2, segments);
+	ASSERT_EQ(still.size(), static_cast<size_t>((segments + 1) * 2));
+	ASSERT_EQ(turned.size(), still.size());
+	for (size_t i = 0; i < still.size(); ++i)
+	{
+		const float reach = i % 2 == 0 ? 50.f : 10.f;
+		EXPECT_NEAR(std::hypot(still[i].x - 100, still[i].y - 200), reach, 0.01f);
+		// Turning moves the picture, not the shape.
+		EXPECT_FLOAT_EQ(turned[i].x, still[i].x);
+		EXPECT_FLOAT_EQ(turned[i].y, still[i].y);
+		// Corners of the image are cut away: nothing samples outside its inscribed circle.
+		EXPECT_NEAR(std::hypot(still[i].u - 0.5f, still[i].v - 0.5f), reach / 100, 0.001f);
+	}
+	// The first spoke points right. A quarter turn clockwise brings the image's top round to it.
+	EXPECT_NEAR(still[0].u, 1, 0.001f);
+	EXPECT_NEAR(still[0].v, 0.5f, 0.001f);
+	EXPECT_NEAR(turned[0].u, 0.5f, 0.001f);
+	EXPECT_NEAR(turned[0].v, 0, 0.001f);
+	// The ring closes on itself, leaving no gap at the seam.
+	EXPECT_NEAR(still[segments * 2].x, still[0].x, 0.01f);
+	EXPECT_NEAR(still[segments * 2].y, still[0].y, 0.01f);
+}
+
+TEST(ThemeRailBadgeTest, EachTagShowsTheFirstFieldWithAValue)
+{
+	themes::Rail rail;
+	themes::LibraryItem item;
+	EXPECT_TRUE(themes::railBadges(rail, item).empty());
+	rail.badges = {{"system"}, {"genre", "region", "format"}};
+	EXPECT_TRUE(themes::railBadges(rail, item).empty());
+	item.metadata = {{"system", "Dreamcast"}, {"genre", ""}, {"region", "JP"}, {"format", "cdi"}};
+	EXPECT_EQ(themes::railBadges(rail, item), (std::vector<std::string>{"Dreamcast", "JP"}));
+	item.metadata["genre"] = "Fighting";
+	EXPECT_EQ(themes::railBadges(rail, item), (std::vector<std::string>{"Dreamcast", "Fighting"}));
+	item.metadata["system"] = "";
+	EXPECT_EQ(themes::railBadges(rail, item), (std::vector<std::string>{"Fighting"}));
+}
+
+TEST(ThemeMetadataTextTest, JoinsFieldsThatHaveValuesAndFallsBackWhenNoneDo)
+{
+	themes::Element element;
+	element.type = "metadata";
+	element.fields = {"publisher", "genre", "region"};
+	element.separator = " * ";
+	element.text = "Nothing known";
+	themes::LibraryItem item;
+	EXPECT_EQ(themes::metadataText(element, item), "Nothing known");
+	item.metadata = {{"publisher", "Sega"}, {"genre", ""}, {"region", "JP"}};
+	EXPECT_EQ(themes::metadataText(element, item), "Sega * JP");
+	element.fields.clear();
+	element.source = "publisher";
+	EXPECT_EQ(themes::metadataText(element, item), "Sega");
+}
+
+TEST(ThemeMetadataTextTest, MarqueeTextStaysOnOneLine)
+{
+	themes::Element element;
+	element.type = "metadata";
+	element.source = "description";
+	themes::LibraryItem item;
+	item.metadata = {{"description", "First line\nSecond line"}};
+	EXPECT_EQ(themes::metadataText(element, item), "First line\nSecond line");
+	element.marqueeSeconds = 10;
+	EXPECT_EQ(themes::metadataText(element, item), "First line Second line");
+}
+
+TEST_F(ThemeRailTest, FavouriteMarkAddsToARowsDrawing)
+{
+	const auto rowVertices = [&](bool favourite, const char* id) {
+		layout.id = id;
+		layout.rail.favouriteMark = true;
+		items[0].favourite = favourite;
+		renderFrame(ImVec2(-1, -1), false);
+		renderFrame(ImVec2(-1, -1), false);
+		for (ImGuiWindow* window : GImGui->Windows)
+			if (std::string(window->Name).find("themeLibraryBrowser") != std::string::npos)
+				return window->DrawList->VtxBuffer.Size;
+		return -1;
+	};
+	const int plain = rowVertices(false, "rail-star-off");
+	ASSERT_GT(plain, 0);
+	EXPECT_GT(rowVertices(true, "rail-star-on"), plain);
+}
+
+class ThemeLaunchTest : public ThemeRailTest
+{
+protected:
+	void SetUp() override
+	{
+		ThemeRailTest::SetUp();
+		layout.launchSeconds = 1;
+		layout.launchSound = "launch";
+		layout.moveSound = "move";
+	}
+	int frame(ImVec2 mouse = ImVec2(-1, -1), bool down = false)
+	{
+		auto& io = ImGui::GetIO();
+		io.MousePos = mouse;
+		io.MouseDown[0] = down;
+		ImGui::NewFrame();
+		ImGui::SetNextWindowPos(ImVec2(0, 0));
+		ImGui::SetNextWindowSize(ImVec2(500, 400));
+		ImGui::Begin("Theme Library");
+		canvasOrigin = ImGui::GetCursorScreenPos();
+		canvasSize = ImGui::GetContentRegionAvail();
+		bounds.resize(items.size());
+		const int result = themes::renderLibrary(layout, {}, items, [&](size_t index) {
+			const auto min = ImGui::GetItemRectMin();
+			const auto max = ImGui::GetItemRectMax();
+			bounds[index] = ImVec4(min.x, min.y, max.x, max.y);
+		}, std::nullopt, 1.f, {}, {}, [&](const std::string& sound) { sounds.push_back(sound); });
+		launchOverlayActive = false;
+		for (ImGuiWindow* window : GImGui->Windows)
+			if (std::string(window->Name).find("themeLibraryLaunch") != std::string::npos && window->Active)
+				launchOverlayActive = true;
+		ImGui::End();
+		ImGui::EndFrame();
+		return result;
+	}
+	// Clicks a row in single-click mode, returning what the release reported.
+	int clickRow(int index)
+	{
+		for (int i = 0; i < 30; ++i)
+			frame();
+		const ImVec2 row = rowCenter(index);
+		frame(row);
+		frame(row, true);
+		return frame(row);
+	}
+	std::vector<std::string> sounds;
+	bool launchOverlayActive = false;
+};
+
+TEST_F(ThemeLaunchTest, HoldsTheGameBackForTheSequenceThenReleasesItOnce)
+{
+	layout.id = "launch-hold";
+	EXPECT_EQ(clickRow(1), -1);
+	EXPECT_EQ(std::count(sounds.begin(), sounds.end(), "launch"), 1);
+	int released = -1, framesWaited = 0;
+	for (; framesWaited < 120 && released < 0; ++framesWaited)
+		released = frame();
+	EXPECT_EQ(released, 1);
+	EXPECT_NEAR(framesWaited, 60, 2); // One second at the harness's 60 frames per second.
+	for (int i = 0; i < 90; ++i)
+		EXPECT_EQ(frame(), -1); // Only once.
+	EXPECT_EQ(std::count(sounds.begin(), sounds.end(), "launch"), 1);
+}
+
+TEST_F(ThemeLaunchTest, WithoutASequenceTheGameStartsAtOnce)
+{
+	layout.id = "launch-none";
+	layout.launchSeconds = 0;
+	EXPECT_EQ(clickRow(1), 1);
+	EXPECT_EQ(std::count(sounds.begin(), sounds.end(), "launch"), 0);
+}
+
+TEST_F(ThemeLaunchTest, AnyPressSkipsToTheGameThatWasChosen)
+{
+	layout.id = "launch-skip-key";
+	EXPECT_EQ(clickRow(1), -1);
+	for (int i = 0; i < 5; ++i)
+		EXPECT_EQ(frame(), -1);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Space, true);
+	EXPECT_EQ(frame(), 1);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Space, false);
+	frame();
+}
+
+TEST_F(ThemeLaunchTest, ClickingAnotherRowSkipsButStillStartsTheChosenGame)
+{
+	layout.id = "launch-skip-click";
+	EXPECT_EQ(clickRow(1), -1);
+	const ImVec2 other = rowCenter(2);
+	frame(other);
+	int released = frame(other, true);
+	if (released < 0)
+		released = frame(other);
+	EXPECT_EQ(released, 1);
+}
+
+TEST_F(ThemeLaunchTest, TheSelectionHoldsStillDuringTheSequence)
+{
+	layout.id = "launch-still";
+	layout.attract.idleSeconds = 0.5f;
+	layout.attract.intervalSeconds = 0.5f;
+	EXPECT_EQ(clickRow(1), -1);
+	sounds.clear();
+	const ImVec2 inside(canvasOrigin.x + canvasSize.x / 2, canvasOrigin.y + canvasSize.y / 2);
+	frame(inside);
+	ImGui::GetIO().AddMouseWheelEvent(0, -1);
+	frame(inside);
+	for (int i = 0; i < 20; ++i)
+		frame(inside);
+	EXPECT_EQ(centeredRow(), 1);
+	EXPECT_TRUE(sounds.empty());
+}
+
+TEST_F(ThemeLaunchTest, ChosenGameLeavingTheListCancelsTheSequence)
+{
+	layout.id = "launch-gone";
+	EXPECT_EQ(clickRow(1), -1);
+	items.erase(items.begin() + 1);
+	for (int i = 0; i < 90; ++i)
+		EXPECT_EQ(frame(), -1);
+	EXPECT_FALSE(launchOverlayActive);
+}
+
+TEST_F(ThemeLaunchTest, LeavingTheLibraryAbandonsTheSequence)
+{
+	layout.id = "launch-left";
+	EXPECT_EQ(clickRow(1), -1);
+	for (int i = 0; i < 90; ++i) // Settings or another screen is showing instead.
+	{
+		ImGui::NewFrame();
+		ImGui::EndFrame();
+	}
+	for (int i = 0; i < 90; ++i)
+		EXPECT_EQ(frame(), -1);
+	EXPECT_FALSE(launchOverlayActive);
+}
+
+TEST_F(ThemeLaunchTest, OverlayExistsOnlyDuringTheSequence)
+{
+	layout.id = "launch-overlay";
+	frame();
+	EXPECT_FALSE(launchOverlayActive);
+	EXPECT_EQ(clickRow(1), -1);
+	frame();
+	EXPECT_TRUE(launchOverlayActive);
+}
+
+TEST_F(ThemeRailTest, MoveSoundIsOptional)
+{
+	layout.id = "rail-no-sound";
+	settle();
+	const ImVec2 next = rowCenter(1);
+	renderFrame(next, false);
+	renderFrame(next, true);
+	EXPECT_EQ(renderFrame(next, false), 1);
+}
+
+TEST_F(ThemeRailTest, BadgesRenderAndDoNotDisturbTheRail)
+{
+	layout.id = "rail-badges";
+	layout.rail.badges = {{"system"}, {"genre"}};
+	items[1].metadata = {{"system", "Atomiswave"}, {"genre", "A very long genre description that would otherwise push the title off the row"}};
+	settle(ImVec2(-1, -1), 2);
+	EXPECT_EQ(centeredRow(), 0);
+}
+
+TEST_F(ThemeRailTest, AttractStepsWhenIdleAndStopsOnInput)
+{
+	layout.id = "rail-attract";
+	layout.attract.idleSeconds = 1;
+	layout.attract.intervalSeconds = 0.5f;
+	settle(ImVec2(10, 10), 50);
+	EXPECT_EQ(centeredRow(), 0);
+	settle(ImVec2(10, 10), 60);
+	const int moved = centeredRow();
+	EXPECT_GE(moved, 1);
+	// A moving pointer restarts the idle wait, and the selection holds still.
+	for (int i = 0; i < 50; ++i)
+		renderFrame(ImVec2(10.f + i, 10), false);
+	EXPECT_EQ(centeredRow(), moved);
+}
+
+TEST_F(ThemeRailTest, AttractWrapsAroundTheLibrary)
+{
+	layout.id = "rail-wrap";
+	layout.attract.idleSeconds = 1;
+	layout.attract.intervalSeconds = 0.5f;
+	items.resize(2);
+	settle(ImVec2(10, 10), 60 + 30 * 2 + 25);
+	EXPECT_EQ(centeredRow(), 0);
+}
+
+TEST_F(ThemeRailTest, ElementsAppearOnlyInTheirBrowsingState)
+{
+	layout.id = "rail-when";
+	layout.attract.idleSeconds = 1;
+	themes::Element panel;
+	panel.type = "panel";
+	panel.rect = {0, 0, 1, 1};
+	panel.when = "attract";
+	layout.elements.push_back(panel);
+	renderFrame(ImVec2(10, 10), false);
+	const int interactive = overlayVertices();
+	ASSERT_GE(interactive, 0);
+	settle(ImVec2(10, 10), 70);
+	EXPECT_GT(overlayVertices(), interactive);
+}
+
+TEST_F(ThemeRailTest, BleedElementsReachPastAFixedAspectCanvas)
+{
+	layout.id = "rail-bleed";
+	layout.canvasAspect = 1;
+	themes::Element panel;
+	panel.type = "panel";
+	panel.rect = {0, 0, 1, 1};
+	panel.color = 0xff0000ff;
+	panel.bleed = true;
+	layout.elements.push_back(panel);
+	renderFrame(ImVec2(-1, -1), false);
+	ImDrawList* drawList = nullptr;
+	for (ImGuiWindow* window : GImGui->Windows)
+		if (std::string(window->Name).find("themeLibraryOverlay") != std::string::npos)
+			drawList = window->DrawList;
+	ASSERT_NE(drawList, nullptr);
+	ASSERT_GE(drawList->VtxBuffer.Size, 4);
+	float width = 0;
+	for (const ImDrawVert& vertex : drawList->VtxBuffer)
+		width = std::max(width, vertex.pos.x - canvasOrigin.x);
+	EXPECT_FLOAT_EQ(width, canvasSize.x);
+	EXPECT_GT(canvasSize.x, canvasSize.y); // The panel covers more than the square canvas.
+}
+
+TEST_F(ThemeLibraryTest, MarqueeAndSlantedTextDrawWithoutWrapping)
+{
+	layout.id = "motion-text";
+	themes::Element text;
+	text.type = "text";
+	text.rect = {0, 0, 1, 0.1f};
+	text.text = "A long scrolling message";
+	text.marqueeSeconds = 10;
+	text.slant = 0.2f;
+	layout.elements.push_back(text);
+	renderFrame(ImVec2(-1, -1), false);
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_NE(bounds[0].w, 0.f);
 }
 
 TEST_F(ThemeLibraryTest, SmallGridCellsAndAspectFitAreExplicitLayoutOptions)

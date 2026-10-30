@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace themes
 {
@@ -176,16 +177,98 @@ std::string elementText(const Element& element, const LibraryItem& item)
 	if (element.type == "text")
 		return element.text;
 	if (element.type == "metadata")
-	{
-		const auto it = item.metadata.find(element.source);
-		return it == item.metadata.end() || it->second.empty() ? element.text : it->second;
-	}
+		return metadataText(element, item);
 	return {};
 }
 
-void drawElement(const Element& element, const Canvas& canvas, const std::string& themeDirectory,
-		const LibraryItem* item, ImDrawList* drawList, const std::string& previewSource)
+// The library's overall state, for elements that respond to it.
+struct LibraryState
 {
+	bool attracting = false;
+	float launchElapsed = -1; // Seconds since the launch sequence began; negative when not launching.
+	float launchProgress = 0; // 0 to 1 across the sequence.
+};
+
+// Spin and sweep share an image's rectangle as their clip region.
+void drawMovingImage(const Element& element, const std::string& path, const Canvas& canvas, const ImRect& visible, ImDrawList* drawList,
+		const LibraryState& state, uint32_t tint)
+{
+	ImguiFileTexture texture(path);
+	const ImTextureID id = texture.getId();
+	if (id == ImTextureID{})
+		return;
+	const double time = ImGui::GetTime();
+	drawList->PushClipRect(visible.Min, visible.Max, true);
+	if (element.spinSeconds > 0)
+	{
+		const ImVec2 center(canvas.origin.x + element.spinCenterX * canvas.size.x, canvas.origin.y + element.spinCenterY * canvas.size.y);
+		const float radius = element.spinRadius * canvas.size.x;
+		// Integrated rather than derived from the clock, so a change of pace does not jump the angle.
+		static std::unordered_map<const Element*, double> turns;
+		double speed = 1.0 / element.spinSeconds;
+		if (state.launchElapsed >= 0 && element.spinLaunchSeconds > 0)
+			speed += (1.0 / element.spinLaunchSeconds - speed) * state.launchProgress * state.launchProgress;
+		double& turn = turns[&element];
+		turn = std::fmod(turn + ImGui::GetIO().DeltaTime * speed, 1.0);
+		const float angle = static_cast<float>(turn * 2.0 * IM_PI);
+		if (element.spinHole >= 0)
+		{
+			constexpr int segments = 96;
+			const std::vector<DiscVertex> ring = discRing(center.x, center.y, radius, element.spinHole, angle, segments);
+			drawList->PushTexture(id);
+			drawList->PrimReserve(segments * 6, static_cast<int>(ring.size()));
+			const ImDrawIdx base = static_cast<ImDrawIdx>(drawList->_VtxCurrentIdx);
+			for (const DiscVertex& vertex : ring)
+				drawList->PrimWriteVtx(ImVec2(vertex.x, vertex.y), ImVec2(vertex.u, vertex.v), color(tint));
+			for (int i = 0; i < segments; ++i)
+			{
+				const ImDrawIdx outer = static_cast<ImDrawIdx>(base + i * 2), inner = static_cast<ImDrawIdx>(outer + 1);
+				const ImDrawIdx nextOuter = static_cast<ImDrawIdx>(outer + 2), nextInner = static_cast<ImDrawIdx>(outer + 3);
+				drawList->PrimWriteIdx(outer);
+				drawList->PrimWriteIdx(nextOuter);
+				drawList->PrimWriteIdx(nextInner);
+				drawList->PrimWriteIdx(outer);
+				drawList->PrimWriteIdx(nextInner);
+				drawList->PrimWriteIdx(inner);
+			}
+			drawList->PopTexture();
+			// Textured triangles have hard edges: a soft line hides the steps around the rim.
+			drawList->AddCircle(center, radius, IM_COL32(0, 0, 0, 70), segments, 1.5f);
+			if (element.spinHole > 0)
+				drawList->AddCircle(center, radius * element.spinHole, IM_COL32(0, 0, 0, 70), segments, 1.5f);
+		}
+		else
+		{
+			const float c = std::cos(angle) * radius, s = std::sin(angle) * radius;
+			drawList->AddImageQuad(id, ImVec2(center.x - c + s, center.y - s - c), ImVec2(center.x + c + s, center.y + s - c),
+					ImVec2(center.x + c - s, center.y + s + c), ImVec2(center.x - c - s, center.y - s + c),
+					ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), color(tint));
+		}
+	}
+	else
+	{
+		const float height = visible.GetWidth() / std::max(0.001f, imguiDriver->getAspectRatio(id));
+		// A launch's sweep starts with the launch, entering from the top edge.
+		const double clock = element.when == "launching" ? state.launchElapsed : time;
+		const float phase = static_cast<float>(std::fmod(clock / element.sweepSeconds, 1.0));
+		const float top = visible.Min.y - height + phase * (visible.GetHeight() + height);
+		drawList->AddImage(id, ImVec2(visible.Min.x, top), ImVec2(visible.Max.x, top + height), ImVec2(0, 0), ImVec2(1, 1), color(tint));
+	}
+	drawList->PopClipRect();
+}
+
+void drawElement(const Element& element, const Canvas& canvas, const std::string& themeDirectory,
+		const LibraryItem* item, ImDrawList* drawList, const std::string& previewSource, const LibraryState& state)
+{
+	if ((element.when == "attract" && !state.attracting) || (element.when == "interactive" && state.attracting)
+			|| (element.when == "launching" && state.launchElapsed < 0))
+		return;
+	uint32_t tint = element.color;
+	if (element.launchFadeFrom >= 0)
+	{
+		const float fade = std::clamp((state.launchProgress - element.launchFadeFrom) / (1.f - element.launchFadeFrom), 0.f, 1.f);
+		tint = (tint & 0xffffff00) | static_cast<uint32_t>((tint & 0xff) * fade);
+	}
 	const ImRect rect = normalizedRect(canvas, element.rect);
 	const ImRect visible(ImMax(rect.Min, canvas.origin), ImMin(rect.Max, canvas.max));
 	if (visible.GetWidth() <= 0 || visible.GetHeight() <= 0)
@@ -194,10 +277,10 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 	{
 		const int start = drawList->VtxBuffer.Size;
 		drawList->AddRectFilled(visible.Min, visible.Max,
-				element.endColor ? IM_COL32_WHITE : color(element.color), uiScaled(element.rounding));
+				element.endColor ? IM_COL32_WHITE : color(tint), uiScaled(element.rounding));
 		if (element.endColor)
 		{
-			const ImVec4 from = ImGui::ColorConvertU32ToFloat4(color(element.color));
+			const ImVec4 from = ImGui::ColorConvertU32ToFloat4(color(tint));
 			const ImVec4 to = ImGui::ColorConvertU32ToFloat4(color(*element.endColor));
 			for (int i = start; i < drawList->VtxBuffer.Size; ++i)
 			{
@@ -214,7 +297,10 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 	}
 	else if (element.type == "image")
 	{
-		drawFittedImage(drawList, visible, element.resolvedAsset, element.fit, element.color, element.rounding);
+		if (!element.resolvedAsset.empty() && (element.spinSeconds > 0 || element.sweepSeconds > 0))
+			drawMovingImage(element, element.resolvedAsset, canvas, visible, drawList, state, tint);
+		else
+			drawFittedImage(drawList, visible, element.resolvedAsset, element.fit, tint, element.rounding);
 	}
 	else if (item && element.type == "artwork")
 	{
@@ -224,7 +310,13 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 		const std::string fallback = element.source == "preview" && source != "cover" ? "none" : element.fallback;
 		std::string path = artworkPath(*item, source, fallback);
 		if (path.empty()) path = element.resolvedFallbackAsset;
-		drawFittedImage(drawList, visible, path, element.fit, element.color, element.rounding);
+		if (element.spinSeconds > 0)
+		{
+			if (!path.empty())
+				drawMovingImage(element, path, canvas, visible, drawList, state, tint);
+		}
+		else
+			drawFittedImage(drawList, visible, path, element.fit, tint, element.rounding);
 	}
 	else if (element.type == "text" || (item && element.type == "metadata"))
 	{
@@ -236,43 +328,76 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 				std::clamp(element.fontSize * canvas.size.y * canvas.textScale, 1.f, 96.f));
 		ImGui::PushFont(element.bold ? boldFont : nullptr, fontSize);
 		ImVec2 textPos = visible.Min;
-		if (element.align != "left")
+		float wrapWidth = visible.GetWidth();
+		if (element.marqueeSeconds > 0)
+		{
+			// New text starts at the right edge, and any length travels at the same readable speed.
+			struct Marquee { std::string text; double start = 0; };
+			static std::unordered_map<const Element*, Marquee> marquees;
+			Marquee& marquee = marquees[&element];
+			if (marquee.text != text)
+				marquee = {text, ImGui::GetTime()};
+			const float textWidth = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0.f, text.c_str()).x;
+			const double speed = visible.GetWidth() / element.marqueeSeconds;
+			const double travelled = std::fmod((ImGui::GetTime() - marquee.start) * speed, visible.GetWidth() + textWidth);
+			textPos.x = visible.Max.x - static_cast<float>(travelled);
+			wrapWidth = 0;
+		}
+		else if (element.align != "left")
 		{
 			const float textWidth = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX,
 					element.wrap ? visible.GetWidth() : 0.f, text.c_str()).x;
 			textPos.x += std::max(0.f, visible.GetWidth() - textWidth) * (element.align == "center" ? 0.5f : 1.f);
 		}
-		if (element.wrap)
+		if (element.marqueeSeconds > 0 || element.slant > 0)
+		{
+			drawList->PushClipRect(visible.Min, visible.Max, true);
+			const int firstVertex = drawList->VtxBuffer.Size;
+			drawList->AddText(ImGui::GetFont(), fontSize, textPos, color(tint), text.c_str(), nullptr, wrapWidth);
+			if (element.slant > 0)
+				for (int i = firstVertex; i < drawList->VtxBuffer.Size; ++i)
+					drawList->VtxBuffer[i].pos.x += (textPos.y + fontSize - drawList->VtxBuffer[i].pos.y) * element.slant;
+			drawList->PopClipRect();
+		}
+		else if (element.wrap)
 		{
 			// Clip at complete lines so a short description panel never shows half a glyph.
 			const float bottom = visible.Min.y + std::floor(visible.GetHeight() / fontSize) * fontSize;
 			drawList->PushClipRect(visible.Min, ImVec2(visible.Max.x, bottom), true);
-			drawList->AddText(ImGui::GetFont(), fontSize, textPos, color(element.color), text.c_str(), nullptr, visible.GetWidth());
+			drawList->AddText(ImGui::GetFont(), fontSize, textPos, color(tint), text.c_str(), nullptr, visible.GetWidth());
 			drawList->PopClipRect();
 		}
 		else
-			drawSingleLine(drawList, ImRect(textPos, visible.Max), text, color(element.color));
+			drawSingleLine(drawList, ImRect(textPos, visible.Max), text, color(tint));
 		ImGui::PopFont();
 	}
 }
 
-void drawElements(const Layout& layout, const Canvas& canvas, const std::string& themeDirectory,
-		const LibraryItem* item, ImDrawList* drawList, bool beforeBrowser, const Rect& details, bool detailsOnly, const std::string& previewSource)
+enum class ElementLayer { BehindBrowser, OverBrowser, OverEverything };
+
+void drawElements(const Layout& layout, const Canvas& canvas, const Canvas& content, const std::string& themeDirectory,
+		const LibraryItem* item, ImDrawList* drawList, ElementLayer layer, const Rect& details, bool detailsOnly,
+		const std::string& previewSource, const LibraryState& state)
 {
 	std::vector<const Element*> sorted;
 	sorted.reserve(layout.elements.size());
 	for (const Element& element : layout.elements)
 	{
-		const bool inDetails = details.w > 0.f && element.rect.x >= details.x - 0.0001f
+		// A launch plays over the whole library, including its buttons, which draw in their own windows.
+		const ElementLayer elementLayer = element.zIndex < 0 ? ElementLayer::BehindBrowser
+				: element.when == "launching" ? ElementLayer::OverEverything : ElementLayer::OverBrowser;
+		// A launch and bleeding elements span the library, so they can not scroll with the details column.
+		const bool inDetails = elementLayer != ElementLayer::OverEverything && !element.bleed
+				&& details.w > 0.f && element.rect.x >= details.x - 0.0001f
 				&& element.rect.x + element.rect.w <= details.x + details.w + 0.0001f;
-		if ((element.zIndex < 0) == beforeBrowser && inDetails == detailsOnly)
+		if (elementLayer == layer && inDetails == detailsOnly)
 			sorted.push_back(&element);
 	}
 	std::stable_sort(sorted.begin(), sorted.end(), [](const Element* a, const Element* b) {
 		return a->zIndex < b->zIndex;
 	});
 	for (const Element* element : sorted)
-		drawElement(*element, canvas, themeDirectory, item, drawList, previewSource);
+		drawElement(*element, element->bleed ? content : canvas, themeDirectory, item, drawList, previewSource, state);
 }
 
 bool browserSelectable(const Layout& layout, bool selected, const ImVec2& size)
@@ -315,7 +440,8 @@ const char* metadataLabel(const std::string& field)
 		{"title", "Title"}, {"developer", "Developer"}, {"publisher", "Publisher"},
 		{"genre", "Genre"}, {"players", "Players"}, {"releaseDate", "Released"},
 		{"productId", "Product ID"}, {"region", "Region"}, {"format", "Format"},
-		{"playTime", "Play time"}, {"lastPlayed", "Last played"}, {"size", "File size"}
+		{"playTime", "Play time"}, {"lastPlayed", "Last played"}, {"size", "File size"},
+		{"system", "System"}
 	};
 	const auto label = labels.find(field);
 	return label == labels.end() ? field.c_str() : i18n::T(label->second);
@@ -445,7 +571,7 @@ void drawButtonContents(const ImRect& rect, const std::string& label, const std:
 
 void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<LibraryItem>& items,
 		int columns, int& selected, std::string& previewSource, bool& scrollSelection, int& activated,
-		const std::function<void(size_t)>& toggleFavourite)
+		const std::function<void(size_t)>& toggleFavourite, bool& focusFirst)
 {
 	const size_t count = items.size();
 	for (size_t i = 0; i < layout.elements.size(); ++i)
@@ -471,13 +597,21 @@ void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<L
 		const uint32_t textColor = selectedButton && element.selectedColor ? *element.selectedColor : element.color;
 		const auto buttonBackground = selectedButton && element.selectedBackground ? element.selectedBackground : element.background;
 		const auto borderColor = selectedButton && element.selectedBorderColor ? element.selectedBorderColor : element.borderColor;
+		const bool hasImage = !element.buttonImage.empty();
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(color(textColor)));
 		if (borderColor)
 		{
 			ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(color(*borderColor)));
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, uiScaled(1.f));
 		}
-		if (buttonBackground)
+		if (hasImage)
+		{
+			// The artwork draws every state: a drawn hover fill would show past its shape.
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+		}
+		else if (buttonBackground)
 		{
 			const ImVec4 background = ImGui::ColorConvertU32ToFloat4(color(*buttonBackground));
 			ImVec4 hovered = background;
@@ -501,23 +635,40 @@ void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<L
 		const bool fitIconLabel = !icon.empty() && contentWidth > rect.GetWidth() - uiScaled(16.f);
 		if (fitIconLabel) ImGui::PushFont(nullptr, ImGui::GetFontSize() * std::max(0.1f, rect.GetWidth() - uiScaled(16.f)) / contentWidth);
 		ImGui::BeginDisabled(disabled);
+		if (focusFirst && !disabled)
+		{
+			ImGui::SetKeyboardFocusHere();
+			ImGui::SetNavCursorVisible(true); // Show where the focus went: it arrived from a row with no cursor.
+			focusFirst = false;
+		}
 		// Keep the widget ID stable when its visible label changes after a toggle.
 		const bool pressed = ImGui::Button(((icon.empty() ? label : std::string()) + "###control").c_str(), rect.GetSize());
 		if (!icon.empty()) drawButtonContents(rect, label, icon);
 		ImGui::EndDisabled();
+		const bool tooltipHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+		if (hasImage)
+		{
+			const bool lit = !disabled && (ImGui::IsItemHovered() || (ImGui::IsItemFocused() && GImGui->NavCursorVisible));
+			const std::string& selectedImage = element.buttonSelectedImage.empty() ? element.buttonImage : element.buttonSelectedImage;
+			const std::string& selectedLit = element.buttonSelectedHoverImage.empty() ? selectedImage : element.buttonSelectedHoverImage;
+			const std::string& litImage = element.buttonHoverImage.empty() ? element.buttonImage : element.buttonHoverImage;
+			const std::string& image = selectedButton ? (lit ? selectedLit : selectedImage) : (lit ? litImage : element.buttonImage);
+			drawFittedImage(ImGui::GetWindowDrawList(), rect, image, "stretch", disabled ? 0xffffff66 : 0xffffffff);
+		}
 		if (fitIconLabel) ImGui::PopFont();
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::PopFont();
+		ImGui::PopStyleColor((hasImage || buttonBackground ? 4 : 1) + (borderColor ? 1 : 0));
+		ImGui::PopStyleVar((element.buttonRounding ? 2 : 1) + (borderColor ? 1 : 0));
+		ImGui::EndChild();
+		ImGui::PopStyleVar();
+		// After all the button's styling, which would otherwise color and cramp the tooltip.
+		if (tooltipHovered)
 		{
 			if (missingArtwork)
 				ImGui::SetTooltip("%s", i18n::T("This artwork is not available for this game."));
 			else if (element.action == "favourite" && item && item->canFavourite)
 				ImGui::SetTooltip("%s", i18n::T(item->favourite ? "Remove from favourites" : "Add to favourites"));
 		}
-		ImGui::PopFont();
-		ImGui::PopStyleColor((buttonBackground ? 4 : 1) + (borderColor ? 1 : 0));
-		ImGui::PopStyleVar((element.buttonRounding ? 2 : 1) + (borderColor ? 1 : 0));
-		ImGui::EndChild();
-		ImGui::PopStyleVar();
 		if (!pressed || count == 0) continue;
 		if (element.action == "activate") activated = selected;
 		else if (element.action == "artwork") previewSource = element.source;
@@ -538,6 +689,367 @@ ImU32 browserTextColor(const Layout& layout, bool selected)
 		return color(*layout.selectedTextColor);
 	return layout.textColor ? color(*layout.textColor) : ImGui::GetColorU32(ImGuiCol_Text);
 }
+
+ImU32 withAlpha(ImU32 value, float alpha)
+{
+	const unsigned int a = static_cast<unsigned int>(((value >> IM_COL32_A_SHIFT) & 0xff) * std::clamp(alpha, 0.f, 1.f));
+	return (value & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+}
+
+struct RailState
+{
+	float position = 0;
+	// The last row clicked: the rail moves at once, so a second click can land on a different row.
+	std::string clickedKey;
+	double clickedAt = 0;
+	ImVec2 clickedPos;
+	float wheel = 0;
+	float dragDistance = 0;
+	bool dragging = false, dragged = false;
+	bool rowFocused = false;
+	bool moved = false; // The wheel or a drag moved the selection last frame.
+	bool refocus = false; // Keyboard focus landed on another row; hand it to the selection.
+	bool focusButtons = false; // Right was pressed on the rail: focus the layout's first button.
+	std::string focusedKey;
+};
+
+// Rows move while the player browses, so they select when pressed, never on hover: a row
+// sliding under a resting pointer must not change the selection. For the same reason Up and
+// Down step along the rail directly. ImGui's geometric navigation scores moving rows against
+// other controls, and can leave the rail with games still to reach.
+void drawRail(const Layout& layout, const Canvas& canvas, const std::vector<LibraryItem>& items, ImDrawList* drawList,
+		RailState& state, int& selected, std::string& selectedId, int& activated, bool selectionMoved,
+		const std::function<void(size_t)>& afterItem)
+{
+	const Rail& rail = layout.rail;
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const ImVec2 area = ImGui::GetContentRegionAvail();
+	const float centerY = origin.y + area.y * rail.center;
+	const float rowHeight = std::max(ImGui::GetFontSize() + uiScaled(8.f),
+			layout.rowHeight > 0 ? layout.rowHeight * canvas.size.y * canvas.textScale : area.y / (rail.visible * 2 + 1));
+	const float rowStep = rowHeight * 1.04f;
+	const int count = static_cast<int>(items.size());
+
+	const float blend = 1.f - std::exp(-ImGui::GetIO().DeltaTime * 14.f);
+	state.position += (selected - state.position) * blend;
+	state.position = std::clamp(state.position, selected - rail.visible - 1.f, selected + rail.visible + 1.f);
+
+	std::vector<int> rows;
+	for (int i = std::max(0, selected - rail.visible - 1); i <= std::min(count - 1, selected + rail.visible + 1); ++i)
+		rows.push_back(i);
+	// Nearer rows draw last, overlap farther ones, and receive input first.
+	std::stable_sort(rows.begin(), rows.end(), [&](int a, int b) {
+		return std::fabs(a - state.position) > std::fabs(b - state.position);
+	});
+
+	ImGuiContext& g = *GImGui;
+	// With nothing focused the keyboard has nowhere to go, and the first press would be lost.
+	if (g.NavWindow == nullptr)
+		ImGui::FocusWindow(ImGui::GetCurrentWindow());
+	const bool locked = (g.CurrentItemFlags & ImGuiItemFlags_Disabled) != 0; // A launch is under way.
+	if (locked && g.NavMoveSubmitted)
+		ImGui::NavMoveRequestCancel();
+	bool stepped = false;
+	// Until the keyboard has been used, ImGui's focus sits unseen on some control. The player
+	// is looking at the rail, so the arrows belong to it.
+	if ((state.rowFocused || g.NavId == 0 || !g.NavCursorVisible) && g.NavMoveSubmitted && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup)
+			&& (g.NavMoveDir == ImGuiDir_Up || g.NavMoveDir == ImGuiDir_Down))
+	{
+		const int target = selected + (g.NavMoveDir == ImGuiDir_Down ? 1 : -1);
+		// At either end the request carries on, so that the rail's neighbours stay reachable.
+		if (target >= 0 && target < count)
+		{
+			ImGui::NavMoveRequestCancel();
+			selected = target;
+			selectedId = itemKey(items[target], static_cast<size_t>(target));
+			stepped = true;
+		}
+	}
+	// Buttons can sit far below the selected row, where Right would not find them by geometry.
+	if (state.rowFocused && g.NavMoveSubmitted && g.NavMoveDir == ImGuiDir_Right
+			&& std::any_of(layout.elements.begin(), layout.elements.end(), [](const Element& element) { return element.type == "button"; }))
+	{
+		ImGui::NavMoveRequestCancel();
+		state.focusButtons = true;
+	}
+	// ImGui ignores confirm while its focus cursor is hidden, and stepping above leaves it hidden.
+	if (!g.NavCursorVisible && !locked && selected >= 0 && !ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup))
+		for (const ImGuiKey confirm : {ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space, ImGuiKey_NavGamepadActivate})
+			if (ImGui::IsKeyPressed(confirm, false))
+				activated = selected;
+	const bool moveFocus = stepped || state.refocus || ((selectionMoved || state.moved) && state.rowFocused);
+	state.moved = false;
+	state.refocus = false;
+	bool rowFocused = false;
+	const bool doubleClick = layout.activation == "doubleClick";
+	ImGuiIO& io = ImGui::GetIO();
+	// A double-click means the row that was clicked first, wherever the rail has since taken it.
+	const ImVec2 sinceClick(io.MousePos.x - state.clickedPos.x, io.MousePos.y - state.clickedPos.y);
+	const bool secondClick = doubleClick && !locked && !state.clickedKey.empty() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+			&& ImGui::GetTime() - state.clickedAt <= io.MouseDoubleClickTime
+			&& ImLengthSqr(sinceClick) <= io.MouseDoubleClickMaxDist * io.MouseDoubleClickMaxDist;
+	if (secondClick)
+		for (int i = 0; i < count; ++i)
+			if (itemKey(items[i], static_cast<size_t>(i)) == state.clickedKey)
+				activated = i;
+	const auto rememberClick = [&](const std::string& key) {
+		state.clickedKey = key;
+		state.clickedAt = ImGui::GetTime();
+		state.clickedPos = io.MousePos;
+	};
+	for (const int i : rows)
+	{
+		const float distance = i - state.position;
+		const float reach = std::fabs(distance);
+		if (reach > rail.visible + 0.75f)
+			continue;
+		const LibraryItem& item = items[i];
+		const std::string key = itemKey(item, static_cast<size_t>(i));
+		const float scale = std::max(0.3f, 1.f - reach * rail.falloff);
+		const float height = rowHeight * scale;
+		const float y = centerY + distance * rowStep * (1.f - reach * rail.falloff * 0.5f);
+		const float top = y - height * 0.5f, bottom = y + height * 0.5f;
+		const float insetTop = rail.tilt * area.x * std::fabs(distance - 0.5f);
+		const float insetBottom = rail.tilt * area.x * std::fabs(distance + 0.5f);
+		const float slant = rail.skew * area.x;
+		const ImVec2 points[4] = {
+			ImVec2(origin.x + insetTop, top), ImVec2(origin.x + area.x - insetTop, top),
+			ImVec2(origin.x + area.x - insetBottom - slant, bottom), ImVec2(origin.x + insetBottom, bottom)
+		};
+		// A row crossing the browser's edge fades away rather than being sliced by it.
+		const float overflow = std::max(0.f, origin.y - top) + std::max(0.f, bottom - (origin.y + area.y));
+		const float alpha = std::clamp(1.f - reach * rail.fade, 0.f, 1.f) * std::clamp(rail.visible + 0.75f - reach, 0.f, 1.f)
+				* std::clamp(1.f - overflow / (height * 0.55f), 0.f, 1.f);
+
+		ImguiID id(key);
+		const float left = std::min(points[0].x, points[3].x);
+		ImGui::SetCursorScreenPos(ImVec2(left, top));
+		// Tabbing into the rail lands on the selection, not on whichever row comes first.
+		ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, i != selected);
+		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0, 0, 0, 0));
+		// A focused row is the selected row, which already stands out; a square outline would not fit its shape.
+		ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
+		const ImGuiSelectableFlags flags = doubleClick ? ImGuiSelectableFlags_AllowDoubleClick : ImGuiSelectableFlags_None;
+		const bool pressed = ImGui::Selectable("##libraryItem", selectedId == key, flags, ImVec2(std::max(1.f, points[1].x - left), height));
+		ImGui::PopStyleColor(4);
+		ImGui::PopItemFlag();
+		// Rows submit far to near, so initial focus must be pointed at the selection.
+		if (i == selected)
+		{
+			ImGui::SetItemDefaultFocus();
+			if (moveFocus)
+			{
+				ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
+				state.focusedKey = key;
+				rowFocused = true;
+			}
+		}
+		const bool hovered = ImGui::IsItemHovered();
+		const bool focused = ImGui::IsItemFocused();
+		if (focused)
+		{
+			rowFocused = true;
+			if (state.focusedKey != key)
+			{
+				state.focusedKey = key;
+				if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+				{
+					// A click focuses its row on press, before Selectable reports it on release.
+					if (!secondClick)
+					{
+						rememberClick(key);
+						selected = i;
+						selectedId = key;
+					}
+				}
+				else if (i != selected)
+					state.refocus = true;
+			}
+		}
+		if (pressed && !state.dragged && !secondClick)
+		{
+			rememberClick(key);
+			selected = i;
+			selectedId = key;
+			if (activatesItem(layout, pressed))
+				activated = i;
+		}
+		const bool isSelected = selectedId == key;
+
+		const ImU32 selector = layout.selectorColor ? color(*layout.selectorColor) : ImGui::GetColorU32(ImGuiCol_Header);
+		const ImU32 row = rail.rowColor ? color(*rail.rowColor) : ImGui::GetColorU32(ImGuiCol_FrameBg);
+		// Blend toward the selection color: row text must stay readable on the hovered fill.
+		const ImU32 hoverRow = ImGui::ColorConvertFloat4ToU32(ImLerp(ImGui::ColorConvertU32ToFloat4(row), ImGui::ColorConvertU32ToFloat4(selector), 0.35f));
+		drawList->AddConvexPolyFilled(points, 4, withAlpha(isSelected ? selector : hovered ? hoverRow : row, alpha));
+
+		const float fontSize = ImGui::GetFontSize() * scale;
+		const float padding = height * 0.28f;
+		const float textY = y - fontSize * 0.5f;
+		const ImU32 text = withAlpha(browserTextColor(layout, isSelected), alpha);
+		float textLeft = origin.x + std::max(insetTop, insetBottom) + padding;
+		float textRight = origin.x + area.x - std::max(insetTop, insetBottom) - slant - padding * 0.5f;
+		if (rail.numbers)
+		{
+			const std::string number = (i < 9 ? "0" : "") + std::to_string(i + 1);
+			const float size = fontSize * 0.78f;
+			drawList->AddText(ImGui::GetFont(), size, ImVec2(textLeft, y - size * 0.5f), withAlpha(text, 0.85f), number.c_str());
+			textLeft += ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.f, "000").x + padding * 0.5f;
+		}
+		if (rail.favouriteMark && item.favourite)
+		{
+			const float radius = fontSize * 0.42f;
+			const ImVec2 center(textLeft + radius, y);
+			ImVec2 star[10];
+			for (int point = 0; point < 10; ++point)
+			{
+				const float angle = -IM_PI / 2.f + point * IM_PI / 5.f;
+				const float reachOut = point % 2 == 0 ? radius : radius * 0.42f;
+				star[point] = ImVec2(center.x + std::cos(angle) * reachOut, center.y + std::sin(angle) * reachOut);
+			}
+			drawList->AddConcavePolyFilled(star, 10, withAlpha(isSelected ? text : selector, alpha));
+			textLeft += radius * 2.f + padding * 0.5f;
+		}
+		const std::vector<std::string> badges = railBadges(rail, item);
+		for (auto badge = badges.rbegin(); badge != badges.rend(); ++badge)
+		{
+			const float size = std::max(fontSize * 0.6f, 9.f);
+			const ImVec2 badgeSize = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.f, badge->c_str());
+			const float margin = size * 0.45f;
+			// Metadata can be long; the game's title keeps most of the row.
+			const float boxWidth = std::min(badgeSize.x + margin * 2.f, (textRight - textLeft) * 0.42f);
+			const ImVec2 boxMax(textRight, y + badgeSize.y * 0.5f + margin * 0.6f);
+			const ImVec2 boxMin(boxMax.x - boxWidth, y - badgeSize.y * 0.5f - margin * 0.6f);
+			drawList->AddRect(boxMin, boxMax, text, 0.f, 0, 1.f);
+			drawList->PushClipRect(ImVec2(boxMin.x + margin, boxMin.y), ImVec2(boxMax.x - margin, boxMax.y), true);
+			drawList->AddText(ImGui::GetFont(), size, ImVec2(boxMin.x + margin, y - badgeSize.y * 0.5f), text, badge->c_str());
+			drawList->PopClipRect();
+			textRight = boxMin.x - padding * 0.5f;
+		}
+		if (!item.title.empty() && textRight > textLeft)
+		{
+			drawList->PushClipRect(ImVec2(textLeft, top), ImVec2(textRight, bottom), true);
+			drawList->AddText(ImGui::GetFont(), fontSize, ImVec2(textLeft, textY), text, item.title.c_str());
+			drawList->PopClipRect();
+		}
+		if (afterItem)
+			afterItem(static_cast<size_t>(i));
+	}
+	state.rowFocused = rowFocused;
+	if (!rowFocused)
+		state.focusedKey.clear();
+	if (secondClick) // The press focused whichever row was under the pointer.
+		state.refocus = true;
+
+	// Wheel and drag step through the games: the rail has no scrollbar to move.
+	const bool hovering = !locked && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+	int steps = 0;
+	if (hovering && io.MouseWheel != 0)
+	{
+		state.wheel -= io.MouseWheel;
+		steps += static_cast<int>(state.wheel);
+		state.wheel -= static_cast<int>(state.wheel);
+	}
+	if (hovering && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	{
+		state.dragging = true;
+		state.dragDistance = 0;
+	}
+	if (state.dragging && ImGui::IsMouseDragging(ImGuiMouseButton_Left, uiScaled(6.f)))
+	{
+		state.dragged = true;
+		state.dragDistance -= io.MouseDelta.y;
+		steps += static_cast<int>(state.dragDistance / rowStep);
+		state.dragDistance -= static_cast<int>(state.dragDistance / rowStep) * rowStep;
+	}
+	if (!io.MouseDown[ImGuiMouseButton_Left] && !ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+	{
+		state.dragging = false;
+		state.dragged = false;
+	}
+	if (steps != 0)
+	{
+		selected = std::clamp(selected + steps, 0, count - 1);
+		selectedId = itemKey(items[selected], static_cast<size_t>(selected));
+		state.moved = true;
+	}
+}
+
+// A fresh press of anything, as opposed to a key or button still held from earlier.
+bool playerPressedAnything()
+{
+	for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key)
+		if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false))
+			return true;
+	return false;
+}
+
+// Any player input keeps attract mode away, including an open menu or text field.
+bool playerInputThisFrame()
+{
+	const ImGuiIO& io = ImGui::GetIO();
+	if (io.WantTextInput || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup))
+		return true;
+	if (io.MouseWheel != 0 || io.MouseWheelH != 0 || ImGui::IsAnyMouseDown())
+		return true;
+	if (ImGui::IsMousePosValid() && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0))
+		return true;
+	for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key)
+		if (ImGui::IsKeyDown(static_cast<ImGuiKey>(key)))
+			return true;
+	return false;
+}
+}
+
+std::vector<DiscVertex> discRing(float centerX, float centerY, float radius, float hole, float angle, int segments)
+{
+	std::vector<DiscVertex> ring;
+	ring.reserve((segments + 1) * 2);
+	for (int i = 0; i <= segments; ++i)
+	{
+		const float spoke = 2.f * IM_PI * i / segments;
+		const float x = std::cos(spoke), y = std::sin(spoke);
+		// What shows at this spoke is the part of the image that has turned round to it.
+		const float u = std::cos(spoke - angle), v = std::sin(spoke - angle);
+		for (const float reach : {1.f, hole})
+			ring.push_back({centerX + x * radius * reach, centerY + y * radius * reach, 0.5f + u * reach * 0.5f, 0.5f + v * reach * 0.5f});
+	}
+	return ring;
+}
+
+std::vector<std::string> railBadges(const Rail& rail, const LibraryItem& item)
+{
+	std::vector<std::string> result;
+	for (const auto& fields : rail.badges)
+		for (const std::string& field : fields)
+		{
+			const auto value = item.metadata.find(field);
+			if (value != item.metadata.end() && !value->second.empty())
+			{
+				result.push_back(value->second);
+				break;
+			}
+		}
+	return result;
+}
+
+std::string metadataText(const Element& element, const LibraryItem& item)
+{
+	std::string joined;
+	const std::vector<std::string> single{element.source};
+	for (const std::string& field : element.fields.empty() ? single : element.fields)
+	{
+		const auto value = item.metadata.find(field);
+		if (value == item.metadata.end() || value->second.empty())
+			continue;
+		if (!joined.empty())
+			joined += element.separator;
+		joined += value->second;
+	}
+	if (element.marqueeSeconds > 0) // A marquee is one line, whatever the source text does.
+		std::replace_if(joined.begin(), joined.end(), [](char c) { return c == '\n' || c == '\r'; }, ' ');
+	return joined.empty() ? element.text : joined;
 }
 
 // Negative zIndex elements are drawn behind the browser; zero and positive
@@ -556,7 +1068,8 @@ std::optional<std::string> iconArtworkSource(int mediaMode)
 int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::vector<LibraryItem>& items, const std::function<void(size_t)>& afterItem,
 		const std::optional<std::string>& iconSource, float iconScale,
-		const std::string& stateLayoutId, const std::function<void(size_t)>& toggleFavourite)
+		const std::string& stateLayoutId, const std::function<void(size_t)>& toggleFavourite,
+		const std::function<void(const std::string&)>& playSound)
 {
 	iconScale = std::clamp(iconScale, 0.5f, 2.f);
 	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
@@ -564,6 +1077,11 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	static std::string selectedLayoutId;
 	static std::string previewSource;
 	static bool scrollSelection = false;
+	static RailState railState;
+	static double lastInputTime = 0, lastAttractStep = 0;
+	static std::string launchingId;
+	static double launchStart = 0;
+	static int launchLastFrame = 0;
 	const std::string layoutKey = themeDirectory + '/' + (stateLayoutId.empty() ? layout.id : stateLayoutId);
 	const bool layoutChanged = selectedLayoutId != layoutKey;
 	if (layoutChanged)
@@ -572,6 +1090,9 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		selectedId.clear();
 		previewSource = layout.previewSource;
 		scrollSelection = false;
+		railState = {};
+		lastInputTime = ImGui::GetTime();
+		launchingId.clear();
 	}
 	int selected = -1;
 	for (int i = 0; i < static_cast<int>(items.size()); ++i)
@@ -584,8 +1105,45 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	{
 		selected = 0;
 		selectedId = itemKey(items.front(), 0);
+		railState.position = 0;
 	}
 	const std::string selectionBeforeBrowsing = selectedId;
+	int launchingIndex = -1;
+	// Leaving the library abandons a launch, so it can not fire when the player comes back.
+	if (ImGui::GetFrameCount() > launchLastFrame + 1)
+		launchingId.clear();
+	if (!launchingId.empty())
+	{
+		for (int i = 0; i < static_cast<int>(items.size()); ++i)
+			if (itemKey(items[i], static_cast<size_t>(i)) == launchingId)
+				launchingIndex = i;
+		if (launchingIndex < 0) // The game has left the list, for example through a rescan.
+			launchingId.clear();
+	}
+	const bool launching = launchingIndex >= 0;
+	LibraryState libraryState;
+	if (launching)
+	{
+		libraryState.launchElapsed = static_cast<float>(ImGui::GetTime() - launchStart);
+		libraryState.launchProgress = std::clamp(libraryState.launchElapsed / layout.launchSeconds, 0.f, 1.f);
+	}
+	bool selectionMoved = false;
+	if (playerInputThisFrame())
+		lastInputTime = ImGui::GetTime();
+	const bool attracting = !launching && layout.attract.idleSeconds > 0 && ImGui::GetTime() - lastInputTime >= layout.attract.idleSeconds;
+	libraryState.attracting = attracting;
+	if (!attracting)
+		lastAttractStep = ImGui::GetTime();
+	else if (items.size() > 1 && ImGui::GetTime() - lastAttractStep >= layout.attract.intervalSeconds)
+	{
+		lastAttractStep = ImGui::GetTime();
+		selected = (selected + 1) % static_cast<int>(items.size());
+		selectedId = itemKey(items[selected], static_cast<size_t>(selected));
+		scrollSelection = true;
+		selectionMoved = true;
+	}
+	// Attract mode and a changed list have already moved the selection: only what follows is the player.
+	const std::string selectedBeforeInput = selectedId;
 	const LibraryItem* initial = selected >= 0 ? &items[selected] : nullptr;
 	if (initial && artworkPath(*initial, previewSource, previewSource == "cover" ? "default" : "none").empty() && !artworkPath(*initial, "cover").empty())
 		previewSource = "cover";
@@ -600,6 +1158,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		canvasOrigin = canvasOrigin + (contentSize - canvasSize) * 0.5f;
 	}
 	const Canvas canvas{canvasOrigin, canvasSize, ImVec2(canvasOrigin.x + canvasSize.x, canvasOrigin.y + canvasSize.y), iconScale};
+	const Canvas content{contentOrigin, contentSize, ImVec2(contentOrigin.x + contentSize.x, contentOrigin.y + contentSize.y), iconScale};
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	drawList->AddRectFilled(contentOrigin, contentOrigin + contentSize, color(layout.background));
 
@@ -608,8 +1167,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	const ImVec2 browserMax(ImMin(browser.Max.x, canvas.max.x), ImMin(browser.Max.y, canvas.max.y));
 	const ImVec2 browserSize(std::max(0.0f, browserMax.x - browserPos.x), std::max(0.0f, browserMax.y - browserPos.y));
 	ImGui::SetCursorScreenPos(browserPos);
+	// Nothing else can be chosen once a game is on its way, but it should not look dimmed either.
+	ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
+	ImGui::BeginDisabled(launching);
+	const bool railMode = layout.mode == "rail";
 	const bool childVisible = ImGui::BeginChild("##themeLibraryBrowser", browserSize, ImGuiChildFlags_NavFlattened,
-			ImGuiWindowFlags_NoBackground);
+			ImGuiWindowFlags_NoBackground | (railMode ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None));
 	if (layout.fontSize > 0)
 		ImGui::PushFont(nullptr, std::clamp(layout.fontSize * canvas.size.y * iconScale, 10.f, 96.f));
 	const ImVec2 previousItemSpacing = ImGui::GetStyle().ItemSpacing;
@@ -622,7 +1185,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	if (childVisible && !items.empty())
 	{
 		const float spacing = std::max(0.0f, uiScaled(layout.spacing) * iconScale);
-		if (layout.mode == "list")
+		if (railMode)
+		{
+			scrollSelection = false;
+			drawRail(layout, canvas, items, browserDrawList, railState, selected, selectedId, activated, selectionMoved, afterItem);
+		}
+		else if (layout.mode == "list")
 		{
 			// ImGui snaps row positions to pixels; snap the height too to avoid overlapping hit boxes.
 			const float rowHeight = std::ceil(layout.rowHeight > 0
@@ -826,12 +1394,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	const Rect details{detailsOnRight ? split : 0.f, 0.f, authoredDetails ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
 	// Resolve background media after hover/navigation so both layers show the same game.
 	// The parent draw list is rendered beneath the browser child, regardless of submission order.
-	drawElements(layout, canvas, themeDirectory, current, drawList, true, details, false, previewSource);
-	ImGui::SetCursorScreenPos(canvas.origin);
-	ImGui::BeginChild("##themeLibraryOverlay", canvas.size, ImGuiChildFlags_None,
+	drawElements(layout, canvas, content, themeDirectory, current, drawList, ElementLayer::BehindBrowser, details, false, previewSource, libraryState);
+	ImGui::SetCursorScreenPos(content.origin);
+	ImGui::BeginChild("##themeLibraryOverlay", content.size, ImGuiChildFlags_None,
 			ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBringToFrontOnFocus
 					| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-	drawElements(layout, canvas, themeDirectory, current, ImGui::GetWindowDrawList(), false, details, false, previewSource);
+	drawElements(layout, canvas, content, themeDirectory, current, ImGui::GetWindowDrawList(), ElementLayer::OverBrowser, details, false, previewSource, libraryState);
 	ImGui::EndChild();
 	if (details.w > 0.f && canvasSize.y > 0.f)
 	{
@@ -849,16 +1417,46 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 			const ImVec2 size(width / details.w, canvasSize.y * iconScale);
 			const ImVec2 offset(origin.x - details.x * size.x, origin.y);
 			const Canvas detailCanvas{offset, size, offset + size};
-			drawElements(layout, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), true, details, true, previewSource);
-			drawElements(layout, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), false, details, true, previewSource);
+			drawElements(layout, detailCanvas, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), ElementLayer::BehindBrowser, details, true, previewSource, libraryState);
+			drawElements(layout, detailCanvas, detailCanvas, themeDirectory, current, ImGui::GetWindowDrawList(), ElementLayer::OverBrowser, details, true, previewSource, libraryState);
 			ImGui::Dummy(ImVec2(width, size.y));
 		}
 		ImGui::EndChild();
 		ImGui::PopStyleVar();
 	}
 	drawDetails(layout, canvas, current);
-	drawButtons(layout, canvas, items, browserColumns, selected, previewSource, scrollSelection, activated, toggleFavourite);
+	drawButtons(layout, canvas, items, browserColumns, selected, previewSource, scrollSelection, activated, toggleFavourite, railState.focusButtons);
+	ImGui::EndDisabled();
+	ImGui::PopStyleVar();
 	if (selected >= 0) selectedId = itemKey(items[selected], static_cast<size_t>(selected));
+	if (playSound && !layout.moveSound.empty() && selectedId != selectedBeforeInput)
+		playSound(layout.moveSound);
+	if (launching)
+	{
+		ImGui::SetCursorScreenPos(content.origin);
+		ImGui::BeginChild("##themeLibraryLaunch", content.size, ImGuiChildFlags_None,
+				ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		drawElements(layout, canvas, content, themeDirectory, current, ImGui::GetWindowDrawList(), ElementLayer::OverEverything, details, false, previewSource, libraryState);
+		ImGui::EndChild();
+		launchLastFrame = ImGui::GetFrameCount();
+		// Any press skips what remains: the sequence must never stand between the player and the game.
+		if (libraryState.launchProgress >= 1.f || playerPressedAnything())
+		{
+			activated = launchingIndex;
+			launchingId.clear();
+		}
+	}
+	else if (activated >= 0 && layout.launchSeconds > 0)
+	{
+		launchingId = itemKey(items[activated], static_cast<size_t>(activated));
+		launchStart = ImGui::GetTime();
+		launchLastFrame = ImGui::GetFrameCount();
+		selected = activated;
+		selectedId = launchingId;
+		activated = -1;
+		if (playSound && !layout.launchSound.empty())
+			playSound(layout.launchSound);
+	}
 	ImGui::SetCursorScreenPos(contentOrigin);
 	ImGui::Dummy(contentSize);
 	return activated;

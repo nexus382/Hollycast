@@ -360,6 +360,7 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 			gameName = it->second->description;
 			fileName = fileName + " (" + gameName + ")";
 			GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
+			game.system = arcadeSystemName(*it->second);
 			populateMetadata(game, metadata, manualIndex, gamelistPath);
 			insert_game(game);
 			continue;
@@ -369,6 +370,7 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 			if (!config::HideLegacyNaomiRoms)
 			{
 				GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
+				game.system = "Naomi"; // Legacy ROM files always load as Naomi.
 				populateMetadata(game, metadata, manualIndex, gamelistPath);
 				insert_game(game);
 			}

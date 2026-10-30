@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "gtest/gtest.h"
+#include "audio/ui_sound.h"
 #include "ui/theme.h"
 
 #include <algorithm>
@@ -271,6 +272,253 @@ TEST(ThemeParserTest, RejectsMalformedPresentationExtensionsInsteadOfSilentlyIgn
 		expectRejected(replaceOnce(minimal, "EXTRA", value), "");
 	expectRejected(replaceOnce(kManifest, "\"baseTheme\": 2", "\"fonts\":{\"body\":\"../outside.ttf\"},\"baseTheme\":2"), "parent traversal");
 	expectRejected(replaceOnce(kManifest, "\"baseTheme\": 2", "\"fonts\":{\"body\":\"missing.ttf\"},\"baseTheme\":2"), "package font");
+}
+
+TEST(ThemeParserTest, RailAttractAndElementMotionFieldsParse)
+{
+	const auto theme = themes::parse(R"({
+		"formatVersion": 1, "id": "motion", "name": "Motion",
+		"layouts": [{
+			"id": "rail", "name": "Rail", "mode": "rail", "browser": [0, 0, 1, 1],
+			"attract": {"idleSeconds": 12, "intervalSeconds": 2},
+			"rail": {"visible": 3, "center": 0.3, "tilt": 0.02, "skew": 0.01, "falloff": 0.04, "fade": 0.1, "rowColor": "010203", "numbers": false,
+				"badges": [["system"], ["genre", "region"]]},
+			"elements": [
+				{"type": "text", "rect": [0, 0, 1, 0.1], "text": "News", "marqueeSeconds": 20, "slant": 0.2, "when": "attract"},
+				{"type": "panel", "rect": [0, 0, 1, 0.1], "when": "interactive", "bleed": true},
+				{"type": "metadata", "rect": [0, 0, 1, 0.1], "fields": ["description", "genre"], "separator": " * "}
+			]
+		}]
+	})", ".");
+	const auto& layout = theme.layouts[0];
+	EXPECT_EQ(layout.mode, "rail");
+	EXPECT_FLOAT_EQ(layout.attract.idleSeconds, 12);
+	EXPECT_FLOAT_EQ(layout.attract.intervalSeconds, 2);
+	EXPECT_EQ(layout.rail.visible, 3);
+	EXPECT_FLOAT_EQ(layout.rail.center, 0.3f);
+	EXPECT_FALSE(layout.rail.numbers);
+	ASSERT_TRUE(layout.rail.rowColor.has_value());
+	EXPECT_EQ(*layout.rail.rowColor, 0x010203ffu);
+	ASSERT_EQ(layout.rail.badges.size(), 2u);
+	EXPECT_EQ(layout.rail.badges[0], (std::vector<std::string>{"system"}));
+	EXPECT_EQ(layout.rail.badges[1], (std::vector<std::string>{"genre", "region"}));
+	EXPECT_EQ(layout.elements[0].when, "attract");
+	EXPECT_FLOAT_EQ(layout.elements[0].marqueeSeconds, 20);
+	EXPECT_FLOAT_EQ(layout.elements[0].slant, 0.2f);
+	EXPECT_EQ(layout.elements[1].when, "interactive");
+	EXPECT_TRUE(layout.elements[1].bleed);
+	EXPECT_FALSE(layout.elements[0].bleed);
+	EXPECT_EQ(layout.elements[2].fields, (std::vector<std::string>{"description", "genre"}));
+	EXPECT_EQ(layout.elements[2].separator, " * ");
+}
+
+TEST(ThemeParserTest, MotionFieldsRejectInvalidCombinations)
+{
+	const auto layoutWith = [](const std::string& fields) {
+		return R"({"formatVersion": 1, "id": "motion", "name": "Motion", "layouts": [{"id": "main", "name": "Main", "browser": [0, 0, 1, 1], )" + fields + "}]}";
+	};
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "grid", "rail": {"visible": 3})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "rail", "rail": {"visible": 9})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "rail", "rail": {"center": 0.95})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "rail", "rail": {"badges": [["mood"]]})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "rail", "rail": {"badges": []})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "rail", "rail": {"badges": [[]]})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "rail", "rail": {"badges": ["genre"]})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "grid", "attract": {"intervalSeconds": 2})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "grid", "sounds": {"move": "missing.wav"}})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "grid", "sounds": {"jump": "missing.wav"}})"), "."), std::runtime_error);
+	const auto withElement = [&](const std::string& element) {
+		return layoutWith(R"("mode": "grid", "elements": [)" + element + "]");
+	};
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "when": "sometimes"})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "button", "rect": [0, 0, 1, 1], "action": "next", "bleed": true})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "metadata", "rect": [0, 0, 1, 1], "fields": ["mood"]})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "metadata", "rect": [0, 0, 1, 1], "source": "genre", "fields": ["genre"]})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "metadata", "rect": [0, 0, 1, 1], "source": "genre", "separator": "-"})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "text", "rect": [0, 0, 1, 1], "fields": ["genre"]})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "button", "rect": [0, 0, 1, 1], "action": "next", "when": "attract"})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "slant": 0.1})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "launchFadeFrom": 0.5})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "when": "launching", "launchFadeFrom": 1.5})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "grid", "launch": {})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "grid", "launch": {"seconds": 9})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(layoutWith(R"("mode": "grid", "sounds": {"launch": "missing.wav"}})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "hoverImage": "a.png"})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "button", "rect": [0, 0, 1, 1], "action": "next", "image": "missing.png"})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "marqueeSeconds": 10})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "sweepSeconds": 10})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "panel", "rect": [0, 0, 1, 1], "spin": {"seconds": 10, "center": [0, 0], "radius": 1}})"), "."), std::runtime_error);
+	EXPECT_THROW(themes::parse(withElement(R"({"type": "artwork", "rect": [0, 0, 1, 1], "source": "disc", "spin": {"seconds": 10, "center": [0, 0], "radius": 1, "hole": 2}})"), "."), std::runtime_error);
+	const auto round = themes::parse(withElement(R"({"type": "artwork", "rect": [0, 0, 1, 1], "source": "disc", "spin": {"seconds": 10, "center": [0, 0], "radius": 1, "hole": 0.13}})"), ".");
+	EXPECT_FLOAT_EQ(round.layouts[0].elements[0].spinHole, 0.13f);
+	const auto square = themes::parse(withElement(R"({"type": "artwork", "rect": [0, 0, 1, 1], "source": "disc", "spin": {"seconds": 10, "center": [0, 0], "radius": 1}})"), ".");
+	EXPECT_LT(square.layouts[0].elements[0].spinHole, 0);
+}
+
+namespace
+{
+std::vector<u8> wavBytes(u32 rate, u16 channels, u16 bits, u16 format, const std::vector<s16>& samples)
+{
+	const auto put = [](std::vector<u8>& out, u32 value, int bytes) {
+		for (int i = 0; i < bytes; ++i)
+			out.push_back(static_cast<u8>(value >> (i * 8)));
+	};
+	const auto tag = [](std::vector<u8>& out, const char* text) { out.insert(out.end(), text, text + 4); };
+	std::vector<u8> out;
+	tag(out, "RIFF");
+	put(out, static_cast<u32>(36 + samples.size() * 2), 4);
+	tag(out, "WAVE");
+	tag(out, "fmt ");
+	put(out, 16, 4);
+	put(out, format, 2);
+	put(out, channels, 2);
+	put(out, rate, 4);
+	put(out, rate * channels * bits / 8, 4);
+	put(out, channels * bits / 8, 2);
+	put(out, bits, 2);
+	tag(out, "data");
+	put(out, static_cast<u32>(samples.size() * 2), 4);
+	for (s16 sample : samples)
+		put(out, static_cast<u16>(sample), 2);
+	return out;
+}
+}
+
+TEST(UiSoundTest, DecodesMonoAndStereoToStereo)
+{
+	std::vector<s16> stereo;
+	auto bytes = wavBytes(44100, 1, 16, 1, {100, -200});
+	ASSERT_TRUE(decodeUiSound(bytes.data(), bytes.size(), stereo));
+	EXPECT_EQ(stereo, (std::vector<s16>{100, 100, -200, -200}));
+	bytes = wavBytes(44100, 2, 16, 1, {1, 2, 3, 4});
+	ASSERT_TRUE(decodeUiSound(bytes.data(), bytes.size(), stereo));
+	EXPECT_EQ(stereo, (std::vector<s16>{1, 2, 3, 4}));
+}
+
+TEST(UiSoundQueueTest, ReleasesAWholeSoundAtThePaceItPlays)
+{
+	UiSoundQueue queue;
+	const std::vector<s16> sound(44100 * 2, 100); // One second of stereo frames.
+	queue.add(sound);
+	s16 chunk[512 * 2];
+	u64 taken = 0;
+	const auto takeDue = [&](double elapsed) {
+		u64 frames = 0;
+		while (const u32 count = queue.take(elapsed, chunk, 512))
+			frames += count;
+		taken += frames;
+		return frames;
+	};
+	const u64 early = takeDue(0);
+	EXPECT_GE(early, 2048u);
+	EXPECT_LT(early, 44100u); // A one-second sound is not sent all at once.
+	EXPECT_EQ(takeDue(0), 0u);
+	EXPECT_GT(takeDue(0.5), 0u);
+	EXPECT_LT(taken, 44100u);
+	takeDue(5);
+	EXPECT_TRUE(queue.empty());
+	EXPECT_GE(taken, 44100u); // Every frame arrives, followed by trailing silence.
+}
+
+TEST(UiSoundQueueTest, MixesOverlappingSoundsWithoutWrapping)
+{
+	UiSoundQueue queue;
+	queue.add(std::vector<s16>(4, 30000));
+	queue.add(std::vector<s16>(2, 30000));
+	s16 chunk[2048 * 2];
+	const u32 frames = queue.take(1, chunk, 2048);
+	ASSERT_GE(frames, 2u);
+	EXPECT_EQ(chunk[0], 32767);
+	EXPECT_EQ(chunk[1], 32767);
+	EXPECT_EQ(chunk[2], 30000);
+	EXPECT_EQ(chunk[3], 30000);
+}
+
+TEST(UiSoundQueueTest, EmptyQueueStartsAgainCleanly)
+{
+	UiSoundQueue queue;
+	s16 chunk[2];
+	EXPECT_TRUE(queue.empty());
+	EXPECT_EQ(queue.take(10, chunk, 1), 0u);
+	queue.add(std::vector<s16>(2, 5));
+	EXPECT_FALSE(queue.empty());
+	while (queue.take(10, chunk, 1) != 0) {}
+	EXPECT_TRUE(queue.empty());
+	queue.add(std::vector<s16>(2, 7));
+	ASSERT_EQ(queue.take(0, chunk, 1), 1u); // The pace restarts with the new sound.
+	EXPECT_EQ(chunk[0], 7);
+}
+
+TEST(UiSoundTest, RejectsFormatsItCannotPlayAndDamagedFiles)
+{
+	std::vector<s16> stereo;
+	auto bytes = wavBytes(22050, 1, 16, 1, {1});
+	EXPECT_FALSE(decodeUiSound(bytes.data(), bytes.size(), stereo));
+	bytes = wavBytes(44100, 1, 8, 1, {1});
+	EXPECT_FALSE(decodeUiSound(bytes.data(), bytes.size(), stereo));
+	bytes = wavBytes(44100, 3, 16, 1, {1, 2, 3});
+	EXPECT_FALSE(decodeUiSound(bytes.data(), bytes.size(), stereo));
+	bytes = wavBytes(44100, 1, 16, 3, {1});
+	EXPECT_FALSE(decodeUiSound(bytes.data(), bytes.size(), stereo));
+	bytes = wavBytes(44100, 1, 16, 1, {1, 2});
+	bytes.resize(bytes.size() - 2); // The data chunk now claims more than the file holds.
+	EXPECT_FALSE(decodeUiSound(bytes.data(), bytes.size(), stereo));
+	const u8 notWav[16] = {'n', 'o', 't'};
+	EXPECT_FALSE(decodeUiSound(notWav, sizeof(notWav), stereo));
+	EXPECT_FALSE(decodeUiSound(nullptr, 0, stereo));
+}
+
+TEST(ThemeParserTest, BundledDemoDiscUsesGenericExtensionsAndLocalAssets)
+{
+	const auto root = fs::path(FLYCAST_TEST_FILES).parent_path().parent_path();
+	const auto theme = themes::load((root / "themes" / "demo-disc").u8string());
+	EXPECT_EQ(theme.id, "demo-disc");
+	ASSERT_EQ(theme.layouts.size(), 2u);
+	EXPECT_EQ(theme.layouts[0].mode, "rail");
+	EXPECT_EQ(theme.layouts[0].toolbar, "compact");
+	EXPECT_EQ(theme.layouts[0].activation, "doubleClick");
+	EXPECT_GT(theme.layouts[0].attract.idleSeconds, 0);
+	EXPECT_FALSE(theme.layouts[0].moveSound.empty());
+	EXPECT_TRUE(theme.layouts[0].rail.favouriteMark);
+	for (const auto& layout : theme.layouts)
+	{
+		EXPECT_GT(layout.launchSeconds, 0);
+		EXPECT_FALSE(layout.launchSound.empty());
+		// The game's own disc art sits on the theme's disc, turning about the same point.
+		const auto find = [&](const char *type, const char *source) {
+			return std::find_if(layout.elements.begin(), layout.elements.end(), [&](const themes::Element& element) {
+				return element.type == type && (element.type != "artwork" || element.source == source) && element.spinSeconds > 0;
+			});
+		};
+		const auto plain = find("image", "");
+		const auto art = find("artwork", "disc");
+		ASSERT_NE(plain, layout.elements.end());
+		ASSERT_NE(art, layout.elements.end());
+		EXPECT_GT(art->zIndex, plain->zIndex);
+		EXPECT_GE(art->spinHole, 0);
+		EXPECT_FLOAT_EQ(art->spinCenterX, plain->spinCenterX);
+		EXPECT_FLOAT_EQ(art->spinCenterY, plain->spinCenterY);
+		EXPECT_FLOAT_EQ(art->spinRadius, plain->spinRadius);
+		EXPECT_FLOAT_EQ(art->spinLaunchSeconds, plain->spinLaunchSeconds);
+	}
+	EXPECT_LT(theme.layouts[1].rail.center, 0.5f); // Portrait keeps the rail's gap small.
+	EXPECT_LT(theme.layouts[1].toolbarLogoHeight, theme.layouts[0].toolbarLogoHeight);
+	for (const auto& element : theme.layouts[0].elements)
+		if (element.action == "favourite")
+		{
+			EXPECT_FALSE(element.buttonImage.empty());
+			EXPECT_FALSE(element.buttonHoverImage.empty());
+			EXPECT_FALSE(element.buttonSelectedImage.empty());
+			EXPECT_FALSE(element.buttonSelectedHoverImage.empty());
+		}
+	for (const auto& layout : theme.layouts)
+		EXPECT_TRUE(std::any_of(layout.elements.begin(), layout.elements.end(), [](const themes::Element& element) {
+			return element.action == "favourite";
+		})) << layout.id;
+	ASSERT_EQ(theme.layouts[0].rail.badges.size(), 2u);
+	EXPECT_EQ(theme.layouts[0].rail.badges[0], (std::vector<std::string>{"system"}));
+	EXPECT_EQ(theme.fonts.size(), 2u);
+	EXPECT_EQ(themes::responsiveLayout(theme, theme.layouts[0], 0.6f).id, "demo-disc-portrait");
 }
 
 TEST(ThemeParserTest, BundledPocketDimensionUsesGenericExtensionsAndLocalAssets)
