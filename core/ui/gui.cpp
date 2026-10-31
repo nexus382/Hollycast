@@ -31,6 +31,7 @@
 #include "input/mouse.h"
 #include "readiness.h"
 #include "setup_checklist_popup.h"
+#include "exit_save_prompt.h"
 #include "library.h"
 #include "library_savestates.h"
 #include "gui_util.h"
@@ -874,31 +875,20 @@ static void render_exit_save_dialog()
 	}
 
 	const bool exitEmulator = exitSaveDialogAction == ExitSaveDialogAction::ExitEmulator;
+	const char* message = exitEmulator ? T("Do you want to save state before exiting the emulator?")
+			: T("Do you want to save state before returning to the library?");
+	const char* saveAndExit = T("Save & Exit");
+	const char* exitWithoutSaving = T("Exit Without Saving");
+	const char* cancelButton = T("Cancel");
+	exit_prompt::sizeNextWindow(message, saveAndExit, exitWithoutSaving, cancelButton);
 	const std::string exitGamePopup = std::string(exitEmulator ? T("Exit Emulator?") : T("Exit Game?")) + "###Exit Save Prompt";
 	if (ImGui::BeginPopupModal(exitGamePopup.c_str(), NULL,
 		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar))
 	{
-		ImGui::TextUnformatted(exitEmulator
-			? T("Do you want to save state before exiting the emulator?")
-			: T("Do you want to save state before returning to the library?"));
-		ImGui::NewLine();
-
-		// Button styling (consistent with existing dialogs)
-		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(uiScaled(20), ImGui::GetStyle().ItemSpacing.y));
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 10));
-		const char *saveAndExit = T("Save & Exit");
-		const char *exitWithoutSaving = T("Exit Without Saving");
-		const char *cancelButton = T("Cancel");
-		const float buttonWidth = std::max({
-			ImGui::CalcTextSize(saveAndExit).x,
-			ImGui::CalcTextSize(exitWithoutSaving).x,
-			ImGui::CalcTextSize(cancelButton).x
-		}) + ImGui::GetStyle().FramePadding.x * 2 + uiScaled(24.f);
-
 		// Check if save is allowed
 		bool canSave = dc_savestateAllowed();
-
-		if (ImGui::Button(saveAndExit, ImVec2(buttonWidth, 0)))
+		const auto choice = exit_prompt::drawChoices(message, saveAndExit, exitWithoutSaving, cancelButton);
+		if (choice == exit_prompt::Choice::Save)
 		{
 			if (canSave)
 			{
@@ -912,15 +902,13 @@ static void render_exit_save_dialog()
 				ImGui::OpenPopup(Tnop("Save Not Allowed"));
 			}
 		}
-		ImGui::SameLine();
-		if (ImGui::Button(exitWithoutSaving, ImVec2(buttonWidth, 0)))
+		if (choice == exit_prompt::Choice::Discard)
 		{
 			ImGui::CloseCurrentPopup();
 			showExitSaveDialog = false;
 			finish_exit_request(exitEmulator, false);
 		}
-		ImGui::SameLine();
-		if (ImGui::Button(cancelButton, ImVec2(buttonWidth, 0)))
+		if (choice == exit_prompt::Choice::Cancel)
 		{
 			ImGui::CloseCurrentPopup();
 			showExitSaveDialog = false;
@@ -945,7 +933,6 @@ static void render_exit_save_dialog()
 			ImGui::EndPopup();
 		}
 
-		ImGui::PopStyleVar(2);
 		ImGui::EndPopup();
 	}
 }

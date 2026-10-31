@@ -1064,6 +1064,50 @@ TEST_F(ScreenScraperTest, ConcurrentDiscEntriesShareDownloadsAndUnavailableResul
 	}
 }
 
+TEST_F(ScreenScraperTest, UnrelatedImagesWithCollidingCacheHashesDownloadConcurrently)
+{
+	const std::string base = root.u8string() + '/';
+	const auto oldLockSlot = [&](u32 id) {
+		return std::hash<std::string>{}(base + "screenscraper/" + std::to_string(id) + "-box-2D-us.png") % 64;
+	};
+	const u32 firstId = 100;
+	u32 secondId = firstId + 1;
+	while (oldLockSlot(firstId) != oldLockSlot(secondId)) ++secondId;
+	std::mutex gateMutex;
+	std::condition_variable gate;
+	int downloads = 0;
+	bool overlapped = true;
+	auto session = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos) return reply(bytes, {{"ssuser", user(2)}});
+		if (url.find("jeuInfos.php") != std::string::npos)
+		{
+			auto response = game();
+			response["id"] = url.substr(url.find("&gameid=") + 8);
+			return reply(bytes, {{"jeu", response}});
+		}
+		{
+			std::unique_lock<std::mutex> lock(gateMutex);
+			++downloads;
+			gate.notify_all();
+			if (!gate.wait_for(lock, std::chrono::seconds(2), [&] { return downloads == 2; })) overlapped = false;
+		}
+		bytes = png();
+		return 200;
+	});
+	session->login();
+	ScreenScraper scraper(session);
+	ASSERT_TRUE(scraper.initialize(base));
+	std::vector<GameBoxart> games(2, item());
+	games[0].screenScraperId = firstId;
+	games[1].screenScraperId = secondId;
+	games[1].gamePath += "-other";
+	scraper.scrape(games);
+	EXPECT_TRUE(overlapped) << "Different cache paths must not share a lock held during network I/O";
+	EXPECT_EQ(downloads, 2);
+	EXPECT_NE(games[0].boxartPath, games[1].boxartPath);
+	for (const auto& game : games) EXPECT_TRUE(std::filesystem::is_regular_file(game.boxartPath));
+}
+
 TEST_F(ScreenScraperTest, MetadataOnlyDoesNotDownloadImagesAndCompletesOnce)
 {
 	int lookups = 0, images = 0;

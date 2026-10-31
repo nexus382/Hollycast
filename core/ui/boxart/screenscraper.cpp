@@ -649,9 +649,13 @@ void ScreenScraper::scrape(GameBoxart& item)
 		{
 			const std::string type = text(*chosen, "type"), region = text(*chosen, "region");
 			const std::string path = directory + std::to_string(item.screenScraperId) + "-" + type + "-" + region + ".png";
-			const size_t slot = std::hash<std::string>{}(path) % mediaLocks.size();
-			std::lock_guard<std::mutex> guard(mediaLocks[slot]);
-			if (unavailableMedia[slot].count(path))
+			MediaDownload* download;
+			{
+				std::lock_guard<std::mutex> guard(mediaDownloadsMutex);
+				download = &mediaDownloads[path];
+			}
+			std::lock_guard<std::mutex> guard(download->mutex);
+			if (download->unavailable)
 			{
 				item.screenScraperCheckedMedia |= bit;
 				continue;
@@ -662,7 +666,7 @@ void ScreenScraper::scrape(GameBoxart& item)
 				const auto bytes = session->requestImage(item.screenScraperId, type, region);
 				if (bytes.empty())
 				{
-					unavailableMedia[slot].insert(path);
+					download->unavailable = true;
 					item.screenScraperCheckedMedia |= bit;
 					continue;
 				}

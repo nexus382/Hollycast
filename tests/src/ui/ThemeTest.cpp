@@ -538,7 +538,7 @@ TEST(ThemeParserTest, BundledPocketDimensionUsesGenericExtensionsAndLocalAssets)
 	EXPECT_EQ(theme.fonts.size(), 2u);
 	EXPECT_EQ(themes::responsiveLayout(theme, theme.layouts[0], 0.6f).id, "pocket-portrait");
 	for (const auto& layout : theme.layouts)
-		for (const char* media : {"cover", "screenshot", "miximage", "physical"})
+		for (const char* media : {"cover", "screenshot", "miximage", "disc"})
 			EXPECT_TRUE(std::any_of(layout.elements.begin(), layout.elements.end(), [&](const themes::Element& e) {
 				return e.type == "button" && e.action == "artwork" && e.source == media;
 			})) << layout.id << ": " << media;

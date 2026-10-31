@@ -5,6 +5,7 @@
 #include "ui/boxart/screenscraper.h"
 #include "ui/settings_new.h"
 #include "ui/theme.h"
+#include "ui/exit_save_prompt.h"
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -102,6 +103,51 @@ protected:
 	int value = 1;
 	int changes = 0;
 };
+
+TEST_F(SettingsPopupTest, ExitSavePromptKeepsCancelVisibleAndReachableInNarrowWindows)
+{
+	const char* message = "Do you want to save state before returning to the library?";
+	const char* save = "Save & Exit";
+	const char* discard = "Exit Without Saving";
+	const char* cancel = "Cancel";
+	for (float width : {320.f, 600.f, 1400.f})
+	{
+		SCOPED_TRACE(width);
+		ImGui::GetIO().DisplaySize = ImVec2(width, 900);
+		exit_prompt::Choice choice = exit_prompt::Choice::None;
+		ImGuiWindow* dialog = nullptr;
+		ImRect cancelRect;
+		auto draw = [&](bool open) {
+			ImGui::NewFrame();
+			ImGui::Begin("Host");
+			if (open) ImGui::OpenPopup("Exit test");
+			ImGui::PushFont(nullptr, 24.f);
+			exit_prompt::sizeNextWindow(message, save, discard, cancel);
+			ImGui::SetNextWindowPos(ImGui::GetIO().DisplaySize * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+			if (ImGui::BeginPopupModal("Exit test", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+			{
+				dialog = ImGui::GetCurrentWindow();
+				choice = exit_prompt::drawChoices(message, save, discard, cancel);
+				cancelRect = GImGui->LastItemData.Rect;
+				if (choice != exit_prompt::Choice::None) ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+			}
+			ImGui::PopFont();
+			ImGui::End();
+			ImGui::Render();
+		};
+		draw(true);
+		draw(false);
+		ASSERT_NE(dialog, nullptr);
+		EXPECT_GE(dialog->Pos.x, 0.f);
+		EXPECT_LE(dialog->Pos.x + dialog->Size.x, width);
+		EXPECT_TRUE(dialog->InnerRect.Contains(cancelRect));
+		EXPECT_FLOAT_EQ(dialog->ScrollMax.x, 0.f);
+		ImGui::ActivateItemByID(dialog->GetID(cancel));
+		draw(false);
+		EXPECT_EQ(choice, exit_prompt::Choice::Cancel);
+	}
+}
 
 TEST_F(SettingsPopupTest, MultipleCheckboxesCommitTogetherOnlyOnApply)
 {

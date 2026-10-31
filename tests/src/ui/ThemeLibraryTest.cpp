@@ -2073,6 +2073,111 @@ TEST_F(ThemeLibraryTest, EveryBundledLayoutPreviewsOnTouchAndHasAnExplicitPlayBu
 	}
 }
 
+TEST_F(ThemeLibraryTest, MissingArtworkControlsLookDisabledUntilTheirMediaIsAvailable)
+{
+	layout.id = "missing-artwork-feedback";
+	layout.browser = {0, 0, 0.5f, 1};
+	themes::Element button;
+	button.type = "button";
+	button.action = "artwork";
+	button.source = "miximage";
+	button.text = "Mix";
+	button.rect = {0.6f, 0.7f, 0.3f, 0.15f};
+	button.fontSize = 0.04f;
+	button.color = 0x7f43c2ff;
+	layout.elements = {button};
+	auto textAlpha = [] {
+		int maximum = 0;
+		for (const auto* window : GImGui->Windows)
+			if (window->Active)
+				for (const auto& vertex : window->DrawList->VtxBuffer)
+					if ((vertex.col & 0xffffff) == (IM_COL32(0x7f, 0x43, 0xc2, 0xff) & 0xffffff))
+						maximum = std::max(maximum, static_cast<int>(vertex.col >> IM_COL32_A_SHIFT));
+		return maximum;
+	};
+	renderFrame(ImVec2(-1, -1), false);
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_GT(textAlpha(), 0);
+	EXPECT_LT(textAlpha(), 255);
+	items[0].metadata["artwork.miximage"] = "/available-mix.png";
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_EQ(textAlpha(), 255);
+}
+
+TEST_F(ThemeLibraryTest, EveryBundledLayoutClearsGameDetailsAndDisablesActionsWhenResultsBecomeEmpty)
+{
+	const auto root = std::filesystem::path(FLYCAST_TEST_FILES) / "../../themes";
+	const ImVec2 away(-1, -1);
+	int favouriteCalls = 0;
+	favouriteHandler = [&](size_t) { ++favouriteCalls; };
+	for (const auto& directory : std::filesystem::directory_iterator(root))
+	{
+		if (!directory.is_directory()) continue;
+		const auto theme = themes::load(directory.path().string());
+		for (const auto& authored : theme.layouts)
+		for (const auto size : {ImVec2(1400, 800), ImVec2(600, 900)})
+		{
+			SCOPED_TRACE(theme.id + "/" + authored.id);
+			SCOPED_TRACE(size.x);
+			layout = authored;
+			layout.id += "-empty-transition-" + std::to_string(static_cast<int>(size.x));
+			layout.attract.idleSeconds = 0;
+			layout.launchSeconds = 0;
+			windowSize = ImGui::GetIO().DisplaySize = size;
+			// Identify game metadata in the submitted geometry without depending on
+			// a GPU, cached artwork, or the colour choices made by a theme author.
+			items = {{"game", "A game with metadata", {}, {{"title", "A game with metadata"}}}};
+			for (auto& element : layout.elements)
+			{
+				element.buttonImage.clear();
+				if (element.type == "metadata" || element.type == "details")
+				{
+					element.color = 0xe15a77ff;
+					items[0].metadata[element.source] = "Metadata value";
+					for (const auto& field : element.fields) items[0].metadata[field] = "Metadata value";
+				}
+			}
+			layout.elements.erase(std::remove_if(layout.elements.begin(), layout.elements.end(), [](const auto& element) {
+				return element.type == "image" || element.type == "artwork";
+			}), layout.elements.end());
+			auto metadataVertices = [] {
+				size_t count = 0;
+				for (const auto* window : GImGui->Windows)
+					if (window->Active)
+						for (const auto& vertex : window->DrawList->VtxBuffer)
+							if (vertex.col == IM_COL32(0xe1, 0x5a, 0x77, 0xff)) ++count;
+				return count;
+			};
+			renderFrame(away, false);
+			renderFrame(away, false);
+			EXPECT_GT(metadataVertices(), 0u);
+			items.clear();
+			EXPECT_EQ(renderFrame(away, false), -1);
+			EXPECT_EQ(metadataVertices(), 0u);
+			ImVec2 canvas = canvasSize, origin = canvasOrigin;
+			if (layout.canvasAspect > 0)
+			{
+				canvas.x = std::min(canvas.x, canvas.y * layout.canvasAspect);
+				canvas.y = canvas.x / layout.canvasAspect;
+				origin = origin + (canvasSize - canvas) * 0.5f;
+			}
+			for (const auto& element : layout.elements)
+				if (element.type == "button")
+				{
+					const ImVec2 center = origin + ImVec2((element.rect.x + element.rect.w * 0.5f) * canvas.x,
+							(element.rect.y + element.rect.h * 0.5f) * canvas.y);
+					renderFrame(center, false);
+					EXPECT_EQ(renderFrame(center, true), -1);
+					EXPECT_EQ(renderFrame(center, false), -1);
+				}
+			EXPECT_EQ(favouriteCalls, 0);
+			items = {{"replacement", "Replacement game", {}, {{"title", "Replacement game"}}}};
+			EXPECT_EQ(renderFrame(away, false), -1);
+			EXPECT_GT(metadataVertices(), 0u);
+		}
+	}
+}
+
 TEST_F(ThemeLibraryTest, GamepadBrowsesAndConfirmsEveryBrowserAfterTouchInput)
 {
 	auto& io = ImGui::GetIO();

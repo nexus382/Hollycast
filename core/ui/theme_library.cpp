@@ -1860,7 +1860,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	const ImVec2 browserSize(std::max(0.0f, browserMax.x - browserPos.x), std::max(0.0f, browserMax.y - browserPos.y));
 	ImGui::SetCursorScreenPos(browserPos);
 	// Nothing else can be chosen once a game is on its way, but it should not look dimmed either.
-	ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
+	ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, launching ? 1.f : ImGui::GetStyle().DisabledAlpha);
 	ImGui::BeginDisabled(launching);
 	const bool railMode = layout.mode == "rail";
 	const bool orbitMode = layout.mode == "orbit";

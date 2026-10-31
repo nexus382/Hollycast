@@ -459,7 +459,7 @@
           "selectedColor": "f5f4e9",
           "selectedBackground": "60745a",
           "rounding": 0.5,
-          "source": "physical"
+          "source": "disc"
         }
       ],
       "narrowLayout": "pocket-portrait",
@@ -826,7 +826,7 @@
           "selectedColor": "f5f4e9",
           "selectedBackground": "60745a",
           "rounding": 0.5,
-          "source": "physical"
+          "source": "disc"
         }
       ]
     }
