@@ -30,6 +30,7 @@
 #include "imgui_driver.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "misc/freetype/imgui_text_shaping.h"
 #include "imgui_stdlib.h"
 #include "gui_font.h"
 #include "IconsFontAwesome6.h"
@@ -1764,30 +1765,48 @@ bool Toast::draw()
 
 std::string middleEllipsis(const std::string& s, float width)
 {
-	float tw = ImGui::CalcTextSize(s.c_str()).x;
-	if (tw <= width)
+	if (width <= 0.0f)
+		return {};
+	if (ImGui::CalcTextSize(s.c_str()).x <= width)
 		return s;
+
 	char buf[5];
 	ImTextCharToUtf8(buf, ImGui::GetFont()->EllipsisChar);
-	std::string ellipsis = buf;
+	const std::string ellipsis = buf;
+	if (ImGui::CalcTextSize(ellipsis.c_str()).x > width)
+		return {};
 
-	int l = s.length() / 2;
-	int d = l;
-
-	while (true)
+	std::string best = ellipsis;
+	size_t low = 0;
+	size_t high = s.size();
+	while (low < high)
 	{
-		std::string ss = s.substr(0, l / 2) + ellipsis + s.substr(s.length() - l / 2 - (l & 1));
-		tw = ImGui::CalcTextSize(ss.c_str()).x;
-		if (tw == width)
-			return ss;
-		d /= 2;
-		if (d == 0)
-			return ss;
-		if (tw > width)
-			l -= d;
+		const size_t keptBytes = low + (high - low) / 2;
+		size_t prefixEnd = (keptBytes + 1) / 2;
+		size_t suffixBegin = s.size() - keptBytes / 2;
+		// Truncation points must stay on UTF-8 boundaries for translated labels and paths.
+		while (prefixEnd > 0 && (static_cast<unsigned char>(s[prefixEnd]) & 0xc0) == 0x80)
+			--prefixEnd;
+		while (suffixBegin < s.size() && (static_cast<unsigned char>(s[suffixBegin]) & 0xc0) == 0x80)
+			++suffixBegin;
+#ifdef IMGUI_ENABLE_HARFBUZZ
+		// A valid UTF-8 boundary can still split a Devanagari vowel or conjunct.
+		if (ImGuiTextShaper::NeedsShaping(s.data(), s.data() + s.size()))
+		{
+			prefixEnd = ImGuiTextShaper::ClusterBoundary(ImGui::GetFont(), ImGui::GetFontSize(), s.data(), s.data() + s.size(), s.data() + prefixEnd, false) - s.data();
+			suffixBegin = ImGuiTextShaper::ClusterBoundary(ImGui::GetFont(), ImGui::GetFontSize(), s.data(), s.data() + s.size(), s.data() + suffixBegin, true) - s.data();
+		}
+#endif
+		std::string candidate = s.substr(0, prefixEnd) + ellipsis + s.substr(suffixBegin);
+		if (ImGui::CalcTextSize(candidate.c_str()).x <= width)
+		{
+			best.swap(candidate);
+			low = keptBytes + 1;
+		}
 		else
-			l += d;
+			high = keptBytes;
 	}
+	return best;
 }
 
 bool beginFrame(const char *label, const ImVec2& size_arg, ImVec2 *out_size)
@@ -2339,6 +2358,8 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
         // DuckStation-style menu button layout
         {
             BeginMenuButtons menuButtons;
+            int highlightedStorageIdx = -1;
+            const char* highlightedOptionText = nullptr;
 
             if (cfg.multiSelect) {
                 // Bound only the choices so Apply/Cancel stay reachable on small screens.
@@ -2396,9 +2417,18 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
                 if (isSelected) {
                     ImGui::SetItemDefaultFocus();
                 }
+                if (ImGui::IsItemHovered() || ImGui::IsItemFocused()) {
+                    highlightedStorageIdx = storageIdx;
+                    highlightedOptionText = cfg.options[i];
+                } else if (isSelected && highlightedStorageIdx < 0) {
+                    highlightedStorageIdx = storageIdx;
+                    highlightedOptionText = cfg.options[i];
+                }
             }
             if (cfg.multiSelect)
                 ImGui::EndChild();
+            if (cfg.onOptionHighlight && highlightedStorageIdx >= 0)
+                cfg.onOptionHighlight(highlightedStorageIdx, highlightedOptionText);
         } // End menu buttons
 
         if (cfg.multiSelect) {

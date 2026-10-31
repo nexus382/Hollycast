@@ -332,17 +332,17 @@ static void addMenuSeparator(NSMenu *menu)
 
 - (void)openDiscord:(id)sender
 {
-	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://discord.gg/X8YWP8w"]];
+	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://discord.gg/8s8Ecc2BxR"]];
 }
 
 - (void)reportBug:(id)sender
 {
-	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/flyinghead/flycast/issues/new/choose"]];
+	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/nexus382/Hollycast/issues/new/choose"]];
 }
 
 - (void)checkForUpdates:(id)sender
 {
-	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://flyinghead.github.io/flycast-builds/"]];
+	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://nexus382.github.io/Hollycast/"]];
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem

@@ -28,6 +28,9 @@ void gui_init();
 void gui_updateStyle();
 void gui_requestStyleReload();
 void gui_open_settings();
+void gui_open_texture_filter_settings();
+// Selects Loading when custom textures need refreshing; otherwise closes the UI.
+bool gui_resume_game();
 void gui_display_ui();
 void gui_draw_osd();
 void gui_display_osd();

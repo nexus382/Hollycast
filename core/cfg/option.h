@@ -482,8 +482,10 @@ public:
 			RenderType::DirectX11
 #elif defined(USE_DX9)
 			RenderType::DirectX9
-#elif !defined(USE_OPENGL)
+#elif !defined(USE_OPENGL) && defined(USE_VULKAN)
 			RenderType::Vulkan
+#elif !defined(USE_OPENGL) && defined(USE_METAL)
+			RenderType::Metal
 #else
 			RenderType::OpenGL
 #endif
@@ -549,6 +551,7 @@ extern Option<bool> VSync;
 extern Option<int64_t> PixelBufferSize;
 extern Option<int> AnisotropicFiltering;
 extern Option<int> TextureFiltering; // 0: default, 1: force nearest, 2: force linear
+extern Option<int> SampleTextureFilter; // 0: disabled, 1-19: reconstruction mode (14 retired)
 extern Option<bool> ThreadedRendering;
 extern Option<bool> DupeFrames;
 extern Option<bool> NativeDepthInterpolation;

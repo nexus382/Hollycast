@@ -1193,9 +1193,7 @@ static void getRegionSettings(int passNumber, RenderPass& pass);
 
 static void parseRenderPass(RenderPass& pass, const RenderPass& previousPass, rend_context& ctx, bool primRestart)
 {
-	const bool perPixel = config::RendererType == RenderType::OpenGL_OIT
-			|| config::RendererType == RenderType::DirectX11_OIT
-			|| config::RendererType == RenderType::Vulkan_OIT;
+	const bool perPixel = isPerPixel(config::RendererType);
 	const bool mergeTranslucent = config::PerStripSorting || perPixel;
 
 	if (config::RenderResolution > 480 && !config::EmulateFramebuffer && config::FixUpscaleBleedingEdge)

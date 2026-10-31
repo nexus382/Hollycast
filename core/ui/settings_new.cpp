@@ -18,6 +18,9 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "settings_new.h"
+#ifdef USE_METAL
+#include "rend/metal/metal_api.h"
+#endif
 #include "custom_theme.h"
 #include "theme.h"
 #include "gui_util.h"
@@ -47,6 +50,7 @@
 #include "log/LogManager.h"
 #include "hw/mem/addrspace.h"
 #include "settings.h"
+#include "emulator.h"
 #include "gui.h"
 #include "boxart/boxart.h"
 #include "boxart/screenscraper.h"
@@ -61,6 +65,7 @@
 #include "achievements/achievements.h"
 #include "vgamepad.h"
 #include "rend/vmu_window.h"
+#include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstring>
@@ -1911,14 +1916,15 @@ static void RenderGeneralRightValue(const std::string& value, float valueWidthPx
 {
 	const float valueWidth = SettingsLayoutScaled(valueWidthPx);
 	const float extraRight = SettingsLayoutScaled(extraRightOffsetPx);
-	const float verticalOffset = (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f;
-	std::string clipped = middleEllipsis(value, valueWidth);
 	ImFont* valueFont = settingsRightValueFont != nullptr ? settingsRightValueFont : largeFont;
+	// Measure and center values with the same font used to draw them.
+	ImGui::PushFont(valueFont);
+	const float verticalOffset = (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f;
+	const std::string clipped = middleEllipsis(value, valueWidth);
 
 	ImGui::SameLine(RightColumnX(valueWidth + extraRight));
 	const ImVec2 valuePos = ImGui::GetCursorPos();
 	ImGui::SetCursorPos(ImVec2(valuePos.x, valuePos.y + verticalOffset));
-	ImGui::PushFont(valueFont);
 	if (disabled)
 		ImGui::TextDisabled("%s", clipped.c_str());
 	else
@@ -2130,6 +2136,184 @@ static void managePathList(const char* label, const std::string& singularLabel, 
 
 // Global state instance
 SettingsUIState g_state;
+
+// Input polling and Android touch dispatch read this flag from other threads.
+static std::atomic<bool> g_textureFilterLiveTune{false};
+
+static void applyPendingSettings()
+{
+	dreampotato::update();
+	if (g_mapleDevicesChangedInSettings)
+	{
+		g_mapleDevicesChangedInSettings = false;
+		if (game_started && settings.platform.isConsole())
+		{
+#if defined(USE_DREAMLINK_DEVICES)
+			reconnectDreamLinks();
+#endif
+			maple_ReconnectDevices();
+			reset_vmus();
+		}
+	}
+	SaveSettings();
+}
+
+// Preserve the stored renderer IDs so old settings files cannot silently select a different filter.
+// ID 14 was Spline36 and is intentionally no longer exposed.
+static constexpr std::array<int, 19> sampleTextureFilterValues { 0, 19, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18 };
+
+static std::array<const char*, 19> getSampleTextureFilterLabels()
+{
+	return {
+		T("Disabled"), T("Nearest-Neighbor"), T("Bilinear"), T("Bilinear / No Edge Blending"), T("Jinc2"),
+		T("Jinc2 / No Edge Blending"), T("MMPX"), T("MMPX Enhanced"), T("MMPX Advanced"),
+		T("Jinc2 Anti-Ring"), T("Jinc2 Sharp Anti-Ring"), T("Jinc2 Mild Anti-Ring"),
+		T("Jinc2 Extra Sharp Anti-Ring"), T("Lanczos2 Anti-Ring"), T("Lanczos3 Anti-Ring"),
+		T("Robidoux"), T("Robidoux Sharp"), T("Bicubic Catmull-Rom"),
+		T("Bicubic Mitchell")
+	};
+}
+
+static int getSampleTextureFilterOptionIndex(int value)
+{
+	for (size_t index = 0; index < sampleTextureFilterValues.size(); ++index)
+		if (sampleTextureFilterValues[index] == value)
+			return static_cast<int>(index);
+	return 0;
+}
+
+static constexpr std::array<int, 8> maxFilteredTextureSizeValues { 8, 16, 32, 64, 128, 256, 512, 1024 };
+
+static std::array<const char*, 8> getMaxFilteredTextureSizeLabels()
+{
+	return { T("8x8"), T("16x16"), T("32x32"), T("64x64"), T("128x128"), T("256x256"), T("512x512"), T("1024x1024+") };
+}
+
+bool textureFilterLiveTuneActive()
+{
+	return g_textureFilterLiveTune.load(std::memory_order_relaxed);
+}
+
+void stopTextureFilterLiveTune()
+{
+	g_textureFilterLiveTune.store(false, std::memory_order_relaxed);
+}
+
+void renderTextureFilterLiveTuneOverlay()
+{
+	if (!textureFilterLiveTuneActive())
+		return;
+	// Recheck the session, but reserve the stateful canPause() check for a pause request.
+	if (!game_started || ggpo::active())
+	{
+		stopTextureFilterLiveTune();
+		return;
+	}
+
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+#ifdef __ANDROID__
+	const float panelHeight = std::max(displaySize.y * .42f, uiScaled(250.f));
+	ImGui::SetNextWindowPos(ImVec2(0.f, displaySize.y - panelHeight), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(displaySize.x, panelHeight), ImGuiCond_Always);
+	flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+#else
+	const float margin = uiScaled(18.f);
+	const ImVec2 panelSize(std::min(uiScaled(620.f), std::max(1.f, displaySize.x - margin * 2.f)),
+			std::min(uiScaled(330.f), std::max(1.f, displaySize.y - uiScaled(96.f))));
+	ImGui::SetNextWindowPos(ImVec2(displaySize.x - panelSize.x - margin, uiScaled(48.f)), ImGuiCond_Once);
+	ImGui::SetNextWindowSize(panelSize, ImGuiCond_Once);
+#endif
+	ImGui::SetNextWindowBgAlpha(.94f);
+
+	bool open = true;
+	bool returnToSettings = false;
+	if (ImGui::Begin(T("Texture Filtering Live Tune###TextureFilteringLiveTune"), &open, flags))
+	{
+		if (ImGui::Button(T("Back to Video Settings")))
+			returnToSettings = true;
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", T("live game preview"));
+		ImGui::Separator();
+		ImGui::TextWrapped("%s", T("Try the filter and its texture-size limit while the game continues behind this panel."));
+		ImGui::Spacing();
+
+		const auto filterLabels = getSampleTextureFilterLabels();
+		if (config::SampleTextureFilter.get() == 14)
+		{
+			config::SampleTextureFilter.set(0);
+			SaveSettings();
+		}
+		int filterSelection = getSampleTextureFilterOptionIndex(config::SampleTextureFilter.get());
+		if (ImGui::BeginCombo(T("Sample Texture Filter"), filterLabels[filterSelection]))
+		{
+#if defined(__ANDROID__)
+			// Combo popups need the same drag-scroll opt-in as Settings lists,
+			// before their selectable rows can hand a finger swipe to the popup.
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
+			for (int index = 0; index < static_cast<int>(filterLabels.size()); ++index)
+			{
+				const bool selected = index == filterSelection;
+				if (ImGui::Selectable(filterLabels[index], selected))
+				{
+					config::SampleTextureFilter.set(sampleTextureFilterValues[index]);
+					SaveSettings();
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
+			ImGui::EndCombo();
+		}
+
+		int sizeSelection = 0;
+		for (size_t index = 0; index < maxFilteredTextureSizeValues.size(); ++index)
+			if (maxFilteredTextureSizeValues[index] == config::MaxFilteredTextureSize.get())
+			{
+				sizeSelection = static_cast<int>(index);
+				break;
+			}
+		const auto sizeLabels = getMaxFilteredTextureSizeLabels();
+		if (ImGui::BeginCombo(T("Filter Resolution Limit"), sizeLabels[sizeSelection]))
+		{
+#if defined(__ANDROID__)
+			ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+#endif
+			for (int index = 0; index < static_cast<int>(sizeLabels.size()); ++index)
+			{
+				const bool selected = index == sizeSelection;
+				if (ImGui::Selectable(sizeLabels[index], selected))
+				{
+					config::MaxFilteredTextureSize.set(maxFilteredTextureSizeValues[index]);
+					SaveSettings();
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+#if defined(__ANDROID__)
+			scrollWhenDraggingOnVoid();
+			windowDragScroll(false);
+#endif
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled("%s", T("Filter resolution limit uses the texture width bucket. Larger textures are left on the normal sampler path."));
+	}
+	ImGui::End();
+
+	if (returnToSettings)
+	{
+		stopTextureFilterLiveTune();
+		gui_open_texture_filter_settings();
+	}
+	else if (!open)
+	{
+		stopTextureFilterLiveTune();
+	}
+}
 
 // Reset state when entering settings screen
 void resetState()
@@ -2552,9 +2736,14 @@ static void renderSettingsContentTab(SettingsTab tab)
 			const UILanguageOption uiLanguageOptions[] = {
 				{ T("System Default"), "" },
 				{ Tnop("English"), "en" },
+				{ Tnop("Deutsch"), "de" },
+				{ Tnop("Español"), "es" },
 				{ Tnop("Français"), "fr" },
 				{ Tnop("Magyar"), "hu" },
+				{ Tnop("हिन्दी"), "hi" },
+				{ Tnop("Italiano"), "it" },
 				{ Tnop("日本語"), "ja" },
+				{ Tnop("한국어"), "ko" },
 				{ Tnop("Português (Brasil)"), "pt_BR" },
 				{ Tnop("Svenska"), "sv" },
 				{ Tnop("Türkçe"), "tr" },
@@ -2657,7 +2846,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 				));
 
 		const char* consoleRegion[] = { T("Japan"), T("USA"), T("Europe"), T("Default") };
-		const char* arcadeRegion[] = { T("Japan"), T("USA"), T("Export"), T("Korea") };
+		const char* arcadeRegion[] = { T("Japan"), T("USA"), i18n::translateCtx("Arcade region", "Export"), T("Korea") };
 		const char* const* region = settings.platform.isArcade() ? arcadeRegion : consoleRegion;
 
 		SettingsUI::PopupConfig regionCfg {};
@@ -2850,7 +3039,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"It typically contains:\n"
 					"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
 					"- Save data (VMU files) and save states\n\n"
-						"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Flycast looks for.\n"
+						"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Hollycast expects.\n"
 						"Custom Paths below can also override where some of these files are stored."
 				)
 			);
@@ -2891,7 +3080,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			if (ImGui::Button(T("Reveal in Finder")))
 			{
 				char temp[512];
-				snprintf(temp, sizeof(temp), T("open \"%s\""), get_writable_config_path("").c_str());
+				snprintf(temp, sizeof(temp), "open \"%s\"", get_writable_config_path("").c_str());
 				system(temp);
 			}
 	#endif
@@ -2961,7 +3150,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		std::vector<const char*> themes;
 		for (const auto& builtin : builtins) themes.push_back(T(builtin.name));
 		for (const auto& file : customFiles)
-			labels.push_back(file.substr(0, file.size() - 5) + " (Custom)");
+			labels.push_back(strprintf(T("%s (Custom)"), file.substr(0, file.size() - 5).c_str()));
 		int selection = config::UITheme.get();
 		if (selection == CustomTheme::CustomThemeId) {
 			auto selected = std::find(customFiles.begin(), customFiles.end(), config::UICustomTheme.get());
@@ -2969,7 +3158,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 				selection = builtinCount + static_cast<int>(selected - customFiles.begin());
 			else {
 				selection = builtinCount + static_cast<int>(labels.size());
-				labels.push_back(config::UICustomTheme.get() + " (Missing)");
+				labels.push_back(strprintf(T("%s (Missing)"), config::UICustomTheme.get().c_str()));
 			}
 		} else if (selection < 0 || selection >= builtinCount) {
 			selection = 0;
@@ -3080,16 +3269,17 @@ static void renderSettingsContentTab(SettingsTab tab)
 		if (ImGui::Button(T("Edit Selected Theme")) && canEditCustom) startThemeEditor(true);
 		if (!canEditCustom) ImGui::EndDisabled();
 		ImGui::SameLine();
-		const char* importTitle = "Import Theme JSON";
+		// Keep the popup ID stable while translating its title.
+		const std::string importTitle = std::string(T("Import Theme JSON")) + "###ImportThemeJSON";
 		if (ImGui::Button(T("Import Theme…")))
-			ImGui::OpenPopup(importTitle);
-		select_file_popup(importTitle, [&](bool cancelled, const std::string& source) {
+			ImGui::OpenPopup(importTitle.c_str());
+		select_file_popup(importTitle.c_str(), [&](bool cancelled, const std::string& source) {
 			if (!cancelled) {
 				themeNotice.clear();
 				std::string imported;
 				if (CustomTheme::importFile(source, imported, themeError)) {
 					customFiles = CustomTheme::list();
-					themeNotice = "Imported " + imported;
+					themeNotice = strprintf(T("Imported %s"), imported.c_str());
 				}
 			}
 			return true;
@@ -3100,7 +3290,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			ImGui::SetNextWindowSize(ImVec2(std::max(1.0f, std::min(uiScaled(760.0f), display.x - uiScaled(24.0f))),
 					std::max(1.0f, std::min(uiScaled(650.0f), display.y - uiScaled(24.0f)))));
 		}
-		const std::string editorTitle = std::string(T(g_themeEditor.editing ? "Edit theme" : "Create theme")) + "###ThemeEditorPopup";
+		const std::string editorTitle = std::string(g_themeEditor.editing ? T("Edit theme") : T("Create theme")) + "###ThemeEditorPopup";
 		if (g_themeEditor.open && ImGui::BeginPopupModal(editorTitle.c_str(), nullptr,
 				ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::TextDisabled("%s", T("Changes preview as you edit. Cancel restores the previous theme."));
@@ -3322,13 +3512,16 @@ static void renderSettingsContentTab(SettingsTab tab)
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
 					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
 					const char* fits[] = {"cover", "contain", "stretch"};
+					// Keep the JSON values independent of the translated option labels.
+					const char* fitLabels[] = {i18n::translateCtx("Background fit", "Cover"),
+						i18n::translateCtx("Background fit", "Contain"), i18n::translateCtx("Background fit", "Stretch")};
 					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
-					if (ImGui::Combo(T("Background fit"), &fit, fits, IM_ARRAYSIZE(fits))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
+					if (ImGui::Combo(T("Background fit"), &fit, fitLabels, IM_ARRAYSIZE(fitLabels))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
 					ImGui::InputText(T("Export folder"), &g_themeEditor.exportFolder);
 					if (ImGui::Button(T("Export theme and assets"))) {
 						const std::string exportName = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
 						if (CustomTheme::exportToDirectory(g_themeEditor.draft, exportName, g_themeEditor.exportFolder, g_themeEditor.error))
-							g_themeEditor.error = "Exported " + exportName + " and its referenced assets.";
+							g_themeEditor.error = strprintf(T("Exported %s and its referenced assets."), exportName.c_str());
 					}
 					}
 					ImGui::EndChild();
@@ -3383,8 +3576,8 @@ static void renderSettingsContentTab(SettingsTab tab)
 				} else if (CustomTheme::save(filename, g_themeEditor.draft, g_themeEditor.editing, g_themeEditor.error)) {
 					customFiles = CustomTheme::list();
 					if (!completePendingThemeMigration(migrationError)) {
-						g_themeEditor.error = "Saved " + filename + ", but could not select it. " + migrationError
-								+ ". Close this editor, resolve the migration error, then select this theme from UI Theme.";
+						g_themeEditor.error = strprintf(T("Saved %s, but could not select it. %s. Close this editor, resolve the migration error, then select this theme from UI Theme."),
+								filename.c_str(), migrationError.c_str());
 					} else {
 						config::CustomTheme.get().clear();
 						config::ThemeLayout.get().clear();
@@ -4139,8 +4332,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			[](bool enabled) { config::AutoLoadState = enabled; },
 			T(
 				"Auto-Load on Start\n"
-				"When enabled, on game boot, if the hidden Auto-Save slot has an Auto-Save, "
-				"it will automatically load this slot on game boot."
+				"When enabled, the hidden Auto-Save slot loads automatically when a game starts, if a save is available."
 			)
 		);
 
@@ -4161,13 +4353,13 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"SaveProtection",
 			ICON_FA_SHIELD_HALVED,
 			T("Save Protection"),
-			T("Disabling this will remove the safeguards that help prevent lost game progress from not saving."),
+			T("Ask to save before leaving a game when automatic saving is off."),
 			static_cast<bool>(config::SaveProtection),
 			[](bool enabled) { config::SaveProtection = enabled; },
 			T(
 				"Save Protection\n"
-				"This is the assurance that you will never be able to leave a game without being prompted "
-				"to save right then, ensuring you do not accidentally leave without saving your data."
+				"When enabled, Hollycast asks you to save before leaving a game if Auto-Save on Exit is off and save states "
+				"are allowed."
 			)
 		);
 
@@ -4467,13 +4659,9 @@ void renderVideoTab()
 		static int currentPresetIndex = 0;
 		static bool presetJustApplied = false;
 
-		// Auto-detect current preset
+		// Include Custom so manual changes cannot leave a stale preset label.
 		if (!presetJustApplied)
-		{
-			VideoPresetLevel detected = detectCurrentPreset();
-			if (detected != VideoPresetLevel::Custom)
-				currentPresetIndex = static_cast<int>(detected);
-		}
+			currentPresetIndex = static_cast<int>(detectCurrentPreset());
 
 		// Build preset labels
 		const char* presetLabels[] = {
@@ -4583,9 +4771,23 @@ void renderVideoTab()
 		renderApi = 3;
 		perPixel = true;
 		break;
+	case RenderType::Metal:
+		renderApi = 4;
+		perPixel = false;
+		break;
+	case RenderType::Metal_OIT:
+		renderApi = 4;
+		perPixel = true;
+		break;
 	}
 
-	constexpr int apiCount = 0
+#ifdef USE_METAL
+	const bool metalAvailable = metalIsAvailable();
+#endif
+	const int apiCount = 0
+#ifdef USE_METAL
+		+ (metalAvailable ? 1 : 0)
+#endif
 #ifdef USE_VULKAN
 		+ 1
 #endif
@@ -4604,8 +4806,8 @@ void renderVideoTab()
 	{
 		if (apiCount > 1)
 		{
-			std::array<const char*, 4> apiLabels {};
-			std::array<int, 4> apiValues {};
+			std::array<const char*, 5> apiLabels {};
+			std::array<int, 5> apiValues {};
 			int apiOptionCount = 0;
 #ifdef USE_OPENGL
 			apiLabels[apiOptionCount] = "OpenGL";
@@ -4626,6 +4828,13 @@ void renderVideoTab()
 #ifdef USE_DX11
 			apiLabels[apiOptionCount] = "DirectX 11";
 			apiValues[apiOptionCount++] = 3;
+#endif
+
+#ifdef USE_METAL
+			if (metalAvailable) {
+				apiLabels[apiOptionCount] = T("Metal (Experimental)");
+				apiValues[apiOptionCount++] = 4;
+			}
 #endif
 
 			int currentApiIndex = 0;
@@ -4679,6 +4888,9 @@ void renderVideoTab()
 						)
 					);
 					break;
+				case 4:
+					SetSettingsFooterText(T("Native Metal rendering for macOS. Experimental; per-pixel sorting is available on supported devices."));
+					break;
 				case 2:
 					SetSettingsFooterText(
 						T(
@@ -4698,6 +4910,10 @@ void renderVideoTab()
 				renderApi = apiValues[selectedIndex];
 				if (renderApi == 2)
 					perPixel = false;
+#ifdef USE_METAL
+				if (renderApi == 4 && !metalSupportsPerPixel())
+					perPixel = false;
+#endif
 				return true;
 			};
 
@@ -4719,7 +4935,11 @@ void renderVideoTab()
 	if (RenderCollapsingHeader("TransparentSortingSection", ICON_FA_WAND_SPARKLES, T("Transparent Sorting"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		{
-			const bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+			bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+#ifdef USE_METAL
+			if (renderApi == 4)
+				has_per_pixel = metalSupportsPerPixel();
+#endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;
 
 			std::array<const char*, 3> sortingLabels {};
@@ -4761,7 +4981,7 @@ void renderVideoTab()
 				{
 				case 2:
 					SetSettingsFooterText(
-						T(
+						/* xgettext:no-c-format */ T(
 							"Per Pixel\n"
 							"Highest performance requirements. This matches the Dreamcast's sorting quality, but only about 15% of games need it and show a meaningful difference versus the middle sorting option.\n"
 							"Use only when needed (or if you have the resource overhead). It can almost double resource requirements.\n"
@@ -4771,7 +4991,7 @@ void renderVideoTab()
 					break;
 				case 0:
 					SetSettingsFooterText(
-						T(
+						/* xgettext:no-c-format */ T(
 							"Per Triangle\n"
 							"Good enough for about 85% of games to play with no or only very brief flashes of incorrect sorting.\n"
 							"For most mid-range devices trying to reach 4K resolutions, you will likely spend your time here unless you must use Per Pixel.\n"
@@ -4818,7 +5038,7 @@ void renderVideoTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("TransparentSortingSetting"),
-				T(
+				/* xgettext:no-c-format */ T(
 					"Sorting Option\n"
 					"This controls how we sort transparent layers in games.\n"
 					"A handful of games will not render certain images correctly at all (example: Shenmue journal), or might have layering issues (example: the white of Sonic's eyes in Sonic Adventure), and a handful of others can show clipping or incorrect texture layering in some spots.\n\n"
@@ -5128,7 +5348,7 @@ void renderVideoTab()
 			stretchCfg.label = T("Horizontal Stretching");
 			stretchCfg.icon = ICON_FA_EXPAND;
 			stretchCfg.popupID = Tnop("HorizontalStretchPopup");
-			stretchCfg.description = T("Stretches the image sideways to fill your display. Use 132% for 16:9 correction.");
+			stretchCfg.description = /* xgettext:no-c-format */ T("Stretches the image sideways to fill your display. Use 132% for 16:9 correction.");
 			stretchCfg.currentValue = &config::ScreenStretching.get();
 			stretchCfg.minValue = 100;
 			stretchCfg.maxValue = 250;
@@ -5142,9 +5362,9 @@ void renderVideoTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("HorizontalStretchingSetting"),
-				T("Fine-tune horizontal scaling (often 132% for 16:9 correction)."),
+				/* xgettext:no-c-format */ T("Fine-tune horizontal scaling (often 132% for 16:9 correction)."),
 				stretchPopupCfg,
-				T(
+				/* xgettext:no-c-format */ T(
 					"Horizontal Stretching\n"
 					"Stretches the image sideways.\n"
 					"132% is a common value for 16:9 correction, but the best value depends on your display and personal preference."
@@ -5196,7 +5416,7 @@ void renderVideoTab()
 				return;
 			SetSettingsFooterText(
 				(selectedIndex == 0)
-					? T("Pixel Buffer Size\n512 MB reserves the least memory and is the fastest place to start. Use this if you want to minimize VRAM/RAM usage, but increase it if you see missing or incorrect transparency in heavier scenes.")
+					? T("Pixel Buffer Size\n512 MB is the smallest budget and is the fastest place to start. Use this if you want to minimize VRAM/RAM usage, but increase it if you see missing or incorrect transparency in heavier scenes.")
 					: (selectedIndex == 1)
 						? T("Pixel Buffer Size\n1 GB is a good middle ground if 512 MB is not enough. It gives Per-Pixel sorting more room for complex scenes without jumping straight to the larger memory costs.")
 						: (selectedIndex == 2)
@@ -5212,11 +5432,11 @@ void renderVideoTab()
 
 		RenderGeneralPopupSettingRow(
 			Tnop("PixelBufferSizeSetting"),
-			T("Reserved memory for Per-Pixel transparency rendering."),
+			T("Memory budget for Per-Pixel transparency rendering."),
 			pixelBufferCfg,
 			T(
 				"Pixel Buffer Size\n"
-				"Controls how much memory is reserved for Per-Pixel (OIT) transparency rendering.\n"
+				"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
 				"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
 				"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
 			)
@@ -5230,12 +5450,11 @@ void renderVideoTab()
 		perPixelLayersCfg.label = T("Maximum Layers");
 		perPixelLayersCfg.icon = ICON_FA_LAYER_GROUP;
 		perPixelLayersCfg.popupID = Tnop("PerPixelMaximumLayersPopup");
-		perPixelLayersCfg.description =
-			T(
-				"Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
+		perPixelLayersCfg.description = renderApi == 4
+			? T("Controls how many transparent layers are resolved per pixel. Metal retains the nearest layers when the limit is exceeded. Lower values can improve performance.")
+			: T("Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
 				"Increase this if you see missing transparency or incorrect layering.\n"
-				"Lower values reduce memory pressure and can improve performance."
-			);
+				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
 		perPixelLayersCfg.minValue = 8;
 		perPixelLayersCfg.maxValue = 128;
@@ -5254,12 +5473,12 @@ void renderVideoTab()
 			Tnop("PerPixelMaximumLayersSetting"),
 			T("Maximum transparent layers resolved per pixel."),
 			perPixelLayersPopupCfg,
-			T(
-				"Per-Pixel Maximum Layers\n"
-				"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
-				"Increase this if you see missing transparency or incorrect layering.\n"
-				"Decrease it to improve performance and reduce memory pressure."
-			)
+			renderApi == 4
+				? T("Per-Pixel Maximum Layers\nMetal retains the nearest layers when the limit is exceeded. Increase the limit if transparency is missing; lower it to reduce resolve work.")
+				: T("Per-Pixel Maximum Layers\n"
+					"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
+					"Increase this if you see missing transparency or incorrect layering.\n"
+					"Decrease it to improve performance and reduce memory pressure.")
 		);
 	}
 
@@ -5480,7 +5699,7 @@ void renderVideoTab()
 				));
 		}
 
-		// Texture Filtering
+		// Texture Sampling (legacy sampler override)
 		const std::array<const char*, 3> textureFilterLabels {
 			T("Default"),
 			T("Force Nearest-Neighbor"),
@@ -5492,7 +5711,7 @@ void renderVideoTab()
 
 		SettingsUI::PopupConfig textureFilterCfg {};
 		textureFilterCfg.type = SettingsUI::PopupType::Options;
-		textureFilterCfg.options.label = T("Filtering Mode");
+		textureFilterCfg.options.label = T("Sampler Override");
 		textureFilterCfg.options.icon = ICON_FA_FILTER;
 		textureFilterCfg.options.popupID = Tnop("TextureFilteringPopup");
 		textureFilterCfg.options.options = textureFilterLabels.data();
@@ -5508,15 +5727,190 @@ void renderVideoTab()
 
 		RenderGeneralPopupSettingRow(
 			Tnop("TextureFilteringSetting"),
-			T("Override how textures are filtered (sampled)."),
+			T("Override the sampler mode used when textures are sampled."),
 			textureFilterCfg,
 			T(
-				"Texture Filtering\n"
+				"Texture Sampling Override\n"
 				"Default: uses game behavior.\n"
 				"Force Nearest-Neighbor: crisp/pixelated look.\n"
 				"Force Linear: smoother/blurrier look.\n\n"
 				"For 2D/pixel-art, many users prefer Nearest-Neighbor. For 3D, Linear can look nicer."
 			));
+
+		const auto sampleTextureFilterLabels = getSampleTextureFilterLabels();
+		const std::array<const char*, 20> sampleTextureFilterDescriptions {
+			T(
+				"Sample Texture Filter: Disabled\n"
+				"Uses HollyCast's legacy texture sampling behavior."
+			),
+			T(
+				"Sample Texture Filter: Bilinear\n"
+				"Smooths texture samples with alpha-weighted bilinear interpolation. Good simple baseline."
+			),
+			T(
+				"Sample Texture Filter: Bilinear / No Edge Blending\n"
+				"Smooth bilinear filtering with harder alpha edges to reduce transparent-edge bleeding."
+			),
+			T(
+				"Sample Texture Filter: Jinc2\n"
+				"Windowed Jinc-style reconstruction. Premium smooth option, but sharp edges can show mild ringing."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 / No Edge Blending\n"
+				"Jinc2 reconstruction with harder alpha edges for sprites, UI, and texture-sheet borders."
+			),
+			T(
+				"Sample Texture Filter: MMPX\n"
+				"Pixel-art style reconstruction that preserves hard shapes. Best for 2D artwork, not natural textures."
+			),
+			T(
+				"Sample Texture Filter: MMPX Enhanced\n"
+				"Softer MMPX variant that blends reconstructed pixels back toward the source."
+			),
+			T(
+				"Sample Texture Filter: MMPX Advanced\n"
+				"More aggressive MMPX edge rules. Useful for pixel-art tests, but can be stylized."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Anti-Ring\n"
+				"Jinc2-style reconstruction with halo clamping. Better for signs, logos, HUD art, decals, and alpha edges."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Sharp Anti-Ring\n"
+				"Sharper Jinc2-style reconstruction with anti-ringing. Advanced option for crisp Dreamcast-era texture sheets."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Mild Anti-Ring\n"
+				"Jinc2 reconstruction with mild sharpening and an anti-ringing clamp."
+			),
+			T(
+				"Sample Texture Filter: Jinc2 Extra Sharp Anti-Ring\n"
+				"Jinc2 reconstruction with stronger sharpening and an anti-ringing clamp."
+			),
+			T(
+				"Sample Texture Filter: Lanczos2 Anti-Ring\n"
+				"Sharp sinc/Lanczos reconstruction with a smaller radius and halo clamp. Strong everyday texture option."
+			),
+			T(
+				"Sample Texture Filter: Lanczos3 Anti-Ring\n"
+				"Sharper larger-radius Lanczos reconstruction with halo clamp. High quality, but more likely to emphasize edges."
+			),
+			"", // Retired ID 14; keep persisted filter IDs stable.
+			T(
+				"Sample Texture Filter: Robidoux\n"
+				"Balanced cubic reconstruction. Good compromise for painted or photographic Dreamcast-era textures."
+			),
+			T(
+				"Sample Texture Filter: Robidoux Sharp\n"
+				"Sharper Robidoux-style cubic filter. A good candidate for texture packs and detailed environment art."
+			),
+			T(
+				"Sample Texture Filter: Bicubic Catmull-Rom\n"
+				"Classic sharper bicubic reconstruction. Crisp, familiar, and cheaper than the heavier premium filters."
+			),
+			T(
+				"Sample Texture Filter: Bicubic Mitchell\n"
+				"Softer Mitchell-Netravali bicubic reconstruction. Smooth low-ringing option for UI and texture sheets."
+			),
+			T(
+				"Sample Texture Filter: Nearest-Neighbor\n"
+				"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the "
+				"selected size limit and leaves the global Sampler Override set to Default."
+			)
+		};
+		if (config::SampleTextureFilter.get() == 14)
+			config::SampleTextureFilter.set(0);
+		int sampleTextureFilterSelection = getSampleTextureFilterOptionIndex(config::SampleTextureFilter.get());
+
+		SettingsUI::PopupConfig sampleTextureFilterCfg {};
+		sampleTextureFilterCfg.type = SettingsUI::PopupType::Options;
+		sampleTextureFilterCfg.options.label = T("Sample Texture Filter");
+		sampleTextureFilterCfg.options.icon = ICON_FA_FILTER;
+		sampleTextureFilterCfg.options.popupID = Tnop("SampleTextureFilterPopup");
+		sampleTextureFilterCfg.options.options = sampleTextureFilterLabels.data();
+		sampleTextureFilterCfg.options.optionCount = static_cast<int>(sampleTextureFilterLabels.size());
+		sampleTextureFilterCfg.options.currentValue = &sampleTextureFilterSelection;
+		sampleTextureFilterCfg.options.valueWidth = 270.0f;
+		sampleTextureFilterCfg.options.description = sampleTextureFilterDescriptions[sampleTextureFilterValues[sampleTextureFilterSelection]];
+		sampleTextureFilterCfg.options.onOptionHighlight = [&](int selectedIndex, const char*) {
+			if (selectedIndex >= 0 && selectedIndex < static_cast<int>(sampleTextureFilterValues.size()))
+				SetSettingsFooterText(sampleTextureFilterDescriptions[sampleTextureFilterValues[selectedIndex]]);
+		};
+		sampleTextureFilterCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(sampleTextureFilterLabels.size()))
+				return false;
+			config::SampleTextureFilter.set(sampleTextureFilterValues[selectedIndex]);
+			return true;
+		};
+
+		const bool sampleTextureFilterSupported = config::RendererType != RenderType::DirectX9;
+		RenderGeneralPopupSettingRow(
+			Tnop("SampleTextureFilterSetting"),
+			T("Choose the sample-time texture filtering algorithm."),
+			sampleTextureFilterCfg,
+			sampleTextureFilterSupported
+				? sampleTextureFilterDescriptions[sampleTextureFilterValues[sampleTextureFilterSelection]]
+				: T("Sample-time filtering is not available on DirectX 9."),
+			!sampleTextureFilterSupported);
+		const auto maxFilteredTextureSizeLabels = getMaxFilteredTextureSizeLabels();
+		int maxFilteredTextureSizeSelection = 5;
+		for (size_t i = 0; i < maxFilteredTextureSizeValues.size(); i++)
+		{
+			if (maxFilteredTextureSizeValues[i] == config::MaxFilteredTextureSize.get())
+			{
+				maxFilteredTextureSizeSelection = static_cast<int>(i);
+				break;
+			}
+		}
+
+		SettingsUI::PopupConfig maxFilteredTextureSizeCfg {};
+		maxFilteredTextureSizeCfg.type = SettingsUI::PopupType::Options;
+		maxFilteredTextureSizeCfg.options.label = T("Max Filtered Texture Size");
+		maxFilteredTextureSizeCfg.options.icon = ICON_FA_EXPAND;
+		maxFilteredTextureSizeCfg.options.popupID = Tnop("MaxFilteredTextureSizePopup");
+		maxFilteredTextureSizeCfg.options.options = maxFilteredTextureSizeLabels.data();
+		maxFilteredTextureSizeCfg.options.optionCount = static_cast<int>(maxFilteredTextureSizeLabels.size());
+		maxFilteredTextureSizeCfg.options.currentValue = &maxFilteredTextureSizeSelection;
+		maxFilteredTextureSizeCfg.options.valueWidth = 170.0f;
+		maxFilteredTextureSizeCfg.options.onChange = [&](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex >= static_cast<int>(maxFilteredTextureSizeValues.size()))
+				return false;
+			config::MaxFilteredTextureSize.set(maxFilteredTextureSizeValues[selectedIndex]);
+			return true;
+		};
+
+		RenderGeneralPopupSettingRow(
+			Tnop("MaxFilteredTextureSizeSetting"),
+			T("Limit filtering to smaller texture groups."),
+			maxFilteredTextureSizeCfg,
+			T(
+				"Max Filtered Texture Size\n"
+				"Controls the largest texture group affected by texture upscaling and sample texture filters.\n"
+				"Upscaling checks the original width. Sample filters check the uploaded width, including upscaling and replacement textures.\n"
+				"Buckets use texture width, so 8x8 includes 8x16 and 8x32, while 16x16 includes 16x8.\n"
+				"1024x1024+ includes larger texture-pack assets.\n\n"
+				"Live preview updates sample-time filtering immediately. Already-uploaded texture-upscale results may require a cache refresh or game restart."
+			));
+		ImGui::Spacing();
+		const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause());
+		if (!canLiveTune)
+			ImGui::BeginDisabled();
+		const char* liveTuneLabel = T("Texture Filtering Live Tune");
+		const float liveTuneWidth = std::max(uiScaled(260.f),
+			ImGui::CalcTextSize(liveTuneLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f);
+		if (ImGui::Button(liveTuneLabel, ImVec2(liveTuneWidth, uiScaled(34.f))))
+		{
+			applyPendingSettings();
+			GamepadDevice::load_system_mappings();
+			g_textureFilterLiveTune.store(true, std::memory_order_relaxed);
+			// Resume through Loading when replacement textures need a refresh or preload.
+			gui_resume_game();
+		}
+		if (!canLiveTune)
+			ImGui::EndDisabled();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("%s", !game_started ? T("Start a game to tune texture filtering over its current frame.")
+					: T("The current game must be pausable for live texture filtering."));
 
 	}
 
@@ -5661,6 +6055,9 @@ void renderVideoTab()
 	case 1:
 		config::RendererType = perPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
 		break;
+	case 4:
+		config::RendererType = perPixel ? RenderType::Metal_OIT : RenderType::Metal;
+		break;
 	case 2:
 		config::RendererType = RenderType::DirectX9;
 		break;
@@ -5756,7 +6153,7 @@ void renderOnScreenDisplayTab()
 			vmuTransparencyCfg.slider.valueWidth = 220.0f;
 			vmuTransparencyCfg.slider.sliderWidth = 320.0f;
 			RenderGeneralPopupSettingRow(Tnop("VmuWindowTransparencySetting"),
-				T("0% is solid. 100% is invisible."), vmuTransparencyCfg,
+				/* xgettext:no-c-format */ T("0% is solid. 100% is invisible."), vmuTransparencyCfg,
 				T("25% keeps the default transparency. Desktop VMUs dim further in menus. Changes apply immediately and are saved with your settings."));
 		}
 #endif
@@ -5815,11 +6212,13 @@ void renderOnScreenDisplayTab()
 				{ "OverlayShowOutputFPS", T("Show Output FPS"), T("Counts successful frames presented to the screen. Compare it with Game FPS to identify repeated or omitted host output frames; it is display cadence, not the game's internal rendered-frame rate."), false },
 				{ "OverlayShowEmulationSpeed", T("Show Emulation Speed"), T("Shows current VPS relative to the active PAL or NTSC target and the configured speed limit. This is overall pace, not a CPU or GPU utilization meter."), true },
 				{ "OverlayShowThreadingState", T("Show Threading State"), T("Shows whether SH4 emulation and PVR rendering run on separate host threads. Threaded mode changes which thread can become the limiting host CPU core."), true },
-				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("Hollycast is the emulator process share of all logical CPU cores. Device is total CPU use from all apps. A single SH4 or renderer thread can still fill one core while Hollycast is low on an 8-core device."), true },
+				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("Shows Hollycast's CPU use as a share of total capacity across all logical cores. Device shows total CPU use "
+				"from all apps. A single SH4 or renderer thread can still fully occupy one core while Hollycast's overall "
+				"share remains low on an 8-core device."), true },
 				{ "OverlayShowGpuUsage", T("Show Host GPU"), T("Shows timestamped GPU work as a one-second share and milliseconds per timed render. Includes PVR screen renders and direct framebuffer uploads; full framebuffer emulation can perform both per video frame. It is backend GPU execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX 9, and DirectX 11 support it."), true },
-				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
-				{ "OverlayShowPvrTimingPressure", T("Show Dreamcast PVR Schedule"), T("Shows all emulated PVR renderer-complete delays scheduled during the sample as a share of the active Dreamcast video-frame budgets. Values above 100% mean scheduled render work exceeded one frame of budget on average. It is scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."), true },
-				{ "OverlayShowCpuUsage", T("Show Host SH4 Thread"), T("Shows host CPU time used by the thread running SH4 emulation. A value near 100% means that one host core is saturated; it does not directly mean the original Dreamcast SH4 is full."), false },
+				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), /* xgettext:no-c-format */ T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
+				{ "OverlayShowPvrTimingPressure", T("Show Dreamcast PVR Schedule"), /* xgettext:no-c-format */ T("Shows all emulated PVR renderer-complete delays scheduled during the sample as a share of the active Dreamcast video-frame budgets. Values above 100% mean scheduled render work exceeded one frame of budget on average. It is scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."), true },
+				{ "OverlayShowCpuUsage", T("Show Host SH4 Thread"), /* xgettext:no-c-format */ T("Shows host CPU time used by the thread running SH4 emulation. A value near 100% means that one host core is saturated; it does not directly mean the original Dreamcast SH4 is full."), false },
 				{ "OverlayShowPvrUsage", T("Show Host PVR Renderer Thread"), T("Shows host CPU time used by the PVR renderer thread or its shared-thread portion. It exposes emulator and graphics-driver preparation cost, not Dreamcast PVR pressure or hardware GPU use."), false },
 				{ "OverlayShowResolution", T("Show Resolution"), T("Shows native Dreamcast output, internal rendered size, host viewport, and final screen output. Higher rendered resolution can raise host GPU time without changing Dreamcast SH4 or PVR scheduling."), true },
 				{ "OverlayShowFrameTimes", T("Show Frame Times"), T("Shows minimum, average, and maximum intervals between successful host presents. Frame-time spikes expose stutter even when the one-second FPS average looks normal."), true },
@@ -9143,6 +9542,8 @@ void renderAboutTab()
 			graphicsTitle = T("Graphics - OpenGL");
 		else if (isVulkan(config::RendererType))
 			graphicsTitle = T("Graphics - Vulkan");
+		else if (isMetal(config::RendererType))
+			graphicsTitle = T("Graphics - Metal");
 		else if (isDirectX(config::RendererType))
 			graphicsTitle = T("Graphics - DirectX");
 
@@ -9196,13 +9597,13 @@ void renderAboutTab()
 		ImGui::Text("%s", T("Website"));
 		ImGui::PopStyleColor();
 		ImGui::SameLine();
-		ImGui::TextDisabled("https://github.com/OrangeFox86/HollyCast#readme");
+		ImGui::TextDisabled("https://github.com/nexus382/Hollycast#readme");
 
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
 		ImGui::Text("%s", T("Source Code"));
 		ImGui::PopStyleColor();
 		ImGui::SameLine();
-		ImGui::TextDisabled("https://github.com/OrangeFox86/HollyCast");
+		ImGui::TextDisabled("https://github.com/nexus382/Hollycast");
 		ImGui::Spacing();
 	}
 
@@ -9220,10 +9621,17 @@ void renderAboutTab()
 			"(at your option) any later version."
 		));
 		ImGui::Spacing();
-		if (ImGui::TreeNode("Noto Sans CJK (SIL Open Font License)"))
+		const struct { const char* title; const char* path; } bundledLicenses[] = {
+			{"Noto Sans CJK (SIL Open Font License)", "fonts/NotoSansCJK-LICENSE.txt"},
+			{"Noto Sans Devanagari (SIL Open Font License)", "fonts/NotoSansDevanagari-LICENSE.txt"},
+			{"HarfBuzz", "fonts/HarfBuzz-LICENSE.txt"},
+		};
+		for (const auto& bundledLicense : bundledLicenses)
 		{
+			if (!ImGui::TreeNode(bundledLicense.title))
+				continue;
 			size_t licenseSize = 0;
-			auto license = resource::load("fonts/NotoSansCJK-LICENSE.txt", licenseSize);
+			auto license = resource::load(bundledLicense.path, licenseSize);
 			if (license)
 			{
 				const std::string text(reinterpret_cast<const char*>(license.get()), licenseSize);
@@ -9329,21 +9737,7 @@ void renderSettingsNew()
 			ImGui::PushFont(settingsTitleFont);
 
 		const std::function<void()> exitSettings = [&]() {
-			dreampotato::update();
-			if (g_mapleDevicesChangedInSettings)
-			{
-				g_mapleDevicesChangedInSettings = false;
-				if (game_started && settings.platform.isConsole())
-				{
-#if defined(USE_DREAMLINK_DEVICES)
-					reconnectDreamLinks();
-#endif
-					maple_ReconnectDevices();
-					reset_vmus();
-				}
-			}
-
-			SaveSettings();
+			applyPendingSettings();
 
 			if (game_started)
 				gui_setState(GuiState::Commands);

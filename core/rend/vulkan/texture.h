@@ -2,6 +2,7 @@
  *  Created on: Oct 3, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -22,6 +23,7 @@
 #include "vulkan_context.h"
 #include "buffer.h"
 #include "rend/TexCache.h"
+#include "rend/sample_filter.h"
 
 #include <algorithm>
 #include <map>
@@ -123,18 +125,25 @@ public:
 	vk::Sampler GetSampler(const PolyParam& poly, bool punchThrough, bool texture1 = false)
 	{
 		TSP tsp = texture1 ? poly.tsp1 : poly.tsp;
-		if (poly.texture != nullptr && poly.texture->gpuPalette)
+		BaseTextureCacheData *texture = texture1 ? poly.texture1 : poly.texture;
+		const sample_filter::Settings filter(config::SampleTextureFilter.get(), config::MaxFilteredTextureSize.get());
+		const bool reconstruct = texture != nullptr && poly.tcw.PixelFmt != PixelBumpMap
+				&& filter.appliesTo(static_cast<Texture*>(texture)->getSize().width);
+		if (texture != nullptr && texture->gpuPalette)
+			tsp.FilterMode = 0;
+		else if (reconstruct)
 			tsp.FilterMode = 0;
 		else if (config::TextureFiltering == 1)
 			tsp.FilterMode = 0;
 		else if (config::TextureFiltering == 2)
 			tsp.FilterMode = 1;
-		return GetSampler(tsp, punchThrough);
+		return GetSampler(tsp, punchThrough, reconstruct);
 	}
 
-	vk::Sampler GetSampler(TSP tsp, bool punchThrough = false)
+	vk::Sampler GetSampler(TSP tsp, bool punchThrough = false, bool baseLevel = false)
 	{
-		const u32 samplerHash = (tsp.full & TSP_Mask) | punchThrough;	// MipMapD, FilterMode, ClampU, ClampV, FlipU, FlipV
+		// Keep reconstruction separate from legacy point samplers, which still use mipmaps.
+		const u32 samplerHash = (tsp.full & TSP_Mask) | (punchThrough ? 1u : 0u) | (baseLevel ? 2u : 0u);	// MipMapD, FilterMode, ClampU, ClampV, FlipU, FlipV
 		const auto& it = samplers.find(samplerHash);
 		if (it != samplers.end())
 			return it->second.get();
@@ -164,7 +173,7 @@ public:
 							mipmapMode, uRepeat, vRepeat, wRepeat, mipLodBias,
 							anisotropicFiltering, std::min((float)config::AnisotropicFiltering, VulkanContext::Instance()->GetMaxSamplerAnisotropy()),
 							false, vk::CompareOp::eNever,
-							0.0f, vk::LodClampNone, vk::BorderColor::eFloatOpaqueBlack)))).first->second.get();
+							0.0f, baseLevel ? 0.0f : vk::LodClampNone, vk::BorderColor::eFloatOpaqueBlack)))).first->second.get();
 	}
 	static const u32 TSP_Mask = 0x7ef00;
 

@@ -1,4 +1,5 @@
 #pragma once
+/* Portions Copyright 2026 The Hollycast Authors */
 #include "types.h"
 #include "ta_structs.h"
 #include "pvr_regs.h"

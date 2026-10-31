@@ -37,6 +37,9 @@ if(NOT LIBRETRO)
     cmrc_add_resources(Hollycast-resources
             fonts/NotoSansCJK-Regular.ttc.zip
             fonts/NotoSansCJK-LICENSE.txt
+            fonts/NotoSansDevanagari-Medium.ttf.zip
+            fonts/NotoSansDevanagari-LICENSE.txt
+            fonts/HarfBuzz-LICENSE.txt
             fonts/Roboto-Medium.ttf.zip
             fonts/Roboto-Bold.ttf.zip
             fonts/Roboto-Regular.ttf.zip
@@ -68,11 +71,17 @@ cmrc_add_resources(Hollycast-resources fonts/biosfont.bin.zip)
 
 cmrc_add_resources(Hollycast-resources
 	WHENCE resources
+	resources/i18n/de.po
+	resources/i18n/es.po
 	resources/i18n/fr.po
 	resources/i18n/hu.po
+	resources/i18n/hi.po
+	resources/i18n/it.po
 	resources/i18n/ja.po
+	resources/i18n/ko.po
 	resources/i18n/pt_BR.po
 	resources/i18n/sv.po
+	resources/i18n/tr.po
 	resources/i18n/zh_CN.po
 	resources/i18n/zh_HK.po
 	resources/i18n/zh_TW.po)

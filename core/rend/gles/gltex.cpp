@@ -19,6 +19,7 @@ struct OpenGLGpuPreloadedTexture final : GpuPreloadedTexture
 	}
 
 	GLuint texture = 0;
+	u32 width = 0;
 };
 }
 
@@ -220,6 +221,7 @@ void TextureCacheData::UploadToGPU(int width, int height, const u8 *temp_tex_buf
 		customTextureObject = false;
 	}
 	((*this).*uploadToGpu)(width, height, temp_tex_buffer, mipmapped, mipmapsIncluded);
+	uploadedWidth = width;
 	glCheck();
 }
 
@@ -331,6 +333,7 @@ bool TextureCacheData::uploadCustomTexture(const PreparedCustomTexture& customTe
 		}
 	}
 	texID = newTexture;
+	uploadedWidth = customTexture.width;
 	customTextureObject = true;
 	return true;
 }
@@ -348,6 +351,7 @@ GpuPreloadedTexture::Ptr TextureCacheData::createGpuPreloadedTexture(
 	if (!uploadedTexture.uploadCustomTexture(customTexture, true))
 		return nullptr;
 	texture->texture = uploadedTexture.texID;
+	texture->width = uploadedTexture.uploadedWidth;
 	uploadedTexture.texID = 0;
 	uploadedTexture.customTextureObject = false;
 	return texture;
@@ -359,6 +363,7 @@ bool TextureCacheData::useGpuPreloadedTexture(const GpuPreloadedTexture::Ptr& te
 	if (!openGlTexture)
 		return false;
 	texID = openGlTexture->texture;
+	uploadedWidth = openGlTexture->width;
 	customTextureObject = false;
 	return true;
 }
@@ -549,6 +554,7 @@ void ReadRTTBuffer()
 			TextureCacheData *texture_data = TexCache.getRTTexture(tex_addr, fb_packmode, wpo2, hpo2);
 			glcache.DeleteTextures(1, &texture_data->texID);
 			texture_data->texID = gl.rtt.framebuffer->detachTexture();
+			texture_data->uploadedWidth = gl.rtt.framebuffer->getWidth();
 			texture_data->dirty = 0;
 			texture_data->unprotectVRam();
 		}
