@@ -240,22 +240,24 @@ TEST(ReShadeCompilerTest, KeepsFloatingShaderSyntaxIndependentOfHostLocale)
 		std::locale previous = std::locale();
 		~RestoreLocale() { std::locale::global(previous); }
 	} restoreLocale;
-	std::locale::global(std::locale(std::locale::classic(), new DecimalComma));
-
-	reshadefx::lexer lexer("0.125f 6.25e-2 .5 16777215.0");
-	for (float expected : { 0.125f, 0.0625f, 0.5f, 16777215.f }) {
-		const reshadefx::token token = lexer.lex();
-		ASSERT_EQ(reshadefx::tokenid::float_literal, token.id);
-		EXPECT_FLOAT_EQ(expected, token.literal_as_float);
+	for (const std::locale& locale : { std::locale::classic(), std::locale(std::locale::classic(), new DecimalComma) }) {
+		std::locale::global(locale);
+		reshadefx::lexer lexer("0.125f 0.125F 0.125l 0.125L 6.25e-2F .5f 1f 16777215.0");
+		for (float expected : { 0.125f, 0.125f, 0.125f, 0.125f, 0.0625f, 0.5f, 1.f, 16777215.f }) {
+			const reshadefx::token token = lexer.lex();
+			ASSERT_EQ(reshadefx::tokenid::float_literal, token.id);
+			EXPECT_FLOAT_EQ(expected, token.literal_as_float);
+		}
 	}
 
 	const std::string effect =
-		"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return float4(1.25, 0.0625, 0.5, 1.0); }\n"
+		"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return float4(0.125f, 0.25F, 0.5l, 1.0L); }\n"
 		"technique Numeric { pass { PixelShader = Pixel; } }\n";
 	postprocess::ShaderPassSource source;
 	std::string error;
 	ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
-	EXPECT_NE(std::string::npos, source.fragment.find("1.25000000e+00"));
+	for (const char *constant : { "1.25000000e-01", "2.50000000e-01", "5.00000000e-01", "1.00000000e+00" })
+		EXPECT_NE(std::string::npos, source.fragment.find(constant));
 	std::string hlsl;
 	EXPECT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, source.slangParameters, {}, 1, hlsl, error)) << error;
 }

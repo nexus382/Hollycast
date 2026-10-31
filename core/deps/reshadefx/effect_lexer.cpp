@@ -1164,6 +1164,8 @@ void reshadefx::lexer::parse_numeric_literal(token &tok) const
 		}
 	}
 
+	// Suffixes belong to the token, but not to the number passed to either parser.
+	const auto numeric_end = end;
 	// Various suffixes force specific literal types
 	if ((*end == 'U' || *end == 'u') && tok.id == tokenid::int_literal) // The 'u' suffix is only valid on integers and needs to be ignored otherwise
 	{
@@ -1188,11 +1190,11 @@ void reshadefx::lexer::parse_numeric_literal(token &tok) const
 	else
 	{
 #ifdef HOLLYCAST_HAVE_FLOAT_CHARCONV
-		std::from_chars(begin, end, tok.literal_as_float);
+		std::from_chars(begin, numeric_end, tok.literal_as_float);
 #else
 		// Keep shader decimal syntax independent of the host locale on older
 		// standard libraries without floating-point from_chars.
-		std::istringstream literal(std::string(begin, end));
+		std::istringstream literal(std::string(begin, numeric_end));
 		literal.imbue(std::locale::classic());
 		literal >> tok.literal_as_float;
 #endif

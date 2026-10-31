@@ -640,7 +640,7 @@ TEST(PostProcessingChainTest, NormalizesCrLfRetroArchGlslInterface)
 	std::string error;
 	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
 	EXPECT_EQ(std::string::npos, source.fragment.find("#define SourceSize"));
-	EXPECT_NE(std::string::npos, source.fragment.find("#define HollycastSourceSize4"));
+	EXPECT_NE(std::string::npos, source.fragment.find("vec4(SourceSize, 1.0 / SourceSize)"));
 }
 
 TEST(PostProcessingChainTest, PreprocessorPreservesFunctionMacroSeparatorsAndStripsComments)
@@ -682,6 +682,79 @@ TEST(PostProcessingChainTest, FunctionMacroArgumentsDoNotRewriteInjectedSwizzles
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(source.fragment, hlsl, error)) << error;
 #ifdef _WIN32
 	EXPECT_TRUE(compileHlsl(hlsl, "ps_4_0", error)) << error;
+#endif
+}
+
+TEST(PostProcessingChainTest, ExpandsSelfReferencingSizeMacrosOnlyOnce)
+{
+	const std::string shader =
+		"#if defined(FRAGMENT)\n"
+		"uniform vec2 OutputSize;\nuniform vec2 TextureSize;\n"
+		"#define OutputSize vec4(OutputSize, 1.0 / OutputSize)\n"
+		"#define SourceSize vec4(TextureSize, 1.0 / TextureSize)\n"
+		"#define VIEW OutputSize\n"
+		"void main() { FragColor = VIEW + SourceSize; }\n#endif\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
+	EXPECT_NE(std::string::npos, source.fragment.find("vec4(OutputSize, 1.0 / OutputSize)"));
+	EXPECT_EQ(std::string::npos, source.fragment.find("#define"));
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, {}, {}, 1, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+#if defined(USE_VULKAN)
+	std::string fragment, vertex;
+	ASSERT_TRUE(postprocess::buildVulkanShaderSources(source, {}, {}, 1, fragment, vertex, error)) << error;
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eFragment, fragment, error)) << error;
+#endif
+}
+
+TEST(PostProcessingChainTest, CompilesMultilineParameterUniformDeclarations)
+{
+	const std::string shader =
+		"#pragma parameter amp \"Amplitude\" 1.25 0.0 2.0 0.05\n"
+		"#pragma parameter phase \"Phase\" 0.5 0.0 2.0 0.05\n"
+		"#if defined(FRAGMENT)\nuniform float amp,\n phase;\n"
+		"void main() { FragColor = vec4(amp, phase, 0.0, 1.0); }\n#endif\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
+	ASSERT_EQ(2u, source.parameters.size());
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(source.fragment, source.parameters, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+}
+
+TEST(PostProcessingChainTest, SuppliesLegacyHistoryCoordinatesAndColumnWiseMvp)
+{
+	const std::string shader =
+		"#if defined(VERTEX)\n"
+		"in vec4 VertexCoord;\nin vec2 TexCoord;\nin vec2 PrevTexCoord;\nin vec4 Prev6TexCoord;\n"
+		"uniform mat4 MVPMatrix;\nout vec2 Previous;\nout vec2 Oldest;\n"
+		"void main() { vec4 p = VertexCoord.x * MVPMatrix[0]; p += VertexCoord.y * MVPMatrix[1];"
+		" p += VertexCoord.z * MVPMatrix[2]; p += VertexCoord.w * MVPMatrix[3]; gl_Position = p;"
+		" Previous = PrevTexCoord; Oldest = Prev6TexCoord.xy; }\n"
+		"#elif defined(FRAGMENT)\n"
+		"in vec2 Previous;\nin vec2 Oldest;\n"
+		"uniform sampler2D PrevTexture;\nuniform sampler2D Prev6Texture;\n"
+		"void main() { FragColor = (texture(PrevTexture, Previous) + texture(Prev6Texture, Oldest)) * 0.5; }\n#endif\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
+	const std::vector<postprocess::ShaderPassInput> inputs {
+		{ "PrevTexture", postprocess::ShaderInputKind::History },
+		{ "Prev6Texture", postprocess::ShaderInputKind::History }
+	};
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, {}, inputs, hlsl, error, false, true)) << error;
+	expectHlslCompiles(hlsl, "vs_4_0");
+	ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, {}, inputs, 1, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+#if defined(USE_VULKAN)
+	std::string fragment, vertex;
+	ASSERT_TRUE(postprocess::buildVulkanShaderSources(source, {}, inputs, 1, fragment, vertex, error)) << error;
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eVertex, vertex, error)) << error;
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eFragment, fragment, error)) << error;
 #endif
 }
 
@@ -853,7 +926,8 @@ TEST(PostProcessingChainTest, LoadsExternalRetroArchGlslCompatibilityPack)
 #endif
 			if (!source.vertex.empty())
 			{
-				ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, parameters, inputs, hlsl, error))
+				ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, parameters, inputs, hlsl, error,
+						source.nativeFxStages, source.retroArchGlsl))
 						<< entry.path().string() << ": " << error;
 #ifdef _WIN32
 				ASSERT_TRUE(compileHlsl(hlsl, "vs_4_0", error)) << entry.path().string() << ": " << error;
@@ -980,7 +1054,7 @@ void main() {
 	std::string error;
 	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
 	EXPECT_TRUE(source.retroArchGlsl);
-	EXPECT_NE(std::string::npos, source.vertex.find("gl_Position = VertexCoord"));
+	EXPECT_EQ(std::string::npos, source.vertex.find("MVPMatrix"));
 	EXPECT_NE(std::string::npos, source.vertex.find("vTexCoord = TexCoord"));
 	EXPECT_NE(std::string::npos, source.fragment.find("texture(Source, vTexCoord)"));
 	EXPECT_NE(std::string::npos, source.fragment.find("(1) > 0"));
@@ -993,7 +1067,8 @@ void main() {
 	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(source.fragment, source.parameters, hlsl, error)) << error;
 
 	expectHlslCompiles(hlsl, "ps_4_0");
-	ASSERT_TRUE(postprocess::translateGlslVertexToHlsl(source.vertex, {}, hlsl, error)) << error;
+	ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, {}, {}, hlsl, error,
+			source.nativeFxStages, source.retroArchGlsl)) << error;
 
 	expectHlslCompiles(hlsl, "vs_4_0");
 }
@@ -1061,8 +1136,8 @@ void main() {
 	EXPECT_EQ(std::string::npos, source.fragment.find("COMPAT_TEXTURE"));
 	EXPECT_EQ(std::string::npos, source.fragment.find("uniform COMPAT_PRECISION"));
 	EXPECT_EQ(std::string::npos, source.fragment.find("#define SourceSize"));
-	EXPECT_NE(std::string::npos, source.fragment.find("#define HollycastSourceSize4"));
-	EXPECT_NE(std::string::npos, source.vertex.find("gl_Position = VertexCoord"));
+	EXPECT_NE(std::string::npos, source.fragment.find("vec4(SourceSize, 1.0 / SourceSize)"));
+	EXPECT_EQ(std::string::npos, source.vertex.find("MVPMatrix"));
 	EXPECT_EQ(std::string::npos, source.vertex.find("COL0"));
 	EXPECT_EQ(std::string::npos, source.vertex.find("COLOR"));
 	EXPECT_NE(std::string::npos, source.fragment.find("texture(Source, vTexCoord)"));
@@ -1073,7 +1148,8 @@ void main() {
 			<< error << '\n' << source.fragment;
 
 	expectHlslCompiles(hlsl, "ps_4_0");
-	ASSERT_TRUE(postprocess::translateGlslVertexToHlsl(source.vertex, {}, hlsl, error)) << error;
+	ASSERT_TRUE(postprocess::translateGlslGraphVertexToHlsl(source.vertex, {}, {}, hlsl, error,
+			source.nativeFxStages, source.retroArchGlsl)) << error;
 
 	expectHlslCompiles(hlsl, "vs_4_0");
 }
@@ -1544,6 +1620,40 @@ TEST(PostProcessingChainTest, SnapsPersistedParametersToDeclaredSteps)
 
 	postprocess::applyShaderChainParameterValues(chain, "MODE=0.6");
 	EXPECT_EQ(1.f, chain.parameters[0].value);
+}
+
+TEST(PostProcessingChainTest, PreservesEverySlangMatrixComponentThroughSavedOverrides)
+{
+	for (unsigned columns = 2; columns <= 4; ++columns) {
+		for (unsigned rows = 2; rows <= 4; ++rows) {
+			const unsigned components = columns * rows;
+			const std::string type = "mat" + std::to_string(columns)
+					+ (columns == rows ? "" : "x" + std::to_string(rows));
+			SCOPED_TRACE(type);
+			std::string initial, minimum, maximum, step, overrideValues;
+			for (unsigned i = 0; i < components; ++i) {
+				if (i != 0) { initial += ','; minimum += ','; maximum += ','; step += ','; overrideValues += ','; }
+				initial += std::to_string(i + 1);
+				minimum += '0'; maximum += "20"; step += '1';
+				overrideValues += std::to_string(components - i);
+			}
+			const std::string shader = "#version 450\n#pragma parameter " + type + " M \"Matrix\" "
+					+ type + '(' + initial + ") " + type + '(' + minimum + ") "
+					+ type + '(' + maximum + ") " + type + '(' + step + ")\nvoid main() {}\n";
+			postprocess::SlangShaderSource source;
+			std::string error;
+			ASSERT_TRUE(postprocess::parseSlangShader(shader, source, error)) << error;
+			ASSERT_EQ(1u, source.parameters.size());
+			EXPECT_EQ(components, source.parameters[0].componentCount);
+			EXPECT_EQ("M=" + initial, postprocess::serializeShaderChainParameterValues(source.parameters));
+			postprocess::ShaderChain chain;
+			chain.parameters = source.parameters;
+			postprocess::applyShaderChainParameterValues(chain, "M=" + overrideValues);
+			EXPECT_EQ("M=" + overrideValues, postprocess::serializeShaderChainParameterValues(chain.parameters));
+			for (unsigned i = 0; i < components; ++i)
+				EXPECT_FLOAT_EQ(static_cast<float>(components - i), chain.parameters[0].values[i]);
+		}
+	}
 }
 
 TEST(PostProcessingChainTest, ParsesReShadeFxIntoBackendNeutralSyntaxIr)

@@ -405,34 +405,37 @@ std::vector<bool> codeMask(const std::string& line, bool startsInBlockComment, b
 }
 
 void expandObjectMacros(std::string& line, const std::unordered_map<std::string, std::string>& defines,
-		bool startsInBlockComment, unsigned maxPasses = 8)
+		bool startsInBlockComment, unsigned maxDepth = 8)
 {
-	for (unsigned pass = 0; pass < maxPasses; ++pass) {
-		const std::vector<bool> mask = codeMask(line, startsInBlockComment);
+	// A macro is disabled while rescanning its replacement. Repeated whole-line
+	// passes recursively expanded valid aliases such as OutputSize = vec4(OutputSize, ...).
+	std::unordered_set<std::string> expanding;
+	const auto expand = [&](const auto& self, const std::string& text, bool inComment, unsigned depth) -> std::string {
+		if (depth == 0)
+			return text;
+		const std::vector<bool> mask = codeMask(text, inComment);
 		std::string expanded;
-		bool changed = false;
-		for (size_t index = 0; index < line.size();) {
-			if (!mask[index] || (!std::isalpha(static_cast<unsigned char>(line[index])) && line[index] != '_')) {
-				expanded += line[index++];
+		for (size_t index = 0; index < text.size();) {
+			if (!mask[index] || (!std::isalpha(static_cast<unsigned char>(text[index])) && text[index] != '_')) {
+				expanded += text[index++];
 				continue;
 			}
 			const size_t begin = index++;
-			while (index < line.size() && mask[index]
-					&& (std::isalnum(static_cast<unsigned char>(line[index])) || line[index] == '_'))
+			while (index < text.size() && mask[index]
+					&& (std::isalnum(static_cast<unsigned char>(text[index])) || text[index] == '_'))
 				++index;
-			const std::string name = line.substr(begin, index - begin);
+			const std::string name = text.substr(begin, index - begin);
 			const auto define = defines.find(name);
-			if (define == defines.end() || define->second == name)
+			if (define == defines.end() || define->second == name || !expanding.insert(name).second)
 				expanded += name;
 			else {
-				expanded += define->second;
-				changed = true;
+				expanded += self(self, define->second, false, depth - 1);
+				expanding.erase(name);
 			}
 		}
-		line = std::move(expanded);
-		if (!changed)
-			break;
-	}
+		return expanded;
+	};
+	line = expand(expand, line, startsInBlockComment, maxDepth);
 }
 
 struct FunctionMacro {

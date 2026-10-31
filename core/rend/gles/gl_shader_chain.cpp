@@ -51,10 +51,13 @@ const char *postProcessGlslVersion()
 {
 	// The normal renderer keeps a GLSL 1.30 baseline for older OpenGL drivers.
 	// Shader packages are allowed to use modern local expressions, so use the
-	// full language version when the active context is already OpenGL 4.3+.
+	// full language version supported by the active context. GLSL 4.10 is also
+	// needed for native FX varying locations on macOS's OpenGL 4.1 context.
 	if (gl.is_gles && gl.gl_major >= 3 && gl.gl_minor >= 1) return "#version 310 es";
 	if (!gl.is_gles && (gl.gl_major > 4 || (gl.gl_major == 4 && gl.gl_minor >= 3)))
 		return "#version 430";
+	if (!gl.is_gles && (gl.gl_major > 4 || (gl.gl_major == 4 && gl.gl_minor >= 1)))
+		return "#version 410";
 	if (!gl.is_gles && (gl.gl_major > 3 || (gl.gl_major == 3 && gl.gl_minor >= 3)))
 		return "#version 330";
 	return gl.glsl_version_header;
@@ -1057,6 +1060,9 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	updateConfiguredChain();
 	if (programs.empty() || sourceTexture == 0 || !ensureResources())
 		return nullptr;
+	// Copies and clears need every channel, including when the game renderer
+	// left a restricted mask on its final draw. glColorMask resets all attachments.
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	frame.frameCount = renderedFrames;
 	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
 		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceUniform& resource) {
@@ -1396,6 +1402,9 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	for (size_t index = 0; index < programs.size(); ++index) {
 		Program& program = programs[index];
 		restoreAttachmentState.count = std::max(restoreAttachmentState.count, program.pass.colorOutputCount);
+		// The preceding FX pass may have restricted individual attachments. Reset
+		// before composition, clears and seed copies, then apply this pass's mask.
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		if (program.pass.composeDisplayInput && !composeDisplayInput())
 			return nullptr;
 		if (index == 0 || program.pass.layerIndex != programs[index - 1].pass.layerIndex) {

@@ -49,26 +49,13 @@ constexpr int MaxPassCount = 32;
 constexpr uint32_t MaxHistoryFrames = 32;
 constexpr uint32_t MaxShaderIncludeFiles = 256;
 
-uint32_t parameterComponentCount(SlangParameterType type)
-{
-	switch (type) {
-	case SlangParameterType::Float2: return 2;
-	case SlangParameterType::Float3: return 3;
-	case SlangParameterType::Float4: return 4;
-	case SlangParameterType::Float2x2: return 4;
-	case SlangParameterType::Float3x3: return 9;
-	case SlangParameterType::Float4x4: return 16;
-	default: return 1;
-	}
-}
-
 ShaderParameter projectParameter(const SlangParameter& parameter)
 {
 	ShaderParameter projected;
 	projected.name = parameter.name;
 	projected.label = parameter.label;
 	projected.type = parameter.type;
-	projected.componentCount = parameterComponentCount(parameter.type);
+	projected.componentCount = shaderParameterComponentCount(parameter.type);
 	projected.values = parameter.defaultValue.values;
 	projected.minimumValues = parameter.minimum.values;
 	projected.maximumValues = parameter.maximum.values;
@@ -858,7 +845,16 @@ void removePortableInterfaceDeclarations(std::string& source, const std::vector<
 	std::string cleaned;
 	std::istringstream stream(source);
 	bool firstLine = true;
+	const std::regex uniformStart(R"(^\s*uniform\b)");
 	for (std::string line; std::getline(stream, line);) {
+		// Comma-separated parameter declarations may span several lines. Decide
+		// whether the entire declaration is host-owned before removing any of it.
+		if (line.find(';') == std::string::npos && std::regex_search(line, uniformStart))
+			for (std::string continuation; std::getline(stream, continuation);) {
+				line += '\n' + continuation;
+				if (continuation.find(';') != std::string::npos)
+					break;
+			}
 		bool remove = (firstLine && startsWith(line, "#version"))
 				|| std::regex_match(line, interfaceDeclaration) || std::regex_match(line, frameDeclaration)
 				|| declaresOnlyParameters(line);
@@ -1937,9 +1933,14 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 			|| std::regex_search(cleaned, std::regex(R"(\b(?:TextureSize|InputSize|FrameDirection|MVPMatrix|TEX0)\b)"));
 
 	auto preprocessStage = [&](const char *stage, std::string& result) {
-		return preprocessShaderSource(cleaned,
+		if (!preprocessShaderSource(cleaned,
 				{ { stage, "1" }, { "PARAMETER_UNIFORM", "1" }, { "__VERSION__", "130" }, { "GL_core_profile", "1" } },
-				result, error);
+				result, error))
+			return false;
+		// These macros have already been expanded. Passing their definitions to
+		// the backend would expand self-references and normalized host names again.
+		result = std::regex_replace(result, std::regex(R"((^|\n)[ \t]*#[ \t]*(?:define|undef)\b[^\n]*)"), "$1");
+		return true;
 	};
 	if (hasVertexStage && !preprocessStage("VERTEX", parsed.vertex))
 		return false;
@@ -1963,13 +1964,25 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 		const std::regex outputSizeDefine(R"(^\s*#\s*define\s+(?:OutSize|OutputSize)\b.*$)", std::regex::icase);
 		const std::regex textureSizeDeclaration(
 				R"(^\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?vec2\s+([A-Za-z_][A-Za-z0-9_]*)(InputSize|TextureSize)\s*;\s*$)");
+		const std::regex textureCoordinateDeclaration(
+				R"(^\s*(?:layout\s*\([^)]*\)\s*)?in\s+(?:(?:lowp|mediump|highp)\s+)?vec([234])\s+((?:Orig|Prev[0-9]*|Pass[0-9]+|PassPrev[0-9]+)TexCoord)\s*;\s*$)");
 		auto normalize = [&](std::string& stageSource, bool vertex) {
 			std::string normalized;
+			std::string textureCoordinates;
 			std::istringstream stageLines(stageSource);
 			bool hasSourceSizeAlias = false;
 			bool hasOutputSizeAlias = false;
 			std::vector<std::pair<std::string, std::string>> textureSizes;
 			for (std::string line; std::getline(stageLines, line);) {
+				std::smatch coordinates;
+				if (vertex && std::regex_match(line, coordinates, textureCoordinateDeclaration)) {
+					// History and pass targets are tightly packed, so all use the
+					// fullscreen quad's normalized UVs rather than extra vertex streams.
+					const std::string dimension = coordinates[1].str();
+					textureCoordinates += "#define " + coordinates[2].str() + " vec" + dimension
+							+ "(TexCoord" + (dimension == "2" ? "" : dimension == "3" ? ", 0.0" : ", 0.0, 1.0") + ")\n";
+					continue;
+				}
 				hasSourceSizeAlias = hasSourceSizeAlias || std::regex_match(line, sourceSizeDefine);
 				hasOutputSizeAlias = hasOutputSizeAlias || std::regex_match(line, outputSizeDefine);
 				std::smatch size;
@@ -1989,7 +2002,7 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 						&& !std::regex_match(line, compatibilityDefine))
 					normalized += line + '\n';
 			}
-			stageSource = std::move(normalized);
+			stageSource = textureCoordinates + normalized;
 			// Texture and input extents coincide because chain render targets are
 			// not padded. Query the selected resource, not the current pass input:
 			// earlier passes may have a completely different scale.
@@ -2011,13 +2024,9 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 				// display quad has no color stream, and the imported shaders do not read
 				// COL0 in their fragment stages, so discard the dead passthrough safely.
 				replaceAll(stageSource, std::regex(R"(\bCOL0\s*=\s*COLOR\s*;)"), "");
-				replaceAll(stageSource, std::regex(R"(\bMVPMatrix\s*\*\s*VertexCoord\b)"), "VertexCoord");
-				// HollyCast supplies clip-space quad coordinates directly. Preserve any
-				// shader-side position adjustment while removing libretro's host MVP.
-				replaceAll(stageSource, std::regex(R"(\bMVPMatrix\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\b)"), "$1");
-				replaceAll(stageSource, std::regex(
-						R"(\bVertexCoord\.x\s*\*\s*MVPMatrix\s*\[\s*0\s*\]\s*\+\s*VertexCoord\.y\s*\*\s*MVPMatrix\s*\[\s*1\s*\]\s*\+\s*VertexCoord\.z\s*\*\s*MVPMatrix\s*\[\s*2\s*\]\s*\+\s*VertexCoord\.w\s*\*\s*MVPMatrix\s*\[\s*3\s*\])"),
-						"VertexCoord");
+				// Vertices are already in clip space. An identity also supports legacy
+				// shaders that accumulate the MVP columns in separate statements.
+				replaceAll(stageSource, std::regex(R"(\bMVPMatrix\b)"), "mat4(1.0)");
 				replaceAll(stageSource, std::regex(R"(\bTEX0\b)"), "vTexCoord");
 			}
 			else {
