@@ -3,9 +3,64 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "ui/shader_preview_layout.h"
+#include "ui/settings_new.h"
+#include "rend/postprocess/shader_chain.h"
+#include "imgui_internal.h"
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tuple>
+
+TEST(ShaderLoadingOverlay, DrawsOnTheCheckboxFrameAndStaysUntilTheNewPreviewRenders)
+{
+	struct RestoreContext {
+		ImGuiContext* previous = ImGui::GetCurrentContext();
+		~RestoreContext() {
+			postprocess::reportShaderChainStatus({}, {});
+			ImGui::DestroyContext();
+			ImGui::SetCurrentContext(previous);
+		}
+	} restore;
+	ImGui::CreateContext();
+	auto& io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+	io.DisplaySize = ImVec2(800, 600);
+	io.DeltaTime = 1.f / 60.f;
+	unsigned char* pixels;
+	int width, height;
+	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+	postprocess::finishShaderCompilation();
+
+	ImGui::NewFrame();
+	// Match the live-preview checkbox: request loading within its current frame.
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+	SettingsNew::renderShaderLoadingOverlay();
+	ImGui::Render();
+	ASSERT_FALSE(GImGui->OpenPopupStack.empty());
+	const auto* popup = GImGui->OpenPopupStack.back().Window;
+	ASSERT_NE(nullptr, popup);
+	bool submitted = false;
+	for (const auto* list : ImGui::GetDrawData()->CmdLists)
+		submitted |= list->VtxBuffer.Size > 0 && (list == popup->DrawList || list == ImGui::GetForegroundDrawList());
+	EXPECT_TRUE(submitted) << "The notice must reach the renderer, including the modal's hidden sizing frame.";
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+
+	postprocess::advanceShaderCompilationFrame();
+	ASSERT_TRUE(postprocess::prepareShaderCompilation());
+	postprocess::reportShaderChainStatus("new", {});
+	EXPECT_TRUE(postprocess::shaderCompilationPending());
+	ImGui::NewFrame();
+	SettingsNew::renderShaderLoadingOverlay();
+	ImGui::Render();
+	ASSERT_FALSE(GImGui->OpenPopupStack.empty());
+	EXPECT_FALSE(GImGui->OpenPopupStack.back().Window->Hidden);
+
+	postprocess::reportShaderFrameStatus("new", {});
+	EXPECT_FALSE(postprocess::shaderCompilationPending());
+	ImGui::NewFrame();
+	SettingsNew::renderShaderLoadingOverlay();
+	ImGui::Render();
+	EXPECT_TRUE(GImGui->OpenPopupStack.empty());
+}
 
 class ShaderPreviewLayoutTest : public ::testing::TestWithParam<std::tuple<int, int, int>> {};
 

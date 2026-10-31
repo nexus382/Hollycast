@@ -5797,6 +5797,7 @@ void processShaderLoading()
 	postprocess::advanceShaderCompilationFrame();
 	if (g_shaderAction) {
 		if (!postprocess::prepareShaderCompilation()) return;
+		const uint64_t previousReload = postprocess::shaderChainReloadGeneration();
 		auto action = std::move(g_shaderAction);
 		g_shaderAction = {};
 		try {
@@ -5804,7 +5805,11 @@ void processShaderLoading()
 		} catch (const std::exception& error) {
 			gui_error(error.what());
 		}
-		postprocess::finishShaderCompilation();
+		// A live checkbox change is one loading operation through CPU preparation,
+		// GPU compilation, and the first rendered preview. Do not reopen the popup
+		// between stages or dismiss it as soon as the files have been parsed.
+		if (!g_shaderLiveTune || postprocess::shaderChainReloadGeneration() == previousReload)
+			postprocess::finishShaderCompilation();
 	}
 	else if (gui_is_open()) {
 		// Pausing can postpone renderer activation. Do not block the settings
@@ -5816,13 +5821,41 @@ void processShaderLoading()
 void renderShaderLoadingOverlay()
 {
 	const bool loading = postprocess::shaderCompilationPending();
+	if (!loading && !ImGui::IsPopupOpen("##ShaderCompilation")) return;
 	if (loading) ImGui::OpenPopup("##ShaderCompilation");
-	ImGui::SetNextWindowPos(ImGui::GetIO().DisplaySize * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	const char* title = T("Compiling shader pipeline...");
+	const char* detail = T("This may take a few seconds.");
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	const float width = std::max(1.f, std::min(display.x - 2.f * style.WindowPadding.x,
+			std::max(ImGui::CalcTextSize(title).x, ImGui::CalcTextSize(detail).x) + 2.f * style.WindowPadding.x));
+	const float wrapWidth = std::max(1.f, width - 2.f * style.WindowPadding.x);
+	const float titleHeight = ImGui::CalcTextSize(title, nullptr, false, wrapWidth).y;
+	const float height = titleHeight + ImGui::CalcTextSize(detail, nullptr, false, wrapWidth).y
+			+ style.ItemSpacing.y + 2.f * style.WindowPadding.y;
+	ImGui::SetNextWindowPos(display * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	// The foreground fallback below shares these dimensions with the modal so
+	// its first visible frame does not jump when ImGui finishes measuring it.
+	ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
 	if (ImGui::BeginPopupModal("##ShaderCompilation", nullptr, ImGuiWindowFlags_NoTitleBar
-			| ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+			| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
 		if (loading) {
-			ImGui::TextUnformatted(T("Compiling shader pipeline..."));
-			ImGui::TextUnformatted(T("This may take a few seconds."));
+			ImGui::TextWrapped("%s", title);
+			ImGui::TextWrapped("%s", detail);
+			if (ImGui::GetCurrentWindow()->Hidden) {
+				// ImGui hides even explicitly sized popups on their opening frame.
+				// Draw the same notice directly now; waiting for the modal's next
+				// frame would let the checkbox appear to freeze before any message.
+				ImDrawList* draw = ImGui::GetForegroundDrawList();
+				const ImVec2 position = (display - ImVec2(width, height)) * 0.5f;
+				draw->AddRectFilled(ImVec2(0, 0), display, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
+				draw->AddRectFilled(position, position + ImVec2(width, height), ImGui::GetColorU32(ImGuiCol_PopupBg), style.PopupRounding);
+				draw->AddRect(position, position + ImVec2(width, height), ImGui::GetColorU32(ImGuiCol_Border), style.PopupRounding, 0, style.PopupBorderSize);
+				draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), position + style.WindowPadding,
+						ImGui::GetColorU32(ImGuiCol_Text), title, nullptr, wrapWidth);
+				draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), position + style.WindowPadding + ImVec2(0, titleHeight + style.ItemSpacing.y),
+						ImGui::GetColorU32(ImGuiCol_Text), detail, nullptr, wrapWidth);
+			}
 			postprocess::markShaderCompilationDrawn();
 		}
 		else ImGui::CloseCurrentPopup();

@@ -84,7 +84,7 @@ std::mutex statusMutex;
 ShaderChainStatus status;
 std::atomic<uint64_t> statusGeneration { 0 };
 std::atomic<uint64_t> reloadGeneration { 1 };
-enum class CompilationProgress { Idle, WaitingForMessage, MessageDrawn, Ready };
+enum class CompilationProgress { Idle, WaitingForMessage, MessageDrawn, Ready, WaitingForFrame };
 std::atomic<CompilationProgress> compilationProgress { CompilationProgress::Idle };
 std::unique_ptr<ShaderChain> preparedChain;
 std::vector<std::string> preparedPaths;
@@ -1409,7 +1409,14 @@ void reportShaderChainStatus(const std::string& activePath, const std::string& e
 		const std::vector<std::string>& techniques, int selectedTechnique)
 {
 	std::lock_guard<std::mutex> lock(statusMutex);
-	finishShaderCompilation();
+	if (!error.empty() || activePath.empty())
+		finishShaderCompilation();
+	else {
+		// Pipeline creation is not completion: keep the notice over the old image
+		// until this graph actually produces a frame (or reports a frame error).
+		auto expected = CompilationProgress::Ready;
+		compilationProgress.compare_exchange_strong(expected, CompilationProgress::WaitingForFrame);
+	}
 	status.activePath = activePath;
 	status.error = error;
 	status.frameError = false;
@@ -1422,6 +1429,10 @@ void reportShaderChainStatus(const std::string& activePath, const std::string& e
 void reportShaderFrameStatus(const std::string& activePath, const std::string& error)
 {
 	std::lock_guard<std::mutex> lock(statusMutex);
+	if (status.activePath == activePath) {
+		auto expected = CompilationProgress::WaitingForFrame;
+		compilationProgress.compare_exchange_strong(expected, CompilationProgress::Idle);
+	}
 	// A successful frame from the previous graph must not hide a rejected reload.
 	if (status.activePath != activePath || (!status.error.empty() && !status.frameError)
 			|| status.error == error)

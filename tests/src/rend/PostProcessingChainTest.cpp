@@ -2344,7 +2344,26 @@ TEST(PostProcessingChainTest, KeepsLoadingVisibleAcrossOldFramesAndRearmsAfterCa
 	postprocess::advanceShaderCompilationFrame();
 	EXPECT_TRUE(postprocess::prepareShaderCompilation());
 	postprocess::reportShaderChainStatus("new", {});
+	EXPECT_TRUE(postprocess::shaderCompilationPending());
+	postprocess::reportShaderFrameStatus("old", {});
+	EXPECT_TRUE(postprocess::shaderCompilationPending());
+	postprocess::reportShaderFrameStatus("new", {});
 	EXPECT_FALSE(postprocess::shaderCompilationPending());
+	postprocess::reportShaderChainStatus({}, {});
+}
+
+TEST(PostProcessingChainTest, UnblocksLoadingWhenTheActivatedGraphCannotRenderAFrame)
+{
+	postprocess::finishShaderCompilation();
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+	postprocess::markShaderCompilationDrawn();
+	postprocess::advanceShaderCompilationFrame();
+	ASSERT_TRUE(postprocess::prepareShaderCompilation());
+	postprocess::reportShaderChainStatus("new", {});
+	EXPECT_TRUE(postprocess::shaderCompilationPending());
+	postprocess::reportShaderFrameStatus("new", "Scene depth unavailable");
+	EXPECT_FALSE(postprocess::shaderCompilationPending());
+	EXPECT_EQ("Scene depth unavailable", postprocess::getShaderChainStatus().error);
 	postprocess::reportShaderChainStatus({}, {});
 }
 
