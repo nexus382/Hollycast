@@ -1,5 +1,8 @@
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
 
-void gui_display_dcnet();
+class Boxart;
+class GameScanner;
+
+void gui_display_dcnet(GameScanner& scanner, Boxart& boxart);
 void gui_term_dcnet();

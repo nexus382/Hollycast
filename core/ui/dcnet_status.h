@@ -19,6 +19,9 @@ struct Game
 	// Some servers do not report counts; keep that distinct from an empty lobby.
 	int players = -1;
 	int matches = -1;
+	std::string reportedName;
+	std::string thumbnailUrl;
+	bool hasPlayerActivity = false;
 };
 
 struct Player
@@ -26,6 +29,7 @@ struct Player
 	std::string name;
 	std::string gameId;
 	std::string accessPoint;
+	std::string gameName;
 };
 
 struct Status
@@ -33,6 +37,10 @@ struct Status
 	std::vector<Game> games;
 	std::vector<Player> players;
 };
+
+// Exact title keys ignore file extensions and release tags, not title words.
+std::string normalizeTitle(const std::string& title);
+std::vector<std::string> titleKeys(const Game& game);
 
 // Parse both responses together so a failed refresh never publishes half a snapshot.
 Status parseStatus(const std::string& gamesJson, const std::string& playersJson);

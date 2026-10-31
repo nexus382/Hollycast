@@ -2503,7 +2503,7 @@ static void gui_display_content()
 	if (showDcnet)
 	{
 		resetLibraryGameInfoHover();
-		gui_display_dcnet();
+		gui_display_dcnet(scanner, boxart);
 		ImGui::End();
 		return;
 	}

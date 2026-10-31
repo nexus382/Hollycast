@@ -3,6 +3,8 @@
 #include "json.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <unordered_map>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -88,6 +90,71 @@ int readCount(const nlohmann::json& item, const char *key)
 
 }
 
+std::string normalizeTitle(const std::string& title)
+{
+	std::string value = title;
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	const auto dot = value.find_last_of('.');
+	if (dot != std::string::npos)
+	{
+		const std::string extension = value.substr(dot);
+		for (const char *supported : { ".chd", ".cdi", ".gdi", ".cue", ".iso", ".zip", ".7z", ".bin", ".m3u" })
+			if (extension == supported)
+			{
+				value.resize(dot);
+				break;
+			}
+	}
+	std::string key;
+	for (size_t i = 0; i < value.size(); ++i)
+	{
+		if (value[i] == '(' || value[i] == '[')
+		{
+			const auto end = value.find(value[i] == '(' ? ')' : ']', i + 1);
+			if (end != std::string::npos)
+			{
+				i = end;
+				continue;
+			}
+		}
+		if ((value[i] >= 'a' && value[i] <= 'z') || (value[i] >= '0' && value[i] <= '9'))
+			key += value[i];
+	}
+	return key;
+}
+
+std::vector<std::string> titleKeys(const Game& game)
+{
+	std::vector<std::string> keys;
+	auto add = [&](const std::string& title) {
+		const std::string key = normalizeTitle(title);
+		if (!key.empty() && std::find(keys.begin(), keys.end(), key) == keys.end())
+			keys.push_back(key);
+	};
+	add(game.name);
+	add(game.reportedName);
+	// Explicit alternate release names avoid substring matches between sequels
+	// or between an offline release and its distinct online edition.
+	const std::pair<const char *, const char *> aliases[] = {
+		{ "catalog:4x4-evolution", "4x4 Evo" },
+		{ "capvsnkmf", "Capcom vs. SNK" },
+		{ "sdo", "Speed Devils - Online Racing" },
+		{ "aerof", "Aero Dancing F" },
+		{ "virtualon", "Virtual-On - Oratorio Tangram" },
+		{ "catalog:pba-bowling-2001", "PBA Tour Bowling 2001" },
+		{ "catalog:capcom-vs-snk-pro", "Capcom vs. SNK - Millennium Fight 2000 Pro" },
+		{ "nettennis", "Net de Tennis" },
+		{ "mvsc2", "Marvel vs. Capcom 2 - New Age of Heroes" },
+		{ "sf3strike3", "Street Fighter III - 3rd Strike - Fight for the Future" },
+		{ "sfzero3", "Street Fighter Zero 3 - Saikyou-ryuu Doujou for Matching Service" },
+		{ "pjustice", "Moero! Justice Gakuen" },
+	};
+	for (const auto& alias : aliases)
+		if (game.id == alias.first)
+			add(alias.second);
+	return keys;
+}
+
 Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 {
 	const auto games = nlohmann::json::parse(gamesJson);
@@ -107,12 +174,19 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 		game.name = readText(item, "name");
 		if (game.id.empty() || game.name.empty() || !gameIds.insert(game.id).second)
 			throw std::runtime_error("Invalid DCnet game identity");
+		game.reportedName = game.name;
+		game.thumbnailUrl = readText(item, "thumbnail");
 		game.hasLiveStatus = true;
 		game.online = item.at("online").get<bool>();
 		game.players = readCount(item, "playerCount");
 		game.matches = readCount(item, "gameCount");
 		const auto known = std::find_if(status.games.begin(), status.games.end(), [&](const Game& entry) {
-			return entry.id == game.id || (entry.id.compare(0, 8, "catalog:") == 0 && entry.name == game.name);
+			if (entry.id == game.id)
+				return true;
+			if (entry.id.compare(0, 8, "catalog:") != 0)
+				return false;
+			const auto keys = titleKeys(entry);
+			return std::find(keys.begin(), keys.end(), normalizeTitle(game.name)) != keys.end();
 		});
 		if (known == status.games.end())
 			status.games.push_back(std::move(game));
@@ -123,15 +197,6 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 			*known = std::move(game);
 		}
 	}
-	std::sort(status.games.begin(), status.games.end(), [](const Game& a, const Game& b) {
-		const bool aActive = a.players > 0 || a.matches > 0;
-		const bool bActive = b.players > 0 || b.matches > 0;
-		if (aActive != bActive)
-			return aActive;
-		if (std::max(a.players, 0) != std::max(b.players, 0))
-			return a.players > b.players;
-		return a.name < b.name;
-	});
 	for (const auto& item : players)
 	{
 		if (!item.is_object())
@@ -144,8 +209,81 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 			player.name = "Unknown player";
 		player.gameId = readText(item, "gameId");
 		player.accessPoint = readText(item, "accessPoint");
+		player.gameName = readText(item, "gameName");
+		if (!player.gameId.empty())
+		{
+			auto game = std::find_if(status.games.begin(), status.games.end(), [&](const Game& entry) {
+				return entry.id == player.gameId;
+			});
+			if (game == status.games.end() && !player.gameName.empty())
+			{
+				const std::string key = normalizeTitle(player.gameName);
+				auto candidate = status.games.end();
+				for (auto it = status.games.begin(); it != status.games.end(); ++it)
+				{
+					if (it->hasLiveStatus || it->hasPlayerActivity)
+						continue;
+					const auto keys = titleKeys(*it);
+					if (std::find(keys.begin(), keys.end(), key) == keys.end())
+						continue;
+					if (candidate != status.games.end())
+					{
+						candidate = status.games.end();
+						break;
+					}
+					candidate = it;
+				}
+				if (candidate != status.games.end())
+				{
+					candidate->id = player.gameId;
+					game = candidate;
+				}
+				else
+				{
+					Game additional;
+					additional.id = player.gameId;
+					additional.name = player.gameName;
+					status.games.push_back(std::move(additional));
+					game = std::prev(status.games.end());
+				}
+			}
+			if (game != status.games.end())
+			{
+				game->hasPlayerActivity = true;
+				if (game->reportedName.empty())
+					game->reportedName = player.gameName;
+				if (game->thumbnailUrl.empty())
+					game->thumbnailUrl = readText(item, "thumbnail");
+			}
+		}
 		status.players.push_back(std::move(player));
 	}
+	// The player feed can identify activity for titles omitted from /games, or
+	// supply a positive player count when the game endpoint has no count field.
+	std::unordered_map<std::string, int> observedPlayers;
+	for (const auto& player : status.players)
+		if (!player.gameId.empty())
+		{
+			int& count = observedPlayers[player.gameId];
+			if (count < std::numeric_limits<int>::max())
+				++count;
+		}
+	for (auto& game : status.games)
+		if (game.players < 0)
+		{
+			const auto it = observedPlayers.find(game.id);
+			if (it != observedPlayers.end())
+				game.players = it->second;
+		}
+	std::sort(status.games.begin(), status.games.end(), [](const Game& a, const Game& b) {
+		const bool aActive = a.players > 0 || a.matches > 0;
+		const bool bActive = b.players > 0 || b.matches > 0;
+		if (aActive != bActive)
+			return aActive;
+		if (std::max(a.players, 0) != std::max(b.players, 0))
+			return a.players > b.players;
+		return a.name < b.name;
+	});
 	return status;
 }
 

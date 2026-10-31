@@ -176,3 +176,103 @@ TEST(DcnetStatusTest, KeepsAdditionalApiGamesSeparateFromSimilarCatalogTitles)
 	EXPECT_FALSE(pro->hasLiveStatus);
 	EXPECT_EQ(-1, pro->players);
 }
+
+TEST(DcnetStatusTest, OwnershipKeysHandleReleaseTagsAndKeepDistinctTitlesSeparate)
+{
+	const auto catalog = dcnet::parseStatus("[]", "[]");
+	struct MatchCase { const char *id; const char *filename; bool owned; };
+	const MatchCase cases[] = {
+		{ "catalog:4x4-evolution", "4x4 Evolution (USA).chd", true },
+		{ "catalog:4x4-evolution", "4x4 Evo (USA).chd", true },
+		{ "aerof", "Aero Dancing F (Japan).GDI", true },
+		{ "nfl2k1", "NFL 2K1 (USA) [Rev A].chd", true },
+		{ "nfl2k1", "NFL 2K2 (USA).chd", false },
+		{ "sdo", "Speed Devils - Online Racing (USA).chd", true },
+		{ "sdo", "Speed Devils 2 (USA).chd", false },
+		{ "sdo", "Speed Devils Online (USA).chd", true },
+		{ "sdo", "Speed Devils (USA).chd", false },
+		{ "catalog:pba-bowling-2001", "PBA Tour Bowling 2001 (USA).cdi", true },
+		{ "virtualon", "Virtual-On - Oratorio Tangram (USA).chd", true },
+		{ "mvsc2", "Marvel vs. Capcom 2 - New Age of Heroes (Japan).chd", true },
+		{ "catalog:capcom-vs-snk-pro", "Capcom vs. SNK - Millennium Fight 2000 Pro (Japan).chd", true },
+		{ "catalog:capcom-vs-snk-pro", "Capcom vs. SNK - Millennium Fight 2000 (Japan).chd", false },
+	};
+	for (const auto& item : cases)
+	{
+		const auto game = std::find_if(catalog.games.begin(), catalog.games.end(), [&](const dcnet::Game& game) {
+			return game.id == item.id;
+		});
+		ASSERT_NE(catalog.games.end(), game);
+		const auto keys = dcnet::titleKeys(*game);
+		EXPECT_EQ(item.owned, std::find(keys.begin(), keys.end(), dcnet::normalizeTitle(item.filename)) != keys.end())
+				<< item.filename;
+	}
+}
+
+TEST(DcnetStatusTest, KeepsReportedTitleAndThumbnailWhenCatalogNameDiffers)
+{
+	const auto status = dcnet::parseStatus(R"([
+		{"gameId":"mvsc2","name":"Marvel vs. Capcom 2","thumbnail":"https://dcnet.flyca.st/gamepic/mvsc2.jpg","online":true}
+	])", "[]");
+	const auto game = std::find_if(status.games.begin(), status.games.end(), [](const dcnet::Game& game) {
+		return game.id == "mvsc2";
+	});
+	ASSERT_NE(status.games.end(), game);
+	EXPECT_EQ("Marvel vs. Capcom 2 (JP)", game->name);
+	EXPECT_EQ("Marvel vs. Capcom 2", game->reportedName);
+	EXPECT_EQ("https://dcnet.flyca.st/gamepic/mvsc2.jpg", game->thumbnailUrl);
+}
+
+TEST(DcnetStatusTest, CatalogFallbackAcceptsVerifiedAliasWithoutBorrowingAnotherGamesStatus)
+{
+	const auto status = dcnet::parseStatus(R"([
+		{"gameId":"pba","name":"PBA Tour Bowling 2001","online":true,"playerCount":2,"gameCount":1}
+	])", "[]");
+	ASSERT_EQ(51u, status.games.size());
+	EXPECT_EQ("pba", status.games.front().id);
+	EXPECT_EQ("PBA Bowling 2001", status.games.front().name);
+	EXPECT_EQ(2, status.games.front().players);
+}
+
+TEST(DcnetStatusTest, RecoversMissingGameFromPlayerFeedWithoutInventingServerHealthOrMatches)
+{
+	const auto status = dcnet::parseStatus("[]", R"([
+		{"name":"Nex","gameId":"4x4","gameName":"4x4 Evolution","thumbnail":"https://dcnet.flyca.st/gamepic/4x4.jpg"},
+		{"name":"Friend","gameId":"4x4","gameName":"4x4 Evolution"}
+	])");
+	ASSERT_EQ(51u, status.games.size());
+	const auto& game = status.games.front();
+	EXPECT_EQ("4x4", game.id);
+	EXPECT_EQ("4x4 Evolution", game.name);
+	EXPECT_EQ(2, game.players);
+	EXPECT_EQ(-1, game.matches);
+	EXPECT_FALSE(game.hasLiveStatus);
+	EXPECT_TRUE(game.hasPlayerActivity);
+	EXPECT_EQ("https://dcnet.flyca.st/gamepic/4x4.jpg", game.thumbnailUrl);
+}
+
+TEST(DcnetStatusTest, PlayerFeedSuppliesPositiveCountWhenGameCountIsUnavailable)
+{
+	const auto status = dcnet::parseStatus(R"([
+		{"gameId":"vf4","name":"Virtua Fighter 4","online":true}
+	])", R"([{"name":"Nex","gameId":"vf4","gameName":"Virtua Fighter 4"}])");
+	EXPECT_EQ("vf4", status.games.front().id);
+	EXPECT_TRUE(status.games.front().hasLiveStatus);
+	EXPECT_EQ(1, status.games.front().players);
+	EXPECT_EQ(-1, status.games.front().matches);
+}
+
+TEST(DcnetStatusTest, AdditionalPlayerOnlyGamesAreKeptAndMissingActivityDoesNotStick)
+{
+	const auto live = dcnet::parseStatus("[]", R"([
+		{"name":"Nex","gameId":"new-game","gameName":"New Online Game"}
+	])");
+	ASSERT_EQ(52u, live.games.size());
+	EXPECT_EQ("New Online Game", live.games.front().name);
+	EXPECT_EQ(1, live.games.front().players);
+	const auto next = dcnet::parseStatus("[]", "[]");
+	EXPECT_EQ(51u, next.games.size());
+	EXPECT_TRUE(std::none_of(next.games.begin(), next.games.end(), [](const dcnet::Game& game) {
+		return game.hasPlayerActivity || game.players >= 0;
+	}));
+}
