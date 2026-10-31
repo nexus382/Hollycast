@@ -4335,6 +4335,7 @@ ImGuiInputTextState::~ImGuiInputTextState()
 void ImGuiInputTextState::OnKeyPressed(int key)
 {
     stb_textedit_key(this, Stb, key);
+    CursorClamp(); // An edit or undo/redo may have merged a cluster around the caret.
     CursorFollow = true;
     CursorAnimReset();
     const int key_u = (key & ~STB_TEXTEDIT_K_SHIFT);
@@ -4351,13 +4352,39 @@ void ImGuiInputTextState::OnCharPressed(unsigned int c)
     char utf8[5];
     ImTextCharToUtf8(utf8, c);
     stb_textedit_text(this, Stb, utf8, (int)ImStrlen(utf8));
+    CursorClamp(); // Committed text may merge with neighbours into one cluster. IME preedit is not in this buffer, so composition is unaffected.
     CursorFollow = true;
     CursorAnimReset();
 }
 
 // Those functions are not inlined in imgui_internal.h, allowing us to hide ImStbTexteditState from that header.
 void ImGuiInputTextState::CursorAnimReset()                 { CursorAnim = -0.30f; } // After a user-input the cursor stays on for a while without blinking
-void ImGuiInputTextState::CursorClamp()                     { Stb->cursor = ImMin(Stb->cursor, TextLen); Stb->select_start = ImMin(Stb->select_start, TextLen); Stb->select_end = ImMin(Stb->select_end, TextLen); }
+void ImGuiInputTextState::CursorClamp()
+{
+    Stb->cursor = ImMin(Stb->cursor, TextLen);
+    Stb->select_start = ImMin(Stb->select_start, TextLen);
+    Stb->select_end = ImMin(Stb->select_end, TextLen);
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    // After a completed edit, caret/selection must rest on a shaping-cluster
+    // boundary, matching the rendered glyphs. Snap to the nearest boundary,
+    // forward on ties, so an insertion caret stays after its merged cluster.
+    if (Ctx == NULL || Ctx->Font == NULL || TextSrc == NULL || TextLen <= 0 || !ImGuiTextShaper::NeedsShaping(TextSrc, TextSrc + TextLen))
+        return;
+    const char* text_end = TextSrc + TextLen;
+    auto snap = [&](int pos) {
+        if (pos <= 0 || pos >= TextLen)
+            return pos;
+        const char* start = ImGuiTextShaper::ClusterBoundary(Ctx->Font, Ctx->FontSize, TextSrc, text_end, TextSrc + pos, false);
+        const char* end = ImGuiTextShaper::ClusterBoundary(Ctx->Font, Ctx->FontSize, TextSrc, text_end, TextSrc + pos, true);
+        if (start == end)
+            return pos;
+        return (int)((TextSrc + pos - start < end - (TextSrc + pos)) ? start - TextSrc : end - TextSrc);
+    };
+    Stb->cursor = snap(Stb->cursor);
+    Stb->select_start = snap(Stb->select_start);
+    Stb->select_end = snap(Stb->select_end);
+#endif
+}
 bool ImGuiInputTextState::HasSelection() const              { return Stb->select_start != Stb->select_end; }
 void ImGuiInputTextState::ClearSelection()                  { Stb->select_start = Stb->select_end = Stb->cursor; }
 int  ImGuiInputTextState::GetCursorPos() const              { return Stb->cursor; }

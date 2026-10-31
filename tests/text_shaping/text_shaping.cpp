@@ -237,6 +237,30 @@ int main(int argc, char** argv)
             state = ImGui::GetInputTextState(click_id);
             Require(state != nullptr, "input state lost after click");
             Require(state->GetCursorPos() == cluster_bytes, "click placed the caret inside a shaped cluster");
+            // Completed edits that merge a new cluster must also reconcile the
+            // caret: navigation snapping alone does not cover these cases.
+            frame(true); frame(false); // Re-focus the first field; the click field owned the state.
+            state = ImGui::GetInputTextState(input_id);
+            Require(state != nullptr, "input state lost for edit cases");
+            auto clear_field = [&]() { state->SelectAll(); state->OnKeyPressed(0x200009); Require(state->TextLen == 0, "field did not clear"); };
+            clear_field();
+            state->OnCharPressed(0x0915); // क
+            state->SetSelection(0, 0);
+            state->OnCharPressed(0x0930); // र before क
+            state->OnCharPressed(0x094d); // virama merges र् + क into one cluster
+            Require(state->TextLen == 9 && state->GetCursorPos() == 9, "insertion left the caret inside a merged cluster");
+            state->OnKeyPressed(0x20000a); // Undo
+            state->OnKeyPressed(0x20000b); // Redo reapplies the merged cluster
+            Require(state->TextLen == 9 && state->GetCursorPos() == 9, "undo/redo left the caret inside a merged cluster");
+            clear_field();
+            state->OnCharPressed(0x0930);
+            state->OnCharPressed(0x094d);
+            state->OnCharPressed('x');
+            state->OnCharPressed(0x0915);
+            Require(state->TextLen == 10, "separator field setup failed");
+            state->SetSelection(6, 6);
+            state->OnKeyPressed(0x200008); // Delete x, merging र् + क
+            Require(state->TextLen == 9 && state->GetCursorPos() == 9, "deletion left the caret inside a merged cluster");
             ImGui::DestroyContext();
         }
         std::cout << checks << " cluster wrap/clip cases passed; substitutions, offsets, mixed text, rendering, sizes and reloads passed\n";
