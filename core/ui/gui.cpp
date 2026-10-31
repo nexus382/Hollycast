@@ -18,6 +18,7 @@
     along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "gui_dcnet.h"
 #include "custom_theme.h"
 #include "rend/osd.h"
 #include "cfg/cfg.h"
@@ -2487,6 +2488,26 @@ static void gui_display_content()
 		}
 	}
 
+	bool showDcnet = false;
+	if (gui_state == GuiState::Main && ImGui::BeginTabBar("mainTabs"))
+	{
+		if (ImGui::BeginTabItem(T("Games")))
+			ImGui::EndTabItem();
+		if (ImGui::BeginTabItem("DCnet"))
+		{
+			showDcnet = true;
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
+	}
+	if (showDcnet)
+	{
+		resetLibraryGameInfoHover();
+		gui_display_dcnet(scanner, boxart);
+		ImGui::End();
+		return;
+	}
+
     // Keep the library toolbar cohesive at a larger size without coupling it to
     // the user-configured global UI Scaling value.
     constexpr float libraryToolbarScale = 4.0f / 3.0f;
@@ -2501,7 +2522,7 @@ static void gui_display_content()
 	ImGui::PushFont(largeFont, 18.5f * libraryToolbarScale);
     ImGui::AlignTextToFramePadding();
     // Position "GAMES" text and search bar below the menu bar (window is already positioned below menu bar)
-    ImGui::SetCursorPosY(ImGui::GetStyle().FramePadding.y);
+    ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), ImGui::GetStyle().FramePadding.y));
     ImGui::Indent(10.0f * libraryToolbarScale);
     ImGui::Text("%s", T("GAMES"));
     ImGui::Unindent(10.0f * libraryToolbarScale);
@@ -4052,6 +4073,7 @@ void gui_term()
 	if (inited)
 	{
 		inited = false;
+		gui_term_dcnet();
 		scanner.stop();
 		librarySavestateCache.stop();
 		clearThumbnailCache();

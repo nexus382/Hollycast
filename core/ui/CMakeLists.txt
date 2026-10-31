@@ -12,6 +12,10 @@ if(NOT LIBRETRO)
             gui_menu.cpp
             gui_menu.h
             gui_achievements.cpp
+            dcnet_status.cpp
+            dcnet_status.h
+            gui_dcnet.cpp
+            gui_dcnet.h
             vgamepad.cpp
             vgamepad.h
             gui_chat.h

@@ -46,6 +46,8 @@ class Boxart
 public:
 	GameBoxart getBoxartAndLoad(const GameMedia& media);
 	GameBoxart getBoxart(const GameMedia& media);
+	// Metadata lookup only: never open a disc or start artwork work.
+	GameBoxart getCachedBoxart(const GameMedia& media);
 	std::string getLibraryCoverMediaPath(const GameMedia& media);
 	std::string getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode);
 	void term();

@@ -560,6 +560,15 @@ void Boxart::invalidateOfflineArtwork()
 	markDatabaseDirty();
 }
 
+GameBoxart Boxart::getCachedBoxart(const GameMedia& media)
+{
+	loadDatabase();
+	const GameBoxart source = makeMediaBoxart(media);
+	std::lock_guard<std::mutex> guard(mutex);
+	const auto it = games.find(source.sourceKey());
+	return it == games.end() ? source : it->second;
+}
+
 GameBoxart Boxart::getBoxart(const GameMedia& media)
 {
 	loadDatabase();
