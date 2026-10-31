@@ -1,11 +1,18 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Pocket Dimension
 
-An original Hollycast theme that turns a VMU into the library browser. Game covers
-become small four-tone LCD images; the selected game's full-color artwork sits in
+An original Hollycast theme that turns a VMU into the library browser. Existing
+scraped covers become detailed green LCD images; the selected game's full-color artwork sits in
 a recessed sage display beside the device, with scrollable game details including
 the description, publisher, players, region, product ID, and play history when available.
 The toolbar gives Hollycast's existing logo its own proportionate space. A portrait layout is selected automatically in
 narrow windows.
+
+Both VMU layouts use cover art by default, rendered at up to 128 pixels with
+32 green tones and smooth filtering. This preserves recognizable artwork while
+keeping the sage LCD palette. The conversion is cached in memory and leaves the
+downloaded images untouched; no new scrape is needed. Missing covers still use
+the local LCD placeholder and title initials.
 
 Install this complete folder with **Settings > Library > Library Themes > Install
 Library Theme Folder**, select **Pocket Dimension**, and select **Pocket library**.

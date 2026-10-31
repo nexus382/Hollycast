@@ -4,6 +4,7 @@
 The imagegen device skin is a retained source asset and is never regenerated here.
 """
 # Copyright 2026 The Hollycast Authors
+# Portions Copyright 2026 The Hollycast Authors
 # SPDX-License-Identifier: GPL-2.0-or-later
 from pathlib import Path
 import json
@@ -119,8 +120,8 @@ def layout(layout_id, name, image_rect, canvas_aspect):
                 selectorColor="26392d", selectorStyle="outline", background="eeede5",
                 canvasAspect=canvas_aspect, toolbar="compact", toolbarSelectedTextColor="f5f4e9", activation="doubleClick",
                 toolbarLogo="assets/hollycast-logo.png", toolbarLogoHeight=50,
-                showItemActions=False, showFavouriteMarker=True, hoverDetails=False, previewSource="cover",
-                pixelArt=dict(resolution=24, dark="26392d", light="a1b88f"),
+                showItemActions=False, showFavouriteMarker=True, hoverDetails=False, previewSource="cover", artworkSource="cover",
+                pixelArt=dict(resolution=128, levels=32, dark="26392d", light="a1b88f"),
                 placeholder="assets/lcd-placeholder.png", elements=elements)
 
 

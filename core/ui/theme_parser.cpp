@@ -407,8 +407,9 @@ Theme parse(const std::string& json, const std::string& directory)
 		if (auto it = item.find("pixelArt"); it != item.end())
 		{
 			const std::string pp = lp + ".pixelArt";
-			objectFields(*it, pp, {"resolution", "dark", "light"});
+			objectFields(*it, pp, {"resolution", "dark", "light", "levels"});
 			layout.pixelArt.resolution = integerValue(required(*it, "resolution", pp), pp + ".resolution", 4, 128);
+			if (auto field = it->find("levels"); field != it->end()) layout.pixelArt.levels = integerValue(*field, pp + ".levels", 2, 256);
 			if (auto field = it->find("dark"); field != it->end()) layout.pixelArt.dark = colorValue(*field, pp + ".dark");
 			if (auto field = it->find("light"); field != it->end()) layout.pixelArt.light = colorValue(*field, pp + ".light");
 		}

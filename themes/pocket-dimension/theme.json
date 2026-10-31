@@ -72,8 +72,10 @@
       "showFavouriteMarker": true,
       "hoverDetails": false,
       "previewSource": "cover",
+      "artworkSource": "cover",
       "pixelArt": {
-        "resolution": 24,
+        "resolution": 128,
+        "levels": 32,
         "dark": "26392d",
         "light": "a1b88f"
       },
@@ -497,8 +499,10 @@
       "showFavouriteMarker": true,
       "hoverDetails": false,
       "previewSource": "cover",
+      "artworkSource": "cover",
       "pixelArt": {
-        "resolution": 24,
+        "resolution": 128,
+        "levels": 32,
         "dark": "26392d",
         "light": "a1b88f"
       },
