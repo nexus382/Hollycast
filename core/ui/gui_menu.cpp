@@ -384,10 +384,15 @@ void renderMainMenuBar()
 	ImFont* menuFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
 #if defined(__ANDROID__)
 	const ImGuiStyle menuStyleBackup = ImGui::GetStyle();
-	applyAndroidMenuStyle(menuStyleBackup);
-	ImGui::PushFont(menuFont, menuFont->LegacySize * androidMenuFontScale());
+	if (gui_state == GuiState::Main || gui_state == GuiState::SelectDisk)
+		ImGui::PushFont(menuFont, uiScaled(17.f));
+	else
+	{
+		applyAndroidMenuStyle(menuStyleBackup);
+		ImGui::PushFont(menuFont, menuFont->LegacySize * androidMenuFontScale());
+	}
 #else
-	ImGui::PushFont(menuFont);
+	ImGui::PushFont(menuFont, uiScaled(17.f));
 #endif
 	if (ImGui::BeginMainMenuBar())
 	{

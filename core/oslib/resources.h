@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -27,5 +28,7 @@ namespace resource
 
 std::unique_ptr<u8[]> load(const std::string& path, size_t& size);
 std::vector<std::string> listDirectory(const std::string& path);
+// Full resource paths of embedded files beneath a directory; no host filesystem IO.
+std::vector<std::string> listFiles(const std::string& path);
 
 }

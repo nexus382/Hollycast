@@ -11,6 +11,9 @@
 #if defined(USE_VULKAN)
 #include <SDL_vulkan.h>
 #endif
+#ifdef USE_METAL
+#include <SDL_metal.h>
+#endif
 #endif
 #include "hw/maple/maple_devs.h"
 #include "sdl_gamepad.h"
@@ -41,6 +44,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <memory>
 
@@ -891,6 +895,11 @@ bool sdl_update_display_metrics(SDL_Window *window, u32 windowFlags)
 		SDL_GL_GetDrawableSize(window, &settings.display.width, &settings.display.height);
 	else
 #endif
+#ifdef USE_METAL
+	if (windowFlags & SDL_WINDOW_METAL)
+		SDL_Metal_GetDrawableSize(window, &settings.display.width, &settings.display.height);
+	else
+#endif
 	{
 		settings.display.width = windowWidth;
 		settings.display.height = windowHeight;
@@ -1107,6 +1116,11 @@ bool sdl_recreate_window(u32 flags)
 	flags |= SDL_WINDOW_FULLSCREEN;
 #endif
 
+#if defined(TEST_AUTOMATION) && defined(__APPLE__)
+	const char *backgroundTest = std::getenv("HOLLYCAST_TEST_BACKGROUND");
+	if (backgroundTest != nullptr && std::strcmp(backgroundTest, "1") == 0)
+		flags |= SDL_WINDOW_HIDDEN;
+#endif
 	window = SDL_CreateWindow("Hollycast", windowPos.x, windowPos.y,
 			windowPos.w * hdpiScaling, windowPos.h * hdpiScaling, flags);
 	if (window == nullptr)

@@ -644,7 +644,17 @@ std::string serialize(const Theme& theme, std::string& error)
 	} catch (const nlohmann::json::exception& e) { error = e.what(); return {}; }
 }
 
-void setActiveAssets(const Theme::Assets& assets) { ActiveAssets = assets; normalizeAssetPaths(ActiveAssets); }
+static std::string activeBodyFontOverride, activeBoldFontOverride;
+void setActiveAssets(const Theme::Assets& assets) {
+	ActiveAssets = assets;
+	normalizeAssetPaths(ActiveAssets);
+	activeBodyFontOverride.clear();
+	activeBoldFontOverride.clear();
+}
+void setActiveFontOverrides(const std::string& body, const std::string& bold) {
+	activeBodyFontOverride = body;
+	activeBoldFontOverride = bold;
+}
 std::string assetPath(const std::string& name)
 {
 	std::string relative;
@@ -661,6 +671,8 @@ std::vector<std::string> assetPaths()
 }
 std::string fontPath(bool bold)
 {
+	const std::string& fontOverride = bold ? activeBoldFontOverride : activeBodyFontOverride;
+	if (!fontOverride.empty()) return fontOverride;
 	const std::string& relative = bold ? ActiveAssets.boldFont : ActiveAssets.bodyFont;
 	return relative.empty() ? std::string() : ActiveAssets.directory + relative;
 }

@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "scraper.h"
+#include "ui/game_scanner.h"
 #include "oslib/http_client.h"
 #include "oslib/storage.h"
 #include "stdclass.h"
@@ -27,9 +28,28 @@
 #include "reios/reios.h"
 #include "pvrparser.h"
 #include <stb_image_write.h>
+#include <stb_image.h>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <random>
 #include <memory>
+
+void GameBoxart::applyMetadata(GameMedia& media) const
+{
+	if (!name.empty() && (media.name.empty() || media.name == media.fileName
+			|| media.name == get_file_basename(media.fileName)))
+		media.name = name;
+	if (media.desc.empty()) media.desc = overview;
+	if (media.releaseDate.empty()) media.releaseDate = releaseDate;
+	if (media.developer.empty()) media.developer = developer;
+	if (media.publisher.empty()) media.publisher = publisher;
+	if (media.genre.empty()) media.genre = genre;
+	if (media.players.empty()) media.players = players;
+}
+
+// Bump when matching improvements should retry older negative results only.
+static constexpr u32 screenScraperMatchVersion = 2;
 
 json GameBoxart::to_json(const std::string& baseArtPath) const
 {
@@ -47,8 +67,17 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 		{ "region", region },
 		{ "release_date", releaseDate },
 		{ "overview", overview },
+		{ "developer", developer }, { "publisher", publisher }, { "genre", genre }, { "players", players },
+		{ "screenscraper_id", screenScraperId },
+		{ "screenscraper_checked_media", screenScraperCheckedMedia },
+		{ "screenscraper_searched", screenScraperSearched },
+		{ "screenscraper_match_version", screenScraperMatchVersion },
+		{ "tgdb_id", tgdbId }, { "tgdb_checked_media", tgdbCheckedMedia }, { "tgdb_searched", tgdbSearched },
 		{ "boxart_path", artPath },
 		{ "boxart_url", boxartUrl },
+		{ "scraped_provider", scrapedProvider },
+		{ "launchbox_id", launchboxId },
+  { "launchbox_checked_media", launchboxCheckedMedia }, { "launchbox_searched", launchboxSearched },
 		{ "parsed", offlineArtState == OfflineArtState::Complete || offlineArtState == OfflineArtState::NoArtwork },
 		{ "offline_art_state", offlineArtState == OfflineArtState::Complete ? "complete"
 				: offlineArtState == OfflineArtState::NoArtwork ? "no_artwork" : "pending" },
@@ -56,7 +85,17 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 		{ "scraped", scraped },
 		{ "arcade", arcade },
 	};
-	return j;
+	// Only local paths are persisted. ScreenScraper download URLs contain passwords.
+	for (const auto& media : screenScraperMedia)
+		j["screenscraper_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
+			? media.second.substr(baseArtPath.size()) : media.second;
+	for (const auto& media : tgdbMedia)
+		j["tgdb_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
+			? media.second.substr(baseArtPath.size()) : media.second;
+ for (const auto& media : launchboxMedia)
+  j["launchbox_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
+   ? media.second.substr(baseArtPath.size()) : media.second;
+ return j;
 }
 
 GameBoxart::GameBoxart(const json& j, const std::string& baseArtPath)
@@ -68,8 +107,40 @@ GameBoxart::GameBoxart(const json& j, const std::string& baseArtPath)
 	loadProperty(region, j, "region");
 	loadProperty(releaseDate, j, "release_date");
 	loadProperty(overview, j, "overview");
+	loadProperty(developer, j, "developer");
+	loadProperty(publisher, j, "publisher");
+	loadProperty(genre, j, "genre");
+	loadProperty(players, j, "players");
+	loadProperty(screenScraperId, j, "screenscraper_id");
+	loadProperty(screenScraperCheckedMedia, j, "screenscraper_checked_media");
+	loadProperty(screenScraperSearched, j, "screenscraper_searched");
+	u32 matchVersion = 0;
+	loadProperty(matchVersion, j, "screenscraper_match_version");
+	if (screenScraperSearched && !screenScraperId && matchVersion < screenScraperMatchVersion)
+	{
+		// Keep successful downloads; only obsolete unmatched records need another lookup.
+		screenScraperSearched = false;
+		screenScraperCheckedMedia = 0;
+	}
+	loadProperty(screenScraperMedia, j, "screenscraper_media");
+	for (auto& media : screenScraperMedia)
+		if (!media.second.empty() && !isAbsolutePath(media.second))
+			media.second = baseArtPath + media.second;
+	loadProperty(tgdbId, j, "tgdb_id");
+	loadProperty(tgdbCheckedMedia, j, "tgdb_checked_media");
+	loadProperty(tgdbSearched, j, "tgdb_searched");
+	loadProperty(tgdbMedia, j, "tgdb_media");
+	for (auto& media : tgdbMedia)
+		if (!media.second.empty() && !isAbsolutePath(media.second)) media.second = baseArtPath + media.second;
 	loadProperty(boxartPath, j, "boxart_path");
 	loadProperty(boxartUrl, j, "boxart_url");
+	loadProperty(scrapedProvider, j, "scraped_provider");
+	loadProperty(launchboxId, j, "launchbox_id");
+ loadProperty(launchboxCheckedMedia, j, "launchbox_checked_media");
+ loadProperty(launchboxSearched, j, "launchbox_searched");
+ loadProperty(launchboxMedia, j, "launchbox_media");
+ for (auto& media : launchboxMedia)
+  if (!media.second.empty() && !isAbsolutePath(media.second)) media.second = baseArtPath + media.second;
 	loadProperty(gamePath, j, "game_path");
 	std::string state;
 	loadProperty(state, j, "offline_art_state");
@@ -141,6 +212,44 @@ std::string Scraper::makeUniqueFilename(const std::string& url)
 	return path;
 }
 
+DiscLabelResult saveDiscLabel(Disc& disc, const std::string& path)
+{
+	IsoFs isofs(&disc);
+	bool valid = false;
+	std::unique_ptr<IsoFs::Directory> root(isofs.getRoot(&valid));
+	if (!valid || root == nullptr)
+		return DiscLabelResult::Failed;
+	std::unique_ptr<IsoFs::Entry> entry(root->getEntry("0GDTEX.PVR"));
+	if (entry == nullptr || entry->isDirectory())
+		return DiscLabelResult::Missing;
+	auto *file = static_cast<IsoFs::File *>(entry.get());
+	std::vector<u8> data(file->getSize());
+	if (file->read(data.data(), data.size()) != data.size())
+		return DiscLabelResult::Failed;
+	std::vector<u8> out;
+	u32 w, h;
+	if (!pvrParse(data.data(), data.size(), w, h, out))
+		return DiscLabelResult::Failed;
+	FILE *output = nowide::fopen(path.c_str(), "wb");
+	if (output == nullptr)
+		return DiscLabelResult::Failed;
+	struct PngOutput { FILE *file; bool failed = false; } context{output};
+	const auto save = [](void *opaque, void *bytes, int size) {
+		auto& output = *static_cast<PngOutput *>(opaque);
+		if (fwrite(bytes, 1, size, output.file) != static_cast<size_t>(size))
+			output.failed = true;
+	};
+	stbi_flip_vertically_on_write(0);
+	const bool encoded = stbi_write_png_to_func(save, &context, w, h, 4, out.data(), 0) != 0;
+	const bool closed = fclose(output) == 0;
+	if (!encoded || context.failed || !closed)
+	{
+		nowide::remove(path.c_str());
+		return DiscLabelResult::Failed;
+	}
+	return DiscLabelResult::Saved;
+}
+
 void OfflineScraper::scrape(GameBoxart& item)
 {
 	if (item.offlineArtState != OfflineArtState::Pending)
@@ -201,43 +310,12 @@ void OfflineScraper::scrape(GameBoxart& item)
 				item.offlineArtState = OfflineArtState::Complete;
 				return;
 			}
-			IsoFs isofs(disc.get());
-			bool valid = false;
-			std::unique_ptr<IsoFs::Directory> root(isofs.getRoot(&valid));
-			if (!valid || root == nullptr)
-				return;
-			std::unique_ptr<IsoFs::Entry> entry(root->getEntry("0GDTEX.PVR"));
-			if (entry == nullptr || entry->isDirectory())
-			{
-				item.offlineArtState = OfflineArtState::NoArtwork;
-				return;
-			}
-			auto *file = static_cast<IsoFs::File *>(entry.get());
-			std::vector<u8> data(file->getSize());
-			if (file->read(data.data(), data.size()) != data.size())
-				return;
-			std::vector<u8> out;
-			u32 w, h;
-			if (!pvrParse(data.data(), data.size(), w, h, out))
-				return;
 			const std::string path = makeUniqueFilename("gdtex.png");
-			FILE *output = nowide::fopen(path.c_str(), "wb");
-			if (output == nullptr)
+			const DiscLabelResult label = saveDiscLabel(*disc, path);
+			if (label == DiscLabelResult::Missing)
+				item.offlineArtState = OfflineArtState::NoArtwork;
+			if (label != DiscLabelResult::Saved)
 				return;
-			struct PngOutput { FILE *file; bool failed = false; } context{output};
-			const auto save = [](void *opaque, void *bytes, int size) {
-				auto& output = *static_cast<PngOutput *>(opaque);
-				if (fwrite(bytes, 1, size, output.file) != static_cast<size_t>(size))
-					output.failed = true;
-			};
-			stbi_flip_vertically_on_write(0);
-			const bool encoded = stbi_write_png_to_func(save, &context, w, h, 4, out.data(), 0) != 0;
-			const bool closed = fclose(output) == 0;
-			if (!encoded || context.failed || !closed)
-			{
-				nowide::remove(path.c_str());
-				return;
-			}
 			item.setBoxartPath(path);
 			item.offlineArtState = OfflineArtState::Complete;
 		}
@@ -279,4 +357,35 @@ void OfflineScraper::scrape(GameBoxart& item)
 	} catch (...) {
 		WARN_LOG(COMMON, "Physical boxart failed for %s", item.gamePath.c_str());
 	}
+}
+
+bool Scraper::downloadMediaImage(const std::string& url, const std::string& path, const Transport& transport)
+{
+    std::vector<u8> bytes;
+    std::string type;
+    const int status = transport ? transport(url, bytes, type) : http::get(url, bytes, type);
+    if (status == 404) return false;
+    int width = 0, height = 0, channels = 0;
+    if (!http::success(status) || bytes.empty() || bytes.size() > 64 * 1024 * 1024
+            || type.substr(0, 6) != "image/" || !stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, &channels)
+            || width <= 0 || height <= 0 || static_cast<u64>(width) * height > 32 * 1024 * 1024)
+    {
+        throw std::runtime_error("Artwork download failed. Retrying after one minute.");
+    }
+    u8* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, &channels, 4);
+    if (!pixels) {
+        throw std::runtime_error("Artwork provider returned an incomplete image.");
+    }
+    stbi_image_free(pixels);
+    const auto temporary = std::filesystem::u8path(path + ".part");
+    std::ofstream file(temporary, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    file.close();
+    std::error_code error;
+    if (file) std::filesystem::rename(temporary, std::filesystem::u8path(path), error);
+    if (!file || error) {
+        std::filesystem::remove(temporary, error);
+        throw std::runtime_error("Artwork provider could not save artwork. Check the writable data folder.");
+    }
+    return true;
 }

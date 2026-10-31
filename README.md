@@ -41,6 +41,7 @@ Releases tagged `-dev` are built from the `dev` branch and contain the newest, l
 
 - **Modern interface.** A redesigned UI with a game library that shows box art and VMU icons.
 - **Continue Playing and favourites.** Continue Playing lists every game with a save state, newest first, and Resume loads that title's newest manual state or autosave. Start Fresh boots without loading a state. Use the star on a game to keep it in Favourites. These choices do not change your automatic save-state settings.
+- **Library theme packages.** Install themes with custom palettes and library layouts, including Art Book Next, Iconic and Linear ports. See the [theme author guide](docs/Themes.md).
 - **Ready to play.** Sensible defaults let new players start a game straight away, and the advanced settings are still there for power users.
 - **Performance overlay.** A configurable on-screen display with frame timing plus RAM and texture VRAM usage.
 - **Real hardware and VMU support.** [DreamLink](docs/DreamLink.md) connects Hollycast to DreamConn and DreamPicoPort controllers and to the [DreamPotato](docs/DreamPotato%20Integrated%20Mode.md) VMU emulator.
@@ -153,6 +154,17 @@ cmake --build --preset <PRESET>
 > ```bash
 > cmake --preset darwin -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
 > ```
+
+### Native Metal renderer on macOS
+
+Standalone macOS builds include the experimental native Metal backend by default:
+
+```bash
+cmake --preset darwin -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
+cmake --build --preset darwin
+```
+
+Then select **Settings > Video > Graphics API > Metal (Experimental)** and choose per-triangle, per-strip or per-pixel sorting. Metal is offered only when its runtime device/pipeline check succeeds; per-pixel support is checked separately. Existing renderer preferences are preserved. `-DUSE_METAL=OFF` remains available for builds that explicitly exclude it. See [the Metal renderer notes](docs/Native%20Metal%20renderer.md) for supported features, limitations and verification.
 
 ### Android
 

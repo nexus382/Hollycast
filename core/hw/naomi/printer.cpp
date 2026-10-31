@@ -1,5 +1,6 @@
 /*
 	Copyright 2023 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -854,7 +855,7 @@ private:
 				const bool success = bitmapWriter->save(s);
 				bitmapWriter.reset();
 				if (success) {
-					os_notify(i18n::T("Print out saved"), 5000, s.c_str());
+					os_notify(i18n::T("Printout saved"), 5000, s.c_str());
 					NOTICE_LOG(NAOMI, "%s", s.c_str());
 				}
 			}

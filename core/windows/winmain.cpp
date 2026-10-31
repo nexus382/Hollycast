@@ -47,6 +47,7 @@
 #include "profiler/fc_profiler.h"
 
 #include <nowide/args.hpp>
+#include <nowide/convert.hpp>
 #include <nowide/stackstring.hpp>
 #include <algorithm>
 #include <exception>
@@ -427,7 +428,9 @@ int main(int argc, char* argv[])
 	} catch (const std::exception& e) {
 		ERROR_LOG(BOOT, "mainui_loop error: %s", e.what());
 #ifndef TARGET_UWP
-		MessageBox(NULL, i18n::T("Flycast Error"), e.what(), MB_ICONSTOP | MB_OK);
+		// Native dialogs require UTF-16; translations and exception text are UTF-8.
+		MessageBoxW(nullptr, nowide::widen(e.what()).c_str(),
+			nowide::widen(i18n::T("Hollycast Error")).c_str(), MB_ICONSTOP | MB_OK);
 #endif
 	} catch (...) {
 		ERROR_LOG(BOOT, "mainui_loop unknown exception");

@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -19,6 +20,7 @@
 #include "resources.h"
 #include "archive/ZipArchive.h"
 #include <cstring>
+#include <functional>
 #include <cmrc/cmrc.hpp>
 CMRC_DECLARE(Hollycast);
 
@@ -62,6 +64,26 @@ std::unique_ptr<u8[]> load(const std::string& path, size_t& size)
 	INFO_LOG(COMMON, "Resource not found: %s", path.c_str());
 	size = 0;
 	return nullptr;
+}
+
+std::vector<std::string> listFiles(const std::string& path)
+{
+	std::vector<std::string> files;
+	try {
+		const auto fs = cmrc::Hollycast::get_filesystem();
+		std::function<void(const std::string&)> visit = [&](const std::string& directory) {
+			for (auto entry : fs.iterate_directory(directory))
+			{
+				const std::string child = directory + "/" + entry.filename();
+				if (entry.is_directory()) visit(child);
+				else files.push_back(child);
+			}
+		};
+		visit(path);
+	} catch (const std::system_error& e) {
+		WARN_LOG(COMMON, "Embedded resource listing failed: %s", e.what());
+	}
+	return files;
 }
 
 std::vector<std::string> listDirectory(const std::string& path)

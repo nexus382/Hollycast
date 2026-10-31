@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "audio/ui_sound.h"
 #include "mainui.h"
 #include "hw/pvr/Renderer_if.h"
 #include "gui.h"
@@ -39,6 +40,15 @@
 static bool mainui_enabled;
 u32 MainFrameCount;
 static bool forceReinit;
+
+static int renderApi(RenderType type)
+{
+	if (isOpenGL(type)) return 0;
+	if (isVulkan(type)) return 1;
+	if (type == RenderType::DirectX9) return 2;
+	if (isMetal(type)) return 4;
+	return 3;
+}
 
 bool mainui_rend_frame()
 {
@@ -116,6 +126,7 @@ void mainui_loop(bool forceStart)
 	while (mainui_enabled)
 	{
 		fc_profiler::startThread("main");
+		tickUiSound();
 
 		if (mainui_rend_frame() && imguiDriver != nullptr)
 		{
@@ -131,8 +142,8 @@ void mainui_loop(bool forceStart)
 		if (config::RendererType != currentRenderer || forceReinit)
 		{
 			mainui_term();
-			int prevApi = isOpenGL(currentRenderer) ? 0 : isVulkan(currentRenderer) ? 1 : currentRenderer == RenderType::DirectX9 ? 2 : 3;
-			int newApi = isOpenGL(config::RendererType) ? 0 : isVulkan(config::RendererType) ? 1 : config::RendererType == RenderType::DirectX9 ? 2 : 3;
+			int prevApi = renderApi(currentRenderer);
+			int newApi = renderApi(config::RendererType);
 			if (newApi != prevApi || forceReinit)
 			{
 				try {

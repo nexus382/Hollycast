@@ -40,7 +40,9 @@ if(APPLE)
 		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS deployment version")
 		set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "")
 	endif()
-	set(ZLIB_LIBRARY "-lz" CACHE STRING "Use generic linker flag for Xcode to support multiple SDKs")
+	if(CMAKE_GENERATOR STREQUAL "Xcode")
+		set(ZLIB_LIBRARY "-lz" CACHE STRING "Use generic linker flag for Xcode to support multiple SDKs")
+	endif()
 endif()
 
 if(LIBRETRO)
@@ -92,6 +94,11 @@ option(USE_HOST_LIBCHDR "Use host libchdr" OFF)
 option(USE_HOST_LIBJUICE "Use host libjuice" OFF)
 option(USE_OPENMP "Use OpenMP if available" ON)
 option(USE_VULKAN "Build with Vulkan support" ON)
+set(USE_METAL_DEFAULT OFF)
+if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT IOS AND NOT LIBRETRO)
+	set(USE_METAL_DEFAULT ON)
+endif()
+option(USE_METAL "Build the experimental native Metal renderer (standalone macOS)" ${USE_METAL_DEFAULT})
 set(MOLTENVK_DYLIB "" CACHE FILEPATH "Path to macOS MoltenVK dylib for macOS Vulkan builds")
 option(USE_DX9 "Build with Direct3D 9 support" ON)
 option(USE_DX11 "Build with Direct3D 11 support" ON)
@@ -118,6 +125,15 @@ endif()
 
 if(IOS AND NOT LIBRETRO)
 	set(USE_VULKAN OFF CACHE BOOL "Force vulkan off" FORCE)
+endif()
+
+if(USE_METAL AND (NOT APPLE OR IOS OR LIBRETRO))
+	message(FATAL_ERROR "USE_METAL is supported only by standalone macOS builds")
+endif()
+if(USE_METAL)
+	enable_language(OBJC OBJCXX)
+	set(CMAKE_OBJCXX_STANDARD 17)
+	set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 endif()
 
 if(WEBOS)
@@ -983,6 +999,7 @@ if(NOT LIBRETRO)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE
 		IMGUI_DISABLE_DEMO_WINDOWS
 		IMGUI_DISABLE_DEBUG_TOOLS
+		IMGUI_ENABLE_HARFBUZZ
 		IMGUI_DEFINE_MATH_OPERATORS)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/imgui core/deps/imgui/backends)
 	target_sources(${PROJECT_NAME} PRIVATE
@@ -994,6 +1011,7 @@ if(NOT LIBRETRO)
 		core/deps/imgui/imgui_tables.cpp
 		core/deps/imgui/imgui_widgets.cpp
 		core/deps/imgui/misc/freetype/imgui_freetype.cpp)
+	target_sources(${PROJECT_NAME} PRIVATE core/deps/imgui/misc/freetype/imgui_text_shaping.cpp)
 
 	set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
 	set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
@@ -1003,6 +1021,17 @@ if(NOT LIBRETRO)
 		target_compile_definitions(freetype PRIVATE _WINRT_DLL)
 	endif()
 	target_link_libraries(${PROJECT_NAME} PRIVATE freetype)
+	# FreeType does not depend on HarfBuzz here. HarfBuzz uses its baked sizes for
+	# deterministic shaping across platforms; optional rendering/tool APIs are unused.
+	set(HB_HAVE_FREETYPE ON CACHE BOOL "" FORCE)
+	set(HB_HAVE_CORETEXT OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_RASTER OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_VECTOR OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_GPU OFF CACHE BOOL "" FORCE)
+	add_subdirectory(core/deps/harfbuzz EXCLUDE_FROM_ALL)
+	target_link_libraries(${PROJECT_NAME} PRIVATE harfbuzz)
 
 	if(ENABLE_FC_PROFILER)
 		target_include_directories(${PROJECT_NAME} PRIVATE core/deps/implot)
@@ -1467,6 +1496,8 @@ if(NOT LIBRETRO)
 			# Test builds use gtest_main instead of the macOS app entry point.
 			if(NOT BUILD_TESTING)
 				add_subdirectory(core/deps/Syphon)
+				# Syphon's C++ prefix header cannot be consumed by Objective-C++ sources.
+				set_target_properties(Syphon PROPERTIES INTERFACE_PRECOMPILE_HEADERS "")
 				target_link_libraries(${PROJECT_NAME} PRIVATE Syphon)
 				add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy ${SYPHON_METALLIB}

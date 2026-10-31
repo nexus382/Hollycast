@@ -19,34 +19,42 @@
 #pragma once
 #include "scraper.h"
 #include "json.hpp"
+#include "artwork_media.h"
 
 #include <map>
 #include <string>
 #include <vector>
+#include <functional>
 
 using namespace nlohmann;
 
 class TheGamesDb : public Scraper
 {
 public:
+	using Transport = std::function<int(const std::string&, std::vector<u8>&, std::string&)>;
+	explicit TheGamesDb(Transport transport = {});
+	// Front/back covers, logos, banners, fanart, screenshots and title screens.
+	inline static constexpr u32 supportedMedia = 1u | (1u << 2) | (1u << 3) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 9);
+	static bool needsMedia(const GameBoxart& item, u32 selection);
 	bool initialize(const std::string& saveDirectory) override;
+	bool ready() const override;
 	void scrape(GameBoxart& item) override;
 	void scrape(std::vector<GameBoxart>& items) override;
 
 private:
 	void fetchPlatforms();
-	bool fetchGameInfo(GameBoxart& item, const std::string& url, const std::string& diskId = "");
 	std::string makeUrl(const std::string& endpoint);
-	void copyFile(const std::string& from, const std::string& to);
 	json httpGet(const std::string& url);
-	void parseBoxart(GameBoxart& item, const json& j, int gameId);
-	void fetchByUids(std::vector<GameBoxart>& items);
-	void fetchByName(GameBoxart& item);
-	bool parseGameInfo(const json& gameArray, const json& boxartArray, GameBoxart& item, const std::string& diskId);
+	json findGame(const GameBoxart& item);
+	void applyMetadata(GameBoxart& item, const json& game);
+	std::string referenceNames(const json& game, const std::string& category);
+	bool downloadMedia(const std::string& url, const std::string& path);
 
 	int dreamcastPlatformId = 0;
 	int arcadePlatformId = 0;
 	u64 blackoutPeriod = 0;
 
-	std::map<std::string, std::string> boxartCache;	// key: url, value: local file path
+	Transport transport;
+	std::string directory;
+	json references = json::object();
 };
