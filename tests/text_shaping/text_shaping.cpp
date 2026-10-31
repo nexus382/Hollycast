@@ -7,6 +7,7 @@
 #include FT_FREETYPE_H
 #include <hb-ft.h>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -157,6 +158,85 @@ int main(int argc, char** argv)
                 }
             }
             ImGui::EndFrame();
+            ImGui::DestroyContext();
+        }
+        // InputText must measure and move by shaped clusters, matching the
+        // rendered glyphs: a caret inside a conjunct cannot be drawn correctly.
+        {
+            ImGui::CreateContext();
+            auto& io2 = ImGui::GetIO();
+            io2.IniFilename = nullptr;
+            io2.DisplaySize = ImVec2(1280, 800);
+            io2.DeltaTime = 1.0f / 60.0f;
+            io2.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+            io2.Fonts->SetFontLoader(ImGuiFreeType::GetFontLoader());
+            ImFontConfig primary;
+            auto* font = io2.Fonts->AddFontFromFileTTF((directory + "Roboto-Medium.ttf").c_str(), 17, &primary);
+            Require(font != nullptr, "input font failed");
+            ImFontConfig fallback; fallback.MergeMode = true; fallback.DstFont = font;
+            Require(io2.Fonts->AddFontFromFileTTF((directory + "NotoSansDevanagari-Medium.ttf").c_str(), 17, &fallback) != nullptr, "input Hindi fallback failed");
+            io2.Fonts->Build();
+            char buf[256] = "क्षि";
+            const int cluster_bytes = (int)std::strlen(buf);
+            ImGuiID input_id = 0;
+            ImVec2 item_min(0, 0);
+            auto frame = [&](bool focus) {
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos(ImVec2(0, 0));
+                ImGui::SetNextWindowSize(ImVec2(700, 400));
+                ImGui::Begin("InputTextHindi");
+                if (focus)
+                    ImGui::SetKeyboardFocusHere();
+                input_id = ImGui::GetID("value");
+                ImGui::InputText("value", buf, sizeof(buf));
+                item_min = ImGui::GetItemRectMin();
+                ImGui::End();
+                ImGui::Render();
+                for (auto* tex : io2.Fonts->TexList)
+                    if (tex->Status != ImTextureStatus_OK)
+                        tex->SetStatus(ImTextureStatus_OK);
+            };
+            frame(true); frame(false); frame(false);
+            auto* state = ImGui::GetInputTextState(input_id);
+            Require(state != nullptr, "input state not active");
+            state->SetSelection(0, 0);
+            state->OnKeyPressed(0x200001); // Right arrow
+            Require(state->GetCursorPos() == cluster_bytes, "right arrow stopped inside a shaped cluster");
+            state->SetSelection(cluster_bytes, cluster_bytes);
+            state->OnKeyPressed(0x200009); // Backspace deletes the whole cluster the caret snapped over
+            Require(state->TextLen == 0, "backspace left a partial shaped cluster");
+            // Mouse hit-testing uses the same widths: a click near the end of
+            // the shaped cluster selects its end, not an interior codepoint.
+            // A fresh field is used because the active field owns its buffer.
+            char buf2[256] = "क्षि";
+            ImGuiID click_id = 0;
+            ImVec2 click_min(0, 0);
+            auto click_frame = [&]() {
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos(ImVec2(0, 0));
+                ImGui::SetNextWindowSize(ImVec2(700, 400));
+                ImGui::Begin("InputTextHindi");
+                click_id = ImGui::GetID("clickvalue");
+                ImGui::InputText("clickvalue", buf2, sizeof(buf2));
+                click_min = ImGui::GetItemRectMin();
+                ImGui::End();
+                ImGui::Render();
+                for (auto* tex : io2.Fonts->TexList)
+                    if (tex->Status != ImTextureStatus_OK)
+                        tex->SetStatus(ImTextureStatus_OK);
+            };
+            click_frame();
+            const float text_x = click_min.x + ImGui::GetStyle().FramePadding.x;
+            const float shaped_width = font->CalcTextSizeA(17, FLT_MAX, 0, buf2).x;
+            Require(shaped_width > 0.0f, "shaped width unavailable for click test");
+            io2.MousePos = ImVec2(text_x + shaped_width - 0.1f, click_min.y + 5);
+            io2.MouseDown[0] = true;
+            click_frame();
+            io2.MouseDown[0] = false;
+            click_frame();
+            state = ImGui::GetInputTextState(click_id);
+            Require(state != nullptr, "input state lost after click");
+            Require(state->GetCursorPos() == cluster_bytes, "click placed the caret inside a shaped cluster");
             ImGui::DestroyContext();
         }
         std::cout << checks << " cluster wrap/clip cases passed; substitutions, offsets, mixed text, rendering, sizes and reloads passed\n";
