@@ -685,6 +685,51 @@ TEST(PostProcessingChainTest, FunctionMacroArgumentsDoNotRewriteInjectedSwizzles
 #endif
 }
 
+TEST(PostProcessingChainTest, RescansNestedObjectAndFunctionMacroAliases)
+{
+	const std::string shader =
+		"#define VALUE 0.5\n"
+		"#define SCALE(x) (VALUE * (x))\n"
+		"#define SCALE_ALIAS SCALE\n"
+		"#define OUTER(x) SCALE_ALIAS(x)\n"
+		"#define RESULT OUTER(1.0)\n"
+		"#if defined(FRAGMENT)\n"
+		"void main() { FragColor = vec4(RESULT + SCALE_ALIAS(1.0)); }\n#endif\n";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseGlslShader(shader, source, error)) << error;
+	EXPECT_EQ(std::string::npos, source.fragment.find("VALUE"));
+	EXPECT_EQ(std::string::npos, source.fragment.find("OUTER"));
+	EXPECT_EQ(std::string::npos, source.fragment.find("SCALE_ALIAS"));
+	EXPECT_NE(std::string::npos, source.fragment.find("0.5"));
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslFragmentToHlsl(source.fragment, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+}
+
+TEST(PostProcessingChainTest, MacroCyclesTerminateWithoutRepeatedExpansion)
+{
+	const std::string shader =
+		"#define A B\n#define B A\n"
+		"#define SELF(x) SELF(x)\n"
+		"int a = A; int b = SELF(1);\n";
+	std::string preprocessed;
+	std::string error;
+	ASSERT_TRUE(postprocess::preprocessShaderSource(shader, {}, preprocessed, error)) << error;
+	EXPECT_NE(std::string::npos, preprocessed.find("int a = A; int b = SELF(1);"));
+}
+
+TEST(PostProcessingChainTest, ExpandsManyIndependentMacroUses)
+{
+	std::string shader = "#define K 7\n";
+	for (int i = 0; i < 10001; ++i) shader += "K ";
+	shader += "\n";
+	std::string preprocessed;
+	std::string error;
+	ASSERT_TRUE(postprocess::preprocessShaderSource(shader, {}, preprocessed, error)) << error;
+	EXPECT_EQ(std::string::npos, preprocessed.find("K ", preprocessed.find('\n') + 1));
+}
+
 TEST(PostProcessingChainTest, ExpandsSelfReferencingSizeMacrosOnlyOnce)
 {
 	const std::string shader =

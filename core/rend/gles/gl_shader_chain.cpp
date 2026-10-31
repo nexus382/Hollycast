@@ -85,6 +85,21 @@ void removeVersionDirective(std::string& source)
 	source.erase(0, lineEnd == std::string::npos ? source.size() : source.find_first_not_of("\r\n", lineEnd));
 }
 
+void normalizeFxVaryingNames(std::string& source, const char *direction)
+{
+	// FX entry points may use different parameter or structure member names for
+	// the same semantic. Apple's monolithic GL 4.1 linker matches varying names
+	// even with explicit locations, so give both sides a name derived from that
+	// location. Only rename the vertex outputs and fragment inputs, not MRTs.
+	const std::regex declaration(std::string(R"(\blayout\s*\(\s*location\s*=\s*([0-9]+)\s*\)\s*(?:(?:flat|noperspective|centroid|smooth|sample|invariant)\s+)*)")
+			+ direction + R"(\s+(?:(?:lowp|mediump|highp)\s+)?[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+	std::unordered_map<std::string, std::string> names;
+	for (std::sregex_iterator it(source.begin(), source.end(), declaration), end; it != end; ++it)
+		names.emplace((*it)[2].str(), "_hollycast_fx_varying_" + (*it)[1].str());
+	for (const auto& [name, replacement] : names)
+		source = std::regex_replace(source, std::regex("\\b" + name + "\\b"), replacement);
+}
+
 const char *glslType(postprocess::SlangParameterType type)
 {
 	return postprocess::shaderParameterGlslType(type);
@@ -704,6 +719,8 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 		removeVersionDirective(vertexBody);
 		removeResourceDeclarations(vertexBody);
 		if (passSource->nativeFxStages) {
+			normalizeFxVaryingNames(vertexBody, "out");
+			normalizeFxVaryingNames(shaderBody, "in");
 			// Keep top-left effect UVs aligned with the renderer's GL texture origin.
 			vertexBody = "#define main HollycastEffectVertexMain\n" + vertexBody
 					+ "\n#undef main\nvoid main() { HollycastEffectVertexMain(); gl_Position.y = -gl_Position.y; }\n";

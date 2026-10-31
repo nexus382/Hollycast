@@ -130,5 +130,26 @@ TEST_F(OpenGLShaderChainTest, RendersDefaultFxAndIsolatesPassMasks)
 	expectPixels({ red, greenMask }, { 255, 255, 255, 255 });
 }
 
+TEST_F(OpenGLShaderChainTest, LinksFxVaryingsBySemanticLocation)
+{
+	const auto parameters = writeShader("parameters.fx",
+			"void Vertex(uint id : SV_VertexID, out float4 position : SV_Position,"
+			" out float2 first : TEXCOORD0, out float2 second : TEXCOORD1) {"
+			" position = float4(id == 2 ? 3.0 : -1.0, id == 1 ? 3.0 : -1.0, 0.0, 1.0);"
+			" first = float2(0.25, 0.5); second = float2(0.75, 1.0); }\n"
+			"float4 Pixel(float2 left : TEXCOORD0, float2 right : TEXCOORD1) : SV_Target"
+			" { return float4(left, right); }\n"
+			"technique Parameters { pass { VertexShader = Vertex; PixelShader = Pixel; } }\n");
+	expectPixels({ parameters }, { 64, 128, 191, 255 });
+	const auto structure = writeShader("structure.fx",
+			"struct VertexOutput { float4 position : SV_Position; float2 coordinates : TEXCOORD0; };\n"
+			"VertexOutput Vertex(uint id : SV_VertexID) { VertexOutput result;"
+			" result.position = float4(id == 2 ? 3.0 : -1.0, id == 1 ? 3.0 : -1.0, 0.0, 1.0);"
+			" result.coordinates = float2(0.25, 0.75); return result; }\n"
+			"float4 Pixel(float2 uv : TEXCOORD0) : SV_Target { return float4(uv, 0.5, 1.0); }\n"
+			"technique Structure { pass { VertexShader = Vertex; PixelShader = Pixel; } }\n");
+	expectPixels({ structure }, { 64, 191, 128, 255 });
+}
+
 } // namespace
 #endif

@@ -507,6 +507,98 @@ void expandFunctionMacros(std::string& line, const std::unordered_map<std::strin
 	}
 }
 
+// Keep the set of disabled macros on each token as replacements are rescanned.
+// This permits an object alias to form a function call with the following input,
+// while preventing recursive aliases from being expanded again indefinitely.
+bool expandShaderMacros(std::string& line, const std::unordered_map<std::string, std::string>& objects,
+		const std::unordered_map<std::string, FunctionMacro>& functions, bool startsInBlockComment)
+{
+	struct MacroToken {
+		std::string text;
+		bool code;
+		bool identifier;
+		std::unordered_set<std::string> disabled;
+	};
+	const auto tokenize = [](const std::string& text, bool inComment) {
+		std::vector<MacroToken> tokens;
+		const auto mask = codeMask(text, inComment);
+		for (size_t i = 0; i < text.size();) {
+			const size_t begin = i++;
+			const bool identifier = mask[begin] && isIdentifierStart(text[begin]);
+			if (identifier)
+				while (i < text.size() && mask[i] && isIdentifierPart(text[i])) ++i;
+			tokens.push_back({ text.substr(begin, i - begin), mask[begin], identifier, {} });
+		}
+		return tokens;
+	};
+	const auto expand = [&](const auto& self, std::vector<MacroToken>& tokens, unsigned depth) -> bool {
+		if (depth > 64 || tokens.size() > 1024 * 1024) return false;
+		for (size_t i = 0; i < tokens.size();) {
+			const MacroToken current = tokens[i];
+			if (!current.identifier || current.disabled.count(current.text)) { ++i; continue; }
+			const auto object = objects.find(current.text);
+			const auto function = functions.find(current.text);
+			std::vector<MacroToken> replacement;
+			size_t end = i + 1;
+			// Function macros also have a sentinel in the object map for #if
+			// defined checks; their invocation must take precedence here.
+			if (object != objects.end() && function == functions.end())
+				replacement = tokenize(object->second, false);
+			else if (function != functions.end()) {
+				size_t open = end;
+				while (open < tokens.size() && tokens[open].code &&
+						tokens[open].text.find_first_not_of(" \t") == std::string::npos) ++open;
+				if (open == tokens.size() || !tokens[open].code || tokens[open].text != "(") { ++i; continue; }
+				std::vector<std::vector<MacroToken>> arguments(1);
+				int nesting = 0;
+				size_t close = open + 1;
+				for (; close < tokens.size(); ++close) {
+					const auto& token = tokens[close];
+					if (token.code && token.text == ")" && nesting == 0) break;
+					if (token.code && token.text == "," && nesting == 0) { arguments.emplace_back(); continue; }
+					if (token.code && token.text == "(") ++nesting;
+					else if (token.code && token.text == ")") --nesting;
+					arguments.back().push_back(token);
+				}
+				if (close == tokens.size()) { ++i; continue; }
+				if (arguments.size() == 1 && std::all_of(arguments[0].begin(), arguments[0].end(),
+						[](const MacroToken& t) { return t.code && t.text.find_first_not_of(" \t") == std::string::npos; }))
+					arguments.clear();
+				if (arguments.size() != function->second.arguments.size()) { ++i; continue; }
+				for (auto& argument : arguments)
+					if (!self(self, argument, depth + 1)) return false;
+				const auto body = tokenize(function->second.body, false);
+				for (const auto& token : body) {
+					const auto parameter = std::find(function->second.arguments.begin(), function->second.arguments.end(), token.text);
+					if (token.identifier && parameter != function->second.arguments.end()) {
+						const auto& argument = arguments[parameter - function->second.arguments.begin()];
+						replacement.insert(replacement.end(), argument.begin(), argument.end());
+					} else replacement.push_back(token);
+				}
+				end = close + 1;
+			} else { ++i; continue; }
+			for (auto& token : replacement) {
+				token.disabled.insert(current.disabled.begin(), current.disabled.end());
+				token.disabled.insert(current.text);
+				if (token.disabled.size() > 64) return false;
+			}
+			if (tokens.size() - (end - i) + replacement.size() > 1024 * 1024) return false;
+			if (replacement.size() == end - i)
+				std::move(replacement.begin(), replacement.end(), tokens.begin() + i);
+			else {
+				tokens.erase(tokens.begin() + i, tokens.begin() + end);
+				tokens.insert(tokens.begin() + i, replacement.begin(), replacement.end());
+			}
+		}
+		return true;
+	};
+	auto tokens = tokenize(line, startsInBlockComment);
+	if (!expand(expand, tokens, 0)) return false;
+	line.clear();
+	for (const auto& token : tokens) line += token.text;
+	return true;
+}
+
 bool preprocess(const std::string& source,
 		const std::unordered_map<std::string, std::string>& initialDefines,
 		std::string& output, std::string& error, const ShaderIncludeResolver& includeResolver,
@@ -564,9 +656,10 @@ bool preprocess(const std::string& source,
 		if (directiveStart == line.size() || line[directiveStart] != '#') {
 			if (active() || preserveSource) {
 				if (!preserveSource) {
-					expandFunctionMacros(line, functionDefines, startsInBlockComment);
-					expandObjectMacros(line, defines, startsInBlockComment);
-					expandFunctionMacros(line, functionDefines, startsInBlockComment);
+					if (!expandShaderMacros(line, defines, functionDefines, startsInBlockComment)) {
+						error = "Shader macro expansion exceeds the complexity limit.";
+						return false;
+					}
 				}
 				if (line.size() + 1 > 32 * 1024 * 1024 - output.size()) {
 					error = "Expanded shader source exceeds the 32 MiB package limit.";
