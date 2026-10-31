@@ -168,13 +168,19 @@ TEST(DcnetStatusTest, KeepsAdditionalApiGamesSeparateFromSimilarCatalogTitles)
 		{"gameId":"future","name":"New DCnet Game","online":true,"playerCount":0,"gameCount":0}
 	])", "[]");
 	ASSERT_EQ(53u, status.games.size());
-	EXPECT_EQ("capvsnkmf", status.games.front().id);
+	EXPECT_EQ(1, std::count_if(status.games.begin(), status.games.end(), [](const dcnet::Game& game) {
+		return game.id == "capvsnkmf";
+	}));
 	const auto pro = std::find_if(status.games.begin(), status.games.end(), [](const dcnet::Game& game) {
 		return game.name == "Capcom vs. SNK Pro (JP)";
 	});
 	ASSERT_NE(status.games.end(), pro);
-	EXPECT_FALSE(pro->hasLiveStatus);
-	EXPECT_EQ(-1, pro->players);
+	EXPECT_TRUE(pro->hasLiveStatus);
+	EXPECT_EQ(2, pro->players);
+	EXPECT_EQ("capvsnkmf", pro->sharedStatusId);
+	EXPECT_EQ(2, status.playerCount);
+	EXPECT_EQ(1, status.matchCount);
+	EXPECT_EQ(1, status.activeGames);
 }
 
 TEST(DcnetStatusTest, OwnershipKeysHandleReleaseTagsAndKeepDistinctTitlesSeparate)
@@ -275,4 +281,118 @@ TEST(DcnetStatusTest, AdditionalPlayerOnlyGamesAreKeptAndMissingActivityDoesNotS
 	EXPECT_TRUE(std::none_of(next.games.begin(), next.games.end(), [](const dcnet::Game& game) {
 		return game.hasPlayerActivity || game.players >= 0;
 	}));
+}
+
+TEST(DcnetStatusTest, SharedEditionsKeepTheirIdentityAndCountEachServiceOnce)
+{
+	const auto status = dcnet::parseStatus(R"([
+		{"gameId":"aeroi","name":"Aero Dancing i","online":true,"playerCount":4,"gameCount":2},
+		{"gameId":"capvsnkmf","name":"Capcom vs. SNK: Millennium Fight 2000","online":false,"playerCount":2,"gameCount":1}
+	])", R"([
+		{"name":"Pilot","gameId":"aeroi"},
+		{"name":"Fighter","gameId":"capvsnkmf"}
+	])");
+	EXPECT_EQ(6, status.playerCount);
+	EXPECT_EQ(3, status.matchCount);
+	EXPECT_EQ(2, status.activeGames);
+	ASSERT_EQ(2u, status.players.size());
+	struct SharedCase { const char *edition; const char *source; const char *unownedTitle; };
+	const SharedCase cases[] = {
+		{ "catalog:aero-dancing-i-jikai", "aeroi", "Aero Dancing i" },
+		{ "catalog:capcom-vs-snk-pro", "capvsnkmf", "Capcom vs. SNK: Millennium Fight 2000" },
+	};
+	for (const auto& item : cases)
+	{
+		const auto edition = std::find_if(status.games.begin(), status.games.end(), [&](const dcnet::Game& game) {
+			return game.id == item.edition;
+		});
+		const auto source = std::find_if(status.games.begin(), status.games.end(), [&](const dcnet::Game& game) {
+			return game.id == item.source;
+		});
+		ASSERT_NE(status.games.end(), edition);
+		ASSERT_NE(status.games.end(), source);
+		EXPECT_EQ(item.source, edition->sharedStatusId);
+		EXPECT_EQ(item.source, source->sharedStatusId);
+		EXPECT_TRUE(edition->hasLiveStatus);
+		EXPECT_TRUE(edition->hasPlayerActivity);
+		EXPECT_EQ(source->online, edition->online);
+		EXPECT_EQ(source->players, edition->players);
+		EXPECT_EQ(source->matches, edition->matches);
+		const auto keys = dcnet::titleKeys(*edition);
+		EXPECT_EQ(keys.end(), std::find(keys.begin(), keys.end(), dcnet::normalizeTitle(item.unownedTitle)));
+		EXPECT_EQ(1, std::count_if(status.players.begin(), status.players.end(), [&](const dcnet::Player& player) {
+			return player.gameId == edition->sharedStatusId;
+		}));
+	}
+}
+
+TEST(DcnetStatusTest, SharedServicesPreserveUnknownCountsAndRecoverPlayerOnlyActivity)
+{
+	const auto status = dcnet::parseStatus(R"([
+		{"gameId":"aeroi","name":"Aero Dancing i","online":true}
+	])", R"([
+		{"name":"Fighter","gameId":"capvsnkmf","gameName":"Capcom vs. SNK: Millennium Fight 2000"}
+	])");
+	EXPECT_EQ(1, status.playerCount);
+	EXPECT_EQ(0, status.matchCount);
+	EXPECT_EQ(1, status.activeGames);
+	for (const auto& game : status.games)
+	{
+		if (game.id == "catalog:aero-dancing-i-jikai")
+		{
+			EXPECT_TRUE(game.online);
+			EXPECT_TRUE(game.hasLiveStatus);
+			EXPECT_EQ(-1, game.players);
+			EXPECT_EQ(-1, game.matches);
+		}
+		else if (game.id == "catalog:capcom-vs-snk-pro")
+		{
+			EXPECT_EQ("capvsnkmf", game.sharedStatusId);
+			EXPECT_FALSE(game.hasLiveStatus);
+			EXPECT_TRUE(game.hasPlayerActivity);
+			EXPECT_EQ(1, game.players);
+			EXPECT_EQ(-1, game.matches);
+		}
+	}
+	const auto empty = dcnet::parseStatus("[]", "[]");
+	EXPECT_EQ(0, empty.playerCount);
+	EXPECT_EQ(0, empty.matchCount);
+	EXPECT_EQ(0, empty.activeGames);
+	for (const auto& game : empty.games)
+	{
+		EXPECT_FALSE(game.hasLiveStatus);
+		EXPECT_FALSE(game.hasPlayerActivity);
+		EXPECT_EQ(-1, game.players);
+		EXPECT_EQ(-1, game.matches);
+	}
+}
+
+TEST(DcnetStatusTest, SeparateEditionReportsTakePrecedenceOverSharedServices)
+{
+	for (const char *games : {
+		R"([
+			{"gameId":"aeroi","name":"Aero Dancing i","online":true,"playerCount":4,"gameCount":2},
+			{"gameId":"aeroisd","name":"Aero Dancing i Jikai Saku Made Matemasen","online":false,"playerCount":0,"gameCount":0}
+		])",
+		R"([
+			{"gameId":"aeroisd","name":"Aero Dancing i Jikai Saku Made Matemasen","online":false,"playerCount":0,"gameCount":0},
+			{"gameId":"aeroi","name":"Aero Dancing i","online":true,"playerCount":4,"gameCount":2}
+		])" })
+	{
+		const auto status = dcnet::parseStatus(games, "[]");
+		EXPECT_EQ(4, status.playerCount);
+		EXPECT_EQ(2, status.matchCount);
+		EXPECT_EQ(1, status.activeGames);
+		for (const auto& game : status.games)
+		{
+			EXPECT_TRUE(game.sharedStatusId.empty());
+			if (game.id == "aeroisd")
+			{
+				EXPECT_FALSE(game.online);
+				EXPECT_TRUE(game.hasLiveStatus);
+				EXPECT_EQ(0, game.players);
+				EXPECT_EQ(0, game.matches);
+			}
+		}
+	}
 }

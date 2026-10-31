@@ -269,12 +269,46 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 				++count;
 		}
 	for (auto& game : status.games)
+	{
 		if (game.players < 0)
 		{
 			const auto it = observedPlayers.find(game.id);
 			if (it != observedPlayers.end())
 				game.players = it->second;
 		}
+		// Tally reported services before projecting their counts onto editions.
+		status.playerCount += std::max(game.players, 0);
+		status.matchCount += std::max(game.matches, 0);
+		if (game.players > 0 || game.matches > 0)
+			++status.activeGames;
+	}
+	// IWANGO maps i and iSD to AeroDancingI (iwango-server/common.h).
+	// Capcom's original and Pro releases both register network game code 8
+	// (network/capcom.cpp). Keep title/ownership identity separate from status.
+	const std::pair<const char *, const char *> sharedServices[] = {
+		{ "catalog:aero-dancing-i-jikai", "aeroi" },
+		{ "catalog:capcom-vs-snk-pro", "capvsnkmf" },
+	};
+	for (const auto& link : sharedServices)
+	{
+		const auto edition = std::find_if(status.games.begin(), status.games.end(), [&](const Game& game) {
+			return game.id == link.first;
+		});
+		const auto source = std::find_if(status.games.begin(), status.games.end(), [&](const Game& game) {
+			return game.id == link.second;
+		});
+		// A future edition-specific report takes precedence over shared reporting.
+		if (edition == status.games.end() || source == status.games.end()
+				|| edition->hasLiveStatus || edition->hasPlayerActivity)
+			continue;
+		source->sharedStatusId = source->id;
+		edition->sharedStatusId = source->id;
+		edition->hasLiveStatus = source->hasLiveStatus;
+		edition->online = source->online;
+		edition->players = source->players;
+		edition->matches = source->matches;
+		edition->hasPlayerActivity = source->hasPlayerActivity;
+	}
 	std::sort(status.games.begin(), status.games.end(), [](const Game& a, const Game& b) {
 		const bool aActive = a.players > 0 || a.matches > 0;
 		const bool bActive = b.players > 0 || b.matches > 0;

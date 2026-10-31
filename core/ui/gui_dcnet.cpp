@@ -218,12 +218,14 @@ void refreshStatus()
 	}
 }
 
-void renderCount(int count)
+void renderCount(int count, bool shared = false)
 {
 	if (count < 0)
-		ImGui::TextDisabled("-");
+		ImGui::TextDisabled("%s", shared ? "-*" : "-");
 	else
-		ImGui::Text("%d", count);
+		ImGui::Text("%d%s", count, shared ? "*" : "");
+	if (shared && ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("Shared service count. Includes both editions and is counted once in totals."));
 }
 
 std::string displayGameName(const dcnet::Game& game)
@@ -327,17 +329,8 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 		const auto age = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - lastSuccess).count();
 		ImGui::TextWrapped(T("%s %llds ago. Auto-refresh every 15s while this tab is open."),
 				error.empty() ? T("Updated") : T("Showing saved activity from"), static_cast<long long>(age));
-		long long players = 0;
-		long long matches = 0;
-		int activeGames = 0;
-		for (const auto& game : status.games)
-		{
-			players += std::max(game.players, 0);
-			matches += std::max(game.matches, 0);
-			if (game.players > 0 || game.matches > 0)
-				activeGames++;
-		}
-		ImGui::TextWrapped(T("Players: %lld  /  Active games: %d  /  Lobbies / matches: %lld"), players, activeGames, matches);
+		ImGui::TextWrapped(T("Players: %lld  /  Active games: %d  /  Lobbies / matches: %lld"),
+				status.playerCount, status.activeGames, status.matchCount);
 	}
 	ImGui::Text(T("Games in catalog: %zu  /  In your library: %zu"), status.games.size(), ownedCovers.size());
 	const float searchWidth = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(T("Search")).x
@@ -348,6 +341,7 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 		ImGui::SameLine();
 	ImGui::Checkbox(T("Owned games only"), &ownedOnly);
 	ImGui::TextWrapped("%s", T("Some supported games do not publish live status. A dash means no count is available."));
+	ImGui::TextWrapped("%s", T("* Shared counts include both editions on the same service. Totals count each service once."));
 
 	if (ImGui::BeginChild("dcnetActivity", ImVec2(0, 0), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_DragScrolling))
 	{
@@ -411,9 +405,9 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 						ImGui::SetCursorPos(labelPos);
 						ImGui::TextWrapped("%s", title.c_str());
 						ImGui::TableNextColumn();
-						renderCount(game.players);
+						renderCount(game.players, !game.sharedStatusId.empty());
 						ImGui::TableNextColumn();
-						renderCount(game.matches);
+						renderCount(game.matches, !game.sharedStatusId.empty());
 						ImGui::TableNextColumn();
 						ImGui::TextWrapped("%s", game.hasLiveStatus ? (game.online ? T("Online") : T("Offline"))
 								: game.hasPlayerActivity ? T("Players online") : T("Status unavailable"));
@@ -452,16 +446,18 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 							ImGui::TextUnformatted(selected->hasLiveStatus ? (selected->online ? T("Server online") : T("Server offline"))
 									: selected->hasPlayerActivity ? T("Players are online; server status is unavailable.")
 									: T("DCnet does not publish live status for this title. Online play may still be supported."));
+							if (!selected->sharedStatusId.empty())
+								ImGui::TextWrapped("%s", T("Shared service: counts and the player list include both editions. Totals count this service once."));
 							ImGui::Text("%s:", T("Players"));
 							ImGui::SameLine();
-							renderCount(selected->players);
+							renderCount(selected->players, !selected->sharedStatusId.empty());
 							ImGui::Text("%s:", T("Lobbies / matches"));
 							ImGui::SameLine();
-							renderCount(selected->matches);
+							renderCount(selected->matches, !selected->sharedStatusId.empty());
 							if (!error.empty())
 								ImGui::TextWrapped("%s", error.c_str());
 							ImGui::Separator();
-							renderPlayers(selected->id);
+							renderPlayers(selected->sharedStatusId.empty() ? selected->id : selected->sharedStatusId);
 						}
 						else
 							ImGui::TextWrapped("%s", T("This game is no longer reported by DCnet."));

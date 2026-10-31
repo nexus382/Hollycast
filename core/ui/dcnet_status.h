@@ -22,6 +22,8 @@ struct Game
 	std::string reportedName;
 	std::string thumbnailUrl;
 	bool hasPlayerActivity = false;
+	// Nonempty on both editions when their counts and players share one service.
+	std::string sharedStatusId;
 };
 
 struct Player
@@ -36,6 +38,10 @@ struct Status
 {
 	std::vector<Game> games;
 	std::vector<Player> players;
+	// Count each reported service once, including services shared by editions.
+	long long playerCount = 0;
+	long long matchCount = 0;
+	int activeGames = 0;
 };
 
 // Exact title keys ignore file extensions and release tags, not title words.
