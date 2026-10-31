@@ -18,6 +18,9 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "settings_new.h"
+#ifdef USE_METAL
+#include "rend/metal/metal_api.h"
+#endif
 #include "custom_theme.h"
 #include "gui_util.h"
 #include "imgui.h"
@@ -4458,9 +4461,23 @@ void renderVideoTab()
 		renderApi = 3;
 		perPixel = true;
 		break;
+	case RenderType::Metal:
+		renderApi = 4;
+		perPixel = false;
+		break;
+	case RenderType::Metal_OIT:
+		renderApi = 4;
+		perPixel = true;
+		break;
 	}
 
-	constexpr int apiCount = 0
+#ifdef USE_METAL
+	const bool metalAvailable = metalIsAvailable();
+#endif
+	const int apiCount = 0
+#ifdef USE_METAL
+		+ (metalAvailable ? 1 : 0)
+#endif
 #ifdef USE_VULKAN
 		+ 1
 #endif
@@ -4479,8 +4496,8 @@ void renderVideoTab()
 	{
 		if (apiCount > 1)
 		{
-			std::array<const char*, 4> apiLabels {};
-			std::array<int, 4> apiValues {};
+			std::array<const char*, 5> apiLabels {};
+			std::array<int, 5> apiValues {};
 			int apiOptionCount = 0;
 #ifdef USE_OPENGL
 			apiLabels[apiOptionCount] = "OpenGL";
@@ -4501,6 +4518,13 @@ void renderVideoTab()
 #ifdef USE_DX11
 			apiLabels[apiOptionCount] = "DirectX 11";
 			apiValues[apiOptionCount++] = 3;
+#endif
+
+#ifdef USE_METAL
+			if (metalAvailable) {
+				apiLabels[apiOptionCount] = T("Metal (Experimental)");
+				apiValues[apiOptionCount++] = 4;
+			}
 #endif
 
 			int currentApiIndex = 0;
@@ -4554,6 +4578,9 @@ void renderVideoTab()
 						)
 					);
 					break;
+				case 4:
+					SetSettingsFooterText(T("Native Metal rendering for macOS. Experimental; per-pixel sorting is available on supported devices."));
+					break;
 				case 2:
 					SetSettingsFooterText(
 						T(
@@ -4573,6 +4600,10 @@ void renderVideoTab()
 				renderApi = apiValues[selectedIndex];
 				if (renderApi == 2)
 					perPixel = false;
+#ifdef USE_METAL
+				if (renderApi == 4 && !metalSupportsPerPixel())
+					perPixel = false;
+#endif
 				return true;
 			};
 
@@ -4594,7 +4625,11 @@ void renderVideoTab()
 	if (RenderCollapsingHeader("TransparentSortingSection", ICON_FA_WAND_SPARKLES, T("Transparent Sorting"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		{
-			const bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+			bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+#ifdef USE_METAL
+			if (renderApi == 4)
+				has_per_pixel = metalSupportsPerPixel();
+#endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;
 
 			std::array<const char*, 3> sortingLabels {};
@@ -5071,7 +5106,7 @@ void renderVideoTab()
 				return;
 			SetSettingsFooterText(
 				(selectedIndex == 0)
-					? T("Pixel Buffer Size\n512 MB reserves the least memory and is the fastest place to start. Use this if you want to minimize VRAM/RAM usage, but increase it if you see missing or incorrect transparency in heavier scenes.")
+					? T("Pixel Buffer Size\n512 MB is the smallest budget and is the fastest place to start. Use this if you want to minimize VRAM/RAM usage, but increase it if you see missing or incorrect transparency in heavier scenes.")
 					: (selectedIndex == 1)
 						? T("Pixel Buffer Size\n1 GB is a good middle ground if 512 MB is not enough. It gives Per-Pixel sorting more room for complex scenes without jumping straight to the larger memory costs.")
 						: (selectedIndex == 2)
@@ -5087,11 +5122,11 @@ void renderVideoTab()
 
 		RenderGeneralPopupSettingRow(
 			Tnop("PixelBufferSizeSetting"),
-			T("Reserved memory for Per-Pixel transparency rendering."),
+			T("Memory budget for Per-Pixel transparency rendering."),
 			pixelBufferCfg,
 			T(
 				"Pixel Buffer Size\n"
-				"Controls how much memory is reserved for Per-Pixel (OIT) transparency rendering.\n"
+				"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
 				"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
 				"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
 			)
@@ -5105,12 +5140,11 @@ void renderVideoTab()
 		perPixelLayersCfg.label = T("Maximum Layers");
 		perPixelLayersCfg.icon = ICON_FA_LAYER_GROUP;
 		perPixelLayersCfg.popupID = Tnop("PerPixelMaximumLayersPopup");
-		perPixelLayersCfg.description =
-			T(
-				"Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
+		perPixelLayersCfg.description = renderApi == 4
+			? T("Controls how many transparent layers are resolved per pixel. Metal retains the nearest layers when the limit is exceeded. Lower values can improve performance.")
+			: T("Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
 				"Increase this if you see missing transparency or incorrect layering.\n"
-				"Lower values reduce memory pressure and can improve performance."
-			);
+				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
 		perPixelLayersCfg.minValue = 8;
 		perPixelLayersCfg.maxValue = 128;
@@ -5129,12 +5163,12 @@ void renderVideoTab()
 			Tnop("PerPixelMaximumLayersSetting"),
 			T("Maximum transparent layers resolved per pixel."),
 			perPixelLayersPopupCfg,
-			T(
-				"Per-Pixel Maximum Layers\n"
-				"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
-				"Increase this if you see missing transparency or incorrect layering.\n"
-				"Decrease it to improve performance and reduce memory pressure."
-			)
+			renderApi == 4
+				? T("Per-Pixel Maximum Layers\nMetal retains the nearest layers when the limit is exceeded. Increase the limit if transparency is missing; lower it to reduce resolve work.")
+				: T("Per-Pixel Maximum Layers\n"
+					"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
+					"Increase this if you see missing transparency or incorrect layering.\n"
+					"Decrease it to improve performance and reduce memory pressure.")
 		);
 	}
 
@@ -5710,6 +5744,9 @@ void renderVideoTab()
 		break;
 	case 1:
 		config::RendererType = perPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
+		break;
+	case 4:
+		config::RendererType = perPixel ? RenderType::Metal_OIT : RenderType::Metal;
 		break;
 	case 2:
 		config::RendererType = RenderType::DirectX9;
@@ -9195,6 +9232,8 @@ void renderAboutTab()
 			graphicsTitle = T("Graphics - OpenGL");
 		else if (isVulkan(config::RendererType))
 			graphicsTitle = T("Graphics - Vulkan");
+		else if (isMetal(config::RendererType))
+			graphicsTitle = T("Graphics - Metal");
 		else if (isDirectX(config::RendererType))
 			graphicsTitle = T("Graphics - DirectX");
 

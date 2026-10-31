@@ -939,6 +939,8 @@ u64 next_event;
 u32 next_port;
 u32 next_kcode;
 bool do_screenshot;
+static bool capture_pending;
+static u64 capture_delay_cycles;
 
 void replay_input()
 {
@@ -952,13 +954,15 @@ void replay_input()
 	{
 		// Account for the swirl time
 		if (config::Broadcast == 0)
-			now = std::max((int64_t)now - 2152626532L, 0L);
+			now = std::max<int64_t>((int64_t)now - 2152626532L, 0);
 		else
-			now = std::max((int64_t)now - 2191059108L, 0L);
+			now = std::max<int64_t>((int64_t)now - 2191059108L, 0);
 	}
 	if (replay_file == NULL)
 	{
-		if (next_event > 0 && now - next_event > SH4_MAIN_CLOCK * 5)
+		if (capture_pending && now - next_event >= capture_delay_cycles)
+			do_screenshot = true;
+		if (capture_pending && now - next_event > capture_delay_cycles + SH4_MAIN_CLOCK * 5)
 			die("Automation time-out after 5 s\n");
 		return;
 	}
@@ -973,7 +977,15 @@ void replay_input()
 			fclose(replay_file);
 			replay_file = NULL;
 			NOTICE_LOG(INPUT, "Input replay terminated");
-			do_screenshot = true;
+			// A loaded state may already be far beyond the last replay event.
+			// Give frame skipping time to produce the requested capture from now.
+			next_event = now;
+			// Restoring a GPU-rendered state leaves its emulated VRAM front buffer
+			// unwritten. A fixed delay lets all backends rebuild it before capture.
+			int delayMs = std::clamp(config::loadInt("record", "capture_delay_ms"), 0, 10000);
+			capture_delay_cycles = (u64)delayMs * SH4_MAIN_CLOCK / 1000;
+			capture_pending = true;
+			do_screenshot = capture_delay_cycles == 0;
 			break;
 		}
 	}

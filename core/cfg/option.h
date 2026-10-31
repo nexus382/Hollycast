@@ -472,8 +472,10 @@ public:
 			RenderType::DirectX11
 #elif defined(USE_DX9)
 			RenderType::DirectX9
-#elif !defined(USE_OPENGL)
+#elif !defined(USE_OPENGL) && defined(USE_VULKAN)
 			RenderType::Vulkan
+#elif !defined(USE_OPENGL) && defined(USE_METAL)
+			RenderType::Metal
 #else
 			RenderType::OpenGL
 #endif
