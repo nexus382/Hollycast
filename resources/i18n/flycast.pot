@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Flycast 2.6\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-01-22 12:49+0100\n"
+"POT-Creation-Date: 2026-10-30 22:46-0400\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: \n"
@@ -656,8 +656,8 @@ msgstr ""
 
 #: core/ui/settings_video.cpp:203
 msgid ""
-"Internal render resolution. Higher is better, but more demanding on the GPU. "
-"Values higher than your display resolution (but no more than double your "
+"Internal render resolution. Higher is better, but more demanding on the GPU."
+" Values higher than your display resolution (but no more than double your "
 "display resolution) can be used for supersampling, which provides high-"
 "quality antialiasing without reducing sharpness."
 msgstr ""
@@ -741,8 +741,8 @@ msgstr ""
 
 #: core/ui/settings_video.cpp:233
 msgid ""
-"Preload custom textures at game start. May improve performance but increases "
-"memory usage"
+"Preload custom textures at game start. May improve performance but increases"
+" memory usage"
 msgstr ""
 
 #: core/ui/settings_video.cpp:239
@@ -755,8 +755,7 @@ msgstr ""
 
 #: core/ui/settings_video.cpp:242
 msgid ""
-"Draw geometry outside of the normal 4:3 aspect ratio. May produce graphical "
-"glitches in the revealed areas.\n"
+"Draw geometry outside of the normal 4:3 aspect ratio. May produce graphical glitches in the revealed areas.\n"
 "Aspect Fit and shows the full 16:9 content."
 msgstr ""
 
@@ -766,8 +765,7 @@ msgstr ""
 
 #: core/ui/settings_video.cpp:248
 msgid ""
-"Use the full width of the screen or window when its aspect ratio is greater "
-"than 16:9.\n"
+"Use the full width of the screen or window when its aspect ratio is greater than 16:9.\n"
 "Aspect Fill and remove black bars. Not compatible with integer scaling."
 msgstr ""
 
@@ -1007,8 +1005,8 @@ msgstr ""
 
 #: core/ui/settings_video.cpp:405
 msgid ""
-"e.g. Route GPU texture to OBS Studio directly instead of using CPU intensive "
-"Display/Window Capture"
+"e.g. Route GPU texture to OBS Studio directly instead of using CPU intensive"
+" Display/Window Capture"
 msgstr ""
 
 #: core/ui/settings_video.cpp:409
@@ -1315,14 +1313,13 @@ msgstr ""
 #: core/ui/settings_new.cpp:3452
 msgid ""
 "Show Achievement Popups\n"
-"Controls achievement, progress, challenge, and leaderboard notifications "
-"shown over gameplay."
+"Controls achievement, progress, challenge, and leaderboard notifications shown over gameplay."
 msgstr ""
 
 #: core/ui/settings_general.cpp:414
 msgid ""
-"Enable RetroAchievements hardcore mode. Using cheats and loading a state are "
-"not allowed in this mode."
+"Enable RetroAchievements hardcore mode. Using cheats and loading a state are"
+" not allowed in this mode."
 msgstr ""
 
 #: core/ui/settings_general.cpp:415
@@ -1389,8 +1386,8 @@ msgstr ""
 
 #: core/ui/settings_general.cpp:476
 msgid ""
-"Folders for save states. First path is used for new states; all are searched "
-"when loading"
+"Folders for save states. First path is used for new states; all are searched"
+" when loading"
 msgstr ""
 
 #: core/ui/settings_general.cpp:479
@@ -1793,10 +1790,8 @@ msgstr ""
 
 #: core/ui/settings_controls.cpp:576
 msgid ""
-"When checked, this combo will only activate when all keys are pressed in the "
-"given sequence.\n"
-"When not checked, the combo will activate when all keys are pressed in any "
-"order."
+"When checked, this combo will only activate when all keys are pressed in the given sequence.\n"
+"When not checked, the combo will activate when all keys are pressed in any order."
 msgstr ""
 
 #: core/ui/settings_controls.cpp:633 core/ui/settings_controls.cpp:1073
@@ -2580,8 +2575,8 @@ msgstr ""
 
 #: core/ui/settings_network.cpp:130
 msgid ""
-"Live monitor for games that support it (Virtual-On Oratorio Tangram and Club "
-"Kart)"
+"Live monitor for games that support it (Virtual-On Oratorio Tangram and Club"
+" Kart)"
 msgstr ""
 
 #: core/ui/settings_network.cpp:135
@@ -2693,8 +2688,8 @@ msgstr ""
 
 #: core/ui/settings_network.cpp:248
 msgid ""
-"The ISP user name stored in the console Flash RAM. Used by some online games "
-"as the player name. Leave blank to keep the current Flash RAM value."
+"The ISP user name stored in the console Flash RAM. Used by some online games"
+" as the player name. Leave blank to keep the current Flash RAM value."
 msgstr ""
 
 #: core/ui/settings_network.cpp:254
@@ -3227,7 +3222,9 @@ msgid "Grouped"
 msgstr ""
 
 #: core/ui/vgamepad.cpp
-msgid "Turn off to move individual buttons. Turning on restores this group's default layout."
+msgid ""
+"Turn off to move individual buttons. Turning on restores this group's "
+"default layout."
 msgstr ""
 
 #: core/ui/vgamepad.cpp
@@ -3291,4 +3288,5017 @@ msgid ""
 "Top Menu Bar\n"
 "On keeps the bar visible. Off keeps it hidden.\n"
 "Auto follows the normal mouse and touch reveal behavior."
+msgstr ""
+
+#: core/imgread/chd.cpp:204
+msgid "Invalid CHD: pregap is longer than the track"
+msgstr ""
+
+#: core/imgread/cue.cpp:210
+msgid "Invalid PREGAP in CUE file"
+msgstr ""
+
+#: core/input/maplelink.cpp:91 core/input/maplelink.cpp:131
+msgid "ATTENTION: External storage differs from VMU memory in loaded state"
+msgstr ""
+
+#: core/input/maplelink.cpp:93 core/input/maplelink.cpp:101
+#: core/input/maplelink.cpp:133
+msgid "VMU will appear to reconnect in-game"
+msgstr ""
+
+#: core/input/maplelink.cpp:99
+msgid "ATTENTION: VMU write was in progress during save"
+msgstr ""
+
+#: core/network/capcom.cpp:440
+msgid "Connected to battle server"
+msgstr ""
+
+#: core/network/capcom.cpp:447
+msgid "Can't connect to battle server"
+msgstr ""
+
+#: core/network/ggpo.cpp:623
+#, c-format
+msgid "GGPO: unknown peer address %s"
+msgstr ""
+
+#: core/network/rawmodem.cpp:47
+msgid "Connected to game server"
+msgstr ""
+
+#: core/network/rawmodem.cpp:135
+msgid "Network disconnected"
+msgstr ""
+
+#: core/network/rawmodem.cpp:173
+msgid "Can't connect to game server"
+msgstr ""
+
+#: core/rend/CustomTexture.cpp:1031
+msgid "Custom texture file could not be read"
+msgstr ""
+
+#: core/rend/CustomTexture.cpp:1034
+msgid "PNG/JPEG custom texture could not be decoded"
+msgstr ""
+
+#: core/rend/CustomTexture.cpp:1037
+msgid ""
+"Compressed custom texture could not be loaded.\n"
+"Supported formats: KTX2/XUBC7, KTX2/XUASTC, KTX2/ETC1S, and DDS/BC7"
+msgstr ""
+
+#: core/rend/CustomTexture.cpp:1040
+msgid "Custom texture exceeds the renderer's maximum texture dimensions"
+msgstr ""
+
+#: core/rend/CustomTexture.cpp:1043
+msgid "Custom texture could not be uploaded to the GPU"
+msgstr ""
+
+#: core/rend/CustomTexture.cpp:1046
+msgid "Custom texture memory allocation failed"
+msgstr ""
+
+#: core/rend/CustomTexture.cpp:1049
+msgid "DirectX 9 supports PNG/JPEG custom textures only"
+msgstr ""
+
+#: core/sdl/dreamlink/dreamlinkgamepad.cpp:80
+#, c-format
+msgid "%s was disconnected"
+msgstr ""
+
+#: core/sdl/dreamlink/dreampicoport.cpp:790
+msgid "Firmware Update Required"
+msgstr ""
+
+#: core/sdl/dreamlink/dreampicoport.cpp:1499
+msgid ""
+"ATTENTION: Current hardware configuration changed since last save state"
+msgstr ""
+
+#: core/sdl/sdl.cpp:1242
+msgid "Hollycast Error"
+msgstr ""
+
+#: core/ui/gui.cpp:485
+msgid "Render Times"
+msgstr ""
+
+#: core/ui/gui.cpp:486 core/ui/gui.cpp:489
+#, c-format
+msgid "StdDev: %.1f%%"
+msgstr ""
+
+#: core/ui/gui.cpp:488
+msgid "VBlank"
+msgstr ""
+
+#: core/ui/gui.cpp:621
+msgid "Hollycast has stopped."
+msgstr ""
+
+#: core/ui/gui.cpp:735
+msgid ""
+"Save states cannot be resumed in the current mode. Choose Start Fresh to "
+"play."
+msgstr ""
+
+#: core/ui/gui.cpp:736
+msgid ""
+"The selected save state could not be loaded. Choose Start Fresh to play."
+msgstr ""
+
+#: core/ui/gui.cpp:810
+msgid "Exit Save Prompt"
+msgstr ""
+
+#: core/ui/gui.cpp:815
+msgid "Exit Emulator?"
+msgstr ""
+
+#: core/ui/gui.cpp:815
+msgid "Exit Game?"
+msgstr ""
+
+#: core/ui/gui.cpp:820
+msgid "Do you want to save state before exiting the emulator?"
+msgstr ""
+
+#: core/ui/gui.cpp:821
+msgid "Do you want to save state before returning to the library?"
+msgstr ""
+
+#: core/ui/gui.cpp:827
+msgid "Save & Exit"
+msgstr ""
+
+#: core/ui/gui.cpp:828
+msgid "Exit Without Saving"
+msgstr ""
+
+#: core/ui/gui.cpp:850 core/ui/gui.cpp:869
+msgid "Save Not Allowed"
+msgstr ""
+
+#: core/ui/gui.cpp:873
+msgid "Cannot save state in current mode."
+msgstr ""
+
+#: core/ui/gui.cpp:874
+msgid "Possible reasons:"
+msgstr ""
+
+#: core/ui/gui.cpp:875
+msgid "No game loaded"
+msgstr ""
+
+#: core/ui/gui.cpp:876
+msgid "Network play active"
+msgstr ""
+
+#: core/ui/gui.cpp:877
+msgid "Multi-board arcade mode"
+msgstr ""
+
+#: core/ui/gui.cpp:907
+msgid "Auto-Load Prompt"
+msgstr ""
+
+#: core/ui/gui.cpp:911
+msgid "Load Auto-Save?"
+msgstr ""
+
+#: core/ui/gui.cpp:915
+msgid "A hidden Auto-Save was found for this game."
+msgstr ""
+
+#: core/ui/gui.cpp:916
+msgid "Do you want to load it?"
+msgstr ""
+
+#: core/ui/gui.cpp:997
+#, c-format
+msgid "UID: %s"
+msgstr ""
+
+#: core/ui/gui.cpp:1127 core/ui/gui.cpp:1128 core/ui/settings_new.cpp:3329
+#: core/ui/settings_new.cpp:8684
+msgid "Error"
+msgstr ""
+
+#: core/ui/gui.cpp:1136
+msgid ""
+"Check the game image and any accompanying track files. Review firmware and "
+"controls in the setup checklist."
+msgstr ""
+
+#: core/ui/gui.cpp:1137
+msgid "Open Setup Checklist"
+msgstr ""
+
+#: core/ui/gui.cpp:1666
+msgid "Media Preview"
+msgstr ""
+
+#: core/ui/gui.cpp:1670 core/ui/gui.cpp:1764
+msgid "Media"
+msgstr ""
+
+#: core/ui/gui.cpp:1693
+msgid "Current Media"
+msgstr ""
+
+#: core/ui/gui.cpp:1696 core/ui/settings_new.cpp:7079
+#: core/ui/settings_new.cpp:7095
+msgid "Status"
+msgstr ""
+
+#: core/ui/gui.cpp:1700
+msgid "Found"
+msgstr ""
+
+#: core/ui/gui.cpp:1700
+msgid "Missing"
+msgstr ""
+
+#: core/ui/gui.cpp:1703 core/ui/gui_menu.cpp:420
+msgid "File"
+msgstr ""
+
+#: core/ui/gui.cpp:1721
+msgid "Details"
+msgstr ""
+
+#: core/ui/gui.cpp:1731 core/ui/gui.cpp:2002
+msgid "Description"
+msgstr ""
+
+#: core/ui/gui.cpp:1739 core/ui/gui.cpp:2004
+msgid "No description available."
+msgstr ""
+
+#: core/ui/gui.cpp:1979
+msgid "No media preview"
+msgstr ""
+
+#: core/ui/gui.cpp:2009
+msgid "MEDIA:"
+msgstr ""
+
+#: core/ui/gui.cpp:2194
+#, c-format
+msgid "%llud %lluh"
+msgstr ""
+
+#: core/ui/gui.cpp:2196
+#, c-format
+msgid "%lluh %llum"
+msgstr ""
+
+#: core/ui/gui.cpp:2198
+#, c-format
+msgid "%llum"
+msgstr ""
+
+#: core/ui/gui.cpp:2199
+#, c-format
+msgid "%llus"
+msgstr ""
+
+#: core/ui/gui.cpp:2207
+msgid "Remove from favourites"
+msgstr ""
+
+#: core/ui/gui.cpp:2207
+msgid "Add to favourites"
+msgstr ""
+
+#: core/ui/gui.cpp:2292
+msgid "No save state is available for this game. Choose Start Fresh to play."
+msgstr ""
+
+#: core/ui/gui.cpp:2512
+msgid "All Games"
+msgstr ""
+
+#: core/ui/gui.cpp:2512
+msgid "Continue Playing"
+msgstr ""
+
+#: core/ui/gui.cpp:2512
+msgid "Favourites"
+msgstr ""
+
+#: core/ui/gui.cpp:2574
+msgid "Icon Size"
+msgstr ""
+
+#: core/ui/gui.cpp:2697
+msgid "Icon"
+msgstr ""
+
+#: core/ui/gui.cpp:2698
+msgid "Product ID"
+msgstr ""
+
+#: core/ui/gui.cpp:2700
+msgid "Title"
+msgstr ""
+
+#: core/ui/gui.cpp:2703
+msgid "Format"
+msgstr ""
+
+#: core/ui/gui.cpp:2704 core/ui/gui.cpp:2709
+msgid "Time Played"
+msgstr ""
+
+#: core/ui/gui.cpp:2705
+msgid "Latest Save"
+msgstr ""
+
+#: core/ui/gui.cpp:2705
+msgid "Last Booted"
+msgstr ""
+
+#: core/ui/gui.cpp:2711 core/ui/gui_util.cpp:638
+msgid "Size"
+msgstr ""
+
+#: core/ui/gui.cpp:2764 core/ui/gui.cpp:2774
+msgid "Favourite"
+msgstr ""
+
+#: core/ui/gui.cpp:2768 core/ui/gui.cpp:2774 core/ui/gui.cpp:2880
+#: core/ui/gui.cpp:3026 core/ui/gui.cpp:3038
+msgid "Start Fresh"
+msgstr ""
+
+#: core/ui/gui.cpp:3018
+msgid "Saved"
+msgstr ""
+
+#: core/ui/gui.cpp:3145
+msgid "Checking saved games..."
+msgstr ""
+
+#: core/ui/gui.cpp:3146 core/ui/gui.cpp:3148
+msgid "No games match this filter"
+msgstr ""
+
+#: core/ui/gui.cpp:3147
+msgid "No saved games yet"
+msgstr ""
+
+#: core/ui/gui.cpp:3148
+msgid "No favourites yet"
+msgstr ""
+
+#: core/ui/gui.cpp:3150
+msgid "Games with a save state or autosave will appear here."
+msgstr ""
+
+#: core/ui/gui.cpp:3151
+msgid "Use the star on a game to add it to Favourites."
+msgstr ""
+
+#: core/ui/gui.cpp:3187 core/ui/gui.cpp:3198
+msgid "Hollycast cannot write to this folder."
+msgstr ""
+
+#: core/ui/gui.cpp:3226
+msgid "Select Hollycast Home Folder"
+msgstr ""
+
+#: core/ui/gui.cpp:3238 core/ui/settings_new.cpp:2709
+msgid "Ready to Play Checklist"
+msgstr ""
+
+#: core/ui/gui.cpp:3304
+msgid "Ready to Play"
+msgstr ""
+
+#: core/ui/gui.cpp:3306
+msgid ""
+"Optional setup for games, firmware and controls. Reopen this checklist from "
+"General settings."
+msgstr ""
+
+#: core/ui/gui.cpp:3307
+msgid "1. Game folder"
+msgstr ""
+
+#: core/ui/gui.cpp:3309
+msgid ""
+"A folder is configured. If your games are elsewhere, choose their folder "
+"below."
+msgstr ""
+
+#: core/ui/gui.cpp:3310
+msgid "Choose a folder containing your games to add them to the library."
+msgstr ""
+
+#: core/ui/gui.cpp:3311
+msgid "Choose Game Folder"
+msgstr ""
+
+#: core/ui/gui.cpp:3313
+msgid "2. BIOS and firmware"
+msgstr ""
+
+#: core/ui/gui.cpp:3317
+msgid ""
+"Place dc_boot.bin and dc_flash.bin in Hollycast's data folder, unless you "
+"have specified a custom BIOS folder."
+msgstr ""
+
+#: core/ui/gui.cpp:3319
+msgid "A BIOS filename was found. Its contents have not been verified."
+msgstr ""
+
+#: core/ui/gui.cpp:3320
+msgid ""
+"No original BIOS was found. Built-in HLE supports many games; some need an "
+"original BIOS."
+msgstr ""
+
+#: core/ui/gui.cpp:3323
+msgid "Arcade systems"
+msgstr ""
+
+#: core/ui/gui.cpp:3329
+msgid "NAOMI / GD-ROM"
+msgstr ""
+
+#: core/ui/gui.cpp:3330
+msgid "NAOMI 2"
+msgstr ""
+
+#: core/ui/gui.cpp:3331
+msgid "Atomiswave"
+msgstr ""
+
+#: core/ui/gui.cpp:3332
+msgid "System SP"
+msgstr ""
+
+#: core/ui/gui.cpp:3338
+msgid "Title-specific BIOS requirements"
+msgstr ""
+
+#: core/ui/gui.cpp:3344
+msgid "Airline Pilots"
+msgstr ""
+
+#: core/ui/gui.cpp:3345
+msgid "The House of the Dead 2"
+msgstr ""
+
+#: core/ui/gui.cpp:3346
+msgid "F355 Challenge (twin) / Challenge 2"
+msgstr ""
+
+#: core/ui/gui.cpp:3347
+msgid "F355 Challenge (deluxe)"
+msgstr ""
+
+#: core/ui/gui.cpp:3348
+msgid "Kasei Channel Mars TV"
+msgstr ""
+
+#: core/ui/gui.cpp:3348
+msgid "naomi.zip containing epr-21576d.ic27"
+msgstr ""
+
+#: core/ui/gui.cpp:3349
+msgid "Mushiking II / III / III+ (Korea)"
+msgstr ""
+
+#: core/ui/gui.cpp:3349
+msgid "naomi.zip containing epr-21576h_multi.ic27"
+msgstr ""
+
+#: core/ui/gui.cpp:3354
+msgid ""
+"Use the archive for your system or game. Keep ZIP or 7z archives packed; the"
+" matching BIOS data may already be included in your game or parent ROM set."
+msgstr ""
+
+#: core/ui/gui.cpp:3357
+msgid "BIOS location"
+msgstr ""
+
+#: core/ui/gui.cpp:3359
+msgid "Default location: Hollycast's data folder."
+msgstr ""
+
+#: core/ui/gui.cpp:3360
+msgid ""
+"To use a custom folder instead, add it in General > Custom Paths > BIOS "
+"Folders."
+msgstr ""
+
+#: core/ui/gui.cpp:3361
+msgid "3. Controls"
+msgstr ""
+
+#: core/ui/gui.cpp:3362
+msgid "A controller is detected. Configure its mapping in Controls settings."
+msgstr ""
+
+#: core/ui/gui.cpp:3363
+msgid ""
+"No controller detected. Touch controls are available; you can also connect a"
+" controller."
+msgstr ""
+
+#: core/ui/gui.cpp:3364
+msgid ""
+"No controller detected. A keyboard is available; you can also connect a "
+"controller."
+msgstr ""
+
+#: core/ui/gui.cpp:3365
+msgid ""
+"No controller detected. Connect a controller and configure it in Controls "
+"settings."
+msgstr ""
+
+#: core/ui/gui.cpp:3368
+msgid ""
+"Next: return to the library and select a game. If none appear, check your "
+"game folder."
+msgstr ""
+
+#: core/ui/gui.cpp:3369
+msgid "Next: choose a game folder, then select a game in the library."
+msgstr ""
+
+#: core/ui/gui.cpp:3775
+msgid "Unable to start game."
+msgstr ""
+
+#: core/ui/gui.cpp:4011
+msgid "Profiler"
+msgstr ""
+
+#: core/ui/gui.cpp:4079
+msgid "Fatal Error"
+msgstr ""
+
+#: core/ui/gui.cpp:4132
+msgid "Cannot load state during online play"
+msgstr ""
+
+#: core/ui/gui.cpp:4429
+#, c-format
+msgid "Save Slot %d (%s)"
+msgstr ""
+
+#: core/ui/gui.cpp:4430
+#, c-format
+msgid "Load Slot %d (%s)"
+msgstr ""
+
+#: core/ui/gui.cpp:4446
+msgid "No Save States"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:423
+msgid "Set ROM Directory"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:426
+msgid "Select ROM Directory"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:436
+msgid "Rescan ROM Directory"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:444
+msgid "Load ROM"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:447
+msgid "Select ROM File"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:474
+msgid "Exit Emulator"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:509
+msgid "Restart"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:529 core/ui/settings_new.cpp:3864
+msgid "Screenshot"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:565
+msgid "Tools"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:567
+msgid "CHD Convert"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:569
+msgid "CHD conversion is not available yet."
+msgstr ""
+
+#: core/ui/gui_menu.cpp:572 core/ui/settings_new.cpp:3699
+msgid "Custom Boxart"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:593 core/ui/settings_new.cpp:2340
+#: core/ui/settings_new.cpp:9382
+msgid "Library"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:604 core/ui/settings_new.cpp:2344
+#: core/ui/settings_new.cpp:5719
+msgid "On Screen Display"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:640
+msgid "Help"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:643
+msgid "Discord"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:649 core/ui/gui_menu.cpp:657 core/ui/gui_menu.cpp:667
+msgid "Opening links is not supported on this platform."
+msgstr ""
+
+#: core/ui/gui_menu.cpp:651
+msgid "Report Bug"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:661
+msgid "Check for Updates"
+msgstr ""
+
+#: core/ui/gui_menu.cpp:671 core/ui/settings_new.cpp:9116
+msgid "About Hollycast"
+msgstr ""
+
+#: core/ui/gui_util.cpp:373
+msgid "Path"
+msgstr ""
+
+#: core/ui/gui_util.cpp:389
+msgid "This PC"
+msgstr ""
+
+#: core/ui/gui_util.cpp:544
+msgid "Search"
+msgstr ""
+
+#: core/ui/gui_util.cpp:569
+msgid "Folders"
+msgstr ""
+
+#: core/ui/gui_util.cpp:573
+msgid "This device"
+msgstr ""
+
+#: core/ui/gui_util.cpp:637
+msgid "Date modified"
+msgstr ""
+
+#: core/ui/gui_util.cpp:675
+msgid "File name:"
+msgstr ""
+
+#: core/ui/gui_util.cpp:675
+msgid "Folder:"
+msgstr ""
+
+#: core/ui/gui_util.cpp:677
+msgid "Filename"
+msgstr ""
+
+#: core/ui/gui_util.cpp:684 core/ui/gui_util.cpp:688
+msgid "Open"
+msgstr ""
+
+#: core/ui/mainui.cpp:74
+msgid "The game has been paused but it is recommended to restart Hollycast"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:545
+#, c-format
+msgid "%d%% (limit 100%%)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:550
+#, c-format
+msgid "%d%% (unlimited)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:552
+#, c-format
+msgid "%d%% (limit %d%%)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:564
+#, c-format
+msgid "%.2f FPS | %.2f VPS"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:572
+msgid "Speed: "
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:582
+msgid "Output FPS: unavailable (framework-managed presentation)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:585
+#, c-format
+msgid "Output FPS: %.2f"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:596 core/ui/performance_overlay.cpp:601
+#: core/ui/performance_overlay.cpp:604 core/ui/performance_overlay.cpp:659
+msgid "unavailable"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:605
+msgid "Rendered: "
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:605
+msgid " | Raw: "
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:610
+msgid " | Viewport: "
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:611
+msgid " | Output: "
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:619
+#, c-format
+msgid "%s%s | %.0f batches | %.0f verts | %.1f passes | %.1f uploads/s"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:628
+msgid "Host GPU: unavailable (backend timing unsupported)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:630
+msgid "Host GPU: sampling timestamp queries"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:632
+#, c-format
+msgid "Host GPU: %.1f%% (%.2f ms/render)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:640
+#, c-format
+msgid "Dreamcast PVR: %.1f%% of frame budget"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:651
+#, c-format
+msgid "%.2f GiB"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:653
+#, c-format
+msgid "%.1f MiB"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:661
+#, c-format
+msgid "Hollycast RAM: %s"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:675
+#, c-format
+msgid "GPU %u memory: %s / %s"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:680
+msgid "GPU VRAM: unavailable (no authoritative query)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:687
+msgid "Threads: ON (SH4 + PVR separate)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:688
+msgid "Threads: OFF (SH4 + PVR shared)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:694
+#, c-format
+msgid "%s: %.1f%% (%.2f ms/vblank)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:702
+msgid "Host CPU (SH4): sampling thread usage"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:706 core/ui/performance_overlay.cpp:713
+msgid "Host CPU (SH4 Thread)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:707 core/ui/performance_overlay.cpp:714
+msgid "Host CPU (SH4 + PVR)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:709 core/ui/performance_overlay.cpp:729
+#, c-format
+msgid "%s: %.1f%% (no video frame)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:716
+msgid "SH4 CPU Work: unavailable (no thread CPU timer)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:724
+msgid "Host CPU (PVR): sampling thread usage"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:725
+msgid "Host CPU (PVR Renderer)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:725
+msgid "Host CPU (PVR Portion)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:734
+msgid "PVR Renderer CPU Work: unavailable (no thread CPU timer)"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:741
+msgid "Host CPU: sampling process and device usage"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:744
+#, c-format
+msgid "Host CPU: Hollycast %.1f%% | Device %.1f%%"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:747
+#, c-format
+msgid "Host CPU: Hollycast %.1f%% of device capacity"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:749
+#, c-format
+msgid "Host CPU: Device %.1f%%"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:756
+msgid "Dreamcast SH4: sampling execution rate"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:758
+#, c-format
+msgid "Dreamcast SH4: %.0f%% target execution rate"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:810 core/ui/performance_overlay.cpp:811
+#, c-format
+msgid "%.0f ms"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:859
+#, c-format
+msgid "%s: %.0f%% app | %.0f%% device"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:862
+#, c-format
+msgid "%s: %.0f%%"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:1167
+#, c-format
+msgid "Frame Times: %.2f ms Min | %.2f ms Avg | %.2f ms Max"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:1170
+msgid "Frame Times: unavailable"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:1276
+msgid "Host CPU"
+msgstr ""
+
+#: core/ui/performance_overlay.cpp:1279
+msgid "Host GPU"
+msgstr ""
+
+#: core/ui/settings_new.cpp:448
+msgid ""
+"System, content, interface, and storage behavior. Highlight or select a "
+"setting to see a fuller explanation here."
+msgstr ""
+
+#: core/ui/settings_new.cpp:450
+msgid ""
+"Library layout, artwork, scraped media, game metadata, and VMU save icons. "
+"Highlight or select a setting to see a fuller explanation here."
+msgstr ""
+
+#: core/ui/settings_new.cpp:452
+msgid ""
+"Graphics quality, renderer behavior, scaling, and performance tuning. "
+"Highlight or select a setting to see what it changes and why it matters."
+msgstr ""
+
+#: core/ui/settings_new.cpp:454
+msgid ""
+"In-game information, VMU displays, performance metrics, and overlay "
+"appearance. Highlight or select a setting to see what it changes and why it "
+"matters."
+msgstr ""
+
+#: core/ui/settings_new.cpp:456
+msgid ""
+"Audio backend, latency, mixing, and output behavior. Highlight or select a "
+"setting for practical guidance before changing it."
+msgstr ""
+
+#: core/ui/settings_new.cpp:458
+msgid ""
+"Controller devices, mappings, sensitivity, and input behavior. Highlight or "
+"select a setting to see setup tips and tradeoffs."
+msgstr ""
+
+#: core/ui/settings_new.cpp:460
+msgid ""
+"Online play, server, match code, and link features. Highlight or select a "
+"setting for connection details and recommendations."
+msgstr ""
+
+#: core/ui/settings_new.cpp:462
+msgid ""
+"Power-user options, debugging, underclocking, overlays, and developer tools."
+" Highlight or select a setting for deeper explanations."
+msgstr ""
+
+#: core/ui/settings_new.cpp:464
+msgid "Project information, links, license details, and credits."
+msgstr ""
+
+#: core/ui/settings_new.cpp:468 core/ui/settings_new.cpp:611
+msgid "Highlight or select a setting to see details here."
+msgstr ""
+
+#: core/ui/settings_new.cpp:692
+msgid "Setting Details: "
+msgstr ""
+
+#: core/ui/settings_new.cpp:1484
+msgid "Current inputs: "
+msgstr ""
+
+#: core/ui/settings_new.cpp:1827
+msgid "bindings"
+msgstr ""
+
+#: core/ui/settings_new.cpp:1982 core/ui/settings_new.cpp:3807
+msgid "Set Path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:1989
+msgid "Select "
+msgstr ""
+
+#: core/ui/settings_new.cpp:2023
+#, c-format
+msgid "Add %s"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2026
+#, c-format
+msgid "Add another %s path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2063
+#, c-format
+msgid "Additional %s path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2081 core/ui/settings_new.cpp:2981
+msgid "Select Path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2095
+#, c-format
+msgid "Select %s"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2158
+msgid "Nearest-Neighbor"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2158
+msgid "Bilinear"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2158
+msgid "Bilinear / No Edge Blending"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2158
+msgid "Jinc2"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2159
+msgid "Jinc2 / No Edge Blending"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2159
+msgid "MMPX"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2159
+msgid "MMPX Enhanced"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2159
+msgid "MMPX Advanced"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2160
+msgid "Jinc2 Anti-Ring"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2160
+msgid "Jinc2 Sharp Anti-Ring"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2160
+msgid "Jinc2 Mild Anti-Ring"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2161
+msgid "Jinc2 Extra Sharp Anti-Ring"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2161
+msgid "Lanczos2 Anti-Ring"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2161
+msgid "Lanczos3 Anti-Ring"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2162
+msgid "Robidoux"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2162
+msgid "Robidoux Sharp"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2162
+msgid "Bicubic Catmull-Rom"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2163
+msgid "Bicubic Mitchell"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "8x8"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "16x16"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "32x32"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "64x64"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "128x128"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "256x256"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "512x512"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2179
+msgid "1024x1024+"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2221
+msgid "Texture Filtering Live Tune###TextureFilteringLiveTune"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2223
+msgid "Back to Video Settings"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2226
+msgid "live game preview"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2228
+msgid ""
+"Try the filter and its texture-size limit while the game continues behind "
+"this panel."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2238 core/ui/settings_new.cpp:5478
+msgid "Sample Texture Filter"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2271
+msgid "Filter Resolution Limit"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2293
+msgid ""
+"Filter resolution limit uses the texture width bucket. Larger textures are "
+"left on the normal sampler path."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2707
+msgid "General Configuration"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2711
+msgid "Review game folders, firmware and controls."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2717
+msgid "Language & Region"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2730
+msgid "Français"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2731
+msgid "Magyar"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2732
+msgid "日本語"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2733
+msgid "Português (Brasil)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2734
+msgid "Svenska"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2735
+msgid "Türkçe"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2736
+msgid "简体中文"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2737
+msgid "正體中文"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2759
+msgid "UILanguagePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2774
+msgid "UILanguageSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2775
+msgid "Language used by Hollycast menus and settings."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2778
+msgid ""
+"UI Language\n"
+"Changes the language used by Hollycast menus, settings, notifications, and other app UI.\n"
+"System Default follows your device language when a translation is available.\n"
+"\n"
+"Game text is controlled separately by Dreamcast Language below."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2792
+msgid "LanguagePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2797 core/ui/settings_new.cpp:2821
+#: core/ui/settings_new.cpp:2871
+msgid "(auto) "
+msgstr ""
+
+#: core/ui/settings_new.cpp:2800
+msgid "LanguageSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2801
+msgid "Dreamcast BIOS language (affects game text/menus)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2804
+msgid ""
+"Language\n"
+"Sets the Dreamcast BIOS language that games read for menus and text.\n"
+"Most games will follow this setting; some may ignore it.\n"
+"\n"
+"Arcade platforms typically use automatic region/language behavior."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2811
+msgid "NTSC"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2811
+msgid "PAL"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2811
+msgid "PAL/M"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2811
+msgid "PAL/N"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2816
+msgid "BroadcastPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2824
+msgid "BroadcastSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2825
+msgid "TV broadcast standard for non-VGA output modes."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2828
+msgid ""
+"Broadcast\n"
+"Controls the TV broadcast standard used for non-VGA video modes.\n"
+"NTSC is typically 60 Hz; PAL is typically 50 Hz.\n"
+"\n"
+"If you see timing issues or a game expects a specific region video mode, try changing this."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2835 core/ui/settings_new.cpp:3061
+msgid "Export"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2842
+msgid "RegionPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2848
+msgid "RegionSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2849
+msgid "BIOS region (can affect compatibility and defaults)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2852
+msgid ""
+"Region\n"
+"Sets the emulated BIOS region.\n"
+"This can affect game compatibility, default language choices, and region-locked behavior in some titles.\n"
+"\n"
+"If a game refuses to boot or behaves like the wrong region, try changing this."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2866
+msgid "CablePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2891
+msgid "CableSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2892
+msgid "Emulated video cable type (affects game video modes)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2895
+msgid ""
+"Cable\n"
+"Controls the emulated Dreamcast video cable type.\n"
+"Games can change behavior depending on whether they detect VGA vs. TV output.\n"
+"\n"
+"If a game has missing effects, wrong colors, or odd mode selection, this is worth trying."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2908
+msgid "Content Paths"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2918
+msgid ""
+"Content Paths\n"
+"These are the folders where your games are stored.\n"
+"Add one or more folders and use Rescan/Refresh to update the library view."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2930
+msgid "Content Folders"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2935
+#, c-format
+msgid "Content Folder %u"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2954
+msgid "Additional content folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2966
+msgid ""
+"Content Paths\n"
+"Adds another folder to scan for games.\n"
+"If you have performance issues when scanning, prefer a smaller folder or fewer subfolders."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2975
+msgid "Add Content Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2991 core/ui/settings_new.cpp:3106
+msgid "Refresh the current content library view."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2993
+msgid "Add another content folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3023
+msgid ""
+"Data Folder\n"
+"This is Hollycast's writable data directory on this platform.\n"
+"\n"
+"It typically contains:\n"
+"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
+"- Save data (VMU files) and save states\n"
+"\n"
+"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Flycast looks for.\n"
+"Custom Paths below can also override where some of these files are stored."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3034 core/ui/settings_new.cpp:3039
+msgid "Home Directory"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3040
+msgid ""
+"The folder where Hollycast saves configuration files and VMUs. BIOS files "
+"should be in a subfolder named \"data\""
+msgstr ""
+
+#: core/ui/settings_new.cpp:3044
+msgid ""
+"Home Directory\n"
+"This is Hollycast's main configuration directory.\n"
+"\n"
+"It typically contains:\n"
+"- Configuration files\n"
+"- VMU saves and other user data\n"
+"\n"
+"On platforms that use a `data` subfolder, BIOS/Flash files should be placed under `data` inside this directory.\n"
+"If you change custom paths below, Hollycast may store some files elsewhere, but this directory remains the base for core configuration."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3058
+msgid "Import"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3068
+#, c-format
+msgid "open \"%s\""
+msgstr ""
+
+#: core/ui/settings_new.cpp:3082
+msgid ""
+"Rescan Content\n"
+"Rescans all configured content folders and rebuilds the game list.\n"
+"\n"
+"This can take a moment if you have many games or slow storage.\n"
+"If you just added/removed files and they are not showing up, this is the first thing to try."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3108
+msgid "Rescan all content folders"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3120
+msgid "UI Settings"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3158
+msgid "UIThemePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3198
+msgid "UIThemeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3199
+msgid "Choose the UI theme colors."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3201
+msgid ""
+"UI Theme\n"
+"Changes the overall look and contrast of the UI. Built-in themes are bundled presets.\n"
+"Use Create Theme to copy the selected preset or custom theme and customize your own version.\n"
+"Custom themes are saved in the themes folder in the configuration directory."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3208
+msgid "Custom Theme Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3209
+msgid "Add JSON theme files here, then select them above."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3211
+msgid "Theme Error"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3212
+msgid ""
+"The theme file could not be loaded. Built-in themes use their bundled "
+"defaults."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3214
+msgid "Theme Import"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3215
+msgid "The theme and its referenced assets are ready to use."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3245
+msgid "Create Theme"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3250
+msgid "Edit Selected Theme"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3255
+msgid "Import Theme…"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3274
+msgid "Edit theme"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3277
+msgid "Changes preview as you edit. Cancel restores the previous theme."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3284
+msgid "Theme"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3287
+msgid "Theme name"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3290
+msgid "Base theme"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3310
+msgid "Preview"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3323
+msgid "Colors"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3326
+msgid "Key colors"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3327
+msgid ""
+"Choose which colors to override. Unchecked colors use the theme defaults."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3329
+msgid "Accent"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3329
+msgid "Success"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3329 core/ui/settings_new.cpp:8684
+msgid "Warning"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3353
+msgid "Using theme default"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3358
+msgid "Advanced interface colors"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3360
+msgid "Search colors"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3376
+msgid "Widget-specific colors"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3410
+msgid "Style & layout"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3430
+msgid "Spacing, rounding, padding and control proportions"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3458
+msgid "Hollycast layout"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3471
+msgid "Fonts & assets"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3474
+msgid ""
+"Use paths relative to the custom theme folder. Copy files there first; "
+"import and export copy referenced files automatically."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3482
+msgid "Body font path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3483
+msgid "Bold font path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3484
+msgid "Background image path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3488
+msgid "Settings icon path"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3494
+msgid "Background opacity"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3500
+msgid "Background fit"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3501
+msgid "Export folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3502
+msgid "Export theme and assets"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3539 core/ui/settings_new.cpp:3548
+msgid "Save theme"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3595
+msgid "MenuBarVisibilityPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3601
+msgid "MenuBarVisibilitySetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3618
+msgid "UIScalingPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3619
+msgid "Adjust UI element sizes"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3640
+msgid "UIScalingSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3641
+msgid "Scale the UI to fit your screen and viewing distance."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3644
+msgid ""
+"UI Scaling\n"
+"Adjusts UI element sizes.\n"
+"Useful on high-DPI displays, TVs, or small screens.\n"
+"\n"
+"After applying, the UI will reinitialize to apply the new scale."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3655
+msgid "Hide legacy Naomi file types in the content browser."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3662
+msgid ""
+"Hide Legacy Naomi ROMs\n"
+"Hides `.bin`, `.dat`, and `.lst` files from the content browser.\n"
+"Useful if you have mixed Naomi sets and only want to see launchable content."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3673
+msgid "Android storage picker integration."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3677
+msgid ""
+"Use SAF File Picker\n"
+"Uses Android's Storage Access Framework (SAF) for file browsing.\n"
+"This can improve compatibility with scoped storage and content providers on newer Android versions."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3691
+msgid "Box Art"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3699
+msgid "Original Box Art"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3699 core/ui/settings_new.cpp:3866
+msgid "Physical Media"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3702
+msgid "Box Art Source"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3704
+msgid "BoxArtSourcePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3715
+msgid "BoxartSourceSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3716
+msgid "Choose the base artwork source for each game."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3719
+msgid ""
+"Box Art Source\n"
+"Choose whether to use the default scraped artwork, physical-disc artwork pulled from the current ROM, or custom box art files you provide.\n"
+"\n"
+"If you have a custom Scraper folder for ES-DE, you can use its `media` folder and subfolders for the full custom-artwork experience."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3729 core/ui/settings_new.cpp:3860
+msgid "Current Artwork"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3730
+msgid "VMU Save Icon"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3731
+msgid "VMU Save Icon, then Current Artwork"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3732
+msgid "Current Artwork, then VMU Save Icon"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3736
+msgid "VMU Icon Options"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3738
+msgid "LibraryImageSourcePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3745
+msgid "LibraryImageSource"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3746
+msgid "Choose whether cached VMU icons appear in the library."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3748
+msgid ""
+"VMU Icon Options\n"
+"Choose whether to exclude or use VMU save icons as cover art. When enabled, Hollycast captures the icon after you create a VMU save for a game, then makes it available for the library.\n"
+"Choose how those icons are prioritized alongside your other artwork options."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3758
+msgid ""
+"Custom Boxart Folder\n"
+"Choose the folder that contains your already-scraped game media.\n"
+"\n"
+"For regular custom media, add an image to the custom folder using the same name as the ROM. For example, if the ROM is `Sonic Adventure.chd`, the image file should be `Sonic Adventure.png` or `Sonic Adventure.jpg`.\n"
+"\n"
+"For existing ES-DE media folders, or for the full custom-artwork experience, choose the system media folder, such as `downloaded_media/dreamcast`. Hollycast reads supported subfolders within it, including `covers`, `miximages`, `physicalmedia`, `marquees`, `titlescreens`, `screenshots`, `fanart`, and `manuals`. This lets you reuse ES-DE scraped media without copying or renaming files.\n"
+"\n"
+"Image/manual file names should match your ROM names. Use Refresh after adding or changing media files."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3770
+msgid "Custom Boxart Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3794
+msgid ""
+"Refresh custom media after adding, removing, or renaming files in the "
+"selected Custom Boxart Folder."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3810
+msgid ""
+"Folder containing custom box art images (png/jpg). File names should match "
+"game names"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3814
+msgid "Select Custom Boxart Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3861
+msgid "Mix Image"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3862
+msgid "Cover"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3863
+msgid "Case / 3D Box"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3865
+msgid "Marquee"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3867
+msgid "Fan Art"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3868
+msgid "Title Screen"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3872
+msgid "Custom Boxart Source"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3874
+msgid "LibraryCoverMediaPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3881
+msgid "LibraryCoverMedia"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3882
+msgid "Choose which custom media category becomes the main library image."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3884
+msgid ""
+"Custom Boxart Source\n"
+"Choose Current Artwork when your Custom Boxart Folder contains one properly named image for each game.\n"
+"\n"
+"The other options are for the full media-folder setup. They let you choose which of the multiple images available for each title becomes its visible library cover art.\n"
+"\n"
+"Other media can still appear in the game hover-information panel when the matching folders and files are present."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3896
+msgid ""
+"Boxart Database Review\n"
+"Checks the boxart database and artwork files without deleting your artwork."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3905
+msgid "Boxart Database Review"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3908
+msgid ""
+"Verifies every DB entry has a usable artwork file, then rebuilds from "
+"existing JSON and image files."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3915
+msgid "Classic"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3915
+msgid "List"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3918
+msgid "Library Display Style"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3920
+msgid "LibraryDisplayStylePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3927
+msgid "LibraryDisplayStyle"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3928
+msgid "Choose how the game library is displayed."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3930
+msgid ""
+"Library Display Style\n"
+"Selects the visual layout for the game library.\n"
+"Classic keeps the existing gallery/list behavior.\n"
+"List uses a compact row/table layout with title and metadata columns."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3935
+msgid "Static"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3935
+msgid "Active / Animated"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3938
+msgid "VMU Icon Mode"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3940
+msgid "VMUIconModePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3947
+msgid "VMUIconMode"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3948
+msgid "Set VMU icon playback behavior."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3950
+msgid ""
+"VMU Icon Mode\n"
+"Controls how cached VMU icons play after they have been captured from saves.\n"
+"Static shows one frame; Active / Animated plays the BIOS-style icon frames."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3962
+msgid ""
+"Box Art Game List\n"
+"Displays cover art tiles in the content list.\n"
+"Disable if you prefer a faster, more compact list or want to reduce UI clutter."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3977
+msgid ""
+"Fetch Box Art\n"
+"Downloads cover images from TheGamesDB.net.\n"
+"Disable if you only want physical media images, custom artwork, or to avoid network fetching."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3985
+msgid "Gamelist XML"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3987
+msgid ""
+"Gamelist XML\n"
+"Choose the exact `gamelist.xml` file that belongs to your Dreamcast ROM set.\n"
+"\n"
+"This file provides the game info used by the library hover/profile screen: description, developer, genre, players, release date, and manual path.\n"
+"\n"
+"For ES-DE, this is usually in a separate folder from the images, for example `gamelists/dreamcast/gamelist.xml`.\n"
+"Hollycast will not guess this path. Set it here if you want game descriptions and details."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4006
+msgid "Automatic Save States"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4011
+msgid "Auto-Load on Start"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4012
+msgid "Automatically loads the hidden Auto-Save slot on game boot."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4016
+msgid ""
+"Auto-Load on Start\n"
+"When enabled, on game boot, if the hidden Auto-Save slot has an Auto-Save, it will automatically load this slot on game boot."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4025
+msgid "Auto-Save on Exit"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4026
+msgid "Automatically saves to the hidden Auto-Save slot on game exit."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4030
+msgid ""
+"Auto-Save on Exit\n"
+"When enabled, leaving a game saves to the hidden Auto-Save slot without asking first."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4038
+msgid "Save Protection"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4039
+msgid ""
+"Disabling this will remove the safeguards that help prevent lost game "
+"progress from not saving."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4043
+msgid ""
+"Save Protection\n"
+"This is the assurance that you will never be able to leave a game without being prompted to save right then, ensuring you do not accidentally leave without saving your data."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4057
+msgid ""
+"Naomi Free Play\n"
+"Forces supported Naomi titles into Free Play mode.\n"
+"Useful if you don't want to manage credits/coin input."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4072
+msgid ""
+"Discord Presence\n"
+"Shows which game you are playing on Discord.\n"
+"Disable if you prefer not to share activity status."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4086
+msgid "Retro Achievements"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4096
+msgid ""
+"Enable RetroAchievements\n"
+"Enables RetroAchievements support and achievement tracking.\n"
+"Requires a RetroAchievements account and a supported title."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4125
+msgid ""
+"Enable RetroAchievements hardcore mode. Using cheats and loading a state are"
+" not allowed."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4129
+msgid ""
+"Hardcore Mode\n"
+"RetroAchievements Hardcore Mode disables features that can invalidate achievements.\n"
+"Using cheats and loading a state are not allowed."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4140
+#, c-format
+msgid "User: %s"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4155
+msgid "RetroAchievements account username"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4160
+msgid ""
+"RetroAchievements Username\n"
+"Enter your RetroAchievements account username used for login."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4169
+msgid "RetroAchievements account password"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4174
+msgid ""
+"RetroAchievements Password\n"
+"Enter your RetroAchievements account password used for login."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4223
+msgid "BIOS Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4225
+msgid ""
+"BIOS Folders\n"
+"Folders that Hollycast searches for Dreamcast and arcade BIOS files.\n"
+"\n"
+"Place `dc_boot.bin` and `dc_flash.bin` in Hollycast's data folder, unless you have specified a custom BIOS folder here.\n"
+"If you keep multiple BIOS sets, you can add multiple folders and Hollycast will search all of them.\n"
+"For troubleshooting, keep your BIOS files in a single known-good folder to avoid confusion."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4237
+msgid ""
+"VMU Folder\n"
+"Where VMU memory card files (`.bin`) are stored.\n"
+"\n"
+"If you change this, Hollycast will look for VMUs in the new location.\n"
+"Move/copy your existing VMU files if you want to keep your saves.\n"
+"Use this to keep saves on a specific drive or to share saves between installations."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4254
+msgid "Savestate Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4256
+msgid ""
+"Savestate Folders\n"
+"Folders used for save states.\n"
+"\n"
+"The first folder is used when creating new save states.\n"
+"All listed folders are searched when loading, which is useful if you keep states organized across different locations.\n"
+"Save states are not always portable between very different Hollycast versions; if a state fails to load, try recreating it on your current build."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4267
+msgid ""
+"Game Save Folder\n"
+"Folder for non-VMU save data (for example: arcade NVRAM and other persistent game data).\n"
+"\n"
+"If you change this path, move/copy your existing save files if you want to keep progress.\n"
+"This is separate from save states, and separate from VMU files."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4276
+msgid "Texture Pack Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4278
+msgid ""
+"Texture Pack Folders\n"
+"Folders that Hollycast searches for custom texture packs.\n"
+"\n"
+"Common layouts include `textures/<gameId>/...` or `<gameId>` inside a `textures` subfolder.\n"
+"After installing a pack, enable Custom Textures in the Video tab and restart the game.\n"
+"If you notice stutter while textures stream in, consider using Preload Textures (more RAM/VRAM required)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4290
+msgid ""
+"Texture Dump Folder\n"
+"Where Hollycast saves dumped textures when Texture Dumping is enabled.\n"
+"\n"
+"Game-specific subfolders are created automatically.\n"
+"Dumping can generate a large number of files quickly and consume significant disk space.\n"
+"Enable dumping only when needed, then disable it after you are done."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4299
+msgid "Controller Mapping Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4304
+msgid "Cheat Folder"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4306
+msgid ""
+"Cheat Folders\n"
+"Folders containing cheat files (`.cht` / `.txt`) named using the game's ID.\n"
+"\n"
+"Hollycast can auto-load matching cheat files when present.\n"
+"If cheats are not loading, verify the filename matches the game ID and that the cheat file format is correct.\n"
+"Use cheats carefully: they can crash games or cause unexpected behavior."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4334
+msgid "Video Configuration"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4340
+msgid "Quality Presets"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4351
+msgid "Potato (Max Performance)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4352
+msgid "Low"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4353
+msgid "Medium (Balanced)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4354
+msgid "High"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4355
+msgid "God Mode (Max Quality)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4356 core/ui/settings_new.cpp:4363
+#: core/ui/settings_new.cpp:4760
+msgid "Custom"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4396
+msgid ""
+"Custom\n"
+"Settings have been manually modified from the last preset."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4410
+msgid ""
+"Quality Presets\n"
+"If you are having issues, try our presets. Unless you are on a very low-end device, starting at the Medium preset should be safe. Adjust the resolution for the fastest performance adjustment from within a preset, then tweak the preset as you like for your perfect experience. Turn on the FPS Counter setting to ensure you get a stable 30/60 FPS during gameplay while finding the best settings for your device. Note: Fog and Shadows are enabled on all preset tiers."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4516
+msgid "GraphicsApiPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4529
+msgid ""
+"OpenGL\n"
+"This is the API that will randomly work best depending on the game and hardware, sometimes for no obvious reason.\n"
+"Always worth a try on any hardware if a game likes it."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4538
+msgid ""
+"Vulkan\n"
+"Tends to work best with NVIDIA GPUs, but remember this is just a recommendation, not a fact.\n"
+"Per-game and per-hardware mileage may vary."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4547
+msgid ""
+"DirectX 11\n"
+"Tends to give higher frame rates on AMD devices.\n"
+"Older and integrated graphics can benefit from this option as well."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4556
+msgid ""
+"DirectX 9\n"
+"Like DirectX 11, this tends to be best on AMD hardware.\n"
+"Lower-end and older devices often work even better with DX9, but again, this is just a thought, not a hard rule."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4576
+msgid "GraphicsApiSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4578
+msgid ""
+"Graphics API\n"
+"One of the most important settings when you're not getting a good experience.\n"
+"You will find that, per game and hardware, you can get different performance depending on the API selected.\n"
+"The best way to figure it out: if you are having FPS issues or glitchy gameplay, change this per your hardware recommendations and see what gives you the smoothest frame rate.\n"
+"(Enable the FPS Counter and test in actual gameplay.)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4621
+msgid "Sorting Method"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4623
+msgid "TransparentSortingPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4636
+#, no-c-format
+msgid ""
+"Per Pixel\n"
+"Highest performance requirements. This matches the Dreamcast's sorting quality, but only about 15% of games need it and show a meaningful difference versus the middle sorting option.\n"
+"Use only when needed (or if you have the resource overhead). It can almost double resource requirements.\n"
+"If you need full speed at a target resolution, you may have to lower resolution when using Per Pixel sorting."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4646
+#, no-c-format
+msgid ""
+"Per Triangle\n"
+"Good enough for about 85% of games to play with no or only very brief flashes of incorrect sorting.\n"
+"For most mid-range devices trying to reach 4K resolutions, you will likely spend your time here unless you must use Per Pixel.\n"
+"This is the recommended option for most people, most of the time."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4656
+msgid ""
+"Per Strip\n"
+"Introduces more graphics glitching than Per Triangle, but can sometimes reduce resource requirements further.\n"
+"Not recommended unless you have to use it. Performance gains range from none to minimal, and may not be worth the quality tradeoff."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4691
+msgid "TransparentSortingSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4693
+#, no-c-format
+msgid ""
+"Sorting Option\n"
+"This controls how we sort transparent layers in games.\n"
+"A handful of games will not render certain images correctly at all (example: Shenmue journal), or might have layering issues (example: the white of Sonic's eyes in Sonic Adventure), and a handful of others can show clipping or incorrect texture layering in some spots.\n"
+"\n"
+"There are three options with very different resource usage. While the highest setting matches Dreamcast sorting quality, it is only needed in about 15% of games and carries a large speed penalty.\n"
+"The middle tier allows just about all games to be played with a small amount of slight issues, but uses about half the resources of the top tier.\n"
+"It is \"good enough\" almost all the time."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4751
+msgid "InternalResPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4777
+msgid "InternalResolutionSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4778
+msgid "Internal render resolution (the biggest performance lever)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4781
+msgid ""
+"Internal Resolution\n"
+"This is the single biggest graphics performance setting.\n"
+"Resolution labels update with the widescreen settings. With Widescreen Game Cheats alone, labels preview the stretched 16:9 output for supported games.\n"
+"\n"
+"Lower values reduce GPU load (faster). Higher values improve clarity, reduce shimmer/aliasing, and act as a form of supersampling.\n"
+"\n"
+"If you are not holding a stable 30/60 FPS, reduce Internal Resolution first before turning off visual features."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4794
+msgid "Pixel-perfect scaling using whole-number multiples."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4798
+msgid ""
+"Integer Scaling\n"
+"Scales the output by the maximum whole-number multiple allowed by your display (1x, 2x, 3x, ...).\n"
+"Best for pixel-art/2D content because it avoids uneven scaling artifacts.\n"
+"\n"
+"Tip: for the crispest result, pair Integer Scaling with nearest-neighbor (disable Linear Interpolation)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4808
+msgid "Smoother scaling (linear) vs. sharper pixels (nearest-neighbor)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4812
+msgid ""
+"Linear Interpolation\n"
+"Enabled: smoother scaling (can look blurrier).\n"
+"Disabled: nearest-neighbor scaling (sharper, more pixelated).\n"
+"\n"
+"If you enable Integer Scaling, many users prefer disabling Linear Interpolation for a pixel-perfect look."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4823
+msgid "Sync presentation to your display to reduce tearing."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4827
+msgid ""
+"VSync\n"
+"Synchronizes frame presentation to your display refresh to reduce tearing and improve pacing.\n"
+"On some setups it can add input latency, and if you cannot maintain full speed it can contribute to stutter.\n"
+"\n"
+"Recommended for most users. If you notice unusual stutter or latency, try toggling it."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4851
+msgid "Duplicate Frames"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4852
+msgid "Improve pacing on high refresh-rate displays."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4856
+msgid ""
+"Duplicate Frames\n"
+"Duplicates frames on high refresh-rate monitors (120 Hz and above) to improve perceived pacing.\n"
+"Only available for Vulkan, and only when VSync is disabled."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4872
+msgid "Accurate effects, but extremely expensive."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4876
+msgid ""
+"Full Framebuffer Emulation\n"
+"Enables accurate VRAM framebuffer emulation. Required for some games' effects.\n"
+"Very slow, and generally incompatible with upscaling and widescreen.\n"
+"\n"
+"Only enable if a game needs it, and be prepared to lower Internal Resolution."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4886
+msgid "Enable texture replacement packs."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4890
+msgid ""
+"Load Custom Textures\n"
+"Loads custom/high-res textures from `data/textures/<game id>`.\n"
+"Great for community texture packs, but can increase load time and memory usage.\n"
+"Supports KTX2/XUBC7, KTX2/XUASTC, KTX2/ETC1S, DDS/BC7, PNG, and JPEG.\n"
+"\n"
+"If you see stutter from texture streaming, consider enabling Preload Custom Textures."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4901
+msgid "System Memory"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4906
+msgid "Video Memory"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4913
+msgid "PreloadTexturesPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4927
+msgid "PreloadTextures"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4928
+msgid "Trade memory for fewer texture hitches."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4931
+msgid ""
+"Preload Custom Textures\n"
+"Preloads custom textures at game start.\n"
+"Can reduce runtime stutter at the cost of increased memory usage and longer initial load times."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4947
+msgid "Renders a wider view (may reveal glitches)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4951
+msgid ""
+"Widescreen\n"
+"Draws geometry outside the normal 4:3 view to render a wider scene.\n"
+"Some games were not authored for widescreen, so newly revealed areas can show visual glitches, missing geometry, or incorrect culling.\n"
+"\n"
+"If a game looks broken in widescreen, disable this (or try Widescreen Game Cheats if supported)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4962
+msgid "Fills ultra-wide displays (more likely to reveal issues)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4966
+msgid ""
+"Super Widescreen\n"
+"Uses the full width of the screen/window when the aspect ratio is wider than 16:9.\n"
+"More likely to reveal out-of-bounds glitches than standard widescreen.\n"
+"\n"
+"Not compatible with Integer Scaling or Stretch to Fill."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4978
+msgid "Game-specific widescreen patches (when available)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4982
+msgid ""
+"Widescreen Game Cheats\n"
+"Modifies supported games to display in a 16:9 anamorphic format (game-specific patches).\n"
+"Only some games are supported, but when it works it can be cleaner than geometry widescreen."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4990
+msgid "Stretch to Fill"
+msgstr ""
+
+#: core/ui/settings_new.cpp:4991 core/ui/settings_new.cpp:4994
+msgid "Stretch the screen to fill the entire screen or window."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5001
+msgid "HorizontalStretchPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5002
+#, no-c-format
+msgid ""
+"Stretches the image sideways to fill your display. Use 132% for 16:9 "
+"correction."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5015
+msgid "HorizontalStretchingSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5016
+#, no-c-format
+msgid "Fine-tune horizontal scaling (often 132% for 16:9 correction)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5019
+#, no-c-format
+msgid ""
+"Horizontal Stretching\n"
+"Stretches the image sideways.\n"
+"132% is a common value for 16:9 correction, but the best value depends on your display and personal preference."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5031
+msgid "Rotate the entire output for rotated games."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5035
+msgid ""
+"Rotate Screen 90°\n"
+"Rotates the screen 90 degrees counterclockwise.\n"
+"Useful for games designed for rotated/vertical displays."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5060
+msgid "PixelBufferSizePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5070
+msgid ""
+"Pixel Buffer Size\n"
+"512 MB reserves the least memory and is the fastest place to start. Use this if you want to minimize VRAM/RAM usage, but increase it if you see missing or incorrect transparency in heavier scenes."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5072
+msgid ""
+"Pixel Buffer Size\n"
+"1 GB is a good middle ground if 512 MB is not enough. It gives Per-Pixel sorting more room for complex scenes without jumping straight to the larger memory costs."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5074
+msgid ""
+"Pixel Buffer Size\n"
+"2 GB is useful for heavier scenes, higher internal resolutions, or games with lots of overlapping transparent effects. Use this if you still see transparency issues at 1 GB."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5075
+msgid ""
+"Pixel Buffer Size\n"
+"4 GB is the largest buffer and is mainly for very demanding setups. It gives the most headroom for Per-Pixel sorting, but uses the most memory and is usually unnecessary unless you are pushing quality hard."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5085
+msgid "PixelBufferSizeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5086
+msgid "Reserved memory for Per-Pixel transparency rendering."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5089
+msgid ""
+"Pixel Buffer Size\n"
+"Controls how much memory is reserved for Per-Pixel (OIT) transparency rendering.\n"
+"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
+"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5103
+msgid "PerPixelMaximumLayersPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5106
+msgid ""
+"Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
+"Increase this if you see missing transparency or incorrect layering.\n"
+"Lower values reduce memory pressure and can improve performance."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5125
+msgid "PerPixelMaximumLayersSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5126
+msgid "Maximum transparent layers resolved per pixel."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5129
+msgid ""
+"Per-Pixel Maximum Layers\n"
+"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
+"Increase this if you see missing transparency or incorrect layering.\n"
+"Decrease it to improve performance and reduce memory pressure."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5150
+msgid "Automatic Frame Skipping"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5152
+msgid "AutoFrameSkipPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5165
+msgid "AutoFrameSkippingSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5166
+msgid "Auto-skip frames to maintain full-speed gameplay."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5169
+msgid ""
+"Automatic Frame Skipping\n"
+"Skips rendering frames when the emulator cannot keep up, to help maintain full-speed gameplay.\n"
+"\n"
+"Disabled: never auto-skip.\n"
+"Normal: skip when CPU and GPU are both slow.\n"
+"Maximum: skip when the GPU is slow.\n"
+"\n"
+"For best image quality, prefer lowering Internal Resolution before relying on heavy frame skipping."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5183
+msgid "FrameSkipPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5184
+msgid "Set how many frames to skip between rendered frames."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5197
+msgid "FrameSkippingSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5198
+msgid "Force a fixed number of skipped frames."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5201
+msgid ""
+"Frame Skipping\n"
+"Forces a fixed number of frames to be skipped between rendered frames.\n"
+"This is more aggressive and less adaptive than Automatic Frame Skipping.\n"
+"\n"
+"Use only if you know a title benefits from it, or as a last resort when tuning for speed."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5218
+msgid "Modifier volumes (often used for shadows)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5222
+msgid ""
+"Shadows (Modifier Volumes)\n"
+"Enables modifier volumes, which are usually used for shadowing and related effects.\n"
+"Disable if a game shows shadow-related artifacts, or if you need a little extra performance."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5232
+msgid "Atmospheric fog effects."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5236
+msgid ""
+"Fog\n"
+"Enables atmospheric fog effects.\n"
+"Disable if you see fog artifacts, or if you need extra performance in heavy scenes."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5258
+msgid "Delay the frame swap to reduce flashing or unstable video playback."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5262
+msgid ""
+"Delay Frame Swapping\n"
+"Waits for the Dreamcast read/write frame buffers to line up before presenting the next frame.\n"
+"\n"
+"This can reduce flashing screens, unstable video playback, or pacing issues in titles that swap buffers in unusual ways.\n"
+"Leave it off if it causes slowdown or extra latency on slower devices."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5273
+msgid "Reduce texture bleeding when upscaling."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5277
+msgid ""
+"Fix Upscale Bleeding Edge\n"
+"Helps with texture bleeding when upscaling.\n"
+"Disable if pixels warp in 2D games (MVC2, CVS, KOF, etc.)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5287
+msgid "Fix depth/texture issues on some GPUs."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5291
+msgid ""
+"Native Depth Interpolation\n"
+"Helps with texture corruption and depth issues on some GPUs (often AMD, sometimes Intel).\n"
+"If you see depth-related flicker or corruption, try enabling this."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5300
+msgid "Copy Rendered Textures"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5301
+msgid "Accuracy option for render-to-texture effects."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5305
+msgid ""
+"Copy Rendered Textures\n"
+"Copies render-to-texture results back into VRAM.\n"
+"Slower, but more accurate. Enable if a game has missing or incorrect render-to-texture effects."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5330
+msgid "AnisotropicPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5343
+msgid "AnisotropicFilteringSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5344
+msgid "Sharper textures at steep angles (mipmapped textures only)."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5347
+msgid ""
+"Anisotropic Filtering\n"
+"Makes mipmapped textures viewed at sharp angles look cleaner (less shimmer).\n"
+"Increases GPU cost.\n"
+"\n"
+"Only affects mipmapped textures. If you want this to do anything, keep mipmaps enabled."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5366
+msgid "Sampler Override"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5368
+msgid "TextureFilteringPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5381
+msgid "TextureFilteringSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5382
+msgid "Override the sampler mode used when textures are sampled."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5385
+msgid ""
+"Texture Sampling Override\n"
+"Default: uses game behavior.\n"
+"Force Nearest-Neighbor: crisp/pixelated look.\n"
+"Force Linear: smoother/blurrier look.\n"
+"\n"
+"For 2D/pixel-art, many users prefer Nearest-Neighbor. For 3D, Linear can look nicer."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5395
+msgid ""
+"Sample Texture Filter: Disabled\n"
+"Uses HollyCast's legacy texture sampling behavior."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5399
+msgid ""
+"Sample Texture Filter: Bilinear\n"
+"Smooths texture samples with alpha-weighted bilinear interpolation. Good simple baseline."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5403
+msgid ""
+"Sample Texture Filter: Bilinear / No Edge Blending\n"
+"Smooth bilinear filtering with harder alpha edges to reduce transparent-edge bleeding."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5407
+msgid ""
+"Sample Texture Filter: Jinc2\n"
+"Windowed Jinc-style reconstruction. Premium smooth option, but sharp edges can show mild ringing."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5411
+msgid ""
+"Sample Texture Filter: Jinc2 / No Edge Blending\n"
+"Jinc2 reconstruction with harder alpha edges for sprites, UI, and texture-sheet borders."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5415
+msgid ""
+"Sample Texture Filter: MMPX\n"
+"Pixel-art style reconstruction that preserves hard shapes. Best for 2D artwork, not natural textures."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5419
+msgid ""
+"Sample Texture Filter: MMPX Enhanced\n"
+"Softer MMPX variant that blends reconstructed pixels back toward the source."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5423
+msgid ""
+"Sample Texture Filter: MMPX Advanced\n"
+"More aggressive MMPX edge rules. Useful for pixel-art tests, but can be stylized."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5427
+msgid ""
+"Sample Texture Filter: Jinc2 Anti-Ring\n"
+"Jinc2-style reconstruction with halo clamping. Better for signs, logos, HUD art, decals, and alpha edges."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5431
+msgid ""
+"Sample Texture Filter: Jinc2 Sharp Anti-Ring\n"
+"Sharper Jinc2-style reconstruction with anti-ringing. Advanced option for crisp Dreamcast-era texture sheets."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5435
+msgid ""
+"Sample Texture Filter: Jinc2 Mild Anti-Ring\n"
+"Jinc2 reconstruction with mild sharpening and an anti-ringing clamp."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5439
+msgid ""
+"Sample Texture Filter: Jinc2 Extra Sharp Anti-Ring\n"
+"Jinc2 reconstruction with stronger sharpening and an anti-ringing clamp."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5443
+msgid ""
+"Sample Texture Filter: Lanczos2 Anti-Ring\n"
+"Sharp sinc/Lanczos reconstruction with a smaller radius and halo clamp. Strong everyday texture option."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5447
+msgid ""
+"Sample Texture Filter: Lanczos3 Anti-Ring\n"
+"Sharper larger-radius Lanczos reconstruction with halo clamp. High quality, but more likely to emphasize edges."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5452
+msgid ""
+"Sample Texture Filter: Robidoux\n"
+"Balanced cubic reconstruction. Good compromise for painted or photographic Dreamcast-era textures."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5456
+msgid ""
+"Sample Texture Filter: Robidoux Sharp\n"
+"Sharper Robidoux-style cubic filter. A good candidate for texture packs and detailed environment art."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5460
+msgid ""
+"Sample Texture Filter: Bicubic Catmull-Rom\n"
+"Classic sharper bicubic reconstruction. Crisp, familiar, and cheaper than the heavier premium filters."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5464
+msgid ""
+"Sample Texture Filter: Bicubic Mitchell\n"
+"Softer Mitchell-Netravali bicubic reconstruction. Smooth low-ringing option for UI and texture sheets."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5468
+msgid ""
+"Sample Texture Filter: Nearest-Neighbor\n"
+"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the selected size limit and leaves Flycast's global sampler override at Default."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5480
+msgid "SampleTextureFilterPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5499
+msgid "SampleTextureFilterSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5500
+msgid "Choose the sample-time texture filtering algorithm."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5504
+msgid "Sample-time filtering is not available on DirectX 9."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5519
+msgid "Max Filtered Texture Size"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5521
+msgid "MaxFilteredTextureSizePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5534
+msgid "MaxFilteredTextureSizeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5535
+msgid "Limit filtering to smaller texture groups."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5538
+msgid ""
+"Max Filtered Texture Size\n"
+"Controls the largest texture group affected by texture upscaling and sample texture filters.\n"
+"Upscaling checks the original width. Sample filters check the uploaded width, including upscaling and replacement textures.\n"
+"Buckets use texture width, so 8x8 includes 8x16 and 8x32, while 16x16 includes 16x8.\n"
+"1024x1024+ includes larger texture-pack assets.\n"
+"\n"
+"Live preview updates sample-time filtering immediately. Already-uploaded texture-upscale results may require a cache refresh or game restart."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5549
+msgid "Texture Filtering Live Tune"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5560
+msgid "Start a game to tune texture filtering over its current frame."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5561
+msgid "The current game must be pausable for live texture filtering."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5574
+msgid "Video Routing"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5585
+msgid "Send Video to Another Program"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5586
+msgid "Stream GPU texture directly to OBS Studio"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5590
+msgid ""
+"Video Routing\n"
+"Routes a GPU texture directly to OBS Studio (or a compatible capture tool), avoiding CPU-intensive Display/Window Capture.\n"
+"This can improve capture quality and reduce overhead compared to capturing the emulator window."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5604
+msgid "Scale Down Before Sending"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5605
+msgid "Share smaller texture for better performance"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5609
+msgid ""
+"Scale Down Before Sending\n"
+"Shares a smaller texture to reduce capture bandwidth and GPU/CPU overhead.\n"
+"Can improve performance on some systems, but results vary."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5624
+msgid "Output Vertical Resolution"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5626
+msgid "VideoRoutingVResPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5627
+msgid "Set the vertical resolution used for the shared OBS texture output."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5644
+msgid "VideoRoutingVResSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5645
+msgid "Set vertical resolution for the shared output texture."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5648
+msgid ""
+"Output Vertical Resolution\n"
+"Sets the vertical resolution used for the shared texture routing output.\n"
+"Lower values reduce bandwidth and overhead. Higher values improve capture clarity."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5669
+msgid ""
+"Output Texture Size\n"
+"Shows the calculated size of the shared output texture based on your routing settings."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5678
+msgid "Output Texture Size"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5690
+msgid "Calculated size of the shared output texture."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5722
+msgid "In-Game Display"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5727
+msgid "Show VMU In-Game"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5728
+msgid "Show VMU LCD screens during gameplay."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5731
+msgid ""
+"Show VMU In-Game\n"
+"Displays the VMU LCD screens while in-game."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5735
+msgid ""
+"Enable to move VMU screens. Turn off to lock them in place. Use reset to "
+"restore their default positions."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5740
+msgid "Move VMU"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5755
+msgid "Reset VMU screens to their default positions."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5766
+msgid "Turn off to lock VMU screens in place."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5773
+msgid "VMU Size"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5775
+msgid "VmuWindowSizePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5776
+msgid "Resize all movable VMU screens live."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5784
+msgid "VmuWindowSizeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5785
+msgid "Scale VMU screens independently of UI scaling."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5786
+msgid ""
+"100% keeps the default VMU size. Changes apply immediately and are saved "
+"with your settings."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5789
+msgid "VMU Transparency"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5791
+msgid "VmuWindowTransparencyPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5792
+msgid "Adjust how transparent VMU screens are."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5800
+msgid "VmuWindowTransparencySetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5801
+#, no-c-format
+msgid "0% is solid. 100% is invisible."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5802
+msgid ""
+"25% keeps the default transparency. Desktop VMUs dim further in menus. "
+"Changes apply immediately and are saved with your settings."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5807
+msgid "Performance Overlay"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5809
+msgid "Minimal"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5813
+msgid "Overlay Mode"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5815
+msgid "ResourceMonitorModePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5827
+msgid "ResourceMonitorMode"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5828
+msgid ""
+"Choose the overlay density. Off can use the lightweight FPS counter; Full "
+"uses the metric selections below."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5830
+msgid ""
+"Overlay Mode\n"
+"Off can show the lightweight FPS counter below. Minimal always shows a compact rate and CPU view. Full uses the diagnostic selections below, including separate host and Dreamcast timing domains."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5840
+msgid "Show Lightweight FPS Counter"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5841
+msgid ""
+"Show a compact frame-rate counter without enabling performance monitoring."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5844
+msgid ""
+"Show Lightweight FPS Counter\n"
+"Available while the Performance Overlay is Off. Minimal includes frame rates automatically, while Full uses the Game FPS and VPS metric below."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5856
+msgid "Show Game FPS and VPS"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5856
+msgid ""
+"FPS counts completed non-render-to-texture PVR scenes: the game's internal "
+"rendered-frame rate, matching DuckStation's FPS meaning. VPS counts "
+"Dreamcast video blanks. A 30 FPS game normally shows 30 FPS and about 60 VPS"
+" on NTSC."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5857
+msgid "Show Output FPS"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5857
+msgid ""
+"Counts successful frames presented to the screen. Compare it with Game FPS "
+"to identify repeated or omitted host output frames; it is display cadence, "
+"not the game's internal rendered-frame rate."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5858
+msgid "Show Emulation Speed"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5858
+msgid ""
+"Shows current VPS relative to the active PAL or NTSC target and the "
+"configured speed limit. This is overall pace, not a CPU or GPU utilization "
+"meter."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5859
+msgid "Show Threading State"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5859
+msgid ""
+"Shows whether SH4 emulation and PVR rendering run on separate host threads. "
+"Threaded mode changes which thread can become the limiting host CPU core."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5860
+msgid "Show Host CPU"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5860
+msgid ""
+"Hollycast is the emulator process share of all logical CPU cores. Device is "
+"total CPU use from all apps. A single SH4 or renderer thread can still fill "
+"one core while Hollycast is low on an 8-core device."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5861
+msgid "Show Host GPU"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5861
+msgid ""
+"Shows timestamped GPU work as a one-second share and milliseconds per timed "
+"render. Includes PVR screen renders and direct framebuffer uploads; full "
+"framebuffer emulation can perform both per video frame. It is backend GPU "
+"execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX "
+"9, and DirectX 11 support it."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5862
+msgid "Show Dreamcast SH4 Rate"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5862
+#, no-c-format
+msgid ""
+"Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. "
+"Below 100% means Hollycast is not advancing SH4 time at the expected rate. "
+"It is not host CPU use or a game's exact SH4 occupancy."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5863
+msgid "Show Dreamcast PVR Schedule"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5863
+#, no-c-format
+msgid ""
+"Shows all emulated PVR renderer-complete delays scheduled during the sample "
+"as a share of the active Dreamcast video-frame budgets. Values above 100% "
+"mean scheduled render work exceeded one frame of budget on average. It is "
+"scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5864
+msgid "Show Host SH4 Thread"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5864
+#, no-c-format
+msgid ""
+"Shows host CPU time used by the thread running SH4 emulation. A value near "
+"100% means that one host core is saturated; it does not directly mean the "
+"original Dreamcast SH4 is full."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5865
+msgid "Show Host PVR Renderer Thread"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5865
+msgid ""
+"Shows host CPU time used by the PVR renderer thread or its shared-thread "
+"portion. It exposes emulator and graphics-driver preparation cost, not "
+"Dreamcast PVR pressure or hardware GPU use."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5866
+msgid "Show Resolution"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5866
+msgid ""
+"Shows native Dreamcast output, internal rendered size, host viewport, and "
+"final screen output. Higher rendered resolution can raise host GPU time "
+"without changing Dreamcast SH4 or PVR scheduling."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5867
+msgid "Show Frame Times"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5867
+msgid ""
+"Shows minimum, average, and maximum intervals between successful host "
+"presents. Frame-time spikes expose stutter even when the one-second FPS "
+"average looks normal."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5868
+msgid "Show Renderer Statistics"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5868
+msgid ""
+"Shows API, PVR primitive batches, vertices, PVR render passes, and texture "
+"uploads per second. These are renderer work counters, not VRAM bytes, cache-"
+"resident texture count, or host draw/copy/readback counters."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5869
+msgid "Show Host GPU Memory"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5869
+msgid ""
+"Shows the Windows DXGI memory attributed to Hollycast and its current "
+"adapter budget when the OS exposes it. It changes with allocations, but is "
+"not total GPU VRAM and is unavailable on platforms without an authoritative "
+"query."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5870
+msgid "Show Hollycast RAM"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5870
+msgid ""
+"Shows the resident memory currently held by Hollycast according to the "
+"operating system. It changes with content, caches, and allocations. Fixed "
+"Dreamcast RAM and VRAM capacities are intentionally omitted."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5884
+msgid "History Graphs"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5886
+msgid "Show Frame-Time Graph"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5886
+msgid ""
+"Draw a rolling 152-sample graph of successful-present intervals. Spikes are "
+"long output frames."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5887
+msgid "Show Host CPU Graph"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5887
+msgid ""
+"Draw rolling one-second samples. The main line is Hollycast's share of total"
+" CPU capacity; the blue line is overall device CPU use from all apps."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5888
+msgid "Show Host GPU Graph"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5888
+msgid ""
+"Draw rolling one-second GPU timestamp samples. It is available only while "
+"the active backend supplies valid GPU timestamp queries."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5903
+msgid "Appearance"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5907
+msgid "Text Size"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5909
+msgid "OverlayTextSizePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5910
+msgid ""
+"Set the maximum text size. The overlay shrinks when needed to keep every row"
+" and graph on screen."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5922
+msgid "OverlayTextSizeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5922
+msgid "Choose the overlay font size."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5923
+msgid ""
+"Text Size\n"
+"Controls the maximum text size. All selected rows and graphs automatically fit inside the screen."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5929
+msgid "Opacity"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5931
+msgid "OverlayTransparencyPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5932 core/ui/settings_new.cpp:5944
+msgid "Set the overlay opacity."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5944
+msgid "OverlayTransparencySetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5945
+msgid ""
+"Opacity\n"
+"Controls the overlay text and background opacity."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5947
+msgid "Top Left"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5947
+msgid "Top Right"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5947
+msgid "Bottom Left"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5947
+msgid "Bottom Right"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5951
+msgid "Screen Corner"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5953
+msgid "OverlayCornerPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5964
+msgid "OverlayCornerSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5964
+msgid "Choose where the overlay appears."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5965
+msgid ""
+"Screen Corner\n"
+"15 pixels from the selected edges, and below the menu bar for the top corners."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5969
+msgid "Horizontal Position"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5971
+msgid "OverlayOffsetXPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5972
+msgid "Move the complete overlay left or right."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5984
+msgid "OverlayOffsetXSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5984
+msgid "Adjust the overlay's horizontal position."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5985
+msgid ""
+"Horizontal Position\n"
+"Zero starts 15 pixels from the selected edge. Negative values move left. Positive values move right. The overlay stays on screen."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5989
+msgid "Vertical Position"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5991
+msgid "OverlayOffsetYPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:5992
+msgid "Move the complete overlay up or down."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6004
+msgid "OverlayOffsetYSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6004
+msgid "Adjust the overlay's vertical position."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6005
+msgid ""
+"Vertical Position\n"
+"Zero starts 15 pixels from the selected edge, below the menu bar for top corners. Negative values move up. Positive values move down. The overlay stays on screen and below the menu bar."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6017
+msgid "Text Color"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6018
+msgid "Choose the overlay text color."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6026
+msgid ""
+"Text Color\n"
+"Controls the overlay text color."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6034
+msgid "Audio Configuration"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6038
+msgid "Playback"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6045
+msgid "Dreamcast Digital Sound Processor"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6049
+msgid ""
+"Enable DSP\n"
+"Enables the Dreamcast Digital Sound Processor.\n"
+"Only recommended on fast platforms. If you experience audio stutter or performance drops, try disabling this."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6057
+msgid "VMU Sounds"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6058
+msgid "Play VMU beeps when enabled"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6062
+msgid ""
+"VMU Sounds\n"
+"Plays VMU beep sounds when enabled.\n"
+"Purely cosmetic; disable if you prefer silence or want to avoid extra audio events."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6075
+msgid "VolumeLevelPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6100
+msgid "VolumeLevelSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6101
+msgid "Master audio volume."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6104
+msgid ""
+"Volume Level\n"
+"Adjusts the emulator's master audio volume.\n"
+"If audio clips or is too quiet, tune this before changing latency settings."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6112 core/ui/settings_new.cpp:6143
+msgid "Audio Latency"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6124
+msgid "Automatically set audio latency"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6128
+msgid ""
+"Automatic Latency\n"
+"Automatically chooses an audio buffer size.\n"
+"Recommended for most users. Disable only if you need to manually tune latency vs stability."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6145
+msgid "Buffer size in milliseconds"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6146
+msgid "AudioLatencyPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6147
+msgid ""
+"Lower values reduce audio lag but may cause audio issues. Higher values are "
+"more stable but increase latency."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6180
+msgid "AudioLatencySetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6181
+msgid "Audio buffer size in milliseconds."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6184
+msgid ""
+"Audio Latency\n"
+"Lower values reduce audio lag but can cause crackling/stutter if your system cannot keep up.\n"
+"Higher values are more stable but add latency.\n"
+"\n"
+"If you hear pops, increase latency. If audio feels delayed, decrease it carefully."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6230
+msgid "AudioDriverPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6255
+msgid "AudioDriverSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6256
+msgid "Select the host audio backend/driver."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6259
+msgid ""
+"Audio Driver\n"
+"Selects the audio backend used to submit sound to your OS.\n"
+"If you have crackling, missing audio, or unusually high latency, try changing the driver.\n"
+"\n"
+"After changing drivers, re-check Audio Latency settings."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6274
+msgid "Driver Options"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6284
+msgid "AudioBackendInt_"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6357
+msgid "AudioBackendList_"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6476 core/ui/settings_new.cpp:6902
+#: core/ui/settings_new.cpp:6960
+msgid "Invalid file name."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6486
+msgid "Invalid VMU folder."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6523 core/ui/settings_new.cpp:6565
+#: core/ui/settings_new.cpp:6658
+msgid "A file with that name already exists."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6530
+msgid "Failed to create file."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6539
+msgid "Failed to build default VMU image."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6546
+msgid "Failed to write VMU image."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6573
+msgid "Failed to open source VMU."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6580
+msgid "Failed to create copy."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6590
+msgid "Failed to write VMU copy."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6596
+msgid "Failed to read source VMU."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6672
+msgid "Rename failed."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6723
+msgid "Memory Cards (Data Folder)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6723
+msgid "Memory Cards (VMU Folder)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6725
+msgid ""
+"Per Game VMU manages A1 automatically; other shared slots remain editable."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6756
+msgid "Refresh"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6762
+msgid "Create New Card"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6765 core/ui/settings_new.cpp:6859
+msgid "Create VMU Card"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6770
+msgid "Rename"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6774 core/ui/settings_new.cpp:6925
+msgid "Rename VMU Card"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6780 core/ui/settings_new.cpp:6891
+msgid "Copy"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6784 core/ui/settings_new.cpp:6885
+msgid "Copy VMU Card"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6790
+msgid "Insert"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6793 core/ui/settings_new.cpp:6983
+msgid "Insert VMU Card"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6797
+msgid "Copy this Per Game A1 VMU before inserting it into another slot."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6801
+msgid "Eject"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6834
+msgid "Slot"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6861
+msgid "File name"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6865
+msgid "Create"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6887
+msgid "New file name"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6933
+msgid "Per Game VMU Rename Warning"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6935
+msgid ""
+"This looks like an auto-named Per Game VMU for A1.\n"
+"Renaming it can stop Hollycast from auto-loading it while Per Game VMUs is enabled.\n"
+"To restore automatic pickup later, rename it back to its original file name."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6940
+msgid "New name"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6987
+msgid "No VMU selected."
+msgstr ""
+
+#: core/ui/settings_new.cpp:6992
+#, c-format
+msgid "Insert \"%s\" into:"
+msgstr ""
+
+#: core/ui/settings_new.cpp:6999
+msgid ""
+"This looks like an auto-named Per Game VMU for A1.\n"
+"Copy it first, then insert the copy into another slot."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7015
+msgid "Per Game VMU"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7045
+msgid "No active shared VMU slots are available."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7062
+msgid "Controls Configuration"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7080 core/ui/settings_new.cpp:7098
+msgid "Actions"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7213
+msgid "Mouse & Raw Input"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7221
+msgid "Sensitivity"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7223
+msgid "Mouse sensitivity for light gun and mouse emulation"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7224
+msgid "SensitivityPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7225
+msgid ""
+"Adjust the mouse sensitivity for light gun and mouse emulation. Higher "
+"values make the cursor move faster."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7249
+msgid "SensitivitySetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7250
+msgid "Mouse/light gun sensitivity."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7253
+msgid ""
+"Sensitivity\n"
+"Adjusts mouse and light gun sensitivity.\n"
+"Higher values make the cursor move faster.\n"
+"\n"
+"Tip: tune this in actual gameplay (not just menus) and keep it consistent across devices when possible."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7269
+msgid ""
+"Use Raw Input\n"
+"Enables raw input so multiple pointing devices (mice, light guns) and keyboards can be handled more accurately.\n"
+"Recommended if you use light guns or multiple input devices."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7633
+msgid "Adjust the size of the on-screen crosshair"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7634
+msgid "CrosshairSizePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7635
+msgid ""
+"Adjust the size of the on-screen crosshair for light guns. Only available "
+"when a light gun device is connected."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7659
+msgid "CrosshairSizeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7660
+msgid "Crosshair size for light guns."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7663
+msgid ""
+"Crosshair Size\n"
+"Adjusts the size of the on-screen crosshair for light guns.\n"
+"Only available when a light gun device is connected.\n"
+"\n"
+"Choose a size that is visible without covering targets."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7673
+msgid "VMU Settings"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7679
+msgid "When enabled, each game has its own VMU on port 1 of controller A"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7683
+msgid ""
+"Per Game VMU\n"
+"When enabled, each game has its own VMU on port 1 of controller A.\n"
+"Useful to prevent save-file conflicts between games."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7694
+msgid "Use External VMU Storage"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7695
+msgid ""
+"Enables read and write access to physical/external VMU storage via "
+"DreamPicoPort or DreamPotato. VMUs may appear to reconnect after loading "
+"state."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7699
+msgid ""
+"Use External VMU Storage\n"
+"Enables read and write access to physical/external VMU storage via DreamPicoPort or DreamPotato. VMUs may appear to reconnect after loading state."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7709
+msgid "DreamPotato Integrated Mode"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7710
+msgid ""
+"Automatically launch DreamPotato (VMU emulator) using the standard VMU file "
+"for the given slot."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7713
+msgid ""
+"DreamPotato Integrated Mode\n"
+"Automatically launch DreamPotato (VMU emulator) using the standard VMU file for the given slot.\n"
+"Applies to all slots which use a DreamPotato device.\n"
+"When this is disabled, DreamPotato devices will connect to a manually-launched standalone instance instead."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7722
+msgid ""
+"(!) DreamPotato executable not found. Please set DreamPotato Path in General"
+" > Custom Paths."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7732
+msgid "Network Configuration"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7751
+msgid "GGPO"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7752
+msgid "Naomi"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7760
+msgid "NetworkTypePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7773
+msgid "NetworkTypeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7774
+msgid "Choose which network feature is active."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7777
+msgid ""
+"Network Type\n"
+"Selects the active network mode:\n"
+"GGPO for rollback netplay, Naomi for Naomi network games, or Battle Cable.\n"
+"\n"
+"Only one network type should be enabled at a time."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7800
+msgid "Host the game session"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7804
+msgid ""
+"Play as Player 1\n"
+"When enabled, you host the session (Player 1).\n"
+"Deselect to connect as Player 2."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7821
+msgid ""
+"GGPO Peer\n"
+"Enter your peer's IP address (and optional port).\n"
+"Use this when connecting directly without matchmaking."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7833
+msgid "GGPOFrameDelayPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7834
+msgid "Sets Frame Delay, advisable for sessions with ping >100 ms."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7851
+msgid "GGPOFrameDelaySetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7852
+msgid "Extra buffering for higher ping sessions."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7855
+msgid ""
+"Frame Delay\n"
+"Adds a fixed frame delay to help stabilize gameplay for higher-latency connections.\n"
+"Often advisable when ping is > 100 ms.\n"
+"\n"
+"Too much delay increases input lag; use the lowest value that feels stable."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7863
+msgid "Analog Axes"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7873
+msgid "Left Thumbstick"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7875
+msgid "GGPOAnalogAxesPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7886
+msgid "GGPOAnalogAxesSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7887
+msgid "Control how the left thumbstick is used in GGPO."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7890
+msgid ""
+"Left Thumbstick (GGPO)\n"
+"Configures how the left thumbstick is mapped during GGPO sessions:\n"
+"Disabled, Horizontal only, or Full analog axes.\n"
+"\n"
+"Choose the option that matches the game and your preferred control style."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7901
+msgid "Open chat on message received"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7905
+msgid ""
+"Enable Chat\n"
+"Opens the chat window when a message is received during GGPO sessions."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7914
+msgid "Chat Auto-Close"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7915
+msgid "Automatically close chat window"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7919
+msgid ""
+"Chat Auto-Close\n"
+"Automatically closes the chat window after a timeout.\n"
+"Useful if you want chat notifications without leaving the overlay open."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7930
+msgid ""
+"Chat Window Timeout\n"
+"Controls how long the chat window stays open after receiving a new message.\n"
+"\n"
+"Increase this if you want more time to read messages.\n"
+"Decrease it if you only want brief notifications without the overlay staying on screen."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7940
+msgid "Chat Window Timeout (s)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7953
+msgid ""
+"Sets duration that chat window stays open after new message is received"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7964
+msgid "Display netplay stats on screen"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7968
+msgid ""
+"Network Statistics\n"
+"Shows a small on-screen overlay with live netplay information.\n"
+"This is useful for diagnosing stutter, desyncs, or “why does this feel laggy?” situations.\n"
+"\n"
+"If you are tuning settings for a stable experience, enable this along with the FPS counter and test during real gameplay.\n"
+"Look for stable latency/jitter and minimal dropped or delayed packets."
+msgstr ""
+
+#: core/ui/settings_new.cpp:7984
+msgid "Client"
+msgstr ""
+
+#: core/ui/settings_new.cpp:7992
+msgid "NetworkRolePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8015
+msgid "NetworkRoleSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8016
+msgid "Choose the network role."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8019
+msgid ""
+"Network Role\n"
+"Selects the active network role:\n"
+"Server to create a local server for Naomi network games, client to connect to a server, satellite to monitor games that support it (Virtual-On Oratorio Tangram and Club Kart)\n"
+"\n"
+"If you cannot connect to each other, check firewalls/NAT rules and confirm both players are using the same game/version.\n"
+"Use the Local Port setting if you need to match a specific port or avoid conflicts."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8042
+msgid ""
+"Naomi Netplay: Server Address\n"
+"Enter the host to connect to (for example: a hostname or an IP address).\n"
+"If a port is supported by your setup, it is typically written as `host:port`.\n"
+"\n"
+"Leave this field blank to use automatic discovery (when available) on the default port.\n"
+"If you have connection issues, try entering the host explicitly and verify your Local Port and firewall/NAT rules."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8056
+msgid ""
+"Local Port\n"
+"Sets the local UDP port used for Naomi netplay / Battle Cable connections.\n"
+"\n"
+"If you cannot connect, make sure both players are using compatible settings and that your firewall/router is not blocking this port.\n"
+"Only change this if you have a port conflict or you need to match a specific setup."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8103
+msgid "Choose a unique word or number and share it with your opponent"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8130
+msgid "Playing "
+msgstr ""
+
+#: core/ui/settings_new.cpp:8140
+msgid "Network Stats"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8141
+msgid "Display network statistics"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8145
+msgid ""
+"Network Statistics\n"
+"Shows a small on-screen overlay with live connection information.\n"
+"\n"
+"Use this to diagnose lag spikes, unstable connections, or dropped packets during Battle Cable sessions.\n"
+"For best results, enable the FPS counter too and test during actual gameplay."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8170
+msgid ""
+"Battle Cable: Peer Address\n"
+"Enter the opponent to connect to (hostname or IP address).\n"
+"If your setup supports specifying a port, it is typically written as `host:port`.\n"
+"\n"
+"Leave this field blank to use automatic discovery (when available) on the default port.\n"
+"If matchmaking fails, try entering the peer explicitly and verify your Local Port and firewall/NAT rules."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8182
+msgid ""
+"Local Port\n"
+"Sets the local UDP port used for Battle Cable sessions.\n"
+"\n"
+"If you cannot connect, verify firewall/router rules and ensure both peers are using the same port.\n"
+"Leave this at the default unless you have a reason to change it."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8220
+msgid "Host for Maximum Speed mode"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8224
+msgid ""
+"Maximum Speed: Master Peer\n"
+"Only used by Maximum Speed mode.\n"
+"Exactly one peer must be the master for the session to work correctly.\n"
+"\n"
+"If you run into connection problems, try switching which player is master.\n"
+"In general, the player with the more stable connection and lower latency is a good choice."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8245
+msgid ""
+"Enable UPnP\n"
+"Attempts to automatically create the required port mappings on your router.\n"
+"\n"
+"This can make hosting/connecting easier on home networks, but it depends on your router supporting UPnP and allowing it.\n"
+"If it does not work (or if you prefer not to use UPnP), disable this and use manual port forwarding instead."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8255
+msgid "Broadcast audio/video"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8259
+msgid ""
+"Broadcast Digital Outputs\n"
+"Exports certain arcade I/O “outputs” over the network (for example, values used by some Naomi driving/force-feedback setups).\n"
+"\n"
+"This is not a general gameplay video/audio streaming feature.\n"
+"Enable it only if you are using external tooling or hardware that expects network output data."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8268
+msgid "Broadband Adapter"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8273
+msgid ""
+"Broadband Adapter (BBA)\n"
+"Emulates the Dreamcast Ethernet Broadband Adapter (BBA) instead of the modem.\n"
+"\n"
+"Use this for games and features that expect Ethernet networking.\n"
+"If a title expects the modem path (or you are troubleshooting connectivity), try toggling this and re-testing."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8283
+msgid "DCNet Cloud"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8284
+msgid "Dreamcast Internet via cloud"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8288
+msgid ""
+"DCNet Cloud\n"
+"Routes Dreamcast networking through a cloud-backed service instead of relying entirely on your local network configuration.\n"
+"\n"
+"This can simplify getting “online” in certain scenarios, but it also changes the networking path.\n"
+"If you have trouble connecting, try toggling this setting and re-testing with the same game and the same network options."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8299
+msgid "ISP Username"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8300
+msgid ""
+"The ISP user name stored in the console Flash RAM. Used by some online games"
+" as the player name. Leave blank to keep the current Flash RAM value"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8317
+msgid "DNS Server"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8325
+msgid ""
+"DNS Server\n"
+"Overrides the DNS server used by the emulated network stack.\n"
+"\n"
+"Only change this if you know you need a specific DNS provider or you are debugging connectivity.\n"
+"Note: When DCNet Cloud is enabled, DNS behavior may be handled differently and this field may not apply."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8338
+msgid "Multiboard"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8353
+msgid "Advanced Configuration"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8357
+msgid "CPU & Emulation"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8369
+msgid "CpuModePopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8378
+msgid ""
+"CPU Mode: Dynarec\n"
+"Recommended for almost everyone.\n"
+"Uses the dynamic recompiler (JIT) for the best performance.\n"
+"\n"
+"If a specific game is crashing or behaving incorrectly, switching to the Interpreter can be a useful compatibility test."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8384
+msgid ""
+"CPU Mode: Interpreter\n"
+"Highest compatibility, lowest performance.\n"
+"Runs the SH4 in interpreter mode which is much slower than Dynarec.\n"
+"\n"
+"Use this mainly for troubleshooting hard-to-reproduce bugs, or for rare titles that misbehave under Dynarec."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8399
+msgid "CpuModeSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8400
+msgid ""
+"Use the dynamic recompiler for speed, or interpreter for compatibility."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8403
+msgid ""
+"CPU Mode\n"
+"Controls how Hollycast emulates the SH4 CPU.\n"
+"\n"
+"Dynarec is dramatically faster and is the normal choice for gameplay.\n"
+"Interpreter is much slower, but can be helpful for compatibility testing.\n"
+"\n"
+"If you are troubleshooting a game-specific issue, switch modes and re-test the exact same scene to compare behavior."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8418
+msgid "Sh4ClockPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8420
+msgid ""
+"Adjusts the emulated SH4 CPU clock. Default is 200 MHz.\n"
+"Higher values may reduce CPU-side frame drops in some games, but can also break timing.\n"
+"Lower values can reduce CPU load, but may cause slowdowns or audio/video instability."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8439
+msgid "Sh4ClockSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8440
+msgid "Over/Underclock the main SH4 CPU."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8443
+msgid ""
+"SH4 Clock\n"
+"Overclocks/underclocks the emulated Dreamcast CPU.\n"
+"\n"
+"Default is 200 MHz.\n"
+"Increasing the clock can help some CPU-limited games maintain full speed, but it can also introduce timing problems, bugs, or instability.\n"
+"Decreasing the clock can lower CPU requirements, but may reduce performance or cause glitches.\n"
+"\n"
+"If you change this, re-test gameplay with the FPS counter enabled and keep adjustments small."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8457
+msgid "Fast-Forward Speed"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8459
+msgid "FastForwardSpeedLimitPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8461
+msgid ""
+"Sets a cap for Fast-Forward speed.\n"
+"Values below Infinite apply frame pacing while Fast-Forward is active.\n"
+"Infinite preserves the current uncapped behavior."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8488
+msgid "FastForwardSpeedLimitSetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8489
+msgid "Cap Fast-Forward speed or leave it Infinite."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8492
+msgid ""
+"Fast-Forward Speed\n"
+"Controls the Fast-Forward cap while Fast-Forward is active.\n"
+"\n"
+"Set this below Infinite if you want a controlled speed-up instead of running as fast as possible.\n"
+"Infinite keeps today's uncapped Fast-Forward behavior.\n"
+"\n"
+"Use moderate values first, then raise or lower based on how smooth gameplay and audio feel."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8504
+msgid "Fast-Forward Audio"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8505
+msgid "Play audio during Fast-Forward"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8509
+msgid ""
+"Fast-Forward Audio\n"
+"Controls whether audio plays while Fast-Forward is active.\n"
+"\n"
+"When enabled, Fast-Forward audio plays at 35% volume to keep it usable without being too harsh.\n"
+"When disabled, Fast-Forward keeps the current muted-audio behavior."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8522
+msgid "High Level Emulation BIOS"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8526
+msgid ""
+"HLE BIOS\n"
+"Uses a High Level Emulation BIOS implementation instead of a real BIOS.\n"
+"\n"
+"This can reduce CPU overhead and simplifies setup, but it can be less accurate than using a real BIOS.\n"
+"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8536
+msgid "Multi-threading"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8537
+msgid "Use additional CPU threads"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8541
+msgid ""
+"Multi-threading\n"
+"Allows Hollycast to use more than one CPU thread for certain emulation/rendering work.\n"
+"\n"
+"On modern multi-core devices this can improve performance or reduce stutter.\n"
+"On some drivers/devices it can introduce instability or odd timing issues.\n"
+"\n"
+"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8554
+msgid "32MB RAM"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8555
+msgid "Extended memory (32MB)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8559
+msgid ""
+"32MB RAM (Memory Mod)\n"
+"Enables an extended-memory mode (not standard Dreamcast hardware).\n"
+"\n"
+"Only use this if a specific title/homebrew explicitly requires it.\n"
+"Because it changes the memory map, it can break games, cause graphical corruption, or lead to crashes.\n"
+"\n"
+"If you are unsure, leave this disabled."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8569
+msgid "Debugging"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8577
+msgid "Serial console output"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8581
+msgid ""
+"Serial Console\n"
+"Enables serial console output for debugging.\n"
+"\n"
+"Most users should leave this off.\n"
+"Enable it only if you are debugging, capturing logs, or using tools that rely on serial output."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8593
+msgid "GDB Server"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8594
+msgid "GDB debug server"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8598
+msgid ""
+"GDB Server\n"
+"Starts a GDB debug server for developers.\n"
+"\n"
+"When enabled, Hollycast can pause startup and wait for a debugger to attach.\n"
+"Leave this disabled unless you are actively debugging."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8613
+msgid "Wait for Connection"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8614
+msgid "Wait for debugger to connect"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8618
+msgid ""
+"Wait for Connection\n"
+"Delays emulation until the debugger connects to the GDB server.\n"
+"\n"
+"Useful when you need to catch very early boot issues.\n"
+"Disable this for normal play."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8629
+msgid ""
+"GDB Port\n"
+"Sets the TCP port used by the built-in GDB debug server.\n"
+"\n"
+"Default is 3263.\n"
+"Only change this if you have a port conflict or you need to match your debugging tool configuration."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8639
+msgid "GDB Port"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8651
+msgid "Default port is 3263"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8666
+msgid "Save log output to file"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8670
+msgid ""
+"Log to File\n"
+"Saves log output to a file on disk.\n"
+"\n"
+"This is helpful when you need to share logs for troubleshooting, but it can increase I/O and may reduce performance on slower storage.\n"
+"If you enable this, try to reproduce the issue, then disable it again to avoid unnecessary disk usage."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8679
+msgid "Logging"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8684
+msgid "Notice"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8684
+msgid "Info"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8684
+msgid "Debug"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8692
+msgid "Log Verbosity"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8694
+msgid "LogVerbosityPopup"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8703
+msgid ""
+"Log Verbosity: Notice\n"
+"Minimal information.\n"
+"Best for normal usage when you only want important notices."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8708
+msgid ""
+"Log Verbosity: Error\n"
+"Only errors.\n"
+"Useful when you want to reduce log noise and focus on failures."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8713
+msgid ""
+"Log Verbosity: Warning\n"
+"Errors and warnings.\n"
+"A good balance for general troubleshooting with moderate verbosity."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8718
+msgid ""
+"Log Verbosity: Info\n"
+"Adds informational messages.\n"
+"Helpful when investigating subsystems without going full debug spam."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8723
+msgid ""
+"Log Verbosity: Debug\n"
+"Most verbose.\n"
+"Can be very noisy and may impact performance; use temporarily when debugging."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8738
+msgid "LogVerbositySetting"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8739
+msgid "Control the verbosity of log output"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8742
+msgid ""
+"Log Verbosity\n"
+"Controls how much information Hollycast writes to the log.\n"
+"\n"
+"Lower verbosity is cleaner and faster.\n"
+"Higher verbosity is useful when diagnosing problems, but can generate a lot of output (and can impact performance in extreme cases).\n"
+"\n"
+"For troubleshooting, start with Warning or Info, then use Debug only if you need deeper detail."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8751
+msgid "Log Categories"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8823
+msgid "Log Server"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8830
+msgid "Log to this hostname[:port] with UDP. Default port is 31667."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8837
+msgid "Profiling"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8842
+msgid "Enable Profiler"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8843
+msgid "Performance profiling"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8847
+msgid ""
+"Profiler\n"
+"Enables performance profiling tools for developers and power users.\n"
+"\n"
+"This can add overhead. Leave it off unless you are actively profiling performance."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8859
+msgid "Display in GUI"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8860
+msgid "Show profiler overlay"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8864
+msgid ""
+"Profiler: Display in GUI\n"
+"Draws profiler output as an in-game overlay.\n"
+"\n"
+"Useful for quickly spotting spikes or expensive subsystems while reproducing a performance issue."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8873
+msgid "Output to Terminal"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8874
+msgid "Write profiler to terminal"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8878
+msgid ""
+"Profiler: Output to Terminal\n"
+"Writes profiler output to the terminal/console.\n"
+"\n"
+"Useful when capturing data during automated runs or when you want to copy/paste profiling output."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8890
+msgid "Experimental Features"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8895
+msgid "(!) Texture Dumping"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8900
+msgid "Texture Dumping"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8901
+msgid "Dump textures to files"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8905
+msgid ""
+"Texture Dumping\n"
+"Saves textures to disk as they are used.\n"
+"\n"
+"This is mainly for creating or debugging custom texture packs.\n"
+"It can create a large number of files quickly and may reduce performance due to disk I/O.\n"
+"\n"
+"Enable it only when you specifically need a dump, then disable it again."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8919
+msgid "Dump Replaced"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8920
+msgid "Dump replaced textures too"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8924
+msgid ""
+"Dump Replaced Textures\n"
+"Also dumps textures even when they are being replaced by a custom texture pack.\n"
+"\n"
+"This is useful when comparing originals vs replacements, but it increases disk usage even more.\n"
+"Leave this off unless you are actively working on textures."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8948
+msgid "Developer Tools"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8957
+msgid ""
+"Specify lua filename to use. Should be located in Hollycast config folder. "
+"Defaults to flycast.lua when empty."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8965
+msgid "Crash Reports"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8966
+msgid "Auto-upload crash reports"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8970
+msgid ""
+"Crash Reports\n"
+"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
+"\n"
+"Crash reports typically include technical details about the crash and environment.\n"
+"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
+msgstr ""
+
+#: core/ui/settings_new.cpp:8982
+msgid "Virtual Memory Addresses"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8987
+#, c-format
+msgid "Base Address: %p"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8991
+msgid "RAM addresses are not available until the emulation is started"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8994
+#, c-format
+msgid "RAM: %p"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8996
+#, c-format
+msgid "VRAM64: %p"
+msgstr ""
+
+#: core/ui/settings_new.cpp:8998
+#, c-format
+msgid "ARAM: %p"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9129
+msgid "Version Information"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9142
+msgid "x86"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9144
+msgid "ARM"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9146
+msgid "x86_64"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9148
+msgid "ARM64"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9155
+msgid "Android"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9157
+msgid "Linux"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9160
+msgid "iOS"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9162
+msgid "macOS"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9167
+msgid "Windows"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9169
+msgid "Nintendo Switch"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9183
+msgid "Graphics"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9185
+msgid "Graphics - OpenGL"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9187
+msgid "Graphics - Vulkan"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9189
+msgid "Graphics - DirectX"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9193
+#, c-format
+msgid "Driver: %s"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9223
+msgid ""
+"Hollycast is a multi-platform emulator for Sega Dreamcast, Naomi, Naomi 2, "
+"and Atomiswave arcade systems."
+msgstr ""
+
+#: core/ui/settings_new.cpp:9227
+msgid ""
+"Based on Flycast, providing accurate emulation with enhancements for modern "
+"systems."
+msgstr ""
+
+#: core/ui/settings_new.cpp:9234
+msgid "Links"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9238
+msgid "Website"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9244
+msgid "Source Code"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9252
+msgid "License"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9255
+msgid ""
+"Copyright (C) 2019-2025 flyinghead and contributors. Portions Copyright 2026"
+" The Hollycast Authors"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9259
+msgid ""
+"Hollycast is free software; you can redistribute it and/or modify it under "
+"the terms of the GNU General Public License as published by the Free "
+"Software Foundation; either version 2 of the License, or (at your option) "
+"any later version."
+msgstr ""
+
+#: core/ui/settings_new.cpp:9279
+msgid "Credits"
+msgstr ""
+
+#: core/ui/settings_new.cpp:9282
+msgid ""
+"This emulator is based on the work of many talented developers who have "
+"contributed to the project and its dependencies."
+msgstr ""
+
+#: core/ui/settings_new.cpp:9286
+msgid "Special thanks to all contributors who make this project possible."
+msgstr ""
+
+#: core/ui/settings_new.cpp:9382
+msgid "Back to Game"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1386
+msgid "image/png"
+msgstr ""
+
+#: core/ui/vgamepad.cpp:1399
+msgid "png"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2729
+msgid "Español"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3139
+#, c-format
+msgid "%s (Custom)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3147
+#, c-format
+msgid "%s (Missing)"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3254
+msgid "Import Theme JSON"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3263
+#, c-format
+msgid "Imported %s"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3274
+msgid "Create theme"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3505
+#, c-format
+msgid "Exported %s and its referenced assets."
+msgstr ""
+
+#: core/ui/settings_new.cpp:3560
+#, c-format
+msgid ""
+"Saved %s, but could not select it. %s. Close this editor, resolve the "
+"migration error, then select this theme from UI Theme."
+msgstr ""
+
+#. Background image scaling mode; not box art.
+#: core/ui/settings_new.cpp:3497
+msgctxt "Background fit"
+msgid "Cover"
+msgstr ""
+
+#. Background image scaling mode; not box art.
+#: core/ui/settings_new.cpp:3498
+msgctxt "Background fit"
+msgid "Contain"
+msgstr ""
+
+#. Background image scaling mode; not box art.
+#: core/ui/settings_new.cpp:3498
+msgctxt "Background fit"
+msgid "Stretch"
+msgstr ""
+
+#. Native language name; keep unchanged.
+#: core/ui/settings_new.cpp:2729
+msgid "Deutsch"
+msgstr ""
+
+#. Native language name; keep unchanged.
+#: core/ui/settings_new.cpp:2729
+msgid "Italiano"
+msgstr ""
+
+#. Native language name; keep unchanged.
+#: core/ui/settings_new.cpp:2729
+msgid "한국어"
+msgstr ""
+
+#: core/hw/naomi/printer.cpp:857
+msgid "Printout saved"
+msgstr ""
+
+#: core/ui/settings_new.cpp:3032
+msgid ""
+"Data Folder\n"
+"This is Hollycast's writable data directory on this platform.\n"
+"\n"
+"It typically contains:\n"
+"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
+"- Save data (VMU files) and save states\n"
+"\n"
+"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Hollycast expects.\n"
+"Custom Paths below can also override where some of these files are stored."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4021
+msgid ""
+"Auto-Load on Start\n"
+"When enabled, the hidden Auto-Save slot loads automatically when a game starts, if a save is available."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4043
+msgid "Ask to save before leaving a game when automatic saving is off."
+msgstr ""
+
+#: core/ui/settings_new.cpp:4048
+msgid ""
+"Save Protection\n"
+"When enabled, Hollycast asks you to save before leaving a game if Auto-Save on Exit is off and save states are allowed."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5473
+msgid ""
+"Sample Texture Filter: Nearest-Neighbor\n"
+"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the selected size limit and leaves the global Sampler Override set to Default."
+msgstr ""
+
+#: core/ui/settings_new.cpp:5864
+msgid ""
+"Shows Hollycast's CPU use as a share of total capacity across all logical "
+"cores. Device shows total CPU use from all apps. A single SH4 or renderer "
+"thread can still fully occupy one core while Hollycast's overall share "
+"remains low on an 8-core device."
+msgstr ""
+
+#: core/ui/settings_new.cpp:2734
+msgid "हिन्दी"
+msgstr ""
+
+#: core/ui/settings_new.cpp:2840
+msgctxt "Arcade region"
+msgid "Export"
 msgstr ""

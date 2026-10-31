@@ -1907,14 +1907,15 @@ static void RenderGeneralRightValue(const std::string& value, float valueWidthPx
 {
 	const float valueWidth = SettingsLayoutScaled(valueWidthPx);
 	const float extraRight = SettingsLayoutScaled(extraRightOffsetPx);
-	const float verticalOffset = (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f;
-	std::string clipped = middleEllipsis(value, valueWidth);
 	ImFont* valueFont = settingsRightValueFont != nullptr ? settingsRightValueFont : largeFont;
+	// Measure and center values with the same font used to draw them.
+	ImGui::PushFont(valueFont);
+	const float verticalOffset = (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f;
+	const std::string clipped = middleEllipsis(value, valueWidth);
 
 	ImGui::SameLine(RightColumnX(valueWidth + extraRight));
 	const ImVec2 valuePos = ImGui::GetCursorPos();
 	ImGui::SetCursorPos(ImVec2(valuePos.x, valuePos.y + verticalOffset));
-	ImGui::PushFont(valueFont);
 	if (disabled)
 		ImGui::TextDisabled("%s", clipped.c_str());
 	else
@@ -2726,9 +2727,14 @@ static void renderSettingsContentTab(SettingsTab tab)
 			const UILanguageOption uiLanguageOptions[] = {
 				{ T("System Default"), "" },
 				{ Tnop("English"), "en" },
+				{ Tnop("Deutsch"), "de" },
+				{ Tnop("Español"), "es" },
 				{ Tnop("Français"), "fr" },
 				{ Tnop("Magyar"), "hu" },
+				{ Tnop("हिन्दी"), "hi" },
+				{ Tnop("Italiano"), "it" },
 				{ Tnop("日本語"), "ja" },
+				{ Tnop("한국어"), "ko" },
 				{ Tnop("Português (Brasil)"), "pt_BR" },
 				{ Tnop("Svenska"), "sv" },
 				{ Tnop("Türkçe"), "tr" },
@@ -2831,7 +2837,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 				));
 
 		const char* consoleRegion[] = { T("Japan"), T("USA"), T("Europe"), T("Default") };
-		const char* arcadeRegion[] = { T("Japan"), T("USA"), T("Export"), T("Korea") };
+		const char* arcadeRegion[] = { T("Japan"), T("USA"), i18n::translateCtx("Arcade region", "Export"), T("Korea") };
 		const char* const* region = settings.platform.isArcade() ? arcadeRegion : consoleRegion;
 
 		SettingsUI::PopupConfig regionCfg {};
@@ -3024,7 +3030,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"It typically contains:\n"
 					"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
 					"- Save data (VMU files) and save states\n\n"
-						"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Flycast looks for.\n"
+						"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Hollycast expects.\n"
 						"Custom Paths below can also override where some of these files are stored."
 				)
 			);
@@ -3065,7 +3071,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			if (ImGui::Button(T("Reveal in Finder")))
 			{
 				char temp[512];
-				snprintf(temp, sizeof(temp), T("open \"%s\""), get_writable_config_path("").c_str());
+				snprintf(temp, sizeof(temp), "open \"%s\"", get_writable_config_path("").c_str());
 				system(temp);
 			}
 	#endif
@@ -3135,7 +3141,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		std::vector<const char*> themes;
 		for (const auto& builtin : builtins) themes.push_back(T(builtin.name));
 		for (const auto& file : customFiles)
-			labels.push_back(file.substr(0, file.size() - 5) + " (Custom)");
+			labels.push_back(strprintf(T("%s (Custom)"), file.substr(0, file.size() - 5).c_str()));
 		int selection = config::UITheme.get();
 		if (selection == CustomTheme::CustomThemeId) {
 			auto selected = std::find(customFiles.begin(), customFiles.end(), config::UICustomTheme.get());
@@ -3143,7 +3149,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 				selection = builtinCount + static_cast<int>(selected - customFiles.begin());
 			else {
 				selection = builtinCount + static_cast<int>(labels.size());
-				labels.push_back(config::UICustomTheme.get() + " (Missing)");
+				labels.push_back(strprintf(T("%s (Missing)"), config::UICustomTheme.get().c_str()));
 			}
 		} else if (selection < 0 || selection >= builtinCount) {
 			selection = 0;
@@ -3249,16 +3255,17 @@ static void renderSettingsContentTab(SettingsTab tab)
 		if (ImGui::Button(T("Edit Selected Theme")) && canEditCustom) startThemeEditor(true);
 		if (!canEditCustom) ImGui::EndDisabled();
 		ImGui::SameLine();
-		const char* importTitle = "Import Theme JSON";
+		// Keep the popup ID stable while translating its title.
+		const std::string importTitle = std::string(T("Import Theme JSON")) + "###ImportThemeJSON";
 		if (ImGui::Button(T("Import Theme…")))
-			ImGui::OpenPopup(importTitle);
-		select_file_popup(importTitle, [&](bool cancelled, const std::string& source) {
+			ImGui::OpenPopup(importTitle.c_str());
+		select_file_popup(importTitle.c_str(), [&](bool cancelled, const std::string& source) {
 			if (!cancelled) {
 				themeNotice.clear();
 				std::string imported;
 				if (CustomTheme::importFile(source, imported, themeError)) {
 					customFiles = CustomTheme::list();
-					themeNotice = "Imported " + imported;
+					themeNotice = strprintf(T("Imported %s"), imported.c_str());
 				}
 			}
 			return true;
@@ -3269,7 +3276,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			ImGui::SetNextWindowSize(ImVec2(std::max(1.0f, std::min(uiScaled(760.0f), display.x - uiScaled(24.0f))),
 					std::max(1.0f, std::min(uiScaled(650.0f), display.y - uiScaled(24.0f)))));
 		}
-		const std::string editorTitle = std::string(T(g_themeEditor.editing ? "Edit theme" : "Create theme")) + "###ThemeEditorPopup";
+		const std::string editorTitle = std::string(g_themeEditor.editing ? T("Edit theme") : T("Create theme")) + "###ThemeEditorPopup";
 		if (g_themeEditor.open && ImGui::BeginPopupModal(editorTitle.c_str(), nullptr,
 				ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
 			ImGui::TextDisabled("%s", T("Changes preview as you edit. Cancel restores the previous theme."));
@@ -3491,13 +3498,16 @@ static void renderSettingsContentTab(SettingsTab tab)
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
 					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
 					const char* fits[] = {"cover", "contain", "stretch"};
+					// Keep the JSON values independent of the translated option labels.
+					const char* fitLabels[] = {i18n::translateCtx("Background fit", "Cover"),
+						i18n::translateCtx("Background fit", "Contain"), i18n::translateCtx("Background fit", "Stretch")};
 					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
-					if (ImGui::Combo(T("Background fit"), &fit, fits, IM_ARRAYSIZE(fits))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
+					if (ImGui::Combo(T("Background fit"), &fit, fitLabels, IM_ARRAYSIZE(fitLabels))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
 					ImGui::InputText(T("Export folder"), &g_themeEditor.exportFolder);
 					if (ImGui::Button(T("Export theme and assets"))) {
 						const std::string exportName = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
 						if (CustomTheme::exportToDirectory(g_themeEditor.draft, exportName, g_themeEditor.exportFolder, g_themeEditor.error))
-							g_themeEditor.error = "Exported " + exportName + " and its referenced assets.";
+							g_themeEditor.error = strprintf(T("Exported %s and its referenced assets."), exportName.c_str());
 					}
 					}
 					ImGui::EndChild();
@@ -3552,8 +3562,8 @@ static void renderSettingsContentTab(SettingsTab tab)
 				} else if (CustomTheme::save(filename, g_themeEditor.draft, g_themeEditor.editing, g_themeEditor.error)) {
 					customFiles = CustomTheme::list();
 					if (!completePendingThemeMigration(migrationError)) {
-						g_themeEditor.error = "Saved " + filename + ", but could not select it. " + migrationError
-								+ ". Close this editor, resolve the migration error, then select this theme from UI Theme.";
+						g_themeEditor.error = strprintf(T("Saved %s, but could not select it. %s. Close this editor, resolve the migration error, then select this theme from UI Theme."),
+								filename.c_str(), migrationError.c_str());
 					} else {
 						config::UITheme = CustomTheme::CustomThemeId;
 						config::UICustomTheme = filename;
@@ -4009,8 +4019,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			[](bool enabled) { config::AutoLoadState = enabled; },
 			T(
 				"Auto-Load on Start\n"
-				"When enabled, on game boot, if the hidden Auto-Save slot has an Auto-Save, "
-				"it will automatically load this slot on game boot."
+				"When enabled, the hidden Auto-Save slot loads automatically when a game starts, if a save is available."
 			)
 		);
 
@@ -4031,13 +4040,13 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"SaveProtection",
 			ICON_FA_SHIELD_HALVED,
 			T("Save Protection"),
-			T("Disabling this will remove the safeguards that help prevent lost game progress from not saving."),
+			T("Ask to save before leaving a game when automatic saving is off."),
 			static_cast<bool>(config::SaveProtection),
 			[](bool enabled) { config::SaveProtection = enabled; },
 			T(
 				"Save Protection\n"
-				"This is the assurance that you will never be able to leave a game without being prompted "
-				"to save right then, ensuring you do not accidentally leave without saving your data."
+				"When enabled, Hollycast asks you to save before leaving a game if Auto-Save on Exit is off and save states "
+				"are allowed."
 			)
 		);
 
@@ -4627,7 +4636,7 @@ void renderVideoTab()
 				{
 				case 2:
 					SetSettingsFooterText(
-						T(
+						/* xgettext:no-c-format */ T(
 							"Per Pixel\n"
 							"Highest performance requirements. This matches the Dreamcast's sorting quality, but only about 15% of games need it and show a meaningful difference versus the middle sorting option.\n"
 							"Use only when needed (or if you have the resource overhead). It can almost double resource requirements.\n"
@@ -4637,7 +4646,7 @@ void renderVideoTab()
 					break;
 				case 0:
 					SetSettingsFooterText(
-						T(
+						/* xgettext:no-c-format */ T(
 							"Per Triangle\n"
 							"Good enough for about 85% of games to play with no or only very brief flashes of incorrect sorting.\n"
 							"For most mid-range devices trying to reach 4K resolutions, you will likely spend your time here unless you must use Per Pixel.\n"
@@ -4684,7 +4693,7 @@ void renderVideoTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("TransparentSortingSetting"),
-				T(
+				/* xgettext:no-c-format */ T(
 					"Sorting Option\n"
 					"This controls how we sort transparent layers in games.\n"
 					"A handful of games will not render certain images correctly at all (example: Shenmue journal), or might have layering issues (example: the white of Sonic's eyes in Sonic Adventure), and a handful of others can show clipping or incorrect texture layering in some spots.\n\n"
@@ -4994,7 +5003,7 @@ void renderVideoTab()
 			stretchCfg.label = T("Horizontal Stretching");
 			stretchCfg.icon = ICON_FA_EXPAND;
 			stretchCfg.popupID = Tnop("HorizontalStretchPopup");
-			stretchCfg.description = T("Stretches the image sideways to fill your display. Use 132% for 16:9 correction.");
+			stretchCfg.description = /* xgettext:no-c-format */ T("Stretches the image sideways to fill your display. Use 132% for 16:9 correction.");
 			stretchCfg.currentValue = &config::ScreenStretching.get();
 			stretchCfg.minValue = 100;
 			stretchCfg.maxValue = 250;
@@ -5008,9 +5017,9 @@ void renderVideoTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("HorizontalStretchingSetting"),
-				T("Fine-tune horizontal scaling (often 132% for 16:9 correction)."),
+				/* xgettext:no-c-format */ T("Fine-tune horizontal scaling (often 132% for 16:9 correction)."),
 				stretchPopupCfg,
-				T(
+				/* xgettext:no-c-format */ T(
 					"Horizontal Stretching\n"
 					"Stretches the image sideways.\n"
 					"132% is a common value for 16:9 correction, but the best value depends on your display and personal preference."
@@ -5461,7 +5470,8 @@ void renderVideoTab()
 			),
 			T(
 				"Sample Texture Filter: Nearest-Neighbor\n"
-				"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the selected size limit and leaves Flycast's global sampler override at Default."
+				"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the "
+				"selected size limit and leaves the global Sampler Override set to Default."
 			)
 		};
 		if (config::SampleTextureFilter.get() == 14)
@@ -5541,7 +5551,10 @@ void renderVideoTab()
 		const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause());
 		if (!canLiveTune)
 			ImGui::BeginDisabled();
-		if (ImGui::Button(T("Texture Filtering Live Tune"), ScaledVec2(260.f, 34.f)))
+		const char* liveTuneLabel = T("Texture Filtering Live Tune");
+		const float liveTuneWidth = std::max(uiScaled(260.f),
+			ImGui::CalcTextSize(liveTuneLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f);
+		if (ImGui::Button(liveTuneLabel, ImVec2(liveTuneWidth, uiScaled(34.f))))
 		{
 			applyPendingSettings();
 			GamepadDevice::load_system_mappings();
@@ -5793,7 +5806,7 @@ void renderOnScreenDisplayTab()
 			vmuTransparencyCfg.slider.valueWidth = 220.0f;
 			vmuTransparencyCfg.slider.sliderWidth = 320.0f;
 			RenderGeneralPopupSettingRow(Tnop("VmuWindowTransparencySetting"),
-				T("0% is solid. 100% is invisible."), vmuTransparencyCfg,
+				/* xgettext:no-c-format */ T("0% is solid. 100% is invisible."), vmuTransparencyCfg,
 				T("25% keeps the default transparency. Desktop VMUs dim further in menus. Changes apply immediately and are saved with your settings."));
 		}
 #endif
@@ -5852,11 +5865,13 @@ void renderOnScreenDisplayTab()
 				{ "OverlayShowOutputFPS", T("Show Output FPS"), T("Counts successful frames presented to the screen. Compare it with Game FPS to identify repeated or omitted host output frames; it is display cadence, not the game's internal rendered-frame rate."), false },
 				{ "OverlayShowEmulationSpeed", T("Show Emulation Speed"), T("Shows current VPS relative to the active PAL or NTSC target and the configured speed limit. This is overall pace, not a CPU or GPU utilization meter."), true },
 				{ "OverlayShowThreadingState", T("Show Threading State"), T("Shows whether SH4 emulation and PVR rendering run on separate host threads. Threaded mode changes which thread can become the limiting host CPU core."), true },
-				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("Hollycast is the emulator process share of all logical CPU cores. Device is total CPU use from all apps. A single SH4 or renderer thread can still fill one core while Hollycast is low on an 8-core device."), true },
+				{ "OverlayShowHostCpuUsage", T("Show Host CPU"), T("Shows Hollycast's CPU use as a share of total capacity across all logical cores. Device shows total CPU use "
+				"from all apps. A single SH4 or renderer thread can still fully occupy one core while Hollycast's overall "
+				"share remains low on an 8-core device."), true },
 				{ "OverlayShowGpuUsage", T("Show Host GPU"), T("Shows timestamped GPU work as a one-second share and milliseconds per timed render. Includes PVR screen renders and direct framebuffer uploads; full framebuffer emulation can perform both per video frame. It is backend GPU execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX 9, and DirectX 11 support it."), true },
-				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
-				{ "OverlayShowPvrTimingPressure", T("Show Dreamcast PVR Schedule"), T("Shows all emulated PVR renderer-complete delays scheduled during the sample as a share of the active Dreamcast video-frame budgets. Values above 100% mean scheduled render work exceeded one frame of budget on average. It is scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."), true },
-				{ "OverlayShowCpuUsage", T("Show Host SH4 Thread"), T("Shows host CPU time used by the thread running SH4 emulation. A value near 100% means that one host core is saturated; it does not directly mean the original Dreamcast SH4 is full."), false },
+				{ "OverlayShowSh4ExecutionRate", T("Show Dreamcast SH4 Rate"), /* xgettext:no-c-format */ T("Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. Below 100% means Hollycast is not advancing SH4 time at the expected rate. It is not host CPU use or a game's exact SH4 occupancy."), true },
+				{ "OverlayShowPvrTimingPressure", T("Show Dreamcast PVR Schedule"), /* xgettext:no-c-format */ T("Shows all emulated PVR renderer-complete delays scheduled during the sample as a share of the active Dreamcast video-frame budgets. Values above 100% mean scheduled render work exceeded one frame of budget on average. It is scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."), true },
+				{ "OverlayShowCpuUsage", T("Show Host SH4 Thread"), /* xgettext:no-c-format */ T("Shows host CPU time used by the thread running SH4 emulation. A value near 100% means that one host core is saturated; it does not directly mean the original Dreamcast SH4 is full."), false },
 				{ "OverlayShowPvrUsage", T("Show Host PVR Renderer Thread"), T("Shows host CPU time used by the PVR renderer thread or its shared-thread portion. It exposes emulator and graphics-driver preparation cost, not Dreamcast PVR pressure or hardware GPU use."), false },
 				{ "OverlayShowResolution", T("Show Resolution"), T("Shows native Dreamcast output, internal rendered size, host viewport, and final screen output. Higher rendered resolution can raise host GPU time without changing Dreamcast SH4 or PVR scheduling."), true },
 				{ "OverlayShowFrameTimes", T("Show Frame Times"), T("Shows minimum, average, and maximum intervals between successful host presents. Frame-time spikes expose stutter even when the one-second FPS average looks normal."), true },
@@ -9257,10 +9272,17 @@ void renderAboutTab()
 			"(at your option) any later version."
 		));
 		ImGui::Spacing();
-		if (ImGui::TreeNode("Noto Sans CJK (SIL Open Font License)"))
+		const struct { const char* title; const char* path; } bundledLicenses[] = {
+			{"Noto Sans CJK (SIL Open Font License)", "fonts/NotoSansCJK-LICENSE.txt"},
+			{"Noto Sans Devanagari (SIL Open Font License)", "fonts/NotoSansDevanagari-LICENSE.txt"},
+			{"HarfBuzz", "fonts/HarfBuzz-LICENSE.txt"},
+		};
+		for (const auto& bundledLicense : bundledLicenses)
 		{
+			if (!ImGui::TreeNode(bundledLicense.title))
+				continue;
 			size_t licenseSize = 0;
-			auto license = resource::load("fonts/NotoSansCJK-LICENSE.txt", licenseSize);
+			auto license = resource::load(bundledLicense.path, licenseSize);
 			if (license)
 			{
 				const std::string text(reinterpret_cast<const char*>(license.get()), licenseSize);

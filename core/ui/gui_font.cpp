@@ -559,6 +559,9 @@ void gui_loadFonts()
 #endif
 
 	// Settings UI fonts
+	// FreeType uses the high word for a named variable-font instance. The bundled
+	// value font defaults to a very light weight that loses readability at small sizes.
+	constexpr int encodeSansMediumFace = 5 << 16; // Condensed Medium.
 	static const ImWchar ranges[] =
 	{
 		0x0020, 0xFFFF, // All chars
@@ -570,12 +573,9 @@ void gui_loadFonts()
 	ImFontConfig settingsTitleFontCfg;
 	settingsTitleFontCfg.RasterizerMultiply = 1.25f;
 	settingsTitleFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), fontSize, &settingsTitleFontCfg, ranges);
+	// Reuse the body face so small descriptions and navigation remain legible.
 	if (settingsTitleFont == nullptr)
-	{
-		data = resource::load("fonts/Jura-wght.ttf", dataSize);
-		if (data != nullptr)
-			settingsTitleFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, fontSize, &settingsTitleFontCfg, ranges);
-	}
+		settingsTitleFont = regularFont;
 
 	ImFontConfig rightValueFontCfg;
 	rightValueFontCfg.RasterizerMultiply = 4.50f;
@@ -583,15 +583,21 @@ void gui_loadFonts()
 	if (settingsRightValueFont == nullptr)
 	{
 		data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
-		if (data != nullptr)
+		if (data != nullptr) {
+			rightValueFontCfg.FontNo = encodeSansMediumFace;
+			rightValueFontCfg.RasterizerMultiply = 1.0f;
 			settingsRightValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, largeFontSize, &rightValueFontCfg, ranges);
+		}
 	}
 
 	settingsValueFont = addThemeFont(io.Fonts, CustomTheme::fontPath(false), uiScaled(24.f), nullptr, ranges);
 	if (settingsValueFont == nullptr) {
 		data = resource::load("fonts/EncodeSans-wdth-wght.ttf", dataSize);
-		if (data != nullptr)
-			settingsValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(24.f), nullptr, ranges);
+		if (data != nullptr) {
+			ImFontConfig valueFontCfg;
+			valueFontCfg.FontNo = encodeSansMediumFace;
+			settingsValueFont = io.Fonts->AddFontFromMemoryTTF(data.release(), (int)dataSize, uiScaled(24.f), &valueFontCfg, ranges);
+		}
 	}
 
 	if (settingsTitleFont == nullptr)
@@ -643,7 +649,26 @@ void gui_loadFonts()
 		verify(io.Fonts->AddFontFromMemoryTTF(cjkData, (int)dataSize, targets[i]->LegacySize, &cjkConfig) != nullptr);
 	}
 
-	// The other text styles already have the shared bundled CJK fallback.
+	// Hindi is also needed in the language picker while another locale is active.
+	// Share one immutable font buffer; the last source owns its atlas lifetime.
+	data = resource::load("fonts/NotoSansDevanagari-Medium.ttf", dataSize);
+	verify(data != nullptr);
+	void* devanagariData = IM_ALLOC(dataSize);
+	verify(devanagariData != nullptr);
+	memcpy(devanagariData, data.get(), dataSize);
+	data.reset();
+	for (size_t i = 0; i < targets.size(); ++i)
+	{
+		ImFontConfig devanagariConfig;
+		devanagariConfig.MergeMode = true;
+		devanagariConfig.DstFont = targets[i];
+		devanagariConfig.FontDataOwnedByAtlas = i + 1 == targets.size();
+		if (targets[i] == boldFont)
+			devanagariConfig.FontLoaderFlags |= ImGuiFreeTypeLoaderFlags_Bold;
+		verify(io.Fonts->AddFontFromMemoryTTF(devanagariData, (int)dataSize, targets[i]->LegacySize, &devanagariConfig) != nullptr);
+	}
+
+	// The other text styles already have the shared bundled fallbacks.
 	// Keep the existing system fallbacks for regular and bold text.
 	loadFonts(fonts, fontConfig);
 	loadFonts(boldFonts, boldFontConfig);
