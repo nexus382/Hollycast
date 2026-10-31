@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gui_dcnet.h"
+#include "gui.h"
 #include "dcnet_status.h"
 #include "gui_util.h"
 #include "gui_font.h"
@@ -17,6 +18,8 @@
 #include <future>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 using namespace i18n;
 
@@ -35,9 +38,15 @@ std::string selectedGame;
 ImGuiTextFilter filter;
 bool activeOnly = false;
 bool ownedOnly = false;
+size_t selectedCopy = 0;
 Clock::time_point nextLibraryRefresh;
-// Presence in this map means ownership, even when no local cover is available.
-std::unordered_map<std::string, std::string> ownedCovers;
+struct OwnedTitle
+{
+	std::vector<GameMedia> copies;
+	std::string cover;
+};
+// Keep launchable library copies separate from shared online-service identities.
+std::unordered_map<std::string, OwnedTitle> ownedGames;
 struct CachedCover
 {
 	std::string path;
@@ -81,7 +90,7 @@ void refreshLibrary(GameScanner& scanner, Boxart& boxart)
 		}
 	}
 	boxart.refreshCustomBoxartIndex(false);
-	ownedCovers.clear();
+	ownedGames.clear();
 	for (const auto& game : status.games)
 	{
 		for (const auto& key : dcnet::titleKeys(game))
@@ -101,9 +110,13 @@ void refreshLibrary(GameScanner& scanner, Boxart& boxart)
 					cover = metadata[index].boxartPath;
 				if (!cover.empty() && !file_exists(cover))
 					cover.clear();
-				auto owned = ownedCovers.emplace(game.id, cover);
-				if (owned.first->second.empty())
-					owned.first->second = std::move(cover);
+				auto& owned = ownedGames[game.id];
+				if (std::none_of(owned.copies.begin(), owned.copies.end(), [&](const GameMedia& copy) {
+					return copy.path == media.path;
+				}))
+					owned.copies.push_back(media);
+				if (owned.cover.empty())
+					owned.cover = std::move(cover);
 			}
 		}
 	}
@@ -237,6 +250,59 @@ std::string displayGameName(const dcnet::Game& game)
 	return game.name;
 }
 
+void renderCover(const dcnet::Game& game, const std::string& localCover, const ImVec2& bounds)
+{
+	std::string path = localCover;
+	if (path.empty() && ImGui::IsRectVisible(bounds))
+		path = remoteCover(game.thumbnailUrl);
+	ImguiFileTexture cover(path, true);
+	const ImTextureID texture = path.empty() ? ImTextureID() : cover.getId();
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	if (texture != ImTextureID())
+	{
+		const float aspect = imguiDriver->getAspectRatio(texture);
+		ImVec2 size = bounds;
+		if (aspect > 0)
+		{
+			if (aspect > size.x / size.y)
+				size.y = size.x / aspect;
+			else
+				size.x = size.y * aspect;
+		}
+		cover.draw(ImGui::GetWindowDrawList(), ImVec2(pos.x + (bounds.x - size.x) / 2, pos.y), size, 1.f);
+	}
+	else
+	{
+		ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + bounds.x, pos.y + bounds.y),
+				ImGui::GetColorU32(ImGuiCol_FrameBg), uiScaled(6));
+		const ImVec2 iconSize = ImGui::CalcTextSize(ICON_FA_GAMEPAD);
+		ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x + (bounds.x - iconSize.x) / 2,
+				pos.y + (bounds.y - iconSize.y) / 2), ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_FA_GAMEPAD);
+	}
+	ImGui::Dummy(bounds);
+}
+
+void renderServerStatus(const dcnet::Game& game)
+{
+	const bool active = game.players > 0 || game.matches > 0 || game.hasPlayerActivity;
+	const char *label = game.hasLiveStatus ? (game.online ? (active ? T("Playing") : T("Online")) : T("Offline"))
+			: active ? T("Playing") : T("No report");
+	const ImVec4 color = game.hasLiveStatus && !game.online ? ImVec4(0.93f, 0.43f, 0.40f, 1.f)
+			: active ? ImVec4(0.39f, 0.78f, 0.98f, 1.f)
+			: game.hasLiveStatus ? ImVec4(0.40f, 0.80f, 0.59f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+	const ImVec2 pos = ImGui::GetCursorScreenPos();
+	const ImVec2 padding = ScaledVec2(8, 4);
+	const ImVec2 textSize = ImGui::CalcTextSize(label);
+	const ImVec2 size(textSize.x + padding.x * 2, textSize.y + padding.y * 2);
+	ImGui::GetWindowDrawList()->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+			ImGui::GetColorU32(ImVec4(color.x, color.y, color.z, 0.14f)), size.y / 2);
+	ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x + padding.x, pos.y + padding.y), ImGui::GetColorU32(color), label);
+	ImGui::Dummy(size);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", game.hasLiveStatus ? T("Server status reported by DCnet.")
+				: T("DCnet does not publish server status for this title. Online play may still be supported."));
+}
+
 void renderPlayers(const std::string& gameId)
 {
 	if (!hasStatus)
@@ -298,52 +364,108 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 		}
 		pendingCoverUrl.clear();
 	}
-	ImGui::PushFont(largeFont, uiLargeFontSize());
-	ImGui::TextUnformatted("DCnet");
-	ImGui::PopFont();
-	ImGui::TextWrapped("%s", T("Find Dreamcast players and see which games are active."));
+	// Limit very wide windows to a readable dashboard while retaining narrow layouts.
+	const float availableWidth = ImGui::GetContentRegionAvail().x;
+	const float pageWidth = std::min(availableWidth, uiScaled(1280));
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availableWidth - pageWidth) / 2);
+	if (!ImGui::BeginChild("dcnetPage", ImVec2(pageWidth, 0), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_NoBackground))
 	{
-		DisabledScope disabled(pending.valid());
-		if (ImGui::Button(pending.valid() ? T("Refreshing...") : T("Refresh")))
-		{
-			nextRefresh = {};
-			nextLibraryRefresh = {};
-			for (auto& cover : covers)
-				if (!cover.second.ready && cover.first != pendingCoverUrl)
-					cover.second.requested = false;
-		}
+		ImGui::EndChild();
+		return;
 	}
-	ImGui::SameLine();
-	if (ImGui::Button(T("Network settings")))
-		GuiMenu::openNetworkSettings();
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, uiScaled(10));
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(6));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 6));
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ScaledVec2(10, 8));
+	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ScaledVec2(10, 10));
+	ImVec4 panelColor = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+	panelColor.w = 0.30f;
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, panelColor);
+	std::string launchPath;
+	std::string launchTitle;
+	if (ImGui::BeginTable("dcnetHeader", pageWidth >= uiScaled(700) ? 2 : 1, ImGuiTableFlags_SizingStretchProp))
+	{
+		ImGui::TableNextColumn();
+		ImGui::PushFont(largeFont, uiScaled(30));
+		ImGui::TextUnformatted("DCnet");
+		ImGui::PopFont();
+		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+		ImGui::TextWrapped("%s", T("Find a game. Meet other players. Jump in."));
+		ImGui::PopStyleColor();
+		ImGui::TableNextColumn();
+		{
+			DisabledScope disabled(pending.valid());
+			if (ImGui::Button(pending.valid() ? T("Refreshing...") : T("Refresh")))
+			{
+				nextRefresh = {};
+				nextLibraryRefresh = {};
+				for (auto& cover : covers)
+					if (!cover.second.ready && cover.first != pendingCoverUrl)
+						cover.second.requested = false;
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(T("Network settings")))
+			GuiMenu::openNetworkSettings();
+		ImGui::EndTable();
+	}
+	const std::pair<const char *, std::string> metrics[] = {
+		{ T("Players online"), hasStatus ? std::to_string(status.playerCount) : "-" },
+		{ T("Active games"), hasStatus ? std::to_string(status.activeGames) : "-" },
+		{ T("Lobbies / matches"), hasStatus ? std::to_string(status.matchCount) : "-" },
+		{ T("Your games"), std::to_string(ownedGames.size()) + " / " + std::to_string(status.games.size()) },
+	};
+	if (ImGui::BeginTable("dcnetSummary", pageWidth >= uiScaled(600) ? 4 : 2, ImGuiTableFlags_SizingStretchSame))
+	{
+		for (const auto& metric : metrics)
+		{
+			ImGui::TableNextColumn();
+			ImguiID id(metric.first);
+			if (ImGui::BeginChild("metric", ImVec2(0, uiScaled(70)), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
+			{
+				ImGui::TextDisabled("%s", metric.first);
+				ImGui::PushFont(largeFont, uiScaled(24));
+				ImGui::TextUnformatted(metric.second.c_str());
+				ImGui::PopFont();
+			}
+			ImGui::EndChild();
+		}
+		ImGui::EndTable();
+	}
+	const bool inlineFilters = pageWidth >= uiScaled(900);
+	const float controlsHeight = ImGui::GetFrameHeightWithSpacing() * (inlineFilters ? 1 : pageWidth >= uiScaled(400) ? 2 : 3)
+			+ ImGui::GetStyle().WindowPadding.y * 2;
+	if (ImGui::BeginChild("dcnetFilters", ImVec2(0, controlsHeight), ImGuiChildFlags_AlwaysUseWindowPadding))
+	{
+		ImGui::SetNextItemWidth(inlineFilters ? ImGui::GetContentRegionAvail().x * 0.46f : -1.f);
+		if (ImGui::InputTextWithHint("##dcnetSearch", T("Search games or players..."), filter.InputBuf, IM_ARRAYSIZE(filter.InputBuf)))
+			filter.Build();
+		if (inlineFilters)
+			ImGui::SameLine();
+		ImGui::Checkbox(T("Active games only"), &activeOnly);
+		if (ImGui::GetContentRegionAvail().x > uiScaled(360))
+			ImGui::SameLine();
+		ImGui::Checkbox(T("Owned games only"), &ownedOnly);
+	}
+	ImGui::EndChild();
 	if (!error.empty())
 		ImGui::TextWrapped("%s", error.c_str());
-	if (!hasStatus)
-	{
-		if (error.empty())
-			ImGui::TextWrapped("%s", T("Loading live activity from DCnet..."));
-	}
-
 	if (hasStatus)
 	{
 		const auto age = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - lastSuccess).count();
-		ImGui::TextWrapped(T("%s %llds ago. Auto-refresh every 15s while this tab is open."),
-				error.empty() ? T("Updated") : T("Showing saved activity from"), static_cast<long long>(age));
-		ImGui::TextWrapped(T("Players: %lld  /  Active games: %d  /  Lobbies / matches: %lld"),
-				status.playerCount, status.activeGames, status.matchCount);
+		ImGui::TextDisabled(error.empty() ? T("Updated %llds ago") : T("Saved activity from %llds ago"), static_cast<long long>(age));
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", T("Refreshes every 15 seconds while DCnet is open."));
 	}
-	ImGui::Text(T("Games in catalog: %zu  /  In your library: %zu"), status.games.size(), ownedCovers.size());
-	const float searchWidth = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(T("Search")).x
-			- ImGui::GetStyle().ItemInnerSpacing.x;
-	filter.Draw(T("Search"), std::clamp(searchWidth, uiScaled(60), uiScaled(320)));
-	ImGui::Checkbox(T("Active games only"), &activeOnly);
-	if (ImGui::GetContentRegionAvail().x > uiScaled(400))
-		ImGui::SameLine();
-	ImGui::Checkbox(T("Owned games only"), &ownedOnly);
-	ImGui::TextWrapped("%s", T("Some supported games do not publish live status. A dash means no count is available."));
-	ImGui::TextWrapped("%s", T("* Shared counts include both editions on the same service. Totals count each service once."));
+	else if (error.empty())
+		ImGui::TextDisabled("%s", T("Connecting to DCnet..."));
+	ImGui::SameLine();
+	ImGui::TextDisabled("%s", T("Status guide"));
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("A dash means no count is available. * Shared counts include both editions and count once in totals. No report does not mean online play is unsupported."));
 
-	if (ImGui::BeginChild("dcnetActivity", ImVec2(0, 0), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_DragScrolling))
+	if (ImGui::BeginChild("dcnetActivity", ImVec2(0, 0),
+			ImGuiChildFlags_NavFlattened | ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_DragScrolling))
 	{
 		if (ImGui::BeginTabBar("dcnetViews"))
 		{
@@ -351,68 +473,67 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 			{
 				bool any = false;
 				bool openDetails = false;
-				if (ImGui::BeginTable("dcnetGames", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+				const bool compact = ImGui::GetContentRegionAvail().x < uiScaled(680);
+				if (ImGui::BeginTable("dcnetGames", compact ? 3 : 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
 				{
-					ImGui::TableSetupColumn("##cover", ImGuiTableColumnFlags_WidthFixed, uiScaled(36));
-					ImGui::TableSetupColumn(T("Game"), ImGuiTableColumnFlags_WidthStretch, 3.0f);
-					ImGui::TableSetupColumn(T("Players"));
-					ImGui::TableSetupColumn(T("Lobbies / matches"));
-					ImGui::TableSetupColumn(T("Server"));
+					ImGui::TableSetupColumn("##cover", ImGuiTableColumnFlags_WidthFixed, uiScaled(48));
+					ImGui::TableSetupColumn(T("Game"), ImGuiTableColumnFlags_WidthStretch);
+					if (!compact)
+					{
+						ImGui::TableSetupColumn(T("Players"), ImGuiTableColumnFlags_WidthFixed, uiScaled(64));
+						ImGui::TableSetupColumn(T("Matches"), ImGuiTableColumnFlags_WidthFixed, uiScaled(80));
+					}
+					ImGui::TableSetupColumn(T("Activity"), ImGuiTableColumnFlags_WidthFixed, uiScaled(110));
 					ImGui::TableHeadersRow();
 					for (const auto& game : status.games)
 					{
-						const auto owned = ownedCovers.find(game.id);
+						const auto owned = ownedGames.find(game.id);
 						if ((activeOnly && game.players <= 0 && game.matches <= 0)
-								|| (ownedOnly && owned == ownedCovers.end()) || !filter.PassFilter(game.name.c_str()))
+								|| (ownedOnly && owned == ownedGames.end()) || !filter.PassFilter(game.name.c_str()))
 							continue;
 						any = true;
 						ImguiID id(game.id.c_str());
-						const ImVec2 coverSize = ScaledVec2(32, 40);
+						const ImVec2 coverSize = ScaledVec2(48, 60);
 						ImGui::TableNextRow(ImGuiTableRowFlags_None, coverSize.y + ImGui::GetStyle().CellPadding.y * 2);
 						ImGui::TableNextColumn();
-						std::string coverPath = owned == ownedCovers.end() ? std::string() : owned->second;
-						if (coverPath.empty() && ImGui::IsRectVisible(coverSize))
-							coverPath = remoteCover(game.thumbnailUrl);
-						ImguiFileTexture cover(coverPath, true);
-						const ImTextureID texture = coverPath.empty() ? ImTextureID() : cover.getId();
-						if (texture != ImTextureID())
-						{
-							const float aspect = imguiDriver->getAspectRatio(texture);
-							ImVec2 size = coverSize;
-							if (aspect > 0)
-							{
-								if (aspect > size.x / size.y)
-									size.y = size.x / aspect;
-								else
-									size.x = size.y * aspect;
-							}
-							cover.draw(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(), size, 1.f);
-						}
-						else
-							ImGui::GetWindowDrawList()->AddText(ImGui::GetCursorScreenPos(),
-									ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_FA_GAMEPAD);
-						ImGui::Dummy(coverSize);
+						renderCover(game, owned == ownedGames.end() ? std::string() : owned->second.cover, coverSize);
 						ImGui::TableNextColumn();
-						const std::string title = displayGameName(game);
+						std::string subtitle = owned == ownedGames.end() ? (game.id == "vf4" ? T("NAOMI") : T("Dreamcast")) : T("In your library");
+						if (game.stage != dcnet::ReleaseStage::Unspecified)
+							subtitle += std::string(" / ") + (game.stage == dcnet::ReleaseStage::Alpha ? T("Alpha") : T("Beta"));
+						if (!game.sharedStatusId.empty())
+							subtitle += std::string(" / ") + T("Shared service");
 						const ImVec2 labelPos = ImGui::GetCursorPos();
+						const float textWidth = ImGui::GetContentRegionAvail().x;
 						const float rowHeight = std::max(coverSize.y,
-								ImGui::CalcTextSize(title.c_str(), nullptr, false, ImGui::GetContentRegionAvail().x).y);
+								ImGui::CalcTextSize(game.name.c_str(), nullptr, false, textWidth).y
+								+ ImGui::CalcTextSize(subtitle.c_str(), nullptr, false, textWidth).y + ImGui::GetStyle().ItemSpacing.y);
 						if (ImGui::Selectable("##game", selectedGame == game.id, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowHeight)))
 						{
 							selectedGame = game.id;
+							selectedCopy = 0;
 							openDetails = true;
 						}
 						ImGui::SetCursorPos(labelPos);
-						ImGui::TextWrapped("%s", title.c_str());
+						ImGui::TextWrapped("%s", game.name.c_str());
+						ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+						ImGui::TextWrapped("%s", subtitle.c_str());
+						ImGui::PopStyleColor();
+						if (!compact)
+						{
+							ImGui::TableNextColumn();
+							renderCount(game.players, !game.sharedStatusId.empty());
+							ImGui::TableNextColumn();
+							renderCount(game.matches, !game.sharedStatusId.empty());
+						}
 						ImGui::TableNextColumn();
-						renderCount(game.players, !game.sharedStatusId.empty());
-						ImGui::TableNextColumn();
-						renderCount(game.matches, !game.sharedStatusId.empty());
-						ImGui::TableNextColumn();
-						ImGui::TextWrapped("%s", game.hasLiveStatus ? (game.online ? T("Online") : T("Offline"))
-								: game.hasPlayerActivity ? T("Players online") : T("Status unavailable"));
-						if (!game.hasLiveStatus && ImGui::IsItemHovered())
-							ImGui::SetTooltip("%s", T("DCnet does not publish server status for this title. Online play may still be supported."));
+						renderServerStatus(game);
+						if (compact)
+						{
+							renderCount(game.players, !game.sharedStatusId.empty());
+							ImGui::SameLine();
+							ImGui::TextDisabled("%s", T("players"));
+						}
 					}
 					ImGui::EndTable();
 				}
@@ -437,15 +558,27 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 					const auto selected = std::find_if(status.games.begin(), status.games.end(), [](const dcnet::Game& game) {
 						return game.id == selectedGame;
 					});
+					const auto owned = selected == status.games.end() ? ownedGames.end() : ownedGames.find(selected->id);
+					if (owned != ownedGames.end() && selectedCopy >= owned->second.copies.size())
+						selectedCopy = 0;
 					if (ImGui::BeginChild("gameDetails", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
 							ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_DragScrolling))
 					{
 						if (selected != status.games.end())
 						{
-							ImGui::TextWrapped("%s", displayGameName(*selected).c_str());
-							ImGui::TextUnformatted(selected->hasLiveStatus ? (selected->online ? T("Server online") : T("Server offline"))
-									: selected->hasPlayerActivity ? T("Players are online; server status is unavailable.")
-									: T("DCnet does not publish live status for this title. Online play may still be supported."));
+							if (ImGui::BeginTable("gameHeading", 2, ImGuiTableFlags_SizingStretchProp))
+							{
+								ImGui::TableSetupColumn("##art", ImGuiTableColumnFlags_WidthFixed, uiScaled(84));
+								ImGui::TableSetupColumn("##title", ImGuiTableColumnFlags_WidthStretch);
+								ImGui::TableNextColumn();
+								renderCover(*selected, owned == ownedGames.end() ? std::string() : owned->second.cover, ScaledVec2(84, 108));
+								ImGui::TableNextColumn();
+								ImGui::PushFont(largeFont, uiScaled(22));
+								ImGui::TextWrapped("%s", displayGameName(*selected).c_str());
+								ImGui::PopFont();
+								renderServerStatus(*selected);
+								ImGui::EndTable();
+							}
 							if (!selected->sharedStatusId.empty())
 								ImGui::TextWrapped("%s", T("Shared service: counts and the player list include both editions. Totals count this service once."));
 							ImGui::Text("%s:", T("Players"));
@@ -454,9 +587,35 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 							ImGui::Text("%s:", T("Lobbies / matches"));
 							ImGui::SameLine();
 							renderCount(selected->matches, !selected->sharedStatusId.empty());
+							if (owned != ownedGames.end() && !owned->second.copies.empty())
+							{
+								ImGui::SeparatorText(T("Your copy"));
+								if (owned->second.copies.size() > 1)
+								{
+									ImGui::SetNextItemWidth(-1.f);
+									if (ImGui::BeginCombo("##gameCopy", owned->second.copies[selectedCopy].fileName.c_str()))
+									{
+										for (size_t i = 0; i < owned->second.copies.size(); ++i)
+										{
+											ImguiID copyId(owned->second.copies[i].path);
+											if (ImGui::Selectable(owned->second.copies[i].fileName.c_str(), selectedCopy == i))
+												selectedCopy = i;
+											if (ImGui::IsItemHovered())
+												ImGui::SetTooltip("%s", owned->second.copies[i].path.c_str());
+											if (selectedCopy == i)
+												ImGui::SetItemDefaultFocus();
+										}
+										ImGui::EndCombo();
+									}
+								}
+								else
+									ImGui::TextWrapped("%s", owned->second.copies.front().fileName.c_str());
+								ImGui::TextWrapped("%s", config::UseDCNet ? T("Launch your copy, then open the game's online mode.")
+										: T("Enable DCnet in Network settings to use online play."));
+							}
 							if (!error.empty())
 								ImGui::TextWrapped("%s", error.c_str());
-							ImGui::Separator();
+							ImGui::SeparatorText(T("Players"));
 							renderPlayers(selected->sharedStatusId.empty() ? selected->id : selected->sharedStatusId);
 						}
 						else
@@ -465,7 +624,21 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 						windowDragScroll();
 					}
 					ImGui::EndChild();
-					if (ImGui::Button(T("Close")))
+					if (owned != ownedGames.end() && !owned->second.copies.empty())
+					{
+						const float launchWidth = std::max(uiScaled(100), ImGui::GetContentRegionAvail().x - uiScaled(80) - ImGui::GetStyle().ItemSpacing.x);
+						const std::string label = std::string(ICON_FA_PLAY) + " " + T("Launch game");
+						if (ImGui::Button(label.c_str(), ImVec2(launchWidth, 0)))
+						{
+							// Copy the path before leaving this frame; refreshing the scanner
+							// or starting the loader can invalidate library-owned data.
+							launchPath = owned->second.copies[selectedCopy].path;
+							launchTitle = selected->name;
+							ImGui::CloseCurrentPopup();
+						}
+						ImGui::SameLine();
+					}
+					if (ImGui::Button(T("Close"), ImVec2(uiScaled(80), 0)))
 						ImGui::CloseCurrentPopup();
 					ImGui::EndPopup();
 				}
@@ -482,6 +655,15 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 		windowDragScroll();
 	}
 	ImGui::EndChild();
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar(5);
+	ImGui::EndChild();
+	// Launch only after all ImGui child windows and style scopes have closed.
+	if (!launchPath.empty())
+	{
+		settings.content.title = std::move(launchTitle);
+		gui_start_game(launchPath);
+	}
 }
 
 void gui_term_dcnet()
@@ -499,11 +681,12 @@ void gui_term_dcnet()
 	}
 	covers.clear();
 	pendingCoverUrl.clear();
-	ownedCovers.clear();
+	ownedGames.clear();
 	nextLibraryRefresh = {};
 	status = {};
 	hasStatus = false;
 	error.clear();
 	selectedGame.clear();
+	selectedCopy = 0;
 	nextRefresh = {};
 }
