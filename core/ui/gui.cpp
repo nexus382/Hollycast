@@ -86,6 +86,7 @@ using namespace i18n;
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 
 bool game_started;
 
@@ -136,6 +137,75 @@ static BackgroundGameLoader gameLoader;
 static LibrarySavestateCache librarySavestateCache;
 static std::future<bool> networkStatus;
 static Boxart boxart;
+
+// UI-thread owned batch; count image/metadata outcomes, never HTTP requests. Provider
+// quotas and fallback can require multiple requests for one unit. Cached/local units
+// are immediately ready; checked-but-absent types are unavailable, not downloaded.
+struct LibraryMediaBatch
+{
+	std::vector<GameMedia> games;
+	std::vector<Boxart::MediaProgress> outcomes;
+	Boxart::MediaProgress progress;
+	u32 mask = 0;
+	std::string label;
+	size_t cursor = 0;
+	bool checked = false, notified = false;
+	double nextCheck = 0, finishedAt = 0;
+};
+static LibraryMediaBatch libraryMediaBatch;
+
+static void updateLibraryMediaProgress()
+{
+	auto& batch = libraryMediaBatch;
+	const bool enabled = config::FetchBoxart
+		&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+	boxart.setMediaBatchPending(enabled && !batch.checked && !batch.games.empty());
+	if (!enabled || batch.games.empty() || (batch.checked && !batch.progress.pending)
+		|| ImGui::GetTime() < batch.nextCheck || !boxart.customMediaReady()) return;
+	// Inventory and enqueue together in bounded slices. Completed categories are
+	// never polled again in this batch; only pending work incurs further checks.
+	// A single slow filesystem call cannot be preempted, but never scan the entire
+	// library in one frame. The cover barrier stays up until this first pass ends.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+	const size_t end = std::min(batch.cursor + 16, batch.games.size());
+	while (batch.cursor < end)
+	{
+		auto& prior = batch.outcomes[batch.cursor];
+		const auto& game = batch.games[batch.cursor];
+		if (prior.pendingMedia)
+		{
+			const auto current = boxart.mediaProgress(game, prior.pendingMedia);
+			batch.progress.ready += current.ready;
+			batch.progress.pending = batch.progress.pending - prior.pending + current.pending;
+			batch.progress.unavailable += current.unavailable;
+			prior.ready += current.ready;
+			prior.unavailable += current.unavailable;
+			prior.pending = current.pending;
+			prior.pendingMedia = current.pendingMedia;
+			if (!batch.checked && current.pendingMedia)
+			{
+				boxart.queueBoxart(game, current.pendingMedia);
+				if (!batch.notified)
+				{
+					os_notify(T("Downloading library media"), 6000, batch.label.c_str());
+					batch.notified = true;
+				}
+			}
+		}
+		++batch.cursor;
+		if (std::chrono::steady_clock::now() >= deadline) break;
+	}
+	if (batch.cursor == batch.games.size())
+	{
+		batch.cursor = 0;
+		batch.checked = true;
+		boxart.setMediaBatchPending(false);
+		batch.nextCheck = ImGui::GetTime() + 0.5;
+		if (batch.progress.pending) batch.finishedAt = 0;
+		if (!batch.progress.pending && batch.finishedAt == 0) batch.finishedAt = ImGui::GetTime();
+	}
+}
+
 static Chat chat;
 static std::recursive_mutex guiMutex;
 using LockGuard = std::lock_guard<std::recursive_mutex>;
@@ -1827,7 +1897,7 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverCache.screenshotPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Screenshot);
 		hoverCache.fanArtPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::FanArt);
 		hoverCache.titleScreenPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::TitleScreen);
-		hoverCache.physicalPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Physical);
+		hoverCache.physicalPath = boxart.getDiscArtPath(game);
 		hoverCache.manualPath = !game.manualPath.empty()
 				? game.manualPath : boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Manual);
 		hoverCache.primaryImagePath = !hoverCache.mixImagePath.empty() ? hoverCache.mixImagePath : hoverCache.art.boxartPath;
@@ -1921,7 +1991,7 @@ static void gui_display_game_info()
 	const std::string screenshotPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Screenshot);
 	const std::string fanArtPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::FanArt);
 	const std::string titleScreenPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::TitleScreen);
-	const std::string physicalPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Physical);
+	const std::string physicalPath = boxart.getDiscArtPath(game);
 	const std::string manualPath = !game.manualPath.empty()
 			? game.manualPath : boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Manual);
 	const std::string primaryImagePath = !mixImagePath.empty() ? mixImagePath : art.boxartPath;
@@ -2116,8 +2186,11 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	if (game.device)
 		return art;
 
-	// gui_display_ui pumps the scheduler once per frame, rather than once per tile.
-	art = boxart.getBoxartAndLoad(game, false);
+	// Automatic Dreamcast downloads are inventoried once by the library batch.
+	// Rendering tiles must not repeat queue/file checks every frame. Keep the
+	// standalone path for arcade scraping and local-only disc-header discovery.
+	art = game.arcade || !config::FetchBoxart
+		? boxart.getBoxartAndLoad(game, false) : boxart.getBoxart(game);
 	const std::string localCoverOverride = boxart.getLibraryCoverMediaPath(game);
 	if (!localCoverOverride.empty())
 		art.boxartPath = localCoverOverride;
@@ -2570,20 +2643,13 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 				item.metadata["artwork.disc"] = boxart.getDiscArtPath(game);
 				continue;
 			}
-			config::LibraryCoverMediaMode media = config::LibraryCoverMediaMode::Cover;
-			if (source == "miximage") media = config::LibraryCoverMediaMode::MixImage;
-			else if (source == "case") media = config::LibraryCoverMediaMode::Case;
-			else if (source == "screenshot") media = config::LibraryCoverMediaMode::Screenshot;
-			else if (source == "fanart") media = config::LibraryCoverMediaMode::FanArt;
-			else if (source == "title") media = config::LibraryCoverMediaMode::Title;
-			else if (source == "physical") media = config::LibraryCoverMediaMode::Physical;
-			else if (source == "titlescreen") media = config::LibraryCoverMediaMode::TitleScreen;
-			else if (source == "banner") media = config::LibraryCoverMediaMode::Banner;
-			else if (source == "backcover") media = config::LibraryCoverMediaMode::BackCover;
-			else if (source == "spine") media = config::LibraryCoverMediaMode::Spine;
-			else if (source == "boxtexture") media = config::LibraryCoverMediaMode::BoxTexture;
-			// Keep missing sources empty: decorative discs/logos can opt out of cover fallback.
-			item.metadata["artwork." + source] = boxart.getCustomMediaPath(game, media);
+			// Resolve named media through the same registry as requirements and providers.
+			for (const auto& media : artwork::mediaTypes)
+				if (source == media.name)
+				{
+					item.metadata["artwork." + source] = boxart.getCustomMediaPath(game, media.mode);
+					break;
+				}
 		}
 		items.push_back(std::move(item));
 		artwork.push_back(std::move(art));
@@ -2767,6 +2833,8 @@ static void gui_display_content()
 	touchedLibraryItemThisFrame = false;
 #endif
 	fullScreenWindow(false);
+	if (libraryMediaBatch.progress.total && (!libraryMediaBatch.finishedAt || ImGui::GetTime() - libraryMediaBatch.finishedAt < 5))
+		gui_display_library_download_progress();
 	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
 
@@ -4197,23 +4265,32 @@ void gui_display_ui()
 	const LockGuard lock(guiMutex);
 
 	if (gui_state == GuiState::Closed)
-		return;
-	// Seed the entire completed scan once, including games outside the visible
-	// list clipper. Switching to settings must not leave the downloader starved.
-	static u64 queuedLibraryGeneration = 0;
-	static bool automaticCoversEnabled = false;
-	static int queuedArtworkProvider = -1;
-	const bool queueCovers = config::FetchBoxart
-		&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
-	const u64 generation = scanner.get_generation();
-	if (queueCovers && generation && (!automaticCoversEnabled || queuedLibraryGeneration != generation || queuedArtworkProvider != config::ArtworkProvider.get()))
 	{
-		gui_download_library_media(screenscraper::coverMedia);
-		queuedLibraryGeneration = generation;
-		queuedArtworkProvider = config::ArtworkProvider.get();
+		boxart.setMediaBatchPending(false);
+		return;
 	}
-	automaticCoversEnabled = queueCovers;
-	// Apply settings/session changes even when the visible library is filtered out.
+	// Reconcile the completed library scan with the selected manifest. Adding a theme
+	// or a named media type must not add another automatic scraping path here.
+	static std::string queuedMediaKey;
+	const auto* selectedTheme = themes::current();
+	const auto* selectedLayout = themes::currentLayout();
+	const auto overrideSource = themes::iconArtworkSource(config::ThemeIconMedia.get());
+	const u32 requirements = selectedTheme && selectedLayout
+		? themes::requiredMedia(*selectedTheme, *selectedLayout, overrideSource) : artwork::basicMedia;
+	const bool enabled = config::FetchBoxart && config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+	const u64 generation = scanner.get_generation();
+	const std::string key = std::to_string(generation) + "/" + std::to_string(requirements) + "/"
+		+ std::to_string(config::ArtworkProvider.get()) + "/" + config::BoxartPath.get() + "/"
+		+ (selectedTheme ? selectedTheme->id : "basic") + "/" + (selectedLayout ? selectedLayout->id : "")
+		+ (enabled ? "/on" : "/off");
+	if (enabled && generation && key != queuedMediaKey)
+	{
+		gui_download_library_media(requirements, false, selectedTheme ? selectedTheme->name : T("Basic library media"));
+		queuedMediaKey = key;
+	}
+	else if (!enabled) queuedMediaKey.clear();
+	updateLibraryMediaProgress();
+	// Account and quota changes resume already queued work without re-enqueuing it.
 	boxart.startFetch();
 
 	// Initialize ImGui frame BEFORE any early returns
@@ -4690,6 +4767,9 @@ void gui_refresh_custom_boxart(bool force)
 	boxart.invalidateOfflineArtwork();
 	boxart.refreshLibraryPlaytimeDatabase();
 	boxart.refreshCustomBoxartIndex(force);
+	// Invalidation cancels pending source revisions; rebuild their requests through
+	// the same bounded inventory path rather than depending on visible tiles.
+	gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia);
 }
 
 void gui_refresh_boxart_cache()
@@ -4697,40 +4777,70 @@ void gui_refresh_boxart_cache()
 	clearVmuIconLookups();
 	boxart.refreshCache();
 	scanner.fetch_game_list_sync();
-	std::vector<GameMedia> games;
-	{
-		std::lock_guard<std::mutex> guard(scanner.get_mutex());
-		games = scanner.get_game_list();
-	}
-	for (const GameMedia& game : games) {
-		if (!game.device)
-			boxart.queueBoxart(game);
-	}
-	boxart.startFetch();
+	gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia);
 }
 
 void gui_display_library_download_progress()
 {
-	const auto progress = boxart.downloadProgress();
-	ImGui::Text(T("Games remaining: %llu | Covers remaining: %llu"),
-		static_cast<unsigned long long>(progress.games), static_cast<unsigned long long>(progress.covers));
-	if (progress.covers)
-		ImGui::TextWrapped("%s", T("Downloading covers first. Other selected images follow automatically."));
+	const auto& batch = libraryMediaBatch;
+	if (!batch.progress.total) return;
+	ImGui::TextWrapped("%s", batch.label.c_str());
+	const auto& p = batch.progress;
+	const float fraction = batch.checked ? float(p.ready + p.unavailable) / p.total
+		: float(batch.cursor) / std::max(size_t(1), batch.games.size());
+	ImGui::ProgressBar(std::clamp(fraction, 0.f, 1.f), ImVec2(-1, uiScaled(14.f)),
+		batch.checked ? T("Media checked") : T("Checking existing media..."));
+	ImGui::Text(T("Ready: %llu | Pending: %llu | Unavailable: %llu"),
+		static_cast<unsigned long long>(p.ready), static_cast<unsigned long long>(p.pending), static_cast<unsigned long long>(p.unavailable));
+	if (p.unavailable) ImGui::TextWrapped("%s", T("Some media is not available from this provider or no matching game was found. Existing artwork remains available."));
+	if (p.pending)
+	{
+		if (!config::FetchBoxart || config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
+			ImGui::TextWrapped("%s", T("Downloads paused. Enable Fetch Box Art and an online artwork source to continue."));
+		else if (boxart.customMediaFailed())
+			ImGui::TextWrapped("%s", T("Downloads paused: the local artwork folder could not be read. Check its path and refresh the artwork index."));
+		else if (!batch.checked && !boxart.customMediaReady())
+			ImGui::TextWrapped("%s", T("Checking the local artwork folder before downloading missing media..."));
+		else if (config::ArtworkProvider.get() == 1)
+		{
+			const auto account = screenscraper::status();
+			if (!account.message.empty()) ImGui::TextWrapped("%s", account.message.c_str());
+		}
+	}
 }
 
-void gui_download_library_media(u32 requestedMedia, bool retryUnavailable)
+void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const std::string& label)
 {
-	if (retryUnavailable)
-		boxart.retryArtworkMedia();
-	std::vector<GameMedia> libraryGames;
+	if (retryUnavailable) boxart.retryArtworkMedia();
+	LibraryMediaBatch batch;
+	batch.mask = requestedMedia | artwork::metadataMedia;
+	// Switching themes must not discard a manually requested batch that is still
+	// being inventoried. Merging masks is safe: each source has one active job.
+	if (libraryMediaBatch.progress.pending) batch.mask |= libraryMediaBatch.mask;
+	batch.label = label;
 	{
 		std::lock_guard<std::mutex> guard(scanner.get_mutex());
-		libraryGames = scanner.get_game_list();
+		std::unordered_set<std::string> paths;
+		for (const auto& game : scanner.get_game_list())
+			if (!game.device && !game.path.empty() && !game.arcade && paths.insert(game.path).second)
+				batch.games.push_back(game);
 	}
-	for (const GameMedia& game : libraryGames)
-		if (!game.device && !game.path.empty() && !game.arcade)
-			boxart.queueBoxart(game, requestedMedia);
+	size_t units = 1; // metadata
+	for (size_t i = 0; i < artwork::mediaTypes.size(); ++i) if (batch.mask & (1u << i)) ++units;
+	batch.progress.total = batch.progress.pending = units * batch.games.size();
+	batch.outcomes.resize(batch.games.size());
+	for (auto& outcome : batch.outcomes)
+	{
+		outcome.total = outcome.pending = units;
+		outcome.pendingMedia = batch.mask;
+	}
+	libraryMediaBatch = std::move(batch);
 	boxart.startFetch();
+}
+
+void gui_download_all_theme_media()
+{
+	gui_download_library_media(themes::allThemeMedia(), false, T("All installed themes"));
 }
 
 void gui_runOnUiThread(std::function<void()> function) {

@@ -196,7 +196,7 @@ Explicit `details` elements retain their own authored scrollable regions; layout
 
 Themes do not run scripts or load remote resources. Keep a package self-contained and use only package-relative paths for images and fonts. Every presentation extension above is optional; existing manifests keep their previous behavior. [Pocket Dimension](../themes/pocket-dimension/theme.json) demonstrates them together without any package-specific renderer code.
 
-Artwork availability comes from the shared library. LaunchBox, ScreenScraper and TheGamesDB use the same named theme bindings, while keeping their provider caches separate. Matching local ES-DE artwork keeps priority, followed by the selected provider and TheGamesDB fallback; existing images from another provider remain usable. Automatic downloads request covers only. **Settings > Library > Artwork Downloads > Download All Required Media** fetches the selected provider's supported categories. Themes never silently trigger a bulk scrape. Disc scans use `physical`; front box artwork uses `cover`, 3D boxes use `case`, and back covers and spines use `backcover` and `spine`. These bindings are reusable and opt-in for every theme. LaunchBox supplies ten categories including discs and box artwork; ScreenScraper also supplies `miximage`. TheGamesDB supplies seven categories and automatically fills missing supported types or unavailable lookups, without replacing the primary provider's images. See [LaunchBox artwork](launchbox-artwork.md), [TheGamesDB media](thegamesdb.md) and [ScreenScraper setup](screenscraper.md).
+Artwork availability comes from the shared library. LaunchBox, ScreenScraper and TheGamesDB use the same named theme bindings, while keeping their provider caches separate. Matching local ES-DE artwork keeps priority, followed by the selected provider and TheGamesDB fallback; existing images from another provider remain usable. Basic views request covers, hover miximages and metadata. Selecting a theme queues its additional manifest requirements and shows progress. **Settings > Library > Artwork Downloads > Download All Media for All Themes** prepares the union used by installed layouts. Disc scans use `physical`; front box artwork uses `cover`, 3D boxes use `case`, and back covers and spines use `backcover` and `spine`. These bindings are reusable and opt-in for every theme. LaunchBox supplies ten categories including discs and box artwork; ScreenScraper also supplies `miximage`. TheGamesDB supplies seven categories and automatically fills missing supported types or unavailable lookups, without replacing the primary provider's images. See [LaunchBox artwork](launchbox-artwork.md), [TheGamesDB media](thegamesdb.md) and [ScreenScraper setup](screenscraper.md).
 
 ## Troubleshooting
 
@@ -264,3 +264,43 @@ shares the usual asset validation; themes still execute no scripts.
 ## Disc orbit mode
 
 `mode: "orbit"` arranges up to seven upright, circular game discs around a perspective ring. Left/Right and controller navigation rotate through the full filtered library; the mouse wheel also steps, click selects, and double-click or confirm plays. The selected disc rises from the ring. `artworkSource: "disc"` prefers physical media and embedded labels with existing artwork as fallback. Library Icon Size scales the discs within the browser viewport. Other layout elements provide the selected miximage, title and metadata. This mode uses the shared draw-list renderer on standalone platforms.
+
+## Automatic media requirements
+
+The two standard library views prepare only covers, miximages for hover details,
+and game metadata. Disc labels are read locally from the game; no extra image
+categories are scraped until a theme or a manual download action needs them.
+Selecting a theme queues its missing media for the whole library and shows progress
+in the library and theme picker. Downloads continue while settings are open.
+
+Requirements come from `artworkSource`, artwork element `source`, named `fallback`,
+`requiresArtwork`, preview media and artwork-selection buttons. Responsive fallback
+layouts are included. For assets consumed only by an animation, a layout may add
+`"requiredMedia": ["boxtexture", "backcover"]`, as CD Rack does. Source names use
+the same provider-independent media registry as all artwork bindings. New themes
+must describe media here; do not start scraping from a renderer or branch on a
+package ID. Adding a media category to the registry automatically exposes its bit
+to requirement collection, provider queues and progress reporting.
+
+**Download All Media for All Themes** prepares the union of media referenced by all
+valid installed layouts. **Download Selected Media** remains available for explicit
+category choices. Existing ES-DE images and provider caches are reused; switching
+themes does not redownload them. Metadata-only lookup is independent of image
+requests, so local covers do not prevent game information being fetched.
+
+Progress counts ready, pending and unavailable image/metadata units, rather than
+HTTP requests. Unavailable includes unsupported provider categories and unmatched
+games; it is never reported as a successful download. Provider quotas, paused
+sessions and missing credentials can leave work pending. Choose ScreenScraper for
+miximages; other providers do not supply them. The existing retry action can retry
+unmatched or unavailable media without deleting successful images.
+
+The library inventories and enqueues media in bounded UI slices after the local
+index is ready. The queue holds extra-media jobs until all covers have been queued;
+provider workers then refill independently. Only pending categories are polled.
+An unreadable configured local folder pauses inventory instead of treating unknown
+files as absent; fix the path and refresh the artwork index to resume.
+Repeated requests merge into the existing source job, and concurrent ScreenScraper
+disc entries share each game/type/region cache file rather than downloading it twice.
+Keep these rules in the shared queue when adding themes; never add per-frame scrape
+requests or a second artwork cache in a theme renderer.

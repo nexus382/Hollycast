@@ -1,6 +1,8 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "theme.h"
+#include "boxart/artwork_media.h"
 #include "cfg/option.h"
 #include "stdclass.h"
 #include "oslib/storage.h"
@@ -175,6 +177,44 @@ const Layout* currentLayout()
 		if (layout.id == config::ThemeLayout.get())
 			return &layout;
 	return &theme->layouts.front();
+}
+
+
+uint32_t requiredMedia(const Layout& layout, const std::optional<std::string>& iconSource)
+{
+	uint32_t mask = artwork::basicMedia;
+	const auto add = [&](const std::string& source) { mask |= artwork::mediaBit(source); };
+	add(iconSource ? *iconSource : layout.artworkSource);
+	for (const auto& source : layout.requiredMedia) add(source);
+	for (const auto& element : layout.elements)
+	{
+		if (element.type == "artwork")
+		{
+			add(element.source == "preview" ? layout.previewSource : element.source);
+			add(element.fallback);
+			if (!element.requiresArtwork.empty()) add(element.requiresArtwork);
+		}
+		else if (element.type == "button" && element.action == "artwork") add(element.source);
+	}
+	return mask;
+}
+
+uint32_t requiredMedia(const Theme& theme, const Layout& layout, const std::optional<std::string>& iconSource)
+{
+	uint32_t mask = requiredMedia(layout, iconSource);
+	// Responsive layouts may be selected by resizing, without changing the saved layout.
+	for (const auto& narrow : theme.layouts)
+		if (narrow.id == layout.narrowLayout) mask |= requiredMedia(narrow, iconSource);
+	return mask;
+}
+
+uint32_t allThemeMedia()
+{
+	catalog();
+	uint32_t mask = artwork::basicMedia;
+	for (const auto& entry : loaded)
+		for (const auto& layout : entry.second.layouts) mask |= requiredMedia(layout);
+	return mask;
 }
 
 const std::string& error()

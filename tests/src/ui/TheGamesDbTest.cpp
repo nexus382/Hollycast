@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gtest/gtest.h"
@@ -170,7 +171,24 @@ TEST_F(TheGamesDbTest, PartialResponsesPreserveCachedMetadataAndOtherProviderIma
 	auto source = scraper(); ASSERT_TRUE(source.initialize(root.string())); source.scrape(item);
 	EXPECT_EQ(item.developer, "Prior developer"); EXPECT_EQ(item.players, "2");
 	const GameBoxart loaded(item.to_json(root.string() + '/'), root.string() + '/');
-	EXPECT_EQ(loaded.screenScraperId, 123u); EXPECT_EQ(loaded.screenScraperMedia.at("physical"), (root / "disc.png").string());
+	EXPECT_EQ(loaded.screenScraperId, 123u); EXPECT_EQ(std::filesystem::path(loaded.screenScraperMedia.at("physical")).lexically_normal(), (root / "disc.png").lexically_normal());
 	EXPECT_EQ(loaded.tgdbMedia, item.tgdbMedia);
 }
+}
+
+TEST_F(TheGamesDbTest, MetadataOnlySkipsImageCatalogueAndDownloads)
+{
+	int imageRequests = 0;
+	TheGamesDb scraper([&](const std::string& url, std::vector<u8>& bytes, std::string& type) {
+		if (url.find("Games/Images") != std::string::npos) ++imageRequests;
+		return respond(url, bytes, type);
+	});
+	ASSERT_TRUE(scraper.initialize(root.u8string() + '/'));
+	item.requestedMedia = artwork::metadataMedia;
+	scraper.scrape(item); scraper.scrape(item);
+	EXPECT_TRUE(item.tgdbSearched);
+	EXPECT_EQ(item.players, "1");
+	EXPECT_EQ(imageRequests, 0);
+	EXPECT_TRUE(downloads.empty());
+	EXPECT_EQ(item.tgdbCheckedMedia, 0u);
 }

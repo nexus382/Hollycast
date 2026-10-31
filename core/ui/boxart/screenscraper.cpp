@@ -445,8 +445,10 @@ std::shared_ptr<Session> currentSession()
 
 bool needsMedia(const GameBoxart& item, u32 selection)
 {
-	if (item.arcade || !selection)
-		return false;
+	if (item.arcade) return false;
+	if ((selection & artwork::metadataMedia) && !item.screenScraperSearched) return true;
+	selection &= allMedia;
+	if (!selection) return false;
 	if (!item.screenScraperSearched || (item.screenScraperCheckedMedia & selection) != selection)
 		return true;
 	for (size_t i = 0; i < mediaTypes.size(); ++i)
@@ -545,7 +547,7 @@ json ScreenScraper::findGame(const GameBoxart& item)
 void ScreenScraper::scrape(GameBoxart& item)
 {
 	const u32 selection = item.requestedMedia & screenscraper::allMedia;
-	if (!screenscraper::needsMedia(item, selection))
+	if (!screenscraper::needsMedia(item, item.requestedMedia))
 		return;
 	const auto game = item.screenScraperDetails ? *item.screenScraperDetails : findGame(item);
 	if (!game.is_object())
@@ -645,11 +647,20 @@ void ScreenScraper::scrape(GameBoxart& item)
 		{
 			const std::string type = text(*chosen, "type"), region = text(*chosen, "region");
 			const std::string path = directory + std::to_string(item.screenScraperId) + "-" + type + "-" + region + ".png";
+			const size_t slot = std::hash<std::string>{}(path) % mediaLocks.size();
+			std::lock_guard<std::mutex> guard(mediaLocks[slot]);
+			if (unavailableMedia[slot].count(path))
+			{
+				item.screenScraperCheckedMedia |= bit;
+				continue;
+			}
+			// Recheck after acquiring ownership: another disc may just have saved it.
 			if (!file_exists(path))
 			{
 				const auto bytes = session->requestImage(item.screenScraperId, type, region);
 				if (bytes.empty())
 				{
+					unavailableMedia[slot].insert(path);
 					item.screenScraperCheckedMedia |= bit;
 					continue;
 				}

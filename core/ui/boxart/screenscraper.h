@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 
 namespace screenscraper {
 
@@ -109,4 +110,8 @@ private:
 	json findGame(const GameBoxart& item);
 	std::shared_ptr<screenscraper::Session> session;
 	std::string directory;
+	// Bounded striped locks serialize identical cache paths across worker threads,
+	// without holding the session quota lock or growing a lock map with the library.
+	std::array<std::mutex, 64> mediaLocks;
+	std::array<std::unordered_set<std::string>, 64> unavailableMedia;
 };

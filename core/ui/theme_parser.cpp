@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "theme.h"
+#include "boxart/artwork_media.h"
 #include "theme_font_validation.h"
 #include "audio/ui_sound.h"
 
@@ -169,7 +170,11 @@ const std::set<std::string>& metadataFields()
 
 const std::set<std::string>& artworkSources()
 {
-	static const std::set<std::string> values = {"", "cover", "miximage", "case", "screenshot", "fanart", "title", "physical", "titlescreen", "banner", "backcover", "spine", "disc", "boxtexture"};
+	static const std::set<std::string> values = [] {
+		std::set<std::string> names{"", "disc"};
+		for (const auto& media : artwork::mediaTypes) names.insert(media.name);
+		return names;
+	}();
 	return values;
 }
 
@@ -301,7 +306,7 @@ Theme parse(const std::string& json, const std::string& directory)
 	{
 		const std::string lp = "layouts[" + std::to_string(i) + "]";
 		const Json& item = layouts[i];
-		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch", "pagedGrid"});
+		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch", "pagedGrid", "requiredMedia"});
 		Layout layout;
 		layout.id = stringValue(required(item, "id", lp), lp + ".id", false);
 		if (!validId(layout.id)) invalid(lp + ".id", "must contain 1 to 64 lowercase letters, digits, hyphens, or underscores");
@@ -310,6 +315,17 @@ Theme parse(const std::string& json, const std::string& directory)
 		layout.mode = stringValue(required(item, "mode", lp), lp + ".mode", false);
 		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail" && layout.mode != "orbit") invalid(lp + ".mode", "must be grid, list, rack, rail, or orbit");
 		layout.browser = parseRect(required(item, "browser", lp), lp + ".browser", 0.1);
+		if (auto it = item.find("requiredMedia"); it != item.end())
+		{
+			if (!it->is_array() || it->size() > artworkSources().size()) invalid(lp + ".requiredMedia", "must be an array of media source names");
+			std::set<std::string> seen;
+			for (const auto& entry : *it)
+			{
+				const std::string name = stringValue(entry, lp + ".requiredMedia", false);
+				if (!artworkSources().count(name) || !seen.insert(name).second) invalid(lp + ".requiredMedia", "must contain unique supported media sources");
+				layout.requiredMedia.push_back(name);
+			}
+		}
 		if (auto it = item.find("columns"); it != item.end()) layout.columns = integerValue(*it, lp + ".columns", 1, layout.mode == "rack" ? 64 : 12);
 		if (auto it = item.find("itemAspect"); it != item.end()) layout.itemAspect = static_cast<float>(numberValue(*it, lp + ".itemAspect", layout.mode == "rack" ? 0.03 : 0.3, 3));
 		if (auto it = item.find("spacing"); it != item.end()) layout.spacing = static_cast<float>(numberValue(*it, lp + ".spacing", 0, 48));

@@ -111,6 +111,7 @@ struct Layout
 	float rowHeight = 0; // Fraction of canvas height; zero uses automatic list sizing.
 	std::optional<uint32_t> textColor, selectedTextColor, selectorColor;
 	std::string artworkSource; // Empty inherits the library media preference.
+	std::vector<std::string> requiredMedia; // Extra dependencies used by animations, not visible elements.
 	float rounding = 0;
 	float inactiveOpacity = 1;
 	std::optional<uint32_t> selectorBorderColor, separatorColor;
@@ -159,6 +160,12 @@ const Layout& responsiveLayout(const Theme& theme, const Layout& layout, float a
 // Asset paths must stay inside the theme, including through symlinks.
 std::string assetPath(const std::string& directory, const std::string& relative);
 
+// Requirements are derived from manifest bindings. Future themes should bind their media
+// normally and declare hidden animation dependencies in requiredMedia; never queue downloads
+// in renderers or add package-ID-specific scraping logic.
+uint32_t requiredMedia(const Layout& layout, const std::optional<std::string>& iconSource = std::nullopt);
+uint32_t requiredMedia(const Theme& theme, const Layout& layout, const std::optional<std::string>& iconSource = std::nullopt);
+uint32_t allThemeMedia();
 // UI-thread owned catalog. Invalid/unavailable selections return nullptr.
 std::string directory();
 const std::vector<CatalogEntry>& catalog();

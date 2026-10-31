@@ -64,6 +64,21 @@ void selectProviderCover(GameBoxart& item)
  }
 }
 
+// Resolve completed/missing categories once when queue state changes. Scheduling
+// and cover-priority scans must consult these bits, not stat every completed file.
+u32 pendingArtworkMedia(const GameBoxart& item, int provider, u32 selection)
+{
+	u32 pending = 0;
+	for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+	{
+		const u32 bit = 1u << i;
+		if ((selection & bit) && ArtworkAdapter::needsMedia(item, provider, bit)) pending |= bit;
+	}
+	if ((selection & artwork::metadataMedia) && ArtworkAdapter::needsMedia(item, provider, artwork::metadataMedia))
+		pending |= artwork::metadataMedia;
+	return pending;
+}
+
 static constexpr size_t kOnlineBoxartBatchSize = 10;
 static constexpr size_t kPhysicalBoxartBatchSize = 40;
 static constexpr size_t kPhysicalBoxartWorkerCount = 4;
@@ -488,13 +503,17 @@ std::string toLowerString(std::string_view value)
 
 const MediaFolderAlias* findMediaFolderAlias(const std::string& folder)
 {
-	static const std::array<MediaFolderAlias, 11> mediaAliases{
+	static const std::array<MediaFolderAlias, 13> mediaAliases{
 		MediaFolderAlias {config::LibraryCoverMediaMode::MixImage,
 				{"miximages", "miximage", "miximg", "miximgs", "mix", "mixrbv1", "image", "images"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Cover,
 				{"covers", "cover", "box2dfront", "boxfront", "box-2d", "box2d"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Case,
-				{"3dboxes", "3dbox", "box3d", "backcovers", "backcover", "case", "cases", "insert", "custom"}},
+				{"3dboxes", "3dbox", "box3d", "box-3d", "case", "cases", "insert", "custom"}},
+		MediaFolderAlias {config::LibraryCoverMediaMode::BackCover,
+				{"backcovers", "backcover", "box-2d-back", "box2dback"}},
+		MediaFolderAlias {config::LibraryCoverMediaMode::Banner,
+				{"banners", "banner", "screenmarquee", "screenmarqueesmall"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::FanArt,
 				{"fanart", "fanarts", "fan-art", "background", "backgrounds"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Screenshot,
@@ -502,7 +521,7 @@ const MediaFolderAlias* findMediaFolderAlias(const std::string& folder)
 		MediaFolderAlias {config::LibraryCoverMediaMode::TitleScreen,
 				{"titlescreens", "titlescreen", "title-screens", "title-screen", "sstitle"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Title,
-				{"marquees", "marquee", "wheelhd", "wheel-hd", "wheel", "wheels", "screenmarquee", "screenmarqueesmall", "title"}},
+				{"marquees", "marquee", "wheelhd", "wheel-hd", "wheel", "wheels", "title"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Physical,
 				{"physicalmedia", "physical-media", "support2d", "support-2d", "supporttexture", "support-texture", "support", "physical", "disc"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Manual,
@@ -576,12 +595,15 @@ void Boxart::completeArtworkWork(GameBoxart& item, bool queueOnline, int provide
 		artworkWake.notify_all();
 		return;
 	}
- const auto& current = games.at(item.sourceKey());
- if (!item.arcade) item.requestedMedia |= current.requestedMedia;
- item.requestedProvider = current.requestedProvider < 0 ? provider : current.requestedProvider;
- // A newly selected provider inherits requests made while the old job ran.
- if (item.requestedProvider != provider && current.busy) queueOnline = true;
- item.busy = queueOnline && ArtworkAdapter::needsMedia(item, item.requestedProvider, item.requestedMedia);
+	const auto& current = games.at(item.sourceKey());
+	if (!item.arcade) item.requestedMedia |= current.requestedMedia;
+	item.requestedProvider = current.requestedProvider < 0 ? provider : current.requestedProvider;
+	// A newly selected provider inherits requests made while the old job ran.
+	if (item.requestedProvider != provider && current.busy) queueOnline = true;
+	if (!item.arcade)
+		item.requestedMedia = pendingArtworkMedia(item, item.requestedProvider, item.requestedMedia);
+	item.busy = queueOnline && (item.arcade
+		? ArtworkAdapter::needsMedia(item, item.requestedProvider, item.requestedMedia) : item.requestedMedia != 0);
 
 	if (item.busy)
 		toFetch.push_back(item);
@@ -664,6 +686,63 @@ void Boxart::queueBoxart(const GameMedia& media, u32 requestedMedia)
 	getBoxartAndQueue(media, false, requestedMedia);
 }
 
+
+bool Boxart::customMediaReady()
+{
+	refreshCustomBoxartIndex(false);
+	const std::string root = getCustomBoxartDirectory();
+	std::lock_guard<std::mutex> guard(mutex);
+	return root.empty() || (customIndexState == CustomIndexState::Ready && customIndexLoaded && customBoxartRoot == root);
+}
+
+bool Boxart::customMediaFailed()
+{
+	std::lock_guard<std::mutex> guard(mutex);
+	return customIndexState == CustomIndexState::Failed;
+}
+
+Boxart::MediaProgress Boxart::mediaProgress(const GameMedia& media, u32 requestedMedia)
+{
+	MediaProgress progress;
+	loadDatabase();
+	GameBoxart record;
+	{
+		std::lock_guard<std::mutex> guard(mutex);
+		record = gameForMedia(media);
+	}
+	const int provider = config::ArtworkProvider.get();
+	const u32 supported = ArtworkAdapter::supportedMedia(provider);
+	for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+	{
+		const u32 bit = 1u << i;
+		if (!(requestedMedia & bit)) continue;
+		++progress.total;
+		if (!getCustomMediaPath(media, artwork::mediaTypes[i].mode, true).empty()) ++progress.ready;
+		else if (!(supported & bit) || !ArtworkAdapter::needsMedia(record, provider, bit)) ++progress.unavailable;
+		else { ++progress.pending; progress.pendingMedia |= bit; }
+	}
+	if (requestedMedia & artwork::metadataMedia)
+	{
+		++progress.total;
+		if (ArtworkAdapter::needsMedia(record, provider, artwork::metadataMedia))
+		{
+			++progress.pending;
+			progress.pendingMedia |= artwork::metadataMedia;
+		}
+		else if (record.screenScraperId || record.tgdbId || record.launchboxId) ++progress.ready;
+		else ++progress.unavailable;
+	}
+	return progress;
+}
+
+void Boxart::setMediaBatchPending(bool pending)
+{
+	std::lock_guard<std::mutex> guard(mutex);
+	if (mediaBatchPending == pending) return;
+	mediaBatchPending = pending;
+	artworkWake.notify_all();
+}
+
 void Boxart::startFetch()
 {
 	fetchBoxart();
@@ -714,13 +793,21 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 		customPath = getCustomBoxartPathForMediaMode(media, config::LibraryCoverMediaMode::CurrentArtwork, &customIndexReady);
 	const int provider = media.arcade && config::ArtworkProvider.get() == 1 ? 0 : config::ArtworkProvider.get();
  const bool useScreenScraper = provider == 1;
- requestedMedia &= ArtworkAdapter::supportedMedia(provider);
+ // Wait for the local index before deciding that an image needs downloading.
+ if (!customMediaReady()) return getBoxart(media);
+ if (!media.arcade)
+ {
+  requestedMedia |= artwork::metadataMedia;
+  for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+   if ((requestedMedia & (1u << i)) && !getCustomMediaPath(media, artwork::mediaTypes[i].mode, true).empty())
+    requestedMedia &= ~(1u << i);
+ }
+ requestedMedia &= ArtworkAdapter::supportedMedia(provider) | artwork::metadataMedia;
 	const bool wantOnline = shouldFetchOnline(media.arcade);
-	const bool expandedRequest = !media.arcade && requestedMedia && requestedMedia != artwork::coverMedia;
 	// Covers can be prepared while account discovery is still connecting.
 	const bool queueOnline = wantOnline || (useScreenScraper && config::FetchBoxart);
 	// Preserve basic cover-fetching rules; an explicit bulk request may also need other artwork.
-	const bool queueScrape = (expandedRequest && queueOnline)
+	const bool queueScrape = (queueOnline && requestedMedia)
 		|| !useCustomBoxart || (customIndexReady && customPath.empty());
 
 	GameBoxart boxart;
@@ -744,7 +831,9 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 			markDatabaseDirty();
 		}
 		const bool needsOffline = boxart.offlineArtState == OfflineArtState::Pending;
-		const bool needsOnline = queueOnline && ArtworkAdapter::needsMedia(boxart, provider, requestedMedia);
+		if (!media.arcade) requestedMedia = pendingArtworkMedia(boxart, provider, requestedMedia);
+		const bool needsOnline = queueOnline && (media.arcade
+			? ArtworkAdapter::needsMedia(boxart, provider, requestedMedia) : requestedMedia != 0);
 		if (queueScrape && (needsOffline || needsOnline))
 		{
    boxart.requestedProvider = record.requestedProvider = provider;
@@ -865,9 +954,9 @@ std::string Boxart::getLibraryCoverMediaPath(const GameMedia& media)
 	return getCustomMediaPath(media, coverMediaMode);
 }
 
-std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode)
+std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode, bool verifyLocal)
 {
-	const std::string custom = getCustomBoxartPathForMediaMode(media, mediaMode);
+	const std::string custom = getCustomBoxartPathForMediaMode(media, mediaMode, nullptr, verifyLocal);
 	if (!custom.empty())
 		return custom;
 	loadDatabase();
@@ -884,11 +973,16 @@ std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCo
    }
 			break;
 		}
+	// Older databases kept downloaded covers in boxartPath only. An embedded disc
+	// label has no remote URL and must never satisfy a request for a front cover.
+	if (mediaMode == config::LibraryCoverMediaMode::Cover && record.scraped
+		&& !record.boxartUrl.empty() && file_exists(record.boxartPath))
+		return record.boxartPath;
 	return {};
 }
 
 std::string Boxart::getCustomBoxartPathForMediaMode(const GameMedia& media, config::LibraryCoverMediaMode mediaMode,
-		bool *indexReady)
+		bool *indexReady, bool verifyFile)
 {
 	const size_t modeIndex = static_cast<size_t>(mediaMode);
 	if (modeIndex >= customBoxartByName.size())
@@ -904,24 +998,16 @@ std::string Boxart::getCustomBoxartPathForMediaMode(const GameMedia& media, conf
 	std::lock_guard<std::mutex> guard(mutex);
 	if (indexReady != nullptr)
 		*indexReady = customIndexLoaded && customBoxartRoot == root;
-	const auto& mediaIndex = customBoxartByName[modeIndex];
-	if (!fileKey.empty())
+	auto& mediaIndex = customBoxartByName[modeIndex];
+	for (const auto& key : {fileKey, nameKey, gameNameKey})
 	{
-		auto it = mediaIndex.find(fileKey);
-		if (it != mediaIndex.end())
-			return it->second;
-	}
-	if (!nameKey.empty())
-	{
-		auto it = mediaIndex.find(nameKey);
-		if (it != mediaIndex.end())
-			return it->second;
-	}
-	if (!gameNameKey.empty())
-	{
-		auto it = mediaIndex.find(gameNameKey);
-		if (it != mediaIndex.end())
-			return it->second;
+		if (key.empty()) continue;
+		const auto it = mediaIndex.find(key);
+		if (it == mediaIndex.end()) continue;
+		// Validate at inventory/queue time, not once per rendered tile. Drop stale
+		// entries so deleting local art cannot suppress a replacement download.
+		if (!verifyFile || file_exists(it->second)) return it->second;
+		mediaIndex.erase(it);
 	}
 	return {};
 }
@@ -934,8 +1020,7 @@ Boxart::DownloadProgress Boxart::downloadProgress()
 		if (!entry.second.arcade && entry.second.busy)
 		{
 			++result.games;
-			if ((entry.second.requestedMedia & screenscraper::coverMedia)
-					&& ArtworkAdapter::needsMedia(entry.second, config::ArtworkProvider.get(), artwork::coverMedia))
+			if (entry.second.requestedMedia & screenscraper::coverMedia)
 				++result.covers;
 		}
 	return result;
@@ -951,23 +1036,21 @@ bool Boxart::takeScreenScraperWork(GameBoxart& item, u64 generation)
 		}), toFetch.end());
 		// Include in-flight and disc-header work, so extras cannot jump ahead of a
 		// cover whose lookup or local scan is still running on another worker.
-		const bool coversPending = std::any_of(games.begin(), games.end(), [](const auto& entry) {
+		const bool coversPending = mediaBatchPending || std::any_of(games.begin(), games.end(), [](const auto& entry) {
 			const auto& game = entry.second;
-			return game.busy && (game.requestedMedia & screenscraper::coverMedia)
-				&& ArtworkAdapter::needsMedia(game, 1, artwork::coverMedia);
+			return game.busy && (game.requestedMedia & screenscraper::coverMedia);
 		});
 		const auto next = std::find_if(toFetch.begin(), toFetch.end(), [&](const GameBoxart& queued) {
 			if (queued.arcade || queued.offlineArtState == OfflineArtState::Pending) return false;
 			const auto& current = games.at(queued.sourceKey());
-			return !coversPending || ((current.requestedMedia & screenscraper::coverMedia)
-				&& ArtworkAdapter::needsMedia(current, 1, artwork::coverMedia));
+			return !coversPending || (current.requestedMedia & screenscraper::coverMedia);
 		});
 		if (next != toFetch.end())
 		{
 			item = std::move(*next);
 			toFetch.erase(next);
 			item.requestedMedia |= games.at(item.sourceKey()).requestedMedia;
-			if (coversPending) item.requestedMedia = screenscraper::coverMedia;
+			if (coversPending) item.requestedMedia = screenscraper::coverMedia | (item.requestedMedia & artwork::metadataMedia);
 			++activeScreenJobs;
 			return true;
 		}
@@ -1007,7 +1090,7 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 				catch (...) { session->pause("ScreenScraper download failed. Retrying after one minute."); }
 				std::lock_guard<std::mutex> lock(mutex);
 				--activeScreenJobs;
-				completeArtworkWork(item, true, true);
+				completeArtworkWork(item, true, 1);
 			}
 		}));
 	// Coalesce disk writes on the coordinator, keeping download workers available.
@@ -1899,7 +1982,12 @@ void Boxart::buildCustomBoxartIndex()
 					if (alias == nullptr)
 					{
 						if (isSupportedBoxartExtension(ext))
+						{
 							newIndex[key] = entry.path;
+							// Flat custom-boxart folders predate the named ES-DE folders.
+							if (firstFolder.empty())
+								mediaModeIndexes[static_cast<size_t>(config::LibraryCoverMediaMode::Cover)].emplace(key, entry.path);
+						}
 						continue;
 					}
 					if (!isSupportedCustomMediaExtension(alias->mode, ext))

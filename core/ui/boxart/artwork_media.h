@@ -1,8 +1,10 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "cfg/option.h"
 #include <array>
+#include <string_view>
 
 namespace artwork {
 struct MediaType
@@ -28,4 +30,16 @@ inline constexpr std::array<MediaType, 12> mediaTypes{{
 }};
 inline constexpr u32 allMedia = (1u << mediaTypes.size()) - 1;
 inline constexpr u32 coverMedia = 1u;
+// A job flag, not an image category: metadata lookups must not force a cover download.
+inline constexpr u32 metadataMedia = 1u << 30;
+inline constexpr u32 basicMedia = coverMedia | (1u << 1) | metadataMedia;
+// The single name-to-bit mapping for requirements, provider queues and future media types.
+inline u32 mediaBit(std::string_view source)
+{
+	if (source.empty() || source == "default") return coverMedia;
+	if (source == "disc") source = "physical";
+	for (size_t i = 0; i < mediaTypes.size(); ++i)
+		if (source == mediaTypes[i].name) return 1u << i;
+	return 0;
+}
 }

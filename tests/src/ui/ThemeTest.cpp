@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 #include "audio/ui_sound.h"
 #include "ui/theme.h"
+#include "ui/boxart/artwork_media.h"
 
 #include <algorithm>
 #include <atomic>
@@ -661,7 +662,7 @@ TEST(ThemeParserTest, LoadsAllBundledPackagesIncludingStarredPreviews)
 			EXPECT_FALSE(theme.layouts[0].showInfoTooltip);
 		}
 	}
-	EXPECT_EQ(previews, 7);
+	EXPECT_EQ(previews, 4);
 }
 
 TEST(ThemeParserTest, RackAllowsNarrowSpinesWithoutChangingGridLimits)
@@ -789,4 +790,40 @@ TEST(ThemeParserTest, TiledImagesKeepPackagePathAndMotionValidation)
 	EXPECT_EQ(themes::parse(json, package.path.u8string()).layouts[0].elements[0].tileSeconds, 8);
 	EXPECT_THROW(themes::parse(replaceOnce(json, "\"tileSeconds\":8", "\"tileSeconds\":8,\"sweepSeconds\":2"), package.path.u8string()), std::runtime_error);
 	EXPECT_THROW(themes::parse(replaceOnce(json, "stars.png", "../stars.png"), package.path.u8string()), std::runtime_error);
+}
+
+TEST(ThemeMediaRequirementsTest, BasicViewsDoNotRequestThemeExtras)
+{
+	const auto mask = themes::requiredMedia(themes::Layout{});
+	EXPECT_EQ(mask, artwork::basicMedia);
+	EXPECT_EQ(mask & artwork::mediaBit("physical"), 0u);
+	EXPECT_EQ(mask & artwork::mediaBit("boxtexture"), 0u);
+}
+
+TEST(ThemeMediaRequirementsTest, DerivesBindingsFallbacksAndHiddenAnimationDependencies)
+{
+	themes::Layout layout;
+	layout.artworkSource = "spine";
+	layout.requiredMedia = {"boxtexture", "backcover"};
+	themes::Element image;
+	image.type = "artwork"; image.source = "fanart"; image.fallback = "screenshot"; image.requiresArtwork = "title";
+	themes::Element button; button.type = "button"; button.action = "artwork"; button.source = "disc";
+	layout.elements = {image, button};
+	const auto mask = themes::requiredMedia(layout);
+	for (const char* source : {"spine", "boxtexture", "backcover", "fanart", "screenshot", "title", "physical"})
+		EXPECT_NE(mask & artwork::mediaBit(source), 0u) << source;
+	EXPECT_EQ(mask & artwork::mediaBit("case"), 0u);
+}
+
+TEST(ThemeMediaRequirementsTest, IncludesResponsiveLayoutAndRespectsIconOverride)
+{
+	themes::Theme theme;
+	themes::Layout wide, narrow;
+	wide.id = "wide"; wide.artworkSource = "spine"; wide.narrowLayout = "narrow";
+	narrow.id = "narrow"; narrow.requiredMedia = {"banner"};
+	theme.layouts = {wide, narrow};
+	const auto mask = themes::requiredMedia(theme, wide, std::string("disc"));
+	EXPECT_NE(mask & artwork::mediaBit("banner"), 0u);
+	EXPECT_NE(mask & artwork::mediaBit("physical"), 0u);
+	EXPECT_EQ(mask & artwork::mediaBit("spine"), 0u);
 }

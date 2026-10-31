@@ -19,6 +19,7 @@
  */
 #pragma once
 #include "scraper.h"
+#include "artwork_media.h"
 #include "stdclass.h"
 #include "cfg/option.h"
 
@@ -51,7 +52,7 @@ public:
 	GameBoxart getBoxartAndLoad(const GameMedia& media, bool startFetch = true);
 	GameBoxart getBoxart(const GameMedia& media);
 	std::string getLibraryCoverMediaPath(const GameMedia& media);
-	std::string getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode);
+	std::string getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode, bool verifyLocal = false);
 	// Art of the game's disc: its physical media if known, otherwise the label on the disc
 	// itself. Empty until that has been read, which happens in the background.
 	std::string getDiscArtPath(const GameMedia& media);
@@ -63,9 +64,18 @@ public:
 	void resumePlaytime();
 	void checkpointPlaytime(bool isPaused);
 	void refreshCustomBoxartIndex(bool force = false);
-	// Bit 0 is the front cover. Expanded masks are explicit user download actions.
-	void queueBoxart(const GameMedia& media, u32 requestedMedia = 1);
+	// The baseline is covers, hover miximages and metadata. Theme requirements add image bits.
+	void queueBoxart(const GameMedia& media, u32 requestedMedia = artwork::basicMedia);
 	void startFetch();
+	bool customMediaReady();
+	bool customMediaFailed();
+	struct MediaProgress {
+		size_t total = 0, ready = 0, pending = 0, unavailable = 0;
+		u32 pendingMedia = 0;
+	};
+	// Hold extra-media jobs while the UI incrementally inventories/enqueues a library.
+	void setMediaBatchPending(bool pending);
+	MediaProgress mediaProgress(const GameMedia& media, u32 requestedMedia);
 	void retryArtworkMedia();
 	struct DownloadProgress { size_t games = 0, covers = 0; };
 	DownloadProgress downloadProgress();
@@ -85,8 +95,8 @@ private:
 	GameBoxart getPhysicalBoxart(const GameMedia& media);
 	std::string getCustomBoxartPath(const GameMedia& media);
 	std::string getCustomBoxartPathForMediaMode(const GameMedia& media, config::LibraryCoverMediaMode mediaMode,
-			bool *indexReady = nullptr);
-	GameBoxart getBoxartAndQueue(const GameMedia& media, bool startFetch, u32 requestedMedia = 1);
+			bool *indexReady = nullptr, bool verifyFile = false);
+	GameBoxart getBoxartAndQueue(const GameMedia& media, bool startFetch, u32 requestedMedia = artwork::basicMedia);
 	bool shouldFetchOnline(bool arcade = false) const;
 	GameBoxart& gameForMedia(const GameMedia& media);
 	bool isCurrentWork(const GameBoxart& item) const;
@@ -158,6 +168,7 @@ private:
 	std::condition_variable artworkWake;
 	std::atomic<u64> screenGeneration{0};
 	std::shared_ptr<screenscraper::Session> screenSessionSnapshot; // UI-thread owned.
+	bool mediaBatchPending = false; // Protected by mutex; preserves cover priority during queue refill.
 	bool physicalWorking = false; // Protected by mutex; producer can overlap network workers.
 	size_t activeScreenJobs = 0; // Protected by mutex; keep idle workers alive until the queue drains.
 	// Futures are destroyed first, while the queue's synchronization state still exists.

@@ -67,7 +67,7 @@ category is available, using the same names:
 CD Rack uses a downloaded box texture for its case pull-out animation. If one
 is unavailable, it uses the existing front cover and spine instead. To add box
 textures to an existing library, select **Box Texture** and download the selected
-media, or use **Download All Required Media**. Launching never waits for a scrape.
+media, or use **Download All Media for All Themes**. Launching never waits for a scrape.
 
 Mixes are downloaded from ScreenScraper, not generated locally. Videos and
 manuals are outside this image-download feature. Not every game has every type.
@@ -80,8 +80,8 @@ provider response do not erase previously downloaded metadata.
 Fetch Box Art must be enabled and the source must allow online artwork
 (Original Box Art or Custom Boxart). The controls have separate purposes:
 
-- **Automatic cover fetching** requests only Cover for the basic library.
-- **Download All Required Media** queues all twelve image types in the loaded
+- **Automatic library fetching** requests Cover, Mix Image and metadata for basic views; a selected theme adds its referenced media.
+- **Download All Media for All Themes** queues the union of media referenced by all valid installed themes in the loaded
   Dreamcast library for hover details, expanded themes, backgrounds and icons.
 - **Images to Download** selects types for **Download Selected Media**. Those
   checkboxes do not change automatic cover fetching or the all-media action.
@@ -152,4 +152,6 @@ Unavailable Media clears those attempts while preserving successful downloads.
 
 API reference: [ScreenScraper API v2](https://www.screenscraper.fr/webapi2.php).
 
-The shared artwork adapter uses TheGamesDB as its automatic fallback for missing supported categories, unmatched games and failed lookups. Primary images and metadata retain priority; automatic requests remain cover-only. LaunchBox also uses these same slots, including disc scans (`physical`) and box artwork (`cover`, `case`, `backcover`, `spine`).
+The shared artwork adapter uses TheGamesDB as its automatic fallback for missing supported categories, unmatched games and failed lookups. Primary images and metadata retain priority; automatic requests follow the baseline and the active theme's manifest requirements. LaunchBox also uses these same slots, including disc scans (`physical`) and box artwork (`cover`, `case`, `backcover`, `spine`).
+
+Media policy and future theme integration are described in [Automatic media requirements](Themes.md#automatic-media-requirements). Local and cached images are checked before downloads; metadata-only requests do not download covers.

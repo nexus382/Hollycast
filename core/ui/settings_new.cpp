@@ -3567,6 +3567,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			T("Choose a library theme package, or use the selected UI theme and default library layout."),
 			libraryThemeCfg,
 			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
+		gui_display_library_download_progress();
 
 		if (const themes::Theme* activeTheme = themes::current())
 		{
@@ -3759,7 +3760,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			T("Choose the preferred online artwork source. TheGamesDB fills missing supported types. Existing local media remains available."), providerCfg);
 		if (config::ArtworkProvider.get() == 1)
 		{
-			ImGui::TextWrapped("%s", T("Basic list and icon views automatically download missing covers and game metadata. Use Download All Required Media for hover details, themes, CD spines, and other expanded artwork."));
+			ImGui::TextWrapped("%s", T("Basic views download covers, hover miximages and game information. Selecting a theme automatically downloads only its additional required media. Physical disc labels are read locally."));
 			static char password[256] = {};
 			const auto account = screenscraper::status();
 			const bool configured = screenscraper::developerConfigured();
@@ -3834,7 +3835,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		mediaCfg.options.label = T("Images to Download");
 		mediaCfg.options.icon = ICON_FA_IMAGES;
 		mediaCfg.options.popupID = "ArtworkMediaPopup";
-		mediaCfg.options.description = T("Choose the types for Download Selected Media. Automatic scraping stays cover-only. Download All Required Media fetches every type supported by this provider. Existing images are kept.");
+		mediaCfg.options.description = T("Choose types for the manual Download Selected Media action. Automatic downloads follow the selected theme. Download All Media for All Themes prepares the installed themes. Existing images are kept.");
 		mediaCfg.options.options = mediaLabels.data();
 		mediaCfg.options.optionCount = static_cast<int>(mediaLabels.size());
 		mediaCfg.options.currentValue = &config::ScreenScraperMedia.get();
@@ -3856,8 +3857,8 @@ static void renderSettingsContentTab(SettingsTab tab)
 		const bool canDownload = (config::ArtworkProvider.get() != 1 || screenscraper::status().connected) && config::FetchBoxart
 			&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
 		ImGui::BeginDisabled(!canDownload);
-		if (ImGui::Button(T("Download All Required Media"), ImVec2(-FLT_MIN, 0)))
-			gui_download_library_media(supported);
+		if (ImGui::Button(T("Download All Media for All Themes"), ImVec2(-FLT_MIN, 0)))
+			gui_download_all_theme_media();
 		ImGui::BeginDisabled(!(config::ScreenScraperMedia.get() & supported));
 		if (ImGui::Button(T("Download Selected Media")))
 			gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & supported);
@@ -4172,8 +4173,8 @@ static void renderSettingsContentTab(SettingsTab tab)
 			[](bool enabled) { config::FetchBoxart = enabled; },
 			T(
 				"Fetch Box Art\n"
-				"Automatically downloads missing covers from the provider selected in Artwork Downloads.\n"
-				"Additional hover and theme images are downloaded only through the manual media buttons.\n"
+				"Automatically downloads covers, hover miximages and game information from the selected provider.\n"
+				"Selecting a library theme automatically downloads the additional media it requires.\n"
 				"Disable if you only want physical media images, custom artwork, or to avoid network fetching."
 			),
 			physicalOnly

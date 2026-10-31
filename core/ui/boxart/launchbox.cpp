@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 /* Copyright 2026 The Hollycast Authors. SPDX-License-Identifier: GPL-2.0-or-later */
 #include "launchbox.h"
 #include "archive/ZipArchive.h"
@@ -423,6 +424,7 @@ bool LaunchBox::ready() const
 
 bool LaunchBox::needsMedia(const GameBoxart& item, u32 selection)
 {
+ if ((selection & artwork::metadataMedia) && !item.launchboxSearched) return true;
  selection &= supportedMedia;
  for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
  {
@@ -437,7 +439,7 @@ bool LaunchBox::needsMedia(const GameBoxart& item, u32 selection)
 void LaunchBox::scrape(GameBoxart& item)
 {
  const u32 selection = (item.requestedMedia ? item.requestedMedia : artwork::coverMedia) & supportedMedia;
- if (!needsMedia(item, selection)) return;
+ if (!needsMedia(item, item.requestedMedia ? item.requestedMedia : artwork::coverMedia)) return;
  if (!ready()) throw std::runtime_error("");
  try {
   const std::string key = LaunchBoxCatalog::identity(item);

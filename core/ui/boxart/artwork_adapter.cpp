@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "artwork_adapter.h"
@@ -42,6 +43,10 @@ u32 ArtworkAdapter::fallbackMedia(const GameBoxart& item, int provider, u32 sele
   const auto image = media.find(artwork::mediaTypes[i].name);
   if (image == media.end() || !file_exists(image->second)) missing |= bit;
  }
+ // If the primary found no game, a metadata-only job may still use TGDB.
+ if ((selection & artwork::metadataMedia) && (unresolved ||
+   (provider == 1 ? item.screenScraperSearched && !item.screenScraperId : item.launchboxSearched && !item.launchboxId)))
+  missing |= artwork::metadataMedia;
  return missing;
 }
 

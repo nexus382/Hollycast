@@ -331,6 +331,8 @@ TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
 TEST_F(BoxartTest, SwitchingProviderRearmsExistingOnlineResult)
 {
 	finishOfflineFetch();
+	// Busy clears before the background database write; join before reading/editing it.
+	boxart->term();
 	json database = readDatabase();
 	database[0]["scraped"] = true;
 	database[0]["scraped_provider"] = 0;
@@ -751,6 +753,59 @@ TEST_F(BoxartTest, LaunchBoxDiscAndBoxSlotsRemainDistinctAndTgdbIsTheFirstFallba
   std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Screenshot)).lexically_normal());
 }
 
+TEST_F(BoxartTest, InventoryReusesFlatCoversAndDetectsDeletedLocalImages)
+{
+	const auto local = directory / "custom";
+	std::filesystem::create_directories(local);
+	const auto cover = local / "game.png";
+	std::ofstream(cover) << "cover";
+	config::BoxartPath = local.string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!boxart->customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart->customMediaReady());
+	EXPECT_EQ(boxart->mediaProgress(media, artwork::coverMedia).ready, 1u);
+	std::filesystem::remove(cover);
+	const auto missing = boxart->mediaProgress(media, artwork::coverMedia);
+	EXPECT_EQ(missing.ready, 0u);
+	EXPECT_EQ(missing.pendingMedia, artwork::coverMedia);
+}
+
+TEST_F(BoxartTest, InventoryReusesLegacyDownloadedCoverWithoutConfusingDiscLabel)
+{
+	const auto artRoot = directory / "boxart";
+	std::filesystem::create_directories(artRoot);
+	const auto cover = artRoot / "legacy.png";
+	std::ofstream(cover) << "legacy cover";
+	GameBoxart cached;
+	cached.fileName = media.fileName; cached.gamePath = media.path;
+	cached.offlineArtState = OfflineArtState::Complete;
+	cached.scraped = true; cached.boxartPath = cover.string();
+	cached.boxartUrl = "https://example.com/cover.png";
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	EXPECT_EQ(boxart->mediaProgress(media, artwork::coverMedia).ready, 1u);
+	boxart->term();
+	boxart = std::make_unique<Boxart>();
+	cached.boxartUrl.clear();
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	EXPECT_EQ(boxart->mediaProgress(media, artwork::coverMedia).ready, 0u);
+}
+
+TEST_F(BoxartTest, UnreadableLocalDirectoryDoesNotAuthorizeDownloads)
+{
+	config::BoxartPath = (directory / "missing-media-folder").string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!boxart->customMediaFailed() && std::chrono::steady_clock::now() < deadline)
+	{
+		EXPECT_FALSE(boxart->customMediaReady());
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	ASSERT_TRUE(boxart->customMediaFailed());
+	EXPECT_FALSE(boxart->customMediaReady());
+	config::FetchBoxart = true;
+	EXPECT_FALSE(boxart->getBoxartAndLoad(media, false).busy);
+}
+
 TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 {
 	namespace fs = std::filesystem;
@@ -761,7 +816,8 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 	media.name = "A different display title";
 	media.gameName.clear();
 	for (const char* folder : {"images", "miximg", "miximages", "cover", "covers", "screenshotS",
-			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens", "box-2d-side", "spines", "boxtexture", "boxtextures"})
+			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens", "box-2d-side", "spines", "boxtexture", "boxtextures",
+			"screenmarquee", "banners", "backcovers", "box-2d-back"})
 	{
 		fs::create_directories(root / folder);
 		std::ofstream(root / folder / "A Game (USA).png", std::ios::binary) << folder;
@@ -786,7 +842,9 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 		{config::LibraryCoverMediaMode::Physical, "physicalmedia"},
 		{config::LibraryCoverMediaMode::TitleScreen, "titlescreens"},
 		{config::LibraryCoverMediaMode::Spine, "spines"},
-		{config::LibraryCoverMediaMode::BoxTexture, "boxtexture"}
+		{config::LibraryCoverMediaMode::BoxTexture, "boxtexture"},
+		{config::LibraryCoverMediaMode::Banner, "banners"},
+		{config::LibraryCoverMediaMode::BackCover, "backcovers"}
 	};
 	for (const auto& source : expected)
 		EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, source.first)).lexically_normal(),

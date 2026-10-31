@@ -532,6 +532,8 @@ protected:
 		previousSource = config::BoxartSourceMode;
 		previousFetch = config::FetchBoxart;
 		previousSelection = config::ScreenScraperMedia;
+		previousBoxartPath = config::BoxartPath;
+		config::BoxartPath = "";
 		config::ArtworkProvider = 1;
 		config::BoxartSourceMode = 0;
 		config::FetchBoxart = false; // Exercise queue state without making network requests.
@@ -550,12 +552,13 @@ protected:
 		config::BoxartSourceMode = previousSource;
 		config::FetchBoxart = previousFetch;
 		config::ScreenScraperMedia = previousSelection;
+		config::BoxartPath = previousBoxartPath;
 		set_user_data_dir(oldDataPath);
 		std::filesystem::remove_all(root);
 	}
-	void seedPrepared(int count)
+	void seedPrepared(int count, int first = 0)
 	{
-		for (int i = 0; i < count; ++i)
+		for (int i = first; i < first + count; ++i)
 		{
 			GameBoxart item;
 			item.fileName = "Game " + std::to_string(i) + ".chd";
@@ -615,8 +618,30 @@ protected:
 		return std::any_of(boxart.games.begin(), boxart.games.end(), [](const auto& item) { return !!item.second.screenScraperDetails; });
 	}
 	std::filesystem::path root;
-	std::string oldDataPath;
-	GameBoxart queue(u32 mask = screenscraper::coverMedia)
+	std::string oldDataPath, previousBoxartPath;
+	void seedCachedCover(const std::string& path)
+	{
+		GameBoxart item;
+		item.fileName = media.fileName; item.gamePath = media.path;
+		item.offlineArtState = OfflineArtState::NoArtwork;
+		item.launchboxMedia["cover"] = path;
+		boxart.games[item.sourceKey()] = item;
+	}
+	bool runWithInventory(const std::shared_ptr<Session>& session, std::future<void>& firstCover)
+	{
+		boxart.setMediaBatchPending(true);
+		boxart.screenFetching = std::async(std::launch::async, [&] { run(session); });
+		const bool covered = firstCover.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		const bool waiting = boxart.screenFetching.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+		{
+			std::lock_guard<std::mutex> lock(boxart.mutex);
+			seedPrepared(1, 1);
+		}
+		boxart.setMediaBatchPending(false);
+		boxart.screenFetching.get();
+		return covered && waiting;
+	}
+	GameBoxart queue(u32 mask = artwork::basicMedia)
 	{
 		return boxart.getBoxartAndQueue(media, false, mask);
 	}
@@ -626,7 +651,7 @@ protected:
 		boxart.toFetch.erase(boxart.toFetch.begin());
 		return item;
 	}
-	void finish(GameBoxart& item) { if (config::ArtworkProvider.get() != 0) item.tgdbCheckedMedia = TheGamesDb::supportedMedia; boxart.completeArtworkWork(item, true, item.arcade ? 0 : config::ArtworkProvider.get()); }
+	void finish(GameBoxart& item) { item.tgdbSearched = true; if (config::ArtworkProvider.get() != 0) item.tgdbCheckedMedia = TheGamesDb::supportedMedia; boxart.completeArtworkWork(item, true, item.arcade ? 0 : config::ArtworkProvider.get()); }
 	void seedArcadeRequest()
 	{
 		GameBoxart arcade;
@@ -646,12 +671,12 @@ protected:
 	bool previousFetch = false;
 };
 
-TEST_F(ScreenScraperQueueTest, BasicLibraryQueuesOnlyCoverRegardlessOfManualChoices)
+TEST_F(ScreenScraperQueueTest, BasicLibraryQueuesCoverMixAndMetadataRegardlessOfManualChoices)
 {
 	const auto automatic = queue();
-	EXPECT_EQ(automatic.requestedMedia, screenscraper::coverMedia);
+	EXPECT_EQ(automatic.requestedMedia, artwork::basicMedia);
 	EXPECT_EQ(queued(), 1u);
-	EXPECT_EQ(takeWork().requestedMedia, screenscraper::coverMedia);
+	EXPECT_EQ(takeWork().requestedMedia, artwork::basicMedia);
 }
 
 TEST_F(ScreenScraperQueueTest, FullMediaRequestSurvivesAnInFlightCoverJob)
@@ -666,7 +691,7 @@ TEST_F(ScreenScraperQueueTest, FullMediaRequestSurvivesAnInFlightCoverJob)
 	finish(coverJob);
 	ASSERT_EQ(queued(), 1u);
 	auto expanded = takeWork();
-	EXPECT_EQ(expanded.requestedMedia, screenscraper::allMedia);
+	EXPECT_EQ(expanded.requestedMedia, screenscraper::allMedia & ~artwork::coverMedia);
 	EXPECT_EQ(expanded.screenScraperCheckedMedia, screenscraper::coverMedia);
 	EXPECT_TRUE(record().busy);
 	expanded.screenScraperCheckedMedia = screenscraper::allMedia;
@@ -688,20 +713,98 @@ TEST_F(ScreenScraperQueueTest, TheGamesDbMergesExpandedMediaIntoAnInFlightCoverJ
 	finish(coverJob);
 	ASSERT_EQ(queued(), 1u);
 	auto expanded = takeWork();
-	EXPECT_EQ(expanded.requestedMedia, TheGamesDb::supportedMedia);
+	EXPECT_EQ(expanded.requestedMedia, TheGamesDb::supportedMedia & ~artwork::coverMedia);
 	expanded.tgdbCheckedMedia = TheGamesDb::supportedMedia;
 	finish(expanded);
 	EXPECT_EQ(queued(), 0u);
 	EXPECT_FALSE(record().busy);
 }
 
-TEST_F(ScreenScraperQueueTest, AddingAnotherGameAfterBulkRequestStillQueuesOnlyCover)
+TEST_F(ScreenScraperQueueTest, RepeatedRequestsCoalesceBeforeAndDuringWork)
+{
+	for (int i = 0; i < 100; ++i) queue();
+	ASSERT_EQ(queued(), 1u);
+	auto job = takeWork();
+	for (int i = 0; i < 100; ++i) queue(artwork::allMedia);
+	EXPECT_EQ(queued(), 0u);
+	job.offlineArtState = OfflineArtState::NoArtwork;
+	job.screenScraperSearched = true;
+	job.screenScraperCheckedMedia = artwork::allMedia;
+	finish(job);
+	config::FetchBoxart = true;
+	for (int i = 0; i < 100; ++i) queue(artwork::allMedia);
+	EXPECT_EQ(queued(), 0u) << "Remember unavailable categories instead of querying them repeatedly";
+}
+
+TEST_F(ScreenScraperQueueTest, CompletedCoversLeavePriorityQueueUntilInventoryFindsThemMissing)
+{
+	queue();
+	auto job = takeWork();
+	const auto path = root / "cover.png";
+	std::ofstream(path) << "cover";
+	job.offlineArtState = OfflineArtState::NoArtwork;
+	job.screenScraperSearched = true; job.screenScraperId = 42;
+	job.screenScraperCheckedMedia = artwork::coverMedia;
+	job.screenScraperMedia["cover"] = path.string();
+	finish(job);
+	ASSERT_EQ(queued(), 1u) << "Mix image still needs downloading";
+	std::filesystem::remove(path);
+	EXPECT_EQ(boxart.downloadProgress().covers, 0u) << "Scheduling uses pending state, without polling files";
+	config::FetchBoxart = true;
+	queue();
+	EXPECT_EQ(boxart.downloadProgress().covers, 1u) << "A new inventory request detects the deleted cover";
+	EXPECT_EQ(queued(), 1u) << "Missing media is merged into the existing job";
+}
+
+TEST_F(ScreenScraperQueueTest, ExistingLocalAndOtherProviderMediaOnlyQueueMetadata)
+{
+	const auto mixes = root / "miximages";
+	std::filesystem::create_directories(mixes);
+	std::ofstream(mixes / "test.png") << "local mix";
+	const auto cover = root / "cache" / "downloaded-cover.png";
+	std::filesystem::create_directories(cover.parent_path());
+	std::ofstream(cover) << "cached cover";
+	seedCachedCover(cover.string());
+	config::BoxartPath = root.string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!boxart.customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart.customMediaReady());
+	config::FetchBoxart = true;
+	queue();
+	ASSERT_EQ(queued(), 1u);
+	EXPECT_EQ(takeWork().requestedMedia, artwork::metadataMedia);
+}
+
+TEST_F(ScreenScraperQueueTest, IncrementalInventoryKeepsNewCoversAheadOfExtras)
+{
+	seedPrepared(1);
+	std::atomic<int> covers{0}, extras{0}, lookups{0};
+	std::atomic<bool> priority{true};
+	std::promise<void> first;
+	auto firstCover = first.get_future();
+	auto session = mockSession(2, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("box-2D") != std::string::npos)
+		{
+			if (++covers == 1) first.set_value();
+		}
+		else { if (covers != 2) priority = false; ++extras; }
+		bytes = png(); return 200;
+	}, lookups);
+	EXPECT_TRUE(runWithInventory(session, firstCover));
+	EXPECT_TRUE(priority);
+	EXPECT_EQ(covers, 2);
+	EXPECT_EQ(extras, 2);
+	EXPECT_EQ(lookups, 2);
+}
+
+TEST_F(ScreenScraperQueueTest, AddingAnotherGameAfterBulkRequestStillUsesOnlyBasicMedia)
 {
 	queue(screenscraper::allMedia);
 	media.path = "/games/new.chd";
 	media.fileName = "new.chd";
 	const auto newlyAdded = queue();
-	EXPECT_EQ(newlyAdded.requestedMedia, screenscraper::coverMedia);
+	EXPECT_EQ(newlyAdded.requestedMedia, artwork::basicMedia);
 }
 
 TEST_F(ScreenScraperQueueTest, RetryingDreamcastMediaPreservesArcadeRequests)
@@ -865,4 +968,70 @@ TEST(ScreenScraperLiveTest, DISABLED_DownloadsDreamcastMetadataAndArtwork)
 		<< ", allowed threads=" << account.maxThreads << ", game=" << art.screenScraperId
 		<< ", downloaded image types=" << art.screenScraperMedia.size() << std::endl;
 	screenscraper::disconnect();
+}
+
+TEST_F(ScreenScraperTest, ConcurrentDiscEntriesShareDownloadsAndUnavailableResults)
+{
+	for (bool missing : {false, true})
+	{
+		std::atomic<int> images{0};
+		std::mutex gateMutex;
+		std::condition_variable gate;
+		int lookups = 0;
+		auto session = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+			if (url.find("ssuserInfos.php") != std::string::npos) return reply(bytes, {{"ssuser", user(10)}});
+			if (url.find("jeuInfos.php") != std::string::npos)
+			{
+				std::unique_lock<std::mutex> lock(gateMutex);
+				++lookups; gate.notify_all();
+				EXPECT_TRUE(gate.wait_for(lock, std::chrono::seconds(2), [&] { return lookups == 10; }));
+				return reply(bytes, {{"jeu", game()}});
+			}
+			++images;
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			bytes = missing ? std::vector<u8>{} : png();
+			return missing ? 404 : 200;
+		});
+		session->login();
+		ScreenScraper scraper(session);
+		ASSERT_TRUE(scraper.initialize((root / (missing ? "missing" : "present")).string()));
+		std::vector<GameBoxart> discs(10, item());
+		for (size_t i = 0; i < discs.size(); ++i)
+		{
+			discs[i].gamePath += std::to_string(i);
+			discs[i].screenScraperId = 1234;
+		}
+		scraper.scrape(discs);
+		EXPECT_EQ(images, 1) << "Matching discs share the game/type/region image request";
+		for (const auto& disc : discs)
+		{
+			EXPECT_FALSE(needsMedia(disc, coverMedia));
+			if (!missing) EXPECT_EQ(disc.boxartPath, discs.front().boxartPath);
+		}
+		scraper.scrape(discs);
+		EXPECT_EQ(images, 1);
+		EXPECT_EQ(lookups, 10);
+	}
+}
+
+TEST_F(ScreenScraperTest, MetadataOnlyDoesNotDownloadImagesAndCompletesOnce)
+{
+	int lookups = 0, images = 0;
+	auto session = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos) return reply(bytes, {{"ssuser", user()}});
+		if (url.find("jeuRecherche.php") != std::string::npos)
+		{
+			++lookups; return reply(bytes, {{"jeux", json::array({game()})}});
+		}
+		++images; bytes = png(); return 200;
+	});
+	session->login();
+	ScreenScraper scraper(session);
+	ASSERT_TRUE(scraper.initialize(root.u8string() + '/'));
+	auto art = item(); art.requestedMedia = artwork::metadataMedia;
+	scraper.scrape(art); scraper.scrape(art);
+	EXPECT_EQ(lookups, 1); EXPECT_EQ(images, 0);
+	EXPECT_EQ(art.developer, "Sonic Team");
+	EXPECT_EQ(art.screenScraperCheckedMedia, 0u);
+	EXPECT_FALSE(screenscraper::needsMedia(art, artwork::metadataMedia));
 }

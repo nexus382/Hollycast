@@ -67,6 +67,7 @@ bool TheGamesDb::ready() const { return getTimeMs() >= blackoutPeriod; }
 bool TheGamesDb::needsMedia(const GameBoxart& item, u32 selection)
 {
     if (item.arcade) return !item.scraped;
+    if ((selection & artwork::metadataMedia) && !item.tgdbSearched) return true;
     selection &= supportedMedia;
     for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
     {
@@ -238,7 +239,7 @@ bool TheGamesDb::downloadMedia(const std::string& url, const std::string& path)
 void TheGamesDb::scrape(GameBoxart& item)
 {
     const u32 selection = (item.requestedMedia ? item.requestedMedia : artwork::coverMedia) & supportedMedia;
-    if (!needsMedia(item, selection)) return;
+    if (!needsMedia(item, item.requestedMedia ? item.requestedMedia : artwork::coverMedia)) return;
     const auto game = findGame(item);
     if (!game.is_object()) {
         item.tgdbSearched = true;
@@ -248,6 +249,7 @@ void TheGamesDb::scrape(GameBoxart& item)
     }
     item.tgdbId = game.at("id").get<u32>();
     applyMetadata(item, game);
+    if (!selection) { item.tgdbSearched = true; return; }
     json images = json::array();
     std::string baseUrl;
     for (int page = 1; page <= 32; ++page)
