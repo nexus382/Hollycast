@@ -752,7 +752,7 @@ protected:
 
 		return name;
 	}
-	std::string semantic_to_builtin(std::string name, const std::string &semantic, shader_type stype) const
+	std::string semantic_to_builtin(std::string name, const std::string &semantic, shader_type stype, const type *input_type = nullptr) const
 	{
 		if (semantic == "SV_POSITION")
 			return stype == shader_type::pixel ? "gl_FragCoord" : "gl_Position";
@@ -761,7 +761,12 @@ protected:
 		if (semantic == "SV_DEPTH")
 			return "gl_FragDepth";
 		if (semantic == "SV_VERTEXID")
-			return _vulkan_semantics ? "gl_VertexIndex" : "gl_VertexID";
+		{
+			name = _vulkan_semantics ? "gl_VertexIndex" : "gl_VertexID";
+			// GLES does not implicitly convert the signed builtin to an unsigned
+			// FX input. Keep authored signed inputs and output lvalues unchanged.
+			return input_type != nullptr && input_type->base == type::t_uint ? "uint(" + name + ")" : name;
+		}
 		if (semantic == "SV_ISFRONTFACE")
 			return "gl_FrontFacing";
 		if (semantic == "SV_GROUPID")
@@ -1243,7 +1248,7 @@ protected:
 									code += '(';
 								}
 
-								code += semantic_to_builtin(std::move(in_param_name), member.semantic, func.type);
+								code += semantic_to_builtin(std::move(in_param_name), member.semantic, func.type, &member.type);
 
 								if (member.type.is_boolean())
 									code += ')';
@@ -1335,7 +1340,7 @@ protected:
 						code += '(';
 					}
 
-					code += semantic_to_builtin("_in_" + id_to_name(param.id), param.semantic, func.type);
+					code += semantic_to_builtin("_in_" + id_to_name(param.id), param.semantic, func.type, &param.type);
 
 					if (param.type.is_boolean())
 						code += ')';
@@ -1557,9 +1562,23 @@ protected:
 					expr_code += '[' + std::to_string(op.index) + ']';
 				break;
 			case expression::operation::op_swizzle:
-				expr_code += '.';
-				for (int i = 0; i < 4 && op.swizzle[i] >= 0; ++i)
-					expr_code += "xyzw"[op.swizzle[i]];
+				if (op.from.is_scalar())
+				{
+					// Scalar swizzles are legal in FX and desktop GLSL, but not ESSL.
+					// Constructors preserve scalar replication without repeating evaluation.
+					if (!op.to.is_scalar())
+					{
+						type.clear();
+						write_type<false, false>(type, op.to);
+						expr_code = type + '(' + expr_code + ')';
+					}
+				}
+				else
+				{
+					expr_code += '.';
+					for (int i = 0; i < 4 && op.swizzle[i] >= 0; ++i)
+						expr_code += "xyzw"[op.swizzle[i]];
+				}
 				break;
 			case expression::operation::op_matrix_swizzle:
 				if (op.swizzle[1] < 0)
@@ -1639,9 +1658,13 @@ protected:
 				code += '[' + std::to_string(op.index) + ']';
 				break;
 			case expression::operation::op_swizzle:
-				code += '.';
-				for (int i = 0; i < 4 && op.swizzle[i] >= 0; ++i)
-					code += "xyzw"[op.swizzle[i]];
+				// A writable scalar .x denotes the scalar itself on GLES as well.
+				if (!op.from.is_scalar())
+				{
+					code += '.';
+					for (int i = 0; i < 4 && op.swizzle[i] >= 0; ++i)
+						code += "xyzw"[op.swizzle[i]];
+				}
 				break;
 			case expression::operation::op_matrix_swizzle:
 				if (op.swizzle[1] < 0)

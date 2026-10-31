@@ -69,10 +69,17 @@ public:
 	explicit PostProcessSource(bool nativeStages = false) : ShaderSource(postProcessGlslVersion())
 	{
 		addConstant("TARGET_GL", gl.gl_version);
+		// Imported GLSL bodies are normalized independently of the device profile.
+		// Every GLES stage needs defaults before its uniforms and helper functions.
+		if (gl.is_gles) {
+			addSource("precision highp float;\nprecision highp int;\n");
+			// FX mad permits a separate multiply and add. Its generated fma call
+			// otherwise needs an optional extension in the GLES 3.1 profile.
+			if (nativeStages)
+				addSource("#define fma(a, b, c) ((a) * (b) + (c))\n");
+		}
 		if (!nativeStages)
 			addSource(ShaderCompatSource);
-		else if (gl.is_gles)
-			addSource("precision highp float;\nprecision highp int;\n");
 	}
 };
 

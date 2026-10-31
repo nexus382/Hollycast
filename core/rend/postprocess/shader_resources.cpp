@@ -62,8 +62,20 @@ bool installBundledShaders(const std::string& directory, std::string& error)
 				error = "A bundled shader destination escapes the shader folder.";
 				return false;
 			}
-			if (std::filesystem::exists(target))
-				continue;
+			if (std::filesystem::exists(target)) {
+				// Repair only byte-identical copies of a previously bundled shader.
+				// A user-edited file always takes precedence over a library update.
+				std::unique_ptr<ArchiveFile> previous(archive.OpenFile(("previous/" + name).c_str()));
+				if (!previous || previous->length() > 32 * 1024 * 1024
+						|| std::filesystem::file_size(target) != previous->length())
+					continue;
+				std::vector<char> previousContents(previous->length()), installed(previous->length());
+				std::ifstream input(target, std::ios::binary);
+				input.read(installed.data(), installed.size());
+				if (!input || previous->Read(previousContents.data(), static_cast<u32>(previousContents.size())) != previousContents.size()
+						|| installed != previousContents)
+					continue;
+			}
 			std::unique_ptr<ArchiveFile> file(archive.OpenFile(name.c_str()));
 			if (!file || file->length() > 32 * 1024 * 1024) {
 				error = "A bundled shader file is missing or too large: " + name;

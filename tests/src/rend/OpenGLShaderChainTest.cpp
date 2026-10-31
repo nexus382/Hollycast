@@ -151,5 +151,78 @@ TEST_F(OpenGLShaderChainTest, LinksFxVaryingsBySemanticLocation)
 	expectPixels({ structure }, { 64, 191, 128, 255 });
 }
 
+TEST_F(OpenGLShaderChainTest, RendersPortableAndFxStagesWithGlesPrecision)
+{
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
+	SDL_GLContext esCompatibleContext = SDL_GL_CreateContext(window);
+	if (esCompatibleContext == nullptr)
+		GTEST_SKIP() << "OpenGL 4.5 ES 3.1 shader compatibility is unavailable: " << SDL_GetError();
+	SDL_GL_DeleteContext(context);
+	context = esCompatibleContext;
+	ASSERT_NE(0, gladLoadGL(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress)));
+	GLint major = 0, minor = 0;
+	glGetIntegerv(GL_MAJOR_VERSION, &major);
+	glGetIntegerv(GL_MINOR_VERSION, &minor);
+	// OpenGL 4.5 includes ES 3.1 shader compatibility. Use its actual shader
+	// compiler/pixel output here; older desktop contexts cannot run ESSL 3.10.
+	if (major < 4 || (major == 4 && minor < 5))
+		GTEST_SKIP() << "OpenGL 4.5 ES 3.1 shader compatibility is required.";
+	gl.is_gles = true;
+	gl.gl_major = 3; gl.gl_minor = 1;
+	gl.gl_version = "GLES3"; gl.glsl_version_header = "#version 300 es";
+	const auto portable = writeShader("precision.glsl",
+			"#pragma parameter GAIN \"Gain\" 0.25 0.0 1.0 0.05\n"
+			"void main() { vec4 color = texture(Source, vTexCoord); float gain = GAIN;"
+			" FragColor = vec4(gain, color.b * 0.5, 0.125, 1.0); }\n");
+	expectPixels({ portable }, { 64, 128, 32, 255 });
+	const auto effect = writeShader("precision.fx",
+			"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target"
+			" { return float4(0.125, 0.25, 0.5, 1.0); }\n"
+			"technique Numeric { pass { PixelShader = Pixel; } }\n");
+	expectPixels({ effect }, { 32, 64, 128, 255 });
+	const auto signedInput = writeShader("signed-vertex.fx",
+			"float4 Vertex(int id : SV_VertexID) : SV_Position {"
+			" return float4(id == 2 ? 3.0 : -1.0, id == 1 ? 3.0 : -1.0, 0.0, 1.0); }\n"
+			"float4 Pixel() : SV_Target { return float4(0.5, 0.25, 0.125, 1.0); }\n"
+			"technique Signed { pass { VertexShader = Vertex; PixelShader = Pixel; } }\n");
+	expectPixels({ signedInput }, { 128, 64, 32, 255 });
+	const auto structuredInput = writeShader("structured-vertex.fx",
+			"struct Input { uint id : SV_VertexID; };\n"
+			"float4 Vertex(Input input) : SV_Position { return float4(input.id == 2 ? 3.0 : -1.0,"
+			" input.id == 1 ? 3.0 : -1.0, 0.0, 1.0); }\n"
+			"float4 Pixel() : SV_Target { return float4(0.25, 0.5, 0.75, 1.0); }\n"
+			"technique Structured { pass { VertexShader = Vertex; PixelShader = Pixel; } }\n");
+	expectPixels({ structuredInput }, { 64, 128, 191, 255 });
+	const auto scalarSwizzles = writeShader("scalar-swizzles.fx",
+			"uniform float Gain = 0.25;\n"
+			"float4 Pixel() : SV_Target { float value = Gain; value.x = value.x * 2.0;"
+			" uint index = 1u; bool enabled = true;"
+			" float4 color = mad(value.xxxx, 1.0, 0.0); uint2 indices = index.xx; bool2 flags = enabled.xx;"
+			" return float4(color.x, Gain.xx.x, indices.y * 0.125, flags.y); }\n"
+			"technique Scalar { pass { PixelShader = Pixel; } }\n");
+	expectPixels({ scalarSwizzles }, { 128, 64, 32, 255 });
+
+	const auto library = directory / "bundled";
+	std::string error;
+	ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+	config::PostProcessShaderDirectory.get() = library.string();
+	unsigned selectable = 0;
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(library)) {
+		if (!entry.is_regular_file() || postprocess::detectFormat(entry.path().string()) == postprocess::ShaderFormat::Unknown)
+			continue;
+		SCOPED_TRACE(entry.path().string());
+		postprocess::ShaderChain chain;
+		if (!postprocess::loadShaderChain(entry.path().string(), chain, error)) {
+			ADD_FAILURE() << error;
+			continue;
+		}
+		GlShaderChain renderer;
+		EXPECT_TRUE(renderer.activate(chain, error)) << error;
+		++selectable;
+	}
+	EXPECT_EQ(36u, selectable);
+}
+
 } // namespace
 #endif

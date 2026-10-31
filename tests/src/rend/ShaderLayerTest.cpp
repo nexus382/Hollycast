@@ -6,6 +6,8 @@
 */
 #include "rend/postprocess/shader_chain.h"
 #include "cfg/option.h"
+#include "archive/ZipArchive.h"
+#include "oslib/resources.h"
 
 #include <algorithm>
 #include <chrono>
@@ -66,6 +68,7 @@ TEST_F(ShaderLayerTest, InstallsTheCompleteReleaseShaderLibrary)
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "shaders/ReShade.fxh"));
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "Textures/lut.png"));
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "Textures/crt-newpixie/crtframe.png"));
+	EXPECT_TRUE(std::filesystem::is_regular_file(library / "Textures/UIMask.png"));
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "LICENSES.txt"));
 }
 
@@ -84,6 +87,45 @@ TEST_F(ShaderLayerTest, PreservesUserShadersAndRepairsMissingBundledAssets)
 		EXPECT_EQ(custom, std::string(std::istreambuf_iterator<char>(file), {}));
 	}
 	EXPECT_GT(std::filesystem::file_size(library / "Textures/lut.png"), 0u);
+}
+
+TEST_F(ShaderLayerTest, UpgradesOnlyUnmodifiedBundledShaders)
+{
+	const auto library = directory / "shaders";
+	std::string error;
+	ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+	size_t archiveSize = 0;
+	auto archiveData = resource::load("shaders/library.zip", archiveSize);
+	ZipArchive archive;
+	ASSERT_TRUE(archiveData && archive.Open(archiveData.get(), archiveSize));
+	for (const char *name : { "CRT-HYLLIAN.glsl", "shaders/deband.glsl" }) {
+		SCOPED_TRACE(name);
+		std::unique_ptr<ArchiveFile> previous(archive.OpenFile(("previous/" + std::string(name)).c_str()));
+		ASSERT_NE(nullptr, previous);
+		std::vector<char> contents(previous->length());
+		ASSERT_EQ(contents.size(), previous->Read(contents.data(), static_cast<u32>(contents.size())));
+		{
+			std::ofstream file(library / name, std::ios::binary);
+			file.write(contents.data(), contents.size());
+		}
+		ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+		{
+			std::ifstream file(library / name, std::ios::binary);
+			EXPECT_NE(std::string(contents.begin(), contents.end()), std::string(std::istreambuf_iterator<char>(file), {}));
+		}
+		// Equal lengths still require an exact match before replacing a file.
+		std::string custom(contents.begin(), contents.end());
+		ASSERT_GT(custom.size(), 5u);
+		custom[5] = custom[5] == 'X' ? 'Y' : 'X';
+		{
+			std::ofstream file(library / name, std::ios::binary);
+			file << custom;
+		}
+		ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+		std::ifstream file(library / name, std::ios::binary);
+		EXPECT_EQ(custom, std::string(std::istreambuf_iterator<char>(file), {}));
+	}
+	EXPECT_FALSE(std::filesystem::exists(library / "previous"));
 }
 
 TEST_F(ShaderLayerTest, DoesNotInstallThroughAnEscapingDirectorySymlink)
