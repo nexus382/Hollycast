@@ -16,6 +16,10 @@ cover and game information; the same Library Scale control is in Library theme
 settings. Cases stay inside the shelf viewport. Larger details can scroll.
 General UI Scaling does not change the library's 100% UI baseline.
 
+When a game is launched, its case pulls out and turns toward the player before
+loading. A ScreenScraper `box-texture` supplies the wrapped artwork; otherwise
+the case uses the existing cover and spine. Only downloaded artwork is used.
+
 The selected game's mix image sits behind its front cover on the right. Cover
 art is the fallback when a mix image is unavailable. Mouse hover and keyboard
 or controller navigation update the artwork and metadata together. All shelves

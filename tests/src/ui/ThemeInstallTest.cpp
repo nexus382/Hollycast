@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -297,12 +298,10 @@ TEST_F(ThemeInstallTest, PreviewThemesValidateAssetsNoticesLimitsAndEveryInstall
 		std::vector<const char*> notices;
 	};
 	const std::vector<PackageExpectation> packages = {
+		{"disc-orbit", "disc-orbit", 1, {"SOURCE.md"}},
 		{"preview-art-book-next", "preview-art-book-next", 1, {"SOURCE.md"}},
-		{"preview-epic-noir-list", "preview-epic-noir-list", 1, {"SOURCE.md"}},
 		{"preview-fanart-disc", "preview-fanart-disc", 1, {"SOURCE.md"}},
 		{"preview-horizon-grid", "preview-horizon-grid", 1, {"SOURCE.md"}},
-		{"preview-iconic-dark-grid", "preview-iconic-dark-grid", 1, {"SOURCE.md"}},
-		{"preview-iconic-light-list", "preview-iconic-light-list", 1, {"SOURCE.md"}},
 	};
 	const fs::path repoThemes = fs::path(FLYCAST_TEST_FILES).parent_path().parent_path() / "themes";
 	ASSERT_TRUE(fs::is_directory(repoThemes)) << repoThemes;

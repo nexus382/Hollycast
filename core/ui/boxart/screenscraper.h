@@ -21,7 +21,7 @@ struct MediaType : artwork::MediaType
 };
 
 // These bits are persisted in settings and the artwork database. Append new types.
-inline constexpr std::array<MediaType, 11> mediaTypes{{
+inline constexpr std::array<MediaType, 12> mediaTypes{{
 	{artwork::mediaTypes[0], "box-2D", ""},
 	{artwork::mediaTypes[1], "mixrbv2", "mixrbv1"},
 	{artwork::mediaTypes[2], "wheel-hd", "wheel"},
@@ -33,6 +33,7 @@ inline constexpr std::array<MediaType, 11> mediaTypes{{
 	{artwork::mediaTypes[8], "box-3D", ""},
 	{artwork::mediaTypes[9], "box-2D-back", ""},
 	{artwork::mediaTypes[10], "box-2D-side", ""},
+	{artwork::mediaTypes[11], "box-texture", ""},
 }};
 using artwork::allMedia;
 using artwork::coverMedia;

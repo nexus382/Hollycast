@@ -100,6 +100,14 @@ GuiState gui_state = GuiState::Main;
 static bool commandLineStart;
 static library::LaunchMode libraryLaunchMode = library::LaunchMode::Default;
 static std::string libraryResumeStatePath;
+struct PendingRackLaunch
+{
+	themes::RackCaseAnimation visual;
+	std::string layoutKey, itemId, path, title, statePath;
+	double started = 0;
+	bool fromContextMenu = false, resume = false;
+};
+static std::optional<PendingRackLaunch> pendingRackLaunch;
 // Android storage callbacks can invalidate this cache off the render thread.
 static std::atomic<bool> librarySavestateCacheInvalidated{false};
 std::string launchOnExitUri;
@@ -2442,6 +2450,14 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	const ImVec2 available = ImGui::GetContentRegionAvail();
 	const themes::Layout& layout = themes::responsiveLayout(theme, requestedLayout,
 			available.x / std::max(1.f, available.y));
+	const std::string layoutKey = theme.directory + '/' + layout.id;
+	if (pendingRackLaunch && (layout.mode != "rack" || pendingRackLaunch->layoutKey != layoutKey))
+		pendingRackLaunch.reset();
+	if (pendingRackLaunch && !pendingRackLaunch->visual.texture.empty())
+	{
+		// Give the selected case priority over other shelf textures in the per-frame load budget.
+		ImguiFileTexture(pendingRackLaunch->visual.texture).getId();
+	}
 	std::vector<GameMedia> games;
 	std::vector<library::Entry> libraryEntries;
 	{
@@ -2486,6 +2502,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
 	// Resolve each requested media type once per game, including explicit fallbacks.
 	std::vector<std::string> mediaSources;
+	if (layout.mode == "rack")
+		mediaSources.insert(mediaSources.end(), {"cover", "spine"});
 	if (!browserSource.empty())
 		mediaSources.push_back(browserSource);
 	for (const auto& element : layout.elements)
@@ -2563,6 +2581,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			else if (source == "banner") media = config::LibraryCoverMediaMode::Banner;
 			else if (source == "backcover") media = config::LibraryCoverMediaMode::BackCover;
 			else if (source == "spine") media = config::LibraryCoverMediaMode::Spine;
+			else if (source == "boxtexture") media = config::LibraryCoverMediaMode::BoxTexture;
 			// Keep missing sources empty: decorative discs/logos can opt out of cover fallback.
 			item.metadata["artwork." + source] = boxart.getCustomMediaPath(game, media);
 		}
@@ -2575,10 +2594,13 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	int favouriteAction = -1;
 	bool contextResume = false;
 	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+	std::vector<ImVec4> itemBounds(items.size());
 	const int activated = themes::renderLibrary(layout, theme.directory, items, [&](size_t index) {
 		const GameMedia& game = visibleGames[index];
 		const ImVec2 itemMin = ImGui::GetItemRectMin();
 		const ImVec2 itemMax = ImGui::GetItemRectMax();
+		itemBounds[index] = ImVec4(itemMin.x, itemMin.y, itemMax.x, itemMax.y);
 		const ImVec2 nextCursor = ImGui::GetCursorScreenPos();
 		const bool itemActive = ImGui::IsItemActive();
 		const bool itemHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly | ImGuiHoveredFlags_NoNavOverride);
@@ -2644,19 +2666,17 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			}
 			ImGui::SetCursorScreenPos(nextCursor);
 		}
-	}, iconSource, std::clamp(config::LibraryIconScale.get(), 50, 200) / 100.f, requestedLayout.id, [&](size_t index) {
-		const GameMedia& game = visibleGames[index];
-		std::vector<std::string> favourites = config::LibraryFavourites.get();
-		library::setFavourite(game.path, !library::isFavourite(game.path, favourites), favourites);
-		config::LibraryFavourites.set(favourites);
-		config::LibraryFavourites.save();
-		favouriteAction = static_cast<int>(index);
-		resetLibraryGameInfoHover();
-	}, [](const std::string& sound) {
-		playUiSound(sound);
-	});
+	}, iconSource, std::clamp(config::LibraryIconScale.get(), 50, 200) / 100.f, requestedLayout.id,
+		[&](size_t index) {
+			const GameMedia& game = visibleGames[index];
+			std::vector<std::string> favourites = config::LibraryFavourites.get();
+			library::setFavourite(game.path, !library::isFavourite(game.path, favourites), favourites);
+			config::LibraryFavourites.set(favourites); config::LibraryFavourites.save();
+			favouriteAction = static_cast<int>(index); resetLibraryGameInfoHover();
+		}, [](const std::string& sound) { playUiSound(sound); },
+		pendingRackLaunch ? pendingRackLaunch->itemId : std::string());
 
-	auto startThemedGame = [&](size_t index, bool resume) {
+	auto startThemedGame = [&](size_t index, bool resume, bool fromContextMenu) {
 		const GameMedia& game = visibleGames[index];
 		const GameBoxart& art = artwork[index];
 		std::string statePath;
@@ -2670,22 +2690,59 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			}
 			statePath = state.path;
 		}
-		settings.content.title = art.name;
-		if (settings.content.title.empty() || settings.content.title == game.fileName)
-			settings.content.title = get_file_basename(game.fileName);
+		std::string title = art.name;
+		if (title.empty() || title == game.fileName)
+			title = get_file_basename(game.fileName);
+		const ImVec4 bounds = itemBounds[index];
+		if (layout.mode == "rack" && bounds.z > bounds.x && bounds.w > bounds.y)
+		{
+			const auto media = [&](const char* source) {
+				const auto found = items[index].metadata.find(std::string("artwork.") + source);
+				return found == items[index].metadata.end() ? std::string() : found->second;
+			};
+			PendingRackLaunch launch;
+			launch.layoutKey = layoutKey;
+			launch.itemId = items[index].id;
+			launch.path = game.path;
+			launch.title = title;
+			launch.statePath = statePath;
+			launch.fromContextMenu = fromContextMenu;
+			launch.resume = resume;
+			launch.started = ImGui::GetTime();
+			launch.visual = {bounds, ImVec4(origin.x, origin.y, origin.x + canvasSize.x, origin.y + canvasSize.y),
+					items[index].title, boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::BoxTexture),
+					media("cover"), media("spine"), boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::BackCover)};
+			if (launch.visual.cover.empty()) launch.visual.cover = art.boxartPath;
+			pendingRackLaunch = std::move(launch);
+			resetLibraryGameInfoHover();
+			return;
+		}
+		settings.content.title = title;
 		librarySavestateCacheInvalidated = true;
-		gui_start_library_game(game.path, resume, statePath);
+		if (fromContextMenu) gui_start_library_game(game.path, resume, statePath);
+		else gui_start_game(game.path);
 	};
 
 	if (contextAction >= 0)
-		startThemedGame(static_cast<size_t>(contextAction), contextResume);
+		startThemedGame(static_cast<size_t>(contextAction), contextResume, true);
 	else if (favouriteAction < 0 && activated >= 0)
+		startThemedGame(static_cast<size_t>(activated), false, false);
+	if (pendingRackLaunch)
 	{
-		settings.content.title = artwork[activated].name;
-		if (settings.content.title.empty() || settings.content.title == visibleGames[activated].fileName)
-			settings.content.title = get_file_basename(visibleGames[activated].fileName);
-		librarySavestateCacheInvalidated = true;
-		gui_start_game(visibleGames[activated].path);
+		// Never wait for a download on launch. Render cached art, then run the usual
+		// launch path once after the last animation frame.
+		constexpr double duration = 0.9;
+		const float progress = static_cast<float>((ImGui::GetTime() - pendingRackLaunch->started) / duration);
+		themes::drawRackCasePullOut(pendingRackLaunch->visual, progress);
+		if (progress >= 1.f)
+		{
+			PendingRackLaunch launch = std::move(*pendingRackLaunch);
+			pendingRackLaunch.reset();
+			settings.content.title = launch.title;
+			librarySavestateCacheInvalidated = true;
+			if (launch.fromContextMenu) gui_start_library_game(launch.path, launch.resume, launch.statePath);
+			else gui_start_game(launch.path);
+		}
 	}
 #if defined(__ANDROID__)
 	if (!ImGui::GetIO().MouseDown[ImGuiMouseButton_Left] || !touchedLibraryItemThisFrame)
@@ -4594,6 +4651,8 @@ void gui_togglePause()
 
 void gui_setState(GuiState newState)
 {
+	if (newState != GuiState::Main)
+		pendingRackLaunch.reset();
 	if (gui_state != newState)
 	{
 		if (gui_state == GuiState::VJoyEditCommands)

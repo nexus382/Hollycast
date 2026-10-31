@@ -169,7 +169,7 @@ const std::set<std::string>& metadataFields()
 
 const std::set<std::string>& artworkSources()
 {
-	static const std::set<std::string> values = {"", "cover", "miximage", "case", "screenshot", "fanart", "title", "physical", "titlescreen", "banner", "backcover", "spine", "disc"};
+	static const std::set<std::string> values = {"", "cover", "miximage", "case", "screenshot", "fanart", "title", "physical", "titlescreen", "banner", "backcover", "spine", "disc", "boxtexture"};
 	return values;
 }
 
@@ -308,7 +308,7 @@ Theme parse(const std::string& json, const std::string& directory)
 		if (!layoutIds.insert(layout.id).second) invalid(lp + ".id", "must be unique within the theme");
 		layout.name = stringValue(required(item, "name", lp), lp + ".name", false);
 		layout.mode = stringValue(required(item, "mode", lp), lp + ".mode", false);
-		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail") invalid(lp + ".mode", "must be grid, list, rack, or rail");
+		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail" && layout.mode != "orbit") invalid(lp + ".mode", "must be grid, list, rack, rail, or orbit");
 		layout.browser = parseRect(required(item, "browser", lp), lp + ".browser", 0.1);
 		if (auto it = item.find("columns"); it != item.end()) layout.columns = integerValue(*it, lp + ".columns", 1, layout.mode == "rack" ? 64 : 12);
 		if (auto it = item.find("itemAspect"); it != item.end()) layout.itemAspect = static_cast<float>(numberValue(*it, lp + ".itemAspect", layout.mode == "rack" ? 0.03 : 0.3, 3));

@@ -405,7 +405,8 @@ enum class LibraryCoverMediaMode
 	Banner = 10,
 	BackCover = 11,
 	Spine = 12,
-	Count = 13,
+	BoxTexture = 13,
+	Count = 14,
 };
 
 enum class VmuIconPlaybackMode

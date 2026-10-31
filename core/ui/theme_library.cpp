@@ -768,6 +768,211 @@ ImU32 withAlpha(ImU32 value, float alpha)
 	return (value & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
 }
 
+
+struct OrbitState
+{
+	double position = 0, target = 0, spin = 0;
+	int count = 0;
+	std::string selection, clickedKey;
+	double clickedAt = 0;
+	ImVec2 clickedPos;
+	float wheel = 0;
+};
+
+// A bounded seven-disc window keeps large libraries cheap. The rear seam is faded
+// as entries enter/leave the window; indices wrap through the full filtered list.
+void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source, float iconScale,
+		ImDrawList* drawList, OrbitState& state, int& selected, std::string& selectedId,
+		int& activated, const std::function<void(size_t)>& afterItem)
+{
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const ImVec2 area = ImGui::GetContentRegionAvail();
+	const int count = static_cast<int>(items.size());
+	const int slots = std::min(count, 7);
+	const auto wrapped = [count](int value) { return (value % count + count) % count; };
+	auto& io = ImGui::GetIO();
+	auto& g = *GImGui;
+	const bool locked = (g.CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
+	const bool input = !locked && !io.WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+	if (g.NavWindow == nullptr) ImGui::FocusWindow(ImGui::GetCurrentWindow());
+	const bool ownsNav = g.NavWindow == ImGui::GetCurrentWindow() || g.NavId == 0 || !g.NavCursorVisible;
+	const auto choose = [&](int index) {
+		selected = wrapped(index);
+		selectedId = itemKey(items[selected], static_cast<size_t>(selected));
+	};
+	if (input && ownsNav && g.NavMoveSubmitted &&
+				(g.NavMoveDir == ImGuiDir_Left || g.NavMoveDir == ImGuiDir_Right))
+	{
+		choose(selected + (g.NavMoveDir == ImGuiDir_Right ? 1 : -1));
+		ImGui::NavMoveRequestCancel();
+	}
+	if (input && ownsNav)
+		for (const ImGuiKey key : {ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_Space, ImGuiKey_NavGamepadActivate})
+			if (ImGui::IsKeyPressed(key, false)) activated = selected;
+	if (!input) state.wheel = 0;
+	if (input && ImGui::IsWindowHovered())
+	{
+		state.wheel -= io.MouseWheel + io.MouseWheelH;
+		const int steps = static_cast<int>(state.wheel);
+		if (steps != 0) { choose(selected + steps); state.wheel -= steps; }
+	}
+	if (state.count != count)
+	{
+		state.count = count;
+		state.position = state.target = selected;
+		state.selection = selectedId;
+		state.spin = 0;
+	}
+	if (state.selection != selectedId)
+	{
+		int delta = selected - wrapped(static_cast<int>(std::round(state.target)));
+		if (delta > count / 2) delta -= count;
+		if (delta < -count / 2) delta += count;
+		state.target += delta;
+		state.selection = selectedId;
+		state.spin = 0;
+	}
+	state.position += (state.target - state.position) * (1.0 - std::exp(-io.DeltaTime * 11.0));
+	if (std::fabs(state.target - state.position) < 0.0001) state.position = state.target;
+	// Let the case settle at the front before its label starts turning. Integrating
+	// frame time keeps the speed constant and resets cleanly for another selection.
+	if (!locked && std::fabs(state.target - state.position) < 0.08)
+		state.spin = std::fmod(state.spin + io.DeltaTime * (2.0 * IM_PI / 24.0), 2.0 * IM_PI);
+
+	// Keep interpolation precise after many full turns without changing any angle.
+	if (std::fabs(state.target) > count * 4.0)
+	{
+		const double turns = std::floor(state.target / count) * count;
+		state.position -= turns; state.target -= turns;
+	}
+	struct Disc { int index; ImVec2 center; float radius, yaw, depth, opacity, lift; };
+	std::vector<Disc> discs;
+	const int base = static_cast<int>(std::round(state.position));
+	const float step = 2.f * IM_PI / slots;
+	const float radius = std::min(area.y * 0.265f, area.x * 0.115f) * std::clamp(iconScale, 0.65f, 1.2f);
+	for (int offset = -slots / 2; offset < slots - slots / 2; ++offset)
+	{
+		const float distance = static_cast<float>(base + offset - state.position);
+		const float angle = distance * step;
+		const float depth = std::cos(angle), side = std::sin(angle);
+		const float scale = 0.79f + 0.21f * depth;
+		float lift = std::clamp(1.f - std::fabs(distance) / 0.85f, 0.f, 1.f);
+		lift = lift * lift * (3.f - 2.f * lift);
+		const float r = radius * scale;
+		const float floorY = origin.y + area.y * (0.78f + depth * 0.14f);
+		const float opacity = count > slots ? std::clamp(slots * 0.5f - std::fabs(distance), 0.f, 1.f) : 1.f;
+		discs.push_back({wrapped(base + offset), ImVec2(origin.x + area.x * (0.5f + side * 0.39f),
+			floorY - r - lift * area.y * 0.16f), r, -side * 0.65f, depth, opacity, lift});
+	}
+	std::stable_sort(discs.begin(), discs.end(), [](const Disc& a, const Disc& b) { return a.depth < b.depth; });
+	int hit = -1;
+	for (const Disc& disc : discs)
+	{
+		const float x = (io.MousePos.x - disc.center.x) / std::max(1.f, disc.radius * std::cos(disc.yaw));
+		const float y = (io.MousePos.y - disc.center.y) / std::max(1.f, disc.radius);
+		if (disc.opacity > 0.1f && x*x + y*y <= 1.f && x*x + y*y >= 0.012f) hit = disc.index;
+	}
+	// Input submits nearest first; the draw pass below submits farthest first.
+	// This keeps an overlapping rear disc from stealing a front disc's click.
+	const ImVec2 sinceClick = io.MousePos - state.clickedPos;
+	const bool secondClick = input && !state.clickedKey.empty() && ImGui::IsMouseDoubleClicked(0)
+			&& ImGui::GetTime() - state.clickedAt <= io.MouseDoubleClickTime
+			&& ImLengthSqr(sinceClick) <= io.MouseDoubleClickMaxDist * io.MouseDoubleClickMaxDist;
+	if (secondClick)
+		for (int i = 0; i < count; ++i)
+			if (itemKey(items[i], static_cast<size_t>(i)) == state.clickedKey) activated = i;
+	for (auto it = discs.rbegin(); it != discs.rend(); ++it)
+	{
+		const Disc& disc = *it;
+		const std::string key = itemKey(items[disc.index], static_cast<size_t>(disc.index));
+		ImguiID id(key);
+		const float width = disc.radius * std::cos(disc.yaw);
+		ImGui::SetCursorScreenPos(disc.center - ImVec2(width, disc.radius));
+		ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, disc.index != selected);
+		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0,0,0,0));
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0,0,0,0));
+		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0,0,0,0));
+		ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0,0,0,0));
+		const bool pressed = ImGui::Selectable("##libraryItem", disc.index == selected,
+			disc.index != hit && ImGui::IsWindowHovered() ? ImGuiSelectableFlags_Disabled : ImGuiSelectableFlags_None,
+			ImVec2(width * 2.f, disc.radius * 2.f));
+		ImGui::PopStyleColor(4);
+		ImGui::PopItemFlag();
+		if (disc.index == selected) ImGui::SetItemDefaultFocus();
+		if (input && pressed && !secondClick)
+		{
+			choose(disc.index);
+			state.clickedKey = key;
+			state.clickedAt = ImGui::GetTime(); state.clickedPos = io.MousePos;
+		}
+		if (afterItem) afterItem(static_cast<size_t>(disc.index));
+	}
+	std::vector<ImVec2> orbit;
+	for (int i = 0; i < 96; ++i)
+	{
+		const float angle = i * 2.f * IM_PI / 96;
+		orbit.emplace_back(origin.x + area.x * (0.5f + std::sin(angle) * 0.39f),
+			origin.y + area.y * (0.78f + std::cos(angle) * 0.14f));
+	}
+	drawList->AddPolyline(orbit.data(), static_cast<int>(orbit.size()), IM_COL32(90,184,222,95), ImDrawFlags_Closed, 1.5f);
+	for (const Disc& disc : discs)
+	{
+		const ImVec2 floor(disc.center.x, disc.center.y + disc.radius + disc.lift * area.y * 0.16f);
+		drawList->AddEllipseFilled(floor, ImVec2(disc.radius * 0.85f, disc.radius * 0.12f), IM_COL32(0,0,0,static_cast<int>(95*disc.opacity)));
+		if (disc.index == selected)
+		{
+			drawList->AddEllipse(floor, ImVec2(disc.radius * 0.9f, disc.radius * 0.15f), IM_COL32(55,192,240,45), 0, 64, 10.f);
+			drawList->AddEllipse(floor, ImVec2(disc.radius * 0.9f, disc.radius * 0.15f), IM_COL32(95,222,255,170), 0, 64, 2.f);
+		}
+	}
+
+	for (const Disc& disc : discs)
+	{
+		const auto project = [&](float x, float y) {
+			const float perspective = 1.f + x / std::max(1.f, disc.radius) * std::sin(disc.yaw) * 0.1f;
+			return disc.center + ImVec2(x * std::cos(disc.yaw) / perspective, y / perspective);
+		};
+		const LibraryItem& item = items[disc.index];
+		const std::string image = artworkPath(item, source);
+		const ImTextureID texture = imguiDriver && !image.empty() ? ImguiFileTexture(image).getId() : ImTextureID{};
+		constexpr int segments = 72;
+		const float spin = disc.index == selected && state.selection == selectedId ? static_cast<float>(state.spin) : 0.f;
+		const auto ring = discRing(0, 0, disc.radius, 0.115f, spin, segments);
+		const float aspect = texture != ImTextureID{} ? std::max(0.001f, imguiDriver->getAspectRatio(texture)) : 1.f;
+		const float brightness = 0.68f + 0.32f * ((disc.depth + 1.f) * 0.5f);
+		const ImU32 tint = IM_COL32(static_cast<int>(255*brightness), static_cast<int>(255*brightness),
+			static_cast<int>(255*brightness), static_cast<int>(255*disc.opacity));
+		if (texture != ImTextureID{}) drawList->PushTexture(texture);
+		drawList->PrimReserve(segments * 6, static_cast<int>(ring.size()));
+		const ImDrawIdx first = static_cast<ImDrawIdx>(drawList->_VtxCurrentIdx);
+		std::vector<ImVec2> rim, hub;
+		for (size_t i = 0; i < ring.size(); ++i)
+		{
+			const auto& v = ring[i];
+			const ImVec2 point = project(v.x, v.y);
+			// Center-crop non-square cover fallbacks rather than stretching them into circles.
+			ImVec2 uv(0.5f + (v.u-0.5f) * std::min(1.f, 1.f/aspect), 0.5f + (v.v-0.5f) * std::min(1.f, aspect));
+			if (texture == ImTextureID{}) uv = ImGui::GetFontTexUvWhitePixel();
+			drawList->PrimWriteVtx(point, uv, texture != ImTextureID{} ? tint : IM_COL32(155,173,187,static_cast<int>(255*disc.opacity)));
+			(i % 2 == 0 ? rim : hub).push_back(point);
+		}
+		for (int i = 0; i < segments; ++i)
+		{
+			const ImDrawIdx a = static_cast<ImDrawIdx>(first + i*2), b = static_cast<ImDrawIdx>(a+1);
+			const ImDrawIdx c = static_cast<ImDrawIdx>(a+2), d = static_cast<ImDrawIdx>(a+3);
+			for (const ImDrawIdx index : {a,c,d,a,d,b}) drawList->PrimWriteIdx(index);
+		}
+		if (texture != ImTextureID{}) drawList->PopTexture();
+		const ImU32 edge = disc.index == selected ? IM_COL32(100,221,255,255) : IM_COL32(197,210,225,static_cast<int>(220*disc.opacity));
+		drawList->AddPolyline(rim.data(), static_cast<int>(rim.size()), IM_COL32(12,22,33,static_cast<int>(255*disc.opacity)), ImDrawFlags_Closed, 5.f);
+		drawList->AddPolyline(rim.data(), static_cast<int>(rim.size()), edge, ImDrawFlags_Closed, 1.5f);
+		drawList->AddPolyline(hub.data(), static_cast<int>(hub.size()), edge, ImDrawFlags_Closed, 2.f);
+		if (texture == ImTextureID{})
+			drawSingleLine(drawList, ImRect(disc.center + ImVec2(-disc.radius*0.7f,disc.radius*0.35f),
+				disc.center + ImVec2(disc.radius*0.7f,disc.radius*0.6f)), item.title, IM_COL32(12,25,40,255));
+	}
+}
+
 struct RailState
 {
 	float position = 0;
@@ -1252,13 +1457,128 @@ std::optional<double> libraryStat(const std::string& source, const std::vector<L
 	return result;
 }
 
+void drawRackCasePullOut(const RackCaseAnimation& animation, float progress)
+{
+	const ImRect slot(ImVec2(animation.slot.x, animation.slot.y), ImVec2(animation.slot.z, animation.slot.w));
+	const ImRect viewport(ImVec2(animation.viewport.x, animation.viewport.y), ImVec2(animation.viewport.z, animation.viewport.w));
+	if (slot.GetWidth() <= 0.f || slot.GetHeight() <= 0.f || viewport.GetWidth() <= 0.f || viewport.GetHeight() <= 0.f)
+		return;
+	progress = std::clamp(progress, 0.f, 1.f);
+	auto smooth = [](float t) { t = std::clamp(t, 0.f, 1.f); return t * t * (3.f - 2.f * t); };
+	const float pull = smooth(progress / 0.35f);
+	const float turn = smooth((progress - 0.25f) / 0.55f);
+	const float angle = 1.5707963f - turn * 1.3907963f;
+	const float cosine = std::cos(angle), sine = std::sin(angle);
+	const ImVec2 start = slot.GetCenter();
+	const ImVec2 target(viewport.GetCenter().x, viewport.GetCenter().y);
+	const ImVec2 center(ImLerp(start.x, target.x, turn),
+			ImLerp(start.y - slot.GetHeight() * 0.08f * pull, target.y, turn));
+
+	ImguiFileTexture atlas(animation.texture), cover(animation.cover), spine(animation.spine), back(animation.back);
+	const ImTextureID atlasId = imguiDriver && !animation.texture.empty() ? atlas.getId() : ImTextureID{};
+	const float atlasAspect = atlasId != ImTextureID{} ? imguiDriver->getAspectRatio(atlasId) : 0.f;
+	// Dreamcast box textures are unfolded left-to-right: back, spine, square front.
+	// Reject incompatible images instead of cutting a 3D-box render into faces.
+	const bool wrapped = atlasId != ImTextureID{} && atlasAspect >= 1.8f && atlasAspect <= 4.f;
+	const ImTextureID frontId = wrapped ? atlasId : imguiDriver && !animation.cover.empty() ? cover.getId() : ImTextureID{};
+	const ImTextureID spineId = wrapped ? atlasId : imguiDriver && !animation.spine.empty() ? spine.getId() : ImTextureID{};
+	const ImTextureID backId = wrapped ? atlasId : imguiDriver && !animation.back.empty() ? back.getId() : ImTextureID{};
+	float spineAspect = spine.getAspectRatio();
+	if (spineAspect > 1.f) spineAspect = 1.f / spineAspect;
+	const bool textureEu = animation.texture.find("-eu.") != std::string::npos;
+	const bool textureUs = animation.texture.find("-us.") != std::string::npos;
+	const bool spineEu = animation.spine.find("-eu.") != std::string::npos;
+	const bool spineUs = animation.spine.find("-us.") != std::string::npos;
+	// Without a matching scan, use typical PAL/US proportions. Atlas width is
+	// only a best-effort region hint when its filename has no region suffix.
+	if (spineAspect <= 0.f || (textureEu && spineUs) || (textureUs && spineEu))
+		spineAspect = textureEu || (!textureUs && atlasAspect >= 2.25f) ? 87.f / 680.f : 39.f / 680.f;
+	spineAspect = std::clamp(spineAspect, 0.025f, 0.3f);
+	const float frontAspect = wrapped || frontId == ImTextureID{} ? 1.f
+			: std::clamp(imguiDriver->getAspectRatio(frontId), 0.6f, 1.4f);
+	const float height = ImLerp(slot.GetHeight() * (4.f - frontAspect * 0.5f) / 4.f,
+			std::min({viewport.GetHeight() * 0.72f, viewport.GetWidth() * 0.72f / frontAspect, slot.GetHeight() * 1.25f}), turn);
+	// Match the shelf slot at the start, then settle on the scan's actual depth.
+	const float depth = ImLerp(slot.GetWidth() / slot.GetHeight(), spineAspect, turn);
+	const float frontU = wrapped ? 1.f - 1.f / atlasAspect : 0.f;
+	const float spineU = wrapped ? std::max(0.f, frontU - spineAspect / atlasAspect) : 0.f;
+
+	struct Point { float x, y, z; };
+	auto interpolate = [](const Point& a, const Point& b, float t) {
+		return Point{ImLerp(a.x, b.x, t), ImLerp(a.y, b.y, t), ImLerp(a.z, b.z, t)};
+	};
+	auto project = [&](const Point& point) {
+		const float x = point.x * cosine + point.z * sine;
+		const float z = -point.x * sine + point.z * cosine;
+		const float perspective = 4.f / (4.f - z);
+		return ImVec2(center.x + height * x * perspective, center.y + height * point.y * perspective);
+	};
+	ImDrawList* drawList = ImGui::GetForegroundDrawList();
+	drawList->PushClipRect(viewport.Min, viewport.Max, true);
+	// Subdivide textured faces so perspective does not visibly bend an image at
+	// the diagonal shared by the two triangles of a single ImGui image quad.
+	auto drawFace = [&](const std::array<Point, 4>& corners, ImTextureID image,
+			const std::array<ImVec2, 4>& uv, ImU32 tint, ImU32 fallback) {
+		if (image == ImTextureID{})
+		{
+			const ImVec2 points[]{project(corners[0]), project(corners[1]), project(corners[2]), project(corners[3])};
+			drawList->AddConvexPolyFilled(points, 4, fallback);
+			return;
+		}
+		constexpr int divisions = 6;
+		for (int y = 0; y < divisions; ++y)
+			for (int x = 0; x < divisions; ++x)
+			{
+				const float x0 = static_cast<float>(x) / divisions, x1 = static_cast<float>(x + 1) / divisions;
+				const float y0 = static_cast<float>(y) / divisions, y1 = static_cast<float>(y + 1) / divisions;
+				auto point = [&](float u, float v) {
+					return project(interpolate(interpolate(corners[0], corners[1], u), interpolate(corners[3], corners[2], u), v));
+				};
+				auto texcoord = [&](float u, float v) {
+					return ImLerp(ImLerp(uv[0], uv[1], u), ImLerp(uv[3], uv[2], u), v);
+				};
+				drawList->AddImageQuad(image, point(x0, y0), point(x1, y0), point(x1, y1), point(x0, y1),
+						texcoord(x0, y0), texcoord(x1, y0), texcoord(x1, y1), texcoord(x0, y1), tint);
+			}
+	};
+	const float left = -frontAspect * 0.5f, right = frontAspect * 0.5f;
+	const float rear = -depth * 0.5f, front = depth * 0.5f;
+	const std::array<Point, 4> backFace{{{left, -.5f, rear}, {right, -.5f, rear}, {right, .5f, rear}, {left, .5f, rear}}};
+	const std::array<Point, 4> frontFace{{{left, -.5f, front}, {right, -.5f, front}, {right, .5f, front}, {left, .5f, front}}};
+	const std::array<Point, 4> sideFace{{{left, -.5f, rear}, {left, -.5f, front}, {left, .5f, front}, {left, .5f, rear}}};
+	auto imageUV = [](float x0, float x1) {
+		return std::array<ImVec2, 4>{ImVec2(x0, 0), ImVec2(x1, 0), ImVec2(x1, 1), ImVec2(x0, 1)};
+	};
+	drawFace(backFace, backId, imageUV(0, wrapped ? spineU : 1.f), IM_COL32(190, 190, 190, 255), IM_COL32(24, 29, 36, 255));
+	drawFace(frontFace, frontId, imageUV(wrapped ? frontU : 0.f, 1.f), IM_COL32_WHITE, IM_COL32(50, 60, 75, 255));
+	const bool rotateSpine = !wrapped && spineId != ImTextureID{} && imguiDriver->getAspectRatio(spineId) > 1.f;
+	const auto sideUV = rotateSpine ? std::array<ImVec2, 4>{ImVec2(0, 1), ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1)}
+			: imageUV(wrapped ? spineU : 0.f, wrapped ? frontU : 1.f);
+	drawFace(sideFace, spineId, sideUV, IM_COL32(225, 225, 225, 255), IM_COL32(35, 43, 54, 255));
+	const ImVec2 top[]{project(frontFace[0]), project(frontFace[1]), project(backFace[1]), project(backFace[0])};
+	drawList->AddConvexPolyFilled(top, 4, IM_COL32(155, 169, 183, 220));
+	const ImVec2 outline[]{project(sideFace[0]), project(frontFace[0]), project(frontFace[1]),
+			project(frontFace[2]), project(frontFace[3]), project(sideFace[3])};
+	drawList->AddPolyline(outline, 6, IM_COL32(227, 232, 237, 190), ImDrawFlags_Closed, std::max(1.f, uiScaled(1.f)));
+	if (frontId == ImTextureID{} && turn > 0.2f)
+	{
+		const ImVec2 a = project(frontFace[0]), b = project(frontFace[2]);
+		const float padding = std::max(3.f, height * 0.04f);
+		ImGui::PushFont(nullptr, std::clamp(height * 0.07f, 9.f, 24.f));
+		drawSingleLine(drawList, ImRect(ImVec2(a.x + padding, center.y - ImGui::GetFontSize() * 0.5f),
+				ImVec2(b.x - padding, center.y + ImGui::GetFontSize())), animation.title, IM_COL32(245, 245, 245, 255));
+		ImGui::PopFont();
+	}
+	drawList->PopClipRect();
+}
+
 // Negative zIndex elements are drawn behind the browser; zero and positive
 // elements are drawn over it. All element geometry uses the full content canvas.
 // IsItemHovered follows active mouse/navigation highlighting; focus alone persists after mouse movement.
 std::optional<std::string> iconArtworkSource(int mediaMode)
 {
-	static const std::array<const char*, 13> sources{
-		"", "miximage", "cover", "case", "screenshot", "title", "physical", "fanart", "titlescreen", "", "banner", "backcover", "spine"
+	static const std::array<const char*, 14> sources{
+		"", "miximage", "cover", "case", "screenshot", "title", "physical", "fanart", "titlescreen", "", "banner", "backcover", "spine", "boxtexture"
 	};
 	if (mediaMode < 0 || mediaMode >= static_cast<int>(sources.size()) || mediaMode == 9)
 		return std::nullopt;
@@ -1269,7 +1589,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::vector<LibraryItem>& items, const std::function<void(size_t)>& afterItem,
 		const std::optional<std::string>& iconSource, float iconScale,
 		const std::string& stateLayoutId, const std::function<void(size_t)>& toggleFavourite,
-		const std::function<void(const std::string&)>& playSound)
+		const std::function<void(const std::string&)>& playSound, const std::string& pulledItemId)
 {
 	iconScale = std::clamp(iconScale, 0.5f, 2.f);
 	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
@@ -1278,6 +1598,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	static std::string previewSource;
 	static bool scrollSelection = false;
 	static RailState railState;
+	static OrbitState orbitState;
 	static bool gridFocused = false;
 	static std::string effectSelection;
 	static double selectionTime = 0;
@@ -1294,6 +1615,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		previewSource = layout.previewSource;
 		scrollSelection = false;
 		railState = {};
+		orbitState = {};
 		gridFocused = false;
 		effectSelection.clear();
 		lastInputTime = ImGui::GetTime();
@@ -1376,9 +1698,10 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
 	ImGui::BeginDisabled(launching);
 	const bool railMode = layout.mode == "rail";
+	const bool orbitMode = layout.mode == "orbit";
 	const bool paged = layout.pagedGrid.rows > 0;
 	const bool childVisible = ImGui::BeginChild("##themeLibraryBrowser", browserSize, ImGuiChildFlags_NavFlattened,
-			ImGuiWindowFlags_NoBackground | ((railMode || paged) ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None));
+			ImGuiWindowFlags_NoBackground | ((railMode || orbitMode || paged) ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None));
 	if (layout.fontSize > 0)
 		ImGui::PushFont(nullptr, std::clamp(layout.fontSize * canvas.size.y * iconScale, 10.f, 96.f));
 	const ImVec2 previousItemSpacing = ImGui::GetStyle().ItemSpacing;
@@ -1396,7 +1719,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	if (childVisible && !items.empty())
 	{
 		const float spacing = std::max(0.0f, uiScaled(layout.spacing) * iconScale);
-		if (paged)
+		if (orbitMode)
+		{
+			scrollSelection = false;
+			drawOrbit(items, browserSource, iconScale, browserDrawList, orbitState, selected, selectedId, activated, observeItem);
+		}
+		else if (paged)
 		{
 			browserColumns = drawPagedGrid(layout, items, browserSource, iconScale, gridFocused, selected, selectedId, activated, observeItem);
 			scrollSelection = false;
@@ -1426,12 +1754,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 					const bool pressed = browserSelectable(layout, isSelected, ImVec2(0.0f, rowHeight));
 					const bool hovered = ImGui::IsItemHovered();
 					const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-					if (hovered || pressed)
+					if (pulledItemId.empty() && (hovered || pressed))
 					{
 						selected = i;
 						selectedId = key;
 					}
-					if (activatesItem(layout, pressed))
+		if (pulledItemId.empty() && activatesItem(layout, pressed))
 						activated = i;
 					const float padding = uiScaled(8.f);
 					float textLeft = itemRect.Min.x + padding;
@@ -1458,7 +1786,6 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 					if (layout.showFavouriteMarker && item.favourite) drawFavouriteMarker(layout, itemRect, browserDrawList);
 					// Draw per-game controls after the artwork/title, retaining the selectable's item data.
 					observeItem(static_cast<size_t>(i));
-					if (scrollSelection && i == selected) { ImGui::SetScrollHereY(); scrollSelection = false; }
 				}
 		}
 		else
@@ -1542,12 +1869,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 						const bool pressed = browserSelectable(layout, isSelected, ImVec2(itemWidth, cellHeight));
 						const bool hovered = ImGui::IsItemHovered();
 						const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-						if (hovered || pressed)
+						if (pulledItemId.empty() && (hovered || pressed))
 						{
 							selected = i;
 							selectedId = key;
 						}
-						if (activatesItem(layout, pressed))
+		if (pulledItemId.empty() && activatesItem(layout, pressed))
 							activated = i;
 
 						const float titleHeight = layout.showTitles
@@ -1557,11 +1884,13 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 						std::string image = artworkPath(item, browserSource, rack ? "none" : "default");
 						if (image.empty() && !rack) image = layout.placeholderAsset;
 						const uint32_t tint = 0xffffff00 | static_cast<uint32_t>(255.f * ((selectedId == key || hovered) ? 1.f : layout.inactiveOpacity));
-						if (rack)
+						if (rack && key == pulledItemId)
+							browserDrawList->AddRectFilled(itemRect.Min, itemRect.Max, IM_COL32(8, 10, 13, 210));
+						else if (rack)
 							drawSpine(browserDrawList, itemRect, item, browserSource, selectedId == key || hovered, tint);
 						else
 							drawFittedImage(browserDrawList, imageRect, image, "contain", tint, layout.rounding, layout.pixelArt);
-						if (selectedId == key || hovered)
+						if (key != pulledItemId && (selectedId == key || hovered))
 							browserDrawList->AddRect(itemRect.Min, itemRect.Max,
 									layout.selectorBorderColor ? color(*layout.selectorBorderColor)
 											: layout.selectorColor ? color(*layout.selectorColor) : ImGui::GetColorU32(ImGuiCol_NavHighlight),
@@ -1582,8 +1911,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 									std::max(0.0f, titleRect.GetWidth() - uiScaled(8.0f)));
 							browserDrawList->PopClipRect();
 						}
-						if (layout.showFavouriteMarker && item.favourite) drawFavouriteMarker(layout, itemRect, browserDrawList);
-						observeItem(static_cast<size_t>(i));
+					observeItem(static_cast<size_t>(i));
 						x += itemWidth + spacing;
 						if (scrollSelection && i == selected) { ImGui::SetScrollHereY(); scrollSelection = false; }
 					}
@@ -1614,7 +1942,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	const bool detailsOnRight = layout.browser.x + layout.browser.w * 0.5f <= 0.5f;
 	const float split = detailsOnRight ? layout.browser.x + layout.browser.w : layout.browser.x;
 	const bool authoredDetails = std::any_of(layout.elements.begin(), layout.elements.end(), [](const Element& element) { return element.type == "details"; });
-	const Rect details{detailsOnRight ? split : 0.f, 0.f, authoredDetails ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
+	const Rect details{detailsOnRight ? split : 0.f, 0.f, (authoredDetails || orbitMode) ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
 	// Resolve background media after hover/navigation so both layers show the same game.
 	// The parent draw list is rendered beneath the browser child, regardless of submission order.
 	drawElements(layout, canvas, content, themeDirectory, current, drawList, ElementLayer::BehindBrowser, details, false, previewSource, libraryState);

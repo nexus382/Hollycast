@@ -488,13 +488,13 @@ std::string toLowerString(std::string_view value)
 
 const MediaFolderAlias* findMediaFolderAlias(const std::string& folder)
 {
-	static const std::array<MediaFolderAlias, 10> mediaAliases{
+	static const std::array<MediaFolderAlias, 11> mediaAliases{
 		MediaFolderAlias {config::LibraryCoverMediaMode::MixImage,
 				{"miximages", "miximage", "miximg", "miximgs", "mix", "mixrbv1", "image", "images"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Cover,
 				{"covers", "cover", "box2dfront", "boxfront", "box-2d", "box2d"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Case,
-				{"3dboxes", "3dbox", "box3d", "backcovers", "backcover", "boxtexture", "box-texture", "boxtextures", "case", "cases", "insert", "custom"}},
+				{"3dboxes", "3dbox", "box3d", "backcovers", "backcover", "case", "cases", "insert", "custom"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::FanArt,
 				{"fanart", "fanarts", "fan-art", "background", "backgrounds"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Screenshot,
@@ -509,6 +509,8 @@ const MediaFolderAlias* findMediaFolderAlias(const std::string& folder)
 				{"manuals", "manual", "manualss"}},
 		MediaFolderAlias {config::LibraryCoverMediaMode::Spine,
 				{"spines", "spine", "box-2d-side", "box2dside"}},
+		MediaFolderAlias {config::LibraryCoverMediaMode::BoxTexture,
+				{"boxtexture", "box-texture", "boxtextures"}},
 	};
 
 	const std::string folderLower = toLowerString(folder);
@@ -1919,6 +1921,19 @@ void Boxart::buildCustomBoxartIndex()
 						const auto previousPriority = std::find(alias->aliases.begin(), alias->aliases.end(), previousFolder);
 						if (priority < previousPriority || (priority == previousPriority && entry.path < existing->second))
 							existing->second = entry.path;
+					}
+					// Older libraries also used flat box textures as the Case fallback.
+					// Keep that fallback while allowing animations to request the texture specifically.
+					if (alias->mode == config::LibraryCoverMediaMode::BoxTexture)
+					{
+						auto& cases = mediaModeIndexes[static_cast<size_t>(config::LibraryCoverMediaMode::Case)];
+						const auto result = cases.emplace(key, mediaIndex.at(key));
+						if (!result.second)
+						{
+							const auto* previous = findMediaFolderAlias(toLowerString(getParentPath(root, result.first->second)));
+							if (previous && previous->mode == config::LibraryCoverMediaMode::BoxTexture)
+								result.first->second = mediaIndex.at(key);
+						}
 					}
 				}
 			}

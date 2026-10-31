@@ -332,10 +332,12 @@ TEST_F(ScreenScraperTest, FullDownloadIncludesRealSpinesAndAllMetadataSurvivesRe
 	auto art = item();
 	art.requestedMedia = allMedia;
 	scraper.scrape(art);
-	EXPECT_EQ(images, 11);
+	EXPECT_EQ(images, static_cast<int>(mediaTypes.size()));
 	EXPECT_EQ(art.screenScraperMedia.size(), mediaTypes.size());
 	ASSERT_EQ(art.screenScraperMedia.count("spine"), 1u);
 	EXPECT_NE(art.screenScraperMedia.at("spine").find("box-2D-side-us"), std::string::npos);
+	ASSERT_EQ(art.screenScraperMedia.count("boxtexture"), 1u);
+	EXPECT_NE(art.screenScraperMedia.at("boxtexture").find("box-texture-us"), std::string::npos);
 	const GameBoxart restored(art.to_json(base), base);
 	GameMedia display;
 	display.fileName = art.fileName;

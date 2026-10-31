@@ -70,7 +70,7 @@ protected:
 			itemIds[index] = ImGui::GetItemID();
 			const ImRect viewport = ImGui::GetCurrentWindow()->InnerRect;
 			browserViewport = ImVec4(viewport.Min.x, viewport.Min.y, viewport.Max.x, viewport.Max.y);
-		}, std::nullopt, iconScale, stateLayoutId, favouriteHandler);
+		}, std::nullopt, iconScale, stateLayoutId, favouriteHandler, {}, pulledItemId);
 		const auto& vertices = ImGui::GetWindowDrawList()->VtxBuffer;
 		backgroundMesh.assign(vertices.begin(), vertices.end());
 		detailsMesh.clear();
@@ -106,6 +106,7 @@ protected:
 	std::vector<ImDrawVert> backgroundMesh, browserMesh;
 	std::vector<ImDrawVert> overlayMesh;
 	float iconScale = 1.f;
+	std::string pulledItemId;
 	std::filesystem::path artworkRoot;
 	bool useLibraryUi = false;
 	float previousUiScale;
@@ -1384,6 +1385,52 @@ TEST_F(ThemeLibraryTest, SmallGridCellsAndAspectFitAreExplicitLayoutOptions)
 	layout.minItemWidth = 96;
 	renderFrame(ImVec2(-1, -1), false);
 	EXPECT_GT(bounds[2].y, bounds[0].y);
+	}
+
+TEST_F(ThemeLibraryTest, RackPullOutKeepsTheSelectedGameAndBlocksExtraLaunches)
+{
+	layout.id = "pull-out-input";
+	layout.mode = "rack";
+	layout.columns = 3;
+	layout.browser = {0, 0, 0.5f, 0.8f};
+	layout.elements = {{"metadata", {0.55f, 0.55f, 0.4f, 0.2f}, "title", {}, 0xe15a77ff, 0.035f, -1}};
+	items[0].metadata["title"] = "A";
+	items[1].metadata["title"] = "BBBB";
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec4 other = bounds[1];
+	const ImVec2 point((other.x + other.z) * 0.5f, (other.y + other.w) * 0.5f);
+	pulledItemId = items[0].id;
+	EXPECT_EQ(renderFrame(point, true), -1);
+	EXPECT_EQ(renderFrame(point, false), -1);
+	EXPECT_EQ(backgroundVertices, 4u);
+}
+
+TEST_F(ThemeLibraryTest, RackPullOutMovesFromTheSlotAndTurnsIntoAFrontCover)
+{
+	themes::RackCaseAnimation animation;
+	animation.slot = ImVec4(40, 100, 56, 320);
+	animation.viewport = ImVec4(0, 0, 500, 400);
+	animation.title = "Game";
+	auto extent = [&](float progress) {
+		ImGui::NewFrame();
+		themes::drawRackCasePullOut(animation, progress);
+		const auto& vertices = ImGui::GetForegroundDrawList()->VtxBuffer;
+		ImVec4 result(FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX);
+		for (const ImDrawVert& vertex : vertices)
+		{
+			result.x = std::min(result.x, vertex.pos.x);
+			result.y = std::min(result.y, vertex.pos.y);
+			result.z = std::max(result.z, vertex.pos.x);
+			result.w = std::max(result.w, vertex.pos.y);
+		}
+		ImGui::EndFrame();
+		return result;
+	};
+	const ImVec4 start = extent(0.f), end = extent(1.f);
+	EXPECT_NEAR((start.x + start.z) * 0.5f, 48.f, 4.f);
+	EXPECT_NEAR(start.w - start.y, 220.f, 6.f);
+	EXPECT_GT(end.z - end.x, (start.z - start.x) * 5.f);
+	EXPECT_NEAR((end.x + end.z) * 0.5f, 250.f, 20.f);
 }
 
 TEST_F(ThemeLibraryTest, KeyboardCanNavigateAndActivateAListItem)
@@ -1600,6 +1647,7 @@ TEST(ThemeLibraryMediaTest, IconMediaSupportsEveryImageCategoryAndRestoresThemeD
 	EXPECT_EQ(themes::iconArtworkSource(10), "banner");
 	EXPECT_EQ(themes::iconArtworkSource(11), "backcover");
 	EXPECT_EQ(themes::iconArtworkSource(12), "spine");
+	EXPECT_EQ(themes::iconArtworkSource(13), "boxtexture");
 }
 
 TEST_F(ThemeLibraryTest, RackNavigatesAcrossSpinesAndDownShelvesWithGamepad)

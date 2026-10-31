@@ -536,7 +536,7 @@ TEST(ThemeParserTest, BundledPocketDimensionUsesGenericExtensionsAndLocalAssets)
 			EXPECT_TRUE(std::any_of(layout.elements.begin(), layout.elements.end(), [&](const themes::Element& e) {
 				return e.type == "button" && e.action == "artwork" && e.source == media;
 			})) << layout.id << ": " << media;
-	for (const char* id : {"preview-iconic-dark-grid", "preview-horizon-grid", "preview-cd-rack"})
+	for (const char* id : {"preview-art-book-next", "preview-horizon-grid", "preview-cd-rack"})
 	{
 		const auto existing = themes::load((root / "themes" / id).u8string());
 		for (const auto& layout : existing.layouts)

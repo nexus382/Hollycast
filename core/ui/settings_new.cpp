@@ -3617,7 +3617,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			const char* iconMediaLabels[] = {
 				T("Theme Default"), T("Default Artwork"), T("Mix Image"), T("Scraped Cover"),
 				T("Case / 3D Box"), T("Screenshot"), T("Wheel / Marquee"), T("Physical Media"), T("Fan Art"), T("Title Screen"),
-				T("Banner"), T("Back Cover"), T("Spine")
+				T("Banner"), T("Back Cover"), T("Spine"), T("Box Texture")
 			};
 			const int iconMedia = config::ThemeIconMedia.get();
 			int selectedIconMedia = iconMedia >= 10 ? iconMedia : iconMedia + 1; // Manual (9) is not image artwork.
@@ -4054,6 +4054,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 				T("Banner"),
 				T("Back Cover"),
 				T("Spine"),
+				T("Box Texture"),
 			};
 			const int coverMedia = config::LibraryCoverMedia.get();
 			int selectedCoverMedia = coverMedia == 9 ? 0 : coverMedia >= 10 ? coverMedia - 1 : coverMedia;

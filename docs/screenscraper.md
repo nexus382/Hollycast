@@ -62,6 +62,12 @@ category is available, using the same names:
 | Case / 3D Box | `box-3D` | `case` |
 | Back Cover | `box-2D-back` | `backcover` |
 | Spine | `box-2D-side` | `spine` |
+| Box Texture | `box-texture` | `boxtexture` |
+
+CD Rack uses a downloaded box texture for its case pull-out animation. If one
+is unavailable, it uses the existing front cover and spine instead. To add box
+textures to an existing library, select **Box Texture** and download the selected
+media, or use **Download All Required Media**. Launching never waits for a scrape.
 
 Mixes are downloaded from ScreenScraper, not generated locally. Videos and
 manuals are outside this image-download feature. Not every game has every type.
@@ -75,7 +81,7 @@ Fetch Box Art must be enabled and the source must allow online artwork
 (Original Box Art or Custom Boxart). The controls have separate purposes:
 
 - **Automatic cover fetching** requests only Cover for the basic library.
-- **Download All Required Media** queues all eleven image types in the loaded
+- **Download All Required Media** queues all twelve image types in the loaded
   Dreamcast library for hover details, expanded themes, backgrounds and icons.
 - **Images to Download** selects types for **Download Selected Media**. Those
   checkboxes do not change automatic cover fetching or the all-media action.

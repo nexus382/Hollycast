@@ -761,11 +761,13 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 	media.name = "A different display title";
 	media.gameName.clear();
 	for (const char* folder : {"images", "miximg", "miximages", "cover", "covers", "screenshotS",
-			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens", "box-2d-side", "spines"})
+			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens", "box-2d-side", "spines", "boxtexture", "boxtextures"})
 	{
 		fs::create_directories(root / folder);
 		std::ofstream(root / folder / "A Game (USA).png", std::ios::binary) << folder;
 	}
+	std::ofstream(root / "boxtexture" / "Texture only.png", std::ios::binary) << "texture";
+	std::ofstream(root / "boxtextures" / "Texture only.png", std::ios::binary) << "other texture";
 	boxart->refreshCustomBoxartIndex(true);
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 	std::string cover;
@@ -783,11 +785,16 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 		{config::LibraryCoverMediaMode::Case, "3dboxes"},
 		{config::LibraryCoverMediaMode::Physical, "physicalmedia"},
 		{config::LibraryCoverMediaMode::TitleScreen, "titlescreens"},
-		{config::LibraryCoverMediaMode::Spine, "spines"}
+		{config::LibraryCoverMediaMode::Spine, "spines"},
+		{config::LibraryCoverMediaMode::BoxTexture, "boxtexture"}
 	};
 	for (const auto& source : expected)
 		EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, source.first)).lexically_normal(),
 				(root / source.second / "A Game (USA).png").lexically_normal());
+	media.fileName = "Texture only.chd";
+	const fs::path textureOnly = (root / "boxtexture" / "Texture only.png").lexically_normal();
+	EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::BoxTexture)).lexically_normal(), textureOnly);
+	EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Case)).lexically_normal(), textureOnly);
 	// A missing category must stay empty, rather than borrowing an old default image.
 	EXPECT_TRUE(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::FanArt).empty());
 	media.fileName = "Not scraped.chd";

@@ -42,7 +42,7 @@ This is the smallest useful `theme.json`:
 }
 ```
 
-The [theme collection](../themes/README.md) contains Pocket Dimension and seven starred examples using grids, lists, CD racks, selected-game artwork and metadata. Each package includes its source notes.
+The [theme collection](../themes/README.md) contains original themes and starred examples using grids, lists, CD racks, selected-game artwork and metadata. Each package includes its source notes.
 
 ## Manifest reference
 
@@ -78,7 +78,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | --- | --- |
 | `id` | Unique within the package; 1–64 lowercase ASCII letters, digits, hyphens, or underscores. |
 | `name` | Display label used by **Library Layout**. |
-| `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), or `rail`. See [Rail mode](#rail-mode). |
+| `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), `rail`, or `orbit` (upright circular disc carousel). See [Rail mode](#rail-mode). |
 | `browser` | `[x, y, width, height]` rectangle for the interactive game browser. Coordinates are fractions of the library content area. Position and size must fit wholly inside 0–1; width and height must each be at least `0.1`. |
 | `columns` | Grid column count, integer 1–12, or 1–64 for racks. Default `4`; list mode ignores it. The library Icon Size control adjusts the displayed column count to resize artwork. |
 | `itemAspect` | Cell width divided by height, from `0.3` to `3`, or `0.03` to `3` for racks. Default `0.8`; list mode ignores it. Rack heights are bounded to keep spines readable. |
@@ -91,7 +91,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `showTitles` | Whether grid cells show their title, default `true`. List rows always show the game title. |
 | `background` | Library canvas color, 6- or 8-digit hex; default `151820ff`. |
 | `elements` | Optional array of up to 64 decorative or selected-game elements. |
-| `artworkSource` | Browser artwork: empty (default library media), `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, or `spine`. Missing media falls back to library artwork, except racks, which show a vertical title label. Rack spines fill the case height with proportional widths and wrap onto shelves; horizontal scans rotate to fit. |
+| `artworkSource` | Browser artwork: empty (default library media), `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, `spine`, `disc`, or `boxtexture`. Missing media falls back to library artwork, except racks, which show a vertical title label. Rack spines fill the case height with proportional widths and wrap onto shelves; horizontal scans rotate to fit. |
 | `rounding` | Browser selection/image corner radius in logical UI pixels, 0–48; default `0`. |
 | `inactiveOpacity` | Unselected grid artwork opacity, 0.1–1; default `1`. |
 | `selectorBorderColor` | Optional selection outline color, separate from the selection fill. |
@@ -186,7 +186,7 @@ Element types:
 
 - **`panel`** fills its rectangle with `color`, optionally grading into `endColor`, with rounded corners when requested.
 - **`image`** draws a package image using `fit` and `color`. Its `source` is a relative file path inside the package, such as `images/panel.png`. Use PNG or JPEG; SVG and WebP must be rasterized or decoded first. Absolute paths, `..`, and paths escaping through symlinks are rejected. The referenced file must exist.
-- **`artwork`** draws selected-game media using `fit`: default art, `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, `spine`, or `disc`. Named slots prefer matching local media, then the selected provider and TGDB fallback, and obey `fallback`. `preview` follows the selected artwork button; unavailable non-cover choices remain empty instead of borrowing cover art. `disc` is the game's physical media artwork, otherwise the label stored on a Dreamcast disc (read in the background and cached under `boxart/disc-labels`); pair it with `"fallback": "none"` so that a game without one does not borrow its cover. A `fallbackImage` package asset can fill an empty region. Backgrounds and details follow mouse and keyboard/controller selection.
+- **`artwork`** draws selected-game media using `fit`: default art, `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, `spine`, `disc`, or `boxtexture`. Named slots prefer matching local media, then the selected provider and TGDB fallback, and obey `fallback`. `preview` follows the selected artwork button; unavailable non-cover choices remain empty instead of borrowing cover art. A `fallbackImage` package asset can fill an empty region. Backgrounds and details follow mouse and keyboard/controller selection.
 - **`text`** draws the literal `text` value.
 - **`metadata`** draws the selected game's value for `source`; a missing value draws nothing. Supported fields: `title`, `description`, `developer`, `publisher`, `genre`, `players`, `releaseDate`, `productId`, `region`, `format`, `playTime`, `lastPlayed`, `size`, and `system`, which names the hardware a game runs on: `Dreamcast`, `Naomi`, `Naomi 2`, `Atomiswave`, or `System SP`.
 - **`details`** displays selected-game metadata with translated field labels in its own scrollable rectangle. `fields` chooses the content and order; `columns` controls density. Empty fields are omitted, long values wrap, and the panel scrolls back to the top when the selected game changes. It requires a nonnegative `zIndex`, and retains normal mouse, keyboard, and controller scrolling. Other themes have no details panel unless they add this element.
@@ -260,3 +260,7 @@ An image can add `tileSeconds` (0.5–600) to scroll repeated copies down its
 rectangle seamlessly, one image-height per period, preserving its aspect ratio.
 It cannot combine with `spin` or `sweepSeconds`. This uses package artwork and
 shares the usual asset validation; themes still execute no scripts.
+
+## Disc orbit mode
+
+`mode: "orbit"` arranges up to seven upright, circular game discs around a perspective ring. Left/Right and controller navigation rotate through the full filtered library; the mouse wheel also steps, click selects, and double-click or confirm plays. The selected disc rises from the ring. `artworkSource: "disc"` prefers physical media and embedded labels with existing artwork as fallback. Library Icon Size scales the discs within the browser viewport. Other layout elements provide the selected miximage, title and metadata. This mode uses the shared draw-list renderer on standalone platforms.
