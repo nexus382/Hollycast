@@ -111,6 +111,23 @@ TEST(CustomThemeTest, ParsesLocalFontAndImageAssetsAndRejectsTraversalPerAsset)
 	EXPECT_TRUE(theme.assets.icons.empty());
 }
 
+TEST(CustomThemeTest, LibraryFontOverridesResetWhenAnotherThemeOrPreviewIsApplied)
+{
+	CustomTheme::Theme::Assets assets;
+	assets.directory = "/tmp/fonts/";
+	assets.bodyFont = "body.ttf";
+	CustomTheme::setActiveAssets(assets);
+	const auto inherited = CustomTheme::fontPath(false);
+	CustomTheme::setActiveFontOverrides("/tmp/package/mono.ttf", "/tmp/package/bold.ttf");
+	EXPECT_EQ(CustomTheme::fontPath(false), "/tmp/package/mono.ttf");
+	EXPECT_EQ(CustomTheme::fontPath(true), "/tmp/package/bold.ttf");
+	CustomTheme::setActiveAssets(assets);
+	EXPECT_EQ(CustomTheme::fontPath(false), inherited);
+	CustomTheme::setActiveAssets({});
+	EXPECT_TRUE(CustomTheme::fontPath(false).empty());
+	EXPECT_TRUE(CustomTheme::fontPath(true).empty());
+}
+
 TEST(CustomThemeTest, ParsesSemanticAndWidgetRolesWithHexAndRgba)
 {
 	CustomTheme::Theme theme;
@@ -579,6 +596,7 @@ TEST_F(ThemeFilesTest, RuntimeReloadResetsStyleBeforeScalingAndPreservesCustomIn
 		std::string configPath = get_writable_config_path("");
 		int theme = config::UITheme.get();
 		std::string custom = config::UICustomTheme.get();
+		std::string libraryTheme = config::CustomTheme.get();
 		float scale = settings.display.uiScale;
 		ImGuiContext* context = ImGui::GetCurrentContext();
 		~Restore() {
@@ -588,6 +606,7 @@ TEST_F(ThemeFilesTest, RuntimeReloadResetsStyleBeforeScalingAndPreservesCustomIn
 			config::open();
 			config::UITheme = theme;
 			config::UICustomTheme = custom;
+			config::CustomTheme = libraryTheme;
 			settings.display.uiScale = scale;
 		}
 	} restore;
@@ -597,6 +616,8 @@ TEST_F(ThemeFilesTest, RuntimeReloadResetsStyleBeforeScalingAndPreservesCustomIn
 	settings.display.uiScale = 2.f;
 	config::UITheme = 0;
 	config::UICustomTheme = "";
+	// App preset inheritance is independent of the default library's palette.
+	config::CustomTheme = "";
 	write("themes/builtin/Dark.json", R"({"colors":{"success":"#35C875"}})");
 	write("themes/builtin/Light.json", R"({"style":{"FrameRounding":9}})");
 	write("themes/.builtin-migration-pending", "malformed migration journal");

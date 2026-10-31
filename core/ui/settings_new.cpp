@@ -22,6 +22,7 @@
 #include "rend/metal/metal_api.h"
 #endif
 #include "custom_theme.h"
+#include "theme.h"
 #include "gui_util.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -52,6 +53,9 @@
 #include "emulator.h"
 #include "gui.h"
 #include "boxart/boxart.h"
+#include "boxart/screenscraper.h"
+#include "boxart/gamesdb.h"
+#include "boxart/artwork_adapter.h"
 #include "IconsFontAwesome6.h"
 #include "mainui.h"
 #include "oslib/oslib.h"
@@ -68,6 +72,8 @@
 #include <cfloat>
 #include <memory>
 #include <filesystem>
+#include <mutex>
+#include <stdexcept>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -3197,6 +3203,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 				config::UITheme = CustomTheme::CustomThemeId;
 				config::UICustomTheme = filename;
 			}
+			// The UI palette/editor and library package palette are separate choices.
+			// Selecting a UI theme clears a package so its palette cannot mask it.
+			config::CustomTheme.get().clear();
+			config::ThemeLayout.get().clear();
+			SaveSettings();
 			applyThemeAfterPopup = true;
 			g_reloadThemeFontsAfterSettings = true;
 			return true;
@@ -3568,8 +3579,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 						g_themeEditor.error = strprintf(T("Saved %s, but could not select it. %s. Close this editor, resolve the migration error, then select this theme from UI Theme."),
 								filename.c_str(), migrationError.c_str());
 					} else {
+						config::CustomTheme.get().clear();
+						config::ThemeLayout.get().clear();
 						config::UITheme = CustomTheme::CustomThemeId;
 						config::UICustomTheme = filename;
+						SaveSettings();
 						setThemePreview(nullptr);
 						g_applyThemeAfterSettings = true;
 						g_reloadThemeFontsAfterSettings = true;
@@ -3593,6 +3607,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			g_reloadThemeFontsAfterSettings |= g_themeEditor.fontChanged;
 			g_themeEditor.open = false;
 		}
+
 
 #if !defined(TARGET_MAC)
 		const char* menuBarModes[] = { T("Auto"), T("On"), T("Off") };
@@ -3696,6 +3711,288 @@ static void renderSettingsContentTab(SettingsTab tab)
 	// ========================================
 	// Library Section
 	// ========================================
+	if (RenderCollapsingHeader("LibraryThemeSection", ICON_FA_SWATCHBOOK, T("Library Themes"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		// Installed library themes package a palette and a library layout. These controls affect
+		// the library rather than the app-wide UI theme.
+		std::vector<std::string> libraryThemeLabelStorage;
+		std::vector<std::string> libraryThemeIds;
+		libraryThemeLabelStorage.emplace_back(T("App UI Theme"));
+		libraryThemeIds.emplace_back();
+		for (const themes::CatalogEntry& entry : themes::catalog())
+		{
+			if (!entry.error.empty())
+				continue;
+			libraryThemeLabelStorage.push_back(entry.name.empty() ? entry.id : entry.name);
+			libraryThemeIds.push_back(entry.id);
+		}
+		std::vector<const char*> libraryThemeLabels;
+		for (const std::string& label : libraryThemeLabelStorage)
+			libraryThemeLabels.push_back(label.c_str());
+
+		int selectedLibraryThemeIndex = 0;
+		if (!config::CustomTheme.get().empty())
+		{
+			auto selected = std::find(libraryThemeIds.begin(), libraryThemeIds.end(), config::CustomTheme.get());
+			if (selected != libraryThemeIds.end())
+				selectedLibraryThemeIndex = static_cast<int>(selected - libraryThemeIds.begin());
+		}
+		SettingsUI::PopupConfig libraryThemeCfg {};
+		libraryThemeCfg.type = SettingsUI::PopupType::Options;
+		libraryThemeCfg.options.label = T("Library Theme");
+		libraryThemeCfg.options.icon = ICON_FA_SWATCHBOOK;
+		libraryThemeCfg.options.popupID = Tnop("LibraryThemePopup");
+		libraryThemeCfg.options.options = libraryThemeLabels.data();
+		libraryThemeCfg.options.optionCount = static_cast<int>(libraryThemeLabels.size());
+		libraryThemeCfg.options.currentValue = &selectedLibraryThemeIndex;
+		libraryThemeCfg.options.valueWidth = 220.0f;
+		libraryThemeCfg.options.onChange = [&](int index) {
+			if (index < 0 || index >= static_cast<int>(libraryThemeIds.size()))
+				return false;
+			config::CustomTheme.get() = libraryThemeIds[index];
+			config::ThemeLayout.get().clear();
+			SaveSettings();
+			g_applyThemeAfterSettings = true;
+			return true;
+		};
+		RenderGeneralPopupSettingRow(
+			Tnop("LibraryThemeSetting"),
+			T("Choose a library theme package, or use the selected UI theme and default library layout."),
+			libraryThemeCfg,
+			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
+		gui_display_library_download_progress();
+
+		if (const themes::Theme* activeTheme = themes::current())
+		{
+			ImGui::Indent(SettingsLayoutScaled(28.0f));
+			ImGui::TextWrapped(T("%s%s%s"), activeTheme->name.c_str(),
+				activeTheme->author.empty() ? "" : " — ", activeTheme->author.c_str());
+			if (!activeTheme->description.empty())
+				ImGui::TextWrapped("%s", activeTheme->description.c_str());
+			ImGui::Unindent(SettingsLayoutScaled(28.0f));
+
+			if (!activeTheme->layouts.empty())
+			{
+				std::vector<std::string> layoutLabelStorage;
+				std::vector<const char*> layoutLabels;
+				int selectedLayoutIndex = 0;
+				for (size_t i = 0; i < activeTheme->layouts.size(); ++i)
+				{
+					const themes::Layout& layout = activeTheme->layouts[i];
+					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
+					if (layout.id == config::ThemeLayout.get())
+						selectedLayoutIndex = static_cast<int>(i);
+				}
+				for (const std::string& label : layoutLabelStorage)
+					layoutLabels.push_back(label.c_str());
+				SettingsUI::PopupConfig layoutCfg {};
+				layoutCfg.type = SettingsUI::PopupType::Options;
+				layoutCfg.options.label = T("Library Layout");
+				layoutCfg.options.icon = ICON_FA_TABLE_CELLS_LARGE;
+				layoutCfg.options.popupID = Tnop("LibraryLayoutPopup");
+				layoutCfg.options.options = layoutLabels.data();
+				layoutCfg.options.optionCount = static_cast<int>(layoutLabels.size());
+				layoutCfg.options.currentValue = &selectedLayoutIndex;
+				layoutCfg.options.valueWidth = 220.0f;
+				layoutCfg.options.onChange = [&](int index) {
+					if (index >= 0 && index < static_cast<int>(activeTheme->layouts.size()))
+					{
+						config::ThemeLayout.get() = activeTheme->layouts[index].id;
+						SaveSettings();
+					}
+					return true;
+				};
+				RenderGeneralPopupSettingRow(
+					Tnop("LibraryLayoutSetting"),
+					T("Choose the library layout supplied by this theme."),
+					layoutCfg);
+			}
+
+			const char* iconMediaLabels[] = {
+				T("Theme Default"), T("Default Artwork"), T("Mix Image"), T("Scraped Cover"),
+				T("Case / 3D Box"), T("Screenshot"), T("Wheel / Marquee"), T("Physical Media"), T("Fan Art"), T("Title Screen"),
+				T("Banner"), T("Back Cover"), T("Spine"), T("Box Texture")
+			};
+			const int iconMedia = config::ThemeIconMedia.get();
+			int selectedIconMedia = iconMedia >= 10 ? iconMedia : iconMedia + 1; // Manual (9) is not image artwork.
+			if (selectedIconMedia < 0 || selectedIconMedia >= IM_ARRAYSIZE(iconMediaLabels))
+				selectedIconMedia = 0;
+			SettingsUI::PopupConfig iconMediaCfg {};
+			iconMediaCfg.type = SettingsUI::PopupType::Options;
+			iconMediaCfg.options.label = T("Theme Icon Media");
+			iconMediaCfg.options.icon = ICON_FA_IMAGE;
+			iconMediaCfg.options.popupID = Tnop("ThemeIconMediaPopup");
+			iconMediaCfg.options.options = iconMediaLabels;
+			iconMediaCfg.options.optionCount = IM_ARRAYSIZE(iconMediaLabels);
+			iconMediaCfg.options.currentValue = &selectedIconMedia;
+			iconMediaCfg.options.valueWidth = 220.0f;
+			iconMediaCfg.options.onChange = [](int index) {
+				config::ThemeIconMedia = index >= 10 ? index : index - 1;
+				gui_refresh_custom_boxart(true);
+				SaveSettings();
+				return true;
+			};
+			RenderGeneralPopupSettingRow(Tnop("ThemeIconMediaSetting"),
+				T("Choose the artwork used by theme grid icons and list thumbnails. Theme Default restores the layout's choice."), iconMediaCfg);
+			SettingsUI::PopupConfig iconSizeCfg {};
+			iconSizeCfg.type = SettingsUI::PopupType::Slider;
+			iconSizeCfg.slider.label = T("Library Scale");
+			iconSizeCfg.slider.icon = ICON_FA_IMAGE;
+			iconSizeCfg.slider.popupID = "ThemeIconSizePopup";
+			iconSizeCfg.slider.description = T("Resize library icons, shelves, covers and game information. The library toolbar has the same Icon Size control. General UI Scaling does not change library sizes.");
+			iconSizeCfg.slider.currentValue = &config::LibraryIconScale.get();
+			iconSizeCfg.slider.minValue = 50;
+			iconSizeCfg.slider.maxValue = 200;
+			iconSizeCfg.slider.defaultValue = 100;
+			iconSizeCfg.slider.onApply = [] { config::LibraryIconScale.save(); };
+			RenderGeneralPopupSettingRow("ThemeIconSizeSetting", T("Set the library scale, including cover art and game information."), iconSizeCfg);
+		}
+
+		if (const std::string& error = themes::error(); !error.empty())
+			ImGui::TextWrapped(T("Library theme error: %s"), error.c_str());
+		for (const themes::CatalogEntry& entry : themes::catalog())
+		{
+			if (!entry.error.empty())
+				ImGui::TextWrapped(T("%s: %s"), entry.name.empty() ? entry.id.c_str() : entry.name.c_str(), entry.error.c_str());
+		}
+
+	}
+
+	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
+	{
+		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper"), T("LaunchBox")};
+		SettingsUI::PopupConfig providerCfg {};
+		providerCfg.type = SettingsUI::PopupType::Options;
+		providerCfg.options.label = T("Artwork Provider");
+		providerCfg.options.icon = ICON_FA_IMAGE;
+		providerCfg.options.popupID = "ArtworkProviderPopup";
+		providerCfg.options.options = providers;
+		providerCfg.options.optionCount = IM_ARRAYSIZE(providers);
+		providerCfg.options.currentValue = &config::ArtworkProvider.get();
+		providerCfg.options.valueWidth = 220.0f;
+		providerCfg.options.onChange = [](int provider) {
+			if (provider != 1) screenscraper::disconnect();
+			SaveSettings();
+			return true;
+		};
+		RenderGeneralPopupSettingRow("ArtworkProviderSetting",
+			T("Choose the preferred online artwork source. ScreenScraper finishes first, then LaunchBox and TheGamesDB fill missing requested media. Existing local media remains available."), providerCfg);
+		if (config::ArtworkProvider.get() == 1)
+		{
+			ImGui::TextWrapped("%s", T("Basic views download covers, hover miximages, title logos and game information. Selecting a theme automatically downloads only its additional required media. Physical disc labels are read locally."));
+			static char password[256] = {};
+			const auto account = screenscraper::status();
+			const bool configured = screenscraper::developerConfigured();
+			ImGui::BeginDisabled(account.connecting);
+			RenderGeneralTextInputSettingRow("ScreenScraperUsername", ICON_FA_USER, T("ScreenScraper Username"),
+				T("Use your ScreenScraper screen name, not your email address, for your account's download and thread allowances."), [] {
+					InputText("##SSUsername", &config::ScreenScraperUser.get(), ImGuiInputTextFlags_None);
+				});
+			RenderGeneralTextInputSettingRow("ScreenScraperPassword", ICON_FA_LOCK, T("Password"),
+				T("Kept for this session; sign in again after restarting Hollycast."), [&] {
+					InputText("##SSPassword", password, sizeof(password), ImGuiInputTextFlags_Password);
+				});
+			ImGui::BeginDisabled(!configured || config::ScreenScraperUser.get().empty() || !password[0]);
+			if (ImGui::Button(T("Sign In / Refresh Account")))
+			{
+				screenscraper::connect(trim_ws(config::ScreenScraperUser.get()), password);
+				std::fill(std::begin(password), std::end(password), '\0');
+				SaveSettings();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			ImGui::BeginDisabled(!configured);
+			if (ImGui::Button(account.personalAccount ? T("Sign Out / Use Guest Access") : T("Reconnect Guest Access")))
+			{
+				screenscraper::connect("", "");
+				std::fill(std::begin(password), std::end(password), '\0');
+			}
+			ImGui::EndDisabled();
+			ImGui::EndDisabled();
+			if (!configured)
+				ImGui::TextWrapped("%s", T("ScreenScraper application access is not configured in this build. Use a provisioned Hollycast build to download media. Your media choices and existing local artwork remain available."));
+			if (!account.message.empty())
+				ImGui::TextWrapped("%s", account.message.c_str());
+			if (account.connected)
+			{
+				ImGui::TextUnformatted(account.personalAccount ? T("Personal account") : T("Guest access; sign in for your account's allowances."));
+				ImGui::Text(T("Account threads: %d | Active requests: %d"), account.maxThreads, account.activeRequests);
+				gui_display_library_download_progress();
+				ImGui::Text(T("Requests today: %llu / %llu | Unmatched: %llu / %llu"),
+					static_cast<unsigned long long>(account.requestsToday), static_cast<unsigned long long>(account.requestsPerDay),
+					static_cast<unsigned long long>(account.missesToday), static_cast<unsigned long long>(account.missesPerDay));
+				ImGui::Text(T("Requests/minute: %llu | Download allowance: %llu KB/s (0 = unspecified)"),
+					static_cast<unsigned long long>(account.requestsPerMinute), static_cast<unsigned long long>(account.downloadKBPerSecond));
+			}
+		}
+		if (config::ArtworkProvider.get() == 0)
+		{
+			ImGui::TextWrapped("%s", T("TheGamesDB downloads original-resolution covers, screenshots, fanart, logos, banners, title screens and back covers. Disc scans, miximages, 3D boxes and spines are not supplied by this provider. Existing local images remain available."));
+			gui_display_library_download_progress();
+		}
+		if (config::ArtworkProvider.get() == 2)
+  {
+   ImGui::TextWrapped("%s", T("LaunchBox supplies original covers, disc scans, 3D boxes, back covers, spines, screenshots, title screens, logos, banners and fanart. The first lookup downloads its public catalog. TheGamesDB fills unavailable supported types."));
+   gui_display_library_download_progress();
+  }
+  const u32 supported = ArtworkAdapter::supportedMedia(config::ArtworkProvider.get());
+		std::vector<const char*> mediaLabels;
+		std::vector<int> mediaBits;
+		const u32 selection = static_cast<u32>(config::ScreenScraperMedia.get()) & supported;
+		unsigned selectedCount = 0;
+		for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+		{
+			if (!(supported & (1u << i))) continue;
+			mediaLabels.push_back(T(artwork::mediaTypes[i].label));
+			mediaBits.push_back(static_cast<int>(i));
+			if (selection & (1u << i)) ++selectedCount;
+		}
+		const std::string selectionSummary = std::to_string(selectedCount) + " / "
+			+ std::to_string(mediaLabels.size()) + " " + T("selected");
+		SettingsUI::PopupConfig mediaCfg {};
+		mediaCfg.type = SettingsUI::PopupType::Options;
+		mediaCfg.options.label = T("Images to Download");
+		mediaCfg.options.icon = ICON_FA_IMAGES;
+		mediaCfg.options.popupID = "ArtworkMediaPopup";
+		mediaCfg.options.description = T("Choose types for the manual Download Selected Media action. Automatic downloads follow the selected theme. Download All Media for All Themes prepares the installed themes. Existing images are kept.");
+		mediaCfg.options.options = mediaLabels.data();
+		mediaCfg.options.optionCount = static_cast<int>(mediaLabels.size());
+		mediaCfg.options.currentValue = &config::ScreenScraperMedia.get();
+		mediaCfg.options.multiSelect = true;
+		mediaCfg.options.storageIndexMap = [mediaBits](int index) { return mediaBits[index]; };
+		mediaCfg.options.selectionPresets = {
+			{T("Covers + Banners"), 1 | (1 << 3)},
+			{T("Select All"), static_cast<int>(supported)},
+			{T("Clear Selection"), 0}
+		};
+		mediaCfg.options.valueWidth = 220.0f;
+		mediaCfg.options.valueToString = [&selectionSummary](int) { return selectionSummary.c_str(); };
+		mediaCfg.options.onChange = [](int) {
+			SaveSettings();
+			return true;
+		};
+		RenderGeneralPopupSettingRow("ArtworkMediaSetting",
+			T("Choose image types for the manual Download Selected Media action."), mediaCfg);
+		const bool canDownload = (config::ArtworkProvider.get() != 1 || screenscraper::status().connected) && config::FetchBoxart
+			&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+		ImGui::BeginDisabled(!canDownload);
+		if (ImGui::Button(T("Download All Media for All Themes"), ImVec2(-FLT_MIN, 0)))
+			gui_download_all_theme_media();
+		ImGui::BeginDisabled(!(config::ScreenScraperMedia.get() & supported));
+		if (ImGui::Button(T("Download Selected Media")))
+			gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & supported);
+		ImGui::SameLine();
+		if (ImGui::Button(T("Retry Unmatched / Unavailable Media")))
+			gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & supported, true);
+		ImGui::EndDisabled();
+		ImGui::EndDisabled();
+		if (!config::FetchBoxart)
+			ImGui::TextWrapped("%s", T("Enable Fetch Box Art below to allow downloads."));
+		if (config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
+			ImGui::TextWrapped("%s", T("Choose Original Box Art or Custom Boxart below to use downloaded media."));
+		ImGui::TextWrapped("%s", T("Only unambiguous Dreamcast title matches are downloaded. Games without a match keep their existing artwork."));
+	}
+
 	if (RenderCollapsingHeader("BoxArtSection", ICON_FA_IMAGE, T("Box Art"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		if (g_scrollToBoxArtSection)
@@ -3870,11 +4167,19 @@ static void renderSettingsContentTab(SettingsTab tab)
 				T("Cover"),
 				T("Case / 3D Box"),
 				T("Screenshot"),
-				T("Marquee"),
+				T("Wheel / Marquee"),
 				T("Physical Media"),
 				T("Fan Art"),
 				T("Title Screen"),
+				T("Banner"),
+				T("Back Cover"),
+				T("Spine"),
+				T("Box Texture"),
 			};
+			const int coverMedia = config::LibraryCoverMedia.get();
+			int selectedCoverMedia = coverMedia == 9 ? 0 : coverMedia >= 10 ? coverMedia - 1 : coverMedia;
+			if (selectedCoverMedia < 0 || selectedCoverMedia >= IM_ARRAYSIZE(libraryCoverMediaSources))
+				selectedCoverMedia = 0;
 			SettingsUI::PopupConfig libraryCoverMediaCfg {};
 			libraryCoverMediaCfg.type = SettingsUI::PopupType::Options;
 			libraryCoverMediaCfg.options.label = T("Custom Boxart Source");
@@ -3882,9 +4187,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryCoverMediaCfg.options.popupID = Tnop("LibraryCoverMediaPopup");
 			libraryCoverMediaCfg.options.options = libraryCoverMediaSources;
 			libraryCoverMediaCfg.options.optionCount = IM_ARRAYSIZE(libraryCoverMediaSources);
-			libraryCoverMediaCfg.options.currentValue = &config::LibraryCoverMedia.get();
+			libraryCoverMediaCfg.options.currentValue = &selectedCoverMedia;
 			libraryCoverMediaCfg.options.valueWidth = 240.0f;
-			libraryCoverMediaCfg.options.onChange = [](int) { return true; };
+			libraryCoverMediaCfg.options.onChange = [](int index) {
+				config::LibraryCoverMedia = index >= 9 ? index + 1 : index; // Skip the manual/PDF slot.
+				return true;
+			};
 			RenderGeneralPopupSettingRow(
 				Tnop("LibraryCoverMedia"),
 				T("Choose which custom media category becomes the main library image."),
@@ -3974,16 +4282,18 @@ static void renderSettingsContentTab(SettingsTab tab)
 		);
 
 		const bool physicalOnly = config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+
 		RenderGeneralToggleSettingRow(
 			"FetchBoxart",
 			ICON_FA_DOWNLOAD,
 			T("Fetch Box Art"),
-			T("Fetch cover images from TheGamesDB.net."),
+			T("Automatically download missing covers for the basic library views."),
 			static_cast<bool>(config::FetchBoxart),
 			[](bool enabled) { config::FetchBoxart = enabled; },
 			T(
 				"Fetch Box Art\n"
-				"Downloads cover images from TheGamesDB.net.\n"
+				"Automatically downloads covers, hover miximages, title logos and game information from the selected provider.\n"
+				"Selecting a library theme automatically downloads the additional media it requires.\n"
 				"Disable if you only want physical media images, custom artwork, or to avoid network fetching."
 			),
 			physicalOnly

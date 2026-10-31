@@ -94,3 +94,26 @@ cmrc_add_resources(Hollycast-resources
         "resources/themes/High Contrast.json"
         resources/themes/Nintendo.json
         "resources/themes/Aqua Chill.json")
+
+# Ship the complete library-theme packages with every standalone release. Hash
+# content so startup can update bundled assets once without per-frame disk scans.
+if(NOT LIBRETRO)
+    file(GLOB_RECURSE HOLLYCAST_LIBRARY_THEME_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/themes/*")
+    list(SORT HOLLYCAST_LIBRARY_THEME_FILES)
+    set(HOLLYCAST_LIBRARY_THEME_HASHES "")
+    foreach(theme_file IN LISTS HOLLYCAST_LIBRARY_THEME_FILES)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${theme_file}")
+        file(SHA256 "${theme_file}" theme_hash)
+        file(RELATIVE_PATH theme_relative "${CMAKE_CURRENT_SOURCE_DIR}/themes" "${theme_file}")
+        string(APPEND HOLLYCAST_LIBRARY_THEME_HASHES "${theme_relative}:${theme_hash}\n")
+    endforeach()
+    string(SHA256 HOLLYCAST_LIBRARY_THEME_VERSION "${HOLLYCAST_LIBRARY_THEME_HASHES}")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes/.version" "${HOLLYCAST_LIBRARY_THEME_VERSION}")
+    cmrc_add_resources(Hollycast-resources
+        WHENCE "${CMAKE_CURRENT_SOURCE_DIR}/themes" PREFIX library-themes
+        ${HOLLYCAST_LIBRARY_THEME_FILES})
+    cmrc_add_resources(Hollycast-resources
+        WHENCE "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes" PREFIX library-themes
+        "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes/.version")
+endif()

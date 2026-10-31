@@ -1,5 +1,7 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/boxart/boxart.h"
+#include "ui/boxart/launchbox.h"
 #include "ui/game_scanner.h"
 #include "reios/reios.h"
 #include "imgread/isofs.h"
@@ -18,6 +20,18 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
+
+TEST(DiscLabelTest, EachGameKeepsItsLabelUnderANameThatSurvivesRestarts)
+{
+	const std::string path = discLabelCachePath("/art/", "/games/Crazy Taxi.cue");
+	EXPECT_EQ(path, "/art/disc-labels/" + path.substr(17, 16) + ".png");
+	EXPECT_EQ(path.size(), std::string("/art/disc-labels/").size() + 16 + 4);
+	EXPECT_EQ(discLabelCachePath("/art/", "/games/Crazy Taxi.cue"), path);
+	EXPECT_NE(discLabelCachePath("/art/", "/games/Crazy Taxi 2.cue"), path);
+	// Pinned: a change here would orphan every label already saved.
+	EXPECT_EQ(discLabelCachePath("/art/", ""), "/art/disc-labels/cbf29ce484222325.png");
+	EXPECT_EQ(discLabelCachePath("/art/", "a"), "/art/disc-labels/af63dc4c8601ec8c.png");
+}
 
 TEST(BoxartWorkTest, AcceptsOnlyCurrentSourceRevision)
 {
@@ -149,6 +163,7 @@ protected:
 		oldDataPath = get_writable_data_path("");
 		oldFetchBoxart = config::FetchBoxart;
 		oldSourceMode = config::BoxartSourceMode;
+		oldProvider = config::ArtworkProvider;
 		oldBoxartPath = config::BoxartPath;
 		directory = std::filesystem::temp_directory_path()
 				/ ("hollycast-boxart-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -170,6 +185,7 @@ protected:
 		boxart.reset();
 		config::FetchBoxart = oldFetchBoxart;
 		config::BoxartSourceMode = oldSourceMode;
+		config::ArtworkProvider = oldProvider;
 		config::BoxartPath = oldBoxartPath;
 		set_user_data_dir(oldDataPath);
 		std::filesystem::remove_all(directory);
@@ -229,12 +245,13 @@ protected:
 		return finishOfflineFetch(media);
 	}
 
-	GameBoxart finishOfflineFetch(const GameMedia& game)
+	GameBoxart finishOfflineFetch(const GameMedia& game, u32 requestedMedia = artwork::basicMedia)
 	{
-		boxart->getBoxartAndLoad(game);
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 		GameBoxart art;
 		do {
+			boxart->queueBoxart(game, requestedMedia);
+			boxart->startFetch();
 			art = boxart->getBoxart(game);
 			if (!art.busy)
 				return art;
@@ -278,8 +295,61 @@ protected:
 	std::string oldDataPath;
 	bool oldFetchBoxart;
 	int oldSourceMode;
+	int oldProvider;
 	std::string oldBoxartPath;
 };
+
+TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
+{
+	const GameBoxart offline = finishOfflineFetch(media, artwork::coverMedia);
+	const std::string image = (directory / "boxart" / "launchbox.png").string();
+	std::ofstream(image) << "cached cover";
+	const json matches = {{LaunchBoxCatalog::identity(offline), {
+		{"id", 2416}, {"name", "Matched game"}, {"url", "https://images.launchbox-app.com/cover.png"}, {"path", image}}}};
+	std::ofstream(directory / "boxart" / "launchbox-matches.json")
+		<< json({{"version", 1}, {"matches", matches}}).dump();
+	config::ArtworkProvider = 2;
+	config::FetchBoxart = true;
+	boxart->invalidateOfflineArtwork();
+	const GameBoxart original = finishOfflineFetch(media, artwork::coverMedia);
+	ASSERT_EQ(2416, original.launchboxId);
+	ASSERT_EQ(image, original.boxartPath);
+	restart();
+	std::filesystem::rename(media.path, directory / "A renamed game.cue");
+	media.fileName = "A renamed game.cue";
+	media.name = "An arbitrary display name";
+	media.path = (directory / media.fileName).string();
+	const GameBoxart renamed = finishOfflineFetch(media, artwork::coverMedia);
+	EXPECT_EQ("TEST-0001", renamed.uniqueId);
+	EXPECT_EQ("Metadata survives", renamed.searchName);
+	EXPECT_EQ(2416, renamed.launchboxId);
+	EXPECT_EQ(image, renamed.boxartPath);
+	EXPECT_EQ(2, renamed.scrapedProvider);
+	restart();
+	EXPECT_EQ(2416, boxart->getBoxart(media).launchboxId);
+}
+
+TEST_F(BoxartTest, SwitchingProviderRearmsExistingOnlineResult)
+{
+	finishOfflineFetch();
+	// Busy clears before the background database write; join before reading/editing it.
+	boxart->term();
+	json database = readDatabase();
+	database[0]["scraped"] = true;
+	database[0]["scraped_provider"] = 0;
+	const std::string image = (directory / "old.png").string();
+	std::ofstream(image) << "previous artwork";
+	database[0]["boxart_path"] = image;
+	database[0]["boxart_url"] = "https://example.test/old.png";
+	writeDatabase(database);
+	restart();
+	config::ArtworkProvider = 2;
+	boxart->queueBoxart(media);
+	const GameBoxart pending = boxart->getBoxart(media);
+	EXPECT_EQ(0u, pending.launchboxCheckedMedia);
+	EXPECT_EQ(image, pending.boxartPath);
+	EXPECT_EQ(OfflineArtState::NoArtwork, pending.offlineArtState);
+}
 
 TEST_F(BoxartTest, NoArtworkDoesNotRepeatOfflineFetchAndPreservesMetadata)
 {
@@ -585,4 +655,244 @@ TEST_F(BoxartTest, NoArtworkStillQueuesIndependentOnlineFallback)
 	config::FetchBoxart = false;
 }
 
+TEST_F(BoxartTest, DownloadedScreenScraperCategoriesRemainDistinctWithoutALocalMediaFolder)
+{
+	const auto artRoot = directory / "boxart";
+	std::filesystem::create_directories(artRoot);
+	GameBoxart cached;
+	cached.fileName = media.fileName;
+	cached.gamePath = media.path;
+	cached.name = "ScreenScraper title";
+	cached.offlineArtState = OfflineArtState::NoArtwork;
+	cached.screenScraperId = 123;
+	cached.developer = "Cached developer";
+	const std::pair<const char*, config::LibraryCoverMediaMode> categories[] = {
+		{"cover", config::LibraryCoverMediaMode::Cover},
+		{"screenshot", config::LibraryCoverMediaMode::Screenshot},
+		{"miximage", config::LibraryCoverMediaMode::MixImage},
+		{"physical", config::LibraryCoverMediaMode::Physical}
+	};
+	for (const auto& category : categories)
+	{
+		const auto path = artRoot / (std::string(category.first) + ".png");
+		std::ofstream(path, std::ios::binary) << category.first;
+		cached.screenScraperMedia[category.first] = path.string();
+	}
+	cached.boxartPath = cached.screenScraperMedia.at("cover");
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	for (const auto& category : categories)
+		EXPECT_EQ(std::filesystem::path(boxart->getCustomMediaPath(media, category.second)),
+				std::filesystem::path(cached.screenScraperMedia.at(category.first)));
+	EXPECT_TRUE(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::FanArt).empty());
+	GameMedia details = media;
+	boxart->getBoxart(media).applyMetadata(details);
+	EXPECT_EQ(details.developer, cached.developer);
+}
+
+TEST_F(BoxartTest, ProviderSwitchingSelectsItsCachedMediaAndRetryKeepsOtherProviderState)
+{
+	const auto artRoot = directory / "boxart";
+	std::filesystem::create_directories(artRoot);
+	GameBoxart cached;
+	cached.fileName = media.fileName; cached.gamePath = media.path;
+	cached.offlineArtState = OfflineArtState::NoArtwork;
+	cached.screenScraperCheckedMedia = 2047;
+	cached.tgdbCheckedMedia = 749;
+	for (const char* source : {"ss", "tgdb"})
+		for (const char* kind : {"cover", "screenshot"})
+		{
+			const auto path = artRoot / (std::string(source) + "-" + kind + ".png");
+			std::ofstream(path) << kind;
+			(std::string(source) == "ss" ? cached.screenScraperMedia : cached.tgdbMedia)[kind] = path.string();
+		}
+	cached.boxartPath = cached.screenScraperMedia.at("cover");
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	for (int provider : {0, 1})
+	{
+		config::ArtworkProvider = provider;
+		const auto& expected = provider == 1 ? cached.screenScraperMedia : cached.tgdbMedia;
+		EXPECT_EQ(std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Screenshot)).lexically_normal(),
+				std::filesystem::path(expected.at("screenshot")).lexically_normal());
+		EXPECT_EQ(std::filesystem::path(boxart->getBoxart(media).boxartPath).lexically_normal(),
+				std::filesystem::path(expected.at("cover")).lexically_normal());
+	}
+	config::ArtworkProvider = 0;
+	boxart->retryArtworkMedia();
+	const auto retried = boxart->getBoxart(media);
+	EXPECT_EQ(retried.screenScraperCheckedMedia, cached.screenScraperCheckedMedia);
+	EXPECT_EQ(retried.tgdbCheckedMedia, 1u | (1u << 6));
+	for (const auto& entry : cached.tgdbMedia)
+		EXPECT_EQ(std::filesystem::path(retried.tgdbMedia.at(entry.first)).lexically_normal(), std::filesystem::path(entry.second).lexically_normal());
+}
+
+TEST_F(BoxartTest, LaunchBoxDiscAndBoxSlotsRemainDistinctAndTgdbIsTheFirstFallback)
+{
+ const auto artRoot = directory / "boxart"; std::filesystem::create_directories(artRoot);
+ GameBoxart cached; cached.fileName = media.fileName; cached.gamePath = media.path;
+ cached.offlineArtState = OfflineArtState::NoArtwork;
+ const std::pair<const char*, config::LibraryCoverMediaMode> categories[] = {
+  {"physical", config::LibraryCoverMediaMode::Physical}, {"case", config::LibraryCoverMediaMode::Case},
+  {"backcover", config::LibraryCoverMediaMode::BackCover}, {"spine", config::LibraryCoverMediaMode::Spine}
+ };
+ for (const auto& category : categories) {
+  const auto path = artRoot / (std::string(category.first) + ".png"); std::ofstream(path) << category.first;
+  cached.launchboxMedia[category.first] = path.string();
+ }
+ for (int provider : {0, 1, 2}) {
+  const auto path = artRoot / (std::to_string(provider) + "-screenshot.png"); std::ofstream(path) << provider;
+  cached.mediaForProvider(provider)["screenshot"] = path.string();
+ }
+ writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+ config::ArtworkProvider = 2;
+ for (const auto& category : categories)
+  EXPECT_EQ(std::filesystem::path(cached.launchboxMedia.at(category.first)).lexically_normal(),
+   std::filesystem::path(boxart->getCustomMediaPath(media, category.second)).lexically_normal());
+ EXPECT_EQ(std::filesystem::path(cached.launchboxMedia.at("screenshot")).lexically_normal(),
+  std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Screenshot)).lexically_normal());
+ std::filesystem::remove(cached.launchboxMedia.at("screenshot"));
+ EXPECT_EQ(std::filesystem::path(cached.tgdbMedia.at("screenshot")).lexically_normal(),
+  std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Screenshot)).lexically_normal());
+}
+
+TEST_F(BoxartTest, InventoryReusesFlatCoversAndDetectsDeletedLocalImages)
+{
+	const auto local = directory / "custom";
+	std::filesystem::create_directories(local);
+	const auto cover = local / "game.png";
+	std::ofstream(cover) << "cover";
+	config::BoxartPath = local.string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!boxart->customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart->customMediaReady());
+	EXPECT_EQ(boxart->mediaProgress(media, artwork::coverMedia).ready, 1u);
+	std::filesystem::remove(cover);
+	const auto missing = boxart->mediaProgress(media, artwork::coverMedia);
+	EXPECT_EQ(missing.ready, 0u);
+	EXPECT_EQ(missing.pendingMedia, artwork::coverMedia);
+}
+
+TEST_F(BoxartTest, InventoryReusesLegacyDownloadedCoverWithoutConfusingDiscLabel)
+{
+	const auto artRoot = directory / "boxart";
+	std::filesystem::create_directories(artRoot);
+	const auto cover = artRoot / "legacy.png";
+	std::ofstream(cover) << "legacy cover";
+	GameBoxart cached;
+	cached.fileName = media.fileName; cached.gamePath = media.path;
+	cached.offlineArtState = OfflineArtState::Complete;
+	cached.scraped = true; cached.boxartPath = cover.string();
+	cached.boxartUrl = "https://example.com/cover.png";
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	EXPECT_EQ(boxart->mediaProgress(media, artwork::coverMedia).ready, 1u);
+	boxart->term();
+	boxart = std::make_unique<Boxart>();
+	cached.boxartUrl.clear();
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	EXPECT_EQ(boxart->mediaProgress(media, artwork::coverMedia).ready, 0u);
+}
+
+TEST_F(BoxartTest, UnreadableLocalDirectoryDoesNotAuthorizeDownloads)
+{
+	config::BoxartPath = (directory / "missing-media-folder").string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (!boxart->customMediaFailed() && std::chrono::steady_clock::now() < deadline)
+	{
+		EXPECT_FALSE(boxart->customMediaReady());
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	ASSERT_TRUE(boxart->customMediaFailed());
+	EXPECT_FALSE(boxart->customMediaReady());
+	config::FetchBoxart = true;
+	EXPECT_FALSE(boxart->getBoxartAndLoad(media, false).busy);
+}
+
+TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
+{
+	namespace fs = std::filesystem;
+	const fs::path root = directory / "downloaded_media";
+	// Windows produces backslash paths here, matching a folder chosen by the user.
+	config::BoxartPath = root.string();
+	media.fileName = "A Game (USA).chd";
+	media.name = "A different display title";
+	media.gameName.clear();
+	for (const char* folder : {"images", "miximg", "miximages", "cover", "covers", "screenshotS",
+			"wheel", "marquees", "3dboxes", "physicalmedia", "titlescreens", "box-2d-side", "spines", "boxtexture", "boxtextures",
+			"screenmarquee", "banners", "backcovers", "box-2d-back"})
+	{
+		fs::create_directories(root / folder);
+		std::ofstream(root / folder / "A Game (USA).png", std::ios::binary) << folder;
+	}
+	std::ofstream(root / "boxtexture" / "Texture only.png", std::ios::binary) << "texture";
+	std::ofstream(root / "boxtextures" / "Texture only.png", std::ios::binary) << "other texture";
+	boxart->refreshCustomBoxartIndex(true);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	std::string cover;
+	do {
+		cover = boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover);
+		if (!cover.empty()) break;
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	} while (std::chrono::steady_clock::now() < deadline);
+	ASSERT_FALSE(cover.empty()) << "The configured media directory was not indexed";
+	EXPECT_EQ(fs::path(cover).lexically_normal(), (root / "covers" / "A Game (USA).png").lexically_normal());
+	const std::pair<config::LibraryCoverMediaMode, const char*> expected[] = {
+		{config::LibraryCoverMediaMode::MixImage, "miximages"},
+		{config::LibraryCoverMediaMode::Screenshot, "screenshotS"},
+		{config::LibraryCoverMediaMode::Title, "marquees"},
+		{config::LibraryCoverMediaMode::Case, "3dboxes"},
+		{config::LibraryCoverMediaMode::Physical, "physicalmedia"},
+		{config::LibraryCoverMediaMode::TitleScreen, "titlescreens"},
+		{config::LibraryCoverMediaMode::Spine, "spines"},
+		{config::LibraryCoverMediaMode::BoxTexture, "boxtexture"},
+		{config::LibraryCoverMediaMode::Banner, "banners"},
+		{config::LibraryCoverMediaMode::BackCover, "backcovers"}
+	};
+	for (const auto& source : expected)
+		EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, source.first)).lexically_normal(),
+				(root / source.second / "A Game (USA).png").lexically_normal());
+	media.fileName = "Texture only.chd";
+	const fs::path textureOnly = (root / "boxtexture" / "Texture only.png").lexically_normal();
+	EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::BoxTexture)).lexically_normal(), textureOnly);
+	EXPECT_EQ(fs::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Case)).lexically_normal(), textureOnly);
+	// A missing category must stay empty, rather than borrowing an old default image.
+	EXPECT_TRUE(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::FanArt).empty());
+	media.fileName = "Not scraped.chd";
+	EXPECT_TRUE(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover).empty());
+}
+
+}
+
+TEST(GameScannerSystemTest, NamesTheBoardAnArcadeRomRunsOn)
+{
+	Game game{};
+	EXPECT_STREQ(arcadeSystemName(game), "Naomi");
+	game.bios = "naomi";
+	EXPECT_STREQ(arcadeSystemName(game), "Naomi");
+	game.bios = "naomi2";
+	EXPECT_STREQ(arcadeSystemName(game), "Naomi 2");
+	game.bios = "segasp";
+	EXPECT_STREQ(arcadeSystemName(game), "System SP");
+	game.bios = nullptr;
+	game.cart_type = AW;
+	EXPECT_STREQ(arcadeSystemName(game), "Atomiswave");
+	EXPECT_EQ(GameMedia{}.system, "Dreamcast");
+}
+
+TEST_F(BoxartTest, ScreenScraperCacheOrderPrefersLaunchBoxBeforeTgdb)
+{
+	config::ArtworkProvider = 1;
+	const auto artRoot = directory / "boxart";
+	std::filesystem::create_directories(artRoot);
+	GameBoxart cached; cached.fileName = media.fileName; cached.gamePath = media.path;
+	cached.offlineArtState = OfflineArtState::NoArtwork;
+	for (int provider : {0, 2})
+	{
+		const auto image = artRoot / (std::to_string(provider) + "-cover.png");
+		std::ofstream(image) << "cached";
+		cached.mediaForProvider(provider)["cover"] = image.string();
+	}
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	const auto expected = std::filesystem::path(cached.launchboxMedia.at("cover")).lexically_normal();
+	EXPECT_EQ(std::filesystem::path(boxart->getBoxart(media).boxartPath).lexically_normal(), expected);
+	EXPECT_EQ(std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover)).lexically_normal(), expected);
 }

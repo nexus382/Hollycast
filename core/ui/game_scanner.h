@@ -20,12 +20,14 @@
 #pragma once
 #include "types.h"
 #include "hw/naomi/naomi_roms.h"
+#include <string_view>
 #include <vector>
 #include <mutex>
 #include <memory>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <atomic>
 
 struct GameListMetadata
 {
@@ -56,8 +58,21 @@ struct GameMedia
 	std::string manualPath;
 	bool arcade = false;	// Arcade game (naomi, atomiswave, system sp, ...)
 	bool device = false;	// Corresponds to a physical cdrom device
+	std::string system = "Dreamcast";	// Hardware the game runs on
 	size_t size = 0;		// File size, if available from the storage backend
 };
+
+// The arcade board a known ROM set runs on; follows naomi_cart_GetPlatform.
+inline const char* arcadeSystemName(const Game& game)
+{
+	if (game.cart_type == AW)
+		return "Atomiswave";
+	if (game.bios != nullptr && std::string_view(game.bios) == "naomi2")
+		return "Naomi 2";
+	if (game.bios != nullptr && std::string_view(game.bios) == "segasp")
+		return "System SP";
+	return "Naomi";
+}
 
 class GameScanner
 {
@@ -67,6 +82,7 @@ class GameScanner
 	std::unique_ptr<std::thread> scan_thread;
 	bool scan_done = false;
 	bool running = false;
+	std::atomic<u64> generation{0};
 	std::unordered_map<std::string, const Game*> arcade_games;
 	std::unordered_set<std::string> arcade_gdroms;
 	using LockGuard = std::lock_guard<std::mutex>;
@@ -94,6 +110,7 @@ public:
 
 	std::mutex& get_mutex() { return mutex; }
 	const std::vector<GameMedia>& get_game_list() { return game_list; }
+	u64 get_generation() const { return generation.load(); }
     unsigned int empty_folders_scanned = 0;
     bool content_path_looks_incorrect = false;
 };

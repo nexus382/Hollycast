@@ -18,6 +18,7 @@
     along with reicast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui_util.h"
+#include "theme_artwork.h"
 #include "types.h"
 #include "stdclass.h"
 #include "oslib/oslib.h"
@@ -35,7 +36,7 @@
 #include "IconsFontAwesome6.h"
 #include "stdclass.h"
 #include "rend/osd.h"
-#include <stb_image.h>
+#include "stbi.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -47,6 +48,31 @@
 #include <vector>
 
 using namespace i18n;
+
+namespace {
+ImGuiStyle libraryBaseStyle;
+}
+
+void LibraryUiScope::setBaseStyle(const ImGuiStyle& style)
+{
+	libraryBaseStyle = style;
+}
+
+LibraryUiScope::LibraryUiScope(float baselineScale)
+	: previousStyle(ImGui::GetStyle()), previousScale(settings.display.uiScale)
+{
+	settings.display.uiScale = std::max(0.01f, baselineScale);
+	ImGui::GetStyle() = libraryBaseStyle;
+	ImGui::GetStyle().ScaleAllSizes(settings.display.uiScale);
+	ImGui::PushFont(nullptr, uiScaled(17.f));
+}
+
+LibraryUiScope::~LibraryUiScope()
+{
+	ImGui::PopFont();
+	ImGui::GetStyle() = previousStyle;
+	settings.display.uiScale = previousScale;
+}
 
 static std::string select_current_directory = "**home**";
 static std::vector<hostfs::FileInfo> subfolders;
@@ -737,25 +763,60 @@ void scrollWhenDraggingOnVoid(ImGuiMouseButton mouse_button)
 		window = window->ParentWindow;
 	if (window == nullptr || !(window->Flags & ImGuiWindowFlags_DragScrolling))
 		return;
-#if defined(__ANDROID__)
 	const ImGuiIO& io = ImGui::GetIO();
-	const bool touchDragAnywhere = io.MouseSource == ImGuiMouseSource_TouchScreen
-			&& io.MouseDown[mouse_button]
-			&& window->Rect().Contains(io.MousePos)
-			&& ImGui::IsMouseDragging(mouse_button, io.MouseDragThreshold);
-	if (touchDragAnywhere)
+	if (io.MouseSource == ImGuiMouseSource_TouchScreen)
 	{
-		// Android finger scrolling often starts over a live Selectable row. Treat
-		// that as a scroll drag so settings rows do not eat the swipe as a tap.
-		const ImVec2& delta = io.MouseDelta;
-		if (delta != ImVec2())
+		const ImGuiID gestureId = ImHashStr("##touchScrollGesture", 0, window->ID);
+		const ImGuiID frameId = ImHashStr("##touchScrollFrame", 0, window->ID);
+		if (window->StateStorage.GetInt(frameId) == g.FrameCount) return;
+		int gesture = window->StateStorage.GetInt(gestureId);
+		if (window->StateStorage.GetInt(frameId) != g.FrameCount - 1)
 		{
-			window->DragScrolling = true;
-			window->ScrollSpeed = delta;
+			gesture = 0;
+			window->DragScrolling = false;
+			window->ScrollSpeed = ImVec2();
 		}
+		window->StateStorage.SetInt(frameId, g.FrameCount);
+		if (ImGui::IsMouseClicked(mouse_button))
+		{
+			// Capture the innermost scrollable pane where the finger went down,
+			// not whichever pane it crosses later. Popups keep their own input.
+			ImGuiWindow* hovered = g.HoveredWindow;
+			while (hovered != nullptr && hovered != window
+					&& (!(hovered->Flags & ImGuiWindowFlags_DragScrolling) || hovered->ScrollMax.y == 0.f))
+			{
+				if (hovered->Flags & ImGuiWindowFlags_Popup) break;
+				hovered = hovered->ParentWindow;
+			}
+			gesture = hovered == window && window->ScrollMax.y > 0.f ? 1 : 0;
+			window->DragScrolling = false;
+			window->ScrollSpeed = ImVec2();
+		}
+		if (gesture != 0 && ImGui::IsMouseDragging(mouse_button, io.MouseDragThreshold))
+		{
+			// Keep scrollbar dragging intact. Content drags instead take ownership
+			// before widgets run, so releasing a swipe cannot activate a game/button.
+			if (g.ActiveId == ImGui::GetWindowScrollbarID(window, ImGuiAxis_Y)
+					|| g.ActiveId == ImGui::GetWindowScrollbarID(window, ImGuiAxis_X))
+				gesture = 0;
+			else
+			{
+				gesture = 2;
+				window->DragScrolling = true;
+				ImGui::SetActiveID(gestureId, window);
+				g.ActiveIdMouseButton = mouse_button;
+			}
+		}
+		if (gesture == 2)
+			ImGui::KeepAliveID(gestureId);
+		if (!io.MouseDown[mouse_button])
+		{
+			if (g.ActiveId == gestureId) ImGui::ClearActiveID();
+			gesture = 0;
+		}
+		window->StateStorage.SetInt(gestureId, gesture);
 		return;
 	}
-#endif
     bool hovered = false;
     bool held = false;
     ImGuiButtonFlags button_flags = (mouse_button == ImGuiMouseButton_Left) ? ImGuiButtonFlags_MouseButtonLeft
@@ -1080,6 +1141,11 @@ static void computeScrollSpeed(float &v)
 void windowDragScroll(bool allowHorizontal)
 {
 	ImGuiWindow *window = ImGui::GetCurrentWindow();
+	if (GImGui->NavMoveSubmitted || GImGui->NavActivateId != 0)
+	{
+		window->DragScrolling = false;
+		window->ScrollSpeed = ImVec2();
+	}
 	if (!allowHorizontal)
 	{
 		// Settings rows are vertically paged. Keep a tiny layout overflow from
@@ -1105,8 +1171,9 @@ void windowDragScroll(bool allowHorizontal)
 		}
 		else
 		{
-			ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-			if (delta != ImVec2())
+			const bool touch = ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen;
+			ImVec2 delta = touch ? ImGui::GetIO().MouseDelta : ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+			if (!touch && delta != ImVec2())
 				ImGui::ResetMouseDragDelta();
 			if (!allowHorizontal)
 				delta.x = 0.0f;
@@ -1119,6 +1186,88 @@ void windowDragScroll(bool allowHorizontal)
 			ImGui::SetScrollY(window, window->Scroll.y - window->ScrollSpeed.y);
 		}
 	}
+}
+
+void scrollWindowFromTouch()
+{
+	if (ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen)
+	{
+		scrollWhenDraggingOnVoid();
+		windowDragScroll(false);
+	}
+}
+
+bool drawEmptyLibraryPrompt()
+{
+	const char* label = i18n::T("Your game list is empty");
+	const char* button = i18n::T("Add Game Folder");
+	const ImVec2 available = ImGui::GetContentRegionAvail(), origin = ImGui::GetCursorPos();
+	const float preferredSize = uiLargeFontSize();
+	const ImVec2 padding = ScaledVec2(20, 8);
+	const ImVec2 labelSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, label);
+	const ImVec2 buttonSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, button) + padding * 2;
+	const float gap = std::max(ImGui::GetStyle().ItemSpacing.y, uiScaled(8));
+	const float height = labelSize.y + gap + buttonSize.y;
+	// Small game browsers (such as Pocket's VMU screen) use the same prompt,
+	// scaled to their own viewport. No child panel obscures the theme artwork.
+	const float scale = std::clamp(std::min(available.x / std::max(labelSize.x, buttonSize.x), available.y / height), 0.01f, 1.f);
+	ImGui::PushFont(nullptr, preferredSize * scale);
+	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, padding * scale);
+	ImguiID id("empty");
+	const float top = origin.y + std::max(0.f, (available.y - height * scale) * 0.5f);
+	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - std::max(labelSize.x, buttonSize.x) * scale) * 0.5f), top));
+	ImGui::BeginGroup();
+	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - labelSize.x * scale) * 0.5f), top));
+	ImGui::TextUnformatted(label);
+	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - buttonSize.x * scale) * 0.5f), top + (labelSize.y + gap) * scale));
+	const bool addFolder = ImGui::Button(button);
+	ImGui::EndGroup();
+	ImGui::PopFont();
+	return addFolder;
+}
+
+bool drawSetupThemePicker()
+{
+	const auto& catalog = themes::catalog();
+	const char* original[] = {i18n::T("Original icon view"), i18n::T("Original list view")};
+	const bool list = config::LibraryDisplayStyle.get() == static_cast<int>(config::LibraryDisplayStyleMode::List);
+	const char* preview = original[list ? 1 : 0];
+	for (const auto& entry : catalog)
+		if (entry.id == config::CustomTheme.get() && entry.error.empty()) preview = entry.name.c_str();
+	bool changed = false;
+	ImGui::SetNextItemWidth(-FLT_MIN);
+	if (ImGui::BeginCombo("##setup-library-theme", preview))
+	{
+		ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+		scrollWindowFromTouch();
+		for (int i = 0; i < 2; ++i)
+		{
+			const bool selected = config::CustomTheme.get().empty() && list == (i == 1);
+			if (ImGui::Selectable(original[i], selected) && !selected)
+			{
+				config::CustomTheme.get().clear();
+				config::ThemeLayout.get().clear();
+				config::LibraryDisplayStyle = i;
+				changed = true;
+			}
+			if (selected) ImGui::SetItemDefaultFocus();
+		}
+		for (const auto& entry : catalog)
+		{
+			if (!entry.error.empty()) continue;
+			const bool selected = config::CustomTheme.get() == entry.id;
+			ImguiID id(entry.id);
+			if (ImGui::Selectable(entry.name.c_str(), selected) && !selected)
+			{
+				config::CustomTheme = entry.id;
+				config::ThemeLayout.get().clear();
+				changed = true;
+			}
+			if (selected) ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+	return changed;
 }
 
 static void setUV(float ar, ImVec2& uv0, ImVec2& uv1)
@@ -1280,6 +1429,7 @@ struct ThemeImageFileStamp
 };
 
 static std::map<std::string, ThemeImageFileStamp> failedThemeImages;
+static std::map<std::string, float> fileImageAspects;
 static constexpr size_t MaxFailedThemeImages = 64;
 struct DecodedThemeImage
 {
@@ -1327,13 +1477,41 @@ void ImguiFileTexture::clearThemeImageFailures()
 	failedThemeImages.clear();
 	decodedThemeImages.clear();
 	decodedThemeImageBytes = 0;
+	fileImageAspects.clear();
+}
+
+float ImguiFileTexture::getAspectRatio() const
+{
+	if (path.empty())
+		return 0.f;
+	if (imguiDriver)
+	{
+		const ImTextureID id = imguiDriver->getTexture(path);
+		if (id != ImTextureID{})
+			return imguiDriver->getAspectRatio(id);
+	}
+	const auto cached = fileImageAspects.find(path);
+	if (cached != fileImageAspects.end())
+		return cached->second;
+	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
+	int width = 0, height = 0, channels;
+	if (!file || !stbi_info_from_callbacks(&STBI::callbacks, file.get(), &width, &height, &channels)
+			|| width <= 0 || height <= 0)
+		return 0.f;
+	// Successful headers share the texture cache's lifetime. Do not cache missing files:
+	// a queued scrape may publish that path while the library is still open.
+	const float aspect = static_cast<float>(width) / height;
+	fileImageAspects.emplace(path, aspect);
+	return aspect;
 }
 
 ImTextureID ImguiFileTexture::getId()
 {
 	if (path.empty())
 		return {};
-	ImTextureID id = imguiDriver->getTexture(path);
+	const std::string textureKey = pixelArt.resolution == 0 ? path : path + "#pixel-art/"
+			+ std::to_string(pixelArt.resolution) + "/" + std::to_string(pixelArt.dark) + "/" + std::to_string(pixelArt.light);
+	ImTextureID id = imguiDriver->getTexture(textureKey);
 	if (id == ImTextureID())
 	{
 		ThemeImageFileStamp fileStamp;
@@ -1395,7 +1573,14 @@ ImTextureID ImguiFileTexture::getId()
 					}
 				}
 				try {
-					id = imguiDriver->updateTextureAndAspectRatio(path, imgData, width, height, nearestSampling);
+					if (pixelArt.resolution > 0)
+					{
+						const auto pixels = themes::makePixelArtwork(imgData, width, height, pixelArt);
+						if (!pixels.pixels.empty())
+							id = imguiDriver->updateTextureAndAspectRatio(textureKey, pixels.pixels.data(), pixels.width, pixels.height, true);
+					}
+					else
+						id = imguiDriver->updateTextureAndAspectRatio(textureKey, imgData, width, height, nearestSampling);
 				} catch (...) {
 					// vulkan can throw during resizing
 				}
@@ -2007,6 +2192,7 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 {
 	static ImGuiID editingPopup = 0;
 	static int openingValue = 0;
+	static int pendingSelection = 0;
 	static int openingFrame = -1;
 	const ImGuiID ownerPopup = ImGui::GetID(cfg.popupID);
 	const bool isOpen = ImGui::IsPopupOpen(cfg.popupID);
@@ -2019,11 +2205,12 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 			editingPopup = ownerPopup;
 			openingFrame = popup.OpenFrameCount;
 			openingValue = *cfg.currentValue;
+			pendingSelection = openingValue;
 		}
 	}
 
 	if (editingPopup == ownerPopup && isTopmost && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
-		const bool changed = *cfg.currentValue != openingValue;
+		const bool changed = !cfg.multiSelect && *cfg.currentValue != openingValue;
 		*cfg.currentValue = openingValue;
 		if (changed && cfg.onChange)
 			cfg.onChange(openingValue);
@@ -2115,18 +2302,18 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 
     // Configure popup window BEFORE opening (DuckStation-style)
     centerNextWindow();
-    float maxWidth = ImGui::GetIO().DisplaySize.x * 0.5f;
-    float maxHeight = ImGui::GetIO().DisplaySize.y * 0.7f;
+    float maxWidth = ImGui::GetIO().DisplaySize.x * (cfg.multiSelect ? 0.9f : 0.5f);
+    float maxHeight = ImGui::GetIO().DisplaySize.y * (cfg.multiSelect ? 0.85f : 0.7f);
 
     // Set fixed width for DuckStation-style choice dialog
     ImGui::SetNextWindowSizeConstraints(
-        ImVec2(uiScaled(Layout::POPUP_MIN_WIDTH), 0),
+        ImVec2(cfg.multiSelect ? std::min(uiScaled(Layout::POPUP_MIN_WIDTH), maxWidth) : uiScaled(Layout::POPUP_MIN_WIDTH), 0),
         ImVec2(maxWidth, maxHeight)
     );
     ImGui::SetNextWindowSize(ImVec2(uiScaled(Layout::POPUP_WIDTH), 0), ImGuiCond_Always);
 
     PopupStyleScope style;
-    if (ImGui::BeginPopup(cfg.popupID, ImGuiWindowFlags_NoScrollbar)) {
+    if (ImGui::BeginPopup(cfg.popupID, cfg.multiSelect ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoScrollbar)) {
         const char* popupTitle = (cfg.title != nullptr && cfg.title[0] != '\0') ? cfg.title : rowLabel;
         const char* popupDescription = (cfg.description != nullptr && cfg.description[0] != '\0') ? cfg.description : cfg.tooltip;
         const bool hasHeader = (popupTitle != nullptr && popupTitle[0] != '\0')
@@ -2152,14 +2339,51 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
             ImGui::Spacing();
         }
 
+        if (cfg.multiSelect) {
+            for (size_t i = 0; i < cfg.selectionPresets.size(); ++i) {
+                const auto& preset = cfg.selectionPresets[i];
+                const float width = ImGui::CalcTextSize(preset.first).x + ImGui::GetStyle().FramePadding.x * 2;
+                const float nextX = ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x;
+                const float rightX = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+                if (i != 0 && nextX + width <= rightX)
+                    ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Button(preset.first))
+                    pendingSelection = preset.second;
+                ImGui::PopID();
+            }
+            ImGui::Spacing();
+        }
+
         // DuckStation-style menu button layout
         {
             BeginMenuButtons menuButtons;
             int highlightedStorageIdx = -1;
             const char* highlightedOptionText = nullptr;
 
+            if (cfg.multiSelect) {
+                // Bound only the choices so Apply/Cancel stay reachable on small screens.
+                const float rowHeight = ImGui::GetFrameHeight();
+                const float footerHeight = rowHeight + uiScaled(32.0f);
+                const float availableHeight = maxHeight - ImGui::GetCursorPosY()
+                    - ImGui::GetStyle().WindowPadding.y - footerHeight;
+                const float listHeight = std::min(rowHeight * cfg.optionCount, std::max(rowHeight, availableHeight));
+                ImGui::BeginChild("##choices", ImVec2(0, listHeight), ImGuiChildFlags_NavFlattened);
+            }
+
             for (int i = 0; i < cfg.optionCount; i++) {
                 int storageIdx = cfg.storageIndexMap ? cfg.storageIndexMap(i) : i;
+
+                if (cfg.multiSelect) {
+                    if (storageIdx < 0 || storageIdx >= 31)
+                        continue;
+                    ImGui::PushID(i);
+                    ImGui::CheckboxFlags(cfg.options[i], &pendingSelection, 1 << storageIdx);
+                    if (i == 0)
+                        ImGui::SetItemDefaultFocus();
+                    ImGui::PopID();
+                    continue;
+                }
                 bool isSelected = (*cfg.currentValue == storageIdx);
 
                 // Render selectable with proper sizing
@@ -2201,9 +2425,30 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
                     highlightedOptionText = cfg.options[i];
                 }
             }
+            if (cfg.multiSelect)
+                ImGui::EndChild();
             if (cfg.onOptionHighlight && highlightedStorageIdx >= 0)
                 cfg.onOptionHighlight(highlightedStorageIdx, highlightedOptionText);
         } // End menu buttons
+
+        if (cfg.multiSelect) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            if (ImGui::Button(T("Apply"))) {
+                valueChanged = *cfg.currentValue != pendingSelection;
+                *cfg.currentValue = pendingSelection;
+                if (!cfg.onChange || cfg.onChange(pendingSelection)) {
+                    editingPopup = 0;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(T("Cancel"))) {
+                editingPopup = 0;
+                ImGui::CloseCurrentPopup();
+            }
+        }
 
         ImGui::EndPopup();
     }
