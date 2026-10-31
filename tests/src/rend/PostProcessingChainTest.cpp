@@ -2313,6 +2313,41 @@ TEST(PostProcessingChainTest, RoutesSourceMipmapsAroundAuxiliaryEffectPasses)
 	EXPECT_TRUE(mipmaps[0][0]); EXPECT_FALSE(mipmaps[1][0]);
 }
 
+TEST(PostProcessingChainTest, WaitsForTheLoadingNoticeToReachAPreviousFrame)
+{
+	postprocess::finishShaderCompilation();
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+	EXPECT_TRUE(postprocess::shaderCompilationPending());
+	// Advancing frames without drawing the notice must not release the work.
+	postprocess::advanceShaderCompilationFrame();
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+	postprocess::markShaderCompilationDrawn();
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+	postprocess::advanceShaderCompilationFrame();
+	EXPECT_TRUE(postprocess::prepareShaderCompilation());
+	postprocess::reportShaderChainStatus("active", "Compilation failed");
+	EXPECT_FALSE(postprocess::shaderCompilationPending());
+	postprocess::reportShaderChainStatus({}, {});
+}
+
+TEST(PostProcessingChainTest, KeepsLoadingVisibleAcrossOldFramesAndRearmsAfterCancellation)
+{
+	postprocess::reportShaderChainStatus("old", {});
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+	postprocess::reportShaderFrameStatus("old", {});
+	EXPECT_TRUE(postprocess::shaderCompilationPending());
+	postprocess::markShaderCompilationDrawn();
+	postprocess::finishShaderCompilation();
+	postprocess::advanceShaderCompilationFrame();
+	EXPECT_FALSE(postprocess::prepareShaderCompilation());
+	postprocess::markShaderCompilationDrawn();
+	postprocess::advanceShaderCompilationFrame();
+	EXPECT_TRUE(postprocess::prepareShaderCompilation());
+	postprocess::reportShaderChainStatus("new", {});
+	EXPECT_FALSE(postprocess::shaderCompilationPending());
+	postprocess::reportShaderChainStatus({}, {});
+}
+
 TEST(PostProcessingChainTest, RecoversFrameErrorsWithoutLosingControlsOrHidingRejectedReloads)
 {
 	postprocess::ShaderParameter gain;

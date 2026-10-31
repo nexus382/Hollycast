@@ -408,6 +408,13 @@ void reportShaderFrameStatus(const std::string& activePath, const std::string& e
 bool setShaderChainParameter(const std::string& name, float value);
 bool setShaderChainParameterComponents(const std::string& name, const float *values, uint32_t componentCount);
 const std::string& shaderParameterKey(const ShaderParameter& parameter);
+// Delay blocking work until the UI has submitted a loading message and the
+// following frame has begun. Libretro hosts manage their own presentation.
+bool prepareShaderCompilation();
+bool shaderCompilationPending();
+void markShaderCompilationDrawn();
+void advanceShaderCompilationFrame();
+void finishShaderCompilation();
 void requestShaderChainReload(const ShaderChain* prepared = nullptr);
 // Consumes a matching UI preflight once; explicit reloads always discard it.
 bool loadConfiguredShaderChain(const std::vector<std::string>& paths, uint64_t generation,

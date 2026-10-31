@@ -812,6 +812,9 @@ bool VulkanShaderChain::updateConfiguredChain()
 		depthRotateRenderPass.reset();
 		programs.clear();
 	};
+	// Present the loading notice before compilation blocks this render thread.
+	if (!requestedPaths.empty() && !postprocess::prepareShaderCompilation())
+		return !programs.empty();
 	configuredPaths = requestedPaths;
 	configuredGeneration = generation;
 	if (requestedPaths.empty()) {

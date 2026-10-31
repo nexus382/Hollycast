@@ -68,6 +68,9 @@ void renderShaderTab();
 // Draws the lightweight in-game controls while normal gameplay continues.
 // The same parameter editor is shared with the Shader settings page.
 void renderShaderLiveTuneOverlay();
+// Loading work runs only after its notice has reached a preceding frame.
+void processShaderLoading();
+void renderShaderLoadingOverlay();
 // Presenters reserve the same unobscured game pane as the live editor.
 bool shaderLiveTuneActive();
 void closeShaderLiveTune();

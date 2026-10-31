@@ -69,6 +69,7 @@
 #include <cfloat>
 #include <cctype>
 #include <future>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -5780,6 +5781,54 @@ struct ShaderPreviewState
 
 static ShaderPreviewState g_shaderPreview;
 static std::atomic_bool g_shaderLiveTune { false };
+static std::function<void()> g_shaderAction;
+
+static void queueShaderAction(std::function<void()> action)
+{
+	if (g_shaderAction) return;
+	g_shaderAction = std::move(action);
+	postprocess::prepareShaderCompilation();
+}
+
+void processShaderLoading()
+{
+	// Called at the beginning of the next platform frame, after the previous
+	// frame was presented. Never run expensive work merely after ImGui::Render.
+	postprocess::advanceShaderCompilationFrame();
+	if (g_shaderAction) {
+		if (!postprocess::prepareShaderCompilation()) return;
+		auto action = std::move(g_shaderAction);
+		g_shaderAction = {};
+		try {
+			action();
+		} catch (const std::exception& error) {
+			gui_error(error.what());
+		}
+		postprocess::finishShaderCompilation();
+	}
+	else if (gui_is_open()) {
+		// Pausing can postpone renderer activation. Do not block the settings
+		// screen waiting for a pipeline that will compile only after resuming.
+		postprocess::finishShaderCompilation();
+	}
+}
+
+void renderShaderLoadingOverlay()
+{
+	const bool loading = postprocess::shaderCompilationPending();
+	if (loading) ImGui::OpenPopup("##ShaderCompilation");
+	ImGui::SetNextWindowPos(ImGui::GetIO().DisplaySize * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	if (ImGui::BeginPopupModal("##ShaderCompilation", nullptr, ImGuiWindowFlags_NoTitleBar
+			| ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+		if (loading) {
+			ImGui::TextUnformatted(T("Compiling shader pipeline..."));
+			ImGui::TextUnformatted(T("This may take a few seconds."));
+			postprocess::markShaderCompilationDrawn();
+		}
+		else ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+}
 
 static std::string configuredShaderDirectory()
 {
@@ -6009,9 +6058,15 @@ static void ensureShaderPreview()
 	if (!g_shaderPreview.initialized || paths != g_shaderPreview.paths
 			|| config::PostProcessShaderTechnique.get() != g_shaderPreview.technique
 			|| config::PostProcessShaderParameters.get() != g_shaderPreview.overrides) {
-		rebuildShaderPreview();
-		// Merely inspecting controls does not need to retain CPU image copies.
-		for (auto& texture : g_shaderPreview.chain.textures) texture.decoded.reset();
+		if (paths.empty()) {
+			rebuildShaderPreview();
+			return;
+		}
+		queueShaderAction([] {
+			rebuildShaderPreview();
+			// Merely inspecting controls does not need CPU image copies afterward.
+			for (auto& texture : g_shaderPreview.chain.textures) texture.decoded.reset();
+		});
 	}
 }
 
@@ -6183,7 +6238,7 @@ static void renderShaderParameterControls()
 		}
 		ImGui::PopID();
 		if (!selection.empty()) {
-			applyShaderTechniqueSelection(std::move(selection));
+			queueShaderAction([selection = std::move(selection)] { applyShaderTechniqueSelection(selection); });
 			break;
 		}
 	}
@@ -6203,7 +6258,7 @@ static void renderShaderParameterControls()
 			ImGui::EndCombo();
 		}
 		if (!selection.empty())
-			applyShaderTechniqueSelection(std::move(selection));
+			queueShaderAction([selection = std::move(selection)] { applyShaderTechniqueSelection(selection); });
 	}
 	if (g_shaderPreview.chain.parameters.empty()) {
 		ImGui::TextDisabled("%s", T("This shader stack exposes no adjustable parameters."));
@@ -6398,6 +6453,13 @@ static void applyShaderSelection(const std::vector<std::string>& paths,
 	SaveSettings();
 }
 
+static void requestShaderSelection(std::vector<std::string> paths, std::vector<size_t> previousLayers = {})
+{
+	queueShaderAction([paths = std::move(paths), previousLayers = std::move(previousLayers)] {
+		applyShaderSelection(paths, previousLayers);
+	});
+}
+
 static std::string selectedShaderLabel(const std::string& path)
 {
 	const auto entry = std::find_if(g_shaderBrowserEntries.begin(), g_shaderBrowserEntries.end(),
@@ -6414,6 +6476,7 @@ void renderShaderTab()
 	ImGui::TextDisabled("%s", T("Shader Configuration"));
 	ImGui::Separator();
 	ensureShaderPreview();
+	if (g_shaderAction) return;
 	if (!shaderLiveTuneActive()) {
 		const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause());
 		if (!canLiveTune)
@@ -6518,7 +6581,7 @@ void renderShaderTab()
 						selectedPaths.push_back(entry.path);
 					else
 						selectedPaths.erase(std::remove(selectedPaths.begin(), selectedPaths.end(), entry.path), selectedPaths.end());
-					applyShaderSelection(selectedPaths);
+					requestShaderSelection(selectedPaths);
 				}
 				if (!canEnable)
 					ImGui::EndDisabled();
@@ -6618,28 +6681,30 @@ void renderShaderTab()
 			if (removeIndex >= 0) {
 				selectedPaths.erase(selectedPaths.begin() + removeIndex);
 				previousLayers.erase(previousLayers.begin() + removeIndex);
-				applyShaderSelection(selectedPaths, previousLayers);
+				requestShaderSelection(selectedPaths, previousLayers);
 			}
 			else if (moveFrom >= 0 && moveTo >= 0) {
 				std::swap(selectedPaths[moveFrom], selectedPaths[moveTo]);
 				std::swap(previousLayers[moveFrom], previousLayers[moveTo]);
-				applyShaderSelection(selectedPaths, previousLayers);
+				requestShaderSelection(selectedPaths, previousLayers);
 			}
 			else if (duplicateIndex >= 0) {
 				selectedPaths.insert(selectedPaths.begin() + duplicateIndex + 1, selectedPaths[duplicateIndex]);
 				previousLayers.insert(previousLayers.begin() + duplicateIndex + 1, duplicateIndex);
-				applyShaderSelection(selectedPaths, previousLayers);
+				requestShaderSelection(selectedPaths, previousLayers);
 			}
 		}
 
 		if (!selectedPaths.empty()) {
 			if (ImGui::Button(T("Reload Active Stack"))) {
-				rebuildShaderPreview();
-				requestShaderActivation();
+				queueShaderAction([] {
+					rebuildShaderPreview();
+					requestShaderActivation();
+				});
 			}
 			ImGui::SameLine();
 			if (ImGui::Button(T("Clear All")))
-				applyShaderSelection({});
+				requestShaderSelection({});
 		}
 	}
 
@@ -6659,6 +6724,7 @@ void renderShaderLiveTuneOverlay()
 		return;
 	}
 	ensureShaderPreview();
+	if (g_shaderAction) return;
 
 	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 	const ShaderPreviewLayout layout = shaderPreviewLayout(static_cast<int>(displaySize.x),

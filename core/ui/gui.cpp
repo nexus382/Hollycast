@@ -3833,6 +3833,7 @@ void gui_display_ui()
 	error_msg_shown = false;
 	bool gui_open = gui_is_open();
 	auto finishFrame = [&]() {
+		SettingsNew::renderShaderLoadingOverlay();
 		ImGui::Render();
 		gui_endFrame(gui_open);
 		uiThreadRunner.execTasks(std::chrono::steady_clock::now());
@@ -4025,6 +4026,7 @@ void gui_draw_osd()
 	vmu_window::drawInApp();
 #endif
 
+	SettingsNew::renderShaderLoadingOverlay();
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
 

@@ -1007,6 +1007,9 @@ void GlShaderChain::updateConfiguredChain()
 	const uint64_t generation = postprocess::shaderChainReloadGeneration();
 	if (requestedPaths == configuredPaths && generation == configuredGeneration)
 		return;
+	// Present the loading notice before compilation blocks this render thread.
+	if (!requestedPaths.empty() && !postprocess::prepareShaderCompilation())
+		return;
 	configuredPaths = requestedPaths;
 	configuredGeneration = generation;
 

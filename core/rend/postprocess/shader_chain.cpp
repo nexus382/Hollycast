@@ -84,6 +84,8 @@ std::mutex statusMutex;
 ShaderChainStatus status;
 std::atomic<uint64_t> statusGeneration { 0 };
 std::atomic<uint64_t> reloadGeneration { 1 };
+enum class CompilationProgress { Idle, WaitingForMessage, MessageDrawn, Ready };
+std::atomic<CompilationProgress> compilationProgress { CompilationProgress::Idle };
 std::unique_ptr<ShaderChain> preparedChain;
 std::vector<std::string> preparedPaths;
 std::string preparedTechnique, preparedDirectory;
@@ -1407,6 +1409,7 @@ void reportShaderChainStatus(const std::string& activePath, const std::string& e
 		const std::vector<std::string>& techniques, int selectedTechnique)
 {
 	std::lock_guard<std::mutex> lock(statusMutex);
+	finishShaderCompilation();
 	status.activePath = activePath;
 	status.error = error;
 	status.frameError = false;
@@ -1462,6 +1465,39 @@ bool setShaderChainParameterComponents(const std::string& name, const float *val
 	parameter->value = parameter->values[0];
 	statusGeneration.fetch_add(1, std::memory_order_release);
 	return true;
+}
+
+bool prepareShaderCompilation()
+{
+#ifdef LIBRETRO
+	return true;
+#else
+	auto expected = CompilationProgress::Idle;
+	compilationProgress.compare_exchange_strong(expected, CompilationProgress::WaitingForMessage);
+	return compilationProgress.load() == CompilationProgress::Ready;
+#endif
+}
+
+bool shaderCompilationPending()
+{
+	return compilationProgress.load() != CompilationProgress::Idle;
+}
+
+void markShaderCompilationDrawn()
+{
+	auto expected = CompilationProgress::WaitingForMessage;
+	compilationProgress.compare_exchange_strong(expected, CompilationProgress::MessageDrawn);
+}
+
+void advanceShaderCompilationFrame()
+{
+	auto expected = CompilationProgress::MessageDrawn;
+	compilationProgress.compare_exchange_strong(expected, CompilationProgress::Ready);
+}
+
+void finishShaderCompilation()
+{
+	compilationProgress.store(CompilationProgress::Idle);
 }
 
 void requestShaderChainReload(const ShaderChain* prepared)
