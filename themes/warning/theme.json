@@ -1,0 +1,1139 @@
+{
+  "formatVersion": 1,
+  "id": "warning",
+  "name": "Warning!",
+  "author": "Hollycast contributors",
+  "description": "Your library is the enemy formation. Lock on, fire, and take on your unplayed backlog, one sixteen-game wave at a time.",
+  "baseTheme": 0,
+  "fonts": {
+    "body": "assets/Audiowide-Regular.ttf",
+    "bold": "assets/PressStart2P-Regular.ttf"
+  },
+  "colors": {
+    "Text": "e8f4ff",
+    "TextDisabled": "8793bf",
+    "WindowBg": "09021d",
+    "ChildBg": "09021d",
+    "PopupBg": "140a31",
+    "Border": "274470",
+    "Separator": "274470",
+    "FrameBg": "160b39",
+    "FrameBgHovered": "25375d",
+    "FrameBgActive": "173e67",
+    "Button": "120b30",
+    "ButtonHovered": "17305e",
+    "ButtonActive": "1fd8ff",
+    "Header": "213a68",
+    "HeaderHovered": "244b76",
+    "HeaderActive": "285a8b",
+    "CheckMark": "ffec1f",
+    "SliderGrab": "1fd8ff",
+    "SliderGrabActive": "ffec1f",
+    "NavCursor": "ffec1f",
+    "ScrollbarBg": "00000000",
+    "ScrollbarGrab": "31507c",
+    "ScrollbarGrabHovered": "1fd8ff",
+    "ScrollbarGrabActive": "ffec1f",
+    "TitleBg": "09021d",
+    "TitleBgActive": "140a31",
+    "TableHeaderBg": "160b39",
+    "TextLink": "1fd8ff"
+  },
+  "layouts": [
+    {
+      "mode": "grid",
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarLogo": "assets/hollycast-logo.png",
+      "toolbarLogoHeight": 40,
+      "toolbarSelectedTextColor": "09021d",
+      "background": "09021d",
+      "artworkSource": "cover",
+      "placeholder": "assets/placeholder.png",
+      "showTitles": false,
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "selectorStyle": "outline",
+      "selectorColor": "00000000",
+      "selectorBorderColor": "00000000",
+      "textColor": "ffec1f",
+      "selectedTextColor": "ffec1f",
+      "minItemWidth": 48,
+      "spacing": 15,
+      "fontSize": 0.018,
+      "pagedGrid": {
+        "rows": 4,
+        "padding": 4,
+        "frame": "assets/frame.png",
+        "unplayedFrame": "assets/frame-unplayed.png"
+      },
+      "sounds": {
+        "move": "assets/move.wav",
+        "launch": "assets/launch.wav"
+      },
+      "launch": {
+        "seconds": 0.43
+      },
+      "id": "warning",
+      "name": "Warning! / Arcade",
+      "canvasAspect": 1.6,
+      "columns": 4,
+      "browser": [
+        0.252,
+        0.025,
+        0.491,
+        0.79
+      ],
+      "narrowLayout": "warning-portrait",
+      "narrowAspect": 1.15,
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0.24,
+            0,
+            0.512,
+            1
+          ],
+          "color": "19084b",
+          "endColor": "260b4e",
+          "zIndex": -5
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.244,
+            0,
+            0.504,
+            1
+          ],
+          "source": "assets/stars.png",
+          "tileSeconds": 9,
+          "zIndex": -4
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.24,
+            0,
+            0.002,
+            1
+          ],
+          "color": "1fd8ff",
+          "zIndex": -3
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.75,
+            0,
+            0.002,
+            1
+          ],
+          "color": "1fd8ff",
+          "zIndex": -3
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.02,
+            0.015,
+            0.21,
+            0.225
+          ],
+          "source": "assets/title.png",
+          "fit": "contain"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.03,
+            0.265,
+            0.18,
+            0.024
+          ],
+          "text": "WAVE",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.03,
+            0.302,
+            0.07,
+            0.045
+          ],
+          "source": "page",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.1,
+            0.305,
+            0.025,
+            0.04
+          ],
+          "text": "/",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.128,
+            0.302,
+            0.085,
+            0.045
+          ],
+          "source": "pageCount",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.03,
+            0.375,
+            0.18,
+            0.025
+          ],
+          "text": "SCORE",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.03,
+            0.414,
+            0.195,
+            0.045
+          ],
+          "source": "totalPlayHours",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 7,
+          "valueScale": 1000
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.03,
+            0.49,
+            0.18,
+            0.025
+          ],
+          "text": "HI-SCORE",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.03,
+            0.529,
+            0.195,
+            0.045
+          ],
+          "source": "maxPlayHours",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 7,
+          "valueScale": 1000
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.03,
+            0.61,
+            0.19,
+            0.025
+          ],
+          "text": "LIVES / FAVOURITES",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.03,
+            0.649,
+            0.18,
+            0.045
+          ],
+          "source": "favouriteCount",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.03,
+            0.73,
+            0.18,
+            0.025
+          ],
+          "text": "BOSSES LEFT",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.03,
+            0.769,
+            0.18,
+            0.045
+          ],
+          "source": "unplayedCount",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.03,
+            0.849,
+            0.18,
+            0.055
+          ],
+          "text": "1,000 PTS PER\nPLAYED HOUR",
+          "fontSize": 0.014,
+          "color": "8793bf"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.03,
+            0.933,
+            0.18,
+            0.045
+          ],
+          "text": "CYAN  /  PLAYED\nRED  /  UNPLAYED",
+          "fontSize": 0.014,
+          "color": "8793bf"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.265,
+            0.945,
+            0.107,
+            0.04
+          ],
+          "action": "previousPage",
+          "text": "PREV WAVE",
+          "color": "e8f4ff",
+          "background": "120b30",
+          "borderColor": "1fd8ff",
+          "rounding": 0,
+          "fontSize": 0.018
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.62,
+            0.945,
+            0.107,
+            0.04
+          ],
+          "action": "nextPage",
+          "text": "NEXT WAVE",
+          "color": "e8f4ff",
+          "background": "120b30",
+          "borderColor": "1fd8ff",
+          "rounding": 0,
+          "fontSize": 0.018
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4,
+            0.858,
+            0.066,
+            0.106
+          ],
+          "source": "assets/ship.png",
+          "anchor": "selectionX"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4,
+            0.2,
+            0.128,
+            0.205
+          ],
+          "source": "assets/reticle.png",
+          "anchor": "selection"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.4,
+            0.862,
+            0.008,
+            0.02
+          ],
+          "color": "1fd8ffb0",
+          "anchor": "selectionTrail",
+          "onSelection": 0.26
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.4,
+            0.862,
+            0.002,
+            0.02
+          ],
+          "color": "e8f4ffff",
+          "anchor": "selectionTrail",
+          "onSelection": 0.26
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.768,
+            0.025,
+            0.212,
+            0.3392
+          ],
+          "source": "preview",
+          "fallbackImage": "assets/placeholder.png",
+          "fit": "contain"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.766,
+            0.394,
+            0.218,
+            0.086
+          ],
+          "source": "title",
+          "fontSize": 0.033,
+          "color": "ffec1f",
+          "wrap": true
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.765,
+            0.49,
+            0.22,
+            0.248
+          ],
+          "fields": [
+            "playTime",
+            "lastPlayed",
+            "developer",
+            "releaseDate",
+            "players",
+            "system"
+          ],
+          "fontSize": 0.018,
+          "color": "e8f4ff"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.768,
+            0.76,
+            0.21,
+            0.025
+          ],
+          "text": "THREAT LEVEL",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.768,
+            0.799,
+            0.212,
+            0.026
+          ],
+          "color": "3a103f"
+        },
+        {
+          "type": "meter",
+          "rect": [
+            0.77,
+            0.801,
+            0.208,
+            0.022
+          ],
+          "source": "neglect",
+          "color": "ff2a3c"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.768,
+            0.837,
+            0.212,
+            0.043
+          ],
+          "action": "favourite",
+          "text": "FAVOURITE",
+          "color": "e8f4ff",
+          "background": "120b30",
+          "borderColor": "1fd8ff",
+          "rounding": 0,
+          "fontSize": 0.018,
+          "selectedText": "FAVOURITED",
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedColor": "ffec1f",
+          "selectedBorderColor": "ffec1f"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.768,
+            0.904,
+            0.212,
+            0.08
+          ],
+          "action": "activate",
+          "text": "FIRE!",
+          "fontSize": 0.047,
+          "color": "e8f4ff",
+          "background": "ff2a3c",
+          "rounding": 0
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.242,
+            0.39,
+            0.508,
+            0.17
+          ],
+          "source": "assets/warning-band.png",
+          "fit": "stretch",
+          "when": "unplayed",
+          "onSelection": 1.35,
+          "zIndex": 10
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.26,
+            0.425,
+            0.472,
+            0.063
+          ],
+          "text": "WARNING!!",
+          "color": "ff2a3c",
+          "fontSize": 0.055,
+          "align": "center",
+          "when": "unplayed",
+          "onSelection": 1.35,
+          "zIndex": 11
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.26,
+            0.494,
+            0.472,
+            0.028
+          ],
+          "text": "UNPLAYED TARGET",
+          "color": "ffec1f",
+          "fontSize": 0.021,
+          "align": "center",
+          "when": "unplayed",
+          "onSelection": 1.35,
+          "zIndex": 11
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.4,
+            0.862,
+            0.012,
+            0.02
+          ],
+          "color": "e8f4ff",
+          "anchor": "selectionTrail",
+          "when": "launching",
+          "zIndex": 15
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "d9f7ff",
+          "when": "launching",
+          "launchFadeFrom": 0.78,
+          "zIndex": 20
+        }
+      ]
+    },
+    {
+      "mode": "grid",
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarLogo": "assets/hollycast-logo.png",
+      "toolbarLogoHeight": 24,
+      "toolbarSelectedTextColor": "09021d",
+      "background": "09021d",
+      "artworkSource": "cover",
+      "placeholder": "assets/placeholder.png",
+      "showTitles": false,
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "selectorStyle": "outline",
+      "selectorColor": "00000000",
+      "selectorBorderColor": "00000000",
+      "textColor": "ffec1f",
+      "selectedTextColor": "ffec1f",
+      "minItemWidth": 48,
+      "spacing": 12,
+      "fontSize": 0.018,
+      "pagedGrid": {
+        "rows": 2,
+        "padding": 4,
+        "frame": "assets/frame.png",
+        "unplayedFrame": "assets/frame-unplayed.png"
+      },
+      "sounds": {
+        "move": "assets/move.wav",
+        "launch": "assets/launch.wav"
+      },
+      "launch": {
+        "seconds": 0.43
+      },
+      "id": "warning-portrait",
+      "name": "Warning! / Vertical",
+      "columns": 2,
+      "browser": [
+        0.04,
+        0.195,
+        0.92,
+        0.335
+      ],
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0.03,
+            0.008,
+            0.53,
+            0.073
+          ],
+          "source": "assets/title-portrait.png"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.76,
+            0.018,
+            0.2,
+            0.02
+          ],
+          "text": "GAMES",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.76,
+            0.048,
+            0.2,
+            0.035
+          ],
+          "source": "gameCount",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.03,
+            0.099,
+            0.94,
+            0.071
+          ],
+          "color": "120b30",
+          "zIndex": -3
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.05,
+            0.105,
+            0.25,
+            0.02
+          ],
+          "text": "WAVE",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.05,
+            0.135,
+            0.105,
+            0.029
+          ],
+          "source": "page",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.165,
+            0.135,
+            0.035,
+            0.025
+          ],
+          "text": "/",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.22,
+            0.135,
+            0.105,
+            0.029
+          ],
+          "source": "pageCount",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.405,
+            0.105,
+            0.24,
+            0.02
+          ],
+          "text": "LIVES",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.405,
+            0.135,
+            0.16,
+            0.029
+          ],
+          "source": "favouriteCount",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.72,
+            0.105,
+            0.24,
+            0.02
+          ],
+          "text": "BOSSES",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.72,
+            0.135,
+            0.16,
+            0.029
+          ],
+          "source": "unplayedCount",
+          "color": "e8f4ff",
+          "fontSize": 0.032,
+          "bold": true,
+          "wrap": false,
+          "digits": 2
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.02,
+            0.184,
+            0.96,
+            0.481
+          ],
+          "color": "19084b",
+          "endColor": "260b4e",
+          "zIndex": -5
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.02,
+            0.184,
+            0.96,
+            0.481
+          ],
+          "source": "assets/stars.png",
+          "tileSeconds": 9,
+          "zIndex": -4
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.02,
+            0.184,
+            0.002,
+            0.481
+          ],
+          "color": "1fd8ff",
+          "zIndex": -3
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.978,
+            0.184,
+            0.002,
+            0.481
+          ],
+          "color": "1fd8ff",
+          "zIndex": -3
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4,
+            0.546,
+            0.1,
+            0.072
+          ],
+          "source": "assets/ship.png",
+          "anchor": "selectionX"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4,
+            0.2,
+            0.28,
+            0.205
+          ],
+          "source": "assets/reticle.png",
+          "anchor": "selection"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.4,
+            0.551,
+            0.012,
+            0.02
+          ],
+          "color": "1fd8ffb0",
+          "anchor": "selectionTrail",
+          "onSelection": 0.26
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.04,
+            0.625,
+            0.26,
+            0.033
+          ],
+          "action": "previousPage",
+          "text": "PREV WAVE",
+          "color": "e8f4ff",
+          "background": "120b30",
+          "borderColor": "1fd8ff",
+          "rounding": 0,
+          "fontSize": 0.018
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.7,
+            0.625,
+            0.26,
+            0.033
+          ],
+          "action": "nextPage",
+          "text": "NEXT WAVE",
+          "color": "e8f4ff",
+          "background": "120b30",
+          "borderColor": "1fd8ff",
+          "rounding": 0,
+          "fontSize": 0.018
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.03,
+            0.687,
+            0.94,
+            0.239
+          ],
+          "color": "120b30",
+          "zIndex": -3
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.045,
+            0.704,
+            0.25,
+            0.205
+          ],
+          "source": "preview",
+          "fallbackImage": "assets/placeholder.png"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.33,
+            0.702,
+            0.62,
+            0.064
+          ],
+          "source": "title",
+          "fontSize": 0.027,
+          "color": "ffec1f"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.33,
+            0.777,
+            0.62,
+            0.025
+          ],
+          "fields": [
+            "developer",
+            "system"
+          ],
+          "separator": " / ",
+          "fontSize": 0.016,
+          "color": "1fd8ff",
+          "wrap": false
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.33,
+            0.812,
+            0.62,
+            0.079
+          ],
+          "fields": [
+            "playTime",
+            "lastPlayed"
+          ],
+          "fontSize": 0.016,
+          "color": "e8f4ff"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.33,
+            0.9,
+            0.2,
+            0.02
+          ],
+          "text": "THREAT",
+          "color": "1fd8ff",
+          "fontSize": 0.018,
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.55,
+            0.902,
+            0.4,
+            0.016
+          ],
+          "color": "3a103f"
+        },
+        {
+          "type": "meter",
+          "rect": [
+            0.55,
+            0.902,
+            0.4,
+            0.016
+          ],
+          "source": "neglect",
+          "color": "ff2a3c"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.035,
+            0.946,
+            0.38,
+            0.046
+          ],
+          "action": "favourite",
+          "text": "FAVOURITE",
+          "color": "e8f4ff",
+          "background": "120b30",
+          "borderColor": "1fd8ff",
+          "rounding": 0,
+          "fontSize": 0.018,
+          "selectedText": "FAVOURITED",
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedColor": "ffec1f",
+          "selectedBorderColor": "ffec1f"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.44,
+            0.94,
+            0.525,
+            0.052
+          ],
+          "action": "activate",
+          "text": "FIRE!",
+          "fontSize": 0.034,
+          "color": "e8f4ff",
+          "background": "ff2a3c",
+          "rounding": 0
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.023,
+            0.342,
+            0.954,
+            0.12
+          ],
+          "source": "assets/warning-band.png",
+          "fit": "stretch",
+          "when": "unplayed",
+          "onSelection": 1.35,
+          "zIndex": 10
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.045,
+            0.371,
+            0.91,
+            0.045
+          ],
+          "text": "WARNING!!",
+          "color": "ff2a3c",
+          "fontSize": 0.041,
+          "align": "center",
+          "when": "unplayed",
+          "onSelection": 1.35,
+          "zIndex": 11
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.045,
+            0.421,
+            0.91,
+            0.023
+          ],
+          "text": "UNPLAYED TARGET",
+          "color": "ffec1f",
+          "fontSize": 0.018,
+          "align": "center",
+          "when": "unplayed",
+          "onSelection": 1.35,
+          "zIndex": 11
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.4,
+            0.551,
+            0.015,
+            0.02
+          ],
+          "color": "e8f4ff",
+          "anchor": "selectionTrail",
+          "when": "launching",
+          "zIndex": 15
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "d9f7ff",
+          "when": "launching",
+          "launchFadeFrom": 0.78,
+          "zIndex": 20
+        }
+      ]
+    }
+  ]
+}

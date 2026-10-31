@@ -371,6 +371,9 @@ extern Option<bool> SaveProtection;
 extern Option<int, false> SavestateSlot;
 extern Option<bool> ForceFreePlay;
 extern Option<bool, false> FetchBoxart;
+extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper (then LaunchBox, TGDB), 2 -> LaunchBox.
+extern Option<std::string, false> ScreenScraperUser;
+extern Option<int, false> ScreenScraperMedia; // Shared manual media choices; legacy config key, stable artwork::mediaTypes bits.
 extern Option<bool, false> BoxartDisplayMode;
 extern Option<int, false> BoxartSourceMode; // 0 -> Scraped, 1 -> Physical Media, 2 -> Custom with scraped fallback
 enum class LibraryDisplayStyleMode
@@ -399,7 +402,11 @@ enum class LibraryCoverMediaMode
 	FanArt = 7,
 	TitleScreen = 8,
 	Manual = 9,
-	Count = 10,
+	Banner = 10,
+	BackCover = 11,
+	Spine = 12,
+	BoxTexture = 13,
+	Count = 14,
 };
 
 enum class VmuIconPlaybackMode
@@ -417,6 +424,9 @@ extern Option<int, false> VmuIconMode;
 extern Option<int, false> UIScaling;
 extern Option<int, false> UITheme;
 extern Option<std::string, false> UICustomTheme;
+extern Option<std::string, false> CustomTheme; // Library package ID; empty uses the selected UI theme.
+extern Option<std::string, false> ThemeLayout; // Layout ID; empty uses the theme's first layout.
+extern Option<int, false> ThemeIconMedia; // -1 uses the theme default; otherwise LibraryCoverMediaMode.
 enum class MenuBarMode
 {
 	Auto = 0,
@@ -472,8 +482,10 @@ public:
 			RenderType::DirectX11
 #elif defined(USE_DX9)
 			RenderType::DirectX9
-#elif !defined(USE_OPENGL)
+#elif !defined(USE_OPENGL) && defined(USE_VULKAN)
 			RenderType::Vulkan
+#elif !defined(USE_OPENGL) && defined(USE_METAL)
+			RenderType::Metal
 #else
 			RenderType::OpenGL
 #endif

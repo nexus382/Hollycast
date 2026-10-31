@@ -44,6 +44,9 @@ Option<bool> SaveProtection("Dreamcast.SaveProtection", true);
 Option<int, false> SavestateSlot("Dreamcast.SavestateSlot");
 Option<bool> ForceFreePlay("ForceFreePlay", true);
 Option<bool, false> FetchBoxart("FetchBoxart", true);
+Option<int, false> ArtworkProvider("ArtworkProvider", 1); // ScreenScraper first, then library-wide LaunchBox and TGDB passes.
+Option<std::string, false> ScreenScraperUser("ScreenScraperUser");
+Option<int, false> ScreenScraperMedia("ScreenScraperMedia", 4095); // Manual selections; automatic media follows the baseline and selected theme.
 Option<bool, false> BoxartDisplayMode("BoxartDisplayMode", true);
 Option<int, false> BoxartSourceMode("BoxartSourceMode", 0);
 Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
@@ -55,6 +58,9 @@ Option<int, false> VmuIconMode("Dreamcast.VmuIconMode", 0);
 Option<int, false> UIScaling("UIScaling", 100);
 Option<int, false> UITheme("UITheme", 0);
 Option<std::string, false> UICustomTheme("UICustomTheme", "");
+Option<std::string, false> CustomTheme("CustomTheme", "demo-disc");
+Option<std::string, false> ThemeLayout("ThemeLayout");
+Option<int, false> ThemeIconMedia("ThemeIconMedia", -1);
 Option<int, false> MenuBarVisibility("MenuBarVisibility", static_cast<int>(MenuBarMode::Auto));
 
 // Sound

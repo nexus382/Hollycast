@@ -40,3 +40,7 @@ endif()
 if(WIN32 AND USE_DX11)
     add_subdirectory(dx11)
 endif()
+
+if(USE_METAL)
+    add_subdirectory(metal)
+endif()

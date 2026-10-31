@@ -85,6 +85,9 @@ void resetRoles();
 ImVec4 roleColor(const std::string& role, const ImVec4& fallback,
 		const std::string& widget = std::string());
 void setActiveAssets(const Theme::Assets& assets);
+// A library package may override fonts without replacing inherited UI assets.
+// setActiveAssets clears these overrides before the next theme layer is applied.
+void setActiveFontOverrides(const std::string& body, const std::string& bold);
 std::string assetPath(const std::string& name);
 std::vector<std::string> assetPaths();
 std::string fontPath(bool bold);

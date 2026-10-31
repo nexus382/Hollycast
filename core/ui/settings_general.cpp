@@ -24,6 +24,8 @@
 #include "gui_menu.h"
 #include "oslib/storage.h"
 #include "imgui_driver.h"
+#include "theme.h"
+#include "gui_util.h"
 #include <map>
 
 namespace {
@@ -197,6 +199,27 @@ void applyCurrentTheme()
 		if (!error.empty())
 			WARN_LOG(COMMON, "UI theme fallback: %s", error.c_str());
 	}
+	// An installed library package supplies the baseline palette for its own colors.
+	// A live UI-theme editor preview takes precedence until its popup is closed.
+	if (!hasPreviewTheme)
+	{
+		if (const themes::Theme* libraryTheme = themes::current())
+		{
+			CustomTheme::Theme base;
+			std::string baseError;
+			if (CustomTheme::loadBundled(libraryTheme->baseTheme, base, baseError))
+				CustomTheme::applyStyle(base, style);
+			else
+				WARN_LOG(COMMON, "Cannot load library theme base palette: %s", baseError.c_str());
+			themes::applyPalette();
+			const auto body = libraryTheme->fonts.find("body");
+			const auto bold = libraryTheme->fonts.find("bold");
+			CustomTheme::setActiveFontOverrides(body == libraryTheme->fonts.end() ? "" : body->second,
+					bold == libraryTheme->fonts.end() ? "" : bold->second);
+		}
+	}
+	// Preserve the original metrics; undoing a scaled style loses pixel precision.
+	LibraryUiScope::setBaseStyle(style);
 #if defined(__ANDROID__)
 	GuiMenu::setAndroidMenuStyle(ImGui::GetStyle(), settings.display.uiScale);
 #endif

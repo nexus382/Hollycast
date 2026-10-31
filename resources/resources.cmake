@@ -37,6 +37,9 @@ if(NOT LIBRETRO)
     cmrc_add_resources(Hollycast-resources
             fonts/NotoSansCJK-Regular.ttc.zip
             fonts/NotoSansCJK-LICENSE.txt
+            fonts/NotoSansDevanagari-Medium.ttf.zip
+            fonts/NotoSansDevanagari-LICENSE.txt
+            fonts/HarfBuzz-LICENSE.txt
             fonts/Roboto-Medium.ttf.zip
             fonts/Roboto-Bold.ttf.zip
             fonts/Roboto-Regular.ttf.zip
@@ -68,11 +71,17 @@ cmrc_add_resources(Hollycast-resources fonts/biosfont.bin.zip)
 
 cmrc_add_resources(Hollycast-resources
 	WHENCE resources
+	resources/i18n/de.po
+	resources/i18n/es.po
 	resources/i18n/fr.po
 	resources/i18n/hu.po
+	resources/i18n/hi.po
+	resources/i18n/it.po
 	resources/i18n/ja.po
+	resources/i18n/ko.po
 	resources/i18n/pt_BR.po
 	resources/i18n/sv.po
+	resources/i18n/tr.po
 	resources/i18n/zh_CN.po
 	resources/i18n/zh_HK.po
 	resources/i18n/zh_TW.po)
@@ -85,3 +94,26 @@ cmrc_add_resources(Hollycast-resources
         "resources/themes/High Contrast.json"
         resources/themes/Nintendo.json
         "resources/themes/Aqua Chill.json")
+
+# Ship the complete library-theme packages with every standalone release. Hash
+# content so startup can update bundled assets once without per-frame disk scans.
+if(NOT LIBRETRO)
+    file(GLOB_RECURSE HOLLYCAST_LIBRARY_THEME_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/themes/*")
+    list(SORT HOLLYCAST_LIBRARY_THEME_FILES)
+    set(HOLLYCAST_LIBRARY_THEME_HASHES "")
+    foreach(theme_file IN LISTS HOLLYCAST_LIBRARY_THEME_FILES)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${theme_file}")
+        file(SHA256 "${theme_file}" theme_hash)
+        file(RELATIVE_PATH theme_relative "${CMAKE_CURRENT_SOURCE_DIR}/themes" "${theme_file}")
+        string(APPEND HOLLYCAST_LIBRARY_THEME_HASHES "${theme_relative}:${theme_hash}\n")
+    endforeach()
+    string(SHA256 HOLLYCAST_LIBRARY_THEME_VERSION "${HOLLYCAST_LIBRARY_THEME_HASHES}")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes/.version" "${HOLLYCAST_LIBRARY_THEME_VERSION}")
+    cmrc_add_resources(Hollycast-resources
+        WHENCE "${CMAKE_CURRENT_SOURCE_DIR}/themes" PREFIX library-themes
+        ${HOLLYCAST_LIBRARY_THEME_FILES})
+    cmrc_add_resources(Hollycast-resources
+        WHENCE "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes" PREFIX library-themes
+        "${CMAKE_CURRENT_BINARY_DIR}/bundled-library-themes/.version")
+endif()

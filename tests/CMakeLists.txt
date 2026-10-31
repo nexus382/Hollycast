@@ -46,6 +46,10 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/oslib/I18nTest.cpp
         src/rend/SampleTextureFilterTest.cpp
         src/ui/BoxartTest.cpp
+        src/ui/ScreenScraperTest.cpp
+        src/ui/LaunchBoxTest.cpp
+        src/ui/ArtworkAdapterTest.cpp
+        src/ui/TheGamesDbTest.cpp
         src/ui/LibraryTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp
@@ -59,8 +63,16 @@ if(LIBRETRO)
 endif()
 
 if(NOT LIBRETRO)
-    target_sources(${PROJECT_NAME} PRIVATE src/DcnetProbeTest.cpp)
-    target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp src/ui/CustomThemeTest.cpp src/ui/LibrarySavestateTest.cpp)
-    target_sources(${PROJECT_NAME} PRIVATE src/ui/VideoPresetTest.cpp)
-    target_sources(${PROJECT_NAME} PRIVATE src/ui/AndroidMenuPopupTest.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE
+        src/DcnetProbeTest.cpp
+        src/ui/SetupChecklistPopupTest.cpp
+        src/ui/SettingsPopupTest.cpp
+        src/ui/CustomThemeTest.cpp
+        src/ui/LibrarySavestateTest.cpp
+        src/ui/ThemeTest.cpp
+        src/ui/ThemeLibraryTest.cpp
+        src/ui/ThemeArtworkTest.cpp
+        src/ui/ThemeInstallTest.cpp
+        src/ui/VideoPresetTest.cpp
+        src/ui/AndroidMenuPopupTest.cpp)
 endif()
