@@ -12,6 +12,7 @@
 #include "vmu_xhair.h"
 #endif
 
+#include <cstring>
 #include <memory>
 
 /*
@@ -192,6 +193,9 @@ void OpenGLRenderer::setGPState(const PolyParam *gp, u32 cflip)
 		else if (config::TextureFiltering == 2)
 			gpuPalette = 2; // force linear
 	}
+	const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+			&& strcmp(gl.gl_version, "GLES2") && strcmp(gl.gl_version, "GL2")
+			? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
 
 	CurrentShader = GetProgram(Type == ListType_Punch_Through ? true : false,
 								  clipmode == TileClipping::Inside,
@@ -206,6 +210,8 @@ void OpenGLRenderer::setGPState(const PolyParam *gp, u32 cflip)
 								  color_clamp,
 								  trilinear_alpha != 1.f,
 								  gpuPalette,
+								  filter.mode,
+								  filter.maxSize,
 								  gp->isNaomi2(),
 								  ShaderUniforms.dithering,
 								  gp->tsp.SrcSelect == 1);
@@ -249,6 +255,8 @@ void OpenGLRenderer::setGPState(const PolyParam *gp, u32 cflip)
 
 		bool nearest_filter;
 		if (gpuPalette != 0)
+			nearest_filter = true;
+		else if (filter.appliesTo(texture->uploadedWidth))
 			nearest_filter = true;
 		else if (config::TextureFiltering == 0)
 			nearest_filter = gp->tsp.FilterMode == 0;

@@ -465,6 +465,9 @@ private:
 static SwapIntervalDetector swapIntervalDetector;
 
 
+#ifdef USE_METAL
+#include "rend/metal/metal_api.h"
+#endif
 Renderer* rend_GLES2();
 Renderer* rend_GL4();
 Renderer* rend_norend();
@@ -498,6 +501,14 @@ static void rend_create_renderer()
 		break;
 	case RenderType::Vulkan_OIT:
 		renderer = rend_OITVulkan();
+		break;
+#endif
+#ifdef USE_METAL
+	case RenderType::Metal:
+		renderer = rend_Metal();
+		break;
+	case RenderType::Metal_OIT:
+		renderer = rend_Metal_OIT();
 		break;
 #endif
 #ifdef USE_DX9

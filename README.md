@@ -7,7 +7,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/nexus382/Hollycast?label=release)](https://github.com/nexus382/Hollycast/releases/latest)
 [![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/pYVqGqvFJW)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/8s8Ecc2BxR)
 [![Website](https://img.shields.io/badge/web-hollycast.org-orange)](https://hollycast.org)
 
 **Hollycast is a multi-platform Sega Dreamcast, Naomi, Naomi 2, and Atomiswave emulator.** It is built on [Flycast](https://github.com/flyinghead/flycast): it follows the upstream emulation core and adds a modern interface, more front-end features, and controls for power users.
@@ -67,7 +67,7 @@ Hollycast aims to support every platform and release that Flycast supports. Merg
 
 ## Contributing
 
-Hollycast is under active development. If you'd like to contribute, please [join our Discord](https://discord.gg/pYVqGqvFJW) and open a feature request to discuss your plans **before** you write code.
+Hollycast is under active development. If you'd like to contribute, please [join our Discord](https://discord.gg/8s8Ecc2BxR) and open a feature request to discuss your plans **before** you write code.
 
 Bugs can be reported with the [bug report template](https://github.com/nexus382/Hollycast/issues/new?template=bug_report.md).
 
@@ -154,6 +154,17 @@ cmake --build --preset <PRESET>
 > ```bash
 > cmake --preset darwin -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
 > ```
+
+### Native Metal renderer on macOS
+
+Standalone macOS builds include the experimental native Metal backend by default:
+
+```bash
+cmake --preset darwin -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
+cmake --build --preset darwin
+```
+
+Then select **Settings > Video > Graphics API > Metal (Experimental)** and choose per-triangle, per-strip or per-pixel sorting. Metal is offered only when its runtime device/pipeline check succeeds; per-pixel support is checked separately. Existing renderer preferences are preserved. `-DUSE_METAL=OFF` remains available for builds that explicitly exclude it. See [the Metal renderer notes](docs/Native%20Metal%20renderer.md) for supported features, limitations and verification.
 
 ### Android
 

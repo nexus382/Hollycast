@@ -43,6 +43,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/SDLControllerMappingTest.cpp
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
+        src/rend/SampleTextureFilterTest.cpp
         src/ui/BoxartTest.cpp
         src/ui/ScreenScraperTest.cpp
         src/ui/LaunchBoxTest.cpp
@@ -65,5 +66,7 @@ if(NOT LIBRETRO)
         src/ui/ThemeTest.cpp
         src/ui/ThemeLibraryTest.cpp
         src/ui/ThemeArtworkTest.cpp
-        src/ui/ThemeInstallTest.cpp)
+        src/ui/ThemeInstallTest.cpp
+        src/ui/VideoPresetTest.cpp
+        src/ui/AndroidMenuPopupTest.cpp)
 endif()

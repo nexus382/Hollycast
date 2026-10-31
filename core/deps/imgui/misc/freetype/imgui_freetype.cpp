@@ -4,6 +4,7 @@
 // Get the latest version at https://github.com/ocornut/imgui/tree/master/misc/freetype
 // Original code by @vuhdo (Aleksei Skriabin) in 2017, with improvements by @mikesart.
 // Maintained since 2019 by @ocornut.
+// Portions Copyright 2026 The Hollycast Authors
 
 // CHANGELOG
 // (minor and older changes stripped away, please see git history for details)
@@ -40,8 +41,10 @@
 #include "imgui.h"
 #ifndef IMGUI_DISABLE
 #include "imgui_freetype.h"
+#include "imgui_text_shaping.h"
 #include "imgui_internal.h"     // ImMin,ImMax,ImFontAtlasBuild*,
 #include <stdint.h>
+#include <limits.h>
 #ifdef _MSC_VER
 #pragma push_macro("generic")
 #undef generic
@@ -55,6 +58,9 @@
 #include FT_SYNTHESIS_H         // <freetype/ftsynth.h>
 #include FT_TRUETYPE_TABLES_H   // <freetype/tttables.h>
 #include FT_TRUETYPE_TAGS_H     // <freetype/tttags.h>
+#ifdef IMGUI_ENABLE_HARFBUZZ
+#include <hb-ft.h>
+#endif
 #ifdef _MSC_VER
 #pragma pop_macro("generic")
 #endif
@@ -179,7 +185,17 @@ struct ImGui_ImplFreeType_FontSrcData
 struct ImGui_ImplFreeType_FontSrcBakedData
 {
 	FT_Size     FtSize;             // This represent a FT_Face with a given size.
-	ImGui_ImplFreeType_FontSrcBakedData() { memset((void*)this, 0, sizeof(*this)); }
+#ifdef IMGUI_ENABLE_HARFBUZZ
+	hb_font_t* HbFont = nullptr;
+	hb_buffer_t* HbBuffer = nullptr;
+	ImGuiStorage GlyphIndices;
+	~ImGui_ImplFreeType_FontSrcBakedData()
+	{
+		if (HbBuffer) hb_buffer_destroy(HbBuffer);
+		if (HbFont) hb_font_destroy(HbFont);
+	}
+#endif
+	ImGui_ImplFreeType_FontSrcBakedData() : FtSize(nullptr) {}
 };
 
 bool ImGui_ImplFreeType_FontSrcData::InitFont(FT_Library ft_library, const ImFontConfig* src, ImGuiFreeTypeLoaderFlags extra_font_loader_flags)
@@ -247,9 +263,10 @@ void ImGui_ImplFreeType_FontSrcData::CloseFont()
 	}
 }
 
-static const FT_Glyph_Metrics* ImGui_ImplFreeType_LoadGlyph(ImGui_ImplFreeType_FontSrcData* src_data, uint32_t codepoint)
+static const FT_Glyph_Metrics* ImGui_ImplFreeType_LoadGlyph(ImGui_ImplFreeType_FontSrcData* src_data, uint32_t codepoint, uint32_t glyph_index = 0)
 {
-	uint32_t glyph_index = FT_Get_Char_Index(src_data->FtFace, codepoint);
+	if (glyph_index == 0)
+		glyph_index = FT_Get_Char_Index(src_data->FtFace, codepoint);
 	if (glyph_index == 0)
 		return nullptr;
 	
@@ -544,10 +561,11 @@ static void ImGui_ImplFreeType_FontBakedDestroy(ImFontAtlas* atlas, ImFontConfig
 	bd_baked_data->~ImGui_ImplFreeType_FontSrcBakedData(); // ~IM_PLACEMENT_DELETE()
 }
 
-static bool ImGui_ImplFreeType_FontBakedLoadGlyph(ImFontAtlas* atlas, ImFontConfig* src, ImFontBaked* baked, void* loader_data_for_baked_src, ImWchar codepoint, ImFontGlyph* out_glyph, float* out_advance_x)
+static bool ImGui_ImplFreeType_FontBakedLoadGlyphInternal(ImFontAtlas* atlas, ImFontConfig* src, ImFontBaked* baked, void* loader_data_for_baked_src, ImWchar codepoint, ImFontGlyph* out_glyph, float* out_advance_x, uint32_t glyph_index)
 {
 	ImGui_ImplFreeType_FontSrcData* bd_font_data = (ImGui_ImplFreeType_FontSrcData*)src->FontLoaderData;
-	uint32_t glyph_index = FT_Get_Char_Index(bd_font_data->FtFace, codepoint);
+	if (glyph_index == 0)
+		glyph_index = FT_Get_Char_Index(bd_font_data->FtFace, codepoint);
 	if (glyph_index == 0)
 		return false;
 	
@@ -559,7 +577,7 @@ static bool ImGui_ImplFreeType_FontBakedLoadGlyph(ImFontAtlas* atlas, ImFontConf
 		bd_font_data->BakedLastActivated = baked;
 	}
 	
-	const FT_Glyph_Metrics* metrics = ImGui_ImplFreeType_LoadGlyph(bd_font_data, codepoint);
+	const FT_Glyph_Metrics* metrics = ImGui_ImplFreeType_LoadGlyph(bd_font_data, codepoint, glyph_index);
 	if (metrics == nullptr)
 		return false;
 	
@@ -658,6 +676,117 @@ static bool ImGui_ImplFreeType_FontBakedLoadGlyph(ImFontAtlas* atlas, ImFontConf
 	
 	return true;
 }
+
+static bool ImGui_ImplFreeType_FontBakedLoadGlyph(ImFontAtlas* atlas, ImFontConfig* src, ImFontBaked* baked, void* loader_data_for_baked_src, ImWchar codepoint, ImFontGlyph* out_glyph, float* out_advance_x)
+{
+	return ImGui_ImplFreeType_FontBakedLoadGlyphInternal(atlas, src, baked, loader_data_for_baked_src, codepoint, out_glyph, out_advance_x, 0);
+}
+
+#ifdef IMGUI_ENABLE_HARFBUZZ
+// Loader data belongs to a (source, baked size) pair. Reusing it preserves the
+// atlas's normal reload/discard lifetime and keeps glyph caches bounded by fonts.
+static ImGui_ImplFreeType_FontSrcBakedData* GetBakedSource(ImFontBaked* baked, ImFontConfig* source)
+{
+	char* data = (char*)baked->FontLoaderDatas;
+	for (ImFontConfig* src : baked->OwnerFont->Sources)
+	{
+		const ImFontLoader* loader = src->FontLoader ? src->FontLoader : baked->OwnerFont->OwnerAtlas->FontLoader;
+		if (src == source)
+			return loader == ImGuiFreeType::GetFontLoader() ? (ImGui_ImplFreeType_FontSrcBakedData*)data : nullptr;
+		data += loader->FontBakedSrcLoaderDataSize;
+	}
+	return nullptr;
+}
+
+bool ImGuiFreeType::ShapeRun(ImFontBaked* baked, const char* begin, const char* end, ImFontConfig** source, ImVector<ImGuiShapedGlyph>* glyphs)
+{
+	glyphs->clear();
+	if (end <= begin || end - begin > INT_MAX)
+		return false;
+	for (ImFontConfig* src : baked->OwnerFont->Sources)
+	{
+		auto* data = GetBakedSource(baked, src);
+		if (!data)
+			continue;
+		auto* font_data = (ImGui_ImplFreeType_FontSrcData*)src->FontLoaderData;
+		bool covers_run = true;
+		for (const char* s = begin; s < end;)
+		{
+			unsigned int c;
+			const int length = ImTextCharFromUtf8(&c, s, end);
+			if (length == 0 || (c != 0x200c && c != 0x200d && FT_Get_Char_Index(font_data->FtFace, c) == 0))
+			{
+				covers_run = false;
+				break;
+			}
+			s += length;
+		}
+		if (!covers_run)
+			continue;
+		FT_Activate_Size(data->FtSize);
+		font_data->BakedLastActivated = baked;
+		if (!data->HbFont)
+		{
+			data->HbFont = hb_ft_font_create_referenced(font_data->FtFace);
+			hb_ft_font_set_load_flags(data->HbFont, font_data->LoadFlags);
+			data->HbBuffer = hb_buffer_create();
+		}
+		// The FT_Face is shared between baked sizes; update HarfBuzz after selecting
+		// this size so shaping advances match the actual glyph rasterization.
+		hb_ft_font_changed(data->HbFont);
+		hb_buffer_reset(data->HbBuffer);
+		hb_buffer_set_direction(data->HbBuffer, HB_DIRECTION_LTR);
+		hb_buffer_set_script(data->HbBuffer, HB_SCRIPT_DEVANAGARI);
+		hb_buffer_set_language(data->HbBuffer, hb_language_from_string("hi", -1));
+		hb_buffer_set_cluster_level(data->HbBuffer, HB_BUFFER_CLUSTER_LEVEL_MONOTONE_GRAPHEMES);
+		hb_buffer_add_utf8(data->HbBuffer, begin, (int)(end - begin), 0, (int)(end - begin));
+		hb_shape(data->HbFont, data->HbBuffer, nullptr, 0);
+		unsigned int count = 0;
+		const hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(data->HbBuffer, &count);
+		const hb_glyph_position_t* positions = hb_buffer_get_glyph_positions(data->HbBuffer, nullptr);
+		if (!hb_buffer_allocation_successful(data->HbBuffer) || count == 0 || count > INT_MAX)
+			return false;
+		const float unit_scale = 1.0f / (64.0f * src->RasterizerDensity * baked->RasterizerDensity);
+		for (unsigned int i = 0; i < count; ++i)
+		{
+			if (infos[i].cluster >= (unsigned int)(end - begin) || (i > 0 && infos[i].cluster < infos[i - 1].cluster))
+			{
+				glyphs->clear();
+				return false;
+			}
+			glyphs->push_back({infos[i].codepoint, infos[i].cluster, positions[i].x_advance * unit_scale,
+				ImVec2(positions[i].x_offset * unit_scale, -positions[i].y_offset * unit_scale),
+				(hb_glyph_info_get_glyph_flags(&infos[i]) & HB_GLYPH_FLAG_UNSAFE_TO_BREAK) != 0});
+		}
+		*source = src;
+		return true;
+	}
+	return false;
+}
+
+const ImFontGlyph* ImGuiFreeType::LoadGlyphIndex(ImFontBaked* baked, ImFontConfig* source, unsigned int glyph_id)
+{
+	auto* data = GetBakedSource(baked, source);
+	if (!data || glyph_id == 0)
+		return nullptr;
+	const int cached = data->GlyphIndices.GetInt(glyph_id, -1);
+	if (cached >= 0)
+		return &baked->Glyphs[cached];
+	ImFontAtlas* atlas = baked->OwnerFont->OwnerAtlas;
+	if (atlas->Locked || (baked->OwnerFont->Flags & ImFontFlags_NoLoadGlyphs))
+		return nullptr;
+	ImFontGlyph glyph;
+	if (!ImGui_ImplFreeType_FontBakedLoadGlyphInternal(atlas, source, baked, data, 0, &glyph, nullptr, glyph_id))
+		return nullptr;
+	for (int i = 0; i < baked->OwnerFont->Sources.Size; ++i)
+		if (baked->OwnerFont->Sources[i] == source)
+			glyph.SourceIdx = i;
+	const int index = baked->Glyphs.Size;
+	ImFontGlyph* added = ImFontAtlasBakedAddFontGlyph(atlas, baked, source, &glyph, false);
+	data->GlyphIndices.SetInt(glyph_id, index);
+	return added;
+}
+#endif
 
 static bool ImGui_ImplFreetype_FontSrcContainsGlyph(ImFontAtlas* atlas, ImFontConfig* src, ImWchar codepoint)
 {

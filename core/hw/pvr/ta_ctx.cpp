@@ -9,6 +9,8 @@
 #include <mutex>
 #include <vector>
 
+/* Portions Copyright 2026 The Hollycast Authors */
+
 extern u32 fskip;
 static int RenderCount;
 

@@ -1,7 +1,9 @@
 // Solution adapted from https://github.com/ocornut/imgui/issues/9066
+// Portions Copyright 2026 The Hollycast Authors
 
 #include "imgui_cjk.h"
 #include "imgui_internal.h"
+#include "misc/freetype/imgui_text_shaping.h"
 #include <array>
 #include <vector>
 #include <string>
@@ -111,6 +113,11 @@ inline bool ImCharIsLineBreakableW(unsigned int c)
 
 const char *CalcWordWrapPositionCJK(ImFont *font, float size, const char *text, const char *text_end, float wrap_width)
 {
+#ifdef IMGUI_ENABLE_HARFBUZZ
+	// Mixed native language names can contain Hindi even in a CJK locale.
+	if (ImGuiTextShaper::NeedsShaping(text, text_end))
+		return ImFontCalcWordWrapPositionEx(font, size, text, text_end, wrap_width);
+#endif
 	if (wrap_width <= 0.0f)
 		return text_end;
 
