@@ -20,11 +20,13 @@ protected:
 	std::filesystem::path directory = std::filesystem::temp_directory_path()
 			/ ("hollycast_effect_layers_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 	std::string previousTechnique = config::PostProcessShaderTechnique.get();
+	std::string previousDirectory = config::PostProcessShaderDirectory.get();
 	std::vector<std::string> previousPaths = config::PostProcessShaders.get();
 
 	void SetUp() override { std::filesystem::create_directories(directory); }
 	void TearDown() override {
 		config::PostProcessShaderTechnique.get() = previousTechnique;
+		config::PostProcessShaderDirectory.get() = previousDirectory;
 		config::PostProcessShaders.get() = previousPaths;
 		std::error_code error;
 		std::filesystem::remove_all(directory, error);
@@ -42,6 +44,63 @@ protected:
 		return path.string();
 	}
 };
+
+TEST_F(ShaderLayerTest, InstallsTheCompleteReleaseShaderLibrary)
+{
+	const auto library = directory / "shaders";
+	std::string error;
+	ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+	config::PostProcessShaderDirectory.get() = library.string();
+	config::PostProcessShaderTechnique.get().clear();
+	unsigned selectable = 0;
+	for (const auto& entry : std::filesystem::recursive_directory_iterator(library)) {
+		if (!entry.is_regular_file() || postprocess::detectFormat(entry.path().string()) == postprocess::ShaderFormat::Unknown)
+			continue;
+		SCOPED_TRACE(entry.path().string());
+		postprocess::ShaderChain chain;
+		ASSERT_TRUE(postprocess::loadShaderChain(entry.path().string(), chain, error)) << error;
+		EXPECT_FALSE(chain.passes.empty());
+		++selectable;
+	}
+	EXPECT_EQ(36u, selectable);
+	EXPECT_TRUE(std::filesystem::is_regular_file(library / "shaders/ReShade.fxh"));
+	EXPECT_TRUE(std::filesystem::is_regular_file(library / "Textures/lut.png"));
+	EXPECT_TRUE(std::filesystem::is_regular_file(library / "Textures/crt-newpixie/crtframe.png"));
+	EXPECT_TRUE(std::filesystem::is_regular_file(library / "LICENSES.txt"));
+}
+
+TEST_F(ShaderLayerTest, PreservesUserShadersAndRepairsMissingBundledAssets)
+{
+	const auto library = directory / "shaders";
+	std::string error;
+	ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+	const std::string custom = "// user-edited shader\nvoid main() {}\n";
+	std::ofstream(library / "scanlines.glsl") << custom;
+	std::ofstream(library / "my-shader.glsl") << custom;
+	ASSERT_TRUE(std::filesystem::remove(library / "Textures/lut.png"));
+	ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+	for (const char *name : { "scanlines.glsl", "my-shader.glsl" }) {
+		std::ifstream file(library / name);
+		EXPECT_EQ(custom, std::string(std::istreambuf_iterator<char>(file), {}));
+	}
+	EXPECT_GT(std::filesystem::file_size(library / "Textures/lut.png"), 0u);
+}
+
+TEST_F(ShaderLayerTest, DoesNotInstallThroughAnEscapingDirectorySymlink)
+{
+	const auto library = directory / "shaders";
+	const auto outside = directory / "outside";
+	std::filesystem::create_directories(library);
+	std::filesystem::create_directories(outside);
+	std::error_code errorCode;
+	std::filesystem::create_directory_symlink(outside, library / "Textures", errorCode);
+	if (errorCode)
+		GTEST_SKIP() << "Directory symlinks are unavailable: " << errorCode.message();
+	std::string error;
+	EXPECT_FALSE(postprocess::installBundledShaders(library.string(), error));
+	EXPECT_FALSE(error.empty());
+	EXPECT_TRUE(std::filesystem::is_empty(outside));
+}
 
 TEST_F(ShaderLayerTest, SharesNamedTargetsAcrossTechniquesOfTheSameEffect)
 {

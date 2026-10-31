@@ -29,6 +29,9 @@
 
 namespace postprocess {
 
+// Install missing release-bundled shaders without overwriting user edits.
+bool installBundledShaders(const std::string& directory, std::string& error);
+
 // Bound reflected controls to keep UI and upload costs predictable. Vulkan uses
 // a uniform buffer for these values, so this is no longer constrained by the
 // 128-byte minimum push-constant guarantee.

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "oslib/storage.h"
+#include "oslib/resources.h"
+#include "archive/ZipArchive.h"
 #include "shader_chain.h"
 #include "stbi.h"
 
@@ -12,6 +14,8 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <locale>
 #include <memory>
 #include <mutex>
@@ -19,6 +23,81 @@
 
 namespace postprocess
 {
+bool installBundledShaders(const std::string& directory, std::string& error)
+{
+	error.clear();
+	try {
+		size_t archiveSize = 0;
+		auto data = resource::load("shaders/library.zip", archiveSize);
+		ZipArchive archive;
+		if (!data || !archive.Open(data.get(), archiveSize)) {
+			error = "Cannot open the bundled shader library.";
+			return false;
+		}
+		std::unique_ptr<ArchiveFile> manifest(archive.OpenFile("MANIFEST.txt"));
+		if (!manifest || manifest->length() > 64 * 1024) {
+			error = "The bundled shader library has no valid manifest.";
+			return false;
+		}
+		std::string names(manifest->length(), '\0');
+		if (manifest->Read(names.data(), static_cast<u32>(names.size())) != names.size()) {
+			error = "Cannot read the bundled shader manifest.";
+			return false;
+		}
+		const auto root = std::filesystem::u8path(directory);
+		std::filesystem::create_directories(root);
+		const auto canonicalRoot = std::filesystem::canonical(root);
+		std::istringstream entries(names);
+		for (std::string name; std::getline(entries, name);) {
+			const auto relative = std::filesystem::u8path(name);
+			if (name.empty() || relative.is_absolute() || name.find('\\') != std::string::npos
+					|| std::any_of(relative.begin(), relative.end(), [](const auto& part) { return part == ".."; })) {
+				error = "The bundled shader manifest contains an invalid path.";
+				return false;
+			}
+			const auto target = root / relative;
+			// Never write through a user-created directory symlink outside the library.
+			const auto parent = std::filesystem::weakly_canonical(target.parent_path());
+			if (std::mismatch(canonicalRoot.begin(), canonicalRoot.end(), parent.begin(), parent.end()).first != canonicalRoot.end()) {
+				error = "A bundled shader destination escapes the shader folder.";
+				return false;
+			}
+			if (std::filesystem::exists(target))
+				continue;
+			std::unique_ptr<ArchiveFile> file(archive.OpenFile(name.c_str()));
+			if (!file || file->length() > 32 * 1024 * 1024) {
+				error = "A bundled shader file is missing or too large: " + name;
+				return false;
+			}
+			std::vector<char> contents(file->length());
+			if (file->Read(contents.data(), static_cast<u32>(contents.size())) != contents.size()) {
+				error = "Cannot read bundled shader file: " + name;
+				return false;
+			}
+			std::filesystem::create_directories(target.parent_path());
+			auto temporary = target;
+			temporary += ".hollycast-install-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+			// Publish complete files only. Interrupted installs are retried next startup.
+			std::ofstream output(temporary, std::ios::binary);
+			output.write(contents.data(), contents.size());
+			output.close();
+			std::error_code writeError;
+			if (output)
+				std::filesystem::rename(temporary, target, writeError);
+			if (!output || writeError) {
+				std::error_code ignored;
+				std::filesystem::remove(temporary, ignored);
+				error = "Cannot install bundled shader file: " + name;
+				return false;
+			}
+		}
+		return true;
+	} catch (const std::exception& exception) {
+		error = exception.what();
+		return false;
+	}
+}
+
 namespace
 {
 struct Format
