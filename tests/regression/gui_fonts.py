@@ -104,12 +104,19 @@ int main(int argc, char** argv) {
             int missing = 0;
             ImFontConfig* primary = textFonts[i]->Sources[0];
             ImFontConfig* bundled = nullptr;
+            ImFontConfig* devanagari = nullptr;
+            size_t devanagariSize = 0;
+            auto devanagariBytes = resource::load("fonts/NotoSansDevanagari-Medium.ttf", devanagariSize);
             for (ImFontConfig* src : textFonts[i]->Sources)
+            {
                 if (src->FontDataSize == static_cast<int>(cjkSize) &&
                     !memcmp(src->FontData, cjk.get(), cjkSize)) bundled = src;
-            if (!bundled) { std::cerr << "Missing bundled source for " << names[i] << "\n"; return 2; }
+                if (devanagariBytes && src->FontDataSize == static_cast<int>(devanagariSize) &&
+                    !memcmp(src->FontData, devanagariBytes.get(), devanagariSize)) devanagari = src;
+            }
+            if (!bundled || !devanagari) { std::cerr << "Missing bundled source for " << names[i] << "\n"; return 2; }
             const int expectedFace = currentLocale == "zh_CN" || currentLocale == "zh-CN" || currentLocale == "zh-Hans-CN" || currentLocale == "zh_CN.UTF-8" ? 2 :
-                currentLocale == "zh_TW" || currentLocale == "zh-Hant-TW" || currentLocale == "zh_TW.UTF-8" ? 3 : currentLocale == "zh-Hant-HK" || currentLocale == "zh_HK.UTF-8" ? 4 : 0;
+                currentLocale == "zh_TW" || currentLocale == "zh-Hant-TW" || currentLocale == "zh_TW.UTF-8" ? 3 : currentLocale == "zh-Hant-HK" || currentLocale == "zh_HK.UTF-8" ? 4 : currentLocale == "ko" ? 1 : 0;
             if (bundled->FontNo != expectedFace) { std::cerr << "Wrong regional face\n"; return 2; }
             for (unsigned c : codepoints) {
                 // Restrict coverage to the built-in primary and bundled sources,
@@ -118,7 +125,7 @@ int main(int argc, char** argv) {
                     auto loader = src->FontLoader ? src->FontLoader : io.Fonts->FontLoader;
                     return loader->FontSrcContainsGlyph(io.Fonts, src, static_cast<ImWchar>(c));
                 };
-                if ((!contains(primary) && !contains(bundled)) ||
+                if ((!contains(primary) && !contains(bundled) && !contains(devanagari)) ||
                     !textFonts[i]->GetFontBaked(textFonts[i]->LegacySize)->FindGlyphNoFallback(c)) {
                     if (missing++ < 5) std::cout << currentLocale << " " << names[i]
                         << " missing U+" << std::hex << c << std::dec << "\n";
@@ -134,13 +141,14 @@ int main(int argc, char** argv) {
 }
 ''')
 objects = build / "build/Hollycast.build/Debug/Objects-normal/arm64"
-units = ["gui_font", "imgui", "imgui_draw", "imgui_tables", "imgui_widgets", "imgui_cjk", "imgui_freetype"]
+units = ["gui_font", "imgui", "imgui_draw", "imgui_tables", "imgui_widgets", "imgui_cjk", "imgui_freetype", "imgui_text_shaping"]
 subprocess.run([
     "clang++", "-std=c++17", "-DNOWIDE_NO_LIB", "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG",
     "-I" + str(ROOT / "core"), "-I" + str(ROOT / "core/deps"),
     "-I" + str(ROOT / "core/deps/nowide/include"), str(source),
     *[str(objects / (unit + ".o")) for unit in units],
     str(build / "core/deps/freetype/Debug/libfreetyped.a"),
+    str(build / "core/deps/harfbuzz/Debug/libharfbuzz.a"),
     "-L/opt/homebrew/lib", "-lpng", "-lz", "-o", str(out / "gui_fonts"),
 ], check=True)
 subprocess.run([str(out / "gui_fonts"), str(out), *[locale for _, locale in locales], "zh-CN", "zh-Hans-CN", "zh-Hant-TW", "zh-Hant-HK", "zh_CN.UTF-8", "zh_TW.UTF-8", "zh_HK.UTF-8"], check=True)

@@ -974,6 +974,7 @@ if(NOT LIBRETRO)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE
 		IMGUI_DISABLE_DEMO_WINDOWS
 		IMGUI_DISABLE_DEBUG_TOOLS
+		IMGUI_ENABLE_HARFBUZZ
 		IMGUI_DEFINE_MATH_OPERATORS)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/imgui core/deps/imgui/backends)
 	target_sources(${PROJECT_NAME} PRIVATE
@@ -985,6 +986,7 @@ if(NOT LIBRETRO)
 		core/deps/imgui/imgui_tables.cpp
 		core/deps/imgui/imgui_widgets.cpp
 		core/deps/imgui/misc/freetype/imgui_freetype.cpp)
+	target_sources(${PROJECT_NAME} PRIVATE core/deps/imgui/misc/freetype/imgui_text_shaping.cpp)
 
 	set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
 	set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
@@ -994,6 +996,17 @@ if(NOT LIBRETRO)
 		target_compile_definitions(freetype PRIVATE _WINRT_DLL)
 	endif()
 	target_link_libraries(${PROJECT_NAME} PRIVATE freetype)
+	# FreeType does not depend on HarfBuzz here. HarfBuzz uses its baked sizes for
+	# deterministic shaping across platforms; optional rendering/tool APIs are unused.
+	set(HB_HAVE_FREETYPE ON CACHE BOOL "" FORCE)
+	set(HB_HAVE_CORETEXT OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_RASTER OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_VECTOR OFF CACHE BOOL "" FORCE)
+	set(HB_BUILD_GPU OFF CACHE BOOL "" FORCE)
+	add_subdirectory(core/deps/harfbuzz EXCLUDE_FROM_ALL)
+	target_link_libraries(${PROJECT_NAME} PRIVATE harfbuzz)
 
 	if(ENABLE_FC_PROFILER)
 		target_include_directories(${PROJECT_NAME} PRIVATE core/deps/implot)
