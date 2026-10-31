@@ -30,8 +30,58 @@
 #include "rend/vulkan/vulkan_context.h"
 #endif
 
+#ifdef USE_METAL
+#include "rend/metal/metal_api.h"
+#include "rend/metal/metal_selection.h"
+#endif
+
 void initRenderApi(void *window, void *display)
 {
+#ifdef USE_METAL
+#if !defined(USE_OPENGL) && !defined(USE_VULKAN)
+	if (!isMetal(config::RendererType))
+		config::RendererType = RenderType::Metal;
+#endif
+	if (isMetal(config::RendererType) && !metalIsAvailable())
+	{
+		RenderType fallback;
+		if (!metalSelectFallback(config::RendererType, false,
+#ifdef USE_VULKAN
+				true,
+#else
+				false,
+#endif
+#ifdef USE_OPENGL
+				true,
+#else
+				false,
+#endif
+				fallback))
+			throw FlycastException("Metal is unavailable: no compatible Metal device or presentation pipeline");
+		WARN_LOG(RENDERER, "Metal is unavailable; falling back to %s", isVulkan(fallback) ? "Vulkan" : "OpenGL");
+		config::RendererType = fallback;
+	}
+	if (isMetal(config::RendererType))
+	{
+		try {
+			metalCreateContext(window, display);
+			if (config::RendererType == RenderType::Metal_OIT && !GraphicsContext::Instance()->hasPerPixel()) {
+				WARN_LOG(RENDERER, "Metal per-pixel sorting is unavailable on this device; using per-triangle sorting");
+				config::RendererType = RenderType::Metal;
+			}
+			return;
+		} catch (const std::exception& e) {
+			WARN_LOG(RENDERER, "Metal initialization failed: %s", e.what());
+#ifdef USE_VULKAN
+			config::RendererType = RenderType::Vulkan;
+#elif defined(USE_OPENGL)
+			config::RendererType = RenderType::OpenGL;
+#else
+			throw;
+#endif
+		}
+	}
+#endif
 #ifdef USE_VULKAN
 	if (isVulkan(config::RendererType))
 	{

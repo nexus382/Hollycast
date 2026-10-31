@@ -154,6 +154,17 @@ cmake --build --preset <PRESET>
 > cmake --preset darwin -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
 > ```
 
+### Native Metal renderer on macOS
+
+Standalone macOS builds include the experimental native Metal backend by default:
+
+```bash
+cmake --preset darwin -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
+cmake --build --preset darwin
+```
+
+Then select **Settings > Video > Graphics API > Metal (Experimental)** and choose per-triangle, per-strip or per-pixel sorting. Metal is offered only when its runtime device/pipeline check succeeds; per-pixel support is checked separately. Existing renderer preferences are preserved. `-DUSE_METAL=OFF` remains available for builds that explicitly exclude it. See [the Metal renderer notes](docs/Native%20Metal%20renderer.md) for supported features, limitations and verification.
+
 ### Android
 
 **Develop in Android Studio**
