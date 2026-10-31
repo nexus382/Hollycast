@@ -6,6 +6,7 @@
 #include "cfg/option.h"
 #include "stdclass.h"
 #include "oslib/storage.h"
+#include "oslib/resources.h"
 #include "imgui.h"
 
 #include <chrono>
@@ -102,6 +103,49 @@ std::string directory()
 	return get_writable_data_path("library-themes/");
 }
 
+// Embedded packages are authoritative for the shipped theme IDs. Seed missing
+// packages and update them on a content-version change; user-added IDs are left
+// alone. The marker is published last so interrupted writes retry next launch.
+static void restoreBundledThemes(const fs::path& root)
+{
+	constexpr const char* prefix = "library-themes/";
+	size_t versionSize = 0;
+	const auto versionData = resource::load(std::string(prefix) + ".version", versionSize);
+	if (!versionData) return; // Libretro does not expose the standalone library UI.
+	const std::string version(reinterpret_cast<const char*>(versionData.get()), versionSize);
+	std::ifstream current(root / ".bundled-version", std::ios::binary);
+	std::string installed((std::istreambuf_iterator<char>(current)), std::istreambuf_iterator<char>());
+	bool complete = installed == version;
+	for (const auto& id : resource::listDirectory("library-themes"))
+		if (!id.empty() && id.front() != '.' && !fs::exists(root / id / "theme.json")) complete = false;
+	if (complete) return;
+	fs::create_directories(root);
+	const fs::path canonicalRoot = fs::weakly_canonical(root);
+	for (const auto& resourcePath : resource::listFiles("library-themes"))
+	{
+		const std::string relative = resourcePath.substr(std::char_traits<char>::length(prefix));
+		if (relative == ".version") continue;
+		const fs::path destination = root / fs::u8path(relative);
+		if (!within(canonicalRoot, fs::weakly_canonical(destination)))
+			throw std::runtime_error("Bundled theme path resolves outside the theme directory.");
+		fs::create_directories(destination.parent_path());
+		size_t size = 0;
+		const auto data = resource::load(resourcePath, size);
+		if (!data) throw std::runtime_error("A bundled library-theme asset is unavailable.");
+		std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+		output.write(reinterpret_cast<const char*>(data.get()), size);
+		output.close();
+		if (!output) throw std::runtime_error("Cannot write the bundled library themes.");
+	}
+	const fs::path marker = root / ".bundled-version";
+	if (!within(canonicalRoot, fs::weakly_canonical(marker)))
+		throw std::runtime_error("Bundled theme version path resolves outside the theme directory.");
+	std::ofstream output(marker, std::ios::binary | std::ios::trunc);
+	output << version;
+	output.close();
+	if (!output) throw std::runtime_error("Cannot save the bundled theme version.");
+}
+
 void reload()
 {
 	initialized = true;
@@ -113,6 +157,7 @@ void reload()
 	try
 	{
 		const fs::path root = fs::u8path(loadedDirectory);
+		restoreBundledThemes(root);
 		if (!fs::exists(root))
 			return;
 		for (const auto& folder : fs::directory_iterator(root))

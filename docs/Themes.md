@@ -3,18 +3,20 @@
 
 Hollycast theme packages are JSON descriptions of the app palette and game-library layouts. This is Hollycast's own **theme format version 1**; an ES-DE theme or theme pack is not compatible.
 
-## Install a theme
+## Included library themes
 
-A theme folder contains `theme.json` at its root. Its folder name must match the manifest's `id` exactly. For example:
+Every standalone download includes all eight library themes and their assets inside
+the executable or app. On startup Hollycast restores missing packages to its data
+folder and updates bundled assets when their content version changes. No theme
+installation or reload action is required. Open **Settings > Library > Library
+Themes**, choose **Library Theme**, then **Library Layout**. **App UI Theme** returns
+to the standard library. This packaging is shared by Windows, Linux, macOS,
+Android, iOS and Switch; libretro uses its frontend's library.
 
-```text
-midnight/
-└── theme.json
-```
-
-To install from Hollycast, open **Settings > Library > Library Themes**, click **Install Library Theme Folder**, then select the theme folder. The app validates and copies it into the themes directory shown below the controls. Install does not overwrite a package with the same ID. Packages may contain at most 256 entries, 64 MiB of files, and eight nested directory levels. The installer rejects symbolic links. To replace or remove an installed package, edit or delete its folder, then use **Reload Library Themes**.
-
-You can also copy a package folder directly into the themes directory shown in settings. Choose it under **Library Theme**, then choose one of its layouts under **Library Layout**. **Reload Library Themes** rescans the directory after manual changes. Selecting **App UI Theme** restores the selected UI theme and the default library layout.
+For theme development, an additional package folder may still be placed under
+`library-themes/` in the app data directory and loaded by restarting the app. Its
+folder name must match the manifest's `id`. Bundled IDs are maintained by Hollycast;
+use a separate ID for local modifications.
 
 Library packages live under `library-themes/` in the app data directory, separately from the UI editor's JSON theme files. Selecting or saving a UI theme clears the library package selection. Opening the UI editor temporarily previews that UI theme; cancelling restores the library package.
 
@@ -196,7 +198,7 @@ Explicit `details` elements retain their own authored scrollable regions; layout
 
 Themes do not run scripts or load remote resources. Keep a package self-contained and use only package-relative paths for images and fonts. Every presentation extension above is optional; existing manifests keep their previous behavior. [Pocket Dimension](../themes/pocket-dimension/theme.json) demonstrates them together without any package-specific renderer code.
 
-Artwork availability comes from the shared library. LaunchBox, ScreenScraper and TheGamesDB use the same named theme bindings, while keeping their provider caches separate. Matching local ES-DE artwork keeps priority, followed by the selected provider and TheGamesDB fallback; existing images from another provider remain usable. Basic views request covers, hover miximages and metadata. Selecting a theme queues its additional manifest requirements and shows progress. **Settings > Library > Artwork Downloads > Download All Media for All Themes** prepares the union used by installed layouts. Disc scans use `physical`; front box artwork uses `cover`, 3D boxes use `case`, and back covers and spines use `backcover` and `spine`. These bindings are reusable and opt-in for every theme. LaunchBox supplies ten categories including discs and box artwork; ScreenScraper also supplies `miximage`. TheGamesDB supplies seven categories and automatically fills missing supported types or unavailable lookups, without replacing the primary provider's images. See [LaunchBox artwork](launchbox-artwork.md), [TheGamesDB media](thegamesdb.md) and [ScreenScraper setup](screenscraper.md).
+Artwork availability comes from the shared library. LaunchBox, ScreenScraper and TheGamesDB use the same named theme bindings, while keeping their provider caches separate. Matching local ES-DE artwork keeps priority, followed by the selected provider and TheGamesDB fallback; existing images from another provider remain usable. Basic views request covers, hover miximages, title logos and metadata. Selecting a theme queues its additional manifest requirements and shows progress. **Settings > Library > Artwork Downloads > Download All Media for All Themes** prepares the union used by installed layouts. Disc scans use `physical`; front box artwork uses `cover`, 3D boxes use `case`, and back covers and spines use `backcover` and `spine`. These bindings are reusable and opt-in for every theme. LaunchBox supplies ten categories including discs and box artwork; ScreenScraper also supplies `miximage`. ScreenScraper completes first; LaunchBox then fills only missing requested types, followed by TheGamesDB after the LaunchBox pass completes. Earlier artwork and metadata retain priority. See [LaunchBox artwork](launchbox-artwork.md), [TheGamesDB media](thegamesdb.md) and [ScreenScraper setup](screenscraper.md).
 
 ## Troubleshooting
 
@@ -267,7 +269,7 @@ shares the usual asset validation; themes still execute no scripts.
 
 ## Automatic media requirements
 
-The two standard library views prepare only covers, miximages for hover details,
+The two standard library views prepare only covers, miximages and title logos for hover details,
 and game metadata. Disc labels are read locally from the game; no extra image
 categories are scraped until a theme or a manual download action needs them.
 Selecting a theme queues its missing media for the whole library and shows progress
@@ -289,7 +291,10 @@ themes does not redownload them. Metadata-only lookup is independent of image
 requests, so local covers do not prevent game information being fetched.
 
 Progress counts ready, pending and unavailable image/metadata units, rather than
-HTTP requests. Unavailable includes unsupported provider categories and unmatched
+HTTP requests. The hover media picker shows missing baseline categories and optional
+media already on disk; it never treats every supported image type as required.
+A missing or unavailable title logo falls back to the game title in text.
+Unavailable includes unsupported provider categories and unmatched
 games; it is never reported as a successful download. Provider quotas, paused
 sessions and missing credentials can leave work pending. Choose ScreenScraper for
 miximages; other providers do not supply them. The existing retry action can retry
@@ -304,3 +309,14 @@ Repeated requests merge into the existing source job, and concurrent ScreenScrap
 disc entries share each game/type/region cache file rather than downloading it twice.
 Keep these rules in the shared queue when adding themes; never add per-frame scrape
 requests or a second artwork cache in a theme renderer.
+
+## Ordered scrape passes
+
+ScreenScraper is the default initial source. It completes all queued covers,
+additional requested images and game lookups before any LaunchBox fallback starts.
+LaunchBox completes its missing-media pass before TheGamesDB is tried. Backoff,
+quota pauses and in-flight jobs do not count as completion. New primary work added
+while a fallback is running takes priority before further fallback jobs begin.
+Only missing requested categories are passed on; unsupported categories are skipped.
+Successful files and unavailable-category checks persist across restarts, and later
+providers fill gaps without overwriting earlier provider metadata.

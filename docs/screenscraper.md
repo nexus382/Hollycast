@@ -152,6 +152,6 @@ Unavailable Media clears those attempts while preserving successful downloads.
 
 API reference: [ScreenScraper API v2](https://www.screenscraper.fr/webapi2.php).
 
-The shared artwork adapter uses TheGamesDB as its automatic fallback for missing supported categories, unmatched games and failed lookups. Primary images and metadata retain priority; automatic requests follow the baseline and the active theme's manifest requirements. LaunchBox also uses these same slots, including disc scans (`physical`) and box artwork (`cover`, `case`, `backcover`, `spine`).
+After the entire ScreenScraper pass finishes, LaunchBox checks missing requested media. After the LaunchBox pass finishes, TheGamesDB checks remaining supported categories. A paused or failed primary request remains pending and does not trigger an early fallback. Primary images and metadata retain priority; automatic requests follow the baseline and the active theme's manifest requirements. LaunchBox also uses these same slots, including disc scans (`physical`) and box artwork (`cover`, `case`, `backcover`, `spine`).
 
 Media policy and future theme integration are described in [Automatic media requirements](Themes.md#automatic-media-requirements). Local and cached images are checked before downloads; metadata-only requests do not download covers.

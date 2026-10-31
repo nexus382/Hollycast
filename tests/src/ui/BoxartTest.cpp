@@ -245,13 +245,14 @@ protected:
 		return finishOfflineFetch(media);
 	}
 
-	GameBoxart finishOfflineFetch(const GameMedia& game)
+	GameBoxart finishOfflineFetch(const GameMedia& game, u32 requestedMedia = artwork::basicMedia)
 	{
-		boxart->getBoxartAndLoad(game);
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 		GameBoxart art;
 		do {
-			art = boxart->getBoxartAndLoad(game);
+			boxart->queueBoxart(game, requestedMedia);
+			boxart->startFetch();
+			art = boxart->getBoxart(game);
 			if (!art.busy)
 				return art;
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -300,7 +301,7 @@ protected:
 
 TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
 {
-	const GameBoxart offline = finishOfflineFetch();
+	const GameBoxart offline = finishOfflineFetch(media, artwork::coverMedia);
 	const std::string image = (directory / "boxart" / "launchbox.png").string();
 	std::ofstream(image) << "cached cover";
 	const json matches = {{LaunchBoxCatalog::identity(offline), {
@@ -310,7 +311,7 @@ TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
 	config::ArtworkProvider = 2;
 	config::FetchBoxart = true;
 	boxart->invalidateOfflineArtwork();
-	const GameBoxart original = finishOfflineFetch();
+	const GameBoxart original = finishOfflineFetch(media, artwork::coverMedia);
 	ASSERT_EQ(2416, original.launchboxId);
 	ASSERT_EQ(image, original.boxartPath);
 	restart();
@@ -318,7 +319,7 @@ TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
 	media.fileName = "A renamed game.cue";
 	media.name = "An arbitrary display name";
 	media.path = (directory / media.fileName).string();
-	const GameBoxart renamed = finishOfflineFetch();
+	const GameBoxart renamed = finishOfflineFetch(media, artwork::coverMedia);
 	EXPECT_EQ("TEST-0001", renamed.uniqueId);
 	EXPECT_EQ("Metadata survives", renamed.searchName);
 	EXPECT_EQ(2416, renamed.launchboxId);
@@ -875,4 +876,23 @@ TEST(GameScannerSystemTest, NamesTheBoardAnArcadeRomRunsOn)
 	game.cart_type = AW;
 	EXPECT_STREQ(arcadeSystemName(game), "Atomiswave");
 	EXPECT_EQ(GameMedia{}.system, "Dreamcast");
+}
+
+TEST_F(BoxartTest, ScreenScraperCacheOrderPrefersLaunchBoxBeforeTgdb)
+{
+	config::ArtworkProvider = 1;
+	const auto artRoot = directory / "boxart";
+	std::filesystem::create_directories(artRoot);
+	GameBoxart cached; cached.fileName = media.fileName; cached.gamePath = media.path;
+	cached.offlineArtState = OfflineArtState::NoArtwork;
+	for (int provider : {0, 2})
+	{
+		const auto image = artRoot / (std::to_string(provider) + "-cover.png");
+		std::ofstream(image) << "cached";
+		cached.mediaForProvider(provider)["cover"] = image.string();
+	}
+	writeDatabase(json::array({cached.to_json(artRoot.string() + '/')}));
+	const auto expected = std::filesystem::path(cached.launchboxMedia.at("cover")).lexically_normal();
+	EXPECT_EQ(std::filesystem::path(boxart->getBoxart(media).boxartPath).lexically_normal(), expected);
+	EXPECT_EQ(std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover)).lexically_normal(), expected);
 }

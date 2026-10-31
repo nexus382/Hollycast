@@ -64,9 +64,10 @@ public:
 	void resumePlaytime();
 	void checkpointPlaytime(bool isPaused);
 	void refreshCustomBoxartIndex(bool force = false);
-	// The baseline is covers, hover miximages and metadata. Theme requirements add image bits.
+	// The baseline is covers, hover miximages, title logos and metadata. Theme requirements add image bits.
 	void queueBoxart(const GameMedia& media, u32 requestedMedia = artwork::basicMedia);
 	void startFetch();
+	int activeMediaProvider() const { return activeProvider.load(); }
 	bool customMediaReady();
 	bool customMediaFailed();
 	struct MediaProgress {
@@ -102,9 +103,9 @@ private:
 	bool isCurrentWork(const GameBoxart& item) const;
 	//! @pre mutex must be locked. Merge requests added while a worker was running.
 	void completeArtworkWork(GameBoxart& item, bool queueOnline, int provider);
-	bool takeScreenScraperWork(GameBoxart& item, u64 generation);
+	bool takeScreenScraperWork(GameBoxart& item, u64 generation, int provider = 1);
 	void runScreenScraperQueue(std::shared_ptr<screenscraper::Session> session, u64 generation,
-			const std::string& directory);
+			const std::string& directory, std::unique_ptr<Scraper> launchbox = {}, std::unique_ptr<Scraper> tgdb = {});
 	void loadDatabase();
 	void loadLibraryPlaytimeDatabase();
 	//! @pre playtimeMutex must be locked.
@@ -167,6 +168,7 @@ private:
 	std::vector<GameBoxart> toFetch;
 	std::condition_variable artworkWake;
 	std::atomic<u64> screenGeneration{0};
+	std::atomic<int> activeProvider{-1};
 	std::shared_ptr<screenscraper::Session> screenSessionSnapshot; // UI-thread owned.
 	bool mediaBatchPending = false; // Protected by mutex; preserves cover priority during queue refill.
 	bool physicalWorking = false; // Protected by mutex; producer can overlap network workers.

@@ -3,6 +3,7 @@
 #include "ui/boxart/screenscraper.h"
 #include "ui/boxart/boxart.h"
 #include "ui/boxart/gamesdb.h"
+#include "ui/boxart/launchbox.h"
 #include "ui/game_scanner.h"
 #include "oslib/http_client.h"
 #include <stb_image_write.h>
@@ -519,6 +520,15 @@ TEST(ScreenScraperAccountTest, SwitchingSessionWaitsForCancelledRequestsToFinish
 }
 } // namespace
 
+class PipelineScraper : public Scraper
+{
+public:
+	explicit PipelineScraper(std::function<void(GameBoxart&)> work) : work(std::move(work)) {}
+	void scrape(GameBoxart& item) override { work(item); }
+private:
+	std::function<void(GameBoxart&)> work;
+};
+
 class ScreenScraperQueueTest : public ::testing::Test
 {
 protected:
@@ -589,9 +599,9 @@ protected:
 		result->login();
 		return result;
 	}
-	void run(const std::shared_ptr<Session>& session)
+	void run(const std::shared_ptr<Session>& session, std::unique_ptr<Scraper> launchbox = {}, std::unique_ptr<Scraper> tgdb = {})
 	{
-		boxart.runScreenScraperQueue(session, boxart.screenGeneration, root.u8string() + '/');
+		boxart.runScreenScraperQueue(session, boxart.screenGeneration, root.u8string() + '/', std::move(launchbox), std::move(tgdb));
 	}
 	bool runWithProducer(const std::shared_ptr<Session>& session, GameBoxart& preparing)
 	{
@@ -625,6 +635,7 @@ protected:
 		item.fileName = media.fileName; item.gamePath = media.path;
 		item.offlineArtState = OfflineArtState::NoArtwork;
 		item.launchboxMedia["cover"] = path;
+		item.launchboxMedia["title"] = path;
 		boxart.games[item.sourceKey()] = item;
 	}
 	bool runWithInventory(const std::shared_ptr<Session>& session, std::future<void>& firstCover)
@@ -651,7 +662,14 @@ protected:
 		boxart.toFetch.erase(boxart.toFetch.begin());
 		return item;
 	}
-	void finish(GameBoxart& item) { item.tgdbSearched = true; if (config::ArtworkProvider.get() != 0) item.tgdbCheckedMedia = TheGamesDb::supportedMedia; boxart.completeArtworkWork(item, true, item.arcade ? 0 : config::ArtworkProvider.get()); }
+	void finish(GameBoxart& item) {
+		item.tgdbSearched = item.launchboxSearched = true;
+		if (config::ArtworkProvider.get() != 0) {
+			item.tgdbCheckedMedia = TheGamesDb::supportedMedia;
+			item.launchboxCheckedMedia = LaunchBox::supportedMedia;
+		}
+		boxart.completeArtworkWork(item, true, item.arcade ? 0 : config::ArtworkProvider.get());
+	}
 	void seedArcadeRequest()
 	{
 		GameBoxart arcade;
@@ -671,7 +689,7 @@ protected:
 	bool previousFetch = false;
 };
 
-TEST_F(ScreenScraperQueueTest, BasicLibraryQueuesCoverMixAndMetadataRegardlessOfManualChoices)
+TEST_F(ScreenScraperQueueTest, BasicLibraryQueuesCoverMixLogoAndMetadataRegardlessOfManualChoices)
 {
 	const auto automatic = queue();
 	EXPECT_EQ(automatic.requestedMedia, artwork::basicMedia);
@@ -814,6 +832,38 @@ TEST_F(ScreenScraperQueueTest, RetryingDreamcastMediaPreservesArcadeRequests)
 	boxart.retryArtworkMedia();
 	ASSERT_EQ(queued(), 1u);
 	EXPECT_TRUE(takeWork().arcade);
+}
+
+TEST_F(ScreenScraperQueueTest, AllPrimaryJobsFinishBeforeLaunchBoxAndAllLaunchBoxJobsBeforeTgdb)
+{
+	seedPrepared(4);
+	std::atomic<int> covers{0}, mixes{0}, lookups{0};
+	int launchboxCalls = 0, tgdbCalls = 0;
+	auto session = mockSession(3, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("box-2D") != std::string::npos) { ++covers; return 404; }
+		++mixes; bytes = png(); return 200;
+	}, lookups);
+	auto launchbox = std::make_unique<PipelineScraper>([&](GameBoxart& item) {
+		EXPECT_EQ(covers, 4); EXPECT_EQ(mixes, 4);
+		EXPECT_EQ(item.requestedMedia, artwork::coverMedia);
+		++launchboxCalls;
+		item.launchboxSearched = true; item.launchboxCheckedMedia |= artwork::coverMedia;
+		item.developer = "Fallback must not replace Sonic Team";
+	});
+	auto tgdb = std::make_unique<PipelineScraper>([&](GameBoxart& item) {
+		EXPECT_EQ(launchboxCalls, 4);
+		EXPECT_EQ(item.requestedMedia, artwork::coverMedia);
+		EXPECT_EQ(item.developer, "Sonic Team");
+		++tgdbCalls;
+		const auto image = root / (std::to_string(item.screenScraperId) + "-fallback.png");
+		std::ofstream(image) << "cached cover";
+		item.tgdbMedia["cover"] = image.string();
+		item.tgdbCheckedMedia |= artwork::coverMedia;
+	});
+	run(session, std::move(launchbox), std::move(tgdb));
+	EXPECT_EQ(launchboxCalls, 4); EXPECT_EQ(tgdbCalls, 4);
+	EXPECT_EQ(queued(), 0u);
+	EXPECT_EQ(boxart.downloadProgress().games, 0u);
 }
 
 TEST_F(ScreenScraperQueueTest, SlowCoverDoesNotIdleOtherWorkersAndAllCoversPrecedeExtras)

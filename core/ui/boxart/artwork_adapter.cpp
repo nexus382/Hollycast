@@ -11,7 +11,7 @@ ArtworkAdapter::ArtworkAdapter(int provider, std::unique_ptr<Scraper> primary,
   std::unique_ptr<Scraper> fallback)
  : provider(provider), primary(std::move(primary)), fallback(std::move(fallback))
 {
- if (provider != 0 && !this->fallback) this->fallback = std::make_unique<TheGamesDb>();
+ if (provider == 2 && !this->fallback) this->fallback = std::make_unique<TheGamesDb>();
 }
 
 bool ArtworkAdapter::initialize(const std::string& directory)
@@ -50,8 +50,45 @@ u32 ArtworkAdapter::fallbackMedia(const GameBoxart& item, int provider, u32 sele
  return missing;
 }
 
+u32 ArtworkAdapter::stageMedia(const GameBoxart& item, int provider, u32 selection)
+{
+ u32 missing = selection & supportedMedia(provider);
+ for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+ {
+  const u32 bit = 1u << i;
+  if (!(missing & bit)) continue;
+  for (int cachedProvider : {1, 2, 0})
+  {
+   const auto& cached = item.mediaForProvider(cachedProvider);
+   const auto found = cached.find(artwork::mediaTypes[i].name);
+   if (found != cached.end() && file_exists(found->second)) { missing &= ~bit; break; }
+  }
+ }
+ // A later image provider can fill absent fields, but needs no extra metadata
+ // lookup when an earlier provider already matched the game.
+ if ((selection & artwork::metadataMedia) && (provider == 1 ||
+   (!item.screenScraperId && (provider == 2 || !item.launchboxId)))) missing |= artwork::metadataMedia;
+ u32 pending = 0;
+ for (u32 bits = missing; bits; bits &= bits - 1)
+ {
+  const u32 bit = bits & (~bits + 1u);
+  const bool needed = provider == 1 ? screenscraper::needsMedia(item, bit)
+    : provider == 2 ? LaunchBox::needsMedia(item, bit) : TheGamesDb::needsMedia(item, bit);
+  if (needed) pending |= bit;
+ }
+ return pending;
+}
+
+int ArtworkAdapter::nextProvider(const GameBoxart& item, u32 selection)
+{
+ for (int provider : {1, 2, 0})
+  if (stageMedia(item, provider, selection)) return provider;
+ return -1;
+}
+
 bool ArtworkAdapter::needsMedia(const GameBoxart& item, int provider, u32 selection)
 {
+ if (provider == 1 && !item.arcade) return nextProvider(item, selection) != -1;
  const bool primaryPending = provider == 1 ? screenscraper::needsMedia(item, selection)
    : provider == 2 ? LaunchBox::needsMedia(item, selection) : TheGamesDb::needsMedia(item, selection);
  if (primaryPending) return true;
@@ -62,6 +99,7 @@ bool ArtworkAdapter::needsMedia(const GameBoxart& item, int provider, u32 select
 
 void ArtworkAdapter::scrape(GameBoxart& item)
 {
+ if (provider == 1) { primary->scrape(item); return; }
  std::exception_ptr primaryFailure;
  try { primary->scrape(item); } catch (...) { primaryFailure = std::current_exception(); }
  const u32 requested = item.requestedMedia ? item.requestedMedia : artwork::coverMedia;

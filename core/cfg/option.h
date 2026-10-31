@@ -371,7 +371,7 @@ extern Option<bool> SaveProtection;
 extern Option<int, false> SavestateSlot;
 extern Option<bool> ForceFreePlay;
 extern Option<bool, false> FetchBoxart;
-extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper, 2 -> LaunchBox. TGDB fills missing supported media.
+extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper (then LaunchBox, TGDB), 2 -> LaunchBox.
 extern Option<std::string, false> ScreenScraperUser;
 extern Option<int, false> ScreenScraperMedia; // Shared manual media choices; legacy config key, stable artwork::mediaTypes bits.
 extern Option<bool, false> BoxartDisplayMode;

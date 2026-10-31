@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gtest/gtest.h"
@@ -52,23 +53,34 @@ TEST_F(ArtworkAdapterTest, TgdbFillsOnlyMissingSupportedSlotsAndKeepsPrimaryMeta
  EXPECT_FALSE(ArtworkAdapter::needsMedia(item, 2, artwork::allMedia));
 }
 
-TEST_F(ArtworkAdapterTest, UnmatchedPrimaryUsesCoverOnlyFallbackUntilExplicitlyExpanded)
+TEST_F(ArtworkAdapterTest, ScreenScraperDefersFallbackAndPlansOnlyMissingRequestedMedia)
 {
- std::vector<u32> requests;
+ int fallbackCalls = 0;
  ArtworkAdapter adapter(1, std::make_unique<StubScraper>([](GameBoxart& item) {
   item.screenScraperCheckedMedia = artwork::allMedia; item.screenScraperSearched = true;
- }), std::make_unique<StubScraper>([&](GameBoxart& item) {
-  requests.push_back(item.requestedMedia); item.tgdbCheckedMedia |= item.requestedMedia;
- }));
+ }), std::make_unique<StubScraper>([&](GameBoxart&) { ++fallbackCalls; }));
  GameBoxart item; item.requestedMedia = artwork::coverMedia;
- EXPECT_TRUE(ArtworkAdapter::needsMedia(item, 1, item.requestedMedia));
  adapter.scrape(item);
- ASSERT_EQ(1u, requests.size()); EXPECT_EQ(artwork::coverMedia, requests[0]);
- EXPECT_FALSE(ArtworkAdapter::needsMedia(item, 1, artwork::coverMedia));
- EXPECT_TRUE(ArtworkAdapter::needsMedia(item, 1, artwork::allMedia));
- item.requestedMedia = artwork::allMedia; adapter.scrape(item);
- EXPECT_EQ(TheGamesDb::supportedMedia, requests.back());
- EXPECT_FALSE(ArtworkAdapter::needsMedia(item, 1, artwork::allMedia));
+ EXPECT_EQ(fallbackCalls, 0);
+ EXPECT_EQ(ArtworkAdapter::nextProvider(item, item.requestedMedia), 2);
+ EXPECT_EQ(ArtworkAdapter::stageMedia(item, 2, item.requestedMedia), artwork::coverMedia);
+ item.launchboxCheckedMedia = LaunchBox::supportedMedia; item.launchboxSearched = true;
+ EXPECT_EQ(ArtworkAdapter::nextProvider(item, item.requestedMedia), 0);
+ item.tgdbCheckedMedia = TheGamesDb::supportedMedia; item.tgdbSearched = true;
+ EXPECT_EQ(ArtworkAdapter::nextProvider(item, item.requestedMedia), -1);
+ EXPECT_FALSE(ArtworkAdapter::needsMedia(item, 1, item.requestedMedia));
+}
+
+TEST_F(ArtworkAdapterTest, PipelineReusesImagesFromAnyProviderAndSkipsUnsupportedTypes)
+{
+ GameBoxart item; item.screenScraperSearched = true;
+ item.screenScraperCheckedMedia = artwork::allMedia;
+ item.launchboxMedia["cover"] = image("cover");
+ EXPECT_EQ(ArtworkAdapter::nextProvider(item, artwork::coverMedia), -1);
+ EXPECT_EQ(ArtworkAdapter::nextProvider(item, artwork::mediaBit("miximage")), -1);
+ EXPECT_EQ(ArtworkAdapter::nextProvider(item, artwork::mediaBit("spine")), 2);
+ item.launchboxCheckedMedia = LaunchBox::supportedMedia;
+ EXPECT_EQ(ArtworkAdapter::nextProvider(item, artwork::mediaBit("spine")), -1);
 }
 
 TEST_F(ArtworkAdapterTest, DiscAndBoxRequestsNeverUseAnUnrelatedFallbackImage)

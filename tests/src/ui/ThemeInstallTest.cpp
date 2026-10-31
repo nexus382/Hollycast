@@ -353,7 +353,8 @@ TEST_F(ThemeInstallTest, PreviewThemesValidateAssetsNoticesLimitsAndEveryInstall
 					EXPECT_GT(height, 0);
 				}
 
-		EXPECT_EQ(themes::install(source.u8string()), expected.id);
+		// Standalone packages are now restored from embedded resources on startup.
+		ASSERT_NE(findEntry(expected.id), nullptr);
 		const fs::path installedPath = fs::path(themes::directory()) / expected.id;
 		ASSERT_TRUE(fs::is_directory(installedPath));
 		size_t installedFiles = 0;
@@ -390,3 +391,20 @@ TEST_F(ThemeInstallTest, PreviewThemesValidateAssetsNoticesLimitsAndEveryInstall
 	}
 }
 #endif
+
+TEST_F(ThemeInstallTest, FreshDataIncludesAllBundledThemesAndRestoresMissingPackages)
+{
+	for (const char* id : {"demo-disc", "disc-orbit", "pocket-dimension", "preview-art-book-next",
+			"preview-cd-rack", "preview-fanart-disc", "preview-horizon-grid", "warning"})
+	{
+		const auto* entry = findEntry(id);
+		ASSERT_NE(entry, nullptr) << id;
+		EXPECT_TRUE(entry->error.empty()) << entry->error;
+	}
+	const fs::path package = appData / "library-themes" / "preview-cd-rack";
+	fs::remove_all(package);
+	themes::reload();
+	EXPECT_TRUE(fs::exists(package / "theme.json"));
+	ASSERT_NE(findEntry("preview-cd-rack"), nullptr);
+	EXPECT_TRUE(findEntry("preview-cd-rack")->error.empty());
+}

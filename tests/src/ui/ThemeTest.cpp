@@ -795,7 +795,10 @@ TEST(ThemeParserTest, TiledImagesKeepPackagePathAndMotionValidation)
 TEST(ThemeMediaRequirementsTest, BasicViewsDoNotRequestThemeExtras)
 {
 	const auto mask = themes::requiredMedia(themes::Layout{});
-	EXPECT_EQ(mask, artwork::basicMedia);
+	EXPECT_EQ(mask, artwork::metadataMedia | artwork::mediaBit("cover")
+		| artwork::mediaBit("miximage") | artwork::mediaBit("title"));
+	for (const char* optional : {"case", "fanart", "screenshot", "banner", "titlescreen", "backcover", "spine"})
+		EXPECT_EQ(mask & artwork::mediaBit(optional), 0u) << optional;
 	EXPECT_EQ(mask & artwork::mediaBit("physical"), 0u);
 	EXPECT_EQ(mask & artwork::mediaBit("boxtexture"), 0u);
 }

@@ -53,10 +53,17 @@
 
 namespace {
 
+std::array<int, 3> cachedProviderOrder(int preferred)
+{
+	if (preferred == 1) return {1, 2, 0};
+	if (preferred == 2) return {2, 0, 1};
+	return {0, 1, 2};
+}
+
 void selectProviderCover(GameBoxart& item)
 {
  const int preferred = config::ArtworkProvider.get();
- for (int provider : {preferred, 0, 1, 2})
+ for (int provider : cachedProviderOrder(preferred))
  {
   const auto& media = item.mediaForProvider(provider);
   const auto cover = media.find("cover");
@@ -759,7 +766,7 @@ void Boxart::retryArtworkMedia()
 		auto& record = entry.second;
 		if (record.arcade) continue;
   const int primary = config::ArtworkProvider.get();
-  for (int provider : (primary == 0 ? std::vector<int>{0} : std::vector<int>{primary, 0}))
+  for (int provider : (primary == 1 ? std::vector<int>{1, 2, 0} : primary == 2 ? std::vector<int>{2, 0} : std::vector<int>{0}))
   {
    u32& checked = record.checkedMediaForProvider(provider);
    checked = 0;
@@ -965,7 +972,7 @@ std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCo
 	for (const auto& kind : artwork::mediaTypes)
 		if (kind.mode == mediaMode)
 		{
-   for (int provider : {config::ArtworkProvider.get(), 0, 1, 2})
+   for (int provider : cachedProviderOrder(config::ArtworkProvider.get()))
    {
     const auto& cached = record.mediaForProvider(provider);
     const auto it = cached.find(kind.name);
@@ -1026,78 +1033,153 @@ Boxart::DownloadProgress Boxart::downloadProgress()
 	return result;
 }
 
-bool Boxart::takeScreenScraperWork(GameBoxart& item, u64 generation)
+bool Boxart::takeScreenScraperWork(GameBoxart& item, u64 generation, int provider)
 {
 	std::unique_lock<std::mutex> lock(mutex);
 	while (screenGeneration == generation)
 	{
-		toFetch.erase(std::remove_if(toFetch.begin(), toFetch.end(), [this](const GameBoxart& queued) {
+		toFetch.erase(std::remove_if(toFetch.begin(), toFetch.end(), [this](const auto& queued) {
 			return !isCurrentWork(queued);
 		}), toFetch.end());
-		// Include in-flight and disc-header work, so extras cannot jump ahead of a
-		// cover whose lookup or local scan is still running on another worker.
-		const bool coversPending = mediaBatchPending || std::any_of(games.begin(), games.end(), [](const auto& entry) {
+		bool primaryPending = mediaBatchPending || physicalWorking;
+		bool launchboxPending = false;
+		bool coversPending = mediaBatchPending;
+		for (const auto& entry : games)
+		{
 			const auto& game = entry.second;
-			return game.busy && (game.requestedMedia & screenscraper::coverMedia);
-		});
-		const auto next = std::find_if(toFetch.begin(), toFetch.end(), [&](const GameBoxart& queued) {
+			if (!game.busy || game.arcade) continue;
+			const int next = ArtworkAdapter::nextProvider(game, game.requestedMedia);
+			primaryPending |= next == 1;
+			launchboxPending |= next == 2;
+			if (next == 1 && (ArtworkAdapter::stageMedia(game, 1, game.requestedMedia) & artwork::coverMedia))
+				coversPending = true;
+		}
+		// No fallback starts while an earlier provider, local header scan or UI
+		// inventory is outstanding anywhere in the batch. Paused is not complete.
+		if (provider != 1 && (primaryPending || (provider == 0 && launchboxPending))) return false;
+		const auto next = std::find_if(toFetch.begin(), toFetch.end(), [&](const auto& queued) {
 			if (queued.arcade || queued.offlineArtState == OfflineArtState::Pending) return false;
 			const auto& current = games.at(queued.sourceKey());
-			return !coversPending || (current.requestedMedia & screenscraper::coverMedia);
+			if (ArtworkAdapter::nextProvider(current, current.requestedMedia) != provider) return false;
+			return provider != 1 || !coversPending
+				|| (ArtworkAdapter::stageMedia(current, 1, current.requestedMedia) & artwork::coverMedia);
 		});
 		if (next != toFetch.end())
 		{
 			item = std::move(*next);
 			toFetch.erase(next);
-			item.requestedMedia |= games.at(item.sourceKey()).requestedMedia;
-			if (coversPending) item.requestedMedia = screenscraper::coverMedia | (item.requestedMedia & artwork::metadataMedia);
+			const auto& current = games.at(item.sourceKey());
+			item.requestedMedia = ArtworkAdapter::stageMedia(current, provider, current.requestedMedia);
+			if (provider == 1 && coversPending)
+				item.requestedMedia &= artwork::coverMedia | artwork::metadataMedia;
 			++activeScreenJobs;
 			return true;
 		}
-		if (!physicalWorking && !coversPending && !activeScreenJobs) return false;
+		if (provider != 1 || (!primaryPending && !activeScreenJobs)) return false;
 		artworkWake.wait(lock);
 	}
 	return false;
 }
 
 void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> session, u64 generation,
-		const std::string& directory)
+		const std::string& directory, std::unique_ptr<Scraper> launchbox, std::unique_ptr<Scraper> tgdb)
 {
-	ArtworkAdapter scraper(1, std::make_unique<ScreenScraper>(session));
-	if (!scraper.initialize(directory))
+	ScreenScraper primary(session);
+	if (!primary.initialize(directory))
 	{
 		session->pause("ScreenScraper cannot open its artwork cache. Retrying after one minute.");
 		return;
 	}
-	std::vector<std::future<void>> workers;
-	for (int i = 0; i < session->status().maxThreads; ++i)
-		workers.push_back(std::async(std::launch::async, [&, this] {
-			ThreadName name("BoxArt-ScreenScraper");
-			while (screenGeneration == generation)
-			{
-				// Only API backoff waits here. Queue refill and worker completion wake
-				// immediately and never depend on rendering another UI frame.
-				while (!session->ready() || !scraper.ready())
+	bool launchboxInitialized = false, tgdbInitialized = false;
+	const auto finish = [&](GameBoxart& item) {
+		std::lock_guard<std::mutex> lock(mutex);
+		--activeScreenJobs;
+		completeArtworkWork(item, true, 1);
+	};
+	while (screenGeneration == generation)
+	{
+		activeProvider = 1;
+		std::vector<std::future<void>> workers;
+		for (int i = 0; i < session->status().maxThreads; ++i)
+			workers.push_back(std::async(std::launch::async, [&, this] {
+				ThreadName name("BoxArt-ScreenScraper");
+				while (screenGeneration == generation)
 				{
-					if (screenGeneration != generation || !session->status().connected) return;
-					std::unique_lock<std::mutex> lock(mutex);
-					artworkWake.wait_for(lock, std::chrono::milliseconds(100));
+					GameBoxart item;
+					if (!takeScreenScraperWork(item, generation)) return;
+					while (!session->ready())
+					{
+						if (screenGeneration != generation || !session->status().connected) { finish(item); return; }
+						std::unique_lock<std::mutex> lock(mutex);
+						artworkWake.wait_for(lock, std::chrono::milliseconds(100));
+					}
+					try { primary.scrape(item); }
+					catch (const std::exception& error) { INFO_LOG(COMMON, "Artwork scraper: %s", error.what()); }
+					catch (...) { session->pause("ScreenScraper download failed. Retrying after one minute."); }
+					finish(item);
 				}
-				GameBoxart item;
-				if (!takeScreenScraperWork(item, generation)) return;
-				try { scraper.scrape(item); }
-				catch (const std::exception& error) { INFO_LOG(COMMON, "Artwork scraper: %s", error.what()); }
-				catch (...) { session->pause("ScreenScraper download failed. Retrying after one minute."); }
-				std::lock_guard<std::mutex> lock(mutex);
-				--activeScreenJobs;
-				completeArtworkWork(item, true, 1);
+			}));
+		for (auto& worker : workers)
+			while (worker.wait_for(std::chrono::seconds(1)) != std::future_status::ready) saveDatabase();
+		for (auto& worker : workers) worker.get();
+		if (screenGeneration != generation || !session->status().connected) break;
+		// Fallback catalogs are lazy: a complete ScreenScraper result never opens
+		// LaunchBox's catalog or makes a TGDB request. Each phase drains completely.
+		for (int provider : {2, 0})
+		{
+			GameBoxart item;
+			while (takeScreenScraperWork(item, generation, provider))
+			{
+				activeProvider = provider;
+				auto& fallback = provider == 2 ? launchbox : tgdb;
+				auto& initialized = provider == 2 ? launchboxInitialized : tgdbInitialized;
+				try
+				{
+					if (!fallback) fallback = provider == 2 ? std::unique_ptr<Scraper>(new LaunchBox) : std::unique_ptr<Scraper>(new TheGamesDb);
+					if (!initialized)
+					{
+						if (!fallback->initialize(directory)) throw std::runtime_error("Cannot open fallback artwork cache.");
+						initialized = true;
+					}
+					while (!fallback->ready() && screenGeneration == generation)
+					{
+						std::unique_lock<std::mutex> lock(mutex);
+						artworkWake.wait_for(lock, std::chrono::milliseconds(100));
+					}
+					if (screenGeneration == generation)
+					{
+						const GameBoxart before = item;
+						// Retain metadata priority even after a partial/failed fallback.
+						auto restore = [&] {
+							if ((before.screenScraperId || (provider == 0 && before.launchboxId)) && !before.name.empty()) item.name = before.name;
+							for (auto field : {&GameBoxart::releaseDate, &GameBoxart::overview, &GameBoxart::developer,
+									&GameBoxart::publisher, &GameBoxart::genre, &GameBoxart::players})
+								if (!(before.*field).empty()) item.*field = before.*field;
+						};
+						try { fallback->scrape(item); } catch (...) { restore(); throw; }
+						restore();
+					}
+				}
+				catch (const std::exception& error)
+				{
+					INFO_LOG(COMMON, "Artwork fallback: %s", error.what());
+					finish(item);
+					saveDatabase();
+					// Retain the provider object and its backoff after transient failures.
+					// A failed cache initialization also receives a bounded retry delay.
+					std::unique_lock<std::mutex> lock(mutex);
+					artworkWake.wait_for(lock, std::chrono::seconds(60), [&] { return screenGeneration != generation; });
+					continue;
+				}
+				finish(item);
 			}
-		}));
-	// Coalesce disk writes on the coordinator, keeping download workers available.
-	for (auto& worker : workers)
-		while (worker.wait_for(std::chrono::seconds(1)) != std::future_status::ready)
-			saveDatabase();
-	for (auto& worker : workers) worker.get();
+		}
+		saveDatabase();
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!mediaBatchPending && !physicalWorking && !std::any_of(toFetch.begin(), toFetch.end(),
+				[](const auto& item) { return !item.arcade; })) break;
+	}
+	activeProvider = -1;
 	saveDatabase();
 }
 
@@ -1215,7 +1297,7 @@ void Boxart::fetchBoxart()
 		std::lock_guard<std::mutex> guard(mutex);
 		if (physicalWorking || std::any_of(toFetch.begin(), toFetch.end(), [](const GameBoxart& item) { return !item.arcade; }))
 			screenFetching = std::async(std::launch::async, &Boxart::runScreenScraperQueue, this,
-				screenSession, screenGeneration.load(), getSaveDirectory());
+				screenSession, screenGeneration.load(), getSaveDirectory(), nullptr, nullptr);
 	}
 	if (onlineFetching.valid())
 		return;

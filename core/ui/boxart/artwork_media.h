@@ -32,7 +32,9 @@ inline constexpr u32 allMedia = (1u << mediaTypes.size()) - 1;
 inline constexpr u32 coverMedia = 1u;
 // A job flag, not an image category: metadata lookups must not force a cover download.
 inline constexpr u32 metadataMedia = 1u << 30;
-inline constexpr u32 basicMedia = coverMedia | (1u << 1) | metadataMedia;
+// Basic icons and hover details consume only covers, miximages, title logos and
+// metadata. Optional media browsers must not expand automatic download requirements.
+inline constexpr u32 basicMedia = coverMedia | (1u << 1) | (1u << 2) | metadataMedia;
 // The single name-to-bit mapping for requirements, provider queues and future media types.
 inline u32 mediaBit(std::string_view source)
 {

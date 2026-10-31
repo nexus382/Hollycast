@@ -1401,6 +1401,7 @@ struct GameInfoMediaEntry
 	const char *label;
 	std::string path;
 	bool selected = false;
+	bool required = false; // Only missing assets actually consumed by the hover UI are shown.
 };
 
 struct HoverGameInfoCache
@@ -1419,6 +1420,7 @@ struct HoverGameInfoCache
 	std::string primaryImagePath;
 	std::string title;
 	int selectedMediaIndex = 0;
+	bool mediaPopupOpen = false;
 	bool ready = false;
 };
 
@@ -1525,16 +1527,21 @@ static bool draw_game_info_image_cover_cropped(const std::string& path, ImDrawLi
 static std::vector<GameInfoMediaEntry> make_game_info_media_entries(const HoverGameInfoCache& cache)
 {
 	std::vector<GameInfoMediaEntry> entries {
-		{ "Mix", cache.mixImagePath, false },
-		{ "Cover", !cache.coverPath.empty() ? cache.coverPath : cache.art.boxartPath, false },
+		{ "Mix", cache.mixImagePath, false, true },
+		{ "Cover", !cache.coverPath.empty() ? cache.coverPath : cache.art.boxartPath, false, true },
 		{ "Case", cache.casePath, false },
 		{ "Screenshot", cache.screenshotPath, false },
-		{ "Marquee", cache.titleImagePath, false },
+		{ "Title Logo", cache.titleImagePath, false, true },
 		{ "Title Screen", cache.titleScreenPath, false },
 		{ "Fan Art", cache.fanArtPath, false },
 		{ "Physical", cache.physicalPath, false },
 		{ "Manual", cache.manualPath, false },
 	};
+	// Optional images remain browsable when already available. Their absence does
+	// not mean the baseline view needs a scrape of every supported media category.
+	entries.erase(std::remove_if(entries.begin(), entries.end(), [](const auto& entry) {
+		return !entry.required && entry.path.empty();
+	}), entries.end());
 	if (!entries.empty())
 		entries[std::clamp(cache.selectedMediaIndex, 0, (int)entries.size() - 1)].selected = true;
 	return entries;
@@ -1582,19 +1589,19 @@ static std::string best_game_info_hero_background_path(const HoverGameInfoCache&
 	return {};
 }
 
-static void draw_game_info_chip(const std::string& text)
+static void draw_game_info_chip(const std::string& text, float scale)
 {
 	if (text.empty())
 		return;
-	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, uiScaled(10.0f));
-	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ScaledVec2(10.0f, 4.0f));
+	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, 10.f * scale);
+	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ImVec2(10.f * scale, 4.f * scale));
 	ImguiStyleColor button(ImGuiCol_Button, blendThemeColor(ImGuiCol_FrameBg, ImGuiCol_ButtonActive, 0.24f, 0.92f));
 	ImguiStyleColor buttonHovered(ImGuiCol_ButtonHovered, blendThemeColor(ImGuiCol_FrameBgHovered, ImGuiCol_ButtonActive, 0.38f, 0.95f));
 	ImguiStyleColor buttonActive(ImGuiCol_ButtonActive, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
 	ImGui::Button(text.c_str());
 }
 
-static void draw_game_info_chip_row(const GameMedia& game)
+static void draw_game_info_chip_row(const GameMedia& game, float scale)
 {
 	std::vector<std::string> chips;
 	if (!game.players.empty())
@@ -1621,7 +1628,7 @@ static void draw_game_info_chip_row(const GameMedia& game)
 			{
 				if (i != 0)
 					ImGui::SameLine();
-				draw_game_info_chip(chips[i]);
+				draw_game_info_chip(chips[i], scale);
 			}
 			break;
 		}
@@ -1667,56 +1674,66 @@ static int draw_game_info_badge_wrap(const std::vector<GameInfoMediaEntry>& medi
 	return clickedIndex;
 }
 
-static void draw_game_info_detail_row(const char *label, const std::string& value)
+static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameMedia& game, float width, float height, float scale)
 {
-	ImGui::PushFont(game_info_body_font(), uiScaled(17.f));
-	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T(label));
-	ImGui::SameLine(uiScaled(110.0f));
-	ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", game_info_value(value));
-	ImGui::PopFont();
-}
-
-static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameMedia& game, float width)
-{
-	const ImVec2 heroSize(width, uiScaled(144.0f));
+	const auto scaled = [scale](float value) { return value * scale; };
+	const auto size = [scale](float x, float y) { return ImVec2(x * scale, y * scale); };
+	const ImVec2 heroSize(width, height);
 	const ImVec2 p = ImGui::GetCursorScreenPos();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(p + ScaledVec2(0.0f, 4.0f), p + heroSize + ScaledVec2(0.0f, 4.0f),
-			alphaOverride(ImGui::GetColorU32(ImGuiCol_BorderShadow), 0.45f), uiScaled(14.0f));
-	dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.95f), uiScaled(14.0f));
+	dl->AddRectFilled(p + size(0.0f, 4.0f), p + heroSize + size(0.0f, 4.0f),
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_BorderShadow), 0.45f), scaled(14.0f));
+	dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.95f), scaled(14.0f));
 	if (draw_game_info_image_cover_cropped(best_game_info_hero_background_path(cache), dl, p, p + heroSize, IM_COL32(255, 255, 255, 62)))
-		dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f), uiScaled(14.0f));
-	dl->AddRectFilled(ImVec2(p.x, p.y + heroSize.y - uiScaled(48.0f)), p + heroSize,
-			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.44f), uiScaled(14.0f));
-	dl->AddRectFilled(p + ScaledVec2(24.0f, 16.0f), ImVec2(p.x + heroSize.x - uiScaled(24.0f), p.y + uiScaled(84.0f)),
-			alphaOverride(ImGui::GetColorU32(ImGuiCol_HeaderActive), 0.12f), uiScaled(18.0f));
-	dl->AddRect(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.82f), uiScaled(14.0f), 0, uiScaled(1.0f));
+		dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f), scaled(14.0f));
+	dl->AddRectFilled(ImVec2(p.x, p.y + heroSize.y - scaled(48.0f)), p + heroSize,
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.44f), scaled(14.0f));
+	dl->AddRectFilled(p + size(24.0f, 16.0f), ImVec2(p.x + heroSize.x - scaled(24.0f), p.y + scaled(84.0f)),
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_HeaderActive), 0.12f), scaled(18.0f));
+	dl->AddRect(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.82f), scaled(14.0f), 0, scaled(1.0f));
 
 	if (ImGui::BeginChild("##libraryHoverHero", heroSize, false,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 	{
-		ImGui::SetCursorPosY(uiScaled(14.0f));
-		ImVec2 titleDrawSize;
+		const float chipY = height - scaled(38.f);
+		ImGui::SetCursorPosY(scaled(10.f));
+		const ImVec2 titlePos = ImGui::GetCursorPos();
+		const float titleWidth = ImGui::GetContentRegionAvail().x;
+		const float titleHeight = std::max(1.f, chipY - titlePos.y - scaled(6.f));
 		const bool drewLogo = draw_game_info_image_contained(cache.titleImagePath,
-				ImVec2(ImGui::GetContentRegionAvail().x, uiScaled(78.0f)),
-				ImVec2(std::min(width * 0.68f, uiScaled(680.0f)), uiScaled(78.0f)),
-				&titleDrawSize);
+				ImVec2(titleWidth, titleHeight), ImVec2(std::min(titleWidth, scaled(680.f)), titleHeight));
 		if (!drewLogo)
 		{
-			ImGui::PushFont(game_info_title_font(), uiScaled(21.f));
-			const ImVec2 textSize = ImGui::CalcTextSize(cache.title.c_str(), nullptr, false, ImGui::GetContentRegionAvail().x);
-			ImGui::SetCursorPosX(std::max(uiScaled(10.0f), (ImGui::GetContentRegionAvail().x - textSize.x) * 0.5f));
-			ImGui::TextWrapped("%s", cache.title.c_str());
+			// The image helper reserves its rectangle even when no texture exists.
+			// Reuse that rectangle for the text fallback rather than drawing below it.
+			float fontSize = scaled(21.f);
+			ImVec2 textSize;
+			do {
+				ImGui::PushFont(game_info_title_font(), fontSize);
+				textSize = ImGui::CalcTextSize(cache.title.c_str(), nullptr, false, titleWidth);
+				ImGui::PopFont();
+				if (textSize.y <= titleHeight || fontSize <= scaled(14.f)) break;
+				fontSize -= scale;
+			} while (true);
+			ImGui::SetCursorPos(titlePos + ImVec2(std::max(0.f, (titleWidth - textSize.x) * 0.5f),
+					std::max(0.f, (titleHeight - textSize.y) * 0.5f)));
+			ImGui::PushFont(game_info_title_font(), fontSize);
+			ImGui::PushTextWrapPos(titlePos.x + titleWidth);
+			ImGui::TextUnformatted(cache.title.c_str());
+			ImGui::PopTextWrapPos();
 			ImGui::PopFont();
 		}
-		ImGui::SetCursorPosY(uiScaled(106.0f));
-		draw_game_info_chip_row(game);
+		ImGui::SetCursorPosY(chipY);
+		ImGui::PushFont(game_info_body_font(), scaled(16.f));
+		draw_game_info_chip_row(game, scale);
+		ImGui::PopFont();
 	}
 	ImGui::EndChild();
 }
 
-static void draw_library_hover_media_card(const HoverGameInfoCache& cache, const std::vector<GameInfoMediaEntry>& mediaEntries, float width, float height)
+static void draw_library_hover_media_card(const std::vector<GameInfoMediaEntry>& mediaEntries, float width, float height, float scale)
 {
+	const auto scaled = [scale](float value) { return value * scale; };
 	if (!ImGui::BeginChild("##libraryHoverMedia", ImVec2(width, height), true,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 	{
@@ -1724,55 +1741,48 @@ static void draw_library_hover_media_card(const HoverGameInfoCache& cache, const
 		return;
 	}
 
-	ImGui::PushFont(game_info_body_font(), uiScaled(17.f));
+	ImGui::PushFont(game_info_body_font(), scaled(17.f));
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Media Preview"));
 	ImGui::PopFont();
 	const GameInfoMediaEntry *selected = selected_game_info_media(mediaEntries);
 	const std::string selectedPath = selected != nullptr ? selected->path : selected_game_info_media_path(mediaEntries);
 	const char *selectedLabel = selected != nullptr ? selected->label : T("Media");
 	const bool found = !selectedPath.empty();
-	const float previewHeight = std::max(uiScaled(180.0f), height - uiScaled(158.0f));
+	const float previewHeight = std::max(1.f, ImGui::GetContentRegionAvail().y - scaled(96.f));
 	const ImVec2 previewSize(ImGui::GetContentRegionAvail().x, previewHeight);
 	const ImVec2 previewPos = ImGui::GetCursorScreenPos();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.72f), uiScaled(9.0f));
-	dl->AddRect(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.55f), uiScaled(9.0f));
-	if (!draw_game_info_image_contained(selectedPath, previewSize, previewSize - ScaledVec2(14.0f, 14.0f)))
+	dl->AddRectFilled(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.72f), scaled(9.0f));
+	dl->AddRect(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.55f), scaled(9.0f));
+	if (!draw_game_info_image_contained(selectedPath, previewSize, ImVec2(std::max(1.f, previewSize.x - scaled(14.f)), std::max(1.f, previewSize.y - scaled(14.f)))))
 	{
 		const std::string missingText = std::string(selectedLabel) + " missing";
 		const char *missing = missingText.c_str();
 		const ImVec2 textSize = ImGui::CalcTextSize(missing);
-		dl->AddCircle(previewPos + previewSize * 0.5f - ScaledVec2(0.0f, 22.0f), uiScaled(14.0f),
-				alphaOverride(ImGui::GetColorU32(ImGuiCol_TextDisabled), 0.86f), 32, uiScaled(2.0f));
-		dl->AddText(previewPos + (previewSize - textSize) * 0.5f + ScaledVec2(0.0f, 18.0f),
+		dl->AddCircle(previewPos + previewSize * 0.5f - ImVec2(0.f, scaled(22.f)), scaled(14.0f),
+				alphaOverride(ImGui::GetColorU32(ImGuiCol_TextDisabled), 0.86f), 32, scaled(2.0f));
+		dl->AddText(previewPos + (previewSize - textSize) * 0.5f + ImVec2(0.f, scaled(18.f)),
 				ImGui::GetColorU32(ImGuiCol_TextDisabled), missing);
 	}
 
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
-	ImGui::PushFont(game_info_body_font(), uiScaled(17.f));
+	ImGui::PushFont(game_info_body_font(), scaled(17.f));
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("Current Media"));
-	ImGui::SameLine(uiScaled(128.0f));
+	ImGui::SameLine(scaled(128.0f));
 	ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", selectedLabel);
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("Status"));
-	ImGui::SameLine(uiScaled(128.0f));
+	ImGui::SameLine(scaled(128.0f));
 	ImGui::TextColored(found ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
 			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status"),
 			"%s", found ? T("Found") : T("Missing"));
-	if (found)
-	{
-		ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("File"));
-		ImGui::SameLine(uiScaled(128.0f));
-		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-		ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", game_info_path_filename(selectedPath).c_str());
-		ImGui::PopTextWrapPos();
-	}
+
 	ImGui::PopFont();
 	ImGui::EndChild();
 }
 
-static void draw_library_hover_description_card(const GameMedia& game, float height)
+static void draw_library_hover_description_card(const GameMedia& game, float height, float scale)
 {
 	if (!ImGui::BeginChild("##libraryHoverDetails", ImVec2(0.0f, height), true))
 	{
@@ -1780,23 +1790,29 @@ static void draw_library_hover_description_card(const GameMedia& game, float hei
 		return;
 	}
 
+	ImGui::PushFont(game_info_body_font(), 17.f * scale);
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Details"));
 	ImGui::Spacing();
-	draw_game_info_detail_row("Players", game.players);
-	draw_game_info_detail_row("Released", format_game_info_release_date(game.releaseDate));
-	draw_game_info_detail_row("Genre", game.genre);
-	draw_game_info_detail_row("Developer", game.developer);
-	draw_game_info_detail_row("Publisher", game.publisher);
+	// Wrap metadata values so a long developer/publisher cannot leave the panel.
+	for (const auto& row : {std::pair{T("Players"), game.players},
+			std::pair{T("Released"), format_game_info_release_date(game.releaseDate)},
+			std::pair{T("Genre"), game.genre}, std::pair{T("Developer"), game.developer},
+			std::pair{T("Publisher"), game.publisher}})
+	{
+		ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", row.first);
+		ImGui::SameLine(100.f * scale);
+		ImGui::TextWrapped("%s", game_info_value(row.second));
+	}
 
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Description"));
 	ImGui::Spacing();
-	const float wrapWidth = std::min(ImGui::GetContentRegionAvail().x, uiScaled(760.0f));
+	const float wrapWidth = std::min(ImGui::GetContentRegionAvail().x, 760.f * scale);
 	if (ImGui::BeginChild("##libraryHoverDescriptionText", ImVec2(0.0f, 0.0f), false))
 	{
-		ImGui::PushFont(game_info_body_font(), uiScaled(17.f));
+		ImGui::PushFont(game_info_body_font(), 17.f * scale);
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapWidth);
 		if (game.desc.empty())
 			ImGui::TextDisabled("%s", T("No description available."));
@@ -1806,35 +1822,40 @@ static void draw_library_hover_description_card(const GameMedia& game, float hei
 		ImGui::PopFont();
 	}
 	ImGui::EndChild();
+	ImGui::PopFont();
 	ImGui::EndChild();
 }
 
-static int draw_library_hover_status_strip(const std::vector<GameInfoMediaEntry>& mediaEntries)
+static int draw_library_hover_status_strip(const std::vector<GameInfoMediaEntry>& mediaEntries, float height, float scale, bool& popupOpen)
 {
-	int foundCount = 0;
-	for (const GameInfoMediaEntry& media : mediaEntries)
-		if (!media.path.empty())
-			foundCount++;
-
-	if (!ImGui::BeginChild("##libraryHoverMediaStatus", ImVec2(0.0f, uiScaled(76.0f)), true,
+	if (!ImGui::BeginChild("##libraryHoverMediaStatus", ImVec2(0.f, height), true,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 	{
 		ImGui::EndChild();
 		return -1;
 	}
-
-	ImGui::PushFont(game_info_body_font(), uiScaled(17.f));
-	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Media"));
+	ImGui::PushFont(game_info_body_font(), 16.f * scale);
+	const int foundCount = static_cast<int>(std::count_if(mediaEntries.begin(), mediaEntries.end(),
+			[](const auto& media) { return !media.path.empty(); }));
+	ImGui::Text(T("Media: %d / %d available"), foundCount, static_cast<int>(mediaEntries.size()));
 	ImGui::SameLine();
-	ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%d / %d found", foundCount, (int)mediaEntries.size());
+	const auto* selected = selected_game_info_media(mediaEntries);
+	ImGui::SetNextItemWidth(std::max(1.f, ImGui::GetContentRegionAvail().x));
+	int clicked = -1;
+	popupOpen = ImGui::BeginCombo("##hoverMedia", selected ? selected->label : T("Media"));
+	if (popupOpen)
+	{
+		for (size_t i = 0; i < mediaEntries.size(); ++i)
+		{
+			const auto& entry = mediaEntries[i];
+			const std::string label = std::string(entry.label) + (entry.path.empty() ? " (not available yet)" : "");
+			if (ImGui::Selectable(label.c_str(), entry.selected)) clicked = static_cast<int>(i);
+		}
+		ImGui::EndCombo();
+	}
 	ImGui::PopFont();
-	int clickedIndex = -1;
-	if (ImGui::BeginChild("##libraryHoverMediaBadges", ImVec2(0.0f, uiScaled(34.0f)), false,
-			ImGuiWindowFlags_HorizontalScrollbar))
-		clickedIndex = draw_game_info_badge_wrap(mediaEntries);
 	ImGui::EndChild();
-	ImGui::EndChild();
-	return clickedIndex;
+	return clicked;
 }
 
 static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart* displayArt = nullptr)
@@ -1871,7 +1892,7 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	const bool panelHovered = hoveredGameId == gameId
 			&& mousePos.x >= hoverPanelMin.x && mousePos.x <= hoverPanelMax.x
 			&& mousePos.y >= hoverPanelMin.y && mousePos.y <= hoverPanelMax.y;
-	if (!itemHovered && !panelHovered)
+	if (!itemHovered && !panelHovered && !(hoverCache.gameId == gameId && hoverCache.mediaPopupOpen))
 		return;
 
 	const float mouseDeltaX = mousePos.x - hoverStartMousePos.x;
@@ -1916,8 +1937,13 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 
 	const ImGuiViewport *viewport = ImGui::GetMainViewport();
 	const ImVec2 displaySize = viewport->Size;
-	const float hoverWidth = std::clamp(displaySize.x * 0.72f, uiScaled(820.0f), uiScaled(1180.0f));
-	const float hoverHeight = std::clamp(displaySize.y * 0.74f, uiScaled(560.0f), uiScaled(720.0f));
+	// Fit the complete panel to the viewport before assigning child heights. A
+	// minimum child size must never force the media controls below the window.
+	const float scale = std::min(uiScaled(1.f), std::max(0.65f,
+			std::min(displaySize.x / 760.f, displaySize.y / 620.f)));
+	const float margin = 12.f * scale;
+	const float hoverWidth = std::max(1.f, std::min(displaySize.x - margin * 2.f, 1180.f * scale));
+	const float hoverHeight = std::max(1.f, std::min(displaySize.y - margin * 2.f, 720.f * scale));
 	if (itemHovered || !hasHoverPanelPos)
 	{
 		hoverPanelPos = ImGui::GetMousePos() + ScaledVec2(18.0f, 18.0f);
@@ -1929,6 +1955,10 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverPanelPos.y = std::max(viewport->Pos.y + uiScaled(12.0f), hoverPanelPos.y);
 		hasHoverPanelPos = true;
 	}
+	hoverPanelPos.x = std::clamp(hoverPanelPos.x, viewport->Pos.x + margin,
+			viewport->Pos.x + std::max(margin, displaySize.x - hoverWidth - margin));
+	hoverPanelPos.y = std::clamp(hoverPanelPos.y, viewport->Pos.y + margin,
+			viewport->Pos.y + std::max(margin, displaySize.y - hoverHeight - margin));
 	hoverPanelMin = hoverPanelPos;
 	hoverPanelMax = hoverPanelPos + ImVec2(hoverWidth, hoverHeight);
 
@@ -1936,9 +1966,9 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f));
 	ImGui::SetNextWindowPos(hoverPanelPos, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(hoverWidth, hoverHeight), ImGuiCond_Always);
-	ImguiStyleVar windowPadding(ImGuiStyleVar_WindowPadding, ScaledVec2(18.0f, 16.0f));
-	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ScaledVec2(10.0f, 6.0f));
-	ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ScaledVec2(12.0f, 8.0f));
+	ImguiStyleVar windowPadding(ImGuiStyleVar_WindowPadding, ImVec2(18.f * scale, 16.f * scale));
+	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ImVec2(10.f * scale, 6.f * scale));
+	ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ImVec2(12.f * scale, 8.f * scale));
 	ImguiStyleVar windowRounding(ImGuiStyleVar_WindowRounding, uiScaled(12.0f));
 	ImguiStyleVar childRounding(ImGuiStyleVar_ChildRounding, uiScaled(10.0f));
 	ImguiStyleVar frameRounding(ImGuiStyleVar_FrameRounding, uiScaled(8.0f));
@@ -1960,19 +1990,30 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	const std::vector<GameInfoMediaEntry> mediaEntries = make_game_info_media_entries(hoverCache);
 	GameMedia details = game;
 	hoverCache.art.applyMetadata(details);
-	draw_library_hover_hero(hoverCache, details, width);
+	ImGui::PushFont(game_info_body_font(), 17.f * scale);
+	const float contentHeight = ImGui::GetContentRegionAvail().y;
+	const float heroHeight = std::min(144.f * scale, contentHeight * 0.28f);
+	const float statusHeight = std::min(54.f * scale, contentHeight * 0.14f);
+	const float gap = ImGui::GetStyle().ItemSpacing.y;
+	draw_library_hover_hero(hoverCache, details, width, heroHeight, scale);
 
-	ImGui::Spacing();
-	const float mediaWidth = std::clamp(width * 0.31f, uiScaled(300.0f), uiScaled(390.0f));
-	const float statusHeight = uiScaled(76.0f);
-	const float mainHeight = std::max(uiScaled(300.0f), ImGui::GetContentRegionAvail().y - statusHeight - uiScaled(10.0f));
-	draw_library_hover_media_card(hoverCache, mediaEntries, mediaWidth, mainHeight);
-
-	ImGui::SameLine(0.0f, uiScaled(14.0f));
-	draw_library_hover_description_card(details, mainHeight);
-
-	ImGui::Spacing();
-	const int clickedMediaIndex = draw_library_hover_status_strip(mediaEntries);
+	const bool stacked = width < 600.f * scale;
+	const float mainHeight = std::max(1.f, ImGui::GetContentRegionAvail().y - statusHeight - gap * 2.f);
+	if (stacked)
+	{
+		const float mediaHeight = mainHeight * 0.42f;
+		draw_library_hover_media_card(mediaEntries, width, mediaHeight, scale);
+		draw_library_hover_description_card(details, std::max(1.f, mainHeight - mediaHeight - gap), scale);
+	}
+	else
+	{
+		const float mediaWidth = width * 0.36f;
+		draw_library_hover_media_card(mediaEntries, mediaWidth, mainHeight, scale);
+		ImGui::SameLine(0.f, 14.f * scale);
+		draw_library_hover_description_card(details, mainHeight, scale);
+	}
+	const int clickedMediaIndex = draw_library_hover_status_strip(mediaEntries, statusHeight, scale, hoverCache.mediaPopupOpen);
+	ImGui::PopFont();
 	if (clickedMediaIndex >= 0)
 		hoverCache.selectedMediaIndex = clickedMediaIndex;
 	ImGui::End();
@@ -4803,8 +4844,10 @@ void gui_display_library_download_progress()
 			ImGui::TextWrapped("%s", T("Checking the local artwork folder before downloading missing media..."));
 		else if (config::ArtworkProvider.get() == 1)
 		{
+			const int phase = boxart.activeMediaProvider();
+			if (phase >= 0) ImGui::Text(T("Current provider: %s"), phase == 1 ? "ScreenScraper" : phase == 2 ? "LaunchBox" : "TheGamesDB");
 			const auto account = screenscraper::status();
-			if (!account.message.empty()) ImGui::TextWrapped("%s", account.message.c_str());
+			if (phase == 1 && !account.message.empty()) ImGui::TextWrapped("%s", account.message.c_str());
 		}
 	}
 }
@@ -4816,8 +4859,12 @@ void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const
 	batch.mask = requestedMedia | artwork::metadataMedia;
 	// Switching themes must not discard a manually requested batch that is still
 	// being inventoried. Merging masks is safe: each source has one active job.
-	if (libraryMediaBatch.progress.pending) batch.mask |= libraryMediaBatch.mask;
 	batch.label = label;
+	if (libraryMediaBatch.progress.pending)
+	{
+		if (libraryMediaBatch.mask & ~batch.mask) batch.label = T("Queued library media");
+		batch.mask |= libraryMediaBatch.mask;
+	}
 	{
 		std::lock_guard<std::mutex> guard(scanner.get_mutex());
 		std::unordered_set<std::string> paths;

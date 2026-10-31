@@ -3655,78 +3655,6 @@ static void renderSettingsContentTab(SettingsTab tab)
 			RenderGeneralPopupSettingRow("ThemeIconSizeSetting", T("Set the library scale, including cover art and game information."), iconSizeCfg);
 		}
 
-		static std::string libraryThemeActionError;
-		static std::mutex pendingLibraryThemeInstallMutex;
-		static std::string pendingLibraryThemeInstallPath;
-		static bool pendingLibraryThemeInstall = false;
-		bool openLibraryThemeFolderPicker = false;
-		if (ImGui::Button(T("Install Library Theme Folder")))
-			openLibraryThemeFolderPicker = true;
-		ImGui::SameLine();
-		if (ImGui::Button(T("Reload Library Themes")))
-		{
-			try
-			{
-				themes::reload();
-				gui_refresh_custom_boxart(true);
-				libraryThemeActionError.clear();
-			}
-			catch (const std::runtime_error& error)
-			{
-				libraryThemeActionError = error.what();
-			}
-			g_applyThemeAfterSettings = true;
-		}
-		const std::string libraryThemePopupName = T("Install Library Theme Folder");
-		auto installSelectedLibraryThemeFolder = [](bool cancelled, const std::string& selection) {
-			if (!cancelled)
-			{
-				std::lock_guard<std::mutex> lock(pendingLibraryThemeInstallMutex);
-				pendingLibraryThemeInstallPath = selection;
-				pendingLibraryThemeInstall = true;
-			}
-			return true;
-		};
-#ifdef __ANDROID__
-		if (openLibraryThemeFolderPicker)
-		{
-			const StoragePopupResult storageResult = select_storage_popup(true, false, libraryThemePopupName,
-				installSelectedLibraryThemeFolder);
-			if (storageResult == StoragePopupResult::Unsupported)
-				ImGui::OpenPopup(libraryThemePopupName.c_str());
-		}
-		select_file_popup(libraryThemePopupName.c_str(), installSelectedLibraryThemeFolder, false, "");
-#else
-		select_file_popup(libraryThemePopupName.c_str(), installSelectedLibraryThemeFolder, false, "");
-		if (openLibraryThemeFolderPicker)
-			ImGui::OpenPopup(libraryThemePopupName.c_str());
-#endif
-		std::string selectedLibraryThemeFolder;
-		{
-			std::lock_guard<std::mutex> lock(pendingLibraryThemeInstallMutex);
-			if (pendingLibraryThemeInstall)
-			{
-				selectedLibraryThemeFolder.swap(pendingLibraryThemeInstallPath);
-				pendingLibraryThemeInstall = false;
-			}
-		}
-		if (!selectedLibraryThemeFolder.empty())
-		{
-			try
-			{
-				config::CustomTheme.get() = themes::install(selectedLibraryThemeFolder);
-				config::ThemeLayout.get().clear();
-				SaveSettings();
-				themes::reload();
-				libraryThemeActionError.clear();
-				g_applyThemeAfterSettings = true;
-			}
-			catch (const std::runtime_error& error)
-			{
-				libraryThemeActionError = error.what();
-			}
-		}
-		ImGui::TextWrapped(T("Library themes folder: %s"), themes::directory().c_str());
 		if (const std::string& error = themes::error(); !error.empty())
 			ImGui::TextWrapped(T("Library theme error: %s"), error.c_str());
 		for (const themes::CatalogEntry& entry : themes::catalog())
@@ -3734,8 +3662,6 @@ static void renderSettingsContentTab(SettingsTab tab)
 			if (!entry.error.empty())
 				ImGui::TextWrapped(T("%s: %s"), entry.name.empty() ? entry.id.c_str() : entry.name.c_str(), entry.error.c_str());
 		}
-		if (!libraryThemeActionError.empty())
-			ImGui::TextWrapped(T("Library theme action error: %s"), libraryThemeActionError.c_str());
 
 	}
 
@@ -3757,10 +3683,10 @@ static void renderSettingsContentTab(SettingsTab tab)
 			return true;
 		};
 		RenderGeneralPopupSettingRow("ArtworkProviderSetting",
-			T("Choose the preferred online artwork source. TheGamesDB fills missing supported types. Existing local media remains available."), providerCfg);
+			T("Choose the preferred online artwork source. ScreenScraper finishes first, then LaunchBox and TheGamesDB fill missing requested media. Existing local media remains available."), providerCfg);
 		if (config::ArtworkProvider.get() == 1)
 		{
-			ImGui::TextWrapped("%s", T("Basic views download covers, hover miximages and game information. Selecting a theme automatically downloads only its additional required media. Physical disc labels are read locally."));
+			ImGui::TextWrapped("%s", T("Basic views download covers, hover miximages, title logos and game information. Selecting a theme automatically downloads only its additional required media. Physical disc labels are read locally."));
 			static char password[256] = {};
 			const auto account = screenscraper::status();
 			const bool configured = screenscraper::developerConfigured();
@@ -4173,7 +4099,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			[](bool enabled) { config::FetchBoxart = enabled; },
 			T(
 				"Fetch Box Art\n"
-				"Automatically downloads covers, hover miximages and game information from the selected provider.\n"
+				"Automatically downloads covers, hover miximages, title logos and game information from the selected provider.\n"
 				"Selecting a library theme automatically downloads the additional media it requires.\n"
 				"Disable if you only want physical media images, custom artwork, or to avoid network fetching."
 			),

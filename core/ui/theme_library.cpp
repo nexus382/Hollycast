@@ -1911,6 +1911,8 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 									std::max(0.0f, titleRect.GetWidth() - uiScaled(8.0f)));
 							browserDrawList->PopClipRect();
 						}
+						if (layout.showFavouriteMarker && item.favourite)
+							drawFavouriteMarker(layout, itemRect, browserDrawList);
 					observeItem(static_cast<size_t>(i));
 						x += itemWidth + spacing;
 						if (scrollSelection && i == selected) { ImGui::SetScrollHereY(); scrollSelection = false; }
