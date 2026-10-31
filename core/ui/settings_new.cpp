@@ -6324,6 +6324,7 @@ static void renderShaderParameterControls()
 				ImGui::TextWrapped("%s", parameter.label.c_str());
 				ImGui::SetNextItemWidth(-1.f);
 				if (ImGui::BeginCombo("##choice", parameter.choiceLabels[selected].c_str())) {
+					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
 					for (size_t index = 0; index < parameter.choiceLabels.size(); ++index) {
 						const bool isSelected = static_cast<int>(index) == selected;
 						if (ImGui::Selectable(parameter.choiceLabels[index].c_str(), isSelected) && !isSelected) {
@@ -6334,6 +6335,8 @@ static void renderShaderParameterControls()
 						if (isSelected)
 							ImGui::SetItemDefaultFocus();
 					}
+					scrollWhenDraggingOnVoid();
+					windowDragScroll(false);
 					ImGui::EndCombo();
 				}
 			}
@@ -6594,7 +6597,7 @@ void renderShaderTab()
 		}
 
 		ImGui::BeginChild("RecognizedShaderList", ImVec2(0.f, SettingsLayoutScaled(260.f)),
-				ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+				ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_DragScrolling);
 		if (g_shaderVisibleEntries.empty())
 			ImGui::TextDisabled("%s", g_shaderBrowserEntries.empty()
 					? T("No recognized shaders were found in this folder.") : T("No shaders match the current filter."));
@@ -6649,6 +6652,13 @@ void renderShaderTab()
 				ImGui::PopID();
 			}
 		}
+		if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+			scrollWhenDraggingOnVoid();
+#if defined(__ANDROID__)
+		windowDragScroll(false);
+#else
+		windowDragScroll();
+#endif
 		ImGui::EndChild();
 	}
 
@@ -6769,7 +6779,7 @@ void renderShaderLiveTuneOverlay()
 	bool open = true;
 	bool returnToSettings = false;
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove
-			| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+			| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_DragScrolling;
 	if (ImGui::Begin(T("Shader Preview###ShaderLiveTune"), &open, flags)) {
 		if (ImGui::Button(T("Back to Settings")))
 			returnToSettings = true;
@@ -6792,6 +6802,14 @@ void renderShaderLiveTuneOverlay()
 			}
 			ImGui::EndTabBar();
 		}
+		// Use Settings touch gestures while nested lists and popups scroll independently.
+		if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+			scrollWhenDraggingOnVoid();
+#if defined(__ANDROID__)
+		windowDragScroll(false);
+#else
+		windowDragScroll();
+#endif
 	}
 	ImGui::End();
 
