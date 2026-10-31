@@ -1649,6 +1649,18 @@ void OpenGLRenderer::Process(TA_context* ctx)
 		updatePaletteTexture(getPaletteTextureSlot());
 		updatePalette = false;
 	}
+	// Presentation shaders reuse texture units, including the fog and palette
+	// slots. Restore these bindings even when the lookup tables did not change;
+	// sampling a shader's image as the fog table corrupts the next game frame.
+	if (config::Fog && fogTextureId != 0) {
+		glActiveTexture(getFogTextureSlot());
+		glBindTexture(GL_TEXTURE_2D, fogTextureId);
+	}
+	if (paletteTextureId != 0) {
+		glActiveTexture(getPaletteTextureSlot());
+		glBindTexture(GL_TEXTURE_2D, paletteTextureId);
+	}
+	glActiveTexture(GL_TEXTURE0);
 	if (!ctx->rend.isRTT && ctx->rend.swapInterval > 0)
 		GraphicsContext::Instance()->setSwapInterval(ctx->rend.swapInterval);
 	ta_parse(ctx, gl.prim_restart_fixed_supported || gl.prim_restart_supported);
