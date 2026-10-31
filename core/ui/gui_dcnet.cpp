@@ -2,6 +2,7 @@
 #include "gui_dcnet.h"
 #include "gui.h"
 #include "dcnet_status.h"
+#include "dcnet_probe.h"
 #include "gui_util.h"
 #include "gui_font.h"
 #include "gui_menu.h"
@@ -14,6 +15,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <future>
 #include <stdexcept>
@@ -56,6 +58,59 @@ struct CachedCover
 std::unordered_map<std::string, CachedCover> covers;
 std::future<std::string> pendingCover;
 std::string pendingCoverUrl;
+
+struct ServiceResult
+{
+	bool responding;
+	Clock::time_point checked;
+};
+
+struct ServiceCheck
+{
+	const char *gameId;
+	std::future<ServiceResult> pending;
+	Clock::time_point checked;
+	Clock::time_point nextCheck;
+	bool responding = false;
+};
+// Separate availability from the feed, so probes cannot change activity totals.
+std::array<ServiceCheck, 2> serviceChecks{{{"catalog:pba-bowling-2001"}, {"catalog:sega-rally-2"}}};
+constexpr auto serviceRefreshInterval = std::chrono::minutes(2);
+constexpr auto serviceExpiry = std::chrono::minutes(3);
+
+void refreshServices()
+{
+	for (size_t i = 0; i < serviceChecks.size(); ++i)
+	{
+		auto& check = serviceChecks[i];
+		if (check.pending.valid() && check.pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+		{
+			try {
+				const auto result = check.pending.get();
+				check.responding = result.responding;
+				check.checked = result.checked;
+			} catch (const std::exception&) {
+				check.responding = false;
+				check.checked = {};
+			}
+			check.nextCheck = check.checked == Clock::time_point{} ? Clock::now() + serviceRefreshInterval
+					: check.checked + serviceRefreshInterval;
+		}
+		if (!check.pending.valid() && Clock::now() >= check.nextCheck)
+		{
+			try {
+				check.pending = std::async(std::launch::async, [i] {
+					const bool responding = i == 0 ? dcnet::probePba("dcnet.flyca.st") : dcnet::probeSegaRally("dcnet.flyca.st");
+					return ServiceResult{responding, Clock::now()};
+				});
+			} catch (const std::exception&) {
+				check.responding = false;
+				check.checked = {};
+				check.nextCheck = Clock::now() + serviceRefreshInterval;
+			}
+		}
+	}
+}
 
 void refreshLibrary(GameScanner& scanner, Boxart& boxart)
 {
@@ -284,12 +339,19 @@ void renderCover(const dcnet::Game& game, const std::string& localCover, const I
 
 void renderServerStatus(const dcnet::Game& game)
 {
+	const auto check = std::find_if(serviceChecks.begin(), serviceChecks.end(), [&](const ServiceCheck& item) {
+		return game.id == item.gameId;
+	});
+	const bool checked = check != serviceChecks.end() && check->checked != Clock::time_point{}
+			&& Clock::now() - check->checked < serviceExpiry;
+	const bool responding = checked && check->responding;
 	const bool active = game.players > 0 || game.matches > 0 || game.hasPlayerActivity;
 	const char *label = game.hasLiveStatus ? (game.online ? (active ? T("Playing") : T("Online")) : T("Offline"))
-			: active ? T("Playing") : T("No report");
+			: active ? T("Playing") : responding ? T("Responding") : checked ? T("No response")
+			: check != serviceChecks.end() && check->pending.valid() ? T("Checking...") : T("No report");
 	const ImVec4 color = game.hasLiveStatus && !game.online ? ImVec4(0.93f, 0.43f, 0.40f, 1.f)
 			: active ? ImVec4(0.39f, 0.78f, 0.98f, 1.f)
-			: game.hasLiveStatus ? ImVec4(0.40f, 0.80f, 0.59f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+			: game.hasLiveStatus || responding ? ImVec4(0.40f, 0.80f, 0.59f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
 	const ImVec2 pos = ImGui::GetCursorScreenPos();
 	const ImVec2 padding = ScaledVec2(8, 4);
 	const ImVec2 textSize = ImGui::CalcTextSize(label);
@@ -299,8 +361,25 @@ void renderServerStatus(const dcnet::Game& game)
 	ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x + padding.x, pos.y + padding.y), ImGui::GetColorU32(color), label);
 	ImGui::Dummy(size);
 	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("%s", game.hasLiveStatus ? T("Server status reported by DCnet.")
-				: T("DCnet does not publish server status for this title. Online play may still be supported."));
+	{
+		if (game.hasLiveStatus)
+			ImGui::SetTooltip("%s", T("Server status reported by DCnet."));
+		else if (check != serviceChecks.end())
+		{
+			ImGui::BeginTooltip();
+			ImGui::TextUnformatted(game.id == "catalog:pba-bowling-2001"
+					? T("PBA lobby query through the DCnet VPN.") : T("Sega Rally 2 initialization handshake with DCnet."));
+			ImGui::TextUnformatted(T("Availability only. Player and match counts are not published."));
+			if (checked)
+				ImGui::Text(T("Checked %lld seconds ago. Refreshes every 2 minutes."),
+						static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - check->checked).count()));
+			if (!responding)
+				ImGui::TextUnformatted(T("No response does not necessarily mean the server is offline."));
+			ImGui::EndTooltip();
+		}
+		else
+			ImGui::SetTooltip("%s", T("DCnet does not publish server status for this title. Online play may still be supported."));
+	}
 }
 
 void renderPlayers(const std::string& gameId)
@@ -355,6 +434,7 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 	if (status.games.empty())
 		status = dcnet::parseStatus("[]", "[]");
 	refreshStatus();
+	refreshServices();
 	refreshLibrary(scanner, boxart);
 	if (pendingCover.valid() && pendingCover.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
 	{
@@ -398,6 +478,8 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 			if (ImGui::Button(pending.valid() ? T("Refreshing...") : T("Refresh")))
 			{
 				nextRefresh = {};
+				for (auto& check : serviceChecks)
+					check.nextCheck = {};
 				nextLibraryRefresh = {};
 				for (auto& cover : covers)
 					if (!cover.second.ready && cover.first != pendingCoverUrl)
@@ -678,6 +760,15 @@ void gui_term_dcnet()
 	{
 		pendingCover.wait();
 		pendingCover = {};
+	}
+	for (auto& check : serviceChecks)
+	{
+		if (check.pending.valid())
+			check.pending.wait();
+		check.pending = {};
+		check.checked = {};
+		check.nextCheck = {};
+		check.responding = false;
 	}
 	covers.clear();
 	pendingCoverUrl.clear();

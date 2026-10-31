@@ -59,6 +59,7 @@ if(LIBRETRO)
 endif()
 
 if(NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/DcnetProbeTest.cpp)
     target_sources(${PROJECT_NAME} PRIVATE src/ui/SetupChecklistPopupTest.cpp src/ui/CustomThemeTest.cpp src/ui/LibrarySavestateTest.cpp)
     target_sources(${PROJECT_NAME} PRIVATE src/ui/VideoPresetTest.cpp)
     target_sources(${PROJECT_NAME} PRIVATE src/ui/AndroidMenuPopupTest.cpp)
