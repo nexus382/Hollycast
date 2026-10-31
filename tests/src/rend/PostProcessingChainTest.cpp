@@ -1901,6 +1901,18 @@ TEST(PostProcessingChainTest, LoadsBomPrefixedReShadePackagesWithSiblingTextures
 	ASSERT_TRUE(postprocess::loadShaderChain(effectPath.string(), chain, error)) << error;
 	ASSERT_EQ(1u, chain.textures.size());
 	EXPECT_TRUE(std::filesystem::equivalent(texturePath, chain.textures[0].path));
+	std::filesystem::path previousShaders = shaders;
+	for (const char *name : { "shaders", "sHaDeRs" }) {
+		SCOPED_TRACE(name);
+		const auto renamed = directory.path / name;
+		// An intermediate name also exercises case changes on Windows filesystems.
+		std::filesystem::rename(previousShaders, directory.path / "shader-staging");
+		std::filesystem::rename(directory.path / "shader-staging", renamed);
+		ASSERT_TRUE(postprocess::loadShaderChain((renamed / "effects/LUT.fx").string(), chain, error)) << error;
+		ASSERT_EQ(1u, chain.textures.size());
+		EXPECT_TRUE(std::filesystem::equivalent(texturePath, chain.textures[0].path));
+		previousShaders = renamed;
+	}
 }
 
 TEST(PostProcessingChainTest, ResolvesReShadeRenderTargetFeedbackAndRuntimeUiBounds)

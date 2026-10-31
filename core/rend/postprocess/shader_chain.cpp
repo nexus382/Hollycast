@@ -783,9 +783,10 @@ std::string shaderSourceIdentity(const std::string& path)
 			: std::filesystem::weakly_canonical(std::filesystem::u8path(path)).u8string();
 }
 
-ShaderIncludeResolver shaderIncludeResolver(const std::string& packageRoot)
+ShaderIncludeResolver shaderIncludeResolver(const std::string& packageRoot, const std::string& shaderDirectory = {})
 {
-	return [packageRoot, fileCount = uint32_t(0), totalBytes = size_t(0)](
+	const std::string includeDirectory = shaderDirectory.empty() ? relativeShaderPath(packageRoot, "Shaders") : shaderDirectory;
+	return [packageRoot, includeDirectory, fileCount = uint32_t(0), totalBytes = size_t(0)](
 			const std::string& parent, const std::string& name, std::string& path,
 			std::string& text, std::string& error) mutable {
 		if (name.empty() || isAbsolutePath(name))
@@ -794,7 +795,7 @@ ShaderIncludeResolver shaderIncludeResolver(const std::string& packageRoot)
 			return fail(error, "Shader packages may include at most 256 source files.");
 		path = relativeShaderPath(parentPath(parent), name);
 		if (!shaderFileExists(path)) {
-			const std::string conventional = relativeShaderPath(relativeShaderPath(packageRoot, "Shaders"), name);
+			const std::string conventional = relativeShaderPath(includeDirectory, name);
 			if (shaderFileExists(conventional)) path = conventional;
 		}
 		if (!isWithinPackageRoot(path, packageRoot))
@@ -2344,6 +2345,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		std::string text;
 		const std::string effectRoot = parentPath(path);
 		std::string packageRoot = effectRoot;
+		std::string shaderDirectory;
 		// Standard ReShade packages place effects and lookup images in sibling
 		// Shaders/ and Textures/ directories. Effects may live below Shaders/, so
 		// locate that ancestor while keeping every include inside the package root.
@@ -2354,6 +2356,8 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 					[](unsigned char value) { return static_cast<char>(std::tolower(value)); });
 			const std::string parent = parentPath(directory);
 			if (folderName == "shaders") {
+				// Preserve the real path: Linux and Android distinguish directory casing.
+				shaderDirectory = directory;
 				if (!parent.empty()) packageRoot = parent;
 				break;
 			}
@@ -2362,7 +2366,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		}
 		if (!readTextFile(path, text, error)) return false;
 		ReShadeEffect effect;
-		if (!parseReShadeEffect(text, effect, error, shaderIncludeResolver(packageRoot), shaderSourceIdentity(path)) || !effect.selectedTechnique
+		if (!parseReShadeEffect(text, effect, error, shaderIncludeResolver(packageRoot, shaderDirectory), shaderSourceIdentity(path)) || !effect.selectedTechnique
 				|| !validateReShadeSamplerStates(effect, error))
 			return false;
 		ShaderChain parsed;
