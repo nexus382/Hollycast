@@ -27,6 +27,9 @@ cmrc_add_resources(Hollycast-resources
         resources/picture/f355_print_template.png
         resources/picture/hollycast_ascii.txt)
 
+# Keep shaders inside the executable/native library, including mobile releases.
+cmrc_add_resources(Hollycast-resources WHENCE resources resources/shaders/library.zip)
+
 cmrc_add_resources(Hollycast-resources
         fonts/printer_ascii8x16.bin.zip
         fonts/printer_ascii12x24.bin.zip

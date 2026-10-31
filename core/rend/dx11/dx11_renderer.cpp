@@ -24,8 +24,12 @@
 #include "ui/gui.h"
 #ifndef LIBRETRO
 #include "ui/performance_overlay.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
 #endif
 #include "rend/sorter.h"
+#include "cfg/option.h"
+#include "rend/postprocess/shader_chain.h"
 #include "rend/osd.h"
 #include "rend/sample_filter.h"
 
@@ -163,6 +167,10 @@ bool DX11Renderer::Init()
 
 	quad = std::make_unique<Quad>();
 	quad->init(device, deviceContext, shaders);
+#ifndef LIBRETRO
+	shaderChain = std::make_unique<Dx11ShaderChain>();
+	shaderChain->init(device, deviceContext, quad.get());
+#endif
 	n2Helper.init(device, deviceContext);
 
 	updateFogTable = true;
@@ -195,6 +203,12 @@ void DX11Renderer::Term()
 	fbScaledRenderTarget.reset();
 	fbScaledTextureView.reset();
 	fbScaledTexture.reset();
+#ifndef LIBRETRO
+	shaderChain.reset();
+	shaderDepthView.reset();
+	shaderDepthTexture.reset();
+	sceneDepthValid = false;
+#endif
 	fbSecondAccum.reset();
 	fbSecondAccumView.reset();
 	fbSecondAccumTex.reset();
@@ -232,6 +246,13 @@ void DX11Renderer::createDepthTexAndView(ComPtr<ID3D11Texture2D>& texture, ComPt
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | bindFlags;
+#ifndef LIBRETRO
+	// Keep the same depth/stencil precision while allowing display effects to
+	// sample the completed scene through a separate read-only depth view.
+	if (desc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT)
+		desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+	desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+#endif
 	HRESULT hr = device->CreateTexture2D(&desc, nullptr, &texture.get());
 	if (FAILED(hr))
 		WARN_LOG(RENDERER, "Depth/stencil creation failed");
@@ -508,6 +529,9 @@ bool DX11Renderer::Render()
 	resetContextState();
 	if (!is_rtt)
 	{
+#ifndef LIBRETRO
+		sceneDepthValid = true;
+#endif
 		resize(rendContext->framebufferWidth, rendContext->framebufferHeight);
 		deviceContext->OMSetRenderTargets(1, &fbRenderTarget.get(), depthTexView);
 		deviceContext->ClearDepthStencilView(depthTexView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 0.f, 0);
@@ -566,20 +590,7 @@ bool DX11Renderer::Render()
 void DX11Renderer::displayFramebuffer()
 {
 #ifndef LIBRETRO
-	D3D11_VIEWPORT vp{};
-	vp.Width = (FLOAT)settings.display.width;
-	vp.Height = (FLOAT)settings.display.height;
-	vp.MinDepth = 0.f;
-	vp.MaxDepth = 1.f;
-	deviceContext->RSSetViewports(1, &vp);
-
-	const D3D11_RECT r = { 0, 0, settings.display.width, settings.display.height };
-	deviceContext->RSSetScissorRects(1, &r);
-	float colors[4];
-	VO_BORDER_COL.getRGBColor(colors);
-	colors[3] = 1.f;
-	deviceContext->ClearRenderTargetView(DX11Context::Instance()->getRenderTarget(), colors);
-
+	ComPtr<ID3D11ShaderResourceView> displayTexture = fbTextureView;
 	float shiftX, shiftY;
 	getVideoShift(shiftX, shiftY);
 	shiftX *=  2.f / width;
@@ -607,11 +618,67 @@ void DX11Renderer::displayFramebuffer()
 	
 	float x = (float)dx;
 	float y = (float)dy;
-	float w = (float)(outwidth - leftInset - 2 * dx);
-	float h = (float)(outheight - topInset - 2 * dy);
+	int viewportWidth = outwidth - leftInset - 2 * dx;
+	int viewportHeight = outheight - topInset - 2 * dy;
+	const bool shaderPreview = SettingsNew::shaderLiveTuneActive();
+	int previewX = 0, previewY = 0, previewWidth = 0, previewHeight = 0;
+	if (shaderPreview) {
+		const auto layout = SettingsNew::shaderPreviewLayout(settings.display.width, settings.display.height, getScaledTopInset());
+		int previewDx = 0, previewDy = 0;
+		getWindowboxDimensions(layout.gameWidth, layout.gameHeight, aspectRatio, previewDx, previewDy, config::Rotate90);
+		previewX = previewDx;
+		previewY = getScaledTopInset() + previewDy;
+		previewWidth = layout.gameWidth - previewDx * 2;
+		previewHeight = layout.gameHeight - previewDy * 2;
+		viewportWidth = config::Rotate90 ? previewHeight : previewWidth;
+		viewportHeight = config::Rotate90 ? previewWidth : previewHeight;
+	}
+	float w = (float)viewportWidth;
+	float h = (float)viewportHeight;
 #ifndef LIBRETRO
-	performance_overlay::recordOutputViewport(static_cast<int>(std::round(w)), static_cast<int>(std::round(h)));
+	performance_overlay::recordOutputViewport(viewportWidth, viewportHeight);
 #endif
+	bool presentationTransformApplied = false;
+	if (shaderChain) {
+		if (shaderDepthTexture.get() != depthTex.get()) {
+			shaderDepthView.reset();
+			shaderDepthTexture = depthTex;
+			if (depthTex) {
+				D3D11_TEXTURE2D_DESC depthDescription {};
+				depthTex->GetDesc(&depthDescription);
+				D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDescription {};
+				depthViewDescription.Format = depthDescription.Format == DXGI_FORMAT_R32G8X24_TYPELESS
+						? DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS : DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+				depthViewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+				depthViewDescription.Texture2D.MipLevels = 1;
+				if (FAILED(device->CreateShaderResourceView(depthTex, &depthViewDescription, &shaderDepthView.get())))
+					WARN_LOG(RENDERER, "Scene depth is unavailable for display shaders");
+			}
+		}
+		shaderChain->render(fbTextureView,
+				{ static_cast<int>(width), static_cast<int>(height),
+						config::Rotate90 ? viewportHeight : viewportWidth,
+						config::Rotate90 ? viewportWidth : viewportHeight,
+						FrameCount, config::Rotate90 }, displayTexture, presentationTransformApplied,
+				sceneDepthValid ? shaderDepthView : ComPtr<ID3D11ShaderResourceView> {});
+	}
+
+	// Shader passes bind their own intermediate render targets. The final blit
+	// and OSD must always return to the swapchain target.
+	deviceContext->OMSetRenderTargets(1, &DX11Context::Instance()->getRenderTarget().get(), nullptr);
+	D3D11_VIEWPORT vp{};
+	vp.Width = (FLOAT)settings.display.width;
+	vp.Height = (FLOAT)settings.display.height;
+	vp.MinDepth = 0.f;
+	vp.MaxDepth = 1.f;
+	deviceContext->RSSetViewports(1, &vp);
+
+	const D3D11_RECT r = { 0, 0, settings.display.width, settings.display.height };
+	deviceContext->RSSetScissorRects(1, &r);
+	float colors[4];
+	VO_BORDER_COL.getRGBColor(colors);
+	colors[3] = 1.f;
+	deviceContext->ClearRenderTargetView(DX11Context::Instance()->getRenderTarget(), colors);
 
 	// Normalize
 	x = x * 2.f / outwidth - 1.f;
@@ -621,8 +688,36 @@ void DX11Renderer::displayFramebuffer()
 	// Shift
 	x += shiftX;
 	y += shiftY;
+	if (presentationTransformApplied && config::Rotate90) {
+		// The legacy DX presenter describes the rectangle in pre-rotation clip
+		// space. Once the chain consumes rotation, apply that same transform to
+		// the rectangle instead of rotating the already-rotated shader output.
+		const float rotatedX = -(y + h);
+		const float rotatedY = x;
+		x = rotatedX;
+		y = rotatedY;
+		std::swap(w, h);
+	}
+	if (shaderPreview) {
+		const float outputWidth = static_cast<float>(settings.display.width);
+		const float outputHeight = static_cast<float>(settings.display.height);
+		x = previewX * 2.f / outputWidth - 1.f;
+		y = 1.f - (previewY + previewHeight) * 2.f / outputHeight;
+		w = previewWidth * 2.f / outputWidth;
+		h = previewHeight * 2.f / outputHeight;
+		x += (config::Rotate90 ? -shiftY : shiftX) * previewWidth / outputWidth;
+		y += (config::Rotate90 ? shiftX : shiftY) * previewHeight / outputHeight;
+		if (config::Rotate90 && !presentationTransformApplied) {
+			// Invert the presenter's rotation so the final rectangle stays in its pane.
+			const float beforeRotationX = y;
+			y = -(x + w);
+			x = beforeRotationX;
+			std::swap(w, h);
+		}
+	}
 	deviceContext->OMSetBlendState(blendStates.getState(false), nullptr, 0xffffffff);
-	quad->draw(fbTextureView, samplers->getSampler(config::LinearInterpolation), nullptr, x, y, w, h, config::Rotate90);
+	quad->draw(displayTexture, samplers->getSampler(config::LinearInterpolation), nullptr, x, y, w, h,
+			config::Rotate90 && !presentationTransformApplied);
 #endif
 }
 
@@ -1084,6 +1179,9 @@ void DX11Renderer::RenderFramebuffer(const FramebufferInfo& info)
 
 #ifndef LIBRETRO
 	ID3D11ShaderResourceView *nullResView = nullptr;
+	// VRAM framebuffer uploads contain color only; an older 3D depth surface
+	// must never masquerade as depth for this image.
+	sceneDepthValid = false;
     deviceContext->PSSetShaderResources(0, 1, &nullResView);
 	resize(width, height);
 	deviceContext->OMSetRenderTargets(1, &fbRenderTarget.get(), nullptr);

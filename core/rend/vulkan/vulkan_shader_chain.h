@@ -1,0 +1,182 @@
+/*
+	Portions Copyright 2026 The Hollycast Authors
+
+	This file is part of Flycast.
+
+	Flycast is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+*/
+#pragma once
+
+#include "rend/postprocess/shader_chain.h"
+#include "buffer.h"
+#include "quad.h"
+#include "texture.h"
+
+#include <array>
+#include <deque>
+#include <map>
+#include <memory>
+#include <vector>
+
+namespace postprocess {
+
+// Builds the exact GLSL submitted by the Vulkan executor. Keeping this pure
+// lets package validation catch front-end failures before device activation.
+bool buildVulkanComputeSource(const ShaderPassSource& source, const std::vector<SlangParameter>& parameters,
+		const std::vector<ShaderPassInput>& bindings, std::string& compute, std::string& error);
+bool buildVulkanShaderSources(const ShaderPassSource& source, const std::vector<SlangParameter>& parameters,
+		const std::vector<ShaderPassInput>& bindings, uint32_t outputCount,
+		std::string& fragmentSource, std::string& vertexSource, std::string& error);
+
+} // namespace postprocess
+
+class VulkanShaderChain
+{
+public:
+	~VulkanShaderChain();
+
+	// GLSL files are fragment bodies. HollyCast supplies Source, SourceSize,
+	// OutputSize and FrameCount, matching the OpenGL executor contract.
+	bool render(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
+			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
+			bool& presentationTransformApplied, vk::Image depthImage = {}, vk::ImageView depthView = {});
+	void term();
+
+private:
+	struct Target {
+		// Allocation must outlive the image it backs, so it is declared first.
+		Allocation allocation;
+		vk::UniqueImage image;
+		vk::UniqueImageView renderView;
+		vk::UniqueImageView sampleView;
+		// Source-history copies remain single-target and use this framebuffer.
+		vk::UniqueFramebuffer framebuffer;
+		vk::Extent2D extent {};
+		uint32_t depth = 1, layers = 1;
+		postprocess::SlangResourceType type = postprocess::SlangResourceType::Sampler2D;
+		bool storage = false;
+		vk::Format format = vk::Format::eUndefined;
+		uint32_t mipLevels = 1;
+		uint32_t renderedFrame = 0;
+		bool initialized = false;
+	};
+	struct TargetSet {
+		std::vector<Target> outputs;
+		vk::UniqueFramebuffer framebuffer;
+		uint32_t renderedFrame = 0;
+		bool initialized = false;
+	};
+	struct Binding {
+		postprocess::ShaderPassInput input;
+		uint32_t descriptorBinding = 0;
+		uint32_t lookupIndex = postprocess::InvalidShaderPass;
+		vk::UniqueSampler sampler;
+		vk::UniqueSampler mipSampler;
+		bool useMipmaps = false;
+	};
+	struct Program {
+		struct Output {
+			postprocess::ShaderPassOutput config;
+			vk::Format format = vk::Format::eR8G8B8A8Unorm;
+			bool needsMipmaps = false;
+			bool supportsMipmaps = false;
+		};
+		postprocess::ShaderPass pass;
+		vk::UniqueShaderModule vertexShader;
+		vk::UniqueShaderModule fragmentShader;
+		vk::UniqueShaderModule computeShader;
+		vk::UniqueRenderPass renderPass;
+		vk::UniquePipeline pipeline;
+		vk::UniquePipeline blendCopyPipeline;
+		vk::UniqueSampler sampler;
+		vk::UniqueSampler mipSampler;
+		std::vector<Output> outputs;
+		std::vector<Binding> bindings;
+		std::vector<postprocess::SlangParameter> parameters;
+		std::vector<uint32_t> parameterIndices;
+		std::vector<bool> targetWasInitialized;
+		std::vector<vk::ImageMemoryBarrier> targetBarriers;
+		std::vector<vk::DescriptorImageInfo> imageInfos;
+		std::vector<vk::WriteDescriptorSet> descriptorWrites;
+		std::vector<std::unique_ptr<BufferData>> parameterBuffers;
+		std::vector<vk::ClearValue> clearColors;
+		std::vector<vk::ImageMemoryBarrier> blendBarriers;
+		bool displayGlsl = false;
+		bool nativeFxStages = false;
+		uint32_t historyDepth = 1;
+		uint32_t targetWidth = 0;
+		uint32_t targetHeight = 0;
+	};
+	struct LookupTexture {
+		postprocess::ShaderPresetTexture config;
+		Target image;
+		std::unique_ptr<BufferData> staging;
+		vk::UniqueSampler sampler;
+	};
+
+	bool updateConfiguredChain();
+	bool renderInternal(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
+			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
+			bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView);
+	bool compileCandidate(const postprocess::ShaderChain& chain, std::vector<Program>& candidate, std::string& error);
+	bool ensureTarget(Target& target, const vk::Extent2D& extent, vk::Format format, bool mipmapped, bool storage = false, postprocess::SlangResourceType type = postprocess::SlangResourceType::Sampler2D, uint32_t depth = 1, uint32_t layers = 1);
+	bool ensureTargetSet(TargetSet& targets, const Program& program, const vk::Extent2D& extent);
+	const Target *findSourceHistoryTarget(uint32_t frameCount) const;
+	const TargetSet *findPassHistoryTarget(uint32_t passIndex, uint32_t frameCount) const;
+	void generateMipmaps(vk::CommandBuffer commandBuffer, const Target& target, bool existingContents) const;
+	vk::UniquePipeline createPipeline(vk::ShaderModule vertexShader, vk::ShaderModule fragmentShader, vk::RenderPass renderPass,
+			const postprocess::ShaderPass& pass, size_t colorAttachmentCount) const;
+	vk::UniqueRenderPass createRenderPass(const std::vector<vk::Format>& formats, bool preserveContents = false, bool stencil = false, bool clear = false) const;
+	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::string& error);
+	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::vector<LookupTexture>& textures,
+			std::string& error);
+	bool validateLookupTextures(std::vector<LookupTexture>& textures, std::string& error) const;
+	void ensureResources();
+
+	struct StencilTarget {
+		Allocation allocation;
+		vk::UniqueImage image;
+		vk::UniqueImageView view;
+		uint32_t frame = 0, layerIndex = postprocess::InvalidShaderPass;
+		bool initialized = false;
+	};
+	// A deque never asks MSVC to copy maps containing unique Vulkan handles.
+	std::deque<std::map<std::pair<uint32_t, uint32_t>, StencilTarget>> stencilTargets;
+
+	vk::UniqueRenderPass renderPass;
+	vk::UniqueDescriptorSetLayout descriptorSetLayout;
+	vk::UniquePipelineLayout pipelineLayout;
+	vk::UniqueSampler linearSampler;
+	vk::UniqueSampler nearestSampler;
+	vk::UniqueSampler mipLinearSampler;
+	vk::UniqueSampler mipNearestSampler;
+	vk::UniqueShaderModule copyFragmentShader;
+	vk::UniquePipeline copyPipeline;
+	vk::UniquePipeline copyRotatePipeline;
+	// Allocated only when a depth consumer needs the display rotation applied.
+	vk::UniqueRenderPass depthRotateRenderPass;
+	vk::UniquePipeline depthRotatePipeline;
+	std::unique_ptr<QuadBuffer> quadBuffer;
+	std::vector<std::vector<vk::UniqueDescriptorSet>> descriptorSets;
+	std::vector<vk::UniqueDescriptorSet> sourceDescriptorSets;
+	std::vector<vk::UniqueDescriptorSet> displayDescriptorSets;
+	std::vector<vk::UniqueDescriptorSet> depthRotateDescriptorSets;
+	std::vector<std::vector<std::vector<TargetSet>>> targets;
+	std::vector<std::vector<Target>> sourceTargets;
+	std::vector<Target> displayTargets;
+	std::vector<Target> depthRotateTargets;
+	uint32_t sourceHistoryDepth = 1;
+	// PVR scene counts also include render-to-texture work. History counts completed display frames.
+	uint32_t renderedFrames = 0;
+	std::array<int, 4> stencilFrameSize {};
+	std::vector<Program> programs;
+	std::vector<LookupTexture> lookupTextures;
+	std::vector<postprocess::ShaderParameter> parameters;
+	std::vector<std::string> configuredPaths;
+	uint64_t configuredGeneration = 0;
+	uint64_t parameterGeneration = 0;
+	std::string activePath;
+};

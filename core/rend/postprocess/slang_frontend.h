@@ -1,0 +1,125 @@
+/*
+	Portions Copyright 2026 The Hollycast Authors
+
+	This file is part of Flycast.
+
+	Flycast is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+*/
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace postprocess {
+
+// Shader packages always use C-locale numeric syntax, regardless of the
+// language selected by the host UI.
+bool parseShaderFloat(std::string_view text, float& value);
+bool parseShaderUnsigned(std::string_view text, uint32_t& value);
+
+enum class SlangParameterType {
+	Float,
+	Int,
+	Bool,
+	Float2,
+	Float3,
+	Float4,
+	Float2x2,
+	Float3x3,
+	Float4x4,
+	Float2x3, Float2x4, Float3x2, Float3x4, Float4x2, Float4x3,
+};
+
+uint32_t shaderParameterComponentCount(SlangParameterType type);
+const char *shaderParameterGlslType(SlangParameterType type);
+
+struct SlangParameterValue {
+	std::array<float, 16> values {};
+	uint32_t componentCount = 1;
+};
+
+struct SlangParameter {
+	SlangParameterType type = SlangParameterType::Float;
+	std::string name;
+	std::string label;
+	SlangParameterValue defaultValue;
+	SlangParameterValue minimum;
+	SlangParameterValue maximum;
+	SlangParameterValue step;
+};
+
+// Shared typed-range contract for every shader frontend.
+bool validateSlangParameter(const SlangParameter& parameter, std::string& error);
+
+enum class SlangResourceType {
+	Sampler1D,
+	Sampler2D,
+	Sampler2DArray,
+	Sampler3D,
+	SamplerCube,
+	Texture1D,
+	Texture2D,
+	Texture2DArray,
+	Texture3D,
+	TextureCube,
+	Image1D,
+	Image2D,
+	Image2DArray,
+	Image3D,
+};
+
+enum class ShaderNumericType { Float, SignedInteger, UnsignedInteger };
+const char *shaderResourceGlslType(SlangResourceType type, ShaderNumericType numeric = ShaderNumericType::Float);
+bool isShaderStorageResource(SlangResourceType type);
+
+enum class SlangResourceConvention {
+	Source,
+	Original,
+	Depth,
+	PassAlias,
+	History,
+	Feedback,
+};
+
+struct SlangResource {
+	SlangResourceType type = SlangResourceType::Sampler2D;
+	SlangResourceConvention convention = SlangResourceConvention::PassAlias;
+	std::string name;
+	std::string alias;
+	uint32_t arrayCount = 1;
+	uint32_t bindingSet = 0;
+	uint32_t binding = 0;
+	bool hasExplicitBinding = false;
+	// History2 means two completed frames ago. Plain History is offset one.
+	uint32_t historyOffset = 1;
+	ShaderNumericType numericType = ShaderNumericType::Float;
+	std::string formatName;
+};
+
+struct SlangStageSource {
+	std::string source;
+	bool declared = false;
+};
+
+// Backend-neutral result of parsing already-expanded Slang source. The frontend
+// intentionally records declarations and stage text only; no backend code is
+// generated or selected here.
+struct SlangShaderIR {
+	std::string displayName;
+	std::string format;
+	SlangStageSource vertex;
+	SlangStageSource fragment;
+	SlangStageSource compute;
+	std::vector<SlangParameter> parameters;
+	std::vector<SlangResource> resources;
+};
+
+bool parseSlangFrontend(const std::string& shaderText, SlangShaderIR& shader, std::string& error);
+
+} // namespace postprocess
