@@ -13,6 +13,20 @@ Themes**, choose **Library Theme**, then **Library Layout**. **App UI Theme** re
 to the standard library. This packaging is shared by Windows, Linux, macOS,
 Android, iOS and Switch; libretro uses its frontend's library.
 
+New settings default to **Demo Disc**. The first-run checklist lets players keep
+that theme, choose another bundled theme, or use the original icon or list view.
+Existing saved selections are preserved. Every library style centers the same
+**Add Game Folder** action in its game browser when no content folder is configured,
+keeping the theme background visible without a separate prompt panel.
+
+Every bundled layout provides a visible **Play** button. Touching a game only
+selects it so its artwork and information can be inspected, including on a second
+tap. Swipe anywhere inside a list, grid, shelf or details pane to scroll it;
+orbit swipes turn the discs and paged-grid swipes change pages. Controller
+directions (D-pad or left stick) browse games and controls, confirm activates the focused item/button,
+and cancel leaves a details pane or popup. Mouse double-click and keyboard confirm
+remain available. The original icon and table views keep their activation rules.
+
 For theme development, an additional package folder may still be placed under
 `library-themes/` in the app data directory and loaded by restarting the app. Its
 folder name must match the manifest's `id`. Bundled IDs are maintained by Hollycast;
@@ -106,7 +120,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `toolbarSelectedTextColor` | Optional foreground for the selected compact-toolbar view. Omit to inherit app text. The selected fill uses the app palette's `ButtonActive`. |
 | `toolbarLogo` | Optional package-relative image replacing the compact toolbar's text brand. It retains its aspect ratio at the toolbar control height. Omit to keep text branding. |
 | `toolbarLogoHeight` | Optional logo height in logical UI pixels, `16`–`96`. Requires `toolbarLogo`; its original aspect ratio is preserved. Omit to match the control height. |
-| `activation` | `singleClick` (default) or `doubleClick`. In double-click mode, a single click selects/previews; double-click, Enter/controller confirm, or an `activate` button launches the game. |
+| `activation` | Mouse activation: `singleClick` (default) or `doubleClick`. In double-click mode, a single click selects/previews; double-click, Enter/controller confirm, or an `activate` button launches the game. Touch always selects/previews, so every layout must provide a visible `activate` button. |
 | `minItemWidth` | Minimum grid-cell width in logical UI pixels, `32`–`256`; defaults to `96`. This controls when the renderer reduces the requested column count. |
 | `titleStyle` | `full` (default) or `initials`. Initials shorten grid labels only; titles used by metadata, search, and game actions remain complete. Whole UTF-8 characters are retained. |
 | `selectorStyle` | `fill` (default) or `outline`. Outline preserves artwork contrast on low-color displays. |
@@ -183,6 +197,7 @@ Every element is an object with required `type` and `rect`. Element rectangles u
 | `rounding` | For panels/images/artwork: logical-pixel corner radius, `0`–`48`, default `0`. For buttons: optional fraction of the smaller dimension, `0`–`0.5`; omit to inherit the app style. |
 | `fields` | Required for `details`: a nonempty array of unique supported metadata field names, in display order. Absent or empty game values are hidden. Description wraps below the other fields. Only valid on `details`. |
 | `columns` | Optional number of label/value pairs per `details` row, integer `1`–`3`; default `1`. Only valid on `details`. |
+| `autoFit` | Details only. `true` compacts label/value spacing and fits the complete metadata and description into the rectangle without scrolling. Reflow is cached until the text, font or viewport changes. Default `false` keeps normal scrolling, including finger dragging and controller scrolling. |
 
 Element types:
 

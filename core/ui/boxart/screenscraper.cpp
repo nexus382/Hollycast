@@ -327,7 +327,9 @@ json Session::requestJson(const std::string& endpoint, const std::string& parame
 		return json::object();
 	// The guest-capability reply includes the system catalog, which is larger than game replies.
 	const size_t limit = endpoint == "systemesListe.php" ? 16 * 1024 * 1024 : 4 * 1024 * 1024;
-	const json root = bytes.size() <= limit ? json::parse(bytes.begin(), bytes.end(), nullptr, false) : json();
+	// Parse JSON as text: recent Android NDKs do not define char_traits<u8>.
+	const char* jsonText = bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data());
+	const json root = bytes.size() <= limit ? json::parse(jsonText, jsonText + bytes.size(), nullptr, false) : json();
 	if (!root.is_object() || !root.contains("response") || !root["response"].is_object())
 		fail(0);
 	updateLimits(root["response"]);

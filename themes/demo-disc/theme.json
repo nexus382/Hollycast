@@ -158,9 +158,9 @@
           "type": "image",
           "rect": [
             0.4891,
-            0.0583,
-            0.3063,
-            0.5444
+            0.035,
+            0.260355,
+            0.46274
           ],
           "source": "assets/screen-frame.png",
           "zIndex": -80,
@@ -169,10 +169,10 @@
         {
           "type": "artwork",
           "rect": [
-            0.4984,
-            0.075,
-            0.2875,
-            0.5111
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
           ],
           "source": "cover",
           "fit": "contain",
@@ -182,10 +182,10 @@
         {
           "type": "image",
           "rect": [
-            0.4984,
-            0.075,
-            0.2875,
-            0.5111
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
           ],
           "source": "assets/scanlines.png",
           "zIndex": -60,
@@ -194,10 +194,10 @@
         {
           "type": "image",
           "rect": [
-            0.4984,
-            0.075,
-            0.2875,
-            0.5111
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
           ],
           "source": "assets/sweep.png",
           "zIndex": -59,
@@ -206,10 +206,10 @@
         {
           "type": "image",
           "rect": [
-            0.4984,
-            0.075,
-            0.2875,
-            0.5111
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
           ],
           "source": "assets/sweep-launch.png",
           "zIndex": -58,
@@ -220,7 +220,7 @@
           "type": "image",
           "rect": [
             0.4891,
-            0.0208,
+            0.002,
             0.0141,
             0.025
           ],
@@ -232,7 +232,7 @@
           "type": "image",
           "rect": [
             0.4891,
-            0.0208,
+            0.002,
             0.0141,
             0.025
           ],
@@ -244,9 +244,9 @@
           "type": "text",
           "rect": [
             0.5078,
-            0.0222,
+            0.005,
             0.1875,
-            0.0278
+            0.022
           ],
           "text": "ATTRACT MODE",
           "fontSize": 0.0195,
@@ -257,9 +257,9 @@
           "type": "metadata",
           "rect": [
             0.4891,
-            0.6139,
+            0.515,
             0.5,
-            0.0694
+            0.06
           ],
           "source": "title",
           "text": "-",
@@ -270,22 +270,14 @@
         },
         {
           "type": "details",
+          "autoFit": true,
           "rect": [
             0.4891,
-            0.6833,
+            0.588,
             0.4922,
-            0.1556
+            0.24
           ],
-          "fields": [
-            "system",
-            "developer",
-            "publisher",
-            "genre",
-            "players",
-            "releaseDate",
-            "region",
-            "productId"
-          ],
+          "fields": ["system", "developer", "publisher", "genre", "players", "releaseDate", "region", "productId", "description"],
           "columns": 2,
           "fontSize": 0.0222,
           "color": "0b0d12",
@@ -379,44 +371,6 @@
         {
           "type": "panel",
           "rect": [
-            0.0,
-            0.9556,
-            1.0,
-            0.0444
-          ],
-          "color": "0b0d12",
-          "zIndex": 4,
-          "bleed": true
-        },
-        {
-          "type": "metadata",
-          "rect": [
-            0.0,
-            0.9639,
-            1.0,
-            0.0333
-          ],
-          "fields": [
-            "description",
-            "publisher",
-            "developer",
-            "genre",
-            "players",
-            "releaseDate",
-            "system",
-            "region",
-            "productId"
-          ],
-          "fontSize": 0.0222,
-          "color": "ff9b6b",
-          "zIndex": 5,
-          "separator": "   *   ",
-          "marqueeSeconds": 9,
-          "bleed": true
-        },
-        {
-          "type": "panel",
-          "rect": [
             0,
             0,
             1,
@@ -436,9 +390,9 @@
       "canvasAspect": 0.68,
       "browser": [
         0.0194,
-        0.4342,
+        0.605,
         0.9613,
-        0.5175
+        0.35
       ],
       "rowHeight": 0.0548,
       "fontSize": 0.0225,
@@ -547,9 +501,9 @@
           "type": "image",
           "rect": [
             0.029,
-            0.0351,
-            0.4581,
-            0.3114
+            0.028,
+            0.389385,
+            0.26469
           ],
           "source": "assets/screen-frame.png",
           "zIndex": -80,
@@ -558,10 +512,10 @@
         {
           "type": "artwork",
           "rect": [
-            0.0435,
-            0.045,
-            0.429,
-            0.2917
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
           ],
           "source": "cover",
           "fit": "contain",
@@ -571,10 +525,10 @@
         {
           "type": "image",
           "rect": [
-            0.0435,
-            0.045,
-            0.429,
-            0.2917
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
           ],
           "source": "assets/scanlines.png",
           "zIndex": -60,
@@ -583,10 +537,10 @@
         {
           "type": "image",
           "rect": [
-            0.0435,
-            0.045,
-            0.429,
-            0.2917
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
           ],
           "source": "assets/sweep.png",
           "zIndex": -59,
@@ -595,10 +549,10 @@
         {
           "type": "image",
           "rect": [
-            0.0435,
-            0.045,
-            0.429,
-            0.2917
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
           ],
           "source": "assets/sweep-launch.png",
           "zIndex": -58,
@@ -659,23 +613,15 @@
         },
         {
           "type": "details",
+          "autoFit": true,
           "rect": [
-            0.5097,
-            0.1075,
-            0.4677,
-            0.2434
+            0.029,
+            0.309,
+            0.951,
+            0.206
           ],
-          "fields": [
-            "system",
-            "developer",
-            "publisher",
-            "genre",
-            "players",
-            "releaseDate",
-            "region",
-            "productId"
-          ],
-          "columns": 1,
+          "fields": ["system", "developer", "publisher", "genre", "players", "releaseDate", "region", "productId", "description"],
+          "columns": 2,
           "fontSize": 0.0175,
           "color": "0b0d12",
           "text": "No details known for this game.",
@@ -685,7 +631,7 @@
           "type": "button",
           "rect": [
             0.029,
-            0.3575,
+            0.529,
             0.3048,
             0.0614
           ],
@@ -699,7 +645,7 @@
           "type": "button",
           "rect": [
             0.329,
-            0.3575,
+            0.529,
             0.2468,
             0.0614
           ],
@@ -715,7 +661,7 @@
           "type": "text",
           "rect": [
             0.6,
-            0.3575,
+            0.529,
             0.1806,
             0.0197
           ],
@@ -728,7 +674,7 @@
           "type": "metadata",
           "rect": [
             0.6,
-            0.3772,
+            0.549,
             0.1806,
             0.0417
           ],
@@ -742,7 +688,7 @@
           "type": "text",
           "rect": [
             0.7871,
-            0.3575,
+            0.529,
             0.1935,
             0.0197
           ],
@@ -755,7 +701,7 @@
           "type": "metadata",
           "rect": [
             0.7871,
-            0.3772,
+            0.549,
             0.1935,
             0.0482
           ],
@@ -764,44 +710,6 @@
           "fontSize": 0.0197,
           "color": "0b0d12",
           "zIndex": 1
-        },
-        {
-          "type": "panel",
-          "rect": [
-            0.0,
-            0.9627,
-            1.0,
-            0.0373
-          ],
-          "color": "0b0d12",
-          "zIndex": 4,
-          "bleed": true
-        },
-        {
-          "type": "metadata",
-          "rect": [
-            0.0,
-            0.9704,
-            1.0,
-            0.0263
-          ],
-          "fields": [
-            "description",
-            "publisher",
-            "developer",
-            "genre",
-            "players",
-            "releaseDate",
-            "system",
-            "region",
-            "productId"
-          ],
-          "fontSize": 0.0197,
-          "color": "ff9b6b",
-          "zIndex": 5,
-          "separator": "   *   ",
-          "marqueeSeconds": 7,
-          "bleed": true
         },
         {
           "type": "panel",

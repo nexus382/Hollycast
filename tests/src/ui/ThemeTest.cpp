@@ -202,6 +202,11 @@ TEST(ThemeParserTest, DetailsPanelsDeclareTheirMetadataFieldsAndColumnCount)
 	const auto theme = parseFixture(minimal);
 	EXPECT_EQ(theme.layouts[0].elements[0].fields.size(), 4u);
 	EXPECT_EQ(theme.layouts[0].elements[0].columns, 2);
+	EXPECT_FALSE(theme.layouts[0].elements[0].autoFit);
+	EXPECT_TRUE(parseFixture(replaceOnce(minimal, "\"columns\":2", "\"columns\":2,\"autoFit\":true")).layouts[0].elements[0].autoFit);
+	expectRejected(replaceOnce(minimal, "\"columns\":2", "\"columns\":2,\"autoFit\":\"yes\""), "boolean");
+	expectRejected(replaceOnce(replaceOnce(minimal, ",\"columns\":2", ""),
+			"\"type\":\"details\"", "\"autoFit\":true,\"type\":\"metadata\""), ".autoFit");
 	expectRejected(replaceOnce(minimal, "\"developer\"", "\"remote-data\""), "supported metadata");
 	expectRejected(replaceOnce(minimal, "\"publisher\"", "\"developer\""), "unique");
 	expectRejected(replaceOnce(minimal, "\"columns\":2", "\"columns\":4"), "between");
@@ -543,7 +548,7 @@ TEST(ThemeParserTest, BundledPocketDimensionUsesGenericExtensionsAndLocalAssets)
 		for (const auto& layout : existing.layouts)
 		{
 			EXPECT_EQ(layout.toolbar, "standard");
-			EXPECT_EQ(layout.activation, "singleClick");
+			EXPECT_EQ(layout.activation, "doubleClick");
 			EXPECT_EQ(layout.pixelArt.resolution, 0);
 		}
 	}

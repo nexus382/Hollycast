@@ -1784,11 +1784,12 @@ static void draw_library_hover_media_card(const std::vector<GameInfoMediaEntry>&
 
 static void draw_library_hover_description_card(const GameMedia& game, float height, float scale)
 {
-	if (!ImGui::BeginChild("##libraryHoverDetails", ImVec2(0.0f, height), true))
+	if (!ImGui::BeginChild("##libraryHoverDetails", ImVec2(0.0f, height), true, ImGuiWindowFlags_DragScrolling))
 	{
 		ImGui::EndChild();
 		return;
 	}
+	scrollWindowFromTouch();
 
 	ImGui::PushFont(game_info_body_font(), 17.f * scale);
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Details"));
@@ -1810,8 +1811,9 @@ static void draw_library_hover_description_card(const GameMedia& game, float hei
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Description"));
 	ImGui::Spacing();
 	const float wrapWidth = std::min(ImGui::GetContentRegionAvail().x, 760.f * scale);
-	if (ImGui::BeginChild("##libraryHoverDescriptionText", ImVec2(0.0f, 0.0f), false))
+	if (ImGui::BeginChild("##libraryHoverDescriptionText", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_DragScrolling))
 	{
+		scrollWindowFromTouch();
 		ImGui::PushFont(game_info_body_font(), 17.f * scale);
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapWidth);
 		if (game.desc.empty())
@@ -2079,8 +2081,9 @@ static void gui_display_game_info()
 		const float rightWidth = std::max(uiScaled(260.0f), contentWidth - leftWidth - ImGui::GetStyle().ItemSpacing.x);
 		const float panelHeight = ImGui::GetContentRegionAvail().y - uiScaled(8.0f);
 
-		if (ImGui::BeginChild("##gameInfoMedia", ImVec2(leftWidth, panelHeight), false))
+		if (ImGui::BeginChild("##gameInfoMedia", ImVec2(leftWidth, panelHeight), false, ImGuiWindowFlags_DragScrolling))
 		{
+			scrollWindowFromTouch();
 			const float previewSize = std::min(leftWidth, panelHeight * 0.78f);
 			if (!draw_game_info_image(primaryImagePath, ImVec2(previewSize, previewSize)))
 			{
@@ -2092,8 +2095,9 @@ static void gui_display_game_info()
 
 		ImGui::SameLine();
 
-		if (ImGui::BeginChild("##gameInfoDetails", ImVec2(rightWidth, panelHeight), false))
+		if (ImGui::BeginChild("##gameInfoDetails", ImVec2(rightWidth, panelHeight), false, ImGuiWindowFlags_DragScrolling))
 		{
+			scrollWindowFromTouch();
 			if (ImGui::BeginTable("##gameInfoStats", 2, ImGuiTableFlags_SizingStretchSame))
 			{
 				ImGui::TableNextColumn();
@@ -2170,6 +2174,11 @@ static void updateLibraryLongPress(const GameMedia& game, const std::string& gam
 #endif
 
 #if defined(__ANDROID__)
+	if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+	{
+		resetLibraryLongPress();
+		return;
+	}
 	if (!itemActive)
 		return;
 
@@ -2577,6 +2586,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	{
 		std::lock_guard<std::mutex> lock(scanner.get_mutex());
 		games = scanner.get_game_list();
+		// Firmware/device entries must not hide the game-folder prompt.
+		if (config::ContentPath.get().empty()) games.clear();
 		if (view == library::View::ContinuePlaying)
 		{
 			static hostfs::SavestateFolders cachedFolders;
@@ -2703,6 +2714,9 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	const ImVec2 origin = ImGui::GetCursorScreenPos();
 	const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
 	std::vector<ImVec4> itemBounds(items.size());
+	bool addFolder = false;
+	std::function<void()> drawEmptyBrowser;
+	if (games.empty()) drawEmptyBrowser = [&] { addFolder = drawEmptyLibraryPrompt(); };
 	const int activated = themes::renderLibrary(layout, theme.directory, items, [&](size_t index) {
 		const GameMedia& game = visibleGames[index];
 		const ImVec2 itemMin = ImGui::GetItemRectMin();
@@ -2781,7 +2795,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			config::LibraryFavourites.set(favourites); config::LibraryFavourites.save();
 			favouriteAction = static_cast<int>(index); resetLibraryGameInfoHover();
 		}, [](const std::string& sound) { playUiSound(sound); },
-		pendingRackLaunch ? pendingRackLaunch->itemId : std::string());
+		pendingRackLaunch ? pendingRackLaunch->itemId : std::string(), drawEmptyBrowser);
 
 	auto startThemedGame = [&](size_t index, bool resume, bool fromContextMenu) {
 		const GameMedia& game = visibleGames[index];
@@ -2854,14 +2868,6 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 #if defined(__ANDROID__)
 	if (!ImGui::GetIO().MouseDown[ImGuiMouseButton_Left] || !touchedLibraryItemThisFrame)
 		resetLibraryLongPress();
-#endif
-	bool addFolder = false;
-#if !defined(TARGET_IPHONE)
-	if (games.empty())
-	{
-		ImGui::SetCursorScreenPos(origin + ScaledVec2(20, 20));
-		addFolder = ImGui::Button(T("Add Game Folder"));
-	}
 #endif
 	addContentPath(addFolder);
 }
@@ -3155,6 +3161,20 @@ static void gui_display_content()
 
     boxart.refreshCustomBoxartIndex(false);
     scanner.fetch_game_list();
+	// Themes draw this inside their own browser viewport; stock views share the
+	// full library area. Firmware/device entries must not hide the folder action.
+	if (customLayout == nullptr && gui_state != GuiState::SelectDisk && config::ContentPath.get().empty())
+	{
+		ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
+				ImGuiWindowFlags_DragScrolling);
+		scrollWindowFromTouch();
+		const bool addFolder = drawEmptyLibraryPrompt();
+		ImGui::EndChild();
+		addContentPath(addFolder);
+		ImGui::End();
+		contentpath_warning_popup();
+		return;
+	}
 	if (customLayout != nullptr)
 	{
 		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
@@ -3166,6 +3186,7 @@ static void gui_display_content()
 	// Only if Filter and Settings aren't focused... ImGui::SetNextWindowFocus();
 	if (libraryThemeBackgroundVisible) ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
 	ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_DragScrolling);
+	scrollWindowFromTouch();
 	if (libraryThemeBackgroundVisible) ImGui::PopStyleColor();
     {
 		const bool useListStyle = config::LibraryDisplayStyle.get() == static_cast<int>(config::LibraryDisplayStyleMode::List);
@@ -3272,6 +3293,10 @@ static void gui_display_content()
 						| ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit
 						| ImGuiTableFlags_ScrollY, ImVec2(0.0f, 0.0f)))
 				{
+					// ScrollY tables create their own child; the outer library cannot
+					// capture a swipe that starts over one of these rows.
+					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+					scrollWindowFromTouch();
 					ImGui::TableSetupColumn(iconLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, iconColumnWidth);
 					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed, productIdColumnWidth);
 					ImGui::TableSetupColumn(titleLabel, ImGuiTableColumnFlags_WidthStretch);
@@ -3644,20 +3669,7 @@ static void gui_display_content()
 #if !defined(TARGET_IPHONE)
 		if (gameListEmpty && gui_state != GuiState::SelectDisk)
 		{
-			const char *label = T("Your game list is empty");
-			// center horizontally
-			const float w = ImGui::GetFont()->CalcTextSizeA(uiLargeFontSize(), FLT_MAX, -1.f, label).x + ImGui::GetStyle().FramePadding.x * 2;
-			ImGui::SameLine((ImGui::GetContentRegionMax().x - w) / 2);
-			if (ImGui::BeginChild("empty", ImVec2(0, 0), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened))
-			{
-				ImGui::PushFont(nullptr, uiLargeFontSize());
-				ImGui::NewLine();
-				ImGui::Text("%s", label);
-				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(20, 8));
-				addContent = ImGui::Button(T("Add Game Folder"));
-				ImGui::PopFont();
-			}
-			ImGui::EndChild();
+			addContent = drawEmptyLibraryPrompt();
 		}
 		if (!gameListEmpty && (libraryViewEmpty || noFilteredResults) && gui_state != GuiState::SelectDisk)
 		{
@@ -3681,8 +3693,11 @@ static void gui_display_content()
 		ImGui::PopStyleVar(useListStyle || !config::BoxartDisplayMode ? 1 : 2);
         addContentPath(addContent);
     }
-    scrollWhenDraggingOnVoid();
-    windowDragScroll();
+	if (ImGui::GetIO().MouseSource != ImGuiMouseSource_TouchScreen)
+	{
+		scrollWhenDraggingOnVoid();
+		windowDragScroll();
+	}
 	ImGui::EndChild();
 	ImGui::End();
 
@@ -3783,6 +3798,7 @@ static void gui_display_setup_checklist()
 		const float footerHeight = uiScaled(42.f) + ImGui::GetStyle().ItemSpacing.y * 2.f + 1.f;
 		ImGui::BeginChild("##setup-checklist-content", ImVec2(0, -footerHeight),
 			false, ImGuiWindowFlags_DragScrolling);
+		scrollWindowFromTouch();
 		auto sectionHeading = [](const char* label) {
 			ImGui::Dummy(ScaledVec2(0.f, 10.f));
 			ImGui::PushFont(boldFont, uiScaled(20.f));
@@ -3823,14 +3839,22 @@ static void gui_display_setup_checklist()
 		ImGui::PushFont(boldFont, uiScaled(25.f));
 		ImGui::TextWrapped("%s", T("Ready to Play"));
 		ImGui::PopFont();
-		ImGui::TextWrapped("%s", T("Optional setup for games, firmware and controls. Reopen this checklist from General settings."));
+		ImGui::TextWrapped("%s", T("Optional setup for games, library themes, firmware and controls. Reopen this checklist from General settings."));
 		sectionHeading(T("1. Game folder"));
 		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
 			? T("A folder is configured. If your games are elsewhere, choose their folder below.")
 			: T("Choose a folder containing your games to add them to the library."));
 		bool addFolder = ImGui::Button(T("Choose Game Folder"));
 		addContentPath(addFolder);
-		sectionHeading(T("2. BIOS and firmware"));
+		sectionHeading(T("2. Library theme"));
+		ImGui::TextWrapped("%s", T("Use the original icon or list view, or choose one of the included library themes. Demo Disc is the default. You can change this later in Library settings."));
+		if (drawSetupThemePicker())
+		{
+			SaveSettings();
+			// Theme metrics/fonts change before the next frame, outside popup style scopes.
+			gui_requestStyleReload();
+		}
+		sectionHeading(T("3. BIOS and firmware"));
 		ImGui::PushFont(boldFont, uiScaled(18.f));
 		ImGui::TextUnformatted(T("Dreamcast"));
 		ImGui::PopFont();
@@ -3878,7 +3902,7 @@ static void gui_display_setup_checklist()
 		ImGui::PopFont();
 		ImGui::TextWrapped("%s", T("Default location: Hollycast's data folder."));
 		ImGui::TextWrapped("%s", T("To use a custom folder instead, add it in General > Custom Paths > BIOS Folders."));
-		sectionHeading(T("3. Controls"));
+		sectionHeading(T("4. Controls"));
 		ImGui::TextWrapped("%s", controller ? T("A controller is detected. Configure its mapping in Controls settings.")
 			: touch ? T("No controller detected. Touch controls are available; you can also connect a controller.")
 			: keyboard ? T("No controller detected. A keyboard is available; you can also connect a controller.")

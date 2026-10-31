@@ -16,13 +16,14 @@
     "compactControls": true,
     "showInfoTooltip": false,
     "mode": "list",
+    "activation": "doubleClick",
     "spacing": 6,
     "rounding": 7,
     "fontSize": 0.027,
     "rowHeight": 0.056,
     "id": "editorial-list",
     "name": "Editorial miximage list",
-    "browser": [0.012,0.025,0.23,0.95],
+    "browser": [0.012,0.025,0.23,0.855],
     "textColor": "C4CBD5",
     "selectedTextColor": "111823",
     "selectorColor": "E5E7EBF5",
@@ -42,7 +43,8 @@
       {"type":"text","text":"PLAYERS","rect":[0.827,0.826,0.14,0.025],"fontSize":0.017,"color":"93A5BC","wrap":false},
       {"type":"metadata","source":"players","rect":[0.827,0.855,0.14,0.033],"fontSize":0.025,"color":"FFFFFF","wrap":false},
       {"type":"text","text":"DEVELOPER","rect":[0.827,0.9,0.14,0.025],"fontSize":0.017,"color":"93A5BC","wrap":false},
-      {"type":"metadata","source":"developer","rect":[0.827,0.929,0.14,0.033],"fontSize":0.025,"color":"FFFFFF","wrap":false}
+      {"type":"metadata","source":"developer","rect":[0.827,0.929,0.14,0.033],"fontSize":0.025,"color":"FFFFFF","wrap":false},
+      {"type":"button","action":"activate","text":"Play","rect":[0.04,0.91,0.18,0.065],"fontSize":0.028,"color":"FFFFFF","background":"4E6179","rounding":0.2}
     ]
   }]
 }

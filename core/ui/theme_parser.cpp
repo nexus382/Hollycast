@@ -476,7 +476,7 @@ Theme parse(const std::string& json, const std::string& directory)
 			{
 				const std::string ep = lp + ".elements[" + std::to_string(j) + "]";
 				const Json& source = (*it)[j];
-				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "fallbackImage", "separator", "when", "launchFadeFrom", "bleed", "image", "hoverImage", "selectedImage", "selectedHoverImage", "slant", "marqueeSeconds", "sweepSeconds", "spin", "anchor", "onSelection", "tileSeconds", "maximum", "valueScale", "digits"});
+				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "autoFit", "fallbackImage", "separator", "when", "launchFadeFrom", "bleed", "image", "hoverImage", "selectedImage", "selectedHoverImage", "slant", "marqueeSeconds", "sweepSeconds", "spin", "anchor", "onSelection", "tileSeconds", "maximum", "valueScale", "digits"});
 				Element element;
 				element.type = stringValue(required(source, "type", ep), ep + ".type", false);
 				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "metadata" && element.type != "details" && element.type != "button" && element.type != "stat" && element.type != "meter") invalid(ep + ".type", "must be panel, image, artwork, text, metadata, details, button, stat, or meter");
@@ -598,6 +598,7 @@ Theme parse(const std::string& json, const std::string& directory)
 				{
 					element.fields = metadataFieldList(required(source, "fields", ep), ep + ".fields");
 					if (auto field = source.find("columns"); field != source.end()) element.columns = integerValue(*field, ep + ".columns", 1, 3);
+					if (auto field = source.find("autoFit"); field != source.end()) element.autoFit = boolValue(*field, ep + ".autoFit");
 					if (element.zIndex < 0) invalid(ep + ".zIndex", "details must draw above the browser");
 				}
 				else if (source.count("columns")) invalid(ep + ".columns", "is only valid on details elements");
@@ -612,6 +613,7 @@ Theme parse(const std::string& json, const std::string& directory)
 					if (element.type != "metadata" || element.fields.empty()) invalid(ep + ".separator", "requires a metadata element with fields");
 					element.separator = stringValue(*field, ep + ".separator");
 				}
+				if (element.type != "details" && source.count("autoFit")) invalid(ep + ".autoFit", "is only valid on details elements");
 				if (auto field = source.find("action"); field != source.end()) element.action = stringValue(*field, ep + ".action", false);
 				if (auto field = source.find("background"); field != source.end()) element.background = colorValue(*field, ep + ".background");
 				if (auto field = source.find("selectedColor"); field != source.end()) element.selectedColor = colorValue(*field, ep + ".selectedColor");

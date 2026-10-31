@@ -762,25 +762,60 @@ void scrollWhenDraggingOnVoid(ImGuiMouseButton mouse_button)
 		window = window->ParentWindow;
 	if (window == nullptr || !(window->Flags & ImGuiWindowFlags_DragScrolling))
 		return;
-#if defined(__ANDROID__)
 	const ImGuiIO& io = ImGui::GetIO();
-	const bool touchDragAnywhere = io.MouseSource == ImGuiMouseSource_TouchScreen
-			&& io.MouseDown[mouse_button]
-			&& window->Rect().Contains(io.MousePos)
-			&& ImGui::IsMouseDragging(mouse_button, io.MouseDragThreshold);
-	if (touchDragAnywhere)
+	if (io.MouseSource == ImGuiMouseSource_TouchScreen)
 	{
-		// Android finger scrolling often starts over a live Selectable row. Treat
-		// that as a scroll drag so settings rows do not eat the swipe as a tap.
-		const ImVec2& delta = io.MouseDelta;
-		if (delta != ImVec2())
+		const ImGuiID gestureId = ImHashStr("##touchScrollGesture", 0, window->ID);
+		const ImGuiID frameId = ImHashStr("##touchScrollFrame", 0, window->ID);
+		if (window->StateStorage.GetInt(frameId) == g.FrameCount) return;
+		int gesture = window->StateStorage.GetInt(gestureId);
+		if (window->StateStorage.GetInt(frameId) != g.FrameCount - 1)
 		{
-			window->DragScrolling = true;
-			window->ScrollSpeed = delta;
+			gesture = 0;
+			window->DragScrolling = false;
+			window->ScrollSpeed = ImVec2();
 		}
+		window->StateStorage.SetInt(frameId, g.FrameCount);
+		if (ImGui::IsMouseClicked(mouse_button))
+		{
+			// Capture the innermost scrollable pane where the finger went down,
+			// not whichever pane it crosses later. Popups keep their own input.
+			ImGuiWindow* hovered = g.HoveredWindow;
+			while (hovered != nullptr && hovered != window
+					&& (!(hovered->Flags & ImGuiWindowFlags_DragScrolling) || hovered->ScrollMax.y == 0.f))
+			{
+				if (hovered->Flags & ImGuiWindowFlags_Popup) break;
+				hovered = hovered->ParentWindow;
+			}
+			gesture = hovered == window && window->ScrollMax.y > 0.f ? 1 : 0;
+			window->DragScrolling = false;
+			window->ScrollSpeed = ImVec2();
+		}
+		if (gesture != 0 && ImGui::IsMouseDragging(mouse_button, io.MouseDragThreshold))
+		{
+			// Keep scrollbar dragging intact. Content drags instead take ownership
+			// before widgets run, so releasing a swipe cannot activate a game/button.
+			if (g.ActiveId == ImGui::GetWindowScrollbarID(window, ImGuiAxis_Y)
+					|| g.ActiveId == ImGui::GetWindowScrollbarID(window, ImGuiAxis_X))
+				gesture = 0;
+			else
+			{
+				gesture = 2;
+				window->DragScrolling = true;
+				ImGui::SetActiveID(gestureId, window);
+				g.ActiveIdMouseButton = mouse_button;
+			}
+		}
+		if (gesture == 2)
+			ImGui::KeepAliveID(gestureId);
+		if (!io.MouseDown[mouse_button])
+		{
+			if (g.ActiveId == gestureId) ImGui::ClearActiveID();
+			gesture = 0;
+		}
+		window->StateStorage.SetInt(gestureId, gesture);
 		return;
 	}
-#endif
     bool hovered = false;
     bool held = false;
     ImGuiButtonFlags button_flags = (mouse_button == ImGuiMouseButton_Left) ? ImGuiButtonFlags_MouseButtonLeft
@@ -1105,6 +1140,11 @@ static void computeScrollSpeed(float &v)
 void windowDragScroll(bool allowHorizontal)
 {
 	ImGuiWindow *window = ImGui::GetCurrentWindow();
+	if (GImGui->NavMoveSubmitted || GImGui->NavActivateId != 0)
+	{
+		window->DragScrolling = false;
+		window->ScrollSpeed = ImVec2();
+	}
 	if (!allowHorizontal)
 	{
 		// Settings rows are vertically paged. Keep a tiny layout overflow from
@@ -1130,8 +1170,9 @@ void windowDragScroll(bool allowHorizontal)
 		}
 		else
 		{
-			ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-			if (delta != ImVec2())
+			const bool touch = ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen;
+			ImVec2 delta = touch ? ImGui::GetIO().MouseDelta : ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+			if (!touch && delta != ImVec2())
 				ImGui::ResetMouseDragDelta();
 			if (!allowHorizontal)
 				delta.x = 0.0f;
@@ -1144,6 +1185,88 @@ void windowDragScroll(bool allowHorizontal)
 			ImGui::SetScrollY(window, window->Scroll.y - window->ScrollSpeed.y);
 		}
 	}
+}
+
+void scrollWindowFromTouch()
+{
+	if (ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen)
+	{
+		scrollWhenDraggingOnVoid();
+		windowDragScroll(false);
+	}
+}
+
+bool drawEmptyLibraryPrompt()
+{
+	const char* label = i18n::T("Your game list is empty");
+	const char* button = i18n::T("Add Game Folder");
+	const ImVec2 available = ImGui::GetContentRegionAvail(), origin = ImGui::GetCursorPos();
+	const float preferredSize = uiLargeFontSize();
+	const ImVec2 padding = ScaledVec2(20, 8);
+	const ImVec2 labelSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, label);
+	const ImVec2 buttonSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, button) + padding * 2;
+	const float gap = std::max(ImGui::GetStyle().ItemSpacing.y, uiScaled(8));
+	const float height = labelSize.y + gap + buttonSize.y;
+	// Small game browsers (such as Pocket's VMU screen) use the same prompt,
+	// scaled to their own viewport. No child panel obscures the theme artwork.
+	const float scale = std::clamp(std::min(available.x / std::max(labelSize.x, buttonSize.x), available.y / height), 0.01f, 1.f);
+	ImGui::PushFont(nullptr, preferredSize * scale);
+	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, padding * scale);
+	ImguiID id("empty");
+	const float top = origin.y + std::max(0.f, (available.y - height * scale) * 0.5f);
+	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - std::max(labelSize.x, buttonSize.x) * scale) * 0.5f), top));
+	ImGui::BeginGroup();
+	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - labelSize.x * scale) * 0.5f), top));
+	ImGui::TextUnformatted(label);
+	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - buttonSize.x * scale) * 0.5f), top + (labelSize.y + gap) * scale));
+	const bool addFolder = ImGui::Button(button);
+	ImGui::EndGroup();
+	ImGui::PopFont();
+	return addFolder;
+}
+
+bool drawSetupThemePicker()
+{
+	const auto& catalog = themes::catalog();
+	const char* original[] = {i18n::T("Original icon view"), i18n::T("Original list view")};
+	const bool list = config::LibraryDisplayStyle.get() == static_cast<int>(config::LibraryDisplayStyleMode::List);
+	const char* preview = original[list ? 1 : 0];
+	for (const auto& entry : catalog)
+		if (entry.id == config::CustomTheme.get() && entry.error.empty()) preview = entry.name.c_str();
+	bool changed = false;
+	ImGui::SetNextItemWidth(-FLT_MIN);
+	if (ImGui::BeginCombo("##setup-library-theme", preview))
+	{
+		ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+		scrollWindowFromTouch();
+		for (int i = 0; i < 2; ++i)
+		{
+			const bool selected = config::CustomTheme.get().empty() && list == (i == 1);
+			if (ImGui::Selectable(original[i], selected) && !selected)
+			{
+				config::CustomTheme.get().clear();
+				config::ThemeLayout.get().clear();
+				config::LibraryDisplayStyle = i;
+				changed = true;
+			}
+			if (selected) ImGui::SetItemDefaultFocus();
+		}
+		for (const auto& entry : catalog)
+		{
+			if (!entry.error.empty()) continue;
+			const bool selected = config::CustomTheme.get() == entry.id;
+			ImguiID id(entry.id);
+			if (ImGui::Selectable(entry.name.c_str(), selected) && !selected)
+			{
+				config::CustomTheme = entry.id;
+				config::ThemeLayout.get().clear();
+				changed = true;
+			}
+			if (selected) ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+	return changed;
 }
 
 static void setUV(float ar, ImVec2& uv0, ImVec2& uv1)

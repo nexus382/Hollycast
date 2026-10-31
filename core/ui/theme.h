@@ -46,6 +46,7 @@ struct Element
 	std::vector<std::string> fields; // Ordered metadata bindings for a details or metadata element.
 	std::string separator = "  /  "; // Joins the values of a multi-field metadata element.
 	int columns = 1; // Number of label/value pairs per details row.
+	bool autoFit = false; // Details only: compact metadata and fit all text without scrolling.
 	std::string selectedText; // Optional label for a selected artwork/favourite button.
 	std::string icon, selectedIcon; // Optional vector button icons: star or star-filled.
 	std::optional<uint32_t> borderColor, selectedBorderColor;

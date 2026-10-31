@@ -494,8 +494,56 @@ bool browserSelectable(const Layout& layout, bool selected, const ImVec2& size)
 
 bool activatesItem(const Layout& layout, bool pressed)
 {
-	return pressed && (layout.activation == "singleClick" || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
-			|| GImGui->NavActivateId == ImGui::GetItemID());
+	// Touch selects for inspection; an explicit Play button launches. Navigation
+	// confirm still works even when the last pointer event came from a touchscreen.
+	return pressed && (GImGui->NavActivateId == ImGui::GetItemID()
+			|| (ImGui::GetIO().MouseSource != ImGuiMouseSource_TouchScreen
+			&& (layout.activation == "singleClick" || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))));
+}
+
+struct BrowserSwipe
+{
+	bool tracking = false, dragged = false;
+	float distance = 0;
+};
+
+// Rail/orbit/paged browsers do not have a physical scrollbar. Share the same
+// gesture capture as regular panes, but translate finger movement into entries.
+int swipeSteps(BrowserSwipe& swipe, float step, bool horizontal, bool enabled)
+{
+	auto& io = ImGui::GetIO();
+	ImGuiWindow* window = ImGui::GetCurrentWindow();
+	const ImGuiID id = window->GetID("##browserSwipe");
+	if (!enabled)
+	{
+		swipe = {};
+		if (GImGui->ActiveId == id) ImGui::ClearActiveID();
+		return 0;
+	}
+	if (!io.MouseDown[ImGuiMouseButton_Left] && !ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+		swipe.dragged = false;
+	if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+	{
+		swipe = {};
+		swipe.tracking = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+	}
+	int steps = 0;
+	if (swipe.tracking && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+	{
+		swipe.dragged = true;
+		ImGui::SetActiveID(id, window);
+		GImGui->ActiveIdMouseButton = ImGuiMouseButton_Left;
+		ImGui::KeepAliveID(id);
+		swipe.distance -= horizontal ? io.MouseDelta.x : io.MouseDelta.y;
+		steps = static_cast<int>(swipe.distance / step);
+		swipe.distance -= steps * step;
+	}
+	if (!io.MouseDown[ImGuiMouseButton_Left])
+	{
+		swipe.tracking = false;
+		if (GImGui->ActiveId == id) ImGui::ClearActiveID();
+	}
+	return steps;
 }
 
 const char* metadataLabel(const std::string& field)
@@ -511,6 +559,88 @@ const char* metadataLabel(const std::string& field)
 	return label == labels.end() ? field.c_str() : i18n::T(label->second);
 }
 
+void drawFittedDetails(const Element& element, const LibraryItem& item, float preferredSize)
+{
+	std::vector<std::pair<const char*, const std::string*>> fields;
+	fields.reserve(element.fields.size());
+	const std::string* description = nullptr;
+	const ImVec2 available = ImGui::GetContentRegionAvail();
+	ImFont* font = ImGui::GetFont();
+	ImGuiID hash = ImHashData(&available, sizeof(available));
+	hash = ImHashData(&preferredSize, sizeof(preferredSize), hash);
+	hash = ImHashData(&font, sizeof(font), hash);
+	hash = ImHashData(&element.columns, sizeof(element.columns), hash);
+	for (const std::string& field : element.fields)
+	{
+		const auto value = item.metadata.find(field);
+		if (value == item.metadata.end() || value->second.empty()) continue;
+		const char* label = metadataLabel(field);
+		hash = ImHashStr(label, 0, hash);
+		hash = ImHashStr(value->second.c_str(), value->second.size(), hash);
+		if (field == "description") description = &value->second;
+		else fields.emplace_back(label, &value->second);
+	}
+	const char* empty = element.text.empty() ? i18n::T("No game details available.") : element.text.c_str();
+	hash = ImHashStr(empty, 0, hash);
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	ImDrawList* draw = ImGui::GetWindowDrawList();
+	const auto content = [&](float size, bool render) {
+		const float gap = size * 0.5f, rowGap = size * 0.2f;
+		const float columnWidth = std::max(1.f, available.x / element.columns);
+		std::array<float, 3> labels{};
+		for (size_t i = 0; i < fields.size(); ++i)
+			labels[i % element.columns] = std::max(labels[i % element.columns],
+					std::min(columnWidth * 0.36f, font->CalcTextSizeA(size, FLT_MAX, 0, fields[i].first).x));
+		float y = 0;
+		for (size_t row = 0; row < fields.size(); row += element.columns)
+		{
+			float height = 0;
+			for (int column = 0; column < element.columns && row + column < fields.size(); ++column)
+			{
+				const auto& field = fields[row + column];
+				const float labelWidth = std::max(1.f, labels[column]);
+				const float valueWidth = std::max(1.f, columnWidth - labelWidth - gap * 2);
+				height = std::max({height, font->CalcTextSizeA(size, FLT_MAX, labelWidth, field.first).y,
+						font->CalcTextSizeA(size, FLT_MAX, valueWidth, field.second->c_str()).y});
+				if (render)
+				{
+					const ImVec2 pos = origin + ImVec2(column * columnWidth, y);
+					draw->AddText(font, size, pos, ImGui::GetColorU32(ImGuiCol_TextDisabled), field.first, nullptr, labelWidth);
+					draw->AddText(font, size, pos + ImVec2(labelWidth + gap, 0), color(element.color), field.second->c_str(), nullptr, valueWidth);
+				}
+			}
+			y += height + (row + element.columns < fields.size() ? rowGap : 0.f);
+		}
+		if (description != nullptr || fields.empty())
+		{
+			if (!fields.empty()) y += size * 0.6f;
+			const char* text = description != nullptr ? description->c_str() : empty;
+			if (render) draw->AddText(font, size, origin + ImVec2(0, y), color(element.color), text, nullptr, std::max(1.f, available.x));
+			y += font->CalcTextSizeA(size, FLT_MAX, std::max(1.f, available.x), text).y;
+		}
+		return y;
+	};
+	ImGuiStorage* state = ImGui::GetStateStorage();
+	const ImGuiID hashKey = ImGui::GetID("fittedContentHash"), sizeKey = ImGui::GetID("fittedFontSize");
+	float size = state->GetFloat(sizeKey);
+	if (size <= 0 || state->GetInt(hashKey) != static_cast<int>(hash))
+	{
+		// Reflow only when the game, scraped metadata, font or viewport changes.
+		// Rendering still uses the same measured widths, so no lines are discarded.
+		float low = 1.f, high = preferredSize;
+		for (int step = 0; step < 10; ++step)
+		{
+			const float candidate = (low + high) * 0.5f;
+			if (content(candidate, false) <= std::max(1.f, available.y - 1.f)) low = candidate;
+			else high = candidate;
+		}
+		size = low;
+		state->SetInt(hashKey, static_cast<int>(hash));
+		state->SetFloat(sizeKey, size);
+	}
+	ImGui::Dummy(ImVec2(std::max(1.f, available.x), content(size, true)));
+}
+
 void drawDetails(const Layout& layout, const Canvas& canvas, const LibraryItem* item)
 {
 	for (size_t i = 0; i < layout.elements.size(); ++i)
@@ -521,9 +651,14 @@ void drawDetails(const Layout& layout, const Canvas& canvas, const LibraryItem* 
 		ImGui::SetCursorScreenPos(rect.Min);
 		ImguiID id("theme-details-" + std::to_string(i));
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+		if (element.autoFit) ImGui::SetNextWindowScroll(ImVec2(0, 0));
 		const bool visible = ImGui::BeginChild("##details", rect.GetSize(), ImGuiChildFlags_None,
-				ImGuiWindowFlags_NoBackground);
-		if (visible && item)
+				ImGuiWindowFlags_NoBackground | (element.autoFit
+						? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_DragScrolling));
+		if (!element.autoFit) scrollWindowFromTouch();
+		if (visible && item && element.autoFit)
+			drawFittedDetails(element, *item, std::clamp(element.fontSize * canvas.size.y * canvas.textScale, 10.f, 96.f));
+		else if (visible && item)
 		{
 			ImGui::PushFont(nullptr, std::clamp(element.fontSize * canvas.size.y, 10.f, 96.f));
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(color(element.color)));
@@ -777,6 +912,7 @@ struct OrbitState
 	double clickedAt = 0;
 	ImVec2 clickedPos;
 	float wheel = 0;
+	BrowserSwipe swipe;
 };
 
 // A bounded seven-disc window keeps large libraries cheap. The rear seam is faded
@@ -795,15 +931,22 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 	const bool locked = (g.CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
 	const bool input = !locked && !io.WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
 	if (g.NavWindow == nullptr) ImGui::FocusWindow(ImGui::GetCurrentWindow());
-	const bool ownsNav = g.NavWindow == ImGui::GetCurrentWindow() || g.NavId == 0 || !g.NavCursorVisible;
+	// A text-only synopsis has NavId == 0 too; its controller input must not
+	// rotate the carousel or launch the selected game while the player reads.
+	const bool ownsNav = g.NavWindow == ImGui::GetCurrentWindow() || !g.NavCursorVisible
+			|| (g.NavId == 0 && (g.NavWindow == nullptr || g.NavWindow == ImGui::GetCurrentWindow()->RootWindow));
 	const auto choose = [&](int index) {
 		selected = wrapped(index);
 		selectedId = itemKey(items[selected], static_cast<size_t>(selected));
 	};
+	const int swipe = swipeSteps(state.swipe, std::max(40.f, area.x * 0.12f), true, input);
+	if (swipe != 0) choose(selected + swipe);
+	bool moveFocus = false;
 	if (input && ownsNav && g.NavMoveSubmitted &&
 				(g.NavMoveDir == ImGuiDir_Left || g.NavMoveDir == ImGuiDir_Right))
 	{
 		choose(selected + (g.NavMoveDir == ImGuiDir_Right ? 1 : -1));
+		moveFocus = true;
 		ImGui::NavMoveRequestCancel();
 	}
 	if (input && ownsNav)
@@ -875,7 +1018,8 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 	// Input submits nearest first; the draw pass below submits farthest first.
 	// This keeps an overlapping rear disc from stealing a front disc's click.
 	const ImVec2 sinceClick = io.MousePos - state.clickedPos;
-	const bool secondClick = input && !state.clickedKey.empty() && ImGui::IsMouseDoubleClicked(0)
+	const bool secondClick = input && io.MouseSource != ImGuiMouseSource_TouchScreen
+			&& !state.swipe.dragged && !state.clickedKey.empty() && ImGui::IsMouseDoubleClicked(0)
 			&& ImGui::GetTime() - state.clickedAt <= io.MouseDoubleClickTime
 			&& ImLengthSqr(sinceClick) <= io.MouseDoubleClickMaxDist * io.MouseDoubleClickMaxDist;
 	if (secondClick)
@@ -894,12 +1038,16 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0,0,0,0));
 		ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0,0,0,0));
 		const bool pressed = ImGui::Selectable("##libraryItem", disc.index == selected,
-			disc.index != hit && ImGui::IsWindowHovered() ? ImGuiSelectableFlags_Disabled : ImGuiSelectableFlags_None,
+			disc.index != hit && ImGui::IsWindowHovered() && !g.NavCursorVisible ? ImGuiSelectableFlags_Disabled : ImGuiSelectableFlags_None,
 			ImVec2(width * 2.f, disc.radius * 2.f));
 		ImGui::PopStyleColor(4);
 		ImGui::PopItemFlag();
-		if (disc.index == selected) ImGui::SetItemDefaultFocus();
-		if (input && pressed && !secondClick)
+		if (disc.index == selected)
+		{
+			ImGui::SetItemDefaultFocus();
+			if (moveFocus) ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
+		}
+		if (input && pressed && !secondClick && !state.swipe.dragged)
 		{
 			choose(disc.index);
 			state.clickedKey = key;
@@ -981,8 +1129,7 @@ struct RailState
 	double clickedAt = 0;
 	ImVec2 clickedPos;
 	float wheel = 0;
-	float dragDistance = 0;
-	bool dragging = false, dragged = false;
+	BrowserSwipe swipe;
 	bool rowFocused = false;
 	bool moved = false; // The wheel or a drag moved the selection last frame.
 	bool refocus = false; // Keyboard focus landed on another row; hand it to the selection.
@@ -1024,6 +1171,8 @@ void drawRail(const Layout& layout, const Canvas& canvas, const std::vector<Libr
 	if (g.NavWindow == nullptr)
 		ImGui::FocusWindow(ImGui::GetCurrentWindow());
 	const bool locked = (g.CurrentItemFlags & ImGuiItemFlags_Disabled) != 0; // A launch is under way.
+	const int dragSteps = swipeSteps(state.swipe, rowStep, false,
+			!locked && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) && !ImGui::GetIO().WantTextInput);
 	if (locked && g.NavMoveSubmitted)
 		ImGui::NavMoveRequestCancel();
 	bool stepped = false;
@@ -1062,7 +1211,8 @@ void drawRail(const Layout& layout, const Canvas& canvas, const std::vector<Libr
 	ImGuiIO& io = ImGui::GetIO();
 	// A double-click means the row that was clicked first, wherever the rail has since taken it.
 	const ImVec2 sinceClick(io.MousePos.x - state.clickedPos.x, io.MousePos.y - state.clickedPos.y);
-	const bool secondClick = doubleClick && !locked && !state.clickedKey.empty() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+	const bool secondClick = doubleClick && !locked && io.MouseSource != ImGuiMouseSource_TouchScreen
+			&& !state.swipe.dragged && !state.clickedKey.empty() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
 			&& ImGui::GetTime() - state.clickedAt <= io.MouseDoubleClickTime
 			&& ImLengthSqr(sinceClick) <= io.MouseDoubleClickMaxDist * io.MouseDoubleClickMaxDist;
 	if (secondClick)
@@ -1145,7 +1295,7 @@ void drawRail(const Layout& layout, const Canvas& canvas, const std::vector<Libr
 					state.refocus = true;
 			}
 		}
-		if (pressed && !state.dragged && !secondClick)
+		if (pressed && !state.swipe.dragged && !secondClick)
 		{
 			rememberClick(key);
 			selected = i;
@@ -1221,29 +1371,12 @@ void drawRail(const Layout& layout, const Canvas& canvas, const std::vector<Libr
 
 	// Wheel and drag step through the games: the rail has no scrollbar to move.
 	const bool hovering = !locked && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-	int steps = 0;
+	int steps = dragSteps;
 	if (hovering && io.MouseWheel != 0)
 	{
 		state.wheel -= io.MouseWheel;
 		steps += static_cast<int>(state.wheel);
 		state.wheel -= static_cast<int>(state.wheel);
-	}
-	if (hovering && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-	{
-		state.dragging = true;
-		state.dragDistance = 0;
-	}
-	if (state.dragging && ImGui::IsMouseDragging(ImGuiMouseButton_Left, uiScaled(6.f)))
-	{
-		state.dragged = true;
-		state.dragDistance -= io.MouseDelta.y;
-		steps += static_cast<int>(state.dragDistance / rowStep);
-		state.dragDistance -= static_cast<int>(state.dragDistance / rowStep) * rowStep;
-	}
-	if (!io.MouseDown[ImGuiMouseButton_Left] && !ImGui::IsMouseReleased(ImGuiMouseButton_Left))
-	{
-		state.dragging = false;
-		state.dragged = false;
 	}
 	if (steps != 0)
 	{
@@ -1263,7 +1396,7 @@ bool playerPressedAnything()
 }
 
 int drawPagedGrid(const Layout& layout, const std::vector<LibraryItem>& items, const std::string& source,
-		float iconScale, bool& focusedLastFrame, int& selected, std::string& selectedId, int& activated,
+		float iconScale, bool& focusedLastFrame, BrowserSwipe& swipe, int& selected, std::string& selectedId, int& activated,
 		const std::function<void(size_t)>& afterItem)
 {
 	const ImVec2 origin = ImGui::GetCursorScreenPos(), area = ImGui::GetContentRegionAvail();
@@ -1287,7 +1420,7 @@ int drawPagedGrid(const Layout& layout, const std::vector<LibraryItem>& items, c
 				moveFocus = true;
 			}
 		}
-		int pages = 0;
+		int pages = swipeSteps(swipe, std::max(40.f, area.y * 0.3f), false, true);
 		if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0) pages = ImGui::GetIO().MouseWheel < 0 ? 1 : -1;
 		if (focusedLastFrame)
 		{
@@ -1589,7 +1722,8 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::vector<LibraryItem>& items, const std::function<void(size_t)>& afterItem,
 		const std::optional<std::string>& iconSource, float iconScale,
 		const std::string& stateLayoutId, const std::function<void(size_t)>& toggleFavourite,
-		const std::function<void(const std::string&)>& playSound, const std::string& pulledItemId)
+		const std::function<void(const std::string&)>& playSound, const std::string& pulledItemId,
+		const std::function<void()>& drawEmptyBrowser)
 {
 	iconScale = std::clamp(iconScale, 0.5f, 2.f);
 	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
@@ -1600,6 +1734,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	static RailState railState;
 	static OrbitState orbitState;
 	static bool gridFocused = false;
+	static BrowserSwipe gridSwipe;
 	static std::string effectSelection;
 	static double selectionTime = 0;
 	static double lastInputTime = 0, lastAttractStep = 0;
@@ -1617,6 +1752,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		railState = {};
 		orbitState = {};
 		gridFocused = false;
+		gridSwipe = {};
 		effectSelection.clear();
 		lastInputTime = ImGui::GetTime();
 		launchingId.clear();
@@ -1648,6 +1784,35 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 			launchingId.clear();
 	}
 	const bool launching = launchingIndex >= 0;
+	ImGuiContext& g = *GImGui;
+	const ImGuiIO& io = ImGui::GetIO();
+	// ImGui normally reserves the left stick for panning, which leaves rail,
+	// orbit and paged libraries with no stick navigation at all. Submit the same
+	// focus moves as the D-pad, retaining native scrolling in text-only panes.
+	if (!launching && (io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad)
+			&& (io.BackendFlags & ImGuiBackendFlags_HasGamepad) && !io.WantTextInput
+			&& !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup)
+			&& g.NavWindow != nullptr && g.NavWindow->RootWindow == ImGui::GetCurrentWindow()->RootWindow
+			&& g.NavWindow->DC.NavLayersActiveMask != 0)
+	{
+		const ImVec2 stick = ImGui::GetKeyMagnitude2d(ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight,
+				ImGuiKey_GamepadLStickUp, ImGuiKey_GamepadLStickDown);
+		if (stick.x != 0.f || stick.y != 0.f)
+		{
+			g.NavWindow->ScrollTarget = ImVec2(FLT_MAX, FLT_MAX);
+			g.NavInputSource = ImGuiInputSource_Gamepad;
+			const bool horizontal = std::fabs(stick.x) > std::fabs(stick.y);
+			const ImGuiDir direction = horizontal ? (stick.x > 0 ? ImGuiDir_Right : ImGuiDir_Left)
+					: (stick.y > 0 ? ImGuiDir_Down : ImGuiDir_Up);
+			const ImGuiKey key = horizontal ? (stick.x > 0 ? ImGuiKey_GamepadLStickRight : ImGuiKey_GamepadLStickLeft)
+					: (stick.y > 0 ? ImGuiKey_GamepadLStickDown : ImGuiKey_GamepadLStickUp);
+			if (!g.NavMoveSubmitted && ImGui::IsKeyPressed(key))
+			{
+				ImGui::NavMoveRequestSubmit(direction, direction, ImGuiNavMoveFlags_None, ImGuiScrollFlags_None);
+				ImGui::SetNavCursorVisible(true);
+			}
+		}
+	}
 	LibraryState libraryState;
 	if (launching)
 	{
@@ -1701,7 +1866,11 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	const bool orbitMode = layout.mode == "orbit";
 	const bool paged = layout.pagedGrid.rows > 0;
 	const bool childVisible = ImGui::BeginChild("##themeLibraryBrowser", browserSize, ImGuiChildFlags_NavFlattened,
-			ImGuiWindowFlags_NoBackground | ((railMode || orbitMode || paged) ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None));
+			ImGuiWindowFlags_NoBackground | ((railMode || orbitMode || paged) ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_DragScrolling));
+	if (!railMode && !orbitMode && !paged)
+	{
+		scrollWindowFromTouch();
+	}
 	if (layout.fontSize > 0)
 		ImGui::PushFont(nullptr, std::clamp(layout.fontSize * canvas.size.y * iconScale, 10.f, 96.f));
 	const ImVec2 previousItemSpacing = ImGui::GetStyle().ItemSpacing;
@@ -1726,7 +1895,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		}
 		else if (paged)
 		{
-			browserColumns = drawPagedGrid(layout, items, browserSource, iconScale, gridFocused, selected, selectedId, activated, observeItem);
+			browserColumns = drawPagedGrid(layout, items, browserSource, iconScale, gridFocused, gridSwipe, selected, selectedId, activated, observeItem);
 			scrollSelection = false;
 		}
 		else if (railMode)
@@ -1923,7 +2092,8 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	}
 	else if (childVisible)
 	{
-		ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(browserTextColor(layout, false)), "%s", i18n::T("No games found"));
+		if (drawEmptyBrowser) drawEmptyBrowser();
+		else ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(browserTextColor(layout, false)), "%s", i18n::T("No games found"));
 	}
 	ImGui::PopStyleVar();
 	if (layout.fontSize > 0)
@@ -1963,6 +2133,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 		const bool visible = ImGui::BeginChild("##themeLibraryDetails", pane.GetSize(), ImGuiChildFlags_None,
 				ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_DragScrolling);
+		scrollWindowFromTouch();
 		if (visible)
 		{
 			const ImVec2 origin = ImGui::GetCursorScreenPos();

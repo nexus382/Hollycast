@@ -55,6 +55,13 @@ StoragePopupResult select_storage_popup(bool isDirectory, bool writeAccess, cons
 		const StringCallback& callback, const std::string& mimeType = {});
 
 void scrollWhenDraggingOnVoid(ImGuiMouseButton mouse_button = ImGuiMouseButton_Left);
+// Call immediately after BeginChild/BeginTable for each scrollable library pane.
+// Capturing a finger swipe before widgets run cancels their pending tap.
+void scrollWindowFromTouch();
+// Shared empty state for classic, table and themed libraries; caller opens the folder picker.
+bool drawEmptyLibraryPrompt();
+// First-run theme choice; caller persists changes and refreshes style after rendering.
+bool drawSetupThemePicker();
 
 // Helper to display a little (?) mark which shows a tooltip when hovered.
 void ShowHelpMarker(const char* desc);

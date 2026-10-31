@@ -16,13 +16,14 @@
     "compactControls": true,
     "showInfoTooltip": false,
     "mode": "list",
+    "activation": "doubleClick",
     "spacing": 6,
     "rounding": 7,
     "fontSize": 0.024,
     "rowHeight": 0.071,
     "id": "fanart-list",
     "name": "Fanart and disc list",
-    "browser": [0.72,0.045,0.245,0.91],
+    "browser": [0.72,0.045,0.245,0.82],
     "showArtwork": true,
     "artworkSource": "physical",
     "textColor": "C9D9ED",
@@ -49,7 +50,8 @@
       {"type":"text","text":"DEVELOPER","rect":[0.333,0.728,0.28,0.022],"fontSize":0.018,"color":"84A9D1","wrap":false},
       {"type":"metadata","source":"developer","rect":[0.333,0.754,0.28,0.029],"fontSize":0.024,"color":"FFFFFF","wrap":false},
       {"type":"panel","rect":[0.043,0.796,0.604,0.001],"color":"8DBFE443"},
-      {"type":"metadata","source":"description","rect":[0.043,0.808,0.604,0.15],"fontSize":0.026,"color":"C2D3E9"}
+      {"type":"metadata","source":"description","rect":[0.043,0.808,0.604,0.15],"fontSize":0.026,"color":"C2D3E9"},
+      {"type":"button","action":"activate","text":"Play","rect":[0.765,0.89,0.16,0.08],"fontSize":0.03,"color":"FFFFFF","background":"17417AE0","rounding":0.2}
     ]
   }]
 }

@@ -42,11 +42,13 @@ std::vector<DiscVertex> discRing(float centerX, float centerY, float radius, flo
 // afterItem runs immediately after each item's widget for existing context menus.
 // stateLayoutId preserves selection across responsive layouts.
 // iconScale also scales the cover/metadata column, which scrolls when needed.
+// drawEmptyBrowser replaces the empty-list label inside the themed game viewport.
 int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::vector<LibraryItem>& items, const std::function<void(size_t)>& afterItem,
 		const std::optional<std::string>& iconSource = std::nullopt, float iconScale = 1.f,
 		const std::string& stateLayoutId = {},
 		const std::function<void(size_t)>& toggleFavourite = {},
 		const std::function<void(const std::string&)>& playSound = {},
-		const std::string& pulledItemId = {}); // Plays a validated package sound.
+		const std::string& pulledItemId = {},
+		const std::function<void()>& drawEmptyBrowser = {});
 }

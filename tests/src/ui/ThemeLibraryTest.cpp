@@ -45,9 +45,11 @@ protected:
 		settings.display.uiScale = previousUiScale;
 		config::UIScaling = previousGeneralScale;
 	}
-	int renderFrame(ImVec2 mouse, bool down)
+	int renderFrame(ImVec2 mouse, bool down, const std::function<void()>& emptyBrowser = {})
 	{
 		auto& io = ImGui::GetIO();
+		// This harness feeds legacy pointer fields directly. Touch tests set
+		// MouseSource too; AddMouseSourceEvent only tags future queued events.
 		io.MousePos = mouse;
 		io.MouseDown[0] = down;
 		ImGui::NewFrame();
@@ -55,12 +57,13 @@ protected:
 		if (useLibraryUi)
 			libraryUi.emplace(1.f);
 		ImGui::SetNextWindowPos(ImVec2(0, 0));
-		ImGui::SetNextWindowSize(ImVec2(500, 400));
+		ImGui::SetNextWindowSize(windowSize);
 		ImGui::Begin("Theme Library");
 		canvasOrigin = ImGui::GetCursorScreenPos();
 		canvasSize = ImGui::GetContentRegionAvail();
 		bounds.resize(items.size());
 		itemIds.assign(items.size(), 0);
+		browserWindow = nullptr;
 		const int result = themes::renderLibrary(layout, {}, items, [&](size_t index) {
 			const auto min = ImGui::GetItemRectMin();
 			const auto max = ImGui::GetItemRectMax();
@@ -68,9 +71,10 @@ protected:
 			const auto& browserVertices = ImGui::GetWindowDrawList()->VtxBuffer;
 			browserMesh.assign(browserVertices.begin(), browserVertices.end());
 			itemIds[index] = ImGui::GetItemID();
+			browserWindow = ImGui::GetCurrentWindow();
 			const ImRect viewport = ImGui::GetCurrentWindow()->InnerRect;
 			browserViewport = ImVec4(viewport.Min.x, viewport.Min.y, viewport.Max.x, viewport.Max.y);
-		}, std::nullopt, iconScale, stateLayoutId, favouriteHandler, {}, pulledItemId);
+		}, std::nullopt, iconScale, stateLayoutId, favouriteHandler, {}, pulledItemId, emptyBrowser);
 		const auto& vertices = ImGui::GetWindowDrawList()->VtxBuffer;
 		backgroundMesh.assign(vertices.begin(), vertices.end());
 		detailsMesh.clear();
@@ -114,6 +118,8 @@ protected:
 	ImGuiStyle baselineStyle;
 	ImVec4 browserViewport;
 	ImGuiWindow* detailsWindow = nullptr;
+	ImGuiWindow* browserWindow = nullptr;
+	ImVec2 windowSize{500, 400};
 	std::vector<ImDrawVert> detailsMesh;
 	ImVec2 canvasOrigin, canvasSize;
 	std::string stateLayoutId;
@@ -1885,4 +1891,456 @@ TEST_F(ThemeLibraryTest, PagedGridFitsItsRowsAtLargeIconScaleAndTabCanLeaveIt)
 	ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab,true); renderFrame(away,false);
 	ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab,false); renderFrame(away,false);
 	EXPECT_NE(GImGui->NavId,before);
+}
+
+TEST_F(ThemeLibraryTest, FingerSwipesScrollEveryContinuousBrowserWithoutActivatingOrCrossingPanes)
+{
+	ImGui::GetIO().MouseSource = ImGuiMouseSource_TouchScreen;
+	items.clear();
+	for (int i = 0; i < 100; ++i)
+		items.push_back({std::to_string(i), "Game " + std::to_string(i), {}, {}});
+	for (const char* mode : {"list", "grid", "rack"})
+	{
+		SCOPED_TRACE(mode);
+		layout = {};
+		layout.id = std::string("finger-scroll-") + mode;
+		layout.mode = mode;
+		layout.browser = {0, 0, 0.6f, 1};
+		layout.rowHeight = 0.16f;
+		layout.columns = 2;
+		const ImVec2 away(-1, -1);
+		renderFrame(away, false);
+		renderFrame(away, false);
+		ASSERT_NE(browserWindow, nullptr);
+		ASSERT_GT(browserWindow->ScrollMax.y, 0.f);
+		const ImVec2 start(browserWindow->InnerRect.GetCenter().x, browserWindow->InnerRect.Max.y - 30.f);
+		renderFrame(start, false);
+		EXPECT_EQ(renderFrame(start, true), -1);
+		for (int distance : {30, 60, 90})
+			EXPECT_EQ(renderFrame(start - ImVec2(0, static_cast<float>(distance)), true), -1);
+		EXPECT_EQ(renderFrame(start - ImVec2(0, 90), false), -1);
+		renderFrame(away, false);
+		EXPECT_GT(browserWindow->Scroll.y, 40.f);
+		// A new finger stops momentum, and a drag that started in the other
+		// column cannot take over this browser simply by crossing its boundary.
+		renderFrame(start, true);
+		renderFrame(start, true);
+		const float stopped = browserWindow->Scroll.y;
+		renderFrame(start, true);
+		EXPECT_FLOAT_EQ(browserWindow->Scroll.y, stopped);
+		renderFrame(start, false);
+		const ImVec2 outside(canvasOrigin.x + canvasSize.x * 0.9f, start.y);
+		renderFrame(outside, false);
+		renderFrame(outside, true);
+		renderFrame(start - ImVec2(0, 100), true);
+		renderFrame(start - ImVec2(0, 100), false);
+		renderFrame(away, false);
+		EXPECT_FLOAT_EQ(browserWindow->Scroll.y, stopped);
+	}
+}
+
+TEST_F(ThemeLibraryTest, FingerSwipesScrollAuthoredAndScaledDetailsIndependently)
+{
+	ImGui::GetIO().MouseSource = ImGuiMouseSource_TouchScreen;
+	for (bool authored : {false, true})
+	{
+		SCOPED_TRACE(authored);
+		layout = {};
+		layout.id = authored ? "finger-authored-details" : "finger-scaled-details";
+		layout.browser = {0, 0, 0.45f, 1};
+		iconScale = 2.f;
+		themes::Element element;
+		element.type = authored ? "details" : "metadata";
+		element.rect = {0.5f, 0, 0.5f, 0.8f};
+		element.source = "description";
+		element.fields = authored ? std::vector<std::string>{"description"} : std::vector<std::string>{};
+		layout.elements = {element};
+		items[0].metadata["description"] = std::string(10000, 'A');
+		renderFrame(ImVec2(-1, -1), false);
+		renderFrame(ImVec2(-1, -1), false);
+		ImGuiWindow* pane = detailsWindow;
+		if (authored)
+			for (ImGuiWindow* window : GImGui->Windows)
+				if (window->Active && std::string(window->Name).find("##details_") != std::string::npos)
+					pane = window;
+		ASSERT_NE(pane, nullptr);
+		ASSERT_GT(pane->ScrollMax.y, 0.f);
+		const ImVec2 start(pane->InnerRect.GetCenter().x, pane->InnerRect.Max.y - 20);
+		renderFrame(start, false);
+		renderFrame(start, true);
+		renderFrame(start - ImVec2(0, 40), true);
+		renderFrame(start - ImVec2(0, 80), true);
+		renderFrame(start - ImVec2(0, 80), false);
+		renderFrame(ImVec2(-1, -1), false);
+		EXPECT_GT(pane->Scroll.y, 30.f);
+		EXPECT_FLOAT_EQ(browserWindow->Scroll.y, 0.f);
+	}
+}
+
+TEST_F(ThemeLibraryTest, FingerSwipesTurnTheOrbitAndPagedGridWithoutLaunching)
+{
+	ImGui::GetIO().MouseSource = ImGuiMouseSource_TouchScreen;
+	for (bool orbit : {false, true})
+	{
+		SCOPED_TRACE(orbit);
+		layout = {};
+		layout.id = orbit ? "finger-orbit" : "finger-page";
+		layout.mode = orbit ? "orbit" : "grid";
+		layout.browser = {0, 0, 1, 0.8f};
+		layout.columns = 2;
+		layout.pagedGrid.rows = orbit ? 0 : 2;
+		layout.elements = {{"button", {0.3f, 0.85f, 0.4f, 0.1f}, {}, "Play"}};
+		layout.elements[0].action = "activate";
+		items.clear();
+		for (int i = 0; i < 12; ++i) items.push_back({std::to_string(i), "Game", {}, {}});
+		renderFrame(ImVec2(-1, -1), false);
+		renderFrame(ImVec2(-1, -1), false);
+		const ImVec2 start = browserWindow->InnerRect.GetCenter();
+		const ImVec2 delta = orbit ? ImVec2(150, 0) : ImVec2(0, 120);
+		renderFrame(start, false);
+		EXPECT_EQ(renderFrame(start, true), -1);
+		EXPECT_EQ(renderFrame(start - delta * 0.5f, true), -1);
+		EXPECT_EQ(renderFrame(start - delta, true), -1);
+		EXPECT_EQ(renderFrame(start - delta, false), -1);
+		renderFrame(ImVec2(-1, -1), false);
+		const ImVec2 play(canvasOrigin.x + canvasSize.x * 0.5f, canvasOrigin.y + canvasSize.y * 0.9f);
+		renderFrame(play, false);
+		renderFrame(play, true);
+		EXPECT_GT(renderFrame(play, false), 0);
+	}
+}
+
+TEST_F(ThemeLibraryTest, EveryBundledLayoutPreviewsOnTouchAndHasAnExplicitPlayButton)
+{
+	ImGui::GetIO().MouseSource = ImGuiMouseSource_TouchScreen;
+	windowSize = ImVec2(1400, 800);
+	ImGui::GetIO().DisplaySize = windowSize;
+	const auto root = std::filesystem::path(FLYCAST_TEST_FILES) / "../../themes";
+	for (const auto& directory : std::filesystem::directory_iterator(root))
+	{
+		if (!directory.is_directory()) continue;
+		const themes::Theme theme = themes::load(directory.path().string());
+		ASSERT_FALSE(theme.layouts.empty());
+		for (const auto& authored : theme.layouts)
+		{
+			SCOPED_TRACE(theme.id + "/" + authored.id);
+			layout = authored;
+			layout.id = theme.id + "-touch-" + authored.id;
+			layout.launchSeconds = 0;
+			layout.attract.idleSeconds = 0;
+			std::optional<themes::Rect> playRect;
+			for (auto& element : layout.elements)
+			{
+				element.buttonImage.clear();
+				if (element.type == "button" && element.action == "activate") playRect = element.rect;
+			}
+			ASSERT_TRUE(playRect.has_value());
+			const ImRect browser(layout.browser.x, layout.browser.y,
+					layout.browser.x + layout.browser.w, layout.browser.y + layout.browser.h);
+			const ImRect playButton(playRect->x, playRect->y, playRect->x + playRect->w, playRect->y + playRect->h);
+			EXPECT_FALSE(browser.Overlaps(playButton));
+			layout.elements.erase(std::remove_if(layout.elements.begin(), layout.elements.end(), [](const themes::Element& e) {
+				return e.type == "artwork" || e.type == "image";
+			}), layout.elements.end());
+			renderFrame(ImVec2(-1, -1), false);
+			renderFrame(ImVec2(-1, -1), false);
+			const int target = layout.mode == "orbit" ? 0 : 1;
+			const ImVec4 box = bounds[target];
+			const ImVec2 point((box.x + box.z) * 0.5f, (box.y + box.w) * 0.5f);
+			renderFrame(point, false);
+			// Repeated taps still inspect; only the separate Play control launches.
+			for (int tap = 0; tap < 2; ++tap)
+			{
+				const ImVec4 current = bounds[target];
+				const ImVec2 tapPoint((current.x + current.z) * 0.5f, (current.y + current.w) * 0.5f);
+				EXPECT_EQ(renderFrame(tapPoint, true), -1);
+				EXPECT_EQ(renderFrame(tapPoint, false), -1);
+			}
+			ImVec2 size = canvasSize, origin = canvasOrigin;
+			if (layout.canvasAspect > 0)
+			{
+				size.x = std::min(size.x, size.y * layout.canvasAspect);
+				size.y = size.x / layout.canvasAspect;
+				origin = origin + (canvasSize - size) * 0.5f;
+			}
+			const ImVec2 play = origin + ImVec2((playRect->x + playRect->w * 0.5f) * size.x,
+					(playRect->y + playRect->h * 0.5f) * size.y);
+			renderFrame(play, false);
+			renderFrame(play, true);
+			EXPECT_EQ(renderFrame(play, false), target);
+			renderFrame(ImVec2(-1, -1), false);
+		}
+	}
+}
+
+TEST_F(ThemeLibraryTest, GamepadBrowsesAndConfirmsEveryBrowserAfterTouchInput)
+{
+	auto& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+	io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+	io.MouseSource = ImGuiMouseSource_TouchScreen;
+	for (bool analog : {false, true})
+	for (const char* mode : {"list", "grid", "rack", "rail", "orbit", "paged"})
+	{
+		SCOPED_TRACE(mode);
+		SCOPED_TRACE(analog);
+		layout = {};
+		layout.id = std::string("controller-after-touch-") + mode + (analog ? "-stick" : "-dpad");
+		layout.mode = std::string(mode) == "paged" ? "grid" : mode;
+		layout.pagedGrid.rows = std::string(mode) == "paged" ? 2 : 0;
+		layout.browser = {0, 0, 1, 1};
+		layout.columns = 2;
+		layout.activation = "doubleClick";
+		items.clear();
+		for (int i = 0; i < 8; ++i) items.push_back({std::to_string(i), "Game", {}, {}});
+		const ImVec2 away(-1, -1);
+		renderFrame(away, false);
+		renderFrame(away, false);
+		ASSERT_NE(itemIds[0], 0u);
+		ImGui::SetFocusID(itemIds[0], browserWindow);
+		renderFrame(away, false);
+		const bool vertical = layout.mode == "list" || layout.mode == "rail";
+		const ImGuiKey direction = analog ? (vertical ? ImGuiKey_GamepadLStickDown : ImGuiKey_GamepadLStickRight)
+				: (vertical ? ImGuiKey_GamepadDpadDown : ImGuiKey_GamepadDpadRight);
+		io.AddKeyEvent(direction, true);
+		renderFrame(away, false);
+		io.AddKeyEvent(direction, false);
+		renderFrame(away, false);
+		renderFrame(away, false);
+		io.AddKeyEvent(ImGuiKey_GamepadFaceDown, true);
+		EXPECT_EQ(renderFrame(away, false), 1);
+		io.AddKeyEvent(ImGuiKey_GamepadFaceDown, false);
+		renderFrame(away, false);
+	}
+}
+
+TEST_F(ThemeLibraryTest, GamepadConfirmsTheExplicitPlayButtonInEveryBundledLayout)
+{
+	auto& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+	io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+	windowSize = ImVec2(1400, 800);
+	io.DisplaySize = windowSize;
+	const auto root = std::filesystem::path(FLYCAST_TEST_FILES) / "../../themes";
+	for (const auto& directory : std::filesystem::directory_iterator(root))
+	{
+		if (!directory.is_directory()) continue;
+		const themes::Theme theme = themes::load(directory.path().string());
+		for (const auto& authored : theme.layouts)
+		{
+			SCOPED_TRACE(theme.id + "/" + authored.id);
+			layout = authored;
+			layout.id = theme.id + "-controller-controls-" + authored.id;
+			layout.attract.idleSeconds = 0;
+			layout.launchSeconds = 0;
+			layout.elements.erase(std::remove_if(layout.elements.begin(), layout.elements.end(), [](const themes::Element& e) {
+				return e.type == "artwork" || e.type == "image";
+			}), layout.elements.end());
+			// Isolate the required launch control from optional artwork/favourite controls.
+			for (auto& element : layout.elements) element.buttonImage.clear();
+			const ImVec2 away(-1, -1);
+			renderFrame(away, false);
+			renderFrame(away, false);
+			ASSERT_NE(itemIds[0], 0u);
+			ImGui::SetFocusID(itemIds[0], browserWindow);
+			renderFrame(away, false);
+			// Confirm the real focused control, rather than bypassing it through
+			// a test-only launch call.
+			ImGuiID playId = 0;
+			ImGuiWindow* playWindow = nullptr;
+			for (size_t i = 0; i < layout.elements.size(); ++i)
+				if (layout.elements[i].type == "button" && layout.elements[i].action == "activate")
+				{
+					const ImGuiID scope = ImHashStr(("theme-action-" + std::to_string(i)).c_str(), 0, browserWindow->ParentWindow->ID);
+					const ImGuiID childId = ImHashStr("##action", 0, scope);
+					for (auto* child : browserWindow->ParentWindow->DC.ChildWindows)
+						if (child->ChildId == childId) { playWindow = child; playId = child->GetID("###control"); }
+				}
+			ASSERT_NE(playWindow, nullptr);
+			ImGui::SetFocusID(playId, playWindow);
+			ImGui::SetNavCursorVisible(true);
+			renderFrame(away, false);
+			io.AddKeyEvent(ImGuiKey_GamepadFaceDown, true);
+			EXPECT_EQ(renderFrame(away, false), 0);
+			io.AddKeyEvent(ImGuiKey_GamepadFaceDown, false);
+			renderFrame(away, false);
+			io.AddKeyEvent(ImGuiKey_GamepadFaceRight, true);
+			EXPECT_EQ(renderFrame(away, false), -1);
+			io.AddKeyEvent(ImGuiKey_GamepadFaceRight, false);
+			renderFrame(away, false);
+		}
+	}
+}
+
+TEST_F(ThemeLibraryTest, ControllerCanScrollDetailsAndCancelBackToTheBrowser)
+{
+	auto& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+	io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+	layout.id = "controller-details-scroll";
+	layout.browser = {0, 0, 0.45f, 1};
+	layout.elements = {{"details", {0.5f, 0, 0.5f, 0.8f}}};
+	layout.elements[0].fields = {"description"};
+	items[0].metadata["description"] = std::string(10000, 'A');
+	const ImVec2 away(-1, -1);
+	renderFrame(away, false);
+	renderFrame(away, false);
+	ImGuiWindow* pane = nullptr;
+	for (ImGuiWindow* window : GImGui->Windows)
+		if (window->Active && std::string(window->Name).find("##details_") != std::string::npos) pane = window;
+	ASSERT_NE(pane, nullptr);
+	ImGui::FocusWindow(pane);
+	GImGui->NavId = 0;
+	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, true);
+	for (int i = 0; i < 10; ++i) renderFrame(away, false);
+	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, false);
+	renderFrame(away, false);
+	EXPECT_GT(pane->Scroll.y, 0.f);
+	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, true);
+	EXPECT_EQ(renderFrame(away, false), -1);
+	EXPECT_NE(GImGui->NavWindow, pane);
+	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, false);
+	renderFrame(away, false);
+}
+
+TEST_F(ThemeLibraryTest, PocketAndDemoFitCompleteGameInformationWithoutScrollbarsInBothOrientations)
+{
+	items[0].metadata = {{"system", "Dreamcast"}, {"developer", "Sonic Team"}, {"publisher", "Sega"},
+		{"genre", "Action / Adventure"}, {"players", "1-4"}, {"releaseDate", "2000-12-15"},
+		{"region", "USA / Europe"}, {"format", "CHD"}, {"productId", "MK-51000"},
+		{"playTime", "12h 34m"}, {"lastPlayed", "2026-10-31"}, {"size", "495 MB"}};
+	for (int i = 0; i < 7; ++i)
+		items[0].metadata["description"] += "Explore a detailed world, meet its characters, and discover a new adventure. Play alone or bring friends along for the journey. ";
+	for (const char* themeId : {"pocket-dimension", "demo-disc"})
+	{
+		const auto theme = themes::load(std::string(FLYCAST_TEST_FILES) + "/../../themes/" + themeId);
+		for (const auto& authored : theme.layouts)
+		{
+			SCOPED_TRACE(authored.id);
+			layout = authored;
+			layout.id += "-complete-info";
+			layout.attract.idleSeconds = 0;
+			windowSize = ImVec2(authored.id.find("portrait") == std::string::npos ? 1400.f : 800.f,
+					authored.id.find("portrait") == std::string::npos ? 800.f : 1400.f);
+			ImGui::GetIO().DisplaySize = windowSize;
+			layout.elements.erase(std::remove_if(layout.elements.begin(), layout.elements.end(), [](const themes::Element& e) {
+				return e.type == "artwork" || e.type == "image";
+			}), layout.elements.end());
+			for (auto& element : layout.elements) element.buttonImage.clear();
+			for (const auto& element : layout.elements)
+				if (element.type == "details")
+				{
+					EXPECT_TRUE(element.autoFit);
+					EXPECT_NE(std::find(element.fields.begin(), element.fields.end(), "description"), element.fields.end());
+				}
+			renderFrame(ImVec2(-1, -1), false);
+			renderFrame(ImVec2(-1, -1), false);
+			ImGuiWindow* pane = nullptr;
+			for (auto* window : GImGui->Windows)
+				if (window->Active && std::string(window->Name).find("##details_") != std::string::npos) pane = window;
+			ASSERT_NE(pane, nullptr);
+			EXPECT_TRUE(pane->Flags & ImGuiWindowFlags_NoScrollbar);
+			EXPECT_FLOAT_EQ(pane->ScrollMax.y, 0.f);
+			EXPECT_LE(pane->ContentSize.y, pane->InnerRect.GetHeight());
+			EXPECT_GE(pane->StateStorage.GetFloat(pane->GetID("fittedFontSize")), 9.f);
+		}
+	}
+}
+
+TEST_F(ThemeLibraryTest, DiscOrbitSynopsisScrollsByFingerAndResetsForAnotherGame)
+{
+	const auto theme = themes::load(std::string(FLYCAST_TEST_FILES) + "/../../themes/disc-orbit");
+	layout = theme.layouts[0];
+	layout.id += "-synopsis";
+	layout.elements.erase(std::remove_if(layout.elements.begin(), layout.elements.end(), [](const themes::Element& e) {
+		return e.type == "artwork" || e.type == "image";
+	}), layout.elements.end());
+	ImGui::GetIO().MouseSource = ImGuiMouseSource_TouchScreen;
+	windowSize = ImVec2(1400, 800);
+	ImGui::GetIO().DisplaySize = windowSize;
+	items[0].metadata["description"] = std::string(10000, 'A');
+	renderFrame(ImVec2(-1, -1), false);
+	renderFrame(ImVec2(-1, -1), false);
+	ImGuiWindow* pane = nullptr;
+	for (auto* window : GImGui->Windows)
+		if (window->Active && std::string(window->Name).find("##details_") != std::string::npos) pane = window;
+	ASSERT_NE(pane, nullptr);
+	ASSERT_GT(pane->ScrollMax.y, 0.f);
+	const ImVec2 point = pane->InnerRect.GetCenter();
+	renderFrame(point, false);
+	renderFrame(point, true);
+	renderFrame(point - ImVec2(0, 25), true);
+	renderFrame(point - ImVec2(0, 50), true);
+	renderFrame(point - ImVec2(0, 50), false);
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_GT(pane->Scroll.y, 0.f);
+	auto& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+	io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+	ImGui::FocusWindow(pane);
+	GImGui->NavId = 0;
+	ImGui::SetNavCursorVisible(true);
+	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, true);
+	EXPECT_EQ(renderFrame(ImVec2(-1, -1), false), -1);
+	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, false);
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec2 play = canvasOrigin + ImVec2(canvasSize.x * 0.5f, canvasSize.y * 0.96f);
+	renderFrame(play, false);
+	renderFrame(play, true);
+	EXPECT_EQ(renderFrame(play, false), 0);
+	items.erase(items.begin());
+	renderFrame(ImVec2(-1, -1), false);
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_FLOAT_EQ(pane->Scroll.y, 0.f);
+}
+
+TEST_F(ThemeLibraryTest, EmptyFolderPromptIsCenteredInsideEveryBundledGameBrowserWithoutAPanel)
+{
+	items.clear();
+	ImGui::GetStyle().Colors[ImGuiCol_Text] = ImVec4(0.12f, 0.23f, 0.34f, 1.f);
+	const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+	int themesChecked = 0;
+	for (const auto& directory : std::filesystem::directory_iterator(std::string(FLYCAST_TEST_FILES) + "/../../themes"))
+	{
+		if (!std::filesystem::is_regular_file(directory.path() / "theme.json")) continue;
+		const auto theme = themes::load(directory.path().u8string());
+		++themesChecked;
+		for (const auto& authored : theme.layouts)
+		{
+			SCOPED_TRACE(theme.id + "/" + authored.id);
+			layout = authored;
+			layout.id += "-empty-folder";
+			layout.attract.idleSeconds = 0;
+			windowSize = authored.id.find("portrait") == std::string::npos ? ImVec2(1400, 800) : ImVec2(800, 1400);
+			ImGui::GetIO().DisplaySize = windowSize;
+			layout.elements.erase(std::remove_if(layout.elements.begin(), layout.elements.end(), [](const themes::Element& element) {
+				return element.type == "image" || element.type == "artwork";
+			}), layout.elements.end());
+			for (auto& element : layout.elements) element.buttonImage.clear();
+			ImGuiID folderButton = 0;
+			bool requestedFolder = false;
+			const auto emptyBrowser = [&] {
+				const auto* browser = ImGui::GetCurrentWindow();
+				EXPECT_NE(std::string(browser->Name).find("##themeLibraryBrowser"), std::string::npos);
+				EXPECT_TRUE(browser->Flags & ImGuiWindowFlags_NoBackground);
+				EXPECT_EQ(ImGui::GetColorU32(ImGuiCol_Text), textColor);
+				const ImVec2 available = ImGui::GetContentRegionAvail();
+				const ImVec2 center = ImGui::GetCursorScreenPos() + available * 0.5f;
+				requestedFolder = drawEmptyLibraryPrompt();
+				EXPECT_NEAR((ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x) * 0.5f, center.x, 2.f);
+				EXPECT_NEAR((ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f, center.y, 2.f);
+				EXPECT_LE(ImGui::GetItemRectSize().x, available.x + 2.f);
+				EXPECT_LE(ImGui::GetItemRectSize().y, available.y + 2.f);
+				EXPECT_TRUE(browser->DC.ChildWindows.empty());
+				folderButton = ImHashStr(i18n::T("Add Game Folder"), 0, ImGui::GetID("empty"));
+			};
+			renderFrame(ImVec2(-1, -1), false, emptyBrowser);
+			renderFrame(ImVec2(-1, -1), false, emptyBrowser);
+			ASSERT_NE(folderButton, 0u);
+			ImGui::ActivateItemByID(folderButton);
+			EXPECT_EQ(renderFrame(ImVec2(-1, -1), false, emptyBrowser), -1);
+			EXPECT_TRUE(requestedFolder);
+		}
+	}
+	EXPECT_EQ(themesChecked, 8);
 }

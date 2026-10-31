@@ -596,6 +596,7 @@ TEST_F(ThemeFilesTest, RuntimeReloadResetsStyleBeforeScalingAndPreservesCustomIn
 		std::string configPath = get_writable_config_path("");
 		int theme = config::UITheme.get();
 		std::string custom = config::UICustomTheme.get();
+		std::string libraryTheme = config::CustomTheme.get();
 		float scale = settings.display.uiScale;
 		ImGuiContext* context = ImGui::GetCurrentContext();
 		~Restore() {
@@ -605,6 +606,7 @@ TEST_F(ThemeFilesTest, RuntimeReloadResetsStyleBeforeScalingAndPreservesCustomIn
 			config::open();
 			config::UITheme = theme;
 			config::UICustomTheme = custom;
+			config::CustomTheme = libraryTheme;
 			settings.display.uiScale = scale;
 		}
 	} restore;
@@ -614,6 +616,8 @@ TEST_F(ThemeFilesTest, RuntimeReloadResetsStyleBeforeScalingAndPreservesCustomIn
 	settings.display.uiScale = 2.f;
 	config::UITheme = 0;
 	config::UICustomTheme = "";
+	// App preset inheritance is independent of the default library's palette.
+	config::CustomTheme = "";
 	write("themes/builtin/Dark.json", R"({"colors":{"success":"#35C875"}})");
 	write("themes/builtin/Light.json", R"({"style":{"FrameRounding":9}})");
 	write("themes/.builtin-migration-pending", "malformed migration journal");

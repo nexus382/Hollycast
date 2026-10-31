@@ -109,7 +109,9 @@ json TheGamesDb::httpGet(const std::string& url)
         throw std::runtime_error("TheGamesDB request failed (" + std::to_string(status) + "). Retrying after one minute.");
     }
     json response;
-    try { response = json::parse(bytes); }
+    // Current libc++ only provides char_traits for text character types.
+    const char* jsonText = reinterpret_cast<const char*>(bytes.data());
+    try { response = json::parse(jsonText, jsonText + bytes.size()); }
     catch (...) {
         blackoutPeriod = getTimeMs() + 60000;
         throw std::runtime_error("TheGamesDB returned an invalid response.");

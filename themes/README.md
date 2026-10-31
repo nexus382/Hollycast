@@ -1,7 +1,7 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 # Hollycast theme collection
 
-These packages provide Hollycast game-list layouts. To install one, use **Settings > Library > Library Themes > Install Library Theme Folder**. Keep its source notice alongside `theme.json`. See the [theme author guide](../docs/Themes.md) for the format.
+These game-list layouts are included with every standalone Hollycast download. Choose one in **Settings > Library > Library Themes**. Touch a game to inspect it, swipe to browse, and use its **Play** button to launch. Keep its source notice alongside `theme.json`. See the [theme author guide](../docs/Themes.md) for the format.
 
 | Package | Media and layout |
 | --- | --- |

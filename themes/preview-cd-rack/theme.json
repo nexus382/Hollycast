@@ -11,8 +11,9 @@
   },
   "layouts": [{
     "id": "disc-shelves", "name": "CD shelves", "mode": "rack",
+    "activation": "doubleClick",
     "requiredMedia": ["boxtexture", "backcover"],
-    "browser": [0.025,0.12,0.55,0.855],
+    "browser": [0.025,0.12,0.55,0.77],
     "columns": 64, "itemAspect": 0.045, "spacing": 3, "fontSize": 0.024,
     "showTitles": false, "artworkSource": "spine",
     "selectorColor": "E3BD7D30", "selectorBorderColor": "F3CE91", "separatorColor": "A58A64",
@@ -44,7 +45,8 @@
       {"type":"text","text":"PUBLISHER","rect":[0.819,0.732,0.156,0.019],"fontSize":0.016,"color":"AEB9CA","wrap":false},
       {"type":"metadata","source":"publisher","rect":[0.819,0.761,0.156,0.029],"fontSize":0.023,"color":"F5EEE3","wrap":false},
       {"type":"panel","rect":[0.628,0.81,0.347,0.001],"color":"C2A57740"},
-      {"type":"metadata","source":"description","rect":[0.628,0.835,0.347,0.14],"fontSize":0.023,"color":"C9CFD8"}
+      {"type":"metadata","source":"description","rect":[0.628,0.835,0.347,0.14],"fontSize":0.023,"color":"C9CFD8"},
+      {"type":"button","action":"activate","text":"Play","rect":[0.2,0.91,0.2,0.065],"fontSize":0.03,"color":"FFF7EA","background":"75624B","rounding":0.2}
     ]
   }]
 }
