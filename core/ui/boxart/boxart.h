@@ -72,6 +72,9 @@ public:
 	int activeMediaProvider() const { return activeProvider.load(); }
 	bool customMediaReady();
 	bool customMediaFailed();
+	// Compare the complete token to invalidate prepared library data, including
+	// publication of a local-artwork index by its background worker.
+	std::array<u64, 3> libraryRevision();
 	struct MediaProgress {
 		size_t total = 0, ready = 0, pending = 0, unavailable = 0;
 		u32 pendingMedia = 0;

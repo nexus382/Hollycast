@@ -717,6 +717,14 @@ bool Boxart::customMediaFailed()
 	return customIndexState == CustomIndexState::Failed;
 }
 
+std::array<u64, 3> Boxart::libraryRevision()
+{
+	loadDatabase();
+	refreshCustomBoxartIndex(false);
+	std::lock_guard<std::mutex> guard(mutex);
+	return {databaseGeneration, customIndexGeneration, static_cast<u64>(customIndexState)};
+}
+
 Boxart::MediaProgress Boxart::mediaProgress(const GameMedia& media, u32 requestedMedia)
 {
 	MediaProgress progress;

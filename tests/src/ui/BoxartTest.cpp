@@ -2,6 +2,7 @@
 #include "gtest/gtest.h"
 #include "ui/boxart/boxart.h"
 #include "ui/boxart/launchbox.h"
+#include "ui/boxart/vmu_icon.h"
 #include "ui/game_scanner.h"
 #include "reios/reios.h"
 #include "imgread/isofs.h"
@@ -298,6 +299,64 @@ protected:
 	int oldProvider;
 	std::string oldBoxartPath;
 };
+
+TEST_F(BoxartTest, HistoryReadsDoNotCreateArtworkDirectories)
+{
+	for (int i = 0; i < 100; ++i)
+		EXPECT_EQ(0, getLibraryGameLastBooted(media, "TEST-0001"));
+	EXPECT_FALSE(std::filesystem::exists(directory / "boxart"));
+	markLibraryGameBooted("TEST-0001", media.path);
+	EXPECT_GT(getLibraryGameLastBooted(media, "TEST-0001"), 0);
+	EXPECT_TRUE(std::filesystem::exists(directory / "boxart" / "vmu-icons" / "library" / "cache.json"));
+}
+
+TEST_F(BoxartTest, HistoryLookupFollowsDataFolderChanges)
+{
+	markLibraryGameBooted("TEST-0001", media.path);
+	const time_t booted = getLibraryGameLastBooted(media, "TEST-0001");
+	ASSERT_GT(booted, 0);
+	set_user_data_dir((directory / "other").string());
+	EXPECT_EQ(0, getLibraryGameLastBooted(media, "TEST-0001"));
+	EXPECT_FALSE(std::filesystem::exists(directory / "other"));
+	set_user_data_dir(directory.string());
+	EXPECT_EQ(booted, getLibraryGameLastBooted(media, "TEST-0001"));
+}
+
+TEST_F(BoxartTest, LibraryRevisionTracksCompletedArtworkAndStaysStableForReads)
+{
+	const auto before = boxart->libraryRevision();
+	finishOfflineFetch();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!boxart->customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart->customMediaReady());
+	const auto completed = boxart->libraryRevision();
+	EXPECT_NE(before, completed);
+	for (int i = 0; i < 10; ++i)
+	{
+		boxart->getBoxart(media);
+		EXPECT_EQ(completed, boxart->libraryRevision());
+	}
+}
+
+TEST_F(BoxartTest, LibraryRevisionTracksLocalArtworkIndexReplacement)
+{
+	const auto before = boxart->libraryRevision();
+	const auto covers = directory / "custom" / "covers";
+	std::filesystem::create_directories(covers);
+	const auto cover = covers / "game.png";
+	std::ofstream(cover) << "indexed image";
+	config::BoxartPath = (directory / "custom").string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!boxart->customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart->customMediaReady());
+	const auto completed = boxart->libraryRevision();
+	EXPECT_NE(before, completed);
+	EXPECT_TRUE(std::filesystem::equivalent(cover,
+			boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover)));
+	EXPECT_EQ(completed, boxart->libraryRevision());
+}
 
 TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
 {
