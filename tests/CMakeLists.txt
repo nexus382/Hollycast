@@ -44,6 +44,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/SDLControllerMappingTest.cpp
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
+        src/oslib/DirectoryTest.cpp
         src/rend/SampleTextureFilterTest.cpp
         src/ui/BoxartTest.cpp
         src/ui/ScreenScraperTest.cpp
@@ -70,6 +71,8 @@ if(NOT LIBRETRO)
         src/ui/SettingsPopupTest.cpp
         src/ui/CustomThemeTest.cpp
         src/ui/LibrarySavestateTest.cpp
+        src/ui/LibraryImageTest.cpp
+        src/ui/GameScannerTest.cpp
         src/ui/ThemeTest.cpp
         src/ui/ThemeLibraryTest.cpp
         src/ui/ThemeArtworkTest.cpp

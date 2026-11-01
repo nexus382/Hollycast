@@ -296,12 +296,6 @@ GameMedia makeGameMedia(const std::string& name, const std::string& path, const 
 
 } // namespace
 
-void GameScanner::insert_game(const GameMedia& game)
-{
-	LockGuard _(mutex);
-	game_list.insert(std::upper_bound(game_list.begin(), game_list.end(), game), game);
-}
-
 static size_t getFileSize(const hostfs::FileInfo& item)
 {
 	if (item.size != 0)
@@ -314,7 +308,7 @@ static size_t getFileSize(const hostfs::FileInfo& item)
 }
 
 void GameScanner::add_game_directory(const std::string& path, const GameListMetadataMap& metadata,
-		const std::unordered_map<std::string, std::string>& manualIndex, const std::string& gamelistPath)
+		const std::unordered_map<std::string, std::string>& manualIndex, const std::string& gamelistPath, bool hideLegacy, std::vector<GameMedia>& result)
 {
 	hostfs::DirectoryTree tree(path);
 	std::string emptyParentPath;
@@ -323,7 +317,7 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 		if (!running)
 			break;
 
-		if (game_list.empty())
+		if (result.empty())
 		{
 			// This won't work for android content uris
 			size_t slash = get_last_slash_pos(item.path);
@@ -362,17 +356,17 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 			GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
 			game.system = arcadeSystemName(*it->second);
 			populateMetadata(game, metadata, manualIndex, gamelistPath);
-			insert_game(game);
+			result.push_back(std::move(game));
 			continue;
 		}
 		else if (extension == "bin" || extension == "lst" || extension == "dat")
 		{
-			if (!config::HideLegacyNaomiRoms)
+			if (!hideLegacy)
 			{
 				GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
 				game.system = "Naomi"; // Legacy ROM files always load as Naomi.
 				populateMetadata(game, metadata, manualIndex, gamelistPath);
-				insert_game(game);
+				result.push_back(std::move(game));
 			}
 			continue;
 		}
@@ -388,7 +382,7 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 			continue;
 		GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, false, false, getFileSize(item));
 		populateMetadata(game, metadata, manualIndex, gamelistPath);
-		insert_game(game);
+		result.push_back(std::move(game));
 	}
 }
 
@@ -410,7 +404,13 @@ void GameScanner::fetch_game_list()
 	if (scan_thread && scan_thread->joinable())
 		scan_thread->join();
 	running = true;
-	scan_thread = std::make_unique<std::thread>([this]()
+	// A scan owns its configuration and working list. Publish one sorted snapshot
+	// so large libraries do not shift thousands of rich records for every file,
+	// block the UI on insertion, or expose a half-rebuilt list during refresh.
+	scan_thread = std::make_unique<std::thread>([this, paths = config::ContentPath.get(),
+			gamelistPath = config::GameListPath.get(), artworkPath = config::BoxartPath.get(),
+			hideLegacy = config::HideLegacyNaomiRoms.get(),
+			hideDrives = config::loadBool("config", "HideCdromDrives", false)]()
 		{
 			ThreadName _("GameScanner");
 			if (arcade_games.empty())
@@ -421,26 +421,23 @@ void GameScanner::fetch_game_list()
 					if (game->gdrom_name != nullptr)
 						arcade_gdroms.insert(game->gdrom_name);
 				}
-			const GameListMetadataMap metadata = parseGamelistMetadata(config::GameListPath.get());
-			const std::unordered_map<std::string, std::string> manualIndex = buildManualPathIndex(config::BoxartPath.get());
-			{
-				LockGuard _(mutex);
-				game_list.clear();
-			}
-			for (const auto& path : config::ContentPath.get())
+			const GameListMetadataMap metadata = parseGamelistMetadata(gamelistPath);
+			const std::unordered_map<std::string, std::string> manualIndex = buildManualPathIndex(artworkPath);
+			std::vector<GameMedia> result;
+			for (const auto& path : paths)
 			{
 				try {
-					add_game_directory(path, metadata, manualIndex, config::GameListPath.get());
+					add_game_directory(path, metadata, manualIndex, gamelistPath, hideLegacy, result);
 				} catch (const hostfs::StorageException& e) {
 					// ignore
 				}
 				if (!running)
 					break;
 			}
+			std::stable_sort(result.begin(), result.end());
 			std::string dcbios = hostfs::findFlash("dc_", "%bios.bin;%boot.bin");
 			{
-				LockGuard _(mutex);
-				if (!config::loadBool("config", "HideCdromDrives", false))
+				if (!hideDrives)
 				{
 					// CD-ROM devices
 					for (const auto& drive : hostfs::getCdromDrives())
@@ -450,17 +447,19 @@ void GameScanner::fetch_game_list()
 							name = drive.substr(4);
 						else
 							name = drive;
-						game_list.insert(game_list.begin(), makeGameMedia(name, drive, name, "", false, true, 0));
+						result.insert(result.begin(), makeGameMedia(name, drive, name, "", false, true, 0));
 					}
 				}
 				// Dreamcast BIOS
 				if (!dcbios.empty())
-					game_list.insert(game_list.begin(), { i18n::T("Dreamcast BIOS") });
+					result.insert(result.begin(), { i18n::T("Dreamcast BIOS") });
 			}
 			if (running)
 			{
-				scan_done = true;
+				LockGuard _(mutex);
+				game_list.swap(result);
 				++generation;
+				scan_done = true;
 			}
 			running = false;
 		});
