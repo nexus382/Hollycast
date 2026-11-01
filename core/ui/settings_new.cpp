@@ -6143,6 +6143,12 @@ static ShaderPreviewState g_shaderPreview;
 static std::atomic_bool g_shaderLiveTune { false };
 static std::function<void()> g_shaderAction;
 
+static bool shaderRendererSupported()
+{
+	return isOpenGL(config::RendererType) || isVulkan(config::RendererType)
+			|| config::RendererType == RenderType::DirectX11 || config::RendererType == RenderType::DirectX11_OIT;
+}
+
 static void queueShaderAction(std::function<void()> action)
 {
 	if (g_shaderAction) return;
@@ -6168,7 +6174,8 @@ void processShaderLoading()
 		// A live checkbox change is one loading operation through CPU preparation,
 		// GPU compilation, and the first rendered preview. Do not reopen the popup
 		// between stages or dismiss it as soon as the files have been parsed.
-		if (!g_shaderLiveTune || postprocess::shaderChainReloadGeneration() == previousReload)
+		if (!g_shaderLiveTune || !shaderRendererSupported()
+				|| postprocess::shaderChainReloadGeneration() == previousReload)
 			postprocess::finishShaderCompilation();
 	}
 	else if (gui_is_open()) {
@@ -6555,6 +6562,10 @@ static void resetShaderParameters()
 
 static void renderShaderActivationStatus(bool compact = false)
 {
+	if (!shaderRendererSupported()) {
+		ImGui::TextWrapped("%s", T("Display shaders require OpenGL, Vulkan, or DirectX 11. Select a supported graphics API in Video settings."));
+		return;
+	}
 	if (g_shaderPreview.paths.empty()) {
 		ImGui::TextDisabled("%s", T("No display shader selected."));
 		return;
@@ -6874,7 +6885,8 @@ void renderShaderTab()
 	ensureShaderPreview();
 	if (g_shaderAction) return;
 	if (!shaderLiveTuneActive()) {
-		const bool canLiveTune = game_started && !ggpo::active() && (!emu.running() || achievements::canPause());
+		const bool canLiveTune = shaderRendererSupported() && game_started && !ggpo::active()
+				&& (!emu.running() || achievements::canPause());
 		if (!canLiveTune)
 			ImGui::BeginDisabled();
 		if (ImGui::Button(T("Preview and Adjust"))) {
@@ -6887,7 +6899,8 @@ void renderShaderTab()
 		if (!canLiveTune)
 			ImGui::EndDisabled();
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("%s", !game_started ? T("Start a game to preview shader changes.")
+			ImGui::SetTooltip("%s", !shaderRendererSupported() ? T("Select OpenGL, Vulkan, or DirectX 11 in Video settings to preview shaders.")
+					: !game_started ? T("Start a game to preview shader changes.")
 					: T("See shader changes beside the running game. Gameplay must be pausable."));
 		ImGui::Separator();
 	}
@@ -7122,8 +7135,9 @@ void renderShaderLiveTuneOverlay()
 {
 	if (!g_shaderLiveTune)
 		return;
-	if (!game_started || ggpo::active()) {
+	if (!game_started || ggpo::active() || !shaderRendererSupported()) {
 		closeShaderLiveTune();
+		postprocess::finishShaderCompilation();
 		return;
 	}
 	ensureShaderPreview();

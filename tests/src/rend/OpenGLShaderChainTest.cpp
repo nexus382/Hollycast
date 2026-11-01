@@ -81,31 +81,95 @@ protected:
 		return path.string();
 	}
 
-	void expectPixels(const std::vector<std::string>& paths, const std::array<int, 4>& expected) {
+	void expectPixels(const std::vector<std::string>& paths, const std::array<int, 4>& expected,
+			const postprocess::ShaderFrameInfo& frame = { 8, 8, 8, 8 }, bool expectComposed = false) {
 		postprocess::ShaderChain chain;
 		std::string error;
 		ASSERT_TRUE(postprocess::loadShaderChain(paths, chain, error)) << error;
 		GlShaderChain renderer;
-		const postprocess::ShaderFrameInfo frame { 8, 8, 8, 8 };
 		bool transformed = false;
 		// Synchronize the empty configuration before activating this test's graph.
 		renderer.render(0, frame, transformed);
 		ASSERT_TRUE(renderer.activate(chain, error)) << error;
-		GlFramebuffer input(8, 8, false, true);
+		GlFramebuffer input(frame.sourceWidth, frame.sourceHeight, false, true);
 		input.bind();
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		glcache.ClearColor(0.f, 0.f, 1.f, 1.f);
 		glClear(GL_COLOR_BUFFER_BIT);
+		const GLboolean srgbEnabled = glIsEnabled(GL_FRAMEBUFFER_SRGB);
 		GlFramebuffer *output = renderer.render(input.getTexture(), frame, transformed);
 		ASSERT_NE(nullptr, output) << postprocess::getShaderChainStatus().error;
+		EXPECT_EQ(expectComposed, transformed);
+		EXPECT_EQ(srgbEnabled, glIsEnabled(GL_FRAMEBUFFER_SRGB));
+		EXPECT_EQ(frame.viewportWidth, output->getWidth());
+		EXPECT_EQ(frame.viewportHeight, output->getHeight());
 		output->bind();
 		std::array<unsigned char, 4> pixel {};
-		glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+		glReadPixels(output->getWidth() / 2, output->getHeight() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
 		for (unsigned channel = 0; channel < pixel.size(); ++channel)
 			EXPECT_NEAR(expected[channel], pixel[channel], 1) << "channel " << channel;
 		EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
 	}
 };
+
+TEST_F(OpenGLShaderChainTest, CopiesGameInputBeforeGeneratingMipmaps)
+{
+	writeShader("mipmap.glsl", "void main() { FragColor = textureLod(Source, vTexCoord, 1.0); }\n");
+	const auto preset = writeShader("mipmap.glslp", "shaders = 1\nshader0 = mipmap.glsl\nmipmap_input0 = true\n");
+	expectPixels({ preset }, { 0, 0, 255, 255 });
+}
+
+TEST_F(OpenGLShaderChainTest, PreservesLinearColorThroughSrgbIntermediate)
+{
+	writeShader("color.glsl", "void main() { FragColor = vec4(0.25, 0.5, 0.75, 1.0); }\n");
+	writeShader("copy.glsl", "void main() { FragColor = texture(Source, vTexCoord); }\n");
+	const auto preset = writeShader("srgb.glslp",
+			"shaders = 2\nshader0 = color.glsl\nsrgb_framebuffer0 = true\nshader1 = copy.glsl\n");
+	// The pass must encode its sRGB attachment and restore either caller state.
+	glDisable(GL_FRAMEBUFFER_SRGB);
+	expectPixels({ preset }, { 64, 128, 191, 255 });
+	glEnable(GL_FRAMEBUFFER_SRGB);
+	expectPixels({ preset }, { 64, 128, 191, 255 });
+}
+
+TEST_F(OpenGLShaderChainTest, PresentsComposedInputForAuxiliaryOnlyEffect)
+{
+	const auto effect = writeShader("auxiliary.fx",
+			"texture2D Auxiliary { Width = 4; Height = 4; Format = RGBA8; };\n"
+			"float4 Pixel() : SV_Target { return float4(1.0, 0.0, 0.0, 1.0); }\n"
+			"technique AuxiliaryOnly { pass { PixelShader = Pixel; RenderTarget = Auxiliary; } }\n");
+	postprocess::ShaderFrameInfo frame { 8, 8, 16, 8 };
+	frame.rotationPending = true;
+	expectPixels({ effect }, { 0, 0, 255, 255 }, frame, true);
+	const auto green = writeShader("green.glsl", "void main() { FragColor = vec4(0.0, 1.0, 0.0, 1.0); }\n");
+	expectPixels({ green, effect }, { 0, 255, 0, 255 }, frame, true);
+}
+
+TEST_F(OpenGLShaderChainTest, AppliesVolumeSamplerWrapToDepthAxis)
+{
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+	SDL_GLContext computeContext = SDL_GL_CreateContext(window);
+	if (computeContext == nullptr)
+		GTEST_SKIP() << "OpenGL 4.3 is required for the volume compute pass: " << SDL_GetError();
+	SDL_GL_DeleteContext(context);
+	context = computeContext;
+	ASSERT_NE(0, gladLoadGL(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress)));
+	gl.gl_major = 4; gl.gl_minor = 3;
+	// Use an effect output so this exercises sampler objects, not the lookup
+	// texture's own wrap settings. The two depth slices contain different colors.
+	const auto effect = writeShader("volume.fx",
+			"texture3D Volume { Width = 1; Height = 1; Depth = 2; Format = RGBA8; };\n"
+			"storage3D WriteVolume { Texture = Volume; };\n"
+			"sampler3D VolumeSampler { Texture = Volume; MinFilter = POINT; MagFilter = POINT; MipFilter = POINT;"
+			" AddressU = CLAMP; AddressV = CLAMP; AddressW = CLAMP; };\n"
+			"[numthreads(1,1,1)] void Fill(uint3 id : SV_DispatchThreadID)"
+			" { tex3Dstore(WriteVolume, int3(id), float4(0.0, 0.0, id.z, 1.0)); }\n"
+			"float4 Pixel() : SV_Target { return tex3D(VolumeSampler, float3(0.25, 0.25, 1.25)); }\n"
+			"technique VolumeEdge { pass Write { ComputeShader = Fill; DispatchSizeX = 1; DispatchSizeY = 1; DispatchSizeZ = 2; }"
+			" pass Present { PixelShader = Pixel; } }\n");
+	expectPixels({ effect }, { 0, 0, 255, 255 });
+}
 
 TEST_F(OpenGLShaderChainTest, RendersDefaultFxAndIsolatesPassMasks)
 {

@@ -474,10 +474,10 @@ void VulkanShaderChain::ensureResources()
 	// targets use the matching unrestricted sampler below.
 	mipLinearSampler = context->GetDevice().createSamplerUnique(vk::SamplerCreateInfo({}, vk::Filter::eLinear, vk::Filter::eLinear,
 			vk::SamplerMipmapMode::eLinear, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-			vk::SamplerAddressMode::eClampToEdge));
+			vk::SamplerAddressMode::eClampToEdge, 0.f, false, 1.f, false, vk::CompareOp::eNever, 0.f, vk::LodClampNone));
 	mipNearestSampler = context->GetDevice().createSamplerUnique(vk::SamplerCreateInfo({}, vk::Filter::eNearest, vk::Filter::eNearest,
 			vk::SamplerMipmapMode::eNearest, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-			vk::SamplerAddressMode::eClampToEdge));
+			vk::SamplerAddressMode::eClampToEdge, 0.f, false, 1.f, false, vk::CompareOp::eNever, 0.f, vk::LodClampNone));
 	quadBuffer = std::make_unique<QuadBuffer>();
 	copyFragmentShader = ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,
 			VulkanSource().addSource(fragmentPreamble({}, {}, 1)).addSource("void main() { gl_FragColor = texture(Source, vTexCoord); }").generate());

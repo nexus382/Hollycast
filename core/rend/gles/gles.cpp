@@ -59,7 +59,7 @@ CompressedTextureSubImage2DProc compressedTextureSubImage2DProc = nullptr;
 bool hasGlExtension(const char *wanted)
 {
 #if !defined(GLES2)
-	if (!gl.is_gles && gl.gl_major >= 3)
+	if (gl.gl_major >= 3)
 	{
 		GLint count = 0;
 		glGetIntegerv(GL_NUM_EXTENSIONS, &count);

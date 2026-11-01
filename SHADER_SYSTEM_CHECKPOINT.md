@@ -30,6 +30,8 @@ The game continues running while the preview is open, with gameplay input captur
 
 ## Boundaries
 
+Standalone shader chains and live preview run on OpenGL/GLES, Vulkan (including the macOS Vulkan-to-Metal path), and DirectX 11. Native Metal and DirectX 9 do not execute these chains; the Shader page reports that limitation and disables live preview until a supported graphics API is selected. Libretro builds use their host's shader system.
+
 Compatibility is determined by the shader's required resources, render state, and graphics API capabilities. This is not a promise that every third-party shader package works. Compute needs DirectX feature level 11, OpenGL 4.3 / GLES 3.1, or a Vulkan graphics queue with compute support. GLES cannot provide native 1D images. Resource binding arrays, overlapping writable FX views, and writable FX views above mip level zero are currently rejected. Writable images within one FX pass must share their base dimensions. Per-binding sampler states outside the supported filter/wrap profile are also rejected. The UI and backend report unsupported requirements rather than silently changing the effect. External textures and includes must be present within the shader library's allowed package paths.
 
 ## Regression coverage

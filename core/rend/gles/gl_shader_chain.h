@@ -157,6 +157,7 @@ private:
 	uint64_t parameterGeneration = 0;
 	std::vector<LookupTexture> lookupTextures;
 	std::unique_ptr<GlBuffer> vertexBuffer;
+	bool framebufferSrgbSupported = false;
 	GLuint depthCopyProgram = 0;
 	GLint depthCopySourceUniform = -1;
 	GLint depthCopyScaleUniform = -1;

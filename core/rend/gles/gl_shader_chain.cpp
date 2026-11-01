@@ -23,6 +23,36 @@
 
 namespace {
 
+class FramebufferSrgbState
+{
+public:
+	explicit FramebufferSrgbState(bool supported) : supported(supported)
+	{
+#if defined(GL_FRAMEBUFFER_SRGB) && !defined(GLES2)
+		if (supported)
+			previous = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+#endif
+	}
+	~FramebufferSrgbState() { set(previous); }
+	void set(bool enabled) const
+	{
+		if (!supported)
+			return;
+#if defined(GL_FRAMEBUFFER_SRGB) && !defined(GLES2)
+		// The renderer's legacy capability cache does not handle sRGB. GLES
+		// converts sRGB attachments automatically unless write control is exposed.
+		if (enabled) glEnable(GL_FRAMEBUFFER_SRGB);
+		else glDisable(GL_FRAMEBUFFER_SRGB);
+#else
+		(void)enabled;
+#endif
+	}
+
+private:
+	bool supported;
+	bool previous = false;
+};
+
 constexpr char FullscreenVertexShader[] = R"(
 in highp vec3 in_pos;
 in mediump vec2 in_uv;
@@ -507,14 +537,13 @@ bool GlShaderChain::ensureMrtTarget(MrtTarget& target, const postprocess::Shader
 			GLenum format, pixels, pixelType;
 			if (!glTargetFormat(outputPass, format, pixels, pixelType, error)) return false;
 			glGenTextures(1, &resource->texture); glBindTexture(resource->target, resource->texture);
-			const uint32_t texelBytes = postprocess::shaderFormatBytes(resource->formatName);
-			std::vector<uint8_t> zeros(static_cast<size_t>(width) * height * resource->depth * (texelBytes ? texelBytes : 4u));
+			// clearOutput initializes every slice below, without a second CPU-sized image.
 			glTexParameteri(resource->target, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(resource->target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 #ifndef GLES
-			if (resource->target == GL_TEXTURE_1D) glTexImage1D(resource->target, 0, format, width, 0, pixels, pixelType, zeros.data());
+			if (resource->target == GL_TEXTURE_1D) glTexImage1D(resource->target, 0, format, width, 0, pixels, pixelType, nullptr);
 			else
 #endif
-			glTexImage3D(resource->target, 0, format, width, height, pass.outputs[output].depth, 0, pixels, pixelType, zeros.data());
+			glTexImage3D(resource->target, 0, format, width, height, pass.outputs[output].depth, 0, pixels, pixelType, nullptr);
 #else
 			error = "This shader texture dimension requires GLES 3.0 or desktop GL."; return false;
 #endif
@@ -558,16 +587,7 @@ bool GlShaderChain::ensureMrtTarget(MrtTarget& target, const postprocess::Shader
 		target.outputs.clear();
 		return false;
 	}
-#ifndef GLES2
-	if (usesSrgbFramebuffer(pass))
-		glcache.Enable(GL_FRAMEBUFFER_SRGB);
-	else
-		glcache.Disable(GL_FRAMEBUFFER_SRGB);
-#endif
 	// Each attachment was initialized through its own typed view above.
-#ifndef GLES2
-	glcache.Disable(GL_FRAMEBUFFER_SRGB);
-#endif
 	return true;
 }
 
@@ -595,6 +615,10 @@ bool GlShaderChain::ensureResources()
 	if (vertexBuffer != nullptr)
 		return true;
 
+#if defined(GL_FRAMEBUFFER_SRGB) && !defined(GLES2)
+	framebufferSrgbSupported = gl.is_gles ? hasGlExtension("GL_EXT_sRGB_write_control")
+			: gl.gl_major >= 3 || hasGlExtension("GL_ARB_framebuffer_sRGB") || hasGlExtension("GL_EXT_framebuffer_sRGB");
+#endif
 	static constexpr float vertices[][5] = {
 		{ -1.f, -1.f, 1.f, 0.f, 0.f },
 		{ -1.f,  1.f, 1.f, 0.f, 1.f },
@@ -952,6 +976,7 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 						glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, binding.linearFilter ? GL_LINEAR : GL_NEAREST);
 						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, wrap);
 						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, wrap);
+						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_R, wrap);
 					}
 					glSamplerParameteri(binding.sampler, GL_TEXTURE_MIN_FILTER,
 							binding.linearFilter ? GL_LINEAR : GL_NEAREST);
@@ -1084,6 +1109,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	updateConfiguredChain();
 	if (programs.empty() || sourceTexture == 0 || !ensureResources())
 		return nullptr;
+	FramebufferSrgbState framebufferSrgb(framebufferSrgbSupported);
 	// Copies and clears need every channel, including when the game renderer
 	// left a restricted mask on its final draw. glColorMask resets all attachments.
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1223,7 +1249,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		glcache.Disable(GL_STENCIL_TEST);
 		glcache.Disable(GL_CULL_FACE);
 		glcache.Disable(GL_BLEND);
-		glcache.Disable(GL_FRAMEBUFFER_SRGB);
+		framebufferSrgb.set(false);
 		glViewport(0, 0, width, height);
 		glcache.UseProgram(depthCopyProgram);
 		glActiveTexture(GL_TEXTURE0);
@@ -1253,6 +1279,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	bool displaySpaceReached = false;
 	int originalWidth = passFrame.sourceWidth;
 	int originalHeight = passFrame.sourceHeight;
+	GlFramebuffer *output = nullptr;
 	auto composeDisplayInput = [&]() {
 		if (displaySpaceReached)
 			return true;
@@ -1267,9 +1294,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		glcache.Disable(GL_STENCIL_TEST);
 		glcache.Disable(GL_CULL_FACE);
 		glcache.Disable(GL_BLEND);
-#ifndef GLES2
-		glcache.Disable(GL_FRAMEBUFFER_SRGB);
-#endif
+		framebufferSrgb.set(false);
 		displayInput->bind();
 		glViewport(0, 0, frame.viewportWidth, frame.viewportHeight);
 		glcache.UseProgram(frame.rotationPending ? copyRotateProgram : copyProgram);
@@ -1285,6 +1310,8 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 		GlVertexArray::unbind();
 		inputTexture = displayInput->getTexture();
+		// An auxiliary-only technique must still present the composed image.
+		output = displayInput.get();
 		originalTexture = inputTexture;
 		inputHasMipmaps = false;
 		passFrame.sourceWidth = frame.viewportWidth;
@@ -1390,9 +1417,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		glcache.Disable(GL_STENCIL_TEST);
 		glcache.Disable(GL_CULL_FACE);
 		glcache.Disable(GL_BLEND);
-#ifndef GLES2
-		glcache.Disable(GL_FRAMEBUFFER_SRGB);
-#endif
+		framebufferSrgb.set(false);
 		historyTarget.framebuffer->bind();
 		glViewport(0, 0, passFrame.sourceWidth, passFrame.sourceHeight);
 		glcache.UseProgram(copyProgram);
@@ -1417,12 +1442,6 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			glcache.InvalidateBlendState();
 		}
 	} restoreAttachmentState;
-	GlFramebuffer *output = nullptr;
-	const auto disableFramebufferSrgb = [] {
-#ifndef GLES2
-		glcache.Disable(GL_FRAMEBUFFER_SRGB);
-#endif
-	};
 	for (size_t index = 0; index < programs.size(); ++index) {
 		Program& program = programs[index];
 		restoreAttachmentState.count = std::max(restoreAttachmentState.count, program.pass.colorOutputCount);
@@ -1446,14 +1465,14 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 				glcache.Disable(GL_STENCIL_TEST);
 				glcache.Disable(GL_CULL_FACE);
 				glcache.Disable(GL_BLEND);
-#ifndef GLES2
-				glcache.Disable(GL_FRAMEBUFFER_SRGB);
-#endif
+				framebufferSrgb.set(false);
 				mipmapInput->bind();
 				glViewport(0, 0, passFrame.sourceWidth, passFrame.sourceHeight);
 				glcache.UseProgram(copyProgram);
 				glActiveTexture(GL_TEXTURE0);
-				sourceTextureState.capture();
+				// Allocation and target setup can change unit zero after capture.
+				glcache.InvalidateTextureBinding();
+				glcache.BindTexture(GL_TEXTURE_2D, sourceTexture);
 				glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 				glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 				glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -1504,12 +1523,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		glcache.Disable(GL_STENCIL_TEST);
 		glcache.Disable(GL_CULL_FACE);
 		glBindFramebuffer(GL_FRAMEBUFFER, target->framebuffer);
-#ifndef GLES2
-		if (usesSrgbFramebuffer(program.pass))
-			glcache.Enable(GL_FRAMEBUFFER_SRGB);
-		else
-			glcache.Disable(GL_FRAMEBUFFER_SRGB);
-#endif
+		framebufferSrgb.set(usesSrgbFramebuffer(program.pass));
 		glViewport(0, 0, outputWidth, outputHeight);
 		if ((program.pass.preserveBackbuffer || program.pass.blendEnabled) && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
 			// ReShade blends against the current backbuffer. Seed HollyCast's
@@ -1583,7 +1597,6 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 							|| resource.sourceOutput >= targets[resource.sourcePass].front()->outputs.size())) {
 				error = "OpenGL shader graph references an invalid pass output.";
 				postprocess::reportShaderFrameStatus(activePath, error);
-				disableFramebufferSrgb();
 				return nullptr;
 			}
 			switch (resource.kind) {
@@ -1602,7 +1615,6 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 				if (!sourceTarget->initialized || sourceTarget->renderedFrame != frame.frameCount) {
 					error = "OpenGL shader pass input was not rendered for the current frame.";
 					postprocess::reportShaderFrameStatus(activePath, error);
-					disableFramebufferSrgb();
 					return nullptr;
 				}
 				texture = sourceTarget->outputs[resource.sourceOutput]->getTexture();
@@ -1636,7 +1648,6 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			}
 			case postprocess::ShaderInputKind::LookupTexture:
 				if (resource.lookupIndex >= lookupTextures.size()) {
-					disableFramebufferSrgb();
 					return nullptr;
 				}
 				lookup = &lookupTextures[resource.lookupIndex];
@@ -1663,6 +1674,8 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_S, glWrapMode(wrapMode));
 			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_T, glWrapMode(wrapMode));
 #ifndef GLES2
+			if (resource.textureTarget == GL_TEXTURE_3D || resource.textureTarget == GL_TEXTURE_CUBE_MAP)
+				glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_R, glWrapMode(wrapMode));
 			if (glBindSampler != nullptr)
 				glBindSampler(resource.unit, resource.sampler == 0 ? 0
 						: sampleMipmaps ? resource.mipSampler : resource.sampler);
@@ -1768,7 +1781,6 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		output = target->outputs[0]->framebuffer.get();
 		}
 	}
-	disableFramebufferSrgb();
 	glCheck();
 	presentationTransformApplied = composedDisplayInput;
 	++renderedFrames;
