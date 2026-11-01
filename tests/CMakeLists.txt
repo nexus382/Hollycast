@@ -15,6 +15,7 @@ endif()
         
 target_include_directories(${PROJECT_NAME} PUBLIC inc)
 target_sources(${PROJECT_NAME} PRIVATE
+        src/DcnetStatusTest.cpp
         src/CheatManagerTest.cpp
         src/ConfigFileTest.cpp
         src/div32_test.cpp
@@ -57,8 +58,14 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/util/TsQueueTest.cpp
         src/util/WorkerThreadTest.cpp)
 
+if(LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
+endif()
+
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
+        src/DcnetProbeTest.cpp
+        src/network/HttpTimeoutTest.cpp
         src/ui/SetupChecklistPopupTest.cpp
         src/ui/SettingsPopupTest.cpp
         src/ui/CustomThemeTest.cpp
