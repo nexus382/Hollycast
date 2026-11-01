@@ -13,6 +13,7 @@ namespace {
 class ImageTestDriver : public ImGuiDriver
 {
 public:
+	ImageTestDriver() : ImGuiDriver(false) {}
 	struct Image { ImTextureID id; size_t bytes; u8 red; bool nearest; };
 	std::unordered_map<std::string, Image> images;
 	std::thread::id owner = std::this_thread::get_id();
@@ -42,7 +43,7 @@ class LibraryImageTest : public ::testing::Test
 protected:
 	void SetUp() override {
 		previousContext = ImGui::GetCurrentContext();
-		gui_init();
+		ImGui::CreateContext();
 		auto& io = ImGui::GetIO();
 		io.IniFilename = nullptr;
 		io.DisplaySize = ImVec2(800, 600);
@@ -64,7 +65,7 @@ protected:
 		ImguiFileTexture::resetLoadCount();
 		ImguiFileTexture::clearThemeImageFailures();
 		imguiDriver = std::move(previousDriver);
-		gui_term();
+		ImGui::DestroyContext();
 		ImGui::SetCurrentContext(previousContext);
 		std::filesystem::remove_all(directory);
 	}

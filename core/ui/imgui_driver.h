@@ -26,9 +26,7 @@
 class ImGuiDriver
 {
 public:
-	ImGuiDriver() {
-		gui_updateStyle();
-	}
+	ImGuiDriver() : ImGuiDriver(true) {}
 	virtual ~ImGuiDriver() = default;
 
 	virtual void reset() {
@@ -70,6 +68,13 @@ public:
 	void updateAspectRatio(ImTextureID textureId, float aspectRatio) {
 		if (textureId != ImTextureID())
 			aspectRatios[textureId] = aspectRatio;
+	}
+
+protected:
+	// Headless test drivers do not own the application GUI lifecycle.
+	explicit ImGuiDriver(bool initializeStyle) {
+		if (initializeStyle)
+			gui_updateStyle();
 	}
 
 private:
