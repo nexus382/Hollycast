@@ -112,11 +112,6 @@ static_assert(postprocess::MaxShaderParameterComponents == 256,
 static_assert(sizeof(ShaderFrameUniforms) <= 128,
 		"Shader frame metadata must fit Vulkan's guaranteed push-constant size.");
 
-bool isSampled2D(postprocess::SlangResourceType type)
-{
-	return type == postprocess::SlangResourceType::Sampler2D || type == postprocess::SlangResourceType::Texture2D;
-}
-
 uint32_t parameterComponentCount(postprocess::SlangParameterType type)
 {
 	return postprocess::shaderParameterComponentCount(type);
@@ -153,30 +148,16 @@ vk::BlendOp blendOperation(postprocess::ShaderBlendOperation operation)
 
 std::string glslParameterValue(const postprocess::SlangParameter& parameter, uint32_t offset)
 {
-	const auto value = [](uint32_t index) {
-		return "shaderParameters.parameters[" + std::to_string(index / 4) + "][" + std::to_string(index % 4) + "]";
-	};
-	const auto composite = [&](const char *type, uint32_t components) {
-		std::string result = std::string(type) + "(";
-		for (uint32_t index = 0; index < components; ++index) {
-			if (index != 0)
-				result += ", ";
-			result += value(offset + index);
-		}
-		return result + ")";
-	};
-	switch (parameter.type) {
-	case postprocess::SlangParameterType::Float: return value(offset);
-	case postprocess::SlangParameterType::Int: return "int(" + value(offset) + ")";
-	case postprocess::SlangParameterType::Bool: return "(" + value(offset) + " != 0.0)";
-	case postprocess::SlangParameterType::Float2: return "vec2(" + value(offset) + ", " + value(offset + 1) + ")";
-	case postprocess::SlangParameterType::Float3: return "vec3(" + value(offset) + ", " + value(offset + 1) + ", " + value(offset + 2) + ")";
-	case postprocess::SlangParameterType::Float4: return "vec4(" + value(offset) + ", " + value(offset + 1) + ", " + value(offset + 2) + ", " + value(offset + 3) + ")";
-	case postprocess::SlangParameterType::Float2x2: return composite("mat2", 4);
-	case postprocess::SlangParameterType::Float3x3: return composite("mat3", 9);
-	case postprocess::SlangParameterType::Float4x4: return composite("mat4", 16);
+	// Use the shared type metadata so rectangular matrices consume every packed
+	// scalar, just like square matrices and the other render backends.
+	std::string result = std::string(postprocess::shaderParameterGlslType(parameter.type)) + "(";
+	for (uint32_t component = 0; component < parameterComponentCount(parameter.type); ++component) {
+		if (component != 0)
+			result += ", ";
+		const uint32_t index = offset + component;
+		result += "shaderParameters.parameters[" + std::to_string(index / 4) + "][" + std::to_string(index % 4) + "]";
 	}
-	return value(offset);
+	return result + ")";
 }
 
 const char *glslParameterType(postprocess::SlangParameterType type)

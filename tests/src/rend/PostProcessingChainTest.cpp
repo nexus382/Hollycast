@@ -2074,6 +2074,35 @@ TEST(PostProcessingChainTest, LowersSelectedReShadeTechniquePassAndVertexStage)
 #endif
 }
 
+#if defined(USE_VULKAN)
+TEST(PostProcessingChainTest, CompilesFxMatrixParametersForVulkan)
+{
+	for (unsigned rows = 2; rows <= 4; ++rows) {
+		for (unsigned columns = 2; columns <= 4; ++columns) {
+			const std::string type = "float" + std::to_string(rows) + "x" + std::to_string(columns);
+			SCOPED_TRACE(type);
+			std::string effect = "uniform " + type + " transform = " + type + "(";
+			for (unsigned component = 0; component < rows * columns; ++component) {
+				if (component != 0) effect += ", ";
+				effect += std::to_string(component + 1);
+			}
+			effect += ");\nfloat4 Pixel() : SV_Target { return float4(transform[0][0], transform["
+					+ std::to_string(rows - 1) + "][" + std::to_string(columns - 1) + "], 0.0, 1.0); }\n"
+					"technique Matrix { pass { PixelShader = Pixel; } }\n";
+			postprocess::ShaderPassSource source;
+			std::string error;
+			ASSERT_TRUE(postprocess::compileReShadeFxPass(effect, 0, 0, source, error)) << error;
+			ASSERT_EQ(1u, source.parameters.size());
+			EXPECT_EQ(rows * columns, source.parameters.front().componentCount);
+			std::string fragment, vertex;
+			ASSERT_TRUE(postprocess::buildVulkanShaderSources(source, source.slangParameters, {}, 1, fragment, vertex, error)) << error;
+			EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eFragment, fragment, error)) << error;
+			EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eVertex, vertex, error)) << error;
+		}
+	}
+}
+#endif
+
 TEST(PostProcessingChainTest, ReflectsAndRoutesReShadeMultiRenderTargets)
 {
 	const std::string effect =

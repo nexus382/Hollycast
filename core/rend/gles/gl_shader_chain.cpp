@@ -236,11 +236,6 @@ std::string vertexResourcePreamble(const std::vector<postprocess::ShaderParamete
 	return preamble;
 }
 
-bool isTexture2D(postprocess::SlangResourceType type)
-{
-	return type == postprocess::SlangResourceType::Sampler2D || type == postprocess::SlangResourceType::Texture2D;
-}
-
 GLenum shaderTextureTarget(postprocess::SlangResourceType type)
 {
 	switch (type) {
@@ -756,7 +751,6 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 			vertexBody = "#define main HollycastEffectVertexMain\n" + vertexBody
 					+ "\n#undef main\nvoid main() { HollycastEffectVertexMain(); gl_Position.y = -gl_Position.y; }\n";
 		}
-		const uint32_t outputCount = pass.outputs.empty() ? 1u : static_cast<uint32_t>(pass.outputs.size());
 		if (gl.is_gles && (std::any_of(passSource->slangResources.begin(), passSource->slangResources.end(), [](const auto& resource) {
 			return resource.type == postprocess::SlangResourceType::Sampler1D || resource.type == postprocess::SlangResourceType::Texture1D;
 		}) || std::any_of(pass.outputs.begin(), pass.outputs.end(), [](const auto& output) {
