@@ -4,6 +4,7 @@
 	Credits for cheats: Esppiral, S4pph4rad, yzb37859365, Shenmue_Trilogy, Radaron, Virgin KLM, Joel, Zorlon,
 		ELOTROLADO.NET, SEGARETRO.ORG, Sakuragi @ emutalk.net
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -30,6 +31,7 @@
 #include "oslib/storage.h"
 #include "oslib/i18n.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -382,6 +384,32 @@ void CheatManager::setActive(bool active)
 		EventManager::unlisten(Event::VBlank, vblankCallback, this);
 }
 
+void CheatManager::refreshManualWidescreenState()
+{
+	manualWidescreenActive.store(std::any_of(cheats.begin(), cheats.end(), [](const Cheat& cheat) {
+		return cheat.enabled && cheat.widescreen;
+	}), std::memory_order_relaxed);
+}
+
+void CheatManager::enableCheat(size_t index, bool enabled)
+{
+	cheats[index].enabled = enabled;
+	refreshManualWidescreenState();
+}
+
+void CheatManager::setCheatWidescreen(size_t index, bool widescreen)
+{
+	if (cheats[index].widescreen == widescreen)
+		return;
+	cheats[index].widescreen = widescreen;
+	refreshManualWidescreenState();
+#ifndef LIBRETRO
+	const std::string path = config::loadStr("cheats", gameId);
+	if (!path.empty())
+		saveCheatFile(path);
+#endif
+}
+
 void CheatManager::loadCheatFile(const std::string& filename)
 {
 #ifndef LIBRETRO
@@ -428,6 +456,7 @@ void CheatManager::loadCheatFile(const std::string& filename)
 		cheat.repeatValueIncrement = cfg.getInt("", prefix + "repeat_add_to_value", cheat.repeatValueIncrement);
 		cheat.repeatAddressIncrement = cfg.getInt("", prefix + "repeat_add_to_address", cheat.repeatAddressIncrement);
 		cheat.enabled = cfg.getBool("", prefix + "enable", false);
+		cheat.widescreen = cfg.getBool("", prefix + "widescreen", false);
 		cheat.destAddress = cfg.getInt("", prefix + "dest_address", 0);
 		if (cheat.destAddress >= RAM_SIZE)
 		{
@@ -438,6 +467,7 @@ void CheatManager::loadCheatFile(const std::string& filename)
 		if (cheat.type != Cheat::Type::disabled)
 			cheats.push_back(cheat);
 	}
+	refreshManualWidescreenState();
 	setActive(!cheats.empty());
 	INFO_LOG(COMMON, "%d cheats loaded", (int)cheats.size());
 	if (!cheats.empty())
@@ -451,6 +481,7 @@ void CheatManager::reset(const std::string& gameId)
 	if (this->gameId != gameId)
 	{
 		cheats.clear();
+		refreshManualWidescreenState();
 		setActive(false);
 		this->gameId = gameId;
 
@@ -825,7 +856,7 @@ static u32 decryptArg(u32 v) {
 	return (((v + 0x543700D0) >> 29) | ((v + 0x543700D0) * 8)) ^ Seeds[0];
 }
 
-void CheatManager::addGameSharkCheat(const std::string& name, const std::string& s)
+void CheatManager::addGameSharkCheat(const std::string& name, const std::string& s, bool widescreen)
 {
 	std::vector<u32> codes = parseCodes(s);
 	Cheat conditionCheat;
@@ -839,6 +870,7 @@ void CheatManager::addGameSharkCheat(const std::string& name, const std::string&
 				cheats.push_back(conditionCheat);
 			Cheat cheat{};
 			cheat.description = name;
+			cheat.widescreen = widescreen;
 			u32 code = (codes[i] & 0xff000000) >> 24;
 			if (code & 0xf0)
 			{
@@ -1108,6 +1140,7 @@ void CheatManager::saveCheatFile(const std::string& filename)
 		cfg.set("", prefix + "repeat_count", cheat.repeatCount);
 		cfg.set("", prefix + "repeat_add_to_value", cheat.repeatValueIncrement);
 		cfg.set("", prefix + "repeat_add_to_address", cheat.repeatAddressIncrement);
+		cfg.set("", prefix + "widescreen", cheat.widescreen);
 		i++;
 	}
 	cfg.set("", "cheats", i);

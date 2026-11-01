@@ -2,6 +2,7 @@
     Created on: Nov 6, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -20,6 +21,9 @@
 */
 #include "compiler.h"
 #include "vulkan_context.h"
+#ifndef LIBRETRO
+#include "rend/postprocess/shader_chain.h"
+#endif
 
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -29,16 +33,22 @@ int ShaderCompiler::initCount;
 
 void ShaderCompiler::Init()
 {
+#ifdef LIBRETRO
 	if (initCount++ == 0) {
 		bool rc = glslang::InitializeProcess();
 		verify(rc);
 	}
+#else
+	verify(postprocess::initializeShaderCompiler());
+#endif
 }
 void ShaderCompiler::Term()
 {
+#ifdef LIBRETRO
 	if (--initCount == 0)
 		glslang::FinalizeProcess();
 	initCount = std::max(initCount, 0);
+#endif
 }
 
 static EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
@@ -66,7 +76,8 @@ static EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
 	}
 }
 
-static bool GLSLtoSPV(const vk::ShaderStageFlagBits shaderType, std::string const& glslShader, std::vector<unsigned int> &spvShader)
+static bool GLSLtoSPV(const vk::ShaderStageFlagBits shaderType, std::string const& glslShader,
+		std::vector<unsigned int>& spvShader, std::string *error = nullptr)
 {
 	EShLanguage stage = translateShaderStage(shaderType);
 
@@ -83,6 +94,8 @@ static bool GLSLtoSPV(const vk::ShaderStageFlagBits shaderType, std::string cons
 	{
 		ERROR_LOG(RENDERER, "%s", shader.getInfoLog());
 		ERROR_LOG(RENDERER, "%s", shader.getInfoDebugLog());
+		if (error != nullptr)
+			*error = shader.getInfoLog();
         return false;  // something didn't work
 	}
 
@@ -97,6 +110,8 @@ static bool GLSLtoSPV(const vk::ShaderStageFlagBits shaderType, std::string cons
 	{
 		ERROR_LOG(RENDERER, "%s", shader.getInfoLog());
 		ERROR_LOG(RENDERER, "%s", shader.getInfoDebugLog());
+		if (error != nullptr)
+			*error = shader.getInfoLog();
 		return false;
 	}
 
@@ -112,4 +127,34 @@ vk::UniqueShaderModule ShaderCompiler::Compile(vk::ShaderStageFlagBits shaderSta
 
 	return VulkanContext::Instance()->GetDevice().createShaderModuleUnique
 			(vk::ShaderModuleCreateInfo(vk::ShaderModuleCreateFlags(), shaderSPV));
+}
+
+bool ShaderCompiler::TryCompile(vk::ShaderStageFlagBits shaderStage, std::string const& shaderText,
+		vk::UniqueShaderModule& shaderModule, std::string& error)
+{
+	std::vector<unsigned int> shaderSPV;
+	if (!GLSLtoSPV(shaderStage, shaderText, shaderSPV, &error)) {
+		if (error.empty())
+			error = "Vulkan GLSL compilation failed.";
+		return false;
+	}
+	try {
+		shaderModule = VulkanContext::Instance()->GetDevice().createShaderModuleUnique(
+				vk::ShaderModuleCreateInfo(vk::ShaderModuleCreateFlags(), shaderSPV));
+		return true;
+	} catch (const vk::SystemError& exception) {
+		error = exception.what();
+		return false;
+	}
+}
+
+bool ShaderCompiler::Validate(vk::ShaderStageFlagBits shaderStage, const std::string& shaderText, std::string& error)
+{
+	Init();
+	std::vector<unsigned int> shaderSPV;
+	const bool valid = GLSLtoSPV(shaderStage, shaderText, shaderSPV, &error);
+	Term();
+	if (!valid && error.empty())
+		error = "Vulkan GLSL compilation failed.";
+	return valid;
 }

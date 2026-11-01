@@ -51,6 +51,7 @@ for _, locale in locales:
 
 source = out / "gui_fonts.cpp"
 source.write_text(r'''
+// Portions Copyright 2026 The Hollycast Authors
 #include "types.h"
 #include "oslib/resources.h"
 #include "ui/gui_font.h"
@@ -64,6 +65,8 @@ source.write_text(r'''
 settings_t settings;
 static std::string resourceDir, currentLocale;
 namespace i18n { std::string getCurrentLocale() { return currentLocale; } }
+// This harness validates the bundled fonts, without a user theme override.
+namespace CustomTheme { std::string fontPath(bool) { return {}; } }
 void fatal_error(const char*, ...) { std::abort(); }
 [[noreturn]] void os_DebugBreak() { std::abort(); }
 namespace resource {

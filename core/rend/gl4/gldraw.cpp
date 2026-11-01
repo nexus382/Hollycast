@@ -501,17 +501,16 @@ OITFramebuffer::OITFramebuffer(int width, int height, GLuint texId, GLuint depth
 	bind();
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texId, 0);
 
-	if (depth != 0)
-		this->depthBuffer = depth;
-	else if (stencil != 0)
-		this->depthBuffer = stencil;
-	glcache.BindTexture(GL_TEXTURE_2D, this->depthBuffer); glCheck();
+	// OIT owns a depth/stencil texture rather than a renderbuffer. Expose it
+	// for display effects and the secondary accumulation target to share.
+	this->depthTexture = depth != 0 ? depth : stencil;
+	glcache.BindTexture(GL_TEXTURE_2D, this->depthTexture); glCheck();
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, depth != 0 ? GL_DEPTH_COMPONENT : GL_STENCIL_INDEX);
 	// with GL_DEPTH32F_STENCIL8 stencil doesn't work on Mali. GL_DEPTH24_STENCIL8 works but moire effect on transparent texs (nvidia)
 	glTexStorage2D(GL_TEXTURE_2D, 1, gl.mali ? GL_DEPTH24_STENCIL8 : GL_DEPTH32F_STENCIL8, width, height);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, this->depthBuffer, 0);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, this->depthTexture, 0);
 	glCheck();
 	GLuint uStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (uStatus != GL_FRAMEBUFFER_COMPLETE) {

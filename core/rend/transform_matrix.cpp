@@ -19,6 +19,7 @@
 */
 #define GLM_FORCE_SWIZZLE 1
 #include "transform_matrix.h"
+#include "cheats.h"
 #include <glm/gtx/transform.hpp>
 
 static void getTAViewport(const rend_context& rendCtx, int& width, int& height) {
@@ -306,10 +307,14 @@ void getScaledFramebufferSize(const rend_context& rendCtx, int& width, int& heig
 
 float getOutputFramebufferAspectRatio()
 {
+	if (config::StretchToFill)
+		return static_cast<float>(settings.display.width) / settings.display.height;
+
+	const bool manualWidescreen = cheatManager.hasManualWidescreenCheat();
 	float aspectRatio;
 	if (config::Rotate90)
 	{
-		aspectRatio = 3.f / 4.f;
+		aspectRatio = manualWidescreen ? 9.f / 16.f : 3.f / 4.f;
 	}
 	else
 	{
@@ -320,15 +325,29 @@ float getOutputFramebufferAspectRatio()
 			else
 				aspectRatio = 16.f / 9.f;
 		}
+		else if (manualWidescreen)
+		{
+			aspectRatio = 16.f / 9.f;
+		}
 		else
 		{
 			aspectRatio = 4.f / 3.f;
 		}
 	}
+	// Manual cheat metadata selects the base aspect only. Horizontal stretching
+	// still defines the final game rectangle used by presentation and shaders.
+	return aspectRatio * config::ScreenStretching / 100.f;
+}
 
+float getDCFramebufferAspectRatio()
+{
 	if (config::StretchToFill)
-		return (float)settings.display.width / settings.display.height;
+		return static_cast<float>(settings.display.width) / settings.display.height;
 
+	const bool widescreen = cheatManager.hasManualWidescreenCheat();
+	const float aspectRatio = config::Rotate90
+			? (widescreen ? 9.f / 16.f : 3.f / 4.f)
+			: (widescreen ? 16.f / 9.f : 4.f / 3.f);
 	return aspectRatio * config::ScreenStretching / 100.f;
 }
 

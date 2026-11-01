@@ -28,6 +28,12 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/MmuTest.cpp
         src/HttpTest.cpp
         src/IniFileTest.cpp
+        src/rend/PostProcessingChainTest.cpp
+        src/rend/ShaderLayerTest.cpp
+        src/rend/ReShadeCompilerTest.cpp
+        src/rend/OpenGLShaderChainTest.cpp
+        src/rend/DirectXShaderChainTest.cpp
+		src/rend/SlangFrontendTest.cpp
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp
         src/network/NetworkServiceTest.cpp
@@ -75,5 +81,6 @@ if(NOT LIBRETRO)
         src/ui/ThemeArtworkTest.cpp
         src/ui/ThemeInstallTest.cpp
         src/ui/VideoPresetTest.cpp
-        src/ui/AndroidMenuPopupTest.cpp)
+        src/ui/AndroidMenuPopupTest.cpp
+        src/ui/ShaderPreviewLayoutTest.cpp)
 endif()

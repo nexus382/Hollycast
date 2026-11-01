@@ -517,8 +517,12 @@ void OITDrawer::MakeBuffers(int width, int height, vk::ImageUsageFlags colorUsag
 			commandPool->addToFlight(new Deleter(std::move(attachment)));
 		attachment = std::make_unique<FramebufferAttachment>(
 				GetContext()->GetPhysicalDevice(), device);
-		attachment->Init(maxWidth, maxHeight, GetContext()->GetDepthFormat(),
-				vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eInputAttachment,
+		vk::ImageUsageFlags depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eInputAttachment;
+#ifndef LIBRETRO
+		if (&attachment == &depthAttachments[0] && GetContext()->CanSampleDepth())
+			depthUsage |= vk::ImageUsageFlagBits::eSampled;
+#endif
+		attachment->Init(maxWidth, maxHeight, GetContext()->GetDepthFormat(), depthUsage,
 				"DEPTH ATTACHMENT" + std::to_string(&attachment - &depthAttachments[0]));
 	}
 	needAttachmentTransition = true;

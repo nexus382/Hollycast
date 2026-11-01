@@ -28,9 +28,10 @@ shim = r'''
 #include <unistd.h>
 #include "oslib/cpu_usage.h"
 #include "oslib/process_memory.h"
-// Select only the production BSD branches after the Linux standard headers.
+// Select only the production BSD branches after the host standard headers.
 // These adapters check syscall contracts, not native BSD header compatibility.
 #undef __linux__
+#undef __APPLE__
 #define PLATFORM
 #if defined(__OpenBSD__)
 constexpr int CPUSTATES = 6, CP_IDLE = 5;

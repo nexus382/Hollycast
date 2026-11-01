@@ -692,6 +692,10 @@ struct DX11OITRenderer : public DX11Renderer
 		DX11GpuTimingScope gpuTiming(DX11Context::Instance(), !is_rtt);
 #endif
 		resetContextState();
+#ifndef LIBRETRO
+		if (!is_rtt)
+			sceneDepthValid = true;
+#endif
 
 		if (!is_rtt)
 			resize(rendContext->framebufferWidth, rendContext->framebufferHeight);

@@ -51,6 +51,11 @@ vk::UniqueRenderPass RenderPasses::MakeRenderPass(bool initial, bool last, bool 
 					vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
 					initial ? vk::ImageLayout::eUndefined : vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal),
     };
+#ifndef LIBRETRO
+	// The geometry depth remains available after OIT resolves the color image.
+	if (GetContext()->CanSampleDepth())
+		attachmentDescriptions[2].storeOp = vk::AttachmentStoreOp::eStore;
+#endif
     vk::AttachmentReference swapChainReference(0, vk::ImageLayout::eColorAttachmentOptimal);
     vk::AttachmentReference colorReference(1, vk::ImageLayout::eColorAttachmentOptimal);
     vk::AttachmentReference depthReference(2, vk::ImageLayout::eDepthStencilAttachmentOptimal);
