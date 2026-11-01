@@ -5,7 +5,7 @@
 namespace aica::arm
 {
 
-#define CPUReadMemoryQuick(addr) (*(u32*)&aica_ram[(addr) & ARAM_MASK])
+#define CPUReadMemoryQuick(addr) (*(u32*)&aica_ram[(addr) & ramMask()])
 #define CPUReadByte readMem<u8>
 #define CPUReadMemory readMem<u32>
 #define CPUReadHalfWord readMem<u16>
@@ -54,9 +54,7 @@ static void CPUUndefinedException();
 //
 int arm7ClockTicks;
 
-#if FEAT_AREC == DYNAREC_NONE
-
-static void runInterpreter(u32 CycleCount)
+void runInterpreterCycles(u32 CycleCount)
 {
 	if (!Arm7Enabled)
 		return;
@@ -70,10 +68,18 @@ static void runInterpreter(u32 CycleCount)
 		reg[15].I = armNextPC + 8;
 
 		int& clockTicks = arm7ClockTicks;
+		#ifndef _MSC_VER
+		#pragma GCC diagnostic push
+		#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+		#endif
 		#include "arm-new.h"
+		#ifndef _MSC_VER
+		#pragma GCC diagnostic pop
+		#endif
 	}
 }
 
+#if FEAT_AREC == DYNAREC_NONE
 void avoidRaceCondition()
 {
 	arm7ClockTicks = std::min(arm7ClockTicks, -50);
@@ -83,11 +89,41 @@ void run(u32 samples)
 {
 	for (u32 i = 0; i < samples; i++)
 	{
-		runInterpreter(ARM_CYCLES_PER_SAMPLE);
+		runInterpreterCycles(ARM_CYCLES_PER_SAMPLE);
 		timeStep();
 	}
 }
 #endif
+
+void saveExecutionState(ExecutionState& state)
+{
+	std::copy(std::begin(arm_Reg), std::end(arm_Reg), std::begin(state.registers));
+	state.clockTicks = arm7ClockTicks;
+	state.mode = armMode;
+	state.irqEnable = armIrqEnable;
+	state.fiqEnable = armFiqEnable;
+	state.enabled = Arm7Enabled;
+	state.aicaInterrupt = aica_interr;
+	state.aicaInterruptLevel = aica_reg_L;
+	state.interruptOutput = e68k_out;
+	state.interruptLevel = e68k_reg_L;
+	state.interruptMode = e68k_reg_M;
+}
+
+void loadExecutionState(const ExecutionState& state)
+{
+	std::copy(std::begin(state.registers), std::end(state.registers), std::begin(arm_Reg));
+	arm7ClockTicks = state.clockTicks;
+	armMode = state.mode;
+	armIrqEnable = state.irqEnable;
+	armFiqEnable = state.fiqEnable;
+	Arm7Enabled = state.enabled;
+	aica_interr = state.aicaInterrupt;
+	aica_reg_L = state.aicaInterruptLevel;
+	e68k_out = state.interruptOutput;
+	e68k_reg_L = state.interruptLevel;
+	e68k_reg_M = state.interruptMode;
+}
 
 void staticInit()
 {
@@ -282,12 +318,9 @@ static void CPUUndefinedException()
 	armNextPC = 0x04;
 }
 
-void reset()
+static void resetState()
 {
 	INFO_LOG(AICA_ARM, "AICA ARM Reset");
-#if FEAT_AREC != DYNAREC_NONE
-	recompiler::flush();
-#endif
 	aica_interr = false;
 	aica_reg_L = 0;
 	e68k_out = false;
@@ -320,6 +353,20 @@ void reset()
 	reg[15].I += 4;
 }
 
+void reset()
+{
+#if FEAT_AREC != DYNAREC_NONE
+	recompiler::flush();
+#endif
+	resetState();
+}
+
+void resetInterpreter()
+{
+	resetState();
+	arm7ClockTicks = 0;
+}
+
 void CPUFiq()
 {
 	u32 PC = reg[R15_ARM_NEXT].I+4;
@@ -348,6 +395,13 @@ void enable(bool enabled)
 		reset();
 	
 	Arm7Enabled=enabled;
+}
+
+void enableInterpreter(bool enabled)
+{
+	if (!Arm7Enabled && enabled)
+		resetInterpreter();
+	Arm7Enabled = enabled;
 }
 
 void update_armintc()

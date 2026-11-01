@@ -413,9 +413,18 @@ enum PCMSType
 
 */
 
+#ifdef USE_HIKARU
+#define ACTIVE_CHANNELS activeChannels()
+#else
+#define ACTIVE_CHANNELS Chans
+#endif
+
 struct ChannelEx
 {
 	static ChannelEx Chans[64];
+#ifdef USE_HIKARU
+	static ChannelEx (&activeChannels())[64];
+#endif
 
 	ChannelCommonData* ccd;
 
@@ -715,7 +724,7 @@ struct ChannelEx
 
 	static void StepAll(SampleType& mixl, SampleType& mixr)
 	{
-		for (ChannelEx& channel : Chans)
+		for (ChannelEx& channel : ACTIVE_CHANNELS)
 			channel.Step(mixl, mixr);
 	}
 
@@ -942,7 +951,7 @@ struct ChannelEx
 			if ((offset == 1 || size == 2) && ccd->KYONEX)
 			{
 				ccd->KYONEX=0;
-				for (ChannelEx& channel : Chans)
+				for (ChannelEx& channel : ACTIVE_CHANNELS)
 				{
 					if (channel.ccd->KYONB)
 						channel.KEY_ON();
@@ -1026,10 +1035,12 @@ struct ChannelEx
 	} 
 
 	static void initAll() {
-		for (std::size_t i = 0; i < std::size(Chans); i++)
-			Chans[i].Init(i, aica_reg);
+		for (std::size_t i = 0; i < std::size(ACTIVE_CHANNELS); i++)
+			ACTIVE_CHANNELS[i].Init(i, aica_reg);
 	}
 };
+
+#undef ACTIVE_CHANNELS
 
 void (ChannelEx::*ChannelEx::STREAM_STEP_LUT[5][2][2])();
 void (ChannelEx::*ChannelEx::STREAM_INITAL_STEP_LUT[5])();
@@ -1058,7 +1069,7 @@ static SampleType DecodeADPCM(u32 sample, s32 prev, s32& quant)
 
 template<typename T>
 static T readAicaRam(u32 addr) {
-	return *(const T *)&aica_ram[addr & ARAM_MASK & ~(sizeof(T) - 1)];
+	return *(const T *)&aica_ram[addr & ramMask() & ~(sizeof(T) - 1)];
 }
 
 template<PCMSType PCMS, bool Last>
@@ -1461,7 +1472,69 @@ static OnLoad staticInit(staticinitialise);
 
 ChannelEx ChannelEx::Chans[64];
 
+struct ChannelState
+{
+	ChannelEx channels[64];
+};
+#ifdef USE_HIKARU
+static ChannelState* selectedChannels;
+ChannelEx (&ChannelEx::activeChannels())[64]
+{
+	return selectedChannels ? selectedChannels->channels : ChannelEx::Chans;
+}
+ChannelState* activeChannelState() { return selectedChannels; }
+void selectChannelState(ChannelState* state)
+{
+	selectedChannels = state;
+	auto& channels = ChannelEx::activeChannels();
+	if (channels[0].ccd != (ChannelCommonData*)&aica_reg[0])
+		for (int i = 0; i < 64; ++i)
+			channels[i].ccd = (ChannelCommonData*)&aica_reg[i * 0x80];
+}
+#define Chans (ChannelEx::activeChannels())
+#else
 #define Chans ChannelEx::Chans
+#endif
+
+ChannelState* createChannelState()
+{
+	return new ChannelState{};
+}
+
+void destroyChannelState(ChannelState* state)
+{
+#ifdef USE_HIKARU
+	verify(selectedChannels != state);
+#endif
+	delete state;
+}
+
+void saveChannelState(ChannelState& state)
+{
+#ifdef USE_HIKARU
+	if (&state != selectedChannels)
+#endif
+		std::copy(std::begin(Chans), std::end(Chans), std::begin(state.channels));
+}
+
+void loadChannelState(const ChannelState& state)
+{
+#ifdef USE_HIKARU
+	if (&state != selectedChannels)
+#endif
+		std::copy(std::begin(state.channels), std::end(state.channels), std::begin(Chans));
+#ifdef USE_HIKARU
+	for (int i = 0; i < 64; ++i)
+		Chans[i].ccd = (ChannelCommonData*)&aica_reg[i * 0x80];
+#endif
+}
+
+void resetBoardChannels()
+{
+	for (auto& channel : Chans)
+		channel = ChannelEx{};
+	ChannelEx::initAll();
+}
 
 void init()
 {
@@ -1547,7 +1620,7 @@ constexpr int CDDA_SIZE = 2352 / 2;
 static s16 cdda_sector[CDDA_SIZE];
 static u32 cdda_index = CDDA_SIZE;
 
-void AICA_Sample()
+static bool generateSample(bool board, s16& left, s16& right)
 {
 	SampleType mixl,mixr;
 	mixl = 0;
@@ -1559,14 +1632,15 @@ void AICA_Sample()
 	//OK , generated all Channels  , now DSP/ect + final mix ;p
 	//CDDA EXTS input
 	
-	if (cdda_index >= CDDA_SIZE)
+	if (!board && cdda_index >= CDDA_SIZE)
 	{
 		cdda_index = 0;
 		libCore_CDDA_Sector(cdda_sector);
 	}
-	s32 EXTS0L = cdda_sector[cdda_index];
-	s32 EXTS0R = cdda_sector[cdda_index+1];
-	cdda_index += 2;
+	s32 EXTS0L = board ? 0 : cdda_sector[cdda_index];
+	s32 EXTS0R = board ? 0 : cdda_sector[cdda_index+1];
+	if (!board)
+		cdda_index += 2;
 
 	//Final MIX ..
 	//Add CDDA / DSP effect(s)
@@ -1580,20 +1654,23 @@ void AICA_Sample()
 
 	if (config::DSPEnabled)
 	{
-		dsp::step();
+		if (board)
+			dsp::stepInterpreter();
+		else
+			dsp::step();
 
 		for (int i = 0; i < 16; i++)
 			VolumePan(*(s16*)&DSPData->EFREG[i], dsp_out_vol[i].EFSDL, dsp_out_vol[i].EFPAN, mixl, mixr);
 	}
 
 #ifdef LIBRETRO
-	if (settings.aica.muteAudio)
+	if (!board && settings.aica.muteAudio)
 #else
-	if (settings.aica.muteAudio || (settings.input.fastForwardMode && !config::FastForwardAudio))
+	if (!board && (settings.aica.muteAudio || (settings.input.fastForwardMode && !config::FastForwardAudio)))
 #endif
-		return;
+		return false;
 
-	if (config::VmuSound)
+	if (!board && config::VmuSound)
 	{
 		SampleType b = beep.getSample();
 		mixl += b;
@@ -1612,7 +1689,7 @@ void AICA_Sample()
 	mixr = (s32)FPMul<s64>(mixr, val, 15);
 
 #ifndef LIBRETRO
-	if (settings.input.fastForwardMode)
+	if (!board && settings.input.fastForwardMode)
 	{
 		mixl = (s32)((s64)mixl * 35 / 100);
 		mixr = (s32)((s64)mixr * 35 / 100);
@@ -1636,7 +1713,21 @@ void AICA_Sample()
 	mixl = std::clamp(mixl, -32768, 32767);
 	mixr = std::clamp(mixr, -32768, 32767);
 
-	WriteSample(mixr, mixl);
+	left = (s16)mixl;
+	right = (s16)mixr;
+	return true;
+}
+
+void AICA_Sample()
+{
+	s16 left, right;
+	if (generateSample(false, left, right))
+		WriteSample(right, left);
+}
+
+void boardSample(s16& left, s16& right)
+{
+	generateSample(true, left, right);
 }
 
 void serialize(Serializer& ser)

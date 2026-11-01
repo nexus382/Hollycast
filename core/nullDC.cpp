@@ -184,7 +184,7 @@ void flycast_term()
 
 bool dc_savestateAllowed() {
 	return !settings.content.path.empty() && !settings.network.online
-			&& !settings.naomi.multiboard;
+			&& !settings.naomi.multiboard && !settings.platform.isHikaru();
 }
 
 void dc_savestate(int index, const u8 *pngData, u32 pngSize)

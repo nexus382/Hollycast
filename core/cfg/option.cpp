@@ -80,6 +80,9 @@ Option<bool> AutoLatency("aica.AutoLatency",
 		);
 
 OptionString AudioBackend("backend", "auto", "audio");
+#ifdef USE_HIKARU
+Option<bool> HikaruAudioPacing("HikaruAudioPacing", true);
+#endif
 AudioVolumeOption AudioVolume;
 Option<bool> VmuSound("VmuSound", false, "audio");
 

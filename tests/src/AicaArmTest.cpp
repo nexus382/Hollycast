@@ -4,16 +4,27 @@
 #include "hw/mem/addrspace.h"
 #include "hw/arm7/arm7.h"
 #include "hw/aica/aica_if.h"
+#include "hw/aica/aica_mem.h"
+#include "hw/aica/board_state.h"
 #include "hw/arm7/arm7_rec.h"
+#include "hw/arm7/arm_mem.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/sound.h"
+#endif
 #include "emulator.h"
 
 #include "gtest/gtest.h"
+#include <array>
+#include <cstdlib>
+#include <fstream>
 
 static const u32 N_FLAG = 1 << 31;
 static const u32 Z_FLAG = 1 << 30;
 static const u32 C_FLAG = 1 << 29;
 static const u32 V_FLAG = 1 << 28;
 static const u32 NZCV_MASK = N_FLAG | Z_FLAG | C_FLAG | V_FLAG;
+static unsigned boardTestMidiCalls;
+static void boardTestMidiReceiver(u8) { ++boardTestMidiCalls; }
 
 
 namespace aica::arm::recompiler {
@@ -58,6 +69,391 @@ protected:
 	}
 };
 #define ASSERT_NZCV_EQ(expected) ASSERT_EQ(arm_Reg[RN_PSR_FLAGS].I & NZCV_MASK, (expected));
+
+TEST_F(AicaArmTest, InterpreterExecutionStateIsIndependent)
+{
+	// Two independent RAM views and programs exercise switching without copying RAM.
+	RamRegion previousRam = aica_ram;
+	std::vector<u32> ramA(0x200000 / sizeof(u32));
+	std::vector<u32> ramB(0x200000 / sizeof(u32));
+	ramA[0x1000 / 4] = 0xe2800001; // add r0, r0, #1
+	ramB[0x1000 / 4] = 0xe2800002; // add r0, r0, #2
+	ramA[0x1004 / 4] = ramB[0x1004 / 4] = 0xeafffffd; // b 0x1000
+	aica_ram.setRegion(reinterpret_cast<u8*>(ramA.data()), ramA.size() * sizeof(u32));
+	ExecutionState first, second;
+	reset();
+	Arm7Enabled = true;
+	arm_Reg[R15_ARM_NEXT].I = 0x1000;
+	arm7ClockTicks = 0;
+	arm_Reg[0].I = 10;
+	interruptChange(1, 3);
+	saveExecutionState(first);
+	arm_Reg[0].I = 100;
+	interruptChange(0, 0);
+	aica_interr = false;
+	e68k_out = false;
+	saveExecutionState(second);
+
+	loadExecutionState(first);
+	runInterpreterCycles(1);
+	EXPECT_EQ(arm_Reg[0].I, 11u);
+	EXPECT_TRUE(aica_interr);
+	EXPECT_EQ(aica_reg_L, 3u);
+	saveExecutionState(first);
+
+	loadExecutionState(second);
+	aica_ram.setRegion(reinterpret_cast<u8*>(ramB.data()), ramB.size() * sizeof(u32));
+	EXPECT_EQ(arm_Reg[0].I, 100u);
+	EXPECT_FALSE(aica_interr);
+	EXPECT_FALSE(e68k_out);
+	runInterpreterCycles(1);
+	EXPECT_EQ(arm_Reg[0].I, 102u);
+
+	loadExecutionState(first);
+	aica_ram.setRegion(reinterpret_cast<u8*>(ramA.data()), ramA.size() * sizeof(u32));
+	EXPECT_EQ(arm_Reg[0].I, 11u);
+	EXPECT_TRUE(aica_interr);
+	aica_ram = previousRam;
+}
+
+TEST_F(AicaArmTest, DreamcastDspRecompilerMatchesInterpreter)
+{
+	BoardState original;
+	original.save();
+	std::fill(std::begin(DSPData->MPRO), std::end(DSPData->MPRO), 0);
+	DSPData->MPRO[1] = 0x8000 | (1 << 13) | (0x30 << 7);
+	DSPData->MPRO[6] = 0x1000;
+	DSPData->COEF[0] = 0x4000;
+	DSPData->EXTS[0] = 1024;
+	DSPData->EFREG[0] = 0;
+	dsp::state.dirty = true;
+	const auto initialState = dsp::state;
+	dsp::stepInterpreter();
+	const u32 expected = DSPData->EFREG[0];
+	const auto interpretedState = dsp::state;
+	ASSERT_NE(expected, 0u);
+	dsp::state = initialState;
+	DSPData->EFREG[0] = 0;
+	dsp::step();
+	EXPECT_EQ(DSPData->EFREG[0], expected);
+	EXPECT_EQ(dsp::state.MDEC_CT, interpretedState.MDEC_CT);
+	EXPECT_EQ(dsp::state.stopped, interpretedState.stopped);
+	original.load();
+}
+
+TEST_F(AicaArmTest, BoardSnapshotsKeepRegistersTimersAndCpuSeparate)
+{
+	BoardState original, first, second;
+	original.save();
+	aica_reg[0x123] = 0x34;
+	timers[0].c_step = 7;
+	dsp::state.TEMP[0] = 0x1234;
+	arm_Reg[0].I = 11;
+	first.save();
+	aica_reg[0x123] = 0x56;
+	timers[0].c_step = 19;
+	dsp::state.TEMP[0] = 0x5678;
+	arm_Reg[0].I = 22;
+	second.save();
+	first.load();
+	EXPECT_EQ(aica_reg[0x123], 0x34);
+	EXPECT_EQ(timers[0].c_step, 7);
+	EXPECT_EQ(dsp::state.TEMP[0], 0x1234);
+	EXPECT_EQ(arm_Reg[0].I, 11u);
+	second.load();
+	EXPECT_EQ(aica_reg[0x123], 0x56);
+	EXPECT_EQ(timers[0].c_step, 19);
+	EXPECT_EQ(dsp::state.TEMP[0], 0x5678);
+	EXPECT_EQ(arm_Reg[0].I, 22u);
+	original.load();
+}
+
+TEST_F(AicaArmTest, InterpreterUsesFullAttachedSoundRam)
+{
+	RamRegion previousRam = aica_ram;
+	std::vector<u32> ram(0x800000 / sizeof(u32));
+	ram[0x1000 / 4] = 0xe5810000; // str r0, [r1]
+	aica_ram.setRegion(reinterpret_cast<u8*>(ram.data()), ram.size() * sizeof(u32));
+	reset();
+	Arm7Enabled = true;
+	arm7ClockTicks = 0;
+	arm_Reg[R15_ARM_NEXT].I = 0x1000;
+	arm_Reg[0].I = 0x60006000;
+	arm_Reg[1].I = 0x7e0000;
+	runInterpreterCycles(1);
+	EXPECT_EQ(ram[0x7e0000 / 4], 0x60006000u);
+	EXPECT_EQ(ram[0x1e0000 / 4], 0u);
+	aica_ram = previousRam;
+}
+
+TEST_F(AicaArmTest, BoardSampleInterruptIsLevelSensitiveAndIsolated)
+{
+	BoardState previous, first, second;
+	previous.save();
+	const bool oldHost = setBoardHost(true);
+	first.initialize();
+	writeTimerAndIntReg<u16>(MCIEB_addr, 0x400);
+	first.save();
+	second.initialize();
+	second.save();
+	first.load();
+	s16 left = -1, right = -1;
+	EXPECT_TRUE(boardTimeStep(left, right));
+	EXPECT_EQ(left, 0);
+	EXPECT_EQ(right, 0);
+	first.save();
+	second.load();
+	EXPECT_FALSE(boardInterruptPending());
+	first.load();
+	EXPECT_TRUE(boardInterruptPending());
+	writeTimerAndIntReg<u16>(MCIRE_addr, 0x400);
+	EXPECT_FALSE(boardInterruptPending());
+	setBoardHost(oldHost);
+	previous.load();
+}
+
+#ifdef USE_HIKARU
+TEST_F(AicaArmTest, HikaruSoundAdapterKeepsBoardsIndependent)
+{
+	std::vector<u8> first(0x800000), second(0x800000);
+	unsigned samples = 0;
+	hikaru::Sound sound([](void* p, s16, s16) { ++*static_cast<unsigned*>(p); }, &samples);
+	auto cb = sound.callbacks();
+	ASSERT_EQ(cb.attach(cb.opaque, 0, first.data(), first.size()), 0);
+	ASSERT_EQ(cb.attach(cb.opaque, 1, second.data(), second.size()), 0);
+	ASSERT_EQ(cb.reset(cb.opaque), 0);
+	ASSERT_EQ(cb.set_reset(cb.opaque, 0), 0);
+	first[0x100000] = 0x55;
+	first[0x400] = 1;
+	ASSERT_EQ(cb.write(cb.opaque, 0, 0, 2, 0x4000), 0);
+	hikaru::Sound::BoardDiagnostics diag;
+	ASSERT_TRUE(sound.diagnostics(0, diag));
+	EXPECT_EQ(diag.bankBytes, 1u);
+	EXPECT_EQ(diag.queuedCommands, 1u);
+	EXPECT_EQ(diag.keys, 1u);
+	ASSERT_TRUE(sound.diagnostics(1, diag));
+	EXPECT_EQ(diag.bankBytes, 0u);
+	EXPECT_EQ(diag.queuedCommands, 0u);
+	EXPECT_EQ(diag.keys, 0u);
+	ASSERT_EQ(cb.write(cb.opaque, 0, MCIEB_addr, 2, 0x400), 0);
+	ASSERT_EQ(cb.write(cb.opaque, 0, 0x2800, 2, 0x000f), 0);
+	ASSERT_EQ(cb.write(cb.opaque, 0, 0x2802, 2, 0x1234), 0);
+	u64 laneValue = 0;
+	ASSERT_EQ(cb.read(cb.opaque, 0, 0x2800, 2, &laneValue), 0);
+	EXPECT_EQ(laneValue & 0xf, 0xfu);
+	ASSERT_EQ(cb.read(cb.opaque, 0, 0x2802, 2, &laneValue), 0);
+	EXPECT_EQ(laneValue, 0x1234u);
+	boardTestMidiCalls = 0;
+	setMidiReceiver(boardTestMidiReceiver);
+	ASSERT_EQ(cb.write(cb.opaque, 0, 0x280c, 1, 0x55), 0);
+	EXPECT_EQ(boardTestMidiCalls, 0u);
+	setMidiReceiver(nullptr);
+	ASSERT_EQ(cb.advance(cb.opaque, 200000), 0);
+	EXPECT_EQ(samples, 44u);
+	EXPECT_EQ(cb.irq(cb.opaque, 0), 1);
+	EXPECT_EQ(cb.irq(cb.opaque, 1), 0);
+	ASSERT_EQ(cb.write(cb.opaque, 0, MCIRE_addr, 2, 0x400), 0);
+	EXPECT_EQ(cb.irq(cb.opaque, 0), 0);
+	u64 value = 0;
+	ASSERT_EQ(cb.read(cb.opaque, 0, 0x2c00, 4, &value), 0);
+	EXPECT_EQ(value, 1u);
+	ASSERT_EQ(cb.write(cb.opaque, 0, 0x2c00, 4, 0), 0);
+	ASSERT_EQ(cb.read(cb.opaque, 0, 0x2c00, 4, &value), 0);
+	EXPECT_EQ(value, 0u);
+	ASSERT_EQ(cb.read(cb.opaque, 1, 0x2c00, 4, &value), 0);
+	EXPECT_EQ(value, 1u);
+	ASSERT_EQ(cb.write(cb.opaque, 1, 0x2c00, 1, 0xff), 0);
+	ASSERT_EQ(cb.read(cb.opaque, 1, 0x2c00, 1, &value), 0);
+	EXPECT_EQ(value, 1u);
+	cb.detach(cb.opaque);
+}
+
+TEST_F(AicaArmTest, HikaruBatchedSamplesMatchSingleSampleSlices)
+{
+	struct Result {
+		std::vector<std::array<s16, 2>> samples;
+		std::vector<std::array<u64, 3>> sampleStats;
+		hikaru::Sound* sound = nullptr;
+		std::array<u32, 2> counters{}, pc{};
+		std::array<int, 2> irq{};
+		u64 clipped = 0, saturated = 0;
+	};
+	auto run = [](bool singleSample, Result& result) {
+		std::array<std::vector<u32>, 2> ram = {
+			std::vector<u32>(0x800000 / 4), std::vector<u32>(0x800000 / 4)};
+		hikaru::Sound sound([](void* p, s16 l, s16 r) {
+			auto& result = *static_cast<Result*>(p);
+			result.samples.push_back({l, r});
+			result.sampleStats.push_back({result.sound->mixedSamples(), result.sound->mixedClippedSamples(), result.sound->boardSaturatedSamples()});
+		}, &result);
+		result.sound = &sound;
+		auto cb = sound.callbacks();
+		for (unsigned b = 0; b < 2; ++b) {
+			// Increment r0 and publish it to RAM on each ARM loop.
+			ram[b][0] = 0xe2800001; // add r0, r0, #1
+			ram[b][1] = 0xe58f0018; // str r0, [pc, #0x18]
+			ram[b][2] = 0xeafffffc; // b 0
+			for (unsigned i = 0; i < 32; ++i)
+				ram[b][0x1000 / 4 + i] = b ? 0x10001000 : 0x30003000;
+			ASSERT_EQ(cb.attach(cb.opaque, b, reinterpret_cast<u8*>(ram[b].data()), 0x800000), 0);
+		}
+		ASSERT_EQ(cb.reset(cb.opaque), 0);
+		ASSERT_EQ(cb.set_reset(cb.opaque, 0), 0);
+		for (unsigned b = 0; b < 2; ++b) {
+			ASSERT_EQ(cb.write(cb.opaque, b, 0x2800, 2, 0xf), 0); // master volume
+			ASSERT_EQ(cb.write(cb.opaque, b, 0x04, 2, 0x1000), 0); // sample address
+			ASSERT_EQ(cb.write(cb.opaque, b, 0x0c, 2, 64), 0); // loop end
+			ASSERT_EQ(cb.write(cb.opaque, b, 0x10, 2, 31), 0); // attack
+			ASSERT_EQ(cb.write(cb.opaque, b, 0x24, 2, 0x0f00), 0); // direct level
+			ASSERT_EQ(cb.write(cb.opaque, b, 0x28, 2, 0x20), 0); // no filter
+			ASSERT_EQ(cb.write(cb.opaque, b, 0, 2, 0xc200), 0); // key on, loop
+			ASSERT_EQ(cb.write(cb.opaque, b, MCIEB_addr, 2, 0x400), 0);
+			ASSERT_EQ(cb.write(cb.opaque, b, 0x2c00, 4, 0), 0);
+		}
+		constexpr u32 totalCycles = 2000000;
+		for (u32 remaining = totalCycles; remaining;) {
+			const u32 slice = std::min(remaining, singleSample ? 4535u : 6100u);
+			ASSERT_EQ(cb.advance(cb.opaque, slice), 0);
+			remaining -= slice;
+		}
+		for (unsigned b = 0; b < 2; ++b) {
+			hikaru::Sound::BoardDiagnostics diag;
+			ASSERT_TRUE(sound.diagnostics(b, diag));
+			result.counters[b] = ram[b][0x24 / 4];
+			result.pc[b] = diag.armPc;
+			result.irq[b] = cb.irq(cb.opaque, b);
+		}
+		result.clipped = sound.mixedClippedSamples();
+		result.saturated = sound.boardSaturatedSamples();
+		cb.detach(cb.opaque);
+	};
+	Result reference, batched;
+	run(true, reference);
+	run(false, batched);
+	ASSERT_EQ(reference.samples.size(), 441u);
+	EXPECT_TRUE(std::any_of(reference.samples.begin(), reference.samples.end(), [](const auto& frame) { return frame[0] != 0 || frame[1] != 0; }));
+	EXPECT_GT(reference.counters[0], 0u);
+	EXPECT_GT(reference.counters[1], 0u);
+	EXPECT_EQ(batched.samples, reference.samples);
+	EXPECT_EQ(batched.sampleStats, reference.sampleStats);
+	EXPECT_EQ(batched.counters, reference.counters);
+	EXPECT_EQ(batched.pc, reference.pc);
+	EXPECT_EQ(batched.irq, reference.irq);
+	EXPECT_EQ(batched.clipped, reference.clipped);
+	EXPECT_EQ(batched.saturated, reference.saturated);
+}
+#endif
+
+TEST_F(AicaArmTest, BoardDmaDoesNotWritePastWaveRam)
+{
+	RamRegion previousRam = aica_ram;
+	BoardState previous, board;
+	previous.save();
+	const bool oldHost = setBoardHost(true);
+	std::vector<u8> ram(0x800000 + 16, 0xaa);
+	aica_ram.setRegion(ram.data(), 0x800000);
+	board.initialize();
+	CommonData->DMEA_hi = 0x7f;
+	CommonData->DMEA_lo = 0x3fff;
+	CommonData->DGATE = 1;
+	writeTimerAndIntReg<u16>(0x288c, 0x8011); // clear 4 words to wave RAM
+	for (size_t i = 0x7ffffc; i < 0x800000; ++i) EXPECT_EQ(ram[i], 0);
+	for (size_t i = 0x800000; i < ram.size(); ++i) EXPECT_EQ(ram[i], 0xaa);
+	setBoardHost(oldHost);
+	previous.load();
+	aica_ram = previousRam;
+}
+
+TEST_F(AicaArmTest, BoardDmaArmResetDoesNotTouchDreamcastReset)
+{
+	RamRegion previousRam = aica_ram;
+	BoardState previous, board;
+	previous.save();
+	const u16 dreamcastReset = readAicaReg<u16>(0x2c00);
+	const bool oldHost = setBoardHost(true);
+	std::vector<u32> ram(0x800000 / 4);
+	aica_ram.setRegion(reinterpret_cast<u8*>(ram.data()), 0x800000);
+	board.initialize();
+	CommonData->DRGA = 0x2c00 / 4;
+	writeTimerAndIntReg<u16>(0x288c, 0x0005); // copy one zero word to ARM reset
+	EXPECT_TRUE(Arm7Enabled);
+	EXPECT_EQ(readAicaReg<u16>(0x2c00) & 1, 0);
+	setBoardHost(oldHost);
+	EXPECT_EQ(readAicaReg<u16>(0x2c00), dreamcastReset);
+	previous.load();
+	aica_ram = previousRam;
+}
+
+TEST_F(AicaArmTest, AirTrixSoundFirmwareInitializesWhenProvided)
+{
+	const char* path = std::getenv("HOLLYCAST_HIKARU_SOUND_RAM_IMAGE");
+	if (!path || !*path)
+		GTEST_SKIP() << "Set HOLLYCAST_HIKARU_SOUND_RAM_IMAGE to an 8 MiB sound RAM capture";
+	std::ifstream file(path, std::ios::binary | std::ios::ate);
+	ASSERT_TRUE(file);
+	ASSERT_EQ(file.tellg(), std::streampos(0x800000));
+	file.seekg(0);
+	std::vector<u32> ram(0x800000 / sizeof(u32));
+	ASSERT_TRUE(file.read(reinterpret_cast<char*>(ram.data()), 0x800000));
+	std::vector<u32> secondRam = ram;
+	RamRegion previousRam = aica_ram;
+	BoardState previous, board, secondBoard;
+	previous.save();
+	aica_ram.setRegion(reinterpret_cast<u8*>(ram.data()), 0x800000);
+	board.initialize();
+	enableInterpreter(true);
+	board.save();
+	aica_ram.setRegion(reinterpret_cast<u8*>(secondRam.data()), 0x800000);
+	secondBoard.initialize();
+	enableInterpreter(true);
+	secondBoard.save();
+	for (int i = 0; i < 15625 && (ram[0x5c / 4] != 0x54494e49 || secondRam[0x5c / 4] != 0x54494e49); ++i)
+	{
+		aica_ram.setRegion(reinterpret_cast<u8*>(ram.data()), 0x800000);
+		board.load();
+		runInterpreterCycles(4096);
+		board.save();
+		aica_ram.setRegion(reinterpret_cast<u8*>(secondRam.data()), 0x800000);
+		secondBoard.load();
+		runInterpreterCycles(4096);
+		secondBoard.save();
+	}
+	EXPECT_EQ(ram[0x5c / 4], 0x54494e49u);
+	EXPECT_EQ(secondRam[0x5c / 4], 0x54494e49u);
+	previous.load();
+	aica_ram = previousRam;
+}
+
+#ifdef USE_HIKARU
+TEST_F(AicaArmTest, HikaruAdapterRunsAirTrixFirmwareWhenProvided)
+{
+	const char* path = std::getenv("HOLLYCAST_HIKARU_SOUND_RAM_IMAGE");
+	if (!path || !*path)
+		GTEST_SKIP() << "Set HOLLYCAST_HIKARU_SOUND_RAM_IMAGE to an 8 MiB sound RAM capture";
+	std::ifstream file(path, std::ios::binary | std::ios::ate);
+	ASSERT_TRUE(file);
+	ASSERT_EQ(file.tellg(), std::streampos(0x800000));
+	file.seekg(0);
+	std::vector<u32> first(0x800000 / 4);
+	ASSERT_TRUE(file.read(reinterpret_cast<char*>(first.data()), 0x800000));
+	std::vector<u32> second = first;
+	unsigned samples = 0;
+	hikaru::Sound sound([](void* p, s16, s16) { ++*static_cast<unsigned*>(p); }, &samples);
+	auto cb = sound.callbacks();
+	ASSERT_EQ(cb.attach(cb.opaque, 0, reinterpret_cast<u8*>(first.data()), 0x800000), 0);
+	ASSERT_EQ(cb.attach(cb.opaque, 1, reinterpret_cast<u8*>(second.data()), 0x800000), 0);
+	ASSERT_EQ(cb.reset(cb.opaque), 0);
+	ASSERT_EQ(cb.set_reset(cb.opaque, 0), 0);
+	ASSERT_EQ(cb.write(cb.opaque, 0, 0x2c00, 4, 0), 0);
+	ASSERT_EQ(cb.write(cb.opaque, 1, 0x2c00, 4, 0), 0);
+	for (int i = 0; i < 10000 && (first[0x5c / 4] != 0x54494e49 || second[0x5c / 4] != 0x54494e49); ++i)
+		ASSERT_EQ(cb.advance(cb.opaque, 6100), 0);
+	EXPECT_EQ(first[0x5c / 4], 0x54494e49u);
+	EXPECT_EQ(second[0x5c / 4], 0x54494e49u);
+	EXPECT_GT(samples, 0u);
+	cb.detach(cb.opaque);
+}
+#endif
 
 TEST_F(AicaArmTest, ArithmeticOpsTest)
 {

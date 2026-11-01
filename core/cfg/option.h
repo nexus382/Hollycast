@@ -440,6 +440,9 @@ extern Option<int, false> MenuBarVisibility;
 constexpr bool LimitFPS = true;
 extern Option<bool> DSPEnabled;
 extern Option<int> AudioBufferSize;	//In samples ,*4 for bytes
+#ifdef USE_HIKARU
+extern Option<bool> HikaruAudioPacing;
+#endif
 extern Option<bool> AutoLatency;
 
 extern OptionString AudioBackend;
