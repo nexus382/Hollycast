@@ -1,0 +1,21 @@
+# Copyright 2026 The Hollycast Authors
+cmake_minimum_required(VERSION 3.22)
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    project(HikaruBusTests LANGUAGES CXX)
+    enable_testing()
+endif()
+
+if(NOT TARGET hollycast_hikaru_bus)
+    add_subdirectory(../../core/hw/hikaru "${CMAKE_CURRENT_BINARY_DIR}/hikaru")
+endif()
+
+foreach(component bridge board_memory sh4_cpu sh4_peripherals sh4_dma roms jvs mie machine eeprom93c46 protection)
+    add_executable(hikaru_${component}_test ${component}_test.cpp)
+    target_link_libraries(hikaru_${component}_test PRIVATE hollycast_hikaru_bus)
+    if(MSVC)
+        target_compile_options(hikaru_${component}_test PRIVATE /W4)
+    else()
+        target_compile_options(hikaru_${component}_test PRIVATE -Wall -Wextra -Werror)
+    endif()
+    add_test(NAME hikaru_${component} COMMAND hikaru_${component}_test)
+endforeach()

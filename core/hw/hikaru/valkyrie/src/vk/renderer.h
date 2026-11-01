@@ -1,0 +1,110 @@
+/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* 
+ * Valkyrie
+ * Copyright (C) 2011, Stefano Teso
+ * 
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+#ifndef __VK_REND_H__
+#define __VK_REND_H__
+
+#include "vk/core.h"
+
+#ifdef NDEBUG
+#define VK_ASSERT_NO_GL_ERROR()
+#else
+#define VK_ASSERT_NO_GL_ERROR() \
+	do { \
+		GLenum error = glGetError (); \
+		char *msg = NULL; \
+		switch (error) { \
+		case GL_INVALID_ENUM: \
+			msg = "invalid enum"; \
+			break; \
+		case GL_INVALID_VALUE: \
+			msg = "invalid value"; \
+			break; \
+		case GL_INVALID_OPERATION: \
+			msg = "invalid operation"; \
+			break; \
+		case GL_INVALID_FRAMEBUFFER_OPERATION: \
+			msg = "invalid fb operation"; \
+			break; \
+		case GL_OUT_OF_MEMORY: \
+			msg = "out of memory"; \
+			break; \
+		default: \
+			break; \
+		} \
+		if (msg) \
+			VK_ERROR ("GL ERROR: %s", msg); \
+		VK_ASSERT (error == GL_NO_ERROR); \
+	} while (0)
+#endif
+
+typedef struct vk_renderer_t vk_renderer_t;
+
+struct vk_renderer_t {
+	GLuint target_fbo;
+
+	unsigned width;
+	unsigned height;
+	/* Requested size of the Hikaru 3D targets; output size remains above. */
+	unsigned internal_width;
+	unsigned internal_height;
+	char message[256];
+
+	void	(* destroy)(vk_renderer_t **renderer_);
+	void	(* reset)(vk_renderer_t *renderer);
+	void	(* begin_frame)(vk_renderer_t *renderer);
+	void	(* end_frame)(vk_renderer_t *renderer);
+};
+
+vk_renderer_t		*vk_renderer_new (unsigned width, unsigned height);
+int			 vk_renderer_init (vk_renderer_t *renderer);
+void			 vk_renderer_begin_frame (vk_renderer_t *renderer);
+void			 vk_renderer_end_frame (vk_renderer_t *renderer);
+void			 vk_renderer_clear_gl_errors (void);
+
+static inline void
+vk_renderer_reset (vk_renderer_t *renderer)
+{
+	renderer->reset (renderer);
+}
+
+static inline void
+vk_renderer_destroy (vk_renderer_t **renderer_)
+{
+	if (renderer_ && *renderer_) {
+		if ((*renderer_)->destroy) (*renderer_)->destroy (renderer_);
+
+		free (*renderer_);
+		*renderer_ = NULL;
+	}
+}
+
+GLuint	vk_renderer_compile_program (const char *vs_src, const char *fs_src);
+void	vk_renderer_destroy_program (GLuint program);
+void	vk_renderer_print_uniforms (GLuint program);
+
+void	vk_renderer_ortho (mtx4x4f_t proj, float l, float r, float b, float t, float n, float f);
+void	vk_renderer_frustum (mtx4x4f_t proj, float l, float r, float b, float t, float n, float f);
+bool	vk_renderer_compute_normal_matrix (mtx3x3f_t dst, mtx4x4f_t src);
+void	vk_renderer_translate (mtx4x4f_t m, float x, float y, float z);
+
+#endif /* __VK_REND_H__ */
+

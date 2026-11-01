@@ -25,6 +25,10 @@
 #include "ui/performance_overlay.h"
 #include "sdl/sdl.h"
 #include "cfg/option.h"
+#ifdef USE_HIKARU
+#include "audio/audiostream.h"
+#include <limits>
+#endif
 
 SDLGLGraphicsContext::SDLGLGraphicsContext(void *window, void *display)
 	: GLGraphicsContext(window, display)
@@ -87,17 +91,8 @@ bool SDLGLGraphicsContext::init()
 	INFO_LOG(RENDERER, "Created SDL Window and GL Context successfully");
 
 	SDL_GL_MakeCurrent(sdlWindow, glcontext);
-	// Swap at vsync
-	swapOnVSync = config::VSync;
-	int swapInterval = 0;
-	if (swapOnVSync)
-	{
-		if (settings.display.refreshRate > 60.f)
-			swapInterval = settings.display.refreshRate / 60.f;
-		else
-			swapInterval = 1;
-	}
-	SDL_GL_SetSwapInterval(swapInterval);
+	gameSwapIntervalChanged = true;
+	changeGLSwapInterval();
 
 #ifdef GLES
 	if (gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress) == 0)
@@ -140,20 +135,39 @@ void SDLGLGraphicsContext::swap()
 
 void SDLGLGraphicsContext::changeGLSwapInterval()
 {
-	if (!gameSwapIntervalChanged && swapOnVSync == (!settings.input.fastForwardMode && config::VSync))
+	const bool onVSync = !settings.input.fastForwardMode && config::VSync;
+#ifdef USE_HIKARU
+	const bool forHikaru = settings.platform.isHikaru() && config::LimitFPS
+		&& AudioOutputQueuedFrames() != std::numeric_limits<u32>::max();
+	if (!gameSwapIntervalChanged && swapOnVSync == onVSync && swapForHikaru == forHikaru)
+#else
+	if (!gameSwapIntervalChanged && swapOnVSync == onVSync)
+#endif
 		return;
-	swapOnVSync = (!settings.input.fastForwardMode && config::VSync);
+	swapOnVSync = onVSync;
+#ifdef USE_HIKARU
+	swapForHikaru = forHikaru;
+#endif
 	gameSwapIntervalChanged = false;
 	int swapInterval = 0;
 	if (swapOnVSync)
 	{
+#ifdef USE_HIKARU
+		// Hikaru runs both CPUs and draws every frame on this thread. Adaptive
+		// sync avoids a second display wait after a frame misses its deadline;
+		// the audio output provides the 60 Hz speed limit when we are faster.
+		if (forHikaru)
+			swapInterval = -1;
+		else
+#endif
 		if (settings.display.refreshRate > 60.f)
 			swapInterval = settings.display.refreshRate / 60.f * gameSwapInterval;
 		else
 			swapInterval = gameSwapInterval;
 		INFO_LOG(RENDERER, "Swap interval changed to %d", swapInterval);
 	}
-	SDL_GL_SetSwapInterval(swapInterval);
+	if (SDL_GL_SetSwapInterval(swapInterval) < 0 && swapInterval == -1)
+		SDL_GL_SetSwapInterval(1);
 }
 
 

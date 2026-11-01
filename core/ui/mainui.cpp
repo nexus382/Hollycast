@@ -32,8 +32,16 @@
 #include "rend/vmu_window.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#ifdef __APPLE__
+#include "wsi/gl_context.h"
+#endif
+#endif
 
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 static bool mainui_enabled;
@@ -107,6 +115,10 @@ void mainui_init()
 
 void mainui_term()
 {
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru())
+		hikaru::frontend::releaseGraphics();
+#endif
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::shutdown();
 #endif
@@ -126,14 +138,47 @@ void mainui_loop(bool forceStart)
 		fc_profiler::startThread("main");
 		tickUiSound();
 
-		if (mainui_rend_frame() && imguiDriver != nullptr)
+#ifdef USE_HIKARU
+		static const bool traceHikaru = std::getenv("HIKARU_TRACE_TIMING") != nullptr;
+		const bool measure = traceHikaru && settings.platform.isHikaru() && !gui_is_open();
+		const auto frameStart = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
+		const bool rendered = mainui_rend_frame();
+#ifdef USE_HIKARU
+		const auto renderEnd = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
+		if (rendered && imguiDriver != nullptr)
 		{
 			try {
+#if defined(USE_HIKARU) && defined(__APPLE__)
+				// Submit the game and overlay before the macOS SDL display wait,
+				// so the GPU can work while presentation is synchronized.
+				if (settings.platform.isHikaru() && !gui_is_open() && config::VSync
+					&& !settings.input.fastForwardMode)
+					glFlush();
+#endif
 				imguiDriver->present();
 			} catch (const FlycastException& e) {
 				forceReinit = true;
 			}
 		}
+#ifdef USE_HIKARU
+		if (measure && rendered && !gui_is_open())
+		{
+			static unsigned frames;
+			static double renderMs, presentMs;
+			const auto end = std::chrono::steady_clock::now();
+			renderMs += std::chrono::duration<double, std::milli>(renderEnd - frameStart).count();
+			presentMs += std::chrono::duration<double, std::milli>(end - renderEnd).count();
+			if (++frames == 60)
+			{
+				std::fprintf(stderr, "Hikaru host timing: frames=%u render_ms=%.3f present_ms=%.3f total_ms=%.3f vsync=%d fast_forward=%d\n",
+					frames, renderMs / frames, presentMs / frames, (renderMs + presentMs) / frames,
+					int(bool(config::VSync)), int(settings.input.fastForwardMode));
+				frames = 0; renderMs = presentMs = 0;
+			}
+		}
+#endif
 		if (imguiDriver == nullptr)
 			forceReinit = true;
 

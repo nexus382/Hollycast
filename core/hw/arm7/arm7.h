@@ -7,8 +7,10 @@ namespace aica::arm
 void init();
 void term();
 void reset();
+void resetInterpreter();
 void run(u32 samples);
 void enable(bool enabled);
+void enableInterpreter(bool enabled);
 // Called when the arm interrupts the SH4 to make sure it has enough cycles to finish what it's doing.
 void avoidRaceCondition();
 
@@ -98,6 +100,29 @@ typedef union
 } reg_pair;
 
 alignas(8) extern reg_pair arm_Reg[RN_ARM_REG_COUNT];
+
+// Interpreter execution state, including the AICA-to-ARM interrupt latch.
+// RAM and AICA registers are owned separately by the sound board. Callers
+// must serialize switching with all ARM and AICA execution.
+struct ExecutionState
+{
+	reg_pair registers[RN_ARM_REG_COUNT]{};
+	int clockTicks = 0;
+	int mode = 0;
+	bool irqEnable = false;
+	bool fiqEnable = false;
+	bool enabled = false;
+	bool aicaInterrupt = false;
+	u32 aicaInterruptLevel = 0;
+	bool interruptOutput = false;
+	u32 interruptLevel = 0;
+	u32 interruptMode = 0;
+};
+
+void saveExecutionState(ExecutionState& state);
+void loadExecutionState(const ExecutionState& state);
+// Runs one interpreter timeslice without stepping the AICA sample generator.
+void runInterpreterCycles(u32 cycles);
 
 // AICA ARM cpu clock: 22.5792 MHz
 #define ARM_CYCLES_PER_SAMPLE (AICA_ARM_CLOCK / 44100)

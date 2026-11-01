@@ -1,0 +1,818 @@
+/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* 
+ * Valkyrie
+ * Copyright (C) 2011, 2012, Stefano Teso
+ * 
+ * Valkyrie is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Valkyrie is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Valkyrie.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "vk/core.h"
+#include "engine_internal.h"
+
+#include "mach/hikaru/hikaru.h"
+#include "mach/hikaru/hikaru-memctl.h"
+#include "mach/hikaru/hikaru-gpu.h"
+#include "mach/hikaru/hikaru-renderer.h"
+#include "cpu/sh/sh4.h"
+
+/*
+ * Memory Controller
+ * =================
+ *
+ * The Hikaru mainboard is connected to a number of external boards: the
+ * ROM board (ROMBD), the primary sound board, an optional sound board, an
+ * optional network board.
+ *
+ * Access to these devices is performed through an 'external BUS'. The
+ * memory controller decides which external device is mapped to what
+ * part of the SH-4 address space.
+ *
+ * There are (very likely) two of these memory controllers, one for each
+ * SH-4 CPU. They are likely the two xxx-xxxxx SEGA ICs conveniently placed
+ * in the proximity of the two CPUs.
+ *
+ * Aside from memory device mapping, they also provide a DMA facility to
+ * transfer data directly from different devices on the external BUS.
+ *
+ *
+ * Mapping
+ * =======
+ *
+ * Direct access to these extenral devices is possible by mapping them in
+ * the SH-4 with the memory controller: in particular, they get mapped within
+ * a couple of apertures: one is located at 02000000-03FFFFFF, the other
+ * at 16000000-17FFFFFF. Other portions of the SH-4 address space (possibly
+ * all of it) may be managed in a similar way, but apparently their emulation
+ * is not critical (their mappings don't seem to change.)
+ *
+ * What is mapped to the apertures is determined by the  MMIOs. See
+ * get_bank_for_addr () for the details. Each byte in the MMIOs (+10, +14,
+ * and +18 are confirmed) controls a 16 MB aperture. See @0C006688.
+ *
+ *
+ * MMIO Ports
+ * ==========
+ *
+ *  Offset	+3       +2       +1       +0
+ *  +0x00	IIIIIIII IIIIIIII IIIIIIII IIIIIIII	Controller ID
+ *  +0x04	---u---- -------- ---sEEEE EEFFFFFF	DMA Status
+ *  +0x08	-------- -------- -------- --------
+ *  +0x0C	-------- -------- -------- --------
+ *  +0x10	dddddddd cccccccc bbbbbbbb aaaaaaaa	Aperture Addresses 0
+ *  +0x14	hhhhhhhh gggggggg ffffffff eeeeeeee	Aperture Addresses 1
+ *  +0x18	llllllll kkkkkkkk jjjjjjjj iiiiiiii	Aperture Addresses 2
+ *  +0x1C	pppppppp oooooooo nnnnnnnn mmmmmmmm	Aperture Control 0?
+ *  +0x20	tttttttt ssssssss rrrrrrrr qqqqqqqq	Aperture Control 1?
+ *  +0x24	xxxxxxxx wwwwwwww vvvvvvvv uuuuuuuu	Aperture Control 2?
+ *  +0x28	-------- -------- -------- --------
+ *  +0x2C	-------- -------- -------- --------
+ *  +0x30	SSSSSSSS SSSSSSSS SSSSSSSS SSS-----	DMA Source Address
+ *  +0x34	DDDDDDDD DDDDDDDD DDDDDDDD DDD-----	DMA Destination Address
+ *  +0x38	-------C LLLLLLLL LLLLLLLL LLLLLLLL	DMA Control
+ *  +0x3C	-------- -------- -------- XXXXXXXX	Unknown
+ *
+ * Fields	Meaning			Values			References
+ * -----------------------------------------------------------------------
+ * +0x00	I = ID (0 for master, ~0 for slave)
+ * +0x04	u = Unknown
+ *		s = DMA status
+ *		E = BUS error bits, Master
+ *		F = BUS error bits, Slave
+ * +0x10	a = Controls 14000080+
+ *		b = Controls 15000000?
+ *					40 [m]			@0C00BDFC
+ *		c = Controls 16xxxxxx	40 [m]			@0C0016A4
+ *					02 [m]			@0C00BDFC
+ *		d = Controls 17xxxxxx	41 [m]			@0C0016A4
+ *					04 [m]			@0C001C70
+ *					06 [m]			@0C001C70
+ *					03 [m]			@0C00BDFC
+ * +0x14	e = Unknown		C0 [m]			@0C0016A4
+ *					E6 [s]			@0C00BE70
+ *					70 [s] !!!!!!!!!!!
+ *		f = Unknown		C1 [m]			@0C0016A4
+ *					EE [s]			@0C00BE70
+ *		g = Unknown		F2 [m]			@0C0016A4
+ *					C2 [m]			@0C00BDFC
+ *					F4 [s]			@0C00BE70
+ *		h = Unknown		F3 [m]			@0C0016A4
+ *					C3 [m]			@0C00BDFC
+ *					CC [s]			@0C00BE70
+ * +0x18	i = Controls 00xxxxxx ?
+ *		j = Controls 01xxxxxx ?
+ *		k = Controls 02xxxxxx				@0C0016A4
+ *		l = Controls 03xxxxxx				@0C007964,@0C001F3C
+ * +0x1C	m = Controls 18xxxxxx[m]			@0C001CC4
+ *		    Controls 14xxxxxx[s]	00,01
+ *		n = Unknown
+ *		o = Unknown			01 [m]		@0C00BDFC
+ *						01 [s]		@0C00BE70
+ *		p = Unknown
+ * +0x20	q = Unknown			FE [m]		@0C00xxxx, @0C00BDFC
+ *		r = Unknown			00 [m]
+ *		s = Unknown			FE [m]
+ *		t = Unknown			00 [m]
+ * +0x24	u = Unknown			E6 [m]
+ *		v = Unknown			5E [m]
+ *						EE [m] MIE	@0C00BDFC
+ *		w = Unknown			F4 [m] (E4, B4, F4 while accessing banks D, E in AIRTRIX)
+ *						FD [m] SNDBD	@0C001F3C, @oCooBDFC
+ *		x = Unknown			CC [m]		@0C00BDFC, @0C007820 => NIBBLES
+ * +0x30	S = DMA source address
+ * +0x34	D = DMA destination address
+ * +0x38	C = DMA control (begin/busy)
+ *		L = DMA transfer length in 32-bit words
+ *		    See @0C008640
+ * +0x3C	X = 0C to access the SNDBD1:027028BC
+ *		    A2 to access the SNDBD2:027028BC
+ *		    See @0C001748
+ *
+ * NOTE: other interesting evidence is at PH:@0C0124B8.
+ *
+ * NOTE: accessing 3C may alter other registers; for instance, the code at
+ * @0C001748  saves/restores 04000018 before accessing 0400003C.
+ *
+ * NOTE: accessing the bus (apertures) may give rise to errors, both during
+ * DMA operation and during normal access; these errors get reported in
+ * fields E and F.
+ *
+ * NOTE: 0400001E (field 'o') may be related to cache and/or master-slave
+ * syncrhonization. See PH:@0C0D6740 and its only caller.
+ *
+ * NOTE: direct access to the external BUS is likely prohibited when the DMA
+ * is running. See the IRL2 handler, AICA case.
+ *
+ *
+ * DMA Operation
+ * =============
+ *
+ * The DMA is likely used to transfer data from the main RAM to devices on
+ * different boards (ROMBD, SNDBD, SNDBD2, NETBD). DMA operation is initiated
+ * by setting bit 24 of +38. Upon termination, the MEMCTL raises IRL 1 on
+ * the master SH-4, and sets bit 12 of +04 and its corresponding error field.
+ *
+ * See @0C008640 for more details XXX
+ *
+ * NOTE: it may be the case that bit 12 and the error field are mutually
+ * exclusive.
+ *
+ *
+ * External BUS Address Space
+ * ==========================
+ *
+ * The address space of the external BUS is as follows:
+ *
+ * 04000000-043FFFFF	Texture RAM Bank 0
+ * 06000000-063FFFFF	Texture RAM Bank 1
+ * 0A000000-0A00FFFF	Unknown; ROMBD-related
+ * 0C000000-0CFFFFFF	Sound Board 1
+ * 0D000000-0DFFFFFF	Sound Board 2 [Optional]
+ * 0E000000-0E00FFFF	Network Board [Optional]
+ * 10000000-3FFFFFFF	ROMBD (EPROM, MASKROM, EEPROM get mapped here)
+ * 40000000-41FFFFFF	Slave RAM
+ * 48000000-483FFFFF	GPU CMDRAM
+ * 4C000000-4C3FFFFF	GPU Unknown
+ * 70000000-71FFFFFF	Master RAM
+ *
+ * NOTE: apparently the external bus is 31 bits wide or less. The MSB is
+ * used in mysterious ways. For instance, the code uses the MEMCTL DMA to
+ * read ROM data, but accesses the following ranges:
+ *
+ * 90000000-9FFFFFFF - 80000000 = 10000000-1FFFFFFF	EPROM
+ * A0000000-AFFFFFFF - 80000000 = 20000000-2FFFFFFF	MASKROM
+ *
+ *
+ * Rom Board (ROMBD)
+ * =================
+ *
+ * There are two known types of ROM board (which are neatly documented in
+ * the MAME hikaru driver.) The EPROM/MASKROM external BUS address can be
+ * recovered from information at offset +13C of the EPROM data.
+ *
+ * This is what this data looks like:
+ *
+ *	AIRTRIX (Type 1)		ICs	Size
+ *	================		===	====
+ *	
+ *	0003 fee8 c889 97c2 620c	29,30	2 x 4MB
+ *	ffff 0000 0000 0000 0000	 		
+ *	ffff 0000 0000 0000 0000	 		
+ *	ffff 0000 0000 0000 0000	 		
+ *	0005 b9a5 9e67 a52a bce0	37,38	2 x 16MB
+ *	ffff 0000 0000 0000 0000	 
+ *	0005 dabb b621 4bd4 5e6b	41,42	2 x 16MB
+ *	ffff 0000 0000 0000 0000	 
+ *	0005 0d06 ad63 790f a27e	45,46	2 x 16MB
+ *	ffff 0000 0000 0000 0000	 
+ *	0005 bdbb 4f01 14a7 6a4e	49,50	2 x 16MB
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	
+ *	BRAVEFF (Type ?)		ICs	Size
+ *	================		===	====
+ *	
+ *	0002 0000 0000 0000 0000 	29,30	2 x 2MB
+ *	0002 be43 7023 7077 f161	31,32	2 x 2MB
+ *	0002 c60d d4f0 b533 8f66	33,34	2 x 2MB
+ *	ffff 0000 0000 0000 0000 
+ *	0004 8613 2876 3700 2f6d 		2 x 4MB
+ *	0004 f545 a454 b97e bb4c 
+ *	0004 d6ff 6fe3 df40 f343 
+ *	0004 e3b6 2f23 b2b6 61c7 
+ *	0004 4792 7015 853b faf1 
+ *	0004 c44b 7a18 24dc e336 
+ *	0004 e3b0 e492 17bb e589 
+ *	0004 cd9f 08f3 3183 cd5c 
+ *	0004 8fb6 3fa8 ebbb 9ed9 
+ *	0004 2316 c644 66cc b590 
+ *	0004 47d0 320d e677 85ad 
+ *	0004 d76d cf62 4d9e 8564 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	
+ *	PHARRIER			ICs	Size
+ *	========			===	====
+ *	
+ *	0003 0000 0000 0000 0000	29,30	2 x 4MB 
+ *	0003 388c 13b5 d289 5910	31,32	2 x 4MB
+ *	0003 09a8 578f 73e5 94f7	33,34	2 x 4MB
+ *	0003 b1de 6dad 9019 6dd5	35,36	2 x 4MB
+ *	0005 7f16 2c37 1f9f aae5	37,38	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	0005 986c 8d7a bd1d 5304	41,42	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	0005 9784 b33d cb75 b08b	45,46	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	0005 5056 b3a9 cbde be85	49,50	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	0005 3d36 05bf d629 8ed6	53,54	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	0005 b9f5 0082 5875 8163	57,58	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	0005 b19d e7cc 158c d180	61,62	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	0005 34bc 677b 5524 349e	65,66	2 x 16MB
+ *	ffff 0000 0000 0000 0000	
+ *	
+ *	PODRACE (Type 2)		ICs	Size
+ *	================		===	====	
+ *	
+ *	0003 0000 0000 0000 0000	29,30	2 x 4MB
+ *	0003 5f01 4174 3594 38b3	31,32	2 x 4MB
+ *	ffff 0000 0000 0000 0000	
+ *	ffff 0000 0000 0000 0000	
+ *	0004 7993 8e18 4d44 d239	37,38	2 x 8MB
+ *	0004 4135 beab f0c8 04e2	39,40	2 x 8MB
+ *	0004 9532 4c1c 925d 02fb	41,42	2 x 8MB
+ *	0004 0809 7050 72bc 9311	43,44	2 x 8MB
+ *	0004 de84 9d8a 7a5c e7fc	45,46	2 x 8MB
+ *	0004 6806 1392 edf1 7bd1	47,48	2 x 8MB
+ *	0004 b82d e114 5792 e5e5	49,50	2 x 8MB
+ *	0004 3af3 a97c a8cc 721d	51,52	2 x 8MB
+ *	0004 ced7 d3cf 6b67 fc76	53,54	2 x 8MB
+ *	0004 586c 6954 13a0 db38	55,56	2 x 8MB
+ *	0004 4f03 42bf 8ea6 adb6	57,58	2 x 8MB
+ *	0004 8645 fc30 3847 ca6b	59,60	2 x 8MB
+ *	0004 4140 01c4 ebe6 8085	61,62	2 x 8MB
+ *	0004 b68b 7467 4715 4787	63,64	2 x 8MB
+ *	0004 3cd6 144a e5d3 ba35	65,66	2 x 8MB
+ *	0004 e668 08ed 1fe8 c4a1	67,68	2 x 8MB
+ *	
+ *	SGNASCAR (Type 2)		ICs	Size		Bus Bank
+ *	=================		===	====		========
+ *	
+ *	0003 0000 0000 0000 0000	35,36	2 x 4MB		10,11
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	0005 0352 d263 49fd 4ad3	19,20	2 x 16MB 	20,21
+ *	0005 e717 d635 3637 0e8e	21,22			22,23
+ *	0005 4001 8dab c65d bde3	23,24			24,25
+ *	0005 615c 293d 7507 1d85	25,26			26,27
+ *	0005 90a2 eccc 2b1e 2f9b	27,28			28,29
+ *	0005 c98b 3ffb 51e3 701b	29,30			2A,2B
+ *	0005 523f 2979 953c 2e5c	31,32			2C,2D
+ *	0005 28cf 283f f17b 74fb	33,34			2E,2F
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *	ffff 0000 0000 0000 0000 
+ *
+ * The mapping from IC numbers to entries has been determined by matching
+ * the CRCs in the entries and the CRC values reported in the MAME driver.
+ *
+ * Each entry (10 bytes) can be defined like this:
+ *
+ *	struct {
+ *		uint16_t log_size;
+ *		uint16_t bytesum_lo;
+ *		uint16_t wordsum_lo;
+ *		uint16_t bytesum_hi;
+ *		uint16_t wordsum_hi;
+ *	} rom_layout[4+16];
+ *
+ * and describes the size and CRC for an IC pair: the first four entries
+ * describe the EPROMs, the remaining 16 the MASKROMs. If the first word
+ * is FFFF, those ICs are not populated.
+ *
+ * Given the i'th entry, the size and location of an IC (pair) can be
+ * computed as follows (see @0C004ED2):
+ *
+ *	base = samurai_tag_at (0x18000000) ? 8 :
+ *	       samurai_tag_at (0x10000000) ? 0 : 0;
+ *	
+ *	size = 1*MB << rom_layout[i].log_size
+ *	
+ *	if (i < 4)
+ *		///////////////////////////////////////////
+ *		// EPROM
+ *		// SAMURAI at 10000000 -> base = 0 -> EPROM at 10,11,12,13
+ *		// SAMURAI at 18000000 -> base = 8 -> EPROM at 18,19,1A,1B
+ *		// each section is 4 or 8 MB (2 ICs)
+ *		///////////////////////////////////////////
+ *		bank = base + 0x10 + i
+ *
+ *	else if ((_0C00F01C & C) != 8)
+ *		///////////////////////////////////////////
+ *		// MASKROM, type 1
+ *		// SAMURAI at 10000000 -> base = 0 -> MASKROM at 20,21,22,23,...
+ *		// SAMURAI at 18000000 -> base = 8 -> MASKROM at 30,31,32,33,...
+ *		// each section is 16 or 32 MB (2 ICs)
+ *		///////////////////////////////////////////
+ *		bank = base * 2 + 0x1C + i 
+ *
+ *	else
+ *		///////////////////////////////////////////
+ *		// MASKROM, type 2
+ *		// SAMURAI at 10000000 -> base = 0 -> MASKROM at 20,22,24,26,...
+ *		// SAMURAI at 18000000 -> base = 8 -> MASKROM at 30,32,34,36,...
+ *		// each section is 16 or 32 MB (2 ICs)
+ *		///////////////////////////////////////////
+ *		bank = base * 2 + 0x20 + (i - 4) * 2
+ *	
+ *	bus_addr = bank >> 24
+ *	if (size < 8*MB)
+ *		bus_addr += 4*MB
+ *
+ * Here base is determined by the bootrom (see @0C00B834) by looking for
+ * the 'SAMURAI' string at both BUS addresses 18000000 and 10000000. If
+ * the string is found at bank 18, then the base is 8; it's 0 otherwise.
+ *
+ * What IC is mapped to what entry is determined by bits 2 and 3 of 0C00F01C.
+ * See memctl_get () and @0C004B32. 
+ */
+
+/* TODO modify the hikaru->mmap_[ms] instead */
+/* TODO raise m/s bus error on bad access */
+
+typedef struct {
+	vk_device_t base;
+
+	vk_buffer_t *regs;
+	bool master;
+} hikaru_memctl_t;
+
+/* MAME's Air Trix ROM regions are zero-filled beyond the populated chips.
+ * Preserve any bytes at the edge of a populated region on a wide read. */
+static void
+rombd_read_region (vk_buffer_t *rom, uint32_t offset, unsigned size, void *val)
+{
+	VK_ASSERT (size == 1 || size == 2 || size == 4 || size == 8);
+	const size_t length = vk_buffer_get_size (rom);
+	if (offset <= length && size <= length - offset) {
+		set_ptr (val, size, vk_buffer_get (rom, size, offset));
+		return;
+	}
+	uint64_t result = 0;
+	for (unsigned i = 0; i < size; ++i)
+		if ((uint64_t) offset + i < length)
+			result |= (uint64_t) vk_buffer_get (rom, 1, offset + i) << (i * 8);
+	set_ptr (val, size, result);
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+uint64_t
+hikaru_vendor_test_rombd_read (vk_buffer_t *rom, uint32_t offset, unsigned size)
+{
+	uint64_t value = 0;
+	rombd_read_region (rom, offset, size, &value);
+	return value;
+}
+#endif
+
+static int
+rombd_get (hikaru_t *hikaru, unsigned size, uint32_t bus_addr, void *val)
+{
+	hikaru_rombd_config_t *config = &hikaru->rombd_config;
+	uint32_t bank = bus_addr >> 24;
+	uint32_t offs = bus_addr & 0xFFFFFF;
+
+	/* Access here is valid even if performed on the wrong banks: we set
+	 * the ptr to garbage here because the hikaru bootrom reads
+	 * indiscriminately from banks 10-1B (including the EEPROM bank!) to
+	 * figure out the EPROM format. We don't want spurious matches
+	 * (that is, 0 vs. 0) to affect the computation. */
+	set_ptr (val, size, 0xDEADBEEFDEADBEEFull);
+
+	/* Nothing else to do if there's no actual ROM data */
+	if (!config->has_rom)
+		return 0;
+
+	if (bank >= config->eprom_bank[0] &&
+	    bank <= config->eprom_bank[1]) {
+		/* ROMBD EPROM */
+		uint32_t num = bank - config->eprom_bank[0]; /* 0 ... 3 */
+		uint32_t bank_size = config->eprom_bank_size == 2 ? 4*MB : 8*MB;
+		uint32_t bank_mask = bank_size - 1;
+		uint32_t real_offs = (offs & bank_mask) + num * config->eprom_source_stride;
+
+		rombd_read_region (hikaru->eprom, real_offs, size, val);
+
+	} else if (bank >= config->maskrom_bank[0] &&
+	           bank <= config->maskrom_bank[1]) {
+		/* ROMBD MASKROM */
+		/* XXX take in account MASKROM stretching here */
+		uint32_t num = bank - config->maskrom_bank[0]; /* 0 ... 15 */
+		uint32_t bank_size = 16*MB;
+		uint32_t bank_mask = bank_size - 1;
+		uint32_t real_offs = (offs & bank_mask) + num * bank_size;
+
+		rombd_read_region (hikaru->maskrom, real_offs, size, val);
+	}
+	return 0;
+}
+
+static int
+memctl_bus_get (hikaru_memctl_t *memctl, unsigned size, uint32_t bus_addr, void *val)
+{
+	hikaru_t *hikaru = (hikaru_t *) memctl->base.mach;
+	uint32_t bank = bus_addr >> 24;
+	uint32_t offs = bus_addr & 0xFFFFFF;
+	bool log = false;
+
+	set_ptr (val, size, 0);
+	if (bus_addr >= 0x04000000 && bus_addr <= 0x043FFFFF) {
+		/* TEXRAM Bank 0 */
+		set_ptr (val, size, vk_buffer_get (hikaru->texram[0], size, offs));
+	} else if (bus_addr >= 0x06000000 && bus_addr <= 0x063FFFFF) {
+		/* TEXRAM Bank 1 */
+		set_ptr (val, size, vk_buffer_get (hikaru->texram[1], size, offs));
+	} else if (bus_addr >= 0x0A000000 && bus_addr <= 0x0AFFFFFF) {
+		HikaruEngine *engine = hikaru->base.host;
+		uint64_t value = 0;
+		if (!engine || engine->protection.read(engine->protection.opaque, size, bus_addr, &value)) {
+			if (engine) snprintf(engine->error, sizeof(engine->error), "Protection read failed at %08x (%u bytes)", bus_addr, size);
+			return -1;
+		}
+		return set_ptr(val, size, value);
+	} else if (bus_addr >= 0x0C000000 && bus_addr <= 0x0CFFFFFF) {
+		/* AICA 1 */
+		return vk_device_get (hikaru->aica_m, size, bus_addr, val);
+	} else if (bus_addr >= 0x0D000000 && bus_addr <= 0x0DFFFFFF) {
+		/* AICA 2 */
+		return vk_device_get (hikaru->aica_s, size, bus_addr, val);
+	} else if (bus_addr >= 0x0E000000 && bus_addr <= 0x0E00FFFF) {
+		/* Network Board */
+		log = true;
+	} else if (bus_addr >= 0x10000000 && bus_addr <= 0x3FFFFFFF) {
+		/* ROMBD */
+		return rombd_get (hikaru, size, bus_addr, val);
+	} else if (bus_addr >= 0x40000000 && bus_addr <= 0x41FFFFFF) {
+		/* Slave RAM */
+		set_ptr (val, size, vk_buffer_get (hikaru->ram_s, size, bus_addr & 0x01FFFFFF));
+	} else if (bus_addr >= 0x70000000 && bus_addr <= 0x71FFFFFF) {
+		/* Master RAM */
+		set_ptr (val, size, vk_buffer_get (hikaru->ram_m, size, bus_addr & 0x01FFFFFF));
+	} else if (bank == hikaru->rombd_config.eeprom_bank && offs == 0) {
+		/* ROMBD EEPROM */
+		set_ptr (val, size, 0xFFFFFFFF);
+		log = true;
+	} else {
+		VK_CPU_ERROR (hikaru->sh_current, "MEMCTL R%u %08X", size * 8, bus_addr);
+		return -1;
+	}
+	if (log)
+		VK_CPU_LOG (hikaru->sh_current, "MEMCTL R%u %08X", size * 8, bus_addr);
+	return 0;
+}
+
+static const struct {
+	uint32_t bit_in, bit_out;
+} d_to_t[] = {
+	{ 0x000001, 0x000001 },
+	{ 0x000800, 0x000002 },
+	{ 0x000002, 0x000004 },
+	{ 0x001000, 0x000008 },
+	{ 0x000004, 0x000010 },
+	{ 0x002000, 0x000020 },
+	{ 0x000008, 0x000040 },
+	{ 0x004000, 0x000080 },
+	{ 0x000010, 0x000100 },
+	{ 0x008000, 0x000200 },
+	{ 0x000020, 0x000400 },
+	{ 0x010000, 0x000800 },
+	{ 0x000040, 0x001000 },
+	{ 0x020000, 0x002000 },
+	{ 0x000080, 0x004000 },
+	{ 0x040000, 0x008000 },
+	{ 0x000100, 0x010000 },
+	{ 0x080000, 0x020000 },
+	{ 0x000200, 0x040000 },
+	{ 0x100000, 0x080000 },
+	{ 0x000400, 0x100000 },
+};
+
+static uint32_t
+twiddle_offs (uint32_t offs)
+{
+	uint32_t toffs = 0, i;
+	for (i = 0; i < NUMELEM (d_to_t); i++) {
+		if (offs & d_to_t[i].bit_out)
+			toffs |= d_to_t[i].bit_in;
+	}
+	return toffs;
+}
+
+static void
+texram_put (hikaru_t *hikaru, uint32_t bank, uint32_t size, uint32_t offs, uint64_t val)
+{
+	if (hikaru_gpu_is_texram_twiddled (hikaru->gpu)) 
+		vk_buffer_put (hikaru->texram[bank], size, offs, val);
+	else {
+		uint32_t toffs_lo = twiddle_offs ((offs + 0) >> 1) << 1;
+		uint32_t toffs_hi = twiddle_offs ((offs + 2) >> 1) << 1;
+
+		VK_ASSERT (size == 4);
+
+		vk_buffer_put (hikaru->texram[bank], 2, toffs_lo, bswap16 (val));
+		vk_buffer_put (hikaru->texram[bank], 2, toffs_hi, bswap16 (val >> 16));
+	}
+	/* CPU writes can touch any cached mip; defer the conservative flush until
+	 * rendering so repeated writes do not repeatedly walk the cache. */
+	hikaru_renderer_note_cpu_texram_write (hikaru->base.renderer);
+}
+
+static int
+memctl_bus_put (hikaru_memctl_t *memctl, unsigned size, uint32_t bus_addr, uint64_t val)
+{
+	hikaru_t *hikaru = (hikaru_t *) memctl->base.mach;
+	uint32_t bank = bus_addr >> 24;
+	uint32_t offs = bus_addr & 0xFFFFFF;
+	bool log = false;
+
+	if (bus_addr >= 0x04000000 && bus_addr <= 0x043FFFFF) {
+		/* TEXRAM Bank 0 */
+		texram_put (hikaru, 0, size, offs, val);
+	} else if (bus_addr >= 0x06000000 && bus_addr <= 0x063FFFFF) {
+		/* TEXRAM Bank 1 */
+		texram_put (hikaru, 1, size, offs, val);
+	} else if (bus_addr >= 0x0A000000 && bus_addr <= 0x0AFFFFFF) {
+		HikaruEngine *engine = hikaru->base.host;
+		if (!engine || engine->protection.write(engine->protection.opaque, size, bus_addr, val)) {
+			if (engine) snprintf(engine->error, sizeof(engine->error), "Protection write failed at %08x (%u bytes)", bus_addr, size);
+			return -1;
+		}
+		return 0;
+	} else if (bus_addr >= 0x0C000000 && bus_addr <= 0x0CFFFFFF) {
+		/* AICA 1 */
+		return vk_device_put (hikaru->aica_m, size, bus_addr, val);
+	} else if (bus_addr >= 0x0D000000 && bus_addr <= 0x0DFFFFFF) {
+		/* AICA 2 */
+		return vk_device_put (hikaru->aica_s, size, bus_addr, val);
+	} else if (bus_addr >= 0x0E000000 && bus_addr <= 0x0E00FFFF) {
+		/* Network board */
+		log = true;
+	} else if (bus_addr >= 0x40000000 && bus_addr <= 0x41FFFFFF) {
+		/* Slave RAM */
+		vk_buffer_put (hikaru->ram_s, size, bus_addr & 0x01FFFFFF, val);
+	} else if (bus_addr >= 0x48000000 && bus_addr <= 0x483FFFFF) {
+		/* GPU CMD RAM */
+		vk_buffer_put (hikaru->cmdram, size, bus_addr & 0x3FFFFF, val);
+	} else if (bus_addr >= 0x70000000 && bus_addr <= 0x71FFFFFF) {
+		/* Master RAM */
+		vk_buffer_put (hikaru->ram_m, size, bus_addr & 0x01FFFFFF, val);
+	} else if (bank == hikaru->rombd_config.eeprom_bank && offs == 0) {
+		/* ROMBD EEPROM */
+		log = true;
+	} else {
+		VK_CPU_ERROR (hikaru->sh_current, "MEMCTL W%u %08X = %" PRIX64 "", size * 8, bus_addr, val);
+		return -1;
+	}
+	if (log)
+		VK_CPU_LOG (hikaru->sh_current, "MEMCTL W%u %08X = %" PRIX64 "", size * 8, bus_addr, val);
+	return 0;
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+int
+hikaru_vendor_test_protection_bus (const HikaruEngineProtection *protection,
+                                  int write, unsigned size, uint32_t address,
+                                  uint64_t *value)
+{
+	HikaruEngine engine = {0};
+	hikaru_t machine = {0};
+	hikaru_memctl_t memctl = {0};
+	engine.protection = *protection;
+	machine.base.host = &engine;
+	memctl.base.mach = &machine.base;
+	return write ? memctl_bus_put (&memctl, size, address, *value)
+	             : memctl_bus_get (&memctl, size, address, value);
+}
+#endif
+
+static uint32_t
+get_bank_for_addr (hikaru_memctl_t *memctl, uint32_t addr)
+{
+	uint32_t reg;
+	switch (addr >> 24) {
+	case 0x02:
+		reg = 0x1A;
+		break;
+	case 0x03:
+		reg = 0x1B;
+		break;
+	case 0x16:
+		reg = 0x12;
+		break;
+	case 0x17:
+		reg = 0x13;
+		break;
+	case 0x18:
+		reg = 0x1C;
+		break;
+	default:
+		return 0;
+	}
+	return vk_buffer_get (memctl->regs, 1, reg);
+}
+
+static int
+hikaru_memctl_get (vk_device_t *dev, unsigned size, uint32_t addr, void *val)
+{
+	hikaru_memctl_t *memctl = (hikaru_memctl_t *) dev;
+	uint32_t bank, bus_addr;
+
+	if (addr >= 0x04000000 && addr <= 0x0400003F) {
+		/* MMIOs */
+		set_ptr (val, size, vk_buffer_get (memctl->regs, size, addr & 0x3F));
+		return 0;
+	}
+
+	bank = get_bank_for_addr (memctl, addr) & 0x7F;
+	bus_addr = (bank << 24) | (addr & 0xFFFFFF);
+	return memctl_bus_get (memctl, size, bus_addr, val);
+}
+
+static int
+hikaru_memctl_put (vk_device_t *dev, unsigned size, uint32_t addr, uint64_t val)
+{
+	hikaru_memctl_t *memctl = (hikaru_memctl_t *) dev;
+	uint32_t bank, bus_addr;
+
+	if (addr >= 0x04000000 && addr <= 0x0400003F) {
+		/* MEMCTL MMIOs */
+		switch (addr & 0xFF) {
+		case 0x04:
+			VK_ASSERT (size == 2);
+			{
+				uint16_t old;
+				old = vk_buffer_get (memctl->regs, size, 0x04);
+				val = (old & 0xF000) |
+				      (old & ~val & 0xFC0) | /* Master BUS/DMA error */
+				      (old & ~val & 0x03F); /* Slave BUS/DMA error */
+			}
+			break;
+		case 0x06:
+			VK_ASSERT (size == 2);
+			break;
+		case 0x30:
+		case 0x34:
+		case 0x38:
+			VK_ASSERT (size == 4);
+			break;
+		}
+		vk_buffer_put (memctl->regs, size, addr & 0x3F, val);
+		return 0;
+	}
+
+	bank = get_bank_for_addr (memctl, addr) & 0x7F;
+	bus_addr = (bank << 24) | (addr & 0xFFFFFF);
+	return memctl_bus_put (memctl, size, bus_addr, val);
+}
+
+static int
+hikaru_memctl_exec (vk_device_t *dev, int cycles)
+{
+	hikaru_memctl_t *memctl = (hikaru_memctl_t *) dev;
+	uint32_t src, dst, len, ctl, todo;
+
+	len = vk_buffer_get (memctl->regs, 4, 0x38);
+
+	if (!(len & 0x01000000))
+		return 0;
+
+	src = vk_buffer_get (memctl->regs, 4, 0x30);
+	dst = vk_buffer_get (memctl->regs, 4, 0x34);
+	ctl = len >> 24;
+	len = len & 0xFFFFFF;
+
+	/* DMA is running */
+	VK_LOG ("MEMCTL DMA: %08X -> %08X x %08X", src, dst, len);
+
+	/* Assume one word per cycle */
+	todo = MIN2 ((int) len, cycles);
+	len -= todo;
+
+	VK_ASSERT ((len & 0xFF000000) == 0);
+
+	while (todo--) {
+		uint32_t tmp;
+		memctl_bus_get (memctl, 4, src & 0x7FFFFFFF, &tmp);
+		memctl_bus_put (memctl, 4, dst & 0x7FFFFFFF, tmp);
+		src += 4;
+		dst += 4;
+	}
+
+	/* Transfer completed */
+	if (len == 0) {
+		ctl = 0;
+		/* Set DMA done, clear error flags */
+		vk_buffer_put (memctl->regs, 2, 0x04, 0x1000);
+		/* Raise an IRQ */
+		hikaru_raise_memctl_irq (memctl->base.mach);
+	}
+
+	/* Write the values back */
+	vk_buffer_put (memctl->regs, 4, 0x30, src);
+	vk_buffer_put (memctl->regs, 4, 0x34, dst);
+	vk_buffer_put (memctl->regs, 4, 0x38, (ctl << 24) | len);
+
+	return 0;
+}
+
+static void
+hikaru_memctl_reset (vk_device_t *dev, vk_reset_type_t type)
+{
+	hikaru_memctl_t *memctl = (hikaru_memctl_t *) dev;
+
+	vk_buffer_clear (memctl->regs);
+	vk_buffer_put (memctl->regs, 4, 0x00, memctl->master ? 0 : 0xFFFFFFFF);
+}
+
+vk_device_t *
+hikaru_memctl_new (vk_machine_t *mach, bool master)
+{
+	hikaru_memctl_t *memctl;
+	vk_device_t *dev;
+
+	VK_DEVICE_ALLOC (memctl, mach);
+	dev = (vk_device_t *) memctl;
+	if (!memctl)
+		return NULL;
+
+	dev->destroy	= NULL;
+	dev->reset	= hikaru_memctl_reset;
+	dev->exec	= hikaru_memctl_exec;
+	dev->get	= hikaru_memctl_get;
+	dev->put	= hikaru_memctl_put;
+	dev->save_state	= NULL;
+	dev->load_state	= NULL;
+
+	memctl->master	= master;
+
+	memctl->regs	= vk_buffer_le32_new (0x40, 0);
+	if (!memctl->regs)
+			goto fail;
+
+	vk_machine_register_buffer (mach, memctl->regs);
+
+	return dev;
+
+fail:
+	vk_device_destroy (&dev);
+	return NULL;
+}

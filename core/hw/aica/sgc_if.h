@@ -5,6 +5,24 @@ namespace aica::sgc
 {
 
 void AICA_Sample();
+// Generate a board sample without Dreamcast CD audio, VMU beep or host output.
+void boardSample(s16& left, s16& right);
+
+// Save channel runtime state when multiplexing independent sound boards.
+// Register storage and DSP state must be switched separately; execution and
+// state switches must be serialized. These snapshots do not include wave RAM.
+struct ChannelState;
+ChannelState* createChannelState();
+void destroyChannelState(ChannelState* state);
+void saveChannelState(ChannelState& state);
+void loadChannelState(const ChannelState& state);
+void resetBoardChannels();
+#ifdef USE_HIKARU
+// nullptr selects the stable Dreamcast bank. Select its matching register bank
+// first, and restore the previous channel selection before destroying a bank.
+ChannelState* activeChannelState();
+void selectChannelState(ChannelState* state);
+#endif
 
 void WriteChannelReg(u32 channel, u32 reg, int size);
 

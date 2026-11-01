@@ -39,6 +39,9 @@
 #include "gui_font.h"
 #include "imgread/common.h"
 #include "emulator.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/roms.h"
+#endif
 #include "mainui.h"
 #include "lua/lua.h"
 #include "gui_chat.h"
@@ -2249,6 +2252,12 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	// standalone path for arcade scraping and local-only disc-header discovery.
 	art = game.arcade || !config::FetchBoxart
 		? boxart.getBoxartAndLoad(game, false) : boxart.getBoxart(game);
+#ifdef USE_HIKARU
+	// Cached artwork can retain a title from an older scanner. Use the
+	// current library title while keeping the cached artwork and metadata.
+	if (game.arcade && !game.name.empty() && hikaru::findGame(get_file_basename(game.fileName)))
+		art.name = game.name;
+#endif
 	const std::string localCoverOverride = boxart.getLibraryCoverMediaPath(game);
 	if (!localCoverOverride.empty())
 		art.boxartPath = localCoverOverride;

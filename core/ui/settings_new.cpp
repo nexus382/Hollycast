@@ -5071,7 +5071,7 @@ void renderVideoTab()
 			const int configuredRenderResolution = config::RenderResolution.get();
 			// Read both toggles every frame so labels also preview widescreen cheats before a game is loaded.
 			float widthScale = 1.f;
-			if ((config::Widescreen || config::WidescreenGameHacks)
+			if (!settings.platform.isHikaru() && (config::Widescreen || config::WidescreenGameHacks)
 					&& !config::Rotate90 && !config::EmulateFramebuffer)
 			{
 				widthScale = config::Widescreen && config::SuperWidescreen
@@ -6394,6 +6394,15 @@ void renderAudioTab()
 	// Audio Playback Section
 	if (RenderCollapsingHeader("PlaybackSection", ICON_FA_VOLUME_HIGH, T("Playback"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+	#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			RenderGeneralToggleSettingRow(
+				"HikaruAudioPacing", ICON_FA_VOLUME_HIGH,
+				T("Match audio to game speed"), T("Keep pitch steady when the game runs slowly"),
+				static_cast<bool>(config::HikaruAudioPacing),
+				[](bool enabled) { config::HikaruAudioPacing.set(enabled); },
+				T("Match audio to game speed\nWhen the game runs slowly, slows audio to match while keeping its pitch. Adds some audio latency."));
+	#endif
 
 		RenderGeneralToggleSettingRow(
 			"EnableDSP",
@@ -8713,8 +8722,13 @@ void renderAdvancedTab()
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+		if (settings.platform.isHikaru()) {
+			RenderGeneralInfoRow("CpuModeSetting", ICON_FA_MICROCHIP, T("CPU Mode"),
+				T("Hikaru uses the interpreter; CPU mode applies to Dreamcast."), T("Interpreter"));
+		}
 #if FEAT_SHREC != DYNAREC_NONE
 		// CPU Mode
+		if (!settings.platform.isHikaru())
 		{
 			const char* cpuModeLabels[] = { T("Dynarec"), T("Interpreter") };
 			int cpuModeSelection = config::DynarecEnabled.get() ? 0 : 1;
@@ -8765,15 +8779,27 @@ void renderAdvancedTab()
 				));
 		}
 
+#endif
+#if FEAT_SHREC == DYNAREC_NONE
+		if (settings.platform.isHikaru())
+#endif
 		// SH4 Clock
 		{
+			const bool hikaru = settings.platform.isHikaru();
 			static int sh4ClockTemp = config::Sh4Clock.get();
+			if (hikaru) {
+				sh4ClockTemp = std::clamp(config::Sh4Clock.get(), 100, 300);
+				if (sh4ClockTemp != config::Sh4Clock.get())
+					config::Sh4Clock.set(sh4ClockTemp);
+			}
 
 			SettingsUI::PopupSliderConfig sh4ClockCfg {};
 			sh4ClockCfg.label = T("SH4 Clock");
 			sh4ClockCfg.icon = ICON_FA_GAUGE_HIGH;
 			sh4ClockCfg.popupID = Tnop("Sh4ClockPopup");
-			sh4ClockCfg.description = T(
+			sh4ClockCfg.description = hikaru ? T(
+				"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n"
+				"Higher settings require more CPU work and can change game timing.") : T(
 				"Adjusts the emulated SH4 CPU clock. Default is 200 MHz.\n"
 				"Higher values may reduce CPU-side frame drops in some games, but can also break timing.\n"
 				"Lower values can reduce CPU load, but may cause slowdowns or audio/video instability.");
@@ -8794,9 +8820,13 @@ void renderAdvancedTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("Sh4ClockSetting"),
-				T("Over/Underclock the main SH4 CPU."),
+				hikaru ? T("Adjust both Hikaru SH4 CPU clocks; audio and video clocks stay unchanged.")
+				       : T("Over/Underclock the main SH4 CPU."),
 				sh4ClockPopupCfg,
-				T(
+				hikaru ? T(
+					"SH4 Clock\n"
+					"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n\n"
+					"The default is 200 MHz. Higher settings require more CPU work and can change game timing.") : T(
 					"SH4 Clock\n"
 					"Overclocks/underclocks the emulated Dreamcast CPU.\n\n"
 					"Default is 200 MHz.\n"
@@ -8806,6 +8836,7 @@ void renderAdvancedTab()
 				));
 		}
 
+#if FEAT_SHREC != DYNAREC_NONE
 		// Fast-Forward Speed Limit
 		{
 			static int fastForwardLimitTemp = config::FastForwardSpeedLimit.get();

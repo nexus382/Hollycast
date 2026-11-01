@@ -62,6 +62,10 @@ if(LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
 endif()
 
+if(USE_HIKARU)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruAudioPacerTest.cpp src/HikaruSoundFrameTest.cpp)
+endif()
+
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/DcnetProbeTest.cpp
@@ -77,3 +81,6 @@ if(NOT LIBRETRO)
         src/ui/VideoPresetTest.cpp
         src/ui/AndroidMenuPopupTest.cpp)
 endif()
+
+# Hikaru bring-up checks also run without the rest of the emulator's dependencies.
+add_subdirectory(hikaru)

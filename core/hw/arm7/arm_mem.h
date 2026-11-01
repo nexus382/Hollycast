@@ -14,7 +14,7 @@ static inline T DYNACALL readMem(u32 addr)
 	addr &= 0x00FFFFFF;
 	if (addr < 0x800000)
 	{
-		T rv = *(T *)&aica_ram[addr & (ARAM_MASK - (sizeof(T) - 1))];
+		T rv = *(T *)&aica_ram[addr & (ramMask() - (sizeof(T) - 1))];
 		
 		if (unlikely(sizeof(T) == 4 && (addr & 3) != 0))
 		{
@@ -36,7 +36,7 @@ static inline void DYNACALL writeMem(u32 addr, T data)
 	addr &= 0x00FFFFFF;
 	if (addr < 0x800000)
 	{
-		*(T *)&aica_ram[addr & (ARAM_MASK - (sizeof(T) - 1))] = data;
+		*(T *)&aica_ram[addr & (ramMask() - (sizeof(T) - 1))] = data;
 	}
 	else
 	{

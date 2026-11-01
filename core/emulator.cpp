@@ -44,6 +44,10 @@
 #include "hw/pvr/pvr.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/storage.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#include "hw/hikaru/roms.h"
+#endif
 #ifndef LIBRETRO
 #include "ui/gui.h"
 #include "ui/performance_overlay.h"
@@ -627,7 +631,15 @@ int getGamePlatform(const std::string& filename)
 	if (extension.empty())
 		return DC_PLATFORM_DREAMCAST;	// unknown
 	if (extension == "zip" || extension == "7z")
+	{
+#ifdef USE_HIKARU
+		std::string basename = get_file_basename(filename);
+		string_tolower(basename);
+		if (hikaru::findGame(basename) != nullptr)
+			return DC_PLATFORM_HIKARU;
+#endif
 		return naomi_cart_GetPlatform(filename.c_str());
+	}
 	if (extension == "bin" || extension == "dat" || extension == "lst")
 		return DC_PLATFORM_NAOMI;
 
@@ -661,7 +673,41 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			settings.content.fileName.clear();
 		}
 
-		setPlatform(getGamePlatform(settings.content.fileName));
+		const int platform = getGamePlatform(settings.content.fileName);
+#ifdef USE_HIKARU
+		if (platform == DC_PLATFORM_HIKARU)
+		{
+			config::Settings::instance().reset();
+			config::Settings::instance().load(false);
+			settings.platform.system = DC_PLATFORM_HIKARU;
+			settings.input.lightgunGame = false;
+			settings.input.keyboardGame = false;
+			settings.input.mouseGame = false;
+			settings.input.fourPlayerGames = false;
+			settings.input.fastForwardMode = false;
+			settings.aica.muteAudio = false;
+			settings.raHardcoreMode = false;
+			setNetworkState(false);
+			memset(&settings.network.md5, 0, sizeof(settings.network.md5));
+			NaomiGameInputs = nullptr;
+			config::RendererType.override(RenderType::OpenGL);
+			config::ThreadedRendering.override(false);
+			config::GGPOEnable.override(false);
+#ifdef USE_RACHIEVEMENTS
+			config::EnableAchievements.override(false);
+#endif
+			try { hikaru::frontend::load(settings.content.path); }
+			catch (const std::exception& e) { throw FlycastException(e.what()); }
+			const auto* game = hikaru::findGame(get_file_basename(settings.content.fileName));
+			settings.content.gameId = game->identifier;
+			settings.content.title = std::string(game->title) + " (experimental)";
+			if (progress) { progress->progress = 1.0f; progress->label = "Starting..."; }
+			EventManager::event(Event::Start);
+			state = Loaded;
+			return;
+		}
+#endif
+		setPlatform(platform);
 		mem_map_default();
 
 		config::Settings::instance().reset();
@@ -827,6 +873,19 @@ void Emulator::unloadGame(bool allowAutoSave)
 	} catch (...) { }
 	if (state == Loaded || state == Error)
 	{
+#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+		{
+			hikaru::frontend::unload();
+			config::Settings::instance().reset();
+			config::Settings::instance().load(false);
+			settings.content.reset();
+			settings.platform.system = DC_PLATFORM_DREAMCAST;
+			state = Init;
+			EventManager::event(Event::Terminate);
+			return;
+		}
+#endif
 #ifndef LIBRETRO
 		if (allowAutoSave && state == Loaded && config::AutoSaveState && !skipAutoSaveThisUnload && !settings.content.path.empty()
 				&& !settings.naomi.multiboard && !config::GGPOEnable && !naomiNetworkSupported())
@@ -884,6 +943,9 @@ void Emulator::stop()
 {
 	if (state != Running)
 		return;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru()) { state = Loaded; hikaru::frontend::pauseAudio(); TermAudio(); EventManager::event(Event::Pause); return; }
+#endif
 	// Avoid race condition with GGPO restarting the sh4 for a new frame
 	if (config::GGPOEnable)
 		NetworkHandshake::term();
@@ -925,6 +987,9 @@ void Emulator::stop()
 // Called on the emulator thread for soft reset
 void Emulator::requestReset()
 {
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru()) { hikaru::frontend::requestReset(); return; }
+#endif
 	resetRequested = true;
 	if (config::GGPOEnable)
 		NetworkHandshake::term();
@@ -1091,6 +1156,9 @@ void Emulator::start()
 		return;
 	}
 	state = Running;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru()) { InitAudio(); hikaru::frontend::resumeAudio(); EventManager::event(Event::Resume); return; }
+#endif
 	SetMemoryHandlers();
 	if (config::GGPOEnable && config::ThreadedRendering)
 		// Not supported with GGPO
@@ -1165,6 +1233,17 @@ bool Emulator::checkStatus(bool wait)
 bool Emulator::render()
 {
 	FC_PROFILE_SCOPE;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru())
+	{
+		if (state != Running) return false;
+		try {
+			if (!isOpenGL(config::RendererType)) throw FlycastException("Air Trix requires desktop OpenGL");
+			return hikaru::frontend::render();
+		}
+		catch (...) { state = Error; TermAudio(); EventManager::event(Event::Pause); throw; }
+	}
+#endif
 
 	if (!config::ThreadedRendering)
 	{

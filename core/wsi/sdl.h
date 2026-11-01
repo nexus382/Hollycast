@@ -38,4 +38,7 @@ private:
 
 	SDL_GLContext glcontext = nullptr;
 	bool swapOnVSync = false;
+#ifdef USE_HIKARU
+	bool swapForHikaru = false;
+#endif
 };

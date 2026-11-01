@@ -57,11 +57,14 @@ extern DSPState state;
 void init();
 void term();
 void step();
+void stepInterpreter();
 void writeProg(u32 addr);
 
 void recInit();
 void recTerm();
 void runStep();
+// Available even when the Dreamcast DSP recompiler is enabled.
+void runInterpreterStep();
 void recompile();
 
 struct Instruction

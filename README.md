@@ -50,6 +50,10 @@ Releases tagged `-dev` are built from the `dev` branch and contain the newest, l
 
 Everything Flycast offers is still included: the full Dreamcast, Naomi, Naomi 2 and Atomiswave core, RetroAchievements, upscaling and widescreen options, and the libretro core.
 
+An optional desktop OpenGL backend adds experimental **Sega Hikaru / Air Trix**
+support. It is disabled by default and still has graphics and audio limitations.
+See [Hikaru setup and compatibility](docs/Hikaru.md) before enabling `USE_HIKARU`.
+
 ## Why a fork?
 
 Hollycast follows the Flycast core and is a home for features and experiments that are outside Flycast's scope:
@@ -214,5 +218,9 @@ If you enjoy Hollycast, you can support its development on [Ko-fi](https://ko-fi
 ## License and credits
 
 Hollycast is licensed under the [GNU General Public License v2.0](LICENSE).
+
+The optional Hikaru backend includes GPL-3.0-or-later Valkyrie code. Builds
+including it must respect those terms; its original notices and license are
+retained in `core/hw/hikaru/valkyrie`.
 
 Hollycast exists because of [flyinghead](https://github.com/flyinghead) and the [Flycast](https://github.com/flyinghead/flycast) contributors, whose work on the core makes this project possible. Thanks as well to the authors of the libraries in [`core/deps`](core/deps) and to everyone who translates Hollycast on Crowdin.

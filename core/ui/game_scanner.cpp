@@ -23,6 +23,9 @@
 #include "oslib/storage.h"
 #include "cfg/option.h"
 #include "oslib/i18n.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/roms.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -354,6 +357,16 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 		if (extension == "zip" || extension == "7z")
 		{
 			string_tolower(gameName);
+#ifdef USE_HIKARU
+			if (const auto* hikaruGame = hikaru::findGame(gameName))
+			{
+				gameName = hikaruGame->title;
+				GameMedia game = makeGameMedia(gameName + " (experimental)", item.path, item.name, gameName, true, false, getFileSize(item));
+				populateMetadata(game, metadata, manualIndex, gamelistPath);
+				insert_game(game);
+				continue;
+			}
+#endif
 			auto it = arcade_games.find(gameName);
 			if (it == arcade_games.end())
 				continue;

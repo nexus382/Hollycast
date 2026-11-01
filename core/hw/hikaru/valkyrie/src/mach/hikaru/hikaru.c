@@ -1,0 +1,1113 @@
+/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* 
+ * Valkyrie
+ * Copyright (C) 2011, 2012, Stefano Teso
+ * 
+ * Valkyrie is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Valkyrie is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Valkyrie.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/* 
+ * SEGA Hikaru
+ *
+ * Specs
+ * =====
+ *
+ * Taken from system16.com
+ *
+ * CPU			2 x Hitachi SH-4 @ 200 MHz
+ * Graphic Engine	Sega Custom 3D 
+ * Sound Engine		2 x ARM7 Yamaha AICA @ 45 MHz + ARM7, 64 channel ADPCM
+ * Main Memory		64 MB
+ * Graphic Memory	28 MB
+ * Sound Memory		8 MB [per AICA board]
+ * Media		ROM Board (max 352 MB)
+ * Colors		24bit
+ * Resolution		24 KHz 496x384, 31 KHz 640x480 
+ * Shading		Flat, Linear, Phong
+ * Lighting		Horizontal, Spot
+ *			1024 lights per scene
+ *			4 lights per polygon
+ *			8 window surfaces
+ * Effects		Fog, Depth Queueing, Stencil, Shadow, Motion blur
+ * Others Capabilties	Bitmap Layer x 2
+ *			Calendar [Note: AICA RTC]
+ *			Dual Monitor (24 kHz)
+ * Extensions		communication, 4 channel audio, PCI, MIDI, RS-232C 
+ * Connection		Jamma Video compliant
+ *
+ *
+ * ICs
+ * ===
+ *
+ * According to the RAM test:
+ *
+ * 15,16,17S,18S = @0C000000 RAM (32 MB), Master RAM
+ * 22,23,24S,25S = @16000000 RAM (32 MB), Slave RAM
+ * 38 39S        = @14000000 RAM (4 MB), CMDRAM
+ * 41            = @16000000 RAM (4 MB), TEXRAM Bank 0
+ * 42            = @16000000 RAM (4 MB), TEXRAM Bank 1
+ * 44,45S,46,47S = @1B000000 RAM (8 MB), FB
+ * 33,34S,35,36S = @........ RAM (8 MB), Unknown (not tested by the RAM test)
+ * 91S,92S       = @00C00000 CMOS SRAM (64 KB), Backup RAM
+ * 98            = @02800000 8 MB SDRAM (main AICA board)
+ *
+ *
+ * BIOSes
+ * ======
+ *
+ * Currently three different bios revisions are known: 0.84, 0.92, and 0.96
+ * (see the MAME driver.)
+ *
+ * Any IRQ controller in there pumping stuff from the various devices to
+ * the master SH-4 IRL pins and Port A?
+ *
+ * The master SH-4 is configured for external-request DMAC (DTD). Requests
+ * are sent either to the master SH-4 or the slave SH-4.
+ *
+ * TMU Channel 2 is configured for input capture; the DMAC is automatically
+ * activeted whenever the interrupt fires. Timed DMA, way to go!
+ *
+ *
+ * EEPROMs
+ * =======
+ *
+ * The Hikaru hosts a few EEPROMs:
+ *  - One on the MAINBD, connected to the master SH4 Port A.
+ *  - One on the ROMBD, which likely holds game-specific data and protection.
+ *  - One on the INPTBD, at 0800000[AC], unknown usage.
+ *
+ *
+ * MAINBD EEPROM
+ * =============
+ *
+ * The MAINBD EEPROM is a serial 128 x 8-bit EEPROM. It is interfaced to bits
+ * 2-5 of PDTRA. The port is configured as follows:
+ *
+ *  PCTRA = (PCTRA & ~FF0) | 950
+ *  PDTRA = PDTRA & ~3C
+ *
+ * See @0C00BF5C.
+ *
+ *  bit 2	Output		[configured as: pulled up, output]
+ *  bit 3	Clock		[configured as: pulled up, output]
+ *  bit 4	Chip Select	[configured as: pulled up, output]
+ *  bit 5	Input		[configured as: not pulled up, input]
+ *
+ * See @0C0067AC, @0C0067DC.
+ *
+ *
+ * ROMBD EEPROM, Type 1
+ * ====================
+ *
+ * Located at 03000000, in bank_base + 0x14. It's a serial EEPROM of size
+ * 128 x 8-bit entries. An 9C346. Bits (active low):
+ *
+ *  bit 0	Output
+ *  bit 1	Clock
+ *  bit 2	Chip Select
+ *  bit 3	Input
+ *
+ * See @0C00C27E, @0C00C2AE
+ *
+ *
+ * ROMBD EEPROM, Type 2
+ * ====================
+ *
+ * An 76X100 secure EEPROM.
+ *
+ * MIE EEPROM
+ * ==========
+ *
+ * See hikaru-mie.c
+ */
+
+#include "vk/core.h"
+#include "vk/games.h"
+
+#include "cpu/sh/sh4.h"
+
+#include "mach/hikaru/hikaru.h"
+#include "mach/hikaru/hikaru-memctl.h"
+#include "mach/hikaru/hikaru-mscomm.h"
+#include "mach/hikaru/hikaru-mie.h"
+#include "mach/hikaru/hikaru-aica.h"
+#include "engine_internal.h"
+#include "mach/hikaru/hikaru-gpu.h"
+#include "mach/hikaru/hikaru-renderer.h"
+
+/*
+ * Port A
+ * ======
+ *
+ * The master SH-4 port A is used for a variety of things. The bitmask is
+ * as follows:
+ *
+ * [M] xxxx xxii iiee eexM
+ *
+ * x = Unused
+ * i = IRQ causes
+ * e = MAINBD EEPROM
+ * M = master-to-slave communication
+ *
+ * Note: apparently bit M is connected to the slave NMI pin; writing a
+ * specific bit pattern there requestes an NMI to the slave SH-4.
+ *
+ * [S] xxxx xxxx xxxx xxSx
+ *
+ * S = slave-to-master communication?
+ *
+ * Note: GPIOIC is never access by the bootrom.
+ */
+
+/* These functions get called by the SH-4 core */
+
+static int
+porta_get_m (sh4_t *ctx, uint16_t *val)
+{
+	vk_device_t *dev = (vk_device_t *) ctx;
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+	*val = hikaru->porta_m;
+	return 0;
+}
+
+static int
+porta_get_s (sh4_t *ctx, uint16_t *val)
+{
+	vk_device_t *dev = (vk_device_t *) ctx;
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+	*val = hikaru->porta_s;
+	return 0;
+}
+
+/* XXX check port A in the core; wrong values reported (0 instead of 1)? */
+
+static int
+porta_put_m (sh4_t *ctx, uint16_t val)
+{
+	vk_device_t *dev = (vk_device_t *) ctx;
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+	hikaru->porta_m = val;
+
+	/* This is a simple hack to detect three consecutive cycles of
+	 * low-high-low pin; the pattern 000-111-000[0000] is there because
+	 * in the SH-4:
+	 *
+	 * "A noise-cancellation feature is built in, and the IRL interrupt
+	 *  is not detected unless the levels sampled at every bus clock
+	 *  cycle remain unchanged for three consecutive cycles, so that no
+	 *  transient level on the IRL pin change is detected."
+	 *
+	 * The additional [0000] bits can be explained with:
+	 *
+	 *  "[...] the NMI interrupt is not detected for a maximum of 6 bus
+	 *   clock cycles after the modification."
+	 *
+	 * Basically it's flipping the NMI pin 0->1->0.
+	 *
+	 * See sections 19.2.1 and 19.2.2 of the SH-4 manual.
+	 */
+	/* XXX ideally this should be done automatically by the SH-4 core;
+	 * but it requires a rewrite of the IRQ code based on lines */
+	hikaru->porta_m_bit0_buffer = (hikaru->porta_m_bit0_buffer << 1) |
+	                              (val & 1);
+	if ((hikaru->porta_m_bit0_buffer & 0x1FFF) == 0x1C7F) {
+		/* Send an IRQ to the slave */
+		VK_CPU_LOG (ctx, " ### PORTA: sending NMI to SLAVE!");
+		vk_cpu_set_irq_state (hikaru->sh_s, SH4_IESOURCE_NMI, VK_IRQ_STATE_RAISED);
+		hikaru->porta_m_bit0_buffer = 0;
+	}
+	return 0;
+}
+
+static int
+porta_put_s (sh4_t *ctx, uint16_t val)
+{
+	vk_device_t *dev = (vk_device_t *) ctx;
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+	hikaru->porta_s = val;
+	hikaru->porta_s_bit1_buffer = (hikaru->porta_s_bit1_buffer << 1) |
+	                              ((val >> 1) & 1);
+	/* TODO */
+	return 0;
+}
+
+/*
+ * Unknown MMIOs (Master)
+ * ======================
+ *
+ * All of these seem connected in some way. All of them act as semaphores
+ * of some kind, and are definitely related to the GPU.
+ *
+ * 00400000  RW 16-bit
+ *
+ * 01000000  RW 16-bit	
+ * 01000006   W 16-bit	See PH:@0C012752.
+ *
+ * 01000100  RW 16-bit	
+ */
+
+static int
+unk_m_get (vk_device_t *dev, unsigned size, uint32_t addr, void *val)
+{
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+	uint16_t *val16 = (uint16_t *) val;
+
+	VK_ASSERT (size == 2);
+
+	switch (addr) {
+	case 0x01000000:
+		hikaru->unk01000000_m ^= ~0ul;
+		*val16 = hikaru->unk01000000_m;
+		break;
+	case 0x01000100:
+		hikaru->unk01000100_m ^= ~0ul;
+		*val16 = hikaru->unk01000100_m;
+		break;
+	default:
+		return -1;
+	}
+	return 0;
+}
+
+static int
+unk_m_put (vk_device_t *dev, unsigned size, uint32_t addr, uint64_t val)
+{
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+
+	VK_ASSERT (size == 2);
+
+	switch (addr) {
+	case 0x01000000:
+		hikaru->unk01000000_m = val;
+		break;
+	case 0x01000100:
+		hikaru->unk01000100_m = val;
+		break;
+	default:
+		return -1;
+	}
+	return 0;
+}
+
+/* XXX hack */
+static vk_device_t unk_m = {
+	0,
+	.get = unk_m_get,
+	.put = unk_m_put
+};
+
+/* Unknown devices in the slave address space */
+
+static int
+unk_s_get (vk_device_t *dev, unsigned size, uint32_t addr, void *val)
+{
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+	uint16_t *val16 = (uint16_t *) val;
+	uint32_t *val32 = (uint32_t *) val;
+
+	switch (addr) {
+	case 0x14000800:
+		/* Controlled by 04000010 and 0400001C */
+		VK_ASSERT (size == 4);
+		*val32 = 0x17C311DB; /* SEGA PCI ID #2 */
+		break;
+	case 0x1A800008:
+		VK_ASSERT (size == 2);
+		*val16 = hikaru->unk1A800008_s;
+		break;
+	case 0x1B000100:
+		VK_ASSERT (size == 2);
+		*val16 = hikaru->unk1B000100_s;
+		break;
+	default:
+		return -1;
+	}
+	return 0;
+}
+
+static int
+unk_s_put (vk_device_t *dev, unsigned size, uint32_t addr, uint64_t val)
+{
+	hikaru_t *hikaru = (hikaru_t *) dev->mach;
+
+	switch (addr) {
+	case 0x1400080D:
+		/* Controlled by 04000010 and 0400001C */
+		VK_ASSERT (size == 1);
+		break;
+	case 0x14000804:
+	case 0x14000810:
+	case 0x14000814:
+	case 0x14000818:
+	case 0x1400081C:
+		/* Controlled by 04000010 and 0400001C */
+		VK_ASSERT (size == 4);
+		break;
+	case 0x1A800008:
+		VK_ASSERT (size == 2);
+		hikaru->unk1A800008_s = val;
+		break;
+	case 0x1B000100:
+		/* This is a semaphore, akin to 01000000 and 01000100 in
+		 * the master address space. */
+		VK_ASSERT (size == 2);
+		hikaru->unk1B000100_s = val ^ 0x100;
+		break;
+	default:
+		return -1;
+	}
+	return 0;
+}
+
+/* XXX hack */
+static vk_device_t unk_s = {
+	0,
+	.get = unk_s_get,
+	.put = unk_s_put
+};
+
+/*
+ * IRQs
+ * ====
+ *
+ * The master SH-4 is configured for independent per-pin external IRQs. It
+ * looks like that the IRQ sources are as follows:
+ *
+ *  IRL0 unused/unhandled
+ *  IRL1 GPU hardware, 
+ *  IRL2 memory controller DMA termination
+ *  IRL3 unused/unhandled
+ *
+ * IRQ-related Registers
+ * =====================
+ *
+ * The following registers are used in the IRL1 handling routine to check
+ * what happened, see @0C00174C.
+ *
+ * PDTRA (active low):
+ *
+ *  0040	IRQ source is GPU
+ *  0080	IRQ source is AICA/DMA
+ *  0100	IRQ source is UNKNOWN [slave?], calls @0C000A30
+ *  0200	Error
+ *
+ * For more informations on the GPU IRQs, see hikaru-gpu.c
+ */
+
+static void
+hikaru_raise_irq (vk_machine_t *mach, unsigned num, uint16_t porta)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	vk_cpu_set_irq_state (hikaru->sh_m, num, VK_IRQ_STATE_RAISED);
+	hikaru->porta_m &= ~porta;
+}
+
+void
+hikaru_raise_gpu_irq (vk_machine_t *mach)
+{
+	hikaru_raise_irq (mach, SH4_IESOURCE_IRL2, 0x40);
+}
+
+void
+hikaru_raise_aica_irq (vk_machine_t *mach)
+{
+	hikaru_raise_irq (mach, SH4_IESOURCE_IRL2, 0x80);
+}
+
+void
+hikaru_raise_memctl_irq (vk_machine_t *mach)
+{
+	hikaru_raise_irq (mach, SH4_IESOURCE_IRL1, 0);
+}
+
+/* Device time stays at the 200 MHz board baseline. The 544 slots per frame approximate the board's
+ * current active/blanking schedule; precise video timing remains unmodelled. */
+static const unsigned cycles_per_line = (200 * MHZ) / (60 * 544);
+
+static int
+hikaru_run_cycles (vk_machine_t *mach, int cycles)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	const uint64_t scaled = (uint64_t)cycles * hikaru->cpu_clock_mhz + hikaru->cpu_cycle_remainder;
+	const int cpu_cycles = (int)(scaled / 200);
+	hikaru->cpu_cycle_remainder = (unsigned)(scaled % 200);
+
+	/* Run the master */
+	hikaru->sh_current = hikaru->sh_m;
+	vk_cpu_run (hikaru->sh_m, cpu_cycles);
+
+	/* Run the slave */
+	hikaru->sh_current = hikaru->sh_s;
+	vk_cpu_run (hikaru->sh_s, cpu_cycles);
+
+	/* Run the MEMCTL and GPU */
+	vk_device_exec (hikaru->memctl_m, cycles);
+	if (vk_device_exec (hikaru->mie, cycles) < 0)
+		return -1;
+	HikaruEngine *engine = mach->host;
+	if (engine && engine->sound_attached) {
+		/* Also catches MIE-firmware writes made during its execution slice. */
+		if (hikaru_engine_sync_sound_reset(engine)) return -1;
+		if (engine->sound.advance(engine->sound.opaque, (uint32_t)cycles)) goto sound_error;
+		const int irq0 = engine->sound.irq(engine->sound.opaque, 0);
+		const int irq1 = engine->sound.irq(engine->sound.opaque, 1);
+		if (irq0 < 0 || irq1 < 0 || irq0 > 1 || irq1 > 1) goto sound_error;
+		const int pending = irq0 || irq1;
+		const int enabled = engine->mie.set_sound_irq(engine->mie.opaque, pending);
+		if (enabled < 0 || enabled > 1) goto sound_error;
+		/* Port A reports the raw AICA source, independently of its mask. */
+		if (pending) hikaru->porta_m &= ~0x80;
+		else hikaru->porta_m |= 0x80;
+		if (enabled) vk_cpu_set_irq_state (hikaru->sh_m, SH4_IESOURCE_IRL2, VK_IRQ_STATE_RAISED);
+		/* IRL2 is shared with the GPU. Never lower its asserted line. */
+		else if (hikaru->porta_m & 0x40)
+			vk_cpu_set_irq_state (hikaru->sh_m, SH4_IESOURCE_IRL2, VK_IRQ_STATE_CLEAR);
+	}
+	/* XXX run the slave MEMCTL? I've never seen it used, and would
+	 * like to debug it a bit before enabling it. */
+	vk_device_exec (hikaru->gpu, cycles);
+	return 0;
+sound_error:
+	snprintf(engine->error, sizeof(engine->error), "Hikaru sound board execution failed");
+	return -1;
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+int hikaru_vendor_test_run_cycles (vk_machine_t *mach, int cycles)
+{
+	return hikaru_run_cycles (mach, cycles);
+}
+#endif
+
+static int
+hikaru_run_frame (vk_machine_t *mach)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	unsigned line;
+
+	/* XXX move the main loop into vk_machine */
+
+	VK_LOG (" *** VBLANK-OUT %s ***", vk_machine_get_debug_string (mach));
+
+	for (line = 0; line < 480; line++) {
+		if (hikaru_run_cycles (mach, cycles_per_line) < 0) return -1;
+		hikaru_gpu_hblank_in (hikaru->gpu, line);
+	}
+
+	VK_LOG (" *** VBLANK-IN  %s ***", vk_machine_get_debug_string (mach));
+	hikaru_gpu_vblank_in (hikaru->gpu);
+
+	for (line = 480; line < (480+64); line++) {
+		if (hikaru_run_cycles (mach, cycles_per_line) < 0) return -1;
+		hikaru_gpu_hblank_in (hikaru->gpu, line);
+	}
+
+	/* this may actually be an hblank-out IRQ */
+	hikaru_gpu_vblank_out (hikaru->gpu);
+
+	/* The compatibility AICA pulse is only possible while the sound chips
+	 * are out of reset. MIE port 3 bit 5 is the active-low SND_RES pin.
+	 * This does not yet model actual AICA interrupt timing. */
+	HikaruEngine *engine = mach->host;
+	if (!engine || !engine->sound_attached) {
+		uint8_t sound_control = 0;
+		if (vk_device_get (hikaru->mie, 1, 0x00800006, &sound_control) < 0)
+			return -1;
+		if (sound_control & 0x20)
+			hikaru_raise_irq (mach, SH4_IESOURCE_IRL2, 0x80);
+	}
+
+	return 0;
+}
+
+static void
+hikaru_reset (vk_machine_t *mach, vk_reset_type_t type)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	hikaru->cpu_cycle_remainder = 0;
+
+	/* XXX load bram from file */
+
+	vk_cpu_set_state (hikaru->sh_s, VK_CPU_STATE_RUN);
+
+	/* Port A's are active low */
+	hikaru->porta_m = 0xFFFF;
+	hikaru->porta_s = 0xFFFF;
+
+	hikaru->unk01000000_m = 0;
+	hikaru->unk01000100_m = 0;
+	hikaru->unk1A800008_s = 0xFFFF;
+	hikaru->unk1B000100_s = 0xFEFF;
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+void hikaru_vendor_test_reset (vk_machine_t *mach)
+{
+	hikaru_reset (mach, VK_RESET_TYPE_HARD);
+}
+#endif
+
+static const char *
+hikaru_get_debug_string (vk_machine_t *mach)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	static char out[256];
+	char *mstr, *sstr;
+	const char *gpustr;
+
+	mstr = strdup (vk_cpu_get_debug_string (hikaru->sh_m));
+	sstr = strdup (vk_cpu_get_debug_string (hikaru->sh_s));
+	gpustr = hikaru_gpu_get_debug_str (hikaru->gpu);
+
+	sprintf (out, "[%s %04X] [%s %04X] [%s]",
+	         mstr, hikaru->porta_m,
+	         sstr, hikaru->porta_s,
+	         gpustr);
+
+	free (mstr);
+	free (sstr);
+	return out;
+}
+
+#define SAVE(thing_) \
+		vk_state_put (state, (void *) &(thing_), sizeof (thing_))
+
+#define LOAD(thing_) \
+		vk_state_get (state, (void *) &(thing_), sizeof (thing_))
+
+static int
+hikaru_load_state (vk_machine_t *mach, vk_state_t *state)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	int ret = 0;
+
+	LOAD (hikaru->porta_m);
+	LOAD (hikaru->porta_m_bit0_buffer);
+	LOAD (hikaru->porta_s);
+	LOAD (hikaru->porta_s_bit1_buffer);
+	LOAD (hikaru->unk01000000_m);
+	LOAD (hikaru->unk01000100_m);
+	LOAD (hikaru->unk1A800008_s);
+	LOAD (hikaru->unk1B000100_s);
+	LOAD (hikaru->rombd_config);
+
+	return ret;
+}
+
+static int
+hikaru_save_state (vk_machine_t *mach, vk_state_t *state)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	int ret = 0;
+
+	SAVE (hikaru->porta_m);
+	SAVE (hikaru->porta_m_bit0_buffer);
+	SAVE (hikaru->porta_s);
+	SAVE (hikaru->porta_s_bit1_buffer);
+	SAVE (hikaru->unk01000000_m);
+	SAVE (hikaru->unk01000100_m);
+	SAVE (hikaru->unk1A800008_s);
+	SAVE (hikaru->unk1B000100_s);
+	SAVE (hikaru->rombd_config);
+
+	return ret;
+}
+
+#undef SAVE
+#undef LOAD
+
+static void
+hikaru_dump (vk_machine_t *mach)
+{
+	hikaru_t *hikaru = (hikaru_t *) mach;
+	char *name = mach->game->name;
+
+	if (!name)
+		return;
+
+	vk_buffer_dumpf (hikaru->ram_m,		"%s-ram-m.bin", name);
+	vk_buffer_dumpf (hikaru->ram_s,		"%s-ram-s.bin", name);
+	vk_buffer_dumpf (hikaru->cmdram,	"%s-cmdram.bin", name);
+	vk_buffer_dumpf (hikaru->texram[0],	"%s-texram-0.bin", name);
+	vk_buffer_dumpf (hikaru->texram[1],	"%s-texram-1.bin", name);
+	vk_buffer_dumpf (hikaru->fb,		"%s-fb.bin", name);
+	vk_buffer_dumpf (hikaru->aica_ram_m,	"%s-aica-m.bin", name);
+	vk_buffer_dumpf (hikaru->aica_ram_s,	"%s-aica-s.bin", name);
+	vk_buffer_dumpf (hikaru->bram,		"%s-bram.bin", name);
+	vk_buffer_dumpf (hikaru->mie_ram,	"%s-mie.bin", name);
+}
+
+/*
+ * Master SH-4 Memory Map
+ * ======================
+ *
+ * Area 0	00000000-00200000 Boot ROM 
+ *		00400000-00400003 ?
+ *		00800000-0083FFFF On-board Switches + MIE
+ *		00C00000-00C0FFFF Backup RAM
+ *		01000000-01000003 ?
+ *		01000100-01000103 ?
+ *		02000000-02FFFFFF Aperture-02
+ *		03000000-03FFFFFF Aperture-03
+ * Area 1	04000000-0400003F Memory Controller [Master]
+ * Area 3	0C000000-0DFFFFFF RAM
+ * Area 5	14000000-140000FF Master/Slave Communication Box
+ *		14000100-143FFFFF Command RAM
+ *		15000000-150FFFFF Geometry Processor
+ *		16000000-16FFFFFF Aperture-16
+ *		17000000-17FFFFFF Aperture-17
+ * Area 6	18001000-180010FF GPU Regs
+ *		1A000000-1A0FFFFF Image Generator
+ *		1B000000-1B7FFFFF Frame Buffer
+ */
+
+static vk_mmap_t *
+setup_master_mmap (hikaru_t *hikaru)
+{
+	vk_mmap_t *mmap = vk_mmap_new (&hikaru->base);
+	int ret = 0;
+
+	if (!mmap)
+		return NULL;
+
+	ret |= vk_mmap_add_ram (mmap, 0x0C000000, 0x0DFFFFFF, 0x01FFFFFF,
+	                        0, hikaru->ram_m, "RAM/M");
+	ret |= vk_mmap_add_rom (mmap, 0x00000000, 0x001FFFFF, 0x001FFFFF,
+	                        0, hikaru->bootrom, "BOOTROM/M");
+	ret |= vk_mmap_add_dev (mmap, 0x00400000, 0x00400001, 0x00000001,
+	                        VK_REGION_RW | VK_REGION_SIZE_16 | VK_REGION_SIZE_32 | VK_REGION_LOG_RW,
+	                        hikaru->gpu, "UNK/M");
+	ret |= vk_mmap_add_dev (mmap, 0x00800000, 0x0083FFFF, 0x0003FFFF,
+	                        VK_REGION_RW | VK_REGION_SIZE_8 | VK_REGION_SIZE_16 | VK_REGION_LOG_RW,
+	                        hikaru->mie, "MIE/M");
+	ret |= vk_mmap_add_ram (mmap, 0x00C00000, 0x00C0FFFF, 0x0000FFFF,
+	                        0, hikaru->bram, "BRAM/M");
+	ret |= vk_mmap_add_dev (mmap, 0x01000000, 0x010001FF, 0x000001FF,
+	                        VK_REGION_RW | VK_REGION_SIZE_16 | VK_REGION_SIZE_32 | VK_REGION_LOG_RW,
+	                        &unk_m, "UNK/M");
+	ret |= vk_mmap_add_dev (mmap, 0x02000000, 0x03FFFFFF, 0x01FFFFFF,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL,
+	                        hikaru->memctl_m, "APERTURE02/M");
+	ret |= vk_mmap_add_dev (mmap, 0x04000000, 0x0400003F, 0x0000003F,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        hikaru->memctl_m, "MEMCTL/M");
+	ret |= vk_mmap_add_dev (mmap, 0x14000000, 0x1400002F, 0x0000003F,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        hikaru->mscomm, "MSCOMM/M");
+	ret |= vk_mmap_add_ram (mmap, 0x14000030, 0x143FFFFF, 0x003FFFFF,
+	                        0, hikaru->cmdram, "CMDRAM/M");
+	ret |= vk_mmap_add_dev (mmap, 0x15000000, 0x150FFFFF, 0x000FFFFF,
+	                        VK_REGION_RW | VK_REGION_SIZE_16 | VK_REGION_SIZE_32 | VK_REGION_LOG_RW,
+	                        hikaru->gpu, "GPU/M");
+	ret |= vk_mmap_add_dev (mmap, 0x16000000, 0x17FFFFFF, 0x01FFFFFF,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL,
+	                        hikaru->memctl_m, "APERTURE16/M");
+	ret |= vk_mmap_add_dev (mmap, 0x18001000, 0x1800101F, 0x0000001F,
+	                        VK_REGION_RW | VK_REGION_SIZE_32 | VK_REGION_LOG_RW,
+	                        hikaru->gpu, "GPU/M");
+	ret |= vk_mmap_add_dev (mmap, 0x1A000000, 0x1A0FFFFF, 0x000FFFFF,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        hikaru->gpu, "GPU/M");
+	ret |= vk_mmap_add_ram (mmap, 0x1B000000, 0x1B7FFFFF, 0x007FFFFF,
+	                        0, hikaru->fb, "FB/M");
+
+	if (ret) vk_mmap_destroy(&mmap);
+	return mmap;
+}
+
+/*
+ * Slave SH-4 Memory Map
+ * =====================
+ *
+ * Area 0	00000000-001FFFFF Boot ROM
+ * Area 1	04000000-0400003F Memory Controller [Slave]
+ * Area 3	0C000000-0DFFFFFF RAM
+ * Area 4	10000000-100000FF Master/Slave Communication Box
+ *		10000100-103FFFFF Command RAM [Slave]
+ * Area 5	14000800-1400083F Master's 18000000
+ * Area 6	1A800000-1A800003 GPU
+ *		1B000100-1B000103 GPU
+ */
+
+static vk_mmap_t *
+setup_slave_mmap (hikaru_t *hikaru)
+{
+	vk_mmap_t *mmap = vk_mmap_new (&hikaru->base);
+	int ret = 0;
+
+	if (!mmap)
+		return NULL;
+
+	ret |= vk_mmap_add_ram (mmap, 0x0C000000, 0x0DFFFFFF, 0x01FFFFFF,
+	                        0, hikaru->ram_s, "RAM/S");
+	ret |= vk_mmap_add_rom (mmap, 0x00000000, 0x001FFFFF, 0x001FFFFF,
+	                        0, hikaru->bootrom, "BOOTROM/S");
+	ret |= vk_mmap_add_dev (mmap, 0x04000000, 0x0400003F, 0x0000003F,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        hikaru->memctl_s, "MEMCTL/S");
+	ret |= vk_mmap_add_dev (mmap, 0x10000000, 0x1000002F, 0x0000003F,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        hikaru->mscomm, "MSCOMM/S");
+	ret |= vk_mmap_add_ram (mmap, 0x10000100, 0x103FFFFF, 0x003FFFFF,
+	                        VK_REGION_LOG_W, hikaru->cmdram, "CMDRAM/S");
+	ret |= vk_mmap_add_dev (mmap, 0x14000800, 0x1400083F, 0x0000003F,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        &unk_s, "UNK/S");
+	ret |= vk_mmap_add_dev (mmap, 0x1A800000, 0x1A8000FF, 0x000000FF,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        &unk_s, "UNK/S");
+	ret |= vk_mmap_add_dev (mmap, 0x1B000100, 0x1B0001FF, 0x000000FF,
+	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
+	                        &unk_s, "UNK/S");
+
+	if (ret) vk_mmap_destroy(&mmap);
+	return mmap;
+}
+
+static int
+hikaru_set_rombd_config (hikaru_t *hikaru)
+{
+	vk_game_t *game = hikaru->base.game;
+	hikaru_rombd_config_t *config = &hikaru->rombd_config;
+	uint32_t rombd_offs = 0, eprom_bank_size = 0, maskrom_bank_size = 0;
+	uint32_t eprom_source_stride = 0;
+	bool has_rom = true, maskrom_is_stretched = false;
+
+	/* The fields computed here are used in hikaru-memctl.c::rombd_get () */
+
+	/* We require at least the bootrom to be loaded */
+	/* XXX add a "required" field to the json file */
+	if (!hikaru->bootrom)
+		return -1;
+
+	/* Determine the layout of ROMBD data within the external bus; see
+	 * hikaru-memctl.c for more details. */
+	if (!strcmp (game->name, "bootrom")) {
+		has_rom = false;
+		hikaru->eprom = NULL;
+		hikaru->maskrom = NULL;
+	} else if (!strcmp (game->name, "airtrix")) {
+		eprom_bank_size = 4;
+		maskrom_bank_size = 16;
+	} else if (!strcmp (game->name, "braveff")) {
+		eprom_bank_size = 2;
+		/* The hosted MAME-format section retains 16 MiB socket slots even
+		 * though each populated pair contains only 4 MiB. */
+		eprom_source_stride = 16*MB;
+		maskrom_bank_size = 8;
+	} else if (!strcmp (game->name, "pharrier")) {
+		eprom_bank_size = 4;
+		maskrom_bank_size = 16;
+	} else if (!strcmp (game->name, "podrace")) {
+		/* XXX doesn't pass the ROMBD test */
+		eprom_bank_size = 4;
+		maskrom_bank_size = 8;
+		maskrom_is_stretched = true;
+	} else if (!strcmp (game->name, "sgnascar")) {
+		//rombd_offs = 8;
+		eprom_bank_size = 4;
+		maskrom_bank_size = 16;
+		maskrom_is_stretched = true;
+	} else
+		return -1;
+
+	config->has_rom = has_rom;
+
+	/* Set the ROMBD data layout within the external bus */
+	if (has_rom) {
+		/* There are four EPROM banks */
+		config->eprom_bank[0] = rombd_offs + 0x10;
+		config->eprom_bank[1] = rombd_offs + 0x13;
+		/* There are sixteen MASKROM banks */
+		/* XXX how does MASKROM stretching affect this? */
+		config->maskrom_bank[0] = (rombd_offs == 0) ? 0x20 : 0x30;
+		config->maskrom_bank[1] = (rombd_offs == 0) ? 0x2F : 0x4F;
+		/* Set the remaining configuration btis */
+		config->eprom_bank_size = eprom_bank_size;
+		config->eprom_source_stride = eprom_source_stride ? eprom_source_stride
+		                                                 : eprom_bank_size * 2*MB;
+		config->maskrom_bank_size = maskrom_bank_size;
+		config->maskrom_is_stretched = maskrom_is_stretched;
+	}
+	/* The EEPROM bank is constant */
+	config->eeprom_bank = rombd_offs + 0x14;
+
+	return 0;
+}
+
+/* XXX actually make sh4_t opaque and add accessors for the registers; that's
+ * going to be needed for any possible future debugger anyway. */
+#define R(n_)	ctx->regs.r[n_]
+#define PR	ctx->regs.pr
+#define T	ctx->regs.sr.bit.t
+
+static uint32_t
+patch_airtrix (vk_cpu_t *cpu, uint32_t pc, uint32_t inst)
+{
+	sh4_t *ctx = (sh4_t *) cpu;
+
+	switch (pc) {
+	case 0x0C010F9A:
+		/* Make the 'WARNING' screen faster (well, 656 frames faster) */
+		R(2) = 0x290;
+		break;
+	}
+	return inst;
+}
+
+static uint32_t
+patch_braveff (vk_cpu_t *cpu, uint32_t pc, uint32_t inst)
+{
+	sh4_t *ctx = (sh4_t *) cpu;
+
+	switch (pc) {
+	case 0x0C0407D0:
+		R(3) = 0x0C06A620;
+		break;
+	case 0x0C0D522A:
+		T = 1;
+		break;
+	case 0x0C05B53E:
+		T = 0;
+		break;
+	}
+	return inst;
+}
+
+static uint32_t
+patch_pharrier (vk_cpu_t *cpu, uint32_t pc, uint32_t inst)
+{
+	if (0) {
+		/* Debug switches
+		 *
+		 * 0C21D4A8 00000003 Enable axis on top right
+		 * 0C21D4A8 00000007 CPU bar
+		 * 0C21D4A8 0000000F Date
+		 * 0C21D4A8 00000041 Char ball
+		 * 0C21D4A8 000000F0 World bounding boxes?
+		 * 0C21D4A8 00000F00 Light list + fog debug?
+		 * 0C21D4A8 00020000 Disable char + world
+		 * 0C21D4A8 00F00000 Switch between world and bounding boxes
+		 * 0C21D4A8 F0000000 Mod light?
+		 */
+		vk_cpu_put (cpu, 4, 0x0C21D4A8, 0xFFFFFFFF);
+		vk_cpu_put (cpu, 4, 0x0C21D4AC, 0xFFFFFFFF);
+	}
+
+	switch (pc) {
+	case 0x0C01C322:
+		/* Patches an AICA-related while (1) into a NOP */
+		return 0x0009;
+	}
+	return inst;
+}
+
+static uint32_t
+patch_sgnascar (vk_cpu_t *cpu, uint32_t pc, uint32_t inst)
+{
+	sh4_t *ctx = (sh4_t *) cpu;
+
+	switch (pc) {
+	case 0x0C00BC9A:
+		/* Make the (non-existent) EEPROM data conform the ROM
+		 * information. This is likely a region/hw version check. */
+		R(3) = 0xFF;
+		break;
+	case 0x0C0130CE:
+		/* Skip the "BAD IO BOARD" infinite loop */
+		R(4) = 1;
+		break;
+	}
+	return inst;
+}
+
+/* Install game-specific patches into the master SH-4 */
+static void
+hikaru_install_game_patches (hikaru_t *hikaru)
+{
+	vk_cpu_t *cpu = hikaru->sh_m;
+	vk_game_t *game = hikaru->base.game;
+	bool patched = true;
+
+	if (!game)
+		return;
+
+	if (!strcmp (game->name, "airtrix"))
+		vk_cpu_install_patch (cpu, patch_airtrix);
+	else if (!strcmp (game->name, "braveff"))
+		vk_cpu_install_patch (cpu, patch_braveff);
+	else if (!strcmp (game->name, "pharrier"))
+		vk_cpu_install_patch (cpu, patch_pharrier);
+	else if (!strcmp (game->name, "sgnascar"))
+		vk_cpu_install_patch (cpu, patch_sgnascar);
+	else
+		patched = false;
+
+	if (patched)
+		VK_PRINT ("Installed patches for '%s'", game->name);
+}
+
+static void
+hikaru_destroy (vk_machine_t **mach_)
+{
+    if (mach_ && *mach_) {
+        hikaru_t *hikaru = (hikaru_t *)*mach_;
+        vk_mmap_destroy(&hikaru->mmap_m);
+        vk_mmap_destroy(&hikaru->mmap_s);
+    }
+}
+
+static int
+hikaru_init (hikaru_t *hikaru)
+{
+	vk_machine_t *mach = (vk_machine_t *) hikaru;
+	vk_game_t *game = mach->game;
+
+	unk_m.mach = mach;
+	unk_s.mach = mach;
+
+#define ALLOC_BUFFER(field, bytes) do { \
+    hikaru->field = vk_buffer_le32_new((bytes), 0); \
+    if (!hikaru->field) return -1; \
+    vk_machine_register_buffer(mach, hikaru->field); \
+} while (0)
+    ALLOC_BUFFER(ram_m, 32*MB);
+    ALLOC_BUFFER(ram_s, 32*MB);
+    ALLOC_BUFFER(cmdram, 4*MB);
+    ALLOC_BUFFER(fb, 8*MB);
+    ALLOC_BUFFER(texram[0], 4*MB);
+    ALLOC_BUFFER(texram[1], 4*MB);
+    ALLOC_BUFFER(aica_ram_m, 8*MB);
+    ALLOC_BUFFER(aica_ram_s, 8*MB);
+    ALLOC_BUFFER(mie_ram, 32*KB);
+    ALLOC_BUFFER(bram, 64*KB);
+#undef ALLOC_BUFFER
+
+	if (game) {
+		char *version;
+
+		hikaru->bootrom 	= vk_game_get_section_data (game, "bootrom");
+		hikaru->eprom   	= vk_game_get_section_data (game, "eprom");
+		hikaru->maskrom 	= vk_game_get_section_data (game, "maskrom");
+
+		if (mach->bios_bypass) {
+		/* Patch theBOOTROM  EEPROM check. Allows games to load. */
+			VK_PRINT ("patching BOOTROM");
+	
+			version = (char *) vk_buffer_get_ptr (hikaru->bootrom, 0xD4);
+			if (!strcmp (version, "SAMURAI BootROM Version 0.84") ||
+			    !strcmp (version, "SAMURAI BootROM Version 0.92"))
+				vk_buffer_put (hikaru->bootrom, 2, 0x8AE, 0xE00F); /* MOV R0, 0xFFFFFFFF */
+			else if (!strcmp (version, "SAMURAI BootROM Version 0.96"))
+				vk_buffer_put (hikaru->bootrom, 2, 0x8E6, 0xE00F); /* MOV R0, 0xFFFFFFFF */
+			else {
+				VK_ERROR ("unknown BOOTROM version!");
+				return -1;
+			}
+	
+		}
+
+		if (hikaru_set_rombd_config (hikaru))
+			return -1;
+	} else {
+		/* Create a mock bootrom */                                     
+		hikaru->bootrom = vk_buffer_le32_new (2*MB, 0);
+	}
+
+	hikaru->memctl_m = hikaru_memctl_new (mach, true);
+	hikaru->memctl_s = hikaru_memctl_new (mach, false);
+
+	if (!hikaru->memctl_m || !hikaru->memctl_s)
+		return -1;
+
+	hikaru->mscomm = hikaru_mscomm_new (mach);
+	if (!hikaru->mscomm)
+		return -1;
+
+	hikaru->mie = hikaru_mie_new (mach);
+	if (!hikaru->mie)
+		return -1;
+
+	hikaru->base.renderer = hikaru_renderer_new (mach, hikaru->fb,
+	                                             hikaru->texram);
+	if (!hikaru->base.renderer)
+		return -1;
+
+	hikaru->gpu = hikaru_gpu_new (mach, hikaru->cmdram, hikaru->fb,
+	                              hikaru->texram, hikaru->base.renderer);
+
+	if (!hikaru->gpu || !hikaru->base.renderer)
+		return -1;
+
+	hikaru_renderer_set_gpu (hikaru->base.renderer, hikaru->gpu);
+
+	hikaru->aica_m = hikaru_aica_new (mach, hikaru->aica_ram_m, true);
+	hikaru->aica_s = hikaru_aica_new (mach, hikaru->aica_ram_s, false);
+
+	if (!hikaru->aica_m || !hikaru->aica_s)
+		return -1;
+
+	hikaru->mmap_m = setup_master_mmap (hikaru);
+	hikaru->mmap_s = setup_slave_mmap (hikaru);
+
+	if (!hikaru->mmap_m || !hikaru->mmap_s)
+		return -1;
+
+	hikaru->sh_m = sh4_new (mach, hikaru->mmap_m, true, true);
+	hikaru->sh_s = sh4_new (mach, hikaru->mmap_s, false, true);
+
+	if (!hikaru->sh_m || !hikaru->sh_s)
+		return -1;
+
+	sh4_set_porta_handlers (hikaru->sh_m, porta_get_m, porta_put_m);
+	sh4_set_porta_handlers (hikaru->sh_s, porta_get_s, porta_put_s);
+
+	/* Leave guest game instructions unchanged in the embedded backend. */
+
+	return 0;
+}
+
+struct vk_machine_t *
+hikaru_new (vk_game_t *game, void *host, int bios_bypass)
+{
+	hikaru_t *hikaru;
+	vk_machine_t *mach;
+
+	hikaru = ALLOC (hikaru_t);
+	if (!hikaru)
+		return NULL;
+	hikaru->cpu_clock_mhz = 200;
+
+	mach = (vk_machine_t *) hikaru;
+	strcpy (mach->name, "SEGA Hikaru");
+
+	mach->game = game;
+	mach->host = host;
+	mach->bios_bypass = bios_bypass;
+	vk_host_attach_machine(host, mach);
+
+	mach->destroy		= hikaru_destroy;
+	mach->reset		= hikaru_reset;
+	mach->run_frame		= hikaru_run_frame;
+	mach->load_state	= hikaru_load_state;
+	mach->save_state	= hikaru_save_state;
+	mach->get_debug_string	= hikaru_get_debug_string;
+
+	if (hikaru_init (hikaru)) {
+		/* The host owns the attached partial machine and cleans it up. */
+		return NULL;
+	}
+
+	return mach;
+}

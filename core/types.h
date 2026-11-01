@@ -160,6 +160,7 @@ struct settings_t
 		bool isNaomi1() const { return system == DC_PLATFORM_NAOMI; }
 		bool isNaomi2() const { return system == DC_PLATFORM_NAOMI2; }
 		bool isNaomi() const { return isNaomi1() || isNaomi2(); }
+		bool isHikaru() const { return system == DC_PLATFORM_HIKARU; }
 		bool isAtomiswave() const { return system == DC_PLATFORM_ATOMISWAVE; }
 		bool isArcade() const { return !isConsole(); }
 		bool isConsole() const { return system == DC_PLATFORM_DREAMCAST; }
