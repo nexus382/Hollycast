@@ -18,6 +18,7 @@ struct PixelArt
 {
 	int resolution = 0; // Zero preserves the original artwork and sampling.
 	uint32_t dark = 0x263e32ff, light = 0x9eae91ff;
+	int levels = 4; // Higher counts retain cover detail in a smooth LCD tint.
 };
 struct Element
 {

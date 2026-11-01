@@ -1510,7 +1510,8 @@ ImTextureID ImguiFileTexture::getId()
 	if (path.empty())
 		return {};
 	const std::string textureKey = pixelArt.resolution == 0 ? path : path + "#pixel-art/"
-			+ std::to_string(pixelArt.resolution) + "/" + std::to_string(pixelArt.dark) + "/" + std::to_string(pixelArt.light);
+			+ std::to_string(pixelArt.resolution) + "/" + std::to_string(pixelArt.dark) + "/" + std::to_string(pixelArt.light)
+			+ "/" + std::to_string(pixelArt.levels);
 	ImTextureID id = imguiDriver->getTexture(textureKey);
 	if (id == ImTextureID())
 	{
@@ -1577,7 +1578,7 @@ ImTextureID ImguiFileTexture::getId()
 					{
 						const auto pixels = themes::makePixelArtwork(imgData, width, height, pixelArt);
 						if (!pixels.pixels.empty())
-							id = imguiDriver->updateTextureAndAspectRatio(textureKey, pixels.pixels.data(), pixels.width, pixels.height, true);
+							id = imguiDriver->updateTextureAndAspectRatio(textureKey, pixels.pixels.data(), pixels.width, pixels.height, pixelArt.levels <= 4);
 					}
 					else
 						id = imguiDriver->updateTextureAndAspectRatio(textureKey, imgData, width, height, nearestSampling);

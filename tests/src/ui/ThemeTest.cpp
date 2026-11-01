@@ -248,6 +248,7 @@ TEST(ThemeParserTest, ParsesReusablePresentationControlsAndResponsiveFallback)
 	 {"id":"tall","name":"Tall","mode":"list","browser":[0,0,1,1]}]})");
 	const auto& layout = theme.layouts[0];
 	EXPECT_EQ(layout.pixelArt.resolution, 24);
+	EXPECT_EQ(layout.pixelArt.levels, 4);
 	EXPECT_EQ(layout.pixelArt.dark, 0x102030ff);
 	EXPECT_TRUE(layout.showFavouriteMarker);
 	EXPECT_EQ(layout.titleStyle, "initials");
@@ -269,6 +270,8 @@ TEST(ThemeParserTest, RejectsMalformedPresentationExtensionsInsteadOfSilentlyIgn
 			R"("canvasAspect":0)", R"("toolbar":"hidden")", R"("activation":"never")",
 			R"("minItemWidth":1)", R"("titleStyle":"guess")", R"("selectorStyle":"invalid")",
 			R"("pixelArt":{"resolution":1024})", R"("pixelArt":{"resolution":24,"typo":true})",
+			R"("pixelArt":{"resolution":128,"levels":1})", R"("pixelArt":{"resolution":128,"levels":257})",
+			R"("pixelArt":{"resolution":128,"levels":2.5})",
 			R"("narrowLayout":"missing")", R"("narrowLayout":"grid")", R"("narrowAspect":1.2)",
 			R"("elements":[{"type":"button","rect":[0,0,0.2,0.2],"action":"script"}])",
 			R"("elements":[{"type":"button","rect":[0,0,0.2,0.2],"action":"artwork","source":"remote"}])",
@@ -534,7 +537,12 @@ TEST(ThemeParserTest, BundledPocketDimensionUsesGenericExtensionsAndLocalAssets)
 	EXPECT_EQ(theme.id, "pocket-dimension");
 	ASSERT_EQ(theme.layouts.size(), 2u);
 	EXPECT_EQ(theme.layouts[0].toolbar, "compact");
-	EXPECT_EQ(theme.layouts[0].pixelArt.resolution, 24);
+	for (const auto& layout : theme.layouts)
+	{
+		EXPECT_EQ(layout.pixelArt.resolution, 128);
+		EXPECT_EQ(layout.pixelArt.levels, 32);
+		EXPECT_EQ(layout.artworkSource, "cover");
+	}
 	EXPECT_EQ(theme.fonts.size(), 2u);
 	EXPECT_EQ(themes::responsiveLayout(theme, theme.layouts[0], 0.6f).id, "pocket-portrait");
 	for (const auto& layout : theme.layouts)

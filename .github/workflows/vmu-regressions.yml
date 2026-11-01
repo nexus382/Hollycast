@@ -34,7 +34,14 @@ jobs:
           java-version: '21'
       - name: Install SDL (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev xvfb
+        run: |
+          # The runner's Azure HTTP mirror can stall before the VMU tests start.
+          # Keep the mirror fallback on HTTPS and bound each network attempt.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y libsdl2-dev xvfb
       - name: Install SDL (macOS)
         if: runner.os == 'macOS'
         run: brew list sdl2 >/dev/null 2>&1 || brew install sdl2
