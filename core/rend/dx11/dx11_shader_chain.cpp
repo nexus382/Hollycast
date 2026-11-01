@@ -337,8 +337,14 @@ bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, st
 			desc.BackFace = desc.FrontFace;
 			if (FAILED(device->CreateDepthStencilState(&desc, &program.stencilState.get()))) { error = "Unable to create FX stencil state."; return false; }
 		}
-		if (!passSource->vertex.empty()) {
-			std::string vertexSource = passSource->vertex;
+		if (!pass.compute) {
+			// Translate the default vertex stage too: the ordinary quad exports
+			// SV_POSITION before TEXCOORD0, while translated fragment stages read
+			// TEXCOORD0 first. D3D11 links signature registers by order, so mixing
+			// those stages can sample a single pixel or produce a black frame.
+			const std::string vertexSource = passSource->vertex.empty()
+					? "void main() { gl_Position = vec4(in_pos.xy, 0.0, 1.0); }"
+					: passSource->vertex;
 			std::string hlslVertex;
 			if (!postprocess::translateGlslGraphVertexToHlsl(vertexSource, program.parameters, inputs,
 					hlslVertex, error, passSource->nativeFxStages, passSource->retroArchGlsl, shaderModel))

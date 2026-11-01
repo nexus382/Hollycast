@@ -31,6 +31,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/rend/ShaderLayerTest.cpp
         src/rend/ReShadeCompilerTest.cpp
         src/rend/OpenGLShaderChainTest.cpp
+        src/rend/DirectXShaderChainTest.cpp
 		src/rend/SlangFrontendTest.cpp
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp
