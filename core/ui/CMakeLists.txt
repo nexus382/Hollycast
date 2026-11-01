@@ -69,6 +69,10 @@ if(NOT LIBRETRO)
             theme.h
             theme.cpp
             theme_parser.cpp
+            theme_repository.h
+            theme_repository.cpp
+            theme_browser.h
+            theme_browser.cpp
             theme_library.h
             theme_library.cpp
             theme_artwork.h

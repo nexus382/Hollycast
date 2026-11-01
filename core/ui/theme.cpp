@@ -268,7 +268,7 @@ const std::string& error()
 	return selectionError.empty() ? catalogError : selectionError;
 }
 
-std::string install(const std::string& sourceDirectory)
+std::string install(const std::string& sourceDirectory, bool refreshCatalog)
 {
 	const fs::path root = fs::u8path(directory());
 	fs::create_directories(root);
@@ -291,7 +291,7 @@ std::string install(const std::string& sourceDirectory)
 		if (fs::exists(destination))
 			throw std::runtime_error("A theme with id '" + theme.id + "' is already installed. Remove it or use a different id.");
 		fs::rename(staging, destination);
-		reload();
+		if (refreshCatalog) reload();
 		return theme.id;
 	}
 	catch (...)

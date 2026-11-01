@@ -23,6 +23,7 @@
 #endif
 #include "custom_theme.h"
 #include "theme.h"
+#include "theme_browser.h"
 #include "gui_util.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -3761,6 +3762,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryThemeCfg,
 			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
 		gui_display_library_download_progress();
+		if (ImGui::Button(T("Browse themes"))) themes::openBrowser();
 
 		if (const themes::Theme* activeTheme = themes::current())
 		{
@@ -9751,6 +9753,13 @@ void renderSettingsNew()
 		renderNavigationRail(exitSettings, backLabel);
 		ImGui::SameLine();
 		renderContentArea();
+		if (const auto chosen = themes::renderBrowser())
+		{
+			config::CustomTheme = *chosen;
+			config::ThemeLayout = "";
+			SaveSettings();
+			g_applyThemeAfterSettings = true;
+		}
 
 		if (pushedSettingsFont)
 			ImGui::PopFont();

@@ -126,6 +126,73 @@ protected:
 	std::function<void(size_t)> favouriteHandler;
 };
 
+TEST_F(ThemeLibraryTest, ListBadgesTrackFavouriteStateAndStayInsideTheRow)
+{
+	layout.id = "list-badges";
+	layout.mode = "list";
+	layout.browser = {0, 0, 1, 1};
+	layout.list.systemBadge = true;
+	layout.list.favouriteBadge = true;
+	layout.list.favouriteColor = 0xead171ff;
+	items[0].metadata["system"] = "Dreamcast";
+	items[1].metadata["system"] = "Naomi 2";
+	const ImU32 gold = IM_COL32(234, 209, 113, 255);
+	const auto goldCount = [&] {
+		return std::count_if(browserMesh.begin(), browserMesh.end(), [&](const ImDrawVert& vertex) { return vertex.col == gold; });
+	};
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_EQ(goldCount(), 0);
+	items[0].favourite = true;
+	for (const ImVec2 size : {ImVec2(800, 600), ImVec2(320, 600)})
+	{
+		windowSize = size;
+		renderFrame(ImVec2(-1, -1), false);
+		EXPECT_GT(goldCount(), 0);
+		for (const auto& vertex : browserMesh)
+			if (vertex.col == gold)
+			{
+				EXPECT_GE(vertex.pos.x, bounds[0].x - 1);
+				EXPECT_LE(vertex.pos.x, bounds[0].z + 1);
+				EXPECT_GE(vertex.pos.y, bounds[0].y - 1);
+				EXPECT_LE(vertex.pos.y, bounds[0].w + 1);
+			}
+	}
+	items[0].favourite = false;
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_EQ(goldCount(), 0);
+}
+
+TEST_F(ThemeLibraryTest, ClickSelectedListDoesNotUndoKeyboardNavigationUnderARestingPointer)
+{
+	layout.id = "click-list-keyboard";
+	layout.mode = "list";
+	layout.list.selectOnHover = false;
+	layout.activation = "doubleClick";
+	layout.elements = {{"metadata", {.6f, 0, .4f, .2f}, "title"}};
+	items[0].metadata["title"] = "A";
+	items[1].metadata["title"] = "BBBB";
+	layout.browser = {0, 0, .55f, 1};
+	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec4 first = bounds[0];
+	const ImVec2 pointer((first.x + first.z) / 2, (first.y + first.w) / 2);
+	renderFrame(pointer, false);
+	renderFrame(pointer, true);
+	renderFrame(pointer, false);
+	const size_t firstPreviewVertices = detailsMesh.size();
+	ASSERT_GT(firstPreviewVertices, 0u);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow, true);
+	renderFrame(pointer, false);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow, false);
+	renderFrame(pointer, false);
+	renderFrame(pointer, false);
+	EXPECT_EQ(GImGui->NavId, itemIds[1]);
+	EXPECT_GT(detailsMesh.size(), firstPreviewVertices) << "Keyboard focus must update the active preview before confirmation";
+	// Confirm must activate the item reached by keyboard, not the hovered old row.
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+	EXPECT_EQ(renderFrame(pointer, false), 1);
+}
+
 TEST_F(ThemeLibraryTest, GridWidgetActivatesTheClickedStableItem)
 {
 	layout.columns = 2;

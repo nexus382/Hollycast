@@ -3,6 +3,26 @@
 
 Hollycast theme packages are JSON descriptions of the app palette and game-library layouts. This is Hollycast's own **theme format version 1**; an ES-DE theme or theme pack is not compatible.
 
+## Browse and download themes
+
+Open **Settings → Library → Browse themes**. Each listing shows screenshots,
+creator, description and version. Search by name or creator, or select **Not
+installed** to find new packages. Choose **Download and install**, then **Use
+theme** when you want to apply it. Downloads run in the background, and existing
+packages are never overwritten. Screenshots are downloaded as they become visible.
+
+The community catalogue is hosted at
+[`TnT-Studio-s/Hollycast-themes`](https://github.com/TnT-Studio-s/Hollycast-themes).
+The browser always uses this repository. An unavailable catalogue shows an
+error and a **Refresh** action; installed themes remain usable offline.
+
+The companion repository scaffold in `tools/theme-repository/` contains the
+catalogue format, contribution guide, deterministic ZIP builder and validation
+workflow. Copy its contents into a separate repository. The catalogue starts
+empty until themes and their screenshots are contributed. ZIPs must contain
+`theme.json` at their root. Downloads enforce the same limits as local theme
+installs and reject unsafe paths, symlinks and mismatched theme IDs.
+
 ## Included library themes
 
 Every standalone download includes all eight library themes and their assets inside
@@ -224,6 +244,14 @@ Artwork availability comes from the shared library. LaunchBox, ScreenScraper and
 - After editing or copying a package manually, press **Reload Library Themes**. A failed package appears with its validation error and is skipped.
 
 ## Paged grids, play-history stats, and selection effects
+
+A `list` layout can add `list: {"systemBadge": true, "favouriteBadge": true,
+"favouriteColor": "EAD171", "selectOnHover": false}`. The badges show the game's
+system and saved favourite state, reserving space beside the title. The badge
+flags default to `false`; the favourite color defaults to the selector outline
+or app accent. `selectOnHover` defaults to `true`. Set it to `false` to select
+by clicking or keyboard/controller focus while a resting pointer leaves the
+active artwork and metadata alone. These fields require list mode.
 
 [Warning!](../themes/warning/theme.json) combines these optional primitives. Existing
 layouts retain their scrolling browser and decorative behavior when they omit them.
