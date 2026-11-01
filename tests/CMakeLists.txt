@@ -74,6 +74,7 @@ if(NOT LIBRETRO)
         src/ui/ThemeLibraryTest.cpp
         src/ui/ThemeArtworkTest.cpp
         src/ui/ThemeInstallTest.cpp
+        src/ui/ThemeRepositoryTest.cpp
         src/ui/VideoPresetTest.cpp
         src/ui/AndroidMenuPopupTest.cpp)
 endif()
