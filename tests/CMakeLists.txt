@@ -65,6 +65,7 @@ endif()
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/DcnetProbeTest.cpp
+        src/network/HttpTimeoutTest.cpp
         src/ui/SetupChecklistPopupTest.cpp
         src/ui/SettingsPopupTest.cpp
         src/ui/CustomThemeTest.cpp

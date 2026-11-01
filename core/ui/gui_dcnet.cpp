@@ -31,7 +31,12 @@ namespace
 using Clock = std::chrono::steady_clock;
 constexpr auto refreshInterval = std::chrono::seconds(15);
 dcnet::Status status;
-std::future<dcnet::Status> pending;
+struct StatusResult
+{
+	dcnet::Status value;
+	Clock::time_point fetched;
+};
+std::future<StatusResult> pending;
 Clock::time_point nextRefresh;
 Clock::time_point lastSuccess;
 bool hasStatus = false;
@@ -42,6 +47,11 @@ bool activeOnly = false;
 bool ownedOnly = false;
 size_t selectedCopy = 0;
 Clock::time_point nextLibraryRefresh;
+
+bool hasFreshStatus()
+{
+	return hasStatus && error.empty() && Clock::now() - lastSuccess < refreshInterval * 3;
+}
 struct OwnedTitle
 {
 	std::vector<GameMedia> copies;
@@ -165,7 +175,7 @@ void refreshLibrary(GameScanner& scanner, Boxart& boxart)
 					cover = metadata[index].boxartPath;
 				if (!cover.empty() && !file_exists(cover))
 					cover.clear();
-				auto& owned = ownedGames[game.id];
+				auto& owned = ownedGames[game.titleId()];
 				if (std::none_of(owned.copies.begin(), owned.copies.end(), [&](const GameMedia& copy) {
 					return copy.path == media.path;
 				}))
@@ -180,7 +190,7 @@ void refreshLibrary(GameScanner& scanner, Boxart& boxart)
 std::string downloadCover(const std::string& url, const std::string& path)
 {
 	std::vector<u8> body;
-	if (http::get(url, body) != 200 || body.empty() || body.size() > 2 * 1024 * 1024)
+	if (http::get(url, body, nullptr, nullptr, 10000) != 200 || body.empty() || body.size() > 2 * 1024 * 1024)
 		return {};
 	int width, height, channels;
 	if (!stbi_info_from_memory(body.data(), static_cast<int>(body.size()), &width, &height, &channels)
@@ -249,7 +259,7 @@ std::string fetchStatus(const char *endpoint)
 {
 	std::vector<u8> body;
 	const http::Headers headers { { "Cache-Control", "no-cache" } };
-	const int code = http::get(std::string("https://dcnet.flyca.st/status/api/") + endpoint, body, &headers);
+	const int code = http::get(std::string("https://dcnet.flyca.st/status/api/") + endpoint, body, &headers, nullptr, 10000);
 	if (code != 200)
 		throw std::runtime_error("DCnet is unavailable (HTTP " + std::to_string(code) + ").");
 	return std::string(body.begin(), body.end());
@@ -260,16 +270,17 @@ void refreshStatus()
 	if (pending.valid() && pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
 	{
 		try {
-			status = pending.get();
+			auto result = pending.get();
+			status = std::move(result.value);
 			nextLibraryRefresh = {};
 			hasStatus = true;
-			lastSuccess = Clock::now();
+			lastSuccess = result.fetched;
 			error.clear();
 		} catch (const std::exception&) {
 			// Keep the last complete snapshot, but never present it as current data.
 			error = T("Unable to refresh DCnet. Check your connection and try again.");
 		}
-		nextRefresh = Clock::now() + refreshInterval;
+		nextRefresh = error.empty() ? lastSuccess + refreshInterval : Clock::now() + refreshInterval;
 	}
 	if (!pending.valid() && Clock::now() >= nextRefresh)
 	{
@@ -277,7 +288,7 @@ void refreshStatus()
 			pending = std::async(std::launch::async, [] {
 				const std::string games = fetchStatus("games");
 				const std::string players = fetchStatus("players");
-				return dcnet::parseStatus(games, players);
+				return StatusResult{dcnet::parseStatus(games, players), Clock::now()};
 			});
 		} catch (const std::exception&) {
 			error = T("Unable to start a DCnet refresh. Please try again.");
@@ -340,18 +351,20 @@ void renderCover(const dcnet::Game& game, const std::string& localCover, const I
 void renderServerStatus(const dcnet::Game& game)
 {
 	const auto check = std::find_if(serviceChecks.begin(), serviceChecks.end(), [&](const ServiceCheck& item) {
-		return game.id == item.gameId;
+		return game.titleId() == item.gameId;
 	});
 	const bool checked = check != serviceChecks.end() && check->checked != Clock::time_point{}
 			&& Clock::now() - check->checked < serviceExpiry;
 	const bool responding = checked && check->responding;
-	const bool active = game.players > 0 || game.matches > 0 || game.hasPlayerActivity;
-	const char *label = game.hasLiveStatus ? (game.online ? (active ? T("Playing") : T("Online")) : T("Offline"))
-			: active ? T("Playing") : responding ? T("Responding") : checked ? T("No response")
+	const bool live = hasFreshStatus() && game.hasLiveStatus;
+	const bool saved = game.hasLiveStatus && !live;
+	const bool active = hasFreshStatus() && game.isActive();
+	const char *label = live ? (game.online ? (active ? T("Playing") : T("Online")) : T("Offline"))
+			: active ? T("Playing") : responding ? T("Responding") : saved ? T("Saved") : checked ? T("No response")
 			: check != serviceChecks.end() && check->pending.valid() ? T("Checking...") : T("No report");
-	const ImVec4 color = game.hasLiveStatus && !game.online ? ImVec4(0.93f, 0.43f, 0.40f, 1.f)
+	const ImVec4 color = live && !game.online ? ImVec4(0.93f, 0.43f, 0.40f, 1.f)
 			: active ? ImVec4(0.39f, 0.78f, 0.98f, 1.f)
-			: game.hasLiveStatus || responding ? ImVec4(0.40f, 0.80f, 0.59f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+			: live || responding ? ImVec4(0.40f, 0.80f, 0.59f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
 	const ImVec2 pos = ImGui::GetCursorScreenPos();
 	const ImVec2 padding = ScaledVec2(8, 4);
 	const ImVec2 textSize = ImGui::CalcTextSize(label);
@@ -362,12 +375,14 @@ void renderServerStatus(const dcnet::Game& game)
 	ImGui::Dummy(size);
 	if (ImGui::IsItemHovered())
 	{
-		if (game.hasLiveStatus)
+		if (saved && !responding)
+			ImGui::SetTooltip("%s", T("Saved DCnet status. Waiting for a fresh activity report."));
+		else if (live)
 			ImGui::SetTooltip("%s", T("Server status reported by DCnet."));
 		else if (check != serviceChecks.end())
 		{
 			ImGui::BeginTooltip();
-			ImGui::TextUnformatted(game.id == "catalog:pba-bowling-2001"
+			ImGui::TextUnformatted(game.titleId() == "catalog:pba-bowling-2001"
 					? T("PBA lobby query through the DCnet VPN.") : T("Sega Rally 2 initialization handshake with DCnet."));
 			ImGui::TextUnformatted(T("Availability only. Player and match counts are not published."));
 			if (checked)
@@ -535,7 +550,7 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 	if (hasStatus)
 	{
 		const auto age = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - lastSuccess).count();
-		ImGui::TextDisabled(error.empty() ? T("Updated %llds ago") : T("Saved activity from %llds ago"), static_cast<long long>(age));
+		ImGui::TextDisabled(hasFreshStatus() ? T("Updated %llds ago") : T("Saved activity from %llds ago"), static_cast<long long>(age));
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("%s", T("Refreshes every 15 seconds while DCnet is open."));
 	}
@@ -569,12 +584,12 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 					ImGui::TableHeadersRow();
 					for (const auto& game : status.games)
 					{
-						const auto owned = ownedGames.find(game.id);
-						if ((activeOnly && game.players <= 0 && game.matches <= 0)
+						const auto owned = ownedGames.find(game.titleId());
+						if ((activeOnly && !game.isActive())
 								|| (ownedOnly && owned == ownedGames.end()) || !filter.PassFilter(game.name.c_str()))
 							continue;
 						any = true;
-						ImguiID id(game.id.c_str());
+						ImguiID id(game.titleId().c_str());
 						const ImVec2 coverSize = ScaledVec2(48, 60);
 						ImGui::TableNextRow(ImGuiTableRowFlags_None, coverSize.y + ImGui::GetStyle().CellPadding.y * 2);
 						ImGui::TableNextColumn();
@@ -590,9 +605,9 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 						const float rowHeight = std::max(coverSize.y,
 								ImGui::CalcTextSize(game.name.c_str(), nullptr, false, textWidth).y
 								+ ImGui::CalcTextSize(subtitle.c_str(), nullptr, false, textWidth).y + ImGui::GetStyle().ItemSpacing.y);
-						if (ImGui::Selectable("##game", selectedGame == game.id, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowHeight)))
+						if (ImGui::Selectable("##game", selectedGame == game.titleId(), ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowHeight)))
 						{
-							selectedGame = game.id;
+							selectedGame = game.titleId();
 							selectedCopy = 0;
 							openDetails = true;
 						}
@@ -638,9 +653,9 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 				if (ImGui::BeginPopupModal(T("Game activity"), nullptr, ImGuiWindowFlags_NoSavedSettings))
 				{
 					const auto selected = std::find_if(status.games.begin(), status.games.end(), [](const dcnet::Game& game) {
-						return game.id == selectedGame;
+						return game.titleId() == selectedGame;
 					});
-					const auto owned = selected == status.games.end() ? ownedGames.end() : ownedGames.find(selected->id);
+					const auto owned = selected == status.games.end() ? ownedGames.end() : ownedGames.find(selected->titleId());
 					if (owned != ownedGames.end() && selectedCopy >= owned->second.copies.size())
 						selectedCopy = 0;
 					if (ImGui::BeginChild("gameDetails", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),

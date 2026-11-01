@@ -145,12 +145,22 @@ void control(Socket& socket, unsigned protocol, uint8_t code, uint8_t id, Bytes 
 }
 
 // Deliberately exercise EAP and IPCP negotiation before answering the game query.
-void negotiatePba(Socket& socket)
+void negotiatePba(Socket& socket, bool stall = false)
 {
 	const auto lcp = readPpp(socket);
 	EXPECT_EQ(lcp.first, 0xc021u);
 	EXPECT_EQ(lcp.second, (Bytes{1, 1, 0, 4}));
-	control(socket, 0xc021, 1, 9, {3, 4, 0xc2, 0x27});
+	if (stall)
+	{
+		const auto frame = pppFrame(0xc021, {1, 9, 0, 8, 3, 4, 0xc2, 0x27});
+		write(socket, Bytes(frame.begin(), frame.begin() + 3));
+		// Wait for the client's LCP retry: this proves the short read timed out
+		// without introducing timing-dependent sleeps in the test server.
+		EXPECT_EQ(readPpp(socket), lcp);
+		write(socket, Bytes(frame.begin() + 3, frame.end()));
+	}
+	else
+		control(socket, 0xc021, 1, 9, {3, 4, 0xc2, 0x27});
 	EXPECT_EQ(readPpp(socket).second, (Bytes{2, 9, 0, 8, 3, 4, 0xc2, 0x27}));
 	control(socket, 0xc021, 2, 1);
 	control(socket, 0xc227, 1, 1, {1});
@@ -213,9 +223,9 @@ void sendIp(Socket& socket, uint8_t protocol, Bytes payload)
 	write(socket, pppFrame(0x21, ip));
 }
 
-void servePba(Socket& socket, const std::string& lobby, bool corrupt = false)
+void servePba(Socket& socket, const std::string& lobby, bool corrupt = false, bool stall = false)
 {
-	negotiatePba(socket);
+	negotiatePba(socket, stall);
 	const auto dns = readPpp(socket);
 	EXPECT_EQ(dns.first, 0x21u);
 	EXPECT_EQ(dns.second.at(9), 17);
@@ -352,4 +362,12 @@ TEST(DcnetProbe, PbaRejectsInvalidTcpChecksum)
 		servePba(socket, "\\fieldcount\\7\\groupid\\hostname\\numplayers\\maxwaiting\\numwaiting\\numservers\\password\\100\\Lobby\\0\\50\\0\\0\\0\\final\\", true);
 	});
 	EXPECT_FALSE(dcnet::probePba("127.0.0.1", server.port));
+}
+
+TEST(DcnetProbe, PbaRecoversAfterPartialFrameReadTimesOut)
+{
+	Server server([](Socket& socket) {
+		servePba(socket, "\\fieldcount\\7\\groupid\\hostname\\numplayers\\maxwaiting\\numwaiting\\numservers\\password\\100\\Lobby\\0\\50\\0\\0\\0\\final\\", false, true);
+	});
+	EXPECT_TRUE(dcnet::probePba("127.0.0.1", server.port, std::chrono::seconds(5)));
 }

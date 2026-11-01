@@ -92,11 +92,13 @@ public:
 	{
 		if (position == available)
 		{
+			// A cancelled read reports zero bytes. Reset both cursors before it can
+			// throw, so an LCP retry cannot read beyond the previous receive buffer.
+			position = available = 0;
 			perform([&](auto done) {
 				socket.async_read_some(asio::buffer(buffer),
 						[&, done](const asio::error_code& ec, size_t size) { available = size; done(ec); });
 			}, std::chrono::seconds(2));
-			position = 0;
 			if (available == 0)
 				throw std::runtime_error("Empty service response");
 		}

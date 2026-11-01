@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -19,6 +20,7 @@
 #include "oslib/http_client.h"
 #include "stdclass.h"
 #include <windows.h>
+#include <memory>
 
 namespace http {
 
@@ -62,7 +64,7 @@ static void getHeaders(IIterator<IKeyValuePair<String^, String^>^>^ it, Headers&
 	}
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
 {
 	nowide::wstackstring wurl;
 	if (!wurl.convert(url.c_str()))
@@ -84,13 +86,18 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		}
 
 		IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^ op = httpClient->SendRequestAsync(request);
-		cResetEvent asyncEvent;
+		// Cancellation can complete after this function returns. Keep the event
+		// alive until both WinRT completion callbacks have released their copies.
+		auto asyncEvent = std::make_shared<cResetEvent>();
 		op->Completed = ref new AsyncOperationWithProgressCompletedHandler<HttpResponseMessage^, HttpProgress>(
-				[&asyncEvent](IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^, Windows::Foundation::AsyncStatus) {
-					asyncEvent.Set();
+				[asyncEvent](IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^, Windows::Foundation::AsyncStatus) {
+					asyncEvent->Set();
 		        });
-		if (!asyncEvent.Wait(30000))
+		if (!asyncEvent->Wait(timeoutMs > 0 ? timeoutMs : 30000))
+		{
+			op->Cancel();
 			return 408;
+		}
 		HttpResponseMessage^ resp = op->GetResults();
 
 		if (resp->IsSuccessStatusCode)
@@ -103,12 +110,18 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 			}
 
 			IAsyncOperationWithProgress<IBuffer^, uint64_t>^ readOp = httpContent->ReadAsBufferAsync();
-			asyncEvent.Reset();
+			asyncEvent->Reset();
 			readOp->Completed = ref new AsyncOperationWithProgressCompletedHandler<IBuffer^, uint64_t>(
-				[&asyncEvent](IAsyncOperationWithProgress<IBuffer^, uint64_t>^, Windows::Foundation::AsyncStatus) {
-					asyncEvent.Set();
+				[asyncEvent](IAsyncOperationWithProgress<IBuffer^, uint64_t>^, Windows::Foundation::AsyncStatus) {
+					asyncEvent->Set();
 				});
-			asyncEvent.Wait();
+			if (timeoutMs > 0 && !asyncEvent->Wait(timeoutMs))
+			{
+				readOp->Cancel();
+				return 408;
+			}
+			if (timeoutMs <= 0)
+				asyncEvent->Wait();
 			IBuffer^ buffer = readOp->GetResults();
 
 			Array<u8>^ array = ref new Array<u8>(buffer->Length);

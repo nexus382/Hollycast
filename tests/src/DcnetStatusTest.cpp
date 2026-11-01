@@ -396,3 +396,36 @@ TEST(DcnetStatusTest, SeparateEditionReportsTakePrecedenceOverSharedServices)
 		}
 	}
 }
+
+TEST(DcnetStatusTest, PlayerFeedActivityOverridesAnOlderEmptyCountWithoutDuplicatingSharedTotals)
+{
+	const auto status = dcnet::parseStatus(R"([
+		{"gameId":"aeroi","name":"Aero Dancing i","online":true,"playerCount":0,"gameCount":0}
+	])", R"([{"name":"Player","gameId":"aeroi"}])");
+	EXPECT_EQ(1, status.activeGames);
+	EXPECT_EQ(1, status.playerCount);
+	EXPECT_EQ(0, status.matchCount);
+	EXPECT_EQ(2, std::count_if(status.games.begin(), status.games.end(), [](const dcnet::Game& game) {
+		return game.isActive();
+	}));
+	EXPECT_TRUE(status.games.front().isActive());
+}
+
+TEST(DcnetStatusTest, NewServiceIdsPreserveCatalogIdentityAndOwnershipAliases)
+{
+	for (bool playerOnly : {false, true})
+	{
+		const auto status = dcnet::parseStatus(playerOnly ? "[]" : R"([
+			{"gameId":"pba2001","name":"PBA Bowling 2001","online":true}
+		])", playerOnly ? R"([
+			{"name":"Player","gameId":"pba2001","gameName":"PBA Bowling 2001"}
+		])" : "[]");
+		const auto game = std::find_if(status.games.begin(), status.games.end(), [](const dcnet::Game& item) {
+			return item.id == "pba2001";
+		});
+		ASSERT_NE(status.games.end(), game);
+		EXPECT_EQ("catalog:pba-bowling-2001", game->titleId());
+		const auto keys = dcnet::titleKeys(*game);
+		EXPECT_NE(keys.end(), std::find(keys.begin(), keys.end(), dcnet::normalizeTitle("PBA Tour Bowling 2001 (USA).chd")));
+	}
+}

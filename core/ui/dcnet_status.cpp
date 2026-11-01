@@ -150,7 +150,7 @@ std::vector<std::string> titleKeys(const Game& game)
 		{ "pjustice", "Moero! Justice Gakuen" },
 	};
 	for (const auto& alias : aliases)
-		if (game.id == alias.first)
+		if (game.titleId() == alias.first)
 			add(alias.second);
 	return keys;
 }
@@ -164,6 +164,8 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 
 	Status status;
 	status.games.assign(std::begin(catalog), std::end(catalog));
+	for (auto& game : status.games)
+		game.catalogId = game.id;
 	std::unordered_set<std::string> gameIds;
 	for (const auto& item : games)
 	{
@@ -194,6 +196,7 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 		{
 			game.name = known->name;
 			game.stage = known->stage;
+			game.catalogId = known->catalogId;
 			*known = std::move(game);
 		}
 	}
@@ -270,16 +273,15 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 		}
 	for (auto& game : status.games)
 	{
-		if (game.players < 0)
-		{
-			const auto it = observedPlayers.find(game.id);
-			if (it != observedPlayers.end())
-				game.players = it->second;
-		}
+		// The two endpoints are sampled separately. A newly joined player may
+		// already be in /players while /games still reports an empty service.
+		const auto it = observedPlayers.find(game.id);
+		if (it != observedPlayers.end())
+			game.players = std::max(game.players, it->second);
 		// Tally reported services before projecting their counts onto editions.
 		status.playerCount += std::max(game.players, 0);
 		status.matchCount += std::max(game.matches, 0);
-		if (game.players > 0 || game.matches > 0)
+		if (game.isActive())
 			++status.activeGames;
 	}
 	// IWANGO maps i and iSD to AeroDancingI (iwango-server/common.h).
@@ -310,8 +312,8 @@ Status parseStatus(const std::string& gamesJson, const std::string& playersJson)
 		edition->hasPlayerActivity = source->hasPlayerActivity;
 	}
 	std::sort(status.games.begin(), status.games.end(), [](const Game& a, const Game& b) {
-		const bool aActive = a.players > 0 || a.matches > 0;
-		const bool bActive = b.players > 0 || b.matches > 0;
+		const bool aActive = a.isActive();
+		const bool bActive = b.isActive();
 		if (aActive != bActive)
 			return aActive;
 		if (std::max(a.players, 0) != std::max(b.players, 0))

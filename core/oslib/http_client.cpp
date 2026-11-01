@@ -87,7 +87,7 @@ static HINTERNET connect(const URL_COMPONENTS& comp) {
 	return InternetConnect(hInet, comp.lpszHostName, comp.nPort, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
 {
 	CrackedUrl cracked;
 	if (!crackUrl(url, cracked))
@@ -106,6 +106,12 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		InternetCloseHandle(ic);
 		WARN_LOG(NETWORK, "Open URL failed: %lx", GetLastError());
 		return 500;
+	}
+	if (timeoutMs > 0)
+	{
+		DWORD timeout = static_cast<DWORD>(timeoutMs);
+		for (DWORD option : {INTERNET_OPTION_CONNECT_TIMEOUT, INTERNET_OPTION_SEND_TIMEOUT, INTERNET_OPTION_RECEIVE_TIMEOUT})
+			InternetSetOption(hreq, option, &timeout, sizeof(timeout));
 	}
 	std::string headers;
 	if (reqHeaders != nullptr)
@@ -370,10 +376,16 @@ static CURL *makeCurlEasy(const std::string& url)
 	return curl;
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
 {
 	CURL *curl = makeCurlEasy(url);
 
+	if (timeoutMs > 0)
+	{
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeoutMs));
+		// DCnet GETs run on workers; libcurl must not install process-wide signals.
+		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	}
 	curl_slist *headers = nullptr;
 	if (reqHeaders != nullptr)
 	{

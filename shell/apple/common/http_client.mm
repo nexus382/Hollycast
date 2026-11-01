@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -22,7 +23,7 @@
 
 namespace http {
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
 {
 	NSString *nsurl = [NSString stringWithCString:url.c_str() 
                                          encoding:[NSString defaultCStringEncoding]];
@@ -41,8 +42,8 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
             [urlRequest setValue:nsvalue forHTTPHeaderField:nsname];
         }
     }
-    // TODO can't set a connection timeout apparently. Need to switch to asynchronous API
-    // but default timeout might be close to 30 s...
+    if (timeoutMs > 0)
+        [urlRequest setTimeoutInterval:timeoutMs / 1000.0];
 	NSURLResponse *response = nil;
 	NSError *error = nil;
 	NSData *data = [NSURLConnection sendSynchronousRequest:urlRequest

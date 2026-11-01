@@ -24,6 +24,10 @@ struct Game
 	bool hasPlayerActivity = false;
 	// Nonempty on both editions when their counts and players share one service.
 	std::string sharedStatusId;
+	// Keep edition identity stable when a live feed starts reporting a new ID.
+	std::string catalogId;
+	const std::string& titleId() const { return catalogId.empty() ? id : catalogId; }
+	bool isActive() const { return players > 0 || matches > 0 || hasPlayerActivity; }
 };
 
 struct Player
