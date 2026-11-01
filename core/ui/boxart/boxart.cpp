@@ -1137,7 +1137,7 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 				}
 			}));
 		for (auto& worker : workers)
-			while (worker.wait_for(std::chrono::seconds(1)) != std::future_status::ready) saveDatabase();
+			while (worker.wait_for(std::chrono::seconds(1)) != std::future_status::ready) saveDatabase(true);
 		for (auto& worker : workers) worker.get();
 		if (screenGeneration != generation || !session->status().connected) break;
 		// Fallback catalogs are lazy: a complete ScreenScraper result never opens
@@ -1294,8 +1294,9 @@ void Boxart::fetchBoxart()
 							std::lock_guard<std::mutex> guard(mutex);
 							completeArtworkWork(item, wantOnline || retainOnlineWork || (allowOnline && item.arcade), item.arcade && useScreenScraper ? 0 : selectedProvider);
 						});
-						saveDatabase();
+						saveDatabase(true);
 					}
+					saveDatabase();
 				} catch (...) {
 					std::lock_guard<std::mutex> guard(mutex);
 					physicalWorking = false;
@@ -1427,9 +1428,14 @@ void Boxart::markDatabaseDirty()
 	++databaseGeneration;
 }
 
-void Boxart::saveDatabase()
+void Boxart::saveDatabase(bool checkpoint)
 {
 	std::lock_guard<std::mutex> writeGuard(databaseWriteMutex);
+	// A large inventory can complete many small batches per second. Checkpoint
+	// progress without serializing/fsyncing the whole database for each batch;
+	// worker completion, refresh and shutdown always perform an unthrottled save.
+	if (checkpoint && std::chrono::steady_clock::now() - lastDatabaseSave < std::chrono::seconds(2))
+		return;
 	std::vector<GameBoxart> snapshot;
 	u64 savedGeneration = 0;
 	const std::string artworkDir = getSaveDirectory();
@@ -1462,6 +1468,7 @@ void Boxart::saveDatabase()
 		return;
 	}
 
+	lastDatabaseSave = std::chrono::steady_clock::now();
 	std::lock_guard<std::mutex> guard(mutex);
 	if (databaseGeneration == savedGeneration)
 		databaseDirty = false;

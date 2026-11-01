@@ -117,7 +117,7 @@ private:
 	void applyLibraryPlaytimeUnlocked(GameBoxart& boxart) const;
 	void recoverDatabases(const std::string& databaseDir, const std::string& artworkDir);
 	void reviewDatabaseArtwork();
-	void saveDatabase();
+	void saveDatabase(bool checkpoint = false);
 	void markDatabaseDirty();
 	void buildCustomBoxartIndex();
 	std::string getDatabaseDirectory() const;
@@ -163,6 +163,7 @@ private:
 	bool databaseLoaded = false;
 	bool databaseDirty = false;
 	std::mutex databaseWriteMutex;
+	std::chrono::steady_clock::time_point lastDatabaseSave; // Protected by databaseWriteMutex.
 	// Incremented while mutex is held so a completed save never clears a newer update.
 	u64 databaseGeneration = 0;
 	bool customIndexLoaded = false;

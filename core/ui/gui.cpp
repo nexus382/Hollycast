@@ -1250,7 +1250,7 @@ static void contentpath_warning_popup()
         if (ImGui::BeginPopupModal(incorrectContentPopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
         {
             ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + uiScaled(400.f));
-            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned);
+            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned.load());
 			{
 				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(16, 3));
 				float currentwidth = ImGui::GetContentRegionAvail().x;
@@ -2634,18 +2634,21 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		resetLibraryGameInfoHover();
 		lastLibraryView = view;
 	}
+	const auto stateFolders = hostfs::getSavestateFolders();
 	const auto key = std::make_tuple(scannerGeneration, gameCount, boxart.libraryRevision(),
 			layoutKey, mediaSources, view, std::string(filter.InputBuf), config::LibraryFavourites.get(),
 			config::BoxartSourceMode.get(), config::LibraryCoverMedia.get(), config::ArtworkProvider.get(),
 			config::FetchBoxart.get(), config::LibraryImageSource.get(), config::ContentPath.get(),
-			get_writable_data_path(""));
+			get_writable_data_path(""), stateFolders.custom, stateFolders.data);
 	static auto preparedKey = key;
 	const int frame = ImGui::GetFrameCount();
 	const bool needsDiscArtwork = std::find(mediaSources.begin(), mediaSources.end(), "disc") != mediaSources.end();
-	// These paths publish asynchronous results or animate without changing the
-	// artwork database. Keep their existing live refresh behavior.
+	// Save discovery is bounded to one outstanding request. Once it has inspected
+	// every game, reuse the result until a refresh, folder change or game return.
 	const bool live = view == library::View::ContinuePlaying
-			|| config::LibraryImageSource.get() != static_cast<int>(config::LibraryImageSourceMode::CurrentArtwork);
+			&& (librarySavestateCache.busy() || librarySavestateCacheInvalidated.load());
+	const bool liveIcons = config::LibraryImageSource.get()
+			!= static_cast<int>(config::LibraryImageSourceMode::CurrentArtwork);
 	const double animationClock = getLibraryIconAnimationClock();
 	if (!prepared || key != preparedKey || frame != previousFrame + 1 || live)
 	{
@@ -2767,6 +2770,13 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	if (games.empty()) drawEmptyBrowser = [&] { addFolder = drawEmptyLibraryPrompt(); };
 	const int activated = themes::renderLibrary(layout, theme.directory, items, [&](size_t index) {
 		const GameMedia& game = visibleGames[index];
+		if (liveIcons && items[index].isGame)
+		{
+			// Animate/recheck VMU artwork only for clipped or selected items. Its
+			// metadata is unchanged, so it must not rebuild every card each frame.
+			artwork[index] = getLibraryDisplayArtwork(game, animationClock);
+			items[index].image = artwork[index].boxartPath;
+		}
 		// The browser clips its items before this callback and includes the selected
 		// row. Keep asynchronous disc labels current without opening every game.
 		if (needsDiscArtwork && items[index].isGame)
@@ -4702,6 +4712,7 @@ void gui_term()
 		gui_term_dcnet();
 		scanner.stop();
 		librarySavestateCache.stop();
+		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
@@ -4732,7 +4743,11 @@ extern bool subfolders_read;
 void gui_refresh_files(bool invalidateArtwork) {
 	librarySavestateCacheInvalidated = true;
 	if (invalidateArtwork)
+	{
 		boxart.invalidateOfflineArtwork();
+		boxart.refreshCustomBoxartIndex(true);
+		ImguiFileTexture::invalidateFileImages();
+	}
 	scanner.refresh();
 	subfolders_read = false;
 }
@@ -4904,6 +4919,7 @@ std::string gui_getCurGameBoxartUrl()
 
 void gui_refresh_custom_boxart(bool force)
 {
+	ImguiFileTexture::invalidateFileImages();
 	boxart.invalidateOfflineArtwork();
 	boxart.refreshLibraryPlaytimeDatabase();
 	boxart.refreshCustomBoxartIndex(force);
@@ -4914,6 +4930,7 @@ void gui_refresh_custom_boxart(bool force)
 
 void gui_refresh_boxart_cache()
 {
+	ImguiFileTexture::invalidateFileImages();
 	clearVmuIconLookups();
 	boxart.refreshCache();
 	scanner.fetch_game_list_sync();

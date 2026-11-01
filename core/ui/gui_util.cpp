@@ -37,6 +37,8 @@
 #include "stdclass.h"
 #include "rend/osd.h"
 #include "stbi.h"
+#include "util/worker_thread.h"
+#include <limits>
 
 #include <algorithm>
 #include <cstdio>
@@ -1399,7 +1401,8 @@ static u8 *loadImage(const std::string& path, int& width, int& height, bool boun
 	int channels;
 	stbi_set_flip_vertically_on_load_thread(0);
 	const s64 fileSize = file->size();
-	if (fileSize <= 0 || (boundedImage && fileSize > 16 * 1024 * 1024))
+	if (fileSize <= 0 || fileSize > std::numeric_limits<int>::max()
+			|| (boundedImage && fileSize > 16 * 1024 * 1024))
 		return nullptr;
 	std::vector<u8> data(fileSize);
 	if (file->read(data.data(), 1, data.size()) != data.size())
@@ -1431,6 +1434,78 @@ struct ThemeImageFileStamp
 static std::map<std::string, ThemeImageFileStamp> failedThemeImages;
 static std::map<std::string, float> fileImageAspects;
 static constexpr size_t MaxFailedThemeImages = 64;
+
+// Only one file read/decode can be outstanding. Fast scrolling therefore cannot
+// queue the whole library or accumulate decoded images behind the render thread.
+struct DecodedFileImage
+{
+	std::unique_ptr<u8, decltype(&free)> pixels{nullptr, free};
+	std::string key;
+	int width = 0, height = 0;
+	u64 generation = 0;
+	bool nearest = false;
+	themes::PixelArt pixelArt;
+};
+static WorkerThread fileImageWorker{"LibraryImages"};
+static std::future<DecodedFileImage> pendingFileImage;
+static u64 fileImageGeneration = 0;
+static bool invalidateFileTextures = false;
+struct FileTextureUse
+{
+	size_t bytes;
+	int frame;
+};
+static std::map<std::string, FileTextureUse> fileTextureUses;
+static size_t fileTextureBytes = 0;
+static constexpr size_t FileTextureBudget = 256 * 1024 * 1024;
+static std::map<std::string, std::chrono::steady_clock::time_point> failedFileImages;
+
+static void finishFileImage(int& loads)
+{
+	if (loads >= 5 || !pendingFileImage.valid()
+			|| pendingFileImage.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+		return;
+	++loads;
+	DecodedFileImage image = pendingFileImage.get();
+	if (image.generation != fileImageGeneration || !imguiDriver)
+		return;
+	if (!image.pixels)
+	{
+		// Retry transient/missing files, including artwork published by a scraper
+		// after the first lookup. A failed cover must not starve the next request.
+		if (failedFileImages.size() >= 128)
+			failedFileImages.erase(failedFileImages.begin());
+		failedFileImages[image.key] = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		return;
+	}
+	ImTextureID id{};
+	try {
+		if (image.pixelArt.resolution > 0)
+		{
+			const auto pixels = themes::makePixelArtwork(image.pixels.get(), image.width, image.height, image.pixelArt);
+			if (!pixels.pixels.empty())
+			{
+				image.width = pixels.width;
+				image.height = pixels.height;
+				id = imguiDriver->updateTextureAndAspectRatio(image.key, pixels.pixels.data(),
+						image.width, image.height, image.pixelArt.levels <= 4);
+			}
+		}
+		else
+			id = imguiDriver->updateTextureAndAspectRatio(image.key, image.pixels.get(),
+					image.width, image.height, image.nearest);
+	} catch (...) {
+		// A renderer resize can reject the upload; a subsequent lookup retries it.
+	}
+	if (id != ImTextureID{})
+	{
+		auto& use = fileTextureUses[image.key];
+		fileTextureBytes -= use.bytes;
+		use = {static_cast<size_t>(image.width) * image.height * 4, ImGui::GetFrameCount()};
+		fileTextureBytes += use.bytes;
+	}
+}
+
 struct DecodedThemeImage
 {
 	ThemeImageFileStamp stamp;
@@ -1472,6 +1547,49 @@ static ThemeImageFileStamp themeImageFileStamp(const std::string& path)
 }
 }
 
+void ImguiFileTexture::invalidateFileImages()
+{
+	++fileImageGeneration;
+	invalidateFileTextures = true;
+	failedFileImages.clear();
+	fileImageAspects.clear();
+}
+
+void ImguiFileTexture::stopImageLoader()
+{
+	fileImageWorker.stop();
+	pendingFileImage = {};
+	invalidateFileImages();
+}
+
+void ImguiFileTexture::resetLoadCount()
+{
+	textureLoadCount = 0;
+	// Called after draw submission. Keep recent/visible textures even when their
+	// working set exceeds the budget; evicting them would cause flicker and churn.
+	const int frame = ImGui::GetFrameCount();
+	if (invalidateFileTextures)
+	{
+		if (imguiDriver)
+			for (const auto& image : fileTextureUses)
+				imguiDriver->deleteTextureAndAspectRatio(image.first);
+		fileTextureUses.clear();
+		fileTextureBytes = 0;
+		invalidateFileTextures = false;
+	}
+	while (!fileTextureUses.empty() && fileTextureBytes > FileTextureBudget)
+	{
+		auto oldest = std::min_element(fileTextureUses.begin(), fileTextureUses.end(),
+				[](const auto& a, const auto& b) { return a.second.frame < b.second.frame; });
+		if (oldest->second.frame >= frame - 2)
+			break;
+		if (imguiDriver)
+			imguiDriver->deleteTextureAndAspectRatio(oldest->first);
+		fileTextureBytes -= oldest->second.bytes;
+		fileTextureUses.erase(oldest);
+	}
+}
+
 void ImguiFileTexture::clearThemeImageFailures()
 {
 	failedThemeImages.clear();
@@ -1507,12 +1625,52 @@ float ImguiFileTexture::getAspectRatio() const
 
 ImTextureID ImguiFileTexture::getId()
 {
-	if (path.empty())
+	if (path.empty() || !imguiDriver)
 		return {};
+	if (!themeAsset)
+		finishFileImage(textureLoadCount);
 	const std::string textureKey = pixelArt.resolution == 0 ? path : path + "#pixel-art/"
 			+ std::to_string(pixelArt.resolution) + "/" + std::to_string(pixelArt.dark) + "/" + std::to_string(pixelArt.light)
 			+ "/" + std::to_string(pixelArt.levels);
 	ImTextureID id = imguiDriver->getTexture(textureKey);
+	if (!themeAsset)
+	{
+		if (id != ImTextureID{})
+		{
+			const auto use = fileTextureUses.find(textureKey);
+			if (use != fileTextureUses.end())
+				use->second.frame = ImGui::GetFrameCount();
+			return id;
+		}
+		const auto failed = failedFileImages.find(textureKey);
+		if (failed != failedFileImages.end())
+		{
+			if (std::chrono::steady_clock::now() < failed->second)
+				return {};
+			failedFileImages.erase(failed);
+		}
+		if (!pendingFileImage.valid() && !invalidateFileTextures)
+		{
+			// Copy all inputs: the temporary ImguiFileTexture and renderer can be
+			// destroyed while storage is busy. The worker never touches the GPU.
+			pendingFileImage = fileImageWorker.runFuture([path = path, key = textureKey,
+					bounded = boundedImage, nearest = nearestSampling, style = pixelArt,
+					generation = fileImageGeneration] {
+				DecodedFileImage image;
+				image.key = key;
+				image.generation = generation;
+				image.nearest = nearest;
+				image.pixelArt = style;
+				try {
+					image.pixels.reset(loadImage(path, image.width, image.height, bounded));
+				} catch (const std::exception& e) {
+					WARN_LOG(COMMON, "Cannot load library image %s: %s", path.c_str(), e.what());
+				}
+				return image;
+			});
+		}
+		return {};
+	}
 	if (id == ImTextureID())
 	{
 		ThemeImageFileStamp fileStamp;

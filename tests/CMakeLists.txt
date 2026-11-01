@@ -71,6 +71,8 @@ if(NOT LIBRETRO)
         src/ui/SettingsPopupTest.cpp
         src/ui/CustomThemeTest.cpp
         src/ui/LibrarySavestateTest.cpp
+        src/ui/LibraryImageTest.cpp
+        src/ui/GameScannerTest.cpp
         src/ui/ThemeTest.cpp
         src/ui/ThemeLibraryTest.cpp
         src/ui/ThemeArtworkTest.cpp

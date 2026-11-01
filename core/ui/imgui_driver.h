@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -50,6 +51,12 @@ public:
 		if (textureId != ImTextureID())
 			aspectRatios[textureId] = (float)width / height;
 		return textureId;
+	}
+
+	void deleteTextureAndAspectRatio(const std::string& name)
+	{
+		aspectRatios.erase(getTexture(name));
+		deleteTexture(name);
 	}
 
 	float getAspectRatio(ImTextureID textureId)
