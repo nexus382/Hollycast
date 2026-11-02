@@ -153,7 +153,7 @@ void mainui_loop(bool forceStart)
 #if defined(USE_HIKARU) && defined(__APPLE__)
 				// Submit the game and overlay before the macOS SDL display wait,
 				// so the GPU can work while presentation is synchronized.
-				if (settings.platform.isHikaru() && !gui_is_open() && config::VSync
+				if (settings.platform.isHikaru() && isOpenGL(config::RendererType) && !gui_is_open() && config::VSync
 					&& !settings.input.fastForwardMode)
 					glFlush();
 #endif

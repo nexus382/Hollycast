@@ -21,19 +21,14 @@
  */
 
 #include "vk/renderer.h"
+#include "graphics_dispatch.h"
 
 bool vk_renderer_is_gles(void)
 {
-	/* The host creates one context kind per run; query it once instead of
-	 * on every depth-state call. A null version means no context is current
-	 * yet, so leave the result uncached in that case. */
-	static int cached = -1;
-	if (cached < 0) {
-		const char *version = (const char *)glGetString(GL_VERSION);
-		if (!version) return false;
-		cached = strncmp(version, "OpenGL ES", 9) == 0;
-	}
-	return cached != 0;
+	/* Renderer selection may replace a desktop GL context with an ES or
+	 * native graphics adapter without restarting the emulated machine. */
+	const char *version = (const char *)glGetString(GL_VERSION);
+	return version && strncmp(version, "OpenGL ES", 9) == 0;
 }
 
 void vk_renderer_clear_depth(float depth)

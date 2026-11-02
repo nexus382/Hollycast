@@ -124,20 +124,28 @@ enabling fast-math. `-DHIKARU_VENDOR_OPTIMIZE=OFF` keeps the build configuration
 original optimization flags. Debug and sanitizer builds retain their requested
 flags.
 
-The backend requires OpenGL 3.2 on desktop or OpenGL ES 3.0 on Android.
-Loading a supported Hikaru game selects OpenGL and disables threaded
-rendering for that session. Vulkan, Metal, Direct3D, libretro, Xbox/UWP,
-Switch, iOS and BSD Hikaru builds are not supported by this experimental
-integration. ES2-only hardware keeps the existing Dreamcast path; Hikaru
-itself is rejected there at load time. macOS Apple Silicon has received
-runtime testing; the Windows, Android and Linux ports have not yet received
-equivalent runtime validation.
+Hikaru follows the selected graphics API: OpenGL 3.2 on desktop or OpenGL ES
+3.0 on Android, with native Metal and Vulkan renderers where those backends
+are available. Loading a supported game disables threaded rendering for that
+session. Runtime scene checks have been performed with Metal and Vulkan on
+macOS; other platform and graphics-API combinations remain unverified.
+Direct3D has no Hikaru renderer. ES2-only hardware keeps the existing
+Dreamcast path; Hikaru itself is rejected there at load time.
 
-Place `airtrix.zip` or `braveff.zip` beside `hikaru.zip` and `mie.zip`, then add
-their folder to the game library or open the game with **File > Load ROM**. `.7z`
-archives are also accepted. The loader also searches the configured Naomi BIOS
-folders for the Hikaru and MIE archives. Every required chip is checked for
-size and CRC before execution; ROMs may be found by their original name or CRC.
+**Transparent Sorting** in Video settings selects per-strip, per-triangle or
+per-pixel sorting for translucent geometry. Per-strip sorts retained strips
+by transformed depth centroid; per-triangle sorts individual triangles by
+their transformed depth centroids. Per-pixel sorting uses depth peeling and
+retains the configured **Maximum Layers** count, from 1 to 32 (default 32).
+If another layer is present beyond that bound, deeper fragments are discarded
+and a warning is reported.
+
+Place `airtrix.zip`, `braveff.zip` or `pharrier.zip` beside `hikaru.zip` and
+`mie.zip`, then add their folder to the game library or open the game with
+**File > Load ROM**. `.7z` archives are also accepted. The loader also searches
+the configured Naomi BIOS folders for the Hikaru and MIE archives. Every
+required chip is checked for size and CRC before execution; ROMs may be found
+by their original name or CRC.
 
 The tested BIOS is **0.92, `epr-23400.ic94`**. The loader prefers this revision
 when several are present. Revisions 0.84 and 0.96 have manifests but have not

@@ -7,6 +7,7 @@
 #include "protection.h"
 #include "sound.h"
 #include "audio_pacer.h"
+#include "graphics/device.h"
 #include "valkyrie/engine.h"
 #include "audio/audiostream.h"
 #include "archive/archive.h"
@@ -30,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -43,6 +45,7 @@ std::unique_ptr<Sound> sound;
 std::unique_ptr<AudioPacer> audioPacer;
 bool audioModeKnown = false, previousFastForward = false, previousMuted = false, previousPacing = false;
 HikaruEngine* engine = nullptr;
+std::unique_ptr<graphics::Device> nativeGraphics;
 unsigned internalHeight = 0;
 uint64_t clocks = 0;
 std::string ioError;
@@ -227,6 +230,7 @@ void load(const std::string& path) {
         : activeGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
 }
 void releaseGraphics() {
+    graphics::Device::Scope graphicsScope(nativeGraphics.get());
     if (audioPacer) { audioPacer->reset(); ClearAudioOutput(); audioPacer.reset(); audioModeKnown = false; }
     if (engine) {
         if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
@@ -236,9 +240,11 @@ void releaseGraphics() {
         hikaru_engine_destroy(engine); engine = nullptr; sound.reset(); internalHeight = 0; glcache.Reset();
         if (!saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
     }
+    nativeGraphics.reset();
 }
 void suspendGraphics() {
-    if (!engine) return;
+    graphics::Device::Scope graphicsScope(nativeGraphics.get());
+    if (!engine) { nativeGraphics.reset(); return; }
     if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
         hasSavedBram = true;
         if (!saveNvram(bramPath, savedBram)) os_notify("Could not save Hikaru battery-backed RAM", 10000);
@@ -249,6 +255,7 @@ void suspendGraphics() {
         os_notify("Could not release Hikaru graphics", 10000);
     internalHeight = 0;
     glcache.Reset();
+    nativeGraphics.reset();
 }
 void unload() { releaseGraphics(); protection.reset(); mie.reset(); images.reset(); activeGame = nullptr; ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
 void requestReset() { resetRequested = true; }
@@ -257,19 +264,42 @@ void insertCredit(unsigned player) {
 }
 void pauseAudio() { if (audioPacer) audioPacer->reset(); ClearAudioOutput(); audioModeKnown = false; }
 void resumeAudio() { if (audioPacer) audioPacer->reset(); ClearAudioOutput(); audioModeKnown = false; }
-bool render() {
+static bool renderFrame() {
     static const bool traceTiming = std::getenv("HIKARU_TRACE_TIMING") != nullptr;
     const auto renderStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (!images || !mie || !protection || !activeGame) throw FlycastException("Hikaru ROMs are not loaded");
-    // A renderer change requested by the loader is applied by the UI loop
-    // after this frame. Do not cast a still-current Vulkan context to GL.
-    auto* context = dynamic_cast<GLGraphicsContext*>(GraphicsContext::Instance());
-    if (!context) return false;
-    if (context->getMajorVersion() < 3 ||
-        (!context->isGLES() && context->getMajorVersion() == 3 && context->getMinorVersion() < 2) || !glGetString(GL_VERSION))
-        throw FlycastException("Hikaru requires OpenGL 3.2 or OpenGL ES 3.0");
+    // A requested API takes effect after the current UI frame has completed.
+    // Never use a new backend with the context that is being replaced.
+    auto* graphicsContext = GraphicsContext::Instance();
+    if (!graphicsContext) return false;
+    const auto requested = config::RendererType.get();
+    const auto current = graphicsContext->renderType();
+    const bool gl = isOpenGL(requested);
+    if (isOpenGL(current) != gl || isVulkan(current) != isVulkan(requested)
+            || isMetal(current) != isMetal(requested)) return false;
+    if (!gl && !isMetal(requested) && !isVulkan(requested))
+        throw FlycastException("The selected graphics API has no Hikaru renderer");
+    if (gl) {
+        auto* context = dynamic_cast<GLGraphicsContext*>(graphicsContext);
+        if (!context || context->getMajorVersion() < 3 ||
+            (!context->isGLES() && context->getMajorVersion() == 3 && context->getMinorVersion() < 2) || !glGetString(GL_VERSION))
+            throw FlycastException("Hikaru OpenGL requires OpenGL 3.2 or OpenGL ES 3.0");
+    }
     if (settings.display.width <= 0 || settings.display.height <= 0) return false;
     if (resetRequested.exchange(false)) releaseGraphics();
+    if (!gl && !nativeGraphics) {
+        std::unique_ptr<graphics::Backend> backend;
+#ifdef USE_METAL
+        if (isMetal(requested)) backend = graphics::makeMetalBackend();
+#endif
+#ifdef USE_VULKAN
+        if (isVulkan(requested)) backend = graphics::makeVulkanBackend();
+#endif
+        nativeGraphics = std::make_unique<graphics::Device>(std::move(backend));
+    }
+    if (nativeGraphics) nativeGraphics->begin(unsigned(settings.display.width), unsigned(settings.display.height));
+    std::optional<graphics::Device::Scope> graphicsScope;
+    graphicsScope.emplace(nativeGraphics.get());
     if (!engine) {
         HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size()};
         auto io = callbacks(); std::array<char, 512> error{};
@@ -278,10 +308,13 @@ bool render() {
             : activeGame == &BraveFirefightersGame ? HIKARU_ENGINE_GAME_BRAVEFF : HIKARU_ENGINE_GAME_AIRTRIX;
         engine = hikaru_engine_create_game(game, &roms, &io, &security, 0, unsigned(settings.display.width), unsigned(settings.display.height), 1, error.data(), error.size());
         glcache.Reset();
+        if (nativeGraphics) nativeGraphics->checkError();
         if (!engine) throw FlycastException(std::string("Hikaru renderer: ") + error.data());
         if (hasSavedBram && hikaru_engine_set_bram(engine, savedBram.data(), savedBram.size()) != 0)
             throw FlycastException("Cannot restore Hikaru battery-backed RAM");
-        audioPacer = std::make_unique<AudioPacer>([](void*, s16 left, s16 right) { WriteSample(right, left); }, nullptr);
+        audioPacer = std::make_unique<AudioPacer>([](void*, s16 left, s16 right) {
+            WriteSample(right, left);
+        }, nullptr);
         audioModeKnown = false;
         sound = std::make_unique<Sound>([](void*, s16 left, s16 right) {
             // Opt-in diagnostics report signal levels only; no audio is saved.
@@ -353,6 +386,12 @@ bool render() {
         config::Sh4Clock.set(int(cpuClockMhz));
     if (hikaru_engine_set_cpu_clock_mhz(engine, cpuClockMhz) != 0)
         throw FlycastException(std::string("Hikaru CPU clock: ") + hikaru_engine_last_error(engine));
+    const auto sorting = isPerPixel(requested) ? HIKARU_TRANSPARENCY_PER_PIXEL
+        : config::PerStripSorting ? HIKARU_TRANSPARENCY_PER_STRIP : HIKARU_TRANSPARENCY_PER_TRIANGLE;
+    if (hikaru_engine_set_transparency_sorting(engine, sorting) != 0)
+        throw FlycastException(std::string("Hikaru sorting: ") + hikaru_engine_last_error(engine));
+    if (hikaru_engine_set_transparency_peel_capacity(engine, unsigned(std::clamp(config::PerPixelLayers.get(), 1, 32))) != 0)
+        throw FlycastException("Invalid Hikaru per-pixel layer capacity");
     const int requestedHeight = config::RenderResolution.get();
     if (unsigned(requestedHeight) != internalHeight) {
         if (hikaru_engine_set_internal_resolution(engine, unsigned(requestedHeight)) != 0)
@@ -412,7 +451,7 @@ bool render() {
         else if (!(kcode[0] & DC_DPAD_DOWN)) input.analog[0] = 0;
     }
     GLint target = 0;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
+    if (!nativeGraphics) glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
     hikaru_engine_resize(engine, uint32_t(target), unsigned(settings.display.width), unsigned(settings.display.height));
     const auto engineStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     int result;
@@ -423,6 +462,9 @@ bool render() {
     }
     const auto engineEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     glcache.Reset();
+    if (nativeGraphics) nativeGraphics->checkError();
+    graphicsScope.reset();
+    if (nativeGraphics) nativeGraphics->present();
     if (result || !ioError.empty()) throw FlycastException(ioError.empty() ? hikaru_engine_last_error(engine) : ioError);
     performance_overlay::recordGuestFrame();
     performance_overlay::recordSh4Vblank();
@@ -435,9 +477,9 @@ bool render() {
         widthLimited ? int(int64_t(outputWidth) * 3 / 4) : outputHeight);
     if (imguiDriver) {
         imguiDriver->setFrameRendered();
-        // Process queued UI actions (including Pause) and render the normal
-        // in-game overlays after the Hikaru frame, on the render thread.
-        gui_display_osd();
+        // Native presenters already build and submit the overlay. Submitting
+        // it twice would acquire a second Vulkan frame before presentation.
+        if (!nativeGraphics) gui_display_osd();
         glcache.Reset();
     }
     if (traceTiming) {
@@ -455,4 +497,10 @@ bool render() {
     }
     return true;
 }
+bool render() {
+    try { return renderFrame(); }
+    catch (const FlycastException&) { throw; }
+    catch (const std::exception& e) { throw FlycastException(std::string("Hikaru graphics: ") + e.what()); }
+}
+
 }

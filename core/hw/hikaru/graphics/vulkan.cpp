@@ -1,0 +1,516 @@
+// Copyright 2026 The Hollycast Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "device.h"
+#include "shaders.h"
+
+#ifdef USE_VULKAN
+#include "rend/vulkan/buffer.h"
+#include "rend/vulkan/compiler.h"
+#include "rend/vulkan/vulkan_context.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <map>
+#include <stdexcept>
+#include <tuple>
+
+namespace hikaru::graphics {
+namespace {
+vk::Format colorFormat(GLenum format) {
+    switch (format) {
+    case GL_RGB10_A2: return vk::Format::eA2B10G10R10UnormPack32;
+    default: return vk::Format::eR8G8B8A8Unorm;
+    }
+}
+vk::Format depthFormat(GLenum format, bool sampled = false) {
+    auto physical = VulkanContext::Instance()->GetPhysicalDevice();
+    const vk::FormatFeatureFlags required = vk::FormatFeatureFlagBits::eDepthStencilAttachment |
+            (sampled ? vk::FormatFeatureFlagBits::eSampledImage : vk::FormatFeatureFlags{});
+    auto supported = [&](vk::Format candidate) {
+        return (physical.getFormatProperties(candidate).optimalTilingFeatures & required) == required;
+    };
+    vk::Format requested = vk::Format::eUndefined;
+    switch (format) {
+    case GL_DEPTH_COMPONENT16: requested = vk::Format::eD16Unorm; break;
+    case GL_DEPTH_COMPONENT24: requested = vk::Format::eD24UnormS8Uint; break;
+    case GL_DEPTH24_STENCIL8: requested = vk::Format::eD24UnormS8Uint; break;
+    case GL_DEPTH_COMPONENT32F: case GL_DEPTH_COMPONENT: requested = vk::Format::eD32Sfloat; break;
+    default: requested = VulkanContext::Instance()->GetDepthFormat(); break;
+    }
+    if (supported(requested)) return requested;
+    for (vk::Format candidate : {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint, vk::Format::eD16Unorm})
+        if (supported(candidate)) return candidate;
+    throw std::runtime_error("No supported Hikaru Vulkan depth format");
+}
+vk::Filter filter(GLenum f) { return f == GL_LINEAR ? vk::Filter::eLinear : vk::Filter::eNearest; }
+vk::SamplerAddressMode address(GLenum w) {
+    if (w == GL_REPEAT) return vk::SamplerAddressMode::eRepeat;
+    if (w == GL_MIRRORED_REPEAT) return vk::SamplerAddressMode::eMirroredRepeat;
+    return vk::SamplerAddressMode::eClampToEdge;
+}
+vk::CompareOp compare(GLenum f) {
+    switch (f) {
+    case GL_NEVER: return vk::CompareOp::eNever; case GL_LESS: return vk::CompareOp::eLess;
+    case GL_EQUAL: return vk::CompareOp::eEqual; case GL_LEQUAL: return vk::CompareOp::eLessOrEqual;
+    case GL_GREATER: return vk::CompareOp::eGreater; case GL_NOTEQUAL: return vk::CompareOp::eNotEqual;
+    case GL_GEQUAL: return vk::CompareOp::eGreaterOrEqual; default: return vk::CompareOp::eAlways;
+    }
+}
+vk::BlendFactor blendFactor(GLenum f) {
+    switch (f) {
+    case GL_ZERO: return vk::BlendFactor::eZero; case GL_ONE: return vk::BlendFactor::eOne;
+    case GL_SRC_COLOR: return vk::BlendFactor::eSrcColor; case GL_ONE_MINUS_SRC_COLOR: return vk::BlendFactor::eOneMinusSrcColor;
+    case GL_DST_COLOR: return vk::BlendFactor::eDstColor; case GL_ONE_MINUS_DST_COLOR: return vk::BlendFactor::eOneMinusDstColor;
+    case GL_SRC_ALPHA: return vk::BlendFactor::eSrcAlpha; case GL_ONE_MINUS_SRC_ALPHA: return vk::BlendFactor::eOneMinusSrcAlpha;
+    case GL_DST_ALPHA: return vk::BlendFactor::eDstAlpha; case GL_ONE_MINUS_DST_ALPHA: return vk::BlendFactor::eOneMinusDstAlpha;
+    default: return vk::BlendFactor::eOne;
+    }
+}
+vk::BlendOp blendOp(GLenum op) {
+    if (op == GL_FUNC_SUBTRACT) return vk::BlendOp::eSubtract;
+    if (op == GL_FUNC_REVERSE_SUBTRACT) return vk::BlendOp::eReverseSubtract;
+    if (op == GL_MIN) return vk::BlendOp::eMin;
+    if (op == GL_MAX) return vk::BlendOp::eMax;
+    return vk::BlendOp::eAdd;
+}
+
+class VulkanBackend final : public Backend {
+    struct Image {
+        // VMA allocation must outlive every Vulkan object bound to it. Members
+        // are destroyed in reverse declaration order, so keep it first.
+        Allocation allocation;
+        vk::UniqueImage image;
+        vk::UniqueImageView view;
+        vk::UniqueImageView attachmentView;
+        vk::Format format = vk::Format::eUndefined;
+        vk::Extent2D extent{};
+        unsigned levels = 1;
+        std::vector<bool> initializedLevels;
+        vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+        bool depth = false, sampleable = true;
+        uint64_t revision = 0;
+    };
+    struct DrawResources {
+        vk::UniqueDescriptorSet descriptorSet;
+    };
+    struct PendingBatch {
+        vk::UniqueCommandBuffer command;
+        vk::UniqueFence fence;
+        std::unique_ptr<BufferData> vertexBuffer, uniformBuffer;
+        std::vector<DrawResources> draws;
+    };
+    struct PipelineKey {
+        bool bitmap, depthTest, depthWrite, blend, cull, depthBias;
+        GLenum depthFunc, cullFace, frontFace, srcRGB, dstRGB, srcAlpha, dstAlpha, equationRGB, equationAlpha, topology;
+        std::array<bool,4> colorMask;
+        vk::Format color, depth;
+        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth) < std::tie(b.bitmap,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth); }
+    };
+    VulkanContext* ctx = VulkanContext::Instance();
+    vk::Device device = ctx->GetDevice();
+    vk::UniqueCommandPool commandPool;
+    vk::UniqueDescriptorSetLayout descriptorLayout;
+    vk::UniquePipelineLayout pipelineLayout;
+    vk::UniqueDescriptorPool descriptorPool;
+    using SamplerKey=std::tuple<GLenum,GLenum,GLenum,GLenum,uint32_t>;
+    std::map<SamplerKey,vk::UniqueSampler> samplerCache;
+    vk::UniqueRenderPass colorOnlyPass;
+    std::map<std::pair<vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
+    vk::UniqueShaderModule meshVertex, meshFragment, bitmapVertex, bitmapFragment;
+    std::map<PipelineKey, vk::UniquePipeline> pipelines;
+    std::unordered_map<unsigned, Image> images;
+    std::unordered_map<unsigned, Texture> imageInfo;
+    std::map<std::pair<unsigned,unsigned>,vk::UniqueFramebuffer> framebuffers;
+    std::deque<PendingBatch> pendingBatches;
+    vk::UniqueCommandBuffer activeCommand;
+    std::unique_ptr<BufferData> activeVertexBuffer,activeUniformBuffer;
+    std::vector<DrawResources> activeDraws;
+    vk::DeviceSize activeVertexOffset=0,activeUniformOffset=0,activeVertexCapacity=0,activeUniformCapacity=0;
+    unsigned activeDrawCount=0,activeColor=0,activeDepth=0;
+    bool renderPassOpen=false;
+
+    size_t outstandingDrawCount() const {
+        size_t count=activeDrawCount;
+        for(const auto& batch:pendingBatches)count+=batch.draws.size();
+        return count;
+    }
+
+    void reapCompletedDraws() {
+        while(!pendingBatches.empty()) {
+            const auto status=device.getFenceStatus(*pendingBatches.front().fence);
+            if(status==vk::Result::eNotReady)break;
+            if(status!=vk::Result::eSuccess)throw std::runtime_error("Failed querying Hikaru Vulkan draw fence");
+            pendingBatches.pop_front();
+        }
+    }
+    void waitForDraws() {
+        flushBatch();
+        if(pendingBatches.empty())return;
+        ctx->WaitIdle();
+        pendingBatches.clear();
+    }
+    vk::CommandBuffer startBatch() {
+        if(activeCommand)return *activeCommand;
+        vk::CommandBufferAllocateInfo ai(*commandPool,vk::CommandBufferLevel::ePrimary,1);
+        auto commands=device.allocateCommandBuffersUnique(ai);
+        activeCommand=std::move(commands.front());
+        auto cmd=*activeCommand;
+        cmd.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+        return cmd;
+    }
+    void endRenderPass(vk::CommandBuffer cmd) {
+        if(!renderPassOpen)return;
+        cmd.endRenderPass();
+        renderPassOpen=false;
+        activeColor=activeDepth=0;
+    }
+    void flushBatch() {
+        if(!activeCommand)return;
+        auto cmd=*activeCommand;
+        endRenderPass(cmd);
+        cmd.end();
+        PendingBatch batch;
+        batch.command=std::move(activeCommand);
+        batch.vertexBuffer=std::move(activeVertexBuffer);
+        batch.uniformBuffer=std::move(activeUniformBuffer);
+        batch.draws=std::move(activeDraws);
+        activeDrawCount=0;
+        activeVertexOffset=activeUniformOffset=activeVertexCapacity=activeUniformCapacity=0;
+        activeDraws.clear();activeDraws.reserve(256);
+        batch.fence=device.createFenceUnique({});
+        pendingBatches.push_back(std::move(batch));
+        try {
+            auto& submitted=pendingBatches.back();
+            ctx->SubmitCommandBuffers({*submitted.command},*submitted.fence);
+        } catch (...) {
+            pendingBatches.pop_back();
+            throw;
+        }
+    }
+    vk::Framebuffer framebuffer(unsigned colorId,unsigned depthId,Image& color,Image* depth,vk::RenderPass pass) {
+        auto key=std::make_pair(colorId,depthId);
+        auto it=framebuffers.find(key);
+        if(it!=framebuffers.end())return *it->second;
+        std::array<vk::ImageView,2> views{*color.attachmentView,depth?*depth->attachmentView:vk::ImageView{}};
+        vk::FramebufferCreateInfo fi({},pass,depth?2:1,views.data(),color.extent.width,color.extent.height,1);
+        return *framebuffers.emplace(key,device.createFramebufferUnique(fi)).first->second;
+    }
+    vk::Sampler sampler(const Texture& sampling,const Image& image,bool mipmapped) {
+        const uint32_t maxLod=mipmapped?std::min(image.levels-1,sampling.maxLevel):0;
+        SamplerKey key{sampling.minFilter,sampling.magFilter,sampling.wrapS,sampling.wrapT,maxLod};
+        auto it=samplerCache.find(key);
+        if(it!=samplerCache.end())return *it->second;
+        const GLenum mf=sampling.minFilter;
+        const bool nearest=mf==GL_NEAREST||mf==GL_NEAREST_MIPMAP_NEAREST||mf==GL_NEAREST_MIPMAP_LINEAR;
+        vk::SamplerCreateInfo si{};
+        si.magFilter=filter(sampling.magFilter);
+        si.minFilter=nearest?vk::Filter::eNearest:vk::Filter::eLinear;
+        si.mipmapMode=(mf==GL_LINEAR_MIPMAP_LINEAR||mf==GL_NEAREST_MIPMAP_LINEAR)?vk::SamplerMipmapMode::eLinear:vk::SamplerMipmapMode::eNearest;
+        si.addressModeU=address(sampling.wrapS);si.addressModeV=address(sampling.wrapT);si.addressModeW=vk::SamplerAddressMode::eClampToEdge;
+        si.mipLodBias=0.f;si.maxLod=float(maxLod);
+        return *samplerCache.emplace(key,device.createSamplerUnique(si)).first->second;
+    }
+
+    void immediate(const std::function<void(vk::CommandBuffer)>& record) {
+        flushBatch();
+        vk::CommandBufferAllocateInfo ai(*commandPool, vk::CommandBufferLevel::ePrimary, 1);
+        auto cmds = device.allocateCommandBuffersUnique(ai);
+        auto cmd = *cmds.front();
+        cmd.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+        record(cmd);
+        cmd.end();
+        ctx->SubmitCommandBuffers({cmd}, {});
+        ctx->WaitIdle();
+        pendingBatches.clear();
+    }
+    void barrier(vk::CommandBuffer cmd, Image& image, vk::ImageLayout next) {
+        if (image.layout == next) return;
+        vk::AccessFlags src; vk::PipelineStageFlags srcStage;
+        switch (image.layout) {
+        case vk::ImageLayout::eUndefined: src = {}; srcStage = vk::PipelineStageFlagBits::eTopOfPipe; break;
+        case vk::ImageLayout::eTransferDstOptimal: src = vk::AccessFlagBits::eTransferWrite; srcStage = vk::PipelineStageFlagBits::eTransfer; break;
+        case vk::ImageLayout::eTransferSrcOptimal: src = vk::AccessFlagBits::eTransferRead; srcStage = vk::PipelineStageFlagBits::eTransfer; break;
+        case vk::ImageLayout::eColorAttachmentOptimal: src = vk::AccessFlagBits::eColorAttachmentWrite; srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput; break;
+        case vk::ImageLayout::eDepthStencilAttachmentOptimal: src = vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite; srcStage = vk::PipelineStageFlagBits::eEarlyFragmentTests|vk::PipelineStageFlagBits::eLateFragmentTests; break;
+        default: src = vk::AccessFlagBits::eShaderRead; srcStage = vk::PipelineStageFlagBits::eFragmentShader; break;
+        }
+        vk::AccessFlags dst; vk::PipelineStageFlags dstStage;
+        switch (next) {
+        case vk::ImageLayout::eTransferDstOptimal: dst=vk::AccessFlagBits::eTransferWrite; dstStage=vk::PipelineStageFlagBits::eTransfer; break;
+        case vk::ImageLayout::eTransferSrcOptimal: dst=vk::AccessFlagBits::eTransferRead; dstStage=vk::PipelineStageFlagBits::eTransfer; break;
+        case vk::ImageLayout::eColorAttachmentOptimal: dst=vk::AccessFlagBits::eColorAttachmentRead|vk::AccessFlagBits::eColorAttachmentWrite; dstStage=vk::PipelineStageFlagBits::eColorAttachmentOutput; break;
+        case vk::ImageLayout::eDepthStencilAttachmentOptimal: dst=vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite; dstStage=vk::PipelineStageFlagBits::eEarlyFragmentTests|vk::PipelineStageFlagBits::eLateFragmentTests; break;
+        default: dst=vk::AccessFlagBits::eShaderRead; dstStage=vk::PipelineStageFlagBits::eFragmentShader; break;
+        }
+        if (next == vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
+            dst = vk::AccessFlagBits::eShaderRead;
+            dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+        }
+        if (image.layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal) {
+            src = vk::AccessFlagBits::eShaderRead;
+            srcStage = vk::PipelineStageFlagBits::eFragmentShader;
+        }
+        vk::ImageAspectFlags aspect = image.depth ? vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth) : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
+        if (image.format == vk::Format::eD24UnormS8Uint || image.format == vk::Format::eD32SfloatS8Uint)
+            aspect |= vk::ImageAspectFlagBits::eStencil;
+        vk::ImageMemoryBarrier b(src,dst,image.layout,next,VK_QUEUE_FAMILY_IGNORED,VK_QUEUE_FAMILY_IGNORED,*image.image,{aspect,0,image.levels,0,1});
+        cmd.pipelineBarrier(srcStage,dstStage,{},nullptr,nullptr,b);
+        image.layout=next;
+    }
+    Image makeImage(unsigned w,unsigned h,vk::Format fmt,unsigned levels,bool depth,bool target,bool sampledDepth=false) {
+        if (!w || !h) throw std::runtime_error("Invalid Hikaru Vulkan image size");
+        Image out; out.extent=vk::Extent2D(w,h); out.format=fmt; out.levels=std::max(1u,levels); out.depth=depth; out.sampleable=!depth||sampledDepth;
+        out.initializedLevels.resize(out.levels,false);
+        vk::ImageUsageFlags usage = depth ? vk::ImageUsageFlagBits::eDepthStencilAttachment|vk::ImageUsageFlagBits::eTransferDst : vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eTransferSrc;
+        if (target && !depth) usage |= vk::ImageUsageFlagBits::eColorAttachment;
+        if (depth && sampledDepth) usage |= vk::ImageUsageFlagBits::eSampled;
+        vk::ImageCreateInfo ci({},vk::ImageType::e2D,fmt,{w,h,1},out.levels,1,vk::SampleCountFlagBits::e1,vk::ImageTiling::eOptimal,usage,vk::SharingMode::eExclusive);
+        out.image=device.createImageUnique(ci);
+        VmaAllocationCreateInfo alloc{}; alloc.requiredFlags=VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        out.allocation=ctx->GetAllocator().AllocateForImage(*out.image,alloc);
+        auto aspect=depth?vk::ImageAspectFlagBits::eDepth:vk::ImageAspectFlagBits::eColor;
+        out.view=device.createImageViewUnique({{},*out.image,vk::ImageViewType::e2D,fmt,{}, {aspect,0,out.levels,0,1}});
+        out.attachmentView=device.createImageViewUnique({{},*out.image,vk::ImageViewType::e2D,fmt,{}, {aspect,0,1,0,1}});
+        return out;
+    }
+    Image& image(unsigned id) {
+        auto it=images.find(id); if(it==images.end()) throw std::runtime_error("Unknown Hikaru Vulkan image"); return it->second;
+    }
+    vk::UniqueRenderPass createPass(vk::Format color, vk::Format depth, bool withDepth) {
+        std::array<vk::AttachmentDescription,2> a{};
+        a[0].format=color; a[0].samples=vk::SampleCountFlagBits::e1; a[0].loadOp=vk::AttachmentLoadOp::eLoad; a[0].storeOp=vk::AttachmentStoreOp::eStore; a[0].stencilLoadOp=vk::AttachmentLoadOp::eDontCare; a[0].stencilStoreOp=vk::AttachmentStoreOp::eDontCare; a[0].initialLayout=vk::ImageLayout::eColorAttachmentOptimal; a[0].finalLayout=vk::ImageLayout::eColorAttachmentOptimal;
+        vk::AttachmentReference colorRef(0,vk::ImageLayout::eColorAttachmentOptimal), dep(1,vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        vk::SubpassDescription sub({},vk::PipelineBindPoint::eGraphics,0,nullptr,1,&colorRef,nullptr,withDepth?&dep:nullptr);
+        auto attachmentStages=vk::PipelineStageFlagBits::eColorAttachmentOutput|vk::PipelineStageFlagBits::eEarlyFragmentTests|vk::PipelineStageFlagBits::eLateFragmentTests;
+        auto attachmentAccess=vk::AccessFlagBits::eColorAttachmentRead|vk::AccessFlagBits::eColorAttachmentWrite|vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+        // Attachments use LOAD and may be drawn into by consecutive render
+        // passes. Make prior attachment writes visible when the next pass
+        // reloads the same image, including when a pass was split to sample a
+        // different image between draws.
+        vk::SubpassDependency dependency(VK_SUBPASS_EXTERNAL,0,attachmentStages,attachmentStages,attachmentAccess,attachmentAccess,vk::DependencyFlagBits::eByRegion);
+        vk::RenderPassCreateInfo rp({},1,a.data(),1,&sub,1,&dependency);
+        if(withDepth){a[1].format=depth;a[1].samples=vk::SampleCountFlagBits::e1;a[1].loadOp=vk::AttachmentLoadOp::eLoad;a[1].storeOp=vk::AttachmentStoreOp::eStore;a[1].stencilLoadOp=vk::AttachmentLoadOp::eDontCare;a[1].stencilStoreOp=vk::AttachmentStoreOp::eDontCare;a[1].initialLayout=vk::ImageLayout::eDepthStencilAttachmentOptimal;a[1].finalLayout=vk::ImageLayout::eDepthStencilAttachmentOptimal;rp.attachmentCount=2;}
+        return device.createRenderPassUnique(rp);
+    }
+    vk::RenderPass renderPass(vk::Format color, vk::Format depth) {
+        auto key=std::make_pair(color,depth);
+        auto it=renderPasses.find(key);
+        if(it==renderPasses.end()) it=renderPasses.emplace(key,createPass(color,depth,depth!=vk::Format::eUndefined)).first;
+        return *it->second;
+    }
+    vk::Pipeline pipeline(const PipelineKey& k) {
+        auto found=pipelines.find(k); if(found!=pipelines.end()) return *found->second;
+        auto pass=renderPass(k.color,k.depth);
+        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.bitmap?*bitmapFragment:*meshFragment,"main"}};
+        vk::VertexInputBindingDescription binding(0,sizeof(Vertex),vk::VertexInputRate::eVertex);
+        std::array<vk::VertexInputAttributeDescription,8> attrs; for(uint32_t i=0;i<8;i++)attrs[i]={i,0,vk::Format::eR32G32B32A32Sfloat,i*16};
+        vk::PipelineVertexInputStateCreateInfo vi({},1,&binding,attrs.size(),attrs.data());
+        vk::PrimitiveTopology topology=k.topology==GL_TRIANGLE_STRIP?vk::PrimitiveTopology::eTriangleStrip:k.topology==GL_LINES?vk::PrimitiveTopology::eLineList:k.topology==GL_POINTS?vk::PrimitiveTopology::ePointList:vk::PrimitiveTopology::eTriangleList;
+        vk::PipelineInputAssemblyStateCreateInfo ia({},topology,false);
+        vk::PipelineViewportStateCreateInfo vp({},1,nullptr,1,nullptr);
+        const auto cullMode=!k.cull?vk::CullModeFlags{}:(k.cullFace==GL_FRONT?vk::CullModeFlags(vk::CullModeFlagBits::eFront):k.cullFace==GL_FRONT_AND_BACK?vk::CullModeFlags(vk::CullModeFlagBits::eFrontAndBack):vk::CullModeFlags(vk::CullModeFlagBits::eBack));
+        vk::PipelineRasterizationStateCreateInfo rs({},false,false,vk::PolygonMode::eFill,cullMode,k.frontFace==GL_CW?vk::FrontFace::eClockwise:vk::FrontFace::eCounterClockwise,k.depthBias,0,0,0,1);
+        vk::PipelineMultisampleStateCreateInfo ms({},vk::SampleCountFlagBits::e1);
+        vk::PipelineDepthStencilStateCreateInfo ds({},k.depthTest,k.depthWrite,k.depthTest?compare(k.depthFunc):vk::CompareOp::eAlways,false,false,{}, {},0.f,1.f);
+        vk::PipelineColorBlendAttachmentState ba{}; ba.blendEnable=k.blend; ba.srcColorBlendFactor=blendFactor(k.srcRGB);ba.dstColorBlendFactor=blendFactor(k.dstRGB);ba.colorBlendOp=blendOp(k.equationRGB);ba.srcAlphaBlendFactor=blendFactor(k.srcAlpha);ba.dstAlphaBlendFactor=blendFactor(k.dstAlpha);ba.alphaBlendOp=blendOp(k.equationAlpha);ba.colorWriteMask={};for(int i=0;i<4;i++)if(k.colorMask[i])ba.colorWriteMask|=static_cast<vk::ColorComponentFlagBits>(1u<<i);
+        vk::PipelineColorBlendStateCreateInfo cb({},false,vk::LogicOp::eCopy,1,&ba);
+        vk::DynamicState dyns[]={vk::DynamicState::eViewport,vk::DynamicState::eScissor,vk::DynamicState::eDepthBias}; vk::PipelineDynamicStateCreateInfo dyn({},3,dyns);
+        vk::GraphicsPipelineCreateInfo ci({},2,stages,&vi,&ia,nullptr,&vp,&rs,&ms,&ds,&cb,&dyn,*pipelineLayout,pass);
+        auto result=device.createGraphicsPipelineUnique(ctx->GetPipelineCache(),ci);
+        return *pipelines.emplace(k,std::move(result.value)).first->second;
+    }
+    vk::UniqueDescriptorSetLayout makeDescriptorLayout() {
+        std::array<vk::DescriptorSetLayoutBinding,5> bindings;
+        bindings[0]={0,vk::DescriptorType::eUniformBuffer,1,vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment};
+        for(uint32_t i=1;i<5;i++)bindings[i]={i,vk::DescriptorType::eCombinedImageSampler,1,vk::ShaderStageFlagBits::eFragment};
+        return device.createDescriptorSetLayoutUnique({{},bindings.size(),bindings.data()});
+    }
+public:
+    VulkanBackend() {
+        if(!ctx) throw std::runtime_error("Hikaru Vulkan backend requires an active Vulkan context");
+        commandPool=device.createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eTransient,ctx->GetGraphicsQueueFamilyIndex()});
+        descriptorLayout=makeDescriptorLayout(); pipelineLayout=device.createPipelineLayoutUnique({{},1,&*descriptorLayout});
+        std::array<vk::DescriptorPoolSize,2> sizes={vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,8192),vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler,32768)};
+        descriptorPool=device.createDescriptorPoolUnique({vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,8192,sizes.size(),sizes.data()});
+        colorOnlyPass=createPass(vk::Format::eR8G8B8A8Unorm,vk::Format::eUndefined,false);
+        meshVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false));meshFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false));bitmapVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(true));bitmapFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true));
+        constexpr unsigned fallback=0xfffffffdu;
+        images.emplace(fallback,makeImage(1,1,vk::Format::eR8G8B8A8Unorm,1,false,false));
+        uint8_t zero[4]={};BufferData staging(4,vk::BufferUsageFlagBits::eTransferSrc);staging.upload(4,zero);
+        immediate([&](vk::CommandBuffer cmd){auto& f=image(fallback);barrier(cmd,f,vk::ImageLayout::eTransferDstOptimal);cmd.copyBufferToImage(*staging.buffer,*f.image,vk::ImageLayout::eTransferDstOptimal,vk::BufferImageCopy(0,0,0,{vk::ImageAspectFlagBits::eColor,0,0,1},{0,0,0},{1,1,1}));barrier(cmd,f,vk::ImageLayout::eShaderReadOnlyOptimal);});
+    }
+    ~VulkanBackend() override {
+        waitForDraws();
+        // PresentFrame retains the sampled view for subsequent OSD frames.
+        // Drain the device and clear that reference before destroying images.
+        ctx->WaitIdle();
+        ctx->PresentFrame({}, {}, {}, 1.f);
+    }
+    void texture(unsigned id,const Texture& info,unsigned level,const void* pixels,size_t bytes) override {
+        reapCompletedDraws();
+        waitForDraws();
+        auto i=images.find(id); unsigned levels=info.maxLevel==1000?1u+unsigned(std::floor(std::log2(std::max(info.width,info.height)))):std::max(1u,info.maxLevel+1); bool depth=(id&0x80000000u)!=0||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8||info.format==GL_DEPTH_COMPONENT;
+        auto fmt=depth?depthFormat(info.format,(id&0x80000000u)==0):colorFormat(info.format);
+        if(i==images.end()||level==0||i->second.extent.width!=info.width||i->second.extent.height!=info.height||i->second.format!=fmt) {
+            framebuffers.clear();images.erase(id); auto fresh=makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,depth&&(id&0x80000000u)==0);fresh.revision=info.revision;images.emplace(id,std::move(fresh)); imageInfo[id]=info;
+        }
+        Image& im=image(id); if(level>=im.levels)throw std::runtime_error("Hikaru Vulkan mip level exceeds allocated image");
+        if(!pixels||bytes==0){im.initializedLevels[level]=true;return;}
+        if(depth)throw std::runtime_error("CPU uploads to Hikaru Vulkan depth textures are unsupported");
+        BufferData staging(bytes,vk::BufferUsageFlagBits::eTransferSrc);staging.upload(bytes,pixels);
+        immediate([&](vk::CommandBuffer cmd){barrier(cmd,im,vk::ImageLayout::eTransferDstOptimal);vk::BufferImageCopy region(0,0,0,{vk::ImageAspectFlagBits::eColor,level,0,1},{0,0,0},{std::max(1u,info.width>>level),std::max(1u,info.height>>level),1});cmd.copyBufferToImage(*staging.buffer,*im.image,vk::ImageLayout::eTransferDstOptimal,region);barrier(cmd,im,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        im.initializedLevels[level]=true;
+    }
+    void eraseTexture(unsigned id) override { reapCompletedDraws();waitForDraws();framebuffers.clear();images.erase(id);imageInfo.erase(id); }
+    void clear(const Draw& d,GLbitfield mask,const Vec4& color,float depth) override {
+        Image& c=image(d.color); Image* z=d.depth?&image(d.depth):nullptr;
+        if(z&&z->extent!=c.extent) throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
+        const bool clearColor=(mask&GL_COLOR_BUFFER_BIT)!=0;
+        const bool colorMaskFull=std::all_of(d.colorMask.begin(),d.colorMask.end(),[](bool enabled){return enabled;});
+        if(clearColor&&!colorMaskFull) {
+            const size_t bytes=size_t(c.extent.width)*c.extent.height*4;
+            BufferData pixels(bytes,vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst);
+            immediate([&](vk::CommandBuffer cmd){barrier(cmd,c,vk::ImageLayout::eTransferSrcOptimal);vk::BufferImageCopy copy(0,c.extent.width,c.extent.height,{vk::ImageAspectFlagBits::eColor,0,0,1},{0,0,0},{c.extent.width,c.extent.height,1});cmd.copyImageToBuffer(*c.image,vk::ImageLayout::eTransferSrcOptimal,*pixels.buffer,copy);});
+            std::vector<uint8_t> raw(bytes);pixels.download(bytes,raw.data());
+            int x0=0,y0=0,x1=c.extent.width,y1=c.extent.height;
+            if(d.scissorEnabled){x0=std::clamp(d.scissor[0],0,int(c.extent.width));x1=std::clamp(d.scissor[0]+d.scissor[2],0,int(c.extent.width));y0=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1],0,int(c.extent.height));y1=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]:d.scissor[1]+d.scissor[3],0,int(c.extent.height));}
+            if(c.format==vk::Format::eA2B10G10R10UnormPack32){
+                auto quant=[](float v,uint32_t max){return uint32_t(std::lround(std::clamp(v,0.f,1.f)*max));};
+                for(int y=y0;y<y1;y++)for(int x=x0;x<x1;x++){auto* ptr=raw.data()+(size_t(y)*c.extent.width+x)*4;uint32_t packed;std::memcpy(&packed,ptr,4);for(unsigned channel=0;channel<4;channel++)if(d.colorMask[channel]){unsigned bits=channel==3?2:10,shift=channel*10;uint32_t m=(1u<<bits)-1;packed=(packed&~(m<<shift))|(quant(color[channel],m)<<shift);}std::memcpy(ptr,&packed,4);}
+            } else {
+                for(int y=y0;y<y1;y++)for(int x=x0;x<x1;x++){auto* pixel=raw.data()+(size_t(y)*c.extent.width+x)*4;for(unsigned channel=0;channel<4;channel++)if(d.colorMask[channel])pixel[channel]=uint8_t(std::lround(std::clamp(color[channel],0.f,1.f)*255.f));}
+            }
+            pixels.upload(bytes,raw.data());
+            immediate([&](vk::CommandBuffer cmd){barrier(cmd,c,vk::ImageLayout::eTransferDstOptimal);vk::BufferImageCopy copy(0,c.extent.width,c.extent.height,{vk::ImageAspectFlagBits::eColor,0,0,1},{0,0,0},{c.extent.width,c.extent.height,1});cmd.copyBufferToImage(*pixels.buffer,*c.image,vk::ImageLayout::eTransferDstOptimal,copy);barrier(cmd,c,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        }
+        const bool gpuColor=clearColor&&colorMaskFull;
+        const bool gpuDepth=(mask&GL_DEPTH_BUFFER_BIT)&&z&&d.depthWrite;
+        if(!gpuColor&&!gpuDepth)return;
+        vk::UniqueFramebuffer framebuffer;
+        immediate([&](vk::CommandBuffer cmd){
+            barrier(cmd,c,vk::ImageLayout::eColorAttachmentOptimal);
+            if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
+            auto rp=renderPass(c.format,z?z->format:vk::Format::eUndefined);
+            std::array<vk::ImageView,2> views{*c.attachmentView,z?*z->attachmentView:vk::ImageView{}};
+            framebuffer=device.createFramebufferUnique({{},rp,z?2u:1u,views.data(),c.extent.width,c.extent.height,1});
+            vk::Rect2D area({0,0},c.extent);cmd.beginRenderPass({rp,*framebuffer,area,0,nullptr},vk::SubpassContents::eInline);
+            std::array<vk::ClearAttachment,2> attachments{};uint32_t count=0;
+            if(gpuColor){attachments[count].aspectMask=vk::ImageAspectFlagBits::eColor;attachments[count].colorAttachment=0;attachments[count].clearValue.color=vk::ClearColorValue(std::array<float,4>{color[0],color[1],color[2],color[3]});++count;}
+            if(gpuDepth){attachments[count].aspectMask=vk::ImageAspectFlagBits::eDepth;attachments[count].clearValue.depthStencil=vk::ClearDepthStencilValue(depth,0);++count;}
+            vk::Rect2D rect({0,0},c.extent);
+            if(d.scissorEnabled){int x0=std::clamp(d.scissor[0],0,int(c.extent.width)),x1=std::clamp(d.scissor[0]+d.scissor[2],0,int(c.extent.width));int y0=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1],0,int(c.extent.height)),y1=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]:d.scissor[1]+d.scissor[3],0,int(c.extent.height));rect.offset=vk::Offset2D(x0,y0);rect.extent=vk::Extent2D(std::max(0,x1-x0),std::max(0,y1-y0));}
+            if(count&&rect.extent.width&&rect.extent.height){std::vector<vk::ClearAttachment> selected(attachments.begin(),attachments.begin()+count);std::array<vk::ClearRect,1> rects{vk::ClearRect(rect,0,1)};cmd.clearAttachments(selected,rects);}
+            cmd.endRenderPass();
+        });
+    }
+    void draw(const Draw& d) override {
+        if(d.vertices.empty())return;
+        reapCompletedDraws();
+        if(activeDrawCount>=256)flushBatch();
+        if(outstandingDrawCount()>=8192){
+            if(device.waitForFences(*pendingBatches.front().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
+                throw std::runtime_error("Failed waiting for Hikaru Vulkan draw fence");
+            reapCompletedDraws();
+        }
+        Image& target=image(d.color);Image* z=d.depth?&image(d.depth):nullptr;
+        if(z&&z->extent!=target.extent) throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
+        if(renderPassOpen&&(d.color!=activeColor||d.depth!=activeDepth))flushBatch();
+        const vk::DeviceSize vertexBytes=d.vertices.size()*sizeof(Vertex);
+        if(vertexBytes>UINT32_MAX)throw std::runtime_error("Hikaru Vulkan draw exceeds buffer upload limit");
+        if(activeVertexBuffer&&activeVertexOffset+vertexBytes>activeVertexCapacity)flushBatch();
+        if(!activeVertexBuffer){
+            activeVertexCapacity=std::max<vk::DeviceSize>(1024*1024,vertexBytes);
+            const vk::DeviceSize alignment=std::max<vk::DeviceSize>(1,ctx->GetUniformBufferAlignment());
+            activeUniformCapacity=((sizeof(Uniforms)+alignment-1)/alignment*alignment)*256;
+            activeVertexBuffer=std::make_unique<BufferData>(activeVertexCapacity,vk::BufferUsageFlagBits::eVertexBuffer);
+            activeUniformBuffer=std::make_unique<BufferData>(activeUniformCapacity,vk::BufferUsageFlagBits::eUniformBuffer);
+        }
+        const vk::DeviceSize uniformAlignment=std::max<vk::DeviceSize>(1,ctx->GetUniformBufferAlignment());
+        const vk::DeviceSize uniformOffset=(activeUniformOffset+uniformAlignment-1)/uniformAlignment*uniformAlignment;
+        if(uniformOffset+sizeof(Uniforms)>activeUniformCapacity)throw std::runtime_error("Hikaru Vulkan uniform batch capacity exceeded");
+        const uint32_t vertexOffset=uint32_t(activeVertexOffset),uniformUploadOffset=uint32_t(uniformOffset);
+        activeVertexBuffer->upload(uint32_t(vertexBytes),d.vertices.data(),vertexOffset);
+        activeUniformBuffer->upload(sizeof(Uniforms),&d.uniforms,uniformUploadOffset);
+        DrawResources resources;
+        std::array<vk::DescriptorImageInfo,4> imgs; std::array<vk::DescriptorSetLayout,1> layouts{*descriptorLayout};
+        vk::DescriptorSetAllocateInfo dai(*descriptorPool,layouts);auto sets=device.allocateDescriptorSetsUnique(dai);resources.descriptorSet=std::move(sets.front());auto set=*resources.descriptorSet;
+        vk::DescriptorBufferInfo bi(*activeUniformBuffer->buffer,uniformOffset,sizeof(Uniforms));std::array<vk::WriteDescriptorSet,5> writes;writes[0]={set,0,0,1,vk::DescriptorType::eUniformBuffer,nullptr,&bi};
+        constexpr unsigned transparentFallback=0xfffffffdu;
+        std::array<unsigned,4> resolvedTextures{};
+        for(unsigned n=0;n<4;n++){
+            const GLenum mf=d.sampling[n].minFilter;
+            const bool mipmapped=mf==GL_NEAREST_MIPMAP_NEAREST||mf==GL_NEAREST_MIPMAP_LINEAR||mf==GL_LINEAR_MIPMAP_NEAREST||mf==GL_LINEAR_MIPMAP_LINEAR;
+            unsigned tid=d.textures[n]; Image* sampled=nullptr;
+            if(tid&&tid!=d.color&&tid!=d.depth){auto it=images.find(tid);if(it!=images.end())sampled=&it->second;}
+            if(sampled&&sampled->sampleable&&sampled->initializedLevels[0]) {
+                unsigned geometric=1u+unsigned(std::floor(std::log2(std::max(sampled->extent.width,sampled->extent.height))));
+                unsigned expected=d.sampling[n].maxLevel==1000?geometric:std::min(geometric,d.sampling[n].maxLevel+1);
+                unsigned checked=mipmapped?expected:1;
+                if(checked>sampled->levels)sampled=nullptr;
+                else for(unsigned level=0;sampled&&level<checked;level++)if(!sampled->initializedLevels[level])sampled=nullptr;
+            } else sampled=nullptr;
+            if(!sampled){sampled=&image(transparentFallback);resolvedTextures[n]=transparentFallback;} // absent, incomplete or attachment feedback reads are transparent
+            else resolvedTextures[n]=tid;
+            imgs[n]={sampler(d.sampling[n],*sampled,mipmapped),*sampled->view,sampled->depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal};writes[n+1]={set,n+1,0,1,vk::DescriptorType::eCombinedImageSampler,&imgs[n]};
+        }
+        device.updateDescriptorSets(writes,{});
+        activeDraws.push_back(std::move(resources));
+        auto cmd=startBatch();
+        bool sampleTransition=false;
+        for(unsigned n=0;n<4;n++)if(resolvedTextures[n]!=transparentFallback){
+            const auto& sampled=image(resolvedTextures[n]);
+            const auto layout=sampled.depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal;
+            sampleTransition|=sampled.layout!=layout;
+        }
+        if(renderPassOpen&&sampleTransition)endRenderPass(cmd);
+        for(unsigned n=0;n<4;n++)if(resolvedTextures[n]!=transparentFallback){
+            auto& sampled=image(resolvedTextures[n]);
+            barrier(cmd,sampled,sampled.depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal);
+        }
+        if(!renderPassOpen){
+            barrier(cmd,target,vk::ImageLayout::eColorAttachmentOptimal);
+            if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
+            auto rp=renderPass(target.format,z?z->format:vk::Format::eUndefined);
+            auto fb=framebuffer(d.color,d.depth,target,z,rp);
+            vk::Rect2D area({0,0},target.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
+            renderPassOpen=true;activeColor=d.color;activeDepth=d.depth;
+        }
+        // Vulkan's positive-height viewport has the opposite framebuffer Y
+        // orientation from GL. Internal targets keep the shader's GL clip Y
+        // orientation, so their front-face sense reverses; the presentation
+        // target also flips clip Y in the shader and keeps the requested sense.
+        const GLenum frontFace=(d.uniforms.inverted[2]!=0.f)?(d.frontFace==GL_CCW?GL_CW:GL_CCW):d.frontFace;
+        auto p=pipeline({d.bitmap,bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined});
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);vk::Viewport vp(float(d.viewport[0]),viewportY,float(d.viewport[2]),float(d.viewport[3]),d.nearDepth,d.farDepth);cmd.setViewport(0,vp);
+        vk::Rect2D sc({0,0},target.extent);if(d.scissorEnabled){const int32_t scissorY=d.color==0?int32_t(target.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1];sc.offset=vk::Offset2D(d.scissor[0],scissorY);sc.extent=vk::Extent2D(uint32_t(std::max(0,d.scissor[2])),uint32_t(std::max(0,d.scissor[3])));}cmd.setScissor(0,sc);cmd.setDepthBias(d.biasUnits,0,d.biasFactor);cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,*pipelineLayout,0,set,nullptr);cmd.bindVertexBuffers(0,*activeVertexBuffer->buffer,{vk::DeviceSize(vertexOffset)});cmd.draw(d.vertices.size(),1,0,0);
+        activeVertexOffset+=vertexBytes;activeUniformOffset=uniformOffset+sizeof(Uniforms);
+        ++activeDrawCount;
+    }
+    void readPixels(unsigned id,int x,int y,int w,int h,uint8_t* rgba) override {
+        Image& im=image(id);if(w<=0||h<=0)return; BufferData dst(size_t(w)*h*4,vk::BufferUsageFlagBits::eTransferDst);
+        const bool flipReadback=id==0;
+        const int imageY=flipReadback?int(im.extent.height)-y-h:y;
+        immediate([&](vk::CommandBuffer cmd){barrier(cmd,im,vk::ImageLayout::eTransferSrcOptimal);vk::BufferImageCopy region(0,w,h,{vk::ImageAspectFlagBits::eColor,0,0,1},{x,imageY,0},{uint32_t(w),uint32_t(h),1});cmd.copyImageToBuffer(*im.image,vk::ImageLayout::eTransferSrcOptimal,*dst.buffer,region);barrier(cmd,im,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        std::vector<uint8_t> raw(size_t(w)*h*4);dst.download(raw.size(),raw.data());
+        for(int row=0;row<h;row++)for(int col=0;col<w;col++){
+            const unsigned sourceRow=flipReadback?unsigned(h-1-row):unsigned(row);
+            const auto* src=raw.data()+(size_t(sourceRow)*w+col)*4;auto* dstPixel=rgba+(size_t(row)*w+col)*4;
+            if(im.format==vk::Format::eA2B10G10R10UnormPack32){uint32_t packed;std::memcpy(&packed,src,4);dstPixel[0]=((packed&1023)*255+511)/1023;dstPixel[1]=(((packed>>10)&1023)*255+511)/1023;dstPixel[2]=(((packed>>20)&1023)*255+511)/1023;dstPixel[3]=(((packed>>30)&3)*255+1)/3;}
+            else std::memcpy(dstPixel,src,4);
+        }
+    }
+    void present(unsigned w,unsigned h) override {
+        Image& out=image(0);if(out.extent.width!=w||out.extent.height!=h)return;
+        immediate([&](vk::CommandBuffer cmd){barrier(cmd,out,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f);
+    }
+};
+}
+std::unique_ptr<Backend> makeVulkanBackend() { return std::make_unique<VulkanBackend>(); }
+} // namespace hikaru::graphics
+#else
+namespace hikaru::graphics { std::unique_ptr<Backend> makeVulkanBackend() { throw std::runtime_error("Vulkan support is not enabled"); } }
+#endif

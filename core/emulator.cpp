@@ -690,7 +690,6 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			setNetworkState(false);
 			memset(&settings.network.md5, 0, sizeof(settings.network.md5));
 			NaomiGameInputs = nullptr;
-			config::RendererType.override(RenderType::OpenGL);
 			config::ThreadedRendering.override(false);
 			config::GGPOEnable.override(false);
 #ifdef USE_RACHIEVEMENTS
@@ -1238,7 +1237,6 @@ bool Emulator::render()
 	{
 		if (state != Running) return false;
 		try {
-			if (!isOpenGL(config::RendererType)) throw FlycastException("Hikaru requires OpenGL or OpenGL ES");
 			return hikaru::frontend::render();
 		}
 		catch (...) { state = Error; TermAudio(); EventManager::event(Event::Pause); throw; }

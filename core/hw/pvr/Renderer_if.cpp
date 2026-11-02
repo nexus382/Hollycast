@@ -482,7 +482,17 @@ static void rend_create_renderer()
 #ifdef NO_REND
 	renderer	 = rend_norend();
 #else
-	switch (config::RendererType)
+	auto hostRenderer = config::RendererType.get();
+#ifdef USE_HIKARU
+	// Hikaru owns its transparency passes. The host renderer supplies the
+	// selected API's window, UI, overlays and presentation resources.
+	if (settings.platform.isHikaru()) {
+		if (isOpenGL(hostRenderer)) hostRenderer = RenderType::OpenGL;
+		else if (isVulkan(hostRenderer)) hostRenderer = RenderType::Vulkan;
+		else if (isMetal(hostRenderer)) hostRenderer = RenderType::Metal;
+	}
+#endif
+	switch (hostRenderer)
 	{
 	default:
 #ifdef USE_OPENGL

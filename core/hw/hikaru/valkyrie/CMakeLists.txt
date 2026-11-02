@@ -2,7 +2,7 @@
 # Portions Copyright 2026 The Hollycast Authors
 # Optional experimental OpenGL/OpenGL ES Hikaru backend. The host owns GL context.
 add_library(hollycast_hikaru_valkyrie STATIC
-    engine.c
+    engine.c graphics_dispatch.c
     src/vk/core.c src/vk/vector.c src/vk/state.c src/vk/buffer.c
     src/vk/mmap.c src/vk/region.c src/vk/machine.c src/vk/renderer.c
     src/cpu/sh/sh4.c
@@ -128,23 +128,29 @@ if(HIKARU_VENDOR_BUILD_SMOKE AND NOT ANDROID AND NOT IOS AND NOT LIBRETRO)
     target_include_directories(hikaru_valkyrie_gl_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(hikaru_valkyrie_gl_smoke PRIVATE hollycast_hikaru_valkyrie SDL2::SDL2)
     add_test(NAME hikaru_valkyrie_gl_smoke COMMAND hikaru_valkyrie_gl_smoke)
+    add_executable(hikaru_valkyrie_sorting_pixels tests/sorting_pixels.c)
+    target_include_directories(hikaru_valkyrie_sorting_pixels PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(hikaru_valkyrie_sorting_pixels PRIVATE hollycast_hikaru_valkyrie SDL2::SDL2)
+    add_test(NAME hikaru_valkyrie_sorting_pixels COMMAND hikaru_valkyrie_sorting_pixels)
+    set_tests_properties(hikaru_valkyrie_sorting_pixels PROPERTIES RUN_SERIAL TRUE)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_test(NAME hikaru_valkyrie_engine_games_gles COMMAND hikaru_valkyrie_engine_games --gles)
         add_test(NAME hikaru_valkyrie_spot_pixels_gles COMMAND hikaru_valkyrie_spot_pixels --gles)
-        set_tests_properties(hikaru_valkyrie_engine_games_gles hikaru_valkyrie_spot_pixels_gles PROPERTIES RUN_SERIAL TRUE)
+        add_test(NAME hikaru_valkyrie_sorting_pixels_gles COMMAND hikaru_valkyrie_sorting_pixels --gles)
+        set_tests_properties(hikaru_valkyrie_engine_games_gles hikaru_valkyrie_spot_pixels_gles hikaru_valkyrie_sorting_pixels_gles PROPERTIES RUN_SERIAL TRUE)
     endif()
     if(NOT APPLE)
         # glad is created by the root build after this directory; CMake
         # resolves the target at generate time. It supplies the GL
         # entry points the Apple builds get from the OpenGL framework.
-        foreach(_hikaru_test sound_bus_timing cpu_clock texture_bounds normal_matrix mmap_fetch mmap_data mmap_write cached_writes cached_reads dispatch double_precision poll_loop slave_wait planet_slave_wait master_wait engine_games spot_pixels gl_smoke)
+        foreach(_hikaru_test sound_bus_timing cpu_clock texture_bounds normal_matrix mmap_fetch mmap_data mmap_write cached_writes cached_reads dispatch double_precision poll_loop slave_wait planet_slave_wait master_wait engine_games spot_pixels gl_smoke sorting_pixels)
             # Vendor headers use C11 (_Noreturn, _Thread_local); MSVC
             # defaults these test targets to an older C mode.
             target_compile_features(hikaru_valkyrie_${_hikaru_test} PRIVATE c_std_11)
             target_link_libraries(hikaru_valkyrie_${_hikaru_test} PRIVATE glad)
         endforeach()
         # Bundled SDL provides SDL2main separately; these tests own main.
-        foreach(_hikaru_test engine_games spot_pixels gl_smoke)
+        foreach(_hikaru_test engine_games spot_pixels gl_smoke sorting_pixels)
             target_compile_definitions(hikaru_valkyrie_${_hikaru_test} PRIVATE SDL_MAIN_HANDLED)
         endforeach()
         unset(_hikaru_test)

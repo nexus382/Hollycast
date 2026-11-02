@@ -4784,6 +4784,7 @@ void renderVideoTab()
 #ifdef USE_METAL
 	const bool metalAvailable = metalIsAvailable();
 #endif
+	const bool hikaruPlatform = settings.platform.isHikaru();
 	const int apiCount = 0
 #ifdef USE_METAL
 		+ (metalAvailable ? 1 : 0)
@@ -4792,13 +4793,13 @@ void renderVideoTab()
 		+ 1
 #endif
 #ifdef USE_DX9
-		+ 1
+		+ (hikaruPlatform ? 0 : 1)
 #endif
 #ifdef USE_OPENGL
 		+ 1
 #endif
 #ifdef USE_DX11
-		+ 1
+		+ (hikaruPlatform ? 0 : 1)
 #endif
 		;
 
@@ -4822,12 +4823,16 @@ void renderVideoTab()
 			apiValues[apiOptionCount++] = 1;
 #endif
 #ifdef USE_DX9
-			apiLabels[apiOptionCount] = "DirectX 9";
-			apiValues[apiOptionCount++] = 2;
+			if (!hikaruPlatform) {
+				apiLabels[apiOptionCount] = "DirectX 9";
+				apiValues[apiOptionCount++] = 2;
+			}
 #endif
 #ifdef USE_DX11
-			apiLabels[apiOptionCount] = "DirectX 11";
-			apiValues[apiOptionCount++] = 3;
+			if (!hikaruPlatform) {
+				apiLabels[apiOptionCount] = "DirectX 11";
+				apiValues[apiOptionCount++] = 3;
+			}
 #endif
 
 #ifdef USE_METAL
@@ -4911,7 +4916,7 @@ void renderVideoTab()
 				if (renderApi == 2)
 					perPixel = false;
 #ifdef USE_METAL
-				if (renderApi == 4 && !metalSupportsPerPixel())
+				if (renderApi == 4 && !settings.platform.isHikaru() && !metalSupportsPerPixel())
 					perPixel = false;
 #endif
 				return true;
@@ -4935,9 +4940,9 @@ void renderVideoTab()
 	if (RenderCollapsingHeader("TransparentSortingSection", ICON_FA_WAND_SPARKLES, T("Transparent Sorting"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		{
-			bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+			bool has_per_pixel = hikaruPlatform || GraphicsContext::Instance()->hasPerPixel();
 #ifdef USE_METAL
-			if (renderApi == 4)
+			if (renderApi == 4 && !hikaruPlatform)
 				has_per_pixel = metalSupportsPerPixel();
 #endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;

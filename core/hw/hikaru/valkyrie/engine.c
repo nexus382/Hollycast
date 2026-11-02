@@ -6,6 +6,7 @@
 #include "mach/hikaru/hikaru-gpu-private.h"
 #include "mach/hikaru/hikaru-renderer.h"
 #include "vk/input.h"
+#include "graphics_dispatch.h"
 
 unsigned vk_verbosity = 0;
 static _Thread_local HikaruEngine *activeEngine;
@@ -207,6 +208,7 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     if (!glGetString(GL_VERSION)) { set_error(error, error_size, "A current OpenGL 3.2 or OpenGL ES 3.0 context is required"); return NULL; }
     HikaruEngine *engine = calloc(1, sizeof(*engine));
     if (!engine) { set_error(error, error_size, "Out of memory"); return NULL; }
+    engine->transparency_peel_capacity = HIKARU_MAX_TRANSPARENCY_LAYERS;
     liveEngine = engine;
     engine->mie = *mie;
     engine->protection = *protection;
@@ -238,6 +240,8 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     restore_gl_state(&glState);
     if (!created) { activeEngine = NULL; set_error(error, error_size, "Hikaru machine initialization failed"); hikaru_engine_destroy(engine); return NULL; }
     hikaru_engine_resize(engine, target_fbo, width, height);
+    hikaru_renderer_set_transparency_sorting(engine->machine->renderer, engine->transparency_sorting);
+    hikaru_renderer_set_transparency_peel_capacity(engine->machine->renderer, engine->transparency_peel_capacity);
     engine->protection.reset(engine->protection.opaque);
     vk_machine_reset(engine->machine, VK_RESET_TYPE_HARD);
     if (engine->error[0]) { activeEngine = NULL; set_error(error, error_size, engine->error); hikaru_engine_destroy(engine); return NULL; }
@@ -371,6 +375,8 @@ int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, un
         vk_renderer_t *renderer = hikaru_renderer_new(engine->machine, board->fb, board->texram);
         if (renderer) {
             hikaru_renderer_set_gpu(renderer, board->gpu);
+            hikaru_renderer_set_transparency_sorting(renderer, engine->transparency_sorting);
+            hikaru_renderer_set_transparency_peel_capacity(renderer, engine->transparency_peel_capacity);
             ((hikaru_gpu_t *)board->gpu)->renderer = renderer;
             hikaru_engine_resize(engine, target_fbo, width, height);
         } else {
@@ -410,6 +416,25 @@ int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height)
     }
     engine->machine->renderer->internal_width = width;
     engine->machine->renderer->internal_height = height;
+    return 0;
+}
+int hikaru_engine_set_transparency_sorting(HikaruEngine *engine, HikaruTransparencySorting sorting)
+{
+    if (!engine || sorting < HIKARU_TRANSPARENCY_PER_STRIP || sorting > HIKARU_TRANSPARENCY_PER_PIXEL)
+        return -1;
+    engine->transparency_sorting = sorting;
+    if (engine->machine && engine->machine->renderer)
+        hikaru_renderer_set_transparency_sorting(engine->machine->renderer, sorting);
+    engine->error[0] = '\0';
+    return 0;
+}
+int hikaru_engine_set_transparency_peel_capacity(HikaruEngine *engine, unsigned layers)
+{
+    if (!engine || layers < 1 || layers > HIKARU_MAX_TRANSPARENCY_LAYERS) return -1;
+    engine->transparency_peel_capacity = layers;
+    if (engine->machine && engine->machine->renderer)
+        hikaru_renderer_set_transparency_peel_capacity(engine->machine->renderer, layers);
+    engine->error[0] = '\0';
     return 0;
 }
 const char *hikaru_engine_last_error(const HikaruEngine *engine)

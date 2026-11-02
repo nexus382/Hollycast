@@ -26,9 +26,12 @@
 #include "vk/buffer.h"
 #include "vk/renderer.h"
 #include "vk/machine.h"
+#include "engine.h"
 
 vk_renderer_t	*hikaru_renderer_new (vk_machine_t *mach, vk_buffer_t *fb, vk_buffer_t *texram[2]);
 void		 hikaru_renderer_set_gpu (vk_renderer_t *, void *);
 void		 hikaru_renderer_note_cpu_texram_write (vk_renderer_t *);
+void             hikaru_renderer_set_transparency_sorting (vk_renderer_t *, HikaruTransparencySorting);
+void             hikaru_renderer_set_transparency_peel_capacity(vk_renderer_t *, unsigned layers);
 
 #endif /* __VK_HIKARU_RENDERER_H__ */

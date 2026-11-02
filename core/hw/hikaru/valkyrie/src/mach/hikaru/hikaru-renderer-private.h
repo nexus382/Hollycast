@@ -23,6 +23,9 @@
 
 #include "mach/hikaru/hikaru-gpu-private.h"
 
+#define HIKARU_MAX_PEEL_LAYERS HIKARU_MAX_TRANSPARENCY_LAYERS
+#include "engine.h"
+
 enum {
 	HR_DEBUG_LOG,
 	HR_DEBUG_NO_LAYER1,
@@ -96,6 +99,8 @@ typedef struct {
 	uint32_t		ls_index;
 	float			alpha_thresh[2];
 	float			depth_bias;
+	/* Retained guest vertices support CPU sorting without relying on buffer readback. */
+	hikaru_vertex_body_t *cpu_vertices;
 	bool			has_two_sided_lighting;
 	uint32_t		num;
 } hikaru_mesh_t;
@@ -107,6 +112,7 @@ typedef struct {
 		GLuint position, direction, diffuse, specular, extents, spot, spot_table;
 	} u_lights[4];
 	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref;
+	GLuint u_peel_enabled, u_peel_first, u_peel_size, u_peel_depth, u_peel_opaque_depth;
 } hikaru_uniform_locations_t;
 
 typedef struct {
@@ -164,6 +170,25 @@ typedef struct {
 		hikaru_uniform_locations_t locs;
 	} meshes;
 	float pass_alpha_ref;
+	HikaruTransparencySorting transparency_sorting;
+	unsigned transparency_peel_capacity;
+	bool transparency_overflow_seen;
+	struct {
+		bool enabled, first;
+		GLuint previous_depth, opaque_depth;
+	} peel;
+	struct {
+		bool enabled, configured;
+		hikaru_mesh_t *mesh;
+		unsigned count, instance;
+		const hikaru_vertex_body_t *vertices;
+		GLuint vao, vbo;
+	} triangle_replay;
+	struct {
+		bool enabled;
+		hikaru_mesh_t *mesh;
+		unsigned instance;
+	} strip_replay;
 
 	struct {
 		hikaru_texture_t cache[2][0x40][0x80];
@@ -174,7 +199,12 @@ typedef struct {
 
 	struct {
 		GLuint program;
-		GLuint fb[2], cb[2], db[2];
+		GLuint fb[2], cb[2], db[2]; /* db are sampleable depth textures */
+		GLuint peel_fb, peel_color[HIKARU_MAX_PEEL_LAYERS + 1], peel_depth[HIKARU_MAX_PEEL_LAYERS + 1];
+		unsigned peel_width, peel_height;
+		unsigned peel_layers_allocated;
+		uint8_t *peel_probe_pixels;
+		size_t peel_probe_capacity;
 		unsigned width, height;
 		GLuint vao, vbo;
 		struct {

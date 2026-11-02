@@ -9,6 +9,8 @@ struct HikaruEngine {
     HikaruEngineSound sound;
     bool sound_attached, frame_started;
     int sound_reset;
+    HikaruTransparencySorting transparency_sorting;
+    unsigned transparency_peel_capacity;
     vk_game_t game;
     vk_game_section_t sections[3];
     vk_machine_t *machine;

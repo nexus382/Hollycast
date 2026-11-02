@@ -11,6 +11,15 @@ context recreation. Hikaru remains unsupported in libretro, Xbox/UWP,
 Switch, iOS and BSD builds. No platform runtime claim is made for a
 backend that has not been built and run on that platform.
 
+The host graphics dispatch now preserves the vendor scene construction while
+supporting native Metal and Vulkan draw backends alongside OpenGL. The host's
+API and transparency settings select strip sorting, triangle sorting, or bounded
+depth peeling. CPU-retained vertices supply transformed sorting keys; sampleable
+depth attachments and the existing bitmap compositor resolve peeled layers.
+Synthetic GPU fixtures cover ordering, layer-capacity overflow, and compositing;
+these are compatibility implementations rather than measured Hikaru hardware
+transparency semantics.
+
 The optional BIOS EEPROM-check bypass is inherited from upstream and applied
 only when explicitly requested by the host to a private in-memory BIOS copy.
 No BIOS, game ROM or MIE firmware is distributed with this source.

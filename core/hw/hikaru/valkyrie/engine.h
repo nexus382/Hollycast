@@ -14,6 +14,15 @@ typedef enum {
     HIKARU_ENGINE_GAME_BRAVEFF = 1,
     HIKARU_ENGINE_GAME_PHARRIER = 2
 } HikaruEngineGame;
+typedef enum {
+    /* Sort retained source strips back-to-front by transformed view-space centroid. */
+    HIKARU_TRANSPARENCY_PER_STRIP = 0,
+    /* Sort source triangles back-to-front by transformed view-space centroid. */
+    HIKARU_TRANSPARENCY_PER_TRIANGLE = 1,
+    /* Exact per-pixel depth peeling; the retained layer bound is configurable. */
+    HIKARU_TRANSPARENCY_PER_PIXEL = 2
+} HikaruTransparencySorting;
+#define HIKARU_MAX_TRANSPARENCY_LAYERS 32u
 #define HIKARU_ENGINE_BRAM_SIZE 65536u
 typedef struct {
     const uint8_t *boot; size_t boot_size;
@@ -98,6 +107,12 @@ int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, un
 // Set the 4:3 internal 3D vertical resolution. Requires a current GL context;
 // targets are reallocated at the next frame. The default is 480 pixels.
 int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height);
+// Selects translucent mesh order, per-triangle centroid order, or per-pixel
+// depth peeling (bounded to the configured translucent layer capacity).
+int hikaru_engine_set_transparency_sorting(HikaruEngine *engine, HikaruTransparencySorting sorting);
+// Set retained per-pixel layers (1 through HIKARU_MAX_TRANSPARENCY_LAYERS).
+// The renderer probes one additional layer and reports when the bound is exceeded.
+int hikaru_engine_set_transparency_peel_capacity(HikaruEngine *engine, unsigned layers);
 const char *hikaru_engine_last_error(const HikaruEngine *engine);
 void hikaru_engine_destroy(HikaruEngine *engine);
 #ifdef __cplusplus
