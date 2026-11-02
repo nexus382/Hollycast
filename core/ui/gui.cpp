@@ -3006,6 +3006,8 @@ static void gui_display_content()
 	}
 	if (showDcnet)
 	{
+		// Both tabs share GuiState::Main, so cancel the rack launch here.
+		pendingRackLaunch.reset();
 		resetLibraryGameInfoHover();
 		gui_display_dcnet(scanner, boxart);
 		ImGui::End();
