@@ -416,6 +416,7 @@ enum class VmuIconPlaybackMode
 };
 
 extern Option<int, false> LibraryDisplayStyle;
+extern Option<int, false> LibraryGameInfoHoverDelay; // Seconds (1-10); 11 disables hover panels.
 extern Option<int, false> LibraryImageSource;
 extern Option<int, false> LibraryCoverMedia;
 extern Option<int, false> LibraryIconScale;

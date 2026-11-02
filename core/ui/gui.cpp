@@ -217,7 +217,6 @@ static Toast toast;
 static ScheduledThreadRunner<std::chrono::steady_clock::time_point> uiThreadRunner;
 
 static constexpr float GAME_INFO_LONG_PRESS_SECONDS = 3.f;
-static constexpr double LIBRARY_GAME_INFO_HOVER_SECONDS = 1.0;
 static bool resetLibraryGameInfoHoverState;
 struct LibraryLongPressState
 {
@@ -1883,8 +1882,11 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	static ImVec2 hoverPanelMin;
 	static ImVec2 hoverPanelMax;
 	static bool hasHoverPanelPos = false;
+	static int previousHoverDelay = 0;
 
-	if (resetLibraryGameInfoHoverState)
+	const int hoverDelay = std::clamp(config::LibraryGameInfoHoverDelay.get(), 1, 11);
+	// Restart the timer and discard cached panel state when the preference changes.
+	if (resetLibraryGameInfoHoverState || previousHoverDelay != hoverDelay)
 	{
 		hoveredGameId.clear();
 		hoverStartTime = 0.0;
@@ -1894,7 +1896,10 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverPanelMin = ImVec2();
 		hoverPanelMax = ImVec2();
 		resetLibraryGameInfoHoverState = false;
+		previousHoverDelay = hoverDelay;
 	}
+	if (hoverDelay == 11)
+		return;
 
 	const std::string gameId = !game.path.empty() ? game.path : (!game.fileName.empty() ? game.fileName : game.name);
 	const ImVec2 mousePos = ImGui::GetMousePos();
@@ -1918,7 +1923,9 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hasHoverPanelPos = false;
 	}
 	const double hoverElapsed = ImGui::GetTime() - hoverStartTime;
-	if (hoverElapsed >= 1.0 && (!hoverCache.ready || hoverCache.gameId != gameId))
+	if (hoverElapsed < hoverDelay)
+		return;
+	if (!hoverCache.ready || hoverCache.gameId != gameId)
 	{
 		hoverCache.gameId = gameId;
 		hoverCache.art = displayArt != nullptr ? *displayArt : getLibraryDisplayArtwork(game, 0.0);
@@ -1943,8 +1950,6 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverCache.selectedMediaIndex = default_game_info_media_index(hoverCache);
 		hoverCache.ready = true;
 	}
-	if (hoverElapsed < LIBRARY_GAME_INFO_HOVER_SECONDS || !hoverCache.ready)
-		return;
 
 	const ImGuiViewport *viewport = ImGui::GetMainViewport();
 	const ImVec2 displaySize = viewport->Size;

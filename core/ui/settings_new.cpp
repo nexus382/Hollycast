@@ -4248,6 +4248,28 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"Classic keeps the existing gallery/list behavior.\n"
 			"List uses a compact row/table layout with title and metadata columns."));
 
+		SettingsUI::PopupConfig hoverDelayCfg {};
+		hoverDelayCfg.type = SettingsUI::PopupType::Slider;
+		hoverDelayCfg.slider.label = T("Game Info Hover Delay");
+		hoverDelayCfg.slider.icon = ICON_FA_CLOCK;
+		hoverDelayCfg.slider.popupID = "LibraryGameInfoHoverDelayPopup";
+		hoverDelayCfg.slider.description = T("Wait 1-10 seconds before showing game information when hovering over a game in Original or List views. The last position (11) turns hover panels off.");
+		hoverDelayCfg.slider.currentValue = &config::LibraryGameInfoHoverDelay.get();
+		hoverDelayCfg.slider.minValue = 1;
+		hoverDelayCfg.slider.maxValue = 11;
+		hoverDelayCfg.slider.defaultValue = 4;
+		hoverDelayCfg.slider.format = "%d s";
+		hoverDelayCfg.slider.valueWidth = 220.0f;
+		hoverDelayCfg.slider.sliderWidth = 320.0f;
+		hoverDelayCfg.slider.valueFormatter = [](int value) {
+			return value >= 11 ? std::string(T("Off")) : std::to_string(value) + " s";
+		};
+		hoverDelayCfg.slider.onValueChange = [] { config::LibraryGameInfoHoverDelay.save(); };
+		RenderGeneralPopupSettingRow(
+			"LibraryGameInfoHoverDelaySetting",
+			T("Set the game info hover delay, or turn hover panels off."),
+			hoverDelayCfg);
+
 		const char* vmuIconModes[] = { T("Static"), T("Active / Animated") };
 		SettingsUI::PopupConfig vmuIconModeCfg {};
 		vmuIconModeCfg.type = SettingsUI::PopupType::Options;

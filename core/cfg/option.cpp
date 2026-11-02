@@ -50,6 +50,7 @@ Option<int, false> ScreenScraperMedia("ScreenScraperMedia", 4095); // Manual sel
 Option<bool, false> BoxartDisplayMode("BoxartDisplayMode", true);
 Option<int, false> BoxartSourceMode("BoxartSourceMode", 0);
 Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
+Option<int, false> LibraryGameInfoHoverDelay("Dreamcast.LibraryGameInfoHoverDelay", 4);
 Option<int, false> LibraryImageSource("Dreamcast.LibraryImageSource", 0);
 Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", 0);
 Option<int, false> LibraryIconScale("Dreamcast.LibraryIconScale", 100);
