@@ -92,6 +92,7 @@ enum class GuiState {
 	Loading,
 	NetworkStart,
 	Cheats,
+	Debugger,
 	Achievements,
 	GameInfo,
 };

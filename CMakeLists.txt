@@ -1220,6 +1220,8 @@ endif()
 
 add_subdirectory(core/rend)
 
+target_sources(${PROJECT_NAME} PRIVATE core/debug/assembly_debugger.cpp)
+
 if(ENABLE_GDB_SERVER)
 
 	target_sources(${PROJECT_NAME} PRIVATE

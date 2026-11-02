@@ -22,6 +22,7 @@
 #include "mainui.h"
 #include "hw/pvr/Renderer_if.h"
 #include "gui.h"
+#include "gui_debugger.h"
 #include "gui_menu.h"
 #include "oslib/oslib.h"
 #include "wsi/context.h"
@@ -55,6 +56,7 @@ bool mainui_rend_frame()
 
 	os_DoEvents();
 	os_UpdateInputState();
+	gui_poll_debugger();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::update(!gui_is_open());
 #endif
@@ -75,8 +77,17 @@ bool mainui_rend_frame()
 	else
 	{
 		try {
+			const int uiFrame = ImGui::GetFrameCount();
 			if (!emu.render())
-				return false;
+			{
+				if (!emu.running())
+					return false;
+			}
+			// A boot loop or hung game may never submit a frame. In either
+			// rendering mode, keep menus and Pause responsive without drawing
+			// the overlay twice when a game frame already drew it.
+			if (ImGui::GetFrameCount() == uiFrame)
+				gui_display_osd();
 			if (config::ProfilerEnabled && config::ProfilerDrawToGUI)
 				gui_display_profiler();
 		} catch (const RendererException& e) {
