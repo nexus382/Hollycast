@@ -141,6 +141,27 @@ TEST(ThemeParserTest, AcceptsMiximageArtworkBinding)
 	EXPECT_EQ(theme.layouts[0].elements[2].source, "miximage");
 }
 
+TEST(ThemeParserTest, ListPresentationIsOptionalAndValidatesItsFields)
+{
+	const std::string plain = R"({"formatVersion":1,"id":"plain","name":"Plain","layouts":[{"id":"list","name":"List","mode":"list","browser":[0,0,1,1]}]})";
+	const auto defaults = parseFixture(plain).layouts.front().list;
+	EXPECT_FALSE(defaults.systemBadge);
+	EXPECT_FALSE(defaults.favouriteBadge);
+	EXPECT_FALSE(defaults.favouriteColor.has_value());
+	EXPECT_TRUE(defaults.selectOnHover);
+	const auto configured = replaceOnce(plain, "\"mode\":\"list\"",
+		R"("mode":"list","list":{"systemBadge":true,"favouriteBadge":true,"favouriteColor":"EAD171","selectOnHover":false})");
+	const auto list = parseFixture(configured).layouts.front().list;
+	EXPECT_TRUE(list.systemBadge);
+	EXPECT_TRUE(list.favouriteBadge);
+	ASSERT_TRUE(list.favouriteColor.has_value());
+	EXPECT_EQ(*list.favouriteColor, 0xead171ff);
+	EXPECT_FALSE(list.selectOnHover);
+	expectRejected(replaceOnce(configured, "\"mode\":\"list\"", "\"mode\":\"grid\""), "requires list mode");
+	expectRejected(replaceOnce(configured, "\"selectOnHover\":false", "\"selectOnHover\":1"), "must be a boolean");
+	expectRejected(replaceOnce(configured, "\"systemBadge\":true", "\"unknown\":true"), "unknown field");
+}
+
 TEST(ThemeParserTest, RejectsUnsupportedVersionUnknownFieldsAndInvalidNumbers)
 {
 	expectRejected(replaceOnce(kManifest, "\"formatVersion\": 1", "\"formatVersion\": 2"), "must be between 1 and 1");

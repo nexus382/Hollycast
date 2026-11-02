@@ -49,6 +49,7 @@
 #include "boxart/boxart.h"
 #include "boxart/screenscraper.h"
 #include "theme_library.h"
+#include "theme_browser.h"
 #include <set>
 #include "boxart/vmu_icon.h"
 #include "profiler/fc_profiler.h"
@@ -4715,6 +4716,7 @@ void gui_term()
 	{
 		inited = false;
 		gui_term_dcnet();
+		themes::stopBrowser();
 		scanner.stop();
 		librarySavestateCache.stop();
 		ImguiFileTexture::stopImageLoader();

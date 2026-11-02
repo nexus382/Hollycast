@@ -98,6 +98,12 @@ struct Attract
 	float idleSeconds = 0; // Zero disables attract mode.
 	float intervalSeconds = 3.5f;
 };
+struct ListPresentation
+{
+	bool systemBadge = false, favouriteBadge = false;
+	bool selectOnHover = true; // Preserve legacy hover previews unless explicitly disabled.
+	std::optional<uint32_t> favouriteColor;
+};
 struct Layout
 {
 	std::string id, name;
@@ -143,6 +149,7 @@ struct Layout
 	float launchSeconds = 0; // Delay between choosing a game and starting it; zero starts at once.
 	Attract attract;
 	PagedGrid pagedGrid;
+	ListPresentation list;
 };
 struct Theme
 {
@@ -176,6 +183,7 @@ const Theme* current();
 const Layout* currentLayout();
 const std::string& error();
 // Copy a validated folder into the user theme directory. Never overwrites.
-std::string install(const std::string& sourceDirectory);
+// Set refreshCatalog=false on a worker; reload() must then run on the UI thread.
+std::string install(const std::string& sourceDirectory, bool refreshCatalog = true);
 void applyPalette();
 } // namespace themes
