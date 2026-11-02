@@ -18,7 +18,6 @@
 #endif
 #include "jni_util.h"
 #include "android_storage.h"
-#include "http_client.h"
 #include "achievements/achievements.h"
 #include "android_locale.h"
 
@@ -90,17 +89,10 @@ static bool dumpCallback(const google_breakpad::MinidumpDescriptor& descriptor, 
 {
     if (succeeded)
     {
-    	__android_log_print(ANDROID_LOG_ERROR, "Flycast", "Minidump saved to '%s'\n", descriptor.path());
-    	registerCrash(descriptor.directory().c_str(), descriptor.path());
+        __android_log_print(ANDROID_LOG_ERROR, "Flycast", "Minidump saved to '%s'\n", descriptor.path());
+        registerCrash(descriptor.path());
     }
 	return succeeded;
-}
-
-static void *uploadCrashThread(void *p)
-{
-	uploadCrashes(*(std::string *)p);
-
-	return nullptr;
 }
 
 static google_breakpad::ExceptionHandler *exceptionHandler;
@@ -172,16 +164,6 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_hollycast_emulator_emu_JNIdc_initE
         int rc = flycast_init(0, nullptr);
         if (rc == -1)
             msg = env->NewStringUTF(i18n::T("Memory initialization failed"));
-#ifdef USE_BREAKPAD
-        else
-        {
-			static std::string crashPath;
-			static cThread uploadThread(uploadCrashThread, &crashPath, "SentryUpload");
-			crashPath = get_writable_config_path("");
-			uploadThread.Start();
-        }
-#endif
-
         return msg;
     }
     else {

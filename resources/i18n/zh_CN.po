@@ -2369,16 +2369,6 @@ msgstr "将日志写入文件"
 msgid "Log debug information to flycast.log"
 msgstr "将调试信息记录到 flycast.log 中"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "自动报告崩溃"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr "自动将崩溃报告上传至 sentry.io，以协助排查问题。报告中不包含任何个人信息"
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Lua 脚本"
@@ -8731,28 +8721,6 @@ msgstr ""
 #: core/ui/settings_new.cpp:8948
 msgid "Developer Tools"
 msgstr "开发者工具"
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "崩溃报告"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "自动上传崩溃报告"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"崩溃报告\n"
-"自动上传崩溃报告，帮助开发者诊断和修复问题。\n"
-"\n"
-"崩溃报告通常包含崩溃和运行环境的技术详情。\n"
-"如果你愿意帮助改进稳定性，请保持启用；如果不想发送崩溃数据，请关闭。"
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

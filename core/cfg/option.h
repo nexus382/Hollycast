@@ -594,7 +594,6 @@ extern Option<std::vector<std::string>, false> CheatPath;
 extern Option<std::string, false> DreamPotatoFolderPath;
 #endif
 extern Option<bool, false> HideLegacyNaomiRoms;
-extern Option<bool, false> UploadCrashLogs;
 extern Option<bool, false> DiscordPresence;
 #if defined(__ANDROID__) && !defined(LIBRETRO)
 extern Option<bool, false> UseSafFilePicker;

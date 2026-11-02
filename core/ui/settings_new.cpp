@@ -9338,23 +9338,6 @@ void renderAdvancedTab()
 		ShowFooterHelpMarker(T("Specify lua filename to use. Should be located in Hollycast config folder. Defaults to flycast.lua when empty."));
 #endif
 
-#ifdef SENTRY_UPLOAD
-		// Crash Reporting - 2x Row Pattern
-		RenderGeneralToggleSettingRow(
-			"CrashReporting",
-			ICON_FA_STETHOSCOPE,
-			T("Crash Reports"),
-			T("Auto-upload crash reports"),
-			static_cast<bool>(config::UploadCrashLogs),
-			[](bool enabled) { config::UploadCrashLogs.set(enabled); },
-			T(
-				"Crash Reports\n"
-				"Automatically uploads crash reports to help developers diagnose and fix issues.\n\n"
-				"Crash reports typically include technical details about the crash and environment.\n"
-				"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-			));
-	#endif
-
 #if defined(GDB_SERVER)
 		// Virtual Memory Addresses (debug builds)
 		if (config::GDB)
