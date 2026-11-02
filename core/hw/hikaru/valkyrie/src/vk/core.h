@@ -1,4 +1,5 @@
-/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* Modified for Hollycast on 2026-11-01; see valkyrie/PROVENANCE.md.
+ * Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie
  * Copyright (C) 2011, 2012, Stefano Teso
@@ -20,7 +21,14 @@
 #ifndef __VK_CORE_H__
 #define __VK_CORE_H__
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+#ifdef _MSC_VER
+#define _USE_MATH_DEFINES
+#define strcasecmp _stricmp
+#define strdup _strdup
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,7 +41,12 @@
 #include <assert.h>
 #include <string.h>
 #include <math.h>
-#ifdef __APPLE__
+#if defined(_WIN32)
+/* Every supported Windows architecture is little endian. */
+#define __BYTE_ORDER 1234
+#define __LITTLE_ENDIAN 1234
+#define __BIG_ENDIAN 4321
+#elif defined(__APPLE__)
 #include <machine/endian.h>
 #define __BYTE_ORDER BYTE_ORDER
 #define __LITTLE_ENDIAN LITTLE_ENDIAN
@@ -42,11 +55,9 @@
 #include <endian.h>
 #endif
 
-#include <getopt.h>
-#include <signal.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <pwd.h>
+#ifndef _WIN32
+#include <strings.h>
+#endif
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -272,37 +283,39 @@ signext_n_64 (const uint64_t in, const unsigned sign_bit)
 	} while (0);
 
 /** Prints a formatted message to stdout */
-#define VK_PRINT(fmt_, args_...) \
+#define VK_PRINT(fmt_, ...) \
 	do { \
-		fprintf (stdout, fmt_"\n", ##args_); \
+		fprintf (stdout, fmt_"\n", ##__VA_ARGS__); \
 	} while (0)
 
 /** Prints a formatted message to stdout in DEBUG builds, and only if verbosity
  * is non-zero */
 #ifdef NDEBUG
-#define VK_LOG(fmt_, args_...)
+#define VK_LOG(fmt_, ...)
 #else
-#define VK_LOG(fmt_, args_...) \
+#define VK_LOG(fmt_, ...) \
 	do { \
 		if (vk_verbosity > 0) \
-			fprintf (stdout, fmt_"\n", ##args_); \
+			fprintf (stdout, fmt_"\n", ##__VA_ARGS__); \
 	} while (0)
 #endif
 
 /** Prints a formatted message, prefixed by 'ERROR', to stderr */
-#define VK_ERROR(fmt_, args_...) \
+#define VK_ERROR(fmt_, ...) \
 	do { \
-		fprintf (stderr, "ERROR: "fmt_"\n", ##args_); \
+		fprintf (stderr, "ERROR: "fmt_"\n", ##__VA_ARGS__); \
 	} while (0)
 
 /** Prints a formatted message, prefixed by 'FATAL', to stderr, and aborts */
 _Noreturn void vk_host_abort(const char *file, int line, const char *function, const char *format, ...);
 void vk_host_attach_machine(void *host, void *machine);
-#define VK_ABORT(fmt_, args_...) vk_host_abort(__FILE__, __LINE__, __FUNCTION__, fmt_, ##args_)
+#define VK_ABORT(fmt_, ...) vk_host_abort(__FILE__, __LINE__, __FUNCTION__, fmt_, ##__VA_ARGS__)
 #define VK_ASSERT(condition_) do { if (!(condition_)) VK_ABORT("assertion failed: %s", #condition_); } while (0)
 
 bool	vk_util_get_bool_option (const char *name, bool fallback);
 int	vk_util_get_int_option (const char *name, int fallback);
+/* C11 replacement for POSIX asprintf, also used by MSVC builds. */
+int vk_asprintf(char **out, const char *format, ...);
 
 #endif /* __VK_CORE_H__ */
 

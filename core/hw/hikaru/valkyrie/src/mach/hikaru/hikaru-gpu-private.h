@@ -333,7 +333,7 @@ typedef struct {
 
 	uint16_t depth_bias;
 	uint16_t _501;
-	uint16_t texoffset_x, texoffset_y;
+	int16_t texoffset[4][2];
 
 	struct {
 		uint32_t in_mesh	: 1;
@@ -363,6 +363,8 @@ typedef struct {
 			hikaru_modelview_t alternate;
 			hikaru_modelview_t pending_alternate;
 			bool alternate_pending, has_alternate;
+			hikaru_modelview_t local;
+			bool has_local;
 		} modelviews;
 	
 		struct {

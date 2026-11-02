@@ -687,6 +687,16 @@ struct ChannelEx
 		u32 dr = std::min(VolMix.DRAtt, max_att);
 		u32 ds = std::min(VolMix.DSPAtt, max_att);
 
+		// Hikaru diagnostics: HIKARU_BGM_TEST forces muted/quiet sends on
+		// sound boards up to send level 12 so silent tracks can be heard.
+		static const bool bgmTest = std::getenv("HIKARU_BGM_TEST") != nullptr;
+		if (bgmTest && collectChannelPeaks) {
+			const u32 floorAtt = u32(ccd->TL) + (3 << 3);
+			dl = std::min(dl, floorAtt);
+			dr = std::min(dr, floorAtt);
+			ds = std::min(ds, floorAtt);
+		}
+
 		oLeft = FPMul<s64>(sample, logtable[dl], 19);	// 16 bits
 		oRight = FPMul<s64>(sample, logtable[dr], 19);	// 16 bits
 		oDsp = FPMul<s64>(sample, logtable[ds], 15);	// 20 bits
@@ -708,11 +718,18 @@ struct ChannelEx
 		return true;
 	}
 
+	static bool collectChannelPeaks;
+	static u32 channelPeaks[64];
+
 	void Step(SampleType& mixl, SampleType& mixr)
 	{
 		SampleType oLeft, oRight, oDsp;
 
 		Step(oLeft, oRight, oDsp);
+		if (collectChannelPeaks) {
+			const u32 level = u32(std::abs(oLeft)) + u32(std::abs(oRight)) + u32(std::abs(oDsp >> 4));
+			if (level > channelPeaks[ChannelNumber]) channelPeaks[ChannelNumber] = level;
+		}
 
 		*VolMix.DSPOut += oDsp;
 		if (oLeft + oRight == 0 && !config::DSPEnabled)
@@ -1480,7 +1497,9 @@ struct ChannelState
 static ChannelState* selectedChannels;
 ChannelEx (&ChannelEx::activeChannels())[64]
 {
-	return selectedChannels ? selectedChannels->channels : ChannelEx::Chans;
+	// MSVC rejects a ternary over array operands; branch explicitly.
+	if (selectedChannels) return selectedChannels->channels;
+	return ChannelEx::Chans;
 }
 ChannelState* activeChannelState() { return selectedChannels; }
 void selectChannelState(ChannelState* state)
@@ -1620,6 +1639,23 @@ constexpr int CDDA_SIZE = 2352 / 2;
 static s16 cdda_sector[CDDA_SIZE];
 static u32 cdda_index = CDDA_SIZE;
 
+bool ChannelEx::collectChannelPeaks;
+u32 ChannelEx::channelPeaks[64];
+
+void readBoardChannelPeaks(u32 peaks[64])
+{
+	std::memcpy(peaks, ChannelEx::channelPeaks, sizeof(ChannelEx::channelPeaks));
+	std::memset(ChannelEx::channelPeaks, 0, sizeof(ChannelEx::channelPeaks));
+}
+
+static s16 boardExternalInput[2];
+
+void setBoardExternalInput(s16 left, s16 right)
+{
+	boardExternalInput[0] = left;
+	boardExternalInput[1] = right;
+}
+
 static bool generateSample(bool board, s16& left, s16& right)
 {
 	SampleType mixl,mixr;
@@ -1627,6 +1663,7 @@ static bool generateSample(bool board, s16& left, s16& right)
 	mixr = 0;
 	memset(dsp::state.MIXS, 0, sizeof(dsp::state.MIXS));
 
+	ChannelEx::collectChannelPeaks = board;
 	ChannelEx::StepAll(mixl,mixr);
 	
 	//OK , generated all Channels  , now DSP/ect + final mix ;p
@@ -1637,8 +1674,8 @@ static bool generateSample(bool board, s16& left, s16& right)
 		cdda_index = 0;
 		libCore_CDDA_Sector(cdda_sector);
 	}
-	s32 EXTS0L = board ? 0 : cdda_sector[cdda_index];
-	s32 EXTS0R = board ? 0 : cdda_sector[cdda_index+1];
+	s32 EXTS0L = board ? boardExternalInput[0] : cdda_sector[cdda_index];
+	s32 EXTS0R = board ? boardExternalInput[1] : cdda_sector[cdda_index+1];
 	if (!board)
 		cdda_index += 2;
 

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Optional experimental desktop OpenGL Hikaru backend. The host owns GL context.
+# Portions Copyright 2026 The Hollycast Authors
+# Optional experimental OpenGL/OpenGL ES Hikaru backend. The host owns GL context.
 add_library(hollycast_hikaru_valkyrie STATIC
     engine.c
     src/vk/core.c src/vk/vector.c src/vk/state.c src/vk/buffer.c
@@ -26,11 +27,18 @@ target_include_directories(hollycast_hikaru_valkyrie PUBLIC "${CMAKE_CURRENT_SOU
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/../../../deps/glad/include")
 if(APPLE)
     target_compile_definitions(hollycast_hikaru_valkyrie PRIVATE GL_SILENCE_DEPRECATION)
+endif()
+if(UNIX AND NOT APPLE)
+    # C test executables do not inherit libm from the C++ host; the
+    # renderer uses lroundf/sincosf/sqrtf from the vendor sources.
+    target_link_libraries(hollycast_hikaru_valkyrie PUBLIC m)
+endif()
+if(APPLE)
     target_link_libraries(hollycast_hikaru_valkyrie PUBLIC "-framework OpenGL")
 endif()
 
 option(HIKARU_VENDOR_BUILD_SMOKE "Build the synthetic hidden-window GL smoke test" OFF)
-if(HIKARU_VENDOR_BUILD_SMOKE AND APPLE)
+if(HIKARU_VENDOR_BUILD_SMOKE AND NOT ANDROID AND NOT IOS AND NOT LIBRETRO)
     target_compile_definitions(hollycast_hikaru_valkyrie PRIVATE HIKARU_VENDOR_TESTING)
     add_executable(hikaru_valkyrie_sound_bus_timing tests/sound_bus_timing.c)
     target_include_directories(hikaru_valkyrie_sound_bus_timing PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -87,7 +95,23 @@ if(HIKARU_VENDOR_BUILD_SMOKE AND APPLE)
     target_include_directories(hikaru_valkyrie_slave_wait PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(hikaru_valkyrie_slave_wait PRIVATE hollycast_hikaru_valkyrie)
     add_test(NAME hikaru_valkyrie_slave_wait COMMAND hikaru_valkyrie_slave_wait)
-    find_package(SDL2 CONFIG REQUIRED)
+    add_executable(hikaru_valkyrie_planet_slave_wait tests/planet_slave_wait.c)
+    target_include_directories(hikaru_valkyrie_planet_slave_wait PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(hikaru_valkyrie_planet_slave_wait PRIVATE hollycast_hikaru_valkyrie)
+    add_test(NAME hikaru_valkyrie_planet_slave_wait COMMAND hikaru_valkyrie_planet_slave_wait)
+    add_executable(hikaru_valkyrie_master_wait tests/master_wait.c)
+    target_include_directories(hikaru_valkyrie_master_wait PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(hikaru_valkyrie_master_wait PRIVATE hollycast_hikaru_valkyrie)
+    add_test(NAME hikaru_valkyrie_master_wait COMMAND hikaru_valkyrie_master_wait)
+    add_executable(hikaru_valkyrie_double_precision tests/double_precision.c)
+    target_include_directories(hikaru_valkyrie_double_precision PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(hikaru_valkyrie_double_precision PRIVATE hollycast_hikaru_valkyrie)
+    add_test(NAME hikaru_valkyrie_double_precision COMMAND hikaru_valkyrie_double_precision)
+    # The bundled SDL is already a target; only look for a system SDL2
+    # when it is not. Linking below uses the SDL2::SDL2 target either way.
+    if(NOT TARGET SDL2::SDL2)
+        find_package(SDL2 CONFIG REQUIRED)
+    endif()
     add_executable(hikaru_valkyrie_engine_games tests/engine_games.c)
     target_include_directories(hikaru_valkyrie_engine_games PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(hikaru_valkyrie_engine_games PRIVATE hollycast_hikaru_valkyrie SDL2::SDL2)
@@ -104,4 +128,25 @@ if(HIKARU_VENDOR_BUILD_SMOKE AND APPLE)
     target_include_directories(hikaru_valkyrie_gl_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(hikaru_valkyrie_gl_smoke PRIVATE hollycast_hikaru_valkyrie SDL2::SDL2)
     add_test(NAME hikaru_valkyrie_gl_smoke COMMAND hikaru_valkyrie_gl_smoke)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME hikaru_valkyrie_engine_games_gles COMMAND hikaru_valkyrie_engine_games --gles)
+        add_test(NAME hikaru_valkyrie_spot_pixels_gles COMMAND hikaru_valkyrie_spot_pixels --gles)
+        set_tests_properties(hikaru_valkyrie_engine_games_gles hikaru_valkyrie_spot_pixels_gles PROPERTIES RUN_SERIAL TRUE)
+    endif()
+    if(NOT APPLE)
+        # glad is created by the root build after this directory; CMake
+        # resolves the target at generate time. It supplies the GL
+        # entry points the Apple builds get from the OpenGL framework.
+        foreach(_hikaru_test sound_bus_timing cpu_clock texture_bounds normal_matrix mmap_fetch mmap_data mmap_write cached_writes cached_reads dispatch double_precision poll_loop slave_wait planet_slave_wait master_wait engine_games spot_pixels gl_smoke)
+            # Vendor headers use C11 (_Noreturn, _Thread_local); MSVC
+            # defaults these test targets to an older C mode.
+            target_compile_features(hikaru_valkyrie_${_hikaru_test} PRIVATE c_std_11)
+            target_link_libraries(hikaru_valkyrie_${_hikaru_test} PRIVATE glad)
+        endforeach()
+        # Bundled SDL provides SDL2main separately; these tests own main.
+        foreach(_hikaru_test engine_games spot_pixels gl_smoke)
+            target_compile_definitions(hikaru_valkyrie_${_hikaru_test} PRIVATE SDL_MAIN_HANDLED)
+        endforeach()
+        unset(_hikaru_test)
+    endif()
 endif()

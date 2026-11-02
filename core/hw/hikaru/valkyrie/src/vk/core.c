@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie
  * Copyright (C) 2011, 2012, Stefano Teso
@@ -18,6 +19,25 @@
 
 #include "vk/types.h"
 #include "vk/core.h"
+
+int vk_asprintf(char **out, const char *format, ...)
+{
+	*out = NULL;
+	va_list args, copy;
+	va_start(args, format);
+	va_copy(copy, args);
+	const int size = vsnprintf(NULL, 0, format, copy);
+	va_end(copy);
+	if (size >= 0) {
+		*out = malloc((size_t)size + 1);
+		if (*out && vsnprintf(*out, (size_t)size + 1, format, args) != size) {
+			free(*out);
+			*out = NULL;
+		}
+	}
+	va_end(args);
+	return *out ? size : -1;
+}
 
 bool
 vk_util_get_bool_option (const char *name, bool fallback)

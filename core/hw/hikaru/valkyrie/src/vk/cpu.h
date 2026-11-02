@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -65,7 +66,7 @@ struct vk_cpu_t {
 		VK_ASSERT (mach_); \
 		VK_ASSERT (mmap_); \
 	\
-		(derivedptr_) = ALLOC (typeof (*(derivedptr_))); \
+		(derivedptr_) = calloc (1, sizeof (*(derivedptr_))); \
 		if (!(derivedptr_)) \
 			break; \
 	\
@@ -82,27 +83,27 @@ struct vk_cpu_t {
 	} while (0)
 
 #ifdef NDEBUG
-#define VK_CPU_LOG(cpu_, fmt_, args_...) do { } while (0)
+#define VK_CPU_LOG(cpu_, fmt_, ...) do { } while (0)
 #else
-#define VK_CPU_LOG(cpu_, fmt_, args_...) \
+#define VK_CPU_LOG(cpu_, fmt_, ...) \
     do { \
         if (vk_verbosity > 0) { \
             const char *str = vk_cpu_get_debug_string ((vk_cpu_t *) cpu_); \
-            VK_LOG ("%s : "fmt_, str, ##args_); \
+            VK_LOG ("%s : "fmt_, str, ##__VA_ARGS__); \
         } \
     } while (0)
 #endif
 
-#define VK_CPU_ERROR(cpu_, fmt_, args_...) \
+#define VK_CPU_ERROR(cpu_, fmt_, ...) \
 	do { \
 		const char *str = vk_cpu_get_debug_string ((vk_cpu_t *) cpu_); \
-		VK_ERROR ("%s : "fmt_, str, ##args_); \
+		VK_ERROR ("%s : "fmt_, str, ##__VA_ARGS__); \
 	} while (0);
 
-#define VK_CPU_ABORT(cpu_, fmt_, args_...) \
+#define VK_CPU_ABORT(cpu_, fmt_, ...) \
 	do { \
 		const char *str = vk_cpu_get_debug_string ((vk_cpu_t *) cpu_); \
-		VK_ABORT ("%s : "fmt_, str, ##args_); \
+		VK_ABORT ("%s : "fmt_, str, ##__VA_ARGS__); \
 	} while (0);
 
 #define VK_CPU_ASSERT(cpu_, cond_) \

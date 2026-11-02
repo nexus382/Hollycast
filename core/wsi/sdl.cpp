@@ -45,7 +45,7 @@ bool SDLGLGraphicsContext::init()
 {
 #ifdef GLES
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 #else
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -63,6 +63,15 @@ bool SDLGLGraphicsContext::init()
 
 	SDL_Window * const sdlWindow = (SDL_Window *)window;
 	glcontext = SDL_GL_CreateContext(sdlWindow);
+#ifdef GLES
+	if (glcontext == SDL_GLContext())
+	{
+		// ES2-only hardware keeps Dreamcast working; Hikaru rejects < ES 3.0.
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+		glcontext = SDL_GL_CreateContext(sdlWindow);
+	}
+#endif
 #ifndef GLES
 	if (glcontext == SDL_GLContext())
 	{

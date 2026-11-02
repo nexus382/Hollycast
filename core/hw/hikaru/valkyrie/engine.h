@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -10,7 +11,8 @@ extern "C" {
 typedef struct HikaruEngine HikaruEngine;
 typedef enum {
     HIKARU_ENGINE_GAME_AIRTRIX = 0,
-    HIKARU_ENGINE_GAME_BRAVEFF = 1
+    HIKARU_ENGINE_GAME_BRAVEFF = 1,
+    HIKARU_ENGINE_GAME_PHARRIER = 2
 } HikaruEngineGame;
 #define HIKARU_ENGINE_BRAM_SIZE 65536u
 typedef struct {
@@ -55,7 +57,7 @@ typedef struct {
     int (*irq)(void *opaque, unsigned board); // 0 clear, 1 asserted, -1 error
 } HikaruEngineSound;
 
-// Requires a current desktop OpenGL context for create, frame and destroy.
+// Requires a current OpenGL 3.2 or OpenGL ES 3.0 context for graphics calls.
 // Calls must be serialized; only one instance is supported. ROM contents are
 // copied. BIOS EEPROM bypass is an upstream compatibility patch and must be
 // explicitly enabled. The caller retains ownership of MIE, protection, context
@@ -66,9 +68,10 @@ HikaruEngine *hikaru_engine_create(const HikaruEngineRoms *roms,
     const HikaruEngineMie *mie, const HikaruEngineProtection *protection,
     uint32_t target_fbo, unsigned width, unsigned height,
     int allow_bios_eeprom_bypass, char *error, size_t error_size);
-// Only the two games listed above are accepted. ROM sections are already
+// Only the games listed above are accepted. ROM sections are already
 // assembled: both use a 2 MiB BIOS; Air Trix uses 8/128 MiB program/data,
-// Brave Firefighters uses 64/256 MiB regions including unpopulated sockets.
+// Brave Firefighters and Planet Harriers use 64/256 MiB regions, retaining
+// zero-filled program socket gaps and any unpopulated sockets.
 // Protection callbacks remain required; the host supplies an unprotected bus
 // backend for a board without a security processor. No game patches are enabled.
 HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngineRoms *roms,
@@ -87,6 +90,11 @@ int hikaru_engine_set_sound(HikaruEngine *engine, const HikaruEngineSound *sound
 int hikaru_engine_get_bram(const HikaruEngine *engine, uint8_t *data, size_t size);
 int hikaru_engine_set_bram(HikaruEngine *engine, const uint8_t *data, size_t size);
 void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
+// Release before the host context is destroyed, then restore on its replacement.
+// CPU, GPU registers, RAM and sound-board state survive this transition. A new
+// renderer starts with empty host render targets and decoded texture caches.
+int hikaru_engine_release_graphics(HikaruEngine *engine);
+int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
 // Set the 4:3 internal 3D vertical resolution. Requires a current GL context;
 // targets are reallocated at the next frame. The default is 480 pixels.
 int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height);

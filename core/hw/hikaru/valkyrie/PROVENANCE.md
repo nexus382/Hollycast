@@ -1,8 +1,16 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 Valkyrie source, revision fa52073f2ac6264d2f77242b3e3cca2935c31392,
 https://github.com/stefanoteso/valkyrie. The original per-file notices and
 GPL-3.0-or-later LICENSE are retained. The embedded adapter removes the SDL
 window/event loop and JSON game loader; uses the host's GL context, ROM data,
 and external MIE device; and contains documented rendering/portability fixes.
+The standalone Windows, Android, Linux and macOS port keeps the desktop
+OpenGL 3.2 path and adds an OpenGL ES 3.0 path with shared shader bodies,
+ES texture-upload conversion, and graphics release/restore across host
+context recreation. Hikaru remains unsupported in libretro, Xbox/UWP,
+Switch, iOS and BSD builds. No platform runtime claim is made for a
+backend that has not been built and run on that platform.
+
 The optional BIOS EEPROM-check bypass is inherited from upstream and applied
 only when explicitly requested by the host to a private in-memory BIOS copy.
 No BIOS, game ROM or MIE firmware is distributed with this source.
@@ -10,7 +18,7 @@ No BIOS, game ROM or MIE firmware is distributed with this source.
 Adapted upstream files carry dated Hollycast modification notices. Local changes
 include host integration, isolated MIE/protection callbacks, dual-matrix skinning,
 viewport and packed-texture decoding, GL state isolation, configurable internal
-resolution, coverage compositing for direct ABGR1555 layers, separate bitmap
+resolution, alpha-keyed ABGR1555/A2BGR10 bitmap coverage and layer priority, separate bitmap
 layer enables and Air Trix combined/direct composition, logical-pixel framebuffer
 DMA addressing, primary/alternate material colour selection for
 untextured unlit geometry (with textured colour handling retained), zero-alpha
@@ -25,9 +33,10 @@ original special-space/endian fallbacks, defined unsigned rotate shifts,
 safe same-slice polling-loop acceleration, and external
 dual-board sound callbacks with MIE-masked interrupts.
 
-The host engine accepts separate Air Trix and Brave Firefighters definitions.
-Brave Firefighters uses sparse EPROM source slots with the existing small-chip
-within-bank mirroring. Synthetic tests exercise both selected board layouts and
+The host engine accepts separate Air Trix, Brave Firefighters and Planet
+Harriers definitions. Brave Firefighters and Planet Harriers use sparse EPROM
+source slots with their respective within-bank mirroring. Synthetic tests
+exercise all three selected board layouts and
 the legacy Air Trix entry point without game data or executed game patches.
 
 Spotlight decoding uses guest-authored cosine cutoffs and uploaded angular
@@ -54,3 +63,14 @@ compatibility latency; this is not a measured hardware value. CPU cycle debt
 and fractional conversion persist across slices and private vendor save states;
 DMA reads are excluded. Vendor state version 2 rejects earlier state files
 because the SH-4 serialized layout includes the new timing fields.
+
+Captured Brave Firefighters textured heads with zero diffuse/ambient coefficients
+use the retained 0x691 RGB channel for prelit modulation. This is a narrow
+compatibility interpretation, with shader regressions and saved-frame replay;
+other 0x691 uses and hardware-accurate material lighting remain unresolved.
+
+SH-4 double arithmetic assembles FRn as the high word and FRn+1 as the low
+word, following Odin's sh4_ops.cpp. FMOV width depends only on FPSCR.SZ,
+independently of FPSCR.PR. Synthetic instruction regressions cover conversion,
+arithmetic, comparison, sign, paired moves, and unsigned decimal division;
+no captured game instructions are included in these tests.

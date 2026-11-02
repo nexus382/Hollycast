@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "engine_internal.h"
 #include "mach/hikaru/hikaru.h"
+#include "mach/hikaru/hikaru-gpu-private.h"
+#include "mach/hikaru/hikaru-renderer.h"
 #include "vk/input.h"
 
 unsigned vk_verbosity = 0;
@@ -82,7 +85,7 @@ typedef struct {
     GLint blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha, blendEqRgb, blendEqAlpha;
     GLint unpackAlignment, unpackRowLength, unpackSkipRows, unpackSkipPixels;
     GLfloat polygonFactor, polygonUnits, clearColor[4];
-    GLdouble clearDepth, depthRange[2];
+    GLfloat clearDepth, depthRange[2];
     GLboolean depthMask, colorMask[4], depthTest, blend, cull, scissorTest, polygonOffset, rasterizerDiscard, stencilTest;
 } HostGlState;
 static void save_gl_state(HostGlState *s)
@@ -102,7 +105,7 @@ static void save_gl_state(HostGlState *s)
     glGetIntegerv(GL_UNPACK_SKIP_ROWS, &s->unpackSkipRows); glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &s->unpackSkipPixels);
     glGetFloatv(GL_POLYGON_OFFSET_FACTOR, &s->polygonFactor); glGetFloatv(GL_POLYGON_OFFSET_UNITS, &s->polygonUnits);
     glGetFloatv(GL_COLOR_CLEAR_VALUE, s->clearColor); glGetBooleanv(GL_DEPTH_WRITEMASK, &s->depthMask); glGetBooleanv(GL_COLOR_WRITEMASK, s->colorMask);
-    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &s->clearDepth); glGetDoublev(GL_DEPTH_RANGE, s->depthRange);
+    glGetFloatv(GL_DEPTH_CLEAR_VALUE, &s->clearDepth); glGetFloatv(GL_DEPTH_RANGE, s->depthRange);
     s->depthTest = glIsEnabled(GL_DEPTH_TEST); s->blend = glIsEnabled(GL_BLEND); s->cull = glIsEnabled(GL_CULL_FACE);
     s->scissorTest = glIsEnabled(GL_SCISSOR_TEST); s->polygonOffset = glIsEnabled(GL_POLYGON_OFFSET_FILL);
     s->rasterizerDiscard = glIsEnabled(GL_RASTERIZER_DISCARD);
@@ -122,8 +125,8 @@ static void prepare_gl(void)
     glBlendEquation(GL_FUNC_ADD);
     glDisable(GL_RASTERIZER_DISCARD);
     glDisable(GL_STENCIL_TEST);
-    glClearDepth(1.0);
-    glDepthRange(0.0, 1.0);
+    vk_renderer_clear_depth(1.0);
+    vk_renderer_depth_range(0.0, 1.0);
 }
 static void restore_gl_state(const HostGlState *s)
 {
@@ -140,7 +143,7 @@ static void restore_gl_state(const HostGlState *s)
     glPixelStorei(GL_UNPACK_ALIGNMENT, s->unpackAlignment); glPixelStorei(GL_UNPACK_ROW_LENGTH, s->unpackRowLength);
     glPixelStorei(GL_UNPACK_SKIP_ROWS, s->unpackSkipRows); glPixelStorei(GL_UNPACK_SKIP_PIXELS, s->unpackSkipPixels);
     glClearColor(s->clearColor[0], s->clearColor[1], s->clearColor[2], s->clearColor[3]);
-    glClearDepth(s->clearDepth); glDepthRange(s->depthRange[0], s->depthRange[1]);
+    vk_renderer_clear_depth(s->clearDepth); vk_renderer_depth_range(s->depthRange[0], s->depthRange[1]);
     set_enabled(GL_DEPTH_TEST, s->depthTest); set_enabled(GL_BLEND, s->blend); set_enabled(GL_CULL_FACE, s->cull);
     set_enabled(GL_SCISSOR_TEST, s->scissorTest); set_enabled(GL_POLYGON_OFFSET_FILL, s->polygonOffset);
     set_enabled(GL_RASTERIZER_DISCARD, s->rasterizerDiscard);
@@ -190,6 +193,9 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     case HIKARU_ENGINE_GAME_BRAVEFF:
         game_name = "braveff"; program_size = 0x4000000; data_size = 0x10000000;
         break;
+    case HIKARU_ENGINE_GAME_PHARRIER:
+        game_name = "pharrier"; program_size = 0x4000000; data_size = 0x10000000;
+        break;
     default:
         set_error(error, error_size, "Unsupported Hikaru game"); return NULL;
     }
@@ -198,7 +204,7 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
         !protection || !protection->reset || !protection->read || !protection->write || !width || !height) {
         set_error(error, error_size, "Invalid ROM sections, device callbacks, or output dimensions"); return NULL;
     }
-    if (!glGetString(GL_VERSION)) { set_error(error, error_size, "A current desktop GL context is required"); return NULL; }
+    if (!glGetString(GL_VERSION)) { set_error(error, error_size, "A current OpenGL 3.2 or OpenGL ES 3.0 context is required"); return NULL; }
     HikaruEngine *engine = calloc(1, sizeof(*engine));
     if (!engine) { set_error(error, error_size, "Out of memory"); return NULL; }
     liveEngine = engine;
@@ -290,7 +296,7 @@ int hikaru_engine_set_cpu_clock_mhz(HikaruEngine *engine, unsigned mhz)
 
 int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inputs)
 {
-    if (!engine || !engine->machine || !inputs) return -1;
+    if (!engine || !engine->machine || !engine->machine->renderer || !inputs) return -1;
     engine->frame_started = true;
     engine->error[0] = '\0';
     engine->mie.set_inputs(engine->mie.opaque, inputs);
@@ -323,14 +329,70 @@ int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inpu
 }
 void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height)
 {
-    if (!engine || !engine->machine || !width || !height) return;
+    if (!engine || !engine->machine || !engine->machine->renderer || !width || !height) return;
     engine->machine->renderer->target_fbo = target_fbo;
     engine->machine->renderer->width = width;
     engine->machine->renderer->height = height;
 }
-int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height)
+int hikaru_engine_release_graphics(HikaruEngine *engine)
 {
     if (!engine || !engine->machine) return -1;
+    if (!engine->machine->renderer) return 0;
+    HostGlState state;
+    save_gl_state(&state);
+    activeEngine = engine;
+    const int failed = setjmp(engine->fatal);
+    if (!failed) {
+        vk_renderer_destroy(&engine->machine->renderer);
+        ((hikaru_gpu_t *)((hikaru_t *)engine->machine)->gpu)->renderer = NULL;
+    }
+    if (failed) {
+        // Destroy aborted part-way: host GL objects die with the context,
+        // so drop stale pointers instead of reusing them on a new context.
+        // The renderer struct itself is leaked in this rare failure path.
+        ((hikaru_gpu_t *)((hikaru_t *)engine->machine)->gpu)->renderer = NULL;
+        engine->machine->renderer = NULL;
+    }
+    activeEngine = NULL;
+    restore_gl_state(&state);
+    return failed ? -1 : 0;
+}
+int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height)
+{
+    if (!engine || !engine->machine || !width || !height) return -1;
+    if (engine->machine->renderer) return 0;
+    hikaru_t *board = (hikaru_t *)engine->machine;
+    HostGlState state;
+    save_gl_state(&state);
+    prepare_gl();
+    activeEngine = engine;
+    int failed = setjmp(engine->fatal);
+    if (!failed) {
+        vk_renderer_t *renderer = hikaru_renderer_new(engine->machine, board->fb, board->texram);
+        if (renderer) {
+            hikaru_renderer_set_gpu(renderer, board->gpu);
+            ((hikaru_gpu_t *)board->gpu)->renderer = renderer;
+            hikaru_engine_resize(engine, target_fbo, width, height);
+        } else {
+            snprintf(engine->error, sizeof(engine->error), "Cannot restore Hikaru graphics");
+            failed = 1;
+        }
+    }
+    if (failed && engine->machine->renderer) {
+        // Construction registers the renderer before it can abort; remove
+        // the partial renderer so a later frame can retry cleanly.
+        vk_renderer_t *partial = engine->machine->renderer;
+        ((hikaru_gpu_t *)board->gpu)->renderer = NULL;
+        engine->machine->renderer = NULL;
+        if (!setjmp(engine->fatal)) vk_renderer_destroy(&partial);
+    }
+    activeEngine = NULL;
+    restore_gl_state(&state);
+    return failed ? -1 : 0;
+}
+int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height)
+{
+    if (!engine || !engine->machine || !engine->machine->renderer) return -1;
     if (height < 240 || height > 4320) {
         snprintf(engine->error, sizeof(engine->error), "Hikaru internal resolution must be between 240 and 4320 pixels high");
         return -1;
@@ -361,11 +423,12 @@ void hikaru_engine_destroy(HikaruEngine *engine)
     }
     if (engine->machine) {
         HostGlState glState;
-        save_gl_state(&glState);
+        const bool hasGraphics = engine->machine->renderer != NULL;
+        if (hasGraphics) save_gl_state(&glState);
         activeEngine = engine;
         if (!setjmp(engine->fatal)) vk_machine_destroy(&engine->machine);
         activeEngine = NULL;
-        restore_gl_state(&glState);
+        if (hasGraphics) restore_gl_state(&glState);
     }
     for (unsigned i = 0; i < 3; ++i) vk_buffer_destroy(&engine->sections[i].buffer);
     if (liveEngine == engine) liveEngine = NULL;

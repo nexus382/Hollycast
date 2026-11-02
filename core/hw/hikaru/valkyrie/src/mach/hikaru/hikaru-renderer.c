@@ -1,4 +1,5 @@
-/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* Modified for Hollycast on 2026-11-01; see valkyrie/PROVENANCE.md.
+ * Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie
  * Copyright (C) 2011-2013, Stefano Teso
@@ -146,21 +147,19 @@ destroy_texture (hikaru_texture_t *tex)
 static uint16_t
 abgr1111_to_rgba4444 (uint32_t texel)
 {
-	static const uint16_t table[16] = {
-		0x0000, 0xF000, 0x0F00, 0xFF00,
-		0x00F0, 0xF0F0, 0x0FF0, 0xFFF0,
-		0x000F, 0xF00F, 0x0F0F, 0xFF0F,
-		0x00FF, 0xF0FF, 0x0FFF, 0xFFFF,
-	};
-	return table[texel & 15];
+	/* Format 2 is a 4-bit intensity: every channel takes the nibble
+	 * (Odin renderer_textures.cpp i4_to_rgba4444). Expanding it as four
+	 * 1-bit channels garbled the loading screens and 1P art. */
+	return (uint16_t) ((texel & 15) * 0x1111);
 }
 
-/* Command 2C1: disabled wrapping clamps; enabled wrapping selects normal or
- * mirrored repeat independently for each axis. */
+/* Command 2C1: mirror wins over repeat, else clamp to edge, independently
+ * for each axis (Odin hikaru_draw.hpp sampling_of). The fields called wrapu/
+ * repeatu in hikaru_texhead_t are the repeat and mirror bits. */
 static GLenum
-texture_wrap (bool wrap, bool mirror)
+texture_wrap (bool repeat, bool mirror)
 {
-    return !wrap ? GL_CLAMP_TO_EDGE : mirror ? GL_MIRRORED_REPEAT : GL_REPEAT;
+    return mirror ? GL_MIRRORED_REPEAT : repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
 }
 
 static bool
@@ -281,18 +280,107 @@ int hikaru_vendor_test_texture_wrap_changed(uint32_t left, uint32_t right)
 
 #undef PUT16
 
+/* ES 3 has no reversed 16-bit pixel types. Convert cached texture uploads
+ * to RGBA8 there, respecting the guest row/skip layout already validated by
+ * the caller. Desktop GL keeps its direct packed upload. */
+static int
+upload_abgr16(GLint level, GLenum internal_format, unsigned width, unsigned height,
+              GLenum type, const void *data)
+{
+	if (!vk_renderer_is_gles()) {
+		glTexImage2D(GL_TEXTURE_2D, level, internal_format, width, height, 0, GL_RGBA, type, data);
+		return 0;
+	}
+	if (!width || !height || width > SIZE_MAX / height / 4) return -1;
+	GLint row_length, skip_rows, skip_pixels;
+	glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
+	glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
+	glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skip_pixels);
+	const size_t stride = (row_length ? (unsigned)row_length : width) * 2u;
+	uint8_t *rgba = malloc((size_t)width * height * 4);
+	if (!rgba) return -1;
+	for (unsigned y = 0; y < height; ++y) {
+		const uint8_t *src = (const uint8_t *)data + ((size_t)skip_rows + y) * stride + (size_t)skip_pixels * 2;
+		for (unsigned x = 0; x < width; ++x) {
+			uint16_t pixel;
+			memcpy(&pixel, src + x * 2, sizeof(pixel));
+			uint8_t *dst = rgba + ((size_t)y * width + x) * 4;
+			if (type == GL_UNSIGNED_SHORT_1_5_5_5_REV) {
+				for (unsigned c = 0; c < 3; ++c) {
+					const unsigned value = (pixel >> (c * 5)) & 31;
+					dst[c] = (uint8_t)((value << 3) | (value >> 2));
+				}
+				dst[3] = pixel & 0x8000 ? 255 : 0;
+			} else {
+				for (unsigned c = 0; c < 4; ++c)
+					dst[c] = (uint8_t)(((pixel >> (c * 4)) & 15) * 17);
+			}
+		}
+	}
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+	glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+	glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	free(rgba);
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
+	glPixelStorei(GL_UNPACK_SKIP_ROWS, skip_rows);
+	glPixelStorei(GL_UNPACK_SKIP_PIXELS, skip_pixels);
+	return 0;
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+/* Exercise the production packed-upload path, including nonzero source
+ * row/skip state, on both desktop GL and ES contexts. */
+int hikaru_vendor_test_abgr_upload(void)
+{
+    const GLenum types[2] = {GL_UNSIGNED_SHORT_1_5_5_5_REV, GL_UNSIGNED_SHORT_4_4_4_4_REV};
+    const GLint formats[2] = {GL_RGB5_A1, GL_RGBA4};
+    const uint16_t samples[2][12] = {
+        {0,0,0,0, 0,0x801f,0x83e0,0, 0,0x7c00,0xffff,0},
+        {0,0,0,0, 0,0xf00f,0xf0f0,0, 0,0x0f00,0xffff,0}
+    };
+    const uint8_t expected[16] = {255,0,0,255, 0,255,0,255, 0,0,255,0, 255,255,255,255};
+    GLuint texture, fbo;
+    int ok = 1;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 4);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 1);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+    for (unsigned i = 0; i < 2; ++i) {
+        uint8_t actual[16] = {0};
+        GLint row, skip_rows, skip_pixels;
+        if (upload_abgr16(0, formats[i], 2, 2, types[i], samples[i])) { ok = 0; break; }
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) { ok = 0; break; }
+        glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, actual);
+        glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row);
+        glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
+        glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skip_pixels);
+        ok &= !memcmp(actual, expected, sizeof(expected)) && row == 4 && skip_rows == 1 && skip_pixels == 1;
+        ok &= glGetError() == GL_NO_ERROR;
+    }
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &texture);
+    return ok;
+}
+#endif
+
 static GLuint
 upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 {
-	static const GLint la8_swizzle[4] = { GL_RED, GL_RED, GL_RED, GL_GREEN };
-
 	uint32_t w, h, num_levels, level, basex, basey, bank;
 	GLuint id;
 
 	w = 16 << th->logw;
 	h = 16 << th->logh;
 	num_levels = hr->debug.flags[HR_DEBUG_NO_MIPMAPS] ? 1 :
-	             MIN2 (th->logw, th->logh) + 4;
+	             MIN2 (th->logw, th->logh) + 5;
 
 	get_texhead_coords (&basex, &basey, th);
 	bank = th->bank;
@@ -314,10 +402,6 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 	VK_ASSERT_NO_GL_ERROR ();
 
-	/* XXX hack to make textures slightly less blurry. */
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, -1);
-	VK_ASSERT_NO_GL_ERROR ();
-
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, num_levels - 1);
 	VK_ASSERT_NO_GL_ERROR ();
 
@@ -337,11 +421,7 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 			glPixelStorei (GL_UNPACK_SKIP_PIXELS, basex);
 			VK_ASSERT_NO_GL_ERROR ();
 	
-			glTexImage2D (GL_TEXTURE_2D, level,
-			              GL_RGB5_A1,
-			              w, h, 0,
-			              GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV,
-			              data);
+			if (upload_abgr16(level, GL_RGB5_A1, w, h, GL_UNSIGNED_SHORT_1_5_5_5_REV, data)) goto fail;
 			VK_ASSERT_NO_GL_ERROR ();
 			break;
 		case HIKARU_FORMAT_ABGR4444:
@@ -350,11 +430,7 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 			glPixelStorei (GL_UNPACK_SKIP_PIXELS, basex);
 			VK_ASSERT_NO_GL_ERROR ();
 	
-			glTexImage2D (GL_TEXTURE_2D, level,
-			              GL_RGBA4,
-			              w, h, 0,
-			              GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4_REV,
-			              data);
+			if (upload_abgr16(level, GL_RGBA4, w, h, GL_UNSIGNED_SHORT_4_4_4_4_REV, data)) goto fail;
 			VK_ASSERT_NO_GL_ERROR ();
 			break;
 		case HIKARU_FORMAT_LA8:
@@ -364,14 +440,16 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 			VK_ASSERT_NO_GL_ERROR ();
 	
 			glTexImage2D (GL_TEXTURE_2D, level,
-			              GL_RGBA8,
+			              GL_RG8,
 			              w, h, 0,
 			              GL_RG, GL_UNSIGNED_BYTE,
 			              data);
 			VK_ASSERT_NO_GL_ERROR ();
 
-			glTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA,
-			                  la8_swizzle);
+			glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
+			glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_RED);
+			glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+			glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_GREEN);
 			VK_ASSERT_NO_GL_ERROR ();
 			break;
 		case HIKARU_FORMAT_ABGR1111:
@@ -383,22 +461,18 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 			glPixelStorei (GL_UNPACK_SKIP_ROWS, 0);
 			glPixelStorei (GL_UNPACK_SKIP_PIXELS, 0);
 
-			glTexImage2D (GL_TEXTURE_2D, level,
-			              GL_RGBA4,
-			              w * 2, h * 2, 0,
-			              GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4_REV,
-			              data);
+			const int uploaded = upload_abgr16(level, GL_RGBA4, w * 2, h * 2, GL_UNSIGNED_SHORT_4_4_4_4_REV, data);
 			VK_ASSERT_NO_GL_ERROR ();
 
 			free (data);
+			if (uploaded) goto fail;
 			break;
 		default:
 			goto fail;
 		}
 
-		w >>= 1;
-		h >>= 1;
-		VK_ASSERT (w && h);
+		w = MAX2 (w >> 1, 1);
+		h = MAX2 (h >> 1, 1);
 
 		basex += (2048 - basex) / 2;
 		basey += (1024 - basey) / 2;
@@ -518,23 +592,24 @@ texture_overlaps_transfer (const hikaru_texhead_t *cached, const hikaru_texhead_
 	get_texhead_coords (&tx0, &ty0, (hikaru_texhead_t *) transfer);
 	uint32_t cw = 16u << cached->logw, ch = 16u << cached->logh;
 	unsigned cb = cached->bank;
-	unsigned levels = MIN2 (cached->logw, cached->logh) + 4;
-	for (unsigned level = 0; level < levels && cw && ch; ++level) {
+	unsigned levels = MIN2 (cached->logw, cached->logh) + 5;
+	for (unsigned level = 0; level < levels; ++level) {
 		uint32_t cstart = cx * 2;
 		uint32_t cend = cstart + (cached->format == HIKARU_FORMAT_ABGR1111 ? ((cw * 2 + 3) & ~3u) : cw * 2);
 		uint32_t tx = tx0, ty = ty0;
 		uint32_t tw = 16u << transfer->logw, th = 16u << transfer->logh;
 		unsigned tb = transfer->bank;
-		while (tw && th) {
+		const unsigned tlevels = MIN2 (transfer->logw, transfer->logh) + 5;
+		for (unsigned tlevel = 0; tlevel < tlevels; ++tlevel) {
 			uint32_t tstart = (tx * 2) & ~3u;
 			uint32_t tend = (tx * 2 + tw * 2 + 3) & ~3u;
 			if (cb == tb && cstart < tend && tstart < cend && cy < ty + th && ty < cy + ch)
 				return true;
 			tx += (2048 - tx) / 2; ty += (1024 - ty) / 2;
-			tw >>= 1; th >>= 1; tb ^= 1;
+			tw = MAX2 (tw >> 1, 1); th = MAX2 (th >> 1, 1); tb ^= 1;
 		}
 		cx += (2048 - cx) / 2; cy += (1024 - cy) / 2;
-		cw >>= 1; ch >>= 1; cb ^= 1;
+		cw = MAX2 (cw >> 1, 1); ch = MAX2 (ch >> 1, 1); cb ^= 1;
 	}
 	return false;
 }
@@ -583,7 +658,6 @@ hikaru_renderer_invalidate_texcache (vk_renderer_t *rend, hikaru_texhead_t *th)
 static const char *mesh_vs_source =
 "#version 150									\n \
 										\n \
-#extension GL_ARB_explicit_attrib_location : require				\n \
 										\n \
 %s										\n \
 										\n \
@@ -591,14 +665,14 @@ uniform mat4 u_projection;							\n \
 uniform mat4 u_modelview; uniform mat4 u_modelview_alternate;							\n \
 uniform mat3 u_normal; uniform mat3 u_normal_alternate;								\n \
 										\n \
-layout(location = 0) in vec3 i_position;					\n \
-layout(location = 1) in vec3 i_normal;						\n \
-layout(location = 2) in vec3 i_diffuse;						\n \
-layout(location = 3) in vec3 i_ambient;						\n \
-layout(location = 4) in vec4 i_specular;					\n \
-layout(location = 5) in vec3 i_unknown;						\n \
-layout(location = 6) in vec2 i_texcoords;					\n \
-layout(location = 7) in float i_alpha; layout(location = 8) in float i_matrix_select;						\n \
+in vec3 i_position;					\n \
+in vec3 i_normal;						\n \
+in vec3 i_diffuse;						\n \
+in vec3 i_ambient;						\n \
+in vec4 i_specular;					\n \
+in vec3 i_unknown;						\n \
+in vec2 i_texcoords;					\n \
+in float i_alpha; in float i_matrix_select;						\n \
 										\n \
 out vec4 p_position;								\n \
 out vec3 p_normal;								\n \
@@ -610,10 +684,25 @@ out vec2 p_texcoords;								\n \
 out float p_alpha;								\n \
 										\n \
 void main (void) {								\n \
-	p_position = (i_matrix_select > 0.5 ? u_modelview_alternate : u_modelview) * vec4 (i_position, 1.0);			\n \
+	int sel = int (i_matrix_select + 0.5);\n \
+	if (sel == 1) p_position = u_modelview_alternate * vec4 (i_position, 1.0);\n \
+	else if (sel == 0) p_position = u_modelview * vec4 (i_position, 1.0);\n \
+	else if ((sel & 1) != 0) {\n \
+		vec3 transformed = ((sel & 64) == 0) ? (mat3 (u_modelview_alternate) * i_position) : i_position;\n \
+		if ((sel & 128) == 0) transformed += u_modelview_alternate[3].xyz;\n \
+		p_position = vec4 (transformed, 1.0);\n \
+	} else {\n \
+		vec3 transformed = ((sel & 64) == 0) ? (mat3 (u_modelview) * i_position) : i_position;\n \
+		if ((sel & 128) == 0) transformed += u_modelview[3].xyz;\n \
+		p_position = vec4 (transformed, 1.0);\n \
+	}			\n \
 	gl_Position = u_projection * p_position;				\n \
 										\n \
-	p_normal = (i_matrix_select > 0.5 ? u_normal_alternate : u_normal) * i_normal;						\n \
+	if (sel == 1) p_normal = u_normal_alternate * i_normal;\n \
+	else if (sel == 0) p_normal = u_normal * i_normal;\n \
+	else if ((sel & 64) != 0) p_normal = i_normal;\n \
+	else if ((sel & 1) != 0) p_normal = u_normal_alternate * i_normal;\n \
+	else p_normal = u_normal * i_normal;						\n \
 										\n \
 	p_diffuse = i_diffuse;							\n \
 	p_ambient = i_ambient;							\n \
@@ -644,6 +733,7 @@ uniform light_t		u_lights[4];						\n \
 uniform vec3		u_ambient;						\n \
 uniform sampler2D	u_texture;						\n \
 uniform vec2		u_fog;							\n \
+uniform float		u_alpha_ref;							\n \
 uniform vec3		u_fog_color;						\n \
 										\n \
 in vec4 p_position;								\n \
@@ -725,7 +815,12 @@ main (void)									\n \
 #if HAS_LIGHTING								\n \
 	vec3 diffuse  = vec3 (0.0);						\n \
 	vec3 specular = vec3 (0.0);						\n \
+#if USE_PRELIT_COLOR\n \
+	/* 0x691 uses captured 8-bit RGB values carried by a UNORM16 attribute. */\n \
+	vec3 ambient = p_unknown * 257.0;\n \
+#else\n \
 	vec3 ambient  = u_ambient * p_ambient;					\n \
+#endif\n \
 										\n \
 #if HAS_LIGHT0									\n \
 	apply_light (diffuse, specular, u_lights[0], LIGHT0_TYPE, LIGHT0_ATT_TYPE, HAS_LIGHT0_SPECULAR);		\n \
@@ -754,7 +849,7 @@ main (void)									\n \
 #else										\n \
 	vk_frag_color = color;							\n \
 #endif										\n \
-	if (vk_frag_color.a == 0.0) discard;\n \
+	if (vk_frag_color.a <= u_alpha_ref) discard;\n \
 }";
 
 static hikaru_light_att_t
@@ -821,6 +916,15 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	 * texture environment modes are implemented; Air Trix's HUD uses it. */
 	variant.use_unlit_diffuse = mat->shading_mode == 0 &&
 	                           !mat->has_texture && !mat->has_alpha;
+
+	/* Captured Brave Firefighters heads have zero diffuse/ambient colors
+	 * and use the 0x691 RGB channel as prelit texture modulation. Restrict
+	 * this compatibility interpretation to that material case; other 0x691
+	 * uses remain unresolved. Ordinary lit and unlit materials keep their paths. */
+	variant.use_prelit_color = variant.has_lighting && variant.has_texture && mat->has_691 &&
+	                          mat->unknown[0] <= 255 && mat->unknown[1] <= 255 && mat->unknown[2] <= 255 &&
+	                          !(mat->diffuse[0] | mat->diffuse[1] | mat->diffuse[2] |
+	                            mat->ambient[0] | mat->ambient[1] | mat->ambient[2]);
 
 	variant.has_fog		= mat->depth_blend == 0 &&
 	                          hr->debug.flags[HR_DEBUG_FOG];
@@ -915,7 +1019,8 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	"#define LIGHT3_ATT_TYPE %d\n"
 	"#define HAS_LIGHT3_SPECULAR %d\n"
 	"#define HAS_FOG %d\n"
-	"#define USE_UNLIT_DIFFUSE %d\n";
+	"#define USE_UNLIT_DIFFUSE %d\n"
+	"#define USE_PRELIT_COLOR %d\n";
 
 	hikaru_glsl_variant_t variant;
 	char *definitions, *vs_source, *fs_source;
@@ -944,7 +1049,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 
 	VK_LOG ("compiling shader for variant %" PRIX64 "", variant.full);
 
-	ret = asprintf (&definitions, definitions_template,
+	ret = vk_asprintf (&definitions, definitions_template,
 	                variant.has_texture,
 	                variant.has_lighting,
 	                variant.has_two_sided_lighting,
@@ -966,13 +1071,14 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	                variant.light3_att_type,
 	                variant.has_light3_specular,
 	                variant.has_fog,
-	                variant.use_unlit_diffuse);
+	                variant.use_unlit_diffuse,
+	                variant.use_prelit_color);
 	if (ret < 0) VK_ABORT("out of memory building shader definitions");
 
-	ret = asprintf (&vs_source, mesh_vs_source, definitions);
+	ret = vk_asprintf (&vs_source, mesh_vs_source, definitions);
 	if (ret < 0) { free(definitions); VK_ABORT("out of memory building vertex shader"); }
 
-	ret = asprintf (&fs_source, mesh_fs_source, definitions);
+	ret = vk_asprintf (&fs_source, mesh_fs_source, definitions);
 	if (ret < 0) { free(vs_source); free(definitions); VK_ABORT("out of memory building fragment shader"); }
 
 	hr->meshes.variant = variant;
@@ -1042,6 +1148,8 @@ update_locations:
 		GET_MESH_UNIFORM (hr->meshes.program, "u_fog");
 	hr->meshes.locs.u_fog_color =
 		GET_MESH_UNIFORM (hr->meshes.program, "u_fog_color");
+	hr->meshes.locs.u_alpha_ref =
+		GET_MESH_UNIFORM (hr->meshes.program, "u_alpha_ref");
 	VK_ASSERT_NO_GL_ERROR ();
 	program_cache[slot].locs = hr->meshes.locs;
 }
@@ -1068,23 +1176,23 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	upload_glsl_program (hr, &mesh);
 	const GLuint first_program = hr->meshes.program;
 	const hikaru_uniform_locations_t first = hr->meshes.locs;
-	int ok = uniform_location_queries == 37 && first.u_texture == (GLuint)-1;
+	int ok = uniform_location_queries == 38 && first.u_texture == (GLuint)-1;
 	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh);
 	const GLuint second_program = hr->meshes.program;
 	const hikaru_uniform_locations_t second = hr->meshes.locs;
-	ok &= second_program != first_program && uniform_location_queries == 74;
+	ok &= second_program != first_program && uniform_location_queries == 76;
 	ok &= second.u_texture == (GLuint)glGetUniformLocation (second_program, "u_texture");
 	material.has_texture = 0;
 	upload_glsl_program (hr, &mesh);
 	glGetIntegerv (GL_CURRENT_PROGRAM, &current_program);
 	ok &= hr->meshes.program == first_program && current_program == (GLint)first_program;
 	ok &= !memcmp (&hr->meshes.locs, &first, sizeof(first));
-	ok &= uniform_location_queries == 74;
+	ok &= uniform_location_queries == 76;
 	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh);
 	ok &= hr->meshes.program == second_program && !memcmp (&hr->meshes.locs, &second, sizeof(second));
-	ok &= uniform_location_queries == 74;
+	ok &= uniform_location_queries == 76;
 	/* Fill the unused entries without compiling hundreds of shaders, then
 	 * exercise the real full-cache replacement and subsequent cache hit. */
 	for (unsigned i = 2; i < MAX_PROGRAMS; ++i)
@@ -1093,13 +1201,13 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	hr->debug.flags[HR_DEBUG_FOG] = 1;
 	upload_glsl_program (hr, &mesh);
 	const GLuint third_program = hr->meshes.program;
-	ok &= uniform_location_queries == 111 && !glIsProgram (first_program);
+	ok &= uniform_location_queries == 114 && !glIsProgram (first_program);
 	hr->debug.flags[HR_DEBUG_FOG] = 0;
 	upload_glsl_program (hr, &mesh);
-	ok &= hr->meshes.program == second_program && uniform_location_queries == 111;
+	ok &= hr->meshes.program == second_program && uniform_location_queries == 114;
 	material.has_texture = 0;
 	upload_glsl_program (hr, &mesh);
-	ok &= uniform_location_queries == 148 && !glIsProgram (third_program);
+	ok &= uniform_location_queries == 152 && !glIsProgram (third_program);
 	ok &= hr->meshes.locs.u_texture == (GLuint)-1 && glGetError() == GL_NO_ERROR;
 	glUseProgram ((GLuint)previous_program);
 	for (unsigned i = 0; i < num_programs; ++i)
@@ -1211,6 +1319,7 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		fog_color[2] = vp->depth.mask[2] * INV255;
 		glUniform3fv (hr->meshes.locs.u_fog_color, 1, fog_color);
 	}
+	glUniform1f (hr->meshes.locs.u_alpha_ref, hr->pass_alpha_ref);
 }
 
 static void
@@ -1287,6 +1396,22 @@ upload_material_texhead (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		VK_ASSERT_NO_GL_ERROR ();
 	}
 
+	if (tex) {
+		/* The sampling belongs to the texhead, not to the texels: set the
+		 * filter and LOD bias of the 0C1 on every bind (Odin
+		 * renderer_textures.cpp sampler). */
+		hikaru_texhead_t *wanted = &hr->tex_list[mesh->tex_index];
+		const unsigned filter = (wanted->_0C1 >> 16) & 3;
+		const float bias = -0.5f + (float) (int8_t) ((wanted->_0C1 >> 20) & 0xFF) * 0.125f;
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+		                 filter == 0 ? GL_NEAREST : GL_LINEAR);
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+		                 filter == 0 ? GL_NEAREST :
+		                 filter == 2 ? GL_LINEAR : GL_LINEAR_MIPMAP_LINEAR);
+		glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, bias);
+		VK_ASSERT_NO_GL_ERROR ();
+	}
+
 	glUniform1i (hr->meshes.locs.u_texture, 0);
 	VK_ASSERT_NO_GL_ERROR ();
 }
@@ -1328,8 +1453,12 @@ get_light_specular (hikaru_renderer_t *hr, hikaru_light_t *lit, float *out)
 		 * colors. */
 		if (lit->specular[0] == 0.0f &&
 		    lit->specular[1] == 0.0f &&
-		    lit->specular[0] == 0.0f)
-			VK_ERROR ("light with specular enabled but no specular color!");
+		    lit->specular[2] == 0.0f) {
+			/* This state is common in Planet Harriers; warn once instead
+			 * of flooding stderr on every affected draw. */
+			static bool warned = false;
+			if (!warned) { warned = true; VK_ERROR ("light with specular enabled but no specular color!"); }
+		}
 
 		out[0] = lit->specular[0] * INV255;
 		out[1] = lit->specular[1] * INV255;
@@ -1501,10 +1630,19 @@ copy_texcoords (hikaru_renderer_t *hr,
 		h *= 2;
 	}
 
-	/* The effect and units of 0D1 are unresolved. Keep its decoded state for
-	 * investigation, but do not apply an unverified translation to vertex UVs. */
-	dst->body.texcoords[0] = src->body.texcoords[0] / w;
-	dst->body.texcoords[1] = src->body.texcoords[1] / h;
+	/* Vertex UVs are 12.4 unless the texhead says whole texels (2C1
+	 * bit 14); the 0D1 offset the vertex selects (header bits 18-19) is
+	 * added in 1/16 of a texel (Odin antarctic_mesh.cpp copy_texcoords). */
+	const float k = ((th->_2C1 >> 14) & 1) ? 16.0f : 1.0f;
+	float u = src->body.texcoords[0] * k;
+	float v = src->body.texcoords[1] * k;
+	const unsigned uvsel = (src->info.full >> 18) & 3;
+	if (uvsel) {
+		u += gpu->texoffset[uvsel][0] * (1.0f / 16.0f);
+		v += gpu->texoffset[uvsel][1] * (1.0f / 16.0f);
+	}
+	dst->body.texcoords[0] = u / w;
+	dst->body.texcoords[1] = v / h;
 }
 
 static void
@@ -1530,6 +1668,10 @@ add_triangle (hikaru_renderer_t *hr)
 			dst[3] = hr->push.tmp[0].body;
 			dst[4] = hr->push.tmp[1].body;
 			dst[5] = hr->push.tmp[2].body;
+			/* The back face is lit with the reversed normals. */
+			for (unsigned back = 3; back < 6; ++back)
+				for (unsigned axis = 0; axis < 3; ++axis)
+					dst[back].normal[axis] = -dst[back].normal[axis];
 			hr->push.num_tris += 1;
 		} else if (hr->push.tmp[2].info.winding) {
 			dst[0] = hr->push.tmp[0].body;
@@ -1590,7 +1732,12 @@ hikaru_renderer_push_vertices (vk_renderer_t *rend,
 			/* Set the position, colors and alpha. */
 			VK_COPY_VEC3F (hr->push.tmp[2].body.position, v->body.position);
 			copy_colors (hr, &hr->push.tmp[2], v);
-			hr->push.tmp[2].body.matrix_select = v->info.unknown1;
+			/* 1: second modelview, +64 without its 3x3, +128 without
+			 * its last row (header bits 12, 13, 14). */
+			hr->push.tmp[2].body.matrix_select =
+			    (uint8_t) ((v->info.unknown1 ? 1 : 0) +
+			               (((v->info.full >> 13) & 1) ? 0 : 64) +
+			               (((v->info.full >> 14) & 1) ? 0 : 128));
 
 			/* Account for the added vertex. */
 			hr->push.num_verts += 1;
@@ -1644,14 +1791,45 @@ int hikaru_vendor_test_uv_packets(uint32_t offset_opcode, uint32_t offset_payloa
     /* 0E8 updates the previous three positions; no triangle is capped. */
     hr->push.num_verts = 3;
     TEX.scratch._2C1 = texhead;
+    TEX.table[0]._2C1 = texhead;
     const uint32_t offset[8] = {offset_opcode, offset_payload};
     if (!hikaru_vendor_test_uv_dispatch(gpu, offset) ||
         !hikaru_vendor_test_uv_dispatch(gpu, packet)) goto cleanup;
-    decoded[0] = gpu->texoffset_x;
-    decoded[1] = gpu->texoffset_y;
+    decoded[0] = (uint16_t) gpu->texoffset[(offset[0] >> 16) & 3][0];
+    decoded[1] = (uint16_t) gpu->texoffset[(offset[0] >> 16) & 3][1];
     const unsigned count = (packet[0] & 0x1ff) == 0x0e8 ? 3 : 1;
     for (unsigned i = 0; i < count; ++i)
         memcpy(uv[i], hr->push.tmp[2-i].body.texcoords, sizeof(uv[i]));
+    ok = 1;
+cleanup:
+    free(gpu);
+    free(hr);
+    return ok;
+}
+
+/* A 0E8 packet names a texhead (top bits, from the base): the three
+ * vertices go on under that texhead in a new mesh (Odin
+ * antarctic_ops.cpp op_push_texcoords3). */
+int hikaru_vendor_test_texhead3_switch(uint32_t texhead_a, uint32_t texhead_b,
+                                       const uint32_t packet[8], float uv[3][2],
+                                       uint32_t *scratch_after)
+{
+    hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+    hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+    int ok = 0;
+    if (!hr || !gpu) goto cleanup;
+    hr->gpu = gpu;
+    gpu->renderer = &hr->base;
+    hr->debug.flags[HR_DEBUG_SELECT_VIEWPORT] = -1;
+    hr->push.num_verts = 3;
+    TEX.base = 0;
+    TEX.scratch._2C1 = texhead_a;
+    TEX.table[0]._2C1 = texhead_a;
+    TEX.table[1]._2C1 = texhead_b;
+    if (!hikaru_vendor_test_uv_dispatch(gpu, packet)) goto cleanup;
+    for (unsigned i = 0; i < 3; ++i)
+        memcpy(uv[i], hr->push.tmp[2-i].body.texcoords, sizeof(uv[i]));
+    *scratch_after = TEX.scratch._2C1;
     ok = 1;
 cleanup:
     free(gpu);
@@ -1668,13 +1846,18 @@ int hikaru_vendor_test_vertex_matrix_selector(void)
 	hr->debug.flags[HR_DEBUG_SELECT_VIEWPORT] = -1;
 	hikaru_vertex_t vertex = {0};
 	vertex.info.unknown1 = 1;
+	vertex.info.unknown2 = 3;
 	hikaru_renderer_push_vertices (&hr->base, &vertex, HR_PUSH_POS, 1);
 	bool selected = hr->push.tmp[2].body.matrix_select == 1;
 	vertex.info.unknown1 = 0;
 	hikaru_renderer_push_vertices (&hr->base, &vertex, HR_PUSH_TXC, 1);
 	bool retained = hr->push.tmp[2].body.matrix_select == 1;
+	/* No 3x3 and no last row: eye-space vertices keep both flags. */
+	vertex.info.unknown2 = 0;
+	hikaru_renderer_push_vertices (&hr->base, &vertex, HR_PUSH_POS, 1);
+	bool eye_space = hr->push.tmp[2].body.matrix_select == 192;
 	free (gpu); free (hr);
-	return selected && retained;
+	return selected && retained && eye_space;
 }
 #endif
 
@@ -1751,11 +1934,27 @@ update_and_set_rendstate (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		hr->num_instances = MV.total;
 
 		for (i = 0; i < MV.total; i++, hr->num_mvs++) {
+			/* Geometry goes through the local matrix first, where one
+			 * was completed (see the 161 handler in hikaru-gpu-cp.c). */
 			LOG ("RENDSTATE adding mv %u/%u [#instances=%u]",
 			     hr->num_mvs, hr->capacity_mvs, MV.total);
 	
 			hr->mv_list = reserve_frame_states(hr->mv_list, &hr->capacity_mvs, hr->num_mvs + 1, sizeof(*hr->mv_list));
 			hr->mv_list[hr->num_mvs] = MV.table[i];
+			if (MV.has_local) {
+				hikaru_modelview_t composed;
+				const hikaru_modelview_t *m = &MV.table[i], *l = &MV.local;
+				unsigned ci, cj;
+				for (ci = 0; ci < 4; ci++) {
+					for (cj = 0; cj < 3; cj++)
+						composed.mtx[ci][cj] = m->mtx[0][cj] * l->mtx[ci][0] +
+						                       m->mtx[1][cj] * l->mtx[ci][1] +
+						                       m->mtx[2][cj] * l->mtx[ci][2] +
+						                       ((ci == 3) ? m->mtx[3][cj] : 0.0f);
+					composed.mtx[ci][3] = (ci == 3) ? 1.0f : 0.0f;
+				}
+				hr->mv_list[hr->num_mvs] = composed;
+			}
 		}
 
 		MV.total = 0;
@@ -1764,6 +1963,12 @@ update_and_set_rendstate (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 
 	mesh->depth_bias = gpu->depth_bias;
 	mesh->alternate_mv_index = ~0u;
+	/* A second modelview completed after the primary also applies. */
+	if (MV.alternate_pending) {
+		MV.alternate = MV.pending_alternate;
+		MV.has_alternate = true;
+		MV.alternate_pending = false;
+	}
 	if (MV.has_alternate) {
 		hr->alternate_mv_list = reserve_frame_states(hr->alternate_mv_list, &hr->capacity_alternate_mvs, hr->num_alternate_mvs + 1, sizeof(*hr->alternate_mv_list));
 		mesh->alternate_mv_index = hr->num_alternate_mvs;
@@ -1893,7 +2098,8 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, GLuint *bound_vao,
 static int test_material_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
                                              const uint8_t ambient[3],
-                                             const uint8_t texel[4], uint8_t pixel[4], float *depth_pixel, unsigned options)
+                                             const uint8_t texel[4], uint8_t pixel[4], float *depth_pixel, unsigned options,
+                                             const uint16_t prelit[3], bool has_prelit)
 {
     hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
     hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
@@ -1906,6 +2112,10 @@ static int test_material_pixels(uint32_t flags,
     material->_881 = flags;
     memcpy(material->diffuse, diffuse, 3);
     memcpy(material->ambient, ambient, 3);
+    if (prelit) {
+        memcpy(material->unknown, prelit, sizeof(material->unknown));
+        material->has_691 = has_prelit;
+    }
     POLY.type = HIKARU_POLYTYPE_OPAQUE;
     POLY.alpha = 1.0f;
     hikaru_lightset_t lights = {0};
@@ -1913,10 +2123,12 @@ static int test_material_pixels(uint32_t flags,
     if (options & 2u) {
         lights.mask = 0xe;
         for (unsigned i = 0; i < 4; ++i) lights.lights[i].has_direction = 1;
-        lights.lights[0].has_specular = 1;
         lights.lights[0].attenuation[0] = lights.lights[0].attenuation[1] = 1;
-        material->specular[0] = material->specular[1] = material->specular[2] = 255;
-        material->specular[3] = 1;
+        if (!prelit) {
+            lights.lights[0].has_specular = 1;
+            material->specular[0] = material->specular[1] = material->specular[2] = 255;
+            material->specular[3] = 1;
+        }
     }
     hikaru_mesh_t mesh = {0};
     hr->mat_list = material; hr->num_mats = 1;
@@ -1991,7 +2203,7 @@ static int test_material_pixels(uint32_t flags,
     glClearColor(1, 0, 1, 1);
     if (depth_pixel) {
         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); glDepthMask(GL_TRUE);
-        glDepthRange(0, 1); glClearDepth(1);
+        vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(1);
     }
     glClear(GL_COLOR_BUFFER_BIT | (depth_pixel ? GL_DEPTH_BUFFER_BIT : 0));
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -2025,19 +2237,25 @@ cleanup:
     free(gpu); free(hr);
     return ok;
 }
+int hikaru_vendor_test_prelit_material_pixels(uint32_t flags, const uint16_t prelit[3],
+                                             bool has_prelit, const uint8_t diffuse[3],
+                                             const uint8_t ambient[3], const uint8_t texel[4], uint8_t pixel[4])
+{
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, NULL, 2u, prelit, has_prelit);
+}
 int hikaru_vendor_test_unlit_material_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
                                              const uint8_t ambient[3],
                                              const uint8_t texel[4], uint8_t pixel[4])
 {
-    return test_material_pixels(flags, diffuse, ambient, texel, pixel, NULL, 0);
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, NULL, 0, NULL, false);
 }
 int hikaru_vendor_test_material_depth_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
                                              const uint8_t ambient[3],
                                              const uint8_t texel[4], uint8_t pixel[4], float *depth)
 {
-    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, 0);
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, 0, NULL, false);
 }
 int hikaru_vendor_test_material_fog_depth_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
@@ -2045,7 +2263,7 @@ int hikaru_vendor_test_material_fog_depth_pixels(uint32_t flags,
                                              const uint8_t texel[4], uint8_t pixel[4], float *depth,
                                              unsigned options)
 {
-    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, options);
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, options, NULL, false);
 }
 #endif
 
@@ -2125,8 +2343,13 @@ hikaru_renderer_begin_mesh (vk_renderer_t *rend, uint32_t addr,
 	update_and_set_rendstate (hr, mesh);
 	mesh->addr[0] = addr;
 
-	/* Clear the push buffer. */
-	hr->push.num_verts = 0;
+	/* The last vertices stay and take the new state: a strip goes on
+	 * through a recall (Odin antarctic_mesh.cpp, from the BOOTROM
+	 * colour bars). Dropping them tore segmented character strips. */
+	if (hr->push.num_verts > 3)
+		hr->push.num_verts = 3;
+	for (unsigned kept = 0; kept < hr->push.num_verts; ++kept)
+		copy_colors (hr, &hr->push.tmp[kept], &hr->push.tmp[kept]);
 	hr->push.num_tris = 0;
 }
 
@@ -2168,24 +2391,35 @@ draw_meshes_for_polytype (hikaru_renderer_t *hr, unsigned vpi, int polytype)
 
 	LOG (" ==== DRAWING VP %u, POLYTYPE %d ====", vpi, polytype);
 
+	/* Pass rules of the X360 port (Odin hikaru_draw.hpp pass_rules):
+	 * punch-through writes depth with an 0.5 alpha test and no blending;
+	 * translucent and background blend and keep the depth. */
 	switch (polytype) {
 	case HIKARU_POLYTYPE_TRANSPARENT:
+		glDisable (GL_BLEND);
+		glDepthMask (GL_TRUE);
+		glEnable (GL_POLYGON_OFFSET_FILL);
+		hr->pass_alpha_ref = 0.5f;
+		break;
 	case HIKARU_POLYTYPE_TRANSLUCENT:
 		glEnable (GL_BLEND);
 		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glDepthMask (GL_FALSE);
 		glEnable (GL_POLYGON_OFFSET_FILL);
+		hr->pass_alpha_ref = 1.0f / 255.0f;
 		break;
 	case HIKARU_POLYTYPE_BACKGROUND:
 		glEnable (GL_BLEND);
 		glBlendFunc (GL_SRC_COLOR, GL_ONE_MINUS_SRC_COLOR);
 		glDepthMask (GL_FALSE);
 		glDisable (GL_POLYGON_OFFSET_FILL);
+		hr->pass_alpha_ref = 1.0f / 255.0f;
 		break;
 	default:
 		glDisable (GL_BLEND);
 		glDepthMask (GL_TRUE);
 		glDisable (GL_POLYGON_OFFSET_FILL);
+		hr->pass_alpha_ref = 0.0f;
 		break;
 	}
 	
@@ -2222,11 +2456,11 @@ draw_scene (hikaru_renderer_t *hr)
 {
 	static const int sorted_polytypes[] = {
 		HIKARU_POLYTYPE_BACKGROUND,
+		HIKARU_POLYTYPE_TRANSPARENT,
+		HIKARU_POLYTYPE_OPAQUE,
 		HIKARU_POLYTYPE_SHADOW_A,
 		HIKARU_POLYTYPE_SHADOW_B,
-		HIKARU_POLYTYPE_OPAQUE,
 		HIKARU_POLYTYPE_TRANSLUCENT,
-		HIKARU_POLYTYPE_TRANSPARENT,
 	};
 	hikaru_gpu_t *gpu = hr->gpu;
 	unsigned vpi, i;
@@ -2364,10 +2598,12 @@ build_3d_state (hikaru_renderer_t *hr)
  Framebuffers
 ****************************************************************************/
 
-static const struct {
+typedef struct {
        vec3f_t position;
        vec2f_t texcoords;
-} fb_vbo_data[] = {
+} framebuffer_vertex_t;
+
+static const framebuffer_vertex_t fb_vbo_data[] = {
        { { 1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f } },
        { { 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f } },
        { { 1.0f, 1.0f, 0.0f }, { 1.0f, 0.0f } },
@@ -2377,22 +2613,21 @@ static const struct {
 static const char *fb_vs_source =
 "#version 150									\n"
 "										\n"
-"#extension GL_ARB_explicit_attrib_location : require				\n"
 "										\n"
-"uniform mat4 u_projection =							\n"
+"const mat4 u_projection =							\n"
 "	mat4 (vec4 ( 2.0,  0.0,  0.0,  0.0),					\n"
 "	      vec4 ( 0.0, -2.0,  0.0,  0.0),					\n"
 "	      vec4 ( 0.0,  0.0, -1.0,  0.0),					\n"
 "	      vec4 (-1.0,  1.0,  0.0,  1.0));					\n"
 "										\n"
-"layout(location = 0) in vec3 i_position;					\n"
-"layout(location = 1) in vec2 i_texcoords;					\n"
+"in vec3 i_position;					\n"
+"in vec2 i_fb_texcoords;					\n"
 "										\n"
 "out vec2 p_texcoords;								\n"
 "										\n"
 "void main (void) {								\n"
 "	gl_Position = u_projection * vec4 (i_position, 1.0);			\n"
-"	p_texcoords = i_texcoords;						\n"
+"	p_texcoords = i_fb_texcoords;						\n"
 "}										\n";
 
 static const char *fb_fs_source =
@@ -2402,22 +2637,22 @@ static const char *fb_fs_source =
 "uniform sampler2D u_back;							\n"
 "uniform sampler2D u_layer1;							\n"
 "uniform sampler2D u_layer2;							\n"
-"uniform float u_factor = 0.0;							\n"
-"uniform float u_mult_f = 1.0;							\n"
-"uniform float u_mult_b = 1.0;							\n"
-"uniform float u_mult_1 = 1.0;							\n"
-"uniform int u_direct_1 = 1;\n"
-"uniform int u_direct_2 = 1;\n"
-"uniform int u_cover_1 = 0;							\n"
-"uniform int u_cover_2 = 0;							\n"
-"uniform float u_mult_2 = 1.0;							\n"
-"uniform int u_invert_f = 0;							\n"
-"uniform int u_invert_b = 0;							\n"
+"uniform float u_factor;							\n"
+"uniform float u_mult_f;							\n"
+"uniform float u_mult_b;							\n"
+"uniform float u_mult_1;							\n"
+"uniform int u_direct_1;\n"
+"uniform int u_direct_2;\n"
+"uniform int u_keyed_1;							\n"
+"uniform int u_keyed_2;							\n"
+"uniform float u_mult_2;							\n"
+"uniform int u_invert_f;							\n"
+"uniform int u_invert_b;							\n"
 "										\n"
 "in vec2 p_texcoords;								\n"
 "										\n"
 "void main (void) {								\n"
-"	vec2 p_texcoords_inv = vec2 (p_texcoords.s, 1 - p_texcoords.t);		\n"
+"	vec2 p_texcoords_inv = vec2 (p_texcoords.s, 1.0 - p_texcoords.t);		\n"
 "	vec4 texel_f, texel_b;							\n"
 "										\n"
 "	if (u_invert_f == 0)							\n"
@@ -2435,30 +2670,31 @@ static const char *fb_fs_source =
 "	vec4 texel_1 = texture (u_layer1, p_texcoords_inv);			\n"
 "	vec4 texel_2 = texture (u_layer2, p_texcoords_inv);			\n"
 "										\n"
-/* Air Trix's combined bitmap mode places its title background (layer 1)
- * behind its prompt/credits plane (layer 0), then the alpha-bearing 3D scene.
- * This order is inferred from captured bitmap contents and guest mode changes.
- * Keep the existing direct-mode order and legacy additive 10-bit behavior;
- * 1BC control and other games' overlap priority remain unverified. */
+/* Bitmap alpha is a coverage key, including the value 1 in Planet Harriers'
+ * two-bit alpha. Adding 10-bit pixels lets the 3D show through solid HUD art.
+ * Follow Odin compose.frag: layer 1 covers layer 2 on either side of the 3D;
+ * unit 38 chooses that side and unit 3C enables each layer's alpha key. */
 "\tvec4 scene = mix (texel_f, texel_b, u_factor);\n"
 "\tvec4 color = vec4 (0.0);\n"
+"\tfloat cover_1 = u_keyed_1 != 0 ? step (0.1, texel_1.a) : 1.0;\n"
+"\tfloat cover_2 = u_keyed_2 != 0 ? step (0.1, texel_2.a) : 1.0;\n"
 "\tbool combined = (u_mult_1 != 0.0 && u_direct_1 == 0) || (u_mult_2 != 0.0 && u_direct_2 == 0);\n"
 "\tif (u_mult_2 != 0.0 && u_direct_2 == 0)\n"
-"\t\tcolor = u_cover_2 != 0 ? mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), texel_2.a) : color + texel_2 * u_mult_2;\n"
+"\t\tcolor = mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), cover_2);\n"
 "\tif (u_mult_1 != 0.0 && u_direct_1 == 0)\n"
-"\t\tcolor = u_cover_1 != 0 ? mix (color, vec4 (texel_1.rgb * u_mult_1, 1.0), texel_1.a) : color + texel_1 * u_mult_1;\n"
+"\t\tcolor = mix (color, vec4 (texel_1.rgb * u_mult_1, 1.0), cover_1);\n"
 "\tcolor = combined ? mix (color, vec4 (scene.rgb, 1.0), scene.a) : scene;\n"
-"\tif (u_mult_1 != 0.0 && u_direct_1 != 0)\n"
-"\t\tcolor = u_cover_1 != 0 ? mix (color, vec4 (texel_1.rgb * u_mult_1, 1.0), texel_1.a) : color + texel_1 * u_mult_1;\n"
 "\tif (u_mult_2 != 0.0 && u_direct_2 != 0)\n"
-"\t\tcolor = u_cover_2 != 0 ? mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), texel_2.a) : color + texel_2 * u_mult_2;\n"
+"\t\tcolor = mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), cover_2);\n"
+"\tif (u_mult_1 != 0.0 && u_direct_1 != 0)\n"
+"\t\tcolor = mix (color, vec4 (texel_1.rgb * u_mult_1, 1.0), cover_1);\n"
 "	vk_frag_color = color;							\n"
 "}\n";
 
 #define NUM_FRAMEBUFFERS 2
 
 #define OFFSET(member_) \
-	((const GLvoid *) offsetof (typeof (fb_vbo_data[0]), member_))
+	((const GLvoid *) offsetof (framebuffer_vertex_t, member_))
 
 static int
 build_fb_state (hikaru_renderer_t *hr)
@@ -2492,10 +2728,10 @@ build_fb_state (hikaru_renderer_t *hr)
 		get_uniform_loc (hr->framebuffer.program, "u_mult_2");
     hr->framebuffer.locs.u_direct_1 = get_uniform_loc(hr->framebuffer.program, "u_direct_1");
     hr->framebuffer.locs.u_direct_2 = get_uniform_loc(hr->framebuffer.program, "u_direct_2");
-	hr->framebuffer.locs.u_cover_1 =
-		get_uniform_loc (hr->framebuffer.program, "u_cover_1");
-	hr->framebuffer.locs.u_cover_2 =
-		get_uniform_loc (hr->framebuffer.program, "u_cover_2");
+	hr->framebuffer.locs.u_keyed_1 =
+		get_uniform_loc (hr->framebuffer.program, "u_keyed_1");
+	hr->framebuffer.locs.u_keyed_2 =
+		get_uniform_loc (hr->framebuffer.program, "u_keyed_2");
 	hr->framebuffer.locs.u_invert_f =
 		get_uniform_loc (hr->framebuffer.program, "u_invert_f");
 	hr->framebuffer.locs.u_invert_b =
@@ -2536,7 +2772,7 @@ build_fb_state (hikaru_renderer_t *hr)
 
 		/* Create and attach a renderbuffer as depth buffer. */
 		glBindRenderbuffer (GL_RENDERBUFFER, hr->framebuffer.db[i]);
-		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT, 640, 480);
+		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 640, 480);
 		VK_ASSERT_NO_GL_ERROR ();
 
 		glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
@@ -2643,13 +2879,10 @@ upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, GLuint *id, float *m
 		}
 		glPixelStorei (GL_UNPACK_ROW_LENGTH, 640);
 
-		glTexImage2D (GL_TEXTURE_2D, 0,
-		              GL_RGB5_A1,
-		              640, 480, 0,
-		              GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV,
-		              staging);
+		const int uploaded = upload_abgr16(0, GL_RGB5_A1, 640, 480, GL_UNSIGNED_SHORT_1_5_5_5_REV, staging);
 		free (staging);
 		staging = NULL;
+		if (uploaded) VK_ABORT("could not upload Hikaru layer pixels");
 
 		*mult = 1.0f;
 		break;
@@ -2683,13 +2916,13 @@ resize_3d_targets (hikaru_renderer_t *hr)
 	glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	glDepthMask (GL_TRUE);
 	glClearColor (0, 0, 0, 0);
-	glClearDepth (1.0);
+	vk_renderer_clear_depth (1.0);
 	for (unsigned i = 0; i < NUM_FRAMEBUFFERS; ++i) {
 		glBindFramebuffer (GL_FRAMEBUFFER, hr->framebuffer.fb[i]);
 		glBindTexture (GL_TEXTURE_2D, hr->framebuffer.cb[i]);
 		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		glBindRenderbuffer (GL_RENDERBUFFER, hr->framebuffer.db[i]);
-		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height);
+		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
 		if (glGetError () != GL_NO_ERROR || glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 			VK_ABORT ("Cannot allocate Hikaru 3D render targets at %ux%u", width, height);
 		/* Either target may be sampled before it is next drawn. */
@@ -2743,12 +2976,8 @@ composite_framebuffers (hikaru_renderer_t *hr, GLuint n1, GLuint n2,
 	            layer2 && f != layer2 && b != layer2 ? mult2 : 0.0f);
     glUniform1i(hr->framebuffer.locs.u_direct_1, !!(direct & 1));
     glUniform1i(hr->framebuffer.locs.u_direct_2, !!(direct & 2));
-	glUniform1i(hr->framebuffer.locs.u_cover_1,
-	            layer1 && f != layer1 && b != layer1 &&
-	            hr->gpu->state.layers.layer[0][0].format == HIKARU_FORMAT_ABGR1555);
-	glUniform1i(hr->framebuffer.locs.u_cover_2,
-	            layer2 && f != layer2 && b != layer2 &&
-	            hr->gpu->state.layers.layer[0][1].format == HIKARU_FORMAT_ABGR1555);
+	glUniform1i(hr->framebuffer.locs.u_keyed_1, !!(REG1AUNIT(0, 0x3C) & 2));
+	glUniform1i(hr->framebuffer.locs.u_keyed_2, !!(REG1AUNIT(0, 0x3C) & 4));
 	glUniform1i(hr->framebuffer.locs.u_invert_f, n1 >= 2);
 	glUniform1i(hr->framebuffer.locs.u_invert_b, n2 >= 2);
 	VK_ASSERT_NO_GL_ERROR ();
@@ -2795,7 +3024,17 @@ draw (hikaru_renderer_t *hr)
 	glBindFramebuffer (GL_FRAMEBUFFER, hr->framebuffer.fb[n1 < 2 ? n1 : 0]);
 	VK_ASSERT_NO_GL_ERROR ();
 
-	draw_scene (hr);
+	/* A frame with no new meshes keeps the last completed scene, as the
+	 * board's displayed buffer does; clearing here turned the 3D
+	 * background black on alternate frames while the 2D layers stayed. */
+	{
+		unsigned meshes = 0;
+		for (unsigned vp = 0; vp < 8; ++vp)
+			for (unsigned type = 0; type < 8; ++type)
+				meshes += hr->num_meshes[vp][type];
+		if (meshes)
+			draw_scene (hr);
+	}
 	VK_ASSERT_NO_GL_ERROR ();
 
 	glBindFramebuffer (GL_FRAMEBUFFER, hr->base.target_fbo);
@@ -2928,9 +3167,10 @@ int hikaru_vendor_test_frame_state_growth(vk_renderer_t *renderer)
 {
     hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
     hikaru_gpu_t *gpu = hr->gpu;
-    typeof(gpu->state) *saved = malloc(sizeof(*saved));
+    /* Anonymous GPU state has no C11 type name; copy its bytes. */
+    void *saved = malloc(sizeof(gpu->state));
     if (!saved) return 0;
-    *saved = gpu->state;
+    memcpy(saved, &gpu->state, sizeof(gpu->state));
     hikaru_renderer_begin_frame(renderer);
     VP0.depth.func = 0;
     POLY.type = HIKARU_POLYTYPE_OPAQUE;
@@ -2969,7 +3209,7 @@ int hikaru_vendor_test_frame_state_growth(vk_renderer_t *renderer)
     hikaru_mesh_t *first = &hr->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
     ok = ok && first->vp_index == 0 && hr->vp_list[0].clip.r == 73.0f;
     hikaru_renderer_begin_frame(renderer);
-    gpu->state = *saved;
+    memcpy(&gpu->state, saved, sizeof(gpu->state));
     free(saved);
     return ok;
 }
@@ -3010,13 +3250,14 @@ hikaru_renderer_reset (vk_renderer_t *renderer)
  * program. `back` selects front (0), back (1), direct layer 1 (2),
  * direct layer 2 (3), or both direct layers (4, with scene as layer 2).
  * Multiplier and factor are explicit to exercise format scaling and blending. */
-int hikaru_vendor_test_layer_pixels(vk_renderer_t *renderer, int format,
+int hikaru_vendor_test_layer_pixels(vk_renderer_t *renderer, int format, int keyed,
                                     const uint32_t packed[4], const uint8_t scene[4],
                                     int back, float multiplier, float factor, uint8_t pixels[4][4])
 {
     hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
     hikaru_gpu_t *gpu = hr->gpu;
     const uint32_t saved_direct = REG1AUNIT(0, 0x38);
+    const uint32_t saved_keyed = REG1AUNIT(0, 0x3C);
     vk_buffer_t *saved_fb = hr->gpu->fb;
     vk_buffer_t *fb = vk_buffer_le32_new(8u * 1024 * 1024, 0);
     GLuint layer_tex = 0, scene_tex = 0, second_tex = 0, target_tex = 0, fbo = 0;
@@ -3027,6 +3268,7 @@ int hikaru_vendor_test_layer_pixels(vk_renderer_t *renderer, int format,
     int ok = 0;
     if (!fb) return 0;
     REG1AUNIT(0, 0x38) = 3;
+    REG1AUNIT(0, 0x3C) = keyed ? 6 : 0;
     hikaru_layer_t layer = {0};
     layer.x0 = 7; layer.y0 = 3;
     layer.format = format ? HIKARU_FORMAT_A2BGR10 : HIKARU_FORMAT_ABGR1555;
@@ -3074,6 +3316,7 @@ int hikaru_vendor_test_layer_pixels(vk_renderer_t *renderer, int format,
     ok = glGetError() == GL_NO_ERROR && upload_mult == (format ? 4.0f : 1.0f);
 cleanup:
     REG1AUNIT(0, 0x38) = saved_direct;
+    REG1AUNIT(0, 0x3C) = saved_keyed;
     hr->gpu->fb = saved_fb;
     hr->framebuffer.cb[0] = saved_cb0;
     hr->gpu->state.layers.layer[0][0].format = saved_format1;
@@ -3094,9 +3337,13 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
     hikaru_gpu_t *gpu = hr->gpu;
     vk_buffer_t *saved_fb = gpu->fb;
     vk_buffer_t *fb = vk_buffer_le32_new(8u * 1024 * 1024, 0);
-    typeof(gpu->regs) saved_regs = gpu->regs;
-    typeof(gpu->state.layers) saved_layers = gpu->state.layers;
-    typeof(gpu->fb_config) saved_config = gpu->fb_config;
+    /* Anonymous GPU sub-structs have no C11 type names; copy their bytes. */
+    unsigned char saved_regs[sizeof(gpu->regs)];
+    unsigned char saved_layers[sizeof(gpu->state.layers)];
+    unsigned char saved_config[sizeof(gpu->fb_config)];
+    memcpy(saved_regs, &gpu->regs, sizeof(saved_regs));
+    memcpy(saved_layers, &gpu->state.layers, sizeof(saved_layers));
+    memcpy(saved_config, &gpu->fb_config, sizeof(saved_config));
     int ok = 1;
     if (!fb) return 0;
     gpu->fb = fb;
@@ -3111,7 +3358,7 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
         fb->ptr[o1]=(uint8_t)b; fb->ptr[o1+1]=(uint8_t)(b>>8);
     }
     const uint32_t addresses[]={0x1a000190,0x1a000194,0x1a000198,0x1a00019c,0x1a0001b0,0x1a0001bc};
-    const uint32_t values[]={0,0,512u<<9,512u<<9,0,0};
+    const uint32_t values[]={0,0,512u<<9,512u<<9,0,6};
     for(unsigned i=0;i<6;++i)
         if(vk_device_put(&gpu->base,4,addresses[i],values[i])) ok=0;
     memset(&gpu->fb_config,0,sizeof(gpu->fb_config));
@@ -3126,13 +3373,22 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
         if(vk_device_put(&gpu->base,4,0x1a0001b4,enables[step]) ||
            vk_device_put(&gpu->base,4,0x1a0001b8,direct[step])) {ok=0; break;}
         hikaru_vendor_test_fill_layer_info(&gpu->base);
+        /* Seed a completed scene. With no new meshes, draw must preserve it
+         * even when the pending clear color changes on the next host frame. */
+        resize_3d_targets(hr);
+        glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+        draw_scene(hr);
+        gpu->fb_config.clear[1]=0;
         draw(hr);
+        gpu->fb_config.clear[1]=255;
         for(unsigned x=0;x<3;++x)
             glReadPixels(80+160*x,240,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels[step][x]);
         if(glGetError()!=GL_NO_ERROR) ok=0;
     }
-    gpu->fb=saved_fb; gpu->regs=saved_regs; gpu->state.layers=saved_layers;
-    gpu->fb_config=saved_config;
+    gpu->fb=saved_fb;
+    memcpy(&gpu->regs, saved_regs, sizeof(gpu->regs));
+    memcpy(&gpu->state.layers, saved_layers, sizeof(gpu->state.layers));
+    memcpy(&gpu->fb_config, saved_config, sizeof(gpu->fb_config));
     vk_buffer_destroy(&fb);
     return ok;
 }
@@ -3240,7 +3496,7 @@ int hikaru_vendor_test_mesh_vao_pixels(void)
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices[2]), vertices[2], GL_STATIC_DRAW);
     meshes[3].depth_bias = 31;
     hr->num_meshes[0][HIKARU_POLYTYPE_OPAQUE] = 4;
-    glDepthRange(0, 1); glClearDepth(0.5); glDepthMask(GL_TRUE);
+    vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(0.5); glDepthMask(GL_TRUE);
     glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL);
     glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     draw_meshes_for_polytype(hr, 0, HIKARU_POLYTYPE_OPAQUE);

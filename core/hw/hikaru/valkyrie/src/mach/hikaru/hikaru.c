@@ -2,6 +2,7 @@
 /* 
  * Valkyrie
  * Copyright (C) 2011, 2012, Stefano Teso
+ * Portions Copyright 2026 The Hollycast Authors
  * 
  * Valkyrie is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -808,6 +809,8 @@ hikaru_set_rombd_config (hikaru_t *hikaru)
 		maskrom_bank_size = 8;
 	} else if (!strcmp (game->name, "pharrier")) {
 		eprom_bank_size = 4;
+		/* MAME retains 16 MiB slots for each populated 8 MiB pair. */
+		eprom_source_stride = 16*MB;
 		maskrom_bank_size = 16;
 	} else if (!strcmp (game->name, "podrace")) {
 		/* XXX doesn't pass the ROMBD test */

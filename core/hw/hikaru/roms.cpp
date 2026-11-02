@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "roms.h"
 #include <stdexcept>
 #include <sstream>
@@ -7,8 +8,9 @@
 #include <cctype>
 
 namespace hikaru {
-const GameDescriptor AirTrixGame{"airtrix", "Air Trix", true};
-const GameDescriptor BraveFirefightersGame{"braveff", "Brave Firefighters", false};
+const GameDescriptor AirTrixGame{"airtrix", "Air Trix", RomImages::AirTrixSecurityKey};
+const GameDescriptor BraveFirefightersGame{"braveff", "Brave Firefighters", std::nullopt};
+const GameDescriptor PlanetHarriersGame{"pharrier", "Planet Harriers", RomImages::PlanetHarriersSecurityKey};
 
 const GameDescriptor* findGame(const std::string& basename)
 {
@@ -19,6 +21,8 @@ const GameDescriptor* findGame(const std::string& basename)
         return &AirTrixGame;
     if (normalized == BraveFirefightersGame.identifier)
         return &BraveFirefightersGame;
+    if (normalized == PlanetHarriersGame.identifier)
+        return &PlanetHarriersGame;
     return nullptr;
 }
 
@@ -78,6 +82,38 @@ const std::array<InterleavedRomFile, 24> BraveFirefightersDataRoms = {{
     {{"mpr-22021.ic58s", 0x800000, 0x43b08604}, 0x0a000002},
     {{"mpr-22022.ic59s", 0x800000, 0xabd3d888}, 0x0b000000},
     {{"mpr-22023.ic60s", 0x800000, 0x07f00869}, 0x0b000002},
+}};
+
+// MAME hikaru.cpp at 43b995da4a2af46c9f48c6a5536953439adfb1ab.
+// Each program pair occupies 8 MiB in a zero-filled 16 MiB socket slot.
+const std::array<InterleavedRomFile, 8> PlanetHarriersProgramRoms = {{
+    {{"epr-23565a.ic29", 0x0400000, 0xca9af8a7}, 0x0000000},
+    {{"epr-23566a.ic30", 0x0400000, 0xaad0057c}, 0x0000002},
+    {{"epr-23567.ic31", 0x0400000, 0xf0e3dcdc}, 0x1000000},
+    {{"epr-23568.ic32", 0x0400000, 0x6eee734c}, 0x1000002},
+    {{"epr-23569.ic33", 0x0400000, 0x867c7064}, 0x2000000},
+    {{"epr-23570.ic34", 0x0400000, 0x556ff58b}, 0x2000002},
+    {{"epr-23571.ic35", 0x0400000, 0x5a75fa92}, 0x3000000},
+    {{"epr-23572.ic36", 0x0400000, 0x46054067}, 0x3000002},
+}};
+
+const std::array<InterleavedRomFile, 16> PlanetHarriersDataRoms = {{
+    {{"mpr-23549.ic37", 0x1000000, 0xed764200}, 0x0000000},
+    {{"mpr-23553.ic38", 0x1000000, 0x5e70ae78}, 0x0000002},
+    {{"mpr-23550.ic41", 0x1000000, 0x841b4d3b}, 0x2000000},
+    {{"mpr-23554.ic42", 0x1000000, 0x5cce99de}, 0x2000002},
+    {{"mpr-23551.ic45", 0x1000000, 0x71f61d04}, 0x4000000},
+    {{"mpr-23555.ic46", 0x1000000, 0x582e5453}, 0x4000002},
+    {{"mpr-23552.ic49", 0x1000000, 0x32487181}, 0x6000000},
+    {{"mpr-23556.ic50", 0x1000000, 0x45002955}, 0x6000002},
+    {{"mpr-23557.ic53", 0x1000000, 0xc20dff1b}, 0x8000000},
+    {{"mpr-23561.ic54", 0x1000000, 0x01237844}, 0x8000002},
+    {{"mpr-23558.ic57", 0x1000000, 0xe93cc8d7}, 0xa000000},
+    {{"mpr-23562.ic58", 0x1000000, 0x85e0816c}, 0xa000002},
+    {{"mpr-23559.ic61", 0x1000000, 0x1a7f2ba0}, 0xc000000},
+    {{"mpr-23563.ic62", 0x1000000, 0xe3dc328b}, 0xc000002},
+    {{"mpr-23560.ic65", 0x1000000, 0x24bb7072}, 0xe000000},
+    {{"mpr-23564.ic66", 0x1000000, 0x255724b6}, 0xe000002},
 }};
 
 uint32_t romCrc32(const std::vector<uint8_t>& data)
@@ -179,6 +215,35 @@ RomImages loadBraveFirefighters(const RomReader& reader, const std::string& boot
         interleaveRomWords(images.program, chip.offset, bytes);
     }
     for (const auto& chip : BraveFirefightersDataRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.data, chip.offset, bytes);
+    }
+    return images;
+}
+
+RomImages loadPlanetHarriers(const RomReader& reader, const std::string& bootName)
+{
+    if (!reader)
+        throw std::invalid_argument("Hikaru ROM reader is required");
+    const RomFile* boot = nullptr;
+    for (const auto& candidate : BootRoms)
+        if (bootName == candidate.name)
+            boot = &candidate;
+    if (!boot)
+        throw std::invalid_argument("Unknown Hikaru BIOS revision: " + bootName);
+
+    RomImages images;
+    images.boot = reader(*boot);
+    validateRom(*boot, images.boot);
+    images.program.resize(0x04000000, 0);
+    images.data.resize(0x10000000, 0);
+    for (const auto& chip : PlanetHarriersProgramRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.program, chip.offset, bytes);
+    }
+    for (const auto& chip : PlanetHarriersDataRoms) {
         auto bytes = reader(chip.file);
         validateRom(chip.file, bytes);
         interleaveRomWords(images.data, chip.offset, bytes);

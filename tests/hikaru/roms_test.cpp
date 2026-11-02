@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/roms.h"
 #include <iostream>
 #include <stdexcept>
@@ -57,10 +58,10 @@ int main()
     rejects([&] { hikaru::loadAirTrix([](const auto&) { return std::vector<uint8_t>{}; }, "unknown"); }, "unknown BIOS revision rejected");
     rejects([&] { hikaru::loadAirTrix([](const auto&) { return std::vector<uint8_t>{}; }); }, "missing BIOS data rejected");
     check(hikaru::findGame("AIRTRIX") == &hikaru::AirTrixGame
-            && hikaru::AirTrixGame.encrypted,
+            && hikaru::AirTrixGame.securityKey == 0x291b02c7,
           "Air Trix descriptor keeps its title and encryption metadata");
     check(hikaru::findGame("braveff") == &hikaru::BraveFirefightersGame
-            && !hikaru::BraveFirefightersGame.encrypted,
+            && !hikaru::BraveFirefightersGame.securityKey,
           "Brave Firefighters descriptor has no security chip encryption");
     check(hikaru::findGame("hikaru") == nullptr && hikaru::findGame("unknown") == nullptr,
           "only supported game basenames are allowlisted");
@@ -89,6 +90,32 @@ int main()
             "unknown Brave Firefighters BIOS revision rejected");
     rejects([&] { hikaru::loadBraveFirefighters([](const auto&) { return std::vector<uint8_t>{}; }); },
             "missing Brave Firefighters BIOS data rejected");
+    check(hikaru::findGame("PHARRIER") == &hikaru::PlanetHarriersGame
+            && hikaru::PlanetHarriersGame.securityKey == 0x2912c68a,
+          "Planet Harriers selects its own protection key");
+    check(hikaru::PlanetHarriersProgramRoms.size() == 8
+            && hikaru::PlanetHarriersDataRoms.size() == 16,
+          "Planet Harriers manifest contains all 24 MAME chips");
+    for (std::size_t i = 0; i < hikaru::PlanetHarriersProgramRoms.size(); ++i) {
+        const auto& chip = hikaru::PlanetHarriersProgramRoms[i];
+        check(chip.offset == (i / 2) * 0x1000000 + (i % 2) * 2 && chip.file.size == 0x400000,
+              "Planet Harriers program pairs retain 16 MiB socket slots");
+    }
+    for (std::size_t i = 0; i < hikaru::PlanetHarriersDataRoms.size(); ++i) {
+        const auto& chip = hikaru::PlanetHarriersDataRoms[i];
+        check(chip.offset == (i / 2) * 0x2000000 + (i % 2) * 2 && chip.file.size == 0x1000000,
+              "Planet Harriers data pairs fill the 256 MiB region");
+    }
+    check(std::string(hikaru::PlanetHarriersProgramRoms[0].file.name) == "epr-23565a.ic29"
+            && hikaru::PlanetHarriersProgramRoms[0].file.crc32 == 0xca9af8a7
+            && std::string(hikaru::PlanetHarriersDataRoms[15].file.name) == "mpr-23564.ic66"
+            && hikaru::PlanetHarriersDataRoms[15].file.crc32 == 0x255724b6,
+          "Planet Harriers manifest endpoints match pinned MAME data");
+    rejects([&] { hikaru::loadPlanetHarriers({}); }, "missing Planet Harriers ROM reader rejected");
+    rejects([&] { hikaru::loadPlanetHarriers([](const auto&) { return std::vector<uint8_t>{}; }, "unknown"); },
+            "unknown Planet Harriers BIOS revision rejected");
+    rejects([&] { hikaru::loadPlanetHarriers([](const auto&) { return std::vector<uint8_t>{}; }); },
+            "missing Planet Harriers BIOS data rejected");
     std::cout << checks << " ROM checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

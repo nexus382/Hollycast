@@ -117,7 +117,7 @@ void mainui_term()
 {
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru())
-		hikaru::frontend::releaseGraphics();
+		hikaru::frontend::suspendGraphics();
 #endif
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::shutdown();

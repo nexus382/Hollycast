@@ -1,4 +1,5 @@
-/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* Modified for Hollycast on 2026-11-01; see valkyrie/PROVENANCE.md.
+ * Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie
  * Copyright (C) 2011, 2012, Stefano Teso
@@ -27,6 +28,7 @@ typedef struct vk_buffer_t vk_buffer_t;
 
 struct vk_buffer_t {
 	uint8_t *ptr;
+	bool aligned_alloc; /* Windows _aligned_malloc must use _aligned_free. */
 	unsigned size;
 	uint64_t (* get) (vk_buffer_t *buf, unsigned size, uint32_t addr);
 	void	 (* put) (vk_buffer_t *buf, unsigned size, uint32_t addr, uint64_t val);

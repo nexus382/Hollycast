@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include <string>
 namespace hikaru::frontend {
@@ -12,5 +13,7 @@ void insertCredit(unsigned player = 0);
 void pauseAudio();
 void resumeAudio();
 void releaseGraphics();
+// Called while the old GL context is still current; preserves the live game.
+void suspendGraphics();
 void unload();
 }

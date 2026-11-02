@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 /* Exact saved Air Trix samples and synthetic boundaries exercise the actual
  * command decoder and production GLSL. Q1.15 cutoff packing is established
  * from the game builder. Compact-float reconstruction, LUT endpoints and
  * bank orientation remain the documented experimental renderer contract. */
 #define GL_SILENCE_DEPRECATION
 #include <SDL.h>
+#ifdef __APPLE__
 #include <OpenGL/gl3.h>
+#else
+#include <glad/gl.h>
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -15,6 +20,9 @@
 #include "mach/hikaru/hikaru-gpu-private.h"
 int hikaru_vendor_test_spot_pixels(const hikaru_light_t *,const float[3],const float[3],int,unsigned,unsigned,const uint16_t[16],uint8_t[4]);
 int hikaru_vendor_test_shader_uniform_cache(void);
+int hikaru_vendor_test_abgr_upload(void);
+int hikaru_vendor_test_prelit_material_pixels(uint32_t, const uint16_t[3], bool,
+    const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4]);
 int hikaru_vendor_test_decode_451(uint32_t,uint32_t,hikaru_light_t *);
 void hikaru_vendor_test_spot_upload_counts(unsigned *, unsigned *);
 void hikaru_vendor_test_spot_upload_counts_reset(void);
@@ -173,12 +181,48 @@ static void run(void) {
  }
  replacement_probe();
 }
-int main(void){
+static void prelit_material_probe(void) {
+ /* The two tints and 0x881 flags are from the affected banquet-room heads.
+  * Synthetic texels keep these shader regressions independent of game data. */
+ static const struct {
+  const char *name; uint32_t flags; uint16_t tint[3]; bool present;
+  uint8_t diffuse[3], ambient[3], texel[4], expected[4];
+ } cases[]={
+  {"captured pale head",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,255},{200,138,92,255}},
+  {"captured shadowed head",0x000d0881,{105,54,58},true,{0,0,0},{0,0,0},{200,150,100,255},{82,32,23,255}},
+  {"unresolved wide 691 unchanged",0x000d0881,{256,234,234},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"zero tint remains black",0x000d0881,{0,0,0},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"missing 691 remains black",0x000d0881,{255,234,234},false,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"ordinary ambient unchanged",0x000d0881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{50,38,25,255}},
+  {"ordinary diffuse shadow unchanged",0x000d0881,{255,255,255},true,{64,64,64},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"unlit textured material unchanged",0x00080881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{50,38,25,255}},
+  {"untextured material unchanged",0x00050881,{255,255,255},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"transparent cutout retained",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,0},{255,0,255,255}},
+  {"partial alpha retained",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,128},{200,138,92,128}},
+ };
+ for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
+  uint8_t actual[4]={0};
+  int ok=hikaru_vendor_test_prelit_material_pixels(cases[i].flags,cases[i].tint,cases[i].present,
+      cases[i].diffuse,cases[i].ambient,cases[i].texel,actual);
+  for(unsigned c=0;c<4;++c){int d=(int)actual[c]-cases[i].expected[c];if(d < -1 || d > 1)ok=0;}
+  if(!ok){fprintf(stderr,"prelit %s: got RGBA %u,%u,%u,%u\n",cases[i].name,actual[0],actual[1],actual[2],actual[3]);failed++;}
+ }
+}
+static void upload_probe(void) {
+ if(!hikaru_vendor_test_abgr_upload()) { fprintf(stderr,"packed texture upload failed\n");failed++; }
+}
+int main(int argc, char **argv){
+ const int gles=argc==2 && !strcmp(argv[1],"--gles");
  if(SDL_Init(SDL_INIT_VIDEO))return 10;
- SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,2);
+ SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,gles?SDL_GL_CONTEXT_PROFILE_ES:SDL_GL_CONTEXT_PROFILE_CORE);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,gles?0:2);
  SDL_Window *w=SDL_CreateWindow("Hikaru lighting pixels",0,0,9,9,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN);if(!w)return 11;
  SDL_GLContext context=SDL_GL_CreateContext(w);if(!context)return 12;
+#ifndef __APPLE__
+ if(!(gles?gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress):gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)))return 9;
+#endif
  hikaru_vendor_test_with_gl_guard(run);
+ hikaru_vendor_test_with_gl_guard(upload_probe);
+ hikaru_vendor_test_with_gl_guard(prelit_material_probe);
  SDL_GL_DeleteContext(context);SDL_DestroyWindow(w);SDL_Quit();
  printf("lighting pixel cases: %s (%d failed)\n",failed?"FAIL":"PASS",failed);
  return failed?1:0;

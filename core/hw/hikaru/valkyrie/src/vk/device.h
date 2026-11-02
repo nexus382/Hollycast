@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -42,7 +43,7 @@ struct vk_device_t {
 	\
 		VK_ASSERT (mach_); \
 	\
-		(derivedptr_) = ALLOC (typeof (*(derivedptr_))); \
+		(derivedptr_) = calloc (1, sizeof (*(derivedptr_))); \
 		if (!(derivedptr_)) \
 			break; \
 	\

@@ -2,6 +2,8 @@
 // Copyright 2026 The Hollycast Authors
 #include "sound.h"
 #include "hw/aica/aica_if.h"
+#include "hw/aica/sgc_if.h"
+#include <cstdio>
 #include "hw/aica/aica_mem.h"
 #include "hw/arm7/arm7.h"
 #include <algorithm>
@@ -170,15 +172,42 @@ int Sound::advance(u32 cycles)
 		std::array<int, BatchSize> left{}, right{};
 		std::array<unsigned, BatchSize> saturated{};
 		if (!resetAsserted) {
-			for (auto& b : boards) {
+			// Odin runs the optional board first: its output feeds the
+			// external inputs (EXTS) of the main board, sample for sample.
+			// Both boards are still summed for the host, as in Odin's MIX.
+			std::array<s16, BatchSize> slaveLeft{}, slaveRight{};
+			{
+				auto& b = boards[1];
+				host.select(b.state, b.ram);
+				aica::sgc::setBoardExternalInput(0, 0); // Nothing feeds the optional board.
+				for (u32 i = 0; i < count; ++i) {
+					aica::arm::runInterpreterCycles(ARM_CYCLES_PER_SAMPLE);
+					aica::boardTimeStep(slaveLeft[i], slaveRight[i]);
+					saturated[i] += slaveLeft[i] == -32768 || slaveLeft[i] == 32767 || slaveRight[i] == -32768 || slaveRight[i] == 32767;
+					boardPeak[1] = std::max({boardPeak[1], u32(std::abs(int(slaveLeft[i]))), u32(std::abs(int(slaveRight[i])))});
+				}
+				u32 peaks[64];
+				aica::sgc::readBoardChannelPeaks(peaks);
+				for (unsigned ch = 0; ch < 64; ++ch)
+					channelPeaks[1][ch] = std::max(channelPeaks[1][ch], peaks[ch]);
+				b.state.save();
+			}
+			{
+				auto& b = boards[0];
 				host.select(b.state, b.ram);
 				for (u32 i = 0; i < count; ++i) {
+					aica::sgc::setBoardExternalInput(slaveLeft[i], slaveRight[i]);
 					aica::arm::runInterpreterCycles(ARM_CYCLES_PER_SAMPLE);
 					s16 l = 0, r = 0;
 					aica::boardTimeStep(l, r);
 					saturated[i] += l == -32768 || l == 32767 || r == -32768 || r == 32767;
-					left[i] += l; right[i] += r;
+					boardPeak[0] = std::max({boardPeak[0], u32(std::abs(int(l))), u32(std::abs(int(r)))});
+					left[i] += int(slaveLeft[i]) + l; right[i] += int(slaveRight[i]) + r;
 				}
+				u32 peaks[64];
+				aica::sgc::readBoardChannelPeaks(peaks);
+				for (unsigned ch = 0; ch < 64; ++ch)
+					channelPeaks[0][ch] = std::max(channelPeaks[0][ch], peaks[ch]);
 				b.state.save();
 			}
 		}
@@ -222,6 +251,26 @@ bool Sound::diagnostics(unsigned board, BoardDiagnostics& output) const
 	}
 	for (size_t i = 0x100000; i < SoundRamSize; ++i)
 		output.bankBytes += b.ram[i] != 0;
+	output.peak = boardPeak[board];
+	boardPeak[board] = 0;
+	output.masterVolume = b.state.masterVolume();
+	aica::BoardState::ChannelInfo infos[64];
+	const u32 channels = b.state.activeChannels(infos, 64);
+	size_t used = 0;
+	for (u32 i = 0; i < channels; ++i) {
+		u32 nonzero = 0;
+		if (infos[i].sa < SoundRamSize) {
+			const u32 span = std::min<u32>(128, SoundRamSize - infos[i].sa);
+			for (u32 at = 0; at < span; ++at) nonzero += b.ram[infos[i].sa + at] != 0;
+		}
+		const int written = std::snprintf(output.channels + used, sizeof(output.channels) - used,
+			"c%u p%u sa=%x %x-%x tl=%u dl=%u im=%u/%u nz=%u pk=%u; ", infos[i].channel, infos[i].pcms,
+			infos[i].sa, infos[i].lsa, infos[i].lea, infos[i].tl, infos[i].disdl,
+			infos[i].isel, infos[i].imxl, nonzero, channelPeaks[board][infos[i].channel]);
+		if (written < 0 || size_t(written) >= sizeof(output.channels) - used) break;
+		used += size_t(written);
+	}
+	for (auto& peak : channelPeaks[board]) peak = 0;
 	return true;
 }
 

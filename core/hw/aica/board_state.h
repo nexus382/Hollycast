@@ -35,6 +35,12 @@ public:
 	void selectBoard();
 #endif
 	bool interruptPending() const;
+	// Register-level view of one keyed channel, for board diagnostics.
+	struct ChannelInfo {
+		u32 channel = 0, sa = 0, pcms = 0, lsa = 0, lea = 0, tl = 0, disdl = 0, dipan = 0, isel = 0, imxl = 0;
+	};
+	u32 activeChannels(ChannelInfo* out, u32 max) const;
+	u32 masterVolume() const { return registers[0x2800] & 0xf; }
 	u32 armProgramCounter() const { return arm.registers[arm::R15_ARM_NEXT].I; }
 	bool armEnabled() const { return arm.enabled; }
 	u32 activeKeyCount() const;

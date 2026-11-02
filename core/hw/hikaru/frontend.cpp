@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "frontend.h"
 #include "roms.h"
 #include "mie.h"
@@ -12,6 +13,7 @@
 #include "cfg/option.h"
 #include "oslib/oslib.h"
 #include "oslib/storage.h"
+#include "oslib/directory.h"
 #include "input/gamepad_device.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/naomi/naomi_cart.h"
@@ -55,7 +57,7 @@ std::string mieEepromPath;
 template<size_t Size>
 bool loadNvram(const std::string& path, std::array<uint8_t, Size>& data) {
     errno = 0;
-    FILE* file = std::fopen(path.c_str(), "rb");
+    FILE* file = nowide::fopen(path.c_str(), "rb");
     if (!file) {
         if (errno == ENOENT) return false;
         throw std::runtime_error("Cannot open Hikaru nonvolatile data: " + path);
@@ -69,12 +71,13 @@ bool loadNvram(const std::string& path, std::array<uint8_t, Size>& data) {
 template<size_t Size>
 bool saveNvram(const std::string& path, const std::array<uint8_t, Size>& data) {
     const std::string temporary = path + ".tmp";
-    FILE* file = std::fopen(temporary.c_str(), "wb");
+    FILE* file = nowide::fopen(temporary.c_str(), "wb");
     if (!file) return false;
     const bool written = std::fwrite(data.data(), 1, data.size(), file) == data.size();
     const bool closed = std::fclose(file) == 0;
-    if (!written || !closed || std::rename(temporary.c_str(), path.c_str()) != 0) {
-        std::remove(temporary.c_str());
+    // flycast::rename replaces an existing save and accepts UTF-8 on Windows.
+    if (!written || !closed || flycast::rename(temporary.c_str(), path.c_str()) != 0) {
+        nowide::remove(temporary.c_str());
         return false;
     }
     return true;
@@ -94,6 +97,16 @@ InputDescriptors braveFirefightersInputs = {{
     {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
 }, {
     {"Horizontal aim", Full, 0, false}, {"Vertical aim", Full, 1, false},
+}};
+
+InputDescriptors planetHarriersInputs = {{
+    {NAOMI_START_KEY, "Start"}, {NAOMI_COIN_KEY, "Coin"},
+    {NAOMI_BTN0_KEY, "Bullet"}, {NAOMI_BTN1_KEY, "Missile"},
+    {NAOMI_BTN2_KEY, "Bomb"}, {NAOMI_BTN3_KEY, "View left"},
+    {NAOMI_BTN4_KEY, "View right"},
+    {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
+}, {
+    {"Stick horizontal", Full, 0, false}, {"Stick vertical", Full, 1, false},
 }};
 
 std::unique_ptr<Archive> findArchive(const std::string& game, const char* name) {
@@ -187,12 +200,16 @@ void load(const std::string& path) {
     const auto reader = [&](const RomFile& file) {
         return readRom(std::string(file.name) == selected->name ? *bios : *game, file);
     };
-    auto loadedImages = std::make_unique<RomImages>(selectedGame == &BraveFirefightersGame
-        ? loadBraveFirefighters(reader, selected->name) : loadAirTrix(reader, selected->name));
+    RomImages loadedRoms;
+    if (selectedGame == &PlanetHarriersGame)
+        loadedRoms = loadPlanetHarriers(reader, selected->name);
+    else if (selectedGame == &BraveFirefightersGame)
+        loadedRoms = loadBraveFirefighters(reader, selected->name);
+    else
+        loadedRoms = loadAirTrix(reader, selected->name);
+    auto loadedImages = std::make_unique<RomImages>(std::move(loadedRoms));
     auto loadedMie = std::make_unique<Mie>(readRom(*mieArchive, MieBootRom));
-    auto loadedProtection = selectedGame->encrypted
-        ? std::make_unique<Protection>(RomImages::AirTrixSecurityKey)
-        : std::make_unique<Protection>(std::nullopt);
+    auto loadedProtection = std::make_unique<Protection>(selectedGame->securityKey);
     const std::string savePrefix = selectedGame->identifier;
     auto loadedBramPath = hostfs::getFlashSavePath("", savePrefix + ".hikaru.nvmem");
     std::array<uint8_t, HIKARU_ENGINE_BRAM_SIZE> loadedBram{};
@@ -206,7 +223,8 @@ void load(const std::string& path) {
     activeGame = selectedGame;
     for (auto& credits : pendingCredits) credits = 0;
     creditPulse.fill(false);
-    NaomiGameInputs = activeGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
+    NaomiGameInputs = activeGame == &PlanetHarriersGame ? &planetHarriersInputs
+        : activeGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
 }
 void releaseGraphics() {
     if (audioPacer) { audioPacer->reset(); ClearAudioOutput(); audioPacer.reset(); audioModeKnown = false; }
@@ -218,6 +236,19 @@ void releaseGraphics() {
         hikaru_engine_destroy(engine); engine = nullptr; sound.reset(); internalHeight = 0; glcache.Reset();
         if (!saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
     }
+}
+void suspendGraphics() {
+    if (!engine) return;
+    if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
+        hasSavedBram = true;
+        if (!saveNvram(bramPath, savedBram)) os_notify("Could not save Hikaru battery-backed RAM", 10000);
+    }
+    if (!saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
+    pauseAudio();
+    if (hikaru_engine_release_graphics(engine) != 0)
+        os_notify("Could not release Hikaru graphics", 10000);
+    internalHeight = 0;
+    glcache.Reset();
 }
 void unload() { releaseGraphics(); protection.reset(); mie.reset(); images.reset(); activeGame = nullptr; ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
 void requestReset() { resetRequested = true; }
@@ -234,16 +265,17 @@ bool render() {
     // after this frame. Do not cast a still-current Vulkan context to GL.
     auto* context = dynamic_cast<GLGraphicsContext*>(GraphicsContext::Instance());
     if (!context) return false;
-    if (context->isGLES() || context->getMajorVersion() < 3 ||
-        (context->getMajorVersion() == 3 && context->getMinorVersion() < 2) || !glGetString(GL_VERSION))
-        throw FlycastException("Hikaru requires a current desktop OpenGL 3.2 context");
+    if (context->getMajorVersion() < 3 ||
+        (!context->isGLES() && context->getMajorVersion() == 3 && context->getMinorVersion() < 2) || !glGetString(GL_VERSION))
+        throw FlycastException("Hikaru requires OpenGL 3.2 or OpenGL ES 3.0");
     if (settings.display.width <= 0 || settings.display.height <= 0) return false;
     if (resetRequested.exchange(false)) releaseGraphics();
     if (!engine) {
         HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size()};
         auto io = callbacks(); std::array<char, 512> error{};
         auto security = protectionCallbacks();
-        const auto game = activeGame == &BraveFirefightersGame ? HIKARU_ENGINE_GAME_BRAVEFF : HIKARU_ENGINE_GAME_AIRTRIX;
+        const auto game = activeGame == &PlanetHarriersGame ? HIKARU_ENGINE_GAME_PHARRIER
+            : activeGame == &BraveFirefightersGame ? HIKARU_ENGINE_GAME_BRAVEFF : HIKARU_ENGINE_GAME_AIRTRIX;
         engine = hikaru_engine_create_game(game, &roms, &io, &security, 0, unsigned(settings.display.width), unsigned(settings.display.height), 1, error.data(), error.size());
         glcache.Reset();
         if (!engine) throw FlycastException(std::string("Hikaru renderer: ") + error.data());
@@ -262,6 +294,20 @@ bool render() {
                 energy += uint64_t(l * l) + uint64_t(r * r);
                 peak = std::max(peak, unsigned(std::max(std::abs(l), std::abs(r))));
                 if (++samples == 44100) {
+                    hikaru::Sound::BoardDiagnostics boardDiag[2]{};
+                    const bool boardOk0 = sound && sound->diagnostics(0, boardDiag[0]);
+                    const bool boardOk1 = sound && sound->diagnostics(1, boardDiag[1]);
+                    std::fprintf(stderr, "Hikaru boards: b0 arm=%d pc=%08x keys=%u peak=%u mv=%u status=%08x bank=%08x/%08x cmds=%u bytes=%u | b1 arm=%d pc=%08x keys=%u peak=%u mv=%u status=%08x bank=%08x/%08x cmds=%u bytes=%u\n",
+                                 boardOk0 ? int(boardDiag[0].armEnabled) : -1, boardOk0 ? boardDiag[0].armPc : 0,
+                                 boardOk0 ? boardDiag[0].keys : 0, boardOk0 ? boardDiag[0].peak : 0, boardOk0 ? boardDiag[0].masterVolume : 0, boardOk0 ? boardDiag[0].status : 0,
+                                 boardOk0 ? boardDiag[0].bankReady : 0, boardOk0 ? boardDiag[0].bankRequest : 0,
+                                 boardOk0 ? boardDiag[0].queuedCommands : 0, boardOk0 ? boardDiag[0].bankBytes : 0,
+                                 boardOk1 ? int(boardDiag[1].armEnabled) : -1, boardOk1 ? boardDiag[1].armPc : 0,
+                                 boardOk1 ? boardDiag[1].keys : 0, boardOk1 ? boardDiag[1].peak : 0, boardOk1 ? boardDiag[1].masterVolume : 0, boardOk1 ? boardDiag[1].status : 0,
+                                 boardOk1 ? boardDiag[1].bankReady : 0, boardOk1 ? boardDiag[1].bankRequest : 0,
+                                 boardOk1 ? boardDiag[1].queuedCommands : 0, boardOk1 ? boardDiag[1].bankBytes : 0);
+                    if (boardOk0) std::fprintf(stderr, "Hikaru b0 channels: %s\n", boardDiag[0].channels);
+                    if (boardOk1) std::fprintf(stderr, "Hikaru b1 channels: %s\n", boardDiag[1].channels);
                     const auto output = audioOutputDiagnostics();
                     const auto now = std::chrono::steady_clock::now();
                     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count();
@@ -287,6 +333,8 @@ bool render() {
         if (hikaru_engine_set_sound(engine, &audio) != 0)
             throw FlycastException(std::string("Hikaru sound: ") + hikaru_engine_last_error(engine));
     }
+    if (hikaru_engine_restore_graphics(engine, 0, unsigned(settings.display.width), unsigned(settings.display.height)) != 0)
+        throw FlycastException(std::string("Hikaru renderer: ") + hikaru_engine_last_error(engine));
     const bool fastForward = settings.input.fastForwardMode;
     const bool muted = settings.aica.muteAudio;
     const bool pacing = config::HikaruAudioPacing;
@@ -318,7 +366,10 @@ bool render() {
         // The default keyboard maps D to scancode 4 (A on a US layout).
         // SDL's default gamepad
         // has no D binding, but maps its face buttons to C/X in arcade mode.
-        input.coin[i] = pressed(DC_BTN_D) || pressed(DC_BTN_C) || pressed(DC_BTN_X);
+        // Planet Harriers uses C/X for cabinet actions, so its only coin
+        // binding is D. Keep the extra credit aliases for the older titles.
+        input.coin[i] = pressed(DC_BTN_D) || (activeGame != &PlanetHarriersGame &&
+            (pressed(DC_BTN_C) || pressed(DC_BTN_X)));
         // Separate queued menu credits with a release frame so the JVS
         // rising-edge counter sees every request as a distinct coin.
         if (creditPulse[i]) creditPulse[i] = false;
@@ -329,17 +380,36 @@ bool render() {
         input.coin[i] = input.coin[i] || creditPulse[i];
         input.players[i] = (pressed(DC_BTN_START) ? 0x8000 : 0) | (pressed(DC_DPAD_LEFT) ? 0x0200 : 0)
             | (pressed(DC_DPAD_RIGHT) ? 0x0100 : 0) | (pressed(DC_DPAD_UP) ? 0x2000 : 0) | (pressed(DC_DPAD_DOWN) ? 0x1000 : 0);
-        if (activeGame == &BraveFirefightersGame)
+        if (activeGame == &BraveFirefightersGame || activeGame == &PlanetHarriersGame)
             input.players[i] = (pressed(DC_BTN_START) ? 0x8000 : 0) | (pressed(DC_BTN_A) ? 0x0200 : 0)
                 | (pressed(DC_BTN_B) ? 0x0100 : 0) | (pressed(DC_DPAD_UP) ? 0x2000 : 0)
                 | (pressed(DC_DPAD_DOWN) ? 0x1000 : 0) | (pressed(DC_DPAD_LEFT) ? 0x0800 : 0)
                 | (pressed(DC_DPAD_RIGHT) ? 0x0400 : 0);
+        if (activeGame == &PlanetHarriersGame)
+            // Match the normal Naomi button order. The left trigger also
+            // supplies button 3 so the default keyboard F binding can bomb.
+            input.players[i] |= ((pressed(DC_BTN_C) || lt[i] >= 0x8000) ? 0x0080 : 0)
+                | (pressed(DC_BTN_X) ? 0x0040 : 0) | (pressed(DC_BTN_Y) ? 0x0020 : 0);
     }
     input.test = !(kcode[0] & DC_DPAD2_DOWN); input.service = !(kcode[0] & DC_DPAD2_UP);
     input.analog[0] = uint16_t(int(joyx[0]) + 32768); input.analog[1] = uint16_t(int(joyy[0]) + 32768);
     if (activeGame == &BraveFirefightersGame) {
         input.analog[2] = uint16_t(int(joyx[1]) + 32768);
         input.analog[3] = uint16_t(int(joyy[1]) + 32768);
+    }
+    if (activeGame == &PlanetHarriersGame) {
+        // One cabinet has one analog stick; linked cabinets are not emulated.
+        // Planet's JVS order is vertical on channel 0, horizontal on
+        // channel 1 (Odin odin-games.json: STICK V analog 0, STICK H
+        // analog 1), the reverse of the other titles; its vertical low
+        // end is down. Arrows provide full-range keyboard movement
+        // alongside analog bindings.
+        input.analog[0] = uint16_t(int(joyy[0]) + 32768);
+        input.analog[1] = uint16_t(int(joyx[0]) + 32768);
+        if (!(kcode[0] & DC_DPAD_LEFT)) input.analog[1] = 0;
+        else if (!(kcode[0] & DC_DPAD_RIGHT)) input.analog[1] = 0xffff;
+        if (!(kcode[0] & DC_DPAD_UP)) input.analog[0] = 0xffff;
+        else if (!(kcode[0] & DC_DPAD_DOWN)) input.analog[0] = 0;
     }
     GLint target = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);

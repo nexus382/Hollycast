@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -57,27 +58,27 @@ struct vk_machine_t {
 };
 
 #ifdef NDEBUG
-#define VK_MACH_LOG(mach_, fmt_, args_...) do { } while (0)
+#define VK_MACH_LOG(mach_, fmt_, ...) do { } while (0)
 #else
-#define VK_MACH_LOG(mach_, fmt_, args_...) \
+#define VK_MACH_LOG(mach_, fmt_, ...) \
     do { \
         if (vk_verbosity > 0) { \
             const char *str = vk_machine_get_debug_string (mach_); \
-            VK_LOG ("%s : "fmt_, str, ##args_); \
+            VK_LOG ("%s : "fmt_, str, ##__VA_ARGS__); \
         } \
     } while (0)
 #endif
 
-#define VK_MACH_ERROR(mach_, fmt_, args_...) \
+#define VK_MACH_ERROR(mach_, fmt_, ...) \
 	do { \
 		const char *str = vk_machine_get_debug_string (mach_); \
-		VK_ERROR ("%s : "fmt_, str, ##args_); \
+		VK_ERROR ("%s : "fmt_, str, ##__VA_ARGS__); \
 	} while (0);
 
-#define VK_MACH_ABORT(mach_, fmt_, args_...) \
+#define VK_MACH_ABORT(mach_, fmt_, ...) \
 	do { \
 		const char *str = vk_machine_get_debug_string (mach_); \
-		VK_ABORT ("%s : "fmt_, str, ##args_); \
+		VK_ABORT ("%s : "fmt_, str, ##__VA_ARGS__); \
 	} while (0);
 
 #define VK_MACH_ASSERT(mach_, cond_) \

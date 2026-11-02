@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -71,6 +72,7 @@ typedef union {
 
 		uint64_t has_fog		: 1;
 		uint64_t use_unlit_diffuse	: 1;
+		uint64_t use_prelit_color	: 1;
 	};
 	uint64_t full;
 } hikaru_glsl_variant_t;
@@ -104,7 +106,7 @@ typedef struct {
 	struct {
 		GLuint position, direction, diffuse, specular, extents, spot, spot_table;
 	} u_lights[4];
-	GLuint u_ambient, u_texture, u_fog, u_fog_color;
+	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref;
 } hikaru_uniform_locations_t;
 
 typedef struct {
@@ -161,6 +163,7 @@ typedef struct {
 
 		hikaru_uniform_locations_t locs;
 	} meshes;
+	float pass_alpha_ref;
 
 	struct {
 		hikaru_texture_t cache[2][0x40][0x80];
@@ -186,8 +189,8 @@ typedef struct {
 			GLuint u_mult_2;
 			GLuint u_direct_1;
 			GLuint u_direct_2;
-			GLuint u_cover_1;
-			GLuint u_cover_2;
+			GLuint u_keyed_1;
+			GLuint u_keyed_2;
 			GLuint u_invert_f;
 			GLuint u_invert_b;
 		} locs;
@@ -199,10 +202,10 @@ typedef struct {
 
 } hikaru_renderer_t;
 
-#define LOG(fmt_, args_...) \
+#define LOG(fmt_, ...) \
 	do { \
 		if (hr->debug.flags[HR_DEBUG_LOG]) \
-			fprintf (stdout, "\tHR: " fmt_"\n", ##args_); \
+			fprintf (stdout, "\tHR: " fmt_"\n", ##__VA_ARGS__); \
 	} while (0)
 
 uint32_t	rgba1111_to_rgba4444 (uint8_t pixel);

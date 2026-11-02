@@ -14,6 +14,7 @@ int hikaru_vendor_test_texture_span(const vk_buffer_t*, uint32_t, uint32_t, uint
 int hikaru_vendor_test_layer_span(const vk_buffer_t*, uint32_t, uint32_t, unsigned);
 void *hikaru_vendor_test_decode_layer_abgr1555(const vk_buffer_t*, uint32_t, uint32_t);
 int hikaru_vendor_test_fb_dma(vk_buffer_t*, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned);
+int hikaru_vendor_test_fb_dma_busy(vk_buffer_t*);
 uint32_t hikaru_vendor_test_texture_wrap(int, int);
 int hikaru_vendor_test_same_texture_state(uint32_t, uint32_t);
 int hikaru_vendor_test_texture_wrap_changed(uint32_t, uint32_t);
@@ -22,8 +23,11 @@ int hikaru_vendor_test_viewport_origin(void);
 int hikaru_vendor_test_gpu_capability_read(void);
 int hikaru_vendor_test_cpu_texram_dirty(void);
 int hikaru_vendor_test_modelview_pair(void);
+int hikaru_vendor_test_modelview_local(void);
 int hikaru_vendor_test_vertex_matrix_selector(void);
 int hikaru_vendor_test_uv_packets(uint32_t, uint32_t, uint32_t, const uint32_t[8], float[3][2], uint16_t[2]);
+int hikaru_vendor_test_texhead3_switch(uint32_t, uint32_t, const uint32_t[8], float[3][2], uint32_t*);
+int hikaru_vendor_test_opcode_flags(uint32_t);
 uint64_t hikaru_vendor_test_rombd_read(vk_buffer_t*, uint32_t, unsigned);
 int hikaru_vendor_test_protection_bus(const HikaruEngineProtection*, int, unsigned, uint32_t, uint64_t*);
 static uint32_t address_seen; static unsigned size_seen; static uint64_t written;
@@ -157,20 +161,22 @@ static unsigned test_uv_packets(void)
     for (unsigned f = 0; f < sizeof(formats)/sizeof(formats[0]); ++f)
         for (unsigned mode = 0; mode < 4; ++mode)
             for (unsigned o = 0; o < sizeof(offsets)/sizeof(offsets[0]); ++o)
+                for (unsigned whole = 0; whole < 2; ++whole)
                 for (unsigned c = 0; c < sizeof(cases)/sizeof(cases[0]); ++c) {
                     float actual[3][2] = {{0}};
                     uint16_t decoded[2] = {0};
-                    uint32_t texhead = (0x44cc02c1u & ~(7u << 26)) | (formats[f] << 26);
+                    uint32_t texhead = (0x44cc02c1u & ~(7u << 26)) | (formats[f] << 26) | (whole << 14);
+                    const float scale = whole ? 16.0f : 1.0f;
                     int failed = !hikaru_vendor_test_uv_packets((mode << 16) | 0x6d1,
                         offsets[o], texhead, cases[c].packet, actual, decoded);
                     const float width = formats[f] == 2 ? 512.0f : 256.0f;
                     const float height = formats[f] == 2 ? 64.0f : 32.0f;
                     for (unsigned i = 0; i < cases[c].count; ++i) {
-                        failed |= fabsf(actual[i][0] - cases[c].pixels[i][0] / width) > 0.000001f;
-                        failed |= fabsf(actual[i][1] - cases[c].pixels[i][1] / height) > 0.000001f;
+                        failed |= fabsf(actual[i][0] - cases[c].pixels[i][0] * scale / width) > 0.000001f;
+                        failed |= fabsf(actual[i][1] - cases[c].pixels[i][1] * scale / height) > 0.000001f;
                     }
-                    const uint16_t dx = mode == 1 || mode == 2 ? offsets[o] & 0xffff : 0;
-                    const uint16_t dy = mode == 1 || mode == 2 ? offsets[o] >> 16 : 0;
+                    const uint16_t dx = offsets[o] & 0xffff;
+                    const uint16_t dy = offsets[o] >> 16;
                     failed |= decoded[0] != dx || decoded[1] != dy;
                     if (failed && errors < 8)
                         fprintf(stderr, "UV %s format%u mode%u offset%08x: got %.6f,%.6f\n",
@@ -182,11 +188,40 @@ static unsigned test_uv_packets(void)
     return errors;
 }
 
+static unsigned test_texhead_switch(void)
+{
+    /* A is 256x32, B is 128x64. The 0E8 packet names texhead 1 (top
+     * bits): its texcoords normalize under B and the scratch takes B.
+     * Naming 0 again goes back to A. FLAG_CONTINUE is 4, FLAG_BEGIN 2. */
+    const uint32_t a = 0x44cc02c1u & ~(7u << 26);
+    const uint32_t b = (0x44cc02c1u & ~(7u << 26) & ~(7u << 16) & ~(7u << 19)) | (3u << 16) | (2u << 19);
+    static const uint32_t to_b[8] = {0x000100e8,0x0100fe00,0x80007fff,0x0000ffff};
+    static const uint32_t to_a[8] = {0x000000e8,0x0100fe00,0x80007fff,0x0000ffff};
+    float uv[3][2] = {{0}};
+    uint32_t scratch = 0;
+    unsigned errors = 0;
+    if (!hikaru_vendor_test_texhead3_switch(a, b, to_b, uv, &scratch)) return 1;
+    errors += scratch != b;
+    errors += fabsf(uv[0][0] - -32.0f / 128.0f) > 0.000001f;
+    errors += fabsf(uv[0][1] - 16.0f / 64.0f) > 0.000001f;
+    if (!hikaru_vendor_test_texhead3_switch(a, b, to_a, uv, &scratch)) return 1;
+    errors += scratch != a;
+    errors += fabsf(uv[0][0] - -32.0f / 256.0f) > 0.000001f;
+    errors += fabsf(uv[0][1] - 16.0f / 32.0f) > 0.000001f;
+    errors += (hikaru_vendor_test_opcode_flags(0x083) & 4) != 0;
+    errors += (hikaru_vendor_test_opcode_flags(0x0c3) & 4) != 0;
+    errors += (hikaru_vendor_test_opcode_flags(0x0e8) & 6) != 6;
+    fprintf(stderr, "CP texhead switching: %u failures\n", errors);
+    return errors;
+}
+
 int main(void)
 {
     unsigned errors = 0;
     errors += test_uv_packets();
+    errors += test_texhead_switch();
     if (!hikaru_vendor_test_modelview_pair()) ++errors;
+    if (!hikaru_vendor_test_modelview_local()) ++errors;
     if (!hikaru_vendor_test_vertex_matrix_selector()) ++errors;
     if (!hikaru_vendor_test_cpu_texram_dirty()) ++errors;
     unsigned evaluated = 0;
@@ -240,13 +275,13 @@ int main(void)
     if (hikaru_vendor_test_protection_bus(&protection, 0, 4, 0x0a020000, &value) == 0) ++errors;
     if (!hikaru_vendor_test_viewport_origin() || !hikaru_vendor_test_gpu_capability_read()) ++errors;
     uint16_t *pixels = hikaru_vendor_test_decode_abgr1111(tex, 2, 2, 0, 0);
-    if (!pixels || pixels[0] != 0xff00 || pixels[1] != 0x0f00 || pixels[2] != 0xfff0 || pixels[3] != 0x0ff0 ||
-        pixels[4] != 0xf000 || pixels[5] != 0 || pixels[6] != 0xf0f0 || pixels[7] != 0x00f0) ++errors;
+    if (!pixels || pixels[0] != 0x3333 || pixels[1] != 0x2222 || pixels[2] != 0x7777 || pixels[3] != 0x6666 ||
+        pixels[4] != 0x1111 || pixels[5] != 0 || pixels[6] != 0x5555 || pixels[7] != 0x4444) ++errors;
     free(pixels);
     /* Nonzero slot uses 16-bit storage coordinates, and expands both axes. */
     tex->ptr[32] = 0x10; tex->ptr[33] = 0x32; tex->ptr[34] = 0x54; tex->ptr[35] = 0x76;
     pixels = hikaru_vendor_test_decode_abgr1111(tex, 2, 1, 16, 0);
-    if (!pixels || pixels[0] != 0xff00 || pixels[1] != 0x0f00 || pixels[2] != 0xfff0 || pixels[3] != 0x0ff0) ++errors;
+    if (!pixels || pixels[0] != 0x3333 || pixels[1] != 0x2222 || pixels[2] != 0x7777 || pixels[3] != 0x6666) ++errors;
     free(pixels);
     pixels = hikaru_vendor_test_decode_abgr1111(tex, 1, 1, 2046, 1023);
     if (!pixels) ++errors;
@@ -275,8 +310,9 @@ int main(void)
     if (hikaru_vendor_test_decode_layer_abgr1555(fb, 0, 1569)) ++errors;
     errors += test_fb_dma_lanes(fb);
     errors += test_fb_dma_overlap(fb);
+    if (hikaru_vendor_test_fb_dma_busy(fb) != 0) ++errors; /* immediate copy: busy bit clear */
     if (hikaru_vendor_test_texture_wrap(0, 0) != GL_CLAMP_TO_EDGE ||
-        hikaru_vendor_test_texture_wrap(0, 1) != GL_CLAMP_TO_EDGE ||
+        hikaru_vendor_test_texture_wrap(0, 1) != GL_MIRRORED_REPEAT ||
         hikaru_vendor_test_texture_wrap(1, 0) != GL_REPEAT ||
         hikaru_vendor_test_texture_wrap(1, 1) != GL_MIRRORED_REPEAT) ++errors;
     if (!hikaru_vendor_test_same_texture_state(0, 0) ||

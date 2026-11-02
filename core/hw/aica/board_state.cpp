@@ -94,6 +94,34 @@ bool BoardState::interruptPending() const
 	return (enabled & pending) != 0;
 }
 
+u32 BoardState::activeChannels(ChannelInfo* out, u32 max) const
+{
+	const auto word = [this](u32 slot, u32 index) {
+		const u32 at = slot + index * 4;
+		return u32(registers[at]) | (u32(registers[at + 1]) << 8);
+	};
+	u32 count = 0;
+	for (u32 channel = 0; channel < 64 && count < max; ++channel) {
+		const u32 slot = channel * 0x80;
+		const u32 first = word(slot, 0);
+		if (!(first & 0x4000)) continue; // KYONB
+		auto& info = out[count++];
+		info.channel = channel;
+		info.sa = ((first & 0x7f) << 16) | word(slot, 1);
+		info.pcms = (first >> 7) & 3;
+		info.lsa = word(slot, 2);
+		info.lea = word(slot, 3);
+		const u32 mix = word(slot, 8);
+		info.isel = mix & 0xf;
+		info.imxl = (mix >> 4) & 0xf;
+		const u32 send = word(slot, 9);
+		info.dipan = send & 0x1f;
+		info.disdl = (send >> 8) & 0xf;
+		info.tl = (word(slot, 10) >> 8) & 0xff;
+	}
+	return count;
+}
+
 u32 BoardState::activeKeyCount() const
 {
 	u32 count = 0;

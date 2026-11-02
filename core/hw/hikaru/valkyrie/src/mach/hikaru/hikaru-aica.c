@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -91,9 +92,7 @@ hikaru_aica_get (vk_device_t *device, unsigned size, uint32_t addr, void *val)
 		/* XXX required for PHARRER; see PH:@0C0B2884 */
 		set_ptr (val, size, 4);
 		break;
-	case 0x700000 ... 0x703BFF:
-		set_ptr (val, size, vk_buffer_get (aica->regs, size, addr & 0x3FFF));
-		break;
+	/* AICA register range is handled in default. */
 	case 0x710000:
 	case 0x710004:
 	case 0x710008:
@@ -101,17 +100,15 @@ hikaru_aica_get (vk_device_t *device, unsigned size, uint32_t addr, void *val)
 		VK_ASSERT (size == 4);
 		*val32 = aica->rtc[(offs & 0xF) / 4];
 		break;
-	case 0x800000 ... 0xFFFFFF:
-		/* RAM */
-		/* The CPU-visible aperture has reached an actual sound RAM device. */
-		sh4_charge_sound_ram_read(((hikaru_t *)device->mach)->sh_current,
-		                          ((hikaru_t *)device->mach)->cpu_clock_mhz);
-		set_ptr (val, size, vk_buffer_get (aica->ram, size, addr & 0x7FFFFF));
-		if ((!engine || !engine->sound_attached) && offs == 0x80005C)
-			/* XXX hack for AIRTRIX */
-			set_ptr (val, size, 1);
-		break;
+	/* AICA RAM range is handled in default. */
 	default:
+		if (offs >= 0x700000 && offs <= 0x703BFF) { set_ptr (val, size, vk_buffer_get (aica->regs, size, addr & 0x3FFF)); break; }
+		if (offs >= 0x800000) {
+			sh4_charge_sound_ram_read(((hikaru_t *)device->mach)->sh_current, ((hikaru_t *)device->mach)->cpu_clock_mhz);
+			set_ptr (val, size, vk_buffer_get (aica->ram, size, addr & 0x7FFFFF));
+			if ((!engine || !engine->sound_attached) && offs == 0x80005C) set_ptr (val, size, 1);
+			break;
+		}
 		VK_MACH_ERROR (device->mach, "AICA unhandled R%u %08X", size*8, addr);
 		return -1;
 	}
@@ -138,22 +135,17 @@ hikaru_aica_put (vk_device_t *device, unsigned size, uint32_t addr, uint64_t val
 		return 0;
 	}
 	switch (offs) {
-	case 0x700000 ... 0x703BFF:
-		vk_buffer_put (aica->regs, size, addr & 0x3FFF, val);
-		if (offs == 0x702C00 && (val & 1))
-			hikaru_aica_reset_cpu (aica);
-		break;
+	/* AICA register range is handled in default. */
 	case 0x710000:
 	case 0x710004:
 	case 0x710008:
 		/* AICA RTC */
 		VK_ASSERT (size == 4);
 		return -1;
-	case 0x800000 ... 0xFFFFFF:
-		/* RAM */
-		vk_buffer_put (aica->ram, size, addr & 0x7FFFFF, val);
-		break;
+	/* AICA RAM range is handled in default. */
 	default:
+		if (offs >= 0x700000 && offs <= 0x703BFF) { vk_buffer_put (aica->regs, size, addr & 0x3FFF, val); if (offs == 0x702C00 && (val & 1)) hikaru_aica_reset_cpu (aica); break; }
+		if (offs >= 0x800000) { vk_buffer_put (aica->ram, size, addr & 0x7FFFFF, val); break; }
 		VK_MACH_ERROR (device->mach, "AICA unhandled W%u %08X = %" PRIX64 "", size*8, addr, val);
 		return -1;
 	}

@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -95,6 +96,26 @@
 
 #define XDN	XD(_RN)
 #define XDM	XD(_RM)
+
+/* SH-4 arithmetic pairs put the high word in FRn and the low word in
+ * FRn+1 (Odin sh4_ops.cpp get_dr/set_dr). A native double overlay reverses
+ * those words on little-endian hosts. FMOV pairs retain their raw order. */
+static inline double
+sh4_get_dr (const sh4_t *ctx, unsigned n)
+{
+	alias64uf_t value;
+	value.u = ((uint64_t) FR(n).u << 32) | FR(n+1).u;
+	return value.f;
+}
+
+static inline void
+sh4_set_dr (sh4_t *ctx, unsigned n, double number)
+{
+	alias64uf_t value;
+	value.f = number;
+	FR(n).u = (uint32_t) (value.u >> 32);
+	FR(n+1).u = (uint32_t) value.u;
+}
 
 #define IS_PRIVILEGED \
 	(SR.bit.md == 1)
@@ -586,9 +607,7 @@ sh4_ireg_get (sh4_t *ctx, unsigned size, uint32_t addr, void *val)
 		VK_ASSERT (size == 2);
 		break;
 	/* DMAC */
-	case DMAC_SAR0 ... DMAC_DMAOR:
-		VK_ASSERT (size == 4);
-		break;
+	/* DMAC range is handled in default (no GNU case ranges). */
 	/* TMU */
 	case TMU_TSTR:
 		VK_ASSERT (size == 1);
@@ -599,6 +618,7 @@ sh4_ireg_get (sh4_t *ctx, unsigned size, uint32_t addr, void *val)
 		break;
 	/* Invalid/Unhandled */
 	default:
+		if ((addr & 0xFFFFFF) >= DMAC_SAR0 && (addr & 0xFFFFFF) <= DMAC_DMAOR) { VK_ASSERT (size == 4); break; }
 		return -1;
 	}
 	return 0;
@@ -620,8 +640,7 @@ sh4_ireg_put (sh4_t *ctx, unsigned size, uint32_t addr, uint64_t val)
 	VK_CPU_LOG (ctx, "IREG W%u %08X = %" PRIX64 "", size * 8, addr, val);
 
 	switch (addr & 0xFFFFFF) {
-	case 0x900000 ... 0x90FFFF: /* BSC_SDRM2 */
-	case 0x940000 ... 0x94FFFF: /* BSC_SDRM3 */
+	/* BSC_SDRM2/SDRM3 ranges are handled in default. */
 	case CPG_STBCR:
 		VK_ASSERT (size == 1);
 		break;
@@ -800,6 +819,8 @@ sh4_ireg_put (sh4_t *ctx, unsigned size, uint32_t addr, uint64_t val)
 		return 0;
 	/* Invalid/Unhandled */
 	default:
+		if (((addr & 0xFFFFFF) >= 0x900000 && (addr & 0xFFFFFF) <= 0x90FFFF) ||
+		    ((addr & 0xFFFFFF) >= 0x940000 && (addr & 0xFFFFFF) <= 0x94FFFF)) { VK_ASSERT (size == 1); break; }
 		return -1;
 	}
 	IREG_PUT (size, addr, val);
@@ -1294,10 +1315,88 @@ sh4_skip_slave_wait (sh4_t *ctx, uint16_t branch)
 #endif
 }
 
+/* Planet Harriers variant of the slave wait above: same 10-cycle,
+ * R7 += 513 iteration (probe-verified against normal execution), with
+ * different branch offsets and tail encoding. */
+static void
+sh4_skip_slave_wait_planet (sh4_t *ctx, uint16_t branch)
+{
+#ifdef HIKARU_VENDOR_TESTING
+	if (!poll_skip_enabled) return;
+#endif
+	static const uint16_t code[] = {
+		0xc400, 0xe202, 0x4218, 0x372e, 0xe180, 0x8f04, 0x4128, 0x7130,
+		0xe701, 0x2171, 0xe700, 0x2008, 0xe000, 0x89f1
+	};
+	if (branch != 0x89f1 || ctx->base.patch || ctx->in_slot ||
+	    ctx->base.remaining < 11 || ctx->intc.pending || PC < 26 || R(0) != 0 || !T) return;
+	uint32_t start = (PC - 26) & ADDR_MASK;
+	vk_mmap_read_span_t insns, data;
+	if (vk_mmap_get_read_span (ctx->base.mmap, 2, start, &insns) ||
+	    (uint64_t)start + sizeof(code) - 1 > insns.last ||
+	    memcmp (insns.data + start - insns.first, code, sizeof(code))) return;
+	uint32_t addr = GBR, physical = addr & ADDR_MASK;
+	if (physical < 0x0c000000 || physical > 0x0dffffff ||
+	    IS_ON_CHIP (addr) || IS_STORE_QUEUE (addr) ||
+	    vk_mmap_get_read_span (ctx->base.mmap, 1, physical, &data) ||
+	    data.data[physical - data.first] != 0) return;
+	uint32_t n = (uint32_t)(ctx->base.remaining - 1) / 10;
+	uint32_t before_carry = (UINT32_MAX - R(7)) / 513u;
+	if (n > before_carry) n = before_carry;
+	if (!n) return;
+	R(7) += n * 513u;
+	R(0) = 0;
+	R(1) = 0xff800000u;
+	R(2) = 512;
+	ctx->base.remaining -= n * 10;
+#ifdef HIKARU_VENDOR_TESTING
+	poll_skipped += (uint64_t)n * 10;
+#endif
+}
+
+/* Planet Harriers master wait: reloads the GBR poll bytes and branches
+ * back while R1 stays positive (6 cycles per iteration, no other state).
+ * R1 and the poll bytes can only change between slices. */
+static void
+sh4_skip_master_wait_planet (sh4_t *ctx, uint16_t branch)
+{
+#ifdef HIKARU_VENDOR_TESTING
+	if (!poll_skip_enabled) return;
+#endif
+	static const uint16_t code[] = {
+		0xc402, 0x4015, 0x8d02, 0xc400, 0xa0b9, 0x0009, 0x4015, 0x89f7
+	};
+	if (branch != 0x89f7 || ctx->base.patch || ctx->in_slot ||
+	    ctx->base.remaining < 7 || ctx->intc.pending || PC < 14 || !T) return;
+	uint32_t start = (PC - 14) & ADDR_MASK;
+	vk_mmap_read_span_t insns, data;
+	if (vk_mmap_get_read_span (ctx->base.mmap, 2, start, &insns) ||
+	    (uint64_t)start + sizeof(code) - 1 > insns.last ||
+	    memcmp (insns.data + start - insns.first, code, sizeof(code))) return;
+	uint32_t addr = GBR, physical = addr & ADDR_MASK;
+	if (physical < 0x0c000000 || physical > 0x0dffffff - 2 ||
+	    IS_ON_CHIP (addr) || IS_STORE_QUEUE (addr) ||
+	    vk_mmap_get_read_span (ctx->base.mmap, 1, physical, &data) ||
+	    (uint64_t)physical + 2 - data.first >= (uint64_t)(data.last - data.first)) return;
+	/* The loop only continues while both poll bytes stay positive
+	 * (CMP/PL on each); they cannot change mid-slice. */
+	if ((int8_t)data.data[physical - data.first] <= 0 ||
+	    (int8_t)data.data[physical - data.first + 2] <= 0) return;
+	uint32_t n = (uint32_t)(ctx->base.remaining - 1) / 6;
+	if (!n) return;
+	R(0) = data.data[physical - data.first];
+	ctx->base.remaining -= n * 6;
+#ifdef HIKARU_VENDOR_TESTING
+	poll_skipped += (uint64_t)n * 6;
+#endif
+}
+
 static void
 sh4_skip_poll_loop (sh4_t *ctx, uint16_t branch)
 {
 	sh4_skip_slave_wait (ctx, branch);
+	sh4_skip_slave_wait_planet (ctx, branch);
+	sh4_skip_master_wait_planet (ctx, branch);
 #ifdef HIKARU_VENDOR_TESTING
 	if (!poll_skip_enabled) return;
 #endif
@@ -1456,6 +1555,15 @@ sh4_step_switch (sh4_t *ctx, uint32_t pc)
 	uint16_t inst;
 	sh4_fetch (ctx, pc, &inst);
 	inst = vk_cpu_patch ((vk_cpu_t *) ctx, pc & 0x1FFFFFFF, inst);
+	/* Inlining FP arithmetic can change NaN sign/payload selection (GCC
+	 * FTRV vectorization). Share the original FP bodies with indirect and
+	 * delay-slot execution; integer instructions retain inlined dispatch. */
+	if ((inst & 0xF000) == 0xF000) {
+		insns[inst] (ctx, inst);
+		ctx->base.remaining --;
+		return;
+	}
+
 	switch (insn_ids[inst]) {
 #define SH4_DISPATCH_HANDLER(name_) \
 	case SH4_HANDLER_##name_: sh4_interp_##name_ (ctx, inst); break;

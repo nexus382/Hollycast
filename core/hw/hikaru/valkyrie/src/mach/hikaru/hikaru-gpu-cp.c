@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -94,6 +95,7 @@ on_frame_begin (hikaru_gpu_t *gpu)
 	MV.total = 0;
 	MV.alternate_pending = false;
 	MV.has_alternate = false;
+	MV.has_local = false;
 
 	MAT.base = 0;
 	MAT.scratch.flags = 0;
@@ -249,8 +251,8 @@ print_disasm (hikaru_gpu_t *gpu, uint32_t *inst, const char *fmt, ...)
 	VK_LOG ("%s", out);
 }
 
-#define DISASM(fmt_, args_...) \
-	print_disasm (gpu, inst, fmt_, ##args_)
+#define DISASM(fmt_, ...) \
+	print_disasm (gpu, inst, fmt_, ##__VA_ARGS__)
 
 static void
 check_self_loop (hikaru_gpu_t *gpu, uint32_t target)
@@ -1088,6 +1090,28 @@ norm_vec4 (vec4f_t v)
  * W = Unknown
  */
 
+/* The modelview the geometry goes through: the local matrix first, if one
+ * was completed since the last plain modelview row. */
+static void
+get_modelview (hikaru_gpu_t *gpu, hikaru_modelview_t *out)
+{
+	hikaru_modelview_t *m = &MV.table[MV.depth];
+	unsigned i, j;
+
+	if (!MV.has_local) {
+		*out = *m;
+		return;
+	}
+	for (i = 0; i < 4; i++) {
+		for (j = 0; j < 3; j++)
+			out->mtx[i][j] = m->mtx[0][j] * MV.local.mtx[i][0] +
+			                 m->mtx[1][j] * MV.local.mtx[i][1] +
+			                 m->mtx[2][j] * MV.local.mtx[i][2] +
+			                 ((i == 3) ? m->mtx[3][j] : 0.0f);
+		out->mtx[i][3] = (i == 3) ? 1.0f : 0.0f;
+	}
+}
+
 I (0x161)
 {
 	hikaru_modelview_t *mv = &MV.table[MV.depth];
@@ -1097,6 +1121,19 @@ I (0x161)
 	switch ((inst[0] >> 8) & 0xF) {
 
 	case 0x1:
+		/* Local-matrix rows go through before the modelview; the last
+		 * one carries bit 14. Discarding them (as conditional uploads)
+		 * scrambled segmented models such as Planet Harriers characters. */
+		if ((inst[0] & 0x0000B000) == 0x00002000) {
+			elem = (inst[0] >> 16) & 3;
+			MV.local.mtx[elem][0] = *(float *) &inst[1];
+			MV.local.mtx[elem][1] = *(float *) &inst[2];
+			MV.local.mtx[elem][2] = *(float *) &inst[3];
+			MV.local.mtx[elem][3] = (elem == 3) ? 1.0f : 0.0f;
+			if (inst[0] & 0x00004000) MV.has_local = true;
+			return;
+		}
+
 		/* Ignore conditional version. */
 		if (inst[0] & 0x0008F000) {
 			uint64_t count = vk_host_diagnostic (gpu->base.mach->host, 3, PC);
@@ -1108,20 +1145,18 @@ I (0x161)
 		elem = (inst[0] >> 16) & 3;
 		if (push) mv = &MV.pending_alternate;
 
-		/* First element during upload. */
+		/* Rows accumulate: a partial upload (Planet Harriers sends the
+		 * translation row alone for repeated items) leaves the other
+		 * rows as they are. */
 		if (elem == 3) {
-			unsigned i, j;
 			if (push) {
 				MV.alternate_pending = false;
 			} else {
 				MV.has_alternate = MV.alternate_pending;
 				if (MV.has_alternate) MV.alternate = MV.pending_alternate;
 				MV.alternate_pending = false;
+				MV.has_local = false;
 			}
-
-			for (i = 0; i < 4; i++)
-				for (j = 0; j < 4; j++)
-					mv->mtx[i][j] = (i == j) ? 1.0f : 0.0;
 		}
 
 		/* We store the columns as rows to facilitate the
@@ -1152,7 +1187,9 @@ I (0x161)
 			v[2] = *(float *) &inst[3];
 			v[3] = 1.0f;
 
-			mult_mtx4x4f_vec4f (w, MV.table[MV.depth].mtx, v);
+			hikaru_modelview_t eye;
+			get_modelview (gpu, &eye);
+			mult_mtx4x4f_vec4f (w, eye.mtx, v);
 			LOD.value = norm_vec4 (w);
 		}
 		break;
@@ -1220,6 +1257,37 @@ int hikaru_vendor_test_modelview_pair(void)
 	bool reset = !MV.has_alternate && !MV.alternate_pending;
 	free (gpu);
 	return pending && paired && staged && reset;
+}
+
+int hikaru_vendor_test_modelview_local(void)
+{
+	hikaru_gpu_t *gpu = calloc (1, sizeof(*gpu));
+	if (!gpu) return 0;
+	uint32_t inst[4] = {0, 0x3f800000, 0, 0};
+	on_frame_begin (gpu);
+	/* Local rows 0..2, then the last row with the completion bit. */
+	for (int elem = 0; elem < 3; ++elem) {
+		inst[0] = 0x00002161u | ((unsigned)elem << 16);
+		hikaru_gpu_inst_0x161 (gpu, inst);
+	}
+	bool incomplete = !MV.has_local;
+	inst[0] = 0x00006161u | (3u << 16);
+	hikaru_gpu_inst_0x161 (gpu, inst);
+	bool completed = MV.has_local && MV.local.mtx[0][0] == 1.0f;
+	/* A full primary upload, then its translation row alone: the other
+	 * rows must survive, and the local matrix must be released. */
+	inst[1] = 0x40000000;
+	for (int elem = 3; elem >= 0; --elem) {
+		inst[0] = 0x00000161u | ((unsigned)elem << 16);
+		hikaru_gpu_inst_0x161 (gpu, inst);
+	}
+	inst[1] = 0x40400000;
+	inst[0] = 0x00030161u;
+	hikaru_gpu_inst_0x161 (gpu, inst);
+	bool retained = MV.table[0].mtx[0][0] == 2.0f && MV.table[0].mtx[3][0] == 3.0f;
+	bool released = !MV.has_local;
+	free (gpu);
+	return incomplete && completed && retained && released;
 }
 #endif
 
@@ -1736,17 +1804,9 @@ D (0x0C1)
 
 I (0x0D1)
 {
-	switch (inst[0] >> 16) {
-	case 1:
-	case 2:
-		gpu->texoffset_x = inst[1] & 0xFFFF;
-		gpu->texoffset_y = inst[1] >> 16;
-		break;
-	default:
-		gpu->texoffset_x = 0;
-		gpu->texoffset_y = 0;
-		break;
-	}
+	const unsigned mode = (inst[0] >> 16) & 3;
+	gpu->texoffset[mode][0] = (int16_t) inst[1];
+	gpu->texoffset[mode][1] = (int16_t) (inst[1] >> 16);
 }
 
 D (0x0D1)
@@ -2479,6 +2539,18 @@ I (0x0E8)
 {
 	hikaru_vertex_t vs[3];
 	unsigned i;
+	const uint32_t index = TEX.base + (inst[0] >> 16);
+
+	/* Another texhead: the three vertices go on in a new mesh (Odin
+	 * antarctic_ops.cpp op_push_texcoords3). */
+	if (index < NUM_TEXHEADS &&
+	    memcmp (&TEX.scratch, &TEX.table[index], sizeof (TEX.scratch))) {
+		if (gpu->state.in_mesh)
+			hikaru_renderer_end_mesh (HR, PC);
+		TEX.scratch = TEX.table[index];
+		if (gpu->state.in_mesh)
+			hikaru_renderer_begin_mesh (HR, PC, false);
+	}
 
 	for (i = 0; i < 3; i++) {
 		vs[i].info.full = inst[0];
@@ -2739,14 +2811,14 @@ static const struct {
 	/* 0x80 */
 	K(0x081, 0x081, FLAG_CONTINUE),
 	K(0x082, 0x082, FLAG_JUMP),
-	K(0x083, 0x083, FLAG_CONTINUE),
+	K(0x083, 0x083, 0),
 	K(0x084, 0x084, 0),
 	K(0x088, 0x088, 0),
 	K(0x091, 0x091, FLAG_CONTINUE),
 	K(0x095, 0x095, 0),
 	/* 0xC0 */
 	K(0x0C1, 0x0C1, 0),
-	K(0x0C3, 0x0C3, FLAG_CONTINUE),
+	K(0x0C3, 0x0C3, 0),
 	K(0x0C4, 0x0C4, 0),
 	K(0x0D1, 0x0D1, 0),
 	K(0x0E8, 0x0E8, FLAG_PUSH),
@@ -2825,6 +2897,15 @@ int hikaru_vendor_test_uv_dispatch(hikaru_gpu_t *gpu, const uint32_t packet[8])
         }
     }
     return 0;
+}
+
+/* The mesh-lifecycle flags of an opcode, from the production table. */
+int hikaru_vendor_test_opcode_flags(uint32_t opcode)
+{
+    for (unsigned i = 0; i < NUMELEM(insns_desc); ++i)
+        if (insns_desc[i].op == opcode)
+            return insns_desc[i].flags;
+    return -1;
 }
 
 /* Reach the real451 command handler without running the emulated CPU. */

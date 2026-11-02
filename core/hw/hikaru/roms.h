@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,11 +24,12 @@ struct InterleavedRomFile {
 struct GameDescriptor {
     const char* identifier;
     const char* title;
-    bool encrypted;
+    std::optional<uint32_t> securityKey;
 };
 
 extern const GameDescriptor AirTrixGame;
 extern const GameDescriptor BraveFirefightersGame;
+extern const GameDescriptor PlanetHarriersGame;
 const GameDescriptor* findGame(const std::string& basename);
 
 // File facts from MAME's Hikaru driver, revision
@@ -35,6 +38,8 @@ extern const std::array<RomFile, 3> BootRoms;
 extern const std::array<RomFile, 10> AirTrixRoms;
 extern const std::array<InterleavedRomFile, 6> BraveFirefightersProgramRoms;
 extern const std::array<InterleavedRomFile, 24> BraveFirefightersDataRoms;
+extern const std::array<InterleavedRomFile, 8> PlanetHarriersProgramRoms;
+extern const std::array<InterleavedRomFile, 16> PlanetHarriersDataRoms;
 extern const RomFile MieBootRom;
 
 uint32_t romCrc32(const std::vector<uint8_t>& data);
@@ -49,9 +54,11 @@ struct RomImages {
     std::vector<uint8_t> program;
     std::vector<uint8_t> data;
     static constexpr uint32_t AirTrixSecurityKey = 0x291b02c7;
+    static constexpr uint32_t PlanetHarriersSecurityKey = 0x2912c68a;
 };
 
 using RomReader = std::function<std::vector<uint8_t>(const RomFile&)>;
 RomImages loadAirTrix(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 RomImages loadBraveFirefighters(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
+RomImages loadPlanetHarriers(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 } // namespace hikaru

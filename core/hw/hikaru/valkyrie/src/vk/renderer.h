@@ -1,4 +1,5 @@
-/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* Modified for Hollycast on 2026-11-01; see valkyrie/PROVENANCE.md.
+ * Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie
  * Copyright (C) 2011, Stefano Teso
@@ -98,6 +99,9 @@ vk_renderer_destroy (vk_renderer_t **renderer_)
 }
 
 GLuint	vk_renderer_compile_program (const char *vs_src, const char *fs_src);
+bool vk_renderer_is_gles(void);
+void vk_renderer_clear_depth(float depth);
+void vk_renderer_depth_range(float near_depth, float far_depth);
 void	vk_renderer_destroy_program (GLuint program);
 void	vk_renderer_print_uniforms (GLuint program);
 

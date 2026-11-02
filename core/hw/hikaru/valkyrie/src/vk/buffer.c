@@ -1,4 +1,5 @@
-/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* Modified for Hollycast on 2026-11-01; see valkyrie/PROVENANCE.md.
+ * Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie
  * Copyright (C) 2011, 2012, Stefano Teso
@@ -18,6 +19,9 @@
  */
 
 #include "vk/buffer.h"
+#ifdef _WIN32
+#include <malloc.h> /* _aligned_malloc/_aligned_free */
+#endif
 
 static unsigned
 get_file_size (FILE *fp)
@@ -100,9 +104,16 @@ vk_buffer_new (unsigned size, unsigned alignment)
 
 	VK_ASSERT (is_pow2 (alignment));
 
-	if (alignment)
+	if (alignment) {
+#ifdef _WIN32
+		/* MSVC has no posix_memalign; the matching free is in destroy. */
+		buf->ptr = _aligned_malloc (size, alignment < sizeof (void *) ? sizeof (void *) : alignment);
+		buf->aligned_alloc = buf->ptr != NULL;
+		ret = buf->ptr ? 0 : ENOMEM;
+#else
 		ret = posix_memalign ((void *) &buf->ptr, alignment, size);
-	else
+#endif
+	} else
 		buf->ptr = malloc (size);
 
 	if (!buf->ptr || ret)
@@ -182,8 +193,12 @@ vk_buffer_destroy (vk_buffer_t **buf_)
 {
 	if (buf_) {
 		vk_buffer_t *buf = *buf_;
-		if (buf)
+		if (buf) {
+#ifdef _WIN32
+			if (buf->aligned_alloc) _aligned_free (buf->ptr); else
+#endif
 			free (buf->ptr);
+		}
 		free (buf);
 		*buf_ = NULL;
 	}

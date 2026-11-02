@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -1399,7 +1400,7 @@ I (flt)
 		FRN.f = (float) (int32_t) FPUL.u; /* int32 to float */
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
-		DRN.f = (double) (int32_t) FPUL.u; /* int32 to double */
+		sh4_set_dr (ctx, _RN, (double) (int32_t) FPUL.u); /* int32 to double */
 	}
 }
 
@@ -1409,7 +1410,7 @@ I (ftrc)
 		FPUL.u = (int32_t) FRN.f; /* float to int32 */
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
-		FPUL.u = (int32_t) DRN.f; /* double to int32 */
+		FPUL.u = (int32_t) sh4_get_dr (ctx, _RN); /* double to int32 */
 	}
 }
 
@@ -1417,19 +1418,21 @@ I (fcnvsd)
 {
 	VK_CPU_ASSERT (ctx, !(_RN & 1));
 	VK_CPU_ASSERT (ctx, !FPSCR.bit.pr);
-	DRN.f = FPUL.f;
+	sh4_set_dr (ctx, _RN, FPUL.f);
 }
 
 I (fcnvds)
 {
 	VK_CPU_ASSERT (ctx, !(_RN & 1));
 	VK_CPU_ASSERT (ctx, !FPSCR.bit.pr);
-	FPUL.f = DRN.f;
+	FPUL.f = sh4_get_dr (ctx, _RN);
 }
 
+/* PR does not change FMOV width: the double-precision unsigned divider
+ * builds its bias with individual single-word loads while PR=1, SZ=0. */
 I (fmov)
 {
-	if (FPSCR.bit.sz | FPSCR.bit.pr) {
+	if (FPSCR.bit.sz) {
 		uint64_t tmp;
 		if (_RM & 1)
 			tmp = XDM.u;
@@ -1445,7 +1448,7 @@ I (fmov)
 
 I (fmov_load)
 {
-	if (!(FPSCR.bit.sz | FPSCR.bit.pr))
+	if (!FPSCR.bit.sz)
 		FRN.u = R32 (ctx, RM);
 	else if (_RN & 1)
 		XDN.u = R64 (ctx, RM);
@@ -1455,7 +1458,7 @@ I (fmov_load)
 
 I (fmov_store)
 {
-	if (!(FPSCR.bit.sz | FPSCR.bit.pr))
+	if (!FPSCR.bit.sz)
 		W32 (ctx, RN, FRM.u);
 	else if (_RM & 1)
 		W64 (ctx, RN, XDM.u);
@@ -1465,7 +1468,7 @@ I (fmov_store)
 
 I (fmov_index_load)
 {
-	if (!(FPSCR.bit.sz | FPSCR.bit.pr))
+	if (!FPSCR.bit.sz)
 		FRN.u = R32 (ctx, R0 + RM);
 	else if (_RN & 1)
 		XDN.u = R64 (ctx, R0 + RM);
@@ -1475,7 +1478,7 @@ I (fmov_index_load)
 
 I (fmov_index_store)
 {
-	if (!(FPSCR.bit.sz | FPSCR.bit.pr))
+	if (!FPSCR.bit.sz)
 		W32 (ctx, R0 + RN, FRM.u);
 	else if (_RM & 1)
 		W64 (ctx, R0 + RN, XDM.u);
@@ -1485,7 +1488,7 @@ I (fmov_index_store)
 
 I (fmov_restore)
 {
-	if (!(FPSCR.bit.sz | FPSCR.bit.pr)) {
+	if (!FPSCR.bit.sz) {
 		FRN.u = R32 (ctx, RM);
 		RM += 4;
 	} else if (_RN & 1) {
@@ -1499,7 +1502,7 @@ I (fmov_restore)
 
 I (fmov_save)
 {
-	if (!(FPSCR.bit.sz | FPSCR.bit.pr)) {
+	if (!FPSCR.bit.sz) {
 		RN -= 4;
 		W32 (ctx, RN, FRM.u);
 	} else if (_RM & 1) {
@@ -1517,7 +1520,7 @@ I (fneg)
 		FRN.u = FRN.u ^ 0x80000000;
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
-		DRN.u = DRN.u ^ 0x8000000000000000ull;
+		FRN.u ^= 0x80000000;
 	}
 }
 
@@ -1527,7 +1530,7 @@ I (fabs)
 		FRN.u = FRN.u & 0x7FFFFFFF;
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
-		DRN.u = DRN.u & 0x7FFFFFFFFFFFFFFFull;
+		FRN.u &= 0x7FFFFFFF;
 	}
 }
 
@@ -1538,7 +1541,7 @@ I (fadd)
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
 		VK_CPU_ASSERT (ctx, !(_RM & 1));
-		DRN.f += DRM.f;
+		sh4_set_dr (ctx, _RN, sh4_get_dr (ctx, _RN) + sh4_get_dr (ctx, _RM));
 	}
 }
 
@@ -1549,7 +1552,7 @@ I (fsub)
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
 		VK_CPU_ASSERT (ctx, !(_RM & 1));
-		DRN.f -= DRM.f;
+		sh4_set_dr (ctx, _RN, sh4_get_dr (ctx, _RN) - sh4_get_dr (ctx, _RM));
 	}
 }
 
@@ -1560,7 +1563,7 @@ I (fmul)
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
 		VK_CPU_ASSERT (ctx, !(_RM & 1));
-		DRN.f *= DRM.f;
+		sh4_set_dr (ctx, _RN, sh4_get_dr (ctx, _RN) * sh4_get_dr (ctx, _RM));
 	}
 }
 
@@ -1571,7 +1574,7 @@ I (fdiv)
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
 		VK_CPU_ASSERT (ctx, !(_RM & 1));
-		DRN.f /= DRM.f;
+		sh4_set_dr (ctx, _RN, sh4_get_dr (ctx, _RN) / sh4_get_dr (ctx, _RM));
 	}
 }
 
@@ -1605,7 +1608,7 @@ I (fsqrt)
 		FRN.f = sqrtf (FRN.f);
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
-		DRN.f = sqrt (DRN.f);
+		sh4_set_dr (ctx, _RN, sqrt (sh4_get_dr (ctx, _RN)));
 	}
 }
 
@@ -1663,7 +1666,7 @@ I (fcmpeq)
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
 		VK_CPU_ASSERT (ctx, !(_RM & 1));
-		T = DRN.f == DRM.f;
+		T = sh4_get_dr (ctx, _RN) == sh4_get_dr (ctx, _RM);
 	}
 }
 
@@ -1674,7 +1677,7 @@ I (fcmpgt)
 	} else {
 		VK_CPU_ASSERT (ctx, !(_RN & 1));
 		VK_CPU_ASSERT (ctx, !(_RM & 1));
-		T = DRN.f > DRM.f;
+		T = sh4_get_dr (ctx, _RN) > sh4_get_dr (ctx, _RM);
 	}
 }
 

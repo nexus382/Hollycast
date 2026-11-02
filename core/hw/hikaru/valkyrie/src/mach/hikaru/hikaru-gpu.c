@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -989,7 +990,11 @@ hikaru_gpu_begin_dma (hikaru_gpu_t *gpu)
 		}
 	}
 
-	REG1A (0x24) |= 1;
+	/* The copy is immediate, so the busy bit (1A000024 bit 0) is never
+	 * left set: games poll it before queueing the next blit (Odin
+	 * eurasia.cpp blit). Leaving it set throttled Planet Harriers HUD
+	 * composition to one blit per CP sync. */
+	REG1A (0x24) &= ~1;
 }
 
 /****************************************************************************
@@ -1142,9 +1147,7 @@ hikaru_gpu_put (vk_device_t *device, unsigned size, uint32_t addr, uint64_t val)
 		case 0x08:
 		case 0x0C:
 		case 0x14:
-		case 0x18 ... 0x34:
-		case 0x38 ... 0x54:
-		case 0x70 ... 0x78:
+		/* IDMA register ranges are handled in default. */
 		case 0x80:
 		case 0x90:
 		case 0x94:
@@ -1171,6 +1174,7 @@ hikaru_gpu_put (vk_device_t *device, unsigned size, uint32_t addr, uint64_t val)
 			VK_ASSERT (val == 0x01010101 || val == 0x02020202);
 			break;
 		default:
+			if (((addr & 0xFF) >= 0x18 && (addr & 0xFF) <= 0x34) || ((addr & 0xFF) >= 0x38 && (addr & 0xFF) <= 0x54) || ((addr & 0xFF) >= 0x70 && (addr & 0xFF) <= 0x78)) break;
 			return -1;
 		}
 		REG15 (addr) = val;
@@ -1202,12 +1206,13 @@ hikaru_gpu_put (vk_device_t *device, unsigned size, uint32_t addr, uint64_t val)
 			REG1A (addr) = val;
 			hikaru_gpu_cp_on_put (gpu);
 			return 0;
-		case 0x80 ... 0xC0: /* Display Config? */
+		/* Display Config range is handled in default. */
 		case 0xC4: /* Unknown control */
 		case 0xD0: /* Unknown control */
 		case 0x100:
 			break;
 		default:
+			if ((addr & 0x1FF) >= 0x80 && (addr & 0x1FF) <= 0xC0) break;
 			return -1;
 		}
 		REG1A (addr) = val;
@@ -1319,6 +1324,22 @@ hikaru_vendor_test_fb_dma (vk_buffer_t *fb, unsigned src_x, unsigned src_y,
 	         hikaru_gpu_put (&gpu->base, 4, 0x1A04000C, 1) == 0;
 	free (gpu);
 	return ok;
+}
+
+int
+hikaru_vendor_test_fb_dma_busy (vk_buffer_t *fb)
+{
+	hikaru_gpu_t *gpu = calloc (1, sizeof (*gpu));
+	if (!gpu) return -1;
+	gpu->fb = fb;
+	REG1A (0x24) = 1;
+	int ok = hikaru_gpu_put (&gpu->base, 4, 0x1A040000, 0) == 0 &&
+	         hikaru_gpu_put (&gpu->base, 4, 0x1A040004, 16) == 0 &&
+	         hikaru_gpu_put (&gpu->base, 4, 0x1A040008, (1 << 16) | 1) == 0 &&
+	         hikaru_gpu_put (&gpu->base, 4, 0x1A04000C, 1) == 0;
+	int busy = ok ? (int) (REG1A (0x24) & 1) : -1;
+	free (gpu);
+	return busy;
 }
 #endif
 

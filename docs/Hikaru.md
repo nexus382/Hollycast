@@ -1,14 +1,19 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Experimental Sega Hikaru support
 
 The optional Hikaru backend recognizes **Air Trix (`airtrix`)** and
-**Brave Firefighters (`braveff`)** in the normal game library and loader. It uses
+**Brave Firefighters (`braveff`)**, plus **Planet Harriers (`pharrier`)**, in the
+normal game library and loader. It uses
 a separate Hikaru CPU/GPU backend. Air Trix testing has reached attract mode, player/stage selection,
 and an active skating stage with calibrated steering and awarded trick coins.
 Compatibility is experimental: rendering and
 timing are still under investigation. The desktop frontend runs both AICA/ARM7
 sound boards and produces music and effects, but playback currently breaks up
 when emulation cannot supply samples in real time. Other
-Hikaru games and the `airtrixo` revision are not supported. Brave Firefighters
+Hikaru games and the `airtrixo` revision remain unsupported. Planet Harriers
+uses its own 315-5881 key, four sparse program-ROM pairs, eight data-ROM pairs,
+and separate nonvolatile storage. It is experimental; cabinet networking is
+not emulated. Brave Firefighters
 has a separately validated ROM manifest, ROM-board layout and unpopulated
 protection-device mapping. Native testing now reaches its first firefighting
 stage with coherent HUD and room textures, registered sound banks, and music
@@ -53,8 +58,11 @@ register writes, mode transitions, individual enables, and scene transparency.
 Spotlights now use the game's encoded cutoff, penumbra scale and uploaded
 falloff curves, replacing a fixed hard edge with the authored spread and fade.
 The encoding was traced through Air Trix's command generator and checked with
-synthetic shader cases and saved selection/gameplay frames. Texture environment
-modes and specular lighting remain incomplete. Exact spotlight rounding, mixed
+synthetic shader cases and saved selection/gameplay frames. Textured Brave Firefighters heads with zero diffuse and ambient coefficients
+now retain their authored 0x691 color modulation, restoring their facial detail
+without lifting ordinary material shadows. This narrow prelit-material behavior
+is inferred from captured draws; other uses of 0x691 remain unresolved. Texture
+environment modes and specular lighting remain incomplete. Exact spotlight rounding, mixed
 bank/curve selection and other interpretation limits are described in
 [SPOTLIGHTS.md](../core/hw/hikaru/valkyrie/SPOTLIGHTS.md); these changes do not
 establish hardware-accurate rendering.
@@ -103,8 +111,8 @@ frame is rendered; automatic frame skipping is not enabled.
 
 ## Build and run
 
-Hikaru is disabled in standard builds. Enable it in a desktop macOS or Linux
-build with desktop OpenGL support:
+Hikaru is enabled by default in standalone Windows, Android, Linux and macOS
+builds. It can be forced on or off at configure time:
 
 ```sh
 cmake --preset <PRESET> -DUSE_HIKARU=ON
@@ -116,10 +124,13 @@ enabling fast-math. `-DHIKARU_VENDOR_OPTIMIZE=OFF` keeps the build configuration
 original optimization flags. Debug and sanitizer builds retain their requested
 flags.
 
-The backend requires OpenGL 3.2. Loading a supported Hikaru game selects OpenGL and disables
-threaded rendering for that session. Vulkan, Metal, OpenGL ES, Windows, mobile,
-and libretro Hikaru builds are not supported by this experimental integration.
-macOS Apple Silicon has received runtime testing; Linux has not yet received
+The backend requires OpenGL 3.2 on desktop or OpenGL ES 3.0 on Android.
+Loading a supported Hikaru game selects OpenGL and disables threaded
+rendering for that session. Vulkan, Metal, Direct3D, libretro, Xbox/UWP,
+Switch, iOS and BSD Hikaru builds are not supported by this experimental
+integration. ES2-only hardware keeps the existing Dreamcast path; Hikaru
+itself is rejected there at load time. macOS Apple Silicon has received
+runtime testing; the Windows, Android and Linux ports have not yet received
 equivalent runtime validation.
 
 Place `airtrix.zip` or `braveff.zip` beside `hikaru.zip` and `mie.zip`, then add
@@ -159,7 +170,8 @@ On macOS, **System > Insert Credit** also inserts one credit for the loaded
 Hikaru game. The action sends a press and release through the same cabinet
 input path as a physical coin button.
 
-Unused gamepad face buttons mapped to C or X also insert credits. The controller
+For Air Trix and Brave Firefighters, unused gamepad face buttons mapped to C
+or X also insert credits. Planet Harriers reserves them for cabinet actions. The controller
 mapping page labels the Hikaru controls. Board motion uses two analog channels;
 the four cabinet buttons are distinct from the analog board axes. Runtime
 testing has verified both calibrated axes, front/back switch mapping, and a
@@ -181,6 +193,14 @@ Start calibration, move both board axes through their full ranges, and release
 them to the center. Press F3 to finish, then select Exit and confirm with F2
 to save. With the default keyboard, J/L move yaw and I/K move roll. Recalibrate
 after changing the controller's usable range.
+
+Planet Harriers uses one analog stick per cabinet. The default keyboard
+provides arrows or I/J/K/L for movement, X for bullets, C for missiles, F for
+bombs, S/D for the left/right view buttons, A for coins, and Return for Start.
+The controller mapping page exposes all five cabinet buttons. Configure and
+calibrate the stick in **Game Test Mode > Joystick Calibration** if needed;
+F2 is Test and F3 is Service. Cabinet link play is not available. Its saves
+use `pharrier.hikaru.nvmem` and `pharrier.mie.eeprom`.
 
 Save states, automatic states, rollback/netplay, and RetroAchievements are
 disabled for Hikaru. The backend currently keeps one emulated machine active.
@@ -235,7 +255,7 @@ ctest --test-dir /tmp/hollycast-hikaru-tests --output-on-failure
 The eleven suites cover the bridge, board memory, native SH4 execution,
 peripherals, DMA, ROM loading, JVS, MIE, native machine, EEPROM, and 315-5881
 protection. They are also included by `ENABLE_CTEST=ON`. Optional embedded
-renderer tests (`HIKARU_VENDOR_BUILD_SMOKE=ON` on macOS) use synthetic data and
+renderer tests (`HIKARU_VENDOR_BUILD_SMOKE=ON` on Windows, Linux or macOS) use synthetic data and
 a hidden GL window to exercise texture bounds, normal transforms, framebuffer
 output, host GL state restoration, and recoverable engine failures. Synthetic
 instruction tests also compare guarded RAM access and polling-loop shortcuts

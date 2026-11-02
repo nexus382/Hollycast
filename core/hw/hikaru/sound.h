@@ -17,6 +17,9 @@ public:
 	struct BoardDiagnostics {
 		u32 armPc = 0, keys = 0, status = 0, bankReady = 0, bankRequest = 0;
 		u32 queuedCommands = 0, bankBytes = 0;
+		u32 peak = 0; // Loudest sample since the previous diagnostics call.
+		u32 masterVolume = 0;
+		char channels[1024]{}; // Keyed channels, register-level, for traces.
 		u32 bankDescriptors[8]{};
 		bool armEnabled = false, irq = false;
 	};
@@ -58,6 +61,8 @@ private:
 	void* sinkOpaque;
 	u64 sampleFraction = 0;
 	u64 mixedSampleCount = 0, mixedClipCount = 0, boardSaturationCount = 0;
+	mutable u32 boardPeak[2]{};
+	mutable u32 channelPeaks[2][64]{};
 	bool resetAsserted = true;
 	bool beginFrame();
 	void endFrame();

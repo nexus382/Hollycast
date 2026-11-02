@@ -1,4 +1,5 @@
-/* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
+/* Modified for Hollycast on 2026-11-01; see valkyrie/PROVENANCE.md.
+ * Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie
  * Copyright (C) 2011, Stefano Teso
@@ -20,6 +21,32 @@
  */
 
 #include "vk/renderer.h"
+
+bool vk_renderer_is_gles(void)
+{
+	/* The host creates one context kind per run; query it once instead of
+	 * on every depth-state call. A null version means no context is current
+	 * yet, so leave the result uncached in that case. */
+	static int cached = -1;
+	if (cached < 0) {
+		const char *version = (const char *)glGetString(GL_VERSION);
+		if (!version) return false;
+		cached = strncmp(version, "OpenGL ES", 9) == 0;
+	}
+	return cached != 0;
+}
+
+void vk_renderer_clear_depth(float depth)
+{
+	if (vk_renderer_is_gles()) glClearDepthf(depth);
+	else glClearDepth(depth);
+}
+
+void vk_renderer_depth_range(float near_depth, float far_depth)
+{
+	if (vk_renderer_is_gles()) glDepthRangef(near_depth, far_depth);
+	else glDepthRange(near_depth, far_depth);
+}
 
 /* TODO change API to avoid leaking the SDL window and GL context. */
 
@@ -80,16 +107,16 @@ compile_shader (GLenum type, const char *src)
 	GLint status;
 
 	id = glCreateShader (type);
-	char *patched = NULL;
-	if (type == GL_FRAGMENT_SHADER) {
-		const char *newline = strchr(src, '\n');
-		if (newline) {
-			int size = asprintf(&patched, "%.*s\nout vec4 vk_frag_color;\n%s", (int)(newline-src), src, newline+1);
-			if (size < 0) { glDeleteShader(id); return 0; }
-			src = patched;
-		}
-	}
-	glShaderSource (id, 1, (const GLchar **) &src, NULL);
+	/* Shared shader bodies use only GLSL 150 / ESSL 300 features. Keep the
+	 * version and ES precision declarations ahead of every generated variant. */
+	const char *body = strchr(src, '\n');
+	if (!body) { glDeleteShader(id); return 0; }
+	const char *sources[] = {
+		vk_renderer_is_gles() ? "#version 300 es\nprecision highp float;\nprecision highp int;\n" : "#version 150\n",
+		type == GL_FRAGMENT_SHADER ? "out vec4 vk_frag_color;\n" : "",
+		body + 1
+	};
+	glShaderSource (id, 3, sources, NULL);
 	glCompileShader (id);
 	glGetShaderiv (id, GL_COMPILE_STATUS, &status);
 	if (!status) {
@@ -97,10 +124,8 @@ compile_shader (GLenum type, const char *src)
 		VK_ERROR ("could not compile GLSL shader: '%s'\n", info);
 		VK_ERROR ("source:\n%s\n", src);
 		glDeleteShader (id);
-		free(patched);
 		return 0;
 	}
-	free(patched);
 	return id;
 }
 
@@ -122,6 +147,13 @@ vk_renderer_compile_program (const char *vs_src, const char *fs_src)
 	id = glCreateProgram ();
 	glAttachShader (id, vs);
 	glAttachShader (id, fs);
+	/* Bind before linking instead of requiring the desktop-only explicit
+	 * attribute extension. The bitmap shader uses its own UV attribute. */
+	static const char *attributes[] = { "i_position", "i_normal", "i_diffuse",
+		"i_ambient", "i_specular", "i_unknown", "i_texcoords", "i_alpha", "i_matrix_select" };
+	for (unsigned i = 0; i < NUMELEM(attributes); ++i)
+		glBindAttribLocation(id, i, attributes[i]);
+	glBindAttribLocation(id, 1, "i_fb_texcoords");
 	glLinkProgram (id);
 	glGetProgramiv (id, GL_LINK_STATUS, &status);
 	if (status == GL_FALSE) {

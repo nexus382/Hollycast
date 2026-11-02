@@ -1,6 +1,11 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 #define GL_SILENCE_DEPRECATION
 #include <SDL.h>
+#ifdef __APPLE__
 #include <OpenGL/gl3.h>
+#else
+#include <glad/gl.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +23,7 @@ int hikaru_vendor_test_shader_uniform_cache(void);
 int hikaru_vendor_test_vertex_chunks(void);
 int hikaru_vendor_test_mesh_vao_pixels(void);
 int hikaru_vendor_test_unlit_material_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4]);
-int hikaru_vendor_test_layer_pixels(vk_renderer_t *, int, const uint32_t[4], const uint8_t[4], int, float, float, uint8_t[4][4]);
+int hikaru_vendor_test_layer_pixels(vk_renderer_t *, int, int, const uint32_t[4], const uint8_t[4], int, float, float, uint8_t[4][4]);
 int hikaru_vendor_test_material_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *);
 int hikaru_vendor_test_material_fog_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *, unsigned);
 int hikaru_vendor_test_routed_layers(vk_renderer_t *, uint8_t[10][3][4]);
@@ -37,7 +42,7 @@ static void layer_pixels_probe(void) {
  for(int format=0;format<2;format++) for(int back=0;back<2;back++) {
   const uint32_t *input=format?rgb10:rgb1555;
   const uint8_t (*expected)[4]=format?expected10:expected1555;
-  if(!hikaru_vendor_test_layer_pixels(layer_renderer,format,input,scene,back,1.0f,back?1.0f:0.0f,actual)) layer_pixels_passed=0;
+  if(!hikaru_vendor_test_layer_pixels(layer_renderer,format,1,input,scene,back,1.0f,back?1.0f:0.0f,actual)) layer_pixels_passed=0;
   for(unsigned i=0;i<4;i++) for(unsigned c=0;c<4;c++) {
    int delta=(int)actual[i][c]-(int)expected[i][c];
    if(delta < -1 || delta > 1) { fprintf(stderr,"layer format %d back %d pixel %u channel %u: got %u expected %u\n",format,back,i,c,actual[i][c],expected[i][c]); layer_pixels_passed=0; }
@@ -46,7 +51,7 @@ static void layer_pixels_probe(void) {
  /* Selected layers also retain the existing front/back factor interpolation. */
  const uint8_t mixed1555[4][4]={{139,24,45,255},{12,151,45,255},{12,24,172,255},{139,151,172,255}};
  for(int back=0;back<2;back++) {
-  if(!hikaru_vendor_test_layer_pixels(layer_renderer,0,rgb1555,scene,back,1.0f,0.5f,actual)) layer_pixels_passed=0;
+  if(!hikaru_vendor_test_layer_pixels(layer_renderer,0,1,rgb1555,scene,back,1.0f,0.5f,actual)) layer_pixels_passed=0;
   for(unsigned i=0;i<4;i++) for(unsigned c=0;c<4;c++) {
    int delta=(int)actual[i][c]-(int)mixed1555[i][c];
    if(delta < -1 || delta > 1) { fprintf(stderr,"selected layer back %d pixel %u channel %u: got %u expected %u\n",back,i,c,actual[i][c],mixed1555[i][c]); layer_pixels_passed=0; }
@@ -58,12 +63,11 @@ static void layer_pixels_probe(void) {
  const uint32_t gray=0x8000 | 28 | (28 << 5) | (28 << 10);
  const uint32_t overlay[4]={gray,0,0x8000,gray};
  const uint8_t direct_expected[4][4]={{230,230,230,255},{64,65,64,255},{0,0,0,255},{230,230,230,255}};
- /* Layer 2 currently draws over layer 1; overlapping hardware priority has
-  * not yet been established by a capture. */
+ /* Both direct layers keep layer 1 above layer 2, as in Odin. */
  for(int slot=2;slot<=4;slot++) {
-  if(!hikaru_vendor_test_layer_pixels(layer_renderer,0,overlay,backdrop,slot,1.0f,0.0f,actual)) layer_pixels_passed=0;
+  if(!hikaru_vendor_test_layer_pixels(layer_renderer,0,1,overlay,backdrop,slot,1.0f,0.0f,actual)) layer_pixels_passed=0;
   for(unsigned i=0;i<4;i++) for(unsigned c=0;c<4;c++) {
-   unsigned expected=slot==4?backdrop[c]:direct_expected[i][c];
+   unsigned expected=direct_expected[i][c];
    int delta=(int)actual[i][c]-(int)expected;
    if(delta < -1 || delta > 1) { fprintf(stderr,"direct slot %d pixel %u channel %u: got %u expected %u\n",slot,i,c,actual[i][c],expected); layer_pixels_passed=0; }
   }
@@ -71,14 +75,25 @@ static void layer_pixels_probe(void) {
  const uint32_t transparent_color[4]={0x001f,0x03e0,0x7c00,0x7fff};
  const uint32_t half10=128 | (128 << 10) | (128 << 20);
  const uint32_t coverage10[4]={half10,half10 | 0x40000000u,half10 | 0x80000000u,half10 | 0xc0000000u};
- const uint8_t additive_backdrop[4]={64,65,64,0};
- const uint8_t expected_additive10[4][4]={{192,193,192,0},{192,193,192,255},{192,193,192,255},{192,193,192,255}};
+ /* Every nonzero 2-bit alpha covers; zero alpha passes the scene through.
+  * This catches additive and fractional blending of Planet Harriers' HUD. */
+ const uint8_t expected_keyed10[4][4]={{64,65,64,255},{128,128,128,255},{128,128,128,255},{128,128,128,255}};
  for(int slot=2;slot<=3;slot++) for(int format=0;format<2;format++) {
-  if(!hikaru_vendor_test_layer_pixels(layer_renderer,format,format?coverage10:transparent_color,format?additive_backdrop:backdrop,slot,format?4.0f:1.0f,0.0f,actual)) layer_pixels_passed=0;
+  if(!hikaru_vendor_test_layer_pixels(layer_renderer,format,1,format?coverage10:transparent_color,backdrop,slot,format?4.0f:1.0f,0.0f,actual)) layer_pixels_passed=0;
   for(unsigned i=0;i<4;i++) for(unsigned c=0;c<4;c++) {
-   unsigned expected=format?expected_additive10[i][c]:backdrop[c];
+   unsigned expected=format?expected_keyed10[i][c]:backdrop[c];
    int delta=(int)actual[i][c]-(int)expected;
    if(delta < -1 || delta > 1) { fprintf(stderr,"layer blending format %d slot %d pixel %u channel %u: got %u expected %u\n",format,slot,i,c,actual[i][c],expected); layer_pixels_passed=0; }
+  }
+ }
+ /* Without the key, even alpha-zero pixels must cover the scene. */
+ const uint8_t unkeyed10[4][4]={{128,128,128,255},{128,128,128,255},{128,128,128,255},{128,128,128,255}};
+ for(int slot=2;slot<=3;slot++) for(int format=0;format<2;format++) {
+  if(!hikaru_vendor_test_layer_pixels(layer_renderer,format,0,format?coverage10:transparent_color,backdrop,slot,format?4.0f:1.0f,0.0f,actual)) layer_pixels_passed=0;
+  const uint8_t (*expected)[4]=format?unkeyed10:expected1555;
+  for(unsigned i=0;i<4;i++) for(unsigned c=0;c<4;c++) {
+   int delta=(int)actual[i][c]-(int)expected[i][c];
+   if(delta < -1 || delta > 1) { fprintf(stderr,"unkeyed layer format %d slot %d pixel %u channel %u: got %u expected %u\n",format,slot,i,c,actual[i][c],expected[i][c]); layer_pixels_passed=0; }
   }
  }
 }
@@ -88,7 +103,7 @@ static void routed_layers_probe(void) {
  static const uint8_t expected[10][3][3]={
   {{255,0,0},{0,0,255},{255,0,0}}, /* both combined, transparent scene */
   {{0,255,0},{0,255,0},{0,255,0}}, /* opaque 3D covers combined */
-  {{0,0,255},{0,0,255},{255,0,0}}, /* both direct: layer 1 on top */
+  {{255,0,0},{0,0,255},{255,0,0}}, /* both direct: layer 0 on top */
   {{255,0,0},{0,0,255},{255,0,0}}, /* layer 0 direct */
   {{0,0,255},{0,0,255},{255,0,0}}, /* layer 1 direct */
   {{0,0,255},{0,0,255},{0,0,0}},   /* only layer 1 enabled */
@@ -269,6 +284,9 @@ int main(void){
  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,2);
  SDL_Window *window=SDL_CreateWindow("Hikaru smoke",0,0,640,480,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN); if(!window)return 11;
  SDL_GLContext context=SDL_GL_CreateContext(window); if(!context)return 12;
+#ifndef __APPLE__
+ if(!gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress))return 9;
+#endif
  if(!hikaru_vendor_test_shader_uniform_cache())return 50;
  if(!hikaru_vendor_test_vertex_chunks())return 51;
  GLuint host_vao; GLint restored_vao;

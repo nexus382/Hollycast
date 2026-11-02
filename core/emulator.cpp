@@ -1238,7 +1238,7 @@ bool Emulator::render()
 	{
 		if (state != Running) return false;
 		try {
-			if (!isOpenGL(config::RendererType)) throw FlycastException("Air Trix requires desktop OpenGL");
+			if (!isOpenGL(config::RendererType)) throw FlycastException("Hikaru requires OpenGL or OpenGL ES");
 			return hikaru::frontend::render();
 		}
 		catch (...) { state = Error; TermAudio(); EventManager::event(Event::Pause); throw; }
