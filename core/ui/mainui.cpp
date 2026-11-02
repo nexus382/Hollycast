@@ -87,7 +87,12 @@ bool mainui_rend_frame()
 			// rendering mode, keep menus and Pause responsive without drawing
 			// the overlay twice when a game frame already drew it.
 			if (ImGui::GetFrameCount() == uiFrame)
+			{
 				gui_display_osd();
+				// DX/OpenGL drivers normally receive this signal from a game
+				// frame. An overlay drawn on its own must also be presented.
+				imguiDriver->setFrameRendered();
+			}
 			if (config::ProfilerEnabled && config::ProfilerDrawToGUI)
 				gui_display_profiler();
 		} catch (const RendererException& e) {

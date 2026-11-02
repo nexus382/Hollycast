@@ -15,6 +15,8 @@
 #ifndef LIBRETRO
 #include "ui/gui_debugger.h"
 #include "ui/gui_util.h"
+#include "ui/imgui_driver.h"
+#include "ui/mainui.h"
 #endif
 
 class AssemblyDebuggerTest : public ::testing::Test
@@ -260,6 +262,77 @@ TEST_F(AssemblyDebuggerTest, BlocksConflictingDebuggerAndOnlineModes)
 }
 
 #ifndef LIBRETRO
+TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoFrames)
+{
+    // Model the DX/OpenGL presentation contract without a GPU: drawing an OSD
+    // with gui_open=false does not make a frame eligible for presentation.
+    class NoVideoDriver final : public ImGuiDriver
+    {
+    public:
+        NoVideoDriver() : ImGuiDriver(false) {}
+        void newFrame() override {}
+        void renderDrawData(ImDrawData*, bool guiOpen) override
+        {
+            ++draws;
+            frameReady |= guiOpen;
+        }
+        void setFrameRendered() override { frameReady = true; }
+        void present() override
+        {
+            if (frameReady)
+                ++presents;
+            frameReady = false;
+        }
+        ImTextureID getTexture(const std::string&) override { return {}; }
+        ImTextureID updateTexture(const std::string&, const u8*, int, int, bool) override { return {}; }
+        void deleteTexture(const std::string&) override {}
+        int draws = 0;
+        int presents = 0;
+        bool frameReady = false;
+    };
+
+    ImGuiContext* previousContext = ImGui::GetCurrentContext();
+    const auto previousDisplay = settings.display;
+    const GuiState previousState = gui_state;
+    auto previousDriver = std::move(imguiDriver);
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(1280, 800);
+    io.DeltaTime = 1.f / 60;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    settings.display.width = 1280;
+    settings.display.height = 800;
+    settings.display.uiScale = 1.f;
+    imguiDriver = std::make_unique<NoVideoDriver>();
+    auto* driver = static_cast<NoVideoDriver*>(imguiDriver.get());
+    program({0xaffe, 0x0009}); // bra pc; nop: no framebuffer or PVR commands.
+
+    for (bool threaded : {true, false})
+    {
+        SCOPED_TRACE(threaded);
+        config::ThreadedRendering = threaded;
+        assembly_debugger::resume();
+        gui_state = GuiState::Closed;
+        const int previousDraws = driver->draws;
+        const int previousPresents = driver->presents;
+        EXPECT_TRUE(mainui_rend_frame());
+        EXPECT_EQ(driver->draws, previousDraws + 1);
+        EXPECT_TRUE(driver->frameReady);
+        driver->present();
+        EXPECT_EQ(driver->presents, previousPresents + 1);
+        emu.stop();
+    }
+
+    imguiDriver = std::move(previousDriver);
+    settings.display = previousDisplay;
+    gui_state = previousState;
+    ImGui::DestroyContext();
+    ImGui::SetCurrentContext(previousContext);
+}
+
 TEST_F(AssemblyDebuggerTest, BrowserKeepsScrollPositionAndCanReturnToCurrentInstruction)
 {
     program({0x7001, 0x0009});
