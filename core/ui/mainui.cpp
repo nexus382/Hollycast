@@ -21,6 +21,7 @@
 #include "audio/ui_sound.h"
 #include "mainui.h"
 #include "hw/pvr/Renderer_if.h"
+#include "hw/sh4/sh4_core.h"
 #include "gui.h"
 #include "gui_debugger.h"
 #include "gui_menu.h"
@@ -78,11 +79,13 @@ bool mainui_rend_frame()
 	{
 		try {
 			const int uiFrame = ImGui::GetFrameCount();
-			if (!emu.render())
-			{
-				if (!emu.running())
-					return false;
-			}
+			const bool frameRendered = emu.render();
+			// Shared-thread execution leaves the guest's rounding mode active,
+			// including when a breakpoint or no-video program ends the slice.
+			if (!config::ThreadedRendering)
+				setDefaultRoundingMode();
+			if (!frameRendered && !emu.running())
+				return false;
 			// A boot loop or hung game may never submit a frame. In either
 			// rendering mode, keep menus and Pause responsive without drawing
 			// the overlay twice when a game frame already drew it.

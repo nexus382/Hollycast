@@ -4,9 +4,11 @@
 #include "emulator.h"
 #include "cfg/option.h"
 #include "hw/sh4/sh4_mem.h"
+#include "hw/sh4/sh4_core.h"
 #include "hw/sh4/modules/mmu.h"
 #include <chrono>
 #include <cfenv>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -51,6 +53,9 @@ protected:
         assembly_debugger::close();
         emu.unloadGame(false);
         std::filesystem::remove(path);
+        // Direct shared-thread runs can stop before the renderer resets the
+        // guest rounding mode. Do not leak that state into unrelated tests.
+        setDefaultRoundingMode();
     }
 
     void program(std::initializer_list<u16> instructions)
@@ -319,6 +324,10 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         const int previousDraws = driver->draws;
         const int previousPresents = driver->presents;
         EXPECT_TRUE(mainui_rend_frame());
+        // On x86 Linux fegetround() only reports x87 state; nearbyint also
+        // catches a guest MXCSR rounding mode leaking into the host UI.
+        volatile double roundingProbe = 1.75;
+        EXPECT_EQ(std::nearbyint(roundingProbe), 2.0);
         EXPECT_EQ(driver->draws, previousDraws + 1);
         EXPECT_TRUE(driver->frameReady);
         driver->present();
