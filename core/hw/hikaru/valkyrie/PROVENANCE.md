@@ -79,7 +79,7 @@ compatibility interpretation, with shader regressions and saved-frame replay;
 other 0x691 uses and hardware-accurate material lighting remain unresolved.
 
 SH-4 double arithmetic assembles FRn as the high word and FRn+1 as the low
-word, following Odin's sh4_ops.cpp. FMOV width depends only on FPSCR.SZ,
+word (high word in FRn, low word in FRn+1). FMOV width depends only on FPSCR.SZ,
 independently of FPSCR.PR. Synthetic instruction regressions cover conversion,
 arithmetic, comparison, sign, paired moves, and unsigned decimal division;
 no captured game instructions are included in these tests.

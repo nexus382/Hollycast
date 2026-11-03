@@ -439,7 +439,7 @@ static bool renderFrame() {
     if (activeGame == &PlanetHarriersGame) {
         // One cabinet has one analog stick; linked cabinets are not emulated.
         // Planet's JVS order is vertical on channel 0, horizontal on
-        // channel 1 (Odin odin-games.json: STICK V analog 0, STICK H
+        // channel 1 (cabinet wiring: STICK V analog 0, STICK H
         // analog 1), the reverse of the other titles; its vertical low
         // end is down. Arrows provide full-range keyboard movement
         // alongside analog bindings.

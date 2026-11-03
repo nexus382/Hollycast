@@ -172,9 +172,9 @@ int Sound::advance(u32 cycles)
 		std::array<int, BatchSize> left{}, right{};
 		std::array<unsigned, BatchSize> saturated{};
 		if (!resetAsserted) {
-			// Odin runs the optional board first: its output feeds the
+			// The optional board runs first: its output feeds the
 			// external inputs (EXTS) of the main board, sample for sample.
-			// Both boards are still summed for the host, as in Odin's MIX.
+			// Both boards are still summed for the host mix.
 			std::array<s16, BatchSize> slaveLeft{}, slaveRight{};
 			{
 				auto& b = boards[1];

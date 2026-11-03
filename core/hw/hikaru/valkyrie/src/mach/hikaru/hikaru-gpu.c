@@ -991,8 +991,8 @@ hikaru_gpu_begin_dma (hikaru_gpu_t *gpu)
 	}
 
 	/* The copy is immediate, so the busy bit (1A000024 bit 0) is never
-	 * left set: games poll it before queueing the next blit (Odin
-	 * eurasia.cpp blit). Leaving it set throttled Planet Harriers HUD
+	 * left set: games poll it before queueing the next blit. Leaving
+	 * it set throttled Planet Harriers HUD
 	 * composition to one blit per CP sync. */
 	REG1A (0x24) &= ~1;
 }

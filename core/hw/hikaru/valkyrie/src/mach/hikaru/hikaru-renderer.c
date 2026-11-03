@@ -148,19 +148,23 @@ destroy_texture (hikaru_texture_t *tex)
 static uint16_t
 abgr1111_to_rgba4444 (uint32_t texel)
 {
-	/* Format 2 is a 4-bit intensity: every channel takes the nibble
-	 * (Odin renderer_textures.cpp i4_to_rgba4444). Expanding it as four
-	 * 1-bit channels garbled the loading screens and 1P art. */
-	return (uint16_t) ((texel & 15) * 0x1111);
+	/* Format 2 stores one 4-bit intensity. The same nibble fills all
+	 * four RGBA4444 channels; treating the texel as four 1-bit
+	 * channels garbled the loading screens and 1P art. */
+	const uint16_t nibble = (uint16_t) (texel & 0xFu);
+	return (uint16_t) (nibble | (nibble << 4) | (nibble << 8) | (nibble << 12));
 }
 
-/* Command 2C1: mirror wins over repeat, else clamp to edge, independently
- * for each axis (Odin hikaru_draw.hpp sampling_of). The fields called wrapu/
- * repeatu in hikaru_texhead_t are the repeat and mirror bits. */
+/* Command 2C1 wrap selection, per axis: a set mirror bit selects
+ * mirrored repeat, else a set repeat bit selects repeat, else the
+ * edge clamps. In hikaru_texhead_t, wrapu/wrapv hold the mirror
+ * bits and repeatu/repeatv the repeat bits. */
 static GLenum
 texture_wrap (bool repeat, bool mirror)
 {
-    return mirror ? GL_MIRRORED_REPEAT : repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+	if (mirror) return GL_MIRRORED_REPEAT;
+	if (repeat) return GL_REPEAT;
+	return GL_CLAMP_TO_EDGE;
 }
 
 static bool
@@ -1414,9 +1418,8 @@ upload_material_texhead (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	}
 
 	if (tex) {
-		/* The sampling belongs to the texhead, not to the texels: set the
-		 * filter and LOD bias of the 0C1 on every bind (Odin
-		 * renderer_textures.cpp sampler). */
+		/* Sampling state belongs to the texhead, not the texels, so
+		 * apply the 0C1 filter and LOD bias on every bind. */
 		hikaru_texhead_t *wanted = &hr->tex_list[mesh->tex_index];
 		const unsigned filter = (wanted->_0C1 >> 16) & 3;
 		const float bias = -0.5f + (float) (int8_t) ((wanted->_0C1 >> 20) & 0xFF) * 0.125f;
@@ -1649,7 +1652,7 @@ copy_texcoords (hikaru_renderer_t *hr,
 
 	/* Vertex UVs are 12.4 unless the texhead says whole texels (2C1
 	 * bit 14); the 0D1 offset the vertex selects (header bits 18-19) is
-	 * added in 1/16 of a texel (Odin antarctic_mesh.cpp copy_texcoords). */
+	 * added in 1/16 of a texel. */
 	const float k = ((th->_2C1 >> 14) & 1) ? 16.0f : 1.0f;
 	float u = src->body.texcoords[0] * k;
 	float v = src->body.texcoords[1] * k;
@@ -1825,8 +1828,7 @@ cleanup:
 }
 
 /* A 0E8 packet names a texhead (top bits, from the base): the three
- * vertices go on under that texhead in a new mesh (Odin
- * antarctic_ops.cpp op_push_texcoords3). */
+ * vertices go on under that texhead in a new mesh. */
 int hikaru_vendor_test_texhead3_switch(uint32_t texhead_a, uint32_t texhead_b,
                                        const uint32_t packet[8], float uv[3][2],
                                        uint32_t *scratch_after)
@@ -2616,8 +2618,8 @@ hikaru_renderer_begin_mesh (vk_renderer_t *rend, uint32_t addr,
 	mesh->addr[0] = addr;
 
 	/* The last vertices stay and take the new state: a strip goes on
-	 * through a recall (Odin antarctic_mesh.cpp, from the BOOTROM
-	 * colour bars). Dropping them tore segmented character strips. */
+	 * through a recall (seen in the BOOTROM colour bars). Dropping
+	 * them tore segmented character strips. */
 	if (hr->push.num_verts > 3)
 		hr->push.num_verts = 3;
 	for (unsigned kept = 0; kept < hr->push.num_verts; ++kept)
@@ -2663,9 +2665,9 @@ draw_meshes_for_polytype (hikaru_renderer_t *hr, unsigned vpi, int polytype)
 
 	LOG (" ==== DRAWING VP %u, POLYTYPE %d ====", vpi, polytype);
 
-	/* Pass rules of the X360 port (Odin hikaru_draw.hpp pass_rules):
-	 * punch-through writes depth with an 0.5 alpha test and no blending;
-	 * translucent and background blend and keep the depth. */
+	/* Per-class state: punch-through writes depth under an 0.5 alpha
+	 * test with blending off; translucent and background blend
+	 * without writing depth. */
 	switch (polytype) {
 	case HIKARU_POLYTYPE_TRANSPARENT:
 		glDisable (GL_BLEND);
@@ -3263,7 +3265,7 @@ static const char *fb_fs_source =
 "										\n"
 /* Bitmap alpha is a coverage key, including the value 1 in Planet Harriers'
  * two-bit alpha. Adding 10-bit pixels lets the 3D show through solid HUD art.
- * Follow Odin compose.frag: layer 1 covers layer 2 on either side of the 3D;
+ * Layer 1 covers layer 2 on either side of the 3D picture;
  * unit 38 chooses that side and unit 3C enables each layer's alpha key. */
 "\tvec4 scene = mix (texel_f, texel_b, u_factor);\n"
 "\tvec4 color = vec4 (0.0);\n"

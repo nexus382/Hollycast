@@ -98,7 +98,7 @@
 #define XDM	XD(_RM)
 
 /* SH-4 arithmetic pairs put the high word in FRn and the low word in
- * FRn+1 (Odin sh4_ops.cpp get_dr/set_dr). A native double overlay reverses
+ * FRn+1. A native double overlay reverses
  * those words on little-endian hosts. FMOV pairs retain their raw order. */
 static inline double
 sh4_get_dr (const sh4_t *ctx, unsigned n)

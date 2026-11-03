@@ -2541,8 +2541,7 @@ I (0x0E8)
 	unsigned i;
 	const uint32_t index = TEX.base + (inst[0] >> 16);
 
-	/* Another texhead: the three vertices go on in a new mesh (Odin
-	 * antarctic_ops.cpp op_push_texcoords3). */
+	/* A different texhead starts a new mesh for these vertices. */
 	if (index < NUM_TEXHEADS &&
 	    memcmp (&TEX.scratch, &TEX.table[index], sizeof (TEX.scratch))) {
 		if (gpu->state.in_mesh)
