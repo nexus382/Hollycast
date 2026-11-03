@@ -18,6 +18,7 @@
 #endif
 #include "jni_util.h"
 #include "android_storage.h"
+#include "http_client.h"
 #include "achievements/achievements.h"
 #include "android_locale.h"
 
