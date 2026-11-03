@@ -442,6 +442,7 @@ extern Option<bool> DSPEnabled;
 extern Option<int> AudioBufferSize;	//In samples ,*4 for bytes
 #ifdef USE_HIKARU
 extern Option<bool> HikaruAudioPacing;
+extern Option<bool> HikaruBraveMouseAim;
 #endif
 extern Option<bool> AutoLatency;
 

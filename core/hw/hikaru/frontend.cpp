@@ -16,6 +16,7 @@
 #include "oslib/storage.h"
 #include "oslib/directory.h"
 #include "input/gamepad_device.h"
+#include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/naomi/naomi_cart.h"
 #include "rend/gles/glcache.h"
@@ -435,6 +436,63 @@ static bool renderFrame() {
     if (activeGame == &BraveFirefightersGame) {
         input.analog[2] = uint16_t(int(joyx[1]) + 32768);
         input.analog[3] = uint16_t(int(joyy[1]) + 32768);
+        if (config::HikaruBraveMouseAim && !gui_is_open()) {
+            // Absolute pointer aim, like touch: position inside the
+            // picture becomes the full analog range. The last pointer
+            // position is held every frame; falling back to the pad
+            // value while the pointer rests snapped the hose to the
+            // pad's centered axes. Pad/keyboard aim still applies on
+            // frames before the pointer first moves.
+            static float aimFx = 0.5f, aimFy = 0.5f;
+            static s32 lastMouseX = -1, lastMouseY = -1;
+            static float wheelAccum = 0.0f;
+            const s32 mx = mo_x_abs[0], my = mo_y_abs[0];
+            if (mx != lastMouseX || my != lastMouseY) {
+                lastMouseX = mx; lastMouseY = my;
+                // mo_x_abs/mo_y_abs are native 640x480 picture coords;
+                // letterbox offsets were removed when they were stored.
+                aimFx = std::clamp(float(mx) / 640.0f, 0.0f, 1.0f);
+                aimFy = std::clamp(float(my) / 480.0f, 0.0f, 1.0f);
+            }
+            // While the pointer is captured for play, SDL delivers
+            // relative motion instead of absolute positions, so the
+            // absolute values freeze. Integrate the relative deltas
+            // (native units) into the held aim; Hikaru has no other
+            // consumer for them, so consuming them here is safe.
+            {
+                std::lock_guard<std::mutex> lock(relPosMutex);
+                aimFx = std::clamp(aimFx + mo_x_delta[0] / 640.0f, 0.0f, 1.0f);
+                aimFy = std::clamp(aimFy + mo_y_delta[0] / 480.0f, 0.0f, 1.0f);
+                mo_x_delta[0] = 0.0f;
+                mo_y_delta[0] = 0.0f;
+            }
+            input.analog[0] = uint16_t(aimFx * 65535.0f);
+            input.analog[1] = uint16_t(aimFy * 65535.0f);
+            // Buttons, active-low in mo_buttons: left sprays, right is
+            // the fog hold (hold right, then spray with left), middle
+            // is Start. OR them in so they work regardless of which
+            // device is assigned to the port; other bindings unchanged.
+            u8 buttons = 0xff;
+            for (unsigned port = 0; port < 4; ++port) buttons &= mo_buttons[port];
+            if (!(buttons & (1 << 2))) input.players[0] |= 0x0200;
+            // Fog hold: set both JVS push-2 positions. The cabinet's
+            // second switch byte is unassigned in the Brave mapping,
+            // so the extra bit cannot collide with a bound control.
+            if (!(buttons & (1 << 1))) input.players[0] |= 0x0100 | 0x0080;
+            if (!(buttons & (1 << 3))) input.players[0] |= 0x8000;
+            if (traceTiming) {
+                static u8 lastButtons = 0xff;
+                if (buttons != lastButtons) {
+                    std::fprintf(stderr, "Hikaru mouse buttons: raw=%02x players=%04x\n",
+                                 unsigned(buttons), unsigned(input.players[0]));
+                    lastButtons = buttons;
+                }
+            }
+            wheelAccum += mo_wheel_delta[0];
+            mo_wheel_delta[0] = 0.0f;
+            while (wheelAccum >= 1.0f) { wheelAccum -= 1.0f; insertCredit(0); }
+            while (wheelAccum <= -1.0f) { wheelAccum += 1.0f; }
+        }
     }
     if (activeGame == &PlanetHarriersGame) {
         // One cabinet has one analog stick; linked cabinets are not emulated.

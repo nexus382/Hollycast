@@ -183,6 +183,11 @@ typedef struct {
 		unsigned count, instance;
 		const hikaru_vertex_body_t *vertices;
 		GLuint vao, vbo;
+		/* Retained sort workspace: grown on demand, reused every frame. */
+		void *refs;
+		void *refs_tmp;
+		size_t refs_capacity;
+		hikaru_vertex_body_t *batch;
 	} triangle_replay;
 	struct {
 		bool enabled;

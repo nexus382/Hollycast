@@ -7583,6 +7583,15 @@ void renderControlsTab()
 
 	if (RenderCollapsingHeader("Mouse&RawInputSection", ICON_FA_CROSSHAIRS, T("Mouse & Raw Input"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			RenderGeneralToggleSettingRow(
+				"HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
+				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
+				static_cast<bool>(config::HikaruBraveMouseAim),
+				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
+				T("Mouse aim (Brave Firefighters)\nUses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
+#endif
 
 		{
 			// Temp storage for popup slider

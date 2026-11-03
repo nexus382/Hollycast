@@ -2223,6 +2223,27 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	}
 }
 
+static void
+stable_sort_triangle_refs (sorted_triangle_ref_t *refs, sorted_triangle_ref_t *tmp, size_t count)
+{
+	/* Stable merge sort: qsort is unstable, so equal-depth translucent
+	 * triangles (smoke fans, layered sprites) reshuffled every frame
+	 * and their seams showed. Ties keep submission order here. */
+	for (size_t width = 1; width < count; width *= 2) {
+		for (size_t base = 0; base < count; base += 2 * width) {
+			const size_t mid = base + width < count ? base + width : count;
+			const size_t end = base + 2 * width < count ? base + 2 * width : count;
+			size_t left = base, right = mid, out = base;
+			while (left < mid && right < end)
+				tmp[out++] = compare_sorted_triangle_ref (&refs[left], &refs[right]) <= 0
+					? refs[left++] : refs[right++];
+			while (left < mid) tmp[out++] = refs[left++];
+			while (right < end) tmp[out++] = refs[right++];
+		}
+		memcpy (refs, tmp, count * sizeof(*refs));
+	}
+}
+
 static bool
 draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	                             hikaru_mesh_t *meshes, unsigned num)
@@ -2237,8 +2258,18 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 		total += (size_t)meshes[m].num_tris * instances;
 	}
 	if (!total) return true;
-	sorted_triangle_ref_t *refs = malloc(total * sizeof(*refs));
-	if (!refs) return false;
+	if (hr->triangle_replay.refs_capacity < total) {
+		size_t grown = hr->triangle_replay.refs_capacity ? hr->triangle_replay.refs_capacity : 1024;
+		while (grown < total) grown *= 2;
+		void *resized = realloc(hr->triangle_replay.refs, grown * sizeof(sorted_triangle_ref_t));
+		if (!resized) return false;
+		hr->triangle_replay.refs = resized;
+		resized = realloc(hr->triangle_replay.refs_tmp, grown * sizeof(sorted_triangle_ref_t));
+		if (!resized) return false;
+		hr->triangle_replay.refs_tmp = resized;
+		hr->triangle_replay.refs_capacity = grown;
+	}
+	sorted_triangle_ref_t *refs = (sorted_triangle_ref_t *)hr->triangle_replay.refs;
 	size_t at = 0;
 	for (unsigned m = 0; m < num; ++m) {
 		hikaru_mesh_t *mesh = &meshes[m];
@@ -2256,23 +2287,17 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 				++at;
 			}
 	}
-	qsort(refs, at, sizeof(*refs), compare_sorted_triangle_ref);
-	hikaru_vertex_body_t *batch_vertices = malloc(
-		SORTED_TRIANGLE_BATCH_CAPACITY * 3u * sizeof(*batch_vertices));
-	if (!batch_vertices) {
-		free(refs);
-		return false;
+	stable_sort_triangle_refs(refs, (sorted_triangle_ref_t *)hr->triangle_replay.refs_tmp, at);
+	if (!hr->triangle_replay.batch) {
+		hr->triangle_replay.batch = malloc(
+			SORTED_TRIANGLE_BATCH_CAPACITY * 3u * sizeof(*hr->triangle_replay.batch));
+		if (!hr->triangle_replay.batch) return false;
 	}
-	GLuint scratch_vao = 0, scratch_vbo = 0;
-	glGenVertexArrays(1, &scratch_vao);
-	glGenBuffers(1, &scratch_vbo);
-	if (!scratch_vao || !scratch_vbo) {
-		if (scratch_vao) glDeleteVertexArrays(1, &scratch_vao);
-		if (scratch_vbo) glDeleteBuffers(1, &scratch_vbo);
-		free(batch_vertices);
-		free(refs);
-		return false;
-	}
+	hikaru_vertex_body_t *batch_vertices = hr->triangle_replay.batch;
+	if (!hr->triangle_replay.vao) glGenVertexArrays(1, &hr->triangle_replay.vao);
+	if (!hr->triangle_replay.vbo) glGenBuffers(1, &hr->triangle_replay.vbo);
+	GLuint scratch_vao = hr->triangle_replay.vao, scratch_vbo = hr->triangle_replay.vbo;
+	if (!scratch_vao || !scratch_vbo) return false;
 	GLuint bound_vao = 0;
 	float applied_depth_bias = -1.0f;
 	hr->triangle_replay.enabled = true;
@@ -2305,13 +2330,8 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	hr->triangle_replay.count = 0;
 	hr->triangle_replay.vertices = NULL;
 	hr->triangle_replay.configured = false;
-	hr->triangle_replay.vao = 0;
-	hr->triangle_replay.vbo = 0;
 	glBindVertexArray(0);
-	glDeleteBuffers(1, &scratch_vbo);
-	glDeleteVertexArrays(1, &scratch_vao);
-	free(batch_vertices);
-	free(refs);
+	/* Scratch objects and sort buffers stay in triangle_replay. */
 	(void)vpi;
 	return true;
 }
@@ -3149,6 +3169,15 @@ destroy_3d_state (hikaru_renderer_t *hr)
 		glBindVertexArray (0);
 		glDeleteVertexArrays (1, &hr->meshes.vao);
 	}
+	if (hr->triangle_replay.vbo) glDeleteBuffers (1, &hr->triangle_replay.vbo);
+	if (hr->triangle_replay.vao) glDeleteVertexArrays (1, &hr->triangle_replay.vao);
+	hr->triangle_replay.vbo = hr->triangle_replay.vao = 0;
+	free (hr->triangle_replay.refs);
+	free (hr->triangle_replay.refs_tmp);
+	free (hr->triangle_replay.batch);
+	hr->triangle_replay.refs = hr->triangle_replay.refs_tmp = NULL;
+	hr->triangle_replay.batch = NULL;
+	hr->triangle_replay.refs_capacity = 0;
 }
 
 static int
