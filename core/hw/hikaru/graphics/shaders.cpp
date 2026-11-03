@@ -80,15 +80,21 @@ const char* bitmapBody=R"(
     vec4 front=SAMPLE0(u.inverted.x==0.0?o.uv:inv)*u.factors.y;
     vec4 back=SAMPLE1(u.inverted.y==0.0?o.uv:inv)*u.factors.z;
     vec4 layer1=SAMPLE2(inv),layer2=SAMPLE3(inv);
-    vec4 scene=mix(front,back,u.factors.x),color=vec4(0.0);
-    float cover1=u.keyed.x!=0.0?step(0.1,layer1.a):1.0;
-    float cover2=u.keyed.y!=0.0?step(0.1,layer2.a):1.0;
-    bool combined=(u.multipliers.x!=0.0&&u.direct.x==0.0)||(u.multipliers.y!=0.0&&u.direct.y==0.0);
-    if(u.multipliers.y!=0.0&&u.direct.y==0.0)color=mix(color,vec4(layer2.xyz*u.multipliers.y,1.0),cover2);
-    if(u.multipliers.x!=0.0&&u.direct.x==0.0)color=mix(color,vec4(layer1.xyz*u.multipliers.x,1.0),cover1);
-    color=combined?mix(color,vec4(scene.xyz,1.0),scene.a):scene;
-    if(u.multipliers.y!=0.0&&u.direct.y!=0.0)color=mix(color,vec4(layer2.xyz*u.multipliers.y,1.0),cover2);
-    if(u.multipliers.x!=0.0&&u.direct.x!=0.0)color=mix(color,vec4(layer1.xyz*u.multipliers.x,1.0),cover1);
+    vec4 scene=mix(front,back,u.factors.x);
+    // Bitmap planes sit either behind the 3D picture or in front of it.
+    // A keyed plane covers only where its alpha key is set; an unkeyed
+    // plane covers everywhere. Behind-planes show only where the 3D
+    // picture drew nothing, so a drawn pixel covers them in full.
+    float key1=u.keyed.x!=0.0?step(0.1,layer1.a):1.0;
+    float key2=u.keyed.y!=0.0?step(0.1,layer2.a):1.0;
+    bool hasBehind=(u.multipliers.x!=0.0&&u.direct.x==0.0)||(u.multipliers.y!=0.0&&u.direct.y==0.0);
+    vec4 color=vec4(0.0);
+    if(u.multipliers.y!=0.0&&u.direct.y==0.0)color=mix(color,vec4(layer2.xyz*u.multipliers.y,1.0),key2);
+    if(u.multipliers.x!=0.0&&u.direct.x==0.0)color=mix(color,vec4(layer1.xyz*u.multipliers.x,1.0),key1);
+    if(hasBehind)color=mix(color,vec4(scene.xyz,1.0),step(0.004,scene.a));
+    else color=scene;
+    if(u.multipliers.y!=0.0&&u.direct.y!=0.0)color=mix(color,vec4(layer2.xyz*u.multipliers.y,1.0),key2);
+    if(u.multipliers.x!=0.0&&u.direct.x!=0.0)color=mix(color,vec4(layer1.xyz*u.multipliers.x,1.0),key1);
     RETURN_COLOR(color);
 )";
 const char* metalPrelude=R"(
