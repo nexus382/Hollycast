@@ -1,4 +1,5 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 Valkyrie source, revision fa52073f2ac6264d2f77242b3e3cca2935c31392,
 https://github.com/stefanoteso/valkyrie. The original per-file notices and
 GPL-3.0-or-later LICENSE are retained. The embedded adapter removes the SDL
@@ -83,3 +84,44 @@ word (high word in FRn, low word in FRn+1). FMOV width depends only on FPSCR.SZ,
 independently of FPSCR.PR. Synthetic instruction regressions cover conversion,
 arithmetic, comparison, sign, paired moves, and unsigned decimal division;
 no captured game instructions are included in these tests.
+
+OpenGL material combination and scene coverage (2026-11-03): material equations
+follow Odin snapshot aa89944add2787233d8161cca380255193b92f15 (GPL-3.0-or-later,
+Copyright 2026 Reda Cherif-Touil), specifically hikaru_draw.hpp, mesh.frag and
+renderer_scene.cpp. 2C1 texture selection, 881 alpha/color selection and 691
+ambient/emission are independent of A81 blending. Hollycast retains its coverage
+alpha convention for bitmap composition; Odin's inverse transmittance factors
+cannot be copied to this framebuffer. Hidden-window production-shader probes
+cover texture/color selection, emission and coverage for all four blend modes.
+Scene clear colors are premultiplied with their coverage. Depth-writing
+surfaces force full coverage after alpha cutout rejection; blended surfaces
+retain fractional coverage. Bitmap keys remain binary, but the 3D scene is
+composed using its actual coverage rather than a nonzero-alpha threshold.
+
+Double-sided triangles apply the closing vertex's winding bit before emitting
+front and reversed-normal back faces, as in Odin's antarctic_mesh.cpp at the
+same snapshot. Ignoring that bit assigned back-face lighting to alternating
+strip triangles. Captured Brave Firefighters smoke reproduces the resulting
+hard dark triangles; the production baker regression covers both windings,
+with and without back-face copies. This change corrects vertex data shared by
+all host backends rather than forcing two-sided lighting in their shaders.
+
+OpenGL fog now defaults on and follows the guest's material enable (881 bit 18)
+and viewport colour-disable control (621 bit 17). Its linear start/range is
+applied to eye-space depth, following Odin's mesh.frag and renderer_scene.cpp
+at the same snapshot. Fog controls, cutouts and coverage have production-shader
+pixel coverage; the captured hallway's fog appearance still needs a live
+visual check because its disabled uniforms were absent from the old capture.
+
+The 621 fog conversion now follows Odin's view_fog (hikaru_draw.hpp): P is the
+inverse range and Q is near/end, so start = near/Q - 1/P. Regression coverage
+uses upload_viewport itself rather than injecting decoded uniforms, including
+negative starts and a disabled inverse range.
+
+OpenGL applies the 32 screen-door masks selected by 501, following Odin's
+pattern_bits and mesh.frag at the same GPL-3.0-or-later snapshot. Patterns are
+snapshotted with each mesh and restored across calls using Odin's six-level
+scope heuristic, preventing a smoke model's mask from affecting furniture.
+The state uses previously reserved flag bits without changing serialized CP
+or drawing-block layout. All masks and nested scope have focused regressions.
+Native Vulkan/Metal shaders still require their separate pattern implementation.

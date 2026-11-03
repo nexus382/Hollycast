@@ -22,7 +22,7 @@ int hikaru_vendor_test_spot_pixels(const hikaru_light_t *,const float[3],const f
 int hikaru_vendor_test_shader_uniform_cache(void);
 int hikaru_vendor_test_abgr_upload(void);
 int hikaru_vendor_test_prelit_material_pixels(uint32_t, const uint16_t[3], bool,
-    const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4]);
+    const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], uint32_t);
 int hikaru_vendor_test_decode_451(uint32_t,uint32_t,hikaru_light_t *);
 void hikaru_vendor_test_spot_upload_counts(unsigned *, unsigned *);
 void hikaru_vendor_test_spot_upload_counts_reset(void);
@@ -190,12 +190,12 @@ static void prelit_material_probe(void) {
  } cases[]={
   {"captured pale head",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,255},{200,138,92,255}},
   {"captured shadowed head",0x000d0881,{105,54,58},true,{0,0,0},{0,0,0},{200,150,100,255},{82,32,23,255}},
-  {"unresolved wide 691 unchanged",0x000d0881,{256,234,234},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"691 above one keeps brightness",0x000d0881,{256,234,234},true,{0,0,0},{0,0,0},{200,150,100,255},{201,138,92,255}},
   {"zero tint remains black",0x000d0881,{0,0,0},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
   {"missing 691 remains black",0x000d0881,{255,234,234},false,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
-  {"ordinary ambient unchanged",0x000d0881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{50,38,25,255}},
-  {"ordinary diffuse shadow unchanged",0x000d0881,{255,255,255},true,{64,64,64},{0,0,0},{200,150,100,255},{0,0,0,255}},
-  {"unlit textured material unchanged",0x00080881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{50,38,25,255}},
+  {"691 supplies ambient instead of 291",0x000d0881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{200,150,100,255}},
+  {"plain texture is not multiplied by primary color",0x000d0881,{255,255,255},true,{64,64,64},{0,0,0},{200,150,100,255},{200,150,100,255}},
+  {"unlit plain texture ignores 291",0x00080881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{200,150,100,255}},
   {"untextured material unchanged",0x00050881,{255,255,255},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
   {"transparent cutout retained",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,0},{255,0,255,255}},
   {"partial alpha retained",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,128},{200,138,92,128}},
@@ -203,7 +203,7 @@ static void prelit_material_probe(void) {
  for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
   uint8_t actual[4]={0};
   int ok=hikaru_vendor_test_prelit_material_pixels(cases[i].flags,cases[i].tint,cases[i].present,
-      cases[i].diffuse,cases[i].ambient,cases[i].texel,actual);
+      cases[i].diffuse,cases[i].ambient,cases[i].texel,actual,0);
   for(unsigned c=0;c<4;++c){int d=(int)actual[c]-cases[i].expected[c];if(d < -1 || d > 1)ok=0;}
   if(!ok){fprintf(stderr,"prelit %s: got RGBA %u,%u,%u,%u\n",cases[i].name,actual[0],actual[1],actual[2],actual[3]);failed++;}
  }

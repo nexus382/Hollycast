@@ -22,10 +22,10 @@ void hikaru_vendor_test_setup_scene_scissor(void);
 int hikaru_vendor_test_shader_uniform_cache(void);
 int hikaru_vendor_test_vertex_chunks(void);
 int hikaru_vendor_test_mesh_vao_pixels(void);
-int hikaru_vendor_test_unlit_material_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4]);
+int hikaru_vendor_test_unlit_material_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], uint32_t);
 int hikaru_vendor_test_layer_pixels(vk_renderer_t *, int, int, const uint32_t[4], const uint8_t[4], int, float, float, uint8_t[4][4]);
-int hikaru_vendor_test_material_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *);
-int hikaru_vendor_test_material_fog_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *, unsigned);
+int hikaru_vendor_test_material_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *, uint32_t);
+int hikaru_vendor_test_material_fog_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *, unsigned, uint32_t);
 int hikaru_vendor_test_routed_layers(vk_renderer_t *, uint8_t[10][3][4]);
 static vk_renderer_t *layer_renderer;
 static int frame_state_growth_passed;
@@ -126,8 +126,8 @@ static int mesh_vao_passed;
 static void mesh_vao_probe(void) { mesh_vao_passed = hikaru_vendor_test_mesh_vao_pixels(); }
 static int unlit_material_passed;
 static void unlit_material_probe(void) {
- /* Captured flat regions distinguish geometry colors from the colored
-  * ambient modulation retained by textured Air Trix HUD elements. */
+ /* Colored HUD cases explicitly use 2C1 texture mode 2 (the 291 color).
+  * Keeping the texture register is essential: plain mode 0 ignores it. */
  static const struct {
   const char *name;
   uint32_t flags;
@@ -145,13 +145,13 @@ static void unlit_material_probe(void) {
   {"green HUD bit18",(1u<<19)|(1u<<18),{255,255,255},{0,224,64},{255,255,255,255},{0,224,64}},
   {"alternate untextured color",1u<<20,{0,64,255},{128,128,128},{255,255,255,255},{128,128,128}},
   {"alternate color bit18",(1u<<20)|(1u<<18),{0,64,255},{128,128,128},{255,255,255,255},{128,128,128}},
-  {"textured alternate green HUD",(1u<<19)|(1u<<20),{255,255,255},{0,224,64},{255,255,255,255},{0,224,64}},
-  {"shade1 no-lights fallback",1u<<16,{0,64,255},{128,128,128},{255,255,255,255},{128,128,128}},
+  {"textured alpha-mode keeps texel",(1u<<19)|(1u<<20),{255,255,255},{0,224,64},{255,255,255,255},{255,255,255}},
+  {"shade1 no-lights ambient",1u<<16,{0,64,255},{128,128,128},{255,255,255,255},{0,64,255}},
  };
  unlit_material_passed=1;
  for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
   uint8_t actual[4]={0};
-  if(!hikaru_vendor_test_unlit_material_pixels(cases[i].flags,cases[i].diffuse,cases[i].ambient,cases[i].texel,actual)) {
+  if(!hikaru_vendor_test_unlit_material_pixels(cases[i].flags,cases[i].diffuse,cases[i].ambient,cases[i].texel,actual,2u<<29)) {
    fprintf(stderr,"unlit %s: render failed\n",cases[i].name);unlit_material_passed=0;continue;
   }
   for(unsigned c=0;c<3;++c) {
@@ -174,7 +174,7 @@ static void texture_cutout_probe(void) {
  } cases[]={
   {"captured opaque cutout",0x000d0881,{255,218,76},{178,178,178},{255,255,255,0},{17,34,51,255},0.75f},
   {"opaque texture positive alpha",0x000d0881,{255,218,76},{178,178,178},{255,255,255,255},{178,178,178,255},0.5f},
-  {"positive alpha one is retained",0x000d0881,{255,218,76},{178,178,178},{255,255,255,1},{178,178,178,1},0.5f},
+  {"positive alpha one retains opaque coverage",0x000d0881,{255,218,76},{178,178,178},{255,255,255,1},{178,178,178,255},0.5f},
   {"captured green HUD",0x000c0881,{255,255,255},{90,240,6},{255,255,255,255},{90,240,6,255},0.5f},
   {"captured orange HUD",0x000c0881,{178,178,178},{255,178,0},{255,255,255,255},{255,178,0,255},0.5f},
   {"untextured primary ignores texture alpha",0,{0,64,255},{178,178,178},{255,255,255,0},{0,64,255,255},0.5f},
@@ -183,7 +183,7 @@ static void texture_cutout_probe(void) {
  texture_cutout_passed=1;
  for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
   uint8_t actual[4]={0}; float depth=-1;
-  if(!hikaru_vendor_test_material_depth_pixels(cases[i].flags,cases[i].diffuse,cases[i].ambient,cases[i].texel,actual,&depth)) {
+  if(!hikaru_vendor_test_material_depth_pixels(cases[i].flags,cases[i].diffuse,cases[i].ambient,cases[i].texel,actual,&depth,2u<<29)) {
    fprintf(stderr,"cutout %s: render failed\n",cases[i].name);texture_cutout_passed=0;continue;
   }
   for(unsigned c=0;c<4;++c) {
@@ -199,22 +199,27 @@ static void texture_cutout_probe(void) {
 }
 static int fog_cutout_passed;
 static void fog_cutout_probe(void) {
- /* Fog must change RGB without changing texture coverage. The final zero
+ /* Fog must preserve cutouts and full coverage of depth-writing geometry. The final zero
   * discard must also hold for the lighting/specular shader variant. */
  static const struct {
   const char *name; uint32_t flags; unsigned options;
   uint8_t texel[4], expected[4]; float depth;
  } cases[]={
-  {"zero alpha",1u<<19,1,{255,255,255,0},{52,105,157,255},0.75f},
-  {"partial alpha",1u<<19,1,{255,255,255,128},{121,153,185,128},0.5f},
-  {"opaque control",1u<<19,1,{255,255,255,255},{121,153,185,255},0.5f},
-  {"lit specular zero alpha",(1u<<19)|(1u<<16),3,{255,255,255,0},{52,105,157,255},0.75f},
+  {"zero alpha",(1u<<19)|(1u<<18),1,{255,255,255,0},{64,128,192,255},0.75f},
+  {"partial alpha",(1u<<19)|(1u<<18),1,{255,255,255,128},{121,153,185,255},0.5f},
+  {"opaque control",(1u<<19)|(1u<<18),1,{255,255,255,255},{121,153,185,255},0.5f},
+  {"lit specular zero alpha",(1u<<19)|(1u<<18)|(1u<<16),3,{255,255,255,0},{64,128,192,255},0.75f},
+  {"material fog disabled",1u<<19,1,{255,255,255,255},{178,178,178,255},0.5f},
+  {"viewport fog disabled",(1u<<19)|(1u<<18),5,{255,255,255,255},{178,178,178,255},0.5f},
+  {"debug fog disabled",(1u<<19)|(1u<<18),0,{255,255,255,255},{178,178,178,255},0.5f},
+  {"raw near/end converts negative start",(1u<<19)|(1u<<18),9,{255,255,255,255},{64,128,192,255},0.5f},
+  {"zero inverse range disables fog",(1u<<19)|(1u<<18),17,{255,255,255,255},{178,178,178,255},0.5f},
  };
  const uint8_t diffuse[3]={255,218,76},ambient[3]={178,178,178};
  fog_cutout_passed=1;
  for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
   uint8_t actual[4]={0}; float depth=-1;
-  if(!hikaru_vendor_test_material_fog_depth_pixels(cases[i].flags,diffuse,ambient,cases[i].texel,actual,&depth,cases[i].options)) {
+  if(!hikaru_vendor_test_material_fog_depth_pixels(cases[i].flags,diffuse,ambient,cases[i].texel,actual,&depth,cases[i].options,2u<<29)) {
    fprintf(stderr,"fog %s: render failed\n",cases[i].name);fog_cutout_passed=0;continue;
   }
   fprintf(stderr,"fog %s: RGBA(%u,%u,%u,%u), depth %.6f\n",cases[i].name,actual[0],actual[1],actual[2],actual[3],depth);

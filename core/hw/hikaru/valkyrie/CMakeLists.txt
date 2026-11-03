@@ -124,6 +124,12 @@ if(HIKARU_VENDOR_BUILD_SMOKE AND NOT ANDROID AND NOT IOS AND NOT LIBRETRO)
     add_test(NAME hikaru_valkyrie_spot_pixels COMMAND hikaru_valkyrie_spot_pixels)
     set_tests_properties(hikaru_valkyrie_spot_pixels PROPERTIES RUN_SERIAL TRUE)
 
+    add_executable(hikaru_valkyrie_material_pixels tests/material_pixels.c)
+    target_include_directories(hikaru_valkyrie_material_pixels PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(hikaru_valkyrie_material_pixels PRIVATE hollycast_hikaru_valkyrie SDL2::SDL2)
+    add_test(NAME hikaru_valkyrie_material_pixels COMMAND hikaru_valkyrie_material_pixels)
+    set_tests_properties(hikaru_valkyrie_material_pixels PROPERTIES RUN_SERIAL TRUE)
+
     add_executable(hikaru_valkyrie_gl_smoke tests/gl_smoke.c)
     target_include_directories(hikaru_valkyrie_gl_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(hikaru_valkyrie_gl_smoke PRIVATE hollycast_hikaru_valkyrie SDL2::SDL2)
@@ -143,14 +149,14 @@ if(HIKARU_VENDOR_BUILD_SMOKE AND NOT ANDROID AND NOT IOS AND NOT LIBRETRO)
         # glad is created by the root build after this directory; CMake
         # resolves the target at generate time. It supplies the GL
         # entry points the Apple builds get from the OpenGL framework.
-        foreach(_hikaru_test sound_bus_timing cpu_clock texture_bounds normal_matrix mmap_fetch mmap_data mmap_write cached_writes cached_reads dispatch double_precision poll_loop slave_wait planet_slave_wait master_wait engine_games spot_pixels gl_smoke sorting_pixels)
+        foreach(_hikaru_test sound_bus_timing cpu_clock texture_bounds normal_matrix mmap_fetch mmap_data mmap_write cached_writes cached_reads dispatch double_precision poll_loop slave_wait planet_slave_wait master_wait engine_games spot_pixels gl_smoke sorting_pixels material_pixels)
             # Vendor headers use C11 (_Noreturn, _Thread_local); MSVC
             # defaults these test targets to an older C mode.
             target_compile_features(hikaru_valkyrie_${_hikaru_test} PRIVATE c_std_11)
             target_link_libraries(hikaru_valkyrie_${_hikaru_test} PRIVATE glad)
         endforeach()
         # Bundled SDL provides SDL2main separately; these tests own main.
-        foreach(_hikaru_test engine_games spot_pixels gl_smoke sorting_pixels)
+        foreach(_hikaru_test engine_games spot_pixels gl_smoke sorting_pixels material_pixels)
             target_compile_definitions(hikaru_valkyrie_${_hikaru_test} PRIVATE SDL_MAIN_HANDLED)
         endforeach()
         unset(_hikaru_test)

@@ -74,6 +74,11 @@ typedef union {
 		uint64_t has_light3_specular	: 1;
 
 		uint64_t has_fog		: 1;
+		uint64_t has_pattern		: 1;
+		uint64_t shading_mode		: 2;
+		uint64_t alpha_mode		: 1;
+		uint64_t texture_mode		: 3;
+		/* Native shader translators still consume these legacy selectors. */
 		uint64_t use_unlit_diffuse	: 1;
 		uint64_t use_prelit_color	: 1;
 	};
@@ -102,6 +107,7 @@ typedef struct {
 	/* Retained guest vertices support CPU sorting without relying on buffer readback. */
 	hikaru_vertex_body_t *cpu_vertices;
 	bool			has_two_sided_lighting;
+	uint8_t			pattern;
 	uint32_t		num;
 } hikaru_mesh_t;
 
@@ -111,7 +117,7 @@ typedef struct {
 	struct {
 		GLuint position, direction, diffuse, specular, extents, spot, spot_table;
 	} u_lights[4];
-	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref;
+	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref, u_weigh_by_alpha, u_force_coverage, u_pattern;
 	GLuint u_peel_enabled, u_peel_first, u_peel_size, u_peel_depth, u_peel_opaque_depth;
 } hikaru_uniform_locations_t;
 

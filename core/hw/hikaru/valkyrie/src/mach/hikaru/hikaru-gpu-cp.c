@@ -83,6 +83,8 @@ on_frame_begin (hikaru_gpu_t *gpu)
 	hikaru_gpu_cp_finish_mesh (gpu);
 
 	memset ((void *) &POLY, 0, sizeof (POLY));
+	gpu->state.pattern = 0;
+	gpu->cp.pattern_stack = 0;
 
 	LOD.value = 0.0f;
 	LOD.cond = false;
@@ -119,6 +121,7 @@ on_cp_begin (hikaru_gpu_t *gpu)
 	PC = REG15 (0x70);
 	SP(0) = REG15 (0x74);
 	SP(1) = REG15 (0x78);
+	gpu->cp.pattern_stack = 0;
 }
 
 static void
@@ -267,6 +270,9 @@ check_self_loop (hikaru_gpu_t *gpu, uint32_t target)
 static void
 push_pc (hikaru_gpu_t *gpu)
 {
+	/* Match Odin's six-level pattern scope: the burning-hall smoke model
+	 * sets a pattern without clearing it before returning to furniture. */
+	gpu->cp.pattern_stack = ((gpu->cp.pattern_stack << 5) | gpu->state.pattern) & 0x3fffffff;
 	VK_ASSERT ((SP(0) >> 24) == 0x48);
 	vk_buffer_put (gpu->cmdram, 4, SP(0) & 0x3FFFFFF, PC);
 	SP(0) -= 4;
@@ -275,6 +281,8 @@ push_pc (hikaru_gpu_t *gpu)
 static void
 pop_pc (hikaru_gpu_t *gpu)
 {
+	gpu->state.pattern = gpu->cp.pattern_stack & 0x1f;
+	gpu->cp.pattern_stack >>= 5;
 	SP(0) += 4;
 	VK_ASSERT ((SP(0) >> 24) == 0x48);
 	PC = vk_buffer_get (gpu->cmdram, 4, SP(0) & 0x3FFFFFF) + 8;
@@ -2212,11 +2220,11 @@ D (0x043)
  * U, N = Unknown (N != 1)
  *
  *
- * 501	Mesh: Set Unknown                                                             
+ * 501	Mesh: Set Screen-Door Pattern
  *                                                                             
  *	-------- ---PPPPP -------o oooooooo
  *                                                                             
- * P = Unknown parameter.
+ * P = 4 x 4 screen-door coverage pattern (low five bits).
  *                                                                             
  * Used by the BOOTROM.                                                        
  *                                                                             
@@ -2243,7 +2251,7 @@ I (0x101)
 	case 3:
 		break;
 	case 5:
-		gpu->_501 = inst[0] >> 16;
+		gpu->state.pattern = (inst[0] >> 16) & 0x1f;
 		break;
 	case 9:
 		log = (inst[0] >> 16) & 0xFF;
@@ -2274,7 +2282,7 @@ D (0x101)
 	case 5:	
 		UNHANDLED |= !!(inst[0] & 0xFFE0F000);
 
-		DISASM ("mesh: set unknown [%u]", (inst[0] >> 16) & 0x1F);
+		DISASM ("mesh: set pattern [%u]", (inst[0] >> 16) & 0x1F);
 		break;
 	case 9:
 		log = (inst[0] >> 16) & 0xFF;
@@ -2880,6 +2888,34 @@ hikaru_gpu_cp_init (hikaru_gpu_t *gpu)
 
 
 #ifdef HIKARU_VENDOR_TESTING
+int hikaru_vendor_test_pattern_commands(void)
+{
+    _Static_assert(sizeof(((hikaru_gpu_t *)0)->cp) == 16, "saved CP flag layout");
+    _Static_assert(offsetof(hikaru_gpu_t, state.lod) - offsetof(hikaru_gpu_t, state) == 4,
+                   "saved drawing flag layout");
+    hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+    if (!gpu) return 0;
+    gpu->cmdram = vk_buffer_le32_new(64, 0);
+    if (!gpu->cmdram) { free(gpu); return 0; }
+    gpu->cp.sp[0] = 0x48000020;
+    uint32_t packet[8] = {0xfffc0501};
+    hikaru_gpu_inst_0x101(gpu, packet);
+    int ok = gpu->state.pattern == 28;
+    push_pc(gpu);
+    packet[0] = 0x00040501;
+    hikaru_gpu_inst_0x101(gpu, packet);
+    push_pc(gpu);
+    packet[0] = 0x00080501;
+    hikaru_gpu_inst_0x101(gpu, packet);
+    pop_pc(gpu); ok &= gpu->state.pattern == 4;
+    pop_pc(gpu); ok &= gpu->state.pattern == 28 && gpu->cp.pattern_stack == 0;
+    on_frame_begin(gpu);
+    ok &= gpu->state.pattern == 0 && gpu->cp.pattern_stack == 0;
+    vk_buffer_destroy(&gpu->cmdram);
+    free(gpu);
+    return ok;
+}
+
 /* Dispatch real offset/UV packets without running the command processor or
  * emulated CPU. The descriptor table remains the production source of truth. */
 int hikaru_vendor_test_uv_dispatch(hikaru_gpu_t *gpu, const uint32_t packet[8])

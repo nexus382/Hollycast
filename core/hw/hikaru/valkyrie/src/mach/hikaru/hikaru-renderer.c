@@ -81,6 +81,8 @@ init_debug_flags (hikaru_renderer_t *hr)
 
 	hr->debug.flags[HR_DEBUG_LOG] =
 		vk_util_get_bool_option ("HR_LOG", false) ? 1 : 0;
+	/* Guest fog is normal rendering state; the debug key can disable it. */
+	hr->debug.flags[HR_DEBUG_FOG] = 1;
 }
 
 static void
@@ -739,6 +741,7 @@ uniform vec3		u_ambient;						\n \
 uniform sampler2D	u_texture;						\n \
 uniform vec2		u_fog;							\n \
 uniform float		u_alpha_ref;							\n \
+uniform float		u_weigh_by_alpha; uniform float u_force_coverage; uniform float u_pattern;	\n \
 uniform vec3		u_fog_color;						\n \
 uniform int u_peel_enabled; uniform int u_peel_first; uniform vec2 u_peel_size;\n \
 uniform sampler2D u_peel_depth; uniform sampler2D u_peel_opaque_depth;\n \
@@ -798,7 +801,7 @@ apply_light (inout vec3 diffuse,						\n \
 		intensity *= mix (lo, hi, t - float (index));\n \
 	}\n \
 										\n \
-	diffuse += attenuation * intensity * p_diffuse * light.diffuse;		\n \
+	diffuse += attenuation * intensity * light.diffuse;		\n \
 										\n \
 	if (has_specular != 0) {								\n \
 		vec3 view_direction = normalize (-p_position.xyz);				\n \
@@ -811,30 +814,53 @@ apply_light (inout vec3 diffuse,						\n \
 void										\n \
 main (void)									\n \
 {										\n \
+#if HAS_PATTERN\n \
+	/* 501 is a screen-space mask, independent of material alpha. */\n \
+	ivec2 dot = ivec2(gl_FragCoord.xy) & 3;\n \
+	if (((uint(u_pattern) >> uint((3 - dot.y) * 4 + dot.x)) & 1u) == 0u) discard;\n \
+#endif\n \
 	if (u_peel_enabled != 0) {\n \
 		vec2 peel_uv = gl_FragCoord.xy / u_peel_size;\n \
 		float opaque_z = texture(u_peel_opaque_depth, peel_uv).r;\n \
 		if (gl_FragCoord.z > opaque_z + 0.000001) discard;\n \
 		if (u_peel_first == 0 && gl_FragCoord.z <= texture(u_peel_depth, peel_uv).r + 0.000001) discard;\n \
 	}\n \
-	vec4 texel, color;							\n \
-										\n \
-#if HAS_TEXTURE									\n \
-	texel = texture (u_texture, p_texcoords);				\n \
-#else										\n \
-	texel = vec4 (1.0);							\n \
-#endif										\n \
-										\n \
-#if HAS_LIGHTING								\n \
-	vec3 diffuse  = vec3 (0.0);						\n \
-	vec3 specular = vec3 (0.0);						\n \
-#if USE_PRELIT_COLOR\n \
-	/* 0x691 uses captured 8-bit RGB values carried by a UNORM16 attribute. */\n \
-	vec3 ambient = p_unknown * 257.0;\n \
+	vec4 texel = vec4(1.0), color;\n \
+	vec3 base;\n \
+	float alpha;\n \
+#if HAS_TEXTURE\n \
+	texel = texture(u_texture, p_texcoords);\n \
+#if ALPHA_MODE\n \
+	base = mix(p_diffuse, texel.rgb, p_alpha);\n \
+	alpha = texel.a;\n \
+#elif TEXTURE_MODE == 1\n \
+	base = mix(p_diffuse, texel.rgb, texel.a);\n \
+	alpha = p_alpha;\n \
+#elif TEXTURE_MODE == 2\n \
+	base = texel.rgb * p_ambient;\n \
+	alpha = texel.a * p_alpha;\n \
+#elif TEXTURE_MODE == 3\n \
+	base = p_diffuse;\n \
+	alpha = texel.a * p_alpha;\n \
+#elif TEXTURE_MODE == 4\n \
+	base = mix(p_diffuse, p_ambient, texel.rgb);\n \
+	alpha = texel.a * p_alpha;\n \
 #else\n \
-	vec3 ambient  = u_ambient * p_ambient;					\n \
+	base = texel.rgb;\n \
+	alpha = texel.a * p_alpha;\n \
 #endif\n \
-										\n \
+#elif ALPHA_MODE\n \
+	base = mix(p_diffuse, p_ambient, p_alpha);\n \
+	alpha = 1.0;\n \
+#else\n \
+	base = p_diffuse;\n \
+	alpha = p_alpha;\n \
+#endif\n \
+#if SHADING_MODE != 0\n \
+	vec3 diffuse = vec3(0.0), specular = vec3(0.0);\n \
+	/* 691 is ambient/emission in units of 1/255, carried as UNORM16. */\n \
+	vec3 ambient = SHADING_MODE == 1 ? u_ambient * p_unknown * 257.0 : vec3(0.0);\n \
+	vec3 emission = SHADING_MODE == 2 ? p_unknown * 257.0 : vec3(0.0);\n \
 #if HAS_LIGHT0									\n \
 	apply_light (diffuse, specular, u_lights[0], LIGHT0_TYPE, LIGHT0_ATT_TYPE, HAS_LIGHT0_SPECULAR);		\n \
 #endif										\n \
@@ -848,21 +874,23 @@ main (void)									\n \
 	apply_light (diffuse, specular, u_lights[3], LIGHT3_TYPE, LIGHT3_ATT_TYPE, HAS_LIGHT3_SPECULAR);		\n \
 #endif										\n \
 										\n \
-	color = vec4 (ambient +  diffuse, p_alpha) * texel + vec4 (specular, 0.0);	\n \
-#elif USE_UNLIT_DIFFUSE\n \
-	color = vec4 (p_diffuse, p_alpha) * texel;\n \
+	color = vec4((ambient + diffuse + emission) * base, alpha);\n \
+#if SHADING_MODE != 3\n \
+	color.rgb += specular;\n \
+#endif\n \
 #else\n \
-	color = vec4 (p_ambient, p_alpha) * texel;				\n \
-#endif										\n \
-										\n \
+	color = vec4(base, alpha);\n \
+#endif\n \
 #if HAS_FOG									\n \
-	float z = gl_FragCoord.z / gl_FragCoord.w;				\n \
+	float z = -p_position.z;				\n \
 	float a = clamp (u_fog.x * (z - u_fog.y), 0.0, 1.0);			\n \
 	vk_frag_color = mix (color, vec4 (u_fog_color, color.a), a);			\n \
 #else										\n \
 	vk_frag_color = color;							\n \
 #endif										\n \
+	if (u_weigh_by_alpha != 0.0) vk_frag_color.rgb *= vk_frag_color.a;	\n \
 	if (vk_frag_color.a <= u_alpha_ref) discard;\n \
+	if (u_force_coverage != 0.0) vk_frag_color.a = 1.0;\n \
 }";
 
 static hikaru_light_att_t
@@ -901,6 +929,7 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	VK_ASSERT (mesh->vp_index != ~0);
 
 	variant.full = 0;
+	variant.has_pattern = (mesh->pattern & 15) != 0;
 
 	if (mesh->mat_index == ~0) {
 		VK_ERROR ("no material.");
@@ -921,26 +950,30 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	variant.has_texture	= mat->has_texture &&
 	                          !hr->debug.flags[HR_DEBUG_NO_TEXTURES];
 
-	variant.has_lighting	= ls->mask != 0xF &&
-	                          mat->shading_mode != 0 &&
-	                          !hr->debug.flags[HR_DEBUG_NO_LIGHTING];
-	/* Untextured unlit geometry uses the primary material color. Bit 20
-	 * selects the alternate color. Keep the textured color path until its
-	 * texture environment modes are implemented; Air Trix's HUD uses it. */
+	variant.shading_mode = hr->debug.flags[HR_DEBUG_NO_LIGHTING] ? 0 : mat->shading_mode;
+	variant.alpha_mode = mat->has_alpha;
+	variant.has_lighting = ls->mask != 0xF && mat->shading_mode != 0 &&
+	                       !hr->debug.flags[HR_DEBUG_NO_LIGHTING];
+	/* 2C1 selects the texture/material combination independently of the
+	 * polygon's blend mode. These modes also apply to unlit geometry. */
+	if (variant.has_texture && mesh->tex_index < hr->num_texs) {
+		static const unsigned modes[8] = {0, 1, 2, 0, 3, 4, 0, 0};
+		variant.texture_mode = modes[hr->tex_list[mesh->tex_index]._2C1 >> 29];
+	}
+
+	/* Preserve the existing native shader inputs until its material port;
+	 * the OpenGL shader below uses the explicit material modes instead. */
 	variant.use_unlit_diffuse = mat->shading_mode == 0 &&
-	                           !mat->has_texture && !mat->has_alpha;
-
-	/* Captured Brave Firefighters heads have zero diffuse/ambient colors
-	 * and use the 0x691 RGB channel as prelit texture modulation. Restrict
-	 * this compatibility interpretation to that material case; other 0x691
-	 * uses remain unresolved. Ordinary lit and unlit materials keep their paths. */
+	    !mat->has_texture && !mat->has_alpha;
 	variant.use_prelit_color = variant.has_lighting && variant.has_texture && mat->has_691 &&
-	                          mat->unknown[0] <= 255 && mat->unknown[1] <= 255 && mat->unknown[2] <= 255 &&
-	                          !(mat->diffuse[0] | mat->diffuse[1] | mat->diffuse[2] |
-	                            mat->ambient[0] | mat->ambient[1] | mat->ambient[2]);
+	    mat->unknown[0] <= 255 && mat->unknown[1] <= 255 && mat->unknown[2] <= 255 &&
+	    !(mat->diffuse[0] | mat->diffuse[1] | mat->diffuse[2] |
+	      mat->ambient[0] | mat->ambient[1] | mat->ambient[2]);
 
-	variant.has_fog		= mat->depth_blend == 0 &&
-	                          hr->debug.flags[HR_DEBUG_FOG];
+	/* 881 bit 18 requests fog; 621 bit 17 disables its viewport colour.
+	 * The guest supplies a start depth and inverse range in eye space. */
+	variant.has_fog = mat->depth_blend && hr->debug.flags[HR_DEBUG_FOG] &&
+	                  hr->vp_list[mesh->vp_index].depth.q_enabled;
 
 	if (!variant.has_lighting)
 		return variant;
@@ -1032,6 +1065,10 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	"#define LIGHT3_ATT_TYPE %d\n"
 	"#define HAS_LIGHT3_SPECULAR %d\n"
 	"#define HAS_FOG %d\n"
+	"#define HAS_PATTERN %d\n"
+	"#define SHADING_MODE %d\n"
+	"#define ALPHA_MODE %d\n"
+	"#define TEXTURE_MODE %d\n"
 	"#define USE_UNLIT_DIFFUSE %d\n"
 	"#define USE_PRELIT_COLOR %d\n";
 
@@ -1087,6 +1124,10 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	                variant.light3_att_type,
 	                variant.has_light3_specular,
 	                variant.has_fog,
+	                variant.has_pattern,
+	                variant.shading_mode,
+	                variant.alpha_mode,
+	                variant.texture_mode,
 	                variant.use_unlit_diffuse,
 	                variant.use_prelit_color);
 	if (ret < 0) VK_ABORT("out of memory building shader definitions");
@@ -1166,6 +1207,11 @@ update_locations:
 		GET_MESH_UNIFORM (hr->meshes.program, "u_fog_color");
 	hr->meshes.locs.u_alpha_ref =
 		GET_MESH_UNIFORM (hr->meshes.program, "u_alpha_ref");
+	hr->meshes.locs.u_weigh_by_alpha =
+		GET_MESH_UNIFORM (hr->meshes.program, "u_weigh_by_alpha");
+	hr->meshes.locs.u_force_coverage =
+		GET_MESH_UNIFORM (hr->meshes.program, "u_force_coverage");
+	hr->meshes.locs.u_pattern = GET_MESH_UNIFORM (hr->meshes.program, "u_pattern");
 	hr->meshes.locs.u_peel_enabled = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_enabled");
 	hr->meshes.locs.u_peel_first = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_first");
 	hr->meshes.locs.u_peel_size = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_size");
@@ -1187,6 +1233,10 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	hikaru_material_t material = {0};
 	hikaru_lightset_t lightset = {0};
 	hikaru_mesh_t mesh = {0};
+	hikaru_viewport_t viewport = {0};
+	viewport.depth.q_enabled = 1;
+	hr->vp_list = &viewport; hr->num_vps = 1;
+	material.depth_blend = 1;
 	lightset.mask = 0xf;
 	hr->mat_list = &material; hr->num_mats = 1;
 	hr->ls_list = &lightset; hr->num_lss = 1;
@@ -1197,23 +1247,23 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	upload_glsl_program (hr, &mesh);
 	const GLuint first_program = hr->meshes.program;
 	const hikaru_uniform_locations_t first = hr->meshes.locs;
-	int ok = uniform_location_queries == 43 && first.u_texture == (GLuint)-1;
+	int ok = uniform_location_queries == 46 && first.u_texture == (GLuint)-1;
 	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh);
 	const GLuint second_program = hr->meshes.program;
 	const hikaru_uniform_locations_t second = hr->meshes.locs;
-	ok &= second_program != first_program && uniform_location_queries == 86;
+	ok &= second_program != first_program && uniform_location_queries == 92;
 	ok &= second.u_texture == (GLuint)glGetUniformLocation (second_program, "u_texture");
 	material.has_texture = 0;
 	upload_glsl_program (hr, &mesh);
 	glGetIntegerv (GL_CURRENT_PROGRAM, &current_program);
 	ok &= hr->meshes.program == first_program && current_program == (GLint)first_program;
 	ok &= !memcmp (&hr->meshes.locs, &first, sizeof(first));
-	ok &= uniform_location_queries == 86;
+	ok &= uniform_location_queries == 92;
 	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh);
 	ok &= hr->meshes.program == second_program && !memcmp (&hr->meshes.locs, &second, sizeof(second));
-	ok &= uniform_location_queries == 86;
+	ok &= uniform_location_queries == 92;
 	/* Fill the unused entries without compiling hundreds of shaders, then
 	 * exercise the real full-cache replacement and subsequent cache hit. */
 	for (unsigned i = 2; i < MAX_PROGRAMS; ++i)
@@ -1222,13 +1272,13 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	hr->debug.flags[HR_DEBUG_FOG] = 1;
 	upload_glsl_program (hr, &mesh);
 	const GLuint third_program = hr->meshes.program;
-	ok &= uniform_location_queries == 129 && !glIsProgram (first_program);
+	ok &= uniform_location_queries == 138 && !glIsProgram (first_program);
 	hr->debug.flags[HR_DEBUG_FOG] = 0;
 	upload_glsl_program (hr, &mesh);
-	ok &= hr->meshes.program == second_program && uniform_location_queries == 129;
+	ok &= hr->meshes.program == second_program && uniform_location_queries == 138;
 	material.has_texture = 0;
 	upload_glsl_program (hr, &mesh);
-	ok &= uniform_location_queries == 172 && !glIsProgram (third_program);
+	ok &= uniform_location_queries == 184 && !glIsProgram (third_program);
 	ok &= hr->meshes.locs.u_texture == (GLuint)-1 && glGetError() == GL_NO_ERROR;
 	glUseProgram ((GLuint)previous_program);
 	for (unsigned i = 0; i < num_programs; ++i)
@@ -1331,8 +1381,13 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		vec2f_t fog;
 		vec3f_t fog_color;
 
-		fog[0] = vp->depth.density;
-		fog[1] = vp->depth.bias;
+		/* 621 stores P = 1/(end-start), Q = near/end, not a start
+		 * distance. Decode it as Odin's view_fog before shading. */
+		fog[0] = fog[1] = 0.0f;
+		if (vp->depth.density > 0.0f && vp->depth.bias > 0.0f) {
+			fog[0] = vp->depth.density;
+			fog[1] = vp->clip.n / vp->depth.bias - 1.0f / vp->depth.density;
+		}
 		glUniform2fv (hr->meshes.locs.u_fog, 1, fog);
 
 		fog_color[0] = vp->depth.mask[0] * INV255;
@@ -1628,7 +1683,8 @@ copy_colors (hikaru_renderer_t *hr, hikaru_vertex_t *dst, hikaru_vertex_t *src)
 	 * polygons also have an alpha, with unknown meaning (it seems to have
 	 * opposite sign w.r.t. translucent alpha though). */
 	alpha = 1.0f;
-	if (POLY.type == HIKARU_POLYTYPE_TRANSLUCENT) {
+	if (POLY.type == HIKARU_POLYTYPE_TRANSLUCENT ||
+	    POLY.type == HIKARU_POLYTYPE_BACKGROUND || mat->has_alpha) {
 		float p_alpha = POLY.alpha;
 		float v_alpha = src->info.alpha * INV255;
 		alpha = clampf (p_alpha * v_alpha, 0.0f, 1.0f);
@@ -1681,19 +1737,7 @@ add_triangle (hikaru_renderer_t *hr)
 		if (hr->push.tmp[2].info.twosided)
 			hr->meshes.current->has_two_sided_lighting = 1;
 
-		if (hr->push.tmp[2].info.nocull) {
-			dst[0] = hr->push.tmp[0].body;
-			dst[1] = hr->push.tmp[2].body;
-			dst[2] = hr->push.tmp[1].body;
-			dst[3] = hr->push.tmp[0].body;
-			dst[4] = hr->push.tmp[1].body;
-			dst[5] = hr->push.tmp[2].body;
-			/* The back face is lit with the reversed normals. */
-			for (unsigned back = 3; back < 6; ++back)
-				for (unsigned axis = 0; axis < 3; ++axis)
-					dst[back].normal[axis] = -dst[back].normal[axis];
-			hr->push.num_tris += 1;
-		} else if (hr->push.tmp[2].info.winding) {
+		if (hr->push.tmp[2].info.winding) {
 			dst[0] = hr->push.tmp[0].body;
 			dst[1] = hr->push.tmp[2].body;
 			dst[2] = hr->push.tmp[1].body;
@@ -1701,6 +1745,18 @@ add_triangle (hikaru_renderer_t *hr)
 			dst[0] = hr->push.tmp[0].body;
 			dst[1] = hr->push.tmp[1].body;
 			dst[2] = hr->push.tmp[2].body;
+		}
+		if (hr->push.tmp[2].info.nocull) {
+			/* Wind the front before duplicating it. Ignoring the winding
+			 * bit here assigns reversed normals to alternate strip faces,
+			 * leaving triangular dark patches in lit smoke and characters. */
+			dst[3] = dst[0];
+			dst[4] = dst[2];
+			dst[5] = dst[1];
+			for (unsigned back = 3; back < 6; ++back)
+				for (unsigned axis = 0; axis < 3; ++axis)
+					dst[back].normal[axis] = -dst[back].normal[axis];
+			hr->push.num_tris += 1;
 		}
 		hr->push.num_tris += 1;
 	}
@@ -1796,6 +1852,34 @@ hikaru_renderer_push_vertices (vk_renderer_t *rend,
 }
 
 #ifdef HIKARU_VENDOR_TESTING
+/* The submitted normal must agree with the face selected by the winding
+ * bit. Check the production baker, including the reversed back-face copy. */
+int hikaru_vendor_test_triangle_winding(unsigned winding, unsigned nocull)
+{
+	hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+	if (!hr) return 0;
+	hr->push.num_verts = 3;
+	hr->push.tmp[1].body.position[winding ? 1 : 0] = 1.0f;
+	hr->push.tmp[2].body.position[winding ? 0 : 1] = 1.0f;
+	for (unsigned i = 0; i < 3; ++i)
+		hr->push.tmp[i].body.normal[2] = 1.0f;
+	hr->push.tmp[2].info.winding = !!winding;
+	hr->push.tmp[2].info.nocull = !!nocull;
+	add_triangle(hr);
+	int ok = hr->push.num_tris == (nocull ? 2u : 1u);
+	for (unsigned face = 0; face < hr->push.num_tris; ++face) {
+		const hikaru_vertex_body_t *v = &hr->push.all[face * 3];
+		float ax = v[1].position[0] - v[0].position[0];
+		float ay = v[1].position[1] - v[0].position[1];
+		float bx = v[2].position[0] - v[0].position[0];
+		float by = v[2].position[1] - v[0].position[1];
+		for (unsigned i = 0; i < 3; ++i)
+			ok &= (ax * by - ay * bx) * v[i].normal[2] > 0.0f;
+	}
+	free(hr);
+	return ok;
+}
+
 int hikaru_vendor_test_uv_dispatch(hikaru_gpu_t *, const uint32_t[8]);
 int hikaru_vendor_test_uv_packets(uint32_t offset_opcode, uint32_t offset_payload,
                                   uint32_t texhead, const uint32_t packet[8],
@@ -2097,6 +2181,56 @@ draw_mesh_geometry(hikaru_renderer_t *hr, hikaru_mesh_t *mesh,
 #define VERTEX_CHUNK_SIZE (4u * 1024u * 1024u)
 #define VERTEX_CHUNK_COUNT 8u
 
+/* Material RGB rules follow Odin (aa89944, GPL-3.0-or-later,
+ * Copyright 2026 Reda Cherif-Touil). Our scene alpha is coverage, whereas
+ * Odin stores transmittance: zeroing destination coverage here makes an
+ * opaque puff disappear when the bitmap planes are composed. */
+static void
+apply_material_blend(hikaru_renderer_t *hr, int polytype, const hikaru_material_t *mat)
+{
+	bool weigh = false;
+	const bool blended = polytype == HIKARU_POLYTYPE_TRANSLUCENT ||
+	                     polytype == HIKARU_POLYTYPE_BACKGROUND;
+	if ((polytype == HIKARU_POLYTYPE_TRANSLUCENT ||
+	     polytype == HIKARU_POLYTYPE_BACKGROUND) && !hr->peel.enabled) {
+		const unsigned mode = mat ? mat->blending_mode : 0;
+		weigh = mode == 0 || mode == 2;
+		switch (mode) {
+		case 1:
+			/* Odin writes zero transmittance for product: full coverage here. */
+			glBlendFuncSeparate(GL_DST_COLOR, GL_ZERO, GL_ONE, GL_ZERO);
+			break;
+		case 2:
+			glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+			break;
+		default:
+			glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+			                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+			break;
+		}
+	}
+	/* Depth-writing geometry covers the background after its cutout test. */
+	if (hr->meshes.locs.u_force_coverage != (GLuint)-1)
+		glUniform1f(hr->meshes.locs.u_force_coverage,
+		    !blended || (!hr->peel.enabled && mat && mat->blending_mode == 1) ? 1.0f : 0.0f);
+	if (hr->meshes.locs.u_weigh_by_alpha != (GLuint)-1)
+		glUniform1f(hr->meshes.locs.u_weigh_by_alpha, weigh ? 1.0f : 0.0f);
+}
+
+/* Odin aa89944, hikaru_draw.hpp: 501 patterns, GPL-3.0-or-later,
+ * Copyright 2026 Reda Cherif-Touil. 0/16 cover all pixels; 8 covers none. */
+static uint16_t
+pattern_bits(unsigned pattern)
+{
+    static const uint16_t patterns[32] = {
+		0xFFFF, 0xFBFE, 0xFAFA, 0x7ADA, 0x5A5A, 0x5258, 0x5050, 0x1040,
+		0x0000, 0x0401, 0x0505, 0x8525, 0xA5A5, 0xADA7, 0xAFAF, 0xEFBF,
+		0xFFFF, 0xFDF7, 0xF5F5, 0xE5B5, 0xA5A5, 0xA4A1, 0xA0A0, 0x8020,
+		0x0000, 0x0208, 0x0A0A, 0x1A4A, 0x5A5A, 0x5B5E, 0x5F5F, 0x7FDF,
+	};
+    return patterns[pattern & 31];
+}
+
 static void
 draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bound_vao,
            float *applied_depth_bias)
@@ -2155,7 +2289,12 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	upload_glsl_program (hr, mesh);
 	VK_ASSERT_NO_GL_ERROR ();
 
+	apply_material_blend(hr, polytype,
+	    mesh->mat_index < hr->num_mats ? &hr->mat_list[mesh->mat_index] : NULL);
+
 	upload_viewport (hr, mesh);
+	if (hr->meshes.variant.has_pattern)
+		glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh->pattern));
 	glUniform1i(hr->meshes.locs.u_peel_enabled, hr->peel.enabled ? 1 : 0);
 	glUniform1i(hr->meshes.locs.u_peel_first, hr->peel.first ? 1 : 0);
 	glUniform2f(hr->meshes.locs.u_peel_size, (float)hr->base.internal_width,
@@ -2383,13 +2522,14 @@ draw_sorted_translucent_strips(hikaru_renderer_t *hr, hikaru_mesh_t *meshes, uns
 }
 
 #ifdef HIKARU_VENDOR_TESTING
+#include "tests/material_pixels.h"
 /* Render a flat region through the real material copy, vertex layout and
  * shader variant cache. The caller owns expected colors from captured cases. */
 static int test_material_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
                                              const uint8_t ambient[3],
                                              const uint8_t texel[4], uint8_t pixel[4], float *depth_pixel, unsigned options,
-                                             const uint16_t prelit[3], bool has_prelit)
+                                             const uint16_t prelit[3], bool has_prelit, uint32_t texture_head_raw, const hikaru_material_pixel_case_t *test)
 {
     hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
     hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
@@ -2398,16 +2538,31 @@ static int test_material_pixels(uint32_t flags,
     if (!hr || !gpu) goto cleanup;
     hr->gpu = gpu;
     hr->debug.flags[HR_DEBUG_FOG] = !!(options & 1u);
+    hikaru_viewport_t viewport = {0};
+    viewport.depth.q_enabled = !(options & 4u);
+    viewport.clip.r = 640; viewport.clip.t = 480;
+    viewport.clip.f = 1280; viewport.clip.n = 0.1f;
+    viewport.offset.x = 320; viewport.offset.y = 240;
+    viewport.depth.density = (options & 16u) ? 0.0f : 1.0f;
+    viewport.depth.bias = (options & 8u) ? 0.2f : 0.1f;
+    viewport.depth.mask[0] = 64; viewport.depth.mask[1] = 128; viewport.depth.mask[2] = 192;
+    hr->base.internal_width = hr->base.internal_height = 8;
+    hr->vp_list = &viewport; hr->num_vps = 1;
     hikaru_material_t *material = &MAT.scratch;
     material->_881 = flags;
     memcpy(material->diffuse, diffuse, 3);
     memcpy(material->ambient, ambient, 3);
-    if (prelit) {
+    if (!prelit) for (unsigned c = 0; c < 3; ++c) material->unknown[c] = 255;
+    if (prelit && has_prelit) {
         memcpy(material->unknown, prelit, sizeof(material->unknown));
         material->has_691 = has_prelit;
     }
-    POLY.type = HIKARU_POLYTYPE_OPAQUE;
-    POLY.alpha = 1.0f;
+    POLY.type = test ? test->polytype : HIKARU_POLYTYPE_OPAQUE;
+    POLY.alpha = test ? test->polygon_alpha / 255.0f : 1.0f;
+    material->blending_mode = test ? test->blend_mode : 0;
+    hikaru_texhead_t texture_head = {0};
+    texture_head._2C1 = test ? test->texture_head : texture_head_raw;
+    hr->tex_list = &texture_head; hr->num_texs = 1;
     hikaru_lightset_t lights = {0};
     lights.mask = 0xf;
     if (options & 2u) {
@@ -2421,6 +2576,7 @@ static int test_material_pixels(uint32_t flags,
         }
     }
     hikaru_mesh_t mesh = {0};
+    mesh.pattern = test ? test->pattern : 0;
     hr->mat_list = material; hr->num_mats = 1;
     hr->ls_list = &lights; hr->num_lss = 1;
     hr->meshes.variant.full = ~0ULL;
@@ -2445,12 +2601,12 @@ static int test_material_pixels(uint32_t flags,
     const float positions[3][2] = {{-1, -1}, {3, -1}, {-1, 3}};
     for (unsigned i = 0; i < 3; ++i) {
         hikaru_vertex_t src = {0}, dst = {0};
-        src.info.alpha = 255;
+        src.info.alpha = test ? test->vertex_alpha : 255;
         copy_colors(hr, &dst, &src);
         vertices[i] = dst.body;
         vertices[i].position[0] = positions[i][0];
         vertices[i].position[1] = positions[i][1];
-        if (options & 2u) vertices[i].position[2] = -0.5f;
+        if (options & 3u) vertices[i].position[2] = -0.5f;
         vertices[i].normal[2] = 1;
         vertices[i].texcoords[0] = vertices[i].texcoords[1] = 0.5f;
     }
@@ -2467,18 +2623,20 @@ static int test_material_pixels(uint32_t flags,
     VAP(7, 1, GL_UNSIGNED_BYTE, alpha, GL_TRUE);
     VAP(8, 1, GL_UNSIGNED_BYTE, matrix_select, GL_FALSE);
     upload_glsl_program(hr, &mesh);
+    upload_viewport(hr, &mesh);
+    if (hr->meshes.variant.has_pattern) glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh.pattern));
+    GLfloat projection[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    /* Fog at eye depths 0.5 and 1.0, with window depths 0.5 and 0.75.
+     * Their independent mappings catch fog based on projected depth. */
+    if (options & 1u) { projection[10] = -1; projection[14] = -0.5f; }
     const GLfloat identity4[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     const GLfloat identity3[9] = {1,0,0, 0,1,0, 0,0,1};
-    glUniformMatrix4fv(hr->meshes.locs.u_projection, 1, GL_FALSE, identity4);
+    glUniformMatrix4fv(hr->meshes.locs.u_projection, 1, GL_FALSE, projection);
     glUniformMatrix4fv(hr->meshes.locs.u_modelview, 1, GL_FALSE, identity4);
     glUniformMatrix4fv(hr->meshes.locs.u_modelview_alternate, 1, GL_FALSE, identity4);
     glUniformMatrix3fv(hr->meshes.locs.u_normal, 1, GL_FALSE, identity3);
     glUniformMatrix3fv(hr->meshes.locs.u_normal_alternate, 1, GL_FALSE, identity3);
     glUniform1i(hr->meshes.locs.u_texture, 0);
-    if (options & 1u) {
-        glUniform2f(hr->meshes.locs.u_fog, 1, 0);
-        glUniform3f(hr->meshes.locs.u_fog_color, 64.0f/255, 128.0f/255, 192.0f/255);
-    }
     if (options & 2u) {
         glUniform3f(hr->meshes.locs.u_ambient, 1, 1, 1);
         glUniform3f(hr->meshes.locs.u_lights[0].direction, 0, 0, 1);
@@ -2488,9 +2646,17 @@ static int test_material_pixels(uint32_t flags,
     }
     glViewport(0, 0, 8, 8);
     glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE); glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
+    if (test && test->blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    apply_material_blend(hr, POLY.type, material);
+    /* Unblended probes inspect the material output before RGB weighting. */
+    if (test && !test->blend) glUniform1f(hr->meshes.locs.u_weigh_by_alpha, 0);
+    if ((!test && !depth_pixel) || (test && test->raw_material))
+        glUniform1f(hr->meshes.locs.u_force_coverage, 0);
+    glUniform1f(hr->meshes.locs.u_alpha_ref, 0.0f);
+    glUniform3f(hr->meshes.locs.u_ambient, 1, 1, 1);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glClearColor(1, 0, 1, 1);
+    if (test) glClearColor(test->background[0], test->background[1], test->background[2], test->background[3]);
+    else glClearColor(1, 0, 1, 1);
     if (depth_pixel) {
         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); glDepthMask(GL_TRUE);
         vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(1);
@@ -2509,7 +2675,7 @@ static int test_material_pixels(uint32_t flags,
             hikaru_vertex_t src = {0}, dst = {0};
             src.info.alpha = 255;
             copy_colors(hr, &dst, &src);
-            vertices[i].position[2] = 0.5f;
+            vertices[i].position[2] = (options & 1u) ? -1.0f : 0.5f;
             memcpy(vertices[i].diffuse, dst.body.diffuse, 3);
             memcpy(vertices[i].ambient, dst.body.ambient, 3);
             if (options & 2u) memset(vertices[i].specular, 0, 3);
@@ -2518,6 +2684,8 @@ static int test_material_pixels(uint32_t flags,
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glReadPixels(4, 4, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, depth_pixel);
     }
+    if (test && test->coverage_pixels)
+        glReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, test->coverage_pixels);
     glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     ok = glGetError() == GL_NO_ERROR;
 cleanup:
@@ -2527,33 +2695,38 @@ cleanup:
     free(gpu); free(hr);
     return ok;
 }
+int hikaru_vendor_test_material_case_pixels(const hikaru_material_pixel_case_t *test, uint8_t pixel[4])
+{
+    return test_material_pixels(test->flags, test->diffuse, test->color1, test->texel,
+                               pixel, NULL, 0, test->color691, true, 0, test);
+}
 int hikaru_vendor_test_prelit_material_pixels(uint32_t flags, const uint16_t prelit[3],
                                              bool has_prelit, const uint8_t diffuse[3],
-                                             const uint8_t ambient[3], const uint8_t texel[4], uint8_t pixel[4])
+                                             const uint8_t ambient[3], const uint8_t texel[4], uint8_t pixel[4], uint32_t texture_head)
 {
-    return test_material_pixels(flags, diffuse, ambient, texel, pixel, NULL, 2u, prelit, has_prelit);
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, NULL, 2u, prelit, has_prelit, texture_head, NULL);
 }
 int hikaru_vendor_test_unlit_material_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
                                              const uint8_t ambient[3],
-                                             const uint8_t texel[4], uint8_t pixel[4])
+                                             const uint8_t texel[4], uint8_t pixel[4], uint32_t texture_head)
 {
-    return test_material_pixels(flags, diffuse, ambient, texel, pixel, NULL, 0, NULL, false);
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, NULL, 0, NULL, false, texture_head, NULL);
 }
 int hikaru_vendor_test_material_depth_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
                                              const uint8_t ambient[3],
-                                             const uint8_t texel[4], uint8_t pixel[4], float *depth)
+                                             const uint8_t texel[4], uint8_t pixel[4], float *depth, uint32_t texture_head)
 {
-    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, 0, NULL, false);
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, 0, NULL, false, texture_head, NULL);
 }
 int hikaru_vendor_test_material_fog_depth_pixels(uint32_t flags,
                                              const uint8_t diffuse[3],
                                              const uint8_t ambient[3],
                                              const uint8_t texel[4], uint8_t pixel[4], float *depth,
-                                             unsigned options)
+                                             unsigned options, uint32_t texture_head)
 {
-    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, options, NULL, false);
+    return test_material_pixels(flags, diffuse, ambient, texel, pixel, depth, options, NULL, false, texture_head, NULL);
 }
 #endif
 
@@ -2636,6 +2809,7 @@ hikaru_renderer_begin_mesh (vk_renderer_t *rend, uint32_t addr,
 	hr->meshes.current = mesh;
 	update_and_set_rendstate (hr, mesh);
 	mesh->addr[0] = addr;
+	mesh->pattern = gpu->state.pattern;
 
 	/* The last vertices stay and take the new state: a strip goes on
 	 * through a recall (seen in the BOOTROM colour bars). Dropping
@@ -2828,7 +3002,8 @@ composite_peel_layers(hikaru_renderer_t *hr, GLuint scene_fb, unsigned count)
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_CULL_FACE);
 	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+	                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 	glUseProgram(hr->framebuffer.program);
 	glBindVertexArray(hr->framebuffer.vao);
 	glViewport(0, 0, hr->base.internal_width, hr->base.internal_height);
@@ -2945,10 +3120,11 @@ draw_scene (hikaru_renderer_t *hr)
 	 * and the buffer writemasks affect the operation of glClear". */
 	glDepthMask (GL_TRUE);
 	glDisable (GL_SCISSOR_TEST);
-	glClearColor (gpu->fb_config.clear[0] * INV255,
-	              gpu->fb_config.clear[1] * INV255,
-	              gpu->fb_config.clear[2] * INV255,
-	              gpu->fb_config.clear[3] * INV255);
+	/* Scene RGB is premultiplied, including the hardware clear color. */
+	const float coverage = gpu->fb_config.clear[3] * INV255;
+	glClearColor (gpu->fb_config.clear[0] * INV255 * coverage,
+	              gpu->fb_config.clear[1] * INV255 * coverage,
+	              gpu->fb_config.clear[2] * INV255 * coverage, coverage);
 	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	setup_scene_scissor (hr->base.internal_width, hr->base.internal_height);
@@ -3305,8 +3481,9 @@ static const char *fb_fs_source =
 "\t\tcolor = mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), cover_2);\n"
 "\tif (u_mult_1 != 0.0 && u_direct_1 == 0)\n"
 "\t\tcolor = mix (color, vec4 (texel_1.rgb * u_mult_1, 1.0), cover_1);\n"
-"\tfloat cover_3d = step (0.004, scene.a);\n"
-"\tcolor = combined ? mix (color, vec4 (scene.rgb, 1.0), cover_3d) : scene;\n"
+/* Scene alpha is fractional coverage, not the binary key used by a
+ * bitmap plane. Its RGB has already been weighted during mesh blending. */
+"\tcolor = combined ? scene + color * (1.0 - scene.a) : scene;\n"
 "\tif (u_mult_2 != 0.0 && u_direct_2 != 0)\n"
 "\t\tcolor = mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), cover_2);\n"
 "\tif (u_mult_1 != 0.0 && u_direct_1 != 0)\n"

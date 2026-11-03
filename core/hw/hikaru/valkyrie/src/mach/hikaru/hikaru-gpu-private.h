@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -304,6 +305,8 @@ typedef struct {
 		uint32_t sp[2];
 		uint32_t is_running	: 1;
 		uint32_t is_unhandled	: 1;
+		/* Reserved flag bits keep the serialized CP block unchanged. */
+		uint32_t pattern_stack	: 30;
 	} cp;
 
 	struct {
@@ -332,11 +335,11 @@ typedef struct {
 	} fb_config;
 
 	uint16_t depth_bias;
-	uint16_t _501;
 	int16_t texoffset[4][2];
 
 	struct {
 		uint32_t in_mesh	: 1;
+		uint32_t pattern	: 5; /* 501 screen-door coverage; formerly reserved bits. */
 
 		struct {
 			float value;
