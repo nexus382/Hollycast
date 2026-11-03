@@ -1,3 +1,5 @@
+// Portions Copyright 2026 The Hollycast Authors
+/* Modified for Hollycast on 2026-11-03; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
  * Copyright (C) 2011-2013, Stefano Teso

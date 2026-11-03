@@ -1,3 +1,4 @@
+/* Modified for Hollycast on 2026-11-03; see valkyrie/PROVENANCE.md. */
 /* Portions Copyright 2026 The Hollycast Authors */
 /* 
  * Valkyrie

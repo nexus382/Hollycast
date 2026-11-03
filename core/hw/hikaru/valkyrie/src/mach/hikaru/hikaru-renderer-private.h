@@ -117,7 +117,7 @@ typedef struct {
 	struct {
 		GLuint position, direction, diffuse, specular, extents, spot, spot_table;
 	} u_lights[4];
-	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref, u_weigh_by_alpha, u_force_coverage, u_pattern;
+	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref, u_weigh_by_alpha, u_force_coverage, u_pattern, u_lod_bias;
 	GLuint u_peel_enabled, u_peel_first, u_peel_size, u_peel_depth, u_peel_opaque_depth;
 } hikaru_uniform_locations_t;
 
@@ -214,8 +214,7 @@ typedef struct {
 		GLuint peel_fb, peel_color[HIKARU_MAX_PEEL_LAYERS + 1], peel_depth[HIKARU_MAX_PEEL_LAYERS + 1];
 		unsigned peel_width, peel_height;
 		unsigned peel_layers_allocated;
-		uint8_t *peel_probe_pixels;
-		size_t peel_probe_capacity;
+		GLuint peel_query[2];
 		unsigned width, height;
 		GLuint vao, vbo;
 		struct {

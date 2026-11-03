@@ -112,9 +112,8 @@ if(NOT LIBRETRO AND NOT WINDOWS_STORE AND NOT WEBOS AND NOT IOS AND NOT NINTENDO
 endif()
 option(USE_HIKARU "Build the experimental Sega Hikaru backend" ${USE_HIKARU_DEFAULT})
 if(USE_HIKARU)
-	if(LIBRETRO OR WINDOWS_STORE OR WEBOS OR IOS OR NINTENDO_SWITCH OR USE_VIDEOCORE OR USE_GLES2 OR NOT USE_OPENGL
-	   OR NOT (WIN32 OR ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
-		message(FATAL_ERROR "USE_HIKARU requires standalone OpenGL 3.2 or OpenGL ES 3.0 support")
+	if(LIBRETRO OR WINDOWS_STORE OR WEBOS OR IOS OR NINTENDO_SWITCH OR USE_VIDEOCORE OR USE_GLES2 OR NOT USE_OPENGL)
+		message(FATAL_ERROR "USE_HIKARU requires standalone OpenGL 3.2 or OpenGL ES 3.0 support; configure with -DUSE_HIKARU=OFF for this target")
 	endif()
 	add_compile_definitions(USE_HIKARU)
 endif()
@@ -171,6 +170,11 @@ include(CMakeRC)
 if(ENABLE_CTEST)
 	include(CTest)
 	add_compile_definitions(FLYCAST_TEST_FILES="${CMAKE_CURRENT_SOURCE_DIR}/tests/files")
+endif()
+# Synthetic vendor tests can accompany a playable build (BUILD_TESTING=OFF).
+# Without this, CTest silently keeps any manifest left by an older test build.
+if(USE_HIKARU AND HIKARU_VENDOR_BUILD_SMOKE)
+	enable_testing()
 endif()
 
 if(IOS AND NOT LIBRETRO)

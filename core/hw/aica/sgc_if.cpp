@@ -423,7 +423,8 @@ struct ChannelEx
 {
 	static ChannelEx Chans[64];
 #ifdef USE_HIKARU
-	static ChannelEx (&activeChannels())[64];
+	static ChannelEx (*selected)[64];
+	static ChannelEx (&activeChannels())[64] { return *selected; }
 #endif
 
 	ChannelCommonData* ccd;
@@ -1495,16 +1496,12 @@ struct ChannelState
 };
 #ifdef USE_HIKARU
 static ChannelState* selectedChannels;
-ChannelEx (&ChannelEx::activeChannels())[64]
-{
-	// MSVC rejects a ternary over array operands; branch explicitly.
-	if (selectedChannels) return selectedChannels->channels;
-	return ChannelEx::Chans;
-}
+ChannelEx (*ChannelEx::selected)[64] = &ChannelEx::Chans;
 ChannelState* activeChannelState() { return selectedChannels; }
 void selectChannelState(ChannelState* state)
 {
 	selectedChannels = state;
+	ChannelEx::selected = state ? &state->channels : &ChannelEx::Chans;
 	auto& channels = ChannelEx::activeChannels();
 	if (channels[0].ccd != (ChannelCommonData*)&aica_reg[0])
 		for (int i = 0; i < 64; ++i)

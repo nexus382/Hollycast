@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "hw/hikaru/graphics/device.h"
@@ -30,6 +31,9 @@ struct RecordingBackend final : Backend {
     void clear(const Draw&, GLbitfield, const Vec4&, float) override {}
     void draw(const Draw& draw) override { lastDraw = draw; drew = true;++draws; }
     void readPixels(unsigned, int, int, int, int, uint8_t*) override {}
+    unsigned queryStartDraws = 0;
+    void beginOcclusion() override { queryStartDraws = draws; }
+    bool endOcclusion() override { return draws != queryStartDraws; }
     void present(unsigned width, unsigned height) override { lastPresentWidth = width; lastPresentHeight = height; }
 };
 
@@ -122,11 +126,23 @@ void testDispatchConversionUniformsAndState(RecordingBackend& backend, Device& d
     check(near(backend.lastDraw.uniforms.lodBias[0], -0.75f)
           && backend.lastDraw.sampling[0].magFilter == GL_LINEAR,
           "sampler remapping lost filtering or fractional LOD bias");
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(bitmap, "u_lod_bias"), -0.375f);
+    hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
+    device.checkError();
+    check(near(backend.lastDraw.uniforms.lodBias[0], -0.375f), "ES uniform LOD bias was lost in native dispatch");
     hikaru_glBindTexture(GL_TEXTURE_2D, 0);
     hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
     device.checkError();
     check(backend.lastDraw.color == 0 && backend.lastDraw.textures[0] == 0,
           "unbound sampler did not remain texture zero while rendering to target zero");
+    GLuint query[2] = {};
+    hikaru_graphics_begin_occlusion(query);
+    hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
+    check(hikaru_graphics_end_occlusion(query), "query did not flush its pending draw");
+    hikaru_graphics_begin_occlusion(query);
+    check(!hikaru_graphics_end_occlusion(query), "empty query included an earlier draw");
+    hikaru_graphics_delete_occlusion(query);
+    device.checkError();
     const auto draws=backend.draws;
     hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
     hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);

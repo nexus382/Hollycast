@@ -85,7 +85,11 @@ bool EGLGraphicsContext::init()
 	{
 		EGLint pi32ConfigAttribs[]  = {
 				EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+#ifdef USE_HIKARU
 				EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT | EGL_OPENGL_ES2_BIT,
+#else
+				EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+#endif
 				EGL_RED_SIZE, 8,
 				EGL_GREEN_SIZE, 8,
 				EGL_BLUE_SIZE, 8,
@@ -154,7 +158,11 @@ bool EGLGraphicsContext::init()
 
 			// Prefer ES 3.0 (required by Hikaru); ES2-only hardware keeps
 			// the existing Dreamcast path and Hikaru rejects it at load.
-			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3 , EGL_NONE };
+#ifdef USE_HIKARU
+			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+#else
+			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+#endif
 
 			context = eglCreateContext(display, config,  EGL_NO_CONTEXT, contextAttrs);
 			if (context == EGL_NO_CONTEXT)

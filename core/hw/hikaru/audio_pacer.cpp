@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
 #include "audio_pacer.h"
@@ -75,7 +76,7 @@ bool AudioPacer::beginFrame(bool enabled, unsigned queuedFrames, double totalBlo
                 if (queuedFrames < 1024)
                     correction += (0.08 - 0.03) * (1024.0 - queuedFrames) / 1024.0;
             }
-            currentTempo = std::clamp(smoothedSpeed < 0.98 ? smoothedSpeed * (1.0 - correction) : 1.0, 0.25, 1.0);
+            currentTempo = std::clamp(smoothedSpeed * (1.0 - correction), 0.25, 1.0);
             haveRate = true;
             processor->touch.setTempo(currentTempo);
         }

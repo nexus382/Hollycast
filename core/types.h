@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "build.h"
 
@@ -123,6 +124,17 @@ static inline bool isMetal(RenderType renderType) {
 static inline bool isPerPixel(RenderType renderType) {
 	return renderType == RenderType::OpenGL_OIT || renderType == RenderType::Vulkan_OIT
 			|| renderType == RenderType::DirectX11_OIT || renderType == RenderType::Metal_OIT;
+}
+
+// Hikaru supplies its own transparency passes. The host still owns window/UI
+// resources, and must return to the requested OIT renderer for other systems.
+static inline RenderType hostRendererType(RenderType requested, bool hikaru) {
+	if (hikaru) {
+		if (isOpenGL(requested)) return RenderType::OpenGL;
+		if (isVulkan(requested)) return RenderType::Vulkan;
+		if (isMetal(requested)) return RenderType::Metal;
+	}
+	return requested;
 }
 
 enum class KeyboardLayout {

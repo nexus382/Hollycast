@@ -9,7 +9,7 @@ The standalone Windows, Android, Linux and macOS port keeps the desktop
 OpenGL 3.2 path and adds an OpenGL ES 3.0 path with shared shader bodies,
 ES texture-upload conversion, and graphics release/restore across host
 context recreation. Hikaru remains unsupported in libretro, Xbox/UWP,
-Switch, iOS and BSD builds. No platform runtime claim is made for a
+Switch and iOS builds. BSD is opt-in and unverified. No platform runtime claim is made for a
 backend that has not been built and run on that platform.
 
 The host graphics dispatch now preserves the vendor scene construction while
@@ -125,3 +125,26 @@ scope heuristic, preventing a smoke model's mask from affecting furniture.
 The state uses previously reserved flag bits without changing serialized CP
 or drawing-block layout. All masks and nested scope have focused regressions.
 Native Vulkan/Metal shaders still require their separate pattern implementation.
+
+The November audit separates the host's Hikaru sorting preference from shared
+Dreamcast/Naomi renderer selection. GPU visibility queries replace peel-target
+color scans; Vulkan transfers and clears use fence-owned batches, and Metal
+internal viewport/scissor/readback coordinates follow the shader's Y mapping.
+ES3 depth24 allocations use unsigned-int data types and texture bias is a
+shader argument instead of the unsupported ES texture parameter.
+Invalid texture uploads restore the untextured shader path. Empty command
+meshes no longer disable sorting. SH-4 FCNVSD/FCNVDS require PR=1, matching the
+shared SH-4 interpreter. Cartridge views explicitly borrow immutable host
+storage while BIOS data remains private and patchable. Original copying
+semantics remain the engine API default.
+
+The follow-up audit registers synthetic tests even in a playable build with
+BUILD_TESTING disabled. The native CPU/bus bring-up model is now an excluded
+library required by its tests; the player links only its shared board I/O.
+Protection aperture holes and unused registers follow MAME revision
+43b995da4a2af46c9f48c6a5536953439adfb1ab's localbus_map and iomap_le:
+unmapped reads return zero, unused writes are ignored, high-address writes
+force zero, and wide reads visit each 16-bit data port once. Width, alignment
+and aperture validation remain explicit host API constraints. The cipher's
+block-header reset already restores its read cursor; the alleged cursor
+heap over-read was not established by this review.

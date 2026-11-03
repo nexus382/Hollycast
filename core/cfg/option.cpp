@@ -81,6 +81,8 @@ Option<bool> AutoLatency("aica.AutoLatency",
 
 OptionString AudioBackend("backend", "auto", "audio");
 #ifdef USE_HIKARU
+Option<HikaruSortingMode> HikaruSorting("HikaruSorting", HikaruSortingMode::PerTriangle);
+Option<int> HikaruMaxLayers("HikaruMaxLayers", 32);
 Option<bool> HikaruAudioPacing("HikaruAudioPacing", true);
 Option<bool> HikaruBraveMouseAim("HikaruBraveMouseAim", false, "input");
 #endif

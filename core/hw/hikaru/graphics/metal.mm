@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Native Metal backend for the Hikaru graphics dispatch. The shader contract
@@ -199,6 +200,29 @@ public:
       }
     }
 
+    void beginOcclusion() override {
+        if(occlusionActive)throw std::runtime_error("Nested Hikaru visibility query");
+        flushDraws();
+        visibilityBuffers.clear();
+        occlusionActive=true;
+    }
+    bool endOcclusion() override {
+        if(!occlusionActive)throw std::runtime_error("No active Hikaru visibility query");
+        flushDraws();
+        // A marker on the same queue waits only for the preceding query work.
+        id<MTLCommandBuffer> marker=[queue commandBuffer];
+        commitCommandBuffer(marker);
+        [marker waitUntilCompleted];
+        occlusionActive=false;
+        if(marker.status==MTLCommandBufferStatusError)throw std::runtime_error("Hikaru visibility query failed");
+        bool visible=false;
+        for(id<MTLBuffer> buffer:visibilityBuffers) {
+            const auto* results=static_cast<const uint64_t*>(buffer.contents);
+            for(unsigned i=0;i<256;i++)visible|=results[i]!=0;
+        }
+        visibilityBuffers.clear();
+        return visible;
+    }
     void eraseTexture(unsigned id) override { @autoreleasepool { flushDraws();if (id) textures.erase(id); } }
 
     void clear(const Draw& state, GLbitfield mask, const Vec4& color, float depth) override {
@@ -227,7 +251,7 @@ public:
         const unsigned h=colorTex ? (unsigned)colorTex.height : (unsigned)depthTex.height;
         MTLViewport vp={0,0,(double)w,(double)h,0,1};[enc setViewport:vp];
         GLint x=0,y=0,sw=(GLint)w,sh=(GLint)h;
-        if (state.scissorEnabled) { x=state.scissor[0];y=(GLint)h-state.scissor[1]-state.scissor[3];sw=state.scissor[2];sh=state.scissor[3]; }
+        if (state.scissorEnabled) { x=state.scissor[0];y=state.color==0?(GLint)h-state.scissor[1]-state.scissor[3]:state.scissor[1];sw=state.scissor[2];sh=state.scissor[3]; }
         x=std::max<GLint>(0,x);y=std::max<GLint>(0,y);sw=std::max<GLint>(0,std::min<GLint>(sw,(GLint)w-x));sh=std::max<GLint>(0,std::min<GLint>(sh,(GLint)h-y));
         [enc setScissorRect:MTLScissorRect{(NSUInteger)x,(NSUInteger)y,(NSUInteger)sw,(NSUInteger)sh}];
         PipelineKey key{}; key.format=colorTex ? (uint32_t)pixelFormat(textures[state.color].info.format) : MTLPixelFormatInvalid;
@@ -251,10 +275,10 @@ public:
         const unsigned w=(unsigned)color.width,h=(unsigned)color.height;
         GLint vx=d.viewport[2]||d.viewport[3]?d.viewport[0]:0,vy=d.viewport[2]||d.viewport[3]?d.viewport[1]:0;
         GLint vw=d.viewport[2]||d.viewport[3]?d.viewport[2]:(GLint)w,vh=d.viewport[2]||d.viewport[3]?d.viewport[3]:(GLint)h;
-        MTLViewport vp={(double)vx,(double)((GLint)h-vy-vh),(double)vw,(double)vh,d.nearDepth,d.farDepth};
+        MTLViewport vp={(double)vx,(double)(d.color==0?(GLint)h-vy-vh:vy),(double)vw,(double)vh,d.nearDepth,d.farDepth};
         [enc setViewport:vp];
         GLint sx=0,sy=0,sw=(GLint)w,sh=(GLint)h;
-        if(d.scissorEnabled){sx=d.scissor[0];sy=(GLint)h-d.scissor[1]-d.scissor[3];sw=d.scissor[2];sh=d.scissor[3];}
+        if(d.scissorEnabled){sx=d.scissor[0];sy=d.color==0?(GLint)h-d.scissor[1]-d.scissor[3]:d.scissor[1];sw=d.scissor[2];sh=d.scissor[3];}
         sx=std::max<GLint>(0,sx);sy=std::max<GLint>(0,sy);sw=std::max<GLint>(0,std::min<GLint>(sw,(GLint)w-sx));sh=std::max<GLint>(0,std::min<GLint>(sh,(GLint)h-sy));
         [enc setScissorRect:MTLScissorRect{(NSUInteger)sx,(NSUInteger)sy,(NSUInteger)sw,(NSUInteger)sh}];
         PipelineKey key{};key.bitmap=d.bitmap;key.blend=d.blend;key.cull=d.cull;key.depth=depth!=nil;key.format=(uint32_t)pixelFormat(textures[d.color].info.format);
@@ -297,6 +321,7 @@ public:
             }
             [enc setFragmentSamplerState:samplerFor(d.sampling[i]) atIndex:i];
         }
+        if(occlusionActive)[enc setVisibilityResultMode:MTLVisibilityResultModeBoolean offset:activeDraws*sizeof(uint64_t)];
         MTLPrimitiveType pt=primitiveType(d.topology);
         if(d.topology==GL_TRIANGLE_FAN){ // Expand fan to a triangle list because Metal has no triangle-fan primitive.
             std::vector<Vertex> expanded;expanded.reserve((d.vertices.size()-2)*3);for(size_t i=1;i+1<d.vertices.size();i++){expanded.push_back(d.vertices[0]);expanded.push_back(d.vertices[i]);expanded.push_back(d.vertices[i+1]);}
@@ -319,7 +344,7 @@ public:
         if(cmd.status==MTLCommandBufferStatusError)throw std::runtime_error(std::string("Hikaru Metal readback failed: ")+(cmd.error.localizedDescription.UTF8String?:"unknown error"));
         const uint8_t* source=(const uint8_t*)staging.contents;
         for(int iy=0;iy<height;iy++){
-            int gy=y+iy, rowTop=(int)t.height-1-gy;
+            int gy=y+iy, rowTop=textureId==0?(int)t.height-1-gy:gy;
             if(gy<0||gy>=(int)t.height){std::memset(rgba+size_t(iy)*width*4,0,size_t(width)*4);continue;}
             const uint8_t* row=source+size_t(rowTop)*bpr;
             for(int ix=0;ix<width;ix++){int gx=x+ix;auto* dst=rgba+(size_t(iy)*width+ix)*4;if(gx<0||gx>=(int)t.width)std::memset(dst,0,4);else if(textures[textureId].info.format==GL_RGB10_A2){uint32_t v;std::memcpy(&v,row+size_t(gx)*4,4);for(unsigned c=0;c<3;c++){unsigned b=(v>>(10*c))&1023u;dst[c]=uint8_t((b*255u+511u)/1023u);}dst[3]=uint8_t((((v>>30)&3u)*255u+1u)/3u);}else std::memcpy(dst,row+size_t(gx)*4,4);}
@@ -340,6 +365,8 @@ private:
     id<MTLCommandBuffer> activeCommand=nil;
     id<MTLRenderCommandEncoder> activeEncoder=nil;
     unsigned activeColor=~0u,activeDepth=~0u,activeDraws=0;
+    bool occlusionActive=false;
+    std::vector<id<MTLBuffer>> visibilityBuffers;
     std::map<unsigned,TextureEntry> textures;std::map<PipelineKey,id<MTLRenderPipelineState>> pipelines;std::map<std::tuple<uint32_t,uint8_t,bool>,id<MTLRenderPipelineState>> clearPipelines;std::map<SamplerKey,id<MTLSamplerState>> samplers;std::map<std::pair<GLenum,bool>,id<MTLDepthStencilState>> depths;
     void commitCommandBuffer(id<MTLCommandBuffer> cmd) {
         if(!cmd)return;
@@ -361,6 +388,13 @@ private:
         MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture=color;pass.colorAttachments[0].loadAction=MTLLoadActionLoad;pass.colorAttachments[0].storeAction=MTLStoreActionStore;
         if(depth){pass.depthAttachment.texture=depth;pass.depthAttachment.loadAction=MTLLoadActionLoad;pass.depthAttachment.storeAction=MTLStoreActionStore;}
+        if(occlusionActive) {
+            id<MTLBuffer> results=[device newBufferWithLength:256*sizeof(uint64_t) options:MTLResourceStorageModeShared];
+            if(!results)throw std::runtime_error("Cannot allocate Hikaru visibility results");
+            std::memset(results.contents,0,256*sizeof(uint64_t));
+            visibilityBuffers.push_back(results);
+            pass.visibilityResultBuffer=results;
+        }
         activeCommand=[queue commandBuffer];activeEncoder=[activeCommand renderCommandEncoderWithDescriptor:pass];
         if(!activeEncoder){activeCommand=nil;return false;}
         activeColor=colorID;activeDepth=depthID;activeDraws=0;return true;

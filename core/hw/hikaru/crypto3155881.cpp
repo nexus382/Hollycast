@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: BSD-3-Clause
 // Adapted from MAME src/mame/sega/315-5881_crypt.{cpp,h}, revision
 // 43b995da4a2af46c9f48c6a5536953439adfb1ab.
@@ -62,7 +63,9 @@ void Crypto3155881::reset() {
 }
 void Crypto3155881::writeAddressLow(uint16_t value) {set_addr_low(value);first_read=true;}
 void Crypto3155881::writeAddressHigh(uint16_t value) {
-    if (value != 0) throw std::runtime_error("Hikaru 315-5881 high address must be zero");
+    // MAME's addrhi_w forces this board's upper address to zero, even when
+    // the guest supplies another value. Such writes still prime a dummy read.
+    (void)value;
     set_addr_high(0);first_read=true;
 }
 void Crypto3155881::writeSubkey(uint16_t value) {set_subkey(value);}

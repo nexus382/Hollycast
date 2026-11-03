@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "vk/core.h"
@@ -362,4 +363,25 @@ void hikaru_glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboole
 void hikaru_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     if (current_dispatch) { current_dispatch->Viewport(x, y, width, height); return; }
     glViewport(x, y, width, height);
+}
+
+void hikaru_graphics_begin_occlusion(GLuint query[2]) {
+    if (current_dispatch) { current_dispatch->BeginOcclusion(); return; }
+    if (!query[0]) {
+        glGenQueries(1, &query[0]);
+        const char *version = (const char *)glGetString(GL_VERSION);
+        query[1] = version && !strncmp(version, "OpenGL ES", 9) ? GL_ANY_SAMPLES_PASSED : GL_SAMPLES_PASSED;
+    }
+    glBeginQuery(query[1], query[0]);
+}
+GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]) {
+    if (current_dispatch) return current_dispatch->EndOcclusion();
+    GLuint samples = 0;
+    glEndQuery(query[1]);
+    glGetQueryObjectuiv(query[0], GL_QUERY_RESULT, &samples);
+    return samples != 0;
+}
+void hikaru_graphics_delete_occlusion(GLuint query[2]) {
+    if (!current_dispatch && query[0]) glDeleteQueries(1, &query[0]);
+    query[0] = query[1] = 0;
 }

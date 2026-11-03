@@ -130,6 +130,7 @@ int main(int argc, char **argv)
     program[0x37fffff] = 0xc4;
     data[0] = 0xd5; data[0x1000000] = 0xe6;
     data[0xf000000] = 0xf7; data[0xfffffff] = 0xf8;
+    roms.borrow_cartridge = 1;
     engine = hikaru_engine_create_game(HIKARU_ENGINE_GAME_PHARRIER,
         &roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
     CHECK(engine != NULL);
@@ -137,6 +138,11 @@ int main(int argc, char **argv)
     check_board(engine, "pharrier", 4, 16);
     board = (hikaru_t *)engine->machine;
     CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
+    CHECK(board->eprom->ptr == program && board->maskrom->ptr == data);
+    CHECK(board->bootrom->ptr != boot);
+    vk_buffer_put(board->eprom, 1, 0, 0);
+    vk_buffer_clear(board->maskrom);
+    CHECK(program[0] == 0x80 && data[0] == 0xd5);
     check_bus(board, 0x10, 0, 0x80);
     check_bus(board, 0x10, 0x800000, 0x80); /* 8 MiB within-bank mirror. */
     check_bus(board, 0x11, 0, 0x91);

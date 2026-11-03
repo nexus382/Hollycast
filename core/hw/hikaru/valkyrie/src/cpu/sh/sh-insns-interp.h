@@ -1414,17 +1414,18 @@ I (ftrc)
 	}
 }
 
+/* SH-4 precision conversions are defined only in PR=1 mode. */
 I (fcnvsd)
 {
 	VK_CPU_ASSERT (ctx, !(_RN & 1));
-	VK_CPU_ASSERT (ctx, !FPSCR.bit.pr);
+	VK_CPU_ASSERT (ctx, FPSCR.bit.pr);
 	sh4_set_dr (ctx, _RN, FPUL.f);
 }
 
 I (fcnvds)
 {
 	VK_CPU_ASSERT (ctx, !(_RN & 1));
-	VK_CPU_ASSERT (ctx, !FPSCR.bit.pr);
+	VK_CPU_ASSERT (ctx, FPSCR.bit.pr);
 	FPUL.f = sh4_get_dr (ctx, _RN);
 }
 

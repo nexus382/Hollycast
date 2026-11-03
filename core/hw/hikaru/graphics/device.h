@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
@@ -68,6 +69,8 @@ public:
     virtual void draw(const Draw& draw) = 0;
     virtual void readPixels(unsigned id, int x, int y, int width, int height, uint8_t* rgba) = 0;
     virtual void present(unsigned width, unsigned height) = 0;
+    virtual void beginOcclusion() = 0;
+    virtual bool endOcclusion() = 0;
 };
 std::unique_ptr<Backend> makeMetalBackend();
 std::unique_ptr<Backend> makeVulkanBackend();

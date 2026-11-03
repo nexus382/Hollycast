@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Metal/Metal.h>
@@ -156,6 +157,18 @@ int main() {
         if(!pixelIs(pixels,0,0,0,0,0,255)){std::cerr<<"texture max-level clamp mismatch: "
             <<int(pixels[0])<<","<<int(pixels[1])<<","<<int(pixels[2])<<","<<int(pixels[3])<<"\n";return 9;}
 
+        Draw corner=bitmap;corner.color=3;corner.viewport={0,0,2,2};corner.uniforms.inverted[2]=1;
+        Draw internalClear=state;internalClear.color=3;
+        backend->clear(internalClear,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);
+        backend->beginOcclusion();backend->draw(corner);
+        if(!backend->endOcclusion()){std::cerr<<"visible query missed geometry\n";return 17;}
+        pixels.fill(0);backend->readPixels(3,0,0,4,4,pixels.data());
+        if(!pixelIs(pixels,0,0,20,40,60,255)||!pixelIs(pixels,0,3,0,0,0,255)){
+            std::cerr<<"off-center internal viewport/readback mismatch\n";return 18;
+        }
+        corner.scissorEnabled=true;corner.scissor={3,3,1,1};
+        backend->beginOcclusion();backend->draw(corner);
+        if(backend->endOcclusion()){std::cerr<<"empty query reported geometry\n";return 19;}
         std::cout<<"Hikaru Metal bitmap, mip completeness/minification, peel depth, composition, culling state, scissor, and readback passed\n";
         return 0;
     }

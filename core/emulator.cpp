@@ -943,7 +943,19 @@ void Emulator::stop()
 	if (state != Running)
 		return;
 #ifdef USE_HIKARU
-	if (settings.platform.isHikaru()) { state = Loaded; hikaru::frontend::pauseAudio(); TermAudio(); EventManager::event(Event::Pause); return; }
+	if (settings.platform.isHikaru()) {
+		state = Loaded;
+#ifdef __ANDROID__
+		// Java may stop us while render() is still producing audio. Consume
+		// this request on the render thread, after its current frame returns.
+		stopRequested = true;
+#else
+		hikaru::frontend::pauseAudio();
+		TermAudio();
+		EventManager::event(Event::Pause);
+#endif
+		return;
+	}
 #endif
 	// Avoid race condition with GGPO restarting the sh4 for a new frame
 	if (config::GGPOEnable)
@@ -1156,7 +1168,17 @@ void Emulator::start()
 	}
 	state = Running;
 #ifdef USE_HIKARU
-	if (settings.platform.isHikaru()) { InitAudio(); hikaru::frontend::resumeAudio(); EventManager::event(Event::Resume); return; }
+	if (settings.platform.isHikaru()) {
+#ifndef __ANDROID__
+		stopRequested = false;
+		InitAudio();
+		hikaru::frontend::resumeAudio();
+		EventManager::event(Event::Resume);
+#endif
+		// Android starts audio on its render thread too. A rapid resume must
+		// not cancel an unconsumed stop or reopen the producer's backend.
+		return;
+	}
 #endif
 	SetMemoryHandlers();
 	if (config::GGPOEnable && config::ThreadedRendering)
@@ -1235,11 +1257,34 @@ bool Emulator::render()
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru())
 	{
-		if (state != Running) return false;
-		try {
-			return hikaru::frontend::render();
+		if (stopRequested.exchange(false)) {
+			hikaru::frontend::pauseAudio();
+			TermAudio();
+			hikaruAudioActive = false;
+			EventManager::event(Event::Pause);
+			return false;
 		}
-		catch (...) { state = Error; TermAudio(); EventManager::event(Event::Pause); throw; }
+		if (state != Running) return false;
+#ifdef __ANDROID__
+		if (!hikaruAudioActive) {
+			InitAudio();
+			hikaru::frontend::resumeAudio();
+			hikaruAudioActive = true;
+			EventManager::event(Event::Resume);
+		}
+#endif
+		try {
+			const bool rendered = hikaru::frontend::render();
+			if (stopRequested.exchange(false)) {
+				hikaru::frontend::pauseAudio();
+				TermAudio();
+				hikaruAudioActive = false;
+				EventManager::event(Event::Pause);
+				return false;
+			}
+			return rendered;
+		}
+		catch (...) { state = Error; TermAudio(); hikaruAudioActive = false; EventManager::event(Event::Pause); throw; }
 	}
 #endif
 

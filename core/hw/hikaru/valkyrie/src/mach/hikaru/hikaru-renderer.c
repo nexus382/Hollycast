@@ -501,7 +501,10 @@ fail:
 
 	glDeleteTextures (1, &id);
 	VK_ASSERT_NO_GL_ERROR ();
-	VK_ABORT ("invalid or unsupported Hikaru texture upload");
+	/* A bad texhead must not terminate the game. The draw selects its
+	 * untextured variant when this upload cannot be represented safely. */
+	LOG ("invalid or unsupported Hikaru texture upload");
+	return 0;
 }
 
 hikaru_texture_t *
@@ -741,7 +744,7 @@ uniform vec3		u_ambient;						\n \
 uniform sampler2D	u_texture;						\n \
 uniform vec2		u_fog;							\n \
 uniform float		u_alpha_ref;							\n \
-uniform float		u_weigh_by_alpha; uniform float u_force_coverage; uniform float u_pattern;	\n \
+uniform float		u_weigh_by_alpha; uniform float u_force_coverage; uniform float u_pattern; uniform float u_lod_bias;	\n \
 uniform vec3		u_fog_color;						\n \
 uniform int u_peel_enabled; uniform int u_peel_first; uniform vec2 u_peel_size;\n \
 uniform sampler2D u_peel_depth; uniform sampler2D u_peel_opaque_depth;\n \
@@ -829,7 +832,11 @@ main (void)									\n \
 	vec3 base;\n \
 	float alpha;\n \
 #if HAS_TEXTURE\n \
+#ifdef GL_ES\n \
+	texel = texture(u_texture, p_texcoords, u_lod_bias);\n \
+#else\n \
 	texel = texture(u_texture, p_texcoords);\n \
+#endif\n \
 #if ALPHA_MODE\n \
 	base = mix(p_diffuse, texel.rgb, p_alpha);\n \
 	alpha = texel.a;\n \
@@ -920,7 +927,7 @@ get_light_type (hikaru_light_t *lit)
 }
 
 static hikaru_glsl_variant_t
-get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
+get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_available)
 {
 	hikaru_material_t *mat;
 	hikaru_lightset_t *ls;
@@ -947,7 +954,7 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	mat = &hr->mat_list[mesh->mat_index];
 	ls = &hr->ls_list[mesh->ls_index];
 
-	variant.has_texture	= mat->has_texture &&
+	variant.has_texture	= mat->has_texture && texture_available &&
 	                          !hr->debug.flags[HR_DEBUG_NO_TEXTURES];
 
 	variant.shading_mode = hr->debug.flags[HR_DEBUG_NO_LIGHTING] ? 0 : mat->shading_mode;
@@ -1006,6 +1013,31 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	return variant;
 }
 
+#ifdef HIKARU_VENDOR_TESTING
+int hikaru_vendor_test_invalid_texture_fallback(void)
+{
+    hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+    hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+    if (!hr || !gpu) { free(hr); free(gpu); return 0; }
+    hikaru_material_t material = {0};
+    hikaru_lightset_t lights = {0};
+    hikaru_mesh_t mesh = {0};
+    hikaru_texhead_t head = {0};
+    material.has_texture = 1;
+    lights.mask = 15;
+    head.slotx = 0x80; head.sloty = 0xc0; head.format = 7;
+    hr->gpu = gpu;
+    hr->mat_list = &material; hr->num_mats = 1;
+    hr->ls_list = &lights; hr->num_lss = 1;
+    hr->tex_list = &head; hr->num_texs = 1;
+    const bool available = get_texture(hr, &head) != NULL;
+    const hikaru_glsl_variant_t variant = get_glsl_variant(hr, &mesh, available);
+    const int ok = !available && !variant.has_texture && glGetError() == GL_NO_ERROR;
+    free(hr); free(gpu);
+    return ok;
+}
+#endif
+
 #define MAX_PROGRAMS	256
 
 typedef struct {
@@ -1041,7 +1073,7 @@ void hikaru_vendor_test_uniform_cache_bypass(bool enabled) { uniform_cache_bypas
 #endif
 
 static void
-upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
+upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_available)
 {
 	static const char *definitions_template =
 	"#define HAS_TEXTURE %d\n"
@@ -1077,7 +1109,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	int ret, i;
 	unsigned slot;
 
-	variant = get_glsl_variant (hr, mesh);
+	variant = get_glsl_variant (hr, mesh, texture_available);
 	if (hr->meshes.variant.full == variant.full) {
 		/* Layer resolve can bind the bitmap program between mesh passes. */
 		glUseProgram(hr->meshes.program);
@@ -1212,6 +1244,7 @@ update_locations:
 	hr->meshes.locs.u_force_coverage =
 		GET_MESH_UNIFORM (hr->meshes.program, "u_force_coverage");
 	hr->meshes.locs.u_pattern = GET_MESH_UNIFORM (hr->meshes.program, "u_pattern");
+	hr->meshes.locs.u_lod_bias = GET_MESH_UNIFORM (hr->meshes.program, "u_lod_bias");
 	hr->meshes.locs.u_peel_enabled = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_enabled");
 	hr->meshes.locs.u_peel_first = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_first");
 	hr->meshes.locs.u_peel_size = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_size");
@@ -1244,41 +1277,41 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	GLint previous_program, current_program;
 	glGetIntegerv (GL_CURRENT_PROGRAM, &previous_program);
 	uniform_location_queries = 0;
-	upload_glsl_program (hr, &mesh);
+	upload_glsl_program (hr, &mesh, true);
 	const GLuint first_program = hr->meshes.program;
 	const hikaru_uniform_locations_t first = hr->meshes.locs;
-	int ok = uniform_location_queries == 46 && first.u_texture == (GLuint)-1;
+	int ok = uniform_location_queries == 47 && first.u_texture == (GLuint)-1;
 	material.has_texture = 1;
-	upload_glsl_program (hr, &mesh);
+	upload_glsl_program (hr, &mesh, true);
 	const GLuint second_program = hr->meshes.program;
 	const hikaru_uniform_locations_t second = hr->meshes.locs;
-	ok &= second_program != first_program && uniform_location_queries == 92;
+	ok &= second_program != first_program && uniform_location_queries == 94;
 	ok &= second.u_texture == (GLuint)glGetUniformLocation (second_program, "u_texture");
 	material.has_texture = 0;
-	upload_glsl_program (hr, &mesh);
+	upload_glsl_program (hr, &mesh, true);
 	glGetIntegerv (GL_CURRENT_PROGRAM, &current_program);
 	ok &= hr->meshes.program == first_program && current_program == (GLint)first_program;
 	ok &= !memcmp (&hr->meshes.locs, &first, sizeof(first));
-	ok &= uniform_location_queries == 92;
+	ok &= uniform_location_queries == 94;
 	material.has_texture = 1;
-	upload_glsl_program (hr, &mesh);
+	upload_glsl_program (hr, &mesh, true);
 	ok &= hr->meshes.program == second_program && !memcmp (&hr->meshes.locs, &second, sizeof(second));
-	ok &= uniform_location_queries == 92;
+	ok &= uniform_location_queries == 94;
 	/* Fill the unused entries without compiling hundreds of shaders, then
 	 * exercise the real full-cache replacement and subsequent cache hit. */
 	for (unsigned i = 2; i < MAX_PROGRAMS; ++i)
 		program_cache[i].variant.full = UINT64_MAX - i;
 	num_programs = MAX_PROGRAMS;
 	hr->debug.flags[HR_DEBUG_FOG] = 1;
-	upload_glsl_program (hr, &mesh);
+	upload_glsl_program (hr, &mesh, true);
 	const GLuint third_program = hr->meshes.program;
-	ok &= uniform_location_queries == 138 && !glIsProgram (first_program);
+	ok &= uniform_location_queries == 141 && !glIsProgram (first_program);
 	hr->debug.flags[HR_DEBUG_FOG] = 0;
-	upload_glsl_program (hr, &mesh);
-	ok &= hr->meshes.program == second_program && uniform_location_queries == 138;
+	upload_glsl_program (hr, &mesh, true);
+	ok &= hr->meshes.program == second_program && uniform_location_queries == 141;
 	material.has_texture = 0;
-	upload_glsl_program (hr, &mesh);
-	ok &= uniform_location_queries == 184 && !glIsProgram (third_program);
+	upload_glsl_program (hr, &mesh, true);
+	ok &= uniform_location_queries == 188 && !glIsProgram (third_program);
 	ok &= hr->meshes.locs.u_texture == (GLuint)-1 && glGetError() == GL_NO_ERROR;
 	glUseProgram ((GLuint)previous_program);
 	for (unsigned i = 0; i < num_programs; ++i)
@@ -1483,7 +1516,11 @@ upload_material_texhead (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
 		                 filter == 0 ? GL_NEAREST :
 		                 filter == 2 ? GL_LINEAR : GL_LINEAR_MIPMAP_LINEAR);
-		glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, bias);
+		/* ES exposes LOD bias in fragment sampling, not texture parameters. */
+		if (vk_renderer_is_gles())
+			glUniform1f(hr->meshes.locs.u_lod_bias, bias);
+		else
+			glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, bias);
 		VK_ASSERT_NO_GL_ERROR ();
 	}
 
@@ -2239,6 +2276,7 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	bool configure = true;
 
 	VK_ASSERT (mesh);
+	if (!mesh->num_tris || !mesh->num_instances) return;
 	VK_ASSERT (mesh->vbo || mesh->vertex_chunk);
 
 	LOG ("==== DRAWING MESH @%p (#vertices=%u #instances=%u) ====",
@@ -2286,7 +2324,12 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	}
 	VK_ASSERT_NO_GL_ERROR ();
 
-	upload_glsl_program (hr, mesh);
+	const hikaru_material_t *material = mesh->mat_index < hr->num_mats
+		? &hr->mat_list[mesh->mat_index] : NULL;
+	const bool texture_available = material && material->has_texture &&
+		!hr->debug.flags[HR_DEBUG_NO_TEXTURES] && mesh->tex_index < hr->num_texs &&
+		get_texture(hr, &hr->tex_list[mesh->tex_index]) != NULL;
+	upload_glsl_program (hr, mesh, texture_available);
 	VK_ASSERT_NO_GL_ERROR ();
 
 	apply_material_blend(hr, polytype,
@@ -2389,7 +2432,8 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 {
 	size_t total = 0;
 	for (unsigned m = 0; m < num; ++m) {
-		if (!meshes[m].cpu_vertices || !meshes[m].num_instances) return false;
+		if (!meshes[m].num_tris || !meshes[m].num_instances) continue;
+		if (!meshes[m].cpu_vertices) return false;
 		unsigned instances = hr->debug.flags[HR_DEBUG_NO_INSTANCING]
 			? 1u : meshes[m].num_instances;
 		if (meshes[m].num_tris && instances > (SIZE_MAX - total) / meshes[m].num_tris)
@@ -2412,6 +2456,7 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	size_t at = 0;
 	for (unsigned m = 0; m < num; ++m) {
 		hikaru_mesh_t *mesh = &meshes[m];
+		if (!mesh->num_tris || !mesh->num_instances) continue;
 		unsigned begin = 0, end = mesh->num_instances;
 		if (hr->debug.flags[HR_DEBUG_NO_INSTANCING]) {
 			begin = end = MIN2(hr->debug.flags[HR_DEBUG_SELECT_INSTANCE], mesh->num_instances - 1);
@@ -2480,7 +2525,8 @@ draw_sorted_translucent_strips(hikaru_renderer_t *hr, hikaru_mesh_t *meshes, uns
 {
 	size_t total = 0;
 	for (unsigned m = 0; m < num; ++m) {
-		if (!meshes[m].cpu_vertices || !meshes[m].num_instances) return false;
+		if (!meshes[m].num_tris || !meshes[m].num_instances) continue;
+		if (!meshes[m].cpu_vertices) return false;
 		unsigned instances = hr->debug.flags[HR_DEBUG_NO_INSTANCING] ? 1u : meshes[m].num_instances;
 		if (instances > SIZE_MAX - total) return false;
 		total += instances;
@@ -2491,6 +2537,7 @@ draw_sorted_translucent_strips(hikaru_renderer_t *hr, hikaru_mesh_t *meshes, uns
 	size_t at = 0;
 	for (unsigned m = 0; m < num; ++m) {
 		hikaru_mesh_t *mesh = &meshes[m];
+		if (!mesh->num_tris || !mesh->num_instances) continue;
 		unsigned begin = 0, end = mesh->num_instances;
 		if (hr->debug.flags[HR_DEBUG_NO_INSTANCING]) {
 			begin = MIN2(hr->debug.flags[HR_DEBUG_SELECT_INSTANCE], mesh->num_instances - 1);
@@ -2622,7 +2669,7 @@ static int test_material_pixels(uint32_t flags,
     VAP(6, 2, GL_FLOAT, texcoords, GL_FALSE);
     VAP(7, 1, GL_UNSIGNED_BYTE, alpha, GL_TRUE);
     VAP(8, 1, GL_UNSIGNED_BYTE, matrix_select, GL_FALSE);
-    upload_glsl_program(hr, &mesh);
+    upload_glsl_program(hr, &mesh, true);
     upload_viewport(hr, &mesh);
     if (hr->meshes.variant.has_pattern) glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh.pattern));
     GLfloat projection[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
@@ -2933,15 +2980,6 @@ allocate_peel_targets(hikaru_renderer_t *hr, unsigned width, unsigned height, un
 	static const GLenum targets[] = { GL_COLOR_ATTACHMENT0 };
 	if (required > HIKARU_MAX_PEEL_LAYERS + 1)
 		VK_ABORT("Hikaru peel target count is out of range");
-	if ((size_t)width > SIZE_MAX / (size_t)height / 4)
-		VK_ABORT("Hikaru peel probe size overflows address space");
-	size_t probe_size = (size_t)width * height * 4;
-	if (hr->framebuffer.peel_probe_capacity < probe_size) {
-		uint8_t *pixels = realloc(hr->framebuffer.peel_probe_pixels, probe_size);
-		if (!pixels) VK_ABORT("Cannot allocate Hikaru peel overflow probe (%ux%u)", width, height);
-		hr->framebuffer.peel_probe_pixels = pixels;
-		hr->framebuffer.peel_probe_capacity = probe_size;
-	}
 	const bool resize = hr->framebuffer.peel_layers_allocated &&
 		(hr->framebuffer.peel_width != width || hr->framebuffer.peel_height != height);
 	const unsigned old_count = resize ? 0 : hr->framebuffer.peel_layers_allocated;
@@ -2957,7 +2995,7 @@ allocate_peel_targets(hikaru_renderer_t *hr, unsigned width, unsigned height, un
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		glBindTexture(GL_TEXTURE_2D, hr->framebuffer.peel_depth[i]);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0,
-		             GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+		             GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
@@ -2974,24 +3012,6 @@ allocate_peel_targets(hikaru_renderer_t *hr, unsigned width, unsigned height, un
 	hr->framebuffer.peel_width = width;
 	hr->framebuffer.peel_height = height;
 	hr->framebuffer.peel_layers_allocated = MAX2(hr->framebuffer.peel_layers_allocated, required);
-}
-
-static bool
-peel_layer_has_fragments(hikaru_renderer_t *hr, unsigned width, unsigned height)
-{
-	const size_t bytes = (size_t)width * height * 4;
-	GLenum pending_error = glGetError();
-	if (pending_error != GL_NO_ERROR)
-		VK_ABORT("Hikaru peel draw failed before occupancy readback (GL error 0x%04x)", pending_error);
-	glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.peel_fb);
-	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE,
-	             hr->framebuffer.peel_probe_pixels);
-	GLenum error = glGetError();
-	if (error != GL_NO_ERROR)
-		VK_ABORT("Cannot read Hikaru transparency peel occupancy (GL error 0x%04x)", error);
-	for (size_t p = 3; p < bytes; p += 4)
-		if (hr->framebuffer.peel_probe_pixels[p]) return true;
-	return false;
 }
 
 static void
@@ -3077,8 +3097,9 @@ draw_transparency_peels(hikaru_renderer_t *hr, unsigned vpi, GLuint scene_fb,
 		 * unit 0 binding across drivers while units 1 and 2 hold depth samplers. */
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, hr->framebuffer.cb[scene_index]);
+		hikaru_graphics_begin_occlusion(hr->framebuffer.peel_query);
 		draw_meshes_for_polytype(hr, vpi, HIKARU_POLYTYPE_TRANSLUCENT);
-		const bool occupied = peel_layer_has_fragments(hr, width, height);
+		const bool occupied = hikaru_graphics_end_occlusion(hr->framebuffer.peel_query);
 		if (layer == layers) { overflow = occupied; break; }
 		if (!occupied) break;
 		++captured;
@@ -3225,7 +3246,10 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 		dst->diffuse[2] = 255;
 		dst->alpha = 128;
 	}
-	hr->num_meshes[0][HIKARU_POLYTYPE_TRANSLUCENT] = 2;
+	/* Empty command meshes must not disable sorting of the real geometry. */
+	hr->num_meshes[0][HIKARU_POLYTYPE_TRANSLUCENT] = 4;
+	meshes[2].num_instances = 1;
+	meshes[3].num_tris = 1;
 	for (unsigned side = 0; side < 2; ++side) {
 		hikaru_mesh_t *mesh = &meshes[side];
 		const unsigned triangle_count = side == 0 ? mesh0_triangles : 1;
@@ -3570,7 +3594,7 @@ build_fb_state (hikaru_renderer_t *hr)
 
 		glBindTexture(GL_TEXTURE_2D, hr->framebuffer.db[i]);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 640, 480, 0,
-		             GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+		             GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
@@ -3635,9 +3659,7 @@ destroy_fb_state (hikaru_renderer_t *hr)
 	glDeleteFramebuffers(1, &hr->framebuffer.peel_fb);
 	glDeleteTextures(HIKARU_MAX_PEEL_LAYERS + 1, hr->framebuffer.peel_color);
 	glDeleteTextures(HIKARU_MAX_PEEL_LAYERS + 1, hr->framebuffer.peel_depth);
-	free(hr->framebuffer.peel_probe_pixels);
-	hr->framebuffer.peel_probe_pixels = NULL;
-	hr->framebuffer.peel_probe_capacity = 0;
+	hikaru_graphics_delete_occlusion(hr->framebuffer.peel_query);
 	VK_ASSERT_NO_GL_ERROR ();
 
 	vk_renderer_destroy_program (hr->framebuffer.program);
@@ -3733,7 +3755,7 @@ resize_3d_targets (hikaru_renderer_t *hr)
 		glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		glBindTexture(GL_TEXTURE_2D, hr->framebuffer.db[i]);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0,
-		             GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+		             GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -4266,7 +4288,7 @@ int hikaru_vendor_test_mesh_vao_pixels(void)
     meshes[4].vertex_chunk = 2;
     hr->vertex_chunks[0].data = (uint8_t *)vertices[0]; hr->vertex_chunks[0].used = sizeof(vertices[0]) * 2;
     hr->vertex_chunks[1].data = (uint8_t *)vertices[4]; hr->vertex_chunks[1].used = sizeof(vertices[4]);
-    hr->meshes.variant = get_glsl_variant(hr, &meshes[0]);
+    hr->meshes.variant = get_glsl_variant(hr, &meshes[0], false);
     hr->meshes.program = program; glUseProgram(program);
     glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE); glDisable(GL_DEPTH_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -4565,7 +4587,7 @@ int hikaru_vendor_test_spot_pixels(const hikaru_light_t *light,
     SPOT_TEST_VAP(6, 2, GL_FLOAT, texcoords, GL_FALSE);
     SPOT_TEST_VAP(7, 1, GL_UNSIGNED_BYTE, alpha, GL_TRUE);
     SPOT_TEST_VAP(8, 1, GL_UNSIGNED_BYTE, matrix_select, GL_FALSE);
-    upload_glsl_program(hr, &mesh);
+    upload_glsl_program(hr, &mesh, true);
     const GLfloat identity3[9] = {1,0,0, 0,1,0, 0,0,1};
     GLfloat modelview[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     GLfloat projection[16] = {1,0,0,0, 0,1,0,0, 0,0,0,0, 0,0,0,1};

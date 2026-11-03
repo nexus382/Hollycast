@@ -7,8 +7,13 @@ namespace aica
 {
 
 extern RamRegion aica_ram;
+#ifdef USE_HIKARU
 inline u32 ramSize() { return static_cast<u32>(aica_ram.getSize()); }
 inline u32 ramMask() { return ramSize() - 1; }
+#else
+inline u32 ramSize() { return ARAM_SIZE; }
+inline u32 ramMask() { return ARAM_MASK; }
+#endif
 extern int aica_schid;
 extern int rtc_schid;
 extern int dma_sched_id;

@@ -28,6 +28,7 @@ typedef struct vk_buffer_t vk_buffer_t;
 
 struct vk_buffer_t {
 	uint8_t *ptr;
+	bool borrowed; /* Immutable external storage; never freed or restored. */
 	bool aligned_alloc; /* Windows _aligned_malloc must use _aligned_free. */
 	unsigned size;
 	uint64_t (* get) (vk_buffer_t *buf, unsigned size, uint32_t addr);
@@ -65,6 +66,7 @@ set_ptr (void *ptr, unsigned size, uint64_t val)
 vk_buffer_t	*vk_buffer_new (unsigned size, unsigned alignment);
 vk_buffer_t	*vk_buffer_new_from_file (const char *path, unsigned size);
 vk_buffer_t	*vk_buffer_le32_new (unsigned size, unsigned alignment);
+vk_buffer_t	*vk_buffer_le32_view (const uint8_t *bytes, unsigned size);
 vk_buffer_t	*vk_buffer_be32_new (unsigned size, unsigned alignment);
 void		 vk_buffer_destroy (vk_buffer_t **buffer_);
 unsigned	 vk_buffer_get_size (vk_buffer_t *buf);

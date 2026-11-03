@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
@@ -5,7 +6,14 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+// A sequential visibility query avoids copying every peel target to the CPU.
+// query[0..1] are caller-owned GL storage, unused by native backends.
+void hikaru_graphics_begin_occlusion(GLuint query[2]);
+GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]);
+void hikaru_graphics_delete_occlusion(GLuint query[2]);
 typedef struct HikaruGraphicsDispatch {
+    void (*BeginOcclusion)(void);
+    GLboolean (*EndOcclusion)(void);
     void (*ActiveTexture)(GLenum texture);
     void (*AttachShader)(GLuint program, GLuint shader);
     void (*BindAttribLocation)(GLuint program, GLuint index, const GLchar * name);
@@ -186,91 +194,178 @@ void hikaru_glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 }
 #endif
 #ifndef HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
+#undef glActiveTexture
 #define glActiveTexture hikaru_glActiveTexture
+#undef glAttachShader
 #define glAttachShader hikaru_glAttachShader
+#undef glBindAttribLocation
 #define glBindAttribLocation hikaru_glBindAttribLocation
+#undef glBindBuffer
 #define glBindBuffer hikaru_glBindBuffer
+#undef glBindFramebuffer
 #define glBindFramebuffer hikaru_glBindFramebuffer
+#undef glBindRenderbuffer
 #define glBindRenderbuffer hikaru_glBindRenderbuffer
+#undef glBindTexture
 #define glBindTexture hikaru_glBindTexture
+#undef glBindVertexArray
 #define glBindVertexArray hikaru_glBindVertexArray
+#undef glBlendEquation
 #define glBlendEquation hikaru_glBlendEquation
+#undef glBlendEquationSeparate
 #define glBlendEquationSeparate hikaru_glBlendEquationSeparate
+#undef glBlendFunc
 #define glBlendFunc hikaru_glBlendFunc
+#undef glBlendFuncSeparate
 #define glBlendFuncSeparate hikaru_glBlendFuncSeparate
+#undef glBufferData
 #define glBufferData hikaru_glBufferData
+#undef glBufferSubData
 #define glBufferSubData hikaru_glBufferSubData
+#undef glCheckFramebufferStatus
 #define glCheckFramebufferStatus hikaru_glCheckFramebufferStatus
+#undef glClear
 #define glClear hikaru_glClear
+#undef glClearColor
 #define glClearColor hikaru_glClearColor
+#undef glClearDepth
 #define glClearDepth hikaru_glClearDepth
+#undef glClearDepthf
 #define glClearDepthf hikaru_glClearDepthf
+#undef glColorMask
 #define glColorMask hikaru_glColorMask
+#undef glCompileShader
 #define glCompileShader hikaru_glCompileShader
+#undef glCreateProgram
 #define glCreateProgram hikaru_glCreateProgram
+#undef glCreateShader
 #define glCreateShader hikaru_glCreateShader
+#undef glCullFace
 #define glCullFace hikaru_glCullFace
+#undef glDeleteBuffers
 #define glDeleteBuffers hikaru_glDeleteBuffers
+#undef glDeleteFramebuffers
 #define glDeleteFramebuffers hikaru_glDeleteFramebuffers
+#undef glDeleteProgram
 #define glDeleteProgram hikaru_glDeleteProgram
+#undef glDeleteRenderbuffers
 #define glDeleteRenderbuffers hikaru_glDeleteRenderbuffers
+#undef glDeleteShader
 #define glDeleteShader hikaru_glDeleteShader
+#undef glDeleteTextures
 #define glDeleteTextures hikaru_glDeleteTextures
+#undef glDeleteVertexArrays
 #define glDeleteVertexArrays hikaru_glDeleteVertexArrays
+#undef glDepthFunc
 #define glDepthFunc hikaru_glDepthFunc
+#undef glDepthMask
 #define glDepthMask hikaru_glDepthMask
+#undef glDepthRange
 #define glDepthRange hikaru_glDepthRange
+#undef glDepthRangef
 #define glDepthRangef hikaru_glDepthRangef
+#undef glDisable
 #define glDisable hikaru_glDisable
+#undef glDrawArrays
 #define glDrawArrays hikaru_glDrawArrays
+#undef glDrawBuffers
 #define glDrawBuffers hikaru_glDrawBuffers
+#undef glEnable
 #define glEnable hikaru_glEnable
+#undef glEnableVertexAttribArray
 #define glEnableVertexAttribArray hikaru_glEnableVertexAttribArray
+#undef glFramebufferRenderbuffer
 #define glFramebufferRenderbuffer hikaru_glFramebufferRenderbuffer
+#undef glFramebufferTexture2D
 #define glFramebufferTexture2D hikaru_glFramebufferTexture2D
+#undef glFrontFace
 #define glFrontFace hikaru_glFrontFace
+#undef glGenBuffers
 #define glGenBuffers hikaru_glGenBuffers
+#undef glGenFramebuffers
 #define glGenFramebuffers hikaru_glGenFramebuffers
+#undef glGenRenderbuffers
 #define glGenRenderbuffers hikaru_glGenRenderbuffers
+#undef glGenTextures
 #define glGenTextures hikaru_glGenTextures
+#undef glGenVertexArrays
 #define glGenVertexArrays hikaru_glGenVertexArrays
+#undef glGetActiveUniform
 #define glGetActiveUniform hikaru_glGetActiveUniform
+#undef glGetBooleanv
 #define glGetBooleanv hikaru_glGetBooleanv
+#undef glGetBufferSubData
 #define glGetBufferSubData hikaru_glGetBufferSubData
+#undef glGetError
 #define glGetError hikaru_glGetError
+#undef glGetFloatv
 #define glGetFloatv hikaru_glGetFloatv
+#undef glGetIntegerv
 #define glGetIntegerv hikaru_glGetIntegerv
+#undef glGetProgramInfoLog
 #define glGetProgramInfoLog hikaru_glGetProgramInfoLog
+#undef glGetProgramiv
 #define glGetProgramiv hikaru_glGetProgramiv
+#undef glGetShaderInfoLog
 #define glGetShaderInfoLog hikaru_glGetShaderInfoLog
+#undef glGetShaderiv
 #define glGetShaderiv hikaru_glGetShaderiv
+#undef glGetString
 #define glGetString hikaru_glGetString
+#undef glGetUniformLocation
 #define glGetUniformLocation hikaru_glGetUniformLocation
+#undef glIsBuffer
 #define glIsBuffer hikaru_glIsBuffer
+#undef glIsEnabled
 #define glIsEnabled hikaru_glIsEnabled
+#undef glIsProgram
 #define glIsProgram hikaru_glIsProgram
+#undef glIsVertexArray
 #define glIsVertexArray hikaru_glIsVertexArray
+#undef glLinkProgram
 #define glLinkProgram hikaru_glLinkProgram
+#undef glPixelStorei
 #define glPixelStorei hikaru_glPixelStorei
+#undef glPolygonOffset
 #define glPolygonOffset hikaru_glPolygonOffset
+#undef glReadPixels
 #define glReadPixels hikaru_glReadPixels
+#undef glRenderbufferStorage
 #define glRenderbufferStorage hikaru_glRenderbufferStorage
+#undef glScissor
 #define glScissor hikaru_glScissor
+#undef glShaderSource
 #define glShaderSource hikaru_glShaderSource
+#undef glTexImage2D
 #define glTexImage2D hikaru_glTexImage2D
+#undef glTexParameterf
 #define glTexParameterf hikaru_glTexParameterf
+#undef glTexParameteri
 #define glTexParameteri hikaru_glTexParameteri
+#undef glTexSubImage2D
 #define glTexSubImage2D hikaru_glTexSubImage2D
+#undef glUniform1f
 #define glUniform1f hikaru_glUniform1f
+#undef glUniform1fv
 #define glUniform1fv hikaru_glUniform1fv
+#undef glUniform1i
 #define glUniform1i hikaru_glUniform1i
+#undef glUniform2f
 #define glUniform2f hikaru_glUniform2f
+#undef glUniform2fv
 #define glUniform2fv hikaru_glUniform2fv
+#undef glUniform3f
 #define glUniform3f hikaru_glUniform3f
+#undef glUniform3fv
 #define glUniform3fv hikaru_glUniform3fv
+#undef glUniformMatrix3fv
 #define glUniformMatrix3fv hikaru_glUniformMatrix3fv
+#undef glUniformMatrix4fv
 #define glUniformMatrix4fv hikaru_glUniformMatrix4fv
+#undef glUseProgram
 #define glUseProgram hikaru_glUseProgram
+#undef glVertexAttribPointer
 #define glVertexAttribPointer hikaru_glVertexAttribPointer
+#undef glViewport
 #define glViewport hikaru_glViewport
 #endif

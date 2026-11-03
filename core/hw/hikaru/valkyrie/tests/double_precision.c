@@ -79,7 +79,7 @@ static void arithmetic(void)
     cpu->regs.f.f[2].u = 0x40000000;
     instruction(0xf024);
     check("FCMP/EQ equal", cpu->regs.sr.bit.t, 1);
-    reset(); cpu->regs.fpscr.bit.pr = 0; cpu->regs.fpul.u = 0x40600000;
+    reset(); cpu->regs.fpscr.bit.pr = 1; cpu->regs.fpul.u = 0x40600000;
     instruction(0xf0ad); /* FCNVSD FPUL,DR0 */
     check("FCNVSD high word", cpu->regs.f.f[0].u, 0x400c0000);
     check("FCNVSD low word", cpu->regs.f.f[1].u, 0);

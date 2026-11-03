@@ -132,6 +132,7 @@ void mainui_loop(bool forceStart)
 		mainui_enabled = true;
 	mainui_init();
 	RenderType currentRenderer = config::RendererType;
+	RenderType currentHostRenderer = hostRendererType(currentRenderer, settings.platform.isHikaru());
 
 	while (mainui_enabled)
 	{
@@ -182,7 +183,8 @@ void mainui_loop(bool forceStart)
 		if (imguiDriver == nullptr)
 			forceReinit = true;
 
-		if (config::RendererType != currentRenderer || forceReinit)
+		const auto desiredHostRenderer = hostRendererType(config::RendererType, settings.platform.isHikaru());
+		if (config::RendererType != currentRenderer || desiredHostRenderer != currentHostRenderer || forceReinit)
 		{
 			mainui_term();
 			int prevApi = renderApi(currentRenderer);
@@ -219,6 +221,7 @@ void mainui_loop(bool forceStart)
 			}
 			forceReinit = false;
 			currentRenderer = config::RendererType;
+			currentHostRenderer = hostRendererType(currentRenderer, settings.platform.isHikaru());
 		}
 
 		fc_profiler::endThread(config::ProfilerFrameWarningTime);

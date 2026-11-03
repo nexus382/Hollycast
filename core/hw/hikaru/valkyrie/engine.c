@@ -161,12 +161,12 @@ void hikaru_vendor_test_with_gl_guard(void (*draw)(void))
 }
 #endif
 static int add_section(HikaruEngine *engine, unsigned index, const char *name,
-                       const uint8_t *bytes, size_t size)
+                       const uint8_t *bytes, size_t size, bool borrowed)
 {
     if (!bytes || size > UINT32_MAX) return -1;
-    vk_buffer_t *buffer = vk_buffer_le32_new((unsigned)size, 0);
+    vk_buffer_t *buffer = borrowed ? vk_buffer_le32_view(bytes, (unsigned)size) : vk_buffer_le32_new((unsigned)size, 0);
     if (!buffer) return -1;
-    memcpy(buffer->ptr, bytes, size);
+    if (!borrowed) memcpy(buffer->ptr, bytes, size);
     snprintf(engine->sections[index].name, sizeof(engine->sections[index].name), "%s", name);
     engine->sections[index].buffer = buffer;
     return 0;
@@ -216,9 +216,9 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     strcpy(engine->game.mach, "hikaru");
     engine->game.sections = engine->sections;
     engine->game.nsections = 3;
-    if (add_section(engine, 0, "bootrom", roms->boot, roms->boot_size) ||
-        add_section(engine, 1, "eprom", roms->program, roms->program_size) ||
-        add_section(engine, 2, "maskrom", roms->data, roms->data_size)) {
+    if (add_section(engine, 0, "bootrom", roms->boot, roms->boot_size, false) ||
+        add_section(engine, 1, "eprom", roms->program, roms->program_size, roms->borrow_cartridge != 0) ||
+        add_section(engine, 2, "maskrom", roms->data, roms->data_size, roms->borrow_cartridge != 0)) {
         set_error(error, error_size, "Could not allocate ROM sections"); hikaru_engine_destroy(engine); return NULL;
     }
     // Upstream BIOS version comparison is NUL-terminated; reject malformed data.

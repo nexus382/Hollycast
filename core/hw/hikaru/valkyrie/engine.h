@@ -28,6 +28,9 @@ typedef struct {
     const uint8_t *boot; size_t boot_size;
     const uint8_t *program; size_t program_size;
     const uint8_t *data; size_t data_size;
+    // Opt in to immutable cartridge views. The caller must retain program/data
+    // until engine destruction. BIOS stays private for the optional bypass patch.
+    int borrow_cartridge;
 } HikaruEngineRoms;
 typedef struct {
     uint16_t players[2];
@@ -68,7 +71,7 @@ typedef struct {
 
 // Requires a current OpenGL 3.2 or OpenGL ES 3.0 context for graphics calls.
 // Calls must be serialized; only one instance is supported. ROM contents are
-// copied. BIOS EEPROM bypass is an upstream compatibility patch and must be
+// copied unless borrow_cartridge is set. BIOS EEPROM bypass is an upstream compatibility patch and must be
 // explicitly enabled. The caller retains ownership of MIE, protection, context
 // and target; protection callbacks receive absolute external-bus addresses.
 // Host callbacks must not throw exceptions through this C boundary.

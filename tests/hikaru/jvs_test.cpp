@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/jvs.h"
@@ -104,6 +105,25 @@ int main()
         uint32_t v = seed; for (unsigned i = 0; i < 400; ++i) { v = v * 1664525u + 1013904223u; node.pushByte(v >> 24); }
         check(node.queuedBytes() <= 1024, "random malformed stream remains bounded");
     }
+    hikaru::CoinPulseQueue queue;
+    node.reset();
+    send(node, 0xff, {0xf1, 1}); read(node);
+    JvsNode::Inputs coinInputs;
+    auto sampleCoin = [&](bool physical) {
+        coinInputs.coin[0] = queue.sample(physical);
+        node.setInputs(coinInputs);
+    };
+    sampleCoin(true);
+    queue.enqueue(); queue.enqueue();
+    sampleCoin(true); sampleCoin(false); sampleCoin(false);
+    sampleCoin(false); sampleCoin(false); sampleCoin(false);
+    send(node, 1, {0x21, 1}); r = read(node);
+    check(valid(r) && r[5] == 0 && r[6] == 3,
+        "queued credits survive physical release and each produce a distinct JVS edge");
+    queue.enqueue(); queue.reset();
+    sampleCoin(false); sampleCoin(false);
+    send(node, 1, {0x21, 1}); r = read(node);
+    check(valid(r) && r[6] == 3, "reset discards queued menu credits");
     std::cout << "JVS synthetic checks: " << checks << " checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

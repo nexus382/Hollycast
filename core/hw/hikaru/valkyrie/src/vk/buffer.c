@@ -141,6 +141,26 @@ vk_buffer_le32_new (unsigned size, unsigned alignment)
 	return buf;
 }
 
+/* Cartridge ROMs are not registered as machine RAM. Keep their ownership
+ * and read-only writes distinct so fast-path writers cannot modify the view. */
+static void readonly_put(vk_buffer_t *buf, unsigned size, uint32_t offs, uint64_t value)
+{
+    check_access(buf, size, offs);
+    (void)value;
+}
+vk_buffer_t *vk_buffer_le32_view(const uint8_t *bytes, unsigned size)
+{
+    if (!bytes || !size) return NULL;
+    vk_buffer_t *buf = ALLOC(vk_buffer_t);
+    if (!buf) return NULL;
+    buf->ptr = (uint8_t *)bytes;
+    buf->size = size;
+    buf->borrowed = true;
+    buf->get = vk_buffer_le32_get;
+    buf->put = readonly_put;
+    return buf;
+}
+
 vk_buffer_t *
 vk_buffer_be32_new (unsigned size, unsigned alignment)
 {
@@ -193,7 +213,7 @@ vk_buffer_destroy (vk_buffer_t **buf_)
 {
 	if (buf_) {
 		vk_buffer_t *buf = *buf_;
-		if (buf) {
+		if (buf && !buf->borrowed) {
 #ifdef _WIN32
 			if (buf->aligned_alloc) _aligned_free (buf->ptr); else
 #endif
@@ -223,7 +243,7 @@ vk_buffer_clear (vk_buffer_t *buf)
 {
 	VK_ASSERT (buf);
 	VK_ASSERT (buf->ptr);
-	memset (buf->ptr, 0, buf->size);
+	if (!buf->borrowed) memset (buf->ptr, 0, buf->size);
 }
 
 int
@@ -299,6 +319,7 @@ vk_buffer_load_state (vk_buffer_t *buffer, vk_state_t *state)
 	VK_ASSERT (buffer);
 	VK_ASSERT (state);
 
+	if (buffer->borrowed) return -1;
 	return vk_state_get (state, buffer->ptr, buffer->size);
 }
 

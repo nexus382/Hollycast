@@ -44,7 +44,7 @@ paths have shader/depth regressions and saved-frame rendering checks.
 Brave Firefighters exposed an inherited global UV translation derived from
 an unresolved `0D1` command. Raw texture coordinates already select the correct
 atlas regions; removing that speculative translation restores its HUD, room
-surfaces and fire sprites. A real command-packet regression covers 96 cases,
+surfaces and fire sprites. A real command-packet regression covers 192 cases,
 including all recorded modes and doubled-size 4-bit textures. The command
 state is retained for research; its hardware meaning remains unresolved.
 The title screen and the return from Game Over use a combined bitmap mode.
@@ -58,11 +58,13 @@ register writes, mode transitions, individual enables, and scene transparency.
 Spotlights now use the game's encoded cutoff, penumbra scale and uploaded
 falloff curves, replacing a fixed hard edge with the authored spread and fade.
 The encoding was traced through Air Trix's command generator and checked with
-synthetic shader cases and saved selection/gameplay frames. Textured Brave Firefighters heads with zero diffuse and ambient coefficients
-now retain their authored 0x691 color modulation, restoring their facial detail
-without lifting ordinary material shadows. This narrow prelit-material behavior
-is inferred from captured draws; other uses of 0x691 remain unresolved. Texture
-environment modes and specular lighting remain incomplete. Exact spotlight rounding, mixed
+synthetic shader cases and saved selection/gameplay frames. The OpenGL material path decodes texture/color selection, color modulation,
+emission and blend modes with scene coverage preserved through bitmap
+composition. Guest fog controls and screen-door patterns are also applied.
+These rules address the black faces, triangular smoke and missing atmosphere
+seen in Brave Firefighters; visual comparison is still required for the latest
+fog changes. Native Vulkan and Metal shaders still need the corresponding
+material and pattern equations. Exact spotlight rounding, mixed
 bank/curve selection and other interpretation limits are described in
 [SPOTLIGHTS.md](../core/hw/hikaru/valkyrie/SPOTLIGHTS.md); these changes do not
 establish hardware-accurate rendering.
@@ -71,7 +73,10 @@ establish hardware-accurate rendering.
 Hikaru. It stretches the stereo mix without lowering pitch when emulation runs
 slowly. This adds buffering and slows the music with the game; it does not
 restore full-speed gameplay. It can be disabled to hear the original sample
-timing, which produces gaps when emulation is too slow.
+timing, which produces gaps when emulation is too slow. Pacing keeps a continuous
+SoundTouch processing history even at unity tempo, adding its processing
+latency. The bundled library explicitly disables its former unity bypass
+because switching across unity can click; the host does not re-enable it.
 The SDL backend consumes available Hikaru samples during a partial underrun
 and silences only the missing tail. Converted samples that exceed one callback
 are carried into the next callback. This reduces avoidable gaps but cannot
@@ -112,7 +117,8 @@ frame is rendered; automatic frame skipping is not enabled.
 ## Build and run
 
 Hikaru is enabled by default in standalone Windows, Android, Linux and macOS
-builds. It can be forced on or off at configure time:
+builds. Other desktop hosts can opt in if their graphics requirements are met;
+those configurations are unverified. It can be forced on or off at configure time:
 
 ```sh
 cmake --preset <PRESET> -DUSE_HIKARU=ON
@@ -138,7 +144,24 @@ by transformed depth centroid; per-triangle sorts individual triangles by
 their transformed depth centroids. Per-pixel sorting uses depth peeling and
 retains the configured **Maximum Layers** count, from 1 to 32 (default 32).
 If another layer is present beyond that bound, deeper fragments are discarded
-and a warning is reported.
+and a warning is reported. Hikaru keeps its sorting and layer settings separate
+from Dreamcast/Naomi. Returning to those systems recreates their requested
+host renderer. The pixel-buffer memory budget and multi-threading controls do
+not apply to Hikaru and are hidden while it is selected.
+
+Peeling uses GPU visibility queries, rather than full-frame color readbacks,
+to detect an empty layer. It still requires a query result before selecting
+the next layer. Vulkan batches clears and texture uploads with draws, retains
+transient resources until their submission fences complete, and reuses
+compatible texture allocations. CPU readbacks wait for a submission fence;
+renderer destruction still drains the device to release presentation views.
+These changes remove synchronization costs; they do not establish a measured
+frame-rate improvement.
+
+Malformed or unreadable nonvolatile files now use in-memory defaults for the
+session. They are preserved and will not be overwritten on exit. The frontend
+retains cartridge ROM storage for the engine instead of copying it again;
+the BIOS is still copied privately for the optional compatibility patch.
 
 Place `airtrix.zip`, `braveff.zip` or `pharrier.zip` beside `hikaru.zip` and
 `mie.zip`, then add their folder to the game library or open the game with

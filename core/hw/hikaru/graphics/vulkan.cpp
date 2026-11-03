@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "device.h"
@@ -100,6 +101,10 @@ class VulkanBackend final : public Backend {
         vk::UniqueCommandBuffer command;
         vk::UniqueFence fence;
         std::unique_ptr<BufferData> vertexBuffer, uniformBuffer;
+        // Release descriptors and framebuffers before their referenced images.
+        std::vector<Image> retiredImages;
+        std::vector<vk::UniqueFramebuffer> retiredFramebuffers;
+        std::vector<std::unique_ptr<BufferData>> transfers;
         std::vector<DrawResources> draws;
     };
     struct PipelineKey {
@@ -128,9 +133,14 @@ class VulkanBackend final : public Backend {
     vk::UniqueCommandBuffer activeCommand;
     std::unique_ptr<BufferData> activeVertexBuffer,activeUniformBuffer;
     std::vector<DrawResources> activeDraws;
+    std::vector<std::unique_ptr<BufferData>> activeTransfers;
+    std::vector<Image> retiredImages;
+    std::vector<vk::UniqueFramebuffer> retiredFramebuffers;
     vk::DeviceSize activeVertexOffset=0,activeUniformOffset=0,activeVertexCapacity=0,activeUniformCapacity=0;
     unsigned activeDrawCount=0,activeColor=0,activeDepth=0;
     bool renderPassOpen=false;
+    bool occlusionActive=false;
+    std::vector<vk::UniqueQueryPool> occlusionQueries;
 
     size_t outstandingDrawCount() const {
         size_t count=activeDrawCount;
@@ -149,7 +159,8 @@ class VulkanBackend final : public Backend {
     void waitForDraws() {
         flushBatch();
         if(pendingBatches.empty())return;
-        ctx->WaitIdle();
+        if(device.waitForFences(*pendingBatches.back().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
+            throw std::runtime_error("Failed waiting for Hikaru Vulkan submission");
         pendingBatches.clear();
     }
     vk::CommandBuffer startBatch() {
@@ -163,6 +174,7 @@ class VulkanBackend final : public Backend {
     }
     void endRenderPass(vk::CommandBuffer cmd) {
         if(!renderPassOpen)return;
+        if(occlusionActive)cmd.endQuery(*occlusionQueries.back(),0);
         cmd.endRenderPass();
         renderPassOpen=false;
         activeColor=activeDepth=0;
@@ -177,6 +189,9 @@ class VulkanBackend final : public Backend {
         batch.vertexBuffer=std::move(activeVertexBuffer);
         batch.uniformBuffer=std::move(activeUniformBuffer);
         batch.draws=std::move(activeDraws);
+        batch.transfers=std::move(activeTransfers);
+        batch.retiredImages=std::move(retiredImages);
+        batch.retiredFramebuffers=std::move(retiredFramebuffers);
         activeDrawCount=0;
         activeVertexOffset=activeUniformOffset=activeVertexCapacity=activeUniformCapacity=0;
         activeDraws.clear();activeDraws.reserve(256);
@@ -215,17 +230,30 @@ class VulkanBackend final : public Backend {
     }
 
     void immediate(const std::function<void(vk::CommandBuffer)>& record) {
-        flushBatch();
-        vk::CommandBufferAllocateInfo ai(*commandPool, vk::CommandBufferLevel::ePrimary, 1);
-        auto cmds = device.allocateCommandBuffersUnique(ai);
-        auto cmd = *cmds.front();
-        cmd.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+        auto cmd=startBatch();
+        endRenderPass(cmd);
         record(cmd);
-        cmd.end();
-        ctx->SubmitCommandBuffers({cmd}, {});
-        ctx->WaitIdle();
-        pendingBatches.clear();
+        waitForDraws(); // CPU readbacks and initialization only; never device-wide.
     }
+    void retireImage(unsigned id) {
+        auto it=images.find(id);
+        if(it==images.end())return;
+        flushBatch();
+        // Presentation submits on this same queue. A following marker fences
+        // its sampling too, rather than just the last off-screen draw.
+        if(id==0)ctx->PresentFrame({}, {}, {}, 1.f);
+        startBatch();
+        for(auto fb=framebuffers.begin();fb!=framebuffers.end();) {
+            if(fb->first.first==id||fb->first.second==id) {
+                retiredFramebuffers.push_back(std::move(fb->second));
+                fb=framebuffers.erase(fb);
+            } else ++fb;
+        }
+        retiredImages.push_back(std::move(it->second));
+        images.erase(it);
+        flushBatch();
+    }
+
     void barrier(vk::CommandBuffer cmd, Image& image, vk::ImageLayout next) {
         if (image.layout == next) return;
         vk::AccessFlags src; vk::PipelineStageFlags srcStage;
@@ -329,6 +357,26 @@ class VulkanBackend final : public Backend {
         return device.createDescriptorSetLayoutUnique({{},bindings.size(),bindings.data()});
     }
 public:
+    void beginOcclusion() override {
+        if(occlusionActive)throw std::runtime_error("Nested Hikaru visibility query");
+        flushBatch();
+        occlusionQueries.clear();
+        occlusionActive=true;
+    }
+    bool endOcclusion() override {
+        if(!occlusionActive)throw std::runtime_error("No active Hikaru visibility query");
+        waitForDraws();
+        occlusionActive=false;
+        bool visible=false;
+        for(const auto& query:occlusionQueries) {
+            uint64_t samples=0;
+            auto result=device.getQueryPoolResults(*query,0,1,sizeof(samples),&samples,sizeof(samples),vk::QueryResultFlagBits::e64|vk::QueryResultFlagBits::eWait);
+            if(result!=vk::Result::eSuccess)throw std::runtime_error("Failed reading Hikaru visibility query");
+            visible|=samples!=0;
+        }
+        occlusionQueries.clear();
+        return visible;
+    }
     VulkanBackend() {
         if(!ctx) throw std::runtime_error("Hikaru Vulkan backend requires an active Vulkan context");
         commandPool=device.createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eTransient,ctx->GetGraphicsQueueFamilyIndex()});
@@ -351,20 +399,28 @@ public:
     }
     void texture(unsigned id,const Texture& info,unsigned level,const void* pixels,size_t bytes) override {
         reapCompletedDraws();
-        waitForDraws();
         auto i=images.find(id); unsigned levels=info.maxLevel==1000?1u+unsigned(std::floor(std::log2(std::max(info.width,info.height)))):std::max(1u,info.maxLevel+1); bool depth=(id&0x80000000u)!=0||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8||info.format==GL_DEPTH_COMPONENT;
         auto fmt=depth?depthFormat(info.format,(id&0x80000000u)==0):colorFormat(info.format);
-        if(i==images.end()||level==0||i->second.extent.width!=info.width||i->second.extent.height!=info.height||i->second.format!=fmt) {
-            framebuffers.clear();images.erase(id); auto fresh=makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,depth&&(id&0x80000000u)==0);fresh.revision=info.revision;images.emplace(id,std::move(fresh)); imageInfo[id]=info;
+        if(i==images.end()||i->second.extent.width!=info.width||i->second.extent.height!=info.height||i->second.format!=fmt||i->second.levels!=(depth?1:levels)) {
+            retireImage(id); auto fresh=makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,depth&&(id&0x80000000u)==0);fresh.revision=info.revision;images.emplace(id,std::move(fresh));
         }
+        imageInfo[id]=info;
         Image& im=image(id); if(level>=im.levels)throw std::runtime_error("Hikaru Vulkan mip level exceeds allocated image");
         if(!pixels||bytes==0){im.initializedLevels[level]=true;return;}
         if(depth)throw std::runtime_error("CPU uploads to Hikaru Vulkan depth textures are unsupported");
-        BufferData staging(bytes,vk::BufferUsageFlagBits::eTransferSrc);staging.upload(bytes,pixels);
-        immediate([&](vk::CommandBuffer cmd){barrier(cmd,im,vk::ImageLayout::eTransferDstOptimal);vk::BufferImageCopy region(0,0,0,{vk::ImageAspectFlagBits::eColor,level,0,1},{0,0,0},{std::max(1u,info.width>>level),std::max(1u,info.height>>level),1});cmd.copyBufferToImage(*staging.buffer,*im.image,vk::ImageLayout::eTransferDstOptimal,region);barrier(cmd,im,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        auto staging=std::make_unique<BufferData>(bytes,vk::BufferUsageFlagBits::eTransferSrc);
+        staging->upload(bytes,pixels);
+        auto cmd=startBatch();
+        endRenderPass(cmd);
+        barrier(cmd,im,vk::ImageLayout::eTransferDstOptimal);
+        vk::BufferImageCopy region(0,0,0,{vk::ImageAspectFlagBits::eColor,level,0,1},{0,0,0},{std::max(1u,info.width>>level),std::max(1u,info.height>>level),1});
+        cmd.copyBufferToImage(*staging->buffer,*im.image,vk::ImageLayout::eTransferDstOptimal,region);
+        barrier(cmd,im,vk::ImageLayout::eShaderReadOnlyOptimal);
+        activeTransfers.push_back(std::move(staging));
+        if(activeTransfers.size()>=64)waitForDraws();
         im.initializedLevels[level]=true;
     }
-    void eraseTexture(unsigned id) override { reapCompletedDraws();waitForDraws();framebuffers.clear();images.erase(id);imageInfo.erase(id); }
+    void eraseTexture(unsigned id) override { reapCompletedDraws();retireImage(id);imageInfo.erase(id); }
     void clear(const Draw& d,GLbitfield mask,const Vec4& color,float depth) override {
         Image& c=image(d.color); Image* z=d.depth?&image(d.depth):nullptr;
         if(z&&z->extent!=c.extent) throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
@@ -389,14 +445,14 @@ public:
         const bool gpuColor=clearColor&&colorMaskFull;
         const bool gpuDepth=(mask&GL_DEPTH_BUFFER_BIT)&&z&&d.depthWrite;
         if(!gpuColor&&!gpuDepth)return;
-        vk::UniqueFramebuffer framebuffer;
-        immediate([&](vk::CommandBuffer cmd){
+        auto cmd=startBatch();
+        endRenderPass(cmd);
+        {
             barrier(cmd,c,vk::ImageLayout::eColorAttachmentOptimal);
             if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
             auto rp=renderPass(c.format,z?z->format:vk::Format::eUndefined);
-            std::array<vk::ImageView,2> views{*c.attachmentView,z?*z->attachmentView:vk::ImageView{}};
-            framebuffer=device.createFramebufferUnique({{},rp,z?2u:1u,views.data(),c.extent.width,c.extent.height,1});
-            vk::Rect2D area({0,0},c.extent);cmd.beginRenderPass({rp,*framebuffer,area,0,nullptr},vk::SubpassContents::eInline);
+            auto fb=framebuffer(d.color,d.depth,c,z,rp);
+            vk::Rect2D area({0,0},c.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
             std::array<vk::ClearAttachment,2> attachments{};uint32_t count=0;
             if(gpuColor){attachments[count].aspectMask=vk::ImageAspectFlagBits::eColor;attachments[count].colorAttachment=0;attachments[count].clearValue.color=vk::ClearColorValue(std::array<float,4>{color[0],color[1],color[2],color[3]});++count;}
             if(gpuDepth){attachments[count].aspectMask=vk::ImageAspectFlagBits::eDepth;attachments[count].clearValue.depthStencil=vk::ClearDepthStencilValue(depth,0);++count;}
@@ -404,7 +460,7 @@ public:
             if(d.scissorEnabled){int x0=std::clamp(d.scissor[0],0,int(c.extent.width)),x1=std::clamp(d.scissor[0]+d.scissor[2],0,int(c.extent.width));int y0=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1],0,int(c.extent.height)),y1=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]:d.scissor[1]+d.scissor[3],0,int(c.extent.height));rect.offset=vk::Offset2D(x0,y0);rect.extent=vk::Extent2D(std::max(0,x1-x0),std::max(0,y1-y0));}
             if(count&&rect.extent.width&&rect.extent.height){std::vector<vk::ClearAttachment> selected(attachments.begin(),attachments.begin()+count);std::array<vk::ClearRect,1> rects{vk::ClearRect(rect,0,1)};cmd.clearAttachments(selected,rects);}
             cmd.endRenderPass();
-        });
+        }
     }
     void draw(const Draw& d) override {
         if(d.vertices.empty())return;
@@ -475,7 +531,12 @@ public:
             if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
             auto rp=renderPass(target.format,z?z->format:vk::Format::eUndefined);
             auto fb=framebuffer(d.color,d.depth,target,z,rp);
+            if(occlusionActive) {
+                occlusionQueries.push_back(device.createQueryPoolUnique({{},vk::QueryType::eOcclusion,1}));
+                cmd.resetQueryPool(*occlusionQueries.back(),0,1);
+            }
             vk::Rect2D area({0,0},target.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
+            if(occlusionActive)cmd.beginQuery(*occlusionQueries.back(),0,{});
             renderPassOpen=true;activeColor=d.color;activeDepth=d.depth;
         }
         // Vulkan's positive-height viewport has the opposite framebuffer Y
@@ -504,7 +565,10 @@ public:
     }
     void present(unsigned w,unsigned h) override {
         Image& out=image(0);if(out.extent.width!=w||out.extent.height!=h)return;
-        immediate([&](vk::CommandBuffer cmd){barrier(cmd,out,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        auto cmd=startBatch();
+        endRenderPass(cmd);
+        barrier(cmd,out,vk::ImageLayout::eShaderReadOnlyOptimal);
+        flushBatch();
         ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f);
     }
 };

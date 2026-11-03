@@ -1,13 +1,35 @@
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 
 namespace hikaru {
+
+// Menu requests cross threads; only the emulation thread samples/resets.
+// A physical release must reach JVS before the next queued rising edge.
+class CoinPulseQueue {
+public:
+    void enqueue() { pending.fetch_add(1, std::memory_order_relaxed); }
+    void reset() { pending = 0; previous = false; }
+    bool sample(bool physical) {
+        bool coin = physical;
+        if (!physical && !previous && pending.load(std::memory_order_relaxed)) {
+            pending.fetch_sub(1, std::memory_order_relaxed);
+            coin = true;
+        }
+        previous = coin;
+        return coin;
+    }
+private:
+    std::atomic<unsigned> pending{0};
+    bool previous = false;
+};
 
 // Bounded JVS 837-13551-compatible I/O node. Input switch words are active
 // high in JVS wire order: 0x8000 start, 0x4000 service, 0x2000 up,

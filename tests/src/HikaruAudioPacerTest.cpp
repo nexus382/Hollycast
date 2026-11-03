@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/audio_pacer.h"
@@ -355,3 +356,24 @@ TEST(HikaruSdlPartialTest, ShortConversionAndFailureAreBounded)
     EXPECT_EQ(dest[8], 0xdeadbeefu);
 }
 #endif
+
+TEST(HikaruAudioPacerTest, RecoversQueueDuringSlightRealtimeDeficit)
+{
+    Harness h;
+    hikaru::AudioPacer pacer(Harness::sink, &h, Harness::clock, &h);
+    for (unsigned frame = 0; frame < 180; ++frame) {
+        pacer.beginFrame(true, 512);
+        for (unsigned i = 0; i < 735; ++i) pacer.submit(5000, -5000);
+        h.now += 1.0 / 59.5;
+    }
+    // Even a <2% deficit drains the device without bounded queue feedback.
+    EXPECT_LT(pacer.tempo(), 0.97);
+    EXPECT_GT(h.output.size(), 132300u);
+    for (unsigned frame = 0; frame < 180; ++frame) {
+        pacer.beginFrame(true, 4410);
+        for (unsigned i = 0; i < 735; ++i) pacer.submit(5000, -5000);
+        h.now += 1.0 / 60;
+    }
+    EXPECT_DOUBLE_EQ(pacer.tempo(), 1.0);
+    EXPECT_EQ(pacer.discardedFrames(), 0u);
+}

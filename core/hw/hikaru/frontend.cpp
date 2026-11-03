@@ -3,6 +3,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "frontend.h"
 #include "roms.h"
+#include "nvram.h"
 #include "mie.h"
 #include "protection.h"
 #include "sound.h"
@@ -51,27 +52,14 @@ unsigned internalHeight = 0;
 uint64_t clocks = 0;
 std::string ioError;
 std::atomic<bool> resetRequested{false};
-std::array<std::atomic<unsigned>, 2> pendingCredits{};
-std::array<bool, 2> creditPulse{};
+std::array<CoinPulseQueue, 2> credits;
+std::atomic<bool> freshAudioOutput{false};
 std::array<uint8_t, HIKARU_ENGINE_BRAM_SIZE> savedBram{};
 bool hasSavedBram = false;
+bool bramSaveAllowed = true, mieSaveAllowed = true;
 std::string bramPath;
 std::string mieEepromPath;
 
-template<size_t Size>
-bool loadNvram(const std::string& path, std::array<uint8_t, Size>& data) {
-    errno = 0;
-    FILE* file = nowide::fopen(path.c_str(), "rb");
-    if (!file) {
-        if (errno == ENOENT) return false;
-        throw std::runtime_error("Cannot open Hikaru nonvolatile data: " + path);
-    }
-    const bool valid = std::fread(data.data(), 1, data.size(), file) == data.size()
-        && std::fgetc(file) == EOF && !std::ferror(file);
-    const bool closed = std::fclose(file) == 0;
-    if (!valid || !closed) throw std::runtime_error("Invalid or unreadable Hikaru nonvolatile data: " + path);
-    return true;
-}
 template<size_t Size>
 bool saveNvram(const std::string& path, const std::array<uint8_t, Size>& data) {
     const std::string temporary = path + ".tmp";
@@ -217,29 +205,34 @@ void load(const std::string& path) {
     const std::string savePrefix = selectedGame->identifier;
     auto loadedBramPath = hostfs::getFlashSavePath("", savePrefix + ".hikaru.nvmem");
     std::array<uint8_t, HIKARU_ENGINE_BRAM_SIZE> loadedBram{};
-    const bool loadedBramPresent = loadNvram(loadedBramPath, loadedBram);
+    const auto bramResult = loadNvram(loadedBramPath, loadedBram);
     auto loadedMiePath = hostfs::getFlashSavePath("", savePrefix + ".mie.eeprom");
     std::array<uint8_t, 128> loadedEeprom{};
-    if (loadNvram(loadedMiePath, loadedEeprom))
+    const auto mieResult = loadNvram(loadedMiePath, loadedEeprom);
+    if (mieResult == NvramLoadResult::Loaded)
         loadedMie->restoreEeprom(std::vector<uint8_t>(loadedEeprom.begin(), loadedEeprom.end()));
     images = std::move(loadedImages); mie = std::move(loadedMie); protection = std::move(loadedProtection); clocks = 0; ioError.clear(); resetRequested = false;
-    bramPath = std::move(loadedBramPath); mieEepromPath = std::move(loadedMiePath); savedBram = loadedBram; hasSavedBram = loadedBramPresent;
+    bramPath = std::move(loadedBramPath); mieEepromPath = std::move(loadedMiePath); savedBram = loadedBram; hasSavedBram = bramResult == NvramLoadResult::Loaded;
+    // Preserve unreadable files for recovery; do not overwrite them on exit.
+    bramSaveAllowed = bramResult != NvramLoadResult::Invalid;
+    mieSaveAllowed = mieResult != NvramLoadResult::Invalid;
+    if (!bramSaveAllowed || !mieSaveAllowed)
+        os_notify("Hikaru save data could not be loaded. Using defaults; the original files will be preserved.", 10000);
     activeGame = selectedGame;
-    for (auto& credits : pendingCredits) credits = 0;
-    creditPulse.fill(false);
+    for (auto& queue : credits) queue.reset();
     NaomiGameInputs = activeGame == &PlanetHarriersGame ? &planetHarriersInputs
         : activeGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
 }
 void releaseGraphics() {
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
-    if (audioPacer) { audioPacer->reset(); ClearAudioOutput(); audioPacer.reset(); audioModeKnown = false; }
+    if (audioPacer) { audioPacer->reset(); audioPacer.reset(); audioModeKnown = false; }
     if (engine) {
         if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
             hasSavedBram = true;
-            if (!saveNvram(bramPath, savedBram)) os_notify("Could not save Hikaru battery-backed RAM", 10000);
+            if (bramSaveAllowed && !saveNvram(bramPath, savedBram)) os_notify("Could not save Hikaru battery-backed RAM", 10000);
         } else os_notify("Could not read Hikaru battery-backed RAM", 10000);
         hikaru_engine_destroy(engine); engine = nullptr; sound.reset(); internalHeight = 0; glcache.Reset();
-        if (!saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
+        if (mieSaveAllowed && !saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
     }
     nativeGraphics.reset();
 }
@@ -248,10 +241,12 @@ void suspendGraphics() {
     if (!engine) { nativeGraphics.reset(); return; }
     if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
         hasSavedBram = true;
-        if (!saveNvram(bramPath, savedBram)) os_notify("Could not save Hikaru battery-backed RAM", 10000);
+        if (bramSaveAllowed && !saveNvram(bramPath, savedBram)) os_notify("Could not save Hikaru battery-backed RAM", 10000);
     }
-    if (!saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
+    if (mieSaveAllowed && !saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
     pauseAudio();
+    ClearAudioOutput();
+    freshAudioOutput = true;
     if (hikaru_engine_release_graphics(engine) != 0)
         os_notify("Could not release Hikaru graphics", 10000);
     internalHeight = 0;
@@ -261,10 +256,12 @@ void suspendGraphics() {
 void unload() { releaseGraphics(); protection.reset(); mie.reset(); images.reset(); activeGame = nullptr; ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
 void requestReset() { resetRequested = true; }
 void insertCredit(unsigned player) {
-    if (player < pendingCredits.size()) pendingCredits[player].fetch_add(1);
+    if (player < credits.size()) credits[player].enqueue();
 }
-void pauseAudio() { if (audioPacer) audioPacer->reset(); ClearAudioOutput(); audioModeKnown = false; }
-void resumeAudio() { if (audioPacer) audioPacer->reset(); ClearAudioOutput(); audioModeKnown = false; }
+void pauseAudio() { if (audioPacer) audioPacer->reset(); audioModeKnown = false; }
+// InitAudio has already supplied an empty backend. Defer DSP work to its
+// producer thread and avoid reopening non-queue backends to clear it again.
+void resumeAudio() { freshAudioOutput = true; }
 static bool renderFrame() {
     static const bool traceTiming = std::getenv("HIKARU_TRACE_TIMING") != nullptr;
     const auto renderStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -287,7 +284,7 @@ static bool renderFrame() {
             throw FlycastException("Hikaru OpenGL requires OpenGL 3.2 or OpenGL ES 3.0");
     }
     if (settings.display.width <= 0 || settings.display.height <= 0) return false;
-    if (resetRequested.exchange(false)) releaseGraphics();
+    if (resetRequested.exchange(false)) { releaseGraphics(); ClearAudioOutput(); freshAudioOutput = true; }
     if (!gl && !nativeGraphics) {
         std::unique_ptr<graphics::Backend> backend;
 #ifdef USE_METAL
@@ -302,7 +299,7 @@ static bool renderFrame() {
     std::optional<graphics::Device::Scope> graphicsScope;
     graphicsScope.emplace(nativeGraphics.get());
     if (!engine) {
-        HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size()};
+        HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size(), 1};
         auto io = callbacks(); std::array<char, 512> error{};
         auto security = protectionCallbacks();
         const auto game = activeGame == &PlanetHarriersGame ? HIKARU_ENGINE_GAME_PHARRIER
@@ -372,10 +369,12 @@ static bool renderFrame() {
     const bool fastForward = settings.input.fastForwardMode;
     const bool muted = settings.aica.muteAudio;
     const bool pacing = config::HikaruAudioPacing;
+    const bool freshOutput = freshAudioOutput.exchange(false);
+    if (freshOutput) audioModeKnown = false;
     bool clearedAudio = false;
     if (!audioModeKnown || fastForward != previousFastForward || muted != previousMuted || pacing != previousPacing) {
         audioPacer->reset();
-        ClearAudioOutput();
+        if (!freshOutput) ClearAudioOutput();
         clearedAudio = true;
         audioModeKnown = true;
         previousFastForward = fastForward; previousMuted = muted; previousPacing = pacing;
@@ -387,11 +386,13 @@ static bool renderFrame() {
         config::Sh4Clock.set(int(cpuClockMhz));
     if (hikaru_engine_set_cpu_clock_mhz(engine, cpuClockMhz) != 0)
         throw FlycastException(std::string("Hikaru CPU clock: ") + hikaru_engine_last_error(engine));
-    const auto sorting = isPerPixel(requested) ? HIKARU_TRANSPARENCY_PER_PIXEL
-        : config::PerStripSorting ? HIKARU_TRANSPARENCY_PER_STRIP : HIKARU_TRANSPARENCY_PER_TRIANGLE;
+    const auto sorting = config::HikaruSorting.get() == config::HikaruSortingMode::PerPixel
+        ? HIKARU_TRANSPARENCY_PER_PIXEL
+        : config::HikaruSorting.get() == config::HikaruSortingMode::PerStrip
+            ? HIKARU_TRANSPARENCY_PER_STRIP : HIKARU_TRANSPARENCY_PER_TRIANGLE;
     if (hikaru_engine_set_transparency_sorting(engine, sorting) != 0)
         throw FlycastException(std::string("Hikaru sorting: ") + hikaru_engine_last_error(engine));
-    if (hikaru_engine_set_transparency_peel_capacity(engine, unsigned(std::clamp(config::PerPixelLayers.get(), 1, 32))) != 0)
+    if (hikaru_engine_set_transparency_peel_capacity(engine, unsigned(std::clamp(config::HikaruMaxLayers.get(), 1, 32))) != 0)
         throw FlycastException("Invalid Hikaru per-pixel layer capacity");
     const int requestedHeight = config::RenderResolution.get();
     if (unsigned(requestedHeight) != internalHeight) {
@@ -410,14 +411,7 @@ static bool renderFrame() {
         // binding is D. Keep the extra credit aliases for the older titles.
         input.coin[i] = pressed(DC_BTN_D) || (activeGame != &PlanetHarriersGame &&
             (pressed(DC_BTN_C) || pressed(DC_BTN_X)));
-        // Separate queued menu credits with a release frame so the JVS
-        // rising-edge counter sees every request as a distinct coin.
-        if (creditPulse[i]) creditPulse[i] = false;
-        else if (!input.coin[i] && pendingCredits[i].load() != 0) {
-            pendingCredits[i].fetch_sub(1);
-            creditPulse[i] = true;
-        }
-        input.coin[i] = input.coin[i] || creditPulse[i];
+        input.coin[i] = credits[i].sample(input.coin[i]);
         input.players[i] = (pressed(DC_BTN_START) ? 0x8000 : 0) | (pressed(DC_DPAD_LEFT) ? 0x0200 : 0)
             | (pressed(DC_DPAD_RIGHT) ? 0x0100 : 0) | (pressed(DC_DPAD_UP) ? 0x2000 : 0) | (pressed(DC_DPAD_DOWN) ? 0x1000 : 0);
         if (activeGame == &BraveFirefightersGame || activeGame == &PlanetHarriersGame)

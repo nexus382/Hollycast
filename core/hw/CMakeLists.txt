@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 target_sources(${PROJECT_NAME} PRIVATE
         hwreg.h)
 
@@ -29,5 +30,5 @@ if(USE_HIKARU)
     endif()
     set_source_files_properties(hikaru/audio_pacer.cpp TARGET_DIRECTORY ${PROJECT_NAME}
         PROPERTIES COMPILE_DEFINITIONS SOUNDTOUCH_FLOAT_SAMPLES=1)
-    target_link_libraries(${PROJECT_NAME} PRIVATE hollycast_hikaru_bus hollycast_hikaru_valkyrie hollycast_soundtouch)
+    target_link_libraries(${PROJECT_NAME} PRIVATE hollycast_hikaru_io hollycast_hikaru_valkyrie hollycast_soundtouch)
 endif()

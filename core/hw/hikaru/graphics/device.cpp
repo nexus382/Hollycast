@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "device.h"
@@ -12,6 +13,8 @@ namespace hikaru::graphics {
 thread_local Device* Device::active;
 Device::Device(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {
     if (!this->backend) throw std::runtime_error("Hikaru graphics backend is unavailable");
+    dispatch.BeginOcclusion = [] { try { active->flushDraw(); active->backend->beginOcclusion(); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.EndOcclusion = []() -> GLboolean { try { active->flushDraw(); return active->backend->endOcclusion(); } catch (...) { active->error=std::current_exception(); return false; } };
     dispatch.ActiveTexture = [](GLenum texture) -> void { try { active->ActiveTexture(texture); } catch (...) { active->error=std::current_exception(); } };
     dispatch.AttachShader = [](GLuint program, GLuint shader) -> void { try { active->AttachShader(program, shader); } catch (...) { active->error=std::current_exception(); } };
     dispatch.BindAttribLocation = [](GLuint program, GLuint index, const GLchar * name) -> void { try { active->BindAttribLocation(program, index, name); } catch (...) { active->error=std::current_exception(); } };
@@ -270,6 +273,13 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
         }
     }
     for(unsigned i=0;i<4;i++) d.uniforms.lodBias[i]=d.sampling[i].lodBias;
+    // The ES shader path supplies bias as a uniform, including when native
+    // backends implement the dispatch without a real GL texture parameter.
+    const auto bias=p.locations.find("u_lod_bias");
+    if(bias!=p.locations.end()) {
+        const auto value=p.values.find(bias->second);
+        if(value!=p.values.end()&&!value->second.empty())d.uniforms.lodBias[0]=value->second[0];
+    }
     queueDraw(std::move(d));
 }
 void Device::DrawBuffers(GLsizei n,const GLenum* values){if(n!=1||values[0]!=GL_COLOR_ATTACHMENT0)throw std::runtime_error("Unsupported Hikaru draw attachments");}

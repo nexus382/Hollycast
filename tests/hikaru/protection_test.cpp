@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/protection.h"
@@ -20,27 +21,30 @@ int main()
     check(first.read(0x0a00ffff,1)==0xfe,"RAM little endian lanes");
     throws([&]{first.read(0x0a000001,2);},"unaligned RAM access rejected");
     throws([&]{first.read(0x0a01000e,8);},"wide crypto read rejected without side effect");
-    throws([&]{first.write(0x0a01000a,1,2);},"unsupported high crypto address rejected");
-    throws([&]{first.read(0x0a020000,2);},"unmapped board read rejected");
-    throws([&]{first.write(0x0a010002,0,2);},"unmapped register write rejected");
+    first.write(0x0a01000a,1,2); // addrhi_w ignores guest high bits, as MAME does.
+    check(first.read(0x0a020000,2)==0,"unmapped board read returns local-bus default");
+    check(first.read(0x0a010002,2)==0,"unmapped register read returns local-bus default");
+    first.write(0x0a010002,0,2);
+    first.write(0x0afffff8,UINT64_MAX,8);
+    check(first.read(0x0afffff8,8)==0,"unmapped writes are ignored through the aperture boundary");
+    throws([&]{first.read(0x0b000000,2);},"out-of-aperture board read rejected");
 
     // The base ROM-board map installs neither protection RAM nor crypto.
     hikaru::Protection absent(std::nullopt);
     constexpr std::array<unsigned,4> widths{{1,2,4,8}};
-    constexpr std::array<uint64_t,4> openBus{{0xff,0xffff,0xffffffffULL,UINT64_MAX}};
     for(unsigned i=0;i<widths.size();++i) {
         for(uint32_t address : {0x0a000000u,0x0a00fff8u,0x0a010008u}) {
             absent.write(address,0,widths[i]);
-            check(absent.read(address,widths[i])==openBus[i],"absent protection window reads open bus");
+            check(absent.read(address,widths[i])==0,"absent protection window reads open bus");
         }
     }
     absent.write(0x0a01000c,0x1234,2);
-    check(absent.read(0x0a01000e,2)==0xffff,"absent chip ignores register writes");
+    check(absent.read(0x0a01000e,2)==0,"absent chip ignores register writes");
     absent.reset();
-    check(absent.read(0x0a00fff8,8)==UINT64_MAX,"absent RAM remains open bus after reset");
-    check(absent.read(0x0a010000,2)==0xffff,"absent chip stays absent after reset");
+    check(absent.read(0x0a00fff8,8)==0,"absent RAM remains open bus after reset");
+    check(absent.read(0x0a010000,2)==0,"absent chip stays absent after reset");
     throws([&]{absent.read(0x0a010001,2);},"absent protection retains bus alignment checks");
-    throws([&]{absent.read(0x0a020000,2);},"absent protection does not expand mapping");
+    check(absent.read(0x0a020000,2)==0,"absent protection aperture remains unmapped");
 
     // Generated ciphertext, NOT game data. LCG seed 2; golden values obtained
     // independently from Hollycast's existing Naomi 315-5881 implementation.
@@ -63,6 +67,18 @@ int main()
         check(first.read(0x0a01000e,2)==expected,"generated uncompressed stream golden");
         check(second.read(0x0a01000e,2)==expected,"interleaved instances do not share cipher cursor");
     }
+    hikaru::Protection wide;
+    fill(wide);
+    wide.write(0x0a01000a,0xffff,2);
+    wide.write(0x0a01000e,0xffff,2); // read-only data port
+    check(wide.read(0x0a010008,8)==0,"wide register read contains one dummy data halfword");
+    check(wide.read(0x0a01000c,4)==uint64_t(golden[0])<<16,"wide read preserves data-port lane and cursor");
+    check(wide.read(0x0a01000e,1)==(golden[1]&0xff),"byte read selects low data lane once");
+    check(wide.read(0x0a01000f,1)==(golden[2]>>8),"byte read selects high data lane once");
+    check(wide.read(0x0a01000e,2)==golden[3],"mixed-width reads advance exactly one word per data access");
+    wide.write(0x0a010008,(uint64_t(0x1234)<<32) | (uint64_t(0xffff)<<16),8);
+    check(wide.read(0x0a01000e,2)==0 && wide.read(0x0a01000e,2)==golden[0],
+          "wide write routes address and subkey lanes, ignoring the read-only port");
     first.reset();
     check(first.read(0x0a00fff8,8)==0,"hard reset clears protection RAM");
     fill(first);check(first.read(0x0a01000e,2)==0,"reset restores dummy-read sequence");

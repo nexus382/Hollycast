@@ -4785,6 +4785,10 @@ void renderVideoTab()
 	const bool metalAvailable = metalIsAvailable();
 #endif
 	const bool hikaruPlatform = settings.platform.isHikaru();
+#ifdef USE_HIKARU
+	if (hikaruPlatform)
+		perPixel = config::HikaruSorting.get() == config::HikaruSortingMode::PerPixel;
+#endif
 	const int apiCount = 0
 #ifdef USE_METAL
 		+ (metalAvailable ? 1 : 0)
@@ -4946,6 +4950,9 @@ void renderVideoTab()
 				has_per_pixel = metalSupportsPerPixel();
 #endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;
+#ifdef USE_HIKARU
+			if (hikaruPlatform) renderer = static_cast<int>(config::HikaruSorting.get());
+#endif
 
 			std::array<const char*, 3> sortingLabels {};
 			std::array<int, 3> sortingValues {};
@@ -5021,6 +5028,13 @@ void renderVideoTab()
 				if (selectedIndex < 0 || selectedIndex >= sortingOptionCount)
 					return false;
 				const int selectedRenderer = sortingValues[selectedIndex];
+#ifdef USE_HIKARU
+				if (hikaruPlatform) {
+					config::HikaruSorting.set(static_cast<config::HikaruSortingMode>(selectedRenderer));
+					perPixel = selectedRenderer == 2;
+					return true;
+				}
+#endif
 				switch (selectedRenderer)
 				{
 				case 0:
@@ -5435,21 +5449,27 @@ void renderVideoTab()
 			return true;
 		};
 
-		RenderGeneralPopupSettingRow(
-			Tnop("PixelBufferSizeSetting"),
-			T("Memory budget for Per-Pixel transparency rendering."),
-			pixelBufferCfg,
-			T(
-				"Pixel Buffer Size\n"
-				"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
-				"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
-				"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
-			)
-		);
+		if (!hikaruPlatform)
+			RenderGeneralPopupSettingRow(
+				Tnop("PixelBufferSizeSetting"),
+				T("Memory budget for Per-Pixel transparency rendering."),
+				pixelBufferCfg,
+				T(
+					"Pixel Buffer Size\n"
+					"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
+					"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
+					"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
+				)
+			);
 
-		static int perPixelLayersTemp = config::PerPixelLayers.get();
+#ifdef USE_HIKARU
+		auto& maximumLayers = hikaruPlatform ? config::HikaruMaxLayers : config::PerPixelLayers;
+#else
+		auto& maximumLayers = config::PerPixelLayers;
+#endif
+		static int perPixelLayersTemp = maximumLayers.get();
 		if (!ImGui::IsPopupOpen("PerPixelMaximumLayersPopup"))
-			perPixelLayersTemp = config::PerPixelLayers.get();
+			perPixelLayersTemp = maximumLayers.get();
 
 		SettingsUI::PopupSliderConfig perPixelLayersCfg {};
 		perPixelLayersCfg.label = T("Maximum Layers");
@@ -5461,13 +5481,13 @@ void renderVideoTab()
 				"Increase this if you see missing transparency or incorrect layering.\n"
 				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
-		perPixelLayersCfg.minValue = 8;
-		perPixelLayersCfg.maxValue = 128;
+		perPixelLayersCfg.minValue = hikaruPlatform ? 1 : 8;
+		perPixelLayersCfg.maxValue = hikaruPlatform ? 32 : 128;
 		perPixelLayersCfg.format = "%d";
 		perPixelLayersCfg.valueWidth = 220.0f;
 		perPixelLayersCfg.sliderWidth = 320.0f;
 		perPixelLayersCfg.onValueChange = [&]() {
-			config::PerPixelLayers.set(perPixelLayersTemp);
+			maximumLayers.set(perPixelLayersTemp);
 		};
 
 		SettingsUI::PopupConfig perPixelLayersPopupCfg {};
@@ -6051,23 +6071,25 @@ void renderVideoTab()
 	}
 #endif
 
-	// Update renderer type based on selections
+	// Changing Hikaru sorting must not overwrite Dreamcast/Naomi's OIT choice.
+	// The API remains a shared preference; the sorting modes are independent.
+	const bool hostPerPixel = hikaruPlatform ? isPerPixel(config::RendererType) : perPixel;
 	switch (renderApi)
 	{
 	case 0:
-		config::RendererType = perPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
+		config::RendererType = hostPerPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
 		break;
 	case 1:
-		config::RendererType = perPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
+		config::RendererType = hostPerPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
 		break;
 	case 4:
-		config::RendererType = perPixel ? RenderType::Metal_OIT : RenderType::Metal;
+		config::RendererType = hostPerPixel ? RenderType::Metal_OIT : RenderType::Metal;
 		break;
 	case 2:
 		config::RendererType = RenderType::DirectX9;
 		break;
 		case 3:
-			config::RendererType = perPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
+			config::RendererType = hostPerPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
 			break;
 	}
 }
@@ -8931,21 +8953,22 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		// Multi-threaded emulation
-		RenderGeneralToggleSettingRow(
-			"MultiThreaded",
-			ICON_FA_GEAR,
-			T("Multi-threading"),
-			T("Use additional CPU threads"),
-			static_cast<bool>(config::ThreadedRendering),
-			[](bool enabled) { config::ThreadedRendering.set(enabled); },
-			T(
-				"Multi-threading\n"
-				"Allows Hollycast to use more than one CPU thread for certain emulation/rendering work.\n\n"
-				"On modern multi-core devices this can improve performance or reduce stutter.\n"
-				"On some drivers/devices it can introduce instability or odd timing issues.\n\n"
-				"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
-			));
+		// Hikaru currently runs both CPUs and graphics on one host thread.
+		if (!settings.platform.isHikaru())
+			RenderGeneralToggleSettingRow(
+				"MultiThreaded",
+				ICON_FA_GEAR,
+				T("Multi-threading"),
+				T("Use additional CPU threads"),
+				static_cast<bool>(config::ThreadedRendering),
+				[](bool enabled) { config::ThreadedRendering.set(enabled); },
+				T(
+					"Multi-threading\n"
+					"Allows Hollycast to use more than one CPU thread for certain emulation/rendering work.\n\n"
+					"On modern multi-core devices this can improve performance or reduce stutter.\n"
+					"On some drivers/devices it can introduce instability or odd timing issues.\n\n"
+					"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
+				));
 
 		ImGui::Spacing();
 
