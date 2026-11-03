@@ -2467,18 +2467,6 @@ msgstr "Registro a archivo"
 msgid "Log debug information to flycast.log"
 msgstr "Registra información de depuración en flycast.log"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "Reporte de crasheos automatico"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr ""
-"Sube automáticamente informes de fallos a sentry.io para ayudar en la "
-"solución de problemas. No se incluye información personal."
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Scripting de Lua"
@@ -9080,28 +9068,6 @@ msgid ""
 msgstr ""
 "Indica el nombre del archivo Lua que se va a usar. Debe estar en la carpeta "
 "de configuración de Hollycast. Si se deja en blanco, se usa flycast.lua."
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "Informes de fallos"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "Subir automáticamente los informes de fallos"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"Informes de fallos\n"
-"Sube automáticamente informes de fallos para ayudar a los desarrolladores a diagnosticar y corregir problemas.\n"
-"\n"
-"Los informes suelen incluir detalles técnicos del fallo y del entorno.\n"
-"Déjalo activado si quieres ayudar a mejorar la estabilidad; desactívalo si prefieres no enviar datos de fallos."
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

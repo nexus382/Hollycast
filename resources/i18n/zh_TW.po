@@ -2371,16 +2371,6 @@ msgstr "記錄至檔案"
 msgid "Log debug information to flycast.log"
 msgstr "將除錯資訊記錄至 flycast.log"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "自動回報當機"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr "自動將當機報告上傳至 sentry.io 以協助故障排除。不包含任何個人資訊。"
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Lua 腳本"
@@ -8734,28 +8724,6 @@ msgid ""
 "Specify lua filename to use. Should be located in Hollycast config folder. "
 "Defaults to flycast.lua when empty."
 msgstr "指定要使用的 Lua 檔名。檔案應位於 Hollycast 設定資料夾中。留白時預設為 flycast.lua。"
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "當機報告"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "自動上傳當機報告"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"當機報告\n"
-"自動上傳當機報告，協助開發者診斷並修正問題。\n"
-"\n"
-"當機報告通常包含當機與環境的技術詳細資料。\n"
-"若願意協助改善穩定性，請保持啟用；若不想傳送當機資料，請停用。"
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"
