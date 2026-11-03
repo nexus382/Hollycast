@@ -834,9 +834,13 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 				if (!hasInputDeclaration(vertexBody, "in_uv"))
 					vertexSource.addSource("in mediump vec2 in_uv;\n");
 				vertexSource.addSource(passSource->retroArchGlsl
-						? "#define VertexCoord vec4(in_pos, 1.0)\n#define Position VertexCoord\n#define TexCoord in_uv\n#define aTexCoord in_uv\n"
-						: "#define VertexCoord in_pos\n#define Position in_pos\n#define TexCoord in_uv\n#define aTexCoord in_uv\n")
-						.addSource(vertexResourcePreamble(passParameters, passSource->slangParameters,
+						? "#define VertexCoord vec4(in_pos, 1.0)\n#define Position VertexCoord\n#define aTexCoord in_uv\n"
+						: "#define VertexCoord in_pos\n#define Position in_pos\n#define aTexCoord in_uv\n");
+				// Preserve a shader-authored TexCoord output instead of aliasing it
+				// to the input attribute with the same legacy convenience name.
+				if (!std::regex_search(vertexBody, std::regex(R"(\bout\s+\w+\s+TexCoord\b)")))
+					vertexSource.addSource("#define TexCoord in_uv\n");
+				vertexSource.addSource(vertexResourcePreamble(passParameters, passSource->slangParameters,
 								passSource->slangResources, vertexBody))
 						.addSource(vertexBody);
 			}
@@ -926,11 +930,15 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 				const auto samplerConfig = std::find_if(pass.samplers.begin(), pass.samplers.end(), [&](const auto& sampler) {
 					return sampler.bindingName == resource.name;
 				});
-				if (samplerConfig != pass.samplers.end() && input->kind != postprocess::ShaderInputKind::LookupTexture) {
+				if (samplerConfig != pass.samplers.end()) {
 					binding.hasSamplerState = true;
-					binding.linearFilter = samplerConfig->linearFilter;
+					binding.minLinear = samplerConfig->minLinear;
+					binding.magLinear = samplerConfig->magLinear;
+					binding.mipLinear = samplerConfig->mipLinear;
 					binding.useMipmaps = samplerConfig->useMipmaps;
-					binding.wrapMode = samplerConfig->wrapMode;
+					binding.wrapU = samplerConfig->wrapU;
+					binding.wrapV = samplerConfig->wrapV;
+					binding.wrapW = samplerConfig->wrapW;
 				}
 				if (resource.name == "Source") {
 					hasSource = true;
@@ -965,17 +973,17 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 						deletePrograms(candidate);
 						return false;
 					}
-					const GLint wrap = glWrapMode(binding.wrapMode);
 					for (const GLuint sampler : { binding.sampler, binding.mipSampler }) {
-						glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, binding.linearFilter ? GL_LINEAR : GL_NEAREST);
-						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, wrap);
-						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, wrap);
-						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_R, wrap);
+						glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, binding.magLinear ? GL_LINEAR : GL_NEAREST);
+						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, glWrapMode(binding.wrapU));
+						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, glWrapMode(binding.wrapV));
+						glSamplerParameteri(sampler, GL_TEXTURE_WRAP_R, glWrapMode(binding.wrapW));
 					}
 					glSamplerParameteri(binding.sampler, GL_TEXTURE_MIN_FILTER,
-							binding.linearFilter ? GL_LINEAR : GL_NEAREST);
+							binding.minLinear ? GL_LINEAR : GL_NEAREST);
 					glSamplerParameteri(binding.mipSampler, GL_TEXTURE_MIN_FILTER,
-							binding.linearFilter ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST);
+							binding.minLinear ? (binding.mipLinear ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR_MIPMAP_NEAREST)
+									: (binding.mipLinear ? GL_NEAREST_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST));
 				}
 			}
 #endif
@@ -1654,22 +1662,23 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			glcache.BindTexture(resource.textureTarget, texture);
 			if (texture == sourceTexture)
 				sourceTextureState.capture();
-			const bool linearFilter = lookup != nullptr ? lookup->config.linearFilter
-					: resource.hasSamplerState ? resource.linearFilter : program.pass.linearFilter;
-			const bool sampleMipmaps = resourceHasMipmaps && (lookup != nullptr ? lookup->config.useMipmaps
-					: resource.hasSamplerState ? resource.useMipmaps : true);
-			const postprocess::ShaderWrapMode wrapMode = lookup != nullptr ? lookup->config.wrapMode
-					: resource.hasSamplerState ? resource.wrapMode : program.pass.wrapMode;
+			const bool fallbackLinear = lookup != nullptr ? lookup->config.linearFilter : program.pass.linearFilter;
+			const bool minLinear = resource.hasSamplerState ? resource.minLinear : fallbackLinear;
+			const bool magLinear = resource.hasSamplerState ? resource.magLinear : fallbackLinear;
+			const bool mipLinear = resource.hasSamplerState ? resource.mipLinear : fallbackLinear;
+			const bool sampleMipmaps = resourceHasMipmaps && (resource.hasSamplerState ? resource.useMipmaps : true);
+			const auto fallbackWrap = lookup != nullptr ? lookup->config.wrapMode : program.pass.wrapMode;
 			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_MIN_FILTER,
-					sampleMipmaps ? (linearFilter ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST)
-							: linearFilter ? GL_LINEAR : GL_NEAREST);
+					sampleMipmaps ? (minLinear ? (mipLinear ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR_MIPMAP_NEAREST)
+							: (mipLinear ? GL_NEAREST_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST))
+							: minLinear ? GL_LINEAR : GL_NEAREST);
 			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_MAG_FILTER,
-					linearFilter ? GL_LINEAR : GL_NEAREST);
-			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_S, glWrapMode(wrapMode));
-			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_T, glWrapMode(wrapMode));
+					magLinear ? GL_LINEAR : GL_NEAREST);
+			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_S, glWrapMode(resource.hasSamplerState ? resource.wrapU : fallbackWrap));
+			glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_T, glWrapMode(resource.hasSamplerState ? resource.wrapV : fallbackWrap));
 #ifndef GLES2
 			if (resource.textureTarget == GL_TEXTURE_3D || resource.textureTarget == GL_TEXTURE_CUBE_MAP)
-				glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_R, glWrapMode(wrapMode));
+				glcache.TexParameteri(resource.textureTarget, GL_TEXTURE_WRAP_R, glWrapMode(resource.hasSamplerState ? resource.wrapW : fallbackWrap));
 			if (glBindSampler != nullptr)
 				glBindSampler(resource.unit, resource.sampler == 0 ? 0
 						: sampleMipmaps ? resource.mipSampler : resource.sampler);

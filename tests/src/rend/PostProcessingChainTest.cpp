@@ -593,12 +593,16 @@ TEST(PostProcessingChainTest, ValidatesAndReflectsReShadeRenderStates)
 	ASSERT_TRUE(postprocess::loadShaderChain(supportedSampler.string(), chain, error)) << error;
 	ASSERT_EQ(1u, chain.passes.size());
 	ASSERT_EQ(1u, chain.passes[0].samplers.size());
-	EXPECT_TRUE(chain.passes[0].samplers[0].linearFilter);
+	EXPECT_TRUE(chain.passes[0].samplers[0].minLinear);
+	EXPECT_TRUE(chain.passes[0].samplers[0].magLinear);
+	EXPECT_TRUE(chain.passes[0].samplers[0].mipLinear);
 	EXPECT_TRUE(chain.passes[0].samplers[0].useMipmaps);
 	ASSERT_TRUE(postprocess::loadShaderChain(customSampler.string(), chain, error)) << error;
 	ASSERT_EQ(1u, chain.passes.size());
 	ASSERT_EQ(1u, chain.passes[0].samplers.size());
-	EXPECT_EQ(postprocess::ShaderWrapMode::Repeat, chain.passes[0].samplers[0].wrapMode);
+	EXPECT_EQ(postprocess::ShaderWrapMode::Repeat, chain.passes[0].samplers[0].wrapU);
+	EXPECT_EQ(postprocess::ShaderWrapMode::ClampToEdge, chain.passes[0].samplers[0].wrapV);
+	EXPECT_EQ(postprocess::ShaderWrapMode::ClampToEdge, chain.passes[0].samplers[0].wrapW);
 	ASSERT_TRUE(postprocess::loadShaderChain(disabledBlend.string(), chain, error)) << error;
 	ASSERT_EQ(1u, chain.passes.size());
 	EXPECT_FALSE(chain.passes[0].blendEnabled);
@@ -2333,6 +2337,141 @@ constexpr char ComputeGradientEffect[] =
 	" pass Present { PixelShader = Pixel; } }\n";
 } // namespace
 
+TEST(PostProcessingChainTest, LoadsLargePresetsWithinThePassBudget)
+{
+	ShaderResourceDirectory directory;
+	std::ofstream(directory.path / "copy.glsl") << "void main() { FragColor = texture(Source, vTexCoord); }\n";
+	const auto path = directory.path / "large.glslp";
+	std::ostringstream preset;
+	preset << "shaders = 48\n";
+	for (unsigned pass = 0; pass < 48; ++pass)
+		preset << "shader" << pass << " = copy.glsl\n";
+	std::ofstream(path) << preset.str();
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	EXPECT_EQ(48u, chain.passes.size());
+	EXPECT_EQ(48u, chain.sources.size());
+	EXPECT_FALSE(postprocess::parseSlangPreset("shaders = 129\n", path.string(), chain, error));
+	EXPECT_NE(std::string::npos, error.find("128"));
+}
+
+TEST(PostProcessingChainTest, PreservesIndependentFxSamplerStatesForSharedLookupImages)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "samplers.fx";
+	std::ofstream(path) <<
+		"texture2D Lookup < source = \"lookup.png\"; >;\n"
+		"sampler2D PointSampler { Texture = Lookup; MinFilter = POINT; MagFilter = LINEAR; MipFilter = NONE;"
+		" AddressU = WRAP; AddressV = CLAMP; AddressW = MIRROR; };\n"
+		"sampler2D LinearSampler { Texture = Lookup; MinFilter = LINEAR; MagFilter = POINT; MipFilter = LINEAR;"
+		" AddressU = CLAMP; AddressV = MIRROR; AddressW = WRAP; };\n"
+		"float4 Pixel(float2 uv : TEXCOORD) : SV_Target { return tex2D(PointSampler, uv) + tex2D(LinearSampler, uv); }\n"
+		"technique Main { pass { PixelShader = Pixel; } }\n";
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	ASSERT_EQ(1u, chain.textures.size());
+	EXPECT_TRUE(chain.textures[0].useMipmaps);
+	ASSERT_EQ(1u, chain.passes.size());
+	EXPECT_FALSE(chain.passes[0].useMipmaps); // Only the lookup image needs a mip chain.
+	ASSERT_EQ(2u, chain.passes[0].samplers.size());
+	const auto& point = chain.passes[0].samplers[0];
+	EXPECT_EQ("PointSampler", point.bindingName);
+	EXPECT_FALSE(point.minLinear); EXPECT_TRUE(point.magLinear);
+	EXPECT_FALSE(point.mipLinear); EXPECT_FALSE(point.useMipmaps);
+	EXPECT_EQ(postprocess::ShaderWrapMode::Repeat, point.wrapU);
+	EXPECT_EQ(postprocess::ShaderWrapMode::ClampToEdge, point.wrapV);
+	EXPECT_EQ(postprocess::ShaderWrapMode::MirroredRepeat, point.wrapW);
+	const auto& linear = chain.passes[0].samplers[1];
+	EXPECT_EQ("LinearSampler", linear.bindingName);
+	EXPECT_TRUE(linear.minLinear); EXPECT_FALSE(linear.magLinear);
+	EXPECT_TRUE(linear.mipLinear); EXPECT_TRUE(linear.useMipmaps);
+	EXPECT_EQ(postprocess::ShaderWrapMode::ClampToEdge, linear.wrapU);
+	EXPECT_EQ(postprocess::ShaderWrapMode::MirroredRepeat, linear.wrapV);
+	EXPECT_EQ(postprocess::ShaderWrapMode::Repeat, linear.wrapW);
+}
+
+TEST(PostProcessingChainTest, AcceptsEveryCombinedFxFilterMode)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "filters.fx";
+	const char *modes[] = { "MIN_MAG_MIP_POINT", "MIN_MAG_POINT_MIP_LINEAR",
+		"MIN_POINT_MAG_LINEAR_MIP_POINT", "MIN_POINT_MAG_MIP_LINEAR",
+		"MIN_LINEAR_MAG_MIP_POINT", "MIN_LINEAR_MAG_POINT_MIP_LINEAR",
+		"MIN_MAG_LINEAR_MIP_POINT", "MIN_MAG_MIP_LINEAR" };
+	for (unsigned index = 0; index < 8; ++index) {
+		SCOPED_TRACE(modes[index]);
+		std::ofstream(path) << "texture2D Image < source = \"color\"; >;\n"
+			"sampler2D ReadImage { Texture = Image; Filter = " << modes[index] << "; };\n"
+			"float4 Pixel(float2 uv : TEXCOORD) : SV_Target { return tex2D(ReadImage, uv); }\n"
+			"technique Main { pass { PixelShader = Pixel; } }\n";
+		postprocess::ShaderChain chain;
+		std::string error;
+		ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+		ASSERT_EQ(1u, chain.passes[0].samplers.size());
+		const auto& sampler = chain.passes[0].samplers[0];
+		EXPECT_EQ((index & 4) != 0, sampler.minLinear);
+		EXPECT_EQ((index & 2) != 0, sampler.magLinear);
+		EXPECT_EQ((index & 1) != 0, sampler.mipLinear);
+		EXPECT_TRUE(sampler.useMipmaps);
+	}
+}
+
+TEST(PostProcessingChainTest, ProvidesSlangTimingAndDisplayAspectUniforms)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "host.slang";
+	std::ofstream(path) << "#version 450\n"
+		"#if !defined(_HAS_ORIGINALASPECT_UNIFORMS) || !defined(_HAS_FRAMETIME_UNIFORMS)\n"
+		"#error Missing host uniforms\n#endif\n"
+		"layout(push_constant) uniform Host { float OriginalFPS; uint FrameTimeDelta;"
+		" float OriginalAspect; float OriginalAspectRotated; } host;\n"
+		"#pragma stage vertex\nlayout(location=0) in vec4 Position;\nlayout(location=1) in vec2 Coord;\n"
+		"layout(location=0) out vec2 TexCoord;\nvoid main() { gl_Position = Position; TexCoord = Coord; }\n"
+		"#pragma stage fragment\nlayout(location=0) in vec2 TexCoord;\n"
+		"layout(location=0) out vec4 FragColor;\n"
+		"void main() { FragColor = vec4(host.OriginalFPS / 60.0, float(host.FrameTimeDelta) / 16667.0,"
+		" host.OriginalAspect, host.OriginalAspectRotated); }\n";
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	ASSERT_EQ(4u, chain.parameters.size());
+	for (const auto& parameter : chain.parameters)
+		EXPECT_FALSE(parameter.hostSource.empty());
+	postprocess::ShaderFrameInfo frame { 640, 480, 1920, 1080, 0, false, 16.f / 9.f };
+	postprocess::updateShaderHostParameters(chain.parameters, frame);
+	EXPECT_GT(chain.parameters[0].value, 0.f);
+	EXPECT_GE(chain.parameters[1].value, 0.f);
+	EXPECT_FLOAT_EQ(16.f / 9.f, chain.parameters[2].value);
+	EXPECT_FLOAT_EQ(16.f / 9.f, chain.parameters[3].value);
+	frame.rotationPending = true;
+	postprocess::updateShaderHostParameters(chain.parameters, frame);
+	EXPECT_FLOAT_EQ(16.f / 9.f, chain.parameters[2].value);
+	EXPECT_FLOAT_EQ(9.f / 16.f, chain.parameters[3].value);
+	EXPECT_TRUE(postprocess::serializeShaderChainParameterValues(chain.parameters).empty());
+	postprocess::applyShaderChainParameterValues(chain, chain.parameters[2].name + "=99");
+	EXPECT_FLOAT_EQ(16.f / 9.f, chain.parameters[2].value);
+	frame.originalAspect = 0.f;
+	postprocess::updateShaderHostParameters(chain.parameters, frame);
+	EXPECT_FLOAT_EQ(4.f / 3.f, chain.parameters[2].value);
+	EXPECT_FLOAT_EQ(3.f / 4.f, chain.parameters[3].value);
+	const auto& source = chain.sources[0];
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, source.slangParameters, {}, 1, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+	ASSERT_TRUE(postprocess::translateGlslVertexToHlsl(source.vertex, source.slangParameters, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "vs_4_0");
+#if defined(USE_VULKAN)
+	std::string fragment, vertex;
+	ASSERT_TRUE(postprocess::buildVulkanShaderSources(source, source.slangParameters, {}, 1, fragment, vertex, error)) << error;
+	ShaderCompiler::Init();
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eFragment, fragment, error)) << error;
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eVertex, vertex, error)) << error;
+	ShaderCompiler::Term();
+#endif
+}
+
 TEST(PostProcessingChainTest, PreservesComputeTextureVersionsAndDispatchGroupCounts)
 {
 	ShaderResourceDirectory directory;
@@ -2507,6 +2646,22 @@ TEST(PostProcessingChainTest, RoutesSourceMipmapsAroundAuxiliaryEffectPasses)
 	chain.passes[2].useMipmaps = true;
 	const auto mipmaps = postprocess::resolveShaderPassOutputMipmaps(chain);
 	EXPECT_TRUE(mipmaps[0][0]); EXPECT_FALSE(mipmaps[1][0]);
+}
+
+TEST(PostProcessingChainTest, ProvisionsInputMipmapsForConsumersAfterAuxiliaryPasses)
+{
+	std::vector<postprocess::ShaderPass> passes(3);
+	passes[0].updatesSource = passes[1].updatesSource = false;
+	passes[2].useMipmaps = true;
+	EXPECT_TRUE(postprocess::shaderInputNeedsMipmaps(passes));
+	EXPECT_TRUE(postprocess::shaderInputNeedsMipmaps(passes, 1));
+	EXPECT_TRUE(postprocess::shaderInputNeedsMipmaps(passes, 2));
+	EXPECT_FALSE(postprocess::shaderInputNeedsMipmaps(passes, 3));
+	passes[1].updatesSource = true;
+	EXPECT_FALSE(postprocess::shaderInputNeedsMipmaps(passes));
+	EXPECT_TRUE(postprocess::shaderInputNeedsMipmaps(passes, 2));
+	passes[2].useMipmaps = false;
+	EXPECT_FALSE(postprocess::shaderInputNeedsMipmaps(passes, 2));
 }
 
 TEST(PostProcessingChainTest, WaitsForTheLoadingNoticeToReachAPreviousFrame)

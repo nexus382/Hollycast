@@ -217,7 +217,11 @@ bool compileStage(const std::string& body, const std::string& companion,
 			header += "layout(location=0) in vec2 HollycastPosition;\nlayout(location=1) in vec2 in_uv;\n#define in_pos vec3(HollycastPosition, 1.0)\n";
 			const bool position4 = retroArchGlsl || std::regex_search(source, std::regex(R"(gl_Position\s*=\s*VertexCoord\s*;)"));
 			header += position4 ? "#define VertexCoord vec4(in_pos, 1.0)\n" : "#define VertexCoord in_pos\n";
-			header += "#define TexCoord in_uv\n#define Position VertexCoord\n#define aPosition VertexCoord\n#define aTexCoord in_uv\n";
+			// A shader may use TexCoord as its own output varying. The legacy
+			// input alias must not rename that declaration to the VBO attribute.
+			if (!std::regex_search(source, std::regex(R"(\bout\s+\w+\s+TexCoord\b)")))
+				header += "#define TexCoord in_uv\n";
+			header += "#define Position VertexCoord\n#define aPosition VertexCoord\n#define aTexCoord in_uv\n";
 			source = std::regex_replace(source, std::regex(R"((?:layout\s*\([^\n]*\)\s*)?out\s+vec2\s+vTexCoord\s*;)"), "");
 			if (defaultTexCoord) {
 				header += "layout(location=0) out vec2 vTexCoord;\n";

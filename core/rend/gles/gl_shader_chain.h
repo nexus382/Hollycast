@@ -59,9 +59,11 @@ private:
 		uint32_t lookupIndex = postprocess::InvalidShaderPass;
 		GLuint unit = 0;
 		bool hasSamplerState = false;
-		bool linearFilter = false;
+		bool minLinear = false, magLinear = false, mipLinear = false;
 		bool useMipmaps = false;
-		postprocess::ShaderWrapMode wrapMode = postprocess::ShaderWrapMode::ClampToEdge;
+		postprocess::ShaderWrapMode wrapU = postprocess::ShaderWrapMode::ClampToEdge;
+		postprocess::ShaderWrapMode wrapV = postprocess::ShaderWrapMode::ClampToEdge;
+		postprocess::ShaderWrapMode wrapW = postprocess::ShaderWrapMode::ClampToEdge;
 		GLuint sampler = 0;
 		GLuint mipSampler = 0;
 		GLenum textureTarget = GL_TEXTURE_2D;

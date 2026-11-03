@@ -7,6 +7,7 @@
 #include "archive/ZipArchive.h"
 #include "shader_chain.h"
 #include "stbi.h"
+#include "hw/pvr/spg.h"
 
 #include <algorithm>
 #include <cctype>
@@ -665,6 +666,10 @@ void updateShaderHostParameters(std::vector<ShaderParameter> &parameters, const 
 	const float time = std::chrono::duration<float, std::milli>(now - start).count();
 	const float delta = std::chrono::duration<float, std::milli>(now - previous).count();
 	previous = now;
+	const u32 frameCycles = spg_getFrameCycles();
+	const float originalFps = frameCycles != 0 ? static_cast<float>(SH4_MAIN_CLOCK) / frameCycles : 60.f;
+	const float aspect = frame.originalAspect > 0.f ? frame.originalAspect
+			: static_cast<float>(std::max(1, frame.sourceWidth)) / std::max(1, frame.sourceHeight);
 	HostInput input;
 	{
 		std::lock_guard<std::mutex> lock(inputMutex);
@@ -678,7 +683,15 @@ void updateShaderHostParameters(std::vector<ShaderParameter> &parameters, const 
 		const float priorValue = v[0];
 		v.fill(0.f);
 		const auto &source = parameter.hostSource;
-		if (source == "timer")
+		if (source == "OriginalFPS")
+			v[0] = originalFps;
+		else if (source == "FrameTimeDelta")
+			v[0] = std::clamp(delta * 1000.f, 0.f, 1.e9f);
+		else if (source == "OriginalAspect")
+			v[0] = aspect;
+		else if (source == "OriginalAspectRotated")
+			v[0] = frame.rotationPending ? 1.f / aspect : aspect;
+		else if (source == "timer")
 			v[0] = time;
 		else if (source == "frametime")
 			v[0] = delta;

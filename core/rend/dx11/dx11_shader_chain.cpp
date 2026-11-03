@@ -272,23 +272,25 @@ bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, st
 			const auto samplerConfig = std::find_if(pass.samplers.begin(), pass.samplers.end(), [&](const auto& sampler) {
 				return sampler.bindingName == inputs[slot].bindingName;
 			});
-			if (inputs[slot].kind != postprocess::ShaderInputKind::LookupTexture
-					&& (samplerConfig != pass.samplers.end() || pass.wrapMode != postprocess::ShaderWrapMode::ClampToEdge)) {
-				const bool linear = samplerConfig != pass.samplers.end() ? samplerConfig->linearFilter : pass.linearFilter;
-				const auto wrap = samplerConfig != pass.samplers.end() ? samplerConfig->wrapMode : pass.wrapMode;
+			if (samplerConfig != pass.samplers.end() || (inputs[slot].kind != postprocess::ShaderInputKind::LookupTexture
+					&& pass.wrapMode != postprocess::ShaderWrapMode::ClampToEdge)) {
+				const bool minLinear = samplerConfig != pass.samplers.end() ? samplerConfig->minLinear : pass.linearFilter;
+				const bool magLinear = samplerConfig != pass.samplers.end() ? samplerConfig->magLinear : pass.linearFilter;
+				const bool mipLinear = samplerConfig != pass.samplers.end() ? samplerConfig->mipLinear : pass.linearFilter;
 				D3D11_SAMPLER_DESC description {};
-				description.Filter = linear
-						? D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT : D3D11_FILTER_MIN_MAG_MIP_POINT;
-				description.AddressU = textureAddressMode(wrap);
-				description.AddressV = description.AddressW = description.AddressU;
+				// D3D11 encodes the three linear-filter choices in independent bits.
+				description.Filter = static_cast<D3D11_FILTER>((minLinear ? D3D11_FILTER_MIN_LINEAR_MAG_MIP_POINT : 0)
+						| (magLinear ? D3D11_FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT : 0));
+				description.AddressU = textureAddressMode(samplerConfig != pass.samplers.end() ? samplerConfig->wrapU : pass.wrapMode);
+				description.AddressV = textureAddressMode(samplerConfig != pass.samplers.end() ? samplerConfig->wrapV : pass.wrapMode);
+				description.AddressW = textureAddressMode(samplerConfig != pass.samplers.end() ? samplerConfig->wrapW : pass.wrapMode);
 				description.ComparisonFunc = D3D11_COMPARISON_NEVER;
 				description.MaxLOD = 0.f;
 				if (FAILED(device->CreateSamplerState(&description, &binding.sampler.get()))) {
 					error = "DirectX 11 could not create shader sampler '" + inputs[slot].bindingName + "'.";
 					return false;
 				}
-				description.Filter = linear
-						? D3D11_FILTER_MIN_MAG_MIP_LINEAR : D3D11_FILTER_MIN_MAG_MIP_POINT;
+				description.Filter = static_cast<D3D11_FILTER>(description.Filter | (mipLinear ? D3D11_FILTER_MIN_MAG_POINT_MIP_LINEAR : 0));
 				description.MaxLOD = D3D11_FLOAT32_MAX;
 				if (FAILED(device->CreateSamplerState(&description, &binding.mipSampler.get()))) {
 					error = "DirectX 11 could not create mipmapped shader sampler '" + inputs[slot].bindingName + "'.";
@@ -1096,6 +1098,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 				if (binding.lookupIndex < lookupTextures.size()) {
 					view = lookupTextures[binding.lookupIndex].view;
 					sampler = lookupTextures[binding.lookupIndex].sampler;
+					resourceHasMipmaps = lookupTextures[binding.lookupIndex].config.useMipmaps;
 				}
 				break;
 			}
@@ -1106,7 +1109,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 				return false;
 			}
 			program.resourceViews[resourceIndex] = view;
-			if (!sampler && binding.sampler)
+			if (binding.sampler)
 				sampler = binding.useMipmaps && resourceHasMipmaps ? binding.mipSampler : binding.sampler;
 			program.samplers[resourceIndex] = sampler ? sampler
 					: program.pass.linearFilter

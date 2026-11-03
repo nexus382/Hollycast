@@ -108,6 +108,7 @@ private:
 		bool nativeFxStages = false;
 		uint32_t historyDepth = 1;
 		uint32_t targetWidth = 0;
+		bool inputNeedsMipmaps = false;
 		uint32_t targetHeight = 0;
 	};
 	struct LookupTexture {

@@ -659,7 +659,7 @@ void DX11Renderer::displayFramebuffer()
 				{ static_cast<int>(width), static_cast<int>(height),
 						config::Rotate90 ? viewportHeight : viewportWidth,
 						config::Rotate90 ? viewportWidth : viewportHeight,
-						FrameCount, config::Rotate90 }, displayTexture, presentationTransformApplied,
+						FrameCount, config::Rotate90, config::Rotate90 ? 1.f / aspectRatio : aspectRatio }, displayTexture, presentationTransformApplied,
 				sceneDepthValid ? shaderDepthView : ComPtr<ID3D11ShaderResourceView> {});
 	}
 

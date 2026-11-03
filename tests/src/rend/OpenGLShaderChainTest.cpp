@@ -158,7 +158,7 @@ TEST_F(OpenGLShaderChainTest, AppliesVolumeSamplerWrapToDepthAxis)
 	gl.gl_major = 4; gl.gl_minor = 3;
 	// Use an effect output so this exercises sampler objects, not the lookup
 	// texture's own wrap settings. The two depth slices contain different colors.
-	const auto effect = writeShader("volume.fx",
+	std::string source =
 			"texture3D Volume { Width = 1; Height = 1; Depth = 2; Format = RGBA8; };\n"
 			"storage3D WriteVolume { Texture = Volume; };\n"
 			"sampler3D VolumeSampler { Texture = Volume; MinFilter = POINT; MagFilter = POINT; MipFilter = POINT;"
@@ -167,8 +167,40 @@ TEST_F(OpenGLShaderChainTest, AppliesVolumeSamplerWrapToDepthAxis)
 			" { tex3Dstore(WriteVolume, int3(id), float4(0.0, 0.0, id.z, 1.0)); }\n"
 			"float4 Pixel() : SV_Target { return tex3D(VolumeSampler, float3(0.25, 0.25, 1.25)); }\n"
 			"technique VolumeEdge { pass Write { ComputeShader = Fill; DispatchSizeX = 1; DispatchSizeY = 1; DispatchSizeZ = 2; }"
-			" pass Present { PixelShader = Pixel; } }\n");
+			" pass Present { PixelShader = Pixel; } }\n";
+	const auto effect = writeShader("volume.fx", source);
 	expectPixels({ effect }, { 0, 0, 255, 255 });
+	source.replace(source.find("AddressW = CLAMP"), std::string("AddressW = CLAMP").size(), "AddressW = WRAP");
+	const auto wrapped = writeShader("volume-wrap.fx", source);
+	expectPixels({ wrapped }, { 0, 0, 0, 255 });
+}
+
+TEST_F(OpenGLShaderChainTest, KeepsLookupSamplerBindingsIndependent)
+{
+	std::string image(18, '\0');
+	image[2] = 2; image[12] = 2; image[14] = 1; image[16] = 24; image[17] = 0x20;
+	std::ofstream(directory / "lookup.tga", std::ios::binary)
+			<< image << std::string("\0\0\xff\xff\0\0", 6);
+	const auto effect = writeShader("lookup.fx",
+			"texture2D Lookup < source = \"lookup.tga\"; >;\n"
+			"sampler2D PointSampler { Texture = Lookup; MinFilter = LINEAR; MagFilter = POINT; MipFilter = NONE; };\n"
+			"sampler2D LinearSampler { Texture = Lookup; MinFilter = POINT; MagFilter = LINEAR; MipFilter = NONE; };\n"
+			"float4 Pixel() : SV_Target { float4 a = tex2D(PointSampler, float2(0.5, 0.5));"
+			" float4 b = tex2D(LinearSampler, float2(0.5, 0.5)); return float4(a.r, b.r, b.b, 1.0); }\n"
+			"technique Main { pass { PixelShader = Pixel; } }\n");
+	expectPixels({ effect }, { 0, 128, 128, 255 });
+}
+
+TEST_F(OpenGLShaderChainTest, ProvidesSlangDisplayAspectToTheFragmentStage)
+{
+	const auto shader = writeShader("aspect.slang", "#version 450\n"
+			"layout(push_constant) uniform Host { float OriginalAspect; float OriginalAspectRotated; } host;\n"
+			"#pragma stage vertex\nlayout(location=0) in vec4 Position;\nlayout(location=1) in vec2 Coord;\n"
+			"layout(location=0) out vec2 TexCoord;\nvoid main() { gl_Position = Position; TexCoord = Coord; }\n"
+			"#pragma stage fragment\nlayout(location=0) in vec2 TexCoord;\n"
+			"layout(location=0) out vec4 FragColor;\n"
+			"void main() { FragColor = vec4(host.OriginalAspect / 2.0, host.OriginalAspectRotated, TexCoord.x * 0.0, 1.0); }\n");
+	expectPixels({ shader }, { 227, 143, 0, 255 }, { 8, 8, 8, 8, 0, true, 16.f / 9.f });
 }
 
 TEST_F(OpenGLShaderChainTest, RendersDefaultFxAndIsolatesPassMasks)

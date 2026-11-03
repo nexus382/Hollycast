@@ -856,7 +856,7 @@ bool OpenGLRenderer::renderLastFrame()
 	{
 		if (GlFramebuffer *processed = gl.shaderChain->render(framebuffer->getTexture(),
 				{ sourceWidth, sourceHeight, outwidth - dx * 2, outheight - dy * 2,
-						FrameCount, config::Rotate90 }, presentationTransformApplied,
+						FrameCount, config::Rotate90, config::Rotate90 ? 1.f / gl.ofbo.aspectRatio : gl.ofbo.aspectRatio }, presentationTransformApplied,
 				gl.ofbo2.ready ? 0 : gl.postProcessDepthTexture != 0
 						? gl.postProcessDepthTexture : framebuffer->getDepthTexture(),
 				gl.postProcessDepthWidth, gl.postProcessDepthHeight))

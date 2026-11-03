@@ -128,6 +128,39 @@ TEST(SlangFrontendTest, ReflectsSizeOnlyTexturesAndMatchingDuplicateParameters)
 	EXPECT_NE(std::string::npos, error.find("Conflicting"));
 }
 
+TEST(SlangFrontendTest, DiscardsUnusedUniformFieldsButRejectsUnsupportedReads)
+{
+	postprocess::SlangShaderIR shader;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseSlangFrontend(
+		"#version 450\nlayout(push_constant) uniform Host { float UNUSED; uint FrameCount; } host;\n"
+		"void main() { float count = float(host.FrameCount); }\n", shader, error)) << error;
+	EXPECT_EQ(std::string::npos, shader.fragment.source.find("UNUSED"));
+	EXPECT_NE(std::string::npos, shader.fragment.source.find("uint(FrameCount)"));
+	ASSERT_TRUE(postprocess::parseSlangFrontend(
+		"#version 450\nuniform Host { float UNUSED; };\nvoid main() {}\n", shader, error)) << error;
+	EXPECT_FALSE(postprocess::parseSlangFrontend(
+		"#version 450\nuniform Host { float UNKNOWN; } host;\n"
+		"void main() { float value = host.UNKNOWN; }\n", shader, error));
+	EXPECT_NE(std::string::npos, error.find("UNKNOWN"));
+}
+
+TEST(SlangFrontendTest, MapsExplicitVertexInputsByLocation)
+{
+	postprocess::SlangShaderIR shader;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseSlangFrontend(
+		"#version 450\n#pragma stage vertex\n"
+		"layout(location=0) in vec4 CustomPosition;\nlayout(location=1) in vec3 Coord;\n"
+		"layout(location=0) out vec2 TexCoord;\n"
+		"void main() { gl_Position = CustomPosition; TexCoord = Coord.xy; }\n"
+		"#pragma stage fragment\nvoid main() {}\n", shader, error)) << error;
+	EXPECT_EQ(std::string::npos, shader.vertex.source.find("CustomPosition"));
+	EXPECT_EQ(std::string::npos, shader.vertex.source.find("in vec3 Coord"));
+	EXPECT_NE(std::string::npos, shader.vertex.source.find("vec4(in_pos, 1.0)"));
+	EXPECT_NE(std::string::npos, shader.vertex.source.find("vec3(in_uv, 0.0)"));
+}
+
 TEST(SlangFrontendTest, DistinguishesTextureCallsFromResourceDeclarations)
 {
 	postprocess::SlangShaderIR shader;

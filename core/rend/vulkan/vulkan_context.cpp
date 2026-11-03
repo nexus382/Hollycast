@@ -1360,7 +1360,8 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 				processed = shaderChain->render(image, imageView, extent,
 						{ static_cast<int>(extent.width), static_cast<int>(extent.height),
 								static_cast<int>(presentRect.extent.width), static_cast<int>(presentRect.extent.height),
-								static_cast<uint32_t>(FrameCount), config::Rotate90 }, processedView,
+								static_cast<uint32_t>(FrameCount), config::Rotate90,
+								config::Rotate90 ? 1.f / aspectRatio : aspectRatio }, processedView,
 						presentationTransformApplied, depthImage, depthView);
 				if (processed)
 					imageView = processedView;

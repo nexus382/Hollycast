@@ -45,7 +45,8 @@
 namespace postprocess {
 namespace {
 
-constexpr int MaxPassCount = 32;
+// Large multi-pass presets still have to fit the source, parameter and GPU budgets.
+constexpr int MaxPassCount = 128;
 constexpr uint32_t MaxHistoryFrames = 32;
 constexpr uint32_t MaxShaderIncludeFiles = 256;
 
@@ -64,6 +65,7 @@ ShaderParameter projectParameter(const SlangParameter& parameter)
 	projected.minimum = projected.minimumValues[0];
 	projected.maximum = projected.maximumValues[0];
 	projected.step = projected.stepValues[0];
+	projected.hostSource = parameter.hostSource;
 	return projected;
 }
 
@@ -629,17 +631,10 @@ bool isReShadeLookupTexture(const ReShadeEffect& effect, const std::string& text
 	return source != texture->annotations.end() && source->value != "color";
 }
 
-struct ReShadeSamplerState {
-	std::optional<bool> linearFilter = true;
-	bool useMipmaps = false;
-	std::optional<ShaderWrapMode> wrapMode;
-};
-
-bool parseReShadeSamplerState(const ReShadeSampler& sampler, ReShadeSamplerState& state, std::string& error)
+bool parseReShadeSamplerState(const ReShadeSampler& sampler, ShaderPassSampler& state, std::string& error)
 {
+	state.minLinear = state.magLinear = true;
 	const std::regex assignment(R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
-	std::optional<bool> minLinear;
-	std::optional<bool> magLinear;
 	for (std::sregex_iterator it(sampler.definition.begin(), sampler.definition.end(), assignment), end;
 			it != end; ++it) {
 		std::string name = (*it)[1].str();
@@ -651,23 +646,29 @@ bool parseReShadeSamplerState(const ReShadeSampler& sampler, ReShadeSamplerState
 		if (name == "texture")
 			continue;
 		if (name == "filter") {
-			if (value == "MIN_MAG_MIP_POINT" || value == "MIN_MAG_POINT_MIP_LINEAR")
-				state.linearFilter = false;
-			else if (value == "MIN_MAG_LINEAR_MIP_POINT" || value == "MIN_MAG_MIP_LINEAR")
-				state.linearFilter = true;
-			else
+			static constexpr const char *modes[] = { "MIN_MAG_MIP_POINT", "MIN_MAG_POINT_MIP_LINEAR",
+					"MIN_POINT_MAG_LINEAR_MIP_POINT", "MIN_POINT_MAG_MIP_LINEAR",
+					"MIN_LINEAR_MAG_MIP_POINT", "MIN_LINEAR_MAG_POINT_MIP_LINEAR",
+					"MIN_MAG_LINEAR_MIP_POINT", "MIN_MAG_MIP_LINEAR" };
+			unsigned mode = 0;
+			while (mode < 8 && value != modes[mode]) ++mode;
+			if (mode == 8)
 				return fail(error, "ReShade FX sampler has an unsupported Filter value.");
+			state.minLinear = (mode & 4) != 0;
+			state.magLinear = (mode & 2) != 0;
+			state.mipLinear = (mode & 1) != 0;
 			state.useMipmaps = true;
 		}
 		else if (name == "minfilter" || name == "magfilter") {
 			if (value != "POINT" && value != "LINEAR")
 				return fail(error, "ReShade FX sampler has an unsupported filter value.");
-			(name == "minfilter" ? minLinear : magLinear) = value == "LINEAR";
+			(name == "minfilter" ? state.minLinear : state.magLinear) = value == "LINEAR";
 		}
 		else if (name == "mipfilter") {
 			if (value != "POINT" && value != "LINEAR" && value != "NONE")
 				return fail(error, "ReShade FX sampler has an unsupported MipFilter value.");
 			state.useMipmaps = value != "NONE";
+			state.mipLinear = value == "LINEAR";
 		}
 		else if (name == "addressu" || name == "addressv" || name == "addressw") {
 			ShaderWrapMode parsed;
@@ -676,19 +677,11 @@ bool parseReShadeSamplerState(const ReShadeSampler& sampler, ReShadeSamplerState
 			else if (value == "WRAP") parsed = ShaderWrapMode::Repeat;
 			else if (value == "MIRROR") parsed = ShaderWrapMode::MirroredRepeat;
 			else return fail(error, "ReShade FX sampler has an unsupported address mode.");
-			if (name != "addressw") {
-				if (state.wrapMode && *state.wrapMode != parsed)
-					return fail(error, "ReShade FX sampler requires matching AddressU and AddressV modes.");
-				state.wrapMode = parsed;
-			}
+			(name == "addressu" ? state.wrapU : name == "addressv" ? state.wrapV : state.wrapW) = parsed;
 		}
 		else
 			return fail(error, "ReShade FX sampler state '" + (*it)[1].str() + "' is not supported.");
 	}
-	if (minLinear && magLinear && *minLinear != *magLinear)
-		return fail(error, "ReShade FX sampler requires matching MinFilter and MagFilter values.");
-	if (minLinear || magLinear)
-		state.linearFilter = minLinear ? *minLinear : *magLinear;
 	return true;
 }
 
@@ -698,7 +691,7 @@ bool validateReShadeSamplerStates(const ReShadeEffect& effect, std::string& erro
 		const std::string textureName = reShadeSamplerTexture(sampler);
 		if (textureName.empty())
 			return fail(error, "ReShade FX sampler '" + sampler.name + "' must reference a texture.");
-		ReShadeSamplerState state;
+		ShaderPassSampler state;
 		if (!parseReShadeSamplerState(sampler, state, error))
 			return false;
 	}
@@ -707,14 +700,12 @@ bool validateReShadeSamplerStates(const ReShadeEffect& effect, std::string& erro
 
 bool applyReShadeLookupSampler(const ReShadeSampler& sampler, ShaderPresetTexture& lookup, std::string& error)
 {
-	ReShadeSamplerState state;
+	ShaderPassSampler state;
 	if (!parseReShadeSamplerState(sampler, state, error))
 		return false;
-	if (state.linearFilter)
-		lookup.linearFilter = *state.linearFilter;
-	lookup.useMipmaps = state.useMipmaps;
-	if (state.wrapMode)
-		lookup.wrapMode = *state.wrapMode;
+	// The image needs every mip level requested by any binding. Filtering and
+	// wrapping belong to each sampler, not to this shared image allocation.
+	lookup.useMipmaps = lookup.useMipmaps || state.useMipmaps;
 	return true;
 }
 
@@ -723,16 +714,15 @@ bool applyReShadePassSamplerStates(const ReShadeEffect& effect, ShaderPass& pass
 	pass.samplers.clear();
 	for (const ReShadeSampler& sampler : effect.samplers) {
 		const std::string textureName = reShadeSamplerTexture(sampler);
-		if (isReShadeLookupTexture(effect, textureName))
-			continue;
-		ReShadeSamplerState state;
+		ShaderPassSampler state;
 		if (!parseReShadeSamplerState(sampler, state, error))
 			return false;
-		pass.samplers.push_back({ sampler.name, state.linearFilter.value_or(pass.linearFilter),
-				state.useMipmaps, state.wrapMode.value_or(ShaderWrapMode::ClampToEdge) });
+		state.bindingName = sampler.name;
+		pass.samplers.push_back(state);
 		// Existing target-allocation logic uses the pass-level bit to provision mip
 		// chains. Per-binding samplers below still decide whether each binding uses it.
-		pass.useMipmaps = pass.useMipmaps || state.useMipmaps;
+		if (!isReShadeLookupTexture(effect, textureName))
+			pass.useMipmaps = pass.useMipmaps || state.useMipmaps;
 	}
 	return true;
 }
@@ -945,7 +935,8 @@ bool expandPackageIncludes(const std::string& path, const std::string& packageRo
 	}
 	const bool slang = detectFormat(path) == ShaderFormat::Slang;
 	const std::unordered_map<std::string, std::string> defines {
-		{ "__VERSION__", slang ? "450" : "130" }, { "PARAMETER_UNIFORM", "1" }, { "GL_core_profile", "1" }
+		{ "__VERSION__", slang ? "450" : "130" }, { "PARAMETER_UNIFORM", "1" }, { "GL_core_profile", "1" },
+		{ "_HAS_ORIGINALASPECT_UNIFORMS", "1" }, { "_HAS_FRAMETIME_UNIFORMS", "1" }
 	};
 	if (slang)
 		return preprocessShaderSource(text, defines, expanded, error, shaderIncludeResolver(packageRoot), shaderSourceIdentity(path), true, true);
@@ -1382,6 +1373,17 @@ std::vector<std::vector<bool>> resolveShaderPassOutputMipmaps(const ShaderChain&
 	return requirements;
 }
 
+bool shaderInputNeedsMipmaps(const std::vector<ShaderPass>& passes, size_t firstPass)
+{
+	// Auxiliary writers leave Source intact. Its first real consumer can occur
+	// later in the graph, so allocate the needed mip levels before rendering.
+	for (size_t index = firstPass; index < passes.size(); ++index) {
+		if (passes[index].useMipmaps) return true;
+		if (passes[index].updatesSource) break;
+	}
+	return false;
+}
+
 bool resolveShaderPassInputs(ShaderChain& chain, size_t passIndex,
 		const ShaderPassSource& source, std::string& error)
 {
@@ -1566,7 +1568,8 @@ void applyShaderChainParameterValues(ShaderChain& chain, const std::string& valu
 		auto parameter = std::find_if(chain.parameters.begin(), chain.parameters.end(), [&](const ShaderParameter& candidate) {
 			return shaderParameterKey(candidate) == name;
 		});
-		if (parameter == chain.parameters.end() || parsedValues.size() != parameter->componentCount)
+		if (parameter == chain.parameters.end() || !parameter->hostSource.empty()
+				|| parsedValues.size() != parameter->componentCount)
 			continue;
 		std::array<float, 16> normalized {};
 		bool valid = true;
@@ -1638,7 +1641,7 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 	preset.load(normalizedPreset);
 	const int passCount = preset.getInt("", "shaders", -1);
 	if (passCount < 1 || passCount > MaxPassCount)
-		return fail(error, std::string(presetName) + " must declare between 1 and 32 shader passes.");
+		return fail(error, std::string(presetName) + " must declare between 1 and " + std::to_string(MaxPassCount) + " shader passes.");
 
 	const std::string basePath = parentPath(presetPath);
 	if (basePath.empty())
@@ -2468,11 +2471,8 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			}
 			if (!isWithinPackageRoot(lookup.path, packageRoot))
 				return fail(error, "ReShade FX lookup texture '" + texture.name + "' escapes its package root.");
-			const auto sampler = std::find_if(effect.samplers.begin(), effect.samplers.end(), [&](const ReShadeSampler& value) {
-				return reShadeSamplerTexture(value) == texture.name;
-			});
-			if (sampler != effect.samplers.end()) {
-				if (!applyReShadeLookupSampler(*sampler, lookup, error))
+			for (const auto& sampler : effect.samplers) {
+				if (reShadeSamplerTexture(sampler) == texture.name && !applyReShadeLookupSampler(sampler, lookup, error))
 					return false;
 			}
 			parsed.textures.push_back(std::move(lookup));
@@ -2602,7 +2602,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		for (const auto& resource : passSource.slangResources)
 			if (resource.numericType != ShaderNumericType::Float) {
 				for (auto& sampler : pass.samplers)
-					if (sampler.bindingName == resource.name) { sampler.linearFilter = false; sampler.useMipmaps = false; }
+					if (sampler.bindingName == resource.name) { sampler.minLinear = sampler.magLinear = sampler.mipLinear = false; sampler.useMipmaps = false; }
 				for (auto& texture : chain.textures)
 					if (texture.name == resource.alias) { texture.linearFilter = false; texture.useMipmaps = false; }
 			}

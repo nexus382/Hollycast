@@ -56,7 +56,6 @@ constexpr char VertexPreamble[] = R"(
 layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec2 in_uv;
 #define VertexCoord in_pos
-#define TexCoord in_uv
 )";
 
 constexpr uint32_t MaxShaderInputs = 16;
@@ -398,12 +397,16 @@ bool postprocess::buildVulkanShaderSources(const ShaderPassSource& source,
 	fragmentSource = VulkanSource().addSource(fragmentHeader).addSource(fragment).generate();
 	vertexSource.clear();
 	if (!vertex.empty()) {
-		const std::string vertexHeader = vertexPreamble(parameters, bindings, source.retroArchGlsl, source.nativeFxStages, includeTexCoord);
+		std::string vertexHeader = vertexPreamble(parameters, bindings, source.retroArchGlsl, source.nativeFxStages, includeTexCoord);
 		if (vertexHeader.empty()) {
 			error = "Vulkan shader chains may use at most "
 					+ std::to_string(postprocess::MaxShaderParameterComponents) + " parameter components per pass.";
 			return false;
 		}
+		// An authored TexCoord varying owns this name; the convenience input
+		// alias must not rename it to the VBO's in_uv attribute.
+		if (!source.nativeFxStages && varyingLocations.count("TexCoord") == 0)
+			vertexHeader += "#define TexCoord in_uv\n";
 		vertexSource = VulkanSource().addSource(vertexHeader).addSource(vertex).generate();
 	}
 	error.clear();
@@ -701,19 +704,19 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 			const auto samplerConfig = std::find_if(pass.samplers.begin(), pass.samplers.end(), [&](const auto& sampler) {
 				return sampler.bindingName == shaderBindings[index].bindingName;
 			});
-			if (samplerConfig != pass.samplers.end()
-					&& shaderBindings[index].kind != postprocess::ShaderInputKind::LookupTexture) {
+			if (samplerConfig != pass.samplers.end()) {
 				vk::SamplerCreateInfo samplerInfo;
-				samplerInfo.magFilter = samplerConfig->linearFilter ? vk::Filter::eLinear : vk::Filter::eNearest;
-				samplerInfo.minFilter = samplerInfo.magFilter;
+				samplerInfo.magFilter = samplerConfig->magLinear ? vk::Filter::eLinear : vk::Filter::eNearest;
+				samplerInfo.minFilter = samplerConfig->minLinear ? vk::Filter::eLinear : vk::Filter::eNearest;
 				samplerInfo.mipmapMode = vk::SamplerMipmapMode::eNearest;
-				samplerInfo.addressModeU = samplerAddressMode(samplerConfig->wrapMode);
-				samplerInfo.addressModeV = samplerInfo.addressModeW = samplerInfo.addressModeU;
+				samplerInfo.addressModeU = samplerAddressMode(samplerConfig->wrapU);
+				samplerInfo.addressModeV = samplerAddressMode(samplerConfig->wrapV);
+				samplerInfo.addressModeW = samplerAddressMode(samplerConfig->wrapW);
 				samplerInfo.borderColor = vk::BorderColor::eFloatTransparentBlack;
 				samplerInfo.maxLod = 0.f;
 				try {
 					binding.sampler = context->GetDevice().createSamplerUnique(samplerInfo);
-					samplerInfo.mipmapMode = samplerConfig->linearFilter
+					samplerInfo.mipmapMode = samplerConfig->mipLinear
 							? vk::SamplerMipmapMode::eLinear : vk::SamplerMipmapMode::eNearest;
 					samplerInfo.maxLod = vk::LodClampNone;
 					binding.mipSampler = context->GetDevice().createSamplerUnique(samplerInfo);
@@ -838,9 +841,11 @@ bool VulkanShaderChain::updateConfiguredChain()
 				return !programs.empty();
 			}
 	const std::vector<std::vector<bool>> mipmapRequirements = postprocess::resolveShaderPassOutputMipmaps(chain);
-	for (size_t passIndex = 0; passIndex < candidate.size(); ++passIndex)
+	for (size_t passIndex = 0; passIndex < candidate.size(); ++passIndex) {
+		candidate[passIndex].inputNeedsMipmaps = postprocess::shaderInputNeedsMipmaps(chain.passes, passIndex);
 		for (size_t outputIndex = 0; outputIndex < candidate[passIndex].outputs.size(); ++outputIndex)
 			candidate[passIndex].outputs[outputIndex].needsMipmaps = mipmapRequirements[passIndex][outputIndex];
+	}
 	for (const Program& program : candidate)
 		for (const Program::Output& output : program.outputs)
 			if (output.needsMipmaps && !output.supportsMipmaps) {
@@ -1265,7 +1270,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	}
 	if (displayBoundary != programs.end() && postprocess::shouldComposeDisplayInput(frame, false)) {
 		if (!postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
-				postprocess::ShaderTargetFormat::Default, {}, displayBoundary->pass.useMipmaps,
+				postprocess::ShaderTargetFormat::Default, {}, displayBoundary->inputNeedsMipmaps,
 				swapchainCopies, targetBytes, targetBudgetError)) {
 			postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 			return false;
@@ -1275,9 +1280,9 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			budgetFrame.sourceHeight = frame.viewportHeight;
 		}
 	}
-	if ((programs.front().pass.useMipmaps || sourceHistoryDepth > 1)
+	if ((programs.front().inputNeedsMipmaps || sourceHistoryDepth > 1)
 			&& !postprocess::accumulateShaderTargetBytes(budgetFrame.sourceWidth, budgetFrame.sourceHeight,
-					postprocess::ShaderTargetFormat::Default, {}, programs.front().pass.useMipmaps,
+					postprocess::ShaderTargetFormat::Default, {}, programs.front().inputNeedsMipmaps,
 					sourceHistoryDepth * swapchainCopies, targetBytes, targetBudgetError)) {
 		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		return false;
@@ -1448,11 +1453,11 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		return true;
 	};
 	if (programs.front().pass.composeDisplayInput
-			&& !composeDisplayInput(programs.front().pass.useMipmaps))
+			&& !composeDisplayInput(programs.front().inputNeedsMipmaps))
 		return false;
 
 	const size_t currentSourceTarget = frame.frameCount % sourceHistoryDepth;
-	const bool sourceNeedsMipmaps = programs.front().pass.useMipmaps && !inputHasMipmaps;
+	const bool sourceNeedsMipmaps = programs.front().inputNeedsMipmaps && !inputHasMipmaps;
 	if (sourceNeedsMipmaps || sourceHistoryDepth > 1) {
 		if (sourceTargets[imageIndex].size() != sourceHistoryDepth)
 			sourceTargets[imageIndex].resize(sourceHistoryDepth);
@@ -1521,7 +1526,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	}
 	for (size_t index = 0; index < programs.size(); ++index) {
 		Program& program = programs[index];
-		if (program.pass.composeDisplayInput && !composeDisplayInput(program.pass.useMipmaps))
+		if (program.pass.composeDisplayInput && !composeDisplayInput(program.inputNeedsMipmaps))
 			return false;
 		if (index == 0 || program.pass.layerIndex != programs[index - 1].pass.layerIndex) {
 			originalView = inputView;
@@ -1737,6 +1742,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				}
 				view = lookupTextures[binding.lookupIndex].image.sampleView.get();
 				resourceSampler = lookupTextures[binding.lookupIndex].sampler.get();
+				resourceHasMipmaps = lookupTextures[binding.lookupIndex].image.mipLevels > 1;
 				break;
 			}
 			}
@@ -1745,8 +1751,8 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				postprocess::reportShaderFrameStatus(activePath, error);
 				return false;
 			}
-			if (binding.input.kind != postprocess::ShaderInputKind::LookupTexture
-					&& binding.input.kind != postprocess::ShaderInputKind::Depth) {
+			if (binding.sampler || (binding.input.kind != postprocess::ShaderInputKind::LookupTexture
+					&& binding.input.kind != postprocess::ShaderInputKind::Depth)) {
 				if (binding.sampler)
 					resourceSampler = binding.useMipmaps && resourceHasMipmaps
 							? binding.mipSampler.get() : binding.sampler.get();

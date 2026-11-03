@@ -52,6 +52,8 @@ struct SlangParameter {
 	SlangParameterValue minimum;
 	SlangParameterValue maximum;
 	SlangParameterValue step;
+	// Internal host uniforms share the parameter transport but never become user controls.
+	std::string hostSource;
 };
 
 // Shared typed-range contract for every shader frontend.

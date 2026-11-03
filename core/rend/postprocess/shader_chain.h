@@ -141,9 +141,11 @@ struct ShaderPassInput {
 
 struct ShaderPassSampler {
 	std::string bindingName;
-	bool linearFilter = false;
+	bool minLinear = false, magLinear = false, mipLinear = false;
 	bool useMipmaps = false;
-	ShaderWrapMode wrapMode = ShaderWrapMode::ClampToEdge;
+	ShaderWrapMode wrapU = ShaderWrapMode::ClampToEdge;
+	ShaderWrapMode wrapV = ShaderWrapMode::ClampToEdge;
+	ShaderWrapMode wrapW = ShaderWrapMode::ClampToEdge;
 };
 
 // Every pass has a primary output. Additional outputs are explicit so a
@@ -286,6 +288,8 @@ struct ShaderFrameInfo {
 	// Rotation remains a presentation operation for unscaled Slang chains. A
 	// backend must not pre-scale an unrotated source into rotated dimensions.
 	bool rotationPending = false;
+	// Display aspect can differ from the pixel ratio (for example a widescreen cheat).
+	float originalAspect = 0.f;
 };
 
 struct ShaderChainStatus {
@@ -452,6 +456,7 @@ bool loadSlangPreset(const std::string& presetPath, ShaderChain& chain, std::str
 // Returns the output mip-chain requirements for every pass. This keeps target
 // allocation and generation identical across the renderer backends.
 std::vector<std::vector<bool>> resolveShaderPassOutputMipmaps(const ShaderChain& chain);
+bool shaderInputNeedsMipmaps(const std::vector<ShaderPass>& passes, size_t firstPass = 0);
 
 // Builds a chain from a selected GLSL, GLSL preset, Slang, Slang preset, or ReShade FX file
 // and reflects the parameters that its backend-neutral source exposes.

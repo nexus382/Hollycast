@@ -444,7 +444,8 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 	if (source.empty())
 		return true;
 	std::string preprocessed;
-	if (!preprocessShaderSource(source, { { "__VERSION__", "450" }, { "PARAMETER_UNIFORM", "1" } },
+	if (!preprocessShaderSource(source, { { "__VERSION__", "450" }, { "PARAMETER_UNIFORM", "1" },
+			{ "_HAS_ORIGINALASPECT_UNIFORMS", "1" }, { "_HAS_FRAMETIME_UNIFORMS", "1" } },
 			preprocessed, error))
 		return false;
 	// Macro expansion has already happened. Keeping the definitions would expand
@@ -484,11 +485,13 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 	std::vector<std::pair<std::string, std::string>> replacements;
 	std::smatch match;
 	while (std::regex_search(source, match, block)) {
+		const std::string instance = match[2].str();
 		std::string declarations;
 		std::istringstream blockLines(match[1].str());
 		bool blockComment = false;
 		for (std::string line; std::getline(blockLines, line);)
 			declarations += stripComments(line, blockComment) + '\n';
+		source.erase(match.position(), match.length());
 		std::istringstream members(declarations);
 		for (std::string declaration; std::getline(members, declaration, ';');) {
 			if (trim(declaration).empty())
@@ -498,6 +501,7 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 				return fail(error, "Unsupported Slang uniform-block member: " + trim(declaration));
 			const std::string type = field[1].str();
 			const std::string name = field[2].str();
+			const std::string binding = instance.empty() ? name : instance + "\\s*\\.\\s*" + name;
 			std::string expression;
 			if (name == "MVP" || name == "MVPMatrix")
 				expression = "mat4(1.0)";
@@ -507,10 +511,22 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 				expression = type + "(" + name + ")";
 			else if (name == "FrameDirection")
 				expression = type + "(1)";
-			else if (name == "OriginalAspect")
-				expression = "(OriginalSize.x / OriginalSize.y)";
-			else if (name == "OriginalAspectRotated")
-				expression = "((Rotation % 2) == 0 ? OriginalSize.x / OriginalSize.y : OriginalSize.y / OriginalSize.x)";
+			else if (name == "OriginalAspect" || name == "OriginalAspectRotated"
+					|| name == "OriginalFPS" || name == "FrameTimeDelta") {
+				// Dynamic host values share the parameter transport on all backends.
+				// A distinct name prevents recursive uniform-member replacement.
+				const std::string hostName = "HollycastHost" + name;
+				if (std::none_of(shader.parameters.begin(), shader.parameters.end(),
+						[&](const SlangParameter& parameter) { return parameter.name == hostName; })) {
+					SlangParameter parameter;
+					parameter.name = parameter.label = hostName;
+					parameter.hostSource = name;
+					parameter.maximum.values[0] = 1.e9f;
+					parameter.step.values[0] = 1.f;
+					shader.parameters.push_back(std::move(parameter));
+				}
+				expression = type + "(" + hostName + ")";
+			}
 			else if (std::any_of(shader.parameters.begin(), shader.parameters.end(),
 					[&](const SlangParameter& parameter) { return parameter.name == name; }))
 				expression = name;
@@ -526,22 +542,29 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 				const std::string dimensions = "vec2(textureSize(" + textureName + ", 0))";
 				expression = "vec4(" + dimensions + ", vec2(1.0) / " + dimensions + ")";
 			}
+			else if (!std::regex_search(source, std::regex("\\b" + binding + "\\b")))
+				// Shared blocks may declare fields absent from this shader's parameters.
+				// Unused fields disappear during native compilation as well.
+				continue;
 			else
 				return fail(error, "Unsupported Slang uniform semantic '" + name + "'.");
-			const std::string binding = match[2].matched ? match[2].str() + "\\s*\\.\\s*" + name : name;
 			replacements.emplace_back(binding, "(" + expression + ")");
 		}
-		source.erase(match.position(), match.length());
 	}
 	for (const auto& replacement : replacements)
 		source = std::regex_replace(source, std::regex("\\b" + replacement.first + "\\b"), replacement.second);
 	if (vertex) {
-		const std::regex input(R"((?:layout\s*\([^)]*\)\s*)?in\s+(vec[234])\s+(Position|VertexCoord|TexCoord)\s*;)");
+		// Explicit attribute locations define position and UV inputs even when
+		// authors choose different names. Unqualified legacy names still work.
+		const std::regex input(R"((?:layout\s*\(\s*location\s*=\s*([01])\s*\)\s*in\s+(vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)|in\s+(vec[234])\s+(Position|VertexCoord|TexCoord))\s*;)");
 		while (std::regex_search(source, match, input)) {
-			const std::string name = match[2].str();
-			const std::string type = match[1].str();
+			const bool explicitLocation = match[1].matched;
+			const std::string name = match[explicitLocation ? 3 : 5].str();
+			const std::string type = match[explicitLocation ? 2 : 4].str();
+			const bool texCoord = explicitLocation ? match[1] == "1" : name == "TexCoord";
 			source.erase(match.position(), match.length());
-			const std::string value = name == "TexCoord" ? "in_uv"
+			const std::string value = texCoord
+					? (type == "vec4" ? "vec4(in_uv, 0.0, 1.0)" : type == "vec3" ? "vec3(in_uv, 0.0)" : "in_uv")
 					: type == "vec4" ? "vec4(in_pos, 1.0)" : type == "vec2" ? "in_pos.xy" : "in_pos";
 			source = std::regex_replace(source, std::regex("\\b" + name + "\\b"), "(" + value + ")");
 		}

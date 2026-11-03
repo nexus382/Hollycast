@@ -17,6 +17,7 @@
 #include <fstream>
 #include <functional>
 #include <locale>
+#include <optional>
 #include <set>
 #include <sstream>
 
@@ -129,7 +130,8 @@ protected:
 		return path.string();
 	}
 
-	void checkPattern(const std::vector<std::string>& paths, bool expectCopy = false) {
+	void checkPattern(const std::vector<std::string>& paths, bool expectCopy = false,
+			const std::optional<std::array<int, 3>>& expectedColor = std::nullopt) {
 		const std::string label = postprocess::shaderSelectionLabel(paths);
 		SCOPED_TRACE(label);
 		config::PostProcessShaders.get() = paths;
@@ -178,10 +180,15 @@ protected:
 			for (unsigned x = description.Width / 4; x < description.Width * 3 / 4; x += 8)
 				colors.insert(row[x] & 0xffffff);
 		}
-		if (expectCopy) {
+		if (expectCopy || expectedColor) {
 			for (unsigned y : { 79u, 243u, 403u }) {
 				const auto *row = static_cast<const uint8_t *>(mapped.pData) + mapped.RowPitch * y;
 				for (unsigned x : { 131u, 325u, 507u }) {
+					if (expectedColor) {
+						for (unsigned channel = 0; channel < 3; ++channel)
+							EXPECT_NEAR((*expectedColor)[channel], row[x * 4 + 2 - channel], 1) << "channel " << channel;
+						continue;
+					}
 					const bool bright = ((x / 32 + y / 32) & 1) != 0;
 					EXPECT_NEAR(x / 2 * 255 / 319, row[x * 4 + 2], 2) << "red at " << x << ',' << y;
 					EXPECT_NEAR(y / 2 * 127 / 239 + (bright ? 128 : 0), row[x * 4 + 1], 2) << "green at " << x << ',' << y;
@@ -190,7 +197,8 @@ protected:
 			}
 		}
 		context->getDeviceContext()->Unmap(readback, 0);
-		EXPECT_GT(colors.size(), 1u) << "Shader lost the spatial variation in the input image";
+		if (!expectedColor)
+			EXPECT_GT(colors.size(), 1u) << "Shader lost the spatial variation in the input image";
 	}
 };
 
@@ -222,6 +230,24 @@ TEST_F(DirectXShaderChainTest, ExternalPresetsPreserveImageDetail)
 			if (path.empty()) continue;
 			checkPattern({ path });
 		}
+	});
+}
+
+TEST_F(DirectXShaderChainTest, KeepsLookupSamplerBindingsIndependent)
+{
+	runInGraphicsProcess([&] {
+		std::string image(18, '\0');
+		image[2] = 2; image[12] = 2; image[14] = 1; image[16] = 24; image[17] = 0x20;
+		std::ofstream(directory / "lookup.tga", std::ios::binary)
+				<< image << std::string("\0\0\xff\xff\0\0", 6);
+		const auto effect = writeShader("lookup.fx",
+				"texture2D Lookup < source = \"lookup.tga\"; >;\n"
+				"sampler2D PointSampler { Texture = Lookup; MinFilter = LINEAR; MagFilter = POINT; MipFilter = NONE; };\n"
+				"sampler2D LinearSampler { Texture = Lookup; MinFilter = POINT; MagFilter = LINEAR; MipFilter = NONE; };\n"
+				"float4 Pixel() : SV_Target { float4 a = tex2D(PointSampler, float2(0.5, 0.5));"
+				" float4 b = tex2D(LinearSampler, float2(0.5, 0.5)); return float4(a.r, b.r, b.b, 1.0); }\n"
+				"technique Main { pass { PixelShader = Pixel; } }\n");
+		checkPattern({ effect }, false, std::array<int, 3>{ 0, 128, 128 });
 	});
 }
 } // namespace
