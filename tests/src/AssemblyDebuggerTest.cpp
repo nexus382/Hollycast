@@ -430,4 +430,60 @@ TEST_F(AssemblyDebuggerTest, BrowserKeepsScrollPositionAndCanReturnToCurrentInst
     ImGui::DestroyContext();
     ImGui::SetCurrentContext(previous);
 }
+
+TEST_F(AssemblyDebuggerTest, MouseClickRemovesOnlyTheChosenBreakpoint)
+{
+    program({0x0009, 0x0009});
+    ASSERT_TRUE(assembly_debugger::setBreakpoint(pc, true));
+    ASSERT_TRUE(assembly_debugger::setBreakpoint(pc + 2, true));
+
+    ImGuiContext* previous = ImGui::GetCurrentContext();
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(1280, 800);
+    io.DeltaTime = 1.f / 60;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const float previousScale = settings.display.uiScale;
+    settings.display.uiScale = 1.f;
+    gui_open_debugger();
+    auto frame = [] {
+        ImGui::NewFrame();
+        gui_display_debugger();
+        ImGui::Render();
+    };
+    frame();
+    frame();
+
+    ImGuiWindow* browser = ImGui::FindWindowByName("###AssemblyDebugger");
+    ImGuiWindow* registers = nullptr;
+    for (ImGuiWindow* window : GImGui->Windows)
+        if (window->ParentWindow == browser && std::strstr(window->Name, "/assemblyRegisters_") != nullptr)
+            registers = window;
+    EXPECT_NE(registers, nullptr);
+    if (registers)
+    {
+        // The pane's last item is the final breakpoint's X. Click its actual
+        // laid-out position: activating its ID would bypass overlapping hits.
+        const float buttonWidth = ImGui::CalcTextSize("X").x + ImGui::GetStyle().FramePadding.x * 2;
+        const ImVec2 removePosition(registers->DC.CursorPosPrevLine.x - buttonWidth * 0.5f,
+                registers->DC.CursorPosPrevLine.y + ImGui::GetTextLineHeight() * 0.5f);
+        io.AddMousePosEvent(removePosition.x, removePosition.y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+        EXPECT_EQ(assembly_debugger::breakpoints().count(pc), 1u);
+        EXPECT_EQ(assembly_debugger::breakpoints().count(pc + 2), 0u);
+        EXPECT_EQ(Sh4cntx.pc, pc);
+    }
+
+    settings.display.uiScale = previousScale;
+    gui_state = GuiState::Main;
+    ImGui::DestroyContext();
+    ImGui::SetCurrentContext(previous);
+}
 #endif

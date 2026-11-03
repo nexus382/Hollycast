@@ -229,7 +229,8 @@ void gui_display_debugger()
             ImGui::PushID(static_cast<int>(address));
             char label[12];
             std::snprintf(label, sizeof(label), "%08X", address);
-            if (ImGui::Selectable(label))
+            // Keep the address hit area clear of the adjacent remove button.
+            if (ImGui::Selectable(label, false, ImGuiSelectableFlags_None, ImVec2(ImGui::CalcTextSize(label).x, 0)))
                 goTo(address);
             ImGui::SameLine();
             if (ImGui::SmallButton("X"))
