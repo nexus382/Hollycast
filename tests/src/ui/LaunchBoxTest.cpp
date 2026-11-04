@@ -1,4 +1,5 @@
 /* Copyright 2026 The Hollycast Authors. SPDX-License-Identifier: GPL-2.0-or-later */
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/boxart/launchbox.h"
 #include "archive/ZipArchive.h"
@@ -260,6 +261,12 @@ protected:
    ++downloads;
    if (url.find("Metadata.zip") != std::string::npos) { ADD_FAILURE() << "The cached catalog should be reused"; return 500; }
    if (failLogo && url.find("logo.png") != std::string::npos) return 503;
+   if (url.find("https://images.launchbox-app.com/") == 0)
+   {
+    if (observeMatchCacheDuringImages && imageRequests > 0 && std::filesystem::exists(root / "launchbox-matches.json"))
+     matchCachePresentDuringLaterImage = true;
+    ++imageRequests;
+   }
    type = "image/png"; const u8 pixel[] = {1, 2, 3, 255};
    stbi_write_png_to_func([](void* context, void* data, int size) {
     auto& bytes = *static_cast<std::vector<u8>*>(context);
@@ -268,7 +275,8 @@ protected:
    return 200;
   });
  }
- std::filesystem::path root; GameBoxart item; int downloads = 0; bool failLogo = false;
+ std::filesystem::path root; GameBoxart item; int downloads = 0, imageRequests = 0;
+ bool failLogo = false, observeMatchCacheDuringImages = false, matchCachePresentDuringLaterImage = false;
 };
 
 TEST_F(LaunchBoxMediaTest, CoversStayAutomaticAndManualRequestsFillDistinctSlots)
@@ -296,6 +304,23 @@ TEST_F(LaunchBoxMediaTest, CoversStayAutomaticAndManualRequestsFillDistinctSlots
  EXPECT_EQ(item.developer, renamed.developer); EXPECT_EQ(10, downloads);
 }
 
+TEST_F(LaunchBoxMediaTest, FlushesMatchCacheAfterAllRequestedImagesComplete)
+{
+ observeMatchCacheDuringImages = true;
+ item.requestedMedia = artwork::allMedia;
+ auto scraper = source(); ASSERT_TRUE(scraper.initialize(root.string()));
+ ASSERT_NO_THROW(scraper.scrape(item));
+ EXPECT_EQ(10, imageRequests);
+ EXPECT_FALSE(matchCachePresentDuringLaterImage);
+
+ std::ifstream cache(root / "launchbox-matches.json");
+ ASSERT_TRUE(cache);
+ const json saved = json::parse(cache);
+ const auto& cachedMedia = saved.at("matches").at(LaunchBoxCatalog::identity(item)).at("media");
+ EXPECT_EQ(10u, cachedMedia.size());
+ EXPECT_EQ(item.launchboxMedia.at("cover"), cachedMedia.at("cover").value("path", ""));
+}
+
 TEST_F(LaunchBoxMediaTest, PartialFailureKeepsCompletedMediaAndRetriesOnlyPendingTypes)
 {
  failLogo = true; item.requestedMedia = artwork::allMedia;
@@ -303,6 +328,15 @@ TEST_F(LaunchBoxMediaTest, PartialFailureKeepsCompletedMediaAndRetriesOnlyPendin
  EXPECT_THROW(scraper.scrape(item), std::runtime_error);
  EXPECT_EQ(1u, item.launchboxMedia.count("cover"));
  EXPECT_FALSE(item.launchboxCheckedMedia & (1u << 2)); EXPECT_FALSE(scraper.ready());
+ std::ifstream cache(root / "launchbox-matches.json");
+ ASSERT_TRUE(cache);
+ const json saved = json::parse(cache);
+ const auto& cachedMedia = saved.at("matches").at(LaunchBoxCatalog::identity(item)).at("media");
+ ASSERT_TRUE(cachedMedia.contains("cover"));
+ EXPECT_EQ(item.launchboxMedia.at("cover"), cachedMedia.at("cover").value("path", ""));
+ const std::string failedKind = artwork::mediaTypes[2].name;
+ ASSERT_TRUE(cachedMedia.contains(failedKind));
+ EXPECT_FALSE(cachedMedia.at(failedKind).contains("path"));
  failLogo = false; auto retry = source(); ASSERT_TRUE(retry.initialize(root.string())); retry.scrape(item);
  EXPECT_EQ(10u, item.launchboxMedia.size()); EXPECT_EQ(11, downloads);
 }

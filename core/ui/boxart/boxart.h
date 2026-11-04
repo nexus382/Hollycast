@@ -34,6 +34,7 @@
 #include <chrono>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 
 struct GameMedia;
 namespace screenscraper { class Session; }
@@ -79,6 +80,15 @@ public:
 		size_t total = 0, ready = 0, pending = 0, unavailable = 0;
 		u32 pendingMedia = 0;
 	};
+	struct ArtworkChanges {
+		u64 revision = 0;
+		bool fullRefresh = false;
+		std::vector<std::string> gamePaths;
+	};
+	// Returns distinct source paths changed since revision, or requests a full refresh
+	// when changes affect arbitrary rows or the bounded history no longer covers it.
+	ArtworkChanges artworkChangesSince(u64 revision);
+	bool refreshPending() const { return cacheRefreshPending.load(); }
 	// Hold extra-media jobs while the UI incrementally inventories/enqueues a library.
 	void setMediaBatchPending(bool pending);
 	MediaProgress mediaProgress(const GameMedia& media, u32 requestedMedia);
@@ -112,6 +122,10 @@ private:
 	void runScreenScraperQueue(std::shared_ptr<screenscraper::Session> session, u64 generation,
 			const std::string& directory, std::unique_ptr<Scraper> launchbox = {}, std::unique_ptr<Scraper> tgdb = {});
 	void loadDatabase();
+	void pollCacheRefresh(bool explicitRequest = false);
+	bool runCacheRefresh();
+	void markArtworkChanged(const std::string& gamePath);
+	void markAllArtworkChanged();
 	void loadLibraryPlaytimeDatabase();
 	//! @pre playtimeMutex must be locked.
 	void applyLibraryPlaytimeUnlocked(GameBoxart& boxart) const;
@@ -166,6 +180,11 @@ private:
 	std::chrono::steady_clock::time_point lastDatabaseSave; // Protected by databaseWriteMutex.
 	// Incremented while mutex is held so a completed save never clears a newer update.
 	u64 databaseGeneration = 0;
+	struct ArtworkChangeEntry { u64 revision; std::string gamePath; };
+	static constexpr size_t kArtworkChangeHistoryLimit = 4096;
+	std::deque<ArtworkChangeEntry> artworkChangeHistory;
+	u64 artworkRevision = 0;
+	u64 fullArtworkRefreshRevision = 0;
 	bool customIndexLoaded = false;
 	CustomIndexState customIndexState = CustomIndexState::NotRequested;
 	u64 customIndexGeneration = 0;
@@ -174,6 +193,10 @@ private:
 	std::vector<GameBoxart> toFetch;
 	std::condition_variable artworkWake;
 	std::atomic<u64> screenGeneration{0};
+	u64 cacheRefreshRequestGeneration = 0; // Protected by mutex.
+	u64 cacheRefreshCompletedGeneration = 0; // Protected by mutex; UI reaps the worker before clearing pending.
+	std::chrono::steady_clock::time_point cacheRefreshRetryAfter{}; // Protected by mutex; prevents per-frame restart attempts.
+	std::atomic<bool> cacheRefreshPending{false};
 	std::atomic<int> activeProvider{-1};
 	std::shared_ptr<screenscraper::Session> screenSessionSnapshot; // UI-thread owned.
 	bool mediaBatchPending = false; // Protected by mutex; preserves cover priority during queue refill.
@@ -184,6 +207,7 @@ private:
 	std::future<void> onlineFetching;
 	std::future<void> screenFetching;
 	std::future<void> customIndexFetching;
+	std::future<bool> cacheRefreshFetching;
 
 	std::map<std::string, std::string> discLabels; // By game path. Empty until read, or when there is none.
 	std::vector<std::string> discLabelQueue;

@@ -592,7 +592,8 @@ GameBoxart& Boxart::gameForMedia(const GameMedia& media)
 bool Boxart::isCurrentWork(const GameBoxart& item) const
 {
 	const auto current = games.find(item.sourceKey());
-	return current != games.end() && current->second.workRevision == item.workRevision;
+	return !cacheRefreshPending.load() && current != games.end()
+		&& current->second.workRevision == item.workRevision;
 }
 
 void Boxart::completeArtworkWork(GameBoxart& item, bool queueOnline, int provider)
@@ -621,11 +622,14 @@ void Boxart::completeArtworkWork(GameBoxart& item, bool queueOnline, int provide
 	}
 	games[item.sourceKey()] = item;
 	markDatabaseDirty();
+	markArtworkChanged(item.gamePath);
 	artworkWake.notify_all();
 }
 
 void Boxart::invalidateOfflineArtwork()
 {
+	if (cacheRefreshPending.load())
+		return;
 	loadDatabase();
 	std::lock_guard<std::mutex> guard(mutex);
 	++screenGeneration;
@@ -647,6 +651,24 @@ void Boxart::invalidateOfflineArtwork()
 
 GameBoxart Boxart::getCachedBoxart(const GameMedia& media)
 {
+	if (cacheRefreshPending.load())
+	{
+		const GameBoxart source = makeMediaBoxart(media);
+		std::lock_guard<std::mutex> guard(mutex);
+		const auto current = games.find(source.sourceKey());
+		if (current != games.end())
+		{
+			GameBoxart cached = current->second;
+			cached.busy = false;
+			return cached;
+		}
+		const auto legacy = games.find("legacy:" + media.fileName);
+		if (legacy == games.end())
+			return source;
+		GameBoxart cached = legacy->second;
+		cached.busy = false;
+		return cached;
+	}
 	loadDatabase();
 	const GameBoxart source = makeMediaBoxart(media);
 	std::lock_guard<std::mutex> guard(mutex);
@@ -656,6 +678,8 @@ GameBoxart Boxart::getCachedBoxart(const GameMedia& media)
 
 GameBoxart Boxart::getBoxart(const GameMedia& media)
 {
+	if (cacheRefreshPending.load())
+		return getCachedBoxart(media);
 	loadDatabase();
 	const int sourceMode = config::BoxartSourceMode.get();
 	if (sourceMode == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
@@ -719,15 +743,61 @@ bool Boxart::customMediaFailed()
 
 std::array<u64, 3> Boxart::libraryRevision()
 {
+	if (cacheRefreshPending.load())
+	{
+		std::lock_guard<std::mutex> guard(mutex);
+		return {databaseGeneration, customIndexGeneration, static_cast<u64>(customIndexState)};
+	}
 	loadDatabase();
 	refreshCustomBoxartIndex(false);
 	std::lock_guard<std::mutex> guard(mutex);
 	return {databaseGeneration, customIndexGeneration, static_cast<u64>(customIndexState)};
 }
 
+void Boxart::markArtworkChanged(const std::string& gamePath)
+{
+	if (gamePath.empty())
+	{
+		markAllArtworkChanged();
+		return;
+	}
+	artworkChangeHistory.push_back({++artworkRevision, gamePath});
+	if (artworkChangeHistory.size() > kArtworkChangeHistoryLimit)
+		artworkChangeHistory.pop_front();
+}
+
+void Boxart::markAllArtworkChanged()
+{
+	fullArtworkRefreshRevision = ++artworkRevision;
+	artworkChangeHistory.clear();
+}
+
+Boxart::ArtworkChanges Boxart::artworkChangesSince(u64 revision)
+{
+	std::lock_guard<std::mutex> guard(mutex);
+	ArtworkChanges changes;
+	changes.revision = artworkRevision;
+	if (revision >= artworkRevision)
+		return changes;
+	if (revision < fullArtworkRefreshRevision
+			|| (!artworkChangeHistory.empty() && revision < artworkChangeHistory.front().revision
+				&& artworkChangeHistory.front().revision - revision > 1))
+	{
+		changes.fullRefresh = true;
+		return changes;
+	}
+	std::unordered_set<std::string> seen;
+	for (const ArtworkChangeEntry& entry : artworkChangeHistory)
+		if (entry.revision > revision && seen.insert(entry.gamePath).second)
+			changes.gamePaths.push_back(entry.gamePath);
+	return changes;
+}
+
 Boxart::MediaProgress Boxart::mediaProgress(const GameMedia& media, u32 requestedMedia)
 {
 	MediaProgress progress;
+	if (cacheRefreshPending.load())
+		return progress;
 	loadDatabase();
 	GameBoxart record;
 	{
@@ -774,6 +844,8 @@ void Boxart::startFetch()
 
 void Boxart::retryArtworkMedia()
 {
+	if (cacheRefreshPending.load())
+		return;
 	loadDatabase();
 	std::lock_guard<std::mutex> guard(mutex);
 	++screenGeneration;
@@ -806,6 +878,8 @@ void Boxart::retryArtworkMedia()
 
 GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u32 requestedMedia)
 {
+	if (cacheRefreshPending.load())
+		return getCachedBoxart(media);
 	loadDatabase();
 	const int sourceMode = config::BoxartSourceMode.get();
 	if (sourceMode == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
@@ -853,6 +927,7 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 			boxart.busy = false;
 			record = boxart;
 			markDatabaseDirty();
+			markArtworkChanged(boxart.gamePath);
 		}
 		const bool needsOffline = boxart.offlineArtState == OfflineArtState::Pending;
 		if (!media.arcade) requestedMedia = pendingArtworkMedia(boxart, provider, requestedMedia);
@@ -950,6 +1025,7 @@ GameBoxart Boxart::getPhysicalBoxart(const GameMedia& media)
 				if (!record.scraped && !boxart.boxartPath.empty())
 					record.boxartPath = boxart.boxartPath;
 				markDatabaseDirty();
+				markArtworkChanged(boxart.gamePath);
 			}
 			else
 				boxart = makeMediaBoxart(media);
@@ -980,6 +1056,8 @@ std::string Boxart::getLibraryCoverMediaPath(const GameMedia& media)
 
 std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode, bool verifyLocal)
 {
+	if (cacheRefreshPending.load())
+		return getCustomBoxartPathForMediaMode(media, mediaMode, nullptr, verifyLocal);
 	const std::string custom = getCustomBoxartPathForMediaMode(media, mediaMode, nullptr, verifyLocal);
 	if (!custom.empty())
 		return custom;
@@ -1202,6 +1280,12 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 
 void Boxart::fetchBoxart()
 {
+	if (cacheRefreshPending.load())
+	{
+		pollCacheRefresh();
+		if (cacheRefreshPending.load())
+			return;
+	}
 	// Snapshot UI-owned configuration before launching either worker.
 	const bool wantOnline = shouldFetchOnline();
 	const int selectedProvider = config::ArtworkProvider.get();
@@ -1820,69 +1904,228 @@ void Boxart::checkpointPlaytime(bool isPaused)
 
 void Boxart::reviewDatabaseArtwork()
 {
-	std::lock_guard<std::mutex> guard(mutex);
-	for (auto& game : games)
+	struct ArtworkReview
 	{
-		if (!game.second.boxartPath.empty())
-		{
-			const bool usableImage = isSupportedBoxartExtension(get_file_extension(game.second.boxartPath)) && file_exists(game.second.boxartPath);
-			if (usableImage)
-				continue;
-			game.second.boxartPath.clear();
-			if (game.second.offlineArtState == OfflineArtState::Complete)
-				game.second.offlineArtState = OfflineArtState::Pending;
-			if (!game.second.boxartUrl.empty())
-				game.second.scraped = false;
-			markDatabaseDirty();
-		}
+		std::string key, gamePath, boxartPath;
+		u64 workRevision;
+		bool scraped, usableImage;
+	};
+	std::vector<ArtworkReview> review;
+	{
+		std::lock_guard<std::mutex> guard(mutex);
+		review.reserve(games.size());
+		for (const auto& game : games)
+			if (!game.second.boxartPath.empty() || game.second.scraped)
+				review.push_back({game.first, game.second.gamePath, game.second.boxartPath,
+					game.second.workRevision, game.second.scraped, true});
+	}
 
-		if (game.second.boxartPath.empty() && game.second.scraped)
+	// File-system metadata checks must never hold the library lookup mutex.
+	for (ArtworkReview& entry : review)
+		entry.usableImage = !entry.boxartPath.empty()
+			&& isSupportedBoxartExtension(get_file_extension(entry.boxartPath)) && file_exists(entry.boxartPath);
+
+	std::lock_guard<std::mutex> guard(mutex);
+	for (const ArtworkReview& entry : review)
+	{
+		auto current = games.find(entry.key);
+		if (current == games.end() || current->second.workRevision != entry.workRevision
+				|| current->second.boxartPath != entry.boxartPath || current->second.scraped != entry.scraped)
+			continue;
+		GameBoxart& game = current->second;
+		if (entry.usableImage)
+			continue;
+		bool changed = false;
+		if (!game.boxartPath.empty())
 		{
-			game.second.scraped = false;
-			game.second.busy = false;
+			game.boxartPath.clear();
+			if (game.offlineArtState == OfflineArtState::Complete)
+				game.offlineArtState = OfflineArtState::Pending;
+			if (!game.boxartUrl.empty())
+				game.scraped = false;
+			changed = true;
+		}
+		if (game.boxartPath.empty() && game.scraped)
+		{
+			game.scraped = false;
+			game.busy = false;
+			changed = true;
+		}
+		if (changed)
+		{
 			markDatabaseDirty();
+			markArtworkChanged(game.gamePath);
 		}
 	}
 }
 
 void Boxart::refreshCache()
 {
-	invalidateOfflineArtwork();
 	{
 		std::lock_guard<std::mutex> guard(mutex);
-		customIndexShuttingDown = true;
-		++customIndexGeneration;
+		++cacheRefreshRequestGeneration;
+		cacheRefreshRetryAfter = {};
+		if (!cacheRefreshPending.load())
+		{
+			cacheRefreshPending = true;
+			++screenGeneration;
+			customIndexShuttingDown = true;
+			++customIndexGeneration;
+			toFetch.clear();
+			artworkWake.notify_all();
+		}
 	}
-	if (customIndexFetching.valid())
-		customIndexFetching.get();
+	pollCacheRefresh(true);
+}
+
+// Only the UI thread owns cacheRefreshFetching and the scraper futures. The
+// refresh worker drains them off-thread; this method reaps it before releasing
+// requests that the library UI deferred while the reset was pending.
+void Boxart::pollCacheRefresh(bool explicitRequest)
+{
+	if (!cacheRefreshPending.load())
+		return;
+	bool workerFailed = false;
+	if (cacheRefreshFetching.valid())
+	{
+		if (cacheRefreshFetching.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+			return;
+		try {
+			workerFailed = !cacheRefreshFetching.get();
+		} catch (const std::exception& e) {
+			ERROR_LOG(COMMON, "Artwork cache refresh failed: %s", e.what());
+			workerFailed = true;
+		} catch (...) {
+			ERROR_LOG(COMMON, "Artwork cache refresh failed");
+			workerFailed = true;
+		}
+	}
+
+	bool complete = false;
 	{
 		std::lock_guard<std::mutex> guard(mutex);
-		customIndexShuttingDown = false;
-		customIndexState = CustomIndexState::NotRequested;
+		if (cacheRefreshCompletedGeneration >= cacheRefreshRequestGeneration)
+		{
+			cacheRefreshPending = false;
+			customIndexShuttingDown = false;
+			customIndexState = CustomIndexState::NotRequested;
+			cacheRefreshRetryAfter = {};
+			complete = true;
+		}
+		else if (workerFailed && !explicitRequest)
+		{
+			cacheRefreshRetryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+			return;
+		}
+		else if (std::chrono::steady_clock::now() < cacheRefreshRetryAfter)
+			return;
 	}
-	if (physicalFetching.valid())
+	if (complete)
+	{
+		refreshCustomBoxartIndex(true);
+		return;
+	}
+	if (!cacheRefreshFetching.valid())
 	{
 		try {
-			physicalFetching.get();
+			{
+				std::lock_guard<std::mutex> guard(mutex);
+				cacheRefreshRetryAfter = {};
+			}
+			cacheRefreshFetching = std::async(std::launch::async, &Boxart::runCacheRefresh, this);
 		} catch (const std::exception& e) {
-			ERROR_LOG(COMMON, "Physical boxart scraper thread exception: %s", e.what());
+			ERROR_LOG(COMMON, "Cannot start artwork cache refresh: %s", e.what());
+			std::lock_guard<std::mutex> guard(mutex);
+			cacheRefreshRetryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 		} catch (...) {
-			ERROR_LOG(COMMON, "Physical boxart scraper thread unknown exception");
+			ERROR_LOG(COMMON, "Cannot start artwork cache refresh");
+			std::lock_guard<std::mutex> guard(mutex);
+			cacheRefreshRetryAfter = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 		}
 	}
-	if (screenFetching.valid())
-		screenFetching.get();
-	if (onlineFetching.valid())
-	{
+}
+
+bool Boxart::runCacheRefresh()
+{
+	bool workersDrained = false;
+	u64 drainedRequestGeneration = 0;
+	const auto drain = [](std::future<void>& worker, const char *name) {
+		if (!worker.valid())
+			return;
 		try {
-			onlineFetching.get();
+			worker.get();
 		} catch (const std::exception& e) {
-			ERROR_LOG(COMMON, "Online boxart scraper thread exception: %s", e.what());
+			ERROR_LOG(COMMON, "%s worker failed during artwork refresh: %s", name, e.what());
 		} catch (...) {
-			ERROR_LOG(COMMON, "Online boxart scraper thread unknown exception");
+			ERROR_LOG(COMMON, "%s worker failed during artwork refresh", name);
 		}
+	};
+	try {
+		while (true)
+		{
+			u64 requestGeneration;
+			{
+				std::lock_guard<std::mutex> guard(mutex);
+				requestGeneration = cacheRefreshRequestGeneration;
+				customIndexShuttingDown = true;
+				++customIndexGeneration;
+			}
+
+			// A full library refresh can outlast an HTTP request, disc scan or custom
+			// artwork walk. Keep all waits and database traversal off the UI thread.
+			drain(customIndexFetching, "Custom artwork index");
+			drain(physicalFetching, "Physical boxart");
+			drain(screenFetching, "ScreenScraper");
+			drain(onlineFetching, "Online artwork");
+			workersDrained = true;
+			drainedRequestGeneration = requestGeneration;
+			{
+				std::lock_guard<std::mutex> guard(mutex);
+				for (auto& entry : games)
+				{
+					GameBoxart& record = entry.second;
+					record.workRevision = ++nextWorkRevision;
+					record.busy = false;
+					record.screenScraperDetails.reset();
+					if (record.offlineArtState == OfflineArtState::NoArtwork || record.offlineArtState == OfflineArtState::Failed)
+						record.offlineArtState = OfflineArtState::Pending;
+				}
+				physicalCache.clear();
+				toFetch.clear();
+				markDatabaseDirty();
+			}
+			saveDatabase();
+			{
+				std::lock_guard<std::mutex> guard(mutex);
+				games.clear();
+				physicalCache.clear();
+				toFetch.clear();
+				databaseLoaded = false;
+				databaseDirty = false;
+				++databaseGeneration;
+				customIndexLoaded = false;
+				customIndexState = CustomIndexState::NotRequested;
+				requestedCustomBoxartRoot.clear();
+			}
+			loadDatabase(); // Also reviews saved image paths outside the queue lock.
+			saveDatabase();
+
+			std::lock_guard<std::mutex> guard(mutex);
+			if (cacheRefreshRequestGeneration == requestGeneration)
+			{
+				cacheRefreshCompletedGeneration = requestGeneration;
+				markAllArtworkChanged();
+				return true;
+			}
+			// Coalesce repeated refreshes by repeating the disk review once for the
+			// newest request before allowing the UI to queue replacement work.
+		}
+	} catch (const std::exception& e) {
+		ERROR_LOG(COMMON, "Artwork cache refresh failed: %s", e.what());
+	} catch (...) {
+		ERROR_LOG(COMMON, "Artwork cache refresh failed");
 	}
-	saveDatabase();
+	if (workersDrained)
 	{
 		std::lock_guard<std::mutex> guard(mutex);
 		games.clear();
@@ -1890,15 +2133,13 @@ void Boxart::refreshCache()
 		toFetch.clear();
 		databaseLoaded = false;
 		databaseDirty = false;
-		++databaseGeneration;
 		customIndexLoaded = false;
 		customIndexState = CustomIndexState::NotRequested;
 		requestedCustomBoxartRoot.clear();
+		cacheRefreshCompletedGeneration = std::max(cacheRefreshCompletedGeneration, drainedRequestGeneration);
+		markAllArtworkChanged();
 	}
-	loadDatabase();
-	reviewDatabaseArtwork();
-	refreshCustomBoxartIndex(true);
-	saveDatabase();
+	return workersDrained;
 }
 
 std::string discLabelCachePath(const std::string& saveDirectory, const std::string& gamePath)
@@ -1992,6 +2233,17 @@ void Boxart::term()
 		artworkWake.notify_all();
 	}
 	screenscraper::disconnect(); // Release workers waiting for rate limits before joining them.
+	if (cacheRefreshFetching.valid())
+	{
+		try {
+			cacheRefreshFetching.get();
+		} catch (const std::exception& e) {
+			ERROR_LOG(COMMON, "Artwork cache refresh worker failed during shutdown: %s", e.what());
+		} catch (...) {
+			ERROR_LOG(COMMON, "Artwork cache refresh worker failed during shutdown");
+		}
+	}
+	cacheRefreshPending = false;
 	checkpointPlaytime(true);
 	{
 		std::lock_guard<std::mutex> guard(mutex);
@@ -2014,6 +2266,8 @@ void Boxart::term()
 
 void Boxart::refreshCustomBoxartIndex(bool force)
 {
+	if (cacheRefreshPending.load())
+		return;
 	const std::string root = getCustomBoxartDirectory();
 
 	if (customIndexFetching.valid() && customIndexFetching.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
@@ -2149,6 +2403,7 @@ void Boxart::buildCustomBoxartIndex()
 					mediaIndex.clear();
 				customBoxartRoot = root;
 				customIndexLoaded = false;
+				markAllArtworkChanged();
 			}
 			customIndexState = CustomIndexState::Failed;
 			return;
@@ -2160,6 +2415,7 @@ void Boxart::buildCustomBoxartIndex()
 		customBoxartByName[static_cast<size_t>(config::LibraryCoverMediaMode::CurrentArtwork)] = std::move(newIndex);
 		customIndexLoaded = true;
 		customIndexState = CustomIndexState::Ready;
+		markAllArtworkChanged();
 		return;
 	}
 }
