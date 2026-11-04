@@ -1194,7 +1194,7 @@ bool parseDisplayGlsl(const std::string& shaderText, ShaderPassSource& source, s
 #define mul(x, y) ((x) * (y))
 #define saturate(x) clamp((x), 0.0, 1.0)
 #define GetOption(x) (x)
-#define OptionEnabled(x) ((x) != 0)
+#define OptionEnabled(x) bool(x)
 #define Sample() HollycastSample()
 #define SampleLocation(location) texture(Source, (location))
 #define GetFragCoord() HollycastGetFragCoord()

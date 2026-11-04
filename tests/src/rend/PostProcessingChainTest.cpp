@@ -2452,6 +2452,42 @@ TEST(PostProcessingChainTest, LowersDisplayNumericConversionsWithoutChangingInte
 	}
 }
 
+TEST(PostProcessingChainTest, CompilesDisplayOptionPredicatesForBoolIntAndFloat)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "predicates.glsl";
+	std::ofstream(path) << "/* [configuration]\n[OptionBool]\nOptionName = ENABLED\nDefaultValue = 1\n"
+		"[OptionRangeInteger]\nOptionName = INDEX\nMinValue = 0\nMaxValue = 1\nStepAmount = 1\nDefaultValue = 1\n"
+		"[OptionRangeFloat]\nOptionName = GAIN\nMinValue = 0\nMaxValue = 1\nStepAmount = 0.1\nDefaultValue = 0.5\n"
+		"[/configuration] */\nvoid main() { SetOutput(vec4(OptionEnabled(ENABLED) && OptionEnabled(INDEX)"
+		" && OptionEnabled(GAIN) ? 1.0 : 0.0)); }\n";
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	ASSERT_EQ(3u, chain.parameters.size());
+	EXPECT_EQ(postprocess::SlangParameterType::Bool, chain.parameters[0].type);
+	EXPECT_EQ(postprocess::SlangParameterType::Int, chain.parameters[1].type);
+	EXPECT_EQ(postprocess::SlangParameterType::Float, chain.parameters[2].type);
+	const auto& source = chain.sources[0];
+	std::vector<postprocess::SlangParameter> parameters;
+	for (const auto& parameter : chain.parameters) {
+		postprocess::SlangParameter typed;
+		typed.name = parameter.name;
+		typed.type = parameter.type;
+		typed.defaultValue.values = parameter.values;
+		typed.defaultValue.componentCount = parameter.componentCount;
+		parameters.push_back(std::move(typed));
+	}
+	std::string hlsl;
+	ASSERT_TRUE(postprocess::translateGlslGraphFragmentToHlsl(source, parameters, {}, 1, hlsl, error)) << error;
+	expectHlslCompiles(hlsl, "ps_4_0");
+#if defined(USE_VULKAN)
+	std::string fragment, vertex;
+	ASSERT_TRUE(postprocess::buildVulkanShaderSources(source, parameters, {}, 1, fragment, vertex, error)) << error;
+	EXPECT_TRUE(ShaderCompiler::Validate(vk::ShaderStageFlagBits::eFragment, fragment, error)) << error;
+#endif
+}
+
 TEST(PostProcessingChainTest, ProvidesSlangTimingAndDisplayAspectUniforms)
 {
 	ShaderResourceDirectory directory;

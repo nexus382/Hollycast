@@ -266,12 +266,14 @@ TEST_F(OpenGLShaderChainTest, PreservesDisplayNumericSemanticsAcrossGlProfiles)
 	const auto shader = writeShader("numeric.glsl",
 			"/* [configuration]\n[OptionRangeFloat]\nOptionName = MODE\nMinValue = 0\nMaxValue = 3\n"
 			"StepAmount = 1\nDefaultValue = 1\n[OptionRangeInteger]\nOptionName = INDEX\nMinValue = 0\n"
-			"MaxValue = 1\nStepAmount = 1\nDefaultValue = 1\n[/configuration] */\n"
+			"MaxValue = 1\nStepAmount = 1\nDefaultValue = 1\n[OptionBool]\nOptionName = ENABLED\nDefaultValue = 1\n[/configuration] */\n"
 			"void main() { float weights[2] = float[](0.25, 0.5); vec3 color = vec3(0.0);"
 			" float y = 0.25; if (GetOption(MODE) == 1) color.r = 1 - y;"
 			" if (MODE == 2) color.r = 0.0; if (MODE == 3) color.r = 0.25;"
 			" for (int i = 0; i < 2; ++i) color.g += i == GetOption(INDEX) ? weights[i] : 0.0;"
-			" color.b = float(3 / 2) * 0.25; SetOutput(vec4(color, 1.0)); }\n");
+			" color.b = float(3 / 2) * 0.25;"
+			" if (!OptionEnabled(ENABLED) || !OptionEnabled(INDEX) || !OptionEnabled(MODE)) color = vec3(0.0);"
+			" SetOutput(vec4(color, 1.0)); }\n");
 	expectPixels({ shader }, { 191, 128, 64, 255 });
 	const auto effect = writeShader("numeric.fx",
 			"float4 Pixel(float2 uv : TEXCOORD) : SV_Target { return uv.x > 0.0"
