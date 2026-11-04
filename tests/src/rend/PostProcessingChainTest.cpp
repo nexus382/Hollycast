@@ -20,6 +20,8 @@
 #include "rend/postprocess/reshade_fx.h"
 #include "cfg/option.h"
 #include "stdclass.h"
+#include <glslang/Public/ResourceLimits.h>
+#include <glslang/Public/ShaderLang.h>
 #if defined(USE_VULKAN)
 #include "rend/vulkan/compiler.h"
 #include "rend/vulkan/vulkan_shader_chain.h"
@@ -2415,6 +2417,38 @@ TEST(PostProcessingChainTest, AcceptsEveryCombinedFxFilterMode)
 		EXPECT_EQ((index & 2) != 0, sampler.magLinear);
 		EXPECT_EQ((index & 1) != 0, sampler.mipLinear);
 		EXPECT_TRUE(sampler.useMipmaps);
+	}
+}
+
+TEST(PostProcessingChainTest, LowersDisplayNumericConversionsWithoutChangingIntegerMath)
+{
+	ASSERT_TRUE(postprocess::initializeShaderCompiler());
+	const std::string body =
+		"precision highp float;\nprecision highp int;\n"
+		"uniform float MODE;\nuniform int INDEX;\nuniform sampler2D Source;\n"
+		"in vec2 vTexCoord;\nout vec4 FragColor;\n"
+		"void main() { float weights[2] = float[2](0.25, 0.5); float gain = 0.0;"
+		" if (MODE == 1) gain = 1 - vTexCoord.y;"
+		" if (MODE == 2) gain = 0.0; if (MODE == 3) gain = 0.25;"
+		" for (int i = 0; i < 2; ++i) gain += i == INDEX ? weights[i] : 0.0;"
+		" FragColor = texture(Source, vTexCoord) * vec4(gain, float(3 / 2), 0.0, 1.0); }\n";
+	const std::string original = "#version 300 es\n" + body;
+	const char *text = original.c_str();
+	glslang::TShader strict(EShLangFragment);
+	strict.setStrings(&text, 1);
+	EXPECT_FALSE(strict.parse(GetDefaultResources(), 300, false, EShMsgDefault));
+	EXPECT_NE(std::string::npos, std::string(strict.getInfoLog()).find("operand"));
+	for (const std::string& profile : { "#version 300 es\n", "#version 310 es\n", "#version 130\n", "#version 410\n" }) {
+		SCOPED_TRACE(profile);
+		std::string translated, error;
+		ASSERT_TRUE(postprocess::translateDisplayGlslToOpenGL(profile + body,
+				profile.find(" es") != std::string::npos, translated, error)) << error;
+		EXPECT_TRUE(std::regex_search(translated, std::regex(R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?float\s+MODE\b)")));
+		EXPECT_TRUE(std::regex_search(translated, std::regex(R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?int\s+INDEX\b)")));
+		text = translated.c_str();
+		glslang::TShader target(EShLangFragment);
+		target.setStrings(&text, 1);
+		EXPECT_TRUE(target.parse(GetDefaultResources(), 100, false, EShMsgDefault)) << target.getInfoLog() << translated;
 	}
 }
 

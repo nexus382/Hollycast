@@ -14,6 +14,7 @@
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
 #include <spirv_hlsl.hpp>
+#include <spirv_glsl.hpp>
 #include <spirv_parser.hpp>
 
 #include <algorithm>
@@ -325,6 +326,72 @@ bool initializeShaderCompiler()
 {
 	static const CompilerLifetime compiler;
 	return compiler.initialized;
+}
+
+bool translateDisplayGlslToOpenGL(const std::string& source, bool es, std::string& translated, std::string& error)
+{
+	translated.clear();
+	std::istringstream profile(source);
+	std::string directive;
+	uint32_t version = 0;
+	const size_t firstLine = source.find('\n');
+	if (!(profile >> directive >> version) || directive != "#version" || firstLine == std::string::npos) {
+		error = "Display GLSL is missing its OpenGL language version.";
+		return false;
+	}
+	if (!initializeShaderCompiler()) {
+		error = "Unable to initialize the shader compiler.";
+		return false;
+	}
+	// Display packages use desktop GLSL's numeric conversion rules. Compile
+	// those semantics first, then let SPIRV-Cross emit the explicit casts that
+	// GLSL ES requires. Textual literal replacement would corrupt integer math.
+	const std::string desktop = "#version 450\n" + source.substr(firstLine + 1);
+	const char *text = desktop.c_str();
+	glslang::TShader shader(EShLangFragment);
+	shader.setStrings(&text, 1);
+	shader.setEnvInput(glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 450);
+	shader.setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+	shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
+	shader.setAutoMapLocations(true);
+	shader.setAutoMapBindings(true);
+	const auto messages = static_cast<EShMessages>(EShMsgSpvRules);
+	glslang::TProgram program;
+	program.addShader(&shader);
+	if (!shader.parse(GetDefaultResources(), 450, false, messages)
+			|| !program.link(messages) || !program.mapIO()) {
+		error = std::string("Display GLSL: ") + shader.getInfoLog() + program.getInfoLog();
+		return false;
+	}
+	std::vector<unsigned int> spirv;
+	glslang::GlslangToSpv(*program.getIntermediate(EShLangFragment), spirv);
+	try {
+		spirv_cross::CompilerGLSL compiler(std::move(spirv));
+		// GL uploads parameters and sampler units by name. Auto-mapped SPIR-V
+		// locations/bindings must not require newer GL extensions or alter that ABI.
+		const auto resources = compiler.get_shader_resources();
+		for (const auto& uniform : resources.gl_plain_uniforms) {
+			compiler.unset_decoration(uniform.id, spv::DecorationLocation);
+			compiler.unset_decoration(uniform.id, spv::DecorationBinding);
+		}
+		for (const auto& sampler : resources.sampled_images) {
+			compiler.unset_decoration(sampler.id, spv::DecorationLocation);
+			compiler.unset_decoration(sampler.id, spv::DecorationBinding);
+		}
+		spirv_cross::CompilerGLSL::Options options;
+		options.version = version;
+		options.es = es;
+		options.enable_420pack_extension = false;
+		options.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
+		options.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
+		compiler.set_common_options(options);
+		translated = compiler.compile();
+	} catch (const spirv_cross::CompilerError& exception) {
+		error = exception.what();
+		return false;
+	}
+	error.clear();
+	return true;
 }
 
 bool translateGlslFragmentToHlsl(const std::string& source, std::string& hlsl, std::string& error)

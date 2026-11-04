@@ -135,6 +135,11 @@ void normalizeFxVaryingNames(std::string& source, const char *direction)
 		names.emplace((*it)[2].str(), "_hollycast_fx_varying_" + (*it)[1].str());
 	for (const auto& [name, replacement] : names)
 		source = std::regex_replace(source, std::regex("\\b" + name + "\\b"), replacement);
+	// Monolithic GL links these canonical names directly. Varying locations
+	// require newer profiles/extensions and add no information after renaming.
+	const std::regex varyingLocation(std::string(R"(\blayout\s*\(\s*location\s*=\s*[0-9]+\s*\)\s*((?:(?:flat|noperspective|centroid|smooth|sample|invariant)\s+)*))")
+			+ direction + "\\b");
+	source = std::regex_replace(source, varyingLocation, std::string("$1") + direction);
 }
 
 const char *glslType(postprocess::SlangParameterType type)
@@ -864,7 +869,18 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 				computeSource.addSource(uniformPreamble(passParameters, passSource->slangParameters, passSource->slangResources, compute)).addSource(compute);
 				program.handle = compileComputeShader(computeSource.generate(), error);
 				if (!program.handle) { deletePrograms(candidate); return false; }
-			} else program.handle = gl_CompileAndLink(vertexShader.c_str(), fragmentSource.generate().c_str(), &error);
+			} else {
+				std::string fragmentShader = fragmentSource.generate();
+				if (passSource->displayGlsl) {
+					std::string translated;
+					if (!postprocess::translateDisplayGlslToOpenGL(fragmentShader, gl.is_gles, translated, error)) {
+						deletePrograms(candidate);
+						return false;
+					}
+					fragmentShader = std::move(translated);
+				}
+				program.handle = gl_CompileAndLink(vertexShader.c_str(), fragmentShader.c_str(), &error);
+			}
 			program.pass = pass;
 			program.sourceUniform = glGetUniformLocation(program.handle, "Source");
 			program.sourceSizeUniform = glGetUniformLocation(program.handle, "SourceSize");

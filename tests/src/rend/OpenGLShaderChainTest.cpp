@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 namespace {
 
@@ -245,6 +246,81 @@ TEST_F(OpenGLShaderChainTest, LinksFxVaryingsBySemanticLocation)
 			"float4 Pixel(float2 uv : TEXCOORD0) : SV_Target { return float4(uv, 0.5, 1.0); }\n"
 			"technique Structure { pass { VertexShader = Vertex; PixelShader = Pixel; } }\n");
 	expectPixels({ structure }, { 64, 191, 128, 255 });
+}
+
+TEST_F(OpenGLShaderChainTest, PreservesDisplayNumericSemanticsAcrossGlProfiles)
+{
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
+	SDL_GLContext esCompatibleContext = SDL_GL_CreateContext(window);
+	if (esCompatibleContext == nullptr)
+		GTEST_SKIP() << "OpenGL ES shader compatibility is unavailable: " << SDL_GetError();
+	SDL_GL_DeleteContext(context);
+	context = esCompatibleContext;
+	ASSERT_NE(0, gladLoadGL(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress)));
+	GLint major = 0, minor = 0;
+	glGetIntegerv(GL_MAJOR_VERSION, &major);
+	glGetIntegerv(GL_MINOR_VERSION, &minor);
+	if (major < 4 || (major == 4 && minor < 5))
+		GTEST_SKIP() << "OpenGL 4.5 ES shader compatibility is required.";
+	const auto shader = writeShader("numeric.glsl",
+			"/* [configuration]\n[OptionRangeFloat]\nOptionName = MODE\nMinValue = 0\nMaxValue = 3\n"
+			"StepAmount = 1\nDefaultValue = 1\n[OptionRangeInteger]\nOptionName = INDEX\nMinValue = 0\n"
+			"MaxValue = 1\nStepAmount = 1\nDefaultValue = 1\n[/configuration] */\n"
+			"void main() { float weights[2] = float[](0.25, 0.5); vec3 color = vec3(0.0);"
+			" float y = 0.25; if (GetOption(MODE) == 1) color.r = 1 - y;"
+			" if (MODE == 2) color.r = 0.0; if (MODE == 3) color.r = 0.25;"
+			" for (int i = 0; i < 2; ++i) color.g += i == GetOption(INDEX) ? weights[i] : 0.0;"
+			" color.b = float(3 / 2) * 0.25; SetOutput(vec4(color, 1.0)); }\n");
+	expectPixels({ shader }, { 191, 128, 64, 255 });
+	const auto effect = writeShader("numeric.fx",
+			"float4 Pixel(float2 uv : TEXCOORD) : SV_Target { return uv.x > 0.0"
+			" ? float4(0.75, 0.5, 0.25, 1.0) : float4(0.0, 0.0, 0.0, 1.0); }\n"
+			"technique Main { pass { PixelShader = Pixel; } }\n");
+	for (int minorVersion : { 0, 1 }) {
+		gl.is_gles = true; gl.gl_major = 3; gl.gl_minor = minorVersion;
+		gl.gl_version = "GLES3"; gl.glsl_version_header = "#version 300 es";
+		expectPixels({ shader }, { 191, 128, 64, 255 });
+		expectPixels({ effect }, { 191, 128, 64, 255 });
+	}
+}
+
+TEST_F(OpenGLShaderChainTest, CompilesExternalDisplayPresetsAcrossGlProfiles)
+{
+	const char *paths = std::getenv("HOLLYCAST_SHADER_GL_PRESETS");
+	if (paths == nullptr)
+		GTEST_SKIP() << "Set HOLLYCAST_SHADER_GL_PRESETS to shader files separated by semicolons.";
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
+	SDL_GLContext esCompatibleContext = SDL_GL_CreateContext(window);
+	if (esCompatibleContext == nullptr)
+		GTEST_SKIP() << "OpenGL ES shader compatibility is unavailable: " << SDL_GetError();
+	SDL_GL_DeleteContext(context);
+	context = esCompatibleContext;
+	ASSERT_NE(0, gladLoadGL(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress)));
+	GLint major = 0, minor = 0;
+	glGetIntegerv(GL_MAJOR_VERSION, &major);
+	glGetIntegerv(GL_MINOR_VERSION, &minor);
+	ASSERT_TRUE(major > 4 || (major == 4 && minor >= 5)) << "ES shader compatibility is required.";
+	// Complete presets can use ES 3.1 features such as nested arrays. The
+	// separate numeric pixel regression also exercises the ES 3.0 profile.
+	for (int profile : { -1, 1 }) {
+		gl.is_gles = profile >= 0;
+		gl.gl_major = gl.is_gles ? 3 : 4; gl.gl_minor = gl.is_gles ? profile : 1;
+		gl.gl_version = gl.is_gles ? "GLES3" : "GL3";
+		gl.glsl_version_header = gl.is_gles ? "#version 300 es" : "#version 130";
+		std::istringstream list(paths);
+		for (std::string path; std::getline(list, path, ';');) {
+			if (path.empty()) continue;
+			SCOPED_TRACE(path);
+			SCOPED_TRACE(profile);
+			postprocess::ShaderChain chain;
+			std::string error;
+			ASSERT_TRUE(postprocess::loadShaderChain(path, chain, error)) << error;
+			GlShaderChain renderer;
+			EXPECT_TRUE(renderer.activate(chain, error)) << error;
+		}
+	}
 }
 
 TEST_F(OpenGLShaderChainTest, RendersPortableAndFxStagesWithGlesPrecision)

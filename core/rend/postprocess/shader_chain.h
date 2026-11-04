@@ -484,6 +484,10 @@ bool compileReShadeFxPass(const std::string& effectText, size_t techniqueIndex, 
 // Compiles GLSL to SPIR-V and translates its typed representation to DX11 HLSL.
 // Compiler initialization is shared with the Vulkan renderer for process lifetime.
 bool initializeShaderCompiler();
+
+// Preserve desktop GLSL's implicit numeric conversions when targeting strict
+// GLSL ES. Input includes the GL host preamble; uniform names remain unchanged.
+bool translateDisplayGlslToOpenGL(const std::string& source, bool es, std::string& translated, std::string& error);
 bool translateGlslComputeToHlsl(const ShaderPassSource& source,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
 		std::string& hlsl, std::string& error);
