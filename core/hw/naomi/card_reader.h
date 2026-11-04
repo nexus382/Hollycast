@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -18,8 +19,13 @@
  */
 #pragma once
 #include <string>
+#include <memory>
+#include "hw/hwreg.h"
 
 namespace card_reader {
+
+// Standalone transport; does not attach to the Naomi/SH-4 serial singleton.
+std::unique_ptr<SerialPort::Pipe> createSanwaReader();
 
 void initdInit();
 void derbyInit();

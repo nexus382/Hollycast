@@ -12,6 +12,15 @@ unsigned vk_verbosity = 0;
 static _Thread_local HikaruEngine *activeEngine;
 static HikaruEngine *liveEngine;
 
+int hikaru_engine_get_cabinet_defaults(const HikaruEngine *engine, uint8_t *data, size_t size)
+{
+    if (!engine || !engine->machine || !data || size != 128) return -1;
+    const hikaru_t *machine = (const hikaru_t *)engine->machine;
+    if (!machine->ram_m || machine->ram_m->size < 0xa00) return -1;
+    memcpy(data, machine->ram_m->ptr + 0x980, size);
+    return 0;
+}
+
 int hikaru_engine_get_bram(const HikaruEngine *engine, uint8_t *data, size_t size)
 {
     if (!engine || !engine->machine || !data || size != HIKARU_ENGINE_BRAM_SIZE) return -1;
@@ -196,6 +205,9 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
         break;
     case HIKARU_ENGINE_GAME_PHARRIER:
         game_name = "pharrier"; program_size = 0x4000000; data_size = 0x10000000;
+        break;
+    case HIKARU_ENGINE_GAME_VON4:
+        game_name = "von4"; program_size = 0x4000000; data_size = 0x10000000;
         break;
     default:
         set_error(error, error_size, "Unsupported Hikaru game"); return NULL;

@@ -2,7 +2,8 @@
 # Experimental Sega Hikaru support
 
 The optional Hikaru backend recognizes **Air Trix (`airtrix`)** and
-**Brave Firefighters (`braveff`)**, plus **Planet Harriers (`pharrier`)**, in the
+**Brave Firefighters (`braveff`)**, **Planet Harriers (`pharrier`)**, and
+**Virtual-On Force (`von4`)** in the
 normal game library and loader. It uses
 a separate Hikaru CPU/GPU backend. Air Trix testing has reached attract mode, player/stage selection,
 and an active skating stage with calibrated steering and awarded trick coins.
@@ -257,6 +258,31 @@ use `pharrier.hikaru.nvmem` and `pharrier.mie.eeprom`.
 Save states, automatic states, rollback/netplay, and RetroAchievements are
 disabled for Hikaru. The backend currently keeps one emulated machine active.
 
+### Virtual-On Force controls and bring-up
+
+VON4 uses two digital levers for one player: JVS player slot 1 is the left
+lever and slot 2 is the right lever. Its title-only **Single-controller bindings** option defaults on: controller A's left/right sticks provide the
+two levers, LT/RT fire, arcade buttons 3/4 operate left/right turbo, button 5
+is Personal Information, and Coin/Start remain separate. A/B also provide
+left/right fire; button 6 is an alternate left turbo. Axis-to-digital conversion
+uses half-range thresholds after the normal controller dead zone. Disabling
+the option assigns one controller to each lever of the same cabinet.
+
+The loader validates the four Rev E/A program chips and sixteen data chips
+against MAME's manifest. It retains the 16 MiB program socket spacing and
+zero-filled unpopulated slots. No 315-5881 chip is fitted. The normal MIE,
+sound and renderer paths are reused. The card reader uses Hollycast's existing Sanwa protocol implementation through
+the MIE serial adapter; its completion latency is modeled at 10 us rather than
+measured electrical timing. Windows manual testing has reached playable combat;
+performance remains under investigation. Linked cabinets and the full inserted-card
+workflow remain unverified. Saves use `von4.mie.eeprom` and
+`von4.hikaru.nvmem`, with an independent cabinet-region selection.
+
+The command-RAM apertures mirror the same 4 MiB backing for both CPUs. MEMCTL
+DMA consumes its source when the start command is written: VON4 immediately
+refills the staging buffer for the next model, so copying it at a later device
+slice would mix geometry blocks and stop the GPU command stream.
+
 ## Cabinet region and language
 
 While a title is loaded, open **Settings > Controls > Game compatibility
@@ -267,9 +293,11 @@ controls > Cabinet region**. Each game remembers its own selection:
 - **USA (English)**: English cabinet configuration.
 - **Export**: export configuration and the game's available language options.
 
-Changing country restarts the emulated cabinet after its EEPROM is idle and
-both records are valid. A fresh cabinet first lets the BIOS create its normal
-settings, then restarts with the selected country. No factory EEPROM image is
+Changing country restarts the emulated cabinet after EEPROM writes finish and
+both records are valid. For an entirely erased chip, a fresh cabinet adopts
+only the BIOS's own matching working records after their game ID and system
+header validate, then restarts with the selected country. Existing or damaged
+nonblank data is never replaced with defaults. No factory EEPROM image is
 embedded or substituted. Existing calibration and other EEPROM fields are
 retained: only country byte 5 and the checksum of each 64-byte record change.
 Battery-backed RAM is captured and restored through the normal reset path.

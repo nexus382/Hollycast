@@ -2,6 +2,7 @@
 /* 
  * Valkyrie
  * Copyright (C) 2011, 2012, Stefano Teso
+ * Portions Copyright 2026 The Hollycast Authors
  * 
  * Valkyrie is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -687,6 +688,8 @@ hikaru_memctl_get (vk_device_t *dev, unsigned size, uint32_t addr, void *val)
 	return memctl_bus_get (memctl, size, bus_addr, val);
 }
 
+static int hikaru_memctl_exec (vk_device_t *dev, int cycles);
+
 static int
 hikaru_memctl_put (vk_device_t *dev, unsigned size, uint32_t addr, uint64_t val)
 {
@@ -716,6 +719,11 @@ hikaru_memctl_put (vk_device_t *dev, unsigned size, uint32_t addr, uint64_t val)
 			break;
 		}
 		vk_buffer_put (memctl->regs, size, addr & 0x3F, val);
+		/* VON4's model loader reuses its staging RAM immediately after a
+		 * nonblocking start. Deferring host-side copying until the next device
+		 * slice instead observes the next model overwriting the same buffer. */
+		if ((addr & 0x3F) == 0x38 && (val & 0x01000000))
+			return hikaru_memctl_exec (dev, (int)(val & 0x00FFFFFF));
 		return 0;
 	}
 

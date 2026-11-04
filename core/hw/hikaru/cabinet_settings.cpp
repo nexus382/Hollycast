@@ -53,4 +53,35 @@ CabinetRegionResult applyCabinetRegion(std::array<uint8_t, 128>& eeprom,
     }
     return changed ? CabinetRegionResult::Changed : CabinetRegionResult::Unchanged;
 }
+CabinetRegionResult initializeErasedCabinetRegion(std::array<uint8_t, 128>& eeprom,
+    const std::array<uint8_t, 128>& biosDefaults, const std::array<uint8_t, 4>& cabinetId,
+    CabinetRegion region)
+{
+    if (region == CabinetRegion::Saved) return CabinetRegionResult::Unchanged;
+    if (region != CabinetRegion::Japan && region != CabinetRegion::Usa && region != CabinetRegion::Export)
+        return CabinetRegionResult::Invalid;
+    if (!std::all_of(eeprom.begin(), eeprom.end(), [](uint8_t value) { return value == 0xff; }))
+        return CabinetRegionResult::Invalid;
+    // On erased EEPROM the BIOS builds these records in RAM, with zero CRC
+    // until it saves them. Matching complete copies plus the game ID and fixed
+    // system header distinguish that state from RAM still being initialized.
+    if (!std::equal(biosDefaults.begin(), biosDefaults.begin() + RecordSize, biosDefaults.begin() + RecordSize)
+            || !std::equal(cabinetId.begin(), cabinetId.end(), biosDefaults.begin())
+            || biosDefaults[4] == 0 || biosDefaults[4] > 8 || biosDefaults[5] > 4
+            || biosDefaults[8] != 0x18 || biosDefaults[10] != 4)
+        return CabinetRegionResult::PendingInitialization;
+    if ((biosDefaults[62] != 0 || biosDefaults[63] != 0) && !validChecksum(biosDefaults.data()))
+        return CabinetRegionResult::PendingInitialization;
+
+    auto initialized = biosDefaults;
+    for (unsigned offset : {0u, RecordSize}) {
+        auto* record = initialized.data() + offset;
+        record[CountryOffset] = uint8_t(region);
+        const auto checksum = recordChecksum(record);
+        record[ChecksumOffset] = uint8_t(checksum);
+        record[ChecksumOffset + 1] = uint8_t(checksum >> 8);
+    }
+    eeprom = initialized;
+    return CabinetRegionResult::Changed;
+}
 } // namespace hikaru

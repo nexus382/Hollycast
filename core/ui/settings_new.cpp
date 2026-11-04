@@ -7617,7 +7617,8 @@ void renderControlsTab()
 	{
 		ImGui::TextUnformatted(hikaruGame->title);
 		auto* regionOption = hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
-			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion : &config::HikaruPlanetRegion;
+			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion
+			: hikaruGame == &hikaru::VirtualOn4Game ? &config::HikaruVirtualOn4Region : &config::HikaruPlanetRegion;
 		const char* regionLabels[] = {T("Keep saved region"), T("Japan"), T("USA (English)"), T("Export")};
 		int regionSelection = std::clamp(regionOption->get(), -1, 2) + 1;
 		SettingsUI::PopupConfig regionCfg {};
@@ -7653,6 +7654,13 @@ void renderControlsTab()
 				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
 				T("Uses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
 			ImGui::TextWrapped("%s", T("Controller Mapping provides Spray, Fog, Horizontal aim and Vertical aim for this cabinet."));
+		} else if (hikaruGame == &hikaru::VirtualOn4Game) {
+			RenderGeneralToggleSettingRow("HikaruVirtualOn4TwinStick", ICON_FA_GAMEPAD,
+				T("Single-controller bindings"), T("Use both sticks and triggers of controller A for one cabinet"),
+				bool(config::HikaruVirtualOn4TwinStick),
+				[](bool enabled) { config::HikaruVirtualOn4TwinStick.set(enabled); },
+				T("When disabled, controllers A and B each provide one lever. These are the two levers of one player, not linked cabinets."));
+			ImGui::TextWrapped("%s", T("Left/right sticks move the two levers. LT/RT fire; arcade buttons 3/4 are left/right turbo. Map Coin and Start separately. Personal information uses button 5."));
 		} else if (hikaruGame == &hikaru::PlanetHarriersGame) {
 			RenderGeneralToggleSettingRow("HikaruPlanetDpadStick", ICON_FA_GAMEPAD,
 				T("D-pad flight controls"), T("Use the D-pad for full-range flight movement, alongside the analog stick"),

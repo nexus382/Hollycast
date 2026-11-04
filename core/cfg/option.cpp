@@ -90,6 +90,8 @@ Option<bool> HikaruPlanetDpadStick("HikaruPlanetDpadStick", true, "input");
 Option<int, false> HikaruAirTrixRegion("HikaruAirTrixRegion", -1, "input");
 Option<int, false> HikaruBraveRegion("HikaruBraveRegion", -1, "input");
 Option<int, false> HikaruPlanetRegion("HikaruPlanetRegion", -1, "input");
+Option<int, false> HikaruVirtualOn4Region("HikaruVirtualOn4Region", -1, "input");
+Option<bool> HikaruVirtualOn4TwinStick("HikaruVirtualOn4TwinStick", true, "input");
 #endif
 AudioVolumeOption AudioVolume;
 Option<bool> VmuSound("VmuSound", false, "audio");

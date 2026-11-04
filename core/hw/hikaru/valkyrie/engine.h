@@ -12,7 +12,8 @@ typedef struct HikaruEngine HikaruEngine;
 typedef enum {
     HIKARU_ENGINE_GAME_AIRTRIX = 0,
     HIKARU_ENGINE_GAME_BRAVEFF = 1,
-    HIKARU_ENGINE_GAME_PHARRIER = 2
+    HIKARU_ENGINE_GAME_PHARRIER = 2,
+    HIKARU_ENGINE_GAME_VON4 = 3
 } HikaruEngineGame;
 typedef enum {
     /* Sort retained source strips back-to-front by transformed view-space centroid. */
@@ -84,7 +85,7 @@ HikaruEngine *hikaru_engine_create(const HikaruEngineRoms *roms,
     int allow_bios_eeprom_bypass, char *error, size_t error_size);
 // Only the games listed above are accepted. ROM sections are already
 // assembled: both use a 2 MiB BIOS; Air Trix uses 8/128 MiB program/data,
-// Brave Firefighters and Planet Harriers use 64/256 MiB regions, retaining
+// Brave Firefighters, Planet Harriers and VON4 use 64/256 MiB regions, retaining
 // zero-filled program socket gaps and any unpopulated sockets.
 // Protection callbacks remain required; the host supplies an unprotected bus
 // backend for a board without a security processor. No game patches are enabled.
@@ -102,6 +103,9 @@ int hikaru_engine_set_sound(HikaruEngine *engine, const HikaruEngineSound *sound
 // Battery-backed RAM is transferred as exactly HIKARU_ENGINE_BRAM_SIZE bytes.
 // Calls are serialized with frame execution. A new machine starts with blank RAM.
 int hikaru_engine_get_bram(const HikaruEngine *engine, uint8_t *data, size_t size);
+// Snapshot the known BIOS revisions' cabinet working copies at master RAM
+// 0x980. Callers validate them before initializing an erased MIE EEPROM.
+int hikaru_engine_get_cabinet_defaults(const HikaruEngine *engine, uint8_t *data, size_t size);
 int hikaru_engine_set_bram(HikaruEngine *engine, const uint8_t *data, size_t size);
 void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
 // Release before the host context is destroyed, then restore on its replacement.

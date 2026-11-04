@@ -7,11 +7,38 @@
 namespace hikaru {
 HikaruEngineInputs bindCabinetInputs(const GameDescriptor* game,
     const std::array<ControllerInputs, 2>& controllers,
-    bool airTrixDpadBoard, bool planetDpadStick)
+    bool airTrixDpadBoard, bool planetDpadStick, bool virtualOn4TwinStick)
 {
     HikaruEngineInputs input{};
     for (auto& axis : input.analog)
         axis = 0x8000;
+    if (game == &VirtualOn4Game) {
+        // One cabinet's left/right digital levers occupy JVS player slots 1/2.
+        // They are not two players. Convert the mapped axes after the host's
+        // dead-zone handling; neutral/opposing D-pad inputs do not force motion.
+        for (unsigned lever = 0; lever < 2; ++lever) {
+            const auto& pad = controllers[virtualOn4TwinStick ? 0 : lever];
+            const bool right = virtualOn4TwinStick && lever == 1;
+            const int x = right ? pad.rightX : pad.stickX, y = right ? pad.rightY : pad.stickY;
+            const auto pressed = [&](uint32_t mask) { return (pad.buttons & mask) == 0; };
+            const bool up = !right && pressed(DC_DPAD_UP), down = !right && pressed(DC_DPAD_DOWN);
+            const bool left = !right && pressed(DC_DPAD_LEFT), rightDpad = !right && pressed(DC_DPAD_RIGHT);
+            input.players[lever] = ((up != down ? up : y <= -16384) ? 0x2000 : 0)
+                | ((up != down ? down : y >= 16384) ? 0x1000 : 0)
+                | ((left != rightDpad ? left : x <= -16384) ? 0x0800 : 0)
+                | ((left != rightDpad ? rightDpad : x >= 16384) ? 0x0400 : 0);
+            const bool fire = right ? pressed(DC_BTN_B) || pad.rightTrigger >= 0x8000
+                : pressed(DC_BTN_A) || pad.leftTrigger >= 0x8000;
+            const bool turbo = right ? pressed(DC_BTN_X) : pressed(DC_BTN_C) || pressed(DC_BTN_Z);
+            input.players[lever] |= (fire ? 0x0200 : 0) | (turbo ? 0x0100 : 0);
+        }
+        const auto buttons = controllers[0].buttons;
+        input.players[0] |= (!(buttons & DC_BTN_START) ? 0x8000 : 0) | (!(buttons & DC_BTN_Y) ? 0x0080 : 0);
+        input.coin[0] = !(buttons & DC_BTN_D) || (!virtualOn4TwinStick && !(controllers[1].buttons & DC_BTN_D));
+        input.test = !(buttons & DC_DPAD2_DOWN);
+        input.service = !(buttons & DC_DPAD2_UP);
+        return input;
+    }
     if (game != &AirTrixGame && game != &BraveFirefightersGame && game != &PlanetHarriersGame)
         return input;
 

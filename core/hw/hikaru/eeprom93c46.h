@@ -23,6 +23,11 @@ public:
     void advanceMicros(uint32_t micros);
     bool busy() const { return busyMicros_ != 0; }
     bool idle() const { return !cs_ && !busy(); }
+    // A selected read may remain open after boot. It is safe to power-cycle;
+    // partial commands or programming must finish before a cabinet edit.
+    bool writePending() const {
+        return busy() || (cs_ && stage_ != Stage::Start && stage_ != Stage::Reading);
+    }
     bool writeEnabled() const { return writeEnabled_; }
     const std::array<uint8_t, Size>& contents() const { return memory_; }
     // Discards an unfinished command, retaining the write-enable latch and any

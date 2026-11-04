@@ -50,6 +50,7 @@ void pinEdgesAndReads(Checks& checks)
     wire.begin();
     wire.bits("0000"); // Zeroes before the start bit are ignored.
     wire.bits("1100100101"); // Datasheet READ: start 1, opcode 10, address 0100101.
+    checks.equal(chip.writePending(), false, "selected READ cannot lose programmed settings on restart");
     checks.equal(chip.dataOut(), false, "dummy zero after final address edge");
     chip.setPins(true, false, false);
     checks.equal(chip.dataOut(), false, "falling CLK does not shift dummy bit");
@@ -97,10 +98,12 @@ void writeEnableBusyAndErase(Checks& checks)
     wire.command("1001100000"); // EWEN: start 1, opcode 00, sub-op 11, five don't-care bits.
     checks.equal(chip.writeEnabled(), true, "EWEN latches write enable");
     wire.begin(); wire.bits("1010100101"); wire.bits("10100110");
+    checks.equal(chip.writePending(), true, "armed WRITE blocks cabinet restart before commit");
     checks.equal(chip.idle(), false, "an armed serial command blocks cabinet changes");
     checks.equal(chip.busy(), false, "complete data still waits for CS falling");
     checks.equal(chip.contents()[0x25], 0xff, "no early memory commit");
     wire.end();
+    checks.equal(chip.writePending(), true, "programming blocks cabinet restart even when deselected");
     checks.equal(chip.idle(), false, "programming blocks cabinet changes even with CS low");
     checks.equal(chip.busy(), true, "CS falling starts self-timed programming");
     checks.equal(chip.dataOut(), true, "busy chip with CS low has high-impedance pull-up");
@@ -116,6 +119,7 @@ void writeEnableBusyAndErase(Checks& checks)
     checks.equal(chip.busy(), true, "busy remains until complete 5 ms model interval");
     checks.equal(chip.contents()[0x25], 0xff, "memory unchanged one microsecond before completion");
     chip.advanceMicros(1);
+    checks.equal(chip.writePending(), false, "completed programming permits restart during selected READY polling");
     checks.equal(chip.idle(), false, "selected chip blocks changes even after programming completes");
     checks.equal(chip.busy(), false, "programming completes at modeled interval");
     checks.equal(chip.dataOut(), true, "DO switches from BUSY to READY");

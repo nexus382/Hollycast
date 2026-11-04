@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/mie.h"
 #include <algorithm>
+#include <deque>
 #include <iostream>
 #include <stdexcept>
 
@@ -103,6 +105,44 @@ int main()
     check(mie.readHost(0x0080002a, 2) == 0xff60, "overflowed guest UART frame dropped");
     mie.reset();
     check(!mie.addressed(), "reset removes JVS address");
+    // The card-reader adapter is a separate serial block, not the JVS UART.
+    hikaru::Mie serial(rom);
+    auto putPort = [&](uint8_t port, uint8_t value) { serial.writeHost(0x00800000u + unsigned(port) * 2, value, 1); };
+    auto getPort = [&](uint8_t port) { return serial.readHost(0x00800000u + unsigned(port) * 2, 1); };
+    check(getPort(0x0d) == 0xff, "serial adapter remains absent for cabinets without a reader");
+    std::vector<uint8_t> sent;
+    std::deque<uint8_t> received{0x06, 0x02};
+    serial.setSerialDevice([&](uint8_t value) { sent.push_back(value); },
+        [&] { auto value = received.front(); received.pop_front(); return value; },
+        [&] { return !received.empty(); });
+    putPort(0x0a, 0xa5); putPort(0x09, 0x55);
+    check(getPort(0x0d) == 3, "adapter reports busy before loopback completion");
+    serial.advanceTicks(159);
+    check(getPort(0x0d) == 3, "adapter completion advances only on MIE clocks");
+    serial.advanceTicks(1);
+    check(getPort(0x0d) == 4 && getPort(0x0b) == 0x55 && getPort(0x0c) == 0xa5,
+          "loopback returns both adapter bytes with its completion flag");
+    check(getPort(0x0d) == 0 && sent.empty(), "reading the reply acknowledges it without transmitting loopback bytes");
+    putPort(0x0a, 0xaa); putPort(0x09, 1); putPort(0x0a, 0xbb);
+    serial.advanceTicks(160);
+    check(sent == std::vector<uint8_t>{0xaa} && getPort(0x0d) == 8 && getPort(0x0b) == 1 && getPort(0x0c) == 0xaa,
+          "transmit latches the in-flight byte and returns its echo");
+    putPort(0x0a, 0x80); putPort(0x09, 0x80); serial.advanceTicks(160);
+    check(getPort(0x0b) == 0x80 && getPort(0x0c) == 0x40 && received.size() == 2,
+          "status request sees waiting reader bytes without consuming them");
+    putPort(0x0a, 0x81); putPort(0x09, 0x81); serial.advanceTicks(160);
+    check(getPort(0x0c) == 6 && received.size() == 1, "receive request consumes exactly one reader byte");
+    received.clear();
+    putPort(0x0a, 0x80); putPort(0x09, 0x80); serial.advanceTicks(160);
+    check(getPort(0x0c) == 0, "empty reader status reports no waiting byte");
+    putPort(0x0a, 0x81); putPort(0x09, 0x81); serial.advanceTicks(160);
+    check(getPort(0x0c) == 0, "empty receive does not call a reader with no available byte");
+    putPort(0x0a, 0xcc); putPort(0x09, 1); putPort(0x0d, 0); serial.advanceTicks(160);
+    check(sent.size() == 1 && getPort(0x0d) == 0, "adapter reset cancels an unfinished exchange");
+    putPort(0x0a, 0xdd); putPort(0x09, 1); serial.reset(); serial.advanceTicks(160);
+    check(sent.size() == 1 && getPort(0x0d) == 0, "MIE reset clears exchanges while retaining the connection");
+    serial.setSerialDevice({}, {}, {});
+    check(getPort(0x0d) == 0xff, "detaching the reader restores open-bus port behavior");
     std::cout << checks << " MIE checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

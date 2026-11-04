@@ -18,7 +18,7 @@ protected:
 
 TEST_F(HikaruInputBindingsTest, NeutralAndUnloadedCabinetsHaveCenteredAxes)
 {
-    for (const auto* game : {static_cast<const GameDescriptor*>(nullptr), &AirTrixGame, &BraveFirefightersGame, &PlanetHarriersGame}) {
+    for (const auto* game : {static_cast<const GameDescriptor*>(nullptr), &AirTrixGame, &BraveFirefightersGame, &PlanetHarriersGame, &VirtualOn4Game}) {
         const auto input = bind(game);
         for (const auto player : input.players) EXPECT_EQ(player, 0);
         for (const auto coin : input.coin) EXPECT_EQ(coin, 0);
@@ -172,6 +172,73 @@ TEST_F(HikaruInputBindingsTest, StartOperatorAndCoinInputsRemainAvailableForEver
         EXPECT_EQ(input.service, 1);
         EXPECT_EQ(input.coin[0], 1);
         EXPECT_EQ(input.coin[1], 1);
+    }
+}
+TEST_F(HikaruInputBindingsTest, VirtualOnUsesTwoIndependentDigitalLeversOnOneCabinet)
+{
+    controllers[0].stickX = -32768;
+    controllers[0].stickY = -32768;
+    controllers[0].rightX = 32767;
+    controllers[0].rightY = 32767;
+    const auto input = bind(&VirtualOn4Game);
+    EXPECT_EQ(input.players[0], 0x2800);
+    EXPECT_EQ(input.players[1], 0x1400);
+    for (const auto axis : input.analog) EXPECT_EQ(axis, 0x8000);
+    EXPECT_EQ(input.coin[0], 0);
+    EXPECT_EQ(input.coin[1], 0);
+}
+
+TEST_F(HikaruInputBindingsTest, VirtualOnTriggersAndTurboDoNotCollideWithCoins)
+{
+    controllers[0].buttons = ~(DC_BTN_START | DC_BTN_C | DC_BTN_X | DC_BTN_Y | DC_BTN_D);
+    controllers[0].leftTrigger = 0x8000;
+    controllers[0].rightTrigger = 0x8000;
+    const auto input = bind(&VirtualOn4Game);
+    EXPECT_EQ(input.players[0], 0x8380);
+    EXPECT_EQ(input.players[1], 0x0300);
+    EXPECT_EQ(input.coin[0], 1);
+    EXPECT_EQ(input.coin[1], 0);
+    controllers[0].buttons |= DC_BTN_D;
+    EXPECT_EQ(bind(&VirtualOn4Game).coin[0], 0);
+}
+
+TEST_F(HikaruInputBindingsTest, VirtualOnDigitalThresholdsKeepCenteredSticksNeutral)
+{
+    controllers[0].stickX = 16383;
+    controllers[0].stickY = -16383;
+    controllers[0].rightX = -16383;
+    controllers[0].rightY = 16383;
+    EXPECT_EQ(bind(&VirtualOn4Game).players[0], 0);
+    EXPECT_EQ(bind(&VirtualOn4Game).players[1], 0);
+    controllers[0].stickX = 16384;
+    controllers[0].stickY = -16384;
+    controllers[0].rightX = -16384;
+    controllers[0].rightY = 16384;
+    EXPECT_EQ(bind(&VirtualOn4Game).players[0], 0x2400);
+    EXPECT_EQ(bind(&VirtualOn4Game).players[1], 0x1800);
+}
+
+TEST_F(HikaruInputBindingsTest, VirtualOnCanAssignOneControllerToEachLever)
+{
+    controllers[0].buttons = ~(DC_DPAD_UP | DC_BTN_A);
+    controllers[1].buttons = ~(DC_DPAD_DOWN | DC_BTN_C | DC_BTN_D);
+    const auto input = bindCabinetInputs(&VirtualOn4Game, controllers, false, false, false);
+    EXPECT_EQ(input.players[0], 0x2200);
+    EXPECT_EQ(input.players[1], 0x1100);
+    EXPECT_EQ(input.coin[0], 1);
+    EXPECT_EQ(input.coin[1], 0);
+}
+
+TEST_F(HikaruInputBindingsTest, VirtualOnRightStickDoesNotChangeOtherGames)
+{
+    controllers[0].rightX = -32768;
+    controllers[0].rightY = 32767;
+    for (const auto* game : {&AirTrixGame, &BraveFirefightersGame, &PlanetHarriersGame}) {
+        const auto input = bind(game);
+        EXPECT_EQ(input.players[0], 0);
+        EXPECT_EQ(input.players[1], 0);
+        EXPECT_EQ(input.analog[0], 0x8000);
+        EXPECT_EQ(input.analog[1], 0x8000);
     }
 }
 } // namespace

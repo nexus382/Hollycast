@@ -25,6 +25,10 @@ public:
     // be supplied through GpioRead (port 6, active-low bits 2 and 3).
     void setInputs(const JvsNode::Inputs& inputs);
     void setGpio(GpioRead read, GpioWrite write = {});
+    // External RS422/RS232 adapter on ports 09..0e, separate from JVS UART.
+    // Callbacks stay attached through reset; the owner resets its device.
+    void setSerialDevice(std::function<void(uint8_t)> send,
+        std::function<uint8_t()> receive, std::function<bool()> pending);
     // AICA asserts MIE pending bit 4. Return its level after port-C masking.
     bool setSoundIrq(bool asserted);
     uint32_t readHost(uint32_t address, unsigned size);
@@ -34,7 +38,7 @@ public:
     bool addressed() const;
     // Restore only before execution; reset intentionally preserves EEPROM.
     std::array<uint8_t, 128> eepromContents() const;
-    bool eepromIdle() const;
+    bool eepromWritePending() const;
     void restoreEeprom(const std::vector<uint8_t>& contents);
 private:
     struct Impl;

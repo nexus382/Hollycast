@@ -116,6 +116,29 @@ int main()
             "unknown Planet Harriers BIOS revision rejected");
     rejects([&] { hikaru::loadPlanetHarriers([](const auto&) { return std::vector<uint8_t>{}; }); },
             "missing Planet Harriers BIOS data rejected");
+    check(hikaru::findGame("VON4") == &hikaru::VirtualOn4Game && !hikaru::VirtualOn4Game.securityKey,
+          "Virtual-On Force is allowlisted with no 315-5881 chip");
+    check(hikaru::VirtualOn4ProgramRoms.size() == 4 && hikaru::VirtualOn4DataRoms.size() == 16,
+          "VON4 manifest contains all 20 chips");
+    for (std::size_t i = 0; i < hikaru::VirtualOn4ProgramRoms.size(); ++i) {
+        const auto& chip = hikaru::VirtualOn4ProgramRoms[i];
+        check(chip.offset == (i / 2) * 0x1000000 + (i % 2) * 2 && chip.file.size == 0x400000,
+              "VON4 program pairs retain 16 MiB socket slots");
+    }
+    for (std::size_t i = 0; i < hikaru::VirtualOn4DataRoms.size(); ++i) {
+        const auto& chip = hikaru::VirtualOn4DataRoms[i];
+        check(chip.offset == (i / 2) * 0x2000000 + (i % 2) * 2 && chip.file.size == 0x1000000,
+              "VON4 data pairs fill the 256 MiB region");
+    }
+    check(hikaru::VirtualOn4ProgramRoms[0].file.crc32 == 0x188e93bc
+            && hikaru::VirtualOn4ProgramRoms[3].file.crc32 == 0x34e95687
+            && hikaru::VirtualOn4DataRoms[15].file.crc32 == 0xd904250f,
+          "VON4 manifest endpoints match pinned MAME data");
+    rejects([&] { hikaru::loadVirtualOn4({}); }, "missing VON4 reader rejected");
+    rejects([&] { hikaru::loadVirtualOn4([](const auto&) { return std::vector<uint8_t>{}; }, "unknown"); },
+            "unknown VON4 BIOS rejected");
+    rejects([&] { hikaru::loadVirtualOn4([](const auto&) { return std::vector<uint8_t>{}; }); },
+            "missing VON4 BIOS data rejected");
     std::cout << checks << " ROM checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

@@ -61,15 +61,18 @@ int main(int argc, char **argv)
     HikaruEngineRoms sizes = {&byte, 0x200000, &byte, 0x4000000, &byte, 0x10000000};
     /* These must reject before reading ROM bytes or asking for a GL context. */
     reject((HikaruEngineGame)-1, &sizes, "Unsupported Hikaru game");
-    reject((HikaruEngineGame)3, &sizes, "Unsupported Hikaru game");
+    reject((HikaruEngineGame)4, &sizes, "Unsupported Hikaru game");
     reject(HIKARU_ENGINE_GAME_AIRTRIX, &sizes, "Invalid ROM sections");
     sizes.program_size = 0x800000; sizes.data_size = 0x8000000;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_PHARRIER, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
     sizes.program_size = 0x4000000; sizes.data_size = 0x10000000 - 1;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
     sizes.data_size = 0x10000000; sizes.program_size--;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
     if (failures) return 1;
 
     if (SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL video: %s\n", SDL_GetError()); return 2; }
@@ -156,7 +159,70 @@ int main(int argc, char **argv)
     check_bus(board, 0x2f, 0xffffff, 0xf8);
     hikaru_engine_destroy(engine);
 
+    /* VON4 has two 8 MiB program pairs in 16 MiB slots and
+     * sixteen contiguous 16 MiB MASKROM banks. Read through the real MEMCTL
+     * to verify populated pairs, empty slots, and data boundaries. */
+    memset(program + 0x2000000, 0, 0x2000000);
+    program[0] = 0x11; program[0x7fffff] = 0x18;
+    program[0x1000000] = 0x21; program[0x17fffff] = 0x28;
+    memset(data, 0, roms.data_size);
+    data[0] = 0x31; data[0xffffff] = 0x32;
+    data[0x1000000] = 0x33; data[0x1ffffff] = 0x34;
+    data[0x2000000] = 0x35; data[0xf000000] = 0x36;
+    data[0xfffffff] = 0x37;
+    error[0] = 0;
+    engine = hikaru_engine_create_game(HIKARU_ENGINE_GAME_VON4,
+        &roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
+    CHECK(engine != NULL);
+    if (!engine) { fprintf(stderr, "VON4 create: %s\n", error); goto cleanup; }
+    check_board(engine, "von4", 4, 16);
+    board = (hikaru_t *)engine->machine;
+    CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
+    CHECK(board->eprom->ptr == program && board->maskrom->ptr == data);
+    check_bus(board, 0x10, 0, 0x11);
+    check_bus(board, 0x10, 0x7fffff, 0x18);
+    check_bus(board, 0x10, 0x800000, 0x11); /* 8 MiB within-bank mirror. */
+    check_bus(board, 0x11, 0, 0x21);
+    check_bus(board, 0x11, 0x7fffff, 0x28);
+    check_bus(board, 0x12, 0, 0); /* Unpopulated EPROM slot. */
+    check_bus(board, 0x13, 0, 0);
+    check_bus(board, 0x20, 0, 0x31);
+    check_bus(board, 0x20, 0xffffff, 0x32);
+    check_bus(board, 0x21, 0, 0x33);
+    check_bus(board, 0x21, 0xffffff, 0x34);
+    check_bus(board, 0x22, 0, 0x35);
+    check_bus(board, 0x2f, 0, 0x36);
+    check_bus(board, 0x2f, 0xffffff, 0x37);
+    {
+        const uint32_t instructionWord = 0x0009e02a;
+        uint32_t value = 0;
+        const int writeOk = !vk_mmap_put(board->mmap_m, 4, 0x14fff000, instructionWord);
+        CHECK(writeOk);
+        if (writeOk) {
+            CHECK(!vk_mmap_get(board->mmap_m, 4, 0x143ff000, &value) && value == instructionWord);
+            CHECK(!vk_mmap_get(board->mmap_s, 4, 0x103ff000, &value) && value == instructionWord);
+            CHECK(!vk_mmap_get(board->mmap_s, 4, 0x10fff000, &value) && value == instructionWord);
+            uint16_t instruction = 0;
+            const int fetchOk = !vk_mmap_fetch16_slow(board->mmap_s, 0x10fff000, &instruction);
+            CHECK(fetchOk && instruction == 0xe02a);
+            if (fetchOk && instruction == 0xe02a) {
+                sh4_t *slave = (sh4_t *)board->sh_s;
+                slave->regs.pc = 0x10fff000;
+                vk_cpu_set_state(board->sh_s, VK_CPU_STATE_RUN);
+                vk_cpu_run(board->sh_s, 1);
+                CHECK(slave->regs.r[0] == 42 && slave->regs.pc == 0x10fff002);
+            }
+        }
+        const uint32_t mirrorValue = 0x78563412;
+        CHECK(!vk_mmap_put(board->mmap_m, 4, 0x143ff004, mirrorValue));
+        CHECK(!vk_mmap_get(board->mmap_m, 4, 0x147ff004, &value) && value == mirrorValue);
+        CHECK(!vk_mmap_get(board->mmap_s, 4, 0x107ff004, &value) && value == mirrorValue);
+    }
+    hikaru_engine_destroy(engine);
+
     /* Original callers still select Air Trix after the other boards are freed. */
+    memset(program, 0, 0x800000);
+    memset(data, 0, 0x8000000);
     program[0x400000] = 0x24;
     roms.program_size = 0x800000; roms.data_size = 0x8000000;
     engine = hikaru_engine_create(&roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));

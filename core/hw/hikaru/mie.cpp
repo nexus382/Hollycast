@@ -32,6 +32,27 @@ struct Mie::Impl {
     GpioWrite gpioWrite;
     bool soundIrq = false;
     uint8_t boardIrqMask = 0;
+    std::function<void(uint8_t)> serialSend;
+    std::function<uint8_t()> serialReceive;
+    std::function<bool()> serialPending;
+    struct SerialExchange {
+        uint8_t transmit = 0, command = 0, data = 0;
+        uint8_t replyCommand = 0, replyData = 0, status = 0;
+        unsigned ticks = 0;
+    } serial;
+
+    void finishSerial() {
+        serial.replyCommand = serial.command;
+        serial.status = serial.command == 0x55 ? 0x04 : 0x08;
+        serial.replyData = serial.data;
+        if (serial.command == 1) {
+            serialSend(serial.data);
+        } else if (serial.command != 0x55) {
+            const bool waiting = serialPending && serialPending();
+            serial.replyData = serial.data == 0x80 ? (waiting ? 0x40 : 0)
+                : waiting && serialReceive ? serialReceive() : 0;
+        }
+    }
 
     uint8_t memoryRead(uint16_t address) const {
         if (address < rom.size()) return rom[address];
@@ -56,6 +77,17 @@ struct Mie::Impl {
             if (gpioRead) return gpioRead(port);
             return 0xff;
         }
+        if (serialSend && port >= 0x09 && port <= 0x0e) {
+            // The game's uploaded Z80 extension polls completion, then reads
+            // the adapter control/data echoes. Reading data acknowledges it.
+            if (port == 0x0b) return serial.replyCommand;
+            if (port == 0x0d) return serial.status;
+            if (port == 0x0c) {
+                serial.status &= uint8_t(~0x0c);
+                return serial.replyData;
+            }
+            return 0xff;
+        }
         switch (port) {
         case 0x08: return direction;
         case 0x0f: return 0; // MIE ADC is unpopulated on this board.
@@ -77,6 +109,20 @@ struct Mie::Impl {
         if (port < 8) {
             gpio[port] = value;
             if (!(direction & (1u << port))) gpioOutput(port, value);
+            return;
+        }
+        if (serialSend && port >= 0x09 && port <= 0x0e) {
+            if (port == 0x0a) serial.transmit = value;
+            else if (port == 0x0d || port == 0x0e) serial = {};
+            else if (port == 0x09 && (value == 1 || value == 0x55
+                    || ((value == 0x80 || value == 0x81) && (serial.transmit == 0x80 || serial.transmit == 0x81)))) {
+                serial.command = value;
+                serial.data = serial.transmit;
+                serial.status = 0x03;
+                // Model adapter completion after 10 us at the fixed 16 MHz
+                // MIE clock. Electrical serial timings are not cycle-exact.
+                serial.ticks = 160;
+            }
             return;
         }
         switch (port) {
@@ -113,6 +159,7 @@ struct Mie::Impl {
     }
     void ticks(uint32_t count) {
         while (count--) {
+            if (serial.ticks && --serial.ticks == 0) finishSerial();
             if (++eepromTicks == 16) { eepromTicks = 0; eeprom.advanceMicros(1); }
             const uint8_t pending = irqEnable & irqPending & 0x7f;
             if (pending) pins |= Z80_INT; else pins &= ~Z80_INT;
@@ -158,10 +205,18 @@ void Mie::reset()
     impl_->eepromTicks = 0;
     impl_->soundIrq = false;
     impl_->boardIrqMask = 0;
+    impl_->serial = {};
     impl_->pins = z80_init(&impl_->cpu);
 }
 void Mie::setInputs(const JvsNode::Inputs& inputs) { impl_->inputs = inputs; impl_->node.setInputs(inputs); }
 void Mie::setGpio(GpioRead read, GpioWrite write) { impl_->gpioRead = std::move(read); impl_->gpioWrite = std::move(write); }
+void Mie::setSerialDevice(std::function<void(uint8_t)> send,
+    std::function<uint8_t()> receive, std::function<bool()> pending) {
+    impl_->serialSend = std::move(send);
+    impl_->serialReceive = std::move(receive);
+    impl_->serialPending = std::move(pending);
+    impl_->serial = {};
+}
 bool Mie::setSoundIrq(bool asserted) { impl_->soundIrq = asserted; return asserted && (impl_->boardIrqMask & 0x10); }
 
 namespace {
@@ -203,6 +258,6 @@ void Mie::advanceTicks(uint32_t z80Ticks) { impl_->ticks(z80Ticks); }
 uint16_t Mie::programCounter() const { return impl_->cpu.pc; }
 bool Mie::addressed() const { return impl_->node.addressed(); }
 std::array<uint8_t, 128> Mie::eepromContents() const { return impl_->eeprom.contents(); }
-bool Mie::eepromIdle() const { return impl_->eeprom.idle(); }
+bool Mie::eepromWritePending() const { return impl_->eeprom.writePending(); }
 void Mie::restoreEeprom(const std::vector<uint8_t>& contents) { impl_->eeprom = Eeprom93c46(contents); }
 } // namespace hikaru

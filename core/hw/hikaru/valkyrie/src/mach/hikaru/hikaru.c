@@ -664,7 +664,7 @@ hikaru_dump (vk_machine_t *mach)
  * Area 1	04000000-0400003F Memory Controller [Master]
  * Area 3	0C000000-0DFFFFFF RAM
  * Area 5	14000000-140000FF Master/Slave Communication Box
- *		14000100-143FFFFF Command RAM
+ *		14000030-14FFFFFF Command RAM [mirrored]
  *		15000000-150FFFFF Geometry Processor
  *		16000000-16FFFFFF Aperture-16
  *		17000000-17FFFFFF Aperture-17
@@ -706,7 +706,9 @@ setup_master_mmap (hikaru_t *hikaru)
 	ret |= vk_mmap_add_dev (mmap, 0x14000000, 0x1400002F, 0x0000003F,
 	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
 	                        hikaru->mscomm, "MSCOMM/M");
-	ret |= vk_mmap_add_ram (mmap, 0x14000030, 0x143FFFFF, 0x003FFFFF,
+	/* VON4 uploads a slave GPU helper at 0x14FFF000 (slave 0x10FFF000).
+	 * The upper aperture must alias the same 4 MiB command RAM backing. */
+	ret |= vk_mmap_add_ram (mmap, 0x14000030, 0x14FFFFFF, 0x003FFFFF,
 	                        0, hikaru->cmdram, "CMDRAM/M");
 	ret |= vk_mmap_add_dev (mmap, 0x15000000, 0x150FFFFF, 0x000FFFFF,
 	                        VK_REGION_RW | VK_REGION_SIZE_16 | VK_REGION_SIZE_32 | VK_REGION_LOG_RW,
@@ -735,7 +737,7 @@ setup_master_mmap (hikaru_t *hikaru)
  * Area 1	04000000-0400003F Memory Controller [Slave]
  * Area 3	0C000000-0DFFFFFF RAM
  * Area 4	10000000-100000FF Master/Slave Communication Box
- *		10000100-103FFFFF Command RAM [Slave]
+ *		10000100-10FFFFFF Command RAM [Slave, mirrored]
  * Area 5	14000800-1400083F Master's 18000000
  * Area 6	1A800000-1A800003 GPU
  *		1B000100-1B000103 GPU
@@ -760,7 +762,7 @@ setup_slave_mmap (hikaru_t *hikaru)
 	ret |= vk_mmap_add_dev (mmap, 0x10000000, 0x1000002F, 0x0000003F,
 	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
 	                        hikaru->mscomm, "MSCOMM/S");
-	ret |= vk_mmap_add_ram (mmap, 0x10000100, 0x103FFFFF, 0x003FFFFF,
+	ret |= vk_mmap_add_ram (mmap, 0x10000100, 0x10FFFFFF, 0x003FFFFF,
 	                        VK_REGION_LOG_W, hikaru->cmdram, "CMDRAM/S");
 	ret |= vk_mmap_add_dev (mmap, 0x14000800, 0x1400083F, 0x0000003F,
 	                        VK_REGION_RW | VK_REGION_SIZE_ALL | VK_REGION_LOG_RW,
@@ -807,7 +809,7 @@ hikaru_set_rombd_config (hikaru_t *hikaru)
 		 * though each populated pair contains only 4 MiB. */
 		eprom_source_stride = 16*MB;
 		maskrom_bank_size = 8;
-	} else if (!strcmp (game->name, "pharrier")) {
+	} else if (!strcmp (game->name, "pharrier") || !strcmp (game->name, "von4")) {
 		eprom_bank_size = 4;
 		/* MAME retains 16 MiB slots for each populated 8 MiB pair. */
 		eprom_source_stride = 16*MB;

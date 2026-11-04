@@ -363,9 +363,14 @@ protected:
 	u32 rxCommandLen = 0;
 
 	static constexpr u32 TRACK_SIZE = 0x45;
-	u8 cardData[TRACK_SIZE * 3];
+	u8 cardData[TRACK_SIZE * 3]{};
 	bool doorOpen = false;
 };
+
+std::unique_ptr<SerialPort::Pipe> createSanwaReader()
+{
+	return std::make_unique<SanwaCRP1231BR>();
+}
 
 class SanwaCRP1231LR : public SanwaCRP1231BR
 {

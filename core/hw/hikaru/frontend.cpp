@@ -22,6 +22,7 @@
 #include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/naomi/naomi_cart.h"
+#include "hw/naomi/card_reader.h"
 #include "rend/gles/glcache.h"
 #include "ui/imgui_driver.h"
 #include "ui/gui.h"
@@ -44,6 +45,7 @@ namespace {
 std::unique_ptr<RomImages> images;
 std::atomic<const GameDescriptor*> activeGame{nullptr};
 std::unique_ptr<Mie> mie;
+std::unique_ptr<SerialPort::Pipe> cardReader;
 std::unique_ptr<Protection> protection;
 std::unique_ptr<Sound> sound;
 std::unique_ptr<AudioPacer> audioPacer;
@@ -67,7 +69,8 @@ CabinetRegion pendingRegion = CabinetRegion::Saved;
 
 CabinetRegion configuredRegion(const GameDescriptor* game) {
     const int value = game == &AirTrixGame ? config::HikaruAirTrixRegion.get()
-        : game == &BraveFirefightersGame ? config::HikaruBraveRegion.get() : config::HikaruPlanetRegion.get();
+        : game == &BraveFirefightersGame ? config::HikaruBraveRegion.get()
+        : game == &VirtualOn4Game ? config::HikaruVirtualOn4Region.get() : config::HikaruPlanetRegion.get();
     return value >= -1 && value <= 2 ? static_cast<CabinetRegion>(value) : CabinetRegion::Saved;
 }
 
@@ -121,6 +124,20 @@ InputDescriptors planetHarriersInputs = {{
     {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
 }, {
     {"Stick horizontal", Full, 0, false}, {"Stick vertical", Full, 1, false},
+}};
+
+InputDescriptors virtualOn4Inputs = {{
+    {NAOMI_START_KEY, "Start"}, {NAOMI_COIN_KEY, "Coin"},
+    {NAOMI_BTN0_KEY, "Left trigger"}, {NAOMI_BTN1_KEY, "Right trigger"},
+    {NAOMI_BTN2_KEY, "Left turbo"}, {NAOMI_BTN3_KEY, "Right turbo"},
+    {NAOMI_BTN4_KEY, "Personal information"}, {NAOMI_BTN5_KEY, "Left turbo (alternate)"},
+    {NAOMI_LEFT_KEY, "Lever left"}, {NAOMI_RIGHT_KEY, "Lever right"},
+    {NAOMI_UP_KEY, "Lever up"}, {NAOMI_DOWN_KEY, "Lever down"},
+    {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
+}, {
+    {"Left lever horizontal", Full, 0, false}, {"Left lever vertical", Full, 1, false},
+    {"Right lever horizontal", Full, 2, false}, {"Right lever vertical", Full, 3, false},
+    {"Right trigger", Half, 4, false}, {"Left trigger", Half, 5, false},
 }};
 
 std::unique_ptr<Archive> findArchive(const std::string& game, const char* name) {
@@ -215,7 +232,9 @@ void load(const std::string& path) {
         return readRom(std::string(file.name) == selected->name ? *bios : *game, file);
     };
     RomImages loadedRoms;
-    if (selectedGame == &PlanetHarriersGame)
+    if (selectedGame == &VirtualOn4Game)
+        loadedRoms = loadVirtualOn4(reader, selected->name);
+    else if (selectedGame == &PlanetHarriersGame)
         loadedRoms = loadPlanetHarriers(reader, selected->name);
     else if (selectedGame == &BraveFirefightersGame)
         loadedRoms = loadBraveFirefighters(reader, selected->name);
@@ -223,6 +242,13 @@ void load(const std::string& path) {
         loadedRoms = loadAirTrix(reader, selected->name);
     auto loadedImages = std::make_unique<RomImages>(std::move(loadedRoms));
     auto loadedMie = std::make_unique<Mie>(readRom(*mieArchive, MieBootRom));
+    if (selectedGame == &VirtualOn4Game) {
+        // Reuse Hollycast's Sanwa protocol implementation through the real
+        // MIE serial adapter. No card is inserted at power-up.
+        loadedMie->setSerialDevice([](uint8_t value) { if (cardReader) cardReader->write(value); },
+            [] { return cardReader ? cardReader->read() : uint8_t(0); },
+            [] { return cardReader && cardReader->available() != 0; });
+    }
     auto loadedProtection = std::make_unique<Protection>(selectedGame->securityKey);
     const std::string savePrefix = selectedGame->identifier;
     auto loadedBramPath = hostfs::getFlashSavePath("", savePrefix + ".hikaru.nvmem");
@@ -241,7 +267,8 @@ void load(const std::string& path) {
     if (!bramSaveAllowed || !mieSaveAllowed)
         os_notify("Hikaru save data could not be loaded. Using defaults; the original files will be preserved.", 10000);
     for (auto& queue : credits) queue.reset();
-    NaomiGameInputs = selectedGame == &PlanetHarriersGame ? &planetHarriersInputs
+    NaomiGameInputs = selectedGame == &VirtualOn4Game ? &virtualOn4Inputs
+        : selectedGame == &PlanetHarriersGame ? &planetHarriersInputs
         : selectedGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
     // The cartridge header supplies the BIOS's four-byte cabinet identifier.
     std::copy_n(images->program.begin() + 0x136, cabinetId.size(), cabinetId.begin());
@@ -280,7 +307,7 @@ void suspendGraphics() {
     nativeGraphics.reset();
 }
 const GameDescriptor* loadedGame() { return activeGame.load(); }
-void unload() { activeGame = nullptr; pendingRegion = CabinetRegion::Saved; releaseGraphics(); protection.reset(); mie.reset(); images.reset(); ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
+void unload() { activeGame = nullptr; pendingRegion = CabinetRegion::Saved; releaseGraphics(); protection.reset(); mie.reset(); cardReader.reset(); images.reset(); ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
 void requestReset() { resetRequested = true; }
 void requestCabinetRegion() { regionRequested = true; }
 void insertCredit(unsigned player) {
@@ -317,21 +344,31 @@ static bool renderFrame() {
         pendingRegion = configuredRegion(loadedGame());
     }
     if (regionRequested.exchange(false)) pendingRegion = configuredRegion(loadedGame());
-    if (pendingRegion != CabinetRegion::Saved && mie->eepromIdle()) {
+    if (pendingRegion != CabinetRegion::Saved && !mie->eepromWritePending()) {
         const auto original = mie->eepromContents();
         auto updated = original;
-        const auto regionResult = applyCabinetRegion(updated, cabinetId, pendingRegion);
+        auto regionResult = applyCabinetRegion(updated, cabinetId, pendingRegion);
+        if (regionResult == CabinetRegionResult::PendingInitialization && engine
+                && std::all_of(original.begin(), original.end(), [](uint8_t value) { return value == 0xff; })) {
+            std::array<uint8_t, 128> biosDefaults{};
+            if (hikaru_engine_get_cabinet_defaults(engine, biosDefaults.data(), biosDefaults.size()) == 0)
+                regionResult = initializeErasedCabinetRegion(updated, biosDefaults, cabinetId, pendingRegion);
+        }
         if (regionResult == CabinetRegionResult::Changed) {
             if (!backupCabinetSettings(original)) {
                 os_notify("Could not back up cabinet settings. Region was not changed.", 10000);
             } else {
                 // The BIOS caches country in RAM. Preserve BRAM and teardown
                 // before replacing the EEPROM; never interrupt its serial I/O.
-                // For a blank chip, wait for the real BIOS defaults, then boot
-                // once more with the requested country instead of a fake image.
+                // For an erased chip, adopt only validated working records
+                // generated by the BIOS itself, then boot with the new country.
                 if (engine) { releaseGraphics(); ClearAudioOutput(); freshAudioOutput = true; }
-                mie->restoreEeprom(std::vector<uint8_t>(updated.begin(), updated.end()));
-                os_notify("Cabinet region applied. Calibration and saved records retained.", 5000);
+                if (saveNvram(mieEepromPath, updated)) {
+                    mie->restoreEeprom(std::vector<uint8_t>(updated.begin(), updated.end()));
+                    os_notify("Cabinet region applied. Calibration and saved records retained.", 5000);
+                } else {
+                    os_notify("Could not save cabinet region. Original settings retained.", 10000);
+                }
             }
             pendingRegion = CabinetRegion::Saved;
         } else if (regionResult != CabinetRegionResult::PendingInitialization) {
@@ -354,10 +391,12 @@ static bool renderFrame() {
     std::optional<graphics::Device::Scope> graphicsScope;
     graphicsScope.emplace(nativeGraphics.get());
     if (!engine) {
+        if (activeGame == &VirtualOn4Game) cardReader = card_reader::createSanwaReader();
         HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size(), 1};
         auto io = callbacks(); std::array<char, 512> error{};
         auto security = protectionCallbacks();
-        const auto game = activeGame == &PlanetHarriersGame ? HIKARU_ENGINE_GAME_PHARRIER
+        const auto game = activeGame == &VirtualOn4Game ? HIKARU_ENGINE_GAME_VON4
+            : activeGame == &PlanetHarriersGame ? HIKARU_ENGINE_GAME_PHARRIER
             : activeGame == &BraveFirefightersGame ? HIKARU_ENGINE_GAME_BRAVEFF : HIKARU_ENGINE_GAME_AIRTRIX;
         engine = hikaru_engine_create_game(game, &roms, &io, &security, 0, unsigned(settings.display.width), unsigned(settings.display.height), 1, error.data(), error.size());
         glcache.Reset();
@@ -460,9 +499,9 @@ static bool renderFrame() {
     }
     std::array<ControllerInputs, 2> controllers;
     for (unsigned i = 0; i < controllers.size(); ++i)
-        controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i]};
+        controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};
     const auto* game = loadedGame();
-    auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick);
+    auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick, config::HikaruVirtualOn4TwinStick);
     for (unsigned i = 0; i < credits.size(); ++i)
         input.coin[i] = credits[i].sample(input.coin[i]);
     if (game == &BraveFirefightersGame) {

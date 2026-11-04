@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 // Synthetic timing checks: no game ROM or sound firmware required.
 #include "cpu/sh/sh4.h"
 #include "mach/hikaru/hikaru.h"
@@ -39,6 +40,7 @@ int main(void) {
     board->memctl_m=hikaru_memctl_new(&board->base,true);
     if(!board->aica_m || !board->aica_s || !board->memctl_m) return 2;
     CHECK(!vk_mmap_add_dev(map,0x02000000,0x02ffffff,0x00ffffff,VK_REGION_RW|VK_REGION_SIZE_ALL,board->memctl_m,"aperture"));
+    CHECK(!vk_mmap_add_dev(map,0x04000000,0x0400003f,0x3f,VK_REGION_RW|VK_REGION_SIZE_ALL,board->memctl_m,"MEMCTL"));
     CHECK(!vk_mmap_add_ram(map,0x0c000000,0x0c00ffff,0xffff,0,board->ram_m,"master RAM"));
     vk_cpu_t *cpu=sh4_new(&board->base,map,true,true);
     if(!cpu) return 2;
@@ -118,6 +120,25 @@ int main(void) {
     CHECK(!vk_device_put(board->memctl_m,4,0x04000038,0x01000001));
     CHECK(!vk_device_exec(board->memctl_m,1));
     CHECK(vk_buffer_get(board->ram_m,4,0x300)==0x12345678 && sh->sound_cycle_debt==0);
+    /* VON4 refills the same staging RAM immediately after a DMA start.
+     * Consuming it at the next device slice would mix two geometry blocks. */
+    for(unsigned i=0;i<8;++i) vk_buffer_put(board->ram_m,4,0x400+4*i,0x11223300u+i);
+    CHECK(!vk_device_put(board->memctl_m,4,0x04000030,0x70000400));
+    CHECK(!vk_device_put(board->memctl_m,4,0x04000034,0x40000500));
+    CHECK(!vk_device_put(board->memctl_m,4,0x04000038,0x01000008));
+    uint32_t control=~0u;
+    CHECK(!vk_device_get(board->memctl_m,4,0x04000038,&control) && control==0);
+    for(unsigned i=0;i<8;++i) vk_buffer_put(board->ram_m,4,0x400+4*i,0xa5a5a5a5);
+    CHECK(!vk_device_exec(board->memctl_m,1));
+    for(unsigned i=0;i<8;++i) CHECK(vk_buffer_get(board->ram_s,4,0x500+4*i)==0x11223300u+i);
+    /* A MEMCTL start executed by the CPU must not charge sound DMA reads
+     * as CPU data loads or defer the copy until after the instruction. */
+    reset_cpu(sh); set_instruction(board->ram_m,0x2102); /* mov.l r0,@r1 */
+    sh->regs.r[0]=0x01000001; sh->regs.r[1]=0x04000038;
+    CHECK(!vk_device_put(board->memctl_m,4,0x04000030,0x0c800010));
+    CHECK(!vk_device_put(board->memctl_m,4,0x04000034,0x70000304));
+    vk_cpu_run(cpu,1);
+    CHECK(vk_buffer_get(board->ram_m,4,0x304)==0x12345678 && sh->sound_cycle_debt==0);
     /* Real SH4 DMA triggered by a CPU write: its sound source read is exempt. */
     reset_cpu(sh); set_instruction(board->ram_m,0x2102); /* mov.l r0,@r1 */
     sh->regs.r[0]=1; sh->regs.r[1]=0xffa00040;

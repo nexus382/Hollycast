@@ -11,6 +11,7 @@ namespace hikaru {
 const GameDescriptor AirTrixGame{"airtrix", "Air Trix", RomImages::AirTrixSecurityKey};
 const GameDescriptor BraveFirefightersGame{"braveff", "Brave Firefighters", std::nullopt};
 const GameDescriptor PlanetHarriersGame{"pharrier", "Planet Harriers", RomImages::PlanetHarriersSecurityKey};
+const GameDescriptor VirtualOn4Game{"von4", "Virtual-On Force", std::nullopt};
 
 const GameDescriptor* findGame(const std::string& basename)
 {
@@ -23,6 +24,8 @@ const GameDescriptor* findGame(const std::string& basename)
         return &BraveFirefightersGame;
     if (normalized == PlanetHarriersGame.identifier)
         return &PlanetHarriersGame;
+    if (normalized == VirtualOn4Game.identifier)
+        return &VirtualOn4Game;
     return nullptr;
 }
 
@@ -114,6 +117,34 @@ const std::array<InterleavedRomFile, 16> PlanetHarriersDataRoms = {{
     {{"mpr-23563.ic62", 0x1000000, 0xe3dc328b}, 0xc000002},
     {{"mpr-23560.ic65", 0x1000000, 0x24bb7072}, 0xe000000},
     {{"mpr-23564.ic66", 0x1000000, 0x255724b6}, 0xe000002},
+}};
+
+// MAME hikaru.cpp at 43b995da4a2af46c9f48c6a5536953439adfb1ab.
+// VON4 has two populated program pairs; the remaining socket slots stay zero.
+const std::array<InterleavedRomFile, 4> VirtualOn4ProgramRoms = {{
+    {{"epr-23766e.ic29", 0x0400000, 0x188e93bc}, 0x00000000},
+    {{"epr-23767e.ic30", 0x0400000, 0xd39e7ff1}, 0x00000002},
+    {{"epr-23768a.ic31", 0x0400000, 0x2e1b3812}, 0x01000000},
+    {{"epr-23769a.ic32", 0x0400000, 0x34e95687}, 0x01000002},
+}};
+
+const std::array<InterleavedRomFile, 16> VirtualOn4DataRoms = {{
+    {{"mpr-23750.ic37", 0x1000000, 0x2e40b246}, 0x00000000},
+    {{"mpr-23751.ic38", 0x1000000, 0xf345e8b3}, 0x00000002},
+    {{"mpr-23752.ic41", 0x1000000, 0x2b8c33e1}, 0x02000000},
+    {{"mpr-23753.ic42", 0x1000000, 0x9e928f82}, 0x02000002},
+    {{"mpr-23754.ic45", 0x1000000, 0xa7129d77}, 0x04000000},
+    {{"mpr-23755.ic46", 0x1000000, 0xfbfc0470}, 0x04000002},
+    {{"mpr-23756.ic49", 0x1000000, 0xc5e9abb1}, 0x06000000},
+    {{"mpr-23757.ic50", 0x1000000, 0xc8f1316e}, 0x06000002},
+    {{"mpr-23758.ic53", 0x1000000, 0x054e408a}, 0x08000000},
+    {{"mpr-23759.ic54", 0x1000000, 0xe49c6ed7}, 0x08000002},
+    {{"mpr-23760.ic57", 0x1000000, 0x261c24d0}, 0x0a000000},
+    {{"mpr-23761.ic58", 0x1000000, 0xbe3681fa}, 0x0a000002},
+    {{"mpr-23762.ic61", 0x1000000, 0xd3aa6caf}, 0x0c000000},
+    {{"mpr-23763.ic62", 0x1000000, 0x648aecb0}, 0x0c000002},
+    {{"mpr-23764.ic65", 0x1000000, 0x0aa472aa}, 0x0e000000},
+    {{"mpr-23765.ic66", 0x1000000, 0xd904250f}, 0x0e000002},
 }};
 
 uint32_t romCrc32(const std::vector<uint8_t>& data)
@@ -244,6 +275,34 @@ RomImages loadPlanetHarriers(const RomReader& reader, const std::string& bootNam
         interleaveRomWords(images.program, chip.offset, bytes);
     }
     for (const auto& chip : PlanetHarriersDataRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.data, chip.offset, bytes);
+    }
+    return images;
+}
+RomImages loadVirtualOn4(const RomReader& reader, const std::string& bootName)
+{
+    if (!reader)
+        throw std::invalid_argument("Hikaru ROM reader is required");
+    const RomFile* boot = nullptr;
+    for (const auto& candidate : BootRoms)
+        if (bootName == candidate.name)
+            boot = &candidate;
+    if (!boot)
+        throw std::invalid_argument("Unknown Hikaru BIOS revision: " + bootName);
+
+    RomImages images;
+    images.boot = reader(*boot);
+    validateRom(*boot, images.boot);
+    images.program.resize(0x04000000, 0);
+    images.data.resize(0x10000000, 0);
+    for (const auto& chip : VirtualOn4ProgramRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.program, chip.offset, bytes);
+    }
+    for (const auto& chip : VirtualOn4DataRoms) {
         auto bytes = reader(chip.file);
         validateRom(chip.file, bytes);
         interleaveRomWords(images.data, chip.offset, bytes);

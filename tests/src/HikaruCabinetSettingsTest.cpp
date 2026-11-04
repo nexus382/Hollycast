@@ -16,6 +16,7 @@ const CabinetFixture Cabinets[] = {
     {{{'B','C','O','0'}}, {{{0x5261,0x5626}, {0x7754,0x7313}, {0x180b,0x1c4c}}}},
     {{{'B','A','K','0'}}, {{{0x75e6,0x71a1}, {0x50d3,0x5494}, {0x3f8c,0x3bcb}}}},
     {{{'B','C','N',0}},   {{{0x74bc,0x70fb}, {0x5189,0x55ce}, {0x3ed6,0x3a91}}}},
+    {{{66,68,88,48}}, {{{0x2810,0x2c57}, {0x0d25,0x0962}, {0x627a,0x663d}}}},
 };
 std::array<uint8_t, 128> fixture(const CabinetFixture& cabinet, unsigned country = 0)
 {
@@ -115,5 +116,86 @@ TEST(HikaruCabinetSettingsTest, ValidRecordsFromDifferentGamesAreNotCombined)
     const auto original = data;
     EXPECT_EQ(applyCabinetRegion(data, Cabinets[0].id, CabinetRegion::Usa), CabinetRegionResult::Invalid);
     EXPECT_EQ(data, original);
+}
+std::array<uint8_t, 128> biosWorkingDefaults(const CabinetFixture& cabinet)
+{
+    auto data = fixture(cabinet);
+    data[4] = 2;
+    data[8] = 0x18;
+    data[10] = 4;
+    data[62] = data[63] = 0; // BIOS calculates these only when it saves.
+    std::copy(data.begin(), data.begin() + 64, data.begin() + 64);
+    return data;
+}
+
+TEST(HikaruCabinetSettingsTest, ErasedChipAdoptsMatchingBiosDefaultsAndCreatesValidCountryChecksums)
+{
+    for (const auto& cabinet : Cabinets) {
+        for (const auto country : {CabinetRegion::Japan, CabinetRegion::Usa, CabinetRegion::Export}) {
+            std::array<uint8_t, 128> erased;
+            erased.fill(0xff);
+            const auto defaults = biosWorkingDefaults(cabinet);
+            ASSERT_EQ(initializeErasedCabinetRegion(erased, defaults, cabinet.id, country), CabinetRegionResult::Changed);
+            for (unsigned i = 0; i < erased.size(); ++i) {
+                const auto offset = i % 64;
+                if (offset != 5 && offset < 62) EXPECT_EQ(erased[i], defaults[i]);
+            }
+            EXPECT_EQ(erased[5], uint8_t(country));
+            EXPECT_EQ(erased[69], uint8_t(country));
+            EXPECT_EQ(applyCabinetRegion(erased, cabinet.id, country), CabinetRegionResult::Unchanged);
+        }
+    }
+}
+
+TEST(HikaruCabinetSettingsTest, DefaultsNeverReplaceExistingOrDamagedNonblankSavedData)
+{
+    auto data = fixture(Cabinets[0]);
+    data[22] ^= 0x10;
+    const auto original = data;
+    EXPECT_EQ(initializeErasedCabinetRegion(data, biosWorkingDefaults(Cabinets[0]), Cabinets[0].id, CabinetRegion::Usa),
+        CabinetRegionResult::Invalid);
+    EXPECT_EQ(data, original);
+}
+
+TEST(HikaruCabinetSettingsTest, ErasedChipWaitsForCompleteMatchingBiosWorkingCopies)
+{
+    std::array<uint8_t, 128> erased;
+    erased.fill(0xff);
+    const auto original = erased;
+    for (const unsigned offset : {0u, 4u, 5u, 8u, 10u, 20u, 62u}) {
+        auto defaults = biosWorkingDefaults(Cabinets[0]);
+        defaults[offset] ^= 0x80;
+        EXPECT_EQ(initializeErasedCabinetRegion(erased, defaults, Cabinets[0].id, CabinetRegion::Usa),
+            CabinetRegionResult::PendingInitialization);
+        EXPECT_EQ(erased, original);
+    }
+    EXPECT_EQ(initializeErasedCabinetRegion(erased, biosWorkingDefaults(Cabinets[1]), Cabinets[0].id, CabinetRegion::Usa),
+        CabinetRegionResult::PendingInitialization);
+    EXPECT_EQ(erased, original);
+}
+
+TEST(HikaruCabinetSettingsTest, MatchingButMalformedBiosHeadersOrChecksumsAreRejected)
+{
+    for (const unsigned offset : {4u, 5u, 8u, 10u, 62u}) {
+        std::array<uint8_t, 128> erased;
+        erased.fill(0xff);
+        const auto original = erased;
+        auto defaults = biosWorkingDefaults(Cabinets[0]);
+        defaults[offset] = 0xff;
+        defaults[offset + 64] = 0xff;
+        EXPECT_EQ(initializeErasedCabinetRegion(erased, defaults, Cabinets[0].id, CabinetRegion::Usa),
+            CabinetRegionResult::PendingInitialization);
+        EXPECT_EQ(erased, original);
+    }
+}
+
+TEST(HikaruCabinetSettingsTest, SavedRegionDoesNotInitializeAnErasedChip)
+{
+    std::array<uint8_t, 128> erased;
+    erased.fill(0xff);
+    const auto original = erased;
+    EXPECT_EQ(initializeErasedCabinetRegion(erased, biosWorkingDefaults(Cabinets[0]), Cabinets[0].id, CabinetRegion::Saved),
+        CabinetRegionResult::Unchanged);
+    EXPECT_EQ(erased, original);
 }
 } // namespace
