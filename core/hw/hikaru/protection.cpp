@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright 2026 The Hollycast Authors
 #include "protection.h"
+#include "state_io.h"
 #include <stdexcept>
 
 namespace hikaru {
@@ -15,6 +16,27 @@ Protection::Protection(std::optional<uint32_t> key)
     });
 }
 void Protection::reset() { ram_.fill(0); if (crypto_) crypto_->reset(); }
+
+void Protection::saveState(StateWriter& writer) const
+{
+    writer.value(crypto_.has_value());
+    writer.bytes(ram_.data(), ram_.size());
+    if (crypto_)
+        crypto_->saveState(writer);
+}
+
+void Protection::loadState(StateReader& reader)
+{
+    bool hasCrypto;
+    reader.value(hasCrypto);
+    StateReader::require(hasCrypto == crypto_.has_value(),
+        "Hikaru protection chip does not match configured board");
+    std::array<uint8_t, 65536> stagedRam;
+    reader.bytes(stagedRam.data(), stagedRam.size());
+    if (crypto_)
+        crypto_->loadState(reader);
+    ram_ = stagedRam;
+}
 namespace {
 bool validSize(unsigned size) { return size==1 || size==2 || size==4 || size==8; }
 }

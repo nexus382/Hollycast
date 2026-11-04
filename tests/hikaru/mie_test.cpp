@@ -2,6 +2,7 @@
 // Copyright 2026 The Hollycast Authors
 // Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/mie.h"
+#include "hw/hikaru/state_io.h"
 #include <algorithm>
 #include <deque>
 #include <iostream>
@@ -127,6 +128,7 @@ int main()
     serial.advanceTicks(160);
     check(sent == std::vector<uint8_t>{0xaa} && getPort(0x0d) == 8 && getPort(0x0b) == 1 && getPort(0x0c) == 0xaa,
           "transmit latches the in-flight byte and returns its echo");
+
     putPort(0x0a, 0x80); putPort(0x09, 0x80); serial.advanceTicks(160);
     check(getPort(0x0b) == 0x80 && getPort(0x0c) == 0x40 && received.size() == 2,
           "status request sees waiting reader bytes without consuming them");
@@ -141,6 +143,40 @@ int main()
     check(sent.size() == 1 && getPort(0x0d) == 0, "adapter reset cancels an unfinished exchange");
     putPort(0x0a, 0xdd); putPort(0x09, 1); serial.reset(); serial.advanceTicks(160);
     check(sent.size() == 1 && getPort(0x0d) == 0, "MIE reset clears exchanges while retaining the connection");
+    putPort(0x0a, 0xcc); putPort(0x09, 1); serial.advanceTicks(80);
+    hikaru::StateWriter serialState;
+    serial.saveState(serialState);
+    hikaru::Mie resumedSerial(rom);
+    std::vector<uint8_t> resumedSent;
+    resumedSerial.setSerialDevice([&](uint8_t value) { resumedSent.push_back(value); },
+        [] { return uint8_t(0); }, [] { return false; });
+    hikaru::StateReader serialReader(serialState.data());
+    resumedSerial.loadState(serialReader);
+    serialReader.finish();
+    auto resumedPort = [&](uint8_t port) {
+        return resumedSerial.readHost(0x00800000u + unsigned(port) * 2, 1);
+    };
+    serial.advanceTicks(80); resumedSerial.advanceTicks(80);
+    check(sent.back() == 0xcc && resumedSent == std::vector<uint8_t>{0xcc}
+        && getPort(0x0d) == 8 && resumedPort(0x0d) == 8
+        && getPort(0x0c) == 0xcc && resumedPort(0x0c) == 0xcc,
+        "MIE state restores serial adapter countdown and reply");
+    auto truncatedSerial = serialState.data();
+    truncatedSerial.pop_back();
+    hikaru::StateWriter beforeRejectedLoad;
+    resumedSerial.saveState(beforeRejectedLoad);
+    bool serialStateRejected = false;
+    try {
+        hikaru::StateReader broken(truncatedSerial);
+        resumedSerial.loadState(broken);
+    } catch (const std::exception&) {
+        serialStateRejected = true;
+    }
+    hikaru::StateWriter afterRejectedLoad;
+    resumedSerial.saveState(afterRejectedLoad);
+    check(serialStateRejected && beforeRejectedLoad.data() == afterRejectedLoad.data(),
+        "rejected MIE state preserves CPU and adapter state");
+
     serial.setSerialDevice({}, {}, {});
     check(getPort(0x0d) == 0xff, "detaching the reader restores open-bus port behavior");
     std::cout << checks << " MIE checks, " << failures << " failures\n";

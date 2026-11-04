@@ -2,6 +2,9 @@
 // Copyright 2026 The Hollycast Authors
 // Portions Copyright 2026 The Hollycast Authors
 #include "frontend.h"
+#include "state_io.h"
+#include "serialize.h"
+#include "emulator.h"
 #include "input_bindings.h"
 #include "cabinet_settings.h"
 #include "roms.h"
@@ -36,12 +39,20 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
+#include <cstring>
 #include <optional>
 #include <stdexcept>
 #include <vector>
 
 namespace hikaru::frontend {
 namespace {
+// Render and snapshot requests may arrive on different host threads (Android).
+// One frame owns the machine; no state operation observes an in-progress frame.
+std::recursive_mutex stateMutex;
+std::vector<uint8_t> pendingState;
+std::array<uint32_t, 3> stateRomHashes{};
+bool stateRomHashesKnown = false;
 std::unique_ptr<RomImages> images;
 std::atomic<const GameDescriptor*> activeGame{nullptr};
 std::unique_ptr<Mie> mie;
@@ -66,6 +77,93 @@ std::string bramPath;
 std::string mieEepromPath;
 std::array<uint8_t, 4> cabinetId{};
 CabinetRegion pendingRegion = CabinetRegion::Saved;
+
+// Bump on any payload-encoding change. The engine layout tag also rejects
+// incompatible native CPU/GPU structures before state is applied.
+constexpr uint32_t StateMagic = 0x534b4948, StateVersion = 1;
+
+const std::array<uint32_t, 3>& romIdentity() {
+    if (!stateRomHashesKnown) {
+        stateRomHashes = {romCrc32(images->boot), romCrc32(images->program), romCrc32(images->data)};
+        stateRomHashesKnown = true;
+    }
+    return stateRomHashes;
+}
+std::array<char, 8> stateGameId() {
+    std::array<char, 8> id{};
+    const auto* game = activeGame.load();
+    if (!game || !images) throw std::runtime_error("No Hikaru game is loaded");
+    std::copy_n(game->identifier, std::min(std::strlen(game->identifier), id.size()), id.begin());
+    return id;
+}
+void writeSnapshot(StateWriter& state) {
+    if (!engine || !sound || !mie || !protection)
+        throw std::runtime_error("Hikaru save states are available after the first game frame");
+    const size_t bytes = hikaru_engine_state_size(engine);
+    if (!bytes || bytes > StateWriter::MaxSize - 2 * 1024 * 1024)
+        throw std::runtime_error("Cannot measure Hikaru machine state");
+    state.reserve(bytes + 2 * 1024 * 1024);
+    state.value(uint32_t(bytes));
+    uint8_t* destination = state.append(bytes);
+    if (!state.measuring() && hikaru_engine_save_state(engine, destination, bytes))
+        throw std::runtime_error("Cannot save Hikaru machine state");
+    state.value(clocks);
+    mie->saveState(state);
+    protection->saveState(state);
+    sound->saveState(state);
+    state.value(bool(cardReader));
+    if (cardReader) card_reader::saveSanwaReaderState(*cardReader, state);
+    for (const auto& credit : credits) credit.saveState(state);
+}
+void readSnapshot(const std::vector<uint8_t>& bytes) {
+    StateReader state(bytes);
+    uint32_t engineBytes;
+    state.value(engineBytes);
+    StateReader::require(engineBytes == hikaru_engine_state_size(engine), "Incompatible Hikaru machine state");
+    const auto* engineData = state.view(engineBytes);
+    if (hikaru_engine_load_state(engine, engineData, engineBytes))
+        throw std::runtime_error("Invalid Hikaru CPU or GPU state");
+    uint64_t savedClocks;
+    state.value(savedClocks);
+    StateReader::require(savedClocks < 200, "Invalid Hikaru I/O clock phase");
+    mie->loadState(state);
+    protection->loadState(state);
+    sound->loadState(state);
+    bool hasReader;
+    state.value(hasReader);
+    StateReader::require(hasReader == bool(cardReader), "Incompatible Hikaru card reader");
+    if (cardReader) card_reader::loadSanwaReaderState(*cardReader, state);
+    for (auto& credit : credits) credit.loadState(state);
+    state.finish();
+    clocks = savedClocks;
+}
+bool applyPendingState() {
+    if (pendingState.empty()) return false;
+    auto restore = std::move(pendingState);
+    // A rejected component must not leave a partially restored machine. Keep
+    // the prior frame until every device has accepted the same snapshot.
+    StateWriter backup;
+    bool applying = false;
+    try {
+        writeSnapshot(backup);
+        applying = true;
+        readSnapshot(restore);
+    } catch (const std::exception& error) {
+        if (applying) readSnapshot(backup.data());
+        os_notify((std::string("Could not restore Hikaru state: ") + error.what()).c_str(), 10000);
+        glcache.Reset();
+        return false;
+    }
+    pendingRegion = CabinetRegion::Saved;
+    regionRequested = resetRequested = false;
+    ioError.clear();
+    audioPacer->reset();
+    audioModeKnown = false;
+    ClearAudioOutput();
+    freshAudioOutput = true;
+    glcache.Reset();
+    return true;
+}
 
 CabinetRegion configuredRegion(const GameDescriptor* game) {
     const int value = game == &AirTrixGame ? config::HikaruAirTrixRegion.get()
@@ -211,6 +309,9 @@ HikaruEngineProtection protectionCallbacks() {
 }
 }
 void load(const std::string& path) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    pendingState.clear();
+    stateRomHashesKnown = false;
     const auto filename = hostfs::storage().getFileInfo(path).name;
     const auto* selectedGame = findGame(get_file_basename(filename));
     if (!selectedGame) throw std::runtime_error("Unsupported Hikaru game archive");
@@ -277,6 +378,7 @@ void load(const std::string& path) {
     activeGame = selectedGame;
 }
 void releaseGraphics() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
     if (audioPacer) { audioPacer->reset(); audioPacer.reset(); audioModeKnown = false; }
     if (engine) {
@@ -290,6 +392,7 @@ void releaseGraphics() {
     nativeGraphics.reset();
 }
 void suspendGraphics() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
     if (!engine) { nativeGraphics.reset(); return; }
     if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
@@ -307,17 +410,81 @@ void suspendGraphics() {
     nativeGraphics.reset();
 }
 const GameDescriptor* loadedGame() { return activeGame.load(); }
-void unload() { activeGame = nullptr; pendingRegion = CabinetRegion::Saved; releaseGraphics(); protection.reset(); mie.reset(); cardReader.reset(); images.reset(); ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
+void unload() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    activeGame = nullptr;
+    pendingRegion = CabinetRegion::Saved;
+    pendingState.clear();
+    stateRomHashesKnown = false;
+    releaseGraphics();
+    protection.reset(); mie.reset(); cardReader.reset(); images.reset();
+    ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr;
+    hasSavedBram = false; bramPath.clear(); mieEepromPath.clear();
+}
+bool stateReady() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    return engine && sound && images && pendingState.empty();
+}
+void serialize(Serializer& target) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    try {
+        if (target.rollback() || !pendingState.empty())
+            throw std::runtime_error("Hikaru state operation is not ready");
+        const auto id = stateGameId();
+        StateWriter state(target.dryrun());
+        writeSnapshot(state);
+        const auto& hashes = romIdentity();
+        const uint64_t layout = hikaru_engine_state_layout();
+        const uint32_t length = uint32_t(state.size());
+        const uint32_t checksum = target.dryrun() ? 0 : romCrc32(state.data());
+        target << StateMagic << StateVersion << layout;
+        target.serialize(id.data(), id.size());
+        target.serialize(hashes.data(), hashes.size());
+        target << length << checksum;
+        if (target.dryrun()) target.skip(length);
+        else target.serialize(state.data().data(), state.size());
+    } catch (const std::exception& error) {
+        throw Serializer::Exception(error.what());
+    }
+}
+void deserialize(Deserializer& source) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    try {
+        if (source.rollback()) throw std::runtime_error("Hikaru rollback states are unsupported");
+        uint32_t magic, version, length, checksum;
+        uint64_t layout;
+        std::array<char, 8> id{};
+        std::array<uint32_t, 3> hashes{};
+        source >> magic >> version >> layout;
+        source.deserialize(id.data(), id.size());
+        source.deserialize(hashes.data(), hashes.size());
+        source >> length >> checksum;
+        StateReader::require(magic == StateMagic && version == StateVersion &&
+            layout == hikaru_engine_state_layout(), "Incompatible Hikaru state format or platform");
+        StateReader::require(id == stateGameId() && hashes == romIdentity(), "Hikaru state belongs to different ROMs or BIOS");
+        StateReader::require(length && length <= StateWriter::MaxSize && length == source.remaining(),
+            "Invalid Hikaru state length");
+        std::vector<uint8_t> bytes(length);
+        source.deserialize(bytes.data(), bytes.size());
+        StateReader::require(romCrc32(bytes) == checksum, "Hikaru state checksum mismatch");
+        pendingState = std::move(bytes);
+        resetRequested = regionRequested = false;
+        pendingRegion = CabinetRegion::Saved;
+    } catch (const std::exception& error) {
+        throw Deserializer::Exception(error.what());
+    }
+}
 void requestReset() { resetRequested = true; }
 void requestCabinetRegion() { regionRequested = true; }
 void insertCredit(unsigned player) {
     if (player < credits.size()) credits[player].enqueue();
 }
-void pauseAudio() { if (audioPacer) audioPacer->reset(); audioModeKnown = false; }
+void pauseAudio() { std::lock_guard<std::recursive_mutex> lock(stateMutex); if (audioPacer) audioPacer->reset(); audioModeKnown = false; }
 // InitAudio has already supplied an empty backend. Defer DSP work to its
 // producer thread and avoid reopening non-queue backends to clear it again.
 void resumeAudio() { freshAudioOutput = true; }
 static bool renderFrame() {
+    std::unique_lock<std::recursive_mutex> stateLock(stateMutex);
     static const bool traceTiming = std::getenv("HIKARU_TRACE_TIMING") != nullptr;
     const auto renderStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (!images || !mie || !protection || !activeGame) throw FlycastException("Hikaru ROMs are not loaded");
@@ -344,7 +511,7 @@ static bool renderFrame() {
         pendingRegion = configuredRegion(loadedGame());
     }
     if (regionRequested.exchange(false)) pendingRegion = configuredRegion(loadedGame());
-    if (pendingRegion != CabinetRegion::Saved && !mie->eepromWritePending()) {
+    if (pendingState.empty() && pendingRegion != CabinetRegion::Saved && !mie->eepromWritePending()) {
         const auto original = mie->eepromContents();
         auto updated = original;
         auto regionResult = applyCabinetRegion(updated, cabinetId, pendingRegion);
@@ -460,6 +627,7 @@ static bool renderFrame() {
     }
     if (hikaru_engine_restore_graphics(engine, 0, unsigned(settings.display.width), unsigned(settings.display.height)) != 0)
         throw FlycastException(std::string("Hikaru renderer: ") + hikaru_engine_last_error(engine));
+    const bool restoredState = applyPendingState();
     const bool fastForward = settings.input.fastForwardMode;
     const bool muted = settings.aica.muteAudio;
     const bool pacing = config::HikaruAudioPacing;
@@ -578,7 +746,6 @@ static bool renderFrame() {
     glcache.Reset();
     if (nativeGraphics) nativeGraphics->checkError();
     graphicsScope.reset();
-    if (nativeGraphics) nativeGraphics->present();
     if (result || !ioError.empty()) throw FlycastException(ioError.empty() ? hikaru_engine_last_error(engine) : ioError);
     performance_overlay::recordGuestFrame();
     performance_overlay::recordSh4Vblank();
@@ -589,6 +756,12 @@ static bool renderFrame() {
     const bool widthLimited = int64_t(outputWidth) * 3 <= int64_t(outputHeight) * 4;
     performance_overlay::recordOutputViewport(widthLimited ? outputWidth : int(int64_t(outputHeight) * 4 / 3),
         widthLimited ? int(int64_t(outputWidth) * 3 / 4) : outputHeight);
+    const unsigned renderedHeight = internalHeight;
+    // Presentation can invoke GUI save/load handlers, which acquire guiMutex
+    // before this mutex. End machine ownership before calling back into UI.
+    // Graphics creation/destruction and presentation remain on this thread.
+    stateLock.unlock();
+    if (nativeGraphics) nativeGraphics->present();
     if (imguiDriver) {
         imguiDriver->setFrameRendered();
         // Native presenters already build and submit the overlay. Submitting
@@ -596,6 +769,9 @@ static bool renderFrame() {
         if (!nativeGraphics) gui_display_osd();
         glcache.Reset();
     }
+    // Subscribers can call the GUI or save again. Notify after the restored
+    // frame is presented, with neither machine nor graphics scope held.
+    if (restoredState) EventManager::event(Event::LoadState);
     if (traceTiming) {
         static unsigned frames;
         static uint64_t frameNumber;
@@ -621,7 +797,7 @@ static bool renderFrame() {
                          frames, engineMs / frames, overlayMs / frames, totalMs / frames, maximumMs, cpuClockMhz,
                          gl ? "opengl" : isMetal(requested) ? "metal" : "vulkan",
                          sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle",
-                         internalHeight);
+                         renderedHeight);
             frames = 0; engineMs = overlayMs = totalMs = maximumMs = 0;
         }
     }

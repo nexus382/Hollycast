@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/sound.h"
+#include "hw/hikaru/state_io.h"
 #include "hw/aica/aica_if.h"
 #include "hw/aica/aica_mem.h"
 #include "hw/aica/aica.h"
@@ -15,8 +17,10 @@
 #include <cstdio>
 #include <chrono>
 #include <future>
+#include <iterator>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 class HikaruSoundFrameTest : public ::testing::Test {
@@ -418,4 +422,131 @@ TEST_F(HikaruSoundFrameTest, GenericSnapshotPreservesSelectedChannelBankAndSeria
         cb.detach(cb.opaque);
     }
     EXPECT_EQ(aica::sgc::activeChannelState(), defaultBank);
+}
+
+struct SoundStateTrace {
+    std::vector<std::array<s16, 2>> pcm;
+    std::vector<u64> reads;
+    std::vector<int> irqs;
+};
+
+TEST_F(HikaruSoundFrameTest, SoundSnapshotRestoresDualBoardContinuationAndDreamcastHost)
+{
+    Result output;
+    hikaru::Sound sound([](void *p, s16 left, s16 right) {
+        static_cast<Result *>(p)->pcm.push_back({left, right});
+    }, &output);
+    auto cb = sound.callbacks();
+    for (unsigned board = 0; board < 2; ++board) {
+        output.ram[board][0] = 0xe2800001;
+        output.ram[board][1] = 0xe58f0018;
+        output.ram[board][2] = 0xeafffffc;
+        for (unsigned i = 0; i < 32; ++i)
+            output.ram[board][0x1000 / 4 + i] = board ? 0x10001000 : 0x30003000;
+        ASSERT_EQ(cb.attach(cb.opaque, board, reinterpret_cast<u8 *>(output.ram[board].data()), 0x800000), 0);
+    }
+    ASSERT_EQ(cb.reset(cb.opaque), 0);
+    ASSERT_EQ(cb.set_reset(cb.opaque, 0), 0);
+    const std::pair<u32, u32> regs[] = {
+        {0x2800, 15}, {4, 0x1000}, {0xc, 64}, {0x10, 31}, {0x24, 0xf00},
+        {0x28, 0x20}, {0, 0xc200}, {0x28b4, 0x400}, {0x2c00, 0}
+    };
+    for (unsigned board = 0; board < 2; ++board)
+        for (const auto& reg : regs)
+            ASSERT_EQ(cb.write(cb.opaque, board, reg.first, 2, reg.second), 0);
+
+    ASSERT_EQ(cb.advance(cb.opaque, 4800), 0);
+    ASSERT_EQ(cb.advance(cb.opaque, 5100), 0);
+    hikaru::StateWriter writer;
+    sound.saveState(writer);
+    const std::vector<u8> savedAudio = writer.data();
+    const std::array<std::vector<u32>, 2> savedRam{output.ram[0], output.ram[1]};
+
+    auto continueSound = [&]() {
+        SoundStateTrace trace;
+        const size_t pcmStart = output.pcm.size();
+        const u32 cycles[] = {4800, 5300, 3600, 7100, 4500, 6200, 4300, 5900};
+        for (unsigned i = 0; i < std::size(cycles); ++i) {
+            const unsigned board = i & 1;
+            EXPECT_EQ(cb.write(cb.opaque, board, 0x2800, 2, 15 - (i % 5)), 0);
+            u64 value = 0;
+            EXPECT_EQ(cb.read(cb.opaque, board, 0x2800, 2, &value), 0);
+            trace.reads.push_back(value);
+            trace.irqs.push_back(cb.irq(cb.opaque, board));
+            EXPECT_EQ(cb.advance(cb.opaque, cycles[i]), 0);
+        }
+        trace.pcm.assign(output.pcm.begin() + pcmStart, output.pcm.end());
+        return trace;
+    };
+    const SoundStateTrace expected = continueSound();
+    EXPECT_FALSE(expected.pcm.empty());
+    const std::array<std::vector<u32>, 2> expectedRam{output.ram[0], output.ram[1]};
+
+    ASSERT_EQ(cb.set_reset(cb.opaque, 1), 0);
+    for (unsigned board = 0; board < 2; ++board)
+        std::copy(savedRam[board].begin(), savedRam[board].end(), output.ram[board].begin());
+    output.pcm.clear();
+
+    aica::BoardState hostState;
+    hostState.save();
+    aica::aica_reg[0x42] = 0x5a;
+    aica::dsp::state.TEMP[3] = 0x12345;
+    aica::timers[0].c_step = 17;
+    aica::arm::arm_Reg[4].I = 0xfeedface;
+    aica::midiSendBuffer.push_back(0x42);
+    const auto *hostRegisterBank = &aica::aica_reg[0];
+    const auto *hostRam = &aica::aica_ram[0];
+    const size_t hostRamSize = aica::aica_ram.getSize();
+    const std::vector<u8> hostRegisters(aica::aica_reg, aica::aica_reg + 0x8000);
+    const auto serializeHostSgc = [] {
+        Serializer measure;
+        aica::sgc::serialize(measure);
+        std::vector<u8> data(measure.size());
+        Serializer write(data.data(), data.size());
+        aica::sgc::serialize(write);
+        return data;
+    };
+    const auto hostSgc = serializeHostSgc();
+    const auto hostMidi = aica::midiSendBuffer;
+
+    hikaru::StateReader reader(savedAudio);
+    sound.loadState(reader);
+    reader.finish();
+
+    EXPECT_EQ(&aica::aica_reg[0], hostRegisterBank);
+    EXPECT_EQ(&aica::aica_ram[0], hostRam);
+    EXPECT_EQ(aica::aica_ram.getSize(), hostRamSize);
+    EXPECT_EQ(std::vector<u8>(aica::aica_reg, aica::aica_reg + 0x8000), hostRegisters);
+    EXPECT_EQ(aica::dsp::state.TEMP[3], 0x12345);
+    EXPECT_EQ(aica::timers[0].c_step, 17);
+    EXPECT_EQ(aica::arm::arm_Reg[4].I, 0xfeedfaceu);
+    EXPECT_EQ(aica::midiSendBuffer, hostMidi);
+    EXPECT_EQ(serializeHostSgc(), hostSgc);
+
+    const SoundStateTrace actual = continueSound();
+    EXPECT_EQ(actual.pcm, expected.pcm);
+    EXPECT_EQ(actual.reads, expected.reads);
+    EXPECT_EQ(actual.irqs, expected.irqs);
+    EXPECT_EQ(output.ram, expectedRam);
+    cb.detach(cb.opaque);
+    hostState.load();
+}
+
+TEST_F(HikaruSoundFrameTest, SoundSnapshotRejectsTruncatedAudioState)
+{
+    Result output;
+    hikaru::Sound sound(nullptr, nullptr);
+    auto cb = sound.callbacks();
+    for (unsigned board = 0; board < 2; ++board)
+        ASSERT_EQ(cb.attach(cb.opaque, board, reinterpret_cast<u8 *>(output.ram[board].data()), 0x800000), 0);
+    ASSERT_EQ(cb.reset(cb.opaque), 0);
+
+    hikaru::StateWriter writer;
+    sound.saveState(writer);
+    std::vector<u8> truncated = writer.data();
+    ASSERT_FALSE(truncated.empty());
+    truncated.pop_back();
+    hikaru::StateReader reader(truncated);
+    EXPECT_THROW(sound.loadState(reader), std::runtime_error);
+    cb.detach(cb.opaque);
 }

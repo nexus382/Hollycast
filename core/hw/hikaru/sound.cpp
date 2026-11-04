@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "sound.h"
+#include "state_io.h"
 #include "hw/aica/aica_if.h"
 #include "hw/aica/sgc_if.h"
 #include <cstdio>
@@ -38,9 +40,9 @@ public:
 		if (local) { ram = aica::aica_ram; registers = aica::aica_reg; channels = aica::sgc::activeChannelState(); host.save(); oldHost = aica::setBoardHost(true); }
 	}
 	~ScopedBoardHost() { if (local) { host.restoreRegisters(registers, channels); aica::aica_ram = ram; aica::setBoardHost(oldHost); } }
-	void select(aica::BoardState& state, u8* data) {
-		if (local || selectedBoard != &state) {
-			aica::aica_ram.setRegion(data, SoundRamSize);
+	void select(aica::BoardState& state, u8* data, bool force = false) {
+		if (local || force || selectedBoard != &state) {
+			if (data) aica::aica_ram.setRegion(data, SoundRamSize);
 			state.selectBoard();
 			if (!local) selectedBoard = &state;
 		}
@@ -78,6 +80,49 @@ void Sound::endFrame()
 	aica::aica_ram = previousRam;
 	aica::setBoardHost(previousHost);
 	frameScratch = selectedBoard = nullptr;
+}
+
+void Sound::saveState(StateWriter& writer) const
+{
+	std::lock_guard<std::recursive_mutex> lock(soundMutex);
+	if (frameScratch == &hostScratch && selectedBoard) {
+		for (const Board& board : boards)
+			if (selectedBoard == &board.state) {
+				selectedBoard->save();
+				break;
+			}
+	}
+	writer.value(sampleFraction);
+	writer.value(resetAsserted);
+	for (const Board& board : boards)
+		board.state.serializeHikaruState(writer);
+}
+
+void Sound::loadState(StateReader& reader)
+{
+	std::lock_guard<std::recursive_mutex> lock(soundMutex);
+	u64 loadedSampleFraction = 0;
+	bool loadedResetAsserted = true;
+	reader.value(loadedSampleFraction);
+	reader.value(loadedResetAsserted);
+	StateReader::require(loadedSampleFraction < Sh4Clock, "Invalid Hikaru audio sample phase");
+	for (Board& board : boards)
+		board.state.deserializeHikaruState(reader);
+
+	{
+		ScopedBoardHost host(hostScratch);
+		for (Board& board : boards) {
+			host.select(board.state, board.ram, true);
+			aica::sgc::rebuildHikaruChannels();
+			board.state.save();
+		}
+	}
+	sampleFraction = loadedSampleFraction;
+	resetAsserted = loadedResetAsserted;
+	mixedSampleCount = mixedClipCount = boardSaturationCount = 0;
+	for (auto& peak : boardPeak) peak = 0;
+	for (auto& peaks : channelPeaks)
+		std::fill(std::begin(peaks), std::end(peaks), 0);
 }
 
 int Sound::attach(unsigned board, u8* ram, size_t size)

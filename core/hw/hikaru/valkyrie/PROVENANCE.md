@@ -148,3 +148,10 @@ force zero, and wide reads visit each 16-bit data port once. Width, alignment
 and aperture validation remain explicit host API constraints. The cipher's
 block-header reset already restores its read cursor; the alleged cursor
 heap over-read was not established by this review.
+
+Frontend save states use a bounded in-memory transfer of registered mutable
+buffers and explicit CPU/GPU/device fields, with native-layout and ROM identity
+checks. Engine transfers preserve live callbacks and renderer ownership;
+restoring invalidates texture/mesh caches. The legacy standalone state format
+is version 3 to include scheduler run state, CPU clock fractions and GPU
+framebuffer/transfer bookkeeping. No host pointers or compiled code are saved.

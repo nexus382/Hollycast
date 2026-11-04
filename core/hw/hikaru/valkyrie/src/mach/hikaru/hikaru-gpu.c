@@ -1392,6 +1392,10 @@ hikaru_gpu_save_state (vk_device_t *dev, vk_state_t *state)
 	SAVE (gpu->regs);
 	SAVE (gpu->cp);
 	SAVE (gpu->state);
+	SAVE (gpu->fb_config);
+	SAVE (gpu->depth_bias);
+	SAVE (gpu->texoffset);
+	SAVE (gpu->idma_completed);
 
 	return ret;
 }
@@ -1399,13 +1403,35 @@ hikaru_gpu_save_state (vk_device_t *dev, vk_state_t *state)
 static int
 hikaru_gpu_load_state (vk_device_t *dev, vk_state_t *state)
 {
-	hikaru_gpu_t *gpu = (hikaru_gpu_t *) dev;
+	hikaru_gpu_t *live = (hikaru_gpu_t *) dev;
+	hikaru_gpu_t *gpu = malloc (sizeof (*gpu));
+	if (!gpu) return -1;
+	memcpy (gpu, live, sizeof (*gpu));
 	int ret = 0;
 
 	LOAD (gpu->regs);
 	LOAD (gpu->cp);
 	LOAD (gpu->state);
+	LOAD (gpu->fb_config);
+	LOAD (gpu->depth_bias);
+	LOAD (gpu->texoffset);
+	LOAD (gpu->idma_completed);
 
+	if (gpu->state.viewports.depth < 0 || gpu->state.viewports.depth > 32 ||
+	    gpu->state.modelviews.depth >= NUM_MODELVIEWS || gpu->state.modelviews.total > NUM_MODELVIEWS ||
+	    gpu->state.materials.base >= NUM_MATERIALS || gpu->state.texheads.base >= NUM_TEXHEADS ||
+	    gpu->state.lights.base >= NUM_LIGHTSETS || gpu->state.in_mesh)
+		ret = -1;
+	if (!ret) {
+		live->regs = gpu->regs;
+		live->cp = gpu->cp;
+		live->state = gpu->state;
+		live->fb_config = gpu->fb_config;
+		live->depth_bias = gpu->depth_bias;
+		memcpy (live->texoffset, gpu->texoffset, sizeof (live->texoffset));
+		live->idma_completed = gpu->idma_completed;
+	}
+	free (gpu);
 	return ret;
 }
 

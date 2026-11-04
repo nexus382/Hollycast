@@ -1,6 +1,7 @@
 /* 
  * Valkyrie
  * Copyright (C) 2011-2013, Stefano Teso
+ * Portions Copyright 2026 The Hollycast Authors
  * 
  * Valkyrie is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +28,10 @@
 typedef struct {
 	uint32_t mode;
 	FILE *fp;
+	/* A null file selects bounded memory I/O; null save data counts bytes. */
+	uint8_t *data;
+	size_t capacity, offset;
+	bool failed;
 } vk_state_t;
 
 vk_state_t	*vk_state_new (const char *path, uint32_t mode);

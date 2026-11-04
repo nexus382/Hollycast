@@ -875,6 +875,11 @@ void Emulator::unloadGame(bool allowAutoSave)
 #ifdef USE_HIKARU
 		if (settings.platform.isHikaru())
 		{
+#ifndef LIBRETRO
+			if (allowAutoSave && state == Loaded && config::AutoSaveState && !skipAutoSaveThisUnload
+					&& dc_savestateAllowed() && hikaru::frontend::stateReady())
+				gui_saveState(dc_getAutoSaveSlot(), false);
+#endif
 			hikaru::frontend::unload();
 			config::Settings::instance().reset();
 			config::Settings::instance().load(false);
@@ -1055,6 +1060,14 @@ void Emulator::stepRange(u32 from, u32 to)
 
 void Emulator::loadstate(Deserializer& deser)
 {
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru()) {
+		// Apply on the render thread; it owns native graphics and emits LoadState
+		// only after every device has accepted the same restored frame.
+		dc_deserialize(deser);
+		return;
+	}
+#endif
 	if (config::customTexturePreloadMode() == config::CustomTexturePreloadMode::Off)
 		custom_texture.refresh();
 #if FEAT_AREC == DYNAREC_JIT

@@ -10,6 +10,8 @@
 #include <vector>
 
 namespace hikaru {
+class StateReader;
+class StateWriter;
 // Sega 315-6146: real Z80 execution with the host's even-byte memory/port
 // windows and a JVS I/O node. No internal ROM or uploaded firmware is bundled.
 class Mie {
@@ -21,6 +23,8 @@ public:
     Mie(const Mie&) = delete;
     Mie& operator=(const Mie&) = delete;
     void reset();
+    void saveState(StateWriter& writer) const;
+    void loadState(StateReader& reader);
     // Cabinet JVS inputs. Motherboard switches are separate GPIO pins and can
     // be supplied through GpioRead (port 6, active-low bits 2 and 3).
     void setInputs(const JvsNode::Inputs& inputs);

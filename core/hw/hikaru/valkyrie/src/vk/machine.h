@@ -91,6 +91,8 @@ void		 vk_machine_register_cpu (vk_machine_t *, void *);
 int		 vk_machine_load_game (vk_machine_t *mach, vk_game_t *game);
 void		 vk_machine_reset (vk_machine_t *mach, vk_reset_type_t type);
 int		 vk_machine_run_frame (vk_machine_t *mach);
+// Transfers registered mutable buffers and devices without resetting external I/O.
+int              vk_machine_transfer_state (vk_machine_t *mach, vk_state_t *state);
 int		 vk_machine_load_state (vk_machine_t *mach, const char *path);
 int		 vk_machine_save_state (vk_machine_t *mach, const char *path);
 const char	*vk_machine_get_debug_string (vk_machine_t *mach);

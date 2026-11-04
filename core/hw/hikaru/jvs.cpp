@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // Protocol and 837-13551 feature values follow hw/maple/maple_jvs.cpp.
 #include "jvs.h"
+#include "state_io.h"
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 namespace hikaru {
@@ -11,6 +14,89 @@ namespace {
 constexpr uint8_t sync = 0xe0, escape = 0xd0;
 constexpr std::size_t maxPayload = 254, maxQueued = 1024;
 }
+void CoinPulseQueue::saveState(StateWriter& writer) const
+{
+    writer.value(pending.load(std::memory_order_relaxed));
+    writer.value(previous);
+}
+
+void CoinPulseQueue::loadState(StateReader& reader)
+{
+    unsigned count;
+    bool wasPressed;
+    reader.value(count);
+    reader.value(wasPressed);
+    StateReader::require(count <= 1000000, "Invalid Hikaru coin pulse count");
+    pending.store(count, std::memory_order_relaxed);
+    previous = wasPressed;
+}
+
+void JvsNode::saveState(StateWriter& writer) const
+{
+    writer.value(inputs_.test);
+    writer.value(inputs_.service);
+    writer.value(inputs_.players);
+    writer.value(inputs_.coin);
+    writer.value(inputs_.analog);
+    writer.value(coins_);
+    writer.value(previousCoin_);
+    writer.value(frame_);
+    writer.value(static_cast<uint32_t>(frameSize_));
+    writer.value(static_cast<uint32_t>(expected_));
+    writer.value(receiving_);
+    writer.value(escape_);
+    writer.value(node_);
+    writer.value(outputs_);
+    writer.value(static_cast<uint32_t>(response_.size()));
+    for (uint8_t byte : response_)
+        writer.value(byte);
+}
+
+void JvsNode::loadState(StateReader& reader)
+{
+    JvsNode staged = *this;
+    reader.value(staged.inputs_.test);
+    reader.value(staged.inputs_.service);
+    reader.value(staged.inputs_.players);
+    reader.value(staged.inputs_.coin);
+    reader.value(staged.inputs_.analog);
+    reader.value(staged.coins_);
+    reader.value(staged.previousCoin_);
+    reader.value(staged.frame_);
+    uint32_t frameSize, expected, responseSize;
+    reader.value(frameSize);
+    reader.value(expected);
+    reader.value(staged.receiving_);
+    reader.value(staged.escape_);
+    reader.value(staged.node_);
+    reader.value(staged.outputs_);
+    reader.value(responseSize);
+    StateReader::require(responseSize <= maxQueued, "JVS response queue is too large");
+    staged.response_.clear();
+    for (uint32_t i = 0; i < responseSize; ++i) {
+        uint8_t byte;
+        reader.value(byte);
+        staged.response_.push_back(byte);
+    }
+
+    StateReader::require(frameSize <= staged.frame_.size() && expected <= staged.frame_.size()
+        && staged.node_ <= 31, "Invalid JVS parser state");
+    for (uint16_t count : staged.coins_)
+        StateReader::require(count <= 0x3fff, "Invalid JVS coin count");
+    if (!staged.receiving_) {
+        StateReader::require(frameSize == 0 && expected == 0 && !staged.escape_,
+            "Invalid inactive JVS parser");
+    } else if (frameSize >= 2) {
+        StateReader::require(expected >= 3 && expected == 2 + staged.frame_[1] && frameSize < expected,
+            "Invalid JVS frame cursor");
+    } else {
+        StateReader::require(expected == 0, "Invalid JVS frame length");
+    }
+    staged.frameSize_ = frameSize;
+    staged.expected_ = expected;
+    *this = std::move(staged);
+}
+
 void JvsNode::clearParser()
 {
     frameSize_ = expected_ = 0;

@@ -30,6 +30,9 @@
 #include "hw/gdrom/gdrom_if.h"
 #include "cfg/option.h"
 #include "serialize.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/state_io.h"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -1490,9 +1493,15 @@ static OnLoad staticInit(staticinitialise);
 
 ChannelEx ChannelEx::Chans[64];
 
+static s16 boardExternalInput[2];
+
 struct ChannelState
 {
 	ChannelEx channels[64];
+#ifdef USE_HIKARU
+	s16 externalInput[2]{};
+	u32 channelPeaks[64]{};
+#endif
 };
 #ifdef USE_HIKARU
 static ChannelState* selectedChannels;
@@ -1529,8 +1538,12 @@ void saveChannelState(ChannelState& state)
 {
 #ifdef USE_HIKARU
 	if (&state != selectedChannels)
-#endif
 		std::copy(std::begin(Chans), std::end(Chans), std::begin(state.channels));
+	std::copy(std::begin(boardExternalInput), std::end(boardExternalInput), std::begin(state.externalInput));
+	std::copy(std::begin(ChannelEx::channelPeaks), std::end(ChannelEx::channelPeaks), std::begin(state.channelPeaks));
+#else
+	std::copy(std::begin(Chans), std::end(Chans), std::begin(state.channels));
+#endif
 }
 
 void loadChannelState(const ChannelState& state)
@@ -1542,14 +1555,167 @@ void loadChannelState(const ChannelState& state)
 #ifdef USE_HIKARU
 	for (int i = 0; i < 64; ++i)
 		Chans[i].ccd = (ChannelCommonData*)&aica_reg[i * 0x80];
+	std::copy(std::begin(state.externalInput), std::end(state.externalInput), std::begin(boardExternalInput));
+	std::copy(std::begin(state.channelPeaks), std::end(state.channelPeaks), std::begin(ChannelEx::channelPeaks));
 #endif
 }
+
+#ifdef USE_HIKARU
+void serializeHikaruState(const ChannelState& state, hikaru::StateWriter& writer)
+{
+	for (const ChannelEx& channel : state.channels)
+	{
+		writer.value(channel.SA);
+		writer.value(channel.CA);
+		writer.value(channel.step.full);
+		writer.value(channel.s0);
+		writer.value(channel.s1);
+		writer.value(channel.loop.looped);
+		writer.value(channel.adpcm.last_quant);
+		writer.value(channel.adpcm.loopstart_quant);
+		writer.value(channel.adpcm.loopstart_prev_sample);
+		writer.value(channel.adpcm.in_loop);
+		writer.value(channel.noise_state);
+		writer.value(channel.AEG.val);
+		writer.value(channel.AEG.state);
+		writer.value(channel.FEG.value);
+		writer.value(channel.FEG.state);
+		writer.value(channel.FEG.prev1);
+		writer.value(channel.FEG.prev2);
+		writer.value(channel.FEG.fractSave);
+		writer.value(channel.lfo.counter);
+		writer.value(channel.lfo.state);
+		writer.value(channel.enabled);
+	}
+	writer.value(state.externalInput);
+	writer.value(state.channelPeaks);
+}
+
+void deserializeHikaruState(ChannelState& state, hikaru::StateReader& reader)
+{
+	struct SavedChannel
+	{
+		u32 SA, CA, step;
+		SampleType s0, s1;
+		u8 looped;
+		s32 lastQuant, loopstartQuant;
+		SampleType loopstartPrevious;
+		bool inLoop;
+		u32 noiseState;
+		s32 aegValue;
+		EGState aegState;
+		u32 fegValue;
+		EGState fegState;
+		SampleType fegPrevious1, fegPrevious2;
+		s32 fegFraction;
+		u32 lfoCounter;
+		u8 lfoState;
+		bool enabled;
+	};
+	SavedChannel saved[64]{};
+	for (SavedChannel& channel : saved)
+	{
+		reader.value(channel.SA);
+		reader.value(channel.CA);
+		reader.value(channel.step);
+		reader.value(channel.s0);
+		reader.value(channel.s1);
+		reader.value(channel.looped);
+		reader.value(channel.lastQuant);
+		reader.value(channel.loopstartQuant);
+		reader.value(channel.loopstartPrevious);
+		reader.value(channel.inLoop);
+		reader.value(channel.noiseState);
+		reader.value(channel.aegValue);
+		reader.value(channel.aegState);
+		reader.value(channel.fegValue);
+		reader.value(channel.fegState);
+		reader.value(channel.fegPrevious1);
+		reader.value(channel.fegPrevious2);
+		reader.value(channel.fegFraction);
+		reader.value(channel.lfoCounter);
+		reader.value(channel.lfoState);
+		reader.value(channel.enabled);
+		// StreamStep keeps only the 10-bit fractional phase between samples.
+		hikaru::StateReader::require(channel.SA <= 0x7fffff && channel.CA <= 0xffff && channel.step <= 0x3ff,
+			"Invalid Hikaru AICA channel phase");
+		hikaru::StateReader::require(channel.looped <= 1, "Invalid Hikaru AICA loop state");
+		const int aegState = static_cast<int>(channel.aegState);
+		const int fegState = static_cast<int>(channel.fegState);
+		hikaru::StateReader::require(aegState >= EG_Attack && aegState <= EG_Release, "Invalid Hikaru AICA envelope state");
+		hikaru::StateReader::require(fegState >= EG_Attack && fegState <= EG_Release, "Invalid Hikaru AICA filter state");
+	}
+	s16 externalInput[2]{};
+	u32 channelPeaks[64]{};
+	reader.value(externalInput);
+	reader.value(channelPeaks);
+
+	for (size_t i = 0; i < std::size(saved); ++i)
+	{
+		const SavedChannel& source = saved[i];
+		ChannelEx& channel = state.channels[i];
+		channel.SA = source.SA;
+		channel.CA = source.CA;
+		channel.step.full = source.step;
+		channel.s0 = source.s0;
+		channel.s1 = source.s1;
+		channel.loop.looped = source.looped;
+		channel.adpcm.last_quant = source.lastQuant;
+		channel.adpcm.loopstart_quant = source.loopstartQuant;
+		channel.adpcm.loopstart_prev_sample = source.loopstartPrevious;
+		channel.adpcm.in_loop = source.inLoop;
+		channel.noise_state = source.noiseState;
+		channel.AEG.val = source.aegValue;
+		channel.AEG.state = source.aegState;
+		channel.FEG.value = source.fegValue;
+		channel.FEG.state = source.fegState;
+		channel.FEG.prev1 = source.fegPrevious1;
+		channel.FEG.prev2 = source.fegPrevious2;
+		channel.FEG.fractSave = source.fegFraction;
+		channel.lfo.counter = source.lfoCounter;
+		channel.lfo.state = source.lfoState;
+		channel.enabled = source.enabled;
+		channel.quiet = false;
+	}
+	std::copy(std::begin(externalInput), std::end(externalInput), std::begin(state.externalInput));
+	std::copy(std::begin(channelPeaks), std::end(channelPeaks), std::begin(state.channelPeaks));
+}
+
+// Rebuild register-derived caches and callbacks that are deliberately omitted
+// from snapshots because they contain board-local or code pointers.
+void rebuildHikaruChannels()
+{
+	for (ChannelEx& channel : Chans)
+	{
+		const u32 lfoCounter = channel.lfo.counter;
+		const u8 lfoState = channel.lfo.state;
+		channel.quiet = true;
+		channel.UpdatePitch();
+		channel.UpdateLoop();
+		channel.UpdateAtts();
+		channel.UpdateDSPMIX();
+		channel.StepAEG = ChannelEx::AEG_STEP_LUT[channel.AEG.state];
+		channel.UpdateAEG();
+		channel.StepFEG = ChannelEx::FEG_STEP_LUT[channel.FEG.state];
+		channel.UpdateFEG();
+		channel.UpdateStreamStep();
+		channel.UpdateLFO(true);
+		channel.lfo.counter = lfoCounter;
+		channel.lfo.state = lfoState;
+		channel.quiet = false;
+	}
+}
+#endif
 
 void resetBoardChannels()
 {
 	for (auto& channel : Chans)
 		channel = ChannelEx{};
 	ChannelEx::initAll();
+#ifdef USE_HIKARU
+	std::fill(std::begin(boardExternalInput), std::end(boardExternalInput), 0);
+	std::fill(std::begin(ChannelEx::channelPeaks), std::end(ChannelEx::channelPeaks), 0);
+#endif
 }
 
 void init()
@@ -1644,8 +1810,6 @@ void readBoardChannelPeaks(u32 peaks[64])
 	std::memcpy(peaks, ChannelEx::channelPeaks, sizeof(ChannelEx::channelPeaks));
 	std::memset(ChannelEx::channelPeaks, 0, sizeof(ChannelEx::channelPeaks));
 }
-
-static s16 boardExternalInput[2];
 
 void setBoardExternalInput(s16 left, s16 right)
 {

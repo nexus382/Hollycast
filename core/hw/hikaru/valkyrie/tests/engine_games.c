@@ -54,6 +54,137 @@ static void check_board(HikaruEngine *engine, const char *name, unsigned eprom_b
     CHECK(!board->sh_m->patch && !board->sh_s->patch);
 }
 
+static size_t mutate_registered_buffers(vk_machine_t *machine, uint8_t *sentinels)
+{
+    size_t index = 0;
+    unsigned offset;
+    VK_VECTOR_FOREACH(machine->buffers, offset) {
+        vk_buffer_t *buffer = *(vk_buffer_t **)&machine->buffers->data[offset];
+        if (!buffer || !buffer->size) return index;
+        buffer->ptr[0] ^= 0xa5;
+        sentinels[index * 2] = buffer->ptr[0];
+        if (buffer->size > 1) {
+            buffer->ptr[buffer->size - 1] ^= 0x5a;
+            sentinels[index * 2 + 1] = buffer->ptr[buffer->size - 1];
+        } else {
+            sentinels[index * 2 + 1] = sentinels[index * 2];
+        }
+        ++index;
+    }
+    return index;
+}
+
+static void check_registered_buffer_sentinels(vk_machine_t *machine, size_t count,
+    const uint8_t *sentinels)
+{
+    size_t index = 0;
+    unsigned offset;
+    VK_VECTOR_FOREACH(machine->buffers, offset) {
+        vk_buffer_t *buffer = *(vk_buffer_t **)&machine->buffers->data[offset];
+        CHECK(index < count);
+        if (index >= count || !buffer || !buffer->size) return;
+        CHECK(buffer->ptr[0] == sentinels[index * 2]);
+        CHECK(buffer->ptr[buffer->size - 1] == sentinels[index * 2 + 1]);
+        ++index;
+    }
+    CHECK(index == count);
+}
+
+static void check_state_roundtrip(HikaruEngine *engine)
+{
+    hikaru_t *board = (hikaru_t *)engine->machine;
+    sh4_t *master = (sh4_t *)board->sh_m;
+    sh4_t *slave = (sh4_t *)board->sh_s;
+    hikaru_gpu_t *gpu = (hikaru_gpu_t *)board->gpu;
+    const size_t size = hikaru_engine_state_size(engine);
+    const size_t buffer_count = board->base.buffers->used / board->base.buffers->element_size;
+    uint8_t *saved = NULL, *roundtrip = NULL, *buffer_sentinels = NULL;
+    CHECK(hikaru_engine_state_layout() != 0);
+    CHECK(size > 0 && buffer_count > 0);
+    if (!size || !buffer_count) return;
+
+    saved = (uint8_t *)malloc(size);
+    roundtrip = (uint8_t *)malloc(size);
+    buffer_sentinels = (uint8_t *)malloc(buffer_count * 2);
+    CHECK(saved && roundtrip && buffer_sentinels);
+    if (!saved || !roundtrip || !buffer_sentinels) goto done;
+
+    const int save_result = hikaru_engine_save_state(engine, saved, size);
+    CHECK(!save_result);
+    if (save_result) goto done;
+
+    const vk_cpu_state_t master_state = master->base.state == VK_CPU_STATE_RUN
+        ? VK_CPU_STATE_STOP : VK_CPU_STATE_RUN;
+    const vk_cpu_state_t slave_state = slave->base.state == VK_CPU_STATE_RUN
+        ? VK_CPU_STATE_SLEEP : VK_CPU_STATE_RUN;
+    master->base.state = master_state;
+    slave->base.state = slave_state;
+    master->base.remaining += 1;
+    slave->base.remaining += 1;
+    master->regs.r[5] ^= 0xa53cc35a;
+    master->in_slot = !master->in_slot;
+    master->tmu.counter[0] ^= 0x10203040;
+    master->dmac.is_running[0] = !master->dmac.is_running[0];
+    master->sound_wait_fraction = (master->sound_wait_fraction + 1) % 200;
+    master->sound_cycle_debt ^= 1;
+    const int master_remaining = master->base.remaining;
+    const int slave_remaining = slave->base.remaining;
+    const uint32_t master_r5 = master->regs.r[5];
+    const uint32_t tmu_counter = master->tmu.counter[0];
+    const bool dmac_running = master->dmac.is_running[0];
+    const uint32_t sound_wait_fraction = master->sound_wait_fraction;
+    const int sound_cycle_debt = master->sound_cycle_debt;
+
+    board->cpu_clock_mhz = board->cpu_clock_mhz == 300 ? 299 : board->cpu_clock_mhz + 1;
+    board->cpu_cycle_remainder = (board->cpu_cycle_remainder + 1) % 200;
+    const unsigned cpu_clock_mhz = board->cpu_clock_mhz;
+    const unsigned cpu_cycle_remainder = board->cpu_cycle_remainder;
+
+    gpu->regs._00400000 ^= 0x10;
+    gpu->cp.pc ^= 4;
+    gpu->cp.sp[0] ^= 4;
+    gpu->cp.is_unhandled = !gpu->cp.is_unhandled;
+    gpu->fb_config._181 ^= 0x10000;
+    gpu->fb_config._781 ^= 0x10000;
+    gpu->depth_bias ^= 1;
+    gpu->texoffset[1][1] ^= 1;
+    gpu->idma_completed ^= 1;
+    const uint16_t gpu_reg = gpu->regs._00400000;
+    const uint32_t gpu_pc = gpu->cp.pc;
+    const uint32_t gpu_sp = gpu->cp.sp[0];
+    const uint32_t gpu_fb_config = gpu->fb_config._181;
+    const uint32_t gpu_layer_config = gpu->fb_config._781;
+    const uint16_t gpu_depth_bias = gpu->depth_bias;
+    const int16_t gpu_texoffset = gpu->texoffset[1][1];
+    const uint32_t gpu_idma_completed = gpu->idma_completed;
+    engine->sound_reset = engine->sound_reset == -1 ? 0 : -1;
+    const int sound_reset = engine->sound_reset;
+    CHECK(mutate_registered_buffers(&board->base, buffer_sentinels) == buffer_count);
+
+    CHECK(hikaru_engine_load_state(engine, saved, size - 1) != 0);
+    check_registered_buffer_sentinels(&board->base, buffer_count, buffer_sentinels);
+    CHECK(master->base.state == master_state && slave->base.state == slave_state);
+    CHECK(master->base.remaining == master_remaining && slave->base.remaining == slave_remaining);
+    CHECK(master->regs.r[5] == master_r5 && master->sound_wait_fraction == sound_wait_fraction);
+    CHECK(master->tmu.counter[0] == tmu_counter && master->dmac.is_running[0] == dmac_running);
+    CHECK(master->sound_cycle_debt == sound_cycle_debt);
+    CHECK(board->cpu_clock_mhz == cpu_clock_mhz && board->cpu_cycle_remainder == cpu_cycle_remainder);
+    CHECK(gpu->regs._00400000 == gpu_reg && gpu->cp.pc == gpu_pc && gpu->cp.sp[0] == gpu_sp);
+    CHECK(gpu->fb_config._181 == gpu_fb_config && gpu->fb_config._781 == gpu_layer_config);
+    CHECK(gpu->depth_bias == gpu_depth_bias && gpu->texoffset[1][1] == gpu_texoffset);
+    CHECK(gpu->idma_completed == gpu_idma_completed && engine->sound_reset == sound_reset);
+
+    CHECK(!hikaru_engine_load_state(engine, saved, size));
+    const int roundtrip_result = hikaru_engine_save_state(engine, roundtrip, size);
+    CHECK(!roundtrip_result);
+    if (!roundtrip_result) CHECK(memcmp(saved, roundtrip, size) == 0);
+
+done:
+    free(buffer_sentinels);
+    free(roundtrip);
+    free(saved);
+}
+
 int main(int argc, char **argv)
 {
     const int gles = argc == 2 && !strcmp(argv[1], "--gles");
@@ -106,6 +237,7 @@ int main(int argc, char **argv)
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "Brave create: %s\n", error); goto cleanup; }
     check_board(engine, "braveff", 2, 8);
+    check_state_roundtrip(engine);
     hikaru_t *board = (hikaru_t *)engine->machine;
     CHECK(board->eprom->size == roms.program_size && board->maskrom->size == roms.data_size);
     CHECK(board->eprom->ptr != program && board->maskrom->ptr != data);
@@ -139,6 +271,7 @@ int main(int argc, char **argv)
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "Planet Harriers create: %s\n", error); goto cleanup; }
     check_board(engine, "pharrier", 4, 16);
+    check_state_roundtrip(engine);
     board = (hikaru_t *)engine->machine;
     CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
     CHECK(board->eprom->ptr == program && board->maskrom->ptr == data);
@@ -176,6 +309,7 @@ int main(int argc, char **argv)
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "VON4 create: %s\n", error); goto cleanup; }
     check_board(engine, "von4", 4, 16);
+    check_state_roundtrip(engine);
     board = (hikaru_t *)engine->machine;
     CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
     CHECK(board->eprom->ptr == program && board->maskrom->ptr == data);
@@ -229,6 +363,7 @@ int main(int argc, char **argv)
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "Air Trix create: %s\n", error); goto cleanup; }
     check_board(engine, "airtrix", 4, 16);
+    check_state_roundtrip(engine);
     check_bus((hikaru_t *)engine->machine, 0x10, 0x400000, 0x24);
     board = (hikaru_t *)engine->machine;
     sh4_t *master = (sh4_t *)board->sh_m;

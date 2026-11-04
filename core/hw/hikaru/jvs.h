@@ -10,12 +10,16 @@
 #include <deque>
 
 namespace hikaru {
+class StateReader;
+class StateWriter;
 
 // Menu requests cross threads; only the emulation thread samples/resets.
 // A physical release must reach JVS before the next queued rising edge.
 class CoinPulseQueue {
 public:
     void enqueue() { pending.fetch_add(1, std::memory_order_relaxed); }
+    void saveState(StateWriter& writer) const;
+    void loadState(StateReader& reader);
     void reset() { pending = 0; previous = false; }
     bool sample(bool physical) {
         bool coin = physical;
@@ -52,6 +56,9 @@ public:
     uint8_t address() const { return node_; }
     uint32_t outputs() const { return outputs_; }
     std::size_t queuedBytes() const { return response_.size(); }
+    const Inputs& inputs() const { return inputs_; }
+    void saveState(StateWriter& writer) const;
+    void loadState(StateReader& reader);
 
 private:
     void processFrame();

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // Wire protocol: ST M93C46 datasheet DS1077, sections 5–7 and table 3.
 // https://www.st.com/resource/en/datasheet/m93c46-w.pdf
 // Edge/dummy-bit cross-check: MAME machine/eepromser.cpp (BSD-3-Clause).
 #include "eeprom93c46.h"
+#include "state_io.h"
 
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 namespace hikaru {
 Eeprom93c46::Eeprom93c46()
@@ -19,6 +22,81 @@ Eeprom93c46::Eeprom93c46(const std::vector<uint8_t>& contents)
         throw std::invalid_argument("93C46 in 8-bit organization requires exactly 128 bytes");
     std::copy(contents.begin(), contents.end(), memory_.begin());
 }
+void Eeprom93c46::saveState(StateWriter& writer) const
+{
+    writer.bytes(memory_.data(), memory_.size());
+    writer.value(cs_);
+    writer.value(clock_);
+    writer.value(output_);
+    writer.value(writeEnabled_);
+    writer.value(static_cast<uint8_t>(stage_));
+    writer.value(static_cast<uint8_t>(armed_));
+    writer.value(static_cast<uint8_t>(pending_));
+    writer.value(command_);
+    writer.value(static_cast<uint32_t>(bits_));
+    writer.value(static_cast<uint32_t>(readBit_));
+    writer.value(address_);
+    writer.value(data_);
+    writer.value(pendingAddress_);
+    writer.value(pendingData_);
+    writer.value(busyMicros_);
+}
+
+void Eeprom93c46::loadState(StateReader& reader)
+{
+    Eeprom93c46 staged = *this;
+    reader.bytes(staged.memory_.data(), staged.memory_.size());
+    reader.value(staged.cs_);
+    reader.value(staged.clock_);
+    reader.value(staged.output_);
+    reader.value(staged.writeEnabled_);
+    uint8_t stage, armed, pending;
+    uint32_t bits, readBit;
+    reader.value(stage);
+    reader.value(armed);
+    reader.value(pending);
+    reader.value(staged.command_);
+    reader.value(bits);
+    reader.value(readBit);
+    reader.value(staged.address_);
+    reader.value(staged.data_);
+    reader.value(staged.pendingAddress_);
+    reader.value(staged.pendingData_);
+    reader.value(staged.busyMicros_);
+
+    StateReader::require(stage <= static_cast<uint8_t>(Stage::Complete), "Invalid 93C46 state stage");
+    StateReader::require(armed <= static_cast<uint8_t>(Operation::EraseAll), "Invalid 93C46 armed operation");
+    StateReader::require(pending <= static_cast<uint8_t>(Operation::EraseAll), "Invalid 93C46 pending operation");
+    StateReader::require(staged.command_ <= 0x1ff && bits <= 9 && readBit < 8,
+        "Invalid 93C46 command cursor");
+    StateReader::require(staged.address_ < Size && staged.pendingAddress_ < Size
+        && staged.busyMicros_ <= WriteCycleMicros, "Invalid 93C46 address or busy cycle");
+    StateReader::require((pending == static_cast<uint8_t>(Operation::None)) == (staged.busyMicros_ == 0),
+        "Invalid 93C46 pending write cycle");
+    staged.stage_ = static_cast<Stage>(stage);
+    staged.armed_ = static_cast<Operation>(armed);
+    staged.pending_ = static_cast<Operation>(pending);
+    staged.bits_ = bits;
+    staged.readBit_ = readBit;
+    StateReader::require(staged.cs_ || staged.stage_ == Stage::Start,
+        "Invalid 93C46 deselected command");
+    StateReader::require(staged.stage_ != Stage::Command || (bits < 9
+        && staged.armed_ == Operation::None && readBit == 0),
+        "Invalid 93C46 command bit count");
+    StateReader::require(staged.stage_ != Stage::Data || (bits < 8 && readBit == 0
+        && (staged.armed_ == Operation::Write || staged.armed_ == Operation::WriteAll)),
+        "Invalid 93C46 data command");
+    StateReader::require(staged.stage_ != Stage::Reading || (staged.cs_ && bits == 0
+        && staged.armed_ == Operation::None),
+        "Invalid 93C46 read command");
+    StateReader::require(staged.stage_ != Stage::Start || (bits == 0 && readBit == 0
+        && staged.armed_ == Operation::None),
+        "Invalid 93C46 start state");
+    StateReader::require(staged.stage_ != Stage::Complete || (readBit == 0 && (bits == 0 || bits == 8)),
+        "Invalid 93C46 completed command");
+    *this = std::move(staged);
+}
+
 void Eeprom93c46::clearCommand()
 {
     stage_ = Stage::Start;

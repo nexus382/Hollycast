@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/jvs.h"
+#include "hw/hikaru/state_io.h"
 #include <cstdint>
+#include <stdexcept>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -124,6 +126,52 @@ int main()
     sampleCoin(false); sampleCoin(false);
     send(node, 1, {0x21, 1}); r = read(node);
     check(valid(r) && r[6] == 3, "reset discards queued menu credits");
+
+    queue.reset(); queue.enqueue(); queue.enqueue();
+    hikaru::StateWriter queueState;
+    queue.saveState(queueState);
+    hikaru::CoinPulseQueue resumedQueue;
+    hikaru::StateReader queueReader(queueState.data());
+    resumedQueue.loadState(queueReader);
+    queueReader.finish();
+    const bool firstPulse = resumedQueue.sample(false);
+    const bool release = resumedQueue.sample(false);
+    const bool secondPulse = resumedQueue.sample(false);
+    check(firstPulse && !release && secondPulse, "coin queue restores pending pulses and release latch");
+
+    node.reset();
+    for (uint8_t byte : encode(0xff, {0xf1, 1})) node.pushByte(byte);
+    const auto partial = encode(1, {0x10});
+    for (unsigned i = 0; i < 3; ++i) node.pushByte(partial[i]);
+    hikaru::StateWriter nodeState;
+    node.saveState(nodeState);
+    JvsNode resumedNode;
+    hikaru::StateReader nodeReader(nodeState.data());
+    resumedNode.loadState(nodeReader);
+    nodeReader.finish();
+    for (std::size_t i = 3; i < partial.size(); ++i) {
+        node.pushByte(partial[i]);
+        resumedNode.pushByte(partial[i]);
+    }
+    const auto originalReply = read(node);
+    const auto resumedReply = read(resumedNode);
+    check(originalReply == resumedReply && !originalReply.empty() && resumedNode.addressed(),
+        "JVS state restores queued replies and a partial input frame");
+
+    auto truncated = nodeState.data();
+    truncated.pop_back();
+    hikaru::StateWriter before;
+    resumedNode.saveState(before);
+    bool rejected = false;
+    try {
+        hikaru::StateReader broken(truncated);
+        resumedNode.loadState(broken);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    hikaru::StateWriter after;
+    resumedNode.saveState(after);
+    check(rejected && before.data() == after.data(), "rejected JVS state preserves parser and queue");
     std::cout << "JVS synthetic checks: " << checks << " checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

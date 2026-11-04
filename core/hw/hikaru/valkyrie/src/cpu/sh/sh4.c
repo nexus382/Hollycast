@@ -1782,28 +1782,40 @@ sh4_reset (vk_device_t *dev, vk_reset_type_t type)
 }
 
 #define SAVE(thing_) \
-		vk_state_put (state, (void *) &(thing_), sizeof (thing_))
+		ret |= vk_state_put (state, (void *) &(thing_), sizeof (thing_))
 
 #define LOAD(thing_) \
-		vk_state_get (state, (void *) &(thing_), sizeof (thing_))
+		ret |= vk_state_get (state, (void *) &(thing_), sizeof (thing_))
 
 static int
 sh4_load_state (vk_device_t *dev, vk_state_t *state)
 {
-	sh4_t *ctx = (sh4_t *) dev;
+	sh4_t *live = (sh4_t *) dev;
+	sh4_t restored = *live;
+	sh4_t *ctx = &restored;
 	int ret = 0;
 
+	LOAD (ctx->base.state);
+	LOAD (ctx->base.remaining);
 	LOAD (ctx->in_slot);
 	LOAD (ctx->regs);
 	LOAD (ctx->intc);
 	LOAD (ctx->dmac);
 	LOAD (ctx->tmu);
 	LOAD (ctx->config);
-	ret |= LOAD (ctx->sound_wait_fraction);
-	ret |= LOAD (ctx->sound_cycle_debt);
+	LOAD (ctx->sound_wait_fraction);
+	LOAD (ctx->sound_cycle_debt);
+	if (ret || ctx->base.state < VK_CPU_STATE_RUN || ctx->base.state >= VK_NUM_CPU_STATES ||
+	    ctx->intc.index < -1 || ctx->intc.index >= SH4_NUM_IESOURCES ||
+	    (ctx->intc.pending && ctx->intc.index < 0) ||
+	    ctx->sound_wait_fraction >= 1000 || ctx->sound_cycle_debt < 0 ||
+	    ctx->config.master != live->config.master ||
+	    ctx->config.little_endian != live->config.little_endian)
+		return -1;
 	ctx->cpu_active = ctx->data_read_active = ctx->dma_active = ctx->sound_wait_this_slice = false;
 
-	return ret;
+	*live = restored;
+	return 0;
 }
 
 static int
@@ -1812,14 +1824,16 @@ sh4_save_state (vk_device_t *dev, vk_state_t *state)
 	sh4_t *ctx = (sh4_t *) dev;
 	int ret = 0;
 
+	SAVE (ctx->base.state);
+	SAVE (ctx->base.remaining);
 	SAVE (ctx->in_slot);
 	SAVE (ctx->regs);
 	SAVE (ctx->intc);
 	SAVE (ctx->dmac);
 	SAVE (ctx->tmu);
 	SAVE (ctx->config);
-	ret |= SAVE (ctx->sound_wait_fraction);
-	ret |= SAVE (ctx->sound_cycle_debt);
+	SAVE (ctx->sound_wait_fraction);
+	SAVE (ctx->sound_cycle_debt);
 
 	return ret;
 }

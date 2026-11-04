@@ -582,15 +582,17 @@ hikaru_get_debug_string (vk_machine_t *mach)
 }
 
 #define SAVE(thing_) \
-		vk_state_put (state, (void *) &(thing_), sizeof (thing_))
+		ret |= vk_state_put (state, (void *) &(thing_), sizeof (thing_))
 
 #define LOAD(thing_) \
-		vk_state_get (state, (void *) &(thing_), sizeof (thing_))
+		ret |= vk_state_get (state, (void *) &(thing_), sizeof (thing_))
 
 static int
 hikaru_load_state (vk_machine_t *mach, vk_state_t *state)
 {
-	hikaru_t *hikaru = (hikaru_t *) mach;
+	hikaru_t *live = (hikaru_t *) mach;
+	hikaru_t restored = *live;
+	hikaru_t *hikaru = &restored;
 	int ret = 0;
 
 	LOAD (hikaru->porta_m);
@@ -602,8 +604,15 @@ hikaru_load_state (vk_machine_t *mach, vk_state_t *state)
 	LOAD (hikaru->unk1A800008_s);
 	LOAD (hikaru->unk1B000100_s);
 	LOAD (hikaru->rombd_config);
+	LOAD (hikaru->cpu_clock_mhz);
+	LOAD (hikaru->cpu_cycle_remainder);
 
-	return ret;
+	if (ret || hikaru->cpu_clock_mhz < 100 || hikaru->cpu_clock_mhz > 300 ||
+	    hikaru->cpu_cycle_remainder >= 200 ||
+	    memcmp (&hikaru->rombd_config, &live->rombd_config, sizeof (live->rombd_config)))
+		return -1;
+	*live = restored;
+	return 0;
 }
 
 static int
@@ -621,6 +630,8 @@ hikaru_save_state (vk_machine_t *mach, vk_state_t *state)
 	SAVE (hikaru->unk1A800008_s);
 	SAVE (hikaru->unk1B000100_s);
 	SAVE (hikaru->rombd_config);
+	SAVE (hikaru->cpu_clock_mhz);
+	SAVE (hikaru->cpu_cycle_remainder);
 
 	return ret;
 }

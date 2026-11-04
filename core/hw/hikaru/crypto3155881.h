@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
+// Portions Copyright 2026 The Hollycast Authors
 // Derived from MAME 315-5881_crypt.h; copyright David Haywood.
 // See crypto3155881.cpp for full license and pinned source provenance.
 #pragma once
@@ -6,11 +7,15 @@
 #include <functional>
 #include <memory>
 namespace hikaru {
+class StateReader;
+class StateWriter;
 class Crypto3155881 {
 public:
     using ReadWord = std::function<uint16_t(uint32_t)>;
     Crypto3155881(uint32_t key, ReadWord read);
     void reset();
+    void saveState(StateWriter& writer) const;
+    void loadState(StateReader& reader);
     void writeAddressLow(uint16_t value);
     void writeAddressHigh(uint16_t value);
     void writeSubkey(uint16_t value);

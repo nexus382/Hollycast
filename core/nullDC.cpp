@@ -21,6 +21,9 @@
 #include "oslib/i18n.h"
 #include "input/maplelinkregistry.h"
 #include "input/maplelink.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#endif
 #ifdef TARGET_UWP
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.Foundation.h>
@@ -29,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <vector>
 
 static std::string lastStateFile;
 static time_t lastStateTime;
@@ -45,8 +49,9 @@ static time_t lastStateTime;
 #endif
 
 #ifdef HAS_FMEMOPEN
-const u32 QUICKSAVE_DEFAULT_SIZE = 32 * 1024 * 1024; // 32 MB
-static u8 quicksave_buf[QUICKSAVE_DEFAULT_SIZE] = {0};
+#include <zlib.h>
+// Hikaru RAM alone exceeds the former fixed 32 MiB quicksave buffer.
+static std::vector<u8> quicksave_buf;
 #endif
 
 struct SavestateHeader
@@ -183,8 +188,11 @@ void flycast_term()
 }
 
 bool dc_savestateAllowed() {
+	#ifndef USE_HIKARU
+	if (settings.platform.isHikaru()) return false;
+#endif
 	return !settings.content.path.empty() && !settings.network.online
-			&& !settings.naomi.multiboard && !settings.platform.isHikaru();
+			&& !settings.naomi.multiboard;
 }
 
 void dc_savestate(int index, const u8 *pngData, u32 pngSize)
@@ -194,19 +202,40 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 
 	lastStateFile.clear();
 
-	Serializer ser;
-	dc_serialize(ser);
-
-	void *data = malloc(ser.size());
-	if (data == nullptr)
-	{
-		WARN_LOG(SAVESTATE, "Failed to save state - could not malloc %d bytes", (int)ser.size());
-		os_notify(i18n::T("Save state failed - memory full"), 5000);
-    	return;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru() && !hikaru::frontend::stateReady()) {
+		os_notify("Hikaru save state is not ready", 5000);
+		return;
 	}
-
-	ser = Serializer(data, ser.size());
-	dc_serialize(ser);
+#endif
+	Serializer ser;
+	std::vector<u8> data;
+#ifdef HAS_FMEMOPEN
+	std::vector<u8> ramState;
+#endif
+	try {
+		dc_serialize(ser);
+		data.resize(ser.size());
+		ser = Serializer(data.data(), data.size());
+		dc_serialize(ser);
+#ifdef HAS_FMEMOPEN
+		if (index == -2) {
+			// RZIP uses 1 MiB zlib chunks. Include each worst-case compressed
+			// chunk and its length, plus the RZIP and savestate headers.
+			constexpr size_t chunkSize = 1024 * 1024;
+			const u64 chunks = (ser.size() + chunkSize - 1) / chunkSize;
+			const u64 capacity = sizeof(SavestateHeader) + u64(pngSize) + 20
+				+ chunks * (compressBound(chunkSize) + sizeof(u32));
+			if (capacity > std::numeric_limits<size_t>::max())
+				throw Serializer::Exception("RAM save state is too large");
+			ramState.resize(size_t(capacity));
+		}
+#endif
+	} catch (const std::exception& error) {
+		WARN_LOG(SAVESTATE, "Failed to serialize state: %s", error.what());
+		os_notify(i18n::T("Failed to save state"), 5000, error.what());
+		return;
+	}
 
 	hostfs::File *f = nullptr;
 	std::string filename = "";
@@ -215,7 +244,8 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 	{
 		// in-ram savestate
 		filename = "RAM";
-		f = new hostfs::StdFile(fmemopen(quicksave_buf, QUICKSAVE_DEFAULT_SIZE, "wb"));
+		if (FILE* stream = fmemopen(ramState.data(), ramState.size(), "wb"))
+			f = new hostfs::StdFile(stream);
 	}
 	else
 #endif
@@ -229,7 +259,6 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 	{
 		WARN_LOG(SAVESTATE, "Failed to save state - could not open %s for writing", filename.c_str());
 		os_notify(i18n::T("Cannot open save file"), 5000);
-		free(data);
     	return;
 	}
 
@@ -242,19 +271,15 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 	if (pngSize > 0 && f->write(pngData, 1, pngSize) != pngSize)
 		goto fail;
 
-#if 0
-	// Uncompressed savestate
-	f->write(data, 1, ser.size());
-	delete f;
-#else
 	if (!zipFile.Open(f, true))
 		goto fail;
-	if (zipFile.Write(data, ser.size()) != ser.size())
+	if (zipFile.Write(data.data(), ser.size()) != ser.size())
 		goto fail;
 	zipFile.Close();
-#endif
 
-	free(data);
+#ifdef HAS_FMEMOPEN
+	if (index == -2) quicksave_buf.swap(ramState);
+#endif
 	NOTICE_LOG(SAVESTATE, "Saved state to %s size %d", filename.c_str(), (int)ser.size());
 	os_notify(i18n::T("State saved"), 2000);
 	return;
@@ -266,7 +291,6 @@ fail:
 		zipFile.Close();
 	else
 		delete f;
-	free(data);
 	// delete failed savestate?
 }
 
@@ -283,7 +307,9 @@ static bool loadState(int index, const std::string& statePath)
 	{
 		// in-ram savestate
 		filename = "RAM";
-		f = new hostfs::StdFile(fmemopen(quicksave_buf, QUICKSAVE_DEFAULT_SIZE, "rb"));
+		if (!quicksave_buf.empty())
+			if (FILE* stream = fmemopen(quicksave_buf.data(), quicksave_buf.size(), "rb"))
+				f = new hostfs::StdFile(stream);
 	}
 	else
 #endif
@@ -332,6 +358,14 @@ static bool loadState(int index, const std::string& statePath)
 		total_size = (u32)f->tell() - pos;
 		f->seek(pos, SEEK_SET);
 	}
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru() && total_size > 256 * 1024 * 1024 + 64) {
+		os_notify("Hikaru save state is too large", 5000);
+		if (zipFile.rawFile() != nullptr) zipFile.Close();
+		else delete f;
+		return false;
+	}
+#endif
 	void *data = malloc(total_size);
 	if (data == nullptr)
 	{

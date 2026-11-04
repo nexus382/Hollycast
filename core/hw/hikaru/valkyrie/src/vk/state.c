@@ -20,7 +20,7 @@
 
 #include "vk/state.h"
 
-#define VK_STATE_VERSION	2
+#define VK_STATE_VERSION	3
 
 vk_state_t *
 vk_state_new (const char *path, uint32_t mode)
@@ -45,7 +45,7 @@ vk_state_new (const char *path, uint32_t mode)
 	sprintf (template, "valkyrie state %08X\n", VK_STATE_VERSION);
 	if (mode == VK_STATE_LOAD) {
 		size = fread ((void *) header, 1, sizeof (template), state->fp);
-		if (size != sizeof (template) || strcmp (template, header))
+		if (size != sizeof (template) || memcmp (template, header, sizeof (header)))
 			goto fail;
 	} else {
 		size = fwrite ((void *) template, 1, sizeof (template), state->fp);
@@ -67,10 +67,10 @@ vk_state_destroy (vk_state_t **state_, int ret)
 
 	VK_ASSERT (state_);
 	state = *state_;
+	if (!state) return;
 
-	if (state->mode == VK_STATE_LOAD ||
-	    (state->mode == VK_STATE_SAVE && ret == 0))
-		fclose (state->fp);
+	if (state->fp) fclose (state->fp);
+	(void) ret;
 
 	free (state);
 	*state_ = NULL;
@@ -81,8 +81,13 @@ vk_state_put (vk_state_t *state, void *src, uint32_t size)
 {
 	size_t num;
 
-	if (state->mode != VK_STATE_SAVE)
-		return -1;
+	if (!state || state->mode != VK_STATE_SAVE) return -1;
+	if (!state->fp) {
+		if (state->offset > state->capacity || size > state->capacity - state->offset) { state->failed = true; return -1; }
+		if (state->data && size) memcpy (state->data + state->offset, src, size);
+		state->offset += size;
+		return 0;
+	}
 
 	VK_LOG ("state: W%08X %p", size, src);
 
@@ -95,8 +100,13 @@ vk_state_get (vk_state_t *state, void *dst, uint32_t size)
 {
 	size_t num;
 
-	if (state->mode != VK_STATE_LOAD)
-		return -1;
+	if (!state || state->mode != VK_STATE_LOAD) return -1;
+	if (!state->fp) {
+		if (!state->data || state->offset > state->capacity || size > state->capacity - state->offset) { state->failed = true; return -1; }
+		if (size) memcpy (dst, state->data + state->offset, size);
+		state->offset += size;
+		return 0;
+	}
 
 	VK_LOG ("state: R%08X %p", size, dst);
 

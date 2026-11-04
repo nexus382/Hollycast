@@ -2,6 +2,7 @@
 // Copyright 2026 The Hollycast Authors
 // Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/eeprom93c46.h"
+#include "hw/hikaru/state_io.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -9,6 +10,8 @@
 
 namespace {
 using hikaru::Eeprom93c46;
+using hikaru::StateReader;
+using hikaru::StateWriter;
 struct Checks {
     unsigned count = 0, failures = 0;
     void equal(unsigned actual, unsigned expected, const std::string& label)
@@ -168,6 +171,53 @@ void allMemoryAndAbortedCommands(Checks& checks)
     for (uint8_t byte : chip.contents()) checks.equal(byte, 0xff, "aborted writes cannot alter memory later");
 }
 
+void saveStateRoundTrip(Checks& checks)
+{
+    Eeprom93c46 chip;
+    Wire wire{chip};
+    wire.command("1001100000"); // EWEN.
+    wire.begin();
+    wire.bits("1010000000"); // WRITE address zero.
+    wire.bits("0101"); // Stop in the middle of the data byte.
+
+    StateWriter saved;
+    chip.saveState(saved);
+    Eeprom93c46 resumed;
+    StateReader reader(saved.data());
+    resumed.loadState(reader);
+    reader.finish();
+    checks.equal(resumed.writeEnabled(), true, "state restores the write-enable latch");
+    checks.equal(resumed.writePending(), true, "state restores a partial EEPROM command");
+
+    auto truncated = saved.data();
+    truncated.pop_back();
+    bool rejected = false;
+    try {
+        StateReader broken(truncated);
+        chip.loadState(broken);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    checks.equal(rejected, true, "truncated EEPROM state rejected");
+    checks.equal(chip.writePending(), true, "rejected EEPROM state preserves partial command");
+
+    Wire continued{chip}, resumedWire{resumed};
+    continued.bits("0110");
+    resumedWire.bits("0110");
+    continued.end();
+    resumedWire.end();
+    checks.equal(chip.busy(), true, "continued EEPROM programming starts its busy cycle");
+    checks.equal(resumed.busy(), true, "restored EEPROM starts the same busy cycle");
+    chip.advanceMicros(4999);
+    resumed.advanceMicros(4999);
+    checks.equal(chip.contents()[0], 0xff, "partial busy interval has not committed data");
+    checks.equal(resumed.contents()[0], 0xff, "restored busy interval has not committed data");
+    chip.advanceMicros(1);
+    resumed.advanceMicros(1);
+    checks.equal(chip.contents()[0], 0x56, "continued EEPROM programming commits the remaining bits");
+    checks.equal(resumed.contents()[0], chip.contents()[0], "restored EEPROM programming matches original");
+}
+
 void resetAndIsolation(Checks& checks)
 {
     Eeprom93c46 chip, other;
@@ -210,6 +260,7 @@ int main()
     writeEnableBusyAndErase(checks);
     allMemoryAndAbortedCommands(checks);
     resetAndIsolation(checks);
+    saveStateRoundTrip(checks);
     std::cout << "93C46 serial EEPROM: " << checks.count << " checks, " << checks.failures << " failures\n";
     return checks.failures == 0 ? 0 : 1;
 }

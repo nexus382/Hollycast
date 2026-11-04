@@ -94,6 +94,14 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     uint32_t target_fbo, unsigned width, unsigned height,
     int allow_bios_eeprom_bypass, char *error, size_t error_size);
 int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inputs);
+// Frame-boundary, native-layout snapshots; external I/O/audio are saved by the
+// host. A load requires the exact measured size and a current graphics scope.
+// layout changes reject incompatible native CPU/GPU layouts before mutation.
+uint64_t hikaru_engine_state_layout(void);
+size_t hikaru_engine_state_size(HikaruEngine *engine);
+int hikaru_engine_save_state(HikaruEngine *engine, uint8_t *data, size_t size);
+int hikaru_engine_load_state(HikaruEngine *engine, const uint8_t *data, size_t size);
+
 // Configure both SH-4s in MHz (100..300). Device clocks remain at the board
 // baseline; changing the clock resets the fractional CPU-cycle accumulator.
 int hikaru_engine_set_cpu_clock_mhz(HikaruEngine *engine, unsigned mhz);

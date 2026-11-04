@@ -8,6 +8,8 @@
 #include <vector>
 
 namespace hikaru {
+class StateReader;
+class StateWriter;
 // 93C46 in 128 x 8 organization. DI and DO advance on rising CLK edges;
 // READ has a dummy zero followed by MSB-first sequential bytes. Programming
 // starts at CS falling and commits after an explicit 5 ms model interval.
@@ -18,6 +20,8 @@ public:
     static constexpr uint32_t WriteCycleMicros = 5000;
     Eeprom93c46();
     explicit Eeprom93c46(const std::vector<uint8_t>& contents);
+    void saveState(StateWriter& writer) const;
+    void loadState(StateReader& reader);
     void setPins(bool cs, bool clock, bool data);
     bool dataOut() const;
     void advanceMicros(uint32_t micros);

@@ -29,6 +29,7 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 */
 #include "crypto3155881.h"
+#include "state_io.h"
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -61,6 +62,95 @@ void Crypto3155881::reset() {
     buffer2[0]=buffer2[1]=0;buffer2a=0;
     block_size=0;block_pos=0;block_numlines=0;done_compression=0;
 }
+void Crypto3155881::saveState(StateWriter& writer) const
+{
+    writer.value(first_read);
+    writer.bytes(buffer.get(), BUFFER_SIZE);
+    writer.bytes(line_buffer.get(), LINE_SIZE);
+    writer.bytes(line_buffer_prev.get(), LINE_SIZE);
+    writer.value(prot_cur_address);
+    writer.value(subkey);
+    writer.value(dec_hist);
+    writer.value(dec_header);
+    writer.value(enc_ready);
+    writer.value(buffer_pos);
+    writer.value(line_buffer_pos);
+    writer.value(line_buffer_size);
+    writer.value(buffer_bit);
+    writer.value(buffer_bit2);
+    writer.bytes(buffer2, sizeof(buffer2));
+    writer.value(buffer2a);
+    writer.value(block_size);
+    writer.value(block_pos);
+    writer.value(block_numlines);
+    writer.value(done_compression);
+}
+
+void Crypto3155881::loadState(StateReader& reader)
+{
+    bool stagedFirstRead, stagedEncReady;
+    uint8_t stagedBuffer[BUFFER_SIZE], stagedLine[LINE_SIZE], stagedPreviousLine[LINE_SIZE];
+    uint8_t stagedBuffer2[2];
+    uint32_t stagedAddress, stagedHeader;
+    uint16_t stagedSubkey, stagedHistory, stagedBuffer2a;
+    int stagedBufferPos, stagedLinePos, stagedLineSize, stagedBufferBit, stagedBufferBit2;
+    int stagedBlockSize, stagedBlockPos, stagedBlockNumLines, stagedDoneCompression;
+    reader.value(stagedFirstRead);
+    reader.bytes(stagedBuffer, sizeof(stagedBuffer));
+    reader.bytes(stagedLine, sizeof(stagedLine));
+    reader.bytes(stagedPreviousLine, sizeof(stagedPreviousLine));
+    reader.value(stagedAddress);
+    reader.value(stagedSubkey);
+    reader.value(stagedHistory);
+    reader.value(stagedHeader);
+    reader.value(stagedEncReady);
+    reader.value(stagedBufferPos);
+    reader.value(stagedLinePos);
+    reader.value(stagedLineSize);
+    reader.value(stagedBufferBit);
+    reader.value(stagedBufferBit2);
+    reader.bytes(stagedBuffer2, sizeof(stagedBuffer2));
+    reader.value(stagedBuffer2a);
+    reader.value(stagedBlockSize);
+    reader.value(stagedBlockPos);
+    reader.value(stagedBlockNumLines);
+    reader.value(stagedDoneCompression);
+
+    StateReader::require(stagedBufferPos >= 0 && stagedBufferPos <= BUFFER_SIZE
+        && stagedLineSize >= 0 && stagedLineSize <= LINE_SIZE
+        && stagedLinePos >= 0 && stagedLinePos <= stagedLineSize,
+        "Invalid 315-5881 stream buffer cursor");
+    StateReader::require(stagedBufferBit >= 0 && stagedBufferBit <= 7
+        && stagedBufferBit2 >= 0 && stagedBufferBit2 <= 15,
+        "Invalid 315-5881 bit cursor");
+    StateReader::require(stagedBlockSize >= 0 && stagedBlockSize <= 131072
+        && stagedBlockPos >= 0 && stagedBlockPos <= 131073
+        && stagedBlockNumLines >= 0 && stagedBlockNumLines <= 256
+        && (stagedDoneCompression == 0 || stagedDoneCompression == 1),
+        "Invalid 315-5881 block cursor");
+
+    std::memcpy(buffer.get(), stagedBuffer, sizeof(stagedBuffer));
+    std::memcpy(line_buffer.get(), stagedLine, sizeof(stagedLine));
+    std::memcpy(line_buffer_prev.get(), stagedPreviousLine, sizeof(stagedPreviousLine));
+    first_read = stagedFirstRead;
+    prot_cur_address = stagedAddress;
+    subkey = stagedSubkey;
+    dec_hist = stagedHistory;
+    dec_header = stagedHeader;
+    enc_ready = stagedEncReady;
+    buffer_pos = stagedBufferPos;
+    line_buffer_pos = stagedLinePos;
+    line_buffer_size = stagedLineSize;
+    buffer_bit = stagedBufferBit;
+    buffer_bit2 = stagedBufferBit2;
+    std::memcpy(buffer2, stagedBuffer2, sizeof(buffer2));
+    buffer2a = stagedBuffer2a;
+    block_size = stagedBlockSize;
+    block_pos = stagedBlockPos;
+    block_numlines = stagedBlockNumLines;
+    done_compression = stagedDoneCompression;
+}
+
 void Crypto3155881::writeAddressLow(uint16_t value) {set_addr_low(value);first_read=true;}
 void Crypto3155881::writeAddressHigh(uint16_t value) {
     // MAME's addrhi_w forces this board's upper address to zero, even when

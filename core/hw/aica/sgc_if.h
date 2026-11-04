@@ -1,5 +1,10 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "types.h"
+
+#ifdef USE_HIKARU
+namespace hikaru { class StateReader; class StateWriter; }
+#endif
 
 namespace aica::sgc
 {
@@ -27,6 +32,9 @@ void resetBoardChannels();
 // first, and restore the previous channel selection before destroying a bank.
 ChannelState* activeChannelState();
 void selectChannelState(ChannelState* state);
+void serializeHikaruState(const ChannelState& state, hikaru::StateWriter& writer);
+void deserializeHikaruState(ChannelState& state, hikaru::StateReader& reader);
+void rebuildHikaruChannels();
 #endif
 
 void WriteChannelReg(u32 channel, u32 reg, int size);

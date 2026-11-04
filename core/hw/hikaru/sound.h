@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 
 #include "valkyrie/engine.h"
@@ -8,6 +9,9 @@
 
 namespace hikaru
 {
+
+class StateReader;
+class StateWriter;
 
 // Serialized interpreter-backed sound boards. The engine owns wave RAM.
 class Sound
@@ -44,6 +48,8 @@ public:
 	};
 	HikaruEngineSound callbacks();
 	bool diagnostics(unsigned board, BoardDiagnostics& output) const;
+	void saveState(StateWriter& writer) const;
+	void loadState(StateReader& reader);
 	u64 mixedSamples() const;
 	u64 mixedClippedSamples() const;
 	u64 boardSaturatedSamples() const;

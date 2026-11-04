@@ -2,6 +2,7 @@
 // Copyright 2026 The Hollycast Authors
 // Portions Copyright 2026 The Hollycast Authors
 #include "engine_internal.h"
+#include "cpu/sh/sh4.h"
 #include "mach/hikaru/hikaru.h"
 #include "mach/hikaru/hikaru-gpu-private.h"
 #include "mach/hikaru/hikaru-renderer.h"
@@ -309,6 +310,80 @@ int hikaru_engine_set_cpu_clock_mhz(HikaruEngine *engine, unsigned mhz)
         hikaru->cpu_clock_mhz = mhz;
         hikaru->cpu_cycle_remainder = 0;
     }
+    return 0;
+}
+
+uint64_t hikaru_engine_state_layout(void)
+{
+    // Include compiler/architecture-sensitive native structures, never pointers
+    // or host resources themselves. Bump the host payload version on changes.
+    const uint32_t layout[] = {sizeof(void *), sizeof(bool), sizeof(sh4_t),
+        sizeof(hikaru_gpu_t), sizeof(hikaru_rombd_config_t),
+        offsetof(sh4_t, regs), offsetof(sh4_t, intc), offsetof(sh4_t, tmu),
+        offsetof(hikaru_gpu_t, state), offsetof(hikaru_gpu_t, idma_completed),
+        sizeof(((hikaru_gpu_t *)0)->state), sizeof(((sh4_t *)0)->regs),
+#ifdef _MSC_VER
+        0x4d530000u | _MSC_VER,
+#elif defined(__clang__)
+        0x434c0000u | __clang_major__,
+#else
+        0x47430000u | __GNUC__,
+#endif
+    };
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (unsigned i = 0; i < NUMELEM(layout); ++i) {
+        hash ^= layout[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static int transfer_engine_state(HikaruEngine *engine, vk_state_t *state)
+{
+    if (!engine || !engine->machine || activeEngine) return -1;
+    int result = vk_machine_transfer_state(engine->machine, state);
+    if (!result) {
+        result |= state->mode == VK_STATE_SAVE
+            ? vk_state_put(state, &engine->sound_reset, sizeof(engine->sound_reset))
+            : vk_state_get(state, &engine->sound_reset, sizeof(engine->sound_reset));
+    }
+    return result || state->failed ? -1 : 0;
+}
+
+size_t hikaru_engine_state_size(HikaruEngine *engine)
+{
+    vk_state_t state = {0};
+    state.mode = VK_STATE_SAVE;
+    state.capacity = SIZE_MAX;
+    return transfer_engine_state(engine, &state) ? 0 : state.offset;
+}
+
+int hikaru_engine_save_state(HikaruEngine *engine, uint8_t *data, size_t size)
+{
+    if (!data || size != hikaru_engine_state_size(engine)) return -1;
+    vk_state_t state = {0};
+    state.mode = VK_STATE_SAVE;
+    state.data = data;
+    state.capacity = size;
+    return transfer_engine_state(engine, &state) || state.offset != size ? -1 : 0;
+}
+
+int hikaru_engine_load_state(HikaruEngine *engine, const uint8_t *data, size_t size)
+{
+    if (!data || !engine || !engine->machine || !engine->machine->renderer ||
+        size != hikaru_engine_state_size(engine)) return -1;
+    vk_state_t state = {0};
+    state.mode = VK_STATE_LOAD;
+    state.data = (uint8_t *)data;
+    state.capacity = size;
+    if (transfer_engine_state(engine, &state) || state.offset != size ||
+        engine->sound_reset < -1 || engine->sound_reset > 1) return -1;
+    // Texture and mesh handles belong to the current host renderer, not the
+    // snapshot. Rebuild them from restored RAM at this graphics-safe boundary.
+    HostGlState host;
+    save_gl_state(&host);
+    vk_renderer_reset(engine->machine->renderer);
+    restore_gl_state(&host);
     return 0;
 }
 

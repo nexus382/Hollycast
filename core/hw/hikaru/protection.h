@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "crypto3155881.h"
 #include <array>
@@ -7,6 +8,8 @@
 #include <optional>
 
 namespace hikaru {
+class StateReader;
+class StateWriter;
 // ROM-board protection RAM and Sega 315-5881, on the 315-6154 local bus.
 // Owns all device state; no copyrighted firmware or ROM data is supplied.
 class Protection {
@@ -16,6 +19,8 @@ public:
     Protection(const Protection&) = delete;
     Protection& operator=(const Protection&) = delete;
     void reset();
+    void saveState(StateWriter& writer) const;
+    void loadState(StateReader& reader);
     uint64_t read(uint32_t address, unsigned size);
     void write(uint32_t address, uint64_t data, unsigned size);
 private:

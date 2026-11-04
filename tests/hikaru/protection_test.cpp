@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/protection.h"
+#include "hw/hikaru/state_io.h"
 #include <array>
 #include <iostream>
 #include <stdexcept>
@@ -95,6 +96,7 @@ int main()
     first.write(0x0a01000a,0,2);first.write(0x0a010008,0,2);first.write(0x0a01000c,0x1234,2);
     check(first.read(0x0a01000e,2)==0,"compressed stream initial dummy");
     for(unsigned i=0;i<8;++i)check(first.read(0x0a01000e,2)==0x5a5a,"generated compressed literal runs");
+
     // Same generated literal run, but an encrypted header declaring a
     // two-byte line. Reject the eight-byte run before writing beyond it.
     first.write(0x0a000000,0x07,1);first.write(0x0a000001,0x64,1);
@@ -103,6 +105,36 @@ int main()
     throws([&]{first.read(0x0a01000e,2);},"compressed run exceeding declared line fails safely");
     first.reset();fill(first);first.read(0x0a01000e,2);
     check(first.read(0x0a01000e,2)==golden[0],"reset recovers after invalid compressed data");
+    first.reset(); fill(first);
+    check(first.read(0x0a01000e,2)==0,"state test stream dummy");
+    check(first.read(0x0a01000e,2)==golden[0] && first.read(0x0a01000e,2)==golden[1],
+        "state test stream advances before checkpoint");
+    hikaru::StateWriter saved;
+    first.saveState(saved);
+    hikaru::Protection resumed;
+    hikaru::StateReader savedReader(saved.data());
+    resumed.loadState(savedReader);
+    savedReader.finish();
+    auto truncated = saved.data();
+    truncated.pop_back();
+    hikaru::StateWriter beforeRejectedLoad;
+    resumed.saveState(beforeRejectedLoad);
+    bool stateRejected = false;
+    try {
+        hikaru::StateReader broken(truncated);
+        resumed.loadState(broken);
+    } catch (const std::exception&) {
+        stateRejected = true;
+    }
+    hikaru::StateWriter afterRejectedLoad;
+    resumed.saveState(afterRejectedLoad);
+    check(stateRejected && beforeRejectedLoad.data() == afterRejectedLoad.data(),
+        "rejected protection state preserves RAM and cipher cursor");
+    for(unsigned i=2;i<golden.size();++i) {
+        check(first.read(0x0a01000e,2)==golden[i],"original encrypted stream continues after save");
+        check(resumed.read(0x0a01000e,2)==golden[i],"restored encrypted stream continues exactly");
+    }
+
     if(failures)return 1;
     std::cout<<"Hikaru protection tests passed\n";
 }

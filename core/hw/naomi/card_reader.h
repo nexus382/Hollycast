@@ -22,10 +22,18 @@
 #include <memory>
 #include "hw/hwreg.h"
 
+namespace hikaru {
+class StateReader;
+class StateWriter;
+}
+
 namespace card_reader {
 
 // Standalone transport; does not attach to the Naomi/SH-4 serial singleton.
 std::unique_ptr<SerialPort::Pipe> createSanwaReader();
+// Hikaru's standalone serial reader is part of its emulated machine state.
+void saveSanwaReaderState(SerialPort::Pipe& pipe, hikaru::StateWriter& writer);
+void loadSanwaReaderState(SerialPort::Pipe& pipe, hikaru::StateReader& reader);
 
 void initdInit();
 void derbyInit();

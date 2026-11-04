@@ -2,6 +2,7 @@
 /* 
  * Valkyrie
  * Copyright (C) 2011-2013, Stefano Teso
+ * Portions Copyright 2026 The Hollycast Authors
  * 
  * Valkyrie is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -130,12 +131,50 @@ vk_machine_run_frame (vk_machine_t *mach)
 	return mach->run_frame (mach);
 }
 
+int
+vk_machine_transfer_state (vk_machine_t *mach, vk_state_t *state)
+{
+	unsigned i;
+	int ret = 0;
+	const uint32_t mode = state->mode;
+	const char *op = mode == VK_STATE_LOAD ? "load" : "save";
+	VK_VECTOR_FOREACH (mach->buffers, i) {
+		vk_buffer_t *buf = *(vk_buffer_t **) &mach->buffers->data[i];
+		ret = (mode == VK_STATE_LOAD) ?
+		      vk_buffer_load_state (buf, state) :
+		      vk_buffer_save_state (buf, state);
+		if (ret) {
+			VK_ERROR ("%s state: cannot %s buffer", op, op);
+			return -1;
+		}
+	}
+
+	VK_VECTOR_FOREACH (mach->devices, i) {
+		vk_device_t *dev = *(vk_device_t **) &mach->devices->data[i];
+		ret = (mode == VK_STATE_LOAD) ?
+		      vk_device_load_state (dev, state) :
+		      vk_device_save_state (dev, state);
+		if (ret) {
+			VK_ERROR ("%s state: cannot %s device", op, op);
+			return -1;
+		}
+	}
+
+	ret = (mode == VK_STATE_LOAD) ? mach->load_state (mach, state) :
+	                                mach->save_state (mach, state);
+	if (ret) {
+		VK_ERROR ("%s state; cannot %s machine", op, op);
+		return -1;
+	}
+
+	return ret || state->failed ? -1 : 0;
+}
+
 static int
 load_save_state (vk_machine_t *mach, const char *path, uint32_t mode)
 {
 	vk_state_t *state;
 	char *op;
-	unsigned i;
 	int ret = 0;
 
 	VK_ASSERT (mach);
@@ -152,34 +191,7 @@ load_save_state (vk_machine_t *mach, const char *path, uint32_t mode)
 	if (mode == VK_STATE_LOAD)
 		vk_machine_reset (mach, VK_RESET_TYPE_HARD);
 
-	VK_VECTOR_FOREACH (mach->buffers, i) {
-		vk_buffer_t *buf = *(vk_buffer_t **) &mach->buffers->data[i];
-		ret = (mode == VK_STATE_LOAD) ?
-		      vk_buffer_load_state (buf, state) :
-		      vk_buffer_save_state (buf, state);
-		if (ret) {
-			VK_ERROR ("%s state: cannot %s buffer", op, op);
-			goto done;
-		}
-	}
-
-	VK_VECTOR_FOREACH (mach->devices, i) {
-		vk_device_t *dev = *(vk_device_t **) &mach->devices->data[i];
-		ret = (mode == VK_STATE_LOAD) ?
-		      vk_device_load_state (dev, state) :
-		      vk_device_save_state (dev, state);
-		if (ret) {
-			VK_ERROR ("%s state: cannot %s device", op, op);
-			goto done;
-		}
-	}
-
-	ret = (mode == VK_STATE_LOAD) ? mach->load_state (mach, state) :
-	                                mach->save_state (mach, state);
-	if (ret) {
-		VK_ERROR ("%s state; cannot %s machine", op, op);
-		goto done;
-	}
+	ret = vk_machine_transfer_state (mach, state);
 
 done:
 	vk_state_destroy (&state, ret);

@@ -93,7 +93,8 @@ excluded. This is a compatibility timing approximation, not a measured bridge
 latency. Tests cover 100–300 MHz, fractional rates, short slices, delay slots,
 remapping, DMA and state round-trips. Changing the clock during an outstanding
 submicrosecond wait does not rescale debt already incurred. The private vendor
-state format is version 2; the desktop frontend still disables Hikaru states.
+state format is version 3; frontend snapshots additionally include both sound
+boards, I/O, protection and card-reader state.
 
 Both SH-4 CPUs have independent registers and local RAM. The playback engine
 runs the master and slave in alternating slices on one host thread, then
@@ -255,8 +256,15 @@ calibrate the stick in **Game Test Mode > Joystick Calibration** if needed;
 F2 is Test and F3 is Service. Cabinet link play is not available. Its saves
 use `pharrier.hikaru.nvmem` and `pharrier.mie.eeprom`.
 
-Save states, automatic states, rollback/netplay, and RetroAchievements are
-disabled for Hikaru. The backend currently keeps one emulated machine active.
+Save slots, quicksave/quickload, automatic states and library resume are
+available after the first frame. Loading restores the CPUs, mutable graphics
+memory, sound boards, cabinet I/O, EEPROM and card reader together at the next
+frame boundary. States require the same game and BIOS images and a compatible
+native engine layout; incompatible or corrupt states are rejected. State
+previews are not currently captured for Hikaru. Restoring a state also restores
+its cabinet calibration and battery-backed records, which are persisted normally
+on exit. Rollback/netplay and RetroAchievements remain disabled. The backend
+currently keeps one emulated machine active.
 
 ### Virtual-On Force controls and bring-up
 

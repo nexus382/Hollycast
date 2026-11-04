@@ -853,6 +853,9 @@ static void appendVectorData(void *context, void *data, int size)
 static void getScreenshot(std::vector<u8>& data, int width = 0)
 {
 	data.clear();
+	// Hikaru has its own presenter; the Dreamcast renderer retains unrelated
+	// pixels. Leave the optional thumbnail empty until that presenter supplies it.
+	if (settings.platform.isHikaru()) return;
 	std::vector<u8> rawData;
 	int height = 0;
 	if (renderer == nullptr || !renderer->GetLastFrame(rawData, width, height))

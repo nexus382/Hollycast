@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 
 #include "aica.h"
 #include "dsp.h"
 #include "sgc_if.h"
 #include "hw/arm7/arm7.h"
+
+#ifdef USE_HIKARU
+namespace hikaru { class StateReader; class StateWriter; }
+#endif
 
 namespace aica
 {
@@ -27,6 +32,8 @@ public:
 	void initialize();
 #ifdef USE_HIKARU
 	void initializeBoard();
+	void serializeHikaruState(hikaru::StateWriter& writer) const;
+	void deserializeHikaruState(hikaru::StateReader& reader);
 #endif
 	void save();
 	void load() const;

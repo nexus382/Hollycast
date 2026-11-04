@@ -5,12 +5,14 @@
 // BSD-3-Clause. Firmware is executed from external inputs, never patched here.
 #include "mie.h"
 #include "eeprom93c46.h"
+#include "state_io.h"
 #define CHIPS_IMPL
 #include "deps/chips/z80.h"
 
 #include <algorithm>
 #include <array>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace hikaru {
@@ -218,6 +220,93 @@ void Mie::setSerialDevice(std::function<void(uint8_t)> send,
     impl_->serial = {};
 }
 bool Mie::setSoundIrq(bool asserted) { impl_->soundIrq = asserted; return asserted && (impl_->boardIrqMask & 0x10); }
+
+void Mie::saveState(StateWriter& writer) const
+{
+    const Impl& state = *impl_;
+    static_assert(std::is_trivially_copyable_v<z80_t>, "Z80 state must be an opaque POD");
+    writer.pod(state.cpu);
+    writer.value(state.pins);
+    writer.bytes(state.ram.data(), state.ram.size());
+    writer.bytes(state.gpio.data(), state.gpio.size());
+    writer.value(state.direction);
+    writer.value(state.lcr);
+    writer.value(state.control);
+    writer.value(state.irqEnable);
+    writer.value(state.irqPending);
+    writer.value(state.mapleIrqLevel);
+    writer.bytes(state.transmit.data(), state.transmit.size());
+    writer.value(static_cast<uint32_t>(state.transmitSize));
+    writer.value(state.transmitOverflow);
+    state.node.saveState(writer);
+    state.eeprom.saveState(writer);
+    writer.value(state.eepromTicks);
+    writer.value(state.soundIrq);
+    writer.value(state.boardIrqMask);
+    writer.value(state.serial.transmit);
+    writer.value(state.serial.command);
+    writer.value(state.serial.data);
+    writer.value(state.serial.replyCommand);
+    writer.value(state.serial.replyData);
+    writer.value(state.serial.status);
+    writer.value(state.serial.ticks);
+}
+
+void Mie::loadState(StateReader& reader)
+{
+    // Keep the loaded ROM and live host callbacks attached to the staged state.
+    auto staged = std::make_unique<Impl>(*impl_);
+    static_assert(std::is_trivially_copyable_v<z80_t>, "Z80 state must be an opaque POD");
+    reader.pod(staged->cpu);
+    reader.value(staged->pins);
+    reader.bytes(staged->ram.data(), staged->ram.size());
+    reader.bytes(staged->gpio.data(), staged->gpio.size());
+    reader.value(staged->direction);
+    reader.value(staged->lcr);
+    reader.value(staged->control);
+    reader.value(staged->irqEnable);
+    reader.value(staged->irqPending);
+    reader.value(staged->mapleIrqLevel);
+    reader.bytes(staged->transmit.data(), staged->transmit.size());
+    uint32_t transmitSize;
+    reader.value(transmitSize);
+    reader.value(staged->transmitOverflow);
+    staged->node.loadState(reader);
+    staged->eeprom.loadState(reader);
+    reader.value(staged->eepromTicks);
+    reader.value(staged->soundIrq);
+    reader.value(staged->boardIrqMask);
+    reader.value(staged->serial.transmit);
+    reader.value(staged->serial.command);
+    reader.value(staged->serial.data);
+    reader.value(staged->serial.replyCommand);
+    reader.value(staged->serial.replyData);
+    reader.value(staged->serial.status);
+    reader.value(staged->serial.ticks);
+
+    constexpr uint64_t z80PinMask = (uint64_t(1) << 40) - 1;
+    constexpr uint16_t maxZ80Step = 1708; // z80_tick dispatches generated cases 0 through 1708.
+    StateReader::require(staged->pins <= z80PinMask && staged->cpu.pins <= z80PinMask
+        && staged->cpu.step <= maxZ80Step && staged->cpu.hlx_idx <= 2 && staged->cpu.im <= 2,
+        "Invalid MIE Z80 state");
+    StateReader::require(transmitSize <= staged->transmit.size() && staged->eepromTicks < 16,
+        "Invalid MIE transmit or EEPROM cursor");
+    StateReader::require(staged->serial.ticks <= 160
+        && (staged->serial.command == 0 || staged->serial.command == 1
+            || staged->serial.command == 0x55 || staged->serial.command == 0x80
+            || staged->serial.command == 0x81)
+        && (staged->serial.replyCommand == 0 || staged->serial.replyCommand == 1
+            || staged->serial.replyCommand == 0x55 || staged->serial.replyCommand == 0x80
+            || staged->serial.replyCommand == 0x81)
+        && (staged->serial.status == 0 || staged->serial.status == 3
+            || staged->serial.status == 4 || staged->serial.status == 8)
+        && ((staged->serial.ticks != 0) == (staged->serial.status == 3))
+        && (!staged->serial.ticks || (staged->serial.command && staged->serialSend)),
+        "Invalid MIE serial exchange");
+    staged->transmitSize = transmitSize;
+    staged->inputs = staged->node.inputs();
+    impl_ = std::move(staged);
+}
 
 namespace {
 void validateHost(uint32_t address, unsigned size) {
