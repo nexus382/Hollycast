@@ -44,6 +44,10 @@
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/pvr/Renderer_if.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#include "hw/hikaru/roms.h"
+#endif
 #ifdef USE_DREAMLINK_DEVICES
 #include "sdl/dreamlink/dreamlinkgamepad.h"
 #endif
@@ -7604,17 +7608,65 @@ void renderControlsTab()
 
 	ImGui::Spacing();
 
+#ifdef USE_HIKARU
+	// Platform alone stays Hikaru after unload. Gate cabinet controls on the
+	// published loaded descriptor so another title never exposes these options.
+	const auto* hikaruGame = hikaru::frontend::loadedGame();
+	if (hikaruGame && RenderCollapsingHeader("HikaruCompatibilityBindings", ICON_FA_GAMEPAD,
+		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::TextUnformatted(hikaruGame->title);
+		auto* regionOption = hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
+			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion : &config::HikaruPlanetRegion;
+		const char* regionLabels[] = {T("Keep saved region"), T("Japan"), T("USA (English)"), T("Export")};
+		int regionSelection = std::clamp(regionOption->get(), -1, 2) + 1;
+		SettingsUI::PopupConfig regionCfg {};
+		regionCfg.type = SettingsUI::PopupType::Options;
+		regionCfg.options.label = T("Cabinet region");
+		regionCfg.options.icon = ICON_FA_GLOBE;
+		regionCfg.options.popupID = Tnop("HikaruCabinetRegionPopup");
+		regionCfg.options.options = regionLabels;
+		regionCfg.options.optionCount = 4;
+		regionCfg.options.currentValue = &regionSelection;
+		regionCfg.options.valueWidth = 220.0f;
+		regionCfg.options.onChange = [regionOption](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex > 3 || regionOption->get() == selectedIndex - 1) return false;
+			regionOption->set(selectedIndex - 1);
+			hikaru::frontend::requestCabinetRegion();
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
+			T("Choose a region for this game. Changing it restarts the cabinet; calibration and saved records are retained. A backup is kept before the first change."), regionCfg);
+		ImGui::TextWrapped("%s", T("USA selects the English cabinet configuration. Export uses the game's export language options. New cabinets must finish creating their settings before the region can apply."));
+		if (hikaruGame == &hikaru::AirTrixGame) {
+			RenderGeneralToggleSettingRow("HikaruAirTrixDpadBoard", ICON_FA_GAMEPAD,
+				T("D-pad board steering"), T("Use the D-pad for board yaw and roll, alongside the analog stick"),
+				bool(config::HikaruAirTrixDpadBoard),
+				[](bool enabled) { config::HikaruAirTrixDpadBoard.set(enabled); },
+				T("When disabled, D-pad up/down operate the original nose/tail kick switches. Action buttons always provide separate kicks."));
+			ImGui::TextWrapped("%s", T("Map Tail kick, Nose kick, Cabinet left/right, Coin, Yaw and Roll using Controller Mapping above. With the default arcade gamepad layout: A is tail kick, B is nose kick, X/Y are cabinet left/right, and the right shoulder inserts a coin."));
+			ImGui::TextWrapped("%s", T("Tricks combine board motion and kick timing. If steering is ignored, calibrate both axes in Game Test Mode > Calibration > Volume Calibration, then return to the center and save."));
+		} else if (hikaruGame == &hikaru::BraveFirefightersGame) {
+			RenderGeneralToggleSettingRow("HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
+				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
+				bool(config::HikaruBraveMouseAim),
+				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
+				T("Uses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Spray, Fog, Horizontal aim and Vertical aim for this cabinet."));
+		} else if (hikaruGame == &hikaru::PlanetHarriersGame) {
+			RenderGeneralToggleSettingRow("HikaruPlanetDpadStick", ICON_FA_GAMEPAD,
+				T("D-pad flight controls"), T("Use the D-pad for full-range flight movement, alongside the analog stick"),
+				bool(config::HikaruPlanetDpadStick),
+				[](bool enabled) { config::HikaruPlanetDpadStick.set(enabled); },
+				T("Disable to steer only with the mapped analog stick. Bullet, Missile, Bomb and View buttons keep their existing bindings."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Bullet, Missile, Bomb, View left/right and Stick horizontal/vertical for this cabinet."));
+		}
+		ImGui::Spacing();
+	}
+#endif
+
 	if (RenderCollapsingHeader("Mouse&RawInputSection", ICON_FA_CROSSHAIRS, T("Mouse & Raw Input"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
-#ifdef USE_HIKARU
-		if (settings.platform.isHikaru())
-			RenderGeneralToggleSettingRow(
-				"HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
-				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
-				static_cast<bool>(config::HikaruBraveMouseAim),
-				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
-				T("Mouse aim (Brave Firefighters)\nUses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
-#endif
 
 		{
 			// Temp storage for popup slider

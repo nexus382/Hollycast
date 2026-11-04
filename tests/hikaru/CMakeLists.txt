@@ -71,10 +71,10 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     add_subdirectory(../../core/deps/googletest "${CMAKE_CURRENT_BINARY_DIR}/googletest" EXCLUDE_FROM_ALL)
     add_subdirectory(../../core/deps/nowide "${CMAKE_CURRENT_BINARY_DIR}/nowide" EXCLUDE_FROM_ALL)
     add_subdirectory(../../core/deps/soundtouch "${CMAKE_CURRENT_BINARY_DIR}/soundtouch")
-    add_executable(hikaru_host_test ../src/HikaruAudioPacerTest.cpp ../src/HikaruAuditTest.cpp
+    add_executable(hikaru_host_test ../src/HikaruAudioPacerTest.cpp ../src/HikaruAuditTest.cpp ../src/HikaruInputBindingsTest.cpp ../src/HikaruCabinetSettingsTest.cpp
         ../../core/hw/hikaru/audio_pacer.cpp)
     target_include_directories(hikaru_host_test PRIVATE ../../core)
     target_compile_features(hikaru_host_test PRIVATE cxx_std_17)
-    target_link_libraries(hikaru_host_test PRIVATE GTest::gtest_main nowide::nowide hollycast_soundtouch)
+    target_link_libraries(hikaru_host_test PRIVATE GTest::gtest_main nowide::nowide hollycast_soundtouch hollycast_hikaru_io)
     add_test(NAME hikaru_host COMMAND hikaru_host_test)
 endif()

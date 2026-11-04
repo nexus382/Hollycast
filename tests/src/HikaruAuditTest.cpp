@@ -31,6 +31,29 @@ protected:
     void TearDown() override { std::filesystem::remove_all(directory); }
 };
 
+TEST_F(HikaruNvramTest, BackupPreservesTheFirstSnapshotAndSupportsUnicodePaths)
+{
+    const auto file = directory / std::filesystem::u8path(u8"cabinet-\u65e5\u672c.before-region");
+    const auto utf8 = file.u8string();
+    const std::string path(utf8.begin(), utf8.end());
+    const std::array<uint8_t, 4> original{{1,2,3,4}}, changed{{9,8,7,6}};
+    ASSERT_TRUE(hikaru::backupNvram(path, original));
+    ASSERT_TRUE(hikaru::backupNvram(path, changed));
+    std::array<uint8_t, 4> loaded{};
+    ASSERT_EQ(hikaru::loadNvram(path, loaded), hikaru::NvramLoadResult::Loaded);
+    EXPECT_EQ(loaded, original);
+}
+
+TEST_F(HikaruNvramTest, BackupDoesNotOverwriteAnInvalidExistingSnapshot)
+{
+    const auto file = directory / "cabinet.before-region";
+    { std::ofstream output(file, std::ios::binary); output << "bad"; }
+    const std::array<uint8_t, 4> data{{1,2,3,4}};
+    EXPECT_FALSE(hikaru::backupNvram(file.string(), data));
+    std::ifstream input(file, std::ios::binary);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "bad");
+}
+
 TEST_F(HikaruNvramTest, RejectsTruncatedAndOversizedDataWithoutChangingDefaultsOrFile)
 {
     const auto file = directory / "save.nvmem";

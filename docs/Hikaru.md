@@ -188,26 +188,45 @@ Game instructions and animation data are not patched.
 Hollycast uses its existing input mapping. These are the default keyboard
 bindings; custom mappings may differ:
 
-| Air Trix control | Default keyboard |
-| --- | --- |
-| Coin | A (US keyboard layout) |
-| Start / confirm | Return |
-| Cabinet left / right buttons | Left / Right arrows |
-| Front / back kick | Up / Down arrows |
-| Board yaw / roll | I / J / K / L analog bindings |
-| Operator test / service | F2 / F3 |
+The Controls tab shows **Game compatibility controls** only while a Hikaru
+title is loaded. Each cabinet has its own actions in Controller Mapping:
+Air Trix board/kick controls, Brave Firefighters hose controls, and Planet
+Harriers flight/weapon controls. Brave's mouse-aim option appears only with
+Brave loaded. The options retain their values when switching titles, but only
+the matching cabinet uses them. Existing controller mapping files are retained.
 
-On macOS, **System > Insert Credit** also inserts one credit for the loaded
-Hikaru game. The action sends a press and release through the same cabinet
-input path as a physical coin button.
+| Air Trix control | Default keyboard | Default SDL arcade gamepad |
+| --- | --- | --- |
+| Coin | A (US keyboard layout), or D | Right shoulder |
+| Start / confirm | Return | Start |
+| Tail kick (DOWN switch) | X | A |
+| Nose kick (UP switch) | C | B |
+| Cabinet left / right buttons | F / V (also S for right) | X / Y (or triggers) |
+| Board yaw (swing) | J / L | Left-stick horizontal |
+| Board roll (tilt) | I / K | Left-stick vertical |
+| Operator test / service | F2 / F3 | Remap Test / Service as needed |
 
-For Air Trix and Brave Firefighters, unused gamepad face buttons mapped to C
-or X also insert credits. Planet Harriers reserves them for cabinet actions. The controller
-mapping page labels the Hikaru controls. Board motion uses two analog channels;
-the four cabinet buttons are distinct from the analog board axes. Runtime
-testing has verified both calibrated axes, front/back switch mapping, and a
-landed spin trick awarded a B grade and nine coins. Every trick and control
-combination has not been validated.
+Enable **D-pad board steering** for Air Trix to use left/right for yaw and
+up/down for roll, leaving the action buttons free for separate kicks.
+Left/right still operate the cabinet buttons for menu navigation. The option
+defaults off to preserve the original D-pad up/down kick switches and analog
+board motion. Opposing D-pad directions leave the corresponding analog axis intact.
+The former C/X credit aliases are now cabinet left/right actions; Coin and
+button 5 provide credits instead. Custom device mappings can differ from the
+defaults above; use the named actions in Controller Mapping.
+
+Air Trix tricks combine board motion and nose/tail kick timing. Steering alone
+is not a trick command. Sega's service manual describes yaw, roll and the
+independent kick switches in its [Input Test section](https://usermanual.wiki/Arcade/AirTrixManual.1962453288.pdf).
+The new compatibility mappings are covered by host regressions; gameplay and
+individual trick combinations still require a controller test. The manual also
+documents **Game Test Mode > Game Assignments > Language > English**; check
+whether your regional ROM provides that option to make the tutorial readable.
+
+On macOS, **System > Insert Credit** inserts a credit for the loaded Hikaru
+game through the same cabinet input path as a physical coin button.
+Brave retains its unused C/X credit aliases. Planet reserves those buttons
+for weapons/views and uses the dedicated Coin binding.
 
 The game requires foot-controller calibration on a fresh machine. Its axis
 endpoints are stored in the MIE EEPROM; blank endpoints cause the game to ignore
@@ -228,13 +247,40 @@ after changing the controller's usable range.
 Planet Harriers uses one analog stick per cabinet. The default keyboard
 provides arrows or I/J/K/L for movement, X for bullets, C for missiles, F for
 bombs, S/D for the left/right view buttons, A for coins, and Return for Start.
-The controller mapping page exposes all five cabinet buttons. Configure and
+The controller mapping page exposes all five cabinet buttons. Its title-only
+**D-pad flight controls** option defaults on, preserving arrow/D-pad steering;
+disable it to use only the mapped analog stick. Configure and
 calibrate the stick in **Game Test Mode > Joystick Calibration** if needed;
 F2 is Test and F3 is Service. Cabinet link play is not available. Its saves
 use `pharrier.hikaru.nvmem` and `pharrier.mie.eeprom`.
 
 Save states, automatic states, rollback/netplay, and RetroAchievements are
 disabled for Hikaru. The backend currently keeps one emulated machine active.
+
+## Cabinet region and language
+
+While a title is loaded, open **Settings > Controls > Game compatibility
+controls > Cabinet region**. Each game remembers its own selection:
+
+- **Keep saved region** (default): leave the cabinet country unchanged.
+- **Japan**: Japanese cabinet configuration.
+- **USA (English)**: English cabinet configuration.
+- **Export**: export configuration and the game's available language options.
+
+Changing country restarts the emulated cabinet after its EEPROM is idle and
+both records are valid. A fresh cabinet first lets the BIOS create its normal
+settings, then restarts with the selected country. No factory EEPROM image is
+embedded or substituted. Existing calibration and other EEPROM fields are
+retained: only country byte 5 and the checksum of each 64-byte record change.
+Battery-backed RAM is captured and restored through the normal reset path.
+
+Before the first change, the frontend keeps `GAME.mie.eeprom.before-region`
+and, when present, `GAME.hikaru.nvmem.before-region` beside the writable saves.
+The BRAM backup captures live records if a game is running. Existing backups
+are never overwritten. A failed backup blocks the region change. Do not delete
+calibration or score files to switch language. Game-language options can still
+depend on the selected country and title; the English screens require manual
+verification in each game.
 
 ## Standalone development tools
 

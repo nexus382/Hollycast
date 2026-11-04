@@ -2,6 +2,8 @@
 // Copyright 2026 The Hollycast Authors
 // Portions Copyright 2026 The Hollycast Authors
 #include "frontend.h"
+#include "input_bindings.h"
+#include "cabinet_settings.h"
 #include "roms.h"
 #include "nvram.h"
 #include "mie.h"
@@ -40,7 +42,7 @@
 namespace hikaru::frontend {
 namespace {
 std::unique_ptr<RomImages> images;
-const GameDescriptor* activeGame = nullptr;
+std::atomic<const GameDescriptor*> activeGame{nullptr};
 std::unique_ptr<Mie> mie;
 std::unique_ptr<Protection> protection;
 std::unique_ptr<Sound> sound;
@@ -52,6 +54,7 @@ unsigned internalHeight = 0;
 uint64_t clocks = 0;
 std::string ioError;
 std::atomic<bool> resetRequested{false};
+std::atomic<bool> regionRequested{false};
 std::array<CoinPulseQueue, 2> credits;
 std::atomic<bool> freshAudioOutput{false};
 std::array<uint8_t, HIKARU_ENGINE_BRAM_SIZE> savedBram{};
@@ -59,6 +62,14 @@ bool hasSavedBram = false;
 bool bramSaveAllowed = true, mieSaveAllowed = true;
 std::string bramPath;
 std::string mieEepromPath;
+std::array<uint8_t, 4> cabinetId{};
+CabinetRegion pendingRegion = CabinetRegion::Saved;
+
+CabinetRegion configuredRegion(const GameDescriptor* game) {
+    const int value = game == &AirTrixGame ? config::HikaruAirTrixRegion.get()
+        : game == &BraveFirefightersGame ? config::HikaruBraveRegion.get() : config::HikaruPlanetRegion.get();
+    return value >= -1 && value <= 2 ? static_cast<CabinetRegion>(value) : CabinetRegion::Saved;
+}
 
 template<size_t Size>
 bool saveNvram(const std::string& path, const std::array<uint8_t, Size>& data) {
@@ -74,18 +85,29 @@ bool saveNvram(const std::string& path, const std::array<uint8_t, Size>& data) {
     }
     return true;
 }
+bool backupCabinetSettings(const std::array<uint8_t, 128>& eeprom) {
+    if (!bramSaveAllowed || !mieSaveAllowed) return false;
+    auto bram = savedBram;
+    if (engine && hikaru_engine_get_bram(engine, bram.data(), bram.size()) != 0) return false;
+    // Capture live records too: the game may hold newer scores than the disk.
+    // The first backup of either file is never overwritten by later changes.
+    return backupNvram(mieEepromPath + ".before-region", eeprom)
+        && (!(engine || hasSavedBram) || backupNvram(bramPath + ".before-region", bram));
+}
 InputDescriptors airTrixInputs = {{
     {NAOMI_START_KEY, "Start"}, {NAOMI_COIN_KEY, "Coin"},
-    {NAOMI_BTN2_KEY, "Coin"}, {NAOMI_BTN3_KEY, "Coin"},
+    {NAOMI_BTN0_KEY, "Tail kick"}, {NAOMI_BTN1_KEY, "Nose kick"},
+    {NAOMI_BTN2_KEY, "Cabinet left"}, {NAOMI_BTN3_KEY, "Cabinet right"},
+    {NAOMI_BTN4_KEY, "Coin"},
     {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
     {NAOMI_LEFT_KEY, "Left"}, {NAOMI_RIGHT_KEY, "Right"},
-    {NAOMI_UP_KEY, "Kick up"}, {NAOMI_DOWN_KEY, "Kick down"},
+    {NAOMI_UP_KEY, "Up"}, {NAOMI_DOWN_KEY, "Down"},
 }, {
     {"Yaw", Full, 0, false}, {"Roll", Full, 1, false},
 }};
 InputDescriptors braveFirefightersInputs = {{
     {NAOMI_START_KEY, "Start"}, {NAOMI_COIN_KEY, "Coin"},
-    {NAOMI_BTN0_KEY, "Button 1"}, {NAOMI_BTN1_KEY, "Button 2"},
+    {NAOMI_BTN0_KEY, "Spray"}, {NAOMI_BTN1_KEY, "Fog"},
     {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
 }, {
     {"Horizontal aim", Full, 0, false}, {"Vertical aim", Full, 1, false},
@@ -218,10 +240,14 @@ void load(const std::string& path) {
     mieSaveAllowed = mieResult != NvramLoadResult::Invalid;
     if (!bramSaveAllowed || !mieSaveAllowed)
         os_notify("Hikaru save data could not be loaded. Using defaults; the original files will be preserved.", 10000);
-    activeGame = selectedGame;
     for (auto& queue : credits) queue.reset();
-    NaomiGameInputs = activeGame == &PlanetHarriersGame ? &planetHarriersInputs
-        : activeGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
+    NaomiGameInputs = selectedGame == &PlanetHarriersGame ? &planetHarriersInputs
+        : selectedGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
+    // The cartridge header supplies the BIOS's four-byte cabinet identifier.
+    std::copy_n(images->program.begin() + 0x136, cabinetId.size(), cabinetId.begin());
+    pendingRegion = configuredRegion(selectedGame);
+    regionRequested = false;
+    activeGame = selectedGame;
 }
 void releaseGraphics() {
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
@@ -253,8 +279,10 @@ void suspendGraphics() {
     glcache.Reset();
     nativeGraphics.reset();
 }
-void unload() { releaseGraphics(); protection.reset(); mie.reset(); images.reset(); activeGame = nullptr; ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
+const GameDescriptor* loadedGame() { return activeGame.load(); }
+void unload() { activeGame = nullptr; pendingRegion = CabinetRegion::Saved; releaseGraphics(); protection.reset(); mie.reset(); images.reset(); ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr; hasSavedBram = false; bramPath.clear(); mieEepromPath.clear(); }
 void requestReset() { resetRequested = true; }
+void requestCabinetRegion() { regionRequested = true; }
 void insertCredit(unsigned player) {
     if (player < credits.size()) credits[player].enqueue();
 }
@@ -284,7 +312,34 @@ static bool renderFrame() {
             throw FlycastException("Hikaru OpenGL requires OpenGL 3.2 or OpenGL ES 3.0");
     }
     if (settings.display.width <= 0 || settings.display.height <= 0) return false;
-    if (resetRequested.exchange(false)) { releaseGraphics(); ClearAudioOutput(); freshAudioOutput = true; }
+    if (resetRequested.exchange(false)) {
+        releaseGraphics(); ClearAudioOutput(); freshAudioOutput = true;
+        pendingRegion = configuredRegion(loadedGame());
+    }
+    if (regionRequested.exchange(false)) pendingRegion = configuredRegion(loadedGame());
+    if (pendingRegion != CabinetRegion::Saved && mie->eepromIdle()) {
+        const auto original = mie->eepromContents();
+        auto updated = original;
+        const auto regionResult = applyCabinetRegion(updated, cabinetId, pendingRegion);
+        if (regionResult == CabinetRegionResult::Changed) {
+            if (!backupCabinetSettings(original)) {
+                os_notify("Could not back up cabinet settings. Region was not changed.", 10000);
+            } else {
+                // The BIOS caches country in RAM. Preserve BRAM and teardown
+                // before replacing the EEPROM; never interrupt its serial I/O.
+                // For a blank chip, wait for the real BIOS defaults, then boot
+                // once more with the requested country instead of a fake image.
+                if (engine) { releaseGraphics(); ClearAudioOutput(); freshAudioOutput = true; }
+                mie->restoreEeprom(std::vector<uint8_t>(updated.begin(), updated.end()));
+                os_notify("Cabinet region applied. Calibration and saved records retained.", 5000);
+            }
+            pendingRegion = CabinetRegion::Saved;
+        } else if (regionResult != CabinetRegionResult::PendingInitialization) {
+            pendingRegion = CabinetRegion::Saved;
+            if (regionResult == CabinetRegionResult::Invalid)
+                os_notify("Cabinet settings do not match this game. Region was not changed.", 10000);
+        }
+    }
     if (!gl && !nativeGraphics) {
         std::unique_ptr<graphics::Backend> backend;
 #ifdef USE_METAL
@@ -403,36 +458,14 @@ static bool renderFrame() {
             throw FlycastException(std::string("Hikaru renderer: ") + hikaru_engine_last_error(engine));
         internalHeight = unsigned(requestedHeight);
     }
-    HikaruEngineInputs input{};
-    for (auto& axis : input.analog) axis = 0x8000;
-    for (unsigned i = 0; i < 2; ++i) {
-        auto pressed = [i](u32 mask) { return (kcode[i] & mask) == 0; };
-        // The default keyboard maps D to scancode 4 (A on a US layout).
-        // SDL's default gamepad
-        // has no D binding, but maps its face buttons to C/X in arcade mode.
-        // Planet Harriers uses C/X for cabinet actions, so its only coin
-        // binding is D. Keep the extra credit aliases for the older titles.
-        input.coin[i] = pressed(DC_BTN_D) || (activeGame != &PlanetHarriersGame &&
-            (pressed(DC_BTN_C) || pressed(DC_BTN_X)));
+    std::array<ControllerInputs, 2> controllers;
+    for (unsigned i = 0; i < controllers.size(); ++i)
+        controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i]};
+    const auto* game = loadedGame();
+    auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick);
+    for (unsigned i = 0; i < credits.size(); ++i)
         input.coin[i] = credits[i].sample(input.coin[i]);
-        input.players[i] = (pressed(DC_BTN_START) ? 0x8000 : 0) | (pressed(DC_DPAD_LEFT) ? 0x0200 : 0)
-            | (pressed(DC_DPAD_RIGHT) ? 0x0100 : 0) | (pressed(DC_DPAD_UP) ? 0x2000 : 0) | (pressed(DC_DPAD_DOWN) ? 0x1000 : 0);
-        if (activeGame == &BraveFirefightersGame || activeGame == &PlanetHarriersGame)
-            input.players[i] = (pressed(DC_BTN_START) ? 0x8000 : 0) | (pressed(DC_BTN_A) ? 0x0200 : 0)
-                | (pressed(DC_BTN_B) ? 0x0100 : 0) | (pressed(DC_DPAD_UP) ? 0x2000 : 0)
-                | (pressed(DC_DPAD_DOWN) ? 0x1000 : 0) | (pressed(DC_DPAD_LEFT) ? 0x0800 : 0)
-                | (pressed(DC_DPAD_RIGHT) ? 0x0400 : 0);
-        if (activeGame == &PlanetHarriersGame)
-            // Match the normal Naomi button order. The left trigger also
-            // supplies button 3 so the default keyboard F binding can bomb.
-            input.players[i] |= ((pressed(DC_BTN_C) || lt[i] >= 0x8000) ? 0x0080 : 0)
-                | (pressed(DC_BTN_X) ? 0x0040 : 0) | (pressed(DC_BTN_Y) ? 0x0020 : 0);
-    }
-    input.test = !(kcode[0] & DC_DPAD2_DOWN); input.service = !(kcode[0] & DC_DPAD2_UP);
-    input.analog[0] = uint16_t(int(joyx[0]) + 32768); input.analog[1] = uint16_t(int(joyy[0]) + 32768);
-    if (activeGame == &BraveFirefightersGame) {
-        input.analog[2] = uint16_t(int(joyx[1]) + 32768);
-        input.analog[3] = uint16_t(int(joyy[1]) + 32768);
+    if (game == &BraveFirefightersGame) {
         if (config::HikaruBraveMouseAim && !gui_is_open()) {
             // Absolute pointer aim, like touch: position inside the
             // picture becomes the full analog range. The last pointer
@@ -491,24 +524,11 @@ static bool renderFrame() {
             while (wheelAccum <= -1.0f) { wheelAccum += 1.0f; }
         }
     }
-    if (activeGame == &PlanetHarriersGame) {
-        // One cabinet has one analog stick; linked cabinets are not emulated.
-        // Planet's JVS order is vertical on channel 0, horizontal on
-        // channel 1 (cabinet wiring: STICK V analog 0, STICK H
-        // analog 1), the reverse of the other titles; its vertical low
-        // end is down. Arrows provide full-range keyboard movement
-        // alongside analog bindings.
-        input.analog[0] = uint16_t(int(joyy[0]) + 32768);
-        input.analog[1] = uint16_t(int(joyx[0]) + 32768);
-        if (!(kcode[0] & DC_DPAD_LEFT)) input.analog[1] = 0;
-        else if (!(kcode[0] & DC_DPAD_RIGHT)) input.analog[1] = 0xffff;
-        if (!(kcode[0] & DC_DPAD_UP)) input.analog[0] = 0xffff;
-        else if (!(kcode[0] & DC_DPAD_DOWN)) input.analog[0] = 0;
-    }
     GLint target = 0;
     if (!nativeGraphics) glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
     hikaru_engine_resize(engine, uint32_t(target), unsigned(settings.display.width), unsigned(settings.display.height));
     const auto engineStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const double blockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
     int result;
     {
         Sound::FrameScope audioFrame(*sound);
@@ -539,18 +559,31 @@ static bool renderFrame() {
     }
     if (traceTiming) {
         static unsigned frames;
-        static double engineMs, overlayMs, totalMs;
+        static uint64_t frameNumber;
+        static double engineMs, overlayMs, totalMs, maximumMs;
         const auto end = std::chrono::steady_clock::now();
-        engineMs += std::chrono::duration<double, std::milli>(engineEnd - engineStart).count();
-        overlayMs += std::chrono::duration<double, std::milli>(end - engineEnd).count();
-        totalMs += std::chrono::duration<double, std::milli>(end - renderStart).count();
+        const double frameEngineMs = std::chrono::duration<double, std::milli>(engineEnd - engineStart).count();
+        const double frameOverlayMs = std::chrono::duration<double, std::milli>(end - engineEnd).count();
+        const double frameTotalMs = std::chrono::duration<double, std::milli>(end - renderStart).count();
+        const double blockedMs = std::max(0.0, audioOutputBlockedSeconds() - blockedStart) * 1000;
+        ++frameNumber;
+        // Window averages hide tutorial-transition hitches. With the existing
+        // opt-in trace, separate long frames from time waiting on audio output.
+        if (frameTotalMs >= 100)
+            std::fprintf(stderr, "Hikaru slow frame: game=%s frame=%llu total_ms=%.3f engine_ms=%.3f audio_wait_ms=%.3f overlay_ms=%.3f\n",
+                         game->identifier, static_cast<unsigned long long>(frameNumber),
+                         frameTotalMs, frameEngineMs, blockedMs, frameOverlayMs);
+        engineMs += frameEngineMs;
+        overlayMs += frameOverlayMs;
+        totalMs += frameTotalMs;
+        maximumMs = std::max(maximumMs, frameTotalMs);
         if (++frames == 60) {
-            std::fprintf(stderr, "Hikaru frontend timing: frames=%u engine_ms=%.3f overlay_ms=%.3f total_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u\n",
-                         frames, engineMs / frames, overlayMs / frames, totalMs / frames, cpuClockMhz,
+            std::fprintf(stderr, "Hikaru frontend timing: frames=%u engine_ms=%.3f overlay_ms=%.3f total_ms=%.3f max_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u\n",
+                         frames, engineMs / frames, overlayMs / frames, totalMs / frames, maximumMs, cpuClockMhz,
                          gl ? "opengl" : isMetal(requested) ? "metal" : "vulkan",
                          sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle",
                          internalHeight);
-            frames = 0; engineMs = overlayMs = totalMs = 0;
+            frames = 0; engineMs = overlayMs = totalMs = maximumMs = 0;
         }
     }
     return true;

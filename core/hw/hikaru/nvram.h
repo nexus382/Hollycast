@@ -25,4 +25,18 @@ NvramLoadResult loadNvram(const std::string& path, std::array<uint8_t, Size>& da
     data = loaded;
     return NvramLoadResult::Loaded;
 }
+// Keep the first pre-change snapshot. Exclusive creation also protects it
+// from another instance; an existing unreadable/truncated backup is an error.
+template<size_t Size>
+bool backupNvram(const std::string& path, const std::array<uint8_t, Size>& data) {
+    std::array<uint8_t, Size> existing{};
+    const auto previous = loadNvram(path, existing);
+    if (previous != NvramLoadResult::Missing) return previous == NvramLoadResult::Loaded;
+    FILE* file = nowide::fopen(path.c_str(), "wbx");
+    if (!file) return errno == EEXIST && loadNvram(path, existing) == NvramLoadResult::Loaded;
+    const bool written = std::fwrite(data.data(), 1, Size, file) == Size;
+    const bool closed = std::fclose(file) == 0;
+    if (!written || !closed) nowide::remove(path.c_str());
+    return written && closed;
+}
 } // namespace hikaru

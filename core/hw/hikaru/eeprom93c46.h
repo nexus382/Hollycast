@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 
 #include <array>
@@ -21,6 +22,7 @@ public:
     bool dataOut() const;
     void advanceMicros(uint32_t micros);
     bool busy() const { return busyMicros_ != 0; }
+    bool idle() const { return !cs_ && !busy(); }
     bool writeEnabled() const { return writeEnabled_; }
     const std::array<uint8_t, Size>& contents() const { return memory_; }
     // Discards an unfinished command, retaining the write-enable latch and any

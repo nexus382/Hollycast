@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "jvs.h"
 #include <array>
@@ -33,6 +34,7 @@ public:
     bool addressed() const;
     // Restore only before execution; reset intentionally preserves EEPROM.
     std::array<uint8_t, 128> eepromContents() const;
+    bool eepromIdle() const;
     void restoreEeprom(const std::vector<uint8_t>& contents);
 private:
     struct Impl;

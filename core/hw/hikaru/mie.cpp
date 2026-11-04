@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // Hardware register reference: MAME src/mame/sega/mie.cpp, Olivier Galibert,
 // BSD-3-Clause. Firmware is executed from external inputs, never patched here.
 #include "mie.h"
@@ -202,5 +203,6 @@ void Mie::advanceTicks(uint32_t z80Ticks) { impl_->ticks(z80Ticks); }
 uint16_t Mie::programCounter() const { return impl_->cpu.pc; }
 bool Mie::addressed() const { return impl_->node.addressed(); }
 std::array<uint8_t, 128> Mie::eepromContents() const { return impl_->eeprom.contents(); }
+bool Mie::eepromIdle() const { return impl_->eeprom.idle(); }
 void Mie::restoreEeprom(const std::vector<uint8_t>& contents) { impl_->eeprom = Eeprom93c46(contents); }
 } // namespace hikaru
