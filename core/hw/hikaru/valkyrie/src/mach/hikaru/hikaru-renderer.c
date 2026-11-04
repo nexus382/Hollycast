@@ -1056,6 +1056,7 @@ unsigned num_programs;
 
 #ifdef HIKARU_VENDOR_TESTING
 static unsigned uniform_location_queries;
+static unsigned state_uploads[3]; /* viewport, model matrices, lightset */
 static unsigned spot_param_uploads, spot_table_uploads;
 void hikaru_vendor_test_spot_upload_counts(unsigned *params, unsigned *tables) { *params = spot_param_uploads; *tables = spot_table_uploads; }
 void hikaru_vendor_test_spot_upload_counts_reset(void) { spot_param_uploads = spot_table_uploads = 0; }
@@ -1116,6 +1117,9 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 		return;
 	}
 
+	/* Layer programs never write these uniforms. A shader/frame transition
+	 * invalidates the active-program values before the next mesh uses them. */
+	memset(&hr->meshes.uniforms, 0, sizeof(hr->meshes.uniforms));
 	hr->meshes.variant.full = variant.full;
 
 	for (i = 0; i < num_programs; i++) {
@@ -1252,6 +1256,10 @@ update_locations:
 	hr->meshes.locs.u_peel_opaque_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_opaque_depth");
 	VK_ASSERT_NO_GL_ERROR ();
 	program_cache[slot].locs = hr->meshes.locs;
+	/* Sampler units are fixed for the lifetime of this linked program. */
+	glUniform1i(hr->meshes.locs.u_texture, 0);
+	glUniform1i(hr->meshes.locs.u_peel_depth, 1);
+	glUniform1i(hr->meshes.locs.u_peel_opaque_depth, 2);
 }
 
 #undef GET_MESH_UNIFORM
@@ -1362,6 +1370,24 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 {
 	VK_ASSERT (mesh->vp_index < hr->num_vps);
 	hikaru_viewport_t *vp = &hr->vp_list[mesh->vp_index];
+	const float sx = hr->base.internal_width / 640.0f;
+	const float sy = hr->base.internal_height / 480.0f;
+	const GLint left = (GLint) lroundf(vp->clip.l * sx);
+	const GLint bottom = (GLint) lroundf(vp->clip.b * sy);
+	const GLint right = (GLint) lroundf(vp->clip.r * sx);
+	const GLint top = (GLint) lroundf(vp->clip.t * sy);
+	glViewport (left, bottom, right - left, top - bottom);
+	/* The viewport rectangle is context state and may have been changed by
+	 * a layer pass. Only the program-local projection/fog values are cached. */
+	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	if (cache->viewport_valid && cache->alpha_ref == hr->pass_alpha_ref &&
+	    !memcmp(&cache->viewport, vp, sizeof(*vp))) return;
+	cache->viewport = *vp;
+	cache->alpha_ref = hr->pass_alpha_ref;
+	cache->viewport_valid = true;
+#ifdef HIKARU_VENDOR_TESTING
+	++state_uploads[0];
+#endif
 	const float h = vp->clip.t - vp->clip.b;
 	const float w = vp->clip.r - vp->clip.l;
 	const float dcx = (vp->offset.x - (w / 2.0f));
@@ -1402,13 +1428,6 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	glUniformMatrix4fv (hr->meshes.locs.u_projection, 1, GL_FALSE,
 	                    (const GLfloat *) projection);
 
-	const float sx = hr->base.internal_width / 640.0f;
-	const float sy = hr->base.internal_height / 480.0f;
-	const GLint left = (GLint) lroundf(vp->clip.l * sx);
-	const GLint bottom = (GLint) lroundf(vp->clip.b * sy);
-	const GLint right = (GLint) lroundf(vp->clip.r * sx);
-	const GLint top = (GLint) lroundf(vp->clip.t * sy);
-	glViewport (left, bottom, right - left, top - bottom);
 
 	if (hr->meshes.variant.has_fog) {
 		vec2f_t fog;
@@ -1457,28 +1476,118 @@ upload_modelview (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned i)
 		mv = &hr->mv_list[mesh->mv_index + i];
 	}
 
-	vk_renderer_compute_normal_matrix (normal, mv->mtx);
-
-	LOG ("mv  = [%u+%u] %s", mesh->mv_index, i, get_modelview_str (mv));
-	glUniformMatrix4fv (hr->meshes.locs.u_modelview, 1, GL_FALSE,
-	                    (const GLfloat *) mv->mtx);
-
-	glUniformMatrix3fv (hr->meshes.locs.u_normal, 1, GL_FALSE,
-	                    (const GLfloat *) normal);
-
-	/* Bit 12 on a vertex selects the explicitly pushed alternate matrix.
-	 * With no alternate upload, use the primary matrix for both selectors. */
+	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	if (!cache->modelview_valid[0] || memcmp(cache->modelview[0], mv->mtx, sizeof(mv->mtx))) {
+		vk_renderer_compute_normal_matrix(normal, mv->mtx);
+		glUniformMatrix4fv(hr->meshes.locs.u_modelview, 1, GL_FALSE, (const GLfloat *)mv->mtx);
+		glUniformMatrix3fv(hr->meshes.locs.u_normal, 1, GL_FALSE, (const GLfloat *)normal);
+		memcpy(cache->modelview[0], mv->mtx, sizeof(mv->mtx));
+		cache->modelview_valid[0] = true;
+#ifdef HIKARU_VENDOR_TESTING
+		++state_uploads[1];
+#endif
+	}
+	/* Bit 12 selects the alternate matrix; without one it uses the primary.
+	 * Cache both values independently, including that fallback transition. */
 	hikaru_modelview_t *alternate = mv;
 	if (mesh->alternate_mv_index != ~0u) {
-		VK_ASSERT (mesh->alternate_mv_index < hr->num_alternate_mvs);
+		VK_ASSERT(mesh->alternate_mv_index < hr->num_alternate_mvs);
 		alternate = &hr->alternate_mv_list[mesh->alternate_mv_index];
-		vk_renderer_compute_normal_matrix (normal, alternate->mtx);
 	}
-	glUniformMatrix4fv (hr->meshes.locs.u_modelview_alternate, 1, GL_FALSE,
-	                    (const GLfloat *) alternate->mtx);
-	glUniformMatrix3fv (hr->meshes.locs.u_normal_alternate, 1, GL_FALSE,
-	                    (const GLfloat *) normal);
+	if (!cache->modelview_valid[1] || memcmp(cache->modelview[1], alternate->mtx, sizeof(alternate->mtx))) {
+		vk_renderer_compute_normal_matrix(normal, alternate->mtx);
+		glUniformMatrix4fv(hr->meshes.locs.u_modelview_alternate, 1, GL_FALSE, (const GLfloat *)alternate->mtx);
+		glUniformMatrix3fv(hr->meshes.locs.u_normal_alternate, 1, GL_FALSE, (const GLfloat *)normal);
+		memcpy(cache->modelview[1], alternate->mtx, sizeof(alternate->mtx));
+		cache->modelview_valid[1] = true;
+#ifdef HIKARU_VENDOR_TESTING
+		++state_uploads[1];
+#endif
+	}
 }
+
+#ifdef HIKARU_VENDOR_TESTING
+static unsigned sampling_updates;
+#endif
+
+static void
+apply_texture_sampling(hikaru_texture_t *tex, const hikaru_texhead_t *wanted, GLuint lod_bias_location)
+{
+	const uint32_t sampling_mask = (3u << 16) | (0xffu << 20);
+	const float bias = -0.5f + (float)(int8_t)((wanted->_0C1 >> 20) & 0xff) * 0.125f;
+	const bool gles = vk_renderer_is_gles();
+	/* Filter and desktop LOD bias belong to the texture object, so repeated
+	 * sorted draws need no driver updates until this texhead changes them. */
+	if (!tex->sampling_valid || ((tex->th._0C1 ^ wanted->_0C1) & sampling_mask)) {
+		const unsigned filter = (wanted->_0C1 >> 16) & 3;
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter == 0 ? GL_NEAREST : GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+		                filter == 0 ? GL_NEAREST : filter == 2 ? GL_LINEAR : GL_LINEAR_MIPMAP_LINEAR);
+		if (!gles) glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, bias);
+		tex->th._0C1 = wanted->_0C1;
+		tex->sampling_valid = true;
+#ifdef HIKARU_VENDOR_TESTING
+		++sampling_updates;
+#endif
+	}
+	/* ES LOD bias is a program uniform, not texture state. It must still be
+	 * restored when switching between programs or texture objects. */
+	if (gles && lod_bias_location != (GLuint)-1)
+		glUniform1f(lod_bias_location, bias);
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+int hikaru_vendor_test_texture_sampling_cache(void)
+{
+	GLuint ids[2];
+	hikaru_texture_t textures[2] = {0};
+	hikaru_texhead_t wanted = {0};
+	GLint filter;
+	GLfloat bias;
+	const unsigned before = sampling_updates;
+	glGenTextures(2, ids);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, ids[0]);
+	apply_texture_sampling(&textures[0], &wanted, (GLuint)-1);
+	apply_texture_sampling(&textures[0], &wanted, (GLuint)-1);
+	glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+	int ok = sampling_updates == before + 1 && filter == GL_NEAREST;
+	glBindTexture(GL_TEXTURE_2D, ids[1]);
+	wanted._0C1 = (1u << 16) | (20u << 20);
+	apply_texture_sampling(&textures[1], &wanted, (GLuint)-1);
+	glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+	ok &= sampling_updates == before + 2 && filter == GL_LINEAR_MIPMAP_LINEAR;
+	glBindTexture(GL_TEXTURE_2D, ids[0]);
+	wanted._0C1 = 0;
+	apply_texture_sampling(&textures[0], &wanted, (GLuint)-1);
+	glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+	ok &= sampling_updates == before + 2 && filter == GL_NEAREST;
+	wanted._0C1 = (2u << 16) | (255u << 20);
+	apply_texture_sampling(&textures[0], &wanted, (GLuint)-1);
+	apply_texture_sampling(&textures[0], &wanted, (GLuint)-1);
+	glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+	ok &= sampling_updates == before + 3 && filter == GL_LINEAR;
+	if (!vk_renderer_is_gles()) {
+		glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, &bias);
+		ok &= fabsf(bias + 0.625f) < 0.0001f;
+	}
+	/* Bias can change without changing the minification filter. */
+	wanted._0C1 = (2u << 16) | (20u << 20);
+	apply_texture_sampling(&textures[0], &wanted, (GLuint)-1);
+	ok &= sampling_updates == before + 4;
+	if (!vk_renderer_is_gles()) {
+		glGetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, &bias);
+		ok &= fabsf(bias - 2.0f) < 0.0001f;
+	}
+	/* Destroying/recreating a texture clears this per-object cache. */
+	memset(&textures[0], 0, sizeof(textures[0]));
+	apply_texture_sampling(&textures[0], &wanted, (GLuint)-1);
+	ok &= sampling_updates == before + 5 && glGetError() == GL_NO_ERROR;
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glDeleteTextures(2, ids);
+	return ok;
+}
+#endif
 
 static void
 upload_material_texhead (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
@@ -1506,26 +1615,10 @@ upload_material_texhead (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	}
 
 	if (tex) {
-		/* Sampling state belongs to the texhead, not the texels, so
-		 * apply the 0C1 filter and LOD bias on every bind. */
-		hikaru_texhead_t *wanted = &hr->tex_list[mesh->tex_index];
-		const unsigned filter = (wanted->_0C1 >> 16) & 3;
-		const float bias = -0.5f + (float) (int8_t) ((wanted->_0C1 >> 20) & 0xFF) * 0.125f;
-		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
-		                 filter == 0 ? GL_NEAREST : GL_LINEAR);
-		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-		                 filter == 0 ? GL_NEAREST :
-		                 filter == 2 ? GL_LINEAR : GL_LINEAR_MIPMAP_LINEAR);
-		/* ES exposes LOD bias in fragment sampling, not texture parameters. */
-		if (vk_renderer_is_gles())
-			glUniform1f(hr->meshes.locs.u_lod_bias, bias);
-		else
-			glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, bias);
+		apply_texture_sampling(tex, &hr->tex_list[mesh->tex_index], hr->meshes.locs.u_lod_bias);
 		VK_ASSERT_NO_GL_ERROR ();
 	}
 
-	glUniform1i (hr->meshes.locs.u_texture, 0);
-	VK_ASSERT_NO_GL_ERROR ();
 }
 
 static void
@@ -1592,36 +1685,53 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 
 	LOG ("lightset = %s", get_lightset_str (ls));
 
+	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
 	get_light_ambient (hr, mesh, tmp);
-	glUniform3fv (hr->meshes.locs.u_ambient, 1, (const GLfloat *) tmp);
-	VK_ASSERT_NO_GL_ERROR ();
-
+	if (!cache->ambient_valid || memcmp(cache->ambient, tmp, sizeof(cache->ambient))) {
+		glUniform3fv(hr->meshes.locs.u_ambient, 1, tmp);
+		memcpy(cache->ambient, tmp, sizeof(cache->ambient));
+		cache->ambient_valid = true;
+	}
+	const unsigned debug_flags = (hr->debug.flags[HR_DEBUG_NO_DIFFUSE] ? 1u : 0u) |
+	                             (hr->debug.flags[HR_DEBUG_NO_SPECULAR] ? 2u : 0u);
+	const bool changed = !cache->lightset_valid || cache->light_debug_flags != debug_flags ||
+	                     memcmp(&cache->lightset, ls, sizeof(*ls));
+	cache->lightset = *ls;
+	cache->light_debug_flags = debug_flags;
+	cache->lightset_valid = true;
+#ifdef HIKARU_VENDOR_TESTING
+	if (changed) ++state_uploads[2];
+#endif
 	for (i = 0; i < 4; i++) {
 		hikaru_light_t *lt = &ls->lights[i];
 
 		if (ls->mask & (1 << i))
 			continue;
 
-		glUniform3fv (hr->meshes.locs.u_lights[i].position, 1,
-		              lt->position);
-		VK_ASSERT_NO_GL_ERROR ();
+		if (changed) {
+			glUniform3fv (hr->meshes.locs.u_lights[i].position, 1,
+			              lt->position);
+			VK_ASSERT_NO_GL_ERROR ();
 
-		glUniform3fv (hr->meshes.locs.u_lights[i].direction, 1,
-		              lt->direction);
-		VK_ASSERT_NO_GL_ERROR ();
+			glUniform3fv (hr->meshes.locs.u_lights[i].direction, 1,
+			              lt->direction);
+			VK_ASSERT_NO_GL_ERROR ();
 
-		get_light_diffuse (hr, lt, tmp);
-		glUniform3fv (hr->meshes.locs.u_lights[i].diffuse, 1, tmp);
-		VK_ASSERT_NO_GL_ERROR ();
+			get_light_diffuse (hr, lt, tmp);
+			glUniform3fv (hr->meshes.locs.u_lights[i].diffuse, 1, tmp);
+			VK_ASSERT_NO_GL_ERROR ();
 
-		get_light_specular (hr, lt, tmp);
-		glUniform3fv (hr->meshes.locs.u_lights[i].specular, 1, tmp);
-		VK_ASSERT_NO_GL_ERROR ();
+			get_light_specular (hr, lt, tmp);
+			glUniform3fv (hr->meshes.locs.u_lights[i].specular, 1, tmp);
+			VK_ASSERT_NO_GL_ERROR ();
 
-		glUniform2fv (hr->meshes.locs.u_lights[i].extents, 1,
-		              lt->attenuation);
+			glUniform2fv (hr->meshes.locs.u_lights[i].extents, 1,
+			              lt->attenuation);
 
-		/* Air Trix's 451 builder stores a Q1.15 cosine and the high eight
+		}
+
+		/* Spotlight LUTs are draw-time state, independent of the light snapshot.
+		 * Air Trix's 451 builder stores a Q1.15 cosine and the high eight
 		 * bits of (float_bits(1.0) - float_bits(cos(inner)-cos(outer))).
 		 * Interpret that reciprocal approximation as four exponent and
 		 * four mantissa bits. The legacy specular alias is unchanged. */
@@ -1671,6 +1781,99 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		}
 	}
 }
+
+#ifdef HIKARU_VENDOR_TESTING
+/* Query real linked-program values after cache hits, state changes and shader
+ * switches. Upload counts also ensure identical draws actually skip the work. */
+int hikaru_vendor_test_mesh_uniform_values(void)
+{
+	if (num_programs) return 0;
+	hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+	if (!hr) return 0;
+	hikaru_viewport_t vp = {0};
+	hikaru_modelview_t mv = {0}, alternate = {0};
+	hikaru_material_t material = {0};
+	hikaru_lightset_t lights = {0};
+	hikaru_mesh_t mesh = {0};
+	GLint previous_program, viewport[4];
+	GLfloat matrix[16], value[4];
+	glGetIntegerv(GL_CURRENT_PROGRAM, &previous_program);
+	hr->vp_list = &vp; hr->num_vps = 1;
+	hr->mv_list = &mv; hr->num_mvs = 1;
+	hr->alternate_mv_list = &alternate; hr->num_alternate_mvs = 1;
+	hr->mat_list = &material; hr->num_mats = 1;
+	hr->ls_list = &lights; hr->num_lss = 1;
+	hr->base.internal_width = 640; hr->base.internal_height = 480;
+	hr->meshes.variant.full = ~UINT64_C(0);
+	hr->debug.flags[HR_DEBUG_FOG] = 1;
+	vp.clip.r = 640; vp.clip.t = 480; vp.clip.n = 1; vp.clip.f = 2;
+	vp.offset.x = 320; vp.offset.y = 240;
+	vp.depth.q_enabled = 1; vp.depth.density = 0.01f; vp.depth.bias = 0.1f;
+	material.shading_mode = 2; material.depth_blend = 1; material.has_alpha = 1;
+	lights.mask = 14; lights.lights[0].has_direction = 1;
+	lights.lights[0].direction[2] = -1; lights.lights[0].diffuse[0] = 128;
+	for (unsigned i = 0; i < 4; ++i) mv.mtx[i][i] = alternate.mtx[i][i] = 1.0f;
+	memset(state_uploads, 0, sizeof(state_uploads));
+	upload_glsl_program(hr, &mesh, false);
+	for (unsigned repeat = 0; repeat < 3; ++repeat) {
+		upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+	}
+	int ok = state_uploads[0] == 1 && state_uploads[1] == 2 && state_uploads[2] == 1;
+	/* Program cache hits must still restore context-global viewport state. */
+	glViewport(1, 2, 3, 4);
+	hr->base.internal_width = 1280; hr->base.internal_height = 960;
+	upload_viewport(hr, &mesh);
+	glGetIntegerv(GL_VIEWPORT, viewport);
+	ok &= state_uploads[0] == 1 && viewport[0] == 0 && viewport[1] == 0 &&
+	      viewport[2] == 1280 && viewport[3] == 960;
+	vp.offset.x = 240; vp.color.ambient[0] = 32;
+	mv.mtx[3][0] = 5; alternate.mtx[3][1] = 7;
+	lights.lights[0].diffuse[0] = 64; hr->pass_alpha_ref = 0.5f;
+	for (unsigned repeat = 0; repeat < 2; ++repeat) {
+		upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+	}
+	ok &= state_uploads[0] == 2 && state_uploads[1] == 4 && state_uploads[2] == 2;
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_projection, matrix);
+	ok &= fabsf(matrix[8] - 0.25f) < 0.0001f;
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_modelview, matrix);
+	ok &= matrix[12] == 5.0f;
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_modelview_alternate, matrix);
+	ok &= matrix[13] == 7.0f;
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_alpha_ref, value);
+	ok &= value[0] == 0.5f;
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_ambient, value);
+	ok &= fabsf(value[0] - 32.0f / 255.0f) < 0.0001f;
+	hr->debug.flags[HR_DEBUG_NO_DIFFUSE] = 1;
+	upload_lightset(hr, &mesh);
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_lights[0].diffuse, value);
+	ok &= value[0] == 0.0f && state_uploads[2] == 3;
+	hr->debug.flags[HR_DEBUG_NO_DIFFUSE] = 0;
+	upload_lightset(hr, &mesh);
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_lights[0].diffuse, value);
+	ok &= fabsf(value[0] - 64.0f / 255.0f) < 0.0001f;
+	mesh.alternate_mv_index = ~0u;
+	upload_modelview(hr, &mesh, 0);
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_modelview_alternate, matrix);
+	ok &= matrix[12] == 5.0f && matrix[13] == 0.0f && state_uploads[1] == 5;
+	/* A different program starts with no valid values, including cache hits
+	 * when switching back to a shader used earlier in the same frame. */
+	for (unsigned fog = 0; fog < 2; ++fog) {
+		material.depth_blend = fog;
+		upload_glsl_program(hr, &mesh, false);
+		upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+		glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_modelview, matrix);
+		ok &= matrix[12] == 5.0f;
+	}
+	ok &= glGetError() == GL_NO_ERROR;
+	glUseProgram((GLuint)previous_program);
+	for (unsigned i = 0; i < num_programs; ++i)
+		vk_renderer_destroy_program(program_cache[i].program);
+	memset(program_cache, 0, sizeof(program_cache));
+	num_programs = 0;
+	free(hr);
+	return ok;
+}
+#endif
 
 /****************************************************************************
  Meshes
@@ -2144,8 +2347,6 @@ typedef struct {
 	float depth;
 } sorted_triangle_ref_t;
 
-#define SORTED_TRIANGLE_BATCH_CAPACITY 256u
-
 typedef struct {
 	hikaru_mesh_t *mesh;
 	unsigned instance;
@@ -2208,7 +2409,7 @@ draw_mesh_geometry(hikaru_renderer_t *hr, hikaru_mesh_t *mesh,
 {
 	if (hr->triangle_replay.enabled) {
 		if (hr->triangle_replay.mesh == mesh && hr->triangle_replay.instance == instance)
-			glDrawArrays(GL_TRIANGLES, 0, hr->triangle_replay.count * 3);
+			glDrawArrays(GL_TRIANGLES, hr->triangle_replay.first * 3, hr->triangle_replay.count * 3);
 		return;
 	}
 	(void)polytype;
@@ -2247,11 +2448,15 @@ apply_material_blend(hikaru_renderer_t *hr, int polytype, const hikaru_material_
 		}
 	}
 	/* Depth-writing geometry covers the background after its cutout test. */
-	if (hr->meshes.locs.u_force_coverage != (GLuint)-1)
-		glUniform1f(hr->meshes.locs.u_force_coverage,
-		    !blended || (!hr->peel.enabled && mat && mat->blending_mode == 1) ? 1.0f : 0.0f);
-	if (hr->meshes.locs.u_weigh_by_alpha != (GLuint)-1)
+	const bool force_coverage = !blended || (!hr->peel.enabled && mat && mat->blending_mode == 1);
+	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	if (!cache->blend_valid || cache->force_coverage != force_coverage || cache->weigh_by_alpha != weigh) {
+		glUniform1f(hr->meshes.locs.u_force_coverage, force_coverage ? 1.0f : 0.0f);
 		glUniform1f(hr->meshes.locs.u_weigh_by_alpha, weigh ? 1.0f : 0.0f);
+		cache->force_coverage = force_coverage;
+		cache->weigh_by_alpha = weigh;
+		cache->blend_valid = true;
+	}
 }
 
 /* Odin aa89944, hikaru_draw.hpp: 501 patterns, GPL-3.0-or-later,
@@ -2289,10 +2494,6 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 			glBindVertexArray(hr->triangle_replay.vao);
 			*bound_vao = hr->triangle_replay.vao;
 		}
-		glBindBuffer(GL_ARRAY_BUFFER, hr->triangle_replay.vbo);
-		glBufferData(GL_ARRAY_BUFFER,
-		             (GLsizeiptr)(hr->triangle_replay.count * 3 * sizeof(*hr->triangle_replay.vertices)),
-		             hr->triangle_replay.vertices, GL_DYNAMIC_DRAW);
 		configure = !hr->triangle_replay.configured;
 	} else if (mesh->vertex_chunk) {
 		unsigned ci = mesh->vertex_chunk - 1;
@@ -2338,12 +2539,18 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	upload_viewport (hr, mesh);
 	if (hr->meshes.variant.has_pattern)
 		glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh->pattern));
-	glUniform1i(hr->meshes.locs.u_peel_enabled, hr->peel.enabled ? 1 : 0);
-	glUniform1i(hr->meshes.locs.u_peel_first, hr->peel.first ? 1 : 0);
-	glUniform2f(hr->meshes.locs.u_peel_size, (float)hr->base.internal_width,
-	             (float)hr->base.internal_height);
-	glUniform1i(hr->meshes.locs.u_peel_depth, 1);
-	glUniform1i(hr->meshes.locs.u_peel_opaque_depth, 2);
+	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	const unsigned peel_mode = (hr->peel.enabled ? 1u : 0u) | (hr->peel.first ? 2u : 0u);
+	if (!cache->peel_valid || cache->peel_mode != peel_mode ||
+	    cache->peel_width != hr->base.internal_width || cache->peel_height != hr->base.internal_height) {
+		glUniform1i(hr->meshes.locs.u_peel_enabled, hr->peel.enabled ? 1 : 0);
+		glUniform1i(hr->meshes.locs.u_peel_first, hr->peel.first ? 1 : 0);
+		glUniform2f(hr->meshes.locs.u_peel_size, (float)hr->base.internal_width, (float)hr->base.internal_height);
+		cache->peel_mode = peel_mode;
+		cache->peel_width = hr->base.internal_width;
+		cache->peel_height = hr->base.internal_height;
+		cache->peel_valid = true;
+	}
 	if (hr->peel.enabled) {
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, hr->peel.previous_depth);
@@ -2441,15 +2648,24 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 		total += (size_t)meshes[m].num_tris * instances;
 	}
 	if (!total) return true;
+	/* Both the GL draw offsets and the retained upload must represent the
+	 * complete sorted stream without narrowing or allocation overflow. */
+	const size_t max_triangles = MIN2((size_t)INT_MAX / 3,
+	    (size_t)PTRDIFF_MAX / (3 * sizeof(*hr->triangle_replay.batch)));
+	if (total > max_triangles)
+		return false;
 	if (hr->triangle_replay.refs_capacity < total) {
 		size_t grown = hr->triangle_replay.refs_capacity ? hr->triangle_replay.refs_capacity : 1024;
-		while (grown < total) grown *= 2;
+		while (grown < total) grown = grown > max_triangles / 2 ? total : grown * 2;
 		void *resized = realloc(hr->triangle_replay.refs, grown * sizeof(sorted_triangle_ref_t));
 		if (!resized) return false;
 		hr->triangle_replay.refs = resized;
 		resized = realloc(hr->triangle_replay.refs_tmp, grown * sizeof(sorted_triangle_ref_t));
 		if (!resized) return false;
 		hr->triangle_replay.refs_tmp = resized;
+		resized = realloc(hr->triangle_replay.batch, grown * 3 * sizeof(*hr->triangle_replay.batch));
+		if (!resized) return false;
+		hr->triangle_replay.batch = resized;
 		hr->triangle_replay.refs_capacity = grown;
 	}
 	sorted_triangle_ref_t *refs = (sorted_triangle_ref_t *)hr->triangle_replay.refs;
@@ -2472,17 +2688,21 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 			}
 	}
 	stable_sort_triangle_refs(refs, (sorted_triangle_ref_t *)hr->triangle_replay.refs_tmp, at);
-	if (!hr->triangle_replay.batch) {
-		hr->triangle_replay.batch = malloc(
-			SORTED_TRIANGLE_BATCH_CAPACITY * 3u * sizeof(*hr->triangle_replay.batch));
-		if (!hr->triangle_replay.batch) return false;
-	}
-	hikaru_vertex_body_t *batch_vertices = hr->triangle_replay.batch;
+	/* Preserve the stable triangle sequence in one upload. Replacing the VBO
+	 * for every material run serializes driver allocation and submission. */
+	for (size_t n = 0; n < at; ++n)
+		memcpy(&hr->triangle_replay.batch[n * 3],
+		       &refs[n].mesh->cpu_vertices[refs[n].triangle * 3],
+		       3 * sizeof(*hr->triangle_replay.batch));
 	if (!hr->triangle_replay.vao) glGenVertexArrays(1, &hr->triangle_replay.vao);
 	if (!hr->triangle_replay.vbo) glGenBuffers(1, &hr->triangle_replay.vbo);
 	GLuint scratch_vao = hr->triangle_replay.vao, scratch_vbo = hr->triangle_replay.vbo;
 	if (!scratch_vao || !scratch_vbo) return false;
-	GLuint bound_vao = 0;
+	glBindVertexArray(scratch_vao);
+	glBindBuffer(GL_ARRAY_BUFFER, scratch_vbo);
+	glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(at * 3 * sizeof(*hr->triangle_replay.batch)),
+	             hr->triangle_replay.batch, GL_DYNAMIC_DRAW);
+	GLuint bound_vao = scratch_vao;
 	float applied_depth_bias = -1.0f;
 	hr->triangle_replay.enabled = true;
 	hr->triangle_replay.vao = scratch_vao;
@@ -2491,20 +2711,14 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	for (size_t i = 0; i < at;) {
 		const sorted_triangle_ref_t *first = &refs[i];
 		size_t end = i + 1;
-		while (end < at && end - i < SORTED_TRIANGLE_BATCH_CAPACITY &&
+		while (end < at &&
 		       refs[end].mesh == first->mesh && refs[end].instance == first->instance)
 			++end;
 		const unsigned count = (unsigned)(end - i);
-		for (unsigned n = 0; n < count; ++n) {
-			const sorted_triangle_ref_t *ref = &refs[i + n];
-			memcpy(&batch_vertices[n * 3],
-			       &ref->mesh->cpu_vertices[ref->triangle * 3],
-			       3 * sizeof(*batch_vertices));
-		}
 		hr->triangle_replay.mesh = first->mesh;
 		hr->triangle_replay.instance = first->instance;
+		hr->triangle_replay.first = (unsigned)i;
 		hr->triangle_replay.count = count;
-		hr->triangle_replay.vertices = batch_vertices;
 		draw_mesh(hr, first->mesh, HIKARU_POLYTYPE_TRANSLUCENT,
 		          &bound_vao, &applied_depth_bias);
 		i = end;
@@ -2512,7 +2726,7 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	hr->triangle_replay.enabled = false;
 	hr->triangle_replay.mesh = NULL;
 	hr->triangle_replay.count = 0;
-	hr->triangle_replay.vertices = NULL;
+	hr->triangle_replay.first = 0;
 	hr->triangle_replay.configured = false;
 	glBindVertexArray(0);
 	/* Scratch objects and sort buffers stay in triangle_replay. */
@@ -2974,15 +3188,48 @@ setup_scene_scissor (unsigned width, unsigned height)
 	glEnable (GL_SCISSOR_TEST);
 }
 
+/* RGBA8 plus a conservatively four-byte depth texel per target. Reserve
+ * one target for the overflow query instead of silently exceeding the budget. */
+static unsigned
+transparency_layer_capacity(unsigned width, unsigned height, uint64_t budget, unsigned requested)
+{
+	const uint64_t pixels = (uint64_t)width * height;
+	if (!pixels || pixels > UINT64_MAX / 8) return 0;
+	const uint64_t targets = budget / (pixels * 8);
+	if (targets < 2) return 0;
+	return (unsigned)MIN2(MIN2(targets - 1, requested), HIKARU_MAX_PEEL_LAYERS);
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+unsigned hikaru_vendor_test_transparency_budget(unsigned width, unsigned height, uint64_t budget, unsigned requested)
+{ return transparency_layer_capacity(width, height, budget, requested); }
+#endif
+
 static void
-allocate_peel_targets(hikaru_renderer_t *hr, unsigned width, unsigned height, unsigned required)
+allocate_peel_targets(hikaru_renderer_t *hr, unsigned width, unsigned height,
+                      unsigned required, unsigned maximum_targets)
 {
 	static const GLenum targets[] = { GL_COLOR_ATTACHMENT0 };
-	if (required > HIKARU_MAX_PEEL_LAYERS + 1)
+	if (!required || required > maximum_targets || maximum_targets > HIKARU_MAX_PEEL_LAYERS + 1)
 		VK_ABORT("Hikaru peel target count is out of range");
-	const bool resize = hr->framebuffer.peel_layers_allocated &&
-		(hr->framebuffer.peel_width != width || hr->framebuffer.peel_height != height);
-	const unsigned old_count = resize ? 0 : hr->framebuffer.peel_layers_allocated;
+	const bool resize = hr->framebuffer.peel_width != width || hr->framebuffer.peel_height != height;
+	if (hr->framebuffer.peel_layers_allocated &&
+	    (resize || hr->framebuffer.peel_layers_allocated > maximum_targets)) {
+		/* Drop all old storage on resize/budget reduction. Keeping the old
+		 * allocation count would incorrectly reuse images of the old size. */
+		glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.peel_fb);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+		glDeleteTextures(HIKARU_MAX_PEEL_LAYERS + 1, hr->framebuffer.peel_color);
+		glDeleteTextures(HIKARU_MAX_PEEL_LAYERS + 1, hr->framebuffer.peel_depth);
+		glGenTextures(HIKARU_MAX_PEEL_LAYERS + 1, hr->framebuffer.peel_color);
+		glGenTextures(HIKARU_MAX_PEEL_LAYERS + 1, hr->framebuffer.peel_depth);
+		hr->framebuffer.peel_layers_allocated = 0;
+	}
+	const unsigned old_count = hr->framebuffer.peel_layers_allocated;
+	/* The caller has bound peel_fb; retained, correctly sized targets need
+	 * no attachment checks or allocation calls before selecting the layer. */
+	if (required <= old_count) return;
 	glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.peel_fb);
 	for (unsigned i = 0; i < required; ++i) {
 		if (i < old_count) continue;
@@ -3067,7 +3314,11 @@ draw_transparency_peels(hikaru_renderer_t *hr, unsigned vpi, GLuint scene_fb,
 	    hr->num_meshes[vpi][HIKARU_POLYTYPE_TRANSLUCENT] == 0)
 		return;
 	const unsigned width = hr->base.internal_width, height = hr->base.internal_height;
-	const unsigned layers = hr->transparency_peel_capacity ? hr->transparency_peel_capacity : HIKARU_MAX_PEEL_LAYERS;
+	const unsigned requested = hr->transparency_peel_capacity ? hr->transparency_peel_capacity : HIKARU_DEFAULT_TRANSPARENCY_LAYERS;
+	const uint64_t budget = hr->transparency_memory_budget ? hr->transparency_memory_budget : HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
+	const unsigned layers = transparency_layer_capacity(width, height, budget, requested);
+	if (!layers)
+		VK_ABORT("Hikaru per-pixel memory budget is too small at %ux%u; increase Pixel Buffer Size or lower the resolution", width, height);
 	bool overflow = false;
 	unsigned captured = 0;
 	glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.peel_fb);
@@ -3082,7 +3333,7 @@ draw_transparency_peels(hikaru_renderer_t *hr, unsigned vpi, GLuint scene_fb,
 	hr->peel.enabled = true;
 	hr->peel.opaque_depth = hr->framebuffer.db[scene_index];
 	for (unsigned layer = 0; layer <= layers; ++layer) {
-		allocate_peel_targets(hr, width, height, layer + 1);
+		allocate_peel_targets(hr, width, height, layer + 1, layers + 1);
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
 		                       hr->framebuffer.peel_color[layer], 0);
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
@@ -3106,8 +3357,11 @@ draw_transparency_peels(hikaru_renderer_t *hr, unsigned vpi, GLuint scene_fb,
 	}
 	hr->peel.enabled = false;
 	if (overflow) hr->transparency_overflow_seen = true;
-	if (overflow)
-		fprintf(stderr, "Hikaru: per-pixel transparency layer capacity (%u) exceeded; deeper fragments were discarded\n", layers);
+	if (overflow && !hr->transparency_overflow_warned) {
+		fprintf(stderr, "Hikaru: per-pixel transparency capacity (%u layers, %llu-byte budget) exceeded; deeper fragments were discarded\n",
+		        layers, (unsigned long long)budget);
+		hr->transparency_overflow_warned = true;
+	}
 	composite_peel_layers(hr, scene_fb, captured);
 }
 
@@ -3215,16 +3469,15 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 	gpu->fb_config.clear[0] = gpu->fb_config.clear[1] = gpu->fb_config.clear[2] = 0;
 	gpu->fb_config.clear[3] = 255;
 	hikaru_mesh_t *meshes = hr->mesh_list[0][HIKARU_POLYTYPE_TRANSLUCENT];
-	const unsigned deferred_triangles = SORTED_TRIANGLE_BATCH_CAPACITY;
+	const unsigned deferred_triangles = 256u;
 	const unsigned mesh0_triangles = deferred_triangles + 1;
 	const unsigned total_vertices = (mesh0_triangles + 1) * 3;
 	hikaru_vertex_body_t *vertices = calloc(total_vertices, sizeof(*vertices));
 	if (!vertices) goto cleanup;
 	static const float xy[3][2] = {{-1200,-1000},{1200,-1000},{0,1000}};
-	/* These offscreen triangles sort before the visible one and fill the first
-	 * batch. The red visible triangle is deliberately index 256, so its pixels
-	 * verify that the next batch is uploaded and drawn. All centroids tie, making
-	 * the stable mesh/triangle tie-break determine this batch boundary. */
+	/* More than 256 triangles exercise the retained stream beyond the old
+	 * upload limit. Blue follows this red run at a nonzero VBO offset; its
+	 * pixels verify both that offset and the stable equal-depth ordering. */
 	for (unsigned triangle = 0; triangle < mesh0_triangles; ++triangle)
 		for (unsigned v = 0; v < 3; ++v) {
 			hikaru_vertex_body_t *dst = &vertices[triangle * 3 + v];
@@ -3299,6 +3552,48 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 	glReadPixels(420, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, right);
 	ok = ok && overflowed[3] && pixels[3][0][0] > pixels[3][0][2] &&
 		pixels[3][1][2] > pixels[3][1][0] && glGetError() == GL_NO_ERROR;
+	/* Forty overlapping surfaces verify that the renderer actually retains
+	 * more than 32 layers. The deepest blue surface must survive the faint
+	 * red foreground; truncating the stream loses that blue contribution. */
+	const unsigned deep_layers = 40;
+	for (unsigned triangle = 0; triangle < deep_layers; ++triangle)
+		for (unsigned v = 0; v < 3; ++v) {
+			hikaru_vertex_body_t *dst = &vertices[triangle * 3 + v];
+			memset(dst, 0, sizeof(*dst));
+			dst->position[0] = xy[v][0]; dst->position[1] = xy[v][1];
+			dst->position[2] = -4.0f - triangle;
+			dst->diffuse[triangle + 1 == deep_layers ? 2 : 0] = 255;
+			dst->alpha = triangle + 1 == deep_layers ? 255 : 2;
+		}
+	memcpy(meshes[0].cpu_vertices, vertices, deep_layers * 3 * sizeof(*vertices));
+	meshes[0].num_tris = deep_layers; meshes[1].num_tris = 0;
+	glBindVertexArray(hr->vertex_chunks[0].vao);
+	glBindBuffer(GL_ARRAY_BUFFER, hr->vertex_chunks[0].vbo);
+	glBufferData(GL_ARRAY_BUFFER, total_vertices * sizeof(*vertices), vertices, GL_DYNAMIC_DRAW);
+	hr->transparency_peel_capacity = 128;
+	hr->transparency_memory_budget = HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
+	glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+	draw_scene(hr);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+	glReadPixels(320, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, left);
+	ok &= !hr->transparency_overflow_seen && left[2] > 100 && left[0] > 10 &&
+	      hr->framebuffer.peel_layers_allocated > 32;
+	/* Budget reduction must release old targets and reserve the probe. */
+	hr->transparency_memory_budget = UINT64_C(16) * 1024 * 1024;
+	const unsigned limited = transparency_layer_capacity(640, 480, hr->transparency_memory_budget, 128);
+	glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+	draw_scene(hr);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+	glReadPixels(320, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, left);
+	ok &= hr->transparency_overflow_seen && left[2] == 0 &&
+	      hr->framebuffer.peel_layers_allocated <= limited + 1;
+	/* Reallocating just the first target must reset the retained count, so
+	 * the following target is also created at the new dimensions. */
+	glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.peel_fb);
+	allocate_peel_targets(hr, 320, 240, 1, 3);
+	ok &= hr->framebuffer.peel_layers_allocated == 1;
+	allocate_peel_targets(hr, 320, 240, 2, 3);
+	ok &= hr->framebuffer.peel_layers_allocated == 2 && glGetError() == GL_NO_ERROR;
 cleanup:
 	if (hr) {
 		if (hr->mesh_list[0][0]) destroy_3d_state(hr);
@@ -3764,8 +4059,8 @@ resize_3d_targets (hikaru_renderer_t *hr)
 		/* Either target may be sampled before it is next drawn. */
 		glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	}
-	if (hr->framebuffer.peel_layers_allocated)
-		allocate_peel_targets(hr, width, height, hr->framebuffer.peel_layers_allocated);
+	/* Peel images resize lazily under the current transparency budget; a
+	 * resolution change must not eagerly recreate the old layer count. */
 	hr->framebuffer.width = width;
 	hr->framebuffer.height = height;
 }
@@ -4515,8 +4810,20 @@ void
 hikaru_renderer_set_transparency_peel_capacity(vk_renderer_t *renderer, unsigned layers)
 {
 	hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
-	if (hr && layers >= 1 && layers <= HIKARU_MAX_PEEL_LAYERS)
+	if (hr && layers >= 1 && layers <= HIKARU_MAX_PEEL_LAYERS && hr->transparency_peel_capacity != layers) {
 		hr->transparency_peel_capacity = layers;
+		hr->transparency_overflow_warned = false;
+	}
+}
+
+void
+hikaru_renderer_set_transparency_memory_budget(vk_renderer_t *renderer, uint64_t bytes)
+{
+	hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
+	if (hr && bytes && hr->transparency_memory_budget != bytes) {
+		hr->transparency_memory_budget = bytes;
+		hr->transparency_overflow_warned = false;
+	}
 }
 
 #ifdef HIKARU_VENDOR_TESTING

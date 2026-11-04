@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 // Copyright 2026 The Hollycast Authors
 #include "vk/buffer.h"
 #include "engine.h"
@@ -215,9 +216,50 @@ static unsigned test_texhead_switch(void)
     return errors;
 }
 
+unsigned hikaru_vendor_test_transparency_budget(unsigned, unsigned, uint64_t, unsigned);
+static unsigned test_transparency_budget(void)
+{
+    const uint64_t layer_bytes = UINT64_C(640) * 480 * 8;
+    const struct { unsigned width, height; uint64_t bytes; unsigned requested, expected; } cases[] = {
+        {640, 480, UINT64_C(512) * 1024 * 1024, 128, 128},
+        {1280, 960, UINT64_C(512) * 1024 * 1024, 128, 53},
+        {1920, 1440, UINT64_C(512) * 1024 * 1024, 128, 23},
+        {1920, 1440, UINT64_C(4) * 1024 * 1024 * 1024, 128, 128},
+        {640, 480, layer_bytes * 2 - 1, 128, 0},
+        {640, 480, layer_bytes * 2, 128, 1},
+        {640, 480, layer_bytes * 129, 128, 128},
+        {640, 480, UINT64_MAX, 7, 7},
+        {0, 480, UINT64_MAX, 128, 0},
+        {UINT32_MAX, UINT32_MAX, UINT64_MAX, 128, 0},
+    };
+    unsigned errors = 0;
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(*cases); ++i) {
+        unsigned actual = hikaru_vendor_test_transparency_budget(cases[i].width, cases[i].height,
+            cases[i].bytes, cases[i].requested);
+        if (actual != cases[i].expected) {
+            fprintf(stderr, "transparency budget case %u: got %u expected %u\n", i, actual, cases[i].expected);
+            ++errors;
+        }
+    }
+    HikaruEngine engine = {0};
+    errors += hikaru_engine_set_transparency_peel_capacity(&engine, 128) != 0;
+    errors += engine.transparency_peel_capacity != 128;
+    errors += hikaru_engine_set_transparency_peel_capacity(&engine, 129) != -1;
+    errors += hikaru_engine_set_transparency_peel_capacity(&engine, 0) != -1;
+    errors += engine.transparency_peel_capacity != 128;
+    errors += hikaru_engine_set_transparency_memory_budget(&engine, UINT64_C(4) * 1024 * 1024 * 1024) != 0;
+    errors += engine.transparency_memory_budget != UINT64_C(4) * 1024 * 1024 * 1024;
+    errors += hikaru_engine_set_transparency_memory_budget(&engine, 0) != -1;
+    errors += hikaru_engine_set_transparency_memory_budget(NULL, 1) != -1;
+    errors += hikaru_engine_set_transparency_peel_capacity(NULL, 1) != -1;
+    fprintf(stderr, "transparency budget/API: %u failures\n", errors);
+    return errors;
+}
+
 int main(void)
 {
     unsigned errors = 0;
+    errors += test_transparency_budget();
     errors += test_uv_packets();
     errors += test_texhead_switch();
     if (!hikaru_vendor_test_modelview_pair()) ++errors;

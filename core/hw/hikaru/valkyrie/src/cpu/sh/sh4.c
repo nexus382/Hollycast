@@ -513,38 +513,36 @@ sh4_dmac_update_state (sh4_t *ctx, uint32_t request_type)
 static void
 sh4_tmu_run_channel (sh4_t *ctx, unsigned ch, int cycles)
 {
+	if (cycles <= 0) return;
 	uint32_t counter = ctx->tmu.counter[ch];
-
-	for (; cycles > 0; cycles--, counter--) {
-		/* Check for underflow */
-		if (counter == 0) {
-			uint16_t tcr;
-
-			/* Set UNF */
-			tcr = IREG_GET (2, TMU_TCR (ch));
-			IREG_PUT (2, TMU_TCR (ch), tcr | 0x100);
-
-			/* Reload the timer */
-			counter = IREG_GET (4, TMU_TCOR (ch));
-
-			/* Raise an IRQ if UNIE is set */
-			if (tcr & 0x20) {
-				static const unsigned nums[3] = {
-					SH4_IESOURCE_TUNI0,
-					SH4_IESOURCE_TUNI1,
-					SH4_IESOURCE_TUNI2,
-				};
-
-				VK_CPU_LOG (ctx, "TMU: rising ch%u IRQ", ch);
-
-				sh4_set_irq_state ((vk_cpu_t *) ctx, nums[ch],
-				                   VK_IRQ_STATE_RAISED);
-			}
-		}
+	const uint32_t ticks = (uint32_t)cycles;
+	if (ticks <= counter) {
+		ctx->tmu.counter[ch] = counter - ticks;
+		return;
 	}
-
+	/* Devices run serially after the CPU slice: no guest can observe or
+	 * change this timer between its ticks. Collapse repeated underflows,
+	 * preserving the original check-zero-then-decrement model exactly.
+	 * In particular, a zero reload wraps through the full 32-bit range. */
+	const uint16_t tcr = IREG_GET(2, TMU_TCR(ch));
+	const uint32_t reload = IREG_GET(4, TMU_TCOR(ch));
+	const uint64_t period = reload ? reload : (UINT64_C(1) << 32);
+	const uint64_t remainder = ((uint64_t)ticks - counter) % period;
+	counter = remainder ? (uint32_t)(period - remainder) : 0;
+	IREG_PUT(2, TMU_TCR(ch), tcr | 0x100);
+	if (tcr & 0x20) {
+		static const unsigned nums[3] = {
+			SH4_IESOURCE_TUNI0, SH4_IESOURCE_TUNI1, SH4_IESOURCE_TUNI2,
+		};
+		sh4_set_irq_state((vk_cpu_t *)ctx, nums[ch], VK_IRQ_STATE_RAISED);
+	}
 	ctx->tmu.counter[ch] = counter;
 }
+
+#ifdef HIKARU_VENDOR_TESTING
+void hikaru_vendor_test_tmu_advance(sh4_t *ctx, unsigned ch, int cycles)
+{ sh4_tmu_run_channel(ctx, ch, cycles); }
+#endif
 
 static void
 sh4_tmu_run (sh4_t *ctx, int cycles)
@@ -1248,7 +1246,11 @@ static uint16_t insn_ids[65536];
 
 /* Keep Debug stepping useful. Direct calls in the switch can inline the same
  * instruction bodies in optimized builds, without altering FP contraction. */
-#if defined(__OPTIMIZE__) && defined(NDEBUG) && (defined(__GNUC__) || defined(__clang__))
+#if defined(_MSC_VER) && defined(NDEBUG)
+/* MSVC does not define __OPTIMIZE__. Use the same direct integer dispatch
+ * as the other optimized builds; FP still uses the shared indirect bodies. */
+#define SH4_HANDLER_INLINE __forceinline
+#elif defined(__OPTIMIZE__) && defined(NDEBUG) && (defined(__GNUC__) || defined(__clang__))
 #define SH4_HANDLER_INLINE inline __attribute__((always_inline))
 #else
 #define SH4_HANDLER_INLINE
@@ -1622,7 +1624,9 @@ sh4_run (vk_cpu_t *cpu, int cycles)
 #endif
 	{
 		while (cpu->remaining > 0 && cpu->state == VK_CPU_STATE_RUN) {
-			sh4_process_irqs (cpu);
+			/* Avoid the out-of-line interrupt context-switch routine on
+			 * every instruction when no interrupt is pending. */
+			if (ctx->intc.pending) sh4_process_irqs(cpu);
 			sh4_step_switch (ctx, PC);
 			PC += 2;
 		}

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* 
  * Valkyrie
@@ -33,5 +34,6 @@ void		 hikaru_renderer_set_gpu (vk_renderer_t *, void *);
 void		 hikaru_renderer_note_cpu_texram_write (vk_renderer_t *);
 void             hikaru_renderer_set_transparency_sorting (vk_renderer_t *, HikaruTransparencySorting);
 void             hikaru_renderer_set_transparency_peel_capacity(vk_renderer_t *, unsigned layers);
+void             hikaru_renderer_set_transparency_memory_budget(vk_renderer_t *, uint64_t bytes);
 
 #endif /* __VK_HIKARU_RENDERER_H__ */

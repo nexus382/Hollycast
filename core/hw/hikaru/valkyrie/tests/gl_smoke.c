@@ -20,6 +20,8 @@ void hikaru_vendor_test_fail_renderer_init(void);
 void hikaru_vendor_test_with_gl_guard(void (*draw)(void));
 void hikaru_vendor_test_setup_scene_scissor(void);
 int hikaru_vendor_test_shader_uniform_cache(void);
+int hikaru_vendor_test_texture_sampling_cache(void);
+int hikaru_vendor_test_mesh_uniform_values(void);
 int hikaru_vendor_test_invalid_texture_fallback(void);
 int hikaru_vendor_test_vertex_chunks(void);
 int hikaru_vendor_test_mesh_vao_pixels(void);
@@ -294,6 +296,8 @@ int main(void){
  if(!gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress))return 9;
 #endif
  if(!hikaru_vendor_test_shader_uniform_cache())return 50;
+ if(!hikaru_vendor_test_mesh_uniform_values())return 63;
+ if(!hikaru_vendor_test_texture_sampling_cache())return 62;
  if(!hikaru_vendor_test_invalid_texture_fallback())return 61;
  if(!hikaru_vendor_test_vertex_chunks())return 51;
  GLuint host_vao; GLint restored_vao;

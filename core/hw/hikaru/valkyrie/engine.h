@@ -22,7 +22,9 @@ typedef enum {
     /* Exact per-pixel depth peeling; the retained layer bound is configurable. */
     HIKARU_TRANSPARENCY_PER_PIXEL = 2
 } HikaruTransparencySorting;
-#define HIKARU_MAX_TRANSPARENCY_LAYERS 32u
+#define HIKARU_MAX_TRANSPARENCY_LAYERS 128u
+#define HIKARU_DEFAULT_TRANSPARENCY_LAYERS 32u
+#define HIKARU_DEFAULT_TRANSPARENCY_BUDGET (UINT64_C(512) * 1024 * 1024)
 #define HIKARU_ENGINE_BRAM_SIZE 65536u
 typedef struct {
     const uint8_t *boot; size_t boot_size;
@@ -116,6 +118,8 @@ int hikaru_engine_set_transparency_sorting(HikaruEngine *engine, HikaruTranspare
 // Set retained per-pixel layers (1 through HIKARU_MAX_TRANSPARENCY_LAYERS).
 // The renderer probes one additional layer and reports when the bound is exceeded.
 int hikaru_engine_set_transparency_peel_capacity(HikaruEngine *engine, unsigned layers);
+// Budget for lazily allocated per-pixel color/depth targets, including the overflow probe.
+int hikaru_engine_set_transparency_memory_budget(HikaruEngine *engine, uint64_t bytes);
 const char *hikaru_engine_last_error(const HikaruEngine *engine);
 void hikaru_engine_destroy(HikaruEngine *engine);
 #ifdef __cplusplus

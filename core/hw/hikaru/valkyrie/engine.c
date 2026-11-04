@@ -208,7 +208,8 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     if (!glGetString(GL_VERSION)) { set_error(error, error_size, "A current OpenGL 3.2 or OpenGL ES 3.0 context is required"); return NULL; }
     HikaruEngine *engine = calloc(1, sizeof(*engine));
     if (!engine) { set_error(error, error_size, "Out of memory"); return NULL; }
-    engine->transparency_peel_capacity = HIKARU_MAX_TRANSPARENCY_LAYERS;
+    engine->transparency_peel_capacity = HIKARU_DEFAULT_TRANSPARENCY_LAYERS;
+    engine->transparency_memory_budget = HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
     liveEngine = engine;
     engine->mie = *mie;
     engine->protection = *protection;
@@ -242,6 +243,7 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     hikaru_engine_resize(engine, target_fbo, width, height);
     hikaru_renderer_set_transparency_sorting(engine->machine->renderer, engine->transparency_sorting);
     hikaru_renderer_set_transparency_peel_capacity(engine->machine->renderer, engine->transparency_peel_capacity);
+    hikaru_renderer_set_transparency_memory_budget(engine->machine->renderer, engine->transparency_memory_budget);
     engine->protection.reset(engine->protection.opaque);
     vk_machine_reset(engine->machine, VK_RESET_TYPE_HARD);
     if (engine->error[0]) { activeEngine = NULL; set_error(error, error_size, engine->error); hikaru_engine_destroy(engine); return NULL; }
@@ -377,6 +379,7 @@ int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, un
             hikaru_renderer_set_gpu(renderer, board->gpu);
             hikaru_renderer_set_transparency_sorting(renderer, engine->transparency_sorting);
             hikaru_renderer_set_transparency_peel_capacity(renderer, engine->transparency_peel_capacity);
+            hikaru_renderer_set_transparency_memory_budget(renderer, engine->transparency_memory_budget);
             ((hikaru_gpu_t *)board->gpu)->renderer = renderer;
             hikaru_engine_resize(engine, target_fbo, width, height);
         } else {
@@ -434,6 +437,15 @@ int hikaru_engine_set_transparency_peel_capacity(HikaruEngine *engine, unsigned 
     engine->transparency_peel_capacity = layers;
     if (engine->machine && engine->machine->renderer)
         hikaru_renderer_set_transparency_peel_capacity(engine->machine->renderer, layers);
+    engine->error[0] = '\0';
+    return 0;
+}
+int hikaru_engine_set_transparency_memory_budget(HikaruEngine *engine, uint64_t bytes)
+{
+    if (!engine || !bytes) return -1;
+    engine->transparency_memory_budget = bytes;
+    if (engine->machine && engine->machine->renderer)
+        hikaru_renderer_set_transparency_memory_budget(engine->machine->renderer, bytes);
     engine->error[0] = '\0';
     return 0;
 }

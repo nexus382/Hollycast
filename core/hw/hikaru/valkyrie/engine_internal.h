@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "engine.h"
 #include "vk/machine.h"
@@ -11,6 +12,7 @@ struct HikaruEngine {
     int sound_reset;
     HikaruTransparencySorting transparency_sorting;
     unsigned transparency_peel_capacity;
+    uint64_t transparency_memory_budget;
     vk_game_t game;
     vk_game_section_t sections[3];
     vk_machine_t *machine;

@@ -5449,18 +5449,19 @@ void renderVideoTab()
 			return true;
 		};
 
-		if (!hikaruPlatform)
-			RenderGeneralPopupSettingRow(
-				Tnop("PixelBufferSizeSetting"),
-				T("Memory budget for Per-Pixel transparency rendering."),
-				pixelBufferCfg,
-				T(
-					"Pixel Buffer Size\n"
+		RenderGeneralPopupSettingRow(
+			Tnop("PixelBufferSizeSetting"),
+			T("Memory budget for Per-Pixel transparency rendering."),
+			pixelBufferCfg,
+			hikaruPlatform
+				? T("Pixel Buffer Size\n"
+					"Controls the memory budget for Hikaru per-pixel transparency. Targets are allocated as needed.\n"
+					"Higher resolutions require more memory per layer; increase this budget to retain more layers.")
+				: T("Pixel Buffer Size\n"
 					"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
 					"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
-					"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
-				)
-			);
+					"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes.")
+		);
 
 #ifdef USE_HIKARU
 		auto& maximumLayers = hikaruPlatform ? config::HikaruMaxLayers : config::PerPixelLayers;
@@ -5482,7 +5483,7 @@ void renderVideoTab()
 				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
 		perPixelLayersCfg.minValue = hikaruPlatform ? 1 : 8;
-		perPixelLayersCfg.maxValue = hikaruPlatform ? 32 : 128;
+		perPixelLayersCfg.maxValue = 128;
 		perPixelLayersCfg.format = "%d";
 		perPixelLayersCfg.valueWidth = 220.0f;
 		perPixelLayersCfg.sliderWidth = 320.0f;

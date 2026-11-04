@@ -88,7 +88,23 @@ typedef union {
 typedef struct {
 	GLuint id;
 	hikaru_texhead_t th;
+	bool sampling_valid;
 } hikaru_texture_t;
+
+/* Values belong to the active mesh program. Shader/frame transitions clear
+ * validity; immutable draw snapshots can then share uniform uploads. */
+typedef struct {
+	bool viewport_valid, modelview_valid[2], lightset_valid, ambient_valid;
+	bool blend_valid, peel_valid;
+	hikaru_viewport_t viewport;
+	float alpha_ref;
+	mtx4x4f_t modelview[2];
+	hikaru_lightset_t lightset;
+	unsigned light_debug_flags;
+	vec3f_t ambient;
+	bool weigh_by_alpha, force_coverage;
+	unsigned peel_mode, peel_width, peel_height;
+} hikaru_mesh_uniform_cache_t;
 
 typedef struct {
 	GLuint			vbo;
@@ -174,11 +190,13 @@ typedef struct {
 		GLuint			vao;
 
 		hikaru_uniform_locations_t locs;
+		hikaru_mesh_uniform_cache_t uniforms;
 	} meshes;
 	float pass_alpha_ref;
 	HikaruTransparencySorting transparency_sorting;
 	unsigned transparency_peel_capacity;
-	bool transparency_overflow_seen;
+	uint64_t transparency_memory_budget;
+	bool transparency_overflow_seen, transparency_overflow_warned;
 	struct {
 		bool enabled, first;
 		GLuint previous_depth, opaque_depth;
@@ -186,8 +204,7 @@ typedef struct {
 	struct {
 		bool enabled, configured;
 		hikaru_mesh_t *mesh;
-		unsigned count, instance;
-		const hikaru_vertex_body_t *vertices;
+		unsigned first, count, instance;
 		GLuint vao, vbo;
 		/* Retained sort workspace: grown on demand, reused every frame. */
 		void *refs;

@@ -392,8 +392,11 @@ static bool renderFrame() {
             ? HIKARU_TRANSPARENCY_PER_STRIP : HIKARU_TRANSPARENCY_PER_TRIANGLE;
     if (hikaru_engine_set_transparency_sorting(engine, sorting) != 0)
         throw FlycastException(std::string("Hikaru sorting: ") + hikaru_engine_last_error(engine));
-    if (hikaru_engine_set_transparency_peel_capacity(engine, unsigned(std::clamp(config::HikaruMaxLayers.get(), 1, 32))) != 0)
+    if (hikaru_engine_set_transparency_peel_capacity(engine, unsigned(std::clamp(config::HikaruMaxLayers.get(), 1, int(HIKARU_MAX_TRANSPARENCY_LAYERS)))) != 0)
         throw FlycastException("Invalid Hikaru per-pixel layer capacity");
+    const auto transparencyBudget = config::PixelBufferSize.get();
+    if (transparencyBudget <= 0 || hikaru_engine_set_transparency_memory_budget(engine, uint64_t(transparencyBudget)) != 0)
+        throw FlycastException("Invalid Hikaru per-pixel memory budget");
     const int requestedHeight = config::RenderResolution.get();
     if (unsigned(requestedHeight) != internalHeight) {
         if (hikaru_engine_set_internal_resolution(engine, unsigned(requestedHeight)) != 0)
@@ -542,8 +545,11 @@ static bool renderFrame() {
         overlayMs += std::chrono::duration<double, std::milli>(end - engineEnd).count();
         totalMs += std::chrono::duration<double, std::milli>(end - renderStart).count();
         if (++frames == 60) {
-            std::fprintf(stderr, "Hikaru frontend timing: frames=%u engine_ms=%.3f overlay_ms=%.3f total_ms=%.3f cpu_mhz=%u\n",
-                         frames, engineMs / frames, overlayMs / frames, totalMs / frames, cpuClockMhz);
+            std::fprintf(stderr, "Hikaru frontend timing: frames=%u engine_ms=%.3f overlay_ms=%.3f total_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u\n",
+                         frames, engineMs / frames, overlayMs / frames, totalMs / frames, cpuClockMhz,
+                         gl ? "opengl" : isMetal(requested) ? "metal" : "vulkan",
+                         sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle",
+                         internalHeight);
             frames = 0; engineMs = overlayMs = totalMs = 0;
         }
     }
