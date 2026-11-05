@@ -284,10 +284,9 @@ static int wr(void *p,unsigned size,uint32_t addr,uint64_t v){(void)p;(void)size
 static int run(void *p,uint32_t cycles){(void)p;(void)cycles;return 0;}
 static void input(void *p,const HikaruEngineInputs *i){(void)p;(void)i;}
 
-static void store_frame_layer_pixel(vk_buffer_t *fb,unsigned x,unsigned y,uint16_t pixel)
+static void store_frame_layer_pixel(vk_buffer_t *fb,size_t offset,uint32_t pixel,unsigned bytes)
 {
- uint64_t offset=(uint64_t)y*4096+(uint64_t)(x/2)*4+((x&1)?0:2);
- fb->ptr[offset]=(uint8_t)pixel;fb->ptr[offset+1]=(uint8_t)(pixel>>8);
+ for(unsigned byte=0;byte<bytes;++byte)fb->ptr[offset+byte]=(uint8_t)(pixel>>(byte*8));
 }
 static int read_frame_pixel(uint32_t fbo,uint8_t pixel[4])
 {
@@ -312,28 +311,51 @@ static int frame_packet_has_gl_handles(const HikaruFrame *frame)
  return 0;
 }
 static int frame_packet_layer_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_t target,
-                                     const HikaruEngineInputs *inputs)
+                                     const HikaruEngineInputs *inputs,int wide)
 {
  static const uint8_t expected[3][4]={{255,0,0,255},{0,0,255,255},{0,255,0,255}};
  const uint32_t saved_781=gpu->fb_config._781;
  const uint32_t saved_num_1=gpu->fb_config.num_1,saved_num_2=gpu->fb_config.num_2;
  const hikaru_layer_t saved_layer=gpu->state.layers.layer[0][0];
+ const uint32_t saved_format=REG1AUNIT(0,0x30),saved_enabled=REG1AUNIT(0,0x34);
+ const uint32_t saved_origin=REG1AUNIT(0,0x10);
+ hikaru_renderer_t *renderer=(hikaru_renderer_t *)engine->machine->renderer;
+ const int32_t saved_debug_layer=renderer->debug.flags[HR_DEBUG_NO_LAYER1];
  /* The layer source is top-origin; the combiner vertically flips it for GL readback. */
  const unsigned x=320,y=239;
- const uint64_t offset=(uint64_t)y*4096+(uint64_t)(x/2)*4+((x&1)?0:2);
- uint8_t saved_pixel[2],pixel[4]={0};
- memcpy(saved_pixel,gpu->fb->ptr+offset,sizeof(saved_pixel));
+ const unsigned origin_x=wide?8:0,origin_y=wide?3:0,bytes=wide?4:2;
+ const size_t offset=(size_t)(origin_y+y)*4096+origin_x*4+
+                     (wide?x*4:(x/2)*4+((x&1)?0:2));
+ uint8_t saved_pixel[4],pixel[4]={0};
+ memcpy(saved_pixel,gpu->fb->ptr+offset,bytes);
  char error[256]={0};
  HikaruFrame *first=hikaru_frame_create(),*second=hikaru_frame_create();
  int ok=first&&second;
  if(!ok)goto cleanup;
+ /* Seal while hidden, then reveal before drawing: packet pixels must
+  * already be frozen regardless of both producer and packet debug flags. */
+ renderer->debug.flags[HR_DEBUG_NO_LAYER1]=1;
+ first->capture->debug.flags[HR_DEBUG_NO_LAYER1]=1;
+ second->capture->debug.flags[HR_DEBUG_NO_LAYER1]=1;
  gpu->fb_config.num_1=2;gpu->fb_config.num_2=0;
- gpu->state.layers.layer[0][0]=(hikaru_layer_t){.x0=0,.y0=0,.format=HIKARU_FORMAT_ABGR1555,.enabled=1};
- store_frame_layer_pixel(gpu->fb,x,y,0x801f);
+ /* Vblank decodes the layer from its registers before sealing the packet.
+  * The 32-bit case also checks a disabled layer selected by the combiner. */
+ REG1AUNIT(0,0x30)=(saved_format&~2u)|(wide?2u:0u);
+ REG1AUNIT(0,0x34)=(saved_enabled&~1u)|(wide?0u:1u);
+ REG1AUNIT(0,0x10)=(origin_y<<9)|(origin_x>>(wide?2:1));
+ store_frame_layer_pixel(gpu->fb,offset,wide?0xc00003ff:0x801f,bytes);
  if(hikaru_engine_build_frame(engine,inputs,first)){ok=0;goto cleanup;}
- store_frame_layer_pixel(gpu->fb,x,y,0xfc00);
+ const hikaru_layer_t *captured=&first->gpu.state.layers.layer[0][0];
+ if(captured->x0!=origin_x||captured->y0!=origin_y||captured->enabled!=!wide||
+    captured->format!=(wide?HIKARU_FORMAT_A2BGR10:HIKARU_FORMAT_ABGR1555)){
+  fprintf(stderr,"packet layer registers did not produce the expected format/origin\n");ok=0;goto cleanup;
+ }
+ store_frame_layer_pixel(gpu->fb,offset,wide?0xfff00000:0xfc00,bytes);
  if(hikaru_engine_build_frame(engine,inputs,second)){ok=0;goto cleanup;}
- store_frame_layer_pixel(gpu->fb,x,y,0x83e0);
+ store_frame_layer_pixel(gpu->fb,offset,wide?0xc00ffc00:0x83e0,bytes);
+ renderer->debug.flags[HR_DEBUG_NO_LAYER1]=0;
+ first->capture->debug.flags[HR_DEBUG_NO_LAYER1]=0;
+ second->capture->debug.flags[HR_DEBUG_NO_LAYER1]=0;
  static const char producer_error[]="producer-side error sentinel";
  snprintf(engine->error,sizeof(engine->error),"%s",producer_error);
  hikaru_vendor_test_fail_next_packet_draw();
@@ -355,9 +377,11 @@ static int frame_packet_layer_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint
   fprintf(stderr,"reused packet HUD pixel: got %u,%u,%u,%u expected green (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;
  }
 cleanup:
+ renderer->debug.flags[HR_DEBUG_NO_LAYER1]=saved_debug_layer;
  gpu->fb_config._781=saved_781;gpu->fb_config.num_1=saved_num_1;gpu->fb_config.num_2=saved_num_2;
  gpu->state.layers.layer[0][0]=saved_layer;
- memcpy(gpu->fb->ptr+offset,saved_pixel,sizeof(saved_pixel));
+ REG1AUNIT(0,0x30)=saved_format;REG1AUNIT(0,0x34)=saved_enabled;REG1AUNIT(0,0x10)=saved_origin;
+ memcpy(gpu->fb->ptr+offset,saved_pixel,bytes);
  hikaru_frame_destroy(first);hikaru_frame_destroy(second);return ok;
 }
 static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_t target,
@@ -371,6 +395,11 @@ static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_
  if(!hikaru_vendor_test_seed_packet_3d(renderer,gpu,first,0)||
     !hikaru_vendor_test_seed_packet_3d(renderer,gpu,second,1)){
   fprintf(stderr,"could not seed textured packet fixture\n");ok=0;goto cleanup;
+ }
+ const hikaru_mesh_t *first_mesh=&first->capture->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
+ const hikaru_mesh_t *second_mesh=&second->capture->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
+ if(!first_mesh->vertex_chunk||first_mesh->cpu_vertices||!second_mesh->vertex_chunk||second_mesh->cpu_vertices){
+  fprintf(stderr,"opaque packets did not use chunk-only vertex storage\n");ok=0;goto cleanup;
  }
  if(hikaru_engine_draw_frame(engine,first,error,sizeof(error))||!read_frame_pixel(target,pixel)||
     !frame_pixel_close(pixel,red,3)){
@@ -489,7 +518,8 @@ int main(void){
  sound_pin=0x20; board->porta_m|=0x80;
  int result=hikaru_engine_run_frame(e,&in);if(result){fprintf(stderr,"frame failed: %s\n",hikaru_engine_last_error(e));return 17;}
  if(board->porta_m&0x80)return 34;
- packetLayerPixelsPassed=frame_packet_layer_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in);
+ packetLayerPixelsPassed=frame_packet_layer_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in,0)&&
+  frame_packet_layer_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in,1);
  if(!target_size(e,640,480) || hikaru_engine_set_internal_resolution(e,0)==0 || hikaru_engine_set_internal_resolution(e,5000)==0)return 35;
  if(hikaru_engine_set_internal_resolution(e,960) || hikaru_engine_run_frame(e,&in) || !target_size(e,1280,960) || !back_target_clear(e))return 36;
  if(hikaru_engine_set_internal_resolution(e,480) || hikaru_engine_run_frame(e,&in) || !target_size(e,640,480))return 37;

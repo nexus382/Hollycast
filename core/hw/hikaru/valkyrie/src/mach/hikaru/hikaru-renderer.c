@@ -204,6 +204,51 @@ valid_layer_span (const vk_buffer_t *fb, uint32_t x, uint32_t y, unsigned row_by
     return start + 479ULL * 4096 + row_bytes <= fb->size;
 }
 
+static bool
+layer_selected (const hikaru_gpu_t *gpu, unsigned slot)
+{
+    return gpu->state.layers.layer[0][slot].enabled ||
+           gpu->fb_config.num_1 == slot + 2 || gpu->fb_config.num_2 == slot + 2;
+}
+
+static void
+freeze_framebuffer (const hikaru_gpu_t *gpu, vk_buffer_t *destination)
+{
+    unsigned row_bytes[2] = {0};
+    /* Only selected 640x480 unit-0 layers read framebuffer pixels. Retain
+     * their original offsets so the draw-time uploader needs no remapping. */
+    /* Freeze every game-selected layer even when a debug toggle hides it:
+     * drawing may observe a later toggle, but must never read live RAM. */
+    for (unsigned slot = 0; slot < 2; ++slot) {
+        if (!layer_selected(gpu, slot)) continue;
+        const hikaru_layer_t *layer = &gpu->state.layers.layer[0][slot];
+        if (layer->format == HIKARU_FORMAT_ABGR1555) row_bytes[slot] = 640 * 2;
+        else if (layer->format == HIKARU_FORMAT_A2BGR10) row_bytes[slot] = 640 * 4;
+        /* Leave malformed metadata to the existing draw-time validation.
+         * In particular, a debug-disabled layer must not abort the producer. */
+        if (!row_bytes[slot] ||
+            !valid_layer_span(gpu->fb, layer->x0, layer->y0, row_bytes[slot]) ||
+            !valid_layer_span(destination, layer->x0, layer->y0, row_bytes[slot])) {
+            memcpy(destination->ptr, gpu->fb->ptr, destination->size);
+            return;
+        }
+    }
+    for (unsigned slot = 0; slot < 2; ++slot) {
+        if (!row_bytes[slot]) continue;
+        const hikaru_layer_t *layer = &gpu->state.layers.layer[0][slot];
+        const uint64_t start = (uint64_t)layer->y0 * 4096 + (uint64_t)layer->x0 * 4;
+        for (unsigned row = 0; row < 480; ++row) {
+            const uint64_t offset = start + (uint64_t)row * 4096;
+            memcpy(destination->ptr + offset, gpu->fb->ptr + offset, row_bytes[slot]);
+        }
+    }
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+void hikaru_vendor_test_freeze_framebuffer(const hikaru_gpu_t *gpu, vk_buffer_t *destination)
+{ freeze_framebuffer(gpu, destination); }
+#endif
+
 /* The 16-bit framebuffer stores adjacent pixels in reversed halfword lanes.
  * Copy into a tightly packed image; the 32-bit layer format is unaffected. */
 static bool
@@ -1107,6 +1152,7 @@ static struct {
 	hikaru_glsl_variant_t variant;
 	GLuint program;
 	hikaru_uniform_locations_t locs;
+	hikaru_mesh_uniform_cache_t uniforms;
 	hikaru_spot_uniform_cache_t spot[4];
 } program_cache[MAX_PROGRAMS];
 unsigned num_programs;
@@ -1168,15 +1214,16 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	unsigned slot;
 
 	variant = get_glsl_variant (hr, mesh, texture_available);
-	if (hr->meshes.variant.full == variant.full) {
+	if (hr->meshes.variant.full == variant.full && hr->meshes.cache_slot < num_programs &&
+	    program_cache[hr->meshes.cache_slot].program == hr->meshes.program &&
+	    program_cache[hr->meshes.cache_slot].variant.full == variant.full) {
 		/* Layer resolve can bind the bitmap program between mesh passes. */
 		glUseProgram(hr->meshes.program);
 		return;
 	}
 
-	/* Layer programs never write these uniforms. A shader/frame transition
-	 * invalidates the active-program values before the next mesh uses them. */
-	memset(&hr->meshes.uniforms, 0, sizeof(hr->meshes.uniforms));
+	/* Uniforms are stored by the linked program, so returning to a shader
+	 * during sorted triangle replay can reuse its actual uploaded values. */
 	hr->meshes.variant.full = variant.full;
 
 	for (i = 0; i < num_programs; i++) {
@@ -1249,6 +1296,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	if (program_cache[slot].program)
 		vk_renderer_destroy_program(program_cache[slot].program);
 	memset (program_cache[slot].spot, 0, sizeof(program_cache[slot].spot));
+	memset (&program_cache[slot].uniforms, 0, sizeof(program_cache[slot].uniforms));
 	hr->meshes.cache_slot = slot;
 	program_cache[slot].variant.full = variant.full;
 	program_cache[slot].program = hr->meshes.program;
@@ -1436,7 +1484,7 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	glViewport (left, bottom, right - left, top - bottom);
 	/* The viewport rectangle is context state and may have been changed by
 	 * a layer pass. Only the program-local projection/fog values are cached. */
-	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 	if (cache->viewport_valid && cache->alpha_ref == hr->pass_alpha_ref &&
 	    !memcmp(&cache->viewport, vp, sizeof(*vp))) return;
 	cache->viewport = *vp;
@@ -1533,7 +1581,7 @@ upload_modelview (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned i)
 		mv = &hr->mv_list[mesh->mv_index + i];
 	}
 
-	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 	if (!cache->modelview_valid[0] || memcmp(cache->modelview[0], mv->mtx, sizeof(mv->mtx))) {
 		vk_renderer_compute_normal_matrix(normal, mv->mtx);
 		glUniformMatrix4fv(hr->meshes.locs.u_modelview, 1, GL_FALSE, (const GLfloat *)mv->mtx);
@@ -1742,7 +1790,7 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 
 	LOG ("lightset = %s", get_lightset_str (ls));
 
-	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 	get_light_ambient (hr, mesh, tmp);
 	if (!cache->ambient_valid || memcmp(cache->ambient, tmp, sizeof(cache->ambient))) {
 		glUniform3fv(hr->meshes.locs.u_ambient, 1, tmp);
@@ -1840,13 +1888,15 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 }
 
 #ifdef HIKARU_VENDOR_TESTING
+static void hikaru_renderer_begin_frame(vk_renderer_t *renderer);
 /* Query real linked-program values after cache hits, state changes and shader
  * switches. Upload counts also ensure identical draws actually skip the work. */
 int hikaru_vendor_test_mesh_uniform_values(void)
 {
 	if (num_programs) return 0;
 	hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
-	if (!hr) return 0;
+	hikaru_renderer_t *other = calloc(1, sizeof(*other));
+	if (!hr || !other) { free(hr); free(other); return 0; }
 	hikaru_viewport_t vp = {0};
 	hikaru_modelview_t mv = {0}, alternate = {0};
 	hikaru_material_t material = {0};
@@ -1912,15 +1962,84 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	upload_modelview(hr, &mesh, 0);
 	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_modelview_alternate, matrix);
 	ok &= matrix[12] == 5.0f && matrix[13] == 0.0f && state_uploads[1] == 5;
-	/* A different program starts with no valid values, including cache hits
-	 * when switching back to a shader used earlier in the same frame. */
-	for (unsigned fog = 0; fog < 2; ++fog) {
-		material.depth_blend = fog;
-		upload_glsl_program(hr, &mesh, false);
-		upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
-		glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_modelview, matrix);
-		ok &= matrix[12] == 5.0f;
-	}
+	/* A(X), B(Y), A(X): values and validity belong to each linked program. */
+	const GLuint program_a = hr->meshes.program;
+	const hikaru_viewport_t viewport_a = vp;
+	const hikaru_lightset_t lights_a = lights;
+	material.depth_blend = 0; vp.offset.x = 400; vp.color.ambient[0] = 96;
+	mv.mtx[3][0] = 11; lights.lights[0].diffuse[0] = 192; hr->pass_alpha_ref = 0.25f;
+	upload_glsl_program(hr, &mesh, false);
+	const GLuint program_b = hr->meshes.program;
+	upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+	glGetUniformfv(program_b, hr->meshes.locs.u_projection, matrix);
+	ok &= program_a != program_b && fabsf(matrix[8] + 0.25f) < 0.0001f;
+	glGetUniformfv(program_b, hr->meshes.locs.u_modelview, matrix);
+	ok &= matrix[12] == 11.0f;
+	glGetUniformfv(program_b, hr->meshes.locs.u_ambient, value);
+	ok &= fabsf(value[0] - 96.0f / 255.0f) < 0.0001f;
+	glGetUniformfv(program_b, hr->meshes.locs.u_alpha_ref, value);
+	ok &= value[0] == 0.25f;
+	unsigned before[3]; memcpy(before, state_uploads, sizeof(before));
+	material.depth_blend = 1; vp = viewport_a; lights = lights_a;
+	mv.mtx[3][0] = 5; hr->pass_alpha_ref = 0.5f;
+	upload_glsl_program(hr, &mesh, false);
+	upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+	ok &= hr->meshes.program == program_a && !memcmp(before, state_uploads, sizeof(before));
+	glGetUniformfv(program_a, hr->meshes.locs.u_projection, matrix);
+	ok &= fabsf(matrix[8] - 0.25f) < 0.0001f;
+	glGetUniformfv(program_a, hr->meshes.locs.u_modelview, matrix);
+	ok &= matrix[12] == 5.0f;
+	glGetUniformfv(program_a, hr->meshes.locs.u_lights[0].diffuse, value);
+	ok &= fabsf(value[0] - 64.0f / 255.0f) < 0.0001f;
+	glGetUniformfv(program_a, hr->meshes.locs.u_alpha_ref, value);
+	ok &= value[0] == 0.5f;
+	mv.mtx[3][0] = 13;
+	upload_modelview(hr, &mesh, 0);
+	ok &= state_uploads[0] == before[0] && state_uploads[1] == before[1] + 2 && state_uploads[2] == before[2];
+	glGetUniformfv(program_a, hr->meshes.locs.u_modelview_alternate, matrix);
+	ok &= matrix[12] == 13.0f;
+	/* Real frame setup discards draw snapshots, not program uniform values. */
+	memcpy(before, state_uploads, sizeof(before));
+	hikaru_renderer_begin_frame(&hr->base);
+	hr->num_vps = hr->num_mvs = hr->num_alternate_mvs = hr->num_mats = hr->num_lss = 1;
+	glViewport(1, 2, 3, 4);
+	upload_glsl_program(hr, &mesh, false);
+	upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+	glGetIntegerv(GL_VIEWPORT, viewport);
+	ok &= !memcmp(before, state_uploads, sizeof(before)) && viewport[0] == 0 && viewport[1] == 0 &&
+	      viewport[2] == 1280 && viewport[3] == 960;
+	/* Two renderers can share one program; the second one's uploads must be
+	 * visible to the first one's comparisons even on its same-variant path. */
+	*other = *hr;
+	hikaru_modelview_t other_mv = mv; other_mv.mtx[3][0] = 23;
+	other->mv_list = &other_mv; other->pass_alpha_ref = 0.75f;
+	upload_glsl_program(other, &mesh, false);
+	upload_viewport(other, &mesh); upload_modelview(other, &mesh, 0); upload_lightset(other, &mesh);
+	glGetUniformfv(other->meshes.program, other->meshes.locs.u_modelview, matrix);
+	ok &= other->meshes.program == program_a && matrix[12] == 23.0f;
+	glGetUniformfv(other->meshes.program, other->meshes.locs.u_alpha_ref, value);
+	ok &= value[0] == 0.75f;
+	upload_glsl_program(hr, &mesh, false);
+	upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+	glGetUniformfv(program_a, hr->meshes.locs.u_modelview, matrix);
+	ok &= matrix[12] == 13.0f;
+	glGetUniformfv(program_a, hr->meshes.locs.u_alpha_ref, value);
+	ok &= value[0] == 0.5f;
+	/* Replace entry zero while hr still retains A. Its fast path must reject
+	 * the stale slot, and the replacement program starts with invalid values. */
+	hikaru_vendor_test_spot_force_replacement();
+	material.depth_blend = 0;
+	upload_glsl_program(other, &mesh, false);
+	ok &= !glIsProgram(program_a);
+	material.depth_blend = 1;
+	memcpy(before, state_uploads, sizeof(before));
+	upload_glsl_program(hr, &mesh, false);
+	upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
+	ok &= state_uploads[0] == before[0] + 1 && state_uploads[1] == before[1] + 2 && state_uploads[2] == before[2] + 1;
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_modelview, matrix);
+	ok &= matrix[12] == 13.0f;
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_lights[0].diffuse, value);
+	ok &= fabsf(value[0] - 64.0f / 255.0f) < 0.0001f;
 	ok &= glGetError() == GL_NO_ERROR;
 	glUseProgram((GLuint)previous_program);
 	for (unsigned i = 0; i < num_programs; ++i)
@@ -1928,6 +2047,7 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	memset(program_cache, 0, sizeof(program_cache));
 	num_programs = 0;
 	free(hr);
+	free(other);
 	return ok;
 }
 #endif
@@ -2506,7 +2626,7 @@ apply_material_blend(hikaru_renderer_t *hr, int polytype, const hikaru_material_
 	}
 	/* Depth-writing geometry covers the background after its cutout test. */
 	const bool force_coverage = !blended || (!hr->peel.enabled && mat && mat->blending_mode == 1);
-	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 	if (!cache->blend_valid || cache->force_coverage != force_coverage || cache->weigh_by_alpha != weigh) {
 		glUniform1f(hr->meshes.locs.u_force_coverage, force_coverage ? 1.0f : 0.0f);
 		glUniform1f(hr->meshes.locs.u_weigh_by_alpha, weigh ? 1.0f : 0.0f);
@@ -2606,7 +2726,7 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	upload_viewport (hr, mesh);
 	if (hr->meshes.variant.has_pattern)
 		glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh->pattern));
-	hikaru_mesh_uniform_cache_t *cache = &hr->meshes.uniforms;
+	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 	const unsigned peel_mode = (hr->peel.enabled ? 1u : 0u) | (hr->peel.first ? 2u : 0u);
 	if (!cache->peel_valid || cache->peel_mode != peel_mode ||
 	    cache->peel_width != hr->base.internal_width || cache->peel_height != hr->base.internal_height) {
@@ -3020,6 +3140,11 @@ cleanup:
     glDeleteBuffers(1, &vbo); glDeleteVertexArrays(1, &vao);
     glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &target); glDeleteTextures(1, &texture);
     glDeleteTextures(1, &depth_target);
+    /* This fixture overrides cached uniforms directly on a shared program. */
+    if (hr && hr->meshes.cache_slot < num_programs &&
+        program_cache[hr->meshes.cache_slot].program == hr->meshes.program)
+        memset(&program_cache[hr->meshes.cache_slot].uniforms, 0,
+               sizeof(program_cache[hr->meshes.cache_slot].uniforms));
     free(gpu); free(hr);
     return ok;
 }
@@ -3061,18 +3186,15 @@ int hikaru_vendor_test_material_fog_depth_pixels(uint32_t flags,
 #undef OFFSET
 
 static void
-upload_vertex_data (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
+upload_vertex_data (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned polytype)
 {
 	VK_ASSERT (mesh);
 
 	mesh->num_tris = hr->push.num_tris;
 	size_t bytes = sizeof(hikaru_vertex_body_t) * (size_t)mesh->num_tris * 3;
 	free(mesh->cpu_vertices);
-	mesh->cpu_vertices = bytes ? malloc(bytes) : NULL;
-	if (bytes && hr->capture_only && !mesh->cpu_vertices)
-		VK_ABORT("Hikaru captured vertex allocation failed");
-	if (bytes && mesh->cpu_vertices)
-		memcpy(mesh->cpu_vertices, hr->push.all, bytes);
+	mesh->cpu_vertices = NULL;
+	mesh->vertex_chunk = mesh->first_vertex = 0;
 	if (bytes && bytes <= VERTEX_CHUNK_SIZE) {
 		for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) {
 			if (hr->vertex_chunks[i].used > VERTEX_CHUNK_SIZE - bytes)
@@ -3085,11 +3207,20 @@ upload_vertex_data (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 			mesh->vertex_chunk = i + 1;
 			mesh->first_vertex = hr->vertex_chunks[i].used / sizeof(hikaru_vertex_body_t);
 			hr->vertex_chunks[i].used += bytes;
-			return;
+			break;
 		}
 	}
 
-	if (hr->capture_only) return;
+	/* Chunk-backed opaque/punch-through/background meshes need no duplicate
+	 * CPU allocation. Keep all translucent vertices for sorting-mode changes,
+	 * and retain the independent CPU fallback when no chunk is available. */
+	if (bytes && (!mesh->vertex_chunk || polytype == HIKARU_POLYTYPE_TRANSLUCENT)) {
+		mesh->cpu_vertices = malloc(bytes);
+		if (hr->capture_only && !mesh->cpu_vertices)
+			VK_ABORT("Hikaru captured vertex allocation failed");
+		if (mesh->cpu_vertices) memcpy(mesh->cpu_vertices, hr->push.all, bytes);
+	}
+	if (mesh->vertex_chunk || hr->capture_only) return;
 
 	/* Generate the VAO if required. */
 	if (!hr->meshes.vao) {
@@ -3175,8 +3306,8 @@ hikaru_renderer_end_mesh (vk_renderer_t *rend, uint32_t addr)
 
 	VK_ASSERT (hr->meshes.current);
 
-	/* Upload the pushed vertex data. */
-	upload_vertex_data (hr, hr->meshes.current);
+	/* CP state-changing commands close the mesh before changing POLY.type. */
+	upload_vertex_data (hr, hr->meshes.current, hr->gpu->state.poly.type);
 	hr->meshes.current->addr[1] = addr;
 
 	/* Make sure there is no current mesh bound. */
@@ -4298,11 +4429,11 @@ draw (hikaru_renderer_t *hr)
 
 	/* We only care about unit 0 for now. (Unit 1 is probably only used
 	 * for the dual-monitor case.) */
-	if ((LAYERS.layer[0][0].enabled || n1 == 2 || n2 == 2) &&
+	if (layer_selected(gpu, 0) &&
 	    !hr->debug.flags[HR_DEBUG_NO_LAYER1])
 		upload_layer (hr, &LAYERS.layer[0][0], 0, &layer1, &mult1);
 
-	if ((LAYERS.layer[0][1].enabled || n1 == 3 || n2 == 3) &&
+	if (layer_selected(gpu, 1) &&
 	    !hr->debug.flags[HR_DEBUG_NO_LAYER2])
 		upload_layer (hr, &LAYERS.layer[0][1], 1, &layer2, &mult2);
 
@@ -4624,7 +4755,7 @@ hikaru_renderer_seal_capture(vk_renderer_t *renderer, void *gpu_as_void, HikaruF
 	VK_ASSERT(gpu->fb->size == frame->fb->size);
 	VK_ASSERT(gpu->texram[0]->size == frame->texram[0]->size);
 	VK_ASSERT(gpu->texram[1]->size == frame->texram[1]->size);
-	memcpy(frame->fb->ptr, gpu->fb->ptr, frame->fb->size);
+	freeze_framebuffer(gpu, frame->fb);
 	for (unsigned bank = 0; bank < 2; ++bank)
 		memcpy(frame->texram[bank]->ptr, gpu->texram[bank]->ptr, frame->texram[bank]->size);
 	memcpy(&frame->gpu, gpu, sizeof(frame->gpu));
@@ -4831,6 +4962,11 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     gpu->texram[0]->ptr[31] = 0x72;
     gpu->texram[1]->ptr[47] = 0xa4;
     gpu->fb_config.alpha = 51;
+    gpu->state.layers.layer[0][0] = (hikaru_layer_t){
+        .format = HIKARU_FORMAT_ABGR1555, .enabled = 1
+    };
+    gpu->state.layers.layer[0][1].enabled = 0;
+    gpu->fb_config.num_1 = gpu->fb_config.num_2 = 0;
     gpu->state.light_table[2][9].full = 0x12345678;
     REG1AUNIT(0, 0x38) = 3;
     vk_renderer_t *capture = hikaru_renderer_begin_capture(renderer, gpu, first);
@@ -4872,9 +5008,13 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
         second->fb->ptr[17] == 0xf1 && second->texram[0]->ptr[31] == 0xf2 &&
         second->texram[1]->ptr[47] == 0xf3 && second->gpu.fb_config.alpha == 99 &&
         !second->capture->textures.cpu_dirty && second->capture->num_invalidations == 1 &&
-        mesh->num_tris == 1 && mesh->cpu_vertices &&
-        mesh->cpu_vertices[0].position[0] == 1 && mesh->cpu_vertices[1].position[0] == 2 &&
-        mesh->cpu_vertices[2].position[0] == 3;
+        mesh->num_tris == 1 && !mesh->cpu_vertices && mesh->vertex_chunk;
+    if (mesh->vertex_chunk) {
+        const hikaru_vertex_body_t *vertices = (const hikaru_vertex_body_t *)
+            second->capture->vertex_chunks[mesh->vertex_chunk - 1].data + mesh->first_vertex;
+        ok = ok && vertices[0].position[0] == 1 && vertices[1].position[0] == 2 &&
+            vertices[2].position[0] == 3;
+    }
     gpu->fb->ptr[17] = saved_fb;
     gpu->texram[0]->ptr[31] = saved_tex[0];
     gpu->texram[1]->ptr[47] = saved_tex[1];
@@ -5269,6 +5409,7 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
 /* Exercise the production draw loop with both chunk offsets and fallback VBOs. */
 int hikaru_vendor_test_mesh_vao_pixels(void)
 {
+    if (num_programs) return 0;
     static const char *vs = "#version 150\nin vec3 position; in vec3 diffuse; out vec3 c; void main(){gl_Position=vec4(position,1); c=diffuse;}";
     static const char *fs = "#version 150\nin vec3 c; out vec4 color; void main(){color=vec4(c,1);}";
     static const unsigned char colors[5][3] = {{255,0,0},{0,255,0},{0,0,255},{255,255,0},{255,0,255}};
@@ -5325,6 +5466,12 @@ int hikaru_vendor_test_mesh_vao_pixels(void)
     hr->vertex_chunks[1].data = (uint8_t *)vertices[4]; hr->vertex_chunks[1].used = sizeof(vertices[4]);
     hr->meshes.variant = get_glsl_variant(hr, &meshes[0], false);
     hr->meshes.program = program; glUseProgram(program);
+    /* This fixture supplies a custom shader to isolate vertex bindings.
+     * Register it like a linked mesh program so normal cache validation applies. */
+    program_cache[0].variant = hr->meshes.variant;
+    program_cache[0].program = program;
+    program_cache[0].locs = hr->meshes.locs;
+    num_programs = 1;
     glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE); glDisable(GL_DEPTH_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     for (unsigned pass = 0; pass < 2; ++pass) {
@@ -5398,6 +5545,65 @@ cleanup:
     if (hr->meshes.vao) glDeleteVertexArrays(1, &hr->meshes.vao);
     glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &texture);
     glDeleteProgram(program); glDeleteShader(vert); glDeleteShader(frag);
+    for (unsigned i = 0; i < num_programs; ++i)
+        if (program_cache[i].program != program)
+            vk_renderer_destroy_program(program_cache[i].program);
+    memset(program_cache, 0, sizeof(program_cache));
+    num_programs = 0;
+    free(hr);
+    return ok;
+}
+
+int hikaru_vendor_test_vertex_storage(void)
+{
+    hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+    if (!hr) return 0;
+    hr->capture_only = true;
+    hikaru_mesh_t mesh = {0};
+    const size_t bytes = 3 * sizeof(hikaru_vertex_body_t);
+    int ok = 1;
+    /* Retention depends on polygon class, never the current sorting mode.
+     * Reuse one mesh to exercise replacement of independently owned copies. */
+    for (unsigned mode = HIKARU_TRANSPARENCY_PER_STRIP;
+         mode <= HIKARU_TRANSPARENCY_PER_PIXEL; ++mode) {
+        hr->transparency_sorting = mode;
+        for (unsigned type = 0; type < 8; ++type) {
+            memset(hr->push.all, 0x31 + mode * 8 + type, bytes);
+            hr->push.num_tris = 1;
+            upload_vertex_data(hr, &mesh, type);
+            ok &= mesh.vertex_chunk != 0 && !mesh.vbo && mesh.num_tris == 1;
+            ok &= (mesh.cpu_vertices != NULL) == (type == HIKARU_POLYTYPE_TRANSLUCENT);
+            if (mesh.cpu_vertices) ok &= !memcmp(mesh.cpu_vertices, hr->push.all, bytes);
+            if (mesh.vertex_chunk) {
+                const uint8_t *vertices = hr->vertex_chunks[mesh.vertex_chunk - 1].data +
+                    (size_t)mesh.first_vertex * sizeof(hikaru_vertex_body_t);
+                ok &= !memcmp(vertices, hr->push.all, bytes);
+            }
+        }
+    }
+    /* A near-full chunk must roll over without retaining an opaque copy. */
+    hr->vertex_chunks[0].used = VERTEX_CHUNK_SIZE - bytes + 1;
+    upload_vertex_data(hr, &mesh, HIKARU_POLYTYPE_OPAQUE);
+    ok &= mesh.vertex_chunk == 2 && mesh.first_vertex == 0 && !mesh.cpu_vertices;
+    for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i)
+        hr->vertex_chunks[i].used = VERTEX_CHUNK_SIZE;
+    /* The largest legal mesh fits in a chunk; do not fabricate an oversized
+     * push array. Exhaustion exercises the same retained CPU fallback. */
+    hr->push.num_tris = MAX_VERTICES_PER_MESH / 3;
+    const size_t maximum_bytes = (size_t)hr->push.num_tris * bytes;
+    memset(hr->push.all, 0x79, maximum_bytes);
+    upload_vertex_data(hr, &mesh, HIKARU_POLYTYPE_OPAQUE);
+    ok &= !mesh.vertex_chunk && !mesh.vbo && mesh.cpu_vertices &&
+        !memcmp(mesh.cpu_vertices, hr->push.all, maximum_bytes);
+    hikaru_renderer_reset(&hr->base);
+    hr->push.num_tris = 0;
+    upload_vertex_data(hr, &mesh, HIKARU_POLYTYPE_TRANSLUCENT);
+    ok &= !mesh.num_tris && !mesh.vertex_chunk && !mesh.cpu_vertices && !mesh.vbo;
+    hr->push.num_tris = 1;
+    upload_vertex_data(hr, &mesh, HIKARU_POLYTYPE_OPAQUE);
+    ok &= mesh.vertex_chunk == 1 && mesh.first_vertex == 0 && !mesh.cpu_vertices;
+    free(mesh.cpu_vertices);
+    for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) free(hr->vertex_chunks[i].data);
     free(hr);
     return ok;
 }
@@ -5411,10 +5617,11 @@ int hikaru_vendor_test_vertex_chunks(void)
 	int ok = 1;
 	memset (hr->push.all, 0x35, bytes);
 	hr->push.num_tris = 1;
-	upload_vertex_data (hr, &a);
+	upload_vertex_data (hr, &a, HIKARU_POLYTYPE_OPAQUE);
 	memset (hr->push.all, 0xa7, bytes);
-	upload_vertex_data (hr, &b);
+	upload_vertex_data (hr, &b, HIKARU_POLYTYPE_OPAQUE);
 	ok &= a.vertex_chunk == 1 && b.vertex_chunk == 1 && a.first_vertex == 0 && b.first_vertex == 3;
+	ok &= !a.cpu_vertices && !b.cpu_vertices;
 	ok &= hr->vertex_chunks[0].used == bytes * 2;
 	if (hr->vertex_chunks[0].data) {
 		for (size_t i = 0; i < bytes; ++i)
@@ -5423,16 +5630,17 @@ int hikaru_vendor_test_vertex_chunks(void)
 	/* Filling all chunks forces the original per-mesh GL upload. */
 	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i)
 		hr->vertex_chunks[i].used = VERTEX_CHUNK_SIZE;
-	upload_vertex_data (hr, &fallback);
+	upload_vertex_data (hr, &fallback, HIKARU_POLYTYPE_OPAQUE);
 	ok &= !fallback.vertex_chunk && fallback.vbo && glIsBuffer (fallback.vbo);
 	uint8_t copy[3 * sizeof(hikaru_vertex_body_t)];
 	glBindBuffer (GL_ARRAY_BUFFER, fallback.vbo);
 	glGetBufferSubData (GL_ARRAY_BUFFER, 0, bytes, copy);
 	ok &= !memcmp (copy, hr->push.all, bytes);
+	ok &= fallback.cpu_vertices && !memcmp(fallback.cpu_vertices, hr->push.all, bytes);
 	glDeleteBuffers (1, &fallback.vbo);
 	/* Zero vertices also retain the original upload path. */
 	hr->push.num_tris = 0;
-	upload_vertex_data (hr, &empty);
+	upload_vertex_data (hr, &empty, HIKARU_POLYTYPE_OPAQUE);
 	ok &= !empty.vertex_chunk && empty.vbo && glIsBuffer (empty.vbo);
 	glDeleteBuffers (1, &empty.vbo);
 	/* A reset must discard partially built CPU and GL chunks. */
@@ -5447,6 +5655,8 @@ int hikaru_vendor_test_vertex_chunks(void)
 	ok &= !glIsBuffer (vbo) && !glIsVertexArray (vao) && glGetError() == GL_NO_ERROR;
 	if (hr->meshes.vao) glDeleteVertexArrays (1, &hr->meshes.vao);
 	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) free (hr->vertex_chunks[i].data);
+	free(a.cpu_vertices); free(b.cpu_vertices);
+	free(fallback.cpu_vertices); free(empty.cpu_vertices);
 	free (hr);
 	return ok;
 }
@@ -5659,6 +5869,11 @@ int hikaru_vendor_test_spot_pixels(const hikaru_light_t *light,
 cleanup:
     glDeleteBuffers(1,&vbo); glDeleteVertexArrays(1,&vao);
     glDeleteFramebuffers(1,&fbo); glDeleteTextures(1,&target);
+    /* Projection and matrix overrides must not outlive this fixture. */
+    if (hr && hr->meshes.cache_slot < num_programs &&
+        program_cache[hr->meshes.cache_slot].program == hr->meshes.program)
+        memset(&program_cache[hr->meshes.cache_slot].uniforms, 0,
+               sizeof(program_cache[hr->meshes.cache_slot].uniforms));
     free(gpu);
     free(hr);
     return ok;

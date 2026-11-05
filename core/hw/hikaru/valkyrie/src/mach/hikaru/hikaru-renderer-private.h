@@ -97,8 +97,8 @@ typedef struct {
 	bool storage_valid;
 } hikaru_layer_texture_t;
 
-/* Values belong to the active mesh program. Shader/frame transitions clear
- * validity; immutable draw snapshots can then share uniform uploads. */
+/* Uniform values belong to a linked mesh program and survive shader/frame
+ * switches. Relinking or direct uniform writes invalidate their cache. */
 typedef struct {
 	bool viewport_valid, modelview_valid[2], lightset_valid, ambient_valid;
 	bool blend_valid, peel_valid;
@@ -212,7 +212,6 @@ typedef struct {
 		GLuint			vao;
 
 		hikaru_uniform_locations_t locs;
-		hikaru_mesh_uniform_cache_t uniforms;
 	} meshes;
 	float pass_alpha_ref;
 	HikaruTransparencySorting transparency_sorting;

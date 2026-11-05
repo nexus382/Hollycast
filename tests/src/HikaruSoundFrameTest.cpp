@@ -430,6 +430,72 @@ struct SoundStateTrace {
     std::vector<int> irqs;
 };
 
+TEST_F(HikaruSoundFrameTest, AllChannelsFollowRepeatedAndChangedRegisterBanks)
+{
+    std::array<std::vector<u8>, 2> ram{std::vector<u8>(0x800000), std::vector<u8>(0x800000)};
+    hikaru::Sound sound(nullptr, nullptr);
+    auto cb = sound.callbacks();
+    for (unsigned board = 0; board < 2; ++board)
+        ASSERT_EQ(cb.attach(cb.opaque, board, ram[board].data(), ram[board].size()), 0);
+    ASSERT_EQ(cb.reset(cb.opaque), 0);
+    auto *hostRegisters = &aica::aica_reg[0];
+    auto *hostChannels = aica::sgc::activeChannelState();
+    {
+        hikaru::Sound::FrameScope scope(sound);
+        ASSERT_TRUE(scope.acquired());
+        for (unsigned board : {0u, 1u, 0u, 1u}) {
+            ASSERT_EQ(cb.write(cb.opaque, board, 0x2800, 2, 15), 0);
+            auto *registers = &aica::aica_reg[0];
+            auto *channels = aica::sgc::activeChannelState();
+            ASSERT_NE(channels, nullptr);
+            aica::BoardState initial;
+            initial.save();
+            auto programAddresses = [&] {
+                // SA is cached from each channel's register pointer. Distinct
+                // addresses expose a stale binding in any of the 64 channels.
+                for (unsigned channel = 0; channel < 64; ++channel)
+                    aica::writeAicaReg<u16>(channel * 0x80 + 4,
+                        static_cast<u16>(0x1000 + board * 0x400 + channel * 0x20));
+            };
+            auto channelState = [&] {
+                hikaru::StateWriter writer;
+                aica::sgc::serializeHikaruState(*channels, writer);
+                return writer.data();
+            };
+            const auto before = channelState();
+            programAddresses();
+            const auto expected = channelState();
+            EXPECT_NE(expected, before);
+            initial.load(); // Independently owned snapshot copied into the selected bank.
+            EXPECT_EQ(aica::sgc::activeChannelState(), channels);
+            programAddresses();
+            EXPECT_EQ(channelState(), expected);
+            initial.load();
+            for (unsigned repeat = 0; repeat < 3; ++repeat) {
+                alignas(4) std::array<u8, 0x8000> alternate;
+                std::copy(registers, registers + alternate.size(), alternate.begin());
+                aica::selectRegisters(alternate.data());
+                // The channel object is still selected, but its register base
+                // changed without selectChannelState performing the rebind.
+                aica::sgc::loadChannelState(*channels);
+                programAddresses();
+                EXPECT_EQ(channelState(), expected);
+                aica::sgc::loadChannelState(*channels); // Already-selected, correctly bound path.
+                programAddresses();
+                EXPECT_EQ(channelState(), expected);
+                // Restore before the temporary register bank goes out of scope.
+                initial.restoreRegisters(registers, channels);
+                u64 volume = 0;
+                EXPECT_EQ(cb.read(cb.opaque, board, 0x2800, 2, &volume), 0);
+                EXPECT_EQ(volume & 15, 15u);
+            }
+        }
+    }
+    EXPECT_EQ(&aica::aica_reg[0], hostRegisters);
+    EXPECT_EQ(aica::sgc::activeChannelState(), hostChannels);
+    cb.detach(cb.opaque);
+}
+
 TEST_F(HikaruSoundFrameTest, SoundSnapshotRestoresDualBoardContinuationAndDreamcastHost)
 {
     Result output;

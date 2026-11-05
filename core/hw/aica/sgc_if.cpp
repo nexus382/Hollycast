@@ -1553,8 +1553,11 @@ void loadChannelState(const ChannelState& state)
 #endif
 		std::copy(std::begin(state.channels), std::end(state.channels), std::begin(Chans));
 #ifdef USE_HIKARU
-	for (int i = 0; i < 64; ++i)
-		Chans[i].ccd = (ChannelCommonData*)&aica_reg[i * 0x80];
+	/* Selecting a board already binds its complete channel bank. An
+	 * independent snapshot copy must still rebind every copied pointer. */
+	if (&state != selectedChannels || Chans[0].ccd != (ChannelCommonData*)&aica_reg[0])
+		for (int i = 0; i < 64; ++i)
+			Chans[i].ccd = (ChannelCommonData*)&aica_reg[i * 0x80];
 	std::copy(std::begin(state.externalInput), std::end(state.externalInput), std::begin(boardExternalInput));
 	std::copy(std::begin(state.channelPeaks), std::end(state.channelPeaks), std::begin(ChannelEx::channelPeaks));
 #endif
