@@ -747,6 +747,19 @@ protected:
 	bool previousFetch = false;
 };
 
+TEST_F(ScreenScraperQueueTest, UnconfiguredGuestAccessRetainsPendingDreamcastRequests)
+{
+	if (screenscraper::developerConfigured())
+		GTEST_SKIP() << "Requires an unprovisioned application identity.";
+	config::FetchBoxart = true;
+	seedPrepared(1);
+	for (int i = 0; i < 3; ++i)
+	{
+		boxart.startFetch();
+		EXPECT_EQ(queued(), 1u);
+	}
+}
+
 TEST_F(ScreenScraperQueueTest, BasicLibraryQueuesCoverMixLogoAndMetadataRegardlessOfManualChoices)
 {
 	const auto automatic = queue();
@@ -1053,6 +1066,28 @@ TEST_F(ScreenScraperQueueTest, RefreshDoesNotWaitForScreenScraperAndAcceptsNewWo
 }
 
 // Opt in explicitly: ordinary test runs must never consume a user's API quota.
+TEST(ScreenScraperLiveTest, DISABLED_ConnectsGuestWithoutPersonalCredentials)
+{
+	const char *output = std::getenv("HOLLYCAST_SCREENSCRAPER_LIVE_OUTPUT");
+	if (!output || !*output)
+		GTEST_SKIP() << "Opt in to a live guest connection check.";
+	ASSERT_TRUE(screenscraper::developerConfigured());
+	// Exercise automatic startup without a personal account or an explicit login.
+	const auto session = screenscraper::currentSession();
+	ASSERT_TRUE(session);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	auto account = screenscraper::status();
+	while (account.connecting && std::chrono::steady_clock::now() < deadline)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		account = screenscraper::status();
+	}
+	EXPECT_TRUE(account.connected) << account.message;
+	EXPECT_FALSE(account.personalAccount);
+	EXPECT_GT(account.maxThreads, 0);
+	screenscraper::disconnect();
+}
+
 TEST(ScreenScraperLiveTest, DISABLED_RecoversPreviouslyUnmatchedDreamcastTitles)
 {
 	const char *output = std::getenv("HOLLYCAST_SCREENSCRAPER_LIVE_OUTPUT");

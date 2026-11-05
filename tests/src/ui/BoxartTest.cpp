@@ -4,6 +4,7 @@
 #include "ui/boxart/launchbox.h"
 #include "ui/boxart/vmu_icon.h"
 #include "ui/game_scanner.h"
+#include "ui/library_media.h"
 #include "reios/reios.h"
 #include "imgread/isofs.h"
 #include <stb_image.h>
@@ -322,6 +323,104 @@ protected:
 	int oldProvider;
 	std::string oldBoxartPath;
 };
+
+TEST_F(BoxartTest, LibraryInventoryQueuesDiscParsingWithCompleteOnlineMetadata)
+{
+	config::ArtworkProvider = 1;
+	GameBoxart cached;
+	cached.fileName = media.fileName;
+	cached.gamePath = media.path;
+	cached.screenScraperId = 123;
+	cached.screenScraperSearched = true;
+	writeDatabase(json::array({cached.to_json(directory.string())}));
+
+	library::MediaBatch batch;
+	batch.reset({media}, artwork::metadataMedia, "Boot inventory");
+	EXPECT_TRUE(batch.advance(*boxart).completedPass);
+	EXPECT_EQ(batch.progress.pending, 0u);
+	EXPECT_TRUE(boxart->getCachedBoxart(media).busy);
+
+	// Physical metadata must be extracted even though the online inventory is done.
+	boxart->startFetch();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (boxart->getCachedBoxart(media).offlineArtState == OfflineArtState::Pending
+			&& std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	EXPECT_EQ(boxart->getCachedBoxart(media).uniqueId, "TEST-0001");
+}
+
+TEST_F(BoxartTest, LibraryInventoryRequeuesCanceledRequestsWithoutDuplicatingActiveWork)
+{
+	config::ArtworkProvider = 1;
+	library::MediaBatch batch;
+	batch.reset({media}, artwork::basicMedia, "Added media");
+	batch.advance(*boxart);
+	ASSERT_TRUE(batch.checked);
+	ASSERT_GT(batch.progress.pending, 0u);
+	ASSERT_TRUE(boxart->getCachedBoxart(media).busy);
+	boxart->invalidateOfflineArtwork();
+	ASSERT_FALSE(boxart->getCachedBoxart(media).busy);
+
+	batch.advance(*boxart);
+	ASSERT_TRUE(boxart->getCachedBoxart(media).busy);
+	const auto revision = boxart->getCachedBoxart(media).workRevision;
+	batch.advance(*boxart);
+	EXPECT_EQ(boxart->getCachedBoxart(media).workRevision, revision);
+}
+
+TEST_F(BoxartTest, NewLibraryInventoryFindsDeletedCachedImages)
+{
+	config::ArtworkProvider = 2;
+	config::FetchBoxart = true; // Queue online work without starting a network worker.
+	const auto artworkDirectory = directory / "boxart";
+	std::filesystem::create_directories(artworkDirectory);
+	const auto image = artworkDirectory / "cached.png";
+	std::ofstream(image) << "cached";
+	GameBoxart cached;
+	cached.fileName = media.fileName;
+	cached.gamePath = media.path;
+	cached.launchboxId = 123;
+	cached.launchboxSearched = true;
+	cached.launchboxCheckedMedia = artwork::coverMedia;
+	cached.launchboxMedia["cover"] = image.string();
+	cached.offlineArtState = OfflineArtState::NoArtwork;
+	writeDatabase(json::array({cached.to_json(artworkDirectory.string() + '/')}));
+	library::MediaBatch batch;
+	batch.reset({media}, artwork::coverMedia, "Boot inventory");
+	batch.advance(*boxart);
+	EXPECT_EQ(batch.progress.pending, 0u);
+	EXPECT_TRUE(std::filesystem::exists(image));
+
+	std::filesystem::remove(image);
+	batch.reset({media}, artwork::coverMedia, "Manual rescan");
+	batch.advance(*boxart);
+	EXPECT_GT(batch.progress.pending, 0u);
+	EXPECT_TRUE(boxart->getCachedBoxart(media).busy);
+}
+
+TEST_F(BoxartTest, LibraryInventoryBoundsWorkAndPreservesProgressTotals)
+{
+	std::vector<GameMedia> games;
+	for (size_t i = 0; i < 1000; ++i)
+	{
+		GameMedia game = media;
+		game.path += std::to_string(i);
+		game.fileName += std::to_string(i);
+		games.push_back(std::move(game));
+	}
+	library::MediaBatch batch;
+	batch.reset(std::move(games), artwork::basicMedia, "Large inventory");
+	const auto first = batch.advance(*boxart, 16, std::chrono::milliseconds(0));
+	EXPECT_EQ(first.processed, 1u);
+	EXPECT_FALSE(batch.checked);
+	while (!batch.checked)
+	{
+		const auto advanced = batch.advance(*boxart);
+		ASSERT_GT(advanced.processed, 0u);
+		ASSERT_LE(advanced.processed, 16u);
+	}
+	EXPECT_EQ(batch.progress.ready + batch.progress.pending + batch.progress.unavailable, batch.progress.total);
+}
 
 TEST_F(BoxartTest, HistoryReadsDoNotCreateArtworkDirectories)
 {

@@ -1293,7 +1293,9 @@ void Boxart::fetchBoxart()
 	const bool allowOnline = config::FetchBoxart
 		&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
 	const auto screenSession = useScreenScraper && allowOnline ? screenscraper::currentSession() : nullptr;
-	const bool retainOnlineWork = useScreenScraper && screenSession && allowOnline;
+	// Keep Dreamcast requests pending even before application access is provisioned.
+	// Otherwise the legacy worker discards them and each inventory poll queues them again.
+	const bool retainOnlineWork = useScreenScraper && allowOnline;
 	if (screenSessionSnapshot != screenSession)
 	{
 		screenSessionSnapshot = screenSession;

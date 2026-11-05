@@ -35,6 +35,7 @@
 #include "exit_save_prompt.h"
 #include "library.h"
 #include "library_savestates.h"
+#include "library_media.h"
 #include "gui_util.h"
 #include "gui_font.h"
 #include "imgread/common.h"
@@ -143,21 +144,7 @@ static LibrarySavestateCache librarySavestateCache;
 static std::future<bool> networkStatus;
 static Boxart boxart;
 
-// UI-thread owned batch; count image/metadata outcomes, never HTTP requests. Provider
-// quotas and fallback can require multiple requests for one unit. Cached/local units
-// are immediately ready; checked-but-absent types are unavailable, not downloaded.
-struct LibraryMediaBatch
-{
-	std::vector<GameMedia> games;
-	std::vector<Boxart::MediaProgress> outcomes;
-	Boxart::MediaProgress progress;
-	u32 mask = 0;
-	std::string label;
-	size_t cursor = 0;
-	bool checked = false, notified = false;
-	double nextCheck = 0, finishedAt = 0;
-};
-static LibraryMediaBatch libraryMediaBatch;
+static library::MediaBatch libraryMediaBatch;
 static bool libraryMediaRefreshPending = false;
 static bool libraryMediaRetryPending = false;
 static bool libraryStateThumbnailCacheInvalidated = false;
@@ -216,43 +203,13 @@ static void updateLibraryMediaProgress()
 	boxart.setMediaBatchPending(enabled && !batch.checked && !batch.games.empty());
 	if (!enabled || batch.games.empty() || (batch.checked && !batch.progress.pending)
 		|| ImGui::GetTime() < batch.nextCheck || !boxart.customMediaReady()) return;
-	// Inventory and enqueue together in bounded slices. Completed categories are
-	// never polled again in this batch; only pending work incurs further checks.
-	// A single slow filesystem call cannot be preempted, but never scan the entire
-	// library in one frame. The cover barrier stays up until this first pass ends.
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
-	const size_t end = std::min(batch.cursor + 16, batch.games.size());
-	while (batch.cursor < end)
+	const auto advanced = batch.advance(boxart);
+	if (advanced.notifyPending)
 	{
-		auto& prior = batch.outcomes[batch.cursor];
-		const auto& game = batch.games[batch.cursor];
-		if (prior.pendingMedia)
-		{
-			const auto current = boxart.mediaProgress(game, prior.pendingMedia);
-			batch.progress.ready += current.ready;
-			batch.progress.pending = batch.progress.pending - prior.pending + current.pending;
-			batch.progress.unavailable += current.unavailable;
-			prior.ready += current.ready;
-			prior.unavailable += current.unavailable;
-			prior.pending = current.pending;
-			prior.pendingMedia = current.pendingMedia;
-			if (!batch.checked && current.pendingMedia)
-			{
-				boxart.queueBoxart(game, current.pendingMedia);
-				if (!batch.notified)
-				{
-					os_notify(T("Downloading library media"), 6000, batch.label.c_str());
-					batch.notified = true;
-				}
-			}
-		}
-		++batch.cursor;
-		if (std::chrono::steady_clock::now() >= deadline) break;
+		os_notify(T("Downloading library media"), 6000, batch.label.c_str());
 	}
-	if (batch.cursor == batch.games.size())
+	if (advanced.completedPass)
 	{
-		batch.cursor = 0;
-		batch.checked = true;
 		boxart.setMediaBatchPending(false);
 		batch.nextCheck = ImGui::GetTime() + 0.5;
 		if (batch.progress.pending) batch.finishedAt = 0;
@@ -5200,7 +5157,7 @@ void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const
 		libraryMediaRetryPending = true;
 	else if (retryUnavailable)
 		boxart.retryArtworkMedia();
-	LibraryMediaBatch batch;
+	library::MediaBatch batch;
 	batch.mask = requestedMedia | artwork::metadataMedia;
 	// Switching themes must not discard a manually requested batch that is still
 	// being inventoried. Merging masks is safe: each source has one active job.
@@ -5210,22 +5167,15 @@ void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const
 		if (libraryMediaBatch.mask & ~batch.mask) batch.label = T("Queued library media");
 		batch.mask |= libraryMediaBatch.mask;
 	}
+	std::vector<GameMedia> games;
 	{
 		std::lock_guard<std::mutex> guard(scanner.get_mutex());
 		std::unordered_set<std::string> paths;
 		for (const auto& game : scanner.get_game_list())
 			if (!game.device && !game.path.empty() && !game.arcade && paths.insert(game.path).second)
-				batch.games.push_back(game);
+				games.push_back(game);
 	}
-	size_t units = 1; // metadata
-	for (size_t i = 0; i < artwork::mediaTypes.size(); ++i) if (batch.mask & (1u << i)) ++units;
-	batch.progress.total = batch.progress.pending = units * batch.games.size();
-	batch.outcomes.resize(batch.games.size());
-	for (auto& outcome : batch.outcomes)
-	{
-		outcome.total = outcome.pending = units;
-		outcome.pendingMedia = batch.mask;
-	}
+	batch.reset(std::move(games), batch.mask, std::move(batch.label));
 	libraryMediaBatch = std::move(batch);
 	boxart.startFetch();
 }
