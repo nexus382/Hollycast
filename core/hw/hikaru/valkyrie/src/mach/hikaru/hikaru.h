@@ -2,6 +2,7 @@
 /* 
  * Valkyrie
  * Copyright (C) 2011, 2012, Stefano Teso
+ * Portions Copyright 2026 The Hollycast Authors
  * 
  * Valkyrie is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -98,7 +99,7 @@ typedef struct {
 } hikaru_t;
 
 vk_machine_t	*hikaru_new (vk_game_t *game, void *host, int bios_bypass);
-void		 hikaru_raise_gpu_irq (vk_machine_t *mach);
+void		 hikaru_set_gpu_irq (vk_machine_t *mach, bool raised);
 void		 hikaru_raise_aica_irq (vk_machine_t *mach);
 void		 hikaru_raise_memctl_irq (vk_machine_t *mach);
 

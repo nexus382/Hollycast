@@ -523,6 +523,9 @@ int main(void){
  probe.fail_board=-1;
  if(hikaru_engine_set_sound(e,&sound) || !probe.ram[0] || !probe.ram[1] || probe.ram[0]==probe.ram[1] || probe.resets!=1)return 40;
  board=(hikaru_t *)e->machine; uint32_t reg=0;
+ /* This synthetic CPU has no GPU interrupt handler. Mask display sources
+  * while checking AICA delivery on their shared IRL2 line. */
+ if(vk_device_put(board->gpu,4,0x15000084,0xff))return 62;
  if(vk_device_put(board->aica_m,4,0x0c700004,0x11223344) || vk_device_put(board->aica_s,4,0x0d700004,0x55667788) ||
     vk_device_get(board->aica_m,4,0x0c700004,&reg) || reg!=0x11223344 ||
     vk_device_get(board->aica_s,4,0x0d700004,&reg) || reg!=0x55667788)return 41;

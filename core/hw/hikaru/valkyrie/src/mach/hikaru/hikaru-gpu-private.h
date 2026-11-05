@@ -40,7 +40,7 @@
  * 0C000A04). Hence the connection. */
 
 #define GPU15_IRQ_IDMA_END		0x01
-#define GPU15_IRQ_POLY_OUT_END		0x02
+#define GPU15_IRQ_ERROR			0x02
 #define GPU15_IRQ_CMD_ANALYSIS_END	0x04
 #define GPU15_IRQ_GPU1A			0x80
 

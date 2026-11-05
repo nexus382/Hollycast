@@ -44,23 +44,14 @@
  * odd and even frames. This may mean that there are *two* CPs performing
  * double-buffered 3D rendering.
  *
- * When execution ends:
- *
- *  - 1A00000C bit 0 is set (not sure)
- *    - 1A000018 bit 1 is set as a consequence
- *      - 15000088 bit 7 is set as a consequence
- *  - 15000088 bit 1 is set; a GPU IRQ is raised (if not masked by 15000084)
- *  - 15002000 bit 0 is set on some HW revisions (not sure)
- *  - 1A000024 bit 0 is cleared if some additional condition occurred (not sure)
+ * At list completion, 15000088 bit 2 reports command analysis complete and
+ * 1A000010 bit 0 reports plot complete (1A000018 bit 2, summarized by
+ * 15000088 bit 7). Their pending, unmasked causes drive the shared GPU IRQ.
+ * The CP and plot busy bits are cleared by on_cp_end. Bit 1 of 15000088 is
+ * an error source, so it must never stand in for normal frame completion.
  *
  * 15002000 and 1A000024 signal different things; see the termination condition
- * in sync().
- *
- * (Guesstimate: 15000088 bit 1 is set when the CP ends verifying/processing
- * the CS (if there is such a thing!); 15002000 is cleared when the CP submits
- * the completely rasterized frame buffer to the GPU 1A; 1A000024 is cleared
- * when the GPU 1A is done compositing the frame buffer with the 2D layers and
- * has displayed them on-screen.)
+ * in sync(). Their precise raster/display pipeline timing remains unmodelled.
  */
 
 void
@@ -142,9 +133,9 @@ void
 hikaru_gpu_cp_vblank_in (hikaru_gpu_t *gpu)
 {
 	on_frame_begin (gpu);
-
-	/* Notify that the drawing is done */
-	hikaru_gpu_raise_irq (gpu, GPU15_IRQ_POLY_OUT_END, 0);
+    /* 15000088 bit 1 is an error, not a drawing-complete interrupt.
+     * Normal list completion is signalled by on_cp_end; vblank is
+     * signalled by the display chip at vblank-out. */
 }
 
 void

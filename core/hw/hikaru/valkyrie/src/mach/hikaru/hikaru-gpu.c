@@ -148,7 +148,7 @@
  * Interrupt Control
  * -----------------
  *
- * 15000084   W		GPU IRQ Mask
+ * 15000084   W		GPU IRQ Mask (set bits suppress delivery)
  * 15000088  RW		GPU IRQ Status
  *			 80 = GPU 1A IRQ fired
  *			 40 = Unknown
@@ -156,7 +156,7 @@
  *			 10 = Unknown
  *			 08 = Unknown
  *			 04 = GPU 15 is ready/done; see @0C0018B4
- *			 02 = Unknown; possibly VBLANK
+ *			 02 = Error; PHARRIER enters GPU recovery for this bit
  *			 01 = IDMA done; see @0C006C04
  *			All bits are AND'ed on write
  *
@@ -464,17 +464,17 @@ hikaru_gpu_update_irq_status (hikaru_gpu_t *gpu)
 	               ((REG1A (0x10) & 1) << 2) |
 	               ((REG1A (0x14) & 1) << 3);
 
-	/* Update 15000088 bit 7 from 1A000018 */
-	if (REG1A (0x18) & 0xF)
-		REG15 (0x88) |= 0x80;
+	/* The display summary follows its causes, including their acknowledgement. */
+	REG15 (0x88) = (REG15 (0x88) & ~GPU15_IRQ_GPU1A) |
+	               ((REG1A (0x18) & 0xF) ? GPU15_IRQ_GPU1A : 0);
 
-	/* Raise IRL2 and lower bit 5 of the PDTRA, if the IRQs are
-	 * not masked. */
-	if (REG15 (0x88) & REG15 (0x84)) {
+	/* Mask bits suppress delivery. The guest's normal 0x72 mask enables
+	 * IDMA, command completion and display IRQs; it does not enable errors. */
+	const bool raised = (REG15 (0x88) & ~REG15 (0x84) & 0xFF) != 0;
+	if (raised)
 		VK_CPU_LOG (cpu, " ## sending GPU IRQ to CPU: %02X/%02X",
 		            REG15 (0x84), REG15 (0x88));
-		hikaru_raise_gpu_irq (gpu->base.mach);
-	}
+	hikaru_set_gpu_irq (gpu->base.mach, raised);
 }
 
 void
@@ -1255,7 +1255,7 @@ int hikaru_vendor_test_idma_completion(vk_machine_t *mach)
     memcpy(saved,gpu,sizeof(*saved));
     board->cmdram=cmd; gpu->cmdram=cmd; gpu->texram[0]=tex;
     /* Disable IRQ delivery while checking its status latch. */
-    REG15(0x84)=0;
+    REG15(0x84)=0xFF;
 #define CHECK_IDMA(expr, label) do { if (!(expr)) { fprintf(stderr,"IDMA: %s\n",label); ok=0; } } while (0)
 #define PUT(reg, val) CHECK_IDMA(hikaru_gpu_put(&gpu->base,4,0x15000000+(reg),(val))==0,"MMIO write")
 #define GET32(reg, out) CHECK_IDMA(hikaru_gpu_get(&gpu->base,4,0x15000000+(reg),&(out))==0,"MMIO read32")
@@ -1424,12 +1424,17 @@ hikaru_gpu_load_state (vk_device_t *dev, vk_state_t *state)
 		ret = -1;
 	if (!ret) {
 		live->regs = gpu->regs;
+        /* Older Hollycast states contain the synthetic per-vblank 0x02
+         * error. It has no real producer; retaining it traps PHARRIER in
+         * GPU recovery even after interrupt delivery has been corrected. */
+        live->regs._15[0x88] &= (uint8_t)~GPU15_IRQ_ERROR;
 		live->cp = gpu->cp;
 		live->state = gpu->state;
 		live->fb_config = gpu->fb_config;
 		live->depth_bias = gpu->depth_bias;
 		memcpy (live->texoffset, gpu->texoffset, sizeof (live->texoffset));
 		live->idma_completed = gpu->idma_completed;
+        hikaru_gpu_update_irq_status(live);
 	}
 	free (gpu);
 	return ret;

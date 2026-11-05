@@ -386,8 +386,8 @@ static vk_device_t unk_s = {
  * looks like that the IRQ sources are as follows:
  *
  *  IRL0 unused/unhandled
- *  IRL1 GPU hardware, 
- *  IRL2 memory controller DMA termination
+ *  IRL1 memory controller DMA termination
+ *  IRL2 GPU and AICA (shared line)
  *  IRL3 unused/unhandled
  *
  * IRQ-related Registers
@@ -415,9 +415,19 @@ hikaru_raise_irq (vk_machine_t *mach, unsigned num, uint16_t porta)
 }
 
 void
-hikaru_raise_gpu_irq (vk_machine_t *mach)
+hikaru_set_gpu_irq (vk_machine_t *mach, bool raised)
 {
-	hikaru_raise_irq (mach, SH4_IESOURCE_IRL2, 0x40);
+    hikaru_t *hikaru = (hikaru_t *)mach;
+    HikaruEngine *engine = mach->host;
+    if (raised) hikaru->porta_m &= ~0x40;
+    else hikaru->porta_m |= 0x40;
+    /* IRL2 is shared. The raw AICA GPIO can be low while its MIE mask
+     * suppresses delivery; clearing a GPU cause must respect that mask. */
+    bool sound_irq = !(hikaru->porta_m & 0x80);
+    if (engine && engine->sound_attached)
+        sound_irq = engine->mie.set_sound_irq(engine->mie.opaque, sound_irq) > 0;
+    vk_cpu_set_irq_state(hikaru->sh_m, SH4_IESOURCE_IRL2,
+                        raised || sound_irq ? VK_IRQ_STATE_RAISED : VK_IRQ_STATE_CLEAR);
 }
 
 void
