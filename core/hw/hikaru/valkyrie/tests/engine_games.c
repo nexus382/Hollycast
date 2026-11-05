@@ -7,6 +7,7 @@
 #define GL_SILENCE_DEPRECATION
 #include <SDL.h>
 #include "engine_internal.h"
+#include "graphics_dispatch.h"
 #include "mach/hikaru/hikaru.h"
 #include "mach/hikaru/hikaru-gpu-private.h"
 #include "cpu/sh/sh4.h"
@@ -15,6 +16,7 @@
 #include <string.h>
 
 void hikaru_vendor_test_fail_renderer_init(void);
+int hikaru_vendor_test_frame_packet_ownership(HikaruEngine *);
 static unsigned checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { \
     fprintf(stderr, "line %u: %s\n", __LINE__, #condition); ++failures; } } while (0)
@@ -29,6 +31,122 @@ static void inputs(void *opaque, const HikaruEngineInputs *value)
 { (void)opaque; (void)value; }
 static const HikaruEngineMie mie = {NULL, reset, read_bus, write_bus, advance, inputs, NULL};
 static const HikaruEngineProtection protection = {NULL, reset, read_bus, write_bus};
+
+static _Thread_local unsigned forbidden_graphics_calls;
+static void count_graphics_call(void) { ++forbidden_graphics_calls; }
+static GLenum count_get_error(void) { count_graphics_call(); return GL_NO_ERROR; }
+static void count_bind_buffer(GLenum target, GLuint buffer)
+{ (void)target; (void)buffer; count_graphics_call(); }
+static void count_bind_vertex_array(GLuint array)
+{ (void)array; count_graphics_call(); }
+static void count_buffer_data(GLenum target, GLsizeiptr size, const void *data, GLenum usage)
+{ (void)target; (void)size; (void)data; (void)usage; count_graphics_call(); }
+static void count_delete_buffers(GLsizei n, const GLuint *buffers)
+{ (void)n; (void)buffers; count_graphics_call(); }
+static void count_delete_textures(GLsizei n, const GLuint *textures)
+{ (void)n; (void)textures; count_graphics_call(); }
+static void count_delete_vertex_arrays(GLsizei n, const GLuint *arrays)
+{ (void)n; (void)arrays; count_graphics_call(); }
+static void count_gen_buffers(GLsizei n, GLuint *buffers)
+{ count_graphics_call(); for (GLsizei i = 0; i < n; ++i) buffers[i] = 1; }
+static void count_gen_vertex_arrays(GLsizei n, GLuint *arrays)
+{ count_graphics_call(); for (GLsizei i = 0; i < n; ++i) arrays[i] = 1; }
+
+typedef struct {
+    HikaruEngine *engine;
+    const HikaruEngineInputs *inputs;
+    HikaruFrame *frame;
+    bool create_frame, build_frame, destroy_frame, test_ownership;
+    int build_result, ownership_result, has_graphics_context;
+    unsigned graphics_calls;
+} FrameApiJob;
+
+static int SDLCALL run_frame_api_job(void *opaque)
+{
+    static const HikaruGraphicsDispatch poison = {
+        .BindBuffer = count_bind_buffer,
+        .BindVertexArray = count_bind_vertex_array,
+        .BufferData = count_buffer_data,
+        .DeleteBuffers = count_delete_buffers,
+        .DeleteTextures = count_delete_textures,
+        .DeleteVertexArrays = count_delete_vertex_arrays,
+        .GenBuffers = count_gen_buffers,
+        .GenVertexArrays = count_gen_vertex_arrays,
+        .GetError = count_get_error,
+    };
+    FrameApiJob *job = (FrameApiJob *)opaque;
+    const HikaruGraphicsDispatch *previous = hikaru_graphics_set_dispatch(&poison);
+    forbidden_graphics_calls = 0;
+    job->has_graphics_context = SDL_GL_GetCurrentContext() != NULL;
+    if (job->create_frame) job->frame = hikaru_frame_create();
+    job->build_result = 0;
+    if (job->test_ownership)
+        job->ownership_result = hikaru_vendor_test_frame_packet_ownership(job->engine);
+    if (job->build_frame && job->frame)
+        job->build_result = hikaru_engine_build_frame(job->engine, job->inputs, job->frame);
+    if (job->destroy_frame) {
+        hikaru_frame_destroy(job->frame);
+        job->frame = NULL;
+    }
+    job->graphics_calls = forbidden_graphics_calls;
+    hikaru_graphics_set_dispatch(previous);
+    return 0;
+}
+
+static int run_frame_api_job_thread(FrameApiJob *job)
+{
+    SDL_Thread *thread = SDL_CreateThread(run_frame_api_job, "Hikaru frame packet", job);
+    if (!thread) return 0;
+    SDL_WaitThread(thread, NULL);
+    return 1;
+}
+
+static void check_frame_packet_api(HikaruEngine *engine, const HikaruEngineInputs *frame_inputs)
+{
+    const uint64_t layout = hikaru_engine_state_layout();
+    const size_t state_size = hikaru_engine_state_size(engine);
+    FrameApiJob build = {0};
+    build.engine = engine;
+    build.inputs = frame_inputs;
+    build.create_frame = true;
+    build.build_frame = true;
+    build.test_ownership = true;
+    CHECK(run_frame_api_job_thread(&build));
+    CHECK(!build.has_graphics_context && build.graphics_calls == 0);
+    CHECK(build.frame && !build.build_result && build.ownership_result);
+    if (!build.frame) return;
+    if (build.build_result) {
+        FrameApiJob cleanup = {0};
+        cleanup.frame = build.frame;
+        cleanup.destroy_frame = true;
+        CHECK(run_frame_api_job_thread(&cleanup));
+        CHECK(!cleanup.has_graphics_context && cleanup.graphics_calls == 0 && !cleanup.frame);
+        return;
+    }
+
+    char draw_error[256] = {0};
+    CHECK(!hikaru_engine_draw_frame(engine, build.frame, draw_error, sizeof(draw_error)));
+    CHECK(!draw_error[0]);
+
+    FrameApiJob reuse = {0};
+    reuse.engine = engine;
+    reuse.inputs = frame_inputs;
+    reuse.frame = build.frame;
+    reuse.build_frame = true;
+    CHECK(run_frame_api_job_thread(&reuse));
+    CHECK(!reuse.has_graphics_context && reuse.graphics_calls == 0);
+    CHECK(!reuse.build_result);
+    CHECK(!hikaru_engine_draw_frame(engine, reuse.frame, draw_error, sizeof(draw_error)));
+    CHECK(!draw_error[0]);
+
+    FrameApiJob destroy = {0};
+    destroy.frame = reuse.frame;
+    destroy.destroy_frame = true;
+    CHECK(run_frame_api_job_thread(&destroy));
+    CHECK(!destroy.has_graphics_context && destroy.graphics_calls == 0 && !destroy.frame);
+    CHECK(hikaru_engine_state_layout() == layout);
+    CHECK(hikaru_engine_state_size(engine) == state_size);
+}
 
 static void reject(HikaruEngineGame game, const HikaruEngineRoms *roms, const char *message)
 {
@@ -188,6 +306,15 @@ done:
 int main(int argc, char **argv)
 {
     const int gles = argc == 2 && !strcmp(argv[1], "--gles");
+    const int profile = argc == 2 && !strcmp(argv[1], "--profile");
+    /* engine.c reads the CRT environment; SDL's Windows setter updates only
+     * the OS environment and would leave getenv() unchanged in this process. */
+#ifdef _WIN32
+    CHECK(_putenv_s("HIKARU_TRACE_TIMING", profile ? "1" : "") == 0);
+#else
+    if (profile) CHECK(setenv("HIKARU_TRACE_TIMING", "1", 1) == 0);
+    else CHECK(unsetenv("HIKARU_TRACE_TIMING") == 0);
+#endif
     uint8_t byte = 0;
     HikaruEngineRoms sizes = {&byte, 0x200000, &byte, 0x4000000, &byte, 0x10000000};
     /* These must reject before reading ROM bytes or asking for a GL context. */
@@ -363,7 +490,6 @@ int main(int argc, char **argv)
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "Air Trix create: %s\n", error); goto cleanup; }
     check_board(engine, "airtrix", 4, 16);
-    check_state_roundtrip(engine);
     check_bus((hikaru_t *)engine->machine, 0x10, 0x400000, 0x24);
     board = (hikaru_t *)engine->machine;
     sh4_t *master = (sh4_t *)board->sh_m;
@@ -395,7 +521,16 @@ int main(int argc, char **argv)
     CHECK(engine->machine == &board->base && master->regs.pc == pc);
     CHECK(board->ram_m->ptr[17] == 0x5a && board->texram[0]->ptr[23] == 0xa5);
     CHECK(board->aica_ram_m->ptr[31] == 0x3c && board->bram->ptr[9] == 0x96);
+    CHECK(engine->profile.enabled == (profile != 0));
     CHECK(!hikaru_engine_run_frame(engine, &frame));
+    CHECK(!engine->profile.collecting);
+    CHECK(engine->profile.frames == (profile ? 1u : 0u));
+    uint64_t measured = 0;
+    for (unsigned i = 0; i < HIKARU_PROFILE_COUNT; ++i) measured += engine->profile.window[i];
+    CHECK(profile ? measured > 0 : measured == 0);
+    if (profile) CHECK(engine->profile.window[HIKARU_PROFILE_MASTER] > 0);
+    check_frame_packet_api(engine, &frame);
+    check_state_roundtrip(engine);
     CHECK(!hikaru_engine_release_graphics(engine));
     SDL_GL_DeleteContext(context);
     context = NULL;

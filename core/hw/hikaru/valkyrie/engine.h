@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 typedef struct HikaruEngine HikaruEngine;
+typedef struct HikaruFrame HikaruFrame;
 typedef enum {
     HIKARU_ENGINE_GAME_AIRTRIX = 0,
     HIKARU_ENGINE_GAME_BRAVEFF = 1,
@@ -73,7 +74,8 @@ typedef struct {
 } HikaruEngineSound;
 
 // Requires a current OpenGL 3.2 or OpenGL ES 3.0 context for graphics calls.
-// Calls must be serialized; only one instance is supported. ROM contents are
+// Machine/control calls must be serialized; completed packet drawing may
+// overlap frame building as described below. Only one instance is supported. ROM contents are
 // copied unless borrow_cartridge is set. BIOS EEPROM bypass is an upstream compatibility patch and must be
 // explicitly enabled. The caller retains ownership of MIE, protection, context
 // and target; protection callbacks receive absolute external-bus addresses.
@@ -94,6 +96,19 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     uint32_t target_fbo, unsigned width, unsigned height,
     int allow_bios_eeprom_bypass, char *error, size_t error_size);
 int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inputs);
+// Reusable host-only graphics packets. Creation/destruction and frame building
+// require no graphics context. Build is serialized with machine/state/sound
+// access; drawing a different completed packet may run concurrently on the
+// graphics thread. A packet remains exclusively owned until drawing returns.
+HikaruFrame *hikaru_frame_create(void);
+void hikaru_frame_destroy(HikaruFrame *frame);
+int hikaru_engine_build_frame(HikaruEngine *engine, const HikaruEngineInputs *inputs, HikaruFrame *frame);
+// Requires the current graphics context/scope. Errors are separate from the
+// emulation thread's engine error buffer. Packets retain no graphics handles.
+int hikaru_engine_draw_frame(HikaruEngine *engine, HikaruFrame *frame, char *error, size_t error_size);
+// After discarding accepted packets, rebase the next draw against live RAM.
+// CPU-only, serialized with frame building; retains the live CP strip carry.
+void hikaru_engine_discard_frames(HikaruEngine *engine);
 // Frame-boundary, native-layout snapshots; external I/O/audio are saved by the
 // host. A load requires the exact measured size and a current graphics scope.
 // layout changes reject incompatible native CPU/GPU layouts before mutation.

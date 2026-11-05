@@ -116,6 +116,48 @@ working audio queue is pacing the game. This avoids an extra display wait after
 a slow frame. Unsupported drivers fall back to ordinary VSync. Every guest
 frame is rendered; automatic frame skipping is not enabled.
 
+## Shared performance paths and diagnostics
+
+With multi-threading enabled, one worker advances both SH-4 CPUs and their
+shared devices while the graphics thread renders the preceding frame. Two
+reusable packets retain each frame's geometry, textures, bitmap layers and
+lighting state; the renderer never reads memory being changed by the worker.
+The graphics thread owns all graphics resources and keeps the selected
+transparency ordering. Queue backpressure limits producer lead to one frame;
+normal rendering does not overwrite or drop completed packets. A one-time
+texture-cache refresh preserves updates when queued work is discarded.
+
+Frame audio is collected with emulation and submitted by the consumer. Pause,
+reset, loading, graphics changes and shutdown quiesce the producer before
+changing machine or graphics ownership. Saving uses a completed machine
+boundary, which may be one frame ahead of the displayed image. Loading discards
+queued work from the prior timeline before presenting restored frames.
+
+Bitmap-layer textures and their 16-bit conversion staging memory are retained
+until the renderer is destroyed. Every active layer still receives a full-image
+update each frame; its alpha, pixel layout and compositing order are unchanged.
+Native texture updates are ordered after prior draws and before later draws.
+
+MEMCTL DMA can bulk-copy disjoint, contiguous plain little-endian RAM ranges.
+Overlaps, custom buffer accessors, device windows and other bus side effects
+retain the per-word path. Both paths consume staging data immediately at the
+start command, preserving VON4's model-loader requirements.
+
+Set the process environment variable `HIKARU_TRACE_TIMING=1` before launch to
+report average host wall time every 60 completed frames. The phase line separates
+master/slave SH-4 execution, MEMCTL DMA, MIE, AICA advance, GPU command processing,
+render submission, host graphics-state preservation and remaining frame work.
+Nested DMA is charged to MEMCTL rather than counted again in its CPU phase.
+Other synchronous device I/O remains in the phase that invoked it. In the
+threaded path, the engine phase line measures producer work, including packet
+capture; drawing is measured separately by the frontend. Rendering measurements
+include host submission and any driver waits, not asynchronous GPU execution
+time. The frontend reports worker wait time, measured build/draw overlap and native
+presentation time; OpenGL's swap remains
+in the outer host timing line. Use that outer total when comparing frame time
+so worker waits and presentation are included. Profiling is off by default and
+does not change guest clocks, scanline boundaries, sorting or audio pacing.
+
 ## Build and run
 
 Hikaru is enabled by default in standalone Windows, Android, Linux and macOS
@@ -134,8 +176,9 @@ flags.
 
 Hikaru follows the selected graphics API: OpenGL 3.2 on desktop or OpenGL ES
 3.0 on Android, with native Metal and Vulkan renderers where those backends
-are available. Loading a supported game disables threaded rendering for that
-session. Runtime scene checks have been performed with Metal and Vulkan on
+are available. The Advanced **Multi-threading** setting enables Hikaru's
+bounded emulation/render pipeline; disabling it uses the direct frame path.
+Runtime scene checks have been performed with Metal and Vulkan on
 macOS; other platform and graphics-API combinations remain unverified.
 Direct3D has no Hikaru renderer. ES2-only hardware keeps the existing
 Dreamcast path; Hikaru itself is rejected there at load time.
@@ -144,12 +187,13 @@ Dreamcast path; Hikaru itself is rejected there at load time.
 per-pixel sorting for translucent geometry. Per-strip sorts retained strips
 by transformed depth centroid; per-triangle sorts individual triangles by
 their transformed depth centroids. Per-pixel sorting uses depth peeling and
-retains the configured **Maximum Layers** count, from 1 to 32 (default 32).
+retains the configured **Maximum Layers** count, from 1 to 128 (default 32).
 If another layer is present beyond that bound, deeper fragments are discarded
 and a warning is reported. Hikaru keeps its sorting and layer settings separate
 from Dreamcast/Naomi. Returning to those systems recreates their requested
-host renderer. The pixel-buffer memory budget and multi-threading controls do
-not apply to Hikaru and are hidden while it is selected.
+host renderer. Hikaru retains its per-pixel layer setting when changing the
+graphics API. The pixel-buffer memory budget applies to its depth-peeling
+storage.
 
 Peeling uses GPU visibility queries, rather than full-frame color readbacks,
 to detect an empty layer. It still requires a query result before selecting

@@ -6,12 +6,100 @@
 #include "mach/hikaru/hikaru.h"
 #include "mach/hikaru/hikaru-gpu-private.h"
 #include "mach/hikaru/hikaru-renderer.h"
+#include "mach/hikaru/hikaru-renderer-private.h"
 #include "vk/input.h"
 #include "graphics_dispatch.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 unsigned vk_verbosity = 0;
 static _Thread_local HikaruEngine *activeEngine;
+/* Rendering can overlap machine execution. Its abort target and diagnostics
+ * must never share the producer's engine->fatal/error storage. */
+static _Thread_local jmp_buf *graphicsFatal;
+static _Thread_local char *graphicsError;
+static _Thread_local size_t graphicsErrorSize;
 static HikaruEngine *liveEngine;
+
+static uint64_t profile_clock(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER counter;
+    return QueryPerformanceCounter(&counter) ? (uint64_t)counter.QuadPart : 0;
+#else
+    struct timespec counter;
+    if (clock_gettime(CLOCK_MONOTONIC, &counter) != 0) return 0;
+    return (uint64_t)counter.tv_sec * UINT64_C(1000000000) + (uint64_t)counter.tv_nsec;
+#endif
+}
+
+static void profile_init(HikaruEngine *engine)
+{
+    if (!getenv("HIKARU_TRACE_TIMING")) return;
+#ifdef _WIN32
+    LARGE_INTEGER frequency;
+    if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) return;
+    engine->profile.frequency = (uint64_t)frequency.QuadPart;
+#else
+    engine->profile.frequency = UINT64_C(1000000000);
+#endif
+    engine->profile.enabled = profile_clock() != 0;
+}
+
+HikaruProfilePhase hikaru_profile_switch(HikaruEngine *engine, HikaruProfilePhase phase)
+{
+    if (!engine || !engine->profile.collecting) return HIKARU_PROFILE_OTHER;
+    const uint64_t now = profile_clock();
+    const HikaruProfilePhase previous = engine->profile.phase;
+    if (engine->profile.last && now >= engine->profile.last)
+        engine->profile.frame[previous] += now - engine->profile.last;
+    engine->profile.last = now;
+    engine->profile.phase = phase;
+    return previous;
+}
+
+static void profile_begin_frame(HikaruEngine *engine)
+{
+    if (!engine->profile.enabled) return;
+    memset(engine->profile.frame, 0, sizeof(engine->profile.frame));
+    engine->profile.phase = HIKARU_PROFILE_OTHER;
+    engine->profile.last = profile_clock();
+    engine->profile.collecting = true;
+}
+
+static void profile_end_frame(HikaruEngine *engine, bool success)
+{
+    if (!engine->profile.collecting) return;
+    hikaru_profile_switch(engine, HIKARU_PROFILE_OTHER);
+    engine->profile.collecting = false;
+    if (!success) return;
+    for (unsigned i = 0; i < HIKARU_PROFILE_COUNT; ++i)
+        engine->profile.window[i] += engine->profile.frame[i];
+    if (++engine->profile.frames != 60) return;
+    const double scale = 1000.0 / (double)engine->profile.frequency / engine->profile.frames;
+    double ms[HIKARU_PROFILE_COUNT], total = 0;
+    for (unsigned i = 0; i < HIKARU_PROFILE_COUNT; ++i) {
+        ms[i] = (double)engine->profile.window[i] * scale;
+        total += ms[i];
+    }
+    const hikaru_t *board = (const hikaru_t *)engine->machine;
+    fprintf(stderr, "Hikaru phase timing: game=%s frames=%u cpu_mhz=%u master_ms=%.3f slave_ms=%.3f memctl_ms=%.3f mie_ms=%.3f aica_ms=%.3f gpu_cp_ms=%.3f render_submit_ms=%.3f gl_state_ms=%.3f other_ms=%.3f total_ms=%.3f\n",
+        engine->game.name, engine->profile.frames, board->cpu_clock_mhz,
+        ms[HIKARU_PROFILE_MASTER], ms[HIKARU_PROFILE_SLAVE], ms[HIKARU_PROFILE_MEMCTL],
+        ms[HIKARU_PROFILE_MIE], ms[HIKARU_PROFILE_SOUND], ms[HIKARU_PROFILE_GPU],
+        ms[HIKARU_PROFILE_RENDER], ms[HIKARU_PROFILE_GL_STATE], ms[HIKARU_PROFILE_OTHER], total);
+    memset(engine->profile.window, 0, sizeof(engine->profile.window));
+    engine->profile.frames = 0;
+}
 
 int hikaru_engine_get_cabinet_defaults(const HikaruEngine *engine, uint8_t *data, size_t size)
 {
@@ -64,6 +152,13 @@ uint64_t vk_host_diagnostic(void *host, unsigned kind, uint32_t address)
 _Noreturn void vk_host_abort(const char *file, int line, const char *function, const char *format, ...)
 {
     (void)file; (void)line; (void)function;
+    if (graphicsFatal) {
+        va_list args;
+        va_start(args, format);
+        vsnprintf(graphicsError, graphicsErrorSize, format, args);
+        va_end(args);
+        longjmp(*graphicsFatal, 1);
+    }
     if (activeEngine) {
         va_list args;
         va_start(args, format);
@@ -221,8 +316,11 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     if (!glGetString(GL_VERSION)) { set_error(error, error_size, "A current OpenGL 3.2 or OpenGL ES 3.0 context is required"); return NULL; }
     HikaruEngine *engine = calloc(1, sizeof(*engine));
     if (!engine) { set_error(error, error_size, "Out of memory"); return NULL; }
+    profile_init(engine);
     engine->transparency_peel_capacity = HIKARU_DEFAULT_TRANSPARENCY_LAYERS;
     engine->transparency_memory_budget = HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
+    engine->internal_width = 640;
+    engine->internal_height = 480;
     liveEngine = engine;
     engine->mie = *mie;
     engine->protection = *protection;
@@ -393,6 +491,8 @@ int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inpu
     engine->frame_started = true;
     engine->error[0] = '\0';
     engine->mie.set_inputs(engine->mie.opaque, inputs);
+    profile_begin_frame(engine);
+    hikaru_profile_switch(engine, HIKARU_PROFILE_GL_STATE);
     HostGlState glState;
     save_gl_state(&glState);
     if (getenv("HIKARU_TRACE_FRAME")) {
@@ -406,20 +506,123 @@ int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inpu
         }
     }
     prepare_gl();
+    hikaru_profile_switch(engine, HIKARU_PROFILE_OTHER);
     activeEngine = engine;
     if (setjmp(engine->fatal)) {
         activeEngine = NULL;
+        profile_end_frame(engine, false);
         restore_gl_state(&glState);
         return -1;
     }
+    hikaru_renderer_t *renderer = (hikaru_renderer_t *)engine->machine->renderer;
+    if (renderer->capture_started || renderer->capture_invalidate_all) {
+        // A displayed packet can trail live machine RAM. Switching back to
+        // direct drawing must not reuse textures from that older snapshot;
+        // the next capture transition also starts with a full invalidation.
+        hikaru_renderer_invalidate_texcache(&renderer->base, NULL);
+        renderer->capture_started = false;
+        renderer->capture_invalidate_all = false;
+    }
     vk_renderer_begin_frame(engine->machine->renderer);
     int status = vk_machine_run_frame(engine->machine);
+    hikaru_profile_switch(engine, HIKARU_PROFILE_RENDER);
     if (!status && !engine->error[0]) vk_renderer_end_frame(engine->machine->renderer);
+    hikaru_profile_switch(engine, HIKARU_PROFILE_GL_STATE);
     restore_gl_state(&glState);
+    profile_end_frame(engine, !status && !engine->error[0]);
     activeEngine = NULL;
     if (status || engine->error[0]) return -1;
     return 0;
 }
+
+int hikaru_engine_build_frame(HikaruEngine *engine, const HikaruEngineInputs *inputs, HikaruFrame *frame)
+{
+    if (!engine || !engine->machine || !engine->machine->renderer || !inputs || !frame || !frame->capture)
+        return -1;
+    vk_renderer_t *renderer = engine->machine->renderer;
+    hikaru_gpu_t *gpu = (hikaru_gpu_t *)((hikaru_t *)engine->machine)->gpu;
+    engine->frame_started = true;
+    engine->error[0] = '\0';
+    frame->ready = false;
+    engine->mie.set_inputs(engine->mie.opaque, inputs);
+    profile_begin_frame(engine);
+    activeEngine = engine;
+    if (setjmp(engine->fatal)) {
+        hikaru_renderer_end_capture(renderer, gpu);
+        activeEngine = NULL;
+        profile_end_frame(engine, false);
+        return -1;
+    }
+    hikaru_renderer_t *capture = frame->capture;
+    capture->base.internal_width = engine->internal_width;
+    capture->base.internal_height = engine->internal_height;
+    capture->transparency_sorting = engine->transparency_sorting;
+    capture->transparency_peel_capacity = engine->transparency_peel_capacity;
+    capture->transparency_memory_budget = engine->transparency_memory_budget;
+    hikaru_renderer_begin_capture(renderer, gpu, frame);
+    int status = vk_machine_run_frame(engine->machine);
+    if (!status && !engine->error[0]) hikaru_renderer_seal_capture(renderer, gpu, frame);
+    hikaru_renderer_end_capture(renderer, gpu);
+    activeEngine = NULL;
+    profile_end_frame(engine, !status && !engine->error[0]);
+    return status || engine->error[0] ? -1 : 0;
+}
+
+void hikaru_engine_discard_frames(HikaruEngine *engine)
+{
+    if (engine && engine->machine && engine->machine->renderer)
+        ((hikaru_renderer_t *)engine->machine->renderer)->capture_invalidate_all = true;
+}
+
+int hikaru_engine_draw_frame(HikaruEngine *engine, HikaruFrame *frame, char *error, size_t error_size)
+{
+    if (!engine || !engine->machine || !engine->machine->renderer || !frame || !frame->ready || graphicsFatal) {
+        set_error(error, error_size, "Invalid Hikaru graphics packet or draw state");
+        return -1;
+    }
+    vk_renderer_t *renderer = engine->machine->renderer;
+    HostGlState host;
+    save_gl_state(&host);
+    jmp_buf fatal;
+    char localError[256];
+    graphicsError = error && error_size ? error : localError;
+    graphicsErrorSize = error && error_size ? error_size : sizeof(localError);
+    graphicsError[0] = '\0';
+    graphicsFatal = &fatal;
+    volatile bool cleaning = false;
+    int failed = setjmp(fatal);
+    if (!failed) {
+        prepare_gl();
+        hikaru_renderer_draw_packet(renderer, frame);
+    }
+    if (!cleaning) {
+        cleaning = true;
+        hikaru_renderer_finish_packet(renderer, frame);
+    }
+    // A valid draw attempt consumes its packet even if graphics preparation
+    // failed before the renderer borrowed it. Recovery must rebuild the frame.
+    frame->ready = false;
+    graphicsFatal = NULL;
+    graphicsError = NULL;
+    graphicsErrorSize = 0;
+    restore_gl_state(&host);
+    return failed ? -1 : 0;
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+int hikaru_vendor_test_frame_packet_ownership(HikaruEngine *engine)
+{
+    if (!engine || !engine->machine || !engine->machine->renderer) return 0;
+    activeEngine = engine;
+    int result = 0;
+    if (!setjmp(engine->fatal))
+        result = hikaru_vendor_test_packet_ownership(engine->machine->renderer,
+            ((hikaru_t *)engine->machine)->gpu);
+    activeEngine = NULL;
+    return result;
+}
+#endif
+
 void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height)
 {
     if (!engine || !engine->machine || !engine->machine->renderer || !width || !height) return;
@@ -506,6 +709,8 @@ int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height)
     }
     engine->machine->renderer->internal_width = width;
     engine->machine->renderer->internal_height = height;
+    engine->internal_width = width;
+    engine->internal_height = height;
     return 0;
 }
 int hikaru_engine_set_transparency_sorting(HikaruEngine *engine, HikaruTransparencySorting sorting)

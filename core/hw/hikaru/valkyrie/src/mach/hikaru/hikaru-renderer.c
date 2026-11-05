@@ -29,6 +29,8 @@
 #ifdef HIKARU_VENDOR_TESTING
 static bool fail_renderer_init_once;
 void hikaru_vendor_test_fail_renderer_init(void) { fail_renderer_init_once = true; }
+static _Thread_local bool fail_packet_draw_once;
+void hikaru_vendor_test_fail_next_packet_draw(void) { fail_packet_draw_once = true; }
 #endif
 
 #define VP0	VP.scratch
@@ -204,12 +206,11 @@ valid_layer_span (const vk_buffer_t *fb, uint32_t x, uint32_t y, unsigned row_by
 
 /* The 16-bit framebuffer stores adjacent pixels in reversed halfword lanes.
  * Copy into a tightly packed image; the 32-bit layer format is unaffected. */
-static uint8_t *
-decode_layer_abgr1555 (const vk_buffer_t *fb, uint32_t x, uint32_t y)
+static bool
+decode_layer_abgr1555_into (const vk_buffer_t *fb, uint32_t x, uint32_t y,
+                            uint8_t *out)
 {
-	if (!valid_layer_span (fb, x, y, 640 * 2)) return NULL;
-	uint8_t *out = malloc (640 * 480 * 2);
-	if (!out) return NULL;
+	if (!out || !valid_layer_span (fb, x, y, 640 * 2)) return false;
 	const uint64_t start = (uint64_t) y * 4096 + (uint64_t) x * 4;
 	for (unsigned row = 0; row < 480; ++row) {
 		const uint8_t *src = fb->ptr + start + (uint64_t) row * 4096;
@@ -219,8 +220,21 @@ decode_layer_abgr1555 (const vk_buffer_t *fb, uint32_t x, uint32_t y)
 			dst[byte + 2] = src[byte]; dst[byte + 3] = src[byte + 1];
 		}
 	}
+	return true;
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+static uint8_t *
+decode_layer_abgr1555 (const vk_buffer_t *fb, uint32_t x, uint32_t y)
+{
+	uint8_t *out = malloc (640 * 480 * 2);
+	if (!out || !decode_layer_abgr1555_into (fb, x, y, out)) {
+		free (out);
+		return NULL;
+	}
 	return out;
 }
+#endif
 
 static void *
 decode_texture_abgr1111 (vk_buffer_t *texram,
@@ -287,24 +301,42 @@ int hikaru_vendor_test_texture_wrap_changed(uint32_t left, uint32_t right)
 
 #undef PUT16
 
-/* ES 3 has no reversed 16-bit pixel types. Convert cached texture uploads
- * to RGBA8 there, respecting the guest row/skip layout already validated by
- * the caller. Desktop GL keeps its direct packed upload. */
+/* ES 3 has no reversed 16-bit pixel types. Convert packed uploads to RGBA8
+ * while retaining the caller's optional destination for recurring layers. */
 static int
-upload_abgr16(GLint level, GLenum internal_format, unsigned width, unsigned height,
-              GLenum type, const void *data)
+upload_abgr16(bool define, GLint level, GLenum internal_format,
+              unsigned width, unsigned height, GLenum type, const void *data,
+              uint8_t **rgba_staging, size_t *rgba_staging_size)
 {
 	if (!vk_renderer_is_gles()) {
-		glTexImage2D(GL_TEXTURE_2D, level, internal_format, width, height, 0, GL_RGBA, type, data);
+		if (define)
+			glTexImage2D(GL_TEXTURE_2D, level, internal_format, width, height, 0,
+			             GL_RGBA, type, data);
+		else
+			glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, width, height, GL_RGBA, type, data);
 		return 0;
 	}
 	if (!width || !height || width > SIZE_MAX / height / 4) return -1;
+	if ((rgba_staging == NULL) != (rgba_staging_size == NULL)) return -1;
 	GLint row_length, skip_rows, skip_pixels;
 	glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
 	glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
 	glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skip_pixels);
 	const size_t stride = (row_length ? (unsigned)row_length : width) * 2u;
-	uint8_t *rgba = malloc((size_t)width * height * 4);
+	const size_t rgba_size = (size_t) width * height * 4;
+	const bool retain_rgba = rgba_staging != NULL;
+	uint8_t *rgba;
+	if (retain_rgba) {
+		if (!*rgba_staging || *rgba_staging_size < rgba_size) {
+			uint8_t *resized = realloc (*rgba_staging, rgba_size);
+			if (!resized) return -1;
+			*rgba_staging = resized;
+			*rgba_staging_size = rgba_size;
+		}
+		rgba = *rgba_staging;
+	} else {
+		rgba = malloc (rgba_size);
+	}
 	if (!rgba) return -1;
 	for (unsigned y = 0; y < height; ++y) {
 		const uint8_t *src = (const uint8_t *)data + ((size_t)skip_rows + y) * stride + (size_t)skip_pixels * 2;
@@ -327,8 +359,13 @@ upload_abgr16(GLint level, GLenum internal_format, unsigned width, unsigned heig
 	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 	glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
 	glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-	glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-	free(rgba);
+	if (define)
+		glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, width, height, 0,
+		             GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	else
+		glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, width, height,
+		                GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	if (!retain_rgba) free(rgba);
 	glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
 	glPixelStorei(GL_UNPACK_SKIP_ROWS, skip_rows);
 	glPixelStorei(GL_UNPACK_SKIP_PIXELS, skip_pixels);
@@ -362,7 +399,7 @@ int hikaru_vendor_test_abgr_upload(void)
     for (unsigned i = 0; i < 2; ++i) {
         uint8_t actual[16] = {0};
         GLint row, skip_rows, skip_pixels;
-        if (upload_abgr16(0, formats[i], 2, 2, types[i], samples[i])) { ok = 0; break; }
+        if (upload_abgr16(true, 0, formats[i], 2, 2, types[i], samples[i], NULL, NULL)) { ok = 0; break; }
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) { ok = 0; break; }
         glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, actual);
@@ -428,7 +465,8 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 			glPixelStorei (GL_UNPACK_SKIP_PIXELS, basex);
 			VK_ASSERT_NO_GL_ERROR ();
 	
-			if (upload_abgr16(level, GL_RGB5_A1, w, h, GL_UNSIGNED_SHORT_1_5_5_5_REV, data)) goto fail;
+			if (upload_abgr16(true, level, GL_RGB5_A1, w, h,
+			                  GL_UNSIGNED_SHORT_1_5_5_5_REV, data, NULL, NULL)) goto fail;
 			VK_ASSERT_NO_GL_ERROR ();
 			break;
 		case HIKARU_FORMAT_ABGR4444:
@@ -437,7 +475,8 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 			glPixelStorei (GL_UNPACK_SKIP_PIXELS, basex);
 			VK_ASSERT_NO_GL_ERROR ();
 	
-			if (upload_abgr16(level, GL_RGBA4, w, h, GL_UNSIGNED_SHORT_4_4_4_4_REV, data)) goto fail;
+			if (upload_abgr16(true, level, GL_RGBA4, w, h,
+			                  GL_UNSIGNED_SHORT_4_4_4_4_REV, data, NULL, NULL)) goto fail;
 			VK_ASSERT_NO_GL_ERROR ();
 			break;
 		case HIKARU_FORMAT_LA8:
@@ -468,7 +507,9 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 			glPixelStorei (GL_UNPACK_SKIP_ROWS, 0);
 			glPixelStorei (GL_UNPACK_SKIP_PIXELS, 0);
 
-			const int uploaded = upload_abgr16(level, GL_RGBA4, w * 2, h * 2, GL_UNSIGNED_SHORT_4_4_4_4_REV, data);
+			const int uploaded = upload_abgr16(true, level, GL_RGBA4, w * 2, h * 2,
+			                                   GL_UNSIGNED_SHORT_4_4_4_4_REV, data,
+			                                   NULL, NULL);
 			VK_ASSERT_NO_GL_ERROR ();
 
 			free (data);
@@ -551,7 +592,11 @@ get_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 void
 hikaru_renderer_note_cpu_texram_write (vk_renderer_t *renderer)
 {
-	if (renderer) ((hikaru_renderer_t *)renderer)->textures.cpu_dirty = true;
+	if (renderer) {
+		hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
+		if (hr->capture_target) hr = hr->capture_target;
+		hr->textures.cpu_dirty = true;
+	}
 }
 
 #ifdef HIKARU_VENDOR_TESTING
@@ -640,6 +685,18 @@ hikaru_renderer_invalidate_texcache (vk_renderer_t *rend, hikaru_texhead_t *th)
 	hikaru_renderer_t *hr = (hikaru_renderer_t *) rend;
 
 	VK_ASSERT (hr);
+
+	if (hr->capture_only) {
+		/* DMA runs on the producer. Cache handles belong to the consumer;
+		 * retain bounded invalidations and conservatively flush on overflow. */
+		if (!th || hr->num_invalidations == NUMELEM(hr->invalidations)) {
+			hr->invalidate_all = true;
+			hr->num_invalidations = 0;
+		} else if (!hr->invalidate_all) {
+			hr->invalidations[hr->num_invalidations++] = *th;
+		}
+		return;
+	}
 
 	if (th == NULL) {
 		clear_texcache_bank (hr, 0);
@@ -2482,6 +2539,16 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 
 	VK_ASSERT (mesh);
 	if (!mesh->num_tris || !mesh->num_instances) return;
+	if (!mesh->vbo && !mesh->vertex_chunk && mesh->cpu_vertices) {
+		/* Capturing cannot create a VBO when the shared CPU chunks fill.
+		 * Upload that retained fallback only after entering the graphics thread. */
+		if (!hr->meshes.vao) glGenVertexArrays(1, &hr->meshes.vao);
+		glBindVertexArray(hr->meshes.vao);
+		glGenBuffers(1, &mesh->vbo);
+		glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo);
+		glBufferData(GL_ARRAY_BUFFER, (size_t)mesh->num_tris * 3 * sizeof(*mesh->cpu_vertices),
+		             mesh->cpu_vertices, GL_DYNAMIC_DRAW);
+	}
 	VK_ASSERT (mesh->vbo || mesh->vertex_chunk);
 
 	LOG ("==== DRAWING MESH @%p (#vertices=%u #instances=%u) ====",
@@ -3002,6 +3069,8 @@ upload_vertex_data (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	size_t bytes = sizeof(hikaru_vertex_body_t) * (size_t)mesh->num_tris * 3;
 	free(mesh->cpu_vertices);
 	mesh->cpu_vertices = bytes ? malloc(bytes) : NULL;
+	if (bytes && hr->capture_only && !mesh->cpu_vertices)
+		VK_ABORT("Hikaru captured vertex allocation failed");
 	if (bytes && mesh->cpu_vertices)
 		memcpy(mesh->cpu_vertices, hr->push.all, bytes);
 	if (bytes && bytes <= VERTEX_CHUNK_SIZE) {
@@ -3019,6 +3088,8 @@ upload_vertex_data (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 			return;
 		}
 	}
+
+	if (hr->capture_only) return;
 
 	/* Generate the VAO if required. */
 	if (!hr->meshes.vao) {
@@ -3062,6 +3133,16 @@ hikaru_renderer_begin_mesh (vk_renderer_t *rend, uint32_t addr,
 
 	/* Create a new mesh. */
 	VK_ASSERT (mesh_index < MAX_MESHES);
+	if (hr->capture_only && mesh_index == hr->capacity_meshes[vp_index][polytype]) {
+		/* A packet allocates only buckets actually used by the guest, rather
+		 * than multiplying the serial renderer's full mesh arena by two. */
+		uint32_t capacity = hr->capacity_meshes[vp_index][polytype];
+		uint32_t grown = capacity ? MIN2(capacity * 2, MAX_MESHES) : 64;
+		void *meshes = realloc(hr->mesh_list[vp_index][polytype], grown * sizeof(*mesh));
+		if (!meshes) VK_ABORT("Hikaru captured mesh allocation failed");
+		hr->mesh_list[vp_index][polytype] = meshes;
+		hr->capacity_meshes[vp_index][polytype] = grown;
+	}
 	mesh = &hr->mesh_list[vp_index][polytype][mesh_index++];
 
 	hr->num_meshes[vp_index][polytype] = mesh_index;
@@ -3609,10 +3690,27 @@ static void
 release_vertex_chunks (hikaru_renderer_t *hr)
 {
 	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) {
-		if (hr->vertex_chunks[i].vbo) glDeleteBuffers (1, &hr->vertex_chunks[i].vbo);
-		if (hr->vertex_chunks[i].vao) glDeleteVertexArrays (1, &hr->vertex_chunks[i].vao);
+		if (hr->capture_only)
+			VK_ASSERT(!hr->vertex_chunks[i].vbo && !hr->vertex_chunks[i].vao);
+		if (!hr->capture_only && hr->vertex_chunks[i].vbo) glDeleteBuffers (1, &hr->vertex_chunks[i].vbo);
+		if (!hr->capture_only && hr->vertex_chunks[i].vao) glDeleteVertexArrays (1, &hr->vertex_chunks[i].vao);
 		hr->vertex_chunks[i].vbo = hr->vertex_chunks[i].vao = 0;
 		hr->vertex_chunks[i].used = 0;
+	}
+}
+
+static void
+release_pending_frame_handles(hikaru_renderer_t *hr)
+{
+	/* Keep counts until a deletion returns. Retrying deletion after an
+	 * aborted backend call is safe, with no intervening resource creation. */
+	if (hr->pending_buffer_count) {
+		glDeleteBuffers((GLsizei)hr->pending_buffer_count, hr->pending_buffers);
+		hr->pending_buffer_count = 0;
+	}
+	if (hr->pending_vao_count) {
+		glDeleteVertexArrays((GLsizei)hr->pending_vao_count, hr->pending_vaos);
+		hr->pending_vao_count = 0;
 	}
 }
 
@@ -3626,7 +3724,8 @@ clear_frame_meshes (hikaru_renderer_t *hr)
 			if (hr->mesh_list[vpi][i])
 				for (unsigned j = 0; j < hr->num_meshes[vpi][i]; ++j) {
 					hikaru_mesh_t *mesh = &hr->mesh_list[vpi][i][j];
-					if (mesh->vbo) glDeleteBuffers(1, &mesh->vbo);
+					if (hr->capture_only) VK_ASSERT(!mesh->vbo);
+					if (!hr->capture_only && mesh->vbo) glDeleteBuffers(1, &mesh->vbo);
 					mesh->vbo = 0;
 					free(mesh->cpu_vertices);
 					mesh->cpu_vertices = NULL;
@@ -3640,6 +3739,10 @@ destroy_3d_state (hikaru_renderer_t *hr)
 {
 	unsigned vpi, i;
 
+	release_pending_frame_handles(hr);
+	free(hr->pending_buffers);
+	hr->pending_buffers = NULL;
+	hr->pending_buffer_capacity = 0;
 	clear_frame_meshes (hr);
 	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i)
 		free(hr->vertex_chunks[i].data);
@@ -3960,13 +4063,23 @@ destroy_fb_state (hikaru_renderer_t *hr)
 	vk_renderer_destroy_program (hr->framebuffer.program);
 }
 
+#ifdef HIKARU_VENDOR_TESTING
+static unsigned layer_texture_definitions, layer_texture_updates;
+#endif
+
+/* Layer contents may change anywhere each frame; retain storage but upload
+ * the complete image whenever the layer is selected. */
 static void
-upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, GLuint *id, float *mult)
+upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, unsigned slot,
+              GLuint *id, float *mult)
 {
+	hikaru_layer_texture_t *texture = &hr->layer_upload.textures[slot];
 	void *data;
-	uint8_t *staging = NULL;
 	uint64_t start;
 	unsigned row_bytes;
+	const unsigned width = 640, height = 480;
+	const bool new_texture = texture->id == 0;
+	bool new_storage;
 
 	LOG ("uploading LAYER %s", get_layer_str (layer));
 
@@ -3978,49 +4091,57 @@ upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, GLuint *id, float *m
 	data = vk_buffer_get_ptr (hr->gpu->fb, (uint32_t)start);
 	if (!data) VK_ABORT("invalid Hikaru layer address");
 
-	/* Upload the layer data to a new texture. */
-	glGenTextures (1, id);
+	if (new_texture) {
+		glGenTextures (1, &texture->id);
+		if (!texture->id) VK_ABORT("could not allocate Hikaru layer texture");
+	}
+	*id = texture->id;
+	new_storage = new_texture || !texture->storage_valid ||
+	              texture->format != layer->format ||
+	              texture->width != width || texture->height != height;
 	glActiveTexture (GL_TEXTURE0 + 0);
-	glBindTexture (GL_TEXTURE_2D, *id);
+	glBindTexture (GL_TEXTURE_2D, texture->id);
 	VK_ASSERT_NO_GL_ERROR ();
 
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	VK_ASSERT_NO_GL_ERROR ();
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	VK_ASSERT_NO_GL_ERROR ();
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-	VK_ASSERT_NO_GL_ERROR ();
+	if (new_texture) {
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+	}
 
 	glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
 	glPixelStorei (GL_UNPACK_SKIP_ROWS, 0);
 	glPixelStorei (GL_UNPACK_SKIP_PIXELS, 0);
 	switch (layer->format) {
 	case HIKARU_FORMAT_ABGR1555:
-		staging = decode_layer_abgr1555 (hr->gpu->fb, layer->x0, layer->y0);
-		if (!staging) {
-			glDeleteTextures (1, id);
-			*id = 0;
-			VK_ABORT("could not allocate Hikaru layer staging buffer");
+		if (!hr->layer_upload.abgr1555_staging) {
+			hr->layer_upload.abgr1555_staging = malloc (width * height * 2);
+			if (!hr->layer_upload.abgr1555_staging)
+				VK_ABORT("could not allocate Hikaru layer staging buffer");
 		}
-		glPixelStorei (GL_UNPACK_ROW_LENGTH, 640);
-
-		const int uploaded = upload_abgr16(0, GL_RGB5_A1, 640, 480, GL_UNSIGNED_SHORT_1_5_5_5_REV, staging);
-		free (staging);
-		staging = NULL;
+		if (!decode_layer_abgr1555_into (hr->gpu->fb, layer->x0, layer->y0,
+		                                 hr->layer_upload.abgr1555_staging))
+			VK_ABORT("could not decode Hikaru layer pixels");
+		glPixelStorei (GL_UNPACK_ROW_LENGTH, width);
+		const int uploaded = upload_abgr16 (new_storage, 0, GL_RGB5_A1, width, height,
+		                                    GL_UNSIGNED_SHORT_1_5_5_5_REV,
+		                                    hr->layer_upload.abgr1555_staging,
+		                                    &hr->layer_upload.rgba8_staging,
+		                                    &hr->layer_upload.rgba8_staging_size);
 		if (uploaded) VK_ABORT("could not upload Hikaru layer pixels");
 
 		*mult = 1.0f;
 		break;
 	case HIKARU_FORMAT_A2BGR10:
 		glPixelStorei (GL_UNPACK_ROW_LENGTH, 1024);
-
-		glTexImage2D (GL_TEXTURE_2D, 0,
-		              GL_RGB10_A2,
-		              640, 480, 0,
-		              GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV,
-		              data);
+		if (new_storage)
+			glTexImage2D (GL_TEXTURE_2D, 0, GL_RGB10_A2, width, height, 0,
+			              GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, data);
+		else
+			glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, width, height,
+			                 GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, data);
 
 		*mult = 4.0f;
 		break;
@@ -4029,6 +4150,39 @@ upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, GLuint *id, float *m
 	}
 	glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
 	VK_ASSERT_NO_GL_ERROR ();
+	if (new_storage) {
+		texture->format = layer->format;
+		texture->width = width;
+		texture->height = height;
+		texture->storage_valid = true;
+#ifdef HIKARU_VENDOR_TESTING
+		++layer_texture_definitions;
+#endif
+	} else {
+#ifdef HIKARU_VENDOR_TESTING
+		++layer_texture_updates;
+#endif
+	}
+}
+
+static void
+destroy_layer_upload (hikaru_renderer_t *hr)
+{
+	bool deleted_texture = false;
+	for (unsigned i = 0; i < NUMELEM (hr->layer_upload.textures); ++i) {
+		hikaru_layer_texture_t *texture = &hr->layer_upload.textures[i];
+		if (texture->id) {
+			glDeleteTextures (1, &texture->id);
+			deleted_texture = true;
+		}
+		memset (texture, 0, sizeof (*texture));
+	}
+	free (hr->layer_upload.abgr1555_staging);
+	hr->layer_upload.abgr1555_staging = NULL;
+	free (hr->layer_upload.rgba8_staging);
+	hr->layer_upload.rgba8_staging = NULL;
+	hr->layer_upload.rgba8_staging_size = 0;
+	if (deleted_texture) VK_ASSERT_NO_GL_ERROR ();
 }
 
 /* TODO make use of the framebuffer configuration in the GPU:1A registers,
@@ -4146,11 +4300,11 @@ draw (hikaru_renderer_t *hr)
 	 * for the dual-monitor case.) */
 	if ((LAYERS.layer[0][0].enabled || n1 == 2 || n2 == 2) &&
 	    !hr->debug.flags[HR_DEBUG_NO_LAYER1])
-		upload_layer (hr, &LAYERS.layer[0][0], &layer1, &mult1);
+		upload_layer (hr, &LAYERS.layer[0][0], 0, &layer1, &mult1);
 
 	if ((LAYERS.layer[0][1].enabled || n1 == 3 || n2 == 3) &&
 	    !hr->debug.flags[HR_DEBUG_NO_LAYER2])
-		upload_layer (hr, &LAYERS.layer[0][1], &layer2, &mult2);
+		upload_layer (hr, &LAYERS.layer[0][1], 1, &layer2, &mult2);
 
 
 	/* FBO handles and color texture handles occupy separate namespaces. */
@@ -4214,9 +4368,14 @@ draw (hikaru_renderer_t *hr)
 					for (unsigned m = 0; m < hr->num_meshes[vp][type]; ++m)
 						triangle_count += hr->mesh_list[vp][type][m].num_tris;
 				}
-			hikaru_t *machine = (hikaru_t *) gpu->base.mach;
-			snprintf (master, sizeof(master), "%s", vk_cpu_get_debug_string (machine->sh_m));
-			snprintf (slave, sizeof(slave), "%s", vk_cpu_get_debug_string (machine->sh_s));
+			if (hr->packet_trace) {
+				snprintf(master, sizeof(master), "%s", hr->trace_master);
+				snprintf(slave, sizeof(slave), "%s", hr->trace_slave);
+			} else {
+				hikaru_t *machine = (hikaru_t *) gpu->base.mach;
+				snprintf (master, sizeof(master), "%s", vk_cpu_get_debug_string (machine->sh_m));
+				snprintf (slave, sizeof(slave), "%s", vk_cpu_get_debug_string (machine->sh_s));
+			}
 			GLint pack_buffer, pack_alignment, pack_row_length, pack_skip_rows, pack_skip_pixels, read_fbo, draw_buffer;
 			glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
 			glGetIntegerv (GL_DRAW_BUFFER0, &draw_buffer);
@@ -4254,13 +4413,6 @@ draw (hikaru_renderer_t *hr)
 	glUseProgram (0);
 	VK_ASSERT_NO_GL_ERROR ();
 
-
-	/* Get rid of the layer texture. */
-	if (layer1)
-		glDeleteTextures (1, &layer1);
-	if (layer2)
-		glDeleteTextures (1, &layer2);
-	VK_ASSERT_NO_GL_ERROR ();
 }
 
 /****************************************************************************
@@ -4291,7 +4443,7 @@ hikaru_renderer_begin_frame (vk_renderer_t *renderer)
 
 	update_debug_flags (hr);
 
-	VK_ASSERT_NO_GL_ERROR ();
+	if (!hr->capture_only) VK_ASSERT_NO_GL_ERROR ();
 }
 
 #ifdef HIKARU_VENDOR_TESTING
@@ -4376,9 +4528,577 @@ hikaru_renderer_reset (vk_renderer_t *renderer)
 	clear_frame_meshes ((hikaru_renderer_t *)renderer);
 	hikaru_renderer_invalidate_texcache (renderer, NULL);
 	((hikaru_renderer_t *)renderer)->textures.cpu_dirty = false;
+	((hikaru_renderer_t *)renderer)->capture_started = false;
+	((hikaru_renderer_t *)renderer)->capture_invalidate_all = false;
+	/* Host strip carry is not part of a machine snapshot. Never connect
+	 * restored/reset geometry to vertices from the discarded timeline. */
+	((hikaru_renderer_t *)renderer)->push.num_verts = 0;
+	((hikaru_renderer_t *)renderer)->push.num_tris = 0;
+}
+
+HikaruFrame *
+hikaru_frame_create(void)
+{
+	HikaruFrame *frame = calloc(1, sizeof(*frame));
+	if (!frame) return NULL;
+	frame->capture = calloc(1, sizeof(*frame->capture));
+	frame->fb = vk_buffer_le32_new(8u * 1024 * 1024, 0);
+	frame->texram[0] = vk_buffer_le32_new(4u * 1024 * 1024, 0);
+	frame->texram[1] = vk_buffer_le32_new(4u * 1024 * 1024, 0);
+	if (!frame->capture || !frame->fb || !frame->texram[0] || !frame->texram[1]) {
+		hikaru_frame_destroy(frame);
+		return NULL;
+	}
+	frame->capture->capture_only = true;
+	frame->capture->base.begin_frame = hikaru_renderer_begin_frame;
+	init_debug_flags(frame->capture);
+	return frame;
+}
+
+void
+hikaru_frame_destroy(HikaruFrame *frame)
+{
+	if (!frame) return;
+	hikaru_renderer_t *hr = frame->capture;
+	if (hr) {
+		/* Packets never own GL resources after draw returns. Even an aborted
+		 * context teardown must not make this CPU-only destructor invoke GL. */
+		for (unsigned vp = 0; vp < 8; ++vp)
+			for (unsigned type = 0; type < 8; ++type) {
+				for (unsigned i = 0; i < hr->num_meshes[vp][type]; ++i)
+					free(hr->mesh_list[vp][type][i].cpu_vertices);
+				free(hr->mesh_list[vp][type]);
+			}
+		for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) free(hr->vertex_chunks[i].data);
+		free(hr->vp_list); free(hr->mv_list); free(hr->alternate_mv_list);
+		free(hr->mat_list); free(hr->tex_list); free(hr->ls_list);
+		free(hr);
+	}
+	vk_buffer_destroy(&frame->fb);
+	vk_buffer_destroy(&frame->texram[0]);
+	vk_buffer_destroy(&frame->texram[1]);
+	free(frame);
+}
+
+vk_renderer_t *
+hikaru_renderer_begin_capture(vk_renderer_t *renderer, void *gpu_as_void, HikaruFrame *frame)
+{
+	hikaru_renderer_t *owner = (hikaru_renderer_t *)renderer;
+	hikaru_renderer_t *capture = frame->capture;
+	hikaru_gpu_t *gpu = gpu_as_void;
+	frame->ready = false;
+	capture->gpu = gpu;
+	capture->invalidate_all = !owner->capture_started || owner->capture_invalidate_all;
+	owner->capture_invalidate_all = false;
+	capture->num_invalidations = 0;
+	capture->textures.cpu_dirty = false;
+	owner->capture_started = true;
+	owner->capture_target = capture;
+	gpu->renderer = &capture->base;
+	vk_renderer_begin_frame(&capture->base);
+	/* Only the strip's last few vertices cross packet boundaries. Keeping
+	 * this producer-owned assembler separate avoids touching a drawing slot. */
+	capture->push.num_verts = owner->push.num_verts;
+	memcpy(capture->push.tmp, owner->push.tmp, sizeof(capture->push.tmp));
+	capture->push.num_tris = 0;
+	return &capture->base;
+}
+
+void
+hikaru_renderer_end_capture(vk_renderer_t *renderer, void *gpu_as_void)
+{
+	hikaru_renderer_t *owner = (hikaru_renderer_t *)renderer;
+	((hikaru_gpu_t *)gpu_as_void)->renderer = renderer;
+	owner->capture_target = NULL;
+}
+
+void
+hikaru_renderer_seal_capture(vk_renderer_t *renderer, void *gpu_as_void, HikaruFrame *frame)
+{
+	hikaru_renderer_t *owner = (hikaru_renderer_t *)renderer;
+	hikaru_renderer_t *capture = frame->capture;
+	hikaru_gpu_t *gpu = gpu_as_void;
+	hikaru_gpu_cp_finish_mesh(gpu);
+	owner->push.num_verts = capture->push.num_verts;
+	memcpy(owner->push.tmp, capture->push.tmp, sizeof(owner->push.tmp));
+	VK_ASSERT(gpu->fb->size == frame->fb->size);
+	VK_ASSERT(gpu->texram[0]->size == frame->texram[0]->size);
+	VK_ASSERT(gpu->texram[1]->size == frame->texram[1]->size);
+	memcpy(frame->fb->ptr, gpu->fb->ptr, frame->fb->size);
+	for (unsigned bank = 0; bank < 2; ++bank)
+		memcpy(frame->texram[bank]->ptr, gpu->texram[bank]->ptr, frame->texram[bank]->size);
+	memcpy(&frame->gpu, gpu, sizeof(frame->gpu));
+	/* A frozen GPU is only a draw-state view. It must expose no live machine,
+	 * command RAM, callback, or renderer pointers to the consumer. */
+	memset(&frame->gpu.base, 0, sizeof(frame->gpu.base));
+	frame->gpu.cmdram = NULL;
+	frame->gpu.renderer = NULL;
+	frame->gpu.fb = frame->fb;
+	frame->gpu.texram[0] = frame->texram[0];
+	frame->gpu.texram[1] = frame->texram[1];
+	capture->gpu = &frame->gpu;
+	capture->packet_trace = true;
+	if (getenv("HIKARU_TRACE_FRAME")) {
+		hikaru_t *machine = (hikaru_t *)gpu->base.mach;
+		snprintf(capture->trace_master, sizeof(capture->trace_master), "%s", vk_cpu_get_debug_string(machine->sh_m));
+		snprintf(capture->trace_slave, sizeof(capture->trace_slave), "%s", vk_cpu_get_debug_string(machine->sh_s));
+	}
+	frame->ready = true;
+}
+
+static void
+swap_packet_state(hikaru_renderer_t *hr, hikaru_renderer_t *capture)
+{
+	/* Move CPU payloads, retaining the renderer's context-owned shader,
+	 * texture, framebuffer and sorting workspaces on the graphics thread. */
+#define SWAP_PACKET_FIELD(field) do { \
+	unsigned char saved[sizeof(hr->field)]; \
+	memcpy(saved, &hr->field, sizeof(saved)); \
+	memcpy(&hr->field, &capture->field, sizeof(saved)); \
+	memcpy(&capture->field, saved, sizeof(saved)); \
+} while (0)
+	SWAP_PACKET_FIELD(gpu);
+	SWAP_PACKET_FIELD(vp_list); SWAP_PACKET_FIELD(num_vps); SWAP_PACKET_FIELD(capacity_vps);
+	SWAP_PACKET_FIELD(mv_list); SWAP_PACKET_FIELD(num_mvs); SWAP_PACKET_FIELD(capacity_mvs);
+	SWAP_PACKET_FIELD(alternate_mv_list); SWAP_PACKET_FIELD(num_alternate_mvs); SWAP_PACKET_FIELD(capacity_alternate_mvs);
+	SWAP_PACKET_FIELD(mat_list); SWAP_PACKET_FIELD(num_mats); SWAP_PACKET_FIELD(capacity_mats);
+	SWAP_PACKET_FIELD(tex_list); SWAP_PACKET_FIELD(num_texs); SWAP_PACKET_FIELD(capacity_texs);
+	SWAP_PACKET_FIELD(ls_list); SWAP_PACKET_FIELD(num_lss); SWAP_PACKET_FIELD(capacity_lss);
+	SWAP_PACKET_FIELD(mesh_list); SWAP_PACKET_FIELD(num_meshes); SWAP_PACKET_FIELD(capacity_meshes);
+	SWAP_PACKET_FIELD(total_meshes); SWAP_PACKET_FIELD(num_instances); SWAP_PACKET_FIELD(vertex_chunks);
+	SWAP_PACKET_FIELD(debug); SWAP_PACKET_FIELD(packet_trace);
+	SWAP_PACKET_FIELD(trace_master); SWAP_PACKET_FIELD(trace_slave);
+	SWAP_PACKET_FIELD(base.internal_width); SWAP_PACKET_FIELD(base.internal_height);
+	SWAP_PACKET_FIELD(transparency_sorting); SWAP_PACKET_FIELD(transparency_peel_capacity);
+	SWAP_PACKET_FIELD(transparency_memory_budget);
+#undef SWAP_PACKET_FIELD
+}
+
+void
+hikaru_renderer_draw_packet(vk_renderer_t *renderer, HikaruFrame *frame)
+{
+	hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
+	hikaru_renderer_t *capture = frame->capture;
+	VK_ASSERT(frame->ready && !hr->packet_active);
+	release_pending_frame_handles(hr);
+	size_t required = VERTEX_CHUNK_COUNT;
+	for (unsigned vp = 0; vp < 8; ++vp)
+		for (unsigned type = 0; type < 8; ++type)
+			required += capture->num_meshes[vp][type];
+	if (required > hr->pending_buffer_capacity) {
+		GLuint *buffers = realloc(hr->pending_buffers, required * sizeof(*buffers));
+		if (!buffers) VK_ABORT("Hikaru frame resource tracking allocation failed");
+		hr->pending_buffers = buffers;
+		hr->pending_buffer_capacity = required;
+	}
+	clear_frame_meshes(hr);
+	if (capture->invalidate_all || capture->textures.cpu_dirty)
+		hikaru_renderer_invalidate_texcache(renderer, NULL);
+	else
+		for (unsigned i = 0; i < capture->num_invalidations; ++i)
+			hikaru_renderer_invalidate_texcache(renderer, &capture->invalidations[i]);
+	swap_packet_state(hr, capture);
+	hr->packet_active = true;
+	hr->meshes.variant.full = ~UINT64_C(0);
+	draw(hr);
+#ifdef HIKARU_VENDOR_TESTING
+	if (fail_packet_draw_once) {
+		fail_packet_draw_once = false;
+		VK_ABORT("injected packet draw failure");
+	}
+#endif
+}
+
+void
+hikaru_renderer_finish_packet(vk_renderer_t *renderer, HikaruFrame *frame)
+{
+	hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
+	if (!hr->packet_active) return;
+	swap_packet_state(hr, frame->capture);
+	hr->packet_active = false;
+	frame->ready = false;
+	/* Transfer every handle before any backend call. A failed deletion stays
+	 * with the graphics owner; packet destruction/reuse remains CPU-only. */
+	hikaru_renderer_t *capture = frame->capture;
+	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) {
+		if (capture->vertex_chunks[i].vbo)
+			hr->pending_buffers[hr->pending_buffer_count++] = capture->vertex_chunks[i].vbo;
+		if (capture->vertex_chunks[i].vao)
+			hr->pending_vaos[hr->pending_vao_count++] = capture->vertex_chunks[i].vao;
+		capture->vertex_chunks[i].vbo = capture->vertex_chunks[i].vao = 0;
+		capture->vertex_chunks[i].used = 0;
+	}
+	for (unsigned vp = 0; vp < 8; ++vp)
+		for (unsigned type = 0; type < 8; ++type)
+			for (unsigned i = 0; i < capture->num_meshes[vp][type]; ++i) {
+				hikaru_mesh_t *mesh = &capture->mesh_list[vp][type][i];
+				if (mesh->vbo) hr->pending_buffers[hr->pending_buffer_count++] = mesh->vbo;
+				mesh->vbo = 0;
+			}
+	release_pending_frame_handles(hr);
 }
 
 #ifdef HIKARU_VENDOR_TESTING
+/* Real capture/texture/light paths with a known center pixel. Style 0 produces
+ * red 128*192/255, style 1 blue 192*128/255. A null packet only mutates live
+ * state, allowing both completed packets to be checked against a third state.
+ * Style 3 captures the current state without RAM writes or invalidations. */
+int hikaru_vendor_test_seed_packet_3d(vk_renderer_t *renderer, void *gpu_as_void,
+                                     HikaruFrame *frame, unsigned style)
+{
+    if (!renderer || !gpu_as_void || style > 3) return 0;
+    hikaru_renderer_t *owner = (hikaru_renderer_t *)renderer;
+    hikaru_gpu_t *gpu = gpu_as_void;
+    if (style < 3) {
+        static const uint16_t texels[] = {0x801f, 0xfc00, 0x83e0};
+        static const uint8_t materials[] = {128, 192, 32};
+        static const uint8_t lights[] = {192, 128, 64};
+        for (unsigned bank = 0; bank < 2; ++bank)
+            for (unsigned offset = 0; offset < gpu->texram[bank]->size; offset += 2)
+                vk_buffer_put(gpu->texram[bank], 2, offset, texels[style]);
+        memset(&gpu->state, 0, sizeof(gpu->state));
+        memset(&gpu->fb_config, 0, sizeof(gpu->fb_config));
+        gpu->depth_bias = 0;
+        gpu->fb_config.clear[3] = 255;
+        REG1AUNIT(0, 0x38) = REG1AUNIT(0, 0x3c) = 0;
+        POLY.type = HIKARU_POLYTYPE_OPAQUE;
+        POLY.alpha = 1;
+        VP0.clip.r = 640; VP0.clip.t = 480;
+        VP0.clip.n = 1; VP0.clip.f = 2;
+        VP0.offset.x = 320; VP0.offset.y = 240;
+        for (unsigned axis = 0; axis < 4; ++axis) MV.table[0].mtx[axis][axis] = 1;
+        MAT0.has_texture = 1;
+        MAT0.shading_mode = 1;
+        memset(MAT0.ambient, materials[style], sizeof(MAT0.ambient));
+        TEX0._2C1 = 2u << 29; // Texture times material ambient, before lighting.
+        TEX0.format = HIKARU_FORMAT_ABGR1555;
+        TEX0.slotx = 0x80; TEX0.sloty = 0xc0;
+        LS0.mask = 0xe;
+        for (unsigned light = 0; light < 4; ++light) LS0.lights[light].has_direction = 1;
+        LS0.lights[0].direction[2] = 1;
+        LS0.lights[0].attenuation[0] = LS0.lights[0].attenuation[1] = 1;
+        for (unsigned channel = 0; channel < 3; ++channel) LS0.lights[0].diffuse[channel] = lights[style];
+    }
+    if (!frame) return 1;
+    owner->push.num_verts = 0;
+    hikaru_renderer_t *capture = frame->capture;
+    capture->base.internal_width = 640; capture->base.internal_height = 480;
+    capture->transparency_sorting = HIKARU_TRANSPARENCY_PER_TRIANGLE;
+    capture->transparency_peel_capacity = HIKARU_DEFAULT_TRANSPARENCY_LAYERS;
+    capture->transparency_memory_budget = HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
+    vk_renderer_t *recorder = hikaru_renderer_begin_capture(renderer, gpu, frame);
+    hikaru_renderer_begin_mesh(recorder, 0x100, false);
+    gpu->state.in_mesh = 1;
+    static const float xy[3][2] = {{-1200, -1000}, {1200, -1000}, {0, 1000}};
+    for (unsigned i = 0; i < 3; ++i) {
+        hikaru_vertex_t vertex = {0};
+        vertex.info.alpha = 255;
+        vertex.info.tricap = i == 2 ? 7 : 0;
+        vertex.body.position[0] = xy[i][0]; vertex.body.position[1] = xy[i][1];
+        vertex.body.position[2] = -4;
+        vertex.body.normal[2] = 1;
+        vertex.body.texcoords[0] = vertex.body.texcoords[1] = 8;
+        hikaru_renderer_push_vertices(recorder, &vertex, HR_PUSH_POS | HR_PUSH_NRM | HR_PUSH_TXC, 1);
+    }
+    if (style < 3) hikaru_renderer_note_cpu_texram_write(renderer);
+    hikaru_renderer_seal_capture(renderer, gpu, frame);
+    hikaru_renderer_end_capture(renderer, gpu);
+    return frame->ready;
+}
+
+int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_void)
+{
+    hikaru_renderer_t *owner = (hikaru_renderer_t *)renderer;
+    hikaru_gpu_t *gpu = gpu_as_void;
+    HikaruFrame *first = hikaru_frame_create(), *second = hikaru_frame_create();
+    if (!first || !second) {
+        hikaru_frame_destroy(first); hikaru_frame_destroy(second);
+        return 0;
+    }
+    hikaru_gpu_t saved_gpu = *gpu;
+    uint8_t saved_fb = gpu->fb->ptr[17], saved_tex[2] = {gpu->texram[0]->ptr[31], gpu->texram[1]->ptr[47]};
+    unsigned saved_num_verts = owner->push.num_verts;
+    hikaru_vertex_t saved_strip[4];
+    memcpy(saved_strip, owner->push.tmp, sizeof(saved_strip));
+    bool saved_started = owner->capture_started;
+    bool saved_invalidate_all = owner->capture_invalidate_all;
+    owner->push.num_verts = 0;
+    gpu->state.in_mesh = 0;
+    VP0.depth.func = 0;
+    POLY.type = HIKARU_POLYTYPE_OPAQUE;
+    MV.total = 0;
+    gpu->fb->ptr[17] = 0x39;
+    gpu->texram[0]->ptr[31] = 0x72;
+    gpu->texram[1]->ptr[47] = 0xa4;
+    gpu->fb_config.alpha = 51;
+    gpu->state.light_table[2][9].full = 0x12345678;
+    REG1AUNIT(0, 0x38) = 3;
+    vk_renderer_t *capture = hikaru_renderer_begin_capture(renderer, gpu, first);
+    hikaru_renderer_begin_mesh(capture, 0x100, false);
+    gpu->state.in_mesh = 1;
+    hikaru_vertex_t vertex = {0};
+    vertex.info.alpha = 255;
+    vertex.body.position[0] = 1;
+    hikaru_renderer_push_vertices(capture, &vertex, HR_PUSH_POS, 1);
+    vertex.body.position[0] = 2;
+    hikaru_renderer_push_vertices(capture, &vertex, HR_PUSH_POS, 1);
+    hikaru_renderer_note_cpu_texram_write(renderer);
+    hikaru_renderer_seal_capture(renderer, gpu, first);
+    hikaru_renderer_end_capture(renderer, gpu);
+    int ok = first->ready && first->capture->push.num_verts == 2 &&
+        first->capture->textures.cpu_dirty && !first->gpu.base.mach &&
+        !first->gpu.cmdram && !first->gpu.renderer && first->gpu.fb == first->fb &&
+        first->gpu.texram[0] == first->texram[0] && first->gpu.texram[1] == first->texram[1];
+    gpu->fb->ptr[17] = 0xf1;
+    gpu->texram[0]->ptr[31] = 0xf2;
+    gpu->texram[1]->ptr[47] = 0xf3;
+    gpu->fb_config.alpha = 99;
+    gpu->state.light_table[2][9].full = 0x87654321;
+    REG1AUNIT(0, 0x38) = 0;
+    capture = hikaru_renderer_begin_capture(renderer, gpu, second);
+    hikaru_renderer_begin_mesh(capture, 0x200, false);
+    gpu->state.in_mesh = 1;
+    vertex.body.position[0] = 3;
+    vertex.info.tricap = 7;
+    hikaru_renderer_push_vertices(capture, &vertex, HR_PUSH_POS, 1);
+    hikaru_texhead_t invalidation = {0};
+    hikaru_renderer_invalidate_texcache(capture, &invalidation);
+    hikaru_renderer_seal_capture(renderer, gpu, second);
+    hikaru_renderer_end_capture(renderer, gpu);
+    hikaru_mesh_t *mesh = &second->capture->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
+    ok = ok && first->fb->ptr[17] == 0x39 && first->texram[0]->ptr[31] == 0x72 &&
+        first->texram[1]->ptr[47] == 0xa4 && first->gpu.fb_config.alpha == 51 &&
+        first->gpu.state.light_table[2][9].full == 0x12345678 &&
+        second->fb->ptr[17] == 0xf1 && second->texram[0]->ptr[31] == 0xf2 &&
+        second->texram[1]->ptr[47] == 0xf3 && second->gpu.fb_config.alpha == 99 &&
+        !second->capture->textures.cpu_dirty && second->capture->num_invalidations == 1 &&
+        mesh->num_tris == 1 && mesh->cpu_vertices &&
+        mesh->cpu_vertices[0].position[0] == 1 && mesh->cpu_vertices[1].position[0] == 2 &&
+        mesh->cpu_vertices[2].position[0] == 3;
+    gpu->fb->ptr[17] = saved_fb;
+    gpu->texram[0]->ptr[31] = saved_tex[0];
+    gpu->texram[1]->ptr[47] = saved_tex[1];
+    *gpu = saved_gpu;
+    owner->push.num_verts = saved_num_verts;
+    memcpy(owner->push.tmp, saved_strip, sizeof(saved_strip));
+    owner->capture_started = saved_started;
+    owner->capture_invalidate_all = saved_invalidate_all;
+    hikaru_frame_destroy(first); hikaru_frame_destroy(second);
+    return ok;
+}
+
+static void
+hikaru_vendor_test_store_abgr1555 (vk_buffer_t *fb, const hikaru_layer_t *layer,
+                                    unsigned row, uint16_t pixel)
+{
+	const uint64_t offset = ((uint64_t) layer->y0 + row) * 4096 +
+	                        (uint64_t) layer->x0 * 4 + 2;
+	fb->ptr[offset] = (uint8_t) pixel;
+	fb->ptr[offset + 1] = (uint8_t) (pixel >> 8);
+}
+
+static void
+hikaru_vendor_test_store_a2bgr10 (vk_buffer_t *fb, const hikaru_layer_t *layer,
+                                  unsigned row, uint32_t pixel)
+{
+	const uint64_t offset = ((uint64_t) layer->y0 + row) * 4096 +
+	                        (uint64_t) layer->x0 * 4;
+	for (unsigned byte = 0; byte < 4; ++byte)
+		fb->ptr[offset + byte] = (uint8_t) (pixel >> (byte * 8));
+}
+
+static bool
+hikaru_vendor_test_layer_texture (GLuint texture, GLint internal_format)
+{
+	GLint width, height, actual_format;
+	if (!texture || !glIsTexture (texture)) return false;
+	glBindTexture (GL_TEXTURE_2D, texture);
+	glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+	glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+	glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT,
+	                          &actual_format);
+	return glGetError () == GL_NO_ERROR && width == 640 && height == 480 &&
+	       actual_format == internal_format;
+}
+
+static bool
+hikaru_vendor_test_layer_pixel (GLuint texture, unsigned x, unsigned y,
+                                const uint8_t expected[4])
+{
+	GLuint fbo = 0;
+	uint8_t actual[4] = {0};
+	glGenFramebuffers (1, &fbo);
+	glBindFramebuffer (GL_FRAMEBUFFER, fbo);
+	glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+	                         texture, 0);
+	const bool complete = glCheckFramebufferStatus (GL_FRAMEBUFFER) ==
+	                      GL_FRAMEBUFFER_COMPLETE;
+	if (complete)
+		glReadPixels (x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, actual);
+	glBindFramebuffer (GL_FRAMEBUFFER, 0);
+	if (fbo) glDeleteFramebuffers (1, &fbo);
+	if (!complete || glGetError () != GL_NO_ERROR) return false;
+	for (unsigned c = 0; c < 4; ++c) {
+		const int delta = (int) actual[c] - expected[c];
+		if (delta < -1 || delta > 1) return false;
+	}
+	return true;
+}
+
+/* Exercise storage reuse, format redefinition, packed alpha, and teardown
+ * through the production layer uploader without touching the live renderer. */
+int
+hikaru_vendor_test_layer_upload_storage (void)
+{
+	hikaru_renderer_t *probe = calloc (1, sizeof (*probe));
+	hikaru_gpu_t *gpu = calloc (1, sizeof (*gpu));
+	vk_buffer_t *fb = vk_buffer_le32_new (8u * 1024 * 1024, 0);
+	GLuint first_id = 0, second_id = 0, recreated_id = 0, updated_id = 0;
+	uint8_t *staging = NULL, *rgba_staging = NULL;
+	float multiplier = 0.0f;
+	int ok = 0;
+	const GLint abgr1555_internal = vk_renderer_is_gles () ? GL_RGBA8 : GL_RGB5_A1;
+	static const uint8_t red_transparent[4] = {255, 0, 0, 0};
+	static const uint8_t red_opaque[4] = {255, 0, 0, 255};
+	static const uint8_t green_opaque[4] = {0, 255, 0, 255};
+	static const uint8_t blue_opaque[4] = {0, 0, 255, 255};
+	static const uint8_t green_alpha_85[4] = {0, 255, 0, 85};
+	static const uint8_t black_alpha_170[4] = {0, 0, 0, 170};
+	static const uint8_t green_alpha_170[4] = {0, 255, 0, 170};
+	static const uint8_t blue_alpha_85[4] = {0, 0, 255, 85};
+	static const uint8_t blue_alpha_255[4] = {0, 0, 255, 255};
+	if (!probe || !gpu || !fb) goto cleanup;
+	probe->gpu = gpu;
+	gpu->fb = fb;
+	layer_texture_definitions = layer_texture_updates = 0;
+
+	hikaru_layer_t first = {0};
+	first.x0 = 7;
+	first.y0 = 3;
+	first.format = HIKARU_FORMAT_ABGR1555;
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 0, 0x001f);
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 479, 0x83e0);
+	upload_layer (probe, &first, 0, &first_id, &multiplier);
+	staging = probe->layer_upload.abgr1555_staging;
+	rgba_staging = probe->layer_upload.rgba8_staging;
+	if (multiplier != 1.0f || !staging ||
+	    (vk_renderer_is_gles () ? !rgba_staging : rgba_staging != NULL) ||
+	    !hikaru_vendor_test_layer_texture (first_id, abgr1555_internal) ||
+	    !hikaru_vendor_test_layer_pixel (first_id, 0, 0, red_transparent) ||
+	    !hikaru_vendor_test_layer_pixel (first_id, 0, 479, green_opaque) ||
+	    layer_texture_definitions != 1 || layer_texture_updates != 0)
+		goto cleanup;
+
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 0, 0x801f);
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 479, 0xfc00);
+	upload_layer (probe, &first, 0, &updated_id, &multiplier);
+	if (updated_id != first_id ||
+	    probe->layer_upload.abgr1555_staging != staging ||
+	    probe->layer_upload.rgba8_staging != rgba_staging ||
+	    !hikaru_vendor_test_layer_pixel (first_id, 0, 0, red_opaque) ||
+	    !hikaru_vendor_test_layer_pixel (first_id, 0, 479, blue_opaque) ||
+	    layer_texture_definitions != 1 || layer_texture_updates != 1)
+		goto cleanup;
+
+	hikaru_layer_t second = {0};
+	second.x0 = 9;
+	second.y0 = 4;
+	second.format = HIKARU_FORMAT_A2BGR10;
+	hikaru_vendor_test_store_a2bgr10 (fb, &second, 0, 0x000003ff);
+	hikaru_vendor_test_store_a2bgr10 (fb, &second, 479, 0xc00ffc00);
+	upload_layer (probe, &second, 1, &second_id, &multiplier);
+	if (multiplier != 4.0f || !second_id || second_id == first_id ||
+	    !hikaru_vendor_test_layer_texture (second_id, GL_RGB10_A2) ||
+	    !hikaru_vendor_test_layer_pixel (second_id, 0, 0, red_transparent) ||
+	    !hikaru_vendor_test_layer_pixel (second_id, 0, 479, green_opaque) ||
+	    layer_texture_definitions != 2 || layer_texture_updates != 1)
+		goto cleanup;
+
+	hikaru_vendor_test_store_a2bgr10 (fb, &second, 0, 0x400ffc00);
+	hikaru_vendor_test_store_a2bgr10 (fb, &second, 479, 0x80000000);
+	upload_layer (probe, &second, 1, &updated_id, &multiplier);
+	if (updated_id != second_id ||
+	    !hikaru_vendor_test_layer_pixel (second_id, 0, 0, green_alpha_85) ||
+	    !hikaru_vendor_test_layer_pixel (second_id, 0, 479, black_alpha_170) ||
+	    layer_texture_definitions != 2 || layer_texture_updates != 2)
+		goto cleanup;
+
+	first.format = HIKARU_FORMAT_A2BGR10;
+	hikaru_vendor_test_store_a2bgr10 (fb, &first, 0, 0x800ffc00);
+	hikaru_vendor_test_store_a2bgr10 (fb, &first, 479, 0x7ff00000);
+	upload_layer (probe, &first, 0, &updated_id, &multiplier);
+	if (updated_id != first_id || multiplier != 4.0f ||
+	    second_id != probe->layer_upload.textures[1].id ||
+	    !hikaru_vendor_test_layer_texture (first_id, GL_RGB10_A2) ||
+	    !hikaru_vendor_test_layer_pixel (first_id, 0, 0, green_alpha_170) ||
+	    !hikaru_vendor_test_layer_pixel (first_id, 0, 479, blue_alpha_85) ||
+	    layer_texture_definitions != 3 || layer_texture_updates != 2)
+		goto cleanup;
+
+	hikaru_vendor_test_store_a2bgr10 (fb, &first, 0, 0xfff00000);
+	hikaru_vendor_test_store_a2bgr10 (fb, &first, 479, 0x000003ff);
+	upload_layer (probe, &first, 0, &updated_id, &multiplier);
+	if (updated_id != first_id ||
+	    !hikaru_vendor_test_layer_pixel (updated_id, 0, 0, blue_opaque) ||
+	    !hikaru_vendor_test_layer_pixel (updated_id, 0, 479, red_transparent) ||
+	    layer_texture_definitions != 3 || layer_texture_updates != 3)
+		goto cleanup;
+
+	first.format = HIKARU_FORMAT_ABGR1555;
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 0, 0x001f);
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 479, 0x83e0);
+	upload_layer (probe, &first, 0, &updated_id, &multiplier);
+	if (updated_id != first_id ||
+	    probe->layer_upload.abgr1555_staging != staging ||
+	    probe->layer_upload.rgba8_staging != rgba_staging ||
+	    !hikaru_vendor_test_layer_texture (updated_id, abgr1555_internal) ||
+	    !hikaru_vendor_test_layer_pixel (updated_id, 0, 0, red_transparent) ||
+	    !hikaru_vendor_test_layer_pixel (updated_id, 0, 479, green_opaque) ||
+	    layer_texture_definitions != 4 || layer_texture_updates != 3)
+		goto cleanup;
+
+	glBindFramebuffer (GL_FRAMEBUFFER, 0);
+	glActiveTexture (GL_TEXTURE0);
+	glBindTexture (GL_TEXTURE_2D, 0);
+	destroy_layer_upload (probe);
+	if (glIsTexture (first_id) || glIsTexture (second_id)) goto cleanup;
+
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 0, 0x801f);
+	upload_layer (probe, &first, 0, &recreated_id, &multiplier);
+	if (!recreated_id || !glIsTexture (recreated_id) ||
+	    !hikaru_vendor_test_layer_texture (recreated_id, abgr1555_internal) ||
+	    !hikaru_vendor_test_layer_pixel (recreated_id, 0, 0, red_opaque) ||
+	    layer_texture_definitions != 5 || layer_texture_updates != 3)
+		goto cleanup;
+	hikaru_vendor_test_store_abgr1555 (fb, &first, 0, 0x001f);
+	GLuint repeated_id = 0;
+	upload_layer (probe, &first, 0, &repeated_id, &multiplier);
+	if (repeated_id != recreated_id ||
+	    !hikaru_vendor_test_layer_pixel (recreated_id, 0, 0, red_transparent) ||
+	    layer_texture_definitions != 5 || layer_texture_updates != 4)
+		goto cleanup;
+	ok = 1;
+
+cleanup:
+	if (probe) {
+		glBindFramebuffer (GL_FRAMEBUFFER, 0);
+		glActiveTexture (GL_TEXTURE0);
+		glBindTexture (GL_TEXTURE_2D, 0);
+		destroy_layer_upload (probe);
+	}
+	GLuint texture_ids[] = {first_id, second_id, recreated_id};
+	for (unsigned i = 0; i < NUMELEM (texture_ids); ++i) {
+		if (texture_ids[i] && glIsTexture (texture_ids[i])) {
+			ok = 0;
+			glDeleteTextures (1, &texture_ids[i]);
+		}
+	}
+	vk_buffer_destroy (&fb);
+	free (gpu);
+	free (probe);
+	return ok;
+}
+
 /* Render four packed layer pixels through the real uploader and framebuffer
  * program. `back` selects front (0), back (1), direct layer 1 (2),
  * direct layer 2 (3), or both direct layers (4, with scene as layer 2).
@@ -4415,7 +5135,7 @@ int hikaru_vendor_test_layer_pixels(vk_renderer_t *renderer, int format, int key
             fb->ptr[offset + byte] = (uint8_t)(packed[i] >> (byte * 8));
     }
     hr->gpu->fb = fb;
-    upload_layer(hr, &layer, &layer_tex, &upload_mult);
+    upload_layer(hr, &layer, 0, &layer_tex, &upload_mult);
     hr->gpu->fb = saved_fb;
     glGenTextures(1, &scene_tex); glBindTexture(GL_TEXTURE_2D, scene_tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -4456,7 +5176,7 @@ cleanup:
     hr->gpu->state.layers.layer[0][1].format = saved_format2;
     glDeleteTextures(1, &second_tex);
     glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &target_tex);
-    glDeleteTextures(1, &scene_tex); glDeleteTextures(1, &layer_tex);
+    glDeleteTextures(1, &scene_tex);
     vk_buffer_destroy(&fb);
     return ok;
 }
@@ -4479,6 +5199,7 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
     memcpy(saved_config, &gpu->fb_config, sizeof(saved_config));
     int ok = 1;
     if (!fb) return 0;
+    destroy_layer_upload(hr);
     gpu->fb = fb;
     /* Layer 0 red, layer 1 blue. Bands 1 and 2 respectively remove one
      * layer, so the probe distinguishes overlap priority from enable. */
@@ -4501,18 +5222,37 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
     const uint32_t enables[]={3,3,3,3,3,2,1,0,2,1};
     const uint32_t direct[] ={0,0,3,1,2,0,0,3,3,0};
     const uint8_t scene_alpha[]={0,255,255,0,0,0,0,255,255,128};
+    GLuint retained_layer_ids[2]={0};
+    layer_texture_definitions=layer_texture_updates=0;
+    /* Two normal frame lifecycles verify both enabled layer names survive
+     * end-frame and receive storage updates on the next frame. */
     for(unsigned step=0;step<10 && ok;++step) {
         gpu->fb_config.clear[3]=scene_alpha[step];
         if(vk_device_put(&gpu->base,4,0x1a0001b4,enables[step]) ||
            vk_device_put(&gpu->base,4,0x1a0001b8,direct[step])) {ok=0; break;}
         hikaru_vendor_test_fill_layer_info(&gpu->base);
+        if(step<2) hikaru_renderer_begin_frame(&hr->base);
         /* Seed a completed scene. With no new meshes, draw must preserve it
          * even when the pending clear color changes on the next host frame. */
         resize_3d_targets(hr);
         glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
         draw_scene(hr);
         gpu->fb_config.clear[1]=0;
-        draw(hr);
+        if(step<2) hikaru_renderer_end_frame(&hr->base);
+        else draw(hr);
+        if(step==0) {
+            for(unsigned layer=0;layer<2;++layer) {
+                retained_layer_ids[layer]=hr->layer_upload.textures[layer].id;
+                if(!retained_layer_ids[layer] || !glIsTexture(retained_layer_ids[layer])) ok=0;
+            }
+            if(layer_texture_definitions!=2 || layer_texture_updates!=0) ok=0;
+        } else if(step==1) {
+            for(unsigned layer=0;layer<2;++layer) {
+                if(hr->layer_upload.textures[layer].id!=retained_layer_ids[layer] ||
+                   !glIsTexture(retained_layer_ids[layer])) ok=0;
+            }
+            if(layer_texture_definitions!=2 || layer_texture_updates!=2) ok=0;
+        }
         gpu->fb_config.clear[1]=255;
         for(unsigned x=0;x<3;++x)
             glReadPixels(80+160*x,240,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixels[step][x]);
@@ -4718,6 +5458,7 @@ hikaru_renderer_destroy (vk_renderer_t **renderer_)
 	if (renderer_) {
 		hikaru_renderer_t *hr = (hikaru_renderer_t *) *renderer_;
 
+		destroy_layer_upload (hr);
 		destroy_3d_state (hr);
 		destroy_fb_state (hr);
 

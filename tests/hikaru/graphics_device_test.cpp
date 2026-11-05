@@ -10,12 +10,14 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace hikaru::graphics;
 
 namespace {
 struct RecordingBackend final : Backend {
+    struct TextureCall { unsigned id=0, level=0; Texture info{}; TextureUpload upload=TextureUpload::Definition; std::vector<uint8_t> pixels; };
     Draw lastDraw{};
     bool drew = false;
     unsigned draws = 0;
@@ -23,13 +25,22 @@ struct RecordingBackend final : Backend {
     std::unordered_map<unsigned, std::vector<uint8_t>> uploads;
     std::unordered_map<unsigned, Texture> infos;
     std::vector<unsigned> erased;
-    void texture(unsigned id, const Texture& info, unsigned, const void* pixels, size_t bytes) override {
+    std::vector<TextureCall> textureCalls;
+    std::vector<Draw> drawHistory;
+    std::vector<std::string> events;
+    void texture(unsigned id, const Texture& info, unsigned level, TextureUpload upload, const void* pixels, size_t bytes) override {
         infos[id] = info;
-        if (pixels && bytes) uploads[id].assign(static_cast<const uint8_t*>(pixels), static_cast<const uint8_t*>(pixels) + bytes);
+        TextureCall call{id,level,info,upload,{}};
+        if (pixels && bytes) {
+            call.pixels.assign(static_cast<const uint8_t*>(pixels), static_cast<const uint8_t*>(pixels) + bytes);
+            uploads[id]=call.pixels;
+        }
+        textureCalls.push_back(std::move(call));
+        events.push_back(upload==TextureUpload::FullUpdate?"update":"definition");
     }
     void eraseTexture(unsigned id) override { erased.push_back(id); }
     void clear(const Draw&, GLbitfield, const Vec4&, float) override {}
-    void draw(const Draw& draw) override { lastDraw = draw; drew = true;++draws; }
+    void draw(const Draw& draw) override { lastDraw = draw; drawHistory.push_back(draw); events.push_back("draw"); drew = true;++draws; }
     void readPixels(unsigned, int, int, int, int, uint8_t*) override {}
     unsigned queryStartDraws = 0;
     void beginOcclusion() override { queryStartDraws = draws; }
@@ -185,6 +196,95 @@ void testTexturePacking(RecordingBackend& backend, Device& device) {
     check(backend.uploads.at(rg) == std::vector<uint8_t>({21,21,21,73, 44,44,44,88}), "RG luminance-alpha expansion failed");
 }
 
+void testFullTextureUpdates(RecordingBackend& backend, Device& device) {
+    Device::Scope scope(&device);
+    hikaru_glActiveTexture(GL_TEXTURE0);
+    GLuint tex=0;hikaru_glGenTextures(1,&tex);hikaru_glBindTexture(GL_TEXTURE_2D,tex);
+    hikaru_glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,1);
+    hikaru_glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+    const uint8_t initial[]={1,2,3,4,5,6,7,8};
+    hikaru_glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,2,1,0,GL_RGBA,GL_UNSIGNED_BYTE,initial);
+    const Texture defined=device.textureInfo(tex);
+
+    // Exercise the same unpack row/skip rules for a full replacement.
+    uint8_t rows[28]={};const uint8_t replacement[]={9,10,11,12,13,14,15,16};
+    std::memcpy(rows+20,replacement,sizeof(replacement));
+    hikaru_glPixelStorei(GL_UNPACK_ALIGNMENT,8);hikaru_glPixelStorei(GL_UNPACK_ROW_LENGTH,3);
+    hikaru_glPixelStorei(GL_UNPACK_SKIP_ROWS,1);hikaru_glPixelStorei(GL_UNPACK_SKIP_PIXELS,1);
+    hikaru_glTexSubImage2D(GL_TEXTURE_2D,0,0,0,2,1,GL_RGBA,GL_UNSIGNED_BYTE,rows);
+    device.checkError();
+    hikaru_glPixelStorei(GL_UNPACK_ALIGNMENT,4);hikaru_glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    hikaru_glPixelStorei(GL_UNPACK_SKIP_ROWS,0);hikaru_glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
+    const auto& replaced=backend.textureCalls.back();
+    check(replaced.upload==TextureUpload::FullUpdate&&replaced.pixels==std::vector<uint8_t>(replacement,replacement+sizeof(replacement)),
+          "full texture update did not replace pixels through unpack state");
+    const auto& updated=device.textureInfo(tex);
+    check(updated.width==defined.width&&updated.height==defined.height&&updated.format==defined.format
+          &&updated.maxLevel==defined.maxLevel&&updated.minFilter==defined.minFilter&&updated.revision==defined.revision+1,
+          "full texture update changed definition metadata or missed its revision");
+
+    // A queued draw must consume the old revision before the replacement is issued.
+    GLuint bitmap=makeProgram("// u_front sampler marks bitmap program\n");
+    hikaru_glUniform1i(hikaru_glGetUniformLocation(bitmap,"u_front"),0);
+    const size_t eventStart=backend.events.size();const unsigned drawStart=backend.draws;
+    issueTriangle();
+    const uint64_t oldRevision=device.textureInfo(tex).revision;
+    hikaru_glTexSubImage2D(GL_TEXTURE_2D,0,0,0,2,1,GL_RGBA,GL_UNSIGNED_BYTE,initial);
+    device.checkError();
+    check(backend.draws==drawStart+1&&backend.drawHistory.back().sampling[0].revision==oldRevision,
+          "queued draw did not capture the pre-update texture revision");
+    check(backend.events.size()>=eventStart+2&&backend.events[eventStart]=="draw"&&backend.events[eventStart+1]=="update",
+          "texture update was issued before the queued draw");
+    issueTriangle();device.checkError();
+    check(backend.draws==drawStart+2&&backend.drawHistory.back().sampling[0].revision==device.textureInfo(tex).revision,
+          "draw after a full update did not observe the new texture revision");
+
+    const size_t callsBeforeInvalid=backend.textureCalls.size();const uint64_t revisionBeforeInvalid=device.textureInfo(tex).revision;
+    auto expectUpdateError=[&](GLint level,GLint x,GLint y,GLsizei width,GLsizei height,GLenum format,GLenum type,const void* pixels,const char* message) {
+        hikaru_glTexSubImage2D(GL_TEXTURE_2D,level,x,y,width,height,format,type,pixels);
+        bool threw=false;try{device.checkError();}catch(const std::runtime_error&){threw=true;}
+        check(threw,message);
+    };
+    expectUpdateError(0,1,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,initial,"partial texture bounds were accepted");
+    expectUpdateError(1,0,0,2,1,GL_RGBA,GL_UNSIGNED_BYTE,initial,"nonzero texture mip level was accepted");
+    expectUpdateError(0,0,0,2,1,GL_RGB,GL_UNSIGNED_BYTE,initial,"incompatible texture source format was accepted");
+    expectUpdateError(0,0,0,0,1,GL_RGBA,GL_UNSIGNED_BYTE,initial,"zero-width texture update was accepted");
+    expectUpdateError(0,0,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,initial,"partial-size texture update was accepted");
+    expectUpdateError(0,0,0,2,1,GL_RGBA,GL_UNSIGNED_BYTE,nullptr,"null full texture update was accepted");
+    check(backend.textureCalls.size()==callsBeforeInvalid&&device.textureInfo(tex).revision==revisionBeforeInvalid,
+          "invalid full texture update changed backend state");
+
+    const uint8_t redefined[]={20,21,22,23,24,25,26,27};
+    hikaru_glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,2,1,0,GL_RGBA,GL_UNSIGNED_BYTE,redefined);
+    device.checkError();
+    check(backend.textureCalls.back().upload==TextureUpload::Definition
+          &&backend.textureCalls.back().pixels==std::vector<uint8_t>(redefined,redefined+sizeof(redefined))
+          &&device.textureInfo(tex).maxLevel==defined.maxLevel,
+          "full TexImage2D redefinition followed the update path or lost mip metadata");
+
+    GLuint packed16=0;hikaru_glGenTextures(1,&packed16);hikaru_glBindTexture(GL_TEXTURE_2D,packed16);
+    const uint16_t abgr1555[]={0x801f,0x83e0,0x7c00};
+    hikaru_glTexImage2D(GL_TEXTURE_2D,0,GL_RGB5_A1,3,1,0,GL_RGBA,GL_UNSIGNED_SHORT_1_5_5_5_REV,abgr1555);
+    hikaru_glTexSubImage2D(GL_TEXTURE_2D,0,0,0,3,1,GL_RGBA,GL_UNSIGNED_SHORT_1_5_5_5_REV,abgr1555);
+    device.checkError();
+    check(backend.textureCalls.back().pixels==std::vector<uint8_t>({255,0,0,255,0,255,0,255,0,0,255,0}),
+          "ABGR1555 full update changed its channel lanes or alpha bit");
+
+    GLuint packed10=0;hikaru_glGenTextures(1,&packed10);hikaru_glBindTexture(GL_TEXTURE_2D,packed10);
+    const uint32_t a2bgr10=(2u<<30)|(17u<<20)|(513u<<10)|777u;
+    hikaru_glTexImage2D(GL_TEXTURE_2D,0,GL_RGB10_A2,1,1,0,GL_RGBA,GL_UNSIGNED_INT_2_10_10_10_REV,&a2bgr10);
+    const uint32_t a2bgr10Updated=(1u<<30)|(1001u<<20)|(23u<<10)|42u;
+    hikaru_glTexSubImage2D(GL_TEXTURE_2D,0,0,0,1,1,GL_RGBA,GL_UNSIGNED_INT_2_10_10_10_REV,&a2bgr10Updated);
+    device.checkError();
+    check(backend.textureCalls.back().pixels.size()==sizeof(a2bgr10Updated),"A2BGR10 full update byte count mismatch");
+    uint32_t packedObserved=0;std::memcpy(&packedObserved,backend.textureCalls.back().pixels.data(),sizeof(packedObserved));
+    check(packedObserved==a2bgr10Updated,
+          "A2BGR10 full update changed packed channels or alpha bits");
+    const size_t packedCalls=backend.textureCalls.size();
+    expectUpdateError(0,0,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,&a2bgr10Updated,"incompatible A2BGR10 source type was accepted");
+    check(backend.textureCalls.size()==packedCalls,"invalid A2BGR10 update reached the backend");
+}
+
 const HikaruGraphicsDispatch* priorDispatch = nullptr;
 void restoredClearColor(GLfloat, GLfloat, GLfloat, GLfloat) { priorDispatch = reinterpret_cast<const HikaruGraphicsDispatch*>(uintptr_t(1)); }
 
@@ -225,6 +325,7 @@ int main() {
         };
         run("dispatch conversion, uniforms, draw state", [&] { testDispatchConversionUniformsAndState(*record, device); });
         run("texture unpack and packed precision", [&] { testTexturePacking(*record, device); });
+        run("full texture update semantics", [&] { testFullTextureUpdates(*record, device); });
         run("nested scope restoration and exception containment", [&] { testScopeAndExceptionContainment(device); });
         return failures ? 1 : 0;
     } catch (const std::exception& e) {

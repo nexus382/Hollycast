@@ -91,6 +91,12 @@ typedef struct {
 	bool sampling_valid;
 } hikaru_texture_t;
 
+typedef struct {
+	GLuint id;
+	unsigned format, width, height;
+	bool storage_valid;
+} hikaru_layer_texture_t;
+
 /* Values belong to the active mesh program. Shader/frame transitions clear
  * validity; immutable draw snapshots can then share uniform uploads. */
 typedef struct {
@@ -141,6 +147,21 @@ typedef struct {
 	vk_renderer_t base;
 
 	hikaru_gpu_t *gpu;
+	/* Capture callbacks only touch CPU data. The live renderer's forwarding
+	 * pointer and strip assembler are producer-owned; drawing never reads them. */
+	bool capture_only, capture_started, capture_invalidate_all;
+	void *capture_target;
+	bool invalidate_all;
+	unsigned num_invalidations;
+	hikaru_texhead_t invalidations[256];
+	bool packet_trace, packet_active;
+	char trace_master[256], trace_slave[256];
+	/* Deletion can fail through a native backend's abort boundary. Detach
+	 * packet identifiers first and retain unfinished disposal on this thread. */
+	GLuint *pending_buffers;
+	size_t pending_buffer_capacity;
+	unsigned pending_buffer_count, pending_vao_count;
+	GLuint pending_vaos[8];
 
 	hikaru_viewport_t	*vp_list;
 	uint32_t		 num_vps;
@@ -167,6 +188,7 @@ typedef struct {
 	uint32_t		 capacity_lss;
 
 	hikaru_mesh_t		*mesh_list[8][8];
+	uint32_t		 capacity_meshes[8][8];
 	uint32_t		 num_meshes[8][8];
 	uint32_t		 total_meshes;
 	struct {
@@ -252,12 +274,29 @@ typedef struct {
 			GLuint u_invert_b;
 		} locs;
 	} framebuffer;
+	struct {
+		hikaru_layer_texture_t textures[2];
+		/* The two layers upload sequentially and share this 1555 staging image. */
+		uint8_t *abgr1555_staging;
+		/* ES conversion destination retained for recurring 1555 layer uploads. */
+		size_t rgba8_staging_size;
+		uint8_t *rgba8_staging;
+	} layer_upload;
 
 	struct {
 		int32_t flags[HR_NUM_DEBUG_VARS];
 	} debug;
 
 } hikaru_renderer_t;
+
+/* Host-only packet storage, deliberately outside serialized GPU/CPU layouts.
+ * The shallow GPU copy is a draw view: all live pointers are cleared/rebound. */
+struct HikaruFrame {
+	hikaru_renderer_t *capture;
+	hikaru_gpu_t gpu;
+	vk_buffer_t *fb, *texram[2];
+	bool ready;
+};
 
 #define LOG(fmt_, ...) \
 	do { \

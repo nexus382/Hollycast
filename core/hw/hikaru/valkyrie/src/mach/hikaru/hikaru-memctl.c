@@ -18,6 +18,8 @@
  * along with Valkyrie.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <string.h>
+
 #include "vk/core.h"
 #include "engine_internal.h"
 
@@ -732,16 +734,109 @@ hikaru_memctl_put (vk_device_t *dev, unsigned size, uint32_t addr, uint64_t val)
 	return memctl_bus_put (memctl, size, bus_addr, val);
 }
 
+#ifdef HIKARU_VENDOR_TESTING
+/* The vendor test fixture runs serially and may force the reference loop. */
+static bool memctl_dma_force_reference;
+static bool memctl_dma_bulk_used;
+#endif
+
+static bool
+memctl_dma_ram_span (hikaru_t *hikaru, uint32_t bus_addr, size_t bytes,
+                     vk_buffer_t **buffer, uint32_t *offset)
+{
+	vk_buffer_t *ram;
+	uint32_t base, limit;
+
+	if (bus_addr >= 0x40000000 && bus_addr <= 0x41FFFFFF) {
+		ram = hikaru->ram_s;
+		base = 0x40000000;
+		limit = 0x41FFFFFF;
+	} else if (bus_addr >= 0x70000000 && bus_addr <= 0x71FFFFFF) {
+		ram = hikaru->ram_m;
+		base = 0x70000000;
+		limit = 0x71FFFFFF;
+	} else {
+		return false;
+	}
+
+	if (!ram || !ram->ptr)
+		return false;
+
+	uint32_t ram_offset = bus_addr - base;
+	unsigned ram_size = vk_buffer_get_size (ram);
+	if (bytes > (uint64_t)limit - bus_addr + 1 ||
+	    ram_offset > ram_size ||
+	    bytes > (size_t)(ram_size - ram_offset))
+		return false;
+
+	*buffer = ram;
+	*offset = ram_offset;
+	return true;
+}
+
+static bool
+memctl_dma_ranges_overlap (uintptr_t left, uintptr_t right, size_t bytes)
+{
+	return left <= right ? right - left < bytes : left - right < bytes;
+}
+
+/* Direct copies are safe only for ordinary, contiguous RAM. Other devices
+ * retain their per-word callbacks, and overlapping RAM retains forward-copy
+ * semantics from the original bus loop. */
+static bool
+memctl_dma_try_bulk (hikaru_t *hikaru, uint32_t src, uint32_t dst,
+                     uint32_t words)
+{
+	vk_buffer_t *src_buffer, *dst_buffer;
+	uint32_t src_offset, dst_offset;
+	size_t bytes = (size_t)words * sizeof (uint32_t);
+
+	uint32_t src_bus_addr = src & 0x7FFFFFFF;
+	uint32_t dst_bus_addr = dst & 0x7FFFFFFF;
+
+	if (words == 0 ||
+	    !memctl_dma_ram_span (hikaru, src_bus_addr, bytes,
+	                          &src_buffer, &src_offset) ||
+	    !memctl_dma_ram_span (hikaru, dst_bus_addr, bytes,
+	                          &dst_buffer, &dst_offset) ||
+	    src_buffer->borrowed || dst_buffer->borrowed ||
+	    !vk_buffer_is_plain_le (src_buffer) ||
+	    !vk_buffer_is_plain_le_writer (src_buffer) ||
+	    !vk_buffer_is_plain_le (dst_buffer) ||
+	    !vk_buffer_is_plain_le_writer (dst_buffer))
+		return false;
+
+	uint8_t *src_ptr = src_buffer->ptr + src_offset;
+	uint8_t *dst_ptr = dst_buffer->ptr + dst_offset;
+	if (src_ptr == dst_ptr)
+		return true;
+	if (memctl_dma_ranges_overlap (src_bus_addr, dst_bus_addr, bytes) ||
+	    memctl_dma_ranges_overlap ((uintptr_t)src_ptr, (uintptr_t)dst_ptr, bytes))
+		return false;
+
+	memcpy (dst_ptr, src_ptr, bytes);
+	return true;
+}
+
 static int
 hikaru_memctl_exec (vk_device_t *dev, int cycles)
 {
 	hikaru_memctl_t *memctl = (hikaru_memctl_t *) dev;
+	hikaru_t *hikaru = (hikaru_t *) memctl->base.mach;
+	HikaruEngine *engine;
+	HikaruProfilePhase previous_phase = HIKARU_PROFILE_OTHER;
 	uint32_t src, dst, len, ctl, todo;
 
+#ifdef HIKARU_VENDOR_TESTING
+	memctl_dma_bulk_used = false;
+#endif
 	len = vk_buffer_get (memctl->regs, 4, 0x38);
-
 	if (!(len & 0x01000000))
 		return 0;
+
+	engine = hikaru->base.host;
+	if (engine)
+		previous_phase = hikaru_profile_switch (engine, HIKARU_PROFILE_MEMCTL);
 
 	src = vk_buffer_get (memctl->regs, 4, 0x30);
 	dst = vk_buffer_get (memctl->regs, 4, 0x34);
@@ -757,12 +852,25 @@ hikaru_memctl_exec (vk_device_t *dev, int cycles)
 
 	VK_ASSERT ((len & 0xFF000000) == 0);
 
-	while (todo--) {
-		uint32_t tmp;
-		memctl_bus_get (memctl, 4, src & 0x7FFFFFFF, &tmp);
-		memctl_bus_put (memctl, 4, dst & 0x7FFFFFFF, tmp);
-		src += 4;
-		dst += 4;
+#ifdef HIKARU_VENDOR_TESTING
+	if (!memctl_dma_force_reference && todo > 0 &&
+#else
+	if (todo > 0 &&
+#endif
+	    memctl_dma_try_bulk (hikaru, src, dst, todo)) {
+		src += todo * 4;
+		dst += todo * 4;
+#ifdef HIKARU_VENDOR_TESTING
+		memctl_dma_bulk_used = true;
+#endif
+	} else {
+		while (todo--) {
+			uint32_t tmp;
+			memctl_bus_get (memctl, 4, src & 0x7FFFFFFF, &tmp);
+			memctl_bus_put (memctl, 4, dst & 0x7FFFFFFF, tmp);
+			src += 4;
+			dst += 4;
+		}
 	}
 
 	/* Transfer completed */
@@ -779,8 +887,34 @@ hikaru_memctl_exec (vk_device_t *dev, int cycles)
 	vk_buffer_put (memctl->regs, 4, 0x34, dst);
 	vk_buffer_put (memctl->regs, 4, 0x38, (ctl << 24) | len);
 
+	if (engine)
+		hikaru_profile_switch (engine, previous_phase);
 	return 0;
 }
+
+#ifdef HIKARU_VENDOR_TESTING
+int
+hikaru_vendor_test_memctl_dma (vk_device_t *dev, uint32_t src, uint32_t dst,
+                               uint32_t words, uint32_t cycles, int force_reference)
+{
+	hikaru_memctl_t *memctl = (hikaru_memctl_t *)dev;
+	bool previous_force_reference;
+	bool bulk_used;
+
+	if (!dev || words > 0xFFFFFF || cycles > 0xFFFFFF)
+		return -1;
+
+	previous_force_reference = memctl_dma_force_reference;
+	memctl_dma_force_reference = force_reference != 0;
+	vk_buffer_put (memctl->regs, 4, 0x30, src);
+	vk_buffer_put (memctl->regs, 4, 0x34, dst);
+	vk_buffer_put (memctl->regs, 4, 0x38, 0x01000000 | words);
+	int status = hikaru_memctl_exec (dev, (int)cycles);
+	bulk_used = memctl_dma_bulk_used;
+	memctl_dma_force_reference = previous_force_reference;
+	return status < 0 ? status : (bulk_used ? 1 : 0);
+}
+#endif
 
 static void
 hikaru_memctl_reset (vk_device_t *dev, vk_reset_type_t type)

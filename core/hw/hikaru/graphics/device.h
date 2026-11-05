@@ -46,6 +46,8 @@ struct Texture {
     float lodBias = 0;
     uint64_t revision = 0;
 };
+// Distinguish TexImage storage definitions from full level-zero replacements.
+enum class TextureUpload : uint8_t { Definition, FullUpdate };
 struct Draw {
     unsigned color = 0, depth = 0;
     std::array<unsigned,4> textures{};
@@ -63,7 +65,8 @@ struct Draw {
 class Backend {
 public:
     virtual ~Backend() = default;
-    virtual void texture(unsigned id, const Texture& info, unsigned level, const void* pixels, size_t bytes) = 0;
+    // Pixel data is borrowed for the call; implementations copy or stage it before returning.
+    virtual void texture(unsigned id, const Texture& info, unsigned level, TextureUpload upload, const void* pixels, size_t bytes) = 0;
     virtual void eraseTexture(unsigned id) = 0;
     virtual void clear(const Draw& state, GLbitfield mask, const Vec4& color, float depth) = 0;
     virtual void draw(const Draw& draw) = 0;
@@ -111,6 +114,7 @@ private:
     std::unordered_map<unsigned,std::vector<uint8_t>> buffers;
     std::unordered_map<unsigned,std::array<Attribute,16>> arrays;
     std::unordered_map<unsigned,Texture> textures;
+    std::vector<uint8_t> fullTextureUpdatePixels;
     std::unordered_map<unsigned,std::array<unsigned,2>> targets;
     std::unordered_map<unsigned,std::string> shaders;
     std::unordered_map<unsigned,Program> programs;
@@ -125,7 +129,7 @@ private:
     void queueDraw(Draw draw);
     Uniforms uniforms(const Program& p) const;
     void uniform(GLint location, size_t count, const float* data);
-    std::vector<uint8_t> unpack(int width, int height, GLenum format, GLenum type, const void* data) const;
+    void unpack(int width, int height, GLenum format, GLenum type, const void* data, std::vector<uint8_t>& pixels) const;
     void ActiveTexture(GLenum texture);
     void AttachShader(GLuint program, GLuint shader);
     void BindAttribLocation(GLuint program, GLuint index, const GLchar * name);

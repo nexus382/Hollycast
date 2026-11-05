@@ -12,6 +12,8 @@ const GameDescriptor* loadedGame();
 // render, releaseGraphics and unload run on the thread owning the GL context.
 void load(const std::string& path);
 bool render();
+// Called after the host swaps the frame; emits a queued LoadState event for its first presented generation.
+void framePresented();
 // Saves wait for the current frame. Loads are validated immediately and applied
 // on the next render frame, where the graphics context is guaranteed current.
 void serialize(Serializer& state);

@@ -30,10 +30,15 @@ int hikaru_vendor_test_layer_pixels(vk_renderer_t *, int, int, const uint32_t[4]
 int hikaru_vendor_test_material_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *, uint32_t);
 int hikaru_vendor_test_material_fog_depth_pixels(uint32_t, const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], float *, unsigned, uint32_t);
 int hikaru_vendor_test_routed_layers(vk_renderer_t *, uint8_t[10][3][4]);
+int hikaru_vendor_test_layer_upload_storage(void);
+void hikaru_vendor_test_fail_next_packet_draw(void);
+int hikaru_vendor_test_seed_packet_3d(vk_renderer_t *,void *,HikaruFrame *,unsigned);
 static vk_renderer_t *layer_renderer;
 static int frame_state_growth_passed;
 static void frame_state_growth_probe(void) { frame_state_growth_passed = hikaru_vendor_test_frame_state_growth(layer_renderer); }
 static int layer_pixels_passed;
+static int layer_upload_storage_passed;
+static void layer_upload_storage_probe(void) { layer_upload_storage_passed = hikaru_vendor_test_layer_upload_storage(); }
 static void layer_pixels_probe(void) {
  const uint8_t scene[4]={23,47,89,255};
  const uint32_t rgb1555[4]={0x801f,0x83e0,0xfc00,0xffff};
@@ -278,6 +283,131 @@ static int back_target_clear(HikaruEngine *e) {
 static int wr(void *p,unsigned size,uint32_t addr,uint64_t v){(void)p;(void)size;(void)addr;(void)v;return -1;}
 static int run(void *p,uint32_t cycles){(void)p;(void)cycles;return 0;}
 static void input(void *p,const HikaruEngineInputs *i){(void)p;(void)i;}
+
+static void store_frame_layer_pixel(vk_buffer_t *fb,unsigned x,unsigned y,uint16_t pixel)
+{
+ uint64_t offset=(uint64_t)y*4096+(uint64_t)(x/2)*4+((x&1)?0:2);
+ fb->ptr[offset]=(uint8_t)pixel;fb->ptr[offset+1]=(uint8_t)(pixel>>8);
+}
+static int read_frame_pixel(uint32_t fbo,uint8_t pixel[4])
+{
+ GLint previous=0;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&previous);glBindFramebuffer(GL_READ_FRAMEBUFFER,fbo);
+ glReadPixels(320,240,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);int ok=glGetError()==GL_NO_ERROR;
+ glBindFramebuffer(GL_READ_FRAMEBUFFER,(GLuint)previous);return ok;
+}
+static int frame_pixel_matches(const uint8_t actual[4],const uint8_t expected[4])
+{
+ for(unsigned c=0;c<4;c++){int delta=(int)actual[c]-(int)expected[c];if(delta < -1 || delta > 1)return 0;}return 1;
+}
+static int frame_pixel_close(const uint8_t actual[4],const uint8_t expected[4],unsigned tolerance)
+{
+ for(unsigned c=0;c<4;c++){int delta=(int)actual[c]-(int)expected[c];if(delta < -(int)tolerance || delta > (int)tolerance)return 0;}return 1;
+}
+static int frame_packet_has_gl_handles(const HikaruFrame *frame)
+{
+ const hikaru_renderer_t *capture=frame->capture;
+ for(unsigned i=0;i<8;i++)if(capture->vertex_chunks[i].vbo||capture->vertex_chunks[i].vao)return 1;
+ for(unsigned vp=0;vp<8;vp++)for(unsigned type=0;type<8;type++)
+  for(unsigned i=0;i<capture->num_meshes[vp][type];i++)if(capture->mesh_list[vp][type][i].vbo)return 1;
+ return 0;
+}
+static int frame_packet_layer_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_t target,
+                                     const HikaruEngineInputs *inputs)
+{
+ static const uint8_t expected[3][4]={{255,0,0,255},{0,0,255,255},{0,255,0,255}};
+ const uint32_t saved_781=gpu->fb_config._781;
+ const uint32_t saved_num_1=gpu->fb_config.num_1,saved_num_2=gpu->fb_config.num_2;
+ const hikaru_layer_t saved_layer=gpu->state.layers.layer[0][0];
+ /* The layer source is top-origin; the combiner vertically flips it for GL readback. */
+ const unsigned x=320,y=239;
+ const uint64_t offset=(uint64_t)y*4096+(uint64_t)(x/2)*4+((x&1)?0:2);
+ uint8_t saved_pixel[2],pixel[4]={0};
+ memcpy(saved_pixel,gpu->fb->ptr+offset,sizeof(saved_pixel));
+ char error[256]={0};
+ HikaruFrame *first=hikaru_frame_create(),*second=hikaru_frame_create();
+ int ok=first&&second;
+ if(!ok)goto cleanup;
+ gpu->fb_config.num_1=2;gpu->fb_config.num_2=0;
+ gpu->state.layers.layer[0][0]=(hikaru_layer_t){.x0=0,.y0=0,.format=HIKARU_FORMAT_ABGR1555,.enabled=1};
+ store_frame_layer_pixel(gpu->fb,x,y,0x801f);
+ if(hikaru_engine_build_frame(engine,inputs,first)){ok=0;goto cleanup;}
+ store_frame_layer_pixel(gpu->fb,x,y,0xfc00);
+ if(hikaru_engine_build_frame(engine,inputs,second)){ok=0;goto cleanup;}
+ store_frame_layer_pixel(gpu->fb,x,y,0x83e0);
+ static const char producer_error[]="producer-side error sentinel";
+ snprintf(engine->error,sizeof(engine->error),"%s",producer_error);
+ hikaru_vendor_test_fail_next_packet_draw();
+ const int draw_result=hikaru_engine_draw_frame(engine,first,error,sizeof(error));
+ const int pixel_read=read_frame_pixel(target,pixel);
+ const int frame_handles=frame_packet_has_gl_handles(first);
+ if(draw_result!=-1||!strstr(error,"injected packet draw failure")||
+    strcmp(hikaru_engine_last_error(engine),producer_error)||first->ready||frame_handles||
+    !pixel_read||!frame_pixel_matches(pixel,expected[0])){
+  fprintf(stderr,"packet draw error recovery: draw=%d ready=%d handles=%d read=%d pixel=%u,%u,%u,%u (%s; producer=%s)\n",
+          draw_result,first->ready,frame_handles,pixel_read,pixel[0],pixel[1],pixel[2],pixel[3],error,hikaru_engine_last_error(engine));ok=0;goto cleanup;
+ }
+ if(hikaru_engine_draw_frame(engine,second,error,sizeof(error))||!read_frame_pixel(target,pixel)||
+    !frame_pixel_matches(pixel,expected[1])){
+  fprintf(stderr,"packet N+1 HUD pixel: got %u,%u,%u,%u expected blue (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;goto cleanup;
+ }
+ if(hikaru_engine_build_frame(engine,inputs,first)||hikaru_engine_draw_frame(engine,first,error,sizeof(error))||
+    !read_frame_pixel(target,pixel)||!frame_pixel_matches(pixel,expected[2])){
+  fprintf(stderr,"reused packet HUD pixel: got %u,%u,%u,%u expected green (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;
+ }
+cleanup:
+ gpu->fb_config._781=saved_781;gpu->fb_config.num_1=saved_num_1;gpu->fb_config.num_2=saved_num_2;
+ gpu->state.layers.layer[0][0]=saved_layer;
+ memcpy(gpu->fb->ptr+offset,saved_pixel,sizeof(saved_pixel));
+ hikaru_frame_destroy(first);hikaru_frame_destroy(second);return ok;
+}
+static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_t target,
+                                  const HikaruEngineInputs *inputs)
+{
+ static const uint8_t red[4]={96,0,0,255},blue[4]={0,0,96,255};
+ HikaruFrame *first=hikaru_frame_create(),*second=hikaru_frame_create();
+ uint8_t pixel[4]={0};char error[256]={0};int ok=first&&second;
+ if(!ok)goto cleanup;
+ vk_renderer_t *renderer=engine->machine->renderer;
+ if(!hikaru_vendor_test_seed_packet_3d(renderer,gpu,first,0)||
+    !hikaru_vendor_test_seed_packet_3d(renderer,gpu,second,1)){
+  fprintf(stderr,"could not seed textured packet fixture\n");ok=0;goto cleanup;
+ }
+ if(hikaru_engine_draw_frame(engine,first,error,sizeof(error))||!read_frame_pixel(target,pixel)||
+    !frame_pixel_close(pixel,red,3)){
+  fprintf(stderr,"packet N textured triangle: got %u,%u,%u,%u expected red-lit (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;goto cleanup;
+ }
+ if(!second->capture->textures.cpu_dirty){fprintf(stderr,"packet N+1 did not carry its texture write\n");ok=0;goto cleanup;}
+ hikaru_renderer_t *owner=(hikaru_renderer_t *)renderer;
+ const unsigned savedCarryCount=owner->push.num_verts;
+ hikaru_vertex_t savedCarry[4];memcpy(savedCarry,owner->push.tmp,sizeof(savedCarry));
+ owner->push.num_verts=2;
+ owner->push.tmp[0].body.position[0]=17;owner->push.tmp[1].body.position[0]=29;
+ hikaru_engine_discard_frames(engine);
+ const int carryPreserved=owner->push.num_verts==2&&owner->push.tmp[0].body.position[0]==17&&owner->push.tmp[1].body.position[0]==29;
+ owner->push.num_verts=savedCarryCount;memcpy(owner->push.tmp,savedCarry,sizeof(savedCarry));
+ if(!carryPreserved){fprintf(stderr,"discard lost partial CP strip carry\n");ok=0;goto cleanup;}
+ if(!hikaru_vendor_test_seed_packet_3d(renderer,gpu,second,3)||!second->capture->invalidate_all||second->capture->textures.cpu_dirty){
+  fprintf(stderr,"discarded packet did not rebase the next clean capture\n");ok=0;goto cleanup;
+ }
+ if(hikaru_engine_draw_frame(engine,second,error,sizeof(error))||!read_frame_pixel(target,pixel)||
+    !frame_pixel_close(pixel,blue,3)){
+  fprintf(stderr,"post-discard clean capture: got %u,%u,%u,%u expected blue-lit (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;goto cleanup;
+ }
+ if(hikaru_engine_run_frame(engine,inputs)!=0||owner->capture_started){
+  fprintf(stderr,"capture-to-direct renderer transition failed\n");ok=0;goto cleanup;
+ }
+ if(!hikaru_vendor_test_seed_packet_3d(renderer,gpu,NULL,0)||
+    !hikaru_vendor_test_seed_packet_3d(renderer,gpu,first,3)||!first->capture->invalidate_all||first->capture->textures.cpu_dirty){
+  fprintf(stderr,"direct-to-capture transition did not rebase the clean packet\n");ok=0;goto cleanup;
+ }
+ if(hikaru_engine_draw_frame(engine,first,error,sizeof(error))||!read_frame_pixel(target,pixel)||
+    !frame_pixel_close(pixel,red,3)){
+  fprintf(stderr,"post-direct clean capture: got %u,%u,%u,%u expected red-lit (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;
+ }
+cleanup:
+ hikaru_frame_destroy(first);hikaru_frame_destroy(second);return ok;
+}
+
 typedef struct { uint8_t *ram[2]; uint64_t regs[2]; uint64_t cycles; int fail_board, detached, resets, pin, irq[2], detached_byte; } SoundProbe;
 static int snd_attach(void *p,unsigned b,uint8_t *ram,size_t size){SoundProbe*s=p;if(b>1||size!=8u*1024*1024||!ram)return -1;if((int)b==s->fail_board)return -1;s->ram[b]=ram;return 0;}
 static void snd_detach(void *p){SoundProbe*s=p;s->detached++;if(s->ram[0])s->detached_byte=s->ram[0][0x5c];s->ram[0]=s->ram[1]=NULL;}
@@ -288,6 +418,7 @@ static int snd_write(void *p,unsigned b,uint32_t off,unsigned size,uint64_t valu
 static int snd_advance(void *p,uint32_t cycles){((SoundProbe*)p)->cycles+=cycles;return 0;}
 static int snd_irq(void *p,unsigned b){return ((SoundProbe*)p)->irq[b];}
 int main(void){
+ int packetLayerPixelsPassed=1,packet3dPixelsPassed=1;
  if(SDL_Init(SDL_INIT_VIDEO))return 10;
  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,2);
  SDL_Window *window=SDL_CreateWindow("Hikaru smoke",0,0,640,480,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN); if(!window)return 11;
@@ -335,6 +466,8 @@ int main(void){
  if(!frame_state_growth_passed)return 60;
  hikaru_vendor_test_with_gl_guard(layer_pixels_probe);
  if(!layer_pixels_passed)return 53;
+ hikaru_vendor_test_with_gl_guard(layer_upload_storage_probe);
+ if(!layer_upload_storage_passed)return 64;
  hikaru_vendor_test_with_gl_guard(routed_layers_probe);
  if(!routed_layers_passed)return 58;
  uint8_t *saved=malloc(HIKARU_ENGINE_BRAM_SIZE), *check=malloc(HIKARU_ENGINE_BRAM_SIZE);
@@ -356,6 +489,7 @@ int main(void){
  sound_pin=0x20; board->porta_m|=0x80;
  int result=hikaru_engine_run_frame(e,&in);if(result){fprintf(stderr,"frame failed: %s\n",hikaru_engine_last_error(e));return 17;}
  if(board->porta_m&0x80)return 34;
+ packetLayerPixelsPassed=frame_packet_layer_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in);
  if(!target_size(e,640,480) || hikaru_engine_set_internal_resolution(e,0)==0 || hikaru_engine_set_internal_resolution(e,5000)==0)return 35;
  if(hikaru_engine_set_internal_resolution(e,960) || hikaru_engine_run_frame(e,&in) || !target_size(e,1280,960) || !back_target_clear(e))return 36;
  if(hikaru_engine_set_internal_resolution(e,480) || hikaru_engine_run_frame(e,&in) || !target_size(e,640,480))return 37;
@@ -375,6 +509,8 @@ int main(void){
  if(pixel[0]||pixel[1]||pixel[2])return 25;
  glReadPixels(320,180,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
  if(pixel[0]==255&&pixel[1]==0&&pixel[2]==255)return 26;
+ hikaru_engine_resize(e,fbo,640,480);
+ packet3dPixelsPassed=frame_packet_3d_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in);
  hikaru_engine_destroy(e);
  glGetIntegerv(GL_ACTIVE_TEXTURE,&active);glGetIntegerv(GL_TEXTURE_BINDING_2D,&binding);glGetIntegerv(GL_UNPACK_SKIP_ROWS,&skip);
  if(active!=GL_TEXTURE7||binding!=(GLint)sentinel||skip!=5)return 22;
@@ -415,5 +551,8 @@ int main(void){
     memcmp(saved,check,HIKARU_ENGINE_BRAM_SIZE))return 32;
  free(saved);free(check);
  if(hikaru_engine_run_frame(e,&in)==0 || !hikaru_engine_last_error(e)[0])return 20;
- hikaru_engine_destroy(e);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);glDeleteBuffers(1,&unpack);glDeleteTextures(1,&sentinel);glDeleteRenderbuffers(1,&depth);glDeleteTextures(1,&tex);glDeleteFramebuffers(1,&fbo);free(boot);free(program);free(data);SDL_GL_DeleteContext(context);SDL_DestroyWindow(window);SDL_Quit();puts("synthetic GL lifecycle passed");return 0;
+ hikaru_engine_destroy(e);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);glDeleteBuffers(1,&unpack);glDeleteTextures(1,&sentinel);glDeleteRenderbuffers(1,&depth);glDeleteTextures(1,&tex);glDeleteFramebuffers(1,&fbo);free(boot);free(program);free(data);SDL_GL_DeleteContext(context);SDL_DestroyWindow(window);SDL_Quit();
+ if(!packetLayerPixelsPassed)return 65;
+ if(!packet3dPixelsPassed)return 66;
+ puts("synthetic GL lifecycle passed");return 0;
 }

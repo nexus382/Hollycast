@@ -18,7 +18,7 @@ if(USE_HIKARU)
     add_subdirectory(../deps/soundtouch soundtouch)
     add_subdirectory(hikaru)
     add_subdirectory(hikaru/valkyrie)
-    target_sources(${PROJECT_NAME} PRIVATE hikaru/frontend.cpp hikaru/sound.cpp hikaru/audio_pacer.cpp
+    target_sources(${PROJECT_NAME} PRIVATE hikaru/frontend.cpp hikaru/sound.cpp hikaru/audio_pacer.cpp hikaru/frame_worker.cpp
         hikaru/graphics/device.cpp hikaru/graphics/shaders.cpp)
     if(USE_METAL)
         target_sources(${PROJECT_NAME} PRIVATE hikaru/graphics/metal.mm)

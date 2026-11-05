@@ -397,11 +397,22 @@ public:
         ctx->WaitIdle();
         ctx->PresentFrame({}, {}, {}, 1.f);
     }
-    void texture(unsigned id,const Texture& info,unsigned level,const void* pixels,size_t bytes) override {
-        reapCompletedDraws();
-        auto i=images.find(id); unsigned levels=info.maxLevel==1000?1u+unsigned(std::floor(std::log2(std::max(info.width,info.height)))):std::max(1u,info.maxLevel+1); bool depth=(id&0x80000000u)!=0||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8||info.format==GL_DEPTH_COMPONENT;
+    void texture(unsigned id,const Texture& info,unsigned level,TextureUpload upload,const void* pixels,size_t bytes) override {
+        const bool fullUpdate=upload==TextureUpload::FullUpdate;
+        const bool depth=(id&0x80000000u)!=0||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8||info.format==GL_DEPTH_COMPONENT;
+        if(fullUpdate&&(!info.width||!info.height||level!=0||!pixels||bytes==0||depth))throw std::runtime_error("Hikaru Vulkan full texture update requires level-zero color pixel data");
+        unsigned levels=info.maxLevel==1000?1u+unsigned(std::floor(std::log2(std::max(info.width,info.height)))):std::max(1u,info.maxLevel+1);
+        const unsigned uploadWidth=std::max(1u,info.width>>level),uploadHeight=std::max(1u,info.height>>level);
+        if(fullUpdate) {
+            if(size_t(uploadWidth)>SIZE_MAX/size_t(uploadHeight)/4)throw std::runtime_error("Hikaru Vulkan full texture update is too large");
+            if(bytes!=size_t(uploadWidth)*uploadHeight*4)throw std::runtime_error("Hikaru Vulkan full texture update has an invalid byte count");
+        }
+        auto i=images.find(id);
         auto fmt=depth?depthFormat(info.format,(id&0x80000000u)==0):colorFormat(info.format);
-        if(i==images.end()||i->second.extent.width!=info.width||i->second.extent.height!=info.height||i->second.format!=fmt||i->second.levels!=(depth?1:levels)) {
+        const bool compatible=i!=images.end()&&i->second.extent.width==info.width&&i->second.extent.height==info.height&&i->second.format==fmt&&i->second.levels==(depth?1:levels);
+        if(fullUpdate&&!compatible)throw std::runtime_error("Hikaru Vulkan full texture update has no compatible allocation");
+        reapCompletedDraws();
+        if(!compatible) {
             retireImage(id); auto fresh=makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,depth&&(id&0x80000000u)==0);fresh.revision=info.revision;images.emplace(id,std::move(fresh));
         }
         imageInfo[id]=info;
@@ -411,9 +422,10 @@ public:
         auto staging=std::make_unique<BufferData>(bytes,vk::BufferUsageFlagBits::eTransferSrc);
         staging->upload(bytes,pixels);
         auto cmd=startBatch();
+        // End prior sampling before the transfer write; the shared queue and image barriers order later draws after the replacement.
         endRenderPass(cmd);
         barrier(cmd,im,vk::ImageLayout::eTransferDstOptimal);
-        vk::BufferImageCopy region(0,0,0,{vk::ImageAspectFlagBits::eColor,level,0,1},{0,0,0},{std::max(1u,info.width>>level),std::max(1u,info.height>>level),1});
+        vk::BufferImageCopy region(0,0,0,{vk::ImageAspectFlagBits::eColor,level,0,1},{0,0,0},{uploadWidth,uploadHeight,1});
         cmd.copyBufferToImage(*staging->buffer,*im.image,vk::ImageLayout::eTransferDstOptimal,region);
         barrier(cmd,im,vk::ImageLayout::eShaderReadOnlyOptimal);
         activeTransfers.push_back(std::move(staging));

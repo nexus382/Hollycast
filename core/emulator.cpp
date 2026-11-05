@@ -690,7 +690,6 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			setNetworkState(false);
 			memset(&settings.network.md5, 0, sizeof(settings.network.md5));
 			NaomiGameInputs = nullptr;
-			config::ThreadedRendering.override(false);
 			config::GGPOEnable.override(false);
 #ifdef USE_RACHIEVEMENTS
 			config::EnableAchievements.override(false);
@@ -1297,7 +1296,7 @@ bool Emulator::render()
 			}
 			return rendered;
 		}
-		catch (...) { state = Error; TermAudio(); hikaruAudioActive = false; EventManager::event(Event::Pause); throw; }
+		catch (...) { state = Error; hikaru::frontend::pauseAudio(); TermAudio(); hikaruAudioActive = false; EventManager::event(Event::Pause); throw; }
 	}
 #endif
 

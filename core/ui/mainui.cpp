@@ -159,6 +159,9 @@ void mainui_loop(bool forceStart)
 					glFlush();
 #endif
 				imguiDriver->present();
+#ifdef USE_HIKARU
+				if (settings.platform.isHikaru()) hikaru::frontend::framePresented();
+#endif
 			} catch (const FlycastException& e) {
 				forceReinit = true;
 			}

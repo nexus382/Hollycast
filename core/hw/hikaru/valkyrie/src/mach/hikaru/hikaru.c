@@ -440,23 +440,28 @@ static int
 hikaru_run_cycles (vk_machine_t *mach, int cycles)
 {
 	hikaru_t *hikaru = (hikaru_t *) mach;
+	HikaruEngine *engine = mach->host;
 	const uint64_t scaled = (uint64_t)cycles * hikaru->cpu_clock_mhz + hikaru->cpu_cycle_remainder;
 	const int cpu_cycles = (int)(scaled / 200);
 	hikaru->cpu_cycle_remainder = (unsigned)(scaled % 200);
 
+	hikaru_profile_switch(engine, HIKARU_PROFILE_MASTER);
 	/* Run the master */
 	hikaru->sh_current = hikaru->sh_m;
 	vk_cpu_run (hikaru->sh_m, cpu_cycles);
 
+	hikaru_profile_switch(engine, HIKARU_PROFILE_SLAVE);
 	/* Run the slave */
 	hikaru->sh_current = hikaru->sh_s;
 	vk_cpu_run (hikaru->sh_s, cpu_cycles);
 
 	/* Run the MEMCTL and GPU */
+	hikaru_profile_switch(engine, HIKARU_PROFILE_MEMCTL);
 	vk_device_exec (hikaru->memctl_m, cycles);
+	hikaru_profile_switch(engine, HIKARU_PROFILE_MIE);
 	if (vk_device_exec (hikaru->mie, cycles) < 0)
 		return -1;
-	HikaruEngine *engine = mach->host;
+	hikaru_profile_switch(engine, HIKARU_PROFILE_SOUND);
 	if (engine && engine->sound_attached) {
 		/* Also catches MIE-firmware writes made during its execution slice. */
 		if (hikaru_engine_sync_sound_reset(engine)) return -1;
@@ -477,7 +482,9 @@ hikaru_run_cycles (vk_machine_t *mach, int cycles)
 	}
 	/* XXX run the slave MEMCTL? I've never seen it used, and would
 	 * like to debug it a bit before enabling it. */
+	hikaru_profile_switch(engine, HIKARU_PROFILE_GPU);
 	vk_device_exec (hikaru->gpu, cycles);
+	hikaru_profile_switch(engine, HIKARU_PROFILE_OTHER);
 	return 0;
 sound_error:
 	snprintf(engine->error, sizeof(engine->error), "Hikaru sound board execution failed");

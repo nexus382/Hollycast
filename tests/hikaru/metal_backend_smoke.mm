@@ -24,11 +24,11 @@ int main() {
         auto backend=makeMetalBackendForTesting(device,[device newCommandQueue]);
 
         Texture output;output.width=4;output.height=4;output.format=GL_RGBA8;output.revision=1;
-        backend->texture(0,output,0,nullptr,0);
-        Texture internal=output;backend->texture(3,internal,0,nullptr,0);
+        backend->texture(0,output,0,TextureUpload::Definition,nullptr,0);
+        Texture internal=output;backend->texture(3,internal,0,TextureUpload::Definition,nullptr,0);
         const uint8_t texel[4]={20,40,60,255};Texture source;source.width=1;source.height=1;source.format=GL_RGBA8;source.revision=1;
-        backend->texture(1,source,0,texel,sizeof(texel));
-        const uint8_t alphaTexel[4]={200,100,50,80};backend->texture(14,source,0,alphaTexel,sizeof(alphaTexel));
+        backend->texture(1,source,0,TextureUpload::Definition,texel,sizeof(texel));
+        const uint8_t alphaTexel[4]={200,100,50,80};backend->texture(14,source,0,TextureUpload::Definition,alphaTexel,sizeof(alphaTexel));
 
         Draw state;state.color=0;state.viewport={0,0,4,4};
         backend->clear(state,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);
@@ -52,7 +52,7 @@ int main() {
         if(!pixelIs(pixels,0,0,255,255,0,255)||!pixelIs(pixels,3,3,255,20,30,128)){std::cerr<<"scissored clear/readback orientation mismatch\n";return 6;}
 
         Texture depth;depth.width=4;depth.height=4;depth.format=GL_DEPTH_COMPONENT24;depth.revision=1;
-        backend->texture(2,depth,0,nullptr,0);
+        backend->texture(2,depth,0,TextureUpload::Definition,nullptr,0);
         Draw clearDepth;clearDepth.color=0;clearDepth.depth=2;clearDepth.viewport={0,0,4,4};
         backend->clear(clearDepth,GL_DEPTH_BUFFER_BIT,{0,0,0,1},0.5f);
         backend->clear(state,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);
@@ -98,9 +98,9 @@ int main() {
 
         Texture peelColor;peelColor.width=4;peelColor.height=4;peelColor.format=GL_RGBA8;peelColor.revision=1;
         Texture peelDepth;peelDepth.width=4;peelDepth.height=4;peelDepth.format=GL_DEPTH_COMPONENT24;peelDepth.revision=1;
-        backend->texture(8,peelColor,0,nullptr,0);backend->texture(10,peelColor,0,nullptr,0);
-        backend->texture(7,peelDepth,0,nullptr,0);backend->texture(9,peelDepth,0,nullptr,0);
-        backend->texture(11,peelDepth,0,nullptr,0);backend->texture(13,peelColor,0,nullptr,0);
+        backend->texture(8,peelColor,0,TextureUpload::Definition,nullptr,0);backend->texture(10,peelColor,0,TextureUpload::Definition,nullptr,0);
+        backend->texture(7,peelDepth,0,TextureUpload::Definition,nullptr,0);backend->texture(9,peelDepth,0,TextureUpload::Definition,nullptr,0);
+        backend->texture(11,peelDepth,0,TextureUpload::Definition,nullptr,0);backend->texture(13,peelColor,0,TextureUpload::Definition,nullptr,0);
         Draw opaqueClear;opaqueClear.color=13;opaqueClear.depth=11;opaqueClear.viewport={0,0,4,4};opaqueClear.depthWrite=true;
         backend->clear(opaqueClear,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,{0,0,0,1},1);
         Draw opaque;opaque.color=13;opaque.depth=11;opaque.viewport={0,0,4,4};opaque.depthTest=true;opaque.depthFunc=GL_LESS;opaque.depthWrite=true;opaque.colorMask={false,false,false,false};
@@ -137,7 +137,7 @@ int main() {
         std::array<uint8_t,64> baseMip{};std::array<uint8_t,16> midMip{};const uint8_t green[4]={0,255,0,255},magenta[4]={255,0,255,255};
         for(size_t i=3;i<baseMip.size();i+=4)baseMip[i]=255;
         for(size_t i=0;i<midMip.size();i+=4)std::copy(green,green+4,midMip.begin()+i);
-        backend->texture(6,mip,0,baseMip.data(),baseMip.size());backend->texture(6,mip,1,midMip.data(),midMip.size());backend->texture(6,mip,2,magenta,sizeof(magenta));
+        backend->texture(6,mip,0,TextureUpload::Definition,baseMip.data(),baseMip.size());backend->texture(6,mip,1,TextureUpload::Definition,midMip.data(),midMip.size());backend->texture(6,mip,2,TextureUpload::Definition,magenta,sizeof(magenta));
         backend->clear(state,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);
         Draw mipDraw=bitmap;mipDraw.color=0;mipDraw.viewport={0,0,2,2};mipDraw.textures[0]=6;
         mipDraw.sampling[0]=mip;mipDraw.sampling[0].minFilter=GL_NEAREST;mipDraw.sampling[0].magFilter=GL_NEAREST;
@@ -169,7 +169,24 @@ int main() {
         corner.scissorEnabled=true;corner.scissor={3,3,1,1};
         backend->beginOcclusion();backend->draw(corner);
         if(backend->endOcclusion()){std::cerr<<"empty query reported geometry\n";return 19;}
-        std::cout<<"Hikaru Metal bitmap, mip completeness/minification, peel depth, composition, culling state, scissor, and readback passed\n";
+
+        // Keep the old draw in flight while a private texture is replaced through a same-queue blit.
+        Draw updateClear=state;updateClear.color=3;
+        backend->clear(updateClear,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);
+        Draw oldLayer=bitmap;oldLayer.color=3;backend->draw(oldLayer);
+        const uint8_t updatedTexel[4]={80,100,120,255};source.revision=2;
+        backend->texture(1,source,0,TextureUpload::FullUpdate,updatedTexel,sizeof(updatedTexel));
+        backend->clear(state,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);
+        backend->draw(bitmap);
+        pixels.fill(0);backend->readPixels(0,0,0,4,4,pixels.data());
+        if(!pixelIs(pixels,1,1,80,100,120,255)){
+            std::cerr<<"full texture update did not preserve in-flight draw ordering or new pixels\n";return 20;
+        }
+        pixels.fill(0);backend->readPixels(3,0,0,4,4,pixels.data());
+        if(!pixelIs(pixels,1,1,20,40,60,255)){
+            std::cerr<<"queued draw did not retain old texture contents across update\n";return 21;
+        }
+        std::cout<<"Hikaru Metal bitmap, full texture updates, mip completeness/minification, peel depth, composition, culling state, scissor, and readback passed\n";
         return 0;
     }
 }

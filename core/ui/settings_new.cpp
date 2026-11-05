@@ -9014,22 +9014,20 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		// Hikaru currently runs both CPUs and graphics on one host thread.
-		if (!settings.platform.isHikaru())
-			RenderGeneralToggleSettingRow(
-				"MultiThreaded",
-				ICON_FA_GEAR,
-				T("Multi-threading"),
-				T("Use additional CPU threads"),
-				static_cast<bool>(config::ThreadedRendering),
-				[](bool enabled) { config::ThreadedRendering.set(enabled); },
-				T(
-					"Multi-threading\n"
-					"Allows Hollycast to use more than one CPU thread for certain emulation/rendering work.\n\n"
-					"On modern multi-core devices this can improve performance or reduce stutter.\n"
-					"On some drivers/devices it can introduce instability or odd timing issues.\n\n"
-					"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
-				));
+		RenderGeneralToggleSettingRow(
+			"MultiThreaded",
+			ICON_FA_GEAR,
+			T("Multi-threading"),
+			T("Use additional CPU threads"),
+			static_cast<bool>(config::ThreadedRendering),
+			[](bool enabled) { config::ThreadedRendering.set(enabled); },
+			T(
+				"Multi-threading\n"
+				"Allows Hollycast to use more than one CPU thread for certain emulation/rendering work.\n\n"
+				"On modern multi-core devices this can improve performance or reduce stutter.\n"
+				"On some drivers/devices it can introduce instability or odd timing issues.\n\n"
+				"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
+			));
 
 		ImGui::Spacing();
 

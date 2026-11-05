@@ -141,7 +141,7 @@ void Device::queueDraw(Draw draw) {
     else { flushDraw();pendingDraw=std::move(draw); }
 }
 void Device::begin(unsigned w,unsigned h) {
-    if (w!=width || h!=height) { flushDraw();width=w;height=h; Texture t; t.width=w;t.height=h;t.revision=++textures[0].revision; textures[0]=t; backend->texture(0,t,0,nullptr,0); }
+    if (w!=width || h!=height) { flushDraw();width=w;height=h; Texture t; t.width=w;t.height=h;t.revision=++textures[0].revision; textures[0]=t; backend->texture(0,t,0,TextureUpload::Definition,nullptr,0); }
 }
 void Device::present() { checkError(); backend->present(width,height); }
 Draw Device::drawState() const {
@@ -327,12 +327,12 @@ void Device::LinkProgram(GLuint id){auto& p=programs.at(id);p.cachedUniforms.res
 void Device::PixelStorei(GLenum name,GLint v){pixelStore[name]=v;}
 void Device::PolygonOffset(GLfloat f,GLfloat u){state.biasFactor=f;state.biasUnits=u;}
 void Device::ReadPixels(GLint x,GLint y,GLsizei w,GLsizei h,GLenum format,GLenum type,void* data){flushDraw();if(format!=GL_RGBA||type!=GL_UNSIGNED_BYTE)throw std::runtime_error("Unsupported Hikaru readback format");backend->readPixels(targets.at(readFramebuffer)[0],x,y,w,h,static_cast<uint8_t*>(data));}
-void Device::RenderbufferStorage(GLenum,GLenum format,GLsizei w,GLsizei h){flushDraw();auto id=renderbuffer|0x80000000u;auto& t=textures[id];t.width=w;t.height=h;t.format=format;++t.revision;backend->texture(id,t,0,nullptr,0);}
+void Device::RenderbufferStorage(GLenum,GLenum format,GLsizei w,GLsizei h){flushDraw();auto id=renderbuffer|0x80000000u;auto& t=textures[id];t.width=w;t.height=h;t.format=format;++t.revision;backend->texture(id,t,0,TextureUpload::Definition,nullptr,0);}
 void Device::Scissor(GLint x,GLint y,GLsizei w,GLsizei h){state.scissor={x,y,w,h};}
 void Device::ShaderSource(GLuint id,GLsizei count,const GLchar* const* strings,const GLint* lengths){auto& s=shaders.at(id);s.clear();for(int i=0;i<count;i++)s.append(strings[i],lengths&&lengths[i]>=0?size_t(lengths[i]):std::strlen(strings[i]));}
-std::vector<uint8_t> Device::unpack(int w,int h,GLenum format,GLenum type,const void* data) const {
+void Device::unpack(int w,int h,GLenum format,GLenum type,const void* data,std::vector<uint8_t>& out) const {
     if(w<=0||h<=0||size_t(w)>SIZE_MAX/size_t(h)/4)throw std::runtime_error("Invalid Hikaru texture dimensions");
-    std::vector<uint8_t> out(size_t(w)*h*4);if(!data)return out;
+    out.resize(size_t(w)*h*4);if(!data){std::fill(out.begin(),out.end(),0);return;}
     auto get=[&](GLenum n,int fallback){auto i=pixelStore.find(n);return i==pixelStore.end()?fallback:i->second;};
     size_t element=format==GL_RG?2:(type==GL_UNSIGNED_BYTE||type==GL_UNSIGNED_INT_2_10_10_10_REV||type==GL_UNSIGNED_INT)?4:2;
     size_t row=size_t(get(GL_UNPACK_ROW_LENGTH,w));if(!row)row=w;
@@ -346,14 +346,13 @@ std::vector<uint8_t> Device::unpack(int w,int h,GLenum format,GLenum type,const 
             else if(type==GL_UNSIGNED_SHORT_4_4_4_4_REV){for(unsigned c=0;c<4;c++)dst[c]=((v>>(c*4))&15)*17;}
             else throw std::runtime_error("Unsupported Hikaru packed texture format");}
     }
-    return out;
 }
 void Device::TexImage2D(GLenum,GLint level,GLint format,GLsizei w,GLsizei h,GLint,GLenum source,GLenum type,const void* data){
     flushDraw();
     auto id=boundTextures[activeTexture];if(!id)throw std::runtime_error("Hikaru texture zero is immutable");auto& t=textures.at(id);
     if(level==0){t.width=w;t.height=h;t.format=format==GL_RG8?GL_RGBA8:format;}++t.revision;
-    auto pixels=unpack(w,h,source,type,data);
-    backend->texture(id,t,level,data?pixels.data():nullptr,data?pixels.size():0);
+    std::vector<uint8_t> pixels;unpack(w,h,source,type,data,pixels);
+    backend->texture(id,t,level,TextureUpload::Definition,data?pixels.data():nullptr,data?pixels.size():0);
 }
 void Device::TexParameterf(GLenum,GLenum name,GLfloat v){
     if(name==GL_TEXTURE_LOD_BIAS) {
@@ -362,7 +361,27 @@ void Device::TexParameterf(GLenum,GLenum name,GLfloat v){
     } else TexParameteri(GL_TEXTURE_2D,name,GLint(v));
 }
 void Device::TexParameteri(GLenum,GLenum name,GLint v){auto id=boundTextures[activeTexture];if(!id)return;auto& t=textures.at(id);switch(name){case GL_TEXTURE_MIN_FILTER:t.minFilter=v;break;case GL_TEXTURE_MAG_FILTER:t.magFilter=v;break;case GL_TEXTURE_WRAP_S:t.wrapS=v;break;case GL_TEXTURE_WRAP_T:t.wrapT=v;break;case GL_TEXTURE_MAX_LEVEL:t.maxLevel=v;break;default:break;}}
-void Device::TexSubImage2D(GLenum,GLint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const void*){throw std::runtime_error("Partial Hikaru texture upload is unsupported");}
+void Device::TexSubImage2D(GLenum target,GLint level,GLint x,GLint y,GLsizei w,GLsizei h,GLenum source,GLenum type,const void* data){
+    if(target!=GL_TEXTURE_2D||level!=0||x!=0||y!=0)
+        throw std::runtime_error("Unsupported Hikaru texture update region");
+    const auto id=boundTextures[activeTexture];
+    if(!id)throw std::runtime_error("Hikaru texture zero is immutable");
+    auto& t=textures.at(id);
+    if(w<=0||h<=0||unsigned(w)!=t.width||unsigned(h)!=t.height)
+        throw std::runtime_error("Hikaru texture update must replace the full image");
+    const bool rgba8Source=source==GL_RGBA&&(type==GL_UNSIGNED_BYTE||type==GL_UNSIGNED_SHORT_1_5_5_5_REV||type==GL_UNSIGNED_SHORT_4_4_4_4_REV);
+    const bool packed10Source=source==GL_RGBA&&type==GL_UNSIGNED_INT_2_10_10_10_REV;
+    const bool grayAlphaSource=source==GL_RG&&type==GL_UNSIGNED_BYTE;
+    const bool compatible=t.format==GL_RGB10_A2?packed10Source:
+        (t.format==GL_RGBA8||t.format==GL_RGB5_A1||t.format==GL_RGBA4)&&(rgba8Source||(t.format==GL_RGBA8&&grayAlphaSource));
+    if(!compatible)throw std::runtime_error("Unsupported Hikaru full texture update format");
+    if(!data)throw std::runtime_error("Hikaru full texture update requires pixel data");
+    unpack(w,h,source,type,data,fullTextureUpdatePixels);
+    // Preserve queued draws against the old texture contents before submitting the replacement.
+    flushDraw();
+    ++t.revision;
+    backend->texture(id,t,level,TextureUpload::FullUpdate,fullTextureUpdatePixels.data(),fullTextureUpdatePixels.size());
+}
 void Device::Uniform1f(GLint l,GLfloat v){uniform(l,1,&v);}
 void Device::Uniform1fv(GLint l,GLsizei n,const GLfloat* v){uniform(l,n,v);}
 void Device::Uniform1i(GLint l,GLint v){float f=v;uniform(l,1,&f);}

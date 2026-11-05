@@ -63,7 +63,7 @@ if(LIBRETRO)
 endif()
 
 if(USE_HIKARU)
-    target_sources(${PROJECT_NAME} PRIVATE src/HikaruStateTest.cpp src/HikaruCardStateTest.cpp src/HikaruAudioPacerTest.cpp src/HikaruSoundFrameTest.cpp src/HikaruAuditTest.cpp src/HikaruInputBindingsTest.cpp src/HikaruCabinetSettingsTest.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruStateTest.cpp src/HikaruCardStateTest.cpp src/HikaruAudioPacerTest.cpp src/HikaruSoundFrameTest.cpp src/HikaruAuditTest.cpp src/HikaruInputBindingsTest.cpp src/HikaruCabinetSettingsTest.cpp src/HikaruFrameWorkerTest.cpp)
 endif()
 
 if(NOT LIBRETRO)

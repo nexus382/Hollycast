@@ -162,16 +162,28 @@ public:
         textures[0] = {};
     }
 
-    void texture(unsigned id, const Texture& info, unsigned level, const void* pixels, size_t bytes) override {
+    void texture(unsigned id, const Texture& info, unsigned level, TextureUpload upload, const void* pixels, size_t bytes) override {
       @autoreleasepool {
-        flushDraws();
-        if (!info.width || !info.height) return;
-        auto& entry = textures[id];
+        if (!info.width || !info.height) {
+            if(upload==TextureUpload::FullUpdate)throw std::runtime_error("Hikaru Metal full texture update has no compatible allocation");
+            flushDraws();return;
+        }
+        auto existing=textures.find(id);
+        if(upload==TextureUpload::FullUpdate&&existing==textures.end())throw std::runtime_error("Hikaru Metal full texture update has no compatible allocation");
+        auto& entry = upload==TextureUpload::FullUpdate?existing->second:textures[id];
         const bool rb=(id & 0x80000000u)!=0;
         const auto format=pixelFormat(info.format);
         const unsigned geometric=1u+unsigned(std::floor(std::log2(std::max(info.width,info.height))));
         const unsigned levels=info.maxLevel==1000?geometric:std::max(1u,std::min(geometric,info.maxLevel+1));
-        if (!entry.texture || entry.info.width!=info.width || entry.info.height!=info.height || entry.info.format!=info.format || entry.levels!=levels) {
+        const bool compatible=entry.texture&&entry.info.width==info.width&&entry.info.height==info.height&&entry.info.format==info.format&&entry.levels==levels;
+        if(upload==TextureUpload::FullUpdate&&!compatible)throw std::runtime_error("Hikaru Metal full texture update has no compatible allocation");
+        if(upload==TextureUpload::FullUpdate) {
+            if(!pixels||bytes==0||level!=0||isDepth(info.format))throw std::runtime_error("Hikaru Metal full texture update requires level-zero color pixel data");
+            if(size_t(info.width)>SIZE_MAX/size_t(info.height)/4)throw std::runtime_error("Hikaru Metal full texture update is too large");
+            if(bytes!=size_t(info.width)*info.height*4)throw std::runtime_error("Hikaru Metal texture upload has an invalid byte count");
+        }
+        flushDraws();
+        if (!compatible) {
             MTLTextureDescriptor *desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:info.width height:info.height mipmapped:levels>1];
             desc.mipmapLevelCount=levels;
             // Private storage supports renderable and sampleable depth textures
@@ -193,6 +205,7 @@ public:
             // but intentionally preserves GL_UNSIGNED_INT_2_10_10_10_REV. Its
             // component bit order matches MTLPixelFormatRGB10A2Unorm exactly.
             if (isDepth(info.format)) throw std::runtime_error("CPU upload to a Hikaru Metal depth texture is unsupported");
+            // Private storage is updated through a blit on the same serial queue, keeping prior draws before writes and later draws after them.
             uploadColor(entry.texture,level,w,h,pixels);
         }
         if(level>=entry.levels)throw std::runtime_error("Hikaru Metal texture upload exceeds allocated mip levels");

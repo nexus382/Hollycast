@@ -35,5 +35,15 @@ void		 hikaru_renderer_note_cpu_texram_write (vk_renderer_t *);
 void             hikaru_renderer_set_transparency_sorting (vk_renderer_t *, HikaruTransparencySorting);
 void             hikaru_renderer_set_transparency_peel_capacity(vk_renderer_t *, unsigned layers);
 void             hikaru_renderer_set_transparency_memory_budget(vk_renderer_t *, uint64_t bytes);
+vk_renderer_t *hikaru_renderer_begin_capture(vk_renderer_t *, void *gpu, HikaruFrame *);
+void hikaru_renderer_seal_capture(vk_renderer_t *, void *gpu, HikaruFrame *);
+void hikaru_renderer_end_capture(vk_renderer_t *, void *gpu);
+void hikaru_renderer_draw_packet(vk_renderer_t *, HikaruFrame *);
+void hikaru_renderer_finish_packet(vk_renderer_t *, HikaruFrame *);
+#ifdef HIKARU_VENDOR_TESTING
+int hikaru_vendor_test_packet_ownership(vk_renderer_t *, void *gpu);
+void hikaru_vendor_test_fail_next_packet_draw(void);
+int hikaru_vendor_test_seed_packet_3d(vk_renderer_t *, void *gpu, HikaruFrame *, unsigned style);
+#endif
 
 #endif /* __VK_HIKARU_RENDERER_H__ */

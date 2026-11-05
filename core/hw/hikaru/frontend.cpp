@@ -13,6 +13,7 @@
 #include "protection.h"
 #include "sound.h"
 #include "audio_pacer.h"
+#include "frame_worker.h"
 #include "graphics/device.h"
 #include "valkyrie/engine.h"
 #include "audio/audiostream.h"
@@ -37,6 +38,8 @@
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
+#include <exception>
+#include <functional>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -50,6 +53,72 @@ namespace {
 // Render and snapshot requests may arrive on different host threads (Android).
 // One frame owns the machine; no state operation observes an in-progress frame.
 std::recursive_mutex stateMutex;
+std::mutex frameWorkerMutex;
+std::unique_ptr<detail::FrameWorker> frameWorker;
+std::atomic<uint64_t> frameGeneration{1};
+constexpr size_t MaxFrameAudioSamples = 32768;
+struct FrameAudioSample { s16 first, second; };
+struct FrameSlot {
+    std::unique_ptr<HikaruFrame, void(*)(HikaruFrame*)> packet{nullptr, hikaru_frame_destroy};
+    std::array<FrameAudioSample, MaxFrameAudioSamples> audio{};
+    size_t audioCount = 0;
+    uint64_t generation = 0;
+    HikaruEngineInputs input{};
+    unsigned internalHeight = 0, cpuClockMhz = 0;
+    bool clearAudio = false, audioOverflow = false;
+    bool fastForward = false, muted = false, fastForwardAudio = false, pacing = false, vsync = false;
+    unsigned queuedFrames = 2600;
+    double blockedSeconds = 0;
+    bool traceTiming = false;
+    std::chrono::steady_clock::time_point buildStart{}, buildEnd{};
+};
+std::array<FrameSlot, 2> frameSlots;
+int pendingFrameSlot = -1, readyFrameSlot = -1;
+unsigned nextFrameSlot = 0;
+bool haveConsumerDrawSpan = false;
+std::chrono::steady_clock::time_point previousDrawStart{}, previousDrawEnd{};
+std::atomic<uint64_t> presentedGeneration{0};
+std::atomic<uint64_t> loadStateEventGeneration{0};
+FrameSlot* activeAudioCapture = nullptr;
+
+void captureFrameAudio(void*, s16 left, s16 right) {
+    if (!activeAudioCapture) return;
+    if (activeAudioCapture->audioCount == activeAudioCapture->audio.size()) {
+        activeAudioCapture->audioOverflow = true;
+        return;
+    }
+    activeAudioCapture->audio[activeAudioCapture->audioCount++] = {right, left};
+}
+
+std::exception_ptr waitFrameWorker() {
+    std::lock_guard<std::mutex> lock(frameWorkerMutex);
+    return frameWorker ? frameWorker->wait() : std::exception_ptr{};
+}
+void drainFrameWorker() {
+    std::lock_guard<std::mutex> lock(frameWorkerMutex);
+    if (frameWorker) frameWorker->drain();
+}
+void stopFrameWorker() {
+    std::lock_guard<std::mutex> lock(frameWorkerMutex);
+    if (frameWorker) {
+        frameWorker->shutdown();
+        frameWorker.reset();
+    }
+}
+void shutdownFrameWorker() {
+    std::lock_guard<std::mutex> lock(frameWorkerMutex);
+    if (frameWorker) {
+        frameWorker->shutdown();
+        frameWorker.reset();
+    }
+    pendingFrameSlot = readyFrameSlot = -1;
+    for (auto& slot : frameSlots) slot.packet.reset();
+}
+void enqueueFrameWorker(std::function<void()> task) {
+    std::lock_guard<std::mutex> lock(frameWorkerMutex);
+    if (!frameWorker) frameWorker = std::make_unique<detail::FrameWorker>();
+    frameWorker->enqueue(std::move(task));
+}
 std::vector<uint8_t> pendingState;
 std::array<uint32_t, 3> stateRomHashes{};
 bool stateRomHashesKnown = false;
@@ -309,6 +378,9 @@ HikaruEngineProtection protectionCallbacks() {
 }
 }
 void load(const std::string& path) {
+    shutdownFrameWorker();
+    frameGeneration.fetch_add(1, std::memory_order_release);
+    loadStateEventGeneration.store(0, std::memory_order_release);
     std::lock_guard<std::recursive_mutex> lock(stateMutex);
     pendingState.clear();
     stateRomHashesKnown = false;
@@ -377,8 +449,8 @@ void load(const std::string& path) {
     regionRequested = false;
     activeGame = selectedGame;
 }
-void releaseGraphics() {
-    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+namespace {
+void releaseGraphicsLocked() {
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
     if (audioPacer) { audioPacer->reset(); audioPacer.reset(); audioModeKnown = false; }
     if (engine) {
@@ -391,8 +463,23 @@ void releaseGraphics() {
     }
     nativeGraphics.reset();
 }
-void suspendGraphics() {
+}
+void releaseGraphics() {
+    // The producer captures PCM only, but it must finish before its engine and packet storage are released.
+    drainFrameWorker();
     std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    frameGeneration.fetch_add(1, std::memory_order_release);
+    readyFrameSlot = -1;
+    loadStateEventGeneration.store(0, std::memory_order_release);
+    releaseGraphicsLocked();
+}
+void suspendGraphics() {
+    drainFrameWorker();
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    const uint64_t generation = frameGeneration.fetch_add(1, std::memory_order_release) + 1;
+    readyFrameSlot = -1;
+    if (loadStateEventGeneration.load(std::memory_order_acquire) != 0)
+        loadStateEventGeneration.store(generation, std::memory_order_release);
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
     if (!engine) { nativeGraphics.reset(); return; }
     if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
@@ -400,9 +487,9 @@ void suspendGraphics() {
         if (bramSaveAllowed && !saveNvram(bramPath, savedBram)) os_notify("Could not save Hikaru battery-backed RAM", 10000);
     }
     if (mieSaveAllowed && !saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
-    pauseAudio();
-    ClearAudioOutput();
+    hikaru_engine_discard_frames(engine);
     freshAudioOutput = true;
+    ClearAudioOutput();
     if (hikaru_engine_release_graphics(engine) != 0)
         os_notify("Could not release Hikaru graphics", 10000);
     internalHeight = 0;
@@ -411,12 +498,15 @@ void suspendGraphics() {
 }
 const GameDescriptor* loadedGame() { return activeGame.load(); }
 void unload() {
+    shutdownFrameWorker();
     std::lock_guard<std::recursive_mutex> lock(stateMutex);
     activeGame = nullptr;
     pendingRegion = CabinetRegion::Saved;
     pendingState.clear();
     stateRomHashesKnown = false;
-    releaseGraphics();
+    frameGeneration.fetch_add(1, std::memory_order_release);
+    loadStateEventGeneration.store(0, std::memory_order_release);
+    releaseGraphicsLocked();
     protection.reset(); mie.reset(); cardReader.reset(); images.reset();
     ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr;
     hasSavedBram = false; bramPath.clear(); mieEepromPath.clear();
@@ -468,6 +558,9 @@ void deserialize(Deserializer& source) {
         source.deserialize(bytes.data(), bytes.size());
         StateReader::require(romCrc32(bytes) == checksum, "Hikaru state checksum mismatch");
         pendingState = std::move(bytes);
+        frameGeneration.fetch_add(1, std::memory_order_release);
+        if (engine) hikaru_engine_discard_frames(engine);
+        loadStateEventGeneration.store(0, std::memory_order_release);
         resetRequested = regionRequested = false;
         pendingRegion = CabinetRegion::Saved;
     } catch (const std::exception& error) {
@@ -479,14 +572,130 @@ void requestCabinetRegion() { regionRequested = true; }
 void insertCredit(unsigned player) {
     if (player < credits.size()) credits[player].enqueue();
 }
-void pauseAudio() { std::lock_guard<std::recursive_mutex> lock(stateMutex); if (audioPacer) audioPacer->reset(); audioModeKnown = false; }
-// InitAudio has already supplied an empty backend. Defer DSP work to its
+// A backend write can wait indefinitely for consumer progress. Drain the CPU producer before audio teardown,
+// without holding stateMutex, so a worker can finish machine state and publish its bounded PCM packet.
+void pauseAudio() {
+    // Never wait for a producer while holding stateMutex: the producer needs
+    // it to finish a machine boundary, and audio backend writes stay on render.
+    drainFrameWorker();
+    {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
+        const uint64_t generation = frameGeneration.fetch_add(1, std::memory_order_release) + 1;
+        readyFrameSlot = -1;
+        if (engine) hikaru_engine_discard_frames(engine);
+        if (loadStateEventGeneration.load(std::memory_order_acquire) != 0)
+            loadStateEventGeneration.store(generation, std::memory_order_release);
+        freshAudioOutput = true;
+    }
+#ifndef LIBRETRO
+    performance_overlay::clearSh4ThreadSample();
+#endif
+}// InitAudio has already supplied an empty backend. Defer DSP work to its
 // producer thread and avoid reopening non-queue backends to clear it again.
 void resumeAudio() { freshAudioOutput = true; }
-static bool renderFrame() {
+namespace {
+#ifndef LIBRETRO
+struct HikaruSh4SampleRegistration {
+    HikaruSh4SampleRegistration() { performance_overlay::resetSh4ThreadSample(); }
+    ~HikaruSh4SampleRegistration() { performance_overlay::clearSh4ThreadSample(); }
+};
+#endif
+struct AudioCaptureScope {
+    explicit AudioCaptureScope(FrameSlot* slot) { activeAudioCapture = slot; }
+    ~AudioCaptureScope() { activeAudioCapture = nullptr; }
+};
+void beginAudioFrame(FrameSlot& frame) {
+    const bool freshOutput = freshAudioOutput.exchange(false);
+    if (freshOutput) audioModeKnown = false;
+    if (!audioModeKnown || frame.fastForward != previousFastForward
+            || frame.muted != previousMuted || frame.pacing != previousPacing) {
+        audioPacer->reset();
+        if (!freshOutput) frame.clearAudio = true;
+        audioModeKnown = true;
+        previousFastForward = frame.fastForward;
+        previousMuted = frame.muted;
+        previousPacing = frame.pacing;
+    }
+    if (audioPacer->beginFrame(frame.pacing && !frame.fastForward && !frame.muted,
+                               frame.queuedFrames, frame.blockedSeconds))
+        frame.clearAudio = true;
+}
+void buildFrame(FrameSlot& frame, bool workerThread) {
+#ifndef LIBRETRO
+    if (workerThread) {
+        static thread_local HikaruSh4SampleRegistration registration;
+        performance_overlay::resetSh4ThreadSample();
+    } else {
+        performance_overlay::resetSh4ThreadSample();
+    }
+#endif
     std::unique_lock<std::recursive_mutex> stateLock(stateMutex);
+    if (frame.generation != frameGeneration.load(std::memory_order_acquire))
+        return;
+    frame.buildStart = frame.traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    frame.audioCount = 0;
+    frame.audioOverflow = false;
+    frame.clearAudio = false;
+    {
+        AudioCaptureScope capture(&frame);
+        beginAudioFrame(frame);
+        for (unsigned i = 0; i < credits.size(); ++i)
+            frame.input.coin[i] = credits[i].sample(frame.input.coin[i]);
+        ioError.clear();
+        int result;
+        {
+            Sound::FrameScope audioFrame(*sound);
+            if (!audioFrame.acquired())
+                throw std::runtime_error("Hikaru sound context is already active");
+            result = hikaru_engine_build_frame(engine, &frame.input, frame.packet.get());
+        }
+        std::string error;
+        if (!ioError.empty()) error = ioError;
+        else if (result != 0) error = hikaru_engine_last_error(engine);
+        if (frame.audioOverflow) error = "Hikaru frame exceeded its bounded audio buffer";
+        frame.buildEnd = frame.traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        stateLock.unlock();
+        if (!error.empty()) throw std::runtime_error(error);
+    }
+#ifndef LIBRETRO
+    performance_overlay::recordSh4Vblank();
+#endif
+}
+}
+static bool renderFrame() {
     static const bool traceTiming = std::getenv("HIKARU_TRACE_TIMING") != nullptr;
     const auto renderStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const bool threaded = config::ThreadedRendering.get();
+    const auto workerWaitStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    int completedSlot = -1;
+    if (pendingFrameSlot >= 0) {
+        completedSlot = pendingFrameSlot;
+        const auto workerError = waitFrameWorker();
+        pendingFrameSlot = -1;
+        if (workerError) {
+            readyFrameSlot = -1;
+            std::rethrow_exception(workerError);
+        }
+    }
+    if (!threaded) stopFrameWorker();
+    const auto workerWaitEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const double workerWaitMs = traceTiming
+        ? std::chrono::duration<double, std::milli>(workerWaitEnd - workerWaitStart).count() : 0;
+    double buildOverlapMs = 0;
+    if (traceTiming && completedSlot >= 0 && haveConsumerDrawSpan) {
+        const auto& completed = frameSlots[completedSlot];
+        const auto overlapStart = std::max(completed.buildStart, previousDrawStart);
+        const auto overlapEnd = std::min(completed.buildEnd, previousDrawEnd);
+        if (overlapEnd > overlapStart)
+            buildOverlapMs = std::chrono::duration<double, std::milli>(overlapEnd - overlapStart).count();
+    }
+    std::unique_lock<std::recursive_mutex> stateLock(stateMutex);
+    if (completedSlot >= 0) {
+        if (frameSlots[completedSlot].generation == frameGeneration.load(std::memory_order_acquire))
+            readyFrameSlot = completedSlot;
+        else
+            readyFrameSlot = -1;
+    }
     if (!images || !mie || !protection || !activeGame) throw FlycastException("Hikaru ROMs are not loaded");
     // A requested API takes effect after the current UI frame has completed.
     // Never use a new backend with the context that is being replaced.
@@ -507,10 +716,22 @@ static bool renderFrame() {
     }
     if (settings.display.width <= 0 || settings.display.height <= 0) return false;
     if (resetRequested.exchange(false)) {
-        releaseGraphics(); ClearAudioOutput(); freshAudioOutput = true;
+        frameGeneration.fetch_add(1, std::memory_order_release);
+        readyFrameSlot = -1;
+        loadStateEventGeneration.store(0, std::memory_order_release);
+        releaseGraphicsLocked();
+        ClearAudioOutput();
+        freshAudioOutput = true;
         pendingRegion = configuredRegion(loadedGame());
     }
-    if (regionRequested.exchange(false)) pendingRegion = configuredRegion(loadedGame());
+    if (regionRequested.exchange(false)) {
+        const uint64_t generation = frameGeneration.fetch_add(1, std::memory_order_release) + 1;
+        readyFrameSlot = -1;
+        if (engine) hikaru_engine_discard_frames(engine);
+        if (loadStateEventGeneration.load(std::memory_order_acquire) != 0)
+            loadStateEventGeneration.store(generation, std::memory_order_release);
+        pendingRegion = configuredRegion(loadedGame());
+    }
     if (pendingState.empty() && pendingRegion != CabinetRegion::Saved && !mie->eepromWritePending()) {
         const auto original = mie->eepromContents();
         auto updated = original;
@@ -529,7 +750,14 @@ static bool renderFrame() {
                 // before replacing the EEPROM; never interrupt its serial I/O.
                 // For an erased chip, adopt only validated working records
                 // generated by the BIOS itself, then boot with the new country.
-                if (engine) { releaseGraphics(); ClearAudioOutput(); freshAudioOutput = true; }
+                if (engine) {
+                    frameGeneration.fetch_add(1, std::memory_order_release);
+                    readyFrameSlot = -1;
+                    loadStateEventGeneration.store(0, std::memory_order_release);
+                    releaseGraphicsLocked();
+                    ClearAudioOutput();
+                    freshAudioOutput = true;
+                }
                 if (saveNvram(mieEepromPath, updated)) {
                     mie->restoreEeprom(std::vector<uint8_t>(updated.begin(), updated.end()));
                     os_notify("Cabinet region applied. Calibration and saved records retained.", 5000);
@@ -571,11 +799,10 @@ static bool renderFrame() {
         if (!engine) throw FlycastException(std::string("Hikaru renderer: ") + error.data());
         if (hasSavedBram && hikaru_engine_set_bram(engine, savedBram.data(), savedBram.size()) != 0)
             throw FlycastException("Cannot restore Hikaru battery-backed RAM");
-        audioPacer = std::make_unique<AudioPacer>([](void*, s16 left, s16 right) {
-            WriteSample(right, left);
-        }, nullptr);
+        audioPacer = std::make_unique<AudioPacer>(captureFrameAudio, nullptr);
         audioModeKnown = false;
         sound = std::make_unique<Sound>([](void*, s16 left, s16 right) {
+            const auto* frame = activeAudioCapture;
             // Opt-in diagnostics report signal levels only; no audio is saved.
             static const bool trace = std::getenv("HIKARU_TRACE_AUDIO") != nullptr;
             static uint64_t energy = 0;
@@ -612,14 +839,14 @@ static bool renderFrame() {
                                  static_cast<unsigned long long>(sound->boardSaturatedSamples()), audioPacer->tempo(),
                                  static_cast<unsigned long long>(audioPacer->outputFrames()), audioPacer->pendingFrames(),
                                  audioPacer->maxPendingFrames(), static_cast<unsigned long long>(audioPacer->discardedFrames()),
-                                 AudioOutputQueuedFrames(), audioOutputBlockedSeconds(), audioPacer->bufferedInputFrames(),
-                                 int(settings.input.fastForwardMode), int(settings.aica.muteAudio),
-                                 int(bool(config::HikaruAudioPacing)), int(bool(config::VSync)));
+                                 (frame ? frame->queuedFrames : 0), (frame ? frame->blockedSeconds : 0), audioPacer->bufferedInputFrames(),
+                                 int(frame && frame->fastForward), int(frame && frame->muted),
+                                 int(frame && frame->pacing), int(frame && frame->vsync));
                     energy = 0; samples = peak = 0;
                 }
             }
-            submitOutputSample(*audioPacer, left, right, settings.aica.muteAudio,
-                               settings.input.fastForwardMode, config::FastForwardAudio);
+            submitOutputSample(*audioPacer, left, right, frame && frame->muted,
+                               frame && frame->fastForward, frame && frame->fastForwardAudio);
         }, nullptr);
         auto audio = sound->callbacks();
         if (hikaru_engine_set_sound(engine, &audio) != 0)
@@ -628,21 +855,8 @@ static bool renderFrame() {
     if (hikaru_engine_restore_graphics(engine, 0, unsigned(settings.display.width), unsigned(settings.display.height)) != 0)
         throw FlycastException(std::string("Hikaru renderer: ") + hikaru_engine_last_error(engine));
     const bool restoredState = applyPendingState();
-    const bool fastForward = settings.input.fastForwardMode;
-    const bool muted = settings.aica.muteAudio;
-    const bool pacing = config::HikaruAudioPacing;
-    const bool freshOutput = freshAudioOutput.exchange(false);
-    if (freshOutput) audioModeKnown = false;
-    bool clearedAudio = false;
-    if (!audioModeKnown || fastForward != previousFastForward || muted != previousMuted || pacing != previousPacing) {
-        audioPacer->reset();
-        if (!freshOutput) ClearAudioOutput();
-        clearedAudio = true;
-        audioModeKnown = true;
-        previousFastForward = fastForward; previousMuted = muted; previousPacing = pacing;
-    }
-    if (audioPacer->beginFrame(pacing && !fastForward && !muted, AudioOutputQueuedFrames(), audioOutputBlockedSeconds()) && !clearedAudio)
-        ClearAudioOutput();
+    if (restoredState)
+        loadStateEventGeneration.store(frameGeneration.load(std::memory_order_acquire), std::memory_order_release);
     const unsigned cpuClockMhz = unsigned(std::clamp(config::Sh4Clock.get(), 100, 300));
     if (int(cpuClockMhz) != config::Sh4Clock.get())
         config::Sh4Clock.set(int(cpuClockMhz));
@@ -670,8 +884,6 @@ static bool renderFrame() {
         controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};
     const auto* game = loadedGame();
     auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick, config::HikaruVirtualOn4TwinStick);
-    for (unsigned i = 0; i < credits.size(); ++i)
-        input.coin[i] = credits[i].sample(input.coin[i]);
     if (game == &BraveFirefightersGame) {
         if (config::HikaruBraveMouseAim && !gui_is_open()) {
             // Absolute pointer aim, like touch: position inside the
@@ -734,74 +946,265 @@ static bool renderFrame() {
     GLint target = 0;
     if (!nativeGraphics) glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
     hikaru_engine_resize(engine, uint32_t(target), unsigned(settings.display.width), unsigned(settings.display.height));
-    const auto engineStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    const double blockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
-    int result;
-    {
-        Sound::FrameScope audioFrame(*sound);
-        if (!audioFrame.acquired()) throw FlycastException("Hikaru sound context is already active");
-        result = hikaru_engine_run_frame(engine, &input);
+    if (!threaded && readyFrameSlot >= 0
+            && frameSlots[readyFrameSlot].generation == frameGeneration.load(std::memory_order_acquire)) {
+        // A mode switch drains the accepted packet and presents it once before returning to direct run_frame.
+        FrameSlot& completed = frameSlots[readyFrameSlot];
+        readyFrameSlot = -1;
+        std::array<char, 512> drawError{};
+        stateLock.unlock();
+        const int drawResult = hikaru_engine_draw_frame(engine, completed.packet.get(), drawError.data(), drawError.size());
+        glcache.Reset();
+        if (nativeGraphics) nativeGraphics->checkError();
+        if (drawResult != 0) throw FlycastException(std::string("Hikaru renderer: ") + drawError.data());
+        performance_overlay::recordGuestFrame();
+        performance_overlay::recordRenderedResolution(640, 480,
+            ((uint64_t(completed.internalHeight) * 4 + 3) / 6) * 2, completed.internalHeight);
+        const bool widthLimited = int64_t(settings.display.width) * 3 <= int64_t(settings.display.height) * 4;
+        performance_overlay::recordOutputViewport(widthLimited ? settings.display.width : int(int64_t(settings.display.height) * 4 / 3),
+            widthLimited ? int(int64_t(settings.display.width) * 3 / 4) : settings.display.height);
+        if (completed.clearAudio) ClearAudioOutput();
+        for (size_t i = 0; i < completed.audioCount; ++i)
+            WriteSample(completed.audio[i].first, completed.audio[i].second);
+        graphicsScope.reset();
+        if (nativeGraphics) nativeGraphics->present();
+        if (imguiDriver) {
+            imguiDriver->setFrameRendered();
+            if (!nativeGraphics) gui_display_osd();
+            glcache.Reset();
+        }
+        presentedGeneration.store(completed.generation, std::memory_order_release);
+        haveConsumerDrawSpan = false;
+        return true;
     }
-    const auto engineEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (!threaded) {
+        // Preserve the original single-thread path: run_frame builds and draws directly, with no packet copies.
+        readyFrameSlot = -1;
+        FrameSlot& audioFrame = frameSlots[0];
+        audioFrame.generation = frameGeneration.load(std::memory_order_acquire);
+        audioFrame.input = input;
+        audioFrame.internalHeight = internalHeight;
+        audioFrame.cpuClockMhz = cpuClockMhz;
+        audioFrame.fastForward = settings.input.fastForwardMode;
+        audioFrame.muted = settings.aica.muteAudio;
+        audioFrame.fastForwardAudio = config::FastForwardAudio;
+        audioFrame.pacing = config::HikaruAudioPacing;
+        audioFrame.vsync = config::VSync;
+        audioFrame.queuedFrames = AudioOutputQueuedFrames();
+        audioFrame.blockedSeconds = audioOutputBlockedSeconds();
+        audioFrame.traceTiming = traceTiming;
+        audioFrame.audioCount = 0;
+        audioFrame.audioOverflow = false;
+        audioFrame.clearAudio = false;
+        const auto engineStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        int result;
+        {
+            AudioCaptureScope capture(&audioFrame);
+            beginAudioFrame(audioFrame);
+            for (unsigned i = 0; i < credits.size(); ++i)
+                input.coin[i] = credits[i].sample(input.coin[i]);
+            ioError.clear();
+            Sound::FrameScope audioScope(*sound);
+            if (!audioScope.acquired())
+                throw FlycastException("Hikaru sound context is already active");
+#ifndef LIBRETRO
+            performance_overlay::resetSh4ThreadSample();
+#endif
+            result = hikaru_engine_run_frame(engine, &input);
+        }
+        const auto engineEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        glcache.Reset();
+        if (nativeGraphics) nativeGraphics->checkError();
+        if (result || !ioError.empty() || audioFrame.audioOverflow) {
+            const std::string error = audioFrame.audioOverflow ? "Hikaru frame exceeded its bounded audio buffer"
+                : !ioError.empty() ? ioError : hikaru_engine_last_error(engine);
+            stateLock.unlock();
+            throw FlycastException(error);
+        }
+#ifndef LIBRETRO
+        performance_overlay::recordSh4Vblank();
+#endif
+        performance_overlay::recordGuestFrame();
+        performance_overlay::recordRenderedResolution(640, 480,
+            ((uint64_t(internalHeight) * 4 + 3) / 6) * 2, internalHeight);
+        const int outputWidth = settings.display.width;
+        const int outputHeight = settings.display.height;
+        const bool widthLimited = int64_t(outputWidth) * 3 <= int64_t(outputHeight) * 4;
+        performance_overlay::recordOutputViewport(widthLimited ? outputWidth : int(int64_t(outputHeight) * 4 / 3),
+            widthLimited ? int(int64_t(outputWidth) * 3 / 4) : outputHeight);
+        stateLock.unlock();
+        if (audioFrame.clearAudio) ClearAudioOutput();
+        const double audioBlockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
+        for (size_t i = 0; i < audioFrame.audioCount; ++i)
+            WriteSample(audioFrame.audio[i].first, audioFrame.audio[i].second);
+        const double audioWaitMs = traceTiming
+            ? std::max(0.0, audioOutputBlockedSeconds() - audioBlockedStart) * 1000 : 0;
+        graphicsScope.reset();
+        const auto presentStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        if (nativeGraphics) nativeGraphics->present();
+        const auto presentEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        if (imguiDriver) {
+            imguiDriver->setFrameRendered();
+            if (!nativeGraphics) gui_display_osd();
+            glcache.Reset();
+        }
+        presentedGeneration.store(audioFrame.generation, std::memory_order_release);
+        haveConsumerDrawSpan = false;
+        if (traceTiming) {
+            static unsigned frames;
+            static double runMs, waitMs, totalMs, maxMs, presentMs, outputWaitMs;
+            const auto end = std::chrono::steady_clock::now();
+            const double frameRunMs = std::chrono::duration<double, std::milli>(engineEnd - engineStart).count();
+            const double frameTotalMs = std::chrono::duration<double, std::milli>(end - renderStart).count();
+            runMs += frameRunMs;
+            waitMs += workerWaitMs;
+            totalMs += frameTotalMs;
+            maxMs = std::max(maxMs, frameTotalMs);
+            presentMs += std::chrono::duration<double, std::milli>(presentEnd - presentStart).count();
+            outputWaitMs += audioWaitMs;
+            if (++frames == 60) {
+                std::fprintf(stderr, "Hikaru frontend timing: frames=%u serial_run_ms=%.3f worker_wait_ms=%.3f total_ms=%.3f max_ms=%.3f native_present_ms=%.3f audio_wait_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u threaded=0\n",
+                    frames, runMs / frames, waitMs / frames, totalMs / frames, maxMs, presentMs / frames, outputWaitMs / frames, cpuClockMhz, gl ? "opengl" : isMetal(requested) ? "metal" : "vulkan", sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle", internalHeight);
+                frames = 0;
+                runMs = waitMs = totalMs = maxMs = presentMs = outputWaitMs = 0;
+            }
+        }
+        return true;
+    }
+    const uint64_t currentGeneration = frameGeneration.load(std::memory_order_acquire);
+    int displayIndex = readyFrameSlot;
+    if (displayIndex >= 0 && frameSlots[displayIndex].generation != currentGeneration) {
+        readyFrameSlot = -1;
+        displayIndex = -1;
+    }
+    const bool bootstrap = displayIndex < 0;
+    unsigned buildIndex = bootstrap ? (nextFrameSlot++ % frameSlots.size()) : unsigned(1 - displayIndex);
+    FrameSlot* displaySlot = bootstrap ? &frameSlots[buildIndex] : &frameSlots[displayIndex];
+    FrameSlot* buildSlot = nullptr;
+    auto configureFrameSlot = [&](FrameSlot& slot) {
+        if (!slot.packet) {
+            slot.packet.reset(hikaru_frame_create());
+            if (!slot.packet) throw std::bad_alloc();
+        }
+        slot.generation = currentGeneration;
+        slot.input = input;
+        slot.internalHeight = internalHeight;
+        slot.cpuClockMhz = cpuClockMhz;
+        slot.fastForward = settings.input.fastForwardMode;
+        slot.muted = settings.aica.muteAudio;
+        slot.fastForwardAudio = config::FastForwardAudio;
+        slot.pacing = config::HikaruAudioPacing;
+        slot.vsync = config::VSync;
+        slot.queuedFrames = AudioOutputQueuedFrames();
+        slot.blockedSeconds = audioOutputBlockedSeconds();
+        slot.traceTiming = traceTiming;
+        slot.audioCount = 0;
+        slot.audioOverflow = false;
+        slot.clearAudio = false;
+    };
+    if (bootstrap) {
+        configureFrameSlot(*displaySlot);
+        // Prime one packet before the first consumer draw. The next request can
+        // then run while this packet is drawn, including after load/reset.
+        stateLock.unlock();
+        buildFrame(*displaySlot, false);
+        if (displaySlot->generation != frameGeneration.load(std::memory_order_acquire))
+            return false;
+        buildIndex = unsigned(1 - int(buildIndex));
+        buildSlot = &frameSlots[buildIndex];
+        configureFrameSlot(*buildSlot);
+    } else {
+        buildSlot = &frameSlots[buildIndex];
+        configureFrameSlot(*buildSlot);
+        stateLock.unlock();
+    }
+    if (displaySlot->generation != frameGeneration.load(std::memory_order_acquire))
+        return false;
+    enqueueFrameWorker([index = buildIndex] { buildFrame(frameSlots[index], true); });
+    pendingFrameSlot = int(buildIndex);
+    readyFrameSlot = -1;
+    std::array<char, 512> drawError{};
+    double drawMs = 0, nativePresentMs = 0, audioWaitMs = 0;
+    const auto drawStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    const int drawResult = hikaru_engine_draw_frame(engine, displaySlot->packet.get(), drawError.data(), drawError.size());
+    const auto drawEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    drawMs = traceTiming ? std::chrono::duration<double, std::milli>(drawEnd - drawStart).count() : 0;
     glcache.Reset();
     if (nativeGraphics) nativeGraphics->checkError();
     graphicsScope.reset();
-    if (result || !ioError.empty()) throw FlycastException(ioError.empty() ? hikaru_engine_last_error(engine) : ioError);
+    if (drawResult != 0) throw FlycastException(std::string("Hikaru renderer: ") + drawError.data());
     performance_overlay::recordGuestFrame();
-    performance_overlay::recordSh4Vblank();
-    const unsigned internalWidth = ((uint64_t(internalHeight) * 4 + 3) / 6) * 2;
-    performance_overlay::recordRenderedResolution(640, 480, internalWidth, internalHeight);
+    const unsigned renderedHeight = displaySlot->internalHeight;
+    const unsigned internalWidth = ((uint64_t(renderedHeight) * 4 + 3) / 6) * 2;
+    performance_overlay::recordRenderedResolution(640, 480, internalWidth, renderedHeight);
     const int outputWidth = settings.display.width;
     const int outputHeight = settings.display.height;
     const bool widthLimited = int64_t(outputWidth) * 3 <= int64_t(outputHeight) * 4;
     performance_overlay::recordOutputViewport(widthLimited ? outputWidth : int(int64_t(outputHeight) * 4 / 3),
         widthLimited ? int(int64_t(outputWidth) * 3 / 4) : outputHeight);
-    const unsigned renderedHeight = internalHeight;
-    // Presentation can invoke GUI save/load handlers, which acquire guiMutex
-    // before this mutex. End machine ownership before calling back into UI.
-    // Graphics creation/destruction and presentation remain on this thread.
-    stateLock.unlock();
+    if (displaySlot->clearAudio) ClearAudioOutput();
+    const double blockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
+    for (size_t i = 0; i < displaySlot->audioCount; ++i)
+        WriteSample(displaySlot->audio[i].first, displaySlot->audio[i].second);
+    if (traceTiming)
+        audioWaitMs = std::max(0.0, audioOutputBlockedSeconds() - blockedStart) * 1000;
+    const auto presentStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (nativeGraphics) nativeGraphics->present();
+    const auto presentEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    nativePresentMs = traceTiming ? std::chrono::duration<double, std::milli>(presentEnd - presentStart).count() : 0;
     if (imguiDriver) {
         imguiDriver->setFrameRendered();
-        // Native presenters already build and submit the overlay. Submitting
-        // it twice would acquire a second Vulkan frame before presentation.
         if (!nativeGraphics) gui_display_osd();
         glcache.Reset();
     }
-    // Subscribers can call the GUI or save again. Notify after the restored
-    // frame is presented, with neither machine nor graphics scope held.
-    if (restoredState) EventManager::event(Event::LoadState);
+    presentedGeneration.store(displaySlot->generation, std::memory_order_release);
+    previousDrawStart = drawStart;
+    previousDrawEnd = drawEnd;
+    haveConsumerDrawSpan = true;
     if (traceTiming) {
         static unsigned frames;
         static uint64_t frameNumber;
-        static double engineMs, overlayMs, totalMs, maximumMs;
+        static double buildMs, consumerDrawMs, workerWaitTotalMs, overlapMs, totalMs, maximumMs, presentMs, audioBlockedMs;
         const auto end = std::chrono::steady_clock::now();
-        const double frameEngineMs = std::chrono::duration<double, std::milli>(engineEnd - engineStart).count();
-        const double frameOverlayMs = std::chrono::duration<double, std::milli>(end - engineEnd).count();
+        const double frameBuildMs = displaySlot->buildEnd > displaySlot->buildStart
+            ? std::chrono::duration<double, std::milli>(displaySlot->buildEnd - displaySlot->buildStart).count() : 0;
         const double frameTotalMs = std::chrono::duration<double, std::milli>(end - renderStart).count();
-        const double blockedMs = std::max(0.0, audioOutputBlockedSeconds() - blockedStart) * 1000;
         ++frameNumber;
-        // Window averages hide tutorial-transition hitches. With the existing
-        // opt-in trace, separate long frames from time waiting on audio output.
         if (frameTotalMs >= 100)
-            std::fprintf(stderr, "Hikaru slow frame: game=%s frame=%llu total_ms=%.3f engine_ms=%.3f audio_wait_ms=%.3f overlay_ms=%.3f\n",
+            std::fprintf(stderr, "Hikaru slow frame: game=%s frame=%llu total_ms=%.3f build_ms=%.3f worker_wait_ms=%.3f draw_ms=%.3f audio_wait_ms=%.3f\n",
                          game->identifier, static_cast<unsigned long long>(frameNumber),
-                         frameTotalMs, frameEngineMs, blockedMs, frameOverlayMs);
-        engineMs += frameEngineMs;
-        overlayMs += frameOverlayMs;
+                         frameTotalMs, frameBuildMs, workerWaitMs, drawMs, audioWaitMs);
+        buildMs += frameBuildMs;
+        consumerDrawMs += drawMs;
+        workerWaitTotalMs += workerWaitMs;
+        overlapMs += buildOverlapMs;
         totalMs += frameTotalMs;
         maximumMs = std::max(maximumMs, frameTotalMs);
+        presentMs += nativePresentMs;
+        audioBlockedMs += audioWaitMs;
         if (++frames == 60) {
-            std::fprintf(stderr, "Hikaru frontend timing: frames=%u engine_ms=%.3f overlay_ms=%.3f total_ms=%.3f max_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u\n",
-                         frames, engineMs / frames, overlayMs / frames, totalMs / frames, maximumMs, cpuClockMhz,
+            std::fprintf(stderr, "Hikaru frontend timing: frames=%u producer_ms=%.3f draw_ms=%.3f worker_wait_ms=%.3f build_overlap_ms=%.3f consumer_ms=%.3f max_ms=%.3f native_present_ms=%.3f audio_wait_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u threaded=%d\n",
+                         frames, buildMs / frames, consumerDrawMs / frames, workerWaitTotalMs / frames, overlapMs / frames,
+                         totalMs / frames, maximumMs, presentMs / frames, audioBlockedMs / frames, displaySlot->cpuClockMhz,
                          gl ? "opengl" : isMetal(requested) ? "metal" : "vulkan",
                          sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle",
-                         renderedHeight);
-            frames = 0; engineMs = overlayMs = totalMs = maximumMs = 0;
+                         renderedHeight, int(threaded));
+            frames = 0;
+            buildMs = consumerDrawMs = workerWaitTotalMs = overlapMs = totalMs = maximumMs = presentMs = audioBlockedMs = 0;
         }
     }
     return true;
+}
+void framePresented() {
+    const uint64_t displayed = presentedGeneration.exchange(0, std::memory_order_acq_rel);
+    const uint64_t current = frameGeneration.load(std::memory_order_acquire);
+    uint64_t restored = loadStateEventGeneration.load(std::memory_order_acquire);
+    if (displayed != 0 && displayed == current && displayed == restored
+            && loadStateEventGeneration.compare_exchange_strong(restored, 0, std::memory_order_acq_rel)) {
+        EventManager::event(Event::LoadState);
+    } else if (restored != 0 && restored != current) {
+        loadStateEventGeneration.compare_exchange_strong(restored, 0, std::memory_order_acq_rel);
+    }
 }
 bool render() {
     try { return renderFrame(); }
