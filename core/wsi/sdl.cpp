@@ -25,6 +25,10 @@
 #include "ui/performance_overlay.h"
 #include "sdl/sdl.h"
 #include "cfg/option.h"
+#ifdef USE_HIKARU
+#include "audio/audiostream.h"
+#include <limits>
+#endif
 
 SDLGLGraphicsContext::SDLGLGraphicsContext(void *window, void *display)
 	: GLGraphicsContext(window, display)
@@ -41,7 +45,11 @@ bool SDLGLGraphicsContext::init()
 {
 #ifdef GLES
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#ifdef USE_HIKARU
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+#else
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+#endif
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 #else
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -59,6 +67,15 @@ bool SDLGLGraphicsContext::init()
 
 	SDL_Window * const sdlWindow = (SDL_Window *)window;
 	glcontext = SDL_GL_CreateContext(sdlWindow);
+#if defined(GLES) && defined(USE_HIKARU)
+	if (glcontext == SDL_GLContext())
+	{
+		// ES2-only hardware keeps Dreamcast working; Hikaru rejects < ES 3.0.
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+		glcontext = SDL_GL_CreateContext(sdlWindow);
+	}
+#endif
 #ifndef GLES
 	if (glcontext == SDL_GLContext())
 	{
@@ -87,17 +104,8 @@ bool SDLGLGraphicsContext::init()
 	INFO_LOG(RENDERER, "Created SDL Window and GL Context successfully");
 
 	SDL_GL_MakeCurrent(sdlWindow, glcontext);
-	// Swap at vsync
-	swapOnVSync = config::VSync;
-	int swapInterval = 0;
-	if (swapOnVSync)
-	{
-		if (settings.display.refreshRate > 60.f)
-			swapInterval = settings.display.refreshRate / 60.f;
-		else
-			swapInterval = 1;
-	}
-	SDL_GL_SetSwapInterval(swapInterval);
+	gameSwapIntervalChanged = true;
+	changeGLSwapInterval();
 
 #ifdef GLES
 	if (gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress) == 0)
@@ -140,20 +148,39 @@ void SDLGLGraphicsContext::swap()
 
 void SDLGLGraphicsContext::changeGLSwapInterval()
 {
-	if (!gameSwapIntervalChanged && swapOnVSync == (!settings.input.fastForwardMode && config::VSync))
+	const bool onVSync = !settings.input.fastForwardMode && config::VSync;
+#ifdef USE_HIKARU
+	const bool forHikaru = settings.platform.isHikaru() && config::LimitFPS
+		&& AudioOutputQueuedFrames() != std::numeric_limits<u32>::max();
+	if (!gameSwapIntervalChanged && swapOnVSync == onVSync && swapForHikaru == forHikaru)
+#else
+	if (!gameSwapIntervalChanged && swapOnVSync == onVSync)
+#endif
 		return;
-	swapOnVSync = (!settings.input.fastForwardMode && config::VSync);
+	swapOnVSync = onVSync;
+#ifdef USE_HIKARU
+	swapForHikaru = forHikaru;
+#endif
 	gameSwapIntervalChanged = false;
 	int swapInterval = 0;
 	if (swapOnVSync)
 	{
+#ifdef USE_HIKARU
+		// Hikaru runs both CPUs and draws every frame on this thread. Adaptive
+		// sync avoids a second display wait after a frame misses its deadline;
+		// the audio output provides the 60 Hz speed limit when we are faster.
+		if (forHikaru)
+			swapInterval = -1;
+		else
+#endif
 		if (settings.display.refreshRate > 60.f)
 			swapInterval = settings.display.refreshRate / 60.f * gameSwapInterval;
 		else
 			swapInterval = gameSwapInterval;
 		INFO_LOG(RENDERER, "Swap interval changed to %d", swapInterval);
 	}
-	SDL_GL_SetSwapInterval(swapInterval);
+	if (SDL_GL_SetSwapInterval(swapInterval) < 0 && swapInterval == -1)
+		SDL_GL_SetSwapInterval(1);
 }
 
 

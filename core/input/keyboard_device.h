@@ -62,7 +62,11 @@ public:
 		set_button(DC_AXIS_DOWN, 14);			// K
 		set_button(DC_AXIS_LEFT, 13);			// J
 		set_button(DC_AXIS_RIGHT, 15);			// L
-		set_button(DC_BTN_D, 4);				// Q (Coin)
+		set_button(DC_BTN_D, 4);				// A on a US layout (Coin)
+		if (settings.platform.isHikaru()) {
+			set_button(DC_DPAD2_DOWN, 59);		// F2: Test
+			set_button(DC_DPAD2_UP, 60);		// F3: Service
+		}
 		set_button(EMU_BTN_SCREENSHOT, 69);		// F12
 
 		dirty = false;

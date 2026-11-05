@@ -129,7 +129,7 @@ void term()
 	recTerm();
 }
 
-void step()
+static bool prepareStep(bool compile)
 {
 	if (state.dirty)
 	{
@@ -141,12 +141,22 @@ void step()
 				state.stopped = false;
 				break;
 			}
-		if (!state.stopped)
+		if (!state.stopped && compile)
 			recompile();
 	}
-	if (state.stopped)
-		return;
-	runStep();
+	return !state.stopped;
+}
+
+void step()
+{
+	if (prepareStep(true))
+		runStep();
+}
+
+void stepInterpreter()
+{
+	if (prepareStep(false))
+		runInterpreterStep();
 }
 
 } // namespace aica::dsp

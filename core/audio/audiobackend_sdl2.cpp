@@ -7,7 +7,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <mutex>
+#ifdef USE_HIKARU
+#include "sdl_partial.h"
+#endif
 
 class SDLAudioBackend : AudioBackend
 {
@@ -19,6 +23,11 @@ class SDLAudioBackend : AudioBackend
 	unsigned sample_buffer_size = 0;
 	unsigned sample_count = 0;
 	SDL_AudioCVT audioCvt;
+#ifdef USE_HIKARU
+	bool partialUnderrun = false;
+	audio::SdlPartialOutput partialOutput;
+	size_t conversionCapacity = 0;
+#endif
 
 	SDL_AudioDeviceID recorddev {};
 	u8 recordbuf[480 * 4];
@@ -32,10 +41,37 @@ class SDLAudioBackend : AudioBackend
 		backend->stream_mutex.lock();
 		// Wait until there's enough samples to feed the kraken
 		unsigned oslen = len / sizeof(uint32_t);
+		audioOutputRequested(oslen);
+#ifdef USE_HIKARU
+		if (backend->partialUnderrun)
+		{
+			auto convert = [backend](const uint32_t* src, unsigned frames, uint8_t* scratch, size_t capacity) -> int {
+				SDL_AudioCVT& cvt = backend->audioCvt;
+				const size_t bytes = size_t(frames) * sizeof(uint32_t);
+				if (bytes > capacity / size_t(cvt.len_mult)) return -1;
+				cvt.len = int(bytes);
+				std::memcpy(scratch, src, bytes);
+				return SDL_ConvertAudio(&cvt) == 0 ? cvt.len_cvt : -1;
+			};
+			const unsigned silent = backend->partialOutput.render(
+				backend->sample_buffer, backend->sample_count, stream, oslen,
+				backend->needs_resampling ? backend->audioCvt.buf : nullptr,
+				backend->conversionCapacity, SAMPLE_COUNT * 2,
+				backend->needs_resampling ? backend->audioCvt.len_ratio : 1.0,
+				backend->needs_resampling, convert);
+			if (silent) audioOutputUnderrun(silent);
+			if (size_t(len) > size_t(oslen) * sizeof(uint32_t))
+				std::memset(stream + size_t(oslen) * sizeof(uint32_t), 0, size_t(len) - size_t(oslen) * sizeof(uint32_t));
+			backend->stream_mutex.unlock();
+			backend->read_wait.Set();
+			return;
+		}
+#endif
 		unsigned islen = backend->needs_resampling ? std::ceil(oslen / backend->audioCvt.len_ratio) : oslen;
 
 		if (backend->sample_count < islen)
 		{
+			audioOutputUnderrun(oslen);
 			// No data, just output a bit of silence for the underrun
 			memset(stream, 0, len);
 			backend->stream_mutex.unlock();
@@ -53,7 +89,9 @@ class SDLAudioBackend : AudioBackend
 			cvt.len = islen * sizeof(uint32_t);
 			memcpy(cvt.buf, &backend->sample_buffer[0], cvt.len);
 			SDL_ConvertAudio(&cvt);
-			memcpy(stream, cvt.buf, cvt.len_cvt);
+			const int copied = std::max(0, std::min(len, cvt.len_cvt));
+			memcpy(stream, cvt.buf, copied);
+			if (copied < len) memset(stream + copied, 0, len - copied);
 		}
 
 		// Move samples in the buffer and consume them
@@ -81,6 +119,11 @@ public:
 		sample_buffer_size = std::max<u32>(SAMPLE_COUNT * 2, config::AudioBufferSize);
 		sample_buffer = new uint32_t[sample_buffer_size]();
 		sample_count = 0;
+#ifdef USE_HIKARU
+		partialUnderrun = settings.platform.isHikaru();
+		partialOutput.reset();
+		conversionCapacity = 0;
+#endif
 
 		// Support 44.1KHz (native) but also upsampling to 48KHz
 		SDL_AudioSpec wav_spec, out_spec;
@@ -115,7 +158,11 @@ public:
 				}
 				else
 				{
-					audioCvt.buf = new u8[SAMPLE_COUNT * 2 * sizeof(uint32_t) * audioCvt.len_mult];
+					const size_t capacity = SAMPLE_COUNT * 2 * sizeof(uint32_t) * audioCvt.len_mult;
+					audioCvt.buf = new u8[capacity];
+#ifdef USE_HIKARU
+					conversionCapacity = capacity;
+#endif
 				}
 			}
 		}
@@ -134,7 +181,9 @@ public:
 		if (wait) {
 			while (sample_count + samples > sample_buffer_size) {
 				stream_mutex.unlock();
+				const auto start = std::chrono::steady_clock::now();
 				read_wait.Wait();
+				audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
 				stream_mutex.lock();
 			}
 		}
@@ -142,6 +191,7 @@ public:
 		// Copy as many samples as possible, drop any remaining (this should not happen usually)
 		unsigned free_samples = sample_buffer_size - sample_count;
 		unsigned tocopy = samples < free_samples ? samples : free_samples;
+		if (tocopy < samples) audioOutputDropped(samples - tocopy);
 		memcpy(&sample_buffer[sample_count], frame, tocopy * sizeof(uint32_t));
 		sample_count += tocopy;
 		stream_mutex.unlock();
@@ -159,6 +209,10 @@ public:
 			SDL_CloseAudioDevice(audiodev);
 			audiodev = SDL_AudioDeviceID();
 		}
+#ifdef USE_HIKARU
+		partialOutput.reset();
+		conversionCapacity = 0;
+#endif
 		delete [] sample_buffer;
 		sample_buffer = nullptr;
 		if (needs_resampling)
@@ -167,6 +221,29 @@ public:
 			audioCvt.buf = nullptr;
 		}
 	}
+
+	void clear() override
+	{
+		std::lock_guard<std::mutex> lock(stream_mutex);
+		sample_count = 0;
+#ifdef USE_HIKARU
+		partialOutput.reset();
+#endif
+		read_wait.Set();
+	}
+
+	u32 queuedFrames() override
+	{
+		std::lock_guard<std::mutex> lock(stream_mutex);
+#ifdef USE_HIKARU
+		const unsigned carry = needs_resampling && partialUnderrun
+			? unsigned(std::ceil((partialOutput.pendingBytes() / sizeof(uint32_t)) / audioCvt.len_ratio)) : 0;
+		return sample_count + carry;
+#else
+		return sample_count;
+#endif
+	}
+	bool hasQueueControl() const override { return true; }
 
 	static void recordCallback(void *userdata, u8 *stream, int len)
 	{

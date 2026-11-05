@@ -1,6 +1,9 @@
 // Portions Copyright 2026 The Hollycast Authors
 // serialize.cpp : save states
 #include "serialize.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#endif
 #include "types.h"
 #include "hw/aica/aica_if.h"
 #include "hw/holly/sb.h"
@@ -21,6 +24,9 @@
 
 void dc_serialize(Serializer& ser)
 {
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru()) { hikaru::frontend::serialize(ser); return; }
+#endif
 	aica::serialize(ser);
 
 	sb_serialize(ser);
@@ -59,6 +65,9 @@ void dc_serialize(Serializer& ser)
 
 void dc_deserialize(Deserializer& deser)
 {
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru()) { hikaru::frontend::deserialize(deser); return; }
+#endif
 	DEBUG_LOG(SAVESTATE, "Loading state version %d", deser.version());
 
 	aica::deserialize(deser);
@@ -110,7 +119,8 @@ void dc_deserialize(Deserializer& deser)
 Deserializer::Deserializer(const void *data, size_t limit, bool rollback)
 	: SerializeBase(limit, rollback), data((const u8 *)data)
 {
-	if (!memcmp(data, "RASTATE\001", 8))
+	if (!data || limit < sizeof(Version)) throw Exception("Truncated savestate header");
+	if (limit >= 8 && !memcmp(data, "RASTATE\001", 8))
 	{
 		// RetroArch savestates now have several sections: MEM, ACHV, RPLY, etc.
 		const u8 *p = this->data + 8;
@@ -118,11 +128,13 @@ Deserializer::Deserializer(const void *data, size_t limit, bool rollback)
 		while (limit > 8)
 		{
 			const u8 *section = p;
-			u32 sectionSize = *(const u32 *)&p[4];
+			u32 sectionSize;
+			memcpy(&sectionSize, &p[4], sizeof(sectionSize));
 			p += 8;
 			limit -= 8;
 			if (!memcmp(section, "MEM ", 4))
 			{
+				if (sectionSize > limit) throw Exception("Truncated RetroArch state section");
 				// That's the part we're interested in
 				this->data = p;
 				this->limit = sectionSize;
@@ -144,6 +156,12 @@ Deserializer::Deserializer(const void *data, size_t limit, bool rollback)
 		throw Exception("Unsupported version");
 	if (_version > Current)
 		throw Exception("Version too recent");
+	if (_version >= V64) {
+		u32 platform;
+		deserialize(platform);
+		if (platform != u32(settings.platform.system)) throw Exception("Save state belongs to another platform");
+	}
+
 
 	if(_version >= V42 && settings.platform.isConsole())
 	{
@@ -159,6 +177,7 @@ Serializer::Serializer(void *data, size_t limit, bool rollback)
 {
 	Version v = Current;
 	serialize(v);
+	serialize(u32(settings.platform.system));
 	if (settings.platform.isConsole())
 		serialize(settings.platform.ram_size);
 }

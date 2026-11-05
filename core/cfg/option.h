@@ -441,6 +441,20 @@ extern Option<int, false> MenuBarVisibility;
 constexpr bool LimitFPS = true;
 extern Option<bool> DSPEnabled;
 extern Option<int> AudioBufferSize;	//In samples ,*4 for bytes
+#ifdef USE_HIKARU
+enum class HikaruSortingMode { PerTriangle, PerStrip, PerPixel };
+extern Option<HikaruSortingMode> HikaruSorting;
+extern Option<int> HikaruMaxLayers;
+extern Option<bool> HikaruAudioPacing;
+extern Option<bool> HikaruBraveMouseAim;
+extern Option<bool> HikaruAirTrixDpadBoard;
+extern Option<bool> HikaruPlanetDpadStick;
+extern Option<int, false> HikaruAirTrixRegion;
+extern Option<int, false> HikaruBraveRegion;
+extern Option<int, false> HikaruPlanetRegion;
+extern Option<int, false> HikaruVirtualOn4Region;
+extern Option<bool> HikaruVirtualOn4TwinStick;
+#endif
 extern Option<bool> AutoLatency;
 
 extern OptionString AudioBackend;
@@ -492,6 +506,18 @@ public:
 #endif
 		) {}
 
+	void set(RenderType v) {
+#if defined(GLES2) || defined(__APPLE__)
+		// These hosts have no Dreamcast OpenGL OIT renderer. In particular,
+		// discard values older Hikaru settings could persist into pvr.rend.
+		if (v == RenderType::OpenGL_OIT) v = RenderType::OpenGL;
+#endif
+		Option<RenderType>::set(v);
+	}
+	void load() override {
+		Option<RenderType>::load();
+		set(value);
+	}
 	RenderType& operator=(const RenderType& v) { set(v); return value; }
 
 	void reset() override {

@@ -8,6 +8,33 @@
 namespace aica
 {
 
+#ifdef USE_HIKARU
+alignas(4) u8 default_aica_reg[0x8000];
+static RegisterBank* currentBank = &default_aica_reg;
+RegisterBank& activeRegisters() { return *currentBank; }
+
+CommonData_struct * CommonData = (CommonData_struct *)&aica_reg[0x2800];
+DSPData_struct * DSPData = (DSPData_struct *)&aica_reg[0x3000];
+//slave cpu (arm7)
+InterruptInfo * SCIEB = (InterruptInfo *)&aica_reg[SCIEB_addr];
+InterruptInfo * SCIPD = (InterruptInfo *)&aica_reg[SCIPD_addr];
+InterruptInfo * SCIRE = (InterruptInfo *)&aica_reg[SCIRE_addr];
+//Main cpu (sh4)
+InterruptInfo * MCIEB = (InterruptInfo *)&aica_reg[MCIEB_addr];
+InterruptInfo * MCIPD = (InterruptInfo *)&aica_reg[MCIPD_addr];
+InterruptInfo * MCIRE = (InterruptInfo *)&aica_reg[MCIRE_addr];
+DSP_OUT_VOL_REG const * dsp_out_vol = (DSP_OUT_VOL_REG *)&aica_reg[0x2000];
+void selectRegisters(u8* bank)
+{
+ currentBank = reinterpret_cast<RegisterBank*>(bank);
+ CommonData = (CommonData_struct*)&bank[0x2800];
+ DSPData = (DSPData_struct*)&bank[0x3000];
+ SCIEB = (InterruptInfo*)&bank[SCIEB_addr]; SCIPD = (InterruptInfo*)&bank[SCIPD_addr]; SCIRE = (InterruptInfo*)&bank[SCIRE_addr];
+ MCIEB = (InterruptInfo*)&bank[MCIEB_addr]; MCIPD = (InterruptInfo*)&bank[MCIPD_addr]; MCIRE = (InterruptInfo*)&bank[MCIRE_addr];
+ dsp_out_vol = (DSP_OUT_VOL_REG*)&bank[0x2000];
+}
+
+#else
 alignas(4) u8 aica_reg[0x8000];
 
 CommonData_struct * const CommonData = (CommonData_struct *)&aica_reg[0x2800];
@@ -21,6 +48,7 @@ InterruptInfo * const MCIEB = (InterruptInfo *)&aica_reg[MCIEB_addr];
 InterruptInfo * const MCIPD = (InterruptInfo *)&aica_reg[MCIPD_addr];
 InterruptInfo * const MCIRE = (InterruptInfo *)&aica_reg[MCIRE_addr];
 DSP_OUT_VOL_REG const * const dsp_out_vol = (DSP_OUT_VOL_REG *)&aica_reg[0x2000];
+#endif
 
 static void (*midiReceiver)(u8 data);
 
@@ -88,11 +116,11 @@ static void writeCommonReg8(u32 reg, u8 data)
 	{
 		using namespace dsp;
 		state.RBL = (8192 << CommonData->RBL) - 1;
-		state.RBP = (CommonData->RBP * 2048) & ARAM_MASK;
+		state.RBP = (CommonData->RBP * 2048) & ramMask();
 		state.dirty = true;
 	}
 	else if (reg == 0x280c) {	// MOBUF
-		if (midiReceiver != nullptr)
+		if (!isBoardHost() && midiReceiver != nullptr)
 			midiReceiver(data);
 	}
 }
@@ -206,7 +234,7 @@ template void writeRegInternal<>(u32 addr, u32 data);
 void initMem()
 {
 	memset(aica_reg, 0, sizeof(aica_reg));
-	aica_ram[ARAM_SIZE - 1] = 1;
+	aica_ram[ramSize() - 1] = 1;
 	aica_ram.zero();
 	midiReceiver = nullptr;
 }

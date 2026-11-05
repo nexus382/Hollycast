@@ -261,6 +261,10 @@ void restartGame()
 	if (::game_started)
 	{
 		emu.stop();
+#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			emu.requestReset();
+#endif
 		emu.start();
 	}
 }

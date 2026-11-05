@@ -482,7 +482,11 @@ static void rend_create_renderer()
 #ifdef NO_REND
 	renderer	 = rend_norend();
 #else
-	switch (config::RendererType)
+	auto hostRenderer = config::RendererType.get();
+#ifdef USE_HIKARU
+	hostRenderer = hostRendererType(hostRenderer, settings.platform.isHikaru());
+#endif
+	switch (hostRenderer)
 	{
 	default:
 #ifdef USE_OPENGL

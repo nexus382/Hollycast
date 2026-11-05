@@ -113,6 +113,8 @@ template<typename T>
 T readAicaReg(u32 addr)
 {
 	addr &= 0x7FFF;
+	if (isBoardHost() && (addr == 0x2c00 || (sizeof(T) == 1 && addr == 0x2c01)))
+		return readRegInternal<T>(addr);
 	if (sizeof(T) == 1)
 	{
 		switch (addr)
@@ -147,6 +149,19 @@ template<typename T>
 void writeAicaReg(u32 addr, T data)
 {
 	addr &= 0x7FFF;
+	if (isBoardHost() && (addr == 0x2c00 || (sizeof(T) == 1 && addr == 0x2c01)))
+	{
+		if constexpr (sizeof(T) == 1)
+			writeRegInternal<u8>(addr, data);
+		else
+			writeRegInternal<u16>(addr, static_cast<u16>(data));
+		if (addr == 0x2c00)
+		{
+			aica_reg[0x2c00] &= 1;
+			arm::enableInterpreter((aica_reg[0x2c00] & 1) == 0);
+		}
+		return;
+	}
 
 	if (sizeof(T) == 1)
 	{

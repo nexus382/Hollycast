@@ -14,6 +14,21 @@ namespace aica
 #define SH4_IRQ_BIT (1 << (holly_SPU_IRQ & 31))
 
 std::deque<u8> midiSendBuffer;
+static bool boardHost;
+
+bool setBoardHost(bool active)
+{
+	bool previous = boardHost;
+	boardHost = active;
+	return previous;
+}
+
+bool isBoardHost() { return boardHost; }
+
+bool boardInterruptPending()
+{
+	return (MCIEB->full & MCIPD->full) != 0;
+}
 
 //Interrupts
 //arm side
@@ -65,6 +80,8 @@ static void update_arm_interrupts()
 static bool UpdateSh4Ints()
 {
 	u32 p_ints = MCIEB->full & MCIPD->full;
+	if (boardHost)
+		return p_ints != 0;
 	if (p_ints)
 	{
 		if ((SB_ISTEXT & SH4_IRQ_BIT) == 0)
@@ -108,6 +125,17 @@ void timeStep()
 	UpdateSh4Ints();	
 }
 
+bool boardTimeStep(s16& left, s16& right)
+{
+	for (auto& timer : timers)
+		timer.StepTimer(1);
+	SCIPD->SAMPLE_DONE = 1;
+	MCIPD->SAMPLE_DONE = 1;
+	sgc::boardSample(left, right);
+	update_arm_interrupts();
+	return boardInterruptPending();
+}
+
 static void AicaInternalDMA()
 {
 	if (!CommonData->DEXE)
@@ -121,8 +149,8 @@ static void AicaInternalDMA()
 		if (CommonData->DDIR)
 		{
 			// to wave mem
-			u32 addr = ((CommonData->DMEA_hi << 16) | (CommonData->DMEA_lo << 2)) & ARAM_MASK;
-			u32 len = std::min(CommonData->DLG, ARAM_SIZE - addr);
+			u32 addr = ((CommonData->DMEA_hi << 16) | (CommonData->DMEA_lo << 2)) & ramMask();
+			u32 len = std::min(CommonData->DLG, (ramSize() - addr) / 4);
 			memset(&aica_ram[addr], 0, len * 4);
 		}
 		else
@@ -136,9 +164,9 @@ static void AicaInternalDMA()
 	else
 	{
 		// Data xfer
-		u32 waddr = ((CommonData->DMEA_hi << 16) | (CommonData->DMEA_lo << 2)) & ARAM_MASK;
+		u32 waddr = ((CommonData->DMEA_hi << 16) | (CommonData->DMEA_lo << 2)) & ramMask();
 		u32 raddr = CommonData->DRGA << 2;
-		u32 len = std::min(CommonData->DLG, ARAM_SIZE - waddr);
+		u32 len = std::min(CommonData->DLG, (ramSize() - waddr) / 4);
 		if (CommonData->DDIR)
 		{
 			// reg to wave mem
@@ -186,7 +214,7 @@ void writeTimerAndIntReg(u32 reg, T data)
 
 	case MCIEB_addr:
 		MCIEB->full = data & 0x7ff;
-		if (UpdateSh4Ints())
+		if (UpdateSh4Ints() && !boardHost)
 			arm::avoidRaceCondition();
 		break;
 
@@ -195,7 +223,7 @@ void writeTimerAndIntReg(u32 reg, T data)
 		if (data & (1 << 5))
 		{
 			MCIPD->SCPU = 1;
-			if (UpdateSh4Ints())
+			if (UpdateSh4Ints() && !boardHost)
 				arm::avoidRaceCondition();
 		}
 		break;

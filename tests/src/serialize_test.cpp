@@ -39,6 +39,8 @@ protected:
 		Serializer ser(data.data(), data.size());
 		gdrom::serialize(ser);
 		data.resize(ser.size() - sizeof(int));
+		// Legacy versions predate the platform tag in the V64 header.
+		data.erase(data.begin() + sizeof(u32), data.begin() + 2 * sizeof(u32));
 		if (version == Deserializer::V61)
 		{
 			// V61 stored data_write_mode before the registers and no GD-ROM timers.
@@ -77,7 +79,7 @@ TEST_F(SerializeTest, SizeTest)
 	std::vector<char> data(30000000);
 	Serializer ser(data.data(), data.size());
 	dc_serialize(ser);
-	ASSERT_EQ(28050910u, ser.size());
+	ASSERT_EQ(28050914u, ser.size());
 }
 
 TEST_F(SerializeTest, GdromPendingSeekSurvivesSaveLoad)
@@ -158,7 +160,8 @@ TEST_F(SerializeTest, GdromV61LoadCancelsPendingTransition)
 
 TEST(SerializerBufferTest, BufferOverflowThrowsException)
 {
-	std::vector<char> smallBuffer(10);
+	Serializer measure;
+	std::vector<char> smallBuffer(measure.size() + 10);
 	Serializer ser(smallBuffer.data(), smallBuffer.size());
 	std::vector<int> largeData(100);
 	ASSERT_THROW(ser.serialize(largeData.data(), largeData.size()), Serializer::Exception);

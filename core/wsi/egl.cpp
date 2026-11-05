@@ -26,6 +26,10 @@
 #include "cfg/option.h"
 #include "ui/performance_overlay.h"
 
+#ifndef EGL_OPENGL_ES3_BIT
+#define EGL_OPENGL_ES3_BIT 0x00000040
+#endif
+
 #ifdef __ANDROID__
 #include <android/native_window.h> // requires ndk r5 or newer
 #endif
@@ -81,7 +85,11 @@ bool EGLGraphicsContext::init()
 	{
 		EGLint pi32ConfigAttribs[]  = {
 				EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+#ifdef USE_HIKARU
+				EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT | EGL_OPENGL_ES2_BIT,
+#else
 				EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+#endif
 				EGL_RED_SIZE, 8,
 				EGL_GREEN_SIZE, 8,
 				EGL_BLUE_SIZE, 8,
@@ -93,8 +101,14 @@ bool EGLGraphicsContext::init()
 		EGLConfig config;
 		if (!eglChooseConfig(display, pi32ConfigAttribs, &config, 1, &num_config) || (num_config != 1))
 		{
-			ERROR_LOG(RENDERER, "EGL Error: eglChooseConfig failed");
-			return false;
+			// Config masks require every requested bit, so ES2-only drivers
+			// need a separate selection before the context fallback can work.
+			pi32ConfigAttribs[3] = EGL_OPENGL_ES2_BIT;
+			if (!eglChooseConfig(display, pi32ConfigAttribs, &config, 1, &num_config) || num_config != 1)
+			{
+				ERROR_LOG(RENDERER, "EGL Error: eglChooseConfig failed");
+				return false;
+			}
 		}
 #ifdef __ANDROID__
 		EGLint format;
@@ -142,9 +156,20 @@ bool EGLGraphicsContext::init()
 				return false;
 			}
 
-			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 2 , EGL_NONE };
+			// Prefer ES 3.0 (required by Hikaru); ES2-only hardware keeps
+			// the existing Dreamcast path and Hikaru rejects it at load.
+#ifdef USE_HIKARU
+			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+#else
+			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+#endif
 
 			context = eglCreateContext(display, config,  EGL_NO_CONTEXT, contextAttrs);
+			if (context == EGL_NO_CONTEXT)
+			{
+				EGLint fallbackAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 2 , EGL_NONE };
+				context = eglCreateContext(display, config,  EGL_NO_CONTEXT, fallbackAttrs);
+			}
 
 			if (context == EGL_NO_CONTEXT)
 			{

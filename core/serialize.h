@@ -55,12 +55,14 @@ public:
 		V61,
 		V62,
 		V63,
-		Current = V63,
+		V64, // Platform-tagged state headers, including the Hikaru payload.
+		Current = V64,
 
 		Next = Current + 1,
 	};
 
 	size_t size() const { return _size; }
+	size_t remaining() const { return limit - _size; }
 	bool rollback() const { return _rollback; }
 
 protected:
@@ -97,7 +99,7 @@ public:
 	{
 		if (_version >= minVersion)
 			return;
-		if (this->_size + size > limit)
+		if (this->_size > limit || size > limit - this->_size)
 		{
 			WARN_LOG(SAVESTATE, "Savestate overflow: current %d limit %d sz %d", (int)this->_size, (int)limit, (int)size);
 			throw Exception("Invalid savestate");
@@ -111,7 +113,7 @@ public:
 private:
 	void doDeserialize(void *dest, size_t size)
 	{
-		if (this->_size + size > limit)	// FIXME one more test vs. current
+		if (this->_size > limit || size > limit - this->_size)
 		{
 			WARN_LOG(SAVESTATE, "Savestate overflow: current %d limit %d sz %d", (int)this->_size, (int)limit, (int)size);
 			throw Exception("Invalid savestate");
@@ -151,6 +153,7 @@ public:
 	}
 	void skip(size_t size)
 	{
+		if (_size > limit || size > limit - _size) throw Exception("Serializer buffer overflow");
 		if (data != nullptr)
 			data += size;
 		this->_size += size;
@@ -160,7 +163,7 @@ public:
 private:
 	void doSerialize(const void *src, size_t size)
 	{
-		if (this->_size + size > limit)
+		if (this->_size > limit || size > limit - this->_size)
 		{
 			WARN_LOG(SAVESTATE, "Serializer overflow: current %d limit %d sz %d", (int)this->_size, (int)limit, (int)size);
 			throw Exception("Serializer buffer overflow");

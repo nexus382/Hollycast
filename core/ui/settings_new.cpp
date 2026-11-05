@@ -45,6 +45,10 @@
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/pvr/Renderer_if.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#include "hw/hikaru/roms.h"
+#endif
 #ifdef USE_DREAMLINK_DEVICES
 #include "sdl/dreamlink/dreamlinkgamepad.h"
 #endif
@@ -4808,6 +4812,11 @@ void renderVideoTab()
 #ifdef USE_METAL
 	const bool metalAvailable = metalIsAvailable();
 #endif
+	const bool hikaruPlatform = settings.platform.isHikaru();
+#ifdef USE_HIKARU
+	if (hikaruPlatform)
+		perPixel = config::HikaruSorting.get() == config::HikaruSortingMode::PerPixel;
+#endif
 	const int apiCount = 0
 #ifdef USE_METAL
 		+ (metalAvailable ? 1 : 0)
@@ -4816,13 +4825,13 @@ void renderVideoTab()
 		+ 1
 #endif
 #ifdef USE_DX9
-		+ 1
+		+ (hikaruPlatform ? 0 : 1)
 #endif
 #ifdef USE_OPENGL
 		+ 1
 #endif
 #ifdef USE_DX11
-		+ 1
+		+ (hikaruPlatform ? 0 : 1)
 #endif
 		;
 
@@ -4846,12 +4855,16 @@ void renderVideoTab()
 			apiValues[apiOptionCount++] = 1;
 #endif
 #ifdef USE_DX9
-			apiLabels[apiOptionCount] = "DirectX 9";
-			apiValues[apiOptionCount++] = 2;
+			if (!hikaruPlatform) {
+				apiLabels[apiOptionCount] = "DirectX 9";
+				apiValues[apiOptionCount++] = 2;
+			}
 #endif
 #ifdef USE_DX11
-			apiLabels[apiOptionCount] = "DirectX 11";
-			apiValues[apiOptionCount++] = 3;
+			if (!hikaruPlatform) {
+				apiLabels[apiOptionCount] = "DirectX 11";
+				apiValues[apiOptionCount++] = 3;
+			}
 #endif
 
 #ifdef USE_METAL
@@ -4935,7 +4948,7 @@ void renderVideoTab()
 				if (renderApi == 2)
 					perPixel = false;
 #ifdef USE_METAL
-				if (renderApi == 4 && !metalSupportsPerPixel())
+				if (renderApi == 4 && !settings.platform.isHikaru() && !metalSupportsPerPixel())
 					perPixel = false;
 #endif
 				return true;
@@ -4959,12 +4972,15 @@ void renderVideoTab()
 	if (RenderCollapsingHeader("TransparentSortingSection", ICON_FA_WAND_SPARKLES, T("Transparent Sorting"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		{
-			bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+			bool has_per_pixel = hikaruPlatform || GraphicsContext::Instance()->hasPerPixel();
 #ifdef USE_METAL
-			if (renderApi == 4)
+			if (renderApi == 4 && !hikaruPlatform)
 				has_per_pixel = metalSupportsPerPixel();
 #endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;
+#ifdef USE_HIKARU
+			if (hikaruPlatform) renderer = static_cast<int>(config::HikaruSorting.get());
+#endif
 
 			std::array<const char*, 3> sortingLabels {};
 			std::array<int, 3> sortingValues {};
@@ -5040,6 +5056,13 @@ void renderVideoTab()
 				if (selectedIndex < 0 || selectedIndex >= sortingOptionCount)
 					return false;
 				const int selectedRenderer = sortingValues[selectedIndex];
+#ifdef USE_HIKARU
+				if (hikaruPlatform) {
+					config::HikaruSorting.set(static_cast<config::HikaruSortingMode>(selectedRenderer));
+					perPixel = selectedRenderer == 2;
+					return true;
+				}
+#endif
 				switch (selectedRenderer)
 				{
 				case 0:
@@ -5095,7 +5118,7 @@ void renderVideoTab()
 			const int configuredRenderResolution = config::RenderResolution.get();
 			// Read both toggles every frame so labels also preview widescreen cheats before a game is loaded.
 			float widthScale = 1.f;
-			if ((config::Widescreen || config::WidescreenGameHacks)
+			if (!settings.platform.isHikaru() && (config::Widescreen || config::WidescreenGameHacks)
 					&& !config::Rotate90 && !config::EmulateFramebuffer)
 			{
 				widthScale = config::Widescreen && config::SuperWidescreen
@@ -5458,17 +5481,24 @@ void renderVideoTab()
 			Tnop("PixelBufferSizeSetting"),
 			T("Memory budget for Per-Pixel transparency rendering."),
 			pixelBufferCfg,
-			T(
-				"Pixel Buffer Size\n"
-				"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
-				"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
-				"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
-			)
+			hikaruPlatform
+				? T("Pixel Buffer Size\n"
+					"Controls the memory budget for Hikaru per-pixel transparency. Targets are allocated as needed.\n"
+					"Higher resolutions require more memory per layer; increase this budget to retain more layers.")
+				: T("Pixel Buffer Size\n"
+					"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
+					"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
+					"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes.")
 		);
 
-		static int perPixelLayersTemp = config::PerPixelLayers.get();
+#ifdef USE_HIKARU
+		auto& maximumLayers = hikaruPlatform ? config::HikaruMaxLayers : config::PerPixelLayers;
+#else
+		auto& maximumLayers = config::PerPixelLayers;
+#endif
+		static int perPixelLayersTemp = maximumLayers.get();
 		if (!ImGui::IsPopupOpen("PerPixelMaximumLayersPopup"))
-			perPixelLayersTemp = config::PerPixelLayers.get();
+			perPixelLayersTemp = maximumLayers.get();
 
 		SettingsUI::PopupSliderConfig perPixelLayersCfg {};
 		perPixelLayersCfg.label = T("Maximum Layers");
@@ -5480,13 +5510,13 @@ void renderVideoTab()
 				"Increase this if you see missing transparency or incorrect layering.\n"
 				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
-		perPixelLayersCfg.minValue = 8;
+		perPixelLayersCfg.minValue = hikaruPlatform ? 1 : 8;
 		perPixelLayersCfg.maxValue = 128;
 		perPixelLayersCfg.format = "%d";
 		perPixelLayersCfg.valueWidth = 220.0f;
 		perPixelLayersCfg.sliderWidth = 320.0f;
 		perPixelLayersCfg.onValueChange = [&]() {
-			config::PerPixelLayers.set(perPixelLayersTemp);
+			maximumLayers.set(perPixelLayersTemp);
 		};
 
 		SettingsUI::PopupConfig perPixelLayersPopupCfg {};
@@ -6070,23 +6100,25 @@ void renderVideoTab()
 	}
 #endif
 
-	// Update renderer type based on selections
+	// Changing Hikaru sorting must not overwrite Dreamcast/Naomi's OIT choice.
+	// The API remains a shared preference; the sorting modes are independent.
+	const bool hostPerPixel = hikaruPlatform ? isPerPixel(config::RendererType) : perPixel;
 	switch (renderApi)
 	{
 	case 0:
-		config::RendererType = perPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
+		config::RendererType = hostPerPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
 		break;
 	case 1:
-		config::RendererType = perPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
+		config::RendererType = hostPerPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
 		break;
 	case 4:
-		config::RendererType = perPixel ? RenderType::Metal_OIT : RenderType::Metal;
+		config::RendererType = hostPerPixel ? RenderType::Metal_OIT : RenderType::Metal;
 		break;
 	case 2:
 		config::RendererType = RenderType::DirectX9;
 		break;
 		case 3:
-			config::RendererType = perPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
+			config::RendererType = hostPerPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
 			break;
 	}
 }
@@ -6418,6 +6450,15 @@ void renderAudioTab()
 	// Audio Playback Section
 	if (RenderCollapsingHeader("PlaybackSection", ICON_FA_VOLUME_HIGH, T("Playback"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+	#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			RenderGeneralToggleSettingRow(
+				"HikaruAudioPacing", ICON_FA_VOLUME_HIGH,
+				T("Match audio to game speed"), T("Keep pitch steady when the game runs slowly"),
+				static_cast<bool>(config::HikaruAudioPacing),
+				[](bool enabled) { config::HikaruAudioPacing.set(enabled); },
+				T("Match audio to game speed\nWhen the game runs slowly, slows audio to match while keeping its pitch. Adds some audio latency."));
+	#endif
 
 		RenderGeneralToggleSettingRow(
 			"EnableDSP",
@@ -7591,6 +7632,71 @@ void renderControlsTab()
 
 	ImGui::Spacing();
 
+#ifdef USE_HIKARU
+	// Platform alone stays Hikaru after unload. Gate cabinet controls on the
+	// published loaded descriptor so another title never exposes these options.
+	const auto* hikaruGame = hikaru::frontend::loadedGame();
+	if (hikaruGame && RenderCollapsingHeader("HikaruCompatibilityBindings", ICON_FA_GAMEPAD,
+		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::TextUnformatted(hikaruGame->title);
+		auto* regionOption = hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
+			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion
+			: hikaruGame == &hikaru::VirtualOn4Game ? &config::HikaruVirtualOn4Region : &config::HikaruPlanetRegion;
+		const char* regionLabels[] = {T("Keep saved region"), T("Japan"), T("USA (English)"), T("Export")};
+		int regionSelection = std::clamp(regionOption->get(), -1, 2) + 1;
+		SettingsUI::PopupConfig regionCfg {};
+		regionCfg.type = SettingsUI::PopupType::Options;
+		regionCfg.options.label = T("Cabinet region");
+		regionCfg.options.icon = ICON_FA_GLOBE;
+		regionCfg.options.popupID = Tnop("HikaruCabinetRegionPopup");
+		regionCfg.options.options = regionLabels;
+		regionCfg.options.optionCount = 4;
+		regionCfg.options.currentValue = &regionSelection;
+		regionCfg.options.valueWidth = 220.0f;
+		regionCfg.options.onChange = [regionOption](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex > 3 || regionOption->get() == selectedIndex - 1) return false;
+			regionOption->set(selectedIndex - 1);
+			hikaru::frontend::requestCabinetRegion();
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
+			T("Choose a region for this game. Changing it restarts the cabinet; calibration and saved records are retained. A backup is kept before the first change."), regionCfg);
+		ImGui::TextWrapped("%s", T("USA selects the English cabinet configuration. Export uses the game's export language options. New cabinets must finish creating their settings before the region can apply."));
+		if (hikaruGame == &hikaru::AirTrixGame) {
+			RenderGeneralToggleSettingRow("HikaruAirTrixDpadBoard", ICON_FA_GAMEPAD,
+				T("D-pad board steering"), T("Use the D-pad for board yaw and roll, alongside the analog stick"),
+				bool(config::HikaruAirTrixDpadBoard),
+				[](bool enabled) { config::HikaruAirTrixDpadBoard.set(enabled); },
+				T("When disabled, D-pad up/down operate the original nose/tail kick switches. Action buttons always provide separate kicks."));
+			ImGui::TextWrapped("%s", T("Map Tail kick, Nose kick, Cabinet left/right, Coin, Yaw and Roll using Controller Mapping above. With the default arcade gamepad layout: A is tail kick, B is nose kick, X/Y are cabinet left/right, and the right shoulder inserts a coin."));
+			ImGui::TextWrapped("%s", T("Tricks combine board motion and kick timing. If steering is ignored, calibrate both axes in Game Test Mode > Calibration > Volume Calibration, then return to the center and save."));
+		} else if (hikaruGame == &hikaru::BraveFirefightersGame) {
+			RenderGeneralToggleSettingRow("HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
+				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
+				bool(config::HikaruBraveMouseAim),
+				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
+				T("Uses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Spray, Fog, Horizontal aim and Vertical aim for this cabinet."));
+		} else if (hikaruGame == &hikaru::VirtualOn4Game) {
+			RenderGeneralToggleSettingRow("HikaruVirtualOn4TwinStick", ICON_FA_GAMEPAD,
+				T("Single-controller bindings"), T("Use both sticks and triggers of controller A for one cabinet"),
+				bool(config::HikaruVirtualOn4TwinStick),
+				[](bool enabled) { config::HikaruVirtualOn4TwinStick.set(enabled); },
+				T("When disabled, controllers A and B each provide one lever. These are the two levers of one player, not linked cabinets."));
+			ImGui::TextWrapped("%s", T("Left/right sticks move the two levers. LT/RT fire; arcade buttons 3/4 are left/right turbo. Map Coin and Start separately. Personal information uses button 5."));
+		} else if (hikaruGame == &hikaru::PlanetHarriersGame) {
+			RenderGeneralToggleSettingRow("HikaruPlanetDpadStick", ICON_FA_GAMEPAD,
+				T("D-pad flight controls"), T("Use the D-pad for full-range flight movement, alongside the analog stick"),
+				bool(config::HikaruPlanetDpadStick),
+				[](bool enabled) { config::HikaruPlanetDpadStick.set(enabled); },
+				T("Disable to steer only with the mapped analog stick. Bullet, Missile, Bomb and View buttons keep their existing bindings."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Bullet, Missile, Bomb, View left/right and Stick horizontal/vertical for this cabinet."));
+		}
+		ImGui::Spacing();
+	}
+#endif
+
 	if (RenderCollapsingHeader("Mouse&RawInputSection", ICON_FA_CROSSHAIRS, T("Mouse & Raw Input"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 
@@ -8737,8 +8843,13 @@ void renderAdvancedTab()
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+		if (settings.platform.isHikaru()) {
+			RenderGeneralInfoRow("CpuModeSetting", ICON_FA_MICROCHIP, T("CPU Mode"),
+				T("Hikaru uses the interpreter; CPU mode applies to Dreamcast."), T("Interpreter"));
+		}
 #if FEAT_SHREC != DYNAREC_NONE
 		// CPU Mode
+		if (!settings.platform.isHikaru())
 		{
 			const char* cpuModeLabels[] = { T("Dynarec"), T("Interpreter") };
 			int cpuModeSelection = config::DynarecEnabled.get() ? 0 : 1;
@@ -8789,15 +8900,27 @@ void renderAdvancedTab()
 				));
 		}
 
+#endif
+#if FEAT_SHREC == DYNAREC_NONE
+		if (settings.platform.isHikaru())
+#endif
 		// SH4 Clock
 		{
+			const bool hikaru = settings.platform.isHikaru();
 			static int sh4ClockTemp = config::Sh4Clock.get();
+			if (hikaru) {
+				sh4ClockTemp = std::clamp(config::Sh4Clock.get(), 100, 300);
+				if (sh4ClockTemp != config::Sh4Clock.get())
+					config::Sh4Clock.set(sh4ClockTemp);
+			}
 
 			SettingsUI::PopupSliderConfig sh4ClockCfg {};
 			sh4ClockCfg.label = T("SH4 Clock");
 			sh4ClockCfg.icon = ICON_FA_GAUGE_HIGH;
 			sh4ClockCfg.popupID = Tnop("Sh4ClockPopup");
-			sh4ClockCfg.description = T(
+			sh4ClockCfg.description = hikaru ? T(
+				"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n"
+				"Higher settings require more CPU work and can change game timing.") : T(
 				"Adjusts the emulated SH4 CPU clock. Default is 200 MHz.\n"
 				"Higher values may reduce CPU-side frame drops in some games, but can also break timing.\n"
 				"Lower values can reduce CPU load, but may cause slowdowns or audio/video instability.");
@@ -8818,9 +8941,13 @@ void renderAdvancedTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("Sh4ClockSetting"),
-				T("Over/Underclock the main SH4 CPU."),
+				hikaru ? T("Adjust both Hikaru SH4 CPU clocks; audio and video clocks stay unchanged.")
+				       : T("Over/Underclock the main SH4 CPU."),
 				sh4ClockPopupCfg,
-				T(
+				hikaru ? T(
+					"SH4 Clock\n"
+					"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n\n"
+					"The default is 200 MHz. Higher settings require more CPU work and can change game timing.") : T(
 					"SH4 Clock\n"
 					"Overclocks/underclocks the emulated Dreamcast CPU.\n\n"
 					"Default is 200 MHz.\n"
@@ -8830,6 +8957,7 @@ void renderAdvancedTab()
 				));
 		}
 
+#if FEAT_SHREC != DYNAREC_NONE
 		// Fast-Forward Speed Limit
 		{
 			static int fastForwardLimitTemp = config::FastForwardSpeedLimit.get();
@@ -8910,7 +9038,6 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		// Multi-threaded emulation
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
 			ICON_FA_GEAR,
