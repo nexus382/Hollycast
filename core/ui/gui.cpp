@@ -2653,22 +2653,6 @@ static bool prepareThemedLibraryItem(const GameMedia& source, library::View view
 	return true;
 }
 
-static bool libraryEntryBefore(size_t left, size_t right, const std::vector<library::Entry>& entries,
-		library::View view)
-{
-	if (view != library::View::ContinuePlaying)
-		return left < right;
-	const library::Entry& a = entries[left];
-	const library::Entry& b = entries[right];
-	if (a.latestStateDate != b.latestStateDate)
-		return a.latestStateDate > b.latestStateDate;
-	if (a.name != b.name)
-		return a.name < b.name;
-	if (a.path != b.path)
-		return a.path < b.path;
-	return left < right;
-}
-
 #ifdef TARGET_UWP
 void gui_load_game()
 {
@@ -2866,7 +2850,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 				if (view == library::View::ContinuePlaying && stateDate > 0 && !candidateFlags[gameIndex])
 				{
 					auto position = std::lower_bound(candidateIndices.begin(), candidateIndices.end(), gameIndex,
-							[&](size_t left, size_t right) { return libraryEntryBefore(left, right, libraryEntries, view); });
+							[&](size_t left, size_t right) { return library::entryBefore(left, right, libraryEntries, view); });
 					candidateIndices.insert(position, gameIndex);
 					candidateFlags[gameIndex] = true;
 				}
@@ -2877,7 +2861,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			if (!candidateFlags[gameIndex])
 				return;
 			auto position = std::lower_bound(visibleGameIndices.begin(), visibleGameIndices.end(), gameIndex,
-					[&](size_t left, size_t right) { return libraryEntryBefore(left, right, libraryEntries, view); });
+					[&](size_t left, size_t right) { return library::entryBefore(left, right, libraryEntries, view); });
 			const size_t row = static_cast<size_t>(position - visibleGameIndices.begin());
 			const bool wasVisible = position != visibleGameIndices.end() && *position == gameIndex;
 			GameMedia game;
@@ -3524,21 +3508,25 @@ static void gui_display_content()
 			int displayedGameCount = 0;
 			static bool filteredRowsValid = false;
 			static u64 filteredArtworkRevision = 0;
-			static std::vector<size_t> filteredRows;
-			static std::vector<bool> filterMatches;
-			static std::unordered_map<std::string, std::vector<size_t>> visibleRowsByPath;
+			static u64 filteredStateRevision = 0;
+			static library::FilteredGames filteredGames;
 			const auto filteredRowsKey = std::make_tuple(scannerGeneration, gameList.size(),
 					std::string(filter.InputBuf), visibleView, gui_state == GuiState::SelectDisk,
 					config::LibraryFavourites.get(),
-					librarySavestateCache.getRevision(), config::BoxartSourceMode.get(),
+					config::BoxartSourceMode.get(),
 					config::LibraryCoverMedia.get(), config::ArtworkProvider.get(), config::FetchBoxart.get(),
 					config::LibraryImageSource.get(), config::ContentPath.get(), get_writable_data_path(""));
 			static auto previousFilteredRowsKey = filteredRowsKey;
 			Boxart::ArtworkChanges artworkChanges;
+			LibrarySavestateCache::StateChanges stateChanges;
 			if (useListStyle && filter.IsActive())
+			{
 				artworkChanges = boxart.artworkChangesSince(filteredArtworkRevision);
-			const auto matchesFilter = [&](size_t visibleIndex) {
-				const GameMedia& game = gameList[visibleGames[visibleIndex]];
+				if (visibleView == library::View::ContinuePlaying)
+					stateChanges = librarySavestateCache.changesSince(filteredStateRevision);
+			}
+			const auto matchesFilter = [&](size_t gameIndex) {
+				const GameMedia& game = gameList[gameIndex];
 				if (gui_state == GuiState::SelectDisk)
 				{
 					const std::string extension = get_file_extension(game.path);
@@ -3555,47 +3543,24 @@ static void gui_display_content()
 			};
 			if (useListStyle && filter.IsActive())
 			{
-				if (!filteredRowsValid || filteredRowsKey != previousFilteredRowsKey || artworkChanges.fullRefresh)
+				if (!filteredRowsValid || filteredRowsKey != previousFilteredRowsKey
+						|| artworkChanges.fullRefresh || stateChanges.fullRefresh)
 				{
-					filteredRows.clear();
-					filterMatches.assign(visibleGames.size(), false);
-					visibleRowsByPath.clear();
-					for (size_t visibleIndex = 0; visibleIndex < visibleGames.size(); ++visibleIndex)
-					{
-						const GameMedia& game = gameList[visibleGames[visibleIndex]];
-						if (!game.path.empty())
-							visibleRowsByPath[game.path].push_back(visibleIndex);
-						filterMatches[visibleIndex] = matchesFilter(visibleIndex);
-						if (filterMatches[visibleIndex])
-							filteredRows.push_back(visibleIndex);
-					}
+					filteredGames.rebuild(libraryEntries, visibleView, config::LibraryFavourites.get(), matchesFilter);
 					previousFilteredRowsKey = filteredRowsKey;
-					filteredArtworkRevision = artworkChanges.revision;
 					filteredRowsValid = true;
 				}
-				else if (!artworkChanges.gamePaths.empty())
+				else if (!artworkChanges.gamePaths.empty() || !stateChanges.paths.empty())
 				{
-					for (const std::string& path : artworkChanges.gamePaths)
-					{
-						auto found = visibleRowsByPath.find(path);
-						if (found == visibleRowsByPath.end())
-							continue;
-						for (size_t visibleIndex : found->second)
-						{
-							const bool matches = matchesFilter(visibleIndex);
-							if (matches == filterMatches[visibleIndex])
-								continue;
-							auto row = std::lower_bound(filteredRows.begin(), filteredRows.end(), visibleIndex);
-							if (matches)
-								filteredRows.insert(row, visibleIndex);
-							else if (row != filteredRows.end() && *row == visibleIndex)
-								filteredRows.erase(row);
-							filterMatches[visibleIndex] = matches;
-						}
-					}
-					filteredArtworkRevision = artworkChanges.revision;
+					// Save batches add candidates without invalidating matches for existing rows.
+					std::vector<std::string> changedPaths = std::move(artworkChanges.gamePaths);
+					changedPaths.insert(changedPaths.end(), stateChanges.paths.begin(), stateChanges.paths.end());
+					filteredGames.update(libraryEntries, changedPaths, matchesFilter);
 				}
+				filteredArtworkRevision = artworkChanges.revision;
+				filteredStateRevision = stateChanges.revision;
 			}
+			const auto& filteredRows = filteredGames.getRows();
 			if (useListStyle)
 			{
 				ImGui::PushFont(largeFont, tableTextSize);
@@ -3772,9 +3737,8 @@ static void gui_display_content()
 						displayedGameCount = static_cast<int>(filteredRows.size());
 						if (gui_state == GuiState::SelectDisk)
 						{
-							for (size_t visibleIndex : filteredRows)
-								if (drawTableGame(gameList[visibleGames[visibleIndex]],
-										static_cast<int>(visibleGames[visibleIndex]), true))
+							for (size_t gameIndex : filteredRows)
+								if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
 									break;
 						}
 						else
@@ -3785,7 +3749,7 @@ static void gui_display_content()
 							while (clipper.Step() && !gameStartedFromRow)
 								for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
 								{
-									const size_t gameIndex = visibleGames[filteredRows[i]];
+									const size_t gameIndex = filteredRows[i];
 									if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
 									{
 										gameStartedFromRow = true;
