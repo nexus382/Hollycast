@@ -9,10 +9,13 @@
 #include "ui/library_savestates.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <thread>
+#include <utility>
 
 namespace {
 
@@ -351,6 +354,39 @@ TEST(LibrarySavestateCacheTest, RefreshDiscardsAnInFlightResult)
 	EXPECT_EQ(200, state.creationDate);
 }
 
+TEST(LibrarySavestateCacheTest, RefreshStopsTheRemainderOfAnOldScanBatch)
+{
+	std::promise<void> entered;
+	std::promise<void> release;
+	const auto gate = release.get_future().share();
+	std::atomic<size_t> staleCalls{0};
+	LibrarySavestateCache cache;
+	cache.reset([&](const std::string& path, const std::string&) {
+		++staleCalls;
+		if (path == "stale0")
+		{
+			entered.set_value();
+			gate.wait();
+		}
+		return SavestateInfo{path + ".state", 100};
+	});
+	cache.setScanGames({{"stale0", "Game.cdi"}, {"stale1", "Game.cdi"}, {"stale2", "Game.cdi"}});
+	cache.advance();
+	const auto started = entered.get_future().wait_for(std::chrono::seconds(5));
+	if (started != std::future_status::ready)
+	{
+		release.set_value();
+		ADD_FAILURE() << "Background batch did not start";
+		return;
+	}
+
+	cache.reset([](const std::string& path, const std::string&) { return SavestateInfo{path + ".state", 200}; });
+	cache.setScanGames({{"current", "Game.cdi"}});
+	release.set_value();
+	EXPECT_EQ("current.state", waitForCachedState(cache, "current").path);
+	EXPECT_EQ(1, staleCalls.load());
+}
+
 TEST(LibrarySavestateCacheTest, StorageFailureIsCachedUntilRefresh)
 {
 	std::atomic<int> calls{0};
@@ -363,6 +399,60 @@ TEST(LibrarySavestateCacheTest, StorageFailureIsCachedUntilRefresh)
 	EXPECT_TRUE(cache.get("game", "Game.cdi").path.empty());
 	EXPECT_FALSE(cache.busy());
 	EXPECT_EQ(1, calls.load());
+}
+
+TEST(LibrarySavestateCacheTest, RevisionChangesOnlyWhenPreparedLibraryStateChanges)
+{
+	LibrarySavestateCache cache;
+	cache.reset([](const std::string&, const std::string&) { return SavestateInfo{}; });
+	const u64 emptyRevision = cache.getRevision();
+	EXPECT_TRUE(waitForCachedState(cache, "without-state").path.empty());
+	EXPECT_TRUE(cache.has("without-state"));
+	EXPECT_EQ(emptyRevision, cache.getRevision());
+
+	cache.reset([](const std::string&, const std::string&) { return SavestateInfo{"game.state", 100}; });
+	const u64 revisionBeforeSave = cache.getRevision();
+	EXPECT_EQ("game.state", waitForCachedState(cache, "with-state").path);
+	EXPECT_TRUE(cache.getRevision() > revisionBeforeSave);
+	EXPECT_TRUE(cache.has("with-state"));
+	const auto changes = cache.changesSince(revisionBeforeSave);
+	EXPECT_FALSE(changes.fullRefresh);
+	EXPECT_EQ((std::vector<std::string>{"with-state"}), changes.paths);
+}
+
+TEST(LibrarySavestateCacheTest, LargeScansQueueBoundedBatchesAndReuseCompletedResults)
+{
+	for (const size_t gameCount : {1000u, 5000u, 10000u})
+	{
+		SCOPED_TRACE(gameCount);
+		std::atomic<size_t> calls{0};
+		LibrarySavestateCache cache;
+		cache.reset([&](const std::string& path, const std::string&) {
+			++calls;
+			return SavestateInfo{path + ".state", 100};
+		});
+		std::vector<LibrarySavestateCache::ScanRequest> games;
+		games.reserve(gameCount);
+		for (size_t i = 0; i < gameCount; ++i)
+			games.push_back({"game" + std::to_string(i), "Game.cdi"});
+		cache.setScanGames(std::move(games));
+
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (!cache.has("game" + std::to_string(gameCount - 1))
+				&& std::chrono::steady_clock::now() < deadline)
+		{
+			cache.advance();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		cache.advance();
+		EXPECT_EQ(gameCount, calls.load());
+		EXPECT_TRUE(cache.has("game0"));
+		EXPECT_TRUE(cache.has("game" + std::to_string(gameCount - 1)));
+		const size_t completedCalls = calls.load();
+		for (int frame = 0; frame < 10; ++frame)
+			cache.advance();
+		EXPECT_EQ(completedCalls, calls.load());
+	}
 }
 
 TEST_F(LibrarySavestateTest, ScreenshotReaderAcceptsValidPngAndRejectsTruncatedOrOversizedHeaders)

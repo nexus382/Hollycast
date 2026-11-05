@@ -17,6 +17,12 @@ directory; credential values are not stored in CMakeCache, compiler arguments
 or tracked source files. Users of a provisioned build only enter their optional
 personal login in Library settings.
 
+The repository's Actions secrets use those same two variable names. Every
+official standalone build requires them through `HOLLYCAST_REQUIRE_SCREENSCRAPER`;
+configuration fails if either is missing, so guest access cannot be silently
+removed from a package. Fork pull requests and offline unit tests do not receive
+the application key and can build with this requirement disabled.
+
 For local development, the same pair of environment variables can override the
 application credentials at runtime. Both must be provided together; a partial
 override disables application access instead of mixing credentials. Personal

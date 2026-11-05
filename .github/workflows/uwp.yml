@@ -25,6 +25,10 @@ jobs:
           submodules: recursive
 
       - name: CMake
+        env:
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD }}
+          HOLLYCAST_REQUIRE_SCREENSCRAPER: ${{ github.repository == 'nexus382/Hollycast' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A ${{ matrix.arch }} -DCMAKE_SYSTEM_NAME=WindowsStore -DCMAKE_SYSTEM_VERSION=10.0.22000.0
           cmake --build build --config Release -- /m

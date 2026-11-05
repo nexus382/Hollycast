@@ -1,10 +1,16 @@
 # Portions Copyright 2026 The Hollycast Authors
 
 if(NOT LIBRETRO)
+    option(HOLLYCAST_REQUIRE_SCREENSCRAPER "Require application access in official standalone builds"
+            "$ENV{HOLLYCAST_REQUIRE_SCREENSCRAPER}")
     # Release builds receive application credentials through the build environment.
     # Keep them out of CMakeCache, compiler command lines, and the source tree.
     set(HOLLYCAST_SS_DEV_ID "$ENV{HOLLYCAST_SCREENSCRAPER_DEV_ID}")
     set(HOLLYCAST_SS_DEV_PASSWORD "$ENV{HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD}")
+    if(HOLLYCAST_REQUIRE_SCREENSCRAPER
+            AND (HOLLYCAST_SS_DEV_ID STREQUAL "" OR HOLLYCAST_SS_DEV_PASSWORD STREQUAL ""))
+        message(FATAL_ERROR "Official Hollycast builds require ScreenScraper application credentials for guest access.")
+    endif()
     if((HOLLYCAST_SS_DEV_ID STREQUAL "" AND NOT HOLLYCAST_SS_DEV_PASSWORD STREQUAL "")
             OR (NOT HOLLYCAST_SS_DEV_ID STREQUAL "" AND HOLLYCAST_SS_DEV_PASSWORD STREQUAL ""))
         message(FATAL_ERROR "ScreenScraper build provisioning requires both developer environment variables.")

@@ -4,6 +4,7 @@
 #include "ui/boxart/launchbox.h"
 #include "ui/boxart/vmu_icon.h"
 #include "ui/game_scanner.h"
+#include "ui/library_media.h"
 #include "reios/reios.h"
 #include "imgread/isofs.h"
 #include <stb_image.h>
@@ -117,10 +118,22 @@ public:
 		refresh = std::async(std::launch::async, [this]() { boxart.refreshCache(); });
 	}
 
+	bool refreshReturnsWithoutUnblocking()
+	{
+		return refresh.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+	}
+
 	void finishRefresh()
 	{
 		unblockReader();
-		refresh.get();
+		if (refresh.valid())
+			refresh.get();
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (boxart.refreshPending() && std::chrono::steady_clock::now() < deadline)
+		{
+			boxart.startFetch();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
 	}
 
 private:
@@ -262,6 +275,17 @@ protected:
 		return art;
 	}
 
+	void finishCacheRefresh()
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (boxart->refreshPending() && std::chrono::steady_clock::now() < deadline)
+		{
+			boxart->startFetch();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		ASSERT_FALSE(boxart->refreshPending()) << "Artwork cache refresh did not finish";
+	}
+
 	void restart()
 	{
 		boxart->term();
@@ -299,6 +323,104 @@ protected:
 	int oldProvider;
 	std::string oldBoxartPath;
 };
+
+TEST_F(BoxartTest, LibraryInventoryQueuesDiscParsingWithCompleteOnlineMetadata)
+{
+	config::ArtworkProvider = 1;
+	GameBoxart cached;
+	cached.fileName = media.fileName;
+	cached.gamePath = media.path;
+	cached.screenScraperId = 123;
+	cached.screenScraperSearched = true;
+	writeDatabase(json::array({cached.to_json(directory.string())}));
+
+	library::MediaBatch batch;
+	batch.reset({media}, artwork::metadataMedia, "Boot inventory");
+	EXPECT_TRUE(batch.advance(*boxart).completedPass);
+	EXPECT_EQ(batch.progress.pending, 0u);
+	EXPECT_TRUE(boxart->getCachedBoxart(media).busy);
+
+	// Physical metadata must be extracted even though the online inventory is done.
+	boxart->startFetch();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (boxart->getCachedBoxart(media).offlineArtState == OfflineArtState::Pending
+			&& std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	EXPECT_EQ(boxart->getCachedBoxart(media).uniqueId, "TEST-0001");
+}
+
+TEST_F(BoxartTest, LibraryInventoryRequeuesCanceledRequestsWithoutDuplicatingActiveWork)
+{
+	config::ArtworkProvider = 1;
+	library::MediaBatch batch;
+	batch.reset({media}, artwork::basicMedia, "Added media");
+	batch.advance(*boxart);
+	ASSERT_TRUE(batch.checked);
+	ASSERT_GT(batch.progress.pending, 0u);
+	ASSERT_TRUE(boxart->getCachedBoxart(media).busy);
+	boxart->invalidateOfflineArtwork();
+	ASSERT_FALSE(boxart->getCachedBoxart(media).busy);
+
+	batch.advance(*boxart);
+	ASSERT_TRUE(boxart->getCachedBoxart(media).busy);
+	const auto revision = boxart->getCachedBoxart(media).workRevision;
+	batch.advance(*boxart);
+	EXPECT_EQ(boxart->getCachedBoxart(media).workRevision, revision);
+}
+
+TEST_F(BoxartTest, NewLibraryInventoryFindsDeletedCachedImages)
+{
+	config::ArtworkProvider = 2;
+	config::FetchBoxart = true; // Queue online work without starting a network worker.
+	const auto artworkDirectory = directory / "boxart";
+	std::filesystem::create_directories(artworkDirectory);
+	const auto image = artworkDirectory / "cached.png";
+	std::ofstream(image) << "cached";
+	GameBoxart cached;
+	cached.fileName = media.fileName;
+	cached.gamePath = media.path;
+	cached.launchboxId = 123;
+	cached.launchboxSearched = true;
+	cached.launchboxCheckedMedia = artwork::coverMedia;
+	cached.launchboxMedia["cover"] = image.string();
+	cached.offlineArtState = OfflineArtState::NoArtwork;
+	writeDatabase(json::array({cached.to_json(artworkDirectory.string() + '/')}));
+	library::MediaBatch batch;
+	batch.reset({media}, artwork::coverMedia, "Boot inventory");
+	batch.advance(*boxart);
+	EXPECT_EQ(batch.progress.pending, 0u);
+	EXPECT_TRUE(std::filesystem::exists(image));
+
+	std::filesystem::remove(image);
+	batch.reset({media}, artwork::coverMedia, "Manual rescan");
+	batch.advance(*boxart);
+	EXPECT_GT(batch.progress.pending, 0u);
+	EXPECT_TRUE(boxart->getCachedBoxart(media).busy);
+}
+
+TEST_F(BoxartTest, LibraryInventoryBoundsWorkAndPreservesProgressTotals)
+{
+	std::vector<GameMedia> games;
+	for (size_t i = 0; i < 1000; ++i)
+	{
+		GameMedia game = media;
+		game.path += std::to_string(i);
+		game.fileName += std::to_string(i);
+		games.push_back(std::move(game));
+	}
+	library::MediaBatch batch;
+	batch.reset(std::move(games), artwork::basicMedia, "Large inventory");
+	const auto first = batch.advance(*boxart, 16, std::chrono::milliseconds(0));
+	EXPECT_EQ(first.processed, 1u);
+	EXPECT_FALSE(batch.checked);
+	while (!batch.checked)
+	{
+		const auto advanced = batch.advance(*boxart);
+		ASSERT_GT(advanced.processed, 0u);
+		ASSERT_LE(advanced.processed, 16u);
+	}
+	EXPECT_EQ(batch.progress.ready + batch.progress.pending + batch.progress.unavailable, batch.progress.total);
+}
 
 TEST_F(BoxartTest, HistoryReadsDoNotCreateArtworkDirectories)
 {
@@ -356,6 +478,26 @@ TEST_F(BoxartTest, LibraryRevisionTracksLocalArtworkIndexReplacement)
 	EXPECT_TRUE(std::filesystem::equivalent(cover,
 			boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Cover)));
 	EXPECT_EQ(completed, boxart->libraryRevision());
+}
+
+TEST_F(BoxartTest, ArtworkChangesReportOnlyThePublishedSourcePath)
+{
+	// A configured folder makes readiness wait for the initial index publication.
+	const auto customMedia = directory / "custom-media";
+	std::filesystem::create_directory(customMedia);
+	config::BoxartPath = customMedia.string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!boxart->customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart->customMediaReady());
+	const u64 before = boxart->artworkChangesSince(0).revision;
+
+	ASSERT_EQ("TEST-0001", finishOfflineFetch().uniqueId);
+	const auto changes = boxart->artworkChangesSince(before);
+	EXPECT_GT(changes.revision, before);
+	EXPECT_FALSE(changes.fullRefresh);
+	ASSERT_EQ(changes.gamePaths.size(), 1u);
+	EXPECT_EQ(changes.gamePaths.front(), media.path);
 }
 
 TEST_F(BoxartTest, RenamedDiscRestoresLaunchBoxCoverAcrossRestart)
@@ -434,6 +576,7 @@ TEST_F(BoxartTest, DatabaseReviewRetriesOfflineArtwork)
 	ASSERT_EQ("TEST-0001", finishOfflineFetch().uniqueId);
 	writeDisc(directory, "TEST-0002", "Replacement metadata");
 	boxart->refreshCache();
+	finishCacheRefresh();
 	const GameBoxart refreshed = finishOfflineFetch();
 	EXPECT_EQ("TEST-0002", refreshed.uniqueId);
 	EXPECT_EQ("Replacement metadata", refreshed.searchName);
@@ -453,6 +596,9 @@ TEST_F(BoxartTest, RefreshDiscardsInFlightNoArtworkResult)
 	ASSERT_TRUE(scan.waitForReader()) << "Physical artwork worker did not open the FIFO";
 
 	scan.startRefresh();
+	ASSERT_TRUE(scan.refreshReturnsWithoutUnblocking()) << "Refresh waited for the physical artwork worker";
+	boxart->refreshCache(); // A second request must coalesce without touching worker futures.
+	EXPECT_TRUE(boxart->refreshPending());
 	bool cancelled = false;
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 	do {
