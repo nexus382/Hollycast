@@ -854,11 +854,11 @@ sh4_sq_put (sh4_t *ctx, unsigned size, uint32_t addr, uint64_t val)
 /* Bus Access */
 
 #define IS_STORE_QUEUE(addr_) \
-	(addr >= 0xE0000000 && addr <= 0xE3FFFFFF)
+	((addr_) >= 0xE0000000 && (addr_) <= 0xE3FFFFFF)
 
 #define IS_ON_CHIP(addr_) \
-	(((addr >> 24) == 0x1F) || \
-	 ((addr >> 24) == 0xFF))
+	((((addr_) >> 24) == 0x1F) || \
+	 (((addr_) >> 24) == 0xFF))
 
 #define ADDR_MASK 0x1FFFFFFF
 
@@ -1393,12 +1393,67 @@ sh4_skip_master_wait_planet (sh4_t *ctx, uint16_t branch)
 #endif
 }
 
+/* Empty queue wait used by VON4: load a queue pointer from GBR+0x74,
+ * compare its head/tail, then poll the positive GBR byte. Only the equal
+ * path is read-only; the other path can submit work and must run normally.
+ * As with the waits above, RAM and interrupts change only between slices.
+ * Match the executed path, not the skipped work-submission instructions. */
+static void
+sh4_skip_queue_wait (sh4_t *ctx, uint16_t branch)
+{
+#ifdef HIKARU_VENDOR_TESTING
+	if (!poll_skip_enabled) return;
+#endif
+	if (branch != 0x89e1 || ctx->base.patch || ctx->in_slot ||
+	    ctx->base.remaining < 10 || ctx->intc.pending || PC < 58 || !T) return;
+	static const uint16_t prefix[] = {0xc61d, 0x5100, 0x5202, 0x3210, 0x6303, 0x8914};
+	static const uint16_t tail[] = {0xc400, 0x4015, 0x89e1};
+	uint32_t start = (PC - 58) & ADDR_MASK;
+	vk_mmap_read_span_t insns, data;
+	if (vk_mmap_get_read_span (ctx->base.mmap, 2, start, &insns) ||
+	    (uint64_t)start + 59 > insns.last ||
+	    memcmp (insns.data + start - insns.first, prefix, sizeof(prefix)) ||
+	    memcmp (insns.data + start - insns.first + 54, tail, sizeof(tail))) return;
+
+	uint32_t base = GBR & ADDR_MASK;
+	if (IS_ON_CHIP (GBR) || IS_STORE_QUEUE (GBR) || (GBR & 3) ||
+	    base < 0x0c000000 || base > 0x0dffffff - 0x77 ||
+	    vk_mmap_get_read_span (ctx->base.mmap, 1, base, &data)) return;
+	int32_t flag = (int8_t)data.data[base - data.first];
+	if (flag <= 0 ||
+	    vk_mmap_get_read_span (ctx->base.mmap, 4, base + 0x74, &data)) return;
+	uint32_t pointer;
+	memcpy (&pointer, data.data + base + 0x74 - data.first, sizeof(pointer));
+	uint32_t queue = pointer & ADDR_MASK;
+	if (IS_ON_CHIP (pointer) || IS_STORE_QUEUE (pointer) || (pointer & 3) ||
+	    queue < 0x0c000000 || queue > 0x0dffffff - 11 ||
+	    vk_mmap_get_read_span (ctx->base.mmap, 4, queue, &data) ||
+	    (uint64_t)queue + 11 > data.last) return;
+	uint32_t head, end;
+	memcpy (&head, data.data + queue - data.first, sizeof(head));
+	memcpy (&end, data.data + queue - data.first + 8, sizeof(end));
+	if (head != end) return;
+
+	/* One full taken path costs nine interpreter steps. Leave the current
+	 * BT to the normal dispatcher and reconstruct the state at the next
+	 * tail; this also handles entering the loop partway through a slice. */
+	int skip = ((ctx->base.remaining - 1) / 9) * 9;
+	R(0) = (uint32_t)flag;
+	R(1) = R(2) = head;
+	R(3) = pointer;
+	ctx->base.remaining -= skip;
+#ifdef HIKARU_VENDOR_TESTING
+	poll_skipped += (uint64_t)skip;
+#endif
+}
+
 static void
 sh4_skip_poll_loop (sh4_t *ctx, uint16_t branch)
 {
 	sh4_skip_slave_wait (ctx, branch);
 	sh4_skip_slave_wait_planet (ctx, branch);
 	sh4_skip_master_wait_planet (ctx, branch);
+	sh4_skip_queue_wait (ctx, branch);
 #ifdef HIKARU_VENDOR_TESTING
 	if (!poll_skip_enabled) return;
 #endif
