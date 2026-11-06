@@ -16,6 +16,9 @@
 #include <spirv_hlsl.hpp>
 #include <spirv_glsl.hpp>
 #include <spirv_parser.hpp>
+#ifdef HOLLYCAST_SHADER_MSL
+#include <spirv_msl.hpp>
+#endif
 
 #include <algorithm>
 #include <map>
@@ -146,11 +149,12 @@ void assignVaryingLocations(std::string& source, const std::string& companion, c
 bool compileStage(const std::string& body, const std::string& companion,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
 		bool vertex, bool nativeStages, bool retroArchGlsl, uint32_t outputs,
-		std::string& hlsl, std::string& error, const ShaderPassSource *computeSource = nullptr, uint32_t shaderModel = 50)
+		std::string& hlsl, std::string& error, const ShaderPassSource *computeSource = nullptr, uint32_t shaderModel = 50,
+		bool metal = false)
 {
 	hlsl.clear();
 	if ((!computeSource && outputs == 0) || outputs > 8 || inputs.size() > 16) {
-		error = "DirectX shader chains support up to 16 textures and eight color outputs per pass.";
+		error = "Shader chains support up to 16 textures and eight color outputs per pass.";
 		return false;
 	}
 	if (!initializeShaderCompiler()) {
@@ -168,7 +172,7 @@ bool compileStage(const std::string& body, const std::string& companion,
 		if (std::find(resources.begin(), resources.end(), input.bindingName) == resources.end())
 			resources.push_back(input.bindingName);
 	if (resources.size() > 16) {
-		error = "DirectX shader chains support up to 16 textures per pass, including Source.";
+		error = "Shader chains support up to 16 textures per pass, including Source.";
 		return false;
 	}
 	for (size_t index = 0; index < resources.size(); ++index) {
@@ -271,6 +275,42 @@ bool compileStage(const std::string& body, const std::string& companion,
 	std::vector<uint32_t> spirv;
 	glslang::GlslangToSpv(*program.getIntermediate(stage), spirv);
 	try {
+#ifdef HOLLYCAST_SHADER_MSL
+		if (metal) {
+			spirv_cross::CompilerMSL compiler(std::move(spirv));
+			spirv_cross::CompilerMSL::Options options;
+			options.platform = spirv_cross::CompilerMSL::Options::macOS;
+			options.set_msl_version(2, 1); // macOS 10.14+, within the deployment target.
+			options.texture_1D_as_2D = true;
+			compiler.set_msl_options(options);
+			auto common = compiler.get_common_options();
+			common.vertex.fixup_clipspace = !nativeStages;
+			compiler.set_common_options(common);
+			const auto model = compiler.get_execution_model();
+			compiler.rename_entry_point("main", "hollycast_main", model);
+			spirv_cross::MSLResourceBinding binding;
+			binding.stage = model;
+			binding.desc_set = 1;
+			binding.binding = 0;
+			binding.msl_buffer = 0;
+			compiler.add_msl_resource_binding(binding);
+			binding.desc_set = 0;
+			for (uint32_t index = 0; index < resources.size(); ++index) {
+				binding.binding = binding.msl_texture = binding.msl_sampler = index;
+				compiler.add_msl_resource_binding(binding);
+			}
+			binding.desc_set = 2;
+			if (computeSource)
+				for (uint32_t index = 0; index < computeSource->storageBindings.size(); ++index) {
+					binding.binding = index;
+					binding.msl_texture = 16 + index;
+					compiler.add_msl_resource_binding(binding);
+				}
+			hlsl = compiler.compile();
+			error.clear();
+			return true;
+		}
+#endif
 		spirv_cross::Parser parser(std::move(spirv));
 		parser.parse();
 		auto& ir = parser.get_parsed_ir();
@@ -445,5 +485,24 @@ bool translateGlslComputeToHlsl(const ShaderPassSource& source,
 {
 	return compileStage(source.compute, {}, parameters, inputs, false, true, false, 0, hlsl, error, &source);
 }
+
+#ifdef HOLLYCAST_SHADER_MSL
+bool translateShaderPassToMetal(const ShaderPassSource& source,
+		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
+		MetalShaderSource& metal, std::string& error)
+{
+	metal = {};
+	if (!source.compute.empty())
+		return compileStage(source.compute, {}, parameters, inputs, false, true, false, 0,
+				metal.compute, error, &source, 50, true);
+	const std::string vertex = source.vertex.empty()
+			? "void main() { gl_Position = vec4(in_pos.xy, 0.0, 1.0); }" : source.vertex;
+	return compileStage(vertex, source.fragment, parameters, inputs, true, source.nativeFxStages,
+			source.retroArchGlsl, 1, metal.vertex, error, nullptr, 50, true)
+			&& compileStage(source.fragment, vertex, parameters, inputs, false, source.nativeFxStages,
+				source.retroArchGlsl, source.colorOutputCount, metal.fragment, error,
+				source.storageBindings.empty() ? nullptr : &source, 50, true);
+}
+#endif
 
 } // namespace postprocess

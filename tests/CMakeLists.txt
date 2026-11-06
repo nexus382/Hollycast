@@ -28,6 +28,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/HttpTest.cpp
         src/IniFileTest.cpp
         src/rend/PostProcessingChainTest.cpp
+        src/rend/MetalShaderCompilerTest.cpp
         src/rend/ShaderLayerTest.cpp
         src/rend/ReShadeCompilerTest.cpp
         src/rend/OpenGLShaderChainTest.cpp
@@ -76,4 +77,9 @@ if(NOT LIBRETRO)
         src/ui/VideoPresetTest.cpp
         src/ui/AndroidMenuPopupTest.cpp
         src/ui/ShaderPreviewLayoutTest.cpp)
+endif()
+
+if(USE_METAL)
+    target_sources(${PROJECT_NAME} PRIVATE src/rend/MetalShaderChainTest.mm)
+    set_source_files_properties(src/rend/MetalShaderChainTest.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()

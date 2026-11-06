@@ -6146,6 +6146,7 @@ static std::function<void()> g_shaderAction;
 static bool shaderRendererSupported()
 {
 	return isOpenGL(config::RendererType) || isVulkan(config::RendererType)
+			|| isMetal(config::RendererType)
 			|| config::RendererType == RenderType::DirectX11 || config::RendererType == RenderType::DirectX11_OIT;
 }
 
@@ -6563,7 +6564,7 @@ static void resetShaderParameters()
 static void renderShaderActivationStatus(bool compact = false)
 {
 	if (!shaderRendererSupported()) {
-		ImGui::TextWrapped("%s", T("Display shaders require OpenGL, Vulkan, or DirectX 11. Select a supported graphics API in Video settings."));
+		ImGui::TextWrapped("%s", T("Display shaders require OpenGL, Vulkan, DirectX 11, or Metal. Select a supported graphics API in Video settings."));
 		return;
 	}
 	if (g_shaderPreview.paths.empty()) {
@@ -6899,7 +6900,7 @@ void renderShaderTab()
 		if (!canLiveTune)
 			ImGui::EndDisabled();
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("%s", !shaderRendererSupported() ? T("Select OpenGL, Vulkan, or DirectX 11 in Video settings to preview shaders.")
+			ImGui::SetTooltip("%s", !shaderRendererSupported() ? T("Select OpenGL, Vulkan, DirectX 11, or Metal in Video settings to preview shaders.")
 					: !game_started ? T("Start a game to preview shader changes.")
 					: T("See shader changes beside the running game. Gameplay must be pausable."));
 		ImGui::Separator();

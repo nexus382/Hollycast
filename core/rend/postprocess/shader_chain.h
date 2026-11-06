@@ -533,6 +533,17 @@ bool translateDisplayGlslToOpenGL(const std::string& source, bool es, std::strin
 bool translateGlslComputeToHlsl(const ShaderPassSource& source,
 		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
 		std::string& hlsl, std::string& error);
+#ifdef HOLLYCAST_SHADER_MSL
+struct MetalShaderSource {
+	std::string vertex, fragment, compute;
+};
+// Uses the same typed GLSL and packed frame block as DirectX. Metal slots are
+// explicit: frame buffer 0, vertex buffer 1, sampled textures/samplers 0..15,
+// and writable textures 16..23. Each stage exports hollycast_main.
+bool translateShaderPassToMetal(const ShaderPassSource& source,
+		const std::vector<SlangParameter>& parameters, const std::vector<ShaderPassInput>& inputs,
+		MetalShaderSource& metal, std::string& error);
+#endif
 bool translateGlslFragmentToHlsl(const std::string& glslSource, std::string& hlslSource, std::string& error);
 bool translateGlslFragmentToHlsl(const std::string& glslSource, const std::vector<SlangParameter>& parameters,
 		std::string& hlslSource, std::string& error, uint32_t outputCount = 1);

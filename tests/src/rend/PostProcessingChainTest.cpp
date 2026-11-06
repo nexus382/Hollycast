@@ -2322,6 +2322,11 @@ TEST(PostProcessingChainTest, CompilesCompleteExternalShaderInventory)
 					return left.bindingName == "Source" && right.bindingName != "Source";
 				});
 				const uint32_t outputCount = pass.colorOutputCount;
+#ifdef HOLLYCAST_SHADER_MSL
+				postprocess::MetalShaderSource metal;
+				EXPECT_TRUE(postprocess::translateShaderPassToMetal(source, parameters, inputs, metal, error))
+						<< "Metal stages: " << error;
+#endif
 				std::string hlsl;
 				if (pass.compute ? postprocess::translateGlslComputeToHlsl(source, parameters, inputs, hlsl, error)
 						: postprocess::translateGlslGraphFragmentToHlsl(source, parameters, inputs, outputCount, hlsl, error))

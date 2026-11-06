@@ -7,5 +7,9 @@ add_library(hollycast-spirv-cross STATIC
     spirv_cfg.cpp
     spirv_glsl.cpp
     spirv_hlsl.cpp)
+if(USE_METAL OR BUILD_TESTING)
+    target_sources(hollycast-spirv-cross PRIVATE spirv_msl.cpp)
+    target_compile_definitions(hollycast-spirv-cross PUBLIC HOLLYCAST_SHADER_MSL)
+endif()
 target_include_directories(hollycast-spirv-cross PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(hollycast-spirv-cross PROPERTIES POSITION_INDEPENDENT_CODE ON)
