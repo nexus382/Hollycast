@@ -35,9 +35,9 @@ Translation alone does not prove that Apple's compiler or GPU accepts a shader.
 On a Mac, build the test executable and opt into the actual GPU checks:
 
 ```sh
-cmake -S . -B build-metal-tests -G Ninja -DENABLE_CTEST=ON -DUSE_METAL=ON -DUSE_VULKAN=OFF
+cmake -S . -B build-metal-tests -G Ninja -DENABLE_CTEST=ON -DUSE_METAL=ON -DUSE_VULKAN=OFF -DCMAKE_OSX_ARCHITECTURES="$(uname -m)"
 cmake --build build-metal-tests --target Hollycast --parallel
-MTL_DEBUG_LAYER=1 HOLLYCAST_SHADER_METAL_TESTS=1 ./build-metal-tests/Hollycast --gtest_filter='MetalShader*'
+MTL_DEBUG_LAYER=1 HOLLYCAST_SHADER_METAL_TESTS=1 ./build-metal-tests/Hollycast.app/Contents/MacOS/Hollycast --gtest_filter='MetalShader*'
 ```
 
 The pixel checks exercise the production executor and fail if no Metal device
