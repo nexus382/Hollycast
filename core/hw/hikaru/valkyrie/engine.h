@@ -14,7 +14,8 @@ typedef enum {
     HIKARU_ENGINE_GAME_AIRTRIX = 0,
     HIKARU_ENGINE_GAME_BRAVEFF = 1,
     HIKARU_ENGINE_GAME_PHARRIER = 2,
-    HIKARU_ENGINE_GAME_VON4 = 3
+    HIKARU_ENGINE_GAME_VON4 = 3,
+    HIKARU_ENGINE_GAME_SGNASCAR = 4
 } HikaruEngineGame;
 typedef enum {
     /* Sort retained source strips back-to-front by transformed view-space centroid. */
@@ -86,9 +87,9 @@ HikaruEngine *hikaru_engine_create(const HikaruEngineRoms *roms,
     uint32_t target_fbo, unsigned width, unsigned height,
     int allow_bios_eeprom_bypass, char *error, size_t error_size);
 // Only the games listed above are accepted. ROM sections are already
-// assembled: both use a 2 MiB BIOS; Air Trix uses 8/128 MiB program/data,
-// Brave Firefighters, Planet Harriers and VON4 use 64/256 MiB regions, retaining
-// zero-filled program socket gaps and any unpopulated sockets.
+// assembled: all use a 2 MiB BIOS. Air Trix uses 8/128 MiB program/data;
+// Brave Firefighters, Planet Harriers, VON4 and NASCAR use 64/256 MiB regions,
+// retaining zero-filled program socket gaps and any unpopulated sockets.
 // Protection callbacks remain required; the host supplies an unprotected bus
 // backend for a board without a security processor. No game patches are enabled.
 HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngineRoms *roms,

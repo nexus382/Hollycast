@@ -35,6 +35,90 @@ TEST_F(HikaruInputBindingsTest, NeutralAndUnloadedCabinetsHaveCenteredAxes)
     EXPECT_EQ(unloaded.analog[0], 0x8000);
 }
 
+TEST_F(HikaruInputBindingsTest, NascarCabinetServiceControlsUseThePrimaryController)
+{
+    controllers[0].buttons = ~(DC_BTN_START | DC_BTN_D | DC_DPAD2_DOWN | DC_DPAD2_UP);
+    const auto input = bind(&SegaNascarGame);
+    EXPECT_EQ(input.players[0], 0x8000);
+    EXPECT_EQ(input.coin[0], 1);
+    EXPECT_EQ(input.test, 1);
+    EXPECT_EQ(input.service, 1);
+    EXPECT_EQ(input.players[1], 0);
+    EXPECT_EQ(input.coin[1], 0);
+    controllers[0] = {};
+    controllers[1].buttons = 0;
+    const auto secondary = bind(&SegaNascarGame);
+    EXPECT_EQ(secondary.players[0], 0);
+    EXPECT_EQ(secondary.players[1], 0);
+    EXPECT_EQ(secondary.coin[0], 0);
+    EXPECT_EQ(secondary.coin[1], 0);
+    EXPECT_EQ(secondary.test, 0);
+    EXPECT_EQ(secondary.service, 0);
+}
+
+
+TEST_F(HikaruInputBindingsTest, NascarStandardAxesAndViewUseCabinetAssignments)
+{
+    auto input = bind(&SegaNascarGame);
+    EXPECT_EQ(input.analog[0], 0x8000);
+    EXPECT_EQ(input.analog[1], 0);
+    EXPECT_EQ(input.analog[2], 0);
+    controllers[0].stickX = -32768;
+    controllers[0].rightTrigger = 0xffff;
+    controllers[0].leftTrigger = 0x1234;
+    controllers[0].buttons = ~DC_BTN_Y;
+    input = bind(&SegaNascarGame);
+    EXPECT_EQ(input.analog[0], 0);
+    EXPECT_EQ(input.analog[1], 0xffff);
+    EXPECT_EQ(input.analog[2], 0x1234);
+    EXPECT_EQ(input.players[0], 0x1000);
+    EXPECT_EQ(input.players[1], 0);
+    controllers[0].stickX = 32767;
+    EXPECT_EQ(bind(&SegaNascarGame).analog[0], 0xffff);
+}
+
+TEST_F(HikaruInputBindingsTest, NascarGearSelectionsLatchThePhysicalSwitchPattern)
+{
+    for (const auto binding : {std::pair<uint32_t, uint16_t>{DC_BTN_A, 0x2800},
+            {DC_BTN_B, 0x1800}, {DC_BTN_C, 0x2000}, {DC_BTN_X, 0x1000}}) {
+        controllers[0].buttons = ~binding.first;
+        const auto selected = bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true, 0);
+        EXPECT_EQ(selected.players[1], binding.second);
+        EXPECT_EQ(selected.players[0], 0);
+        controllers[0].buttons = UINT32_MAX;
+        EXPECT_EQ(bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true,
+            selected.players[1]).players[1], binding.second);
+        EXPECT_EQ(bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, false,
+            selected.players[1]).players[1], 0);
+        controllers[0].buttons = ~(DC_BTN_A | DC_BTN_B);
+        EXPECT_EQ(bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true,
+            selected.players[1]).players[1], binding.second);
+        controllers[0].buttons = ~(DC_BTN_Z | binding.first);
+        EXPECT_EQ(bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true,
+            selected.players[1]).players[1], 0);
+    }
+    controllers[0].buttons = UINT32_MAX;
+    EXPECT_EQ(bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true, 0xffff).players[1], 0);
+}
+
+TEST_F(HikaruInputBindingsTest, NascarDpadOptionDoesNotOverrideOtherCabinets)
+{
+    controllers[0].stickX = 1234;
+    controllers[0].buttons = ~DC_DPAD_LEFT;
+    EXPECT_EQ(bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true).analog[0], 0);
+    EXPECT_EQ(bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, false).analog[0], 34002);
+    controllers[0].buttons = ~DC_DPAD_RIGHT;
+    EXPECT_EQ(bind(&SegaNascarGame).analog[0], 0xffff);
+    controllers[0].buttons = ~(DC_DPAD_LEFT | DC_DPAD_RIGHT);
+    EXPECT_EQ(bind(&SegaNascarGame).analog[0], 34002);
+    for (const auto* game : {&AirTrixGame, &BraveFirefightersGame, &PlanetHarriersGame, &VirtualOn4Game}) {
+        const auto enabled = bindCabinetInputs(game, controllers, false, false, true, true, 0x2800);
+        const auto disabled = bindCabinetInputs(game, controllers, false, false, true, false, 0x1000);
+        for (unsigned i = 0; i < 8; ++i) EXPECT_EQ(enabled.analog[i], disabled.analog[i]);
+        for (unsigned i = 0; i < 2; ++i) EXPECT_EQ(enabled.players[i], disabled.players[i]);
+    }
+}
+
 TEST_F(HikaruInputBindingsTest, AirTrixKicksAreIndependentOfBoardMotionAndCoins)
 {
     for (const auto binding : {std::pair<uint32_t, uint16_t>{DC_BTN_A, 0x1000}, {DC_BTN_B, 0x2000}}) {

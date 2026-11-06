@@ -31,6 +31,7 @@ extern const GameDescriptor AirTrixGame;
 extern const GameDescriptor BraveFirefightersGame;
 extern const GameDescriptor PlanetHarriersGame;
 extern const GameDescriptor VirtualOn4Game;
+extern const GameDescriptor SegaNascarGame;
 const GameDescriptor* findGame(const std::string& basename);
 
 // File facts from MAME's Hikaru driver, revision
@@ -43,6 +44,8 @@ extern const std::array<InterleavedRomFile, 8> PlanetHarriersProgramRoms;
 extern const std::array<InterleavedRomFile, 16> PlanetHarriersDataRoms;
 extern const std::array<InterleavedRomFile, 4> VirtualOn4ProgramRoms;
 extern const std::array<InterleavedRomFile, 16> VirtualOn4DataRoms;
+extern const std::array<InterleavedRomFile, 2> SegaNascarProgramRoms;
+extern const std::array<InterleavedRomFile, 16> SegaNascarDataRoms;
 extern const RomFile MieBootRom;
 
 uint32_t romCrc32(const std::vector<uint8_t>& data);
@@ -65,4 +68,5 @@ RomImages loadAirTrix(const RomReader& reader, const std::string& bootName = "ep
 RomImages loadBraveFirefighters(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 RomImages loadPlanetHarriers(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 RomImages loadVirtualOn4(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
+RomImages loadSegaNascar(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 } // namespace hikaru

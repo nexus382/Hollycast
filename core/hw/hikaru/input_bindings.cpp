@@ -7,11 +7,49 @@
 namespace hikaru {
 HikaruEngineInputs bindCabinetInputs(const GameDescriptor* game,
     const std::array<ControllerInputs, 2>& controllers,
-    bool airTrixDpadBoard, bool planetDpadStick, bool virtualOn4TwinStick)
+    bool airTrixDpadBoard, bool planetDpadStick, bool virtualOn4TwinStick,
+    bool nascarGamepad, uint16_t previousNascarGear)
 {
     HikaruEngineInputs input{};
     for (auto& axis : input.analog)
         axis = 0x8000;
+    if (game == &SegaNascarGame) {
+        const auto& pad = controllers[0];
+        const auto pressed = [&](uint32_t mask) { return (pad.buttons & mask) == 0; };
+        // Standard cabinet wiring: wheel/gas/brake occupy analog 0/1/2.
+        // View is P1 Down; the three shifter switches occupy P2 Left/Up/Down.
+        // Deluxe has different View/presence wiring and reversed steering.
+        input.players[0] = (pressed(DC_BTN_START) ? 0x8000 : 0) | (pressed(DC_BTN_Y) ? 0x1000 : 0);
+        input.coin[0] = pressed(DC_BTN_D);
+        input.test = pressed(DC_DPAD2_DOWN);
+        input.service = pressed(DC_DPAD2_UP);
+        input.analog[0] = uint16_t(int(pad.stickX) + 32768);
+        input.analog[1] = pad.rightTrigger;
+        input.analog[2] = pad.leftTrigger;
+        if (nascarGamepad) {
+            const bool left = pressed(DC_DPAD_LEFT), right = pressed(DC_DPAD_RIGHT);
+            if (left != right) input.analog[0] = left ? 0 : 0xffff;
+            // The physical shifter stays in its notch after the hand releases.
+            // Reuse the serialized MIE switch snapshot so load/reset retains it.
+            switch (previousNascarGear) {
+            case 0x2800: case 0x1800: case 0x2000: case 0x1000:
+                input.players[1] = previousNascarGear;
+                break;
+            default: break;
+            }
+        }
+        const unsigned gearButtons = (pressed(DC_BTN_A) ? 1u : 0u) | (pressed(DC_BTN_B) ? 2u : 0u)
+            | (pressed(DC_BTN_C) ? 4u : 0u) | (pressed(DC_BTN_X) ? 8u : 0u);
+        if (pressed(DC_BTN_Z)) input.players[1] = 0;
+        else switch (gearButtons) {
+        case 1: input.players[1] = 0x2800; break; // First: left + up.
+        case 2: input.players[1] = 0x1800; break; // Second: left + down.
+        case 4: input.players[1] = 0x2000; break; // Third: up.
+        case 8: input.players[1] = 0x1000; break; // Fourth: down.
+        default: break; // Simultaneous selections must not invent a gear.
+        }
+        return input;
+    }
     if (game == &VirtualOn4Game) {
         // One cabinet's left/right digital levers occupy JVS player slots 1/2.
         // They are not two players. Convert the mapped axes after the host's

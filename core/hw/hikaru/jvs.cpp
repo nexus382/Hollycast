@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright 2026 The Hollycast Authors
 // Portions Copyright 2026 The Hollycast Authors
-// Protocol and 837-13551 feature values follow hw/maple/maple_jvs.cpp.
+// Protocol and Sega board profiles follow hw/maple/maple_jvs.cpp.
 #include "jvs.h"
 #include "state_io.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -189,15 +190,22 @@ void JvsNode::processFrame()
             newNode = frame_[pos++];
             break;
         case 0x10: {
-            static constexpr char id[] = "SEGA ENTERPRISES,LTD.;I/O BD JVS;837-13551 ;Ver1.00;98/10";
+            const std::string_view id = boardProfile_ == BoardProfile::Sega83713844
+                ? "SEGA ENTERPRISES,LTD.;837-13844-01 I/O CNTL BD2 ;Ver1.00;99/07"
+                : "SEGA ENTERPRISES,LTD.;I/O BD JVS;837-13551 ;Ver1.00;98/10";
             for (char c : id) if (!append(static_cast<uint8_t>(c))) return;
+            if (!append(0)) return;
             break;
         }
         case 0x11: if (!append(0x11)) return; break;
         case 0x12: if (!append(0x20)) return; break;
         case 0x13: if (!append(0x10)) return; break;
         case 0x14: {
-            static constexpr uint8_t features[] = {1,2,13,0, 2,2,0,0, 3,8,16,0, 0x12,6,0,0, 0};
+            // NASCAR's operator manual (JVS TEST, p36) requires the type-2
+            // board's 12 switch bits and 22 outputs, unlike the default board.
+            const bool type2 = boardProfile_ == BoardProfile::Sega83713844;
+            const uint8_t features[] = {1,2,static_cast<uint8_t>(type2 ? 12 : 13),0,
+                2,2,0,0, 3,8,16,0, 0x12,static_cast<uint8_t>(type2 ? 22 : 6),0,0, 0};
             for (uint8_t b : features) if (!append(b)) return;
             break;
         }

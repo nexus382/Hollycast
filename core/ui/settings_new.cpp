@@ -7616,7 +7616,8 @@ void renderControlsTab()
 		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		ImGui::TextUnformatted(hikaruGame->title);
-		auto* regionOption = hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
+		auto* regionOption = hikaruGame == &hikaru::SegaNascarGame ? &config::HikaruNascarRegion
+			: hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
 			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion
 			: hikaruGame == &hikaru::VirtualOn4Game ? &config::HikaruVirtualOn4Region : &config::HikaruPlanetRegion;
 		const char* regionLabels[] = {T("Keep saved region"), T("Japan"), T("USA (English)"), T("Export")};
@@ -7639,7 +7640,15 @@ void renderControlsTab()
 		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
 			T("Choose a region for this game. Changing it restarts the cabinet; calibration and saved records are retained. A backup is kept before the first change."), regionCfg);
 		ImGui::TextWrapped("%s", T("USA selects the English cabinet configuration. Export uses the game's export language options. New cabinets must finish creating their settings before the region can apply."));
-		if (hikaruGame == &hikaru::AirTrixGame) {
+		if (hikaruGame == &hikaru::SegaNascarGame) {
+			RenderGeneralToggleSettingRow("HikaruNascarGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad driving controls"), T("Keep the selected gear engaged and allow D-pad steering"),
+				bool(config::HikaruNascarGamepad),
+				[](bool enabled) { config::HikaruNascarGamepad.set(enabled); },
+				T("Disable for a physical shifter whose gear buttons remain held. Analog steering and pedals always keep their cabinet assignments."));
+			ImGui::TextWrapped("%s", T("Standard cabinet: left stick steers, RT is gas, LT is brake. With the default arcade gamepad layout, A/B/X/Y select gears 1/2/3/4, right shoulder changes view, and left shoulder selects neutral. Coin and Start use their normal arcade bindings."));
+			ImGui::TextWrapped("%s", T("Map Steering wheel, Gas pedal and Brake pedal above. Use Game Test > Input Assignments for calibration; select Automatic transmission in the game if you do not want to shift manually."));
+		} else if (hikaruGame == &hikaru::AirTrixGame) {
 			RenderGeneralToggleSettingRow("HikaruAirTrixDpadBoard", ICON_FA_GAMEPAD,
 				T("D-pad board steering"), T("Use the D-pad for board yaw and roll, alongside the analog stick"),
 				bool(config::HikaruAirTrixDpadBoard),

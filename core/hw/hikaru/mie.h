@@ -28,6 +28,9 @@ public:
     // Cabinet JVS inputs. Motherboard switches are separate GPIO pins and can
     // be supplied through GpioRead (port 6, active-low bits 2 and 3).
     void setInputs(const JvsNode::Inputs& inputs);
+    const JvsNode::Inputs& inputs() const;
+    // Select the fixed cabinet board before execution; reset/load retain it.
+    void setJvsBoardProfile(JvsNode::BoardProfile profile);
     void setGpio(GpioRead read, GpioWrite write = {});
     // External RS422/RS232 adapter on ports 09..0e, separate from JVS UART.
     // Callbacks stay attached through reset; the owner resets its device.

@@ -35,11 +35,12 @@ private:
     bool previous = false;
 };
 
-// Bounded JVS 837-13551-compatible I/O node. Input switch words are active
-// high in JVS wire order: 0x8000 start, 0x4000 service, 0x2000 up,
+// Bounded JVS node for Sega 837-13551 and 837-13844 I/O boards. Input switch
+// words are active high in JVS wire order: 0x8000 start, 0x4000 service, 0x2000 up,
 // 0x1000 down, 0x0800 left, 0x0400 right; lower bits are game buttons.
 class JvsNode {
 public:
+    enum class BoardProfile { Sega83713551, Sega83713844 };
     struct Inputs {
         bool test = false;
         bool service = false; // player 1 service switch
@@ -49,6 +50,9 @@ public:
     };
     void reset();
     void reset(const Inputs& inputs);
+    // Select the physical cabinet board before execution. This fixed game
+    // configuration survives reset/load and is not part of the state payload.
+    void setBoardProfile(BoardProfile profile) { boardProfile_ = profile; }
     void setInputs(const Inputs& inputs);
     void pushByte(uint8_t byte);
     bool popByte(uint8_t& byte);
@@ -63,6 +67,7 @@ public:
 private:
     void processFrame();
     void clearParser();
+    BoardProfile boardProfile_ = BoardProfile::Sega83713551;
     Inputs inputs_{};
     std::array<uint16_t, 2> coins_{};
     std::array<bool, 2> previousCoin_{};

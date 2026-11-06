@@ -12,6 +12,7 @@ const GameDescriptor AirTrixGame{"airtrix", "Air Trix", RomImages::AirTrixSecuri
 const GameDescriptor BraveFirefightersGame{"braveff", "Brave Firefighters", std::nullopt};
 const GameDescriptor PlanetHarriersGame{"pharrier", "Planet Harriers", RomImages::PlanetHarriersSecurityKey};
 const GameDescriptor VirtualOn4Game{"von4", "Virtual-On Force", std::nullopt};
+const GameDescriptor SegaNascarGame{"sgnascar", "NASCAR Arcade (Rev A)", std::nullopt};
 
 const GameDescriptor* findGame(const std::string& basename)
 {
@@ -26,6 +27,8 @@ const GameDescriptor* findGame(const std::string& basename)
         return &PlanetHarriersGame;
     if (normalized == VirtualOn4Game.identifier)
         return &VirtualOn4Game;
+    if (normalized == SegaNascarGame.identifier)
+        return &SegaNascarGame;
     return nullptr;
 }
 
@@ -145,6 +148,32 @@ const std::array<InterleavedRomFile, 16> VirtualOn4DataRoms = {{
     {{"mpr-23763.ic62", 0x1000000, 0x648aecb0}, 0x0c000002},
     {{"mpr-23764.ic65", 0x1000000, 0x0aa472aa}, 0x0e000000},
     {{"mpr-23765.ic66", 0x1000000, 0xd904250f}, 0x0e000002},
+}};
+
+// MAME hikaru.cpp at 43b995da4a2af46c9f48c6a5536953439adfb1ab.
+// Rev A uses an Actel ROM board; its key is not a 315-5881 security key.
+const std::array<InterleavedRomFile, 2> SegaNascarProgramRoms = {{
+    {{"epr-23485a.ic35", 0x0400000, 0x1072f531}, 0x00000000},
+    {{"epr-23486a.ic36", 0x0400000, 0x02d4aab6}, 0x00000002},
+}};
+
+const std::array<InterleavedRomFile, 16> SegaNascarDataRoms = {{
+    {{"mpr-23469.ic19", 0x1000000, 0x89cbad8d}, 0x00000000},
+    {{"mpr-23473.ic20", 0x1000000, 0x977b87d6}, 0x00000002},
+    {{"mpr-23470.ic21", 0x1000000, 0xfaf4940f}, 0x02000000},
+    {{"mpr-23474.ic22", 0x1000000, 0xfaf69ac5}, 0x02000002},
+    {{"mpr-23471.ic23", 0x1000000, 0xa3aad8ac}, 0x04000000},
+    {{"mpr-23475.ic24", 0x1000000, 0x5f51597c}, 0x04000002},
+    {{"mpr-23472.ic25", 0x1000000, 0x2495f678}, 0x06000000},
+    {{"mpr-23476.ic26", 0x1000000, 0x927cf31c}, 0x06000002},
+    {{"mpr-23477.ic27", 0x1000000, 0xb4b7c477}, 0x08000000},
+    {{"mpr-23481.ic28", 0x1000000, 0x27b8eb7d}, 0x08000002},
+    {{"mpr-23478.ic29", 0x1000000, 0x1fac431c}, 0x0a000000},
+    {{"mpr-23482.ic30", 0x1000000, 0x2e9a0420}, 0x0a000002},
+    {{"mpr-23479.ic31", 0x1000000, 0x9704e393}, 0x0c000000},
+    {{"mpr-23483.ic32", 0x1000000, 0xc37adebe}, 0x0c000002},
+    {{"mpr-23480.ic33", 0x1000000, 0xf517b8b3}, 0x0e000000},
+    {{"mpr-23484.ic34", 0x1000000, 0x2ebe1aa1}, 0x0e000002},
 }};
 
 uint32_t romCrc32(const std::vector<uint8_t>& data)
@@ -303,6 +332,35 @@ RomImages loadVirtualOn4(const RomReader& reader, const std::string& bootName)
         interleaveRomWords(images.program, chip.offset, bytes);
     }
     for (const auto& chip : VirtualOn4DataRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.data, chip.offset, bytes);
+    }
+    return images;
+}
+
+RomImages loadSegaNascar(const RomReader& reader, const std::string& bootName)
+{
+    if (!reader)
+        throw std::invalid_argument("Hikaru ROM reader is required");
+    const RomFile* boot = nullptr;
+    for (const auto& candidate : BootRoms)
+        if (bootName == candidate.name)
+            boot = &candidate;
+    if (!boot)
+        throw std::invalid_argument("Unknown Hikaru BIOS revision: " + bootName);
+
+    RomImages images;
+    images.boot = reader(*boot);
+    validateRom(*boot, images.boot);
+    images.program.resize(0x04000000, 0);
+    images.data.resize(0x10000000, 0);
+    for (const auto& chip : SegaNascarProgramRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.program, chip.offset, bytes);
+    }
+    for (const auto& chip : SegaNascarDataRoms) {
         auto bytes = reader(chip.file);
         validateRom(chip.file, bytes);
         interleaveRomWords(images.data, chip.offset, bytes);

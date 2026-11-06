@@ -198,4 +198,40 @@ TEST(HikaruCabinetSettingsTest, SavedRegionDoesNotInitializeAnErasedChip)
         CabinetRegionResult::Unchanged);
     EXPECT_EQ(erased, original);
 }
+
+TEST(HikaruCabinetSettingsTest, FreshSinglePlayerCabinetKeepsBiosCountryUnlessExplicitlySelected)
+{
+    const std::array<uint8_t, 4> nascarId{{'B','B','R',0}};
+    auto defaults = biosWorkingDefaults(Cabinets[0]);
+    for (unsigned offset : {0u, 64u})
+        std::copy(nascarId.begin(), nascarId.end(), defaults.begin() + offset);
+    for (auto country : {CabinetRegion::Saved, CabinetRegion::Export}) {
+        std::array<uint8_t, 128> erased;
+        erased.fill(0xff);
+        ASSERT_EQ(initializeErasedCabinetRegion(erased, defaults, nascarId, country, 1),
+            CabinetRegionResult::Changed);
+        for (unsigned i = 0; i < erased.size(); ++i) {
+            const unsigned offset = i % 64;
+            if (offset == 4) EXPECT_EQ(erased[i], 1);
+            else if (offset == 5 && country != CabinetRegion::Saved) EXPECT_EQ(erased[i], uint8_t(country));
+            else if (offset < 62) EXPECT_EQ(erased[i], defaults[i]);
+        }
+        EXPECT_EQ(applyCabinetRegion(erased, nascarId, static_cast<CabinetRegion>(erased[5])),
+            CabinetRegionResult::Unchanged);
+        const auto saved = erased;
+        EXPECT_EQ(initializeErasedCabinetRegion(erased, defaults, nascarId, country, 1),
+            CabinetRegionResult::Invalid);
+        EXPECT_EQ(erased, saved);
+    }
+}
+
+TEST(HikaruCabinetSettingsTest, UnsupportedFreshPlayerCountLeavesErasedDataUntouched)
+{
+    std::array<uint8_t, 128> erased;
+    erased.fill(0xff);
+    const auto original = erased;
+    EXPECT_EQ(initializeErasedCabinetRegion(erased, biosWorkingDefaults(Cabinets[0]),
+        Cabinets[0].id, CabinetRegion::Saved, 9), CabinetRegionResult::Invalid);
+    EXPECT_EQ(erased, original);
+}
 } // namespace

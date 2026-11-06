@@ -146,6 +146,7 @@ std::string bramPath;
 std::string mieEepromPath;
 std::array<uint8_t, 4> cabinetId{};
 CabinetRegion pendingRegion = CabinetRegion::Saved;
+bool initializeCabinet = false;
 
 // Bump on any payload-encoding change. The engine layout tag also rejects
 // incompatible native CPU/GPU structures before state is applied.
@@ -224,6 +225,7 @@ bool applyPendingState() {
         return false;
     }
     pendingRegion = CabinetRegion::Saved;
+    initializeCabinet = false;
     regionRequested = resetRequested = false;
     ioError.clear();
     audioPacer->reset();
@@ -235,7 +237,8 @@ bool applyPendingState() {
 }
 
 CabinetRegion configuredRegion(const GameDescriptor* game) {
-    const int value = game == &AirTrixGame ? config::HikaruAirTrixRegion.get()
+    const int value = game == &SegaNascarGame ? config::HikaruNascarRegion.get()
+        : game == &AirTrixGame ? config::HikaruAirTrixRegion.get()
         : game == &BraveFirefightersGame ? config::HikaruBraveRegion.get()
         : game == &VirtualOn4Game ? config::HikaruVirtualOn4Region.get() : config::HikaruPlanetRegion.get();
     return value >= -1 && value <= 2 ? static_cast<CabinetRegion>(value) : CabinetRegion::Saved;
@@ -305,6 +308,18 @@ InputDescriptors virtualOn4Inputs = {{
     {"Left lever horizontal", Full, 0, false}, {"Left lever vertical", Full, 1, false},
     {"Right lever horizontal", Full, 2, false}, {"Right lever vertical", Full, 3, false},
     {"Right trigger", Half, 4, false}, {"Left trigger", Half, 5, false},
+}};
+
+InputDescriptors segaNascarInputs = {{
+    {NAOMI_START_KEY, "Start"}, {NAOMI_COIN_KEY, "Coin"},
+    {NAOMI_BTN0_KEY, "Gear 1"}, {NAOMI_BTN1_KEY, "Gear 2"},
+    {NAOMI_BTN2_KEY, "Gear 3"}, {NAOMI_BTN3_KEY, "Gear 4"},
+    {NAOMI_BTN4_KEY, "View change"}, {NAOMI_BTN5_KEY, "Neutral"},
+    {NAOMI_LEFT_KEY, "Steer left"}, {NAOMI_RIGHT_KEY, "Steer right"},
+    {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
+}, {
+    {"Steering wheel", Full, 0, false},
+    {"Gas pedal", Half, 4, false}, {"Brake pedal", Half, 5, false},
 }};
 
 std::unique_ptr<Archive> findArchive(const std::string& game, const char* name) {
@@ -405,7 +420,9 @@ void load(const std::string& path) {
         return readRom(std::string(file.name) == selected->name ? *bios : *game, file);
     };
     RomImages loadedRoms;
-    if (selectedGame == &VirtualOn4Game)
+    if (selectedGame == &SegaNascarGame)
+        loadedRoms = loadSegaNascar(reader, selected->name);
+    else if (selectedGame == &VirtualOn4Game)
         loadedRoms = loadVirtualOn4(reader, selected->name);
     else if (selectedGame == &PlanetHarriersGame)
         loadedRoms = loadPlanetHarriers(reader, selected->name);
@@ -415,6 +432,8 @@ void load(const std::string& path) {
         loadedRoms = loadAirTrix(reader, selected->name);
     auto loadedImages = std::make_unique<RomImages>(std::move(loadedRoms));
     auto loadedMie = std::make_unique<Mie>(readRom(*mieArchive, MieBootRom));
+    if (selectedGame == &SegaNascarGame)
+        loadedMie->setJvsBoardProfile(JvsNode::BoardProfile::Sega83713844);
     if (selectedGame == &VirtualOn4Game) {
         // Reuse Hollycast's Sanwa protocol implementation through the real
         // MIE serial adapter. No card is inserted at power-up.
@@ -440,12 +459,16 @@ void load(const std::string& path) {
     if (!bramSaveAllowed || !mieSaveAllowed)
         os_notify("Hikaru save data could not be loaded. Using defaults; the original files will be preserved.", 10000);
     for (auto& queue : credits) queue.reset();
-    NaomiGameInputs = selectedGame == &VirtualOn4Game ? &virtualOn4Inputs
+    NaomiGameInputs = selectedGame == &SegaNascarGame ? &segaNascarInputs
+        : selectedGame == &VirtualOn4Game ? &virtualOn4Inputs
         : selectedGame == &PlanetHarriersGame ? &planetHarriersInputs
         : selectedGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
     // The cartridge header supplies the BIOS's four-byte cabinet identifier.
     std::copy_n(images->program.begin() + 0x136, cabinetId.size(), cabinetId.begin());
     pendingRegion = configuredRegion(selectedGame);
+    // NASCAR requires a one-player cabinet; the BIOS defaults to two. Only a
+    // new cabinet may adopt this default, so saved calibration is never reset.
+    initializeCabinet = selectedGame == &SegaNascarGame && mieResult == NvramLoadResult::Missing;
     regionRequested = false;
     activeGame = selectedGame;
 }
@@ -502,6 +525,7 @@ void unload() {
     std::lock_guard<std::recursive_mutex> lock(stateMutex);
     activeGame = nullptr;
     pendingRegion = CabinetRegion::Saved;
+    initializeCabinet = false;
     pendingState.clear();
     stateRomHashesKnown = false;
     frameGeneration.fetch_add(1, std::memory_order_release);
@@ -563,6 +587,7 @@ void deserialize(Deserializer& source) {
         loadStateEventGeneration.store(0, std::memory_order_release);
         resetRequested = regionRequested = false;
         pendingRegion = CabinetRegion::Saved;
+        initializeCabinet = false;
     } catch (const std::exception& error) {
         throw Deserializer::Exception(error.what());
     }
@@ -732,19 +757,22 @@ static bool renderFrame() {
             loadStateEventGeneration.store(generation, std::memory_order_release);
         pendingRegion = configuredRegion(loadedGame());
     }
-    if (pendingState.empty() && pendingRegion != CabinetRegion::Saved && !mie->eepromWritePending()) {
+    if (pendingState.empty() && (pendingRegion != CabinetRegion::Saved || initializeCabinet)
+            && !mie->eepromWritePending()) {
         const auto original = mie->eepromContents();
         auto updated = original;
-        auto regionResult = applyCabinetRegion(updated, cabinetId, pendingRegion);
-        if (regionResult == CabinetRegionResult::PendingInitialization && engine
-                && std::all_of(original.begin(), original.end(), [](uint8_t value) { return value == 0xff; })) {
+        const bool erased = std::all_of(original.begin(), original.end(), [](uint8_t value) { return value == 0xff; });
+        auto regionResult = initializeCabinet && erased ? CabinetRegionResult::PendingInitialization
+            : applyCabinetRegion(updated, cabinetId, pendingRegion);
+        if (regionResult == CabinetRegionResult::PendingInitialization && engine && erased) {
             std::array<uint8_t, 128> biosDefaults{};
             if (hikaru_engine_get_cabinet_defaults(engine, biosDefaults.data(), biosDefaults.size()) == 0)
-                regionResult = initializeErasedCabinetRegion(updated, biosDefaults, cabinetId, pendingRegion);
+                regionResult = initializeErasedCabinetRegion(updated, biosDefaults, cabinetId, pendingRegion,
+                    initializeCabinet ? 1u : 0u);
         }
         if (regionResult == CabinetRegionResult::Changed) {
             if (!backupCabinetSettings(original)) {
-                os_notify("Could not back up cabinet settings. Region was not changed.", 10000);
+                os_notify("Could not back up cabinet settings. Original settings retained.", 10000);
             } else {
                 // The BIOS caches country in RAM. Preserve BRAM and teardown
                 // before replacing the EEPROM; never interrupt its serial I/O.
@@ -760,14 +788,16 @@ static bool renderFrame() {
                 }
                 if (saveNvram(mieEepromPath, updated)) {
                     mie->restoreEeprom(std::vector<uint8_t>(updated.begin(), updated.end()));
-                    os_notify("Cabinet region applied. Calibration and saved records retained.", 5000);
+                    os_notify("Cabinet settings applied. Calibration and saved records retained.", 5000);
                 } else {
-                    os_notify("Could not save cabinet region. Original settings retained.", 10000);
+                    os_notify("Could not save cabinet settings. Original settings retained.", 10000);
                 }
             }
             pendingRegion = CabinetRegion::Saved;
+            initializeCabinet = false;
         } else if (regionResult != CabinetRegionResult::PendingInitialization) {
             pendingRegion = CabinetRegion::Saved;
+            initializeCabinet = false;
             if (regionResult == CabinetRegionResult::Invalid)
                 os_notify("Cabinet settings do not match this game. Region was not changed.", 10000);
         }
@@ -790,7 +820,8 @@ static bool renderFrame() {
         HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size(), 1};
         auto io = callbacks(); std::array<char, 512> error{};
         auto security = protectionCallbacks();
-        const auto game = activeGame == &VirtualOn4Game ? HIKARU_ENGINE_GAME_VON4
+        const auto game = activeGame == &SegaNascarGame ? HIKARU_ENGINE_GAME_SGNASCAR
+            : activeGame == &VirtualOn4Game ? HIKARU_ENGINE_GAME_VON4
             : activeGame == &PlanetHarriersGame ? HIKARU_ENGINE_GAME_PHARRIER
             : activeGame == &BraveFirefightersGame ? HIKARU_ENGINE_GAME_BRAVEFF : HIKARU_ENGINE_GAME_AIRTRIX;
         engine = hikaru_engine_create_game(game, &roms, &io, &security, 0, unsigned(settings.display.width), unsigned(settings.display.height), 1, error.data(), error.size());
@@ -883,7 +914,8 @@ static bool renderFrame() {
     for (unsigned i = 0; i < controllers.size(); ++i)
         controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};
     const auto* game = loadedGame();
-    auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick, config::HikaruVirtualOn4TwinStick);
+    auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick,
+        config::HikaruVirtualOn4TwinStick, config::HikaruNascarGamepad, mie->inputs().players[1]);
     if (game == &BraveFirefightersGame) {
         if (config::HikaruBraveMouseAim && !gui_is_open()) {
             // Absolute pointer aim, like touch: position inside the

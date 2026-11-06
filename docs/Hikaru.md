@@ -3,7 +3,7 @@
 
 The optional Hikaru backend recognizes **Air Trix (`airtrix`)** and
 **Brave Firefighters (`braveff`)**, **Planet Harriers (`pharrier`)**, and
-**Virtual-On Force (`von4`)** in the
+**Virtual-On Force (`von4`)**, and **NASCAR Arcade Rev A (`sgnascar`)** in the
 normal game library and loader. It uses
 a separate Hikaru CPU/GPU backend. Air Trix testing has reached attract mode, player/stage selection,
 and an active skating stage with calibrated steering and awarded trick coins.
@@ -209,7 +209,8 @@ session. They are preserved and will not be overwritten on exit. The frontend
 retains cartridge ROM storage for the engine instead of copying it again;
 the BIOS is still copied privately for the optional compatibility patch.
 
-Place `airtrix.zip`, `braveff.zip` or `pharrier.zip` beside `hikaru.zip` and
+Place a supported game ZIP (`airtrix`, `braveff`, `pharrier`, `von4`, or
+`sgnascar`) beside `hikaru.zip` and
 `mie.zip`, then add their folder to the game library or open the game with
 **File > Load ROM**. `.7z` archives are also accepted. The loader also searches
 the configured Naomi BIOS folders for the Hikaru and MIE archives. Every
@@ -309,6 +310,43 @@ previews are not currently captured for Hikaru. Restoring a state also restores
 its cabinet calibration and battery-backed records, which are persisted normally
 on exit. Rollback/netplay and RetroAchievements remain disabled. The backend
 currently keeps one emulated machine active.
+
+### NASCAR Arcade controls and bring-up
+
+NASCAR uses the Standard cabinet layout and its own 837-13844 JVS board profile.
+The loader validates the Rev A program pair and all sixteen data chips against
+MAME's manifest; the older `sgnascaro` revision is not enabled. Fresh cabinets
+adopt the BIOS's validated records with the required one-player setting.
+Existing EEPROM, calibration and records are never replaced by these defaults.
+Saves use `sgnascar.hikaru.nvmem` and `sgnascar.mie.eeprom`; cabinet region is
+independent of the other games.
+
+Its **Gamepad driving controls** option appears only while NASCAR is loaded.
+It defaults on and adds D-pad steering plus a latched shifter. With the normal
+arcade gamepad mapping:
+
+- Left stick steers; RT accelerates and LT brakes.
+- A/B/X/Y select gears 1/2/3/4. Right shoulder changes view; left shoulder selects neutral.
+- Start and Coin retain the normal arcade bindings.
+- Turning the option off removes the D-pad alias and gear latch for a physical
+  shifter whose selected gear button remains held. Analog steering and pedals
+  retain their cabinet assignments.
+
+Controller Mapping exposes each gear, neutral, view, wheel and pedal separately.
+Standard cabinet wheel/gas/brake use JVS analog 0/1/2; low is left/released.
+View is P1 Down. The shifter uses P2 Left/Up/Down, with switch words
+`0x2800`, `0x1800`, `0x2000`, `0x1000` for gears 1 through 4.
+The latch uses the existing serialized MIE input snapshot, so a restored state
+restores its gear without changing the save format. Conflicting gear buttons
+retain the prior selection; Neutral explicitly disengages it.
+
+Use Game Test > Input Assignments for wheel and pedal calibration. The game
+also offers automatic transmission. Attract mode has booted with the track
+and cars rendered; race performance and the completed input integration still
+require runtime verification. Linked play, Deluxe cabinet wiring and steering
+force feedback are not implemented here. The
+[Sega Standard cabinet manual](https://backup.segakore.fr/sauservice/Manuals/Nascar/NascarSTD/NascarSTD.pdf)
+documents the cabinet settings and calibration procedure.
 
 ### Virtual-On Force controls and bring-up
 

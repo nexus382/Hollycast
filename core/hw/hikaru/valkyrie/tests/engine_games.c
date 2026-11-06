@@ -167,14 +167,14 @@ static void check_bus(hikaru_t *board, unsigned bank, uint32_t offset, uint8_t e
     CHECK(!vk_device_put(board->memctl_m, 1, 0x0400001a, bank));
     CHECK(!vk_device_get(board->memctl_m, 1, 0x02000000 | offset, &value) && value == expected);
 }
-static void check_board(HikaruEngine *engine, const char *name, unsigned eprom_bank, unsigned mask_bank)
+static void check_board(HikaruEngine *engine, const char *name, unsigned eprom_bank, unsigned mask_bank, bool stretched)
 {
     static uint64_t previous_texture_source;
     CHECK(engine->texture_source && engine->texture_source != previous_texture_source);
     previous_texture_source = engine->texture_source;
     hikaru_t *board = (hikaru_t *)engine->machine;
     CHECK(!strcmp(engine->game.name, name));
-    CHECK(board->rombd_config.has_rom && !board->rombd_config.maskrom_is_stretched);
+    CHECK(board->rombd_config.has_rom && board->rombd_config.maskrom_is_stretched == stretched);
     CHECK(board->rombd_config.eprom_bank_size == eprom_bank &&
           board->rombd_config.maskrom_bank_size == mask_bank);
     CHECK(!board->sh_m->patch && !board->sh_s->patch);
@@ -419,18 +419,21 @@ int main(int argc, char **argv)
     HikaruEngineRoms sizes = {&byte, 0x200000, &byte, 0x4000000, &byte, 0x10000000};
     /* These must reject before reading ROM bytes or asking for a GL context. */
     reject((HikaruEngineGame)-1, &sizes, "Unsupported Hikaru game");
-    reject((HikaruEngineGame)4, &sizes, "Unsupported Hikaru game");
+    reject((HikaruEngineGame)5, &sizes, "Unsupported Hikaru game");
     reject(HIKARU_ENGINE_GAME_AIRTRIX, &sizes, "Invalid ROM sections");
     sizes.program_size = 0x800000; sizes.data_size = 0x8000000;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_PHARRIER, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_SGNASCAR, &sizes, "Invalid ROM sections");
     sizes.program_size = 0x4000000; sizes.data_size = 0x10000000 - 1;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_SGNASCAR, &sizes, "Invalid ROM sections");
     sizes.data_size = 0x10000000; sizes.program_size--;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_SGNASCAR, &sizes, "Invalid ROM sections");
     if (failures) return 1;
 
     if (SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL video: %s\n", SDL_GetError()); return 2; }
@@ -463,7 +466,7 @@ int main(int argc, char **argv)
         &roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "Brave create: %s\n", error); goto cleanup; }
-    check_board(engine, "braveff", 2, 8);
+    check_board(engine, "braveff", 2, 8, false);
     check_state_roundtrip(engine);
     hikaru_t *board = (hikaru_t *)engine->machine;
     CHECK(board->eprom->size == roms.program_size && board->maskrom->size == roms.data_size);
@@ -497,7 +500,7 @@ int main(int argc, char **argv)
         &roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "Planet Harriers create: %s\n", error); goto cleanup; }
-    check_board(engine, "pharrier", 4, 16);
+    check_board(engine, "pharrier", 4, 16, false);
     check_state_roundtrip(engine);
     board = (hikaru_t *)engine->machine;
     CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
@@ -535,7 +538,7 @@ int main(int argc, char **argv)
         &roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "VON4 create: %s\n", error); goto cleanup; }
-    check_board(engine, "von4", 4, 16);
+    check_board(engine, "von4", 4, 16, false);
     check_state_roundtrip(engine);
     board = (hikaru_t *)engine->machine;
     CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
@@ -581,6 +584,43 @@ int main(int argc, char **argv)
     }
     hikaru_engine_destroy(engine);
 
+    /* NASCAR has one 8 MiB program pair and eight 32 MiB data pairs. Verify
+     * both halves of every data pair through the real ROM-board apertures. */
+    memset(program, 0, roms.program_size);
+    program[0] = 0x41; program[0x7fffff] = 0x42;
+    memset(data, 0, roms.data_size);
+    for (unsigned bank = 0; bank < 16; ++bank) {
+        data[bank * 0x1000000] = (uint8_t)(0x50 + bank);
+        data[bank * 0x1000000 + 0xffffff] = (uint8_t)(0x70 + bank);
+    }
+    roms.borrow_cartridge = 1;
+    engine = hikaru_engine_create_game(HIKARU_ENGINE_GAME_SGNASCAR,
+        &roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
+    CHECK(engine != NULL);
+    if (!engine) { fprintf(stderr, "NASCAR create: %s\n", error); goto cleanup; }
+    check_board(engine, "sgnascar", 4, 16, true);
+    check_state_roundtrip(engine);
+    board = (hikaru_t *)engine->machine;
+    CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
+    CHECK(board->eprom->ptr == program && board->maskrom->ptr == data);
+    CHECK(board->bootrom->ptr != boot);
+    vk_buffer_put(board->eprom, 1, 0, 0);
+    vk_buffer_clear(board->maskrom);
+    CHECK(program[0] == 0x41 && data[0] == 0x50);
+    check_bus(board, 0x10, 0, 0x41);
+    check_bus(board, 0x10, 0x7fffff, 0x42);
+    check_bus(board, 0x10, 0x800000, 0x41); /* 8 MiB within-bank mirror. */
+    check_bus(board, 0x10, 0xffffff, 0x42);
+    for (unsigned bank = 0x11; bank <= 0x13; ++bank) {
+        check_bus(board, bank, 0, 0); /* Unpopulated program socket pairs. */
+        check_bus(board, bank, 0xffffff, 0);
+    }
+    for (unsigned bank = 0; bank < 16; ++bank) {
+        check_bus(board, 0x20 + bank, 0, (uint8_t)(0x50 + bank));
+        check_bus(board, 0x20 + bank, 0xffffff, (uint8_t)(0x70 + bank));
+    }
+    hikaru_engine_destroy(engine);
+
     /* Original callers still select Air Trix after the other boards are freed. */
     memset(program, 0, 0x800000);
     memset(data, 0, 0x8000000);
@@ -589,7 +629,7 @@ int main(int argc, char **argv)
     engine = hikaru_engine_create(&roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
     CHECK(engine != NULL);
     if (!engine) { fprintf(stderr, "Air Trix create: %s\n", error); goto cleanup; }
-    check_board(engine, "airtrix", 4, 16);
+    check_board(engine, "airtrix", 4, 16, false);
     check_bus((hikaru_t *)engine->machine, 0x10, 0x400000, 0x24);
     board = (hikaru_t *)engine->machine;
     sh4_t *master = (sh4_t *)board->sh_m;

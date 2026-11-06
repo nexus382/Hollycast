@@ -850,8 +850,9 @@ hikaru_set_rombd_config (hikaru_t *hikaru)
 		maskrom_bank_size = 8;
 		maskrom_is_stretched = true;
 	} else if (!strcmp (game->name, "sgnascar")) {
-		//rombd_offs = 8;
 		eprom_bank_size = 4;
+		/* MAME retains 16 MiB socket slots around the populated 8 MiB pair. */
+		eprom_source_stride = 16*MB;
 		maskrom_bank_size = 16;
 		maskrom_is_stretched = true;
 	} else

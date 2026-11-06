@@ -14,7 +14,9 @@ CabinetRegionResult applyCabinetRegion(std::array<uint8_t, 128>& eeprom,
     const std::array<uint8_t, 4>& cabinetId, CabinetRegion region);
 // Only an entirely erased chip may adopt the BIOS's two matching working
 // copies. Existing or damaged saved settings must never be replaced by defaults.
+// A nonzero player count supplies a title-required fresh cabinet default; Saved
+// keeps the BIOS country when only the player count needs initialization.
 CabinetRegionResult initializeErasedCabinetRegion(std::array<uint8_t, 128>& eeprom,
     const std::array<uint8_t, 128>& biosDefaults, const std::array<uint8_t, 4>& cabinetId,
-    CabinetRegion region);
+    CabinetRegion region, unsigned players = 0);
 } // namespace hikaru

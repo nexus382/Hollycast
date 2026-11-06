@@ -211,6 +211,8 @@ void Mie::reset()
     impl_->pins = z80_init(&impl_->cpu);
 }
 void Mie::setInputs(const JvsNode::Inputs& inputs) { impl_->inputs = inputs; impl_->node.setInputs(inputs); }
+const JvsNode::Inputs& Mie::inputs() const { return impl_->inputs; }
+void Mie::setJvsBoardProfile(JvsNode::BoardProfile profile) { impl_->node.setBoardProfile(profile); }
 void Mie::setGpio(GpioRead read, GpioWrite write) { impl_->gpioRead = std::move(read); impl_->gpioWrite = std::move(write); }
 void Mie::setSerialDevice(std::function<void(uint8_t)> send,
     std::function<uint8_t()> receive, std::function<bool()> pending) {

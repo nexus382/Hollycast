@@ -55,10 +55,12 @@ CabinetRegionResult applyCabinetRegion(std::array<uint8_t, 128>& eeprom,
 }
 CabinetRegionResult initializeErasedCabinetRegion(std::array<uint8_t, 128>& eeprom,
     const std::array<uint8_t, 128>& biosDefaults, const std::array<uint8_t, 4>& cabinetId,
-    CabinetRegion region)
+    CabinetRegion region, unsigned players)
 {
-    if (region == CabinetRegion::Saved) return CabinetRegionResult::Unchanged;
-    if (region != CabinetRegion::Japan && region != CabinetRegion::Usa && region != CabinetRegion::Export)
+    if (players > 8) return CabinetRegionResult::Invalid;
+    if (region == CabinetRegion::Saved && players == 0) return CabinetRegionResult::Unchanged;
+    if (region != CabinetRegion::Saved && region != CabinetRegion::Japan
+            && region != CabinetRegion::Usa && region != CabinetRegion::Export)
         return CabinetRegionResult::Invalid;
     if (!std::all_of(eeprom.begin(), eeprom.end(), [](uint8_t value) { return value == 0xff; }))
         return CabinetRegionResult::Invalid;
@@ -76,7 +78,8 @@ CabinetRegionResult initializeErasedCabinetRegion(std::array<uint8_t, 128>& eepr
     auto initialized = biosDefaults;
     for (unsigned offset : {0u, RecordSize}) {
         auto* record = initialized.data() + offset;
-        record[CountryOffset] = uint8_t(region);
+        if (region != CabinetRegion::Saved) record[CountryOffset] = uint8_t(region);
+        if (players != 0) record[4] = uint8_t(players);
         const auto checksum = recordChecksum(record);
         record[ChecksumOffset] = uint8_t(checksum);
         record[ChecksumOffset + 1] = uint8_t(checksum >> 8);

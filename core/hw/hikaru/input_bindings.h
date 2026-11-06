@@ -21,5 +21,6 @@ struct ControllerInputs {
 // and Brave's pointer overlay remain frontend responsibilities.
 HikaruEngineInputs bindCabinetInputs(const GameDescriptor* game,
     const std::array<ControllerInputs, 2>& controllers,
-    bool airTrixDpadBoard, bool planetDpadStick, bool virtualOn4TwinStick = true);
+    bool airTrixDpadBoard, bool planetDpadStick, bool virtualOn4TwinStick = true,
+    bool nascarGamepad = true, uint16_t previousNascarGear = 0);
 } // namespace hikaru

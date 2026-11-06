@@ -3,6 +3,7 @@
 // Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/jvs.h"
 #include "hw/hikaru/state_io.h"
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <iostream>
@@ -51,6 +52,11 @@ int main()
     check(valid(r) && std::string(r.begin()+5, r.end()-2) == "SEGA ENTERPRISES,LTD.;I/O BD JVS;837-13551 ;Ver1.00;98/10" && r[r.size()-2] == 0, "837-13551 identity");
     send(node, 1, {0x11,0x12,0x13}); r = read(node);
     check(valid(r) && r[4] == 1 && r[5] == 0x11 && r[6] == 1 && r[7] == 0x20 && r[8] == 1 && r[9] == 0x10, "batched version queries");
+    send(node, 1, {0x14}); r = read(node);
+    const std::vector<uint8_t> defaultFeatures{1,2,13,0, 2,2,0,0, 3,8,16,0, 0x12,6,0,0, 0};
+    check(valid(r) && r.size() == defaultFeatures.size() + 6 && r[4] == 1
+            && std::equal(defaultFeatures.begin(), defaultFeatures.end(), r.begin() + 5),
+        "default 837-13551 features remain two players, 13 switch bits, eight analog channels and six outputs");
     JvsNode::Inputs inputs; inputs.test = true; inputs.service = true; inputs.players[0] = 0x8401; inputs.players[1] = 0x0202; inputs.coin[0] = true; inputs.analog[0] = 0xe0d0; inputs.analog[1] = 0x1234;
     node.setInputs(inputs); node.setInputs(inputs); // held switch counts once
     send(node, 1, {0x20,2,2,0x21,2,0x22,2}); r = read(node);
@@ -172,6 +178,46 @@ int main()
     hikaru::StateWriter after;
     resumedNode.saveState(after);
     check(rejected && before.data() == after.data(), "rejected JVS state preserves parser and queue");
+
+    JvsNode nascar;
+    nascar.setBoardProfile(JvsNode::BoardProfile::Sega83713844);
+    hikaru::StateWriter defaultProfileState, nascarProfileState;
+    JvsNode{}.saveState(defaultProfileState);
+    nascar.saveState(nascarProfileState);
+    check(defaultProfileState.data() == nascarProfileState.data(),
+        "fixed JVS board profile does not change the save-state payload");
+    hikaru::StateReader profileReader(defaultProfileState.data());
+    nascar.loadState(profileReader);
+    profileReader.finish();
+    nascar.reset();
+    send(nascar, 0xff, {0xf1, 1}); read(nascar);
+    send(nascar, 1, {0x10}); r = read(nascar);
+    check(valid(r) && r.size() > 6
+            && std::string(r.begin() + 5, r.end() - 2) == "SEGA ENTERPRISES,LTD.;837-13844-01 I/O CNTL BD2 ;Ver1.00;99/07"
+            && r[r.size() - 2] == 0,
+        "837-13844 identity survives state load and reset");
+    send(nascar, 1, {0x14}); r = read(nascar);
+    const std::vector<uint8_t> nascarFeatures{1,2,12,0, 2,2,0,0, 3,8,16,0, 0x12,22,0,0, 0};
+    check(valid(r) && r.size() == nascarFeatures.size() + 6 && r[4] == 1
+            && std::equal(nascarFeatures.begin(), nascarFeatures.end(), r.begin() + 5),
+        "NASCAR type-2 features match the operator manual");
+    send(nascar, 1, {0x32,3,0x5a,0xa5,0xfc}); r = read(nascar);
+    check(valid(r) && r[4] == 1 && nascar.outputs() == 0x00fca55a,
+        "type-2 node accepts the three output bytes needed for 22 drivers");
+    const auto nascarPartial = encode(1, {0x14});
+    for (unsigned i = 0; i < 3; ++i) nascar.pushByte(nascarPartial[i]);
+    hikaru::StateWriter nascarState;
+    nascar.saveState(nascarState);
+    nascar.reset(held);
+    hikaru::StateReader nascarReader(nascarState.data());
+    nascar.loadState(nascarReader);
+    nascarReader.finish();
+    for (std::size_t i = 3; i < nascarPartial.size(); ++i) nascar.pushByte(nascarPartial[i]);
+    r = read(nascar);
+    check(valid(r) && r.size() == nascarFeatures.size() + 6 && r[4] == 1
+            && std::equal(nascarFeatures.begin(), nascarFeatures.end(), r.begin() + 5)
+            && nascar.outputs() == 0x00fca55a,
+        "type-2 state restores partial requests and outputs while retaining the configured profile");
     std::cout << "JVS synthetic checks: " << checks << " checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

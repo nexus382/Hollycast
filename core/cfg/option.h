@@ -452,6 +452,8 @@ extern Option<int, false> HikaruAirTrixRegion;
 extern Option<int, false> HikaruBraveRegion;
 extern Option<int, false> HikaruPlanetRegion;
 extern Option<int, false> HikaruVirtualOn4Region;
+extern Option<int, false> HikaruNascarRegion;
+extern Option<bool> HikaruNascarGamepad;
 extern Option<bool> HikaruVirtualOn4TwinStick;
 #endif
 extern Option<bool> AutoLatency;

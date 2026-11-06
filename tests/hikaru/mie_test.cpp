@@ -144,6 +144,9 @@ int main()
     putPort(0x0a, 0xdd); putPort(0x09, 1); serial.reset(); serial.advanceTicks(160);
     check(sent.size() == 1 && getPort(0x0d) == 0, "MIE reset clears exchanges while retaining the connection");
     putPort(0x0a, 0xcc); putPort(0x09, 1); serial.advanceTicks(80);
+    hikaru::JvsNode::Inputs shifterInputs;
+    shifterInputs.players[1] = 0x1800;
+    serial.setInputs(shifterInputs);
     hikaru::StateWriter serialState;
     serial.saveState(serialState);
     hikaru::Mie resumedSerial(rom);
@@ -153,6 +156,7 @@ int main()
     hikaru::StateReader serialReader(serialState.data());
     resumedSerial.loadState(serialReader);
     serialReader.finish();
+    check(resumedSerial.inputs().players[1] == 0x1800, "MIE state restores latched cabinet gear inputs");
     auto resumedPort = [&](uint8_t port) {
         return resumedSerial.readHost(0x00800000u + unsigned(port) * 2, 1);
     };
@@ -161,6 +165,8 @@ int main()
         && getPort(0x0d) == 8 && resumedPort(0x0d) == 8
         && getPort(0x0c) == 0xcc && resumedPort(0x0c) == 0xcc,
         "MIE state restores serial adapter countdown and reply");
+    resumedSerial.reset();
+    check(resumedSerial.inputs().players[1] == 0x1800, "MIE reset preserves the physical shifter position");
     auto truncatedSerial = serialState.data();
     truncatedSerial.pop_back();
     hikaru::StateWriter beforeRejectedLoad;

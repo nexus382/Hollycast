@@ -139,6 +139,31 @@ int main()
             "unknown VON4 BIOS rejected");
     rejects([&] { hikaru::loadVirtualOn4([](const auto&) { return std::vector<uint8_t>{}; }); },
             "missing VON4 BIOS data rejected");
+    check(hikaru::findGame("SGNASCAR") == &hikaru::SegaNascarGame && !hikaru::SegaNascarGame.securityKey,
+          "NASCAR Rev A selects its Actel board without a 315-5881 key");
+    check(hikaru::SegaNascarProgramRoms.size() == 2 && hikaru::SegaNascarDataRoms.size() == 16,
+          "NASCAR Rev A manifest contains the populated program pair and all data chips");
+    check(hikaru::SegaNascarProgramRoms[0].offset == 0 && hikaru::SegaNascarProgramRoms[1].offset == 2
+            && hikaru::SegaNascarProgramRoms[0].file.size == 0x400000
+            && hikaru::SegaNascarProgramRoms[1].file.size == 0x400000
+            && hikaru::SegaNascarProgramRoms[0].file.crc32 == 0x1072f531
+            && hikaru::SegaNascarProgramRoms[1].file.crc32 == 0x02d4aab6,
+          "NASCAR Rev A uses the correct program lanes and revision");
+    for (std::size_t i = 0; i < hikaru::SegaNascarDataRoms.size(); ++i) {
+        const auto& chip = hikaru::SegaNascarDataRoms[i];
+        check(chip.offset == (i / 2) * 0x2000000 + (i % 2) * 2 && chip.file.size == 0x1000000,
+              "NASCAR data pairs fill the 256 MiB region");
+    }
+    check(std::string(hikaru::SegaNascarDataRoms[0].file.name) == "mpr-23469.ic19"
+            && hikaru::SegaNascarDataRoms[0].file.crc32 == 0x89cbad8d
+            && std::string(hikaru::SegaNascarDataRoms[15].file.name) == "mpr-23484.ic34"
+            && hikaru::SegaNascarDataRoms[15].file.crc32 == 0x2ebe1aa1,
+          "NASCAR data manifest matches the pinned MAME socket layout");
+    rejects([&] { hikaru::loadSegaNascar({}); }, "missing NASCAR reader rejected");
+    rejects([&] { hikaru::loadSegaNascar([](const auto&) { return std::vector<uint8_t>{}; }, "unknown"); },
+            "unknown NASCAR BIOS rejected");
+    rejects([&] { hikaru::loadSegaNascar([](const auto&) { return std::vector<uint8_t>{}; }); },
+            "missing NASCAR BIOS data rejected");
     std::cout << checks << " ROM checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }
