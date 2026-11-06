@@ -18,6 +18,7 @@
 #include "rend/transform_matrix.h"
 #include "rend/CustomTexture.h"
 #include "rend/sample_filter.h"
+#include "rend/osd.h"
 #include "ui/performance_overlay.h"
 #include "ui/settings_new.h"
 #include "ui/shader_preview_layout.h"
