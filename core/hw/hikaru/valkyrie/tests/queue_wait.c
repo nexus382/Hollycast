@@ -45,6 +45,40 @@ static uint64_t hash_bytes(uint64_t hash, const void *data, size_t size)
     return hash;
 }
 
+/* Compare architectural values, not unspecified structure-padding bytes. */
+static uint64_t hash_cpu_state(uint64_t hash, const sh4_t *sh)
+{
+#define HASH_FIELD(field) hash = hash_bytes(hash, &sh->field, sizeof(sh->field))
+    HASH_FIELD(regs.r);
+    HASH_FIELD(regs.pc);
+    HASH_FIELD(regs.sr.full);
+    HASH_FIELD(regs.pr);
+    HASH_FIELD(regs.gbr);
+    HASH_FIELD(regs.vbr);
+    HASH_FIELD(regs.dbr);
+    HASH_FIELD(regs.mac.full);
+    HASH_FIELD(regs.spc);
+    HASH_FIELD(regs.ssr.full);
+    HASH_FIELD(regs.sgr);
+    HASH_FIELD(regs.rbank);
+    HASH_FIELD(regs.f);
+    HASH_FIELD(regs.x);
+    HASH_FIELD(regs.fpul.u);
+    HASH_FIELD(regs.fpscr.full);
+    HASH_FIELD(intc.pending);
+    HASH_FIELD(intc.index);
+    for (unsigned i = 0; i < SH4_NUM_IESOURCES; ++i) {
+        HASH_FIELD(intc.irqs[i].state);
+        HASH_FIELD(intc.irqs[i].priority);
+        HASH_FIELD(intc.irqs[i].offset);
+        HASH_FIELD(intc.irqs[i].code);
+    }
+    HASH_FIELD(tmu.is_running);
+    HASH_FIELD(tmu.counter);
+#undef HASH_FIELD
+    return hash;
+}
+
 static void store32(vk_buffer_t *ram, uint32_t address, uint32_t value)
 {
     memcpy(ram->ptr + (address & 0xffff), &value, sizeof(value));
@@ -62,6 +96,8 @@ static Result run_case(enum Mode mode, bool enabled)
     vk_mmap_t *map = vk_mmap_new(machine);
     vk_buffer_t *ram = vk_buffer_le32_new(65536, 0);
     if (!map || !ram) abort();
+    /* The comparison hashes RAM beyond the explicitly written test words. */
+    memset(ram->ptr, 0, ram->size);
     vk_device_t device = {0};
     device.get = device_get;
     device_ram = ram->ptr;
@@ -164,9 +200,7 @@ static Result run_case(enum Mode mode, bool enabled)
                         result.hash = hash_bytes(result.hash, &ran, sizeof(ran));
                         result.hash = hash_bytes(result.hash, &cpu->remaining, sizeof(cpu->remaining));
                         result.hash = hash_bytes(result.hash, &cpu->state, sizeof(cpu->state));
-                        result.hash = hash_bytes(result.hash, &sh->regs, sizeof(sh->regs));
-                        result.hash = hash_bytes(result.hash, &sh->intc, sizeof(sh->intc));
-                        result.hash = hash_bytes(result.hash, &sh->tmu, sizeof(sh->tmu));
+                        result.hash = hash_cpu_state(result.hash, sh);
                         result.hash = hash_bytes(result.hash, &sh->sound_cycle_debt, sizeof(sh->sound_cycle_debt));
                         result.hash = hash_bytes(result.hash, ram->ptr + 0x100, 0x600);
                         result.hash = hash_bytes(result.hash, ram->ptr + 0xfff4, 12);

@@ -33,7 +33,9 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *, uint8_t[10][3][4]);
 int hikaru_vendor_test_layer_upload_storage(void);
 void hikaru_vendor_test_fail_next_packet_draw(void);
 int hikaru_vendor_test_seed_packet_3d(vk_renderer_t *,void *,HikaruFrame *,unsigned);
+int hikaru_vendor_test_grow_packet_opaque(HikaruFrame *,unsigned);
 static vk_renderer_t *layer_renderer;
+static GLuint stream_test_vbo, stream_test_vao;
 static int frame_state_growth_passed;
 static void frame_state_growth_probe(void) { frame_state_growth_passed = hikaru_vendor_test_frame_state_growth(layer_renderer); }
 static int layer_pixels_passed;
@@ -310,6 +312,25 @@ static int frame_packet_has_gl_handles(const HikaruFrame *frame)
   for(unsigned i=0;i<capture->num_meshes[vp][type];i++)if(capture->mesh_list[vp][type][i].vbo)return 1;
  return 0;
 }
+static int frame_packet_stream_matches(const hikaru_renderer_t *owner,unsigned chunk,
+                                       GLuint vbo,GLuint vao,const uint8_t *expected,size_t bytes)
+{
+ if(chunk>=8||!vbo||!vao||!expected||!bytes||
+    owner->vertex_chunks[chunk].vbo!=vbo||owner->vertex_chunks[chunk].vao!=vao||
+    !glIsBuffer(vbo)||!glIsVertexArray(vao))return 0;
+ uint8_t *actual=malloc(bytes);
+ if(!actual)return 0;
+ GLint previous=0,size=0;
+ glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&previous);
+ glBindBuffer(GL_ARRAY_BUFFER,vbo);
+ glGetBufferParameteriv(GL_ARRAY_BUFFER,GL_BUFFER_SIZE,&size);
+ if(size==(GLint)bytes)glGetBufferSubData(GL_ARRAY_BUFFER,0,(GLsizeiptr)bytes,actual);
+ int ok=size==(GLint)bytes&&glGetError()==GL_NO_ERROR&&memcmp(actual,expected,bytes)==0;
+ glBindBuffer(GL_ARRAY_BUFFER,(GLuint)previous);
+ ok=ok&&glGetError()==GL_NO_ERROR;
+ free(actual);
+ return ok;
+}
 static int frame_packet_layer_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_t target,
                                      const HikaruEngineInputs *inputs,int wide)
 {
@@ -388,25 +409,77 @@ static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_
                                   const HikaruEngineInputs *inputs)
 {
  static const uint8_t red[4]={96,0,0,255},blue[4]={0,0,96,255};
- HikaruFrame *first=hikaru_frame_create(),*second=hikaru_frame_create();
+ HikaruFrame *first=hikaru_frame_create(),*second=hikaru_frame_create(),*abandoned=NULL;
+ uint8_t *saved_state=NULL;
  uint8_t pixel[4]={0};char error[256]={0};int ok=first&&second;
  if(!ok)goto cleanup;
  vk_renderer_t *renderer=engine->machine->renderer;
+ hikaru_renderer_t *owner=(hikaru_renderer_t *)renderer;
  if(!hikaru_vendor_test_seed_packet_3d(renderer,gpu,first,0)||
     !hikaru_vendor_test_seed_packet_3d(renderer,gpu,second,1)){
   fprintf(stderr,"could not seed textured packet fixture\n");ok=0;goto cleanup;
  }
  const hikaru_mesh_t *first_mesh=&first->capture->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
  const hikaru_mesh_t *second_mesh=&second->capture->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
- if(!first_mesh->vertex_chunk||first_mesh->cpu_vertices||!second_mesh->vertex_chunk||second_mesh->cpu_vertices){
+ if(first_mesh->vertex_chunk!=1||first_mesh->cpu_vertices||
+    second_mesh->vertex_chunk!=1||second_mesh->cpu_vertices){
   fprintf(stderr,"opaque packets did not use chunk-only vertex storage\n");ok=0;goto cleanup;
  }
- if(hikaru_engine_draw_frame(engine,first,error,sizeof(error))||!read_frame_pixel(target,pixel)||
-    !frame_pixel_close(pixel,red,3)){
-  fprintf(stderr,"packet N textured triangle: got %u,%u,%u,%u expected red-lit (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;goto cleanup;
+ const unsigned chunk=first_mesh->vertex_chunk-1;
+ const size_t triangle_bytes=3*sizeof(hikaru_vertex_body_t);
+ const uint8_t *first_vertices=first->capture->vertex_chunks[chunk].data;
+ hikaru_vendor_test_fail_next_packet_draw();
+ const int first_result=hikaru_engine_draw_frame(engine,first,error,sizeof(error));
+ if(first_result!=-1||!strstr(error,"injected packet draw failure")||
+    !read_frame_pixel(target,pixel)||!frame_pixel_close(pixel,red,3)||
+    first->ready||frame_packet_has_gl_handles(first)||owner->packet_active){
+  fprintf(stderr,"packet N stream/error recovery: draw=%d ready=%d handles=%d pixel=%u,%u,%u,%u (%s)\n",
+          first_result,first->ready,frame_packet_has_gl_handles(first),pixel[0],pixel[1],pixel[2],pixel[3],error);
+  ok=0;goto cleanup;
+ }
+ stream_test_vbo=owner->vertex_chunks[chunk].vbo;
+ stream_test_vao=owner->vertex_chunks[chunk].vao;
+ if(!stream_test_vbo||!stream_test_vao||!glIsBuffer(stream_test_vbo)||!glIsVertexArray(stream_test_vao)){
+  fprintf(stderr,"packet N did not retain its renderer-owned stream objects\n");ok=0;goto cleanup;
  }
  if(!second->capture->textures.cpu_dirty){fprintf(stderr,"packet N+1 did not carry its texture write\n");ok=0;goto cleanup;}
- hikaru_renderer_t *owner=(hikaru_renderer_t *)renderer;
+ if(!hikaru_vendor_test_grow_packet_opaque(second,8)){
+  fprintf(stderr,"could not grow the second packet's opaque stream\n");ok=0;goto cleanup;
+ }
+ const size_t grown_bytes=second->capture->vertex_chunks[chunk].used;
+ const uint8_t *second_vertices=second->capture->vertex_chunks[chunk].data;
+ if(grown_bytes<=triangle_bytes||memcmp(first_vertices,second_vertices,triangle_bytes)==0){
+  fprintf(stderr,"second packet did not provide fresh, larger vertex data\n");ok=0;goto cleanup;
+ }
+ const size_t state_size=hikaru_engine_state_size(engine);
+ saved_state=state_size?malloc(state_size):NULL;
+ if(!saved_state||hikaru_engine_save_state(engine,saved_state,state_size)||
+    hikaru_engine_load_state(engine,saved_state,state_size)){
+  fprintf(stderr,"renderer save/load reset failed with a live stream buffer\n");ok=0;goto cleanup;
+ }
+ free(saved_state);saved_state=NULL;
+ if(owner->vertex_chunks[chunk].vbo!=stream_test_vbo||
+    owner->vertex_chunks[chunk].vao!=stream_test_vao||
+    !glIsBuffer(stream_test_vbo)||!glIsVertexArray(stream_test_vao)){
+  fprintf(stderr,"save/load discarded renderer-owned stream objects\n");ok=0;goto cleanup;
+ }
+ abandoned=hikaru_frame_create();
+ if(!abandoned||!hikaru_vendor_test_seed_packet_3d(renderer,gpu,abandoned,3)||
+    frame_packet_has_gl_handles(abandoned)){
+  fprintf(stderr,"abandoned capture acquired graphics objects\n");ok=0;goto cleanup;
+ }
+ hikaru_frame_destroy(abandoned);abandoned=NULL;
+ if(!glIsBuffer(stream_test_vbo)||!glIsVertexArray(stream_test_vao)){
+  fprintf(stderr,"destroying an abandoned CPU packet affected owner graphics objects\n");ok=0;goto cleanup;
+ }
+ if(hikaru_engine_draw_frame(engine,second,error,sizeof(error))||!read_frame_pixel(target,pixel)||
+    !frame_pixel_close(pixel,blue,3)||
+    !frame_packet_stream_matches(owner,chunk,stream_test_vbo,stream_test_vao,second_vertices,grown_bytes)){
+  fprintf(stderr,"packet N+1 reuse/growth: got %u,%u,%u,%u, stable=%d (%s)\n",
+          pixel[0],pixel[1],pixel[2],pixel[3],
+          frame_packet_stream_matches(owner,chunk,stream_test_vbo,stream_test_vao,second_vertices,grown_bytes),error);
+  ok=0;goto cleanup;
+ }
  const unsigned savedCarryCount=owner->push.num_verts;
  hikaru_vertex_t savedCarry[4];memcpy(savedCarry,owner->push.tmp,sizeof(savedCarry));
  owner->push.num_verts=2;
@@ -425,15 +498,21 @@ static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_
  if(hikaru_engine_run_frame(engine,inputs)!=0||owner->capture_started){
   fprintf(stderr,"capture-to-direct renderer transition failed\n");ok=0;goto cleanup;
  }
+ if(owner->vertex_chunks[chunk].vbo!=stream_test_vbo||owner->vertex_chunks[chunk].vao!=stream_test_vao){
+  fprintf(stderr,"direct rendering discarded the retained packet stream\n");ok=0;goto cleanup;
+ }
  if(!hikaru_vendor_test_seed_packet_3d(renderer,gpu,NULL,0)||
     !hikaru_vendor_test_seed_packet_3d(renderer,gpu,first,3)||!first->capture->invalidate_all||first->capture->textures.cpu_dirty){
   fprintf(stderr,"direct-to-capture transition did not rebase the clean packet\n");ok=0;goto cleanup;
  }
  if(hikaru_engine_draw_frame(engine,first,error,sizeof(error))||!read_frame_pixel(target,pixel)||
-    !frame_pixel_close(pixel,red,3)){
+    !frame_pixel_close(pixel,red,3)||
+    owner->vertex_chunks[chunk].vbo!=stream_test_vbo||owner->vertex_chunks[chunk].vao!=stream_test_vao){
   fprintf(stderr,"post-direct clean capture: got %u,%u,%u,%u expected red-lit (%s)\n",pixel[0],pixel[1],pixel[2],pixel[3],error);ok=0;
  }
 cleanup:
+ free(saved_state);
+ hikaru_frame_destroy(abandoned);
  hikaru_frame_destroy(first);hikaru_frame_destroy(second);return ok;
 }
 
@@ -455,6 +534,7 @@ int main(void){
 #ifndef __APPLE__
  if(!gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress))return 9;
 #endif
+ /* This fixture compiles real variants past its two-slot test cache limit. */
  if(!hikaru_vendor_test_shader_uniform_cache())return 50;
  if(!hikaru_vendor_test_mesh_uniform_values())return 63;
  if(!hikaru_vendor_test_texture_sampling_cache())return 62;
@@ -542,6 +622,9 @@ int main(void){
  hikaru_engine_resize(e,fbo,640,480);
  packet3dPixelsPassed=frame_packet_3d_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in);
  hikaru_engine_destroy(e);
+ if(stream_test_vbo&&(glIsBuffer(stream_test_vbo)||glIsVertexArray(stream_test_vao))){
+  fprintf(stderr,"renderer teardown leaked streamed vertex objects\n");return 65;
+ }
  glGetIntegerv(GL_ACTIVE_TEXTURE,&active);glGetIntegerv(GL_TEXTURE_BINDING_2D,&binding);glGetIntegerv(GL_UNPACK_SKIP_ROWS,&skip);
  if(active!=GL_TEXTURE7||binding!=(GLint)sentinel||skip!=5)return 22;
  /* A synthetic backend proves both real-board bus paths and lifecycle while

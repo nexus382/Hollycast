@@ -26,7 +26,7 @@ int hikaru_vendor_test_prelit_material_pixels(uint32_t, const uint16_t[3], bool,
 int hikaru_vendor_test_decode_451(uint32_t,uint32_t,hikaru_light_t *);
 void hikaru_vendor_test_spot_upload_counts(unsigned *, unsigned *);
 void hikaru_vendor_test_spot_upload_counts_reset(void);
-void hikaru_vendor_test_spot_force_replacement(void);
+void hikaru_vendor_test_reset_shader_cache(unsigned);
 void hikaru_vendor_test_uniform_cache_bypass(bool);
 void hikaru_vendor_test_with_gl_guard(void (*draw)(void));
 static int failed;
@@ -105,9 +105,14 @@ static void replacement_probe(void) {
  light.attenuation[0]=-1;light.attenuation[1]=-100;
  light.diffuse[0]=200;light.diffuse[1]=100;light.diffuse[2]=50;
  slot=curve=0;active_table=captured_table;decode(&light,0,0);
+ /* Three real light-slot variants overflow the two-program cache. */
+ hikaru_vendor_test_reset_shader_cache(2);
  check("cache replacement prime",&light,pos,normal,0,full);
- hikaru_vendor_test_spot_upload_counts_reset();hikaru_vendor_test_spot_force_replacement();
+ slot=1;check("cache replacement second variant",&light,pos,normal,0,full);
+ slot=2;check("cache replacement third variant",&light,pos,normal,0,full);
+ slot=0;hikaru_vendor_test_spot_upload_counts_reset();
  check("cache linked-program replacement",&light,pos,normal,0,full);expect_uploads("replacement",1,1);
+ hikaru_vendor_test_reset_shader_cache(0);
 }
 static void run(void) {
  int cache_ok=hikaru_vendor_test_shader_uniform_cache();

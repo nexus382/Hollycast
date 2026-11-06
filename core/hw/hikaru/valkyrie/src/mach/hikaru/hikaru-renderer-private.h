@@ -160,8 +160,7 @@ typedef struct {
 	 * packet identifiers first and retain unfinished disposal on this thread. */
 	GLuint *pending_buffers;
 	size_t pending_buffer_capacity;
-	unsigned pending_buffer_count, pending_vao_count;
-	GLuint pending_vaos[8];
+	unsigned pending_buffer_count;
 
 	hikaru_viewport_t	*vp_list;
 	uint32_t		 num_vps;
@@ -191,10 +190,12 @@ typedef struct {
 	uint32_t		 capacity_meshes[8][8];
 	uint32_t		 num_meshes[8][8];
 	uint32_t		 total_meshes;
+	/* Packet swaps move CPU data/usage; the GL objects stay on this owner. */
 	struct {
 		uint8_t *data;
 		size_t used;
 		GLuint vbo, vao;
+		bool uploaded, configured;
 	} vertex_chunks[8];
 
 	struct {

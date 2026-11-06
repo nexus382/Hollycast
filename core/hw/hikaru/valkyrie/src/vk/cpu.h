@@ -110,7 +110,7 @@ struct vk_cpu_t {
 	do { \
 		if (!(cond_)) { \
 			const char *str = vk_cpu_get_debug_string ((vk_cpu_t *) cpu_); \
-			VK_ABORT ("%s : assertion failed, aborting", str); \
+			VK_ABORT ("%s : assertion failed in %s: %s", str, __func__, #cond_); \
 		} \
 	} while (0);
 

@@ -1274,10 +1274,44 @@ static uint16_t insn_ids[65536];
  * side-effect-free RAM polling loop; no external writer can run mid-slice. */
 #ifdef HIKARU_VENDOR_TESTING
 static bool poll_skip_enabled = true;
-static uint64_t poll_skipped;
-void hikaru_vendor_test_poll_skip(bool enabled) { poll_skip_enabled = enabled; poll_skipped = 0; }
+/* Keep each accelerator's statistics independent for its regression fixtures. */
+static uint64_t poll_skipped, idle_skipped;
+void hikaru_vendor_test_poll_skip(bool enabled) { poll_skip_enabled = enabled; poll_skipped = idle_skipped = 0; }
 uint64_t hikaru_vendor_test_poll_skipped(void) { return poll_skipped; }
+uint64_t hikaru_vendor_test_idle_skipped(void) { return idle_skipped; }
 #endif
+/* BRA -2 with a NOP delay slot leaves no architectural or bus effects. Keep
+ * one cycle for the normal branch path so its delay slot and budget overrun
+ * remain unchanged. */
+static void
+sh4_skip_self_idle (sh4_t *ctx)
+{
+#ifdef HIKARU_VENDOR_TESTING
+	if (!poll_skip_enabled) return;
+#endif
+	if (ctx->base.patch || ctx->in_slot || ctx->base.remaining < 3) return;
+
+	static const uint16_t code[] = { 0xaffe, 0x0009 };
+	uint32_t start = PC & ADDR_MASK;
+	vk_mmap_read_span_t instructions;
+	if (start > ADDR_MASK - (uint32_t)(sizeof(code) - 1) ||
+	    vk_mmap_get_read_span (ctx->base.mmap, 2, start, &instructions) ||
+	    (uint64_t)start + sizeof(code) - 1 > instructions.last ||
+	    memcmp (instructions.data + start - instructions.first, code, sizeof(code)))
+		return;
+
+	if (ctx->intc.pending) return;
+	for (unsigned i = 0; i < SH4_NUM_IESOURCES; ++i)
+		if (ctx->intc.irqs[i].state == VK_IRQ_STATE_RAISED)
+			return;
+
+	int skip = ((ctx->base.remaining - 1) / 2) * 2;
+	if (!skip) return;
+	ctx->base.remaining -= skip;
+#ifdef HIKARU_VENDOR_TESTING
+	idle_skipped += (uint64_t)skip;
+#endif
+}
 /* Collapse only complete no-carry iterations of this RAM wait loop. A carry
  * causes a port-A read/write and must execute normally. The current BT has
  * not yet been charged, so leave one step in the current slice for it. */
@@ -1901,8 +1935,9 @@ sh4_get_debug_string (vk_cpu_t *cpu)
 {
 	sh4_t *ctx = (sh4_t *) cpu;
 	static char str[256];
-	sprintf (str, "%c @%08X @%08X %08X",
-	         ctx->config.master ? 'M' : 'S', PC, PR, SR.full);
+	/* Include the interrupted PC to distinguish IRQ callbacks from their callers. */
+	sprintf (str, "%c @%08X @%08X %08X FPSCR=%08X SPC=%08X",
+	         ctx->config.master ? 'M' : 'S', PC, PR, SR.full, FPSCR.full, SPC);
 	return str;
 }
 

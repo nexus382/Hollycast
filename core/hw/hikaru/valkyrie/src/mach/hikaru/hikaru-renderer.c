@@ -1154,20 +1154,82 @@ static struct {
 	hikaru_uniform_locations_t locs;
 	hikaru_mesh_uniform_cache_t uniforms;
 	hikaru_spot_uniform_cache_t spot[4];
+	unsigned lru_prev, lru_next;
 } program_cache[MAX_PROGRAMS];
 unsigned num_programs;
+#ifdef HIKARU_VENDOR_TESTING
+static unsigned program_cache_test_capacity;
+#endif
+static unsigned program_cache_mru = MAX_PROGRAMS, program_cache_lru = MAX_PROGRAMS;
+
+/* Keep cache-hit updates constant-time and evict from the least-used tail. */
+static void
+program_cache_link_mru (unsigned slot)
+{
+	program_cache[slot].lru_prev = MAX_PROGRAMS;
+	program_cache[slot].lru_next = program_cache_mru;
+	if (program_cache_mru < MAX_PROGRAMS)
+		program_cache[program_cache_mru].lru_prev = slot;
+	else
+		program_cache_lru = slot;
+	program_cache_mru = slot;
+}
+
+static void
+program_cache_unlink (unsigned slot)
+{
+	const unsigned previous = program_cache[slot].lru_prev;
+	const unsigned next = program_cache[slot].lru_next;
+	if (previous < MAX_PROGRAMS)
+		program_cache[previous].lru_next = next;
+	else
+		program_cache_mru = next;
+	if (next < MAX_PROGRAMS)
+		program_cache[next].lru_prev = previous;
+	else
+		program_cache_lru = previous;
+	program_cache[slot].lru_prev = program_cache[slot].lru_next = MAX_PROGRAMS;
+}
+
+static void
+program_cache_touch (unsigned slot)
+{
+	if (program_cache_mru == slot)
+		return;
+	program_cache_unlink (slot);
+	program_cache_link_mru (slot);
+}
+
+static void
+program_cache_reset (void)
+{
+	memset (program_cache, 0, sizeof (program_cache));
+	num_programs = 0;
+	program_cache_mru = program_cache_lru = MAX_PROGRAMS;
+#ifdef HIKARU_VENDOR_TESTING
+	program_cache_test_capacity = 0;
+#endif
+}
 
 #ifdef HIKARU_VENDOR_TESTING
+/* Start pixel regressions with a real cache and an optional smaller capacity. */
+void hikaru_vendor_test_reset_shader_cache(unsigned capacity)
+{
+    VK_ASSERT(capacity <= MAX_PROGRAMS);
+    GLint previous_program;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previous_program);
+    for (unsigned i = 0; i < num_programs; ++i)
+        vk_renderer_destroy_program(program_cache[i].program);
+    program_cache_reset();
+    program_cache_test_capacity = capacity;
+    if (previous_program && glIsProgram((GLuint)previous_program))
+        glUseProgram((GLuint)previous_program);
+}
 static unsigned uniform_location_queries;
 static unsigned state_uploads[3]; /* viewport, model matrices, lightset */
 static unsigned spot_param_uploads, spot_table_uploads;
 void hikaru_vendor_test_spot_upload_counts(unsigned *params, unsigned *tables) { *params = spot_param_uploads; *tables = spot_table_uploads; }
 void hikaru_vendor_test_spot_upload_counts_reset(void) { spot_param_uploads = spot_table_uploads = 0; }
-/* Force the production full-cache replacement path for the active variant. */
-void hikaru_vendor_test_spot_force_replacement(void) {
-    for (unsigned i=0; i<MAX_PROGRAMS; ++i) program_cache[i].variant.full = UINT64_MAX - i;
-    num_programs = MAX_PROGRAMS;
-}
 static bool uniform_cache_bypass;
 void hikaru_vendor_test_uniform_cache_bypass(bool enabled) { uniform_cache_bypass = enabled; }
 #define GET_MESH_UNIFORM(program, name) \
@@ -1216,8 +1278,11 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	variant = get_glsl_variant (hr, mesh, texture_available);
 	if (hr->meshes.variant.full == variant.full && hr->meshes.cache_slot < num_programs &&
 	    program_cache[hr->meshes.cache_slot].program == hr->meshes.program &&
-	    program_cache[hr->meshes.cache_slot].variant.full == variant.full) {
+	    program_cache[hr->meshes.cache_slot].variant.full == variant.full &&
+	    !memcmp (&program_cache[hr->meshes.cache_slot].locs, &hr->meshes.locs,
+	             sizeof (hr->meshes.locs))) {
 		/* Layer resolve can bind the bitmap program between mesh passes. */
+		program_cache_touch (hr->meshes.cache_slot);
 		glUseProgram(hr->meshes.program);
 		return;
 	}
@@ -1228,6 +1293,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 
 	for (i = 0; i < num_programs; i++) {
 		if (program_cache[i].variant.full == variant.full) {
+			program_cache_touch ((unsigned)i);
 			hr->meshes.cache_slot = (unsigned)i;
 			hr->meshes.program = program_cache[i].program;
 #ifdef HIKARU_VENDOR_TESTING
@@ -1291,8 +1357,21 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 		VK_ASSERT_NO_GL_ERROR ();
 	}
 
-	/* Bound the cache even when a game generates more shader variants. */
-	slot = num_programs < MAX_PROGRAMS ? num_programs++ : 0;
+	/* Keep the cache bounded and retain recently used shader variants. */
+#ifdef HIKARU_VENDOR_TESTING
+	unsigned cache_capacity = program_cache_test_capacity &&
+	                          program_cache_test_capacity < MAX_PROGRAMS
+	                              ? program_cache_test_capacity : MAX_PROGRAMS;
+#else
+	const unsigned cache_capacity = MAX_PROGRAMS;
+#endif
+	if (num_programs < cache_capacity) {
+		slot = num_programs++;
+	} else {
+		slot = program_cache_lru;
+		VK_ASSERT (slot < MAX_PROGRAMS);
+		program_cache_unlink (slot);
+	}
 	if (program_cache[slot].program)
 		vk_renderer_destroy_program(program_cache[slot].program);
 	memset (program_cache[slot].spot, 0, sizeof(program_cache[slot].spot));
@@ -1300,6 +1379,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	hr->meshes.cache_slot = slot;
 	program_cache[slot].variant.full = variant.full;
 	program_cache[slot].program = hr->meshes.program;
+	program_cache_link_mru (slot);
 
 #ifdef HIKARU_VENDOR_TESTING
 update_locations:
@@ -1375,7 +1455,9 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 {
 	if (num_programs) return 0;
 	hikaru_renderer_t *hr = calloc (1, sizeof(*hr));
-	if (!hr) return 0;
+	hikaru_renderer_t *other = calloc (1, sizeof(*other));
+	hikaru_renderer_t *stale = calloc (1, sizeof(*stale));
+	if (!hr || !other || !stale) { free(hr); free(other); free(stale); return 0; }
 	hikaru_material_t material = {0};
 	hikaru_lightset_t lightset = {0};
 	hikaru_mesh_t mesh = {0};
@@ -1387,8 +1469,11 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	hr->mat_list = &material; hr->num_mats = 1;
 	hr->ls_list = &lightset; hr->num_lss = 1;
 	hr->meshes.variant.full = ~0ULL;
+	*other = *hr;
+	other->meshes.variant.full = ~0ULL;
 	GLint previous_program, current_program;
 	glGetIntegerv (GL_CURRENT_PROGRAM, &previous_program);
+	program_cache_test_capacity = 2;
 	uniform_location_queries = 0;
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint first_program = hr->meshes.program;
@@ -1400,38 +1485,56 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	const hikaru_uniform_locations_t second = hr->meshes.locs;
 	ok &= second_program != first_program && uniform_location_queries == 94;
 	ok &= second.u_texture == (GLuint)glGetUniformLocation (second_program, "u_texture");
+	*stale = *hr;
 	material.has_texture = 0;
-	upload_glsl_program (hr, &mesh, true);
-	glGetIntegerv (GL_CURRENT_PROGRAM, &current_program);
-	ok &= hr->meshes.program == first_program && current_program == (GLint)first_program;
-	ok &= !memcmp (&hr->meshes.locs, &first, sizeof(first));
-	ok &= uniform_location_queries == 94;
-	material.has_texture = 1;
-	upload_glsl_program (hr, &mesh, true);
-	ok &= hr->meshes.program == second_program && !memcmp (&hr->meshes.locs, &second, sizeof(second));
-	ok &= uniform_location_queries == 94;
-	/* Fill the unused entries without compiling hundreds of shaders, then
-	 * exercise the real full-cache replacement and subsequent cache hit. */
-	for (unsigned i = 2; i < MAX_PROGRAMS; ++i)
-		program_cache[i].variant.full = UINT64_MAX - i;
-	num_programs = MAX_PROGRAMS;
+	upload_glsl_program (other, &mesh, true);
+	ok &= other->meshes.program == first_program &&
+	      !memcmp (&other->meshes.locs, &first, sizeof(first)) &&
+	      uniform_location_queries == 94;
+
+	/* A real third upload overflows the two-slot test cache and evicts B. */
 	hr->debug.flags[HR_DEBUG_FOG] = 1;
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint third_program = hr->meshes.program;
-	ok &= uniform_location_queries == 141 && !glIsProgram (first_program);
-	hr->debug.flags[HR_DEBUG_FOG] = 0;
+	ok &= uniform_location_queries == 141 && !glIsProgram (second_program) &&
+	      glIsProgram (first_program) && hr->meshes.locs.u_texture == (GLuint)-1;
+
+	/* A same-variant hit must refresh recency before another real overflow. */
+	upload_glsl_program (other, &mesh, true);
+	glGetIntegerv (GL_CURRENT_PROGRAM, &current_program);
+	ok &= other->meshes.program == first_program &&
+	      current_program == (GLint)first_program && uniform_location_queries == 141;
+	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh, true);
-	ok &= hr->meshes.program == second_program && uniform_location_queries == 141;
+	const GLuint fourth_program = hr->meshes.program;
+	ok &= fourth_program != third_program && uniform_location_queries == 188 &&
+	      !glIsProgram (third_program) && glIsProgram (first_program) &&
+	      hr->meshes.locs.u_texture ==
+	          (GLuint)glGetUniformLocation (fourth_program, "u_texture");
+
+	/* A recycled GL name with stale locations must fall back to cache lookup. */
+	other->meshes.locs.u_modelview = (GLuint)-1;
 	material.has_texture = 0;
-	upload_glsl_program (hr, &mesh, true);
-	ok &= uniform_location_queries == 188 && !glIsProgram (third_program);
-	ok &= hr->meshes.locs.u_texture == (GLuint)-1 && glGetError() == GL_NO_ERROR;
-	glUseProgram ((GLuint)previous_program);
+	upload_glsl_program (other, &mesh, true);
+	ok &= other->meshes.program == first_program &&
+	      !memcmp (&other->meshes.locs, &first, sizeof(first)) &&
+	      uniform_location_queries == 188;
+
+	/* The renderer still holding B must reject its replaced slot and recompile. */
+	material.has_texture = 1;
+	upload_glsl_program (stale, &mesh, true);
+	const GLuint recompiled_program = stale->meshes.program;
+	ok &= recompiled_program != 0 && uniform_location_queries == 235 &&
+	      stale->meshes.locs.u_texture ==
+	          (GLuint)glGetUniformLocation (recompiled_program, "u_texture") &&
+	      glGetError() == GL_NO_ERROR;
 	for (unsigned i = 0; i < num_programs; ++i)
 		vk_renderer_destroy_program (program_cache[i].program);
-	memset (program_cache, 0, sizeof(program_cache));
-	num_programs = 0;
+	program_cache_reset ();
+	glUseProgram ((GLuint)previous_program);
 	free (hr);
+	free (other);
+	free (stale);
 	return ok;
 }
 #endif
@@ -1905,6 +2008,7 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	GLint previous_program, viewport[4];
 	GLfloat matrix[16], value[4];
 	glGetIntegerv(GL_CURRENT_PROGRAM, &previous_program);
+	program_cache_test_capacity = 2;
 	hr->vp_list = &vp; hr->num_vps = 1;
 	hr->mv_list = &mv; hr->num_mvs = 1;
 	hr->alternate_mv_list = &alternate; hr->num_alternate_mvs = 1;
@@ -2025,12 +2129,14 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	ok &= matrix[12] == 13.0f;
 	glGetUniformfv(program_a, hr->meshes.locs.u_alpha_ref, value);
 	ok &= value[0] == 0.5f;
-	/* Replace entry zero while hr still retains A. Its fast path must reject
-	 * the stale slot, and the replacement program starts with invalid values. */
-	hikaru_vendor_test_spot_force_replacement();
+	/* Make B most recent, then overflow the two-slot cache with a real variant. */
 	material.depth_blend = 0;
 	upload_glsl_program(other, &mesh, false);
-	ok &= !glIsProgram(program_a);
+	material.has_alpha = 0;
+	upload_glsl_program(other, &mesh, false);
+	const GLuint program_c = other->meshes.program;
+	ok &= program_c != program_b && !glIsProgram(program_a);
+	material.has_alpha = 1;
 	material.depth_blend = 1;
 	memcpy(before, state_uploads, sizeof(before));
 	upload_glsl_program(hr, &mesh, false);
@@ -2040,12 +2146,12 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	ok &= matrix[12] == 13.0f;
 	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_lights[0].diffuse, value);
 	ok &= fabsf(value[0] - 64.0f / 255.0f) < 0.0001f;
+	ok &= !glIsProgram(program_b) && glIsProgram(program_c);
 	ok &= glGetError() == GL_NO_ERROR;
-	glUseProgram((GLuint)previous_program);
 	for (unsigned i = 0; i < num_programs; ++i)
 		vk_renderer_destroy_program(program_cache[i].program);
-	memset(program_cache, 0, sizeof(program_cache));
-	num_programs = 0;
+	program_cache_reset ();
+	glUseProgram((GLuint)previous_program);
 	free(hr);
 	free(other);
 	return ok;
@@ -2148,8 +2254,10 @@ add_triangle (hikaru_renderer_t *hr)
 		hikaru_vertex_body_t *dst = &hr->push.all[index];
 
 		if (hr->push.tmp[2].info.twosided &&
-		    !hr->push.tmp[2].info.nocull)
-			VK_ERROR ("got a vertex with culling and two-sided lighting!");
+		    !hr->push.tmp[2].info.nocull) {
+			/* This per-vertex condition can flood stderr during gameplay. */
+			VK_LOG ("got a vertex with culling and two-sided lighting!");
+		}
 
 		if (hr->push.tmp[2].info.twosided)
 			hr->meshes.current->has_two_sided_lighting = 1;
@@ -2656,6 +2764,8 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 {
 	unsigned i;
 	bool configure = true;
+	unsigned chunk_index = 0;
+	bool upload_chunk = false;
 
 	VK_ASSERT (mesh);
 	if (!mesh->num_tris || !mesh->num_instances) return;
@@ -2683,25 +2793,34 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 		}
 		configure = !hr->triangle_replay.configured;
 	} else if (mesh->vertex_chunk) {
-		unsigned ci = mesh->vertex_chunk - 1;
-		VK_ASSERT (ci < VERTEX_CHUNK_COUNT);
-		VK_ASSERT ((size_t)mesh->first_vertex * sizeof(hikaru_vertex_body_t) <= hr->vertex_chunks[ci].used);
+		chunk_index = mesh->vertex_chunk - 1;
+		VK_ASSERT (chunk_index < VERTEX_CHUNK_COUNT);
+		VK_ASSERT ((size_t)mesh->first_vertex * sizeof(hikaru_vertex_body_t) <= hr->vertex_chunks[chunk_index].used);
 		VK_ASSERT ((size_t)mesh->num_tris * 3 * sizeof(hikaru_vertex_body_t) <=
-		           hr->vertex_chunks[ci].used - (size_t)mesh->first_vertex * sizeof(hikaru_vertex_body_t));
-		if (!hr->vertex_chunks[ci].vbo) {
-			glGenVertexArrays (1, &hr->vertex_chunks[ci].vao);
-			glGenBuffers (1, &hr->vertex_chunks[ci].vbo);
-			glBindVertexArray (hr->vertex_chunks[ci].vao);
-			*bound_vao = hr->vertex_chunks[ci].vao;
-			glBindBuffer (GL_ARRAY_BUFFER, hr->vertex_chunks[ci].vbo);
-			glBufferData (GL_ARRAY_BUFFER, hr->vertex_chunks[ci].used,
-			              hr->vertex_chunks[ci].data, GL_DYNAMIC_DRAW);
-		} else {
-			if (*bound_vao != hr->vertex_chunks[ci].vao) {
-				glBindVertexArray (hr->vertex_chunks[ci].vao);
-				*bound_vao = hr->vertex_chunks[ci].vao;
+		           hr->vertex_chunks[chunk_index].used - (size_t)mesh->first_vertex * sizeof(hikaru_vertex_body_t));
+		if (!hr->vertex_chunks[chunk_index].vao) {
+			glGenVertexArrays (1, &hr->vertex_chunks[chunk_index].vao);
+			hr->vertex_chunks[chunk_index].uploaded = false;
+			hr->vertex_chunks[chunk_index].configured = false;
+		}
+		if (!hr->vertex_chunks[chunk_index].vbo) {
+			glGenBuffers (1, &hr->vertex_chunks[chunk_index].vbo);
+			hr->vertex_chunks[chunk_index].uploaded = false;
+			hr->vertex_chunks[chunk_index].configured = false;
+		}
+		VK_ASSERT (hr->vertex_chunks[chunk_index].vao && hr->vertex_chunks[chunk_index].vbo);
+		if (*bound_vao != hr->vertex_chunks[chunk_index].vao) {
+			glBindVertexArray (hr->vertex_chunks[chunk_index].vao);
+			*bound_vao = hr->vertex_chunks[chunk_index].vao;
+		}
+		configure = !hr->vertex_chunks[chunk_index].configured;
+		if (!hr->vertex_chunks[chunk_index].uploaded || configure) {
+			glBindBuffer (GL_ARRAY_BUFFER, hr->vertex_chunks[chunk_index].vbo);
+			if (!hr->vertex_chunks[chunk_index].uploaded) {
+				glBufferData (GL_ARRAY_BUFFER, hr->vertex_chunks[chunk_index].used,
+				              hr->vertex_chunks[chunk_index].data, GL_DYNAMIC_DRAW);
+				upload_chunk = true;
 			}
-			configure = false;
 		}
 	} else {
 		if (*bound_vao != hr->meshes.vao) {
@@ -2711,6 +2830,7 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 		glBindBuffer (GL_ARRAY_BUFFER, mesh->vbo);
 	}
 	VK_ASSERT_NO_GL_ERROR ();
+	if (upload_chunk) hr->vertex_chunks[chunk_index].uploaded = true;
 
 	const hikaru_material_t *material = mesh->mat_index < hr->num_mats
 		? &hr->mat_list[mesh->mat_index] : NULL;
@@ -2762,6 +2882,10 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 		VAP (8, 1, GL_UNSIGNED_BYTE,  matrix_select, GL_FALSE);
 		if (hr->triangle_replay.enabled)
 			hr->triangle_replay.configured = true;
+		else if (mesh->vertex_chunk) {
+			VK_ASSERT_NO_GL_ERROR ();
+			hr->vertex_chunks[mesh->vertex_chunk - 1].configured = true;
+		}
 	}
 
 	/* Opcode 101 supplies bias for all polygon types, including opaque
@@ -3818,15 +3942,13 @@ cleanup:
 #endif
 
 static void
-release_vertex_chunks (hikaru_renderer_t *hr)
+reset_vertex_chunks (hikaru_renderer_t *hr)
 {
 	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) {
 		if (hr->capture_only)
 			VK_ASSERT(!hr->vertex_chunks[i].vbo && !hr->vertex_chunks[i].vao);
-		if (!hr->capture_only && hr->vertex_chunks[i].vbo) glDeleteBuffers (1, &hr->vertex_chunks[i].vbo);
-		if (!hr->capture_only && hr->vertex_chunks[i].vao) glDeleteVertexArrays (1, &hr->vertex_chunks[i].vao);
-		hr->vertex_chunks[i].vbo = hr->vertex_chunks[i].vao = 0;
 		hr->vertex_chunks[i].used = 0;
+		hr->vertex_chunks[i].uploaded = false;
 	}
 }
 
@@ -3839,16 +3961,12 @@ release_pending_frame_handles(hikaru_renderer_t *hr)
 		glDeleteBuffers((GLsizei)hr->pending_buffer_count, hr->pending_buffers);
 		hr->pending_buffer_count = 0;
 	}
-	if (hr->pending_vao_count) {
-		glDeleteVertexArrays((GLsizei)hr->pending_vao_count, hr->pending_vaos);
-		hr->pending_vao_count = 0;
-	}
 }
 
 static void
 clear_frame_meshes (hikaru_renderer_t *hr)
 {
-	release_vertex_chunks(hr);
+	reset_vertex_chunks(hr);
 	hr->meshes.current = NULL;
 	for (unsigned vpi = 0; vpi < 8; ++vpi)
 		for (unsigned i = 0; i < 8; ++i) {
@@ -3875,8 +3993,16 @@ destroy_3d_state (hikaru_renderer_t *hr)
 	hr->pending_buffers = NULL;
 	hr->pending_buffer_capacity = 0;
 	clear_frame_meshes (hr);
-	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i)
+	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) {
+		if (hr->capture_only) {
+			VK_ASSERT(!hr->vertex_chunks[i].vbo && !hr->vertex_chunks[i].vao);
+		} else {
+			if (hr->vertex_chunks[i].vbo) glDeleteBuffers(1, &hr->vertex_chunks[i].vbo);
+			if (hr->vertex_chunks[i].vao) glDeleteVertexArrays(1, &hr->vertex_chunks[i].vao);
+		}
+		hr->vertex_chunks[i].vbo = hr->vertex_chunks[i].vao = 0;
 		free(hr->vertex_chunks[i].data);
+	}
 	free (hr->vp_list);
 	free (hr->mv_list);
 	free (hr->alternate_mv_list);
@@ -3890,8 +4016,7 @@ destroy_3d_state (hikaru_renderer_t *hr)
 
 	for (i = 0; i < num_programs; ++i)
 		vk_renderer_destroy_program (program_cache[i].program);
-	memset(program_cache, 0, sizeof(program_cache));
-	num_programs = 0;
+	program_cache_reset ();
 	VK_ASSERT_NO_GL_ERROR ();
 
 	if (hr->meshes.vao) {
@@ -4642,7 +4767,7 @@ hikaru_renderer_end_frame (vk_renderer_t *renderer)
 	hikaru_gpu_cp_finish_mesh (hr->gpu);
 
 	draw (hr);
-	release_vertex_chunks(hr);
+	reset_vertex_chunks(hr);
 	VK_ASSERT_NO_GL_ERROR ();
 
 	LOG (" ==== RENDSTATE STATISTICS ==== ");
@@ -4796,7 +4921,11 @@ swap_packet_state(hikaru_renderer_t *hr, hikaru_renderer_t *capture)
 	SWAP_PACKET_FIELD(tex_list); SWAP_PACKET_FIELD(num_texs); SWAP_PACKET_FIELD(capacity_texs);
 	SWAP_PACKET_FIELD(ls_list); SWAP_PACKET_FIELD(num_lss); SWAP_PACKET_FIELD(capacity_lss);
 	SWAP_PACKET_FIELD(mesh_list); SWAP_PACKET_FIELD(num_meshes); SWAP_PACKET_FIELD(capacity_meshes);
-	SWAP_PACKET_FIELD(total_meshes); SWAP_PACKET_FIELD(num_instances); SWAP_PACKET_FIELD(vertex_chunks);
+	SWAP_PACKET_FIELD(total_meshes); SWAP_PACKET_FIELD(num_instances);
+	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) {
+		SWAP_PACKET_FIELD(vertex_chunks[i].data);
+		SWAP_PACKET_FIELD(vertex_chunks[i].used);
+	}
 	SWAP_PACKET_FIELD(debug); SWAP_PACKET_FIELD(packet_trace);
 	SWAP_PACKET_FIELD(trace_master); SWAP_PACKET_FIELD(trace_slave);
 	SWAP_PACKET_FIELD(base.internal_width); SWAP_PACKET_FIELD(base.internal_height);
@@ -4812,7 +4941,7 @@ hikaru_renderer_draw_packet(vk_renderer_t *renderer, HikaruFrame *frame)
 	hikaru_renderer_t *capture = frame->capture;
 	VK_ASSERT(frame->ready && !hr->packet_active);
 	release_pending_frame_handles(hr);
-	size_t required = VERTEX_CHUNK_COUNT;
+	size_t required = 0;
 	for (unsigned vp = 0; vp < 8; ++vp)
 		for (unsigned type = 0; type < 8; ++type)
 			required += capture->num_meshes[vp][type];
@@ -4848,16 +4977,13 @@ hikaru_renderer_finish_packet(vk_renderer_t *renderer, HikaruFrame *frame)
 	swap_packet_state(hr, frame->capture);
 	hr->packet_active = false;
 	frame->ready = false;
-	/* Transfer every handle before any backend call. A failed deletion stays
-	 * with the graphics owner; packet destruction/reuse remains CPU-only. */
+	/* Chunk buffers stay with the graphics owner; only packet-local fallback
+	 * buffers are queued for deletion. */
 	hikaru_renderer_t *capture = frame->capture;
 	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) {
-		if (capture->vertex_chunks[i].vbo)
-			hr->pending_buffers[hr->pending_buffer_count++] = capture->vertex_chunks[i].vbo;
-		if (capture->vertex_chunks[i].vao)
-			hr->pending_vaos[hr->pending_vao_count++] = capture->vertex_chunks[i].vao;
-		capture->vertex_chunks[i].vbo = capture->vertex_chunks[i].vao = 0;
+		VK_ASSERT(!capture->vertex_chunks[i].vbo && !capture->vertex_chunks[i].vao);
 		capture->vertex_chunks[i].used = 0;
+		capture->vertex_chunks[i].uploaded = false;
 	}
 	for (unsigned vp = 0; vp < 8; ++vp)
 		for (unsigned type = 0; type < 8; ++type)
@@ -4935,6 +5061,34 @@ int hikaru_vendor_test_seed_packet_3d(vk_renderer_t *renderer, void *gpu_as_void
     hikaru_renderer_seal_capture(renderer, gpu, frame);
     hikaru_renderer_end_capture(renderer, gpu);
     return frame->ready;
+}
+
+int hikaru_vendor_test_grow_packet_opaque(HikaruFrame *frame, unsigned triangles)
+{
+    if (!frame || !frame->ready || triangles < 2) return 0;
+    hikaru_renderer_t *capture = frame->capture;
+    const unsigned polytype = HIKARU_POLYTYPE_OPAQUE;
+    if (!capture->mesh_list[0][polytype] || capture->num_meshes[0][polytype] != 1)
+        return 0;
+    hikaru_mesh_t *mesh = &capture->mesh_list[0][polytype][0];
+    if (mesh->vertex_chunk != 1 || mesh->first_vertex || mesh->num_tris != 1 ||
+        mesh->cpu_vertices)
+        return 0;
+    const size_t triangle_bytes = 3 * sizeof(hikaru_vertex_body_t);
+    if (triangles > VERTEX_CHUNK_SIZE / triangle_bytes) return 0;
+    const size_t bytes = (size_t)triangles * triangle_bytes;
+    if (!capture->vertex_chunks[0].data || capture->vertex_chunks[0].used != triangle_bytes)
+        return 0;
+    hikaru_vertex_body_t *vertices =
+        (hikaru_vertex_body_t *)capture->vertex_chunks[0].data;
+    /* Change packet N+1's bytes so the smoke check proves a fresh upload. */
+    for (unsigned vertex = 0; vertex < 3; ++vertex)
+        vertices[vertex].position[0] += 32.0f;
+    for (unsigned triangle = 1; triangle < triangles; ++triangle)
+        memcpy((uint8_t *)vertices + triangle * triangle_bytes, vertices, triangle_bytes);
+    capture->vertex_chunks[0].used = bytes;
+    mesh->num_tris = triangles;
+    return 1;
 }
 
 int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_void)
@@ -5472,6 +5626,7 @@ int hikaru_vendor_test_mesh_vao_pixels(void)
     program_cache[0].program = program;
     program_cache[0].locs = hr->meshes.locs;
     num_programs = 1;
+    program_cache_link_mru(0);
     glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE); glDisable(GL_DEPTH_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     for (unsigned pass = 0; pass < 2; ++pass) {
@@ -5548,8 +5703,7 @@ cleanup:
     for (unsigned i = 0; i < num_programs; ++i)
         if (program_cache[i].program != program)
             vk_renderer_destroy_program(program_cache[i].program);
-    memset(program_cache, 0, sizeof(program_cache));
-    num_programs = 0;
+    program_cache_reset();
     free(hr);
     return ok;
 }
@@ -5647,12 +5801,16 @@ int hikaru_vendor_test_vertex_chunks(void)
 	glGenBuffers (1, &hr->vertex_chunks[0].vbo);
 	glGenVertexArrays (1, &hr->vertex_chunks[0].vao);
 	GLuint vbo = hr->vertex_chunks[0].vbo, vao = hr->vertex_chunks[0].vao;
+	hr->vertex_chunks[0].uploaded = true;
 	glBindVertexArray (vao);
 	glBindBuffer (GL_ARRAY_BUFFER, vbo);
 	ok &= glIsBuffer (vbo) && glIsVertexArray (vao);
 	hikaru_renderer_reset (&hr->base);
-	ok &= !hr->vertex_chunks[0].used && !hr->vertex_chunks[0].vbo && !hr->vertex_chunks[0].vao;
-	ok &= !glIsBuffer (vbo) && !glIsVertexArray (vao) && glGetError() == GL_NO_ERROR;
+	ok &= !hr->vertex_chunks[0].used && !hr->vertex_chunks[0].uploaded &&
+	      hr->vertex_chunks[0].vbo == vbo && hr->vertex_chunks[0].vao == vao;
+	ok &= glIsBuffer (vbo) && glIsVertexArray (vao) && glGetError() == GL_NO_ERROR;
+	glDeleteBuffers (1, &vbo);
+	glDeleteVertexArrays (1, &vao);
 	if (hr->meshes.vao) glDeleteVertexArrays (1, &hr->meshes.vao);
 	for (unsigned i = 0; i < VERTEX_CHUNK_COUNT; ++i) free (hr->vertex_chunks[i].data);
 	free(a.cpu_vertices); free(b.cpu_vertices);
@@ -5712,8 +5870,7 @@ hikaru_renderer_new (vk_machine_t *mach, vk_buffer_t *fb, vk_buffer_t *texram[2]
 
 	VK_ASSERT_NO_GL_ERROR ();
 
-	memset ((void *) program_cache, 0, sizeof (program_cache));
-	num_programs = 0;
+	program_cache_reset ();
 
 	init_debug_flags (hr);
 

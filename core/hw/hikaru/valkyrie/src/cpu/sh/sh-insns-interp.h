@@ -844,6 +844,8 @@ I (bra)
 	uint32_t pc;
 
 	VK_CPU_ASSERT (ctx, !ctx->in_slot);
+	if (inst == 0xaffe)
+		sh4_skip_self_idle (ctx);
 
 	pc = PC;
 	PC = PC + (_SIMM12 * 2) + 4;
@@ -1307,7 +1309,36 @@ I (stcmrbank)
 I (ldsfpscr)
 {
 	CHECK_FP
-	set_fpscr (ctx, RN);
+	uint32_t value = RN;
+	/* The captured precision mode occurs with either register-bank (FR) bit. */
+	if ((value & ~(1u << 21)) == 0x000c0001 &&
+	    FPSCR.full == 0x00100000 && ctx->config.master && ctx->in_slot &&
+	    _RN == 3 && SR.bit.bl && SR.bit.md && SR.bit.rb &&
+	    (PC & ADDR_MASK) == 0x0c0102c0 && (PR & ADDR_MASK) == 0x0c0010a8 &&
+	    (SPC & ADDR_MASK) >= 0x0c10e758 && (SPC & ADDR_MASK) <= 0x0c10e776 &&
+	    ctx->base.base.mach && ctx->base.base.mach->game &&
+	    !strcmp (ctx->base.base.mach->game->name, "pharrier")) {
+		/* Compatibility for Planet Harriers' single-precision IRQ handler:
+		 * its stub clears SZ but retains PR when interrupting the unsigned
+		 * division helper. Match that helper's resume window and the IRQ code
+		 * before clearing PR for the handler. The saved guest FPSCR remains
+		 * untouched and is restored before the double-precision work resumes. */
+		static const uint16_t irq_tail[] = {
+			0x6997, 0xf0cb, 0x2399, 0xf0ab, 0xf08b, 0xf06b, 0xf04b,
+			0xf02b, 0xf00b, 0xdf26, 0xc7ab, 0xf0fa, 0xf0db, 0xf0bb,
+			0xf09b, 0xf07b, 0xf05b, 0xf03b, 0xf01b, 0x450b, 0x436a
+		};
+		static const uint16_t irq_entry[] = {
+			0xc412, 0xe780, 0xd672, 0x4728, 0xd372, 0x7730, 0x6171, 0x4f22
+		};
+		vk_mmap_read_span_t code;
+		if (!vk_mmap_get_read_span (ctx->base.mmap, 2, 0x0c00107e, &code) &&
+		    (uint64_t)0x0c0102c0 + sizeof(irq_entry) - 1 <= code.last &&
+		    !memcmp (code.data + 0x0c00107e - code.first, irq_tail, sizeof(irq_tail)) &&
+		    !memcmp (code.data + 0x0c0102c0 - code.first, irq_entry, sizeof(irq_entry)))
+			value &= ~(1u << 19);
+	}
+	set_fpscr (ctx, value);
 }
 
 I (ldsmfpscr)
