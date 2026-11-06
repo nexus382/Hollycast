@@ -27,6 +27,10 @@
 #include "graphics_dispatch.h"
 #include "engine_internal.h"
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
 #ifdef HIKARU_VENDOR_TESTING
 static bool fail_renderer_init_once;
 void hikaru_vendor_test_fail_renderer_init(void) { fail_renderer_init_once = true; }
@@ -731,6 +735,8 @@ get_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 		return cached;
 
 	destroy_texture (cached);
+	/* Keep a failed deletion indexed; a later failed upload leaves it empty. */
+	hr->textures.occupied[bank][sloty][slotx >> 5] &= ~(UINT32_C(1) << (slotx & 31));
 
 	id = upload_texture (hr, th);
 	if (!id) {
@@ -740,6 +746,7 @@ get_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 
 	cached->th = *th;
 	cached->id = id;
+	hr->textures.occupied[bank][sloty][slotx >> 5] |= UINT32_C(1) << (slotx & 31);
 	hr->textures.uploads++;
 
 	hr->textures.is_clear[bank] = false;
@@ -790,6 +797,7 @@ clear_texcache_bank (hikaru_renderer_t *hr, unsigned bank)
 	 * texture RAM origin is (80,C0), so (slotx, sloty) will never match
 	 * a zeroed out cache entries. */
 	memset ((void *) &hr->textures.cache[bank], 0, sizeof (hr->textures.cache[bank]));
+	memset (hr->textures.occupied[bank], 0, sizeof (hr->textures.occupied[bank]));
 }
 
 /* IDMA writes 16-bit texels with halfwords exchanged in each 32-bit word.
@@ -827,6 +835,9 @@ texture_overlaps_transfer (const hikaru_texhead_t *cached, const hikaru_texhead_
 }
 
 #ifdef HIKARU_VENDOR_TESTING
+static _Thread_local uint64_t texture_cache_visits;
+uint64_t hikaru_vendor_test_texture_cache_visits(void) { return texture_cache_visits; }
+
 int hikaru_vendor_test_texture_overlap(uint32_t c2, uint32_t c4, uint32_t t2, uint32_t t4)
 {
 	hikaru_texhead_t cached = {0}, transfer = {0};
@@ -835,6 +846,19 @@ int hikaru_vendor_test_texture_overlap(uint32_t c2, uint32_t c4, uint32_t t2, ui
 	return texture_overlaps_transfer(&cached, &transfer);
 }
 #endif
+
+/* Call only with a nonzero occupancy word. Use a 32-bit scan on every host. */
+static unsigned
+first_occupied_texture (uint32_t slots)
+{
+#ifdef _MSC_VER
+	unsigned long bit;
+	_BitScanForward (&bit, slots);
+	return (unsigned) bit;
+#else
+	return (unsigned) __builtin_ctz (slots);
+#endif
+}
 
 void
 hikaru_renderer_invalidate_texcache (vk_renderer_t *rend, hikaru_texhead_t *th)
@@ -863,11 +887,23 @@ hikaru_renderer_invalidate_texcache (vk_renderer_t *rend, hikaru_texhead_t *th)
 			if (hr->textures.is_clear[bank]) continue;
 			bool any_left = false;
 			for (unsigned y = 0; y < 0x40; ++y)
-				for (unsigned x = 0; x < 0x80; ++x) {
-					hikaru_texture_t *cached = &hr->textures.cache[bank][y][x];
-					if (cached->id) {
-						if (texture_overlaps_transfer (&cached->th, th)) { destroy_texture (cached); hr->textures.invalidations++; }
-						else any_left = true;
+				for (unsigned word = 0; word < 4; ++word) {
+					uint32_t slots = hr->textures.occupied[bank][y][word];
+					while (slots) {
+						const unsigned bit = first_occupied_texture (slots);
+						const uint32_t mask = UINT32_C(1) << bit;
+						hikaru_texture_t *cached = &hr->textures.cache[bank][y][word * 32 + bit];
+#ifdef HIKARU_VENDOR_TESTING
+						++texture_cache_visits;
+#endif
+						if (texture_overlaps_transfer (&cached->th, th)) {
+							destroy_texture (cached);
+							hr->textures.occupied[bank][y][word] &= ~mask;
+							hr->textures.invalidations++;
+						} else {
+							any_left = true;
+						}
+						slots &= slots - 1;
 					}
 				}
 			hr->textures.is_clear[bank] = !any_left;
@@ -3080,7 +3116,7 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	}
 }
 
-static void
+static sorted_triangle_ref_t *
 stable_sort_triangle_refs (sorted_triangle_ref_t *refs, sorted_triangle_ref_t *tmp, size_t count)
 {
 	/* Stable merge sort: qsort is unstable, so equal-depth translucent
@@ -3097,9 +3133,89 @@ stable_sort_triangle_refs (sorted_triangle_ref_t *refs, sorted_triangle_ref_t *t
 			while (left < mid) tmp[out++] = refs[left++];
 			while (right < end) tmp[out++] = refs[right++];
 		}
-		memcpy (refs, tmp, count * sizeof(*refs));
+		/* Reuse both retained arrays as alternating merge destinations.
+		 * Returning the final array avoids copying every pass while keeping
+		 * the exact merge schedule, including NaN and equal-depth ordering. */
+		sorted_triangle_ref_t *previous = refs;
+		refs = tmp;
+		tmp = previous;
+	}
+	return refs;
+}
+
+#ifdef HIKARU_VENDOR_TESTING
+/* Preserve the former merge schedule as a differential oracle. In particular,
+ * a different stable-sort algorithm is not an equivalent oracle for NaNs:
+ * the depth comparator falls through to mesh/triangle keys for those pairs. */
+static void
+reference_sort_triangle_refs(sorted_triangle_ref_t *refs, sorted_triangle_ref_t *tmp, size_t count)
+{
+	for (size_t width = 1; width < count; width *= 2) {
+		for (size_t base = 0; base < count; base += 2 * width) {
+			const size_t mid = base + width < count ? base + width : count;
+			const size_t end = base + 2 * width < count ? base + 2 * width : count;
+			size_t left = base, right = mid, out = base;
+			while (left < mid && right < end)
+				tmp[out++] = compare_sorted_triangle_ref(&refs[left], &refs[right]) <= 0
+					? refs[left++] : refs[right++];
+			while (left < mid) tmp[out++] = refs[left++];
+			while (right < end) tmp[out++] = refs[right++];
+		}
+		memcpy(refs, tmp, count * sizeof(*refs));
 	}
 }
+
+int
+hikaru_vendor_test_triangle_sort_order(void)
+{
+	static const size_t counts[] = {0, 1, 2, 3, 4, 5, 255, 256, 257, 258, 1023, 1024, 1025};
+	static const uint32_t depth_bits[] = {
+		0xff800000u, 0xbf800000u, 0x80000000u, 0x00000000u,
+		0x3f800000u, 0x7f800000u, 0x7fc00001u, 0xffc00002u
+	};
+	hikaru_mesh_t meshes[4] = {0};
+	sorted_triangle_ref_t refs[1025], tmp[1025], expected[1025], reference_tmp[1025];
+	meshes[0].num = 7;
+	meshes[1].num = 2;
+	meshes[2].num = 9;
+	meshes[3].num = 2;
+	/* Repeated calls reuse the same storage, with odd/even merge counts and
+	 * partial final runs. Instance identifies the original submission order. */
+	for (unsigned mode = 0; mode < 3; ++mode) {
+		for (size_t test = 0; test < NUMELEM(counts); ++test) {
+			const size_t count = counts[test];
+			memset(refs, 0, sizeof(refs));
+			memset(tmp, 0x5a, sizeof(tmp));
+			for (size_t i = 0; i < count; ++i) {
+				refs[i].mesh = &meshes[mode ? (i * 3) % NUMELEM(meshes) : 0];
+				refs[i].triangle = mode ? (unsigned)(i % 7) : 0;
+				refs[i].instance = (unsigned)i;
+				if (mode == 2) {
+					uint32_t bits = depth_bits[(i * 5 + test) % NUMELEM(depth_bits)];
+					memcpy(&refs[i].depth, &bits, sizeof(bits));
+				} else {
+					refs[i].depth = mode ? (float)((count - i) / 3) : 1.0f;
+				}
+			}
+			memcpy(expected, refs, count * sizeof(*refs));
+			reference_sort_triangle_refs(expected, reference_tmp, count);
+			const sorted_triangle_ref_t *sorted = stable_sort_triangle_refs(refs, tmp, count);
+			if (sorted != refs && sorted != tmp)
+				return __LINE__;
+			for (size_t i = 0; i < count; ++i) {
+				if (sorted[i].mesh != expected[i].mesh ||
+				    sorted[i].triangle != expected[i].triangle ||
+				    sorted[i].instance != expected[i].instance ||
+				    memcmp(&sorted[i].depth, &expected[i].depth, sizeof(sorted[i].depth)))
+					return __LINE__;
+				if (mode == 0 && sorted[i].instance != i)
+					return __LINE__;
+			}
+		}
+	}
+	return 0;
+}
+#endif
 
 static bool
 draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
@@ -3155,7 +3271,7 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 				++at;
 			}
 	}
-	stable_sort_triangle_refs(refs, (sorted_triangle_ref_t *)hr->triangle_replay.refs_tmp, at);
+	refs = stable_sort_triangle_refs(refs, (sorted_triangle_ref_t *)hr->triangle_replay.refs_tmp, at);
 	/* Preserve the stable triangle sequence in one upload. Replacing the VBO
 	 * for every material run serializes driver allocation and submission. */
 	for (size_t n = 0; n < at; ++n)

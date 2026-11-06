@@ -249,6 +249,8 @@ typedef struct {
 
 	struct {
 		hikaru_texture_t cache[2][0x40][0x80];
+		/* Graphics-owner index: one bit for each successfully uploaded slot. */
+		uint32_t occupied[2][0x40][4];
 		bool is_clear[2];
 		bool cpu_dirty;
 		uint64_t uploads, invalidations, wrap_updates;

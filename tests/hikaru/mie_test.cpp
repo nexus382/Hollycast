@@ -3,10 +3,15 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/mie.h"
 #include "hw/hikaru/state_io.h"
+#include "deps/chips/z80.h"
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <deque>
 #include <iostream>
 #include <stdexcept>
+
+namespace hikaru { uint64_t testMieSkippedClocks(); }
 
 int main()
 {
@@ -185,6 +190,181 @@ int main()
 
     serial.setSerialDevice({}, {}, {});
     check(getPort(0x0d) == 0xff, "detaching the reader restores open-bus port behavior");
+
+    // Compare complete serialized state against single-clock execution, which
+    // cannot skip a loop. This includes decoder latches, both pin images, R,
+    // device countdowns, and RAM rather than just final architectural registers.
+    const std::array<uint8_t, 10> pollCode{0x3a,0x00,0xc0,0xfe,0x0c,0x30,0x17,0xb7,0x28,0xf6};
+    constexpr uint16_t pollStart = 0x8046;
+    std::vector<uint8_t> pollRom(2048, 0);
+    const uint8_t boot[] = {0x31,0x00,0xff,0xed,0x56,0xfb,0xc3,0x46,0x80}; // SP; IM 1; EI; JP poll.
+    const uint8_t handler[] = {0xf5,0x3e,0x01,0x32,0x01,0xc0,0xf1,0xfb,0xed,0x4d};
+    std::copy_n(boot, sizeof(boot), pollRom.begin());
+    std::copy_n(handler, sizeof(handler), pollRom.begin() + 0x38);
+    auto writeRam = [](hikaru::Mie& target, uint16_t address, uint8_t value) {
+        target.writeHost(0x00820000u + uint32_t(address) * 2, value, 1);
+    };
+    auto writePort = [](hikaru::Mie& target, uint8_t port, uint8_t value) {
+        target.writeHost(0x00800000u + uint32_t(port) * 2, value, 1);
+    };
+    auto save = [](const hikaru::Mie& target) {
+        hikaru::StateWriter state;
+        target.saveState(state);
+        return state.data();
+    };
+    auto load = [](hikaru::Mie& target, const std::vector<uint8_t>& state) {
+        hikaru::StateReader reader(state);
+        target.loadState(reader);
+        reader.finish();
+    };
+    auto cpuState = [](const std::vector<uint8_t>& state) {
+        z80_t cpu{};
+        hikaru::StateReader reader(state);
+        reader.pod(cpu);
+        return cpu;
+    };
+    auto singleTicks = [](hikaru::Mie& target, uint32_t count) {
+        for (uint32_t tick = 0; tick < count; ++tick) target.advanceTicks(1);
+    };
+    hikaru::Mie seed(pollRom), batched(pollRom), reference(pollRom);
+    for (unsigned i = 0; i < pollCode.size(); ++i) writeRam(seed, uint16_t(pollStart + i), pollCode[i]);
+    // Both command exits store A, making changes to the polled byte observable.
+    const uint8_t lowExit[] = {0x32,0x02,0xc0,0x76}, highExit[] = {0x32,0x03,0xc0,0x76};
+    for (unsigned i = 0; i < sizeof(lowExit); ++i) {
+        writeRam(seed, uint16_t(pollStart + 10 + i), lowExit[i]);
+        writeRam(seed, uint16_t(pollStart + 30 + i), highExit[i]);
+    }
+    unsigned seedTicks = 0;
+    bool foundPoll = false;
+    while (seedTicks < 256) {
+        seed.advanceTicks(1);
+        ++seedTicks;
+        z80_t cpu = cpuState(save(seed));
+        if (cpu.pc == pollStart + 1 && cpu.opcode == 0x28 && z80_opdone(&cpu)) {
+            foundPoll = true;
+            break;
+        }
+    }
+    check(foundPoll, "generated command poll reaches its repeated fetch phase");
+    const auto pollState = save(seed);
+    auto compareTicks = [&](uint32_t count, const char* description) {
+        batched.advanceTicks(count);
+        const uint64_t skipped = hikaru::testMieSkippedClocks();
+        singleTicks(reference, count);
+        check(hikaru::testMieSkippedClocks() == skipped, "single-clock oracle never skips execution");
+        const bool equal = save(batched) == save(reference);
+        if (!equal) std::cerr << "command poll batch length " << count << '\n';
+        check(equal, description);
+    };
+    const uint32_t batchSizes[] = {0,1,42,43,44,85,86,87,128,129,130,490,1024,4097};
+    for (uint8_t refresh : {uint8_t(0x7d), uint8_t(0xfd)}) {
+        auto refreshState = pollState;
+        z80_t cpu = cpuState(refreshState);
+        cpu.r = refresh; // Exercise wraparound with each value of the retained high bit.
+        std::memcpy(refreshState.data(), &cpu, sizeof(cpu));
+        for (unsigned phase = 0; phase < 43; ++phase) {
+            load(seed, refreshState);
+            singleTicks(seed, phase);
+            const auto phaseState = save(seed);
+            for (uint32_t count : batchSizes) {
+                load(batched, phaseState);
+                load(reference, phaseState);
+                const uint64_t skipped = hikaru::testMieSkippedClocks();
+                compareTicks(count, "command polling preserves full state at every cycle phase");
+                if (count >= 490)
+                    check(hikaru::testMieSkippedClocks() > skipped, "long idle batches execute the shortcut");
+            }
+        }
+    }
+    // Recognition is based on instructions, including both legal RAM edges.
+    for (uint16_t start : {uint16_t(0x7800), uint16_t(0x9100), uint16_t(0xfff6)}) {
+        auto relocatedRom = pollRom;
+        relocatedRom[7] = uint8_t(start);
+        relocatedRom[8] = uint8_t(start >> 8);
+        hikaru::Mie relocated(relocatedRom), relocatedReference(relocatedRom);
+        for (unsigned i = 0; i < pollCode.size(); ++i) {
+            writeRam(relocated, uint16_t(start + i), pollCode[i]);
+            writeRam(relocatedReference, uint16_t(start + i), pollCode[i]);
+        }
+        relocated.advanceTicks(4097);
+        singleTicks(relocatedReference, 4097);
+        check(save(relocated) == save(relocatedReference), "relocated RAM command poll preserves full state");
+    }
+    for (uint8_t command : {uint8_t(1), uint8_t(0x0c)}) {
+        load(batched, pollState);
+        load(reference, pollState);
+        compareTicks(490, "command poll is stable before a host command");
+        writeRam(batched, 0xc000, command);
+        writeRam(reference, 0xc000, command);
+        compareTicks(490, "host command change ends polling on the next slice");
+        const uint32_t result = command < 0x0c ? 0x00838004u : 0x00838006u;
+        check(batched.readHost(result, 1) == command, "command poll takes the correct command exit");
+    }
+    load(batched, pollState);
+    load(reference, pollState);
+    compareTicks(490, "command poll is stable before replacing its code");
+    writeRam(batched, pollStart + 7, 0x3c); // INC A replaces OR A and exits with A=1.
+    writeRam(reference, pollStart + 7, 0x3c);
+    compareTicks(490, "host code replacement cannot reuse a prior loop proof");
+    check(batched.readHost(0x00838004, 1) == 1, "replacement instruction executes its side effect");
+
+    load(batched, pollState);
+    load(reference, pollState);
+    compareTicks(490, "command poll is stable before an interrupt");
+    for (hikaru::Mie* target : {&batched, &reference}) {
+        writePort(*target, 0x30, 0x40);
+        writePort(*target, 0x70, 0x40);
+    }
+    compareTicks(490, "IRQ between slices preserves acknowledgement and resume timing");
+    check(batched.readHost(0x00838002, 1) == 1, "command poll services the IM1 interrupt handler");
+    load(batched, pollState);
+    load(reference, pollState);
+    compareTicks(17, "partial command iteration preserves its internal phase");
+    const auto midPoll = save(batched);
+    load(batched, midPoll);
+    load(reference, midPoll);
+    compareTicks(4097, "save/load resumes command polling without cached recognition");
+
+    load(batched, pollState);
+    load(reference, pollState);
+    std::vector<uint8_t> batchedSent, referenceSent;
+    batched.setSerialDevice([&](uint8_t value) { batchedSent.push_back(value); }, {}, {});
+    reference.setSerialDevice([&](uint8_t value) { referenceSent.push_back(value); }, {}, {});
+    for (hikaru::Mie* target : {&batched, &reference}) {
+        writePort(*target, 0x0a, 0xa6);
+        writePort(*target, 0x09, 1);
+    }
+    compareTicks(159, "active serial exchange prevents polling from crossing its deadline");
+    check(batchedSent.empty() && referenceSent.empty() && batched.readHost(0x0080001a, 1) == 3,
+        "command polling keeps serial busy through tick 159");
+    compareTicks(1, "serial exchange completes on clock 160 during command polling");
+    check(batchedSent == std::vector<uint8_t>{0xa6} && batchedSent == referenceSent,
+        "command polling sends exactly the scheduled serial byte");
+    compareTicks(490, "command polling resumes after serial completion");
+
+    load(batched, pollState);
+    load(reference, pollState);
+    compareTicks((16 - (seedTicks & 15)) & 15, "align EEPROM divider before its programming deadline");
+    for (hikaru::Mie* target : {&batched, &reference}) {
+        writePort(*target, 8, 0xdf); // GPIO F output: CS=8, CLK=1, DI=2.
+        for (const char* command : {"1001100000", "101000000010100110"}) { // EWEN; WRITE 0,A6.
+            writePort(*target, 5, 8);
+            for (const char* bit = command; *bit; ++bit) {
+                const uint8_t value = uint8_t(8 | (*bit == '1' ? 2 : 0));
+                writePort(*target, 5, value);
+                writePort(*target, 5, value | 1);
+            }
+            writePort(*target, 5, 0);
+        }
+    }
+    check(batched.eepromWritePending() && reference.eepromWritePending(), "polling fixture starts EEPROM programming");
+    compareTicks(79999, "busy EEPROM prevents command polling from skipping its programming clocks");
+    check(batched.eepromWritePending() && batched.eepromContents()[0] == 0xff,
+        "EEPROM remains unchanged one MIE clock before programming completes");
+    compareTicks(1, "EEPROM programming completes at its exact MIE clock deadline");
+    check(!batched.eepromWritePending() && batched.eepromContents()[0] == 0xa6,
+        "command polling preserves the completed EEPROM write");
+    compareTicks(490, "command polling resumes after EEPROM programming");
     std::cout << checks << " MIE checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

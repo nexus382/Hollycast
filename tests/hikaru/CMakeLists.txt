@@ -10,6 +10,10 @@ if(NOT TARGET hollycast_hikaru_bus)
     add_subdirectory(../../core/hw/hikaru "${CMAKE_CURRENT_BINARY_DIR}/hikaru")
 endif()
 
+# This directory is only configured for regressions. Keep activation probes
+# out of normal player builds and out of the serialized MIE state.
+target_compile_definitions(hollycast_hikaru_io PRIVATE HIKARU_MIE_TESTING)
+
 foreach(component bridge board_memory sh4_cpu sh4_peripherals sh4_dma roms jvs mie machine eeprom93c46 protection)
     add_executable(hikaru_${component}_test ${component}_test.cpp)
     target_link_libraries(hikaru_${component}_test PRIVATE hollycast_hikaru_bus)

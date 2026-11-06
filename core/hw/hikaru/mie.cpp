@@ -16,6 +16,12 @@
 #include <utility>
 
 namespace hikaru {
+#ifdef HIKARU_MIE_TESTING
+// The standalone regression build verifies that equivalent state also comes
+// from executing the shortcut. Normal player builds have no counter or hook.
+static thread_local uint64_t mieSkippedClocks = 0;
+uint64_t testMieSkippedClocks() { return mieSkippedClocks; }
+#endif
 struct Mie::Impl {
     z80_t cpu{};
     uint64_t pins = 0;
@@ -160,6 +166,18 @@ struct Mie::Impl {
         }
     }
     void ticks(uint32_t count) {
+        // Uploaded firmware polls a host command byte with this exact sequence:
+        // LD A,(C000); CP 0C; JR NC,+17; OR A; JR Z,-10. With a zero command,
+        // one iteration takes 43 clocks and five opcode refreshes, with no I/O
+        // or writes. Recognition lives only within this emulation-worker slice:
+        // the SH-4 host writes MIE RAM on that same worker between ticks calls.
+        static constexpr std::array<uint8_t, 10> commandPoll{
+            0x3a, 0x00, 0xc0, 0xfe, 0x0c, 0x30, 0x17, 0xb7, 0x28, 0xf6
+        };
+        z80_t checkpoint{};
+        uint64_t checkpointPins = 0;
+        uint32_t checkpointRemaining = 0;
+        bool haveCheckpoint = false;
         while (count--) {
             if (serial.ticks && --serial.ticks == 0) finishSerial();
             if (++eepromTicks == 16) { eepromTicks = 0; eeprom.advanceMicros(1); }
@@ -180,6 +198,54 @@ struct Mie::Impl {
                     } else { Z80_SET_DATA(pins, 0xff); }
                 } else if (pins & Z80_RD) { Z80_SET_DATA(pins, portRead(uint8_t(address))); }
                 else if (pins & Z80_WR) portWrite(uint8_t(address), Z80_GET_DATA(pins));
+            }
+            if (count < 43 || !z80_opdone(&cpu)) continue;
+            // Do not cross serial callbacks, EEPROM programming, or an interrupt.
+            // With these gates, the recognized loop cannot create any internal
+            // event; idle EEPROM microsecond advances have no observable effect.
+            constexpr uint64_t blockedPins = Z80_INT | Z80_NMI | Z80_WAIT | Z80_HALT | Z80_RES;
+            if (serial.ticks || eeprom.busy() || irqPending || cpu.int_bits ||
+                ((pins | cpu.pins) & blockedPins)) {
+                haveCheckpoint = false;
+                continue;
+            }
+            if (address < 0x7800 || address > 0x10000 - commandPoll.size() || cpu.pc != address + 1 ||
+                Z80_GET_DATA(pins) != commandPoll[0] || ram[0xc000 - 0x7800] ||
+                !std::equal(commandPoll.begin(), commandPoll.end(), ram.begin() + address - 0x7800)) {
+                // Other instruction fetches inside the loop do not end the proof.
+                // A different matching loop still has to reproduce its full state.
+                continue;
+            }
+            // Compare named fields, not structure padding. At this post-bus fetch
+            // phase both pin images hold the loop address, not a refresh address.
+            const bool repeated = haveCheckpoint && checkpointRemaining - count == 43 &&
+                pins == checkpointPins && cpu.step == checkpoint.step && cpu.addr == checkpoint.addr &&
+                cpu.dlatch == checkpoint.dlatch && cpu.opcode == checkpoint.opcode &&
+                cpu.hlx_idx == checkpoint.hlx_idx && cpu.prefix_active == checkpoint.prefix_active &&
+                cpu.pins == checkpoint.pins && cpu.int_bits == checkpoint.int_bits &&
+                cpu.pc == checkpoint.pc && cpu.af == checkpoint.af && cpu.bc == checkpoint.bc &&
+                cpu.de == checkpoint.de && cpu.hl == checkpoint.hl && cpu.ix == checkpoint.ix &&
+                cpu.iy == checkpoint.iy && cpu.wz == checkpoint.wz && cpu.sp == checkpoint.sp &&
+                cpu.i == checkpoint.i && cpu.af2 == checkpoint.af2 && cpu.bc2 == checkpoint.bc2 &&
+                cpu.de2 == checkpoint.de2 && cpu.hl2 == checkpoint.hl2 && cpu.im == checkpoint.im &&
+                cpu.iff1 == checkpoint.iff1 && cpu.iff2 == checkpoint.iff2 &&
+                cpu.r == uint8_t((checkpoint.r & 0x80) | ((checkpoint.r + 5) & 0x7f));
+            if (repeated) {
+                const uint32_t iterations = count / 43;
+                const uint32_t skipped = iterations * 43;
+#ifdef HIKARU_MIE_TESTING
+                mieSkippedClocks += skipped;
+#endif
+                cpu.r = uint8_t((cpu.r & 0x80) | ((cpu.r + iterations * 5) & 0x7f));
+                eepromTicks = (eepromTicks + (skipped & 15)) & 15;
+                count -= skipped;
+                haveCheckpoint = false;
+            } else {
+                // The first real iteration may normalize A, flags, or WZ.
+                checkpoint = cpu;
+                checkpointPins = pins;
+                checkpointRemaining = count;
+                haveCheckpoint = true;
             }
         }
     }

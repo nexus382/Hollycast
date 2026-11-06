@@ -68,6 +68,15 @@ if(HIKARU_VENDOR_BUILD_SMOKE AND NOT ANDROID AND NOT IOS AND NOT LIBRETRO)
     target_link_libraries(hikaru_valkyrie_texture_bounds PRIVATE hollycast_hikaru_valkyrie_test)
     add_test(NAME hikaru_valkyrie_texture_bounds COMMAND hikaru_valkyrie_texture_bounds)
 
+    add_executable(hikaru_valkyrie_texture_cache tests/texture_cache.c)
+    target_include_directories(hikaru_valkyrie_texture_cache PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(hikaru_valkyrie_texture_cache PRIVATE hollycast_hikaru_valkyrie_test)
+    add_test(NAME hikaru_valkyrie_texture_cache COMMAND hikaru_valkyrie_texture_cache)
+
+    add_executable(hikaru_valkyrie_sorting_order tests/sorting_order.c)
+    target_link_libraries(hikaru_valkyrie_sorting_order PRIVATE hollycast_hikaru_valkyrie_test)
+    add_test(NAME hikaru_valkyrie_sorting_order COMMAND hikaru_valkyrie_sorting_order)
+
     add_executable(hikaru_valkyrie_framebuffer_snapshot tests/framebuffer_snapshot.c)
     target_include_directories(hikaru_valkyrie_framebuffer_snapshot PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(hikaru_valkyrie_framebuffer_snapshot PRIVATE hollycast_hikaru_valkyrie_test)
@@ -188,7 +197,7 @@ if(HIKARU_VENDOR_BUILD_SMOKE AND NOT ANDROID AND NOT IOS AND NOT LIBRETRO)
         # glad is created by the root build after this directory; CMake
         # resolves the target at generate time. It supplies the GL
         # entry points the Apple builds get from the OpenGL framework.
-        foreach(_hikaru_test sound_bus_timing tmu_timing cpu_clock gpu_irq texture_bounds framebuffer_snapshot vertex_storage normal_matrix mmap_fetch mmap_data mmap_write cached_writes cached_reads dispatch double_precision irq_fpu_context poll_loop idle_spin queue_wait slave_wait planet_slave_wait master_wait engine_games spot_pixels gl_smoke sorting_pixels material_pixels)
+        foreach(_hikaru_test sound_bus_timing tmu_timing cpu_clock gpu_irq texture_bounds texture_cache sorting_order framebuffer_snapshot vertex_storage normal_matrix mmap_fetch mmap_data mmap_write cached_writes cached_reads dispatch double_precision irq_fpu_context poll_loop idle_spin queue_wait slave_wait planet_slave_wait master_wait engine_games spot_pixels gl_smoke sorting_pixels material_pixels)
             # Vendor headers use C11 (_Noreturn, _Thread_local); MSVC
             # defaults these test targets to an older C mode.
             target_compile_features(hikaru_valkyrie_${_hikaru_test} PRIVATE c_std_11)
