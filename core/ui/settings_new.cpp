@@ -7616,7 +7616,8 @@ void renderControlsTab()
 		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		ImGui::TextUnformatted(hikaruGame->title);
-		auto* regionOption = hikaruGame == &hikaru::SegaNascarGame ? &config::HikaruNascarRegion
+		auto* regionOption = hikaruGame == &hikaru::StarWarsRacerGame ? &config::HikaruStarWarsRacerRegion
+			: hikaruGame == &hikaru::SegaNascarGame ? &config::HikaruNascarRegion
 			: hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
 			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion
 			: hikaruGame == &hikaru::VirtualOn4Game ? &config::HikaruVirtualOn4Region : &config::HikaruPlanetRegion;
@@ -7640,7 +7641,15 @@ void renderControlsTab()
 		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
 			T("Choose a region for this game. Changing it restarts the cabinet; calibration and saved records are retained. A backup is kept before the first change."), regionCfg);
 		ImGui::TextWrapped("%s", T("USA selects the English cabinet configuration. Export uses the game's export language options. New cabinets must finish creating their settings before the region can apply."));
-		if (hikaruGame == &hikaru::SegaNascarGame) {
+		if (hikaruGame == &hikaru::StarWarsRacerGame) {
+			RenderGeneralToggleSettingRow("HikaruStarWarsRacerGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad pod controls"), T("Use triggers and shoulders while both thumbs operate the pod levers"),
+				bool(config::HikaruStarWarsRacerGamepad),
+				[](bool enabled) { config::HikaruStarWarsRacerGamepad.set(enabled); },
+				T("Disable to use only the individually mapped cabinet buttons. The two analog levers keep their assignments."));
+			ImGui::TextWrapped("%s", T("Push the left and right sticks forward to advance their respective pod levers. A is boost, B is brake, and X/Y are the left/right buttons."));
+			ImGui::TextWrapped("%s", T("With the default arcade gamepad layout, this option also maps LT to boost, RT to brake, and the left/right shoulders or D-pad to the corresponding left/right buttons. Coin and Start use their normal arcade bindings."));
+		} else if (hikaruGame == &hikaru::SegaNascarGame) {
 			RenderGeneralToggleSettingRow("HikaruNascarGamepad", ICON_FA_GAMEPAD,
 				T("Gamepad driving controls"), T("Keep the selected gear engaged and allow D-pad steering"),
 				bool(config::HikaruNascarGamepad),

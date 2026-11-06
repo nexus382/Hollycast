@@ -15,7 +15,8 @@ typedef enum {
     HIKARU_ENGINE_GAME_BRAVEFF = 1,
     HIKARU_ENGINE_GAME_PHARRIER = 2,
     HIKARU_ENGINE_GAME_VON4 = 3,
-    HIKARU_ENGINE_GAME_SGNASCAR = 4
+    HIKARU_ENGINE_GAME_SGNASCAR = 4,
+    HIKARU_ENGINE_GAME_SWRACER = 5
 } HikaruEngineGame;
 typedef enum {
     /* Sort retained source strips back-to-front by transformed view-space centroid. */

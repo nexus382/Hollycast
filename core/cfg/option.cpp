@@ -92,6 +92,8 @@ Option<int, false> HikaruBraveRegion("HikaruBraveRegion", -1, "input");
 Option<int, false> HikaruPlanetRegion("HikaruPlanetRegion", -1, "input");
 Option<int, false> HikaruVirtualOn4Region("HikaruVirtualOn4Region", -1, "input");
 Option<int, false> HikaruNascarRegion("HikaruNascarRegion", -1, "input");
+Option<int, false> HikaruStarWarsRacerRegion("HikaruStarWarsRacerRegion", -1, "input");
+Option<bool> HikaruStarWarsRacerGamepad("HikaruStarWarsRacerGamepad", true, "input");
 Option<bool> HikaruNascarGamepad("HikaruNascarGamepad", true, "input");
 Option<bool> HikaruVirtualOn4TwinStick("HikaruVirtualOn4TwinStick", true, "input");
 #endif

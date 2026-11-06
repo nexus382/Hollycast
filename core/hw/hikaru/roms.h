@@ -32,6 +32,7 @@ extern const GameDescriptor BraveFirefightersGame;
 extern const GameDescriptor PlanetHarriersGame;
 extern const GameDescriptor VirtualOn4Game;
 extern const GameDescriptor SegaNascarGame;
+extern const GameDescriptor StarWarsRacerGame;
 const GameDescriptor* findGame(const std::string& basename);
 
 // File facts from MAME's Hikaru driver, revision
@@ -46,6 +47,8 @@ extern const std::array<InterleavedRomFile, 4> VirtualOn4ProgramRoms;
 extern const std::array<InterleavedRomFile, 16> VirtualOn4DataRoms;
 extern const std::array<InterleavedRomFile, 2> SegaNascarProgramRoms;
 extern const std::array<InterleavedRomFile, 16> SegaNascarDataRoms;
+extern const std::array<InterleavedRomFile, 4> StarWarsRacerProgramRoms;
+extern const std::array<InterleavedRomFile, 32> StarWarsRacerDataRoms;
 extern const RomFile MieBootRom;
 
 uint32_t romCrc32(const std::vector<uint8_t>& data);
@@ -61,6 +64,7 @@ struct RomImages {
     std::vector<uint8_t> data;
     static constexpr uint32_t AirTrixSecurityKey = 0x291b02c7;
     static constexpr uint32_t PlanetHarriersSecurityKey = 0x2912c68a;
+    static constexpr uint32_t StarWarsRacerSecurityKey = 0x2903dad5;
 };
 
 using RomReader = std::function<std::vector<uint8_t>(const RomFile&)>;
@@ -69,4 +73,5 @@ RomImages loadBraveFirefighters(const RomReader& reader, const std::string& boot
 RomImages loadPlanetHarriers(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 RomImages loadVirtualOn4(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 RomImages loadSegaNascar(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
+RomImages loadStarWarsRacer(const RomReader& reader, const std::string& bootName = "epr-23400.ic94");
 } // namespace hikaru

@@ -22,5 +22,5 @@ struct ControllerInputs {
 HikaruEngineInputs bindCabinetInputs(const GameDescriptor* game,
     const std::array<ControllerInputs, 2>& controllers,
     bool airTrixDpadBoard, bool planetDpadStick, bool virtualOn4TwinStick = true,
-    bool nascarGamepad = true, uint16_t previousNascarGear = 0);
+    bool nascarGamepad = true, uint16_t previousNascarGear = 0, bool starWarsGamepad = true);
 } // namespace hikaru

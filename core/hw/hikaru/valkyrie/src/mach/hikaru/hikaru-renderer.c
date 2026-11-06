@@ -2517,6 +2517,51 @@ int hikaru_vendor_test_triangle_winding(unsigned winding, unsigned nocull)
 	return ok;
 }
 
+int hikaru_vendor_test_static_mesh_dispatch(hikaru_gpu_t *, const uint32_t[4]);
+/* Decode real 901/12x packets into the renderer's vertex ring without GL or
+ * commercial data. The independent IEEE-754 oracle covers subnormal scales. */
+int hikaru_vendor_test_static_mesh_precision(void)
+{
+    hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+    hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+    int ok = 0;
+    if (!hr || !gpu) goto cleanup;
+    hr->gpu = gpu;
+    gpu->renderer = &hr->base;
+    hr->debug.flags[HR_DEBUG_SELECT_VIEWPORT] = -1;
+    for (unsigned exponent = 0; exponent < 256; ++exponent) {
+        /* Byte 15 is the smallest normal scale; lower bytes select exact
+         * subnormal powers of two. Byte 0x8E is 2.0, not a negative scale. */
+        const uint32_t expected = exponent < 15 ? 1u << (exponent + 8)
+                                                : (exponent - 14u) << 23;
+        const uint32_t precision_packet[4] = {(exponent << 16) | 0x901u};
+        if (!hikaru_vendor_test_static_mesh_dispatch(gpu, precision_packet)) goto cleanup;
+        uint32_t actual;
+        memcpy(&actual, &gpu->state.poly.static_mesh_precision, sizeof(actual));
+        if (actual != expected) {
+            fprintf(stderr, "901 exponent %02X: scale bits %08X, expected %08X\n", exponent, actual, expected);
+            goto cleanup;
+        }
+        for (unsigned opcode = 0x12c; opcode <= 0x12f; ++opcode) {
+            /* Signed input coordinates (1,-1,0) also stay finite at byte FF. */
+            const uint32_t vertex[4] = {opcode, 0x00010000u, 0xffff0000u, 0};
+            if (!hikaru_vendor_test_static_mesh_dispatch(gpu, vertex)) goto cleanup;
+            uint32_t positions[3];
+            memcpy(positions, hr->push.tmp[2].body.position, sizeof(positions));
+            if (positions[0] != expected || positions[1] != (expected | 0x80000000u) || positions[2] != 0) {
+                fprintf(stderr, "static vertex %03X exponent %02X: position bits %08X,%08X,%08X\n",
+                    opcode, exponent, positions[0], positions[1], positions[2]);
+                goto cleanup;
+            }
+        }
+    }
+    ok = 1;
+cleanup:
+    free(gpu);
+    free(hr);
+    return ok;
+}
+
 int hikaru_vendor_test_uv_dispatch(hikaru_gpu_t *, const uint32_t[8]);
 int hikaru_vendor_test_uv_packets(uint32_t offset_opcode, uint32_t offset_payload,
                                   uint32_t texhead, const uint32_t packet[8],

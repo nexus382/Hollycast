@@ -164,6 +164,34 @@ int main()
             "unknown NASCAR BIOS rejected");
     rejects([&] { hikaru::loadSegaNascar([](const auto&) { return std::vector<uint8_t>{}; }); },
             "missing NASCAR BIOS data rejected");
+    check(hikaru::findGame("SWRACER") == &hikaru::StarWarsRacerGame
+            && hikaru::StarWarsRacerGame.securityKey == 0x2903dad5,
+          "Star Wars Racer selects its 315-5881 protection key");
+    check(hikaru::StarWarsRacerProgramRoms.size() == 4 && hikaru::StarWarsRacerDataRoms.size() == 32,
+          "Star Wars Racer manifest contains all 36 chips");
+    for (std::size_t i = 0; i < hikaru::StarWarsRacerProgramRoms.size(); ++i) {
+        const auto& chip = hikaru::StarWarsRacerProgramRoms[i];
+        check(chip.offset == (i / 2) * 0x1000000 + (i % 2) * 2 && chip.file.size == 0x400000,
+              "Star Wars Racer program pairs retain 16 MiB socket slots");
+    }
+    for (std::size_t i = 0; i < hikaru::StarWarsRacerDataRoms.size(); ++i) {
+        const auto& chip = hikaru::StarWarsRacerDataRoms[i];
+        check(chip.offset == (i / 2) * 0x1000000 + (i % 2) * 2 && chip.file.size == 0x800000,
+              "Star Wars Racer SOP44 pairs fill contiguous 16 MiB banks");
+    }
+    check(hikaru::StarWarsRacerProgramRoms[0].file.crc32 == 0xeae62b46
+            && hikaru::StarWarsRacerProgramRoms[3].file.crc32 == 0x7a5e3f0f
+            && std::string(hikaru::StarWarsRacerDataRoms[15].file.name) == "mpr-23101.ic52"
+            && std::string(hikaru::StarWarsRacerDataRoms[16].file.name) == "mpr-23102.ic53s"
+            && hikaru::StarWarsRacerDataRoms[16].file.crc32 == 0x080c5bcb
+            && std::string(hikaru::StarWarsRacerDataRoms[31].file.name) == "mpr-23117.ic68s"
+            && hikaru::StarWarsRacerDataRoms[31].file.crc32 == 0x9d4d3529,
+          "Star Wars Racer program and underside socket metadata match pinned MAME data");
+    rejects([&] { hikaru::loadStarWarsRacer({}); }, "missing Star Wars Racer reader rejected");
+    rejects([&] { hikaru::loadStarWarsRacer([](const auto&) { return std::vector<uint8_t>{}; }, "unknown"); },
+            "unknown Star Wars Racer BIOS rejected");
+    rejects([&] { hikaru::loadStarWarsRacer([](const auto&) { return std::vector<uint8_t>{}; }); },
+            "missing Star Wars Racer BIOS data rejected");
     std::cout << checks << " ROM checks, " << failures << " failures\n";
     return failures ? 1 : 0;
 }

@@ -3,7 +3,8 @@
 
 The optional Hikaru backend recognizes **Air Trix (`airtrix`)** and
 **Brave Firefighters (`braveff`)**, **Planet Harriers (`pharrier`)**, and
-**Virtual-On Force (`von4`)**, and **NASCAR Arcade Rev A (`sgnascar`)** in the
+**Virtual-On Force (`von4`)**, **NASCAR Arcade Rev A (`sgnascar`)**, and
+**Star Wars Racer Arcade (`swracer`)** in the
 normal game library and loader. It uses
 a separate Hikaru CPU/GPU backend. Air Trix testing has reached attract mode, player/stage selection,
 and an active skating stage with calibrated steering and awarded trick coins.
@@ -209,8 +210,8 @@ session. They are preserved and will not be overwritten on exit. The frontend
 retains cartridge ROM storage for the engine instead of copying it again;
 the BIOS is still copied privately for the optional compatibility patch.
 
-Place a supported game ZIP (`airtrix`, `braveff`, `pharrier`, `von4`, or
-`sgnascar`) beside `hikaru.zip` and
+Place a supported game ZIP (`airtrix`, `braveff`, `pharrier`, `von4`,
+`sgnascar`, or `swracer`) beside `hikaru.zip` and
 `mie.zip`, then add their folder to the game library or open the game with
 **File > Load ROM**. `.7z` archives are also accepted. The loader also searches
 the configured Naomi BIOS folders for the Hikaru and MIE archives. Every
@@ -347,6 +348,42 @@ require runtime verification. Linked play, Deluxe cabinet wiring and steering
 force feedback are not implemented here. The
 [Sega Standard cabinet manual](https://backup.segakore.fr/sauservice/Manuals/Nascar/NascarSTD/NascarSTD.pdf)
 documents the cabinet settings and calibration procedure.
+
+### Star Wars Racer Arcade controls and bring-up
+
+The loader recognizes `swracer`, validates four program and thirty-two data
+chips, and uses this title's 315-5881 security key. Its SOP44 data board uses
+8 MiB chips; program pairs occupy separate 16 MiB source slots. The cabinet
+uses the existing Sega 837-13551 JVS profile. Saves and cabinet region are
+separate from the other games (`swracer.hikaru.nvmem` / `swracer.mie.eeprom`).
+
+Star Wars startup exercises a static-vertex scale of 2.0 (command 008E0901).
+The inherited integer-shift decoder made that scale negative. Precision now
+uses floating exponent arithmetic, with regression coverage for all 256
+encodings and the static vertex handlers; the assertion remains in place.
+
+The left/right stick Y axes operate the left/right pod levers independently.
+Push both forward to accelerate, pull both back to decelerate, and move them
+in opposite directions to turn. Left lever forward/right lever back turns
+right; the reverse turns left. Start confirms menu choices and changes view
+during a race. A is Boost, B is Brake, and X/Y are the left/right buttons.
+
+The title-only **Gamepad pod controls** option defaults on. It adds LT/RT
+as Boost/Brake and left/right shoulders or D-pad as the left/right buttons,
+so both thumbs can remain on the levers. Disabling it removes those aliases;
+the separately remappable levers and cabinet buttons keep their assignments.
+JVS analog 0/1 carry the left/right levers, with low values forward. Boost and
+Brake use P1 Push1/Push2; the left/right buttons use P1 Right/Left respectively.
+These bit/channel assignments are hardware facts from the Odin reference
+manifest; the implementation uses Hollycast's own input paths.
+
+For one machine, select **NO LINK** in Game Assignments. Game Test's Input
+Assignments calibrate each lever's forward/back endpoints independently.
+The [Sega operator manual](https://primetimeamusements.com/wp-content/uploads/2015/05/StarWarsRacerArcade_Hikaru_US_Manual_Deluxe.pdf)
+describes controls, Input Test and calibration on printed pages 31-32, 55,
+and 60-61. Linked cabinets and the Deluxe boost-lock actuator are not
+emulated. Boot, gameplay and physical input behavior require runtime
+validation; adding the manifest alone does not establish compatibility.
 
 ### Virtual-On Force controls and bring-up
 

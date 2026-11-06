@@ -311,6 +311,9 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     case HIKARU_ENGINE_GAME_SGNASCAR:
         game_name = "sgnascar"; program_size = 0x4000000; data_size = 0x10000000;
         break;
+    case HIKARU_ENGINE_GAME_SWRACER:
+        game_name = "swracer"; program_size = 0x4000000; data_size = 0x10000000;
+        break;
     default:
         set_error(error, error_size, "Unsupported Hikaru game"); return NULL;
     }

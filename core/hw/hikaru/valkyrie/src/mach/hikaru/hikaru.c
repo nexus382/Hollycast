@@ -844,11 +844,12 @@ hikaru_set_rombd_config (hikaru_t *hikaru)
 		/* MAME retains 16 MiB slots for each populated 8 MiB pair. */
 		eprom_source_stride = 16*MB;
 		maskrom_bank_size = 16;
-	} else if (!strcmp (game->name, "podrace")) {
-		/* XXX doesn't pass the ROMBD test */
+	} else if (!strcmp (game->name, "swracer")) {
 		eprom_bank_size = 4;
+		/* Two populated 8 MiB program pairs retain 16 MiB MAME socket slots.
+		 * The 32 SOP44 data chips fill sixteen contiguous 16 MiB pairs. */
+		eprom_source_stride = 16*MB;
 		maskrom_bank_size = 8;
-		maskrom_is_stretched = true;
 	} else if (!strcmp (game->name, "sgnascar")) {
 		eprom_bank_size = 4;
 		/* MAME retains 16 MiB socket slots around the populated 8 MiB pair. */

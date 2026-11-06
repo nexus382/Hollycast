@@ -6,6 +6,7 @@
 #include <stdio.h>
 static int close_enough(float a, float b) { return fabsf(a-b) < 0.00001f; }
 int hikaru_vendor_test_triangle_winding(unsigned winding, unsigned nocull);
+int hikaru_vendor_test_static_mesh_precision(void);
 int main(void)
 {
     mtx4x4f_t transform = {{2,0,0,0},{0,3,0,0},{0,0,4,0},{5,6,7,1}};
@@ -27,6 +28,10 @@ int main(void)
                 fprintf(stderr, "triangle normal disagrees with winding=%u nocull=%u\n", winding, nocull);
                 return 4;
             }
-    puts("Hikaru normal matrix and triangle winding checks passed");
+    if (!hikaru_vendor_test_static_mesh_precision()) {
+        fprintf(stderr, "static mesh precision packet checks failed\n");
+        return 5;
+    }
+    puts("Hikaru static precision, normal matrix and triangle winding checks passed");
     return 0;
 }

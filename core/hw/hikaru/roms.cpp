@@ -13,6 +13,7 @@ const GameDescriptor BraveFirefightersGame{"braveff", "Brave Firefighters", std:
 const GameDescriptor PlanetHarriersGame{"pharrier", "Planet Harriers", RomImages::PlanetHarriersSecurityKey};
 const GameDescriptor VirtualOn4Game{"von4", "Virtual-On Force", std::nullopt};
 const GameDescriptor SegaNascarGame{"sgnascar", "NASCAR Arcade (Rev A)", std::nullopt};
+const GameDescriptor StarWarsRacerGame{"swracer", "Star Wars: Racer Arcade", RomImages::StarWarsRacerSecurityKey};
 
 const GameDescriptor* findGame(const std::string& basename)
 {
@@ -29,6 +30,8 @@ const GameDescriptor* findGame(const std::string& basename)
         return &VirtualOn4Game;
     if (normalized == SegaNascarGame.identifier)
         return &SegaNascarGame;
+    if (normalized == StarWarsRacerGame.identifier)
+        return &StarWarsRacerGame;
     return nullptr;
 }
 
@@ -174,6 +177,51 @@ const std::array<InterleavedRomFile, 16> SegaNascarDataRoms = {{
     {{"mpr-23483.ic32", 0x1000000, 0xc37adebe}, 0x0c000002},
     {{"mpr-23480.ic33", 0x1000000, 0xf517b8b3}, 0x0e000000},
     {{"mpr-23484.ic34", 0x1000000, 0x2ebe1aa1}, 0x0e000002},
+}};
+
+// MAME hikaru.cpp at 43b995da4a2af46c9f48c6a5536953439adfb1ab.
+// Two populated 8 MiB program pairs retain their zero-filled 16 MiB socket slots.
+const std::array<InterleavedRomFile, 4> StarWarsRacerProgramRoms = {{
+    {{"epr-23174.ic29", 0x0400000, 0xeae62b46}, 0x00000000},
+    {{"epr-23175.ic30", 0x0400000, 0xb92da060}, 0x00000002},
+    {{"epr-23176.ic31", 0x0400000, 0x2f2824a7}, 0x01000000},
+    {{"epr-23177.ic32", 0x0400000, 0x7a5e3f0f}, 0x01000002},
+}};
+
+// The SOP44 board uses sixteen 16 MiB pairs, including the underside sockets.
+const std::array<InterleavedRomFile, 32> StarWarsRacerDataRoms = {{
+    {{"mpr-23086.ic37",  0x0800000, 0xef6f20f1}, 0x00000000},
+    {{"mpr-23087.ic38",  0x0800000, 0x54389822}, 0x00000002},
+    {{"mpr-23088.ic39",  0x0800000, 0x9f1a382e}, 0x01000000},
+    {{"mpr-23089.ic40",  0x0800000, 0x6aae64fc}, 0x01000002},
+    {{"mpr-23090.ic41",  0x0800000, 0xba857872}, 0x02000000},
+    {{"mpr-23091.ic42",  0x0800000, 0x66a73e27}, 0x02000002},
+    {{"mpr-23092.ic43",  0x0800000, 0x4f20a0f5}, 0x03000000},
+    {{"mpr-23093.ic44",  0x0800000, 0xe74d7d64}, 0x03000002},
+    {{"mpr-23094.ic45",  0x0800000, 0x90f04c14}, 0x04000000},
+    {{"mpr-23095.ic46",  0x0800000, 0xcc67cb5b}, 0x04000002},
+    {{"mpr-23096.ic47",  0x0800000, 0x799ab79e}, 0x05000000},
+    {{"mpr-23097.ic48",  0x0800000, 0xf68439de}, 0x05000002},
+    {{"mpr-23098.ic49",  0x0800000, 0xa1e2009c}, 0x06000000},
+    {{"mpr-23099.ic50",  0x0800000, 0xce36f642}, 0x06000002},
+    {{"mpr-23100.ic51",  0x0800000, 0x0f966653}, 0x07000000},
+    {{"mpr-23101.ic52",  0x0800000, 0x2640fbaa}, 0x07000002},
+    {{"mpr-23102.ic53s", 0x0800000, 0x080c5bcb}, 0x08000000},
+    {{"mpr-23103.ic54s", 0x0800000, 0x19c7758f}, 0x08000002},
+    {{"mpr-23104.ic55s", 0x0800000, 0x4ca74216}, 0x09000000},
+    {{"mpr-23105.ic56s", 0x0800000, 0xe2dd35ba}, 0x09000002},
+    {{"mpr-23106.ic57s", 0x0800000, 0xdd325515}, 0x0a000000},
+    {{"mpr-23107.ic58s", 0x0800000, 0xa527a22a}, 0x0a000002},
+    {{"mpr-23108.ic59s", 0x0800000, 0x47817d9a}, 0x0b000000},
+    {{"mpr-23109.ic60s", 0x0800000, 0x8c61dec4}, 0x0b000002},
+    {{"mpr-23110.ic61s", 0x0800000, 0x4ddae9f1}, 0x0c000000},
+    {{"mpr-23111.ic62s", 0x0800000, 0xc404cb1c}, 0x0c000002},
+    {{"mpr-23112.ic63s", 0x0800000, 0xd001fe59}, 0x0d000000},
+    {{"mpr-23113.ic64s", 0x0800000, 0xf241cfd5}, 0x0d000002},
+    {{"mpr-23114.ic65s", 0x0800000, 0x80049d7c}, 0x0e000000},
+    {{"mpr-23115.ic66s", 0x0800000, 0x4fc540fe}, 0x0e000002},
+    {{"mpr-23116.ic67s", 0x0800000, 0x9f567fce}, 0x0f000000},
+    {{"mpr-23117.ic68s", 0x0800000, 0x9d4d3529}, 0x0f000002},
 }};
 
 uint32_t romCrc32(const std::vector<uint8_t>& data)
@@ -361,6 +409,35 @@ RomImages loadSegaNascar(const RomReader& reader, const std::string& bootName)
         interleaveRomWords(images.program, chip.offset, bytes);
     }
     for (const auto& chip : SegaNascarDataRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.data, chip.offset, bytes);
+    }
+    return images;
+}
+
+RomImages loadStarWarsRacer(const RomReader& reader, const std::string& bootName)
+{
+    if (!reader)
+        throw std::invalid_argument("Hikaru ROM reader is required");
+    const RomFile* boot = nullptr;
+    for (const auto& candidate : BootRoms)
+        if (bootName == candidate.name)
+            boot = &candidate;
+    if (!boot)
+        throw std::invalid_argument("Unknown Hikaru BIOS revision: " + bootName);
+
+    RomImages images;
+    images.boot = reader(*boot);
+    validateRom(*boot, images.boot);
+    images.program.resize(0x04000000, 0);
+    images.data.resize(0x10000000, 0);
+    for (const auto& chip : StarWarsRacerProgramRoms) {
+        auto bytes = reader(chip.file);
+        validateRom(chip.file, bytes);
+        interleaveRomWords(images.program, chip.offset, bytes);
+    }
+    for (const auto& chip : StarWarsRacerDataRoms) {
         auto bytes = reader(chip.file);
         validateRom(chip.file, bytes);
         interleaveRomWords(images.data, chip.offset, bytes);

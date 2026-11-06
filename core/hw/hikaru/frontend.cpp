@@ -237,7 +237,8 @@ bool applyPendingState() {
 }
 
 CabinetRegion configuredRegion(const GameDescriptor* game) {
-    const int value = game == &SegaNascarGame ? config::HikaruNascarRegion.get()
+    const int value = game == &StarWarsRacerGame ? config::HikaruStarWarsRacerRegion.get()
+        : game == &SegaNascarGame ? config::HikaruNascarRegion.get()
         : game == &AirTrixGame ? config::HikaruAirTrixRegion.get()
         : game == &BraveFirefightersGame ? config::HikaruBraveRegion.get()
         : game == &VirtualOn4Game ? config::HikaruVirtualOn4Region.get() : config::HikaruPlanetRegion.get();
@@ -308,6 +309,18 @@ InputDescriptors virtualOn4Inputs = {{
     {"Left lever horizontal", Full, 0, false}, {"Left lever vertical", Full, 1, false},
     {"Right lever horizontal", Full, 2, false}, {"Right lever vertical", Full, 3, false},
     {"Right trigger", Half, 4, false}, {"Left trigger", Half, 5, false},
+}};
+
+InputDescriptors starWarsRacerInputs = {{
+    {NAOMI_START_KEY, "Start"}, {NAOMI_COIN_KEY, "Coin"},
+    {NAOMI_BTN0_KEY, "Boost"}, {NAOMI_BTN1_KEY, "Brake"},
+    {NAOMI_BTN2_KEY, "Left button"}, {NAOMI_BTN3_KEY, "Right button"},
+    {NAOMI_BTN4_KEY, "Right button (gamepad)"}, {NAOMI_BTN5_KEY, "Left button (gamepad)"},
+    {NAOMI_LEFT_KEY, "Left button (gamepad)"}, {NAOMI_RIGHT_KEY, "Right button (gamepad)"},
+    {NAOMI_TEST_KEY, "Test"}, {NAOMI_SERVICE_KEY, "Service"},
+}, {
+    {"Left pod lever", Full, 1, false}, {"Right pod lever", Full, 3, false},
+    {"Brake (gamepad)", Half, 4, false}, {"Boost (gamepad)", Half, 5, false},
 }};
 
 InputDescriptors segaNascarInputs = {{
@@ -420,7 +433,9 @@ void load(const std::string& path) {
         return readRom(std::string(file.name) == selected->name ? *bios : *game, file);
     };
     RomImages loadedRoms;
-    if (selectedGame == &SegaNascarGame)
+    if (selectedGame == &StarWarsRacerGame)
+        loadedRoms = loadStarWarsRacer(reader, selected->name);
+    else if (selectedGame == &SegaNascarGame)
         loadedRoms = loadSegaNascar(reader, selected->name);
     else if (selectedGame == &VirtualOn4Game)
         loadedRoms = loadVirtualOn4(reader, selected->name);
@@ -459,7 +474,8 @@ void load(const std::string& path) {
     if (!bramSaveAllowed || !mieSaveAllowed)
         os_notify("Hikaru save data could not be loaded. Using defaults; the original files will be preserved.", 10000);
     for (auto& queue : credits) queue.reset();
-    NaomiGameInputs = selectedGame == &SegaNascarGame ? &segaNascarInputs
+    NaomiGameInputs = selectedGame == &StarWarsRacerGame ? &starWarsRacerInputs
+        : selectedGame == &SegaNascarGame ? &segaNascarInputs
         : selectedGame == &VirtualOn4Game ? &virtualOn4Inputs
         : selectedGame == &PlanetHarriersGame ? &planetHarriersInputs
         : selectedGame == &BraveFirefightersGame ? &braveFirefightersInputs : &airTrixInputs;
@@ -820,7 +836,8 @@ static bool renderFrame() {
         HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size(), 1};
         auto io = callbacks(); std::array<char, 512> error{};
         auto security = protectionCallbacks();
-        const auto game = activeGame == &SegaNascarGame ? HIKARU_ENGINE_GAME_SGNASCAR
+        const auto game = activeGame == &StarWarsRacerGame ? HIKARU_ENGINE_GAME_SWRACER
+            : activeGame == &SegaNascarGame ? HIKARU_ENGINE_GAME_SGNASCAR
             : activeGame == &VirtualOn4Game ? HIKARU_ENGINE_GAME_VON4
             : activeGame == &PlanetHarriersGame ? HIKARU_ENGINE_GAME_PHARRIER
             : activeGame == &BraveFirefightersGame ? HIKARU_ENGINE_GAME_BRAVEFF : HIKARU_ENGINE_GAME_AIRTRIX;
@@ -915,7 +932,8 @@ static bool renderFrame() {
         controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};
     const auto* game = loadedGame();
     auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick,
-        config::HikaruVirtualOn4TwinStick, config::HikaruNascarGamepad, mie->inputs().players[1]);
+        config::HikaruVirtualOn4TwinStick, config::HikaruNascarGamepad, mie->inputs().players[1],
+        config::HikaruStarWarsRacerGamepad);
     if (game == &BraveFirefightersGame) {
         if (config::HikaruBraveMouseAim && !gui_is_open()) {
             // Absolute pointer aim, like touch: position inside the

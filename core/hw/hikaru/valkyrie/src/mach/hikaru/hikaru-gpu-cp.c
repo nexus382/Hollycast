@@ -2246,7 +2246,9 @@ I (0x101)
 		break;
 	case 9:
 		log = (inst[0] >> 16) & 0xFF;
-		POLY.static_mesh_precision = 1.0f / (1 << (0x8F - log - 2));
+		/* 901 encodes 2^(log - 0x8D), including scales above one. Integer
+		 * shifts cannot represent its full eight-bit exponent range. */
+		POLY.static_mesh_precision = scalbnf (1.0f, (int) log - 0x8D);
 		break;
 	default:
 		VK_ASSERT (0);
@@ -2277,7 +2279,7 @@ D (0x101)
 		break;
 	case 9:
 		log = (inst[0] >> 16) & 0xFF;
-		precision = 1.0f / (1 << (0x8F - log - 2));
+		precision = scalbnf (1.0f, (int) log - 0x8D);
 
 		UNHANDLED |= !!(inst[0] & 0xFF00F000);
 
@@ -2915,6 +2917,23 @@ int hikaru_vendor_test_uv_dispatch(hikaru_gpu_t *gpu, const uint32_t packet[8])
     if (opcode != 0x0d1 && opcode != 0x0e8 && opcode != 0x158 &&
         (opcode < 0x1b8 || opcode > 0x1bf)) return 0;
     uint32_t inst[8];
+    memcpy(inst, packet, sizeof(inst));
+    for (unsigned i = 0; i < NUMELEM(insns_desc); ++i) {
+        if (insns_desc[i].op == opcode) {
+            insns_desc[i].handler(gpu, inst);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Exercise 901 and every static-position alias through the production table. */
+int hikaru_vendor_test_static_mesh_dispatch(hikaru_gpu_t *gpu, const uint32_t packet[4])
+{
+    const unsigned opcode = packet[0] & 0x1ff;
+    if ((opcode != 0x101 || ((packet[0] >> 8) & 0xf) != 9) &&
+        (opcode < 0x12c || opcode > 0x12f)) return 0;
+    uint32_t inst[4];
     memcpy(inst, packet, sizeof(inst));
     for (unsigned i = 0; i < NUMELEM(insns_desc); ++i) {
         if (insns_desc[i].op == opcode) {

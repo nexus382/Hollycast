@@ -35,6 +35,82 @@ TEST_F(HikaruInputBindingsTest, NeutralAndUnloadedCabinetsHaveCenteredAxes)
     EXPECT_EQ(unloaded.analog[0], 0x8000);
 }
 
+TEST_F(HikaruInputBindingsTest, StarWarsLeversAreIndependentAndForwardIsLow)
+{
+    auto input = bind(&StarWarsRacerGame);
+    for (const auto axis : input.analog) EXPECT_EQ(axis, 0x8000);
+    controllers[0].stickY = -32768;
+    controllers[0].rightY = 32767;
+    controllers[0].stickX = 32767;
+    controllers[0].rightX = -32768;
+    controllers[1].stickY = 1234;
+    input = bind(&StarWarsRacerGame);
+    EXPECT_EQ(input.analog[0], 0);
+    EXPECT_EQ(input.analog[1], 0xffff);
+    controllers[0].stickY = 32767;
+    controllers[0].rightY = -32768;
+    input = bindCabinetInputs(&StarWarsRacerGame, controllers, false, false, true, true, 0, false);
+    EXPECT_EQ(input.analog[0], 0xffff);
+    EXPECT_EQ(input.analog[1], 0);
+    for (unsigned axis = 2; axis < 8; ++axis) EXPECT_EQ(input.analog[axis], 0x8000);
+}
+
+TEST_F(HikaruInputBindingsTest, StarWarsButtonsUseTheirCabinetSwitches)
+{
+    for (const auto binding : {std::pair<uint32_t, uint16_t>{DC_BTN_A, 0x0200},
+            {DC_BTN_B, 0x0100}, {DC_BTN_C, 0x0400}, {DC_BTN_X, 0x0800}, {DC_BTN_START, 0x8000}}) {
+        controllers[0].buttons = ~binding.first;
+        const auto input = bindCabinetInputs(&StarWarsRacerGame, controllers, false, false, true, true, 0, false);
+        EXPECT_EQ(input.players[0], binding.second);
+        EXPECT_EQ(input.players[1], 0);
+        EXPECT_EQ(input.coin[0], 0);
+    }
+    controllers[0].buttons = ~(DC_BTN_D | DC_DPAD2_DOWN | DC_DPAD2_UP);
+    const auto input = bind(&StarWarsRacerGame);
+    EXPECT_EQ(input.players[0], 0);
+    EXPECT_EQ(input.coin[0], 1);
+    EXPECT_EQ(input.test, 1);
+    EXPECT_EQ(input.service, 1);
+    controllers[0] = {};
+    controllers[1].buttons = 0;
+    const auto secondary = bind(&StarWarsRacerGame);
+    EXPECT_EQ(secondary.players[0], 0);
+    EXPECT_EQ(secondary.players[1], 0);
+    EXPECT_EQ(secondary.coin[0], 0);
+    EXPECT_EQ(secondary.coin[1], 0);
+    EXPECT_EQ(secondary.test, 0);
+    EXPECT_EQ(secondary.service, 0);
+}
+
+TEST_F(HikaruInputBindingsTest, StarWarsGamepadAliasesCanBeDisabledWithoutChangingTheLevers)
+{
+    for (const auto alias : {std::pair<uint32_t, uint16_t>{DC_BTN_Z, 0x0400},
+            {DC_BTN_Y, 0x0800}, {DC_DPAD_LEFT, 0x0400}, {DC_DPAD_RIGHT, 0x0800}}) {
+        controllers[0].buttons = ~alias.first;
+        EXPECT_EQ(bind(&StarWarsRacerGame).players[0], alias.second);
+        EXPECT_EQ(bindCabinetInputs(&StarWarsRacerGame, controllers, false, false, true, true, 0, false).players[0], 0);
+    }
+    controllers[0].buttons = UINT32_MAX;
+    controllers[0].leftTrigger = 0x7fff;
+    controllers[0].rightTrigger = 0x7fff;
+    EXPECT_EQ(bind(&StarWarsRacerGame).players[0], 0);
+    controllers[0].leftTrigger = 0x8000;
+    EXPECT_EQ(bind(&StarWarsRacerGame).players[0], 0x0200);
+    controllers[0].leftTrigger = 0;
+    controllers[0].rightTrigger = 0x8000;
+    EXPECT_EQ(bind(&StarWarsRacerGame).players[0], 0x0100);
+    controllers[0].leftTrigger = 0xffff;
+    EXPECT_EQ(bind(&StarWarsRacerGame).players[0], 0x0300);
+    EXPECT_EQ(bindCabinetInputs(&StarWarsRacerGame, controllers, false, false, true, true, 0, false).players[0], 0);
+    // The compatibility option belongs to this title, not the shared pad map.
+    controllers[0].buttons = ~(DC_BTN_Z | DC_DPAD_LEFT);
+    const auto nascar = bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true, 0, false);
+    const auto nascarWithOption = bindCabinetInputs(&SegaNascarGame, controllers, false, false, true, true, 0, true);
+    EXPECT_EQ(nascar.players[0], nascarWithOption.players[0]);
+    EXPECT_EQ(nascar.players[1], nascarWithOption.players[1]);
+    for (unsigned axis = 0; axis < 8; ++axis) EXPECT_EQ(nascar.analog[axis], nascarWithOption.analog[axis]);
+}
+
 TEST_F(HikaruInputBindingsTest, NascarCabinetServiceControlsUseThePrimaryController)
 {
     controllers[0].buttons = ~(DC_BTN_START | DC_BTN_D | DC_DPAD2_DOWN | DC_DPAD2_UP);

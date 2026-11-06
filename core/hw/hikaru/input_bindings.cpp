@@ -8,11 +8,31 @@ namespace hikaru {
 HikaruEngineInputs bindCabinetInputs(const GameDescriptor* game,
     const std::array<ControllerInputs, 2>& controllers,
     bool airTrixDpadBoard, bool planetDpadStick, bool virtualOn4TwinStick,
-    bool nascarGamepad, uint16_t previousNascarGear)
+    bool nascarGamepad, uint16_t previousNascarGear, bool starWarsGamepad)
 {
     HikaruEngineInputs input{};
     for (auto& axis : input.analog)
         axis = 0x8000;
+    if (game == &StarWarsRacerGame) {
+        const auto& pad = controllers[0];
+        const auto pressed = [&](uint32_t mask) { return (pad.buttons & mask) == 0; };
+        // The cabinet has two independent levers: analog 0/1, low when pushed
+        // forward. Preserve the signed stick endpoints and their neutral center.
+        input.analog[0] = uint16_t(int(pad.stickY) + 32768);
+        input.analog[1] = uint16_t(int(pad.rightY) + 32768);
+        const bool boost = pressed(DC_BTN_A) || (starWarsGamepad && pad.leftTrigger >= 0x8000);
+        const bool brake = pressed(DC_BTN_B) || (starWarsGamepad && pad.rightTrigger >= 0x8000);
+        const bool left = pressed(DC_BTN_C) || (starWarsGamepad && (pressed(DC_BTN_Z) || pressed(DC_DPAD_LEFT)));
+        const bool right = pressed(DC_BTN_X) || (starWarsGamepad && (pressed(DC_BTN_Y) || pressed(DC_DPAD_RIGHT)));
+        // The left button is wired to P1 Right and the right button to P1 Left.
+        input.players[0] = (pressed(DC_BTN_START) ? 0x8000 : 0)
+            | (boost ? 0x0200 : 0) | (brake ? 0x0100 : 0)
+            | (left ? 0x0400 : 0) | (right ? 0x0800 : 0);
+        input.coin[0] = pressed(DC_BTN_D);
+        input.test = pressed(DC_DPAD2_DOWN);
+        input.service = pressed(DC_DPAD2_UP);
+        return input;
+    }
     if (game == &SegaNascarGame) {
         const auto& pad = controllers[0];
         const auto pressed = [&](uint32_t mask) { return (pad.buttons & mask) == 0; };

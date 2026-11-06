@@ -419,21 +419,24 @@ int main(int argc, char **argv)
     HikaruEngineRoms sizes = {&byte, 0x200000, &byte, 0x4000000, &byte, 0x10000000};
     /* These must reject before reading ROM bytes or asking for a GL context. */
     reject((HikaruEngineGame)-1, &sizes, "Unsupported Hikaru game");
-    reject((HikaruEngineGame)5, &sizes, "Unsupported Hikaru game");
+    reject((HikaruEngineGame)6, &sizes, "Unsupported Hikaru game");
     reject(HIKARU_ENGINE_GAME_AIRTRIX, &sizes, "Invalid ROM sections");
     sizes.program_size = 0x800000; sizes.data_size = 0x8000000;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_PHARRIER, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_SGNASCAR, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_SWRACER, &sizes, "Invalid ROM sections");
     sizes.program_size = 0x4000000; sizes.data_size = 0x10000000 - 1;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_SGNASCAR, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_SWRACER, &sizes, "Invalid ROM sections");
     sizes.data_size = 0x10000000; sizes.program_size--;
     reject(HIKARU_ENGINE_GAME_BRAVEFF, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_VON4, &sizes, "Invalid ROM sections");
     reject(HIKARU_ENGINE_GAME_SGNASCAR, &sizes, "Invalid ROM sections");
+    reject(HIKARU_ENGINE_GAME_SWRACER, &sizes, "Invalid ROM sections");
     if (failures) return 1;
 
     if (SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL video: %s\n", SDL_GetError()); return 2; }
@@ -618,6 +621,44 @@ int main(int argc, char **argv)
     for (unsigned bank = 0; bank < 16; ++bank) {
         check_bus(board, 0x20 + bank, 0, (uint8_t)(0x50 + bank));
         check_bus(board, 0x20 + bank, 0xffffff, (uint8_t)(0x70 + bank));
+    }
+    hikaru_engine_destroy(engine);
+
+    /* Star Wars Racer has two sparse program pairs and sixteen 16 MiB SOP44
+     * data pairs. Read every bank to catch a packed EPROM stride or doubled
+     * data stride, including both program mirrors and the final data socket. */
+    memset(program, 0, roms.program_size);
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        program[bank * 0x1000000] = (uint8_t)(0x80 + bank);
+        program[bank * 0x1000000 + 0x7fffff] = (uint8_t)(0x88 + bank);
+    }
+    memset(data, 0, roms.data_size);
+    for (unsigned bank = 0; bank < 16; ++bank) {
+        data[bank * 0x1000000] = (uint8_t)(0x90 + bank);
+        data[bank * 0x1000000 + 0xffffff] = (uint8_t)(0xb0 + bank);
+    }
+    engine = hikaru_engine_create_game(HIKARU_ENGINE_GAME_SWRACER,
+        &roms, &mie, &protection, 0, 640, 480, 0, error, sizeof(error));
+    CHECK(engine != NULL);
+    if (!engine) { fprintf(stderr, "Star Wars Racer create: %s\n", error); goto cleanup; }
+    check_board(engine, "swracer", 4, 8, false);
+    check_state_roundtrip(engine);
+    board = (hikaru_t *)engine->machine;
+    CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
+    CHECK(board->eprom->ptr == program && board->maskrom->ptr == data);
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        check_bus(board, 0x10 + bank, 0, (uint8_t)(0x80 + bank));
+        check_bus(board, 0x10 + bank, 0x7fffff, (uint8_t)(0x88 + bank));
+        check_bus(board, 0x10 + bank, 0x800000, (uint8_t)(0x80 + bank));
+        check_bus(board, 0x10 + bank, 0xffffff, (uint8_t)(0x88 + bank));
+    }
+    for (unsigned bank = 0x12; bank <= 0x13; ++bank) {
+        check_bus(board, bank, 0, 0); /* Unpopulated program socket pairs. */
+        check_bus(board, bank, 0xffffff, 0);
+    }
+    for (unsigned bank = 0; bank < 16; ++bank) {
+        check_bus(board, 0x20 + bank, 0, (uint8_t)(0x90 + bank));
+        check_bus(board, 0x20 + bank, 0xffffff, (uint8_t)(0xb0 + bank));
     }
     hikaru_engine_destroy(engine);
 
