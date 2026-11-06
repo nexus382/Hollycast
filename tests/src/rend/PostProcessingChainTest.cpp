@@ -1481,6 +1481,98 @@ TEST(PostProcessingChainTest, ResolvesPassTargetsFromTheSharedFrameContract)
 	EXPECT_FALSE(postprocess::resolveTargetSize(pass, frame, width, height, error));
 }
 
+TEST(PostProcessingChainTest, CachedGeometryMatchesFreshResolutionAcrossFramesAndInvalidSizes)
+{
+	postprocess::ShaderPass pass;
+	pass.widthExpression = "max(1, SourceSize.x / 2)";
+	pass.heightExpression = "ceil(OutputSize.y / 3)";
+	pass.localSize = { 8, 4, 1 };
+	pass.dispatchExpressions[2] = "max(1, SourceSize.y / 32)";
+	postprocess::ShaderPassGeometry cached;
+	const std::array<postprocess::ShaderFrameInfo, 7> frames {{
+		{ 320, 240, 640, 480 }, { 320, 240, 640, 480, 99, true },
+		{ 640, 480, 1280, 720 }, { 0, 480, 1280, 720 },
+		{ 640, 480, 1280, 720 }, { 320, 240, 640, 0 }, { 320, 240, 640, 480 }
+	}};
+	for (const auto& frame : frames) {
+		SCOPED_TRACE(frame.sourceWidth);
+		SCOPED_TRACE(frame.viewportHeight);
+		std::string freshError, cachedError = "previous error";
+		int freshWidth = 0, freshHeight = 0, cachedWidth = 0, cachedHeight = 0;
+		const bool freshSize = postprocess::resolveTargetSize(pass, frame, freshWidth, freshHeight, freshError);
+		EXPECT_EQ(freshSize, cached.resolveTargetSize(pass, frame, cachedWidth, cachedHeight, cachedError));
+		EXPECT_EQ(freshError, cachedError);
+		if (freshSize) {
+			EXPECT_EQ(freshWidth, cachedWidth);
+			EXPECT_EQ(freshHeight, cachedHeight);
+		}
+		std::array<uint32_t, 3> freshGroups {}, cachedGroups {};
+		freshError.clear();
+		cachedError = "previous error";
+		const bool freshDispatch = postprocess::resolveShaderDispatchGroups(pass, frame, freshGroups, freshError);
+		EXPECT_EQ(freshDispatch, cached.resolveDispatchGroups(pass, frame, cachedGroups, cachedError));
+		EXPECT_EQ(freshError, cachedError);
+		if (freshDispatch)
+			EXPECT_EQ(freshGroups, cachedGroups);
+	}
+}
+
+TEST(PostProcessingChainTest, SummaryRetainsActivationAndFrameFailureSemantics)
+{
+	struct ResetStatus {
+		~ResetStatus() { postprocess::reportShaderChainStatus({}, {}); }
+	} resetStatus;
+	postprocess::ShaderParameter parameter;
+	parameter.name = "Gain";
+	parameter.maximum = 1.f;
+	postprocess::reportShaderChainStatus("active", {}, { parameter }, { "Main" }, 0);
+	const auto active = postprocess::getShaderChainStatusSummary();
+	EXPECT_EQ("active", active.activePath);
+	EXPECT_TRUE(active.error.empty());
+	EXPECT_EQ(1u, active.parameterCount);
+	EXPECT_TRUE(postprocess::setShaderChainParameter("Gain", 0.5f));
+	EXPECT_EQ(1u, postprocess::getShaderChainStatusSummary().parameterCount);
+	postprocess::reportShaderFrameStatus("active", "Temporary depth unavailable");
+	const auto frameFailure = postprocess::getShaderChainStatusSummary();
+	EXPECT_TRUE(frameFailure.frameError);
+	EXPECT_EQ("Temporary depth unavailable", frameFailure.error);
+	postprocess::reportShaderChainStatus("active", "Replacement rejected", { parameter });
+	const auto rejection = postprocess::getShaderChainStatusSummary();
+	EXPECT_FALSE(rejection.frameError);
+	EXPECT_EQ("Replacement rejected", rejection.error);
+	EXPECT_EQ("active", rejection.activePath);
+	EXPECT_EQ(1u, rejection.parameterCount);
+}
+
+TEST(PostProcessingChainTest, ExpandsDisplayBordersWithoutChangingNativePresetGeometry)
+{
+	postprocess::ShaderFrameInfo frame { 640, 480, 640, 480 };
+	frame.presentation = { 960, 540, 120, 0, 720, 540, { 0.25f, 0.f, 0.f, 1.f } };
+	postprocess::prepareShaderPresentation(frame, false);
+	EXPECT_FALSE(frame.presentationExpanded);
+	EXPECT_EQ(640, frame.viewportWidth);
+	EXPECT_EQ(480, frame.viewportHeight);
+	postprocess::prepareShaderPresentation(frame, true);
+	EXPECT_TRUE(frame.presentationExpanded);
+	EXPECT_EQ(960, frame.viewportWidth);
+	EXPECT_EQ(540, frame.viewportHeight);
+	EXPECT_EQ(640, frame.sourceWidth);
+	EXPECT_EQ(480, frame.sourceHeight);
+	EXPECT_TRUE(postprocess::shouldComposeDisplayInput(frame, false));
+	EXPECT_FALSE(postprocess::shouldComposeDisplayInput(frame, true));
+	frame = { 960, 540, 960, 540 };
+	frame.presentation = { 960, 540, 120, 0, 720, 540 };
+	postprocess::prepareShaderPresentation(frame, true);
+	EXPECT_TRUE(postprocess::shouldComposeDisplayInput(frame, false));
+	frame = { 640, 480, 640, 480 };
+	frame.presentation = { 640, 480, 0, 0, 640, 480 };
+	postprocess::prepareShaderPresentation(frame, true);
+	EXPECT_FALSE(frame.presentationExpanded);
+	EXPECT_FALSE(postprocess::shouldComposeDisplayInput(frame, false));
+	frame.presentation.x = 1;
+	EXPECT_FALSE(frame.presentation.hasBorders());
+}
+
 TEST(PostProcessingChainTest, ComposesOnlyNormalDisplayInputs)
 {
 	postprocess::ShaderFrameInfo frame { 640, 480, 1280, 960, 42, false };

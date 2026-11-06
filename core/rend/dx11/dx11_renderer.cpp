@@ -639,6 +639,14 @@ void DX11Renderer::displayFramebuffer()
 	performance_overlay::recordOutputViewport(viewportWidth, viewportHeight);
 #endif
 	bool presentationTransformApplied = false;
+	bool fullPresentation = false;
+	int presentationWidth = settings.display.width;
+	int presentationHeight = settings.display.height - getScaledTopInset();
+	if (shaderPreview) {
+		const auto layout = SettingsNew::shaderPreviewLayout(settings.display.width, settings.display.height, getScaledTopInset());
+		presentationWidth = layout.gameWidth;
+		presentationHeight = layout.gameHeight;
+	}
 	if (shaderChain) {
 		if (shaderDepthTexture.get() != depthTex.get()) {
 			shaderDepthView.reset();
@@ -655,12 +663,22 @@ void DX11Renderer::displayFramebuffer()
 					WARN_LOG(RENDERER, "Scene depth is unavailable for display shaders");
 			}
 		}
-		shaderChain->render(fbTextureView,
-				{ static_cast<int>(width), static_cast<int>(height),
+		postprocess::ShaderFrameInfo shaderFrame { static_cast<int>(width), static_cast<int>(height),
 						config::Rotate90 ? viewportHeight : viewportWidth,
 						config::Rotate90 ? viewportWidth : viewportHeight,
-						FrameCount, config::Rotate90, config::Rotate90 ? 1.f / aspectRatio : aspectRatio }, displayTexture, presentationTransformApplied,
+						FrameCount, config::Rotate90, config::Rotate90 ? 1.f / aspectRatio : aspectRatio };
+		// Fit in physical display coordinates after excluding the menu/pane.
+		// The legacy pre-rotation rectangle subtracts its inset after fitting.
+		int presentationDx = 0, presentationDy = 0;
+		getWindowboxDimensions(presentationWidth, presentationHeight, aspectRatio,
+				presentationDx, presentationDy, config::Rotate90);
+		shaderFrame.presentation = { presentationWidth, presentationHeight,
+				presentationDx, presentationDy,
+				presentationWidth - 2 * presentationDx, presentationHeight - 2 * presentationDy,
+				{ VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f } };
+		const bool processed = shaderChain->render(fbTextureView, shaderFrame, displayTexture, presentationTransformApplied,
 				sceneDepthValid ? shaderDepthView : ComPtr<ID3D11ShaderResourceView> {});
+		fullPresentation = processed && shaderChain->startsInDisplaySpace() && shaderFrame.presentation.hasBorders();
 	}
 
 	// Shader passes bind their own intermediate render targets. The final blit
@@ -716,6 +734,15 @@ void DX11Renderer::displayFramebuffer()
 		}
 	}
 	deviceContext->OMSetBlendState(blendStates.getState(false), nullptr, 0xffffffff);
+	if (fullPresentation) {
+		x = -1.f;
+		y = 1.f - (getScaledTopInset() + presentationHeight) * 2.f / settings.display.height;
+		w = presentationWidth * 2.f / settings.display.width;
+		h = presentationHeight * 2.f / settings.display.height;
+		x += (config::Rotate90 ? -shiftY : shiftX) * (shaderPreview ? static_cast<float>(previewWidth) / settings.display.width : 1.f);
+		y += (config::Rotate90 ? shiftX : shiftY) * (shaderPreview ? static_cast<float>(previewHeight) / settings.display.height : 1.f);
+		performance_overlay::recordOutputViewport(presentationWidth, presentationHeight);
+	}
 	quad->draw(displayTexture, samplers->getSampler(config::LinearInterpolation), nullptr, x, y, w, h,
 			config::Rotate90 && !presentationTransformApplied);
 #endif

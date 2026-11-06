@@ -854,18 +854,32 @@ bool OpenGLRenderer::renderLastFrame()
 	// here before the chain is recreated, so leave the unprocessed frame intact.
 	if (gl.shaderChain != nullptr)
 	{
+		postprocess::ShaderFrameInfo shaderFrame { sourceWidth, sourceHeight,
+				outwidth - dx * 2, outheight - dy * 2, FrameCount, config::Rotate90,
+				config::Rotate90 ? 1.f / gl.ofbo.aspectRatio : gl.ofbo.aspectRatio };
+		shaderFrame.presentation = { outwidth, outheight, dx, dy,
+				shaderFrame.viewportWidth, shaderFrame.viewportHeight,
+				{ VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f } };
 		if (GlFramebuffer *processed = gl.shaderChain->render(framebuffer->getTexture(),
-				{ sourceWidth, sourceHeight, outwidth - dx * 2, outheight - dy * 2,
-						FrameCount, config::Rotate90, config::Rotate90 ? 1.f / gl.ofbo.aspectRatio : gl.ofbo.aspectRatio }, presentationTransformApplied,
+				shaderFrame, presentationTransformApplied,
 				gl.ofbo2.ready ? 0 : gl.postProcessDepthTexture != 0
 						? gl.postProcessDepthTexture : framebuffer->getDepthTexture(),
 				gl.postProcessDepthWidth, gl.postProcessDepthHeight))
 		{
 			framebuffer = processed;
+			const bool fullPresentation = gl.shaderChain->startsInDisplaySpace() && shaderFrame.presentation.hasBorders();
 			// Display shifts are measured in source pixels. Scale them after a pass
 			// changes resolution so post-processing does not move the picture.
 			presentShiftX *= static_cast<float>(framebuffer->getWidth()) / sourceWidth;
 			presentShiftY *= static_cast<float>(framebuffer->getHeight()) / sourceHeight;
+			if (fullPresentation) {
+				// The final blit now spans the borders too. Keep shifts relative to
+				// the original picture rectangle, even if a pass resizes its output.
+				presentShiftX *= static_cast<float>(shaderFrame.viewportWidth) / outwidth;
+				presentShiftY *= static_cast<float>(shaderFrame.viewportHeight) / outheight;
+				dx = dy = 0;
+				performance_overlay::recordOutputViewport(outwidth, outheight);
+			}
 		}
 	}
 #endif

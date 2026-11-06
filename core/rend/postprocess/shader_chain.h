@@ -279,6 +279,18 @@ struct ShaderTechniqueGroup {
 
 // This is deliberately backend-neutral: it gives every renderer the same
 // size and frame inputs without leaking an API texture handle into the chain.
+struct ShaderPresentation {
+	int width = 0, height = 0;
+	int x = 0, y = 0, contentWidth = 0, contentHeight = 0;
+	std::array<float, 4> borderColor { 0.f, 0.f, 0.f, 1.f };
+	bool hasBorders() const {
+		return width > 0 && height > 0 && x >= 0 && y >= 0
+				&& contentWidth > 0 && contentHeight > 0
+				&& x <= width - contentWidth && y <= height - contentHeight
+				&& (x != 0 || y != 0 || contentWidth != width || contentHeight != height);
+	}
+};
+
 struct ShaderFrameInfo {
 	int sourceWidth = 0;
 	int sourceHeight = 0;
@@ -290,7 +302,13 @@ struct ShaderFrameInfo {
 	bool rotationPending = false;
 	// Display aspect can differ from the pixel ratio (for example a widescreen cheat).
 	float originalAspect = 0.f;
+	// Display effects filter the complete visible image, including BIOS/video
+	// borders. Native presets keep their original source and viewport contract.
+	ShaderPresentation presentation;
+	bool presentationExpanded = false;
 };
+
+void prepareShaderPresentation(ShaderFrameInfo& frame, bool startsInDisplaySpace);
 
 struct ShaderChainStatus {
 	std::string activePath;
@@ -300,6 +318,29 @@ struct ShaderChainStatus {
 	std::vector<ShaderParameter> parameters;
 	std::vector<std::string> techniques;
 	int selectedTechnique = -1;
+};
+
+// Status labels do not need to copy every control, range and choice label.
+struct ShaderChainStatusSummary {
+	std::string activePath;
+	std::string error;
+	bool frameError = false;
+	size_t parameterCount = 0;
+};
+
+// One cache belongs to one immutable compiled pass. Only successful geometry
+// results are retained; allocation, history selection and budgets stay dynamic.
+class ShaderPassGeometry {
+public:
+	bool resolveTargetSize(const ShaderPass& pass, const ShaderFrameInfo& frame,
+			int& width, int& height, std::string& error);
+	bool resolveDispatchGroups(const ShaderPass& pass, const ShaderFrameInfo& frame,
+			std::array<uint32_t, 3>& groups, std::string& error);
+private:
+	std::array<int, 4> targetKey {}, dispatchKey {};
+	std::array<uint32_t, 3> dispatchGroups {};
+	int targetWidth = 0, targetHeight = 0;
+	bool targetValid = false, dispatchValid = false;
 };
 
 struct SlangShaderSource {
@@ -405,6 +446,7 @@ bool resolveShaderPassInputs(ShaderChain& chain, size_t passIndex,
 // Backends publish a copy so UI code can report a rejected candidate without
 // reaching into renderer-specific state or racing the render thread.
 ShaderChainStatus getShaderChainStatus();
+ShaderChainStatusSummary getShaderChainStatusSummary();
 // Changes only when the published status or its parameter values change.
 // Renderers use this to avoid copying UI-facing vectors on every frame.
 uint64_t shaderChainStatusGeneration();

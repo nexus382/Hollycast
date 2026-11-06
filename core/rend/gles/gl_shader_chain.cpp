@@ -882,6 +882,9 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 				program.handle = gl_CompileAndLink(vertexShader.c_str(), fragmentShader.c_str(), &error);
 			}
 			program.pass = pass;
+			program.storageLocations.reserve(pass.storageBindings.size());
+			for (const auto& binding : pass.storageBindings)
+				program.storageLocations.push_back(glGetUniformLocation(program.handle, binding.first.c_str()));
 			program.sourceUniform = glGetUniformLocation(program.handle, "Source");
 			program.sourceSizeUniform = glGetUniformLocation(program.handle, "SourceSize");
 			program.originalSizeUniform = glGetUniformLocation(program.handle, "OriginalSize");
@@ -902,6 +905,16 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 						pass.layerIndex, parameter.type, parameter.defaultValue.values });
 			}
 
+			// Names and layer identities are fixed for this linked program. Retain
+			// indices rather than searching the entire host list on every frame.
+			for (ParameterUniform& uniform : program.parameters) {
+				const auto host = std::find_if(chain.parameters.begin(), chain.parameters.end(), [&](const auto& parameter) {
+					return !parameter.hostSource.empty() && parameter.name == uniform.name
+							&& parameter.layerIndex == uniform.layerIndex;
+				});
+				if (host != chain.parameters.end())
+					uniform.hostIndex = static_cast<uint32_t>(std::distance(chain.parameters.begin(), host));
+			}
 			GLuint textureUnit = 0;
 			bool hasSource = false;
 			for (const postprocess::SlangResource& resource : passSource->slangResources) {
@@ -1064,6 +1077,7 @@ bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string&
 	stencilTargets.clear();
 	displayInput.reset();
 	depthInput.reset();
+	displayDepthInput.reset();
 	mipmapInput.reset();
 	sourceHistory.clear();
 	error.clear();
@@ -1073,10 +1087,10 @@ bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string&
 void GlShaderChain::updateConfiguredChain()
 {
 	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
-	const std::string requestedLabel = postprocess::shaderSelectionLabel(requestedPaths);
 	const uint64_t generation = postprocess::shaderChainReloadGeneration();
 	if (requestedPaths == configuredPaths && generation == configuredGeneration)
 		return;
+	const std::string requestedLabel = postprocess::shaderSelectionLabel(requestedPaths);
 	// Present the loading notice before compilation blocks this render thread.
 	if (!requestedPaths.empty() && !postprocess::prepareShaderCompilation())
 		return;
@@ -1089,6 +1103,7 @@ void GlShaderChain::updateConfiguredChain()
 		targets.clear();
 		displayInput.reset();
 		depthInput.reset();
+		displayDepthInput.reset();
 		mipmapInput.reset();
 		sourceHistory.clear();
 		activePath.clear();
@@ -1119,14 +1134,14 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		bool& presentationTransformApplied, GLuint depthTexture, int depthWidth, int depthHeight)
 {
 	postprocess::ShaderFrameInfo frame = inputFrame;
-	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
-	if (stencilFrameSize != currentStencilSize) { stencilTargets.clear(); stencilFrameSize = currentStencilSize; }
-
 	presentationTransformApplied = false;
 	bool composedDisplayInput = false;
 	updateConfiguredChain();
 	if (programs.empty() || sourceTexture == 0 || !ensureResources())
 		return nullptr;
+	postprocess::prepareShaderPresentation(frame, startsInDisplaySpace());
+	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
+	if (stencilFrameSize != currentStencilSize) { stencilTargets.clear(); stencilFrameSize = currentStencilSize; }
 	FramebufferSrgbState framebufferSrgb(framebufferSrgbSupported);
 	// Copies and clears need every channel, including when the game renderer
 	// left a restricted mask on its final draw. glColorMask resets all attachments.
@@ -1167,8 +1182,10 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	if (targets.size() != programs.size())
 		targets.resize(programs.size());
 	postprocess::updateShaderHostParameters(hostParameters, frame);
-	for (auto& program : programs) for (auto& uniform : program.parameters)
-		for (const auto& host : hostParameters) if (!host.hostSource.empty() && host.name == uniform.name && host.layerIndex == uniform.layerIndex) uniform.values = host.values;
+	for (auto& program : programs)
+		for (auto& uniform : program.parameters)
+			if (uniform.hostIndex < hostParameters.size())
+				uniform.values = hostParameters[uniform.hostIndex].values;
 	GLuint inputTexture = sourceTexture;
 	GLuint originalTexture = sourceTexture;
 	bool inputHasMipmaps = false;
@@ -1304,6 +1321,17 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		displaySpaceReached = true;
 		if (!postprocess::shouldComposeDisplayInput(frame, false))
 			return true;
+		if (frame.presentationExpanded) {
+			uint64_t bytes = depthTargetBytes;
+			std::string error;
+			if (!postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
+					postprocess::ShaderTargetFormat::Default, {}, false, 1, bytes, error)
+					|| (needsDepth && !postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
+							postprocess::ShaderTargetFormat::Default, "R32_SFLOAT", false, 1, bytes, error))) {
+				postprocess::reportShaderFrameStatus(activePath, error);
+				return false;
+			}
+		}
 		if (displayInput == nullptr || displayInput->getWidth() != frame.viewportWidth
 				|| displayInput->getHeight() != frame.viewportHeight)
 			displayInput = std::make_unique<GlFramebuffer>(frame.viewportWidth, frame.viewportHeight, false, true);
@@ -1315,6 +1343,13 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		framebufferSrgb.set(false);
 		displayInput->bind();
 		glViewport(0, 0, frame.viewportWidth, frame.viewportHeight);
+		if (frame.presentationExpanded) {
+			const auto& presentation = frame.presentation;
+			glcache.ClearColor(presentation.borderColor[0], presentation.borderColor[1], presentation.borderColor[2], presentation.borderColor[3]);
+			glClear(GL_COLOR_BUFFER_BIT);
+			glViewport(presentation.x, frame.viewportHeight - presentation.y - presentation.contentHeight,
+					presentation.contentWidth, presentation.contentHeight);
+		}
 		glcache.UseProgram(frame.rotationPending ? copyRotateProgram : copyProgram);
 		glActiveTexture(GL_TEXTURE0);
 		glcache.InvalidateTextureBinding();
@@ -1338,6 +1373,34 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 		originalHeight = passFrame.sourceHeight;
 		if (depthInputRotated)
 			depthTexture = depthInput->getTexture();
+		if (frame.presentationExpanded && needsDepth) {
+#ifndef GLES2
+			if (!displayDepthInput || displayDepthInput->getWidth() != frame.viewportWidth
+					|| displayDepthInput->getHeight() != frame.viewportHeight)
+				displayDepthInput = std::make_unique<GlFramebuffer>(frame.viewportWidth, frame.viewportHeight, false, 0, GL_R32F, GL_RED, GL_FLOAT);
+			displayDepthInput->bind();
+			if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+				postprocess::reportShaderFrameStatus(activePath, "OpenGL cannot compose display depth.");
+				return false;
+			}
+			// Scene depth uses reverse Z: untouched display borders are at zero.
+			glcache.ClearColor(0.f, 0.f, 0.f, 1.f);
+			glClear(GL_COLOR_BUFFER_BIT);
+			glcache.UseProgram(copyProgram);
+			glcache.InvalidateTextureBinding();
+			glcache.BindTexture(GL_TEXTURE_2D, depthTexture);
+			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			if (copySourceUniform != -1) glUniform1i(copySourceUniform, 0);
+			vertexArray.bind(vertexBuffer.get());
+			glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+			GlVertexArray::unbind();
+			depthTexture = displayDepthInput->getTexture();
+#else
+			postprocess::reportShaderFrameStatus(activePath, "Display depth composition requires OpenGL or GLES 3.0.");
+			return false;
+#endif
+		}
 		composedDisplayInput = true;
 		return true;
 	};
@@ -1348,6 +1411,12 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	bool sizeDisplaySpaceReached = false;
 	uint64_t targetBytes = depthTargetBytes;
 	std::string targetBudgetError;
+	if (frame.presentationExpanded && needsDepth && !postprocess::accumulateShaderTargetBytes(
+			frame.viewportWidth, frame.viewportHeight, postprocess::ShaderTargetFormat::Default,
+			"R32_SFLOAT", false, 1, targetBytes, targetBudgetError)) {
+		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
+		return nullptr;
+	}
 	const auto displayBoundary = std::find_if(programs.begin(), programs.end(), [](const Program& program) {
 		return program.pass.composeDisplayInput;
 	});
@@ -1374,7 +1443,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			}
 		}
 		std::string error;
-		if (!postprocess::resolveTargetSize(programs[index].pass, sizeFrame,
+		if (!programs[index].geometry.resolveTargetSize(programs[index].pass, sizeFrame,
 				programs[index].targetWidth, programs[index].targetHeight, error)) {
 			postprocess::reportShaderFrameStatus(activePath, error);
 			return nullptr;
@@ -1699,9 +1768,12 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 				glBindSampler(resource.unit, resource.sampler == 0 ? 0
 						: sampleMipmaps ? resource.mipSampler : resource.sampler);
 #endif
-			if (resource.location != -1)
+			if (!program.resourceUnitsInitialized && resource.location != -1)
 				glUniform1i(resource.location, static_cast<GLint>(resource.unit));
 		}
+		// Uniform values belong to the linked program, unlike texture bindings.
+		// Mark completion only after every resource has passed validation.
+		program.resourceUnitsInitialized = true;
 		glActiveTexture(GL_TEXTURE0);
 		glcache.InvalidateTextureBinding();
 		if (program.sourceSizeUniform != -1)
@@ -1752,11 +1824,11 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			GLenum format, pixels, type; if (!glTargetFormat(formatPass, format, pixels, type, error)) return nullptr;
 			const auto& image = target->outputs[binding.second];
 			glBindImageTexture(unit, image->getTexture(), 0, image->target == GL_TEXTURE_3D || image->target == GL_TEXTURE_2D_ARRAY, 0, GL_READ_WRITE, format);
-			const GLint location = glGetUniformLocation(program.handle, binding.first.c_str()); if (location >= 0) glUniform1i(location, unit);
+			const GLint location = program.storageLocations[unit]; if (location >= 0) glUniform1i(location, unit);
 		}
 		if (program.pass.compute) {
 			std::array<uint32_t, 3> groups;
-			if (!postprocess::resolveShaderDispatchGroups(program.pass, passFrame, groups, error)) {
+			if (!program.geometry.resolveDispatchGroups(program.pass, passFrame, groups, error)) {
 				postprocess::reportShaderFrameStatus(activePath, error); return nullptr;
 			}
 			glDispatchCompute(groups[0], groups[1], groups[2]);
@@ -1818,6 +1890,7 @@ void GlShaderChain::term()
 	stencilTargets.clear();
 	displayInput.reset();
 	depthInput.reset();
+	displayDepthInput.reset();
 	mipmapInput.reset();
 	sourceHistory.clear();
 	vertexBuffer.reset();

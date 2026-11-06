@@ -218,7 +218,7 @@ private:
 	void InitImgui();
 	void DoSwapAutomation();
 	void DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-			bool presentationTransformApplied = false);
+			bool presentationTransformApplied = false, bool fullPresentation = false);
 	void pollGpuTiming();
 	vk::SurfaceKHR GetSurface() const { return *surface; }
 
@@ -308,6 +308,7 @@ private:
 	vk::Extent2D lastFrameExtent;
 	float lastFrameAR = 0.f;
 	bool lastFramePresentationTransformApplied = false;
+	bool lastFrameFullPresentation = false;
 
 	std::unique_ptr<VulkanOverlay> overlay;
 	std::vector<std::vector<std::unique_ptr<Deletable>>> inFlightObjects;

@@ -33,6 +33,7 @@ public:
 	GlFramebuffer *render(GLuint sourceTexture, const postprocess::ShaderFrameInfo& frame,
 			bool& presentationTransformApplied, GLuint depthTexture = 0, int depthWidth = 0, int depthHeight = 0);
 	bool hasActiveChain() const { return !programs.empty(); }
+	bool startsInDisplaySpace() const { return !programs.empty() && programs.front().pass.composeDisplayInput; }
 	void term();
 
 private:
@@ -48,6 +49,7 @@ private:
 		uint32_t layerIndex = 0;
 		postprocess::SlangParameterType type = postprocess::SlangParameterType::Float;
 		std::array<float, 16> values {};
+		uint32_t hostIndex = postprocess::InvalidShaderPass;
 	};
 	struct ResourceUniform {
 		GLint location = -1;
@@ -85,8 +87,11 @@ private:
 		GLint rotationUniform = -1;
 		bool displayGlsl = false;
 		bool nativeFxStages = false;
+		bool resourceUnitsInitialized = false;
 		std::vector<ParameterUniform> parameters;
 		std::vector<ResourceUniform> resources;
+		std::vector<GLint> storageLocations;
+		postprocess::ShaderPassGeometry geometry;
 		std::vector<bool> outputNeedsMipmaps;
 		uint32_t historyDepth = 1;
 		int targetWidth = 0;
@@ -150,6 +155,7 @@ private:
 	std::vector<MrtTargetRing> targets;
 	std::unique_ptr<GlFramebuffer> displayInput;
 	std::unique_ptr<GlFramebuffer> depthInput;
+	std::unique_ptr<GlFramebuffer> displayDepthInput;
 	std::unique_ptr<GlFramebuffer> mipmapInput;
 	std::vector<HistoryTarget> sourceHistory;
 	uint32_t sourceHistoryDepth = 1;

@@ -44,6 +44,7 @@ public:
 			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
 			bool& presentationTransformApplied, vk::Image depthImage = {}, vk::ImageView depthView = {});
 	void term();
+	bool startsInDisplaySpace() const { return !programs.empty() && programs.front().pass.composeDisplayInput; }
 
 private:
 	struct Target {
@@ -97,6 +98,7 @@ private:
 		std::vector<Binding> bindings;
 		std::vector<postprocess::SlangParameter> parameters;
 		std::vector<uint32_t> parameterIndices;
+		postprocess::ShaderPassGeometry geometry;
 		std::vector<bool> targetWasInitialized;
 		std::vector<vk::ImageMemoryBarrier> targetBarriers;
 		std::vector<vk::DescriptorImageInfo> imageInfos;
@@ -157,9 +159,10 @@ private:
 	vk::UniqueShaderModule copyFragmentShader;
 	vk::UniquePipeline copyPipeline;
 	vk::UniquePipeline copyRotatePipeline;
-	// Allocated only when a depth consumer needs the display rotation applied.
+	// Allocated only when depth needs display rotation or border composition.
 	vk::UniqueRenderPass depthRotateRenderPass;
 	vk::UniquePipeline depthRotatePipeline;
+	vk::UniquePipeline depthCopyPipeline;
 	std::unique_ptr<QuadBuffer> quadBuffer;
 	std::vector<std::vector<vk::UniqueDescriptorSet>> descriptorSets;
 	std::vector<vk::UniqueDescriptorSet> sourceDescriptorSets;

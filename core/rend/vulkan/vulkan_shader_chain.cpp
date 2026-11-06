@@ -733,7 +733,7 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 		program.targetWasInitialized.reserve(program.outputs.size());
 		program.targetBarriers.reserve(program.outputs.size());
 		program.imageInfos.reserve(program.bindings.size() + 1 + pass.storageBindings.size());
-		program.descriptorWrites.reserve(program.bindings.size() + 1 + pass.storageBindings.size());
+		program.descriptorWrites.reserve(program.bindings.size() + 2 + pass.storageBindings.size());
 		program.clearColors.assign(program.outputs.size(),
 				vk::ClearValue(vk::ClearColorValue(std::array<uint32_t, 4> { 0, 0, 0, 0 })));
 		program.blendBarriers.reserve(program.outputs.size());
@@ -770,10 +770,10 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 bool VulkanShaderChain::updateConfiguredChain()
 {
 	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
-	const std::string requestedLabel = postprocess::shaderSelectionLabel(requestedPaths);
 	const uint64_t generation = postprocess::shaderChainReloadGeneration();
 	if (requestedPaths == configuredPaths && generation == configuredGeneration)
 		return !programs.empty();
+	const std::string requestedLabel = postprocess::shaderSelectionLabel(requestedPaths);
 	auto releaseActiveResources = [&] {
 		if (programs.empty() && targets.empty() && sourceTargets.empty() && displayTargets.empty()
 				&& lookupTextures.empty() && descriptorSets.empty() && sourceDescriptorSets.empty()
@@ -793,6 +793,7 @@ bool VulkanShaderChain::updateConfiguredChain()
 		displayDescriptorSets.clear();
 		depthRotateDescriptorSets.clear();
 		depthRotatePipeline.reset();
+		depthCopyPipeline.reset();
 		depthRotateRenderPass.reset();
 		programs.clear();
 	};
@@ -1162,6 +1163,11 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView)
 {
 	postprocess::ShaderFrameInfo frame = inputFrame;
+	presentationTransformApplied = false;
+	bool composedDisplayInput = false;
+	if (!updateConfiguredChain() || !sourceImage || !sourceView || extent.width == 0 || extent.height == 0)
+		return false;
+	postprocess::prepareShaderPresentation(frame, startsInDisplaySpace());
 	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
 	if (stencilFrameSize != currentStencilSize) {
 		if (!targets.empty() || !sourceTargets.empty() || !displayTargets.empty()) {
@@ -1172,10 +1178,6 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		stencilFrameSize = currentStencilSize;
 	}
 
-	presentationTransformApplied = false;
-	bool composedDisplayInput = false;
-	if (!updateConfiguredChain() || !sourceImage || !sourceView || extent.width == 0 || extent.height == 0)
-		return false;
 	frame.frameCount = renderedFrames;
 	VulkanContext *context = VulkanContext::Instance();
 	vk::CommandBuffer commandBuffer = context->GetCurrentCommandBuffer();
@@ -1263,7 +1265,9 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			&& postprocess::shouldComposeDisplayInput(frame, false);
 	// R32F retains scene-depth precision; it uses four bytes per pixel, just like
 	// the default color format used by the shared target budget calculation.
-	if (rotateDepth && !postprocess::accumulateShaderTargetBytes(extent.height, extent.width,
+	if ((rotateDepth || (frame.presentationExpanded && needsDepth)) && !postprocess::accumulateShaderTargetBytes(
+			frame.presentationExpanded ? frame.viewportWidth : extent.height,
+			frame.presentationExpanded ? frame.viewportHeight : extent.width,
 			postprocess::ShaderTargetFormat::Default, {}, false, swapchainCopies, targetBytes, targetBudgetError)) {
 		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		return false;
@@ -1298,7 +1302,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		}
 		int width;
 		int height;
-		if (!postprocess::resolveTargetSize(program.pass, budgetFrame, width, height, targetBudgetError)) {
+		if (!program.geometry.resolveTargetSize(program.pass, budgetFrame, width, height, targetBudgetError)) {
 			postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 			return false;
 		}
@@ -1365,13 +1369,16 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 						vk::FramebufferCreateInfo({}, renderPass.get(), attachments,
 							displayExtent.width, displayExtent.height, 1));
 			}
-			const vk::ClearValue clearColor(vk::ClearColorValue(std::array<float, 4> { 0.f, 0.f, 0.f, 1.f }));
+			const vk::ClearValue clearColor(vk::ClearColorValue(frame.presentationExpanded
+					? frame.presentation.borderColor : std::array<float, 4> { 0.f, 0.f, 0.f, 1.f }));
 			commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(renderPass.get(), displayTarget.framebuffer.get(),
 					vk::Rect2D({}, displayExtent), clearColor), vk::SubpassContents::eInline);
 			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
 					frame.rotationPending ? copyRotatePipeline.get() : copyPipeline.get());
-			commandBuffer.setViewport(0, vk::Viewport(0.f, 0.f, static_cast<float>(displayExtent.width),
-					static_cast<float>(displayExtent.height), 0.f, 1.f));
+			commandBuffer.setViewport(0, frame.presentationExpanded
+					? vk::Viewport(static_cast<float>(frame.presentation.x), static_cast<float>(frame.presentation.y),
+							static_cast<float>(frame.presentation.contentWidth), static_cast<float>(frame.presentation.contentHeight), 0.f, 1.f)
+					: vk::Viewport(0.f, 0.f, static_cast<float>(displayExtent.width), static_cast<float>(displayExtent.height), 0.f, 1.f));
 			commandBuffer.setScissor(0, vk::Rect2D({}, displayExtent));
 			commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0,
 					displayDescriptorSets[imageIndex].get(), nullptr);
@@ -1383,7 +1390,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				generateMipmaps(commandBuffer, displayTarget, initialized);
 			displayTarget.renderedFrame = frame.frameCount;
 			displayTarget.initialized = true;
-			if (rotateDepth) {
+			if (rotateDepth || (frame.presentationExpanded && needsDepth)) {
 				// Apply the exact vertex transform used for color at the same graph
 				// boundary. Earlier raw-input passes still see the original depth.
 				if (!depthRotateRenderPass) {
@@ -1393,15 +1400,17 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 						throw std::runtime_error("Vulkan rotated depth requires sampled R32F color-attachment support.");
 					depthRotateRenderPass = createRenderPass({ vk::Format::eR32Sfloat });
 				}
-				if (!depthRotatePipeline)
+				if (rotateDepth && !depthRotatePipeline)
 					depthRotatePipeline = createPipeline(context->GetShaderManager()->GetQuadVertexShader(true),
 							copyFragmentShader.get(), depthRotateRenderPass.get(), postprocess::ShaderPass {}, 1);
+				if (!rotateDepth && !depthCopyPipeline)
+					depthCopyPipeline = createPipeline({}, copyFragmentShader.get(), depthRotateRenderPass.get(), postprocess::ShaderPass {}, 1);
 				if (depthRotateTargets.size() <= imageIndex)
 					depthRotateTargets.resize(imageIndex + 1);
 				if (depthRotateDescriptorSets.size() <= imageIndex)
 					depthRotateDescriptorSets.resize(imageIndex + 1);
 				Target& depthTarget = depthRotateTargets[imageIndex];
-				const vk::Extent2D depthExtent(extent.height, extent.width);
+				const vk::Extent2D depthExtent = frame.presentationExpanded ? displayExtent : vk::Extent2D(extent.height, extent.width);
 				ensureTarget(depthTarget, depthExtent, vk::Format::eR32Sfloat, false);
 				const vk::ImageMemoryBarrier depthBarrier(depthTarget.initialized ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags(),
 						vk::AccessFlagBits::eColorAttachmentWrite,
@@ -1421,11 +1430,15 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					depthTarget.framebuffer = context->GetDevice().createFramebufferUnique(vk::FramebufferCreateInfo({},
 							depthRotateRenderPass.get(), attachments, depthExtent.width, depthExtent.height, 1));
 				}
+				// Match the scene renderer's reverse-Z background depth.
+				const vk::ClearValue farDepth(vk::ClearColorValue(std::array<float, 4> { 0.f, 0.f, 0.f, 1.f }));
 				commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(depthRotateRenderPass.get(), depthTarget.framebuffer.get(),
-						vk::Rect2D({}, depthExtent), clearColor), vk::SubpassContents::eInline);
-				commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, depthRotatePipeline.get());
-				commandBuffer.setViewport(0, vk::Viewport(0.f, 0.f, static_cast<float>(depthExtent.width),
-						static_cast<float>(depthExtent.height), 0.f, 1.f));
+						vk::Rect2D({}, depthExtent), farDepth), vk::SubpassContents::eInline);
+				commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, rotateDepth ? depthRotatePipeline.get() : depthCopyPipeline.get());
+				commandBuffer.setViewport(0, frame.presentationExpanded
+						? vk::Viewport(static_cast<float>(frame.presentation.x), static_cast<float>(frame.presentation.y),
+								static_cast<float>(frame.presentation.contentWidth), static_cast<float>(frame.presentation.contentHeight), 0.f, 1.f)
+						: vk::Viewport(0.f, 0.f, static_cast<float>(depthExtent.width), static_cast<float>(depthExtent.height), 0.f, 1.f));
 				commandBuffer.setScissor(0, vk::Rect2D({}, depthExtent));
 				commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0,
 						depthRotateDescriptorSets[imageIndex].get(), nullptr);
@@ -1772,12 +1785,10 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		for (size_t parameterIndex = 0; parameterIndex < program.parameters.size(); ++parameterIndex) {
 			const postprocess::SlangParameter& parameter = program.parameters[parameterIndex];
 			const uint32_t components = parameterComponentCount(parameter.type);
-			std::copy_n(parameter.defaultValue.values.begin(), components,
-					parameterUniforms.parameters + parameterOffset);
 			const uint32_t configuredIndex = program.parameterIndices[parameterIndex];
-			if (configuredIndex < parameters.size())
-				std::copy_n(parameters[configuredIndex].values.begin(), components,
-						parameterUniforms.parameters + parameterOffset);
+			const auto& values = configuredIndex < parameters.size()
+					? parameters[configuredIndex].values : parameter.defaultValue.values;
+			std::copy_n(values.begin(), components, parameterUniforms.parameters + parameterOffset);
 			parameterOffset += components;
 		}
 		try {
@@ -1797,11 +1808,13 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			program.imageInfos.emplace_back(vk::Sampler(), targetSet.outputs[binding.second].renderView.get(), vk::ImageLayout::eGeneral);
 			program.descriptorWrites.emplace_back(descriptorSets[imageIndex][index].get(), MaxShaderInputs + 1 + i, 0, 1, vk::DescriptorType::eStorageImage, &program.imageInfos.back());
 		}
-		context->GetDevice().updateDescriptorSets(program.descriptorWrites, nullptr);
 		const vk::DescriptorBufferInfo parameterInfo(program.parameterBuffers[imageIndex]->buffer.get(),
 				0, sizeof(ShaderParameterUniforms));
-		context->GetDevice().updateDescriptorSets(vk::WriteDescriptorSet(descriptorSets[imageIndex][index].get(),
-				MaxShaderInputs, 0, vk::DescriptorType::eUniformBuffer, nullptr, parameterInfo), nullptr);
+		program.descriptorWrites.push_back(vk::WriteDescriptorSet(descriptorSets[imageIndex][index].get(),
+				MaxShaderInputs, 0, vk::DescriptorType::eUniformBuffer, nullptr, parameterInfo));
+		// The buffer info and image-info storage remain alive until this single
+		// synchronous update consumes every write, before any draw or dispatch.
+		context->GetDevice().updateDescriptorSets(program.descriptorWrites, nullptr);
 		if ((program.pass.preserveBackbuffer || program.pass.blendEnabled) && program.pass.updatesSource && !program.pass.renderState.clearRenderTargets) {
 			// ReShade blends against the current backbuffer. Populate the private
 			// target first, then load those pixels for the blended pass.
@@ -1855,7 +1868,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				0, sizeof(uniforms), &uniforms);
 		if (program.pass.compute) {
 			std::array<uint32_t, 3> groups;
-			if (!postprocess::resolveShaderDispatchGroups(program.pass, passFrame, groups, error)) {
+			if (!program.geometry.resolveDispatchGroups(program.pass, passFrame, groups, error)) {
 				postprocess::reportShaderFrameStatus(activePath, error); return false;
 			}
 			commandBuffer.dispatch(groups[0], groups[1], groups[2]);
@@ -1913,6 +1926,7 @@ void VulkanShaderChain::term()
 	programs.clear();
 	parameters.clear();
 	depthRotatePipeline.reset();
+	depthCopyPipeline.reset();
 	depthRotateRenderPass.reset();
 	copyRotatePipeline.reset();
 	copyPipeline.reset();

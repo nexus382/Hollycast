@@ -33,6 +33,7 @@ public:
 			ComPtr<ID3D11ShaderResourceView>& outputView, bool& presentationTransformApplied,
 			const ComPtr<ID3D11ShaderResourceView>& depthView = {});
 	void term();
+	bool startsInDisplaySpace() const { return !programs.empty() && programs.front().pass.composeDisplayInput; }
 
 private:
 	struct ShaderFrameUniforms {
@@ -88,6 +89,11 @@ private:
 		std::vector<uint32_t> parameterIndices;
 		std::vector<ComPtr<ID3D11ShaderResourceView>> resourceViews;
 		std::vector<ComPtr<ID3D11SamplerState>> samplers;
+		// Refresh non-owning pointers before every use; resizing replaces views.
+		std::vector<ID3D11ShaderResourceView *> computeViews;
+		std::vector<ID3D11SamplerState *> computeSamplers;
+		std::vector<ID3D11UnorderedAccessView *> storageViews;
+		postprocess::ShaderPassGeometry geometry;
 		std::vector<bool> outputNeedsMipmaps;
 		std::vector<DXGI_FORMAT> outputFormats;
 		bool displayGlsl = false;
@@ -126,6 +132,7 @@ private:
 	std::vector<PassTargets> targets;
 	Target displayInput;
 	Target depthInput;
+	Target displayDepthInput;
 	ComPtr<ID3D11PixelShader> depthCopyShader;
 	ComPtr<ID3D11Buffer> computeConstants;
 	Target mipmapSource;

@@ -98,20 +98,167 @@ protected:
 		glcache.ClearColor(0.f, 0.f, 1.f, 1.f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		const GLboolean srgbEnabled = glIsEnabled(GL_FRAMEBUFFER_SRGB);
-		GlFramebuffer *output = renderer.render(input.getTexture(), frame, transformed);
-		ASSERT_NE(nullptr, output) << postprocess::getShaderChainStatus().error;
-		EXPECT_EQ(expectComposed, transformed);
-		EXPECT_EQ(srgbEnabled, glIsEnabled(GL_FRAMEBUFFER_SRGB));
-		EXPECT_EQ(frame.viewportWidth, output->getWidth());
-		EXPECT_EQ(frame.viewportHeight, output->getHeight());
-		output->bind();
-		std::array<unsigned char, 4> pixel {};
-		glReadPixels(output->getWidth() / 2, output->getHeight() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
-		for (unsigned channel = 0; channel < pixel.size(); ++channel)
-			EXPECT_NEAR(expected[channel], pixel[channel], 1) << "channel " << channel;
-		EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+		// Exercise retained program uniforms and target reuse after the first draw.
+		for (unsigned draw = 0; draw < 3; ++draw) {
+			SCOPED_TRACE(draw);
+			GlFramebuffer *output = renderer.render(input.getTexture(), frame, transformed);
+			ASSERT_NE(nullptr, output) << postprocess::getShaderChainStatus().error;
+			EXPECT_EQ(expectComposed, transformed);
+			EXPECT_EQ(srgbEnabled, glIsEnabled(GL_FRAMEBUFFER_SRGB));
+			EXPECT_EQ(frame.viewportWidth, output->getWidth());
+			EXPECT_EQ(frame.viewportHeight, output->getHeight());
+			output->bind();
+			std::array<unsigned char, 4> pixel {};
+			glReadPixels(output->getWidth() / 2, output->getHeight() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+			for (unsigned channel = 0; channel < pixel.size(); ++channel)
+				EXPECT_NEAR(expected[channel], pixel[channel], 1) << "channel " << channel;
+			EXPECT_EQ(static_cast<GLenum>(GL_NO_ERROR), glGetError());
+		}
 	}
 };
+
+TEST_F(OpenGLShaderChainTest, KeepsHostBindingsAndLiveEditsAcrossFramesAndRejectedReloads)
+{
+	struct ClearStatus {
+		~ClearStatus() { postprocess::reportShaderChainStatus({}, {}); }
+	} clearStatus;
+	const auto effect = writeShader("live.fx",
+			"uniform int HostFrame < source = \"framecount\"; >;\n"
+			"uniform float Gain < ui_min = 0.0; ui_max = 1.0; > = 0.25;\n"
+			"float4 Pixel() : SV_Target { return float4((HostFrame % 4) / 4.0, Gain, 0.0, 1.0); }\n"
+			"technique Main { pass { PixelShader = Pixel; } }\n");
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(effect, chain, error)) << error;
+	GlShaderChain renderer;
+	bool transformed = false;
+	const postprocess::ShaderFrameInfo frame { 8, 8, 8, 8 };
+	renderer.render(0, frame, transformed);
+	ASSERT_TRUE(renderer.activate(chain, error)) << error;
+	// Direct activation bypasses updateConfiguredChain's status publication.
+	postprocess::reportShaderChainStatus({}, {}, chain.parameters);
+	GlFramebuffer input(8, 8, false, true);
+	input.bind();
+	glcache.ClearColor(0.f, 0.f, 1.f, 1.f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	for (unsigned draw = 0; draw < 4; ++draw) {
+		SCOPED_TRACE(draw);
+		if (draw == 1)
+			ASSERT_TRUE(postprocess::setShaderChainParameter("Gain", 0.5f));
+		if (draw == 2) {
+			auto rejected = chain;
+			rejected.sources[0].fragment = "invalid shader source";
+			EXPECT_FALSE(renderer.activate(rejected, error));
+		}
+		auto output = renderer.render(input.getTexture(), frame, transformed);
+		ASSERT_NE(nullptr, output);
+		output->bind();
+		std::array<unsigned char, 4> pixel {};
+		glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+		EXPECT_NEAR(draw * 255.f / 4.f, pixel[0], 1);
+		EXPECT_NEAR(draw == 0 ? 64 : 128, pixel[1], 1);
+		EXPECT_EQ(0, pixel[2]);
+		EXPECT_EQ(255, pixel[3]);
+	}
+	ASSERT_TRUE(renderer.activate(chain, error)) << error;
+	postprocess::reportShaderChainStatus({}, {}, chain.parameters);
+	auto output = renderer.render(input.getTexture(), frame, transformed);
+	ASSERT_NE(nullptr, output);
+	output->bind();
+	std::array<unsigned char, 4> pixel {};
+	glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+	EXPECT_EQ(0, pixel[0]);
+	EXPECT_NEAR(64, pixel[1], 1);
+}
+
+TEST_F(OpenGLShaderChainTest, FiltersBordersWithoutStretchingThePictureAcrossRotations)
+{
+	const auto effect = writeShader("borders.glsl", "void main() { SetOutput(Sample() + vec4(0.25, 0.0, 0.0, 0.0)); }\n");
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(effect, chain, error)) << error;
+	GlShaderChain renderer;
+	postprocess::ShaderFrameInfo frame { 8, 8, 8, 8 };
+	frame.presentation = { 16, 8, 4, 0, 8, 8, { 0.25f, 0.f, 0.f, 1.f } };
+	bool transformed = false;
+	renderer.render(0, frame, transformed);
+	ASSERT_TRUE(renderer.activate(chain, error)) << error;
+	GlFramebuffer input(8, 8, false, true);
+	input.bind();
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glcache.ClearColor(0.f, 0.f, 1.f, 1.f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(0, 0, 4, 8);
+	glcache.ClearColor(0.f, 1.f, 0.f, 1.f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDisable(GL_SCISSOR_TEST);
+	glcache.Reset();
+	for (bool rotated : { false, true, false }) {
+		SCOPED_TRACE(rotated);
+		frame.rotationPending = rotated;
+		auto output = renderer.render(input.getTexture(), frame, transformed);
+		ASSERT_NE(nullptr, output) << postprocess::getShaderChainStatus().error;
+		EXPECT_TRUE(transformed);
+		EXPECT_EQ(16, output->getWidth());
+		EXPECT_EQ(8, output->getHeight());
+		output->bind();
+		auto expectPixel = [](int x, int y, const std::array<int, 4>& expected) {
+			std::array<unsigned char, 4> pixel {};
+			glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+			for (unsigned channel = 0; channel < pixel.size(); ++channel)
+				EXPECT_NEAR(expected[channel], pixel[channel], 1) << "channel " << channel;
+		};
+		expectPixel(1, 4, { 128, 0, 0, 255 });
+		expectPixel(14, 4, { 128, 0, 0, 255 });
+		expectPixel(rotated ? 8 : 6, rotated ? 2 : 4, { 64, 255, 0, 255 });
+		expectPixel(rotated ? 8 : 10, rotated ? 6 : 4, { 64, 0, 255, 255 });
+	}
+}
+
+TEST_F(OpenGLShaderChainTest, ComposesDepthWithFarValuesInTheDisplayBorders)
+{
+	const auto effect = writeShader("border-depth.fx",
+			"texture2D DepthTex : DEPTH; sampler2D ReadDepth { Texture = DepthTex; MinFilter = POINT; MagFilter = POINT; };\n"
+			"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return float4(tex2D(ReadDepth, uv).rrr, 1.0); }\n"
+			"technique Main { pass { PixelShader = Pixel; } }\n");
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(effect, chain, error)) << error;
+	GlShaderChain renderer;
+	postprocess::ShaderFrameInfo frame { 8, 8, 8, 8 };
+	frame.presentation = { 16, 8, 4, 0, 8, 8 };
+	bool transformed = false;
+	renderer.render(0, frame, transformed);
+	ASSERT_TRUE(renderer.activate(chain, error)) << error;
+	GlFramebuffer input(8, 8, false, true);
+	GlFramebuffer depth(8, 8, false, 0, GL_R32F, GL_RED, GL_FLOAT);
+	depth.bind();
+	glcache.ClearColor(0.25f, 0.f, 0.f, 1.f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(0, 0, 4, 8);
+	glcache.ClearColor(0.75f, 0.f, 0.f, 1.f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDisable(GL_SCISSOR_TEST);
+	glcache.Reset();
+	for (bool rotated : { false, true }) {
+		frame.rotationPending = rotated;
+		auto output = renderer.render(input.getTexture(), frame, transformed, depth.getTexture(), 8, 8);
+		ASSERT_NE(nullptr, output) << postprocess::getShaderChainStatus().error;
+		output->bind();
+		auto expectDepth = [](int x, int y, int expected) {
+			std::array<unsigned char, 4> pixel {};
+			glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+			for (unsigned channel = 0; channel < 3; ++channel)
+				EXPECT_NEAR(expected, pixel[channel], 1);
+		};
+		expectDepth(1, 4, 0);
+		expectDepth(14, 4, 0);
+		expectDepth(rotated ? 8 : 6, rotated ? 2 : 4, 191);
+		expectDepth(rotated ? 8 : 10, rotated ? 6 : 4, 64);
+	}
+}
 
 TEST_F(OpenGLShaderChainTest, CopiesGameInputBeforeGeneratingMipmaps)
 {

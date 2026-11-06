@@ -1260,7 +1260,7 @@ void VulkanContext::Present() noexcept
 		}
 }
 
-static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspectRatio)
+static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspectRatio, bool includeBorders = false)
 {
 	const int topInset = getScaledTopInset();
 	int drawableWidth = outputWidth;
@@ -1272,13 +1272,14 @@ static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspect
 	}
 	int dx = 0;
 	int dy = 0;
-	getWindowboxDimensions(drawableWidth, drawableHeight, aspectRatio, dx, dy, config::Rotate90);
+	if (!includeBorders)
+		getWindowboxDimensions(drawableWidth, drawableHeight, aspectRatio, dx, dy, config::Rotate90);
 	return vk::Rect2D(vk::Offset2D(dx, dy + topInset),
 			vk::Extent2D(drawableWidth - dx * 2, drawableHeight - dy * 2));
 }
 
 void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-		bool presentationTransformApplied)
+		bool presentationTransformApplied, bool fullPresentation)
 {
 	QuadVertex vtx[4] {
 		{ -1, -1, 0, 0, 0 },
@@ -1304,7 +1305,7 @@ void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& exten
 	else
 		quadPipeline->BindPipeline(commandBuffer);
 
-	const vk::Rect2D presentRect = getPresentRect(width, height, aspectRatio);
+	const vk::Rect2D presentRect = getPresentRect(width, height, aspectRatio, fullPresentation);
 #ifndef LIBRETRO
 	performance_overlay::recordOutputViewport(presentRect.extent.width, presentRect.extent.height);
 #endif
@@ -1347,6 +1348,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 	lastFrameExtent = extent;
 	lastFrameAR = aspectRatio;
 	bool presentationTransformApplied = image ? false : lastFramePresentationTransformApplied;
+	bool fullPresentation = image ? false : lastFrameFullPresentation;
 
 	if (imageView && IsValid())
 	{
@@ -1357,21 +1359,29 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 			if (image && shaderChain) {
 				vk::ImageView processedView;
 				const vk::Rect2D presentRect = getPresentRect(width, height, aspectRatio);
+				const vk::Rect2D fullRect = getPresentRect(width, height, aspectRatio, true);
+				postprocess::ShaderFrameInfo shaderFrame { static_cast<int>(extent.width), static_cast<int>(extent.height),
+						static_cast<int>(presentRect.extent.width), static_cast<int>(presentRect.extent.height),
+						static_cast<uint32_t>(FrameCount), config::Rotate90, config::Rotate90 ? 1.f / aspectRatio : aspectRatio };
+				shaderFrame.presentation = { static_cast<int>(fullRect.extent.width), static_cast<int>(fullRect.extent.height),
+						presentRect.offset.x - fullRect.offset.x, presentRect.offset.y - fullRect.offset.y,
+						shaderFrame.viewportWidth, shaderFrame.viewportHeight,
+						{ VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f } };
 				processed = shaderChain->render(image, imageView, extent,
-						{ static_cast<int>(extent.width), static_cast<int>(extent.height),
-								static_cast<int>(presentRect.extent.width), static_cast<int>(presentRect.extent.height),
-								static_cast<uint32_t>(FrameCount), config::Rotate90,
-								config::Rotate90 ? 1.f / aspectRatio : aspectRatio }, processedView,
+						shaderFrame, processedView,
 						presentationTransformApplied, depthImage, depthView);
+				fullPresentation = processed && shaderChain->startsInDisplaySpace() && shaderFrame.presentation.hasBorders();
 				if (processed)
 					imageView = processedView;
 				if (processed && presentationTransformApplied)
-					drawExtent = presentRect.extent;
+					drawExtent = fullPresentation ? fullRect.extent : presentRect.extent;
 			}
 			lastFrameView = imageView;
 			lastFrameExtent = drawExtent;
-			lastFrameAR = aspectRatio;
+			lastFrameAR = processed && presentationTransformApplied
+					? static_cast<float>(drawExtent.width) / drawExtent.height : aspectRatio;
 			lastFramePresentationTransformApplied = presentationTransformApplied;
+			lastFrameFullPresentation = fullPresentation;
 			auto overlayCmdBuffer = PrepareOverlay(config::FloatVMUs, true);
 			gui_draw_osd();
 			if (GetVendorID() == VulkanContext::VENDOR_NVIDIA && image && !processed)
@@ -1396,7 +1406,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 			BeginRenderPass();
 
 			if (lastFrameView) // Might have been nullified if swap chain recreated
-				DrawFrame(imageView, drawExtent, aspectRatio, presentationTransformApplied);
+				DrawFrame(imageView, drawExtent, aspectRatio, presentationTransformApplied, fullPresentation);
 
 			DrawOverlay(settings.display.uiScale, config::FloatVMUs, true);
 			imguiDriver->renderDrawData(ImGui::GetDrawData(), false);
@@ -1413,7 +1423,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 void VulkanContext::PresentLastFrame()
 {
 	if (lastFrameView && IsValid())
-		DrawFrame(lastFrameView, lastFrameExtent, lastFrameAR, lastFramePresentationTransformApplied);
+		DrawFrame(lastFrameView, lastFrameExtent, lastFrameAR, lastFramePresentationTransformApplied, lastFrameFullPresentation);
 }
 
 void VulkanContext::term()
@@ -1674,6 +1684,8 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 {
 	if (!lastFrameView)
 		return false;
+	// The retained shader output may already include the display rotation.
+	const bool rotateAtCapture = config::Rotate90 && !lastFramePresentationTransformApplied;
 
 	if (width != 0) {
 		height = width / lastFrameAR;
@@ -1685,7 +1697,7 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 	{
 		width = lastFrameExtent.width;
 		height = lastFrameExtent.height;
-		if (config::Rotate90)
+		if (rotateAtCapture)
 			std::swap(width, height);
 		// We need square pixels for PNG
 		int w = lastFrameAR * height;
@@ -1736,7 +1748,7 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 			vk::SubpassContents::eInline);
 
 	// Pipeline
-	QuadPipeline pipeline(true, config::Rotate90);
+	QuadPipeline pipeline(true, rotateAtCapture);
 	pipeline.Init(shaderManager.get(), *renderPass, 0);
 	pipeline.BindPipeline(*commandBuffer);
 

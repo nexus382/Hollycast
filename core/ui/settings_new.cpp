@@ -6493,10 +6493,10 @@ static bool previewMatchesActiveShader()
 {
 	if (shaderActivationPending() || g_shaderPreview.paths.empty())
 		return false;
-	const postprocess::ShaderChainStatus status = postprocess::getShaderChainStatus();
+	const postprocess::ShaderChainStatusSummary status = postprocess::getShaderChainStatusSummary();
 	return (status.error.empty() || status.frameError) && !status.activePath.empty()
 			&& status.activePath == postprocess::shaderSelectionLabel(g_shaderPreview.paths)
-			&& status.parameters.size() == g_shaderPreview.chain.parameters.size();
+			&& status.parameterCount == g_shaderPreview.chain.parameters.size();
 }
 
 static void shaderTextWrapped(const ImVec4& color, const char *format, ...)
@@ -6581,7 +6581,7 @@ static void renderShaderActivationStatus(bool compact = false)
 		return;
 	}
 
-	const postprocess::ShaderChainStatus status = postprocess::getShaderChainStatus();
+	const postprocess::ShaderChainStatusSummary status = postprocess::getShaderChainStatusSummary();
 	if (!status.error.empty())
 		shaderTextWrapped(ImVec4(1.f, .35f, .35f, 1.f), status.frameError ? T("Frame unavailable: %s") : T("Rejected: %s"), status.error.c_str());
 	else if (status.activePath == postprocess::shaderSelectionLabel(g_shaderPreview.paths)) {

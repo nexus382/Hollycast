@@ -1398,6 +1398,12 @@ ShaderChainStatus getShaderChainStatus()
 	return status;
 }
 
+ShaderChainStatusSummary getShaderChainStatusSummary()
+{
+	std::lock_guard<std::mutex> lock(statusMutex);
+	return { status.activePath, status.error, status.frameError, status.parameters.size() };
+}
+
 uint64_t shaderChainStatusGeneration()
 {
 	return statusGeneration.load(std::memory_order_acquire);
@@ -1816,8 +1822,17 @@ std::string serializeShaderTechniqueSelections(const std::vector<ShaderTechnique
 bool shouldComposeDisplayInput(const ShaderFrameInfo& frame, bool wantsUnscaledInput)
 {
 	return !wantsUnscaledInput && frame.viewportWidth > 0 && frame.viewportHeight > 0
-			&& (frame.rotationPending || frame.sourceWidth != frame.viewportWidth
+			&& (frame.presentationExpanded || frame.rotationPending || frame.sourceWidth != frame.viewportWidth
 					|| frame.sourceHeight != frame.viewportHeight);
+}
+
+void prepareShaderPresentation(ShaderFrameInfo& frame, bool startsInDisplaySpace)
+{
+	frame.presentationExpanded = startsInDisplaySpace && frame.presentation.hasBorders();
+	if (frame.presentationExpanded) {
+		frame.viewportWidth = frame.presentation.width;
+		frame.viewportHeight = frame.presentation.height;
+	}
 }
 
 bool parseSlangPreset(const std::string& presetText, const std::string& presetPath,

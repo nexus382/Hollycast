@@ -24,12 +24,14 @@ protected:
 	std::string previousTechnique = config::PostProcessShaderTechnique.get();
 	std::string previousDirectory = config::PostProcessShaderDirectory.get();
 	std::vector<std::string> previousPaths = config::PostProcessShaders.get();
+	std::string previousPath = config::PostProcessShader.get();
 
 	void SetUp() override { std::filesystem::create_directories(directory); }
 	void TearDown() override {
 		config::PostProcessShaderTechnique.get() = previousTechnique;
 		config::PostProcessShaderDirectory.get() = previousDirectory;
 		config::PostProcessShaders.get() = previousPaths;
+		config::PostProcessShader.get() = previousPath;
 		std::error_code error;
 		std::filesystem::remove_all(directory, error);
 	}
@@ -70,6 +72,26 @@ TEST_F(ShaderLayerTest, InstallsTheCompleteReleaseShaderLibrary)
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "Textures/crt-newpixie/crtframe.png"));
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "Textures/UIMask.png"));
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "LICENSES.txt"));
+}
+
+TEST_F(ShaderLayerTest, LibraryInstallationLeavesFreshDefaultsOffAndPreservesSelections)
+{
+	config::PostProcessShader.reset();
+	config::PostProcessShaders.reset();
+	EXPECT_TRUE(postprocess::configuredShaderPaths().empty());
+	std::string error;
+	const auto library = directory / "shaders";
+	ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+	EXPECT_TRUE(postprocess::configuredShaderPaths().empty());
+	const std::vector<std::string> selected {
+		(library / "crt-lottes.glsl").string(), (library / "simple-brightness.glsl").string()
+	};
+	config::PostProcessShaders.get() = selected;
+	config::PostProcessShader.get() = (library / "scanlines.glsl").string();
+	ASSERT_TRUE(postprocess::installBundledShaders(library.string(), error)) << error;
+	EXPECT_EQ(selected, postprocess::configuredShaderPaths());
+	config::PostProcessShaders.get().clear();
+	EXPECT_EQ((std::vector<std::string> { config::PostProcessShader.get() }), postprocess::configuredShaderPaths());
 }
 
 TEST_F(ShaderLayerTest, PreservesUserShadersAndRepairsMissingBundledAssets)

@@ -438,6 +438,42 @@ bool resolveShaderDispatchGroups(const ShaderPass &pass, const ShaderFrameInfo &
 	return true;
 }
 
+bool ShaderPassGeometry::resolveTargetSize(const ShaderPass& pass, const ShaderFrameInfo& frame,
+		int& width, int& height, std::string& error)
+{
+	const std::array<int, 4> key { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
+	if (!targetValid || targetKey != key) {
+		int resolvedWidth, resolvedHeight;
+		if (!postprocess::resolveTargetSize(pass, frame, resolvedWidth, resolvedHeight, error))
+			return false;
+		targetKey = key;
+		targetWidth = resolvedWidth;
+		targetHeight = resolvedHeight;
+		targetValid = true;
+	}
+	width = targetWidth;
+	height = targetHeight;
+	error.clear();
+	return true;
+}
+
+bool ShaderPassGeometry::resolveDispatchGroups(const ShaderPass& pass, const ShaderFrameInfo& frame,
+		std::array<uint32_t, 3>& groups, std::string& error)
+{
+	const std::array<int, 4> key { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
+	if (!dispatchValid || dispatchKey != key) {
+		std::array<uint32_t, 3> resolved;
+		if (!postprocess::resolveShaderDispatchGroups(pass, frame, resolved, error))
+			return false;
+		dispatchKey = key;
+		dispatchGroups = resolved;
+		dispatchValid = true;
+	}
+	groups = dispatchGroups;
+	error.clear();
+	return true;
+}
+
 std::string canonicalShaderFormat(const std::string &value)
 {
 	std::string name = value;

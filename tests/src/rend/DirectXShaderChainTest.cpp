@@ -11,7 +11,9 @@
 #include "imgui.h"
 #include "ui/gui.h"
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -120,6 +122,12 @@ protected:
 			initializeGraphics();
 			if (!HasFatalFailure()) check();
 			TearDown();
+			// GTest's parent captures stderr, while ordinary assertions write to
+			// stdout. Retain the actual pixel failure when a child exits with 1.
+			const auto *result = testing::UnitTest::GetInstance()->current_test_info()->result();
+			for (int index = 0; index < result->total_part_count(); ++index)
+				if (result->GetTestPartResult(index).failed())
+					std::fprintf(stderr, "%s\n", result->GetTestPartResult(index).summary());
 			std::exit(HasFailure() ? 1 : 0);
 		}, testing::ExitedWithCode(0), "");
 	}
@@ -131,7 +139,8 @@ protected:
 	}
 
 	void checkPattern(const std::vector<std::string>& paths, bool expectCopy = false,
-			const std::optional<std::array<int, 3>>& expectedColor = std::nullopt) {
+			const std::optional<std::array<int, 3>>& expectedColor = std::nullopt,
+			const postprocess::ShaderPresentation& presentation = {}) {
 		const std::string label = postprocess::shaderSelectionLabel(paths);
 		SCOPED_TRACE(label);
 		config::PostProcessShaders.get() = paths;
@@ -145,9 +154,14 @@ protected:
 		chain.init(context->getDevice(), context->getDeviceContext(), quad.get());
 		ComPtr<ID3D11ShaderResourceView> output;
 		bool transformed = false;
-		for (unsigned frame = 0; frame < 3; ++frame)
-			ASSERT_TRUE(chain.render(inputView, { 320, 240, 640, 480, frame }, output, transformed, depthView))
+		for (unsigned frame = 0; frame < 3; ++frame) {
+			postprocess::ShaderFrameInfo frameInfo { 320, 240,
+					presentation.hasBorders() ? presentation.contentWidth : 640,
+					presentation.hasBorders() ? presentation.contentHeight : 480, frame };
+			frameInfo.presentation = presentation;
+			ASSERT_TRUE(chain.render(inputView, frameInfo, output, transformed, depthView))
 					<< postprocess::getShaderChainStatus().error;
+		}
 		ASSERT_NE(nullptr, output.get());
 		// Present through the regular quad, as the real renderer does. This also
 		// converts float/sRGB pass outputs to a consistent format for readback.
@@ -189,9 +203,19 @@ protected:
 							EXPECT_NEAR((*expectedColor)[channel], row[x * 4 + 2 - channel], 1) << "channel " << channel;
 						continue;
 					}
-					const bool bright = ((x / 32 + y / 32) & 1) != 0;
-					EXPECT_NEAR(x / 2 * 255 / 319, row[x * 4 + 2], 2) << "red at " << x << ',' << y;
-					EXPECT_NEAR(y / 2 * 127 / 239 + (bright ? 128 : 0), row[x * 4 + 1], 2) << "green at " << x << ',' << y;
+					if (presentation.hasBorders() && (x < static_cast<unsigned>(presentation.x)
+							|| y < static_cast<unsigned>(presentation.y)
+							|| x >= static_cast<unsigned>(presentation.x + presentation.contentWidth)
+							|| y >= static_cast<unsigned>(presentation.y + presentation.contentHeight))) {
+						for (unsigned channel = 0; channel < 3; ++channel)
+							EXPECT_NEAR(presentation.borderColor[channel] * 255, row[x * 4 + 2 - channel], 1);
+						continue;
+					}
+					const unsigned sourceX = presentation.hasBorders() ? (x - presentation.x) * 320 / presentation.contentWidth : x / 2;
+					const unsigned sourceY = presentation.hasBorders() ? (y - presentation.y) * 240 / presentation.contentHeight : y / 2;
+					const bool bright = ((sourceX / 16 + sourceY / 16) & 1) != 0;
+					EXPECT_NEAR(sourceX * 255 / 319, row[x * 4 + 2], 2) << "red at " << x << ',' << y;
+					EXPECT_NEAR(sourceY * 127 / 239 + (bright ? 128 : 0), row[x * 4 + 1], 2) << "green at " << x << ',' << y;
 					EXPECT_NEAR(bright ? 224 : 32, row[x * 4], 2) << "blue at " << x << ',' << y;
 				}
 			}
@@ -208,6 +232,43 @@ TEST_F(DirectXShaderChainTest, FragmentOnlyStagesPreserveTextureCoordinates)
 		const auto copy = writeShader("copy.glsl", "void main() { SetOutput(Sample()); }\n");
 		checkPattern({ copy }, true);
 		checkPattern({ copy, copy }, true);
+	});
+}
+
+TEST_F(DirectXShaderChainTest, ReusesComputeBindingsAndPacksConfiguredVectorParameters)
+{
+	runInGraphicsProcess([&] {
+		const auto effect = writeShader("compute-tint.fx",
+				"texture2D Result { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA8; };\n"
+				"storage2D WriteResult { Texture = Result; };\n"
+				"sampler2D ReadResult { Texture = Result; MinFilter = POINT; MagFilter = POINT; };\n"
+				"uniform float4 Tint < ui_min = 0.0; ui_max = 1.0; > = float4(0.25, 0.5, 0.75, 1.0);\n"
+				"[numthreads(8,8,1)] void Fill(uint3 id : SV_DispatchThreadID)"
+				" { tex2Dstore(WriteResult, int2(id.xy), Tint); }\n"
+				"float4 Pixel(float4 position : SV_Position, float2 uv : TEXCOORD) : SV_Target { return tex2D(ReadResult, uv); }\n"
+				"technique Main { pass Write { ComputeShader = Fill; DispatchSizeX = BUFFER_WIDTH / 8; DispatchSizeY = BUFFER_HEIGHT / 8; }"
+				" pass Present { PixelShader = Pixel; } }\n");
+		checkPattern({ effect }, false, std::array<int, 3> { 64, 128, 191 });
+		postprocess::ShaderChain parsed;
+		std::string error;
+		ASSERT_TRUE(postprocess::loadShaderChain(effect, parsed, error)) << error;
+		auto tint = std::find_if(parsed.parameters.begin(), parsed.parameters.end(), [](const auto& parameter) {
+			return parameter.name == "Tint";
+		});
+		ASSERT_NE(parsed.parameters.end(), tint);
+		tint->values = { 0.75f, 0.25f, 0.5f, 1.f };
+		tint->value = tint->values[0];
+		config::PostProcessShaderParameters.get() = postprocess::serializeShaderChainParameterValues(parsed.parameters);
+		checkPattern({ effect }, false, std::array<int, 3> { 191, 64, 128 });
+	});
+}
+
+TEST_F(DirectXShaderChainTest, ComposesAndFiltersTheWholePresentation)
+{
+	runInGraphicsProcess([&] {
+		const auto copy = writeShader("borders.glsl", "void main() { SetOutput(Sample()); }\n");
+		checkPattern({ copy }, true, std::nullopt,
+				{ 640, 480, 160, 120, 320, 240, { 0.25f, 0.f, 0.f, 1.f } });
 	});
 }
 
