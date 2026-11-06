@@ -229,7 +229,7 @@ int Sound::advance(u32 cycles)
 					aica::arm::runInterpreterCycles(ARM_CYCLES_PER_SAMPLE);
 					aica::boardTimeStep(slaveLeft[i], slaveRight[i]);
 					saturated[i] += slaveLeft[i] == -32768 || slaveLeft[i] == 32767 || slaveRight[i] == -32768 || slaveRight[i] == 32767;
-					boardPeak[1] = std::max({boardPeak[1], u32(std::abs(int(slaveLeft[i]))), u32(std::abs(int(slaveRight[i])))});
+					boardPeak[1] = std::max(boardPeak[1], std::max(u32(std::abs(int(slaveLeft[i]))), u32(std::abs(int(slaveRight[i])))));
 				}
 				u32 peaks[64];
 				aica::sgc::readBoardChannelPeaks(peaks);
@@ -246,7 +246,7 @@ int Sound::advance(u32 cycles)
 					s16 l = 0, r = 0;
 					aica::boardTimeStep(l, r);
 					saturated[i] += l == -32768 || l == 32767 || r == -32768 || r == 32767;
-					boardPeak[0] = std::max({boardPeak[0], u32(std::abs(int(l))), u32(std::abs(int(r)))});
+					boardPeak[0] = std::max(boardPeak[0], std::max(u32(std::abs(int(l))), u32(std::abs(int(r)))));
 					left[i] += int(slaveLeft[i]) + l; right[i] += int(slaveRight[i]) + r;
 				}
 				u32 peaks[64];

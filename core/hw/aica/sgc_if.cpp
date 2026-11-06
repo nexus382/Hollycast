@@ -729,7 +729,9 @@ struct ChannelEx
 	{
 		SampleType oLeft, oRight, oDsp;
 
-		Step(oLeft, oRight, oDsp);
+		// A voice that ends during Step still contributes its final sample.
+		if (!Step(oLeft, oRight, oDsp))
+			return;
 		if (collectChannelPeaks) {
 			const u32 level = u32(std::abs(oLeft)) + u32(std::abs(oRight)) + u32(std::abs(oDsp >> 4));
 			if (level > channelPeaks[ChannelNumber]) channelPeaks[ChannelNumber] = level;

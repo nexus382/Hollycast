@@ -890,6 +890,10 @@ sh4_charge_sound_ram_read(vk_cpu_t *cpu, unsigned cpu_clock_mhz)
 	cpu->remaining -= (int)(scaled / 1000u);
 }
 
+/* Keep the MSVC read miss path shared when fixed-width reads are inlined. */
+#if defined(_MSC_VER) && defined(NDEBUG)
+__declspec(noinline)
+#endif
 static int
 sh4_get (sh4_t *ctx, unsigned size, uint32_t addr, void *val)
 {
@@ -944,11 +948,19 @@ static bool read_hit_enabled = true;
 void hikaru_vendor_test_read_hit (bool enabled) { read_hit_enabled = enabled; }
 #endif
 
+/* MSVC otherwise leaves fixed-width reads out of line in optimized handlers.
+ * Keep the policy local to reads; sh4_get remains shared to bound code size. */
+#if defined(_MSC_VER) && defined(NDEBUG)
+#define SH4_READ_INLINE __forceinline
+#else
+#define SH4_READ_INLINE inline
+#endif
+
 /* Reuse only an already validated plain-LE read span. This keeps the common
  * fixed-width RAM load in its instruction handler; every miss still follows
  * sh4_get, including endian conversion, overlays, logging and device effects.
  * High special spaces and the physical on-chip alias never use this shortcut. */
-static inline
+static SH4_READ_INLINE
 #if defined(__OPTIMIZE__) && (defined(__GNUC__) || defined(__clang__))
 __attribute__((always_inline))
 #endif
@@ -975,7 +987,7 @@ sh4_read_cached (sh4_t *ctx, unsigned size, uint32_t addr, void *out)
 	return true;
 }
 
-static inline uint8_t
+static SH4_READ_INLINE uint8_t
 R8 (sh4_t *ctx, uint32_t addr)
 {
 	uint8_t tmp;
@@ -984,7 +996,7 @@ R8 (sh4_t *ctx, uint32_t addr)
 	return tmp;
 }
 
-static inline uint16_t
+static SH4_READ_INLINE uint16_t
 R16 (sh4_t *ctx, uint32_t addr)
 {
 	uint16_t tmp;
@@ -993,7 +1005,7 @@ R16 (sh4_t *ctx, uint32_t addr)
 	return tmp;
 }
 
-static inline uint32_t
+static SH4_READ_INLINE uint32_t
 R32 (sh4_t *ctx, uint32_t addr)
 {
 	uint32_t tmp;
@@ -1002,7 +1014,7 @@ R32 (sh4_t *ctx, uint32_t addr)
 	return tmp;
 }
 
-static inline uint64_t
+static SH4_READ_INLINE uint64_t
 R64 (sh4_t *ctx, uint32_t addr)
 {
 	uint64_t tmp;
@@ -1010,6 +1022,8 @@ R64 (sh4_t *ctx, uint32_t addr)
 		sh4_get (ctx, 8, addr, &tmp);
 	return tmp;
 }
+
+#undef SH4_READ_INLINE
 
 #ifdef HIKARU_VENDOR_TESTING
 bool hikaru_vendor_test_cached_read (sh4_t *ctx, unsigned size, uint32_t addr, void *out)

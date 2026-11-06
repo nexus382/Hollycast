@@ -3,6 +3,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/sound.h"
 #include "hw/hikaru/state_io.h"
+#include "cfg/option.h"
 #include "hw/aica/aica_if.h"
 #include "hw/aica/aica_mem.h"
 #include "hw/aica/aica.h"
@@ -120,6 +121,112 @@ TEST_F(HikaruSoundFrameTest, RandomMmioResetIrqAndPcmMatchStandalone) {
         EXPECT_EQ(reference.diag[b].irq, framed.diag[b].irq);
         EXPECT_EQ(reference.diag[b].keys, framed.diag[b].keys);
     }
+}
+
+TEST_F(HikaruSoundFrameTest, DisabledChannelsKeepFinalReleaseSampleAndDspMix)
+{
+    // Exercise the shared Dreamcast channel bank as well as both mixer modes.
+    ASSERT_EQ(aica::sgc::activeChannelState(), nullptr);
+    aica::BoardState host;
+    host.save();
+    const bool previousDsp = config::DSPEnabled;
+    constexpr s16 sample = 0x1234;
+    std::fill_n(reinterpret_cast<s16 *>(&aica::aica_ram[0x1000]), 1024, sample);
+    for (bool dspEnabled : {false, true}) {
+        SCOPED_TRACE(dspEnabled);
+        config::DSPEnabled = dspEnabled;
+        aica::BoardState reset;
+        reset.initialize();
+        const std::pair<u32, u16> regs[] = {
+            {0x2800, 15}, {4, 0x1000}, {0xc, 1024}, {0x10, 31},
+            {0x14, 0x3c1f}, {0x20, 0xf3}, {0x24, u16(dspEnabled ? 0xf00 : 0)},
+            {0x28, 0x60}, // Bypass attenuation so the last release sample stays audible.
+            {MCIEB_addr, 0x400}, {0, 0xc200}
+        };
+        for (const auto& reg : regs)
+            aica::writeAicaReg<u16>(reg.first, reg.second);
+        s16 left = 0, right = 0;
+        EXPECT_TRUE(aica::boardTimeStep(left, right));
+        EXPECT_EQ(left, sample);
+        EXPECT_EQ(right, sample);
+        aica::writeAicaReg<u16>(0, 0x8200); // Key off; release continues until disable().
+        bool ended = false;
+        for (unsigned i = 0; i < 512; ++i) {
+            EXPECT_TRUE(aica::boardTimeStep(left, right));
+            EXPECT_EQ(left, sample);
+            EXPECT_EQ(right, sample);
+            EXPECT_EQ(aica::dsp::state.MIXS[3], s32(sample) * 16);
+            if (aica::readAicaReg<u16>(0x2814) == 0) {
+                ended = true; // disable() resets CA after producing this sample.
+                break;
+            }
+        }
+        EXPECT_TRUE(ended);
+        const u8 timerCount = aica::aica_reg[TIMER_A];
+        EXPECT_TRUE(aica::boardTimeStep(left, right));
+        EXPECT_EQ(left, 0);
+        EXPECT_EQ(right, 0);
+        EXPECT_EQ(aica::aica_reg[TIMER_A], u8(timerCount + 1));
+        for (s32 mix : aica::dsp::state.MIXS)
+            EXPECT_EQ(mix, 0);
+        u32 peaks[64]{};
+        aica::sgc::readBoardChannelPeaks(peaks);
+        EXPECT_EQ(peaks[0], u32(sample) * (dspEnabled ? 3 : 1));
+        for (unsigned i = 1; i < 64; ++i)
+            EXPECT_EQ(peaks[i], 0u);
+        aica::sgc::readBoardChannelPeaks(peaks);
+        EXPECT_EQ(peaks[0], 0u);
+    }
+    config::DSPEnabled = previousDsp;
+    host.load();
+}
+
+TEST_F(HikaruSoundFrameTest, BoardPeaksRetainExtremaUntilDiagnosticsRead)
+{
+    Result output;
+    hikaru::Sound sound([](void *p, s16 left, s16 right) {
+        static_cast<Result *>(p)->pcm.push_back({left, right});
+    }, &output);
+    auto cb = sound.callbacks();
+    for (unsigned board = 0; board < 2; ++board) {
+        std::fill_n(output.ram[board].begin() + 0x1000 / 4, 32,
+            board ? 0x7fff7fffu : 0x80008000u);
+        ASSERT_EQ(cb.attach(cb.opaque, board, reinterpret_cast<u8 *>(output.ram[board].data()), 0x800000), 0);
+    }
+    ASSERT_EQ(cb.reset(cb.opaque), 0);
+    ASSERT_EQ(cb.set_reset(cb.opaque, 0), 0);
+    const std::pair<u32, u32> regs[] = {
+        {0x2800, 15}, {4, 0x1000}, {0xc, 64}, {0x10, 31},
+        {0x24, 0xf00}, {0x28, 0x60}, {0, 0xc200}
+    };
+    for (unsigned board = 0; board < 2; ++board)
+        for (const auto& reg : regs)
+            ASSERT_EQ(cb.write(cb.opaque, board, reg.first, 2, reg.second), 0);
+    ASSERT_EQ(cb.advance(cb.opaque, 10000), 0);
+    ASSERT_EQ(output.pcm.size(), 2u);
+    for (const auto& pcm : output.pcm) {
+        EXPECT_EQ(pcm[0], -1);
+        EXPECT_EQ(pcm[1], -1);
+    }
+    for (unsigned board = 0; board < 2; ++board)
+        ASSERT_EQ(cb.write(cb.opaque, board, 0x2800, 2, 0), 0);
+    ASSERT_EQ(cb.advance(cb.opaque, 10000), 0);
+    EXPECT_EQ(output.pcm.back()[0], 0);
+    EXPECT_EQ(output.pcm.back()[1], 0);
+    for (unsigned board = 0; board < 2; ++board) {
+        hikaru::Sound::BoardDiagnostics diag;
+        ASSERT_TRUE(sound.diagnostics(board, diag));
+        EXPECT_EQ(diag.peak, board ? 32767u : 32768u);
+        ASSERT_TRUE(sound.diagnostics(board, diag));
+        EXPECT_EQ(diag.peak, 0u);
+    }
+    ASSERT_EQ(cb.advance(cb.opaque, 10000), 0);
+    for (unsigned board = 0; board < 2; ++board) {
+        hikaru::Sound::BoardDiagnostics diag;
+        ASSERT_TRUE(sound.diagnostics(board, diag));
+        EXPECT_EQ(diag.peak, 0u);
+    }
+    cb.detach(cb.opaque);
 }
 
 TEST_F(HikaruSoundFrameTest, HostRestoredOnNormalAndExceptionalExit) {
@@ -547,6 +654,8 @@ TEST_F(HikaruSoundFrameTest, SoundSnapshotRestoresDualBoardContinuationAndDreamc
     const SoundStateTrace expected = continueSound();
     EXPECT_FALSE(expected.pcm.empty());
     const std::array<std::vector<u32>, 2> expectedRam{output.ram[0], output.ram[1]};
+    hikaru::StateWriter expectedState;
+    sound.saveState(expectedState);
 
     ASSERT_EQ(cb.set_reset(cb.opaque, 1), 0);
     for (unsigned board = 0; board < 2; ++board)
@@ -594,6 +703,9 @@ TEST_F(HikaruSoundFrameTest, SoundSnapshotRestoresDualBoardContinuationAndDreamc
     EXPECT_EQ(actual.reads, expected.reads);
     EXPECT_EQ(actual.irqs, expected.irqs);
     EXPECT_EQ(output.ram, expectedRam);
+    hikaru::StateWriter actualState;
+    sound.saveState(actualState);
+    EXPECT_EQ(actualState.data(), expectedState.data());
     cb.detach(cb.opaque);
     hostState.load();
 }
