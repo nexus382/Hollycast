@@ -75,6 +75,7 @@ bool game_started = false;
 struct Boxart { void resumePlaytime() {} void startPlaytime(const std::string&, const std::string&) {} void checkpointPlaytime(bool) {} } boxart;
 struct GamepadDevice { static void load_system_mappings() {} };
 namespace vgamepad { void startGame() {} }
+namespace SettingsNew { void stopTextureFilterLiveTune() {} void closeShaderLiveTune() {} }
 void markLibraryGameBooted(const std::string&, const std::string&) {}
 '''
 stdincludes = overlay[overlay.index('#include <algorithm>'):overlay.index('namespace performance_overlay')]

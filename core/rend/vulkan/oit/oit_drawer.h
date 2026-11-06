@@ -183,7 +183,12 @@ public:
 			return false;
 		frameRendered = false;
 		GetContext()->PresentFrame(colorAttachments[framebufferIndex]->GetImage(),
-				colorAttachments[framebufferIndex]->GetImageView(), viewport.extent, aspectRatio);
+				colorAttachments[framebufferIndex]->GetImageView(), viewport.extent, aspectRatio
+#ifndef LIBRETRO
+				, GetContext()->CanSampleDepth() ? depthAttachments[0]->GetImage() : vk::Image {},
+				GetContext()->CanSampleDepth() ? depthAttachments[0]->GetImageView() : vk::ImageView {}
+#endif
+		);
 
 		return true;
 	}

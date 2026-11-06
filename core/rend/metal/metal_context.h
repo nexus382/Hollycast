@@ -1,10 +1,12 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
 #include "wsi/context.h"
 #include <vector>
 #include <memory>
+#include <array>
 #include "metal_common.h"
 
 class MetalContext final : public GraphicsContext
@@ -16,6 +18,9 @@ class MetalContext final : public GraphicsContext
 	id<MTLDevice> GetDevice() const { return device; }
 	id<MTLCommandQueue> GetQueue() const { return queue; }
 	void PresentFrame(id<MTLTexture> texture, float aspectRatio);
+	// Updated by the renderer before presentation, including paused shader edits.
+	void SetShaderOutput(id<MTLTexture> texture, bool transformed, bool fullPresentation,
+			const std::array<int, 4>& gameArea = {});
 	void PresentLastFrame();
 	bool GetLastFrame(std::vector<u8> &data, int &width, int &height);
 	void WaitIdle();

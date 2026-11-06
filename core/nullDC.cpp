@@ -21,6 +21,7 @@
 #include "oslib/i18n.h"
 #include "input/maplelinkregistry.h"
 #include "input/maplelink.h"
+#include "rend/postprocess/shader_chain.h"
 #ifdef TARGET_UWP
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.Foundation.h>
@@ -107,6 +108,9 @@ int flycast_init(int argc, char* argv[])
 			config::Settings::instance().load(false);
 		}
 		i18n::reloadLanguage();
+		std::string shaderInstallError;
+		if (!postprocess::installBundledShaders(get_writable_data_path("shaders"), shaderInstallError))
+			WARN_LOG(BOOT, "Bundled shader installation failed: %s", shaderInstallError.c_str());
 		gui_init();
 		os_CreateWindow();
 		os_SetupInput();

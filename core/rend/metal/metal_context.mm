@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "metal_context.h"
@@ -45,6 +46,9 @@ struct MetalContext::Impl
 	id<MTLSamplerState> pointSampler = nil;
 	std::unique_ptr<MetalOverlay> overlay;
 	id<MTLTexture> lastFrame = nil;
+	id<MTLTexture> shaderOutput = nil;
+	bool shaderTransformed = false, shaderFullPresentation = false;
+	std::array<int, 4> gameArea {};
 	id<MTLTexture> routingFrame = nil;
 	id<MTLTexture> routingScaled = nil;
 	float aspect = 1;
@@ -223,10 +227,20 @@ void MetalContext::PresentFrame(id<MTLTexture> texture, float aspectRatio)
 	if (texture)
 	{
 		impl->lastFrame = texture;
+		impl->shaderOutput = nil;
+		impl->shaderTransformed = impl->shaderFullPresentation = false;
 		impl->aspect = aspectRatio > 0 ? aspectRatio : (float)texture.width / texture.height;
 	}
 	gui_draw_osd();
 	imguiDriver->renderDrawData(ImGui::GetDrawData(), false);
+}
+void MetalContext::SetShaderOutput(id<MTLTexture> texture, bool transformed, bool fullPresentation,
+		const std::array<int, 4>& gameArea)
+{
+	impl->shaderOutput = texture;
+	impl->shaderTransformed = texture && transformed;
+	impl->shaderFullPresentation = texture && fullPresentation;
+	impl->gameArea = gameArea;
 }
 void MetalContext::PresentLastFrame()
 {
@@ -303,29 +317,47 @@ void MetalContext::PresentLastFrame()
 			impl->routingScaled = nil;
 		}
 #endif
+		// Reprocess the retained scene once per presentation so paused settings
+		// and live parameter edits use the same path as running gameplay. Submit
+		// those commands before this presentation buffer on the shared queue.
+		bool showFrame = impl->lastFrame && (!gui_is_open() || renderer);
+		if (showFrame && renderer) showFrame = renderer->RenderLastFrame();
 		MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
 		pass.colorAttachments[0].texture = renderTarget;
 		pass.colorAttachments[0].loadAction = MTLLoadActionClear;
 		pass.colorAttachments[0].storeAction = MTLStoreActionStore;
 		pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
 		id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:pass];
-		if (impl->lastFrame && (!gui_is_open() || (renderer && renderer->RenderLastFrame())))
+		if (showFrame)
 		{
 			int width = (int)drawable.texture.width, height = (int)drawable.texture.height;
 			int top = std::min(height - 1, std::max(0, getScaledTopInset())), dx = 0, dy = 0;
-			getWindowboxDimensions(width, height - top, impl->aspect, dx, dy, config::Rotate90);
-			int vw = std::max(1, width - 2 * dx), vh = std::max(1, height - top - 2 * dy);
+			int areaWidth = width, areaHeight = height - top;
+			if (impl->gameArea[2] > 0 && impl->gameArea[3] > 0) {
+				areaWidth = std::min(width, impl->gameArea[2]);
+				top = std::clamp(impl->gameArea[1], 0, height - 1);
+				areaHeight = std::min(height - top, impl->gameArea[3]);
+			}
+			getWindowboxDimensions(areaWidth, areaHeight, impl->aspect, dx, dy, config::Rotate90);
+			const int contentWidth = std::max(1, areaWidth - 2 * dx), contentHeight = std::max(1, areaHeight - 2 * dy);
+			int vw = contentWidth, vh = contentHeight;
+			if (impl->shaderFullPresentation) { dx = dy = 0; vw = areaWidth; vh = areaHeight; }
 			performance_overlay::recordOutputViewport(vw, vh);
 			[enc setViewport:MTLViewport{(double)dx, (double)(top + dy), (double)vw, (double)vh, 0, 1}];
 			float shiftX, shiftY;
 			getVideoShift(shiftX, shiftY);
 			float x = 2.f * shiftX / impl->lastFrame.width;
 			float y = 2.f * shiftY / impl->lastFrame.height;
-			float scale[4] = {config::Rotate90 ? y : x, config::Rotate90 ? x : -y, config::Rotate90 ? 1.f : 0.f, 0.f};
+			float scale[4] = {config::Rotate90 ? y : x, config::Rotate90 ? x : -y,
+					config::Rotate90 && !impl->shaderTransformed ? 1.f : 0.f, 0.f};
+			if (impl->shaderFullPresentation) {
+				scale[0] *= (float)contentWidth / areaWidth;
+				scale[1] *= (float)contentHeight / areaHeight;
+			}
 			[enc setScissorRect:MTLScissorRect{(NSUInteger)dx, (NSUInteger)(top + dy), (NSUInteger)vw, (NSUInteger)vh}];
 			[enc setRenderPipelineState:impl->pipeline];
 			[enc setVertexBytes:scale length:sizeof(scale) atIndex:0];
-			[enc setFragmentTexture:impl->lastFrame atIndex:0];
+			[enc setFragmentTexture:impl->shaderOutput ? impl->shaderOutput : impl->lastFrame atIndex:0];
 			[enc setFragmentSamplerState:config::LinearInterpolation ? impl->sampler : impl->pointSampler atIndex:0];
 			[enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 			[enc setViewport:MTLViewport{0, 0, (double)width, (double)height, 0, 1}];
@@ -406,9 +438,11 @@ bool MetalContext::GetLastFrame(std::vector<u8> &data, int &width, int &height)
 }
 bool MetalContext::readFrame(std::vector<u8> &data, int &width, int &height, bool normalize)
 {
-	id<MTLTexture> texture = impl->lastFrame;
+	id<MTLTexture> texture = normalize && impl->shaderOutput ? impl->shaderOutput : impl->lastFrame;
 	if (!texture)
 		return false;
+	const bool rotate = config::Rotate90 && !(normalize && impl->shaderTransformed);
+	const float aspect = normalize && impl->shaderFullPresentation ? (float)texture.width / texture.height : impl->aspect;
 	int sw = (int)texture.width, sh = (int)texture.height;
 	if (sw <= 0 || sh <= 0)
 		return false;
@@ -419,24 +453,24 @@ bool MetalContext::readFrame(std::vector<u8> &data, int &width, int &height, boo
 	}
 	else if (width > 0 && height > 0)
 	{
-		if ((float)width / height > impl->aspect)
-			width = std::max(1, (int)(height * impl->aspect));
+		if ((float)width / height > aspect)
+			width = std::max(1, (int)(height * aspect));
 		else
-			height = std::max(1, (int)(width / impl->aspect));
+			height = std::max(1, (int)(width / aspect));
 	}
 	else if (width > 0)
-		height = std::max(1, (int)(width / impl->aspect));
+		height = std::max(1, (int)(width / aspect));
 	else if (height > 0)
-		width = std::max(1, (int)(height * impl->aspect));
+		width = std::max(1, (int)(height * aspect));
 	else
 	{
 		width = sw;
 		height = sh;
-		if (config::Rotate90)
+		if (rotate)
 			std::swap(width, height);
-		int w = std::max(1, (int)(impl->aspect * height));
+		int w = std::max(1, (int)(aspect * height));
 		if (width > w)
-			height = std::max(1, (int)(width / impl->aspect));
+			height = std::max(1, (int)(width / aspect));
 		else
 			width = w;
 	}
@@ -481,7 +515,7 @@ bool MetalContext::readFrame(std::vector<u8> &data, int &width, int &height, boo
 		{
 			float sx = ((x + .5f) * sw / width) - .5f;
 			float sy = ((y + .5f) * sh / height) - .5f;
-			if (config::Rotate90)
+			if (rotate)
 			{
 				sx = sw - (y + .5f) * sw / height - .5f;
 				sy = (x + .5f) * sh / width - .5f;

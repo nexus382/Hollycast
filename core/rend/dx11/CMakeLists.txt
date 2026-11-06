@@ -1,3 +1,5 @@
+# Portions Copyright 2026 The Hollycast Authors
+
 target_compile_definitions(${PROJECT_NAME} PRIVATE HAVE_D3D11)
 
 target_sources(${PROJECT_NAME} PRIVATE
@@ -26,6 +28,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
+            dx11_shader_chain.cpp
+            dx11_shader_chain.h
             "${IMGUI_BACKENDS_DIR}/imgui_impl_dx11.cpp"
             "${IMGUI_BACKENDS_DIR}/imgui_impl_dx11.h")
 endif()

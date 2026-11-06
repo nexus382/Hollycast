@@ -606,6 +606,11 @@ void renderSettingsMenu()
 			openVideoSettings();
 		}
 
+		if (ImGui::MenuItem(T("Shader")))
+		{
+			openSettingsTab(GuiSettingsTab::Shader);
+		}
+
 		if (ImGui::MenuItem(T("On Screen Display"), nullptr, false, true))
 		{
 			openOnScreenDisplaySettings();

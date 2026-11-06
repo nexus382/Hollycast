@@ -1,3 +1,5 @@
+# Portions Copyright 2026 The Hollycast Authors
+
 target_sources(${PROJECT_NAME} PRIVATE
         glcache.h
         gldraw.cpp
@@ -12,6 +14,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
+            gl_shader_chain.cpp
+            gl_shader_chain.h
             opengl_driver.cpp
             opengl_driver.h)
 endif()

@@ -38,6 +38,7 @@ enum class GuiSettingsTab
 	Network,
 	Advanced,
 	About,
+	Shader,
 };
 
 void gui_display_settings();

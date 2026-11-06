@@ -637,8 +637,14 @@ void ScreenDrawer::createAttachments(vk::CommandBuffer cmdBuffer)
 	{
 		depthAttachment = std::make_unique<FramebufferAttachment>(
 				GetContext()->GetPhysicalDevice(), GetContext()->GetDevice());
-		depthAttachment->Init(viewport.width, viewport.height, GetContext()->GetDepthFormat(),
-				vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransientAttachment,
+		vk::ImageUsageFlags depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransientAttachment;
+#ifndef LIBRETRO
+		// Display shaders borrow the completed scene depth. Sampled attachments
+		// cannot use transient allocation, which may discard depth after the pass.
+		if (GetContext()->CanSampleDepth())
+			depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
+#endif
+		depthAttachment->Init(viewport.width, viewport.height, GetContext()->GetDepthFormat(), depthUsage,
 				"DEPTH ATTACHMENT");
 	}
 
@@ -726,7 +732,12 @@ bool ScreenDrawer::PresentFrame()
 		return false;
 	frameRendered = false;
 	GetContext()->PresentFrame(colorAttachments[GetCurrentImage()]->GetImage(),
-			colorAttachments[GetCurrentImage()]->GetImageView(), viewport, aspectRatio);
+			colorAttachments[GetCurrentImage()]->GetImageView(), viewport, aspectRatio
+#ifndef LIBRETRO
+			, GetContext()->CanSampleDepth() ? depthAttachment->GetImage() : vk::Image {},
+			GetContext()->CanSampleDepth() ? depthAttachment->GetImageView() : vk::ImageView {}
+#endif
+	);
 
 	return true;
 }
@@ -796,6 +807,11 @@ void ScreenClassicRender::init(Drawer *drawer)
 					vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
 					vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal),
 	};
+#ifndef LIBRETRO
+	if (vkCtx()->CanSampleDepth())
+		attachmentDescriptions[1].storeOp = vk::AttachmentStoreOp::eStore;
+#endif
+
 	vk::AttachmentReference colorReference(0, vk::ImageLayout::eColorAttachmentOptimal);
 	vk::AttachmentReference depthReference(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
@@ -932,6 +948,10 @@ void DynamicRender::beginRender(vk::CommandBuffer cmdBuffer, int index)
 	depthAttachment.imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 	depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
 	depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+#ifndef LIBRETRO
+	if (!drawer->rendContext->isRTT && vkCtx()->CanSampleDepth())
+		depthAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+#endif
 	depthAttachment.clearValue.depthStencil = vk::ClearDepthStencilValue{ 0.f, 0 };
 
 	vk::RenderingInfoKHR renderingInfo {};

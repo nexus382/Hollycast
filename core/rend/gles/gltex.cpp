@@ -684,8 +684,8 @@ GlFramebuffer::GlFramebuffer(int width, int height, bool withDepth, GLuint textu
 	makeFramebuffer(withDepth);
 }
 
-GlFramebuffer::GlFramebuffer(int width, int height, GLuint depthBuffer)
-	: width(width), height(height), texture(0)
+GlFramebuffer::GlFramebuffer(int width, int height, GLuint depthBuffer, GLuint depthTexture)
+	: width(width), height(height), texture(0), depthTexture(depthTexture), ownsDepthAttachment(false)
 {
 	// Create a texture for rendering to
 	this->texture = glcache.GenTexture();
@@ -697,7 +697,6 @@ GlFramebuffer::GlFramebuffer(int width, int height, GLuint depthBuffer)
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	makeFramebuffer(true, depthBuffer);
-	ownsDepthBuffer = false;
 }
 
 void GlFramebuffer::makeFramebuffer(bool withDepth, const GLuint depthBuffer)
@@ -706,7 +705,27 @@ void GlFramebuffer::makeFramebuffer(bool withDepth, const GLuint depthBuffer)
 	glGenFramebuffers(1, &framebuffer);
 	bind();
 
-	if (withDepth)
+#if !defined(LIBRETRO) && defined(GL_DEPTH24_STENCIL8)
+	if (withDepth && depthBuffer == 0 && depthTexture == 0 && (!gl.is_gles || gl.gl_major >= 3)) {
+		// A texture preserves the completed scene's depth for display effects;
+		// older GLES contexts retain their existing renderbuffer path below.
+		depthTexture = glcache.GenTexture();
+		glcache.BindTexture(GL_TEXTURE_2D, depthTexture);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width, height, 0,
+				GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	}
+#endif
+	if (withDepth && depthTexture != 0)
+	{
+		// The secondary accumulation target shares the primary scene depth.
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTexture, 0);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depthTexture, 0);
+	}
+	else if (withDepth)
 	{
 		if (depthBuffer != 0)
 			this->depthBuffer = depthBuffer;
@@ -785,11 +804,29 @@ GlFramebuffer::GlFramebuffer(int width, int height, bool withDepth, bool withTex
 	makeFramebuffer(withDepth);
 }
 
+GlFramebuffer::GlFramebuffer(int width, int height, bool withDepth, GLuint texture, GLenum internalFormat,
+		GLenum pixelFormat, GLenum pixelType)
+	: width(width), height(height), texture(texture)
+{
+	if (this->texture == 0)
+		this->texture = glcache.GenTexture();
+	glcache.BindTexture(GL_TEXTURE_2D, this->texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, pixelFormat, pixelType, nullptr);
+	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	makeFramebuffer(withDepth);
+}
+
 GlFramebuffer::~GlFramebuffer()
 {
 	glDeleteFramebuffers(1, &framebuffer);
-	if (ownsDepthBuffer)
+	if (ownsDepthAttachment) {
 		glDeleteRenderbuffers(1, &depthBuffer);
+		if (depthTexture != 0)
+			glcache.DeleteTextures(1, &depthTexture);
+	}
 	glcache.DeleteTextures(1, &texture);
 	glDeleteRenderbuffers(1, &colorBuffer);
 }
