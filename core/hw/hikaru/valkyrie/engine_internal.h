@@ -37,7 +37,19 @@ struct HikaruEngine {
         uint64_t frequency, last;
         uint64_t frame[HIKARU_PROFILE_COUNT], window[HIKARU_PROFILE_COUNT];
     } profile;
+    /* Producer-owned versions are never serialized or included in the state
+     * layout. The source token also survives graphics-context recreation. */
+    uint64_t texture_source, texture_generation[2];
 };
+/* Reset/load invalidate only after the worker is drained. Consumers keep their
+ * immutable packet bytes; zero stays sticky after wrap and disables reuse. */
+static inline void hikaru_engine_note_texram_write(HikaruEngine *engine, unsigned banks)
+{
+    if (!engine) return;
+    for (unsigned bank = 0; bank < 2; ++bank)
+        if ((banks & (1u << bank)) && engine->texture_generation[bank])
+            ++engine->texture_generation[bank];
+}
 /* Returns the occurrence count on the first and power-of-two occurrences. */
 uint64_t vk_host_diagnostic(void *host, unsigned kind, uint32_t address);
 // Synchronize the hosted MIE's SND_RES pin when it changes.

@@ -95,6 +95,13 @@ typedef struct {
 	GLuint id;
 	unsigned format, width, height;
 	bool storage_valid;
+	/* Retain tightly packed source rows, excluding framebuffer padding. */
+	uint8_t *source_snapshot;
+	size_t source_snapshot_capacity;
+	/* Source layout for the retained bytes. */
+	uint32_t source_x, source_y;
+	unsigned source_format;
+	bool source_valid;
 } hikaru_layer_texture_t;
 
 /* Uniform values belong to a linked mesh program and survive shader/frame
@@ -296,6 +303,9 @@ struct HikaruFrame {
 	hikaru_gpu_t gpu;
 	vk_buffer_t *fb, *texram[2];
 	bool ready;
+	/* Each alternating slot tracks its own retained contents. A shared dirty
+	 * bit cleared by the other slot would miss writes from two frames ago. */
+	uint64_t texture_source, texture_generation[2];
 };
 
 #define LOG(fmt_, ...) \

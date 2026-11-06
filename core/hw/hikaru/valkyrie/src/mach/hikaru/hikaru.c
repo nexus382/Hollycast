@@ -554,6 +554,8 @@ hikaru_reset (vk_machine_t *mach, vk_reset_type_t type)
 {
 	hikaru_t *hikaru = (hikaru_t *) mach;
 	hikaru->cpu_cycle_remainder = 0;
+	/* The generic machine reset has already cleared both texture buffers. */
+	hikaru_engine_note_texram_write (mach->host, 3u);
 
 	/* XXX load bram from file */
 

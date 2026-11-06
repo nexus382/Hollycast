@@ -25,6 +25,7 @@
 #include "mach/hikaru/hikaru-renderer.h"
 #include "mach/hikaru/hikaru-renderer-private.h"
 #include "graphics_dispatch.h"
+#include "engine_internal.h"
 
 #ifdef HIKARU_VENDOR_TESTING
 static bool fail_renderer_init_once;
@@ -211,6 +212,27 @@ layer_selected (const hikaru_gpu_t *gpu, unsigned slot)
            gpu->fb_config.num_1 == slot + 2 || gpu->fb_config.num_2 == slot + 2;
 }
 
+/* Only a producer-owned/released slot may be refreshed. Rendering continues to
+ * read that slot's private RAM, never the live texture buffers or generations. */
+static unsigned
+freeze_texture_ram (const hikaru_gpu_t *gpu, HikaruFrame *frame)
+{
+    const HikaruEngine *engine = gpu->base.mach ? gpu->base.mach->host : NULL;
+    const uint64_t source = engine ? engine->texture_source : 0;
+    const bool same_source = source && source == frame->texture_source;
+    unsigned copied = 0;
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        const uint64_t generation = engine ? engine->texture_generation[bank] : 0;
+        if (!same_source || !generation || generation != frame->texture_generation[bank]) {
+            memcpy(frame->texram[bank]->ptr, gpu->texram[bank]->ptr, frame->texram[bank]->size);
+            copied |= 1u << bank;
+        }
+        frame->texture_generation[bank] = generation;
+    }
+    frame->texture_source = source;
+    return copied;
+}
+
 static void
 freeze_framebuffer (const hikaru_gpu_t *gpu, vk_buffer_t *destination)
 {
@@ -245,6 +267,96 @@ freeze_framebuffer (const hikaru_gpu_t *gpu, vk_buffer_t *destination)
 }
 
 #ifdef HIKARU_VENDOR_TESTING
+int hikaru_vendor_test_texture_snapshot(void *gpu_as_void, HikaruFrame *frame, unsigned expected)
+{
+    const hikaru_gpu_t *gpu = gpu_as_void;
+    if (freeze_texture_ram(gpu, frame) != expected) return 0;
+    for (unsigned bank = 0; bank < 2; ++bank)
+        if (memcmp(frame->texram[bank]->ptr, gpu->texram[bank]->ptr, frame->texram[bank]->size))
+            return 0;
+    return 1;
+}
+
+int hikaru_vendor_test_texture_snapshots(void)
+{
+    HikaruEngine engine = {0};
+    vk_machine_t machine = {0};
+    hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+    HikaruFrame *first = hikaru_frame_create(), *second = hikaru_frame_create();
+    int ok = 1;
+    if (!gpu || !first || !second) { ok = 0; goto cleanup_textures; }
+    machine.host = &engine;
+    gpu->base.mach = &machine;
+    engine.texture_source = 7;
+    engine.texture_generation[0] = engine.texture_generation[1] = 1;
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        gpu->texram[bank] = vk_buffer_le32_new(4u * 1024 * 1024, 0);
+        if (!gpu->texram[bank]) { ok = 0; goto cleanup_textures; }
+        memset(gpu->texram[bank]->ptr, bank ? 0x22 : 0x11, gpu->texram[bank]->size);
+    }
+#define CHECK_TEXTURE_FREEZE(slot, mask) do { \
+    if (!hikaru_vendor_test_texture_snapshot(gpu, (slot), (mask))) { \
+        fprintf(stderr, "texture snapshot line %u: expected bank mask %u\n", __LINE__, (mask)); \
+        ok = 0; \
+    } \
+} while (0)
+    CHECK_TEXTURE_FREEZE(first, 3u);
+    CHECK_TEXTURE_FREEZE(first, 0u);
+    CHECK_TEXTURE_FREEZE(second, 3u);
+    CHECK_TEXTURE_FREEZE(second, 0u);
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        /* Touch opposite ends, including the last mip area. Both slots must
+         * independently catch up; freezing one cannot clear the other's work. */
+        gpu->texram[bank]->ptr[0] ^= 0x5a;
+        gpu->texram[bank]->ptr[gpu->texram[bank]->size - 1] ^= 0xa5;
+        hikaru_engine_note_texram_write(&engine, 1u << bank);
+        CHECK_TEXTURE_FREEZE(first, 1u << bank);
+        ok &= second->texram[bank]->ptr[0] == (bank ? 0x22 : 0x11);
+        CHECK_TEXTURE_FREEZE(second, 1u << bank);
+        CHECK_TEXTURE_FREEZE(first, 0u);
+    }
+    /* Reset/load replace both banks without going through CPU/GPU writers. */
+    for (unsigned bank = 0; bank < 2; ++bank)
+        memset(gpu->texram[bank]->ptr, 0x3c, gpu->texram[bank]->size);
+    hikaru_engine_note_texram_write(&engine, 3u);
+    CHECK_TEXTURE_FREEZE(second, 3u);
+    ok &= first->texram[0]->ptr[0] != 0x3c && first->texram[1]->ptr[0] != 0x3c;
+    CHECK_TEXTURE_FREEZE(first, 3u);
+    /* Identical addresses and bank versions from a replacement machine must
+     * still refresh both retained slots, even with allocator address reuse. */
+    ++engine.texture_source;
+    gpu->texram[0]->ptr[17] ^= 0xff;
+    gpu->texram[1]->ptr[31] ^= 0xff;
+    CHECK_TEXTURE_FREEZE(first, 3u);
+    CHECK_TEXTURE_FREEZE(second, 3u);
+    engine.texture_generation[0] = UINT64_MAX;
+    CHECK_TEXTURE_FREEZE(first, 1u);
+    CHECK_TEXTURE_FREEZE(second, 1u);
+    hikaru_engine_note_texram_write(&engine, 1u);
+    ok &= engine.texture_generation[0] == 0;
+    gpu->texram[0]->ptr[17] ^= 0xff;
+    CHECK_TEXTURE_FREEZE(second, 1u);
+    CHECK_TEXTURE_FREEZE(first, 1u);
+    CHECK_TEXTURE_FREEZE(first, 1u);
+    hikaru_engine_note_texram_write(&engine, 1u);
+    ok &= engine.texture_generation[0] == 0;
+    engine.texture_source = 0;
+    CHECK_TEXTURE_FREEZE(first, 3u);
+    CHECK_TEXTURE_FREEZE(first, 3u);
+    gpu->base.mach = NULL; /* Unknown provenance also falls back to full copies. */
+    CHECK_TEXTURE_FREEZE(second, 3u);
+#undef CHECK_TEXTURE_FREEZE
+cleanup_textures:
+    if (gpu) {
+        vk_buffer_destroy(&gpu->texram[0]);
+        vk_buffer_destroy(&gpu->texram[1]);
+    }
+    free(gpu);
+    hikaru_frame_destroy(first);
+    hikaru_frame_destroy(second);
+    return ok;
+}
+
 void hikaru_vendor_test_freeze_framebuffer(const hikaru_gpu_t *gpu, vk_buffer_t *destination)
 { freeze_framebuffer(gpu, destination); }
 #endif
@@ -4323,19 +4435,21 @@ destroy_fb_state (hikaru_renderer_t *hr)
 static unsigned layer_texture_definitions, layer_texture_updates;
 #endif
 
-/* Layer contents may change anywhere each frame; retain storage but upload
- * the complete image whenever the layer is selected. */
+/* Layer writes are not tracked. Compare exact active source bytes; row padding
+ * is not uploaded and must not invalidate the retained layer texture. */
 static void
 upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, unsigned slot,
               GLuint *id, float *mult)
 {
 	hikaru_layer_texture_t *texture = &hr->layer_upload.textures[slot];
 	void *data;
+	const uint8_t *source;
 	uint64_t start;
+	size_t source_size;
 	unsigned row_bytes;
 	const unsigned width = 640, height = 480;
 	const bool new_texture = texture->id == 0;
-	bool new_storage;
+	bool new_storage, source_unchanged = false;
 
 	LOG ("uploading LAYER %s", get_layer_str (layer));
 
@@ -4346,15 +4460,44 @@ upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, unsigned slot,
 	if (!valid_layer_span(hr->gpu->fb, layer->x0, layer->y0, row_bytes)) VK_ABORT("Hikaru layer upload exceeds framebuffer");
 	data = vk_buffer_get_ptr (hr->gpu->fb, (uint32_t)start);
 	if (!data) VK_ABORT("invalid Hikaru layer address");
+	source = data;
+	source_size = (size_t) row_bytes * height;
+
+	new_storage = new_texture || !texture->storage_valid ||
+	              texture->format != layer->format ||
+	              texture->width != width || texture->height != height;
+	if (texture->id && texture->storage_valid && !new_storage &&
+	    texture->source_valid && texture->source_format == layer->format &&
+	    texture->source_x == layer->x0 && texture->source_y == layer->y0 &&
+	    texture->source_snapshot &&
+	    texture->source_snapshot_capacity >= source_size) {
+		source_unchanged = true;
+		for (unsigned row = 0; row < height; ++row) {
+			if (memcmp (source + (size_t) row * 4096,
+			            texture->source_snapshot + (size_t) row * row_bytes,
+			            row_bytes) != 0) {
+				source_unchanged = false;
+				break;
+			}
+		}
+	}
+	if (source_unchanged) {
+		*id = texture->id;
+		*mult = layer->format == HIKARU_FORMAT_ABGR1555 ? 1.0f : 4.0f;
+		VK_ASSERT_NO_GL_ERROR ();
+		return;
+	}
+
+	/* A failed upload may already have changed GL storage. Keep the old
+	 * snapshot ineligible until a complete upload has succeeded. */
+	texture->source_valid = false;
+	if (new_storage) texture->storage_valid = false;
 
 	if (new_texture) {
 		glGenTextures (1, &texture->id);
 		if (!texture->id) VK_ABORT("could not allocate Hikaru layer texture");
 	}
 	*id = texture->id;
-	new_storage = new_texture || !texture->storage_valid ||
-	              texture->format != layer->format ||
-	              texture->width != width || texture->height != height;
 	glActiveTexture (GL_TEXTURE0 + 0);
 	glBindTexture (GL_TEXTURE_2D, texture->id);
 	VK_ASSERT_NO_GL_ERROR ();
@@ -4419,6 +4562,28 @@ upload_layer (hikaru_renderer_t *hr, hikaru_layer_t *layer, unsigned slot,
 		++layer_texture_updates;
 #endif
 	}
+
+	/* Snapshot allocation is optional: if memory is tight, keep uploading
+	 * normally and retry the cache on a later successful upload. */
+	if (texture->source_snapshot_capacity < source_size) {
+		uint8_t *snapshot = realloc (texture->source_snapshot, source_size);
+		if (snapshot) {
+			texture->source_snapshot = snapshot;
+			texture->source_snapshot_capacity = source_size;
+		}
+	}
+	if (texture->source_snapshot &&
+	    texture->source_snapshot_capacity >= source_size) {
+		for (unsigned row = 0; row < height; ++row)
+			memcpy (texture->source_snapshot + (size_t) row * row_bytes,
+			        source + (size_t) row * 4096, row_bytes);
+		texture->source_format = layer->format;
+		texture->source_x = layer->x0;
+		texture->source_y = layer->y0;
+		texture->source_valid = true;
+	} else {
+		texture->source_valid = false;
+	}
 }
 
 static void
@@ -4431,6 +4596,7 @@ destroy_layer_upload (hikaru_renderer_t *hr)
 			glDeleteTextures (1, &texture->id);
 			deleted_texture = true;
 		}
+		free (texture->source_snapshot);
 		memset (texture, 0, sizeof (*texture));
 	}
 	free (hr->layer_upload.abgr1555_staging);
@@ -4881,8 +5047,7 @@ hikaru_renderer_seal_capture(vk_renderer_t *renderer, void *gpu_as_void, HikaruF
 	VK_ASSERT(gpu->texram[0]->size == frame->texram[0]->size);
 	VK_ASSERT(gpu->texram[1]->size == frame->texram[1]->size);
 	freeze_framebuffer(gpu, frame->fb);
-	for (unsigned bank = 0; bank < 2; ++bank)
-		memcpy(frame->texram[bank]->ptr, gpu->texram[bank]->ptr, frame->texram[bank]->size);
+	freeze_texture_ram(gpu, frame);
 	memcpy(&frame->gpu, gpu, sizeof(frame->gpu));
 	/* A frozen GPU is only a draw-state view. It must expose no live machine,
 	 * command RAM, callback, or renderer pointers to the consumer. */
@@ -5013,6 +5178,7 @@ int hikaru_vendor_test_seed_packet_3d(vk_renderer_t *renderer, void *gpu_as_void
         for (unsigned bank = 0; bank < 2; ++bank)
             for (unsigned offset = 0; offset < gpu->texram[bank]->size; offset += 2)
                 vk_buffer_put(gpu->texram[bank], 2, offset, texels[style]);
+        hikaru_engine_note_texram_write(gpu->base.mach->host, 3u);
         memset(&gpu->state, 0, sizeof(gpu->state));
         memset(&gpu->fb_config, 0, sizeof(gpu->fb_config));
         gpu->depth_bias = 0;
@@ -5115,6 +5281,7 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     gpu->fb->ptr[17] = 0x39;
     gpu->texram[0]->ptr[31] = 0x72;
     gpu->texram[1]->ptr[47] = 0xa4;
+    hikaru_engine_note_texram_write(gpu->base.mach->host, 3u);
     gpu->fb_config.alpha = 51;
     gpu->state.layers.layer[0][0] = (hikaru_layer_t){
         .format = HIKARU_FORMAT_ABGR1555, .enabled = 1
@@ -5142,6 +5309,7 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     gpu->fb->ptr[17] = 0xf1;
     gpu->texram[0]->ptr[31] = 0xf2;
     gpu->texram[1]->ptr[47] = 0xf3;
+    hikaru_engine_note_texram_write(gpu->base.mach->host, 3u);
     gpu->fb_config.alpha = 99;
     gpu->state.light_table[2][9].full = 0x87654321;
     REG1AUNIT(0, 0x38) = 0;
@@ -5172,6 +5340,7 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     gpu->fb->ptr[17] = saved_fb;
     gpu->texram[0]->ptr[31] = saved_tex[0];
     gpu->texram[1]->ptr[47] = saved_tex[1];
+    hikaru_engine_note_texram_write(gpu->base.mach->host, 3u);
     *gpu = saved_gpu;
     owner->push.num_verts = saved_num_verts;
     memcpy(owner->push.tmp, saved_strip, sizeof(saved_strip));
@@ -5247,6 +5416,7 @@ hikaru_vendor_test_layer_upload_storage (void)
 	hikaru_renderer_t *probe = calloc (1, sizeof (*probe));
 	hikaru_gpu_t *gpu = calloc (1, sizeof (*gpu));
 	vk_buffer_t *fb = vk_buffer_le32_new (8u * 1024 * 1024, 0);
+	vk_buffer_t *other_fb = vk_buffer_le32_new (8u * 1024 * 1024, 0);
 	GLuint first_id = 0, second_id = 0, recreated_id = 0, updated_id = 0;
 	uint8_t *staging = NULL, *rgba_staging = NULL;
 	float multiplier = 0.0f;
@@ -5261,7 +5431,7 @@ hikaru_vendor_test_layer_upload_storage (void)
 	static const uint8_t green_alpha_170[4] = {0, 255, 0, 170};
 	static const uint8_t blue_alpha_85[4] = {0, 0, 255, 85};
 	static const uint8_t blue_alpha_255[4] = {0, 0, 255, 255};
-	if (!probe || !gpu || !fb) goto cleanup;
+	if (!probe || !gpu || !fb || !other_fb) goto cleanup;
 	probe->gpu = gpu;
 	gpu->fb = fb;
 	layer_texture_definitions = layer_texture_updates = 0;
@@ -5280,6 +5450,21 @@ hikaru_vendor_test_layer_upload_storage (void)
 	    !hikaru_vendor_test_layer_texture (first_id, abgr1555_internal) ||
 	    !hikaru_vendor_test_layer_pixel (first_id, 0, 0, red_transparent) ||
 	    !hikaru_vendor_test_layer_pixel (first_id, 0, 479, green_opaque) ||
+	    layer_texture_definitions != 1 || layer_texture_updates != 0)
+		goto cleanup;
+
+	/* Exact matches reuse the upload, even when framebuffer storage changes. */
+	upload_layer (probe, &first, 0, &updated_id, &multiplier);
+	if (updated_id != first_id || multiplier != 1.0f ||
+	    layer_texture_definitions != 1 || layer_texture_updates != 0)
+		goto cleanup;
+	hikaru_vendor_test_store_abgr1555 (other_fb, &first, 0, 0x001f);
+	hikaru_vendor_test_store_abgr1555 (other_fb, &first, 479, 0x83e0);
+	gpu->fb = other_fb;
+	upload_layer (probe, &first, 0, &updated_id, &multiplier);
+	gpu->fb = fb;
+	if (updated_id != first_id || multiplier != 1.0f ||
+	    !hikaru_vendor_test_layer_pixel (first_id, 0, 0, red_transparent) ||
 	    layer_texture_definitions != 1 || layer_texture_updates != 0)
 		goto cleanup;
 
@@ -5305,6 +5490,20 @@ hikaru_vendor_test_layer_upload_storage (void)
 	    !hikaru_vendor_test_layer_texture (second_id, GL_RGB10_A2) ||
 	    !hikaru_vendor_test_layer_pixel (second_id, 0, 0, red_transparent) ||
 	    !hikaru_vendor_test_layer_pixel (second_id, 0, 479, green_opaque) ||
+	    layer_texture_definitions != 2 || layer_texture_updates != 1)
+		goto cleanup;
+
+	upload_layer (probe, &second, 1, &updated_id, &multiplier);
+	if (updated_id != second_id || multiplier != 4.0f ||
+	    layer_texture_definitions != 2 || layer_texture_updates != 1)
+		goto cleanup;
+	hikaru_vendor_test_store_a2bgr10 (other_fb, &second, 0, 0x000003ff);
+	hikaru_vendor_test_store_a2bgr10 (other_fb, &second, 479, 0xc00ffc00);
+	gpu->fb = other_fb;
+	upload_layer (probe, &second, 1, &updated_id, &multiplier);
+	gpu->fb = fb;
+	if (updated_id != second_id || multiplier != 4.0f ||
+	    !hikaru_vendor_test_layer_pixel (second_id, 0, 0, red_transparent) ||
 	    layer_texture_definitions != 2 || layer_texture_updates != 1)
 		goto cleanup;
 
@@ -5364,6 +5563,10 @@ hikaru_vendor_test_layer_upload_storage (void)
 	    !hikaru_vendor_test_layer_pixel (recreated_id, 0, 0, red_opaque) ||
 	    layer_texture_definitions != 5 || layer_texture_updates != 3)
 		goto cleanup;
+	upload_layer (probe, &first, 0, &updated_id, &multiplier);
+	if (updated_id != recreated_id ||
+	    layer_texture_definitions != 5 || layer_texture_updates != 3)
+		goto cleanup;
 	hikaru_vendor_test_store_abgr1555 (fb, &first, 0, 0x001f);
 	GLuint repeated_id = 0;
 	upload_layer (probe, &first, 0, &repeated_id, &multiplier);
@@ -5387,6 +5590,7 @@ cleanup:
 			glDeleteTextures (1, &texture_ids[i]);
 		}
 	}
+	vk_buffer_destroy (&other_fb);
 	vk_buffer_destroy (&fb);
 	free (gpu);
 	free (probe);
@@ -5518,8 +5722,8 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
     const uint8_t scene_alpha[]={0,255,255,0,0,0,0,255,255,128};
     GLuint retained_layer_ids[2]={0};
     layer_texture_definitions=layer_texture_updates=0;
-    /* Two normal frame lifecycles verify both enabled layer names survive
-     * end-frame and receive storage updates on the next frame. */
+    /* Two normal frame lifecycles verify retained layer names survive
+     * end-frame and skip an upload when the next frame has identical bytes. */
     for(unsigned step=0;step<10 && ok;++step) {
         gpu->fb_config.clear[3]=scene_alpha[step];
         if(vk_device_put(&gpu->base,4,0x1a0001b4,enables[step]) ||
@@ -5545,7 +5749,7 @@ int hikaru_vendor_test_routed_layers(vk_renderer_t *renderer, uint8_t pixels[10]
                 if(hr->layer_upload.textures[layer].id!=retained_layer_ids[layer] ||
                    !glIsTexture(retained_layer_ids[layer])) ok=0;
             }
-            if(layer_texture_definitions!=2 || layer_texture_updates!=2) ok=0;
+            if(layer_texture_definitions!=2 || layer_texture_updates!=0) ok=0;
         }
         gpu->fb_config.clear[1]=255;
         for(unsigned x=0;x<3;++x)

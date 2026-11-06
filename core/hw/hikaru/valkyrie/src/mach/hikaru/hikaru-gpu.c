@@ -21,6 +21,7 @@
 #include "mach/hikaru/hikaru-gpu.h"
 #include "mach/hikaru/hikaru-gpu-private.h"
 #include "mach/hikaru/hikaru-renderer.h"
+#include "engine_internal.h"
 
 /* TODO: handle slave access here */
 
@@ -787,6 +788,9 @@ copy_texture (hikaru_gpu_t *gpu, uint32_t bus_addr, unsigned size,
 			break;
 		}
 
+		/* Mips alternate banks. Mark before copying so an aborted partial
+		 * level cannot leave a retained snapshot incorrectly current. */
+		hikaru_engine_note_texram_write (hikaru->base.host, 1u << bank);
 		copy_level (srcbuf, gpu->texram[bank], bus_offs,
 		            dstx, dsty, level_w, level_h);
 
@@ -1240,25 +1244,35 @@ hikaru_gpu_put (vk_device_t *device, unsigned size, uint32_t addr, uint64_t val)
 #ifdef HIKARU_VENDOR_TESTING
 /* Guest-style IDMA completion accounting through real MMIO and DMA steps.
  * Use on a freshly created machine (its renderer texture cache is empty). */
+int hikaru_vendor_test_texture_snapshot(void *, HikaruFrame *, unsigned);
 int hikaru_vendor_test_idma_completion(vk_machine_t *mach)
 {
     hikaru_t *board=(hikaru_t *)mach;
+    HikaruEngine *engine=mach->host;
     hikaru_gpu_t *gpu=(hikaru_gpu_t *)board->gpu;
     hikaru_gpu_t *saved=malloc(sizeof(*saved));
     vk_buffer_t *cmd=vk_buffer_le32_new(4u*1024*1024,0);
     vk_buffer_t *tex=vk_buffer_le32_new(4u*1024*1024,0);
+    vk_buffer_t *miptex=vk_buffer_le32_new(4u*1024*1024,0);
+    HikaruFrame *first=hikaru_frame_create(), *second=hikaru_frame_create();
+    const uint64_t before[2]={engine->texture_generation[0],engine->texture_generation[1]};
     vk_buffer_t *saved_board_cmd=board->cmdram;
     int ok=1;
     uint32_t value=0, ledger=0;
     uint16_t value16=0;
-    if (!saved || !cmd || !tex) { free(saved); vk_buffer_destroy(&cmd); vk_buffer_destroy(&tex); return 0; }
+    if (!saved || !cmd || !tex || !miptex || !first || !second) {
+        free(saved); vk_buffer_destroy(&cmd); vk_buffer_destroy(&tex); vk_buffer_destroy(&miptex);
+        hikaru_frame_destroy(first); hikaru_frame_destroy(second); return 0;
+    }
     memcpy(saved,gpu,sizeof(*saved));
-    board->cmdram=cmd; gpu->cmdram=cmd; gpu->texram[0]=tex;
+    board->cmdram=cmd; gpu->cmdram=cmd; gpu->texram[0]=tex; gpu->texram[1]=miptex;
     /* Disable IRQ delivery while checking its status latch. */
     REG15(0x84)=0xFF;
 #define CHECK_IDMA(expr, label) do { if (!(expr)) { fprintf(stderr,"IDMA: %s\n",label); ok=0; } } while (0)
 #define PUT(reg, val) CHECK_IDMA(hikaru_gpu_put(&gpu->base,4,0x15000000+(reg),(val))==0,"MMIO write")
 #define GET32(reg, out) CHECK_IDMA(hikaru_gpu_get(&gpu->base,4,0x15000000+(reg),&(out))==0,"MMIO read32")
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,first,3u),"first initial snapshot");
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,second,3u),"second initial snapshot");
     /* Three valid 16x16 1555 descriptors: unique sources and destinations. */
     for(unsigned d=0;d<3;++d) {
         for(unsigned i=0;i<256;++i)
@@ -1276,7 +1290,9 @@ int hikaru_vendor_test_idma_completion(vk_machine_t *mach)
     hikaru_gpu_step_idma(gpu);
     GET32(0x14,value); CHECK_IDMA((value&1)==1,"partial batch busy");
     GET32(0x10,value); CHECK_IDMA(value==1,"partial batch remaining");
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,first,1u),"first changed GPU bank");
     hikaru_gpu_step_idma(gpu);
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,second,1u),"second catches missed GPU writes");
     GET32(0x14,value); CHECK_IDMA((value&1)==0,"first batch complete");
     GET32(0x88,value); CHECK_IDMA(value&GPU15_IRQ_IDMA_END,"first completion IRQ");
     GET32(0x10,value); CHECK_IDMA(value==2,"first batch completion count32");
@@ -1294,18 +1310,37 @@ int hikaru_vendor_test_idma_completion(vk_machine_t *mach)
     CHECK_IDMA(hikaru_gpu_get(&gpu->base,2,0x15000010,&value16)==0 && value16==1,"second batch completion count16");
     ledger+=value; PUT(0x10,0);
     GET32(0x10,value); CHECK_IDMA(value==0 && ledger==3,"second acknowledge advances ledger");
+    CHECK_IDMA(engine->texture_generation[0]==before[0]+3 && engine->texture_generation[1]==before[1],"base writes version only bank zero");
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,first,1u),"first catches later GPU bank write");
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,second,1u),"second catches later GPU bank write");
     for(unsigned d=0;d<3;++d) for(unsigned y=0;y<16;++y) for(unsigned x=0;x<16;++x) {
         unsigned dst=(y*4096+(d*16+x)*2)^2;
         uint16_t want=(uint16_t)(0x8100+d*0x100+y*16+x);
         if (vk_buffer_get(tex,2,dst)!=want) { fprintf(stderr,"IDMA: descriptor %u pixel %u,%u mismatch\n",d,x,y); ok=0; goto cleanup_idma; }
     }
+    /* A bank-one base level followed by its bank-zero mip must refresh both
+     * immutable slots. A descriptor ending after the base refreshed only one. */
+    for(unsigned i=0;i<320;++i) vk_buffer_put(cmd,2,0x1600+i*2,0x9000+i);
+    vk_buffer_put(cmd,4,0x30,0x48001600);
+    vk_buffer_put(cmd,4,0x34,640);
+    vk_buffer_put(cmd,4,0x38,0x0000c080);
+    vk_buffer_put(cmd,4,0x3c,1);
+    PUT(0x0c,0x48000030); PUT(0x10,1); PUT(0x14,1);
+    hikaru_gpu_step_idma(gpu);
+    CHECK_IDMA(engine->texture_generation[0]==before[0]+4 && engine->texture_generation[1]==before[1]+1,"mips version their actual destination banks");
+    CHECK_IDMA(vk_buffer_get(miptex,2,2)==0x9000,"bank one base texel");
+    CHECK_IDMA(vk_buffer_get(tex,2,(512*4096+1024*2)^2)==0x9100,"bank zero mip texel");
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,second,3u),"second refreshes both mip banks");
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,first,3u),"first refreshes both mip banks");
+    CHECK_IDMA(hikaru_vendor_test_texture_snapshot(gpu,second,0u),"unchanged IDMA snapshot");
 cleanup_idma:
 #undef GET32
 #undef PUT
 #undef CHECK_IDMA
     board->cmdram=saved_board_cmd;
     memcpy(gpu,saved,sizeof(*saved));
-    free(saved); vk_buffer_destroy(&cmd); vk_buffer_destroy(&tex);
+    free(saved); vk_buffer_destroy(&cmd); vk_buffer_destroy(&tex); vk_buffer_destroy(&miptex);
+    hikaru_frame_destroy(first); hikaru_frame_destroy(second);
     return ok;
 }
 #endif

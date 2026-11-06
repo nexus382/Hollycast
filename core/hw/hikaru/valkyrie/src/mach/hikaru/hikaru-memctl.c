@@ -563,6 +563,8 @@ twiddle_offs (uint32_t offs)
 static void
 texram_put (hikaru_t *hikaru, uint32_t bank, uint32_t size, uint32_t offs, uint64_t val)
 {
+	/* Mark before either halfword store so an aborted partial write is dirty. */
+	hikaru_engine_note_texram_write (hikaru->base.host, 1u << bank);
 	if (hikaru_gpu_is_texram_twiddled (hikaru->gpu)) 
 		vk_buffer_put (hikaru->texram[bank], size, offs, val);
 	else {

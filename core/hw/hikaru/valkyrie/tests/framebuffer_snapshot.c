@@ -7,6 +7,7 @@
 #include <string.h>
 
 void hikaru_vendor_test_freeze_framebuffer(const hikaru_gpu_t *, vk_buffer_t *);
+int hikaru_vendor_test_texture_snapshots(void);
 
 typedef struct {
     const char *name;
@@ -74,7 +75,7 @@ int main(void)
     vk_buffer_t *second = vk_buffer_le32_new(8u * 1024 * 1024, 0);
     if (!gpu || !source || !first || !second) abort();
     gpu->fb = source;
-    unsigned failures = 0;
+    unsigned failures = !hikaru_vendor_test_texture_snapshots();
     for (unsigned n = 0; n < sizeof(cases) / sizeof(cases[0]); ++n) {
         const Case *test = &cases[n];
         for (uint32_t offset = 0; offset < source->size; ++offset)

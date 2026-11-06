@@ -29,6 +29,9 @@ static _Thread_local jmp_buf *graphicsFatal;
 static _Thread_local char *graphicsError;
 static _Thread_local size_t graphicsErrorSize;
 static HikaruEngine *liveEngine;
+/* Engine creation already enforces one live instance. Never recycle a source
+ * token, including after allocator reuse; exhaustion permanently disables reuse. */
+static uint64_t next_texture_source = 1;
 
 static uint64_t profile_clock(void)
 {
@@ -317,6 +320,9 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     HikaruEngine *engine = calloc(1, sizeof(*engine));
     if (!engine) { set_error(error, error_size, "Out of memory"); return NULL; }
     profile_init(engine);
+    engine->texture_source = next_texture_source;
+    if (next_texture_source) ++next_texture_source;
+    engine->texture_generation[0] = engine->texture_generation[1] = 1;
     engine->transparency_peel_capacity = HIKARU_DEFAULT_TRANSPARENCY_LAYERS;
     engine->transparency_memory_budget = HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
     engine->internal_width = 640;
@@ -439,6 +445,14 @@ uint64_t hikaru_engine_state_layout(void)
 static int transfer_engine_state(HikaruEngine *engine, vk_state_t *state)
 {
     if (!engine || !engine->machine || activeEngine) return -1;
+    /* RAM is restored before devices. Invalidate even if a later field rejects
+     * the load, so no packet can reuse bytes from the partially replaced RAM. */
+    if (state->mode == VK_STATE_LOAD) {
+        hikaru_engine_note_texram_write(engine, 3u);
+        /* Rejected partial loads must also invalidate decoded GL textures,
+         * since only a successful load reaches the full renderer reset. */
+        hikaru_renderer_note_cpu_texram_write(engine->machine->renderer);
+    }
     int result = vk_machine_transfer_state(engine->machine, state);
     if (!result) {
         result |= state->mode == VK_STATE_SAVE

@@ -10,13 +10,18 @@
 #include "graphics_dispatch.h"
 #include "mach/hikaru/hikaru.h"
 #include "mach/hikaru/hikaru-gpu-private.h"
+#include "mach/hikaru/hikaru-renderer-private.h"
 #include "cpu/sh/sh4.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+hikaru_texture_t *get_texture(hikaru_renderer_t *, hikaru_texhead_t *);
 void hikaru_vendor_test_fail_renderer_init(void);
 int hikaru_vendor_test_frame_packet_ownership(HikaruEngine *);
+int hikaru_vendor_test_texture_snapshot(void *, HikaruFrame *, unsigned);
+int hikaru_vendor_test_memctl_dma(vk_device_t *, uint32_t, uint32_t, uint32_t, uint32_t, int);
+int hikaru_vendor_test_write_value(sh4_t *, unsigned, uint32_t, uint64_t);
 static unsigned checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { \
     fprintf(stderr, "line %u: %s\n", __LINE__, #condition); ++failures; } } while (0)
@@ -164,12 +169,72 @@ static void check_bus(hikaru_t *board, unsigned bank, uint32_t offset, uint8_t e
 }
 static void check_board(HikaruEngine *engine, const char *name, unsigned eprom_bank, unsigned mask_bank)
 {
+    static uint64_t previous_texture_source;
+    CHECK(engine->texture_source && engine->texture_source != previous_texture_source);
+    previous_texture_source = engine->texture_source;
     hikaru_t *board = (hikaru_t *)engine->machine;
     CHECK(!strcmp(engine->game.name, name));
     CHECK(board->rombd_config.has_rom && !board->rombd_config.maskrom_is_stretched);
     CHECK(board->rombd_config.eprom_bank_size == eprom_bank &&
           board->rombd_config.maskrom_bank_size == mask_bank);
     CHECK(!board->sh_m->patch && !board->sh_s->patch);
+}
+
+/* Compare retained snapshots with a full live-bank reference after real CPU
+ * apertures and MEMCTL DMA, including aliases and both CPU texture layouts. */
+static void check_texture_write_versions(HikaruEngine *engine)
+{
+    hikaru_t *board = (hikaru_t *)engine->machine;
+    hikaru_gpu_t *gpu = (hikaru_gpu_t *)board->gpu;
+    HikaruFrame *first = hikaru_frame_create(), *second = hikaru_frame_create();
+    CHECK(first && second);
+    if (!first || !second) goto done;
+    static const unsigned regs[] = {0x1a, 0x1b, 0x12, 0x13};
+    static const uint32_t apertures[] = {0x82000020, 0xa3000024, 0x96000028, 0xb700002c};
+    uint8_t saved_regs[4] = {0};
+    const uint32_t saved_layout = REG15(0x8c);
+    const uint32_t saved_word = vk_buffer_get(board->ram_m, 4, 0x40);
+    for (unsigned n = 0; n < 4; ++n)
+        CHECK(!vk_device_get(board->memctl_m, 1, 0x04000000 | regs[n], &saved_regs[n]));
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 3u));
+    for (unsigned layout = 0; layout < 2; ++layout) {
+        REG15(0x8c) = layout ? 0x02020202 : 0;
+        for (unsigned bank = 0; bank < 2; ++bank) {
+            const uint64_t before[2] = {engine->texture_generation[0], engine->texture_generation[1]};
+            for (unsigned n = 0; n < 4; ++n) {
+                CHECK(!vk_device_put(board->memctl_m, 1, 0x04000000 | regs[n], bank ? 6 : 4));
+                CHECK(!hikaru_vendor_test_write_value((sh4_t *)board->sh_m, 4,
+                    apertures[n], 0x12345678u + n + bank + layout));
+            }
+            CHECK(engine->texture_generation[bank] > before[bank]);
+            CHECK(engine->texture_generation[bank ^ 1] == before[bank ^ 1]);
+            CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 1u << bank));
+            CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 1u << bank));
+            CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 0u));
+        }
+    }
+    REG15(0x8c) = 0x02020202;
+    vk_buffer_put(board->ram_m, 4, 0x40, 0xaabbccdd);
+    for (unsigned bank = 0; bank < 2; ++bank) {
+        const uint64_t before[2] = {engine->texture_generation[0], engine->texture_generation[1]};
+        /* The ordinary-RAM bulk path must decline texture destinations. The
+         * 31-bit DMA alias must still reach the same per-bank CPU writer. */
+        CHECK(hikaru_vendor_test_memctl_dma(board->memctl_s, 0xf0000040,
+            bank ? 0x86000040 : 0x84000040, 1, 1, 0) == 0);
+        CHECK(engine->texture_generation[bank] > before[bank]);
+        CHECK(engine->texture_generation[bank ^ 1] == before[bank ^ 1]);
+        CHECK(vk_buffer_get(board->texram[bank], 4, 0x40) == 0xaabbccdd);
+        CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 1u << bank));
+        CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 1u << bank));
+    }
+    REG15(0x8c) = saved_layout;
+    vk_buffer_put(board->ram_m, 4, 0x40, saved_word);
+    for (unsigned n = 0; n < 4; ++n)
+        CHECK(!vk_device_put(board->memctl_m, 1, 0x04000000 | regs[n], saved_regs[n]));
+done:
+    hikaru_frame_destroy(first);
+    hikaru_frame_destroy(second);
 }
 
 static size_t mutate_registered_buffers(vk_machine_t *machine, uint8_t *sentinels)
@@ -217,9 +282,12 @@ static void check_state_roundtrip(HikaruEngine *engine)
     const size_t size = hikaru_engine_state_size(engine);
     const size_t buffer_count = board->base.buffers->used / board->base.buffers->element_size;
     uint8_t *saved = NULL, *roundtrip = NULL, *buffer_sentinels = NULL;
+    HikaruFrame *first = hikaru_frame_create(), *second = hikaru_frame_create();
+    CHECK(first && second);
+    if (!first || !second) goto done;
     CHECK(hikaru_engine_state_layout() != 0);
     CHECK(size > 0 && buffer_count > 0);
-    if (!size || !buffer_count) return;
+    if (!size || !buffer_count) goto done;
 
     saved = (uint8_t *)malloc(size);
     roundtrip = (uint8_t *)malloc(size);
@@ -278,8 +346,16 @@ static void check_state_roundtrip(HikaruEngine *engine)
     engine->sound_reset = engine->sound_reset == -1 ? 0 : -1;
     const int sound_reset = engine->sound_reset;
     CHECK(mutate_registered_buffers(&board->base, buffer_sentinels) == buffer_count);
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 3u));
+    const uint64_t before_load[2] = {engine->texture_generation[0], engine->texture_generation[1]};
+    hikaru_renderer_t *renderer = (hikaru_renderer_t *)engine->machine->renderer;
+    hikaru_texhead_t invalid_texture = {0};
+    get_texture(renderer, &invalid_texture); /* Consume earlier CPU invalidations. */
+    CHECK(!renderer->textures.cpu_dirty);
 
     CHECK(hikaru_engine_load_state(engine, saved, size - 1) != 0);
+    CHECK(!renderer->textures.cpu_dirty);
     check_registered_buffer_sentinels(&board->base, buffer_count, buffer_sentinels);
     CHECK(master->base.state == master_state && slave->base.state == slave_state);
     CHECK(master->base.remaining == master_remaining && slave->base.remaining == slave_remaining);
@@ -291,13 +367,37 @@ static void check_state_roundtrip(HikaruEngine *engine)
     CHECK(gpu->fb_config._181 == gpu_fb_config && gpu->fb_config._781 == gpu_layer_config);
     CHECK(gpu->depth_bias == gpu_depth_bias && gpu->texoffset[1][1] == gpu_texoffset);
     CHECK(gpu->idma_completed == gpu_idma_completed && engine->sound_reset == sound_reset);
+    CHECK(engine->texture_generation[0] == before_load[0] && engine->texture_generation[1] == before_load[1]);
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 0u));
+    /* Reject only after RAM/device restoration to exercise partial-load
+     * invalidation, not just the early byte-count guard. */
+    int saved_sound_reset;
+    const int invalid_sound_reset = 2;
+    memcpy(&saved_sound_reset, saved + size - sizeof(saved_sound_reset), sizeof(saved_sound_reset));
+    memcpy(saved + size - sizeof(invalid_sound_reset), &invalid_sound_reset, sizeof(invalid_sound_reset));
+    CHECK(hikaru_engine_load_state(engine, saved, size) != 0);
+    CHECK(renderer->textures.cpu_dirty);
+    get_texture(renderer, &invalid_texture);
+    CHECK(!renderer->textures.cpu_dirty);
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 3u));
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
+    memcpy(saved + size - sizeof(saved_sound_reset), &saved_sound_reset, sizeof(saved_sound_reset));
 
     CHECK(!hikaru_engine_load_state(engine, saved, size));
+    CHECK(engine->texture_generation[0] > before_load[0] && engine->texture_generation[1] > before_load[1]);
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 3u));
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
     const int roundtrip_result = hikaru_engine_save_state(engine, roundtrip, size);
     CHECK(!roundtrip_result);
     if (!roundtrip_result) CHECK(memcmp(saved, roundtrip, size) == 0);
+    vk_machine_reset(engine->machine, VK_RESET_TYPE_HARD);
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 3u));
+    CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 0u));
 
 done:
+    hikaru_frame_destroy(first);
+    hikaru_frame_destroy(second);
     free(buffer_sentinels);
     free(roundtrip);
     free(saved);
@@ -530,6 +630,7 @@ int main(int argc, char **argv)
     CHECK(profile ? measured > 0 : measured == 0);
     if (profile) CHECK(engine->profile.window[HIKARU_PROFILE_MASTER] > 0);
     check_frame_packet_api(engine, &frame);
+    check_texture_write_versions(engine);
     check_state_roundtrip(engine);
     CHECK(!hikaru_engine_release_graphics(engine));
     SDL_GL_DeleteContext(context);
