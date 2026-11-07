@@ -730,13 +730,25 @@ get_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 	slotx -= 0x80;
 	sloty -= 0xC0;
 
-	cached = &hr->textures.cache[bank][sloty][slotx];
-	if (is_texhead_eq (hr, th, &cached->th))
-		return cached;
+	hikaru_texture_t *layouts = hr->textures.cache[bank][sloty][slotx];
+	const unsigned num_layouts = NUMELEM(hr->textures.cache[bank][sloty][slotx]);
+	unsigned empty = num_layouts;
+	for (unsigned way = 0; way < num_layouts; ++way) {
+		if (!layouts[way].id) {
+			if (empty == num_layouts) empty = way;
+		} else if (is_texhead_eq (hr, th, &layouts[way].th)) {
+			hr->textures.most_recent[bank][sloty][slotx] = way;
+			return &layouts[way];
+		}
+	}
+	const unsigned way = empty < num_layouts ? empty :
+	                     1u - hr->textures.most_recent[bank][sloty][slotx];
+	cached = &layouts[way];
 
 	destroy_texture (cached);
-	/* Keep a failed deletion indexed; a later failed upload leaves it empty. */
-	hr->textures.occupied[bank][sloty][slotx >> 5] &= ~(UINT32_C(1) << (slotx & 31));
+	/* A failed replacement must preserve the other layout and its index. */
+	if (!layouts[0].id && !layouts[1].id)
+		hr->textures.occupied[bank][sloty][slotx >> 5] &= ~(UINT32_C(1) << (slotx & 31));
 
 	id = upload_texture (hr, th);
 	if (!id) {
@@ -746,6 +758,7 @@ get_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 
 	cached->th = *th;
 	cached->id = id;
+	hr->textures.most_recent[bank][sloty][slotx] = way;
 	hr->textures.occupied[bank][sloty][slotx >> 5] |= UINT32_C(1) << (slotx & 31);
 	hr->textures.uploads++;
 
@@ -791,12 +804,14 @@ clear_texcache_bank (hikaru_renderer_t *hr, unsigned bank)
 	/* Free all allocated surfaces. */
 	for (y = 0; y < 0x40; y++)
 		for (x = 0; x < 0x80; x++)
-			destroy_texture (&hr->textures.cache[bank][y][x]);
+			for (unsigned way = 0; way < NUMELEM(hr->textures.cache[bank][y][x]); ++way)
+				destroy_texture (&hr->textures.cache[bank][y][x][way]);
 
 	/* Zero out the cache itself, to avoid spurious hits. Note that
 	 * texture RAM origin is (80,C0), so (slotx, sloty) will never match
 	 * a zeroed out cache entries. */
 	memset ((void *) &hr->textures.cache[bank], 0, sizeof (hr->textures.cache[bank]));
+	memset (hr->textures.most_recent[bank], 0, sizeof (hr->textures.most_recent[bank]));
 	memset (hr->textures.occupied[bank], 0, sizeof (hr->textures.occupied[bank]));
 }
 
@@ -892,17 +907,24 @@ hikaru_renderer_invalidate_texcache (vk_renderer_t *rend, hikaru_texhead_t *th)
 					while (slots) {
 						const unsigned bit = first_occupied_texture (slots);
 						const uint32_t mask = UINT32_C(1) << bit;
-						hikaru_texture_t *cached = &hr->textures.cache[bank][y][word * 32 + bit];
+						bool slot_left = false;
+						for (unsigned way = 0; way < NUMELEM(hr->textures.cache[bank][y][word * 32 + bit]); ++way) {
+							hikaru_texture_t *cached = &hr->textures.cache[bank][y][word * 32 + bit][way];
+							if (!cached->id) continue;
 #ifdef HIKARU_VENDOR_TESTING
-						++texture_cache_visits;
+							++texture_cache_visits;
 #endif
-						if (texture_overlaps_transfer (&cached->th, th)) {
-							destroy_texture (cached);
-							hr->textures.occupied[bank][y][word] &= ~mask;
-							hr->textures.invalidations++;
-						} else {
-							any_left = true;
+							/* Either layout can overlap a DMA write, including a mip
+							 * in the opposite bank. Test each retained footprint. */
+							if (texture_overlaps_transfer (&cached->th, th)) {
+								destroy_texture (cached);
+								hr->textures.invalidations++;
+							} else {
+								slot_left = true;
+							}
 						}
+						if (!slot_left) hr->textures.occupied[bank][y][word] &= ~mask;
+						any_left |= slot_left;
 						slots &= slots - 1;
 					}
 				}

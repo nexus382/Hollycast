@@ -9,7 +9,7 @@
 hikaru_texture_t *get_texture(hikaru_renderer_t *, hikaru_texhead_t *);
 uint64_t hikaru_vendor_test_texture_cache_visits(void);
 
-static unsigned checks, failures, generated, deleted, live;
+static unsigned checks, failures, generated, deleted, live, uploaded_levels;
 static bool texture_ids[256];
 #define CHECK(condition) do { ++checks; if (!(condition)) { \
     fprintf(stderr, "line %u: %s\n", __LINE__, #condition); ++failures; } } while (0)
@@ -52,6 +52,7 @@ static void tex_image(GLenum target, GLint level, GLint internal_format,
 {
     (void)target; (void)level; (void)internal_format; (void)width; (void)height;
     (void)border; (void)format; (void)type; (void)data;
+    ++uploaded_levels;
 }
 
 static hikaru_texhead_t head(unsigned bank, unsigned x, unsigned y)
@@ -70,11 +71,15 @@ static void check_cache(const hikaru_renderer_t *renderer, unsigned expected)
         unsigned in_bank = 0;
         for (unsigned y = 0; y < 0x40; ++y)
             for (unsigned x = 0; x < 0x80; ++x) {
-                const bool allocated = renderer->textures.cache[bank][y][x].id != 0;
+                unsigned layouts = 0;
+                for (unsigned way = 0; way < NUMELEM(renderer->textures.cache[bank][y][x]); ++way)
+                    layouts += renderer->textures.cache[bank][y][x][way].id != 0;
                 const bool indexed = (renderer->textures.occupied[bank][y][x >> 5] &
                                       (UINT32_C(1) << (x & 31))) != 0;
-                CHECK(allocated == indexed);
-                in_bank += allocated;
+                CHECK((layouts != 0) == indexed);
+                CHECK(renderer->textures.most_recent[bank][y][x] <
+                      NUMELEM(renderer->textures.cache[bank][y][x]));
+                in_bank += layouts;
             }
         CHECK(!renderer->textures.is_clear[bank] || !in_bank);
         count += in_bank;
@@ -133,37 +138,101 @@ static void overlap_cases(hikaru_renderer_t *renderer)
         }
 }
 
-static void replacement_and_reuse(hikaru_renderer_t *renderer)
+static void alternating_layouts(hikaru_renderer_t *renderer)
 {
-    hikaru_texhead_t wanted = head(0, 32, 7);
-    CHECK(get_texture(renderer, &wanted) != NULL);
+    /* Planet Harriers uses the same RAM origin for a reflection and ordinary
+     * geometry with different dimensions or formats. Neither view changes RAM. */
+    for (unsigned format_alias = 0; format_alias < 2; ++format_alias) {
+        hikaru_texhead_t small = head(1, 32, 0), large = small;
+        small.logw = 2;
+        small.logh = 3;
+        large.logw = format_alias ? small.logw : 4;
+        large.logh = format_alias ? small.logh : 4;
+        large.format = format_alias ? HIKARU_FORMAT_ABGR4444 : small.format;
+        const unsigned before = generated, prior_deletes = deleted;
+        hikaru_texture_t *texture = get_texture(renderer, &small);
+        CHECK(texture != NULL);
+        const GLuint small_id = texture ? texture->id : 0;
+        texture = get_texture(renderer, &large);
+        CHECK(texture != NULL);
+        const GLuint large_id = texture ? texture->id : 0;
+        const unsigned initial_levels = uploaded_levels;
+        for (unsigned i = 0; i < 8; ++i) {
+            texture = get_texture(renderer, &small);
+            CHECK(texture && texture->id == small_id);
+            texture = get_texture(renderer, &large);
+            CHECK(texture && texture->id == large_id);
+        }
+        CHECK(generated - before == 2 && deleted == prior_deletes);
+        CHECK(uploaded_levels == initial_levels);
+        check_cache(renderer, 2);
+        hikaru_renderer_invalidate_texcache(&renderer->base, NULL);
+        CHECK(deleted - prior_deletes == 2);
+        check_cache(renderer, 0);
+    }
+}
+
+static void bounded_replacement(hikaru_renderer_t *renderer)
+{
+    hikaru_texhead_t first = head(0, 32, 7), second = first, third = first;
+    second.format = HIKARU_FORMAT_ABGR4444;
+    third.format = HIKARU_FORMAT_LA8;
+    hikaru_texture_t *texture = get_texture(renderer, &first);
+    CHECK(texture != NULL);
+    const GLuint first_id = texture ? texture->id : 0;
+    CHECK(get_texture(renderer, &second) != NULL);
+    CHECK(get_texture(renderer, &first) != NULL); /* Keep the first layout hot. */
     const unsigned prior_deletes = deleted;
     const uint64_t prior_uploads = renderer->textures.uploads;
-    wanted.format = HIKARU_FORMAT_ABGR4444;
-    CHECK(get_texture(renderer, &wanted) != NULL);
+    CHECK(get_texture(renderer, &third) != NULL);
     CHECK(deleted - prior_deletes == 1);
     CHECK(renderer->textures.uploads - prior_uploads == 1);
-    check_cache(renderer, 1);
+    texture = get_texture(renderer, &first);
+    CHECK(texture && texture->id == first_id);
+    CHECK(renderer->textures.uploads - prior_uploads == 1);
+    check_cache(renderer, 2);
+    CHECK(get_texture(renderer, &second) != NULL);
+    CHECK(deleted - prior_deletes == 2);
+    check_cache(renderer, 2);
+    hikaru_renderer_invalidate_texcache(&renderer->base, NULL);
+    check_cache(renderer, 0);
+}
 
-    /* The replacement destroys its predecessor before rejecting this format. */
+static void failed_upload_and_cpu_dirty(hikaru_renderer_t *renderer)
+{
+    hikaru_texhead_t wanted = head(0, 32, 7), original = wanted;
+    hikaru_texture_t *texture = get_texture(renderer, &wanted);
+    CHECK(texture != NULL);
+    const GLuint original_id = texture ? texture->id : 0;
+    const unsigned prior_deletes = deleted;
+    const uint64_t prior_uploads = renderer->textures.uploads;
     wanted.format = 7;
     CHECK(get_texture(renderer, &wanted) == NULL);
-    CHECK(deleted - prior_deletes == 3);
-    CHECK(renderer->textures.uploads - prior_uploads == 1);
-    check_cache(renderer, 0);
-    hikaru_renderer_invalidate_texcache(&renderer->base, NULL);
-    CHECK(deleted - prior_deletes == 3);
+    CHECK(deleted - prior_deletes == 1);
+    CHECK(renderer->textures.uploads == prior_uploads);
+    check_cache(renderer, 1);
 
-    wanted.format = HIKARU_FORMAT_ABGR1555;
-    CHECK(get_texture(renderer, &wanted) != NULL);
-    /* Also reject a partially uploaded replacement whose next mip has no RAM. */
+    /* A failed format or partial mip upload leaves the other layout intact. */
     vk_buffer_t *other_bank = renderer->gpu->texram[1];
     renderer->gpu->texram[1] = NULL;
     wanted.format = HIKARU_FORMAT_ABGR4444;
     CHECK(get_texture(renderer, &wanted) == NULL);
     renderer->gpu->texram[1] = other_bank;
-    check_cache(renderer, 0);
+    CHECK(deleted - prior_deletes == 2);
+    texture = get_texture(renderer, &original);
+    CHECK(texture && texture->id == original_id);
+    CHECK(renderer->textures.uploads == prior_uploads);
+    check_cache(renderer, 1);
     CHECK(get_texture(renderer, &wanted) != NULL);
+    check_cache(renderer, 2);
+
+    /* Failure while replacing one of two live layouts also keeps the other. */
+    wanted.format = 7;
+    CHECK(get_texture(renderer, &original) != NULL);
+    CHECK(get_texture(renderer, &wanted) == NULL);
+    CHECK(deleted - prior_deletes == 4);
+    texture = get_texture(renderer, &original);
+    CHECK(texture && texture->id == original_id);
     check_cache(renderer, 1);
 
     hikaru_texhead_t other = head(1, 127, 63), invalid = {0};
@@ -180,6 +249,34 @@ static void replacement_and_reuse(hikaru_renderer_t *renderer)
     check_cache(renderer, 0);
 }
 
+static void retained_layout_invalidation(hikaru_renderer_t *renderer)
+{
+    hikaru_texhead_t small = head(0, 0, 0), large = small;
+    large.logw = large.logh = 2;
+    hikaru_texture_t *texture = get_texture(renderer, &small);
+    CHECK(texture != NULL);
+    const GLuint small_id = texture ? texture->id : 0;
+    CHECK(get_texture(renderer, &large) != NULL);
+    check_cache(renderer, 2);
+    const unsigned prior_deletes = deleted;
+    const uint64_t visits = hikaru_vendor_test_texture_cache_visits();
+    /* Inside the larger base level, outside every mip of the smaller view. */
+    hikaru_texhead_t transfer = head(0, 2, 2);
+    hikaru_renderer_invalidate_texcache(&renderer->base, &transfer);
+    CHECK(hikaru_vendor_test_texture_cache_visits() - visits == 2);
+    CHECK(deleted - prior_deletes == 1);
+    check_cache(renderer, 1);
+    texture = get_texture(renderer, &small);
+    CHECK(texture && texture->id == small_id);
+    CHECK(get_texture(renderer, &large) != NULL);
+    /* Both layouts sample this mip in the opposite bank. */
+    transfer = head(1, 64, 32);
+    hikaru_renderer_invalidate_texcache(&renderer->base, &transfer);
+    CHECK(deleted - prior_deletes == 3);
+    check_cache(renderer, 0);
+    CHECK(renderer->textures.is_clear[0] && renderer->textures.is_clear[1]);
+}
+
 static void capture_queue(hikaru_renderer_t *renderer)
 {
     hikaru_renderer_t *capture = calloc(1, sizeof(*capture));
@@ -188,19 +285,22 @@ static void capture_queue(hikaru_renderer_t *renderer)
     capture->capture_only = true;
     hikaru_texhead_t wanted = head(1, 0, 0);
     CHECK(get_texture(renderer, &wanted) != NULL);
+    hikaru_texhead_t alternate = wanted;
+    alternate.format = HIKARU_FORMAT_ABGR4444;
+    CHECK(get_texture(renderer, &alternate) != NULL);
     const unsigned prior_deletes = deleted;
     const uint64_t visits = hikaru_vendor_test_texture_cache_visits();
     hikaru_renderer_invalidate_texcache(&capture->base, &wanted);
     CHECK(capture->num_invalidations == 1 && !capture->invalidate_all);
     CHECK(deleted == prior_deletes && hikaru_vendor_test_texture_cache_visits() == visits);
-    check_cache(renderer, 1);
+    check_cache(renderer, 2);
     /* This is the consumer's production replay operation, after capture ends. */
     hikaru_renderer_invalidate_texcache(&renderer->base, &capture->invalidations[0]);
     check_cache(renderer, 0);
     for (unsigned i = 0; i < NUMELEM(capture->invalidations); ++i)
         hikaru_renderer_invalidate_texcache(&capture->base, &wanted);
     CHECK(capture->invalidate_all && !capture->num_invalidations);
-    CHECK(deleted - prior_deletes == 1);
+    CHECK(deleted - prior_deletes == 2);
     check_cache(capture, 0);
     free(capture);
 }
@@ -223,7 +323,10 @@ int main(void)
     const HikaruGraphicsDispatch *previous = hikaru_graphics_set_dispatch(&dispatch);
     sparse_boundaries(renderer);
     overlap_cases(renderer);
-    replacement_and_reuse(renderer);
+    alternating_layouts(renderer);
+    bounded_replacement(renderer);
+    failed_upload_and_cpu_dirty(renderer);
+    retained_layout_invalidation(renderer);
     capture_queue(renderer);
     hikaru_renderer_invalidate_texcache(&renderer->base, NULL);
     CHECK(!live && generated == deleted);

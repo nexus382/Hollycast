@@ -253,8 +253,12 @@ typedef struct {
 	} strip_replay;
 
 	struct {
-		hikaru_texture_t cache[2][0x40][0x80];
-		/* Graphics-owner index: one bit for each successfully uploaded slot. */
+		/* A RAM origin can have multiple size/format interpretations without a
+		 * write. Keep two layouts to avoid reuploading alternating views, with
+		 * least-recently-used replacement bounding host and graphics memory. */
+		hikaru_texture_t cache[2][0x40][0x80][2];
+		uint8_t most_recent[2][0x40][0x80];
+		/* Graphics-owner index: one bit for each slot with any live layout. */
 		uint32_t occupied[2][0x40][4];
 		bool is_clear[2];
 		bool cpu_dirty;
