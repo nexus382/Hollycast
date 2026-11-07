@@ -25,6 +25,11 @@ cmrc_add_resources(Hollycast-resources
         resources/flash/westdrmg.nvmem.zip	# debug: comm and all errors disabled
         resources/flash/smarinef.nvmem.zip	# standard cabinet
         resources/picture/f355_print_template.png
+        # Same BIOS cover used by Flycast's flycast-content console artwork.
+        resources/picture/dreamcast_logo_grey.jpg
+        # Matching artwork for the virtual BIOS entry's explicit media slots.
+        resources/picture/dreamcast_bios_disc.png
+        resources/picture/dreamcast_bios_spine.png
         resources/picture/hollycast_ascii.txt)
 
 cmrc_add_resources(Hollycast-resources

@@ -52,7 +52,7 @@ Option<int, false> BoxartSourceMode("BoxartSourceMode", 0);
 Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
 Option<int, false> LibraryGameInfoHoverDelay("Dreamcast.LibraryGameInfoHoverDelay", 4);
 Option<int, false> LibraryImageSource("Dreamcast.LibraryImageSource", 0);
-Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", 0);
+Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", static_cast<int>(LibraryCoverMediaMode::Cover));
 Option<int, false> LibraryIconScale("Dreamcast.LibraryIconScale", 100);
 Option<std::vector<std::string>, false> LibraryFavourites("LibraryFavourites", {}, "ui");
 Option<int, false> VmuIconMode("Dreamcast.VmuIconMode", 0);

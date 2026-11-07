@@ -28,6 +28,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <atomic>
+#include <functional>
+#include <utility>
 
 struct GameListMetadata
 {
@@ -85,13 +87,14 @@ class GameScanner
 	std::atomic<u64> generation{0};
 	std::unordered_map<std::string, const Game*> arcade_games;
 	std::unordered_set<std::string> arcade_gdroms;
+	std::function<std::vector<std::string>()> enumerateDrives;
 	using LockGuard = std::lock_guard<std::mutex>;
 
-	void add_game_directory(const std::string& path, const GameListMetadataMap& metadata,
-			const std::unordered_map<std::string, std::string>& manualIndex,
-			const std::string& gamelistPath, bool hideLegacy, std::vector<GameMedia>& result);
+	void add_game_directory(const std::string& path, bool hideLegacy, std::vector<GameMedia>& result);
 
 public:
+	explicit GameScanner(std::function<std::vector<std::string>()> enumerateDrives = {})
+		: enumerateDrives(std::move(enumerateDrives)) {}
 	~GameScanner()
 	{
 		stop();
@@ -109,6 +112,7 @@ public:
 	std::mutex& get_mutex() { return mutex; }
 	const std::vector<GameMedia>& get_game_list() { return game_list; }
 	u64 get_generation() const { return generation.load(); }
+	bool is_scanning() const { return running.load(); }
     std::atomic<unsigned int> empty_folders_scanned{0};
     std::atomic<bool> content_path_looks_incorrect{false};
 };

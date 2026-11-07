@@ -2516,3 +2516,29 @@ TEST_F(ThemeLibraryTest, EmptyFolderPromptIsCenteredInsideEveryBundledGameBrowse
 	}
 	EXPECT_EQ(themesChecked, 8);
 }
+
+TEST_F(ThemeLibraryTest, ConfiguredFolderShowsScanProgressUntilTheEmptyScanFinishes)
+{
+	items.clear();
+	layout.id = "configured-empty-scan";
+	layout.browser = {0, 0, 1, 1};
+	auto promptText = [&](bool hasContentPath, bool scanning) {
+		std::string text;
+		renderFrame(ImVec2(-1, -1), false, [&] {
+			ImGui::LogToBuffer(0);
+			EXPECT_FALSE(drawEmptyLibraryPrompt(hasContentPath, scanning));
+			text = ImGui::GetCurrentContext()->LogBuffer.c_str();
+			ImGui::LogFinish();
+		});
+		return text;
+	};
+	const std::string scanning = promptText(true, true);
+	EXPECT_NE(scanning.find(i18n::T("Scanning for games...")), std::string::npos);
+	EXPECT_EQ(scanning.find(i18n::T("Add Game Folder")), std::string::npos);
+	const std::string completed = promptText(true, false);
+	EXPECT_NE(completed.find(i18n::T("No games found")), std::string::npos);
+	EXPECT_NE(completed.find(i18n::T("Add Game Folder")), std::string::npos);
+	const std::string unconfigured = promptText(false, true);
+	EXPECT_NE(unconfigured.find(i18n::T("Your game list is empty")), std::string::npos);
+	EXPECT_NE(unconfigured.find(i18n::T("Add Game Folder")), std::string::npos);
+}

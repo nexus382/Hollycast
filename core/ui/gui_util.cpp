@@ -1199,17 +1199,20 @@ void scrollWindowFromTouch()
 	}
 }
 
-bool drawEmptyLibraryPrompt()
+bool drawEmptyLibraryPrompt(bool hasContentPath, bool scanning)
 {
-	const char* label = i18n::T("Your game list is empty");
+	const char* label = !hasContentPath ? i18n::T("Your game list is empty")
+			: scanning ? i18n::T("Scanning for games...") : i18n::T("No games found");
+	const bool showAddFolder = !hasContentPath || !scanning;
 	const char* button = i18n::T("Add Game Folder");
 	const ImVec2 available = ImGui::GetContentRegionAvail(), origin = ImGui::GetCursorPos();
 	const float preferredSize = uiLargeFontSize();
 	const ImVec2 padding = ScaledVec2(20, 8);
 	const ImVec2 labelSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, label);
-	const ImVec2 buttonSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, button) + padding * 2;
+	const ImVec2 buttonSize = showAddFolder
+			? ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, button) + padding * 2 : ImVec2();
 	const float gap = std::max(ImGui::GetStyle().ItemSpacing.y, uiScaled(8));
-	const float height = labelSize.y + gap + buttonSize.y;
+	const float height = labelSize.y + (showAddFolder ? gap + buttonSize.y : 0.f);
 	// Small game browsers (such as Pocket's VMU screen) use the same prompt,
 	// scaled to their own viewport. No child panel obscures the theme artwork.
 	const float scale = std::clamp(std::min(available.x / std::max(labelSize.x, buttonSize.x), available.y / height), 0.01f, 1.f);
@@ -1221,8 +1224,12 @@ bool drawEmptyLibraryPrompt()
 	ImGui::BeginGroup();
 	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - labelSize.x * scale) * 0.5f), top));
 	ImGui::TextUnformatted(label);
-	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - buttonSize.x * scale) * 0.5f), top + (labelSize.y + gap) * scale));
-	const bool addFolder = ImGui::Button(button);
+	bool addFolder = false;
+	if (showAddFolder)
+	{
+		ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - buttonSize.x * scale) * 0.5f), top + (labelSize.y + gap) * scale));
+		addFolder = ImGui::Button(button);
+	}
 	ImGui::EndGroup();
 	ImGui::PopFont();
 	return addFolder;
