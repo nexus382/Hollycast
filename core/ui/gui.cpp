@@ -2596,8 +2596,10 @@ static bool prepareThemedLibraryItem(const GameMedia& source, library::View view
 	{
 		if (sourceMedia == "disc")
 		{
-			// Opening a disc image belongs to the visible-item callback below.
-			item.metadata["artwork.disc"] = {};
+			// The virtual BIOS disc is bundled, so resolve it before the theme checks
+			// preview availability. Real disc-image reads remain visible-item work.
+			item.metadata["artwork.disc"] = !game.device && !game.arcade && game.path.empty() && game.fileName.empty()
+					? boxart.getDiscArtPath(game) : std::string();
 			continue;
 		}
 		for (const auto& media : artwork::mediaTypes)
@@ -2872,7 +2874,9 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	std::vector<ImVec4> itemBounds(items.size());
 	bool addFolder = false;
 	std::function<void()> drawEmptyBrowser;
-	if (games.empty()) drawEmptyBrowser = [&] { addFolder = drawEmptyLibraryPrompt(); };
+	if (games.empty()) drawEmptyBrowser = [&] {
+		addFolder = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
+	};
 	const int activated = themes::renderLibrary(layout, theme.directory, items, [&](size_t index) {
 		const GameMedia& game = visibleGames[index];
 		if (liveIcons && items[index].isGame)
@@ -2884,7 +2888,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		}
 		// The browser clips its items before this callback and includes the selected
 		// row. Keep asynchronous disc labels current without opening every game.
-		if (needsDiscArtwork && items[index].isGame)
+		if (needsDiscArtwork && !game.device)
 			items[index].metadata["artwork.disc"] = boxart.getDiscArtPath(game);
 		const ImVec2 itemMin = ImGui::GetItemRectMin();
 		const ImVec2 itemMax = ImGui::GetItemRectMax();
@@ -3190,7 +3194,6 @@ static void gui_display_content()
 		ImGui::PopStyleVar(2);
 		ImGui::Separator();
 		boxart.refreshCustomBoxartIndex(false);
-		scanner.fetch_game_list();
 		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
 		ImGui::End();
 		contentpath_warning_popup();
@@ -3349,7 +3352,6 @@ static void gui_display_content()
     ImGui::PopStyleVar(3);
 
     boxart.refreshCustomBoxartIndex(false);
-    scanner.fetch_game_list();
 	// Themes draw this inside their own browser viewport; stock views share the
 	// full library area. Firmware/device entries must not hide the folder action.
 	if (customLayout == nullptr && gui_state != GuiState::SelectDisk && config::ContentPath.get().empty())
@@ -3357,7 +3359,7 @@ static void gui_display_content()
 		ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
 				ImGuiWindowFlags_DragScrolling);
 		scrollWindowFromTouch();
-		const bool addFolder = drawEmptyLibraryPrompt();
+		const bool addFolder = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
 		ImGui::EndChild();
 		addContentPath(addFolder);
 		ImGui::End();
@@ -3928,7 +3930,7 @@ static void gui_display_content()
 #if !defined(TARGET_IPHONE)
 		if (gameListEmpty && gui_state != GuiState::SelectDisk)
 		{
-			addContent = drawEmptyLibraryPrompt();
+			addContent = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
 		}
 		if (!gameListEmpty && (libraryViewEmpty || noFilteredResults) && gui_state != GuiState::SelectDisk)
 		{
@@ -4001,13 +4003,15 @@ static bool systemdir_selected_callback(bool cancelled, std::string selection)
 
 	if (config::open())
 	{
+		// Imported settings replace the scan's captured paths, even if an earlier
+		// scan completed before the home folder was selected.
+		scanner.refresh();
 		config::Settings::instance().load(false);
 		// Make sure the renderer type doesn't change mid-flight
 		config::RendererType = RenderType::OpenGL;
 		gui_setState(GuiState::Main);
 		if (config::ContentPath.get().empty())
 		{
-			scanner.stop();
 			config::ContentPath.get().push_back(selection);
 		}
 		SaveSettings();
@@ -4607,7 +4611,7 @@ void gui_display_ui()
 		+ std::to_string(config::ArtworkProvider.get()) + "/" + config::BoxartPath.get() + "/"
 		+ (selectedTheme ? selectedTheme->id : "basic") + "/" + (selectedLayout ? selectedLayout->id : "")
 		+ (enabled ? "/on" : "/off");
-	if (enabled && generation && key != queuedMediaKey)
+	if (enabled && generation && !scanner.is_scanning() && key != queuedMediaKey)
 	{
 		gui_download_library_media(requirements, false, selectedTheme ? selectedTheme->name : T("Basic library media"));
 		queuedMediaKey = key;
@@ -4638,6 +4642,12 @@ void gui_display_ui()
 	// Resolve protocol-launched games before the intro can defer activation.
 	const bool protocolActivated = gui_state == GuiState::Main && checkUWPProtocolActivation();
 #endif
+
+	// Scan library paths during the intro, but keep direct launches free of a
+	// worker that gui_start_game would have to join before loading the game.
+	if (gui_state == GuiState::SelectDisk || (gui_state == GuiState::Main
+			&& settings.content.path.empty() && !settings.naomi.slave))
+		scanner.fetch_game_list();
 
 	if (gui_display_launch_screen())
 	{

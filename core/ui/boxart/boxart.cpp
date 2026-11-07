@@ -23,6 +23,7 @@
 #include "../game_scanner.h"
 #include "oslib/oslib.h"
 #include "oslib/directory.h"
+#include "oslib/resources.h"
 #include "oslib/storage.h"
 #include "cfg/option.h"
 #include "arcade_scraper.h"
@@ -678,6 +679,8 @@ GameBoxart Boxart::getCachedBoxart(const GameMedia& media)
 
 GameBoxart Boxart::getBoxart(const GameMedia& media)
 {
+	if (media.path.empty() && media.fileName.empty() && !media.arcade && !media.device)
+		return getBiosBoxart(media);
 	if (cacheRefreshPending.load())
 		return getCachedBoxart(media);
 	loadDatabase();
@@ -878,6 +881,8 @@ void Boxart::retryArtworkMedia()
 
 GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u32 requestedMedia)
 {
+	if (media.path.empty() && media.fileName.empty() && !media.arcade && !media.device)
+		return getBiosBoxart(media);
 	if (cacheRefreshPending.load())
 		return getCachedBoxart(media);
 	loadDatabase();
@@ -982,6 +987,64 @@ bool Boxart::shouldFetchOnline(bool arcade) const
 	return true;
 }
 
+GameBoxart Boxart::getBiosBoxart(const GameMedia& media, config::LibraryCoverMediaMode mediaMode)
+{
+	GameBoxart boxart = makeMediaBoxart(media);
+	if (mediaMode == config::LibraryCoverMediaMode::CurrentArtwork
+		&& config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::CustomThenScraped))
+	{
+		const std::string custom = getCustomBoxartPath(media);
+		if (!custom.empty())
+		{
+			boxart.setBoxartPath(custom);
+			return boxart;
+		}
+	}
+	const char *filename;
+	switch (mediaMode)
+	{
+	case config::LibraryCoverMediaMode::CurrentArtwork:
+	case config::LibraryCoverMediaMode::Cover:
+		filename = "dreamcast_logo_grey.jpg";
+		break;
+	case config::LibraryCoverMediaMode::Physical:
+		filename = "dreamcast_bios_disc.png";
+		break;
+	case config::LibraryCoverMediaMode::Spine:
+		filename = "dreamcast_bios_spine.png";
+		break;
+	default:
+		return boxart;
+	}
+	const std::string directory = getSaveDirectory();
+	const std::string path = directory + filename;
+	// The virtual BIOS entry has no catalog entry. Keep its artwork independent of online
+	// providers and legacy database records that marked it as failed or unavailable.
+	if (!file_exists(path))
+	{
+		if (!ensureFilesystemDirectory(directory))
+			return boxart;
+		size_t size = 0;
+		const auto image = resource::load(std::string("picture/") + filename, size);
+		if (!image || size == 0)
+			return boxart;
+		const std::string partial = path + ".tmp";
+		FILE *file = nowide::fopen(partial.c_str(), "wb");
+		if (file == nullptr)
+			return boxart;
+		const bool written = fwrite(image.get(), 1, size, file) == size;
+		const bool closed = fclose(file) == 0;
+		// Publish only the complete image so an interrupted write is retried.
+		if (!written || !closed || nowide::rename(partial.c_str(), path.c_str()) != 0)
+		{
+			nowide::remove(partial.c_str());
+			return boxart;
+		}
+	}
+	boxart.setBoxartPath(path);
+	return boxart;
+}
+
 GameBoxart Boxart::getPhysicalBoxart(const GameMedia& media)
 {
 	GameBoxart boxart;
@@ -1056,11 +1119,14 @@ std::string Boxart::getLibraryCoverMediaPath(const GameMedia& media)
 
 std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode, bool verifyLocal)
 {
-	if (cacheRefreshPending.load())
-		return getCustomBoxartPathForMediaMode(media, mediaMode, nullptr, verifyLocal);
 	const std::string custom = getCustomBoxartPathForMediaMode(media, mediaMode, nullptr, verifyLocal);
 	if (!custom.empty())
 		return custom;
+	// Bundled BIOS media fills missing slots without replacing named local artwork.
+	if (media.path.empty() && media.fileName.empty() && !media.arcade && !media.device)
+		return getBiosBoxart(media, mediaMode).boxartPath;
+	if (cacheRefreshPending.load())
+		return {};
 	loadDatabase();
 	std::lock_guard<std::mutex> guard(mutex);
 	const auto& record = gameForMedia(media);
