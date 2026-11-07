@@ -28,6 +28,7 @@ static_assert(sizeof(Vertex) == sizeof(float) * 32, "Metal vertex ABI mismatch")
 MTLPixelFormat pixelFormat(GLenum format) {
     switch (format) {
     case GL_RGB10_A2: return MTLPixelFormatRGB10A2Unorm;
+    case GL_RG32UI: return MTLPixelFormatRG32Uint;
     case GL_DEPTH_COMPONENT24:
     case GL_DEPTH_COMPONENT32:
     case GL_DEPTH_COMPONENT32F: return MTLPixelFormatDepth32Float;
@@ -115,13 +116,13 @@ struct TextureEntry {
     std::vector<bool> initializedLevels;
 };
 struct PipelineKey {
-    bool bitmap=false, blend=false, cull=false, depth=false;
-    uint32_t format=0, srcRGB=0, dstRGB=0, srcAlpha=0, dstAlpha=0;
+    bool bitmap=false, familyResolve=false, blend=false, cull=false, depth=false;
+    uint32_t format=0, metadataFormat=0, srcRGB=0, dstRGB=0, srcAlpha=0, dstAlpha=0;
     uint32_t eqRGB=0, eqAlpha=0, cullFace=0, frontFace=0;
     uint8_t colorMask=0;
     bool operator<(const PipelineKey& b) const {
-        return std::tie(bitmap,blend,cull,depth,format,srcRGB,dstRGB,srcAlpha,dstAlpha,eqRGB,eqAlpha,cullFace,frontFace,colorMask) <
-               std::tie(b.bitmap,b.blend,b.cull,b.depth,b.format,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.eqRGB,b.eqAlpha,b.cullFace,b.frontFace,b.colorMask);
+        return std::tie(bitmap,familyResolve,blend,cull,depth,format,metadataFormat,srcRGB,dstRGB,srcAlpha,dstAlpha,eqRGB,eqAlpha,cullFace,frontFace,colorMask) <
+               std::tie(b.bitmap,b.familyResolve,b.blend,b.cull,b.depth,b.format,b.metadataFormat,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.eqRGB,b.eqAlpha,b.cullFace,b.frontFace,b.colorMask);
     }
 };
 struct SamplerKey {
@@ -159,6 +160,16 @@ public:
         depthDesc.storageMode=MTLStorageModePrivate;depthDesc.usage=MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget;
         fallbackDepth=[device newTextureWithDescriptor:depthDesc];
         clearDepthTexture(fallbackDepth);
+        MTLTextureDescriptor *metadataDesc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG32Uint width:1 height:1 mipmapped:NO];
+        metadataDesc.storageMode=MTLStorageModePrivate;metadataDesc.usage=MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget;
+        fallbackMetadata=[device newTextureWithDescriptor:metadataDesc];
+        MTLRenderPassDescriptor *metadataClear=[MTLRenderPassDescriptor renderPassDescriptor];
+        metadataClear.colorAttachments[0].texture=fallbackMetadata;
+        metadataClear.colorAttachments[0].loadAction=MTLLoadActionClear;
+        metadataClear.colorAttachments[0].storeAction=MTLStoreActionStore;
+        metadataClear.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,0);
+        id<MTLCommandBuffer> clearCommand=[queue commandBuffer];
+        [[clearCommand renderCommandEncoderWithDescriptor:metadataClear] endEncoding];commitCommandBuffer(clearCommand);
         textures[0] = {};
     }
 
@@ -281,9 +292,9 @@ public:
 
     void draw(const Draw& d) override {
       @autoreleasepool {
-        auto color=target(d.color,false), depth=target(d.depth,true);
+        auto color=target(d.color,false), depth=target(d.depth,true), metadata=d.metadata?target(d.metadata,false):nil;
         if (!color || d.vertices.empty() || (d.cull && d.cullFace==GL_FRONT_AND_BACK)) return;
-        if(!beginDrawPass(d.color,d.depth,color,depth))return;
+        if(!beginDrawPass(d.color,d.depth,color,depth,d.metadata,metadata))return;
         id<MTLRenderCommandEncoder> enc=activeEncoder;
         const unsigned w=(unsigned)color.width,h=(unsigned)color.height;
         GLint vx=d.viewport[2]||d.viewport[3]?d.viewport[0]:0,vy=d.viewport[2]||d.viewport[3]?d.viewport[1]:0;
@@ -294,7 +305,7 @@ public:
         if(d.scissorEnabled){sx=d.scissor[0];sy=d.color==0?(GLint)h-d.scissor[1]-d.scissor[3]:d.scissor[1];sw=d.scissor[2];sh=d.scissor[3];}
         sx=std::max<GLint>(0,sx);sy=std::max<GLint>(0,sy);sw=std::max<GLint>(0,std::min<GLint>(sw,(GLint)w-sx));sh=std::max<GLint>(0,std::min<GLint>(sh,(GLint)h-sy));
         [enc setScissorRect:MTLScissorRect{(NSUInteger)sx,(NSUInteger)sy,(NSUInteger)sw,(NSUInteger)sh}];
-        PipelineKey key{};key.bitmap=d.bitmap;key.blend=d.blend;key.cull=d.cull;key.depth=depth!=nil;key.format=(uint32_t)pixelFormat(textures[d.color].info.format);
+        PipelineKey key{};key.bitmap=d.bitmap;key.familyResolve=d.familyResolve;key.metadataFormat=metadata?(uint32_t)MTLPixelFormatRG32Uint:0;key.blend=d.blend;key.cull=d.cull;key.depth=depth!=nil;key.format=(uint32_t)pixelFormat(textures[d.color].info.format);
         key.srcRGB=d.srcRGB;key.dstRGB=d.dstRGB;key.srcAlpha=d.srcAlpha;key.dstAlpha=d.dstAlpha;key.eqRGB=d.equationRGB;key.eqAlpha=d.equationAlpha;key.cullFace=d.cullFace;key.frontFace=d.frontFace;
         for(unsigned i=0;i<4;i++)if(d.colorMask[i])key.colorMask|=1u<<i;
         id<MTLRenderPipelineState> pipeline=pipelineFor(key);if(!pipeline)return;
@@ -316,11 +327,15 @@ public:
         for(unsigned i=0;i<4;i++){
             id<MTLTexture> t=nil;auto it=textures.find(d.textures[i]);
             const bool meshDepthSlot=!d.bitmap&&(i==1||i==2);
-            if(meshDepthSlot){
+            const bool metadataSlot=(!d.bitmap&&i==3)||(d.familyResolve&&i>=2);
+            if(metadataSlot){
+                if(d.textures[i]&&d.textures[i]!=d.metadata&&it!=textures.end()&&it->second.info.format==GL_RG32UI)t=it->second.texture;
+                [enc setFragmentTexture:t?:fallbackMetadata atIndex:i];
+            } else if(meshDepthSlot){
                 if(d.textures[i] && it!=textures.end() && isDepth(it->second.info.format)) t=it->second.texture;
                 [enc setFragmentTexture:t?:fallbackDepth atIndex:i];
             } else {
-                if(d.textures[i] && d.textures[i]!=d.color && d.textures[i]!=d.depth && it!=textures.end() && !isDepth(it->second.info.format)) {
+                if(d.textures[i] && d.textures[i]!=d.color && d.textures[i]!=d.depth && d.textures[i]!=d.metadata && it!=textures.end() && !isDepth(it->second.info.format)) {
                     const auto& sampled=it->second;
                     const GLenum minFilter=d.sampling[i].minFilter;
                     const bool mipmapped=minFilter==GL_NEAREST_MIPMAP_NEAREST||minFilter==GL_NEAREST_MIPMAP_LINEAR||minFilter==GL_LINEAR_MIPMAP_NEAREST||minFilter==GL_LINEAR_MIPMAP_LINEAR;
@@ -373,11 +388,11 @@ public:
     }
 
 private:
-    std::function<void(id<MTLTexture>,float)> presenter;id<MTLDevice> device=nil;id<MTLCommandQueue> queue=nil;id<MTLLibrary> library=nil;id<MTLTexture> fallback=nil,fallbackDepth=nil;
+    std::function<void(id<MTLTexture>,float)> presenter;id<MTLDevice> device=nil;id<MTLCommandQueue> queue=nil;id<MTLLibrary> library=nil;id<MTLTexture> fallback=nil,fallbackDepth=nil,fallbackMetadata=nil;
     dispatch_semaphore_t inFlight=nullptr;
     id<MTLCommandBuffer> activeCommand=nil;
     id<MTLRenderCommandEncoder> activeEncoder=nil;
-    unsigned activeColor=~0u,activeDepth=~0u,activeDraws=0;
+    unsigned activeColor=~0u,activeDepth=~0u,activeMetadata=~0u,activeDraws=0;
     bool occlusionActive=false;
     std::vector<id<MTLBuffer>> visibilityBuffers;
     std::map<unsigned,TextureEntry> textures;std::map<PipelineKey,id<MTLRenderPipelineState>> pipelines;std::map<std::tuple<uint32_t,uint8_t,bool>,id<MTLRenderPipelineState>> clearPipelines;std::map<SamplerKey,id<MTLSamplerState>> samplers;std::map<std::pair<GLenum,bool>,id<MTLDepthStencilState>> depths;
@@ -392,14 +407,15 @@ private:
         if(!activeCommand)return;
         [activeEncoder endEncoding];
         id<MTLCommandBuffer> command=activeCommand;
-        activeEncoder=nil;activeCommand=nil;activeColor=activeDepth=~0u;activeDraws=0;
+        activeEncoder=nil;activeCommand=nil;activeColor=activeDepth=activeMetadata=~0u;activeDraws=0;
         commitCommandBuffer(command);
     }
-    bool beginDrawPass(unsigned colorID,unsigned depthID,id<MTLTexture> color,id<MTLTexture> depth) {
-        if(activeEncoder&&activeColor==colorID&&activeDepth==depthID&&activeDraws<256)return true;
+    bool beginDrawPass(unsigned colorID,unsigned depthID,id<MTLTexture> color,id<MTLTexture> depth,unsigned metadataID,id<MTLTexture> metadata) {
+        if(activeEncoder&&activeColor==colorID&&activeDepth==depthID&&activeMetadata==metadataID&&activeDraws<256)return true;
         flushDraws();
         MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture=color;pass.colorAttachments[0].loadAction=MTLLoadActionLoad;pass.colorAttachments[0].storeAction=MTLStoreActionStore;
+        if(metadata){pass.colorAttachments[1].texture=metadata;pass.colorAttachments[1].loadAction=MTLLoadActionLoad;pass.colorAttachments[1].storeAction=MTLStoreActionStore;}
         if(depth){pass.depthAttachment.texture=depth;pass.depthAttachment.loadAction=MTLLoadActionLoad;pass.depthAttachment.storeAction=MTLStoreActionStore;}
         if(occlusionActive) {
             id<MTLBuffer> results=[device newBufferWithLength:256*sizeof(uint64_t) options:MTLResourceStorageModeShared];
@@ -410,7 +426,7 @@ private:
         }
         activeCommand=[queue commandBuffer];activeEncoder=[activeCommand renderCommandEncoderWithDescriptor:pass];
         if(!activeEncoder){activeCommand=nil;return false;}
-        activeColor=colorID;activeDepth=depthID;activeDraws=0;return true;
+        activeColor=colorID;activeDepth=depthID;activeMetadata=metadataID;activeDraws=0;return true;
     }
     void setVertexData(id<MTLRenderCommandEncoder> encoder,const Vertex* vertices,size_t count) {
         const size_t byteCount=count*sizeof(Vertex);
@@ -436,7 +452,21 @@ private:
     }
     id<MTLSamplerState> samplerFor(const Texture& s){const bool mipmapped=s.minFilter==GL_NEAREST_MIPMAP_NEAREST||s.minFilter==GL_NEAREST_MIPMAP_LINEAR||s.minFilter==GL_LINEAR_MIPMAP_NEAREST||s.minFilter==GL_LINEAR_MIPMAP_LINEAR;SamplerKey key{s.minFilter,s.magFilter,s.wrapS,s.wrapT,mipmapped?s.maxLevel:0};auto i=samplers.find(key);if(i!=samplers.end())return i->second;MTLSamplerDescriptor *d=[MTLSamplerDescriptor new];d.minFilter=(s.minFilter==GL_NEAREST||s.minFilter==GL_NEAREST_MIPMAP_NEAREST||s.minFilter==GL_NEAREST_MIPMAP_LINEAR)?MTLSamplerMinMagFilterNearest:MTLSamplerMinMagFilterLinear;d.magFilter=s.magFilter==GL_NEAREST?MTLSamplerMinMagFilterNearest:MTLSamplerMinMagFilterLinear;d.mipFilter=!mipmapped?MTLSamplerMipFilterNotMipmapped:(s.minFilter==GL_NEAREST_MIPMAP_LINEAR||s.minFilter==GL_LINEAR_MIPMAP_LINEAR)?MTLSamplerMipFilterLinear:MTLSamplerMipFilterNearest;d.lodMaxClamp=mipmapped?(float)s.maxLevel:0.f;d.sAddressMode=addressMode(s.wrapS);d.tAddressMode=addressMode(s.wrapT);auto state=[device newSamplerStateWithDescriptor:d];samplers[key]=state;return state;}
     id<MTLDepthStencilState> depthState(GLenum func,bool write){auto key=std::make_pair(func,write);auto i=depths.find(key);if(i!=depths.end())return i->second;MTLDepthStencilDescriptor *d=[MTLDepthStencilDescriptor new];d.depthCompareFunction=compareFunction(func);d.depthWriteEnabled=write;auto s=[device newDepthStencilStateWithDescriptor:d];depths[key]=s;return s;}
-    id<MTLRenderPipelineState> pipelineFor(const PipelineKey& k){auto i=pipelines.find(k);if(i!=pipelines.end())return i->second;NSString *vn=k.bitmap?@"bitmapVertex":@"meshVertex",*fn=k.bitmap?@"bitmapFragment":@"meshFragment";MTLRenderPipelineDescriptor *d=[MTLRenderPipelineDescriptor new];d.vertexFunction=[library newFunctionWithName:vn];d.fragmentFunction=[library newFunctionWithName:fn];d.colorAttachments[0].pixelFormat=(MTLPixelFormat)k.format;auto a=d.colorAttachments[0];a.writeMask=metalColorWriteMask(k.colorMask);a.blendingEnabled=k.blend;if(k.blend){a.sourceRGBBlendFactor=blendFactor(k.srcRGB);a.destinationRGBBlendFactor=blendFactor(k.dstRGB);a.sourceAlphaBlendFactor=blendFactor(k.srcAlpha);a.destinationAlphaBlendFactor=blendFactor(k.dstAlpha);a.rgbBlendOperation=blendOperation(k.eqRGB);a.alphaBlendOperation=blendOperation(k.eqAlpha);}if(k.depth)d.depthAttachmentPixelFormat=MTLPixelFormatDepth32Float;NSError *e=nil;auto p=[device newRenderPipelineStateWithDescriptor:d error:&e];if(!p)throw std::runtime_error(std::string("Hikaru Metal pipeline creation failed: ")+(e.localizedDescription.UTF8String?:"unknown error"));pipelines[k]=p;return p;}
+    id<MTLRenderPipelineState> pipelineFor(const PipelineKey& k){
+        auto found=pipelines.find(k);if(found!=pipelines.end())return found->second;
+        NSString *vertex=k.bitmap?@"bitmapVertex":@"meshVertex";
+        NSString *fragment=k.familyResolve?@"familyResolveFragment":k.bitmap?@"bitmapFragment":k.metadataFormat?@"familyMeshFragment":@"meshFragment";
+        MTLRenderPipelineDescriptor *descriptor=[MTLRenderPipelineDescriptor new];
+        descriptor.vertexFunction=[library newFunctionWithName:vertex];descriptor.fragmentFunction=[library newFunctionWithName:fragment];
+        descriptor.colorAttachments[0].pixelFormat=(MTLPixelFormat)k.format;
+        if(k.metadataFormat){descriptor.colorAttachments[1].pixelFormat=(MTLPixelFormat)k.metadataFormat;descriptor.colorAttachments[1].writeMask=MTLColorWriteMaskAll;}
+        auto color=descriptor.colorAttachments[0];color.writeMask=metalColorWriteMask(k.colorMask);color.blendingEnabled=k.blend;
+        if(k.blend){color.sourceRGBBlendFactor=blendFactor(k.srcRGB);color.destinationRGBBlendFactor=blendFactor(k.dstRGB);color.sourceAlphaBlendFactor=blendFactor(k.srcAlpha);color.destinationAlphaBlendFactor=blendFactor(k.dstAlpha);color.rgbBlendOperation=blendOperation(k.eqRGB);color.alphaBlendOperation=blendOperation(k.eqAlpha);}
+        if(k.depth)descriptor.depthAttachmentPixelFormat=MTLPixelFormatDepth32Float;
+        NSError *error=nil;auto pipeline=[device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+        if(!pipeline)throw std::runtime_error(std::string("Hikaru Metal pipeline creation failed: ")+(error.localizedDescription.UTF8String?:"unknown error"));
+        pipelines[k]=pipeline;return pipeline;
+    }
     id<MTLRenderPipelineState> clearPipeline(const PipelineKey& key,bool withDepth){ // partial clears need channel-mask and scissor support
         auto cacheKey=std::make_tuple(key.format,key.colorMask,withDepth);auto found=clearPipelines.find(cacheKey);if(found!=clearPipelines.end())return found->second;
         NSString *source=@"#include <metal_stdlib>\nusing namespace metal;struct U{float4 color;float depth;};vertex float4 cv(uint i [[vertex_id]],constant U& u [[buffer(0)]]){float2 p[3]={{-1,-1},{3,-1},{-1,3}};return float4(p[i],u.depth,1);}fragment float4 cf(constant U& u [[buffer(0)]]){return u.color;}";NSError *e=nil;id<MTLLibrary> l=[device newLibraryWithSource:source options:nil error:&e];if(!l)throw std::runtime_error(std::string("Hikaru Metal clear shader compile failed: ")+(e.localizedDescription.UTF8String?:"unknown error"));MTLRenderPipelineDescriptor *d=[MTLRenderPipelineDescriptor new];d.vertexFunction=[l newFunctionWithName:@"cv"];d.fragmentFunction=[l newFunctionWithName:@"cf"];d.colorAttachments[0].pixelFormat=(MTLPixelFormat)key.format;d.colorAttachments[0].writeMask=metalColorWriteMask(key.colorMask);if(withDepth)d.depthAttachmentPixelFormat=MTLPixelFormatDepth32Float;id<MTLRenderPipelineState> p=[device newRenderPipelineStateWithDescriptor:d error:&e];if(!p)throw std::runtime_error(std::string("Hikaru Metal clear pipeline failed: ")+(e.localizedDescription.UTF8String?:"unknown error"));clearPipelines[cacheKey]=p;return p;}

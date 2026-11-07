@@ -23,6 +23,7 @@ namespace {
 vk::Format colorFormat(GLenum format) {
     switch (format) {
     case GL_RGB10_A2: return vk::Format::eA2B10G10R10UnormPack32;
+    case GL_RG32UI: return vk::Format::eR32G32Uint;
     default: return vk::Format::eR8G8B8A8Unorm;
     }
 }
@@ -42,8 +43,10 @@ vk::Format depthFormat(GLenum format, bool sampled = false) {
     default: requested = VulkanContext::Instance()->GetDepthFormat(); break;
     }
     if (supported(requested)) return requested;
+    // Hikaru explicitly compares canonical D24 codes during transparency
+    // peeling. D16 cannot preserve them, even when it is otherwise renderable.
     for (vk::Format candidate : {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint, vk::Format::eD16Unorm})
-        if (supported(candidate)) return candidate;
+        if ((format == GL_DEPTH_COMPONENT16 || candidate != vk::Format::eD16Unorm) && supported(candidate)) return candidate;
     throw std::runtime_error("No supported Hikaru Vulkan depth format");
 }
 vk::Filter filter(GLenum f) { return f == GL_LINEAR ? vk::Filter::eLinear : vk::Filter::eNearest; }
@@ -108,11 +111,11 @@ class VulkanBackend final : public Backend {
         std::vector<DrawResources> draws;
     };
     struct PipelineKey {
-        bool bitmap, depthTest, depthWrite, blend, cull, depthBias;
+        bool bitmap, familyResolve, depthTest, depthWrite, blend, cull, depthBias;
         GLenum depthFunc, cullFace, frontFace, srcRGB, dstRGB, srcAlpha, dstAlpha, equationRGB, equationAlpha, topology;
         std::array<bool,4> colorMask;
-        vk::Format color, depth;
-        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth) < std::tie(b.bitmap,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth); }
+        vk::Format color, depth, metadata;
+        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,familyResolve,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata) < std::tie(b.bitmap,b.familyResolve,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth,b.metadata); }
     };
     VulkanContext* ctx = VulkanContext::Instance();
     vk::Device device = ctx->GetDevice();
@@ -123,12 +126,12 @@ class VulkanBackend final : public Backend {
     using SamplerKey=std::tuple<GLenum,GLenum,GLenum,GLenum,uint32_t>;
     std::map<SamplerKey,vk::UniqueSampler> samplerCache;
     vk::UniqueRenderPass colorOnlyPass;
-    std::map<std::pair<vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
-    vk::UniqueShaderModule meshVertex, meshFragment, bitmapVertex, bitmapFragment;
+    std::map<std::tuple<vk::Format,vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
+    vk::UniqueShaderModule meshVertex, meshFragment, bitmapVertex, bitmapFragment, familyFragment;
     std::map<PipelineKey, vk::UniquePipeline> pipelines;
     std::unordered_map<unsigned, Image> images;
     std::unordered_map<unsigned, Texture> imageInfo;
-    std::map<std::pair<unsigned,unsigned>,vk::UniqueFramebuffer> framebuffers;
+    std::map<std::tuple<unsigned,unsigned,unsigned>,vk::UniqueFramebuffer> framebuffers;
     std::deque<PendingBatch> pendingBatches;
     vk::UniqueCommandBuffer activeCommand;
     std::unique_ptr<BufferData> activeVertexBuffer,activeUniformBuffer;
@@ -137,7 +140,7 @@ class VulkanBackend final : public Backend {
     std::vector<Image> retiredImages;
     std::vector<vk::UniqueFramebuffer> retiredFramebuffers;
     vk::DeviceSize activeVertexOffset=0,activeUniformOffset=0,activeVertexCapacity=0,activeUniformCapacity=0;
-    unsigned activeDrawCount=0,activeColor=0,activeDepth=0;
+    unsigned activeDrawCount=0,activeColor=0,activeDepth=0,activeMetadata=0;
     bool renderPassOpen=false;
     bool occlusionActive=false;
     std::vector<vk::UniqueQueryPool> occlusionQueries;
@@ -177,7 +180,7 @@ class VulkanBackend final : public Backend {
         if(occlusionActive)cmd.endQuery(*occlusionQueries.back(),0);
         cmd.endRenderPass();
         renderPassOpen=false;
-        activeColor=activeDepth=0;
+        activeColor=activeDepth=activeMetadata=0;
     }
     void flushBatch() {
         if(!activeCommand)return;
@@ -205,12 +208,15 @@ class VulkanBackend final : public Backend {
             throw;
         }
     }
-    vk::Framebuffer framebuffer(unsigned colorId,unsigned depthId,Image& color,Image* depth,vk::RenderPass pass) {
-        auto key=std::make_pair(colorId,depthId);
+    vk::Framebuffer framebuffer(unsigned colorId,unsigned depthId,Image& color,Image* depth,vk::RenderPass pass,unsigned metadataId=0,Image* metadata=nullptr) {
+        auto key=std::make_tuple(colorId,depthId,metadataId);
         auto it=framebuffers.find(key);
         if(it!=framebuffers.end())return *it->second;
-        std::array<vk::ImageView,2> views{*color.attachmentView,depth?*depth->attachmentView:vk::ImageView{}};
-        vk::FramebufferCreateInfo fi({},pass,depth?2:1,views.data(),color.extent.width,color.extent.height,1);
+        std::array<vk::ImageView,3> views{};
+        unsigned count=0;views[count++]=*color.attachmentView;
+        if(metadata)views[count++]=*metadata->attachmentView;
+        if(depth)views[count++]=*depth->attachmentView;
+        vk::FramebufferCreateInfo fi({},pass,count,views.data(),color.extent.width,color.extent.height,1);
         return *framebuffers.emplace(key,device.createFramebufferUnique(fi)).first->second;
     }
     vk::Sampler sampler(const Texture& sampling,const Image& image,bool mipmapped) {
@@ -244,7 +250,7 @@ class VulkanBackend final : public Backend {
         if(id==0)ctx->PresentFrame({}, {}, {}, 1.f);
         startBatch();
         for(auto fb=framebuffers.begin();fb!=framebuffers.end();) {
-            if(fb->first.first==id||fb->first.second==id) {
+            if(std::get<0>(fb->first)==id||std::get<1>(fb->first)==id||std::get<2>(fb->first)==id) {
                 retiredFramebuffers.push_back(std::move(fb->second));
                 fb=framebuffers.erase(fb);
             } else ++fb;
@@ -307,32 +313,44 @@ class VulkanBackend final : public Backend {
     Image& image(unsigned id) {
         auto it=images.find(id); if(it==images.end()) throw std::runtime_error("Unknown Hikaru Vulkan image"); return it->second;
     }
-    vk::UniqueRenderPass createPass(vk::Format color, vk::Format depth, bool withDepth) {
-        std::array<vk::AttachmentDescription,2> a{};
-        a[0].format=color; a[0].samples=vk::SampleCountFlagBits::e1; a[0].loadOp=vk::AttachmentLoadOp::eLoad; a[0].storeOp=vk::AttachmentStoreOp::eStore; a[0].stencilLoadOp=vk::AttachmentLoadOp::eDontCare; a[0].stencilStoreOp=vk::AttachmentStoreOp::eDontCare; a[0].initialLayout=vk::ImageLayout::eColorAttachmentOptimal; a[0].finalLayout=vk::ImageLayout::eColorAttachmentOptimal;
-        vk::AttachmentReference colorRef(0,vk::ImageLayout::eColorAttachmentOptimal), dep(1,vk::ImageLayout::eDepthStencilAttachmentOptimal);
-        vk::SubpassDescription sub({},vk::PipelineBindPoint::eGraphics,0,nullptr,1,&colorRef,nullptr,withDepth?&dep:nullptr);
-        auto attachmentStages=vk::PipelineStageFlagBits::eColorAttachmentOutput|vk::PipelineStageFlagBits::eEarlyFragmentTests|vk::PipelineStageFlagBits::eLateFragmentTests;
-        auto attachmentAccess=vk::AccessFlagBits::eColorAttachmentRead|vk::AccessFlagBits::eColorAttachmentWrite|vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-        // Attachments use LOAD and may be drawn into by consecutive render
-        // passes. Make prior attachment writes visible when the next pass
-        // reloads the same image, including when a pass was split to sample a
-        // different image between draws.
-        vk::SubpassDependency dependency(VK_SUBPASS_EXTERNAL,0,attachmentStages,attachmentStages,attachmentAccess,attachmentAccess,vk::DependencyFlagBits::eByRegion);
-        vk::RenderPassCreateInfo rp({},1,a.data(),1,&sub,1,&dependency);
-        if(withDepth){a[1].format=depth;a[1].samples=vk::SampleCountFlagBits::e1;a[1].loadOp=vk::AttachmentLoadOp::eLoad;a[1].storeOp=vk::AttachmentStoreOp::eStore;a[1].stencilLoadOp=vk::AttachmentLoadOp::eDontCare;a[1].stencilStoreOp=vk::AttachmentStoreOp::eDontCare;a[1].initialLayout=vk::ImageLayout::eDepthStencilAttachmentOptimal;a[1].finalLayout=vk::ImageLayout::eDepthStencilAttachmentOptimal;rp.attachmentCount=2;}
-        return device.createRenderPassUnique(rp);
+    vk::UniqueRenderPass createPass(vk::Format color,vk::Format depth,bool withDepth,vk::Format metadata=vk::Format::eUndefined) {
+        std::array<vk::AttachmentDescription,3> attachments{};
+        std::array<vk::AttachmentReference,2> colors{};
+        unsigned count=0,colorCount=0;
+        for(auto format:{color,metadata}) {
+            if(format==vk::Format::eUndefined)continue;
+            auto& attachment=attachments[count];
+            attachment.format=format;attachment.samples=vk::SampleCountFlagBits::e1;
+            attachment.loadOp=vk::AttachmentLoadOp::eLoad;attachment.storeOp=vk::AttachmentStoreOp::eStore;
+            attachment.stencilLoadOp=vk::AttachmentLoadOp::eDontCare;attachment.stencilStoreOp=vk::AttachmentStoreOp::eDontCare;
+            attachment.initialLayout=attachment.finalLayout=vk::ImageLayout::eColorAttachmentOptimal;
+            colors[colorCount++]=vk::AttachmentReference(count++,vk::ImageLayout::eColorAttachmentOptimal);
+        }
+        vk::AttachmentReference depthReference(count,vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        if(withDepth) {
+            auto& attachment=attachments[count++];attachment.format=depth;attachment.samples=vk::SampleCountFlagBits::e1;
+            attachment.loadOp=vk::AttachmentLoadOp::eLoad;attachment.storeOp=vk::AttachmentStoreOp::eStore;
+            attachment.stencilLoadOp=vk::AttachmentLoadOp::eDontCare;attachment.stencilStoreOp=vk::AttachmentStoreOp::eDontCare;
+            attachment.initialLayout=attachment.finalLayout=vk::ImageLayout::eDepthStencilAttachmentOptimal;
+        }
+        vk::SubpassDescription sub({},vk::PipelineBindPoint::eGraphics,0,nullptr,colorCount,colors.data(),nullptr,withDepth?&depthReference:nullptr);
+        // Consecutive family and resolve passes share images on this queue.
+        auto stages=vk::PipelineStageFlagBits::eColorAttachmentOutput|vk::PipelineStageFlagBits::eEarlyFragmentTests|vk::PipelineStageFlagBits::eLateFragmentTests;
+        auto access=vk::AccessFlagBits::eColorAttachmentRead|vk::AccessFlagBits::eColorAttachmentWrite|vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+        vk::SubpassDependency dependency(VK_SUBPASS_EXTERNAL,0,stages,stages,access,access,vk::DependencyFlagBits::eByRegion);
+        vk::RenderPassCreateInfo info({},count,attachments.data(),1,&sub,1,&dependency);
+        return device.createRenderPassUnique(info);
     }
-    vk::RenderPass renderPass(vk::Format color, vk::Format depth) {
-        auto key=std::make_pair(color,depth);
+    vk::RenderPass renderPass(vk::Format color,vk::Format depth,vk::Format metadata=vk::Format::eUndefined) {
+        auto key=std::make_tuple(color,depth,metadata);
         auto it=renderPasses.find(key);
-        if(it==renderPasses.end()) it=renderPasses.emplace(key,createPass(color,depth,depth!=vk::Format::eUndefined)).first;
+        if(it==renderPasses.end())it=renderPasses.emplace(key,createPass(color,depth,depth!=vk::Format::eUndefined,metadata)).first;
         return *it->second;
     }
     vk::Pipeline pipeline(const PipelineKey& k) {
         auto found=pipelines.find(k); if(found!=pipelines.end()) return *found->second;
-        auto pass=renderPass(k.color,k.depth);
-        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.bitmap?*bitmapFragment:*meshFragment,"main"}};
+        auto pass=renderPass(k.color,k.depth,k.metadata);
+        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.familyResolve?*familyFragment:k.bitmap?*bitmapFragment:*meshFragment,"main"}};
         vk::VertexInputBindingDescription binding(0,sizeof(Vertex),vk::VertexInputRate::eVertex);
         std::array<vk::VertexInputAttributeDescription,8> attrs; for(uint32_t i=0;i<8;i++)attrs[i]={i,0,vk::Format::eR32G32B32A32Sfloat,i*16};
         vk::PipelineVertexInputStateCreateInfo vi({},1,&binding,attrs.size(),attrs.data());
@@ -344,7 +362,9 @@ class VulkanBackend final : public Backend {
         vk::PipelineMultisampleStateCreateInfo ms({},vk::SampleCountFlagBits::e1);
         vk::PipelineDepthStencilStateCreateInfo ds({},k.depthTest,k.depthWrite,k.depthTest?compare(k.depthFunc):vk::CompareOp::eAlways,false,false,{}, {},0.f,1.f);
         vk::PipelineColorBlendAttachmentState ba{}; ba.blendEnable=k.blend; ba.srcColorBlendFactor=blendFactor(k.srcRGB);ba.dstColorBlendFactor=blendFactor(k.dstRGB);ba.colorBlendOp=blendOp(k.equationRGB);ba.srcAlphaBlendFactor=blendFactor(k.srcAlpha);ba.dstAlphaBlendFactor=blendFactor(k.dstAlpha);ba.alphaBlendOp=blendOp(k.equationAlpha);ba.colorWriteMask={};for(int i=0;i<4;i++)if(k.colorMask[i])ba.colorWriteMask|=static_cast<vk::ColorComponentFlagBits>(1u<<i);
-        vk::PipelineColorBlendStateCreateInfo cb({},false,vk::LogicOp::eCopy,1,&ba);
+        std::array<vk::PipelineColorBlendAttachmentState,2> blends{ba,ba};
+        // The metadata attachment is used only by unblended depth writers.
+        vk::PipelineColorBlendStateCreateInfo cb({},false,vk::LogicOp::eCopy,k.metadata==vk::Format::eUndefined?1:2,blends.data());
         vk::DynamicState dyns[]={vk::DynamicState::eViewport,vk::DynamicState::eScissor,vk::DynamicState::eDepthBias}; vk::PipelineDynamicStateCreateInfo dyn({},3,dyns);
         vk::GraphicsPipelineCreateInfo ci({},2,stages,&vi,&ia,nullptr,&vp,&rs,&ms,&ds,&cb,&dyn,*pipelineLayout,pass);
         auto result=device.createGraphicsPipelineUnique(ctx->GetPipelineCache(),ci);
@@ -385,6 +405,11 @@ public:
         descriptorPool=device.createDescriptorPoolUnique({vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,8192,sizes.size(),sizes.data()});
         colorOnlyPass=createPass(vk::Format::eR8G8B8A8Unorm,vk::Format::eUndefined,false);
         meshVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false));meshFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false));bitmapVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(true));bitmapFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true));
+        familyFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true,true));
+        constexpr unsigned metadataFallback=0xfffffffcu;
+        images.emplace(metadataFallback,makeImage(1,1,vk::Format::eR32G32Uint,1,false,false));
+        immediate([&](vk::CommandBuffer cmd){auto& f=image(metadataFallback);barrier(cmd,f,vk::ImageLayout::eTransferDstOptimal);cmd.clearColorImage(*f.image,vk::ImageLayout::eTransferDstOptimal,vk::ClearColorValue(std::array<uint32_t,4>{}),vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor,0,1,0,1));barrier(cmd,f,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        image(metadataFallback).initializedLevels[0]=true;
         constexpr unsigned fallback=0xfffffffdu;
         images.emplace(fallback,makeImage(1,1,vk::Format::eR8G8B8A8Unorm,1,false,false));
         uint8_t zero[4]={};BufferData staging(4,vk::BufferUsageFlagBits::eTransferSrc);staging.upload(4,zero);
@@ -484,8 +509,10 @@ public:
             reapCompletedDraws();
         }
         Image& target=image(d.color);Image* z=d.depth?&image(d.depth):nullptr;
+        Image* metadata=d.metadata?&image(d.metadata):nullptr;
+        if(metadata&&(metadata->extent!=target.extent||metadata->format!=vk::Format::eR32G32Uint))throw std::runtime_error("Invalid Hikaru family metadata target");
         if(z&&z->extent!=target.extent) throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
-        if(renderPassOpen&&(d.color!=activeColor||d.depth!=activeDepth))flushBatch();
+        if(renderPassOpen&&(d.color!=activeColor||d.depth!=activeDepth||d.metadata!=activeMetadata))flushBatch();
         const vk::DeviceSize vertexBytes=d.vertices.size()*sizeof(Vertex);
         if(vertexBytes>UINT32_MAX)throw std::runtime_error("Hikaru Vulkan draw exceeds buffer upload limit");
         if(activeVertexBuffer&&activeVertexOffset+vertexBytes>activeVertexCapacity)flushBatch();
@@ -512,7 +539,7 @@ public:
             const GLenum mf=d.sampling[n].minFilter;
             const bool mipmapped=mf==GL_NEAREST_MIPMAP_NEAREST||mf==GL_NEAREST_MIPMAP_LINEAR||mf==GL_LINEAR_MIPMAP_NEAREST||mf==GL_LINEAR_MIPMAP_LINEAR;
             unsigned tid=d.textures[n]; Image* sampled=nullptr;
-            if(tid&&tid!=d.color&&tid!=d.depth){auto it=images.find(tid);if(it!=images.end())sampled=&it->second;}
+            if(tid&&tid!=d.color&&tid!=d.depth&&tid!=d.metadata){auto it=images.find(tid);if(it!=images.end())sampled=&it->second;}
             if(sampled&&sampled->sampleable&&sampled->initializedLevels[0]) {
                 unsigned geometric=1u+unsigned(std::floor(std::log2(std::max(sampled->extent.width,sampled->extent.height))));
                 unsigned expected=d.sampling[n].maxLevel==1000?geometric:std::min(geometric,d.sampling[n].maxLevel+1);
@@ -520,7 +547,10 @@ public:
                 if(checked>sampled->levels)sampled=nullptr;
                 else for(unsigned level=0;sampled&&level<checked;level++)if(!sampled->initializedLevels[level])sampled=nullptr;
             } else sampled=nullptr;
-            if(!sampled){sampled=&image(transparentFallback);resolvedTextures[n]=transparentFallback;} // absent, incomplete or attachment feedback reads are transparent
+            if(!sampled){
+                const unsigned fallback=(!d.bitmap&&n==3)||(d.familyResolve&&n>=2)?0xfffffffcu:transparentFallback;
+                sampled=&image(fallback);resolvedTextures[n]=fallback;
+            } // absent, incomplete or attachment feedback reads are transparent
             else resolvedTextures[n]=tid;
             imgs[n]={sampler(d.sampling[n],*sampled,mipmapped),*sampled->view,sampled->depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal};writes[n+1]={set,n+1,0,1,vk::DescriptorType::eCombinedImageSampler,&imgs[n]};
         }
@@ -541,22 +571,23 @@ public:
         if(!renderPassOpen){
             barrier(cmd,target,vk::ImageLayout::eColorAttachmentOptimal);
             if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
-            auto rp=renderPass(target.format,z?z->format:vk::Format::eUndefined);
-            auto fb=framebuffer(d.color,d.depth,target,z,rp);
+            if(metadata)barrier(cmd,*metadata,vk::ImageLayout::eColorAttachmentOptimal);
+            auto rp=renderPass(target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined);
+            auto fb=framebuffer(d.color,d.depth,target,z,rp,d.metadata,metadata);
             if(occlusionActive) {
                 occlusionQueries.push_back(device.createQueryPoolUnique({{},vk::QueryType::eOcclusion,1}));
                 cmd.resetQueryPool(*occlusionQueries.back(),0,1);
             }
             vk::Rect2D area({0,0},target.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
             if(occlusionActive)cmd.beginQuery(*occlusionQueries.back(),0,{});
-            renderPassOpen=true;activeColor=d.color;activeDepth=d.depth;
+            renderPassOpen=true;activeColor=d.color;activeDepth=d.depth;activeMetadata=d.metadata;
         }
         // Vulkan's positive-height viewport has the opposite framebuffer Y
         // orientation from GL. Internal targets keep the shader's GL clip Y
         // orientation, so their front-face sense reverses; the presentation
         // target also flips clip Y in the shader and keeps the requested sense.
         const GLenum frontFace=(d.uniforms.inverted[2]!=0.f)?(d.frontFace==GL_CCW?GL_CW:GL_CCW):d.frontFace;
-        auto p=pipeline({d.bitmap,bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined});
+        auto p=pipeline({d.bitmap,d.familyResolve,bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined});
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);vk::Viewport vp(float(d.viewport[0]),viewportY,float(d.viewport[2]),float(d.viewport[3]),d.nearDepth,d.farDepth);cmd.setViewport(0,vp);
         vk::Rect2D sc({0,0},target.extent);if(d.scissorEnabled){const int32_t scissorY=d.color==0?int32_t(target.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1];sc.offset=vk::Offset2D(d.scissor[0],scissorY);sc.extent=vk::Extent2D(uint32_t(std::max(0,d.scissor[2])),uint32_t(std::max(0,d.scissor[3])));}cmd.setScissor(0,sc);cmd.setDepthBias(d.biasUnits,0,d.biasFactor);cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,*pipelineLayout,0,set,nullptr);cmd.bindVertexBuffers(0,*activeVertexBuffer->buffer,{vk::DeviceSize(vertexOffset)});cmd.draw(d.vertices.size(),1,0,0);
         activeVertexOffset+=vertexBytes;activeUniformOffset=uniformOffset+sizeof(Uniforms);

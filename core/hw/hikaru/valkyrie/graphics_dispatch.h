@@ -101,7 +101,11 @@ typedef struct HikaruGraphicsDispatch {
     void (*UseProgram)(GLuint program);
     void (*VertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void * pointer);
     void (*Viewport)(GLint x, GLint y, GLsizei width, GLsizei height);
+    void (*BindFragDataLocation)(GLuint program, GLuint color, const GLchar * name);
+    void (*ClearBufferuiv)(GLenum buffer, GLint drawbuffer, const GLuint * value);
 } HikaruGraphicsDispatch;
+void hikaru_glBindFragDataLocation(GLuint program, GLuint color, const GLchar * name);
+void hikaru_glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint * value);
 const HikaruGraphicsDispatch *hikaru_graphics_set_dispatch(const HikaruGraphicsDispatch *dispatch);
 void hikaru_glActiveTexture(GLenum texture);
 void hikaru_glAttachShader(GLuint program, GLuint shader);
@@ -194,6 +198,10 @@ void hikaru_glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 }
 #endif
 #ifndef HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
+#undef glBindFragDataLocation
+#define glBindFragDataLocation hikaru_glBindFragDataLocation
+#undef glClearBufferuiv
+#define glClearBufferuiv hikaru_glClearBufferuiv
 #undef glActiveTexture
 #define glActiveTexture hikaru_glActiveTexture
 #undef glAttachShader

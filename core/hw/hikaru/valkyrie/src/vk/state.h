@@ -32,6 +32,10 @@ typedef struct {
 	uint8_t *data;
 	size_t capacity, offset;
 	bool failed;
+	/* Transient payload encoding: 0 selects current, 1 legacy, 2 current.
+	 * Append it so existing positional file-I/O initializers keep working;
+	 * this selector is not part of the serialized device payload. */
+	uint32_t encoding;
 } vk_state_t;
 
 vk_state_t	*vk_state_new (const char *path, uint32_t mode);

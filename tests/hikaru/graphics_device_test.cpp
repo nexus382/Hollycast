@@ -18,7 +18,8 @@ using namespace hikaru::graphics;
 namespace {
 struct RecordingBackend final : Backend {
     struct TextureCall { unsigned id=0, level=0; Texture info{}; TextureUpload upload=TextureUpload::Definition; std::vector<uint8_t> pixels; };
-    Draw lastDraw{};
+    Draw lastDraw{}, lastClear{};
+    GLbitfield lastClearMask=0;
     bool drew = false;
     unsigned draws = 0;
     unsigned lastPresentWidth = 0, lastPresentHeight = 0;
@@ -39,7 +40,7 @@ struct RecordingBackend final : Backend {
         events.push_back(upload==TextureUpload::FullUpdate?"update":"definition");
     }
     void eraseTexture(unsigned id) override { erased.push_back(id); }
-    void clear(const Draw&, GLbitfield, const Vec4&, float) override {}
+    void clear(const Draw& draw, GLbitfield mask, const Vec4&, float) override { lastClear=draw;lastClearMask=mask;events.push_back("clear"); }
     void draw(const Draw& draw) override { lastDraw = draw; drawHistory.push_back(draw); events.push_back("draw"); drew = true;++draws; }
     void readPixels(unsigned, int, int, int, int, uint8_t*) override {}
     unsigned queryStartDraws = 0;
@@ -93,12 +94,17 @@ void testDispatchConversionUniformsAndState(RecordingBackend& backend, Device& d
     hikaru_glViewport(2, 3, 40, 50);
     hikaru_glEnable(GL_BLEND);
     hikaru_glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
-    GLuint p = makeProgram("#define HAS_TEXTURE 1\n#define USE_PRELIT_COLOR 1\n");
+    GLuint p = makeProgram("#define HAS_TEXTURE 1\n#define SHADING_MODE 1\n#define ALPHA_MODE 0\n#define TEXTURE_MODE 2\n");
     const GLfloat projection[] = {1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16};
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(p,"u_lights[0].ambient"),0.25f);
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(p,"u_weigh_by_alpha"),1.0f);
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(p,"u_force_coverage"),0.0f);
     const GLfloat normal[] = {1,2,3,4,5,6,7,8,9};
     GLint loc = hikaru_glGetUniformLocation(p, "u_projection"); hikaru_glUniformMatrix4fv(loc, 1, GL_FALSE, projection);
     loc = hikaru_glGetUniformLocation(p, "u_normal"); hikaru_glUniformMatrix3fv(loc, 1, GL_FALSE, normal);
     loc = hikaru_glGetUniformLocation(p, "u_factor"); hikaru_glUniform1f(loc, 0.375f);
+    loc = hikaru_glGetUniformLocation(p, "u_depth"); hikaru_glUniform2f(loc, 0.1f, 0.00002f);
+    hikaru_glDepthRangef(0.2f, 0.9f);
     issueTriangle();
     device.checkError();
     check(backend.drew, "dispatch wrapper did not reach Backend::draw");
@@ -107,17 +113,28 @@ void testDispatchConversionUniformsAndState(RecordingBackend& backend, Device& d
     check(v.position == Vec4{1,2,3,4}, "float vertex conversion failed");
     check(near(v.normal[0], 0) && near(v.normal[1], 127.f/255.f) && near(v.normal[2], 1), "normalized byte vertex conversion failed");
     const auto& u = backend.lastDraw.uniforms;
+    check(u.flags[1]==1.0f&&u.material[0]==0.0f&&u.material[1]==2.0f,
+          "native shader lost explicit GL shading/texture/alpha modes");
+    check(u.lights[0].extents[2]==0.25f&&u.blend==Vec4{1,0,0,0},
+          "measured lamp fill or premultiplied coverage inputs were lost");
     check(u.projection == Matrix{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}, "matrix4 uniform packing failed");
     check(u.normal == Matrix{1,2,3,0,4,5,6,0,7,8,9,0,0,0,0,0}, "matrix3 std140 packing failed");
     check(near(u.factors[0], .375f) && near(u.factors[1], 1), "scalar uniform defaults failed");
+    check(u.depth == Vec4{0.1f,0.00002f,0.2f,0.9f}, "canonical depth parameters or range were lost");
     check(backend.lastDraw.viewport == std::array<GLint,4>{2,3,40,50}, "viewport state missing from draw");
     check(backend.lastDraw.blend && backend.lastDraw.srcRGB == GL_SRC_ALPHA && backend.lastDraw.dstAlpha == GL_ZERO,
           "blend state missing from draw");
     hikaru_glUniform1f(hikaru_glGetUniformLocation(p, "u_factor"), 0.625f);
+    hikaru_glUniform2f(hikaru_glGetUniformLocation(p, "u_depth"), 0.3f, 0.0f);
     hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
     device.checkError();
     check(near(backend.lastDraw.uniforms.factors[0], 0.625f),
           "updated uniform did not invalidate the packed constant cache");
+    check(backend.lastDraw.uniforms.depth == Vec4{0.3f,0.0f,0.2f,0.9f}, "zero bias did not replace packed depth parameters");
+    hikaru_glDepthRangef(0.0f, 1.0f);
+    hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
+    device.checkError();
+    check(backend.lastDraw.uniforms.depth == Vec4{0.3f,0.0f,0.0f,1.0f}, "cached uniforms retained an obsolete depth range");
     check(backend.lastDraw.color == 0 && backend.lastDraw.textures[0] == 0, "default target zero and unbound texture zero differ unexpectedly");
     check(backend.infos.at(0).width == 64 && backend.infos.at(0).height == 32,
           "default framebuffer target zero was not allocated separately from the unbound sampler");
@@ -285,6 +302,44 @@ void testFullTextureUpdates(RecordingBackend& backend, Device& device) {
     check(backend.textureCalls.size()==packedCalls,"invalid A2BGR10 update reached the backend");
 }
 
+void testFamilyAttachments(RecordingBackend& backend, Device& device) {
+    Device::Scope scope(&device);
+    GLuint images[3]={},fbo=0;
+    hikaru_glGenTextures(3,images);
+    for(unsigned i=0;i<3;++i){
+        hikaru_glActiveTexture(GL_TEXTURE0);hikaru_glBindTexture(GL_TEXTURE_2D,images[i]);
+        GLenum internal=i==0?GL_RGBA8:i==1?GL_RG32UI:GL_DEPTH_COMPONENT24;
+        GLenum format=i==0?GL_RGBA:i==1?GL_RG_INTEGER:GL_DEPTH_COMPONENT;
+        hikaru_glTexImage2D(GL_TEXTURE_2D,0,internal,8,8,0,format,i==0?GL_UNSIGNED_BYTE:GL_UNSIGNED_INT,nullptr);
+    }
+    hikaru_glGenFramebuffers(1,&fbo);hikaru_glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+    hikaru_glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,images[0],0);
+    hikaru_glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D,images[1],0);
+    hikaru_glFramebufferTexture2D(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,images[2],0);
+    const GLenum buffers[]={GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1};
+    hikaru_glDrawBuffers(2,buffers);
+    GLuint program=makeProgram("#define HAS_TEXTURE 0\n");
+    hikaru_glUniform3f(hikaru_glGetUniformLocation(program,"u_family"),0,1,4194304);
+    issueTriangle();device.checkError();
+    check(backend.lastDraw.color==images[0]&&backend.lastDraw.depth==images[2]
+          &&backend.lastDraw.metadata==images[1],"family MRT attachment routing lost an image");
+    check(backend.lastDraw.uniforms.family==Vec4{0,1,4194304,65535},"family ordinal or mode lost during native packing");
+    check(backend.infos.at(images[1]).format==GL_RG32UI,"unsigned family metadata was converted to RGBA8");
+    const GLuint empty[4]={};hikaru_glClearBufferuiv(GL_COLOR,1,empty);device.checkError();
+    check(backend.lastClear.color==images[1]&&!backend.lastClear.depth&&!backend.lastClear.metadata
+          &&backend.lastClearMask==GL_COLOR_BUFFER_BIT,"metadata clear touched the family color/depth target");
+    hikaru_glDrawBuffers(1,buffers);hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(!backend.lastDraw.metadata,"single-target draw retained the family MRT attachment");
+    hikaru_glBindFramebuffer(GL_FRAMEBUFFER,0);
+    makeProgram("#define FAMILY_RESOLVE 1\n// u_front u_back u_layer1 u_layer2\n");
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(backend.lastDraw.bitmap&&backend.lastDraw.familyResolve&&!backend.lastDraw.metadata,
+          "family resolve reached the ordinary mesh/bitmap native shader");
+    for(unsigned i=0;i<4;++i){hikaru_glActiveTexture(GL_TEXTURE0+i);hikaru_glBindTexture(GL_TEXTURE_2D,0);}
+    hikaru_glActiveTexture(GL_TEXTURE0);hikaru_glDeleteFramebuffers(1,&fbo);hikaru_glDeleteTextures(3,images);
+    device.checkError();
+}
+
 const HikaruGraphicsDispatch* priorDispatch = nullptr;
 void restoredClearColor(GLfloat, GLfloat, GLfloat, GLfloat) { priorDispatch = reinterpret_cast<const HikaruGraphicsDispatch*>(uintptr_t(1)); }
 
@@ -326,6 +381,7 @@ int main() {
         run("dispatch conversion, uniforms, draw state", [&] { testDispatchConversionUniformsAndState(*record, device); });
         run("texture unpack and packed precision", [&] { testTexturePacking(*record, device); });
         run("full texture update semantics", [&] { testFullTextureUpdates(*record, device); });
+        run("family MRT, unsigned metadata and resolve dispatch", [&] { testFamilyAttachments(*record, device); });
         run("nested scope restoration and exception containment", [&] { testScopeAndExceptionContainment(device); });
         return failures ? 1 : 0;
     } catch (const std::exception& e) {

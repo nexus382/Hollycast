@@ -1393,6 +1393,8 @@ hikaru_gpu_reset (vk_device_t *dev, vk_reset_type_t type)
 
 	memset ((void *) &gpu->regs, 0, sizeof (gpu->regs));
 	memset ((void *) &gpu->state, 0, sizeof (gpu->state));
+	memset (gpu->material_high, 0, sizeof (gpu->material_high));
+	memset (gpu->texhead_high, 0, sizeof (gpu->texhead_high));
 	gpu->idma_completed = 0;
 
 	gpu->cp.is_running = 0;
@@ -1423,6 +1425,8 @@ hikaru_gpu_save_state (vk_device_t *dev, vk_state_t *state)
 {
 	hikaru_gpu_t *gpu = (hikaru_gpu_t *) dev;
 	int ret = 0;
+	if (state->encoding != 0 && state->encoding != HIKARU_STATE_ENCODING_LEGACY &&
+	    state->encoding != HIKARU_STATE_ENCODING_CURRENT) return -1;
 
 	SAVE (gpu->regs);
 	SAVE (gpu->cp);
@@ -1431,6 +1435,11 @@ hikaru_gpu_save_state (vk_device_t *dev, vk_state_t *state)
 	SAVE (gpu->depth_bias);
 	SAVE (gpu->texoffset);
 	SAVE (gpu->idma_completed);
+	/* Keep the V1 raw GPU prefix byte-for-byte intact. */
+	if (state->encoding != HIKARU_STATE_ENCODING_LEGACY) {
+		SAVE (gpu->material_high);
+		SAVE (gpu->texhead_high);
+	}
 
 	return ret;
 }
@@ -1439,6 +1448,8 @@ static int
 hikaru_gpu_load_state (vk_device_t *dev, vk_state_t *state)
 {
 	hikaru_gpu_t *live = (hikaru_gpu_t *) dev;
+	if (state->encoding != 0 && state->encoding != HIKARU_STATE_ENCODING_LEGACY &&
+	    state->encoding != HIKARU_STATE_ENCODING_CURRENT) return -1;
 	hikaru_gpu_t *gpu = malloc (sizeof (*gpu));
 	if (!gpu) return -1;
 	memcpy (gpu, live, sizeof (*gpu));
@@ -1451,10 +1462,21 @@ hikaru_gpu_load_state (vk_device_t *dev, vk_state_t *state)
 	LOAD (gpu->depth_bias);
 	LOAD (gpu->texoffset);
 	LOAD (gpu->idma_completed);
+	if (state->encoding == HIKARU_STATE_ENCODING_LEGACY) {
+		/* Old states retain their low records. The aliases already lost by
+		 * their 14-bit indexing cannot be reconstructed from that payload. */
+		memset(gpu->material_high, 0, sizeof(gpu->material_high));
+		memset(gpu->texhead_high, 0, sizeof(gpu->texhead_high));
+	} else {
+		LOAD (gpu->material_high);
+		LOAD (gpu->texhead_high);
+	}
 
+	const unsigned table_limit = state->encoding == HIKARU_STATE_ENCODING_LEGACY
+		? HIKARU_LEGACY_TABLE_ENTRIES : NUM_MATERIALS;
 	if (gpu->state.viewports.depth < 0 || gpu->state.viewports.depth > 32 ||
 	    gpu->state.modelviews.depth >= NUM_MODELVIEWS || gpu->state.modelviews.total > NUM_MODELVIEWS ||
-	    gpu->state.materials.base >= NUM_MATERIALS || gpu->state.texheads.base >= NUM_TEXHEADS ||
+	    gpu->state.materials.base >= table_limit || gpu->state.texheads.base >= table_limit ||
 	    gpu->state.lights.base >= NUM_LIGHTSETS || gpu->state.in_mesh)
 		ret = -1;
 	if (!ret) {
@@ -1469,6 +1491,8 @@ hikaru_gpu_load_state (vk_device_t *dev, vk_state_t *state)
 		live->depth_bias = gpu->depth_bias;
 		memcpy (live->texoffset, gpu->texoffset, sizeof (live->texoffset));
 		live->idma_completed = gpu->idma_completed;
+		memcpy(live->material_high, gpu->material_high, sizeof(live->material_high));
+		memcpy(live->texhead_high, gpu->texhead_high, sizeof(live->texhead_high));
         hikaru_gpu_update_irq_status(live);
 	}
 	free (gpu);

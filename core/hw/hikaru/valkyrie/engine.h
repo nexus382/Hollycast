@@ -114,10 +114,13 @@ void hikaru_engine_discard_frames(HikaruEngine *engine);
 // Frame-boundary, native-layout snapshots; external I/O/audio are saved by the
 // host. A load requires the exact measured size and a current graphics scope.
 // layout changes reject incompatible native CPU/GPU layouts before mutation.
-uint64_t hikaru_engine_state_layout(void);
-size_t hikaru_engine_state_size(HikaruEngine *engine);
+// Saves always write CURRENT. Legacy loads retain the low tables and clear
+// upper banks that were not represented by that encoding.
+enum { HIKARU_STATE_ENCODING_LEGACY = 1, HIKARU_STATE_ENCODING_CURRENT = 2 };
+uint64_t hikaru_engine_state_layout(uint32_t encoding);
+size_t hikaru_engine_state_size(HikaruEngine *engine, uint32_t encoding);
 int hikaru_engine_save_state(HikaruEngine *engine, uint8_t *data, size_t size);
-int hikaru_engine_load_state(HikaruEngine *engine, const uint8_t *data, size_t size);
+int hikaru_engine_load_state(HikaruEngine *engine, const uint8_t *data, size_t size, uint32_t encoding);
 
 // Configure both SH-4s in MHz (100..300). Device clocks remain at the board
 // baseline; changing the clock resets the fractional CPU-cycle accumulator.

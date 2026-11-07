@@ -13,6 +13,8 @@ namespace hikaru::graphics {
 thread_local Device* Device::active;
 Device::Device(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {
     if (!this->backend) throw std::runtime_error("Hikaru graphics backend is unavailable");
+    dispatch.BindFragDataLocation = [](GLuint program, GLuint color, const GLchar *name) { active->BindFragDataLocation(program, color, name); };
+    dispatch.ClearBufferuiv = [](GLenum buffer, GLint drawbuffer, const GLuint *value) { try { active->ClearBufferuiv(buffer, drawbuffer, value); } catch (...) { active->error=std::current_exception(); } };
     dispatch.BeginOcclusion = [] { try { active->flushDraw(); active->backend->beginOcclusion(); } catch (...) { active->error=std::current_exception(); } };
     dispatch.EndOcclusion = []() -> GLboolean { try { active->flushDraw(); return active->backend->endOcclusion(); } catch (...) { active->error=std::current_exception(); return false; } };
     dispatch.ActiveTexture = [](GLenum texture) -> void { try { active->ActiveTexture(texture); } catch (...) { active->error=std::current_exception(); } };
@@ -122,7 +124,7 @@ void Device::queueDraw(Draw draw) {
     // Triangle sorting replays individual triangles. Merge only adjacent,
     // identical draws, preserving their order and bounding staging memory.
     auto key=[](const Draw& d) {
-        return std::tie(d.color,d.depth,d.textures,d.viewport,d.scissor,
+        return std::tie(d.color,d.depth,d.metadata,d.familyResolve,d.textures,d.viewport,d.scissor,
             d.scissorEnabled,d.depthTest,d.depthWrite,d.blend,d.cull,d.bitmap,
             d.depthFunc,d.cullFace,d.frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,
             d.equationRGB,d.equationAlpha,d.topology,d.colorMask,d.biasFactor,
@@ -147,7 +149,7 @@ void Device::present() { checkError(); backend->present(width,height); }
 Draw Device::drawState() const {
     Draw d=state;
     const auto& target=targets.at(framebuffer);
-    d.color=target[0];d.depth=target[1];d.textures=boundTextures;
+    d.color=target[0];d.depth=target[1];d.metadata=target[3]==2?target[2]:0;d.textures=boundTextures;
     for(unsigned i=0;i<4;i++){auto t=textures.find(boundTextures[i]);if(t!=textures.end())d.sampling[i]=t->second;}
     d.scissorEnabled=enabled.count(GL_SCISSOR_TEST);d.depthTest=enabled.count(GL_DEPTH_TEST);
     d.blend=enabled.count(GL_BLEND);d.cull=enabled.count(GL_CULL_FACE);
@@ -170,14 +172,17 @@ Uniforms Device::uniforms(const Program& p) const {
         const auto& v=value(name);for(unsigned c=0;c<3;c++)for(unsigned r=0;r<3;r++)if(c*3+r<v.size())(*out)[c*4+r]=v[c*3+r];
     }
     copy("u_ambient",u.ambient);copy("u_fog",u.fog);copy("u_fog_color",u.fogColor);
-    u.flags={def("HAS_TEXTURE"),def("HAS_LIGHTING"),def("HAS_TWO_SIDED_LIGHTING"),def("HAS_FOG")};
-    u.material={def("USE_UNLIT_DIFFUSE"),def("USE_PRELIT_COLOR"),scalar("u_alpha_ref"),0};
+    copy("u_depth",u.depth);copy("u_family",u.family);
+    u.family[3]=def("HAS_PATTERN")!=0.f?scalar("u_pattern"):65535.f;
+    u.flags={def("HAS_TEXTURE"),def("SHADING_MODE"),def("HAS_TWO_SIDED_LIGHTING"),def("HAS_FOG")};
+    u.material={def("ALPHA_MODE"),def("TEXTURE_MODE"),scalar("u_alpha_ref"),scalar("u_sort_scale")};
+    u.blend={scalar("u_weigh_by_alpha"),scalar("u_force_coverage"),0,0};
     u.peel={scalar("u_peel_enabled"),scalar("u_peel_first"),1,1};
     const auto& peelSize=value("u_peel_size");if(peelSize.size()>=2){u.peel[2]=peelSize[0];u.peel[3]=peelSize[1];}
     for(unsigned i=0;i<4;i++) {
         auto prefix="u_lights["+std::to_string(i)+"].";auto& l=u.lights[i];
         copy(prefix+"position",l.position);copy(prefix+"direction",l.direction);copy(prefix+"diffuse",l.diffuse);
-        copy(prefix+"specular",l.specular);copy(prefix+"extents",l.extents);copy(prefix+"spot",l.spot);
+        copy(prefix+"specular",l.specular);copy(prefix+"extents",l.extents);l.extents[2]=scalar(prefix+"ambient");copy(prefix+"spot",l.spot);
         const auto& table=value(prefix+"spot_table[0]");for(size_t j=0;j<std::min(size_t(16),table.size());j++)l.table[j/4][j%4]=table[j];
         auto n=std::to_string(i);l.flags={def("HAS_LIGHT"+n),def("LIGHT"+n+"_TYPE"),def("LIGHT"+n+"_ATT_TYPE"),def("HAS_LIGHT"+n+"_SPECULAR")};
     }
@@ -236,7 +241,10 @@ void Device::Disable(GLenum cap){enabled.erase(cap);}
 void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
     if(first<0||count<0)throw std::runtime_error("Invalid Hikaru draw range");
     if(!count)return;
-    auto d=drawState();auto& p=programs.at(program);d.bitmap=p.bitmap;d.uniforms=uniforms(p);d.topology=mode;d.uniforms.inverted[2]=d.color?1.f:0.f;
+    auto d=drawState();auto& p=programs.at(program);d.bitmap=p.bitmap;d.familyResolve=p.familyResolve;d.uniforms=uniforms(p);d.topology=mode;d.uniforms.inverted[2]=d.color?1.f:0.f;
+    // Fragment depth is already in window coordinates, so viewport range must
+    // be applied in the shader. Range changes do not invalidate program uniforms.
+    d.uniforms.depth[2]=d.nearDepth;d.uniforms.depth[3]=d.farDepth;
     d.vertices.resize(count);const auto& attrs=arrays.at(vao);
     auto read=[&](const Attribute& a,size_t i,Vec4& out){
         if(!a.enabled)return;
@@ -282,11 +290,28 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
     }
     queueDraw(std::move(d));
 }
-void Device::DrawBuffers(GLsizei n,const GLenum* values){if(n!=1||values[0]!=GL_COLOR_ATTACHMENT0)throw std::runtime_error("Unsupported Hikaru draw attachments");}
+void Device::DrawBuffers(GLsizei n,const GLenum* values){
+    if(n<1||n>2||values[0]!=GL_COLOR_ATTACHMENT0||(n==2&&values[1]!=GL_COLOR_ATTACHMENT1))
+        throw std::runtime_error("Unsupported Hikaru draw attachments");
+    targets.at(framebuffer)[3]=unsigned(n);
+}
+void Device::BindFragDataLocation(GLuint,GLuint,const GLchar*){}
+void Device::ClearBufferuiv(GLenum buffer,GLint drawbuffer,const GLuint* value){
+    // The family pass only clears its unsigned metadata to zero. Reject other
+    // unsigned clears instead of losing bits through the float clear interface.
+    if(buffer!=GL_COLOR||drawbuffer!=1||value[0]||value[1]||value[2]||value[3])
+        throw std::runtime_error("Unsupported Hikaru unsigned clear");
+    flushDraw();auto d=drawState();d.color=d.metadata;d.metadata=0;d.depth=0;
+    if(!d.color||textures.at(d.color).format!=GL_RG32UI)
+        throw std::runtime_error("Missing Hikaru family metadata attachment");
+    backend->clear(d,GL_COLOR_BUFFER_BIT,Vec4{},1.0f);
+}
 void Device::Enable(GLenum cap){enabled.insert(cap);}
 void Device::EnableVertexAttribArray(GLuint i){arrays.at(vao).at(i).enabled=true;}
 void Device::FramebufferRenderbuffer(GLenum,GLenum attachment,GLenum,GLuint id){if(attachment!=GL_DEPTH_ATTACHMENT)throw std::runtime_error("Unsupported Hikaru depth attachment");targets.at(framebuffer)[1]=id? id|0x80000000u:0;}
-void Device::FramebufferTexture2D(GLenum,GLenum attachment,GLenum,GLuint id,GLint level){if(level)throw std::runtime_error("Unsupported Hikaru target mip level");targets.at(framebuffer)[attachment==GL_DEPTH_ATTACHMENT?1:0]=id;}
+void Device::FramebufferTexture2D(GLenum,GLenum attachment,GLenum,GLuint id,GLint level){if(level)throw std::runtime_error("Unsupported Hikaru target mip level");unsigned index=attachment==GL_DEPTH_ATTACHMENT?1:attachment==GL_COLOR_ATTACHMENT0?0:attachment==GL_COLOR_ATTACHMENT1?2:3;
+    if(index==3)throw std::runtime_error("Unsupported Hikaru target attachment");
+    targets.at(framebuffer)[index]=id;}
 void Device::FrontFace(GLenum f){state.frontFace=f;}
 void Device::GenBuffers(GLsizei n,GLuint* ids){for(int i=0;i<n;i++){ids[i]=nextId++;buffers[ids[i]]={};}}
 void Device::GenFramebuffers(GLsizei n,GLuint* ids){for(int i=0;i<n;i++){ids[i]=nextId++;targets[ids[i]]={};}}
@@ -323,7 +348,7 @@ GLboolean Device::IsBuffer(GLuint id){return buffers.count(id);}
 GLboolean Device::IsEnabled(GLenum cap){return enabled.count(cap);}
 GLboolean Device::IsProgram(GLuint id){return programs.count(id);}
 GLboolean Device::IsVertexArray(GLuint id){return arrays.count(id);}
-void Device::LinkProgram(GLuint id){auto& p=programs.at(id);p.cachedUniforms.reset();for(auto s:p.shaders){const auto& text=shaders.at(s);p.bitmap|=text.find("u_front")!=std::string::npos;std::istringstream input(text);std::string line;while(std::getline(input,line)){std::istringstream words(line);std::string directive,name;int value;if(words>>directive>>name>>value && directive=="#define")p.definitions[name]=value;}}}
+void Device::LinkProgram(GLuint id){auto& p=programs.at(id);p.cachedUniforms.reset();for(auto s:p.shaders){const auto& text=shaders.at(s);p.bitmap|=text.find("u_front")!=std::string::npos;p.familyResolve|=text.find("#define FAMILY_RESOLVE 1")!=std::string::npos;std::istringstream input(text);std::string line;while(std::getline(input,line)){std::istringstream words(line);std::string directive,name;int value;if(words>>directive>>name>>value && directive=="#define")p.definitions[name]=value;}}}
 void Device::PixelStorei(GLenum name,GLint v){pixelStore[name]=v;}
 void Device::PolygonOffset(GLfloat f,GLfloat u){state.biasFactor=f;state.biasUnits=u;}
 void Device::ReadPixels(GLint x,GLint y,GLsizei w,GLsizei h,GLenum format,GLenum type,void* data){flushDraw();if(format!=GL_RGBA||type!=GL_UNSIGNED_BYTE)throw std::runtime_error("Unsupported Hikaru readback format");backend->readPixels(targets.at(readFramebuffer)[0],x,y,w,h,static_cast<uint8_t*>(data));}

@@ -78,9 +78,6 @@ typedef union {
 		uint64_t shading_mode		: 2;
 		uint64_t alpha_mode		: 1;
 		uint64_t texture_mode		: 3;
-		/* Native shader translators still consume these legacy selectors. */
-		uint64_t use_unlit_diffuse	: 1;
-		uint64_t use_prelit_color	: 1;
 	};
 	uint64_t full;
 } hikaru_glsl_variant_t;
@@ -108,7 +105,8 @@ typedef struct {
  * switches. Relinking or direct uniform writes invalidate their cache. */
 typedef struct {
 	bool viewport_valid, modelview_valid[2], lightset_valid, ambient_valid;
-	bool blend_valid, peel_valid;
+	bool blend_valid, peel_valid, depth_valid;
+	vec2f_t depth;
 	hikaru_viewport_t viewport;
 	float alpha_ref;
 	mtx4x4f_t modelview[2];
@@ -144,10 +142,11 @@ typedef struct {
 	GLuint u_projection, u_modelview, u_normal;
 	GLuint u_modelview_alternate, u_normal_alternate;
 	struct {
-		GLuint position, direction, diffuse, specular, extents, spot, spot_table;
+		GLuint position, direction, diffuse, ambient, specular, extents, spot, spot_table;
 	} u_lights[4];
 	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref, u_weigh_by_alpha, u_force_coverage, u_pattern, u_lod_bias;
 	GLuint u_peel_enabled, u_peel_first, u_peel_size, u_peel_depth, u_peel_opaque_depth;
+	GLuint u_depth, u_sort_scale, u_family, u_family_other;
 } hikaru_uniform_locations_t;
 
 typedef struct {
@@ -221,6 +220,12 @@ typedef struct {
 
 		hikaru_uniform_locations_t locs;
 	} meshes;
+    struct {
+        bool active, depth_pass;
+        unsigned selected, width, height;
+        GLuint fb[2], color[2], metadata[2], depth[2], second_depth;
+        GLuint color_fb, program;
+    } families;
 	float pass_alpha_ref;
 	HikaruTransparencySorting transparency_sorting;
 	unsigned transparency_peel_capacity;

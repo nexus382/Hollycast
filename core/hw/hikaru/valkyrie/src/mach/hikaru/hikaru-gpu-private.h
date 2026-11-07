@@ -25,8 +25,10 @@
 
 #define NUM_VIEWPORTS	8
 #define NUM_MODELVIEWS	256
-#define NUM_MATERIALS	16384
-#define NUM_TEXHEADS	16384
+#define NUM_MATERIALS	65536
+#define NUM_TEXHEADS	65536
+/* Keep the V1 state block's lower banks and native offsets unchanged. */
+#define HIKARU_LEGACY_TABLE_ENTRIES 16384
 #define NUM_LIGHTS	1024
 #define NUM_LIGHTSETS	256
 
@@ -371,13 +373,13 @@ typedef struct {
 		} modelviews;
 	
 		struct {
-			hikaru_material_t table[NUM_MATERIALS];
+			hikaru_material_t table[HIKARU_LEGACY_TABLE_ENTRIES];
 			hikaru_material_t scratch;
 			uint32_t base;
 		} materials;
 	
 		struct {
-			hikaru_texhead_t table[NUM_TEXHEADS];
+			hikaru_texhead_t table[HIKARU_LEGACY_TABLE_ENTRIES];
 			hikaru_texhead_t scratch;
 			uint32_t base;
 		} texheads;
@@ -423,7 +425,30 @@ typedef struct {
 	 * by writing the count register. REG15(0x10) tracks pending entries. */
 	uint32_t idma_completed;
 
+	/* The CP addresses both tables with 16 bits. The upper entries must not
+	 * alias the legacy banks (VON4 keeps menu and gameplay materials there).
+	 * These are producer-only: frozen draws use per-mesh state snapshots and
+	 * must never read these arrays or copy them into each graphics packet. */
+	hikaru_material_t material_high[NUM_MATERIALS - HIKARU_LEGACY_TABLE_ENTRIES];
+	hikaru_texhead_t texhead_high[NUM_TEXHEADS - HIKARU_LEGACY_TABLE_ENTRIES];
+
 } hikaru_gpu_t;
+
+static inline hikaru_material_t *
+hikaru_gpu_material(hikaru_gpu_t *gpu, uint32_t index)
+{
+	VK_ASSERT(index < NUM_MATERIALS);
+	return index < HIKARU_LEGACY_TABLE_ENTRIES ? &gpu->state.materials.table[index]
+		: &gpu->material_high[index - HIKARU_LEGACY_TABLE_ENTRIES];
+}
+
+static inline hikaru_texhead_t *
+hikaru_gpu_texhead(hikaru_gpu_t *gpu, uint32_t index)
+{
+	VK_ASSERT(index < NUM_TEXHEADS);
+	return index < HIKARU_LEGACY_TABLE_ENTRIES ? &gpu->state.texheads.table[index]
+		: &gpu->texhead_high[index - HIKARU_LEGACY_TABLE_ENTRIES];
+}
 
 #define REG15(addr_)	(*(uint32_t *) &gpu->regs._15[(addr_) & 0xFF])
 #define REG18(addr_)	(*(uint32_t *) &gpu->regs._18[(addr_) & 0xFF])

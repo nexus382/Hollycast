@@ -10,6 +10,13 @@
 #include <vector>
 
 namespace hikaru {
+// A legacy layout is accepted only with its legacy encoding. Checking the
+// pair prevents a valid ABI tag from authorizing a different payload size.
+inline void validateStateEncoding(uint32_t version, uint64_t layout, uint64_t legacyLayout, uint64_t currentLayout) {
+    if (!((version == 1 && legacyLayout && layout == legacyLayout) ||
+          (version == 2 && currentLayout && layout == currentLayout)))
+        throw std::runtime_error("Incompatible Hikaru state format or platform");
+}
 // Private, versioned Hikaru payload. Opaque CPU structures are accepted only
 // after the outer header has checked the producer's ABI and machine layout.
 class StateWriter {

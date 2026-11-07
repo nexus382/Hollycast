@@ -177,18 +177,19 @@ static int texture_cutout_passed;
 static void texture_cutout_probe(void) {
  /* Gameplay mesh231: opaque, 881=000d0881, 2C1=404a02c1,
   * bank1 storage(68,864)=7fff: white RGB with alpha zero. C81=00200c81.
-  * Test only zero rejection; the C81 threshold comparison remains unknown. */
+  * Test only zero rejection; the C81 threshold comparison remains unknown.
+  * Expected depths encode eye distances 0.5 and 1.0 on the D24 log lattice. */
  static const struct {
   const char *name; uint32_t flags;
   uint8_t diffuse[3], ambient[3], texel[4], expected[4]; float depth;
  } cases[]={
-  {"captured opaque cutout",0x000d0881,{255,218,76},{178,178,178},{255,255,255,0},{17,34,51,255},0.75f},
-  {"opaque texture positive alpha",0x000d0881,{255,218,76},{178,178,178},{255,255,255,255},{178,178,178,255},0.5f},
-  {"positive alpha one retains opaque coverage",0x000d0881,{255,218,76},{178,178,178},{255,255,255,1},{178,178,178,255},0.5f},
-  {"captured green HUD",0x000c0881,{255,255,255},{90,240,6},{255,255,255,255},{90,240,6,255},0.5f},
-  {"captured orange HUD",0x000c0881,{178,178,178},{255,178,0},{255,255,255,255},{255,178,0,255},0.5f},
-  {"untextured primary ignores texture alpha",0,{0,64,255},{178,178,178},{255,255,255,0},{0,64,255,255},0.5f},
-  {"untextured alternate ignores texture alpha",1u<<20,{0,64,255},{255,96,192},{255,255,255,0},{255,96,192,255},0.5f},
+   {"captured opaque cutout",0x000d0881,{255,218,76},{178,178,178},{255,255,255,0},{17,34,51,255},0.06020595f},
+   {"opaque texture positive alpha",0x000d0881,{255,218,76},{178,178,178},{255,255,255,255},{178,178,178,255},0.03521822f},
+   {"positive alpha one retains opaque coverage",0x000d0881,{255,218,76},{178,178,178},{255,255,255,1},{178,178,178,255},0.03521822f},
+   {"captured green HUD",0x000c0881,{255,255,255},{90,240,6},{255,255,255,255},{90,240,6,255},0.03521822f},
+   {"captured orange HUD",0x000c0881,{178,178,178},{255,178,0},{255,255,255,255},{255,178,0,255},0.03521822f},
+   {"untextured primary ignores texture alpha",0,{0,64,255},{178,178,178},{255,255,255,0},{0,64,255,255},0.03521822f},
+   {"untextured alternate ignores texture alpha",1u<<20,{0,64,255},{255,96,192},{255,255,255,0},{255,96,192,255},0.03521822f},
  };
  texture_cutout_passed=1;
  for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
@@ -202,7 +203,7 @@ static void texture_cutout_probe(void) {
     fprintf(stderr,"cutout %s channel %u: got %u expected %u\n",cases[i].name,c,actual[c],cases[i].expected[c]);texture_cutout_passed=0;
    }
   }
-  if(depth<cases[i].depth-0.0001f || depth>cases[i].depth+0.0001f) {
+   if(depth<cases[i].depth-0.00000012f || depth>cases[i].depth+0.00000012f) {
    fprintf(stderr,"cutout %s depth: got %.6f expected %.6f\n",cases[i].name,depth,cases[i].depth);texture_cutout_passed=0;
   }
  }
@@ -215,15 +216,15 @@ static void fog_cutout_probe(void) {
   const char *name; uint32_t flags; unsigned options;
   uint8_t texel[4], expected[4]; float depth;
  } cases[]={
-  {"zero alpha",(1u<<19)|(1u<<18),1,{255,255,255,0},{64,128,192,255},0.75f},
-  {"partial alpha",(1u<<19)|(1u<<18),1,{255,255,255,128},{121,153,185,255},0.5f},
-  {"opaque control",(1u<<19)|(1u<<18),1,{255,255,255,255},{121,153,185,255},0.5f},
-  {"lit specular zero alpha",(1u<<19)|(1u<<18)|(1u<<16),3,{255,255,255,0},{64,128,192,255},0.75f},
-  {"material fog disabled",1u<<19,1,{255,255,255,255},{178,178,178,255},0.5f},
-  {"viewport fog disabled",(1u<<19)|(1u<<18),5,{255,255,255,255},{178,178,178,255},0.5f},
-  {"debug fog disabled",(1u<<19)|(1u<<18),0,{255,255,255,255},{178,178,178,255},0.5f},
-  {"raw near/end converts negative start",(1u<<19)|(1u<<18),9,{255,255,255,255},{64,128,192,255},0.5f},
-  {"zero inverse range disables fog",(1u<<19)|(1u<<18),17,{255,255,255,255},{178,178,178,255},0.5f},
+   {"zero alpha",(1u<<19)|(1u<<18),1,{255,255,255,0},{64,128,192,255},0.06020595f},
+   {"partial alpha",(1u<<19)|(1u<<18),1,{255,255,255,128},{121,153,185,255},0.03521822f},
+   {"opaque control",(1u<<19)|(1u<<18),1,{255,255,255,255},{121,153,185,255},0.03521822f},
+   {"lit specular zero alpha",(1u<<19)|(1u<<18)|(1u<<16),3,{255,255,255,0},{64,128,192,255},0.06020595f},
+   {"material fog disabled",1u<<19,1,{255,255,255,255},{178,178,178,255},0.03521822f},
+   {"viewport fog disabled",(1u<<19)|(1u<<18),5,{255,255,255,255},{178,178,178,255},0.03521822f},
+   {"debug fog disabled",(1u<<19)|(1u<<18),0,{255,255,255,255},{178,178,178,255},0.03521822f},
+   {"raw near/end converts negative start",(1u<<19)|(1u<<18),9,{255,255,255,255},{64,128,192,255},0.03521822f},
+   {"zero inverse range disables fog",(1u<<19)|(1u<<18),17,{255,255,255,255},{178,178,178,255},0.03521822f},
  };
  const uint8_t diffuse[3]={255,218,76},ambient[3]={178,178,178};
  fog_cutout_passed=1;
@@ -239,7 +240,7 @@ static void fog_cutout_probe(void) {
     fprintf(stderr,"fog %s channel %u: got %u expected %u\n",cases[i].name,c,actual[c],cases[i].expected[c]);fog_cutout_passed=0;
    }
   }
-  if(depth<cases[i].depth-0.0001f || depth>cases[i].depth+0.0001f) {
+   if(depth<cases[i].depth-0.00000012f || depth>cases[i].depth+0.00000012f) {
    fprintf(stderr,"fog %s depth: got %.6f expected %.6f\n",cases[i].name,depth,cases[i].depth);fog_cutout_passed=0;
   }
  }
@@ -451,10 +452,10 @@ static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_
  if(grown_bytes<=triangle_bytes||memcmp(first_vertices,second_vertices,triangle_bytes)==0){
   fprintf(stderr,"second packet did not provide fresh, larger vertex data\n");ok=0;goto cleanup;
  }
- const size_t state_size=hikaru_engine_state_size(engine);
+ const size_t state_size=hikaru_engine_state_size(engine,HIKARU_STATE_ENCODING_CURRENT);
  saved_state=state_size?malloc(state_size):NULL;
  if(!saved_state||hikaru_engine_save_state(engine,saved_state,state_size)||
-    hikaru_engine_load_state(engine,saved_state,state_size)){
+    hikaru_engine_load_state(engine,saved_state,state_size,HIKARU_STATE_ENCODING_CURRENT)){
   fprintf(stderr,"renderer save/load reset failed with a live stream buffer\n");ok=0;goto cleanup;
  }
  free(saved_state);saved_state=NULL;

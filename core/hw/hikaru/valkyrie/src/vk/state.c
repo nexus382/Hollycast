@@ -20,7 +20,7 @@
 
 #include "vk/state.h"
 
-#define VK_STATE_VERSION	3
+#define VK_STATE_VERSION	4
 
 vk_state_t *
 vk_state_new (const char *path, uint32_t mode)
@@ -41,12 +41,18 @@ vk_state_new (const char *path, uint32_t mode)
 		goto fail;
 
 	state->mode = mode;
+	state->encoding = 2;
 
 	sprintf (template, "valkyrie state %08X\n", VK_STATE_VERSION);
 	if (mode == VK_STATE_LOAD) {
 		size = fread ((void *) header, 1, sizeof (template), state->fp);
-		if (size != sizeof (template) || memcmp (template, header, sizeof (header)))
-			goto fail;
+		if (size != sizeof (template)) goto fail;
+		if (memcmp(template, header, sizeof(header))) {
+			/* Version 3 predates the upper material and texture-head banks. */
+			sprintf(template, "valkyrie state %08X\n", 3);
+			if (memcmp(template, header, sizeof(header))) goto fail;
+			state->encoding = 1;
+		}
 	} else {
 		size = fwrite ((void *) template, 1, sizeof (template), state->fp);
 		if (size != sizeof (template))

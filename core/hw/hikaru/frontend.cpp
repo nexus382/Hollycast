@@ -120,6 +120,7 @@ void enqueueFrameWorker(std::function<void()> task) {
     frameWorker->enqueue(std::move(task));
 }
 std::vector<uint8_t> pendingState;
+uint32_t pendingStateEncoding = HIKARU_STATE_ENCODING_CURRENT;
 std::array<uint32_t, 3> stateRomHashes{};
 bool stateRomHashesKnown = false;
 std::unique_ptr<RomImages> images;
@@ -150,7 +151,7 @@ bool initializeCabinet = false;
 
 // Bump on any payload-encoding change. The engine layout tag also rejects
 // incompatible native CPU/GPU structures before state is applied.
-constexpr uint32_t StateMagic = 0x534b4948, StateVersion = 1;
+constexpr uint32_t StateMagic = 0x534b4948, StateVersion = HIKARU_STATE_ENCODING_CURRENT;
 
 const std::array<uint32_t, 3>& romIdentity() {
     if (!stateRomHashesKnown) {
@@ -169,7 +170,7 @@ std::array<char, 8> stateGameId() {
 void writeSnapshot(StateWriter& state) {
     if (!engine || !sound || !mie || !protection)
         throw std::runtime_error("Hikaru save states are available after the first game frame");
-    const size_t bytes = hikaru_engine_state_size(engine);
+    const size_t bytes = hikaru_engine_state_size(engine, StateVersion);
     if (!bytes || bytes > StateWriter::MaxSize - 2 * 1024 * 1024)
         throw std::runtime_error("Cannot measure Hikaru machine state");
     state.reserve(bytes + 2 * 1024 * 1024);
@@ -185,13 +186,13 @@ void writeSnapshot(StateWriter& state) {
     if (cardReader) card_reader::saveSanwaReaderState(*cardReader, state);
     for (const auto& credit : credits) credit.saveState(state);
 }
-void readSnapshot(const std::vector<uint8_t>& bytes) {
+void readSnapshot(const std::vector<uint8_t>& bytes, uint32_t encoding) {
     StateReader state(bytes);
     uint32_t engineBytes;
     state.value(engineBytes);
-    StateReader::require(engineBytes == hikaru_engine_state_size(engine), "Incompatible Hikaru machine state");
+    StateReader::require(engineBytes == hikaru_engine_state_size(engine, encoding), "Incompatible Hikaru machine state");
     const auto* engineData = state.view(engineBytes);
-    if (hikaru_engine_load_state(engine, engineData, engineBytes))
+    if (hikaru_engine_load_state(engine, engineData, engineBytes, encoding))
         throw std::runtime_error("Invalid Hikaru CPU or GPU state");
     uint64_t savedClocks;
     state.value(savedClocks);
@@ -210,6 +211,8 @@ void readSnapshot(const std::vector<uint8_t>& bytes) {
 bool applyPendingState() {
     if (pendingState.empty()) return false;
     auto restore = std::move(pendingState);
+    const uint32_t encoding = pendingStateEncoding;
+    pendingStateEncoding = StateVersion;
     // A rejected component must not leave a partially restored machine. Keep
     // the prior frame until every device has accepted the same snapshot.
     StateWriter backup;
@@ -217,9 +220,9 @@ bool applyPendingState() {
     try {
         writeSnapshot(backup);
         applying = true;
-        readSnapshot(restore);
+        readSnapshot(restore, encoding);
     } catch (const std::exception& error) {
-        if (applying) readSnapshot(backup.data());
+        if (applying) readSnapshot(backup.data(), StateVersion);
         os_notify((std::string("Could not restore Hikaru state: ") + error.what()).c_str(), 10000);
         glcache.Reset();
         return false;
@@ -411,6 +414,7 @@ void load(const std::string& path) {
     loadStateEventGeneration.store(0, std::memory_order_release);
     std::lock_guard<std::recursive_mutex> lock(stateMutex);
     pendingState.clear();
+    pendingStateEncoding = StateVersion;
     stateRomHashesKnown = false;
     const auto filename = hostfs::storage().getFileInfo(path).name;
     const auto* selectedGame = findGame(get_file_basename(filename));
@@ -543,6 +547,7 @@ void unload() {
     pendingRegion = CabinetRegion::Saved;
     initializeCabinet = false;
     pendingState.clear();
+    pendingStateEncoding = StateVersion;
     stateRomHashesKnown = false;
     frameGeneration.fetch_add(1, std::memory_order_release);
     loadStateEventGeneration.store(0, std::memory_order_release);
@@ -564,7 +569,7 @@ void serialize(Serializer& target) {
         StateWriter state(target.dryrun());
         writeSnapshot(state);
         const auto& hashes = romIdentity();
-        const uint64_t layout = hikaru_engine_state_layout();
+        const uint64_t layout = hikaru_engine_state_layout(StateVersion);
         const uint32_t length = uint32_t(state.size());
         const uint32_t checksum = target.dryrun() ? 0 : romCrc32(state.data());
         target << StateMagic << StateVersion << layout;
@@ -589,8 +594,9 @@ void deserialize(Deserializer& source) {
         source.deserialize(id.data(), id.size());
         source.deserialize(hashes.data(), hashes.size());
         source >> length >> checksum;
-        StateReader::require(magic == StateMagic && version == StateVersion &&
-            layout == hikaru_engine_state_layout(), "Incompatible Hikaru state format or platform");
+        StateReader::require(magic == StateMagic, "Incompatible Hikaru state format or platform");
+        validateStateEncoding(version, layout, hikaru_engine_state_layout(HIKARU_STATE_ENCODING_LEGACY),
+            hikaru_engine_state_layout(StateVersion));
         StateReader::require(id == stateGameId() && hashes == romIdentity(), "Hikaru state belongs to different ROMs or BIOS");
         StateReader::require(length && length <= StateWriter::MaxSize && length == source.remaining(),
             "Invalid Hikaru state length");
@@ -598,6 +604,7 @@ void deserialize(Deserializer& source) {
         source.deserialize(bytes.data(), bytes.size());
         StateReader::require(romCrc32(bytes) == checksum, "Hikaru state checksum mismatch");
         pendingState = std::move(bytes);
+        pendingStateEncoding = version;
         frameGeneration.fetch_add(1, std::memory_order_release);
         if (engine) hikaru_engine_discard_frames(engine);
         loadStateEventGeneration.store(0, std::memory_order_release);

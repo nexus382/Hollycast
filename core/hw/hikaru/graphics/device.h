@@ -31,7 +31,7 @@ struct Light {
 // Identical 16-byte fields in std140 GLSL and Metal constant buffers.
 struct Uniforms {
     Matrix projection{}, modelview{}, alternate{}, normal{}, alternateNormal{};
-    Vec4 ambient{}, fog{}, fogColor{}, flags{}, material{}, peel{};
+    Vec4 ambient{}, fog{}, fogColor{}, flags{}, material{}, peel{}, depth{}, family{}, blend{};
     std::array<Light,4> lights{};
     Vec4 factors{}, multipliers{}, direct{}, keyed{}, inverted{}, lodBias{};
 };
@@ -49,11 +49,11 @@ struct Texture {
 // Distinguish TexImage storage definitions from full level-zero replacements.
 enum class TextureUpload : uint8_t { Definition, FullUpdate };
 struct Draw {
-    unsigned color = 0, depth = 0;
+    unsigned color = 0, depth = 0, metadata = 0;
     std::array<unsigned,4> textures{};
     std::array<Texture,4> sampling{};
     std::array<GLint,4> viewport{}, scissor{};
-    bool scissorEnabled = false, depthTest = false, depthWrite = true, blend = false, cull = false, bitmap = false;
+    bool scissorEnabled = false, depthTest = false, depthWrite = true, blend = false, cull = false, bitmap = false, familyResolve = false;
     GLenum depthFunc = GL_LESS, cullFace = GL_BACK, frontFace = GL_CCW;
     GLenum srcRGB = GL_ONE, dstRGB = GL_ZERO, srcAlpha = GL_ONE, dstAlpha = GL_ZERO;
     GLenum equationRGB = GL_FUNC_ADD, equationAlpha = GL_FUNC_ADD, topology = GL_TRIANGLES;
@@ -97,7 +97,7 @@ public:
 private:
     struct Attribute { unsigned buffer=0; GLint size=4; GLenum type=GL_FLOAT; bool normalized=false; GLsizei stride=0; size_t offset=0; bool enabled=false; };
     struct Program {
-        bool bitmap=false;
+        bool bitmap=false, familyResolve=false;
         std::unordered_map<std::string,int> definitions;
         std::unordered_map<std::string,GLint> locations;
         std::unordered_map<GLint,std::vector<float>> values;
@@ -115,7 +115,7 @@ private:
     std::unordered_map<unsigned,std::array<Attribute,16>> arrays;
     std::unordered_map<unsigned,Texture> textures;
     std::vector<uint8_t> fullTextureUpdatePixels;
-    std::unordered_map<unsigned,std::array<unsigned,2>> targets;
+    std::unordered_map<unsigned,std::array<unsigned,4>> targets;
     std::unordered_map<unsigned,std::string> shaders;
     std::unordered_map<unsigned,Program> programs;
     std::unordered_map<GLenum,GLint> pixelStore;
@@ -168,6 +168,8 @@ private:
     void Disable(GLenum cap);
     void DrawArrays(GLenum mode, GLint first, GLsizei count);
     void DrawBuffers(GLsizei n, const GLenum * bufs);
+    void BindFragDataLocation(GLuint program, GLuint color, const GLchar * name);
+    void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint * value);
     void Enable(GLenum cap);
     void EnableVertexAttribArray(GLuint index);
     void FramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);

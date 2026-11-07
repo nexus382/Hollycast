@@ -18,7 +18,7 @@
 #include <math.h>
 #include <stddef.h>
 #include "mach/hikaru/hikaru-gpu-private.h"
-int hikaru_vendor_test_spot_pixels(const hikaru_light_t *,const float[3],const float[3],int,unsigned,unsigned,const uint16_t[16],uint8_t[4]);
+int hikaru_vendor_test_spot_pixels(const hikaru_light_t *,const float[3],const float[3],int,unsigned,unsigned,const uint16_t[16],uint8_t[4],unsigned);
 int hikaru_vendor_test_shader_uniform_cache(void);
 int hikaru_vendor_test_abgr_upload(void);
 int hikaru_vendor_test_prelit_material_pixels(uint32_t, const uint16_t[3], bool,
@@ -30,7 +30,7 @@ void hikaru_vendor_test_reset_shader_cache(unsigned);
 void hikaru_vendor_test_uniform_cache_bypass(bool);
 void hikaru_vendor_test_with_gl_guard(void (*draw)(void));
 static int failed;
-static unsigned slot,curve;
+static unsigned slot,curve,lamp_flags;
 static const uint16_t captured_table[16]={51,102,204,307,409,512,563,614,665,716,768,819,870,921,972,1024};
 static const uint16_t nonlinear_table[16]={0,0,0,0,0,0,0,256,768,768,768,768,768,768,768,1024};
 static const uint16_t *active_table=captured_table;
@@ -43,7 +43,7 @@ static void decode(hikaru_light_t *light,uint32_t payload,int disabled){
 
 static void check(const char *name,const hikaru_light_t *light,const float position[3],const float normal[3],int unlit,const uint8_t expected[3]) {
  uint8_t actual[4]={0};
- if(!hikaru_vendor_test_spot_pixels(light,position,normal,unlit,slot,curve,active_table,actual)){fprintf(stderr,"%s draw failed\n",name);failed++;return;}
+ if(!hikaru_vendor_test_spot_pixels(light,position,normal,unlit,slot,curve,active_table,actual,lamp_flags)){fprintf(stderr,"%s draw failed\n",name);failed++;return;}
  int ok=actual[3]==255;
  for(int c=0;c<3;c++){int d=(int)actual[c]-expected[c];if(d < -2 || d > 2)ok=0;}
  printf("%s: RGB %u,%u,%u expected %u,%u,%u %s\n",name,actual[0],actual[1],actual[2],expected[0],expected[1],expected[2],ok?"PASS":"FAIL");
@@ -213,6 +213,44 @@ static void prelit_material_probe(void) {
   if(!ok){fprintf(stderr,"prelit %s: got RGBA %u,%u,%u,%u\n",cases[i].name,actual[0],actual[1],actual[2],actual[3]);failed++;}
  }
 }
+static void lamp_ambient_probe(void) {
+ enum {MASKED=1,TWO_SIDED=2,VIEW_AMBIENT=4,NO_AMBIENT=8,NO_DIFFUSE=16};
+ hikaru_light_t light={0};
+ const float position[3]={0,0,-10},front[3]={0,0,1},back[3]={0,0,-1};
+ const uint8_t lit[3]={160,80,40},fill[3]={32,16,8},black[3]={0,0,0},viewport[3]={64,64,64};
+ light.has_direction=1;light.direction[2]=1;
+ light.attenuation[0]=light.attenuation[1]=1;
+ light.diffuse[0]=128;light.diffuse[1]=64;light.diffuse[2]=32;
+ light._051_index=4;slot=curve=lamp_flags=0;active_table=captured_table;
+ check("051 measured quarter fill on front",&light,position,front,0,lit);
+ check("051 measured quarter fill on back",&light,position,back,0,fill);
+ light._051_index=0;
+ check("051 zero resets prior fill",&light,position,back,0,black);
+ light._051_index=4;lamp_flags=MASKED;
+ check("masked light removes its constant fill",&light,position,back,0,black);
+ lamp_flags=MASKED|VIEW_AMBIENT;
+ check("masked light preserves viewport691 ambient",&light,position,back,0,viewport);
+ lamp_flags=TWO_SIDED;
+ check("two sided Lambert adds fill once",&light,position,back,0,lit);
+ lamp_flags=NO_AMBIENT;
+ check("ambient debug mask removes051 fill",&light,position,back,0,black);
+ lamp_flags=NO_DIFFUSE;
+ check("diffuse debug mask removes lamp color",&light,position,front,0,black);
+ lamp_flags=0;light.has_position=1;light.has_direction=0;
+ light.attenuation[0]=0.025f;light.attenuation[1]=0;
+ const uint8_t distance_fill[3]={8,4,2};
+ check("point distance attenuates constant fill",&light,position,back,0,distance_fill);
+ light.has_direction=1;light.direction[2]=-1;
+ light.attenuation[0]=-1;light.attenuation[1]=-100;decode(&light,0,0);
+ check("spot inside cone retains fill",&light,position,back,0,fill);
+ light.direction[0]=sqrtf(0.75f);light.direction[2]=-0.5f;
+ /* At unit .5, t=8 selects captured knot7=614/1024. */
+ const uint8_t curve_fill[3]={19,10,5};
+ check("spot cone attenuates fill with Lambert",&light,position,back,0,curve_fill);
+ light.direction[0]=1;light.direction[2]=0;
+ check("spot outside cone rejects fill",&light,position,back,0,black);
+ lamp_flags=0;
+}
 static void upload_probe(void) {
  if(!hikaru_vendor_test_abgr_upload()) { fprintf(stderr,"packed texture upload failed\n");failed++; }
 }
@@ -228,6 +266,7 @@ int main(int argc, char **argv){
  hikaru_vendor_test_with_gl_guard(run);
  hikaru_vendor_test_with_gl_guard(upload_probe);
  hikaru_vendor_test_with_gl_guard(prelit_material_probe);
+ hikaru_vendor_test_with_gl_guard(lamp_ambient_probe);
  SDL_GL_DeleteContext(context);SDL_DestroyWindow(w);SDL_Quit();
  printf("lighting pixel cases: %s (%d failed)\n",failed?"FAIL":"PASS",failed);
  return failed?1:0;

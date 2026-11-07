@@ -8,6 +8,14 @@ static _Thread_local const HikaruGraphicsDispatch *current_dispatch;
 const HikaruGraphicsDispatch *hikaru_graphics_set_dispatch(const HikaruGraphicsDispatch *dispatch) {
     const HikaruGraphicsDispatch *previous = current_dispatch; current_dispatch = dispatch; return previous;
 }
+void hikaru_glBindFragDataLocation(GLuint program, GLuint color, const GLchar *name) {
+    if (current_dispatch) { current_dispatch->BindFragDataLocation(program, color, name); return; }
+    glBindFragDataLocation(program, color, name);
+}
+void hikaru_glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint *value) {
+    if (current_dispatch) { current_dispatch->ClearBufferuiv(buffer, drawbuffer, value); return; }
+    glClearBufferuiv(buffer, drawbuffer, value);
+}
 void hikaru_glActiveTexture(GLenum texture) {
     if (current_dispatch) { current_dispatch->ActiveTexture(texture); return; }
     glActiveTexture(texture);

@@ -1253,7 +1253,9 @@ typedef void (* itype) (sh4_t *ctx, uint16_t inst);
  * without regenerating it fails compilation at SH4_HANDLER_##name_ below. */
 enum sh4_handler_id {
 #define SH4_DISPATCH_HANDLER(name_) SH4_HANDLER_##name_,
+#define SH4_DISPATCH_FP_HANDLER(name_) SH4_DISPATCH_HANDLER(name_)
 #include "sh-dispatch-list.h"
+#undef SH4_DISPATCH_FP_HANDLER
 #undef SH4_DISPATCH_HANDLER
 };
 static uint16_t insn_ids[65536];
@@ -1669,10 +1671,14 @@ sh4_step_switch (sh4_t *ctx, uint32_t pc)
 		return;
 	}
 
+	/* FP-only cases cannot execute after the return above. Exclude them so
+	 * compilers do not expand unused FP arithmetic into the integer hot loop. */
 	switch (insn_ids[inst]) {
 #define SH4_DISPATCH_HANDLER(name_) \
 	case SH4_HANDLER_##name_: sh4_interp_##name_ (ctx, inst); break;
+#define SH4_DISPATCH_FP_HANDLER(name_)
 #include "sh-dispatch-list.h"
+#undef SH4_DISPATCH_FP_HANDLER
 #undef SH4_DISPATCH_HANDLER
 	default: sh4_interp_invalid (ctx, inst); break;
 	}
@@ -1689,7 +1695,12 @@ int hikaru_vendor_test_verify_dispatch (void)
 		switch (insn_ids[inst]) {
 #define SH4_DISPATCH_HANDLER(name_) \
 		case SH4_HANDLER_##name_: if (insns[inst] != sh4_interp_##name_) return -1; break;
+#define SH4_DISPATCH_FP_HANDLER(name_) \
+		case SH4_HANDLER_##name_: \
+			if ((inst & 0xF000) != 0xF000 || insns[inst] != sh4_interp_##name_) return -1; \
+			break;
 #include "sh-dispatch-list.h"
+#undef SH4_DISPATCH_FP_HANDLER
 #undef SH4_DISPATCH_HANDLER
 		default: return -1;
 		}

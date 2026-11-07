@@ -23,6 +23,7 @@ int hikaru_vendor_test_texture_overlap(uint32_t, uint32_t, uint32_t, uint32_t);
 int hikaru_vendor_test_viewport_origin(void);
 int hikaru_vendor_test_gpu_capability_read(void);
 int hikaru_vendor_test_cpu_texram_dirty(void);
+int hikaru_vendor_test_table_banks(void);
 int hikaru_vendor_test_modelview_pair(void);
 int hikaru_vendor_test_modelview_local(void);
 int hikaru_vendor_test_vertex_matrix_selector(void);
@@ -198,6 +199,8 @@ static unsigned test_texhead_switch(void)
     const uint32_t b = (0x44cc02c1u & ~(7u << 26) & ~(7u << 16) & ~(7u << 19)) | (3u << 16) | (2u << 19);
     static const uint32_t to_b[8] = {0x000100e8,0x0100fe00,0x80007fff,0x0000ffff};
     static const uint32_t to_a[8] = {0x000000e8,0x0100fe00,0x80007fff,0x0000ffff};
+    /* Upper bank entry 0x4000 must not read its lower-bank alias 0. */
+    static const uint32_t to_high[8] = {0x400000e8,0x0100fe00,0x80007fff,0x0000ffff};
     float uv[3][2] = {{0}};
     uint32_t scratch = 0;
     unsigned errors = 0;
@@ -209,6 +212,10 @@ static unsigned test_texhead_switch(void)
     errors += scratch != a;
     errors += fabsf(uv[0][0] - -32.0f / 256.0f) > 0.000001f;
     errors += fabsf(uv[0][1] - 16.0f / 32.0f) > 0.000001f;
+    if (!hikaru_vendor_test_texhead3_switch(a, b, to_high, uv, &scratch)) return 1;
+    errors += scratch != b;
+    errors += fabsf(uv[0][0] - -32.0f / 128.0f) > 0.000001f;
+    errors += fabsf(uv[0][1] - 16.0f / 64.0f) > 0.000001f;
     errors += (hikaru_vendor_test_opcode_flags(0x083) & 4) != 0;
     errors += (hikaru_vendor_test_opcode_flags(0x0c3) & 4) != 0;
     errors += (hikaru_vendor_test_opcode_flags(0x0e8) & 6) != 6;
@@ -316,6 +323,7 @@ int main(void)
         written != 0xabcd || address_seen != 0x0a010000 || size_seen != 2) ++errors;
     if (hikaru_vendor_test_protection_bus(&protection, 0, 4, 0x0a020000, &value) == 0) ++errors;
     if (!hikaru_vendor_test_viewport_origin() || !hikaru_vendor_test_gpu_capability_read()) ++errors;
+    if (!hikaru_vendor_test_table_banks()) ++errors;
     uint16_t *pixels = hikaru_vendor_test_decode_abgr1111(tex, 2, 2, 0, 0);
     if (!pixels || pixels[0] != 0x3333 || pixels[1] != 0x2222 || pixels[2] != 0x7777 || pixels[3] != 0x6666 ||
         pixels[4] != 0x1111 || pixels[5] != 0 || pixels[6] != 0x5555 || pixels[7] != 0x4444) ++errors;

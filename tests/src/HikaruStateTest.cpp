@@ -58,3 +58,15 @@ TEST_F(HikaruStateTest, PayloadMeasuresAndRejectsInvalidBounds) {
     EXPECT_THROW(invalidReader.value(flag), std::runtime_error);
     EXPECT_THROW(measured.append(hikaru::StateWriter::MaxSize), std::runtime_error);
 }
+
+TEST_F(HikaruStateTest, PayloadVersionMustMatchItsOwnNativeLayout) {
+    constexpr uint64_t legacy = 0x1248124812481248, current = 0x369c369c369c369c;
+    EXPECT_NO_THROW(hikaru::validateStateEncoding(1, legacy, legacy, current));
+    EXPECT_NO_THROW(hikaru::validateStateEncoding(2, current, legacy, current));
+    EXPECT_THROW(hikaru::validateStateEncoding(1, current, legacy, current), std::runtime_error);
+    EXPECT_THROW(hikaru::validateStateEncoding(2, legacy, legacy, current), std::runtime_error);
+    EXPECT_THROW(hikaru::validateStateEncoding(0, current, legacy, current), std::runtime_error);
+    EXPECT_THROW(hikaru::validateStateEncoding(3, current, legacy, current), std::runtime_error);
+    EXPECT_THROW(hikaru::validateStateEncoding(2, current ^ 1, legacy, current), std::runtime_error);
+    EXPECT_THROW(hikaru::validateStateEncoding(1, 0, 0, current), std::runtime_error);
+}

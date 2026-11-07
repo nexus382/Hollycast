@@ -984,7 +984,7 @@ struct light_t {								\n \
 	vec3 direction;								\n \
 	vec3 diffuse;								\n \
 	vec3 specular;								\n \
-	vec2 extents;								\n \
+	vec2 extents; float ambient;\n \
 	vec3 spot;\n \
 	float spot_table[16];\n \
 };										\n \
@@ -998,6 +998,8 @@ uniform float		u_weigh_by_alpha; uniform float u_force_coverage; uniform float u
 uniform vec3		u_fog_color;						\n \
 uniform int u_peel_enabled; uniform int u_peel_first; uniform vec2 u_peel_size;\n \
 uniform sampler2D u_peel_depth; uniform sampler2D u_peel_opaque_depth;\n \
+uniform vec2 u_depth; uniform float u_sort_scale;\n \
+uniform vec3 u_family; uniform usampler2D u_family_other;\n \
 										\n \
 in vec4 p_position;								\n \
 in vec3 p_normal;								\n \
@@ -1051,10 +1053,10 @@ apply_light (inout vec3 diffuse,						\n \
 		int index = clamp (int (floor (t)), 0, 15);\n \
 		float lo = index == 0 ? 0.0 : light.spot_table[max (index - 1, 0)];\n \
 		float hi = light.spot_table[index];\n \
-		intensity *= mix (lo, hi, t - float (index));\n \
+		attenuation *= mix (lo, hi, t - float (index));\n \
 	}\n \
 										\n \
-	diffuse += attenuation * intensity * light.diffuse;		\n \
+	diffuse += attenuation * (intensity + light.ambient) * light.diffuse;		\n \
 										\n \
 	if (has_specular != 0) {								\n \
 		vec3 view_direction = normalize (-p_position.xyz);				\n \
@@ -1064,9 +1066,33 @@ apply_light (inout vec3 diffuse,						\n \
 	}											\n \
 }										\n \
 										\n \
-void										\n \
-main (void)									\n \
+float window_depth(float z) {\n \
+    float encoded = clamp(log2(1.0 + z) / log2(100001.0), 0.0, 1.0);\n \
+    return roundEven(mix(gl_DepthRange.near, gl_DepthRange.far, encoded) * 16777215.0) / 16777215.0;\n \
+}\n \
+void main(void)									\n \
 {										\n \
+    /* Clipping is unchanged; placement and translucent ordering are distinct. */\n \
+    float eye_z = max(u_depth.x, -p_position.z);\n \
+    float placement_depth = window_depth(max(u_depth.x, eye_z * u_depth.y));\n \
+    float placement_code = roundEven(placement_depth * 16777215.0);\n \
+    float written_depth = placement_depth;\n \
+    if (u_sort_scale > 0.0 && u_sort_scale != u_depth.y)\n \
+        written_depth = window_depth(max(u_depth.x, eye_z * u_sort_scale));\n \
+    float depth_code = roundEven(written_depth * 16777215.0);\n \
+    gl_FragDepth = written_depth;\n \
+    uint raw_code = 0u;\n \
+    if (u_family.y != 0.0 || u_family.x > 1.0)\n \
+        raw_code = u_depth.y == 1.0 ? uint(placement_code) : uint(roundEven(window_depth(eye_z) * 16777215.0));\n \
+    vk_frag_metadata = uvec2(raw_code, uint(u_family.z + 0.5));\n \
+    if (u_family.x != 0.0) {\n \
+        vec2 coordinate = gl_FragCoord.xy / u_peel_size;\n \
+        if (placement_code > roundEven(texture(u_peel_opaque_depth, coordinate).r * 16777215.0)) discard;\n \
+        if (u_family.x > 1.0) {\n \
+            uvec2 other = texelFetch(u_family_other, ivec2(gl_FragCoord.xy), 0).rg;\n \
+            if (other.y != 0u && raw_code > other.x) discard;\n \
+        }\n \
+    }\n \
 #if HAS_PATTERN\n \
 	/* 501 is a screen-space mask, independent of material alpha. */\n \
 	ivec2 dot = ivec2(gl_FragCoord.xy) & 3;\n \
@@ -1074,9 +1100,9 @@ main (void)									\n \
 #endif\n \
 	if (u_peel_enabled != 0) {\n \
 		vec2 peel_uv = gl_FragCoord.xy / u_peel_size;\n \
-		float opaque_z = texture(u_peel_opaque_depth, peel_uv).r;\n \
-		if (gl_FragCoord.z > opaque_z + 0.000001) discard;\n \
-		if (u_peel_first == 0 && gl_FragCoord.z <= texture(u_peel_depth, peel_uv).r + 0.000001) discard;\n \
+		float opaque_code = roundEven(texture(u_peel_opaque_depth, peel_uv).r * 16777215.0);\n \
+		if (u_family.x == 0.0 && depth_code > opaque_code) discard;\n \
+		if (u_peel_first == 0 && depth_code <= roundEven(texture(u_peel_depth, peel_uv).r * 16777215.0)) discard;\n \
 	}\n \
 	vec4 texel = vec4(1.0), color;\n \
 	vec3 base;\n \
@@ -1217,15 +1243,6 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_avail
 		static const unsigned modes[8] = {0, 1, 2, 0, 3, 4, 0, 0};
 		variant.texture_mode = modes[hr->tex_list[mesh->tex_index]._2C1 >> 29];
 	}
-
-	/* Preserve the existing native shader inputs until its material port;
-	 * the OpenGL shader below uses the explicit material modes instead. */
-	variant.use_unlit_diffuse = mat->shading_mode == 0 &&
-	    !mat->has_texture && !mat->has_alpha;
-	variant.use_prelit_color = variant.has_lighting && variant.has_texture && mat->has_691 &&
-	    mat->unknown[0] <= 255 && mat->unknown[1] <= 255 && mat->unknown[2] <= 255 &&
-	    !(mat->diffuse[0] | mat->diffuse[1] | mat->diffuse[2] |
-	      mat->ambient[0] | mat->ambient[1] | mat->ambient[2]);
 
 	/* 881 bit 18 requests fog; 621 bit 17 disables its viewport colour.
 	 * The guest supplies a start depth and inverse range in eye space. */
@@ -1414,9 +1431,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	"#define HAS_PATTERN %d\n"
 	"#define SHADING_MODE %d\n"
 	"#define ALPHA_MODE %d\n"
-	"#define TEXTURE_MODE %d\n"
-	"#define USE_UNLIT_DIFFUSE %d\n"
-	"#define USE_PRELIT_COLOR %d\n";
+	"#define TEXTURE_MODE %d\n";
 
 	hikaru_glsl_variant_t variant;
 	char *definitions, *vs_source, *fs_source;
@@ -1481,9 +1496,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	                variant.has_pattern,
 	                variant.shading_mode,
 	                variant.alpha_mode,
-	                variant.texture_mode,
-	                variant.use_unlit_diffuse,
-	                variant.use_prelit_color);
+	                variant.texture_mode);
 	if (ret < 0) VK_ABORT("out of memory building shader definitions");
 
 	ret = vk_asprintf (&vs_source, mesh_vs_source, definitions);
@@ -1552,6 +1565,8 @@ update_locations:
 		sprintf (temp, "u_lights[%d].direction", i);
 		hr->meshes.locs.u_lights[i].direction =
 			GET_MESH_UNIFORM (hr->meshes.program, temp);
+        sprintf(temp,"u_lights[%d].ambient",i);
+        hr->meshes.locs.u_lights[i].ambient=GET_MESH_UNIFORM(hr->meshes.program,temp);
 		sprintf (temp, "u_lights[%d].diffuse", i);
 		hr->meshes.locs.u_lights[i].diffuse =
 			GET_MESH_UNIFORM (hr->meshes.program, temp);
@@ -1587,12 +1602,17 @@ update_locations:
 	hr->meshes.locs.u_peel_size = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_size");
 	hr->meshes.locs.u_peel_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_depth");
 	hr->meshes.locs.u_peel_opaque_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_opaque_depth");
+	hr->meshes.locs.u_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_depth");
+    hr->meshes.locs.u_sort_scale = GET_MESH_UNIFORM(hr->meshes.program, "u_sort_scale");
+    hr->meshes.locs.u_family = GET_MESH_UNIFORM(hr->meshes.program, "u_family");
+    hr->meshes.locs.u_family_other = GET_MESH_UNIFORM(hr->meshes.program, "u_family_other");
 	VK_ASSERT_NO_GL_ERROR ();
 	program_cache[slot].locs = hr->meshes.locs;
 	/* Sampler units are fixed for the lifetime of this linked program. */
 	glUniform1i(hr->meshes.locs.u_texture, 0);
 	glUniform1i(hr->meshes.locs.u_peel_depth, 1);
 	glUniform1i(hr->meshes.locs.u_peel_opaque_depth, 2);
+    glUniform1i(hr->meshes.locs.u_family_other, 3);
 }
 
 #undef GET_MESH_UNIFORM
@@ -1626,36 +1646,38 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint first_program = hr->meshes.program;
 	const hikaru_uniform_locations_t first = hr->meshes.locs;
-	int ok = uniform_location_queries == 47 && first.u_texture == (GLuint)-1;
+	const unsigned locations_per_program = 55;
+	int ok = uniform_location_queries == locations_per_program && first.u_texture == (GLuint)-1 &&
+	      first.u_depth == (GLuint)glGetUniformLocation(first_program, "u_depth");
 	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint second_program = hr->meshes.program;
 	const hikaru_uniform_locations_t second = hr->meshes.locs;
-	ok &= second_program != first_program && uniform_location_queries == 94;
+	ok &= second_program != first_program && uniform_location_queries == 2 * locations_per_program;
 	ok &= second.u_texture == (GLuint)glGetUniformLocation (second_program, "u_texture");
 	*stale = *hr;
 	material.has_texture = 0;
 	upload_glsl_program (other, &mesh, true);
 	ok &= other->meshes.program == first_program &&
 	      !memcmp (&other->meshes.locs, &first, sizeof(first)) &&
-	      uniform_location_queries == 94;
+	      uniform_location_queries == 2 * locations_per_program;
 
 	/* A real third upload overflows the two-slot test cache and evicts B. */
 	hr->debug.flags[HR_DEBUG_FOG] = 1;
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint third_program = hr->meshes.program;
-	ok &= uniform_location_queries == 141 && !glIsProgram (second_program) &&
+	ok &= uniform_location_queries == 3 * locations_per_program && !glIsProgram (second_program) &&
 	      glIsProgram (first_program) && hr->meshes.locs.u_texture == (GLuint)-1;
 
 	/* A same-variant hit must refresh recency before another real overflow. */
 	upload_glsl_program (other, &mesh, true);
 	glGetIntegerv (GL_CURRENT_PROGRAM, &current_program);
 	ok &= other->meshes.program == first_program &&
-	      current_program == (GLint)first_program && uniform_location_queries == 141;
+	      current_program == (GLint)first_program && uniform_location_queries == 3 * locations_per_program;
 	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint fourth_program = hr->meshes.program;
-	ok &= fourth_program != third_program && uniform_location_queries == 188 &&
+	ok &= fourth_program != third_program && uniform_location_queries == 4 * locations_per_program &&
 	      !glIsProgram (third_program) && glIsProgram (first_program) &&
 	      hr->meshes.locs.u_texture ==
 	          (GLuint)glGetUniformLocation (fourth_program, "u_texture");
@@ -1666,16 +1688,18 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	upload_glsl_program (other, &mesh, true);
 	ok &= other->meshes.program == first_program &&
 	      !memcmp (&other->meshes.locs, &first, sizeof(first)) &&
-	      uniform_location_queries == 188;
+	      uniform_location_queries == 4 * locations_per_program;
 
 	/* The renderer still holding B must reject its replaced slot and recompile. */
 	material.has_texture = 1;
 	upload_glsl_program (stale, &mesh, true);
 	const GLuint recompiled_program = stale->meshes.program;
-	ok &= recompiled_program != 0 && uniform_location_queries == 235 &&
+	ok &= recompiled_program != 0 && uniform_location_queries == 5 * locations_per_program &&
 	      stale->meshes.locs.u_texture ==
 	          (GLuint)glGetUniformLocation (recompiled_program, "u_texture") &&
 	      glGetError() == GL_NO_ERROR;
+	if (!ok)
+		fprintf(stderr, "shader uniform cache contract failed after %u location queries\n", uniform_location_queries);
 	for (unsigned i = 0; i < num_programs; ++i)
 		vk_renderer_destroy_program (program_cache[i].program);
 	program_cache_reset ();
@@ -1721,6 +1745,26 @@ int hikaru_vendor_test_viewport_origin(void)
 }
 #endif
 
+/* Independent fit to measured NASCAR reference GPU uniforms: 101=0x500
+ * gave test scale .978124976 and sort scale 1.01171875; 0x700 gave
+ * .934374988 and 1.00390625. Placement uses the low ten bits, while the
+ * translucent ordering field is signed eleven-bit. These are measured
+ * compatibility rules, not a claim about an undocumented hardware unit. */
+static float
+mesh_depth_scale(float raw)
+{
+    unsigned bits=(unsigned)(int32_t)raw;
+    return 1.0f-(bits&0x3ffu)*(5.6f/65536.0f);
+}
+
+static float
+mesh_sort_scale(float raw)
+{
+    unsigned bits=(unsigned)(int32_t)raw&0x7ffu;
+    int signed_bias=(int)bits-((bits&0x400u)?0x800:0);
+    return 1.0f-signed_bias*(1.0f/65536.0f);
+}
+
 static void
 upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 {
@@ -1736,6 +1780,14 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	/* The viewport rectangle is context state and may have been changed by
 	 * a layer pass. Only the program-local projection/fog values are cached. */
 	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
+    // Apply relative guest placement before the existing canonical log depth.
+    // Changing the camera near plane must not change a surface's placement.
+    const vec2f_t depth = {vp->clip.n, mesh_depth_scale(mesh->depth_bias)};
+	if (!cache->depth_valid || memcmp(cache->depth, depth, sizeof(depth))) {
+		glUniform2fv(hr->meshes.locs.u_depth, 1, depth);
+		memcpy(cache->depth, depth, sizeof(depth));
+		cache->depth_valid = true;
+	}
 	if (cache->viewport_valid && cache->alpha_ref == hr->pass_alpha_ref &&
 	    !memcmp(&cache->viewport, vp, sizeof(*vp))) return;
 	cache->viewport = *vp;
@@ -2034,7 +2086,7 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	float tmp[4];
 	unsigned i;
 
-	if (!hr->meshes.variant.has_lighting)
+	if (!hr->meshes.variant.shading_mode)
 		return;
 	VK_ASSERT (mesh->ls_index < hr->num_lss);
 	ls = &hr->ls_list[mesh->ls_index];
@@ -2049,7 +2101,8 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		cache->ambient_valid = true;
 	}
 	const unsigned debug_flags = (hr->debug.flags[HR_DEBUG_NO_DIFFUSE] ? 1u : 0u) |
-	                             (hr->debug.flags[HR_DEBUG_NO_SPECULAR] ? 2u : 0u);
+	                             (hr->debug.flags[HR_DEBUG_NO_SPECULAR] ? 2u : 0u) |
+                                 (hr->debug.flags[HR_DEBUG_NO_AMBIENT] ? 4u : 0u);
 	const bool changed = !cache->lightset_valid || cache->light_debug_flags != debug_flags ||
 	                     memcmp(&cache->lightset, ls, sizeof(*ls));
 	cache->lightset = *ls;
@@ -2065,6 +2118,10 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 			continue;
 
 		if (changed) {
+            // Measured NASCAR 051 level 4 uploads .25 in the reference GPU.
+            // Keep the authored constant fill independent of the normal.
+            glUniform1f(hr->meshes.locs.u_lights[i].ambient,
+                hr->debug.flags[HR_DEBUG_NO_AMBIENT] ? 0.0f : lt->_051_index * (1.0f/16.0f));
 			glUniform3fv (hr->meshes.locs.u_lights[i].position, 1,
 			              lt->position);
 			VK_ASSERT_NO_GL_ERROR ();
@@ -2169,6 +2226,7 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	vp.offset.x = 320; vp.offset.y = 240;
 	vp.depth.q_enabled = 1; vp.depth.density = 0.01f; vp.depth.bias = 0.1f;
 	material.shading_mode = 2; material.depth_blend = 1; material.has_alpha = 1;
+	mesh.depth_bias = 31;
 	lights.mask = 14; lights.lights[0].has_direction = 1;
 	lights.lights[0].direction[2] = -1; lights.lights[0].diffuse[0] = 128;
 	for (unsigned i = 0; i < 4; ++i) mv.mtx[i][i] = alternate.mtx[i][i] = 1.0f;
@@ -2178,6 +2236,18 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 		upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
 	}
 	int ok = state_uploads[0] == 1 && state_uploads[1] == 2 && state_uploads[2] == 1;
+	const float depth_bias = mesh_depth_scale(31);
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_depth, value);
+	ok &= value[0] == 1.0f && fabsf(value[1] - depth_bias) < 1e-10f;
+	/* Bias changes must bypass the otherwise unchanged viewport cache. */
+	mesh.depth_bias = 0;
+	upload_viewport(hr, &mesh);
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_depth, value);
+	ok &= value[0] == 1.0f && value[1] == 1.0f && state_uploads[0] == 1;
+	mesh.depth_bias = 31;
+	upload_viewport(hr, &mesh);
+	glGetUniformfv(hr->meshes.program, hr->meshes.locs.u_depth, value);
+	ok &= value[0] == 1.0f && fabsf(value[1] - depth_bias) < 1e-10f && state_uploads[0] == 1;
 	/* Program cache hits must still restore context-global viewport state. */
 	glViewport(1, 2, 3, 4);
 	hr->base.internal_width = 1280; hr->base.internal_height = 960;
@@ -2219,6 +2289,7 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	const hikaru_viewport_t viewport_a = vp;
 	const hikaru_lightset_t lights_a = lights;
 	material.depth_blend = 0; vp.offset.x = 400; vp.color.ambient[0] = 96;
+	vp.clip.n = 0.5f; mesh.depth_bias = 0;
 	mv.mtx[3][0] = 11; lights.lights[0].diffuse[0] = 192; hr->pass_alpha_ref = 0.25f;
 	upload_glsl_program(hr, &mesh, false);
 	const GLuint program_b = hr->meshes.program;
@@ -2231,8 +2302,11 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	ok &= fabsf(value[0] - 96.0f / 255.0f) < 0.0001f;
 	glGetUniformfv(program_b, hr->meshes.locs.u_alpha_ref, value);
 	ok &= value[0] == 0.25f;
+	glGetUniformfv(program_b, hr->meshes.locs.u_depth, value);
+	ok &= value[0] == 0.5f && value[1] == 1.0f;
 	unsigned before[3]; memcpy(before, state_uploads, sizeof(before));
 	material.depth_blend = 1; vp = viewport_a; lights = lights_a;
+	mesh.depth_bias = 31;
 	mv.mtx[3][0] = 5; hr->pass_alpha_ref = 0.5f;
 	upload_glsl_program(hr, &mesh, false);
 	upload_viewport(hr, &mesh); upload_modelview(hr, &mesh, 0); upload_lightset(hr, &mesh);
@@ -2245,6 +2319,8 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	ok &= fabsf(value[0] - 64.0f / 255.0f) < 0.0001f;
 	glGetUniformfv(program_a, hr->meshes.locs.u_alpha_ref, value);
 	ok &= value[0] == 0.5f;
+	glGetUniformfv(program_a, hr->meshes.locs.u_depth, value);
+	ok &= value[0] == 1.0f && fabsf(value[1] - depth_bias) < 1e-10f;
 	mv.mtx[3][0] = 13;
 	upload_modelview(hr, &mesh, 0);
 	ok &= state_uploads[0] == before[0] && state_uploads[1] == before[1] + 2 && state_uploads[2] == before[2];
@@ -2613,7 +2689,7 @@ int hikaru_vendor_test_uv_packets(uint32_t offset_opcode, uint32_t offset_payloa
     /* 0E8 updates the previous three positions; no triangle is capped. */
     hr->push.num_verts = 3;
     TEX.scratch._2C1 = texhead;
-    TEX.table[0]._2C1 = texhead;
+    hikaru_gpu_texhead(gpu, 0)->_2C1 = texhead;
     const uint32_t offset[8] = {offset_opcode, offset_payload};
     if (!hikaru_vendor_test_uv_dispatch(gpu, offset) ||
         !hikaru_vendor_test_uv_dispatch(gpu, packet)) goto cleanup;
@@ -2645,8 +2721,9 @@ int hikaru_vendor_test_texhead3_switch(uint32_t texhead_a, uint32_t texhead_b,
     hr->push.num_verts = 3;
     TEX.base = 0;
     TEX.scratch._2C1 = texhead_a;
-    TEX.table[0]._2C1 = texhead_a;
-    TEX.table[1]._2C1 = texhead_b;
+    hikaru_gpu_texhead(gpu, 0)->_2C1 = texhead_a;
+    const unsigned index = packet[0] >> 16;
+    if (index) hikaru_gpu_texhead(gpu, index)->_2C1 = texhead_b;
     if (!hikaru_vendor_test_uv_dispatch(gpu, packet)) goto cleanup;
     for (unsigned i = 0; i < 3; ++i)
         memcpy(uv[i], hr->push.tmp[2-i].body.texcoords, sizeof(uv[i]));
@@ -2878,7 +2955,7 @@ triangle_view_depth(hikaru_renderer_t *hr, hikaru_mesh_t *mesh,
 		if ((selector & 128) == 0) z += matrix->mtx[3][2];
 		sum += z;
 	}
-	return sum / 3.0f;
+	return (sum / 3.0f) * mesh_sort_scale(mesh->depth_bias);
 }
 
 static void
@@ -2952,8 +3029,7 @@ pattern_bits(unsigned pattern)
 }
 
 static void
-draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bound_vao,
-           float *applied_depth_bias)
+draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bound_vao)
 {
 	unsigned i;
 	bool configure = true;
@@ -2962,7 +3038,11 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 
 	VK_ASSERT (mesh);
 	if (!mesh->num_tris || !mesh->num_instances) return;
-	if (!mesh->vbo && !mesh->vertex_chunk && mesh->cpu_vertices) {
+    const unsigned family = ((unsigned)(int32_t)mesh->depth_bias >> 10) & 1;
+    if (hr->families.active && hr->families.depth_pass && family != hr->families.selected) return;
+	/* Sorted replay already owns the uploaded stream and its VAO. A lazy
+	 * fallback upload here would replace those bindings before the draw. */
+	if (!hr->triangle_replay.enabled && !mesh->vbo && !mesh->vertex_chunk && mesh->cpu_vertices) {
 		/* Capturing cannot create a VBO when the shared CPU chunks fill.
 		 * Upload that retained fallback only after entering the graphics thread. */
 		if (!hr->meshes.vao) glGenVertexArrays(1, &hr->meshes.vao);
@@ -2972,7 +3052,7 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 		glBufferData(GL_ARRAY_BUFFER, (size_t)mesh->num_tris * 3 * sizeof(*mesh->cpu_vertices),
 		             mesh->cpu_vertices, GL_DYNAMIC_DRAW);
 	}
-	VK_ASSERT (mesh->vbo || mesh->vertex_chunk);
+	VK_ASSERT (hr->triangle_replay.enabled || mesh->vbo || mesh->vertex_chunk);
 
 	LOG ("==== DRAWING MESH @%p (#vertices=%u #instances=%u) ====",
 	     mesh, mesh->num_tris * 3, mesh->num_instances);
@@ -3037,6 +3117,16 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	    mesh->mat_index < hr->num_mats ? &hr->mat_list[mesh->mat_index] : NULL);
 
 	upload_viewport (hr, mesh);
+    const bool family_test = polytype == HIKARU_POLYTYPE_TRANSLUCENT &&
+        (hr->families.active || hr->families.depth[0] || hr->peel.enabled);
+    const bool family_write = hr->families.active && hr->families.depth_pass;
+    unsigned pass_rank = polytype == HIKARU_POLYTYPE_TRANSPARENT ? 0 :
+        polytype == HIKARU_POLYTYPE_OPAQUE ? 1 : polytype == HIKARU_POLYTYPE_SHADOW_A ? 2 : 3;
+    // The pass rank precedes the immutable guest mesh number. Both fit exactly
+    // in a float uniform; the uint metadata retains the LEQUAL winner on ties.
+    glUniform3f(hr->meshes.locs.u_family, family_test ? (hr->families.active ? 2.0f : 1.0f) : 0.0f,
+        family_write ? 1.0f : 0.0f, family_write ? (float)(pass_rank * MAX_FRAME_STATES + mesh->num + 1) : 0.0f);
+    glUniform1f(hr->meshes.locs.u_sort_scale, family_test ? mesh_sort_scale(mesh->depth_bias) : 0.0f);
 	if (hr->meshes.variant.has_pattern)
 		glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh->pattern));
 	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
@@ -3051,13 +3141,15 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 		cache->peel_height = hr->base.internal_height;
 		cache->peel_valid = true;
 	}
-	if (hr->peel.enabled) {
-		glActiveTexture(GL_TEXTURE1);
-		glBindTexture(GL_TEXTURE_2D, hr->peel.previous_depth);
-		glActiveTexture(GL_TEXTURE2);
-		glBindTexture(GL_TEXTURE_2D, hr->peel.opaque_depth);
-		glActiveTexture(GL_TEXTURE0);
-	}
+    // No render target may remain bound as a sampler, even when a uniform
+    // branch would skip that read on this draw.
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, hr->peel.enabled ? hr->peel.previous_depth : 0);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, family_test ? (hr->families.active ? hr->families.depth[family] : hr->peel.enabled ? hr->peel.opaque_depth : hr->families.depth[0]) : 0);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, family_test && hr->families.active ? hr->families.metadata[1 - family] : 0);
+    glActiveTexture(GL_TEXTURE0);
 	upload_material_texhead (hr, mesh);
 	upload_lightset (hr, mesh);
 	VK_ASSERT_NO_GL_ERROR ();
@@ -3079,18 +3171,6 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 			VK_ASSERT_NO_GL_ERROR ();
 			hr->vertex_chunks[mesh->vertex_chunk - 1].configured = true;
 		}
-	}
-
-	/* Opcode 101 supplies bias for all polygon types, including opaque
-	 * projected geometry. A zero-bias mesh must not inherit the prior mesh's
-	 * offset state. */
-	if (mesh->depth_bias != *applied_depth_bias) {
-		if (mesh->depth_bias != 0.0f)
-			glEnable (GL_POLYGON_OFFSET_FILL);
-		else
-			glDisable (GL_POLYGON_OFFSET_FILL);
-		glPolygonOffset (0.0f, -mesh->depth_bias);
-		*applied_depth_bias = mesh->depth_bias;
 	}
 
 	if (hr->debug.flags[HR_DEBUG_NO_INSTANCING]) {
@@ -3287,7 +3367,6 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(at * 3 * sizeof(*hr->triangle_replay.batch)),
 	             hr->triangle_replay.batch, GL_DYNAMIC_DRAW);
 	GLuint bound_vao = scratch_vao;
-	float applied_depth_bias = -1.0f;
 	hr->triangle_replay.enabled = true;
 	hr->triangle_replay.vao = scratch_vao;
 	hr->triangle_replay.vbo = scratch_vbo;
@@ -3304,7 +3383,7 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 		hr->triangle_replay.first = (unsigned)i;
 		hr->triangle_replay.count = count;
 		draw_mesh(hr, first->mesh, HIKARU_POLYTYPE_TRANSLUCENT,
-		          &bound_vao, &applied_depth_bias);
+		          &bound_vao);
 		i = end;
 	}
 	hr->triangle_replay.enabled = false;
@@ -3351,13 +3430,12 @@ draw_sorted_translucent_strips(hikaru_renderer_t *hr, hikaru_mesh_t *meshes, uns
 	}
 	qsort(refs, at, sizeof(*refs), compare_sorted_strip_ref);
 	GLuint bound_vao = 0;
-	float applied_depth_bias = -1.0f;
 	hr->strip_replay.enabled = true;
 	for (size_t i = 0; i < at; ++i) {
 		hr->strip_replay.mesh = refs[i].mesh;
 		hr->strip_replay.instance = refs[i].instance;
 		draw_mesh(hr, refs[i].mesh, HIKARU_POLYTYPE_TRANSLUCENT,
-		          &bound_vao, &applied_depth_bias);
+		          &bound_vao);
 	}
 	hr->strip_replay.enabled = false;
 	hr->strip_replay.mesh = NULL;
@@ -3451,7 +3529,7 @@ static int test_material_pixels(uint32_t flags,
         vertices[i] = dst.body;
         vertices[i].position[0] = positions[i][0];
         vertices[i].position[1] = positions[i][1];
-        if (options & 3u) vertices[i].position[2] = -0.5f;
+        vertices[i].position[2] = -0.5f;
         vertices[i].normal[2] = 1;
         vertices[i].texcoords[0] = vertices[i].texcoords[1] = 0.5f;
     }
@@ -3471,8 +3549,7 @@ static int test_material_pixels(uint32_t flags,
     upload_viewport(hr, &mesh);
     if (hr->meshes.variant.has_pattern) glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh.pattern));
     GLfloat projection[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-    /* Fog at eye depths 0.5 and 1.0, with window depths 0.5 and 0.75.
-     * Their independent mappings catch fog based on projected depth. */
+    /* Distinct eye and clip depths catch fog accidentally using projected depth. */
     if (options & 1u) { projection[10] = -1; projection[14] = -0.5f; }
     const GLfloat identity4[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
     const GLfloat identity3[9] = {1,0,0, 0,1,0, 0,0,1};
@@ -3520,7 +3597,7 @@ static int test_material_pixels(uint32_t flags,
             hikaru_vertex_t src = {0}, dst = {0};
             src.info.alpha = 255;
             copy_colors(hr, &dst, &src);
-            vertices[i].position[2] = (options & 1u) ? -1.0f : 0.5f;
+            vertices[i].position[2] = -1.0f;
             memcpy(vertices[i].diffuse, dst.body.diffuse, 3);
             memcpy(vertices[i].ambient, dst.body.ambient, 3);
             if (options & 2u) memset(vertices[i].specular, 0, 3);
@@ -3717,7 +3794,6 @@ draw_meshes_for_polytype (hikaru_renderer_t *hr, unsigned vpi, int polytype)
 	hikaru_mesh_t *meshes = hr->mesh_list[vpi][polytype];
 	unsigned num = hr->num_meshes[vpi][polytype];
 	GLuint bound_vao = 0;
-	float applied_depth_bias = -1.0f; /* Guest opcode 101 is nonnegative. */
 	int j;
 
 	if (num == 0)
@@ -3729,34 +3805,36 @@ draw_meshes_for_polytype (hikaru_renderer_t *hr, unsigned vpi, int polytype)
 
 	LOG (" ==== DRAWING VP %u, POLYTYPE %d ====", vpi, polytype);
 
+    if (polytype == HIKARU_POLYTYPE_TRANSLUCENT && (hr->families.active || hr->families.depth[0]) && !hr->peel.enabled)
+        glDisable(GL_DEPTH_TEST);
+    else
+        glEnable(GL_DEPTH_TEST);
 	/* Per-class state: punch-through writes depth under an 0.5 alpha
 	 * test with blending off; translucent and background blend
 	 * without writing depth. */
+	/* Mesh shaders apply guest bias in eye space before writing depth. */
+	glDisable (GL_POLYGON_OFFSET_FILL);
 	switch (polytype) {
 	case HIKARU_POLYTYPE_TRANSPARENT:
 		glDisable (GL_BLEND);
 		glDepthMask (GL_TRUE);
-		glEnable (GL_POLYGON_OFFSET_FILL);
 		hr->pass_alpha_ref = 0.5f;
 		break;
 	case HIKARU_POLYTYPE_TRANSLUCENT:
 		glEnable (GL_BLEND);
 		glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glDepthMask (GL_FALSE);
-		glEnable (GL_POLYGON_OFFSET_FILL);
 		hr->pass_alpha_ref = 1.0f / 255.0f;
 		break;
 	case HIKARU_POLYTYPE_BACKGROUND:
 		glEnable (GL_BLEND);
 		glBlendFunc (GL_SRC_COLOR, GL_ONE_MINUS_SRC_COLOR);
 		glDepthMask (GL_FALSE);
-		glDisable (GL_POLYGON_OFFSET_FILL);
 		hr->pass_alpha_ref = 1.0f / 255.0f;
 		break;
 	default:
 		glDisable (GL_BLEND);
 		glDepthMask (GL_TRUE);
-		glDisable (GL_POLYGON_OFFSET_FILL);
 		hr->pass_alpha_ref = 0.0f;
 		break;
 	}
@@ -3775,11 +3853,13 @@ draw_meshes_for_polytype (hikaru_renderer_t *hr, unsigned vpi, int polytype)
 	
 	for (j = 0; j < num; j++) {
 		hikaru_mesh_t *mesh = &meshes[j];
-		draw_mesh (hr, mesh, polytype, &bound_vao, &applied_depth_bias);
+		draw_mesh (hr, mesh, polytype, &bound_vao);
 	}
 	glBindVertexArray (0);
 
 destroy_meshes:
+    // The second family still needs meshes skipped by the first family pass.
+    if (hr->families.active && hr->families.depth_pass && hr->families.selected == 0) return;
 	for (j = 0; j < num; j++) {
 		hikaru_mesh_t *mesh = &meshes[j];
 		if (mesh->vbo && !hr->peel.enabled)
@@ -3978,6 +4058,80 @@ draw_transparency_peels(hikaru_renderer_t *hr, unsigned vpi, GLuint scene_fb,
 void hikaru_vendor_test_setup_scene_scissor(void) { setup_scene_scissor(640, 480); }
 #endif
 
+/* A hidden winner must survive later changes in the other family. Retain
+ * independent color/raw-depth/biased-depth winners and resolve only after all
+ * depth writers; rejecting a hidden fragment early makes draw order visible. */
+static void
+bind_scene_color_target(hikaru_renderer_t *hr, unsigned scene_index)
+{
+    static const GLenum target=GL_COLOR_ATTACHMENT0;
+    if(!hr->families.color_fb)glGenFramebuffers(1,&hr->families.color_fb);
+    glBindFramebuffer(GL_FRAMEBUFFER,hr->families.color_fb);
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,hr->framebuffer.cb[scene_index],0);
+    glDrawBuffers(1,&target);
+    if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)VK_ABORT("incomplete Hikaru scene color target");
+}
+
+static void
+allocate_family_targets(hikaru_renderer_t *hr, unsigned scene_index)
+{
+    static const GLenum both[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    const unsigned width=hr->base.internal_width, height=hr->base.internal_height;
+    if (!hr->families.program) {
+        hr->families.program=vk_renderer_compile_program("#version 150\nin vec3 i_position;\nvoid main(){gl_Position=vec4(i_position.x*2.0-1.0,1.0-i_position.y*2.0,0.0,1.0);}\n", "#version 150\n#define FAMILY_RESOLVE 1\nuniform sampler2D u_front, u_back;\nuniform usampler2D u_layer1, u_layer2;\nvoid main(){\n    ivec2 pixel=ivec2(gl_FragCoord.xy);\n    uvec2 first=texelFetch(u_layer1,pixel,0).rg, second=texelFetch(u_layer2,pixel,0).rg;\n    if(first.y==0u&&second.y==0u)discard;\n    bool choose_first=second.y==0u||(first.y!=0u&&\n        (first.x<second.x||(first.x==second.x&&first.y>second.y)));\n    vk_frag_color=choose_first?texelFetch(u_front,pixel,0):texelFetch(u_back,pixel,0);\n}\n");
+        if (!hr->families.program) VK_ABORT("could not compile Hikaru depth-family resolve");
+        glUseProgram(hr->families.program);
+        static const char *samplers[]={"u_front","u_back","u_layer1","u_layer2"};
+        for (unsigned i=0;i<4;++i) glUniform1i(get_uniform_loc(hr->families.program,samplers[i]),i);
+        glGenFramebuffers(2,hr->families.fb);
+        glGenTextures(2,hr->families.color);glGenTextures(2,hr->families.metadata);
+        glGenTextures(1,&hr->families.second_depth);
+    }
+    hr->families.depth[0]=hr->framebuffer.db[scene_index];
+    hr->families.depth[1]=hr->families.second_depth;
+    if (hr->families.width!=width || hr->families.height!=height) {
+        // RG32UI is renderable in GLES3 without float-color extensions. Its
+        // second word is an exact ordinal; zero denotes an empty family.
+        for (unsigned i=0;i<5;++i) {
+            GLuint id=i<2?hr->families.color[i]:i<4?hr->families.metadata[i-2]:hr->families.second_depth;
+            GLenum internal=i<2?GL_RGBA8:i<4?GL_RG32UI:GL_DEPTH_COMPONENT24;
+            GLenum format=i<2?GL_RGBA:i<4?GL_RG_INTEGER:GL_DEPTH_COMPONENT;
+            glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,id);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,0);
+            glTexImage2D(GL_TEXTURE_2D,0,internal,width,height,0,format,i<2?GL_UNSIGNED_BYTE:GL_UNSIGNED_INT,NULL);
+        }
+        hr->families.width=width;hr->families.height=height;
+    }
+    for (unsigned family=0;family<2;++family) {
+        glBindFramebuffer(GL_FRAMEBUFFER,hr->families.fb[family]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,hr->families.color[family],0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D,hr->families.metadata[family],0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_TEXTURE_2D,hr->families.depth[family],0);
+        glDrawBuffers(2,both);
+        if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)VK_ABORT("incomplete Hikaru depth-family target");
+    }
+    bind_scene_color_target(hr,scene_index);
+}
+
+static void
+resolve_family_targets(hikaru_renderer_t *hr)
+{
+    glBindFramebuffer(GL_FRAMEBUFFER,hr->families.color_fb);
+    glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glDisable(GL_BLEND);
+    glUseProgram(hr->families.program);glBindVertexArray(hr->framebuffer.vao);
+    glViewport(0,0,hr->base.internal_width,hr->base.internal_height);
+    for (unsigned i=0;i<4;++i) {
+        glActiveTexture(GL_TEXTURE0+i);
+        glBindTexture(GL_TEXTURE_2D,i<2?hr->families.color[i]:hr->families.metadata[i-2]);
+    }
+    glDrawArrays(GL_TRIANGLE_STRIP,0,4);
+    glActiveTexture(GL_TEXTURE0);glEnable(GL_CULL_FACE);glDepthMask(GL_TRUE);
+}
+
 static void
 draw_scene (hikaru_renderer_t *hr)
 {
@@ -4020,15 +4174,57 @@ draw_scene (hikaru_renderer_t *hr)
 	glCullFace (GL_BACK);
 
 	for (vpi = 0; vpi < 8; vpi++) {
+        hr->families.depth[0]=hr->framebuffer.db[scene_index];
 		glDepthMask (GL_TRUE);
 		glClear (GL_DEPTH_BUFFER_BIT);
-		for (i = 0; i < NUMELEM (sorted_polytypes); i++) {
-			if (hr->transparency_sorting == HIKARU_TRANSPARENCY_PER_PIXEL &&
-			    sorted_polytypes[i] == HIKARU_POLYTYPE_TRANSLUCENT)
-				continue;
-			draw_meshes_for_polytype (hr, vpi, sorted_polytypes[i]);
-		}
-		draw_transparency_peels(hr, vpi, (GLuint)scene_binding, scene_index);
+        unsigned families=0;
+        for (unsigned pass=1;pass<NUMELEM(sorted_polytypes);++pass) {
+            unsigned type=sorted_polytypes[pass];
+            for (unsigned index=0;index<hr->num_meshes[vpi][type];++index) {
+                const hikaru_mesh_t *mesh=&hr->mesh_list[vpi][type][index];
+                if(mesh->num_tris&&mesh->num_instances)
+                    families|=1u<<(((unsigned)(int32_t)mesh->depth_bias>>10)&1);
+            }
+        }
+        hr->families.active=families==3;
+        hr->families.depth_pass=false;
+        if (!hr->families.active) {
+            for (i=0;i<NUMELEM(sorted_polytypes);++i) {
+                if (hr->transparency_sorting==HIKARU_TRANSPARENCY_PER_PIXEL &&
+                    sorted_polytypes[i]==HIKARU_POLYTYPE_TRANSLUCENT)
+                    continue;
+                if (sorted_polytypes[i]==HIKARU_POLYTYPE_TRANSLUCENT &&
+                    hr->num_meshes[vpi][HIKARU_POLYTYPE_TRANSLUCENT])
+                    bind_scene_color_target(hr,scene_index);
+                draw_meshes_for_polytype(hr,vpi,sorted_polytypes[i]);
+            }
+            draw_transparency_peels(hr,vpi,(GLuint)scene_binding,scene_index);
+        } else {
+            draw_meshes_for_polytype(hr,vpi,HIKARU_POLYTYPE_BACKGROUND);
+            allocate_family_targets(hr,scene_index);
+            static const GLenum both[]={GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1};
+            static const GLuint empty[4]={0,0,0,0};
+            hr->families.depth_pass=true;
+            for (unsigned family=0;family<2;++family) {
+                hr->families.selected=family;
+                glBindFramebuffer(GL_FRAMEBUFFER,hr->families.fb[family]);
+                glDisable(GL_SCISSOR_TEST);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);
+                glDrawBuffers(1,both);glClearColor(0,0,0,0);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                glDrawBuffers(2,both);glClearBufferuiv(GL_COLOR,1,empty);
+                setup_scene_scissor(hr->base.internal_width,hr->base.internal_height);
+                for (i=1;i+1<NUMELEM(sorted_polytypes);++i)
+                    draw_meshes_for_polytype(hr,vpi,sorted_polytypes[i]);
+            }
+            hr->families.depth_pass=false;
+            resolve_family_targets(hr);
+            if(hr->transparency_sorting!=HIKARU_TRANSPARENCY_PER_PIXEL)
+                draw_meshes_for_polytype(hr,vpi,HIKARU_POLYTYPE_TRANSLUCENT);
+            draw_transparency_peels(hr,vpi,hr->families.color_fb,scene_index);
+        }
+        // The next viewport clears the original scene depth, never the
+        // color-only resolve target or a retained family depth attachment.
+        glBindFramebuffer(GL_FRAMEBUFFER,(GLuint)scene_binding);
+        hr->families.active=false;
 	}
 
 	glDepthMask (GL_TRUE);
@@ -4589,6 +4785,11 @@ destroy_fb_state (hikaru_renderer_t *hr)
 	hikaru_graphics_delete_occlusion(hr->framebuffer.peel_query);
 	VK_ASSERT_NO_GL_ERROR ();
 
+    glDeleteFramebuffers(2,hr->families.fb);glDeleteFramebuffers(1,&hr->families.color_fb);
+    glDeleteTextures(2,hr->families.color);glDeleteTextures(2,hr->families.metadata);
+    glDeleteTextures(1,&hr->families.second_depth);
+    if(hr->families.program)vk_renderer_destroy_program(hr->families.program);
+    memset(&hr->families,0,sizeof(hr->families));
 	vk_renderer_destroy_program (hr->framebuffer.program);
 }
 
@@ -5209,7 +5410,10 @@ hikaru_renderer_seal_capture(vk_renderer_t *renderer, void *gpu_as_void, HikaruF
 	VK_ASSERT(gpu->texram[1]->size == frame->texram[1]->size);
 	freeze_framebuffer(gpu, frame->fb);
 	freeze_texture_ram(gpu, frame);
-	memcpy(&frame->gpu, gpu, sizeof(frame->gpu));
+	/* Logical table banks belong to the CP producer. Draws use the immutable
+	 * per-mesh material/texhead lists, so copying the legacy prefix is enough
+	 * and avoids moving the unused upper banks on every frame. */
+	memcpy(&frame->gpu, gpu, offsetof(hikaru_gpu_t, material_high));
 	/* A frozen GPU is only a draw-state view. It must expose no live machine,
 	 * command RAM, callback, or renderer pointers to the consumer. */
 	memset(&frame->gpu.base, 0, sizeof(frame->gpu.base));
@@ -5322,6 +5526,389 @@ hikaru_renderer_finish_packet(vk_renderer_t *renderer, HikaruFrame *frame)
 }
 
 #ifdef HIKARU_VENDOR_TESTING
+/* Exercise the production projection, depth upload, material passes, sorting
+ * and peel targets together. The gauge distances are from the NASCAR capture;
+ * no game content is needed to reproduce their former D24 collision. */
+int hikaru_vendor_test_depth_precision_pixels(void)
+{
+	typedef struct {
+		float z, bias;
+		unsigned type;
+		uint8_t r, g, b, alpha, viewport, pattern;
+	} surface_t;
+	static const struct {
+		const char *name;
+		surface_t surfaces[4];
+		unsigned count;
+		bool reverse;
+		uint8_t expected[4], pixel_expected[4];
+	} cases[] = {
+		{"captured numeral before disk", {
+			{772.7384033f,0,HIKARU_POLYTYPE_TRANSPARENT,255,255,255,255,0,0},
+			{772.7579346f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,0,204,0,0}},2,false,{255,255,255,255},{255,255,255,255}},
+		{"captured disk before numeral", {
+			{772.7384033f,0,HIKARU_POLYTYPE_TRANSPARENT,255,255,255,255,0,0},
+			{772.7579346f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,0,204,0,0}},2,true,{255,255,255,255},{255,255,255,255}},
+		{"real equal depth retains LEQUAL", {
+			{772.7384033f,0,HIKARU_POLYTYPE_TRANSPARENT,255,255,255,255,0,0},
+			{772.7384033f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,0,204,0,0}},2,false,{51,51,51,255},{51,51,51,255}},
+		{"nearby world remains visible", {
+			{3,0,HIKARU_POLYTYPE_OPAQUE,0,255,0,255,0,0},
+			{772.7579346f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,0,204,0,0}},2,false,{0,255,0,255},{0,255,0,255}},
+		{"close peel layers remain distinct", {
+			{772.7384033f,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{772.7403564f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{128,0,64,255},{128,0,64,255}},
+		{"close opaque occlusion", {
+			{772.7384033f,0,HIKARU_POLYTYPE_OPAQUE,255,0,0,255,0,0},
+			{772.7403564f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{255,0,0,255},{255,0,0,255}},
+		{"equal translucent depth retains ordering", {
+			{772.7384033f,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{772.7384033f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{64,0,128,255},{0,0,128,255}},
+		{"close layers across half-depth transition", {
+			{315.2290216f,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{315.2298897f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{128,0,64,255},{128,0,64,255}},
+		{"equal layers at half-depth transition", {
+			{315.2293472f,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{315.2293472f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{64,0,128,255},{0,0,128,255}},
+		{"close layers around code sixteen million", {
+			{58663.5857042f,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{58663.7467327f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{128,0,64,255},{128,0,64,255}},
+		{"equal layers around code sixteen million", {
+			{58663.5857042f,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{58663.5857042f,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{64,0,128,255},{0,0,128,255}},
+		{"close layers at far boundary", {
+			{99999.5f,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{100000,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{128,0,64,255},{128,0,64,255}},
+		{"equal layers at far boundary", {
+			{100000,0,HIKARU_POLYTYPE_TRANSLUCENT,255,0,0,128,0,0},
+			{100000,0,HIKARU_POLYTYPE_TRANSLUCENT,0,0,255,128,0,0}},2,false,{64,0,128,255},{0,0,128,255}},
+		{"bias zero reset across programs", {
+			{772.7384033f,0,HIKARU_POLYTYPE_OPAQUE,255,255,255,255,0,0},
+			{772.7579346f,31,HIKARU_POLYTYPE_OPAQUE,255,0,0,255,0,1},
+			{772.7579346f,0,HIKARU_POLYTYPE_OPAQUE,0,0,255,255,0,0}},3,false,{255,0,0,255},{255,0,0,255}},
+		{"bias reenabled after zero", {
+			{772.7384033f,0,HIKARU_POLYTYPE_OPAQUE,255,255,255,255,0,0},
+			{772.7579346f,31,HIKARU_POLYTYPE_OPAQUE,255,0,0,255,0,0},
+			{772.7579346f,0,HIKARU_POLYTYPE_OPAQUE,0,0,255,255,0,0},
+			{772.7579346f,31,HIKARU_POLYTYPE_OPAQUE,0,255,0,255,0,0}},4,false,{0,255,0,255},{0,255,0,255}},
+		{"reserved bias bits do not erase cross-family depth", {
+			{772.7384033f,0,HIKARU_POLYTYPE_OPAQUE,255,255,255,255,0,0},
+			{90000,65535,HIKARU_POLYTYPE_OPAQUE,255,0,0,255,0,0}},2,false,{255,255,255,255},{255,255,255,255}},
+		{"relative bias is independent of viewport near", {
+			{50,0,HIKARU_POLYTYPE_OPAQUE,255,255,255,255,0,0},
+			{50.03f,31,HIKARU_POLYTYPE_OPAQUE,255,0,0,255,1,0}},2,false,{255,0,0,255},{255,0,0,255}},
+		{"viewport near changes on same program", {
+			{50,0,HIKARU_POLYTYPE_OPAQUE,255,255,255,255,0,0},
+			{50.03f,31,HIKARU_POLYTYPE_OPAQUE,255,0,0,255,1,0},
+			{50.03f,31,HIKARU_POLYTYPE_OPAQUE,0,0,255,255,0,0}},3,false,{0,0,255,255},{0,0,255,255}}
+	};
+	hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+	hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+	int ok = 0;
+	if (!hr || !gpu) goto cleanup;
+	hr->gpu = gpu;
+	hr->base.internal_width = hr->base.internal_height = 8;
+	hr->debug.flags[HR_DEBUG_SELECT_POLYTYPE] = -1;
+	hr->meshes.variant.full = ~UINT64_C(0);
+	hr->transparency_peel_capacity = 8;
+	if (build_fb_state(hr) || build_3d_state(hr)) goto cleanup;
+	resize_3d_targets(hr);
+	hr->num_vps = 2;
+	memset(hr->vp_list, 0, 2 * sizeof(*hr->vp_list));
+	for (unsigned i = 0; i < 2; ++i) {
+		hr->vp_list[i].clip.r = 640; hr->vp_list[i].clip.t = 480;
+		hr->vp_list[i].clip.f = 1280; hr->vp_list[i].clip.n = i ? 0.2f : 0.1f;
+		hr->vp_list[i].offset.x = 320; hr->vp_list[i].offset.y = 240;
+	}
+	memset(hr->mv_list, 0, sizeof(*hr->mv_list));
+	for (unsigned i = 0; i < 4; ++i) hr->mv_list[0].mtx[i][i] = 1;
+	memset(hr->mat_list, 0, sizeof(*hr->mat_list));
+	memset(hr->tex_list, 0, sizeof(*hr->tex_list));
+	memset(hr->ls_list, 0, sizeof(*hr->ls_list));
+	hr->ls_list[0].mask = 15;
+	hr->num_mvs = hr->num_mats = hr->num_texs = hr->num_lss = 1;
+	gpu->fb_config.clear[3] = 255;
+	/* Deliberately disagree with the snapshots, as a producer may have
+	 * advanced to another viewport/bias before a frozen packet is drawn. */
+	VP0.clip.n = 10; gpu->depth_bias = 65535;
+	vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(1);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	ok = 1;
+	const unsigned mode_count = HIKARU_TRANSPARENCY_PER_PIXEL + 1;
+	for (unsigned pass = 0; pass < 2 * mode_count; ++pass) {
+		const unsigned storage = pass / mode_count, mode = pass % mode_count;
+		if (pass == mode_count) {
+			/* Native Metal uses D32F for a D24 request; Vulkan may do the
+			 * same. Exercise those stored-depth groups through real GL too. */
+			glActiveTexture(GL_TEXTURE0);
+			for (unsigned i = 0; i < NUM_FRAMEBUFFERS; ++i) {
+				glBindTexture(GL_TEXTURE_2D, hr->framebuffer.db[i]);
+				glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, 8, 8, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+			}
+			for (unsigned i = 0; i < hr->framebuffer.peel_layers_allocated; ++i) {
+				glBindTexture(GL_TEXTURE_2D, hr->framebuffer.peel_depth[i]);
+				glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, 8, 8, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+			}
+		}
+		hr->transparency_sorting = mode;
+		for (unsigned test = 0; test < NUMELEM(cases); ++test) {
+			clear_frame_meshes(hr);
+			for (unsigned i = 0; i < cases[test].count; ++i) {
+				const surface_t *s = &cases[test].surfaces[i];
+				unsigned *count = &hr->num_meshes[0][s->type];
+				hikaru_mesh_t *mesh = &hr->mesh_list[0][s->type][(*count)++];
+				memset(mesh, 0, sizeof(*mesh));
+				/* Keep these CPU-only: normal drawing must lazily upload them,
+				 * while triangle replay must retain its shared stream bindings. */
+				mesh->cpu_vertices = calloc(3, sizeof(*mesh->cpu_vertices));
+				if (!mesh->cpu_vertices) { ok = 0; goto cleanup; }
+				mesh->num_tris = mesh->num_instances = 1;
+				mesh->alternate_mv_index = ~0u;
+				mesh->vp_index = s->viewport; mesh->depth_bias = s->bias;
+				mesh->pattern = s->pattern; mesh->num = i;
+				static const float xy[3][2] = {{-1,-1},{3,-1},{-1,3}};
+				for (unsigned v = 0; v < 3; ++v) {
+					hikaru_vertex_body_t *vertex = &mesh->cpu_vertices[v];
+					vertex->position[0] = xy[v][0] * s->z;
+					vertex->position[1] = xy[v][1] * s->z;
+					vertex->position[2] = -s->z;
+					vertex->diffuse[0] = s->r; vertex->diffuse[1] = s->g; vertex->diffuse[2] = s->b;
+					vertex->alpha = s->alpha;
+				}
+			}
+			glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+			if (cases[test].reverse) {
+				glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE);
+				glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+				glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL);
+				glEnable(GL_CULL_FACE); glCullFace(GL_BACK);
+				if (mode == HIKARU_TRANSPARENCY_PER_PIXEL)
+					draw_transparency_peels(hr, 0, hr->framebuffer.fb[0], 0);
+				else
+					draw_meshes_for_polytype(hr, 0, HIKARU_POLYTYPE_TRANSLUCENT);
+				draw_meshes_for_polytype(hr, 0, HIKARU_POLYTYPE_TRANSPARENT);
+			} else {
+				draw_scene(hr);
+			}
+			uint8_t pixel[4] = {0};
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+			glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+			const uint8_t *expected = mode == HIKARU_TRANSPARENCY_PER_PIXEL
+				? cases[test].pixel_expected : cases[test].expected;
+			for (unsigned c = 0; c < 4; ++c) {
+				const int delta = (int)pixel[c] - expected[c];
+				if (delta < -1 || delta > 1) {
+					fprintf(stderr, "depth %s D%u mode %u channel %u: got %u expected %u\n",
+					        cases[test].name, storage ? 32 : 24, mode, c, pixel[c], expected[c]);
+					ok = 0;
+				}
+			}
+			ok &= glGetError() == GL_NO_ERROR;
+		}
+	}
+	/* Clear-depth occlusion checks fragment output directly without depth
+	 * readback, which GLES does not expose through glReadPixels. The first
+	 * pair distinguishes window-range mapping; the second brackets the near
+	 * saturation of maximum bias without loosening any color assertions. */
+	for (unsigned probe = 0; probe < 4; ++probe) {
+		clear_frame_meshes(hr);
+		hikaru_mesh_t *mesh = &hr->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
+		memset(mesh, 0, sizeof(*mesh));
+		mesh->cpu_vertices = calloc(3, sizeof(*mesh->cpu_vertices));
+		if (!mesh->cpu_vertices) { ok = 0; goto cleanup; }
+		hr->num_meshes[0][HIKARU_POLYTYPE_OPAQUE] = 1;
+		mesh->num_tris = mesh->num_instances = 1; mesh->alternate_mv_index = ~0u;
+		mesh->depth_bias = probe >= 2 ? 65535 : 0;
+		const float z = probe >= 2 ? 0.10001f : 3.0f;
+		static const float xy[3][2] = {{-1,-1},{3,-1},{-1,3}};
+		for (unsigned v = 0; v < 3; ++v) {
+			mesh->cpu_vertices[v].position[0] = xy[v][0] * z;
+			mesh->cpu_vertices[v].position[1] = xy[v][1] * z;
+			mesh->cpu_vertices[v].position[2] = -z;
+			mesh->cpu_vertices[v].diffuse[0] = mesh->cpu_vertices[v].alpha = 255;
+		}
+		glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+		glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE);
+		vk_renderer_depth_range(probe == 0 ? 0.2f : 0.0f, probe == 0 ? 0.4f : 1.0f);
+		vk_renderer_clear_depth(probe < 2 ? 0.15f : probe == 2 ? 0.00826f : 0.00829f);
+		glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL);
+		draw_meshes_for_polytype(hr, 0, HIKARU_POLYTYPE_OPAQUE);
+		uint8_t pixel[4] = {0};
+		glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+		const unsigned red = probe & 1 ? 255 : 0;
+		if (pixel[0] != red || pixel[1] != 0 || pixel[2] != 0 || pixel[3] != 255) {
+			fprintf(stderr, "depth range/saturation probe %u: got %u,%u,%u,%u\n",
+			        probe, pixel[0], pixel[1], pixel[2], pixel[3]);
+			ok = 0;
+		}
+		ok &= glGetError() == GL_NO_ERROR;
+	}
+	vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(1);
+cleanup:
+	if (hr) {
+		if (hr->mesh_list[0][0]) destroy_3d_state(hr);
+		if (hr->framebuffer.program || hr->framebuffer.fb[0]) destroy_fb_state(hr);
+		free(hr);
+	}
+	free(gpu);
+	return ok;
+}
+
+/* Real draw_scene tests: both family targets, resolve, cutout/pattern tests,
+ * retained CPU vertices, all transparency choices and allocation transitions.
+ * No game data or per-game material exceptions are used. */
+int hikaru_vendor_test_depth_family_pixels(void)
+{
+    typedef struct {
+        float z, bias;
+        unsigned type;
+        uint8_t color[3], alpha, pattern, viewport;
+    } surface_t;
+    static const struct {
+        const char *name;
+        surface_t surfaces[4];
+        unsigned count, permutations, sample;
+        uint8_t expected[4];
+    } cases[] = {
+        {"late hidden winner", {
+            {100,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {95,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,0,0},
+            {95.1f,0x300,HIKARU_POLYTYPE_OPAQUE,{0,0,255},255,0,0},
+            {95.2f,0x700,HIKARU_POLYTYPE_OPAQUE,{255,255,0},255,0,0}},4,24,0,{0,0,255,255}},
+        {"same family equal placement later blue", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {0,0x100,HIKARU_POLYTYPE_OPAQUE,{0,0,255},255,0,0},
+            {3,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,8,0}},3,1,0,{0,0,255,255}},
+        {"same family equal placement later red", {
+            {0,0x100,HIKARU_POLYTYPE_OPAQUE,{0,0,255},255,0,0},
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {3,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,8,0}},3,1,0,{255,0,0,255}},
+        {"pass rank precedes guest number on raw tie", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {4,0x400,HIKARU_POLYTYPE_TRANSPARENT,{0,255,0},255,0,0}},2,1,0,{255,0,0,255}},
+        {"equal raw depth later flagged", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {4,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,0,0}},2,1,0,{0,255,0,255}},
+        {"equal raw depth later unflagged", {
+            {4,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,0,0},
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0}},2,1,0,{255,0,0,255}},
+        {"far code is occupied", {
+            {100000,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {4,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,8,0}},2,1,0,{255,0,0,255}},
+        {"cutout leaves empty family", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {3,0x400,HIKARU_POLYTYPE_TRANSPARENT,{0,255,0},0,0,0}},2,1,0,{255,0,0,255}},
+        {"pattern hole keeps other family", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {3,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,1,0}},2,1,1,{255,0,0,255}},
+        {"pattern covered pixel", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {3,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,1,0}},2,1,2,{0,255,0,255}},
+        {"captured road cut", {
+            {30,0,HIKARU_POLYTYPE_OPAQUE,{0,0,255},255,0,0},
+            {3.087548f,0x400,HIKARU_POLYTYPE_OPAQUE,{255,255,255},255,0,0},
+            {3.095477f,0x700,HIKARU_POLYTYPE_TRANSLUCENT,{0,0,0},200,0,0}},3,1,0,{55,55,55,255}},
+        {"shadow cannot cross car family", {
+            {3,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {3.087548f,0x400,HIKARU_POLYTYPE_OPAQUE,{255,255,255},255,0,0},
+            {3.095477f,0x700,HIKARU_POLYTYPE_TRANSLUCENT,{0,0,0},200,0,0}},3,1,0,{255,0,0,255}},
+        {"single family after mixed", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,0,0}},1,1,0,{0,255,0,255}},
+        {"clipped family inside viewport", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {3,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,0,1}},2,1,3,{0,255,0,255}},
+        {"clipped family outside viewport", {
+            {4,0,HIKARU_POLYTYPE_OPAQUE,{255,0,0},255,0,0},
+            {3,0x400,HIKARU_POLYTYPE_OPAQUE,{0,255,0},255,0,1}},2,1,4,{255,0,0,255}}
+    };
+    hikaru_renderer_t *hr=calloc(1,sizeof(*hr));
+    hikaru_gpu_t *gpu=calloc(1,sizeof(*gpu));
+    int ok=0;
+    if(!hr||!gpu)goto cleanup;
+    hr->gpu=gpu;hr->base.internal_width=hr->base.internal_height=8;
+    hr->debug.flags[HR_DEBUG_SELECT_POLYTYPE]=-1;hr->meshes.variant.full=~UINT64_C(0);
+    hr->transparency_peel_capacity=8;
+    if(build_fb_state(hr)||build_3d_state(hr))goto cleanup;
+    hr->num_vps=2;
+    memset(hr->vp_list,0,2*sizeof(*hr->vp_list));
+    for(unsigned i=0;i<2;++i){
+        hr->vp_list[i].clip.r=i?320:640;hr->vp_list[i].clip.t=i?240:480;
+        hr->vp_list[i].clip.f=1280;hr->vp_list[i].clip.n=0.1f;
+        hr->vp_list[i].offset.x=i?160:320;hr->vp_list[i].offset.y=i?120:240;
+    }
+    memset(hr->mv_list,0,sizeof(*hr->mv_list));
+    for(unsigned i=0;i<4;++i)hr->mv_list[0].mtx[i][i]=1;
+    memset(hr->mat_list,0,sizeof(*hr->mat_list));memset(hr->tex_list,0,sizeof(*hr->tex_list));
+    memset(hr->ls_list,0,sizeof(*hr->ls_list));hr->ls_list[0].mask=15;
+    hr->num_mvs=hr->num_mats=hr->num_texs=hr->num_lss=1;gpu->fb_config.clear[3]=255;
+    vk_renderer_clear_depth(1);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);ok=1;
+    for(unsigned mode=0;mode<=HIKARU_TRANSPARENCY_PER_PIXEL;++mode){
+        hr->transparency_sorting=mode;
+        for(unsigned test=0;test<NUMELEM(cases);++test){
+            // Mixed -> single -> mixed and 8 -> 16 -> 8 reuse the same objects.
+            unsigned size=test%3==0?16:8;
+            hr->base.internal_width=hr->base.internal_height=size;resize_3d_targets(hr);
+            vk_renderer_depth_range(test&1?0.2f:0.0f,test&1?0.7f:1.0f);
+            unsigned order[4]={0,1,2,3};
+            for(unsigned permutation=0;permutation<cases[test].permutations;++permutation){
+                clear_frame_meshes(hr);
+                for(unsigned i=0;i<cases[test].count;++i){
+                    const surface_t *surface=&cases[test].surfaces[order[i]];
+                    unsigned *count=&hr->num_meshes[0][surface->type];
+                    hikaru_mesh_t *mesh=&hr->mesh_list[0][surface->type][(*count)++];
+                    memset(mesh,0,sizeof(*mesh));mesh->cpu_vertices=calloc(3,sizeof(*mesh->cpu_vertices));
+                    if(!mesh->cpu_vertices){ok=0;goto cleanup;}
+                    mesh->num_tris=mesh->num_instances=1;mesh->alternate_mv_index=~0u;
+                    mesh->depth_bias=surface->bias;mesh->num=i;mesh->pattern=surface->pattern;mesh->vp_index=surface->viewport;
+                    static const float xy[3][2]={{-1,-1},{3,-1},{-1,3}};
+                    for(unsigned v=0;v<3;++v){
+                        hikaru_vertex_body_t *vertex=&mesh->cpu_vertices[v];
+                        // Zero requests the same canonical placement as z=4
+                        // under a different measured bias, without duplicating
+                        // the encoder or relying on float-exact eye depths.
+                        float z=surface->z?surface->z:4.0f/mesh_depth_scale(surface->bias);
+                        vertex->position[0]=xy[v][0]*z;vertex->position[1]=xy[v][1]*z;vertex->position[2]=-z;
+                        memcpy(vertex->diffuse,surface->color,3);vertex->alpha=surface->alpha;
+                    }
+                }
+                glBindFramebuffer(GL_FRAMEBUFFER,hr->framebuffer.fb[0]);
+                // A host UI scissor must not clip clears, metadata or resolve.
+                glEnable(GL_SCISSOR_TEST);glScissor(0,0,1,1);draw_scene(hr);
+                unsigned x=size/2,y=size/2;
+                if(cases[test].sample==1){x=4;y=7;}else if(cases[test].sample==2){x=5;y=7;}
+                else if(cases[test].sample==3)x=y=size/4;else if(cases[test].sample==4)x=y=size*3/4;
+                uint8_t pixel[4]={0};glBindFramebuffer(GL_READ_FRAMEBUFFER,hr->framebuffer.fb[0]);
+                glReadPixels(x,y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+                for(unsigned channel=0;channel<4;++channel){
+                    int delta=(int)pixel[channel]-cases[test].expected[channel];
+                    if(delta < -1 || delta > 1){
+                        fprintf(stderr,"family %s mode %u permutation %u: channel %u got %u expected %u\n",
+                            cases[test].name,mode,permutation,channel,pixel[channel],cases[test].expected[channel]);ok=0;
+                    }
+                }
+                ok&=glGetError()==GL_NO_ERROR;
+                if(cases[test].permutations>1&&permutation+1<cases[test].permutations){
+                    unsigned pivot=2;while(order[pivot]>=order[pivot+1])--pivot;
+                    unsigned next=3;while(order[next]<=order[pivot])--next;
+                    unsigned temporary=order[pivot];order[pivot]=order[next];order[next]=temporary;
+                    for(unsigned left=pivot+1,right=3;left<right;++left,--right){temporary=order[left];order[left]=order[right];order[right]=temporary;}
+                }
+            }
+        }
+    }
+    vk_renderer_depth_range(0,1);vk_renderer_clear_depth(1);
+cleanup:
+    if(hr){
+        GLuint retained[]={hr->families.color[0],hr->families.color[1],hr->families.metadata[0],hr->families.metadata[1],hr->families.second_depth};
+        if(hr->mesh_list[0][0])destroy_3d_state(hr);
+        if(hr->framebuffer.program||hr->framebuffer.fb[0])destroy_fb_state(hr);
+        for(unsigned i=0;i<NUMELEM(retained);++i)if(retained[i]&&glIsTexture(retained[i]))ok=0;
+        free(hr);
+    }
+    free(gpu);return ok;
+}
+
 /* Real capture/texture/light paths with a known center pixel. Style 0 produces
  * red 128*192/255, style 1 blue 192*128/255. A null packet only mutates live
  * state, allowing both completed packets to be checked against a third state.
@@ -5423,11 +6010,13 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     hikaru_renderer_t *owner = (hikaru_renderer_t *)renderer;
     hikaru_gpu_t *gpu = gpu_as_void;
     HikaruFrame *first = hikaru_frame_create(), *second = hikaru_frame_create();
-    if (!first || !second) {
+    hikaru_gpu_t *saved_gpu = malloc(sizeof(*saved_gpu));
+    if (!first || !second || !saved_gpu) {
         hikaru_frame_destroy(first); hikaru_frame_destroy(second);
+        free(saved_gpu);
         return 0;
     }
-    hikaru_gpu_t saved_gpu = *gpu;
+    *saved_gpu = *gpu;
     uint8_t saved_fb = gpu->fb->ptr[17], saved_tex[2] = {gpu->texram[0]->ptr[31], gpu->texram[1]->ptr[47]};
     unsigned saved_num_verts = owner->push.num_verts;
     hikaru_vertex_t saved_strip[4];
@@ -5450,6 +6039,14 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     gpu->state.layers.layer[0][1].enabled = 0;
     gpu->fb_config.num_1 = gpu->fb_config.num_2 = 0;
     gpu->state.light_table[2][9].full = 0x12345678;
+    /* The frozen prefix excludes logical table banks. Actual draw values
+     * are captured from scratch into the per-mesh snapshots instead. */
+    gpu->material_high[0].diffuse[0] = 23;
+    gpu->texhead_high[0]._0C1 = 0x000100c1;
+    MAT0 = gpu->material_high[0];
+    TEX0 = gpu->texhead_high[0];
+    first->gpu.material_high[0].diffuse[0] = 91;
+    first->gpu.texhead_high[0]._0C1 = 0x000200c1;
     REG1AUNIT(0, 0x38) = 3;
     vk_renderer_t *capture = hikaru_renderer_begin_capture(renderer, gpu, first);
     hikaru_renderer_begin_mesh(capture, 0x100, false);
@@ -5473,6 +6070,10 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     hikaru_engine_note_texram_write(gpu->base.mach->host, 3u);
     gpu->fb_config.alpha = 99;
     gpu->state.light_table[2][9].full = 0x87654321;
+    gpu->material_high[0].diffuse[0] = 47;
+    gpu->texhead_high[0]._0C1 = 0x000300c1;
+    MAT0 = gpu->material_high[0];
+    TEX0 = gpu->texhead_high[0];
     REG1AUNIT(0, 0x38) = 0;
     capture = hikaru_renderer_begin_capture(renderer, gpu, second);
     hikaru_renderer_begin_mesh(capture, 0x200, false);
@@ -5488,6 +6089,12 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     ok = ok && first->fb->ptr[17] == 0x39 && first->texram[0]->ptr[31] == 0x72 &&
         first->texram[1]->ptr[47] == 0xa4 && first->gpu.fb_config.alpha == 51 &&
         first->gpu.state.light_table[2][9].full == 0x12345678 &&
+        first->gpu.material_high[0].diffuse[0] == 91 &&
+        first->gpu.texhead_high[0]._0C1 == 0x000200c1 &&
+        first->capture->mat_list[0].diffuse[0] == 23 &&
+        first->capture->tex_list[0]._0C1 == 0x000100c1 &&
+        second->capture->mat_list[mesh->mat_index].diffuse[0] == 47 &&
+        second->capture->tex_list[mesh->tex_index]._0C1 == 0x000300c1 &&
         second->fb->ptr[17] == 0xf1 && second->texram[0]->ptr[31] == 0xf2 &&
         second->texram[1]->ptr[47] == 0xf3 && second->gpu.fb_config.alpha == 99 &&
         !second->capture->textures.cpu_dirty && second->capture->num_invalidations == 1 &&
@@ -5502,7 +6109,8 @@ int hikaru_vendor_test_packet_ownership(vk_renderer_t *renderer, void *gpu_as_vo
     gpu->texram[0]->ptr[31] = saved_tex[0];
     gpu->texram[1]->ptr[47] = saved_tex[1];
     hikaru_engine_note_texram_write(gpu->base.mach->host, 3u);
-    *gpu = saved_gpu;
+    *gpu = *saved_gpu;
+    free(saved_gpu);
     owner->push.num_verts = saved_num_verts;
     memcpy(owner->push.tmp, saved_strip, sizeof(saved_strip));
     owner->capture_started = saved_started;
@@ -5942,7 +6550,7 @@ int hikaru_vendor_test_mesh_vao_pixels(void)
     hikaru_texhead_t texhead = {0};
     hikaru_lightset_t light = {0};
     GLuint vert = glCreateShader(GL_VERTEX_SHADER), frag = glCreateShader(GL_FRAGMENT_SHADER);
-    GLuint program = glCreateProgram(), fbo = 0, texture = 0, test_depth = 0;
+    GLuint program = glCreateProgram(), fbo = 0, texture = 0;
     GLint linked = 0, complete = 0;
     int ok = 1;
     glShaderSource(vert, 1, &vs, NULL); glCompileShader(vert);
@@ -6009,54 +6617,7 @@ int hikaru_vendor_test_mesh_vao_pixels(void)
         }
         ok &= glGetError() == GL_NO_ERROR;
     }
-    /* Real opaque draw path: a captured nonzero opcode-101 bias pulls the
-     * first triangle in front of a nearly coplanar receiver. The adjacent
-     * zero-bias triangle remains occluded, and an ordinary zero-bias black
-     * triangle in front still draws black. */
-    glGenRenderbuffers(1, &test_depth); glBindRenderbuffer(GL_RENDERBUFFER, test_depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 640, 480);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, test_depth);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) { ok = 0; goto cleanup; }
-    for (unsigned v = 0; v < 3; ++v) {
-        vertices[0][v].position[2] = 0.000002f;
-        vertices[1][v].position[2] = 0.000002f;
-        vertices[2][v].position[2] = 0.000002f;
-        vertices[4][v].position[2] = -0.1f;
-        memset(vertices[4][v].diffuse, 0, 3);
-    }
-    glBindBuffer(GL_ARRAY_BUFFER, hr->vertex_chunks[0].vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices[0]) * 2, vertices[0]);
-    glBindBuffer(GL_ARRAY_BUFFER, hr->vertex_chunks[1].vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices[4]), vertices[4]);
-    meshes[0].depth_bias = 31; meshes[1].depth_bias = 0;
-    meshes[2].vertex_chunk = 2; meshes[2].first_vertex = 0; meshes[2].depth_bias = 0;
-    /* A second biased triangle after the zero-bias controls verifies that
-     * offset is enabled again when bias changes back to a nonzero value. */
-    glGenBuffers(1, &meshes[3].vbo); glBindBuffer(GL_ARRAY_BUFFER, meshes[3].vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices[2]), vertices[2], GL_STATIC_DRAW);
-    meshes[3].depth_bias = 31;
-    hr->num_meshes[0][HIKARU_POLYTYPE_OPAQUE] = 4;
-    vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(0.5); glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL);
-    glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    draw_meshes_for_polytype(hr, 0, HIKARU_POLYTYPE_OPAQUE);
-    unsigned char biased[4] = {0}, unbiased[4] = {0}, black[4] = {0}, rebiased[4] = {0};
-    glReadPixels(64, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, biased);
-    glReadPixels(192, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, unbiased);
-    glReadPixels(576, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, black);
-    glReadPixels(320, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rebiased);
-    if (!(rebiased[0] < 10 && rebiased[1] < 10 && rebiased[2] > 240 &&
-          biased[0] > 240 && biased[1] < 10 && biased[2] < 10 &&
-          unbiased[0] > 240 && unbiased[1] > 240 && unbiased[2] > 240 &&
-          black[0] < 10 && black[1] < 10 && black[2] < 10)) {
-        fprintf(stderr, "Hikaru opaque bias: biased=%u,%u,%u unbiased=%u,%u,%u black=%u,%u,%u rebiased=%u,%u,%u\n",
-                biased[0],biased[1],biased[2],unbiased[0],unbiased[1],unbiased[2],black[0],black[1],black[2],
-                rebiased[0],rebiased[1],rebiased[2]);
-        ok = 0;
-    }
-    ok &= glGetError() == GL_NO_ERROR;
 cleanup:
-    if (test_depth) glDeleteRenderbuffers(1, &test_depth);
     for (unsigned i = 0; i < 5; ++i) if (meshes[i].vbo) glDeleteBuffers(1, &meshes[i].vbo);
     for (unsigned i = 0; i < 2; ++i) {
         if (hr->vertex_chunks[i].vbo) glDeleteBuffers(1, &hr->vertex_chunks[i].vbo);
@@ -6311,7 +6872,7 @@ hikaru_renderer_set_transparency_memory_budget(vk_renderer_t *renderer, uint64_t
 int hikaru_vendor_test_spot_pixels(const hikaru_light_t *light,
                                    const float position[3],
                                    const float normal[3], int unlit, unsigned slot, unsigned curve,
-                                   const uint16_t table[16], uint8_t pixel[4])
+                                   const uint16_t table[16], uint8_t pixel[4], unsigned flags)
 {
     hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
     hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
@@ -6320,12 +6881,16 @@ int hikaru_vendor_test_spot_pixels(const hikaru_light_t *light,
     if (!hr || !gpu) goto cleanup;
     hr->gpu = gpu;
     hr->debug.flags[HR_DEBUG_NO_SPECULAR] = 1; /* Isolate angular diffuse from the legacy alias. */
+    hr->debug.flags[HR_DEBUG_NO_AMBIENT] = !!(flags&8u);
+    hr->debug.flags[HR_DEBUG_NO_DIFFUSE] = !!(flags&16u);
     for (unsigned j=0; j<8; ++j)
         gpu->state.light_table[slot][curve*8+j].full = ((uint32_t)table[j*2] <<16) | table[j*2+1];
     hikaru_material_t material = {0};
     material.shading_mode = unlit ? 0 : 1;
     hikaru_lightset_t lights = {0};
-    lights.mask = 15 ^ (1u<<slot);
+    // Test-only flags: masked, two-sided, viewport ambient, no ambient,
+    // no diffuse. Existing spotlight callers pass zero.
+    lights.mask = flags&1u ? 15 : 15 ^ (1u<<slot);
     for (unsigned i=0;i<4;i++) {
         lights.lights[i].has_direction = 1;
         lights.lights[i].direction[2] = 1;
@@ -6334,6 +6899,8 @@ int hikaru_vendor_test_spot_pixels(const hikaru_light_t *light,
     lights.lights[slot] = *light;
     hikaru_viewport_t viewport = {0};
     hikaru_mesh_t mesh = {0};
+    mesh.has_two_sided_lighting=!!(flags&2u);
+    if(flags&4u)for(unsigned component=0;component<3;++component)viewport.color.ambient[component]=64;
     hr->mat_list = &material; hr->num_mats = 1;
     hr->ls_list = &lights; hr->num_lss = 1;
     hr->vp_list = &viewport; hr->num_vps = 1;
@@ -6353,6 +6920,7 @@ int hikaru_vendor_test_spot_pixels(const hikaru_light_t *light,
         memcpy(vertices[i].normal, normal, sizeof(vertices[i].normal));
         memset(vertices[i].diffuse, 255, 3);
         vertices[i].alpha = 255;
+        if(flags&4u)for(unsigned component=0;component<3;++component)vertices[i].unknown[component]=255;
         vertices[i].specular[3] = 255; /* Keep zero specular RGB; avoid undefined pow(0,0). */
     }
     glGenVertexArrays(1, &vao); glBindVertexArray(vao);

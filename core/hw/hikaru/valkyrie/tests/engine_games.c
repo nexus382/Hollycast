@@ -12,6 +12,7 @@
 #include "mach/hikaru/hikaru-gpu-private.h"
 #include "mach/hikaru/hikaru-renderer-private.h"
 #include "cpu/sh/sh4.h"
+#include "vk/state.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,8 +109,8 @@ static int run_frame_api_job_thread(FrameApiJob *job)
 
 static void check_frame_packet_api(HikaruEngine *engine, const HikaruEngineInputs *frame_inputs)
 {
-    const uint64_t layout = hikaru_engine_state_layout();
-    const size_t state_size = hikaru_engine_state_size(engine);
+    const uint64_t layout = hikaru_engine_state_layout(HIKARU_STATE_ENCODING_CURRENT);
+    const size_t state_size = hikaru_engine_state_size(engine, HIKARU_STATE_ENCODING_CURRENT);
     FrameApiJob build = {0};
     build.engine = engine;
     build.inputs = frame_inputs;
@@ -149,8 +150,8 @@ static void check_frame_packet_api(HikaruEngine *engine, const HikaruEngineInput
     destroy.destroy_frame = true;
     CHECK(run_frame_api_job_thread(&destroy));
     CHECK(!destroy.has_graphics_context && destroy.graphics_calls == 0 && !destroy.frame);
-    CHECK(hikaru_engine_state_layout() == layout);
-    CHECK(hikaru_engine_state_size(engine) == state_size);
+    CHECK(hikaru_engine_state_layout(HIKARU_STATE_ENCODING_CURRENT) == layout);
+    CHECK(hikaru_engine_state_size(engine, HIKARU_STATE_ENCODING_CURRENT) == state_size);
 }
 
 static void reject(HikaruEngineGame game, const HikaruEngineRoms *roms, const char *message)
@@ -273,19 +274,151 @@ static void check_registered_buffer_sentinels(vk_machine_t *machine, size_t coun
     CHECK(index == count);
 }
 
+static void check_state_file_versions(void)
+{
+    char *base = SDL_GetBasePath();
+    char path[1024];
+    CHECK(base);
+    if (!base) return;
+    const int length = snprintf(path, sizeof(path), "%shikaru-state-%" PRIx64 ".tmp", base, (uint64_t)SDL_GetPerformanceCounter());
+    SDL_free(base);
+    CHECK(length > 0 && (size_t)length < sizeof(path));
+    if (length <= 0 || (size_t)length >= sizeof(path)) return;
+    vk_state_t *state = vk_state_new(path, VK_STATE_SAVE);
+    CHECK(state && state->encoding == HIKARU_STATE_ENCODING_CURRENT);
+    if (!state) return;
+    vk_state_destroy(&state, 0);
+    state = vk_state_new(path, VK_STATE_LOAD);
+    CHECK(state && state->encoding == HIKARU_STATE_ENCODING_CURRENT);
+    if (state) vk_state_destroy(&state, 0);
+    for (unsigned version = 2; version <= 5; ++version) {
+        char header[32] = {0};
+        snprintf(header, sizeof(header), "valkyrie state %08X\n", version);
+        FILE *file = fopen(path, "wb");
+        CHECK(file);
+        if (!file) break;
+        CHECK(fwrite(header, 1, sizeof(header), file) == sizeof(header));
+        CHECK(!fclose(file));
+        state = vk_state_new(path, VK_STATE_LOAD);
+        if (version == 3 || version == 4)
+            CHECK(state && state->encoding == (version == 3 ? HIKARU_STATE_ENCODING_LEGACY : HIKARU_STATE_ENCODING_CURRENT));
+        else CHECK(!state);
+        if (state) vk_state_destroy(&state, 0);
+    }
+    FILE *file = fopen(path, "wb");
+    CHECK(file);
+    if (file) {
+        CHECK(fwrite("valkyrie state", 1, 14, file) == 14);
+        CHECK(!fclose(file));
+        state = vk_state_new(path, VK_STATE_LOAD);
+        CHECK(!state);
+        if (state) vk_state_destroy(&state, 0);
+    }
+    CHECK(!remove(path));
+}
+
+static void check_gpu_bank_encoding(hikaru_gpu_t *gpu)
+{
+    const size_t material_bytes = sizeof(gpu->material_high), texhead_bytes = sizeof(gpu->texhead_high);
+    vk_state_t state = {0};
+    state.mode = VK_STATE_SAVE; state.capacity = SIZE_MAX;
+    CHECK(!vk_device_save_state(&gpu->base, &state)); /* Default encoding is current. */
+    const size_t bytes = state.offset, legacy_bytes = bytes - material_bytes - texhead_bytes;
+    uint8_t *wire = malloc(bytes);
+    hikaru_gpu_t *before = malloc(sizeof(*before));
+    CHECK(wire && before);
+    if (!wire || !before) goto done;
+    memset(gpu->material_high, 0x5a, material_bytes);
+    memset(gpu->texhead_high, 0xa5, texhead_bytes);
+    gpu->state.materials.table[0x10a1]._881 = 0x00000881;
+    gpu->state.texheads.table[0x10a1]._2C1 = 0x12345678;
+    state.data = wire; state.capacity = bytes; state.offset = 0;
+    CHECK(!vk_device_save_state(&gpu->base, &state));
+    CHECK(state.offset == bytes);
+    memset(gpu->material_high, 0xc3, material_bytes);
+    memset(gpu->texhead_high, 0x3c, texhead_bytes);
+    state.mode = VK_STATE_LOAD; state.offset = 0;
+    CHECK(!vk_device_load_state(&gpu->base, &state));
+    CHECK(!memcmp(gpu->material_high, wire + legacy_bytes, material_bytes));
+    CHECK(!memcmp(gpu->texhead_high, wire + legacy_bytes + material_bytes, texhead_bytes));
+
+    /* A truncated high bank must not publish even the decoded low prefix. */
+    memcpy(before, gpu, sizeof(*before));
+    state.capacity = bytes - 1; state.offset = 0;
+    CHECK(vk_device_load_state(&gpu->base, &state) != 0);
+    CHECK(!memcmp(before, gpu, sizeof(*before)));
+    state.failed = false; state.capacity = bytes; state.offset = 0; state.encoding = 3;
+    CHECK(vk_device_load_state(&gpu->base, &state) != 0 && state.offset == 0);
+    CHECK(!memcmp(before, gpu, sizeof(*before)));
+
+    state.mode = VK_STATE_SAVE; state.encoding = HIKARU_STATE_ENCODING_LEGACY; state.offset = 0;
+    CHECK(!vk_device_save_state(&gpu->base, &state));
+    CHECK(state.offset == legacy_bytes);
+    memset(gpu->material_high, 0x69, material_bytes);
+    memset(gpu->texhead_high, 0x96, texhead_bytes);
+    gpu->state.materials.table[0x10a1]._881 = 0;
+    gpu->state.texheads.table[0x10a1]._2C1 = 0;
+    state.mode = VK_STATE_LOAD; state.offset = 0; state.capacity = legacy_bytes;
+    CHECK(!vk_device_load_state(&gpu->base, &state));
+    CHECK(gpu->state.materials.table[0x10a1]._881 == 0x00000881);
+    CHECK(gpu->state.texheads.table[0x10a1]._2C1 == 0x12345678);
+    memset(wire + legacy_bytes, 0, material_bytes + texhead_bytes);
+    CHECK(!memcmp(gpu->material_high, wire + legacy_bytes, material_bytes));
+    CHECK(!memcmp(gpu->texhead_high, wire + legacy_bytes + material_bytes, texhead_bytes));
+
+    /* V1 never had valid upper table bases; V2 accepts them and rejects
+     * values outside the complete 16-bit address space. Both callbacks
+     * stage the complete GPU before publishing any successful load. */
+    for (unsigned encoding = HIKARU_STATE_ENCODING_LEGACY; encoding <= HIKARU_STATE_ENCODING_CURRENT; ++encoding) {
+        for (unsigned table = 0; table < 2; ++table) {
+            gpu->state.materials.base = gpu->state.texheads.base = 0;
+            uint32_t *base = table ? &gpu->state.texheads.base : &gpu->state.materials.base;
+            *base = HIKARU_LEGACY_TABLE_ENTRIES;
+            state.mode = VK_STATE_SAVE; state.encoding = encoding; state.offset = 0; state.capacity = bytes;
+            CHECK(!vk_device_save_state(&gpu->base, &state));
+            const size_t encoded_bytes = state.offset;
+            *base = 0;
+            memcpy(before, gpu, sizeof(*before));
+            state.mode = VK_STATE_LOAD; state.offset = 0; state.capacity = encoded_bytes;
+            const int loaded = vk_device_load_state(&gpu->base, &state);
+            if (encoding == HIKARU_STATE_ENCODING_LEGACY) {
+                CHECK(loaded != 0 && !memcmp(before, gpu, sizeof(*before)));
+            } else {
+                CHECK(!loaded && *base == HIKARU_LEGACY_TABLE_ENTRIES);
+                *base = NUM_MATERIALS;
+                state.mode = VK_STATE_SAVE; state.offset = 0;
+                CHECK(!vk_device_save_state(&gpu->base, &state));
+                *base = 0;
+                memcpy(before, gpu, sizeof(*before));
+                state.mode = VK_STATE_LOAD; state.offset = 0;
+                CHECK(vk_device_load_state(&gpu->base, &state) != 0);
+                CHECK(!memcmp(before, gpu, sizeof(*before)));
+            }
+        }
+    }
+    memset(gpu->material_high, 0xb7, material_bytes);
+    memset(gpu->texhead_high, 0x7b, texhead_bytes);
+    vk_device_reset(&gpu->base, VK_RESET_TYPE_HARD);
+    memset(wire, 0, material_bytes + texhead_bytes);
+    CHECK(!memcmp(gpu->material_high, wire, material_bytes));
+    CHECK(!memcmp(gpu->texhead_high, wire + material_bytes, texhead_bytes));
+done:
+    free(before); free(wire);
+}
+
 static void check_state_roundtrip(HikaruEngine *engine)
 {
     hikaru_t *board = (hikaru_t *)engine->machine;
     sh4_t *master = (sh4_t *)board->sh_m;
     sh4_t *slave = (sh4_t *)board->sh_s;
     hikaru_gpu_t *gpu = (hikaru_gpu_t *)board->gpu;
-    const size_t size = hikaru_engine_state_size(engine);
+    const size_t size = hikaru_engine_state_size(engine, HIKARU_STATE_ENCODING_CURRENT);
     const size_t buffer_count = board->base.buffers->used / board->base.buffers->element_size;
-    uint8_t *saved = NULL, *roundtrip = NULL, *buffer_sentinels = NULL;
+    uint8_t *saved = NULL, *roundtrip = NULL, *buffer_sentinels = NULL, *legacy = NULL;
     HikaruFrame *first = hikaru_frame_create(), *second = hikaru_frame_create();
     CHECK(first && second);
     if (!first || !second) goto done;
-    CHECK(hikaru_engine_state_layout() != 0);
+    CHECK(hikaru_engine_state_layout(HIKARU_STATE_ENCODING_CURRENT) != 0);
     CHECK(size > 0 && buffer_count > 0);
     if (!size || !buffer_count) goto done;
 
@@ -295,9 +428,13 @@ static void check_state_roundtrip(HikaruEngine *engine)
     CHECK(saved && roundtrip && buffer_sentinels);
     if (!saved || !roundtrip || !buffer_sentinels) goto done;
 
+    memset(gpu->material_high, 0x7d, sizeof(gpu->material_high));
+    memset(gpu->texhead_high, 0xd7, sizeof(gpu->texhead_high));
     const int save_result = hikaru_engine_save_state(engine, saved, size);
     CHECK(!save_result);
     if (save_result) goto done;
+    memset(gpu->material_high, 0x12, sizeof(gpu->material_high));
+    memset(gpu->texhead_high, 0x21, sizeof(gpu->texhead_high));
 
     const vk_cpu_state_t master_state = master->base.state == VK_CPU_STATE_RUN
         ? VK_CPU_STATE_STOP : VK_CPU_STATE_RUN;
@@ -354,7 +491,7 @@ static void check_state_roundtrip(HikaruEngine *engine)
     get_texture(renderer, &invalid_texture); /* Consume earlier CPU invalidations. */
     CHECK(!renderer->textures.cpu_dirty);
 
-    CHECK(hikaru_engine_load_state(engine, saved, size - 1) != 0);
+    CHECK(hikaru_engine_load_state(engine, saved, size - 1, HIKARU_STATE_ENCODING_CURRENT) != 0);
     CHECK(!renderer->textures.cpu_dirty);
     check_registered_buffer_sentinels(&board->base, buffer_count, buffer_sentinels);
     CHECK(master->base.state == master_state && slave->base.state == slave_state);
@@ -375,7 +512,7 @@ static void check_state_roundtrip(HikaruEngine *engine)
     const int invalid_sound_reset = 2;
     memcpy(&saved_sound_reset, saved + size - sizeof(saved_sound_reset), sizeof(saved_sound_reset));
     memcpy(saved + size - sizeof(invalid_sound_reset), &invalid_sound_reset, sizeof(invalid_sound_reset));
-    CHECK(hikaru_engine_load_state(engine, saved, size) != 0);
+    CHECK(hikaru_engine_load_state(engine, saved, size, HIKARU_STATE_ENCODING_CURRENT) != 0);
     CHECK(renderer->textures.cpu_dirty);
     get_texture(renderer, &invalid_texture);
     CHECK(!renderer->textures.cpu_dirty);
@@ -383,13 +520,45 @@ static void check_state_roundtrip(HikaruEngine *engine)
     CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
     memcpy(saved + size - sizeof(saved_sound_reset), &saved_sound_reset, sizeof(saved_sound_reset));
 
-    CHECK(!hikaru_engine_load_state(engine, saved, size));
+    CHECK(!hikaru_engine_load_state(engine, saved, size, HIKARU_STATE_ENCODING_CURRENT));
     CHECK(engine->texture_generation[0] > before_load[0] && engine->texture_generation[1] > before_load[1]);
     CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 3u));
     CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
     const int roundtrip_result = hikaru_engine_save_state(engine, roundtrip, size);
     CHECK(!roundtrip_result);
     if (!roundtrip_result) CHECK(memcmp(saved, roundtrip, size) == 0);
+    check_gpu_bank_encoding(gpu);
+    CHECK(!hikaru_engine_load_state(engine, saved, size, HIKARU_STATE_ENCODING_CURRENT));
+    const size_t legacy_size = hikaru_engine_state_size(engine, HIKARU_STATE_ENCODING_LEGACY);
+    CHECK(legacy_size + sizeof(gpu->material_high) + sizeof(gpu->texhead_high) == size);
+    CHECK(hikaru_engine_state_layout(HIKARU_STATE_ENCODING_LEGACY) != hikaru_engine_state_layout(HIKARU_STATE_ENCODING_CURRENT));
+    CHECK(!hikaru_engine_state_layout(0) && !hikaru_engine_state_layout(3));
+    CHECK(!hikaru_engine_state_size(engine, 0) && !hikaru_engine_state_size(engine, 3));
+    legacy = malloc(legacy_size);
+    CHECK(legacy);
+    if (!legacy) goto done;
+    vk_state_t legacy_writer = {0};
+    legacy_writer.mode = VK_STATE_SAVE; legacy_writer.encoding = HIKARU_STATE_ENCODING_LEGACY;
+    legacy_writer.data = legacy; legacy_writer.capacity = legacy_size;
+    CHECK(!vk_machine_transfer_state(engine->machine, &legacy_writer));
+    CHECK(!vk_state_put(&legacy_writer, &engine->sound_reset, sizeof(engine->sound_reset)));
+    CHECK(legacy_writer.offset == legacy_size);
+    const uint32_t low_material = gpu->state.materials.table[0x10a1]._881;
+    memset(gpu->material_high, 0x5a, sizeof(gpu->material_high));
+    memset(gpu->texhead_high, 0xa5, sizeof(gpu->texhead_high));
+    gpu->state.materials.table[0x10a1]._881 ^= 0x10000;
+    CHECK(hikaru_engine_load_state(engine, legacy, legacy_size, HIKARU_STATE_ENCODING_CURRENT) != 0);
+    CHECK(hikaru_engine_load_state(engine, saved, size, HIKARU_STATE_ENCODING_LEGACY) != 0);
+    CHECK(hikaru_engine_load_state(engine, legacy, legacy_size - 1, HIKARU_STATE_ENCODING_LEGACY) != 0);
+    CHECK(hikaru_engine_load_state(engine, legacy, legacy_size, 3) != 0);
+    CHECK(gpu->state.materials.table[0x10a1]._881 == (low_material ^ 0x10000));
+    CHECK(((uint8_t *)gpu->material_high)[0] == 0x5a && ((uint8_t *)gpu->texhead_high)[0] == 0xa5);
+    CHECK(!hikaru_engine_load_state(engine, legacy, legacy_size, HIKARU_STATE_ENCODING_LEGACY));
+    CHECK(gpu->state.materials.table[0x10a1]._881 == low_material);
+    memset(roundtrip, 0, sizeof(gpu->material_high) + sizeof(gpu->texhead_high));
+    CHECK(!memcmp(gpu->material_high, roundtrip, sizeof(gpu->material_high)));
+    CHECK(!memcmp(gpu->texhead_high, roundtrip + sizeof(gpu->material_high), sizeof(gpu->texhead_high)));
+    CHECK(!hikaru_engine_load_state(engine, saved, size, HIKARU_STATE_ENCODING_CURRENT));
     vk_machine_reset(engine->machine, VK_RESET_TYPE_HARD);
     CHECK(hikaru_vendor_test_texture_snapshot(gpu, first, 3u));
     CHECK(hikaru_vendor_test_texture_snapshot(gpu, second, 3u));
@@ -401,6 +570,7 @@ done:
     free(buffer_sentinels);
     free(roundtrip);
     free(saved);
+    free(legacy);
 }
 
 int main(int argc, char **argv)
@@ -440,6 +610,7 @@ int main(int argc, char **argv)
     if (failures) return 1;
 
     if (SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL video: %s\n", SDL_GetError()); return 2; }
+    check_state_file_versions();
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, gles ? SDL_GL_CONTEXT_PROFILE_ES : SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, gles ? 0 : 2);

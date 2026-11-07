@@ -423,12 +423,26 @@ int hikaru_engine_set_cpu_clock_mhz(HikaruEngine *engine, unsigned mhz)
     return 0;
 }
 
-uint64_t hikaru_engine_state_layout(void)
+uint64_t hikaru_engine_state_layout(uint32_t encoding)
 {
+#ifdef _WIN64
+    /* These are the shipped V1 Windows x64 prefix dimensions. Growing a
+     * legacy low table would silently invalidate every existing state. */
+    _Static_assert(offsetof(hikaru_gpu_t, state) == 1072, "V1 GPU state offset changed");
+    _Static_assert(sizeof(((hikaru_gpu_t *)0)->state) == 972192, "V1 GPU state size changed");
+    _Static_assert(offsetof(hikaru_gpu_t, idma_completed) == 973268, "V1 GPU prefix changed");
+#endif
+    if (encoding != HIKARU_STATE_ENCODING_LEGACY && encoding != HIKARU_STATE_ENCODING_CURRENT) return 0;
     // Include compiler/architecture-sensitive native structures, never pointers
     // or host resources themselves. Bump the host payload version on changes.
+    // Reproduce the old complete-struct size, including its tail padding,
+    // without including the appended banks in the V1 compatibility tag.
+    const size_t legacy_end = offsetof(hikaru_gpu_t, idma_completed) + sizeof(((hikaru_gpu_t *)0)->idma_completed);
+    const size_t alignment = _Alignof(hikaru_gpu_t);
+    const size_t gpu_size = encoding == HIKARU_STATE_ENCODING_LEGACY
+        ? (legacy_end + alignment - 1) / alignment * alignment : sizeof(hikaru_gpu_t);
     const uint32_t layout[] = {sizeof(void *), sizeof(bool), sizeof(sh4_t),
-        sizeof(hikaru_gpu_t), sizeof(hikaru_rombd_config_t),
+        (uint32_t)gpu_size, sizeof(hikaru_rombd_config_t),
         offsetof(sh4_t, regs), offsetof(sh4_t, intc), offsetof(sh4_t, tmu),
         offsetof(hikaru_gpu_t, state), offsetof(hikaru_gpu_t, idma_completed),
         sizeof(((hikaru_gpu_t *)0)->state), sizeof(((sh4_t *)0)->regs),
@@ -450,7 +464,8 @@ uint64_t hikaru_engine_state_layout(void)
 
 static int transfer_engine_state(HikaruEngine *engine, vk_state_t *state)
 {
-    if (!engine || !engine->machine || activeEngine) return -1;
+    if (!engine || !engine->machine || activeEngine ||
+        (state->encoding != HIKARU_STATE_ENCODING_LEGACY && state->encoding != HIKARU_STATE_ENCODING_CURRENT)) return -1;
     /* RAM is restored before devices. Invalidate even if a later field rejects
      * the load, so no packet can reuse bytes from the partially replaced RAM. */
     if (state->mode == VK_STATE_LOAD) {
@@ -468,30 +483,34 @@ static int transfer_engine_state(HikaruEngine *engine, vk_state_t *state)
     return result || state->failed ? -1 : 0;
 }
 
-size_t hikaru_engine_state_size(HikaruEngine *engine)
+size_t hikaru_engine_state_size(HikaruEngine *engine, uint32_t encoding)
 {
     vk_state_t state = {0};
     state.mode = VK_STATE_SAVE;
+    state.encoding = encoding;
     state.capacity = SIZE_MAX;
     return transfer_engine_state(engine, &state) ? 0 : state.offset;
 }
 
 int hikaru_engine_save_state(HikaruEngine *engine, uint8_t *data, size_t size)
 {
-    if (!data || size != hikaru_engine_state_size(engine)) return -1;
+    if (!data || size != hikaru_engine_state_size(engine, HIKARU_STATE_ENCODING_CURRENT)) return -1;
     vk_state_t state = {0};
     state.mode = VK_STATE_SAVE;
+    state.encoding = HIKARU_STATE_ENCODING_CURRENT;
     state.data = data;
     state.capacity = size;
     return transfer_engine_state(engine, &state) || state.offset != size ? -1 : 0;
 }
 
-int hikaru_engine_load_state(HikaruEngine *engine, const uint8_t *data, size_t size)
+int hikaru_engine_load_state(HikaruEngine *engine, const uint8_t *data, size_t size, uint32_t encoding)
 {
     if (!data || !engine || !engine->machine || !engine->machine->renderer ||
-        size != hikaru_engine_state_size(engine)) return -1;
+        (encoding != HIKARU_STATE_ENCODING_LEGACY && encoding != HIKARU_STATE_ENCODING_CURRENT) ||
+        size != hikaru_engine_state_size(engine, encoding)) return -1;
     vk_state_t state = {0};
     state.mode = VK_STATE_LOAD;
+    state.encoding = encoding;
     state.data = (uint8_t *)data;
     state.capacity = size;
     if (transfer_engine_state(engine, &state) || state.offset != size ||

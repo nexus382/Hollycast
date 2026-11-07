@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #define GL_SILENCE_DEPRECATION
 #include <SDL.h>
 #ifdef __APPLE__
@@ -11,6 +12,8 @@
 #include <string.h>
 
 int hikaru_vendor_test_transparency_sorting_pixels(void);
+int hikaru_vendor_test_depth_precision_pixels(void);
+int hikaru_vendor_test_depth_family_pixels(void);
 
 int main(int argc, char **argv)
 {
@@ -29,10 +32,14 @@ int main(int argc, char **argv)
                  gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress))) return 5;
 #endif
     const int passed = hikaru_vendor_test_transparency_sorting_pixels();
+    const int depth_passed = hikaru_vendor_test_depth_precision_pixels();
+    const int family_passed = hikaru_vendor_test_depth_family_pixels();
     SDL_GL_DeleteContext(context);
     SDL_DestroyWindow(window);
     SDL_Quit();
     if (!passed) { fprintf(stderr, "crossing translucent triangles did not resolve per pixel\n"); return 1; }
+    if (!depth_passed) { fprintf(stderr, "canonical eye-depth regression failed\n"); return 1; }
+    if (!family_passed) { fprintf(stderr, "depth-family regression failed\n"); return 1; }
     puts("per-pixel transparency sorting: PASS");
     return 0;
 }

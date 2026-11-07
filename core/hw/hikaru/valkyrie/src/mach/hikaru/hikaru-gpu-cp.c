@@ -1605,7 +1605,7 @@ I (0x084)
 		return;
 	}
 
-	MAT.table[index] = MAT.scratch;
+	*hikaru_gpu_material(gpu, index) = MAT.scratch;
 }
 
 D (0x084)
@@ -1640,7 +1640,7 @@ I (0x083)
 			return;
 		}
 
-		MAT.scratch = MAT.table[index];
+		MAT.scratch = *hikaru_gpu_material(gpu, index);
 	}
 }
 
@@ -1838,7 +1838,7 @@ I (0x0C4)
 		return;
 	}
 
-	TEX.table[index] = TEX.scratch;
+	*hikaru_gpu_texhead(gpu, index) = TEX.scratch;
 }
 
 D (0x0C4)
@@ -1874,7 +1874,7 @@ I (0x0C3)
 			return;
 		}
 
-		TEX.scratch = TEX.table[index];
+		TEX.scratch = *hikaru_gpu_texhead(gpu, index);
 	}
 }
 
@@ -2544,10 +2544,10 @@ I (0x0E8)
 
 	/* A different texhead starts a new mesh for these vertices. */
 	if (index < NUM_TEXHEADS &&
-	    memcmp (&TEX.scratch, &TEX.table[index], sizeof (TEX.scratch))) {
+	    memcmp (&TEX.scratch, hikaru_gpu_texhead(gpu, index), sizeof (TEX.scratch))) {
 		if (gpu->state.in_mesh)
 			hikaru_renderer_end_mesh (HR, PC);
-		TEX.scratch = TEX.table[index];
+		TEX.scratch = *hikaru_gpu_texhead(gpu, index);
 		if (gpu->state.in_mesh)
 			hikaru_renderer_begin_mesh (HR, PC, false);
 	}
@@ -2881,6 +2881,90 @@ hikaru_gpu_cp_init (hikaru_gpu_t *gpu)
 
 
 #ifdef HIKARU_VENDOR_TESTING
+/* Exercise the real commit/recall decoders: high entries must not overwrite
+ * the lower bank, and base-relative addresses must reject overflow. */
+int hikaru_vendor_test_table_banks(void)
+{
+    hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+    if (!gpu) return 0;
+    uint32_t inst[4] = {0};
+    int ok = 1;
+
+    MAT.scratch.diffuse[0] = 17;
+    inst[0] = 0x10a11084;
+    hikaru_gpu_inst_0x084(gpu, inst);
+    MAT.scratch.diffuse[0] = 99;
+    inst[0] = 0x50a11084;
+    hikaru_gpu_inst_0x084(gpu, inst);
+    inst[0] = 0x10a11083;
+    hikaru_gpu_inst_0x083(gpu, inst);
+    ok &= MAT.scratch.diffuse[0] == 17;
+    inst[0] = 0x50000083;
+    hikaru_gpu_inst_0x083(gpu, inst);
+    inst[0] = 0x00a11083;
+    hikaru_gpu_inst_0x083(gpu, inst);
+    ok &= MAT.scratch.diffuse[0] == 99;
+    MAT.scratch.diffuse[0] = 77;
+    inst[0] = 0x00a21084;
+    hikaru_gpu_inst_0x084(gpu, inst);
+    ok &= hikaru_gpu_material(gpu, 0x50a2)->diffuse[0] == 77 &&
+          hikaru_gpu_material(gpu, 0x10a2)->diffuse[0] == 0;
+    inst[0] = 0xfff00083;
+    hikaru_gpu_inst_0x083(gpu, inst);
+    inst[0] = 0x000f1084;
+    hikaru_gpu_inst_0x084(gpu, inst);
+    MAT.scratch.diffuse[0] = 0;
+    inst[0] = 0x000f1083;
+    hikaru_gpu_inst_0x083(gpu, inst);
+    ok &= MAT.scratch.diffuse[0] == 77;
+    MAT.scratch.diffuse[0] = 51;
+    inst[0] = 0x00101084;
+    hikaru_gpu_inst_0x084(gpu, inst);
+    inst[0] = 0x00101083;
+    hikaru_gpu_inst_0x083(gpu, inst);
+    ok &= MAT.base == 0xfff0 && MAT.scratch.diffuse[0] == 51 &&
+          hikaru_gpu_material(gpu, 0)->diffuse[0] == 0 &&
+          hikaru_gpu_material(gpu, 0xffff)->diffuse[0] == 77;
+
+    TEX.scratch._0C1 = 0x000100c1;
+    inst[0] = 0x0b2a10c4;
+    hikaru_gpu_inst_0x0C4(gpu, inst);
+    TEX.scratch._0C1 = 0x000200c1;
+    inst[0] = 0x4b2a10c4;
+    hikaru_gpu_inst_0x0C4(gpu, inst);
+    inst[0] = 0x0b2a10c3;
+    hikaru_gpu_inst_0x0C3(gpu, inst);
+    ok &= TEX.scratch._0C1 == 0x000100c1;
+    inst[0] = 0x400000c3;
+    hikaru_gpu_inst_0x0C3(gpu, inst);
+    inst[0] = 0x0b2a10c3;
+    hikaru_gpu_inst_0x0C3(gpu, inst);
+    ok &= TEX.scratch._0C1 == 0x000200c1;
+    TEX.scratch._0C1 = 0x000300c1;
+    inst[0] = 0x0b2b10c4;
+    hikaru_gpu_inst_0x0C4(gpu, inst);
+    ok &= hikaru_gpu_texhead(gpu, 0x4b2b)->_0C1 == 0x000300c1 &&
+          hikaru_gpu_texhead(gpu, 0x0b2b)->_0C1 == 0;
+    inst[0] = 0xfff000c3;
+    hikaru_gpu_inst_0x0C3(gpu, inst);
+    inst[0] = 0x000f10c4;
+    hikaru_gpu_inst_0x0C4(gpu, inst);
+    TEX.scratch._0C1 = 0;
+    inst[0] = 0x000f10c3;
+    hikaru_gpu_inst_0x0C3(gpu, inst);
+    ok &= TEX.scratch._0C1 == 0x000300c1;
+    TEX.scratch._0C1 = 0x000400c1;
+    inst[0] = 0x001010c4;
+    hikaru_gpu_inst_0x0C4(gpu, inst);
+    inst[0] = 0x001010c3;
+    hikaru_gpu_inst_0x0C3(gpu, inst);
+    ok &= TEX.base == 0xfff0 && TEX.scratch._0C1 == 0x000400c1 &&
+          hikaru_gpu_texhead(gpu, 0)->_0C1 == 0 &&
+          hikaru_gpu_texhead(gpu, 0xffff)->_0C1 == 0x000300c1;
+    free(gpu);
+    return ok;
+}
+
 int hikaru_vendor_test_pattern_commands(void)
 {
     _Static_assert(sizeof(((hikaru_gpu_t *)0)->cp) == 16, "saved CP flag layout");

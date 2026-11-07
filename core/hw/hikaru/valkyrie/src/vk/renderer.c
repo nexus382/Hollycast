@@ -107,8 +107,10 @@ compile_shader (GLenum type, const char *src)
 	const char *body = strchr(src, '\n');
 	if (!body) { glDeleteShader(id); return 0; }
 	const char *sources[] = {
-		vk_renderer_is_gles() ? "#version 300 es\nprecision highp float;\nprecision highp int;\n" : "#version 150\n",
-		type == GL_FRAGMENT_SHADER ? "out vec4 vk_frag_color;\n" : "",
+		vk_renderer_is_gles() ? "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp usampler2D;\n" : "#version 150\n",
+		type == GL_FRAGMENT_SHADER ? (vk_renderer_is_gles()
+            ? "layout(location=0) out vec4 vk_frag_color;\nlayout(location=1) out uvec2 vk_frag_metadata;\n"
+            : "out vec4 vk_frag_color;\nout uvec2 vk_frag_metadata;\n") : "",
 		body + 1
 	};
 	glShaderSource (id, 3, sources, NULL);
@@ -149,6 +151,10 @@ vk_renderer_compile_program (const char *vs_src, const char *fs_src)
 	for (unsigned i = 0; i < NUMELEM(attributes); ++i)
 		glBindAttribLocation(id, i, attributes[i]);
 	glBindAttribLocation(id, 1, "i_fb_texcoords");
+    if (!vk_renderer_is_gles()) {
+        glBindFragDataLocation(id, 0, "vk_frag_color");
+        glBindFragDataLocation(id, 1, "vk_frag_metadata");
+    }
 	glLinkProgram (id);
 	glGetProgramiv (id, GL_LINK_STATUS, &status);
 	if (status == GL_FALSE) {
