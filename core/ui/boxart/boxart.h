@@ -109,7 +109,7 @@ private:
 	};
 
 	GameBoxart getBiosBoxart(const GameMedia& media,
-			config::LibraryCoverMediaMode mediaMode = config::LibraryCoverMediaMode::Cover);
+			config::LibraryCoverMediaMode mediaMode = config::LibraryCoverMediaMode::CurrentArtwork);
 	GameBoxart getPhysicalBoxart(const GameMedia& media);
 	std::string getCustomBoxartPath(const GameMedia& media);
 	std::string getCustomBoxartPathForMediaMode(const GameMedia& media, config::LibraryCoverMediaMode mediaMode,

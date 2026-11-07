@@ -443,6 +443,89 @@ TEST_F(BoxartTest, BiosSpineAndDiscRecoverDeletedCacheWithoutScraping)
 	}
 }
 
+TEST_F(BoxartTest, BiosNamedCustomMediaOverridesOnlyItsMatchingBundledSlot)
+{
+	GameMedia bios;
+	bios.name = "Dreamcast BIOS";
+	const auto root = directory / "custom";
+	const std::pair<const char*, config::LibraryCoverMediaMode> slots[] = {
+		{"covers", config::LibraryCoverMediaMode::Cover},
+		{"spines", config::LibraryCoverMediaMode::Spine},
+		{"physicalmedia", config::LibraryCoverMediaMode::Physical},
+		{"screenshots", config::LibraryCoverMediaMode::Screenshot},
+		{"boxtexture", config::LibraryCoverMediaMode::BoxTexture},
+	};
+	for (const auto& slot : slots)
+	{
+		std::filesystem::create_directories(root / slot.first);
+		std::ofstream(root / slot.first / "Dreamcast BIOS.png") << "custom artwork";
+	}
+	config::BoxartPath = root.string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!boxart->customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart->customMediaReady());
+	for (int provider : {0, 1, 2})
+		for (const auto source : {BoxartSourceMode::ScrapedOnly, BoxartSourceMode::PhysicalMediaOnly,
+				BoxartSourceMode::CustomThenScraped})
+		{
+			config::ArtworkProvider = provider;
+			config::BoxartSourceMode = static_cast<int>(source);
+			for (const auto& slot : slots)
+			{
+				const auto expected = root / slot.first / "Dreamcast BIOS.png";
+				EXPECT_EQ(expected.lexically_normal(),
+					std::filesystem::path(boxart->getCustomMediaPath(bios, slot.second)).lexically_normal());
+			}
+			EXPECT_EQ((root / "physicalmedia" / "Dreamcast BIOS.png").lexically_normal(),
+				std::filesystem::path(boxart->getDiscArtPath(bios)).lexically_normal());
+		}
+	for (const auto& slot : slots)
+	{
+		const auto custom = root / slot.first / "Dreamcast BIOS.png";
+		ASSERT_TRUE(std::filesystem::remove(custom));
+		const auto fallback = boxart->getCustomMediaPath(bios, slot.second, true);
+		if (slot.second == config::LibraryCoverMediaMode::Screenshot
+			|| slot.second == config::LibraryCoverMediaMode::BoxTexture)
+			EXPECT_TRUE(fallback.empty());
+		else
+		{
+			EXPECT_FALSE(fallback.empty());
+			EXPECT_NE(custom.lexically_normal(), std::filesystem::path(fallback).lexically_normal());
+			EXPECT_TRUE(file_exists(fallback));
+		}
+		if (slot.second == config::LibraryCoverMediaMode::Physical)
+			EXPECT_EQ(fallback, boxart->getDiscArtPath(bios));
+	}
+}
+
+TEST_F(BoxartTest, BiosCurrentArtworkPreservesTheCustomSourceSelection)
+{
+	GameMedia bios;
+	bios.name = "Dreamcast BIOS";
+	const auto root = directory / "custom";
+	std::filesystem::create_directories(root);
+	const auto custom = root / "Dreamcast BIOS.png";
+	std::ofstream(custom) << "custom artwork";
+	config::BoxartPath = root.string();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (!boxart->customMediaReady() && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_TRUE(boxart->customMediaReady());
+	for (int provider : {0, 1, 2})
+		for (const auto source : {BoxartSourceMode::ScrapedOnly, BoxartSourceMode::PhysicalMediaOnly,
+				BoxartSourceMode::CustomThenScraped})
+		{
+			config::ArtworkProvider = provider;
+			config::BoxartSourceMode = static_cast<int>(source);
+			const auto path = boxart->getBoxart(bios).boxartPath;
+			EXPECT_EQ(path, boxart->getBoxartAndLoad(bios).boxartPath);
+			EXPECT_TRUE(file_exists(path));
+			EXPECT_EQ(source == BoxartSourceMode::CustomThenScraped,
+				std::filesystem::path(path).lexically_normal() == custom.lexically_normal());
+		}
+}
+
 TEST_F(BoxartTest, LibraryInventoryQueuesDiscParsingWithCompleteOnlineMetadata)
 {
 	config::ArtworkProvider = 1;

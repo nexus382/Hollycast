@@ -2886,7 +2886,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		}
 		// The browser clips its items before this callback and includes the selected
 		// row. Keep asynchronous disc labels current without opening every game.
-		if (needsDiscArtwork && items[index].isGame)
+		if (needsDiscArtwork && !game.device)
 			items[index].metadata["artwork.disc"] = boxart.getDiscArtPath(game);
 		const ImVec2 itemMin = ImGui::GetItemRectMin();
 		const ImVec2 itemMax = ImGui::GetItemRectMax();
@@ -4595,10 +4595,6 @@ void gui_display_ui()
 		boxart.setMediaBatchPending(false);
 		return;
 	}
-	// Scan imported content paths during the intro instead of waiting for the
-	// first browser frame. The scanner publishes its snapshots asynchronously.
-	if (gui_state == GuiState::Main || gui_state == GuiState::SelectDisk)
-		scanner.fetch_game_list();
 	// Reconcile the completed library scan with the selected manifest. Adding a theme
 	// or a named media type must not add another automatic scraping path here.
 	static std::string queuedMediaKey;
@@ -4644,6 +4640,12 @@ void gui_display_ui()
 	// Resolve protocol-launched games before the intro can defer activation.
 	const bool protocolActivated = gui_state == GuiState::Main && checkUWPProtocolActivation();
 #endif
+
+	// Scan library paths during the intro, but keep direct launches free of a
+	// worker that gui_start_game would have to join before loading the game.
+	if (gui_state == GuiState::SelectDisk || (gui_state == GuiState::Main
+			&& settings.content.path.empty() && !settings.naomi.slave))
+		scanner.fetch_game_list();
 
 	if (gui_display_launch_screen())
 	{
