@@ -2596,8 +2596,10 @@ static bool prepareThemedLibraryItem(const GameMedia& source, library::View view
 	{
 		if (sourceMedia == "disc")
 		{
-			// Opening a disc image belongs to the visible-item callback below.
-			item.metadata["artwork.disc"] = {};
+			// The virtual BIOS disc is bundled, so resolve it before the theme checks
+			// preview availability. Real disc-image reads remain visible-item work.
+			item.metadata["artwork.disc"] = !game.device && !game.arcade && game.path.empty() && game.fileName.empty()
+					? boxart.getDiscArtPath(game) : std::string();
 			continue;
 		}
 		for (const auto& media : artwork::mediaTypes)
