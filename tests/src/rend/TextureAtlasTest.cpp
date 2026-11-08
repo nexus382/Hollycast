@@ -247,3 +247,27 @@ TEST(TextureAtlas, RejectsWrongOriginalAndRendererOverflow)
 	EXPECT_THROW(rebuild(TwoPieces, solid(8, 4, 1), {solid(16, 16, 2), std::nullopt}, 16, 16), std::exception);
 	EXPECT_THROW(rebuild(TwoPieces, solid(8, 4, 1), {}, 1024, 1024), std::exception);
 }
+
+TEST(TextureAtlas, ValidatesOutputDimensionsBeforeAllocatingPixels)
+{
+	const Sheet sheet {1, 256, 256, {{0, 0, 63, 63}}};
+	EXPECT_EQ(scaledDimensions(sheet, 1254, 63, 8192, 8192), (std::make_pair(5096u, 5096u)));
+	EXPECT_THROW(scaledDimensions(sheet, 8192, 63, 8192, 8192), std::exception);
+	EXPECT_THROW(scaledDimensions(sheet, 64, 1, 16384, 16384), std::exception);
+	EXPECT_THROW(scaledDimensions(sheet, 1, 0, 8192, 8192), std::exception);
+	EXPECT_THROW(scaledDimensions(sheet, 0, 1, 8192, 8192), std::exception);
+	EXPECT_THROW(scaledDimensions(sheet, 1, UINT32_MAX, 8192, 8192), std::exception);
+}
+
+TEST(TextureAtlas, CancellationDiscardsPartialRebuilds)
+{
+	for (int cancelAfter : {0, 2, 7})
+	{
+		int checks = 0;
+		const auto output = rebuild(TwoPieces, solid(8, 4, 1), {solid(4, 4, 2), std::nullopt}, 1024, 1024,
+				[&] { return checks++ >= cancelAfter; });
+		EXPECT_EQ(output.width, 0u);
+		EXPECT_EQ(output.height, 0u);
+		EXPECT_TRUE(output.pixels.empty());
+	}
+}

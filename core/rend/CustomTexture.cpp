@@ -82,6 +82,17 @@ std::vector<u8> readFile(const CustomTextureCandidate& candidate, size_t maxSize
 	return bytes;
 }
 
+std::pair<int, int> imageDimensions(const std::string& path)
+{
+	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
+	if (!file)
+		throw CustomTextureException(CustomTextureException::Error::FileRead, "image open failed: " + path);
+	int width = 0, height = 0, channels = 0;
+	if (!stbi_info_from_callbacks(&STBI::callbacks, file.get(), &width, &height, &channels) || width <= 0 || height <= 0)
+		throw CustomTextureException(CustomTextureException::Error::ImageDecode, "invalid image header: " + path);
+	return { width, height };
+}
+
 std::array<CustomTextureSourceKind, 7> preferredSourceKinds(
 		const CustomTextureCapabilities& capabilities)
 {
@@ -108,7 +119,7 @@ std::array<CustomTextureSourceKind, 7> preferredSourceKinds(
 	return kinds;
 }
 
-PreparedCustomTexture::Ptr decodeImageToRGBA(u32 hash, const std::vector<u8>& fileBytes,
+std::shared_ptr<PreparedCustomTexture> decodeImageToRGBA(u32 hash, const std::vector<u8>& fileBytes,
 		const CustomTextureCapabilities& capabilities, bool flip = true)
 {
 	if (fileBytes.size() > INT_MAX)
@@ -171,35 +182,70 @@ PreparedCustomTexture::Ptr rebuildAtlasTexture(const texture_atlas::Sheet& sheet
 		const std::string& directory, const CustomTextureCapabilities& capabilities,
 		const BaseCustomTextureSource::CancellationCheck& cancelled)
 {
-	const auto load = [&](const std::string& filename) {
-		const std::string path = hostfs::storage().getSubPath(directory, filename);
-		const auto texture = decodeImageToRGBA(sheet.hash,
-				readFile({ CustomTextureSourceKind::Png, path }, 512ull * 1024 * 1024), capabilities, false);
-		return texture_atlas::Image { texture->width, texture->height, texture->bytes };
+	const auto pathFor = [&](const std::string& filename) {
+		return hostfs::storage().getSubPath(directory, filename);
 	};
-	std::vector<std::optional<texture_atlas::Image>> tiles(sheet.regions.size());
-	size_t totalBytes = 0;
+	const std::string originalName = texture_atlas::imageFilename(sheet.hash);
+	const auto originalDimensions = imageDimensions(pathFor(originalName));
+	if (static_cast<u32>(originalDimensions.first) != sheet.width
+			|| static_cast<u32>(originalDimensions.second) != sheet.height)
+		throw std::runtime_error("atlas original dimensions do not match the mapping");
+	std::vector<std::pair<int, int>> dimensions(sheet.regions.size());
+	uint32_t numerator = 0, denominator = 1;
+	uint64_t totalBytes = 0;
+	// Reject impossible layouts and aggregate working sizes before decoding large replacement PNGs.
 	for (size_t i = 0; i < sheet.regions.size(); i++)
 	{
 		if (cancelled && cancelled())
 			return nullptr;
-		const std::string name = texture_atlas::regionFilename(sheet.hash, sheet.regions[i]);
-		if (!hostfs::storage().exists(hostfs::storage().getSubPath(directory, name)))
+		const auto& region = sheet.regions[i];
+		const std::string name = texture_atlas::regionFilename(sheet.hash, region);
+		const std::string path = pathFor(name);
+		if (!hostfs::storage().exists(path))
 			continue;
-		tiles[i] = load(name);
-		totalBytes += tiles[i]->pixels.size();
+		dimensions[i] = imageDimensions(path);
+		const auto [width, height] = dimensions[i];
+		if (uint64_t(width) * region.height != uint64_t(height) * region.width
+				|| (numerator != 0 && uint64_t(width) * denominator != uint64_t(numerator) * region.width))
+			throw std::runtime_error("atlas piece has a different scale: " + name);
+		numerator = width;
+		denominator = region.width;
+		texture_atlas::scaledDimensions(sheet, numerator, denominator, capabilities.max2DWidth, capabilities.max2DHeight);
+		totalBytes += uint64_t(width) * height * 4;
 		if (totalBytes > 512ull * 1024 * 1024)
 			throw std::runtime_error("atlas pieces exceed the 512 MiB working limit");
 	}
-	const auto original = load(texture_atlas::imageFilename(sheet.hash));
-	auto image = texture_atlas::rebuild(sheet, original, tiles, capabilities.max2DWidth, capabilities.max2DHeight);
+	const auto load = [&](const std::string& filename, const std::pair<int, int>& dimensions) {
+		const auto texture = decodeImageToRGBA(sheet.hash,
+				readFile({ CustomTextureSourceKind::Png, pathFor(filename) }, 512ull * 1024 * 1024), capabilities, false);
+		if (texture->width != static_cast<u32>(dimensions.first) || texture->height != static_cast<u32>(dimensions.second))
+			throw std::runtime_error("atlas image dimensions changed while loading: " + filename);
+		return texture_atlas::Image { texture->width, texture->height, std::move(texture->bytes) };
+	};
+	std::vector<std::optional<texture_atlas::Image>> tiles(sheet.regions.size());
+	for (size_t i = 0; i < sheet.regions.size(); i++)
+	{
+		if (cancelled && cancelled())
+			return nullptr;
+		if (dimensions[i].first == 0)
+			continue;
+		tiles[i] = load(texture_atlas::regionFilename(sheet.hash, sheet.regions[i]), dimensions[i]);
+	}
 	if (cancelled && cancelled())
+		return nullptr;
+	const auto original = load(originalName, originalDimensions);
+	auto image = texture_atlas::rebuild(sheet, original, tiles, capabilities.max2DWidth, capabilities.max2DHeight, cancelled);
+	if (image.width == 0 || (cancelled && cancelled()))
 		return nullptr;
 	// Mapping/crop files use top-left coordinates. The replacement upload expects bottom-up RGBA.
 	const size_t rowBytes = size_t(image.width) * 4;
 	for (uint32_t y = 0; y < image.height / 2; y++)
+	{
+		if (cancelled && cancelled())
+			return nullptr;
 		std::swap_ranges(image.pixels.begin() + y * rowBytes, image.pixels.begin() + (y + 1) * rowBytes,
 				image.pixels.begin() + (image.height - 1 - y) * rowBytes);
+	}
 	auto texture = std::make_shared<PreparedCustomTexture>();
 	texture->replacementHash = sheet.hash;
 	texture->nativeFormat = NativeTextureFormat::Rgba8Unorm;
@@ -640,12 +686,7 @@ void CustomTexture::clearSessionResources()
 	if (loaderThread)
 		loaderThread->stop();
 	loaderThread.reset();
-	dumpedTextureSizes.clear();
-	atlasDetectors.clear();
-	dumpedSheets.clear();
-	dumpMappingLoaded = false;
-	dumpAtlasFailed = false;
-	extractedSheets.clear();
+	setDumpDirectory("");
 	for (auto& source : sources)
 		source->terminate();
 	sources.clear();
@@ -851,6 +892,30 @@ bool CustomTexture::isTextureReplaced(BaseTextureCacheData* texture) const
 	return false;
 }
 
+void CustomTexture::setDumpDirectory(const std::string& directory)
+{
+	if (dumpDirectory == directory)
+		return;
+	dumpDirectory = directory;
+	dumpedTextureSizes.clear();
+	atlasDetectors.clear();
+	dumpedSheets.clear();
+	dumpMappingLoaded = false;
+	dumpAtlasFailed = false;
+	extractedSheets.clear();
+}
+
+void CustomTexture::rememberDumpedTexture(u32 hash, int width, int height)
+{
+	if (dumpedTextureSizes.size() >= 4096 && dumpedTextureSizes.count(hash) == 0)
+		return;
+	const std::pair<int, int> dimensions { width, height };
+	const auto previous = dumpedTextureSizes.find(hash);
+	if (previous != dumpedTextureSizes.end() && previous->second != dimensions)
+		atlasDetectors.erase(hash);
+	dumpedTextureSizes[hash] = dimensions;
+}
+
 void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, void *srcBuffer)
 {
 	if (!config::DumpTextures)
@@ -870,12 +935,34 @@ void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, voi
 		return;
 
 	baseDumpDir += gameId + "/";
+	setDumpDirectory(baseDumpDir);
 	if (!file_exists(baseDumpDir))
 		make_directory(baseDumpDir);
 
 	std::ostringstream path;
 	path.imbue(std::locale::classic());
 	path << baseDumpDir << std::hex << texture->texture_hash << ".png";
+	if (config::SplitTextureSheets && file_exists(path.str()))
+	{
+		// Persisted mappings refer to this PNG's coordinate basis, even if CPU upscaling changed.
+		if (!dumpAtlasFailed)
+		{
+			try
+			{
+				const auto [width, height] = imageDimensions(path.str());
+				if (width > 8192 || height > 8192)
+					throw std::runtime_error("dumped sheet exceeds supported dimensions");
+				rememberDumpedTexture(texture->texture_hash, width, height);
+			}
+			catch (const std::exception& exception)
+			{
+				dumpAtlasFailed = true;
+				WARN_LOG(RENDERER, "Texture sheet extraction: %s", exception.what());
+				reportError(CustomTextureException::Error::AtlasMapping);
+			}
+		}
+		return;
+	}
 
 	u16 *src = (u16 *)srcBuffer;
 	u8 *dstBuffer = (u8 *)malloc(w * h * 4);	// 32-bit per pixel
@@ -977,15 +1064,8 @@ void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, voi
 
 	if (writeAtlasPng(path.str(), w, h, dstBuffer, 0))
 	{
-		if (config::SplitTextureSheets
-				&& (dumpedTextureSizes.size() < 4096 || dumpedTextureSizes.count(texture->texture_hash) != 0))
-		{
-			const std::pair<int, int> dimensions { w, h };
-			const auto previous = dumpedTextureSizes.find(texture->texture_hash);
-			if (previous != dumpedTextureSizes.end() && previous->second != dimensions)
-				atlasDetectors.erase(texture->texture_hash);
-			dumpedTextureSizes[texture->texture_hash] = dimensions;
-		}
+		if (config::SplitTextureSheets)
+			rememberDumpedTexture(texture->texture_hash, w, h);
 	}
 	else
 		WARN_LOG(RENDERER, "Cannot save texture dump: %s", path.str().c_str());
@@ -997,9 +1077,12 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 		const RenderPass& previousPass, const RenderPass& pass)
 {
 	const std::string gameId = getGameId();
-	if (gameId.empty() || dumpedTextureSizes.empty() || dumpAtlasFailed)
+	if (gameId.empty())
 		return;
 	const std::string directory = hostfs::getTextureDumpPath() + gameId + "/";
+	setDumpDirectory(directory);
+	if (dumpedTextureSizes.empty() || dumpAtlasFailed)
+		return;
 	const std::string mappingPath = directory + texture_atlas::MappingFilename;
 	try
 	{
@@ -1061,14 +1144,14 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 					? texture_atlas::Sheet { hash, static_cast<u32>(dimensions.first), static_cast<u32>(dimensions.second), {} }
 					: *existing;
 			if (sheet.width != static_cast<u32>(dimensions.first) || sheet.height != static_cast<u32>(dimensions.second))
-				continue; // Never reuse crop coordinates after changing the dump's source resolution.
+				throw std::runtime_error("dumped sheet dimensions do not match the saved atlas mapping");
 			bool sheetChanged = false;
 			for (const auto& region : regions)
 				sheetChanged |= texture_atlas::addRegion(sheet, region);
 			if (!sheetChanged && extractedSheets.count(hash) != 0)
 				continue;
 			const auto original = decodeImageToRGBA(hash,
-					readFile({ CustomTextureSourceKind::Png, directory + texture_atlas::imageFilename(hash) }),
+					readFile({ CustomTextureSourceKind::Png, directory + texture_atlas::imageFilename(hash) }, 512ull * 1024 * 1024),
 					CustomTextureCapabilities::rgbaOnly(CustomTextureBackend::Unknown, 8192));
 			if (original->width != sheet.width || original->height != sheet.height)
 				throw std::runtime_error("dumped sheet dimensions changed during extraction");

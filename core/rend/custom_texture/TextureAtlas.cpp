@@ -210,8 +210,23 @@ std::string writeMapping(const std::vector<Sheet>& sheets)
 	return nlohmann::json({ { "version", 1 }, { "sheets", std::move(entries) } }).dump(2) + '\n';
 }
 
+std::pair<uint32_t, uint32_t> scaledDimensions(const Sheet& sheet, uint32_t numerator, uint32_t denominator,
+		uint32_t maxWidth, uint32_t maxHeight)
+{
+	if (sheet.width == 0 || sheet.height == 0 || sheet.width > 16384 || sheet.height > 16384
+			|| numerator == 0 || denominator == 0)
+		throw std::runtime_error("invalid atlas dimensions or scale");
+	const uint64_t width = (uint64_t(sheet.width) * numerator + denominator / 2) / denominator;
+	const uint64_t height = (uint64_t(sheet.height) * numerator + denominator / 2) / denominator;
+	if (width == 0 || height == 0 || width > maxWidth || height > maxHeight || width > 16384 || height > 16384
+			|| width * height * 4 > MaxImageBytes)
+		throw std::runtime_error("rebuilt atlas exceeds renderer or memory limits");
+	return { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
+}
+
 Image rebuild(const Sheet& sheet, const Image& original,
-		const std::vector<std::optional<Image>>& tiles, uint32_t maxWidth, uint32_t maxHeight)
+		const std::vector<std::optional<Image>>& tiles, uint32_t maxWidth, uint32_t maxHeight,
+		const std::function<bool()>& cancelled)
 {
 	validateImage(original);
 	if (original.width != sheet.width || original.height != sheet.height || tiles.size() != sheet.regions.size())
@@ -240,10 +255,7 @@ Image rebuild(const Sheet& sheet, const Image& original,
 		// Round consistently so adjacent regions retain a shared boundary.
 		return (uint64_t(value) * numerator + denominator / 2) / denominator;
 	};
-	const uint64_t width = scaled(sheet.width), height = scaled(sheet.height);
-	if (width == 0 || height == 0 || width > maxWidth || height > maxHeight || width > 16384 || height > 16384
-			|| width * height * 4 > MaxImageBytes)
-		throw std::runtime_error("rebuilt atlas exceeds renderer or memory limits");
+	const auto [width, height] = scaledDimensions(sheet, numerator, denominator, maxWidth, maxHeight);
 	for (size_t i = 0; i < tiles.size(); i++)
 		if (tiles[i])
 		{
@@ -251,14 +263,20 @@ Image rebuild(const Sheet& sheet, const Image& original,
 			if (scaled(region.x) + tiles[i]->width > width || scaled(region.y) + tiles[i]->height > height)
 				throw std::runtime_error("scaled atlas piece extends outside its sheet");
 		}
-	Image output { static_cast<uint32_t>(width), static_cast<uint32_t>(height), {} };
-	output.pixels.resize(static_cast<size_t>(width * height * 4));
+	if (cancelled && cancelled())
+		return {};
+	Image output { width, height, {} };
+	output.pixels.resize(size_t(width) * height * 4);
 	// Keep unknown/missing regions intact, scaling their original pixels to the same size.
 	for (uint32_t y = 0; y < output.height; y++)
+	{
+		if (cancelled && cancelled())
+			return {};
 		for (uint32_t x = 0; x < output.width; x++)
 			std::copy_n(&original.pixels[(size_t(uint64_t(y) * denominator / numerator) * sheet.width
 					+ uint64_t(x) * denominator / numerator) * 4], 4,
 					&output.pixels[(size_t(y) * output.width + x) * 4]);
+	}
 	for (size_t i = 0; i < tiles.size(); i++)
 	{
 		if (!tiles[i])
@@ -267,8 +285,12 @@ Image rebuild(const Sheet& sheet, const Image& original,
 		const Image& tile = *tiles[i];
 		const size_t left = static_cast<size_t>(scaled(region.x)), top = static_cast<size_t>(scaled(region.y));
 		for (uint32_t y = 0; y < tile.height; y++)
+		{
+			if (cancelled && cancelled())
+				return {};
 			std::copy_n(&tile.pixels[size_t(y) * tile.width * 4], size_t(tile.width) * 4,
 					&output.pixels[((top + y) * output.width + left) * 4]);
+		}
 	}
 	return output;
 }

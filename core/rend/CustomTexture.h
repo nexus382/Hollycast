@@ -151,6 +151,8 @@ private:
 	std::string getGameId() const;
 	void startSession(const std::string& gameId);
 	void clearSessionResources();
+	void setDumpDirectory(const std::string& directory);
+	void rememberDumpedTexture(u32 hash, int width, int height);
 	void prepareSource(BaseCustomTextureSource* source, bool shouldPreload);
 	void submitGpuPreload(u32 hash, PreparedCustomTexture::Ptr texture);
 	bool consumeGpuCleanupOperations();
@@ -161,6 +163,7 @@ private:
 	std::string sessionGameId;
 	bool sessionCustomTextures = false;
 	bool sessionSplitTextureSheets = false;
+	std::string dumpDirectory;
 	bool dumpMappingLoaded = false;
 	bool dumpAtlasFailed = false;
 	std::unordered_set<u32> extractedSheets;

@@ -11,6 +11,8 @@ The title's normal dump folder receives:
 
 Coordinates in the mapping and filenames are measured from the top-left of the dumped PNG. Keep filenames unchanged. The mapping stays beside the images; no separate installation location is needed.
 
+With splitting enabled, an existing parent PNG and existing pieces are preserved when dumping again. The saved parent's dimensions remain the coordinate basis even if the CPU texture upscaling setting changes. Use a fresh dump folder to start over at a different source resolution. Changing the dump folder during gameplay starts an independent mapping there as textures are dumped again.
+
 Upscale or edit the individual pieces, then copy **the mapping, original sheets and pieces** into that title's usual replacement folder (`data/textures/<game id>`). Keep the original sheets at their dumped dimensions. All supplied pieces from a particular sheet must use exactly the same scale in both dimensions. Different sheets can use different scales. For example, at 4×, a 32×32 piece must be 128×128 and a 64×32 piece must be 256×128.
 
 Enable **Load Custom Textures** and **Split Texture Sheets**, then start the title. Hollycast rebuilds each sheet in memory before uploading it, including when preloading textures. Missing pieces and areas outside the extracted rectangles retain the original sheet's pixels, resized with nearest-neighbor sampling to the selected scale. Mismatched scales, changed aspect ratios, invalid mappings and renderer size limits cause the sheet replacement to be rejected with a notification and details in the log. Fractional scales are supported; sheet and crop positions are rounded to the nearest output pixel when needed.

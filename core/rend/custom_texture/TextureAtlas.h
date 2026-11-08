@@ -3,9 +3,11 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace texture_atlas
@@ -47,7 +49,11 @@ struct Image
 	std::vector<uint8_t> pixels;
 };
 
+std::pair<uint32_t, uint32_t> scaledDimensions(const Sheet& sheet, uint32_t numerator, uint32_t denominator,
+		uint32_t maxWidth, uint32_t maxHeight);
 // All images and mapping rectangles use top-left image coordinates.
+// Cancellation returns an empty image without retaining a partially rebuilt sheet.
 Image rebuild(const Sheet& sheet, const Image& original,
-		const std::vector<std::optional<Image>>& tiles, uint32_t maxWidth, uint32_t maxHeight);
+		const std::vector<std::optional<Image>>& tiles, uint32_t maxWidth, uint32_t maxHeight,
+		const std::function<bool()>& cancelled = {});
 }

@@ -47,6 +47,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/oslib/DirectoryTest.cpp
         src/rend/SampleTextureFilterTest.cpp
         src/rend/TextureAtlasTest.cpp
+        src/rend/CustomTextureDumpTest.cpp
         src/ui/BoxartTest.cpp
         src/ui/ScreenScraperTest.cpp
         src/ui/LaunchBoxTest.cpp
