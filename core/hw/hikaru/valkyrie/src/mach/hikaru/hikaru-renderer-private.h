@@ -46,6 +46,8 @@ enum {
 	HR_NUM_DEBUG_VARS
 };
 
+enum { HIKARU_DRAW_PALETTE_SIZE = 16 };
+
 typedef union {
 	struct {
 		uint64_t has_texture		: 1;
@@ -78,6 +80,9 @@ typedef union {
 		uint64_t shading_mode		: 2;
 		uint64_t alpha_mode		: 1;
 		uint64_t texture_mode		: 3;
+		uint64_t has_draw_palette	: 1;
+		uint64_t has_texture_palette	: 1;
+		uint64_t has_shading_palette	: 1;
 	};
 	uint64_t full;
 } hikaru_glsl_variant_t;
@@ -105,11 +110,16 @@ typedef struct {
  * switches. Relinking or direct uniform writes invalidate their cache. */
 typedef struct {
 	bool viewport_valid, modelview_valid[2], lightset_valid, ambient_valid;
-	bool blend_valid, peel_valid, depth_valid;
+	bool blend_valid, peel_valid, depth_valid, family_valid;
+	vec3f_t family;
+	float sort_scale;
 	vec2f_t depth;
 	hikaru_viewport_t viewport;
 	float alpha_ref;
 	mtx4x4f_t modelview[2];
+	unsigned palette_counts[3];
+	mtx4x4f_t palette_modelviews[2][HIKARU_DRAW_PALETTE_SIZE];
+	vec2f_t palette_depths[HIKARU_DRAW_PALETTE_SIZE];
 	hikaru_lightset_t lightset;
 	unsigned light_debug_flags;
 	vec3f_t ambient;
@@ -135,6 +145,9 @@ typedef struct {
 	hikaru_vertex_body_t *cpu_vertices;
 	bool			has_two_sided_lighting;
 	uint8_t			pattern;
+	/* Selected modelviews in finalized vertices: primary/alternate bits;
+	 * zero means unknown and keeps both uploads for legacy/test meshes. */
+	uint8_t			matrix_usage;
 	uint32_t		num;
 } hikaru_mesh_t;
 
@@ -147,6 +160,8 @@ typedef struct {
 	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref, u_weigh_by_alpha, u_force_coverage, u_pattern, u_lod_bias;
 	GLuint u_peel_enabled, u_peel_first, u_peel_size, u_peel_depth, u_peel_opaque_depth;
 	GLuint u_depth, u_sort_scale, u_family, u_family_other;
+	GLuint u_draw_depth;
+	GLuint u_textures, u_texture_modes, u_shading_modes;
 } hikaru_uniform_locations_t;
 
 typedef struct {
@@ -237,6 +252,36 @@ typedef struct {
 	} peel;
 	struct {
 		bool enabled, configured;
+		bool auxiliary_textures_valid;
+		GLuint auxiliary_textures[3];
+		bool texture_binding_valid, blend_function_valid;
+		bool viewport_valid;
+		GLint viewport[4];
+		GLuint texture_binding;
+		GLuint program;
+		unsigned blend_mode;
+		/* Sixteen records bound indirect-uniform working storage; vertices
+		 * vectors including projection. Vertices keep their exact order. */
+		bool palette_enabled;
+		bool texture_palette_enabled;
+		bool shading_palette_enabled;
+		int shading_modes[HIKARU_DRAW_PALETTE_SIZE];
+		GLuint texture_ids[HIKARU_DRAW_PALETTE_SIZE];
+		int texture_modes[HIKARU_DRAW_PALETTE_SIZE];
+		hikaru_texture_t *textures[HIKARU_DRAW_PALETTE_SIZE];
+		const hikaru_texhead_t *texture_heads[HIKARU_DRAW_PALETTE_SIZE];
+		GLuint texture_bindings[HIKARU_DRAW_PALETTE_SIZE];
+		GLuint sampler_bindings[HIKARU_DRAW_PALETTE_SIZE];
+		struct { GLuint id; GLenum wrap_s, wrap_t; GLint mag_filter, min_filter; float lod_bias; } samplers[64];
+		unsigned sampler_count, sampler_cursor;
+		bool texture_bindings_valid;
+		unsigned palette_count;
+		unsigned matrix_usage;
+		mtx4x4f_t modelviews[HIKARU_DRAW_PALETTE_SIZE], alternate_modelviews[HIKARU_DRAW_PALETTE_SIZE];
+		vec2f_t depths[HIKARU_DRAW_PALETTE_SIZE];
+		uint8_t *draw_states;
+		size_t *run_ends, palette_capacity;
+		GLuint state_vbo;
 		hikaru_mesh_t *mesh;
 		unsigned first, count, instance;
 		GLuint vao, vbo;

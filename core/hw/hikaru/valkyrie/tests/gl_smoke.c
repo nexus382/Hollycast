@@ -422,9 +422,9 @@ static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_
  }
  const hikaru_mesh_t *first_mesh=&first->capture->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
  const hikaru_mesh_t *second_mesh=&second->capture->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][0];
- if(first_mesh->vertex_chunk!=1||first_mesh->cpu_vertices||
-    second_mesh->vertex_chunk!=1||second_mesh->cpu_vertices){
-  fprintf(stderr,"opaque packets did not use chunk-only vertex storage\n");ok=0;goto cleanup;
+ if(first_mesh->vertex_chunk!=1||first_mesh->cpu_vertices||first_mesh->matrix_usage!=3||
+    second_mesh->vertex_chunk!=1||second_mesh->cpu_vertices||second_mesh->matrix_usage!=3){
+  fprintf(stderr,"opaque packet vertex storage or selector metadata incorrect\n");ok=0;goto cleanup;
  }
  const unsigned chunk=first_mesh->vertex_chunk-1;
  const size_t triangle_bytes=3*sizeof(hikaru_vertex_body_t);
@@ -474,7 +474,7 @@ static int frame_packet_3d_pixels(HikaruEngine *engine,hikaru_gpu_t *gpu,uint32_
   fprintf(stderr,"destroying an abandoned CPU packet affected owner graphics objects\n");ok=0;goto cleanup;
  }
  if(hikaru_engine_draw_frame(engine,second,error,sizeof(error))||!read_frame_pixel(target,pixel)||
-    !frame_pixel_close(pixel,blue,3)||
+    !frame_pixel_close(pixel,blue,3)||second_mesh->matrix_usage!=3||
     !frame_packet_stream_matches(owner,chunk,stream_test_vbo,stream_test_vao,second_vertices,grown_bytes)){
   fprintf(stderr,"packet N+1 reuse/growth: got %u,%u,%u,%u, stable=%d (%s)\n",
           pixel[0],pixel[1],pixel[2],pixel[3],

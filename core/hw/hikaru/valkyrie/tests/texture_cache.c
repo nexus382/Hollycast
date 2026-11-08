@@ -207,7 +207,9 @@ static void failed_upload_and_cpu_dirty(hikaru_renderer_t *renderer)
     const unsigned prior_deletes = deleted;
     const uint64_t prior_uploads = renderer->textures.uploads;
     wanted.format = 7;
+    renderer->triangle_replay.texture_binding_valid = true;
     CHECK(get_texture(renderer, &wanted) == NULL);
+    CHECK(!renderer->triangle_replay.texture_binding_valid);
     CHECK(deleted - prior_deletes == 1);
     CHECK(renderer->textures.uploads == prior_uploads);
     check_cache(renderer, 1);
@@ -216,14 +218,18 @@ static void failed_upload_and_cpu_dirty(hikaru_renderer_t *renderer)
     vk_buffer_t *other_bank = renderer->gpu->texram[1];
     renderer->gpu->texram[1] = NULL;
     wanted.format = HIKARU_FORMAT_ABGR4444;
+    renderer->triangle_replay.texture_binding_valid = true;
     CHECK(get_texture(renderer, &wanted) == NULL);
+    CHECK(!renderer->triangle_replay.texture_binding_valid);
     renderer->gpu->texram[1] = other_bank;
     CHECK(deleted - prior_deletes == 2);
     texture = get_texture(renderer, &original);
     CHECK(texture && texture->id == original_id);
     CHECK(renderer->textures.uploads == prior_uploads);
     check_cache(renderer, 1);
+    renderer->triangle_replay.texture_binding_valid = true;
     CHECK(get_texture(renderer, &wanted) != NULL);
+    CHECK(!renderer->triangle_replay.texture_binding_valid);
     check_cache(renderer, 2);
 
     /* Failure while replacing one of two live layouts also keeps the other. */
@@ -321,6 +327,7 @@ int main(void)
         gpu->texram[bank] = vk_buffer_le32_new(4u * 1024 * 1024, 0);
     if (!gpu->texram[0] || !gpu->texram[1]) { ++failures; goto cleanup; }
     const HikaruGraphicsDispatch *previous = hikaru_graphics_set_dispatch(&dispatch);
+    CHECK(!hikaru_graphics_supports_draw_palette());
     sparse_boundaries(renderer);
     overlap_cases(renderer);
     alternating_layouts(renderer);

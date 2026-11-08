@@ -11,6 +11,12 @@ extern "C" {
 void hikaru_graphics_begin_occlusion(GLuint query[2]);
 GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]);
 void hikaru_graphics_delete_occlusion(GLuint query[2]);
+// Direct GL/GLES implements the matrix palette in GLSL. Native dispatchers
+// retain their existing vertex/uniform contract until they support it too.
+GLboolean hikaru_graphics_supports_draw_palette(void);
+// Own attribute 9 only on direct GL. Nonzero leaves ARRAY_BUFFER bound to it;
+// callers restore their ordinary vertex buffer before configuring attributes.
+void hikaru_graphics_bind_draw_palette(GLuint state_buffer);
 typedef struct HikaruGraphicsDispatch {
     void (*BeginOcclusion)(void);
     GLboolean (*EndOcclusion)(void);

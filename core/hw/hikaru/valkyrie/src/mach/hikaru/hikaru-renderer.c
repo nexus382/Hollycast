@@ -133,8 +133,7 @@ get_uniform_loc (GLuint prog, const char *id)
 ****************************************************************************/
 
 static bool
-is_texhead_eq (hikaru_renderer_t *hr,
-               hikaru_texhead_t *a, hikaru_texhead_t *b)
+is_texhead_eq (const hikaru_texhead_t *a, const hikaru_texhead_t *b)
 {
 	return (a->format == b->format) &&
 	       (a->logw == b->logw) &&
@@ -450,7 +449,7 @@ int hikaru_vendor_test_same_texture_state(uint32_t left, uint32_t right)
 {
     hikaru_texhead_t a = {0}, b = {0};
     a._2C1 = left; b._2C1 = right;
-    return is_texhead_eq(NULL, &a, &b);
+    return is_texhead_eq(&a, &b);
 }
 int hikaru_vendor_test_texture_wrap_changed(uint32_t left, uint32_t right)
 {
@@ -590,6 +589,9 @@ upload_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 	get_texhead_coords (&basex, &basey, th);
 	bank = th->bank;
 
+	/* Uploads bind unit zero even when they later fail. A replay binding from
+	 * the preceding draw cannot remain authoritative across that operation. */
+	hr->triangle_replay.texture_binding_valid = false;
 	glGenTextures (1, &id);
 	VK_ASSERT_NO_GL_ERROR ();
 
@@ -736,7 +738,7 @@ get_texture (hikaru_renderer_t *hr, hikaru_texhead_t *th)
 	for (unsigned way = 0; way < num_layouts; ++way) {
 		if (!layouts[way].id) {
 			if (empty == num_layouts) empty = way;
-		} else if (is_texhead_eq (hr, th, &layouts[way].th)) {
+		} else if (is_texhead_eq (th, &layouts[way].th)) {
 			hr->textures.most_recent[bank][sloty][slotx] = way;
 			return &layouts[way];
 		}
@@ -944,8 +946,21 @@ static const char *mesh_vs_source =
 %s										\n \
 										\n \
 uniform mat4 u_projection;							\n \
-uniform mat4 u_modelview; uniform mat4 u_modelview_alternate;							\n \
-uniform mat3 u_normal; uniform mat3 u_normal_alternate;								\n \
+#if HAS_DRAW_PALETTE\n \
+uniform mat4 u_modelview_palette[DRAW_PALETTE_SIZE];\n \
+uniform mat4 u_modelview_alternate_palette[DRAW_PALETTE_SIZE];\n \
+uniform mat3 u_normal_palette[DRAW_PALETTE_SIZE];\n \
+uniform mat3 u_normal_alternate_palette[DRAW_PALETTE_SIZE];\n \
+uniform vec2 u_draw_depth[DRAW_PALETTE_SIZE];\n \
+in float i_draw_state; flat out vec2 p_draw_depth;\n #if HAS_TEXTURE_PALETTE\n uniform int u_texture_modes[DRAW_PALETTE_SIZE]; flat out int p_draw_index; flat out int p_texture_mode;\n #endif\n #if HAS_SHADING_PALETTE\n uniform int u_shading_modes[DRAW_PALETTE_SIZE]; flat out int p_shading_mode;\n #endif\n \
+#define u_modelview u_modelview_palette[draw_index]\n \
+#define u_modelview_alternate u_modelview_alternate_palette[draw_index]\n \
+#define u_normal u_normal_palette[draw_index]\n \
+#define u_normal_alternate u_normal_alternate_palette[draw_index]\n \
+#else\n \
+uniform mat4 u_modelview; uniform mat4 u_modelview_alternate;\n \
+uniform mat3 u_normal; uniform mat3 u_normal_alternate;\n \
+#endif								\n \
 										\n \
 in vec3 i_position;					\n \
 in vec3 i_normal;						\n \
@@ -966,6 +981,10 @@ out vec2 p_texcoords;								\n \
 out float p_alpha;								\n \
 										\n \
 void main (void) {								\n \
+#if HAS_DRAW_PALETTE\n \
+	int draw_index = int(i_draw_state + 0.5);\n \
+	p_draw_depth = u_draw_depth[draw_index];\n #if HAS_TEXTURE_PALETTE\n 	p_draw_index = draw_index; p_texture_mode = u_texture_modes[draw_index];\n #endif\n #if HAS_SHADING_PALETTE\n 	p_shading_mode = u_shading_modes[draw_index];\n #endif\n \
+#endif\n \
 	int sel = int (i_matrix_select + 0.5);\n \
 	if (sel == 1) p_position = u_modelview_alternate * vec4 (i_position, 1.0);\n \
 	else if (sel == 0) p_position = u_modelview * vec4 (i_position, 1.0);\n \
@@ -1013,7 +1032,7 @@ struct light_t {								\n \
 										\n \
 uniform light_t		u_lights[4];						\n \
 uniform vec3		u_ambient;						\n \
-uniform sampler2D	u_texture;						\n \
+uniform sampler2D	u_texture;						\n #if HAS_TEXTURE_PALETTE\n uniform sampler2D u_textures[DRAW_PALETTE_SIZE]; flat in int p_draw_index; flat in int p_texture_mode;\n #endif\n #if HAS_SHADING_PALETTE\n flat in int p_shading_mode;\n #endif\n \
 uniform vec2		u_fog;							\n \
 uniform float		u_alpha_ref;							\n \
 uniform float		u_weigh_by_alpha; uniform float u_force_coverage; uniform float u_pattern; uniform float u_lod_bias;	\n \
@@ -1021,6 +1040,14 @@ uniform vec3		u_fog_color;						\n \
 uniform int u_peel_enabled; uniform int u_peel_first; uniform vec2 u_peel_size;\n \
 uniform sampler2D u_peel_depth; uniform sampler2D u_peel_opaque_depth;\n \
 uniform vec2 u_depth; uniform float u_sort_scale;\n \
+#if HAS_DRAW_PALETTE\n \
+flat in vec2 p_draw_depth;\n \
+#define DRAW_DEPTH_SCALE p_draw_depth.x\n \
+#define DRAW_SORT_SCALE p_draw_depth.y\n \
+#else\n \
+#define DRAW_DEPTH_SCALE u_depth.y\n \
+#define DRAW_SORT_SCALE u_sort_scale\n \
+#endif\n \
 uniform vec3 u_family; uniform usampler2D u_family_other;\n \
 										\n \
 in vec4 p_position;								\n \
@@ -1092,20 +1119,40 @@ float window_depth(float z) {\n \
     float encoded = clamp(log2(1.0 + z) / log2(100001.0), 0.0, 1.0);\n \
     return roundEven(mix(gl_DepthRange.near, gl_DepthRange.far, encoded) * 16777215.0) / 16777215.0;\n \
 }\n \
+#if HAS_TEXTURE_PALETTE\n \
+vec4 hikaru_palette_texture(int slot, vec2 uv) {\n \
+ if (slot == 0) return texture(u_textures[0], uv);\n \
+ else if (slot == 1) return texture(u_textures[1], uv);\n \
+ else if (slot == 2) return texture(u_textures[2], uv);\n \
+ else if (slot == 3) return texture(u_textures[3], uv);\n \
+ else if (slot == 4) return texture(u_textures[4], uv);\n \
+ else if (slot == 5) return texture(u_textures[5], uv);\n \
+ else if (slot == 6) return texture(u_textures[6], uv);\n \
+ else if (slot == 7) return texture(u_textures[7], uv);\n \
+ else if (slot == 8) return texture(u_textures[8], uv);\n \
+ else if (slot == 9) return texture(u_textures[9], uv);\n \
+ else if (slot == 10) return texture(u_textures[10], uv);\n \
+ else if (slot == 11) return texture(u_textures[11], uv);\n \
+ else if (slot == 12) return texture(u_textures[12], uv);\n \
+ else if (slot == 13) return texture(u_textures[13], uv);\n \
+ else if (slot == 14) return texture(u_textures[14], uv);\n \
+ return texture(u_textures[15], uv);\n \
+}\n \
+#endif\n \
 void main(void)									\n \
 {										\n \
     /* Clipping is unchanged; placement and translucent ordering are distinct. */\n \
     float eye_z = max(u_depth.x, -p_position.z);\n \
-    float placement_depth = window_depth(max(u_depth.x, eye_z * u_depth.y));\n \
+    float placement_depth = window_depth(max(u_depth.x, eye_z * DRAW_DEPTH_SCALE));\n \
     float placement_code = roundEven(placement_depth * 16777215.0);\n \
     float written_depth = placement_depth;\n \
-    if (u_sort_scale > 0.0 && u_sort_scale != u_depth.y)\n \
-        written_depth = window_depth(max(u_depth.x, eye_z * u_sort_scale));\n \
+    if (DRAW_SORT_SCALE > 0.0 && DRAW_SORT_SCALE != DRAW_DEPTH_SCALE)\n \
+        written_depth = window_depth(max(u_depth.x, eye_z * DRAW_SORT_SCALE));\n \
     float depth_code = roundEven(written_depth * 16777215.0);\n \
     gl_FragDepth = written_depth;\n \
     uint raw_code = 0u;\n \
     if (u_family.y != 0.0 || u_family.x > 1.0)\n \
-        raw_code = u_depth.y == 1.0 ? uint(placement_code) : uint(roundEven(window_depth(eye_z) * 16777215.0));\n \
+        raw_code = DRAW_DEPTH_SCALE == 1.0 ? uint(placement_code) : uint(roundEven(window_depth(eye_z) * 16777215.0));\n \
     vk_frag_metadata = uvec2(raw_code, uint(u_family.z + 0.5));\n \
     if (u_family.x != 0.0) {\n \
         vec2 coordinate = gl_FragCoord.xy / u_peel_size;\n \
@@ -1130,12 +1177,25 @@ void main(void)									\n \
 	vec3 base;\n \
 	float alpha;\n \
 #if HAS_TEXTURE\n \
+#if HAS_TEXTURE_PALETTE\n \
+ texel = hikaru_palette_texture(p_draw_index, p_texcoords);\n \
+#else\n \
 #ifdef GL_ES\n \
 	texel = texture(u_texture, p_texcoords, u_lod_bias);\n \
 #else\n \
 	texel = texture(u_texture, p_texcoords);\n \
 #endif\n \
+#endif\n \
+#if HAS_TEXTURE_PALETTE\n \
+ base = texel.rgb; alpha = texel.a * p_alpha;\n \
+ if (p_texture_mode == 1) { base = mix(p_diffuse, texel.rgb, texel.a); alpha = p_alpha; }\n \
+ if (p_texture_mode == 2) { base = texel.rgb * p_ambient; }\n \
+ if (p_texture_mode == 3) { base = p_diffuse; }\n \
+ if (p_texture_mode == 4) { base = mix(p_diffuse, p_ambient, texel.rgb); }\n \
 #if ALPHA_MODE\n \
+ base = mix(p_diffuse, texel.rgb, p_alpha); alpha = texel.a;\n \
+#endif\n \
+#elif ALPHA_MODE\n \
 	base = mix(p_diffuse, texel.rgb, p_alpha);\n \
 	alpha = texel.a;\n \
 #elif TEXTURE_MODE == 1\n \
@@ -1161,11 +1221,16 @@ void main(void)									\n \
 	base = p_diffuse;\n \
 	alpha = p_alpha;\n \
 #endif\n \
-#if SHADING_MODE != 0\n \
+#if HAS_SHADING_PALETTE\n \
+ int shading_mode_rt = p_shading_mode;\n \
+#else\n \
+ int shading_mode_rt = SHADING_MODE;\n \
+#endif\n \
+ if (shading_mode_rt != 0) {\n \
 	vec3 diffuse = vec3(0.0), specular = vec3(0.0);\n \
 	/* 691 is ambient/emission in units of 1/255, carried as UNORM16. */\n \
-	vec3 ambient = SHADING_MODE == 1 ? u_ambient * p_unknown * 257.0 : vec3(0.0);\n \
-	vec3 emission = SHADING_MODE == 2 ? p_unknown * 257.0 : vec3(0.0);\n \
+	vec3 ambient = shading_mode_rt == 1 ? u_ambient * p_unknown * 257.0 : vec3(0.0);\n \
+	vec3 emission = shading_mode_rt == 2 ? p_unknown * 257.0 : vec3(0.0);\n \
 #if HAS_LIGHT0									\n \
 	apply_light (diffuse, specular, u_lights[0], LIGHT0_TYPE, LIGHT0_ATT_TYPE, HAS_LIGHT0_SPECULAR);		\n \
 #endif										\n \
@@ -1180,12 +1245,10 @@ void main(void)									\n \
 #endif										\n \
 										\n \
 	color = vec4((ambient + diffuse + emission) * base, alpha);\n \
-#if SHADING_MODE != 3\n \
-	color.rgb += specular;\n \
-#endif\n \
-#else\n \
+ if (shading_mode_rt != 3) color.rgb += specular;\n \
+ } else {\n \
 	color = vec4(base, alpha);\n \
-#endif\n \
+ }\n \
 #if HAS_FOG									\n \
 	float z = -p_position.z;				\n \
 	float a = clamp (u_fog.x * (z - u_fog.y), 0.0, 1.0);			\n \
@@ -1224,6 +1287,18 @@ get_light_type (hikaru_light_t *lit)
 	return HIKARU_LIGHT_TYPE_DIRECTIONAL;
 }
 
+/* Disabled slots are not read by the shader. Their retained payload must not
+ * split draws or invalidate the uniforms for otherwise identical active lights. */
+static bool
+same_lightset_draw_state(const hikaru_lightset_t *a, const hikaru_lightset_t *b)
+{
+	if (a->mask != b->mask) return false;
+	for (unsigned i = 0; i < NUMELEM(a->lights); ++i)
+		if (!(a->mask & (1u << i)) && memcmp(&a->lights[i], &b->lights[i], sizeof(a->lights[i])))
+			return false;
+	return true;
+}
+
 static hikaru_glsl_variant_t
 get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_available)
 {
@@ -1234,6 +1309,7 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_avail
 	VK_ASSERT (mesh->vp_index != ~0);
 
 	variant.full = 0;
+	variant.has_draw_palette = hr->triangle_replay.palette_enabled;
 	variant.has_pattern = (mesh->pattern & 15) != 0;
 
 	if (mesh->mat_index == ~0) {
@@ -1265,6 +1341,15 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_avail
 		static const unsigned modes[8] = {0, 1, 2, 0, 3, 4, 0, 0};
 		variant.texture_mode = modes[hr->tex_list[mesh->tex_index]._2C1 >> 29];
 	}
+	/* Sorted replay can select each record's texture in the shader, so the
+	 * mode moves from a compile-time variant to a per-record uniform. */
+	variant.has_shading_palette = hr->triangle_replay.shading_palette_enabled;
+	if (variant.has_shading_palette)
+		variant.has_lighting = ls->mask != 0xF &&
+		                       !hr->debug.flags[HR_DEBUG_NO_LIGHTING];
+	variant.has_texture_palette = variant.has_texture &&
+	                              hr->triangle_replay.texture_palette_enabled;
+	if (variant.has_texture_palette) variant.texture_mode = 0;
 
 	/* 881 bit 18 requests fog; 621 bit 17 disables its viewport colour.
 	 * The guest supplies a start depth and inverse range in eye space. */
@@ -1277,24 +1362,32 @@ get_glsl_variant (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_avail
 	variant.has_phong		= mat->shading_mode == 2;
 
 	variant.has_light0		= !(ls->mask & (1 << 0));
-	variant.light0_type		= get_light_type (&ls->lights[0]);
-	variant.light0_att_type		= get_light_attenuation_type (&ls->lights[0]);
-	variant.has_light0_specular	= ls->lights[0].has_specular;
+	if (variant.has_light0) {
+		variant.light0_type = get_light_type(&ls->lights[0]);
+		variant.light0_att_type = get_light_attenuation_type(&ls->lights[0]);
+		variant.has_light0_specular = ls->lights[0].has_specular;
+	}
 
 	variant.has_light1		= !(ls->mask & (1 << 1));
-	variant.light1_type		= get_light_type (&ls->lights[1]);
-	variant.light1_att_type		= get_light_attenuation_type (&ls->lights[1]);
-	variant.has_light1_specular	= ls->lights[1].has_specular;
+	if (variant.has_light1) {
+		variant.light1_type = get_light_type(&ls->lights[1]);
+		variant.light1_att_type = get_light_attenuation_type(&ls->lights[1]);
+		variant.has_light1_specular = ls->lights[1].has_specular;
+	}
 
 	variant.has_light2		= !(ls->mask & (1 << 2));
-	variant.light2_type		= get_light_type (&ls->lights[2]);
-	variant.light2_att_type		= get_light_attenuation_type (&ls->lights[2]);
-	variant.has_light2_specular	= ls->lights[2].has_specular;
+	if (variant.has_light2) {
+		variant.light2_type = get_light_type(&ls->lights[2]);
+		variant.light2_att_type = get_light_attenuation_type(&ls->lights[2]);
+		variant.has_light2_specular = ls->lights[2].has_specular;
+	}
 
 	variant.has_light3		= !(ls->mask & (1 << 3));
-	variant.light3_type		= get_light_type (&ls->lights[3]);
-	variant.light3_att_type		= get_light_attenuation_type (&ls->lights[3]);
-	variant.has_light3_specular	= ls->lights[3].has_specular;
+	if (variant.has_light3) {
+		variant.light3_type = get_light_type(&ls->lights[3]);
+		variant.light3_att_type = get_light_attenuation_type(&ls->lights[3]);
+		variant.has_light3_specular = ls->lights[3].has_specular;
+	}
 
 	if (mesh->has_two_sided_lighting)
 		variant.has_two_sided_lighting = 1;
@@ -1414,6 +1507,9 @@ void hikaru_vendor_test_reset_shader_cache(unsigned capacity)
 }
 static unsigned uniform_location_queries;
 static unsigned state_uploads[3]; /* viewport, model matrices, lightset */
+static unsigned palette_uploads[3]; /* primary matrices, alternate matrices, depth */
+static unsigned viewport_updates;
+static unsigned program_binds;
 static unsigned spot_param_uploads, spot_table_uploads;
 void hikaru_vendor_test_spot_upload_counts(unsigned *params, unsigned *tables) { *params = spot_param_uploads; *tables = spot_table_uploads; }
 void hikaru_vendor_test_spot_upload_counts_reset(void) { spot_param_uploads = spot_table_uploads = 0; }
@@ -1424,6 +1520,20 @@ void hikaru_vendor_test_uniform_cache_bypass(bool enabled) { uniform_cache_bypas
 #else
 #define GET_MESH_UNIFORM(program, name) glGetUniformLocation ((program), (name))
 #endif
+
+/* Only sorted replay owns the current mesh program between its draws.
+ * Other passes must always bind, even when their renderer cache matches. */
+static void
+bind_mesh_program(hikaru_renderer_t *hr)
+{
+	if (!hr->triangle_replay.enabled || hr->triangle_replay.program != hr->meshes.program) {
+		glUseProgram(hr->meshes.program);
+		hr->triangle_replay.program = hr->meshes.program;
+#ifdef HIKARU_VENDOR_TESTING
+		++program_binds;
+#endif
+	}
+}
 
 static void
 upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_available)
@@ -1453,7 +1563,11 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	"#define HAS_PATTERN %d\n"
 	"#define SHADING_MODE %d\n"
 	"#define ALPHA_MODE %d\n"
-	"#define TEXTURE_MODE %d\n";
+	"#define TEXTURE_MODE %d\n"
+	"#define HAS_DRAW_PALETTE %d\n"
+	"#define HAS_TEXTURE_PALETTE %d\n"
+	"#define HAS_SHADING_PALETTE %d\n"
+	"#define DRAW_PALETTE_SIZE %u\n";
 
 	hikaru_glsl_variant_t variant;
 	char *definitions, *vs_source, *fs_source;
@@ -1468,7 +1582,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	             sizeof (hr->meshes.locs))) {
 		/* Layer resolve can bind the bitmap program between mesh passes. */
 		program_cache_touch (hr->meshes.cache_slot);
-		glUseProgram(hr->meshes.program);
+		bind_mesh_program(hr);
 		return;
 	}
 
@@ -1485,7 +1599,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 			if (uniform_cache_bypass) { slot = (unsigned)i; goto update_locations; }
 #endif
 			hr->meshes.locs = program_cache[i].locs;
-			glUseProgram (hr->meshes.program);
+			bind_mesh_program(hr);
 			VK_ASSERT_NO_GL_ERROR ();
 			return;
 		}
@@ -1518,7 +1632,8 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	                variant.has_pattern,
 	                variant.shading_mode,
 	                variant.alpha_mode,
-	                variant.texture_mode);
+	                variant.texture_mode,
+ variant.has_draw_palette, variant.has_texture_palette, variant.has_shading_palette, (unsigned)NUMELEM(hr->triangle_replay.depths));
 	if (ret < 0) VK_ABORT("out of memory building shader definitions");
 
 	ret = vk_asprintf (&vs_source, mesh_vs_source, definitions);
@@ -1567,17 +1682,20 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 #ifdef HIKARU_VENDOR_TESTING
 update_locations:
 #endif
-	glUseProgram (hr->meshes.program);
+	/* Evicting any program unbinds GL, and program names can be recycled.
+	 * A rebuilt program must bind regardless of the replay's cached name. */
+	hr->triangle_replay.program = 0;
+	bind_mesh_program(hr);
 	VK_ASSERT_NO_GL_ERROR ();
 
 	hr->meshes.locs.u_projection =
 		GET_MESH_UNIFORM (hr->meshes.program, "u_projection");
 	hr->meshes.locs.u_modelview =
-		GET_MESH_UNIFORM (hr->meshes.program, "u_modelview");
+		GET_MESH_UNIFORM (hr->meshes.program, variant.has_draw_palette ? "u_modelview_palette[0]" : "u_modelview");
 	hr->meshes.locs.u_normal =
-		GET_MESH_UNIFORM (hr->meshes.program, "u_normal");
-	hr->meshes.locs.u_modelview_alternate = GET_MESH_UNIFORM (hr->meshes.program, "u_modelview_alternate");
-	hr->meshes.locs.u_normal_alternate = GET_MESH_UNIFORM (hr->meshes.program, "u_normal_alternate");
+		GET_MESH_UNIFORM (hr->meshes.program, variant.has_draw_palette ? "u_normal_palette[0]" : "u_normal");
+	hr->meshes.locs.u_modelview_alternate = GET_MESH_UNIFORM (hr->meshes.program, variant.has_draw_palette ? "u_modelview_alternate_palette[0]" : "u_modelview_alternate");
+	hr->meshes.locs.u_normal_alternate = GET_MESH_UNIFORM (hr->meshes.program, variant.has_draw_palette ? "u_normal_alternate_palette[0]" : "u_normal_alternate");
 	for (i = 0; i < 4; i++) {
 		char temp[64];
 
@@ -1625,6 +1743,10 @@ update_locations:
 	hr->meshes.locs.u_peel_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_depth");
 	hr->meshes.locs.u_peel_opaque_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_peel_opaque_depth");
 	hr->meshes.locs.u_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_depth");
+	hr->meshes.locs.u_draw_depth = GET_MESH_UNIFORM(hr->meshes.program, "u_draw_depth[0]");
+	hr->meshes.locs.u_textures = GET_MESH_UNIFORM(hr->meshes.program, "u_textures[0]");
+	hr->meshes.locs.u_texture_modes = GET_MESH_UNIFORM(hr->meshes.program, "u_texture_modes[0]");
+	hr->meshes.locs.u_shading_modes = GET_MESH_UNIFORM(hr->meshes.program, "u_shading_modes[0]");
     hr->meshes.locs.u_sort_scale = GET_MESH_UNIFORM(hr->meshes.program, "u_sort_scale");
     hr->meshes.locs.u_family = GET_MESH_UNIFORM(hr->meshes.program, "u_family");
     hr->meshes.locs.u_family_other = GET_MESH_UNIFORM(hr->meshes.program, "u_family_other");
@@ -1632,6 +1754,12 @@ update_locations:
 	program_cache[slot].locs = hr->meshes.locs;
 	/* Sampler units are fixed for the lifetime of this linked program. */
 	glUniform1i(hr->meshes.locs.u_texture, 0);
+	if (hr->meshes.locs.u_textures != (GLuint)-1) {
+		GLint texture_units[HIKARU_DRAW_PALETTE_SIZE];
+		for (unsigned unit = 0; unit < NUMELEM(texture_units); ++unit)
+			texture_units[unit] = (GLint)(4 + unit);
+		glUniform1iv(hr->meshes.locs.u_textures, NUMELEM(texture_units), texture_units);
+	}
 	glUniform1i(hr->meshes.locs.u_peel_depth, 1);
 	glUniform1i(hr->meshes.locs.u_peel_opaque_depth, 2);
     glUniform1i(hr->meshes.locs.u_family_other, 3);
@@ -1665,11 +1793,14 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	glGetIntegerv (GL_CURRENT_PROGRAM, &previous_program);
 	program_cache_test_capacity = 2;
 	uniform_location_queries = 0;
+	hr->triangle_replay.enabled = true;
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint first_program = hr->meshes.program;
 	const hikaru_uniform_locations_t first = hr->meshes.locs;
-	const unsigned locations_per_program = 55;
-	int ok = uniform_location_queries == locations_per_program && first.u_texture == (GLuint)-1 &&
+	const unsigned first_binds = program_binds;
+	upload_glsl_program(hr, &mesh, true);
+	const unsigned locations_per_program = 59;
+	int ok = program_binds == first_binds && uniform_location_queries == locations_per_program && first.u_texture == (GLuint)-1 &&
 	      first.u_depth == (GLuint)glGetUniformLocation(first_program, "u_depth");
 	material.has_texture = 1;
 	upload_glsl_program (hr, &mesh, true);
@@ -1688,8 +1819,10 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 	hr->debug.flags[HR_DEBUG_FOG] = 1;
 	upload_glsl_program (hr, &mesh, true);
 	const GLuint third_program = hr->meshes.program;
+	glGetIntegerv(GL_CURRENT_PROGRAM, &current_program);
 	ok &= uniform_location_queries == 3 * locations_per_program && !glIsProgram (second_program) &&
-	      glIsProgram (first_program) && hr->meshes.locs.u_texture == (GLuint)-1;
+	      glIsProgram (first_program) && hr->meshes.locs.u_texture == (GLuint)-1 &&
+	      current_program == (GLint)third_program;
 
 	/* A same-variant hit must refresh recency before another real overflow. */
 	upload_glsl_program (other, &mesh, true);
@@ -1798,13 +1931,22 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	const GLint bottom = (GLint) lroundf(vp->clip.b * sy);
 	const GLint right = (GLint) lroundf(vp->clip.r * sx);
 	const GLint top = (GLint) lroundf(vp->clip.t * sy);
-	glViewport (left, bottom, right - left, top - bottom);
-	/* The viewport rectangle is context state and may have been changed by
-	 * a layer pass. Only the program-local projection/fog values are cached. */
+	const GLint rectangle[4] = {left, bottom, right - left, top - bottom};
+	/* Sorted replay owns context state between its draws. Other passes can
+	 * change the viewport, so each replay starts with an invalid rectangle. */
+	if (!hr->triangle_replay.enabled || !hr->triangle_replay.viewport_valid ||
+	    memcmp(hr->triangle_replay.viewport, rectangle, sizeof(rectangle))) {
+		glViewport(rectangle[0], rectangle[1], rectangle[2], rectangle[3]);
+		memcpy(hr->triangle_replay.viewport, rectangle, sizeof(rectangle));
+		hr->triangle_replay.viewport_valid = true;
+#ifdef HIKARU_VENDOR_TESTING
+		++viewport_updates;
+#endif
+	}
 	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
     // Apply relative guest placement before the existing canonical log depth.
     // Changing the camera near plane must not change a surface's placement.
-    const vec2f_t depth = {vp->clip.n, mesh_depth_scale(mesh->depth_bias)};
+    const vec2f_t depth = {vp->clip.n, hr->triangle_replay.palette_enabled ? 1.0f : mesh_depth_scale(mesh->depth_bias)};
 	if (!cache->depth_valid || memcmp(cache->depth, depth, sizeof(depth))) {
 		glUniform2fv(hr->meshes.locs.u_depth, 1, depth);
 		memcpy(cache->depth, depth, sizeof(depth));
@@ -1880,59 +2022,104 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	glUniform1f (hr->meshes.locs.u_alpha_ref, hr->pass_alpha_ref);
 }
 
+/* Matrix fallback is shared by sorting and draw submission. Returning the
+ * same values avoids CPU pretransformation or changing floating-point order. */
+static bool
+mesh_modelviews(const hikaru_renderer_t *hr, const hikaru_mesh_t *mesh, unsigned instance,
+                const hikaru_modelview_t **primary, const hikaru_modelview_t **alternate)
+{
+	static const hikaru_modelview_t identity = {.mtx = {
+		{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0,0,1}
+	}};
+	*primary = &identity;
+	if (mesh->mv_index != ~0u) {
+		if (mesh->mv_index >= hr->num_mvs || instance >= hr->num_mvs - mesh->mv_index) return false;
+		*primary = &hr->mv_list[mesh->mv_index + instance];
+	}
+	*alternate = *primary;
+	if (mesh->alternate_mv_index != ~0u) {
+		if (mesh->alternate_mv_index >= hr->num_alternate_mvs) return false;
+		*alternate = &hr->alternate_mv_list[mesh->alternate_mv_index];
+	}
+	return true;
+}
+
 static void
 upload_modelview (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned i)
 {
-	hikaru_modelview_t *mv;
-	mtx3x3f_t normal;
-
-	if (mesh->mv_index == ~0) {
-		static const hikaru_modelview_t identity_mv = {
-			.mtx = {
-				{ 1.0f, 0.0f, 0.0f, 0.0f },
-				{ 0.0f, 1.0f, 0.0f, 0.0f },
-				{ 0.0f, 0.0f, 1.0f, 0.0f },
-				{ 0.0f, 0.0f, 0.0f, 1.0f }
+	/* Usage is aggregated over the entire replay run, including merged
+	 * meshes. Ordinary/native fallback retains both uniform uploads. */
+	const unsigned usage = hr->triangle_replay.enabled ? hr->triangle_replay.matrix_usage : 3u;
+	if (hr->triangle_replay.palette_enabled) {
+		/* Each vertex selects a record; matrices remain GPU operations with
+		 * the same values and expressions as the individual-draw path.
+		 * Cache the active prefix per linked program: tiny sorted runs often
+		 * revisit identical records, and redundant arrays stall GL drivers. */
+		const GLsizei count = (GLsizei)hr->triangle_replay.palette_count;
+		hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
+		const mtx4x4f_t *matrices[2] = {hr->triangle_replay.modelviews, hr->triangle_replay.alternate_modelviews};
+		const GLuint modelview_locations[2] = {hr->meshes.locs.u_modelview, hr->meshes.locs.u_modelview_alternate};
+		const GLuint normal_locations[2] = {hr->meshes.locs.u_normal, hr->meshes.locs.u_normal_alternate};
+		const size_t matrix_bytes = (size_t)count * sizeof(*matrices[0]);
+		for (unsigned which = 0; which < 2; ++which) {
+			if (!(usage & (1u << which))) continue;
+			if (cache->palette_counts[which] < (unsigned)count ||
+			    memcmp(cache->palette_modelviews[which], matrices[which], matrix_bytes)) {
+				glUniformMatrix4fv(modelview_locations[which], count, GL_FALSE, (const GLfloat *)matrices[which]);
+				if (normal_locations[which] != (GLuint)-1) {
+					mtx3x3f_t normals[HIKARU_DRAW_PALETTE_SIZE];
+					for (GLsizei state = 0; state < count; ++state)
+						vk_renderer_compute_normal_matrix(normals[state], matrices[which][state]);
+					glUniformMatrix3fv(normal_locations[which], count, GL_FALSE, (const GLfloat *)normals);
+				}
+				memcpy(cache->palette_modelviews[which], matrices[which], matrix_bytes);
+				/* Shorter GL array updates leave the remaining records intact. */
+				cache->palette_counts[which] = MAX2(cache->palette_counts[which], (unsigned)count);
+#ifdef HIKARU_VENDOR_TESTING
+				++palette_uploads[which];
+#endif
 			}
-		};
-
-		VK_ERROR ("attempting to draw with no modelview!");
-
-		/* Attempt to render something anyway. */
-		mv = (hikaru_modelview_t *) &identity_mv;
+		}
+		const size_t depth_bytes = (size_t)count * sizeof(*hr->triangle_replay.depths);
+		if (cache->palette_counts[2] < (unsigned)count ||
+		    memcmp(cache->palette_depths, hr->triangle_replay.depths, depth_bytes)) {
+			glUniform2fv(hr->meshes.locs.u_draw_depth, count, (const GLfloat *)hr->triangle_replay.depths);
+			memcpy(cache->palette_depths, hr->triangle_replay.depths, depth_bytes);
+			cache->palette_counts[2] = MAX2(cache->palette_counts[2], (unsigned)count);
+#ifdef HIKARU_VENDOR_TESTING
+			++palette_uploads[2];
+#endif
+		}
+		if (hr->triangle_replay.shading_palette_enabled &&
+		    hr->meshes.locs.u_shading_modes != (GLuint)-1)
+			glUniform1iv(hr->meshes.locs.u_shading_modes, count,
+			             hr->triangle_replay.shading_modes);
+		return;
 	}
-	else {
-		VK_ASSERT (mesh->mv_index < hr->num_mvs && i < hr->num_mvs - mesh->mv_index);
-		mv = &hr->mv_list[mesh->mv_index + i];
-	}
-
+	const hikaru_modelview_t *primary, *alternate;
+	if (!mesh_modelviews(hr, mesh, i, &primary, &alternate))
+		VK_ABORT("invalid Hikaru modelview reference");
+	if (mesh->mv_index == ~0u) VK_ERROR("attempting to draw with no modelview!");
+	const hikaru_modelview_t *matrices[2] = {primary, alternate};
+	const GLuint modelview_locations[2] = {hr->meshes.locs.u_modelview, hr->meshes.locs.u_modelview_alternate};
+	const GLuint normal_locations[2] = {hr->meshes.locs.u_normal, hr->meshes.locs.u_normal_alternate};
 	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
-	if (!cache->modelview_valid[0] || memcmp(cache->modelview[0], mv->mtx, sizeof(mv->mtx))) {
-		vk_renderer_compute_normal_matrix(normal, mv->mtx);
-		glUniformMatrix4fv(hr->meshes.locs.u_modelview, 1, GL_FALSE, (const GLfloat *)mv->mtx);
-		glUniformMatrix3fv(hr->meshes.locs.u_normal, 1, GL_FALSE, (const GLfloat *)normal);
-		memcpy(cache->modelview[0], mv->mtx, sizeof(mv->mtx));
-		cache->modelview_valid[0] = true;
+	for (unsigned which = 0; which < 2; ++which) {
+		if (!(usage & (1u << which))) continue;
+		if (!cache->modelview_valid[which] ||
+		    memcmp(cache->modelview[which], matrices[which]->mtx, sizeof(matrices[which]->mtx))) {
+			glUniformMatrix4fv(modelview_locations[which], 1, GL_FALSE, (const GLfloat *)matrices[which]->mtx);
+			if (normal_locations[which] != (GLuint)-1) {
+				mtx3x3f_t normal;
+				vk_renderer_compute_normal_matrix(normal, matrices[which]->mtx);
+				glUniformMatrix3fv(normal_locations[which], 1, GL_FALSE, (const GLfloat *)normal);
+			}
+			memcpy(cache->modelview[which], matrices[which]->mtx, sizeof(matrices[which]->mtx));
+			cache->modelview_valid[which] = true;
 #ifdef HIKARU_VENDOR_TESTING
-		++state_uploads[1];
+			++state_uploads[1];
 #endif
-	}
-	/* Bit 12 selects the alternate matrix; without one it uses the primary.
-	 * Cache both values independently, including that fallback transition. */
-	hikaru_modelview_t *alternate = mv;
-	if (mesh->alternate_mv_index != ~0u) {
-		VK_ASSERT(mesh->alternate_mv_index < hr->num_alternate_mvs);
-		alternate = &hr->alternate_mv_list[mesh->alternate_mv_index];
-	}
-	if (!cache->modelview_valid[1] || memcmp(cache->modelview[1], alternate->mtx, sizeof(alternate->mtx))) {
-		vk_renderer_compute_normal_matrix(normal, alternate->mtx);
-		glUniformMatrix4fv(hr->meshes.locs.u_modelview_alternate, 1, GL_FALSE, (const GLfloat *)alternate->mtx);
-		glUniformMatrix3fv(hr->meshes.locs.u_normal_alternate, 1, GL_FALSE, (const GLfloat *)normal);
-		memcpy(cache->modelview[1], alternate->mtx, sizeof(alternate->mtx));
-		cache->modelview_valid[1] = true;
-#ifdef HIKARU_VENDOR_TESTING
-		++state_uploads[1];
-#endif
+		}
 	}
 }
 
@@ -2019,6 +2206,70 @@ int hikaru_vendor_test_texture_sampling_cache(void)
 }
 #endif
 
+/* Sampler objects carry wrap/filter per record, so one GL texture can be
+ * sampled with several states inside a single palette draw. */
+static GLuint
+palette_sampler(hikaru_renderer_t *hr, const hikaru_texhead_t *wanted)
+{
+	const GLenum wrap_s = texture_wrap(wanted->wrapu, wanted->repeatu);
+	const GLenum wrap_t = texture_wrap(wanted->wrapv, wanted->repeatv);
+	const unsigned filter = (wanted->_0C1 >> 16) & 3;
+	const GLint mag = filter == 0 ? GL_NEAREST : GL_LINEAR;
+	const GLint min = filter == 0 ? GL_NEAREST : filter == 2 ? GL_LINEAR : GL_LINEAR_MIPMAP_LINEAR;
+	const float bias = -0.5f + (float)(int8_t)((wanted->_0C1 >> 20) & 0xff) * 0.125f;
+	for (unsigned i = 0; i < hr->triangle_replay.sampler_count; ++i) {
+		if (hr->triangle_replay.samplers[i].wrap_s == wrap_s && hr->triangle_replay.samplers[i].wrap_t == wrap_t &&
+		    hr->triangle_replay.samplers[i].mag_filter == mag && hr->triangle_replay.samplers[i].min_filter == min &&
+		    hr->triangle_replay.samplers[i].lod_bias == bias) return hr->triangle_replay.samplers[i].id;
+	}
+	unsigned slot;
+	if (hr->triangle_replay.sampler_count < NUMELEM(hr->triangle_replay.samplers))
+		slot = hr->triangle_replay.sampler_count++;
+	else {
+		slot = hr->triangle_replay.sampler_cursor;
+		hr->triangle_replay.sampler_cursor = (slot + 1) % NUMELEM(hr->triangle_replay.samplers);
+		glDeleteSamplers(1, &hr->triangle_replay.samplers[slot].id);
+	}
+	glGenSamplers(1, &hr->triangle_replay.samplers[slot].id);
+	glSamplerParameteri(hr->triangle_replay.samplers[slot].id, GL_TEXTURE_WRAP_S, (GLint)wrap_s);
+	glSamplerParameteri(hr->triangle_replay.samplers[slot].id, GL_TEXTURE_WRAP_T, (GLint)wrap_t);
+	glSamplerParameteri(hr->triangle_replay.samplers[slot].id, GL_TEXTURE_MAG_FILTER, mag);
+	glSamplerParameteri(hr->triangle_replay.samplers[slot].id, GL_TEXTURE_MIN_FILTER, min);
+	glSamplerParameterf(hr->triangle_replay.samplers[slot].id, GL_TEXTURE_LOD_BIAS, bias);
+	hr->triangle_replay.samplers[slot].wrap_s = wrap_s; hr->triangle_replay.samplers[slot].wrap_t = wrap_t;
+	hr->triangle_replay.samplers[slot].mag_filter = mag; hr->triangle_replay.samplers[slot].min_filter = min;
+	hr->triangle_replay.samplers[slot].lod_bias = bias;
+	return hr->triangle_replay.samplers[slot].id;
+}
+
+static void
+upload_texture_palette (hikaru_renderer_t *hr)
+{
+	const unsigned count = hr->triangle_replay.palette_count;
+	if (hr->meshes.locs.u_texture_modes != (GLuint)-1)
+		glUniform1iv(hr->meshes.locs.u_texture_modes, (GLsizei)count,
+		             hr->triangle_replay.texture_modes);
+	for (unsigned record = 0; record < count; ++record) {
+		glActiveTexture(GL_TEXTURE0 + 4 + record);
+		const GLuint texture_id = hr->triangle_replay.texture_ids[record];
+		if (!hr->triangle_replay.texture_bindings_valid ||
+		    hr->triangle_replay.texture_bindings[record] != texture_id) {
+			glBindTexture(GL_TEXTURE_2D, texture_id);
+			hr->triangle_replay.texture_bindings[record] = texture_id;
+		}
+		const hikaru_texhead_t *wanted = hr->triangle_replay.texture_heads[record];
+		const GLuint sampler = wanted ? palette_sampler(hr, wanted) : 0;
+		if (!hr->triangle_replay.texture_bindings_valid ||
+		    hr->triangle_replay.sampler_bindings[record] != sampler) {
+			glBindSampler(4 + record, sampler);
+			hr->triangle_replay.sampler_bindings[record] = sampler;
+		}
+	}
+	hr->triangle_replay.texture_bindings_valid = true;
+	glActiveTexture(GL_TEXTURE0);
+	VK_ASSERT_NO_GL_ERROR ();
+}
+
 static void
 upload_material_texhead (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 {
@@ -2027,13 +2278,22 @@ upload_material_texhead (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	if (!hr->meshes.variant.has_texture)
 		return;
 
+	if (hr->triangle_replay.texture_palette_enabled) {
+		upload_texture_palette (hr);
+		return;
+	}
+
 	tex = get_texture (hr, &hr->tex_list[mesh->tex_index]);
 
-	glActiveTexture (GL_TEXTURE0 + 0);
-	VK_ASSERT_NO_GL_ERROR ();
-
-	glBindTexture (GL_TEXTURE_2D, tex ? tex->id : 0);
-	VK_ASSERT_NO_GL_ERROR ();
+	const GLuint texture_id = tex ? tex->id : 0;
+	if (!hr->triangle_replay.enabled || !hr->triangle_replay.texture_binding_valid ||
+	    hr->triangle_replay.texture_binding != texture_id) {
+		glActiveTexture (GL_TEXTURE0);
+		glBindTexture (GL_TEXTURE_2D, texture_id);
+		VK_ASSERT_NO_GL_ERROR ();
+		hr->triangle_replay.texture_binding = texture_id;
+		hr->triangle_replay.texture_binding_valid = true;
+	}
 	if (tex && texture_wrap_changed (&tex->th, &hr->tex_list[mesh->tex_index])) {
 		hikaru_texhead_t *wanted = &hr->tex_list[mesh->tex_index];
 		glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, texture_wrap(wanted->wrapu, wanted->repeatu));
@@ -2108,7 +2368,7 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	float tmp[4];
 	unsigned i;
 
-	if (!hr->meshes.variant.shading_mode)
+	if (!hr->meshes.variant.shading_mode && !hr->triangle_replay.shading_palette_enabled)
 		return;
 	VK_ASSERT (mesh->ls_index < hr->num_lss);
 	ls = &hr->ls_list[mesh->ls_index];
@@ -2126,10 +2386,12 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	                             (hr->debug.flags[HR_DEBUG_NO_SPECULAR] ? 2u : 0u) |
                                  (hr->debug.flags[HR_DEBUG_NO_AMBIENT] ? 4u : 0u);
 	const bool changed = !cache->lightset_valid || cache->light_debug_flags != debug_flags ||
-	                     memcmp(&cache->lightset, ls, sizeof(*ls));
-	cache->lightset = *ls;
-	cache->light_debug_flags = debug_flags;
-	cache->lightset_valid = true;
+	                     !same_lightset_draw_state(&cache->lightset, ls);
+	if (changed) {
+		cache->lightset = *ls;
+		cache->light_debug_flags = debug_flags;
+		cache->lightset_valid = true;
+	}
 #ifdef HIKARU_VENDOR_TESTING
 	if (changed) ++state_uploads[2];
 #endif
@@ -3010,18 +3272,23 @@ apply_material_blend(hikaru_renderer_t *hr, int polytype, const hikaru_material_
 	     polytype == HIKARU_POLYTYPE_BACKGROUND) && !hr->peel.enabled) {
 		const unsigned mode = mat ? mat->blending_mode : 0;
 		weigh = mode == 0 || mode == 2;
-		switch (mode) {
-		case 1:
-			/* Odin writes zero transmittance for product: full coverage here. */
-			glBlendFuncSeparate(GL_DST_COLOR, GL_ZERO, GL_ONE, GL_ZERO);
-			break;
-		case 2:
-			glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-			break;
-		default:
-			glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
-			                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-			break;
+		if (!hr->triangle_replay.enabled || !hr->triangle_replay.blend_function_valid ||
+		    hr->triangle_replay.blend_mode != mode) {
+			switch (mode) {
+			case 1:
+				/* Odin writes zero transmittance for product: full coverage here. */
+				glBlendFuncSeparate(GL_DST_COLOR, GL_ZERO, GL_ONE, GL_ZERO);
+				break;
+			case 2:
+				glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+				break;
+			default:
+				glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+				                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+				break;
+			}
+			hr->triangle_replay.blend_mode = mode;
+			hr->triangle_replay.blend_function_valid = true;
 		}
 	}
 	/* Depth-writing geometry covers the background after its cutout test. */
@@ -3129,9 +3396,12 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 
 	const hikaru_material_t *material = mesh->mat_index < hr->num_mats
 		? &hr->mat_list[mesh->mat_index] : NULL;
-	const bool texture_available = material && material->has_texture &&
+	const bool texture_available = hr->triangle_replay.texture_palette_enabled
+		? (material && material->has_texture &&
+		   !hr->debug.flags[HR_DEBUG_NO_TEXTURES] && mesh->tex_index < hr->num_texs)
+		: (material && material->has_texture &&
 		!hr->debug.flags[HR_DEBUG_NO_TEXTURES] && mesh->tex_index < hr->num_texs &&
-		get_texture(hr, &hr->tex_list[mesh->tex_index]) != NULL;
+		get_texture(hr, &hr->tex_list[mesh->tex_index]) != NULL);
 	upload_glsl_program (hr, mesh, texture_available);
 	VK_ASSERT_NO_GL_ERROR ();
 
@@ -3146,12 +3416,23 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
         polytype == HIKARU_POLYTYPE_OPAQUE ? 1 : polytype == HIKARU_POLYTYPE_SHADOW_A ? 2 : 3;
     // The pass rank precedes the immutable guest mesh number. Both fit exactly
     // in a float uniform; the uint metadata retains the LEQUAL winner on ties.
-    glUniform3f(hr->meshes.locs.u_family, family_test ? (hr->families.active ? 2.0f : 1.0f) : 0.0f,
-        family_write ? 1.0f : 0.0f, family_write ? (float)(pass_rank * MAX_FRAME_STATES + mesh->num + 1) : 0.0f);
-    glUniform1f(hr->meshes.locs.u_sort_scale, family_test ? mesh_sort_scale(mesh->depth_bias) : 0.0f);
+	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
+	const vec3f_t family_state = {
+		family_test ? (hr->families.active ? 2.0f : 1.0f) : 0.0f,
+		family_write ? 1.0f : 0.0f,
+		family_write ? (float)(pass_rank * MAX_FRAME_STATES + mesh->num + 1) : 0.0f
+	};
+	const float sort_scale = family_test && !hr->triangle_replay.palette_enabled ? mesh_sort_scale(mesh->depth_bias) : 0.0f;
+	if (!cache->family_valid || memcmp(cache->family, family_state, sizeof(family_state)) ||
+	    memcmp(&cache->sort_scale, &sort_scale, sizeof(sort_scale))) {
+		glUniform3f(hr->meshes.locs.u_family, family_state[0], family_state[1], family_state[2]);
+		glUniform1f(hr->meshes.locs.u_sort_scale, sort_scale);
+		memcpy(cache->family, family_state, sizeof(family_state));
+		cache->sort_scale = sort_scale;
+		cache->family_valid = true;
+	}
 	if (hr->meshes.variant.has_pattern)
 		glUniform1f(hr->meshes.locs.u_pattern, pattern_bits(mesh->pattern));
-	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 	const unsigned peel_mode = (hr->peel.enabled ? 1u : 0u) | (hr->peel.first ? 2u : 0u);
 	if (!cache->peel_valid || cache->peel_mode != peel_mode ||
 	    cache->peel_width != hr->base.internal_width || cache->peel_height != hr->base.internal_height) {
@@ -3165,13 +3446,25 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	}
     // No render target may remain bound as a sampler, even when a uniform
     // branch would skip that read on this draw.
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, hr->peel.enabled ? hr->peel.previous_depth : 0);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, family_test ? (hr->families.active ? hr->families.depth[family] : hr->peel.enabled ? hr->peel.opaque_depth : hr->families.depth[0]) : 0);
-    glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, family_test && hr->families.active ? hr->families.metadata[1 - family] : 0);
-    glActiveTexture(GL_TEXTURE0);
+	const GLuint auxiliary_textures[3] = {
+		hr->peel.enabled ? hr->peel.previous_depth : 0,
+		family_test ? (hr->families.active ? hr->families.depth[family] :
+		              hr->peel.enabled ? hr->peel.opaque_depth : hr->families.depth[0]) : 0,
+		family_test && hr->families.active ? hr->families.metadata[1 - family] : 0
+	};
+	/* Only sorted replay owns these units across consecutive mesh draws.
+	 * Other passes can change attachments/samplers, so the first replay draw
+	 * always restores all three bindings, including zero to prevent feedback. */
+	if (!hr->triangle_replay.enabled || !hr->triangle_replay.auxiliary_textures_valid ||
+	    memcmp(hr->triangle_replay.auxiliary_textures, auxiliary_textures, sizeof(auxiliary_textures))) {
+		for (unsigned unit = 0; unit < NUMELEM(auxiliary_textures); ++unit) {
+			glActiveTexture(GL_TEXTURE1 + unit);
+			glBindTexture(GL_TEXTURE_2D, auxiliary_textures[unit]);
+		}
+		glActiveTexture(GL_TEXTURE0);
+		memcpy(hr->triangle_replay.auxiliary_textures, auxiliary_textures, sizeof(auxiliary_textures));
+		hr->triangle_replay.auxiliary_textures_valid = true;
+	}
 	upload_material_texhead (hr, mesh);
 	upload_lightset (hr, mesh);
 	VK_ASSERT_NO_GL_ERROR ();
@@ -3195,23 +3488,24 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 		}
 	}
 
-	if (hr->debug.flags[HR_DEBUG_NO_INSTANCING]) {
+	if (hr->triangle_replay.enabled || hr->strip_replay.enabled) {
+		/* A sorted run already selects one instance; do not scan every other
+		 * instance again for each interleaved run of the same mesh. */
+		hikaru_mesh_t *selected = hr->triangle_replay.enabled
+			? hr->triangle_replay.mesh : hr->strip_replay.mesh;
+		const unsigned instance = hr->triangle_replay.enabled
+			? hr->triangle_replay.instance : hr->strip_replay.instance;
+		if (selected == mesh && instance < mesh->num_instances) {
+			upload_modelview(hr, mesh, instance);
+			draw_mesh_geometry(hr, mesh, polytype, instance);
+		}
+	} else if (hr->debug.flags[HR_DEBUG_NO_INSTANCING]) {
 		unsigned i = MIN2 (hr->debug.flags[HR_DEBUG_SELECT_INSTANCE],
 		                   mesh->num_instances - 1);
-		if ((!hr->triangle_replay.enabled ||
-	     (hr->triangle_replay.mesh == mesh && hr->triangle_replay.instance == i)) &&
-	    (!hr->strip_replay.enabled ||
-	     (hr->strip_replay.mesh == mesh && hr->strip_replay.instance == i))) {
-			upload_modelview (hr, mesh, i);
-			draw_mesh_geometry(hr, mesh, polytype, i);
-		}
+		upload_modelview (hr, mesh, i);
+		draw_mesh_geometry(hr, mesh, polytype, i);
 	} else {
 		for (i = 0; i < mesh->num_instances; i++) {
-			if ((hr->triangle_replay.enabled &&
-			     (hr->triangle_replay.mesh != mesh || hr->triangle_replay.instance != i)) ||
-			    (hr->strip_replay.enabled &&
-			     (hr->strip_replay.mesh != mesh || hr->strip_replay.instance != i)))
-				continue;
 			upload_modelview (hr, mesh, i);
 			draw_mesh_geometry(hr, mesh, polytype, i);
 		}
@@ -3319,6 +3613,315 @@ hikaru_vendor_test_triangle_sort_order(void)
 }
 #endif
 
+/* Baked vertex colours/UVs are already in the sorted stream. This key covers
+ * only draw-time state read by get_glsl_variant and the uniform/sampler paths;
+ * new draw-time inputs must be added here before they can share a batch. */
+static bool
+same_triangle_pipeline(const hikaru_renderer_t *hr,
+                       bool ignore_texture, bool ignore_shading,
+                       const sorted_triangle_ref_t *a, const sorted_triangle_ref_t *b)
+{
+	const hikaru_mesh_t *ma = a->mesh, *mb = b->mesh;
+	if (ma == mb) return true;
+	if (ma->pattern != mb->pattern ||
+	    (hr->families.active && (((uint32_t)(int32_t)ma->depth_bias ^ (uint32_t)(int32_t)mb->depth_bias) & 0x400u))) return false;
+	if (ma->vp_index >= hr->num_vps || mb->vp_index >= hr->num_vps ||
+	    ma->mat_index >= hr->num_mats || mb->mat_index >= hr->num_mats ||
+	    ma->tex_index >= hr->num_texs || mb->tex_index >= hr->num_texs ||
+	    ma->ls_index >= hr->num_lss || mb->ls_index >= hr->num_lss) return false;
+	if (memcmp(&hr->vp_list[ma->vp_index], &hr->vp_list[mb->vp_index], sizeof(*hr->vp_list))) return false;
+	const hikaru_material_t *am = &hr->mat_list[ma->mat_index], *bm = &hr->mat_list[mb->mat_index];
+	if (am->has_texture != bm->has_texture || (!ignore_shading && am->shading_mode != bm->shading_mode) ||
+	    am->has_alpha != bm->has_alpha || am->depth_blend != bm->depth_blend ||
+	    am->blending_mode != bm->blending_mode) return false;
+	if (!ignore_texture && am->has_texture && !hr->debug.flags[HR_DEBUG_NO_TEXTURES]) {
+		const hikaru_texhead_t *at = &hr->tex_list[ma->tex_index], *bt = &hr->tex_list[mb->tex_index];
+		const uint32_t sampling_mask = (3u << 16) | (0xffu << 20);
+		if (!is_texhead_eq(at, bt) || texture_wrap_changed(at, bt) ||
+		    ((at->_0C1 ^ bt->_0C1) & sampling_mask) || ((at->_2C1 ^ bt->_2C1) & 0xe0000000u)) return false;
+	}
+	if ((am->shading_mode || (ignore_shading && bm->shading_mode)) && !hr->debug.flags[HR_DEBUG_NO_LIGHTING]) {
+		const hikaru_lightset_t *al = &hr->ls_list[ma->ls_index], *bl = &hr->ls_list[mb->ls_index];
+		if (!same_lightset_draw_state(al, bl) ||
+		    (al->mask != 15 && ma->has_two_sided_lighting != mb->has_two_sided_lighting)) return false;
+	}
+	return true;
+}
+
+static bool
+same_triangle_transform(const hikaru_renderer_t *hr,
+                        const sorted_triangle_ref_t *a, const sorted_triangle_ref_t *b)
+{
+	if (a->mesh == b->mesh && a->instance == b->instance) return true;
+	/* Placement consumes the low ten bits; the eleventh is the depth-family
+	 * selector and only splits draws while family targets are in use. */
+	const uint32_t depth_mask = hr->families.active || hr->families.depth[0] ? 0x7ffu : 0x3ffu;
+	if (((uint32_t)(int32_t)a->mesh->depth_bias ^ (uint32_t)(int32_t)b->mesh->depth_bias) & depth_mask) return false;
+	const hikaru_modelview_t *ap, *aa, *bp, *ba;
+	return mesh_modelviews(hr, a->mesh, a->instance, &ap, &aa) &&
+	       mesh_modelviews(hr, b->mesh, b->instance, &bp, &ba) &&
+	       !memcmp(ap, bp, sizeof(*ap)) && !memcmp(aa, ba, sizeof(*aa));
+}
+
+static bool
+same_triangle_draw_state(const hikaru_renderer_t *hr,
+                         const sorted_triangle_ref_t *a, const sorted_triangle_ref_t *b)
+{
+	return same_triangle_pipeline(hr, false, false, a, b) && same_triangle_transform(hr, a, b);
+}
+
+
+/* Texture palette records carry one texture each; wrap and sampling stay
+ * texture-object state on the scalar path; palette draws use sampler objects. */
+static bool
+same_triangle_texture(const hikaru_renderer_t *hr,
+                      const sorted_triangle_ref_t *a, const sorted_triangle_ref_t *b)
+{
+	const hikaru_mesh_t *ma = a->mesh, *mb = b->mesh;
+	if (ma->mat_index >= hr->num_mats || mb->mat_index >= hr->num_mats) return false;
+	if (!hr->mat_list[ma->mat_index].has_texture || hr->debug.flags[HR_DEBUG_NO_TEXTURES]) return true;
+	if (ma->tex_index >= hr->num_texs || mb->tex_index >= hr->num_texs) return false;
+	const hikaru_texhead_t *at = &hr->tex_list[ma->tex_index], *bt = &hr->tex_list[mb->tex_index];
+	const uint32_t sampling_mask = (3u << 16) | (0xffu << 20);
+	return is_texhead_eq(at, bt) && !texture_wrap_changed(at, bt) &&
+	       ((at->_0C1 ^ bt->_0C1) & sampling_mask) == 0 &&
+	       ((at->_2C1 ^ bt->_2C1) & 0xe0000000u) == 0;
+}
+
+static bool
+same_triangle_shading(const hikaru_renderer_t *hr,
+                      const sorted_triangle_ref_t *a, const sorted_triangle_ref_t *b)
+{
+	if (a->mesh->mat_index >= hr->num_mats || b->mesh->mat_index >= hr->num_mats) return false;
+	return hr->mat_list[a->mesh->mat_index].shading_mode ==
+	       hr->mat_list[b->mesh->mat_index].shading_mode;
+}
+
+static bool
+triangle_texture_conflict(const hikaru_renderer_t *hr,
+                          const sorted_triangle_ref_t **states, unsigned used,
+                          const sorted_triangle_ref_t *candidate)
+{
+	const hikaru_mesh_t *cm = candidate->mesh;
+	if (cm->mat_index >= hr->num_mats || !hr->mat_list[cm->mat_index].has_texture ||
+	    hr->debug.flags[HR_DEBUG_NO_TEXTURES] || cm->tex_index >= hr->num_texs) return false;
+	const hikaru_texhead_t *ct = &hr->tex_list[cm->tex_index];
+	unsigned layouts = 0;
+	for (unsigned i = 0; i < used; ++i) {
+		const hikaru_mesh_t *sm = states[i]->mesh;
+		if (sm->mat_index >= hr->num_mats || !hr->mat_list[sm->mat_index].has_texture ||
+		    sm->tex_index >= hr->num_texs) continue;
+		const hikaru_texhead_t *st = &hr->tex_list[sm->tex_index];
+		if (st->bank != ct->bank || st->slotx != ct->slotx || st->sloty != ct->sloty) continue;
+		/* Wrap and sampling are per-unit sampler state now; only the bounded
+		 * two-layout texture residency still splits a run. */
+		if (!is_texhead_eq(st, ct) && ++layouts >= 2) return true;
+	}
+	return false;
+}
+
+static int hikaru_texture_palette_support = -1;
+static bool
+texture_palette_supported(void)
+{
+	if (hikaru_texture_palette_support < 0) {
+		GLint units = 0;
+		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &units);
+		hikaru_texture_palette_support =
+			!vk_renderer_is_gles() && units >= 4 + HIKARU_DRAW_PALETTE_SIZE ? 1 : 0;
+	}
+	return hikaru_texture_palette_support != 0;
+}
+#ifdef HIKARU_VENDOR_TESTING
+static _Thread_local bool separate_triangle_meshes;
+static _Thread_local bool disable_triangle_palette;
+static _Thread_local unsigned triangle_draw_runs;
+
+int hikaru_vendor_test_triangle_batch_state(void)
+{
+	hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+	if (!hr) return __LINE__;
+	hikaru_viewport_t viewports[2] = {0};
+	hikaru_material_t materials[2] = {0};
+	hikaru_texhead_t textures[2] = {0};
+	hikaru_lightset_t lights[2] = {0};
+	hikaru_modelview_t matrices[3] = {0}, alternates[2] = {0};
+	materials[0].has_texture = materials[1].has_texture = 1;
+	materials[0].shading_mode = materials[1].shading_mode = 1;
+	hr->vp_list = viewports; hr->num_vps = NUMELEM(viewports);
+	hr->mat_list = materials; hr->num_mats = NUMELEM(materials);
+	hr->tex_list = textures; hr->num_texs = NUMELEM(textures);
+	hr->ls_list = lights; hr->num_lss = NUMELEM(lights);
+	hr->mv_list = matrices; hr->num_mvs = NUMELEM(matrices);
+	hr->alternate_mv_list = alternates; hr->num_alternate_mvs = NUMELEM(alternates);
+	hikaru_mesh_t meshes[2] = {0};
+	meshes[0].num_instances = meshes[1].num_instances = 2;
+	meshes[0].alternate_mv_index = meshes[1].alternate_mv_index = ~0u;
+	meshes[1].vp_index = meshes[1].mat_index = meshes[1].tex_index = meshes[1].ls_index = 1;
+	meshes[1].mv_index = 1;
+	sorted_triangle_ref_t first = {.mesh = &meshes[0]}, next = {.mesh = &meshes[1]};
+	int failure = 0;
+#define CHECK_BATCH(expected_) do { \
+	if (same_triangle_draw_state(hr, &first, &next) != (expected_)) { \
+		failure = __LINE__; goto cleanup; } \
+} while (0)
+	CHECK_BATCH(true); /* Distinct snapshots with identical values. */
+	materials[1].diffuse[0] = 255; CHECK_BATCH(true); materials[1] = materials[0];
+	lights[1].set = 1; CHECK_BATCH(true); lights[1] = lights[0];
+	lights[0].mask = lights[1].mask = 14;
+	lights[0].lights[0].has_direction = lights[1].lights[0].has_direction = 1;
+	lights[1].lights[1].has_position = lights[1].lights[1].has_direction = 1;
+	lights[1].lights[1].has_specular = 1;
+	lights[1].lights[1].attenuation[1] = 1;
+	CHECK_BATCH(true); /* A masked slot changes neither shader nor draw state. */
+	if (get_glsl_variant(hr, &meshes[0], true).full != get_glsl_variant(hr, &meshes[1], true).full) {
+		failure = __LINE__; goto cleanup;
+	}
+	lights[1].lights[0].diffuse[0] = 1; CHECK_BATCH(false); lights[1].lights[0] = lights[0].lights[0];
+	meshes[1].has_two_sided_lighting = true; CHECK_BATCH(false);
+	lights[0].mask = lights[1].mask = 15; CHECK_BATCH(true);
+	meshes[1].has_two_sided_lighting = false;
+	memset(lights, 0, sizeof(lights));
+	textures[1]._2C1 ^= 1u << 14; CHECK_BATCH(true); textures[1] = textures[0];
+	viewports[1].clip.r = 1; CHECK_BATCH(false); viewports[1] = viewports[0];
+	materials[1].blending_mode = 2; CHECK_BATCH(false); materials[1] = materials[0];
+	textures[1].wrapu = 1; CHECK_BATCH(false); textures[1] = textures[0];
+	lights[1].mask = 1; CHECK_BATCH(false); lights[1] = lights[0];
+	materials[0].shading_mode = materials[1].shading_mode = 0;
+	lights[1].mask = 1; CHECK_BATCH(true); lights[1] = lights[0];
+	materials[0].shading_mode = materials[1].shading_mode = 1;
+	meshes[1].pattern = 1; CHECK_BATCH(false); meshes[1].pattern = 0;
+	meshes[1].has_two_sided_lighting = true; CHECK_BATCH(false); meshes[1].has_two_sided_lighting = false;
+	meshes[1].depth_bias = 1; CHECK_BATCH(false); meshes[1].depth_bias = 0;
+	meshes[1].depth_bias = 4096; CHECK_BATCH(true); meshes[1].depth_bias = 0;
+	/* The family selector bit only splits draws while families are active. */
+	meshes[1].depth_bias = 1024; CHECK_BATCH(true);
+	hr->families.active = true; CHECK_BATCH(false); hr->families.active = false;
+	meshes[1].depth_bias = 0;
+	meshes[1].depth_bias = -2048; CHECK_BATCH(true); meshes[1].depth_bias = 0;
+	/* Captured alpha_thresh is not a draw input; pass_alpha_ref is global. */
+	meshes[1].alpha_thresh[1] = 1; CHECK_BATCH(true); meshes[1].alpha_thresh[1] = 0;
+	next.instance = 1; CHECK_BATCH(true);
+	matrices[2].mtx[3][0] = 1; CHECK_BATCH(false); matrices[2] = matrices[0];
+	meshes[1].alternate_mv_index = 1; CHECK_BATCH(true);
+	alternates[1].mtx[3][1] = 1; CHECK_BATCH(false); alternates[1] = alternates[0];
+	meshes[1].mv_index = hr->num_mvs; CHECK_BATCH(false); meshes[1].mv_index = 1;
+	meshes[1].alternate_mv_index = hr->num_alternate_mvs; CHECK_BATCH(false);
+	meshes[1].alternate_mv_index = ~0u;
+	meshes[1].vp_index = hr->num_vps; CHECK_BATCH(false); meshes[1].vp_index = 1;
+	meshes[1].mv_index = ~0u; CHECK_BATCH(false);
+	meshes[0].mv_index = ~0u; CHECK_BATCH(true);
+	/* Shading-palette records: a shading change is a new record, while the
+	 * pipeline key may span shading modes when shading is ignored. */
+	materials[1].shading_mode = 2;
+	if (same_triangle_shading(hr, &first, &next)) { failure = __LINE__; goto cleanup; }
+	if (!same_triangle_pipeline(hr, false, true, &first, &next)) { failure = __LINE__; goto cleanup; }
+	if (same_triangle_pipeline(hr, false, false, &first, &next)) { failure = __LINE__; goto cleanup; }
+	materials[1].shading_mode = materials[0].shading_mode;
+	/* Texture-palette records: a new texhead, wrap or mode is a new record,
+	 * while the pipeline key may span texheads when textures are ignored. */
+	if (!same_triangle_texture(hr, &first, &next)) { failure = __LINE__; goto cleanup; }
+	textures[1].slotx = 1;
+	if (same_triangle_texture(hr, &first, &next)) { failure = __LINE__; goto cleanup; }
+	if (!same_triangle_pipeline(hr, true, false, &first, &next)) { failure = __LINE__; goto cleanup; }
+	if (same_triangle_pipeline(hr, false, false, &first, &next)) { failure = __LINE__; goto cleanup; }
+	textures[1] = textures[0]; textures[1].wrapu = 1;
+	if (same_triangle_texture(hr, &first, &next)) { failure = __LINE__; goto cleanup; }
+	textures[1] = textures[0]; textures[1]._2C1 = 1u << 29;
+	if (same_triangle_texture(hr, &first, &next)) { failure = __LINE__; goto cleanup; }
+	textures[1] = textures[0];
+cleanup:
+#undef CHECK_BATCH
+	free(hr);
+	return failure;
+}
+#endif
+
+/* Palette metadata is optional: allocation failure keeps the existing sorted
+ * draws, rather than dropping sorting or making the optimisation unbounded. */
+static bool
+reserve_triangle_palette(hikaru_renderer_t *hr)
+{
+	if (hr->triangle_replay.palette_capacity >= hr->triangle_replay.refs_capacity) return true;
+	const size_t capacity = hr->triangle_replay.refs_capacity;
+	uint8_t *states = realloc(hr->triangle_replay.draw_states, capacity * 3);
+	if (!states) return false;
+	hr->triangle_replay.draw_states = states;
+	size_t *ends = realloc(hr->triangle_replay.run_ends, capacity * sizeof(*ends));
+	if (!ends) return false;
+	hr->triangle_replay.run_ends = ends;
+	hr->triangle_replay.palette_capacity = capacity;
+	return true;
+}
+
+static void build_triangle_palette_runs(hikaru_renderer_t *hr, const sorted_triangle_ref_t *refs, size_t count, bool texture_palette)
+{
+	for (size_t first = 0; first < count;) {
+		const sorted_triangle_ref_t *states[NUMELEM(hr->triangle_replay.depths)];
+		unsigned used = 1;
+		states[0] = &refs[first];
+		memset(&hr->triangle_replay.draw_states[first * 3], 0, 3);
+		size_t end = first + 1;
+		while (end < count && same_triangle_pipeline(hr, texture_palette, texture_palette, &refs[first], &refs[end])) {
+			unsigned state = 0;
+			while (state < used && !(same_triangle_transform(hr, states[state], &refs[end]) && (!texture_palette || (same_triangle_texture(hr, states[state], &refs[end]) && same_triangle_shading(hr, states[state], &refs[end]))))) ++state;
+			if (state == used) {
+				if (used == NUMELEM(states)) break;
+				if (texture_palette && triangle_texture_conflict(hr, states, used, &refs[end])) break;
+				states[used++] = &refs[end];
+			}
+			memset(&hr->triangle_replay.draw_states[end * 3], (int)state, 3);
+			++end;
+		}
+		hr->triangle_replay.run_ends[first] = end;
+		first = end;
+	}
+}
+
+static void
+load_triangle_palette(hikaru_renderer_t *hr, const sorted_triangle_ref_t *refs, size_t first, size_t end)
+{
+	uint32_t loaded = 0;
+	hr->triangle_replay.palette_count = 0;
+	hr->triangle_replay.matrix_usage = 0;
+	for (size_t i = first; i < end; ++i) {
+		const unsigned usage = refs[i].mesh->matrix_usage & 3u;
+		hr->triangle_replay.matrix_usage |= usage ? usage : 3u;
+		const unsigned state = hr->triangle_replay.draw_states[i * 3];
+		VK_ASSERT(state < NUMELEM(hr->triangle_replay.depths));
+		if (loaded & (1u << state)) continue;
+		loaded |= 1u << state;
+		const hikaru_modelview_t *primary, *alternate;
+		if (!mesh_modelviews(hr, refs[i].mesh, refs[i].instance, &primary, &alternate))
+			VK_ABORT("invalid Hikaru palette modelview reference");
+		memcpy(hr->triangle_replay.modelviews[state], primary->mtx, sizeof(primary->mtx));
+		memcpy(hr->triangle_replay.alternate_modelviews[state], alternate->mtx, sizeof(alternate->mtx));
+		hr->triangle_replay.depths[state][0] = mesh_depth_scale(refs[i].mesh->depth_bias);
+		hr->triangle_replay.depths[state][1] = hr->families.active || hr->families.depth[0]
+			? mesh_sort_scale(refs[i].mesh->depth_bias) : 0.0f;
+		hr->triangle_replay.shading_modes[state] = refs[i].mesh->mat_index < hr->num_mats &&
+			!hr->debug.flags[HR_DEBUG_NO_LIGHTING] ?
+			(int)hr->mat_list[refs[i].mesh->mat_index].shading_mode : 0;
+		if (state + 1 > hr->triangle_replay.palette_count) hr->triangle_replay.palette_count = state + 1;
+		const hikaru_mesh_t *record_mesh = refs[i].mesh;
+		if (record_mesh->mat_index < hr->num_mats && record_mesh->tex_index < hr->num_texs) {
+			static const int modes[8] = {0, 1, 2, 0, 3, 4, 0, 0};
+			const hikaru_texhead_t *head = &hr->tex_list[record_mesh->tex_index];
+			hr->triangle_replay.texture_heads[state] = head;
+			hr->triangle_replay.texture_modes[state] = modes[head->_2C1 >> 29];
+			hr->triangle_replay.textures[state] = hr->mat_list[record_mesh->mat_index].has_texture &&
+				!hr->debug.flags[HR_DEBUG_NO_TEXTURES] ? get_texture(hr, (hikaru_texhead_t *)head) : NULL;
+			hr->triangle_replay.texture_ids[state] = hr->triangle_replay.textures[state] ?
+				hr->triangle_replay.textures[state]->id : 0;
+		} else {
+			hr->triangle_replay.texture_heads[state] = NULL;
+			hr->triangle_replay.textures[state] = NULL;
+			hr->triangle_replay.texture_ids[state] = 0;
+			hr->triangle_replay.texture_modes[state] = 0;
+		}
+	}
+}
+
 static bool
 draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	                             hikaru_mesh_t *meshes, unsigned num)
@@ -3388,31 +3991,99 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	glBindBuffer(GL_ARRAY_BUFFER, scratch_vbo);
 	glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(at * 3 * sizeof(*hr->triangle_replay.batch)),
 	             hr->triangle_replay.batch, GL_DYNAMIC_DRAW);
+	bool palette = hikaru_graphics_supports_draw_palette() && !hr->families.depth_pass;
+#ifdef HIKARU_VENDOR_TESTING
+	if (separate_triangle_meshes || disable_triangle_palette) palette = false;
+#endif
+	if (palette && !reserve_triangle_palette(hr)) palette = false;
+	if (palette && !hr->triangle_replay.state_vbo) glGenBuffers(1, &hr->triangle_replay.state_vbo);
+	if (palette && !hr->triangle_replay.state_vbo) palette = false;
+	bool texture_palette = palette && texture_palette_supported();
+	if (palette) {
+		build_triangle_palette_runs(hr, refs, at, texture_palette);
+		hikaru_graphics_bind_draw_palette(hr->triangle_replay.state_vbo);
+
+		glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(at * 3), hr->triangle_replay.draw_states, GL_DYNAMIC_DRAW);
+	} else {
+		hikaru_graphics_bind_draw_palette(0);
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, scratch_vbo);
 	GLuint bound_vao = scratch_vao;
 	hr->triangle_replay.enabled = true;
+	hr->triangle_replay.program = 0;
+	hr->triangle_replay.matrix_usage = 3;
+	hr->triangle_replay.palette_enabled = palette;
+		hr->triangle_replay.texture_palette_enabled = texture_palette;
+	hr->triangle_replay.shading_palette_enabled = texture_palette;
 	hr->triangle_replay.vao = scratch_vao;
 	hr->triangle_replay.vbo = scratch_vbo;
 	hr->triangle_replay.configured = false;
+	hr->triangle_replay.auxiliary_textures_valid = false;
+	hr->triangle_replay.texture_binding_valid = false;
+	hr->triangle_replay.texture_bindings_valid = false;
+	hr->triangle_replay.blend_function_valid = false;
+	hr->triangle_replay.viewport_valid = false;
 	for (size_t i = 0; i < at;) {
 		const sorted_triangle_ref_t *first = &refs[i];
 		size_t end = i + 1;
-		while (end < at &&
-		       refs[end].mesh == first->mesh && refs[end].instance == first->instance)
-			++end;
+		if (palette) {
+			end = hr->triangle_replay.run_ends[i];
+			load_triangle_palette(hr, refs, i, end);
+		} else {
+			while (end < at) {
+#ifdef HIKARU_VENDOR_TESTING
+				if (separate_triangle_meshes &&
+				    (refs[end].mesh != first->mesh || refs[end].instance != first->instance)) break;
+#endif
+				if (!same_triangle_draw_state(hr, first, &refs[end])) break;
+				++end;
+			}
+		}
 		const unsigned count = (unsigned)(end - i);
+		/* Single-record draws use the scalar program: indirect array access
+		 * costs more on some GL drivers than keeping this cached variant. */
+		hr->triangle_replay.palette_enabled = palette && hr->triangle_replay.palette_count > 1;
+		hr->triangle_replay.texture_palette_enabled = texture_palette && hr->triangle_replay.palette_enabled;
+		hr->triangle_replay.shading_palette_enabled = hr->triangle_replay.texture_palette_enabled;
 		hr->triangle_replay.mesh = first->mesh;
 		hr->triangle_replay.instance = first->instance;
 		hr->triangle_replay.first = (unsigned)i;
 		hr->triangle_replay.count = count;
+#ifdef HIKARU_VENDOR_TESTING
+		if (separate_triangle_meshes) {
+			/* The differential oracle also restores the former per-run state
+			 * setup, so binding/uniform reuse is covered by the pixel comparison. */
+			hr->triangle_replay.auxiliary_textures_valid = false;
+			hr->triangle_replay.texture_binding_valid = false;
+			hr->triangle_replay.blend_function_valid = false;
+			hr->triangle_replay.viewport_valid = false;
+			hr->triangle_replay.program = 0;
+			for (unsigned slot = 0; slot < num_programs; ++slot)
+				program_cache[slot].uniforms.family_valid = false;
+		}
+#endif
 		draw_mesh(hr, first->mesh, HIKARU_POLYTYPE_TRANSLUCENT,
 		          &bound_vao);
+#ifdef HIKARU_VENDOR_TESTING
+		++triangle_draw_runs;
+#endif
 		i = end;
 	}
 	hr->triangle_replay.enabled = false;
+	hr->triangle_replay.program = 0;
+	hr->triangle_replay.matrix_usage = 0;
+	hr->triangle_replay.palette_enabled = false;
+	for (unsigned unit = 0; unit < HIKARU_DRAW_PALETTE_SIZE; ++unit) glBindSampler(4 + unit, 0);
+	hr->triangle_replay.texture_palette_enabled = false;
+	hr->triangle_replay.shading_palette_enabled = false;
 	hr->triangle_replay.mesh = NULL;
 	hr->triangle_replay.count = 0;
 	hr->triangle_replay.first = 0;
 	hr->triangle_replay.configured = false;
+	hr->triangle_replay.auxiliary_textures_valid = false;
+	hr->triangle_replay.texture_binding_valid = false;
+	hr->triangle_replay.blend_function_valid = false;
+	hr->triangle_replay.viewport_valid = false;
 	glBindVertexArray(0);
 	/* Scratch objects and sort buffers stay in triangle_replay. */
 	(void)vpi;
@@ -3687,6 +4358,9 @@ upload_vertex_data (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned polytyp
 	VK_ASSERT (mesh);
 
 	mesh->num_tris = hr->push.num_tris;
+	mesh->matrix_usage = 0;
+	for (unsigned v = 0; v < mesh->num_tris * 3 && mesh->matrix_usage != 3; ++v)
+		mesh->matrix_usage |= (uint8_t)(1u << (hr->push.all[v].matrix_select & 1u));
 	size_t bytes = sizeof(hikaru_vertex_body_t) * (size_t)mesh->num_tris * 3;
 	free(mesh->cpu_vertices);
 	mesh->cpu_vertices = NULL;
@@ -4268,6 +4942,7 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 	hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
 	int ok = 0;
 	uint8_t left[4] = {0}, right[4] = {0};
+	uint8_t *reference_pixels = NULL, *batched_pixels = NULL;
 	if (!hr || !gpu) goto cleanup;
 	hr->gpu = gpu;
 	hr->base.internal_width = 640;
@@ -4292,6 +4967,15 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 	hr->vp_list[0].offset.x = 320; hr->vp_list[0].offset.y = 240;
 	for (unsigned i = 0; i < 4; ++i) hr->mv_list[0].mtx[i][i] = 1.0f;
 	hr->mat_list[0].shading_mode = 0;
+	hr->mat_list[1] = hr->mat_list[0];
+	hr->mat_list[1].blending_mode = 2;
+	hr->num_mats = hr->num_texs = 2;
+	hr->tex_list[0].slotx = 0x80; hr->tex_list[0].sloty = 0xc0;
+	for (unsigned bank = 0; bank < 2; ++bank) {
+		gpu->texram[bank] = vk_buffer_le32_new(4u * 1024u * 1024u, 0);
+		if (!gpu->texram[bank]) goto cleanup;
+		memset(gpu->texram[bank]->ptr, 0xff, gpu->texram[bank]->size);
+	}
 	hr->ls_list[0].mask = 15;
 	gpu->fb_config.clear[0] = gpu->fb_config.clear[1] = gpu->fb_config.clear[2] = 0;
 	gpu->fb_config.clear[3] = 255;
@@ -4352,9 +5036,181 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 	const unsigned capacities[] = {32, 32, 32, 1};
 	uint8_t pixels[4][2][4] = {{{0}}};
 	bool overflowed[4] = {false};
+	bool batching_matches = true;
+	const size_t image_bytes = 640u * 480u * 4u;
+	reference_pixels = malloc(image_bytes);
+	batched_pixels = malloc(image_bytes);
+	if (!reference_pixels || !batched_pixels) goto cleanup;
 	for (unsigned pass = 0; pass < 4; ++pass) {
 		hr->transparency_sorting = modes[pass];
 		hr->transparency_peel_capacity = capacities[pass];
+		if (modes[pass] == HIKARU_TRANSPARENCY_PER_TRIANGLE) {
+			hr->mat_list[0].has_texture = hr->mat_list[1].has_texture = 1;
+			hr->num_vps = 2;
+			hr->num_lss = 2;
+			hr->vp_list[1] = hr->vp_list[0];
+			hr->vp_list[1].clip.r = 320;
+			/* Compare full images to the former mesh boundaries and state setup.
+			 * Identical state merges; blend/texture changes must keep both draws. */
+			hr->num_mvs = HIKARU_DRAW_PALETTE_SIZE + 2;
+			for (unsigned mv = 1; mv < hr->num_mvs; ++mv) {
+				hr->mv_list[mv] = hr->mv_list[0];
+				hr->mv_list[mv].mtx[3][0] = (float)(mv - 1) * 4.0f;
+			}
+			hr->alternate_mv_list = reserve_frame_states(hr->alternate_mv_list,
+				&hr->capacity_alternate_mvs, 1, sizeof(*hr->alternate_mv_list));
+			hr->num_alternate_mvs = 1;
+			hr->alternate_mv_list[0] = hr->mv_list[0];
+			hr->alternate_mv_list[0].mtx[3][1] = 32.0f;
+			/* Exercise matrix/depth selection, alternate/bypass selectors, and
+			 * one extra record spilling into a new bounded GPU table. */
+			for (unsigned boundary = 0; boundary < 17; ++boundary) {
+				const bool lit_case = boundary == 10 || boundary == 15;
+				hr->mat_list[0].shading_mode = lit_case ? 1 : 0;
+				hr->ls_list[0].mask = lit_case ? 14 : 15;
+				hr->ls_list[0].lights[0].has_direction = 1;
+				hr->ls_list[0].lights[0].direction[2] = 1;
+				hr->ls_list[0].lights[0].attenuation[0] = hr->ls_list[0].lights[0].attenuation[1] = 1;
+				for (unsigned c = 0; c < 3; ++c) hr->ls_list[0].lights[0].diffuse[c] = 255;
+				hr->ls_list[1] = hr->ls_list[0];
+				hr->ls_list[1].lights[1].has_direction = hr->ls_list[1].lights[1].has_position = 1;
+				hr->ls_list[1].lights[1].has_specular = 1;
+				hr->ls_list[1].lights[1].attenuation[1] = 1;
+				hr->mv_list[2].mtx[0][0] = boundary == 10 ? 2.0f : 1.0f;
+				hr->mv_list[2].mtx[1][1] = boundary == 10 ? 0.5f : 1.0f;
+				meshes[1].mat_index = boundary == 1 || boundary == 3 ? 1 : 0;
+				meshes[1].vp_index = boundary == 11 ? 1 : 0;
+				meshes[1].ls_index = boundary == 15 ? 1 : 0;
+				meshes[1].has_two_sided_lighting = boundary == 16;
+				meshes[1].tex_index = boundary == 1 || boundary == 2 ? 1 : 0;
+				meshes[1].mv_index = boundary == 7 ? 1 : boundary == 4 || boundary == 9 || boundary == 10 || boundary == 14 ? 2 : 0;
+				meshes[1].num_instances = boundary == 7 ? HIKARU_DRAW_PALETTE_SIZE + 1 : 1;
+				meshes[1].depth_bias = boundary == 5 ? 100.0f : boundary == 8 ? 1024.0f : boundary == 12 ? 4096.0f : 0.0f;
+				meshes[1].alpha_thresh[1] = boundary == 12 ? 1.0f : 0.0f;
+				meshes[1].alternate_mv_index = boundary == 6 || boundary == 13 ? 0 : ~0u;
+				meshes[0].alternate_mv_index = boundary == 14 ? 0 : ~0u;
+				hr->mat_list[1] = hr->mat_list[0];
+				hr->mat_list[1].blending_mode = boundary == 1 ? 2 : 0;
+				if (boundary == 3) hr->mat_list[1].diffuse[0] ^= 255;
+				hr->tex_list[1] = hr->tex_list[0];
+				hr->tex_list[1].bank = boundary == 1;
+				hr->tex_list[1].format = boundary == 2 ? HIKARU_FORMAT_ABGR4444 : HIKARU_FORMAT_ABGR1555;
+				for (unsigned v = 0; v < 3; ++v)
+					meshes[1].cpu_vertices[v].matrix_select = boundary == 6 || boundary == 14 ? 1 :
+						boundary == 9 ? 0xc1 : boundary == 13 ? (v == 0 ? 0 : v == 1 ? 1 : 0xc1) : 0;
+				/* A nonuniform modelview changes the inverse-transpose normal.
+				 * Nonzero directional lighting makes its palette selection visible. */
+				for (unsigned side = 0; side < 2; ++side)
+					for (unsigned v = 0; v < meshes[side].num_tris * 3; ++v) {
+						if (side == 0) meshes[side].cpu_vertices[v].matrix_select = boundary == 14 ? 1 : 0;
+						meshes[side].cpu_vertices[v].normal[0] = lit_case ? 0.5f : 0.0f;
+						meshes[side].cpu_vertices[v].normal[2] = lit_case ? 1.0f : 0.0f;
+					}
+				separate_triangle_meshes = true;
+				triangle_draw_runs = 0;
+				const unsigned reference_viewport_start = viewport_updates;
+				const unsigned reference_program_start = program_binds;
+				draw_scene(hr);
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+				glReadPixels(0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, reference_pixels);
+				const unsigned reference_runs = triangle_draw_runs;
+				if (program_binds - reference_program_start != reference_runs) {
+					fprintf(stderr, "triangle reference program boundary %u: binds=%u expected=%u\n",
+					        boundary, program_binds - reference_program_start, reference_runs);
+					batching_matches = false;
+				}
+				if (viewport_updates - reference_viewport_start != reference_runs) {
+					fprintf(stderr, "triangle reference viewport boundary %u: updates=%u expected=%u\n",
+					        boundary, viewport_updates - reference_viewport_start, reference_runs);
+					batching_matches = false;
+				}
+				if (lit_case &&
+				    reference_pixels[(240u * 640u + 320u) * 4u] == 0 &&
+				    reference_pixels[(240u * 640u + 320u) * 4u + 2u] == 0) {
+					fprintf(stderr, "triangle palette lighting probe is black\n");
+					batching_matches = false;
+				}
+				const unsigned expected_reference_runs = boundary == 7 ? HIKARU_DRAW_PALETTE_SIZE + 2 : 2;
+				batching_matches &= triangle_draw_runs == expected_reference_runs;
+				separate_triangle_meshes = false;
+				/* The oracle uses conservative unknown metadata. Exercise known
+				 * primary-only, alternate-only and mixed usage in the live path. */
+				meshes[0].matrix_usage = boundary == 14 ? 2 : 1;
+				meshes[1].matrix_usage = boundary == 6 || boundary == 9 || boundary == 14 ? 2 : boundary == 13 ? 3 : 1;
+				disable_triangle_palette = true;
+				triangle_draw_runs = 0;
+				draw_scene(hr);
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+				glReadPixels(0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, batched_pixels);
+				const unsigned fallback_runs = boundary == 0 || boundary == 3 || boundary == 12 || boundary == 15 || boundary == 16 ? 1 :
+					boundary == 7 ? HIKARU_DRAW_PALETTE_SIZE + 1 : expected_reference_runs;
+				if (triangle_draw_runs != fallback_runs || memcmp(reference_pixels, batched_pixels, image_bytes)) {
+					fprintf(stderr, "triangle fallback boundary %u: runs=%u expected=%u\n",
+					        boundary, triangle_draw_runs, fallback_runs);
+					batching_matches = false;
+				}
+				disable_triangle_palette = false;
+				triangle_draw_runs = 0;
+				const unsigned batched_viewport_start = viewport_updates;
+				const unsigned batched_program_start = program_binds;
+				const unsigned batched_light_start = state_uploads[2];
+				draw_scene(hr);
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+				glReadPixels(0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, batched_pixels);
+				const bool same_pixels = !memcmp(reference_pixels, batched_pixels, image_bytes);
+				const unsigned expected_runs = boundary == 1 || boundary == 7 || boundary == 8 || boundary == 11 ? 2u : 1u;
+				const unsigned expected_viewports = boundary == 11 ? 2u : 1u;
+				if (boundary == 15 && state_uploads[2] != batched_light_start) {
+					fprintf(stderr, "masked light change invalidated active light uniforms\n");
+					batching_matches = false;
+				}
+				if ((boundary == 1 || boundary == 2 || boundary == 11 || boundary == 15 || boundary == 16) && program_binds - batched_program_start != 1) {
+					fprintf(stderr, "triangle program boundary %u: binds=%u expected=1\n",
+					        boundary, program_binds - batched_program_start);
+					batching_matches = false;
+				}
+				if (viewport_updates - batched_viewport_start != expected_viewports) {
+					fprintf(stderr, "triangle viewport boundary %u: updates=%u expected=%u\n",
+					        boundary, viewport_updates - batched_viewport_start, expected_viewports);
+					batching_matches = false;
+				}
+				if (reference_runs != expected_reference_runs || triangle_draw_runs != expected_runs || !same_pixels)
+					fprintf(stderr, "triangle batch boundary %u: reference runs=%u batched runs=%u expected=%u pixels=%s\n",
+					        boundary, reference_runs, triangle_draw_runs, expected_runs, same_pixels ? "equal" : "different");
+				batching_matches &= triangle_draw_runs == expected_runs && same_pixels;
+				if (boundary == 4) {
+					/* An unchanged two-record draw must reuse its matrix and
+					 * depth arrays while producing the same complete image. */
+					unsigned uploads[3];
+					memcpy(uploads, palette_uploads, sizeof(uploads));
+					draw_scene(hr);
+					glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+					glReadPixels(0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, batched_pixels);
+					if (memcmp(uploads, palette_uploads, sizeof(uploads)) ||
+					    memcmp(reference_pixels, batched_pixels, image_bytes)) {
+						fprintf(stderr, "triangle palette repeat changed uploads or pixels\n");
+						batching_matches = false;
+					}
+				}
+				meshes[0].matrix_usage = meshes[1].matrix_usage = 0;
+			}
+			meshes[1].vp_index = meshes[1].mat_index = meshes[1].tex_index = meshes[1].mv_index = 0;
+			meshes[1].ls_index = 0;
+			meshes[1].has_two_sided_lighting = false;
+			meshes[1].alpha_thresh[1] = 0;
+			meshes[1].num_instances = 1;
+			meshes[1].depth_bias = 0;
+			meshes[1].alternate_mv_index = ~0u;
+			meshes[0].alternate_mv_index = ~0u;
+			for (unsigned side = 0; side < 2; ++side)
+				for (unsigned v = 0; v < meshes[side].num_tris * 3; ++v) {
+					meshes[side].cpu_vertices[v].matrix_select = 0;
+					memset(meshes[side].cpu_vertices[v].normal, 0, sizeof(meshes[side].cpu_vertices[v].normal));
+				}
+			hr->ls_list[0].mask = 15;
+			hr->mat_list[0].shading_mode = hr->mat_list[1].shading_mode = 0;
+			hr->mat_list[0].has_texture = hr->mat_list[1].has_texture = 0;
+		}
 		draw_scene(hr);
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
 		glReadPixels(220, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels[pass][0]);
@@ -4363,7 +5219,7 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 	}
 	left[0] = pixels[2][0][0]; left[2] = pixels[2][0][2];
 	right[0] = pixels[2][1][0]; right[2] = pixels[2][1][2];
-	ok = glGetError() == GL_NO_ERROR &&
+	ok = batching_matches && glGetError() == GL_NO_ERROR &&
 		/* Strip and triangle order use one global back-to-front sequence. */
 		pixels[0][0][2] > pixels[0][0][0] && pixels[0][1][2] > pixels[0][1][0] &&
 		pixels[1][0][2] > pixels[1][0][0] && pixels[1][1][2] > pixels[1][1][0] &&
@@ -4422,11 +5278,17 @@ int hikaru_vendor_test_transparency_sorting_pixels(void)
 	allocate_peel_targets(hr, 320, 240, 2, 3);
 	ok &= hr->framebuffer.peel_layers_allocated == 2 && glGetError() == GL_NO_ERROR;
 cleanup:
+	separate_triangle_meshes = false;
+	disable_triangle_palette = false;
+	free(reference_pixels);
+	free(batched_pixels);
 	if (hr) {
 		if (hr->mesh_list[0][0]) destroy_3d_state(hr);
 		if (hr->framebuffer.program || hr->framebuffer.fb[0]) destroy_fb_state(hr);
 		free(hr);
 	}
+	if (gpu)
+		for (unsigned bank = 0; bank < 2; ++bank) vk_buffer_destroy(&gpu->texram[bank]);
 	free(gpu);
 	return ok;
 }
@@ -4515,14 +5377,27 @@ destroy_3d_state (hikaru_renderer_t *hr)
 		glDeleteVertexArrays (1, &hr->meshes.vao);
 	}
 	if (hr->triangle_replay.vbo) glDeleteBuffers (1, &hr->triangle_replay.vbo);
+	if (hr->triangle_replay.state_vbo) glDeleteBuffers (1, &hr->triangle_replay.state_vbo);
 	if (hr->triangle_replay.vao) glDeleteVertexArrays (1, &hr->triangle_replay.vao);
 	hr->triangle_replay.vbo = hr->triangle_replay.vao = 0;
+	hr->triangle_replay.state_vbo = 0;
+	for (unsigned i = 0; i < hr->triangle_replay.sampler_count; ++i)
+		glDeleteSamplers(1, &hr->triangle_replay.samplers[i].id);
+	hr->triangle_replay.sampler_count = hr->triangle_replay.sampler_cursor = 0;
 	free (hr->triangle_replay.refs);
 	free (hr->triangle_replay.refs_tmp);
 	free (hr->triangle_replay.batch);
+	free (hr->triangle_replay.draw_states);
+	free (hr->triangle_replay.run_ends);
 	hr->triangle_replay.refs = hr->triangle_replay.refs_tmp = NULL;
 	hr->triangle_replay.batch = NULL;
+	hr->triangle_replay.draw_states = NULL;
+	hr->triangle_replay.run_ends = NULL;
 	hr->triangle_replay.refs_capacity = 0;
+	hr->triangle_replay.palette_capacity = 0;
+	hr->triangle_replay.palette_enabled = false;
+	hr->triangle_replay.texture_palette_enabled = false;
+	hr->triangle_replay.shading_palette_enabled = false;
 }
 
 static int
@@ -5987,6 +6862,9 @@ int hikaru_vendor_test_seed_packet_3d(vk_renderer_t *renderer, void *gpu_as_void
         hikaru_vertex_t vertex = {0};
         vertex.info.alpha = 255;
         vertex.info.tricap = i == 2 ? 7 : 0;
+        /* Mixed selectors retain the fixture's component-bypass geometry
+         * while exercising usage metadata across packet ownership swaps. */
+        vertex.info.unknown1 = i == 1;
         vertex.body.position[0] = xy[i][0]; vertex.body.position[1] = xy[i][1];
         vertex.body.position[2] = -4;
         vertex.body.normal[2] = 1;

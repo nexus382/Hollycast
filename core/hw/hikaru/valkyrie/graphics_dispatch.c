@@ -5,6 +5,17 @@
 #define HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
 #include "graphics_dispatch.h"
 static _Thread_local const HikaruGraphicsDispatch *current_dispatch;
+GLboolean hikaru_graphics_supports_draw_palette(void) { return current_dispatch == NULL; }
+void hikaru_graphics_bind_draw_palette(GLuint state_buffer) {
+    if (current_dispatch) return;
+    if (state_buffer) {
+        glBindBuffer(GL_ARRAY_BUFFER, state_buffer);
+        glVertexAttribPointer(9, 1, GL_UNSIGNED_BYTE, GL_FALSE, 1, NULL);
+        glEnableVertexAttribArray(9);
+    } else {
+        glDisableVertexAttribArray(9);
+    }
+}
 const HikaruGraphicsDispatch *hikaru_graphics_set_dispatch(const HikaruGraphicsDispatch *dispatch) {
     const HikaruGraphicsDispatch *previous = current_dispatch; current_dispatch = dispatch; return previous;
 }

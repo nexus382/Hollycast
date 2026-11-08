@@ -150,6 +150,8 @@ vk_renderer_compile_program (const char *vs_src, const char *fs_src)
 		"i_ambient", "i_specular", "i_unknown", "i_texcoords", "i_alpha", "i_matrix_select" };
 	for (unsigned i = 0; i < NUMELEM(attributes); ++i)
 		glBindAttribLocation(id, i, attributes[i]);
+	if (hikaru_graphics_supports_draw_palette())
+		glBindAttribLocation(id, 9, "i_draw_state");
 	glBindAttribLocation(id, 1, "i_fb_texcoords");
     if (!vk_renderer_is_gles()) {
         glBindFragDataLocation(id, 0, "vk_frag_color");
