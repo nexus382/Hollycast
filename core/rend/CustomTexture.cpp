@@ -1148,8 +1148,19 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 			bool sheetChanged = false;
 			for (const auto& region : regions)
 				sheetChanged |= texture_atlas::addRegion(sheet, region);
-			if (!sheetChanged && extractedSheets.count(hash) != 0)
-				continue;
+			if (!sheetChanged)
+			{
+				if (extractedSheets.count(hash) != 0)
+					continue;
+				const bool missingPiece = std::any_of(sheet.regions.begin(), sheet.regions.end(), [&](const auto& region) {
+					return !file_exists(directory + texture_atlas::regionFilename(hash, region));
+				});
+				if (!missingPiece)
+				{
+					extractedSheets.insert(hash);
+					continue;
+				}
+			}
 			const auto original = decodeImageToRGBA(hash,
 					readFile({ CustomTextureSourceKind::Png, directory + texture_atlas::imageFilename(hash) }, 512ull * 1024 * 1024),
 					CustomTextureCapabilities::rgbaOnly(CustomTextureBackend::Unknown, 8192));
@@ -1171,7 +1182,7 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 			else
 				*existing = std::move(sheet);
 			extractedSheets.insert(hash);
-			changed = true;
+			changed |= sheetChanged;
 		}
 		if (changed)
 		{

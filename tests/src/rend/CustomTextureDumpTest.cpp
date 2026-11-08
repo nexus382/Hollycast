@@ -60,7 +60,7 @@ protected:
 	void dump(DumpTexture& texture, int size)
 	{
 		std::vector<u8> pixels(size_t(size) * size * 4, 255);
-		dumper.dumpTexture(&texture, size, size, pixels.data());
+		dumper->dumpTexture(&texture, size, size, pixels.data());
 	}
 
 	void extract(DumpTexture& texture)
@@ -83,7 +83,7 @@ protected:
 		polygon.count = 4;
 		RenderPass pass {};
 		pass.op_count = 1;
-		dumper.dumpTextureRegions(context, RenderPass{}, pass);
+		dumper->dumpTextureRegions(context, RenderPass{}, pass);
 	}
 
 	std::filesystem::path titleDirectory() const
@@ -91,7 +91,7 @@ protected:
 		return std::filesystem::path(config::TextureDumpPath.get()) / "ATLAS-TEST";
 	}
 
-	CustomTexture dumper;
+	std::unique_ptr<CustomTexture> dumper = std::make_unique<CustomTexture>();
 	std::filesystem::path root;
 	std::string oldPath, oldGameId;
 	RenderType oldRenderer {};
@@ -155,4 +155,44 @@ TEST_F(CustomTextureDumpTest, InvalidExistingImagesArePreserved)
 	dump(texture, 8);
 	EXPECT_EQ(readText(parent), "invalid PNG fixture");
 	EXPECT_FALSE(std::filesystem::exists(titleDirectory() / texture_atlas::MappingFilename));
+}
+
+TEST_F(CustomTextureDumpTest, RestartSkipsExistingFilesAndOnlyRestoresMissingPieces)
+{
+	DumpTexture texture(0x123);
+	dump(texture, 8);
+	extract(texture);
+	const auto parent = titleDirectory() / "123.png";
+	const auto mapping = titleDirectory() / texture_atlas::MappingFilename;
+	const auto sheets = texture_atlas::parseMapping(readText(mapping));
+	ASSERT_EQ(sheets.size(), 1u);
+	ASSERT_EQ(sheets[0].regions.size(), 1u);
+	const auto piece = titleDirectory() / texture_atlas::regionFilename(texture.texture_hash, sheets[0].regions[0]);
+	const auto parentBytes = readText(parent), pieceBytes = readText(piece), mappingBytes = readText(mapping);
+	const auto oldTime = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
+	for (const auto& path : {parent, piece, mapping})
+		std::filesystem::last_write_time(path, oldTime);
+	const auto parentTime = std::filesystem::last_write_time(parent);
+	const auto pieceTime = std::filesystem::last_write_time(piece);
+	const auto mappingTime = std::filesystem::last_write_time(mapping);
+
+	dumper = std::make_unique<CustomTexture>();
+	dump(texture, 8);
+	extract(texture);
+	EXPECT_EQ(readText(parent), parentBytes);
+	EXPECT_EQ(readText(piece), pieceBytes);
+	EXPECT_EQ(readText(mapping), mappingBytes);
+	EXPECT_EQ(std::filesystem::last_write_time(parent), parentTime);
+	EXPECT_EQ(std::filesystem::last_write_time(piece), pieceTime);
+	EXPECT_EQ(std::filesystem::last_write_time(mapping), mappingTime);
+	EXPECT_EQ(std::distance(std::filesystem::directory_iterator(titleDirectory()), std::filesystem::directory_iterator()), 3);
+
+	std::filesystem::remove(piece);
+	dumper = std::make_unique<CustomTexture>();
+	dump(texture, 8);
+	extract(texture);
+	EXPECT_EQ(readText(piece), pieceBytes);
+	EXPECT_EQ(readText(mapping), mappingBytes);
+	EXPECT_EQ(std::filesystem::last_write_time(mapping), mappingTime);
+	EXPECT_EQ(std::filesystem::last_write_time(parent), parentTime);
 }
