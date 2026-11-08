@@ -165,6 +165,7 @@ private:
 	bool dumpAtlasFailed = false;
 	std::unordered_set<u32> extractedSheets;
 	std::unordered_map<u32, std::pair<int, int>> dumpedTextureSizes;
+	std::unordered_map<u32, texture_atlas::RegionDetector> atlasDetectors;
 	std::vector<texture_atlas::Sheet> dumpedSheets;
 	config::CustomTexturePreloadMode sessionPreloadMode {};
 	std::vector<std::unique_ptr<BaseCustomTextureSource>> sources;

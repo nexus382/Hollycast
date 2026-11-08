@@ -641,6 +641,7 @@ void CustomTexture::clearSessionResources()
 		loaderThread->stop();
 	loaderThread.reset();
 	dumpedTextureSizes.clear();
+	atlasDetectors.clear();
 	dumpedSheets.clear();
 	dumpMappingLoaded = false;
 	dumpAtlasFailed = false;
@@ -976,8 +977,15 @@ void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, voi
 
 	if (writeAtlasPng(path.str(), w, h, dstBuffer, 0))
 	{
-		if (config::SplitTextureSheets && dumpedTextureSizes.size() < 4096)
-			dumpedTextureSizes[texture->texture_hash] = { w, h };
+		if (config::SplitTextureSheets
+				&& (dumpedTextureSizes.size() < 4096 || dumpedTextureSizes.count(texture->texture_hash) != 0))
+		{
+			const std::pair<int, int> dimensions { w, h };
+			const auto previous = dumpedTextureSizes.find(texture->texture_hash);
+			if (previous != dumpedTextureSizes.end() && previous->second != dimensions)
+				atlasDetectors.erase(texture->texture_hash);
+			dumpedTextureSizes[texture->texture_hash] = dimensions;
+		}
 	}
 	else
 		WARN_LOG(RENDERER, "Cannot save texture dump: %s", path.str().c_str());
@@ -1011,21 +1019,23 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 				const PolyParam& polygon = polygons[p];
 				if (!polygon.pcw.Texture || polygon.texture == nullptr || polygon.texture1 != nullptr
 						|| polygon.mvMatrix != -1 || polygon.texture->tcw.PixelFmt == PixelYUV
-						|| polygon.count < 4 || polygon.first > context.verts.size()
+						|| polygon.count < 3 || polygon.first > context.verts.size()
 						|| polygon.count > context.verts.size() - polygon.first)
 					continue;
 				const auto dimensions = dumpedTextureSizes.find(polygon.texture->texture_hash);
 				if (dimensions == dumpedTextureSizes.end())
 					continue; // Only associate UVs with an original PNG successfully dumped in this session.
-				for (u32 i = 0; i + 3 < polygon.count; i++)
+				auto& detector = atlasDetectors.try_emplace(polygon.texture->texture_hash,
+						dimensions->second.first, dimensions->second.second).first->second;
+				for (u32 i = 0; i + 2 < polygon.count; i++)
 				{
-					std::array<std::array<float, 2>, 4> uv;
-					for (u32 j = 0; j < 4; j++)
+					std::array<std::array<float, 2>, 3> uv;
+					for (u32 j = 0; j < 3; j++)
 					{
 						const Vertex& vertex = context.verts[polygon.first + i + j];
 						uv[j] = { vertex.u, vertex.v };
 					}
-					const auto region = texture_atlas::quadRegion(uv, dimensions->second.first, dimensions->second.second);
+					const auto region = detector.submitTriangle(uv);
 					if (region)
 						candidates[polygon.texture->texture_hash].push_back(*region);
 				}
@@ -1035,8 +1045,13 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 		collect(context.global_param_pt, previousPass.pt_count, pass.pt_count);
 		collect(context.global_param_tr, previousPass.tr_count, pass.tr_count);
 		bool changed = false;
-		for (const auto& [hash, regions] : candidates)
+		for (auto& [hash, regions] : candidates)
 		{
+			// A clipped face can cover only part of another confirmed rectangle.
+			// Prefer the complete face when both are discovered in this render pass.
+			std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) {
+				return uint64_t(a.width) * a.height > uint64_t(b.width) * b.height;
+			});
 			const auto dimensions = dumpedTextureSizes.at(hash);
 			auto existing = std::find_if(dumpedSheets.begin(), dumpedSheets.end(),
 					[hash](const texture_atlas::Sheet& sheet) { return sheet.hash == hash; });
@@ -1047,10 +1062,10 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 					: *existing;
 			if (sheet.width != static_cast<u32>(dimensions.first) || sheet.height != static_cast<u32>(dimensions.second))
 				continue; // Never reuse crop coordinates after changing the dump's source resolution.
-			const size_t oldCount = sheet.regions.size();
+			bool sheetChanged = false;
 			for (const auto& region : regions)
-				texture_atlas::addRegion(sheet, region);
-			if (sheet.regions.size() == oldCount && extractedSheets.count(hash) != 0)
+				sheetChanged |= texture_atlas::addRegion(sheet, region);
+			if (!sheetChanged && extractedSheets.count(hash) != 0)
 				continue;
 			const auto original = decodeImageToRGBA(hash,
 					readFile({ CustomTextureSourceKind::Png, directory + texture_atlas::imageFilename(hash) }),

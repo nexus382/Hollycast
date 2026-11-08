@@ -1,8 +1,12 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "rend/custom_texture/TextureAtlas.h"
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <fstream>
 #include <limits>
 #include <locale>
+#include <map>
+#include <sstream>
 #include <stdexcept>
 
 namespace
@@ -15,6 +19,77 @@ Image solid(uint32_t width, uint32_t height, uint8_t value)
 }
 
 const Sheet TwoPieces { 0x123abc, 8, 4, { { 0, 0, 4, 4 }, { 4, 0, 4, 4 } } };
+
+std::optional<Region> quadRegion(const std::array<std::array<float, 2>, 4>& uv, uint32_t width, uint32_t height)
+{
+	RegionDetector detector(width, height);
+	detector.submitTriangle({uv[0], uv[1], uv[2]});
+	return detector.submitTriangle({uv[1], uv[2], uv[3]});
+}
+}
+
+TEST(TextureAtlas, MatchesComplementaryStandaloneTrianglesAcrossSubmissions)
+{
+	RegionDetector detector(256, 256);
+	const std::array<std::array<float, 2>, 3> first {{{0.501953125f, 0.251953125f},
+			{0.744140625f, 0.251953125f}, {0.744140625f, 0.494140625f}}};
+	const std::array<std::array<float, 2>, 3> second {{{0.501953125f, 0.251953125f},
+			{0.744140625f, 0.494140625f}, {0.501953125f, 0.494140625f}}};
+	EXPECT_FALSE(detector.submitTriangle(first));
+	EXPECT_FALSE(detector.submitTriangle(first));
+	const auto region = detector.submitTriangle(second);
+	ASSERT_TRUE(region);
+	EXPECT_EQ(*region, (Region {128, 129, 63, 63}));
+	EXPECT_FALSE(detector.submitTriangle(second));
+}
+
+TEST(TextureAtlas, RejectsClippedRectanglesAndInsetWholeImages)
+{
+	// This clipped corner comes directly from the Chronicles capture; it is not an authored edge.
+	EXPECT_FALSE(quadRegion({{{0.501953125f, 0.251953125f}, {0.595392227f, 0.251953125f},
+			{0.501953125f, 0.494140625f}, {0.595392227f, 0.494140625f}}}, 256, 256));
+	EXPECT_FALSE(quadRegion({{{0.5f/256, 0.5f/256}, {254.5f/256, 0.5f/256},
+			{0.5f/256, 254.5f/256}, {254.5f/256, 254.5f/256}}}, 256, 256));
+}
+
+TEST(TextureAtlas, CapturedChroniclesStripsRecoverGameplayPieces)
+{
+	std::ifstream input(FLYCAST_TEST_FILES "/texture-atlas/chronicles-uv.csv");
+	ASSERT_TRUE(input.is_open());
+	std::map<uint32_t, RegionDetector> detectors;
+	std::map<uint32_t, Sheet> sheets;
+	std::string line;
+	while (std::getline(input, line))
+	{
+		if (line.empty() || line[0] == '#')
+			continue;
+		std::replace(line.begin(), line.end(), ',', ' ');
+		std::istringstream row(line);
+		row.imbue(std::locale::classic());
+		uint32_t hash, width, height, count;
+		int matrix, secondTexture;
+		ASSERT_TRUE(bool(row >> std::hex >> hash >> std::dec >> width >> height >> count >> matrix >> secondTexture));
+		ASSERT_EQ(count, 3u);
+		std::array<std::array<float, 2>, 3> uv;
+		for (auto& point : uv)
+			ASSERT_TRUE(bool(row >> point[0] >> point[1]));
+		auto& detector = detectors.try_emplace(hash, width, height).first->second;
+		if (const auto region = detector.submitTriangle(uv))
+		{
+			auto& sheet = sheets.try_emplace(hash, Sheet {hash, width, height, {}}).first->second;
+			addRegion(sheet, *region);
+		}
+	}
+	ASSERT_EQ(sheets.size(), 2u);
+	for (const auto& [hash, sheet] : sheets)
+	{
+		ASSERT_EQ(sheet.regions.size(), 3u) << std::hex << hash;
+		for (const auto& region : sheet.regions)
+		{
+			EXPECT_EQ(region.width, 63u);
+			EXPECT_EQ(region.height, 63u);
+		}
+	}
 }
 
 TEST(TextureAtlas, ExtractsRectangleWithImageCoordinates)
@@ -60,6 +135,18 @@ TEST(TextureAtlas, RejectsOverlapsDuplicatesAndOutsideRegions)
 	EXPECT_TRUE(addRegion(sheet, {4, 0, 4, 4}));
 }
 
+TEST(TextureAtlas, CompleteFacesReplaceContainedCutsWithoutMergingDistinctPieces)
+{
+	Sheet sheet {1, 256, 256, {{0, 209, 63, 47}}};
+	EXPECT_TRUE(addRegion(sheet, {0, 193, 63, 63}));
+	ASSERT_EQ(sheet.regions.size(), 1u);
+	EXPECT_EQ(sheet.regions[0], (Region {0, 193, 63, 63}));
+	EXPECT_FALSE(addRegion(sheet, {0, 209, 63, 47}));
+	EXPECT_TRUE(addRegion(sheet, {64, 193, 63, 63}));
+	EXPECT_FALSE(addRegion(sheet, {0, 192, 128, 64}));
+	EXPECT_EQ(sheet.regions.size(), 2u);
+}
+
 TEST(TextureAtlas, MappingRoundTripPreservesDimensionsAndFilenames)
 {
 	const auto decoded = parseMapping(writeMapping({TwoPieces}));
@@ -91,6 +178,7 @@ TEST(TextureAtlas, RejectsMalformedUnsupportedAndOverlappingMappings)
 	EXPECT_THROW(parseMapping(R"({"version":2,"sheets":[]})"), std::exception);
 	EXPECT_THROW(parseMapping(R"({"version":1,"sheets":[{"hash":1,"width":8,"height":8,"regions":[[-1,0,4,4]]}]})"), std::exception);
 	EXPECT_THROW(parseMapping(R"({"version":1,"sheets":[{"hash":1,"width":8,"height":8,"regions":[[0,0,4,4],[2,2,4,4]]}]})"), std::exception);
+	EXPECT_THROW(parseMapping(R"({"version":1,"sheets":[{"hash":1,"width":8,"height":8,"regions":[[0,0,4,4],[0,0,8,8]]}]})"), std::exception);
 	EXPECT_THROW(parseMapping(writeMapping({TwoPieces, TwoPieces})), std::exception);
 }
 

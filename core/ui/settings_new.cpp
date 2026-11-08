@@ -5268,20 +5268,6 @@ void renderVideoTab()
 			),
 			game_started);
 
-		RenderGeneralToggleSettingRow(
-			"SplitTextureSheets",
-			ICON_FA_IMAGE,
-			T("Split Texture Sheets"),
-			T("Extract and rebuild pieces of texture sheets."),
-			static_cast<bool>(config::SplitTextureSheets),
-			[](bool enabled) { config::SplitTextureSheets.set(enabled); },
-			T("Enable for games that store several textures in one image.\n\n"
-				"With Texture Dumping enabled, saves rectangular pieces and texture-atlas.json beside the original sheets.\n"
-				"Copy the mapping, original sheets and edited pieces into the title's replacement folder.\n"
-				"Every piece from a sheet must use the same scale, such as 2x or 4x.\n"
-				"Sheets are rebuilt automatically when custom textures load. Uncertain regions remain in the original sheet."),
-			game_started);
-
 		const bool gpuPreloadSupported = rend_supports_gpu_texture_preload();
 		int configuredMode = static_cast<int>(config::customTexturePreloadMode());
 
@@ -9303,6 +9289,19 @@ void renderAdvancedTab()
 				"It can create a large number of files quickly and may reduce performance due to disk I/O.\n\n"
 				"Enable it only when you specifically need a dump, then disable it again."
 			));
+		RenderGeneralToggleSettingRow(
+			"SplitTextureSheets",
+			ICON_FA_IMAGE,
+			T("Split Texture Sheets"),
+			T("Extract and rebuild pieces of texture sheets."),
+			static_cast<bool>(config::SplitTextureSheets),
+			[](bool enabled) { config::SplitTextureSheets.set(enabled); },
+			T("Enable for games that store several textures in one image.\n\n"
+				"With Texture Dumping enabled, saves rectangular pieces and texture-atlas.json beside the original sheets.\n"
+				"Copy the mapping, original sheets and edited pieces into the title's replacement folder.\n"
+				"Every piece from a sheet must use the same scale, such as 2x or 4x.\n"
+				"Sheets are rebuilt automatically when custom textures load. Uncertain regions remain in the original sheet."),
+			game_started);
 		if (config::DumpTextures)
 		{
 			ImGui::Indent();

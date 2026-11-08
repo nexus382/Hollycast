@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -23,9 +24,17 @@ struct Sheet
 	std::vector<Region> regions;
 };
 
-// Coordinates are in the source sheet, before renderer-specific UV adjustments.
-std::optional<Region> quadRegion(const std::array<std::array<float, 2>, 4>& uv,
-		uint32_t width, uint32_t height);
+class RegionDetector
+{
+public:
+	RegionDetector(uint32_t width, uint32_t height) : width(width), height(height) {}
+	// Match source-space triangle halves across strips, before renderer UV adjustments.
+	std::optional<Region> submitTriangle(const std::array<std::array<float, 2>, 3>& uv);
+
+private:
+	uint32_t width, height;
+	std::map<std::array<uint32_t, 4>, uint16_t> triangles;
+};
 bool addRegion(Sheet& sheet, const Region& region);
 std::string imageFilename(uint32_t hash);
 std::string regionFilename(uint32_t hash, const Region& region);

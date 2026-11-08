@@ -54,57 +54,95 @@ bool Region::operator==(const Region& other) const
 	return x == other.x && y == other.y && width == other.width && height == other.height;
 }
 
-std::optional<Region> quadRegion(const std::array<std::array<float, 2>, 4>& uv,
-		uint32_t width, uint32_t height)
+std::optional<Region> RegionDetector::submitTriangle(const std::array<std::array<float, 2>, 3>& uv)
 {
 	if (width == 0 || height == 0 || width > 8192 || height > 8192)
 		return std::nullopt;
-	float minU = 1, minV = 1, maxU = 0, maxV = 0;
-	for (const auto& point : uv)
-	{
-		if (!std::isfinite(point[0]) || !std::isfinite(point[1])
-				|| point[0] < 0 || point[0] > 1 || point[1] < 0 || point[1] > 1)
-			return std::nullopt; // Wrapped/mirrored UV ranges do not identify a single crop.
-		minU = std::min(minU, point[0]); maxU = std::max(maxU, point[0]);
-		minV = std::min(minV, point[1]); maxV = std::max(maxV, point[1]);
-	}
-	if (maxU - minU < 1.0f / width || maxV - minV < 1.0f / height)
-		return std::nullopt;
-	unsigned corners = 0;
-	std::array<unsigned, 4> cornerIds {};
+	std::array<std::array<uint32_t, 2>, 3> points;
+	uint32_t minU = width * 2, minV = height * 2, maxU = 0, maxV = 0;
 	for (size_t i = 0; i < uv.size(); i++)
 	{
 		const auto& point = uv[i];
-		// Accept only paired triangles covering an axis-aligned UV rectangle.
-		// Arbitrary UV islands stay in the original sheet instead of becoming misleading crops.
-		const bool right = std::abs(point[0] - maxU) < 0.001f / width;
-		const bool bottom = std::abs(point[1] - maxV) < 0.001f / height;
-		if ((!right && std::abs(point[0] - minU) >= 0.001f / width)
-				|| (!bottom && std::abs(point[1] - minV) >= 0.001f / height))
-			return std::nullopt;
-		cornerIds[i] = unsigned(right) + 2 * unsigned(bottom);
-		corners |= 1u << cornerIds[i];
+		if (!std::isfinite(point[0]) || !std::isfinite(point[1])
+				|| point[0] < 0 || point[0] > 1 || point[1] < 0 || point[1] > 1)
+			return std::nullopt; // Wrapped/mirrored UV ranges do not identify a single crop.
+		for (size_t axis = 0; axis < 2; axis++)
+		{
+			const double coordinate = double(point[axis]) * (axis == 0 ? width : height) * 2;
+			const double rounded = std::round(coordinate);
+			// Chronicles submits individually clipped triangles. Arbitrary clipping intersections
+			// must not become crop boundaries; authored edges normally lie on texels or texel centers.
+			if (std::abs(coordinate - rounded) > 0.002)
+				return std::nullopt;
+			points[i][axis] = static_cast<uint32_t>(rounded);
+		}
+		minU = std::min(minU, points[i][0]);
+		maxU = std::max(maxU, points[i][0]);
+		minV = std::min(minV, points[i][1]);
+		maxV = std::max(maxV, points[i][1]);
 	}
-	// Vertices 1 and 2 are shared by the two strip triangles; they must form the diagonal.
-	if (corners != 15 || (cornerIds[1] ^ cornerIds[2]) != 3)
+	if (maxU - minU < 2 || maxV - minV < 2)
 		return std::nullopt;
-	const uint32_t left = static_cast<uint32_t>(std::floor(minU * width));
-	const uint32_t top = static_cast<uint32_t>(std::floor(minV * height));
-	const uint32_t right = static_cast<uint32_t>(std::ceil(maxU * width));
-	const uint32_t bottom = static_cast<uint32_t>(std::ceil(maxV * height));
-	if (right <= left || bottom <= top || (right - left == width && bottom - top == height))
+	unsigned corners = 0;
+	for (const auto& point : points)
+	{
+		if ((point[0] != minU && point[0] != maxU) || (point[1] != minV && point[1] != maxV))
+			return std::nullopt;
+		corners |= 1u << (unsigned(point[0] == maxU) + 2 * unsigned(point[1] == maxV));
+	}
+	if (corners != 7 && corners != 11 && corners != 13 && corners != 14)
 		return std::nullopt;
+	const uint32_t left = minU / 2, top = minV / 2;
+	const uint32_t right = (maxU + 1) / 2, bottom = (maxV + 1) / 2;
+	// Inset UVs on a standalone image (e.g. the Dreamcast spiral) are still whole-image use.
+	if (right - left + 2 >= width && bottom - top + 2 >= height)
+		return std::nullopt;
+	const std::array<uint32_t, 4> bounds { minU, minV, maxU, maxV };
+	auto found = triangles.find(bounds);
+	if (found == triangles.end())
+	{
+		if (triangles.size() >= MaxRegions)
+			return std::nullopt;
+		found = triangles.emplace(bounds, 0).first;
+	}
+	uint16_t& observed = found->second;
+	constexpr uint16_t Confirmed = 1;
+	if ((observed & Confirmed) != 0)
+		return std::nullopt;
+	observed |= uint16_t(1u << corners);
+	// The halves may belong to different strips or frames. Only opposite missing corners
+	// cover the rectangle: sharing a side would leave a gap and double-cover another area.
+	if (!((observed & (1u << 7)) && (observed & (1u << 14)))
+			&& !((observed & (1u << 11)) && (observed & (1u << 13))))
+		return std::nullopt;
+	observed |= Confirmed;
 	// Dumped PNGs are flipped vertically relative to PVR sampling coordinates.
 	return Region { left, height - bottom, right - left, bottom - top };
 }
 
 bool addRegion(Sheet& sheet, const Region& region)
 {
-	if (!validRegion(sheet, region) || sheet.regions.size() >= MaxRegions)
+	if (!validRegion(sheet, region))
 		return false;
-	for (const Region& existing : sheet.regions)
-		if (overlaps(existing, region))
-			return false; // Includes duplicates; never overwrite a previously exported piece.
+	auto contained = sheet.regions.end();
+	for (auto existing = sheet.regions.begin(); existing != sheet.regions.end(); ++existing)
+	{
+		if (!overlaps(*existing, region))
+			continue;
+		if (*existing == region || existing->x < region.x || existing->y < region.y
+				|| existing->x + existing->width > region.x + region.width
+				|| existing->y + existing->height > region.y + region.height || contained != sheet.regions.end())
+			return false; // Never combine independently identified pieces or partially overlapping regions.
+		contained = existing;
+	}
+	if (contained != sheet.regions.end())
+	{
+		// A complete face discovered later supersedes its clipped partial rectangle.
+		*contained = region;
+		return true;
+	}
+	if (sheet.regions.size() >= MaxRegions)
+		return false;
 	sheet.regions.push_back(region);
 	return true;
 }
@@ -149,7 +187,8 @@ std::vector<Sheet> parseMapping(const std::string& text)
 				throw std::runtime_error("atlas region must contain x, y, width and height");
 			Region region { unsignedValue(box[0]), unsignedValue(box[1]),
 					unsignedValue(box[2]), unsignedValue(box[3]) };
-			if (!addRegion(sheet, region))
+			const size_t previousCount = sheet.regions.size();
+			if (!addRegion(sheet, region) || sheet.regions.size() != previousCount + 1)
 				throw std::runtime_error("atlas regions overlap or extend outside their sheet");
 		}
 		sheets.push_back(std::move(sheet));
