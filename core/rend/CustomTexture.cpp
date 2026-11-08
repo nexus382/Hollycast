@@ -38,6 +38,7 @@
 #include <cstring>
 #include <map>
 #include <new>
+#include <stdexcept>
 #include <unordered_set>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -66,15 +67,15 @@ std::vector<u32> replacementHashes(u32 currentHash, u32 oldVqHash, u32 oldHash)
 	return hashes;
 }
 
-std::vector<u8> readFile(const CustomTextureCandidate& candidate)
+std::vector<u8> readFile(const CustomTextureCandidate& candidate, size_t maxSize = SIZE_MAX)
 {
 	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(candidate.path, "rb"));
 	if (!file)
 		throw CustomTextureException(CustomTextureException::Error::FileRead, "file open failed");
 	const s64 actualSize = file->size();
-	if (actualSize <= 0 || static_cast<u64>(actualSize) > static_cast<u64>(SIZE_MAX))
+	if (actualSize <= 0 || static_cast<u64>(actualSize) > static_cast<u64>(maxSize))
 		throw CustomTextureException(CustomTextureException::Error::FileRead,
-				"file is empty or cannot be addressed on this platform");
+				"file is empty or exceeds the supported size");
 	std::vector<u8> bytes(static_cast<size_t>(actualSize));
 	if (file->read(bytes.data(), 1, bytes.size()) != bytes.size())
 		throw CustomTextureException(CustomTextureException::Error::FileRead, "short file read");
@@ -108,7 +109,7 @@ std::array<CustomTextureSourceKind, 7> preferredSourceKinds(
 }
 
 PreparedCustomTexture::Ptr decodeImageToRGBA(u32 hash, const std::vector<u8>& fileBytes,
-		const CustomTextureCapabilities& capabilities)
+		const CustomTextureCapabilities& capabilities, bool flip = true)
 {
 	if (fileBytes.size() > INT_MAX)
 		throw CustomTextureException(CustomTextureException::Error::ImageDecode,
@@ -126,7 +127,7 @@ PreparedCustomTexture::Ptr decodeImageToRGBA(u32 hash, const std::vector<u8>& fi
 				"legacy image dimensions exceed active renderer limits");
 	const PreparedMipLevel level = computeMipLayout(NativeTextureFormat::Rgba8Unorm,
 			static_cast<u32>(width), static_cast<u32>(height), 0);
-	stbi_set_flip_vertically_on_load_thread(1);
+	stbi_set_flip_vertically_on_load_thread(flip);
 	stbi_uc *decoded = stbi_load_from_memory(fileBytes.data(), static_cast<int>(fileBytes.size()),
 			&width, &height, &channels, STBI_rgb_alpha);
 	if (decoded == nullptr)
@@ -142,6 +143,72 @@ PreparedCustomTexture::Ptr decodeImageToRGBA(u32 hash, const std::vector<u8>& fi
 	output->levels.push_back(level);
 	output->bytes.assign(decoded, decoded + level.byteSize);
 	return output;
+}
+
+bool writeAtlasPng(const std::string& path, int width, int height, const u8 *pixels, int stride)
+{
+	const std::string temporary = path + ".tmp";
+	FILE *file = nowide::fopen(temporary.c_str(), "wb");
+	if (file == nullptr)
+		return false;
+	struct Writer { FILE *file; bool success; } writer { file, true };
+	const auto write = [](void *context, void *data, int size) {
+		auto& writer = *static_cast<Writer *>(context);
+		if (fwrite(data, 1, size, writer.file) != static_cast<size_t>(size))
+			writer.success = false;
+	};
+	// The decoder/dumper supplies bottom-up pixels; keep the existing dump orientation.
+	stbi_flip_vertically_on_write(1);
+	const bool encoded = stbi_write_png_to_func(write, &writer, width, height, STBI_rgb_alpha, pixels, stride) != 0;
+	const bool closed = fclose(file) == 0;
+	if (encoded && writer.success && closed && flycast::rename(temporary.c_str(), path.c_str()) == 0)
+		return true;
+	flycast::unlink(temporary.c_str());
+	return false;
+}
+
+PreparedCustomTexture::Ptr rebuildAtlasTexture(const texture_atlas::Sheet& sheet,
+		const std::string& directory, const CustomTextureCapabilities& capabilities,
+		const BaseCustomTextureSource::CancellationCheck& cancelled)
+{
+	const auto load = [&](const std::string& filename) {
+		const std::string path = hostfs::storage().getSubPath(directory, filename);
+		const auto texture = decodeImageToRGBA(sheet.hash,
+				readFile({ CustomTextureSourceKind::Png, path }, 512ull * 1024 * 1024), capabilities, false);
+		return texture_atlas::Image { texture->width, texture->height, texture->bytes };
+	};
+	std::vector<std::optional<texture_atlas::Image>> tiles(sheet.regions.size());
+	size_t totalBytes = 0;
+	for (size_t i = 0; i < sheet.regions.size(); i++)
+	{
+		if (cancelled && cancelled())
+			return nullptr;
+		const std::string name = texture_atlas::regionFilename(sheet.hash, sheet.regions[i]);
+		if (!hostfs::storage().exists(hostfs::storage().getSubPath(directory, name)))
+			continue;
+		tiles[i] = load(name);
+		totalBytes += tiles[i]->pixels.size();
+		if (totalBytes > 512ull * 1024 * 1024)
+			throw std::runtime_error("atlas pieces exceed the 512 MiB working limit");
+	}
+	const auto original = load(texture_atlas::imageFilename(sheet.hash));
+	auto image = texture_atlas::rebuild(sheet, original, tiles, capabilities.max2DWidth, capabilities.max2DHeight);
+	if (cancelled && cancelled())
+		return nullptr;
+	// Mapping/crop files use top-left coordinates. The replacement upload expects bottom-up RGBA.
+	const size_t rowBytes = size_t(image.width) * 4;
+	for (uint32_t y = 0; y < image.height / 2; y++)
+		std::swap_ranges(image.pixels.begin() + y * rowBytes, image.pixels.begin() + (y + 1) * rowBytes,
+				image.pixels.begin() + (image.height - 1 - y) * rowBytes);
+	auto texture = std::make_shared<PreparedCustomTexture>();
+	texture->replacementHash = sheet.hash;
+	texture->nativeFormat = NativeTextureFormat::Rgba8Unorm;
+	texture->width = image.width;
+	texture->height = image.height;
+	texture->generateMipmaps = true;
+	texture->levels.push_back(computeMipLayout(texture->nativeFormat, image.width, image.height, 0));
+	texture->bytes = std::move(image.pixels);
+	return texture;
 }
 }
 
@@ -185,12 +252,14 @@ private:
 	std::string texturesPath;
 	mutable std::mutex catalogMutex;
 	std::map<u32, CustomTextureCandidate> textureCatalog;
+	std::map<u32, texture_atlas::Sheet> atlasSheets;
 	std::unordered_set<std::string> sessionFailures;
 };
 
 bool CustomTextureSource::loadMap(const CustomTextureCapabilities& capabilities)
 {
 	std::map<u32, CustomTextureCandidate> newCatalog;
+	std::map<u32, texture_atlas::Sheet> newAtlasSheets;
 	const auto preferredKinds = preferredSourceKinds(capabilities);
 	hostfs::DirectoryTree tree(texturesPath);
 	for (const hostfs::FileInfo& item : tree)
@@ -222,9 +291,37 @@ bool CustomTextureSource::loadMap(const CustomTextureCapabilities& capabilities)
 					parsed->hash, candidate.path.c_str(), catalogEntry->second.path.c_str());
 		}
 	}
+	if (config::SplitTextureSheets)
+	{
+		const std::string mappingPath = hostfs::storage().getSubPath(texturesPath, texture_atlas::MappingFilename);
+		if (hostfs::storage().exists(mappingPath))
+		{
+			try
+			{
+				const auto bytes = readFile({ CustomTextureSourceKind::Png, mappingPath }, 4 * 1024 * 1024);
+				for (auto& sheet : texture_atlas::parseMapping(std::string(bytes.begin(), bytes.end())))
+				{
+					const std::string original = hostfs::storage().getSubPath(texturesPath, texture_atlas::imageFilename(sheet.hash));
+					if (!hostfs::storage().exists(original))
+						throw std::runtime_error("atlas mapping requires its original sheet PNG");
+					newAtlasSheets.emplace(sheet.hash, std::move(sheet));
+				}
+			}
+			catch (const std::exception& exception)
+			{
+				WARN_LOG(RENDERER, "Atlas mapping %s: %s", mappingPath.c_str(), exception.what());
+				custom_texture.reportError(CustomTextureException::Error::AtlasMapping);
+				newAtlasSheets.clear();
+			}
+		}
+	}
+	for (const auto& [hash, sheet] : newAtlasSheets)
+		newCatalog[hash] = { CustomTextureSourceKind::Png,
+				hostfs::storage().getSubPath(texturesPath, texture_atlas::imageFilename(hash)) };
 	{
 		std::lock_guard<std::mutex> lock(catalogMutex);
 		textureCatalog = std::move(newCatalog);
+		atlasSheets = std::move(newAtlasSheets);
 		sessionFailures.clear();
 	}
 	std::lock_guard<std::mutex> lock(catalogMutex);
@@ -262,17 +359,35 @@ PreparedCustomTexture::Ptr CustomTextureSource::loadCustomTexture(u32 hash,
 		const CancellationCheck& cancelled)
 {
 	CustomTextureCandidate candidate;
+	std::optional<texture_atlas::Sheet> sheet;
 	{
 		std::lock_guard<std::mutex> lock(catalogMutex);
 		const auto found = textureCatalog.find(hash);
 		if (found == textureCatalog.end())
 			return nullptr;
 		candidate = found->second;
+		const auto atlas = atlasSheets.find(hash);
+		if (atlas != atlasSheets.end())
+			sheet = atlas->second;
 	}
 	if (isFailed(candidate.path))
 		return nullptr;
 	if (cancelled && cancelled())
 		return nullptr;
+	if (sheet)
+	{
+		try
+		{
+			return rebuildAtlasTexture(*sheet, texturesPath, capabilities, cancelled);
+		}
+		catch (const std::exception& exception)
+		{
+			WARN_LOG(RENDERER, "Cannot rebuild texture sheet %08x: %s", hash, exception.what());
+			custom_texture.reportError(CustomTextureException::Error::AtlasMapping);
+			markFailed(candidate.path);
+			return nullptr;
+		}
+	}
 	const bool legacyImage = candidate.kind == CustomTextureSourceKind::Png
 			|| candidate.kind == CustomTextureSourceKind::Jpeg;
 	if (!legacyImage && capabilities.backend == CustomTextureBackend::Direct3D9)
@@ -446,6 +561,7 @@ bool CustomTexture::needsRefresh() const {
 	return state == State::RefreshPending
 			|| (state == State::Active
 					&& (sessionCustomTextures != config::CustomTextures.get()
+							|| sessionSplitTextureSheets != config::SplitTextureSheets.get()
 							|| sessionPreloadMode != config::customTexturePreloadMode()));
 }
 
@@ -507,6 +623,7 @@ void CustomTexture::startSession(const std::string& gameId)
 	state = State::Active;
 	sessionGameId = gameId;
 	sessionCustomTextures = config::CustomTextures.get();
+	sessionSplitTextureSheets = config::SplitTextureSheets.get();
 	sessionPreloadMode = config::customTexturePreloadMode();
 	if (!gameId.empty())
 	{
@@ -523,6 +640,11 @@ void CustomTexture::clearSessionResources()
 	if (loaderThread)
 		loaderThread->stop();
 	loaderThread.reset();
+	dumpedTextureSizes.clear();
+	dumpedSheets.clear();
+	dumpMappingLoaded = false;
+	dumpAtlasFailed = false;
+	extractedSheets.clear();
 	for (auto& source : sources)
 		source->terminate();
 	sources.clear();
@@ -852,22 +974,131 @@ void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, voi
 		}
 	}
 
-	stbi_flip_vertically_on_write(1);
-	const auto& savefunc = [](void *context, void *data, int size) {
-		FILE *f = nowide::fopen((const char *)context, "wb");
-		if (f == nullptr)
-		{
-			WARN_LOG(RENDERER, "Dump texture: can't save to file %s: error %d", (const char *)context, errno);
-		}
-		else
-		{
-			fwrite(data, 1, size, f);
-			fclose(f);
-		}
-	};
-	stbi_write_png_to_func(savefunc, (void *)path.str().c_str(), w, h, STBI_rgb_alpha, dstBuffer, 0);
+	if (writeAtlasPng(path.str(), w, h, dstBuffer, 0))
+	{
+		if (config::SplitTextureSheets && dumpedTextureSizes.size() < 4096)
+			dumpedTextureSizes[texture->texture_hash] = { w, h };
+	}
+	else
+		WARN_LOG(RENDERER, "Cannot save texture dump: %s", path.str().c_str());
 
 	free(dstBuffer);
+}
+
+void CustomTexture::dumpTextureRegions(const rend_context& context,
+		const RenderPass& previousPass, const RenderPass& pass)
+{
+	const std::string gameId = getGameId();
+	if (gameId.empty() || dumpedTextureSizes.empty() || dumpAtlasFailed)
+		return;
+	const std::string directory = hostfs::getTextureDumpPath() + gameId + "/";
+	const std::string mappingPath = directory + texture_atlas::MappingFilename;
+	try
+	{
+		if (!dumpMappingLoaded)
+		{
+			dumpMappingLoaded = true;
+			if (file_exists(mappingPath))
+			{
+				const auto bytes = readFile({ CustomTextureSourceKind::Png, mappingPath }, 4 * 1024 * 1024);
+				dumpedSheets = texture_atlas::parseMapping(std::string(bytes.begin(), bytes.end()));
+			}
+		}
+		std::map<u32, std::vector<texture_atlas::Region>> candidates;
+		const auto collect = [&](const std::vector<PolyParam>& polygons, u32 first, u32 end) {
+			for (size_t p = first; p < std::min<size_t>(end, polygons.size()); p++)
+			{
+				const PolyParam& polygon = polygons[p];
+				if (!polygon.pcw.Texture || polygon.texture == nullptr || polygon.texture1 != nullptr
+						|| polygon.mvMatrix != -1 || polygon.texture->tcw.PixelFmt == PixelYUV
+						|| polygon.count < 4 || polygon.first > context.verts.size()
+						|| polygon.count > context.verts.size() - polygon.first)
+					continue;
+				const auto dimensions = dumpedTextureSizes.find(polygon.texture->texture_hash);
+				if (dimensions == dumpedTextureSizes.end())
+					continue; // Only associate UVs with an original PNG successfully dumped in this session.
+				for (u32 i = 0; i + 3 < polygon.count; i++)
+				{
+					std::array<std::array<float, 2>, 4> uv;
+					for (u32 j = 0; j < 4; j++)
+					{
+						const Vertex& vertex = context.verts[polygon.first + i + j];
+						uv[j] = { vertex.u, vertex.v };
+					}
+					const auto region = texture_atlas::quadRegion(uv, dimensions->second.first, dimensions->second.second);
+					if (region)
+						candidates[polygon.texture->texture_hash].push_back(*region);
+				}
+			}
+		};
+		collect(context.global_param_op, previousPass.op_count, pass.op_count);
+		collect(context.global_param_pt, previousPass.pt_count, pass.pt_count);
+		collect(context.global_param_tr, previousPass.tr_count, pass.tr_count);
+		bool changed = false;
+		for (const auto& [hash, regions] : candidates)
+		{
+			const auto dimensions = dumpedTextureSizes.at(hash);
+			auto existing = std::find_if(dumpedSheets.begin(), dumpedSheets.end(),
+					[hash](const texture_atlas::Sheet& sheet) { return sheet.hash == hash; });
+			if (existing == dumpedSheets.end() && dumpedSheets.size() >= 4096)
+				continue;
+			texture_atlas::Sheet sheet = existing == dumpedSheets.end()
+					? texture_atlas::Sheet { hash, static_cast<u32>(dimensions.first), static_cast<u32>(dimensions.second), {} }
+					: *existing;
+			if (sheet.width != static_cast<u32>(dimensions.first) || sheet.height != static_cast<u32>(dimensions.second))
+				continue; // Never reuse crop coordinates after changing the dump's source resolution.
+			const size_t oldCount = sheet.regions.size();
+			for (const auto& region : regions)
+				texture_atlas::addRegion(sheet, region);
+			if (sheet.regions.size() == oldCount && extractedSheets.count(hash) != 0)
+				continue;
+			const auto original = decodeImageToRGBA(hash,
+					readFile({ CustomTextureSourceKind::Png, directory + texture_atlas::imageFilename(hash) }),
+					CustomTextureCapabilities::rgbaOnly(CustomTextureBackend::Unknown, 8192));
+			if (original->width != sheet.width || original->height != sheet.height)
+				throw std::runtime_error("dumped sheet dimensions changed during extraction");
+			for (size_t i = 0; i < sheet.regions.size(); i++)
+			{
+				const auto& region = sheet.regions[i];
+				const std::string path = directory + texture_atlas::regionFilename(hash, region);
+				if (file_exists(path))
+					continue; // Preserve any pieces the user has already edited/upscaled.
+				const u8 *pixels = original->bytes.data()
+						+ (size_t(sheet.height - region.y - region.height) * sheet.width + region.x) * 4;
+				if (!writeAtlasPng(path, region.width, region.height, pixels, sheet.width * 4))
+					throw std::runtime_error("cannot save extracted atlas piece");
+			}
+			if (existing == dumpedSheets.end())
+				dumpedSheets.push_back(std::move(sheet));
+			else
+				*existing = std::move(sheet);
+			extractedSheets.insert(hash);
+			changed = true;
+		}
+		if (changed)
+		{
+			const std::string mapping = texture_atlas::writeMapping(dumpedSheets);
+			if (mapping.size() > 4 * 1024 * 1024)
+				throw std::runtime_error("atlas mapping exceeds 4 MiB");
+			const std::string temporary = mappingPath + ".tmp";
+			FILE *file = nowide::fopen(temporary.c_str(), "wb");
+			if (file == nullptr)
+				throw std::runtime_error("cannot open atlas mapping for writing");
+			const bool written = fwrite(mapping.data(), 1, mapping.size(), file) == mapping.size();
+			const bool closed = fclose(file) == 0;
+			if (!written || !closed || flycast::rename(temporary.c_str(), mappingPath.c_str()) != 0)
+			{
+				flycast::unlink(temporary.c_str());
+				throw std::runtime_error("cannot save atlas mapping");
+			}
+		}
+	}
+	catch (const std::exception& exception)
+	{
+		dumpAtlasFailed = true;
+		WARN_LOG(RENDERER, "Texture sheet extraction: %s", exception.what());
+		reportError(CustomTextureException::Error::AtlasMapping);
+	}
 }
 
 void CustomTexture::prepareSource(BaseCustomTextureSource* source, bool shouldPreload)
@@ -1047,6 +1278,9 @@ void CustomTexture::showErrorNotification()
 		break;
 	case Error::DirectX9CompressedSource:
 		message = i18n::T("DirectX 9 supports PNG/JPEG custom textures only");
+		break;
+	case Error::AtlasMapping:
+		message = i18n::T("Texture sheet could not be processed. Check its mapping, original PNG and piece sizes; all pieces must use the same scale.");
 		break;
 	}
 	if (message != nullptr)

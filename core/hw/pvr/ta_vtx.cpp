@@ -1,6 +1,7 @@
 
 /*
 	TA-VTX handling
+	Portions Copyright 2026 The Hollycast Authors
 
 	Parsing of the TA stream and generation of vertex data !
 */
@@ -9,6 +10,7 @@
 #include "pvr_mem.h"
 #include "Renderer_if.h"
 #include "cfg/option.h"
+#include "rend/CustomTexture.h"
 
 #include <algorithm>
 #include <utility>
@@ -1193,6 +1195,10 @@ static void getRegionSettings(int passNumber, RenderPass& pass);
 
 static void parseRenderPass(RenderPass& pass, const RenderPass& previousPass, rend_context& ctx, bool primRestart)
 {
+	// Capture original strip UVs before bleed correction and index merging change them.
+	if (config::DumpTextures && config::SplitTextureSheets)
+		custom_texture.dumpTextureRegions(ctx, previousPass, pass);
+
 	const bool perPixel = isPerPixel(config::RendererType);
 	const bool mergeTranslucent = config::PerStripSorting || perPixel;
 
