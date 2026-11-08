@@ -236,20 +236,20 @@ Image rebuild(const Sheet& sheet, const Image& original,
 	if (numerator == 0)
 		numerator = 1;
 	const auto scaled = [numerator, denominator](uint32_t value) -> uint64_t {
-		const uint64_t result = uint64_t(value) * numerator;
-		if (result % denominator != 0)
-			throw std::runtime_error("atlas scale places a sheet boundary between pixels");
-		return result / denominator;
+		// A shared fractional scale can put sheet boundaries between output pixels.
+		// Round consistently so adjacent regions retain a shared boundary.
+		return (uint64_t(value) * numerator + denominator / 2) / denominator;
 	};
 	const uint64_t width = scaled(sheet.width), height = scaled(sheet.height);
-	if (width > maxWidth || height > maxHeight || width > 16384 || height > 16384
+	if (width == 0 || height == 0 || width > maxWidth || height > maxHeight || width > 16384 || height > 16384
 			|| width * height * 4 > MaxImageBytes)
 		throw std::runtime_error("rebuilt atlas exceeds renderer or memory limits");
 	for (size_t i = 0; i < tiles.size(); i++)
 		if (tiles[i])
 		{
-			scaled(sheet.regions[i].x);
-			scaled(sheet.regions[i].y);
+			const Region& region = sheet.regions[i];
+			if (scaled(region.x) + tiles[i]->width > width || scaled(region.y) + tiles[i]->height > height)
+				throw std::runtime_error("scaled atlas piece extends outside its sheet");
 		}
 	Image output { static_cast<uint32_t>(width), static_cast<uint32_t>(height), {} };
 	output.pixels.resize(static_cast<size_t>(width * height * 4));

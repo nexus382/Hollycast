@@ -218,13 +218,27 @@ TEST(TextureAtlas, RejectsDifferentScalesAndChangedAspectRatios)
 	EXPECT_THROW(rebuild(TwoPieces, solid(8, 4, 1), {solid(8, 12, 2), std::nullopt}, 1024, 1024), std::exception);
 }
 
-TEST(TextureAtlas, AcceptsExactFractionalScaleWhenBoundariesAlign)
+TEST(TextureAtlas, AcceptsFractionalScaleAndRoundsBoundaries)
 {
 	const auto output = rebuild(TwoPieces, solid(8, 4, 1), {solid(6, 6, 2), solid(6, 6, 3)}, 1024, 1024);
 	EXPECT_EQ(output.width, 12u);
 	EXPECT_EQ(output.height, 6u);
 	const Sheet misaligned { 1, 8, 4, {{1, 0, 4, 4}} };
-	EXPECT_THROW(rebuild(misaligned, solid(8, 4, 1), {solid(6, 6, 2)}, 1024, 1024), std::exception);
+	const auto rounded = rebuild(misaligned, solid(8, 4, 1), {solid(6, 6, 2)}, 1024, 1024);
+	EXPECT_EQ(rounded.pixels[4], 1);
+	EXPECT_EQ(rounded.pixels[8], 2);
+	EXPECT_EQ(rounded.pixels[8 * 4], 1);
+}
+
+TEST(TextureAtlas, RebuildsTheUsers1254PixelPiecesWithoutResizingThem)
+{
+	const Sheet sheet { 1, 256, 256, {{128, 65, 63, 63}} };
+	const auto output = rebuild(sheet, solid(256, 256, 1), {solid(1254, 1254, 2)}, 8192, 8192);
+	ASSERT_EQ(output.width, 5096u);
+	ASSERT_EQ(output.height, 5096u);
+	const size_t offset = (size_t(1294) * output.width + 2548) * 4;
+	EXPECT_EQ(output.pixels[offset], 2);
+	EXPECT_EQ(output.pixels[offset - 4], 1);
 }
 
 TEST(TextureAtlas, RejectsWrongOriginalAndRendererOverflow)
