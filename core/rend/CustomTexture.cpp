@@ -1130,11 +1130,6 @@ void CustomTexture::dumpTextureRegions(const rend_context& context,
 		bool changed = false;
 		for (auto& [hash, regions] : candidates)
 		{
-			// A clipped face can cover only part of another confirmed rectangle.
-			// Prefer the complete face when both are discovered in this render pass.
-			std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) {
-				return uint64_t(a.width) * a.height > uint64_t(b.width) * b.height;
-			});
 			const auto dimensions = dumpedTextureSizes.at(hash);
 			auto existing = std::find_if(dumpedSheets.begin(), dumpedSheets.end(),
 					[hash](const texture_atlas::Sheet& sheet) { return sheet.hash == hash; });

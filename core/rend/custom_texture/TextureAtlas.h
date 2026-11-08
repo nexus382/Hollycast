@@ -37,6 +37,7 @@ private:
 	uint32_t width, height;
 	std::map<std::array<uint32_t, 4>, uint16_t> triangles;
 };
+// Append a unique rectangle without changing previously exported crop identities.
 bool addRegion(Sheet& sheet, const Region& region);
 std::string imageFilename(uint32_t hash);
 std::string regionFilename(uint32_t hash, const Region& region);

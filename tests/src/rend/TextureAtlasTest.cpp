@@ -81,14 +81,15 @@ TEST(TextureAtlas, CapturedChroniclesStripsRecoverGameplayPieces)
 		}
 	}
 	ASSERT_EQ(sheets.size(), 2u);
+	const std::map<uint32_t, std::vector<Region>> expected {
+		{0xa6e88c95, {{128, 129, 63, 63}, {192, 129, 63, 63}, {0, 209, 63, 47}, {0, 193, 63, 63}}},
+		{0x3b623ebc, {{128, 65, 63, 63}, {192, 193, 63, 63}, {64, 65, 63, 63}}},
+	};
 	for (const auto& [hash, sheet] : sheets)
 	{
-		ASSERT_EQ(sheet.regions.size(), 3u) << std::hex << hash;
-		for (const auto& region : sheet.regions)
-		{
-			EXPECT_EQ(region.width, 63u);
-			EXPECT_EQ(region.height, 63u);
-		}
+		ASSERT_EQ(sheet.regions.size(), expected.at(hash).size()) << std::hex << hash;
+		for (const auto& region : expected.at(hash))
+			EXPECT_NE(std::find(sheet.regions.begin(), sheet.regions.end(), region), sheet.regions.end());
 	}
 }
 
@@ -124,27 +125,31 @@ TEST(TextureAtlas, RejectsIrregularAndDegenerateStripPairs)
 	EXPECT_FALSE(quadRegion({{{0, 0}, {0.5f, 0}, {0.5f, 0.5f}, {0, 0.5f}}}, 256, 256));
 }
 
-TEST(TextureAtlas, RejectsOverlapsDuplicatesAndOutsideRegions)
+TEST(TextureAtlas, KeepsDistinctOverlappingCropsAndRejectsDuplicatesAndOutsideRegions)
 {
 	Sheet sheet { 1, 8, 8, {} };
 	EXPECT_TRUE(addRegion(sheet, {0, 0, 4, 4}));
 	EXPECT_FALSE(addRegion(sheet, {0, 0, 4, 4}));
-	EXPECT_FALSE(addRegion(sheet, {2, 2, 4, 4}));
+	EXPECT_TRUE(addRegion(sheet, {2, 2, 4, 4}));
 	EXPECT_FALSE(addRegion(sheet, {7, 7, 2, 2}));
 	EXPECT_FALSE(addRegion(sheet, {UINT32_MAX, 0, 2, 2}));
 	EXPECT_TRUE(addRegion(sheet, {4, 0, 4, 4}));
 }
 
-TEST(TextureAtlas, CompleteFacesReplaceContainedCutsWithoutMergingDistinctPieces)
+TEST(TextureAtlas, LargerCropsPreserveEarlierIdentitiesInEitherDiscoveryOrder)
 {
-	Sheet sheet {1, 256, 256, {{0, 209, 63, 47}}};
-	EXPECT_TRUE(addRegion(sheet, {0, 193, 63, 63}));
-	ASSERT_EQ(sheet.regions.size(), 1u);
-	EXPECT_EQ(sheet.regions[0], (Region {0, 193, 63, 63}));
-	EXPECT_FALSE(addRegion(sheet, {0, 209, 63, 47}));
-	EXPECT_TRUE(addRegion(sheet, {64, 193, 63, 63}));
-	EXPECT_FALSE(addRegion(sheet, {0, 192, 128, 64}));
-	EXPECT_EQ(sheet.regions.size(), 2u);
+	const Region partial {0, 209, 63, 47}, complete {0, 193, 63, 63};
+	Sheet first {1, 256, 256, {}}, second {1, 256, 256, {}};
+	EXPECT_TRUE(addRegion(first, partial));
+	const auto name = regionFilename(first.hash, first.regions[0]);
+	EXPECT_TRUE(addRegion(first, complete));
+	ASSERT_EQ(first.regions.size(), 2u);
+	EXPECT_EQ(first.regions[0], partial);
+	EXPECT_EQ(regionFilename(first.hash, first.regions[0]), name);
+	EXPECT_TRUE(addRegion(second, complete));
+	EXPECT_TRUE(addRegion(second, partial));
+	EXPECT_EQ(writeMapping({first}), writeMapping({second}));
+	EXPECT_FALSE(addRegion(first, partial));
 }
 
 TEST(TextureAtlas, MappingRoundTripPreservesDimensionsAndFilenames)
@@ -172,14 +177,71 @@ TEST(TextureAtlas, FilenamesAreIndependentOfTheUsersLocale)
 	std::locale::global(originalLocale);
 }
 
-TEST(TextureAtlas, RejectsMalformedUnsupportedAndOverlappingMappings)
+TEST(TextureAtlas, RejectsMalformedUnsupportedDuplicateAndOverlappingLegacyMappings)
 {
 	EXPECT_THROW(parseMapping("{"), std::exception);
-	EXPECT_THROW(parseMapping(R"({"version":2,"sheets":[]})"), std::exception);
+	EXPECT_THROW(parseMapping(R"({"version":3,"sheets":[]})"), std::exception);
 	EXPECT_THROW(parseMapping(R"({"version":1,"sheets":[{"hash":1,"width":8,"height":8,"regions":[[-1,0,4,4]]}]})"), std::exception);
 	EXPECT_THROW(parseMapping(R"({"version":1,"sheets":[{"hash":1,"width":8,"height":8,"regions":[[0,0,4,4],[2,2,4,4]]}]})"), std::exception);
 	EXPECT_THROW(parseMapping(R"({"version":1,"sheets":[{"hash":1,"width":8,"height":8,"regions":[[0,0,4,4],[0,0,8,8]]}]})"), std::exception);
 	EXPECT_THROW(parseMapping(writeMapping({TwoPieces, TwoPieces})), std::exception);
+	const Sheet duplicate {1, 8, 8, {{0, 0, 4, 4}, {0, 0, 4, 4}}};
+	EXPECT_THROW(parseMapping(writeMapping({duplicate})), std::exception);
+}
+
+TEST(TextureAtlas, ReadsLegacyPacksAndNewOverlappingMappingsWithoutChangingFilenames)
+{
+	const auto legacy = parseMapping(R"({"version":1,"sheets":[{"hash":1,"width":8,"height":8,"regions":[[0,4,4,2]]}]})");
+	ASSERT_EQ(legacy.size(), 1u);
+	const auto oldName = regionFilename(legacy[0].hash, legacy[0].regions[0]);
+	Sheet extended = legacy[0];
+	ASSERT_TRUE(addRegion(extended, {0, 2, 4, 4}));
+	const auto current = parseMapping(writeMapping({extended}));
+	ASSERT_EQ(current.size(), 1u);
+	ASSERT_EQ(current[0].regions.size(), 2u);
+	const auto retained = std::find(current[0].regions.begin(), current[0].regions.end(), legacy[0].regions[0]);
+	ASSERT_NE(retained, current[0].regions.end());
+	EXPECT_EQ(regionFilename(current[0].hash, *retained), oldName);
+	const Image tile = solid(8, 4, 2);
+	std::vector<std::optional<Image>> tiles(current[0].regions.size());
+	tiles[std::distance(current[0].regions.begin(), retained)] = tile;
+	const auto output = rebuild(current[0], solid(8, 8, 1), tiles, 1024, 1024);
+	const auto previous = rebuild(legacy[0], solid(8, 8, 1), {tile}, 1024, 1024);
+	EXPECT_EQ(output.width, previous.width);
+	EXPECT_EQ(output.height, previous.height);
+	EXPECT_EQ(output.pixels, previous.pixels);
+}
+
+TEST(TextureAtlas, MappingOrderDoesNotDependOnSheetOrCropDiscoveryOrder)
+{
+	Sheet other {0xfedcba, 8, 8, {{0, 4, 4, 2}, {0, 2, 4, 4}, {2, 2, 4, 4}}};
+	const auto expected = writeMapping({TwoPieces, other});
+	std::reverse(other.regions.begin(), other.regions.end());
+	EXPECT_EQ(writeMapping({other, TwoPieces}), expected);
+}
+
+TEST(TextureAtlas, OverlappingPiecesRebuildIdenticallyInEitherMappingOrder)
+{
+	Sheet sheet {1, 8, 8, {{0, 4, 4, 2}, {0, 2, 4, 4}}};
+	const auto output = rebuild(sheet, solid(8, 8, 1), {solid(4, 2, 2), solid(4, 4, 3)}, 1024, 1024);
+	EXPECT_EQ(output.pixels[(size_t(2) * 8) * 4], 3);
+	EXPECT_EQ(output.pixels[(size_t(4) * 8) * 4], 2);
+	std::reverse(sheet.regions.begin(), sheet.regions.end());
+	const auto reversed = rebuild(sheet, solid(8, 8, 1), {solid(4, 4, 3), solid(4, 2, 2)}, 1024, 1024);
+	EXPECT_EQ(output.pixels, reversed.pixels);
+	const auto oldPieceOnly = rebuild(sheet, solid(8, 8, 1), {std::nullopt, solid(4, 2, 2)}, 1024, 1024);
+	EXPECT_EQ(oldPieceOnly.pixels[(size_t(2) * 8) * 4], 1);
+	EXPECT_EQ(oldPieceOnly.pixels[(size_t(4) * 8) * 4], 2);
+}
+
+TEST(TextureAtlas, EqualAreaOverlapsHaveAStableCoordinateTieBreak)
+{
+	Sheet sheet {1, 8, 4, {{0, 0, 4, 4}, {2, 0, 4, 4}}};
+	const auto output = rebuild(sheet, solid(8, 4, 1), {solid(4, 4, 2), solid(4, 4, 3)}, 1024, 1024);
+	EXPECT_EQ(output.pixels[2 * 4], 2);
+	EXPECT_EQ(output.pixels[4 * 4], 3);
+	std::reverse(sheet.regions.begin(), sheet.regions.end());
+	EXPECT_EQ(rebuild(sheet, solid(8, 4, 1), {solid(4, 4, 3), solid(4, 4, 2)}, 1024, 1024).pixels, output.pixels);
 }
 
 TEST(TextureAtlas, ReassemblesPiecesAtTheirScaledPositions)

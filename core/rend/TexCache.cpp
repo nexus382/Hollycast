@@ -594,6 +594,8 @@ bool BaseTextureCacheData::Update()
 	PixelBuffer<u16> pb16;
 	PixelBuffer<u32> pb32;
 	PixelBuffer<u8> pb8;
+	PixelBuffer<u32> nativeDump;
+	void *nativeDumpBuffer = nullptr;
 
 	// Figure out if we really need to use a 32-bit pixel buffer
 	const int maxFilteredTextureSize = config::MaxFilteredTextureSize.get();
@@ -675,6 +677,12 @@ bool BaseTextureCacheData::Update()
 					// Alpha channel formats. Palettes with alpha are already handled
 					has_alpha = true;
 				UpscalexBRZ(factor, pb32.data(), tmp_buf.data(), width, height, has_alpha);
+				if (config::DumpTextures && config::SplitTextureSheets)
+				{
+					// Split coordinates use the original game pixels, independent of xBRZ settings.
+					nativeDump.steal_data(pb32);
+					nativeDumpBuffer = nativeDump.data();
+				}
 				pb32.steal_data(tmp_buf);
 				upscaled_w *= factor;
 				upscaled_h *= factor;
@@ -757,11 +765,14 @@ bool BaseTextureCacheData::Update()
 	//lock the texture to detect changes in it
 	protectVRam();
 
+	void *dumpBuffer = nativeDumpBuffer != nullptr ? nativeDumpBuffer : temp_tex_buffer;
+	const u32 dumpWidth = nativeDumpBuffer != nullptr ? width : upscaled_w;
+	const u32 dumpHeight = nativeDumpBuffer != nullptr ? height : upscaled_h;
 	bool customTextureUploaded = false;
 	if (dumpReplacedTexture)
 	{
 		ComputeHash();
-		custom_texture.dumpTexture(this, upscaled_w, upscaled_h, temp_tex_buffer);
+		custom_texture.dumpTexture(this, dumpWidth, dumpHeight, dumpBuffer);
 		NOTICE_LOG(RENDERER, "Dumped texture %x.png. Old hash %x", texture_hash, old_texture_hash);
 		const TextureType originalTextureType = tex_type;
 		customTextureUploaded = CheckCustomTexture();
@@ -776,7 +787,7 @@ bool BaseTextureCacheData::Update()
 	if (config::DumpTextures && !dumpReplacedTexture)
 	{
 		ComputeHash();
-		custom_texture.dumpTexture(this, upscaled_w, upscaled_h, temp_tex_buffer);
+		custom_texture.dumpTexture(this, dumpWidth, dumpHeight, dumpBuffer);
 		NOTICE_LOG(RENDERER, "Dumped texture %x.png. Old hash %x", texture_hash, old_texture_hash);
 	}
 	PrintTextureName();

@@ -1,7 +1,13 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "rend/TexCache.h"
 #include "util/worker_thread.h"
+#include "emulator.h"
+#include "hw/mem/addrspace.h"
+#include "hw/pvr/pvr_mem.h"
 #include <gtest/gtest.h>
+#include <stb_image.h>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -17,8 +23,14 @@ public:
 		texture_hash = hash;
 		tex_type = TextureType::_8888;
 	}
+	~DumpTexture() override { unprotectVRam(); }
 	std::string GetId() override { return "atlas-dump-test"; }
-	void UploadToGPU(int, int, const u8 *, bool, bool) override {}
+	void UploadToGPU(int width, int height, const u8 *, bool, bool) override
+	{
+		uploadedWidth = width;
+		uploadedHeight = height;
+	}
+	int uploadedWidth = 0, uploadedHeight = 0;
 };
 
 std::string readText(const std::filesystem::path& path)
@@ -63,7 +75,7 @@ protected:
 		dumper->dumpTexture(&texture, size, size, pixels.data());
 	}
 
-	void extract(DumpTexture& texture)
+	void extract(DumpTexture& texture, float maxV = 0.5f, CustomTexture *target = nullptr)
 	{
 		rend_context context {};
 		context.verts.resize(4);
@@ -72,9 +84,9 @@ protected:
 		context.verts[1].u = 0.5f;
 		context.verts[1].v = 0;
 		context.verts[2].u = 0;
-		context.verts[2].v = 0.5f;
+		context.verts[2].v = maxV;
 		context.verts[3].u = 0.5f;
-		context.verts[3].v = 0.5f;
+		context.verts[3].v = maxV;
 		context.global_param_op.emplace_back();
 		auto& polygon = context.global_param_op.back();
 		polygon.init();
@@ -83,7 +95,7 @@ protected:
 		polygon.count = 4;
 		RenderPass pass {};
 		pass.op_count = 1;
-		dumper->dumpTextureRegions(context, RenderPass{}, pass);
+		(target != nullptr ? target : dumper.get())->dumpTextureRegions(context, RenderPass{}, pass);
 	}
 
 	std::filesystem::path titleDirectory() const
@@ -96,6 +108,47 @@ protected:
 	std::string oldPath, oldGameId;
 	RenderType oldRenderer {};
 	bool oldDump = false, oldSplit = false;
+};
+
+class NativeTextureDumpTest : public CustomTextureDumpTest
+{
+protected:
+	void SetUp() override
+	{
+		if (!addrspace::reserve())
+			die("addrspace::reserve failed");
+		emu.init();
+		CustomTextureDumpTest::SetUp();
+		oldUpscale = config::TextureUpscale.get();
+		oldFilterSize = config::MaxFilteredTextureSize.get();
+		oldCustom = config::CustomTextures.get();
+		oldUnique = config::DumpUniqueTextures.get();
+		config::CustomTextures = false;
+		config::DumpUniqueTextures = false;
+		config::MaxFilteredTextureSize = 1024;
+		addrspace::unprotectVram(0, PAGE_SIZE);
+		std::copy_n(&vram[0], savedVram.size(), savedVram.begin());
+		for (size_t i = 0; i < savedVram.size(); i++)
+			vram[i] = static_cast<u8>(i * 17 + 31);
+		custom_texture.terminate();
+		custom_texture.init();
+	}
+
+	void TearDown() override
+	{
+		custom_texture.terminate();
+		addrspace::unprotectVram(0, PAGE_SIZE);
+		std::copy(savedVram.begin(), savedVram.end(), &vram[0]);
+		config::TextureUpscale = oldUpscale;
+		config::MaxFilteredTextureSize = oldFilterSize;
+		config::CustomTextures = oldCustom;
+		config::DumpUniqueTextures = oldUnique;
+		CustomTextureDumpTest::TearDown();
+	}
+
+	std::array<u8, 128> savedVram {};
+	int oldUpscale = 1, oldFilterSize = 0;
+	bool oldCustom = false, oldUnique = false;
 };
 }
 
@@ -195,4 +248,88 @@ TEST_F(CustomTextureDumpTest, RestartSkipsExistingFilesAndOnlyRestoresMissingPie
 	EXPECT_EQ(readText(mapping), mappingBytes);
 	EXPECT_EQ(std::filesystem::last_write_time(mapping), mappingTime);
 	EXPECT_EQ(std::filesystem::last_write_time(parent), parentTime);
+}
+
+TEST_F(CustomTextureDumpTest, IndependentInstancesKeepTheSameNamesWhenCropsArriveInOppositeOrders)
+{
+	DumpTexture texture(0x123);
+	dump(texture, 8);
+	extract(texture, 0.375f);
+	const auto firstDirectory = titleDirectory();
+	const auto mapping = firstDirectory / texture_atlas::MappingFilename;
+	const auto first = texture_atlas::parseMapping(readText(mapping));
+	ASSERT_EQ(first.size(), 1u);
+	ASSERT_EQ(first[0].regions.size(), 1u);
+	const auto partial = firstDirectory / texture_atlas::regionFilename(texture.texture_hash, first[0].regions[0]);
+	std::ofstream(partial, std::ios::binary) << "user edited partial crop";
+	const auto stamp = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
+	std::filesystem::last_write_time(partial, stamp);
+	const auto partialTime = std::filesystem::last_write_time(partial);
+
+	dumper = std::make_unique<CustomTexture>();
+	dump(texture, 8);
+	extract(texture);
+	const auto extended = texture_atlas::parseMapping(readText(mapping));
+	ASSERT_EQ(extended.size(), 1u);
+	ASSERT_EQ(extended[0].regions.size(), 2u);
+	EXPECT_NE(std::find(extended[0].regions.begin(), extended[0].regions.end(), first[0].regions[0]), extended[0].regions.end());
+	EXPECT_EQ(readText(partial), "user edited partial crop");
+	EXPECT_EQ(std::filesystem::last_write_time(partial), partialTime);
+
+	config::TextureDumpPath = (root / "independent").string();
+	dumper = std::make_unique<CustomTexture>();
+	dump(texture, 8);
+	extract(texture);
+	extract(texture, 0.375f);
+	EXPECT_EQ(readText(titleDirectory() / texture_atlas::MappingFilename), readText(mapping));
+	for (const auto& region : extended[0].regions)
+		EXPECT_TRUE(std::filesystem::exists(titleDirectory() / texture_atlas::regionFilename(texture.texture_hash, region)));
+}
+
+TEST_F(NativeTextureDumpTest, SplitDumpsUseTheSameNativePixelsAndNamesWithDifferentXbrzSettings)
+{
+	std::string expectedMapping, expectedParent;
+	for (int factor : {1, 2, 4})
+	{
+		config::TextureUpscale = factor;
+		config::TextureDumpPath = (root / ("xbrz-" + std::to_string(factor))).string();
+		DumpTexture texture(0);
+		ASSERT_TRUE(texture.Update());
+		EXPECT_EQ(texture.uploadedWidth, 8 * factor);
+		EXPECT_EQ(texture.uploadedHeight, 8 * factor);
+		extract(texture, 0.5f, &custom_texture);
+		const auto mapping = readText(titleDirectory() / texture_atlas::MappingFilename);
+		const auto parent = readText(titleDirectory() / texture_atlas::imageFilename(texture.texture_hash));
+		const auto sheets = texture_atlas::parseMapping(mapping);
+		ASSERT_EQ(sheets.size(), 1u);
+		EXPECT_EQ(sheets[0].width, 8u);
+		EXPECT_EQ(sheets[0].height, 8u);
+		if (factor == 1)
+		{
+			expectedMapping = mapping;
+			expectedParent = parent;
+		}
+		else
+		{
+			EXPECT_EQ(mapping, expectedMapping);
+			EXPECT_EQ(parent, expectedParent);
+		}
+	}
+}
+
+TEST_F(NativeTextureDumpTest, OrdinaryDumpsStillUseTheirNormalXbrzResolution)
+{
+	config::SplitTextureSheets = false;
+	config::TextureUpscale = 4;
+	DumpTexture texture(0);
+	ASSERT_TRUE(texture.Update());
+	EXPECT_EQ(texture.uploadedWidth, 32);
+	const auto path = titleDirectory() / texture_atlas::imageFilename(texture.texture_hash);
+	const auto bytes = readText(path);
+	int width = 0, height = 0, channels = 0;
+	ASSERT_NE(stbi_info_from_memory(reinterpret_cast<const stbi_uc *>(bytes.data()), static_cast<int>(bytes.size()),
+			&width, &height, &channels), 0);
+	EXPECT_EQ(width, 32);
+	EXPECT_EQ(height, 32);
+	EXPECT_FALSE(std::filesystem::exists(titleDirectory() / texture_atlas::MappingFilename));
 }

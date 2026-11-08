@@ -9,6 +9,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 
 namespace texture_atlas
 {
@@ -22,6 +23,11 @@ bool overlaps(const Region& a, const Region& b)
 {
 	return a.x < b.x + b.width && b.x < a.x + a.width
 			&& a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+bool regionLess(const Region& a, const Region& b)
+{
+	return std::tie(a.x, a.y, a.width, a.height) < std::tie(b.x, b.y, b.width, b.height);
 }
 
 bool validRegion(const Sheet& sheet, const Region& region)
@@ -122,27 +128,10 @@ std::optional<Region> RegionDetector::submitTriangle(const std::array<std::array
 
 bool addRegion(Sheet& sheet, const Region& region)
 {
-	if (!validRegion(sheet, region))
+	if (!validRegion(sheet, region) || sheet.regions.size() >= MaxRegions
+			|| std::find(sheet.regions.begin(), sheet.regions.end(), region) != sheet.regions.end())
 		return false;
-	auto contained = sheet.regions.end();
-	for (auto existing = sheet.regions.begin(); existing != sheet.regions.end(); ++existing)
-	{
-		if (!overlaps(*existing, region))
-			continue;
-		if (*existing == region || existing->x < region.x || existing->y < region.y
-				|| existing->x + existing->width > region.x + region.width
-				|| existing->y + existing->height > region.y + region.height || contained != sheet.regions.end())
-			return false; // Never combine independently identified pieces or partially overlapping regions.
-		contained = existing;
-	}
-	if (contained != sheet.regions.end())
-	{
-		// A complete face discovered later supersedes its clipped partial rectangle.
-		*contained = region;
-		return true;
-	}
-	if (sheet.regions.size() >= MaxRegions)
-		return false;
+	// Every confirmed rectangle has a permanent identity, even when another crop contains it.
 	sheet.regions.push_back(region);
 	return true;
 }
@@ -169,7 +158,8 @@ std::vector<Sheet> parseMapping(const std::string& text)
 	if (text.size() > 4 * 1024 * 1024)
 		throw std::runtime_error("atlas mapping exceeds 4 MiB");
 	const auto root = nlohmann::json::parse(text);
-	if (root.at("version") != 1 || !root.at("sheets").is_array() || root.at("sheets").size() > MaxSheets)
+	const uint32_t version = unsignedValue(root.at("version"));
+	if ((version != 1 && version != 2) || !root.at("sheets").is_array() || root.at("sheets").size() > MaxSheets)
 		throw std::runtime_error("unsupported atlas mapping version or sheet count");
 	std::vector<Sheet> sheets;
 	std::set<uint32_t> hashes;
@@ -187,9 +177,9 @@ std::vector<Sheet> parseMapping(const std::string& text)
 				throw std::runtime_error("atlas region must contain x, y, width and height");
 			Region region { unsignedValue(box[0]), unsignedValue(box[1]),
 					unsignedValue(box[2]), unsignedValue(box[3]) };
-			const size_t previousCount = sheet.regions.size();
-			if (!addRegion(sheet, region) || sheet.regions.size() != previousCount + 1)
-				throw std::runtime_error("atlas regions overlap or extend outside their sheet");
+			if ((version == 1 && std::any_of(sheet.regions.begin(), sheet.regions.end(),
+					[&](const Region& existing) { return overlaps(existing, region); })) || !addRegion(sheet, region))
+				throw std::runtime_error("invalid or duplicate atlas region, or overlapping version 1 regions");
 		}
 		sheets.push_back(std::move(sheet));
 	}
@@ -198,16 +188,19 @@ std::vector<Sheet> parseMapping(const std::string& text)
 
 std::string writeMapping(const std::vector<Sheet>& sheets)
 {
+	auto ordered = sheets;
+	std::sort(ordered.begin(), ordered.end(), [](const Sheet& a, const Sheet& b) { return a.hash < b.hash; });
 	nlohmann::json entries = nlohmann::json::array();
-	for (const Sheet& sheet : sheets)
+	for (Sheet& sheet : ordered)
 	{
+		std::sort(sheet.regions.begin(), sheet.regions.end(), regionLess);
 		nlohmann::json regions = nlohmann::json::array();
 		for (const Region& region : sheet.regions)
 			regions.push_back({ region.x, region.y, region.width, region.height });
 		entries.push_back({ { "hash", sheet.hash }, { "width", sheet.width },
 				{ "height", sheet.height }, { "regions", std::move(regions) } });
 	}
-	return nlohmann::json({ { "version", 1 }, { "sheets", std::move(entries) } }).dump(2) + '\n';
+	return nlohmann::json({ { "version", 2 }, { "sheets", std::move(entries) } }).dump(2) + '\n';
 }
 
 std::pair<uint32_t, uint32_t> scaledDimensions(const Sheet& sheet, uint32_t numerator, uint32_t denominator,
@@ -277,10 +270,22 @@ Image rebuild(const Sheet& sheet, const Image& original,
 					+ uint64_t(x) * denominator / numerator) * 4], 4,
 					&output.pixels[(size_t(y) * output.width + x) * 4]);
 	}
+	std::vector<size_t> order;
+	order.reserve(tiles.size());
 	for (size_t i = 0; i < tiles.size(); i++)
+		if (tiles[i])
+			order.push_back(i);
+	std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+		const Region& first = sheet.regions[a];
+		const Region& second = sheet.regions[b];
+		const uint64_t firstArea = uint64_t(first.width) * first.height;
+		const uint64_t secondArea = uint64_t(second.width) * second.height;
+		return firstArea != secondArea ? firstArea > secondArea : regionLess(second, first);
+	});
+	// Smaller supplied crops keep their pixels when a larger overlapping crop is added later.
+	// Equal-area overlaps prefer the lowest (x, y, width, height), independent of mapping order.
+	for (size_t i : order)
 	{
-		if (!tiles[i])
-			continue;
 		const Region& region = sheet.regions[i];
 		const Image& tile = *tiles[i];
 		const size_t left = static_cast<size_t>(scaled(region.x)), top = static_cast<size_t>(scaled(region.y));
