@@ -942,10 +942,10 @@ void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, voi
 	std::ostringstream path;
 	path.imbue(std::locale::classic());
 	path << baseDumpDir << std::hex << texture->texture_hash << ".png";
-	if (config::SplitTextureSheets && file_exists(path.str()))
+	if (file_exists(path.str()))
 	{
 		// Persisted mappings refer to this PNG's coordinate basis, even if CPU upscaling changed.
-		if (!dumpAtlasFailed)
+		if (config::SplitTextureSheets && !dumpAtlasFailed)
 		{
 			try
 			{

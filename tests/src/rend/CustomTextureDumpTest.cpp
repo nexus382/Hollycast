@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 
 namespace
@@ -18,7 +19,7 @@ namespace
 class DumpTexture : public BaseTextureCacheData
 {
 public:
-	DumpTexture(u32 hash) : BaseTextureCacheData(TSP{}, TCW{}, 0)
+	DumpTexture(u32 hash, TCW control = {}) : BaseTextureCacheData(TSP{}, control, 0)
 	{
 		texture_hash = hash;
 		tex_type = TextureType::_8888;
@@ -29,8 +30,15 @@ public:
 	{
 		uploadedWidth = width;
 		uploadedHeight = height;
+		uploadedType = tex_type;
+		if (onUpload)
+			onUpload();
 	}
+	bool Force32BitTexture(TextureType) const override { return force32; }
 	int uploadedWidth = 0, uploadedHeight = 0;
+	TextureType uploadedType = TextureType::_8888;
+	bool force32 = false;
+	std::function<void()> onUpload;
 };
 
 std::string readText(const std::filesystem::path& path)
@@ -294,6 +302,9 @@ TEST_F(NativeTextureDumpTest, SplitDumpsUseTheSameNativePixelsAndNamesWithDiffer
 		config::TextureUpscale = factor;
 		config::TextureDumpPath = (root / ("xbrz-" + std::to_string(factor))).string();
 		DumpTexture texture(0);
+		texture.onUpload = [&] {
+			EXPECT_TRUE(std::filesystem::exists(titleDirectory() / texture_atlas::imageFilename(texture.texture_hash)));
+		};
 		ASSERT_TRUE(texture.Update());
 		EXPECT_EQ(texture.uploadedWidth, 8 * factor);
 		EXPECT_EQ(texture.uploadedHeight, 8 * factor);
@@ -317,19 +328,84 @@ TEST_F(NativeTextureDumpTest, SplitDumpsUseTheSameNativePixelsAndNamesWithDiffer
 	}
 }
 
-TEST_F(NativeTextureDumpTest, OrdinaryDumpsStillUseTheirNormalXbrzResolution)
+TEST_F(NativeTextureDumpTest, OrdinaryDumpsUseTheSameNativePixelsWithDifferentXbrzSettings)
 {
 	config::SplitTextureSheets = false;
-	config::TextureUpscale = 4;
+	std::string expected;
+	for (int factor : {1, 2, 4})
+	{
+		config::TextureUpscale = factor;
+		config::TextureDumpPath = (root / ("ordinary-" + std::to_string(factor))).string();
+		DumpTexture texture(0);
+		texture.onUpload = [&] {
+			EXPECT_TRUE(std::filesystem::exists(titleDirectory() / texture_atlas::imageFilename(texture.texture_hash)));
+		};
+		ASSERT_TRUE(texture.Update());
+		EXPECT_EQ(texture.uploadedWidth, 8 * factor);
+		EXPECT_EQ(texture.uploadedHeight, 8 * factor);
+		const auto path = titleDirectory() / texture_atlas::imageFilename(texture.texture_hash);
+		const auto bytes = readText(path);
+		int width = 0, height = 0, channels = 0;
+		ASSERT_NE(stbi_info_from_memory(reinterpret_cast<const stbi_uc *>(bytes.data()), static_cast<int>(bytes.size()),
+				&width, &height, &channels), 0);
+		EXPECT_EQ(width, 8);
+		EXPECT_EQ(height, 8);
+		if (factor == 1)
+			expected = bytes;
+		else
+			EXPECT_EQ(bytes, expected);
+		EXPECT_FALSE(std::filesystem::exists(titleDirectory() / texture_atlas::MappingFilename));
+	}
+}
+
+TEST_F(CustomTextureDumpTest, OrdinaryRedumpsPreserveExistingFiles)
+{
+	config::SplitTextureSheets = false;
+	DumpTexture texture(0x123);
+	dump(texture, 8);
+	const auto path = titleDirectory() / "123.png";
+	const auto before = readText(path);
+	const auto oldTime = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
+	std::filesystem::last_write_time(path, oldTime);
+	const auto stamp = std::filesystem::last_write_time(path);
+	dumper = std::make_unique<CustomTexture>();
+	dump(texture, 16);
+	EXPECT_EQ(readText(path), before);
+	EXPECT_EQ(std::filesystem::last_write_time(path), stamp);
+}
+
+TEST_F(NativeTextureDumpTest, DumpPixelsDoNotDependOnRendererPixelPrecision)
+{
+	config::SplitTextureSheets = false;
+	config::TextureUpscale = 1;
+	for (u32 format : {Pixel1555, Pixel565, Pixel4444, PixelYUV})
+	{
+		std::string expected;
+		for (bool force32 : {false, true})
+		{
+			config::TextureDumpPath = (root / ("precision-" + std::to_string(format) + '-' + std::to_string(force32))).string();
+			TCW control {};
+			control.PixelFmt = format;
+			DumpTexture texture(0, control);
+			texture.force32 = force32;
+			ASSERT_TRUE(texture.Update());
+			EXPECT_EQ(texture.uploadedType, TextureType::_8888);
+			const auto pixels = readText(titleDirectory() / texture_atlas::imageFilename(texture.texture_hash));
+			ASSERT_FALSE(pixels.empty());
+			if (!force32)
+				expected = pixels;
+			else
+				EXPECT_EQ(pixels, expected);
+		}
+	}
+}
+
+TEST_F(NativeTextureDumpTest, DumpingDisabledRetainsTheNormalTextureFormat)
+{
+	config::DumpTextures = false;
+	config::TextureUpscale = 1;
 	DumpTexture texture(0);
 	ASSERT_TRUE(texture.Update());
-	EXPECT_EQ(texture.uploadedWidth, 32);
-	const auto path = titleDirectory() / texture_atlas::imageFilename(texture.texture_hash);
-	const auto bytes = readText(path);
-	int width = 0, height = 0, channels = 0;
-	ASSERT_NE(stbi_info_from_memory(reinterpret_cast<const stbi_uc *>(bytes.data()), static_cast<int>(bytes.size()),
-			&width, &height, &channels), 0);
-	EXPECT_EQ(width, 32);
-	EXPECT_EQ(height, 32);
-	EXPECT_FALSE(std::filesystem::exists(titleDirectory() / texture_atlas::MappingFilename));
+	EXPECT_EQ(texture.uploadedType, TextureType::_5551);
+	EXPECT_FALSE(std::filesystem::exists(titleDirectory()));
 }
