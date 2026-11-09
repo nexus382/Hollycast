@@ -28,6 +28,13 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/MmuTest.cpp
         src/HttpTest.cpp
         src/IniFileTest.cpp
+        src/rend/PostProcessingChainTest.cpp
+        src/rend/MetalShaderCompilerTest.cpp
+        src/rend/ShaderLayerTest.cpp
+        src/rend/ReShadeCompilerTest.cpp
+        src/rend/OpenGLShaderChainTest.cpp
+        src/rend/DirectXShaderChainTest.cpp
+		src/rend/SlangFrontendTest.cpp
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp
         src/network/NetworkServiceTest.cpp
@@ -79,5 +86,11 @@ if(NOT LIBRETRO)
         src/ui/ThemeInstallTest.cpp
         src/ui/ThemeRepositoryTest.cpp
         src/ui/VideoPresetTest.cpp
-        src/ui/AndroidMenuPopupTest.cpp)
+        src/ui/AndroidMenuPopupTest.cpp
+        src/ui/ShaderPreviewLayoutTest.cpp)
+endif()
+
+if(USE_METAL)
+    target_sources(${PROJECT_NAME} PRIVATE src/rend/MetalShaderChainTest.mm)
+    set_source_files_properties(src/rend/MetalShaderChainTest.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()

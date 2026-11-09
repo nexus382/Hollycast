@@ -35,6 +35,8 @@ SettingsNew::SettingsTab toSettingsNewTab(GuiSettingsTab tab)
 		return SettingsNew::SettingsTab::Library;
 	case GuiSettingsTab::Video:
 		return SettingsNew::SettingsTab::Video;
+	case GuiSettingsTab::Shader:
+		return SettingsNew::SettingsTab::Shader;
 	case GuiSettingsTab::OnScreenDisplay:
 		return SettingsNew::SettingsTab::OnScreenDisplay;
 	case GuiSettingsTab::Audio:

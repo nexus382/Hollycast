@@ -1,3 +1,5 @@
+# Portions Copyright 2026 The Hollycast Authors
+
 target_compile_definitions(${PROJECT_NAME} PRIVATE USE_VULKAN HAVE_VULKAN)
 
 target_sources(${PROJECT_NAME} PRIVATE
@@ -44,6 +46,8 @@ if(LIBRETRO)
 else()
     target_compile_definitions(${PROJECT_NAME} PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
     target_sources(${PROJECT_NAME} PRIVATE
+            vulkan_shader_chain.cpp
+            vulkan_shader_chain.h
             vulkan_driver.h
             vulkan_context.cpp
             "${IMGUI_BACKENDS_DIR}/imgui_impl_vulkan.cpp"

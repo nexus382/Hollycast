@@ -23,6 +23,7 @@
 #include "hw/pvr/Renderer_if.h"
 #include "gui.h"
 #include "gui_menu.h"
+#include "settings_new.h"
 #include "oslib/oslib.h"
 #include "wsi/context.h"
 #include "cfg/option.h"
@@ -53,6 +54,7 @@ bool mainui_rend_frame()
 {
 	FC_PROFILE_SCOPE;
 
+	SettingsNew::processShaderLoading();
 	os_DoEvents();
 	os_UpdateInputState();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)

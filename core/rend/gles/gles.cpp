@@ -4,6 +4,7 @@
 #include "quad.h"
 #include "hw/pvr/ta.h"
 #ifndef LIBRETRO
+#include "gl_shader_chain.h"
 #include "ui/gui.h"
 #else
 #include "rend/gles/postprocess.h"
@@ -58,7 +59,7 @@ CompressedTextureSubImage2DProc compressedTextureSubImage2DProc = nullptr;
 bool hasGlExtension(const char *wanted)
 {
 #if !defined(GLES2)
-	if (!gl.is_gles && gl.gl_major >= 3)
+	if (gl.gl_major >= 3)
 	{
 		GLint count = 0;
 		glGetIntegerv(GL_NUM_EXTENSIONS, &count);
@@ -975,6 +976,11 @@ void termGLCommon()
 #ifdef VIDEO_ROUTING
 	os_VideoRoutingTermGL();
 #endif
+#ifndef LIBRETRO
+	gl.shaderChain.reset();
+	gl.postProcessDepthTexture = 0;
+	gl.postProcessDepthWidth = gl.postProcessDepthHeight = 0;
+#endif
 	gl.quadDrawer.reset();
 
 	// palette, fog
@@ -1138,7 +1144,28 @@ void findGLVersion()
 
 struct ShaderUniforms_t ShaderUniforms;
 
-GLuint gl_CompileShader(const char* shader,GLuint type)
+static void appendShaderDiagnostic(std::string *diagnostics, const char *stage, const std::string& message)
+{
+	if (diagnostics == nullptr || diagnostics->size() >= 4096)
+		return;
+	std::string entry;
+	if (!diagnostics->empty())
+		entry.push_back('\n');
+	entry.append(stage).append(": ").append(message);
+	const size_t remaining = 4096 - diagnostics->size();
+	diagnostics->append(entry, 0, entry.size() < remaining ? entry.size() : remaining);
+}
+
+static void logShaderExcerpt(const char *label, const char *source)
+{
+	constexpr size_t MaxLoggedShaderBytes = 2048;
+	const size_t length = std::char_traits<char>::length(source);
+	INFO_LOG(RENDERER, "// %s (%zu bytes)\n%.*s%s\n// END", label, length,
+			static_cast<int>(std::min(length, MaxLoggedShaderBytes)), source,
+			length > MaxLoggedShaderBytes ? "\n// SOURCE TRUNCATED" : "");
+}
+
+GLuint gl_CompileShader(const char* shader, GLuint type, std::string *diagnostics)
 {
 	GLint result;
 	GLint compile_log_len;
@@ -1150,25 +1177,28 @@ GLuint gl_CompileShader(const char* shader,GLuint type)
 	glGetShaderiv(rv, GL_COMPILE_STATUS, &result);
 	glGetShaderiv(rv, GL_INFO_LOG_LENGTH, &compile_log_len);
 
-	if (!result && compile_log_len>0)
+	if (!result)
 	{
-		char* compile_log=(char*)malloc(compile_log_len);
-		*compile_log=0;
-
-		glGetShaderInfoLog(rv, compile_log_len, &compile_log_len, compile_log);
-		WARN_LOG(RENDERER, "Shader: %s \n%s", result ? "compiled!" : "failed to compile", compile_log);
-
-		free(compile_log);
+		std::string compileLog;
+		if (compile_log_len > 0) {
+			compileLog.resize(static_cast<size_t>(compile_log_len), '\0');
+			glGetShaderInfoLog(rv, compile_log_len, &compile_log_len, compileLog.data());
+			compileLog.resize(static_cast<size_t>(compile_log_len));
+		}
+		if (compileLog.empty())
+			compileLog = "compilation failed without a driver diagnostic";
+		WARN_LOG(RENDERER, "Shader failed to compile:\n%s", compileLog.c_str());
+		appendShaderDiagnostic(diagnostics, type == GL_VERTEX_SHADER ? "Vertex shader" : "Fragment shader", compileLog);
 	}
 
 	return rv;
 }
 
-GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader)
+GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader, std::string *diagnostics)
 {
 	//create shaders
-	GLuint vs = gl_CompileShader(vertexShader, GL_VERTEX_SHADER);
-	GLuint ps = gl_CompileShader(fragmentShader, GL_FRAGMENT_SHADER);
+	GLuint vs = gl_CompileShader(vertexShader, GL_VERTEX_SHADER, diagnostics);
+	GLuint ps = gl_CompileShader(fragmentShader, GL_FRAGMENT_SHADER, diagnostics);
 
 	GLuint program = glCreateProgram();
 	glAttachShader(program, vs);
@@ -1199,20 +1229,27 @@ GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader)
 	GLint compile_log_len;
 	glGetProgramiv(program, GL_INFO_LOG_LENGTH, &compile_log_len);
 
-	if (!result && compile_log_len>0)
+	if (!result)
 	{
-		compile_log_len+= 1024;
-		char* compile_log=(char*)malloc(compile_log_len);
-		*compile_log=0;
-
-		glGetProgramInfoLog(program, compile_log_len, &compile_log_len, compile_log);
-		WARN_LOG(RENDERER, "Shader linking: %s \n (%d bytes), - %s -", result ? "linked" : "failed to link", compile_log_len, compile_log);
-
-		free(compile_log);
+		std::string linkLog;
+		if (compile_log_len > 0) {
+			linkLog.resize(static_cast<size_t>(compile_log_len), '\0');
+			glGetProgramInfoLog(program, compile_log_len, &compile_log_len, linkLog.data());
+			linkLog.resize(static_cast<size_t>(compile_log_len));
+		}
+		if (linkLog.empty())
+			linkLog = "linking failed without a driver diagnostic";
+		WARN_LOG(RENDERER, "Shader linking failed:\n%s", linkLog.c_str());
+		appendShaderDiagnostic(diagnostics, "Shader link", linkLog);
 
 		// Dump the shaders source for troubleshooting
-		INFO_LOG(RENDERER, "// VERTEX SHADER\n%s\n// END", vertexShader);
-		INFO_LOG(RENDERER, "// FRAGMENT SHADER\n%s\n// END", fragmentShader);
+		logShaderExcerpt("VERTEX SHADER", vertexShader);
+		logShaderExcerpt("FRAGMENT SHADER", fragmentShader);
+		// Candidate shader chains may fail during import. Release the failed
+		// program here so a rejected candidate cannot leak GL objects.
+		glDeleteProgram(program);
+		glDeleteShader(vs);
+		glDeleteShader(ps);
 		throw RendererException(i18n::T("OpenGL shader compilation failed"));
 		// FIXME MINIDUMP-8A1, MINIDUMP-8A2, MINIDUMP-7YE
 	}
@@ -1456,9 +1493,11 @@ static void gl_create_resources()
 	gl.vbo.idxs = std::make_unique<GlBuffer>(GL_ELEMENT_ARRAY_BUFFER);
 
 	gl.quadDrawer = std::make_unique<GlQuadDrawer>();
+#ifndef LIBRETRO
+	gl.shaderChain = std::make_unique<GlShaderChain>();
+#endif
 }
 
-GLuint gl_CompileShader(const char* shader,GLuint type);
 
 //setup
 
@@ -1610,6 +1649,18 @@ void OpenGLRenderer::Process(TA_context* ctx)
 		updatePaletteTexture(getPaletteTextureSlot());
 		updatePalette = false;
 	}
+	// Presentation shaders reuse texture units, including the fog and palette
+	// slots. Restore these bindings even when the lookup tables did not change;
+	// sampling a shader's image as the fog table corrupts the next game frame.
+	if (config::Fog && fogTextureId != 0) {
+		glActiveTexture(getFogTextureSlot());
+		glBindTexture(GL_TEXTURE_2D, fogTextureId);
+	}
+	if (paletteTextureId != 0) {
+		glActiveTexture(getPaletteTextureSlot());
+		glBindTexture(GL_TEXTURE_2D, paletteTextureId);
+	}
+	glActiveTexture(GL_TEXTURE0);
 	if (!ctx->rend.isRTT && ctx->rend.swapInterval > 0)
 		GraphicsContext::Instance()->setSwapInterval(ctx->rend.swapInterval);
 	ta_parse(ctx, gl.prim_restart_fixed_supported || gl.prim_restart_supported);

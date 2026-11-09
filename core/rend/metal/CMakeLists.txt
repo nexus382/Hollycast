@@ -1,8 +1,10 @@
+# Portions Copyright 2026 The Hollycast Authors
 set(METAL_SOURCES
     metal_context.mm
     metal_imgui.mm
     metal_renderer.mm
     metal_shaders.mm
+    metal_shader_chain.mm
     metal_texture.mm
     metal_modvol.mm
     metal_oit.mm
