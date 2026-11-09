@@ -5,9 +5,17 @@
 #define HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
 #include "graphics_dispatch.h"
 static _Thread_local const HikaruGraphicsDispatch *current_dispatch;
-GLboolean hikaru_graphics_supports_draw_palette(void) { return current_dispatch == NULL; }
+GLboolean hikaru_graphics_supports_draw_palette(void) {
+    return current_dispatch == NULL || (current_dispatch->SupportsDrawPalette && current_dispatch->SupportsDrawPalette());
+}
+GLint hikaru_graphics_native_texture_palette(void) {
+    return current_dispatch ? (current_dispatch->SupportsTexturePalette && current_dispatch->SupportsTexturePalette()) : -1;
+}
 void hikaru_graphics_bind_draw_palette(GLuint state_buffer) {
-    if (current_dispatch) return;
+    if (current_dispatch) {
+        if (current_dispatch->BindDrawPalette) current_dispatch->BindDrawPalette(state_buffer);
+        return;
+    }
     if (state_buffer) {
         glBindBuffer(GL_ARRAY_BUFFER, state_buffer);
         glVertexAttribPointer(9, 1, GL_UNSIGNED_BYTE, GL_FALSE, 1, NULL);
@@ -403,4 +411,34 @@ GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]) {
 void hikaru_graphics_delete_occlusion(GLuint query[2]) {
     if (!current_dispatch && query[0]) glDeleteQueries(1, &query[0]);
     query[0] = query[1] = 0;
+}
+
+void hikaru_glGenSamplers(GLsizei n, GLuint* ids) {
+    if (current_dispatch) { current_dispatch->GenSamplers(n, ids); return; }
+    glGenSamplers(n, ids);
+}
+
+void hikaru_glDeleteSamplers(GLsizei n, const GLuint* ids) {
+    if (current_dispatch) { current_dispatch->DeleteSamplers(n, ids); return; }
+    glDeleteSamplers(n, ids);
+}
+
+void hikaru_glBindSampler(GLuint unit, GLuint id) {
+    if (current_dispatch) { current_dispatch->BindSampler(unit, id); return; }
+    glBindSampler(unit, id);
+}
+
+void hikaru_glSamplerParameteri(GLuint id, GLenum name, GLint value) {
+    if (current_dispatch) { current_dispatch->SamplerParameteri(id, name, value); return; }
+    glSamplerParameteri(id, name, value);
+}
+
+void hikaru_glSamplerParameterf(GLuint id, GLenum name, GLfloat value) {
+    if (current_dispatch) { current_dispatch->SamplerParameterf(id, name, value); return; }
+    glSamplerParameterf(id, name, value);
+}
+
+void hikaru_glUniform1iv(GLint location, GLsizei count, const GLint* values) {
+    if (current_dispatch) { current_dispatch->Uniform1iv(location, count, values); return; }
+    glUniform1iv(location, count, values);
 }

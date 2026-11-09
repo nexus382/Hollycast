@@ -115,7 +115,7 @@ typedef struct {
 	float sort_scale;
 	vec2f_t depth;
 	hikaru_viewport_t viewport;
-	float alpha_ref;
+	float alpha_ref, viewport_horizontal_scale;
 	mtx4x4f_t modelview[2];
 	unsigned palette_counts[3];
 	mtx4x4f_t palette_modelviews[2][HIKARU_DRAW_PALETTE_SIZE];
@@ -335,6 +335,7 @@ typedef struct {
 			GLuint u_keyed_2;
 			GLuint u_invert_f;
 			GLuint u_invert_b;
+			GLuint u_layer_x_scale;
 		} locs;
 	} framebuffer;
 	struct {

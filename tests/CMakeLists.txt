@@ -66,6 +66,19 @@ if(USE_HIKARU)
     target_sources(${PROJECT_NAME} PRIVATE src/HikaruStateTest.cpp src/HikaruCardStateTest.cpp src/HikaruAudioPacerTest.cpp src/HikaruSoundFrameTest.cpp src/HikaruAuditTest.cpp src/HikaruInputBindingsTest.cpp src/HikaruCabinetSettingsTest.cpp src/HikaruFrameWorkerTest.cpp)
 endif()
 
+if(USE_HIKARU AND USE_VULKAN AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruVulkanTest.cpp)
+    # Expose the generic-shader oracle only in the native test executable.
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/vulkan.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
+if(USE_HIKARU AND USE_DX11 AND WIN32 AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruDx11Test.cpp)
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/dx11.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/DcnetProbeTest.cpp

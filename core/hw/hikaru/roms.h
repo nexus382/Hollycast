@@ -21,10 +21,13 @@ struct InterleavedRomFile {
     uint32_t offset;
 };
 
+enum class CardReaderModel { None, SanwaCRP1231BR10 };
+
 struct GameDescriptor {
     const char* identifier;
     const char* title;
     std::optional<uint32_t> securityKey;
+    CardReaderModel cardReader = CardReaderModel::None;
 };
 
 extern const GameDescriptor AirTrixGame;

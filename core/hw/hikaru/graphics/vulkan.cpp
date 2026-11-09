@@ -12,11 +12,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <map>
 #include <stdexcept>
 #include <tuple>
+#include <limits>
 
 namespace hikaru::graphics {
 namespace {
@@ -97,80 +101,170 @@ class VulkanBackend final : public Backend {
         bool depth = false, sampleable = true;
         uint64_t revision = 0;
     };
-    struct DrawResources {
-        vk::UniqueDescriptorSet descriptorSet;
+    static constexpr unsigned BatchDraws = 256, BatchSlots = 8;
+    static constexpr vk::DeviceSize RetainedStreamBytes = 32 * 1024 * 1024;
+    static constexpr vk::DeviceSize LiveStreamBytes = 64 * 1024 * 1024;
+    struct StreamBuffer {
+        BufferData storage;
+        uint8_t* mapping;
+        StreamBuffer(vk::DeviceSize bytes, vk::BufferUsageFlags usage)
+            : storage(bytes,usage), mapping(static_cast<uint8_t*>(storage.MapMemory())) {}
+        ~StreamBuffer() { storage.UnmapMemory(); }
+        void flush(vk::DeviceSize used) { if(used)storage.allocation.FlushMemory(0,used); }
     };
     struct PendingBatch {
         vk::UniqueCommandBuffer command;
         vk::UniqueFence fence;
-        std::unique_ptr<BufferData> vertexBuffer, uniformBuffer;
-        // Release descriptors and framebuffers before their referenced images.
+        std::unique_ptr<StreamBuffer> vertexBuffer, uniformBuffer, paletteBuffer;
         std::vector<Image> retiredImages;
         std::vector<vk::UniqueFramebuffer> retiredFramebuffers;
+        std::vector<vk::UniquePipeline> retiredPipelines;
         std::vector<std::unique_ptr<BufferData>> transfers;
-        std::vector<DrawResources> draws;
+        // Raw descriptor sets are owned by this pool, which is reset only
+        // after the submission fence. Never use UniqueDescriptorSet here.
+        vk::UniqueDescriptorPool descriptors;
+        unsigned drawCount = 0;
+        vk::DeviceSize streamBytes() const {
+            return (vertexBuffer?vertexBuffer->storage.bufferSize:0)+
+                (uniformBuffer?uniformBuffer->storage.bufferSize:0)+
+                (paletteBuffer?paletteBuffer->storage.bufferSize:0);
+        }
     };
     struct PipelineKey {
-        bool bitmap, familyResolve, depthTest, depthWrite, blend, cull, depthBias;
+        bool bitmap, familyResolve, palette, depthTest, depthWrite, blend, cull, depthBias;
         GLenum depthFunc, cullFace, frontFace, srcRGB, dstRGB, srcAlpha, dstAlpha, equationRGB, equationAlpha, topology;
         std::array<bool,4> colorMask;
         vk::Format color, depth, metadata;
-        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,familyResolve,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata) < std::tie(b.bitmap,b.familyResolve,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth,b.metadata); }
+        std::array<int32_t,MeshShaderSpecializationCount> shader{};
+        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,familyResolve,palette,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader) < std::tie(b.bitmap,b.familyResolve,b.palette,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth,b.metadata,b.shader); }
     };
     VulkanContext* ctx = VulkanContext::Instance();
     vk::Device device = ctx->GetDevice();
     vk::UniqueCommandPool commandPool;
-    vk::UniqueDescriptorSetLayout descriptorLayout;
-    vk::UniquePipelineLayout pipelineLayout;
-    vk::UniqueDescriptorPool descriptorPool;
+    vk::UniqueDescriptorSetLayout descriptorLayout, paletteDescriptorLayout;
+    vk::UniquePipelineLayout pipelineLayout, palettePipelineLayout;
+
     using SamplerKey=std::tuple<GLenum,GLenum,GLenum,GLenum,uint32_t>;
     std::map<SamplerKey,vk::UniqueSampler> samplerCache;
     vk::UniqueRenderPass colorOnlyPass;
     std::map<std::tuple<vk::Format,vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
-    vk::UniqueShaderModule meshVertex, meshFragment, bitmapVertex, bitmapFragment, familyFragment;
-    std::map<PipelineKey, vk::UniquePipeline> pipelines;
+    vk::UniqueShaderModule meshVertex, meshFragment, paletteVertex, paletteFragment, fixedTexturePaletteFragment, bitmapVertex, bitmapFragment, familyFragment;
+    struct CachedPipeline { vk::UniquePipeline pipeline; uint64_t touched; };
+    std::map<PipelineKey,CachedPipeline> pipelines;
+    uint64_t pipelineClock = 0;
+    unsigned textureSlots = 1;
+    bool specializeShaders = true;
     std::unordered_map<unsigned, Image> images;
     std::unordered_map<unsigned, Texture> imageInfo;
     std::map<std::tuple<unsigned,unsigned,unsigned>,vk::UniqueFramebuffer> framebuffers;
     std::deque<PendingBatch> pendingBatches;
+    std::vector<PendingBatch> freeBatches;
+    std::optional<PendingBatch> failedSubmission;
     vk::UniqueCommandBuffer activeCommand;
-    std::unique_ptr<BufferData> activeVertexBuffer,activeUniformBuffer;
-    std::vector<DrawResources> activeDraws;
+    vk::UniqueFence activeFence;
+    vk::UniqueDescriptorPool activeDescriptors;
+    std::unique_ptr<StreamBuffer> activeVertexBuffer,activeUniformBuffer,activePaletteBuffer;
     std::vector<std::unique_ptr<BufferData>> activeTransfers;
     std::vector<Image> retiredImages;
     std::vector<vk::UniqueFramebuffer> retiredFramebuffers;
-    vk::DeviceSize activeVertexOffset=0,activeUniformOffset=0,activeVertexCapacity=0,activeUniformCapacity=0;
+    std::vector<vk::UniquePipeline> retiredPipelines;
+    vk::DeviceSize activeVertexOffset=0,activeUniformOffset=0,activePaletteOffset=0;
     unsigned activeDrawCount=0,activeColor=0,activeDepth=0,activeMetadata=0;
+    vk::Pipeline boundPipeline;
+    vk::Buffer boundVertexBuffer;
+    std::optional<std::array<float,6>> boundViewport;
+    std::optional<vk::Rect2D> boundScissor;
+    std::optional<std::array<float,2>> boundDepthBias;
+    // Opt-in diagnostics distinguish CPU pipeline work from queue backpressure.
+    struct Timings {
+        const bool enabled=std::getenv("HIKARU_TRACE_TIMING")!=nullptr;
+        unsigned frames=0,draws=0,palettes=0,pipelines=0,passes=0,batches=0,queries=0,uploads=0;
+        double waitMs=0,pipelineMs=0,submitMs=0,descriptorMs=0;
+        struct Span {
+            double& total; bool enabled;
+            std::chrono::steady_clock::time_point start;
+            Span(double& value,bool trace):total(value),enabled(trace),start(trace?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{}){}
+            void stop(){if(enabled){total+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();enabled=false;}}
+            ~Span(){stop();}
+        };
+        void present() {
+            if(!enabled||++frames<60)return;
+            std::fprintf(stderr,"Hikaru Vulkan timing: draws=%u palettes=%u pipelines=%u passes=%u batches=%u queries=%u uploads=%u wait_ms=%.3f pipeline_ms=%.3f submit_ms=%.3f descriptor_ms=%.3f\n",draws,palettes,pipelines,passes,batches,queries,uploads,waitMs/frames,pipelineMs/frames,submitMs/frames,descriptorMs/frames);
+            frames=draws=palettes=pipelines=passes=batches=queries=uploads=0;waitMs=pipelineMs=submitMs=descriptorMs=0;
+        }
+    } timing;
     bool renderPassOpen=false;
     bool occlusionActive=false;
     std::vector<vk::UniqueQueryPool> occlusionQueries;
 
-    size_t outstandingDrawCount() const {
-        size_t count=activeDrawCount;
-        for(const auto& batch:pendingBatches)count+=batch.draws.size();
-        return count;
+    vk::DeviceSize liveStreamBytes() const {
+        vk::DeviceSize bytes=(activeVertexBuffer?activeVertexBuffer->storage.bufferSize:0)+
+            (activeUniformBuffer?activeUniformBuffer->storage.bufferSize:0)+
+            (activePaletteBuffer?activePaletteBuffer->storage.bufferSize:0);
+        for(const auto& batch:pendingBatches)bytes+=batch.streamBytes();
+        for(const auto& batch:freeBatches)bytes+=batch.streamBytes();
+        return bytes;
     }
-
+    void allocateStream(std::unique_ptr<StreamBuffer>& target,vk::DeviceSize bytes,vk::BufferUsageFlags usage) {
+        if(target&&target->storage.bufferSize>=bytes)return;
+        target.reset(); // only unused storage from a fence-retired slot can grow
+        while(liveStreamBytes()+bytes>LiveStreamBytes) {
+            for(auto& batch:freeBatches){batch.vertexBuffer.reset();batch.uniformBuffer.reset();batch.paletteBuffer.reset();}
+            if(liveStreamBytes()+bytes<=LiveStreamBytes||pendingBatches.empty())break;
+            Timings::Span measured(timing.waitMs,timing.enabled);
+            if(device.waitForFences(*pendingBatches.front().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
+                throw std::runtime_error("Failed waiting for Hikaru Vulkan stream budget");
+            reapCompletedDraws();
+        }
+        // A single oversized guest draw is still rendered, after other batches
+        // drain. It must not be dropped or split into a different topology.
+        target=std::make_unique<StreamBuffer>(bytes,usage);
+    }
     void reapCompletedDraws() {
         while(!pendingBatches.empty()) {
             const auto status=device.getFenceStatus(*pendingBatches.front().fence);
             if(status==vk::Result::eNotReady)break;
             if(status!=vk::Result::eSuccess)throw std::runtime_error("Failed querying Hikaru Vulkan draw fence");
-            pendingBatches.pop_front();
+            auto batch=std::move(pendingBatches.front());pendingBatches.pop_front();
+            // The fence covers all commands that reference these resources.
+            if(batch.descriptors)device.resetDescriptorPool(*batch.descriptors);
+            batch.retiredFramebuffers.clear();batch.retiredPipelines.clear();batch.retiredImages.clear();batch.transfers.clear();
+            batch.drawCount=0;
+            vk::DeviceSize retained=batch.streamBytes();
+            for(const auto& free:freeBatches)retained+=free.streamBytes();
+            if(retained>RetainedStreamBytes){batch.vertexBuffer.reset();batch.uniformBuffer.reset();batch.paletteBuffer.reset();}
+            freeBatches.push_back(std::move(batch));
         }
     }
     void waitForDraws() {
+        Timings::Span measured(timing.waitMs,timing.enabled);
         flushBatch();
         if(pendingBatches.empty())return;
         if(device.waitForFences(*pendingBatches.back().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
             throw std::runtime_error("Failed waiting for Hikaru Vulkan submission");
-        pendingBatches.clear();
+        reapCompletedDraws();
     }
     vk::CommandBuffer startBatch() {
+        if(failedSubmission)throw std::runtime_error("Hikaru Vulkan submission has failed");
         if(activeCommand)return *activeCommand;
-        vk::CommandBufferAllocateInfo ai(*commandPool,vk::CommandBufferLevel::ePrimary,1);
-        auto commands=device.allocateCommandBuffersUnique(ai);
-        activeCommand=std::move(commands.front());
+        reapCompletedDraws();
+        if(freeBatches.empty()&&pendingBatches.size()>=BatchSlots) {
+            Timings::Span measured(timing.waitMs,timing.enabled);
+            if(device.waitForFences(*pendingBatches.front().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
+                throw std::runtime_error("Failed waiting for Hikaru Vulkan batch slot");
+            reapCompletedDraws();
+        }
+        if(!freeBatches.empty()) {
+            auto batch=std::move(freeBatches.back());freeBatches.pop_back();
+            activeCommand=std::move(batch.command);activeFence=std::move(batch.fence);
+            activeVertexBuffer=std::move(batch.vertexBuffer);activeUniformBuffer=std::move(batch.uniformBuffer);
+            activePaletteBuffer=std::move(batch.paletteBuffer);activeDescriptors=std::move(batch.descriptors);
+            activeCommand->reset();
+        } else {
+            auto commands=device.allocateCommandBuffersUnique({*commandPool,vk::CommandBufferLevel::ePrimary,1});
+            activeCommand=std::move(commands.front());activeFence=device.createFenceUnique({});
+        }
+        boundPipeline=nullptr;boundVertexBuffer=nullptr;boundViewport.reset();boundScissor.reset();boundDepthBias.reset();
         auto cmd=*activeCommand;
         cmd.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
         return cmd;
@@ -189,21 +283,27 @@ class VulkanBackend final : public Backend {
         cmd.end();
         PendingBatch batch;
         batch.command=std::move(activeCommand);
-        batch.vertexBuffer=std::move(activeVertexBuffer);
-        batch.uniformBuffer=std::move(activeUniformBuffer);
-        batch.draws=std::move(activeDraws);
-        batch.transfers=std::move(activeTransfers);
-        batch.retiredImages=std::move(retiredImages);
-        batch.retiredFramebuffers=std::move(retiredFramebuffers);
-        activeDrawCount=0;
-        activeVertexOffset=activeUniformOffset=activeVertexCapacity=activeUniformCapacity=0;
-        activeDraws.clear();activeDraws.reserve(256);
-        batch.fence=device.createFenceUnique({});
+        batch.vertexBuffer=std::move(activeVertexBuffer);batch.uniformBuffer=std::move(activeUniformBuffer);
+        batch.paletteBuffer=std::move(activePaletteBuffer);batch.descriptors=std::move(activeDescriptors);
+        if(batch.vertexBuffer)batch.vertexBuffer->flush(activeVertexOffset);
+        if(batch.uniformBuffer)batch.uniformBuffer->flush(activeUniformOffset);
+        if(batch.paletteBuffer)batch.paletteBuffer->flush(activePaletteOffset);
+        batch.drawCount=activeDrawCount;batch.transfers=std::move(activeTransfers);
+        batch.retiredImages=std::move(retiredImages);batch.retiredFramebuffers=std::move(retiredFramebuffers);
+        batch.retiredPipelines=std::move(retiredPipelines);batch.fence=std::move(activeFence);
+        activeDrawCount=0;activeVertexOffset=activeUniformOffset=activePaletteOffset=0;
+        device.resetFences(*batch.fence);
         pendingBatches.push_back(std::move(batch));
         try {
             auto& submitted=pendingBatches.back();
+            Timings::Span measured(timing.submitMs,timing.enabled);
             ctx->SubmitCommandBuffers({*submitted.command},*submitted.fence);
+            if(timing.enabled)++timing.batches;
         } catch (...) {
+            // Its retirement lists may still protect earlier queue work. Keep
+            // them alive until shutdown drains that work; this fence was never
+            // submitted and must not enter the normal wait/recycle queue.
+            failedSubmission.emplace(std::move(pendingBatches.back()));
             pendingBatches.pop_back();
             throw;
         }
@@ -348,9 +448,14 @@ class VulkanBackend final : public Backend {
         return *it->second;
     }
     vk::Pipeline pipeline(const PipelineKey& k) {
-        auto found=pipelines.find(k); if(found!=pipelines.end()) return *found->second;
+        auto found=pipelines.find(k);
+        if(found!=pipelines.end()){found->second.touched=++pipelineClock;return *found->second.pipeline;}
         auto pass=renderPass(k.color,k.depth,k.metadata);
-        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.familyResolve?*familyFragment:k.bitmap?*bitmapFragment:*meshFragment,"main"}};
+        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.familyResolve?*familyFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
+        std::array<vk::SpecializationMapEntry,MeshShaderSpecializationCount> entries{};
+        for(unsigned i=0;i<entries.size();++i)entries[i]=vk::SpecializationMapEntry(i,uint32_t(i*sizeof(int32_t)),sizeof(int32_t));
+        vk::SpecializationInfo specialization(entries.size(),entries.data(),sizeof(k.shader),k.shader.data());
+        if(!k.bitmap)stages[1].pSpecializationInfo=&specialization;
         vk::VertexInputBindingDescription binding(0,sizeof(Vertex),vk::VertexInputRate::eVertex);
         std::array<vk::VertexInputAttributeDescription,8> attrs; for(uint32_t i=0;i<8;i++)attrs[i]={i,0,vk::Format::eR32G32B32A32Sfloat,i*16};
         vk::PipelineVertexInputStateCreateInfo vi({},1,&binding,attrs.size(),attrs.data());
@@ -366,18 +471,40 @@ class VulkanBackend final : public Backend {
         // The metadata attachment is used only by unblended depth writers.
         vk::PipelineColorBlendStateCreateInfo cb({},false,vk::LogicOp::eCopy,k.metadata==vk::Format::eUndefined?1:2,blends.data());
         vk::DynamicState dyns[]={vk::DynamicState::eViewport,vk::DynamicState::eScissor,vk::DynamicState::eDepthBias}; vk::PipelineDynamicStateCreateInfo dyn({},3,dyns);
-        vk::GraphicsPipelineCreateInfo ci({},2,stages,&vi,&ia,nullptr,&vp,&rs,&ms,&ds,&cb,&dyn,*pipelineLayout,pass);
+        vk::GraphicsPipelineCreateInfo ci({},2,stages,&vi,&ia,nullptr,&vp,&rs,&ms,&ds,&cb,&dyn,k.shader[8]?*palettePipelineLayout:*pipelineLayout,pass);
+        Timings::Span measured(timing.pipelineMs,timing.enabled);
+        if(timing.enabled)++timing.pipelines;
         auto result=device.createGraphicsPipelineUnique(ctx->GetPipelineCache(),ci);
-        return *pipelines.emplace(k,std::move(result.value)).first->second;
+        // Evicted pipelines can still be referenced by recorded or submitted
+        // draws. Retire them on this queue before reclaiming their handles.
+        if(pipelines.size()>=512) {
+            auto oldest=std::min_element(pipelines.begin(),pipelines.end(),[](const auto& a,const auto& b){return a.second.touched<b.second.touched;});
+            retiredPipelines.push_back(std::move(oldest->second.pipeline));pipelines.erase(oldest);
+        }
+        return *pipelines.emplace(k,CachedPipeline{std::move(result.value),++pipelineClock}).first->second.pipeline;
     }
-    vk::UniqueDescriptorSetLayout makeDescriptorLayout() {
-        std::array<vk::DescriptorSetLayoutBinding,5> bindings;
+    vk::UniqueDescriptorSetLayout makeDescriptorLayout(unsigned slots) {
+        std::array<vk::DescriptorSetLayoutBinding,6> bindings;
         bindings[0]={0,vk::DescriptorType::eUniformBuffer,1,vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment};
-        for(uint32_t i=1;i<5;i++)bindings[i]={i,vk::DescriptorType::eCombinedImageSampler,1,vk::ShaderStageFlagBits::eFragment};
+        for(uint32_t i=1;i<5;i++)bindings[i]={i,vk::DescriptorType::eCombinedImageSampler,i==1?slots:1,vk::ShaderStageFlagBits::eFragment};
+        bindings[5]={5,vk::DescriptorType::eStorageBuffer,1,vk::ShaderStageFlagBits::eVertex};
         return device.createDescriptorSetLayoutUnique({{},bindings.size(),bindings.data()});
     }
+    vk::DescriptorPool descriptorPool() {
+        if(!activeDescriptors) {
+            std::array<vk::DescriptorPoolSize,3> sizes={vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,BatchDraws),
+                vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,BatchDraws),
+                vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler,(textureSlots+3)*BatchDraws)};
+            activeDescriptors=device.createDescriptorPoolUnique({{},BatchDraws,sizes.size(),sizes.data()});
+        }
+        return *activeDescriptors;
+    }
+
 public:
+    bool supportsDrawPalette() const override { return true; }
+    bool supportsTexturePalette() const override { return textureSlots==DrawPaletteSize; }
     void beginOcclusion() override {
+        if(timing.enabled)++timing.queries;
         if(occlusionActive)throw std::runtime_error("Nested Hikaru visibility query");
         flushBatch();
         occlusionQueries.clear();
@@ -397,15 +524,27 @@ public:
         occlusionQueries.clear();
         return visible;
     }
-    VulkanBackend() {
+    explicit VulkanBackend(bool specialize=true) : specializeShaders(specialize) {
         if(!ctx) throw std::runtime_error("Hikaru Vulkan backend requires an active Vulkan context");
-        commandPool=device.createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eTransient,ctx->GetGraphicsQueueFamilyIndex()});
-        descriptorLayout=makeDescriptorLayout(); pipelineLayout=device.createPipelineLayoutUnique({{},1,&*descriptorLayout});
-        std::array<vk::DescriptorPoolSize,2> sizes={vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,8192),vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler,32768)};
-        descriptorPool=device.createDescriptorPoolUnique({vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,8192,sizes.size(),sizes.data()});
+        commandPool=device.createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eTransient|vk::CommandPoolCreateFlagBits::eResetCommandBuffer,ctx->GetGraphicsQueueFamilyIndex()});
+        const auto limits=ctx->GetPhysicalDevice().getProperties().limits;
+        // The base texture aliases palette slot zero; the other three inputs
+        // remain depth/metadata or bitmap layers. No descriptor-indexing feature
+        // is needed, and small mobile sampler limits keep the scalar texture path.
+        if(limits.maxPerStageDescriptorSamplers>=DrawPaletteSize+3&&limits.maxPerStageDescriptorSampledImages>=DrawPaletteSize+3&&
+            limits.maxDescriptorSetSamplers>=DrawPaletteSize+3&&limits.maxDescriptorSetSampledImages>=DrawPaletteSize+3)
+            textureSlots=DrawPaletteSize;
+        descriptorLayout=makeDescriptorLayout(1);pipelineLayout=device.createPipelineLayoutUnique({{},1,&*descriptorLayout});
+        paletteDescriptorLayout=makeDescriptorLayout(textureSlots);palettePipelineLayout=device.createPipelineLayoutUnique({{},1,&*paletteDescriptorLayout});
         colorOnlyPass=createPass(vk::Format::eR8G8B8A8Unorm,vk::Format::eUndefined,false);
-        meshVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false));meshFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false));bitmapVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(true));bitmapFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true));
-        familyFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true,true));
+        meshVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false));
+        meshFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,false,1));
+        paletteVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false,true));
+        paletteFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,true,textureSlots));
+        fixedTexturePaletteFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,true,1));
+        bitmapVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(true));
+        bitmapFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true,false,false,1));
+        familyFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true,true,false,1));
         constexpr unsigned metadataFallback=0xfffffffcu;
         images.emplace(metadataFallback,makeImage(1,1,vk::Format::eR32G32Uint,1,false,false));
         immediate([&](vk::CommandBuffer cmd){auto& f=image(metadataFallback);barrier(cmd,f,vk::ImageLayout::eTransferDstOptimal);cmd.clearColorImage(*f.image,vk::ImageLayout::eTransferDstOptimal,vk::ClearColorValue(std::array<uint32_t,4>{}),vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor,0,1,0,1));barrier(cmd,f,vk::ImageLayout::eShaderReadOnlyOptimal);});
@@ -423,6 +562,7 @@ public:
         ctx->PresentFrame({}, {}, {}, 1.f);
     }
     void texture(unsigned id,const Texture& info,unsigned level,TextureUpload upload,const void* pixels,size_t bytes) override {
+        if(timing.enabled)++timing.uploads;
         const bool fullUpdate=upload==TextureUpload::FullUpdate;
         const bool depth=(id&0x80000000u)!=0||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8||info.format==GL_DEPTH_COMPONENT;
         if(fullUpdate&&(!info.width||!info.height||level!=0||!pixels||bytes==0||depth))throw std::runtime_error("Hikaru Vulkan full texture update requires level-zero color pixel data");
@@ -501,74 +641,94 @@ public:
     }
     void draw(const Draw& d) override {
         if(d.vertices.empty())return;
-        reapCompletedDraws();
-        if(activeDrawCount>=256)flushBatch();
-        if(outstandingDrawCount()>=8192){
-            if(device.waitForFences(*pendingBatches.front().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
-                throw std::runtime_error("Failed waiting for Hikaru Vulkan draw fence");
-            reapCompletedDraws();
-        }
+        if(timing.enabled){++timing.draws;timing.palettes+=!d.palette.empty();}
+        // Slot acquisition and pressure waits reap completed work. Polling a
+        // fence for every triangle draw adds driver calls without freeing any
+        // resource the active slot can use.
+        if(activeDrawCount>=BatchDraws)flushBatch();
         Image& target=image(d.color);Image* z=d.depth?&image(d.depth):nullptr;
         Image* metadata=d.metadata?&image(d.metadata):nullptr;
         if(metadata&&(metadata->extent!=target.extent||metadata->format!=vk::Format::eR32G32Uint))throw std::runtime_error("Invalid Hikaru family metadata target");
         if(z&&z->extent!=target.extent) throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
         if(renderPassOpen&&(d.color!=activeColor||d.depth!=activeDepth||d.metadata!=activeMetadata))flushBatch();
+        if(d.vertices.size()>UINT32_MAX/sizeof(Vertex))throw std::runtime_error("Hikaru Vulkan draw exceeds buffer upload limit");
         const vk::DeviceSize vertexBytes=d.vertices.size()*sizeof(Vertex);
-        if(vertexBytes>UINT32_MAX)throw std::runtime_error("Hikaru Vulkan draw exceeds buffer upload limit");
-        if(activeVertexBuffer&&activeVertexOffset+vertexBytes>activeVertexCapacity)flushBatch();
-        if(!activeVertexBuffer){
-            activeVertexCapacity=std::max<vk::DeviceSize>(1024*1024,vertexBytes);
-            const vk::DeviceSize alignment=std::max<vk::DeviceSize>(1,ctx->GetUniformBufferAlignment());
-            activeUniformCapacity=((sizeof(Uniforms)+alignment-1)/alignment*alignment)*256;
-            activeVertexBuffer=std::make_unique<BufferData>(activeVertexCapacity,vk::BufferUsageFlagBits::eVertexBuffer);
-            activeUniformBuffer=std::make_unique<BufferData>(activeUniformCapacity,vk::BufferUsageFlagBits::eUniformBuffer);
+        if(d.palette.size()>DrawPaletteSize||(d.texturePalette&&(!supportsTexturePalette()||d.paletteTextures.size()!=d.palette.size()||d.paletteSampling.size()!=d.palette.size())))
+            throw std::runtime_error("Invalid Hikaru Vulkan draw palette");
+        if(activeVertexBuffer&&activeVertexOffset+vertexBytes>activeVertexBuffer->storage.bufferSize)flushBatch();
+        auto cmd=startBatch();
+        allocateStream(activeVertexBuffer,std::max<vk::DeviceSize>(1024*1024,vertexBytes),vk::BufferUsageFlagBits::eVertexBuffer);
+        const vk::DeviceSize alignment=std::max<vk::DeviceSize>(1,ctx->GetUniformBufferAlignment());
+        const vk::DeviceSize uniformStride=(sizeof(Uniforms)+alignment-1)/alignment*alignment;
+        allocateStream(activeUniformBuffer,uniformStride*BatchDraws,vk::BufferUsageFlagBits::eUniformBuffer);
+        const vk::DeviceSize uniformOffset=(activeUniformOffset+alignment-1)/alignment*alignment;
+        if(uniformOffset+sizeof(Uniforms)>activeUniformBuffer->storage.bufferSize)throw std::runtime_error("Hikaru Vulkan uniform batch capacity exceeded");
+        const uint32_t vertexOffset=uint32_t(activeVertexOffset);
+        std::memcpy(activeVertexBuffer->mapping+vertexOffset,d.vertices.data(),size_t(vertexBytes));
+        std::memcpy(activeUniformBuffer->mapping+uniformOffset,&d.uniforms,sizeof(Uniforms));
+        vk::DescriptorBufferInfo paletteInfo;
+        if(!d.palette.empty()) {
+            const vk::DeviceSize storageAlignment=std::max<vk::DeviceSize>(1,ctx->GetStorageBufferAlignment());
+            const vk::DeviceSize maxRecordBytes=sizeof(DrawRecord)*DrawPaletteSize;
+            const vk::DeviceSize stride=(maxRecordBytes+storageAlignment-1)/storageAlignment*storageAlignment;
+            allocateStream(activePaletteBuffer,stride*BatchDraws,vk::BufferUsageFlagBits::eStorageBuffer);
+            const vk::DeviceSize offset=(activePaletteOffset+storageAlignment-1)/storageAlignment*storageAlignment;
+            const size_t bytes=d.palette.size()*sizeof(DrawRecord);
+            if(offset+bytes>activePaletteBuffer->storage.bufferSize)throw std::runtime_error("Hikaru Vulkan palette capacity exceeded");
+            for(const auto& vertex:d.vertices)if(!std::isfinite(vertex.extra[2])||vertex.extra[2]<0||vertex.extra[2]>=d.palette.size()||std::floor(vertex.extra[2])!=vertex.extra[2])
+                throw std::runtime_error("Invalid Hikaru Vulkan palette index");
+            std::memcpy(activePaletteBuffer->mapping+offset,d.palette.data(),bytes);
+            activePaletteOffset=offset+bytes;paletteInfo=vk::DescriptorBufferInfo(*activePaletteBuffer->storage.buffer,offset,bytes);
         }
-        const vk::DeviceSize uniformAlignment=std::max<vk::DeviceSize>(1,ctx->GetUniformBufferAlignment());
-        const vk::DeviceSize uniformOffset=(activeUniformOffset+uniformAlignment-1)/uniformAlignment*uniformAlignment;
-        if(uniformOffset+sizeof(Uniforms)>activeUniformCapacity)throw std::runtime_error("Hikaru Vulkan uniform batch capacity exceeded");
-        const uint32_t vertexOffset=uint32_t(activeVertexOffset),uniformUploadOffset=uint32_t(uniformOffset);
-        activeVertexBuffer->upload(uint32_t(vertexBytes),d.vertices.data(),vertexOffset);
-        activeUniformBuffer->upload(sizeof(Uniforms),&d.uniforms,uniformUploadOffset);
-        DrawResources resources;
-        std::array<vk::DescriptorImageInfo,4> imgs; std::array<vk::DescriptorSetLayout,1> layouts{*descriptorLayout};
-        vk::DescriptorSetAllocateInfo dai(*descriptorPool,layouts);auto sets=device.allocateDescriptorSetsUnique(dai);resources.descriptorSet=std::move(sets.front());auto set=*resources.descriptorSet;
-        vk::DescriptorBufferInfo bi(*activeUniformBuffer->buffer,uniformOffset,sizeof(Uniforms));std::array<vk::WriteDescriptorSet,5> writes;writes[0]={set,0,0,1,vk::DescriptorType::eUniformBuffer,nullptr,&bi};
+        const unsigned slots=d.texturePalette?textureSlots:1;
+        const auto layout=d.texturePalette?*paletteDescriptorLayout:*descriptorLayout;
+        Timings::Span descriptorWork(timing.descriptorMs,timing.enabled);
+        auto sets=device.allocateDescriptorSets({descriptorPool(),1,&layout});const auto set=sets.front();
+        vk::DescriptorBufferInfo bi(*activeUniformBuffer->storage.buffer,uniformOffset,sizeof(Uniforms));
+        std::array<vk::WriteDescriptorSet,6> writes{};writes[0]={set,0,0,1,vk::DescriptorType::eUniformBuffer,nullptr,&bi};
+        std::array<vk::DescriptorImageInfo,DrawPaletteSize+3> imgs{};
         constexpr unsigned transparentFallback=0xfffffffdu;
-        std::array<unsigned,4> resolvedTextures{};
-        for(unsigned n=0;n<4;n++){
-            const GLenum mf=d.sampling[n].minFilter;
+        std::array<unsigned,DrawPaletteSize+3> resolvedTextures{};
+        for(unsigned n=0;n<slots+3;n++) {
+            const bool base=n<slots;
+            const unsigned unit=base?0:n-slots+1;
+            const bool paletteTexture=base&&d.texturePalette&&n<d.palette.size();
+            const Texture sampling=paletteTexture?d.paletteSampling[n]:base&&n!=0?Texture{}:d.sampling[unit];
+            const GLenum mf=sampling.minFilter;
             const bool mipmapped=mf==GL_NEAREST_MIPMAP_NEAREST||mf==GL_NEAREST_MIPMAP_LINEAR||mf==GL_LINEAR_MIPMAP_NEAREST||mf==GL_LINEAR_MIPMAP_LINEAR;
-            unsigned tid=d.textures[n]; Image* sampled=nullptr;
+            const unsigned tid=paletteTexture?d.paletteTextures[n]:base&&n!=0?0:d.textures[unit];Image* sampled=nullptr;
             if(tid&&tid!=d.color&&tid!=d.depth&&tid!=d.metadata){auto it=images.find(tid);if(it!=images.end())sampled=&it->second;}
             if(sampled&&sampled->sampleable&&sampled->initializedLevels[0]) {
-                unsigned geometric=1u+unsigned(std::floor(std::log2(std::max(sampled->extent.width,sampled->extent.height))));
-                unsigned expected=d.sampling[n].maxLevel==1000?geometric:std::min(geometric,d.sampling[n].maxLevel+1);
-                unsigned checked=mipmapped?expected:1;
+                const unsigned geometric=1u+unsigned(std::floor(std::log2(std::max(sampled->extent.width,sampled->extent.height))));
+                const unsigned expected=sampling.maxLevel==1000?geometric:std::min(geometric,sampling.maxLevel+1);
+                const unsigned checked=mipmapped?expected:1;
                 if(checked>sampled->levels)sampled=nullptr;
                 else for(unsigned level=0;sampled&&level<checked;level++)if(!sampled->initializedLevels[level])sampled=nullptr;
             } else sampled=nullptr;
-            if(!sampled){
-                const unsigned fallback=(!d.bitmap&&n==3)||(d.familyResolve&&n>=2)?0xfffffffcu:transparentFallback;
+            if(!sampled) {
+                const unsigned fallback=(!base&&!d.bitmap&&unit==3)||(!base&&d.familyResolve&&unit>=2)?0xfffffffcu:transparentFallback;
                 sampled=&image(fallback);resolvedTextures[n]=fallback;
-            } // absent, incomplete or attachment feedback reads are transparent
-            else resolvedTextures[n]=tid;
-            imgs[n]={sampler(d.sampling[n],*sampled,mipmapped),*sampled->view,sampled->depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal};writes[n+1]={set,n+1,0,1,vk::DescriptorType::eCombinedImageSampler,&imgs[n]};
+            } else resolvedTextures[n]=tid;
+            imgs[n]={sampler(sampling,*sampled,mipmapped),*sampled->view,sampled->depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal};
         }
-        device.updateDescriptorSets(writes,{});
-        activeDraws.push_back(std::move(resources));
-        auto cmd=startBatch();
+        writes[1]={set,1,0,slots,vk::DescriptorType::eCombinedImageSampler,imgs.data()};
+        for(unsigned unit=1;unit<4;++unit)writes[unit+1]={set,unit+1,0,1,vk::DescriptorType::eCombinedImageSampler,&imgs[slots+unit-1]};
+        if(!d.palette.empty())writes[5]={set,5,0,1,vk::DescriptorType::eStorageBuffer,nullptr,&paletteInfo};
+        device.updateDescriptorSets(d.palette.empty()?5:6,writes.data(),0,nullptr);
+        descriptorWork.stop();
         bool sampleTransition=false;
-        for(unsigned n=0;n<4;n++)if(resolvedTextures[n]!=transparentFallback){
+        for(unsigned n=0;n<slots+3;n++)if(resolvedTextures[n]!=transparentFallback){
             const auto& sampled=image(resolvedTextures[n]);
             const auto layout=sampled.depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal;
             sampleTransition|=sampled.layout!=layout;
         }
         if(renderPassOpen&&sampleTransition)endRenderPass(cmd);
-        for(unsigned n=0;n<4;n++)if(resolvedTextures[n]!=transparentFallback){
+        for(unsigned n=0;n<slots+3;n++)if(resolvedTextures[n]!=transparentFallback){
             auto& sampled=image(resolvedTextures[n]);
             barrier(cmd,sampled,sampled.depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal);
         }
         if(!renderPassOpen){
+            if(timing.enabled)++timing.passes;
             barrier(cmd,target,vk::ImageLayout::eColorAttachmentOptimal);
             if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
             if(metadata)barrier(cmd,*metadata,vk::ImageLayout::eColorAttachmentOptimal);
@@ -587,9 +747,20 @@ public:
         // orientation, so their front-face sense reverses; the presentation
         // target also flips clip Y in the shader and keeps the requested sense.
         const GLenum frontFace=(d.uniforms.inverted[2]!=0.f)?(d.frontFace==GL_CCW?GL_CW:GL_CCW):d.frontFace;
-        auto p=pipeline({d.bitmap,d.familyResolve,bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined});
-        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);vk::Viewport vp(float(d.viewport[0]),viewportY,float(d.viewport[2]),float(d.viewport[3]),d.nearDepth,d.farDepth);cmd.setViewport(0,vp);
-        vk::Rect2D sc({0,0},target.extent);if(d.scissorEnabled){const int32_t scissorY=d.color==0?int32_t(target.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1];sc.offset=vk::Offset2D(d.scissor[0],scissorY);sc.extent=vk::Extent2D(uint32_t(std::max(0,d.scissor[2])),uint32_t(std::max(0,d.scissor[3])));}cmd.setScissor(0,sc);cmd.setDepthBias(d.biasUnits,0,d.biasFactor);cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,*pipelineLayout,0,set,nullptr);cmd.bindVertexBuffers(0,*activeVertexBuffer->buffer,{vk::DeviceSize(vertexOffset)});cmd.draw(d.vertices.size(),1,0,0);
+        auto p=pipeline({d.bitmap,d.familyResolve,!d.palette.empty(),bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined,meshShaderSpecialization(d,specializeShaders)});
+        if(boundPipeline!=p){cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);boundPipeline=p;}
+        const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);
+        const std::array<float,6> viewport{float(d.viewport[0]),viewportY,float(d.viewport[2]),float(d.viewport[3]),d.nearDepth,d.farDepth};
+        if(!boundViewport||*boundViewport!=viewport){cmd.setViewport(0,vk::Viewport(viewport[0],viewport[1],viewport[2],viewport[3],viewport[4],viewport[5]));boundViewport=viewport;}
+        vk::Rect2D sc({0,0},target.extent);
+        if(d.scissorEnabled){const int32_t y=d.color==0?int32_t(target.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1];sc.offset=vk::Offset2D(d.scissor[0],y);sc.extent=vk::Extent2D(uint32_t(std::max(0,d.scissor[2])),uint32_t(std::max(0,d.scissor[3])));}
+        if(!boundScissor||*boundScissor!=sc){cmd.setScissor(0,sc);boundScissor=sc;}
+        const std::array<float,2> bias{d.biasUnits,d.biasFactor};
+        if(!boundDepthBias||*boundDepthBias!=bias){cmd.setDepthBias(bias[0],0,bias[1]);boundDepthBias=bias;}
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,d.texturePalette?*palettePipelineLayout:*pipelineLayout,0,set,nullptr);
+        const auto vertexBuffer=*activeVertexBuffer->storage.buffer;
+        if(boundVertexBuffer!=vertexBuffer){cmd.bindVertexBuffers(0,vertexBuffer,{vk::DeviceSize(0)});boundVertexBuffer=vertexBuffer;}
+        cmd.draw(uint32_t(d.vertices.size()),1,uint32_t(vertexOffset/sizeof(Vertex)),0);
         activeVertexOffset+=vertexBytes;activeUniformOffset=uniformOffset+sizeof(Uniforms);
         ++activeDrawCount;
     }
@@ -613,10 +784,14 @@ public:
         barrier(cmd,out,vk::ImageLayout::eShaderReadOnlyOptimal);
         flushBatch();
         ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f);
+        timing.present();
     }
 };
 }
 std::unique_ptr<Backend> makeVulkanBackend() { return std::make_unique<VulkanBackend>(); }
+#ifdef HIKARU_NATIVE_TESTING
+std::unique_ptr<Backend> makeVulkanBackendForTesting(bool specialize) { return std::make_unique<VulkanBackend>(specialize); }
+#endif
 } // namespace hikaru::graphics
 #else
 namespace hikaru::graphics { std::unique_ptr<Backend> makeVulkanBackend() { throw std::runtime_error("Vulkan support is not enabled"); } }

@@ -601,9 +601,11 @@ int main(void){
  if(board->porta_m&0x80)return 34;
  packetLayerPixelsPassed=frame_packet_layer_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in,0)&&
   frame_packet_layer_pixels(e,(hikaru_gpu_t *)board->gpu,fbo,&in,1);
- if(!target_size(e,640,480) || hikaru_engine_set_internal_resolution(e,0)==0 || hikaru_engine_set_internal_resolution(e,5000)==0)return 35;
- if(hikaru_engine_set_internal_resolution(e,960) || hikaru_engine_run_frame(e,&in) || !target_size(e,1280,960) || !back_target_clear(e))return 36;
- if(hikaru_engine_set_internal_resolution(e,480) || hikaru_engine_run_frame(e,&in) || !target_size(e,640,480))return 37;
+ if(!target_size(e,640,480) || hikaru_engine_set_internal_resolution(e,0,4.f/3.f)==0 || hikaru_engine_set_internal_resolution(e,5000,4.f/3.f)==0)return 35;
+ if(hikaru_engine_set_internal_resolution(e,960,4.f/3.f) || hikaru_engine_run_frame(e,&in) || !target_size(e,1280,960) || !back_target_clear(e))return 36;
+ if(hikaru_engine_set_internal_resolution(e,480,4.f/3.f) || hikaru_engine_run_frame(e,&in) || !target_size(e,640,480))return 37;
+ if(hikaru_engine_set_internal_resolution(e,480,16.f/9.f) || hikaru_engine_run_frame(e,&in) || !target_size(e,854,480))return 37;
+ if(hikaru_engine_set_internal_resolution(e,480,4.f/3.f) || hikaru_engine_run_frame(e,&in) || !target_size(e,640,480))return 37;
  unsigned char pixel[4];glReadPixels(320,240,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
  if(pixel[0]==255&&pixel[1]==0&&pixel[2]==255)return 21;
  glGetIntegerv(GL_VIEWPORT,viewport);glGetIntegerv(GL_ACTIVE_TEXTURE,&active);glGetIntegerv(GL_TEXTURE_BINDING_2D,&binding);glGetIntegerv(GL_UNPACK_SKIP_ROWS,&skip);glGetBooleanv(GL_COLOR_WRITEMASK,mask);

@@ -64,6 +64,7 @@ struct vk_renderer_t {
 
 	unsigned width;
 	unsigned height;
+	float output_aspect_ratio;
 	/* Requested size of the Hikaru 3D targets; output size remains above. */
 	unsigned internal_width;
 	unsigned internal_height;

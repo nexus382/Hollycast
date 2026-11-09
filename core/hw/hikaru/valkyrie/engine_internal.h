@@ -23,6 +23,7 @@ struct HikaruEngine {
     unsigned transparency_peel_capacity;
     uint64_t transparency_memory_budget;
     unsigned internal_width, internal_height; // Host-only capture configuration.
+    float output_aspect_ratio;
     vk_game_t game;
     vk_game_section_t sections[3];
     vk_machine_t *machine;

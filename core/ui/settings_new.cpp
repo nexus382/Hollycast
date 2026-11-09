@@ -4807,7 +4807,7 @@ void renderVideoTab()
 		+ 1
 #endif
 #ifdef USE_DX11
-		+ (hikaruPlatform ? 0 : 1)
+		+ 1
 #endif
 		;
 
@@ -4837,10 +4837,8 @@ void renderVideoTab()
 			}
 #endif
 #ifdef USE_DX11
-			if (!hikaruPlatform) {
-				apiLabels[apiOptionCount] = "DirectX 11";
-				apiValues[apiOptionCount++] = 3;
-			}
+			apiLabels[apiOptionCount] = "DirectX 11";
+			apiValues[apiOptionCount++] = 3;
 #endif
 
 #ifdef USE_METAL

@@ -8,7 +8,9 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
+#include <type_traits>
 namespace hikaru::graphics {
 thread_local Device* Device::active;
 Device::Device(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {
@@ -104,6 +106,15 @@ Device::Device(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {
     dispatch.UseProgram = [](GLuint program) -> void { try { active->UseProgram(program); } catch (...) { active->error=std::current_exception(); } };
     dispatch.VertexAttribPointer = [](GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void * pointer) -> void { try { active->VertexAttribPointer(index, size, type, normalized, stride, pointer); } catch (...) { active->error=std::current_exception(); } };
     dispatch.Viewport = [](GLint x, GLint y, GLsizei width, GLsizei height) -> void { try { active->Viewport(x, y, width, height); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.SupportsDrawPalette = [] { return GLboolean(active->backend->supportsDrawPalette()); };
+    dispatch.SupportsTexturePalette = [] { return GLboolean(active->backend->supportsTexturePalette()); };
+    dispatch.BindDrawPalette = [](GLuint buffer) { try { active->BindDrawPalette(buffer); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.GenSamplers = [](GLsizei n, GLuint* ids) { try { active->GenSamplers(n, ids); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.DeleteSamplers = [](GLsizei n, const GLuint* ids) { try { active->DeleteSamplers(n, ids); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.BindSampler = [](GLuint unit, GLuint id) { try { active->BindSampler(unit, id); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.SamplerParameteri = [](GLuint id, GLenum name, GLint value) { try { active->SamplerParameteri(id, name, value); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.SamplerParameterf = [](GLuint id, GLenum name, GLfloat value) { try { active->SamplerParameterf(id, name, value); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.Uniform1iv = [](GLint location, GLsizei count, const GLint* values) { try { active->Uniform1iv(location, count, values); } catch (...) { active->error=std::current_exception(); } };
     pixelStore[GL_UNPACK_ALIGNMENT]=4;
     arrays[0]={}; targets[0]={0,0};
 }
@@ -119,6 +130,10 @@ void Device::flushDraw() {
     auto draw=std::move(*pendingDraw);
     pendingDraw.reset();
     backend->draw(draw);
+    // The backend consumes borrowed vertices before returning. Recycle CPU
+    // staging independently of its fence-retired GPU buffers, with a 2 MiB cap.
+    if(!draw.vertices.empty()&&draw.vertices.capacity()<=16384){vertexScratch=std::move(draw.vertices);vertexScratch.clear();}
+    if(!draw.packedVertices.empty()&&draw.packedVertices.capacity()<=16384){packedVertexScratch=std::move(draw.packedVertices);packedVertexScratch.clear();}
 }
 void Device::queueDraw(Draw draw) {
     // Triangle sorting replays individual triangles. Merge only adjacent,
@@ -130,8 +145,9 @@ void Device::queueDraw(Draw draw) {
             d.equationRGB,d.equationAlpha,d.topology,d.colorMask,d.biasFactor,
             d.biasUnits,d.nearDepth,d.farDepth);
     };
-    bool merge=pendingDraw && draw.topology==GL_TRIANGLES
-        && pendingDraw->vertices.size()+draw.vertices.size()<=16384
+    bool merge=pendingDraw && draw.palette.empty() && pendingDraw->palette.empty() && draw.topology==GL_TRIANGLES
+        && pendingDraw->packedVertices.empty()==draw.packedVertices.empty()
+        && pendingDraw->vertices.size()+draw.vertices.size()+pendingDraw->packedVertices.size()+draw.packedVertices.size()<=16384
         && key(*pendingDraw)==key(draw)
         && std::memcmp(&pendingDraw->uniforms,&draw.uniforms,sizeof(Uniforms))==0;
     for(unsigned i=0;merge&&i<4;i++) {
@@ -139,7 +155,12 @@ void Device::queueDraw(Draw draw) {
         merge=std::tie(a.minFilter,a.magFilter,a.wrapS,a.wrapT,a.maxLevel)
             ==std::tie(b.minFilter,b.magFilter,b.wrapS,b.wrapT,b.maxLevel);
     }
-    if(merge) pendingDraw->vertices.insert(pendingDraw->vertices.end(),draw.vertices.begin(),draw.vertices.end());
+    if(merge) {
+        pendingDraw->vertices.insert(pendingDraw->vertices.end(),draw.vertices.begin(),draw.vertices.end());
+        pendingDraw->packedVertices.insert(pendingDraw->packedVertices.end(),draw.packedVertices.begin(),draw.packedVertices.end());
+        if(!draw.vertices.empty()&&draw.vertices.capacity()<=16384){vertexScratch=std::move(draw.vertices);vertexScratch.clear();}
+        if(!draw.packedVertices.empty()&&draw.packedVertices.capacity()<=16384){packedVertexScratch=std::move(draw.packedVertices);packedVertexScratch.clear();}
+    }
     else { flushDraw();pendingDraw=std::move(draw); }
 }
 void Device::begin(unsigned w,unsigned h) {
@@ -149,8 +170,8 @@ void Device::present() { checkError(); backend->present(width,height); }
 Draw Device::drawState() const {
     Draw d=state;
     const auto& target=targets.at(framebuffer);
-    d.color=target[0];d.depth=target[1];d.metadata=target[3]==2?target[2]:0;d.textures=boundTextures;
-    for(unsigned i=0;i<4;i++){auto t=textures.find(boundTextures[i]);if(t!=textures.end())d.sampling[i]=t->second;}
+    d.color=target[0];d.depth=target[1];d.metadata=target[3]==2?target[2]:0;std::copy_n(boundTextures.begin(),4,d.textures.begin());
+    for(unsigned i=0;i<4;i++)d.sampling[i]=sampling(i);
     d.scissorEnabled=enabled.count(GL_SCISSOR_TEST);d.depthTest=enabled.count(GL_DEPTH_TEST);
     d.blend=enabled.count(GL_BLEND);d.cull=enabled.count(GL_CULL_FACE);
     if (!enabled.count(GL_POLYGON_OFFSET_FILL)) d.biasFactor=d.biasUnits=0;
@@ -179,12 +200,16 @@ Uniforms Device::uniforms(const Program& p) const {
     u.blend={scalar("u_weigh_by_alpha"),scalar("u_force_coverage"),0,0};
     u.peel={scalar("u_peel_enabled"),scalar("u_peel_first"),1,1};
     const auto& peelSize=value("u_peel_size");if(peelSize.size()>=2){u.peel[2]=peelSize[0];u.peel[3]=peelSize[1];}
-    for(unsigned i=0;i<4;i++) {
-        auto prefix="u_lights["+std::to_string(i)+"].";auto& l=u.lights[i];
-        copy(prefix+"position",l.position);copy(prefix+"direction",l.direction);copy(prefix+"diffuse",l.diffuse);
-        copy(prefix+"specular",l.specular);copy(prefix+"extents",l.extents);l.extents[2]=scalar(prefix+"ambient");copy(prefix+"spot",l.spot);
-        const auto& table=value(prefix+"spot_table[0]");for(size_t j=0;j<std::min(size_t(16),table.size());j++)l.table[j/4][j%4]=table[j];
-        auto n=std::to_string(i);l.flags={def("HAS_LIGHT"+n),def("LIGHT"+n+"_TYPE"),def("LIGHT"+n+"_ATT_TYPE"),def("HAS_LIGHT"+n+"_SPECULAR")};
+    if(p.cachedLights) u.lights=*p.cachedLights;
+    else {
+        for(unsigned i=0;i<4;i++) {
+            auto prefix="u_lights["+std::to_string(i)+"].";auto& l=u.lights[i];
+            copy(prefix+"position",l.position);copy(prefix+"direction",l.direction);copy(prefix+"diffuse",l.diffuse);
+            copy(prefix+"specular",l.specular);copy(prefix+"extents",l.extents);l.extents[2]=scalar(prefix+"ambient");copy(prefix+"spot",l.spot);
+            const auto& table=value(prefix+"spot_table[0]");for(size_t j=0;j<std::min(size_t(16),table.size());j++)l.table[j/4][j%4]=table[j];
+            auto n=std::to_string(i);l.flags={def("HAS_LIGHT"+n),def("LIGHT"+n+"_TYPE"),def("LIGHT"+n+"_ATT_TYPE"),def("HAS_LIGHT"+n+"_SPECULAR")};
+        }
+        p.cachedLights=u.lights;
     }
     u.factors={scalar("u_factor"),scalar("u_mult_f",1),scalar("u_mult_b",1),0};
     u.multipliers={scalar("u_mult_1"),scalar("u_mult_2"),0,0};
@@ -198,11 +223,138 @@ void Device::uniform(GLint location,size_t count,const float* data) {
     auto& p=programs.at(program);
     auto& current=p.values[location];
     if(current.size()!=count || !std::equal(current.begin(),current.end(),data)) {
-        current.assign(data,data+count);
-        p.cachedUniforms.reset();
+        // GL array uploads replace a prefix. Retain the untouched tail because
+        // sorted replay can revisit it without uploading the whole palette.
+        if(p.paletteLocations.count(location)) {
+            current.resize(std::max(current.size(),count));
+            std::copy_n(data,count,current.begin());
+        } else current.assign(data,data+count);
+        // Matrix changes are frequent during sorted replay. Patch only that
+        // field instead of repacking every material, light and bitmap uniform.
+        // Palette arrays are packed separately and never enter Uniforms.
+        if(p.cachedUniforms&&!p.paletteLocations.count(location)) {
+            const auto matrix=p.matrixLocations.find(location);
+            const auto vector=p.vectorLocations.find(location);
+            if(vector!=p.vectorLocations.end()) {
+                // Sorted draws change placement/sort depth and family order
+                // independently of the material and light set. Update only
+                // their packed components, retaining GL's zero-filled tail.
+                const auto& binding=vector->second;
+                auto& out=(*p.cachedUniforms).*(binding.field);
+                std::fill_n(out.begin()+binding.offset,binding.count,0.f);
+                std::copy_n(current.begin(),std::min(current.size(),size_t(binding.count)),out.begin()+binding.offset);
+            } else if(matrix==p.matrixLocations.end())p.cachedUniforms.reset();
+            else {
+                auto& out=(*p.cachedUniforms).*(matrix->second.field);out={};
+                const unsigned dimension=matrix->second.dimension;
+                for(unsigned column=0;column<dimension;++column)for(unsigned row=0;row<dimension;++row)
+                    if(column*dimension+row<current.size())out[column*4+row]=current[column*dimension+row];
+            }
+        }
+        if(p.lightLocations.count(location))p.cachedLights.reset();
     }
 }
-void Device::ActiveTexture(GLenum t) {if(t<GL_TEXTURE0||t>=GL_TEXTURE0+4)throw std::runtime_error("Invalid Hikaru texture unit");activeTexture=t-GL_TEXTURE0;}
+Texture Device::sampling(unsigned unit) const {
+    const auto image=textures.find(boundTextures.at(unit));
+    Texture result=image!=textures.end()?image->second:Texture{};
+    if(const unsigned sampler=boundSamplers.at(unit)) {
+        const auto& state=samplers.at(sampler);
+        result.minFilter=state.minFilter;result.magFilter=state.magFilter;
+        result.wrapS=state.wrapS;result.wrapT=state.wrapT;result.lodBias=state.lodBias;
+    }
+    return result;
+}
+void Device::BindDrawPalette(GLuint stateBuffer) {
+    auto& index=arrays.at(vao)[9];
+    if(!stateBuffer){index.enabled=false;return;}
+    if(!backend->supportsDrawPalette())throw std::runtime_error("Hikaru backend has no draw palette");
+    BindBuffer(GL_ARRAY_BUFFER,stateBuffer);
+    VertexAttribPointer(9,1,GL_UNSIGNED_BYTE,GL_FALSE,1,nullptr);
+    index.enabled=true;
+}
+void Device::GenSamplers(GLsizei count,GLuint* ids) {
+    if(count<0)throw std::runtime_error("Invalid Hikaru sampler count");
+    for(GLsizei i=0;i<count;++i){ids[i]=nextId++;samplers[ids[i]]={};}
+}
+void Device::DeleteSamplers(GLsizei count,const GLuint* ids) {
+    for(GLsizei i=0;i<count;++i){samplers.erase(ids[i]);for(auto& bound:boundSamplers)if(bound==ids[i])bound=0;}
+}
+void Device::BindSampler(GLuint unit,GLuint id) {
+    if(unit>=boundSamplers.size()||(unit>=4&&!backend->supportsTexturePalette()))throw std::runtime_error("Invalid Hikaru sampler unit");
+    if(id&&samplers.find(id)==samplers.end())throw std::runtime_error("Unknown Hikaru sampler");
+    boundSamplers[unit]=id;
+}
+void Device::SamplerParameteri(GLuint id,GLenum name,GLint value) {
+    auto& s=samplers.at(id);
+    switch(name){
+    case GL_TEXTURE_MIN_FILTER:s.minFilter=value;break;
+    case GL_TEXTURE_MAG_FILTER:s.magFilter=value;break;
+    case GL_TEXTURE_WRAP_S:s.wrapS=value;break;
+    case GL_TEXTURE_WRAP_T:s.wrapT=value;break;
+    default:throw std::runtime_error("Unsupported Hikaru sampler parameter");
+    }
+}
+void Device::SamplerParameterf(GLuint id,GLenum name,GLfloat value) {
+    if(name==GL_TEXTURE_LOD_BIAS)samplers.at(id).lodBias=value;
+    else SamplerParameteri(id,name,GLint(value));
+}
+void Device::Uniform1iv(GLint location,GLsizei count,const GLint* values) {
+    if(count<0||unsigned(count)>DrawPaletteSize)throw std::runtime_error("Invalid Hikaru integer uniform count");
+    if(location<0||!count)return;
+    std::vector<float> converted(size_t(count),0.f);
+    for(GLsizei i=0;i<count;++i)converted[size_t(i)]=float(values[i]);
+    uniform(location,converted.size(),converted.data());
+}
+void Device::packPalette(Draw& draw,const Program& p) const {
+    auto values=[&](const char* name)->const std::vector<float>& {
+        static const std::vector<float> empty;
+        auto location=p.locations.find(name);if(location==p.locations.end())return empty;
+        auto value=p.values.find(location->second);return value==p.values.end()?empty:value->second;
+    };
+    unsigned count=0;
+    for(const auto& vertex:draw.vertices)count=std::max(count,unsigned(vertex.extra[2])+1);
+    for(const auto& vertex:draw.packedVertices)count=std::max(count,unsigned(vertex.drawIndex)+1);
+    const auto& depths=values("u_draw_depth");
+    if(!count||count>DrawPaletteSize||depths.size()<size_t(count)*2)
+        throw std::runtime_error("Incomplete Hikaru depth palette");
+    draw.palette.resize(count);
+    auto matrices=[&](const char* name,Matrix DrawRecord::* member,bool normal) {
+        const auto& data=values(name);if(data.empty())return; // unused matrix banks have GL's zero defaults
+        const unsigned stride=normal?9:16;
+        if(data.size()%stride)throw std::runtime_error("Invalid Hikaru matrix palette size");
+        // A replay run may use only one matrix bank. Unwritten elements of
+        // the other bank retain GL's zero defaults rather than making that
+        // otherwise valid run fail because its old upload was shorter.
+        for(unsigned i=0;i<std::min<size_t>(count,data.size()/stride);++i){auto& out=draw.palette[i].*member;
+            if(normal){for(unsigned c=0;c<3;++c)for(unsigned r=0;r<3;++r)out[c*4+r]=data[i*9+c*3+r];}
+            else std::copy_n(data.begin()+i*16,16,out.begin());
+        }
+    };
+    matrices("u_modelview_palette",&DrawRecord::modelview,false);
+    matrices("u_modelview_alternate_palette",&DrawRecord::alternate,false);
+    matrices("u_normal_palette",&DrawRecord::normal,true);
+    matrices("u_normal_alternate_palette",&DrawRecord::alternateNormal,true);
+    auto enabled=[&](const char* key){auto flag=p.definitions.find(key);return flag!=p.definitions.end()&&flag->second!=0;};
+    draw.texturePalette=enabled("HAS_TEXTURE_PALETTE");draw.shadingPalette=enabled("HAS_SHADING_PALETTE");
+    const auto& textureModes=values("u_texture_modes");const auto& shadingModes=values("u_shading_modes");
+    if((draw.texturePalette&&textureModes.size()<count)||(draw.shadingPalette&&shadingModes.size()<count))
+        throw std::runtime_error("Incomplete Hikaru material palette");
+    const auto& units=values("u_textures");
+    for(unsigned i=0;i<count;++i) {
+        auto& record=draw.palette[i];
+        record.modes={depths[i*2],depths[i*2+1],draw.texturePalette?textureModes[i]:draw.uniforms.material[1],
+            draw.shadingPalette?shadingModes[i]:draw.uniforms.flags[1]};
+        if(draw.texturePalette) {
+            const float unit=i<units.size()?units[i]:float(4+i);
+            if(!std::isfinite(unit)||unit<0||unit>=boundTextures.size()||std::floor(unit)!=unit)
+                throw std::runtime_error("Invalid Hikaru palette sampler");
+            draw.paletteTextures.push_back(boundTextures[unsigned(unit)]);
+            draw.paletteSampling.push_back(sampling(unsigned(unit)));
+            record.sampling[0]=draw.paletteSampling.back().lodBias;
+        }
+    }
+}
+void Device::ActiveTexture(GLenum t) {if(t<GL_TEXTURE0||t>=GL_TEXTURE0+(backend->supportsTexturePalette()?4+DrawPaletteSize:4))throw std::runtime_error("Invalid Hikaru texture unit");activeTexture=t-GL_TEXTURE0;}
 void Device::AttachShader(GLuint p,GLuint s){programs.at(p).shaders.push_back(s);}
 void Device::BindAttribLocation(GLuint,GLuint,const GLchar*){}
 void Device::BindBuffer(GLenum target,GLuint id){if(target==GL_ARRAY_BUFFER)buffer=id;else if(id)throw std::runtime_error("Unsupported Hikaru buffer binding");}
@@ -245,25 +397,120 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
     // Fragment depth is already in window coordinates, so viewport range must
     // be applied in the shader. Range changes do not invalidate program uniforms.
     d.uniforms.depth[2]=d.nearDepth;d.uniforms.depth[3]=d.farDepth;
-    d.vertices.resize(count);const auto& attrs=arrays.at(vao);
-    auto read=[&](const Attribute& a,size_t i,Vec4& out){
-        if(!a.enabled)return;
-        const auto& b=buffers.at(a.buffer);size_t component=a.type==GL_FLOAT?4:a.type==GL_UNSIGNED_SHORT?2:1;
-        size_t stride=a.stride?a.stride:size_t(a.size)*component;
-        if(i>(SIZE_MAX-a.offset)/stride)throw std::runtime_error("Hikaru vertex index overflow");
-        size_t off=a.offset+i*stride,bytes=size_t(a.size)*component;
-        if(off>b.size()||bytes>b.size()-off||a.size<1||a.size>4)throw std::runtime_error("Hikaru vertex attribute exceeds buffer");
-        for(int c=0;c<a.size;c++) {
-            if(a.type==GL_FLOAT)std::memcpy(&out[c],b.data()+off+c*4,4);
-            else if(a.type==GL_UNSIGNED_SHORT){uint16_t v;std::memcpy(&v,b.data()+off+c*2,2);out[c]=a.normalized?v/65535.f:float(v);}
-            else if(a.type==GL_UNSIGNED_BYTE){uint8_t v=b[off+c];out[c]=a.normalized?v/255.f:float(v);}
-            else throw std::runtime_error("Unsupported Hikaru vertex format");
-        }
+    const auto& attrs=arrays.at(vao);
+    struct AttributeSource {
+        const uint8_t* data=nullptr;
+        size_t stride=0;
+        GLint size=0;
+        GLenum type=GL_FLOAT;
+        bool normalized=false;
     };
-    for(size_t i=0;i<size_t(count);i++) {
-        auto& v=d.vertices[i];read(attrs[0],first+i,v.position);
-        if(d.bitmap)read(attrs[1],first+i,v.uv);
-        else {read(attrs[1],first+i,v.normal);read(attrs[2],first+i,v.diffuse);read(attrs[3],first+i,v.ambient);read(attrs[4],first+i,v.specular);read(attrs[5],first+i,v.unknown);read(attrs[6],first+i,v.uv);Vec4 a{},m{};read(attrs[7],first+i,a);read(attrs[8],first+i,m);v.extra={a[0],m[0],0,0};}
+    const auto paletteFlag=p.definitions.find("HAS_DRAW_PALETTE");
+    const bool paletted=paletteFlag!=p.definitions.end()&&paletteFlag->second!=0;
+    if(paletted&&(!backend->supportsDrawPalette()||d.bitmap||mode!=GL_TRIANGLES||!attrs[9].enabled))
+        throw std::runtime_error("Invalid Hikaru native palette draw");
+    std::array<AttributeSource,10> sources{};
+    // Resolve storage and validate the entire range once, rather than doing
+    // hash lookups and overflow checks for every component of every vertex.
+    for(unsigned index=0;index<(d.bitmap?2u:paletted?10u:9u);++index) {
+        const auto& a=attrs[index];
+        if(!a.enabled)continue;
+        if(a.size<1||a.size>4||a.stride<0)throw std::runtime_error("Invalid Hikaru vertex attribute");
+        size_t component;
+        switch(a.type) {
+        case GL_FLOAT:component=4;break;
+        case GL_UNSIGNED_SHORT:component=2;break;
+        case GL_UNSIGNED_BYTE:component=1;break;
+        default:throw std::runtime_error("Unsupported Hikaru vertex format");
+        }
+        const auto& b=buffers.at(a.buffer);
+        const size_t bytes=size_t(a.size)*component;
+        const size_t stride=a.stride?size_t(a.stride):bytes;
+        const size_t last=size_t(first)+size_t(count)-1;
+        if(last>(SIZE_MAX-a.offset)/stride)throw std::runtime_error("Hikaru vertex index overflow");
+        const size_t end=a.offset+last*stride;
+        if(end>b.size()||bytes>b.size()-end)throw std::runtime_error("Hikaru vertex attribute exceeds buffer");
+        sources[index]={b.data()+a.offset+size_t(first)*stride,stride,a.size,a.type,a.normalized};
+    }
+    // Accept only the complete production interleaved layout. Other VAOs,
+    // disabled fields, nonstandard formats and truncated padding retain the
+    // generic conversion path and all its bounds/default-component rules.
+    constexpr size_t bodySize=offsetof(PackedVertex,drawIndex);
+    constexpr size_t offsets[]={offsetof(PackedVertex,position),offsetof(PackedVertex,normal),offsetof(PackedVertex,diffuse),
+        offsetof(PackedVertex,ambient),offsetof(PackedVertex,specular),offsetof(PackedVertex,unknown),offsetof(PackedVertex,uv),
+        offsetof(PackedVertex,alpha),offsetof(PackedVertex,matrixSelect)};
+    constexpr GLint widths[]={3,3,3,3,4,3,2,1,1};
+    constexpr GLenum formats[]={GL_FLOAT,GL_FLOAT,GL_UNSIGNED_BYTE,GL_UNSIGNED_BYTE,GL_UNSIGNED_BYTE,GL_UNSIGNED_SHORT,GL_FLOAT,GL_UNSIGNED_BYTE,GL_UNSIGNED_BYTE};
+    constexpr bool normalized[]={false,false,true,true,true,true,false,true,false};
+    bool packed=!d.bitmap&&backend->supportsPackedVertices()&&sources[0].data&&sources[0].stride==bodySize;
+    if(packed) {
+        const auto& storage=buffers.at(attrs[0].buffer);
+        const size_t begin=size_t(sources[0].data-storage.data());
+        packed=size_t(count)<=(storage.size()-begin)/bodySize;
+    }
+    for(unsigned i=0;packed&&i<9;++i)
+        packed=sources[i].data&&attrs[i].buffer==attrs[0].buffer&&sources[i].stride==bodySize&&sources[i].size==widths[i]&&
+            sources[i].type==formats[i]&&sources[i].normalized==normalized[i]&&sources[i].data==sources[0].data+offsets[i];
+    if(packed&&paletted)packed=sources[9].type==GL_UNSIGNED_BYTE&&sources[9].size==1&&!sources[9].normalized;
+    if(packed) {
+        d.packedVertices=std::move(packedVertexScratch);d.packedVertices.resize(count);
+        for(size_t i=0;i<size_t(count);++i) {
+            std::memcpy(&d.packedVertices[i],sources[0].data+i*bodySize,bodySize);
+            d.packedVertices[i].drawIndex=paletted?float(sources[9].data[i*sources[9].stride]):0.f;
+        }
+    } else {
+        d.vertices=std::move(vertexScratch);
+        // clear() before recycling makes resize value-initialize every attribute,
+        // including fields disabled by the next VAO.
+        d.vertices.resize(count);
+        auto scatter=[&](const AttributeSource& a,Vec4 Vertex::*field,unsigned offset=0,unsigned limit=4) {
+            if(!a.data)return;
+            const unsigned components=std::min(unsigned(a.size),limit);
+            if(a.type==GL_FLOAT) {
+                // Dispatch the format once per attribute. Constant-size memcpy
+                // permits unaligned GL storage while avoiding a runtime memcpy
+                // and format branch for every field of every vertex.
+                auto copy=[&](auto size) {
+                    for(size_t i=0;i<size_t(count);++i)
+                        std::memcpy((d.vertices[i].*field).data()+offset,a.data+i*a.stride,size.value*sizeof(float));
+                };
+                switch(components) {
+                case 1:copy(std::integral_constant<unsigned,1>{});break;
+                case 2:copy(std::integral_constant<unsigned,2>{});break;
+                case 3:copy(std::integral_constant<unsigned,3>{});break;
+                case 4:copy(std::integral_constant<unsigned,4>{});break;
+                }
+            } else if(a.type==GL_UNSIGNED_SHORT) {
+                for(size_t i=0;i<size_t(count);++i)for(unsigned c=0;c<components;++c) {
+                    uint16_t value;std::memcpy(&value,a.data+i*a.stride+c*2,2);
+                    (d.vertices[i].*field)[offset+c]=a.normalized?value/65535.f:float(value);
+                }
+            } else {
+                for(size_t i=0;i<size_t(count);++i)for(unsigned c=0;c<components;++c) {
+                    const uint8_t value=a.data[i*a.stride+c];
+                    (d.vertices[i].*field)[offset+c]=a.normalized?value/255.f:float(value);
+                }
+            }
+        };
+        scatter(sources[0],&Vertex::position);
+        if(d.bitmap)scatter(sources[1],&Vertex::uv);
+        else {
+            scatter(sources[1],&Vertex::normal);scatter(sources[2],&Vertex::diffuse);
+            scatter(sources[3],&Vertex::ambient);scatter(sources[4],&Vertex::specular);
+            scatter(sources[5],&Vertex::unknown);scatter(sources[6],&Vertex::uv);
+            scatter(sources[7],&Vertex::extra,0,1);scatter(sources[8],&Vertex::extra,1,1);
+        }
+        if(paletted)scatter(sources[9],&Vertex::extra,2,1);
+    }
+    if(paletted) {
+        for(size_t i=0;i<size_t(count);++i) {
+            const float record=packed?d.packedVertices[i].drawIndex:d.vertices[i].extra[2];
+            if(!std::isfinite(record)||record<0||record>=DrawPaletteSize||std::floor(record)!=record)
+                throw std::runtime_error("Invalid Hikaru palette index");
+            if(i%3&&record!=(packed?d.packedVertices[i-i%3].drawIndex:d.vertices[i-i%3].extra[2]))
+                throw std::runtime_error("Hikaru triangle crosses palette records");
+        }
+        packPalette(d,p);
     }
     // Sampler uniforms select texture units; absent layers use the zero image.
     if(d.bitmap) {
@@ -275,9 +522,9 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
                 auto value=p.values.find(location->second);
                 if(value!=p.values.end()&&!value->second.empty()) unit=unsigned(value->second[0]);
             }
-            if(unit>=4) throw std::runtime_error("Invalid Hikaru bitmap sampler");
+            if(unit>=boundTextures.size()) throw std::runtime_error("Invalid Hikaru bitmap sampler");
             d.textures[i]=boundTextures[unit];
-            d.sampling[i]=d.textures[i]?textures.at(d.textures[i]):Texture{};
+            d.sampling[i]=sampling(unit);
         }
     }
     for(unsigned i=0;i<4;i++) d.uniforms.lodBias[i]=d.sampling[i].lodBias;
@@ -333,6 +580,7 @@ void Device::GetIntegerv(GLenum name,GLint* data){
     case GL_DEPTH_FUNC:*data=state.depthFunc;break;case GL_CULL_FACE_MODE:*data=state.cullFace;break;case GL_FRONT_FACE:*data=state.frontFace;break;
     case GL_BLEND_SRC_RGB:*data=state.srcRGB;break;case GL_BLEND_DST_RGB:*data=state.dstRGB;break;case GL_BLEND_SRC_ALPHA:*data=state.srcAlpha;break;case GL_BLEND_DST_ALPHA:*data=state.dstAlpha;break;
     case GL_BLEND_EQUATION_RGB:*data=state.equationRGB;break;case GL_BLEND_EQUATION_ALPHA:*data=state.equationAlpha;break;
+    case GL_MAX_TEXTURE_IMAGE_UNITS:*data=backend->supportsTexturePalette()?4+DrawPaletteSize:4;break;
     case GL_MAX_VIEWPORT_DIMS:data[0]=data[1]=16384;break;case GL_MAX_TEXTURE_SIZE:case GL_MAX_RENDERBUFFER_SIZE:*data=16384;break;
     case GL_MAJOR_VERSION:*data=3;break;case GL_MINOR_VERSION:*data=0;break;
     default:{auto it=pixelStore.find(name);*data=it==pixelStore.end()?0:it->second;break;}
@@ -343,12 +591,50 @@ void Device::GetProgramiv(GLuint id,GLenum name,GLint* value){*value=name==GL_LI
 void Device::GetShaderInfoLog(GLuint,GLsizei n,GLsizei* length,GLchar* data){if(length)*length=0;if(n&&data)*data=0;}
 void Device::GetShaderiv(GLuint id,GLenum name,GLint* value){*value=name==GL_COMPILE_STATUS?shaders.count(id):0;}
 const GLubyte* Device::GetString(GLenum name){static const GLubyte version[]="OpenGL ES 3.0 Hikaru native graphics dispatch";static const GLubyte empty[]="";return name==GL_VERSION?version:empty;}
-GLint Device::GetUniformLocation(GLuint id,const GLchar* name){auto& p=programs.at(id);auto [i,added]=p.locations.emplace(name,uniformCounter);if(added)++uniformCounter;return i->second;}
+GLint Device::GetUniformLocation(GLuint id, const GLchar* name) {
+    auto& p = programs.at(id);
+    std::string_view uniformName(name);
+    if (uniformName.size() >= 3 && uniformName.substr(uniformName.size() - 3) == "[0]")
+        uniformName.remove_suffix(3);
+    const auto enabled=[&](const char* key) { auto flag=p.definitions.find(key);return flag!=p.definitions.end()&&flag->second!=0; };
+    const bool normal=uniformName=="u_normal"||uniformName=="u_normal_alternate"||
+        uniformName=="u_normal_palette"||uniformName=="u_normal_alternate_palette";
+    const bool lit=(enabled("SHADING_MODE")||enabled("HAS_SHADING_PALETTE"))&&
+        (enabled("HAS_LIGHT0")||enabled("HAS_LIGHT1")||enabled("HAS_LIGHT2")||enabled("HAS_LIGHT3"));
+    // GL optimizes these uniforms away for unlit variants. Mirroring that
+    // liveness avoids inverse-normal calculations during sorted replay.
+    if(normal&&!lit)return -1;
+    const bool transform=uniformName=="u_modelview_palette"||uniformName=="u_modelview_alternate_palette"||
+        uniformName=="u_normal_palette"||uniformName=="u_normal_alternate_palette"||uniformName=="u_draw_depth";
+    const bool texture=uniformName=="u_textures"||uniformName=="u_texture_modes";
+    const bool shading=uniformName=="u_shading_modes";
+    // Never advertise optional arrays to a scalar program or an unsupported
+    // backend: that would enable code requiring unavailable GL entry points.
+    if(transform&&(!backend->supportsDrawPalette()||!enabled("HAS_DRAW_PALETTE")))return -1;
+    if(texture&&(!backend->supportsTexturePalette()||!enabled("HAS_TEXTURE_PALETTE")))return -1;
+    if(shading&&(!backend->supportsTexturePalette()||!enabled("HAS_SHADING_PALETTE")))return -1;
+    const std::string key=(transform||texture||shading)?std::string(uniformName):std::string(name);
+    auto [location, added] = p.locations.emplace(key, uniformCounter);
+    if (added) {
+        ++uniformCounter;
+        if(uniformName.substr(0,9)=="u_lights[")p.lightLocations.insert(location->second);
+        if(transform||texture||shading)p.paletteLocations.insert(location->second);
+        if(key=="u_projection")p.matrixLocations.emplace(location->second,Program::MatrixUniform{&Uniforms::projection,4});
+        else if(key=="u_modelview")p.matrixLocations.emplace(location->second,Program::MatrixUniform{&Uniforms::modelview,4});
+        else if(key=="u_modelview_alternate")p.matrixLocations.emplace(location->second,Program::MatrixUniform{&Uniforms::alternate,4});
+        else if(key=="u_normal")p.matrixLocations.emplace(location->second,Program::MatrixUniform{&Uniforms::normal,3});
+        else if(key=="u_normal_alternate")p.matrixLocations.emplace(location->second,Program::MatrixUniform{&Uniforms::alternateNormal,3});
+        else if(key=="u_depth")p.vectorLocations.emplace(location->second,Program::VectorUniform{&Uniforms::depth,0,2});
+        else if(key=="u_sort_scale")p.vectorLocations.emplace(location->second,Program::VectorUniform{&Uniforms::material,3,1});
+        else if(key=="u_family")p.vectorLocations.emplace(location->second,Program::VectorUniform{&Uniforms::family,0,3});
+    }
+    return location->second;
+}
 GLboolean Device::IsBuffer(GLuint id){return buffers.count(id);}
 GLboolean Device::IsEnabled(GLenum cap){return enabled.count(cap);}
 GLboolean Device::IsProgram(GLuint id){return programs.count(id);}
 GLboolean Device::IsVertexArray(GLuint id){return arrays.count(id);}
-void Device::LinkProgram(GLuint id){auto& p=programs.at(id);p.cachedUniforms.reset();for(auto s:p.shaders){const auto& text=shaders.at(s);p.bitmap|=text.find("u_front")!=std::string::npos;p.familyResolve|=text.find("#define FAMILY_RESOLVE 1")!=std::string::npos;std::istringstream input(text);std::string line;while(std::getline(input,line)){std::istringstream words(line);std::string directive,name;int value;if(words>>directive>>name>>value && directive=="#define")p.definitions[name]=value;}}}
+void Device::LinkProgram(GLuint id){auto& p=programs.at(id);p.cachedUniforms.reset();p.cachedLights.reset();for(auto s:p.shaders){const auto& text=shaders.at(s);p.bitmap|=text.find("u_front")!=std::string::npos;p.familyResolve|=text.find("#define FAMILY_RESOLVE 1")!=std::string::npos;std::istringstream input(text);std::string line;while(std::getline(input,line)){std::istringstream words(line);std::string directive,name;int value;if(words>>directive>>name>>value && directive=="#define")p.definitions[name]=value;}}}
 void Device::PixelStorei(GLenum name,GLint v){pixelStore[name]=v;}
 void Device::PolygonOffset(GLfloat f,GLfloat u){state.biasFactor=f;state.biasUnits=u;}
 void Device::ReadPixels(GLint x,GLint y,GLsizei w,GLsizei h,GLenum format,GLenum type,void* data){flushDraw();if(format!=GL_RGBA||type!=GL_UNSIGNED_BYTE)throw std::runtime_error("Unsupported Hikaru readback format");backend->readPixels(targets.at(readFramebuffer)[0],x,y,w,h,static_cast<uint8_t*>(data));}

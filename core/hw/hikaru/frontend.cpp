@@ -26,8 +26,9 @@
 #include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/naomi/naomi_cart.h"
-#include "hw/naomi/card_reader.h"
+#include "card_reader.h"
 #include "rend/gles/glcache.h"
+#include "rend/transform_matrix.h"
 #include "ui/imgui_driver.h"
 #include "ui/gui.h"
 #include "ui/performance_overlay.h"
@@ -37,6 +38,7 @@
 #include <atomic>
 #include <chrono>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <exception>
 #include <functional>
@@ -64,7 +66,7 @@ struct FrameSlot {
     size_t audioCount = 0;
     uint64_t generation = 0;
     HikaruEngineInputs input{};
-    unsigned internalHeight = 0, cpuClockMhz = 0;
+    unsigned internalWidth = 0, internalHeight = 0, cpuClockMhz = 0;
     bool clearAudio = false, audioOverflow = false;
     bool fastForward = false, muted = false, fastForwardAudio = false, pacing = false, vsync = false;
     unsigned queuedFrames = 2600;
@@ -93,6 +95,25 @@ void captureFrameAudio(void*, s16 left, s16 right) {
 std::exception_ptr waitFrameWorker() {
     std::lock_guard<std::mutex> lock(frameWorkerMutex);
     return frameWorker ? frameWorker->wait() : std::exception_ptr{};
+}
+
+void recordHikaruOutputViewport() {
+    const int width = settings.display.width;
+    const int height = settings.display.height;
+    float aspectRatio = getOutputFramebufferAspectRatio();
+    if (!std::isfinite(aspectRatio) || aspectRatio <= 0.0f)
+        aspectRatio = 4.0f / 3.0f;
+    int viewportWidth, viewportHeight;
+    if (double(width) > double(height) * aspectRatio) {
+        viewportHeight = height;
+        viewportWidth = int(double(viewportHeight) * aspectRatio + 0.5);
+    } else {
+        viewportWidth = width;
+        viewportHeight = int(double(viewportWidth) / aspectRatio + 0.5);
+    }
+    viewportWidth = std::clamp(viewportWidth, 0, width);
+    viewportHeight = std::clamp(viewportHeight, 0, height);
+    performance_overlay::recordOutputViewport(viewportWidth, viewportHeight);
 }
 void drainFrameWorker() {
     std::lock_guard<std::mutex> lock(frameWorkerMutex);
@@ -126,14 +147,16 @@ bool stateRomHashesKnown = false;
 std::unique_ptr<RomImages> images;
 std::atomic<const GameDescriptor*> activeGame{nullptr};
 std::unique_ptr<Mie> mie;
-std::unique_ptr<SerialPort::Pipe> cardReader;
+std::unique_ptr<CardReader> cardReader;
+bool cardButtonDown = false;
 std::unique_ptr<Protection> protection;
 std::unique_ptr<Sound> sound;
 std::unique_ptr<AudioPacer> audioPacer;
 bool audioModeKnown = false, previousFastForward = false, previousMuted = false, previousPacing = false;
 HikaruEngine* engine = nullptr;
 std::unique_ptr<graphics::Device> nativeGraphics;
-unsigned internalHeight = 0;
+unsigned internalWidth = 0, internalHeight = 0;
+float internalAspectRatio = 0;
 uint64_t clocks = 0;
 std::string ioError;
 std::atomic<bool> resetRequested{false};
@@ -183,7 +206,7 @@ void writeSnapshot(StateWriter& state) {
     protection->saveState(state);
     sound->saveState(state);
     state.value(bool(cardReader));
-    if (cardReader) card_reader::saveSanwaReaderState(*cardReader, state);
+    if (cardReader) cardReader->saveState(state);
     for (const auto& credit : credits) credit.saveState(state);
 }
 void readSnapshot(const std::vector<uint8_t>& bytes, uint32_t encoding) {
@@ -203,7 +226,7 @@ void readSnapshot(const std::vector<uint8_t>& bytes, uint32_t encoding) {
     bool hasReader;
     state.value(hasReader);
     StateReader::require(hasReader == bool(cardReader), "Incompatible Hikaru card reader");
-    if (cardReader) card_reader::loadSanwaReaderState(*cardReader, state);
+    if (cardReader) cardReader->loadState(state);
     for (auto& credit : credits) credit.loadState(state);
     state.finish();
     clocks = savedClocks;
@@ -453,9 +476,9 @@ void load(const std::string& path) {
     auto loadedMie = std::make_unique<Mie>(readRom(*mieArchive, MieBootRom));
     if (selectedGame == &SegaNascarGame)
         loadedMie->setJvsBoardProfile(JvsNode::BoardProfile::Sega83713844);
-    if (selectedGame == &VirtualOn4Game) {
-        // Reuse Hollycast's Sanwa protocol implementation through the real
-        // MIE serial adapter. No card is inserted at power-up.
+    if (selectedGame->cardReader != CardReaderModel::None) {
+        // Card-capable cabinets communicate through the real MIE serial adapter.
+        // The reader starts empty; selecting a saved card does not insert it.
         loadedMie->setSerialDevice([](uint8_t value) { if (cardReader) cardReader->write(value); },
             [] { return cardReader ? cardReader->read() : uint8_t(0); },
             [] { return cardReader && cardReader->available() != 0; });
@@ -490,6 +513,10 @@ void load(const std::string& path) {
     // new cabinet may adopt this default, so saved calibration is never reset.
     initializeCabinet = selectedGame == &SegaNascarGame && mieResult == NvramLoadResult::Missing;
     regionRequested = false;
+    if (selectedGame->cardReader != CardReaderModel::None)
+        cardReader = std::make_unique<CardReader>(hostfs::getFlashSavePath("hikaru/", std::string(selectedGame->identifier) + ".cards"),
+            hostfs::getArcadeFlashPath() + ".card");
+    cardButtonDown = false;
     activeGame = selectedGame;
 }
 namespace {
@@ -540,6 +567,25 @@ void suspendGraphics() {
     nativeGraphics.reset();
 }
 const GameDescriptor* loadedGame() { return activeGame.load(); }
+bool cardReaderAvailable() {
+    const auto* game = loadedGame();
+    return game && game->cardReader != CardReaderModel::None;
+}
+CardReaderInfo cardReaderInfo() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    return cardReader ? cardReader->info() : CardReaderInfo{};
+}
+void cardAction() {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    if (cardReader && !cardReader->cardAction()) {
+        const auto info = cardReader->info();
+        if (!info.error.empty()) os_notify(info.error.c_str(), 6000);
+    }
+}
+void selectCard(const std::string& filename) {
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    if (cardReader && !cardReader->select(filename)) os_notify(cardReader->info().error.c_str(), 6000);
+}
 void unload() {
     shutdownFrameWorker();
     std::lock_guard<std::recursive_mutex> lock(stateMutex);
@@ -553,6 +599,7 @@ void unload() {
     loadStateEventGeneration.store(0, std::memory_order_release);
     releaseGraphicsLocked();
     protection.reset(); mie.reset(); cardReader.reset(); images.reset();
+    cardButtonDown = false;
     ioError.clear(); resetRequested = false; NaomiGameInputs = nullptr;
     hasSavedBram = false; bramPath.clear(); mieEepromPath.clear();
 }
@@ -752,9 +799,11 @@ static bool renderFrame() {
     const auto requested = config::RendererType.get();
     const auto current = graphicsContext->renderType();
     const bool gl = isOpenGL(requested);
+    const bool dx11 = requested == RenderType::DirectX11 || requested == RenderType::DirectX11_OIT;
+    const bool currentDx11 = current == RenderType::DirectX11 || current == RenderType::DirectX11_OIT;
     if (isOpenGL(current) != gl || isVulkan(current) != isVulkan(requested)
-            || isMetal(current) != isMetal(requested)) return false;
-    if (!gl && !isMetal(requested) && !isVulkan(requested))
+            || isMetal(current) != isMetal(requested) || currentDx11 != dx11) return false;
+    if (!gl && !isMetal(requested) && !isVulkan(requested) && !dx11)
         throw FlycastException("The selected graphics API has no Hikaru renderer");
     if (gl) {
         auto* context = dynamic_cast<GLGraphicsContext*>(graphicsContext);
@@ -764,6 +813,7 @@ static bool renderFrame() {
     }
     if (settings.display.width <= 0 || settings.display.height <= 0) return false;
     if (resetRequested.exchange(false)) {
+        if (cardReader) cardReader->reset();
         frameGeneration.fetch_add(1, std::memory_order_release);
         readyFrameSlot = -1;
         loadStateEventGeneration.store(0, std::memory_order_release);
@@ -833,13 +883,16 @@ static bool renderFrame() {
 #ifdef USE_VULKAN
         if (isVulkan(requested)) backend = graphics::makeVulkanBackend();
 #endif
+#if defined(HAVE_D3D11) && !defined(LIBRETRO)
+        if (dx11) backend = graphics::makeDx11Backend();
+#endif
+        if (!backend) throw FlycastException("The selected Hikaru renderer is unavailable in this build");
         nativeGraphics = std::make_unique<graphics::Device>(std::move(backend));
     }
     if (nativeGraphics) nativeGraphics->begin(unsigned(settings.display.width), unsigned(settings.display.height));
     std::optional<graphics::Device::Scope> graphicsScope;
     graphicsScope.emplace(nativeGraphics.get());
     if (!engine) {
-        if (activeGame == &VirtualOn4Game) cardReader = card_reader::createSanwaReader();
         HikaruEngineRoms roms{images->boot.data(), images->boot.size(), images->program.data(), images->program.size(), images->data.data(), images->data.size(), 1};
         auto io = callbacks(); std::array<char, 512> error{};
         auto security = protectionCallbacks();
@@ -929,18 +982,43 @@ static bool renderFrame() {
     if (transparencyBudget <= 0 || hikaru_engine_set_transparency_memory_budget(engine, uint64_t(transparencyBudget)) != 0)
         throw FlycastException("Invalid Hikaru per-pixel memory budget");
     const int requestedHeight = config::RenderResolution.get();
-    if (unsigned(requestedHeight) != internalHeight) {
-        if (hikaru_engine_set_internal_resolution(engine, unsigned(requestedHeight)) != 0)
+    float requestedAspectRatio = 4.0f / 3.0f;
+    if (config::Widescreen && !config::Rotate90 && !config::EmulateFramebuffer) {
+        requestedAspectRatio = config::SuperWidescreen && settings.display.height > 0
+            ? float(settings.display.width) / settings.display.height : 16.0f / 9.0f;
+        requestedAspectRatio = std::max(requestedAspectRatio, 4.0f / 3.0f);
+    }
+    if (unsigned(requestedHeight) != internalHeight || requestedAspectRatio != internalAspectRatio) {
+        if (hikaru_engine_set_internal_resolution(engine, unsigned(requestedHeight), requestedAspectRatio) != 0)
             throw FlycastException(std::string("Hikaru renderer: ") + hikaru_engine_last_error(engine));
         internalHeight = unsigned(requestedHeight);
+        internalWidth = unsigned(std::round(double(internalHeight) * requestedAspectRatio / 2.0) * 2.0);
+        internalAspectRatio = requestedAspectRatio;
+        // The producer has completed before taking stateMutex. Discard the
+        // previous shape instead of stretching its queued picture for one frame;
+        // the replacement must replay any texture invalidations in that packet.
+        if (readyFrameSlot >= 0) {
+            readyFrameSlot = -1;
+            hikaru_engine_discard_frames(engine);
+        }
     }
     std::array<ControllerInputs, 2> controllers;
     for (unsigned i = 0; i < controllers.size(); ++i)
         controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};
+    if (cardReader) {
+        // Hikaru does not execute Maple DMA, where other systems consume this
+        // action. Use its host edge here, once, across all assigned controllers.
+        bool pressed = false;
+        for (unsigned port = 0; port < 4; ++port)
+            pressed |= (kcode[port] & DC_BTN_INSERT_CARD) == 0;
+        if (pressed && !cardButtonDown && !gui_is_open()) cardAction();
+        cardButtonDown = pressed;
+    }
     const auto* game = loadedGame();
     auto input = bindCabinetInputs(game, controllers, config::HikaruAirTrixDpadBoard, config::HikaruPlanetDpadStick,
         config::HikaruVirtualOn4TwinStick, config::HikaruNascarGamepad, mie->inputs().players[1],
         config::HikaruStarWarsRacerGamepad);
+
     if (game == &BraveFirefightersGame) {
         if (config::HikaruBraveMouseAim && !gui_is_open()) {
             // Absolute pointer aim, like touch: position inside the
@@ -1002,6 +1080,7 @@ static bool renderFrame() {
     }
     GLint target = 0;
     if (!nativeGraphics) glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
+    hikaru_engine_set_output_aspect_ratio(engine, getOutputFramebufferAspectRatio());
     hikaru_engine_resize(engine, uint32_t(target), unsigned(settings.display.width), unsigned(settings.display.height));
     if (!threaded && readyFrameSlot >= 0
             && frameSlots[readyFrameSlot].generation == frameGeneration.load(std::memory_order_acquire)) {
@@ -1016,10 +1095,8 @@ static bool renderFrame() {
         if (drawResult != 0) throw FlycastException(std::string("Hikaru renderer: ") + drawError.data());
         performance_overlay::recordGuestFrame();
         performance_overlay::recordRenderedResolution(640, 480,
-            ((uint64_t(completed.internalHeight) * 4 + 3) / 6) * 2, completed.internalHeight);
-        const bool widthLimited = int64_t(settings.display.width) * 3 <= int64_t(settings.display.height) * 4;
-        performance_overlay::recordOutputViewport(widthLimited ? settings.display.width : int(int64_t(settings.display.height) * 4 / 3),
-            widthLimited ? int(int64_t(settings.display.width) * 3 / 4) : settings.display.height);
+            completed.internalWidth, completed.internalHeight);
+        recordHikaruOutputViewport();
         if (completed.clearAudio) ClearAudioOutput();
         for (size_t i = 0; i < completed.audioCount; ++i)
             WriteSample(completed.audio[i].first, completed.audio[i].second);
@@ -1040,6 +1117,7 @@ static bool renderFrame() {
         FrameSlot& audioFrame = frameSlots[0];
         audioFrame.generation = frameGeneration.load(std::memory_order_acquire);
         audioFrame.input = input;
+        audioFrame.internalWidth = internalWidth;
         audioFrame.internalHeight = internalHeight;
         audioFrame.cpuClockMhz = cpuClockMhz;
         audioFrame.fastForward = settings.input.fastForwardMode;
@@ -1083,12 +1161,8 @@ static bool renderFrame() {
 #endif
         performance_overlay::recordGuestFrame();
         performance_overlay::recordRenderedResolution(640, 480,
-            ((uint64_t(internalHeight) * 4 + 3) / 6) * 2, internalHeight);
-        const int outputWidth = settings.display.width;
-        const int outputHeight = settings.display.height;
-        const bool widthLimited = int64_t(outputWidth) * 3 <= int64_t(outputHeight) * 4;
-        performance_overlay::recordOutputViewport(widthLimited ? outputWidth : int(int64_t(outputHeight) * 4 / 3),
-            widthLimited ? int(int64_t(outputWidth) * 3 / 4) : outputHeight);
+            internalWidth, internalHeight);
+        recordHikaruOutputViewport();
         stateLock.unlock();
         if (audioFrame.clearAudio) ClearAudioOutput();
         const double audioBlockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
@@ -1121,7 +1195,7 @@ static bool renderFrame() {
             outputWaitMs += audioWaitMs;
             if (++frames == 60) {
                 std::fprintf(stderr, "Hikaru frontend timing: frames=%u serial_run_ms=%.3f worker_wait_ms=%.3f total_ms=%.3f max_ms=%.3f native_present_ms=%.3f audio_wait_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u threaded=0\n",
-                    frames, runMs / frames, waitMs / frames, totalMs / frames, maxMs, presentMs / frames, outputWaitMs / frames, cpuClockMhz, gl ? "opengl" : isMetal(requested) ? "metal" : "vulkan", sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle", internalHeight);
+                    frames, runMs / frames, waitMs / frames, totalMs / frames, maxMs, presentMs / frames, outputWaitMs / frames, cpuClockMhz, gl ? "opengl" : isMetal(requested) ? "metal" : dx11 ? "dx11" : "vulkan", sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle", internalHeight);
                 frames = 0;
                 runMs = waitMs = totalMs = maxMs = presentMs = outputWaitMs = 0;
             }
@@ -1145,6 +1219,7 @@ static bool renderFrame() {
         }
         slot.generation = currentGeneration;
         slot.input = input;
+        slot.internalWidth = internalWidth;
         slot.internalHeight = internalHeight;
         slot.cpuClockMhz = cpuClockMhz;
         slot.fastForward = settings.input.fastForwardMode;
@@ -1192,13 +1267,8 @@ static bool renderFrame() {
     if (drawResult != 0) throw FlycastException(std::string("Hikaru renderer: ") + drawError.data());
     performance_overlay::recordGuestFrame();
     const unsigned renderedHeight = displaySlot->internalHeight;
-    const unsigned internalWidth = ((uint64_t(renderedHeight) * 4 + 3) / 6) * 2;
-    performance_overlay::recordRenderedResolution(640, 480, internalWidth, renderedHeight);
-    const int outputWidth = settings.display.width;
-    const int outputHeight = settings.display.height;
-    const bool widthLimited = int64_t(outputWidth) * 3 <= int64_t(outputHeight) * 4;
-    performance_overlay::recordOutputViewport(widthLimited ? outputWidth : int(int64_t(outputHeight) * 4 / 3),
-        widthLimited ? int(int64_t(outputWidth) * 3 / 4) : outputHeight);
+    performance_overlay::recordRenderedResolution(640, 480, displaySlot->internalWidth, renderedHeight);
+    recordHikaruOutputViewport();
     if (displaySlot->clearAudio) ClearAudioOutput();
     const double blockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
     for (size_t i = 0; i < displaySlot->audioCount; ++i)
@@ -1243,7 +1313,7 @@ static bool renderFrame() {
             std::fprintf(stderr, "Hikaru frontend timing: frames=%u producer_ms=%.3f draw_ms=%.3f worker_wait_ms=%.3f build_overlap_ms=%.3f consumer_ms=%.3f max_ms=%.3f native_present_ms=%.3f audio_wait_ms=%.3f cpu_mhz=%u api=%s sorting=%s height=%u threaded=%d\n",
                          frames, buildMs / frames, consumerDrawMs / frames, workerWaitTotalMs / frames, overlapMs / frames,
                          totalMs / frames, maximumMs, presentMs / frames, audioBlockedMs / frames, displaySlot->cpuClockMhz,
-                         gl ? "opengl" : isMetal(requested) ? "metal" : "vulkan",
+                         gl ? "opengl" : isMetal(requested) ? "metal" : dx11 ? "dx11" : "vulkan",
                          sorting == HIKARU_TRANSPARENCY_PER_PIXEL ? "pixel" : sorting == HIKARU_TRANSPARENCY_PER_STRIP ? "strip" : "triangle",
                          renderedHeight, int(threaded));
             frames = 0;

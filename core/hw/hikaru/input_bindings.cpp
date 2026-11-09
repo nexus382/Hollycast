@@ -127,6 +127,8 @@ HikaruEngineInputs bindCabinetInputs(const GameDescriptor* game,
                 input.players[i] |= ((pressed(DC_BTN_C) || controller.leftTrigger >= 0x8000) ? 0x0080 : 0)
                     | (pressed(DC_BTN_X) ? 0x0040 : 0) | (pressed(DC_BTN_Y) ? 0x0020 : 0);
             } else {
+                if (game == &BraveFirefightersGame && pressed(DC_BTN_B))
+                    input.players[i] |= 0x0080; // Fog uses both push-2 positions, as the mouse path does
                 input.coin[i] = input.coin[i] || pressed(DC_BTN_C) || pressed(DC_BTN_X);
             }
         }

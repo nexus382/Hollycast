@@ -136,6 +136,8 @@ int hikaru_engine_get_bram(const HikaruEngine *engine, uint8_t *data, size_t siz
 int hikaru_engine_get_cabinet_defaults(const HikaruEngine *engine, uint8_t *data, size_t size);
 int hikaru_engine_set_bram(HikaruEngine *engine, const uint8_t *data, size_t size);
 void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
+// Set the host output aspect ratio; the default preserves the board's 4:3 output.
+void hikaru_engine_set_output_aspect_ratio(HikaruEngine *engine, float aspect_ratio);
 // Release before the host context is destroyed, then restore on its replacement.
 // CPU, GPU registers, RAM and sound-board state survive this transition. A new
 // renderer starts with empty host render targets and decoded texture caches.
@@ -143,7 +145,8 @@ int hikaru_engine_release_graphics(HikaruEngine *engine);
 int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
 // Set the 4:3 internal 3D vertical resolution. Requires a current GL context;
 // targets are reallocated at the next frame. The default is 480 pixels.
-int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height);
+// Aspect ratio changes the 3D field of view; output stretching is independent.
+int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height, float aspect_ratio);
 // Selects translucent mesh order, per-triangle centroid order, or per-pixel
 // depth peeling (bounded to the configured translucent layer capacity).
 int hikaru_engine_set_transparency_sorting(HikaruEngine *engine, HikaruTransparencySorting sorting);

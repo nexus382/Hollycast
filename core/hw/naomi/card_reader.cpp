@@ -19,6 +19,9 @@
  */
 #include "card_reader.h"
 #include "hw/hikaru/state_io.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#endif
 #include "oslib/oslib.h"
 #include "hw/sh4/modules/modules.h"
 #include "hw/maple/maple_cfg.h"
@@ -1196,6 +1199,12 @@ void barcodeSetCard(const std::string& card)
 
 void insertCard(int playerNum)
 {
+#ifdef USE_HIKARU
+    if (settings.platform.isHikaru()) {
+        hikaru::frontend::cardAction();
+        return;
+    }
+#endif
 	if (cardReader != nullptr)
 		cardReader->insertCard();
 	else if (barcodeReader != nullptr)
@@ -1211,6 +1220,9 @@ void ejectCard()
 
 bool readerAvailable()
 {
+#ifdef USE_HIKARU
+    if (settings.platform.isHikaru()) return hikaru::frontend::cardReaderAvailable();
+#endif
 	return cardReader != nullptr
 			|| barcodeAvailable()
 			|| getRfidCardData(0) != nullptr;

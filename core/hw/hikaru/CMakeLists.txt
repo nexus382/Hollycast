@@ -2,7 +2,7 @@
 # Copyright 2026 The Hollycast Authors
 # The player uses these board devices alongside the vendored playback CPUs.
 add_library(hollycast_hikaru_io STATIC roms.cpp jvs.cpp mie.cpp eeprom93c46.cpp
-    protection.cpp crypto3155881.cpp input_bindings.cpp cabinet_settings.cpp)
+    protection.cpp crypto3155881.cpp input_bindings.cpp cabinet_settings.cpp card_reader.cpp)
 target_compile_features(hollycast_hikaru_io PUBLIC cxx_std_17)
 target_include_directories(hollycast_hikaru_io PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 

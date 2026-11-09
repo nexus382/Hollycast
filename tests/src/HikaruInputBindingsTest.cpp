@@ -272,6 +272,13 @@ TEST_F(HikaruInputBindingsTest, TriggerAliasesHaveAnExplicitHalfRangeThreshold)
     EXPECT_EQ(bind(&BraveFirefightersGame).players[0], 0);
 }
 
+TEST_F(HikaruInputBindingsTest, BraveFogSetsBothPush2Positions)
+{
+    controllers[0].buttons = ~uint32_t(DC_BTN_B);
+    EXPECT_EQ(bind(&BraveFirefightersGame).players[0], 0x0180);
+    EXPECT_EQ(bind(&PlanetHarriersGame).players[0], 0x0100);
+}
+
 TEST_F(HikaruInputBindingsTest, BraveRetainsBothPlayersAimAndUnusedButtonCredits)
 {
     controllers[0].stickX = -32768;
@@ -282,7 +289,7 @@ TEST_F(HikaruInputBindingsTest, BraveRetainsBothPlayersAimAndUnusedButtonCredits
     const auto input = bind(&BraveFirefightersGame);
     EXPECT_EQ(input.players[0], 0);
     EXPECT_EQ(input.coin[0], 0);
-    EXPECT_EQ(input.players[1], 0x8300);
+    EXPECT_EQ(input.players[1], 0x8380);
     EXPECT_EQ(input.coin[1], 1);
     EXPECT_EQ(input.analog[0], 0);
     EXPECT_EQ(input.analog[1], 0xffff);

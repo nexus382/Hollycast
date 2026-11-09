@@ -2,6 +2,7 @@
 	Created on: Nov 24, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -75,18 +76,24 @@ public:
 		VkMemoryPropertyFlags flags;
 		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
 		if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
-			vmaInvalidateAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
+			vmaInvalidateAllocation(allocator, allocation, 0, allocInfo.size);
 		return p;
 	}
+    // VMA ranges are allocation-relative; it handles coherent heaps and atom
+    // alignment. Native streaming buffers stay mapped and flush before submit.
+    void FlushMemory(VkDeviceSize offset, VkDeviceSize size) const
+    {
+        const VkResult result = vmaFlushAllocation(allocator, allocation, offset, size);
+        vk::detail::resultCheck(static_cast<vk::Result>(result), "vmaFlushAllocation failed");
+    }
 	void UnmapMemory() const
 	{
-		if (allocInfo.pMappedData != nullptr)
-			return;
 		VkMemoryPropertyFlags flags;
 		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
-		if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
-			vmaFlushAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
-		vmaUnmapMemory(allocator, allocation);
+		if ((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
+			vmaFlushAllocation(allocator, allocation, 0, allocInfo.size);
+		if (allocInfo.pMappedData == nullptr)
+			vmaUnmapMemory(allocator, allocation);
 	}
 
 private:

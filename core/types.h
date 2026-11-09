@@ -133,6 +133,7 @@ static inline RenderType hostRendererType(RenderType requested, bool hikaru) {
 		if (isOpenGL(requested)) return RenderType::OpenGL;
 		if (isVulkan(requested)) return RenderType::Vulkan;
 		if (isMetal(requested)) return RenderType::Metal;
+		if (requested == RenderType::DirectX11_OIT) return RenderType::DirectX11;
 	}
 	return requested;
 }

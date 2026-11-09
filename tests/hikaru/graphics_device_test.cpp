@@ -18,6 +18,10 @@ using namespace hikaru::graphics;
 namespace {
 struct RecordingBackend final : Backend {
     struct TextureCall { unsigned id=0, level=0; Texture info{}; TextureUpload upload=TextureUpload::Definition; std::vector<uint8_t> pixels; };
+    bool paletteSupport=false, texturePaletteSupport=false, packedSupport=false;
+    bool supportsDrawPalette() const override { return paletteSupport; }
+    bool supportsTexturePalette() const override { return texturePaletteSupport; }
+    bool supportsPackedVertices() const override { return packedSupport; }
     Draw lastDraw{}, lastClear{};
     GLbitfield lastClearMask=0;
     bool drew = false;
@@ -94,7 +98,7 @@ void testDispatchConversionUniformsAndState(RecordingBackend& backend, Device& d
     hikaru_glViewport(2, 3, 40, 50);
     hikaru_glEnable(GL_BLEND);
     hikaru_glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
-    GLuint p = makeProgram("#define HAS_TEXTURE 1\n#define SHADING_MODE 1\n#define ALPHA_MODE 0\n#define TEXTURE_MODE 2\n");
+    GLuint p = makeProgram("#define HAS_TEXTURE 1\n#define SHADING_MODE 1\n#define HAS_LIGHT0 1\n#define ALPHA_MODE 0\n#define TEXTURE_MODE 2\n");
     const GLfloat projection[] = {1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16};
     hikaru_glUniform1f(hikaru_glGetUniformLocation(p,"u_lights[0].ambient"),0.25f);
     hikaru_glUniform1f(hikaru_glGetUniformLocation(p,"u_weigh_by_alpha"),1.0f);
@@ -138,6 +142,26 @@ void testDispatchConversionUniformsAndState(RecordingBackend& backend, Device& d
     check(backend.lastDraw.color == 0 && backend.lastDraw.textures[0] == 0, "default target zero and unbound texture zero differ unexpectedly");
     check(backend.infos.at(0).width == 64 && backend.infos.at(0).height == 32,
           "default framebuffer target zero was not allocated separately from the unbound sampler");
+
+    // Warm packed constants must accept matrix changes without disturbing
+    // unrelated material/light state, and a later full repack must agree.
+    const auto previous=backend.lastDraw.uniforms;
+    const GLfloat moved[]={1,0,0,0, 0,1,0,0, 0,0,1,0, 7,8,9,1};
+    const GLfloat rotated[]={9,8,7,6,5,4,3,2,1};
+    hikaru_glUniformMatrix4fv(hikaru_glGetUniformLocation(p,"u_modelview_alternate"),1,GL_FALSE,moved);
+    hikaru_glUniformMatrix3fv(hikaru_glGetUniformLocation(p,"u_normal_alternate"),1,GL_FALSE,rotated);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    const Matrix expectedModel={1,0,0,0,0,1,0,0,0,0,1,0,7,8,9,1};
+    const Matrix expectedNormal={9,8,7,0,6,5,4,0,3,2,1,0,0,0,0,0};
+    check(backend.lastDraw.uniforms.alternate==expectedModel&&backend.lastDraw.uniforms.alternateNormal==expectedNormal,
+          "warm matrix update lost the alternate bank or normal padding");
+    check(backend.lastDraw.uniforms.projection==previous.projection&&backend.lastDraw.uniforms.material==previous.material&&
+          std::memcmp(previous.lights.data(),backend.lastDraw.uniforms.lights.data(),sizeof(previous.lights))==0,
+          "matrix update changed unrelated packed constants");
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(p,"u_factor"),0.875f);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(backend.lastDraw.uniforms.alternate==expectedModel&&backend.lastDraw.uniforms.alternateNormal==expectedNormal&&
+          backend.lastDraw.uniforms.factors[0]==0.875f,"full uniform repack disagrees with cached matrix updates");
 
     GLuint bitmap = makeProgram("// u_front sampler marks bitmap program\n");
     GLuint image = 0; hikaru_glGenTextures(1, &image);
@@ -340,6 +364,265 @@ void testFamilyAttachments(RecordingBackend& backend, Device& device) {
     device.checkError();
 }
 
+void testUnavailableDrawPalettes(Device& device) {
+    Device::Scope scope(&device);
+    check(!hikaru_graphics_supports_draw_palette(), "native backend advertised GL draw palettes");
+    const GLuint program = makeProgram("#define HAS_DRAW_PALETTE 0\n#define HAS_TEXTURE_PALETTE 0\n#define HAS_SHADING_PALETTE 0\n");
+    for (const char* name : {"u_modelview_palette", "u_modelview_alternate_palette",
+            "u_normal_palette", "u_normal_alternate_palette", "u_draw_depth",
+            "u_textures", "u_texture_modes", "u_shading_modes"}) {
+        check(hikaru_glGetUniformLocation(program, name) == -1,
+            "native backend advertised an unsupported draw-palette uniform");
+        const std::string indexed = std::string(name) + "[0]";
+        check(hikaru_glGetUniformLocation(program, indexed.c_str()) == -1,
+            "native backend advertised an unsupported indexed draw-palette uniform");
+    }
+    // These are required by the native shader's ordinary mesh/texture contract.
+    check(hikaru_glGetUniformLocation(program, "u_projection") >= 0 &&
+          hikaru_glGetUniformLocation(program, "u_texture") >= 0 &&
+          hikaru_glGetUniformLocation(program, "u_lights[0].diffuse") >= 0,
+          "native palette capability check disabled ordinary mesh uniforms");
+    hikaru_glDeleteProgram(program);
+    device.checkError();
+}
+
+void testLightCacheUpdates(RecordingBackend& backend, Device& device) {
+    Device::Scope scope(&device);
+    const GLuint program=makeProgram("#define HAS_LIGHT0 1\n#define HAS_LIGHT1 1\n");
+    const GLint diffuse=hikaru_glGetUniformLocation(program,"u_lights[0].diffuse");
+    const GLint table=hikaru_glGetUniformLocation(program,"u_lights[0].spot_table[0]");
+    const GLfloat spotTable[]={1,2,3,4,5};
+    hikaru_glUniform3f(diffuse,0.25f,0.5f,0.75f);
+    hikaru_glUniform3f(hikaru_glGetUniformLocation(program,"u_lights[1].position"),7,8,9);
+    hikaru_glUniform1fv(table,5,spotTable);
+    issueTriangle();device.checkError();
+    const auto lights=backend.lastDraw.uniforms.lights;
+    const GLfloat projection[]={1,0,0,0, 0,2,0,0, 0,0,3,0, 0,0,0,1};
+    hikaru_glUniformMatrix4fv(hikaru_glGetUniformLocation(program,"u_projection"),1,GL_FALSE,projection);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(std::memcmp(lights.data(),backend.lastDraw.uniforms.lights.data(),sizeof(lights))==0,
+          "matrix update changed the cached light set");
+    hikaru_glUniform3f(diffuse,1,0,0);
+    hikaru_glUniform1fv(table,1,spotTable);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    const auto& updated=backend.lastDraw.uniforms.lights;
+    check(updated[0].diffuse==Vec4{1,0,0,0}&&updated[1].position==Vec4{7,8,9,0},
+          "light update retained stale data or lost another light");
+    check(updated[0].table[0]==Vec4{1,0,0,0}&&updated[0].table[1]==Vec4{},
+          "shorter spotlight update retained old cached entries");
+    hikaru_glLinkProgram(program);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(backend.lastDraw.uniforms.lights[0].diffuse==Vec4{1,0,0,0},
+          "relink lost existing native light values");
+}
+
+void testCachedDepthAndFamilyUpdates(RecordingBackend& backend,Device& device) {
+    Device::Scope scope(&device);
+    const GLuint program=makeProgram("#define HAS_PATTERN 1\n#define HAS_TEXTURE 1\n");
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(program,"u_pattern"),float(0x5a5a));
+    hikaru_glDepthRangef(0.2f,0.8f);issueTriangle();device.checkError();
+    const auto previous=backend.lastDraw.uniforms;
+    const GLint depth=hikaru_glGetUniformLocation(program,"u_depth");
+    hikaru_glUniform2f(depth,0.125f,0.25f);
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(program,"u_sort_scale"),2.f);
+    hikaru_glUniform3f(hikaru_glGetUniformLocation(program,"u_family"),1.f,2.f,3.f);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    const auto warm=backend.lastDraw.uniforms;
+    check(warm.depth==Vec4{0.125f,0.25f,0.2f,0.8f}&&warm.family==Vec4{1,2,3,float(0x5a5a)}&&warm.material[3]==2,
+          "warm depth/family update lost range, sort scale or pattern coverage");
+    check(warm.projection==previous.projection&&warm.flags==previous.flags&&
+          std::memcmp(warm.lights.data(),previous.lights.data(),sizeof(warm.lights))==0,
+          "depth update disturbed unrelated packed state");
+    // A separate material update forces the full packer to rebuild the same
+    // depth/family fields; it must agree with the warm incremental path.
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(program,"u_factor"),0.5f);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(backend.lastDraw.uniforms.depth==warm.depth&&backend.lastDraw.uniforms.family==warm.family&&
+          backend.lastDraw.uniforms.material==warm.material,"full repack disagrees with warm depth/family constants");
+    // Short uploads preserve zero defaults for omitted vector components.
+    hikaru_glUniform1f(depth,0.375f);hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(backend.lastDraw.uniforms.depth==Vec4{0.375f,0,0.2f,0.8f},"short depth upload retained a stale placement scale");
+}
+
+void testVertexRanges(RecordingBackend& backend, Device& device) {
+    Device::Scope scope(&device);
+    makeProgram("");
+    GLuint vao=0,buffer=0;
+    hikaru_glGenVertexArrays(1,&vao);hikaru_glBindVertexArray(vao);
+    hikaru_glGenBuffers(1,&buffer);hikaru_glBindBuffer(GL_ARRAY_BUFFER,buffer);
+    const uint16_t data[]={99,0,1,2, 99,3,4,5, 99,6,7,8, 99,9,10,11, 99,12,13,14, 99,15,16,17};
+    hikaru_glBufferData(GL_ARRAY_BUFFER,sizeof(data),data,GL_STATIC_DRAW);
+    hikaru_glEnableVertexAttribArray(0);
+    hikaru_glVertexAttribPointer(0,3,GL_UNSIGNED_SHORT,GL_TRUE,8,reinterpret_cast<const void*>(2));
+    hikaru_glDrawArrays(GL_TRIANGLES,2,3);device.checkError();
+    check(backend.lastDraw.vertices.size()==3&&
+          near(backend.lastDraw.vertices.front().position[0],6.f/65535.f)&&
+          near(backend.lastDraw.vertices.back().position[2],14.f/65535.f)&&
+          backend.lastDraw.vertices[0].position[3]==0&&backend.lastDraw.vertices[0].normal==Vec4{},
+          "strided, offset vertex conversion changed values or default components");
+    const unsigned draws=backend.draws;
+    hikaru_glDrawArrays(GL_TRIANGLES,4,3);
+    bool failed=false;try{device.checkError();}catch(const std::runtime_error&){failed=true;}
+    check(failed&&backend.draws==draws,"truncated final vertex reached the backend");
+    hikaru_glVertexAttribPointer(0,3,GL_UNSIGNED_SHORT,GL_FALSE,8,reinterpret_cast<const void*>(UINTPTR_MAX));
+    hikaru_glDrawArrays(GL_TRIANGLES,1,3);
+    failed=false;try{device.checkError();}catch(const std::runtime_error&){failed=true;}
+    check(failed&&backend.draws==draws,"overflowing vertex offset reached the backend");
+    hikaru_glVertexAttribPointer(0,3,GL_UNSIGNED_SHORT,GL_FALSE,-1,nullptr);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);
+    failed=false;try{device.checkError();}catch(const std::runtime_error&){failed=true;}
+    check(failed&&backend.draws==draws,"negative vertex stride reached the backend");
+    // Native float attributes may be unaligned, interleaved, and start at a
+    // nonzero vertex. Exercise all widths and ensure disabled tails stay zero.
+    std::array<uint8_t,121> interleaved{};
+    for(unsigned i=0;i<6;++i)for(unsigned c=0;c<4;++c) {
+        const float value=float(i*4+c)+0.25f;
+        std::memcpy(interleaved.data()+1+i*20+c*4,&value,sizeof(value));
+    }
+    hikaru_glBufferData(GL_ARRAY_BUFFER,interleaved.size(),interleaved.data(),GL_STATIC_DRAW);
+    for(unsigned width=1;width<=4;++width) {
+        hikaru_glVertexAttribPointer(0,GLint(width),GL_FLOAT,GL_FALSE,20,reinterpret_cast<const void*>(1));
+        hikaru_glDrawArrays(GL_TRIANGLES,1,3);device.checkError();
+        for(unsigned i=0;i<3;++i)for(unsigned c=0;c<4;++c)
+            check(backend.lastDraw.vertices[i].position[c]==(c<width?float((i+1)*4+c)+0.25f:0.f),
+                  "unaligned float attribute width, stride, first vertex or zero tail changed");
+    }
+    const float flags[]={0.5f,99,99,99, 0.25f,99,99,99, 1,99,99,99};
+    const float selectors[]={64,99,99,99, 128,99,99,99, 192,99,99,99};
+    setAttribute(7,4,GL_FLOAT,GL_FALSE,flags,sizeof(flags));
+    setAttribute(8,4,GL_FLOAT,GL_FALSE,selectors,sizeof(selectors));
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(backend.lastDraw.vertices[0].extra==Vec4{0.5f,64,0,0}&&backend.lastDraw.vertices[2].extra==Vec4{1,192,0,0},
+          "scalar alpha/selector conversion overwrote neighboring extra components");
+    hikaru_glDeleteVertexArrays(1,&vao);hikaru_glDeleteBuffers(1,&buffer);
+    device.checkError();
+}
+
+void testPackedVertexDispatch() {
+    auto backend=std::make_unique<RecordingBackend>();auto* record=backend.get();record->packedSupport=true;record->paletteSupport=true;
+    Device device(std::move(backend));Device::Scope scope(&device);device.begin(16,16);makeProgram("");
+    std::array<PackedVertex,4> vertices{};
+    for(unsigned i=0;i<vertices.size();++i){vertices[i].position={float(i),float(i+1),-1};vertices[i].diffuse={10,20,30};
+        vertices[i].normal={0,0,1};vertices[i].alpha=191;vertices[i].ambient={40,50,60};vertices[i].matrixSelect=193;
+        vertices[i].specular={70,80,90,100};vertices[i].unknown={101,202,303};vertices[i].uv={0.25f,0.75f};}
+    constexpr size_t body=offsetof(PackedVertex,drawIndex);std::array<uint8_t,body*4> bytes{};
+    for(unsigned i=0;i<vertices.size();++i)std::memcpy(bytes.data()+i*body,&vertices[i],body);
+    GLuint vao=0,buffer=0;hikaru_glGenVertexArrays(1,&vao);hikaru_glBindVertexArray(vao);
+    hikaru_glGenBuffers(1,&buffer);hikaru_glBindBuffer(GL_ARRAY_BUFFER,buffer);hikaru_glBufferData(GL_ARRAY_BUFFER,bytes.size(),bytes.data(),GL_STATIC_DRAW);
+    const GLint widths[]={3,3,3,3,4,3,2,1,1};
+    const GLenum formats[]={GL_FLOAT,GL_FLOAT,GL_UNSIGNED_BYTE,GL_UNSIGNED_BYTE,GL_UNSIGNED_BYTE,GL_UNSIGNED_SHORT,GL_FLOAT,GL_UNSIGNED_BYTE,GL_UNSIGNED_BYTE};
+    const GLboolean normalized[]={GL_FALSE,GL_FALSE,GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE,GL_FALSE,GL_TRUE,GL_FALSE};
+    const size_t offsets[]={0,16,12,28,40,48,32,15,31};
+    for(unsigned i=0;i<9;++i){hikaru_glVertexAttribPointer(i,widths[i],formats[i],normalized[i],body,reinterpret_cast<const void*>(offsets[i]));hikaru_glEnableVertexAttribArray(i);}
+    hikaru_glDrawArrays(GL_TRIANGLES,1,3);hikaru_glDrawArrays(GL_TRIANGLES,1,3);device.checkError();
+    check(record->lastDraw.vertices.empty()&&record->lastDraw.packedVertices.size()==6,"compatible packed draws did not retain adjacent ordered merging");
+    check(record->lastDraw.packedVertices.front().position==vertices[1].position&&record->lastDraw.packedVertices.back().unknown==vertices[3].unknown&&
+          record->lastDraw.packedVertices[0].alpha==191&&record->lastDraw.packedVertices[0].matrixSelect==193,"packed first vertex, colors or selector bytes changed");
+    // A layout that the input assembler cannot reproduce must keep the old
+    // conversion path, including unusual normalization and missing padding.
+    hikaru_glVertexAttribPointer(8,1,GL_UNSIGNED_BYTE,GL_TRUE,body,reinterpret_cast<const void*>(31));
+    hikaru_glDrawArrays(GL_TRIANGLES,1,3);device.checkError();
+    check(record->lastDraw.packedVertices.empty()&&near(record->lastDraw.vertices[0].extra[1],193.f/255.f),"nonstandard normalized selector escaped generic conversion");
+    hikaru_glVertexAttribPointer(8,1,GL_UNSIGNED_BYTE,GL_FALSE,body,reinterpret_cast<const void*>(31));
+    hikaru_glBufferData(GL_ARRAY_BUFFER,bytes.size()-2,bytes.data(),GL_STATIC_DRAW);
+    hikaru_glDrawArrays(GL_TRIANGLES,1,3);device.checkError();
+    check(record->lastDraw.packedVertices.empty()&&record->lastDraw.vertices.size()==3,"truncated unused padding was read by the packed copy");
+    hikaru_glBufferData(GL_ARRAY_BUFFER,bytes.size(),bytes.data(),GL_STATIC_DRAW);
+    const GLuint program=makeProgram("#define HAS_DRAW_PALETTE 1\n");
+    std::array<float,4> depth={1,1,0.5f,2};hikaru_glUniform2fv(hikaru_glGetUniformLocation(program,"u_draw_depth[0]"),2,depth.data());
+    GLuint indices=0;hikaru_glGenBuffers(1,&indices);hikaru_glBindBuffer(GL_ARRAY_BUFFER,indices);
+    std::array<uint8_t,4> index={0,1,1,1};hikaru_glBufferData(GL_ARRAY_BUFFER,index.size(),index.data(),GL_DYNAMIC_DRAW);hikaru_graphics_bind_draw_palette(indices);
+    hikaru_glDrawArrays(GL_TRIANGLES,1,3);device.checkError();
+    check(record->lastDraw.packedVertices.size()==3&&record->lastDraw.packedVertices[0].drawIndex==1&&record->lastDraw.palette.size()==2&&
+          record->lastDraw.palette[1].modes==Vec4{0.5f,2,0,0},"packed palette record, depth or sort scale changed");
+    const unsigned previous=record->draws;index[2]=0;hikaru_glBufferSubData(GL_ARRAY_BUFFER,0,index.size(),index.data());
+    hikaru_glDrawArrays(GL_TRIANGLES,1,3);bool failed=false;try{device.checkError();}catch(const std::runtime_error&){failed=true;}
+    check(failed&&record->draws==previous,"one packed triangle selected multiple palette records");
+}
+
+void testNativePalettes() {
+    auto backend=std::make_unique<RecordingBackend>();auto* record=backend.get();
+    record->paletteSupport=true;record->texturePaletteSupport=true;
+    Device device(std::move(backend));Device::Scope scope(&device);device.begin(8,8);
+    check(hikaru_graphics_supports_draw_palette()&&hikaru_graphics_native_texture_palette()==1,
+          "native palette capabilities did not reach shared replay");
+    GLint unitsAvailable=0;hikaru_glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS,&unitsAvailable);
+    check(unitsAvailable==20,"native sampler query disagrees with accepted palette units");
+    const GLuint p=makeProgram("#define HAS_DRAW_PALETTE 1\n#define HAS_TEXTURE_PALETTE 1\n#define HAS_SHADING_PALETTE 1\n#define HAS_LIGHT0 1\n");
+    const GLint model=hikaru_glGetUniformLocation(p,"u_modelview_palette[0]");
+    check(model>=0&&model==hikaru_glGetUniformLocation(p,"u_modelview_palette"),"palette base/element-zero locations differ");
+    std::array<GLfloat,16*16> matrices{};std::array<GLfloat,16*9> normals{};std::array<GLfloat,16*2> depths{};
+    std::array<GLint,16> units{},textureModes{},shadingModes{};
+    for(unsigned i=0;i<16;++i){for(unsigned j=0;j<4;++j)matrices[i*16+j*5]=1;matrices[i*16+12]=float(i);
+        for(unsigned j=0;j<9;++j)normals[i*9+j]=float(i*9+j);depths[i*2]=float(i+1);depths[i*2+1]=float(i+2);
+        units[i]=4+i;textureModes[i]=i%5;shadingModes[i]=i%4;}
+    hikaru_glUniformMatrix4fv(model,16,GL_FALSE,matrices.data());
+    hikaru_glUniformMatrix4fv(hikaru_glGetUniformLocation(p,"u_modelview_alternate_palette[0]"),16,GL_FALSE,matrices.data());
+    hikaru_glUniformMatrix3fv(hikaru_glGetUniformLocation(p,"u_normal_palette[0]"),16,GL_FALSE,normals.data());
+    hikaru_glUniformMatrix3fv(hikaru_glGetUniformLocation(p,"u_normal_alternate_palette[0]"),16,GL_FALSE,normals.data());
+    hikaru_glUniform2fv(hikaru_glGetUniformLocation(p,"u_draw_depth[0]"),16,depths.data());
+    hikaru_glUniform1iv(hikaru_glGetUniformLocation(p,"u_textures[0]"),16,units.data());
+    hikaru_glUniform1iv(hikaru_glGetUniformLocation(p,"u_texture_modes[0]"),16,textureModes.data());
+    hikaru_glUniform1iv(hikaru_glGetUniformLocation(p,"u_shading_modes[0]"),16,shadingModes.data());
+    std::array<GLuint,16> textures{};hikaru_glGenTextures(16,textures.data());
+    const uint8_t pixel[]={20,40,60,255};
+    for(unsigned i=0;i<16;++i){hikaru_glActiveTexture(GL_TEXTURE0+4+i);hikaru_glBindTexture(GL_TEXTURE_2D,textures[i]);
+        hikaru_glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+        hikaru_glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,2);}
+    GLuint sampler=0;hikaru_glGenSamplers(1,&sampler);
+    hikaru_glSamplerParameteri(sampler,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);
+    hikaru_glSamplerParameteri(sampler,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+    hikaru_glSamplerParameteri(sampler,GL_TEXTURE_WRAP_S,GL_MIRRORED_REPEAT);
+    hikaru_glSamplerParameteri(sampler,GL_TEXTURE_WRAP_T,GL_REPEAT);
+    hikaru_glSamplerParameterf(sampler,GL_TEXTURE_LOD_BIAS,-0.75f);hikaru_glBindSampler(19,sampler);
+    GLuint vao=0;hikaru_glGenVertexArrays(1,&vao);hikaru_glBindVertexArray(vao);
+    const GLfloat positions[]={0,0,0,1, 1,0,0,1, 0,1,0,1};
+    setAttribute(0,4,GL_FLOAT,GL_FALSE,positions,sizeof(positions));
+    GLuint indices=0;hikaru_glGenBuffers(1,&indices);hikaru_glBindBuffer(GL_ARRAY_BUFFER,indices);
+    std::array<uint8_t,3> index={15,15,15};
+    hikaru_glBufferData(GL_ARRAY_BUFFER,index.size(),index.data(),GL_DYNAMIC_DRAW);hikaru_graphics_bind_draw_palette(indices);
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    const auto& draw=record->lastDraw;
+    check(draw.palette.size()==16&&draw.vertices[2].extra[2]==15,"16-record palette index or payload was lost");
+    check(draw.palette[15].modelview[12]==15&&draw.palette[15].alternate[12]==15&&
+          draw.palette[15].normal==Matrix{135,136,137,0,138,139,140,0,141,142,143,0,0,0,0,0},
+          "palette matrices or std430 normal padding changed");
+    check(draw.palette[15].modes==Vec4{16,17,0,3}&&draw.paletteTextures[15]==textures[15],
+          "placement/sort scales, material modes, or texture selection were lost");
+    check(draw.paletteSampling[15].wrapS==GL_MIRRORED_REPEAT&&draw.paletteSampling[15].maxLevel==2&&
+          draw.paletteSampling[15].minFilter==GL_LINEAR_MIPMAP_LINEAR&&draw.palette[15].sampling[0]==-0.75f,
+          "sampler override lost LOD/filtering or replaced texture-only mip state");
+    matrices[12]=99;hikaru_glUniformMatrix4fv(model,1,GL_FALSE,matrices.data());
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(record->lastDraw.palette[0].modelview[12]==99&&record->lastDraw.palette[15].modelview[12]==15,
+          "short palette update destroyed the cached tail");
+    const unsigned before=record->draws;
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(record->draws==before+2,"palette draws were joined without remapping their records");
+    index={16,16,16};hikaru_glBufferSubData(GL_ARRAY_BUFFER,0,index.size(),index.data());
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);
+    bool failed=false;try{device.checkError();}catch(const std::runtime_error&){failed=true;}
+    check(failed,"17th record escaped native palette bounds");
+    index={0,1,0};hikaru_glBufferSubData(GL_ARRAY_BUFFER,0,index.size(),index.data());hikaru_glDrawArrays(GL_TRIANGLES,0,3);
+    failed=false;try{device.checkError();}catch(const std::runtime_error&){failed=true;}
+    check(failed,"one triangle selected multiple palette records");
+    hikaru_glDeleteSamplers(1,&sampler);index={15,15,15};hikaru_glBufferSubData(GL_ARRAY_BUFFER,0,index.size(),index.data());
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(record->lastDraw.palette[15].sampling[0]==0,"deleted sampler remained bound to a palette unit");
+    const GLuint primaryOnly=makeProgram("#define HAS_DRAW_PALETTE 1\n");
+    hikaru_glUniformMatrix4fv(hikaru_glGetUniformLocation(primaryOnly,"u_modelview_palette[0]"),16,GL_FALSE,matrices.data());
+    hikaru_glUniformMatrix4fv(hikaru_glGetUniformLocation(primaryOnly,"u_modelview_alternate_palette[0]"),1,GL_FALSE,matrices.data());
+    hikaru_glUniform2fv(hikaru_glGetUniformLocation(primaryOnly,"u_draw_depth[0]"),16,depths.data());
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+    check(record->lastDraw.palette[15].modelview[12]==15&&record->lastDraw.palette[15].alternate==Matrix{},
+          "unused shorter matrix bank rejected the run or lost GL's zero defaults");
+    hikaru_graphics_bind_draw_palette(0);
+    const GLuint scalar=makeProgram("#define HAS_DRAW_PALETTE 0\n#define HAS_TEXTURE_PALETTE 0\n");
+    check(hikaru_glGetUniformLocation(scalar,"u_modelview_palette[0]")==-1&&
+          hikaru_glGetUniformLocation(scalar,"u_textures[0]")==-1,"scalar variant advertised inactive arrays");
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();check(record->lastDraw.palette.empty(),"palette disable leaked into scalar draws");
+}
+
 const HikaruGraphicsDispatch* priorDispatch = nullptr;
 void restoredClearColor(GLfloat, GLfloat, GLfloat, GLfloat) { priorDispatch = reinterpret_cast<const HikaruGraphicsDispatch*>(uintptr_t(1)); }
 
@@ -382,6 +665,12 @@ int main() {
         run("texture unpack and packed precision", [&] { testTexturePacking(*record, device); });
         run("full texture update semantics", [&] { testFullTextureUpdates(*record, device); });
         run("family MRT, unsigned metadata and resolve dispatch", [&] { testFamilyAttachments(*record, device); });
+        run("native draw-palette capability and optional uniforms", [&] { testUnavailableDrawPalettes(device); });
+        run("light cache across matrices, light edits and relink", [&] { testLightCacheUpdates(*record, device); });
+        run("cached placement, sort depth and family updates", [&] { testCachedDepthAndFamilyUpdates(*record, device); });
+        run("strided vertex conversion and complete-range bounds", [&] { testVertexRanges(*record, device); });
+        run("packed layout, fallback, ordering and palette records", [&] { testPackedVertexDispatch(); });
+        run("native matrix, texture and shading palettes", [&] { testNativePalettes(); });
         run("nested scope restoration and exception containment", [&] { testScopeAndExceptionContainment(device); });
         return failures ? 1 : 0;
     } catch (const std::exception& e) {

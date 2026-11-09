@@ -2,6 +2,9 @@
 // Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "shaders.h"
+#include "device.h"
+#include <stdexcept>
+#include <utility>
 namespace hikaru::graphics {
 namespace {
 const char* structures=R"(
@@ -247,7 +250,24 @@ std::string metalShaderSource() {
     s+="fragment vec4 familyResolveFragment"+resolveArgs+familyResolveBody+"}\n";
     return s;
 }
-std::string vulkanVertexSource(bool bitmap) {
+namespace {
+void replaceAll(std::string& source, const std::string& from, const std::string& to) {
+    for(std::size_t at=0;(at=source.find(from,at))!=std::string::npos;at+=to.size())
+        source.replace(at,from.size(),to);
+}
+std::string vulkanMeshConstants() {
+    const char* names[]={"Specialize","Texture","ShadingMode","TwoSided","Fog","AlphaMode","TextureMode","Pattern","TexturePalette"};
+    std::string source;
+    for(unsigned i=0;i<9;++i)
+        source+="layout(constant_id="+std::to_string(i)+") const int k"+names[i]+"=0;\n";
+    const char* fields[]={"Enabled","Type","Attenuation","Specular"};
+    for(unsigned light=0;light<4;++light)for(unsigned field=0;field<4;++field)
+        source+="layout(constant_id="+std::to_string(9+light*4+field)+") const int kLight"+
+            std::to_string(light)+fields[field]+"=0;\n";
+    return source;
+}
+}
+std::string vulkanVertexSource(bool bitmap, bool palette) {
     std::string s=glslPrelude;s+="mat3 mat3of(mat4 m){return mat3(m);}";s+=structures;s+="layout(set=0,binding=0,std140)uniform Constants{Uniforms u;};\n";s+=outputStruct;
     s+="struct Vertex{vec4 position,normal,diffuse,ambient,specular,unknown,uv,extra;};\n";
     const char* fields[]={"position","normal","diffuse","ambient","specular","unknown","uv","extra"};
@@ -255,28 +275,295 @@ std::string vulkanVertexSource(bool bitmap) {
     const char* outTypes[]={"vec4","vec3","vec3","vec3","vec4","vec3","vec2","float"};
     const char* outNames[]={"viewPosition","normal","diffuse","ambient","specular","unknown","uv","alpha"};
     for(int i=0;i<8;i++)s+="layout(location="+std::to_string(i)+")out "+outTypes[i]+" "+outNames[i]+";\n";
+    if(palette) {
+        s+="struct DrawRecord{mat4 modelview,alternate,normal,alternateNormal;vec4 modes,sampling;};\n";
+        s+="layout(set=0,binding=5,std430) readonly buffer Palette{DrawRecord records[];};\n";
+        s+="layout(location=8) flat out vec4 drawModes;layout(location=9) flat out float textureBias;layout(location=10) flat out int drawIndex;\n";
+    }
     s+="void main(){Vertex v=Vertex(i_position,i_normal,i_diffuse,i_ambient,i_specular,i_unknown,i_uv,i_extra);Output o;";
     if(bitmap)s+="o.position=vec4(v.position.x*2.0-1.0,1.0-v.position.y*2.0,0.0,1.0);o.uv=v.uv.xy;o.viewPosition=vec4(0);o.normal=o.diffuse=o.ambient=o.unknown=vec3(0);o.specular=vec4(0);o.alpha=0.0;";
-    else s+=vertexBody;
+    else {
+        std::string body=vertexBody;
+        if(palette) {
+            s+="drawIndex=int(v.extra.z+0.5);DrawRecord record=records[drawIndex];drawModes=record.modes;textureBias=record.sampling.x;";
+            replaceAll(body,"u.modelview","record.modelview");
+            replaceAll(body,"u.alternateNormal","record.alternateNormal");
+            replaceAll(body,"u.alternate","record.alternate");
+            replaceAll(body,"u.normal","record.normal");
+        }
+        s+=body;
+    }
     s+="if(u.inverted.z==0.0)o.position.y=-o.position.y;o.position.z=(o.position.z+o.position.w)*0.5;gl_Position=o.position;";
     for(auto name:outNames)s+=std::string(name)+"=o."+name+";";
     return s+"}";
 }
-std::string vulkanFragmentSource(bool bitmap, bool familyResolve) {
+std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, unsigned textureSlots) {
+    if(textureSlots!=1&&textureSlots!=16)throw std::invalid_argument("Invalid Hikaru Vulkan texture palette size");
     std::string s=glslPrelude;s+="mat3 mat3of(mat4 m){return mat3(m);}";s+=structures;s+="layout(set=0,binding=0,std140)uniform Constants{Uniforms u;};\n";
     s+=outputStruct;
     std::string inputs=fragmentInput;
+    replaceAll(inputs,"uniform sampler2D tex0;","uniform sampler2D tex0["+std::to_string(textureSlots)+"];" );
     for(int index=familyResolve?2:3;index<4;++index){
         if(bitmap&&!familyResolve)break;
         const std::string from="uniform sampler2D tex"+std::to_string(index);
         inputs.replace(inputs.find(from),from.size(),"uniform usampler2D tex"+std::to_string(index));
     }
     s+=inputs;
-    if(!bitmap)s+="layout(location=1) out uvec2 outMetadata;\n";
-    s+="void applyLight(inout vec3 diffuse,inout vec3 specular,Light light,Uniforms u,Output o){";s+=lightBody;s+="}\n";
-    s+="float meshWindowDepth(float z,Uniforms u){";s+=depthFunctionBody;s+="}\n";
+    s+="#undef SAMPLE0\n#define SAMPLE0(uv) texture(tex0[0],uv,u.lodBias.x)\n#undef COLOR0\n#define COLOR0(pixel) texelFetch(tex0[0],ivec2(pixel),0)\n";
+    if(!bitmap) {
+        s+="layout(location=1) out uvec2 outMetadata;\n";
+        s+=vulkanMeshConstants();
+        if(palette) {
+            s+="layout(location=8) flat in vec4 drawModes;layout(location=9) flat in float textureBias;layout(location=10) flat in int drawIndex;\n";
+            // Constant descriptor indices work without descriptor-indexing or
+            // nonuniform sampler-array features on Android Vulkan devices.
+            s+="vec4 samplePalette(int index,vec2 coordinate,float bias){\n";
+            for(unsigned i=0;i+1<textureSlots;++i)
+                s+="if(index=="+std::to_string(i)+")return texture(tex0["+std::to_string(i)+"],coordinate,bias);\n";
+            s+="return texture(tex0["+std::to_string(textureSlots-1)+"],coordinate,bias);}\n";
+            s+="#undef SAMPLE0\n#define SAMPLE0(uv) samplePalette(kTexturePalette!=0?drawIndex:0,uv,kTexturePalette!=0?textureBias:u.lodBias.x)\n";
+        }
+        // Match the GL shader's direct access to fragment inputs and each
+        // constant-index UBO light. This avoids aggregate function arguments
+        // and lets each light's flags specialize independently.
+        const char* components[]={"x","y","z","w"};
+        const char* fields[]={"Enabled","Type","Attenuation","Specular"};
+        for(unsigned i=0;i<4;++i) {
+            const std::string n=std::to_string(i),base="u.lights["+n+"]";
+            std::string light=lightBody;
+            replaceAll(light,"u.flags.z","(kSpecialize!=0?float(kTwoSided):u.flags.z)");
+            for(unsigned field=1;field<4;++field)
+                replaceAll(light,std::string("light.flags.")+components[field],
+                    "(kSpecialize!=0?float(kLight"+n+fields[field]+"):"+base+".flags."+components[field]+")");
+            replaceAll(light,"light.",base+".");
+            replaceAll(light,"vec3 normal=","vec3 surfaceNormal=");
+            replaceAll(light,"dot(normal,","dot(surfaceNormal,");
+            replaceAll(light,",normal)",",surfaceNormal)");
+            replaceAll(light,"o.viewPosition","viewPosition");
+            replaceAll(light,"o.normal","normal");
+            replaceAll(light,"o.specular","specular");
+            replaceAll(light,"diffuse+=","accumDiffuse+=");
+            replaceAll(light,"specular+=","accumSpecular+=");
+            s+="void applyLight"+n+"(inout vec3 accumDiffuse,inout vec3 accumSpecular){"+light+"}\n";
+        }
+        s+="float meshWindowDepth(float z){";s+=depthFunctionBody;s+="}\n";
+    }
     s+="void main(){Output o=Output(gl_FragCoord,viewPosition,normal,diffuse,ambient,specular,unknown,uv,alpha);";
-    s+=familyResolve?familyResolveBody:bitmap?bitmapBody:meshFragmentBody;
+    if(bitmap)s+=familyResolve?familyResolveBody:bitmapBody;
+    else {
+        const std::string textureMode=palette?"drawModes.z":"u.material.y";
+        const std::string shadingMode=palette?"drawModes.w":"u.flags.y";
+        s+="float textureMode=kSpecialize!=0&&kTextureMode>=0?float(kTextureMode):"+textureMode+";\n";
+        s+="float shadingMode=kSpecialize!=0&&kShadingMode>=0?float(kShadingMode):"+shadingMode+";\n";
+        std::string body=meshFragmentBody;
+        const std::string loop="        for(int i=0;i<4;i++)if(u.lights[i].flags.x!=0.0)applyLight(diffuse,specular,u.lights[i],u,o);";
+        std::string lights;
+        for(unsigned i=0;i<4;++i) {
+            const std::string n=std::to_string(i);
+            lights+="        if((kSpecialize!=0?kLight"+n+"Enabled:int(u.lights["+n+"].flags.x))!=0)applyLight"+n+"(diffuse,specular);\n";
+        }
+        replaceAll(body,loop,lights);
+        replaceAll(body,",u)",")");
+        replaceAll(body,"u.flags.x","(kSpecialize!=0?float(kTexture):u.flags.x)");
+        replaceAll(body,"u.flags.y","shadingMode");
+        replaceAll(body,"u.flags.w","(kSpecialize!=0?float(kFog):u.flags.w)");
+        replaceAll(body,"u.material.x","(kSpecialize!=0?float(kAlphaMode):u.material.x)");
+        replaceAll(body,"u.material.y","textureMode");
+        if(palette){replaceAll(body,"u.depth.y","drawModes.x");replaceAll(body,"u.material.w","drawModes.y");}
+        const auto patternBegin=body.find("    uint2 patternPixel"),patternEnd=body.find("    float eyeZ");
+        body.insert(patternEnd,"    }\n");
+        body.insert(patternBegin,"    if(kSpecialize==0||kPattern!=0){\n");
+        s+=body;
+    }
     return s+"}";
+}
+
+MeshShaderSpecialization meshShaderSpecialization(const Draw& d, bool specialize) {
+    MeshShaderSpecialization result{};
+    if(d.bitmap)return result;
+    result[0]=specialize;result[1]=int32_t(d.uniforms.flags[0]);
+    result[2]=d.shadingPalette?-1:int32_t(d.uniforms.flags[1]);result[3]=int32_t(d.uniforms.flags[2]);
+    result[4]=int32_t(d.uniforms.flags[3]);result[5]=int32_t(d.uniforms.material[0]);
+    result[6]=d.texturePalette?-1:int32_t(d.uniforms.material[1]);result[7]=d.uniforms.family[3]!=65535;
+    result[8]=d.texturePalette;
+    for(unsigned light=0;light<4;++light)for(unsigned field=0;field<4;++field)
+        result[9+light*4+field]=int32_t(d.uniforms.lights[light].flags[field]);
+    return result;
+}
+
+std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed, unsigned passFlags) {
+    // Uniforms and DrawRecord contain only column-major matrices and 16-byte
+    // vectors, matching both the native CPU layout and HLSL constant packing.
+    std::string s=R"(
+#pragma pack_matrix(column_major)
+#define vec2 float2
+#define vec3 float3
+#define vec4 float4
+#define mat4 float4x4
+#define mix lerp
+#define ROUND_EVEN round
+#define DISCARD discard
+)";
+    s+=structures;
+    s+="cbuffer Constants : register(b0){Uniforms u;};\n";
+    s+=R"(
+struct DrawRecord {mat4 modelview,alternate,normal,alternateNormal;vec4 modes,sampling;};
+cbuffer Palette : register(b1){DrawRecord records[16];};
+struct Vertex {
+    vec4 position:POSITION;vec4 normal:NORMAL;vec4 diffuse:COLOR0;vec4 ambient:COLOR1;
+    vec4 specular:COLOR2;vec4 unknown:COLOR3;vec4 uv:TEXCOORD0;vec4 extra:TEXCOORD1;
+};
+struct Output {
+    vec4 position:SV_Position;vec4 viewPosition:TEXCOORD0;vec3 normal:TEXCOORD1;
+    vec3 diffuse:TEXCOORD2;vec3 ambient:TEXCOORD3;vec4 specular:TEXCOORD4;
+    vec3 unknown:TEXCOORD5;vec2 uv:TEXCOORD6;float alpha:TEXCOORD7;
+    nointerpolation vec4 drawModes:TEXCOORD8;
+    nointerpolation float textureBias:TEXCOORD9;
+    nointerpolation uint drawIndex:TEXCOORD10;
+};
+struct VertexInput {
+    vec4 position:POSITION;vec4 normal:NORMAL;vec4 diffuse:COLOR0;vec4 ambient:COLOR1;
+    vec4 specular:COLOR2;vec4 unknown:COLOR3;vec4 uv:TEXCOORD0;
+    float alpha:TEXCOORD1;float matrixSelect:TEXCOORD2;float drawIndex:TEXCOORD3;
+};
+Output vertexMain(VertexInput input){Output o=(Output)0;Vertex v=(Vertex)0;
+v.position=input.position;v.normal=input.normal;v.diffuse=input.diffuse;v.ambient=input.ambient;
+v.specular=input.specular;v.unknown=input.unknown;v.uv=input.uv;
+)";
+    // UNORM8 supplies alpha directly. Recover the exact byte selector before
+    // its existing round-to-integer/matrix-bank logic; colors stay normalized.
+    s+="v.extra=vec4(input.alpha,input.matrixSelect"+std::string(packed?"*255.0":"")+",input.drawIndex,0);\n";
+    if(bitmap)s+="o.position=vec4(v.position.x*2.0-1.0,1.0-v.position.y*2.0,0.0,1.0);o.uv=v.uv.xy;";
+    else {
+        std::string body=vertexBody;
+        replaceAll(body,"mv*vec4(v.position.xyz,1.0)","mul(mv,vec4(v.position.xyz,1.0))");
+        replaceAll(body,"mat3of(mv)*v.position.xyz","mul((float3x3)mv,v.position.xyz)");
+        replaceAll(body,"mv[3].xyz","vec3(mv[0][3],mv[1][3],mv[2][3])");
+        replaceAll(body,"mat3of(nm)*v.normal.xyz","mul((float3x3)nm,v.normal.xyz)");
+        replaceAll(body,"u.projection*pos","mul(u.projection,pos)");
+        if(palette) {
+            s+="o.drawIndex=uint(v.extra.z+0.5);DrawRecord record=records[o.drawIndex];o.drawModes=record.modes;o.textureBias=record.sampling.x;";
+            replaceAll(body,"u.modelview","record.modelview");
+            replaceAll(body,"u.alternateNormal","record.alternateNormal");
+            replaceAll(body,"u.alternate","record.alternate");
+            replaceAll(body,"u.normal","record.normal");
+        }
+        s+=body;
+    }
+    // D3D's viewport reverses clip Y. Offscreen rows retain GL texture row
+    // ordering; the final output is top-left and ReadPixels flips only it.
+    s+="if(u.inverted.z!=0.0)o.position.y=-o.position.y;o.position.z=(o.position.z+o.position.w)*0.5;return o;}\n";
+    s+="Texture2D<float4> tex0[16]:register(t0);SamplerState samplers[16]:register(s0);\n";
+    if(bitmap&&!familyResolve) {
+        s+="Texture2D<float4> tex1:register(t16);Texture2D<float4> tex2:register(t17);Texture2D<float4> tex3:register(t18);\n";
+        s+="#define SAMPLE0(coord) tex0[0].SampleBias(samplers[0],coord,u.lodBias.x)\n";
+        s+="#define SAMPLE1(coord) tex1.SampleBias(samplers[1],coord,u.lodBias.y)\n";
+        s+="#define SAMPLE2(coord) tex2.SampleBias(samplers[2],coord,u.lodBias.z)\n";
+        s+="#define SAMPLE3(coord) tex3.SampleBias(samplers[3],coord,u.lodBias.w)\n";
+    } else if(familyResolve) {
+        s+="Texture2D<float4> tex1:register(t16);Texture2D<uint2> tex2:register(t17);Texture2D<uint2> tex3:register(t18);\n";
+    } else {
+        s+="Texture2D<float> tex1:register(t16);Texture2D<float> tex2:register(t17);Texture2D<uint2> tex3:register(t18);\n";
+        // Depth inputs use nearest/clamp at exact fragment coordinates. Loads
+        // leave all 16 sampler slots available to the ordered texture palette.
+        s+=R"(
+float loadDepth(Texture2D<float> source,vec2 coordinate){
+    uint width,height;source.GetDimensions(width,height);
+    int2 pixel=clamp(int2(coordinate*vec2(width,height)),int2(0,0),int2(width-1,height-1));
+    return source.Load(int3(pixel,0));
+}
+#define DEPTH1(coord) loadDepth(tex1,coord)
+#define DEPTH2(coord) loadDepth(tex2,coord)
+)";
+    }
+    s+="#define COLOR0(pixel) tex0[0].Load(int3(int2(pixel),0))\n#define COLOR1(pixel) tex1.Load(int3(int2(pixel),0))\n";
+    s+="#define META2(pixel) tex2.Load(int3(int2(pixel),0)).xy\n#define META3(pixel) tex3.Load(int3(int2(pixel),0)).xy\n";
+    if(bitmap) {
+        s+="#define RETURN_COLOR(value) return value\nfloat4 pixelMain(Output o):SV_Target0{\n";
+        std::string body=familyResolve?familyResolveBody:bitmapBody;
+        replaceAll(body,"vec4(0.0)","vec4(0.0,0.0,0.0,0.0)");
+        s+=body;return s+"}\n";
+    }
+    const char* names[]={"Specialize","Texture","ShadingMode","TwoSided","Fog","AlphaMode","TextureMode","Pattern","TexturePalette"};
+    for(unsigned i=0;i<9;++i)s+="static const int k"+std::string(names[i])+"="+std::to_string(specialization[i])+";\n";
+    const char* fields[]={"Enabled","Type","Attenuation","Specular"};
+    for(unsigned i=0;i<4;++i)for(unsigned j=0;j<4;++j)
+        s+="static const int kLight"+std::to_string(i)+fields[j]+"="+std::to_string(specialization[9+i*4+j])+";\n";
+    s+="static const uint kPassFlags="+std::to_string(passFlags)+"u;\n";
+    s+="vec4 sampleBase(uint index,vec2 coord,vec2 dx,vec2 dy,float bias){float scale=exp2(bias);\n";
+    const unsigned slots=palette&&specialization[8]?16:1;
+    for(unsigned i=0;i+1<slots;++i)s+="if(index=="+std::to_string(i)+")return tex0["+std::to_string(i)+"].SampleGrad(samplers["+std::to_string(i)+"],coord,dx*scale,dy*scale);\n";
+    const std::string last=std::to_string(slots-1);
+    s+="return tex0["+last+"].SampleGrad(samplers["+last+"],coord,dx*scale,dy*scale);}\n";
+    s+="#define SAMPLE0(coord) sampleBase(kTexturePalette!=0?o.drawIndex:0,coord,uvDx,uvDy,kTexturePalette!=0?o.textureBias:u.lodBias.x)\n";
+    s+="float meshWindowDepth(float z){";
+    s+=depthFunctionBody;s+="}\n";
+    s+=R"(
+struct PixelResult{vec4 color:SV_Target0;uint2 metadata:SV_Target1;float depth:SV_Depth;};
+#define WRITE_DEPTH(value) result.depth=value
+#define WRITE_METADATA(code,order) result.metadata=uint2(uint(code),uint(order+0.5))
+#define RETURN_COLOR(value) result.color=value;return result
+PixelResult pixelMain(Output o){PixelResult result=(PixelResult)0;
+// Evaluate derivatives before any pattern/family discard or sampler branch.
+vec2 uvDx=ddx(o.uv),uvDy=ddy(o.uv);
+)";
+    s+="float textureMode=kSpecialize!=0&&kTextureMode>=0?float(kTextureMode):"+std::string(palette?"o.drawModes.z":"u.material.y")+";\n";
+    s+="float shadingMode=kSpecialize!=0&&kShadingMode>=0?float(kShadingMode):"+std::string(palette?"o.drawModes.w":"u.flags.y")+";\n";
+    std::string body=meshFragmentBody;
+    std::string lights;
+    for(unsigned i=0;i<4;++i) {
+        const std::string n=std::to_string(i),base="u.lights["+n+"]";
+        std::string light=lightBody;
+        replaceAll(light,"u.flags.z","(kSpecialize!=0?float(kTwoSided):u.flags.z)");
+        const char* components[]={"x","y","z","w"};
+        for(unsigned field=1;field<4;++field)
+            replaceAll(light,std::string("light.flags.")+components[field],"(kSpecialize!=0?float(kLight"+n+fields[field]+"):"+base+".flags."+components[field]+")");
+        replaceAll(light,"light.",base+".");
+        lights+="if((kSpecialize!=0?kLight"+n+"Enabled:int("+base+".flags.x))!=0){"+light+"}\n";
+    }
+    replaceAll(body,"for(int i=0;i<4;i++)if(u.lights[i].flags.x!=0.0)applyLight(diffuse,specular,u.lights[i],u,o);",lights);
+    replaceAll(body,",u)",")");
+    replaceAll(body,"u.flags.x","(kSpecialize!=0?float(kTexture):u.flags.x)");
+    replaceAll(body,"u.flags.y","shadingMode");
+    replaceAll(body,"u.flags.w","(kSpecialize!=0?float(kFog):u.flags.w)");
+    replaceAll(body,"u.material.x","(kSpecialize!=0?float(kAlphaMode):u.material.x)");
+    replaceAll(body,"u.material.y","textureMode");
+    if(palette){replaceAll(body,"u.depth.y","o.drawModes.x");replaceAll(body,"u.material.w","o.drawModes.y");}
+    replaceAll(body,"vec3(0.0)","vec3(0.0,0.0,0.0)");
+    replaceAll(body,"vec4(1.0)","vec4(1.0,1.0,1.0,1.0)");
+    const auto patternBegin=body.find("    uint2 patternPixel"),patternEnd=body.find("    float eyeZ");
+    body.insert(patternEnd,"    }\n");body.insert(patternBegin,"    if(kSpecialize==0||kPattern!=0){\n");
+    // Compile out unused pass work without changing depth rounding, arithmetic
+    // order, or the generic reference path. In particular an ordinary mesh
+    // need not compute raw/placement depth for absent family/peel passes.
+    const std::pair<const char*,std::pair<unsigned,const char*>> controls[]={
+        {"familyEnabled",{Dx11FamilyEnabled,"u.family.x!=0.0"}},
+        {"familyOther",{Dx11FamilyOther,"u.family.x>1.0"}},
+        {"rawMetadata",{Dx11RawMetadata,"u.family.y!=0.0||u.family.x>1.0"}},
+        {"peelEnabled",{Dx11PeelEnabled,"u.peel.x!=0.0"}},
+        {"peelAfterFirst",{Dx11PeelAfterFirst,"u.peel.y==0.0"}},
+        {"weighByAlpha",{Dx11WeighByAlpha,"u.blend.x!=0.0"}},
+        {"forceCoverage",{Dx11ForceCoverage,"u.blend.y!=0.0"}}
+    };
+    // Replace composite predicates before their component expressions.
+    replaceAll(body,"u.family.y!=0.0||u.family.x>1.0","rawMetadata");
+    replaceAll(body,"u.family.x==0.0","!familyEnabled");
+    for(const auto& control:controls) {
+        const auto& [flag,expression]=control.second;
+        s+="bool "+std::string(control.first)+"=kSpecialize!=0?(kPassFlags&"+std::to_string(flag)+"u)!=0:("+expression+");\n";
+        replaceAll(body,expression,control.first);
+    }
+    // Palette runs may mix placement and sort scales. Elide an unused
+    // encoding only when every record selects the same existing branch.
+    s+="bool commonDepth=kSpecialize!=0&&(kPassFlags&"+std::to_string(Dx11CommonDepth)+"u)!=0;\n";
+    replaceAll(body,"if(o.drawModes.y>0.0&&o.drawModes.y!=o.drawModes.x)","if(!commonDepth&&o.drawModes.y>0.0&&o.drawModes.y!=o.drawModes.x)");
+    replaceAll(body,"if(u.material.w>0.0&&u.material.w!=u.depth.y)","if(!commonDepth&&u.material.w>0.0&&u.material.w!=u.depth.y)");
+    s+="bool separateDepth=kSpecialize!=0&&(kPassFlags&"+std::to_string(Dx11SeparateDepth)+"u)!=0;\n";
+    const std::string placement=palette?"o.drawModes.x":"u.depth.y",sorting=palette?"o.drawModes.y":"u.material.w";
+    replaceAll(body,"float writtenDepth=placementDepth;","float writtenDepth=separateDepth?meshWindowDepth(max(u.depth.x,eyeZ*"+sorting+")):placementDepth;");
+    // separateDepth proves the legacy condition true for the entire run.
+    // The generic/mixed path still evaluates the original per-record test.
+    replaceAll(body,"if(!commonDepth&&"+sorting+">0.0&&"+sorting+"!="+placement+")","if(!commonDepth&&!separateDepth&&"+sorting+">0.0&&"+sorting+"!="+placement+")");
+    return s+body+"}\n";
 }
 } // namespace hikaru::graphics

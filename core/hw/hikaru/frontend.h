@@ -4,7 +4,7 @@
 #include <string>
 class Serializer;
 class Deserializer;
-namespace hikaru { struct GameDescriptor; }
+namespace hikaru { struct GameDescriptor; struct CardReaderInfo; }
 namespace hikaru::frontend {
 // Static descriptor of the loaded title, or null; safe for native settings UI.
 const GameDescriptor* loadedGame();
@@ -24,6 +24,11 @@ void requestReset();
 void requestCabinetRegion();
 // Queues an emulated coin pulse; safe to call from the native menu thread.
 void insertCredit(unsigned player = 0);
+// Card controls share the device lock with MIE serial IO and save states.
+bool cardReaderAvailable();
+CardReaderInfo cardReaderInfo();
+void cardAction();
+void selectCard(const std::string& filename);
 void pauseAudio();
 void resumeAudio();
 void releaseGraphics();

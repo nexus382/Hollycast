@@ -11,7 +11,7 @@ namespace hikaru {
 const GameDescriptor AirTrixGame{"airtrix", "Air Trix", RomImages::AirTrixSecurityKey};
 const GameDescriptor BraveFirefightersGame{"braveff", "Brave Firefighters", std::nullopt};
 const GameDescriptor PlanetHarriersGame{"pharrier", "Planet Harriers", RomImages::PlanetHarriersSecurityKey};
-const GameDescriptor VirtualOn4Game{"von4", "Virtual-On Force", std::nullopt};
+const GameDescriptor VirtualOn4Game{"von4", "Virtual-On Force", std::nullopt, CardReaderModel::SanwaCRP1231BR10};
 const GameDescriptor SegaNascarGame{"sgnascar", "NASCAR Arcade (Rev A)", std::nullopt};
 const GameDescriptor StarWarsRacerGame{"swracer", "Star Wars: Racer Arcade", RomImages::StarWarsRacerSecurityKey};
 

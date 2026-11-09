@@ -41,6 +41,7 @@
 #include "emulator.h"
 #ifdef USE_HIKARU
 #include "hw/hikaru/roms.h"
+#include "hw/hikaru/frontend.h"
 #endif
 #include "mainui.h"
 #include "lua/lua.h"
@@ -1111,6 +1112,15 @@ static void gui_display_commands()
 			if (IconButton(ICON_FA_TROPHY, T("Achievements"), ScaledVec2(buttonWidth, 50)).realize() && achievements::isActive())
 				gui_setState(GuiState::Achievements);
 		}
+#ifdef USE_HIKARU
+        if (hikaru::frontend::cardReaderAvailable()) {
+            if (ImGui::Button(T("Cards"), ScaledVec2(buttonWidth, 50))) ImGui::OpenPopup("HikaruCards");
+            if (ImGui::BeginPopup("HikaruCards")) {
+                GuiMenu::renderCardsMenu();
+                ImGui::EndPopup();
+            }
+        }
+#endif
 		// Barcode
 		if (card_reader::barcodeAvailable())
 		{

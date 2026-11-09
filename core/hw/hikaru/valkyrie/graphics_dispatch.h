@@ -11,10 +11,11 @@ extern "C" {
 void hikaru_graphics_begin_occlusion(GLuint query[2]);
 GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]);
 void hikaru_graphics_delete_occlusion(GLuint query[2]);
-// Direct GL/GLES implements the matrix palette in GLSL. Native dispatchers
-// retain their existing vertex/uniform contract until they support it too.
+// Palette support belongs to the active backend, not the host GL loader.
+// Returns -1 for direct GL, otherwise the native texture-palette capability.
+GLint hikaru_graphics_native_texture_palette(void);
 GLboolean hikaru_graphics_supports_draw_palette(void);
-// Own attribute 9 only on direct GL. Nonzero leaves ARRAY_BUFFER bound to it;
+// Own attribute 9 through the active backend. Nonzero leaves ARRAY_BUFFER bound to it;
 // callers restore their ordinary vertex buffer before configuring attributes.
 void hikaru_graphics_bind_draw_palette(GLuint state_buffer);
 typedef struct HikaruGraphicsDispatch {
@@ -109,9 +110,24 @@ typedef struct HikaruGraphicsDispatch {
     void (*Viewport)(GLint x, GLint y, GLsizei width, GLsizei height);
     void (*BindFragDataLocation)(GLuint program, GLuint color, const GLchar * name);
     void (*ClearBufferuiv)(GLenum buffer, GLint drawbuffer, const GLuint * value);
+    GLboolean (*SupportsDrawPalette)(void);
+    GLboolean (*SupportsTexturePalette)(void);
+    void (*BindDrawPalette)(GLuint buffer);
+    void (*GenSamplers)(GLsizei n, GLuint* ids);
+    void (*DeleteSamplers)(GLsizei n, const GLuint* ids);
+    void (*BindSampler)(GLuint unit, GLuint id);
+    void (*SamplerParameteri)(GLuint id, GLenum name, GLint value);
+    void (*SamplerParameterf)(GLuint id, GLenum name, GLfloat value);
+    void (*Uniform1iv)(GLint location, GLsizei count, const GLint* values);
 } HikaruGraphicsDispatch;
 void hikaru_glBindFragDataLocation(GLuint program, GLuint color, const GLchar * name);
 void hikaru_glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint * value);
+void hikaru_glGenSamplers(GLsizei n, GLuint* ids);
+void hikaru_glDeleteSamplers(GLsizei n, const GLuint* ids);
+void hikaru_glBindSampler(GLuint unit, GLuint id);
+void hikaru_glSamplerParameteri(GLuint id, GLenum name, GLint value);
+void hikaru_glSamplerParameterf(GLuint id, GLenum name, GLfloat value);
+void hikaru_glUniform1iv(GLint location, GLsizei count, const GLint* values);
 const HikaruGraphicsDispatch *hikaru_graphics_set_dispatch(const HikaruGraphicsDispatch *dispatch);
 void hikaru_glActiveTexture(GLenum texture);
 void hikaru_glAttachShader(GLuint program, GLuint shader);
@@ -204,6 +220,19 @@ void hikaru_glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 }
 #endif
 #ifndef HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
+#undef glGenSamplers
+#define glGenSamplers hikaru_glGenSamplers
+#undef glDeleteSamplers
+#define glDeleteSamplers hikaru_glDeleteSamplers
+#undef glBindSampler
+#define glBindSampler hikaru_glBindSampler
+#undef glSamplerParameteri
+#define glSamplerParameteri hikaru_glSamplerParameteri
+#undef glSamplerParameterf
+#define glSamplerParameterf hikaru_glSamplerParameterf
+#undef glUniform1iv
+#define glUniform1iv hikaru_glUniform1iv
+
 #undef glBindFragDataLocation
 #define glBindFragDataLocation hikaru_glBindFragDataLocation
 #undef glClearBufferuiv

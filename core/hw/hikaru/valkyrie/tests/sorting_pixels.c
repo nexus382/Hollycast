@@ -14,6 +14,7 @@
 int hikaru_vendor_test_transparency_sorting_pixels(void);
 int hikaru_vendor_test_depth_precision_pixels(void);
 int hikaru_vendor_test_depth_family_pixels(void);
+int hikaru_vendor_test_widescreen_pixels(void);
 
 int main(int argc, char **argv)
 {
@@ -34,12 +35,14 @@ int main(int argc, char **argv)
     const int passed = hikaru_vendor_test_transparency_sorting_pixels();
     const int depth_passed = hikaru_vendor_test_depth_precision_pixels();
     const int family_passed = hikaru_vendor_test_depth_family_pixels();
+    const int widescreen_passed = hikaru_vendor_test_widescreen_pixels();
     SDL_GL_DeleteContext(context);
     SDL_DestroyWindow(window);
     SDL_Quit();
     if (!passed) { fprintf(stderr, "crossing translucent triangles did not resolve per pixel\n"); return 1; }
     if (!depth_passed) { fprintf(stderr, "canonical eye-depth regression failed\n"); return 1; }
     if (!family_passed) { fprintf(stderr, "depth-family regression failed\n"); return 1; }
-    puts("per-pixel transparency sorting: PASS");
+    if (!widescreen_passed) { fprintf(stderr, "widescreen geometry/HUD proportions failed\n"); return 1; }
+    puts("per-pixel transparency sorting and widescreen projection: PASS");
     return 0;
 }

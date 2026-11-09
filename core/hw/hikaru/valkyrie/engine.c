@@ -9,6 +9,7 @@
 #include "mach/hikaru/hikaru-renderer-private.h"
 #include "vk/input.h"
 #include "graphics_dispatch.h"
+#include <math.h>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -333,6 +334,7 @@ HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngin
     engine->transparency_memory_budget = HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
     engine->internal_width = 640;
     engine->internal_height = 480;
+    engine->output_aspect_ratio = 4.0f / 3.0f;
     liveEngine = engine;
     engine->mie = *mie;
     engine->protection = *protection;
@@ -668,6 +670,16 @@ void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned wi
     engine->machine->renderer->target_fbo = target_fbo;
     engine->machine->renderer->width = width;
     engine->machine->renderer->height = height;
+    engine->machine->renderer->output_aspect_ratio = engine->output_aspect_ratio;
+    engine->machine->renderer->internal_width = engine->internal_width;
+    engine->machine->renderer->internal_height = engine->internal_height;
+}
+void hikaru_engine_set_output_aspect_ratio(HikaruEngine *engine, float aspect_ratio)
+{
+    if (!engine || !isfinite(aspect_ratio) || aspect_ratio <= 0.0f) return;
+    engine->output_aspect_ratio = aspect_ratio;
+    if (engine->machine && engine->machine->renderer)
+        engine->machine->renderer->output_aspect_ratio = aspect_ratio;
 }
 int hikaru_engine_release_graphics(HikaruEngine *engine)
 {
@@ -728,24 +740,30 @@ int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, un
     restore_gl_state(&state);
     return failed ? -1 : 0;
 }
-int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height)
+int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height, float aspect_ratio)
 {
     if (!engine || !engine->machine || !engine->machine->renderer) return -1;
     if (height < 240 || height > 4320) {
         snprintf(engine->error, sizeof(engine->error), "Hikaru internal resolution must be between 240 and 4320 pixels high");
         return -1;
     }
-    const unsigned width = (unsigned)((((uint64_t)height * 4 + 3) / 6) * 2);
+    if (!isfinite(aspect_ratio) || aspect_ratio < 4.0f / 3.0f) {
+        snprintf(engine->error, sizeof(engine->error), "Hikaru internal aspect ratio must be finite and at least 4:3");
+        return -1;
+    }
+    // Round to an even target width while retaining the requested vertical detail.
+    const double requested_width = round((double)height * aspect_ratio / 2.0) * 2.0;
     GLint max_texture = 0, max_renderbuffer = 0, max_viewport[2] = {0, 0};
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture);
     glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &max_renderbuffer);
     glGetIntegerv(GL_MAX_VIEWPORT_DIMS, max_viewport);
-    if (width > (unsigned)max_texture || height > (unsigned)max_texture ||
-        width > (unsigned)max_renderbuffer || height > (unsigned)max_renderbuffer ||
-        width > (unsigned)max_viewport[0] || height > (unsigned)max_viewport[1]) {
+    if (requested_width > max_texture || height > (unsigned)max_texture ||
+        requested_width > max_renderbuffer || height > (unsigned)max_renderbuffer ||
+        requested_width > max_viewport[0] || height > (unsigned)max_viewport[1]) {
         snprintf(engine->error, sizeof(engine->error), "Hikaru internal resolution exceeds OpenGL limits");
         return -1;
     }
+    const unsigned width = (unsigned)requested_width;
     engine->machine->renderer->internal_width = width;
     engine->machine->renderer->internal_height = height;
     engine->internal_width = width;

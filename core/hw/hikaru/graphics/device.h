@@ -12,6 +12,7 @@
 #undef HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -24,6 +25,21 @@ namespace hikaru::graphics {
 using Vec4 = std::array<float, 4>;
 using Matrix = std::array<float, 16>;
 struct Vertex { Vec4 position{}, normal{}, diffuse{}, ambient{}, specular{}, unknown{}, uv{}, extra{}; };
+// The board's interleaved vertex body is 56 bytes. DX11 can normalize its
+// byte/word colors in the input assembler, avoiding CPU float expansion.
+// The final float is our per-triangle palette index, not guest memory.
+struct PackedVertex {
+    std::array<float,3> position{};
+    std::array<uint8_t,3> diffuse{}; uint8_t alpha=0;
+    std::array<float,3> normal{};
+    std::array<uint8_t,3> ambient{}; uint8_t matrixSelect=0;
+    std::array<float,2> uv{};
+    std::array<uint8_t,4> specular{};
+    uint32_t reserved=0;
+    std::array<uint16_t,3> unknown{}; uint16_t reservedTail=0;
+    float drawIndex=0;
+};
+static_assert(offsetof(PackedVertex,drawIndex)==56&&sizeof(PackedVertex)==60);
 struct Light {
     Vec4 position{}, direction{}, diffuse{}, specular{}, extents{}, spot{}, flags{};
     std::array<Vec4,4> table{};
@@ -35,6 +51,15 @@ struct Uniforms {
     std::array<Light,4> lights{};
     Vec4 factors{}, multipliers{}, direct{}, keyed{}, inverted{}, lodBias{};
 };
+// std430 records mirror the existing GL palette. Indices remain per vertex,
+// so one ordered draw retains each triangle's transform and sorting scales.
+inline constexpr unsigned DrawPaletteSize = 16;
+struct DrawRecord {
+    Matrix modelview{}, alternate{}, normal{}, alternateNormal{};
+    Vec4 modes{}; // placement scale, sort scale, texture mode, shading mode
+    Vec4 sampling{}; // texture LOD bias
+};
+static_assert(sizeof(DrawRecord) == 288);
 static_assert(sizeof(Vertex) == 128);
 static_assert(sizeof(Uniforms) % 16 == 0);
 struct Texture {
@@ -61,10 +86,18 @@ struct Draw {
     float biasFactor = 0, biasUnits = 0, nearDepth = 0, farDepth = 1;
     Uniforms uniforms{};
     std::vector<Vertex> vertices;
+    std::vector<PackedVertex> packedVertices; // Mutually exclusive with vertices.
+    std::vector<DrawRecord> palette;
+    std::vector<unsigned> paletteTextures;
+    std::vector<Texture> paletteSampling;
+    bool texturePalette = false, shadingPalette = false;
 };
 class Backend {
 public:
     virtual ~Backend() = default;
+    virtual bool supportsDrawPalette() const { return false; }
+    virtual bool supportsTexturePalette() const { return false; }
+    virtual bool supportsPackedVertices() const { return false; }
     // Pixel data is borrowed for the call; implementations copy or stage it before returning.
     virtual void texture(unsigned id, const Texture& info, unsigned level, TextureUpload upload, const void* pixels, size_t bytes) = 0;
     virtual void eraseTexture(unsigned id) = 0;
@@ -77,6 +110,7 @@ public:
 };
 std::unique_ptr<Backend> makeMetalBackend();
 std::unique_ptr<Backend> makeVulkanBackend();
+std::unique_ptr<Backend> makeDx11Backend();
 class Device {
 public:
     explicit Device(std::unique_ptr<Backend> backend);
@@ -103,14 +137,25 @@ private:
         std::unordered_map<GLint,std::vector<float>> values;
         std::vector<unsigned> shaders;
         mutable std::optional<Uniforms> cachedUniforms;
+        struct MatrixUniform { Matrix Uniforms::*field; unsigned dimension; };
+        std::unordered_map<GLint,MatrixUniform> matrixLocations;
+        struct VectorUniform { Vec4 Uniforms::*field; unsigned offset, count; };
+        std::unordered_map<GLint,VectorUniform> vectorLocations;
+        // Matrix/material changes need not repack the unchanged light set.
+        std::unordered_set<GLint> lightLocations;
+        mutable std::optional<std::array<Light,4>> cachedLights;
+        std::unordered_set<GLint> paletteLocations;
     };
     std::unique_ptr<Backend> backend;
     std::optional<Draw> pendingDraw;
+    std::vector<Vertex> vertexScratch;
+    std::vector<PackedVertex> packedVertexScratch;
     HikaruGraphicsDispatch dispatch{};
     std::exception_ptr error;
     unsigned nextId=1, program=0, buffer=0, vao=0, framebuffer=0, readFramebuffer=0, renderbuffer=0, activeTexture=0;
     unsigned width=0,height=0;
-    std::array<unsigned,4> boundTextures{};
+    std::array<unsigned,4 + DrawPaletteSize> boundTextures{}, boundSamplers{};
+    std::unordered_map<unsigned,Texture> samplers;
     std::unordered_map<unsigned,std::vector<uint8_t>> buffers;
     std::unordered_map<unsigned,std::array<Attribute,16>> arrays;
     std::unordered_map<unsigned,Texture> textures;
@@ -125,6 +170,15 @@ private:
     float clearDepth=1;
     GLint uniformCounter=0;
     Draw drawState() const;
+    Texture sampling(unsigned unit) const;
+    void packPalette(Draw& draw, const Program& program) const;
+    void BindDrawPalette(GLuint stateBuffer);
+    void GenSamplers(GLsizei count, GLuint* ids);
+    void DeleteSamplers(GLsizei count, const GLuint* ids);
+    void BindSampler(GLuint unit, GLuint id);
+    void SamplerParameteri(GLuint id, GLenum name, GLint value);
+    void SamplerParameterf(GLuint id, GLenum name, GLfloat value);
+    void Uniform1iv(GLint location, GLsizei count, const GLint* values);
     void flushDraw();
     void queueDraw(Draw draw);
     Uniforms uniforms(const Program& p) const;

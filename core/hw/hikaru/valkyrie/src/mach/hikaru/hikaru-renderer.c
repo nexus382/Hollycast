@@ -1867,14 +1867,14 @@ int hikaru_vendor_test_shader_uniform_cache(void)
 #endif
 
 static void
-viewport_projection (mtx4x4f_t projection, const hikaru_viewport_t *vp)
+viewport_projection (mtx4x4f_t projection, const hikaru_viewport_t *vp, float horizontal_scale)
 {
 	/* Offset relative to the clip origin for nonzero clip origins is not yet
 	 * verified; the BIOS and game cases tested use a (0,0) clip origin. */
 	const float w = vp->clip.r - vp->clip.l, h = vp->clip.t - vp->clip.b;
 	const float scale = vp->clip.n / vp->clip.f;
 	const float hh = (h / 2.0f) * scale;
-	const float hw = hh * (w / h);
+	const float hw = hh * (w / h) * horizontal_scale;
 	const float dx = (vp->offset.x - w / 2.0f) * scale;
 	const float dy = (vp->offset.y - h / 2.0f) * scale;
 	vk_renderer_frustum (projection,
@@ -1888,14 +1888,14 @@ int hikaru_vendor_test_viewport_origin(void)
 	hikaru_viewport_t vp = {0};
 	mtx4x4f_t p;
 	vp.clip.r = 640; vp.clip.t = 480; vp.clip.f = 1280; vp.clip.n = 0.1f;
-	viewport_projection (p, &vp);
+	viewport_projection (p, &vp, 1.0f);
 	/* A guest point on the optical axis maps to the top-left origin. */
 	float x = (1.0f - p[2][0]) * 320.0f;
 	float y = (1.0f + p[2][1]) * 240.0f;
 	if (fabsf(x) > 0.01f || fabsf(y) > 0.01f) return 0;
 	/* A centred origin preserves the existing centred gameplay projection. */
 	vp.offset.x = 320; vp.offset.y = 240;
-	viewport_projection (p, &vp);
+	viewport_projection (p, &vp, 1.0f);
 	return fabsf(p[2][0]) < 0.0001f && fabsf(p[2][1]) < 0.0001f;
 }
 #endif
@@ -1927,9 +1927,15 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	hikaru_viewport_t *vp = &hr->vp_list[mesh->vp_index];
 	const float sx = hr->base.internal_width / 640.0f;
 	const float sy = hr->base.internal_height / 480.0f;
-	const GLint left = (GLint) lroundf(vp->clip.l * sx);
+	/* Expand full-width scene views. Inset views retain their native-sized,
+	 * centred rectangle instead of widening instruments or split panels. */
+	const bool full_width = vp->clip.l == 0.0f && vp->clip.r == 640.0f;
+	const float viewport_sx = full_width ? sx : MIN2(sx, sy);
+	const float offset_x = (hr->base.internal_width - 640.0f * viewport_sx) * 0.5f;
+	const float horizontal_scale = full_width ? MAX2(1.0f, sx / sy) : 1.0f;
+	const GLint left = (GLint) lroundf(offset_x + vp->clip.l * viewport_sx);
 	const GLint bottom = (GLint) lroundf(vp->clip.b * sy);
-	const GLint right = (GLint) lroundf(vp->clip.r * sx);
+	const GLint right = (GLint) lroundf(offset_x + vp->clip.r * viewport_sx);
 	const GLint top = (GLint) lroundf(vp->clip.t * sy);
 	const GLint rectangle[4] = {left, bottom, right - left, top - bottom};
 	/* Sorted replay owns context state between its draws. Other passes can
@@ -1952,8 +1958,10 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		memcpy(cache->depth, depth, sizeof(depth));
 		cache->depth_valid = true;
 	}
-	if (cache->viewport_valid && cache->alpha_ref == hr->pass_alpha_ref &&
+	if (cache->viewport_valid && cache->viewport_horizontal_scale == horizontal_scale &&
+	    cache->alpha_ref == hr->pass_alpha_ref &&
 	    !memcmp(&cache->viewport, vp, sizeof(*vp))) return;
+	cache->viewport_horizontal_scale = horizontal_scale;
 	cache->viewport = *vp;
 	cache->alpha_ref = hr->pass_alpha_ref;
 	cache->viewport_valid = true;
@@ -1995,7 +2003,7 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	     get_viewport_str (vp), w, h, dcx, dcy);
 
 	/* Guest offsets specify the projection centre in top-left coordinates. */
-	viewport_projection (projection, vp);
+	viewport_projection (projection, vp, horizontal_scale);
 
 	glUniformMatrix4fv (hr->meshes.locs.u_projection, 1, GL_FALSE,
 	                    (const GLfloat *) projection);
@@ -3720,17 +3728,17 @@ triangle_texture_conflict(const hikaru_renderer_t *hr,
 	return false;
 }
 
-static int hikaru_texture_palette_support = -1;
 static bool
 texture_palette_supported(void)
 {
-	if (hikaru_texture_palette_support < 0) {
-		GLint units = 0;
-		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &units);
-		hikaru_texture_palette_support =
-			!vk_renderer_is_gles() && units >= 4 + HIKARU_DRAW_PALETTE_SIZE ? 1 : 0;
-	}
-	return hikaru_texture_palette_support != 0;
+	/* The active API may change without restarting the emulated machine.
+	 * Do not retain another GL context's sampler limit or GLES decision. */
+	const GLint native = hikaru_graphics_native_texture_palette();
+	if (native >= 0) return native != 0;
+	if (vk_renderer_is_gles()) return false;
+	GLint units = 0;
+	glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &units);
+	return units >= 4 + HIKARU_DRAW_PALETTE_SIZE;
 }
 #ifdef HIKARU_VENDOR_TESTING
 static _Thread_local bool separate_triangle_meshes;
@@ -4073,7 +4081,11 @@ draw_sorted_translucent_triangles(hikaru_renderer_t *hr, unsigned vpi,
 	hr->triangle_replay.program = 0;
 	hr->triangle_replay.matrix_usage = 0;
 	hr->triangle_replay.palette_enabled = false;
-	for (unsigned unit = 0; unit < HIKARU_DRAW_PALETTE_SIZE; ++unit) glBindSampler(4 + unit, 0);
+	/* Only the GL texture palette binds these sampler units. Native backends
+	 * have no GL entry points and must not enter its cleanup path. */
+	if (texture_palette)
+		for (unsigned unit = 0; unit < HIKARU_DRAW_PALETTE_SIZE; ++unit)
+			glBindSampler(4 + unit, 0);
 	hr->triangle_replay.texture_palette_enabled = false;
 	hr->triangle_replay.shading_palette_enabled = false;
 	hr->triangle_replay.mesh = NULL;
@@ -5490,27 +5502,31 @@ static const char *fb_fs_source =
 "uniform float u_mult_2;							\n"
 "uniform int u_invert_f;							\n"
 "uniform int u_invert_b;							\n"
+"uniform float u_layer_x_scale;\n"
 "										\n"
 "in vec2 p_texcoords;								\n"
 "										\n"
 "void main (void) {								\n"
-"	vec2 p_texcoords_inv = vec2 (p_texcoords.s, 1.0 - p_texcoords.t);		\n"
+/* Screen stretching belongs to the final output rectangle. Bitmap planes use
+ * native pixel proportions, including their opaque/key-disabled coverage. */
+"\tvec2 layer_uv = vec2((p_texcoords.x - 0.5) / u_layer_x_scale + 0.5, 1.0 - p_texcoords.y);\n"
+"\tfloat layer_visible = step(0.0, layer_uv.x) * step(layer_uv.x, 1.0);\n"
 "	vec4 texel_f, texel_b;							\n"
 "										\n"
 "	if (u_invert_f == 0)							\n"
 "		texel_f = texture (u_front, p_texcoords);			\n"
 "	else									\n"
-"		texel_f = texture (u_front, p_texcoords_inv);			\n"
+"		texel_f = texture (u_front, layer_uv) * layer_visible;			\n"
 "	texel_f = texel_f * u_mult_f;						\n"
 "										\n"
 "	if (u_invert_b == 0)							\n"
 "		texel_b = texture (u_back,  p_texcoords);			\n"
 "	else									\n"
-"		texel_b = texture (u_back,  p_texcoords_inv);			\n"
+"		texel_b = texture (u_back,  layer_uv) * layer_visible;			\n"
 "	texel_b = texel_b * u_mult_b;						\n"
 "										\n"
-"	vec4 texel_1 = texture (u_layer1, p_texcoords_inv);			\n"
-"	vec4 texel_2 = texture (u_layer2, p_texcoords_inv);			\n"
+"	vec4 texel_1 = texture (u_layer1, layer_uv);			\n"
+"	vec4 texel_2 = texture (u_layer2, layer_uv);			\n"
 "										\n"
 /* Bitmap alpha is a coverage key, including the value 1 in Planet Harriers'
  * two-bit alpha. Adding 10-bit pixels lets the 3D show through solid HUD art.
@@ -5518,8 +5534,8 @@ static const char *fb_fs_source =
  * unit 38 chooses that side and unit 3C enables each layer's alpha key. */
 "\tvec4 scene = mix (texel_f, texel_b, u_factor);\n"
 "\tvec4 color = vec4 (0.0);\n"
-"\tfloat cover_1 = u_keyed_1 != 0 ? step (0.1, texel_1.a) : 1.0;\n"
-"\tfloat cover_2 = u_keyed_2 != 0 ? step (0.1, texel_2.a) : 1.0;\n"
+"\tfloat cover_1 = layer_visible * (u_keyed_1 != 0 ? step (0.1, texel_1.a) : 1.0);\n"
+"\tfloat cover_2 = layer_visible * (u_keyed_2 != 0 ? step (0.1, texel_2.a) : 1.0);\n"
 "\tbool combined = (u_mult_1 != 0.0 && u_direct_1 == 0) || (u_mult_2 != 0.0 && u_direct_2 == 0);\n"
 "\tif (u_mult_2 != 0.0 && u_direct_2 == 0)\n"
 "\t\tcolor = mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), cover_2);\n"
@@ -5580,6 +5596,8 @@ build_fb_state (hikaru_renderer_t *hr)
 		get_uniform_loc (hr->framebuffer.program, "u_invert_f");
 	hr->framebuffer.locs.u_invert_b =
 		get_uniform_loc (hr->framebuffer.program, "u_invert_b");
+	hr->framebuffer.locs.u_layer_x_scale =
+		get_uniform_loc (hr->framebuffer.program, "u_layer_x_scale");
 
 	/* Scene depth is sampleable for exact per-pixel transparency peeling. */
 	glGenFramebuffers (NUM_FRAMEBUFFERS, hr->framebuffer.fb);
@@ -5948,6 +5966,8 @@ composite_framebuffers (hikaru_renderer_t *hr, GLuint n1, GLuint n2,
 	glUniform1i(hr->framebuffer.locs.u_keyed_2, !!(REG1AUNIT(0, 0x3C) & 4));
 	glUniform1i(hr->framebuffer.locs.u_invert_f, n1 >= 2);
 	glUniform1i(hr->framebuffer.locs.u_invert_b, n2 >= 2);
+	glUniform1f(hr->framebuffer.locs.u_layer_x_scale,
+	    MIN2(1.0f, (hr->base.internal_height * 4.0f) / (hr->base.internal_width * 3.0f)));
 	VK_ASSERT_NO_GL_ERROR ();
 
 	glBindVertexArray (hr->framebuffer.vao);
@@ -6006,18 +6026,21 @@ draw (hikaru_renderer_t *hr)
 	VK_ASSERT_NO_GL_ERROR ();
 
 	glBindFramebuffer (GL_FRAMEBUFFER, hr->base.target_fbo);
-	/* The board's final image is 640x480. Preserve its 4:3 aspect ratio
-	 * on resized and high-DPI host drawables, clearing the unused bars. */
+	/* Preserve the selected output aspect ratio on resized and high-DPI host
+	 * drawables, clearing the unused bars. */
 	const unsigned output_width = hr->base.width;
 	const unsigned output_height = hr->base.height;
+	const float output_aspect_ratio = hr->base.output_aspect_ratio;
 	unsigned view_width, view_height;
-	if ((uint64_t) output_width * 3 <= (uint64_t) output_height * 4) {
-		view_width = output_width;
-		view_height = (unsigned) ((uint64_t) output_width * 3 / 4);
-	} else {
+	if ((double) output_width > (double) output_height * output_aspect_ratio) {
 		view_height = output_height;
-		view_width = (unsigned) ((uint64_t) output_height * 4 / 3);
+		view_width = (unsigned) lroundf(output_height * output_aspect_ratio);
+	} else {
+		view_width = output_width;
+		view_height = (unsigned) lroundf(output_width / output_aspect_ratio);
 	}
+	if (view_width > output_width) view_width = output_width;
+	if (view_height > output_height) view_height = output_height;
 	glDisable (GL_SCISSOR_TEST);
 	glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	glClearColor (0.0f, 0.0f, 0.0f, 1.0f);
@@ -6650,6 +6673,117 @@ cleanup:
 	}
 	free(gpu);
 	return ok;
+}
+
+/* Real projected squares beyond the native view must become visible in a
+ * wider target. Both a central 3D square and a bitmap HUD square must retain
+ * equal width/height, including after returning to 4:3 with cached programs. */
+int hikaru_vendor_test_widescreen_pixels(void)
+{
+    hikaru_renderer_t *hr = calloc(1, sizeof(*hr));
+    hikaru_gpu_t *gpu = calloc(1, sizeof(*gpu));
+    uint8_t *bitmap = calloc(640 * 480, 4);
+    GLuint layer = 0, target = 0, fbo = 0;
+    int ok = 0;
+    if (!hr || !gpu || !bitmap) goto cleanup;
+    hr->gpu = gpu;
+    hr->base.internal_width = 64; hr->base.internal_height = 48;
+    hr->debug.flags[HR_DEBUG_SELECT_POLYTYPE] = -1;
+    hr->meshes.variant.full = ~UINT64_C(0);
+    hr->transparency_sorting = HIKARU_TRANSPARENCY_PER_TRIANGLE;
+    if (build_fb_state(hr) || build_3d_state(hr)) goto cleanup;
+    hr->num_vps = hr->num_mvs = hr->num_mats = hr->num_texs = hr->num_lss = 1;
+    memset(hr->vp_list, 0, sizeof(*hr->vp_list));
+    hr->vp_list[0].clip.r = 640; hr->vp_list[0].clip.t = 480;
+    hr->vp_list[0].clip.n = 0.1f; hr->vp_list[0].clip.f = 1280;
+    hr->vp_list[0].offset.x = 320; hr->vp_list[0].offset.y = 240;
+    memset(hr->mv_list, 0, sizeof(*hr->mv_list));
+    for (unsigned i = 0; i < 4; ++i) hr->mv_list[0].mtx[i][i] = 1;
+    memset(hr->mat_list, 0, sizeof(*hr->mat_list));
+    memset(hr->tex_list, 0, sizeof(*hr->tex_list));
+    memset(hr->ls_list, 0, sizeof(*hr->ls_list));
+    hr->ls_list[0].mask = 15;
+    gpu->fb_config.clear[3] = 255;
+    static const uint8_t colors[4][3] = {{255,0,0},{0,255,0},{0,0,255},{255,0,255}};
+    static const float centers[3] = {-380,380,0};
+    static const float corners[6][2] = {{-20,-20},{20,-20},{-20,20},{-20,20},{20,-20},{20,20}};
+    hr->num_meshes[0][HIKARU_POLYTYPE_OPAQUE] = 3;
+    for (unsigned i = 0; i < 3; ++i) {
+        hikaru_mesh_t *mesh = &hr->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][i];
+        memset(mesh, 0, sizeof(*mesh));
+        mesh->cpu_vertices = calloc(6, sizeof(*mesh->cpu_vertices));
+        if (!mesh->cpu_vertices) goto cleanup;
+        mesh->num_tris = 2; mesh->num_instances = 1;
+        mesh->alternate_mv_index = ~0u; mesh->num = i;
+        for (unsigned v = 0; v < 6; ++v) {
+            mesh->cpu_vertices[v].position[0] = centers[i] + corners[v][0];
+            mesh->cpu_vertices[v].position[1] = corners[v][1];
+            mesh->cpu_vertices[v].position[2] = -1280;
+            memcpy(mesh->cpu_vertices[v].diffuse, colors[i], 3);
+            mesh->cpu_vertices[v].alpha = 255;
+        }
+    }
+    for (unsigned y = 220; y < 260; ++y) for (unsigned x = 400; x < 440; ++x) {
+        memcpy(bitmap + (y * 640 + x) * 4, colors[3], 3);
+        bitmap[(y * 640 + x) * 4 + 3] = 255;
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &layer); glBindTexture(GL_TEXTURE_2D, layer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 640, 480, 0, GL_RGBA, GL_UNSIGNED_BYTE, bitmap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenTextures(1, &target); glBindTexture(GL_TEXTURE_2D, target);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 96, 48, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &fbo); glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) goto cleanup;
+    vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(1);
+    static const unsigned widths[] = {64,86,96,64,96,96};
+    ok = 1;
+    for (unsigned pass = 0; pass < NUMELEM(widths); ++pass) {
+        const unsigned width = widths[pass], padding = (width - 64) / 2;
+        uint8_t pixels[96 * 48 * 4] = {0};
+        unsigned counts[4] = {0}, minx[4] = {96,96,96,96}, miny[4] = {48,48,48,48};
+        unsigned maxx[4] = {0}, maxy[4] = {0};
+        hr->base.internal_width = width;
+        resize_3d_targets(hr);
+        glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+        draw_scene(hr);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, width, 48);
+        glDisable(GL_SCISSOR_TEST); glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND);
+        REG1AUNIT(0, 0x38) = 1;
+        REG1AUNIT(0, 0x3c) = pass == 4 ? 0 : 2;
+        composite_framebuffers(hr, pass == 5 ? 2 : 0, 0, layer, 0, 1, 0, 0);
+        glReadPixels(0, 0, width, 48, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        for (unsigned y = 0; y < 48; ++y) for (unsigned x = 0; x < width; ++x)
+            for (unsigned c = 0; c < 4; ++c) if (!memcmp(pixels + (y * width + x) * 4, colors[c], 3)) {
+                ++counts[c]; minx[c] = MIN2(minx[c], x); miny[c] = MIN2(miny[c], y);
+                maxx[c] = MAX2(maxx[c], x); maxy[c] = MAX2(maxy[c], y);
+            }
+        for (unsigned c = 0; c < 4; ++c) {
+            unsigned expected = c < 2 ? (width > 64 && pass != 5 ? 16 : 0)
+                : c == 2 && pass >= 4 ? 0 : 16;
+            if (counts[c] != expected || (expected && (maxx[c] - minx[c] != 3 || maxy[c] - miny[c] != 3))) {
+                fprintf(stderr, "widescreen pass %u color %u: count %u expected %u, bounds %u,%u-%u,%u\n",
+                    pass, c, counts[c], expected, minx[c], miny[c], maxx[c], maxy[c]);
+                ok = 0;
+            }
+        }
+        if (counts[3] && minx[3] != padding + 40) ok = 0;
+        if (counts[2] && minx[2] != padding + 30) ok = 0;
+        ok &= glGetError() == GL_NO_ERROR;
+    }
+cleanup:
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &target); glDeleteTextures(1, &layer);
+    if (hr) {
+        if (hr->mesh_list[0][0]) destroy_3d_state(hr);
+        if (hr->framebuffer.program || hr->framebuffer.fb[0]) destroy_fb_state(hr);
+        free(hr);
+    }
+    free(bitmap); free(gpu);
+    return ok;
 }
 
 /* Real draw_scene tests: both family targets, resolve, cutout/pattern tests,
@@ -7674,6 +7808,7 @@ hikaru_renderer_new (vk_machine_t *mach, vk_buffer_t *fb, vk_buffer_t *texram[2]
 
 	hr->base.width = 640;
 	hr->base.height = 480;
+	hr->base.output_aspect_ratio = 4.0f / 3.0f;
 	hr->base.internal_width = 640;
 	hr->base.internal_height = 480;
 	hr->transparency_peel_capacity = HIKARU_MAX_PEEL_LAYERS;
