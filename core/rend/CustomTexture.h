@@ -1,5 +1,6 @@
 /*
 	 Copyright 2018 flyinghead
+	 Portions Copyright 2026 The Hollycast Authors
  
 	 This file is part of reicast.
  
@@ -19,6 +20,7 @@
 #pragma once
 #include "texconv.h"
 #include "custom_texture/CustomTextureTypes.h"
+#include "custom_texture/TextureAtlas.h"
 #include "util/tsqueue.h"
 #include "types.h"
 #include <string>
@@ -31,10 +33,13 @@
 #include <deque>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 class BaseTextureCacheData;
 struct Renderer;
 class WorkerThread;
+struct rend_context;
+struct RenderPass;
 namespace config
 {
 enum class CustomTexturePreloadMode : int;
@@ -52,6 +57,7 @@ public:
 		Upload,
 		AllocationFailed,
 		DirectX9CompressedSource,
+		AtlasMapping,
 	};
 
 	CustomTextureException(Error error, const std::string& message)
@@ -112,6 +118,7 @@ public:
 	void invalidateGpuPreloads();
 	CustomTextureCapabilities getCapabilities() const;
 	void dumpTexture(BaseTextureCacheData* texture, int w, int h, void *srcBuffer);
+	void dumpTextureRegions(const rend_context& context, const RenderPass& previousPass, const RenderPass& pass);
 	void refresh();
 	void terminate();
 	void getPreloadProgress(int& completed, int& total, size_t& loadedSize) const;
@@ -144,6 +151,8 @@ private:
 	std::string getGameId() const;
 	void startSession(const std::string& gameId);
 	void clearSessionResources();
+	void setDumpDirectory(const std::string& directory);
+	void rememberDumpedTexture(u32 hash, int width, int height);
 	void prepareSource(BaseCustomTextureSource* source, bool shouldPreload);
 	void submitGpuPreload(u32 hash, PreparedCustomTexture::Ptr texture);
 	bool consumeGpuCleanupOperations();
@@ -153,6 +162,14 @@ private:
 	State state = State::Stopped;
 	std::string sessionGameId;
 	bool sessionCustomTextures = false;
+	bool sessionSplitTextureSheets = false;
+	std::string dumpDirectory;
+	bool dumpMappingLoaded = false;
+	bool dumpAtlasFailed = false;
+	std::unordered_set<u32> extractedSheets;
+	std::unordered_map<u32, std::pair<int, int>> dumpedTextureSizes;
+	std::unordered_map<u32, texture_atlas::RegionDetector> atlasDetectors;
+	std::vector<texture_atlas::Sheet> dumpedSheets;
 	config::CustomTexturePreloadMode sessionPreloadMode {};
 	std::vector<std::unique_ptr<BaseCustomTextureSource>> sources;
 	std::unique_ptr<WorkerThread> loaderThread;

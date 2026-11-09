@@ -69,6 +69,8 @@ Option<int> PreloadCustomTextures(CORE_OPTION_NAME "_preload_custom_textures");
 Option<bool> DumpTextures(CORE_OPTION_NAME "_dump_textures");
 Option<bool> DumpUniqueTextures(CORE_OPTION_NAME "_dump_unique_textures");
 Option<bool> DumpReplacedTextures(CORE_OPTION_NAME "_dump_replaced_textures");
+// Sheet extraction/rebuilding is configured by the standalone Advanced settings.
+Option<bool> SplitTextureSheets("");
 Option<int> ScreenStretching("", 100);
 Option<bool> StretchToFill("");
 Option<bool> Fog(CORE_OPTION_NAME "_fog", true);
