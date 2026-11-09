@@ -61,7 +61,7 @@ struct GameMedia
 	bool arcade = false;	// Arcade game (naomi, atomiswave, system sp, ...)
 	bool device = false;	// Corresponds to a physical cdrom device
 	std::string system = "Dreamcast";	// Hardware the game runs on
-	size_t size = 0;		// File size, if available from the storage backend
+	size_t size = 0;		// ROM size, including referenced GDI/CUE tracks when available
 };
 
 // The arcade board a known ROM set runs on; follows naomi_cart_GetPlatform.

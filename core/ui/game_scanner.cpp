@@ -27,6 +27,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 static bool operator<(const GameMedia &left, const GameMedia &right)
 {
@@ -296,14 +299,76 @@ GameMedia makeGameMedia(const std::string& name, const std::string& path, const 
 
 } // namespace
 
-static size_t getFileSize(const hostfs::FileInfo& item)
+static size_t getMediaSize(const hostfs::FileInfo& item)
 {
-	if (item.size != 0)
-		return item.size;
+	size_t size = item.size;
 	try {
-		return hostfs::storage().getFileInfo(item.path).size;
+		if (size == 0)
+			size = hostfs::storage().getFileInfo(item.path).size;
+		const std::string extension = get_file_extension(item.name);
+		if (extension != "gdi" && extension != "cue")
+			return size;
+
+		// Only read the small descriptor; track contents are never loaded during a scan.
+		std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(item.path, "rb"));
+		if (file == nullptr)
+			return size;
+		char data[64_KB];
+		const size_t length = file->read(data, 1, sizeof(data));
+		if (length == sizeof(data) || file->error())
+			return size;
+		std::istringstream descriptor(std::string(data, length));
+		descriptor.imbue(std::locale::classic());
+		std::unordered_set<std::string> trackFiles;
+		if (extension == "gdi")
+		{
+			u32 trackCount;
+			if (!(descriptor >> trackCount) || trackCount < 3 || trackCount > 99)
+				return size;
+			for (u32 i = 0; i < trackCount; ++i)
+			{
+				u32 track, fad, control, sectorSize;
+				s32 offset;
+				std::string name;
+				// GDI/CUE filenames do not escape backslashes inside quotes.
+				if (!(descriptor >> track >> fad >> control >> sectorSize
+						>> std::quoted(name, '"', '\0') >> offset) || name.empty())
+					return size;
+				trackFiles.insert(name);
+			}
+		}
+		else
+		{
+			std::string line;
+			while (std::getline(descriptor, line))
+			{
+				std::istringstream entry(line);
+				entry.imbue(std::locale::classic());
+				std::string token;
+				entry >> token;
+				if (token != "FILE")
+					continue;
+				std::string name, type;
+				if (!(entry >> std::quoted(name, '"', '\0') >> type) || name.empty() || type != "BINARY")
+					return size;
+				trackFiles.insert(name);
+			}
+		}
+
+		// Several tracks may share one BIN; count each referenced file only once.
+		const std::string parent = hostfs::storage().getParentPath(item.path);
+		size_t totalSize = size;
+		for (const std::string& name : trackFiles)
+		{
+			const hostfs::FileInfo track = hostfs::storage().getFileInfo(hostfs::storage().getSubPath(parent, name));
+			if (track.isDirectory || track.size > std::numeric_limits<size_t>::max() - totalSize)
+				return size;
+			totalSize += track.size;
+		}
+		return totalSize;
 	} catch (const hostfs::StorageException&) {
-		return 0;
+		// Keep the descriptor size when a track is missing or inaccessible.
+		return size;
 	}
 }
 
@@ -352,7 +417,7 @@ void GameScanner::add_game_directory(const std::string& path, bool hideLegacy, s
 				continue;
 			gameName = it->second->description;
 			fileName = fileName + " (" + gameName + ")";
-			GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
+			GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getMediaSize(item));
 			game.system = arcadeSystemName(*it->second);
 			result.push_back(std::move(game));
 			continue;
@@ -361,7 +426,7 @@ void GameScanner::add_game_directory(const std::string& path, bool hideLegacy, s
 		{
 			if (!hideLegacy)
 			{
-				GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
+				GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getMediaSize(item));
 				game.system = "Naomi"; // Legacy ROM files always load as Naomi.
 				result.push_back(std::move(game));
 			}
@@ -377,7 +442,7 @@ void GameScanner::add_game_directory(const std::string& path, bool hideLegacy, s
 		}
 		else if (extension != "cdi" && extension != "cue")
 			continue;
-		GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, false, false, getFileSize(item));
+		GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, false, false, getMediaSize(item));
 		result.push_back(std::move(game));
 	}
 }
