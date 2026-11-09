@@ -17,7 +17,9 @@
  */
 #include <cstdio>
 #include <cstdarg>
+#include <cstdlib>
 #include <math.h>
+#include <compat/msvc.h>
 #include "types.h"
 #ifndef _WIN32
 #include <sys/time.h>
@@ -3722,9 +3724,10 @@ void fatal_error(const char* text, ...)
 [[noreturn]] void os_DebugBreak()
 {
 	ERROR_LOG(COMMON, "DEBUGBREAK!");
-	//exit(-1);
 #ifdef __SWITCH__
 	svcExitProcess();
+#elif defined(_MSC_VER)
+	std::abort();
 #else
 	__builtin_trap();
 #endif

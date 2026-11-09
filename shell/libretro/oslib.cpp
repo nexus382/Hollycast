@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -18,6 +19,8 @@
  */
 #include "oslib/oslib.h"
 #include "stdclass.h"
+#include <compat/msvc.h>
+#include <cstring>
 #include "file/file_path.h"
 #include "oslib/i18n.h"
 #ifndef _WIN32
@@ -33,6 +36,14 @@ extern char g_roms_dir[PATH_MAX];
 extern unsigned per_content_vmus;
 extern std::string arcadeFlashPath;
 extern retro_environment_t environ_cb;
+
+#ifdef _MSC_VER
+// libretro-common's POSIX string header expects this name for the MSVC CRT adapter.
+extern "C" char *retro_strdup__(const char *str)
+{
+	return _strdup(str);
+}
+#endif
 
 namespace hostfs
 {
