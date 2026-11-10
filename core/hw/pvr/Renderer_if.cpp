@@ -2,6 +2,7 @@
 	Portions Copyright 2026 The Hollycast Authors
 */
 #include "Renderer_if.h"
+#include "pvr_message_queue.h"
 #include "spg.h"
 #include "rend/CustomTexture.h"
 #include "rend/texconv.h"
@@ -22,8 +23,6 @@
 
 #include <cstdint>
 #include <cassert>
-#include <mutex>
-#include <deque>
 
 #ifdef LIBRETRO
 void retro_rend_present();
@@ -47,83 +46,22 @@ static bool rendererEnabled = true;
 static bool presented;
 static u32 fbAddrHistory[2] { 1, 1 };
 
-class PvrMessageQueue
+class PvrMessageExecutor : public PvrMessageQueue
 {
-	using lock_guard = std::lock_guard<std::mutex>;
-
 public:
-	enum MessageType { NoMessage = -1, Render, RenderFramebuffer, Present, Stop };
-	struct Message
-	{
-		Message() = default;
-		Message(MessageType type, FramebufferInfo config)
-			: type(type), config(config) {}
-
-		MessageType type = NoMessage;
-		FramebufferInfo config;
-	};
-
 	void enqueue(MessageType type, FramebufferInfo config = FramebufferInfo())
 	{
-		Message msg { type, config };
 		if (config::ThreadedRendering)
-		{
-			// FIXME need some synchronization to avoid blinking in densha de go
-			// or use !threaded rendering for emufb?
-			// or read framebuffer vram on emu thread
-			bool dupe;
-			do {
-				dupe = false;
-				{
-					const lock_guard lock(mutex);
-					for (const auto& m : queue)
-						if (m.type == type) {
-							dupe = true;
-							break;
-						}
-					if (!dupe || type == Present) {
-						// Bound the queue to keep the emu-thread producer and
-						// the renderer-thread consumer from drifting apart.
-						// Render/RenderFramebuffer/Stop are already deduplicated
-						// above, but Present is intentionally allowed to repeat
-						// and can stack up indefinitely if the consumer stalls
-						// (notably under libretro frontends, which drive the
-						// swap from their own video callback). Unbounded growth
-						// here is the producer side of progressive audio/video
-						// drift in long sessions: the SH4 keeps running ahead
-						// while pending Presents pile up. Drop the oldest
-						// pending Present to keep latency bounded.
-						constexpr size_t MAX_QUEUE_DEPTH = 4;
-						if (queue.size() >= MAX_QUEUE_DEPTH)
-						{
-							for (auto it = queue.begin(); it != queue.end(); ++it)
-							{
-								if (it->type == Present)
-								{
-									queue.erase(it);
-									break;
-								}
-							}
-						}
-						queue.push_back(msg);
-						dupe = false;
-					}
-				}
-				if (dupe)
-				{
-					if (type == Stop)
-						return;
-					dequeueEvent.Wait();
-				}
-			} while (dupe);
-			enqueueEvent.Set();
-		}
+			// Framebuffer VRAM is still read on the renderer thread; queue
+			// synchronization alone does not snapshot direct framebuffer writes.
+			PvrMessageQueue::enqueue(type, config);
 		else
 		{
+			Message msg { type, config };
 			setDefaultRoundingMode();
-			// drain the queue after switching to !threaded rendering
-			while (!queue.empty())
-				waitAndExecute();
+			// Drain pending work in FIFO order when switching out of threading.
+			for (Message pending = dequeue(0); pending.type != NoMessage; pending = dequeue(0))
+				execute(pending);
 			execute(msg);
 			Sh4cntx.restoreHostRoundingMode();
 		}
@@ -134,51 +72,7 @@ public:
 		return execute(dequeue(timeoutMs));
 	}
 
-	void reset() {
-		const lock_guard lock(mutex);
-		queue.clear();
-	}
-
-	void cancelEnqueue()
-	{
-		const lock_guard lock(mutex);
-		for (auto it = queue.begin(); it != queue.end(); )
-		{
-			if (it->type != Render)
-				it = queue.erase(it);
-			else
-				++it;
-		}
-		dequeueEvent.Set();
-	}
 private:
-	Message dequeue(int timeoutMs = -1)
-	{
-		FC_PROFILE_SCOPE;
-
-		Message msg;
-		while (true)
-		{
-			{
-				const lock_guard lock(mutex);
-				if (!queue.empty())
-				{
-					msg = queue.front();
-					queue.pop_front();
-				}
-			}
-			if (msg.type != NoMessage) {
-				dequeueEvent.Set();
-				break;
-			}
-			if (timeoutMs == -1)
-				enqueueEvent.Wait();
-			else if (!enqueueEvent.Wait(timeoutMs))
-				break;
-		}
-		return msg;
-	}
-
 	bool execute(Message msg)
 	{
 	#ifndef LIBRETRO
@@ -333,14 +227,9 @@ private:
 #endif
 		}
 	}
-
-	std::mutex mutex;
-	cResetEvent enqueueEvent;
-	cResetEvent dequeueEvent;
-	std::deque<Message> queue;
 };
 
-static PvrMessageQueue pvrQueue;
+static PvrMessageExecutor pvrQueue;
 
 bool rend_single_frame(const bool& enabled)
 {
