@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -74,7 +75,7 @@ public:
 	};
 
 	IsoFs(Disc *disc);
-	Directory *getRoot();
+	Directory *getRoot(bool *valid = nullptr);
 
 private:
 	Disc *disc;

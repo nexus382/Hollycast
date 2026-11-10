@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 Flyinghead <flyinghead.github@gmail.com>
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -22,6 +23,19 @@
 
 namespace ice
 {
+
+struct STUNConfig
+{
+	std::string stun_host;
+	unsigned stun_port;
+	std::string turn_host;
+	unsigned turn_port;
+	std::string turn_username;
+	std::string turn_password;
+
+	static STUNConfig get();
+};
+
 typedef enum {
 	Offline,
 	Online,
@@ -32,7 +46,7 @@ typedef enum {
 	Playing
 } State;
 
-#ifdef USE_ICE
+#if defined(USE_ICE) && defined(USE_WEBSOCKET)
 
 void init(const std::string& username, bool matchCode = false);
 State getState();

@@ -20,12 +20,16 @@
 #pragma once
 #include "types.h"
 #include "hw/naomi/naomi_roms.h"
+#include <string_view>
 #include <vector>
 #include <mutex>
 #include <memory>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <atomic>
+#include <functional>
+#include <utility>
 
 struct GameListMetadata
 {
@@ -56,8 +60,21 @@ struct GameMedia
 	std::string manualPath;
 	bool arcade = false;	// Arcade game (naomi, atomiswave, system sp, ...)
 	bool device = false;	// Corresponds to a physical cdrom device
+	std::string system = "Dreamcast";	// Hardware the game runs on
 	size_t size = 0;		// ROM size, including referenced GDI/CUE tracks when available
 };
+
+// The arcade board a known ROM set runs on; follows naomi_cart_GetPlatform.
+inline const char* arcadeSystemName(const Game& game)
+{
+	if (game.cart_type == AW)
+		return "Atomiswave";
+	if (game.bios != nullptr && std::string_view(game.bios) == "naomi2")
+		return "Naomi 2";
+	if (game.bios != nullptr && std::string_view(game.bios) == "segasp")
+		return "System SP";
+	return "Naomi";
+}
 
 class GameScanner
 {
@@ -65,19 +82,19 @@ class GameScanner
 	std::mutex mutex;
 	std::mutex threadMutex;
 	std::unique_ptr<std::thread> scan_thread;
-	bool scan_done = false;
-	bool running = false;
+	std::atomic<bool> scan_done{false};
+	std::atomic<bool> running{false};
+	std::atomic<u64> generation{0};
 	std::unordered_map<std::string, const Game*> arcade_games;
 	std::unordered_set<std::string> arcade_gdroms;
+	std::function<std::vector<std::string>()> enumerateDrives;
 	using LockGuard = std::lock_guard<std::mutex>;
 
-	void insert_game(const GameMedia& game);
-	void insert_arcade_game(GameMedia game);
-	void add_game_directory(const std::string& path, const GameListMetadataMap& metadata,
-			const std::unordered_map<std::string, std::string>& manualIndex,
-			const std::string& gamelistPath);
+	void add_game_directory(const std::string& path, bool hideLegacy, std::vector<GameMedia>& result);
 
 public:
+	explicit GameScanner(std::function<std::vector<std::string>()> enumerateDrives = {})
+		: enumerateDrives(std::move(enumerateDrives)) {}
 	~GameScanner()
 	{
 		stop();
@@ -94,6 +111,8 @@ public:
 
 	std::mutex& get_mutex() { return mutex; }
 	const std::vector<GameMedia>& get_game_list() { return game_list; }
-    unsigned int empty_folders_scanned = 0;
-    bool content_path_looks_incorrect = false;
+	u64 get_generation() const { return generation.load(); }
+	bool is_scanning() const { return running.load(); }
+    std::atomic<unsigned int> empty_folders_scanned{0};
+    std::atomic<bool> content_path_looks_incorrect{false};
 };

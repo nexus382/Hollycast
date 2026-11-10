@@ -1,0 +1,95 @@
+Text 0.850000024 0.899999976 0.920000017 1
+TextDisabled 0.550000012 0.600000024 0.649999976 0.699999988
+WindowBg 0.150000006 0.180000007 0.200000003 1
+ChildBg 0.150000006 0.180000007 0.200000003 1
+PopupBg 0.150000006 0.180000007 0.200000003 1
+Border 0.200000003 0.349999994 0.449999988 0.600000024
+BorderShadow 0 0 0 0
+FrameBg 0.200000003 0.280000001 0.330000013 1
+FrameBgHovered 0.25 0.349999994 0.400000006 1
+FrameBgActive 0.300000012 0.449999988 0.5 1
+TitleBg 0.100000001 0.25 0.300000012 1
+TitleBgActive 0.150000006 0.349999994 0.449999988 1
+TitleBgCollapsed 0.100000001 0.25 0.300000012 0.75
+MenuBarBg 0.170000002 0.209999993 0.239999995 1
+ScrollbarBg 0.150000006 0.180000007 0.200000003 1
+ScrollbarGrab 0.25 0.449999988 0.5 1
+ScrollbarGrabHovered 0.300000012 0.550000012 1 1
+ScrollbarGrabActive 0.349999994 0.649999976 1 1
+CheckMark 0.400000006 0.800000012 0.899999976 1
+SliderGrab 0.349999994 0.649999976 0.75 1
+SliderGrabActive 0.449999988 0.75 0.850000024 1
+Button 0.200000003 0.400000006 0.449999988 1
+ButtonHovered 0.25 0.5 0.550000012 1
+ButtonActive 0.300000012 0.600000024 0.649999976 1
+Header 0.200000003 0.349999994 0.449999988 1
+HeaderHovered 0.25 0.400000006 0.5 1
+HeaderActive 0.300000012 0.5 0.600000024 1
+Separator 0.200000003 0.349999994 0.449999988 0.75
+SeparatorHovered 0.100000001 0.400000006 0.75 0.779999971
+SeparatorActive 0.100000001 0.400000006 0.75 1
+ResizeGrip 0.25999999 0.589999974 0.980000019 0.200000003
+ResizeGripHovered 0.25999999 0.589999974 0.980000019 0.670000017
+ResizeGripActive 0.25999999 0.589999974 0.980000019 0.949999988
+InputTextCursor 1 1 1 1
+TabHovered 0.25 0.400000006 0.5 1
+Tab 0.150000006 0.300000012 0.400000006 1
+TabSelected 0.300000012 0.5 0.600000024 1
+TabSelectedOverline 0.25999999 0.589999974 0.980000019 1
+TabDimmed 0.100000001 0.25 0.349999994 1
+TabDimmedSelected 0.200000003 0.349999994 0.449999988 1
+TabDimmedSelectedOverline 0.5 0.5 0.5 0
+PlotLines 0.610000014 0.610000014 0.610000014 1
+PlotLinesHovered 1 0.430000007 0.349999994 1
+PlotHistogram 0.899999976 0.699999988 0 1
+PlotHistogramHovered 1 0.600000024 0 1
+TableHeaderBg 0.150000006 0.300000012 0.400000006 1
+TableBorderStrong 0.200000003 0.349999994 0.449999988 1
+TableBorderLight 0.200000003 0.349999994 0.449999988 0.699999988
+TableRowBg 0.150000006 0.180000007 0.200000003 1
+TableRowBgAlt 0.170000002 0.209999993 0.239999995 1
+TextLink 0.25999999 0.589999974 0.980000019 1
+TextSelectedBg 0.300000012 0.5 0.600000024 0.349999994
+TreeLines 0.430000007 0.430000007 0.5 0.5
+DragDropTarget 1 1 0 0.899999976
+DragDropTargetBg 0 0 0 0
+UnsavedMarker 1 1 1 1
+NavCursor 0.25999999 0.589999974 0.980000019 1
+NavWindowingHighlight 1 1 1 0.699999988
+NavWindowingDimBg 0.800000012 0.800000012 0.800000012 0.200000003
+ModalWindowDimBg 0.800000012 0.800000012 0.800000012 0.349999994
+style.Alpha 1
+style.DisabledAlpha 0.600000024
+style.WindowRounding 0
+style.WindowBorderSize 1
+style.ChildRounding 0
+style.ChildBorderSize 1
+style.PopupRounding 0
+style.PopupBorderSize 1
+style.FrameRounding 3
+style.FrameBorderSize 0
+style.IndentSpacing 21
+style.ScrollbarSize 14
+style.ScrollbarRounding 9
+style.ScrollbarPadding 2
+style.GrabMinSize 12
+style.GrabRounding 0
+style.TabRounding 5
+style.TabBorderSize 0
+style.TabMinWidthBase 1
+style.TabMinWidthShrink 80
+style.TabBarBorderSize 1
+style.TabBarOverlineSize 1
+style.SeparatorTextBorderSize 3
+style.WindowPadding 8 8
+style.WindowMinSize 32 32
+style.WindowTitleAlign 0 0.5
+style.FramePadding 4 3
+style.ItemSpacing 8 8
+style.ItemInnerSpacing 4 6
+style.CellPadding 4 2
+style.TouchExtraPadding 0 0
+style.ButtonTextAlign 0.5 0.5
+style.SelectableTextAlign 0 0
+style.SeparatorTextAlign 0 0.5
+style.SeparatorTextPadding 20 3

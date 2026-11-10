@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "imgread/common.h"
 #include <locale>
@@ -22,6 +23,7 @@ static void verifyDisk(Disc *disk)
 
 TEST_F(CueTest, LoadD)
 {
+	struct RestoreLocale { std::locale original = std::locale(); ~RestoreLocale() { std::locale::global(original); } } restoreLocale;
 	std::locale::global(std::locale("fr_FR.UTF-8"));
 	Disc *disk = OpenDisc(FLYCAST_TEST_FILES "/test_cues/d/cs.cue");
 	verifyDisk(disk);

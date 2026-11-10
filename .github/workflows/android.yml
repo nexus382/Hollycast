@@ -4,8 +4,9 @@ name: Android
 
 on:
   push:
-    branches-ignore:
-      - 'l10n_**'
+    branches:
+      - dev
+      - master
   pull_request:
 
 jobs:
@@ -52,6 +53,9 @@ jobs:
         env:
           SENTRY_UPLOAD_URL: ${{ secrets.SENTRY_UPLOAD_URL }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD }}
+          HOLLYCAST_REQUIRE_SCREENSCRAPER: ${{ github.repository == 'nexus382/Hollycast' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
       - uses: actions/upload-artifact@v7
         with:

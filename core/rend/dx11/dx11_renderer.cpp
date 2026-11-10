@@ -27,6 +27,7 @@
 #endif
 #include "rend/sorter.h"
 #include "rend/osd.h"
+#include "rend/sample_filter.h"
 
 #include <memory>
 
@@ -663,6 +664,9 @@ template <u32 Type, bool SortingEnabled>
 void DX11Renderer::setRenderState(const PolyParam *gp)
 {
 	PixelPolyConstants constants;
+	const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+			? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
+
 	if (gp->pcw.Texture && gp->tsp.FilterMode > 1 && Type != ListType_Punch_Through && gp->tcw.MipMapped == 1)
 	{
 		constants.trilinearAlpha = 0.25f * (gp->tsp.MipMapD & 0x3);
@@ -728,6 +732,8 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 			Type == ListType_Punch_Through,
 			clipmode == TileClipping::Inside,
 			dithering,
+			filter.mode,
+			filter.maxSize,
 			gp->tsp.SrcSelect == 1);
 	deviceContext->PSSetShader(pixelShader, nullptr, 0);
 
@@ -757,8 +763,11 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 	if (texture != nullptr)
 	{
         deviceContext->PSSetShaderResources(0, 1, &texture->textureView.get());
+		const bool reconstruct = filter.appliesTo(texture->sampledWidth());
 		bool linearFiltering;
 		if (gpuPalette != 0)
+			linearFiltering = false;
+		else if (reconstruct)
 			linearFiltering = false;
 		else if (config::TextureFiltering == 0)
 			linearFiltering = gp->tsp.FilterMode != 0;
@@ -766,7 +775,7 @@ void DX11Renderer::setRenderState(const PolyParam *gp)
 			linearFiltering = false;
 		else
 			linearFiltering = true;
-        auto sampler = samplers->getSampler(linearFiltering, gp->tsp.ClampU, gp->tsp.ClampV, gp->tsp.FlipU, gp->tsp.FlipV, Type == ListType_Punch_Through);
+		auto sampler = samplers->getSampler(linearFiltering, gp->tsp.ClampU, gp->tsp.ClampV, gp->tsp.FlipU, gp->tsp.FlipV, Type == ListType_Punch_Through, reconstruct);
         deviceContext->PSSetSamplers(0, 1, &sampler.get());
 	}
 
@@ -862,6 +871,8 @@ void DX11Renderer::drawSorted(int first, int count, bool multipass)
 				false,
 				false,
 				false,
+				0,
+				0,
 				false);
 		deviceContext->PSSetShader(pixelShader, nullptr, 0);
 
@@ -1219,6 +1230,10 @@ void DX11Renderer::readRttRenderTarget(u32 texAddress)
 			DX11Texture* texture = texCache.getRTTexture(texAddress, rendContext->fb_W_CTRL.fb_packmode, wpo2, hpo2);
 
 			texture->texture = rttTexture;
+			// RTT resolution scaling can make the GPU texture wider than its native cache entry.
+			D3D11_TEXTURE2D_DESC desc;
+			rttTexture->GetDesc(&desc);
+			texture->uploadedWidth = desc.Width;
 			rttTexture.reset();
 			rttRenderTarget.reset();
 			texture->textureView.reset();

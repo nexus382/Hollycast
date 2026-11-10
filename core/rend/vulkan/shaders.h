@@ -2,6 +2,7 @@
  *  Created on: Oct 3, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -20,6 +21,7 @@
 */
 #pragma once
 #include "vulkan.h"
+#include "rend/sample_filter.h"
 
 #include <glm/glm.hpp>
 #include <map>
@@ -49,18 +51,22 @@ struct FragmentShaderParams
 	bool clamping;
 	bool trilinear;
 	int palette;
+	int sampleTextureFilter;
+	int maxFilteredTextureSize;
 	bool divPosZ;
 	bool dithering;
 	bool secAccum;
 
 	u32 hash()
 	{
-		return ((u32)alphaTest) | ((u32)insideClipTest << 1) | ((u32)useAlpha << 2)
+		u32 hash = ((u32)alphaTest) | ((u32)insideClipTest << 1) | ((u32)useAlpha << 2)
 			| ((u32)texture << 3) | ((u32)ignoreTexAlpha << 4) | (shaderInstr << 5)
 			| ((u32)offset << 7) | ((u32)fog << 8) | ((u32)gouraud << 10)
 			| ((u32)bumpmap << 11) | ((u32)clamping << 12) | ((u32)trilinear << 13)
 			| ((u32)palette << 14) | ((u32)divPosZ << 16) | ((u32)dithering << 17)
-			| ((u32)secAccum << 18);
+			| ((u32)secAccum << 18)
+			| (sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key() << 19);
+		return hash;
 	}
 };
 

@@ -1,5 +1,6 @@
 /*
 	Copyright 2024 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -25,6 +26,7 @@
 #include "achievements/achievements.h"
 #include "IconsFontAwesome6.h"
 #include "oslib/i18n.h"
+#include "cfg/option.h"
 #include <cmath>
 #include <sstream>
 using namespace i18n;
@@ -134,6 +136,9 @@ void Notification::hideLeaderboard(u32 id)
 
 bool Notification::draw()
 {
+	if (!config::ShowAchievementPopups)
+		return false;
+
 	std::lock_guard<std::mutex> _(mutex);
 	if (type == None)
 		return false;
@@ -299,7 +304,7 @@ void achievementList()
 		std::string str = strprintf(T("You have unlocked %d of %d achievements and %d of %d points."),
 				game.unlockedAchievements, game.totalAchievements, game.points, game.totalPoints);
 		{
-			ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.f));
+			ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 			ImGui::TextWrapped("%s", str.c_str());
 		}
 		if (settings.raHardcoreMode)
@@ -344,7 +349,7 @@ void achievementList()
 			ImGui::PopFont();
 
 			{
-				ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.f));
+				ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 				ImGui::TextWrapped("%s", ach.description.c_str());
 				ImGui::TextWrapped("%s", ach.status.c_str());
 			}

@@ -13,6 +13,7 @@
 #include "ui/gui.h"
 #include "ui/gui_menu.h"
 #include "oslib/oslib.h"
+#include "sdl/sdl.h"
 #include <functional>
 #include <string>
 
@@ -609,30 +610,12 @@ static bool dumpCallback(const char *dump_dir, const char *minidump_id, void *co
     return succeeded;
 }
 #endif
-/*
- * Catch document open requests...this lets us notice files when the app
- *  was launched by double-clicking a document, or when a document was
- *  dragged/dropped on the app's icon. You need to have a
- *  CFBundleDocumentsType section in your Info.plist to get this message,
- *  apparently.
- *
- * Files are added to gArgv, so to the app, they'll look like command line
- *  arguments. Previously, apps launched from the finder had nothing but
- *  an argv[0].
- *
- * This message may be received multiple times to open several docs on launch.
- *
- * This message is ignored once the app's mainline has been called.
- */
+// Queue document opens until the main loop can safely load the game.
 - (BOOL)application:(NSApplication *)theApplication openFile:(NSString *)filename
 {
-	dispatch_async(dispatch_get_main_queue(), ^(){
-		gui_start_game([filename cStringUsingEncoding:NSUTF8StringEncoding]);
-	});
-
-    return TRUE;
+	// AppKit may deliver a document before SDL initializes the video subsystem.
+	return sdl_queue_open_file([filename UTF8String]) ? YES : NO;
 }
-
 
 /* Called when the internal event loop has just started running */
 - (void) applicationDidFinishLaunching: (NSNotification *) note

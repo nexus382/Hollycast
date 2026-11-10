@@ -1,4 +1,5 @@
 // Copyright 2009 Dolphin Emulator Project
+// Portions Copyright 2026 The Hollycast Authors
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
@@ -121,7 +122,7 @@ LogManager::LogManager()
 	m_log[LogTypes::SH4] = {"SH4", "SH4 Modules"};
 
 	// Set up log listeners
-	int verbosity = config::loadInt("log", "Verbosity", LogTypes::LDEBUG);
+	int verbosity = config::loadInt("log", "Verbosity", LogTypes::LINFO);
 
 	// Ensure the verbosity level is valid
 	if (verbosity < 1)

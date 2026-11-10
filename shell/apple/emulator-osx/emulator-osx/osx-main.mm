@@ -354,6 +354,29 @@ void os_VideoRoutingTermVk()
 }
 #endif
 
+#if defined(USE_METAL) && defined(VIDEO_ROUTING)
+static SyphonMetalServer *syphonNativeMetalServer;
+
+void os_VideoRoutingPublishMetalTexture(id<MTLDevice> device, id<MTLTexture> texture,
+                                      id<MTLCommandBuffer> commandBuffer)
+{
+    if (syphonNativeMetalServer == nil) {
+        int boardID = config::loadInt("naomi", "BoardId");
+        NSString *name = [NSString stringWithFormat:(boardID == 0 ? @"Video Content" : @"Video Content - %d"), boardID];
+        syphonNativeMetalServer = [[SyphonMetalServer alloc] initWithName:name device:device options:nil];
+    }
+    [syphonNativeMetalServer publishFrameTexture:texture onCommandBuffer:commandBuffer
+        imageRegion:NSMakeRect(0, 0, texture.width, texture.height) flipped:YES];
+}
+
+void os_VideoRoutingTermMetal()
+{
+    [syphonNativeMetalServer stop];
+    [syphonNativeMetalServer release];
+    syphonNativeMetalServer = nil;
+}
+#endif
+
 namespace hostfs
 {
 

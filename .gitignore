@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 build*/
 !tools/builds/
 !docs/builds/
@@ -15,6 +16,9 @@ out/
 # JetBrains IDES
 .idea/
 cmake-build-*/
+
+# Local agent workspace configuration
+.codex/
 
 # Dependencies from .gitmodules
 core/deps/breakpad/

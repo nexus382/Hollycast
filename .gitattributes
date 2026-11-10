@@ -1,0 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
+# Preserve vendored upstream documentation byte-for-byte, including Markdown spaces.
+themes/art-book-next/UPSTREAM.md whitespace=-blank-at-eol
+themes/iconic/README.md whitespace=-blank-at-eol

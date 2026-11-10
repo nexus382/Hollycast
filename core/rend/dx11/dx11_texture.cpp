@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -28,6 +29,7 @@ struct DX11GpuPreloadedTexture final : GpuPreloadedTexture
 
 	ComPtr<ID3D11Texture2D> texture;
 	ComPtr<ID3D11ShaderResourceView> textureView;
+	u32 uploadedWidth = 0;
 };
 }
 
@@ -129,6 +131,7 @@ void DX11Texture::UploadToGPU(int width, int height, const u8* temp_tex_buffer, 
 	}
 	if (mipmapped && !mipmapsIncluded)
 		DX11Context::Instance()->getDeviceContext()->GenerateMips(textureView);
+	uploadedWidth = static_cast<u32>(width);
 }
 
 #ifndef TARGET_UWP
@@ -151,6 +154,7 @@ bool DX11Texture::Delete()
 
 	textureView.reset();
 	texture.reset();
+	uploadedWidth = 0;
 	return true;
 }
 
@@ -227,6 +231,7 @@ bool DX11Texture::uploadCustomTexture(const PreparedCustomTexture& customTexture
 	}
 	texture = std::move(newTexture);
 	textureView = std::move(newView);
+	uploadedWidth = customTexture.width;
 	return true;
 }
 
@@ -242,6 +247,7 @@ GpuPreloadedTexture::Ptr DX11Texture::createGpuPreloadedTexture(
 					: customTexture.levels.size()));
 	texture->texture = std::move(uploadedTexture.texture);
 	texture->textureView = std::move(uploadedTexture.textureView);
+	texture->uploadedWidth = uploadedTexture.uploadedWidth;
 	return texture;
 }
 
@@ -252,6 +258,7 @@ bool DX11Texture::useGpuPreloadedTexture(const GpuPreloadedTexture::Ptr& texture
 		return false;
 	this->texture = dx11Texture->texture;
 	textureView = dx11Texture->textureView;
+	uploadedWidth = dx11Texture->uploadedWidth;
 	return true;
 }
 

@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include "audio/ui_sound.h"
 #include "mainui.h"
 #include "hw/pvr/Renderer_if.h"
 #include "gui.h"
@@ -28,6 +29,7 @@
 #include "emulator.h"
 #include "rend/CustomTexture.h"
 #include "imgui_driver.h"
+#include "rend/vmu_window.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
 
@@ -38,12 +40,24 @@ static bool mainui_enabled;
 u32 MainFrameCount;
 static bool forceReinit;
 
+static int renderApi(RenderType type)
+{
+	if (isOpenGL(type)) return 0;
+	if (isVulkan(type)) return 1;
+	if (type == RenderType::DirectX9) return 2;
+	if (isMetal(type)) return 4;
+	return 3;
+}
+
 bool mainui_rend_frame()
 {
 	FC_PROFILE_SCOPE;
 
 	os_DoEvents();
 	os_UpdateInputState();
+#if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
+	vmu_window::update(!gui_is_open());
+#endif
 
 	if (gui_is_open())
 	{
@@ -93,6 +107,9 @@ void mainui_init()
 
 void mainui_term()
 {
+#if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
+	vmu_window::shutdown();
+#endif
 	rend_term_renderer();
 }
 
@@ -107,6 +124,7 @@ void mainui_loop(bool forceStart)
 	while (mainui_enabled)
 	{
 		fc_profiler::startThread("main");
+		tickUiSound();
 
 		if (mainui_rend_frame() && imguiDriver != nullptr)
 		{
@@ -122,8 +140,8 @@ void mainui_loop(bool forceStart)
 		if (config::RendererType != currentRenderer || forceReinit)
 		{
 			mainui_term();
-			int prevApi = isOpenGL(currentRenderer) ? 0 : isVulkan(currentRenderer) ? 1 : currentRenderer == RenderType::DirectX9 ? 2 : 3;
-			int newApi = isOpenGL(config::RendererType) ? 0 : isVulkan(config::RendererType) ? 1 : config::RendererType == RenderType::DirectX9 ? 2 : 3;
+			int prevApi = renderApi(currentRenderer);
+			int newApi = renderApi(config::RendererType);
 			if (newApi != prevApi || forceReinit)
 			{
 				try {

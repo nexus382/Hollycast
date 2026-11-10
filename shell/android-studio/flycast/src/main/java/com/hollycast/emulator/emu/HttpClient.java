@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -56,12 +57,15 @@ public class HttpClient {
     }
 
     public int openUrl(String url_string, byte[][] content, String[] reqHeaderNames, String[] reqHeaderValues,
-                       String[][] respHeaderNames, String[][] respHeaderValues)
+                       String[][] respHeaderNames, String[][] respHeaderValues, int timeoutMs)
     {
+        HttpURLConnection conn = null;
         try {
             URL url = new URL(url_string);
-            HttpURLConnection conn = (HttpURLConnection)url.openConnection();
-            conn.setConnectTimeout(30 * 1000); // 30 s
+            conn = (HttpURLConnection)url.openConnection();
+            conn.setConnectTimeout(timeoutMs > 0 ? timeoutMs : 30 * 1000);
+            if (timeoutMs > 0)
+                conn.setReadTimeout(timeoutMs);
             conn.setRequestProperty("User-Agent", userAgent);
             if (reqHeaderNames != null) {
                 for (int i = 0; i < reqHeaderNames.length; i++)
@@ -109,6 +113,9 @@ public class HttpClient {
             Log.e("hollycast", "Security error", e);
         } catch (Throwable t) {
             Log.e("hollycast", "Unknown error", t);
+        } finally {
+            if (conn != null)
+                conn.disconnect();
         }
         return 500;
     }

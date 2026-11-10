@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "types.h"
 #include "stdclass.h"
 #include "oslib/directory.h"
@@ -122,6 +123,13 @@ std::string get_readonly_data_path(const std::string& filename)
 
 	// Not found, so we return the user variant
 	return user_filepath;
+}
+
+std::vector<std::string> get_readonly_data_dirs()
+{
+	std::vector<std::string> paths{user_data_dir};
+	paths.insert(paths.end(), system_data_dirs.begin(), system_data_dirs.end());
+	return paths;
 }
 
 size_t get_last_slash_pos(const std::string& path)
@@ -262,5 +270,17 @@ std::string timeToISO8601(time_t time)
 
 std::string timeToShortDateTimeString(time_t time) {
 	return i18n::formatShortDateTime(time);
+}
+
+MD5Sum& MD5Sum::add(hostfs::File *file)
+{
+	if (file == nullptr)
+		return *this;
+	file->seek(0, SEEK_SET);
+	char buf[4096];
+	size_t len;
+	while ((len = file->read(buf, 1, sizeof(buf))) > 0)
+		MD5_Update(&ctx, buf, (unsigned long)len);
+	return *this;
 }
 

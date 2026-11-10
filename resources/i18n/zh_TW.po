@@ -1,21 +1,22 @@
+# Portions Copyright 2026 The Hollycast Authors
 msgid ""
 msgstr ""
 "Project-Id-Version: flycast\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-01-22 12:49+0100\n"
-"PO-Revision-Date: 2026-09-03 17:16\n"
+"POT-Creation-Date: 2026-10-30 22:46-0400\n"
+"PO-Revision-Date: 2026-10-30 22:46-0400\n"
 "Last-Translator: \n"
+"Language-Team: Chinese Traditional\n"
 "Language: zh_TW\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
-"X-Crowdin-Project: flycast\n"
-"X-Crowdin-Project-ID: 852682\n"
-"X-Crowdin-Language: zh-TW\n"
 "X-Crowdin-File: /dev/resources/i18n/flycast.pot\n"
 "X-Crowdin-File-ID: 13\n"
-"Language-Team: Chinese Traditional\n"
+"X-Crowdin-Language: zh-TW\n"
+"X-Crowdin-Project: flycast\n"
+"X-Crowdin-Project-ID: 852682\n"
 
 #: core/achievements/achievements.cpp:379
 #, c-format
@@ -159,7 +160,7 @@ msgstr "返回"
 
 #: core/sdl/sdl_gamepad.cpp:550
 msgid "Guide"
-msgstr "Guide"
+msgstr "導覽鍵"
 
 #: core/sdl/sdl_gamepad.cpp:551 core/ui/settings_controls.cpp:218
 #: core/ui/settings_controls.cpp:274
@@ -601,7 +602,9 @@ msgid "Graphics API"
 msgstr "圖形 API"
 
 #: core/ui/settings_video.cpp:96
-msgid "MoltenVK: An implementation of Vulkan that runs on Apple's Metal graphics framework"
+msgid ""
+"MoltenVK: An implementation of Vulkan that runs on Apple's Metal graphics "
+"framework"
 msgstr "MoltenVK：在 Apple 的 Metal 圖形框架上執行的 Vulkan 實作"
 
 #: core/ui/settings_video.cpp:116
@@ -613,7 +616,9 @@ msgid "Per Triangle"
 msgstr "逐三角面"
 
 #: core/ui/settings_video.cpp:123
-msgid "Sort transparent polygons per triangle. Fast but may produce graphical glitches"
+msgid ""
+"Sort transparent polygons per triangle. Fast but may produce graphical "
+"glitches"
 msgstr "依每個三角面排序透明多邊形。速度快，但可能產生圖形瑕疵"
 
 #: core/ui/settings_video.cpp:125
@@ -621,7 +626,9 @@ msgid "Per Strip"
 msgstr "逐條帶"
 
 #: core/ui/settings_video.cpp:127
-msgid "Sort transparent polygons per strip. Faster but may produce graphical glitches"
+msgid ""
+"Sort transparent polygons per strip. Faster but may produce graphical "
+"glitches"
 msgstr "依每條條帶排序透明多邊形。速度更快，但可能產生圖形瑕疵"
 
 #: core/ui/settings_video.cpp:131
@@ -649,15 +656,23 @@ msgid "Internal Resolution"
 msgstr "內部解析度"
 
 #: core/ui/settings_video.cpp:203
-msgid "Internal render resolution. Higher is better, but more demanding on the GPU. Values higher than your display resolution (but no more than double your display resolution) can be used for supersampling, which provides high-quality antialiasing without reducing sharpness."
-msgstr "內部渲染解析度。越高越好，但對 GPU 的要求也越高。高於顯示解析度的值（但不超過顯示解析度的兩倍）可用於超採樣，可在不降低銳利度的情況下提供高品質的反鋸齒效果。"
+msgid ""
+"Internal render resolution. Higher is better, but more demanding on the GPU."
+" Values higher than your display resolution (but no more than double your "
+"display resolution) can be used for supersampling, which provides high-"
+"quality antialiasing without reducing sharpness."
+msgstr ""
+"內部渲染解析度。越高越好，但對 GPU "
+"的要求也越高。高於顯示解析度的值（但不超過顯示解析度的兩倍）可用於超採樣，可在不降低銳利度的情況下提供高品質的反鋸齒效果。"
 
 #: core/ui/settings_video.cpp:204
 msgid "Integer Scaling"
 msgstr "整數縮放"
 
 #: core/ui/settings_video.cpp:204
-msgid "Scales the output by the maximum integer multiple allowed by the display resolution."
+msgid ""
+"Scales the output by the maximum integer multiple allowed by the display "
+"resolution."
 msgstr "以顯示解析度所允許的最大整數倍數來縮放輸出。"
 
 #: core/ui/settings_video.cpp:205
@@ -665,7 +680,9 @@ msgid "Linear Interpolation"
 msgstr "線性內插"
 
 #: core/ui/settings_video.cpp:205
-msgid "Scales the output with linear interpolation. Will use nearest neighbor interpolation otherwise. Disable with integer scaling."
+msgid ""
+"Scales the output with linear interpolation. Will use nearest neighbor "
+"interpolation otherwise. Disable with integer scaling."
 msgstr "以線性內插方式縮放輸出。否則將使用最近相鄰內插。請在啟用整數縮放時停用此選項。"
 
 #: core/ui/settings_video.cpp:207
@@ -681,7 +698,9 @@ msgid "Frame Pacing (Experimental)"
 msgstr "影格節奏（實驗性）"
 
 #: core/ui/settings_video.cpp:213
-msgid "Provide the GPU with presentation timing for each frame to replicate original frame pacing."
+msgid ""
+"Provide the GPU with presentation timing for each frame to replicate "
+"original frame pacing."
 msgstr "為每個影格提供 GPU 呈現時間，以複製原始的影格節奏。"
 
 #: core/ui/settings_video.cpp:216
@@ -705,8 +724,12 @@ msgid "Full Framebuffer Emulation"
 msgstr "完整 Framebuffer 模擬"
 
 #: core/ui/settings_video.cpp:223
-msgid "Fully accurate VRAM framebuffer emulation. Helps games that directly access the framebuffer for special effects. Very slow and incompatible with upscaling and wide screen."
-msgstr "完全精確的 VRAM framebuffer 模擬。有助於直接存取 framebuffer 以實現特殊效果的遊戲。非常緩慢，且與升頻及寬螢幕不相容。"
+msgid ""
+"Fully accurate VRAM framebuffer emulation. Helps games that directly access "
+"the framebuffer for special effects. Very slow and incompatible with "
+"upscaling and wide screen."
+msgstr ""
+"完全精確的 VRAM framebuffer 模擬。有助於直接存取 framebuffer 以實現特殊效果的遊戲。非常緩慢，且與升頻及寬螢幕不相容。"
 
 #: core/ui/settings_video.cpp:227
 msgid "Load Custom Textures"
@@ -721,7 +744,9 @@ msgid "Preload Custom Textures"
 msgstr "預載自訂紋理"
 
 #: core/ui/settings_video.cpp:233
-msgid "Preload custom textures at game start. May improve performance but increases memory usage"
+msgid ""
+"Preload custom textures at game start. May improve performance but increases"
+" memory usage"
 msgstr "在遊戲啟動時預載自訂紋理。可能會提升效能，但會增加記憶體使用量"
 
 #: core/ui/settings_video.cpp:239
@@ -733,9 +758,11 @@ msgid "Widescreen"
 msgstr "寬螢幕"
 
 #: core/ui/settings_video.cpp:242
-msgid "Draw geometry outside of the normal 4:3 aspect ratio. May produce graphical glitches in the revealed areas.\n"
+msgid ""
+"Draw geometry outside of the normal 4:3 aspect ratio. May produce graphical glitches in the revealed areas.\n"
 "Aspect Fit and shows the full 16:9 content."
-msgstr "在正常 4:3 長寬比之外繪製幾何圖形。可能在顯露的區域產生圖形瑕疵。\n"
+msgstr ""
+"在正常 4:3 長寬比之外繪製幾何圖形。可能在顯露的區域產生圖形瑕疵。\n"
 "等比適配並顯示完整的 16:9 內容。"
 
 #: core/ui/settings_video.cpp:247
@@ -743,9 +770,11 @@ msgid "Super Widescreen"
 msgstr "超長寬比"
 
 #: core/ui/settings_video.cpp:248
-msgid "Use the full width of the screen or window when its aspect ratio is greater than 16:9.\n"
+msgid ""
+"Use the full width of the screen or window when its aspect ratio is greater than 16:9.\n"
 "Aspect Fill and remove black bars. Not compatible with integer scaling."
-msgstr "當螢幕或視窗的長寬比大於 16:9 時，使用完整的寬度。\n"
+msgstr ""
+"當螢幕或視窗的長寬比大於 16:9 時，使用完整的寬度。\n"
 "等比填滿並移除黑邊。與整數縮放不相容。"
 
 #: core/ui/settings_video.cpp:251
@@ -753,7 +782,9 @@ msgid "Widescreen Game Cheats"
 msgstr "寬螢幕遊戲金手指"
 
 #: core/ui/settings_video.cpp:252
-msgid "Modify the game so that it displays in 16:9 anamorphic format and use horizontal screen stretching. Only some games are supported."
+msgid ""
+"Modify the game so that it displays in 16:9 anamorphic format and use "
+"horizontal screen stretching. Only some games are supported."
 msgstr "修改遊戲使其以 16:9 變形格式顯示，並使用水平螢幕拉伸。僅支援部分遊戲。"
 
 #: core/ui/settings_video.cpp:253
@@ -797,7 +828,9 @@ msgid "Pixel Buffer Size"
 msgstr "像素緩衝區大小"
 
 #: core/ui/settings_video.cpp:303
-msgid "The size of the pixel buffer. May need to be increased when upscaling by a large factor."
+msgid ""
+"The size of the pixel buffer. May need to be increased when upscaling by a "
+"large factor."
 msgstr "像素緩衝區的大小。當以較大倍率升頻時可能需要增加。"
 
 #: core/ui/settings_video.cpp:305
@@ -805,7 +838,9 @@ msgid "Maximum Layers"
 msgstr "最大圖層數"
 
 #: core/ui/settings_video.cpp:306
-msgid "Maximum number of transparent layers. May need to be increased for some complex scenes. Decreasing it may improve performance."
+msgid ""
+"Maximum number of transparent layers. May need to be increased for some "
+"complex scenes. Decreasing it may improve performance."
 msgstr "透明圖層的最大數量。對於某些複雜場景可能需要增加。減少它可能會提升效能。"
 
 #: core/ui/settings_video.cpp:309
@@ -874,7 +909,9 @@ msgid "Delay Frame Swapping"
 msgstr "延遲影格交換"
 
 #: core/ui/settings_video.cpp:330
-msgid "Useful to avoid flashing screen or glitchy videos. Not recommended on slow platforms"
+msgid ""
+"Useful to avoid flashing screen or glitchy videos. Not recommended on slow "
+"platforms"
 msgstr "有助於避免閃爍畫面或視訊卡頓。不建議在較慢的平台上啟用"
 
 #: core/ui/settings_video.cpp:331
@@ -882,7 +919,9 @@ msgid "Fix Upscale Bleeding Edge"
 msgstr "修復升頻邊緣滲色"
 
 #: core/ui/settings_video.cpp:332
-msgid "Helps with texture bleeding case when upscaling. Disabling it can help if pixels are warping when upscaling in 2D games (MVC2, CVS, KOF, etc.)"
+msgid ""
+"Helps with texture bleeding case when upscaling. Disabling it can help if "
+"pixels are warping when upscaling in 2D games (MVC2, CVS, KOF, etc.)"
 msgstr "有助於處理升頻時的紋理滲色情況。如果在 2D 遊戲（MVC2、CVS、KOF 等）中升頻時像素出現扭曲，停用此選項可能有所幫助"
 
 #: core/ui/settings_video.cpp:333
@@ -890,7 +929,9 @@ msgid "Native Depth Interpolation"
 msgstr "原生深度內插"
 
 #: core/ui/settings_video.cpp:334
-msgid "Helps with texture corruption and depth issues on AMD GPUs. Can also help Intel GPUs in some cases."
+msgid ""
+"Helps with texture corruption and depth issues on AMD GPUs. Can also help "
+"Intel GPUs in some cases."
 msgstr "有助於解決 AMD GPU 上的紋理損毀和深度問題。在某些情況下也有助於 Intel GPU。"
 
 #: core/ui/settings_video.cpp:335
@@ -906,7 +947,10 @@ msgid "Anisotropic Filtering"
 msgstr "非等向性過濾"
 
 #: core/ui/settings_video.cpp:377
-msgid "Higher values make textures viewed at oblique angles look sharper, but are more demanding on the GPU. This option only has a visible impact on mipmapped textures."
+msgid ""
+"Higher values make textures viewed at oblique angles look sharper, but are "
+"more demanding on the GPU. This option only has a visible impact on "
+"mipmapped textures."
 msgstr "數值越高，傾斜角度觀看的紋理看起來越銳利，但對 GPU 的要求也越高。此選項僅對具備 mipmap 的紋理有明顯影響。"
 
 #: core/ui/settings_video.cpp:379
@@ -927,7 +971,10 @@ msgid "Force Nearest-Neighbor"
 msgstr "強制最近相鄰"
 
 #: core/ui/settings_video.cpp:383
-msgid "Force nearest-neighbor filtering for all textures. Crisper appearance, but may cause various rendering issues. This option usually does not affect performance."
+msgid ""
+"Force nearest-neighbor filtering for all textures. Crisper appearance, but "
+"may cause various rendering issues. This option usually does not affect "
+"performance."
 msgstr "對所有紋理強制使用最近相鄰過濾。外觀更銳利，但可能導致各種渲染問題。此選項通常不影響效能。"
 
 #: core/ui/settings_video.cpp:385
@@ -935,7 +982,9 @@ msgid "Force Linear"
 msgstr "強制線性"
 
 #: core/ui/settings_video.cpp:385
-msgid "Force linear filtering for all textures. Smoother appearance, but may cause various rendering issues. This option usually does not affect performance."
+msgid ""
+"Force linear filtering for all textures. Smoother appearance, but may cause "
+"various rendering issues. This option usually does not affect performance."
 msgstr "對所有紋理強制使用線性過濾。外觀更平滑，但可能導致各種渲染問題。此選項通常不影響效能。"
 
 #: core/ui/settings_video.cpp:388
@@ -963,7 +1012,9 @@ msgid "Send video content to another program"
 msgstr "將視訊內容傳送至其他程式"
 
 #: core/ui/settings_video.cpp:405
-msgid "e.g. Route GPU texture to OBS Studio directly instead of using CPU intensive Display/Window Capture"
+msgid ""
+"e.g. Route GPU texture to OBS Studio directly instead of using CPU intensive"
+" Display/Window Capture"
 msgstr "例如：將 GPU 紋理直接傳送至 OBS Studio，而非使用高 CPU 負載的顯示／視窗擷取"
 
 #: core/ui/settings_video.cpp:409
@@ -1002,7 +1053,7 @@ msgstr "系統預設"
 
 #: core/ui/settings_general.cpp:211
 msgid "UI Language"
-msgstr "UI 語言"
+msgstr "介面語言"
 
 #: core/ui/settings_general.cpp:231
 msgid "Japanese"
@@ -1038,7 +1089,7 @@ msgstr "Dreamcast BIOS 中所設定的語言"
 
 #: core/ui/settings_general.cpp:236
 msgid "Broadcast"
-msgstr "廣播制式"
+msgstr "電視制式"
 
 #: core/ui/settings_general.cpp:237
 msgid "TV broadcasting standard for non-VGA modes"
@@ -1132,7 +1183,9 @@ msgid "Reveal in Finder"
 msgstr "在 Finder 中顯示"
 
 #: core/ui/settings_general.cpp:355
-msgid "The folder where Flycast saves configuration files and VMUs. BIOS files should be in a subfolder named \"data\""
+msgid ""
+"The folder where Flycast saves configuration files and VMUs. BIOS files "
+"should be in a subfolder named \"data\""
 msgstr "Flycast 儲存設定檔和 VMU 的資料夾。BIOS 檔案應放在名為「data」的子資料夾中"
 
 #: core/ui/settings_general.cpp:366
@@ -1189,7 +1242,7 @@ msgstr "Aqua Chill"
 
 #: core/ui/settings_general.cpp:383
 msgid "UI Theme"
-msgstr "UI 主題"
+msgstr "介面主題"
 
 #: core/ui/settings_general.cpp:384
 msgid "Select the UI color theme."
@@ -1208,8 +1261,11 @@ msgid "Use SAF File Picker"
 msgstr "使用 SAF 檔案選擇器"
 
 #: core/ui/settings_general.cpp:395
-msgid "Use Android Storage Access Framework file picker to select folders and files. Ignored on Android 10 and later."
-msgstr "使用 Android Storage Access Framework 檔案選擇器來選擇資料夾和檔案。在 Android 10 及以上版本中忽略此設定。"
+msgid ""
+"Use Android Storage Access Framework file picker to select folders and "
+"files. Ignored on Android 10 and later."
+msgstr ""
+"使用 Android Storage Access Framework 檔案選擇器來選擇資料夾和檔案。在 Android 10 及以上版本中忽略此設定。"
 
 #: core/ui/settings_general.cpp:398
 msgid "Automatic State:"
@@ -1256,7 +1312,9 @@ msgid "Track your game achievements using RetroAchievements.org"
 msgstr "使用 RetroAchievements.org 追蹤您的遊戲成就"
 
 #: core/ui/settings_general.cpp:414
-msgid "Enable RetroAchievements hardcore mode. Using cheats and loading a state are not allowed in this mode."
+msgid ""
+"Enable RetroAchievements hardcore mode. Using cheats and loading a state are"
+" not allowed in this mode."
 msgstr "啟用 RetroAchievements 極限模式。在此模式下不允許使用作弊和載入存檔狀態。"
 
 #: core/ui/settings_general.cpp:415
@@ -1296,7 +1354,9 @@ msgid "Select a BIOS folder"
 msgstr "選擇 BIOS 資料夾"
 
 #: core/ui/settings_general.cpp:467
-msgid "Folders containing BIOS files (e.g. dc_boot.bin or dc_bios.bin) and arcade BIOS"
+msgid ""
+"Folders containing BIOS files (e.g. dc_boot.bin or dc_bios.bin) and arcade "
+"BIOS"
 msgstr "包含 BIOS 檔案（例如 dc_boot.bin 或 dc_bios.bin）和大型電玩 BIOS 的資料夾"
 
 #: core/ui/settings_general.cpp:471
@@ -1320,7 +1380,9 @@ msgid "Select a savestate folder"
 msgstr "選擇存檔狀態資料夾"
 
 #: core/ui/settings_general.cpp:476
-msgid "Folders for save states. First path is used for new states; all are searched when loading"
+msgid ""
+"Folders for save states. First path is used for new states; all are searched"
+" when loading"
 msgstr "存放存檔狀態的資料夾。第一個路徑用於儲存新狀態；載入時會搜尋所有路徑"
 
 #: core/ui/settings_general.cpp:479
@@ -1344,7 +1406,8 @@ msgid "Select a texture pack folder"
 msgstr "選擇紋理包資料夾"
 
 #: core/ui/settings_general.cpp:485
-msgid "Folders containing textures/<gameId> or <gameId> under a textures subfolder"
+msgid ""
+"Folders containing textures/<gameId> or <gameId> under a textures subfolder"
 msgstr "包含 textures/<gameId> 或在 textures 子資料夾下包含 <gameId> 的資料夾"
 
 #: core/ui/settings_general.cpp:489
@@ -1356,7 +1419,9 @@ msgid "Select the texture dump folder"
 msgstr "選擇紋理轉存資料夾"
 
 #: core/ui/settings_general.cpp:490
-msgid "Folder where texture dumps are saved. Game-specific subfolders will be created automatically"
+msgid ""
+"Folder where texture dumps are saved. Game-specific subfolders will be "
+"created automatically"
 msgstr "儲存紋理轉存檔案的資料夾。會自動建立遊戲專屬的子資料夾"
 
 #: core/ui/settings_general.cpp:493
@@ -1368,7 +1433,9 @@ msgid "Select the box art folder"
 msgstr "選擇封面資料夾"
 
 #: core/ui/settings_general.cpp:494
-msgid "Folder containing box art images (png/jpg). If empty, Flycast will use the default Home Folder/boxart for downloads and generated art"
+msgid ""
+"Folder containing box art images (png/jpg). If empty, Flycast will use the "
+"default Home Folder/boxart for downloads and generated art"
 msgstr "包含封面圖片（png/jpg）的資料夾。如果為空，Flycast 將使用預設的主資料夾/boxart 來下載和產生封面"
 
 #: core/ui/settings_general.cpp:497
@@ -1380,8 +1447,11 @@ msgid "Select a controller mapping folder"
 msgstr "選擇控制器映射資料夾"
 
 #: core/ui/settings_general.cpp:498
-msgid "Folders containing controller mapping files (.cfg). The emulator also looks in Home Folder/mappings. Per-game mappings are suffixed with _<gameId>.cfg"
-msgstr "包含控制器映射檔案（.cfg）的資料夾。模擬器也會在主資料夾/mappings 中尋找。每個遊戲的映射會加上 _<gameId>.cfg 的後綴"
+msgid ""
+"Folders containing controller mapping files (.cfg). The emulator also looks "
+"in Home Folder/mappings. Per-game mappings are suffixed with _<gameId>.cfg"
+msgstr ""
+"包含控制器映射檔案（.cfg）的資料夾。模擬器也會在主資料夾/mappings 中尋找。每個遊戲的映射會加上 _<gameId>.cfg 的後綴"
 
 #: core/ui/settings_general.cpp:501
 msgid "Cheat Folders"
@@ -1392,7 +1462,9 @@ msgid "Select a cheat folder"
 msgstr "選擇作弊資料夾"
 
 #: core/ui/settings_general.cpp:502
-msgid "Folders containing cheat files (.cht/.txt) named with the game ID. Flycast will auto-load matching files if present"
+msgid ""
+"Folders containing cheat files (.cht/.txt) named with the game ID. Flycast "
+"will auto-load matching files if present"
 msgstr "包含以遊戲 ID 命名的作弊檔案（.cht/.txt）的資料夾。如果存在，Flycast 會自動載入相符的檔案"
 
 #: core/ui/gui_chat.h:46 core/ui/gui_chat.h:48
@@ -1713,9 +1785,11 @@ msgid "Sequential"
 msgstr "順序"
 
 #: core/ui/settings_controls.cpp:576
-msgid "When checked, this combo will only activate when all keys are pressed in the given sequence.\n"
+msgid ""
+"When checked, this combo will only activate when all keys are pressed in the given sequence.\n"
 "When not checked, the combo will activate when all keys are pressed in any order."
-msgstr "勾選時，此組合鍵僅在依指定順序按下所有按鍵時才會觸發。\n"
+msgstr ""
+"勾選時，此組合鍵僅在依指定順序按下所有按鍵時才會觸發。\n"
 "未勾選時，組合鍵將在任意順序按下所有按鍵時觸發。"
 
 #: core/ui/settings_controls.cpp:633 core/ui/settings_controls.cpp:1073
@@ -1855,7 +1929,9 @@ msgid "Saturation"
 msgstr "飽和度"
 
 #: core/ui/settings_controls.cpp:993
-msgid "Value sent to the game at 100% thumbstick deflection. Values greater than 100% will saturate before full deflection of the thumbstick."
+msgid ""
+"Value sent to the game at 100% thumbstick deflection. Values greater than "
+"100% will saturate before full deflection of the thumbstick."
 msgstr "拇指搖桿偏移 100% 時傳送給遊戲的數值。數值大於 100% 將在拇指搖桿完全偏移前達到飽和。"
 
 #: core/ui/settings_controls.cpp:1006
@@ -1927,7 +2003,9 @@ msgid "Use Physical VMU Storage"
 msgstr "使用實體 VMU 儲存空間"
 
 #: core/ui/settings_controls.cpp:1221
-msgid "Enables read and write access to physical VMU storage via DreamPicoPort or DreamPotato. This is not compatible with load state events."
+msgid ""
+"Enables read and write access to physical VMU storage via DreamPicoPort or "
+"DreamPotato. This is not compatible with load state events."
 msgstr "透過 DreamPicoPort 或 DreamPotato 啟用對實體 VMU 儲存空間的讀取和寫入存取。這與載入存檔狀態事件不相容。"
 
 #: core/ui/settings_controls.cpp:1226
@@ -1972,9 +2050,11 @@ msgid "The game has been paused but it is recommended to restart Flycast"
 msgstr "遊戲已暫停，但建議重新啟動 Flycast"
 
 #: core/ui/mainui.cpp:87
-msgid "Renderer initialization failed.\n"
+msgid ""
+"Renderer initialization failed.\n"
 "Please select a different graphics API"
-msgstr "渲染器初始化失敗。\n"
+msgstr ""
+"渲染器初始化失敗。\n"
 "請選擇不同的圖形 API。"
 
 #: core/ui/gui.cpp:469
@@ -2123,7 +2203,9 @@ msgid "Enable DSP"
 msgstr "啟用 DSP"
 
 #: core/ui/settings_audio.cpp:26
-msgid "Enable the Dreamcast Digital Sound Processor. Only recommended on fast platforms"
+msgid ""
+"Enable the Dreamcast Digital Sound Processor. Only recommended on fast "
+"platforms"
 msgstr "啟用 Dreamcast 數位訊號處理器。僅建議在較快的平台上啟用"
 
 #: core/ui/settings_audio.cpp:27
@@ -2207,7 +2289,8 @@ msgid "Interpreter"
 msgstr "直譯器"
 
 #: core/ui/settings.cpp:42
-msgid "Use the interpreter. Very slow but may help in case of a dynarec problem"
+msgid ""
+"Use the interpreter. Very slow but may help in case of a dynarec problem"
 msgstr "使用直譯器。速度非常慢，但可能在動態重編譯器發生問題時有所幫助。"
 
 #: core/ui/settings.cpp:45
@@ -2215,7 +2298,9 @@ msgid "SH4 Clock"
 msgstr "SH4 時脈"
 
 #: core/ui/settings.cpp:46
-msgid "Over/Underclock the main SH4 CPU. Default is 200 MHz. Other values may crash, freeze or trigger unexpected nuclear reactions."
+msgid ""
+"Over/Underclock the main SH4 CPU. Default is 200 MHz. Other values may "
+"crash, freeze or trigger unexpected nuclear reactions."
 msgstr "超頻／降頻主 SH4 CPU。預設為 200 MHz。其他數值可能導致當機、凍結或觸發意外的核反應。"
 
 #: core/ui/settings.cpp:94
@@ -2291,7 +2376,9 @@ msgid "Automatically Report Crashes"
 msgstr "自動回報當機"
 
 #: core/ui/settings.cpp:126
-msgid "Automatically upload crash reports to sentry.io to help in troubleshooting. No personal information is included."
+msgid ""
+"Automatically upload crash reports to sentry.io to help in troubleshooting. "
+"No personal information is included."
 msgstr "自動將當機報告上傳至 sentry.io 以協助故障排除。不包含任何個人資訊。"
 
 #: core/ui/settings.cpp:131
@@ -2303,7 +2390,9 @@ msgid "Lua Filename"
 msgstr "Lua 檔案名稱"
 
 #: core/ui/settings.cpp:135
-msgid "Specify lua filename to use. Should be located in Flycast config folder. Defaults to flycast.lua when empty."
+msgid ""
+"Specify lua filename to use. Should be located in Flycast config folder. "
+"Defaults to flycast.lua when empty."
 msgstr "指定要使用的 Lua 檔案名稱。應位於 Flycast 設定資料夾中。留空時預設為 flycast.lua。"
 
 #: core/ui/settings.cpp:281
@@ -2355,7 +2444,8 @@ msgid "Network Type"
 msgstr "網路類型"
 
 #: core/ui/settings_network.cpp:42
-msgid "Use native Dreamcast online features using the modem or Broadband Adapter"
+msgid ""
+"Use native Dreamcast online features using the modem or Broadband Adapter"
 msgstr "使用數據機或寬頻轉接器來使用 Dreamcast 原生線上功能"
 
 #: core/ui/settings_network.cpp:46
@@ -2447,7 +2537,8 @@ msgid "Chat Window Timeout (seconds)"
 msgstr "聊天視窗逾時（秒）"
 
 #: core/ui/settings_network.cpp:105
-msgid "Sets duration that chat window stays open after new message is received."
+msgid ""
+"Sets duration that chat window stays open after new message is received."
 msgstr "設定收到新訊息後聊天視窗保持開啟的時間長度。"
 
 #: core/ui/settings_network.cpp:109 core/ui/settings_network.cpp:201
@@ -2483,7 +2574,9 @@ msgid "Satellite"
 msgstr "衛星"
 
 #: core/ui/settings_network.cpp:130
-msgid "Live monitor for games that support it (Virtual-On Oratorio Tangram and Club Kart)"
+msgid ""
+"Live monitor for games that support it (Virtual-On Oratorio Tangram and Club"
+" Kart)"
 msgstr "支援該功能的遊戲的即時監控器（Virtual-On Oratorio Tangram 和 Club Kart）"
 
 #: core/ui/settings_network.cpp:135
@@ -2491,7 +2584,9 @@ msgid "Server"
 msgstr "伺服器"
 
 #: core/ui/settings_network.cpp:137
-msgid "The server to connect to. Leave blank to find a server automatically on the default port"
+msgid ""
+"The server to connect to. Leave blank to find a server automatically on the "
+"default port"
 msgstr "要連線的伺服器。留空則在預設連接埠上自動尋找伺服器"
 
 #: core/ui/settings_network.cpp:141 core/ui/settings_network.cpp:213
@@ -2536,7 +2631,9 @@ msgid "Manual"
 msgstr "手動"
 
 #: core/ui/settings_network.cpp:210
-msgid "The peer to connect to. Leave blank to find a player automatically on the default port"
+msgid ""
+"The peer to connect to. Leave blank to find a player automatically on the "
+"default port"
 msgstr "要連線的對等端。留空則在預設連接埠上自動尋找玩家。"
 
 #: core/ui/settings_network.cpp:223
@@ -2564,7 +2661,9 @@ msgid "Broadcast Digital Outputs"
 msgstr "廣播數位輸出"
 
 #: core/ui/settings_network.cpp:231
-msgid "Broadcast digital outputs and force-feedback state on TCP port 8000. Compatible with the \"-output network\" MAME option. Arcade games only."
+msgid ""
+"Broadcast digital outputs and force-feedback state on TCP port 8000. "
+"Compatible with the \"-output network\" MAME option. Arcade games only."
 msgstr "在 TCP 連接埠 8000 上廣播數位輸出和力回饋狀態。與 MAME 的「-output network」選項相容。僅限大型電玩遊戲。"
 
 #: core/ui/settings_network.cpp:236
@@ -2588,7 +2687,9 @@ msgid "ISP User Name"
 msgstr "ISP 使用者名稱"
 
 #: core/ui/settings_network.cpp:248
-msgid "The ISP user name stored in the console Flash RAM. Used by some online games as the player name. Leave blank to keep the current Flash RAM value."
+msgid ""
+"The ISP user name stored in the console Flash RAM. Used by some online games"
+" as the player name. Leave blank to keep the current Flash RAM value."
 msgstr "儲存在主機 Flash RAM 中的 ISP 使用者名稱。某些線上遊戲用作玩家名稱。留空則保留目前的 Flash RAM 數值。"
 
 #: core/ui/settings_network.cpp:254
@@ -2612,8 +2713,12 @@ msgid "2+ (Deluxe, Main screen)"
 msgstr "2+（豪華版、主螢幕）"
 
 #: core/ui/settings_network.cpp:265
-msgid "Two or three screens configuration (Airline Pilot, Derby Owners Club main screen, F355 Deluxe, Sega Strike Fighter)"
-msgstr "雙螢幕或三螢幕配置（Airline Pilot、Derby Owners Club 主螢幕、F355 Deluxe、Sega Strike Fighter）"
+msgid ""
+"Two or three screens configuration (Airline Pilot, Derby Owners Club main "
+"screen, F355 Deluxe, Sega Strike Fighter)"
+msgstr ""
+"雙螢幕或三螢幕配置（Airline Pilot、Derby Owners Club 主螢幕、F355 Deluxe、Sega Strike "
+"Fighter）"
 
 #: core/ui/settings_about.cpp:53 core/ui/settings_about.cpp:107
 #, c-format
@@ -2827,7 +2932,8 @@ msgid "Connected as slot %d"
 msgstr "已以插槽 %d 的身份連線"
 
 #: core/rend/dx9/d3d_renderer.cpp:320
-msgid "DirectX 9 doesn't support Naomi 2 games. Select a different graphics API"
+msgid ""
+"DirectX 9 doesn't support Naomi 2 games. Select a different graphics API"
 msgstr "DirectX 9 不支援 Naomi 2 遊戲。請選擇不同的圖形 API。"
 
 #: core/rend/vulkan/adreno.cpp:154
@@ -2964,3 +3070,5999 @@ msgstr "分享"
 msgid "Not supported on Switch"
 msgstr "不支援 Switch"
 
+#: core/ui/settings_new.cpp:4109
+msgid "Show Achievement Popups"
+msgstr "顯示成就快顯通知"
+
+#: core/ui/settings_new.cpp:4110
+msgid "Show on-screen RetroAchievements notifications while playing."
+msgstr "遊玩時顯示 RetroAchievements 成就通知。"
+
+#: core/ui/settings_new.cpp:4114
+msgid ""
+"Show Achievement Popups\n"
+"Controls achievement, progress, challenge, and leaderboard notifications shown over gameplay."
+msgstr ""
+"顯示成就快顯通知\n"
+"控制遊戲畫面上顯示的成就、進度、挑戰和排行榜通知。"
+
+#: core/ui/vgamepad.cpp:110 core/ui/vgamepad.cpp:119
+msgid "Black / Color"
+msgstr "黑色／彩色"
+
+#: core/ui/vgamepad.cpp:111
+msgid "Dark Gray / White"
+msgstr "深灰色／白色"
+
+#: core/ui/vgamepad.cpp:112 core/ui/vgamepad.cpp:120
+msgid "Gray / White"
+msgstr "灰色／白色"
+
+#: core/ui/vgamepad.cpp:113
+msgid "Bright Neon"
+msgstr "鮮明霓虹"
+
+#: core/ui/vgamepad.cpp:114
+msgid "Dim Neon"
+msgstr "暗色霓虹"
+
+#: core/ui/vgamepad.cpp:118
+msgid "Black / Gray"
+msgstr "黑色／灰色"
+
+#: core/ui/vgamepad.cpp:121
+msgid "White Outline"
+msgstr "白色外框"
+
+#: core/ui/vgamepad.cpp:122
+msgid "Neon"
+msgstr "霓虹"
+
+#: core/ui/vgamepad.cpp:664
+msgid "D-pad"
+msgstr "方向鍵"
+
+#: core/ui/vgamepad.cpp:665
+msgid "Face Buttons"
+msgstr "面鈕"
+
+#: core/ui/vgamepad.cpp:668
+msgid "LT"
+msgstr "LT"
+
+#: core/ui/vgamepad.cpp:669
+msgid "RT"
+msgstr "RT"
+
+#: core/ui/vgamepad.cpp:670
+msgid "Analog Stick"
+msgstr "類比搖桿"
+
+#: core/ui/gui_menu.cpp:523 core/ui/vgamepad.cpp:671
+msgid "Fast Forward"
+msgstr "快轉"
+
+#: core/ui/vgamepad.cpp:1250
+msgid "Virtual Controller"
+msgstr "虛擬控制器"
+
+#: core/ui/vgamepad.cpp:1254
+msgid "Controller Layout"
+msgstr "控制器配置"
+
+#: core/ui/vgamepad.cpp:1258
+msgid "Arcade"
+msgstr "街機"
+
+#: core/ui/vgamepad.cpp:1265
+msgid "Selected"
+msgstr "已選取"
+
+#: core/ui/vgamepad.cpp:1266
+msgid "Touch a button to select it. Drag to move it."
+msgstr "點選按鈕以選取。拖曳即可移動。"
+
+#: core/ui/vgamepad.cpp:1291
+msgid "Show Virtual Controller"
+msgstr "顯示虛擬控制器"
+
+#: core/ui/vgamepad.cpp:1293
+msgid "Visual Feedback"
+msgstr "視覺回饋"
+
+#: core/ui/vgamepad.cpp:1296
+msgid "Circular Stick Travel"
+msgstr "圓形搖桿行程"
+
+#: core/ui/vgamepad.cpp:1298
+msgid "Off uses the original square stick travel."
+msgstr "關閉時會使用原本的方形搖桿行程。"
+
+#: core/ui/vgamepad.cpp:1305
+msgid "Vibration"
+msgstr "震動"
+
+#: core/ui/vgamepad.cpp:1312
+msgid "Vibration Power"
+msgstr "震動強度"
+
+#: core/ui/vgamepad.cpp:1318
+msgid "Idle Timeout in Seconds"
+msgstr "閒置逾時（秒）"
+
+#: core/ui/vgamepad.cpp:1319
+msgid "Never"
+msgstr "永不"
+
+#: core/ui/vgamepad.cpp:1324
+msgid "Finger Size"
+msgstr "手指大小"
+
+#: core/ui/vgamepad.cpp:1331
+msgid "Unit Transparency"
+msgstr "元件透明度"
+
+#: core/ui/vgamepad.cpp:1336
+msgid "Touch Size"
+msgstr "觸控大小"
+
+#: core/ui/vgamepad.cpp:1340
+msgid "Scaling"
+msgstr "縮放比例"
+
+#: core/ui/vgamepad.cpp:1346
+msgid "Reset Unit"
+msgstr "重設元件"
+
+#: core/ui/vgamepad.cpp:1349
+msgid "Reset Layout"
+msgstr "重設配置"
+
+#: core/ui/vgamepad.cpp:1355
+msgid "Custom Image"
+msgstr "自訂圖片"
+
+#: core/ui/vgamepad.cpp:1360
+msgid "Dreamcast Images"
+msgstr "Dreamcast 圖片"
+
+#: core/ui/vgamepad.cpp:1360
+msgid "Arcade Images"
+msgstr "街機圖片"
+
+#: core/ui/vgamepad.cpp:1377
+msgid "CHOOSE IMG..."
+msgstr "選擇圖片..."
+
+#: core/ui/vgamepad.cpp:1272
+msgid "Grouped"
+msgstr "分組"
+
+#: core/ui/vgamepad.cpp:1285
+msgid ""
+"Turn off to move individual buttons. Turning on restores this group's "
+"default layout."
+msgstr "關閉即可個別移動按鈕。開啟後會還原此群組的預設配置。"
+
+#: core/ui/vgamepad.cpp:679
+msgid "D-pad Left"
+msgstr "方向鍵左"
+
+#: core/ui/vgamepad.cpp:680
+msgid "D-pad Up"
+msgstr "方向鍵上"
+
+#: core/ui/vgamepad.cpp:681
+msgid "D-pad Right"
+msgstr "方向鍵右"
+
+#: core/ui/vgamepad.cpp:682
+msgid "D-pad Down"
+msgstr "方向鍵下"
+
+#: core/ui/vgamepad.cpp:683 core/ui/vgamepad.cpp:733
+msgid "Button X"
+msgstr "X 鍵"
+
+#: core/ui/vgamepad.cpp:684
+msgid "Button Y"
+msgstr "Y 鍵"
+
+#: core/ui/vgamepad.cpp:685
+msgid "Button B"
+msgstr "B 鍵"
+
+#: core/ui/vgamepad.cpp:686
+msgid "Button A"
+msgstr "A 鍵"
+
+#: core/ui/vgamepad.cpp:731
+msgid "Button C"
+msgstr "C 鍵"
+
+#: core/ui/settings_new.cpp:3590
+msgid "Auto"
+msgstr "自動"
+
+#: core/ui/settings_new.cpp:3590
+msgid "On"
+msgstr "開啟"
+
+#: core/ui/settings_new.cpp:3590 core/ui/settings_new.cpp:4901
+#: core/ui/settings_new.cpp:5809
+msgid "Off"
+msgstr "關閉"
+
+#: core/ui/settings_new.cpp:3593
+msgid "Top Menu Bar"
+msgstr "頂端選單列"
+
+#: core/ui/settings_new.cpp:3602
+msgid "Choose when the top menu bar is shown."
+msgstr "選擇頂端選單列的顯示時機。"
+
+#: core/ui/settings_new.cpp:3604
+msgid ""
+"Top Menu Bar\n"
+"On keeps the bar visible. Off keeps it hidden.\n"
+"Auto follows the normal mouse and touch reveal behavior."
+msgstr ""
+"頂端選單列\n"
+"開啟時會固定顯示選單列。關閉時會將其隱藏。\n"
+"自動會依照一般的滑鼠與觸控顯示行為決定。"
+
+#: core/imgread/chd.cpp:204
+msgid "Invalid CHD: pregap is longer than the track"
+msgstr "CHD 無效：前間隙長於音軌"
+
+#: core/imgread/cue.cpp:210
+msgid "Invalid PREGAP in CUE file"
+msgstr "CUE 檔案中的 PREGAP 無效"
+
+#: core/input/maplelink.cpp:91 core/input/maplelink.cpp:131
+msgid "ATTENTION: External storage differs from VMU memory in loaded state"
+msgstr "注意：載入的存檔狀態中，VMU 記憶體與外接儲存空間內容不同"
+
+#: core/input/maplelink.cpp:93 core/input/maplelink.cpp:101
+#: core/input/maplelink.cpp:133
+msgid "VMU will appear to reconnect in-game"
+msgstr "VMU 會在遊戲中重新連線"
+
+#: core/input/maplelink.cpp:99
+msgid "ATTENTION: VMU write was in progress during save"
+msgstr "注意：存檔狀態儲存期間，VMU 寫入作業仍在進行"
+
+#: core/network/capcom.cpp:440
+msgid "Connected to battle server"
+msgstr "已連線至對戰伺服器"
+
+#: core/network/capcom.cpp:447
+msgid "Can't connect to battle server"
+msgstr "無法連線至對戰伺服器"
+
+#: core/network/ggpo.cpp:623
+#, c-format
+msgid "GGPO: unknown peer address %s"
+msgstr "GGPO：未知的對端位址 %s"
+
+#: core/network/rawmodem.cpp:47
+msgid "Connected to game server"
+msgstr "已連線至遊戲伺服器"
+
+#: core/network/rawmodem.cpp:135
+msgid "Network disconnected"
+msgstr "網路連線已中斷"
+
+#: core/network/rawmodem.cpp:173
+msgid "Can't connect to game server"
+msgstr "無法連線至遊戲伺服器"
+
+#: core/rend/CustomTexture.cpp:1031
+msgid "Custom texture file could not be read"
+msgstr "無法讀取自訂紋理檔案"
+
+#: core/rend/CustomTexture.cpp:1034
+msgid "PNG/JPEG custom texture could not be decoded"
+msgstr "無法解碼 PNG/JPEG 自訂紋理"
+
+#: core/rend/CustomTexture.cpp:1037
+msgid ""
+"Compressed custom texture could not be loaded.\n"
+"Supported formats: KTX2/XUBC7, KTX2/XUASTC, KTX2/ETC1S, and DDS/BC7"
+msgstr ""
+"無法載入壓縮自訂紋理。\n"
+"支援的格式：KTX2/XUBC7、KTX2/XUASTC、KTX2/ETC1S 和 DDS/BC7"
+
+#: core/rend/CustomTexture.cpp:1040
+msgid "Custom texture exceeds the renderer's maximum texture dimensions"
+msgstr "自訂紋理超過渲染器支援的最大紋理尺寸"
+
+#: core/rend/CustomTexture.cpp:1043
+msgid "Custom texture could not be uploaded to the GPU"
+msgstr "無法將自訂紋理上傳至 GPU"
+
+#: core/rend/CustomTexture.cpp:1046
+msgid "Custom texture memory allocation failed"
+msgstr "自訂紋理記憶體配置失敗"
+
+#: core/rend/CustomTexture.cpp:1049
+msgid "DirectX 9 supports PNG/JPEG custom textures only"
+msgstr "DirectX 9 僅支援 PNG/JPEG 自訂紋理"
+
+#: core/sdl/dreamlink/dreamlinkgamepad.cpp:80
+#, c-format
+msgid "%s was disconnected"
+msgstr "%s 已中斷連線"
+
+#: core/sdl/dreamlink/dreampicoport.cpp:790
+msgid "Firmware Update Required"
+msgstr "需要更新韌體"
+
+#: core/sdl/dreamlink/dreampicoport.cpp:1499
+msgid ""
+"ATTENTION: Current hardware configuration changed since last save state"
+msgstr "注意：目前硬體設定與建立上次存檔狀態時不同"
+
+#: core/sdl/sdl.cpp:1242
+msgid "Hollycast Error"
+msgstr "Hollycast 錯誤"
+
+#: core/ui/gui.cpp:485
+msgid "Render Times"
+msgstr "渲染時間"
+
+#: core/ui/gui.cpp:486 core/ui/gui.cpp:489
+#, c-format
+msgid "StdDev: %.1f%%"
+msgstr "標準差：%.1f%%"
+
+#: core/ui/gui.cpp:488
+msgid "VBlank"
+msgstr "VBlank"
+
+#: core/ui/gui.cpp:621
+msgid "Hollycast has stopped."
+msgstr "Hollycast 已停止。"
+
+#: core/ui/gui.cpp:735
+msgid ""
+"Save states cannot be resumed in the current mode. Choose Start Fresh to "
+"play."
+msgstr "目前模式無法繼續使用存檔狀態。請選擇「重新開始」來遊玩。"
+
+#: core/ui/gui.cpp:736
+msgid ""
+"The selected save state could not be loaded. Choose Start Fresh to play."
+msgstr "無法載入所選的存檔狀態。請選擇「重新開始」來遊玩。"
+
+#: core/ui/gui.cpp:810
+msgid "Exit Save Prompt"
+msgstr "離開前儲存提示"
+
+#: core/ui/gui.cpp:815
+msgid "Exit Emulator?"
+msgstr "要結束模擬器嗎？"
+
+#: core/ui/gui.cpp:815
+msgid "Exit Game?"
+msgstr "要結束遊戲嗎？"
+
+#: core/ui/gui.cpp:820
+msgid "Do you want to save state before exiting the emulator?"
+msgstr "離開模擬器前要建立存檔狀態嗎？"
+
+#: core/ui/gui.cpp:821
+msgid "Do you want to save state before returning to the library?"
+msgstr "返回遊戲庫前要建立存檔狀態嗎？"
+
+#: core/ui/gui.cpp:827
+msgid "Save & Exit"
+msgstr "儲存並離開"
+
+#: core/ui/gui.cpp:828
+msgid "Exit Without Saving"
+msgstr "不儲存直接離開"
+
+#: core/ui/gui.cpp:850 core/ui/gui.cpp:869
+msgid "Save Not Allowed"
+msgstr "無法建立存檔狀態"
+
+#: core/ui/gui.cpp:873
+msgid "Cannot save state in current mode."
+msgstr "目前模式無法建立存檔狀態。"
+
+#: core/ui/gui.cpp:874
+msgid "Possible reasons:"
+msgstr "可能原因："
+
+#: core/ui/gui.cpp:875
+msgid "No game loaded"
+msgstr "尚未載入遊戲"
+
+#: core/ui/gui.cpp:876
+msgid "Network play active"
+msgstr "正在進行網路對戰"
+
+#: core/ui/gui.cpp:877
+msgid "Multi-board arcade mode"
+msgstr "多機板街機模式"
+
+#: core/ui/gui.cpp:907
+msgid "Auto-Load Prompt"
+msgstr "自動載入提示"
+
+#: core/ui/gui.cpp:911
+msgid "Load Auto-Save?"
+msgstr "要載入自動存檔狀態嗎？"
+
+#: core/ui/gui.cpp:915
+msgid "A hidden Auto-Save was found for this game."
+msgstr "找到此遊戲的隱藏自動存檔狀態。"
+
+#: core/ui/gui.cpp:916
+msgid "Do you want to load it?"
+msgstr "要載入嗎？"
+
+#: core/ui/gui.cpp:997
+#, c-format
+msgid "UID: %s"
+msgstr "UID：%s"
+
+#: core/ui/gui.cpp:1127 core/ui/gui.cpp:1128 core/ui/settings_new.cpp:3329
+#: core/ui/settings_new.cpp:8684
+msgid "Error"
+msgstr "錯誤"
+
+#: core/ui/gui.cpp:1136
+msgid ""
+"Check the game image and any accompanying track files. Review firmware and "
+"controls in the setup checklist."
+msgstr "請檢查遊戲映像檔及其附帶的音軌檔案，並在設定檢查清單中檢查韌體與控制器。"
+
+#: core/ui/gui.cpp:1137
+msgid "Open Setup Checklist"
+msgstr "開啟設定檢查清單"
+
+#: core/ui/gui.cpp:1666
+msgid "Media Preview"
+msgstr "媒體預覽"
+
+#: core/ui/gui.cpp:1670 core/ui/gui.cpp:1764
+msgid "Media"
+msgstr "媒體"
+
+#: core/ui/gui.cpp:1693
+msgid "Current Media"
+msgstr "目前媒體"
+
+#: core/ui/gui.cpp:1696 core/ui/settings_new.cpp:7079
+#: core/ui/settings_new.cpp:7095
+msgid "Status"
+msgstr "狀態"
+
+#: core/ui/gui.cpp:1700
+msgid "Found"
+msgstr "已找到"
+
+#: core/ui/gui.cpp:1700
+msgid "Missing"
+msgstr "遺失"
+
+#: core/ui/gui.cpp:1703 core/ui/gui_menu.cpp:420
+msgid "File"
+msgstr "檔案"
+
+#: core/ui/gui.cpp:1721
+msgid "Details"
+msgstr "詳細資料"
+
+#: core/ui/gui.cpp:1731 core/ui/gui.cpp:2002
+msgid "Description"
+msgstr "描述"
+
+#: core/ui/gui.cpp:1739 core/ui/gui.cpp:2004
+msgid "No description available."
+msgstr "沒有可用的描述。"
+
+#: core/ui/gui.cpp:1979
+msgid "No media preview"
+msgstr "沒有媒體預覽"
+
+#: core/ui/gui.cpp:2009
+msgid "MEDIA:"
+msgstr "媒體："
+
+#: core/ui/gui.cpp:2194
+#, c-format
+msgid "%llud %lluh"
+msgstr "%llud %lluh"
+
+#: core/ui/gui.cpp:2196
+#, c-format
+msgid "%lluh %llum"
+msgstr "%lluh %llum"
+
+#: core/ui/gui.cpp:2198
+#, c-format
+msgid "%llum"
+msgstr "%llum"
+
+#: core/ui/gui.cpp:2199
+#, c-format
+msgid "%llus"
+msgstr "%llus"
+
+#: core/ui/gui.cpp:2207
+msgid "Remove from favourites"
+msgstr "從最愛中移除"
+
+#: core/ui/gui.cpp:2207
+msgid "Add to favourites"
+msgstr "加入最愛"
+
+#: core/ui/gui.cpp:2292
+msgid "No save state is available for this game. Choose Start Fresh to play."
+msgstr "此遊戲沒有可用的存檔狀態。請選擇「重新開始」來遊玩。"
+
+#: core/ui/gui.cpp:2512
+msgid "All Games"
+msgstr "所有遊戲"
+
+#: core/ui/gui.cpp:2512
+msgid "Continue Playing"
+msgstr "繼續遊玩"
+
+#: core/ui/gui.cpp:2512
+msgid "Favourites"
+msgstr "最愛遊戲"
+
+#: core/ui/gui.cpp:2574
+msgid "Icon Size"
+msgstr "圖示大小"
+
+#: core/ui/gui.cpp:2697
+msgid "Icon"
+msgstr "圖示"
+
+#: core/ui/gui.cpp:2698
+msgid "Product ID"
+msgstr "產品 ID"
+
+#: core/ui/gui.cpp:2700
+msgid "Title"
+msgstr "標題"
+
+#: core/ui/gui.cpp:2703
+msgid "Format"
+msgstr "格式"
+
+#: core/ui/gui.cpp:2704 core/ui/gui.cpp:2709
+msgid "Time Played"
+msgstr "遊玩時間"
+
+#: core/ui/gui.cpp:2705
+msgid "Latest Save"
+msgstr "最新存檔"
+
+#: core/ui/gui.cpp:2705
+msgid "Last Booted"
+msgstr "上次啟動時間"
+
+#: core/ui/gui.cpp:2711 core/ui/gui_util.cpp:638
+msgid "Size"
+msgstr "大小"
+
+#: core/ui/gui.cpp:2764 core/ui/gui.cpp:2774
+msgid "Favourite"
+msgstr "最愛"
+
+#: core/ui/gui.cpp:2768 core/ui/gui.cpp:2774 core/ui/gui.cpp:2880
+#: core/ui/gui.cpp:3026 core/ui/gui.cpp:3038
+msgid "Start Fresh"
+msgstr "重新開始"
+
+#: core/ui/gui.cpp:3018
+msgid "Saved"
+msgstr "已儲存"
+
+#: core/ui/gui.cpp:3145
+msgid "Checking saved games..."
+msgstr "正在檢查已儲存的遊戲..."
+
+#: core/ui/gui.cpp:3146 core/ui/gui.cpp:3148
+msgid "No games match this filter"
+msgstr "沒有遊戲符合此過濾條件"
+
+#: core/ui/gui.cpp:3147
+msgid "No saved games yet"
+msgstr "尚無已儲存的遊戲"
+
+#: core/ui/gui.cpp:3148
+msgid "No favourites yet"
+msgstr "尚無最愛遊戲"
+
+#: core/ui/gui.cpp:3150
+msgid "Games with a save state or autosave will appear here."
+msgstr "有存檔狀態或自動存檔狀態的遊戲會顯示在此處。"
+
+#: core/ui/gui.cpp:3151
+msgid "Use the star on a game to add it to Favourites."
+msgstr "點選遊戲旁的星號，即可將其加入最愛。"
+
+#: core/ui/gui.cpp:3187 core/ui/gui.cpp:3198
+msgid "Hollycast cannot write to this folder."
+msgstr "Hollycast 無法寫入此資料夾。"
+
+#: core/ui/gui.cpp:3226
+msgid "Select Hollycast Home Folder"
+msgstr "選取 Hollycast 主資料夾"
+
+#: core/ui/gui.cpp:3238 core/ui/settings_new.cpp:2709
+msgid "Ready to Play Checklist"
+msgstr "可遊玩檢查清單"
+
+#: core/ui/gui.cpp:3304
+msgid "Ready to Play"
+msgstr "準備就緒，可以遊玩"
+
+#: core/ui/gui.cpp:3306
+msgid ""
+"Optional setup for games, firmware and controls. Reopen this checklist from "
+"General settings."
+msgstr "遊玩遊戲、韌體與控制器的選用設定。可從一般設定重新開啟此檢查清單。"
+
+#: core/ui/gui.cpp:3307
+msgid "1. Game folder"
+msgstr "1. 遊戲資料夾"
+
+#: core/ui/gui.cpp:3309
+msgid ""
+"A folder is configured. If your games are elsewhere, choose their folder "
+"below."
+msgstr "已設定資料夾。如果遊戲位於其他位置，請在下方選取遊戲資料夾。"
+
+#: core/ui/gui.cpp:3310
+msgid "Choose a folder containing your games to add them to the library."
+msgstr "選取包含遊戲的資料夾，將遊戲加入遊戲庫。"
+
+#: core/ui/gui.cpp:3311
+msgid "Choose Game Folder"
+msgstr "選取遊戲資料夾"
+
+#: core/ui/gui.cpp:3313
+msgid "2. BIOS and firmware"
+msgstr "2. BIOS 與韌體"
+
+#: core/ui/gui.cpp:3317
+msgid ""
+"Place dc_boot.bin and dc_flash.bin in Hollycast's data folder, unless you "
+"have specified a custom BIOS folder."
+msgstr ""
+"請將 dc_boot.bin 和 dc_flash.bin 放在 Hollycast 的 data 資料夾中，除非你已指定自訂 BIOS 資料夾。"
+
+#: core/ui/gui.cpp:3319
+msgid "A BIOS filename was found. Its contents have not been verified."
+msgstr "找到 BIOS 檔名，但尚未驗證其內容。"
+
+#: core/ui/gui.cpp:3320
+msgid ""
+"No original BIOS was found. Built-in HLE supports many games; some need an "
+"original BIOS."
+msgstr "找不到原廠 BIOS。內建 HLE 支援許多遊戲，但有些遊戲需要原廠 BIOS。"
+
+#: core/ui/gui.cpp:3323
+msgid "Arcade systems"
+msgstr "街機系統"
+
+#: core/ui/gui.cpp:3329
+msgid "NAOMI / GD-ROM"
+msgstr "NAOMI／GD-ROM"
+
+#: core/ui/gui.cpp:3330
+msgid "NAOMI 2"
+msgstr "NAOMI 2"
+
+#: core/ui/gui.cpp:3331
+msgid "Atomiswave"
+msgstr "Atomiswave"
+
+#: core/ui/gui.cpp:3332
+msgid "System SP"
+msgstr "System SP"
+
+#: core/ui/gui.cpp:3338
+msgid "Title-specific BIOS requirements"
+msgstr "特定遊戲的 BIOS 需求"
+
+#: core/ui/gui.cpp:3344
+msgid "Airline Pilots"
+msgstr "Airline Pilots"
+
+#: core/ui/gui.cpp:3345
+msgid "The House of the Dead 2"
+msgstr "The House of the Dead 2"
+
+#: core/ui/gui.cpp:3346
+msgid "F355 Challenge (twin) / Challenge 2"
+msgstr "F355 Challenge（雙機版）／Challenge 2"
+
+#: core/ui/gui.cpp:3347
+msgid "F355 Challenge (deluxe)"
+msgstr "F355 Challenge（豪華版）"
+
+#: core/ui/gui.cpp:3348
+msgid "Kasei Channel Mars TV"
+msgstr "Kasei Channel Mars TV"
+
+#: core/ui/gui.cpp:3348
+msgid "naomi.zip containing epr-21576d.ic27"
+msgstr "naomi.zip，內含 epr-21576d.ic27"
+
+#: core/ui/gui.cpp:3349
+msgid "Mushiking II / III / III+ (Korea)"
+msgstr "Mushiking II／III／III+（韓國版）"
+
+#: core/ui/gui.cpp:3349
+msgid "naomi.zip containing epr-21576h_multi.ic27"
+msgstr "naomi.zip，內含 epr-21576h_multi.ic27"
+
+#: core/ui/gui.cpp:3354
+msgid ""
+"Use the archive for your system or game. Keep ZIP or 7z archives packed; the"
+" matching BIOS data may already be included in your game or parent ROM set."
+msgstr "請使用適用於系統或遊戲的壓縮檔。請保持 ZIP 或 7z 壓縮檔的封裝狀態；相符的 BIOS 資料可能已包含在遊戲或上層 ROM 集合中。"
+
+#: core/ui/gui.cpp:3357
+msgid "BIOS location"
+msgstr "BIOS 位置"
+
+#: core/ui/gui.cpp:3359
+msgid "Default location: Hollycast's data folder."
+msgstr "預設位置：Hollycast 的 data 資料夾。"
+
+#: core/ui/gui.cpp:3360
+msgid ""
+"To use a custom folder instead, add it in General > Custom Paths > BIOS "
+"Folders."
+msgstr "若要改用自訂資料夾，請在「一般 > 自訂路徑 > BIOS 資料夾」中新增資料夾。"
+
+#: core/ui/gui.cpp:3361
+msgid "3. Controls"
+msgstr "3. 控制器"
+
+#: core/ui/gui.cpp:3362
+msgid "A controller is detected. Configure its mapping in Controls settings."
+msgstr "已偵測到控制器。請在控制器設定中設定按鍵對應。"
+
+#: core/ui/gui.cpp:3363
+msgid ""
+"No controller detected. Touch controls are available; you can also connect a"
+" controller."
+msgstr "未偵測到控制器。你可以使用觸控控制，也可以連接控制器。"
+
+#: core/ui/gui.cpp:3364
+msgid ""
+"No controller detected. A keyboard is available; you can also connect a "
+"controller."
+msgstr "未偵測到控制器。可使用鍵盤，也可以連接控制器。"
+
+#: core/ui/gui.cpp:3365
+msgid ""
+"No controller detected. Connect a controller and configure it in Controls "
+"settings."
+msgstr "未偵測到控制器。請連接控制器，並在控制器設定中進行設定。"
+
+#: core/ui/gui.cpp:3368
+msgid ""
+"Next: return to the library and select a game. If none appear, check your "
+"game folder."
+msgstr "下一步：返回遊戲庫並選取遊戲。若沒有顯示任何遊戲，請檢查遊戲資料夾。"
+
+#: core/ui/gui.cpp:3369
+msgid "Next: choose a game folder, then select a game in the library."
+msgstr "下一步：選取遊戲資料夾，再從遊戲庫選取遊戲。"
+
+#: core/ui/gui.cpp:3775
+msgid "Unable to start game."
+msgstr "無法啟動遊戲。"
+
+#: core/ui/gui.cpp:4011
+msgid "Profiler"
+msgstr "效能分析器"
+
+#: core/ui/gui.cpp:4079
+msgid "Fatal Error"
+msgstr "嚴重錯誤"
+
+#: core/ui/gui.cpp:4132
+msgid "Cannot load state during online play"
+msgstr "線上對戰期間無法載入狀態"
+
+#: core/ui/gui.cpp:4429
+#, c-format
+msgid "Save Slot %d (%s)"
+msgstr "儲存欄位 %d（%s）"
+
+#: core/ui/gui.cpp:4430
+#, c-format
+msgid "Load Slot %d (%s)"
+msgstr "載入欄位 %d（%s）"
+
+#: core/ui/gui.cpp:4446
+msgid "No Save States"
+msgstr "沒有存檔狀態"
+
+#: core/ui/gui_menu.cpp:423
+msgid "Set ROM Directory"
+msgstr "設定 ROM 目錄"
+
+#: core/ui/gui_menu.cpp:426
+msgid "Select ROM Directory"
+msgstr "選取 ROM 目錄"
+
+#: core/ui/gui_menu.cpp:436
+msgid "Rescan ROM Directory"
+msgstr "重新掃描 ROM 目錄"
+
+#: core/ui/gui_menu.cpp:444
+msgid "Load ROM"
+msgstr "載入 ROM"
+
+#: core/ui/gui_menu.cpp:447
+msgid "Select ROM File"
+msgstr "選取 ROM 檔案"
+
+#: core/ui/gui_menu.cpp:474
+msgid "Exit Emulator"
+msgstr "結束模擬器"
+
+#: core/ui/gui_menu.cpp:509
+msgid "Restart"
+msgstr "重新啟動"
+
+#: core/ui/gui_menu.cpp:529 core/ui/settings_new.cpp:3864
+msgid "Screenshot"
+msgstr "螢幕擷取"
+
+#: core/ui/gui_menu.cpp:565
+msgid "Tools"
+msgstr "工具"
+
+#: core/ui/gui_menu.cpp:567
+msgid "CHD Convert"
+msgstr "CHD 轉換"
+
+#: core/ui/gui_menu.cpp:569
+msgid "CHD conversion is not available yet."
+msgstr "CHD 轉換功能尚未提供。"
+
+#: core/ui/gui_menu.cpp:572 core/ui/settings_new.cpp:3699
+msgid "Custom Boxart"
+msgstr "自訂封面圖片"
+
+#: core/ui/gui_menu.cpp:593 core/ui/settings_new.cpp:2340
+#: core/ui/settings_new.cpp:9382
+msgid "Library"
+msgstr "遊戲庫"
+
+#: core/ui/gui_menu.cpp:604 core/ui/settings_new.cpp:2344
+#: core/ui/settings_new.cpp:5719
+msgid "On Screen Display"
+msgstr "螢幕顯示資訊"
+
+#: core/ui/gui_menu.cpp:640
+msgid "Help"
+msgstr "說明"
+
+#: core/ui/gui_menu.cpp:643
+msgid "Discord"
+msgstr "Discord"
+
+#: core/ui/gui_menu.cpp:649 core/ui/gui_menu.cpp:657 core/ui/gui_menu.cpp:667
+msgid "Opening links is not supported on this platform."
+msgstr "此平台不支援開啟連結。"
+
+#: core/ui/gui_menu.cpp:651
+msgid "Report Bug"
+msgstr "回報錯誤"
+
+#: core/ui/gui_menu.cpp:661
+msgid "Check for Updates"
+msgstr "檢查更新"
+
+#: core/ui/gui_menu.cpp:671 core/ui/settings_new.cpp:9116
+msgid "About Hollycast"
+msgstr "關於 Hollycast"
+
+#: core/ui/gui_util.cpp:373
+msgid "Path"
+msgstr "路徑"
+
+#: core/ui/gui_util.cpp:389
+msgid "This PC"
+msgstr "本機"
+
+#: core/ui/gui_util.cpp:544
+msgid "Search"
+msgstr "搜尋"
+
+#: core/ui/gui_util.cpp:569
+msgid "Folders"
+msgstr "資料夾"
+
+#: core/ui/gui_util.cpp:573
+msgid "This device"
+msgstr "此裝置"
+
+#: core/ui/gui_util.cpp:637
+msgid "Date modified"
+msgstr "修改日期"
+
+#: core/ui/gui_util.cpp:675
+msgid "File name:"
+msgstr "檔名："
+
+#: core/ui/gui_util.cpp:675
+msgid "Folder:"
+msgstr "資料夾："
+
+#: core/ui/gui_util.cpp:677
+msgid "Filename"
+msgstr "檔名"
+
+#: core/ui/gui_util.cpp:684 core/ui/gui_util.cpp:688
+msgid "Open"
+msgstr "開啟"
+
+#: core/ui/mainui.cpp:74
+msgid "The game has been paused but it is recommended to restart Hollycast"
+msgstr "遊戲已暫停，建議重新啟動 Hollycast"
+
+#: core/ui/performance_overlay.cpp:545
+#, c-format
+msgid "%d%% (limit 100%%)"
+msgstr "%d%%（上限 100%%）"
+
+#: core/ui/performance_overlay.cpp:550
+#, c-format
+msgid "%d%% (unlimited)"
+msgstr "%d%%（不限速）"
+
+#: core/ui/performance_overlay.cpp:552
+#, c-format
+msgid "%d%% (limit %d%%)"
+msgstr "%d%%（上限 %d%%）"
+
+#: core/ui/performance_overlay.cpp:564
+#, c-format
+msgid "%.2f FPS | %.2f VPS"
+msgstr "%.2f FPS | %.2f VPS"
+
+#: core/ui/performance_overlay.cpp:572
+msgid "Speed: "
+msgstr "速度： "
+
+#: core/ui/performance_overlay.cpp:582
+msgid "Output FPS: unavailable (framework-managed presentation)"
+msgstr "輸出 FPS：無法使用（由框架管理的畫面呈現）"
+
+#: core/ui/performance_overlay.cpp:585
+#, c-format
+msgid "Output FPS: %.2f"
+msgstr "輸出 FPS：%.2f"
+
+#: core/ui/performance_overlay.cpp:596 core/ui/performance_overlay.cpp:601
+#: core/ui/performance_overlay.cpp:604 core/ui/performance_overlay.cpp:659
+msgid "unavailable"
+msgstr "無法使用"
+
+#: core/ui/performance_overlay.cpp:605
+msgid "Rendered: "
+msgstr "已渲染： "
+
+#: core/ui/performance_overlay.cpp:605
+msgid " | Raw: "
+msgstr " | 原始： "
+
+#: core/ui/performance_overlay.cpp:610
+msgid " | Viewport: "
+msgstr " | 視埠： "
+
+#: core/ui/performance_overlay.cpp:611
+msgid " | Output: "
+msgstr " | 輸出： "
+
+#: core/ui/performance_overlay.cpp:619
+#, c-format
+msgid "%s%s | %.0f batches | %.0f verts | %.1f passes | %.1f uploads/s"
+msgstr "%s%s | %.0f 個批次 | %.0f 個頂點 | %.1f 個渲染階段 | 每秒 %.1f 次上傳"
+
+#: core/ui/performance_overlay.cpp:628
+msgid "Host GPU: unavailable (backend timing unsupported)"
+msgstr "主機 GPU：無法使用（後端不支援計時）"
+
+#: core/ui/performance_overlay.cpp:630
+msgid "Host GPU: sampling timestamp queries"
+msgstr "主機 GPU：正在取樣時間戳查詢"
+
+#: core/ui/performance_overlay.cpp:632
+#, c-format
+msgid "Host GPU: %.1f%% (%.2f ms/render)"
+msgstr "主機 GPU：%.1f%%（每次渲染 %.2f ms）"
+
+#: core/ui/performance_overlay.cpp:640
+#, c-format
+msgid "Dreamcast PVR: %.1f%% of frame budget"
+msgstr "Dreamcast PVR：佔影格預算 %.1f%%"
+
+#: core/ui/performance_overlay.cpp:651
+#, c-format
+msgid "%.2f GiB"
+msgstr "%.2f GiB"
+
+#: core/ui/performance_overlay.cpp:653
+#, c-format
+msgid "%.1f MiB"
+msgstr "%.1f MiB"
+
+#: core/ui/performance_overlay.cpp:661
+#, c-format
+msgid "Hollycast RAM: %s"
+msgstr "Hollycast RAM：%s"
+
+#: core/ui/performance_overlay.cpp:675
+#, c-format
+msgid "GPU %u memory: %s / %s"
+msgstr "GPU %u 記憶體：%s／%s"
+
+#: core/ui/performance_overlay.cpp:680
+msgid "GPU VRAM: unavailable (no authoritative query)"
+msgstr "GPU VRAM：無法使用（沒有權威查詢）"
+
+#: core/ui/performance_overlay.cpp:687
+msgid "Threads: ON (SH4 + PVR separate)"
+msgstr "執行緒：開啟（SH4 與 PVR 分開）"
+
+#: core/ui/performance_overlay.cpp:688
+msgid "Threads: OFF (SH4 + PVR shared)"
+msgstr "執行緒：關閉（SH4 與 PVR 共用）"
+
+#: core/ui/performance_overlay.cpp:694
+#, c-format
+msgid "%s: %.1f%% (%.2f ms/vblank)"
+msgstr "%s：%.1f%%（%.2f ms／VBlank）"
+
+#: core/ui/performance_overlay.cpp:702
+msgid "Host CPU (SH4): sampling thread usage"
+msgstr "主機 CPU（SH4）：正在取樣執行緒使用率"
+
+#: core/ui/performance_overlay.cpp:706 core/ui/performance_overlay.cpp:713
+msgid "Host CPU (SH4 Thread)"
+msgstr "主機 CPU（SH4 執行緒）"
+
+#: core/ui/performance_overlay.cpp:707 core/ui/performance_overlay.cpp:714
+msgid "Host CPU (SH4 + PVR)"
+msgstr "主機 CPU（SH4 + PVR）"
+
+#: core/ui/performance_overlay.cpp:709 core/ui/performance_overlay.cpp:729
+#, c-format
+msgid "%s: %.1f%% (no video frame)"
+msgstr "%s：%.1f%%（沒有視訊影格）"
+
+#: core/ui/performance_overlay.cpp:716
+msgid "SH4 CPU Work: unavailable (no thread CPU timer)"
+msgstr "SH4 CPU 工作：無法使用（沒有執行緒 CPU 計時器）"
+
+#: core/ui/performance_overlay.cpp:724
+msgid "Host CPU (PVR): sampling thread usage"
+msgstr "主機 CPU（PVR）：正在取樣執行緒使用率"
+
+#: core/ui/performance_overlay.cpp:725
+msgid "Host CPU (PVR Renderer)"
+msgstr "主機 CPU（PVR 渲染器）"
+
+#: core/ui/performance_overlay.cpp:725
+msgid "Host CPU (PVR Portion)"
+msgstr "主機 CPU（PVR 部分）"
+
+#: core/ui/performance_overlay.cpp:734
+msgid "PVR Renderer CPU Work: unavailable (no thread CPU timer)"
+msgstr "PVR 渲染器 CPU 工作：無法使用（沒有執行緒 CPU 計時器）"
+
+#: core/ui/performance_overlay.cpp:741
+msgid "Host CPU: sampling process and device usage"
+msgstr "主機 CPU：正在取樣處理程序與裝置使用率"
+
+#: core/ui/performance_overlay.cpp:744
+#, c-format
+msgid "Host CPU: Hollycast %.1f%% | Device %.1f%%"
+msgstr "主機 CPU：Hollycast %.1f%% | 裝置 %.1f%%"
+
+#: core/ui/performance_overlay.cpp:747
+#, c-format
+msgid "Host CPU: Hollycast %.1f%% of device capacity"
+msgstr "主機 CPU：佔裝置容量 %.1f%%"
+
+#: core/ui/performance_overlay.cpp:749
+#, c-format
+msgid "Host CPU: Device %.1f%%"
+msgstr "主機 CPU：裝置 %.1f%%"
+
+#: core/ui/performance_overlay.cpp:756
+msgid "Dreamcast SH4: sampling execution rate"
+msgstr "Dreamcast SH4：正在取樣執行速率"
+
+#: core/ui/performance_overlay.cpp:758
+#, c-format
+msgid "Dreamcast SH4: %.0f%% target execution rate"
+msgstr "Dreamcast SH4：目標執行速率 %.0f%%"
+
+#: core/ui/performance_overlay.cpp:810 core/ui/performance_overlay.cpp:811
+#, c-format
+msgid "%.0f ms"
+msgstr "%.0f ms"
+
+#: core/ui/performance_overlay.cpp:859
+#, c-format
+msgid "%s: %.0f%% app | %.0f%% device"
+msgstr "%s：應用程式 %.0f%% | 裝置 %.0f%%"
+
+#: core/ui/performance_overlay.cpp:862
+#, c-format
+msgid "%s: %.0f%%"
+msgstr "%s：%.0f%%"
+
+#: core/ui/performance_overlay.cpp:1167
+#, c-format
+msgid "Frame Times: %.2f ms Min | %.2f ms Avg | %.2f ms Max"
+msgstr "影格時間：最短 %.2f ms | 平均 %.2f ms | 最長 %.2f ms"
+
+#: core/ui/performance_overlay.cpp:1170
+msgid "Frame Times: unavailable"
+msgstr "影格時間：無法使用"
+
+#: core/ui/performance_overlay.cpp:1276
+msgid "Host CPU"
+msgstr "主機 CPU"
+
+#: core/ui/performance_overlay.cpp:1279
+msgid "Host GPU"
+msgstr "主機 GPU"
+
+#: core/ui/settings_new.cpp:448
+msgid ""
+"System, content, interface, and storage behavior. Highlight or select a "
+"setting to see a fuller explanation here."
+msgstr "系統、內容、介面與儲存行為。反白或選取設定，即可在此查看詳細說明。"
+
+#: core/ui/settings_new.cpp:450
+msgid ""
+"Library layout, artwork, scraped media, game metadata, and VMU save icons. "
+"Highlight or select a setting to see a fuller explanation here."
+msgstr "遊戲庫版面、封面圖片、擷取的媒體、遊戲中繼資料與 VMU 存檔圖示。反白或選取設定，即可在此查看詳細說明。"
+
+#: core/ui/settings_new.cpp:452
+msgid ""
+"Graphics quality, renderer behavior, scaling, and performance tuning. "
+"Highlight or select a setting to see what it changes and why it matters."
+msgstr "圖形品質、渲染器行為、縮放與效能調校。反白或選取設定，即可查看其影響與重要性。"
+
+#: core/ui/settings_new.cpp:454
+msgid ""
+"In-game information, VMU displays, performance metrics, and overlay "
+"appearance. Highlight or select a setting to see what it changes and why it "
+"matters."
+msgstr "遊戲內資訊、VMU 顯示畫面、效能指標與螢幕顯示資訊外觀。反白或選取設定，即可查看其影響與重要性。"
+
+#: core/ui/settings_new.cpp:456
+msgid ""
+"Audio backend, latency, mixing, and output behavior. Highlight or select a "
+"setting for practical guidance before changing it."
+msgstr "音訊後端、延遲、混音與輸出行為。變更設定前，請先選取該設定以查看實用說明。"
+
+#: core/ui/settings_new.cpp:458
+msgid ""
+"Controller devices, mappings, sensitivity, and input behavior. Highlight or "
+"select a setting to see setup tips and tradeoffs."
+msgstr "控制器裝置、按鍵對應、靈敏度與輸入行為。反白或選取設定，即可查看設定提示與取捨。"
+
+#: core/ui/settings_new.cpp:460
+msgid ""
+"Online play, server, match code, and link features. Highlight or select a "
+"setting for connection details and recommendations."
+msgstr "線上遊玩、伺服器、對戰代碼與連結功能。反白或選取設定，即可查看連線詳情與建議。"
+
+#: core/ui/settings_new.cpp:462
+msgid ""
+"Power-user options, debugging, underclocking, overlays, and developer tools."
+" Highlight or select a setting for deeper explanations."
+msgstr "進階選項、偵錯、降頻、螢幕顯示資訊與開發工具。反白或選取設定，即可查看深入說明。"
+
+#: core/ui/settings_new.cpp:464
+msgid "Project information, links, license details, and credits."
+msgstr "專案資訊、連結、授權資訊與貢獻者名單。"
+
+#: core/ui/settings_new.cpp:468 core/ui/settings_new.cpp:611
+msgid "Highlight or select a setting to see details here."
+msgstr "反白或選取設定，即可在此查看詳細資訊。"
+
+#: core/ui/settings_new.cpp:692
+msgid "Setting Details: "
+msgstr "設定詳細資料： "
+
+#: core/ui/settings_new.cpp:1484
+msgid "Current inputs: "
+msgstr "目前輸入： "
+
+#: core/ui/settings_new.cpp:1827
+msgid "bindings"
+msgstr "按鍵對應"
+
+#: core/ui/settings_new.cpp:1982 core/ui/settings_new.cpp:3807
+msgid "Set Path"
+msgstr "設定路徑"
+
+#: core/ui/settings_new.cpp:1989
+msgid "Select "
+msgstr "選取 "
+
+#: core/ui/settings_new.cpp:2023
+#, c-format
+msgid "Add %s"
+msgstr "新增 %s"
+
+#: core/ui/settings_new.cpp:2026
+#, c-format
+msgid "Add another %s path"
+msgstr "新增其他 %s 路徑"
+
+#: core/ui/settings_new.cpp:2063
+#, c-format
+msgid "Additional %s path"
+msgstr "其他 %s 路徑"
+
+#: core/ui/settings_new.cpp:2081 core/ui/settings_new.cpp:2981
+msgid "Select Path"
+msgstr "選取路徑"
+
+#: core/ui/settings_new.cpp:2095
+#, c-format
+msgid "Select %s"
+msgstr "選取 %s"
+
+#: core/ui/settings_new.cpp:2158
+msgid "Nearest-Neighbor"
+msgstr "最近相鄰"
+
+#: core/ui/settings_new.cpp:2158
+msgid "Bilinear"
+msgstr "雙線性"
+
+#: core/ui/settings_new.cpp:2158
+msgid "Bilinear / No Edge Blending"
+msgstr "雙線性／不混合邊緣"
+
+#: core/ui/settings_new.cpp:2158
+msgid "Jinc2"
+msgstr "Jinc2"
+
+#: core/ui/settings_new.cpp:2159
+msgid "Jinc2 / No Edge Blending"
+msgstr "Jinc2／不混合邊緣"
+
+#: core/ui/settings_new.cpp:2159
+msgid "MMPX"
+msgstr "MMPX"
+
+#: core/ui/settings_new.cpp:2159
+msgid "MMPX Enhanced"
+msgstr "MMPX 強化版"
+
+#: core/ui/settings_new.cpp:2159
+msgid "MMPX Advanced"
+msgstr "MMPX 進階版"
+
+#: core/ui/settings_new.cpp:2160
+msgid "Jinc2 Anti-Ring"
+msgstr "Jinc2 抗振鈴"
+
+#: core/ui/settings_new.cpp:2160
+msgid "Jinc2 Sharp Anti-Ring"
+msgstr "Jinc2 銳利抗振鈴"
+
+#: core/ui/settings_new.cpp:2160
+msgid "Jinc2 Mild Anti-Ring"
+msgstr "Jinc2 輕度抗振鈴"
+
+#: core/ui/settings_new.cpp:2161
+msgid "Jinc2 Extra Sharp Anti-Ring"
+msgstr "Jinc2 極銳利抗振鈴"
+
+#: core/ui/settings_new.cpp:2161
+msgid "Lanczos2 Anti-Ring"
+msgstr "Lanczos2 抗振鈴"
+
+#: core/ui/settings_new.cpp:2161
+msgid "Lanczos3 Anti-Ring"
+msgstr "Lanczos3 抗振鈴"
+
+#: core/ui/settings_new.cpp:2162
+msgid "Robidoux"
+msgstr "Robidoux"
+
+#: core/ui/settings_new.cpp:2162
+msgid "Robidoux Sharp"
+msgstr "Robidoux 銳利版"
+
+#: core/ui/settings_new.cpp:2162
+msgid "Bicubic Catmull-Rom"
+msgstr "雙三次 Catmull-Rom"
+
+#: core/ui/settings_new.cpp:2163
+msgid "Bicubic Mitchell"
+msgstr "雙三次 Mitchell"
+
+#: core/ui/settings_new.cpp:2179
+msgid "8x8"
+msgstr "8x8"
+
+#: core/ui/settings_new.cpp:2179
+msgid "16x16"
+msgstr "16x16"
+
+#: core/ui/settings_new.cpp:2179
+msgid "32x32"
+msgstr "32x32"
+
+#: core/ui/settings_new.cpp:2179
+msgid "64x64"
+msgstr "64x64"
+
+#: core/ui/settings_new.cpp:2179
+msgid "128x128"
+msgstr "128x128"
+
+#: core/ui/settings_new.cpp:2179
+msgid "256x256"
+msgstr "256x256"
+
+#: core/ui/settings_new.cpp:2179
+msgid "512x512"
+msgstr "512x512"
+
+#: core/ui/settings_new.cpp:2179
+msgid "1024x1024+"
+msgstr "1024x1024+"
+
+#: core/ui/settings_new.cpp:2221
+msgid "Texture Filtering Live Tune###TextureFilteringLiveTune"
+msgstr "紋理過濾即時調校###TextureFilteringLiveTune"
+
+#: core/ui/settings_new.cpp:2223
+msgid "Back to Video Settings"
+msgstr "返回視訊設定"
+
+#: core/ui/settings_new.cpp:2226
+msgid "live game preview"
+msgstr "遊戲即時預覽"
+
+#: core/ui/settings_new.cpp:2228
+msgid ""
+"Try the filter and its texture-size limit while the game continues behind "
+"this panel."
+msgstr "遊戲會在此面板後方持續執行，可在此試用過濾器及紋理尺寸上限。"
+
+#: core/ui/settings_new.cpp:2238 core/ui/settings_new.cpp:5478
+msgid "Sample Texture Filter"
+msgstr "取樣紋理過濾器"
+
+#: core/ui/settings_new.cpp:2271
+msgid "Filter Resolution Limit"
+msgstr "過濾解析度上限"
+
+#: core/ui/settings_new.cpp:2293
+msgid ""
+"Filter resolution limit uses the texture width bucket. Larger textures are "
+"left on the normal sampler path."
+msgstr "過濾解析度上限依紋理寬度區間判定。較大的紋理會沿用一般取樣器路徑。"
+
+#: core/ui/settings_new.cpp:2707
+msgid "General Configuration"
+msgstr "一般設定"
+
+#: core/ui/settings_new.cpp:2711
+msgid "Review game folders, firmware and controls."
+msgstr "檢視遊戲資料夾、韌體與控制器。"
+
+#: core/ui/settings_new.cpp:2717
+msgid "Language & Region"
+msgstr "語言與地區"
+
+#: core/ui/settings_new.cpp:2730
+msgid "Français"
+msgstr "Français"
+
+#: core/ui/settings_new.cpp:2731
+msgid "Magyar"
+msgstr "Magyar"
+
+#: core/ui/settings_new.cpp:2732
+msgid "日本語"
+msgstr "日本語"
+
+#: core/ui/settings_new.cpp:2733
+msgid "Português (Brasil)"
+msgstr "Português (Brasil)"
+
+#: core/ui/settings_new.cpp:2734
+msgid "Svenska"
+msgstr "Svenska"
+
+#: core/ui/settings_new.cpp:2735
+msgid "Türkçe"
+msgstr "Türkçe"
+
+#: core/ui/settings_new.cpp:2736
+msgid "简体中文"
+msgstr "简体中文"
+
+#: core/ui/settings_new.cpp:2737
+msgid "正體中文"
+msgstr "正體中文"
+
+#: core/ui/settings_new.cpp:2759
+msgid "UILanguagePopup"
+msgstr "UILanguagePopup"
+
+#: core/ui/settings_new.cpp:2774
+msgid "UILanguageSetting"
+msgstr "UILanguageSetting"
+
+#: core/ui/settings_new.cpp:2775
+msgid "Language used by Hollycast menus and settings."
+msgstr "Hollycast 選單與設定使用的語言。"
+
+#: core/ui/settings_new.cpp:2778
+msgid ""
+"UI Language\n"
+"Changes the language used by Hollycast menus, settings, notifications, and other app UI.\n"
+"System Default follows your device language when a translation is available.\n"
+"\n"
+"Game text is controlled separately by Dreamcast Language below."
+msgstr ""
+"介面語言\n"
+"變更 Hollycast 選單、設定、通知及其他應用程式介面所使用的語言。\n"
+"若有提供翻譯，系統預設會依照裝置語言顯示。\n"
+"\n"
+"下方的 Dreamcast 語言會另外控制遊戲文字。"
+
+#: core/ui/settings_new.cpp:2792
+msgid "LanguagePopup"
+msgstr "LanguagePopup"
+
+#: core/ui/settings_new.cpp:2797 core/ui/settings_new.cpp:2821
+#: core/ui/settings_new.cpp:2871
+msgid "(auto) "
+msgstr "(auto) "
+
+#: core/ui/settings_new.cpp:2800
+msgid "LanguageSetting"
+msgstr "LanguageSetting"
+
+#: core/ui/settings_new.cpp:2801
+msgid "Dreamcast BIOS language (affects game text/menus)."
+msgstr "遊戲文字與選單使用的 Dreamcast BIOS 語言。"
+
+#: core/ui/settings_new.cpp:2804
+msgid ""
+"Language\n"
+"Sets the Dreamcast BIOS language that games read for menus and text.\n"
+"Most games will follow this setting; some may ignore it.\n"
+"\n"
+"Arcade platforms typically use automatic region/language behavior."
+msgstr ""
+"語言\n"
+"設定遊戲讀取選單與文字時使用的 Dreamcast BIOS 語言。\n"
+"大多數遊戲會遵循此設定；部分遊戲可能會忽略。\n"
+"\n"
+"街機平台通常會依照自動地區／語言行為運作。"
+
+#: core/ui/settings_new.cpp:2811
+msgid "NTSC"
+msgstr "NTSC"
+
+#: core/ui/settings_new.cpp:2811
+msgid "PAL"
+msgstr "PAL"
+
+#: core/ui/settings_new.cpp:2811
+msgid "PAL/M"
+msgstr "PAL/M"
+
+#: core/ui/settings_new.cpp:2811
+msgid "PAL/N"
+msgstr "PAL/N"
+
+#: core/ui/settings_new.cpp:2816
+msgid "BroadcastPopup"
+msgstr "BroadcastPopup"
+
+#: core/ui/settings_new.cpp:2824
+msgid "BroadcastSetting"
+msgstr "BroadcastSetting"
+
+#: core/ui/settings_new.cpp:2825
+msgid "TV broadcast standard for non-VGA output modes."
+msgstr "非 VGA 輸出模式使用的電視廣播標準。"
+
+#: core/ui/settings_new.cpp:2828
+msgid ""
+"Broadcast\n"
+"Controls the TV broadcast standard used for non-VGA video modes.\n"
+"NTSC is typically 60 Hz; PAL is typically 50 Hz.\n"
+"\n"
+"If you see timing issues or a game expects a specific region video mode, try changing this."
+msgstr ""
+"電視廣播標準\n"
+"控制非 VGA 視訊模式使用的電視廣播標準。\n"
+"NTSC 通常為 60 Hz；PAL 通常為 50 Hz。\n"
+"\n"
+"若遇到時序問題，或遊戲需要特定地區的視訊模式，請嘗試變更此設定。"
+
+#: core/ui/settings_new.cpp:2835 core/ui/settings_new.cpp:3061
+msgid "Export"
+msgstr "匯出"
+
+#: core/ui/settings_new.cpp:2842
+msgid "RegionPopup"
+msgstr "RegionPopup"
+
+#: core/ui/settings_new.cpp:2848
+msgid "RegionSetting"
+msgstr "RegionSetting"
+
+#: core/ui/settings_new.cpp:2849
+msgid "BIOS region (can affect compatibility and defaults)."
+msgstr "可能影響相容性與預設值的 BIOS 地區。"
+
+#: core/ui/settings_new.cpp:2852
+msgid ""
+"Region\n"
+"Sets the emulated BIOS region.\n"
+"This can affect game compatibility, default language choices, and region-locked behavior in some titles.\n"
+"\n"
+"If a game refuses to boot or behaves like the wrong region, try changing this."
+msgstr ""
+"地區\n"
+"設定模擬 BIOS 的地區。\n"
+"這可能影響遊戲相容性、預設語言選項，以及部分遊戲的地區鎖定行為。\n"
+"\n"
+"若遊戲無法啟動，或行為像是使用錯誤地區，請嘗試變更此設定。"
+
+#: core/ui/settings_new.cpp:2866
+msgid "CablePopup"
+msgstr "CablePopup"
+
+#: core/ui/settings_new.cpp:2891
+msgid "CableSetting"
+msgstr "CableSetting"
+
+#: core/ui/settings_new.cpp:2892
+msgid "Emulated video cable type (affects game video modes)."
+msgstr "模擬的視訊線材類型（會影響遊戲視訊模式）。"
+
+#: core/ui/settings_new.cpp:2895
+msgid ""
+"Cable\n"
+"Controls the emulated Dreamcast video cable type.\n"
+"Games can change behavior depending on whether they detect VGA vs. TV output.\n"
+"\n"
+"If a game has missing effects, wrong colors, or odd mode selection, this is worth trying."
+msgstr ""
+"線材\n"
+"設定模擬的 Dreamcast 視訊線材類型。\n"
+"遊戲會依據偵測到 VGA 或電視輸出而改變行為。\n"
+"\n"
+"若遊戲缺少特效、色彩錯誤或選擇了奇怪的顯示模式，可以嘗試變更此設定。"
+
+#: core/ui/settings_new.cpp:2908
+msgid "Content Paths"
+msgstr "內容路徑"
+
+#: core/ui/settings_new.cpp:2918
+msgid ""
+"Content Paths\n"
+"These are the folders where your games are stored.\n"
+"Add one or more folders and use Rescan/Refresh to update the library view."
+msgstr ""
+"內容路徑\n"
+"這些資料夾存放你的遊戲。\n"
+"新增一個或多個資料夾，並使用「重新掃描／重新整理」更新遊戲庫畫面。"
+
+#: core/ui/settings_new.cpp:2930
+msgid "Content Folders"
+msgstr "內容資料夾"
+
+#: core/ui/settings_new.cpp:2935
+#, c-format
+msgid "Content Folder %u"
+msgstr "內容資料夾 %u"
+
+#: core/ui/settings_new.cpp:2954
+msgid "Additional content folder"
+msgstr "其他內容資料夾"
+
+#: core/ui/settings_new.cpp:2966
+msgid ""
+"Content Paths\n"
+"Adds another folder to scan for games.\n"
+"If you have performance issues when scanning, prefer a smaller folder or fewer subfolders."
+msgstr ""
+"內容路徑\n"
+"新增另一個遊戲掃描資料夾。\n"
+"若掃描時遇到效能問題，請改用較小的資料夾或減少子資料夾。"
+
+#: core/ui/settings_new.cpp:2975
+msgid "Add Content Folder"
+msgstr "新增內容資料夾"
+
+#: core/ui/settings_new.cpp:2991 core/ui/settings_new.cpp:3106
+msgid "Refresh the current content library view."
+msgstr "重新整理目前的內容遊戲庫畫面。"
+
+#: core/ui/settings_new.cpp:2993
+msgid "Add another content folder"
+msgstr "新增其他內容資料夾"
+
+#: core/ui/settings_new.cpp:3023
+msgid ""
+"Data Folder\n"
+"This is Hollycast's writable data directory on this platform.\n"
+"\n"
+"It typically contains:\n"
+"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
+"- Save data (VMU files) and save states\n"
+"\n"
+"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Flycast looks for.\n"
+"Custom Paths below can also override where some of these files are stored."
+msgstr ""
+"資料目錄\n"
+"此資料夾是 Hollycast 在此平台可寫入的資料目錄。\n"
+"\n"
+"通常包含：\n"
+"- Dreamcast BIOS 設定檔（`dc_boot.bin` 和 `dc_flash.bin`）\n"
+"- 儲存資料（VMU 檔案）與存檔狀態\n"
+"\n"
+"若 Hollycast 找不到 BIOS，請確認 BIOS 檔案位於預期位置，且檔名符合 Flycast 的要求。\n"
+"下方的自訂路徑也可覆寫部分檔案的儲存位置。"
+
+#: core/ui/settings_new.cpp:3034 core/ui/settings_new.cpp:3039
+msgid "Home Directory"
+msgstr "主目錄"
+
+#: core/ui/settings_new.cpp:3040
+msgid ""
+"The folder where Hollycast saves configuration files and VMUs. BIOS files "
+"should be in a subfolder named \"data\""
+msgstr "Hollycast 儲存設定檔與 VMU 的資料夾。BIOS 檔案應放在名為「data」的子資料夾中。"
+
+#: core/ui/settings_new.cpp:3044
+msgid ""
+"Home Directory\n"
+"This is Hollycast's main configuration directory.\n"
+"\n"
+"It typically contains:\n"
+"- Configuration files\n"
+"- VMU saves and other user data\n"
+"\n"
+"On platforms that use a `data` subfolder, BIOS/Flash files should be placed under `data` inside this directory.\n"
+"If you change custom paths below, Hollycast may store some files elsewhere, but this directory remains the base for core configuration."
+msgstr ""
+"主目錄\n"
+"這是 Hollycast 的主要設定目錄。\n"
+"\n"
+"通常包含：\n"
+"- 設定檔\n"
+"- VMU 存檔與其他使用者資料\n"
+"\n"
+"在使用 `data` 子資料夾的平台上，BIOS／Flash 檔案應放在此目錄下的 `data` 資料夾中。\n"
+"若變更下方的自訂路徑，部分檔案可能會儲存在其他位置，但此目錄仍是核心設定的基礎位置。"
+
+#: core/ui/settings_new.cpp:3058
+msgid "Import"
+msgstr "匯入"
+
+#: core/ui/settings_new.cpp:3068
+#, c-format
+msgid "open \"%s\""
+msgstr "open \"%s\""
+
+#: core/ui/settings_new.cpp:3082
+msgid ""
+"Rescan Content\n"
+"Rescans all configured content folders and rebuilds the game list.\n"
+"\n"
+"This can take a moment if you have many games or slow storage.\n"
+"If you just added/removed files and they are not showing up, this is the first thing to try."
+msgstr ""
+"重新掃描內容\n"
+"重新掃描所有已設定的內容資料夾並重建遊戲清單。\n"
+"\n"
+"若遊戲很多或儲存裝置較慢，可能需要一些時間。\n"
+"若剛新增或移除檔案但畫面未更新，請先嘗試此功能。"
+
+#: core/ui/settings_new.cpp:3108
+msgid "Rescan all content folders"
+msgstr "重新掃描所有內容資料夾"
+
+#: core/ui/settings_new.cpp:3120
+msgid "UI Settings"
+msgstr "介面設定"
+
+#: core/ui/settings_new.cpp:3158
+msgid "UIThemePopup"
+msgstr "UIThemePopup"
+
+#: core/ui/settings_new.cpp:3198
+msgid "UIThemeSetting"
+msgstr "UIThemeSetting"
+
+#: core/ui/settings_new.cpp:3199
+msgid "Choose the UI theme colors."
+msgstr "選擇介面主題色彩。"
+
+#: core/ui/settings_new.cpp:3201
+msgid ""
+"UI Theme\n"
+"Changes the overall look and contrast of the UI. Built-in themes are bundled presets.\n"
+"Use Create Theme to copy the selected preset or custom theme and customize your own version.\n"
+"Custom themes are saved in the themes folder in the configuration directory."
+msgstr ""
+"介面主題\n"
+"變更介面的整體外觀與對比。內建主題是隨附的預設組合。\n"
+"使用「建立主題」即可複製所選的預設主題或自訂主題，再自訂自己的版本。\n"
+"自訂主題會儲存在設定目錄的 themes 資料夾中。"
+
+#: core/ui/settings_new.cpp:3208
+msgid "Custom Theme Folder"
+msgstr "自訂主題資料夾"
+
+#: core/ui/settings_new.cpp:3209
+msgid "Add JSON theme files here, then select them above."
+msgstr "在此新增 JSON 主題檔案，再從上方選取。"
+
+#: core/ui/settings_new.cpp:3211
+msgid "Theme Error"
+msgstr "主題錯誤"
+
+#: core/ui/settings_new.cpp:3212
+msgid ""
+"The theme file could not be loaded. Built-in themes use their bundled "
+"defaults."
+msgstr "無法載入主題檔案。內建主題會使用隨附的預設值。"
+
+#: core/ui/settings_new.cpp:3214
+msgid "Theme Import"
+msgstr "匯入主題"
+
+#: core/ui/settings_new.cpp:3215
+msgid "The theme and its referenced assets are ready to use."
+msgstr "主題及其參照的資產已準備就緒，可以使用。"
+
+#: core/ui/settings_new.cpp:3245
+msgid "Create Theme"
+msgstr "建立主題"
+
+#: core/ui/settings_new.cpp:3250
+msgid "Edit Selected Theme"
+msgstr "編輯所選主題"
+
+#: core/ui/settings_new.cpp:3255
+msgid "Import Theme…"
+msgstr "匯入主題…"
+
+#: core/ui/settings_new.cpp:3274
+msgid "Edit theme"
+msgstr "編輯主題"
+
+#: core/ui/settings_new.cpp:3277
+msgid "Changes preview as you edit. Cancel restores the previous theme."
+msgstr "編輯時會即時預覽變更。按下取消會還原先前的主題。"
+
+#: core/ui/settings_new.cpp:3284
+msgid "Theme"
+msgstr "主題"
+
+#: core/ui/settings_new.cpp:3287
+msgid "Theme name"
+msgstr "主題名稱"
+
+#: core/ui/settings_new.cpp:3290
+msgid "Base theme"
+msgstr "基礎主題"
+
+#: core/ui/settings_new.cpp:3310
+msgid "Preview"
+msgstr "預覽"
+
+#: core/ui/settings_new.cpp:3323
+msgid "Colors"
+msgstr "色彩"
+
+#: core/ui/settings_new.cpp:3326
+msgid "Key colors"
+msgstr "主要色彩"
+
+#: core/ui/settings_new.cpp:3327
+msgid ""
+"Choose which colors to override. Unchecked colors use the theme defaults."
+msgstr "選取要覆寫的色彩。未選取的色彩會使用主題預設值。"
+
+#: core/ui/settings_new.cpp:3329
+msgid "Accent"
+msgstr "強調色"
+
+#: core/ui/settings_new.cpp:3329
+msgid "Success"
+msgstr "成功"
+
+#: core/ui/settings_new.cpp:3329 core/ui/settings_new.cpp:8684
+msgid "Warning"
+msgstr "警告"
+
+#: core/ui/settings_new.cpp:3353
+msgid "Using theme default"
+msgstr "使用主題預設值"
+
+#: core/ui/settings_new.cpp:3358
+msgid "Advanced interface colors"
+msgstr "進階介面色彩"
+
+#: core/ui/settings_new.cpp:3360
+msgid "Search colors"
+msgstr "搜尋色彩"
+
+#: core/ui/settings_new.cpp:3376
+msgid "Widget-specific colors"
+msgstr "元件專用色彩"
+
+#: core/ui/settings_new.cpp:3410
+msgid "Style & layout"
+msgstr "樣式與版面配置"
+
+#: core/ui/settings_new.cpp:3430
+msgid "Spacing, rounding, padding and control proportions"
+msgstr "間距、圓角、內距與控制項比例"
+
+#: core/ui/settings_new.cpp:3458
+msgid "Hollycast layout"
+msgstr "Hollycast 版面配置"
+
+#: core/ui/settings_new.cpp:3471
+msgid "Fonts & assets"
+msgstr "字型與資產"
+
+#: core/ui/settings_new.cpp:3474
+msgid ""
+"Use paths relative to the custom theme folder. Copy files there first; "
+"import and export copy referenced files automatically."
+msgstr "使用相對於自訂主題資料夾的路徑。請先將檔案複製到該處；匯入與匯出時會自動複製參照的檔案。"
+
+#: core/ui/settings_new.cpp:3482
+msgid "Body font path"
+msgstr "內文字型路徑"
+
+#: core/ui/settings_new.cpp:3483
+msgid "Bold font path"
+msgstr "粗體字型路徑"
+
+#: core/ui/settings_new.cpp:3484
+msgid "Background image path"
+msgstr "背景圖片路徑"
+
+#: core/ui/settings_new.cpp:3488
+msgid "Settings icon path"
+msgstr "設定圖示路徑"
+
+#: core/ui/settings_new.cpp:3494
+msgid "Background opacity"
+msgstr "背景不透明度"
+
+#: core/ui/settings_new.cpp:3500
+msgid "Background fit"
+msgstr "背景顯示方式"
+
+#: core/ui/settings_new.cpp:3501
+msgid "Export folder"
+msgstr "匯出資料夾"
+
+#: core/ui/settings_new.cpp:3502
+msgid "Export theme and assets"
+msgstr "匯出主題與資產"
+
+#: core/ui/settings_new.cpp:3539 core/ui/settings_new.cpp:3548
+msgid "Save theme"
+msgstr "儲存主題"
+
+#: core/ui/settings_new.cpp:3595
+msgid "MenuBarVisibilityPopup"
+msgstr "MenuBarVisibilityPopup"
+
+#: core/ui/settings_new.cpp:3601
+msgid "MenuBarVisibilitySetting"
+msgstr "MenuBarVisibilitySetting"
+
+#: core/ui/settings_new.cpp:3618
+msgid "UIScalingPopup"
+msgstr "UIScalingPopup"
+
+#: core/ui/settings_new.cpp:3619
+msgid "Adjust UI element sizes"
+msgstr "調整介面元件大小"
+
+#: core/ui/settings_new.cpp:3640
+msgid "UIScalingSetting"
+msgstr "UIScalingSetting"
+
+#: core/ui/settings_new.cpp:3641
+msgid "Scale the UI to fit your screen and viewing distance."
+msgstr "調整介面大小，以符合螢幕尺寸與觀看距離。"
+
+#: core/ui/settings_new.cpp:3644
+msgid ""
+"UI Scaling\n"
+"Adjusts UI element sizes.\n"
+"Useful on high-DPI displays, TVs, or small screens.\n"
+"\n"
+"After applying, the UI will reinitialize to apply the new scale."
+msgstr ""
+"介面縮放\n"
+"調整介面元件大小。\n"
+"適用於高 DPI 螢幕、電視或小型螢幕。\n"
+"\n"
+"套用後，介面會重新初始化以使用新的縮放比例。"
+
+#: core/ui/settings_new.cpp:3655
+msgid "Hide legacy Naomi file types in the content browser."
+msgstr "在內容瀏覽器中隱藏舊版 Naomi 檔案類型。"
+
+#: core/ui/settings_new.cpp:3662
+msgid ""
+"Hide Legacy Naomi ROMs\n"
+"Hides `.bin`, `.dat`, and `.lst` files from the content browser.\n"
+"Useful if you have mixed Naomi sets and only want to see launchable content."
+msgstr ""
+"隱藏舊版 Naomi ROM\n"
+"在內容瀏覽器中隱藏 `.bin`、`.dat` 和 `.lst` 檔案。\n"
+"若 Naomi ROM 集合中混有多種檔案，且只想顯示可啟動的內容，此功能就很實用。"
+
+#: core/ui/settings_new.cpp:3673
+msgid "Android storage picker integration."
+msgstr "Android 儲存空間選取器整合。"
+
+#: core/ui/settings_new.cpp:3677
+msgid ""
+"Use SAF File Picker\n"
+"Uses Android's Storage Access Framework (SAF) for file browsing.\n"
+"This can improve compatibility with scoped storage and content providers on newer Android versions."
+msgstr ""
+"使用 SAF 檔案選取器\n"
+"使用 Android 儲存體存取架構（SAF）瀏覽檔案。\n"
+"這可提升新版 Android 上對分區儲存空間與內容提供者的相容性。"
+
+#: core/ui/settings_new.cpp:3691
+msgid "Box Art"
+msgstr "封面圖片"
+
+#: core/ui/settings_new.cpp:3699
+msgid "Original Box Art"
+msgstr "原始封面圖片"
+
+#: core/ui/settings_new.cpp:3699 core/ui/settings_new.cpp:3866
+msgid "Physical Media"
+msgstr "實體媒體"
+
+#: core/ui/settings_new.cpp:3702
+msgid "Box Art Source"
+msgstr "封面圖片來源"
+
+#: core/ui/settings_new.cpp:3704
+msgid "BoxArtSourcePopup"
+msgstr "BoxArtSourcePopup"
+
+#: core/ui/settings_new.cpp:3715
+msgid "BoxartSourceSetting"
+msgstr "BoxartSourceSetting"
+
+#: core/ui/settings_new.cpp:3716
+msgid "Choose the base artwork source for each game."
+msgstr "選擇各遊戲的基本圖片來源。"
+
+#: core/ui/settings_new.cpp:3719
+msgid ""
+"Box Art Source\n"
+"Choose whether to use the default scraped artwork, physical-disc artwork pulled from the current ROM, or custom box art files you provide.\n"
+"\n"
+"If you have a custom Scraper folder for ES-DE, you can use its `media` folder and subfolders for the full custom-artwork experience."
+msgstr ""
+"封面圖片來源\n"
+"選擇要使用預設的擷取圖片、從目前 ROM 取得的實體光碟圖片，或你提供的自訂封面圖片檔案。\n"
+"\n"
+"若你有 ES-DE 專用的自訂 Scraper 資料夾，可使用其中的 `media` 資料夾及子資料夾，以完整運用自訂圖片功能。"
+
+#: core/ui/settings_new.cpp:3729 core/ui/settings_new.cpp:3860
+msgid "Current Artwork"
+msgstr "目前圖片"
+
+#: core/ui/settings_new.cpp:3730
+msgid "VMU Save Icon"
+msgstr "VMU 存檔圖示"
+
+#: core/ui/settings_new.cpp:3731
+msgid "VMU Save Icon, then Current Artwork"
+msgstr "先顯示 VMU 存檔圖示，再顯示目前圖片"
+
+#: core/ui/settings_new.cpp:3732
+msgid "Current Artwork, then VMU Save Icon"
+msgstr "先顯示目前圖片，再顯示 VMU 存檔圖示"
+
+#: core/ui/settings_new.cpp:3736
+msgid "VMU Icon Options"
+msgstr "VMU 圖示選項"
+
+#: core/ui/settings_new.cpp:3738
+msgid "LibraryImageSourcePopup"
+msgstr "LibraryImageSourcePopup"
+
+#: core/ui/settings_new.cpp:3745
+msgid "LibraryImageSource"
+msgstr "LibraryImageSource"
+
+#: core/ui/settings_new.cpp:3746
+msgid "Choose whether cached VMU icons appear in the library."
+msgstr "選擇是否在遊戲庫中顯示快取的 VMU 圖示。"
+
+#: core/ui/settings_new.cpp:3748
+msgid ""
+"VMU Icon Options\n"
+"Choose whether to exclude or use VMU save icons as cover art. When enabled, Hollycast captures the icon after you create a VMU save for a game, then makes it available for the library.\n"
+"Choose how those icons are prioritized alongside your other artwork options."
+msgstr ""
+"VMU 圖示選項\n"
+"選擇是否排除或使用 VMU 存檔圖示作為封面圖片。啟用後，Hollycast 會在你為遊戲建立 VMU 存檔時擷取圖示，並提供給遊戲庫使用。\n"
+"選擇這些圖示與其他圖片來源選項並用時的優先順序。"
+
+#: core/ui/settings_new.cpp:3758
+msgid ""
+"Custom Boxart Folder\n"
+"Choose the folder that contains your already-scraped game media.\n"
+"\n"
+"For regular custom media, add an image to the custom folder using the same name as the ROM. For example, if the ROM is `Sonic Adventure.chd`, the image file should be `Sonic Adventure.png` or `Sonic Adventure.jpg`.\n"
+"\n"
+"For existing ES-DE media folders, or for the full custom-artwork experience, choose the system media folder, such as `downloaded_media/dreamcast`. Hollycast reads supported subfolders within it, including `covers`, `miximages`, `physicalmedia`, `marquees`, `titlescreens`, `screenshots`, `fanart`, and `manuals`. This lets you reuse ES-DE scraped media without copying or renaming files.\n"
+"\n"
+"Image/manual file names should match your ROM names. Use Refresh after adding or changing media files."
+msgstr ""
+"自訂封面圖片資料夾\n"
+"選取存放已擷取遊戲媒體的資料夾。\n"
+"\n"
+"一般自訂媒體：在自訂資料夾中放入與 ROM 同名的圖片。例如，ROM 若為 `Sonic Adventure.chd`，圖片檔應命名為 `Sonic Adventure.png` 或 `Sonic Adventure.jpg`。\n"
+"\n"
+"若要使用現有 ES-DE 媒體資料夾，或完整運用自訂圖片功能，請選取系統媒體資料夾，例如 `downloaded_media/dreamcast`。Hollycast 會讀取其中支援的子資料夾，包括 `covers`、`miximages`、`physicalmedia`、`marquees`、`titlescreens`、`screenshots`、`fanart` 和 `manuals`。如此一來就能沿用 ES-DE 擷取的媒體，不必複製或重新命名檔案。\n"
+"\n"
+"圖片與手冊檔名應與 ROM 名稱相同。新增或變更媒體檔案後，請使用「重新整理」。"
+
+#: core/ui/settings_new.cpp:3770
+msgid "Custom Boxart Folder"
+msgstr "自訂封面圖片資料夾"
+
+#: core/ui/settings_new.cpp:3794
+msgid ""
+"Refresh custom media after adding, removing, or renaming files in the "
+"selected Custom Boxart Folder."
+msgstr "在所選的自訂封面圖片資料夾新增、移除或重新命名檔案後，請重新整理自訂媒體。"
+
+#: core/ui/settings_new.cpp:3810
+msgid ""
+"Folder containing custom box art images (png/jpg). File names should match "
+"game names"
+msgstr "存放自訂封面圖片（png/jpg）的資料夾。檔名應與遊戲名稱相同。"
+
+#: core/ui/settings_new.cpp:3814
+msgid "Select Custom Boxart Folder"
+msgstr "選取自訂封面圖片資料夾"
+
+#: core/ui/settings_new.cpp:3861
+msgid "Mix Image"
+msgstr "混合圖片"
+
+#: core/ui/settings_new.cpp:3862
+msgid "Cover"
+msgstr "封面"
+
+#: core/ui/settings_new.cpp:3863
+msgid "Case / 3D Box"
+msgstr "外盒／3D 盒裝圖片"
+
+#: core/ui/settings_new.cpp:3865
+msgid "Marquee"
+msgstr "機台招牌"
+
+#: core/ui/settings_new.cpp:3867
+msgid "Fan Art"
+msgstr "同人美術圖"
+
+#: core/ui/settings_new.cpp:3868
+msgid "Title Screen"
+msgstr "標題畫面"
+
+#: core/ui/settings_new.cpp:3872
+msgid "Custom Boxart Source"
+msgstr "自訂封面圖片來源"
+
+#: core/ui/settings_new.cpp:3874
+msgid "LibraryCoverMediaPopup"
+msgstr "LibraryCoverMediaPopup"
+
+#: core/ui/settings_new.cpp:3881
+msgid "LibraryCoverMedia"
+msgstr "LibraryCoverMedia"
+
+#: core/ui/settings_new.cpp:3882
+msgid "Choose which custom media category becomes the main library image."
+msgstr "選擇要作為遊戲庫主要圖片的自訂媒體類別。"
+
+#: core/ui/settings_new.cpp:3884
+msgid ""
+"Custom Boxart Source\n"
+"Choose Current Artwork when your Custom Boxart Folder contains one properly named image for each game.\n"
+"\n"
+"The other options are for the full media-folder setup. They let you choose which of the multiple images available for each title becomes its visible library cover art.\n"
+"\n"
+"Other media can still appear in the game hover-information panel when the matching folders and files are present."
+msgstr ""
+"自訂封面圖片來源\n"
+"若自訂封面圖片資料夾中每款遊戲都有一張正確命名的圖片，請選擇「目前圖片」。\n"
+"\n"
+"其他選項適用於完整媒體資料夾設定。你可以選擇每款遊戲的多張圖片中，哪一類要作為遊戲庫封面顯示。\n"
+"\n"
+"只要相符的資料夾與檔案存在，其他媒體仍會顯示在遊戲懸停資訊面板中。"
+
+#: core/ui/settings_new.cpp:3896
+msgid ""
+"Boxart Database Review\n"
+"Checks the boxart database and artwork files without deleting your artwork."
+msgstr ""
+"封面圖片資料庫檢查\n"
+"檢查封面圖片資料庫與圖片檔案，不會刪除你的圖片。"
+
+#: core/ui/settings_new.cpp:3905
+msgid "Boxart Database Review"
+msgstr "封面圖片資料庫檢查"
+
+#: core/ui/settings_new.cpp:3908
+msgid ""
+"Verifies every DB entry has a usable artwork file, then rebuilds from "
+"existing JSON and image files."
+msgstr "確認資料庫中的每個項目都有可用的圖片，再使用現有的 JSON 與圖片檔案重建資料庫。"
+
+#: core/ui/settings_new.cpp:3915
+msgid "Classic"
+msgstr "經典"
+
+#: core/ui/settings_new.cpp:3915
+msgid "List"
+msgstr "清單"
+
+#: core/ui/settings_new.cpp:3918
+msgid "Library Display Style"
+msgstr "遊戲庫顯示樣式"
+
+#: core/ui/settings_new.cpp:3920
+msgid "LibraryDisplayStylePopup"
+msgstr "LibraryDisplayStylePopup"
+
+#: core/ui/settings_new.cpp:3927
+msgid "LibraryDisplayStyle"
+msgstr "LibraryDisplayStyle"
+
+#: core/ui/settings_new.cpp:3928
+msgid "Choose how the game library is displayed."
+msgstr "選擇遊戲庫的顯示方式。"
+
+#: core/ui/settings_new.cpp:3930
+msgid ""
+"Library Display Style\n"
+"Selects the visual layout for the game library.\n"
+"Classic keeps the existing gallery/list behavior.\n"
+"List uses a compact row/table layout with title and metadata columns."
+msgstr ""
+"遊戲庫顯示樣式\n"
+"選擇遊戲庫的視覺版面。\n"
+"「經典」保留現有的圖片集／清單行為。\n"
+"「清單」使用精簡的列／表格版面，並顯示標題與中繼資料欄。"
+
+#: core/ui/settings_new.cpp:3935
+msgid "Static"
+msgstr "靜態"
+
+#: core/ui/settings_new.cpp:3935
+msgid "Active / Animated"
+msgstr "啟用／動畫"
+
+#: core/ui/settings_new.cpp:3938
+msgid "VMU Icon Mode"
+msgstr "VMU 圖示模式"
+
+#: core/ui/settings_new.cpp:3940
+msgid "VMUIconModePopup"
+msgstr "VMUIconModePopup"
+
+#: core/ui/settings_new.cpp:3947
+msgid "VMUIconMode"
+msgstr "VMUIconMode"
+
+#: core/ui/settings_new.cpp:3948
+msgid "Set VMU icon playback behavior."
+msgstr "設定 VMU 圖示播放方式。"
+
+#: core/ui/settings_new.cpp:3950
+msgid ""
+"VMU Icon Mode\n"
+"Controls how cached VMU icons play after they have been captured from saves.\n"
+"Static shows one frame; Active / Animated plays the BIOS-style icon frames."
+msgstr ""
+"VMU 圖示模式\n"
+"控制從存檔擷取後的快取 VMU 圖示播放方式。\n"
+"「靜態」只顯示單一影格；「啟用／動畫」則播放 BIOS 風格的圖示影格。"
+
+#: core/ui/settings_new.cpp:3962
+msgid ""
+"Box Art Game List\n"
+"Displays cover art tiles in the content list.\n"
+"Disable if you prefer a faster, more compact list or want to reduce UI clutter."
+msgstr ""
+"遊戲庫封面圖片\n"
+"在內容清單中顯示封面圖片磚。\n"
+"若偏好更快速、精簡的清單，或想減少介面雜亂，請停用此選項。"
+
+#: core/ui/settings_new.cpp:3977
+msgid ""
+"Fetch Box Art\n"
+"Downloads cover images from TheGamesDB.net.\n"
+"Disable if you only want physical media images, custom artwork, or to avoid network fetching."
+msgstr ""
+"取得封面圖片\n"
+"從 TheGamesDB.net 下載封面圖片。\n"
+"若只想使用實體媒體圖片、自訂圖片，或避免從網路下載，請停用此選項。"
+
+#: core/ui/settings_new.cpp:3985
+msgid "Gamelist XML"
+msgstr "Gamelist XML"
+
+#: core/ui/settings_new.cpp:3987
+msgid ""
+"Gamelist XML\n"
+"Choose the exact `gamelist.xml` file that belongs to your Dreamcast ROM set.\n"
+"\n"
+"This file provides the game info used by the library hover/profile screen: description, developer, genre, players, release date, and manual path.\n"
+"\n"
+"For ES-DE, this is usually in a separate folder from the images, for example `gamelists/dreamcast/gamelist.xml`.\n"
+"Hollycast will not guess this path. Set it here if you want game descriptions and details."
+msgstr ""
+"Gamelist XML\n"
+"選取確實屬於你的 Dreamcast ROM 集合的 `gamelist.xml` 檔案。\n"
+"\n"
+"此檔案提供遊戲庫懸停／個人資料畫面所用的遊戲資訊：描述、開發商、類型、玩家人數、發行日期與手冊路徑。\n"
+"\n"
+"ES-DE 通常會將此檔案放在與圖片不同的資料夾，例如 `gamelists/dreamcast/gamelist.xml`。\n"
+"Hollycast 不會猜測此路徑。若要顯示遊戲描述與詳細資料，請在此設定。"
+
+#: core/ui/settings_new.cpp:4006
+msgid "Automatic Save States"
+msgstr "自動存檔狀態"
+
+#: core/ui/settings_new.cpp:4011
+msgid "Auto-Load on Start"
+msgstr "啟動時自動載入"
+
+#: core/ui/settings_new.cpp:4012
+msgid "Automatically loads the hidden Auto-Save slot on game boot."
+msgstr "啟動遊戲時自動載入隱藏的自動存檔欄位。"
+
+#: core/ui/settings_new.cpp:4016
+msgid ""
+"Auto-Load on Start\n"
+"When enabled, on game boot, if the hidden Auto-Save slot has an Auto-Save, it will automatically load this slot on game boot."
+msgstr ""
+"啟動時自動載入\n"
+"啟用後，啟動遊戲時若隱藏的自動存檔欄位中有存檔狀態，便會自動載入該狀態。"
+
+#: core/ui/settings_new.cpp:4025
+msgid "Auto-Save on Exit"
+msgstr "離開時自動存檔"
+
+#: core/ui/settings_new.cpp:4026
+msgid "Automatically saves to the hidden Auto-Save slot on game exit."
+msgstr "結束遊戲時自動將存檔狀態儲存至隱藏的自動存檔欄位。"
+
+#: core/ui/settings_new.cpp:4030
+msgid ""
+"Auto-Save on Exit\n"
+"When enabled, leaving a game saves to the hidden Auto-Save slot without asking first."
+msgstr ""
+"離開時自動存檔\n"
+"啟用後，離開遊戲時會直接建立存檔狀態並存入隱藏的自動存檔欄位，不會先詢問。"
+
+#: core/ui/settings_new.cpp:4038
+msgid "Save Protection"
+msgstr "存檔保護"
+
+#: core/ui/settings_new.cpp:4039
+msgid ""
+"Disabling this will remove the safeguards that help prevent lost game "
+"progress from not saving."
+msgstr "停用此功能會移除協助防止遊戲進度因未儲存而遺失的保護措施。"
+
+#: core/ui/settings_new.cpp:4043
+msgid ""
+"Save Protection\n"
+"This is the assurance that you will never be able to leave a game without being prompted to save right then, ensuring you do not accidentally leave without saving your data."
+msgstr ""
+"存檔保護\n"
+"此功能可確保你離開遊戲前一定會收到立即儲存的提示，避免不小心未儲存資料就離開。"
+
+#: core/ui/settings_new.cpp:4057
+msgid ""
+"Naomi Free Play\n"
+"Forces supported Naomi titles into Free Play mode.\n"
+"Useful if you don't want to manage credits/coin input."
+msgstr ""
+"NAOMI 自由遊玩\n"
+"強制支援的 NAOMI 遊戲以自由遊玩模式執行。\n"
+"若不想管理點數／投幣輸入，此功能就很實用。"
+
+#: core/ui/settings_new.cpp:4072
+msgid ""
+"Discord Presence\n"
+"Shows which game you are playing on Discord.\n"
+"Disable if you prefer not to share activity status."
+msgstr ""
+"Discord 遊戲狀態\n"
+"在 Discord 上顯示你正在遊玩的遊戲。\n"
+"若不想分享活動狀態，請停用此功能。"
+
+#: core/ui/settings_new.cpp:4086
+msgid "Retro Achievements"
+msgstr "RetroAchievements"
+
+#: core/ui/settings_new.cpp:4096
+msgid ""
+"Enable RetroAchievements\n"
+"Enables RetroAchievements support and achievement tracking.\n"
+"Requires a RetroAchievements account and a supported title."
+msgstr ""
+"啟用 RetroAchievements\n"
+"啟用 RetroAchievements 支援與成就追蹤。\n"
+"需要 RetroAchievements 帳戶及支援的遊戲。"
+
+#: core/ui/settings_new.cpp:4125
+msgid ""
+"Enable RetroAchievements hardcore mode. Using cheats and loading a state are"
+" not allowed."
+msgstr "啟用 RetroAchievements 硬派模式。此模式不允許使用作弊功能或載入存檔狀態。"
+
+#: core/ui/settings_new.cpp:4129
+msgid ""
+"Hardcore Mode\n"
+"RetroAchievements Hardcore Mode disables features that can invalidate achievements.\n"
+"Using cheats and loading a state are not allowed."
+msgstr ""
+"硬派模式\n"
+"RetroAchievements 硬派模式會停用可能導致成就失效的功能。\n"
+"不允許使用作弊功能或載入存檔狀態。"
+
+#: core/ui/settings_new.cpp:4140
+#, c-format
+msgid "User: %s"
+msgstr "使用者：%s"
+
+#: core/ui/settings_new.cpp:4155
+msgid "RetroAchievements account username"
+msgstr "RetroAchievements 帳戶使用者名稱"
+
+#: core/ui/settings_new.cpp:4160
+msgid ""
+"RetroAchievements Username\n"
+"Enter your RetroAchievements account username used for login."
+msgstr ""
+"RetroAchievements 使用者名稱\n"
+"輸入用於登入的 RetroAchievements 帳戶使用者名稱。"
+
+#: core/ui/settings_new.cpp:4169
+msgid "RetroAchievements account password"
+msgstr "RetroAchievements 帳戶密碼"
+
+#: core/ui/settings_new.cpp:4174
+msgid ""
+"RetroAchievements Password\n"
+"Enter your RetroAchievements account password used for login."
+msgstr ""
+"RetroAchievements 密碼\n"
+"輸入用於登入的 RetroAchievements 帳戶密碼。"
+
+#: core/ui/settings_new.cpp:4223
+msgid "BIOS Folder"
+msgstr "BIOS 資料夾"
+
+#: core/ui/settings_new.cpp:4225
+msgid ""
+"BIOS Folders\n"
+"Folders that Hollycast searches for Dreamcast and arcade BIOS files.\n"
+"\n"
+"Place `dc_boot.bin` and `dc_flash.bin` in Hollycast's data folder, unless you have specified a custom BIOS folder here.\n"
+"If you keep multiple BIOS sets, you can add multiple folders and Hollycast will search all of them.\n"
+"For troubleshooting, keep your BIOS files in a single known-good folder to avoid confusion."
+msgstr ""
+"BIOS 資料夾\n"
+"Hollycast 會在這些資料夾中搜尋 Dreamcast 與街機 BIOS 檔案。\n"
+"\n"
+"除非已在此指定自訂 BIOS 資料夾，否則請將 `dc_boot.bin` 和 `dc_flash.bin` 放在 Hollycast 的 data 資料夾中。\n"
+"若有多組 BIOS，可新增多個資料夾，Hollycast 會搜尋所有資料夾。\n"
+"如需疑難排解，請將 BIOS 檔案集中放在一個已知可用的資料夾，避免混淆。"
+
+#: core/ui/settings_new.cpp:4237
+msgid ""
+"VMU Folder\n"
+"Where VMU memory card files (`.bin`) are stored.\n"
+"\n"
+"If you change this, Hollycast will look for VMUs in the new location.\n"
+"Move/copy your existing VMU files if you want to keep your saves.\n"
+"Use this to keep saves on a specific drive or to share saves between installations."
+msgstr ""
+"VMU 資料夾\n"
+"VMU 記憶卡檔案（`.bin`）的存放位置。\n"
+"\n"
+"變更此路徑後，Hollycast 會在新位置尋找 VMU。\n"
+"若要保留存檔，請移動／複製現有的 VMU 檔案。\n"
+"可用此設定將存檔放在指定磁碟，或在不同安裝版本間共用存檔。"
+
+#: core/ui/settings_new.cpp:4254
+msgid "Savestate Folder"
+msgstr "存檔狀態資料夾"
+
+#: core/ui/settings_new.cpp:4256
+msgid ""
+"Savestate Folders\n"
+"Folders used for save states.\n"
+"\n"
+"The first folder is used when creating new save states.\n"
+"All listed folders are searched when loading, which is useful if you keep states organized across different locations.\n"
+"Save states are not always portable between very different Hollycast versions; if a state fails to load, try recreating it on your current build."
+msgstr ""
+"存檔狀態資料夾\n"
+"存放存檔狀態的資料夾。\n"
+"\n"
+"建立新的存檔狀態時會使用第一個資料夾。\n"
+"載入時會搜尋所有列出的資料夾，方便將存檔狀態整理在不同位置。\n"
+"不同 Hollycast 版本之間的存檔狀態不一定相容；若無法載入，請在目前版本重新建立。"
+
+#: core/ui/settings_new.cpp:4267
+msgid ""
+"Game Save Folder\n"
+"Folder for non-VMU save data (for example: arcade NVRAM and other persistent game data).\n"
+"\n"
+"If you change this path, move/copy your existing save files if you want to keep progress.\n"
+"This is separate from save states, and separate from VMU files."
+msgstr ""
+"遊戲存檔資料夾\n"
+"非 VMU 存檔資料的資料夾（例如街機 NVRAM 與其他持續保存的遊戲資料）。\n"
+"\n"
+"若變更此路徑，想保留遊戲進度時請移動／複製現有存檔。\n"
+"此資料夾與存檔狀態及 VMU 檔案分開。"
+
+#: core/ui/settings_new.cpp:4276
+msgid "Texture Pack Folder"
+msgstr "紋理包資料夾"
+
+#: core/ui/settings_new.cpp:4278
+msgid ""
+"Texture Pack Folders\n"
+"Folders that Hollycast searches for custom texture packs.\n"
+"\n"
+"Common layouts include `textures/<gameId>/...` or `<gameId>` inside a `textures` subfolder.\n"
+"After installing a pack, enable Custom Textures in the Video tab and restart the game.\n"
+"If you notice stutter while textures stream in, consider using Preload Textures (more RAM/VRAM required)."
+msgstr ""
+"紋理包資料夾\n"
+"Hollycast 會在這些資料夾中搜尋自訂紋理包。\n"
+"\n"
+"常見目錄結構包括 `textures/<gameId>/...`，或在 `textures` 子資料夾中存放 `<gameId>`。\n"
+"安裝紋理包後，請在「視訊」分頁啟用「自訂紋理」，再重新啟動遊戲。\n"
+"若紋理串流時出現卡頓，可考慮使用「預載紋理」（需要更多 RAM／VRAM）。"
+
+#: core/ui/settings_new.cpp:4290
+msgid ""
+"Texture Dump Folder\n"
+"Where Hollycast saves dumped textures when Texture Dumping is enabled.\n"
+"\n"
+"Game-specific subfolders are created automatically.\n"
+"Dumping can generate a large number of files quickly and consume significant disk space.\n"
+"Enable dumping only when needed, then disable it after you are done."
+msgstr ""
+"紋理傾印資料夾\n"
+"啟用紋理傾印時，Hollycast 儲存傾印紋理的位置。\n"
+"\n"
+"系統會自動建立遊戲專用的子資料夾。\n"
+"傾印可能很快產生大量檔案並佔用大量磁碟空間。\n"
+"只在需要時啟用傾印，完成後請停用。"
+
+#: core/ui/settings_new.cpp:4299
+msgid "Controller Mapping Folder"
+msgstr "控制器按鍵對應資料夾"
+
+#: core/ui/settings_new.cpp:4304
+msgid "Cheat Folder"
+msgstr "作弊檔案資料夾"
+
+#: core/ui/settings_new.cpp:4306
+msgid ""
+"Cheat Folders\n"
+"Folders containing cheat files (`.cht` / `.txt`) named using the game's ID.\n"
+"\n"
+"Hollycast can auto-load matching cheat files when present.\n"
+"If cheats are not loading, verify the filename matches the game ID and that the cheat file format is correct.\n"
+"Use cheats carefully: they can crash games or cause unexpected behavior."
+msgstr ""
+"作弊資料夾\n"
+"存放以遊戲 ID 命名的作弊檔案（`.cht`／`.txt`）的資料夾。\n"
+"\n"
+"若有相符的作弊檔案，Hollycast 可自動載入。\n"
+"若作弊功能未載入，請確認檔名與遊戲 ID 相符，且作弊檔案格式正確。\n"
+"請謹慎使用作弊功能：可能導致遊戲當機或出現非預期行為。"
+
+#: core/ui/settings_new.cpp:4334
+msgid "Video Configuration"
+msgstr "視訊設定"
+
+#: core/ui/settings_new.cpp:4340
+msgid "Quality Presets"
+msgstr "畫質預設"
+
+#: core/ui/settings_new.cpp:4351
+msgid "Potato (Max Performance)"
+msgstr "最低（效能優先）"
+
+#: core/ui/settings_new.cpp:4352
+msgid "Low"
+msgstr "低"
+
+#: core/ui/settings_new.cpp:4353
+msgid "Medium (Balanced)"
+msgstr "中（平衡）"
+
+#: core/ui/settings_new.cpp:4354
+msgid "High"
+msgstr "高"
+
+#: core/ui/settings_new.cpp:4355
+msgid "God Mode (Max Quality)"
+msgstr "極致（最高畫質）"
+
+#: core/ui/settings_new.cpp:4356 core/ui/settings_new.cpp:4363
+#: core/ui/settings_new.cpp:4760
+msgid "Custom"
+msgstr "自訂"
+
+#: core/ui/settings_new.cpp:4396
+msgid ""
+"Custom\n"
+"Settings have been manually modified from the last preset."
+msgstr ""
+"自訂\n"
+"設定已手動變更，與上次套用的預設值不同。"
+
+#: core/ui/settings_new.cpp:4410
+msgid ""
+"Quality Presets\n"
+"If you are having issues, try our presets. Unless you are on a very low-end device, starting at the Medium preset should be safe. Adjust the resolution for the fastest performance adjustment from within a preset, then tweak the preset as you like for your perfect experience. Turn on the FPS Counter setting to ensure you get a stable 30/60 FPS during gameplay while finding the best settings for your device. Note: Fog and Shadows are enabled on all preset tiers."
+msgstr ""
+"畫質預設\n"
+"若遇到問題，請嘗試使用預設值。除非裝置效能非常低，否則建議從「中」開始。套用預設值後，可先調整解析度，這是最快速的效能調整方式，再依喜好微調預設值，找到最適合你的體驗。設定期間請開啟「FPS 計數器」，確認遊玩時能穩定維持 30／60 FPS。注意：所有預設等級皆會啟用霧效與陰影。"
+
+#: core/ui/settings_new.cpp:4516
+msgid "GraphicsApiPopup"
+msgstr "GraphicsApiPopup"
+
+#: core/ui/settings_new.cpp:4529
+msgid ""
+"OpenGL\n"
+"This is the API that will randomly work best depending on the game and hardware, sometimes for no obvious reason.\n"
+"Always worth a try on any hardware if a game likes it."
+msgstr ""
+"OpenGL\n"
+"這個 API 會依遊戲與硬體而有不同表現，有時原因並不明顯。\n"
+"無論使用哪種硬體，都值得試試看是否適合遊戲。"
+
+#: core/ui/settings_new.cpp:4538
+msgid ""
+"Vulkan\n"
+"Tends to work best with NVIDIA GPUs, but remember this is just a recommendation, not a fact.\n"
+"Per-game and per-hardware mileage may vary."
+msgstr ""
+"Vulkan\n"
+"通常在 NVIDIA GPU 上效果最好，但這只是建議，並非絕對。\n"
+"實際表現會因遊戲與硬體而異。"
+
+#: core/ui/settings_new.cpp:4547
+msgid ""
+"DirectX 11\n"
+"Tends to give higher frame rates on AMD devices.\n"
+"Older and integrated graphics can benefit from this option as well."
+msgstr ""
+"DirectX 11\n"
+"通常能在 AMD 裝置上提供較高的影格率。\n"
+"較舊或使用整合式顯示晶片的設備也可能適用。"
+
+#: core/ui/settings_new.cpp:4556
+msgid ""
+"DirectX 9\n"
+"Like DirectX 11, this tends to be best on AMD hardware.\n"
+"Lower-end and older devices often work even better with DX9, but again, this is just a thought, not a hard rule."
+msgstr ""
+"DirectX 9\n"
+"和 DirectX 11 一樣，通常在 AMD 硬體上效果較好。\n"
+"低階與較舊的裝置使用 DX9 時往往效果更佳，但這也只是建議，並非硬性規則。"
+
+#: core/ui/settings_new.cpp:4576
+msgid "GraphicsApiSetting"
+msgstr "GraphicsApiSetting"
+
+#: core/ui/settings_new.cpp:4578
+msgid ""
+"Graphics API\n"
+"One of the most important settings when you're not getting a good experience.\n"
+"You will find that, per game and hardware, you can get different performance depending on the API selected.\n"
+"The best way to figure it out: if you are having FPS issues or glitchy gameplay, change this per your hardware recommendations and see what gives you the smoothest frame rate.\n"
+"(Enable the FPS Counter and test in actual gameplay.)"
+msgstr ""
+"圖形 API\n"
+"若體驗不理想，這是最重要的設定之一。\n"
+"不同遊戲與硬體搭配不同 API 時，效能可能有所差異。\n"
+"最佳做法是：若 FPS 過低或遊戲畫面卡頓，可參考硬體建議變更此設定，並確認哪個選項能提供最流暢的影格率。\n"
+"（請啟用 FPS 計數器，並在實際遊戲中測試。）"
+
+#: core/ui/settings_new.cpp:4621
+msgid "Sorting Method"
+msgstr "排序方式"
+
+#: core/ui/settings_new.cpp:4623
+msgid "TransparentSortingPopup"
+msgstr "TransparentSortingPopup"
+
+#: core/ui/settings_new.cpp:4636
+#, no-c-format
+msgid ""
+"Per Pixel\n"
+"Highest performance requirements. This matches the Dreamcast's sorting quality, but only about 15% of games need it and show a meaningful difference versus the middle sorting option.\n"
+"Use only when needed (or if you have the resource overhead). It can almost double resource requirements.\n"
+"If you need full speed at a target resolution, you may have to lower resolution when using Per Pixel sorting."
+msgstr ""
+"逐像素\n"
+"效能需求最高。畫面排序品質可媲美 Dreamcast，但只有約 15% 的遊戲需要此選項，且與中間的排序選項相比有明顯差異。\n"
+"只在必要時使用（或裝置資源充足時使用）。資源需求最高可能增加近一倍。\n"
+"若要在目標解析度維持全速，使用逐像素排序時可能需要降低解析度。"
+
+#: core/ui/settings_new.cpp:4646
+#, no-c-format
+msgid ""
+"Per Triangle\n"
+"Good enough for about 85% of games to play with no or only very brief flashes of incorrect sorting.\n"
+"For most mid-range devices trying to reach 4K resolutions, you will likely spend your time here unless you must use Per Pixel.\n"
+"This is the recommended option for most people, most of the time."
+msgstr ""
+"逐三角形\n"
+"約 85% 的遊戲使用此選項時不會出現排序錯誤，或只會短暫閃現。\n"
+"大多數中階裝置若要達到 4K 解析度，通常會選擇此設定，除非必須使用逐像素排序。\n"
+"大部分使用者在大多數情況下都建議使用此選項。"
+
+#: core/ui/settings_new.cpp:4656
+msgid ""
+"Per Strip\n"
+"Introduces more graphics glitching than Per Triangle, but can sometimes reduce resource requirements further.\n"
+"Not recommended unless you have to use it. Performance gains range from none to minimal, and may not be worth the quality tradeoff."
+msgstr ""
+"逐條帶\n"
+"比逐三角形更容易出現圖形錯誤，但有時能進一步降低資源需求。\n"
+"除非別無選擇，否則不建議使用。效能提升可能從沒有到極少，未必值得犧牲畫質。"
+
+#: core/ui/settings_new.cpp:4691
+msgid "TransparentSortingSetting"
+msgstr "TransparentSortingSetting"
+
+#: core/ui/settings_new.cpp:4693
+#, no-c-format
+msgid ""
+"Sorting Option\n"
+"This controls how we sort transparent layers in games.\n"
+"A handful of games will not render certain images correctly at all (example: Shenmue journal), or might have layering issues (example: the white of Sonic's eyes in Sonic Adventure), and a handful of others can show clipping or incorrect texture layering in some spots.\n"
+"\n"
+"There are three options with very different resource usage. While the highest setting matches Dreamcast sorting quality, it is only needed in about 15% of games and carries a large speed penalty.\n"
+"The middle tier allows just about all games to be played with a small amount of slight issues, but uses about half the resources of the top tier.\n"
+"It is \"good enough\" almost all the time."
+msgstr ""
+"排序選項\n"
+"此設定控制遊戲中透明圖層的排序方式。\n"
+"少數遊戲無法正確渲染某些圖片（例如《莎木》的日誌），也可能有圖層問題（例如《Sonic Adventure》中 Sonic 眼白的顯示），另有少數遊戲會在特定位置出現裁切或紋理圖層錯誤。\n"
+"\n"
+"三種選項的資源使用量差異很大。最高設定的排序品質可媲美 Dreamcast，但只有約 15% 的遊戲需要，且會大幅降低速度。\n"
+"中間等級可讓幾乎所有遊戲正常遊玩，只會有少量輕微問題，資源使用量約為最高等級的一半。\n"
+"幾乎所有情況下都已「足夠好」。"
+
+#: core/ui/settings_new.cpp:4751
+msgid "InternalResPopup"
+msgstr "InternalResPopup"
+
+#: core/ui/settings_new.cpp:4777
+msgid "InternalResolutionSetting"
+msgstr "InternalResolutionSetting"
+
+#: core/ui/settings_new.cpp:4778
+msgid "Internal render resolution (the biggest performance lever)."
+msgstr "內部渲染解析度（對效能影響最大的設定）。"
+
+#: core/ui/settings_new.cpp:4781
+msgid ""
+"Internal Resolution\n"
+"This is the single biggest graphics performance setting.\n"
+"Resolution labels update with the widescreen settings. With Widescreen Game Cheats alone, labels preview the stretched 16:9 output for supported games.\n"
+"\n"
+"Lower values reduce GPU load (faster). Higher values improve clarity, reduce shimmer/aliasing, and act as a form of supersampling.\n"
+"\n"
+"If you are not holding a stable 30/60 FPS, reduce Internal Resolution first before turning off visual features."
+msgstr ""
+"內部解析度\n"
+"這是影響圖形效能最大的單一設定。\n"
+"解析度標籤會依寬螢幕設定更新。若只使用寬螢幕遊戲作弊，標籤會預覽支援遊戲拉伸後的 16:9 輸出。\n"
+"\n"
+"較低的數值會減輕 GPU 負載（速度較快）。較高的數值可提升清晰度、減少閃爍／鋸齒，並達到類似超取樣的效果。\n"
+"\n"
+"若無法穩定維持 30／60 FPS，請先降低內部解析度，再考慮關閉視覺效果。"
+
+#: core/ui/settings_new.cpp:4794
+msgid "Pixel-perfect scaling using whole-number multiples."
+msgstr "使用整數倍進行像素完美縮放。"
+
+#: core/ui/settings_new.cpp:4798
+msgid ""
+"Integer Scaling\n"
+"Scales the output by the maximum whole-number multiple allowed by your display (1x, 2x, 3x, ...).\n"
+"Best for pixel-art/2D content because it avoids uneven scaling artifacts.\n"
+"\n"
+"Tip: for the crispest result, pair Integer Scaling with nearest-neighbor (disable Linear Interpolation)."
+msgstr ""
+"整數縮放\n"
+"依照顯示器可用的最大整數倍數縮放輸出（1x、2x、3x……）。\n"
+"適合像素藝術／2D 內容，可避免縮放不均的失真。\n"
+"\n"
+"提示：若要獲得最清晰的效果，請搭配最近相鄰縮放（停用線性插值）。"
+
+#: core/ui/settings_new.cpp:4808
+msgid "Smoother scaling (linear) vs. sharper pixels (nearest-neighbor)."
+msgstr "較平滑的線性縮放，或較銳利的最近相鄰像素。"
+
+#: core/ui/settings_new.cpp:4812
+msgid ""
+"Linear Interpolation\n"
+"Enabled: smoother scaling (can look blurrier).\n"
+"Disabled: nearest-neighbor scaling (sharper, more pixelated).\n"
+"\n"
+"If you enable Integer Scaling, many users prefer disabling Linear Interpolation for a pixel-perfect look."
+msgstr ""
+"線性插值\n"
+"啟用：縮放較平滑（畫面可能較模糊）。\n"
+"停用：使用最近相鄰縮放（畫面較銳利、像素感較明顯）。\n"
+"\n"
+"若啟用整數縮放，許多使用者會偏好停用線性插值，呈現像素完美的效果。"
+
+#: core/ui/settings_new.cpp:4823
+msgid "Sync presentation to your display to reduce tearing."
+msgstr "同步畫面呈現以減少撕裂。"
+
+#: core/ui/settings_new.cpp:4827
+msgid ""
+"VSync\n"
+"Synchronizes frame presentation to your display refresh to reduce tearing and improve pacing.\n"
+"On some setups it can add input latency, and if you cannot maintain full speed it can contribute to stutter.\n"
+"\n"
+"Recommended for most users. If you notice unusual stutter or latency, try toggling it."
+msgstr ""
+"垂直同步\n"
+"同步影格呈現與顯示器更新率，以減少畫面撕裂並改善流暢度。\n"
+"在某些設定下，可能增加輸入延遲；若無法維持全速，也可能導致卡頓。\n"
+"\n"
+"建議大部分使用者啟用。若出現異常卡頓或延遲，請嘗試切換此選項。"
+
+#: core/ui/settings_new.cpp:4851
+msgid "Duplicate Frames"
+msgstr "重複影格"
+
+#: core/ui/settings_new.cpp:4852
+msgid "Improve pacing on high refresh-rate displays."
+msgstr "改善高更新率顯示器上的流暢度。"
+
+#: core/ui/settings_new.cpp:4856
+msgid ""
+"Duplicate Frames\n"
+"Duplicates frames on high refresh-rate monitors (120 Hz and above) to improve perceived pacing.\n"
+"Only available for Vulkan, and only when VSync is disabled."
+msgstr ""
+"重複影格\n"
+"在高更新率螢幕（120 Hz 以上）上重複影格，以改善感受上的流暢度。\n"
+"僅支援 Vulkan，且必須停用 VSync。"
+
+#: core/ui/settings_new.cpp:4872
+msgid "Accurate effects, but extremely expensive."
+msgstr "效果精確，但效能成本極高。"
+
+#: core/ui/settings_new.cpp:4876
+msgid ""
+"Full Framebuffer Emulation\n"
+"Enables accurate VRAM framebuffer emulation. Required for some games' effects.\n"
+"Very slow, and generally incompatible with upscaling and widescreen.\n"
+"\n"
+"Only enable if a game needs it, and be prepared to lower Internal Resolution."
+msgstr ""
+"完整影格緩衝區模擬\n"
+"啟用精確的 VRAM 影格緩衝區模擬。部分遊戲特效需要此功能。\n"
+"速度非常慢，且通常不相容於升頻與寬螢幕。\n"
+"\n"
+"只有遊戲需要時才啟用，並準備好降低內部解析度。"
+
+#: core/ui/settings_new.cpp:4886
+msgid "Enable texture replacement packs."
+msgstr "啟用紋理替換包。"
+
+#: core/ui/settings_new.cpp:4890
+msgid ""
+"Load Custom Textures\n"
+"Loads custom/high-res textures from `data/textures/<game id>`.\n"
+"Great for community texture packs, but can increase load time and memory usage.\n"
+"Supports KTX2/XUBC7, KTX2/XUASTC, KTX2/ETC1S, DDS/BC7, PNG, and JPEG.\n"
+"\n"
+"If you see stutter from texture streaming, consider enabling Preload Custom Textures."
+msgstr ""
+"載入自訂紋理\n"
+"從 `data/textures/<game id>` 載入自訂／高解析度紋理。\n"
+"適用於社群製作的紋理包，但可能增加載入時間與記憶體用量。\n"
+"支援 KTX2/XUBC7、KTX2/XUASTC、KTX2/ETC1S、DDS/BC7、PNG 和 JPEG。\n"
+"\n"
+"若紋理串流時出現卡頓，可考慮啟用「預載自訂紋理」。"
+
+#: core/ui/settings_new.cpp:4901
+msgid "System Memory"
+msgstr "系統記憶體"
+
+#: core/ui/settings_new.cpp:4906
+msgid "Video Memory"
+msgstr "視訊記憶體"
+
+#: core/ui/settings_new.cpp:4913
+msgid "PreloadTexturesPopup"
+msgstr "PreloadTexturesPopup"
+
+#: core/ui/settings_new.cpp:4927
+msgid "PreloadTextures"
+msgstr "PreloadTextures"
+
+#: core/ui/settings_new.cpp:4928
+msgid "Trade memory for fewer texture hitches."
+msgstr "以更多記憶體換取更少紋理卡頓。"
+
+#: core/ui/settings_new.cpp:4931
+msgid ""
+"Preload Custom Textures\n"
+"Preloads custom textures at game start.\n"
+"Can reduce runtime stutter at the cost of increased memory usage and longer initial load times."
+msgstr ""
+"預載自訂紋理\n"
+"在遊戲啟動時預先載入自訂紋理。\n"
+"可減少執行期間的卡頓，但會增加記憶體用量並延長初始載入時間。"
+
+#: core/ui/settings_new.cpp:4947
+msgid "Renders a wider view (may reveal glitches)."
+msgstr "呈現更寬的視野（可能顯露圖形錯誤）。"
+
+#: core/ui/settings_new.cpp:4951
+msgid ""
+"Widescreen\n"
+"Draws geometry outside the normal 4:3 view to render a wider scene.\n"
+"Some games were not authored for widescreen, so newly revealed areas can show visual glitches, missing geometry, or incorrect culling.\n"
+"\n"
+"If a game looks broken in widescreen, disable this (or try Widescreen Game Cheats if supported)."
+msgstr ""
+"寬螢幕\n"
+"繪製一般 4:3 視野以外的幾何圖形，呈現更寬廣的場景。\n"
+"部分遊戲設計時並未考慮寬螢幕，因此新顯示的區域可能出現圖形錯誤、幾何圖形缺失或錯誤的剔除。\n"
+"\n"
+"若遊戲在寬螢幕下畫面異常，請停用此選項（或在支援時嘗試使用「寬螢幕遊戲作弊」）。"
+
+#: core/ui/settings_new.cpp:4962
+msgid "Fills ultra-wide displays (more likely to reveal issues)."
+msgstr "填滿超寬螢幕（較可能顯露問題）。"
+
+#: core/ui/settings_new.cpp:4966
+msgid ""
+"Super Widescreen\n"
+"Uses the full width of the screen/window when the aspect ratio is wider than 16:9.\n"
+"More likely to reveal out-of-bounds glitches than standard widescreen.\n"
+"\n"
+"Not compatible with Integer Scaling or Stretch to Fill."
+msgstr ""
+"超寬螢幕\n"
+"當螢幕或視窗的長寬比大於 16:9 時，會使用整個畫面寬度。\n"
+"比一般寬螢幕更容易顯露越界圖形錯誤。\n"
+"\n"
+"不相容於「整數縮放」或「拉伸填滿」。"
+
+#: core/ui/settings_new.cpp:4978
+msgid "Game-specific widescreen patches (when available)."
+msgstr "可用時套用遊戲專用的寬螢幕修正。"
+
+#: core/ui/settings_new.cpp:4982
+msgid ""
+"Widescreen Game Cheats\n"
+"Modifies supported games to display in a 16:9 anamorphic format (game-specific patches).\n"
+"Only some games are supported, but when it works it can be cleaner than geometry widescreen."
+msgstr ""
+"寬螢幕遊戲作弊\n"
+"透過遊戲專用修補程式，讓支援的遊戲以 16:9 變形格式顯示。\n"
+"僅支援部分遊戲，但成功時畫面可能比幾何寬螢幕更乾淨。"
+
+#: core/ui/settings_new.cpp:4990
+msgid "Stretch to Fill"
+msgstr "拉伸填滿"
+
+#: core/ui/settings_new.cpp:4991 core/ui/settings_new.cpp:4994
+msgid "Stretch the screen to fill the entire screen or window."
+msgstr "拉伸畫面以填滿整個螢幕或視窗。"
+
+#: core/ui/settings_new.cpp:5001
+msgid "HorizontalStretchPopup"
+msgstr "HorizontalStretchPopup"
+
+#: core/ui/settings_new.cpp:5002
+#, no-c-format
+msgid ""
+"Stretches the image sideways to fill your display. Use 132% for 16:9 "
+"correction."
+msgstr "水平拉伸畫面以填滿顯示器。使用 132% 可修正 16:9 顯示比例。"
+
+#: core/ui/settings_new.cpp:5015
+msgid "HorizontalStretchingSetting"
+msgstr "HorizontalStretchingSetting"
+
+#: core/ui/settings_new.cpp:5016
+#, no-c-format
+msgid "Fine-tune horizontal scaling (often 132% for 16:9 correction)."
+msgstr "微調水平縮放（16:9 修正通常使用 132%）。"
+
+#: core/ui/settings_new.cpp:5019
+#, no-c-format
+msgid ""
+"Horizontal Stretching\n"
+"Stretches the image sideways.\n"
+"132% is a common value for 16:9 correction, but the best value depends on your display and personal preference."
+msgstr ""
+"水平拉伸\n"
+"水平拉伸畫面。\n"
+"132% 是常見的 16:9 修正值，但最佳數值取決於顯示器與個人偏好。"
+
+#: core/ui/settings_new.cpp:5031
+msgid "Rotate the entire output for rotated games."
+msgstr "旋轉整個輸出畫面，以配合旋轉顯示的遊戲。"
+
+#: core/ui/settings_new.cpp:5035
+msgid ""
+"Rotate Screen 90°\n"
+"Rotates the screen 90 degrees counterclockwise.\n"
+"Useful for games designed for rotated/vertical displays."
+msgstr ""
+"旋轉螢幕 90°\n"
+"逆時針旋轉螢幕 90 度。\n"
+"適用於為旋轉／直向螢幕設計的遊戲。"
+
+#: core/ui/settings_new.cpp:5060
+msgid "PixelBufferSizePopup"
+msgstr "PixelBufferSizePopup"
+
+#: core/ui/settings_new.cpp:5070
+msgid ""
+"Pixel Buffer Size\n"
+"512 MB reserves the least memory and is the fastest place to start. Use this if you want to minimize VRAM/RAM usage, but increase it if you see missing or incorrect transparency in heavier scenes."
+msgstr ""
+"像素緩衝區大小\n"
+"512 MB 預留的記憶體最少，適合作為最快速的起點。若想盡量降低 VRAM／RAM 用量，請使用此設定；若較複雜的場景出現透明效果缺失或錯誤，請增加大小。"
+
+#: core/ui/settings_new.cpp:5072
+msgid ""
+"Pixel Buffer Size\n"
+"1 GB is a good middle ground if 512 MB is not enough. It gives Per-Pixel sorting more room for complex scenes without jumping straight to the larger memory costs."
+msgstr ""
+"像素緩衝區大小\n"
+"若 512 MB 不足，1 GB 是不錯的折衷值。此設定可為逐像素排序的複雜場景提供更多空間，不必直接增加到更高的記憶體用量。"
+
+#: core/ui/settings_new.cpp:5074
+msgid ""
+"Pixel Buffer Size\n"
+"2 GB is useful for heavier scenes, higher internal resolutions, or games with lots of overlapping transparent effects. Use this if you still see transparency issues at 1 GB."
+msgstr ""
+"像素緩衝區大小\n"
+"2 GB 適用於較複雜的場景、較高的內部解析度，或有大量重疊透明特效的遊戲。若 1 GB 時仍有透明效果問題，請使用此設定。"
+
+#: core/ui/settings_new.cpp:5075
+msgid ""
+"Pixel Buffer Size\n"
+"4 GB is the largest buffer and is mainly for very demanding setups. It gives the most headroom for Per-Pixel sorting, but uses the most memory and is usually unnecessary unless you are pushing quality hard."
+msgstr ""
+"像素緩衝區大小\n"
+"4 GB 是最大的緩衝區，主要適用於需求極高的設定。此設定能為逐像素排序提供最多餘裕，但記憶體用量也最高；除非你追求極高畫質，否則通常不需要。"
+
+#: core/ui/settings_new.cpp:5085
+msgid "PixelBufferSizeSetting"
+msgstr "PixelBufferSizeSetting"
+
+#: core/ui/settings_new.cpp:5086
+msgid "Reserved memory for Per-Pixel transparency rendering."
+msgstr "逐像素透明效果渲染所預留的記憶體。"
+
+#: core/ui/settings_new.cpp:5089
+msgid ""
+"Pixel Buffer Size\n"
+"Controls how much memory is reserved for Per-Pixel (OIT) transparency rendering.\n"
+"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
+"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
+msgstr ""
+"像素緩衝區大小\n"
+"控制為逐像素（OIT）透明效果渲染所預留的記憶體。\n"
+"若大幅提高內部解析度，或複雜場景出現透明效果缺失或錯誤，可能需要加大緩衝區。\n"
+"較小的數值可降低記憶體用量，但可能限制較複雜場景中的透明效果準確度。"
+
+#: core/ui/settings_new.cpp:5103
+msgid "PerPixelMaximumLayersPopup"
+msgstr "PerPixelMaximumLayersPopup"
+
+#: core/ui/settings_new.cpp:5106
+msgid ""
+"Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
+"Increase this if you see missing transparency or incorrect layering.\n"
+"Lower values reduce memory pressure and can improve performance."
+msgstr ""
+"控制複雜場景中每個像素可解析的透明圖層數。\n"
+"若透明效果缺失或圖層排序錯誤，請增加數值。\n"
+"較低的數值可減輕記憶體壓力並提升效能。"
+
+#: core/ui/settings_new.cpp:5125
+msgid "PerPixelMaximumLayersSetting"
+msgstr "PerPixelMaximumLayersSetting"
+
+#: core/ui/settings_new.cpp:5126
+msgid "Maximum transparent layers resolved per pixel."
+msgstr "每個像素可解析的透明圖層上限。"
+
+#: core/ui/settings_new.cpp:5129
+msgid ""
+"Per-Pixel Maximum Layers\n"
+"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
+"Increase this if you see missing transparency or incorrect layering.\n"
+"Decrease it to improve performance and reduce memory pressure."
+msgstr ""
+"逐像素最大圖層數\n"
+"限制複雜場景中每個像素可解析的透明圖層數。\n"
+"若透明效果缺失或圖層排序錯誤，請增加數值。\n"
+"降低數值可提升效能並減輕記憶體壓力。"
+
+#: core/ui/settings_new.cpp:5150
+msgid "Automatic Frame Skipping"
+msgstr "自動跳過影格"
+
+#: core/ui/settings_new.cpp:5152
+msgid "AutoFrameSkipPopup"
+msgstr "AutoFrameSkipPopup"
+
+#: core/ui/settings_new.cpp:5165
+msgid "AutoFrameSkippingSetting"
+msgstr "AutoFrameSkippingSetting"
+
+#: core/ui/settings_new.cpp:5166
+msgid "Auto-skip frames to maintain full-speed gameplay."
+msgstr "自動跳過影格以維持全速遊玩。"
+
+#: core/ui/settings_new.cpp:5169
+msgid ""
+"Automatic Frame Skipping\n"
+"Skips rendering frames when the emulator cannot keep up, to help maintain full-speed gameplay.\n"
+"\n"
+"Disabled: never auto-skip.\n"
+"Normal: skip when CPU and GPU are both slow.\n"
+"Maximum: skip when the GPU is slow.\n"
+"\n"
+"For best image quality, prefer lowering Internal Resolution before relying on heavy frame skipping."
+msgstr ""
+"自動跳過影格\n"
+"模擬器無法跟上時會跳過渲染影格，協助維持全速遊玩。\n"
+"\n"
+"停用：不會自動跳過影格。\n"
+"一般：CPU 與 GPU 都變慢時跳過影格。\n"
+"最高：GPU 變慢時跳過影格。\n"
+"\n"
+"若要維持最佳畫質，請優先降低內部解析度，再考慮大量跳過影格。"
+
+#: core/ui/settings_new.cpp:5183
+msgid "FrameSkipPopup"
+msgstr "FrameSkipPopup"
+
+#: core/ui/settings_new.cpp:5184
+msgid "Set how many frames to skip between rendered frames."
+msgstr "設定每個已渲染影格之間要跳過的影格數。"
+
+#: core/ui/settings_new.cpp:5197
+msgid "FrameSkippingSetting"
+msgstr "FrameSkippingSetting"
+
+#: core/ui/settings_new.cpp:5198
+msgid "Force a fixed number of skipped frames."
+msgstr "強制固定跳過指定數量的影格。"
+
+#: core/ui/settings_new.cpp:5201
+msgid ""
+"Frame Skipping\n"
+"Forces a fixed number of frames to be skipped between rendered frames.\n"
+"This is more aggressive and less adaptive than Automatic Frame Skipping.\n"
+"\n"
+"Use only if you know a title benefits from it, or as a last resort when tuning for speed."
+msgstr ""
+"影格跳過\n"
+"強制在每個已渲染影格之間跳過固定數量的影格。\n"
+"此方式比自動跳過影格更積極，也較缺乏彈性。\n"
+"\n"
+"只有在確定遊戲適合使用，或調校速度時已別無選擇，才使用此功能。"
+
+#: core/ui/settings_new.cpp:5218
+msgid "Modifier volumes (often used for shadows)."
+msgstr "修飾體積（常用於陰影）。"
+
+#: core/ui/settings_new.cpp:5222
+msgid ""
+"Shadows (Modifier Volumes)\n"
+"Enables modifier volumes, which are usually used for shadowing and related effects.\n"
+"Disable if a game shows shadow-related artifacts, or if you need a little extra performance."
+msgstr ""
+"陰影（修飾體積）\n"
+"啟用修飾體積，通常用於陰影及相關效果。\n"
+"若遊戲出現陰影問題，或需要稍微提升效能，請停用此功能。"
+
+#: core/ui/settings_new.cpp:5232
+msgid "Atmospheric fog effects."
+msgstr "大氣霧效。"
+
+#: core/ui/settings_new.cpp:5236
+msgid ""
+"Fog\n"
+"Enables atmospheric fog effects.\n"
+"Disable if you see fog artifacts, or if you need extra performance in heavy scenes."
+msgstr ""
+"霧效\n"
+"啟用大氣霧效。\n"
+"若霧效顯示異常，或複雜場景需要提升效能，請停用此功能。"
+
+#: core/ui/settings_new.cpp:5258
+msgid "Delay the frame swap to reduce flashing or unstable video playback."
+msgstr "延遲交換影格，以減少閃爍或不穩定的視訊播放。"
+
+#: core/ui/settings_new.cpp:5262
+msgid ""
+"Delay Frame Swapping\n"
+"Waits for the Dreamcast read/write frame buffers to line up before presenting the next frame.\n"
+"\n"
+"This can reduce flashing screens, unstable video playback, or pacing issues in titles that swap buffers in unusual ways.\n"
+"Leave it off if it causes slowdown or extra latency on slower devices."
+msgstr ""
+"延遲影格交換\n"
+"等待 Dreamcast 讀取／寫入影格緩衝區同步後，再呈現下一個影格。\n"
+"\n"
+"可減少畫面閃爍、視訊播放不穩或影格節奏問題，適用於以特殊方式交換緩衝區的遊戲。\n"
+"若低速裝置因此變慢或延遲增加，請保持關閉。"
+
+#: core/ui/settings_new.cpp:5273
+msgid "Reduce texture bleeding when upscaling."
+msgstr "減少升頻時的紋理滲色。"
+
+#: core/ui/settings_new.cpp:5277
+msgid ""
+"Fix Upscale Bleeding Edge\n"
+"Helps with texture bleeding when upscaling.\n"
+"Disable if pixels warp in 2D games (MVC2, CVS, KOF, etc.)."
+msgstr ""
+"修正升頻邊緣滲色\n"
+"協助改善升頻時的紋理滲色。\n"
+"若 2D 遊戲出現像素扭曲（MVC2、CVS、KOF 等），請停用此功能。"
+
+#: core/ui/settings_new.cpp:5287
+msgid "Fix depth/texture issues on some GPUs."
+msgstr "修正部分 GPU 上的深度／紋理問題。"
+
+#: core/ui/settings_new.cpp:5291
+msgid ""
+"Native Depth Interpolation\n"
+"Helps with texture corruption and depth issues on some GPUs (often AMD, sometimes Intel).\n"
+"If you see depth-related flicker or corruption, try enabling this."
+msgstr ""
+"原生深度插值\n"
+"協助修正部分 GPU 上的紋理毀損與深度問題（通常是 AMD，有時也包括 Intel）。\n"
+"若出現深度相關的閃爍或毀損，請嘗試啟用此功能。"
+
+#: core/ui/settings_new.cpp:5300
+msgid "Copy Rendered Textures"
+msgstr "複製已渲染紋理"
+
+#: core/ui/settings_new.cpp:5301
+msgid "Accuracy option for render-to-texture effects."
+msgstr "渲染至紋理效果的精確度選項。"
+
+#: core/ui/settings_new.cpp:5305
+msgid ""
+"Copy Rendered Textures\n"
+"Copies render-to-texture results back into VRAM.\n"
+"Slower, but more accurate. Enable if a game has missing or incorrect render-to-texture effects."
+msgstr ""
+"複製已渲染紋理\n"
+"將渲染至紋理的結果複製回 VRAM。\n"
+"速度較慢，但準確度較高。若遊戲的渲染至紋理效果缺失或錯誤，請啟用此功能。"
+
+#: core/ui/settings_new.cpp:5330
+msgid "AnisotropicPopup"
+msgstr "AnisotropicPopup"
+
+#: core/ui/settings_new.cpp:5343
+msgid "AnisotropicFilteringSetting"
+msgstr "AnisotropicFilteringSetting"
+
+#: core/ui/settings_new.cpp:5344
+msgid "Sharper textures at steep angles (mipmapped textures only)."
+msgstr "改善大角度觀看時紋理的清晰度（僅適用於使用 mipmap 的紋理）。"
+
+#: core/ui/settings_new.cpp:5347
+msgid ""
+"Anisotropic Filtering\n"
+"Makes mipmapped textures viewed at sharp angles look cleaner (less shimmer).\n"
+"Increases GPU cost.\n"
+"\n"
+"Only affects mipmapped textures. If you want this to do anything, keep mipmaps enabled."
+msgstr ""
+"各向異性過濾\n"
+"讓以大角度觀看的 mipmap 紋理更清晰（減少閃爍）。\n"
+"會增加 GPU 負載。\n"
+"\n"
+"僅影響使用 mipmap 的紋理。若要使用此功能，請保持 mipmap 啟用。"
+
+#: core/ui/settings_new.cpp:5366
+msgid "Sampler Override"
+msgstr "取樣器覆寫"
+
+#: core/ui/settings_new.cpp:5368
+msgid "TextureFilteringPopup"
+msgstr "TextureFilteringPopup"
+
+#: core/ui/settings_new.cpp:5381
+msgid "TextureFilteringSetting"
+msgstr "TextureFilteringSetting"
+
+#: core/ui/settings_new.cpp:5382
+msgid "Override the sampler mode used when textures are sampled."
+msgstr "覆寫取樣紋理時使用的取樣器模式。"
+
+#: core/ui/settings_new.cpp:5385
+msgid ""
+"Texture Sampling Override\n"
+"Default: uses game behavior.\n"
+"Force Nearest-Neighbor: crisp/pixelated look.\n"
+"Force Linear: smoother/blurrier look.\n"
+"\n"
+"For 2D/pixel-art, many users prefer Nearest-Neighbor. For 3D, Linear can look nicer."
+msgstr ""
+"紋理取樣覆寫\n"
+"預設：使用遊戲的行為。\n"
+"強制最近相鄰：呈現銳利／像素化外觀。\n"
+"強制線性：呈現較平滑／模糊的外觀。\n"
+"\n"
+"對 2D／像素藝術而言，許多使用者偏好最近相鄰。對 3D 而言，線性可能較美觀。"
+
+#: core/ui/settings_new.cpp:5395
+msgid ""
+"Sample Texture Filter: Disabled\n"
+"Uses HollyCast's legacy texture sampling behavior."
+msgstr ""
+"取樣紋理過濾器：停用\n"
+"使用 Hollycast 舊版紋理取樣行為。"
+
+#: core/ui/settings_new.cpp:5399
+msgid ""
+"Sample Texture Filter: Bilinear\n"
+"Smooths texture samples with alpha-weighted bilinear interpolation. Good simple baseline."
+msgstr ""
+"取樣紋理過濾器：雙線性\n"
+"使用 Alpha 加權雙線性插值平滑紋理取樣。適合作為簡單的基準設定。"
+
+#: core/ui/settings_new.cpp:5403
+msgid ""
+"Sample Texture Filter: Bilinear / No Edge Blending\n"
+"Smooth bilinear filtering with harder alpha edges to reduce transparent-edge bleeding."
+msgstr ""
+"取樣紋理過濾器：雙線性／不混合邊緣\n"
+"使用平滑的雙線性過濾，並保留較銳利的 Alpha 邊緣，以減少透明邊緣滲色。"
+
+#: core/ui/settings_new.cpp:5407
+msgid ""
+"Sample Texture Filter: Jinc2\n"
+"Windowed Jinc-style reconstruction. Premium smooth option, but sharp edges can show mild ringing."
+msgstr ""
+"取樣紋理過濾器：Jinc2\n"
+"使用視窗化 Jinc 風格重建。高品質的平滑選項，但銳利邊緣可能出現輕微振鈴。"
+
+#: core/ui/settings_new.cpp:5411
+msgid ""
+"Sample Texture Filter: Jinc2 / No Edge Blending\n"
+"Jinc2 reconstruction with harder alpha edges for sprites, UI, and texture-sheet borders."
+msgstr ""
+"取樣紋理過濾器：Jinc2／不混合邊緣\n"
+"使用 Jinc2 重建並保留較銳利的 Alpha 邊緣，適用於精靈圖、介面與紋理表邊界。"
+
+#: core/ui/settings_new.cpp:5415
+msgid ""
+"Sample Texture Filter: MMPX\n"
+"Pixel-art style reconstruction that preserves hard shapes. Best for 2D artwork, not natural textures."
+msgstr ""
+"取樣紋理過濾器：MMPX\n"
+"使用像素藝術風格重建，保留銳利形狀。最適合 2D 美術圖，不適合自然紋理。"
+
+#: core/ui/settings_new.cpp:5419
+msgid ""
+"Sample Texture Filter: MMPX Enhanced\n"
+"Softer MMPX variant that blends reconstructed pixels back toward the source."
+msgstr ""
+"取樣紋理過濾器：MMPX 強化版\n"
+"較柔和的 MMPX 變體，會將重建後的像素與來源混合。"
+
+#: core/ui/settings_new.cpp:5423
+msgid ""
+"Sample Texture Filter: MMPX Advanced\n"
+"More aggressive MMPX edge rules. Useful for pixel-art tests, but can be stylized."
+msgstr ""
+"取樣紋理過濾器：MMPX 進階版\n"
+"採用更積極的 MMPX 邊緣規則。適合測試像素藝術，但可能呈現特殊風格。"
+
+#: core/ui/settings_new.cpp:5427
+msgid ""
+"Sample Texture Filter: Jinc2 Anti-Ring\n"
+"Jinc2-style reconstruction with halo clamping. Better for signs, logos, HUD art, decals, and alpha edges."
+msgstr ""
+"取樣紋理過濾器：Jinc2 抗振鈴\n"
+"採用 Jinc2 風格重建並限制光暈。適合招牌、標誌、HUD 美術圖、貼花與 Alpha 邊緣。"
+
+#: core/ui/settings_new.cpp:5431
+msgid ""
+"Sample Texture Filter: Jinc2 Sharp Anti-Ring\n"
+"Sharper Jinc2-style reconstruction with anti-ringing. Advanced option for crisp Dreamcast-era texture sheets."
+msgstr ""
+"取樣紋理過濾器：Jinc2 銳利抗振鈴\n"
+"更銳利的 Jinc2 風格重建並抑制振鈴。進階選項，適合清晰的 Dreamcast 時代紋理表。"
+
+#: core/ui/settings_new.cpp:5435
+msgid ""
+"Sample Texture Filter: Jinc2 Mild Anti-Ring\n"
+"Jinc2 reconstruction with mild sharpening and an anti-ringing clamp."
+msgstr ""
+"取樣紋理過濾器：Jinc2 輕度抗振鈴\n"
+"採用 Jinc2 重建、輕度銳化並限制振鈴。"
+
+#: core/ui/settings_new.cpp:5439
+msgid ""
+"Sample Texture Filter: Jinc2 Extra Sharp Anti-Ring\n"
+"Jinc2 reconstruction with stronger sharpening and an anti-ringing clamp."
+msgstr ""
+"取樣紋理過濾器：Jinc2 極銳利抗振鈴\n"
+"採用 Jinc2 重建、強化銳化並限制振鈴。"
+
+#: core/ui/settings_new.cpp:5443
+msgid ""
+"Sample Texture Filter: Lanczos2 Anti-Ring\n"
+"Sharp sinc/Lanczos reconstruction with a smaller radius and halo clamp. Strong everyday texture option."
+msgstr ""
+"取樣紋理過濾器：Lanczos2 抗振鈴\n"
+"採用銳利的 sinc／Lanczos 重建，半徑較小並限制光暈。適合日常使用的強效選項。"
+
+#: core/ui/settings_new.cpp:5447
+msgid ""
+"Sample Texture Filter: Lanczos3 Anti-Ring\n"
+"Sharper larger-radius Lanczos reconstruction with halo clamp. High quality, but more likely to emphasize edges."
+msgstr ""
+"取樣紋理過濾器：Lanczos3 抗振鈴\n"
+"採用半徑較大的銳利 Lanczos 重建並限制光暈。畫質出色，但可能更強調邊緣。"
+
+#: core/ui/settings_new.cpp:5452
+msgid ""
+"Sample Texture Filter: Robidoux\n"
+"Balanced cubic reconstruction. Good compromise for painted or photographic Dreamcast-era textures."
+msgstr ""
+"取樣紋理過濾器：Robidoux\n"
+"採用平衡的三次重建。適合彩繪或照片風格的 Dreamcast 時代紋理，能提供良好折衷。"
+
+#: core/ui/settings_new.cpp:5456
+msgid ""
+"Sample Texture Filter: Robidoux Sharp\n"
+"Sharper Robidoux-style cubic filter. A good candidate for texture packs and detailed environment art."
+msgstr ""
+"取樣紋理過濾器：Robidoux 銳利版\n"
+"採用較銳利的 Robidoux 風格三次過濾。適合紋理包與細節豐富的環境美術圖。"
+
+#: core/ui/settings_new.cpp:5460
+msgid ""
+"Sample Texture Filter: Bicubic Catmull-Rom\n"
+"Classic sharper bicubic reconstruction. Crisp, familiar, and cheaper than the heavier premium filters."
+msgstr ""
+"取樣紋理過濾器：雙三次 Catmull-Rom\n"
+"採用經典且較銳利的雙三次重建。清晰、熟悉，且成本低於較重的高品質過濾器。"
+
+#: core/ui/settings_new.cpp:5464
+msgid ""
+"Sample Texture Filter: Bicubic Mitchell\n"
+"Softer Mitchell-Netravali bicubic reconstruction. Smooth low-ringing option for UI and texture sheets."
+msgstr ""
+"取樣紋理過濾器：雙三次 Mitchell\n"
+"採用較柔和的 Mitchell-Netravali 雙三次重建。適合介面與紋理表的低振鈴選項。"
+
+#: core/ui/settings_new.cpp:5468
+msgid ""
+"Sample Texture Filter: Nearest-Neighbor\n"
+"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the selected size limit and leaves Flycast's global sampler override at Default."
+msgstr ""
+"取樣紋理過濾器：最近相鄰\n"
+"僅使用最近相鄰取樣，並走取樣過濾路徑。此設定會影響所選尺寸上限內符合條件的紋理，並讓 Flycast 的全域取樣器覆寫維持「預設」。"
+
+#: core/ui/settings_new.cpp:5480
+msgid "SampleTextureFilterPopup"
+msgstr "SampleTextureFilterPopup"
+
+#: core/ui/settings_new.cpp:5499
+msgid "SampleTextureFilterSetting"
+msgstr "SampleTextureFilterSetting"
+
+#: core/ui/settings_new.cpp:5500
+msgid "Choose the sample-time texture filtering algorithm."
+msgstr "選擇取樣時使用的紋理過濾演算法。"
+
+#: core/ui/settings_new.cpp:5504
+msgid "Sample-time filtering is not available on DirectX 9."
+msgstr "DirectX 9 不支援取樣時過濾。"
+
+#: core/ui/settings_new.cpp:5519
+msgid "Max Filtered Texture Size"
+msgstr "最大過濾紋理尺寸"
+
+#: core/ui/settings_new.cpp:5521
+msgid "MaxFilteredTextureSizePopup"
+msgstr "MaxFilteredTextureSizePopup"
+
+#: core/ui/settings_new.cpp:5534
+msgid "MaxFilteredTextureSizeSetting"
+msgstr "MaxFilteredTextureSizeSetting"
+
+#: core/ui/settings_new.cpp:5535
+msgid "Limit filtering to smaller texture groups."
+msgstr "僅對較小的紋理群組套用過濾。"
+
+#: core/ui/settings_new.cpp:5538
+msgid ""
+"Max Filtered Texture Size\n"
+"Controls the largest texture group affected by texture upscaling and sample texture filters.\n"
+"Upscaling checks the original width. Sample filters check the uploaded width, including upscaling and replacement textures.\n"
+"Buckets use texture width, so 8x8 includes 8x16 and 8x32, while 16x16 includes 16x8.\n"
+"1024x1024+ includes larger texture-pack assets.\n"
+"\n"
+"Live preview updates sample-time filtering immediately. Already-uploaded texture-upscale results may require a cache refresh or game restart."
+msgstr ""
+"最大過濾紋理尺寸\n"
+"控制會受到紋理升頻與取樣紋理過濾影響的最大紋理群組。\n"
+"升頻依據原始寬度判定。取樣過濾則依據上傳後的寬度判定，包括升頻及替換紋理。\n"
+"紋理區間依寬度分類，因此 8x8 也包含 8x16 和 8x32，而 16x16 也包含 16x8。\n"
+"1024x1024+ 包含更大的紋理包資產。\n"
+"\n"
+"即時預覽會立即更新取樣時過濾。已上傳的升頻紋理可能需要重新整理快取或重新啟動遊戲。"
+
+#: core/ui/settings_new.cpp:5549
+msgid "Texture Filtering Live Tune"
+msgstr "紋理過濾即時調校"
+
+#: core/ui/settings_new.cpp:5560
+msgid "Start a game to tune texture filtering over its current frame."
+msgstr "啟動遊戲後，可在目前遊戲畫面中調校紋理過濾。"
+
+#: core/ui/settings_new.cpp:5561
+msgid "The current game must be pausable for live texture filtering."
+msgstr "目前遊戲必須能暫停，才能即時調校紋理過濾。"
+
+#: core/ui/settings_new.cpp:5574
+msgid "Video Routing"
+msgstr "視訊路由"
+
+#: core/ui/settings_new.cpp:5585
+msgid "Send Video to Another Program"
+msgstr "將視訊傳送至其他程式"
+
+#: core/ui/settings_new.cpp:5586
+msgid "Stream GPU texture directly to OBS Studio"
+msgstr "將 GPU 紋理串流至 OBS Studio"
+
+#: core/ui/settings_new.cpp:5590
+msgid ""
+"Video Routing\n"
+"Routes a GPU texture directly to OBS Studio (or a compatible capture tool), avoiding CPU-intensive Display/Window Capture.\n"
+"This can improve capture quality and reduce overhead compared to capturing the emulator window."
+msgstr ""
+"視訊路由\n"
+"將 GPU 紋理直接傳送至 OBS Studio（或相容的擷取工具），避免使用耗用大量 CPU 的顯示器／視窗擷取。\n"
+"與擷取模擬器視窗相比，這可提升擷取畫質並減少負載。"
+
+#: core/ui/settings_new.cpp:5604
+msgid "Scale Down Before Sending"
+msgstr "傳送前縮小"
+
+#: core/ui/settings_new.cpp:5605
+msgid "Share smaller texture for better performance"
+msgstr "共用較小的紋理以提升效能"
+
+#: core/ui/settings_new.cpp:5609
+msgid ""
+"Scale Down Before Sending\n"
+"Shares a smaller texture to reduce capture bandwidth and GPU/CPU overhead.\n"
+"Can improve performance on some systems, but results vary."
+msgstr ""
+"傳送前縮小\n"
+"共用較小的紋理，以降低擷取頻寬與 GPU／CPU 負載。\n"
+"在某些系統上可提升效能，但實際效果因系統而異。"
+
+#: core/ui/settings_new.cpp:5624
+msgid "Output Vertical Resolution"
+msgstr "輸出垂直解析度"
+
+#: core/ui/settings_new.cpp:5626
+msgid "VideoRoutingVResPopup"
+msgstr "VideoRoutingVResPopup"
+
+#: core/ui/settings_new.cpp:5627
+msgid "Set the vertical resolution used for the shared OBS texture output."
+msgstr "設定共用 OBS 紋理輸出的垂直解析度。"
+
+#: core/ui/settings_new.cpp:5644
+msgid "VideoRoutingVResSetting"
+msgstr "VideoRoutingVResSetting"
+
+#: core/ui/settings_new.cpp:5645
+msgid "Set vertical resolution for the shared output texture."
+msgstr "設定共用輸出紋理的垂直解析度。"
+
+#: core/ui/settings_new.cpp:5648
+msgid ""
+"Output Vertical Resolution\n"
+"Sets the vertical resolution used for the shared texture routing output.\n"
+"Lower values reduce bandwidth and overhead. Higher values improve capture clarity."
+msgstr ""
+"輸出垂直解析度\n"
+"設定共用紋理路由輸出的垂直解析度。\n"
+"較低的數值可減少頻寬與負載；較高的數值可提升擷取清晰度。"
+
+#: core/ui/settings_new.cpp:5669
+msgid ""
+"Output Texture Size\n"
+"Shows the calculated size of the shared output texture based on your routing settings."
+msgstr ""
+"輸出紋理尺寸\n"
+"根據你的路由設定顯示計算後的共用輸出紋理尺寸。"
+
+#: core/ui/settings_new.cpp:5678
+msgid "Output Texture Size"
+msgstr "輸出紋理尺寸"
+
+#: core/ui/settings_new.cpp:5690
+msgid "Calculated size of the shared output texture."
+msgstr "計算後的共用輸出紋理尺寸。"
+
+#: core/ui/settings_new.cpp:5722
+msgid "In-Game Display"
+msgstr "遊戲內顯示"
+
+#: core/ui/settings_new.cpp:5727
+msgid "Show VMU In-Game"
+msgstr "在遊戲中顯示 VMU"
+
+#: core/ui/settings_new.cpp:5728
+msgid "Show VMU LCD screens during gameplay."
+msgstr "遊戲期間顯示 VMU LCD 螢幕。"
+
+#: core/ui/settings_new.cpp:5731
+msgid ""
+"Show VMU In-Game\n"
+"Displays the VMU LCD screens while in-game."
+msgstr ""
+"在遊戲中顯示 VMU\n"
+"遊戲期間顯示 VMU LCD 螢幕。"
+
+#: core/ui/settings_new.cpp:5735
+msgid ""
+"Enable to move VMU screens. Turn off to lock them in place. Use reset to "
+"restore their default positions."
+msgstr "啟用即可移動 VMU 螢幕。關閉後會將其固定。使用重設功能可還原預設位置。"
+
+#: core/ui/settings_new.cpp:5740
+msgid "Move VMU"
+msgstr "移動 VMU"
+
+#: core/ui/settings_new.cpp:5755
+msgid "Reset VMU screens to their default positions."
+msgstr "將 VMU 螢幕重設至預設位置。"
+
+#: core/ui/settings_new.cpp:5766
+msgid "Turn off to lock VMU screens in place."
+msgstr "關閉後會將 VMU 螢幕固定。"
+
+#: core/ui/settings_new.cpp:5773
+msgid "VMU Size"
+msgstr "VMU 大小"
+
+#: core/ui/settings_new.cpp:5775
+msgid "VmuWindowSizePopup"
+msgstr "VmuWindowSizePopup"
+
+#: core/ui/settings_new.cpp:5776
+msgid "Resize all movable VMU screens live."
+msgstr "即時調整所有可移動的 VMU 螢幕大小。"
+
+#: core/ui/settings_new.cpp:5784
+msgid "VmuWindowSizeSetting"
+msgstr "VmuWindowSizeSetting"
+
+#: core/ui/settings_new.cpp:5785
+msgid "Scale VMU screens independently of UI scaling."
+msgstr "分別縮放 VMU 螢幕，不受介面縮放影響。"
+
+#: core/ui/settings_new.cpp:5786
+msgid ""
+"100% keeps the default VMU size. Changes apply immediately and are saved "
+"with your settings."
+msgstr "100% 會維持 VMU 預設大小。變更會立即套用並儲存至設定。"
+
+#: core/ui/settings_new.cpp:5789
+msgid "VMU Transparency"
+msgstr "VMU 透明度"
+
+#: core/ui/settings_new.cpp:5791
+msgid "VmuWindowTransparencyPopup"
+msgstr "VmuWindowTransparencyPopup"
+
+#: core/ui/settings_new.cpp:5792
+msgid "Adjust how transparent VMU screens are."
+msgstr "調整 VMU 螢幕的透明度。"
+
+#: core/ui/settings_new.cpp:5800
+msgid "VmuWindowTransparencySetting"
+msgstr "VmuWindowTransparencySetting"
+
+#: core/ui/settings_new.cpp:5801
+#, no-c-format
+msgid "0% is solid. 100% is invisible."
+msgstr "0% 為不透明，100% 則完全透明。"
+
+#: core/ui/settings_new.cpp:5802
+msgid ""
+"25% keeps the default transparency. Desktop VMUs dim further in menus. "
+"Changes apply immediately and are saved with your settings."
+msgstr "25% 會維持預設透明度。桌面上的 VMU 在選單中會進一步變暗。變更會立即套用並儲存至設定。"
+
+#: core/ui/settings_new.cpp:5807
+msgid "Performance Overlay"
+msgstr "效能資訊覆疊"
+
+#: core/ui/settings_new.cpp:5809
+msgid "Minimal"
+msgstr "精簡"
+
+#: core/ui/settings_new.cpp:5813
+msgid "Overlay Mode"
+msgstr "覆疊模式"
+
+#: core/ui/settings_new.cpp:5815
+msgid "ResourceMonitorModePopup"
+msgstr "ResourceMonitorModePopup"
+
+#: core/ui/settings_new.cpp:5827
+msgid "ResourceMonitorMode"
+msgstr "ResourceMonitorMode"
+
+#: core/ui/settings_new.cpp:5828
+msgid ""
+"Choose the overlay density. Off can use the lightweight FPS counter; Full "
+"uses the metric selections below."
+msgstr "選擇覆疊資訊的密度。「關閉」可改用輕量 FPS 計數器；「完整」會使用下方選取的指標。"
+
+#: core/ui/settings_new.cpp:5830
+msgid ""
+"Overlay Mode\n"
+"Off can show the lightweight FPS counter below. Minimal always shows a compact rate and CPU view. Full uses the diagnostic selections below, including separate host and Dreamcast timing domains."
+msgstr ""
+"覆疊模式\n"
+"關閉時，可顯示下方的輕量 FPS 計數器。精簡模式會固定顯示簡潔的影格率與 CPU 資訊。完整模式會使用下方選取的診斷資訊，包括主機與 Dreamcast 的分別計時資料。"
+
+#: core/ui/settings_new.cpp:5840
+msgid "Show Lightweight FPS Counter"
+msgstr "顯示輕量 FPS 計數器"
+
+#: core/ui/settings_new.cpp:5841
+msgid ""
+"Show a compact frame-rate counter without enabling performance monitoring."
+msgstr "顯示精簡的影格率計數器，不啟用效能監控。"
+
+#: core/ui/settings_new.cpp:5844
+msgid ""
+"Show Lightweight FPS Counter\n"
+"Available while the Performance Overlay is Off. Minimal includes frame rates automatically, while Full uses the Game FPS and VPS metric below."
+msgstr ""
+"顯示輕量 FPS 計數器\n"
+"僅在效能資訊覆疊關閉時提供。精簡模式會自動包含影格率；完整模式則使用下方的「遊戲 FPS 與 VPS」指標。"
+
+#: core/ui/settings_new.cpp:5856
+msgid "Show Game FPS and VPS"
+msgstr "顯示遊戲 FPS 與 VPS"
+
+#: core/ui/settings_new.cpp:5856
+msgid ""
+"FPS counts completed non-render-to-texture PVR scenes: the game's internal "
+"rendered-frame rate, matching DuckStation's FPS meaning. VPS counts "
+"Dreamcast video blanks. A 30 FPS game normally shows 30 FPS and about 60 VPS"
+" on NTSC."
+msgstr ""
+"FPS 統計已完成、非渲染至紋理的 PVR 場景數：也就是遊戲內部的影格渲染率，與 DuckStation 對 FPS 的定義相同。VPS 統計 "
+"Dreamcast 的垂直消隱次數。NTSC 下，30 FPS 的遊戲通常會顯示 30 FPS 和約 60 VPS。"
+
+#: core/ui/settings_new.cpp:5857
+msgid "Show Output FPS"
+msgstr "顯示輸出 FPS"
+
+#: core/ui/settings_new.cpp:5857
+msgid ""
+"Counts successful frames presented to the screen. Compare it with Game FPS "
+"to identify repeated or omitted host output frames; it is display cadence, "
+"not the game's internal rendered-frame rate."
+msgstr "統計成功呈現至螢幕的影格。可與遊戲 FPS 比較，找出主機重複或遺漏的輸出影格；這是顯示器的影格節奏，不是遊戲內部的影格渲染率。"
+
+#: core/ui/settings_new.cpp:5858
+msgid "Show Emulation Speed"
+msgstr "顯示模擬速度"
+
+#: core/ui/settings_new.cpp:5858
+msgid ""
+"Shows current VPS relative to the active PAL or NTSC target and the "
+"configured speed limit. This is overall pace, not a CPU or GPU utilization "
+"meter."
+msgstr "顯示目前 VPS 相對於使用中的 PAL 或 NTSC 目標值及設定速度上限。這代表整體執行速度，不是 CPU 或 GPU 使用率。"
+
+#: core/ui/settings_new.cpp:5859
+msgid "Show Threading State"
+msgstr "顯示多執行緒狀態"
+
+#: core/ui/settings_new.cpp:5859
+msgid ""
+"Shows whether SH4 emulation and PVR rendering run on separate host threads. "
+"Threaded mode changes which thread can become the limiting host CPU core."
+msgstr "顯示 SH4 模擬與 PVR 渲染是否在不同主機執行緒上執行。多執行緒模式會影響哪個執行緒可能成為主機 CPU 的效能瓶頸。"
+
+#: core/ui/settings_new.cpp:5860
+msgid "Show Host CPU"
+msgstr "顯示主機 CPU"
+
+#: core/ui/settings_new.cpp:5860
+msgid ""
+"Hollycast is the emulator process share of all logical CPU cores. Device is "
+"total CPU use from all apps. A single SH4 or renderer thread can still fill "
+"one core while Hollycast is low on an 8-core device."
+msgstr ""
+"Hollycast 是模擬器處理程序佔用所有邏輯 CPU 核心的比例；裝置則是所有應用程式的總 CPU 使用率。即使 Hollycast 在 8 "
+"核心裝置上的總使用率偏低，單一 SH4 或渲染器執行緒仍可能佔滿一個核心。"
+
+#: core/ui/settings_new.cpp:5861
+msgid "Show Host GPU"
+msgstr "顯示主機 GPU"
+
+#: core/ui/settings_new.cpp:5861
+msgid ""
+"Shows timestamped GPU work as a one-second share and milliseconds per timed "
+"render. Includes PVR screen renders and direct framebuffer uploads; full "
+"framebuffer emulation can perform both per video frame. It is backend GPU "
+"execution time, not a whole-device GPU sensor. Vulkan, OpenGL/GLES, DirectX "
+"9, and DirectX 11 support it."
+msgstr ""
+"顯示 GPU 計時工作在一秒內所佔的比例，以及每次計時渲染所需的毫秒數。包括 PVR "
+"螢幕渲染與直接影格緩衝區上傳；完整影格緩衝區模擬可能在每個視訊影格中執行兩者。這是後端 GPU 執行時間，不是整部裝置的 GPU "
+"感測器。Vulkan、OpenGL/GLES、DirectX 9 和 DirectX 11 支援此功能。"
+
+#: core/ui/settings_new.cpp:5862
+msgid "Show Dreamcast SH4 Rate"
+msgstr "顯示 Dreamcast SH4 速率"
+
+#: core/ui/settings_new.cpp:5862
+#, no-c-format
+msgid ""
+"Shows emulated SH4 cycles advancing versus the real-time Dreamcast target. "
+"Below 100% means Hollycast is not advancing SH4 time at the expected rate. "
+"It is not host CPU use or a game's exact SH4 occupancy."
+msgstr ""
+"顯示模擬的 SH4 週期相對於 Dreamcast 即時目標值的推進狀況。低於 100% 表示 Hollycast 未按預期速率推進 SH4 "
+"時間。這不是主機 CPU 使用率，也不是遊戲實際的 SH4 使用率。"
+
+#: core/ui/settings_new.cpp:5863
+msgid "Show Dreamcast PVR Schedule"
+msgstr "顯示 Dreamcast PVR 排程"
+
+#: core/ui/settings_new.cpp:5863
+#, no-c-format
+msgid ""
+"Shows all emulated PVR renderer-complete delays scheduled during the sample "
+"as a share of the active Dreamcast video-frame budgets. Values above 100% "
+"mean scheduled render work exceeded one frame of budget on average. It is "
+"scheduler pressure, not host GPU use and not a full PVR busy-cycle meter."
+msgstr ""
+"顯示取樣期間排程的所有模擬 PVR 渲染器完成延遲，並以目前 Dreamcast 視訊影格預算的比例呈現。數值高於 100% "
+"表示平均排程的渲染工作量超出一個影格預算。這反映排程器負載，不是主機 GPU 使用率，也不是完整的 PVR 忙碌週期指標。"
+
+#: core/ui/settings_new.cpp:5864
+msgid "Show Host SH4 Thread"
+msgstr "顯示主機 SH4 執行緒"
+
+#: core/ui/settings_new.cpp:5864
+#, no-c-format
+msgid ""
+"Shows host CPU time used by the thread running SH4 emulation. A value near "
+"100% means that one host core is saturated; it does not directly mean the "
+"original Dreamcast SH4 is full."
+msgstr ""
+"顯示執行 SH4 模擬的執行緒所耗用的主機 CPU 時間。接近 100% 表示一個主機核心已滿載；這不代表原始 Dreamcast SH4 已滿載。"
+
+#: core/ui/settings_new.cpp:5865
+msgid "Show Host PVR Renderer Thread"
+msgstr "顯示主機 PVR 渲染器執行緒"
+
+#: core/ui/settings_new.cpp:5865
+msgid ""
+"Shows host CPU time used by the PVR renderer thread or its shared-thread "
+"portion. It exposes emulator and graphics-driver preparation cost, not "
+"Dreamcast PVR pressure or hardware GPU use."
+msgstr ""
+"顯示 PVR 渲染器執行緒或其共用執行緒部分所耗用的主機 CPU 時間。這反映模擬器與圖形驅動程式的準備成本，不是 Dreamcast PVR "
+"負載或硬體 GPU 使用率。"
+
+#: core/ui/settings_new.cpp:5866
+msgid "Show Resolution"
+msgstr "顯示解析度"
+
+#: core/ui/settings_new.cpp:5866
+msgid ""
+"Shows native Dreamcast output, internal rendered size, host viewport, and "
+"final screen output. Higher rendered resolution can raise host GPU time "
+"without changing Dreamcast SH4 or PVR scheduling."
+msgstr ""
+"顯示原生 Dreamcast 輸出、內部渲染尺寸、主機視埠與最終螢幕輸出。提高渲染解析度會增加主機 GPU 時間，但不會改變 Dreamcast SH4"
+" 或 PVR 排程。"
+
+#: core/ui/settings_new.cpp:5867
+msgid "Show Frame Times"
+msgstr "顯示影格時間"
+
+#: core/ui/settings_new.cpp:5867
+msgid ""
+"Shows minimum, average, and maximum intervals between successful host "
+"presents. Frame-time spikes expose stutter even when the one-second FPS "
+"average looks normal."
+msgstr "顯示主機成功呈現影格之間的最短、平均與最長間隔。影格時間尖峰可顯示卡頓，即使一秒平均 FPS 看起來正常也一樣。"
+
+#: core/ui/settings_new.cpp:5868
+msgid "Show Renderer Statistics"
+msgstr "顯示渲染器統計資料"
+
+#: core/ui/settings_new.cpp:5868
+msgid ""
+"Shows API, PVR primitive batches, vertices, PVR render passes, and texture "
+"uploads per second. These are renderer work counters, not VRAM bytes, cache-"
+"resident texture count, or host draw/copy/readback counters."
+msgstr ""
+"顯示 API、PVR 圖元批次、頂點、PVR 渲染階段，以及每秒紋理上傳數。這些是渲染器工作計數，不是 VRAM "
+"位元組數、快取中的紋理數，或主機繪圖／複製／讀回計數。"
+
+#: core/ui/settings_new.cpp:5869
+msgid "Show Host GPU Memory"
+msgstr "顯示主機 GPU 記憶體"
+
+#: core/ui/settings_new.cpp:5869
+msgid ""
+"Shows the Windows DXGI memory attributed to Hollycast and its current "
+"adapter budget when the OS exposes it. It changes with allocations, but is "
+"not total GPU VRAM and is unavailable on platforms without an authoritative "
+"query."
+msgstr ""
+"若作業系統有提供此資訊，顯示 Windows DXGI 歸屬於 Hollycast 的記憶體，以及目前配接器預算。此數值會隨配置變動，但不代表 GPU "
+"VRAM 總量；若平台沒有權威查詢，則無法使用。"
+
+#: core/ui/settings_new.cpp:5870
+msgid "Show Hollycast RAM"
+msgstr "顯示 Hollycast RAM"
+
+#: core/ui/settings_new.cpp:5870
+msgid ""
+"Shows the resident memory currently held by Hollycast according to the "
+"operating system. It changes with content, caches, and allocations. Fixed "
+"Dreamcast RAM and VRAM capacities are intentionally omitted."
+msgstr ""
+"顯示作業系統回報的 Hollycast 目前常駐記憶體。此數值會隨內容、快取與配置變動。固定的 Dreamcast RAM 與 VRAM 容量不會顯示。"
+
+#: core/ui/settings_new.cpp:5884
+msgid "History Graphs"
+msgstr "歷史圖表"
+
+#: core/ui/settings_new.cpp:5886
+msgid "Show Frame-Time Graph"
+msgstr "顯示影格時間圖表"
+
+#: core/ui/settings_new.cpp:5886
+msgid ""
+"Draw a rolling 152-sample graph of successful-present intervals. Spikes are "
+"long output frames."
+msgstr "繪製成功呈現間隔的 152 筆移動圖表。尖峰代表較長的輸出影格。"
+
+#: core/ui/settings_new.cpp:5887
+msgid "Show Host CPU Graph"
+msgstr "顯示主機 CPU 圖表"
+
+#: core/ui/settings_new.cpp:5887
+msgid ""
+"Draw rolling one-second samples. The main line is Hollycast's share of total"
+" CPU capacity; the blue line is overall device CPU use from all apps."
+msgstr "繪製每秒移動樣本。主線代表 Hollycast 佔總 CPU 容量的比例；藍線代表所有應用程式的裝置整體 CPU 使用率。"
+
+#: core/ui/settings_new.cpp:5888
+msgid "Show Host GPU Graph"
+msgstr "顯示主機 GPU 圖表"
+
+#: core/ui/settings_new.cpp:5888
+msgid ""
+"Draw rolling one-second GPU timestamp samples. It is available only while "
+"the active backend supplies valid GPU timestamp queries."
+msgstr "繪製每秒移動 GPU 時間戳樣本。只有在使用中的後端提供有效 GPU 時間戳查詢時，才能使用此功能。"
+
+#: core/ui/settings_new.cpp:5903
+msgid "Appearance"
+msgstr "外觀"
+
+#: core/ui/settings_new.cpp:5907
+msgid "Text Size"
+msgstr "文字大小"
+
+#: core/ui/settings_new.cpp:5909
+msgid "OverlayTextSizePopup"
+msgstr "OverlayTextSizePopup"
+
+#: core/ui/settings_new.cpp:5910
+msgid ""
+"Set the maximum text size. The overlay shrinks when needed to keep every row"
+" and graph on screen."
+msgstr "設定文字大小上限。必要時會縮小覆疊，以便在螢幕上顯示所有列與圖表。"
+
+#: core/ui/settings_new.cpp:5922
+msgid "OverlayTextSizeSetting"
+msgstr "OverlayTextSizeSetting"
+
+#: core/ui/settings_new.cpp:5922
+msgid "Choose the overlay font size."
+msgstr "選擇覆疊字型大小。"
+
+#: core/ui/settings_new.cpp:5923
+msgid ""
+"Text Size\n"
+"Controls the maximum text size. All selected rows and graphs automatically fit inside the screen."
+msgstr ""
+"文字大小\n"
+"控制文字大小上限。所有選取的列與圖表都會自動縮放以符合螢幕。"
+
+#: core/ui/settings_new.cpp:5929
+msgid "Opacity"
+msgstr "不透明度"
+
+#: core/ui/settings_new.cpp:5931
+msgid "OverlayTransparencyPopup"
+msgstr "OverlayTransparencyPopup"
+
+#: core/ui/settings_new.cpp:5932 core/ui/settings_new.cpp:5944
+msgid "Set the overlay opacity."
+msgstr "設定覆疊不透明度。"
+
+#: core/ui/settings_new.cpp:5944
+msgid "OverlayTransparencySetting"
+msgstr "OverlayTransparencySetting"
+
+#: core/ui/settings_new.cpp:5945
+msgid ""
+"Opacity\n"
+"Controls the overlay text and background opacity."
+msgstr ""
+"不透明度\n"
+"控制覆疊文字與背景的不透明度。"
+
+#: core/ui/settings_new.cpp:5947
+msgid "Top Left"
+msgstr "左上"
+
+#: core/ui/settings_new.cpp:5947
+msgid "Top Right"
+msgstr "右上"
+
+#: core/ui/settings_new.cpp:5947
+msgid "Bottom Left"
+msgstr "左下"
+
+#: core/ui/settings_new.cpp:5947
+msgid "Bottom Right"
+msgstr "右下"
+
+#: core/ui/settings_new.cpp:5951
+msgid "Screen Corner"
+msgstr "螢幕角落"
+
+#: core/ui/settings_new.cpp:5953
+msgid "OverlayCornerPopup"
+msgstr "OverlayCornerPopup"
+
+#: core/ui/settings_new.cpp:5964
+msgid "OverlayCornerSetting"
+msgstr "OverlayCornerSetting"
+
+#: core/ui/settings_new.cpp:5964
+msgid "Choose where the overlay appears."
+msgstr "選擇覆疊的顯示位置。"
+
+#: core/ui/settings_new.cpp:5965
+msgid ""
+"Screen Corner\n"
+"15 pixels from the selected edges, and below the menu bar for the top corners."
+msgstr ""
+"螢幕角落\n"
+"距離所選邊緣 15 像素；位於上方的角落會避開選單列。"
+
+#: core/ui/settings_new.cpp:5969
+msgid "Horizontal Position"
+msgstr "水平位置"
+
+#: core/ui/settings_new.cpp:5971
+msgid "OverlayOffsetXPopup"
+msgstr "OverlayOffsetXPopup"
+
+#: core/ui/settings_new.cpp:5972
+msgid "Move the complete overlay left or right."
+msgstr "將整個覆疊向左或向右移動。"
+
+#: core/ui/settings_new.cpp:5984
+msgid "OverlayOffsetXSetting"
+msgstr "OverlayOffsetXSetting"
+
+#: core/ui/settings_new.cpp:5984
+msgid "Adjust the overlay's horizontal position."
+msgstr "調整覆疊的水平位置。"
+
+#: core/ui/settings_new.cpp:5985
+msgid ""
+"Horizontal Position\n"
+"Zero starts 15 pixels from the selected edge. Negative values move left. Positive values move right. The overlay stays on screen."
+msgstr ""
+"水平位置\n"
+"數值為 0 時，覆疊會距離所選邊緣 15 像素。負值向左移動，正值向右移動。覆疊會保持在螢幕內。"
+
+#: core/ui/settings_new.cpp:5989
+msgid "Vertical Position"
+msgstr "垂直位置"
+
+#: core/ui/settings_new.cpp:5991
+msgid "OverlayOffsetYPopup"
+msgstr "OverlayOffsetYPopup"
+
+#: core/ui/settings_new.cpp:5992
+msgid "Move the complete overlay up or down."
+msgstr "將整個覆疊向上或向下移動。"
+
+#: core/ui/settings_new.cpp:6004
+msgid "OverlayOffsetYSetting"
+msgstr "OverlayOffsetYSetting"
+
+#: core/ui/settings_new.cpp:6004
+msgid "Adjust the overlay's vertical position."
+msgstr "調整覆疊的垂直位置。"
+
+#: core/ui/settings_new.cpp:6005
+msgid ""
+"Vertical Position\n"
+"Zero starts 15 pixels from the selected edge, below the menu bar for top corners. Negative values move up. Positive values move down. The overlay stays on screen and below the menu bar."
+msgstr ""
+"垂直位置\n"
+"數值為 0 時，覆疊會距離所選邊緣 15 像素；位於上方的角落會避開選單列。負值向上移動，正值向下移動。覆疊會保持在螢幕內並避開選單列。"
+
+#: core/ui/settings_new.cpp:6017
+msgid "Text Color"
+msgstr "文字色彩"
+
+#: core/ui/settings_new.cpp:6018
+msgid "Choose the overlay text color."
+msgstr "選擇覆疊文字色彩。"
+
+#: core/ui/settings_new.cpp:6026
+msgid ""
+"Text Color\n"
+"Controls the overlay text color."
+msgstr ""
+"文字色彩\n"
+"控制覆疊文字色彩。"
+
+#: core/ui/settings_new.cpp:6034
+msgid "Audio Configuration"
+msgstr "音訊設定"
+
+#: core/ui/settings_new.cpp:6038
+msgid "Playback"
+msgstr "播放"
+
+#: core/ui/settings_new.cpp:6045
+msgid "Dreamcast Digital Sound Processor"
+msgstr "Dreamcast 數位訊號處理器"
+
+#: core/ui/settings_new.cpp:6049
+msgid ""
+"Enable DSP\n"
+"Enables the Dreamcast Digital Sound Processor.\n"
+"Only recommended on fast platforms. If you experience audio stutter or performance drops, try disabling this."
+msgstr ""
+"啟用 DSP\n"
+"啟用 Dreamcast 數位訊號處理器。\n"
+"僅建議在高效能平台上使用。若音訊卡頓或效能下降，請嘗試停用。"
+
+#: core/ui/settings_new.cpp:6057
+msgid "VMU Sounds"
+msgstr "VMU 音效"
+
+#: core/ui/settings_new.cpp:6058
+msgid "Play VMU beeps when enabled"
+msgstr "啟用時播放 VMU 提示音"
+
+#: core/ui/settings_new.cpp:6062
+msgid ""
+"VMU Sounds\n"
+"Plays VMU beep sounds when enabled.\n"
+"Purely cosmetic; disable if you prefer silence or want to avoid extra audio events."
+msgstr ""
+"VMU 音效\n"
+"啟用時播放 VMU 提示音。\n"
+"純屬裝飾效果；若偏好靜音或想避免額外音訊事件，請停用。"
+
+#: core/ui/settings_new.cpp:6075
+msgid "VolumeLevelPopup"
+msgstr "VolumeLevelPopup"
+
+#: core/ui/settings_new.cpp:6100
+msgid "VolumeLevelSetting"
+msgstr "VolumeLevelSetting"
+
+#: core/ui/settings_new.cpp:6101
+msgid "Master audio volume."
+msgstr "主要音量。"
+
+#: core/ui/settings_new.cpp:6104
+msgid ""
+"Volume Level\n"
+"Adjusts the emulator's master audio volume.\n"
+"If audio clips or is too quiet, tune this before changing latency settings."
+msgstr ""
+"音量\n"
+"調整模擬器的主要音量。\n"
+"若音訊破音或太小聲，請先調整此設定，再變更延遲設定。"
+
+#: core/ui/settings_new.cpp:6112 core/ui/settings_new.cpp:6143
+msgid "Audio Latency"
+msgstr "音訊延遲"
+
+#: core/ui/settings_new.cpp:6124
+msgid "Automatically set audio latency"
+msgstr "自動設定音訊延遲"
+
+#: core/ui/settings_new.cpp:6128
+msgid ""
+"Automatic Latency\n"
+"Automatically chooses an audio buffer size.\n"
+"Recommended for most users. Disable only if you need to manually tune latency vs stability."
+msgstr ""
+"自動延遲\n"
+"自動選擇音訊緩衝區大小。\n"
+"建議大部分使用者使用。只有在需要手動平衡延遲與穩定性時才停用。"
+
+#: core/ui/settings_new.cpp:6145
+msgid "Buffer size in milliseconds"
+msgstr "以毫秒為單位的緩衝區大小"
+
+#: core/ui/settings_new.cpp:6146
+msgid "AudioLatencyPopup"
+msgstr "AudioLatencyPopup"
+
+#: core/ui/settings_new.cpp:6147
+msgid ""
+"Lower values reduce audio lag but may cause audio issues. Higher values are "
+"more stable but increase latency."
+msgstr "較低的數值可減少音訊延遲，但可能造成音訊問題。較高的數值較穩定，但會增加延遲。"
+
+#: core/ui/settings_new.cpp:6180
+msgid "AudioLatencySetting"
+msgstr "AudioLatencySetting"
+
+#: core/ui/settings_new.cpp:6181
+msgid "Audio buffer size in milliseconds."
+msgstr "以毫秒為單位的音訊緩衝區大小。"
+
+#: core/ui/settings_new.cpp:6184
+msgid ""
+"Audio Latency\n"
+"Lower values reduce audio lag but can cause crackling/stutter if your system cannot keep up.\n"
+"Higher values are more stable but add latency.\n"
+"\n"
+"If you hear pops, increase latency. If audio feels delayed, decrease it carefully."
+msgstr ""
+"音訊延遲\n"
+"較低的數值可減少音訊延遲，但若系統無法跟上，可能導致爆音／卡頓。\n"
+"較高的數值較穩定，但會增加延遲。\n"
+"\n"
+"若聽到爆音，請增加延遲。若音訊感覺延遲，請小心降低數值。"
+
+#: core/ui/settings_new.cpp:6230
+msgid "AudioDriverPopup"
+msgstr "AudioDriverPopup"
+
+#: core/ui/settings_new.cpp:6255
+msgid "AudioDriverSetting"
+msgstr "AudioDriverSetting"
+
+#: core/ui/settings_new.cpp:6256
+msgid "Select the host audio backend/driver."
+msgstr "選擇主機音訊後端／驅動程式。"
+
+#: core/ui/settings_new.cpp:6259
+msgid ""
+"Audio Driver\n"
+"Selects the audio backend used to submit sound to your OS.\n"
+"If you have crackling, missing audio, or unusually high latency, try changing the driver.\n"
+"\n"
+"After changing drivers, re-check Audio Latency settings."
+msgstr ""
+"音訊驅動程式\n"
+"選擇用於將聲音送至作業系統的音訊後端。\n"
+"若出現爆音、沒有音訊或延遲異常偏高，請嘗試變更驅動程式。\n"
+"\n"
+"變更驅動程式後，請重新檢查音訊延遲設定。"
+
+#: core/ui/settings_new.cpp:6274
+msgid "Driver Options"
+msgstr "驅動程式選項"
+
+#: core/ui/settings_new.cpp:6284
+msgid "AudioBackendInt_"
+msgstr "AudioBackendInt_"
+
+#: core/ui/settings_new.cpp:6357
+msgid "AudioBackendList_"
+msgstr "AudioBackendList_"
+
+#: core/ui/settings_new.cpp:6476 core/ui/settings_new.cpp:6902
+#: core/ui/settings_new.cpp:6960
+msgid "Invalid file name."
+msgstr "檔名無效。"
+
+#: core/ui/settings_new.cpp:6486
+msgid "Invalid VMU folder."
+msgstr "VMU 資料夾無效。"
+
+#: core/ui/settings_new.cpp:6523 core/ui/settings_new.cpp:6565
+#: core/ui/settings_new.cpp:6658
+msgid "A file with that name already exists."
+msgstr "已存在同名檔案。"
+
+#: core/ui/settings_new.cpp:6530
+msgid "Failed to create file."
+msgstr "無法建立檔案。"
+
+#: core/ui/settings_new.cpp:6539
+msgid "Failed to build default VMU image."
+msgstr "無法建立預設 VMU 映像。"
+
+#: core/ui/settings_new.cpp:6546
+msgid "Failed to write VMU image."
+msgstr "無法寫入 VMU 映像。"
+
+#: core/ui/settings_new.cpp:6573
+msgid "Failed to open source VMU."
+msgstr "無法開啟來源 VMU。"
+
+#: core/ui/settings_new.cpp:6580
+msgid "Failed to create copy."
+msgstr "無法建立副本。"
+
+#: core/ui/settings_new.cpp:6590
+msgid "Failed to write VMU copy."
+msgstr "無法寫入 VMU 副本。"
+
+#: core/ui/settings_new.cpp:6596
+msgid "Failed to read source VMU."
+msgstr "無法讀取來源 VMU。"
+
+#: core/ui/settings_new.cpp:6672
+msgid "Rename failed."
+msgstr "重新命名失敗。"
+
+#: core/ui/settings_new.cpp:6723
+msgid "Memory Cards (Data Folder)"
+msgstr "記憶卡（資料目錄）"
+
+#: core/ui/settings_new.cpp:6723
+msgid "Memory Cards (VMU Folder)"
+msgstr "記憶卡（VMU 資料夾）"
+
+#: core/ui/settings_new.cpp:6725
+msgid ""
+"Per Game VMU manages A1 automatically; other shared slots remain editable."
+msgstr "個別遊戲 VMU 會自動管理 A1；其他共用插槽仍可編輯。"
+
+#: core/ui/settings_new.cpp:6756
+msgid "Refresh"
+msgstr "重新整理"
+
+#: core/ui/settings_new.cpp:6762
+msgid "Create New Card"
+msgstr "建立新卡片"
+
+#: core/ui/settings_new.cpp:6765 core/ui/settings_new.cpp:6859
+msgid "Create VMU Card"
+msgstr "建立 VMU 記憶卡"
+
+#: core/ui/settings_new.cpp:6770
+msgid "Rename"
+msgstr "重新命名"
+
+#: core/ui/settings_new.cpp:6774 core/ui/settings_new.cpp:6925
+msgid "Rename VMU Card"
+msgstr "重新命名 VMU 記憶卡"
+
+#: core/ui/settings_new.cpp:6780 core/ui/settings_new.cpp:6891
+msgid "Copy"
+msgstr "複製"
+
+#: core/ui/settings_new.cpp:6784 core/ui/settings_new.cpp:6885
+msgid "Copy VMU Card"
+msgstr "複製 VMU 記憶卡"
+
+#: core/ui/settings_new.cpp:6790
+msgid "Insert"
+msgstr "插入"
+
+#: core/ui/settings_new.cpp:6793 core/ui/settings_new.cpp:6983
+msgid "Insert VMU Card"
+msgstr "插入 VMU 記憶卡"
+
+#: core/ui/settings_new.cpp:6797
+msgid "Copy this Per Game A1 VMU before inserting it into another slot."
+msgstr "將此個別遊戲 A1 VMU 複製一份，再插入其他插槽。"
+
+#: core/ui/settings_new.cpp:6801
+msgid "Eject"
+msgstr "退出"
+
+#: core/ui/settings_new.cpp:6834
+msgid "Slot"
+msgstr "插槽"
+
+#: core/ui/settings_new.cpp:6861
+msgid "File name"
+msgstr "檔名"
+
+#: core/ui/settings_new.cpp:6865
+msgid "Create"
+msgstr "建立"
+
+#: core/ui/settings_new.cpp:6887
+msgid "New file name"
+msgstr "新檔名"
+
+#: core/ui/settings_new.cpp:6933
+msgid "Per Game VMU Rename Warning"
+msgstr "個別遊戲 VMU 重新命名警告"
+
+#: core/ui/settings_new.cpp:6935
+msgid ""
+"This looks like an auto-named Per Game VMU for A1.\n"
+"Renaming it can stop Hollycast from auto-loading it while Per Game VMUs is enabled.\n"
+"To restore automatic pickup later, rename it back to its original file name."
+msgstr ""
+"這看起來是自動命名的 A1 個別遊戲 VMU。\n"
+"重新命名後，啟用「個別遊戲 VMU」時 Hollycast 可能無法自動載入它。\n"
+"若要日後恢復自動載入，請將名稱改回原始檔名。"
+
+#: core/ui/settings_new.cpp:6940
+msgid "New name"
+msgstr "新名稱"
+
+#: core/ui/settings_new.cpp:6987
+msgid "No VMU selected."
+msgstr "未選取 VMU。"
+
+#: core/ui/settings_new.cpp:6992
+#, c-format
+msgid "Insert \"%s\" into:"
+msgstr "將 \"%s\" 插入："
+
+#: core/ui/settings_new.cpp:6999
+msgid ""
+"This looks like an auto-named Per Game VMU for A1.\n"
+"Copy it first, then insert the copy into another slot."
+msgstr ""
+"這看起來是自動命名的 A1 個別遊戲 VMU。\n"
+"請先複製，再將副本插入其他插槽。"
+
+#: core/ui/settings_new.cpp:7015
+msgid "Per Game VMU"
+msgstr "個別遊戲 VMU"
+
+#: core/ui/settings_new.cpp:7045
+msgid "No active shared VMU slots are available."
+msgstr "沒有可用的啟用中共用 VMU 插槽。"
+
+#: core/ui/settings_new.cpp:7062
+msgid "Controls Configuration"
+msgstr "控制器設定"
+
+#: core/ui/settings_new.cpp:7080 core/ui/settings_new.cpp:7098
+msgid "Actions"
+msgstr "動作"
+
+#: core/ui/settings_new.cpp:7213
+msgid "Mouse & Raw Input"
+msgstr "滑鼠與原始輸入"
+
+#: core/ui/settings_new.cpp:7221
+msgid "Sensitivity"
+msgstr "靈敏度"
+
+#: core/ui/settings_new.cpp:7223
+msgid "Mouse sensitivity for light gun and mouse emulation"
+msgstr "光線槍與滑鼠模擬的滑鼠靈敏度"
+
+#: core/ui/settings_new.cpp:7224
+msgid "SensitivityPopup"
+msgstr "SensitivityPopup"
+
+#: core/ui/settings_new.cpp:7225
+msgid ""
+"Adjust the mouse sensitivity for light gun and mouse emulation. Higher "
+"values make the cursor move faster."
+msgstr "調整光線槍與滑鼠模擬的滑鼠靈敏度。數值越高，游標移動越快。"
+
+#: core/ui/settings_new.cpp:7249
+msgid "SensitivitySetting"
+msgstr "SensitivitySetting"
+
+#: core/ui/settings_new.cpp:7250
+msgid "Mouse/light gun sensitivity."
+msgstr "滑鼠／光線槍靈敏度。"
+
+#: core/ui/settings_new.cpp:7253
+msgid ""
+"Sensitivity\n"
+"Adjusts mouse and light gun sensitivity.\n"
+"Higher values make the cursor move faster.\n"
+"\n"
+"Tip: tune this in actual gameplay (not just menus) and keep it consistent across devices when possible."
+msgstr ""
+"靈敏度\n"
+"調整滑鼠與光線槍的靈敏度。\n"
+"數值越高，游標移動越快。\n"
+"\n"
+"提示：請在實際遊戲中（而非只在選單中）調整，並盡可能讓不同裝置使用相同設定。"
+
+#: core/ui/settings_new.cpp:7269
+msgid ""
+"Use Raw Input\n"
+"Enables raw input so multiple pointing devices (mice, light guns) and keyboards can be handled more accurately.\n"
+"Recommended if you use light guns or multiple input devices."
+msgstr ""
+"使用原始輸入\n"
+"啟用原始輸入，可更精確地處理多個指向裝置（滑鼠、光線槍）與鍵盤。\n"
+"若使用光線槍或多個輸入裝置，建議啟用此功能。"
+
+#: core/ui/settings_new.cpp:7633
+msgid "Adjust the size of the on-screen crosshair"
+msgstr "調整螢幕準星大小"
+
+#: core/ui/settings_new.cpp:7634
+msgid "CrosshairSizePopup"
+msgstr "CrosshairSizePopup"
+
+#: core/ui/settings_new.cpp:7635
+msgid ""
+"Adjust the size of the on-screen crosshair for light guns. Only available "
+"when a light gun device is connected."
+msgstr "調整光線槍的螢幕準星大小。僅在連接光線槍裝置時提供。"
+
+#: core/ui/settings_new.cpp:7659
+msgid "CrosshairSizeSetting"
+msgstr "CrosshairSizeSetting"
+
+#: core/ui/settings_new.cpp:7660
+msgid "Crosshair size for light guns."
+msgstr "光線槍準星大小。"
+
+#: core/ui/settings_new.cpp:7663
+msgid ""
+"Crosshair Size\n"
+"Adjusts the size of the on-screen crosshair for light guns.\n"
+"Only available when a light gun device is connected.\n"
+"\n"
+"Choose a size that is visible without covering targets."
+msgstr ""
+"準星大小\n"
+"調整光線槍的螢幕準星大小。\n"
+"僅在連接光線槍裝置時提供。\n"
+"\n"
+"請選擇清楚可見、又不會遮住目標的大小。"
+
+#: core/ui/settings_new.cpp:7673
+msgid "VMU Settings"
+msgstr "VMU 設定"
+
+#: core/ui/settings_new.cpp:7679
+msgid "When enabled, each game has its own VMU on port 1 of controller A"
+msgstr "啟用後，每款遊戲都會在控制器 A 的連接埠 1 使用專屬 VMU。"
+
+#: core/ui/settings_new.cpp:7683
+msgid ""
+"Per Game VMU\n"
+"When enabled, each game has its own VMU on port 1 of controller A.\n"
+"Useful to prevent save-file conflicts between games."
+msgstr ""
+"個別遊戲 VMU\n"
+"啟用後，每款遊戲都會在控制器 A 的連接埠 1 使用專屬 VMU。\n"
+"可避免不同遊戲的存檔互相衝突。"
+
+#: core/ui/settings_new.cpp:7694
+msgid "Use External VMU Storage"
+msgstr "使用外接 VMU 儲存空間"
+
+#: core/ui/settings_new.cpp:7695
+msgid ""
+"Enables read and write access to physical/external VMU storage via "
+"DreamPicoPort or DreamPotato. VMUs may appear to reconnect after loading "
+"state."
+msgstr ""
+"透過 DreamPicoPort 或 DreamPotato 啟用實體／外接 VMU 儲存空間的讀寫權限。載入存檔狀態後，VMU 可能會顯示重新連線。"
+
+#: core/ui/settings_new.cpp:7699
+msgid ""
+"Use External VMU Storage\n"
+"Enables read and write access to physical/external VMU storage via DreamPicoPort or DreamPotato. VMUs may appear to reconnect after loading state."
+msgstr ""
+"使用外接 VMU 儲存空間\n"
+"透過 DreamPicoPort 或 DreamPotato 啟用實體／外接 VMU 儲存空間的讀寫權限。載入存檔狀態後，VMU 可能會顯示重新連線。"
+
+#: core/ui/settings_new.cpp:7709
+msgid "DreamPotato Integrated Mode"
+msgstr "DreamPotato 整合模式"
+
+#: core/ui/settings_new.cpp:7710
+msgid ""
+"Automatically launch DreamPotato (VMU emulator) using the standard VMU file "
+"for the given slot."
+msgstr "使用指定插槽的標準 VMU 檔案，自動啟動 DreamPotato（VMU 模擬器）。"
+
+#: core/ui/settings_new.cpp:7713
+msgid ""
+"DreamPotato Integrated Mode\n"
+"Automatically launch DreamPotato (VMU emulator) using the standard VMU file for the given slot.\n"
+"Applies to all slots which use a DreamPotato device.\n"
+"When this is disabled, DreamPotato devices will connect to a manually-launched standalone instance instead."
+msgstr ""
+"DreamPotato 整合模式\n"
+"使用指定插槽的標準 VMU 檔案，自動啟動 DreamPotato（VMU 模擬器）。\n"
+"適用於所有使用 DreamPotato 裝置的插槽。\n"
+"停用此功能後，DreamPotato 裝置會改為連線至手動啟動的獨立執行個體。"
+
+#: core/ui/settings_new.cpp:7722
+msgid ""
+"(!) DreamPotato executable not found. Please set DreamPotato Path in General"
+" > Custom Paths."
+msgstr "（！）找不到 DreamPotato 執行檔。請在「一般 > 自訂路徑」設定 DreamPotato 路徑。"
+
+#: core/ui/settings_new.cpp:7732
+msgid "Network Configuration"
+msgstr "網路設定"
+
+#: core/ui/settings_new.cpp:7751
+msgid "GGPO"
+msgstr "GGPO"
+
+#: core/ui/settings_new.cpp:7752
+msgid "Naomi"
+msgstr "Naomi"
+
+#: core/ui/settings_new.cpp:7760
+msgid "NetworkTypePopup"
+msgstr "NetworkTypePopup"
+
+#: core/ui/settings_new.cpp:7773
+msgid "NetworkTypeSetting"
+msgstr "NetworkTypeSetting"
+
+#: core/ui/settings_new.cpp:7774
+msgid "Choose which network feature is active."
+msgstr "選擇要啟用的網路功能。"
+
+#: core/ui/settings_new.cpp:7777
+msgid ""
+"Network Type\n"
+"Selects the active network mode:\n"
+"GGPO for rollback netplay, Naomi for Naomi network games, or Battle Cable.\n"
+"\n"
+"Only one network type should be enabled at a time."
+msgstr ""
+"網路類型\n"
+"選擇使用中的網路模式：\n"
+"GGPO 用於回滾式網路對戰，Naomi 用於 Naomi 網路遊戲，或使用 Battle Cable。\n"
+"\n"
+"一次只能啟用一種網路類型。"
+
+#: core/ui/settings_new.cpp:7800
+msgid "Host the game session"
+msgstr "主辦遊戲連線"
+
+#: core/ui/settings_new.cpp:7804
+msgid ""
+"Play as Player 1\n"
+"When enabled, you host the session (Player 1).\n"
+"Deselect to connect as Player 2."
+msgstr ""
+"以玩家 1 身分遊玩\n"
+"啟用後，你會成為連線的主辦者（玩家 1）。\n"
+"取消選取後會以玩家 2 身分連線。"
+
+#: core/ui/settings_new.cpp:7821
+msgid ""
+"GGPO Peer\n"
+"Enter your peer's IP address (and optional port).\n"
+"Use this when connecting directly without matchmaking."
+msgstr ""
+"GGPO 對端\n"
+"輸入對方的 IP 位址（及選用連接埠）。\n"
+"直接連線且不使用配對時，請使用此設定。"
+
+#: core/ui/settings_new.cpp:7833
+msgid "GGPOFrameDelayPopup"
+msgstr "GGPOFrameDelayPopup"
+
+#: core/ui/settings_new.cpp:7834
+msgid "Sets Frame Delay, advisable for sessions with ping >100 ms."
+msgstr "設定影格延遲，Ping 高於 100 ms 時建議啟用。"
+
+#: core/ui/settings_new.cpp:7851
+msgid "GGPOFrameDelaySetting"
+msgstr "GGPOFrameDelaySetting"
+
+#: core/ui/settings_new.cpp:7852
+msgid "Extra buffering for higher ping sessions."
+msgstr "為高 Ping 連線增加緩衝。"
+
+#: core/ui/settings_new.cpp:7855
+msgid ""
+"Frame Delay\n"
+"Adds a fixed frame delay to help stabilize gameplay for higher-latency connections.\n"
+"Often advisable when ping is > 100 ms.\n"
+"\n"
+"Too much delay increases input lag; use the lowest value that feels stable."
+msgstr ""
+"影格延遲\n"
+"增加固定影格延遲，協助穩定高延遲連線的遊戲過程。\n"
+"Ping 高於 100 ms 時通常建議啟用。\n"
+"\n"
+"延遲過高會增加輸入延遲；請使用體感穩定的最低數值。"
+
+#: core/ui/settings_new.cpp:7863
+msgid "Analog Axes"
+msgstr "類比軸"
+
+#: core/ui/settings_new.cpp:7873
+msgid "Left Thumbstick"
+msgstr "左類比搖桿"
+
+#: core/ui/settings_new.cpp:7875
+msgid "GGPOAnalogAxesPopup"
+msgstr "GGPOAnalogAxesPopup"
+
+#: core/ui/settings_new.cpp:7886
+msgid "GGPOAnalogAxesSetting"
+msgstr "GGPOAnalogAxesSetting"
+
+#: core/ui/settings_new.cpp:7887
+msgid "Control how the left thumbstick is used in GGPO."
+msgstr "設定左類比搖桿在 GGPO 中的用途。"
+
+#: core/ui/settings_new.cpp:7890
+msgid ""
+"Left Thumbstick (GGPO)\n"
+"Configures how the left thumbstick is mapped during GGPO sessions:\n"
+"Disabled, Horizontal only, or Full analog axes.\n"
+"\n"
+"Choose the option that matches the game and your preferred control style."
+msgstr ""
+"左類比搖桿（GGPO）\n"
+"設定 GGPO 連線期間左類比搖桿的對應方式：\n"
+"停用、僅水平，或完整類比軸。\n"
+"\n"
+"請選擇符合遊戲與偏好操作方式的選項。"
+
+#: core/ui/settings_new.cpp:7901
+msgid "Open chat on message received"
+msgstr "收到訊息時開啟聊天"
+
+#: core/ui/settings_new.cpp:7905
+msgid ""
+"Enable Chat\n"
+"Opens the chat window when a message is received during GGPO sessions."
+msgstr ""
+"啟用聊天\n"
+"GGPO 連線期間收到訊息時開啟聊天視窗。"
+
+#: core/ui/settings_new.cpp:7914
+msgid "Chat Auto-Close"
+msgstr "自動關閉聊天"
+
+#: core/ui/settings_new.cpp:7915
+msgid "Automatically close chat window"
+msgstr "自動關閉聊天視窗"
+
+#: core/ui/settings_new.cpp:7919
+msgid ""
+"Chat Auto-Close\n"
+"Automatically closes the chat window after a timeout.\n"
+"Useful if you want chat notifications without leaving the overlay open."
+msgstr ""
+"自動關閉聊天\n"
+"逾時後自動關閉聊天視窗。\n"
+"若想接收聊天通知，但不想讓覆疊一直開著，此功能就很實用。"
+
+#: core/ui/settings_new.cpp:7930
+msgid ""
+"Chat Window Timeout\n"
+"Controls how long the chat window stays open after receiving a new message.\n"
+"\n"
+"Increase this if you want more time to read messages.\n"
+"Decrease it if you only want brief notifications without the overlay staying on screen."
+msgstr ""
+"聊天視窗逾時\n"
+"控制收到新訊息後聊天視窗會保持開啟的時間。\n"
+"\n"
+"若想多留一些時間閱讀訊息，請增加數值。\n"
+"若只想短暫接收通知，不希望覆疊持續顯示，請降低數值。"
+
+#: core/ui/settings_new.cpp:7940
+msgid "Chat Window Timeout (s)"
+msgstr "聊天視窗逾時（秒）"
+
+#: core/ui/settings_new.cpp:7953
+msgid ""
+"Sets duration that chat window stays open after new message is received"
+msgstr "設定收到新訊息後聊天視窗保持開啟的時間"
+
+#: core/ui/settings_new.cpp:7964
+msgid "Display netplay stats on screen"
+msgstr "在螢幕上顯示網路對戰統計資料"
+
+#: core/ui/settings_new.cpp:7968
+msgid ""
+"Network Statistics\n"
+"Shows a small on-screen overlay with live netplay information.\n"
+"This is useful for diagnosing stutter, desyncs, or “why does this feel laggy?” situations.\n"
+"\n"
+"If you are tuning settings for a stable experience, enable this along with the FPS counter and test during real gameplay.\n"
+"Look for stable latency/jitter and minimal dropped or delayed packets."
+msgstr ""
+"網路統計資料\n"
+"顯示網路對戰資訊的精簡螢幕覆疊。\n"
+"可用於診斷卡頓、不同步，或「為什麼感覺這麼延遲？」等問題。\n"
+"\n"
+"若要調校穩定體驗，請一併啟用此功能與 FPS 計數器，並在實際遊戲中測試。\n"
+"留意延遲／抖動是否穩定，以及封包遺失或延遲是否極少。"
+
+#: core/ui/settings_new.cpp:7984
+msgid "Client"
+msgstr "用戶端"
+
+#: core/ui/settings_new.cpp:7992
+msgid "NetworkRolePopup"
+msgstr "NetworkRolePopup"
+
+#: core/ui/settings_new.cpp:8015
+msgid "NetworkRoleSetting"
+msgstr "NetworkRoleSetting"
+
+#: core/ui/settings_new.cpp:8016
+msgid "Choose the network role."
+msgstr "選擇網路角色。"
+
+#: core/ui/settings_new.cpp:8019
+msgid ""
+"Network Role\n"
+"Selects the active network role:\n"
+"Server to create a local server for Naomi network games, client to connect to a server, satellite to monitor games that support it (Virtual-On Oratorio Tangram and Club Kart)\n"
+"\n"
+"If you cannot connect to each other, check firewalls/NAT rules and confirm both players are using the same game/version.\n"
+"Use the Local Port setting if you need to match a specific port or avoid conflicts."
+msgstr ""
+"網路角色\n"
+"選擇使用中的網路角色：\n"
+"伺服器：建立 NAOMI 網路遊戲的本機伺服器。用戶端：連線至伺服器。衛星端：監看支援的遊戲（《Virtual-On Oratorio Tangram》和《Club Kart》）。\n"
+"\n"
+"若彼此無法連線，請檢查防火牆／NAT 規則，並確認兩位玩家使用相同的遊戲與版本。\n"
+"若需使用特定連接埠或避免衝突，請使用「本機連接埠」設定。"
+
+#: core/ui/settings_new.cpp:8042
+msgid ""
+"Naomi Netplay: Server Address\n"
+"Enter the host to connect to (for example: a hostname or an IP address).\n"
+"If a port is supported by your setup, it is typically written as `host:port`.\n"
+"\n"
+"Leave this field blank to use automatic discovery (when available) on the default port.\n"
+"If you have connection issues, try entering the host explicitly and verify your Local Port and firewall/NAT rules."
+msgstr ""
+"Naomi 網路對戰：伺服器位址\n"
+"輸入要連線的主機（例如主機名稱或 IP 位址）。\n"
+"若設定支援指定連接埠，通常會寫成 `host:port`。\n"
+"\n"
+"若要使用預設連接埠自動探索（如有支援），請將此欄留白。\n"
+"若有連線問題，請明確輸入主機，並確認本機連接埠與防火牆／NAT 規則。"
+
+#: core/ui/settings_new.cpp:8056
+msgid ""
+"Local Port\n"
+"Sets the local UDP port used for Naomi netplay / Battle Cable connections.\n"
+"\n"
+"If you cannot connect, make sure both players are using compatible settings and that your firewall/router is not blocking this port.\n"
+"Only change this if you have a port conflict or you need to match a specific setup."
+msgstr ""
+"本機連接埠\n"
+"設定 Naomi 網路對戰／Battle Cable 連線使用的本機 UDP 連接埠。\n"
+"\n"
+"若無法連線，請確認兩位玩家使用相容的設定，且防火牆／路由器未封鎖此連接埠。\n"
+"只有在連接埠衝突或需要符合特定設定時才變更。"
+
+#: core/ui/settings_new.cpp:8103
+msgid "Choose a unique word or number and share it with your opponent"
+msgstr "選擇一組獨特的文字或數字，並分享給對手"
+
+#: core/ui/settings_new.cpp:8130
+msgid "Playing "
+msgstr "遊玩中 "
+
+#: core/ui/settings_new.cpp:8140
+msgid "Network Stats"
+msgstr "網路統計資料"
+
+#: core/ui/settings_new.cpp:8141
+msgid "Display network statistics"
+msgstr "顯示網路統計資料"
+
+#: core/ui/settings_new.cpp:8145
+msgid ""
+"Network Statistics\n"
+"Shows a small on-screen overlay with live connection information.\n"
+"\n"
+"Use this to diagnose lag spikes, unstable connections, or dropped packets during Battle Cable sessions.\n"
+"For best results, enable the FPS counter too and test during actual gameplay."
+msgstr ""
+"網路統計資料\n"
+"顯示即時連線資訊的精簡螢幕覆疊。\n"
+"\n"
+"用於診斷 Battle Cable 連線期間的延遲尖峰、不穩定連線或封包遺失。\n"
+"若要獲得最佳結果，請一併啟用 FPS 計數器，並在實際遊戲中測試。"
+
+#: core/ui/settings_new.cpp:8170
+msgid ""
+"Battle Cable: Peer Address\n"
+"Enter the opponent to connect to (hostname or IP address).\n"
+"If your setup supports specifying a port, it is typically written as `host:port`.\n"
+"\n"
+"Leave this field blank to use automatic discovery (when available) on the default port.\n"
+"If matchmaking fails, try entering the peer explicitly and verify your Local Port and firewall/NAT rules."
+msgstr ""
+"Battle Cable：對端位址\n"
+"輸入要連線的對手（主機名稱或 IP 位址）。\n"
+"若設定支援指定連接埠，通常會寫成 `host:port`。\n"
+"\n"
+"若要使用預設連接埠自動探索（如有支援），請將此欄留白。\n"
+"若配對失敗，請明確輸入對端，並確認本機連接埠與防火牆／NAT 規則。"
+
+#: core/ui/settings_new.cpp:8182
+msgid ""
+"Local Port\n"
+"Sets the local UDP port used for Battle Cable sessions.\n"
+"\n"
+"If you cannot connect, verify firewall/router rules and ensure both peers are using the same port.\n"
+"Leave this at the default unless you have a reason to change it."
+msgstr ""
+"本機連接埠\n"
+"設定 Battle Cable 連線使用的本機 UDP 連接埠。\n"
+"\n"
+"若無法連線，請確認防火牆／路由器規則，並確保兩端使用相同連接埠。\n"
+"除非有變更理由，否則請保留預設值。"
+
+#: core/ui/settings_new.cpp:8220
+msgid "Host for Maximum Speed mode"
+msgstr "最高速度模式的主端"
+
+#: core/ui/settings_new.cpp:8224
+msgid ""
+"Maximum Speed: Master Peer\n"
+"Only used by Maximum Speed mode.\n"
+"Exactly one peer must be the master for the session to work correctly.\n"
+"\n"
+"If you run into connection problems, try switching which player is master.\n"
+"In general, the player with the more stable connection and lower latency is a good choice."
+msgstr ""
+"最高速度：主端\n"
+"僅供最高速度模式使用。\n"
+"連線中必須恰有一個對端設為主端，才能正常運作。\n"
+"\n"
+"若遇到連線問題，請嘗試切換由哪位玩家擔任主端。\n"
+"一般而言，連線較穩定、延遲較低的玩家較適合擔任主端。"
+
+#: core/ui/settings_new.cpp:8245
+msgid ""
+"Enable UPnP\n"
+"Attempts to automatically create the required port mappings on your router.\n"
+"\n"
+"This can make hosting/connecting easier on home networks, but it depends on your router supporting UPnP and allowing it.\n"
+"If it does not work (or if you prefer not to use UPnP), disable this and use manual port forwarding instead."
+msgstr ""
+"啟用 UPnP\n"
+"嘗試在路由器上自動建立必要的連接埠對應。\n"
+"\n"
+"若路由器支援並允許 UPnP，此功能可簡化家庭網路的主辦／連線流程。\n"
+"若無法運作（或不想使用 UPnP），請停用此功能並改用手動連接埠轉送。"
+
+#: core/ui/settings_new.cpp:8255
+msgid "Broadcast audio/video"
+msgstr "廣播音訊／視訊"
+
+#: core/ui/settings_new.cpp:8259
+msgid ""
+"Broadcast Digital Outputs\n"
+"Exports certain arcade I/O “outputs” over the network (for example, values used by some Naomi driving/force-feedback setups).\n"
+"\n"
+"This is not a general gameplay video/audio streaming feature.\n"
+"Enable it only if you are using external tooling or hardware that expects network output data."
+msgstr ""
+"廣播數位輸出\n"
+"透過網路匯出特定街機 I/O「輸出」（例如部分 Naomi 賽車／力回饋設定使用的數值）。\n"
+"\n"
+"這不是一般的遊戲視訊／音訊串流功能。\n"
+"只有在使用預期會接收網路輸出資料的外部工具或硬體時才啟用。"
+
+#: core/ui/settings_new.cpp:8268
+msgid "Broadband Adapter"
+msgstr "寬頻配接器"
+
+#: core/ui/settings_new.cpp:8273
+msgid ""
+"Broadband Adapter (BBA)\n"
+"Emulates the Dreamcast Ethernet Broadband Adapter (BBA) instead of the modem.\n"
+"\n"
+"Use this for games and features that expect Ethernet networking.\n"
+"If a title expects the modem path (or you are troubleshooting connectivity), try toggling this and re-testing."
+msgstr ""
+"寬頻配接器（BBA）\n"
+"模擬 Dreamcast 乙太網路寬頻配接器（BBA），而非數據機。\n"
+"\n"
+"用於需要乙太網路連線的遊戲與功能。\n"
+"若遊戲需要數據機連線，或正在疑難排解連線問題，請嘗試切換此設定並重新測試。"
+
+#: core/ui/settings_new.cpp:8283
+msgid "DCNet Cloud"
+msgstr "DCNet Cloud"
+
+#: core/ui/settings_new.cpp:8284
+msgid "Dreamcast Internet via cloud"
+msgstr "透過雲端連線至 Dreamcast 網際網路"
+
+#: core/ui/settings_new.cpp:8288
+msgid ""
+"DCNet Cloud\n"
+"Routes Dreamcast networking through a cloud-backed service instead of relying entirely on your local network configuration.\n"
+"\n"
+"This can simplify getting “online” in certain scenarios, but it also changes the networking path.\n"
+"If you have trouble connecting, try toggling this setting and re-testing with the same game and the same network options."
+msgstr ""
+"DCNet Cloud\n"
+"透過雲端服務轉送 Dreamcast 網路連線，不必完全依賴本機網路設定。\n"
+"\n"
+"在某些情況下，這可簡化「上線」流程，但也會改變網路路徑。\n"
+"若無法連線，請嘗試切換此設定，並使用相同遊戲與網路選項重新測試。"
+
+#: core/ui/settings_new.cpp:8299
+msgid "ISP Username"
+msgstr "ISP 使用者名稱"
+
+#: core/ui/settings_new.cpp:8300
+msgid ""
+"The ISP user name stored in the console Flash RAM. Used by some online games"
+" as the player name. Leave blank to keep the current Flash RAM value"
+msgstr "儲存在主機 Flash RAM 中的 ISP 使用者名稱。部分線上遊戲會將其作為玩家名稱。留白可保留目前的 Flash RAM 值。"
+
+#: core/ui/settings_new.cpp:8317
+msgid "DNS Server"
+msgstr "DNS 伺服器"
+
+#: core/ui/settings_new.cpp:8325
+msgid ""
+"DNS Server\n"
+"Overrides the DNS server used by the emulated network stack.\n"
+"\n"
+"Only change this if you know you need a specific DNS provider or you are debugging connectivity.\n"
+"Note: When DCNet Cloud is enabled, DNS behavior may be handled differently and this field may not apply."
+msgstr ""
+"DNS 伺服器\n"
+"覆寫模擬網路堆疊使用的 DNS 伺服器。\n"
+"\n"
+"只有在需要特定 DNS 服務供應商或正在偵錯連線問題時才變更。\n"
+"注意：啟用 DCNet Cloud 時，DNS 行為可能不同，此欄位可能不適用。"
+
+#: core/ui/settings_new.cpp:8338
+msgid "Multiboard"
+msgstr "多機板"
+
+#: core/ui/settings_new.cpp:8353
+msgid "Advanced Configuration"
+msgstr "進階設定"
+
+#: core/ui/settings_new.cpp:8357
+msgid "CPU & Emulation"
+msgstr "CPU 與模擬"
+
+#: core/ui/settings_new.cpp:8369
+msgid "CpuModePopup"
+msgstr "CpuModePopup"
+
+#: core/ui/settings_new.cpp:8378
+msgid ""
+"CPU Mode: Dynarec\n"
+"Recommended for almost everyone.\n"
+"Uses the dynamic recompiler (JIT) for the best performance.\n"
+"\n"
+"If a specific game is crashing or behaving incorrectly, switching to the Interpreter can be a useful compatibility test."
+msgstr ""
+"CPU 模式：Dynarec\n"
+"幾乎所有使用者都建議使用。\n"
+"使用動態重編譯器（JIT）以獲得最佳效能。\n"
+"\n"
+"若特定遊戲當機或行為異常，切換至直譯器可用於相容性測試。"
+
+#: core/ui/settings_new.cpp:8384
+msgid ""
+"CPU Mode: Interpreter\n"
+"Highest compatibility, lowest performance.\n"
+"Runs the SH4 in interpreter mode which is much slower than Dynarec.\n"
+"\n"
+"Use this mainly for troubleshooting hard-to-reproduce bugs, or for rare titles that misbehave under Dynarec."
+msgstr ""
+"CPU 模式：直譯器\n"
+"相容性最高，效能最低。\n"
+"以直譯器模式執行 SH4，速度比 Dynarec 慢得多。\n"
+"\n"
+"主要用於疑難排解難以重現的錯誤，或處理少數在 Dynarec 下行為異常的遊戲。"
+
+#: core/ui/settings_new.cpp:8399
+msgid "CpuModeSetting"
+msgstr "CpuModeSetting"
+
+#: core/ui/settings_new.cpp:8400
+msgid ""
+"Use the dynamic recompiler for speed, or interpreter for compatibility."
+msgstr "使用動態重編譯器提升速度，或使用直譯器改善相容性。"
+
+#: core/ui/settings_new.cpp:8403
+msgid ""
+"CPU Mode\n"
+"Controls how Hollycast emulates the SH4 CPU.\n"
+"\n"
+"Dynarec is dramatically faster and is the normal choice for gameplay.\n"
+"Interpreter is much slower, but can be helpful for compatibility testing.\n"
+"\n"
+"If you are troubleshooting a game-specific issue, switch modes and re-test the exact same scene to compare behavior."
+msgstr ""
+"CPU 模式\n"
+"控制 Hollycast 模擬 SH4 CPU 的方式。\n"
+"\n"
+"Dynarec 的速度快得多，是一般遊玩的常用選項。\n"
+"直譯器速度慢得多，但有助於測試相容性。\n"
+"\n"
+"若要疑難排解特定遊戲問題，請切換模式，並在完全相同的場景重新測試比較。"
+
+#: core/ui/settings_new.cpp:8418
+msgid "Sh4ClockPopup"
+msgstr "Sh4ClockPopup"
+
+#: core/ui/settings_new.cpp:8420
+msgid ""
+"Adjusts the emulated SH4 CPU clock. Default is 200 MHz.\n"
+"Higher values may reduce CPU-side frame drops in some games, but can also break timing.\n"
+"Lower values can reduce CPU load, but may cause slowdowns or audio/video instability."
+msgstr ""
+"調整模擬的 SH4 CPU 時脈。預設為 200 MHz。\n"
+"提高數值可減少部分遊戲的 CPU 端掉影格，但也可能破壞時序。\n"
+"降低數值可減輕 CPU 負載，但可能導致速度變慢或音訊／視訊不穩定。"
+
+#: core/ui/settings_new.cpp:8439
+msgid "Sh4ClockSetting"
+msgstr "Sh4ClockSetting"
+
+#: core/ui/settings_new.cpp:8440
+msgid "Over/Underclock the main SH4 CPU."
+msgstr "提高／降低 SH4 主 CPU 時脈。"
+
+#: core/ui/settings_new.cpp:8443
+msgid ""
+"SH4 Clock\n"
+"Overclocks/underclocks the emulated Dreamcast CPU.\n"
+"\n"
+"Default is 200 MHz.\n"
+"Increasing the clock can help some CPU-limited games maintain full speed, but it can also introduce timing problems, bugs, or instability.\n"
+"Decreasing the clock can lower CPU requirements, but may reduce performance or cause glitches.\n"
+"\n"
+"If you change this, re-test gameplay with the FPS counter enabled and keep adjustments small."
+msgstr ""
+"SH4 時脈\n"
+"提高或降低模擬 Dreamcast CPU 的時脈。\n"
+"\n"
+"預設為 200 MHz。\n"
+"提高時脈可協助部分受 CPU 限制的遊戲維持全速，但也可能導致時序問題、錯誤或不穩定。\n"
+"降低時脈可減少 CPU 需求，但可能降低效能或造成圖形錯誤。\n"
+"\n"
+"若變更此設定，請啟用 FPS 計數器重新測試遊戲，並以小幅度調整。"
+
+#: core/ui/settings_new.cpp:8457
+msgid "Fast-Forward Speed"
+msgstr "快轉速度"
+
+#: core/ui/settings_new.cpp:8459
+msgid "FastForwardSpeedLimitPopup"
+msgstr "FastForwardSpeedLimitPopup"
+
+#: core/ui/settings_new.cpp:8461
+msgid ""
+"Sets a cap for Fast-Forward speed.\n"
+"Values below Infinite apply frame pacing while Fast-Forward is active.\n"
+"Infinite preserves the current uncapped behavior."
+msgstr ""
+"設定快轉速度上限。\n"
+"低於「無上限」的數值會在快轉時套用影格節奏控制。\n"
+"「無上限」會保留目前不設上限的行為。"
+
+#: core/ui/settings_new.cpp:8488
+msgid "FastForwardSpeedLimitSetting"
+msgstr "FastForwardSpeedLimitSetting"
+
+#: core/ui/settings_new.cpp:8489
+msgid "Cap Fast-Forward speed or leave it Infinite."
+msgstr "設定快轉速度上限，或維持無上限。"
+
+#: core/ui/settings_new.cpp:8492
+msgid ""
+"Fast-Forward Speed\n"
+"Controls the Fast-Forward cap while Fast-Forward is active.\n"
+"\n"
+"Set this below Infinite if you want a controlled speed-up instead of running as fast as possible.\n"
+"Infinite keeps today's uncapped Fast-Forward behavior.\n"
+"\n"
+"Use moderate values first, then raise or lower based on how smooth gameplay and audio feel."
+msgstr ""
+"快轉速度\n"
+"控制啟用快轉時的速度上限。\n"
+"\n"
+"若想要可控的加速，而非盡可能提高執行速度，請設定為低於「無上限」的數值。\n"
+"「無上限」會保留目前不設上限的快轉行為。\n"
+"\n"
+"先使用適中的數值，再依遊戲與音訊的流暢度提高或降低。"
+
+#: core/ui/settings_new.cpp:8504
+msgid "Fast-Forward Audio"
+msgstr "快轉音訊"
+
+#: core/ui/settings_new.cpp:8505
+msgid "Play audio during Fast-Forward"
+msgstr "快轉時播放音訊"
+
+#: core/ui/settings_new.cpp:8509
+msgid ""
+"Fast-Forward Audio\n"
+"Controls whether audio plays while Fast-Forward is active.\n"
+"\n"
+"When enabled, Fast-Forward audio plays at 35% volume to keep it usable without being too harsh.\n"
+"When disabled, Fast-Forward keeps the current muted-audio behavior."
+msgstr ""
+"快轉音訊\n"
+"控制快轉時是否播放音訊。\n"
+"\n"
+"啟用後，快轉音訊會以 35% 音量播放，避免音量過大並保持可聽。\n"
+"停用後，快轉時會沿用目前靜音的行為。"
+
+#: core/ui/settings_new.cpp:8522
+msgid "High Level Emulation BIOS"
+msgstr "高階模擬 BIOS"
+
+#: core/ui/settings_new.cpp:8526
+msgid ""
+"HLE BIOS\n"
+"Uses a High Level Emulation BIOS implementation instead of a real BIOS.\n"
+"\n"
+"This can reduce CPU overhead and simplifies setup, but it can be less accurate than using a real BIOS.\n"
+"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
+msgstr ""
+"HLE BIOS\n"
+"使用高階模擬 BIOS 實作，而非實際 BIOS。\n"
+"\n"
+"這可減少 CPU 負載並簡化設定，但準確度可能不如實際 BIOS。\n"
+"若遇到特定遊戲的啟動問題或異常行為，請嘗試停用 HLE BIOS（若有實際 BIOS，也可改用實際 BIOS），以獲得最高相容性。"
+
+#: core/ui/settings_new.cpp:8536
+msgid "Multi-threading"
+msgstr "多執行緒"
+
+#: core/ui/settings_new.cpp:8537
+msgid "Use additional CPU threads"
+msgstr "使用額外的 CPU 執行緒"
+
+#: core/ui/settings_new.cpp:8541
+msgid ""
+"Multi-threading\n"
+"Allows Hollycast to use more than one CPU thread for certain emulation/rendering work.\n"
+"\n"
+"On modern multi-core devices this can improve performance or reduce stutter.\n"
+"On some drivers/devices it can introduce instability or odd timing issues.\n"
+"\n"
+"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
+msgstr ""
+"多執行緒\n"
+"允許 Hollycast 在部分模擬／渲染工作中使用多個 CPU 執行緒。\n"
+"\n"
+"在現代多核心裝置上，可提升效能或減少卡頓。\n"
+"在某些驅動程式／裝置上，可能導致不穩定或時序異常。\n"
+"\n"
+"若啟用後出現當機、畫面錯誤或影格節奏不穩，請嘗試關閉並重新測試。"
+
+#: core/ui/settings_new.cpp:8554
+msgid "32MB RAM"
+msgstr "32MB RAM"
+
+#: core/ui/settings_new.cpp:8555
+msgid "Extended memory (32MB)"
+msgstr "延伸記憶體（32MB）"
+
+#: core/ui/settings_new.cpp:8559
+msgid ""
+"32MB RAM (Memory Mod)\n"
+"Enables an extended-memory mode (not standard Dreamcast hardware).\n"
+"\n"
+"Only use this if a specific title/homebrew explicitly requires it.\n"
+"Because it changes the memory map, it can break games, cause graphical corruption, or lead to crashes.\n"
+"\n"
+"If you are unsure, leave this disabled."
+msgstr ""
+"32MB RAM（記憶體模組）\n"
+"啟用延伸記憶體模式（非標準 Dreamcast 硬體）。\n"
+"\n"
+"只有在特定遊戲／自製遊戲明確要求時才使用。\n"
+"此功能會變更記憶體映射，可能導致遊戲無法運作、圖形毀損或當機。\n"
+"\n"
+"若不確定，請保持停用。"
+
+#: core/ui/settings_new.cpp:8569
+msgid "Debugging"
+msgstr "偵錯"
+
+#: core/ui/settings_new.cpp:8577
+msgid "Serial console output"
+msgstr "序列主控台輸出"
+
+#: core/ui/settings_new.cpp:8581
+msgid ""
+"Serial Console\n"
+"Enables serial console output for debugging.\n"
+"\n"
+"Most users should leave this off.\n"
+"Enable it only if you are debugging, capturing logs, or using tools that rely on serial output."
+msgstr ""
+"序列主控台\n"
+"啟用序列主控台輸出以進行偵錯。\n"
+"\n"
+"大多數使用者應保持關閉。\n"
+"只有在偵錯、擷取記錄，或使用依賴序列輸出的工具時才啟用。"
+
+#: core/ui/settings_new.cpp:8593
+msgid "GDB Server"
+msgstr "GDB 伺服器"
+
+#: core/ui/settings_new.cpp:8594
+msgid "GDB debug server"
+msgstr "GDB 偵錯伺服器"
+
+#: core/ui/settings_new.cpp:8598
+msgid ""
+"GDB Server\n"
+"Starts a GDB debug server for developers.\n"
+"\n"
+"When enabled, Hollycast can pause startup and wait for a debugger to attach.\n"
+"Leave this disabled unless you are actively debugging."
+msgstr ""
+"GDB 伺服器\n"
+"啟動供開發者使用的 GDB 偵錯伺服器。\n"
+"\n"
+"啟用後，Hollycast 可能會暫停啟動並等待偵錯工具連線。\n"
+"除非正在進行偵錯，否則請保持停用。"
+
+#: core/ui/settings_new.cpp:8613
+msgid "Wait for Connection"
+msgstr "等待連線"
+
+#: core/ui/settings_new.cpp:8614
+msgid "Wait for debugger to connect"
+msgstr "等待偵錯工具連線"
+
+#: core/ui/settings_new.cpp:8618
+msgid ""
+"Wait for Connection\n"
+"Delays emulation until the debugger connects to the GDB server.\n"
+"\n"
+"Useful when you need to catch very early boot issues.\n"
+"Disable this for normal play."
+msgstr ""
+"等待連線\n"
+"延遲模擬，直到偵錯工具連線至 GDB 伺服器。\n"
+"\n"
+"需要擷取啟動初期問題時，此功能很實用。\n"
+"一般遊玩時請停用。"
+
+#: core/ui/settings_new.cpp:8629
+msgid ""
+"GDB Port\n"
+"Sets the TCP port used by the built-in GDB debug server.\n"
+"\n"
+"Default is 3263.\n"
+"Only change this if you have a port conflict or you need to match your debugging tool configuration."
+msgstr ""
+"GDB 連接埠\n"
+"設定內建 GDB 偵錯伺服器使用的 TCP 連接埠。\n"
+"\n"
+"預設為 3263。\n"
+"只有在連接埠衝突，或需要符合偵錯工具設定時才變更。"
+
+#: core/ui/settings_new.cpp:8639
+msgid "GDB Port"
+msgstr "GDB 連接埠"
+
+#: core/ui/settings_new.cpp:8651
+msgid "Default port is 3263"
+msgstr "預設連接埠為 3263"
+
+#: core/ui/settings_new.cpp:8666
+msgid "Save log output to file"
+msgstr "將記錄輸出儲存至檔案"
+
+#: core/ui/settings_new.cpp:8670
+msgid ""
+"Log to File\n"
+"Saves log output to a file on disk.\n"
+"\n"
+"This is helpful when you need to share logs for troubleshooting, but it can increase I/O and may reduce performance on slower storage.\n"
+"If you enable this, try to reproduce the issue, then disable it again to avoid unnecessary disk usage."
+msgstr ""
+"記錄至檔案\n"
+"將記錄輸出儲存在磁碟上的檔案中。\n"
+"\n"
+"需要分享記錄以進行疑難排解時，此功能很實用，但會增加 I/O，並可能降低較慢儲存裝置的效能。\n"
+"啟用後，請重現問題，再停用此功能，避免不必要的磁碟用量。"
+
+#: core/ui/settings_new.cpp:8679
+msgid "Logging"
+msgstr "記錄"
+
+#: core/ui/settings_new.cpp:8684
+msgid "Notice"
+msgstr "通知"
+
+#: core/ui/settings_new.cpp:8684
+msgid "Info"
+msgstr "資訊"
+
+#: core/ui/settings_new.cpp:8684
+msgid "Debug"
+msgstr "偵錯"
+
+#: core/ui/settings_new.cpp:8692
+msgid "Log Verbosity"
+msgstr "記錄詳細程度"
+
+#: core/ui/settings_new.cpp:8694
+msgid "LogVerbosityPopup"
+msgstr "LogVerbosityPopup"
+
+#: core/ui/settings_new.cpp:8703
+msgid ""
+"Log Verbosity: Notice\n"
+"Minimal information.\n"
+"Best for normal usage when you only want important notices."
+msgstr ""
+"記錄詳細程度：通知\n"
+"僅提供最少資訊。\n"
+"一般使用時最適合只查看重要通知的情況。"
+
+#: core/ui/settings_new.cpp:8708
+msgid ""
+"Log Verbosity: Error\n"
+"Only errors.\n"
+"Useful when you want to reduce log noise and focus on failures."
+msgstr ""
+"記錄詳細程度：錯誤\n"
+"僅記錄錯誤。\n"
+"適合減少記錄雜訊並專注於失敗問題。"
+
+#: core/ui/settings_new.cpp:8713
+msgid ""
+"Log Verbosity: Warning\n"
+"Errors and warnings.\n"
+"A good balance for general troubleshooting with moderate verbosity."
+msgstr ""
+"記錄詳細程度：警告\n"
+"記錄錯誤與警告。\n"
+"適合一般疑難排解，提供適中的詳細程度。"
+
+#: core/ui/settings_new.cpp:8718
+msgid ""
+"Log Verbosity: Info\n"
+"Adds informational messages.\n"
+"Helpful when investigating subsystems without going full debug spam."
+msgstr ""
+"記錄詳細程度：資訊\n"
+"加入資訊訊息。\n"
+"適合調查子系統，又不會像偵錯模式般產生大量記錄。"
+
+#: core/ui/settings_new.cpp:8723
+msgid ""
+"Log Verbosity: Debug\n"
+"Most verbose.\n"
+"Can be very noisy and may impact performance; use temporarily when debugging."
+msgstr ""
+"記錄詳細程度：偵錯\n"
+"資訊最詳盡。\n"
+"記錄可能非常繁雜並影響效能；偵錯時請暫時使用。"
+
+#: core/ui/settings_new.cpp:8738
+msgid "LogVerbositySetting"
+msgstr "LogVerbositySetting"
+
+#: core/ui/settings_new.cpp:8739
+msgid "Control the verbosity of log output"
+msgstr "控制記錄輸出的詳細程度"
+
+#: core/ui/settings_new.cpp:8742
+msgid ""
+"Log Verbosity\n"
+"Controls how much information Hollycast writes to the log.\n"
+"\n"
+"Lower verbosity is cleaner and faster.\n"
+"Higher verbosity is useful when diagnosing problems, but can generate a lot of output (and can impact performance in extreme cases).\n"
+"\n"
+"For troubleshooting, start with Warning or Info, then use Debug only if you need deeper detail."
+msgstr ""
+"記錄詳細程度\n"
+"控制 Hollycast 寫入記錄的資訊量。\n"
+"\n"
+"較低的詳細程度更簡潔、速度也較快。\n"
+"較高的詳細程度有助於診斷問題，但可能產生大量輸出（極端情況下也會影響效能）。\n"
+"\n"
+"疑難排解時，請先使用「警告」或「資訊」，需要更多細節時再使用「偵錯」。"
+
+#: core/ui/settings_new.cpp:8751
+msgid "Log Categories"
+msgstr "記錄類別"
+
+#: core/ui/settings_new.cpp:8823
+msgid "Log Server"
+msgstr "記錄伺服器"
+
+#: core/ui/settings_new.cpp:8830
+msgid "Log to this hostname[:port] with UDP. Default port is 31667."
+msgstr "透過 UDP 將記錄傳送至此主機名稱[:port]。預設連接埠為 31667。"
+
+#: core/ui/settings_new.cpp:8837
+msgid "Profiling"
+msgstr "效能分析"
+
+#: core/ui/settings_new.cpp:8842
+msgid "Enable Profiler"
+msgstr "啟用效能分析器"
+
+#: core/ui/settings_new.cpp:8843
+msgid "Performance profiling"
+msgstr "效能分析"
+
+#: core/ui/settings_new.cpp:8847
+msgid ""
+"Profiler\n"
+"Enables performance profiling tools for developers and power users.\n"
+"\n"
+"This can add overhead. Leave it off unless you are actively profiling performance."
+msgstr ""
+"效能分析器\n"
+"為開發者與進階使用者啟用效能分析工具。\n"
+"\n"
+"此功能可能增加負載。除非正在分析效能，否則請保持關閉。"
+
+#: core/ui/settings_new.cpp:8859
+msgid "Display in GUI"
+msgstr "在圖形介面中顯示"
+
+#: core/ui/settings_new.cpp:8860
+msgid "Show profiler overlay"
+msgstr "顯示效能分析器覆疊"
+
+#: core/ui/settings_new.cpp:8864
+msgid ""
+"Profiler: Display in GUI\n"
+"Draws profiler output as an in-game overlay.\n"
+"\n"
+"Useful for quickly spotting spikes or expensive subsystems while reproducing a performance issue."
+msgstr ""
+"效能分析器：在圖形介面中顯示\n"
+"以遊戲內覆疊方式顯示效能分析器輸出。\n"
+"\n"
+"重現效能問題時，可快速找出尖峰或耗用資源較多的子系統。"
+
+#: core/ui/settings_new.cpp:8873
+msgid "Output to Terminal"
+msgstr "輸出至終端機"
+
+#: core/ui/settings_new.cpp:8874
+msgid "Write profiler to terminal"
+msgstr "將效能分析器輸出至終端機"
+
+#: core/ui/settings_new.cpp:8878
+msgid ""
+"Profiler: Output to Terminal\n"
+"Writes profiler output to the terminal/console.\n"
+"\n"
+"Useful when capturing data during automated runs or when you want to copy/paste profiling output."
+msgstr ""
+"效能分析器：輸出至終端機\n"
+"將效能分析器輸出寫入終端機／主控台。\n"
+"\n"
+"在自動化執行期間擷取資料，或想要複製效能分析輸出時，此功能很實用。"
+
+#: core/ui/settings_new.cpp:8890
+msgid "Experimental Features"
+msgstr "實驗性功能"
+
+#: core/ui/settings_new.cpp:8895
+msgid "(!) Texture Dumping"
+msgstr "（！）紋理傾印"
+
+#: core/ui/settings_new.cpp:8900
+msgid "Texture Dumping"
+msgstr "紋理傾印"
+
+#: core/ui/settings_new.cpp:8901
+msgid "Dump textures to files"
+msgstr "將紋理傾印至檔案"
+
+#: core/ui/settings_new.cpp:8905
+msgid ""
+"Texture Dumping\n"
+"Saves textures to disk as they are used.\n"
+"\n"
+"This is mainly for creating or debugging custom texture packs.\n"
+"It can create a large number of files quickly and may reduce performance due to disk I/O.\n"
+"\n"
+"Enable it only when you specifically need a dump, then disable it again."
+msgstr ""
+"紋理傾印\n"
+"將使用中的紋理儲存至磁碟。\n"
+"\n"
+"主要用於建立或偵錯自訂紋理包。\n"
+"此功能可能很快產生大量檔案，並因磁碟 I/O 降低效能。\n"
+"\n"
+"只有在確實需要傾印時才啟用，完成後請再次停用。"
+
+#: core/ui/settings_new.cpp:8919
+msgid "Dump Replaced"
+msgstr "傾印已替換紋理"
+
+#: core/ui/settings_new.cpp:8920
+msgid "Dump replaced textures too"
+msgstr "也傾印已替換的紋理"
+
+#: core/ui/settings_new.cpp:8924
+msgid ""
+"Dump Replaced Textures\n"
+"Also dumps textures even when they are being replaced by a custom texture pack.\n"
+"\n"
+"This is useful when comparing originals vs replacements, but it increases disk usage even more.\n"
+"Leave this off unless you are actively working on textures."
+msgstr ""
+"傾印已替換紋理\n"
+"即使紋理已由自訂紋理包替換，也一併傾印。\n"
+"\n"
+"方便比較原始紋理與替換紋理，但會進一步增加磁碟用量。\n"
+"除非正在處理紋理，否則請保持關閉。"
+
+#: core/ui/settings_new.cpp:8948
+msgid "Developer Tools"
+msgstr "開發者工具"
+
+#: core/ui/settings_new.cpp:8957
+msgid ""
+"Specify lua filename to use. Should be located in Hollycast config folder. "
+"Defaults to flycast.lua when empty."
+msgstr "指定要使用的 Lua 檔名。檔案應位於 Hollycast 設定資料夾中。留白時預設為 flycast.lua。"
+
+#: core/ui/settings_new.cpp:8965
+msgid "Crash Reports"
+msgstr "當機報告"
+
+#: core/ui/settings_new.cpp:8966
+msgid "Auto-upload crash reports"
+msgstr "自動上傳當機報告"
+
+#: core/ui/settings_new.cpp:8970
+msgid ""
+"Crash Reports\n"
+"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
+"\n"
+"Crash reports typically include technical details about the crash and environment.\n"
+"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
+msgstr ""
+"當機報告\n"
+"自動上傳當機報告，協助開發者診斷並修正問題。\n"
+"\n"
+"當機報告通常包含當機與環境的技術詳細資料。\n"
+"若願意協助改善穩定性，請保持啟用；若不想傳送當機資料，請停用。"
+
+#: core/ui/settings_new.cpp:8982
+msgid "Virtual Memory Addresses"
+msgstr "虛擬記憶體位址"
+
+#: core/ui/settings_new.cpp:8987
+#, c-format
+msgid "Base Address: %p"
+msgstr "基底位址：%p"
+
+#: core/ui/settings_new.cpp:8991
+msgid "RAM addresses are not available until the emulation is started"
+msgstr "必須先啟動模擬，才能取得 RAM 位址"
+
+#: core/ui/settings_new.cpp:8994
+#, c-format
+msgid "RAM: %p"
+msgstr "RAM：%p"
+
+#: core/ui/settings_new.cpp:8996
+#, c-format
+msgid "VRAM64: %p"
+msgstr "VRAM64：%p"
+
+#: core/ui/settings_new.cpp:8998
+#, c-format
+msgid "ARAM: %p"
+msgstr "ARAM：%p"
+
+#: core/ui/settings_new.cpp:9129
+msgid "Version Information"
+msgstr "版本資訊"
+
+#: core/ui/settings_new.cpp:9142
+msgid "x86"
+msgstr "x86"
+
+#: core/ui/settings_new.cpp:9144
+msgid "ARM"
+msgstr "ARM"
+
+#: core/ui/settings_new.cpp:9146
+msgid "x86_64"
+msgstr "x86_64"
+
+#: core/ui/settings_new.cpp:9148
+msgid "ARM64"
+msgstr "ARM64"
+
+#: core/ui/settings_new.cpp:9155
+msgid "Android"
+msgstr "Android"
+
+#: core/ui/settings_new.cpp:9157
+msgid "Linux"
+msgstr "Linux"
+
+#: core/ui/settings_new.cpp:9160
+msgid "iOS"
+msgstr "iOS"
+
+#: core/ui/settings_new.cpp:9162
+msgid "macOS"
+msgstr "macOS"
+
+#: core/ui/settings_new.cpp:9167
+msgid "Windows"
+msgstr "Windows"
+
+#: core/ui/settings_new.cpp:9169
+msgid "Nintendo Switch"
+msgstr "Nintendo Switch"
+
+#: core/ui/settings_new.cpp:9183
+msgid "Graphics"
+msgstr "圖形"
+
+#: core/ui/settings_new.cpp:9185
+msgid "Graphics - OpenGL"
+msgstr "圖形 - OpenGL"
+
+#: core/ui/settings_new.cpp:9187
+msgid "Graphics - Vulkan"
+msgstr "圖形 - Vulkan"
+
+#: core/ui/settings_new.cpp:9189
+msgid "Graphics - DirectX"
+msgstr "圖形 - DirectX"
+
+#: core/ui/settings_new.cpp:9193
+#, c-format
+msgid "Driver: %s"
+msgstr "驅動程式：%s"
+
+#: core/ui/settings_new.cpp:9223
+msgid ""
+"Hollycast is a multi-platform emulator for Sega Dreamcast, Naomi, Naomi 2, "
+"and Atomiswave arcade systems."
+msgstr "Hollycast 是支援 Sega Dreamcast、Naomi、Naomi 2 與 Atomiswave 街機系統的多平台模擬器。"
+
+#: core/ui/settings_new.cpp:9227
+msgid ""
+"Based on Flycast, providing accurate emulation with enhancements for modern "
+"systems."
+msgstr "以 Flycast 為基礎，提供準確模擬及現代系統強化功能。"
+
+#: core/ui/settings_new.cpp:9234
+msgid "Links"
+msgstr "連結"
+
+#: core/ui/settings_new.cpp:9238
+msgid "Website"
+msgstr "官方網站"
+
+#: core/ui/settings_new.cpp:9244
+msgid "Source Code"
+msgstr "原始碼"
+
+#: core/ui/settings_new.cpp:9252
+msgid "License"
+msgstr "授權條款"
+
+#: core/ui/settings_new.cpp:9255
+msgid ""
+"Copyright (C) 2019-2025 flyinghead and contributors. Portions Copyright 2026"
+" The Hollycast Authors"
+msgstr ""
+"Copyright (C) 2019-2025 flyinghead and contributors. Portions Copyright 2026"
+" The Hollycast Authors"
+
+#: core/ui/settings_new.cpp:9259
+msgid ""
+"Hollycast is free software; you can redistribute it and/or modify it under "
+"the terms of the GNU General Public License as published by the Free "
+"Software Foundation; either version 2 of the License, or (at your option) "
+"any later version."
+msgstr ""
+"Hollycast 是自由軟體；你可以依據自由軟體基金會（Free Software Foundation）發布的 GNU "
+"通用公眾授權條款（General Public License），重新散布或修改本程式。授權版本為第 2 版，或（由你選擇）任何後續版本。"
+
+#: core/ui/settings_new.cpp:9279
+msgid "Credits"
+msgstr "貢獻者"
+
+#: core/ui/settings_new.cpp:9282
+msgid ""
+"This emulator is based on the work of many talented developers who have "
+"contributed to the project and its dependencies."
+msgstr "此模擬器以許多才華洋溢的開發者所做的工作為基礎，他們曾為本專案及其相依項目作出貢獻。"
+
+#: core/ui/settings_new.cpp:9286
+msgid "Special thanks to all contributors who make this project possible."
+msgstr "特別感謝所有讓本專案得以實現的貢獻者。"
+
+#: core/ui/settings_new.cpp:9382
+msgid "Back to Game"
+msgstr "返回遊戲"
+
+#: core/ui/vgamepad.cpp:1386
+msgid "image/png"
+msgstr "image/png"
+
+#: core/ui/vgamepad.cpp:1399
+msgid "png"
+msgstr "png"
+
+#: core/ui/settings_new.cpp:2729
+msgid "Español"
+msgstr "Español"
+
+#: core/ui/settings_new.cpp:3139
+#, c-format
+msgid "%s (Custom)"
+msgstr "%s（自訂）"
+
+#: core/ui/settings_new.cpp:3147
+#, c-format
+msgid "%s (Missing)"
+msgstr "%s（遺失）"
+
+#: core/ui/settings_new.cpp:3254
+msgid "Import Theme JSON"
+msgstr "匯入 JSON 主題"
+
+#: core/ui/settings_new.cpp:3263
+#, c-format
+msgid "Imported %s"
+msgstr "已匯入 %s"
+
+#: core/ui/settings_new.cpp:3274
+msgid "Create theme"
+msgstr "建立主題"
+
+#: core/ui/settings_new.cpp:3505
+#, c-format
+msgid "Exported %s and its referenced assets."
+msgstr "已匯出 %s 及其參照的資源。"
+
+#: core/ui/settings_new.cpp:3560
+#, c-format
+msgid ""
+"Saved %s, but could not select it. %s. Close this editor, resolve the "
+"migration error, then select this theme from UI Theme."
+msgstr "已儲存 %s，但無法將其設為目前主題。%s。請關閉編輯器，解決移轉錯誤，然後在「介面主題」中選取此主題。"
+
+#. Background image scaling mode; not box art.
+#: core/ui/settings_new.cpp:3497
+msgctxt "Background fit"
+msgid "Cover"
+msgstr "填滿"
+
+#. Background image scaling mode; not box art.
+#: core/ui/settings_new.cpp:3498
+msgctxt "Background fit"
+msgid "Contain"
+msgstr "完整顯示"
+
+#. Background image scaling mode; not box art.
+#: core/ui/settings_new.cpp:3498
+msgctxt "Background fit"
+msgid "Stretch"
+msgstr "延展"
+
+#. Native language name; keep unchanged.
+#: core/ui/settings_new.cpp:2729
+msgid "Deutsch"
+msgstr "Deutsch"
+
+#. Native language name; keep unchanged.
+#: core/ui/settings_new.cpp:2729
+msgid "Italiano"
+msgstr "Italiano"
+
+#. Native language name; keep unchanged.
+#: core/ui/settings_new.cpp:2729
+msgid "한국어"
+msgstr "한국어"
+
+#: core/hw/naomi/printer.cpp:857
+msgid "Printout saved"
+msgstr "列印輸出已儲存"
+
+#: core/ui/settings_new.cpp:3032
+msgid ""
+"Data Folder\n"
+"This is Hollycast's writable data directory on this platform.\n"
+"\n"
+"It typically contains:\n"
+"- Dreamcast BIOS setup files (`dc_boot.bin` and `dc_flash.bin`)\n"
+"- Save data (VMU files) and save states\n"
+"\n"
+"If Hollycast cannot find a BIOS, double-check that your BIOS files are placed in the expected location and that their filenames match what Hollycast expects.\n"
+"Custom Paths below can also override where some of these files are stored."
+msgstr ""
+"資料目錄\n"
+"這是 Hollycast 在此平台上可寫入的資料目錄。\n"
+"\n"
+"通常包含：\n"
+"- Dreamcast BIOS 設定檔（`dc_boot.bin` 和 `dc_flash.bin`）\n"
+"- 存檔資料（VMU 檔案）和存檔狀態\n"
+"\n"
+"如果 Hollycast 找不到 BIOS，請確認 BIOS 檔案位於預期位置，且檔名符合 Hollycast 的預期。\n"
+"下方的自訂路徑也可以變更其中部分檔案的儲存位置。"
+
+#: core/ui/settings_new.cpp:4021
+msgid ""
+"Auto-Load on Start\n"
+"When enabled, the hidden Auto-Save slot loads automatically when a game starts, if a save is available."
+msgstr ""
+"啟動時自動載入\n"
+"啟用時，若有可用的存檔，隱藏的自動存檔槽會在遊戲啟動時自動載入。"
+
+#: core/ui/settings_new.cpp:4043
+msgid "Ask to save before leaving a game when automatic saving is off."
+msgstr "關閉自動儲存時，在離開遊戲前詢問是否要儲存。"
+
+#: core/ui/settings_new.cpp:4048
+msgid ""
+"Save Protection\n"
+"When enabled, Hollycast asks you to save before leaving a game if Auto-Save on Exit is off and save states are allowed."
+msgstr ""
+"存檔保護\n"
+"啟用時，若「離開時自動存檔」已關閉且允許使用存檔狀態，Hollycast 會在離開遊戲前詢問是否儲存。"
+
+#: core/ui/settings_new.cpp:5473
+msgid ""
+"Sample Texture Filter: Nearest-Neighbor\n"
+"Uses the sample-filter path with nearest-neighbor sampling only. This affects eligible textures up to the selected size limit and leaves the global Sampler Override set to Default."
+msgstr ""
+"取樣紋理過濾器：最近相鄰\n"
+"僅使用最近相鄰取樣的取樣過濾路徑。此設定會影響所選尺寸上限內符合條件的紋理，並讓全域「取樣器覆寫」維持為「預設」。"
+
+#: core/ui/settings_new.cpp:5864
+msgid ""
+"Shows Hollycast's CPU use as a share of total capacity across all logical "
+"cores. Device shows total CPU use from all apps. A single SH4 or renderer "
+"thread can still fully occupy one core while Hollycast's overall share "
+"remains low on an 8-core device."
+msgstr ""
+"顯示 Hollycast 的 CPU 使用量占所有邏輯核心總處理能力的比例。「裝置」顯示所有應用程式的 CPU 總使用量。在 8 核心裝置上，即使 "
+"Hollycast 的整體占比偏低，單一 SH4 或轉譯器執行緒仍可能完全占用一個核心。"
+
+#: core/ui/settings_new.cpp:2734
+msgid "हिन्दी"
+msgstr "हिन्दी"
+
+#: core/ui/settings_new.cpp:2840
+msgctxt "Arcade region"
+msgid "Export"
+msgstr "海外"

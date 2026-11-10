@@ -64,7 +64,7 @@ void SwappyGLGC::activate(bool enable)
 	if (this->enabled == enable)
 		return;
 	this->enabled = enable;
-	if (enable)
+	if (enable && g_activity != nullptr)
 	{
 		SwappyGL_init(jni::env(), g_activity);
 		swappyAvailable = SwappyGL_isEnabled();
@@ -76,7 +76,9 @@ void SwappyGLGC::activate(bool enable)
 			SwappyGL_setAutoPipelineMode(false);
 		}
 	}
-	else {
+	else
+	{
+		SwappyGL_setWindow(nullptr);
 		SwappyGL_destroy();
 		swappyAvailable = false;
 	}

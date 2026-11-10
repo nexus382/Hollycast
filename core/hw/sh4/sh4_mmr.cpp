@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Sh4 internal register routing (P4 & 'area 7')
 */
 #include "types.h"
@@ -719,6 +720,8 @@ void deserialize(Deserializer& deser)
 	deser >> (*p_sh4rcb).cntx;
 
 	sh4_sched_deserialize(deser);
+	// let the serial port reschedule its callback after the scheduler has been deserialized
+	SCIFSerialPort::Instance().postDeserialize();
 }
 
 void serialize2(Serializer& ser)

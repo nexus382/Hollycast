@@ -1,4 +1,5 @@
 // dear imgui, v1.92.6
+// Portions Copyright 2026 The Hollycast Authors
 // (drawing and font code)
 
 /*
@@ -36,6 +37,7 @@ Index of this file:
 #include "imgui.h"
 #ifndef IMGUI_DISABLE
 #include "imgui_internal.h"
+#include "misc/freetype/imgui_text_shaping.h"
 #ifdef IMGUI_ENABLE_FREETYPE
 #include "misc/freetype/imgui_freetype.h"
 #endif
@@ -5252,7 +5254,7 @@ bool ImFont::IsGlyphRangeUnused(unsigned int c_begin, unsigned int c_last)
 // x0/y0/x1/y1 are offset from the character upper-left layout position, in pixels. Therefore x0/y0 are often fairly close to zero.
 // Not to be mistaken with texture coordinates, which are held by u0/v0/u1/v1 in normalized format (0.0..1.0 on each texture axis).
 // - 'src' is not necessarily == 'this->Sources' because multiple source fonts+configs can be used to build one target font.
-ImFontGlyph* ImFontAtlasBakedAddFontGlyph(ImFontAtlas* atlas, ImFontBaked* baked, ImFontConfig* src, const ImFontGlyph* in_glyph)
+ImFontGlyph* ImFontAtlasBakedAddFontGlyph(ImFontAtlas* atlas, ImFontBaked* baked, ImFontConfig* src, const ImFontGlyph* in_glyph, bool unicode_lookup)
 {
     int glyph_idx = baked->Glyphs.Size;
     baked->Glyphs.push_back(*in_glyph);
@@ -5294,13 +5296,17 @@ ImFontGlyph* ImFontAtlasBakedAddFontGlyph(ImFontAtlas* atlas, ImFontBaked* baked
     if (glyph->Colored)
         atlas->TexPixelsUseColors = atlas->TexData->UseColors = true;
 
-    // Update lookup tables
-    const int codepoint = glyph->Codepoint;
-    ImFontBaked_BuildGrowIndex(baked, codepoint + 1);
-    baked->IndexAdvanceX[codepoint] = glyph->AdvanceX;
-    baked->IndexLookup[codepoint] = (ImU16)glyph_idx;
-    const int page_n = codepoint / 8192;
-    baked->OwnerFont->Used8kPagesMap[page_n >> 3] |= 1 << (page_n & 7);
+    // Substituted OpenType glyphs have font-local IDs, not Unicode codepoints.
+    // They still belong to Glyphs for atlas repacking and baked-size cleanup.
+    if (unicode_lookup)
+    {
+        const int codepoint = glyph->Codepoint;
+        ImFontBaked_BuildGrowIndex(baked, codepoint + 1);
+        baked->IndexAdvanceX[codepoint] = glyph->AdvanceX;
+        baked->IndexLookup[codepoint] = (ImU16)glyph_idx;
+        const int page_n = codepoint / 8192;
+        baked->OwnerFont->Used8kPagesMap[page_n >> 3] |= 1 << (page_n & 7);
+    }
 
     return glyph;
 }
@@ -5563,6 +5569,9 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
 
     ImFontBaked* baked = font->GetFontBaked(size);
     const float scale = size / baked->Size;
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    ImGuiTextShaper shaper(baked);
+#endif
 
     float line_width = 0.0f;
     float blank_width = 0.0f;
@@ -5600,9 +5609,20 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
         }
 
         // Optimized inline version of 'float char_width = GetCharAdvance((ImWchar)c);'
-        float char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
-        if (char_width < 0.0f)
-            char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        float char_width;
+#ifdef IMGUI_ENABLE_HARFBUZZ
+        if (const ImGuiTextShaper::Cluster* cluster = shaper.Next(s, text_end))
+        {
+            next_s = cluster->End;
+            char_width = cluster->Advance;
+        }
+        else
+#endif
+        {
+            char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
+            if (char_width < 0.0f)
+                char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        }
 
         // Classify current character
         int curr_type;
@@ -5660,7 +5680,13 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
     // Wrap_width is too small to fit anything. Force displaying 1 character to minimize the height discontinuity.
     // +1 may not be a character start point in UTF-8 but it's ok because caller loops use (text >= word_wrap_eol).
     if (s == text && text < text_end)
+    {
+#ifdef IMGUI_ENABLE_HARFBUZZ
+        if (const ImGuiTextShaper::Cluster* cluster = shaper.Next(s, text_end))
+            return cluster->End;
+#endif
         return s + ImTextCountUtf8BytesFromChar(s, text_end);
+    }
     return s;
 }
 
@@ -5679,6 +5705,9 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
     ImFontBaked* baked = font->GetFontBaked(size);
     const float line_height = size;
     const float scale = line_height / baked->Size;
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    ImGuiTextShaper shaper(baked);
+#endif
 
     ImVec2 text_size = ImVec2(0, 0);
     float line_width = 0.0f;
@@ -5731,9 +5760,20 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
             continue;
 
         // Optimized inline version of 'float char_width = GetCharAdvance((ImWchar)c);'
-        float char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
-        if (char_width < 0.0f)
-            char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        float char_width;
+#ifdef IMGUI_ENABLE_HARFBUZZ
+        if (const ImGuiTextShaper::Cluster* cluster = shaper.Next(prev_s, text_end_display))
+        {
+            s = cluster->End;
+            char_width = cluster->Advance;
+        }
+        else
+#endif
+        {
+            char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
+            if (char_width < 0.0f)
+                char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        }
         char_width *= scale;
 
         if (line_width + char_width >= max_width)
@@ -5808,6 +5848,15 @@ void ImFont::RenderChar(ImDrawList* draw_list, float size, const ImVec2& pos, Im
 // DO NOT CALL DIRECTLY THIS WILL CHANGE WILDLY IN 2026. Use ImDrawList::AddText().
 void ImFont::RenderText(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, const ImVec4& clip_rect, const char* text_begin, const char* text_end, float wrap_width, ImDrawTextFlags flags)
 {
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    if (!text_end)
+        text_end = text_begin + ImStrlen(text_begin);
+    if (ImGuiTextShaper::NeedsShaping(text_begin, text_end))
+    {
+        ImGuiTextShaper::RenderText(this, draw_list, size, pos, col, clip_rect, text_begin, text_end, wrap_width, flags);
+        return;
+    }
+#endif
     // Align to be pixel perfect
 begin:
     float x = IM_TRUNC(pos.x);

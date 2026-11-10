@@ -133,6 +133,16 @@ static bool isFullscreenMenuMode()
 
 static bool shouldShowMenuBar()
 {
+	// Explicit locks take priority over pointer position, timers and temporary toggles.
+	switch (static_cast<config::MenuBarMode>(config::MenuBarVisibility.get()))
+	{
+	case config::MenuBarMode::On:
+		return true;
+	case config::MenuBarMode::Off:
+		return false;
+	default:
+		break;
+	}
 	if (!menuVisible)
 		return false;
 	if (!isFullscreenMenuMode())
@@ -151,38 +161,30 @@ static bool shouldShowMenuBar()
 	const bool pointerAtTop = hasPointer && io.MousePos.y <= revealHeight;
 	const bool popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
 
-#if !defined(__ANDROID__)
 	// Keep the bar in its current state while a popup owns input. Revealing a
-	// hidden bar for a Settings popup focuses the reappearing bar and closes
-	// that popup. Real menu dropdowns open from an already visible bar, so
+	// hidden bar for a Settings or Live Tune popup focuses the reappearing bar
+	// and closes that popup. Menu dropdowns open from an already visible bar, so
 	// preserving visibility also keeps them accessible away from the top edge.
 	if (popupOpen)
 		return menuBarVisibleThisFrame;
-#endif
 
 	if (io.MouseSource == ImGuiMouseSource_TouchScreen)
 	{
 #if defined(__ANDROID__)
-		// Settings rows also use ImGui popups. Do not treat those popups as a
-		// reason to reveal the top menu on Android: showing the menu changes the
-		// Settings window position between OpenPopup() and BeginPopup(), which can
-		// make row value popups flicker and fail unless the menu was already shown.
-		const bool settingsOwnsTouch = gui_state == GuiState::Settings;
-		// The temporary reveal timer is only for an idle gameplay menu. Once a
-		// gameplay popup is open, keep the menu bar in place until it closes so a
-		// nested menu can be selected without racing the timeout.
-		const bool gameplayPopupOpen = !settingsOwnsTouch && popupOpen;
-		if (!settingsOwnsTouch && !popupOpen && pointerAtTop && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+		// Settings and the controller editor own their touches, including taps
+		// along the top edge that would otherwise reveal the gameplay menu.
+		const bool panelOwnsTouch = gui_state == GuiState::Settings || gui_state == GuiState::VJoyEditCommands;
+		if (!panelOwnsTouch && pointerAtTop && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 			touchMenuVisibleUntil = ImGui::GetTime() + 5.0;
-		return gameplayPopupOpen || ImGui::GetTime() < touchMenuVisibleUntil;
+		return ImGui::GetTime() < touchMenuVisibleUntil;
 #else
-		if (!popupOpen && pointerAtTop && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+		if (pointerAtTop && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 			touchMenuVisibleUntil = ImGui::GetTime() + 5.0;
-		return popupOpen || ImGui::GetTime() < touchMenuVisibleUntil;
+		return ImGui::GetTime() < touchMenuVisibleUntil;
 #endif
 	}
 
-	return popupOpen || pointerAtTop;
+	return pointerAtTop;
 }
 
 static bool openUrlInShell(const char* url)
@@ -366,7 +368,9 @@ void renderMainMenuBar()
 		ImGui::PopFont();
 #endif
 		const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-		publishMenuTouchState(false, menuVisible && isFullscreenMenuMode(),
+		// A locked-off bar must not intercept touches in its hidden reveal strip.
+		publishMenuTouchState(false, menuVisible && isFullscreenMenuMode()
+				&& config::MenuBarVisibility != static_cast<int>(config::MenuBarMode::Off),
 				ImVec2(0.0f, 0.0f), ImVec2(displaySize.x, revealHeight));
 		return;
 	}
@@ -380,10 +384,15 @@ void renderMainMenuBar()
 	ImFont* menuFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
 #if defined(__ANDROID__)
 	const ImGuiStyle menuStyleBackup = ImGui::GetStyle();
-	applyAndroidMenuStyle(menuStyleBackup);
-	ImGui::PushFont(menuFont, menuFont->LegacySize * androidMenuFontScale());
+	if (gui_state == GuiState::Main || gui_state == GuiState::SelectDisk)
+		ImGui::PushFont(menuFont, uiScaled(17.f));
+	else
+	{
+		applyAndroidMenuStyle(menuStyleBackup);
+		ImGui::PushFont(menuFont, menuFont->LegacySize * androidMenuFontScale());
+	}
 #else
-	ImGui::PushFont(menuFont);
+	ImGui::PushFont(menuFont, uiScaled(17.f));
 #endif
 	if (ImGui::BeginMainMenuBar())
 	{

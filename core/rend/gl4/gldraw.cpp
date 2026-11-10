@@ -1,5 +1,6 @@
 /*
 	Copyright 2018 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -32,7 +33,7 @@ std::unique_ptr<OITFramebuffer> framebuffers[2];
 static gl4PipelineShader *gl4GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 							bool pp_Texture, bool pp_UseAlpha, bool pp_IgnoreTexA, u32 pp_ShadInstr, bool pp_Offset,
 							u32 pp_FogCtrl, bool pp_TwoVolumes, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping,
-							int palette, bool naomi2, Pass pass, bool secAccum)
+							int palette, int sampleTextureFilter, int maxFilteredTextureSize, bool naomi2, Pass pass, bool secAccum)
 {
 	u32 rv=0;
 
@@ -49,6 +50,7 @@ static gl4PipelineShader *gl4GetProgram(bool cp_AlphaTest, bool pp_InsideClippin
 	rv <<= 1; rv |= (int)pp_BumpMap;
 	rv <<= 1; rv |= (int)fog_clamping;
 	rv <<= 2; rv |= palette;
+	rv <<= 9; rv |= sample_filter::Settings(sampleTextureFilter, maxFilteredTextureSize).key();
 	rv <<= 1; rv |= (int)naomi2;
 	rv <<= 2; rv |= (int)pass;
 	rv <<= 1; rv |= (int)(!settings.platform.isNaomi2() && config::NativeDepthInterpolation);
@@ -70,6 +72,8 @@ static gl4PipelineShader *gl4GetProgram(bool cp_AlphaTest, bool pp_InsideClippin
 		shader->pp_BumpMap = pp_BumpMap;
 		shader->fog_clamping = fog_clamping;
 		shader->palette = palette;
+		shader->sampleTextureFilter = sampleTextureFilter;
+		shader->maxFilteredTextureSize = maxFilteredTextureSize;
 		shader->naomi2 = naomi2;
 		shader->pass = pass;
 		shader->divPosZ = !settings.platform.isNaomi2() && config::NativeDepthInterpolation;
@@ -124,6 +128,10 @@ void OpenGL4Renderer::setGPState(const PolyParam *gp)
 		else if (config::TextureFiltering == 2)
 			gpuPalette = 2; // force linear
 	}
+	const sample_filter::Settings filter(gp->pcw.Texture && gp->tcw.PixelFmt != PixelBumpMap
+			? config::SampleTextureFilter.get() : 0, config::MaxFilteredTextureSize.get());
+	const int sampleTextureFilter = filter.mode;
+	const int maxFilteredTextureSize = filter.maxSize;
 
 	if constexpr (pass == Pass::Color && Type == ListType_Translucent && !SortingEnabled)
 	{
@@ -165,6 +173,8 @@ void OpenGL4Renderer::setGPState(const PolyParam *gp)
 				false,
 				false,
 				gpuPalette,
+				sampleTextureFilter,
+				maxFilteredTextureSize,
 				gp->isNaomi2(),
 				pass,
 				false);
@@ -189,6 +199,8 @@ void OpenGL4Renderer::setGPState(const PolyParam *gp)
 				gp->tcw.PixelFmt == PixelBumpMap,
 				color_clamp,
 				gpuPalette,
+				sampleTextureFilter,
+				maxFilteredTextureSize,
 				gp->isNaomi2(),
 				pass,
 				Type == ListType_Translucent && !SortingEnabled && gp->tsp.SrcSelect == 1);
@@ -254,7 +266,9 @@ void OpenGL4Renderer::setGPState(const PolyParam *gp)
 				setTextureRepeatMode(i, GL_TEXTURE_WRAP_T, tsp.ClampV, tsp.FlipV);
 
 				bool nearest_filter;
-				if (gpuPalette != 0)
+				if (texture->gpuPalette)
+					nearest_filter = true;
+				else if (filter.appliesTo(texture->uploadedWidth))
 					nearest_filter = true;
 				else if (config::TextureFiltering == 0)
 					nearest_filter = tsp.FilterMode == 0;
@@ -526,9 +540,12 @@ void OpenGL4Renderer::drawStrips(int width, int height)
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 		if (gl.rendContext->clearFramebuffer)
 		{
-			// Clear framebuffer
+			// Clear the color-pass framebuffer. The first framebuffer is used
+			// for depth and stencil; the color pass renders into the second one.
+			framebuffers[1]->bind();
 			glcache.ClearColor(VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f);
 			glClear(GL_COLOR_BUFFER_BIT);
+			framebuffers[0]->bind();
 		}
 		else
 		{

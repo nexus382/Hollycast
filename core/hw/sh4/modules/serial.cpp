@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	Dreamcast serial port.
 */
 #include <cerrno>
@@ -375,14 +376,10 @@ void SCIFSerialPort::init()
 
 void SCIFSerialPort::term()
 {
-	if (schedId != -1) {
-		sh4_sched_unregister(schedId);
-		schedId = -1;
-	}
-	if (brkSchedId != -1) {
-		sh4_sched_unregister(brkSchedId);
-		brkSchedId = -1;
-	}
+	sh4_sched_unregister(schedId);
+	schedId = -1;
+	sh4_sched_unregister(brkSchedId);
+	brkSchedId = -1;
 }
 
 void SCIFSerialPort::reset()
@@ -441,7 +438,6 @@ void SCIFSerialPort::deserialize(Deserializer& deser)
 		transmitting = false;
 	}
 	SCIF_SCBRR2 &= 0xff;	// work around previous issues with dynarecs
-	updateBaudRate();
 }
 
 struct PTYPipe : public SerialPort::Pipe

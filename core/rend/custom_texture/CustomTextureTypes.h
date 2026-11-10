@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 Edward Li
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -78,6 +79,7 @@ enum class CustomTextureBackend : uint8_t
 	Direct3D9,
 	OpenGL,
 	OpenGLES,
+	Metal,
 };
 
 struct CustomTextureCandidate

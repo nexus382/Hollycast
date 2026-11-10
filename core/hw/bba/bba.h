@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -19,11 +20,9 @@
 #pragma once
 #include "types.h"
 
-void bba_Init();
 void bba_Term();
 void bba_Reset(bool hard);
 u32 bba_ReadMem(u32 addr, u32 sz);
 void bba_WriteMem(u32 addr, u32 data, u32 sz);
 void bba_Serialize(Serializer& ser);
 void bba_Deserialize(Deserializer& deser);
-int bba_recv_frame(const u8 *data, u32 len);

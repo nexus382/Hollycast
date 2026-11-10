@@ -1,6 +1,38 @@
+# Portions Copyright 2026 The Hollycast Authors
+
 # This block is executed when generating an intermediate resource file, not when
 # running in CMake configure mode
 if(_CMRC_GENERATE_MODE)
+    file(SIZE "${INPUT_FILE}" n_bytes)
+    if(_CMRC_OPENBSD_CLANG AND n_bytes GREATER 1048576)
+        # Clang's AST for millions of individual character initializers can
+        # exhaust the memory of an OpenBSD build VM. The assembler can include
+        # the identical bytes directly without parsing them as C++ expressions.
+        # Include the content hash in the preprocessed source: ccache cannot
+        # discover files referenced only by the assembler's .incbin directive.
+        file(SHA256 "${INPUT_FILE}" content_hash)
+        # Escape first for the assembler's quoted path, then for the C++ string.
+        string(REPLACE "\\" "\\\\" asm_path "${INPUT_FILE}")
+        string(REPLACE "\"" "\\\"" asm_path "${asm_path}")
+        string(REPLACE "\\" "\\\\" cpp_path "${asm_path}")
+        string(REPLACE "\"" "\\\"" cpp_path "${cpp_path}")
+        string(CONFIGURE [=[
+            [[maybe_unused]] static constexpr char cmrc_resource_sha256[] = "@content_hash@";
+            extern "C" { extern const char cmrc_resource_bytes[@n_bytes@ + 1]; }
+            __asm__(".pushsection .rodata\n"
+                    ".local cmrc_resource_bytes\n"
+                    "cmrc_resource_bytes:\n"
+                    ".incbin \"@cpp_path@\"\n"
+                    ".byte 0\n"
+                    ".popsection\n");
+            namespace cmrc { namespace @NAMESPACE@ { namespace res_chars {
+            extern const char* const @SYMBOL@_begin = cmrc_resource_bytes;
+            extern const char* const @SYMBOL@_end = cmrc_resource_bytes + @n_bytes@;
+            }}}
+        ]=] code @ONLY)
+        file(WRITE "${OUTPUT_FILE}" "${code}")
+        return()
+    endif()
     # Read in the digits
     file(READ "${INPUT_FILE}" bytes HEX)
     # Format each pair into a character literal. Heuristics seem to favor doing
@@ -619,6 +651,10 @@ function(cmrc_add_resources name)
 endfunction()
 
 function(_cmrc_generate_intermediate_cpp lib_ns symbol outfile infile)
+    set(openbsd_clang FALSE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(openbsd_clang TRUE)
+    endif()
     add_custom_command(
         # This is the file we will generate
         OUTPUT "${outfile}"
@@ -627,6 +663,7 @@ function(_cmrc_generate_intermediate_cpp lib_ns symbol outfile infile)
         COMMAND
             "${CMAKE_COMMAND}"
                 -D_CMRC_GENERATE_MODE=TRUE
+                -D_CMRC_OPENBSD_CLANG=${openbsd_clang}
                 -DNAMESPACE=${lib_ns}
                 -DSYMBOL=${symbol}
                 "-DINPUT_FILE=${infile}"

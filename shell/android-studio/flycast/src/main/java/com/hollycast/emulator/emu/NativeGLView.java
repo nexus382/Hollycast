@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 package com.hollycast.emulator.emu;
 
 import android.content.Context;
@@ -57,7 +58,7 @@ public class NativeGLView extends SurfaceView implements SurfaceHolder.Callback 
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         if (InputDeviceManager.getInstance().hasTouchscreen())
-            vjoyDelegate = new VirtualJoystickDelegate(this);
+            vjoyDelegate = new VirtualJoystickDelegate();
     }
 
     @Override
@@ -165,10 +166,12 @@ public class NativeGLView extends SurfaceView implements SurfaceHolder.Callback 
     {
         if (!InputDeviceManager.getInstance().hasTouchscreen())
             return;
-        if (editing && !(vjoyDelegate instanceof EditVirtualJoystickDelegate))
-            vjoyDelegate = new EditVirtualJoystickDelegate(this);
-        else if (!editing && !(vjoyDelegate instanceof VirtualJoystickDelegate))
-            vjoyDelegate = new VirtualJoystickDelegate(this);
+        if ((editing && vjoyDelegate instanceof EditVirtualJoystickDelegate)
+                || (!editing && vjoyDelegate instanceof VirtualJoystickDelegate))
+            return;
+        if (vjoyDelegate != null)
+            vjoyDelegate.stop();
+        vjoyDelegate = editing ? new EditVirtualJoystickDelegate(this) : new VirtualJoystickDelegate();
     }
 
     public void showVGamepad() {

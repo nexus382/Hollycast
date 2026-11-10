@@ -1,0 +1,994 @@
+{
+  "baseline_revision": "c517c36618029fb65d495d0333211b469b147c7a",
+  "after_source": "Artwork absence-cache fix, measured before commit",
+  "source_sha256": {
+    "before_boxart": "46bd6beec21524dad2134035cc63d11e7f3ef90ac450d5ef686e83583294d3ee",
+    "after_boxart": "258e06c9909756e66deca68b00ff815d527c4563850a1874d2f786006176ad45",
+    "before_scraper": "ca9d2e8ec1951677bf75a3c9cdc0534737e8ffa12d50393bc281072161ba66a8",
+    "after_scraper": "a0a29ba388aa281d9c4340b38270781032ba034d3185ad7e6669001f07ef3164"
+  },
+  "host": {
+    "platform": "macOS-26.6-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 10,
+    "physical_cpus": 10,
+    "memory_bytes": 34359738368,
+    "uptime": "12:34  3 users, load averages: 42.87 17.81 19.40",
+    "configuration": "RelWithDebInfo -O2 -g -DNDEBUG, arm64",
+    "background_load": "desktop browser IDE and other processes active; no processes stopped"
+  },
+  "build": {
+    "generator": "Ninja",
+    "configuration": "RelWithDebInfo",
+    "architecture": "arm64",
+    "compiler_flags": "-O2 -g -DNDEBUG",
+    "options": {
+      "ENABLE_CTEST": "ON",
+      "USE_VULKAN": "OFF",
+      "USE_BREAKPAD": "OFF",
+      "USE_DISCORD": "OFF",
+      "USE_OPENMP": "OFF",
+      "USE_LUA": "OFF"
+    },
+    "linker_flags": "-lcurl",
+    "compiler_launchers": "disabled"
+  },
+  "fixture": {
+    "games": 1000,
+    "track_logical_bytes": 734003200,
+    "total_logical_bytes": 734003266000,
+    "allocated_bytes": 49152000,
+    "embedded_artwork": false,
+    "data_generated_before_timing": true
+  },
+  "timing_note": "Five interleaved pairs without an interposer. Logical counters were unmeasured and their original placeholder fields are omitted. User and system CPU components are omitted here; cpu_ms is their sum.",
+  "timing": [
+    {
+      "run": "01-before",
+      "database_bytes": 370002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 245.69499999999982,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 155.109334,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9691136
+        },
+        "first_scan": {
+          "cpu_ms": 240.551,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 185.387041,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 4861952
+        },
+        "persisted_restart": {
+          "cpu_ms": 258.81799999999987,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 158.264417,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9318400
+        },
+        "repeat_browsing": {
+          "cpu_ms": 2355.917,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 1517.302208,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 93184000
+        }
+      },
+      "repeat_passes": 10,
+      "side": "before"
+    },
+    {
+      "run": "01-after",
+      "database_bytes": 530002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 261.75,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 160.623334,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 13824000
+        },
+        "first_scan": {
+          "cpu_ms": 214.53300000000002,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 117.04675,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 524288,
+          "physical_write_bytes": 6942720
+        },
+        "persisted_restart": {
+          "cpu_ms": 4.388999999999996,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 4.563833,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        },
+        "repeat_browsing": {
+          "cpu_ms": 2.9609999999999985,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 2.961458,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        }
+      },
+      "repeat_passes": 10,
+      "side": "after"
+    },
+    {
+      "run": "02-after",
+      "database_bytes": 530002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 253.838,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 274.376916,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 13824000
+        },
+        "first_scan": {
+          "cpu_ms": 218.63100000000003,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 122.33675,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 6942720
+        },
+        "persisted_restart": {
+          "cpu_ms": 3.6819999999999737,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 3.698375,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        },
+        "repeat_browsing": {
+          "cpu_ms": 3.7819999999999823,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 4.738667,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        }
+      },
+      "repeat_passes": 10,
+      "side": "after"
+    },
+    {
+      "run": "02-before",
+      "database_bytes": 370002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 229.46699999999998,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 132.264334,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9691136
+        },
+        "first_scan": {
+          "cpu_ms": 228.33200000000002,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 115.844792,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 4861952
+        },
+        "persisted_restart": {
+          "cpu_ms": 224.59899999999982,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 133.953583,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9318400
+        },
+        "repeat_browsing": {
+          "cpu_ms": 2393.617,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 1454.368584,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 93184000
+        }
+      },
+      "repeat_passes": 10,
+      "side": "before"
+    },
+    {
+      "run": "03-before",
+      "database_bytes": 370002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 228.35800000000017,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 134.395833,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 12288,
+          "physical_write_bytes": 9691136
+        },
+        "first_scan": {
+          "cpu_ms": 229.20100000000002,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 166.898541,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 8192,
+          "physical_write_bytes": 4861952
+        },
+        "persisted_restart": {
+          "cpu_ms": 251.74800000000005,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 160.206625,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 12288,
+          "physical_write_bytes": 9318400
+        },
+        "repeat_browsing": {
+          "cpu_ms": 2342.274,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 1412.500292,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 16384,
+          "physical_write_bytes": 93184000
+        }
+      },
+      "repeat_passes": 10,
+      "side": "before"
+    },
+    {
+      "run": "03-after",
+      "database_bytes": 530002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 261.292,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 187.556084,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 8192,
+          "physical_write_bytes": 13824000
+        },
+        "first_scan": {
+          "cpu_ms": 239.662,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 137.755542,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 6942720
+        },
+        "persisted_restart": {
+          "cpu_ms": 4.182000000000016,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 4.306625,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        },
+        "repeat_browsing": {
+          "cpu_ms": 3.5319999999999965,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 3.60125,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        }
+      },
+      "repeat_passes": 10,
+      "side": "after"
+    },
+    {
+      "run": "04-after",
+      "database_bytes": 530002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 289.53700000000003,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 201.837,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 8192,
+          "physical_write_bytes": 13824000
+        },
+        "first_scan": {
+          "cpu_ms": 235.061,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 148.320625,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 8192,
+          "physical_write_bytes": 6942720
+        },
+        "persisted_restart": {
+          "cpu_ms": 4.432000000000002,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 5.320583,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        },
+        "repeat_browsing": {
+          "cpu_ms": 4.402000000000015,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 4.805875,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        }
+      },
+      "repeat_passes": 10,
+      "side": "after"
+    },
+    {
+      "run": "04-before",
+      "database_bytes": 370002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 238.13099999999997,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 128.725208,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9691136
+        },
+        "first_scan": {
+          "cpu_ms": 232.97500000000002,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 125.42225,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 4861952
+        },
+        "persisted_restart": {
+          "cpu_ms": 251.46399999999971,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 139.3835,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9318400
+        },
+        "repeat_browsing": {
+          "cpu_ms": 2298.7000000000003,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 1349.709208,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 90112,
+          "physical_write_bytes": 93184000
+        }
+      },
+      "repeat_passes": 10,
+      "side": "before"
+    },
+    {
+      "run": "05-before",
+      "database_bytes": 370002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 239.49700000000007,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 135.627125,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9691136
+        },
+        "first_scan": {
+          "cpu_ms": 248.548,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 214.335958,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 16384,
+          "physical_write_bytes": 4861952
+        },
+        "persisted_restart": {
+          "cpu_ms": 266.21400000000006,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 165.296292,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 9318400
+        },
+        "repeat_browsing": {
+          "cpu_ms": 2455.325,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 1639.744333,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 93184000
+        }
+      },
+      "repeat_passes": 10,
+      "side": "before"
+    },
+    {
+      "run": "05-after",
+      "database_bytes": 530002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": false,
+      "phases": {
+        "explicit_refresh": {
+          "cpu_ms": 257.86800000000005,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 175.11575,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 13824000
+        },
+        "first_scan": {
+          "cpu_ms": 233.147,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 126.354416,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 12288,
+          "physical_write_bytes": 6942720
+        },
+        "persisted_restart": {
+          "cpu_ms": 3.7920000000000016,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 3.914416,
+          "errors": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        },
+        "repeat_browsing": {
+          "cpu_ms": 3.2809999999999917,
+          "disk_counter_status": [
+            0,
+            0
+          ],
+          "elapsed_ms": 3.369125,
+          "errors": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "physical_read_bytes": 0,
+          "physical_write_bytes": 0
+        }
+      },
+      "repeat_passes": 10,
+      "side": "after"
+    }
+  ],
+  "aggregates": {
+    "first_scan": {
+      "before": {
+        "cpu_ms": {
+          "median": 232.97500000000002,
+          "min": 228.33200000000002,
+          "max": 248.548
+        },
+        "elapsed_ms": {
+          "median": 166.898541,
+          "min": 115.844792,
+          "max": 214.335958
+        },
+        "physical_read_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 16384
+        },
+        "physical_write_bytes": {
+          "median": 4861952,
+          "min": 4861952,
+          "max": 4861952
+        }
+      },
+      "after": {
+        "cpu_ms": {
+          "median": 233.147,
+          "min": 214.53300000000002,
+          "max": 239.662
+        },
+        "elapsed_ms": {
+          "median": 126.354416,
+          "min": 117.04675,
+          "max": 148.320625
+        },
+        "physical_read_bytes": {
+          "median": 8192,
+          "min": 0,
+          "max": 524288
+        },
+        "physical_write_bytes": {
+          "median": 6942720,
+          "min": 6942720,
+          "max": 6942720
+        }
+      }
+    },
+    "repeat_browsing": {
+      "before": {
+        "cpu_ms": {
+          "median": 2355.917,
+          "min": 2298.7000000000003,
+          "max": 2455.325
+        },
+        "elapsed_ms": {
+          "median": 1454.368584,
+          "min": 1349.709208,
+          "max": 1639.744333
+        },
+        "physical_read_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 90112
+        },
+        "physical_write_bytes": {
+          "median": 93184000,
+          "min": 93184000,
+          "max": 93184000
+        }
+      },
+      "after": {
+        "cpu_ms": {
+          "median": 3.5319999999999965,
+          "min": 2.9609999999999985,
+          "max": 4.402000000000015
+        },
+        "elapsed_ms": {
+          "median": 3.60125,
+          "min": 2.961458,
+          "max": 4.805875
+        },
+        "physical_read_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "physical_write_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        }
+      }
+    },
+    "persisted_restart": {
+      "before": {
+        "cpu_ms": {
+          "median": 251.74800000000005,
+          "min": 224.59899999999982,
+          "max": 266.21400000000006
+        },
+        "elapsed_ms": {
+          "median": 158.264417,
+          "min": 133.953583,
+          "max": 165.296292
+        },
+        "physical_read_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 12288
+        },
+        "physical_write_bytes": {
+          "median": 9318400,
+          "min": 9318400,
+          "max": 9318400
+        }
+      },
+      "after": {
+        "cpu_ms": {
+          "median": 4.182000000000016,
+          "min": 3.6819999999999737,
+          "max": 4.432000000000002
+        },
+        "elapsed_ms": {
+          "median": 4.306625,
+          "min": 3.698375,
+          "max": 5.320583
+        },
+        "physical_read_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "physical_write_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        }
+      }
+    },
+    "explicit_refresh": {
+      "before": {
+        "cpu_ms": {
+          "median": 238.13099999999997,
+          "min": 228.35800000000017,
+          "max": 245.69499999999982
+        },
+        "elapsed_ms": {
+          "median": 134.395833,
+          "min": 128.725208,
+          "max": 155.109334
+        },
+        "physical_read_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 12288
+        },
+        "physical_write_bytes": {
+          "median": 9691136,
+          "min": 9691136,
+          "max": 9691136
+        }
+      },
+      "after": {
+        "cpu_ms": {
+          "median": 261.292,
+          "min": 253.838,
+          "max": 289.53700000000003
+        },
+        "elapsed_ms": {
+          "median": 187.556084,
+          "min": 160.623334,
+          "max": 274.376916
+        },
+        "physical_read_bytes": {
+          "median": 0,
+          "min": 0,
+          "max": 8192
+        },
+        "physical_write_bytes": {
+          "median": 13824000,
+          "min": 13824000,
+          "max": 13824000
+        }
+      }
+    }
+  },
+  "counter_note": "One separate pair with the 16-byte counter self-test. Timings and process disk counters from this pair are excluded.",
+  "io_counts": [
+    {
+      "counter_control": {
+        "read_bytes": 16,
+        "write_bytes": 16
+      },
+      "database_bytes": 370002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": true,
+      "phases": {
+        "explicit_refresh": {
+          "bin_opens": 2000,
+          "cue_opens": 1000,
+          "errors": 0,
+          "logical_read_bytes": 6580002,
+          "logical_write_bytes": 9633052,
+          "lookups": 1000,
+          "passes": 1,
+          "read_calls": 4001,
+          "write_calls": 26
+        },
+        "first_scan": {
+          "bin_opens": 2000,
+          "cue_opens": 1000,
+          "errors": 0,
+          "logical_read_bytes": 6210000,
+          "logical_write_bytes": 4810050,
+          "lookups": 1000,
+          "passes": 1,
+          "read_calls": 4000,
+          "write_calls": 25
+        },
+        "persisted_restart": {
+          "bin_opens": 2000,
+          "cue_opens": 1000,
+          "errors": 0,
+          "logical_read_bytes": 6580002,
+          "logical_write_bytes": 9250050,
+          "lookups": 1000,
+          "passes": 1,
+          "read_calls": 4001,
+          "write_calls": 25
+        },
+        "repeat_browsing": {
+          "bin_opens": 20000,
+          "cue_opens": 10000,
+          "errors": 0,
+          "logical_read_bytes": 62100000,
+          "logical_write_bytes": 92500500,
+          "lookups": 10000,
+          "passes": 10,
+          "read_calls": 40000,
+          "write_calls": 250
+        }
+      },
+      "repeat_passes": 10,
+      "side": "before"
+    },
+    {
+      "counter_control": {
+        "read_bytes": 16,
+        "write_bytes": 16
+      },
+      "database_bytes": 530002,
+      "database_records": 1000,
+      "errors": 0,
+      "games": 1000,
+      "instrumented": true,
+      "phases": {
+        "explicit_refresh": {
+          "bin_opens": 2000,
+          "cue_opens": 1000,
+          "errors": 0,
+          "logical_read_bytes": 6738002,
+          "logical_write_bytes": 13754052,
+          "lookups": 1000,
+          "passes": 1,
+          "read_calls": 4001,
+          "write_calls": 26
+        },
+        "first_scan": {
+          "bin_opens": 2000,
+          "cue_opens": 1000,
+          "errors": 0,
+          "logical_read_bytes": 6210000,
+          "logical_write_bytes": 6890050,
+          "lookups": 1000,
+          "passes": 1,
+          "read_calls": 4000,
+          "write_calls": 25
+        },
+        "persisted_restart": {
+          "bin_opens": 0,
+          "cue_opens": 0,
+          "errors": 0,
+          "logical_read_bytes": 530002,
+          "logical_write_bytes": 0,
+          "lookups": 1000,
+          "passes": 1,
+          "read_calls": 1,
+          "write_calls": 0
+        },
+        "repeat_browsing": {
+          "bin_opens": 0,
+          "cue_opens": 0,
+          "errors": 0,
+          "logical_read_bytes": 0,
+          "logical_write_bytes": 0,
+          "lookups": 10000,
+          "passes": 10,
+          "read_calls": 0,
+          "write_calls": 0
+        }
+      },
+      "repeat_passes": 10,
+      "side": "after"
+    }
+  ]
+}

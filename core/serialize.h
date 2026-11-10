@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -52,7 +53,9 @@ public:
 		V59,
 		V60,
 		V61,
-		Current = V61,
+		V62,
+		V63,
+		Current = V63,
 
 		Next = Current + 1,
 	};
