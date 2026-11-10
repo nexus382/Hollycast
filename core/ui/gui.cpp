@@ -1249,7 +1249,7 @@ static void contentpath_warning_popup()
         if (ImGui::BeginPopupModal(incorrectContentPopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
         {
             ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + uiScaled(400.f));
-            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned);
+            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned.load());
 			{
 				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(16, 3));
 				float currentwidth = ImGui::GetContentRegionAvail().x;
