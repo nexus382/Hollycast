@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <future>
+#include <system_error>
 #include <limits>
 #include <map>
 #include <sstream>
@@ -59,6 +61,14 @@ bool isMipmapped(GLenum value) {return value!=GL_NEAREST&&value!=GL_LINEAR;}
 unsigned mipCount(unsigned width,unsigned height) {
     unsigned count=1;while((width>>=1)|(height>>=1))++count;return count;
 }
+ComPtr<ID3DBlob> compileCode(pD3DCompile compiler,const std::string& source,const char* entry,const char* profile) {
+    ComPtr<ID3DBlob> code,errors;
+    const HRESULT result=compiler(source.data(),source.size(),"hikaru-dx11",nullptr,nullptr,entry,profile,
+        D3DCOMPILE_OPTIMIZATION_LEVEL3|D3DCOMPILE_IEEE_STRICTNESS,0,&code.get(),&errors.get());
+    if(FAILED(result)&&errors)
+        throw FlycastException("Hikaru DX11 shader: "+std::string(static_cast<const char*>(errors->GetBufferPointer()),errors->GetBufferSize()));
+    checkResult(result,"shader compilation");return code;
+}
 class Dx11Backend final : public Backend, private CachedDX11Shaders {
     struct Image {
         ComPtr<ID3D11Texture2D> texture;
@@ -75,7 +85,9 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         unsigned passFlags=0;
         bool operator<(const PixelKey& other) const {return std::tie(bitmap,family,palette,constants,passFlags)<std::tie(other.bitmap,other.family,other.palette,other.constants,other.passFlags);}
     };
-    struct PixelShader {ComPtr<ID3D11PixelShader> shader;uint64_t touched=0;};
+    struct PixelShader {ComPtr<ID3D11PixelShader> shader;uint64_t touched=0;bool deferred=false;};
+    struct CompiledPixel {ComPtr<ID3DBlob> code;ComPtr<ID3D11PixelShader> shader;};
+    struct PendingPixel {PixelKey key;u64 hash;std::future<CompiledPixel> result;};
     using BlendKey=std::tuple<bool,GLenum,GLenum,GLenum,GLenum,GLenum,GLenum,unsigned>;
     using DepthKey=std::tuple<bool,bool,GLenum>;
     using RasterKey=std::tuple<bool,GLenum,bool,bool,float,float>;
@@ -85,7 +97,9 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     ComPtr<ID3D11DeviceContext1> context1;
     pD3DCompile compiler=nullptr;
     DX11Context* owner=nullptr;
-    bool specialize=true,bindingsDirty=true;
+    bool specialize=true,bindingsDirty=true,backgroundCompilation=false;
+    std::array<ComPtr<ID3D11PixelShader>,4> genericPixels;
+    std::optional<PendingPixel> pendingPixel;
     std::unordered_map<unsigned,Image> images;
     std::map<PixelKey,PixelShader> pixelShaders;
     std::map<BlendKey,ComPtr<ID3D11BlendState>> blends;
@@ -129,14 +143,35 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     static constexpr unsigned ColorFallback=0x7ffffffdu,MetadataFallback=0x7ffffffcu;
 
     ComPtr<ID3DBlob> compile(const std::string& source,const char* entry,const char* profile) {
-        ComPtr<ID3DBlob> code,errors;
-        const u64 hash=hashShader(source.c_str(),entry,profile);
+        ComPtr<ID3DBlob> code;const u64 hash=hashShader(source.c_str(),entry,profile);
         if(lookupShader(hash,code))return code;
-        const HRESULT result=compiler(source.data(),source.size(),"hikaru-dx11",nullptr,nullptr,entry,profile,
-            D3DCOMPILE_OPTIMIZATION_LEVEL3|D3DCOMPILE_IEEE_STRICTNESS,0,&code.get(),&errors.get());
-        if(FAILED(result)&&errors)
-            throw FlycastException("Hikaru DX11 shader: "+std::string(static_cast<const char*>(errors->GetBufferPointer()),errors->GetBufferSize()));
-        checkResult(result,"shader compilation");cacheShader(hash,code);return code;
+        code=compileCode(compiler,source,entry,profile);cacheShader(hash,code);return code;
+    }
+    const ComPtr<ID3D11PixelShader>& genericPixel(const PixelKey& key) const {
+        // Transform palettes and indexed textures are independent shader modes.
+        return genericPixels[(key.palette?2u:0u)+(key.constants[8]?1u:0u)];
+    }
+    ID3D11PixelShader* retainPixel(const PixelKey& key,ComPtr<ID3D11PixelShader> shader,bool deferred=false) {
+        if(pixelShaders.size()>=512&&pixelShaders.find(key)==pixelShaders.end()) {
+            auto oldest=std::min_element(pixelShaders.begin(),pixelShaders.end(),[](const auto& a,const auto& b){return a.second.touched<b.second.touched;});
+            pixelShaders.erase(oldest);
+        }
+        return pixelShaders.insert_or_assign(key,PixelShader{std::move(shader),++shaderClock,deferred}).first->second.shader;
+    }
+    void completePixelCompilation(bool wait) {
+        if(!pendingPixel||(!wait&&pendingPixel->result.wait_for(std::chrono::seconds(0))!=std::future_status::ready))return;
+        auto pending=std::move(*pendingPixel);pendingPixel.reset();
+        ComPtr<ID3D11PixelShader> shader;
+        try {
+            auto compiled=pending.result.get();shader=std::move(compiled.shader);
+            cacheShader(pending.hash,compiled.code);
+        } catch(const std::exception& error) {
+            // The generic shader remains exact if an optional specialization
+            // fails. Cache that fallback under this key to avoid a retry storm.
+            WARN_LOG(RENDERER,"Hikaru DX11 specialized shader: %s",error.what());
+            shader=genericPixel(pending.key);
+        }
+        retainPixel(pending.key,std::move(shader));
     }
     ComPtr<ID3D11Buffer> buffer(size_t bytes,UINT bind) {
         if(!bytes||bytes>UINT_MAX)throw FlycastException("Invalid Hikaru DX11 buffer size");
@@ -264,14 +299,46 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
             }
         }
         const PixelKey key{draw.bitmap,draw.familyResolve,!draw.palette.empty(),meshShaderSpecialization(draw,specialize),passFlags};
-        auto found=pixelShaders.find(key);if(found!=pixelShaders.end()){found->second.touched=++shaderClock;return found->second.shader;}
-        auto code=compile(dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags),"pixelMain","ps_5_0");
-        ComPtr<ID3D11PixelShader> result;checkResult(device->CreatePixelShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,&result.get()),"pixel shader");
-        if(pixelShaders.size()>=512) {
-            auto oldest=std::min_element(pixelShaders.begin(),pixelShaders.end(),[](const auto& a,const auto& b){return a.second.touched<b.second.touched;});
-            pixelShaders.erase(oldest);
+        auto found=pixelShaders.find(key);
+        // Cache deferred keys too: a pending compiler must not make every
+        // sorted triangle rebuild and hash the same HLSL source each frame.
+        if(found!=pixelShaders.end()&&(!found->second.deferred||pendingPixel)) {
+            found->second.touched=++shaderClock;return found->second.shader;
         }
-        return pixelShaders.emplace(key,PixelShader{std::move(result),++shaderClock}).first->second.shader;
+        const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags);
+        ComPtr<ID3DBlob> code;const u64 hash=hashShader(source.c_str(),"pixelMain","ps_5_0");
+        if(!lookupShader(hash,code)) {
+            if(backgroundCompilation&&!draw.bitmap) {
+                // One outstanding job bounds CPU/memory use. All immediate-
+                // context work and bytecode-cache access stay on this thread.
+                // The worker owns its source/device until compilation finishes.
+                if(!pendingPixel) {
+                    try {
+                        auto result=std::async(std::launch::async,[dxDevice=device,dxCompiler=compiler,source] {
+                            // MSVC may reuse an async pool thread. Restore its
+                            // priority on success and on compiler/device failure.
+                            struct PriorityRestore {
+                                int previous=GetThreadPriority(GetCurrentThread());
+                                ~PriorityRestore(){SetThreadPriority(GetCurrentThread(),previous);}
+                            } priority;
+                            SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+                            CompiledPixel compiled;compiled.code=compileCode(dxCompiler,source,"pixelMain","ps_5_0");
+                            checkResult(dxDevice->CreatePixelShader(compiled.code->GetBufferPointer(),compiled.code->GetBufferSize(),
+                                nullptr,&compiled.shader.get()),"background pixel shader");
+                            return compiled;
+                        });
+                        pendingPixel.emplace(PendingPixel{key,hash,std::move(result)});
+                    } catch(const std::system_error& error) {
+                        WARN_LOG(RENDERER,"Hikaru DX11 background compiler unavailable: %s",error.what());
+                        backgroundCompilation=false; // Retain the synchronous path if no worker can start.
+                    }
+                }
+                if(backgroundCompilation)return retainPixel(key,genericPixel(key),true);
+            }
+            code=compile(source,"pixelMain","ps_5_0");
+        }
+        ComPtr<ID3D11PixelShader> result;checkResult(device->CreatePixelShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,&result.get()),"pixel shader");
+        return retainPixel(key,std::move(result));
     }
     void bindTargets(const Draw& draw) {
         auto& color=image(draw.color);auto* depth=draw.depth?&image(draw.depth):nullptr;
@@ -315,8 +382,8 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     }
     void endQuerySegment() {if(queryOpen){context->End(queries.back());queryOpen=false;}}
 public:
-    Dx11Backend(ID3D11Device* dxDevice,ID3D11DeviceContext* dxContext,pD3DCompile dxCompiler,DX11Context* dxOwner,bool optimized)
-        :compiler(dxCompiler),owner(dxOwner),specialize(optimized) {
+    Dx11Backend(ID3D11Device* dxDevice,ID3D11DeviceContext* dxContext,pD3DCompile dxCompiler,DX11Context* dxOwner,bool optimized,bool background=false)
+        :compiler(dxCompiler),owner(dxOwner),specialize(optimized),backgroundCompilation(background&&optimized) {
         if(!dxDevice||!dxContext||!compiler||dxDevice->GetFeatureLevel()<D3D_FEATURE_LEVEL_11_0)
             throw FlycastException("Hikaru DX11 requires Direct3D feature level 11.0");
         device.reset(dxDevice);dxDevice->AddRef();context.reset(dxContext);dxContext->AddRef();
@@ -369,8 +436,25 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         Texture fallback;fallback.width=fallback.height=1;fallback.maxLevel=0;
         const uint8_t transparent[4]={};texture(ColorFallback,fallback,0,TextureUpload::Definition,transparent,sizeof(transparent));
         fallback.format=GL_RG32UI;const uint32_t zero[2]={};texture(MetadataFallback,fallback,0,TextureUpload::Definition,zero,sizeof(zero));
+        if(backgroundCompilation) {
+            // Keep scalar/palette transforms and single/indexed sampling exact
+            // while material/light/pass decisions use the original dynamic equations.
+            for(unsigned variant=0;variant<genericPixels.size();++variant) {
+                MeshShaderSpecialization dynamic{};dynamic[8]=variant&1;
+                auto generic=compile(dx11ShaderSource(false,false,variant>=2,dynamic),"pixelMain","ps_5_0");
+                checkResult(device->CreatePixelShader(generic->GetBufferPointer(),generic->GetBufferSize(),nullptr,
+                    &genericPixels[variant].get()),"generic pixel shader");
+            }
+            // Fixed composition programs are cheap and need no late compiler
+            // call while the single specialization worker is active.
+            compile(dx11ShaderSource(true,false,false,{}),"pixelMain","ps_5_0");
+            compile(dx11ShaderSource(true,true,false,{}),"pixelMain","ps_5_0");
+        }
     }
     ~Dx11Backend() override {
+        // Finish before the owner unloads its compiler/device. The worker never
+        // borrows this backend or its context, so there is no shutdown lock cycle.
+        try {completePixelCompilation(true);}catch(const std::exception& error){WARN_LOG(RENDERER,"Hikaru DX11 shader shutdown: %s",error.what());}
         endQuerySegment();
         if(owner)saveCache(CacheFile);
         if(owner&&GraphicsContext::Instance()==owner)owner->presentFrame({});
@@ -378,6 +462,9 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         // CPU cache entries never requires a device-wide GPU idle wait.
         unbindInputs();unbindTargets();
     }
+#ifdef HIKARU_NATIVE_TESTING
+    void completeCompilationForTesting() {completePixelCompilation(true);}
+#endif
     bool supportsDrawPalette() const override {return true;}
     bool supportsTexturePalette() const override {return true;}
     bool supportsPackedVertices() const override {return true;}
@@ -565,6 +652,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         queries.clear();return visible;
     }
     void present(unsigned width,unsigned height) override {
+        completePixelCompilation(false);
         auto& output=image(0);if(output.description.Width!=width||output.description.Height!=height)return;
         if(!owner)throw FlycastException("Hikaru DX11 presenter is unavailable");
         unbindInputs();unbindTargets();owner->presentFrame(output.view);bindingsDirty=true;
@@ -574,12 +662,16 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
 std::unique_ptr<Backend> makeDx11Backend() {
     auto* owner=dynamic_cast<DX11Context*>(GraphicsContext::Instance());
     if(!owner)throw FlycastException("Hikaru DX11 requires an active DX11 context");
-    return std::make_unique<Dx11Backend>(owner->getDevice(),owner->getDeviceContext(),owner->getCompiler(),owner,true);
+    return std::make_unique<Dx11Backend>(owner->getDevice(),owner->getDeviceContext(),owner->getCompiler(),owner,true,true);
 }
 #ifdef HIKARU_NATIVE_TESTING
 std::unique_ptr<Backend> makeDx11BackendForTesting(ID3D11Device* device,ID3D11DeviceContext* context,pD3DCompile compiler,bool specialize) {
     return std::make_unique<Dx11Backend>(device,context,compiler,nullptr,specialize);
 }
+std::unique_ptr<Backend> makeBackgroundDx11BackendForTesting(ID3D11Device* device,ID3D11DeviceContext* context,pD3DCompile compiler) {
+    return std::make_unique<Dx11Backend>(device,context,compiler,nullptr,true,true);
+}
+void completeDx11CompilationForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).completeCompilationForTesting();}
 #endif
 } // namespace hikaru::graphics
 #endif

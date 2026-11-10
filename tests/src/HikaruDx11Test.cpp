@@ -6,13 +6,24 @@
 #include "rend/dx11/dx11_shaders.h"
 #include <d3d11sdklayers.h>
 #include <cstdlib>
+#include <atomic>
 
 namespace hikaru::graphics {
 std::unique_ptr<Backend> makeDx11BackendForTesting(ID3D11Device*,ID3D11DeviceContext*,pD3DCompile,bool);
+std::unique_ptr<Backend> makeBackgroundDx11BackendForTesting(ID3D11Device*,ID3D11DeviceContext*,pD3DCompile);
+void completeDx11CompilationForTesting(Backend&);
 }
 using namespace hikaru::graphics;
 using namespace hikaru::graphics::test;
 namespace {
+std::atomic<bool> failCompilation{false};
+std::atomic<unsigned> compilationCalls{0};
+HRESULT WINAPI compileWithFailure(LPCVOID source,SIZE_T bytes,LPCSTR name,const D3D_SHADER_MACRO* defines,ID3DInclude* include,
+    LPCSTR entry,LPCSTR profile,UINT flags,UINT flags2,ID3DBlob** code,ID3DBlob** errors) {
+    ++compilationCalls;
+    if(failCompilation.exchange(false))return E_FAIL;
+    return D3DCompile(source,bytes,name,defines,include,entry,profile,flags,flags2,code,errors);
+}
 class HikaruDx11Test : public testing::Test {
 protected:
     ComPtr<ID3D11Device> device;
@@ -43,6 +54,43 @@ TEST_F(HikaruDx11Test, MaterialsPalettesAndResourceLifetime) {
     auto generic=makeDx11BackendForTesting(device,context,D3DCompile,false);
     auto optimized=makeDx11BackendForTesting(device,context,D3DCompile,true);
     exerciseNativeGraphics(*generic,*optimized);
+}
+TEST_F(HikaruDx11Test, BackgroundCompilationMatchesGenericAndReleasesPendingWork) {
+    auto generic=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto background=makeBackgroundDx11BackendForTesting(device,context,D3DCompile);
+    allocate(*generic);allocate(*background);
+    for(bool palette:{false,true})for(bool textured:{false,true}) {
+        auto draw=mesh();draw.depthTest=false;draw.uniforms.flags={float(textured),1,1,1};
+        draw.uniforms.lights[0].flags={1,2,1,1};
+        if(palette) {
+            DrawRecord record;record.modelview=draw.uniforms.modelview;record.alternate=draw.uniforms.alternate;
+            record.normal=draw.uniforms.normal;record.alternateNormal=draw.uniforms.alternateNormal;
+            record.modes={1,2,2,1};record.sampling[0]=-0.5f;draw.palette.push_back(record);
+            draw.paletteTextures.push_back(10);draw.paletteSampling.push_back(draw.sampling[0]);draw.texturePalette=textured;
+        }
+        clear(*generic);generic->draw(draw);const auto expected=pixels(*generic);
+        clear(*background);background->draw(draw);
+        equalPixels(expected,pixels(*background),"background generic fallback",1);
+        completeDx11CompilationForTesting(*background);
+        background->draw(draw);equalPixels(expected,pixels(*background),"completed background specialization",1);
+    }
+    exerciseNativeGraphics(*generic,*background);completeDx11CompilationForTesting(*background);
+    // Dropping the renderer during a new variant must join the worker before
+    // its compiler/device can be released, without touching the context there.
+    allocate(*background); // The stress helper resized the output attachments.
+    auto pending=mesh();pending.uniforms.family={1,1,0,0};background->draw(pending);background.reset();
+}
+TEST_F(HikaruDx11Test, FailedBackgroundSpecializationKeepsExactFallbackWithoutRetries) {
+    auto generic=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto background=makeBackgroundDx11BackendForTesting(device,context,compileWithFailure);
+    allocate(*generic);allocate(*background);auto draw=mesh();
+    clear(*generic);generic->draw(draw);const auto expected=pixels(*generic);
+    failCompilation=true;clear(*background);background->draw(draw);completeDx11CompilationForTesting(*background);
+    equalPixels(expected,pixels(*background),"failed specialization fallback",1);
+    const unsigned calls=compilationCalls.load();
+    background->draw(draw);completeDx11CompilationForTesting(*background);
+    equalPixels(expected,pixels(*background),"cached failed specialization fallback",1);
+    EXPECT_EQ(compilationCalls.load(),calls);
 }
 TEST_F(HikaruDx11Test, WindingRowsMaskedClearsQueriesAndBitmaps) {
     auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);allocate(*backend);
