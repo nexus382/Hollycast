@@ -18,6 +18,9 @@
     along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "gui_dcnet.h"
+#include "audio/ui_sound.h"
+#include "custom_theme.h"
 #include "rend/osd.h"
 #include "cfg/cfg.h"
 #include "imgui.h"
@@ -29,6 +32,9 @@
 #include "input/mouse.h"
 #include "readiness.h"
 #include "setup_checklist_popup.h"
+#include "exit_save_prompt.h"
+#include "library.h"
+#include "library_savestates.h"
 #include "gui_util.h"
 #include "gui_font.h"
 #include "imgread/common.h"
@@ -41,6 +47,9 @@
 #include "implot.h"
 #endif
 #include "boxart/boxart.h"
+#include "boxart/screenscraper.h"
+#include "theme_library.h"
+#include <set>
 #include "boxart/vmu_icon.h"
 #include "profiler/fc_profiler.h"
 #include "hw/naomi/card_reader.h"
@@ -75,16 +84,35 @@ using namespace i18n;
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <utility>
+#include <atomic>
+#include <cmath>
+#include <limits>
+#include <unordered_set>
 
 bool game_started;
 
 int insetLeft, insetRight, insetTop, insetBottom;
 std::unique_ptr<ImGuiDriver> imguiDriver;
+static bool styleReloadRequested;
 
 static bool inited = false;
+static bool launchScreenPending = true;
 static SetupChecklistLifecycle setupChecklist;
 GuiState gui_state = GuiState::Main;
 static bool commandLineStart;
+static library::LaunchMode libraryLaunchMode = library::LaunchMode::Default;
+static std::string libraryResumeStatePath;
+struct PendingRackLaunch
+{
+	themes::RackCaseAnimation visual;
+	std::string layoutKey, itemId, path, title, statePath;
+	double started = 0;
+	bool fromContextMenu = false, resume = false;
+};
+static std::optional<PendingRackLaunch> pendingRackLaunch;
+// Android storage callbacks can invalidate this cache off the render thread.
+static std::atomic<bool> librarySavestateCacheInvalidated{false};
 std::string launchOnExitUri;
 static u32 mouseButtons;
 static int mouseX, mouseY;
@@ -99,6 +127,7 @@ static std::mutex osd_message_mutex;
 static void (*showOnScreenKeyboard)(bool show);
 static bool keysUpNextFrame[512];
 bool uiUserScaleUpdated;
+static float appliedUserUiScale = 1.f;
 static bool clearActiveIdNextFrame;
 bool showExitSaveDialog = false;
 static bool showAutoLoadDialog = false;
@@ -107,7 +136,78 @@ static ExitSaveDialogAction exitSaveDialogAction = ExitSaveDialogAction::ReturnT
 
 GameScanner scanner;
 static BackgroundGameLoader gameLoader;
+static LibrarySavestateCache librarySavestateCache;
+static std::future<bool> networkStatus;
 static Boxart boxart;
+
+// UI-thread owned batch; count image/metadata outcomes, never HTTP requests. Provider
+// quotas and fallback can require multiple requests for one unit. Cached/local units
+// are immediately ready; checked-but-absent types are unavailable, not downloaded.
+struct LibraryMediaBatch
+{
+	std::vector<GameMedia> games;
+	std::vector<Boxart::MediaProgress> outcomes;
+	Boxart::MediaProgress progress;
+	u32 mask = 0;
+	std::string label;
+	size_t cursor = 0;
+	bool checked = false, notified = false;
+	double nextCheck = 0, finishedAt = 0;
+};
+static LibraryMediaBatch libraryMediaBatch;
+
+static void updateLibraryMediaProgress()
+{
+	auto& batch = libraryMediaBatch;
+	const bool enabled = config::FetchBoxart
+		&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+	boxart.setMediaBatchPending(enabled && !batch.checked && !batch.games.empty());
+	if (!enabled || batch.games.empty() || (batch.checked && !batch.progress.pending)
+		|| ImGui::GetTime() < batch.nextCheck || !boxart.customMediaReady()) return;
+	// Inventory and enqueue together in bounded slices. Completed categories are
+	// never polled again in this batch; only pending work incurs further checks.
+	// A single slow filesystem call cannot be preempted, but never scan the entire
+	// library in one frame. The cover barrier stays up until this first pass ends.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+	const size_t end = std::min(batch.cursor + 16, batch.games.size());
+	while (batch.cursor < end)
+	{
+		auto& prior = batch.outcomes[batch.cursor];
+		const auto& game = batch.games[batch.cursor];
+		if (prior.pendingMedia)
+		{
+			const auto current = boxart.mediaProgress(game, prior.pendingMedia);
+			batch.progress.ready += current.ready;
+			batch.progress.pending = batch.progress.pending - prior.pending + current.pending;
+			batch.progress.unavailable += current.unavailable;
+			prior.ready += current.ready;
+			prior.unavailable += current.unavailable;
+			prior.pending = current.pending;
+			prior.pendingMedia = current.pendingMedia;
+			if (!batch.checked && current.pendingMedia)
+			{
+				boxart.queueBoxart(game, current.pendingMedia);
+				if (!batch.notified)
+				{
+					os_notify(T("Downloading library media"), 6000, batch.label.c_str());
+					batch.notified = true;
+				}
+			}
+		}
+		++batch.cursor;
+		if (std::chrono::steady_clock::now() >= deadline) break;
+	}
+	if (batch.cursor == batch.games.size())
+	{
+		batch.cursor = 0;
+		batch.checked = true;
+		boxart.setMediaBatchPending(false);
+		batch.nextCheck = ImGui::GetTime() + 0.5;
+		if (batch.progress.pending) batch.finishedAt = 0;
+		if (!batch.progress.pending && batch.finishedAt == 0) batch.finishedAt = ImGui::GetTime();
+	}
+}
+
 static Chat chat;
 static std::recursive_mutex guiMutex;
 using LockGuard = std::lock_guard<std::recursive_mutex>;
@@ -141,12 +241,14 @@ static void emuEventCallback(Event event, void *)
 		vgamepad::startGame();
 		break;
 	case Event::Start:
+		SettingsNew::stopTextureFilterLiveTune();
 		performance_overlay::reset();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
 		GamepadDevice::load_system_mappings();
 		break;
 	case Event::Terminate:
+		SettingsNew::stopTextureFilterLiveTune();
 		performance_overlay::reset();
 		boxart.checkpointPlaytime(true);
 		GamepadDevice::load_system_mappings();
@@ -173,6 +275,7 @@ void gui_init()
 	if (inited)
 		return;
 	inited = true;
+	launchScreenPending = true;
 
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
@@ -253,6 +356,8 @@ static ImGuiKey keycodeToImGuiKey(u8 keycode)
 void gui_updateStyle()
 {
 	static float uiScale;
+	const bool forceReload = styleReloadRequested;
+	styleReloadRequested = false;
 
 	verify(inited);
 	uiThreadRunner.init();
@@ -273,35 +378,23 @@ void gui_updateStyle()
     if (settings.display.width <= 640 || settings.display.height <= 480)
     	settings.display.uiScale = std::min(1.2f, settings.display.uiScale);
 #endif
+	appliedUserUiScale = std::max(0.01f, config::UIScaling.get() / 100.f);
     settings.display.uiScale *= uiUserScale();
-	if (settings.display.uiScale == uiScale && ImGui::GetIO().Fonts->IsBuilt())
+	if (!forceReload && settings.display.uiScale == uiScale && ImGui::GetIO().Fonts->IsBuilt())
 		return;
 	uiScale = settings.display.uiScale;
 
-	// Setup Dear ImGui style
-	ImGui::GetStyle() = ImGuiStyle{};
-
-	// Apply the current theme
+	// The theme applies metrics at the current DPI, including on live switches.
 	applyCurrentTheme();
-
-	ImGui::GetStyle().TabRounding = 5.0f;
-	ImGui::GetStyle().FrameRounding = 3.0f;
-	ImGui::GetStyle().ItemSpacing = ImVec2(8, 8);		// from 8,4
-	ImGui::GetStyle().ItemInnerSpacing = ImVec2(4, 6);	// from 4,4
-#if defined(__ANDROID__) || defined(TARGET_IPHONE) || defined(__SWITCH__)
-	ImGui::GetStyle().TouchExtraPadding = ImVec2(1, 1);	// from 0,0
-#endif
-#if defined(__ANDROID__)
-	GuiMenu::setAndroidMenuStyle(ImGui::GetStyle(), settings.display.uiScale);
-#endif
-	if (settings.display.uiScale != 1.f)
-		ImGui::GetStyle().ScaleAllSizes(settings.display.uiScale);
+	ImguiFileTexture::clearThemeImageFailures();
 
 	gui_loadFonts();
 
 	NOTICE_LOG(RENDERER, "Screen DPI is %.0f, size %d x %d. Scaling by %.2f", settings.display.dpi, settings.display.width, settings.display.height, settings.display.uiScale);
 	vgamepad::applyUiScale();
 }
+
+void gui_requestStyleReload() { styleReloadRequested = true; }
 
 void gui_keyboard_input(u32 wc)
 {
@@ -352,7 +445,9 @@ void gui_set_mouse_position(int x, int y, bool touchscreen)
 
 bool gui_is_menu_touch_target(float x, float y)
 {
-	return GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
+	// Reuse Android's gesture capture so virtual controls never consume panel taps.
+	return SettingsNew::textureFilterLiveTuneActive()
+			|| GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
 			std::round(y * settings.display.pointScale));
 }
 
@@ -425,8 +520,6 @@ static void gui_newFrame()
 		return;  // Skip the rest of this frame
 	}
 
-	ImGui::GetStyle().Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.06f, 0.06f, 0.06f, 0.94f);
-
 	if (showOnScreenKeyboard != nullptr)
 		showOnScreenKeyboard(io.WantTextInput);
 	if (clearActiveIdNextFrame && io.WantTextInput)
@@ -480,7 +573,7 @@ void gui_plot_render_time(int width, int height)
 }
 #endif
 
-static bool gui_resume_game()
+bool gui_resume_game()
 {
 	if (custom_texture.needsRefresh())
 	{
@@ -514,13 +607,6 @@ void gui_open_settings()
 			chat.toggle();
 		}
 	}
-	else if (gui_state == GuiState::VJoyEdit)
-	{
-		vgamepad::pauseEditing();
-		// iOS: force a touch up event to make up for the one eaten by the tap gesture recognizer
-		mouseButtons &= ~1;
-		gui_setState(GuiState::VJoyEditCommands);
-	}
 	else if (gui_state == GuiState::Loading)
 	{
 		gameLoader.cancel();
@@ -542,17 +628,37 @@ void gui_open_settings()
 	}
 }
 
+void gui_open_texture_filter_settings()
+{
+	const LockGuard lock(guiMutex);
+	if (gui_state != GuiState::Closed || !game_started || ggpo::active() || !achievements::canPause())
+		return;
+
+	try {
+		vgamepad::hide();
+		emu.stop();
+		SettingsNew::openTab(SettingsNew::SettingsTab::Video);
+		gui_setState(GuiState::Settings);
+	} catch (const FlycastException& e) {
+		gui_stop_game(e.what());
+	}
+}
+
 void gui_start_game(const std::string& path)
 {
 	const LockGuard lock(guiMutex);
 	if (gui_state != GuiState::Main && gui_state != GuiState::Closed && gui_state != GuiState::Commands
 			&& gui_state != GuiState::Pause)
 		return;
+	libraryLaunchMode = library::LaunchMode::Default;
+	libraryResumeStatePath.clear();
+	librarySavestateCacheInvalidated = true;
 	setupChecklist.gameLaunchStarted(config::loadBool("hollycast", "SetupChecklistPending", false), [](bool pending) {
 		config::saveBool("hollycast", "SetupChecklistPending", pending);
 	});
 	showExitSaveDialog = false;
 	showAutoLoadDialog = false;
+	cancelUiSound(); // The game's audio is about to take over the backend.
 	emu.unloadGame();
 	reset_vmus();
     chat.reset();
@@ -565,9 +671,24 @@ void gui_start_game(const std::string& path)
 	gameLoader.load(path);
 }
 
+static void gui_start_library_game(const std::string& path, bool resume, const std::string& statePath)
+{
+	const LockGuard lock(guiMutex);
+	if (gui_state != GuiState::Main)
+		return;
+	gui_start_game(path);
+	if (gui_state == GuiState::Loading)
+	{
+		libraryLaunchMode = resume ? library::LaunchMode::Resume : library::LaunchMode::Fresh;
+		libraryResumeStatePath = statePath;
+	}
+}
+
 void gui_stop_game(const std::string& message, bool allowAutoSave)
 {
 	const LockGuard lock(guiMutex);
+	libraryLaunchMode = library::LaunchMode::Default;
+	libraryResumeStatePath.clear();
 	showExitSaveDialog = false;
 	showAutoLoadDialog = false;
 	if (!commandLineStart)
@@ -672,15 +793,43 @@ void gui_request_exit_emulator()
 
 void gui_request_initial_auto_load()
 {
+	// A library action applies to this boot only, never the saved auto-load preference.
+	const auto launchMode = std::exchange(libraryLaunchMode, library::LaunchMode::Default);
+	const std::string resumePath = std::exchange(libraryResumeStatePath, std::string{});
+	const bool stateAllowed = dc_savestateAllowed() && !settings.raHardcoreMode;
+	const bool networkStartup = !game_started && NetworkHandshake::instance != nullptr;
 	const int autoSaveSlot = dc_getAutoSaveSlot();
-	if (!dc_savestateAllowed() || settings.raHardcoreMode
-			|| dc_getStateCreationDate(autoSaveSlot) == 0)
+	const bool stateAvailable = launchMode == library::LaunchMode::Resume ? !resumePath.empty()
+			: !networkStartup && stateAllowed && dc_getStateCreationDate(autoSaveSlot) != 0;
+	const auto action = library::initialAutoLoadAction(launchMode,
+			stateAvailable, stateAllowed, config::AutoLoadState, networkStartup);
+	if (action == library::AutoLoadAction::StartNetwork)
+	{
+		networkStatus = NetworkHandshake::instance->start();
+		gui_setState(GuiState::NetworkStart);
+		return;
+	}
+	if (launchMode == library::LaunchMode::Resume)
+	{
+		if (action == library::AutoLoadAction::RejectResume || !dc_loadstateForPath(resumePath))
+		{
+			// Reject before a network handshake, and never autosave over a failed Resume.
+			gui_stop_game("", false);
+			gui_error(!stateAllowed || networkStartup
+					? T("Save states cannot be resumed in the current mode. Choose Start Fresh to play.")
+					: T("The selected save state could not be loaded. Choose Start Fresh to play."));
+			return;
+		}
+		gui_setState(GuiState::Closed);
+		return;
+	}
+	if (action == library::AutoLoadAction::StartFresh)
 	{
 		gui_setState(GuiState::Closed);
 		return;
 	}
 
-	if (config::AutoLoadState)
+	if (action == library::AutoLoadAction::Load)
 	{
 		dc_loadstate(autoSaveSlot);
 		gui_setState(GuiState::Closed);
@@ -747,31 +896,20 @@ static void render_exit_save_dialog()
 	}
 
 	const bool exitEmulator = exitSaveDialogAction == ExitSaveDialogAction::ExitEmulator;
+	const char* message = exitEmulator ? T("Do you want to save state before exiting the emulator?")
+			: T("Do you want to save state before returning to the library?");
+	const char* saveAndExit = T("Save & Exit");
+	const char* exitWithoutSaving = T("Exit Without Saving");
+	const char* cancelButton = T("Cancel");
+	exit_prompt::sizeNextWindow(message, saveAndExit, exitWithoutSaving, cancelButton);
 	const std::string exitGamePopup = std::string(exitEmulator ? T("Exit Emulator?") : T("Exit Game?")) + "###Exit Save Prompt";
 	if (ImGui::BeginPopupModal(exitGamePopup.c_str(), NULL,
 		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar))
 	{
-		ImGui::TextUnformatted(exitEmulator
-			? T("Do you want to save state before exiting the emulator?")
-			: T("Do you want to save state before returning to the library?"));
-		ImGui::NewLine();
-
-		// Button styling (consistent with existing dialogs)
-		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(uiScaled(20), ImGui::GetStyle().ItemSpacing.y));
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 10));
-		const char *saveAndExit = T("Save & Exit");
-		const char *exitWithoutSaving = T("Exit Without Saving");
-		const char *cancelButton = T("Cancel");
-		const float buttonWidth = std::max({
-			ImGui::CalcTextSize(saveAndExit).x,
-			ImGui::CalcTextSize(exitWithoutSaving).x,
-			ImGui::CalcTextSize(cancelButton).x
-		}) + ImGui::GetStyle().FramePadding.x * 2 + uiScaled(24.f);
-
 		// Check if save is allowed
 		bool canSave = dc_savestateAllowed();
-
-		if (ImGui::Button(saveAndExit, ImVec2(buttonWidth, 0)))
+		const auto choice = exit_prompt::drawChoices(message, saveAndExit, exitWithoutSaving, cancelButton);
+		if (choice == exit_prompt::Choice::Save)
 		{
 			if (canSave)
 			{
@@ -785,15 +923,13 @@ static void render_exit_save_dialog()
 				ImGui::OpenPopup(Tnop("Save Not Allowed"));
 			}
 		}
-		ImGui::SameLine();
-		if (ImGui::Button(exitWithoutSaving, ImVec2(buttonWidth, 0)))
+		if (choice == exit_prompt::Choice::Discard)
 		{
 			ImGui::CloseCurrentPopup();
 			showExitSaveDialog = false;
 			finish_exit_request(exitEmulator, false);
 		}
-		ImGui::SameLine();
-		if (ImGui::Button(cancelButton, ImVec2(buttonWidth, 0)))
+		if (choice == exit_prompt::Choice::Cancel)
 		{
 			ImGui::CloseCurrentPopup();
 			showExitSaveDialog = false;
@@ -818,7 +954,6 @@ static void render_exit_save_dialog()
 			ImGui::EndPopup();
 		}
 
-		ImGui::PopStyleVar(2);
 		ImGui::EndPopup();
 	}
 }
@@ -852,7 +987,7 @@ static void render_auto_load_dialog()
 		const int autoSaveSlot = dc_getAutoSaveSlot();
 		const time_t savestateDate = dc_getStateCreationDate(autoSaveSlot);
 		if (savestateDate != 0)
-			ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.75f, 1.f), "%s", timeToShortDateTimeString(savestateDate).c_str());
+			ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", timeToShortDateTimeString(savestateDate).c_str());
 
 		ImGui::Spacing();
 		ImguiStateTexture savestatePic(autoSaveSlot);
@@ -912,6 +1047,7 @@ static void gui_display_commands()
 		GameMedia game;
 		game.path = settings.content.path;
 		game.fileName = settings.content.fileName;
+		game.arcade = settings.platform.isArcade();
 		GameBoxart art = boxart.getBoxart(game);
 		ImguiFileTexture tex(art.boxartPath);
 		// Use a fallback image when artwork is unavailable
@@ -925,7 +1061,7 @@ static void gui_display_commands()
 			ImGui::Text("%s", art.name.c_str());
 			ImGui::PopFont();
 			{
-				ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 0.75f, 1.f));
+				ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 				ImGui::TextWrapped("%s", art.fileName.c_str());
 				if (!art.arcade && !art.uniqueId.empty())
 					ImGui::Text(T("UID: %s"), art.uniqueId.c_str());
@@ -1038,11 +1174,10 @@ static void gui_display_commands()
 			if (ImGui::ArrowButton("##next-slot", ImGuiDir_Right))
 				gui_cycleSaveStateSlot(1);
 			{
-				ImVec4 gray(0.75f, 0.75f, 0.75f, 1.f);
 				if (savestateDate == 0)
-					ImGui::TextColored(gray, "%s", T("Empty"));
+					ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", T("Empty"));
 				else
-					ImGui::TextColored(gray, "%s", timeToShortDateTimeString(savestateDate).c_str());
+					ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", timeToShortDateTimeString(savestateDate).c_str());
 			}
 			savestatePic.draw(ScaledVec2(buttonWidth, 0.f));
 		}
@@ -1114,7 +1249,7 @@ static void contentpath_warning_popup()
         if (ImGui::BeginPopupModal(incorrectContentPopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
         {
             ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + uiScaled(400.f));
-            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned);
+            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned.load());
 			{
 				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(16, 3));
 				float currentwidth = ImGui::GetContentRegionAvail().x;
@@ -1153,7 +1288,7 @@ static void contentpath_warning_popup()
             	config::ContentPath.get().clear();
                 config::ContentPath.get().push_back(selection);
             }
-            scanner.refresh();
+            gui_refresh_files();
             return true;
         });
     }
@@ -1220,6 +1355,25 @@ static void gameTooltip(const std::string& tip)
 
 static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animationClock);
 
+static ImVec4 blendThemeColor(ImGuiCol base, ImGuiCol accent, float accentWeight, float alpha = 1.0f)
+{
+	const ImVec4 a = ImGui::GetStyle().Colors[base];
+	const ImVec4 b = ImGui::GetStyle().Colors[accent];
+	return ImVec4(a.x + (b.x - a.x) * accentWeight,
+			a.y + (b.y - a.y) * accentWeight,
+			a.z + (b.z - a.z) * accentWeight, alpha);
+}
+
+static ImVec4 themeStatusColor(const char *role, const ImVec4& semantic, const char *widget = "media.status")
+{
+	const ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
+	constexpr float semanticWeight = 0.62f;
+	const ImVec4 fallback(accent.x + (semantic.x - accent.x) * semanticWeight,
+			accent.y + (semantic.y - accent.y) * semanticWeight,
+			accent.z + (semantic.z - accent.z) * semanticWeight, 1.0f);
+	return CustomTheme::roleColor(role, fallback, widget);
+}
+
 static const char *game_info_value(const std::string& value)
 {
 	return value.empty() ? T("Unknown") : value.c_str();
@@ -1244,8 +1398,8 @@ static std::string format_game_info_release_date(const std::string& value)
 
 static void draw_game_info_stat(const char *label, const std::string& value)
 {
-	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.52f, 0.70f, 0.82f, 1.0f), "%s", T(label));
+	ImGui::PushFont(game_info_body_font(), uiScaled(17.f));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T(label));
 	ImGui::TextWrapped("%s", game_info_value(value));
 	ImGui::PopFont();
 }
@@ -1255,6 +1409,7 @@ struct GameInfoMediaEntry
 	const char *label;
 	std::string path;
 	bool selected = false;
+	bool required = false; // Only missing assets actually consumed by the hover UI are shown.
 };
 
 struct HoverGameInfoCache
@@ -1273,15 +1428,15 @@ struct HoverGameInfoCache
 	std::string primaryImagePath;
 	std::string title;
 	int selectedMediaIndex = 0;
+	bool mediaPopupOpen = false;
 	bool ready = false;
 };
 
 static void draw_game_info_media_label(const char *label, bool present)
 {
-	const ImVec4 presentColor(0.35f, 0.95f, 0.45f, 1.0f);
-	const ImVec4 missingColor(0.45f, 0.45f, 0.52f, 1.0f);
-	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(present ? presentColor : missingColor, "%s", label);
+	ImGui::PushFont(game_info_body_font(), uiScaled(17.f));
+	ImGui::TextColored(present ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
+			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status"), "%s", label);
 	const bool hasRoomForNextLabel = ImGui::GetContentRegionAvail().x > ImGui::CalcTextSize("Title Screen").x + uiScaled(18.0f);
 	ImGui::PopFont();
 	if (hasRoomForNextLabel)
@@ -1380,16 +1535,21 @@ static bool draw_game_info_image_cover_cropped(const std::string& path, ImDrawLi
 static std::vector<GameInfoMediaEntry> make_game_info_media_entries(const HoverGameInfoCache& cache)
 {
 	std::vector<GameInfoMediaEntry> entries {
-		{ "Mix", cache.mixImagePath, false },
-		{ "Cover", !cache.coverPath.empty() ? cache.coverPath : cache.art.boxartPath, false },
+		{ "Mix", cache.mixImagePath, false, true },
+		{ "Cover", !cache.coverPath.empty() ? cache.coverPath : cache.art.boxartPath, false, true },
 		{ "Case", cache.casePath, false },
 		{ "Screenshot", cache.screenshotPath, false },
-		{ "Marquee", cache.titleImagePath, false },
+		{ "Title Logo", cache.titleImagePath, false, true },
 		{ "Title Screen", cache.titleScreenPath, false },
 		{ "Fan Art", cache.fanArtPath, false },
 		{ "Physical", cache.physicalPath, false },
 		{ "Manual", cache.manualPath, false },
 	};
+	// Optional images remain browsable when already available. Their absence does
+	// not mean the baseline view needs a scrape of every supported media category.
+	entries.erase(std::remove_if(entries.begin(), entries.end(), [](const auto& entry) {
+		return !entry.required && entry.path.empty();
+	}), entries.end());
 	if (!entries.empty())
 		entries[std::clamp(cache.selectedMediaIndex, 0, (int)entries.size() - 1)].selected = true;
 	return entries;
@@ -1437,20 +1597,19 @@ static std::string best_game_info_hero_background_path(const HoverGameInfoCache&
 	return {};
 }
 
-static void draw_game_info_chip(const std::string& text)
+static void draw_game_info_chip(const std::string& text, float scale)
 {
 	if (text.empty())
 		return;
-	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, uiScaled(10.0f));
-	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ScaledVec2(10.0f, 4.0f));
-	ImguiStyleColor button(ImGuiCol_Button, ImVec4(0.06f, 0.12f, 0.16f, 0.92f));
-	ImguiStyleColor buttonHovered(ImGuiCol_ButtonHovered, ImVec4(0.08f, 0.18f, 0.22f, 0.95f));
-	ImguiStyleColor buttonActive(ImGuiCol_ButtonActive, ImVec4(0.08f, 0.18f, 0.22f, 0.95f));
-	ImguiStyleColor textColor(ImGuiCol_Text, ImVec4(0.72f, 0.86f, 0.92f, 1.0f));
+	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, 10.f * scale);
+	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ImVec2(10.f * scale, 4.f * scale));
+	ImguiStyleColor button(ImGuiCol_Button, blendThemeColor(ImGuiCol_FrameBg, ImGuiCol_ButtonActive, 0.24f, 0.92f));
+	ImguiStyleColor buttonHovered(ImGuiCol_ButtonHovered, blendThemeColor(ImGuiCol_FrameBgHovered, ImGuiCol_ButtonActive, 0.38f, 0.95f));
+	ImguiStyleColor buttonActive(ImGuiCol_ButtonActive, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
 	ImGui::Button(text.c_str());
 }
 
-static void draw_game_info_chip_row(const GameMedia& game)
+static void draw_game_info_chip_row(const GameMedia& game, float scale)
 {
 	std::vector<std::string> chips;
 	if (!game.players.empty())
@@ -1477,7 +1636,7 @@ static void draw_game_info_chip_row(const GameMedia& game)
 			{
 				if (i != 0)
 					ImGui::SameLine();
-				draw_game_info_chip(chips[i]);
+				draw_game_info_chip(chips[i], scale);
 			}
 			break;
 		}
@@ -1488,12 +1647,12 @@ static void draw_game_info_chip_row(const GameMedia& game)
 static bool draw_game_info_badge(const GameInfoMediaEntry& media, int index)
 {
 	const bool found = !media.path.empty();
-	ImVec4 bg = media.selected ? ImVec4(0.08f, 0.34f, 0.45f, 1.0f)
-			: found ? ImVec4(0.04f, 0.20f, 0.10f, 0.88f)
-			: ImVec4(0.13f, 0.14f, 0.16f, 0.84f);
-	ImVec4 text = media.selected ? ImVec4(0.90f, 0.98f, 1.0f, 1.0f)
-			: found ? ImVec4(0.32f, 0.94f, 0.48f, 1.0f)
-			: ImVec4(0.50f, 0.53f, 0.58f, 1.0f);
+	const ImVec4 bg = media.selected ? blendThemeColor(ImGuiCol_Button, ImGuiCol_ButtonActive, 0.85f)
+			: found ? blendThemeColor(ImGuiCol_FrameBg, ImGuiCol_ButtonActive, 0.28f, 0.88f)
+			: ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+	const ImVec4 text = media.selected ? ImGui::GetStyle().Colors[ImGuiCol_Text]
+			: found ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
+			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status");
 
 	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, uiScaled(11.0f));
 	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ScaledVec2(9.0f, 4.0f));
@@ -1523,56 +1682,66 @@ static int draw_game_info_badge_wrap(const std::vector<GameInfoMediaEntry>& medi
 	return clickedIndex;
 }
 
-static void draw_game_info_detail_row(const char *label, const std::string& value)
+static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameMedia& game, float width, float height, float scale)
 {
-	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T(label));
-	ImGui::SameLine(uiScaled(110.0f));
-	ImGui::TextColored(ImVec4(0.86f, 0.89f, 0.92f, 1.0f), "%s", game_info_value(value));
-	ImGui::PopFont();
-}
-
-static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameMedia& game, float width)
-{
-	const ImVec2 heroSize(width, uiScaled(144.0f));
+	const auto scaled = [scale](float value) { return value * scale; };
+	const auto size = [scale](float x, float y) { return ImVec2(x * scale, y * scale); };
+	const ImVec2 heroSize(width, height);
 	const ImVec2 p = ImGui::GetCursorScreenPos();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(p + ScaledVec2(0.0f, 4.0f), p + heroSize + ScaledVec2(0.0f, 4.0f),
-			IM_COL32(0, 0, 0, 120), uiScaled(14.0f));
-	dl->AddRectFilled(p, p + heroSize, IM_COL32(5, 8, 11, 245), uiScaled(14.0f));
+	dl->AddRectFilled(p + size(0.0f, 4.0f), p + heroSize + size(0.0f, 4.0f),
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_BorderShadow), 0.45f), scaled(14.0f));
+	dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.95f), scaled(14.0f));
 	if (draw_game_info_image_cover_cropped(best_game_info_hero_background_path(cache), dl, p, p + heroSize, IM_COL32(255, 255, 255, 62)))
-		dl->AddRectFilled(p, p + heroSize, IM_COL32(0, 0, 0, 142), uiScaled(14.0f));
-	dl->AddRectFilled(ImVec2(p.x, p.y + heroSize.y - uiScaled(48.0f)), p + heroSize,
-			IM_COL32(0, 0, 0, 112), uiScaled(14.0f));
-	dl->AddRectFilled(p + ScaledVec2(24.0f, 16.0f), ImVec2(p.x + heroSize.x - uiScaled(24.0f), p.y + uiScaled(84.0f)),
-			IM_COL32(0, 170, 220, 24), uiScaled(18.0f));
-	dl->AddRect(p, p + heroSize, IM_COL32(18, 145, 205, 135), uiScaled(14.0f), 0, uiScaled(1.0f));
+		dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f), scaled(14.0f));
+	dl->AddRectFilled(ImVec2(p.x, p.y + heroSize.y - scaled(48.0f)), p + heroSize,
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.44f), scaled(14.0f));
+	dl->AddRectFilled(p + size(24.0f, 16.0f), ImVec2(p.x + heroSize.x - scaled(24.0f), p.y + scaled(84.0f)),
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_HeaderActive), 0.12f), scaled(18.0f));
+	dl->AddRect(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.82f), scaled(14.0f), 0, scaled(1.0f));
 
 	if (ImGui::BeginChild("##libraryHoverHero", heroSize, false,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 	{
-		ImGui::SetCursorPosY(uiScaled(14.0f));
-		ImVec2 titleDrawSize;
+		const float chipY = height - scaled(38.f);
+		ImGui::SetCursorPosY(scaled(10.f));
+		const ImVec2 titlePos = ImGui::GetCursorPos();
+		const float titleWidth = ImGui::GetContentRegionAvail().x;
+		const float titleHeight = std::max(1.f, chipY - titlePos.y - scaled(6.f));
 		const bool drewLogo = draw_game_info_image_contained(cache.titleImagePath,
-				ImVec2(ImGui::GetContentRegionAvail().x, uiScaled(78.0f)),
-				ImVec2(std::min(width * 0.68f, uiScaled(680.0f)), uiScaled(78.0f)),
-				&titleDrawSize);
+				ImVec2(titleWidth, titleHeight), ImVec2(std::min(titleWidth, scaled(680.f)), titleHeight));
 		if (!drewLogo)
 		{
-			ImGui::PushFont(game_info_title_font());
-			const ImVec2 textSize = ImGui::CalcTextSize(cache.title.c_str(), nullptr, false, ImGui::GetContentRegionAvail().x);
-			ImGui::SetCursorPosX(std::max(uiScaled(10.0f), (ImGui::GetContentRegionAvail().x - textSize.x) * 0.5f));
-			ImGui::TextWrapped("%s", cache.title.c_str());
+			// The image helper reserves its rectangle even when no texture exists.
+			// Reuse that rectangle for the text fallback rather than drawing below it.
+			float fontSize = scaled(21.f);
+			ImVec2 textSize;
+			do {
+				ImGui::PushFont(game_info_title_font(), fontSize);
+				textSize = ImGui::CalcTextSize(cache.title.c_str(), nullptr, false, titleWidth);
+				ImGui::PopFont();
+				if (textSize.y <= titleHeight || fontSize <= scaled(14.f)) break;
+				fontSize -= scale;
+			} while (true);
+			ImGui::SetCursorPos(titlePos + ImVec2(std::max(0.f, (titleWidth - textSize.x) * 0.5f),
+					std::max(0.f, (titleHeight - textSize.y) * 0.5f)));
+			ImGui::PushFont(game_info_title_font(), fontSize);
+			ImGui::PushTextWrapPos(titlePos.x + titleWidth);
+			ImGui::TextUnformatted(cache.title.c_str());
+			ImGui::PopTextWrapPos();
 			ImGui::PopFont();
 		}
-		ImGui::SetCursorPosY(uiScaled(106.0f));
-		draw_game_info_chip_row(game);
+		ImGui::SetCursorPosY(chipY);
+		ImGui::PushFont(game_info_body_font(), scaled(16.f));
+		draw_game_info_chip_row(game, scale);
+		ImGui::PopFont();
 	}
 	ImGui::EndChild();
 }
 
-static void draw_library_hover_media_card(const HoverGameInfoCache& cache, const std::vector<GameInfoMediaEntry>& mediaEntries, float width, float height)
+static void draw_library_hover_media_card(const std::vector<GameInfoMediaEntry>& mediaEntries, float width, float height, float scale)
 {
+	const auto scaled = [scale](float value) { return value * scale; };
 	if (!ImGui::BeginChild("##libraryHoverMedia", ImVec2(width, height), true,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 	{
@@ -1580,77 +1749,80 @@ static void draw_library_hover_media_card(const HoverGameInfoCache& cache, const
 		return;
 	}
 
-	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Media Preview"));
+	ImGui::PushFont(game_info_body_font(), scaled(17.f));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Media Preview"));
 	ImGui::PopFont();
 	const GameInfoMediaEntry *selected = selected_game_info_media(mediaEntries);
 	const std::string selectedPath = selected != nullptr ? selected->path : selected_game_info_media_path(mediaEntries);
 	const char *selectedLabel = selected != nullptr ? selected->label : T("Media");
 	const bool found = !selectedPath.empty();
-	const float previewHeight = std::max(uiScaled(180.0f), height - uiScaled(158.0f));
+	const float previewHeight = std::max(1.f, ImGui::GetContentRegionAvail().y - scaled(96.f));
 	const ImVec2 previewSize(ImGui::GetContentRegionAvail().x, previewHeight);
 	const ImVec2 previewPos = ImGui::GetCursorScreenPos();
 	ImDrawList *dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(previewPos, previewPos + previewSize, IM_COL32(4, 6, 8, 180), uiScaled(9.0f));
-	dl->AddRect(previewPos, previewPos + previewSize, IM_COL32(18, 145, 205, 80), uiScaled(9.0f));
-	if (!draw_game_info_image_contained(selectedPath, previewSize, previewSize - ScaledVec2(14.0f, 14.0f)))
+	dl->AddRectFilled(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.72f), scaled(9.0f));
+	dl->AddRect(previewPos, previewPos + previewSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_Border), 0.55f), scaled(9.0f));
+	if (!draw_game_info_image_contained(selectedPath, previewSize, ImVec2(std::max(1.f, previewSize.x - scaled(14.f)), std::max(1.f, previewSize.y - scaled(14.f)))))
 	{
 		const std::string missingText = std::string(selectedLabel) + " missing";
 		const char *missing = missingText.c_str();
 		const ImVec2 textSize = ImGui::CalcTextSize(missing);
-		dl->AddCircle(previewPos + previewSize * 0.5f - ScaledVec2(0.0f, 22.0f), uiScaled(14.0f),
-				IM_COL32(120, 128, 140, 220), 32, uiScaled(2.0f));
-		dl->AddText(previewPos + (previewSize - textSize) * 0.5f + ScaledVec2(0.0f, 18.0f),
-				IM_COL32(135, 140, 150, 255), missing);
+		dl->AddCircle(previewPos + previewSize * 0.5f - ImVec2(0.f, scaled(22.f)), scaled(14.0f),
+				alphaOverride(ImGui::GetColorU32(ImGuiCol_TextDisabled), 0.86f), 32, scaled(2.0f));
+		dl->AddText(previewPos + (previewSize - textSize) * 0.5f + ImVec2(0.f, scaled(18.f)),
+				ImGui::GetColorU32(ImGuiCol_TextDisabled), missing);
 	}
 
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
-	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T("Current Media"));
-	ImGui::SameLine(uiScaled(128.0f));
-	ImGui::TextColored(ImVec4(0.86f, 0.89f, 0.92f, 1.0f), "%s", selectedLabel);
-	ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T("Status"));
-	ImGui::SameLine(uiScaled(128.0f));
-	ImGui::TextColored(found ? ImVec4(0.32f, 0.94f, 0.48f, 1.0f) : ImVec4(0.50f, 0.53f, 0.58f, 1.0f),
+	ImGui::PushFont(game_info_body_font(), scaled(17.f));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("Current Media"));
+	ImGui::SameLine(scaled(128.0f));
+	ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", selectedLabel);
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", T("Status"));
+	ImGui::SameLine(scaled(128.0f));
+	ImGui::TextColored(found ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
+			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status"),
 			"%s", found ? T("Found") : T("Missing"));
-	if (found)
-	{
-		ImGui::TextColored(ImVec4(0.44f, 0.64f, 0.72f, 1.0f), "%s", T("File"));
-		ImGui::SameLine(uiScaled(128.0f));
-		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-		ImGui::TextColored(ImVec4(0.66f, 0.72f, 0.76f, 1.0f), "%s", game_info_path_filename(selectedPath).c_str());
-		ImGui::PopTextWrapPos();
-	}
+
 	ImGui::PopFont();
 	ImGui::EndChild();
 }
 
-static void draw_library_hover_description_card(const GameMedia& game, float height)
+static void draw_library_hover_description_card(const GameMedia& game, float height, float scale)
 {
-	if (!ImGui::BeginChild("##libraryHoverDetails", ImVec2(0.0f, height), true))
+	if (!ImGui::BeginChild("##libraryHoverDetails", ImVec2(0.0f, height), true, ImGuiWindowFlags_DragScrolling))
 	{
 		ImGui::EndChild();
 		return;
 	}
+	scrollWindowFromTouch();
 
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Details"));
+	ImGui::PushFont(game_info_body_font(), 17.f * scale);
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Details"));
 	ImGui::Spacing();
-	draw_game_info_detail_row("Players", game.players);
-	draw_game_info_detail_row("Released", format_game_info_release_date(game.releaseDate));
-	draw_game_info_detail_row("Genre", game.genre);
-	draw_game_info_detail_row("Developer", game.developer);
+	// Wrap metadata values so a long developer/publisher cannot leave the panel.
+	for (const auto& row : {std::pair{T("Players"), game.players},
+			std::pair{T("Released"), format_game_info_release_date(game.releaseDate)},
+			std::pair{T("Genre"), game.genre}, std::pair{T("Developer"), game.developer},
+			std::pair{T("Publisher"), game.publisher}})
+	{
+		ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.35f), "%s", row.first);
+		ImGui::SameLine(100.f * scale);
+		ImGui::TextWrapped("%s", game_info_value(row.second));
+	}
 
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Description"));
+	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Description"));
 	ImGui::Spacing();
-	const float wrapWidth = std::min(ImGui::GetContentRegionAvail().x, uiScaled(760.0f));
-	if (ImGui::BeginChild("##libraryHoverDescriptionText", ImVec2(0.0f, 0.0f), false))
+	const float wrapWidth = std::min(ImGui::GetContentRegionAvail().x, 760.f * scale);
+	if (ImGui::BeginChild("##libraryHoverDescriptionText", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_DragScrolling))
 	{
-		ImGui::PushFont(game_info_body_font());
+		scrollWindowFromTouch();
+		ImGui::PushFont(game_info_body_font(), 17.f * scale);
 		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapWidth);
 		if (game.desc.empty())
 			ImGui::TextDisabled("%s", T("No description available."));
@@ -1660,35 +1832,40 @@ static void draw_library_hover_description_card(const GameMedia& game, float hei
 		ImGui::PopFont();
 	}
 	ImGui::EndChild();
+	ImGui::PopFont();
 	ImGui::EndChild();
 }
 
-static int draw_library_hover_status_strip(const std::vector<GameInfoMediaEntry>& mediaEntries)
+static int draw_library_hover_status_strip(const std::vector<GameInfoMediaEntry>& mediaEntries, float height, float scale, bool& popupOpen)
 {
-	int foundCount = 0;
-	for (const GameInfoMediaEntry& media : mediaEntries)
-		if (!media.path.empty())
-			foundCount++;
-
-	if (!ImGui::BeginChild("##libraryHoverMediaStatus", ImVec2(0.0f, uiScaled(76.0f)), true,
+	if (!ImGui::BeginChild("##libraryHoverMediaStatus", ImVec2(0.f, height), true,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 	{
 		ImGui::EndChild();
 		return -1;
 	}
-
-	ImGui::PushFont(game_info_body_font());
-	ImGui::TextColored(ImVec4(0.45f, 0.66f, 0.74f, 1.0f), "%s", T("Media"));
+	ImGui::PushFont(game_info_body_font(), 16.f * scale);
+	const int foundCount = static_cast<int>(std::count_if(mediaEntries.begin(), mediaEntries.end(),
+			[](const auto& media) { return !media.path.empty(); }));
+	ImGui::Text(T("Media: %d / %d available"), foundCount, static_cast<int>(mediaEntries.size()));
 	ImGui::SameLine();
-	ImGui::TextColored(ImVec4(0.70f, 0.78f, 0.82f, 1.0f), "%d / %d found", foundCount, (int)mediaEntries.size());
+	const auto* selected = selected_game_info_media(mediaEntries);
+	ImGui::SetNextItemWidth(std::max(1.f, ImGui::GetContentRegionAvail().x));
+	int clicked = -1;
+	popupOpen = ImGui::BeginCombo("##hoverMedia", selected ? selected->label : T("Media"));
+	if (popupOpen)
+	{
+		for (size_t i = 0; i < mediaEntries.size(); ++i)
+		{
+			const auto& entry = mediaEntries[i];
+			const std::string label = std::string(entry.label) + (entry.path.empty() ? " (not available yet)" : "");
+			if (ImGui::Selectable(label.c_str(), entry.selected)) clicked = static_cast<int>(i);
+		}
+		ImGui::EndCombo();
+	}
 	ImGui::PopFont();
-	int clickedIndex = -1;
-	if (ImGui::BeginChild("##libraryHoverMediaBadges", ImVec2(0.0f, uiScaled(34.0f)), false,
-			ImGuiWindowFlags_HorizontalScrollbar))
-		clickedIndex = draw_game_info_badge_wrap(mediaEntries);
 	ImGui::EndChild();
-	ImGui::EndChild();
-	return clickedIndex;
+	return clicked;
 }
 
 static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart* displayArt = nullptr)
@@ -1725,7 +1902,7 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	const bool panelHovered = hoveredGameId == gameId
 			&& mousePos.x >= hoverPanelMin.x && mousePos.x <= hoverPanelMax.x
 			&& mousePos.y >= hoverPanelMin.y && mousePos.y <= hoverPanelMax.y;
-	if (!itemHovered && !panelHovered)
+	if (!itemHovered && !panelHovered && !(hoverCache.gameId == gameId && hoverCache.mediaPopupOpen))
 		return;
 
 	const float mouseDeltaX = mousePos.x - hoverStartMousePos.x;
@@ -1751,11 +1928,13 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverCache.screenshotPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Screenshot);
 		hoverCache.fanArtPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::FanArt);
 		hoverCache.titleScreenPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::TitleScreen);
-		hoverCache.physicalPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Physical);
+		hoverCache.physicalPath = boxart.getDiscArtPath(game);
 		hoverCache.manualPath = !game.manualPath.empty()
 				? game.manualPath : boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Manual);
 		hoverCache.primaryImagePath = !hoverCache.mixImagePath.empty() ? hoverCache.mixImagePath : hoverCache.art.boxartPath;
-		hoverCache.title = game.name;
+		GameMedia details = game;
+		hoverCache.art.applyMetadata(details);
+		hoverCache.title = details.name;
 		if (hoverCache.title.empty() || hoverCache.title == game.fileName)
 			hoverCache.title = hoverCache.art.name;
 		if (hoverCache.title.empty())
@@ -1768,8 +1947,13 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 
 	const ImGuiViewport *viewport = ImGui::GetMainViewport();
 	const ImVec2 displaySize = viewport->Size;
-	const float hoverWidth = std::clamp(displaySize.x * 0.72f, uiScaled(820.0f), uiScaled(1180.0f));
-	const float hoverHeight = std::clamp(displaySize.y * 0.74f, uiScaled(560.0f), uiScaled(720.0f));
+	// Fit the complete panel to the viewport before assigning child heights. A
+	// minimum child size must never force the media controls below the window.
+	const float scale = std::min(uiScaled(1.f), std::max(0.65f,
+			std::min(displaySize.x / 760.f, displaySize.y / 620.f)));
+	const float margin = 12.f * scale;
+	const float hoverWidth = std::max(1.f, std::min(displaySize.x - margin * 2.f, 1180.f * scale));
+	const float hoverHeight = std::max(1.f, std::min(displaySize.y - margin * 2.f, 720.f * scale));
 	if (itemHovered || !hasHoverPanelPos)
 	{
 		hoverPanelPos = ImGui::GetMousePos() + ScaledVec2(18.0f, 18.0f);
@@ -1781,22 +1965,27 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverPanelPos.y = std::max(viewport->Pos.y + uiScaled(12.0f), hoverPanelPos.y);
 		hasHoverPanelPos = true;
 	}
+	hoverPanelPos.x = std::clamp(hoverPanelPos.x, viewport->Pos.x + margin,
+			viewport->Pos.x + std::max(margin, displaySize.x - hoverWidth - margin));
+	hoverPanelPos.y = std::clamp(hoverPanelPos.y, viewport->Pos.y + margin,
+			viewport->Pos.y + std::max(margin, displaySize.y - hoverHeight - margin));
 	hoverPanelMin = hoverPanelPos;
 	hoverPanelMax = hoverPanelPos + ImVec2(hoverWidth, hoverHeight);
 
-	ImGui::GetBackgroundDrawList()->AddRectFilled(viewport->Pos, viewport->Pos + viewport->Size, IM_COL32(0, 0, 0, 138));
+	ImGui::GetBackgroundDrawList()->AddRectFilled(viewport->Pos, viewport->Pos + viewport->Size,
+			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f));
 	ImGui::SetNextWindowPos(hoverPanelPos, ImGuiCond_Always);
 	ImGui::SetNextWindowSize(ImVec2(hoverWidth, hoverHeight), ImGuiCond_Always);
-	ImguiStyleVar windowPadding(ImGuiStyleVar_WindowPadding, ScaledVec2(18.0f, 16.0f));
-	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ScaledVec2(10.0f, 6.0f));
-	ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ScaledVec2(12.0f, 8.0f));
+	ImguiStyleVar windowPadding(ImGuiStyleVar_WindowPadding, ImVec2(18.f * scale, 16.f * scale));
+	ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ImVec2(10.f * scale, 6.f * scale));
+	ImguiStyleVar itemSpacing(ImGuiStyleVar_ItemSpacing, ImVec2(12.f * scale, 8.f * scale));
 	ImguiStyleVar windowRounding(ImGuiStyleVar_WindowRounding, uiScaled(12.0f));
 	ImguiStyleVar childRounding(ImGuiStyleVar_ChildRounding, uiScaled(10.0f));
 	ImguiStyleVar frameRounding(ImGuiStyleVar_FrameRounding, uiScaled(8.0f));
 	ImguiStyleVar borderSize(ImGuiStyleVar_WindowBorderSize, 0.0f);
-	ImguiStyleColor borderColor(ImGuiCol_Border, ImVec4(0.10f, 0.55f, 0.82f, 0.55f));
-	ImguiStyleColor childBgColor(ImGuiCol_ChildBg, ImVec4(0.035f, 0.040f, 0.045f, 0.94f));
-	ImguiStyleColor windowBgColor(ImGuiCol_WindowBg, ImVec4(0.015f, 0.018f, 0.022f, 0.97f));
+	ImguiStyleColor borderColor(ImGuiCol_Border, blendThemeColor(ImGuiCol_Border, ImGuiCol_HeaderActive, 0.35f, 0.65f));
+	ImguiStyleColor childBgColor(ImGuiCol_ChildBg, blendThemeColor(ImGuiCol_WindowBg, ImGuiCol_ChildBg, 0.45f, 0.96f));
+	ImguiStyleColor windowBgColor(ImGuiCol_WindowBg, ImGui::GetStyle().Colors[ImGuiCol_WindowBg]);
 	const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration
 			| ImGuiWindowFlags_NoSavedSettings
 			| ImGuiWindowFlags_NoNav
@@ -1809,19 +1998,32 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 
 	const float width = ImGui::GetContentRegionAvail().x;
 	const std::vector<GameInfoMediaEntry> mediaEntries = make_game_info_media_entries(hoverCache);
-	draw_library_hover_hero(hoverCache, game, width);
+	GameMedia details = game;
+	hoverCache.art.applyMetadata(details);
+	ImGui::PushFont(game_info_body_font(), 17.f * scale);
+	const float contentHeight = ImGui::GetContentRegionAvail().y;
+	const float heroHeight = std::min(144.f * scale, contentHeight * 0.28f);
+	const float statusHeight = std::min(54.f * scale, contentHeight * 0.14f);
+	const float gap = ImGui::GetStyle().ItemSpacing.y;
+	draw_library_hover_hero(hoverCache, details, width, heroHeight, scale);
 
-	ImGui::Spacing();
-	const float mediaWidth = std::clamp(width * 0.31f, uiScaled(300.0f), uiScaled(390.0f));
-	const float statusHeight = uiScaled(76.0f);
-	const float mainHeight = std::max(uiScaled(300.0f), ImGui::GetContentRegionAvail().y - statusHeight - uiScaled(10.0f));
-	draw_library_hover_media_card(hoverCache, mediaEntries, mediaWidth, mainHeight);
-
-	ImGui::SameLine(0.0f, uiScaled(14.0f));
-	draw_library_hover_description_card(game, mainHeight);
-
-	ImGui::Spacing();
-	const int clickedMediaIndex = draw_library_hover_status_strip(mediaEntries);
+	const bool stacked = width < 600.f * scale;
+	const float mainHeight = std::max(1.f, ImGui::GetContentRegionAvail().y - statusHeight - gap * 2.f);
+	if (stacked)
+	{
+		const float mediaHeight = mainHeight * 0.42f;
+		draw_library_hover_media_card(mediaEntries, width, mediaHeight, scale);
+		draw_library_hover_description_card(details, std::max(1.f, mainHeight - mediaHeight - gap), scale);
+	}
+	else
+	{
+		const float mediaWidth = width * 0.36f;
+		draw_library_hover_media_card(mediaEntries, mediaWidth, mainHeight, scale);
+		ImGui::SameLine(0.f, 14.f * scale);
+		draw_library_hover_description_card(details, mainHeight, scale);
+	}
+	const int clickedMediaIndex = draw_library_hover_status_strip(mediaEntries, statusHeight, scale, hoverCache.mediaPopupOpen);
+	ImGui::PopFont();
 	if (clickedMediaIndex >= 0)
 		hoverCache.selectedMediaIndex = clickedMediaIndex;
 	ImGui::End();
@@ -1830,8 +2032,9 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 
 static void gui_display_game_info()
 {
-	const GameMedia game = selectedGameForInfo;
+	GameMedia game = selectedGameForInfo;
 	const GameBoxart art = getLibraryDisplayArtwork(game, 0.0);
+	art.applyMetadata(game);
 	const std::string mixImagePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::MixImage);
 	const std::string titleImagePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Title);
 	const std::string coverPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Cover);
@@ -1839,7 +2042,7 @@ static void gui_display_game_info()
 	const std::string screenshotPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Screenshot);
 	const std::string fanArtPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::FanArt);
 	const std::string titleScreenPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::TitleScreen);
-	const std::string physicalPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Physical);
+	const std::string physicalPath = boxart.getDiscArtPath(game);
 	const std::string manualPath = !game.manualPath.empty()
 			? game.manualPath : boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Manual);
 	const std::string primaryImagePath = !mixImagePath.empty() ? mixImagePath : art.boxartPath;
@@ -1886,8 +2089,9 @@ static void gui_display_game_info()
 		const float rightWidth = std::max(uiScaled(260.0f), contentWidth - leftWidth - ImGui::GetStyle().ItemSpacing.x);
 		const float panelHeight = ImGui::GetContentRegionAvail().y - uiScaled(8.0f);
 
-		if (ImGui::BeginChild("##gameInfoMedia", ImVec2(leftWidth, panelHeight), false))
+		if (ImGui::BeginChild("##gameInfoMedia", ImVec2(leftWidth, panelHeight), false, ImGuiWindowFlags_DragScrolling))
 		{
+			scrollWindowFromTouch();
 			const float previewSize = std::min(leftWidth, panelHeight * 0.78f);
 			if (!draw_game_info_image(primaryImagePath, ImVec2(previewSize, previewSize)))
 			{
@@ -1899,8 +2103,9 @@ static void gui_display_game_info()
 
 		ImGui::SameLine();
 
-		if (ImGui::BeginChild("##gameInfoDetails", ImVec2(rightWidth, panelHeight), false))
+		if (ImGui::BeginChild("##gameInfoDetails", ImVec2(rightWidth, panelHeight), false, ImGuiWindowFlags_DragScrolling))
 		{
+			scrollWindowFromTouch();
 			if (ImGui::BeginTable("##gameInfoStats", 2, ImGuiTableFlags_SizingStretchSame))
 			{
 				ImGui::TableNextColumn();
@@ -1911,6 +2116,8 @@ static void gui_display_game_info()
 				draw_game_info_stat("Genre", game.genre);
 				ImGui::TableNextColumn();
 				draw_game_info_stat("Developer", game.developer);
+				ImGui::TableNextColumn();
+				draw_game_info_stat("Publisher", game.publisher);
 				ImGui::EndTable();
 			}
 
@@ -1975,6 +2182,11 @@ static void updateLibraryLongPress(const GameMedia& game, const std::string& gam
 #endif
 
 #if defined(__ANDROID__)
+	if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+	{
+		resetLibraryLongPress();
+		return;
+	}
 	if (!itemActive)
 		return;
 
@@ -2006,8 +2218,9 @@ static bool gameImageButton(ImguiTexture& texture, const std::string& tooltip, I
 	// general UI scale. ImageButton otherwise inherits scaled FramePadding,
 	// which makes the artwork shrink inside an unchanged library card.
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f, 2.0f));
+	const float radius = CustomTheme::activeLayout().artworkCornerRadius;
 	bool pressed = texture.button("##imagebutton", size, gameName, ImVec4(0, 0, 0, 0), ImVec4(1, 1, 1, 1),
-			fallbackTitleSize);
+			fallbackTitleSize, radius < 0.0f ? 0.0f : uiScaled(radius));
 	ImGui::PopStyleVar();
 
     return pressed;
@@ -2031,7 +2244,11 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	if (game.device)
 		return art;
 
-	art = boxart.getBoxartAndLoad(game);
+	// Automatic Dreamcast downloads are inventoried once by the library batch.
+	// Rendering tiles must not repeat queue/file checks every frame. Keep the
+	// standalone path for arcade scraping and local-only disc-header discovery.
+	art = game.arcade || !config::FetchBoxart
+		? boxart.getBoxartAndLoad(game, false) : boxart.getBoxart(game);
 	const std::string localCoverOverride = boxart.getLibraryCoverMediaPath(game);
 	if (!localCoverOverride.empty())
 		art.boxartPath = localCoverOverride;
@@ -2114,6 +2331,197 @@ static std::string formatLibraryPlaytime(u64 seconds)
 	return strprintf(T("%llus"), value);
 }
 
+static bool drawLibraryFavouriteButton(const GameMedia& game, bool coverOverlay = false, const ImVec2& size = ImVec2(0.0f, 0.0f))
+{
+	if (gui_state == GuiState::SelectDisk || game.device || game.path.empty())
+		return false;
+	const bool favourite = library::isFavourite(game.path, config::LibraryFavourites.get());
+	const char *label = favourite ? T("Remove from favourites") : T("Add to favourites");
+	const ImVec4 favouriteColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
+	if (coverOverlay)
+	{
+		const float scale = size.x / uiScaled(34.0f);
+		ImVec4 buttonColor = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+		ImVec4 hoveredColor = ImGui::GetStyle().Colors[ImGuiCol_FrameBgHovered];
+		ImVec4 activeColor = ImGui::GetStyle().Colors[ImGuiCol_FrameBgActive];
+		ImVec4 borderColor = ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
+		buttonColor.w = 0.92f;
+		hoveredColor.w = 0.98f;
+		activeColor.w = 1.0f;
+		borderColor.w = 0.48f;
+		ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoveredColor);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeColor);
+		ImGui::PushStyleColor(ImGuiCol_Border, borderColor);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(5.0f) * scale);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, scale);
+		ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * scale);
+	}
+	ImGui::PushStyleColor(ImGuiCol_Text, favourite ? favouriteColor : ImGui::GetStyle().Colors[ImGuiCol_Text]);
+	const bool pressed = ImGui::Button((std::string(ICON_FA_STAR) + "##favourite_" + game.path).c_str(), size);
+	ImGui::PopStyleColor();
+	if (coverOverlay)
+		ImGui::PopFont();
+	gameTooltip(label);
+	if (coverOverlay)
+	{
+		ImGui::PopStyleVar(3);
+		ImGui::PopStyleColor(4);
+	}
+	if (!pressed)
+		return false;
+	std::vector<std::string> favourites = config::LibraryFavourites.get();
+	library::setFavourite(game.path, !favourite, favourites);
+	config::LibraryFavourites.set(favourites);
+	config::LibraryFavourites.save();
+	return true;
+}
+
+static bool drawLibraryCoverButton(ImguiTexture& texture, const std::string& tooltip, const ImVec2& size,
+		const std::string& title, float fallbackTitleSize, const GameMedia& game, const GameBoxart *art,
+		float overlayScale, bool& favouritePressed)
+{
+	if (gui_state == GuiState::SelectDisk || game.device || game.path.empty())
+	{
+		const bool pressed = gameImageButton(texture, tooltip, size, title, fallbackTitleSize);
+		updateLibraryLongPress(game, game.path.empty() ? "bios" : game.path, ImGui::IsItemActive());
+		if (ImGui::IsItemHovered())
+			draw_library_game_info_hover(game, art);
+		return pressed;
+	}
+
+	const ImVec2 coverMin = ImGui::GetCursorScreenPos();
+	const ImVec2 buttonSize(uiScaled(34.0f) * overlayScale, uiScaled(34.0f) * overlayScale);
+	const float inset = uiScaled(6.0f) * overlayScale;
+	const ImVec2 starMin(coverMin.x + size.x - buttonSize.x - inset, coverMin.y + inset);
+	ImDrawList *drawList = ImGui::GetWindowDrawList();
+	ImDrawListSplitter splitter;
+	splitter.Split(drawList, 2);
+	splitter.SetCurrentChannel(drawList, 1);
+	ImGui::SetCursorScreenPos(starMin);
+	favouritePressed = drawLibraryFavouriteButton(game, true, buttonSize);
+	splitter.SetCurrentChannel(drawList, 0);
+	ImGui::SetCursorScreenPos(coverMin);
+	const bool pressed = gameImageButton(texture, tooltip, size, title, fallbackTitleSize);
+	const ImVec2 mouse = ImGui::GetIO().MousePos;
+	const bool mouseOverStar = mouse.x >= starMin.x && mouse.x <= starMin.x + buttonSize.x
+			&& mouse.y >= starMin.y && mouse.y <= starMin.y + buttonSize.y;
+	splitter.Merge(drawList);
+	updateLibraryLongPress(game, game.path, ImGui::IsItemActive() && !mouseOverStar);
+	if (!mouseOverStar)
+		draw_library_game_info_hover(game, art);
+	return pressed;
+}
+
+static void startLibraryGame(const GameMedia& game, const GameBoxart& art, bool resume)
+{
+	librarySavestateCacheInvalidated = true;
+	// Recheck on activation: another save may have been written since the card was rendered.
+	const SavestateInfo state = resume ? dc_getLatestStateForGame(game.path) : SavestateInfo{};
+	if (resume && state.path.empty())
+	{
+		gui_error(T("No save state is available for this game. Choose Start Fresh to play."));
+		return;
+	}
+	settings.content.title = art.name;
+	if (settings.content.title.empty() || settings.content.title == game.fileName)
+		settings.content.title = get_file_basename(game.fileName);
+	const std::string path = game.path;
+	scanner.get_mutex().unlock();
+	gui_start_library_game(path, resume, state.path);
+	scanner.get_mutex().lock();
+}
+
+static bool libraryStateThumbnailCacheInvalidated = false;
+
+class LibraryStateThumbnail : public ImguiTexture
+{
+public:
+	LibraryStateThumbnail(const SavestateInfo& state) : path(state.path), modified(state.creationDate) {}
+
+	ImTextureID getId() override
+	{
+		if (path.empty() || modified == 0 || imguiDriver == nullptr)
+			return {};
+		const std::string textureName = "library_state_thumbnail:" + path;
+		static std::vector<Entry> cache;
+		if (libraryStateThumbnailCacheInvalidated)
+		{
+			for (const Entry& entry : cache)
+				imguiDriver->deleteTexture("library_state_thumbnail:" + entry.path);
+			cache.clear();
+			libraryStateThumbnailCacheInvalidated = false;
+		}
+		auto found = std::find_if(cache.begin(), cache.end(), [this](const Entry& entry) { return entry.path == path; });
+		if (found != cache.end())
+		{
+			if (found->modified == modified)
+			{
+				// Keep failed previews cached; retry only when a previously uploaded texture was lost.
+				if (found->id == ImTextureID{})
+					return {};
+				found->id = imguiDriver->getTexture(textureName);
+				if (found->id != ImTextureID{})
+					return found->id;
+				cache.erase(found);
+			}
+			else
+			{
+				imguiDriver->deleteTexture(textureName);
+				cache.erase(found);
+			}
+		}
+		if (cache.size() >= 16)
+		{
+			imguiDriver->deleteTexture("library_state_thumbnail:" + cache.front().path);
+			cache.erase(cache.begin());
+		}
+
+		Entry entry { path, modified, {} };
+		std::vector<u8> pngData;
+		dc_getStateScreenshotForPath(path, pngData);
+		int width = 0, height = 0, channels = 0;
+		if (!pngData.empty() && pngData.size() <= 64 * 1024 * 1024
+				&& stbi_info_from_memory(pngData.data(), static_cast<int>(pngData.size()), &width, &height, &channels)
+				&& width > 0 && height > 0 && width <= 2048 && height <= 2048
+				&& static_cast<u64>(width) * height <= 4'000'000)
+		{
+			stbi_set_flip_vertically_on_load_thread(0);
+			u8 *pixels = stbi_load_from_memory(pngData.data(), static_cast<int>(pngData.size()), &width, &height, &channels, STBI_rgb_alpha);
+			if (pixels != nullptr)
+			{
+				try {
+					entry.id = imguiDriver->updateTextureAndAspectRatio(textureName, pixels, width, height, false);
+				} catch (...) {
+					// Keep artwork visible if the renderer cannot upload the preview.
+				}
+				stbi_image_free(pixels);
+			}
+		}
+		cache.push_back(entry);
+		return entry.id;
+	}
+
+private:
+	struct Entry { std::string path; time_t modified; ImTextureID id; };
+	std::string path;
+	time_t modified;
+};
+
+static void drawLibraryStatePreview(const SavestateInfo& state)
+{
+	if (!ImGui::IsItemHovered())
+		return;
+	LibraryStateThumbnail texture(state);
+	if (texture.getId() != ImTextureID{})
+	{
+		ImGui::BeginTooltip();
+		texture.draw(ImVec2(uiScaled(240.0f), uiScaled(135.0f)));
+		ImGui::EndTooltip();
+	}
+}
+
 static void centerTableCellCursor(const ImVec2& contentSize, float rowContentHeight, bool centerX)
 {
 	ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -2167,18 +2575,471 @@ void gui_load_game()
 }
 #endif
 
+static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& requestedLayout,
+		const SettingsUI::TextFilter& filter, library::View view)
+{
+	const ImVec2 available = ImGui::GetContentRegionAvail();
+	const themes::Layout& layout = themes::responsiveLayout(theme, requestedLayout,
+			available.x / std::max(1.f, available.y));
+	const std::string layoutKey = theme.directory + '/' + layout.id;
+	if (pendingRackLaunch && (layout.mode != "rack" || pendingRackLaunch->layoutKey != layoutKey))
+		pendingRackLaunch.reset();
+	if (pendingRackLaunch && !pendingRackLaunch->visual.texture.empty())
+	{
+		// Give the selected case priority over other shelf textures in the per-frame load budget.
+		ImguiFileTexture(pendingRackLaunch->visual.texture).getId();
+	}
+	std::vector<GameMedia> games;
+	std::vector<library::Entry> libraryEntries;
+	{
+		std::lock_guard<std::mutex> lock(scanner.get_mutex());
+		games = scanner.get_game_list();
+		// Firmware/device entries must not hide the game-folder prompt.
+		if (config::ContentPath.get().empty()) games.clear();
+		if (view == library::View::ContinuePlaying)
+		{
+			static hostfs::SavestateFolders cachedFolders;
+			const auto folders = hostfs::getSavestateFolders();
+			if (librarySavestateCacheInvalidated.exchange(false)
+					|| folders.custom != cachedFolders.custom || folders.data != cachedFolders.data)
+			{
+				cachedFolders = folders;
+				librarySavestateCache.reset([folders](const std::string& path, const std::string& fileName) {
+					return dc_getLatestStateForGame(path, fileName, folders);
+				});
+				libraryStateThumbnailCacheInvalidated = true;
+			}
+		}
+
+		libraryEntries.reserve(games.size());
+		for (const GameMedia& game : games)
+		{
+			const time_t latestStateDate = view == library::View::ContinuePlaying && !game.device
+					? librarySavestateCache.get(game.path, game.fileName).creationDate : 0;
+			libraryEntries.push_back({game.path, game.name, latestStateDate, game.device});
+		}
+	}
+
+	static library::View lastLibraryView = view;
+	if (lastLibraryView != view)
+	{
+		resetLibraryGameInfoHover();
+		lastLibraryView = view;
+	}
+	const std::vector<size_t> candidates = library::selectGames(libraryEntries, view,
+			config::LibraryFavourites.get());
+	std::vector<GameMedia> visibleGames;
+	std::vector<GameBoxart> artwork;
+	std::vector<themes::LibraryItem> items;
+	const auto iconSource = themes::iconArtworkSource(config::ThemeIconMedia.get());
+	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
+	// Resolve each requested media type once per game, including explicit fallbacks.
+	std::vector<std::string> mediaSources;
+	if (layout.mode == "rack")
+		mediaSources.insert(mediaSources.end(), {"cover", "spine"});
+	if (!browserSource.empty())
+		mediaSources.push_back(browserSource);
+	for (const auto& element : layout.elements)
+		if (element.type == "artwork")
+		{
+			if (!element.source.empty())
+				mediaSources.push_back(element.source == "preview" ? layout.previewSource : element.source);
+			if (element.fallback != "default" && element.fallback != "none")
+				mediaSources.push_back(element.fallback);
+			if (!element.requiresArtwork.empty())
+				mediaSources.push_back(element.requiresArtwork);
+		}
+	for (const auto& element : layout.elements)
+		if (element.type == "button" && element.action == "artwork")
+			mediaSources.push_back(element.source);
+	std::sort(mediaSources.begin(), mediaSources.end());
+	mediaSources.erase(std::unique(mediaSources.begin(), mediaSources.end()), mediaSources.end());
+	const double animationClock = getLibraryIconAnimationClock();
+	for (size_t gameIndex : candidates)
+	{
+		GameMedia game = games[gameIndex];
+		GameBoxart art = getLibraryDisplayArtwork(game, animationClock);
+		art.applyMetadata(game);
+		std::string title = art.name.empty() ? game.name : art.name;
+		if (view == library::View::ContinuePlaying)
+		{
+			if (!art.name.empty())
+				title = art.name;
+			if (!art.searchName.empty() && (title.empty() || title == game.fileName
+					|| title == get_file_basename(game.fileName)))
+				title = art.searchName;
+		}
+		const std::string searchable = title + '\n' + game.name;
+		if (!filter.PassFilter(searchable.c_str()))
+			continue;
+
+		themes::LibraryItem item;
+		item.id = game.path.empty() ? "bios" : game.path;
+		item.title = title;
+		item.image = art.boxartPath;
+		item.canFavourite = !game.device && !game.path.empty();
+		item.favourite = item.canFavourite && library::isFavourite(game.path, config::LibraryFavourites.get());
+		item.isGame = item.canFavourite;
+		item.playTimeSeconds = art.playTimeSeconds.value_or(0);
+		item.metadata = {
+			{"title", title}, {"description", game.desc},
+			{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
+			{"players", game.players}, {"system", game.system}, {"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
+			{"productId", art.uniqueId}, {"region", art.region == 0 ? std::string() : formatLibraryRegion(art.region)},
+			{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
+			{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
+			{"lastPlayed", ""}, {"size", formatLibrarySize(game.size)}
+		};
+		const time_t lastPlayed = getLibraryGameLastBooted(game, art.uniqueId);
+		item.lastPlayed = lastPlayed;
+		if (lastPlayed != 0)
+			item.metadata["lastPlayed"] = formatShortDateTime(lastPlayed);
+
+		for (const std::string& source : mediaSources)
+		{
+			if (source == "disc")
+			{
+				// No cover standing in here: the theme's own disc shows until there is real art.
+				item.metadata["artwork.disc"] = boxart.getDiscArtPath(game);
+				continue;
+			}
+			// Resolve named media through the same registry as requirements and providers.
+			for (const auto& media : artwork::mediaTypes)
+				if (source == media.name)
+				{
+					item.metadata["artwork." + source] = boxart.getCustomMediaPath(game, media.mode);
+					break;
+				}
+		}
+		items.push_back(std::move(item));
+		artwork.push_back(std::move(art));
+		visibleGames.push_back(game);
+	}
+
+	int contextAction = -1;
+	int favouriteAction = -1;
+	bool contextResume = false;
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+	std::vector<ImVec4> itemBounds(items.size());
+	bool addFolder = false;
+	std::function<void()> drawEmptyBrowser;
+	if (games.empty()) drawEmptyBrowser = [&] {
+		addFolder = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
+	};
+	const int activated = themes::renderLibrary(layout, theme.directory, items, [&](size_t index) {
+		const GameMedia& game = visibleGames[index];
+		const ImVec2 itemMin = ImGui::GetItemRectMin();
+		const ImVec2 itemMax = ImGui::GetItemRectMax();
+		itemBounds[index] = ImVec4(itemMin.x, itemMin.y, itemMax.x, itemMax.y);
+		const ImVec2 nextCursor = ImGui::GetCursorScreenPos();
+		const bool itemActive = ImGui::IsItemActive();
+		const bool itemHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly | ImGuiHoveredFlags_NoNavOverride);
+		const bool itemFocused = ImGui::GetIO().NavVisible && ImGui::IsItemFocused();
+
+		// Keep per-game actions available when a theme replaces the stock table/cards.
+		const bool contextOpen = ImGui::BeginPopupContextItem();
+		if (contextOpen)
+		{
+			ImGui::TextUnformatted(items[index].title.c_str());
+			ImGui::Separator();
+			if (view == library::View::ContinuePlaying && !game.device && !game.path.empty())
+			{
+				const SavestateInfo& state = librarySavestateCache.get(game.path, game.fileName);
+				const bool canResume = !state.path.empty();
+				if (ImGui::MenuItem(T("Resume"), nullptr, false, canResume))
+				{
+					contextAction = static_cast<int>(index);
+					contextResume = true;
+				}
+				drawLibraryStatePreview(state);
+				if (ImGui::MenuItem(T("Start Fresh")))
+				{
+					contextAction = static_cast<int>(index);
+					contextResume = false;
+				}
+			}
+			if (!game.device && !game.path.empty())
+			{
+				const bool favourite = library::isFavourite(game.path, config::LibraryFavourites.get());
+				if (ImGui::MenuItem(favourite ? T("Remove from favourites") : T("Add to favourites")))
+				{
+					std::vector<std::string> favourites = config::LibraryFavourites.get();
+					library::setFavourite(game.path, !favourite, favourites);
+					config::LibraryFavourites.set(favourites);
+					config::LibraryFavourites.save();
+					resetLibraryGameInfoHover();
+				}
+			}
+			ImGui::EndPopup();
+		}
+
+		const bool showFavourite = layout.showItemActions && (!layout.compactControls || itemHovered || itemFocused
+				|| library::isFavourite(game.path, config::LibraryFavourites.get()));
+		const float favouriteSide = std::max(1.f, std::min({uiScaled(32.f), itemMax.y - itemMin.y - uiScaled(8.f),
+				itemMax.x - itemMin.x - uiScaled(8.f)}));
+		const ImVec2 favouriteSize(favouriteSide, favouriteSide);
+		const ImVec2 favouriteMin(itemMax.x - favouriteSize.x - uiScaled(6.0f),
+				itemMin.y + (layout.mode == "list" ? (itemMax.y - itemMin.y - favouriteSide) * 0.5f : uiScaled(4.f)));
+		const ImVec2 mouse = ImGui::GetIO().MousePos;
+		const bool mouseOverFavourite = showFavourite && mouse.x >= favouriteMin.x && mouse.x <= favouriteMin.x + favouriteSize.x
+				&& mouse.y >= favouriteMin.y && mouse.y <= favouriteMin.y + favouriteSize.y;
+		updateLibraryLongPress(game, items[index].id, itemActive && !mouseOverFavourite);
+		if (layout.showInfoTooltip && layout.hoverDetails && !contextOpen && itemHovered && !mouseOverFavourite && !ImGui::GetIO().NavVisible)
+			draw_library_game_info_hover(game, !game.device ? &artwork[index] : nullptr);
+		if (showFavourite && !contextOpen && !game.device && !game.path.empty())
+		{
+			ImGui::SetCursorScreenPos(favouriteMin);
+			if (drawLibraryFavouriteButton(game, true, favouriteSize))
+			{
+				favouriteAction = static_cast<int>(index);
+				resetLibraryGameInfoHover();
+			}
+			ImGui::SetCursorScreenPos(nextCursor);
+		}
+	}, iconSource, std::clamp(config::LibraryIconScale.get(), 50, 200) / 100.f, requestedLayout.id,
+		[&](size_t index) {
+			const GameMedia& game = visibleGames[index];
+			std::vector<std::string> favourites = config::LibraryFavourites.get();
+			library::setFavourite(game.path, !library::isFavourite(game.path, favourites), favourites);
+			config::LibraryFavourites.set(favourites); config::LibraryFavourites.save();
+			favouriteAction = static_cast<int>(index); resetLibraryGameInfoHover();
+		}, [](const std::string& sound) { playUiSound(sound); },
+		pendingRackLaunch ? pendingRackLaunch->itemId : std::string(), drawEmptyBrowser);
+
+	auto startThemedGame = [&](size_t index, bool resume, bool fromContextMenu) {
+		const GameMedia& game = visibleGames[index];
+		const GameBoxart& art = artwork[index];
+		std::string statePath;
+		if (resume)
+		{
+			const SavestateInfo state = dc_getLatestStateForGame(game.path);
+			if (state.path.empty())
+			{
+				gui_error(T("No save state is available for this game. Choose Start Fresh to play."));
+				return;
+			}
+			statePath = state.path;
+		}
+		std::string title = art.name;
+		if (title.empty() || title == game.fileName)
+			title = get_file_basename(game.fileName);
+		const ImVec4 bounds = itemBounds[index];
+		if (layout.mode == "rack" && bounds.z > bounds.x && bounds.w > bounds.y)
+		{
+			const auto media = [&](const char* source) {
+				const auto found = items[index].metadata.find(std::string("artwork.") + source);
+				return found == items[index].metadata.end() ? std::string() : found->second;
+			};
+			PendingRackLaunch launch;
+			launch.layoutKey = layoutKey;
+			launch.itemId = items[index].id;
+			launch.path = game.path;
+			launch.title = title;
+			launch.statePath = statePath;
+			launch.fromContextMenu = fromContextMenu;
+			launch.resume = resume;
+			launch.started = ImGui::GetTime();
+			launch.visual = {bounds, ImVec4(origin.x, origin.y, origin.x + canvasSize.x, origin.y + canvasSize.y),
+					items[index].title, boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::BoxTexture),
+					media("cover"), media("spine"), boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::BackCover)};
+			if (launch.visual.cover.empty()) launch.visual.cover = art.boxartPath;
+			pendingRackLaunch = std::move(launch);
+			resetLibraryGameInfoHover();
+			return;
+		}
+		settings.content.title = title;
+		librarySavestateCacheInvalidated = true;
+		if (fromContextMenu) gui_start_library_game(game.path, resume, statePath);
+		else gui_start_game(game.path);
+	};
+
+	if (contextAction >= 0)
+		startThemedGame(static_cast<size_t>(contextAction), contextResume, true);
+	else if (favouriteAction < 0 && activated >= 0)
+		startThemedGame(static_cast<size_t>(activated), false, false);
+	if (pendingRackLaunch)
+	{
+		// Never wait for a download on launch. Render cached art, then run the usual
+		// launch path once after the last animation frame.
+		constexpr double duration = 0.9;
+		const float progress = static_cast<float>((ImGui::GetTime() - pendingRackLaunch->started) / duration);
+		themes::drawRackCasePullOut(pendingRackLaunch->visual, progress);
+		if (progress >= 1.f)
+		{
+			PendingRackLaunch launch = std::move(*pendingRackLaunch);
+			pendingRackLaunch.reset();
+			settings.content.title = launch.title;
+			librarySavestateCacheInvalidated = true;
+			if (launch.fromContextMenu) gui_start_library_game(launch.path, launch.resume, launch.statePath);
+			else gui_start_game(launch.path);
+		}
+	}
+#if defined(__ANDROID__)
+	if (!ImGui::GetIO().MouseDown[ImGuiMouseButton_Left] || !touchedLibraryItemThisFrame)
+		resetLibraryLongPress();
+#endif
+	addContentPath(addFolder);
+}
+
 static void gui_display_content()
 {
+	// Use the last applied factor, rather than a pending Settings slider value.
+	LibraryUiScope libraryUi(settings.display.uiScale / appliedUserUiScale);
 #if defined(__ANDROID__)
 	touchedLibraryItemThisFrame = false;
 #endif
 	fullScreenWindow(false);
+	if (libraryMediaBatch.progress.total && (!libraryMediaBatch.finishedAt || ImGui::GetTime() - libraryMediaBatch.finishedAt < 5))
+		gui_display_library_download_progress();
 	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
 
     ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration);
+	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
+	static library::View libraryView = library::View::All;
+	static SettingsUI::TextFilter filter;
+	// Draw theme artwork first so all library controls remain above it. A dark
+	// wash preserves contrast even when users choose a bright background.
+	const std::string themeBackground = customLayout != nullptr && customLayout->toolbar == "compact"
+			? std::string() : CustomTheme::assetPath("background");
+	bool libraryThemeBackgroundVisible = false;
+	if (!themeBackground.empty()) {
+		ImguiFileTexture background(themeBackground, true, true);
+		ImTextureID id = background.getId();
+		const bool hasThemeBackground = id != ImTextureID();
+		libraryThemeBackgroundVisible = hasThemeBackground;
+		if (hasThemeBackground) {
+			const ImVec2 min = ImGui::GetWindowPos();
+			const ImVec2 max(min.x + ImGui::GetWindowSize().x, min.y + ImGui::GetWindowSize().y);
+			ImVec2 imageMin = min, imageMax = max;
+			const float aspect = imguiDriver->getAspectRatio(id);
+			const float windowAspect = (max.x - min.x) / std::max(1.f, max.y - min.y);
+			const std::string fit = CustomTheme::backgroundFit();
+			if (fit != "stretch" && aspect > 0.f) {
+				const bool contain = fit == "contain";
+				if ((aspect > windowAspect) == contain) {
+					const float height = (max.x - min.x) / aspect;
+					imageMin.y += ((max.y - min.y) - height) * 0.5f;
+					imageMax.y = imageMin.y + height;
+				} else {
+					const float width = (max.y - min.y) * aspect;
+					imageMin.x += ((max.x - min.x) - width) * 0.5f;
+					imageMax.x = imageMin.x + width;
+				}
+			}
+			ImGui::GetWindowDrawList()->AddImage(id, imageMin, imageMax,
+					ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, (int)(CustomTheme::backgroundOpacity() * 255)));
+			ImGui::GetWindowDrawList()->AddRectFilled(min, max, IM_COL32(0, 0, 0, 72));
+		}
+	}
 
-    // Keep the library toolbar cohesive at a larger size without coupling it to
+	bool showDcnet = false;
+	if (gui_state == GuiState::Main && ImGui::BeginTabBar("mainTabs"))
+	{
+		if (ImGui::BeginTabItem(T("Games")))
+			ImGui::EndTabItem();
+		if (ImGui::BeginTabItem("DCnet"))
+		{
+			showDcnet = true;
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
+	}
+	if (showDcnet)
+	{
+		// Both tabs share GuiState::Main, so cancel the rack launch here.
+		pendingRackLaunch.reset();
+		resetLibraryGameInfoHover();
+		gui_display_dcnet(scanner, boxart);
+		ImGui::End();
+		return;
+	}
+
+	if (customLayout != nullptr && customLayout->toolbar == "compact")
+	{
+		// Compact chrome is a shared layout option, independent of package identity.
+		const ImVec2 toolbarArea = ImGui::GetContentRegionAvail();
+		const themes::Layout& toolbarLayout = themes::responsiveLayout(*themes::current(), *customLayout,
+				toolbarArea.x / std::max(1.f, toolbarArea.y));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 6));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(16));
+		ImGui::PushFont(largeFont, uiScaled(15.f));
+		const float brandY = ImGui::GetCursorPosY();
+		float brandHeight = ImGui::GetFrameHeight();
+		ImTextureID brand = {};
+		if (!toolbarLayout.toolbarLogoAsset.empty())
+			brand = ImguiFileTexture(toolbarLayout.toolbarLogoAsset, true, true).getId();
+		if (brand != ImTextureID{})
+		{
+			if (toolbarLayout.toolbarLogoHeight > 0) brandHeight = uiScaled(toolbarLayout.toolbarLogoHeight);
+			ImGui::Image(brand, ImVec2(brandHeight * imguiDriver->getAspectRatio(brand), brandHeight));
+		}
+		else
+		{
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted("Hollycast");
+		}
+		const float controlsY = brandY + std::max(0.f, (brandHeight - ImGui::GetFrameHeight()) * 0.5f);
+		auto placeInline = [controlsY](const char* label) {
+			const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+			if (ImGui::GetItemRectMax().x + width + ImGui::GetStyle().ItemSpacing.x
+					< ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
+			{
+				ImGui::SameLine();
+				ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), controlsY));
+			}
+		};
+		const char* labels[] = {T("All Games"), T("Continue Playing"), T("Favourites")};
+		const library::View views[] = {library::View::All, library::View::ContinuePlaying, library::View::Favourites};
+		const float spacing = ImGui::GetStyle().ItemSpacing.x;
+		float controlsWidth = ImGui::CalcTextSize(ICON_FA_MAGNIFYING_GLASS).x + ImGui::CalcTextSize(ICON_FA_GEAR).x
+				+ ImGui::GetStyle().FramePadding.x * 10 + spacing * 6;
+		for (const char* label : labels) controlsWidth += ImGui::CalcTextSize(label).x;
+		const float startX = ImGui::GetWindowContentRegionMax().x - controlsWidth;
+		const bool alignRight = ImGui::GetItemRectMax().x + spacing < ImGui::GetWindowPos().x + startX;
+		for (int i = 0; i < 3; ++i)
+		{
+			if (i == 0 && alignRight) ImGui::SameLine(startX);
+			else placeInline(labels[i]);
+			if (i == 0 && alignRight) ImGui::SetCursorPosY(controlsY);
+			const bool selected = libraryView == views[i];
+			if (selected)
+			{
+				// The selected fill holds on hover: its text color was chosen to suit this fill alone.
+				const ImVec4 selectedFill = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+				ImGui::PushStyleColor(ImGuiCol_Button, selectedFill);
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selectedFill);
+				if (toolbarLayout.toolbarSelectedTextColor)
+				{
+					const uint32_t rgba = *toolbarLayout.toolbarSelectedTextColor;
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4((rgba >> 24) / 255.f, ((rgba >> 16) & 255) / 255.f,
+							((rgba >> 8) & 255) / 255.f, (rgba & 255) / 255.f));
+				}
+			}
+			const bool pressed = ImGui::Button(labels[i]);
+			if (selected) ImGui::PopStyleColor(toolbarLayout.toolbarSelectedTextColor ? 3 : 2);
+			if (pressed) { libraryView = views[i]; librarySavestateCacheInvalidated = true; }
+		}
+		static bool showFilter = false;
+		placeInline(ICON_FA_MAGNIFYING_GLASS);
+		if (ImGui::Button(ICON_FA_MAGNIFYING_GLASS "##themeFilter")) showFilter = !showFilter;
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Filter"));
+		placeInline(ICON_FA_GEAR);
+		if (ImGui::Button(ICON_FA_GEAR "##themeSettings")) gui_setState(GuiState::Settings);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
+		if (showFilter || filter.IsActive()) filter.Draw(T("Filter"), ImGui::GetContentRegionAvail().x - uiScaled(60));
+		ImGui::PopFont();
+		ImGui::PopStyleVar(2);
+		ImGui::Separator();
+		boxart.refreshCustomBoxartIndex(false);
+		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
+		ImGui::End();
+		contentpath_warning_popup();
+		return;
+	}
+
+	// Keep the library toolbar cohesive at a larger size without coupling it to
     // the user-configured global UI Scaling value.
     constexpr float libraryToolbarScale = 4.0f / 3.0f;
     const ImVec2 itemSpacing = ImGui::GetStyle().ItemSpacing;
@@ -2192,12 +3053,38 @@ static void gui_display_content()
 	ImGui::PushFont(largeFont, 18.5f * libraryToolbarScale);
     ImGui::AlignTextToFramePadding();
     // Position "GAMES" text and search bar below the menu bar (window is already positioned below menu bar)
-    ImGui::SetCursorPosY(ImGui::GetStyle().FramePadding.y);
+    ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), ImGui::GetStyle().FramePadding.y));
     ImGui::Indent(10.0f * libraryToolbarScale);
     ImGui::Text("%s", T("GAMES"));
     ImGui::Unindent(10.0f * libraryToolbarScale);
 
-    static SettingsUI::TextFilter filter;
+	if (gui_state != GuiState::SelectDisk)
+	{
+		const char *viewLabels[] = { T("All Games"), T("Continue Playing"), T("Favourites") };
+		const library::View viewValues[] = { library::View::All, library::View::ContinuePlaying, library::View::Favourites };
+		for (int i = 0; i < 3; i++)
+		{
+			ImGui::SameLine(0.0f, uiScaled(8.0f));
+			const float width = ImGui::CalcTextSize(viewLabels[i]).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			if (ImGui::GetCursorPosX() + width > ImGui::GetWindowContentRegionMax().x)
+			{
+				ImGui::NewLine();
+				ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + uiScaled(10.0f));
+			}
+			const bool selected = libraryView == viewValues[i];
+			if (selected)
+				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+			if (ImGui::Button(viewLabels[i]))
+			{
+				libraryView = viewValues[i];
+				librarySavestateCacheInvalidated = true;
+			}
+			if (selected)
+				ImGui::PopStyleColor();
+		}
+		ImGui::NewLine();
+	}
+
 	int libraryIconScale = std::clamp(config::LibraryIconScale.get(), 50, 200);
 	static bool libraryHoverSettingsInitialized = false;
 	static int lastLibraryIconScale = libraryIconScale;
@@ -2270,7 +3157,25 @@ static void gui_display_content()
 #else
 		ImGui::SameLine(ImGui::GetContentRegionMax().x - settingsBtn.width());
 #endif
-			if (settingsBtn.realize())
+			const std::string settingsIcon = CustomTheme::assetPath("settings");
+			ImTextureID settingsIconId{};
+			if (!settingsIcon.empty()) {
+				ImguiFileTexture icon(settingsIcon, true, true);
+				settingsIconId = icon.getId();
+			}
+			const bool hasSettingsIcon = settingsIconId != ImTextureID();
+			const bool settingsPressed = hasSettingsIcon
+					? ImGui::Button("##LibrarySettings", ImVec2(settingsBtn.width(), 0))
+					: settingsBtn.realize();
+			if (hasSettingsIcon) {
+			const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+			const float iconSize = std::min(max.y - min.y - 12.f, 24.f * libraryToolbarScale);
+			const ImVec2 iconMin(min.x + 8.f, min.y + ((max.y - min.y) - iconSize) * 0.5f);
+			ImGui::GetWindowDrawList()->AddImage(settingsIconId, iconMin, ImVec2(iconMin.x + iconSize, iconMin.y + iconSize));
+			ImGui::GetWindowDrawList()->AddText(ImVec2(iconMin.x + iconSize + 8.f, min.y + ImGui::GetStyle().FramePadding.y),
+					ImGui::GetColorU32(ImGuiCol_Text), T("Settings"));
+			}
+			if (settingsPressed)
 			{
 				gui_setState(GuiState::Settings);
 			}
@@ -2286,10 +3191,33 @@ static void gui_display_content()
     ImGui::PopStyleVar(3);
 
     boxart.refreshCustomBoxartIndex(false);
-    scanner.fetch_game_list();
+	// Themes draw this inside their own browser viewport; stock views share the
+	// full library area. Firmware/device entries must not hide the folder action.
+	if (customLayout == nullptr && gui_state != GuiState::SelectDisk && config::ContentPath.get().empty())
+	{
+		ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
+				ImGuiWindowFlags_DragScrolling);
+		scrollWindowFromTouch();
+		const bool addFolder = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
+		ImGui::EndChild();
+		addContentPath(addFolder);
+		ImGui::End();
+		contentpath_warning_popup();
+		return;
+	}
+	if (customLayout != nullptr)
+	{
+		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
+		ImGui::End();
+		contentpath_warning_popup();
+		return;
+	}
 
 	// Only if Filter and Settings aren't focused... ImGui::SetNextWindowFocus();
+	if (libraryThemeBackgroundVisible) ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
 	ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_DragScrolling);
+	scrollWindowFromTouch();
+	if (libraryThemeBackgroundVisible) ImGui::PopStyleColor();
     {
 		const bool useListStyle = config::LibraryDisplayStyle.get() == static_cast<int>(config::LibraryDisplayStyleMode::List);
 		const float totalWidth = ImGui::GetContentRegionMax().x - (!ImGui::GetCurrentWindow()->ScrollbarY ? ImGui::GetStyle().ScrollbarSize : 0);
@@ -2310,12 +3238,22 @@ static void gui_display_content()
 
 		if (useListStyle)
 			ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(5, 4));
-		else if (config::BoxartDisplayMode)
-			ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.5f, 0.5f));
-		else
-			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 20));
+		else {
+			const auto& layout = CustomTheme::activeLayout();
+			const float density = layout.density;
+			const float currentSpacingX = ImGui::GetStyle().ItemSpacing.x;
+			const float currentSpacingY = ImGui::GetStyle().ItemSpacing.y;
+			const float spacingX = layout.libraryCoverSpacing >= 0.0f
+					? uiScaled(layout.libraryCoverSpacing) : (config::BoxartDisplayMode ? currentSpacingX : 8.0f);
+			const float spacingY = config::BoxartDisplayMode ? currentSpacingY : 20.0f;
+			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacingX * density, spacingY * density));
+			if (config::BoxartDisplayMode)
+				ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.5f, 0.5f));
+		}
 		const float tableTextSize = std::clamp(18.5f * libraryTextScaleFactor, 18.5f, 46.0f);
-		const float tableRowContentHeight = std::max(iconSize.y, tableTextSize);
+		const bool showContinueActions = gui_state != GuiState::SelectDisk && libraryView == library::View::ContinuePlaying;
+		const float tableRowContentHeight = std::max(std::max(iconSize.y, tableTextSize),
+				showContinueActions ? ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0f : 0.0f);
 		const float tableRowHeight = tableRowContentHeight + ImGui::GetStyle().CellPadding.y * 2.0f;
 		auto calcLibraryTextWidth = [&](const char *text) {
 			return largeFont != nullptr ? largeFont->CalcTextSizeA(tableTextSize, FLT_MAX, -1.0f, text).x
@@ -2335,9 +3273,9 @@ static void gui_display_content()
 		const float regionColumnWidth = calcLibraryColumnWidth(regionLabel, "JP/US/EU");
 		const char* formatLabel = T("Format");
 		const char* timePlayedLabel = T("Time Played");
-		const char* lastBootedLabel = T("Last Booted");
+		const char* dateLabel = showContinueActions ? T("Latest Save") : T("Last Booted");
 		const float formatColumnWidth = calcLibraryColumnWidth(formatLabel, "Unknown");
-		const float lastBootedColumnWidth = calcLibraryTextWidth("12/31/2026 12:59:59 PM")
+		const float dateColumnWidth = calcLibraryTextWidth("12/31/2026 12:59:59 PM")
 				+ ImGui::GetStyle().CellPadding.x * 2.0f;
 		const float timePlayedColumnWidth = std::max(calcLibraryTextWidth(T("Time Played")), calcLibraryTextWidth("999h 59m"))
 				+ ImGui::GetStyle().CellPadding.x * 2.0f;
@@ -2346,36 +3284,76 @@ static void gui_display_content()
 
 		int counter = 0;
 		bool gameListEmpty = false;
+		bool libraryViewEmpty = false;
+		bool noFilteredResults = false;
 		{
 			scanner.get_mutex().lock();
-			gameListEmpty = scanner.get_game_list().empty();
+			const auto& gameList = scanner.get_game_list();
+			gameListEmpty = gameList.empty();
+			const library::View visibleView = gui_state == GuiState::SelectDisk ? library::View::All : libraryView;
+			if (visibleView == library::View::ContinuePlaying)
+			{
+				static hostfs::SavestateFolders cachedFolders;
+				const auto folders = hostfs::getSavestateFolders();
+				if (librarySavestateCacheInvalidated.exchange(false)
+						|| folders.custom != cachedFolders.custom || folders.data != cachedFolders.data)
+				{
+					cachedFolders = folders;
+					librarySavestateCache.reset([folders](const std::string& path, const std::string& fileName) {
+						return dc_getLatestStateForGame(path, fileName, folders);
+					});
+					libraryStateThumbnailCacheInvalidated = true;
+				}
+			}
+			std::vector<library::Entry> libraryEntries;
+			libraryEntries.reserve(gameList.size());
+			for (const GameMedia& game : gameList)
+				libraryEntries.push_back({ game.path, game.name,
+						visibleView == library::View::ContinuePlaying && !game.device
+								? librarySavestateCache.get(game.path, game.fileName).creationDate : 0, game.device });
+			const std::vector<size_t> visibleGames = library::selectGames(libraryEntries, visibleView,
+					config::LibraryFavourites.get());
+			libraryViewEmpty = visibleGames.empty();
+			int displayedGameCount = 0;
 			if (useListStyle)
 			{
 				ImGui::PushFont(largeFont, tableTextSize);
-				if (ImGui::BeginTable("libraryTable", 8, ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_Borders
+				const int columnCount = gui_state == GuiState::SelectDisk ? 8 : showContinueActions ? 11 : 9;
+				if (ImGui::BeginTable("libraryTable", columnCount, ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_Borders
 						| ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit
 						| ImGuiTableFlags_ScrollY, ImVec2(0.0f, 0.0f)))
 				{
+					// ScrollY tables create their own child; the outer library cannot
+					// capture a swipe that starts over one of these rows.
+					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+					scrollWindowFromTouch();
 					ImGui::TableSetupColumn(iconLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, iconColumnWidth);
 					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed, productIdColumnWidth);
 					ImGui::TableSetupColumn(titleLabel, ImGuiTableColumnFlags_WidthStretch);
 					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed, regionColumnWidth);
 					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed, formatColumnWidth);
 					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed, timePlayedColumnWidth);
-					ImGui::TableSetupColumn(lastBootedLabel, ImGuiTableColumnFlags_WidthFixed, lastBootedColumnWidth);
+					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed, dateColumnWidth);
 					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed, sizeColumnWidth);
+					if (gui_state != GuiState::SelectDisk)
+						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, uiScaled(48.0f));
+					if (showContinueActions)
+					{
+						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
+						ImGui::TableSetupColumn(T("Start Fresh"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Start Fresh")) + ImGui::GetStyle().CellPadding.x * 2.0f);
+					}
 					ImGui::TableSetupScrollFreeze(0, 1);
 					ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
 					const char *const libraryColumnHeaders[] = {
-						iconLabel, productIdLabel, titleLabel, regionLabel, formatLabel, timePlayedLabel, lastBootedLabel, sizeLabel
+						iconLabel, productIdLabel, titleLabel, regionLabel, formatLabel, timePlayedLabel, dateLabel, sizeLabel,
+						T("Favourite"), T("Resume"), T("Start Fresh")
 					};
-					for (int column = 0; column < static_cast<int>(sizeof(libraryColumnHeaders) / sizeof(libraryColumnHeaders[0])); ++column)
+					for (int column = 0; column < columnCount; ++column)
 					{
 						ImGui::TableSetColumnIndex(column);
 						textTableCellCentered(libraryColumnHeaders[column], tableTextSize);
 					}
 
-					const auto& gameList = scanner.get_game_list();
 					auto drawTableGame = [&](const GameMedia& game, int rowIndex) -> bool
 					{
 						if (gui_state == GuiState::SelectDisk)
@@ -2401,6 +3379,7 @@ static void gui_display_content()
 
 						if (!passFilter)
 							return false;
+						displayedGameCount++;
 
 						std::string productId;
 						std::string region = "Unknown";
@@ -2448,18 +3427,40 @@ static void gui_display_content()
 								? formatLibraryPlaytime(*art.playTimeSeconds) : std::string();
 						textTableCellCentered(timePlayed, tableRowContentHeight);
 						ImGui::TableSetColumnIndex(6);
-						const time_t lastBootedTime = getLibraryGameLastBooted(game, art.uniqueId);
-						const std::string lastBooted = lastBootedTime == 0 ? std::string() : formatShortDateTime(lastBootedTime);
-						textTableCellCentered(lastBooted, tableRowContentHeight);
+						const time_t date = showContinueActions ? librarySavestateCache.get(game.path, game.fileName).creationDate
+								: getLibraryGameLastBooted(game, art.uniqueId);
+						const std::string dateText = date == 0 ? std::string() : formatShortDateTime(date);
+						textTableCellCentered(dateText, tableRowContentHeight);
 						ImGui::TableSetColumnIndex(7);
 						const std::string size = formatLibrarySize(game.size);
 						textTableCellCentered(size, tableRowContentHeight);
-
-						if (rowPressed)
+						bool favouritePressed = false;
+						if (gui_state != GuiState::SelectDisk)
 						{
-							settings.content.title = art.name;
-							if (settings.content.title.empty() || settings.content.title == game.fileName)
-								settings.content.title = get_file_basename(game.fileName);
+							ImGui::TableSetColumnIndex(8);
+							favouritePressed = drawLibraryFavouriteButton(game);
+						}
+						if (showContinueActions && !game.device && !game.path.empty())
+						{
+							const SavestateInfo& stateInfo = librarySavestateCache.get(game.path, game.fileName);
+							ImGui::TableSetColumnIndex(9);
+							const bool resumePressed = ImGui::Button((std::string(T("Resume")) + "##resume_" + game.path).c_str());
+							drawLibraryStatePreview(stateInfo);
+							if (resumePressed)
+							{
+								startLibraryGame(game, art, true);
+								return true;
+							}
+							ImGui::TableSetColumnIndex(10);
+							if (ImGui::Button((std::string(T("Start Fresh")) + "##fresh_" + game.path).c_str()))
+							{
+								startLibraryGame(game, art, false);
+								return true;
+							}
+						}
+
+						if (rowPressed && !favouritePressed)
+						{
 							if (gui_state == GuiState::SelectDisk)
 							{
 								try {
@@ -2471,6 +3472,10 @@ static void gui_display_content()
 							}
 							else
 							{
+								librarySavestateCacheInvalidated = true;
+								settings.content.title = art.name;
+								if (settings.content.title.empty() || settings.content.title == game.fileName)
+									settings.content.title = get_file_basename(game.fileName);
 								std::string gamePath(game.path);
 								scanner.get_mutex().unlock();
 								gui_start_game(gamePath);
@@ -2484,11 +3489,11 @@ static void gui_display_content()
 					if (!filter.IsActive() && gui_state != GuiState::SelectDisk)
 					{
 						ImGuiListClipper clipper;
-						clipper.Begin(static_cast<int>(gameList.size()), tableRowHeight);
+						clipper.Begin(static_cast<int>(visibleGames.size()), tableRowHeight);
 						bool gameStartedFromRow = false;
 						while (clipper.Step() && !gameStartedFromRow)
 							for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-								if (drawTableGame(gameList[i], i))
+								if (drawTableGame(gameList[visibleGames[i]], visibleGames[i]))
 								{
 									gameStartedFromRow = true;
 									break;
@@ -2496,8 +3501,8 @@ static void gui_display_content()
 					}
 					else
 					{
-						for (int i = 0; i < static_cast<int>(gameList.size()); i++)
-							if (drawTableGame(gameList[i], i))
+						for (size_t i : visibleGames)
+							if (drawTableGame(gameList[i], static_cast<int>(i)))
 								break;
 					}
 					ImGui::EndTable();
@@ -2509,10 +3514,16 @@ static void gui_display_content()
 				const int itemsPerLine = std::max<int>(totalWidth / (gridBoxBaseSize + ImGui::GetStyle().ItemSpacing.x), 1);
 				const float responsiveBoxSize = totalWidth / itemsPerLine - ImGui::GetStyle().FramePadding.x * 2;
 				const ImVec2 responsiveBoxVec2 = ImVec2(responsiveBoxSize, responsiveBoxSize);
+				// Keep the current star size at 200%, then follow the actual cover size as columns change.
+				const float maxGridBoxBaseSize = libraryIconBaseInches * settings.display.dpi * 2.0f;
+				const int maxScaleItemsPerLine = std::max<int>(totalWidth / (maxGridBoxBaseSize + ImGui::GetStyle().ItemSpacing.x), 1);
+				const float maxScaleBoxSize = std::max(1.0f, totalWidth / maxScaleItemsPerLine - ImGui::GetStyle().FramePadding.x * 2);
+				const float overlayScale = std::max(1.0f, responsiveBoxSize) / maxScaleBoxSize;
 				const float gridTextSize = std::clamp(13.0f * libraryTextScaleFactor, 13.0f, 38.0f);
 
-				for (const auto& game : scanner.get_game_list())
+				for (size_t visibleIndex : visibleGames)
 				{
+					const GameMedia& game = gameList[visibleIndex];
 					if (gui_state == GuiState::SelectDisk)
 					{
 						std::string extension = get_file_extension(game.path);
@@ -2527,40 +3538,127 @@ static void gui_display_content()
 					std::string gameName = game.name;
 					bool passFilter = filter.PassFilter(gameName.c_str());
 					GameBoxart art;
-					if (config::BoxartDisplayMode && !game.device)
+					if ((config::BoxartDisplayMode || visibleView == library::View::ContinuePlaying) && !game.device)
 					{
 						art = getLibraryDisplayArtwork(game, iconAnimationClock);
-						gameName = art.name;
+						if (visibleView == library::View::ContinuePlaying)
+						{
+							if (!art.name.empty())
+								gameName = art.name;
+							if (!art.searchName.empty() && (gameName.empty() || gameName == game.fileName
+									|| gameName == get_file_basename(game.fileName)))
+								gameName = art.searchName;
+						}
+						else
+							gameName = art.name;
 						passFilter = passFilter || filter.PassFilter(gameName.c_str());
 					}
 					if (passFilter)
 					{
+						displayedGameCount++;
 						ImguiID _(game.path.empty() ? "bios" : game.path);
 						bool pressed = false;
-						if (config::BoxartDisplayMode)
+						bool favouritePressed = false;
+						bool libraryActionPressed = false;
+						bool resumeRequested = false;
+						if (visibleView == library::View::ContinuePlaying)
 						{
 							if (counter % itemsPerLine != 0)
 								ImGui::SameLine();
 							counter++;
-							// Put the image inside a child window so we can detect when it's fully clipped and doesn't need to be loaded
-							if (ImGui::BeginChild("img", ImVec2(0, 0), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened))
+							ImGui::BeginGroup();
+							ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+							if (ImGui::BeginChild("libraryCard", ImVec2(responsiveBoxSize, 0.0f), ImGuiChildFlags_AutoResizeY,
+									ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
 							{
-								ImguiFileTexture tex(art.boxartPath);
-								pressed = gameImageButton(tex, game.name, responsiveBoxVec2, gameName, gridTextSize);
-								updateLibraryLongPress(game, game.path.empty() ? "bios" : game.path, ImGui::IsItemActive());
-								draw_library_game_info_hover(game, !game.device ? &art : nullptr);
+								// Preview the same newest state used to include and order this card.
+								const SavestateInfo& stateInfo = librarySavestateCache.get(game.path, game.fileName);
+								ImguiFileTexture artTexture(art.boxartPath);
+								pressed = drawLibraryCoverButton(artTexture, game.name, responsiveBoxVec2, gameName, gridTextSize,
+										game, &art, overlayScale, favouritePressed);
+								ImguiStyleVar compactSpacing(ImGuiStyleVar_ItemSpacing, ScaledVec2(6.0f, 6.0f));
+								ImguiStyleVar compactPadding(ImGuiStyleVar_FramePadding, ScaledVec2(8.0f, 4.0f));
+								ImGui::PushFont(largeFont, uiScaled(14.0f));
+								ImGui::PushFont(largeFont, std::clamp(uiScaled(18.0f * libraryTextScaleFactor), uiScaled(18.0f), uiScaled(28.0f)));
+								ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + responsiveBoxSize);
+								ImGui::TextWrapped("%s", gameName.c_str());
+								ImGui::PopTextWrapPos();
+								ImGui::PopFont();
+								const time_t savedAt = stateInfo.creationDate;
+								if (savedAt != 0)
+								{
+									const std::string savedAtLabel = formatShortDateTime(savedAt);
+									ImGui::PushFont(nullptr, std::clamp(uiScaled(12.0f * libraryTextScaleFactor), uiScaled(12.0f), uiScaled(18.0f)));
+									ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + responsiveBoxSize);
+									ImGui::TextDisabled("%s: %s", T("Saved"), savedAtLabel.c_str());
+									ImGui::PopTextWrapPos();
+									ImGui::PopFont();
+								}
+
+								const float actionGap = ImGui::GetStyle().ItemSpacing.x;
+								const float framePad = ImGui::GetStyle().FramePadding.x * 2.0f;
+								const float requiredWidth = ImGui::CalcTextSize(T("Resume")).x
+										+ ImGui::CalcTextSize(T("Start Fresh")).x + framePad * 2.0f + actionGap;
+								const bool sideBySide = responsiveBoxSize >= requiredWidth;
+								const float actionWidth = sideBySide ? (responsiveBoxSize - actionGap) / 2.0f : responsiveBoxSize;
+								if (ImGui::Button((std::string(T("Resume")) + "##resume_" + game.path).c_str(), ImVec2(actionWidth, 0.0f)))
+								{
+									resumeRequested = true;
+									libraryActionPressed = true;
+								}
+								drawLibraryStatePreview(stateInfo);
+								if (sideBySide)
+									ImGui::SameLine(0.0f, actionGap);
+								ImguiStyleColor secondaryAction(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_FrameBg]);
+								if (ImGui::Button((std::string(T("Start Fresh")) + "##fresh_" + game.path).c_str(), ImVec2(actionWidth, 0.0f)))
+								{
+									resumeRequested = false;
+									libraryActionPressed = true;
+								}
+								ImGui::PopFont();
 							}
 							ImGui::EndChild();
+							ImGui::PopStyleVar();
+							ImGui::EndGroup();
 						}
 						else
 						{
-							ImGui::PushFont(largeFont, gridTextSize);
-							pressed = ImGui::Selectable(gameName.c_str());
-							ImGui::PopFont();
-							updateLibraryLongPress(game, game.path.empty() ? "bios" : game.path, ImGui::IsItemActive());
-							draw_library_game_info_hover(game);
+							if (config::BoxartDisplayMode)
+							{
+								if (counter % itemsPerLine != 0)
+									ImGui::SameLine();
+								counter++;
+							}
+							ImGui::BeginGroup();
+							if (config::BoxartDisplayMode)
+							{
+								// Put the image inside a child window so we can detect when it's fully clipped and doesn't need to be loaded
+								if (ImGui::BeginChild("img", ImVec2(0, 0), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened))
+								{
+									ImguiFileTexture artTexture(art.boxartPath);
+									pressed = drawLibraryCoverButton(artTexture, game.name, responsiveBoxVec2, gameName, gridTextSize,
+											game, &art, overlayScale, favouritePressed);
+								}
+								ImGui::EndChild();
+							}
+							else
+							{
+								ImGui::PushFont(largeFont, gridTextSize);
+								pressed = ImGui::Selectable(gameName.c_str());
+								ImGui::PopFont();
+								updateLibraryLongPress(game, game.path.empty() ? "bios" : game.path, ImGui::IsItemActive());
+								draw_library_game_info_hover(game);
+							}
+							if (!config::BoxartDisplayMode)
+								favouritePressed = drawLibraryFavouriteButton(game);
+							ImGui::EndGroup();
 						}
-						if (pressed)
+						if (libraryActionPressed)
+						{
+							startLibraryGame(game, art, resumeRequested);
+							break;
+						}
+						if (pressed && !favouritePressed)
 						{
 							if (!config::BoxartDisplayMode)
 								art = boxart.getBoxart(game);
@@ -2578,6 +3676,7 @@ static void gui_display_content()
 							}
 							else
 							{
+								librarySavestateCacheInvalidated = true;
 								std::string gamePath(game.path);
 								scanner.get_mutex().unlock();
 								gui_start_game(gamePath);
@@ -2588,6 +3687,7 @@ static void gui_display_content()
 					}
 				}
 			}
+			noFilteredResults = filter.IsActive() && !visibleGames.empty() && displayedGameCount == 0;
 			scanner.get_mutex().unlock();
 		}
 
@@ -2599,27 +3699,35 @@ static void gui_display_content()
 #if !defined(TARGET_IPHONE)
 		if (gameListEmpty && gui_state != GuiState::SelectDisk)
 		{
-			const char *label = T("Your game list is empty");
-			// center horizontally
-			const float w = ImGui::GetFont()->CalcTextSizeA(uiLargeFontSize(), FLT_MAX, -1.f, label).x + ImGui::GetStyle().FramePadding.x * 2;
-			ImGui::SameLine((ImGui::GetContentRegionMax().x - w) / 2);
-			if (ImGui::BeginChild("empty", ImVec2(0, 0), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened))
-			{
-				ImGui::PushFont(nullptr, uiLargeFontSize());
-				ImGui::NewLine();
-				ImGui::Text("%s", label);
-				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(20, 8));
-				addContent = ImGui::Button(T("Add Game Folder"));
-				ImGui::PopFont();
-			}
-			ImGui::EndChild();
+			addContent = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
+		}
+		if (!gameListEmpty && (libraryViewEmpty || noFilteredResults) && gui_state != GuiState::SelectDisk)
+		{
+			const bool scanningStates = libraryView == library::View::ContinuePlaying && librarySavestateCache.busy();
+			const char *label = scanningStates ? T("Checking saved games...")
+					: filter.IsActive() ? T("No games match this filter") : libraryView == library::View::ContinuePlaying
+					? T("No saved games yet") : libraryView == library::View::Favourites
+					? T("No favourites yet") : T("No games match this filter");
+			const char *detail = scanningStates || filter.IsActive() ? "" : libraryView == library::View::ContinuePlaying
+					? T("Games with a save state or autosave will appear here.") : libraryView == library::View::Favourites
+					? T("Use the star on a game to add it to Favourites.") : "";
+			ImGui::PushFont(nullptr, uiLargeFontSize());
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + uiScaled(24.0f));
+			ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(label).x) * 0.5f));
+			ImGui::TextWrapped("%s", label);
+			if (detail[0] != '\0')
+				ImGui::TextWrapped("%s", detail);
+			ImGui::PopFont();
 		}
 #endif
-        ImGui::PopStyleVar();
+		ImGui::PopStyleVar(useListStyle || !config::BoxartDisplayMode ? 1 : 2);
         addContentPath(addContent);
     }
-    scrollWhenDraggingOnVoid();
-    windowDragScroll();
+	if (ImGui::GetIO().MouseSource != ImGuiMouseSource_TouchScreen)
+	{
+		scrollWhenDraggingOnVoid();
+		windowDragScroll();
+	}
 	ImGui::EndChild();
 	ImGui::End();
 
@@ -2664,13 +3772,15 @@ static bool systemdir_selected_callback(bool cancelled, std::string selection)
 
 	if (config::open())
 	{
+		// Imported settings replace the scan's captured paths, even if an earlier
+		// scan completed before the home folder was selected.
+		scanner.refresh();
 		config::Settings::instance().load(false);
 		// Make sure the renderer type doesn't change mid-flight
 		config::RendererType = RenderType::OpenGL;
 		gui_setState(GuiState::Main);
 		if (config::ContentPath.get().empty())
 		{
-			scanner.stop();
 			config::ContentPath.get().push_back(selection);
 		}
 		SaveSettings();
@@ -2720,6 +3830,7 @@ static void gui_display_setup_checklist()
 		const float footerHeight = uiScaled(42.f) + ImGui::GetStyle().ItemSpacing.y * 2.f + 1.f;
 		ImGui::BeginChild("##setup-checklist-content", ImVec2(0, -footerHeight),
 			false, ImGuiWindowFlags_DragScrolling);
+		scrollWindowFromTouch();
 		auto sectionHeading = [](const char* label) {
 			ImGui::Dummy(ScaledVec2(0.f, 10.f));
 			ImGui::PushFont(boldFont, uiScaled(20.f));
@@ -2760,14 +3871,22 @@ static void gui_display_setup_checklist()
 		ImGui::PushFont(boldFont, uiScaled(25.f));
 		ImGui::TextWrapped("%s", T("Ready to Play"));
 		ImGui::PopFont();
-		ImGui::TextWrapped("%s", T("Optional setup for games, firmware and controls. Reopen this checklist from General settings."));
+		ImGui::TextWrapped("%s", T("Optional setup for games, library themes, firmware and controls. Reopen this checklist from General settings."));
 		sectionHeading(T("1. Game folder"));
 		ImGui::TextWrapped("%s", checklist.games == readiness::Status::Ready
 			? T("A folder is configured. If your games are elsewhere, choose their folder below.")
 			: T("Choose a folder containing your games to add them to the library."));
 		bool addFolder = ImGui::Button(T("Choose Game Folder"));
 		addContentPath(addFolder);
-		sectionHeading(T("2. BIOS and firmware"));
+		sectionHeading(T("2. Library theme"));
+		ImGui::TextWrapped("%s", T("Use the original icon or list view, or choose one of the included library themes. Demo Disc is the default. You can change this later in Library settings."));
+		if (drawSetupThemePicker())
+		{
+			SaveSettings();
+			// Theme metrics/fonts change before the next frame, outside popup style scopes.
+			gui_requestStyleReload();
+		}
+		sectionHeading(T("3. BIOS and firmware"));
 		ImGui::PushFont(boldFont, uiScaled(18.f));
 		ImGui::TextUnformatted(T("Dreamcast"));
 		ImGui::PopFont();
@@ -2815,7 +3934,7 @@ static void gui_display_setup_checklist()
 		ImGui::PopFont();
 		ImGui::TextWrapped("%s", T("Default location: Hollycast's data folder."));
 		ImGui::TextWrapped("%s", T("To use a custom folder instead, add it in General > Custom Paths > BIOS Folders."));
-		sectionHeading(T("3. Controls"));
+		sectionHeading(T("4. Controls"));
 		ImGui::TextWrapped("%s", controller ? T("A controller is detected. Configure its mapping in Controls settings.")
 			: touch ? T("No controller detected. Touch controls are available; you can also connect a controller.")
 			: keyboard ? T("No controller detected. A keyboard is available; you can also connect a controller.")
@@ -2845,13 +3964,12 @@ static void drawBoxartBackground()
 	GameMedia game;
 	game.path = settings.content.path;
 	game.fileName = settings.content.fileName;
+	game.arcade = settings.platform.isArcade();
 	GameBoxart art = boxart.getBoxart(game);
 	ImguiFileTexture tex(art.boxartPath);
 	ImDrawList *dl = ImGui::GetBackgroundDrawList();
 	tex.draw(dl, ImVec2(0, 0), ImVec2(settings.display.width, settings.display.height), 1.f);
 }
-
-static std::future<bool> networkStatus;
 
 static void gui_network_start()
 {
@@ -2972,6 +4090,180 @@ static bool checkUWPProtocolActivation()
 }
 #endif
 
+static bool gui_display_launch_screen()
+{
+	static std::chrono::steady_clock::time_point started;
+	static bool startedAnimation = false;
+	static constexpr const char *textureName = "picture/hollycast-launch.png";
+#ifdef TEST_AUTOMATION
+	launchScreenPending = false;
+#endif
+	if (!launchScreenPending)
+		return false;
+
+	// Launching a game directly should not be delayed by the library intro.
+	if (!settings.content.path.empty() || settings.naomi.slave || !error_msg.empty()
+			|| (gui_state != GuiState::Main && gui_state != GuiState::Onboarding))
+	{
+		if (startedAnimation)
+			imguiDriver->deleteTexture(textureName);
+		launchScreenPending = false;
+		startedAnimation = false;
+		return false;
+	}
+
+	if (!startedAnimation)
+	{
+		started = std::chrono::steady_clock::now();
+		startedAnimation = true;
+	}
+	const float elapsed = std::chrono::duration<float>(std::chrono::steady_clock::now() - started).count();
+	constexpr float fadeStart = 2.05f;
+	constexpr float duration = 2.55f;
+	if (elapsed >= duration)
+	{
+		launchScreenPending = false;
+		startedAnimation = false;
+		imguiDriver->deleteTexture(textureName);
+		return false;
+	}
+
+	ImTextureID logo = imguiDriver->getTexture(textureName);
+	if (logo == ImTextureID())
+	{
+		size_t size = 0;
+		std::unique_ptr<u8[]> data = resource::load(textureName, size);
+		int width, height, channels;
+		stbi_set_flip_vertically_on_load_thread(0);
+		u8 *pixels = data && size <= static_cast<size_t>(std::numeric_limits<int>::max())
+				? stbi_load_from_memory(data.get(), static_cast<int>(size), &width, &height, &channels, STBI_rgb_alpha)
+				: nullptr;
+		if (pixels == nullptr)
+		{
+			launchScreenPending = false;
+			startedAnimation = false;
+			return false;
+		}
+		try {
+			logo = imguiDriver->updateTexture(textureName, pixels, width, height, false);
+		} catch (...) {
+			stbi_image_free(pixels);
+			throw;
+		}
+		stbi_image_free(pixels);
+		if (logo == ImTextureID())
+		{
+			// Vulkan defers uploads until its first frame has finished. Retry while
+			// the intro is pending; the duration above also bounds persistent failures.
+			return true;
+		}
+	}
+
+	auto smooth = [](float value) {
+		value = std::clamp(value, 0.f, 1.f);
+		return value * value * (3.f - 2.f * value);
+	};
+	const float emblemReveal = smooth(elapsed / .8f);
+	const float wordmarkReveal = smooth((elapsed - .38f) / .75f);
+	const float fade = 1.f - smooth((elapsed - fadeStart) / (duration - fadeStart));
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	ImDrawList *draw = ImGui::GetForegroundDrawList();
+	const int bgAlpha = static_cast<int>(255.f * fade);
+	draw->AddRectFilledMultiColor(ImVec2(0, 0), display, IM_COL32(9, 20, 30, bgAlpha),
+			IM_COL32(14, 26, 39, bgAlpha), IM_COL32(7, 13, 24, bgAlpha), IM_COL32(6, 19, 25, bgAlpha));
+
+	// The green spiral in the emblem becomes the centre of the whole sequence.
+	const float logoWidth = std::min(display.x * .82f, std::min(1000.f, display.y * 2.5f));
+	const float logoHeight = logoWidth * 226.f / 800.f;
+	const ImVec2 topLeft((display.x - logoWidth) * .5f, (display.y - logoHeight) * .5f);
+	const ImVec2 orbit(topLeft.x + logoWidth * .145f, topLeft.y + logoHeight * .43f);
+	const float unit = logoWidth / 800.f;
+	const float energy = smooth(elapsed / .55f) * fade;
+
+	// Layered transparent discs make a quiet pool of light, without an image asset.
+	for (int i = 12; i > 0; --i)
+	{
+		const float radius = unit * (72.f + i * 23.f);
+		draw->AddCircleFilled(orbit, radius, IM_COL32(28, 145, 116, static_cast<int>(2.f * energy)), 64);
+	}
+	constexpr float pi = 3.14159265f;
+	const float orbitAngle = elapsed * 1.15f - pi * .8f;
+	const float arcReveal = smooth(elapsed / .9f);
+	for (int i = 0; i < 3; ++i)
+	{
+		const float radius = unit * (112.f + 17.f * i);
+		const float start = orbitAngle + i * 1.65f;
+		draw->PathArcTo(orbit, radius, start, start + (1.25f - i * .22f) * arcReveal, 32);
+		draw->PathStroke(IM_COL32(85, 213, 166, static_cast<int>((70 - i * 16) * energy)), 0, std::max(1.f, unit));
+	}
+	const float sparkRadius = unit * 112.f;
+	const float sparkAngle = orbitAngle + 1.25f * arcReveal;
+	const ImVec2 spark(orbit.x + std::cos(sparkAngle) * sparkRadius, orbit.y + std::sin(sparkAngle) * sparkRadius);
+	for (int i = 5; i > 0; --i)
+	{
+		const float angle = sparkAngle - i * .065f;
+		const ImVec2 trail(orbit.x + std::cos(angle) * sparkRadius, orbit.y + std::sin(angle) * sparkRadius);
+		draw->AddCircleFilled(trail, unit * (2.2f - i * .25f),
+				IM_COL32(118, 255, 194, static_cast<int>((55 - i * 8) * energy)), 12);
+	}
+	draw->AddCircleFilled(spark, 4.f * unit, IM_COL32(118, 255, 194, static_cast<int>(95.f * energy)), 16);
+	draw->AddCircleFilled(spark, 1.8f * unit, IM_COL32(224, 255, 235, static_cast<int>(220.f * energy)), 12);
+
+	// Four colored lights spiral into the matching buttons in the emblem.
+	const int colors[4][3] = {{30, 235, 186}, {255, 197, 61}, {48, 145, 255}, {255, 78, 64}};
+	const ImVec2 buttonCenters[4] = {
+		ImVec2(topLeft.x + 213.f * unit, topLeft.y + 136.f * unit),
+		ImVec2(topLeft.x + 183.f * unit, topLeft.y + 161.f * unit),
+		ImVec2(topLeft.x + 237.f * unit, topLeft.y + 166.f * unit),
+		ImVec2(topLeft.x + 207.f * unit, topLeft.y + 187.f * unit)
+	};
+	auto particlePosition = [&](int i, float time) {
+		const float converge = smooth((time - .08f - i * .06f) / 1.f);
+		const float angle = i * pi * .5f - pi * .5f + time * 2.2f;
+		const float radius = unit * (210.f - 40.f * converge);
+		const ImVec2 start(orbit.x + std::cos(angle) * radius, orbit.y + std::sin(angle) * radius);
+		return ImVec2(start.x + (buttonCenters[i].x - start.x) * converge,
+				start.y + (buttonCenters[i].y - start.y) * converge);
+	};
+	for (int i = 0; i < 4; ++i)
+	{
+		const float particlesAlpha = smooth(elapsed / .22f)
+				* (1.f - smooth((elapsed - .92f - i * .06f) / .3f)) * fade;
+		for (int tail = 4; tail >= 0; --tail)
+		{
+			const ImVec2 tailPoint = particlePosition(i, std::max(0.f, elapsed - tail * .035f));
+			const int opacity = static_cast<int>((tail == 0 ? 220.f : 55.f - tail * 10.f) * particlesAlpha);
+			draw->AddCircleFilled(tailPoint, unit * (tail == 0 ? 3.5f : 2.f),
+					IM_COL32(colors[i][0], colors[i][1], colors[i][2], opacity), 12);
+		}
+	}
+
+	// Reveal the emblem first, then let the wordmark settle alongside it.
+	const float split = .375f;
+	const float emblemScale = .88f + .12f * emblemReveal;
+	const ImVec2 emblemCenter(topLeft.x + logoWidth * split * .5f, topLeft.y + logoHeight * .5f);
+	const ImVec2 emblemHalf(logoWidth * split * .5f * emblemScale, logoHeight * .5f * emblemScale);
+	draw->AddImage(logo, ImVec2(emblemCenter.x - emblemHalf.x, emblemCenter.y - emblemHalf.y),
+			ImVec2(emblemCenter.x + emblemHalf.x, emblemCenter.y + emblemHalf.y), ImVec2(0, 0), ImVec2(split, 1),
+			IM_COL32(255, 255, 255, static_cast<int>(255.f * emblemReveal * fade)));
+	const float wordOffset = (1.f - wordmarkReveal) * 28.f * unit;
+	draw->AddImage(logo, ImVec2(topLeft.x + logoWidth * split - wordOffset, topLeft.y),
+			ImVec2(topLeft.x + logoWidth - wordOffset, topLeft.y + logoHeight), ImVec2(split, 0), ImVec2(1, 1),
+			IM_COL32(255, 255, 255, static_cast<int>(255.f * wordmarkReveal * fade)));
+	for (int i = 0; i < 4; ++i)
+	{
+		const float impact = smooth((elapsed - .94f - i * .06f) / .12f)
+				* (1.f - smooth((elapsed - 1.06f - i * .06f) / .28f)) * fade;
+		draw->AddCircleFilled(buttonCenters[i], 13.f * unit,
+				IM_COL32(colors[i][0], colors[i][1], colors[i][2], static_cast<int>(45.f * impact)), 24);
+		draw->AddCircleFilled(buttonCenters[i], 3.f * unit,
+				IM_COL32(255, 255, 255, static_cast<int>(150.f * impact)), 16);
+	}
+
+	// In the last half-second, render the real UI underneath the fading artwork.
+	return elapsed < fadeStart;
+}
+
 static void gui_display_loadscreen()
 {
 	drawBoxartBackground();
@@ -3008,16 +4300,8 @@ static void gui_display_loadscreen()
 			const bool customTexPreloading = custom_texture.isPreloading();
 			if (gameReady && !customTexPreloading)
 			{
-				if (!game_started && NetworkHandshake::instance != nullptr)
-				{
-					networkStatus = NetworkHandshake::instance->start();
-					gui_setState(GuiState::NetworkStart);
-				}
-				else
-				{
-					gui_request_initial_auto_load();
-					ImGui::Text("%s", label);
-				}
+				gui_request_initial_auto_load();
+				ImGui::Text("%s", label);
 			}
 			else
 			{
@@ -3048,7 +4332,7 @@ static void gui_display_loadscreen()
 					}
 				}
 
-				ImguiStyleColor _(ImGuiCol_PlotHistogram, ImVec4(0.557f, 0.268f, 0.965f, 1.f));
+				ImguiStyleColor _(ImGuiCol_PlotHistogram, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
 				ImGui::ProgressBar(progress, ImVec2(-1, uiScaled(20.f)), overlay);
 
 				float currentwidth = ImGui::GetContentRegionAvail().x;
@@ -3078,10 +4362,38 @@ void gui_display_ui()
 	const LockGuard lock(guiMutex);
 
 	if (gui_state == GuiState::Closed)
+	{
+		boxart.setMediaBatchPending(false);
 		return;
+	}
+	// Reconcile the completed library scan with the selected manifest. Adding a theme
+	// or a named media type must not add another automatic scraping path here.
+	static std::string queuedMediaKey;
+	const auto* selectedTheme = themes::current();
+	const auto* selectedLayout = themes::currentLayout();
+	const auto overrideSource = themes::iconArtworkSource(config::ThemeIconMedia.get());
+	const u32 requirements = selectedTheme && selectedLayout
+		? themes::requiredMedia(*selectedTheme, *selectedLayout, overrideSource) : artwork::basicMedia;
+	const bool enabled = config::FetchBoxart && config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
+	const u64 generation = scanner.get_generation();
+	const std::string key = std::to_string(generation) + "/" + std::to_string(requirements) + "/"
+		+ std::to_string(config::ArtworkProvider.get()) + "/" + config::BoxartPath.get() + "/"
+		+ (selectedTheme ? selectedTheme->id : "basic") + "/" + (selectedLayout ? selectedLayout->id : "")
+		+ (enabled ? "/on" : "/off");
+	if (enabled && generation && !scanner.is_scanning() && key != queuedMediaKey)
+	{
+		gui_download_library_media(requirements, false, selectedTheme ? selectedTheme->name : T("Basic library media"));
+		queuedMediaKey = key;
+	}
+	else if (!enabled) queuedMediaKey.clear();
+	updateLibraryMediaProgress();
+	// Account and quota changes resume already queued work without re-enqueuing it.
+	boxart.startFetch();
 
 	// Initialize ImGui frame BEFORE any early returns
 	// This ensures the menu bar is always visible, even during auto-start
+	if (styleReloadRequested)
+		gui_updateStyle();
 	gui_newFrame();
 	if (gui_state == GuiState::Settings)
 		SettingsNew::prepareControllerNavigation();
@@ -3095,21 +4407,44 @@ void gui_display_ui()
 		ImguiFileTexture::resetLoadCount();
 	};
 
+#ifdef TARGET_UWP
+	// Resolve protocol-launched games before the intro can defer activation.
+	const bool protocolActivated = gui_state == GuiState::Main && checkUWPProtocolActivation();
+#endif
+
+	// Scan library paths during the intro, but keep direct launches free of a
+	// worker that gui_start_game would have to join before loading the game.
+	if (gui_state == GuiState::SelectDisk || (gui_state == GuiState::Main
+			&& settings.content.path.empty() && !settings.naomi.slave))
+		scanner.fetch_game_list();
+
+	if (gui_display_launch_screen())
+	{
+		finishFrame();
+		return;
+	}
+
 	// Render menu bar BEFORE any early returns.
 	// Hide it for the full-screen GameInfo screen on Android.
 	if (gui_state != GuiState::GameInfo)
+	{
+		std::optional<LibraryUiScope> libraryMenuUi;
+		if (gui_state == GuiState::Main || gui_state == GuiState::SelectDisk)
+			libraryMenuUi.emplace(settings.display.uiScale / appliedUserUiScale);
 		GuiMenu::renderMainMenuBar();
+	}
+
+#ifdef TARGET_UWP
+	if (protocolActivated)
+	{
+		finishFrame();
+		return;
+	}
+#endif
 
 	// Check for auto-start after menu bar is rendered
 	if (gui_state == GuiState::Main)
 	{
-#ifdef TARGET_UWP
-		if (checkUWPProtocolActivation())
-		{
-			finishFrame();
-			return;
-		}
-#endif
 		if (!settings.content.path.empty() || settings.naomi.slave)
 		{
 #ifndef __ANDROID__
@@ -3152,9 +4487,6 @@ void gui_display_ui()
 		break;
 	case GuiState::Onboarding:
 		gui_display_onboarding();
-		break;
-	case GuiState::VJoyEdit:
-		vgamepad::draw();
 		break;
 	case GuiState::VJoyEditCommands:
 		vgamepad::displayCommands();
@@ -3260,11 +4592,16 @@ void gui_draw_osd()
 	}
 	if (!settings.raHardcoreMode)
 		lua::overlay();
-	vgamepad::draw();
+	SettingsNew::renderTextureFilterLiveTuneOverlay();
+	if (!SettingsNew::textureFilterLiveTuneActive())
+		vgamepad::draw();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
 	// Use this frame's effective bar height, including fullscreen auto-hide.
 	performance_overlay::draw();
+#if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
+	vmu_window::drawInApp();
+#endif
 
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
@@ -3288,7 +4625,7 @@ void gui_display_profiler()
 	ImGui::Begin(profilerWindowTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBackground);
 
 	{
-		ImguiStyleColor _(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+		ImguiStyleColor _(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 
 		std::unique_lock<std::recursive_mutex> lock(fc_profiler::ProfileThread::s_allThreadsLock);
 
@@ -3328,7 +4665,9 @@ void gui_term()
 	if (inited)
 	{
 		inited = false;
+		gui_term_dcnet();
 		scanner.stop();
+		librarySavestateCache.stop();
 		clearThumbnailCache();
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
@@ -3356,14 +4695,22 @@ void fatal_error(const char* text, ...)
 
 extern bool subfolders_read;
 
-void gui_refresh_files() {
+void gui_refresh_files(bool invalidateArtwork) {
+	librarySavestateCacheInvalidated = true;
+	if (invalidateArtwork)
+		boxart.invalidateOfflineArtwork();
 	scanner.refresh();
 	subfolders_read = false;
 }
 
 void reset_vmus() {
 	for (u32 i = 0; i < std::size(vmu_lcd_status); i++)
+	{
 		vmu_lcd_status[i] = false;
+#ifdef HAVE_MOVABLE_VMUS
+		vmu_window::publishScreen(i, nullptr, false);
+#endif
+	}
 }
 
 void gui_error(const std::string& what) {
@@ -3487,8 +4834,13 @@ void gui_togglePause()
 
 void gui_setState(GuiState newState)
 {
+	if (newState != GuiState::Main)
+		pendingRackLaunch.reset();
 	if (gui_state != newState)
 	{
+		if (gui_state == GuiState::VJoyEditCommands)
+			// Menu navigation cancels unsaved edits; Done has already ended the session.
+			vgamepad::stopEditing(true);
 		if (newState == GuiState::Main && gui_state == GuiState::Closed)
 			clearVmuIconLookups();
 		resetLibraryLongPress();
@@ -3511,14 +4863,19 @@ std::string gui_getCurGameBoxartUrl()
 	GameMedia game;
 	game.fileName = settings.content.fileName;
 	game.path = settings.content.path;
+	game.arcade = settings.platform.isArcade();
 	GameBoxart art = boxart.getBoxart(game);
 	return art.boxartUrl;
 }
 
 void gui_refresh_custom_boxart(bool force)
 {
+	boxart.invalidateOfflineArtwork();
 	boxart.refreshLibraryPlaytimeDatabase();
 	boxart.refreshCustomBoxartIndex(force);
+	// Invalidation cancels pending source revisions; rebuild their requests through
+	// the same bounded inventory path rather than depending on visible tiles.
+	gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia);
 }
 
 void gui_refresh_boxart_cache()
@@ -3526,16 +4883,76 @@ void gui_refresh_boxart_cache()
 	clearVmuIconLookups();
 	boxart.refreshCache();
 	scanner.fetch_game_list_sync();
-	std::vector<GameMedia> games;
+	gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia);
+}
+
+void gui_display_library_download_progress()
+{
+	const auto& batch = libraryMediaBatch;
+	if (!batch.progress.total) return;
+	ImGui::TextWrapped("%s", batch.label.c_str());
+	const auto& p = batch.progress;
+	const float fraction = batch.checked ? float(p.ready + p.unavailable) / p.total
+		: float(batch.cursor) / std::max(size_t(1), batch.games.size());
+	ImGui::ProgressBar(std::clamp(fraction, 0.f, 1.f), ImVec2(-1, uiScaled(14.f)),
+		batch.checked ? T("Media checked") : T("Checking existing media..."));
+	ImGui::Text(T("Ready: %llu | Pending: %llu | Unavailable: %llu"),
+		static_cast<unsigned long long>(p.ready), static_cast<unsigned long long>(p.pending), static_cast<unsigned long long>(p.unavailable));
+	if (p.unavailable) ImGui::TextWrapped("%s", T("Some media is not available from this provider or no matching game was found. Existing artwork remains available."));
+	if (p.pending)
+	{
+		if (!config::FetchBoxart || config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
+			ImGui::TextWrapped("%s", T("Downloads paused. Enable Fetch Box Art and an online artwork source to continue."));
+		else if (boxart.customMediaFailed())
+			ImGui::TextWrapped("%s", T("Downloads paused: the local artwork folder could not be read. Check its path and refresh the artwork index."));
+		else if (!batch.checked && !boxart.customMediaReady())
+			ImGui::TextWrapped("%s", T("Checking the local artwork folder before downloading missing media..."));
+		else if (config::ArtworkProvider.get() == 1)
+		{
+			const int phase = boxart.activeMediaProvider();
+			if (phase >= 0) ImGui::Text(T("Current provider: %s"), phase == 1 ? "ScreenScraper" : phase == 2 ? "LaunchBox" : "TheGamesDB");
+			const auto account = screenscraper::status();
+			if (phase == 1 && !account.message.empty()) ImGui::TextWrapped("%s", account.message.c_str());
+		}
+	}
+}
+
+void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const std::string& label)
+{
+	if (retryUnavailable) boxart.retryArtworkMedia();
+	LibraryMediaBatch batch;
+	batch.mask = requestedMedia | artwork::metadataMedia;
+	// Switching themes must not discard a manually requested batch that is still
+	// being inventoried. Merging masks is safe: each source has one active job.
+	batch.label = label;
+	if (libraryMediaBatch.progress.pending)
+	{
+		if (libraryMediaBatch.mask & ~batch.mask) batch.label = T("Queued library media");
+		batch.mask |= libraryMediaBatch.mask;
+	}
 	{
 		std::lock_guard<std::mutex> guard(scanner.get_mutex());
-		games = scanner.get_game_list();
+		std::unordered_set<std::string> paths;
+		for (const auto& game : scanner.get_game_list())
+			if (!game.device && !game.path.empty() && !game.arcade && paths.insert(game.path).second)
+				batch.games.push_back(game);
 	}
-	for (const GameMedia& game : games) {
-		if (!game.device)
-			boxart.queueBoxart(game);
+	size_t units = 1; // metadata
+	for (size_t i = 0; i < artwork::mediaTypes.size(); ++i) if (batch.mask & (1u << i)) ++units;
+	batch.progress.total = batch.progress.pending = units * batch.games.size();
+	batch.outcomes.resize(batch.games.size());
+	for (auto& outcome : batch.outcomes)
+	{
+		outcome.total = outcome.pending = units;
+		outcome.pendingMedia = batch.mask;
 	}
+	libraryMediaBatch = std::move(batch);
 	boxart.startFetch();
+}
+
+void gui_download_all_theme_media()
+{
+	gui_download_library_media(themes::allThemeMedia(), false, T("All installed themes"));
 }
 
 void gui_runOnUiThread(std::function<void()> function) {
@@ -3705,7 +5122,7 @@ void render_save_state_slots(bool isSaving)
     }
 
     if (!isSaving && !hasEntries) {
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", T("No Save States"));
+        ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", T("No Save States"));
     }
 }
 

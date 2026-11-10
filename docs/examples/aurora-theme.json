@@ -1,0 +1,35 @@
+{
+  "base": "Dark",
+  "colors": {
+    "Text": "#F1F6FFFF",
+    "TextDisabled": "#A2B0C8",
+    "WindowBg": "#10152A",
+    "ChildBg": "#151D35",
+    "PopupBg": "#192442",
+    "FrameBg": "#253556",
+    "FrameBgHovered": "#36527C",
+    "FrameBgActive": "#416795",
+    "Button": "#285D76",
+    "ButtonHovered": "#36859A",
+    "ButtonActive": "#48B4AD",
+    "Header": "#285D76",
+    "HeaderHovered": "#36859A",
+    "HeaderActive": "#48B4AD",
+    "CheckMark": "#7DE8CA",
+    "SliderGrab": "#7DE8CA",
+    "SliderGrabActive": "#B2FFE3",
+    "Border": "#5A7496AA"
+  },
+  "style": {
+    "WindowRounding": 10,
+    "PopupRounding": 10,
+    "FrameRounding": 7,
+    "FrameBorderSize": 1,
+    "GrabRounding": 7,
+    "TabRounding": 7,
+    "WindowPadding": [12, 12],
+    "FramePadding": [10, 6],
+    "ItemSpacing": [10, 10],
+    "ItemInnerSpacing": [6, 6]
+  }
+}

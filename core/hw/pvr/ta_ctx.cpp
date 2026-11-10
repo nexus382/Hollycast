@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "ta_ctx.h"
 #include "spg.h"
 #include "cfg/option.h"
@@ -7,6 +8,8 @@
 
 #include <mutex>
 #include <vector>
+
+/* Portions Copyright 2026 The Hollycast Authors */
 
 extern u32 fskip;
 static int RenderCount;
@@ -236,9 +239,11 @@ static void deserializeContext(Deserializer& deser, TA_context **pctx)
 		*pctx = nullptr;
 		return;
 	}
-	*pctx = tactx_Find(address, true);
 	u32 size;
 	deser >> size;
+	if (size > TA_DATA_SIZE)
+		throw Deserializer::Exception("Invalid TA context size");
+	*pctx = tactx_Find(address, true);
 	tad_context& tad = (*pctx)->tad;
 	deser.deserialize(tad.thd_root, size);
 	tad.thd_data = tad.thd_root + size;

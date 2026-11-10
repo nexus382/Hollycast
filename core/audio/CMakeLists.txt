@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 target_sources(${PROJECT_NAME} PRIVATE
         audiostream.h)
 
@@ -13,5 +14,7 @@ if(NOT LIBRETRO)
             audiobackend_oss.cpp
             audiobackend_pulseaudio.cpp
             audiobackend_sdl2.cpp
-            audiostream.cpp)
+            audiostream.cpp
+            ui_sound.cpp
+            ui_sound.h)
 endif()

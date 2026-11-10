@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 plugins {
     alias(libs.plugins.android.application)
 }
@@ -18,9 +19,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.hollycast.emulator"
+        applicationId = "com.hollycast.emu"
         minSdk = 21
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 8
         versionName = gitVersionName()
         vectorDrawables.useSupportLibrary = true

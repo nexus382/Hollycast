@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -46,7 +47,9 @@
 #include "profiler/fc_profiler.h"
 
 #include <nowide/args.hpp>
+#include <nowide/convert.hpp>
 #include <nowide/stackstring.hpp>
+#include <algorithm>
 #include <exception>
 
 #include <windows.h>
@@ -262,16 +265,22 @@ FILE *fopen(char const *file_name, char const *mode)
 	DWORD dwCreationDisposition;
 	int openFlags = 0;
 	if (strchr(mode, '+') != nullptr)
+	{
 		dwDesiredAccess = GENERIC_READ | GENERIC_WRITE;
+		openFlags |= _O_RDWR;
+	}
 	else if (strchr(mode, 'r') != nullptr)
 	{
 		openFlags |= _O_RDONLY;
 		dwDesiredAccess = GENERIC_READ;
 	}
 	else
+	{
 		dwDesiredAccess = GENERIC_WRITE;
+		openFlags |= _O_WRONLY;
+	}
 	if (strchr(mode, 'w') != nullptr)
-		dwCreationDisposition = CREATE_ALWAYS;
+		dwCreationDisposition = strchr(mode, 'x') != nullptr ? CREATE_NEW : CREATE_ALWAYS;
 	else if (strchr(mode, 'a') != nullptr)
 	{
 		dwCreationDisposition = OPEN_ALWAYS;
@@ -279,12 +288,22 @@ FILE *fopen(char const *file_name, char const *mode)
 	}
 	else
 		dwCreationDisposition = OPEN_EXISTING;
-	if (strchr(mode, 'b') == nullptr)
-		openFlags |= _O_TEXT;
+	openFlags |= strchr(mode, 'b') != nullptr ? _O_BINARY : _O_TEXT;
 
 	HANDLE fileh = CreateFile2FromAppW(wname.get(), dwDesiredAccess, FILE_SHARE_READ, dwCreationDisposition, nullptr);
 	if (fileh == INVALID_HANDLE_VALUE)
+	{
+		const DWORD error = GetLastError();
+		if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)
+			errno = EEXIST;
+		else if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+			errno = ENOENT;
+		else if (error == ERROR_ACCESS_DENIED)
+			errno = EACCES;
+		else
+			errno = EIO;
 		return nullptr;
+	}
 
 	int fd = _open_osfhandle((intptr_t)fileh, openFlags);
 	if (fd == -1)
@@ -294,7 +313,26 @@ FILE *fopen(char const *file_name, char const *mode)
 		return nullptr;
 	}
 
-	return _fdopen(fd, mode);
+	// Exclusive creation is already enforced by CreateFile2FromAppW.
+	std::string streamMode(mode);
+	streamMode.erase(std::remove(streamMode.begin(), streamMode.end(), 'x'), streamMode.end());
+	FILE *file = _fdopen(fd, streamMode.c_str());
+	if (!file)
+		_close(fd);
+	return file;
+}
+
+namespace detail {
+FILE *wfopen(const wchar_t *filename, const wchar_t *mode)
+{
+	stackstring name, openMode;
+	if (!name.convert(filename) || !openMode.convert(mode))
+	{
+		errno = EINVAL;
+		return nullptr;
+	}
+	return nowide::fopen(name.get(), openMode.get());
+}
 }
 
 int remove(char const *name)
@@ -390,7 +428,9 @@ int main(int argc, char* argv[])
 	} catch (const std::exception& e) {
 		ERROR_LOG(BOOT, "mainui_loop error: %s", e.what());
 #ifndef TARGET_UWP
-		MessageBox(NULL, i18n::T("Flycast Error"), e.what(), MB_ICONSTOP | MB_OK);
+		// Native dialogs require UTF-16; translations and exception text are UTF-8.
+		MessageBoxW(nullptr, nowide::widen(e.what()).c_str(),
+			nowide::widen(i18n::T("Hollycast Error")).c_str(), MB_ICONSTOP | MB_OK);
 #endif
 	} catch (...) {
 		ERROR_LOG(BOOT, "mainui_loop unknown exception");

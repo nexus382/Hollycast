@@ -2,6 +2,7 @@
 	Created on: Sep 15, 2018
 
 	Copyright 2018 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of reicast.
 
@@ -33,6 +34,7 @@ public:
 	int readModem() override;
 	int modemAvailable() override;
 	void receiveEthFrame(const u8 *frame, u32 size) override;
+	u32 sendEthFrame(u8 *frame) override;
 };
 
 }

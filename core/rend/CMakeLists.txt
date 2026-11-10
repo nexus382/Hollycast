@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 target_sources(${PROJECT_NAME} PRIVATE
         CustomTexture.cpp
         CustomTexture.h
@@ -39,4 +40,8 @@ endif()
 
 if(WIN32 AND USE_DX11)
     add_subdirectory(dx11)
+endif()
+
+if(USE_METAL)
+    add_subdirectory(metal)
 endif()

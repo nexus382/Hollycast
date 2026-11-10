@@ -1,5 +1,6 @@
 /*
 	Copyright 2023 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -17,7 +18,6 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "sh4_cycles.h"
-#include "modules/mmu.h"
 
 int Sh4Cycles::countCycles(u16 op)
 {
@@ -65,7 +65,7 @@ int Sh4Cycles::countCycles(u16 op)
 	if (isMemOp[opcode->ex_type])
 	{
 		if (++memOps < 4)
-			cycles = mmu_enabled() ? 5 : 2;
+			cycles = 2;
 	}
 	// TODO only for mem read?
 #endif

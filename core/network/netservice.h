@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -18,11 +19,19 @@
  */
 #pragma once
 #include "types.h"
+#include <stdexcept>
 
 namespace net::modbba
 {
 
+class ConnectionClosed : public std::exception
+{
+public:
+	ConnectionClosed() = default;
+};
+
 bool start();
+bool startIfNeeded(bool receiverEnabled);
 void stop();
 
 void writeModem(u8 b);
@@ -30,6 +39,7 @@ int readModem();
 int modemAvailable();
 
 void receiveEthFrame(const u8 *frame, u32 size);
+u32 sendEthFrame(u8 *frame);
 
 class Service
 {
@@ -42,7 +52,10 @@ public:
 	virtual int readModem() = 0;
 	virtual int modemAvailable() = 0;
 
-	virtual void receiveEthFrame(const u8 *frame, u32 size) = 0;
+	virtual void receiveEthFrame(const u8 *frame, u32 size) {}
+	virtual u32 sendEthFrame(u8 *frame) { return 0; }
 };
+
+void setCustomService(Service *service);
 
 }

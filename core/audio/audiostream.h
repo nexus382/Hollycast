@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "types.h"
 
@@ -63,6 +64,10 @@ private:
 void InitAudio();
 void TermAudio();
 void WriteSample(s16 right, s16 left);
+// Plays interleaved stereo frames while no game is running, opening the backend if needed.
+void PushUiAudio(const s16 *frames, u32 count);
+// Closes a backend opened by PushUiAudio. A running game's backend is left alone.
+void StopUiAudio();
 
 void StartAudioRecording(bool eight_khz);
 u32 RecordAudio(void *buffer, u32 samples);
@@ -73,8 +78,8 @@ constexpr u32 SAMPLE_COUNT = 512;	// AudioBackend::push() is always called with 
 class RingBuffer
 {
 	std::vector<u8> buffer;
-	std::atomic_int readCursor { 0 };
-	std::atomic_int writeCursor { 0 };
+	alignas(64) std::atomic_int readCursor { 0 };
+	alignas(64) std::atomic_int writeCursor { 0 };
 
 	u32 readSize() {
 		return (u32)((writeCursor - readCursor + buffer.size()) % buffer.size());

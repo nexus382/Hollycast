@@ -2,6 +2,7 @@
  *  Created on: Oct 3, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -188,6 +189,9 @@ private:
 			hash |= (u64)(pp->tsp.SrcSelect == 1) << 33;
 			hash |= (u64)(pp->tsp.DstSelect == 1) << 34;
 		}
+		const sample_filter::Settings filter(pp->pcw.Texture && pp->tcw.PixelFmt != PixelBumpMap ? config::SampleTextureFilter.get() : 0,
+				config::MaxFilteredTextureSize.get());
+		hash |= (u64)filter.key() << 35;
 
 		return hash;
 	}

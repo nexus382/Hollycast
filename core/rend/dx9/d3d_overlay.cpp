@@ -45,6 +45,8 @@ void D3DOverlay::draw(u32 width, u32 height, bool vmu, bool crosshair)
 
 		for (size_t i = 0; i < vmuTextures.size(); i++)
 		{
+			if (vmu_window::ownsScreen(int(i)))
+				continue;
 			ComPtr<IDirect3DTexture9>& texture = vmuTextures[i];
 			if (!vmu_lcd_status[i])
 			{

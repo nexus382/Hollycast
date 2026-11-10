@@ -1,0 +1,52 @@
+{
+  "formatVersion": 1,
+  "id": "preview-cd-rack",
+  "name": "CD Rack *",
+  "author": "The Hollycast Authors",
+  "description": "Jewel-case spines on shaded shelves, with a selected-game miximage, front cover and metadata.",
+  "baseTheme": 0,
+  "colors": {
+    "WindowBg": "14171C", "Text": "F3EEE5", "Button": "343B46",
+    "ButtonHovered": "525A66", "Header": "75624B", "CheckMark": "E4BB7A"
+  },
+  "layouts": [{
+    "id": "disc-shelves", "name": "CD shelves", "mode": "rack",
+    "activation": "doubleClick",
+    "requiredMedia": ["boxtexture", "backcover"],
+    "browser": [0.025,0.12,0.55,0.77],
+    "columns": 64, "itemAspect": 0.045, "spacing": 3, "fontSize": 0.024,
+    "showTitles": false, "artworkSource": "spine",
+    "selectorColor": "E3BD7D30", "selectorBorderColor": "F3CE91", "separatorColor": "A58A64",
+    "inactiveOpacity": 0.85, "compactControls": true, "showInfoTooltip": false,
+    "background": "11151B",
+    "elements": [
+      {"type":"artwork","source":"miximage","fallback":"cover","rect":[0,0,1,1],"fit":"cover","color":"FFFFFF50","zIndex":-100},
+      {"type":"panel","rect":[0,0,1,1],"color":"0F141AEA","endColor":"111419D8","gradient":"horizontal","zIndex":-90},
+      {"type":"panel","rect":[0.012,0.105,0.578,0.885],"color":"24282DDD","endColor":"0D1116EE","rounding":10,"zIndex":-80},
+      {"type":"panel","rect":[0.012,0.105,0.006,0.88],"color":"9A8060","endColor":"312C27","zIndex":-70},
+      {"type":"panel","rect":[0.584,0.105,0.006,0.88],"color":"9A8060","endColor":"312C27","zIndex":-70},
+      {"type":"text","text":"THE DISC COLLECTION","rect":[0.025,0.025,0.55,0.04],"fontSize":0.032,"color":"E6C79A","bold":true,"wrap":false},
+      {"type":"text","text":"Browse your shelves","rect":[0.025,0.072,0.55,0.026],"fontSize":0.021,"color":"A8ADB5","wrap":false},
+      {"type":"panel","rect":[0.604,0.02,0.001,0.96],"color":"C2A57745","zIndex":-10},
+      {"type":"artwork","source":"miximage","fallback":"cover","rect":[0.62,0.02,0.365,0.47],"fit":"cover","rounding":12,"zIndex":-60},
+      {"type":"panel","rect":[0.62,0.02,0.365,0.47],"color":"10151B20","endColor":"10151BF2","rounding":12,"zIndex":-50},
+      {"type":"panel","rect":[0.697,0.087,0.225,0.36],"color":"00000080","rounding":8},
+      {"type":"artwork","source":"cover","rect":[0.685,0.075,0.225,0.36],"fit":"contain","rounding":5},
+      {"type":"metadata","source":"title","rect":[0.628,0.5,0.347,0.087],"fontSize":0.038,"color":"FFF7EA","bold":true},
+      {"type":"metadata","source":"genre","rect":[0.628,0.591,0.347,0.028],"fontSize":0.022,"color":"C5AD8D","wrap":false},
+      {"type":"panel","rect":[0.624,0.636,0.18,0.075],"color":"343B47C0","endColor":"252B34C0","rounding":7},
+      {"type":"panel","rect":[0.813,0.636,0.167,0.075],"color":"343B47C0","endColor":"252B34C0","rounding":7},
+      {"type":"text","text":"RELEASED","rect":[0.635,0.647,0.16,0.019],"fontSize":0.016,"color":"AEB9CA","wrap":false},
+      {"type":"metadata","source":"releaseDate","rect":[0.635,0.675,0.16,0.029],"fontSize":0.025,"color":"F5EEE3","wrap":false},
+      {"type":"text","text":"PLAYERS","rect":[0.824,0.647,0.146,0.019],"fontSize":0.016,"color":"AEB9CA","wrap":false},
+      {"type":"metadata","source":"players","rect":[0.824,0.675,0.146,0.029],"fontSize":0.025,"color":"F5EEE3","wrap":false},
+      {"type":"text","text":"DEVELOPER","rect":[0.63,0.732,0.17,0.019],"fontSize":0.016,"color":"AEB9CA","wrap":false},
+      {"type":"metadata","source":"developer","rect":[0.63,0.761,0.17,0.029],"fontSize":0.023,"color":"F5EEE3","wrap":false},
+      {"type":"text","text":"PUBLISHER","rect":[0.819,0.732,0.156,0.019],"fontSize":0.016,"color":"AEB9CA","wrap":false},
+      {"type":"metadata","source":"publisher","rect":[0.819,0.761,0.156,0.029],"fontSize":0.023,"color":"F5EEE3","wrap":false},
+      {"type":"panel","rect":[0.628,0.81,0.347,0.001],"color":"C2A57740"},
+      {"type":"metadata","source":"description","rect":[0.628,0.835,0.347,0.14],"fontSize":0.023,"color":"C9CFD8"},
+      {"type":"button","action":"activate","text":"Play","rect":[0.2,0.91,0.2,0.065],"fontSize":0.03,"color":"FFF7EA","background":"75624B","rounding":0.2}
+    ]
+  }]
+}

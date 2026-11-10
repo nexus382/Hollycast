@@ -1,4 +1,5 @@
 // dear imgui, v1.92.6
+// Portions Copyright 2026 The Hollycast Authors
 // (widgets code)
 
 /*
@@ -44,6 +45,7 @@ Index of this file:
 #ifndef IMGUI_DISABLE
 #include "imgui_internal.h"
 #include "imgui_cjk.h"
+#include "misc/freetype/imgui_text_shaping.h"
 
 // System includes
 #include <stdint.h>     // intptr_t
@@ -4009,7 +4011,40 @@ namespace ImStb
 {
 static int     STB_TEXTEDIT_STRINGLEN(const ImGuiInputTextState* obj)                             { return obj->TextLen; }
 static char    STB_TEXTEDIT_GETCHAR(const ImGuiInputTextState* obj, int idx)                      { IM_ASSERT(idx >= 0 && idx <= obj->TextLen); return obj->TextSrc[idx]; }
-static float   STB_TEXTEDIT_GETWIDTH(ImGuiInputTextState* obj, int line_start_idx, int char_idx)  { unsigned int c; ImTextCharFromUtf8(&c, obj->TextSrc + line_start_idx + char_idx, obj->TextSrc + obj->TextLen); if ((ImWchar)c == '\n') return IMSTB_TEXTEDIT_GETWIDTH_NEWLINE; ImGuiContext& g = *obj->Ctx; return g.FontBaked->GetCharAdvance((ImWchar)c) * g.FontBakedScale; }
+#ifdef IMGUI_ENABLE_HARFBUZZ
+// Rendered Hindi uses shaped cluster widths, so editing must measure and move
+// by the same clusters or the caret disagrees with the glyphs on screen. Only
+// positions inside a Devanagari run take this path; other text is unchanged.
+static bool InputTextPositionNeedsShaping(const char* text, const char* text_end)
+{
+    return text < text_end && ImGuiTextShaper::NeedsShaping(text, text_end);
+}
+static const char* InputTextShapedBoundary(ImGuiInputTextState* obj, const char* position, bool round_up)
+{
+    ImGuiContext& g = *obj->Ctx;
+    return ImGuiTextShaper::ClusterBoundary(g.Font, g.FontSize, obj->TextSrc, obj->TextSrc + obj->TextLen, position, round_up);
+}
+#endif
+static float   STB_TEXTEDIT_GETWIDTH(ImGuiInputTextState* obj, int line_start_idx, int char_idx)
+{
+    const char* text_end = obj->TextSrc + obj->TextLen;
+    const char* p = obj->TextSrc + line_start_idx + char_idx;
+    unsigned int c;
+    const int char_len = ImTextCharFromUtf8(&c, p, text_end);
+    if ((ImWchar)c == '\n') return IMSTB_TEXTEDIT_GETWIDTH_NEWLINE;
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    if (char_len > 0 && InputTextPositionNeedsShaping(p, p + char_len))
+    {
+        const char* cluster_start = InputTextShapedBoundary(obj, p, false);
+        if (cluster_start < p)
+            return 0.0f; // Interior codepoint: its width is counted at the cluster start.
+        const char* cluster_end = InputTextShapedBoundary(obj, p + char_len, true);
+        return InputTextCalcTextSize(obj->Ctx, cluster_start, cluster_end, text_end, NULL, NULL, ImDrawTextFlags_StopOnNewLine).x;
+    }
+#endif
+    ImGuiContext& g = *obj->Ctx;
+    return g.FontBaked->GetCharAdvance((ImWchar)c) * g.FontBakedScale;
+}
 static char    STB_TEXTEDIT_NEWLINE = '\n';
 static void    STB_TEXTEDIT_LAYOUTROW(StbTexteditRow* r, ImGuiInputTextState* obj, int line_start_idx)
 {
@@ -4032,7 +4067,13 @@ static int IMSTB_TEXTEDIT_GETNEXTCHARINDEX_IMPL(ImGuiInputTextState* obj, int id
     if (idx >= obj->TextLen)
         return obj->TextLen + 1;
     unsigned int c;
-    return idx + ImTextCharFromUtf8(&c, obj->TextSrc + idx, obj->TextSrc + obj->TextLen);
+    int next = idx + ImTextCharFromUtf8(&c, obj->TextSrc + idx, obj->TextSrc + obj->TextLen);
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    // Never leave the caret inside a shaped cluster: snap to its far edge.
+    if (next < obj->TextLen && InputTextPositionNeedsShaping(obj->TextSrc, obj->TextSrc + obj->TextLen))
+        next = (int)(InputTextShapedBoundary(obj, obj->TextSrc + next, true) - obj->TextSrc);
+#endif
+    return next;
 }
 
 static int IMSTB_TEXTEDIT_GETPREVCHARINDEX_IMPL(ImGuiInputTextState* obj, int idx)
@@ -4040,6 +4081,10 @@ static int IMSTB_TEXTEDIT_GETPREVCHARINDEX_IMPL(ImGuiInputTextState* obj, int id
     if (idx <= 0)
         return -1;
     const char* p = ImTextFindPreviousUtf8Codepoint(obj->TextSrc, obj->TextSrc + idx);
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    if (InputTextPositionNeedsShaping(obj->TextSrc, obj->TextSrc + obj->TextLen))
+        p = InputTextShapedBoundary(obj, p, false);
+#endif
     return (int)(p - obj->TextSrc);
 }
 
@@ -4290,6 +4335,7 @@ ImGuiInputTextState::~ImGuiInputTextState()
 void ImGuiInputTextState::OnKeyPressed(int key)
 {
     stb_textedit_key(this, Stb, key);
+    CursorClamp(); // An edit or undo/redo may have merged a cluster around the caret.
     CursorFollow = true;
     CursorAnimReset();
     const int key_u = (key & ~STB_TEXTEDIT_K_SHIFT);
@@ -4306,13 +4352,39 @@ void ImGuiInputTextState::OnCharPressed(unsigned int c)
     char utf8[5];
     ImTextCharToUtf8(utf8, c);
     stb_textedit_text(this, Stb, utf8, (int)ImStrlen(utf8));
+    CursorClamp(); // Committed text may merge with neighbours into one cluster. IME preedit is not in this buffer, so composition is unaffected.
     CursorFollow = true;
     CursorAnimReset();
 }
 
 // Those functions are not inlined in imgui_internal.h, allowing us to hide ImStbTexteditState from that header.
 void ImGuiInputTextState::CursorAnimReset()                 { CursorAnim = -0.30f; } // After a user-input the cursor stays on for a while without blinking
-void ImGuiInputTextState::CursorClamp()                     { Stb->cursor = ImMin(Stb->cursor, TextLen); Stb->select_start = ImMin(Stb->select_start, TextLen); Stb->select_end = ImMin(Stb->select_end, TextLen); }
+void ImGuiInputTextState::CursorClamp()
+{
+    Stb->cursor = ImMin(Stb->cursor, TextLen);
+    Stb->select_start = ImMin(Stb->select_start, TextLen);
+    Stb->select_end = ImMin(Stb->select_end, TextLen);
+#ifdef IMGUI_ENABLE_HARFBUZZ
+    // After a completed edit, caret/selection must rest on a shaping-cluster
+    // boundary, matching the rendered glyphs. Snap to the nearest boundary,
+    // forward on ties, so an insertion caret stays after its merged cluster.
+    if (Ctx == NULL || Ctx->Font == NULL || TextSrc == NULL || TextLen <= 0 || !ImGuiTextShaper::NeedsShaping(TextSrc, TextSrc + TextLen))
+        return;
+    const char* text_end = TextSrc + TextLen;
+    auto snap = [&](int pos) {
+        if (pos <= 0 || pos >= TextLen)
+            return pos;
+        const char* start = ImGuiTextShaper::ClusterBoundary(Ctx->Font, Ctx->FontSize, TextSrc, text_end, TextSrc + pos, false);
+        const char* end = ImGuiTextShaper::ClusterBoundary(Ctx->Font, Ctx->FontSize, TextSrc, text_end, TextSrc + pos, true);
+        if (start == end)
+            return pos;
+        return (int)((TextSrc + pos - start < end - (TextSrc + pos)) ? start - TextSrc : end - TextSrc);
+    };
+    Stb->cursor = snap(Stb->cursor);
+    Stb->select_start = snap(Stb->select_start);
+    Stb->select_end = snap(Stb->select_end);
+#endif
+}
 bool ImGuiInputTextState::HasSelection() const              { return Stb->select_start != Stb->select_end; }
 void ImGuiInputTextState::ClearSelection()                  { Stb->select_start = Stb->select_end = Stb->cursor; }
 int  ImGuiInputTextState::GetCursorPos() const              { return Stb->cursor; }

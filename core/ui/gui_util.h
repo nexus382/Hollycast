@@ -28,6 +28,7 @@
 #include "oslib/oslib.h"
 #include "oslib/i18n.h"
 #include "stdclass.h"
+#include "theme.h"
 
 #include <algorithm>
 #include <chrono>
@@ -35,6 +36,8 @@
 #include <functional>
 #include <string>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 using StringCallback = std::function<bool(bool cancelled, const std::string& selection)>;
 
@@ -52,6 +55,13 @@ StoragePopupResult select_storage_popup(bool isDirectory, bool writeAccess, cons
 		const StringCallback& callback, const std::string& mimeType = {});
 
 void scrollWhenDraggingOnVoid(ImGuiMouseButton mouse_button = ImGuiMouseButton_Left);
+// Call immediately after BeginChild/BeginTable for each scrollable library pane.
+// Capturing a finger swipe before widgets run cancels their pending tap.
+void scrollWindowFromTouch();
+// Shared empty state for classic, table and themed libraries; caller opens the folder picker.
+bool drawEmptyLibraryPrompt(bool hasContentPath = false, bool scanning = false);
+// First-run theme choice; caller persists changes and refreshes style after rendering.
+bool drawSetupThemePicker();
 
 // Helper to display a little (?) mark which shows a tooltip when hovered.
 void ShowHelpMarker(const char* desc);
@@ -234,6 +244,22 @@ public:
 	}
 };
 
+// Library metrics use the theme at General UI Scaling 100%, without rebuilding
+// the font atlas or leaking temporary styles into Settings and other screens.
+class LibraryUiScope
+{
+public:
+	explicit LibraryUiScope(float baselineScale);
+	~LibraryUiScope();
+	LibraryUiScope(const LibraryUiScope&) = delete;
+	LibraryUiScope& operator=(const LibraryUiScope&) = delete;
+	static void setBaseStyle(const ImGuiStyle& style);
+
+private:
+	ImGuiStyle previousStyle;
+	float previousScale;
+};
+
 class ImguiTexture
 {
 public:
@@ -243,7 +269,7 @@ public:
 	void draw(ImDrawList *drawList, const ImVec2& pos, const ImVec2& size,
 			const ImVec2& uv0 = ImVec2(0, 0), const ImVec2& uv1 = ImVec2(1, 1), const ImVec4& color = ImVec4(1, 1, 1, 1));
 	bool button(const char* str_id, const ImVec2& image_size, const std::string& title = {}, const ImVec4& bg_col = ImVec4(0, 0, 0, 0),
-			const ImVec4& tint_col = ImVec4(1, 1, 1, 1), float fallbackTitleSize = 0.0f);
+			const ImVec4& tint_col = ImVec4(1, 1, 1, 1), float fallbackTitleSize = 0.0f, float rounding = 0.0f);
 
 	operator ImTextureID() {
 		return getId();
@@ -263,19 +289,27 @@ class ImguiFileTexture : public ImguiTexture
 {
 public:
 	ImguiFileTexture() = default;
-	ImguiFileTexture(const std::string& path) : ImguiTexture(), path(path) {}
+	ImguiFileTexture(const std::string& path, bool boundedImage = false, bool themeAsset = false)
+			: ImguiTexture(), path(path), boundedImage(boundedImage), themeAsset(themeAsset) {}
 
 	bool operator==(const ImguiFileTexture& other) const {
 		return other.path == path;
 	}
 	ImTextureID getId() override;
+	// Reads dimensions without decoding/uploading off-screen library artwork. Zero means unavailable.
+	float getAspectRatio() const;
+	void setPixelArt(const themes::PixelArt& style) { pixelArt = style; }
 
 	static void resetLoadCount() {
 		textureLoadCount = 0;
 	}
+	static void clearThemeImageFailures();
 
 private:
 	std::string path;
+	bool boundedImage = false;
+	bool themeAsset = false;
+	themes::PixelArt pixelArt;
 	static int textureLoadCount;
 };
 
@@ -431,6 +465,10 @@ struct PopupOptionsConfig {
     const char* const* options = nullptr;
     int optionCount = 0;
     int* currentValue = nullptr;
+
+    // Multiple selection edits a draft bitmask until Apply; storage indexes are bits 0..30.
+    bool multiSelect = false;
+    std::vector<std::pair<const char*, int>> selectionPresets;
 
     // Optional: Custom value-to-string conversion
     std::function<const char*(int)> valueToString = nullptr;

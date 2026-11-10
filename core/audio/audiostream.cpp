@@ -23,6 +23,8 @@
 #include "cfg/option.h"
 #include "emulator.h"
 
+#include <cstring>
+
 static void registerForEvents();
 
 struct SoundFrame { s16 l; s16 r; };
@@ -35,6 +37,7 @@ std::vector<AudioBackend *> *AudioBackend::backends;
 
 static bool audio_recording_started;
 static bool eight_khz;
+static bool uiAudioOpen; // The backend was opened for interface sounds, not a game.
 
 AudioBackend *AudioBackend::getBackend(const std::string& slug)
 {
@@ -82,6 +85,38 @@ void WriteSample(s16 r, s16 l)
 	}
 }
 
+void PushUiAudio(const s16 *frames, u32 count)
+{
+	if (emu.running())
+		return;
+	if (currentBackend == nullptr)
+	{
+		InitAudio();
+		uiAudioOpen = currentBackend != nullptr;
+	}
+	if (currentBackend == nullptr)
+		return;
+	const float volume = config::AudioVolume.dbPower();
+	SoundFrame chunk[SAMPLE_COUNT];
+	for (u32 offset = 0; offset < count; offset += SAMPLE_COUNT)
+	{
+		std::memset(chunk, 0, sizeof(chunk));
+		for (u32 i = 0; i < SAMPLE_COUNT && offset + i < count; ++i)
+		{
+			chunk[i].l = frames[(offset + i) * 2] * volume;
+			chunk[i].r = frames[(offset + i) * 2 + 1] * volume;
+		}
+		// Never wait: a full buffer drops the end of a sound rather than stalling the interface.
+		currentBackend->push(chunk, SAMPLE_COUNT, false);
+	}
+}
+
+void StopUiAudio()
+{
+	if (uiAudioOpen)
+		TermAudio();
+}
+
 void InitAudio()
 {
 	registerForEvents();
@@ -127,6 +162,7 @@ void InitAudio()
 
 void TermAudio()
 {
+	uiAudioOpen = false;
 	if (currentBackend == nullptr)
 		return;
 

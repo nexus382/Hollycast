@@ -3,8 +3,9 @@ name: Linux, macOS, Windows
 
 on:
   push:
-    branches-ignore:
-      - 'l10n_**'
+    branches:
+      - dev
+      - master
   pull_request:
 
 jobs:
@@ -137,15 +138,19 @@ jobs:
         if: runner.os != 'macOS'
 
       - name: CMake
+        env:
+          SENTRY_UPLOAD_URL: ${{ secrets.SENTRY_UPLOAD_URL }}
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ !startsWith(matrix.config.name, 'libretro') && secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID || '' }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ !startsWith(matrix.config.name, 'libretro') && secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD || '' }}
+          HOLLYCAST_REQUIRE_SCREENSCRAPER: ${{ !startsWith(matrix.config.name, 'libretro') && github.repository == 'nexus382/Hollycast' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact ${{ matrix.config.cmakeArgs }} -DSENTRY_UPLOAD_URL=${{ env.SENTRY_UPLOAD_URL }}
           cmake --build build --config ${{ matrix.config.buildType }} --target install
-        env:
-          SENTRY_UPLOAD_URL: ${{ secrets.SENTRY_UPLOAD_URL }}
 
       - name: Unit Tests
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON ${{ matrix.config.cmakeArgs }}
+          # Unit tests use mocks and must not inherit the packaged application's access.
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF ${{ matrix.config.cmakeArgs }}
           cmake --build build --config ${{ matrix.config.buildType }}
           ./build/Hollycast
         if: matrix.config.name == 'x86_64-pc-linux-gnu'

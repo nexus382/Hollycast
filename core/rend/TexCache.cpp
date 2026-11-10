@@ -2,6 +2,7 @@
 	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
+	Portions Copyright 2026 The Hollycast Authors
 
     Flycast is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -595,9 +596,11 @@ bool BaseTextureCacheData::Update()
 	PixelBuffer<u8> pb8;
 
 	// Figure out if we really need to use a 32-bit pixel buffer
+	const int maxFilteredTextureSize = config::MaxFilteredTextureSize.get();
 	bool textureUpscaling = config::TextureUpscale > 1
-			// Don't process textures that are too big
-			&& (int)(width * height) <= config::MaxFilteredTextureSize * config::MaxFilteredTextureSize
+			// Bucket by texture width so 8x16 sprites match 8x8, while 16x8 sprites match 16x16.
+			&& maxFilteredTextureSize > 0
+			&& (maxFilteredTextureSize >= 1024 || width <= (u32)maxFilteredTextureSize)
 			// Don't process YUV textures
 			&& tcw.PixelFmt != PixelYUV;
 	bool need_32bit_buffer = true;
@@ -662,16 +665,19 @@ bool BaseTextureCacheData::Update()
 			// xBRZ scaling
 			if (textureUpscaling)
 			{
+				// xBRZ only supports scale factors 2 through 6. Keep the allocated
+				// buffer, scaling operation, and uploaded dimensions in agreement.
+				const int factor = std::clamp((int)config::TextureUpscale, 2, 6);
 				PixelBuffer<u32> tmp_buf;
-				tmp_buf.init(width * config::TextureUpscale, height * config::TextureUpscale);
+				tmp_buf.init(width * factor, height * factor);
 
 				if (tcw.PixelFmt == Pixel1555 || tcw.PixelFmt == Pixel4444)
 					// Alpha channel formats. Palettes with alpha are already handled
 					has_alpha = true;
-				UpscalexBRZ(config::TextureUpscale, pb32.data(), tmp_buf.data(), width, height, has_alpha);
+				UpscalexBRZ(factor, pb32.data(), tmp_buf.data(), width, height, has_alpha);
 				pb32.steal_data(tmp_buf);
-				upscaled_w *= config::TextureUpscale;
-				upscaled_h *= config::TextureUpscale;
+				upscaled_w *= factor;
+				upscaled_h *= factor;
 			}
 		}
 		temp_tex_buffer = pb32.data();

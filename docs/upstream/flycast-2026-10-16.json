@@ -1,0 +1,3138 @@
+{
+  "snapshot_date": "2026-10-16",
+  "hollycast_repository": "https://github.com/nexus382/Hollycast",
+  "hollycast_base": "aede1de0887e655b1a1c987b9d408fc4491958d3",
+  "flycast_repository": "https://github.com/flyinghead/flycast",
+  "previous_full_sync": "36c975e39166df976581e4a5f68edc908a46c3d9",
+  "upstream_snapshot": "91c3084d52fc09e07d78cd1262f926e140d38b67",
+  "selection_rule": "Import independent backend fixes; hold rebuilt systems and changes needing integration for individual review.",
+  "integration_method": "Selective cherry-picks and explicit file selections. The upstream snapshot is not merged or marked fully integrated; use this ledger for subsequent syncs.",
+  "notes": [
+    "The CHD reader has no Hollycast changes. Its content matches the final upstream snapshot because the original commit predates an earlier upstream pregap fix; this avoids retaining both pregap implementations.",
+    "Box-art behavior remains intentionally excluded. The previously partial logging commit is now complete: warning fixes were imported earlier, and the upstream INFO default was applied on 2026-10-17.",
+    "Existing Hollycast fast-forward audio, command-line guards, render queue and OSD behavior are retained.",
+    "The GD-ROM timer import originally used upstream V62. A follow-up saves the pending transition target in V63, which older V62 builds reject. Supported older states remain readable; V62 states with a pending transition settle on pause because they did not save the target. Hollycast DreamLink serialization is preserved.",
+    "Follow-up fixes also parse empty STUN responses safely and allow an active Super Widescreen setting to be turned off when its prerequisites are disabled.",
+    "Hollycast copyright headers are retained or added. Fixture generation preserves the CUE attribution comments.",
+    "Original upstream sector-conversion formatting and CHD test implementation are retained. Earlier optional cleanup departures were removed by the 2026-10-17 fidelity-alignment batch."
+  ],
+  "validation": {
+    "source_review": "Selected-import integration fidelity reviewed against original Flycast source. All four identified findings across five files are resolved; required compatibility integrations and attribution retained. No runtime verification.",
+    "builds": "not run",
+    "tests": "not run",
+    "latest_batch_source_review": "All twelve changed-file deltas match upstream exactly before required attribution; actual source matches the expected combined tree. Prior edits, dependency pin, branch HEAD and empty real index are preserved. No builds or runtime verification.",
+    "latest_integration_fidelity_review": "Resolved all findings. Each of the five corrected full files matches the frozen upstream file after excluding only required Hollycast attribution and the Spanish Hollycast error title. Entire live source equals the expected corrected tree; other source and prior integrations preserved. No builds or runtime tests."
+  },
+  "review_queue": {
+    "library-ui": "Adapt controller navigation and image-button changes to the rebuilt library.",
+    "boxart": "Review retry and rate-limit behavior against Hollycast fetching stages and database ownership.",
+    "video-rendering": "Review Vulkan and swap-interval changes against OSD and custom textures; review Stretch to Fill in the custom settings UI.",
+    "android-lifecycle": "Review activity, frame pacing, EGL teardown and target SDK changes with the Android frontend.",
+    "gdrom-state-format": "Review the GD-ROM timer and CDDA series together with V62 serialization.",
+    "capcom-networking": "Review the complete modem/Capcom/libjuice series, dependency pin and build guards together.",
+    "platform-build": "Review platform build and macOS document-open changes against Hollycast targets and menus.",
+    "lua-disc-control": "Review new disc commands against Hollycast pause, resume and save protection behavior.",
+    "logging-default": "Review whether to change the default log verbosity.",
+    "arcade-input-label": "Review the WCCF button-label change separately.",
+    "documentation": "Keep Hollycast documentation; selectively adapt useful upstream instructions.",
+    "translations": "Review translations and generated libretro options separately from the backend batch.",
+    "merge-history": "History-only merge commits are not imported because their complete contents were not approved."
+  },
+  "commits": [
+    {
+      "sha": "c37be698dbeed9be3b4b44e21b138ece05cddb37",
+      "subject": "android: fix start up crash on android <= 8",
+      "status": "applied",
+      "held_group": "android-lifecycle",
+      "conflict_audit": {
+        "dependency_group": "android_lifecycle",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "shell/android-studio/flycast/src/main/java/com/hollycast/emulator/BaseGLActivity.java"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "149e651d24b3e3b3ddeff1d022f47813c40e9fc5",
+      "subject": "android: don't start swappy if g_activity is null",
+      "status": "applied",
+      "held_group": "android-lifecycle",
+      "conflict_audit": {
+        "dependency_group": "android_lifecycle",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "shell/android-studio/flycast/src/main/jni/src/swappygl.cpp"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "57e33d323a985caff7b50db1e74247f8363bbd24",
+      "subject": "ui: fix regression where dpad won't scroll up/down the game list",
+      "status": "skipped",
+      "held_group": "library-ui",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/ui/gui.cpp",
+            "core/ui/gui_util.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/ui/gui.cpp",
+            "core/ui/gui_util.cpp"
+          ]
+        },
+        "plan_note": "Previously skipped by user; CLEAN/CONFLICT marks do not reopen that decision."
+      }
+    },
+    {
+      "sha": "71b739faeece0d985807bcb9305329122599de85",
+      "subject": "android: tentative fix for ANR when calling eglDestroyContext",
+      "status": "applied",
+      "held_group": "android-lifecycle",
+      "conflict_audit": {
+        "dependency_group": "android_lifecycle",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "core/wsi/egl.cpp",
+          "shell/android-studio/flycast/src/main/jni/src/swappygl.cpp",
+          "shell/android-studio/flycast/src/main/jni/src/swappyvk.cpp"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "12bb43652fe7a83a25e5831060e73c11573f4c03",
+      "subject": "Fix Monkey Ball minimap depth masking",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "8f511f89604243d9cd48040634e1d20da59c5fae",
+      "subject": "Remove macOS Homebrew from Install section",
+      "status": "skipped",
+      "held_group": "documentation",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "README.md"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "README.md"
+          ]
+        },
+        "plan_note": "Previously skipped by user."
+      }
+    },
+    {
+      "sha": "fd9d39b1274006065e295cc0fb5e6c2e1636a231",
+      "subject": "ci: build the Switch core here, with CMake (#2465)",
+      "status": "deferred",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "switch_ci_archive",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          }
+        },
+        "plan_note": "User deferred the complete Switch group; clean individual commits remain deferred."
+      }
+    },
+    {
+      "sha": "d8a76809e57027da36d88bafb670983541de5ba1",
+      "subject": "OpenGL: fix per-frame VAO leak in the ImGui GL3 backend",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "9814e2fe40cd4a3c86b0cebe5b907c39ddb52c35",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "applied",
+      "held_group": "translations",
+      "conflict_audit": {
+        "dependency_group": "libretro_translation_series",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "shell/libretro/libretro_core_options_intl.h"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "daa46ec63ee634247b3fc7d7d8a37a4c670a4d68",
+      "subject": "fix for switch (#2466)",
+      "status": "deferred",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "switch_ci_archive",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          }
+        },
+        "plan_note": "User deferred the complete Switch group; clean individual commits remain deferred."
+      }
+    },
+    {
+      "sha": "a75d1cff5337732fcc64e5a5900751b4a68ce8f1",
+      "subject": "gitlab-ci: build the Switch core's combined archive (#2471)",
+      "status": "deferred",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "switch_ci_archive",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".gitlab-ci.yml"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".gitlab-ci.yml"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          }
+        },
+        "plan_note": "User deferred the complete Switch group; clean individual commits remain deferred."
+      }
+    },
+    {
+      "sha": "52c8ecef1e67935b98e7ea3cfb0acd36eed787d6",
+      "subject": "gitlab-ci: the libnx image's cmake is too old for this tree",
+      "status": "deferred",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "switch_ci_archive",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".gitlab-ci.yml"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".gitlab-ci.yml"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          }
+        },
+        "plan_note": "User deferred the complete Switch group; clean individual commits remain deferred."
+      }
+    },
+    {
+      "sha": "fa04b208374511f8c51157c2fbca7e2d559aeaae",
+      "subject": "cmake: the Switch archive was missing zstd and tinygettext",
+      "status": "deferred",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "switch_ci_archive",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          }
+        },
+        "plan_note": "User deferred the complete Switch group; clean individual commits remain deferred."
+      }
+    },
+    {
+      "sha": "fb286f777ce690ef8acf3359a75ab84b61566ad9",
+      "subject": "cmake: keep the Switch archive's extracted objects apart",
+      "status": "deferred",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "switch_ci_archive",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "CMakeLists.txt"
+            ]
+          }
+        },
+        "plan_note": "User deferred the complete Switch group; clean individual commits remain deferred."
+      }
+    },
+    {
+      "sha": "a9b451c6f20a8cb3ff49b253a211939a2100e785",
+      "subject": "ini: check if string empty before accessing 1st element",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "0abac3465dc9547dca5f30f3352fee10b67e34b2",
+      "subject": "chd: MIL-CD support for images with pregaps",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/imgread/chd.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "tests/files/test_chds/audiocd.cue",
+            "tests/files/test_chds/make_fixtures.py",
+            "tests/files/test_chds/milcd.cue",
+            "tests/files/test_chds/milcd_nogap.cue",
+            "tests/files/test_chds/milcd_pregap.cue",
+            "tests/src/imgread/ChdTest.cpp"
+          ]
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work. CHD reader matches final upstream code apart from Hollycast attribution; fixtures/tests were deliberately adapted.",
+        "triage": {
+          "number": 1,
+          "sha": "0abac3465dc9547dca5f30f3352fee10b67e34b2",
+          "title": "CHD / pregap disc support",
+          "category": "already_handled",
+          "label": "Already handled",
+          "finding_and_proposed_resolution": "The earlier prepared backend branch already has the reconciled final-upstream reader and adapted fixtures. Do not reapply the original older commit.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      }
+    },
+    {
+      "sha": "3f70e47adb1804a69fcd80625bb13fb27606f60e",
+      "subject": "aica: store last sample and Q at loop start even with ADPCM stream",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "eddf2635867f0f16f64bebd3185db151c99c551c",
+      "subject": "windows: fix http request with path > 256 chars",
+      "status": "partial-skipped",
+      "imported_paths": [
+        "core/oslib/http_client.cpp"
+      ],
+      "held_group": "boxart",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/ui/boxart/boxart.cpp",
+            "core/ui/boxart/boxart.h"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/oslib/http_client.cpp",
+            "core/ui/boxart/boxart.cpp",
+            "core/ui/boxart/boxart.h"
+          ]
+        },
+        "plan_note": "Only box-art work remains for a user decision; the prepared branch already has the adapted HTTP fix. Do not replay the older HTTP hunk over the URL race fix.",
+        "triage": {
+          "number": 2,
+          "sha": "eddf2635867f0f16f64bebd3185db151c99c551c",
+          "title": "Box-art retries and saving",
+          "category": "integration_or_decision",
+          "label": "Backend integration",
+          "finding_and_proposed_resolution": "Preserve Hollycast physical/online workers, custom source handling and database generations. Adapt backoff/no-progress/save rules to that architecture; this is not a naming fix.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "boxart_adaptation_review": {
+        "state": "skipped_by_user; not implemented",
+        "source_files": [
+          "core/ui/boxart/boxart.cpp",
+          "core/ui/boxart/boxart.h",
+          "core/ui/boxart/gamesdb.cpp"
+        ],
+        "preserve": [
+          "40-item physical batches with four workers; 10-item online batches",
+          "physical-only/custom-first/scraped cover selection and cached fallback",
+          "custom indexing, database generation and atomic save protection",
+          "separate arcade artwork source; TheGamesDB blackout must stay provider-specific"
+        ],
+        "adaptations": [
+          "Put the 10-second no-progress gate on online scheduling after local/physical work is allowed to start. Reuse the existing queue and threading model.",
+          "Track progress for this scrape batch, not the global databaseDirty flag, which can be set by other Hollycast activity. A completed lookup, even with no matching image, counts as completed work.",
+          "Hollycast TheGamesDb::scrape(vector&) catches individual lookup errors internally. Inspect each item completion flag and requeue unfinished items rather than relying only on the outer exception handler; save completed items from a partially successful batch.",
+          "Keep markDatabaseDirty/saveDatabase generation checks; saveDatabase already skips a clean database. Avoid declaring no-op/error-only batches dirty instead of replacing Hollycast save logic with Flycast older single-worker code.",
+          "Import upstream HTTP 403/429 24-hour blackout and status-bearing warning messages. Keep it in TheGamesDb; the independent arcade source must not acquire a one-day blackout."
+        ],
+        "user_effects": [
+          "Successful online scraping gains no fixed per-game delay.",
+          "After no-progress work, the online queue waits 10 seconds before another attempt; newly queued online work may share that short wait. Local/custom processing remains available.",
+          "TheGamesDB 403 changes from 60 seconds to 24 hours; 429 changes from the generic 1 second to 24 hours. These are the exact upstream timings.",
+          "Existing/cached/custom/physical artwork stays visible while missing TheGamesDB artwork waits; arcade source is not subject to the TheGamesDB one-day timer.",
+          "Fewer redundant database writes and fewer repeated error-only scrape attempts; failed items remain retryable and successful partial results are retained.",
+          "The timer is in scraper memory, not persisted into the artwork database; a full application restart resets that object state.",
+          "No new menu setting or popup is included. Failure/status detail is logged."
+        ],
+        "recommendation": "Keep upstream 10-second and 24-hour policy unchanged; adapt only the Hollycast worker, completion/retry, and database bookkeeping seams.",
+        "correction": "Earlier summaries saying all failed items naturally reach the outer catch were incomplete: Hollycast catches some errors inside TheGamesDb and the adaptation must account for that."
+      },
+      "remaining_disposition": "skipped_by_user",
+      "skip_reason": "User chose to retain Hollycast existing shorter scrape/retry rules on 2026-10-17.",
+      "preserved_import": "Previously integrated Windows HTTP long-path fix is retained; only remaining box-art behavior is skipped."
+    },
+    {
+      "sha": "604ebd58fe6061f99ce936251296554dabe9cc64",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "applied",
+      "held_group": "translations",
+      "conflict_audit": {
+        "dependency_group": "libretro_translation_series",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "shell/libretro/libretro_core_options_intl.h"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "b03335bca9494bb74ce405644968361d7056de99",
+      "subject": "pvr: swap interval detector improvements",
+      "status": "applied",
+      "held_group": "video-rendering",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "core/hw/pvr/Renderer_if.cpp"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "93379c489fc77bb014ddba76e2ce2a5467733007",
+      "subject": "macOS: backport MoltenVK fixes and verify packaged artifacts (#2485)",
+      "status": "covered",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".github/workflows/c-cpp.yml",
+            "CMakeLists.txt"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".github/workflows/c-cpp.yml",
+            "CMakeLists.txt"
+          ]
+        },
+        "plan_note": "Conditional approval only for compatible missing macOS pieces; retain Hollycast names and review actual package workflow.",
+        "triage": {
+          "number": 3,
+          "sha": "93379c489fc77bb014ddba76e2ce2a5467733007",
+          "title": "macOS packaging / MoltenVK",
+          "category": "simple_merge",
+          "label": "Naming / duplicate",
+          "finding_and_proposed_resolution": "Conflict hunks differ in Hollycast/Flycast app, executable, ZIP, artifact and CMake target names. Keep Hollycast names. Actual DEV already contains signature verification, packaging before upload, upload-artifact v7 and the official stable MoltenVK CI download; do not add those twice.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "resolution": "Already present after keeping Hollycast naming."
+    },
+    {
+      "sha": "b777c15fdca6c7e97a14bd0b8caab43172a3e275",
+      "subject": "docs: restore Homebrew installation via the Flycast tap (#2486)",
+      "status": "deferred",
+      "held_group": "documentation",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "README.md"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "README.md"
+          ]
+        },
+        "plan_note": "Adapt instructions to a real Hollycast install channel; do not copy Flycast tap commands as Hollycast commands.",
+        "triage": {
+          "number": 4,
+          "sha": "b777c15fdca6c7e97a14bd0b8caab43172a3e275",
+          "title": "Homebrew install documentation",
+          "category": "integration_or_decision",
+          "label": "Documentation decision",
+          "finding_and_proposed_resolution": "Upstream commands install Flycast from flyinghead/flycast. Retain Hollycast README and only add instructions for a verified Hollycast distribution channel; changing the product name alone is insufficient.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "deferral": "User explicitly left Homebrew documentation for later on 2026-10-17; no source or README change."
+    },
+    {
+      "sha": "ea22ee8723f66668adc850de1625869700cb5ddd",
+      "subject": "lua: expose openGdrom and insertGdrom as lua functions",
+      "status": "applied",
+      "held_group": "lua-disc-control",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "core/lua/lua.cpp"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "9869ea8852cc6cd0b3af436d0becf468b233c8e3",
+      "subject": "gdrom: don't stop cdda when reading a sector",
+      "status": "covered",
+      "held_group": "gdrom-state-format",
+      "conflict_audit": {
+        "dependency_group": "cdda_revert_pair",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "no_change",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "no_change",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "plan_note": "Temporary CDDA removal is not an import candidate merely because it merges cleanly; the complete revert pair has no net change."
+      },
+      "resolution": "Complete CDDA revert pair has no net change; retain existing stop-on-data-read behavior."
+    },
+    {
+      "sha": "04b74c3a1155b1583b6e747b731785184e2297e9",
+      "subject": "gdrom: stop cdda when reading a sector",
+      "status": "covered",
+      "held_group": "gdrom-state-format",
+      "conflict_audit": {
+        "dependency_group": "cdda_revert_pair",
+        "hollycast_dev": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "no_change",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "no_change",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "plan_note": "Correct CDDA behavior already present; complete pair has no net change."
+      },
+      "resolution": "Complete CDDA revert pair has no net change; retain existing stop-on-data-read behavior."
+    },
+    {
+      "sha": "4509ee903ccc4e34cb1ff04f9db5fec6500a54a0",
+      "subject": "macOS: defer document loading until emulator initialization finishes (#2492)",
+      "status": "applied",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "macos_document_open",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm"
+            ]
+          }
+        },
+        "plan_note": "Keep with 628bd3db; do not bring only the intermediate SDL_DROPFILE approach."
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "macos-open",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "4509ee903ccc4e34cb1ff04f9db5fec6500a54a0",
+        "adaptation": "Keep the exact upstream registered SDL user-event queue, document-open callback and drop-path cleanup. Combine the new sdl/sdl.h include with Hollycast gui_menu.h, functional and string includes; preserve all menu handlers.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "8933f9fe0ccd3f7cbe2e77717ea3a6db8b472129",
+      "subject": "libretro: link libandroid, or the dynarec dies on the first memory access",
+      "status": "applied",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt"
+          ]
+        },
+        "triage": {
+          "number": 5,
+          "sha": "8933f9fe0ccd3f7cbe2e77717ea3a6db8b472129",
+          "title": "Android Libretro system-library link",
+          "category": "simple_merge",
+          "label": "Small build merge",
+          "finding_and_proposed_resolution": "Add the conditional Android system-library link while retaining Hollycast HAVE_OPENGLES_3_1 definition. The conflict is overlapping lines, not incompatible behavior.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "android-link",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "8933f9fe0ccd3f7cbe2e77717ea3a6db8b472129",
+        "adaptation": "Insert the exact upstream three-line conditional Android system-library link beside the existing compile definitions, preserving HAVE_OPENGLES_3_1.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "c0fb036d601af586d21ca7a80413d55de58b7d9e",
+      "subject": "Fix stalled uploads in the picoTCP proxy (#2497)",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "215a5af1650c49b57fa12430d723fddb34b009cc",
+      "subject": "vmem: ignore the heap pointer tag when matching a fault address",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "6d73f7191c29d30f460134ee7c8ade96256098d6",
+      "subject": "minor changes (error logging)",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/deps/imgui/backends/imgui_impl_opengl3.cpp"
+          ]
+        },
+        "plan_note": "Imported error-logging changes retained. The two optional indentation changes from local cleanup 0562abe24 were reversed on 2026-10-17; the current ImGui backend now matches frozen upstream apart from required attribution."
+      }
+    },
+    {
+      "sha": "dd7a5f06201a4f8960ed162e2c6a5b61659bb9cd",
+      "subject": "target android 16. Fix Back invoked handler",
+      "status": "applied",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "current_resolution": "Applied in the approved 2026-10-17 batch after a clean grouped merge and exact upstream delta review. Earlier conflict/decision records are historical."
+      },
+      "implementation": {
+        "batch": "2026-10-17-gdrom-android-logging",
+        "state": "applied_uncommitted_unstaged",
+        "group": "android-sdk",
+        "adaptation": "No upstream code adaptation required; clean merge preserves Hollycast customizations. Required attribution added where absent.",
+        "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-gdrom-android-logging-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "da5be1a0a7114cb0096576373ad847f6b471af96",
+      "subject": "Merge remote-tracking branch 'origin/master' into dev",
+      "status": "not-merged",
+      "held_group": "merge-history",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "history_only",
+          "no_merge_conflicts": null,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "history_only",
+          "no_merge_conflicts": null,
+          "conflict_paths": []
+        }
+      }
+    },
+    {
+      "sha": "49ad26a7e56d939b317c82fc2161cbce6de207ce",
+      "subject": "change default log level from debug to info. compilation warnings",
+      "status": "applied",
+      "imported_paths": [
+        "core/deps/imgui/backends/imgui_impl_opengl3.cpp",
+        "core/imgread/cue.cpp"
+      ],
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Remaining delta on prepared branch is only the default logging change from DEBUG to INFO; that decision is still open.",
+        "current_resolution": "Applied in the approved 2026-10-17 batch after a clean grouped merge and exact upstream delta review. Earlier conflict/decision records are historical."
+      },
+      "implementation": {
+        "batch": "2026-10-17-gdrom-android-logging",
+        "state": "applied_uncommitted_unstaged",
+        "group": "logging",
+        "adaptation": "No upstream code adaptation required; clean merge preserves Hollycast customizations. Required attribution added where absent.",
+        "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-gdrom-android-logging-20261017\\manifest.json",
+        "prior_imports": "Compilation-warning fixes remain imported; this batch completes the remaining LogManager default line."
+      }
+    },
+    {
+      "sha": "a99c8667b4c2ef1bd716c66f189a31655ee5b83e",
+      "subject": "vk: invalid attachment 1 initial layout when rttCopy2vram is on",
+      "status": "applied",
+      "held_group": "video-rendering",
+      "conflict_audit": {
+        "dependency_group": "vulkan_passes",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "plan_note": "Actual DEV still needs the attachment-layout condition. Earlier already-present observation came from a different checkout."
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "core/rend/vulkan/oit/oit_drawer.h"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "e6707469d2018575544b5f2f3bbdb48e219cae0d",
+      "subject": "gdrom: improve SecNumber.Status handling with timer",
+      "status": "applied",
+      "conflict_audit": {
+        "dependency_group": "gdrom_timer_v62",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "plan_note": "Clean grouped merge still requires the planned GD-ROM/save-state V62 compatibility review.",
+        "current_resolution": "Applied in the approved 2026-10-17 batch after a clean grouped merge and exact upstream delta review. Earlier conflict/decision records are historical."
+      },
+      "implementation": {
+        "batch": "2026-10-17-gdrom-android-logging",
+        "state": "applied_uncommitted_unstaged",
+        "group": "gdrom-state",
+        "adaptation": "No upstream code adaptation required; clean merge preserves Hollycast customizations. Required attribution added where absent.",
+        "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-gdrom-android-logging-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "fff68b3f57fee88445d82a8580bfb8f51bbc2c98",
+      "subject": "gdrom: fix regressions",
+      "status": "applied",
+      "conflict_audit": {
+        "dependency_group": "gdrom_timer_v62",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/hw/gdrom/gdromv3.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/hw/gdrom/gdromv3.cpp"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "triage": {
+          "number": 6,
+          "sha": "fff68b3f57fee88445d82a8580bfb8f51bbc2c98",
+          "title": "GD-ROM timer regression fixes",
+          "category": "dependency_order",
+          "label": "Prerequisites",
+          "finding_and_proposed_resolution": "This follow-up conflicts alone because its timer implementation is missing. The complete e670/fff/869 sequence merges cleanly; still review V62 save-state compatibility as planned.",
+          "status": "analysis only; not implemented or newly approved"
+        },
+        "current_resolution": "Applied in the approved 2026-10-17 batch after a clean grouped merge and exact upstream delta review. Earlier conflict/decision records are historical."
+      },
+      "implementation": {
+        "batch": "2026-10-17-gdrom-android-logging",
+        "state": "applied_uncommitted_unstaged",
+        "group": "gdrom-state",
+        "adaptation": "No upstream code adaptation required; clean merge preserves Hollycast customizations. Required attribution added where absent.",
+        "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-gdrom-android-logging-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "2ac5c772f04d070ce733dce5575156b35cc21954",
+      "subject": "vk: ends rendering before clearing texture cache",
+      "status": "applied",
+      "held_group": "video-rendering",
+      "conflict_audit": {
+        "dependency_group": "vulkan_passes",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "core/rend/vulkan/oit/oit_renderer.cpp",
+          "core/rend/vulkan/vulkan_renderer.cpp"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "628bd3dbb160ea2750230fc6b00c0bb8173cb1f6",
+      "subject": "macOS: queue document opens with an SDL user event",
+      "status": "applied",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": "macos_document_open",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm"
+            ]
+          }
+        },
+        "triage": {
+          "number": 7,
+          "sha": "628bd3dbb160ea2750230fc6b00c0bb8173cb1f6",
+          "title": "macOS Finder file-open queue",
+          "category": "integration_or_decision",
+          "label": "Small behavior integration",
+          "finding_and_proposed_resolution": "Hollycast dispatches gui_start_game on the AppKit main queue; upstream uses sdl_queue_open_file until SDL is ready. Use the final queued-event design while preserving Hollycast menu/UI routing and needed includes.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "macos-open",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "628bd3dbb160ea2750230fc6b00c0bb8173cb1f6",
+        "adaptation": "Keep the exact upstream registered SDL user-event queue, document-open callback and drop-path cleanup. Combine the new sdl/sdl.h include with Hollycast gui_menu.h, functional and string includes; preserve all menu handlers.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "0a304f1396bd1b743f34b33ea3e64753eb195f02",
+      "subject": "Crowdin Translations (Simplified Chinese, Swedish)",
+      "status": "applied",
+      "held_group": "translations",
+      "conflict_audit": {
+        "dependency_group": "crowdin_ui_series",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "resources/i18n/sv.po",
+          "resources/i18n/zh_CN.po"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "869038f40ac8cddc7741c3a35d545de057cc0dd5",
+      "subject": "scif: use scheduler only after it has been deserialized",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": "gdrom_timer_v62",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "ea087b9140ff5a3b1809e090da0f8d644ee2db95",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "applied",
+      "held_group": "translations",
+      "conflict_audit": {
+        "dependency_group": "libretro_translation_series",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "plan_note": "Retain Hollycast 512M label and apply recorded translation wording rules despite clean merge."
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "shell/libretro/libretro_core_options_intl.h"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      },
+      "integration_fidelity_finding": "Resolved on 2026-10-17: imported the original upstream NULL value for OPTION_VAL_512MB_CHS; the optional retained 512M value is removed."
+    },
+    {
+      "sha": "e36e9df2dcc1487acdb1dc7725766f1f5ba029b5",
+      "subject": "vk oit: fix synchronization hazards between render passes and frames",
+      "status": "applied",
+      "held_group": "video-rendering",
+      "conflict_audit": {
+        "dependency_group": "vulkan_passes",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "core/rend/vulkan/oit/oit_buffer.h",
+          "core/rend/vulkan/oit/oit_renderpass.cpp"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "b1b80d8849f1cdfbd4e5a34125bf9dde7e3cd994",
+      "subject": "Crowdin Translations (Chinese Simplified)",
+      "status": "applied",
+      "held_group": "translations",
+      "conflict_audit": {
+        "dependency_group": "crowdin_ui_series",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "resources/i18n/zh_CN.po"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "resources/i18n/zh_CN.po"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        },
+        "triage": {
+          "number": 8,
+          "sha": "b1b80d8849f1cdfbd4e5a34125bf9dde7e3cd994",
+          "title": "Chinese UI translations",
+          "category": "dependency_order",
+          "label": "Prerequisites + wording",
+          "finding_and_proposed_resolution": "Conflicts are translation revisions and metadata. The combined 0a304f13/b1b80d88 sequence merges cleanly. Keep recorded Hollycast message keys/branding and correct Export wording rather than changing English intent.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "resources/i18n/zh_CN.po"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "fe04dd650367fe592be759350a6d692027adacb7",
+      "subject": "modem: answer mode. network: capcom direct support",
+      "status": "applied",
+      "held_group": "capcom-networking",
+      "conflict_audit": {
+        "dependency_group": "capcom_direct_complete",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          }
+        },
+        "plan_note": "Initial commit is clean individually, but the complete approved Capcom feature has integration conflicts."
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "capcom",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "fe04dd650367fe592be759350a6d692027adacb7",
+        "adaptation": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "89b72a8e3ec873d8b6cd544e76749ab9a59e4557",
+      "subject": "windows: fix HTTP URL parsing race and GET status handling (#2509)",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/oslib/http_client.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work.",
+        "triage": {
+          "number": 9,
+          "sha": "89b72a8e3ec873d8b6cd544e76749ab9a59e4557",
+          "title": "Windows HTTP safety fix",
+          "category": "already_handled",
+          "label": "Already handled",
+          "finding_and_proposed_resolution": "The earlier prepared backend branch already has this thread-safe URL parsing and GET-status behavior; replay produces no change there.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      }
+    },
+    {
+      "sha": "9d4c33734978f32a4643485c172fc837a0f07921",
+      "subject": "network: validate GGPO application data packets (#2510)",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "2ea7920fdc109d93a2eb8bb696328cd9aaa20f73",
+      "subject": "network: bound DCNet Ethernet frame sizes (#2511)",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "2a57c9ffd9780af1287d54ac556ff0234972c202",
+      "subject": "savestate: validate fixed buffer lengths (#2512)",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "98ce9fb5d7883314990d80c421dc8d486ccedbf1",
+      "subject": "Keep spaces inside -config section names (#2516)",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "04669ebe4164bb589e6a2050aa1559724aa94291",
+      "subject": "ci: fix libusb1 installation on netbsd",
+      "status": "applied",
+      "held_group": "platform-build",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".github/workflows/bsd.yml"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            ".github/workflows/bsd.yml"
+          ]
+        },
+        "triage": {
+          "number": 10,
+          "sha": "04669ebe4164bb589e6a2050aa1559724aa94291",
+          "title": "NetBSD dependency installation",
+          "category": "simple_merge",
+          "label": "One package entry",
+          "finding_and_proposed_resolution": "Keep Hollycast NetBSD 11.0 and change only libusb1-1.0.30 to libusb1 as upstream intended. Do not take the older NetBSD version from the incoming surrounding context.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          ".github/workflows/bsd.yml"
+        ],
+        "conflict_resolution": "netbsd",
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "59ed35a7ea7c1940d4c8ac221a662d0e6d6dc9ea",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "status": "applied",
+      "held_group": "translations",
+      "conflict_audit": {
+        "dependency_group": "libretro_translation_series",
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          },
+          "prepared_backend": {
+            "outcome": "clean",
+            "no_merge_conflicts": true,
+            "conflict_paths": []
+          }
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "shell/libretro/libretro_core_options_intl.h"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "f83fda7069ee7a32e206cb5092c38fd0216d80af",
+      "subject": "New translations strings.xml (Spanish)",
+      "status": "applied",
+      "held_group": "translations",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "shell/android-studio/flycast/src/main/res/values-es/strings.xml"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "shell/android-studio/flycast/src/main/res/values-es/strings.xml"
+          ]
+        },
+        "triage": {
+          "number": 11,
+          "sha": "f83fda7069ee7a32e206cb5092c38fd0216d80af",
+          "title": "Spanish Android messages",
+          "category": "simple_merge",
+          "label": "Wording / branding",
+          "finding_and_proposed_resolution": "Keep Hollycast in the translated error title and correct select_an_export_folder to mean selecting an export folder, not selecting/exporting a file. Keep resource identifiers and consistent Spanish formality.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "shell/android-studio/flycast/src/main/res/values-es/strings.xml"
+        ],
+        "conflict_resolution": "spanish",
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      },
+      "integration_fidelity_finding": "Resolved on 2026-10-17: restored exact upstream Spanish export-folder wording; only the required Hollycast error-title branding differs."
+    },
+    {
+      "sha": "5ff3f974d9e2d57c2b76bd552a303a0d21e0549b",
+      "subject": "Add stretch to fill screen option (#2515)",
+      "status": "applied",
+      "held_group": "video-rendering",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/ui/settings_video.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/ui/settings_video.cpp"
+          ]
+        },
+        "plan_note": "Adapt the toggle into Hollycast settings; source video-settings file conflicts.",
+        "triage": {
+          "number": 12,
+          "sha": "5ff3f974d9e2d57c2b76bd552a303a0d21e0549b",
+          "title": "Stretch to Fill video option",
+          "category": "integration_or_decision",
+          "label": "Targeted UI integration",
+          "finding_and_proposed_resolution": "Backend changes merge; the old upstream video panel conflicts with Hollycast SettingsNew delegation. Add the option to the new video tab with the upstream Super Widescreen and Horizontal Stretching exclusion rules.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-stretch-to-fill",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "5ff3f974d9e2d57c2b76bd552a303a0d21e0549b",
+        "changed_source_paths": [
+          "core/cfg/option.cpp",
+          "core/cfg/option.h",
+          "core/input/mouse.cpp",
+          "core/rend/transform_matrix.cpp",
+          "core/rend/transform_matrix.h",
+          "shell/libretro/option.cpp",
+          "core/ui/settings_new.cpp"
+        ],
+        "upstream_backend": "Exact upstream patch in all six backend files; only required Hollycast copyright attribution added.",
+        "ui_adaptation": "Use the existing RenderGeneralToggleSettingRow in Video > Aspect Ratio after Widescreen Game Cheats, before Horizontal Stretching. Preserve the upstream Super Widescreen and Horizontal Stretching exclusion rules.",
+        "default": "off"
+      }
+    },
+    {
+      "sha": "7d69c9cfd48143497bf03f0e17350b07f38b1c92",
+      "subject": "capcom: use libjuice for in-game p2p connection",
+      "status": "applied",
+      "held_group": "capcom-networking",
+      "conflict_audit": {
+        "dependency_group": "capcom_direct_complete",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp",
+            "core/oslib/CMakeLists.txt"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp",
+            "core/oslib/CMakeLists.txt"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          }
+        },
+        "triage": {
+          "number": 13,
+          "sha": "7d69c9cfd48143497bf03f0e17350b07f38b1c92",
+          "title": "Capcom peer-to-peer transport",
+          "category": "integration_or_decision",
+          "label": "Small build-list merge within feature",
+          "finding_and_proposed_resolution": "The capcom.cpp conflict disappears with the initial feature commit. In core/oslib/CMakeLists.txt move HTTP sources into the shared build list while preserving Hollycast CPU/GPU/process-memory monitoring sources.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "capcom",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "7d69c9cfd48143497bf03f0e17350b07f38b1c92",
+        "adaptation": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "9ec8b7e65823ddb3847405e9d3252d194e7d05cd",
+      "subject": "Merge remote-tracking branch 'origin/master' into dev",
+      "status": "not-merged",
+      "held_group": "merge-history",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "history_only",
+          "no_merge_conflicts": null,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "history_only",
+          "no_merge_conflicts": null,
+          "conflict_paths": []
+        }
+      }
+    },
+    {
+      "sha": "552a86086b038f71f997e563ae9e4100e09ee0c7",
+      "subject": "win32 and switch build fixes",
+      "status": "applied",
+      "held_group": "capcom-networking",
+      "conflict_audit": {
+        "dependency_group": "capcom_direct_complete",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt",
+            "core/ui/settings_network.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "CMakeLists.txt",
+            "core/ui/settings_network.cpp"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          }
+        },
+        "triage": {
+          "number": 14,
+          "sha": "552a86086b038f71f997e563ae9e4100e09ee0c7",
+          "title": "Capcom build / network UI guards",
+          "category": "integration_or_decision",
+          "label": "Build and UI integration",
+          "finding_and_proposed_resolution": "Take the Windows Libretro WinInet link in the complete series. Adapt the USE_ICE && USE_WEBSOCKET guards into Hollycast renderNetworkTab, which currently uses USE_ICE alone; keep its redesigned UI.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "capcom",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "552a86086b038f71f997e563ae9e4100e09ee0c7",
+        "adaptation": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "4dca1988dab56f603c2309e8882e264252fa7c8f",
+      "subject": "capcom: fix battle code mem location in several games",
+      "status": "applied",
+      "held_group": "capcom-networking",
+      "conflict_audit": {
+        "dependency_group": "capcom_direct_complete",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          }
+        },
+        "triage": {
+          "number": 15,
+          "sha": "4dca1988dab56f603c2309e8882e264252fa7c8f",
+          "title": "Capcom battle-code memory fixes",
+          "category": "dependency_order",
+          "label": "Prerequisites",
+          "finding_and_proposed_resolution": "The target lacks the Capcom file when this fix is checked alone. It has no remaining content conflict in the complete Capcom series.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "capcom",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "4dca1988dab56f603c2309e8882e264252fa7c8f",
+        "adaptation": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "bc3b8c71da90dd1f716837f655784e8668a66bb6",
+      "subject": "capcom: support for sf3 MF 2000 v1 and v2. modem hang up",
+      "status": "applied",
+      "held_group": "capcom-networking",
+      "conflict_audit": {
+        "dependency_group": "capcom_direct_complete",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp",
+            "core/network/ice.cpp",
+            "core/network/netservice.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp",
+            "core/network/ice.cpp",
+            "core/network/netservice.cpp"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          }
+        },
+        "triage": {
+          "number": 16,
+          "sha": "bc3b8c71da90dd1f716837f655784e8668a66bb6",
+          "title": "Capcom hang-up / game variants",
+          "category": "dependency_order",
+          "label": "Prerequisites",
+          "finding_and_proposed_resolution": "The Capcom and modem/network follow-ups merge without remaining backend conflicts when the complete series is included; no independent naming patch is needed.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "capcom",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "bc3b8c71da90dd1f716837f655784e8668a66bb6",
+        "adaptation": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "ec56b5f2601891c6017ac20f7bbc39eef39980a5",
+      "subject": "sh4: remove penalty cycles for MMU memory access",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "no_change",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work."
+      }
+    },
+    {
+      "sha": "6dafd41eaab99526d193109f497d505bef8c44cc",
+      "subject": "capcom: wrong battle code on win32. fix spawn and hmgeo end of match",
+      "status": "applied",
+      "held_group": "capcom-networking",
+      "conflict_audit": {
+        "dependency_group": "capcom_direct_complete",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/network/capcom.cpp"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          }
+        },
+        "triage": {
+          "number": 17,
+          "sha": "6dafd41eaab99526d193109f497d505bef8c44cc",
+          "title": "Windows battle codes / match-end fixes",
+          "category": "dependency_order",
+          "label": "Prerequisites",
+          "finding_and_proposed_resolution": "The missing initial Capcom feature causes the standalone conflict. Include in sequence and preserve the later explicit hang-up behavior from 506b4efd.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "capcom",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "6dafd41eaab99526d193109f497d505bef8c44cc",
+        "adaptation": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "7422d1b831ae7a6e163634b08be120ea3a93235b",
+      "subject": "wccf: rename ENTER button to PRESSURE",
+      "status": "applied",
+      "held_group": "arcade-input-label",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-16-clean-and-naming",
+        "state": "applied_uncommitted",
+        "base": "0562abe249d5988e94f050aedda35004986e64f9",
+        "effective_paths": [
+          "core/hw/naomi/naomi_roms_input.h"
+        ],
+        "conflict_resolution": null,
+        "upstream_behavior": "preserved except recorded naming/translation/label choices and required attribution"
+      }
+    },
+    {
+      "sha": "506b4efd04ded3c2654a14afb5107ced87263a33",
+      "subject": "capcom: use peer-to-peer raw mode for in-game communication",
+      "status": "applied",
+      "held_group": "capcom-networking",
+      "conflict_audit": {
+        "dependency_group": "capcom_direct_complete",
+        "hollycast_dev": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/hw/modem/modem.cpp",
+            "core/hw/modem/v42.cpp",
+            "core/hw/modem/v42.h",
+            "core/network/capcom.cpp"
+          ]
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/hw/modem/modem.cpp",
+            "core/hw/modem/v42.cpp",
+            "core/hw/modem/v42.h",
+            "core/network/capcom.cpp"
+          ]
+        },
+        "combined_group_checks": {
+          "hollycast_dev": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          },
+          "prepared_backend": {
+            "outcome": "conflict",
+            "no_merge_conflicts": false,
+            "conflict_paths": [
+              "core/oslib/CMakeLists.txt",
+              "core/ui/settings_network.cpp"
+            ]
+          }
+        },
+        "triage": {
+          "number": 18,
+          "sha": "506b4efd04ded3c2654a14afb5107ced87263a33",
+          "title": "Capcom raw modem mode",
+          "category": "dependency_order",
+          "label": "Prerequisites",
+          "finding_and_proposed_resolution": "This touches substantial modem behavior, but its reported content conflicts disappear with the complete Capcom series. The remaining group conflicts are build-list/network-UI integration, not these modem files.",
+          "status": "analysis only; not implemented or newly approved"
+        }
+      },
+      "implementation": {
+        "batch": "2026-10-17-macos-capcom-android-link",
+        "group": "capcom",
+        "state": "applied_uncommitted_unstaged",
+        "source_commit": "506b4efd04ded3c2654a14afb5107ced87263a33",
+        "adaptation": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+      }
+    },
+    {
+      "sha": "91c3084d52fc09e07d78cd1262f926e140d38b67",
+      "subject": "imgread: add 2336 to 2340 bytes sector conversion as used by Bleemcast",
+      "status": "imported",
+      "conflict_audit": {
+        "dependency_group": null,
+        "hollycast_dev": {
+          "outcome": "clean",
+          "no_merge_conflicts": true,
+          "conflict_paths": []
+        },
+        "prepared_backend": {
+          "outcome": "conflict",
+          "no_merge_conflicts": false,
+          "conflict_paths": [
+            "core/imgread/common.cpp"
+          ]
+        },
+        "plan_note": "Already selected and integrated on the prepared backend branch; original-commit replay is not new pending work. Sector conversion is present; Hollycast attribution and intentionally retained formatting explain the replay conflict."
+      }
+    }
+  ],
+  "conflict_audit": {
+    "date": "2026-10-16",
+    "git_version": "2.56.0.windows.1",
+    "baselines": {
+      "hollycast_dev": "aede1de0887e655b1a1c987b9d408fc4491958d3",
+      "prepared_backend": "0562abe249d5988e94f050aedda35004986e64f9"
+    },
+    "upstream_snapshot": "91c3084d52fc09e07d78cd1262f926e140d38b67",
+    "method": "Git merge-tree --write-tree with each upstream first parent as explicit merge base; equivalent three-way content merge to an individual cherry-pick, without checkout or source edits. Related groups are assembled in scratch Git objects and checked as a combined change; no conflict resolution is invented.",
+    "counts": {
+      "hollycast_dev": {
+        "clean": 36,
+        "conflict": 24,
+        "no_change": 1,
+        "history_only": 2
+      },
+      "prepared_backend": {
+        "clean": 22,
+        "conflict": 25,
+        "no_change": 14,
+        "history_only": 2
+      }
+    },
+    "report_markdown": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\conflict-report.md",
+    "report_json": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\conflict-results.json",
+    "approval_note": "Technical conflict flags only. Existing user import/skip/adapt/defer decisions stay in the decision log. No implementation is authorized by these marks.",
+    "remaining_18_triage_counts": {
+      "already_handled": 2,
+      "integration_or_decision": 6,
+      "simple_merge": 4,
+      "dependency_order": 6
+    },
+    "snapshot_note": "Historical conflict results are against the pre-implementation baselines; use current_remaining_groups for remaining work after the applied batch."
+  },
+  "implementation_batches": [
+    {
+      "id": "2026-10-16-clean-and-naming",
+      "state": "applied_uncommitted_unstaged",
+      "worktree": "D:/tmp/hollycast-flycast-backend-20261016",
+      "branch": "flycast-backend-2026-10-16",
+      "base_head": "0562abe249d5988e94f050aedda35004986e64f9",
+      "selected_source_commits": [
+        "c37be698dbeed9be3b4b44e21b138ece05cddb37",
+        "149e651d24b3e3b3ddeff1d022f47813c40e9fc5",
+        "71b739faeece0d985807bcb9305329122599de85",
+        "9814e2fe40cd4a3c86b0cebe5b907c39ddb52c35",
+        "604ebd58fe6061f99ce936251296554dabe9cc64",
+        "b03335bca9494bb74ce405644968361d7056de99",
+        "ea22ee8723f66668adc850de1625869700cb5ddd",
+        "a99c8667b4c2ef1bd716c66f189a31655ee5b83e",
+        "2ac5c772f04d070ce733dce5575156b35cc21954",
+        "0a304f1396bd1b743f34b33ea3e64753eb195f02",
+        "ea087b9140ff5a3b1809e090da0f8d644ee2db95",
+        "e36e9df2dcc1487acdb1dc7725766f1f5ba029b5",
+        "b1b80d8849f1cdfbd4e5a34125bf9dde7e3cd994",
+        "04669ebe4164bb589e6a2050aa1559724aa94291",
+        "59ed35a7ea7c1940d4c8ac221a662d0e6d6dc9ea",
+        "f83fda7069ee7a32e206cb5092c38fd0216d80af",
+        "7422d1b831ae7a6e163634b08be120ea3a93235b"
+      ],
+      "source_tree": "4e793590b0eb7da1096496ceeb1b5af670f24663",
+      "changed_source_paths": [
+        ".github/workflows/bsd.yml",
+        "core/hw/naomi/naomi_roms_input.h",
+        "core/hw/pvr/Renderer_if.cpp",
+        "core/lua/lua.cpp",
+        "core/rend/vulkan/oit/oit_buffer.h",
+        "core/rend/vulkan/oit/oit_drawer.h",
+        "core/rend/vulkan/oit/oit_renderer.cpp",
+        "core/rend/vulkan/oit/oit_renderpass.cpp",
+        "core/rend/vulkan/vulkan_renderer.cpp",
+        "core/wsi/egl.cpp",
+        "resources/i18n/sv.po",
+        "resources/i18n/zh_CN.po",
+        "shell/android-studio/flycast/src/main/java/com/hollycast/emulator/BaseGLActivity.java",
+        "shell/android-studio/flycast/src/main/jni/src/swappygl.cpp",
+        "shell/android-studio/flycast/src/main/jni/src/swappyvk.cpp",
+        "shell/android-studio/flycast/src/main/res/values-es/strings.xml",
+        "shell/libretro/libretro_core_options_intl.h"
+      ],
+      "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-batch-manifest.json",
+      "validation": {
+        "source_tree_matches": true,
+        "file_count": 17,
+        "branding_and_selected_exceptions": true,
+        "xml_well_formed": true,
+        "copyright_headers": true,
+        "diff_check_exit": 2,
+        "diff_check_output": "core/rend/vulkan/oit/oit_renderpass.cpp:91: space before tab in indent.\n+    \t\t| vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput;\ncore/rend/vulkan/oit/oit_renderpass.cpp:93: space before tab in indent.\n+    \tdependencies.emplace_back(vk::SubpassExternal, subpass, oitStages, oitStages,\ncore/rend/vulkan/oit/oit_renderpass.cpp:94: space before tab in indent.\n+    \t\t\tvk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite | vk::AccessFlagBits::eShaderWrite,\ncore/rend/vulkan/oit/oit_renderpass.cpp:95: space before tab in indent.\n+    \t\t\tvk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite\ncore/rend/vulkan/oit/oit_renderpass.cpp:96: space before tab in indent.\n+    \t\t\t\t| vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite\ncore/rend/vulkan/oit/oit_renderpass.cpp:97: space before tab in indent.\n+    \t\t\t\t| vk::AccessFlagBits::eInputAttachmentRead | vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);\ncore/rend/vulkan/oit/oit_renderpass.cpp:101: space before tab in indent.\n+    \t\tvk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,\ncore/rend/vulkan/oit/oit_renderpass.cpp:102: space before tab in indent.\n+    \t\tvk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,\ncore/rend/vulkan/oit/oit_renderpass.cpp:103: space before tab in indent.\n+    \t\tvk::AccessFlagBits::eColorAttachmentWrite,\ncore/rend/vulkan/oit/oit_renderpass.cpp:104: space before tab in indent.\n+    \t\tvk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite);\ncore/rend/vulkan/oit/oit_renderpass.cpp:110: space before tab in indent.\n+    \t\tvk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite,\ncore/rend/vulkan/oit/oit_renderpass.cpp:114: space before tab in indent.\n+    \t\tvk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,\ncore/rend/vulkan/oit/oit_renderpass.cpp:115: space before tab in indent.\n+    \t\tvk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eInputAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite,\ncore/rend/vulkan/oit/oit_renderpass.cpp:116: space before tab in indent.\n+    \t\tvk::DependencyFlagBits::eByRegion);\n",
+        "builds": "not run",
+        "runtime_tests": "not run",
+        "preserved_upstream_mixed_indent_lines": 14,
+        "diff_check_ignoring_upstream_space_before_tab": 0,
+        "source_note": "Original Flycast mixed indentation was preserved as requested; no formatting-only cleanup was introduced."
+      },
+      "remaining_groups": [
+        {
+          "id": "boxart",
+          "title": "Box-art scraping/backoff",
+          "source_commits": [
+            "eddf2635867f0f16f64bebd3185db151c99c551c"
+          ],
+          "reason": "Needs integration with Hollycast workers; the cooldown behavior has not received a final bring/adapt/skip decision.",
+          "state": "pending"
+        },
+        {
+          "id": "macos-open",
+          "title": "macOS Finder document opening",
+          "source_commits": [
+            "4509ee903ccc4e34cb1ff04f9db5fec6500a54a0",
+            "628bd3dbb160ea2750230fc6b00c0bb8173cb1f6"
+          ],
+          "reason": "Apply the complete registered-event sequence later; the final callback overlaps Hollycast handling.",
+          "state": "pending"
+        },
+        {
+          "id": "capcom",
+          "title": "Complete Capcom Direct feature",
+          "source_commits": [
+            "fe04dd650367fe592be759350a6d692027adacb7",
+            "7d69c9cfd48143497bf03f0e17350b07f38b1c92",
+            "552a86086b038f71f997e563ae9e4100e09ee0c7",
+            "4dca1988dab56f603c2309e8882e264252fa7c8f",
+            "bc3b8c71da90dd1f716837f655784e8668a66bb6",
+            "6dafd41eaab99526d193109f497d505bef8c44cc",
+            "506b4efd04ded3c2654a14afb5107ced87263a33"
+          ],
+          "reason": "Approved feature, held as a complete unit until the build-source list and redesigned network settings are integrated.",
+          "state": "pending"
+        },
+        {
+          "id": "stretch",
+          "title": "Stretch to Fill",
+          "source_commits": [
+            "5ff3f974d9e2d57c2b76bd552a303a0d21e0549b"
+          ],
+          "reason": "Approved feature; requires adding the control and option guards to Hollycast video settings.",
+          "state": "pending"
+        },
+        {
+          "id": "android-link",
+          "title": "Android Libretro system-library link",
+          "source_commits": [
+            "8933f9fe0ccd3f7cbe2e77717ea3a6db8b472129"
+          ],
+          "reason": "Small build overlap; preserve HAVE_OPENGLES_3_1 while adding Android linkage. This is beyond a naming-only resolution.",
+          "state": "pending"
+        },
+        {
+          "id": "android-sdk",
+          "title": "Android 16 target / Back callback",
+          "source_commits": [
+            "dd7a5f06201a4f8960ed162e2c6a5b61659bb9cd"
+          ],
+          "reason": "A final import decision was not recorded; Android frontend changes remain to review.",
+          "state": "pending"
+        },
+        {
+          "id": "gdrom-state",
+          "title": "GD-ROM timers / V62 save states",
+          "source_commits": [
+            "e6707469d2018575544b5f2f3bbdb48e219cae0d",
+            "fff68b3f57fee88445d82a8580bfb8f51bbc2c98"
+          ],
+          "reason": "Grouped change merges cleanly, but the save-state-format decision and Hollycast serialization overlap remain to review.",
+          "state": "pending"
+        },
+        {
+          "id": "homebrew",
+          "title": "Hollycast Homebrew install documentation",
+          "source_commits": [
+            "b777c15fdca6c7e97a14bd0b8caab43172a3e275"
+          ],
+          "reason": "Only add commands after a real Hollycast distribution channel is confirmed; do not copy Flycast install commands.",
+          "state": "pending"
+        },
+        {
+          "id": "logging",
+          "title": "Default logging DEBUG to INFO",
+          "source_commits": [
+            "49ad26a7e56d939b317c82fc2161cbce6de207ce"
+          ],
+          "reason": "Remaining hunk is clean but this behavior was not approved; compilation warning changes are already imported.",
+          "state": "pending"
+        },
+        {
+          "id": "switch",
+          "title": "Switch CI / archive group",
+          "source_commits": [
+            "fd9d39b1274006065e295cc0fb5e6c2e1636a231",
+            "daa46ec63ee634247b3fc7d7d8a37a4c670a4d68",
+            "a75d1cff5337732fcc64e5a5900751b4a68ce8f1",
+            "52c8ecef1e67935b98e7ea3cfb0acd36eed787d6",
+            "fa04b208374511f8c51157c2fbca7e2d559aeaae",
+            "fb286f777ce690ef8acf3359a75ab84b61566ad9"
+          ],
+          "reason": "Deferred by the user for a later grouped decision.",
+          "state": "deferred"
+        }
+      ],
+      "count_by_status": {
+        "applied": 17,
+        "skipped": 2,
+        "imported": 16,
+        "deferred": 6,
+        "partial": 2,
+        "covered": 3,
+        "held": 15,
+        "not-merged": 2
+      },
+      "translation_context_correction": "Do not change region-context Export=出口 to the action 导出. They are separate contexts and upstream already translates the action correctly."
+    },
+    {
+      "id": "2026-10-17-stretch-to-fill",
+      "state": "applied_uncommitted_unstaged",
+      "worktree": "D:/tmp/hollycast-flycast-backend-20261016",
+      "branch": "flycast-backend-2026-10-16",
+      "base_head": "0562abe249d5988e94f050aedda35004986e64f9",
+      "selected_source_commits": [
+        "5ff3f974d9e2d57c2b76bd552a303a0d21e0549b"
+      ],
+      "changed_source_paths": [
+        "core/cfg/option.cpp",
+        "core/cfg/option.h",
+        "core/input/mouse.cpp",
+        "core/rend/transform_matrix.cpp",
+        "core/rend/transform_matrix.h",
+        "shell/libretro/option.cpp",
+        "core/ui/settings_new.cpp"
+      ],
+      "validation": {
+        "upstream_backend_delta_exact_except_required_attribution": true,
+        "hollycast_ui_helper_and_exclusion_rules": true,
+        "default_off_and_existing_option_registration": true,
+        "prior_source_changes_preserved": true,
+        "only_seven_feature_source_paths_changed": true,
+        "required_attribution_present": true,
+        "staged_changes": false,
+        "builds": "not run",
+        "runtime_tests": "not run",
+        "scope": "Source and diff checks only; no build or live UI verification.",
+        "diff_check_exit": 0,
+        "changed_paths_match_scope": true
+      },
+      "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\stretch-to-fill-result.json",
+      "remaining_source_audit": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\remaining-after-stretch-audit.json"
+    },
+    {
+      "id": "2026-10-17-macos-capcom-android-link",
+      "state": "applied_uncommitted_unstaged",
+      "worktree": "D:/tmp/hollycast-flycast-backend-20261016",
+      "branch": "flycast-backend-2026-10-16",
+      "base_head": "0562abe249d5988e94f050aedda35004986e64f9",
+      "selected_source_commits": [
+        "4509ee903ccc4e34cb1ff04f9db5fec6500a54a0",
+        "628bd3dbb160ea2750230fc6b00c0bb8173cb1f6",
+        "fe04dd650367fe592be759350a6d692027adacb7",
+        "7d69c9cfd48143497bf03f0e17350b07f38b1c92",
+        "552a86086b038f71f997e563ae9e4100e09ee0c7",
+        "4dca1988dab56f603c2309e8882e264252fa7c8f",
+        "bc3b8c71da90dd1f716837f655784e8668a66bb6",
+        "6dafd41eaab99526d193109f497d505bef8c44cc",
+        "506b4efd04ded3c2654a14afb5107ced87263a33",
+        "8933f9fe0ccd3f7cbe2e77717ea3a6db8b472129"
+      ],
+      "source_tree": "0ab5ec2c05c0d5a66214161b87a27396d0366b2c",
+      "changed_source_paths": [
+        ".gitmodules",
+        "CMakeLists.txt",
+        "core/deps/libjuice",
+        "core/hw/modem/modem.cpp",
+        "core/hw/modem/modem.h",
+        "core/hw/modem/v42.cpp",
+        "core/hw/modem/v42.h",
+        "core/network/CMakeLists.txt",
+        "core/network/capcom.cpp",
+        "core/network/ice.cpp",
+        "core/network/ice.h",
+        "core/network/netservice.cpp",
+        "core/network/netservice.h",
+        "core/network/rawmodem.cpp",
+        "core/network/rawmodem.h",
+        "core/oslib/CMakeLists.txt",
+        "core/oslib/http_client.cpp",
+        "core/sdl/sdl.cpp",
+        "core/sdl/sdl.h",
+        "core/ui/settings_new.cpp",
+        "shell/apple/emulator-osx/emulator-osx/SDLApplicationDelegate.mm",
+        "shell/switch/ifaddrs.h",
+        "shell/switch/stubs.c",
+        "shell/switch/switch_main.cpp"
+      ],
+      "adaptations": {
+        "macos-open": "Keep the exact upstream registered SDL user-event queue, document-open callback and drop-path cleanup. Combine the new sdl/sdl.h include with Hollycast gui_menu.h, functional and string includes; preserve all menu handlers.",
+        "capcom": "Keep the complete seven-commit backend, dependency fork/pin and platform helpers. Move HTTP sources to the shared list while preserving Hollycast monitoring sources; retain the legacy network delegation and apply only the two USE_ICE && USE_WEBSOCKET guards in settings_new.cpp.",
+        "android-link": "Insert the exact upstream three-line conditional Android system-library link beside the existing compile definitions, preserving HAVE_OPENGLES_3_1."
+      },
+      "required_attribution_paths": [
+        ".gitmodules",
+        "core/hw/modem/modem.cpp",
+        "core/hw/modem/modem.h",
+        "core/hw/modem/v42.cpp",
+        "core/hw/modem/v42.h",
+        "core/network/CMakeLists.txt",
+        "core/network/capcom.cpp",
+        "core/network/ice.cpp",
+        "core/network/ice.h",
+        "core/network/netservice.cpp",
+        "core/network/netservice.h",
+        "core/network/rawmodem.cpp",
+        "core/network/rawmodem.h",
+        "shell/switch/ifaddrs.h",
+        "shell/switch/stubs.c"
+      ],
+      "libjuice": {
+        "before": "77daa8befd828046169adbb012d8de928bfdcdd4",
+        "after": "8f0918a716e4c6c4b931842d57914a852417369a",
+        "url": "https://github.com/flyinghead/libjuice.git"
+      },
+      "validation": {
+        "source_tree_matches_resolved_upstream_merge": true,
+        "exact_upstream_delta_paths": [
+          "core/sdl/sdl.cpp",
+          "core/sdl/sdl.h",
+          ".gitmodules",
+          "core/deps/libjuice",
+          "core/hw/modem/modem.cpp",
+          "core/hw/modem/modem.h",
+          "core/hw/modem/v42.cpp",
+          "core/hw/modem/v42.h",
+          "core/network/CMakeLists.txt",
+          "core/network/capcom.cpp",
+          "core/network/ice.cpp",
+          "core/network/ice.h",
+          "core/network/netservice.cpp",
+          "core/network/netservice.h",
+          "core/network/rawmodem.cpp",
+          "core/network/rawmodem.h",
+          "core/oslib/http_client.cpp",
+          "shell/switch/ifaddrs.h",
+          "shell/switch/stubs.c",
+          "shell/switch/switch_main.cpp"
+        ],
+        "attribution_only_outside_recorded_conflicts": true,
+        "prior_edits_preserved": true,
+        "stretch_to_fill_preserved": true,
+        "legacy_network_delegation_preserved": true,
+        "ui_changes_only_two_upstream_guards": true,
+        "monitoring_sources_preserved": true,
+        "android_graphics_definition_preserved": true,
+        "libjuice_exact_pin_and_clean_checkout": true,
+        "new_batch_diff_check_exit": 0,
+        "whole_diff_check_ignoring_previous_upstream_space_before_tab": 0,
+        "real_index_empty": true,
+        "source_branch_head_unchanged": true,
+        "builds": "not run",
+        "runtime_tests": "not run",
+        "live_netplay": "not tested",
+        "macos_ui": "not tested",
+        "android_libretro_runtime": "not tested"
+      },
+      "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-three-groups-20261017\\manifest.json"
+    },
+    {
+      "id": "2026-10-17-gdrom-android-logging",
+      "state": "applied_uncommitted_unstaged",
+      "worktree": "D:/tmp/hollycast-flycast-backend-20261016",
+      "branch": "flycast-backend-2026-10-16",
+      "base_head": "0562abe249d5988e94f050aedda35004986e64f9",
+      "selected_source_commits": [
+        "dd7a5f06201a4f8960ed162e2c6a5b61659bb9cd",
+        "e6707469d2018575544b5f2f3bbdb48e219cae0d",
+        "fff68b3f57fee88445d82a8580bfb8f51bbc2c98",
+        "49ad26a7e56d939b317c82fc2161cbce6de207ce"
+      ],
+      "source_tree": "6905604e88ed6c5207ed383931f596fd9bf621cf",
+      "changed_source_paths": [
+        "core/emulator.cpp",
+        "core/hw/aica/aica_if.cpp",
+        "core/hw/aica/aica_if.h",
+        "core/hw/gdrom/gdromv3.cpp",
+        "core/hw/maple/maple_cfg.cpp",
+        "core/hw/pvr/spg.cpp",
+        "core/hw/sh4/sh4_sched.cpp",
+        "core/log/LogManager.cpp",
+        "core/serialize.h",
+        "shell/android-studio/flycast/build.gradle.kts",
+        "shell/android-studio/flycast/src/main/java/com/hollycast/emulator/BaseGLActivity.java",
+        "tests/src/serialize_test.cpp"
+      ],
+      "adaptations": "Required Hollycast copyright notices only. No upstream behavior or code-conflict adaptation was necessary. Existing Hollycast package identity and customizations are retained by the clean merges.",
+      "required_attribution_paths": [
+        "shell/android-studio/flycast/build.gradle.kts",
+        "core/hw/aica/aica_if.cpp",
+        "core/hw/aica/aica_if.h",
+        "core/hw/maple/maple_cfg.cpp",
+        "core/hw/sh4/sh4_sched.cpp",
+        "core/serialize.h",
+        "tests/src/serialize_test.cpp",
+        "core/log/LogManager.cpp"
+      ],
+      "validation": {
+        "actual_tree_matches_expected": true,
+        "exact_upstream_delta_paths": [
+          "shell/android-studio/flycast/build.gradle.kts",
+          "shell/android-studio/flycast/src/main/java/com/hollycast/emulator/BaseGLActivity.java",
+          "core/emulator.cpp",
+          "core/hw/aica/aica_if.cpp",
+          "core/hw/aica/aica_if.h",
+          "core/hw/gdrom/gdromv3.cpp",
+          "core/hw/maple/maple_cfg.cpp",
+          "core/hw/pvr/spg.cpp",
+          "core/hw/sh4/sh4_sched.cpp",
+          "core/serialize.h",
+          "tests/src/serialize_test.cpp",
+          "core/log/LogManager.cpp"
+        ],
+        "only_added_attribution_differs_from_upstream": true,
+        "prior_work_preserved": true,
+        "real_index_empty": true,
+        "source_branch_head_unchanged": true,
+        "libjuice_pin_and_clean_checkout_preserved": true,
+        "new_batch_diff_check_exit": 0,
+        "whole_diff_check_ignoring_preexisting_upstream_space_before_tab": 0,
+        "builds": "not run",
+        "runtime_tests": "not run",
+        "android_device_checks": "not run",
+        "save_load_execution": "not run"
+      },
+      "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\approved-gdrom-android-logging-20261017\\manifest.json",
+      "save_state_compatibility": "Current is V62. The reader retains supported older formats. Newly saved V62 snapshots cannot load in older V61 builds; normal VMU in-game save formats are unchanged."
+    },
+    {
+      "id": "2026-10-17-upstream-fidelity-alignment",
+      "state": "applied_uncommitted_unstaged",
+      "kind": "upstream_fidelity_correction",
+      "worktree": "D:/tmp/hollycast-flycast-backend-20261016",
+      "branch": "flycast-backend-2026-10-16",
+      "base_head": "0562abe249d5988e94f050aedda35004986e64f9",
+      "before_tree": "6905604e88ed6c5207ed383931f596fd9bf621cf",
+      "source_tree": "657a4c4510bc115dd5cf2d9a40383fc4d341a16e",
+      "selected_source_commits": [],
+      "changed_source_paths": [
+        "core/deps/imgui/backends/imgui_impl_opengl3.cpp",
+        "core/imgread/common.cpp",
+        "shell/android-studio/flycast/src/main/res/values-es/strings.xml",
+        "shell/libretro/libretro_core_options_intl.h",
+        "tests/src/imgread/ChdTest.cpp"
+      ],
+      "actions": [
+        {
+          "path": "tests/src/imgread/ChdTest.cpp",
+          "resolution": "Restore exact upstream contents, retaining the existing required Hollycast copyright notice."
+        },
+        {
+          "path": "core/deps/imgui/backends/imgui_impl_opengl3.cpp",
+          "resolution": "Restore exact upstream contents, retaining the existing required Hollycast copyright notice."
+        },
+        {
+          "path": "core/imgread/common.cpp",
+          "resolution": "Restore exact upstream contents, retaining the existing required Hollycast copyright notice."
+        },
+        {
+          "path": "shell/android-studio/flycast/src/main/res/values-es/strings.xml",
+          "resolution": "Restore upstream Spanish export-folder wording; preserve the required Hollycast error-title branding."
+        },
+        {
+          "path": "shell/libretro/libretro_core_options_intl.h",
+          "resolution": "Take the original upstream NULL label value without additional translation changes."
+        }
+      ],
+      "validation": {
+        "source_tree_matches_expected": true,
+        "only_five_approved_paths_changed": true,
+        "whole_corrected_files_match_upstream": [
+          {
+            "path": "core/deps/imgui/backends/imgui_impl_opengl3.cpp",
+            "matches_upstream": true,
+            "exceptions": [
+              "Required Hollycast copyright notice"
+            ]
+          },
+          {
+            "path": "core/imgread/common.cpp",
+            "matches_upstream": true,
+            "exceptions": [
+              "Required Hollycast copyright notice"
+            ]
+          },
+          {
+            "path": "shell/android-studio/flycast/src/main/res/values-es/strings.xml",
+            "matches_upstream": true,
+            "exceptions": [
+              "Required Hollycast copyright notice",
+              "Hollycast error-title branding"
+            ]
+          },
+          {
+            "path": "shell/libretro/libretro_core_options_intl.h",
+            "matches_upstream": true,
+            "exceptions": [
+              "Required Hollycast copyright notice"
+            ]
+          },
+          {
+            "path": "tests/src/imgread/ChdTest.cpp",
+            "matches_upstream": true,
+            "exceptions": [
+              "Required Hollycast copyright notice"
+            ]
+          }
+        ],
+        "all_other_source_and_prior_integrations_preserved": true,
+        "source_branch_head_unchanged": true,
+        "real_index_empty": true,
+        "libjuice_exact_pin_and_clean_checkout_preserved": true,
+        "diff_checks_pass_with_upstream_indent_preserved": true,
+        "known_upstream_indentation_warnings_restored": 2,
+        "builds": "not run",
+        "runtime_tests": "not run"
+      },
+      "manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\fidelity-alignment-20261017\\manifest.json",
+      "note": "Corrects existing selected imports; does not select additional upstream commits or alter skip/defer decisions."
+    }
+  ],
+  "current_remaining_groups": [
+    {
+      "id": "homebrew",
+      "title": "Hollycast Homebrew install documentation",
+      "source_commits": [
+        "b777c15fdca6c7e97a14bd0b8caab43172a3e275"
+      ],
+      "reason": "User explicitly left this group for later while approving GD-ROM/V62, Android SDK/Back and logging on 2026-10-17.",
+      "state": "deferred",
+      "post_stretch_source_audit": {
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\remaining-after-stretch-audit.json",
+        "outcome": "conflict",
+        "conflict_paths": [
+          "README.md"
+        ],
+        "paths_without_reported_conflicts": [],
+        "decision_note": "Source-only merge result; preserve all pending decisions, skips, and deferred groups."
+      },
+      "review_2026_10_17": {
+        "state": "review only; no implementation or new approval",
+        "current": "Hollycast README uses Homebrew to install source-build prerequisites (cmake and molten-vk); that is not a Homebrew package for the Hollycast application. No verified Hollycast app tap/cask is established in the current project plan.",
+        "upstream_change": "Restore Flycast application installation instructions for stable, master and dev/nightly channels from flyinghead/homebrew-flycast. The same commit also contains unrelated README indentation edits.",
+        "user_effects": [
+          "Only installation documentation changes; no emulator functionality, graphics, networking or game support changes.",
+          "The incoming commands install Flycast.app. Rebranding the prose while retaining the commands would send Hollycast users to Flycast; changing tokens alone does not create a valid Hollycast package."
+        ],
+        "hollycast_adaptation": "A real Hollycast tap/cask must download the correct Hollycast macOS artifact and install Hollycast.app, with only the release channels that actually exist. Once verified, add a small Hollycast installation section to the current README, retaining its build instructions and ignoring unrelated upstream indentation edits. Do not invent commands.",
+        "recommendation": "Skip or keep this documentation-only item deferred until a real Hollycast tap/cask is established. Creating that distribution channel would be separate work.",
+        "primary_reference": "https://github.com/flyinghead/homebrew-flycast",
+        "fresh_merge_preview": {
+          "source_tree": "0ab5ec2c05c0d5a66214161b87a27396d0366b2c",
+          "outcome": "conflict",
+          "conflict_paths": [
+            "README.md"
+          ],
+          "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\next-three-review-20261017.json"
+        }
+      },
+      "remaining_triage_2026_10_17": {
+        "classification": "distribution_dependency",
+        "merge": "README.md conflict",
+        "substantial_issue": true,
+        "reason": "The incoming commands install Flycast.app from flyinghead/homebrew-flycast. Existing Hollycast Homebrew commands install build prerequisites. A Hollycast application tap/cask has not been verified in the project record.",
+        "handling": "Recommend leaving this documentation item deferred until an actual Hollycast tap/cask and supported channels are established. A name-only edit cannot create a valid package. Preserve existing source-build instructions and omit unrelated README indentation changes. This is a recommendation, not a newly recorded user skip.",
+        "evidence": "next-three-review-20261017.json"
+      },
+      "last_user_decision": "Leave for now; not implemented."
+    },
+    {
+      "id": "switch",
+      "title": "Switch CI / archive group",
+      "source_commits": [
+        "fd9d39b1274006065e295cc0fb5e6c2e1636a231",
+        "daa46ec63ee634247b3fc7d7d8a37a4c670a4d68",
+        "a75d1cff5337732fcc64e5a5900751b4a68ce8f1",
+        "52c8ecef1e67935b98e7ea3cfb0acd36eed787d6",
+        "fa04b208374511f8c51157c2fbca7e2d559aeaae",
+        "fb286f777ce690ef8acf3359a75ab84b61566ad9"
+      ],
+      "reason": "User explicitly left this group for later while approving GD-ROM/V62, Android SDK/Back and logging on 2026-10-17.",
+      "state": "deferred",
+      "post_stretch_source_audit": {
+        "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\remaining-after-stretch-audit.json",
+        "outcome": "conflict",
+        "conflict_paths": [
+          "CMakeLists.txt"
+        ],
+        "paths_without_reported_conflicts": [
+          ".gitlab-ci.yml"
+        ],
+        "decision_note": "Source-only merge result; preserve all pending decisions, skips, and deferred groups."
+      },
+      "remaining_triage_2026_10_17": {
+        "classification": "small_build_and_naming_adaptation_user_deferred",
+        "merge": "CMakeLists.txt conflict",
+        "substantial_issue": true,
+        "reason": "The six-commit group repairs combined archive construction and enables the Switch Libretro CI job. CMake conflicts on Hollycast resource/output names. In addition, inherited CORENAME is flycast while Hollycast builds Hollycast_libretro_libnx.a, so the new CI move step would look for the wrong archive even though YAML merges textually.",
+        "handling": "Retain upstream separate object directories, dependency additions, combined target and CI build sequence. Keep Hollycast::res and Hollycast_libretro_libnx.a, and align the new Switch job's CORENAME with that exact output spelling using a narrowly scoped override. Do not rename unrelated backend symbols or change other platform jobs. CI still depends on the referenced Libretro infrastructure; importing the job is not proof it runs on Hollycast infrastructure. Preserve the user's explicit deferral until the grouped decision.",
+        "preview_tree": "306c5c7fc4181685447f1e0acf58e8161263997e",
+        "evidence_paths": [
+          "CMakeLists.txt:1562-1571",
+          ".gitlab-ci.yml:8-12"
+        ]
+      },
+      "last_user_decision": "Leave for now; not implemented."
+    }
+  ],
+  "decision_updates": [
+    {
+      "id": "2026-10-17-skip-boxart",
+      "source_commit": "eddf2635867f0f16f64bebd3185db151c99c551c",
+      "decision": "Skip remaining box-art behavior; retain current Hollycast retry timings and the earlier HTTP fix."
+    },
+    {
+      "id": "2026-10-17-stretch-to-fill",
+      "source_commit": "5ff3f974d9e2d57c2b76bd552a303a0d21e0549b",
+      "decision": "Implement Stretch to Fill exactly as upstream except the Hollycast video-settings toggle and existing UI exclusions. Follow upstream deltas unchanged wherever compatible; adapt only actual Hollycast conflict sites, preserving required attribution and prior skip/defer decisions."
+    },
+    {
+      "id": "2026-10-17-macos-capcom-android-link",
+      "source_commits": [
+        "4509ee903ccc4e34cb1ff04f9db5fec6500a54a0",
+        "628bd3dbb160ea2750230fc6b00c0bb8173cb1f6",
+        "fe04dd650367fe592be759350a6d692027adacb7",
+        "7d69c9cfd48143497bf03f0e17350b07f38b1c92",
+        "552a86086b038f71f997e563ae9e4100e09ee0c7",
+        "4dca1988dab56f603c2309e8882e264252fa7c8f",
+        "bc3b8c71da90dd1f716837f655784e8668a66bb6",
+        "6dafd41eaab99526d193109f497d505bef8c44cc",
+        "506b4efd04ded3c2654a14afb5107ced87263a33",
+        "8933f9fe0ccd3f7cbe2e77717ea3a6db8b472129"
+      ],
+      "decision": "User authorized macOS file opening, the complete Capcom Direct feature, and Android Libretro linking. Keep upstream code exactly; adapt only actual Hollycast code, naming and UI conflicts. Required feature-specific Switch helpers are included with Capcom; the six deferred Switch CI/archive commits remain deferred."
+    },
+    {
+      "id": "2026-10-17-all-remaining-triage",
+      "decision": "User requested all remaining substantial integration issues and minimal divergence for future upstream updates. Reviewed all five groups without implementing. Android and logging are straightforward imports under the existing standing rule; GD-ROM is also a clean import with a snapshot downgrade-compatibility note. Switch needs limited build/naming alignment and retains its explicit user deferral. Homebrew needs a verified Hollycast distribution channel; leaving it deferred is the review recommendation, not a new user skip. Earlier separate-approval wording for unchanged Android/logging behavior is superseded.",
+      "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\remaining-triage-20261017.json"
+    },
+    {
+      "id": "2026-10-17-gdrom-android-logging",
+      "source_commits": [
+        "dd7a5f06201a4f8960ed162e2c6a5b61659bb9cd",
+        "e6707469d2018575544b5f2f3bbdb48e219cae0d",
+        "fff68b3f57fee88445d82a8580bfb8f51bbc2c98",
+        "49ad26a7e56d939b317c82fc2161cbce6de207ce"
+      ],
+      "decision": "User approved GD-ROM/V62 plus the straightforward Android SDK/Back and logging changes, using the simplest necessary adaptations. User explicitly retained Switch and Homebrew deferrals. Applied upstream code unchanged through clean merges; only required Hollycast attribution was added."
+    },
+    {
+      "id": "2026-10-17-upstream-fidelity-alignment",
+      "decision": "User explicitly requested removal of all nonessential changes from this current upstream import, retaining only necessary Hollycast compatibility/conflict resolutions. Restored original CHD tests, original formatting in ImGui and sector conversion, original Spanish export-folder translation and original Chinese NULL label. Required attribution and Hollycast branding remain.",
+      "changed_source_paths": [
+        "core/deps/imgui/backends/imgui_impl_opengl3.cpp",
+        "core/imgread/common.cpp",
+        "shell/android-studio/flycast/src/main/res/values-es/strings.xml",
+        "shell/libretro/libretro_core_options_intl.h",
+        "tests/src/imgread/ChdTest.cpp"
+      ]
+    }
+  ],
+  "current_status_counts": {
+    "applied": 32,
+    "skipped": 2,
+    "imported": 16,
+    "deferred": 7,
+    "partial-skipped": 1,
+    "covered": 3,
+    "not-merged": 2
+  },
+  "review_queue_note": "Original review topics and earlier conflict/hold/fidelity findings are historical. current_remaining_groups and latest implementation_batches are authoritative. All integration-fidelity findings are resolved. Only Homebrew documentation (one commit) and Switch CI/archive (six commits) remain, both deferred; previous skips and duplicates remain excluded.",
+  "integration_fidelity_review": {
+    "date": "2026-10-17",
+    "state": "resolved_upstream_alignment_complete",
+    "reviewed_source_tree": "6905604e88ed6c5207ed383931f596fd9bf621cf",
+    "scope": "Review only our integration fidelity, not trusted upstream algorithm/design/style quality. Entire selected snapshot: 48 full source commits plus one partial import, 90 affected source/artifact paths.",
+    "findings": [
+      {
+        "id": "early-chd-test-rewrite",
+        "axis": "integration standards",
+        "severity": "P2",
+        "paths": [
+          {
+            "path": "tests/src/imgread/ChdTest.cpp",
+            "line": 11
+          },
+          {
+            "path": "tests/src/imgread/ChdTest.cpp",
+            "line": 32
+          }
+        ],
+        "finding": "Local cleanup rewrote new upstream CHD tests from raw Disc pointers to unique_ptr, added .get() calls, and removed explicit deletes. The file did not exist in pre-import Hollycast; this was not a compatibility conflict.",
+        "introduced_by": "0562abe249d5988e94f050aedda35004986e64f9",
+        "upstream_source": "0abac3465dc9547dca5f30f3352fee10b67e34b2",
+        "minimal_alignment": "Restore upstream ChdTest.cpp test contents while retaining the required Hollycast copyright notice. This is a fidelity finding, not a judgment about either pointer style.",
+        "status": "resolved",
+        "resolution_batch": "2026-10-17-upstream-fidelity-alignment",
+        "resolution": "Restored exact original upstream source at the identified spots, retaining required Hollycast attribution and necessary Hollycast branding."
+      },
+      {
+        "id": "early-formatting-divergence",
+        "axis": "integration standards",
+        "severity": "P3",
+        "paths": [
+          {
+            "path": "core/deps/imgui/backends/imgui_impl_opengl3.cpp",
+            "line": 658
+          },
+          {
+            "path": "core/imgread/common.cpp",
+            "line": 37
+          }
+        ],
+        "finding": "Local cleanup changed two upstream ImGui indentation lines and reversed the spacing/braces accompanying the sector-conversion import. Neither accommodates different Hollycast behavior.",
+        "introduced_by": "0562abe249d5988e94f050aedda35004986e64f9",
+        "upstream_source": "91c3084d52fc09e07d78cd1262f926e140d38b67",
+        "minimal_alignment": "Restore the incoming upstream lines, preserving notices. The sector formatting omission followed the earlier general no-formatting-churn preference; it is nevertheless a difference from the requested exact incoming source.",
+        "status": "resolved",
+        "resolution_batch": "2026-10-17-upstream-fidelity-alignment",
+        "resolution": "Restored exact original upstream source at the identified spots, retaining required Hollycast attribution and necessary Hollycast branding."
+      },
+      {
+        "id": "spanish-wording-correction",
+        "axis": "import specification",
+        "severity": "P3",
+        "paths": [
+          {
+            "path": "shell/android-studio/flycast/src/main/res/values-es/strings.xml",
+            "line": 10
+          }
+        ],
+        "finding": "The import substitutes Seleccione una carpeta de exportaciÃ³n for upstream Selecciona o exporta un archivo. Both pre-import Hollycast and Flycast use the same English Select an export folder, so this corrects an upstream translation rather than adapting a Hollycast-specific wording difference.",
+        "introduced_by": "2026-10-16-clean-and-naming",
+        "upstream_source": "f83fda7069ee7a32e206cb5092c38fd0216d80af",
+        "minimal_alignment": "Strict upstream parity would use the original upstream Spanish line while retaining Error de Hollycast. The current correction more accurately describes an export folder; retaining it should be explicitly documented as a translation exception, not called a merge-compatibility change.",
+        "approval_evidence": "Assistant-authored plan recorded the correction before implementation. User authorized wording review generally, but the supplied conversation does not explicitly select this exact exception to the latest strict compatibility-only rule.",
+        "status": "resolved",
+        "resolution_batch": "2026-10-17-upstream-fidelity-alignment",
+        "resolution": "Restored exact original upstream source at the identified spots, retaining required Hollycast attribution and necessary Hollycast branding."
+      },
+      {
+        "id": "chinese-old-label-retained",
+        "axis": "import specification",
+        "severity": "P3",
+        "paths": [
+          {
+            "path": "shell/libretro/libretro_core_options_intl.h",
+            "line": 10653
+          }
+        ],
+        "finding": "The import retains OPTION_VAL_512MB_CHS as 512M even though upstream ea087b91 changes it to NULL. The old 512M value was shared by both projects before this update, not a Hollycast-specific customization.",
+        "introduced_by": "2026-10-16-clean-and-naming",
+        "upstream_source": "ea087b9140ff5a3b1809e090da0f8d644ee2db95",
+        "minimal_alignment": "Take the upstream NULL value. Retain required attribution and the unrelated Hollycast branding adaptations.",
+        "approval_evidence": "Earlier manifest/plan descriptions call this user-selected, but no direct user selection of this particular value appears in the supplied conversation. That characterization should not be relied on.",
+        "status": "resolved",
+        "resolution_batch": "2026-10-17-upstream-fidelity-alignment",
+        "resolution": "Restored exact original upstream source at the identified spots, retaining required Hollycast attribution and necessary Hollycast branding."
+      }
+    ],
+    "evidence": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\integration-fidelity-review-20261017.json",
+    "implementation_changed": true,
+    "next_step": "No outstanding integration-fidelity corrections remain from this review. Keep the selected upstream source unchanged except required Hollycast compatibility adaptations and attribution.",
+    "current_source_tree": "657a4c4510bc115dd5cf2d9a40383fc4d341a16e",
+    "open_findings": 0,
+    "resolution_batch": "2026-10-17-upstream-fidelity-alignment",
+    "resolution_manifest": "D:\\tmp\\hollycast-flycast-conflict-audit-20261016\\fidelity-alignment-20261017\\manifest.json"
+  },
+  "publication": {
+    "repository": "nexus382/Hollycast",
+    "base_branch": "dev",
+    "head_branch": "flycast-backend-2026-10-16",
+    "pull_request": 16,
+    "pull_request_url": "https://github.com/nexus382/Hollycast/pull/16",
+    "integration_state": "selected_import_complete",
+    "approved_source_tree": "657a4c4510bc115dd5cf2d9a40383fc4d341a16e",
+    "upstream_snapshot": "91c3084d52fc09e07d78cd1262f926e140d38b67",
+    "previous_head": "0562abe249d5988e94f050aedda35004986e64f9",
+    "note": "The commit containing this publication record completes the approved import for PR #16. Earlier batch states are historical application-time records. Switch CI/archive and Homebrew application-installation documentation remain deferred; prior skips and duplicates remain excluded."
+  }
+}

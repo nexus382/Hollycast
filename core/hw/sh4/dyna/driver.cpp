@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "types.h"
 #include <unordered_set>
 
@@ -334,6 +335,8 @@ void* DYNACALL rdv_LinkBlock(u8* code,u32 dpc)
 void Sh4Recompiler::Reset(bool hard)
 {
 	super::Reset(hard);
+	if (hard)
+		sh4Dynarec->init(*getContext(), codeBuffer);
 	ResetCache();
 	if (hard)
 		bm_Reset();

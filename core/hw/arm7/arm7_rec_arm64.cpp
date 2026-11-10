@@ -1,5 +1,6 @@
 /*
 	Copyright 2020 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of flycast.
 
@@ -427,32 +428,11 @@ class Arm7Compiler : public MacroAssembler
 				Add(rd, w0, op2);
 			break;
 		case 8:		// TST
-#ifdef STRICT_MODE
-			// In armv7, TST and TEQ do not affect the V flag.
-			// This isn't the case in armv8 so we need to save
-			// and restore it.
-			// Since this is a bit complicated/slow, let's assume nobody
-			// relies on this.
-			Cset(w3, vs);
-#endif
 			Tst(rn, op2);
-#ifdef STRICT_MODE
-			Mrs(x0, NZCV);
-			Bfi(x0, x3, 28, 1);		// V is bit 28
-			Msr(NZCV, x0);
-#endif
 			break;
 		case 9:		// TEQ
 			Eor(w0, rn, op2);
-#ifdef STRICT_MODE
-			Cset(w3, vs);
-#endif
 			Tst(w0, w0);
-#ifdef STRICT_MODE
-			Mrs(x0, NZCV);
-			Bfi(x0, x3, 28, 1);		// V is bit 28
-			Msr(NZCV, x0);
-#endif
 			break;
 		case 10:	// CMP
 			Cmp(rn, op2);
@@ -474,10 +454,17 @@ class Arm7Compiler : public MacroAssembler
 			die("invalid op");
 			break;
 		}
-		if (set_carry_bit)
+		if (set_carry_bit || logical_op_set_flags)
 		{
 			Mrs(x0, NZCV);
-			Bfi(x0, x14, 29, 1);		// C is bit 29 in NZCV
+			if (set_carry_bit)
+				Bfi(x0, x14, 29, 1);		// C is bit 29 in NZCV
+			if (logical_op_set_flags)
+			{
+				Ldr(w3, arm_reg_operand(RN_PSR_FLAGS));
+				Ubfx(w3, w3, 28, 1);
+				Bfi(x0, x3, 28, 1);
+			}
 			Msr(NZCV, x0);
 		}
 	}

@@ -270,10 +270,10 @@ fail:
 	// delete failed savestate?
 }
 
-void dc_loadstate(int index)
+static bool loadState(int index, const std::string& statePath)
 {
 	if (!dc_savestateAllowed() || settings.raHardcoreMode)
-		return;
+		return false;
 	u32 total_size = 0;
 
 	hostfs::File *f = nullptr;
@@ -289,7 +289,7 @@ void dc_loadstate(int index)
 #endif
 	{
 		// regular file savestate
-		filename = hostfs::getSavestatePath(index, false);
+		filename = statePath.empty() ? hostfs::getSavestatePath(index, false) : statePath;
 		f = hostfs::storage().openFile(filename, "rb");
 	}
 
@@ -297,7 +297,7 @@ void dc_loadstate(int index)
 	{
 		WARN_LOG(SAVESTATE, "Failed to load state - could not open %s for reading", filename.c_str());
 		os_notify(i18n::T("Save state not found"), 2000);
-		return;
+		return false;
 	}
 	SavestateHeader header;
 	if (f->read(&header, sizeof(header), 1) == 1)
@@ -341,7 +341,7 @@ void dc_loadstate(int index)
 			delete f;
 		else
 			zipFile.Close();
-		return;
+		return false;
 	}
 
 	size_t read_size;
@@ -360,12 +360,14 @@ void dc_loadstate(int index)
 		WARN_LOG(SAVESTATE, "Failed to load state - I/O error");
 		os_notify(i18n::T("Failed to load state"), 5000, i18n::T("I/O error"));
 		free(data);
-		return;
+		return false;
 	}
 
+	bool loaded = false;
 	try {
 		Deserializer deser(data, total_size);
 		emu.loadstate(deser);
+		loaded = true;
 	    NOTICE_LOG(SAVESTATE, "Loaded state ver %d from %s size %d", deser.version(), filename.c_str(), total_size);
 		if (deser.size() != total_size)
 			// Note: this isn't true for RA savestates
@@ -376,6 +378,17 @@ void dc_loadstate(int index)
 	}
 
 	free(data);
+	return loaded;
+}
+
+void dc_loadstate(int index)
+{
+	loadState(index, "");
+}
+
+bool dc_loadstateForPath(const std::string& statePath)
+{
+	return !statePath.empty() && loadState(0, statePath);
 }
 
 time_t dc_getStateCreationDate(int index)
@@ -384,43 +397,87 @@ time_t dc_getStateCreationDate(int index)
 	if (filename != lastStateFile)
 	{
 		lastStateFile = filename;
-		hostfs::File *f = hostfs::storage().openFile(filename, "rb");
-		if (f == nullptr)
-			lastStateTime = 0;
-		else
-		{
-			SavestateHeader header;
-			if (f->read(&header, sizeof(header), 1) != 1 || !header.isValid())
-			{
-				delete f;
-				try {
-					hostfs::FileInfo fileInfo = hostfs::storage().getFileInfo(filename);
-					lastStateTime = fileInfo.updateTime;
-				} catch (...) {
-					lastStateTime = 0;
-				}
-			}
-			else {
-				delete f;
-				lastStateTime = (time_t)header.creationDate;
-			}
-		}
+		lastStateTime = dc_getStateCreationDateForPath(filename);
 	}
 	return lastStateTime;
 }
 
+time_t dc_getStateCreationDateForPath(const std::string& filename)
+{
+	// Background library scans must not share the active slot's mutable cache.
+	hostfs::File *f = hostfs::storage().openFile(filename, "rb");
+	if (f == nullptr)
+		return 0;
+	SavestateHeader header;
+	const bool validHeader = f->read(&header, sizeof(header), 1) == 1 && header.isValid();
+	delete f;
+	if (validHeader)
+		return (time_t)header.creationDate;
+	try {
+		return hostfs::storage().getFileInfo(filename).updateTime;
+	} catch (...) {
+		return 0;
+	}
+}
+
+SavestateInfo dc_getLatestStateForGame(const std::string& contentPath)
+{
+	if (contentPath.empty())
+		return {};
+	std::string fileName = contentPath;
+	try {
+		const hostfs::FileInfo info = hostfs::storage().getFileInfo(contentPath);
+		if (!info.name.empty())
+			fileName = info.name;
+	} catch (const hostfs::StorageException&) {
+		// Match the live loader's fallback for Naomi slave content.
+	}
+	return dc_getLatestStateForGame(contentPath, fileName, hostfs::getSavestateFolders());
+}
+
+SavestateInfo dc_getLatestStateForGame(const std::string& contentPath, const std::string& fileName,
+		const hostfs::SavestateFolders& folders)
+{
+	SavestateInfo latest;
+	if (contentPath.empty())
+		return latest;
+	const int autoSaveSlot = dc_getAutoSaveSlot();
+	// Include every manual slot and the hidden autosave; never offer netplay or RAM states.
+	for (int slot = 0; slot <= autoSaveSlot; ++slot)
+	{
+		const std::string path = hostfs::getSavestatePathForGame(contentPath, fileName, slot, folders);
+		const time_t creationDate = path.empty() ? 0 : dc_getStateCreationDateForPath(path);
+		// Autosave wins equal timestamps; otherwise keep the lowest numbered slot.
+		if (creationDate > latest.creationDate
+				|| (creationDate != 0 && creationDate == latest.creationDate && slot == autoSaveSlot))
+			latest = { path, creationDate };
+	}
+	return latest;
+}
+
 void dc_getStateScreenshot(int index, std::vector<u8>& pngData)
 {
-	pngData.clear();
 	std::string filename = hostfs::getSavestatePath(index, false);
+	dc_getStateScreenshotForPath(filename, pngData);
+}
+
+void dc_getStateScreenshotForPath(const std::string& filename, std::vector<u8>& pngData)
+{
+	static constexpr u32 MAX_SAVESTATE_SCREENSHOT_SIZE = 64 * 1024 * 1024;
+	pngData.clear();
 	hostfs::File *f = hostfs::storage().openFile(filename, "rb");
 	if (f == nullptr)
 		return;
 	SavestateHeader header;
-	if (f->read(&header, sizeof(header), 1) == 1 && header.isValid() && header.pngSize != 0)
+	const s64 fileSize = f->size();
+	if (f->read(&header, sizeof(header), 1) == 1 && header.isValid()
+			&& header.pngSize >= 8 && header.pngSize <= MAX_SAVESTATE_SCREENSHOT_SIZE
+			&& fileSize >= (s64)sizeof(header) + header.pngSize)
 	{
 		pngData.resize(header.pngSize);
 		if (f->read(pngData.data(), 1, pngData.size()) != pngData.size())
+			pngData.clear();
+		else if (memcmp(pngData.data(), "\x89PNG\r\n\x1a\n", 8) != 0)
 			pngData.clear();
 	}
 	delete f;

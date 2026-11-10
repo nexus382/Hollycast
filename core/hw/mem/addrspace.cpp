@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "addrspace.h"
 #include "hw/aica/aica_if.h"
 #include "hw/pvr/pvr_mem.h"
@@ -61,8 +62,8 @@ void *readConst(u32 addr, bool& ismem, u32 sz)
 	else
 	{
 		ismem = true;
-		addr <<= iirf;
-		addr >>= iirf;
+		addr <<= (iirf & HANDLER_MAX);
+		addr >>= (iirf & HANDLER_MAX);
 
 		return &(((u8 *)ptr)[addr]);
 	}
@@ -94,8 +95,8 @@ void *writeConst(u32 addr, bool& ismem, u32 sz)
 	else
 	{
 		ismem = true;
-		addr <<= iirf;
-		addr >>= iirf;
+		addr <<= (iirf & HANDLER_MAX);
+		addr >>= (iirf & HANDLER_MAX);
 
 		return &(((u8 *)ptr)[addr]);
 	}
@@ -112,8 +113,8 @@ T DYNACALL readt(u32 addr)
 
 	if (likely(ptr != nullptr))
 	{
-		addr <<= iirf;
-		addr >>= iirf;
+		addr <<= (iirf & HANDLER_MAX);
+		addr >>= (iirf & HANDLER_MAX);
 
 		return *(T *)&((u8 *)ptr)[addr];
 	}
@@ -156,8 +157,8 @@ void DYNACALL writet(u32 addr, T data)
 
 	if (likely(ptr != nullptr))
 	{
-		addr <<= iirf;
-		addr >>= iirf;
+		addr <<= (iirf & HANDLER_MAX);
+		addr >>= (iirf & HANDLER_MAX);
 
 		*(T *)&((u8 *)ptr)[addr] = data;
 	}
@@ -398,6 +399,7 @@ static void termMappings()
 		aica::aica_ram.free();
 		free_pages(elan::RAM);
 		elan::RAM = nullptr;
+		memset(memInfo_ptr, 0, sizeof(memInfo_ptr));
 	}
 }
 
@@ -407,7 +409,7 @@ void initMappings()
 	// Fallback to statically allocated buffers, this results in slow-ops being generated.
 	if (ram_base == nullptr)
 	{
-		WARN_LOG(VMEM, "Warning! nvmem is DISABLED (due to failure or not being built-in");
+		WARN_LOG(VMEM, "Warning! nvmem is DISABLED (due to failure or not being built-in)");
 
 		// Allocate it all and initialize it.
 		p_sh4rcb = (Sh4RCB*)malloc_pages(sizeof(Sh4RCB));
@@ -535,8 +537,8 @@ u32 getVramOffset(void *addr)
 	else
 #endif
 	{
-		ptrdiff_t offset = (u8*)addr - &vram[0];
-		if (offset < 0 || offset >= VRAM_SIZE)
+		uintptr_t offset = virtmem::untag(addr) - virtmem::untag(&vram[0]);
+		if (offset >= VRAM_SIZE)
 			return -1;
 
 		return (u32)offset;

@@ -19,6 +19,7 @@
 */
 #pragma once
 #include "cfg.h"
+#include "rend/vmu_window.h"
 #include "hw/maple/maple_cfg.h"
 #ifdef LIBRETRO
 #include <libretro.h>
@@ -370,6 +371,9 @@ extern Option<bool> SaveProtection;
 extern Option<int, false> SavestateSlot;
 extern Option<bool> ForceFreePlay;
 extern Option<bool, false> FetchBoxart;
+extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper (then LaunchBox, TGDB), 2 -> LaunchBox.
+extern Option<std::string, false> ScreenScraperUser;
+extern Option<int, false> ScreenScraperMedia; // Shared manual media choices; legacy config key, stable artwork::mediaTypes bits.
 extern Option<bool, false> BoxartDisplayMode;
 extern Option<int, false> BoxartSourceMode; // 0 -> Scraped, 1 -> Physical Media, 2 -> Custom with scraped fallback
 enum class LibraryDisplayStyleMode
@@ -398,7 +402,11 @@ enum class LibraryCoverMediaMode
 	FanArt = 7,
 	TitleScreen = 8,
 	Manual = 9,
-	Count = 10,
+	Banner = 10,
+	BackCover = 11,
+	Spine = 12,
+	BoxTexture = 13,
+	Count = 14,
 };
 
 enum class VmuIconPlaybackMode
@@ -411,9 +419,21 @@ extern Option<int, false> LibraryDisplayStyle;
 extern Option<int, false> LibraryImageSource;
 extern Option<int, false> LibraryCoverMedia;
 extern Option<int, false> LibraryIconScale;
+extern Option<std::vector<std::string>, false> LibraryFavourites;
 extern Option<int, false> VmuIconMode;
 extern Option<int, false> UIScaling;
-extern Option<int, false> UITheme;          // 0 -> Dark, 1 -> Light, 2 -> Dreamcast, 3 -> High Contrast, 4 -> Nintendo, 5 -> Aqua Chill
+extern Option<int, false> UITheme;
+extern Option<std::string, false> UICustomTheme;
+extern Option<std::string, false> CustomTheme; // Library package ID; empty uses the selected UI theme.
+extern Option<std::string, false> ThemeLayout; // Layout ID; empty uses the theme's first layout.
+extern Option<int, false> ThemeIconMedia; // -1 uses the theme default; otherwise LibraryCoverMediaMode.
+enum class MenuBarMode
+{
+	Auto = 0,
+	On = 1,
+	Off = 2,
+};
+extern Option<int, false> MenuBarVisibility;
 
 // Sound
 
@@ -462,8 +482,10 @@ public:
 			RenderType::DirectX11
 #elif defined(USE_DX9)
 			RenderType::DirectX9
-#elif !defined(USE_OPENGL)
+#elif !defined(USE_OPENGL) && defined(USE_VULKAN)
 			RenderType::Vulkan
+#elif !defined(USE_OPENGL) && defined(USE_METAL)
+			RenderType::Metal
 #else
 			RenderType::OpenGL
 #endif
@@ -504,8 +526,15 @@ extern Option<bool> DumpTextures;
 extern Option<bool> DumpUniqueTextures;
 extern Option<bool> DumpReplacedTextures;
 extern Option<int> ScreenStretching;	// in percent. 150 means stretch from 4/3 to 6/3
+extern Option<bool> StretchToFill;
 extern Option<bool> Fog;
 extern Option<bool> FloatVMUs;
+#ifdef HAVE_MOVABLE_VMUS
+extern Option<bool, false> MovableVMUs;
+extern Option<bool, false> VmuLayoutEnabled;
+extern Option<int, false> VmuWindowSize;
+extern Option<int, false> VmuWindowTransparency;
+#endif
 extern Option<bool> Rotate90;
 extern Option<bool> PerStripSorting;
 extern Option<bool> DelayFrameSwapping;	// Delay swapping frame until FB_R_SOF matches FB_W_SOF
@@ -522,6 +551,7 @@ extern Option<bool> VSync;
 extern Option<int64_t> PixelBufferSize;
 extern Option<int> AnisotropicFiltering;
 extern Option<int> TextureFiltering; // 0: default, 1: force nearest, 2: force linear
+extern Option<int> SampleTextureFilter; // 0: disabled, 1-19: reconstruction mode (14 retired)
 extern Option<bool> ThreadedRendering;
 extern Option<bool> DupeFrames;
 extern Option<bool> NativeDepthInterpolation;
@@ -607,8 +637,14 @@ extern Option<bool> OmxAudioHdmi;
 // Maple
 
 extern Option<int> MouseSensitivity;
+extern Option<bool> VirtualGamepadEnabled;
+extern Option<bool> VirtualGamepadHapticFeedback;
+extern Option<bool> VirtualGamepadVisualFeedback;
+extern Option<bool> VirtualGamepadCircularStick;
 extern Option<int> VirtualGamepadVibration;
 extern Option<int> VirtualGamepadTransparency;
+extern Option<int> VirtualGamepadIdleTimeout;
+extern Option<int> VirtualGamepadFingerSize;
 extern std::array<Option<MapleDeviceType>, 4> MapleMainDevices;
 extern std::array<std::array<Option<MapleDeviceType>, 2>, 4> MapleExpansionDevices;
 extern std::array<std::array<Option<int>, 2>, 4> NetworkExpansionDevices;
@@ -633,6 +669,7 @@ extern Option<std::string, false> LuaFileName;
 // RetroAchievements
 
 extern Option<bool> EnableAchievements;
+extern Option<bool> ShowAchievementPopups;
 extern Option<bool> AchievementsHardcoreMode;
 extern OptionString AchievementsUserName;
 extern OptionString AchievementsToken;

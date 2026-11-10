@@ -1,0 +1,43 @@
+# Portions Copyright 2026 The Hollycast Authors
+name: Text shaping
+on:
+  pull_request:
+    paths:
+      - 'core/deps/imgui/**'
+      - 'core/deps/harfbuzz'
+      - 'core/deps/freetype'
+      - 'core/ui/gui_font.cpp'
+      - 'core/ui/gui_util.cpp'
+      - 'fonts/**'
+      - 'tests/text_shaping/**'
+      - '.github/workflows/text-shaping.yml'
+  push:
+    branches: [dev, master]
+    paths:
+      - 'core/deps/imgui/**'
+      - 'core/deps/harfbuzz'
+      - 'core/deps/freetype'
+      - 'core/ui/gui_font.cpp'
+      - 'core/ui/gui_util.cpp'
+      - 'fonts/**'
+      - 'tests/text_shaping/**'
+      - '.github/workflows/text-shaping.yml'
+permissions:
+  contents: read
+jobs:
+  shaping:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize font dependencies
+        run: git submodule update --init core/deps/freetype core/deps/harfbuzz
+      - name: Configure
+        run: cmake -S tests/text_shaping -B build/text-shaping -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/text-shaping --config Release --parallel 4
+      - name: Test
+        run: ctest --test-dir build/text-shaping -C Release --output-on-failure

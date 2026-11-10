@@ -614,7 +614,7 @@ std::string formatResolution()
 std::string formatGpuStatistics()
 {
 	const RenderType renderer = config::RendererType.get();
-	const char *api = isOpenGL(renderer) ? "OpenGL" : isVulkan(renderer) ? "Vulkan" : isDirectX(renderer) ? "DirectX" : "Renderer";
+	const char *api = isOpenGL(renderer) ? "OpenGL" : isVulkan(renderer) ? "Vulkan" : isDirectX(renderer) ? "DirectX" : isMetal(renderer) ? "Metal" : "Renderer";
 	char statistics[192];
 	std::snprintf(statistics, sizeof(statistics), i18n::T("%s%s | %.0f batches | %.0f verts | %.1f passes | %.1f uploads/s"), api,
 		static_cast<bool>(config::ThreadedRendering) ? "-MT" : "", metrics.pvrPrimitivesPerScene,

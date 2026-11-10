@@ -1,4 +1,5 @@
 /*
+	 Portions Copyright 2026 The Hollycast Authors
 	 This file is part of reicast.
 
 	 reicast is free software: you can redistribute it and/or modify
@@ -18,6 +19,7 @@
 
 #include "types.h"
 #include "cfg/option.h"
+#include "rend/vmu_window.h"
 
 // VMUs
 extern u32 vmu_lcd_data[8][48 * 32];
@@ -57,4 +59,8 @@ static inline void blankVmus()
 {
 	memset(vmu_lcd_data, 0, sizeof(vmu_lcd_data));
 	memset(vmuLastChanged, 0, sizeof(vmuLastChanged));
+#ifdef HAVE_MOVABLE_VMUS
+	for (int i = 0; i < 8; ++i)
+		vmu_window::publishScreen(i, vmu_lcd_data[i], vmu_lcd_status[i]);
+#endif
 }

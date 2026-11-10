@@ -1,0 +1,731 @@
+{
+  "formatVersion": 1,
+  "id": "demo-disc",
+  "name": "Demo Disc",
+  "author": "Hollycast contributors",
+  "description": "Brushed silver and loud type: a tilted game rail tagged from each game's details, a spinning disc, and an attract mode that rolls through your library.",
+  "baseTheme": 1,
+  "colors": {
+    "Text": "0b0d12",
+    "TextDisabled": "4d545f",
+    "WindowBg": "c9ced6",
+    "ChildBg": "d7dbe1",
+    "PopupBg": "ffffff",
+    "Border": "6e7682",
+    "Separator": "8d95a1",
+    "FrameBg": "e4e7eb",
+    "FrameBgHovered": "f3f4f6",
+    "FrameBgActive": "ffffff",
+    "Button": "e4e7eb",
+    "ButtonHovered": "ffffff",
+    "ButtonActive": "ff4f00",
+    "Header": "ffb48f",
+    "HeaderHovered": "ffc9ad",
+    "HeaderActive": "ff9a66",
+    "CheckMark": "ff4f00",
+    "SliderGrab": "ff4f00",
+    "SliderGrabActive": "c93d00",
+    "NavCursor": "ff4f00",
+    "ScrollbarBg": "00000000",
+    "ScrollbarGrab": "6e768299",
+    "ScrollbarGrabHovered": "4d545f",
+    "ScrollbarGrabActive": "0b0d12",
+    "TitleBg": "b9bfc8",
+    "TitleBgActive": "a7aeb9",
+    "TableHeaderBg": "b9bfc8",
+    "TextLink": "b83500"
+  },
+  "fonts": {
+    "body": "assets/Orbitron-700.ttf",
+    "bold": "assets/Orbitron-900.ttf"
+  },
+  "layouts": [
+    {
+      "id": "demo-disc",
+      "name": "Demo Disc",
+      "canvasAspect": 1.7778,
+      "browser": [
+        0.0172,
+        0.0111,
+        0.4562,
+        0.8889
+      ],
+      "rowHeight": 0.0861,
+      "fontSize": 0.0278,
+      "narrowLayout": "demo-disc-portrait",
+      "narrowAspect": 1.1,
+      "mode": "rail",
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarSelectedTextColor": "ffffff",
+      "toolbarLogo": "assets/logo.png",
+      "toolbarLogoHeight": 36,
+      "hoverDetails": false,
+      "showItemActions": false,
+      "textColor": "eef1f4",
+      "selectedTextColor": "ffffff",
+      "selectorColor": "ff4f00",
+      "background": "c9ced6",
+      "attract": {
+        "idleSeconds": 20,
+        "intervalSeconds": 3.5
+      },
+      "rail": {
+        "visible": 4,
+        "tilt": 0.024,
+        "skew": 0.03,
+        "falloff": 0.045,
+        "fade": 0.15,
+        "rowColor": "0b0d12",
+        "favouriteMark": true,
+        "badges": [
+          [
+            "system"
+          ],
+          [
+            "genre",
+            "region",
+            "format"
+          ]
+        ]
+      },
+      "sounds": {
+        "move": "assets/move.wav",
+        "launch": "assets/launch.wav"
+      },
+      "launch": {
+        "seconds": 1.05
+      },
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/background.png",
+          "zIndex": -100,
+          "fit": "cover",
+          "bleed": true
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.5,
+            0,
+            0.5,
+            1
+          ],
+          "source": "assets/disc.png",
+          "zIndex": -90,
+          "bleed": true,
+          "spin": {
+            "seconds": 14,
+            "launchSeconds": 0.07,
+            "center": [
+              0.875,
+              0.1
+            ],
+            "radius": 0.232
+          }
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.5,
+            0,
+            0.5,
+            1
+          ],
+          "source": "disc",
+          "fallback": "none",
+          "zIndex": -89,
+          "bleed": true,
+          "spin": {
+            "seconds": 14,
+            "launchSeconds": 0.07,
+            "center": [
+              0.875,
+              0.1
+            ],
+            "radius": 0.232,
+            "hole": 0.13
+          }
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4891,
+            0.035,
+            0.260355,
+            0.46274
+          ],
+          "source": "assets/screen-frame.png",
+          "zIndex": -80,
+          "fit": "stretch"
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
+          ],
+          "source": "cover",
+          "fit": "contain",
+          "fallbackImage": "assets/placeholder.png",
+          "zIndex": -70
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
+          ],
+          "source": "assets/scanlines.png",
+          "zIndex": -60,
+          "fit": "stretch"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
+          ],
+          "source": "assets/sweep.png",
+          "zIndex": -59,
+          "sweepSeconds": 3.2
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.497005,
+            0.049195,
+            0.244375,
+            0.434435
+          ],
+          "source": "assets/sweep-launch.png",
+          "zIndex": -58,
+          "sweepSeconds": 0.5,
+          "when": "launching"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4891,
+            0.002,
+            0.0141,
+            0.025
+          ],
+          "source": "assets/lamp-on.png",
+          "zIndex": 1,
+          "when": "attract"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4891,
+            0.002,
+            0.0141,
+            0.025
+          ],
+          "source": "assets/lamp-off.png",
+          "zIndex": 1,
+          "when": "interactive"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.5078,
+            0.005,
+            0.1875,
+            0.022
+          ],
+          "text": "ATTRACT MODE",
+          "fontSize": 0.0195,
+          "color": "0b0d12",
+          "zIndex": 1
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.4891,
+            0.515,
+            0.5,
+            0.06
+          ],
+          "source": "title",
+          "text": "-",
+          "fontSize": 0.052,
+          "color": "0b0d12",
+          "zIndex": 1,
+          "slant": 0.2
+        },
+        {
+          "type": "details",
+          "autoFit": true,
+          "rect": [
+            0.4891,
+            0.588,
+            0.4922,
+            0.24
+          ],
+          "fields": ["system", "developer", "publisher", "genre", "players", "releaseDate", "region", "productId", "description"],
+          "columns": 2,
+          "fontSize": 0.0222,
+          "color": "0b0d12",
+          "text": "No details known for this game.",
+          "zIndex": 1
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.4891,
+            0.8417,
+            0.1797,
+            0.0944
+          ],
+          "action": "activate",
+          "text": "",
+          "zIndex": 3,
+          "image": "assets/play-button.png",
+          "hoverImage": "assets/play-button-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.6547,
+            0.8417,
+            0.1453,
+            0.0944
+          ],
+          "action": "favourite",
+          "text": "",
+          "zIndex": 3,
+          "image": "assets/favourite.png",
+          "hoverImage": "assets/favourite-hover.png",
+          "selectedImage": "assets/favourited.png",
+          "selectedHoverImage": "assets/favourited-hover.png"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.8094,
+            0.8389,
+            0.0828,
+            0.025
+          ],
+          "text": "PLAY TIME",
+          "fontSize": 0.0167,
+          "color": "3a414d",
+          "zIndex": 1
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.8094,
+            0.8639,
+            0.0828,
+            0.0333
+          ],
+          "source": "playTime",
+          "text": "Not yet",
+          "fontSize": 0.0236,
+          "color": "0b0d12",
+          "zIndex": 1
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.8953,
+            0.8389,
+            0.0953,
+            0.025
+          ],
+          "text": "LAST RUN",
+          "fontSize": 0.0167,
+          "color": "3a414d",
+          "zIndex": 1
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.8953,
+            0.8639,
+            0.0953,
+            0.0694
+          ],
+          "source": "lastPlayed",
+          "text": "Never",
+          "fontSize": 0.0236,
+          "color": "0b0d12",
+          "zIndex": 1
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "ffffff",
+          "zIndex": 90,
+          "bleed": true,
+          "when": "launching",
+          "launchFadeFrom": 0.68
+        }
+      ]
+    },
+    {
+      "id": "demo-disc-portrait",
+      "name": "Demo Disc (portrait)",
+      "canvasAspect": 0.68,
+      "browser": [
+        0.0194,
+        0.605,
+        0.9613,
+        0.35
+      ],
+      "rowHeight": 0.0548,
+      "fontSize": 0.0225,
+      "mode": "rail",
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarSelectedTextColor": "ffffff",
+      "toolbarLogo": "assets/logo-mark.png",
+      "toolbarLogoHeight": 30,
+      "hoverDetails": false,
+      "showItemActions": false,
+      "textColor": "eef1f4",
+      "selectedTextColor": "ffffff",
+      "selectorColor": "ff4f00",
+      "background": "c9ced6",
+      "attract": {
+        "idleSeconds": 20,
+        "intervalSeconds": 3.5
+      },
+      "rail": {
+        "visible": 6,
+        "tilt": 0.014,
+        "skew": 0.03,
+        "falloff": 0.026,
+        "fade": 0.11,
+        "rowColor": "0b0d12",
+        "favouriteMark": true,
+        "badges": [
+          [
+            "system"
+          ],
+          [
+            "genre",
+            "region",
+            "format"
+          ]
+        ],
+        "center": 0.2
+      },
+      "sounds": {
+        "move": "assets/move.wav",
+        "launch": "assets/launch.wav"
+      },
+      "launch": {
+        "seconds": 1.05
+      },
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/background.png",
+          "zIndex": -100,
+          "fit": "cover",
+          "bleed": true
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.4,
+            0,
+            0.6,
+            0.4
+          ],
+          "source": "assets/disc.png",
+          "zIndex": -90,
+          "bleed": true,
+          "spin": {
+            "seconds": 14,
+            "launchSeconds": 0.07,
+            "center": [
+              1.02,
+              0.02
+            ],
+            "radius": 0.28
+          }
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.4,
+            0,
+            0.6,
+            0.4
+          ],
+          "source": "disc",
+          "fallback": "none",
+          "zIndex": -89,
+          "bleed": true,
+          "spin": {
+            "seconds": 14,
+            "launchSeconds": 0.07,
+            "center": [
+              1.02,
+              0.02
+            ],
+            "radius": 0.28,
+            "hole": 0.13
+          }
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.029,
+            0.028,
+            0.389385,
+            0.26469
+          ],
+          "source": "assets/screen-frame.png",
+          "zIndex": -80,
+          "fit": "stretch"
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
+          ],
+          "source": "cover",
+          "fit": "contain",
+          "fallbackImage": "assets/placeholder.png",
+          "zIndex": -70
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
+          ],
+          "source": "assets/scanlines.png",
+          "zIndex": -60,
+          "fit": "stretch"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
+          ],
+          "source": "assets/sweep.png",
+          "zIndex": -59,
+          "sweepSeconds": 3.2
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.041325,
+            0.036415,
+            0.36465,
+            0.247945
+          ],
+          "source": "assets/sweep-launch.png",
+          "zIndex": -58,
+          "sweepSeconds": 0.5,
+          "when": "launching"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.029,
+            0.0088,
+            0.029,
+            0.0197
+          ],
+          "source": "assets/lamp-on.png",
+          "zIndex": 1,
+          "when": "attract"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.029,
+            0.0088,
+            0.029,
+            0.0197
+          ],
+          "source": "assets/lamp-off.png",
+          "zIndex": 1,
+          "when": "interactive"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.0677,
+            0.011,
+            0.3871,
+            0.0219
+          ],
+          "text": "ATTRACT MODE",
+          "fontSize": 0.0164,
+          "color": "0b0d12",
+          "zIndex": 1
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.5097,
+            0.0373,
+            0.4677,
+            0.068
+          ],
+          "source": "title",
+          "text": "-",
+          "fontSize": 0.0307,
+          "color": "0b0d12",
+          "zIndex": 1,
+          "slant": 0.16
+        },
+        {
+          "type": "details",
+          "autoFit": true,
+          "rect": [
+            0.029,
+            0.309,
+            0.951,
+            0.206
+          ],
+          "fields": ["system", "developer", "publisher", "genre", "players", "releaseDate", "region", "productId", "description"],
+          "columns": 2,
+          "fontSize": 0.0175,
+          "color": "0b0d12",
+          "text": "No details known for this game.",
+          "zIndex": 1
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.029,
+            0.529,
+            0.3048,
+            0.0614
+          ],
+          "action": "activate",
+          "text": "",
+          "zIndex": 3,
+          "image": "assets/play-button.png",
+          "hoverImage": "assets/play-button-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.329,
+            0.529,
+            0.2468,
+            0.0614
+          ],
+          "action": "favourite",
+          "text": "",
+          "zIndex": 3,
+          "image": "assets/favourite.png",
+          "hoverImage": "assets/favourite-hover.png",
+          "selectedImage": "assets/favourited.png",
+          "selectedHoverImage": "assets/favourited-hover.png"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.6,
+            0.529,
+            0.1806,
+            0.0197
+          ],
+          "text": "PLAY TIME",
+          "fontSize": 0.0137,
+          "color": "3a414d",
+          "zIndex": 1
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.6,
+            0.549,
+            0.1806,
+            0.0417
+          ],
+          "source": "playTime",
+          "text": "Not yet",
+          "fontSize": 0.0197,
+          "color": "0b0d12",
+          "zIndex": 1
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.7871,
+            0.529,
+            0.1935,
+            0.0197
+          ],
+          "text": "LAST RUN",
+          "fontSize": 0.0137,
+          "color": "3a414d",
+          "zIndex": 1
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.7871,
+            0.549,
+            0.1935,
+            0.0482
+          ],
+          "source": "lastPlayed",
+          "text": "Never",
+          "fontSize": 0.0197,
+          "color": "0b0d12",
+          "zIndex": 1
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "ffffff",
+          "zIndex": 90,
+          "bleed": true,
+          "when": "launching",
+          "launchFadeFrom": 0.68
+        }
+      ]
+    }
+  ]
+}

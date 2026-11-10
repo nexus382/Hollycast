@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "hw/hwreg.h"
 #include <deque>
@@ -110,6 +111,9 @@ public:
 	void reset();
 	void serialize(Serializer& ser);
 	void deserialize(Deserializer& deser);
+	void postDeserialize() {
+		updateBaudRate();
+	}
 
 	u8 SCFRDR2_read();
 	void SCFTDR2_write(u8 data);
