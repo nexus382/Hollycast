@@ -481,6 +481,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (PlayAppUpdater.result(requestCode, resultCode)) return;
+        if (AppUpdateInstaller.result(requestCode, resultCode)) return;
         switch (requestCode)
         {
             case AndroidStorage.ADD_STORAGE_ACTIVITY_REQUEST:

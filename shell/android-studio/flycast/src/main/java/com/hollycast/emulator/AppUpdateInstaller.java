@@ -25,14 +25,17 @@ import java.util.zip.ZipInputStream;
 
 /** Downloads only after Update is pressed; Android owns permission and package-signature checks. */
 final class AppUpdateInstaller {
+    private static final int INSTALL_REQUEST = 19582;
     private static final long LIMIT = 512L * 1024 * 1024;
     private static final AtomicBoolean busy = new AtomicBoolean();
     private static WeakReference<Activity> foreground = new WeakReference<>(null);
     private static File pendingApk;
     private static File pendingWork;
+    private static File activeWork;
 
     static synchronized void resume(Activity activity) {
         foreground = new WeakReference<>(activity);
+        if (BuildConfig.GITHUB_UPDATES) reclaimCompleted(activity.getApplicationContext());
         present();
     }
 
@@ -54,30 +57,120 @@ final class AppUpdateInstaller {
         catch (IOException ignored) { android.util.Log.e("HollycastUpdate", "Cannot publish update failure"); }
     }
 
-    private static synchronized void present() {
-        Activity activity = foreground.get();
-        if (activity == null || activity.isFinishing() || activity.isDestroyed() || pendingApk == null) return;
-        final File apk = pendingApk;
-        final File work = pendingWork;
-        pendingApk = null;
-        pendingWork = null;
-        activity.runOnUiThread(() -> {
-            try {
-                checkCancelled(work);
-                if (Build.VERSION.SDK_INT >= 26 && !activity.getPackageManager().canRequestPackageInstalls()) {
-                    status(work, "Error\nAllow Hollycast to install updates, then press Update again.");
-                    activity.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                            Uri.parse("package:" + activity.getPackageName())));
-                    return;
+    private static long versionCode(PackageInfo info) {
+        return Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+    }
+
+    private static void validateWork(Context context, File work) throws IOException {
+        File root = new File(context.getFilesDir(), "app-updates").getCanonicalFile();
+        if (!work.isDirectory() || !work.getName().startsWith("update-")
+                || !root.equals(work.getCanonicalFile().getParentFile()))
+            throw new IOException("Invalid update staging directory.");
+    }
+
+    private static void discardPayloads(File work, boolean includeApk) {
+        // Keep progress markers until the native UI has consumed the terminal status.
+        for (String name : new String[]{"package.zip", "inner-0.zip", "inner-1.zip", "inner-2.zip", "update.apk"}) {
+            if (!includeApk && name.equals("update.apk")) continue;
+            File file = new File(work, name);
+            if (file.exists() && !file.delete())
+                android.util.Log.w("HollycastUpdate", "Cannot remove staged update payload: " + name);
+        }
+    }
+
+    private static void reclaimCompleted(Context context) {
+        try {
+            long current = versionCode(context.getPackageManager().getPackageInfo(context.getPackageName(), 0));
+            File[] folders = new File(context.getFilesDir(), "app-updates").listFiles();
+            if (folders == null) return;
+            for (File work : folders) {
+                if (work.equals(activeWork) || work.equals(pendingWork)) continue;
+                try {
+                    validateWork(context, work);
+                    File marker = new File(work, "source-version");
+                    if (marker.length() == 0 || marker.length() > 32) continue;
+                    try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(
+                            new FileInputStream(marker), java.nio.charset.StandardCharsets.UTF_8))) {
+                        // A successful package replacement may kill this process before its result callback.
+                        // Only a newer installed version proves that the old APK is no longer in use.
+                        if (current > Long.parseLong(in.readLine())) discardPayloads(work, true);
+                    }
+                } catch (IOException | NumberFormatException ignored) {
+                    // Unknown folders and incomplete markers are not ours to reclaim.
                 }
-                Uri uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".provider", apk);
-                Intent intent = new Intent(Intent.ACTION_VIEW);
-                intent.setDataAndType(uri, "application/vnd.android.package-archive");
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                activity.startActivity(intent);
-                status(work, "Installer\n");
+            }
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            android.util.Log.w("HollycastUpdate", "Cannot inspect the installed update version");
+        }
+    }
+
+    private static boolean ensureInstallPermission(Activity activity, File work) throws IOException {
+        if (Build.VERSION.SDK_INT < 26 || activity.getPackageManager().canRequestPackageInstalls()) return true;
+        status(work, "Error\nAllow Hollycast to install updates, then press Update again.");
+        activity.runOnUiThread(() -> {
+            synchronized (AppUpdateInstaller.class) {
+                if (foreground.get() != activity || activity.isFinishing() || activity.isDestroyed()) return;
+            }
+            try {
+                activity.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + activity.getPackageName())));
             } catch (Exception e) { error(work, e); }
         });
+        return false;
+    }
+
+    private static synchronized void present() {
+        Activity activity = foreground.get();
+        if (activity == null || pendingApk == null) return;
+        activity.runOnUiThread(() -> {
+            final File apk, work;
+            synchronized (AppUpdateInstaller.class) {
+                // The Activity can pause or be recreated while this runnable waits on the UI thread.
+                // Leave the payload pending until a live foreground Activity can actually use it.
+                if (foreground.get() != activity || activity.isFinishing() || activity.isDestroyed()
+                        || pendingApk == null) return;
+                apk = pendingApk;
+                work = pendingWork;
+                pendingApk = null;
+                pendingWork = null;
+                activeWork = work;
+            }
+            boolean launched = false;
+            try {
+                checkCancelled(work);
+                if (!ensureInstallPermission(activity, work)) return;
+                Uri uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".provider", apk);
+                Intent intent = new Intent(Intent.ACTION_INSTALL_PACKAGE);
+                intent.setDataAndType(uri, "application/vnd.android.package-archive");
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                // Retain the APK while Android reads it, then reclaim it on either install or cancellation.
+                intent.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+                status(work, "Installer\n");
+                activity.startActivityForResult(intent, INSTALL_REQUEST);
+                launched = true;
+            } catch (Exception e) { error(work, e); }
+            finally {
+                if (!launched) {
+                    synchronized (AppUpdateInstaller.class) { activeWork = null; }
+                    discardPayloads(work, true);
+                }
+            }
+        });
+    }
+
+    static synchronized boolean result(int requestCode, int resultCode) {
+        if (requestCode != INSTALL_REQUEST) return false;
+        File work = activeWork;
+        activeWork = null;
+        if (work != null) {
+            discardPayloads(work, true);
+            try {
+                if (resultCode == Activity.RESULT_OK) status(work, "Done\n");
+                else if (resultCode == Activity.RESULT_CANCELED) status(work, "Cancelled\n");
+                else status(work, "Error\nAndroid could not install the update.");
+            } catch (IOException e) { error(work, e); }
+        }
+        return true;
     }
 
     private static void checkCancelled(File work) throws IOException {
@@ -101,48 +194,57 @@ final class AppUpdateInstaller {
 
     static void install(Activity activity, String url, String digest, String directory, long size) {
         File work = new File(directory);
-        if (!busy.compareAndSet(false, true)) { error(work, new IOException("An update is already downloading.")); return; }
         final Context context = activity.getApplicationContext();
+        try { validateWork(context, work); }
+        catch (IOException e) { android.util.Log.e("HollycastUpdate", "Invalid update staging directory"); return; }
+        if (!busy.compareAndSet(false, true)) { error(work, new IOException("An update is already downloading.")); return; }
         try {
             PackageInfo current = context.getPackageManager().getPackageInfo(context.getPackageName(),
                     android.content.pm.PackageManager.GET_PERMISSIONS);
             boolean githubBuild = current.requestedPermissions != null
                     && java.util.Arrays.asList(current.requestedPermissions).contains("android.permission.REQUEST_INSTALL_PACKAGES");
             if (!BuildConfig.GITHUB_UPDATES || !githubBuild) throw new IOException("Use your app store to update this installation. In-app APK installation is available in GitHub builds.");
-            String allowedRoot = new File(context.getFilesDir(), "app-updates").getCanonicalPath() + File.separator;
-            if (!work.getCanonicalPath().startsWith(allowedRoot) || !digest.matches("[a-f0-9]{64}")
+            synchronized (AppUpdateInstaller.class) {
+                if (pendingWork != null || activeWork != null) throw new IOException("Finish the pending Android update before starting another.");
+            }
+            if (!digest.matches("[a-f0-9]{64}")
                     || !url.startsWith("https://github.com/nexus382/Hollycast/releases/download/")
                     || size <= 0 || size > LIMIT) throw new IOException("Invalid official update request.");
             if (work.getUsableSpace() < size * 3) throw new IOException("Not enough free space to stage the update.");
+            checkCancelled(work);
+            if (!ensureInstallPermission(activity, work)) { busy.set(false); return; }
+            try (FileOutputStream out = new FileOutputStream(new File(work, "source-version"))) {
+                out.write(Long.toString(versionCode(current)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                out.getFD().sync();
+            }
             status(work, "Downloading\n");
-        } catch (Exception e) { busy.set(false); error(work, e); return; }
+        } catch (Exception e) { discardPayloads(work, true); busy.set(false); error(work, e); return; }
         new Thread(() -> {
             try {
                 File archive = new File(work, "package.zip");
                 final long deadline = SystemClock.elapsedRealtime() + 5 * 60 * 1000;
                 URL destination = new URL(url);
-                HttpURLConnection connection = null;
                 for (int redirects = 0; ; ++redirects) {
                     checkCancelled(work);
                     if (redirects > 5 || !"https".equals(destination.getProtocol())) throw new IOException("Unsafe update redirect.");
-                    connection = (HttpURLConnection) destination.openConnection();
-                    connection.setConnectTimeout(15000);
-                    connection.setReadTimeout(30000);
-                    connection.setInstanceFollowRedirects(false);
-                    connection.setRequestProperty("User-Agent", "Hollycast-Updater");
-                    int code = connection.getResponseCode();
-                    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                        String location = connection.getHeaderField("Location");
-                        connection.disconnect();
-                        if (location == null) throw new IOException("Invalid update redirect.");
-                        destination = new URL(destination, location);
-                        continue;
-                    }
-                    if (code != 200) { connection.disconnect(); throw new IOException("Update download failed (HTTP " + code + ")."); }
-                    break;
+                    HttpURLConnection connection = (HttpURLConnection) destination.openConnection();
+                    try {
+                        connection.setConnectTimeout(15000);
+                        connection.setReadTimeout(30000);
+                        connection.setInstanceFollowRedirects(false);
+                        connection.setRequestProperty("User-Agent", "Hollycast-Updater");
+                        int code = connection.getResponseCode();
+                        if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                            String location = connection.getHeaderField("Location");
+                            if (location == null) throw new IOException("Invalid update redirect.");
+                            destination = new URL(destination, location);
+                            continue;
+                        }
+                        if (code != 200) throw new IOException("Update download failed (HTTP " + code + ").");
+                        try (InputStream input = connection.getInputStream()) { copy(input, archive, size, work, deadline); }
+                        break;
+                    } finally { connection.disconnect(); }
                 }
-                try (InputStream input = connection.getInputStream()) { copy(input, archive, size, work, deadline); }
-                finally { connection.disconnect(); }
                 if (archive.length() != size) throw new IOException("The downloaded package has the wrong size.");
                 MessageDigest sha = MessageDigest.getInstance("SHA-256");
                 try (InputStream in = new FileInputStream(archive)) {
@@ -183,13 +285,14 @@ final class AppUpdateInstaller {
                 if (info == null || !context.getPackageName().equals(info.packageName))
                     throw new IOException("The update is for a different Android application.");
                 PackageInfo installed = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
-                long installedVersion = Build.VERSION.SDK_INT >= 28 ? installed.getLongVersionCode() : installed.versionCode;
-                long updateVersion = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+                long installedVersion = versionCode(installed);
+                long updateVersion = versionCode(info);
                 if (updateVersion < installedVersion)
                     throw new IOException("Android cannot install an older build over this version. Choose a newer build on the selected track.");
                 checkCancelled(work);
+                discardPayloads(work, false);
                 synchronized (AppUpdateInstaller.class) { pendingApk = apk; pendingWork = work; present(); }
-            } catch (Exception e) { error(work, e); }
+            } catch (Exception e) { discardPayloads(work, true); error(work, e); }
             finally { busy.set(false); }
         }, "HollycastUpdate").start();
     }

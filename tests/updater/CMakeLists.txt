@@ -27,6 +27,15 @@ if(WIN32)
     endif()
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME updater_linux_install COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/desktop_install.py"
+            --helper "${UPDATER_ROOT}/resources/update/install-desktop.sh" --work-root "${CMAKE_CURRENT_BINARY_DIR}")
+        set_tests_properties(updater_linux_install PROPERTIES TIMEOUT 30)
+    endif()
+endif()
+
 # This exercises the desktop frame loop without Android's Java/Play bridge.
 if(ANDROID OR IOS OR NINTENDO_SWITCH)
     return()

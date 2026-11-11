@@ -143,8 +143,16 @@ fi
 # restores it from the exit trap if publishing the prepared bundle fails.
 mv -f "$prepared" "$target" || fail 'Cannot install the verified update.'
 installed=true
-publish Done
 cd "$previous_cwd" 2>/dev/null || cd "$(dirname "$target")"
 if [ "$kind" = macos ]; then /usr/bin/open "$target"
-else nohup "$target" >/dev/null 2>&1 &
+else
+    nohup "$target" >/dev/null 2>&1 &
+    launched_pid=$!
+    # A background launch reports success before exec runs. Catch immediate loader
+    # failures so the exit trap restores and relaunches the previous application.
+    sleep 1
+    if ! kill -0 "$launched_pid" 2>/dev/null; then
+        wait "$launched_pid" || fail 'The updated application could not start; restoring the previous application.'
+    fi
 fi
+publish Done
