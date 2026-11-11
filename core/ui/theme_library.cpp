@@ -504,12 +504,11 @@ bool activatesItem(const Layout& layout, bool pressed)
 struct BrowserSwipe
 {
 	bool tracking = false, dragged = false;
-	float distance = 0;
+	float distance = 0, velocity = 0;
 };
 
-// Rail/orbit/paged browsers do not have a physical scrollbar. Share the same
-// gesture capture as regular panes, but translate finger movement into entries.
-int swipeSteps(BrowserSwipe& swipe, float step, bool horizontal, bool enabled)
+// Browsers without a physical scrollbar translate a drag into entry steps.
+int swipeSteps(BrowserSwipe& swipe, float step, bool horizontal, bool enabled, bool flickOnRelease = false)
 {
 	auto& io = ImGui::GetIO();
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -534,9 +533,18 @@ int swipeSteps(BrowserSwipe& swipe, float step, bool horizontal, bool enabled)
 		ImGui::SetActiveID(id, window);
 		GImGui->ActiveIdMouseButton = ImGuiMouseButton_Left;
 		ImGui::KeepAliveID(id);
-		swipe.distance -= horizontal ? io.MouseDelta.x : io.MouseDelta.y;
+		const float delta = horizontal ? io.MouseDelta.x : io.MouseDelta.y;
+		swipe.distance -= delta;
+		swipe.velocity = io.DeltaTime > 0.f ? -delta / io.DeltaTime : 0.f;
 		steps = static_cast<int>(swipe.distance / step);
 		swipe.distance -= steps * step;
+	}
+	if (flickOnRelease && swipe.tracking && swipe.dragged && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+	{
+		constexpr float flickWindow = 0.14f;
+		const float flickDistance = swipe.velocity * flickWindow;
+		if (std::fabs(flickDistance) >= step * 0.5f)
+			steps += std::clamp(static_cast<int>(std::round(flickDistance / step)), -3, 3);
 	}
 	if (!io.MouseDown[ImGuiMouseButton_Left])
 	{
@@ -830,7 +838,7 @@ void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<L
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hovered);
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, hovered);
 		}
-		ImGui::PushFont(nullptr, std::clamp(element.fontSize * canvas.size.y, 10.f, 96.f));
+		ImGui::PushFont(element.bold ? boldFont : nullptr, std::clamp(element.fontSize * canvas.size.y, 10.f, 96.f));
 		const std::string& label = selectedButton && !element.selectedText.empty() ? element.selectedText : element.text;
 		const std::string& icon = selectedButton && !element.selectedIcon.empty() ? element.selectedIcon : element.icon;
 		const float contentWidth = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetFontSize() * (label.empty() ? 1.f : 1.45f);
@@ -970,14 +978,14 @@ struct OrbitState
 
 // A bounded seven-disc window keeps large libraries cheap. The rear seam is faded
 // as entries enter/leave the window; indices wrap through the full filtered list.
-void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source, float iconScale,
+void drawOrbit(const Layout& layout, bool flatCarousel, const std::vector<LibraryItem>& items, const std::string& source, float iconScale,
 		ImDrawList* drawList, OrbitState& state, int& selected, std::string& selectedId,
 		int& activated, const std::function<void(size_t)>& afterItem)
 {
 	const ImVec2 origin = ImGui::GetCursorScreenPos();
 	const ImVec2 area = ImGui::GetContentRegionAvail();
 	const int count = static_cast<int>(items.size());
-	const int slots = std::min(count, 7);
+	const int slots = std::min(count, flatCarousel ? 5 : 7);
 	const auto wrapped = [count](int value) { return (value % count + count) % count; };
 	auto& io = ImGui::GetIO();
 	auto& g = *GImGui;
@@ -992,7 +1000,7 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 		selected = wrapped(index);
 		selectedId = itemKey(items[selected], static_cast<size_t>(selected));
 	};
-	const int swipe = swipeSteps(state.swipe, std::max(40.f, area.x * 0.12f), true, input);
+	const int swipe = swipeSteps(state.swipe, std::max(40.f, area.x * 0.12f), true, input, flatCarousel);
 	if (swipe != 0) choose(selected + swipe);
 	bool moveFocus = false;
 	if (input && ownsNav && g.NavMoveSubmitted &&
@@ -1032,7 +1040,7 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 	if (std::fabs(state.target - state.position) < 0.0001) state.position = state.target;
 	// Let the case settle at the front before its label starts turning. Integrating
 	// frame time keeps the speed constant and resets cleanly for another selection.
-	if (!locked && std::fabs(state.target - state.position) < 0.08)
+	if (!flatCarousel && !locked && std::fabs(state.target - state.position) < 0.08)
 		state.spin = std::fmod(state.spin + io.DeltaTime * (2.0 * IM_PI / 24.0), 2.0 * IM_PI);
 
 	// Keep interpolation precise after many full turns without changing any angle.
@@ -1041,32 +1049,67 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 		const double turns = std::floor(state.target / count) * count;
 		state.position -= turns; state.target -= turns;
 	}
-	struct Disc { int index; ImVec2 center; float radius, yaw, depth, opacity, lift; };
+	struct Disc { int index; ImVec2 center; float radius, halfWidth, yaw, depth, opacity, lift; };
 	std::vector<Disc> discs;
 	const int base = static_cast<int>(std::round(state.position));
 	const float step = 2.f * IM_PI / slots;
 	const float radius = std::min(area.y * 0.265f, area.x * 0.115f) * std::clamp(iconScale, 0.65f, 1.2f);
+	const float aspect = std::clamp(layout.itemAspect, 0.3f, 3.f);
+	const float fitSlots = slots + std::max(0, slots - 1) * 0.14f;
+	const float carouselScale = std::clamp(iconScale, 0.65f, 1.2f);
+	const float cardWidth = flatCarousel
+			? std::min(area.y * 0.82f * aspect, area.x / (fitSlots * carouselScale)) * carouselScale
+			: 0.f;
+	const float cardHeight = flatCarousel ? cardWidth / aspect : 0.f;
+	const float cardStep = cardWidth * 1.14f;
 	for (int offset = -slots / 2; offset < slots - slots / 2; ++offset)
 	{
 		const float distance = static_cast<float>(base + offset - state.position);
 		const float angle = distance * step;
-		const float depth = std::cos(angle), side = std::sin(angle);
-		const float scale = 0.79f + 0.21f * depth;
-		float lift = std::clamp(1.f - std::fabs(distance) / 0.85f, 0.f, 1.f);
-		lift = lift * lift * (3.f - 2.f * lift);
-		const float r = radius * scale;
-		const float floorY = origin.y + area.y * (0.78f + depth * 0.14f);
-		const float opacity = count > slots ? std::clamp(slots * 0.5f - std::fabs(distance), 0.f, 1.f) : 1.f;
-		discs.push_back({wrapped(base + offset), ImVec2(origin.x + area.x * (0.5f + side * 0.39f),
-			floorY - r - lift * area.y * 0.16f), r, -side * 0.65f, depth, opacity, lift});
+		float depth, scale, lift, yaw, opacity, r, halfWidth;
+		ImVec2 center;
+		if (flatCarousel)
+		{
+			depth = 1.f - std::fabs(distance) * 0.12f;
+			scale = std::max(0.86f, 1.f - std::fabs(distance) * 0.055f);
+			lift = yaw = 0.f;
+			r = cardHeight * 0.5f * scale;
+			halfWidth = cardWidth * 0.5f * scale;
+			center = ImVec2(origin.x + area.x * 0.5f + distance * cardStep, origin.y + area.y * 0.5f);
+			opacity = distance == 0.f ? 1.f : layout.inactiveOpacity;
+		}
+		else
+		{
+			const float side = std::sin(angle);
+			depth = std::cos(angle);
+			scale = 0.79f + 0.21f * depth;
+			lift = std::clamp(1.f - std::fabs(distance) / 0.85f, 0.f, 1.f);
+			lift = lift * lift * (3.f - 2.f * lift);
+			r = radius * scale;
+			yaw = -side * 0.65f;
+			halfWidth = r * std::cos(yaw);
+			const float floorY = origin.y + area.y * (0.78f + depth * 0.14f);
+			center = ImVec2(origin.x + area.x * (0.5f + side * 0.39f), floorY - r - lift * area.y * 0.16f);
+			opacity = count > slots ? std::clamp(slots * 0.5f - std::fabs(distance), 0.f, 1.f) : 1.f;
+		}
+		discs.push_back({wrapped(base + offset), center, r, halfWidth, yaw, depth, opacity, lift});
 	}
 	std::stable_sort(discs.begin(), discs.end(), [](const Disc& a, const Disc& b) { return a.depth < b.depth; });
 	int hit = -1;
 	for (const Disc& disc : discs)
 	{
-		const float x = (io.MousePos.x - disc.center.x) / std::max(1.f, disc.radius * std::cos(disc.yaw));
-		const float y = (io.MousePos.y - disc.center.y) / std::max(1.f, disc.radius);
-		if (disc.opacity > 0.1f && x*x + y*y <= 1.f && x*x + y*y >= 0.012f) hit = disc.index;
+		if (disc.opacity <= 0.1f) continue;
+		if (flatCarousel)
+		{
+			if (std::fabs(io.MousePos.x - disc.center.x) <= disc.halfWidth
+					&& std::fabs(io.MousePos.y - disc.center.y) <= disc.radius) hit = disc.index;
+		}
+		else
+		{
+			const float x = (io.MousePos.x - disc.center.x) / std::max(1.f, disc.halfWidth);
+			const float y = (io.MousePos.y - disc.center.y) / std::max(1.f, disc.radius);
+			if (x*x + y*y <= 1.f && x*x + y*y >= 0.012f) hit = disc.index;
+		}
 	}
 	// Input submits nearest first; the draw pass below submits farthest first.
 	// This keeps an overlapping rear disc from stealing a front disc's click.
@@ -1083,7 +1126,7 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 		const Disc& disc = *it;
 		const std::string key = itemKey(items[disc.index], static_cast<size_t>(disc.index));
 		ImguiID id(key);
-		const float width = disc.radius * std::cos(disc.yaw);
+		const float width = disc.halfWidth;
 		ImGui::SetCursorScreenPos(disc.center - ImVec2(width, disc.radius));
 		ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, disc.index != selected);
 		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0,0,0,0));
@@ -1107,6 +1150,30 @@ void drawOrbit(const std::vector<LibraryItem>& items, const std::string& source,
 			state.clickedAt = ImGui::GetTime(); state.clickedPos = io.MousePos;
 		}
 		if (afterItem) afterItem(static_cast<size_t>(disc.index));
+	}
+	if (flatCarousel)
+	{
+		const ImU32 edge = layout.selectorBorderColor ? color(*layout.selectorBorderColor) : IM_COL32(67, 232, 242, 255);
+		for (const Disc& disc : discs)
+		{
+			const ImRect rect(disc.center - ImVec2(disc.halfWidth, disc.radius),
+					disc.center + ImVec2(disc.halfWidth, disc.radius));
+			const float rounding = uiScaled(layout.rounding);
+			const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(255 * disc.opacity));
+			const std::string image = artworkPath(items[disc.index], source);
+			drawList->AddRectFilled(rect.Min, rect.Max, IM_COL32(7, 11, 24, 255), rounding);
+			drawFittedImage(drawList, rect, image, "cover", tint, layout.rounding);
+			if (image.empty())
+				drawSingleLine(drawList, rect, items[disc.index].title, IM_COL32(232, 242, 255, 255));
+			if (disc.index == selected)
+			{
+				drawList->AddRect(rect.Min - ImVec2(3, 3), rect.Max + ImVec2(3, 3), IM_COL32(67, 232, 242, 60), rounding + uiScaled(3), 0, uiScaled(9));
+				drawList->AddRect(rect.Min, rect.Max, edge, rounding, 0, uiScaled(2.5f));
+			}
+			else
+				drawList->AddRect(rect.Min, rect.Max, IM_COL32(35, 91, 125, 180), rounding, 0, uiScaled(1));
+		}
+		return;
 	}
 	std::vector<ImVec2> orbit;
 	for (int i = 0; i < 96; ++i)
@@ -1917,10 +1984,11 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	ImGui::BeginDisabled(launching);
 	const bool railMode = layout.mode == "rail";
 	const bool orbitMode = layout.mode == "orbit";
+	const bool carouselMode = layout.mode == "carousel";
 	const bool paged = layout.pagedGrid.rows > 0;
 	const bool childVisible = ImGui::BeginChild("##themeLibraryBrowser", browserSize, ImGuiChildFlags_NavFlattened,
-			ImGuiWindowFlags_NoBackground | ((railMode || orbitMode || paged) ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_DragScrolling));
-	if (!railMode && !orbitMode && !paged)
+			ImGuiWindowFlags_NoBackground | ((railMode || orbitMode || carouselMode || paged) ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_DragScrolling));
+	if (!railMode && !orbitMode && !carouselMode && !paged)
 	{
 		scrollWindowFromTouch();
 	}
@@ -1941,10 +2009,10 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	if (childVisible && !items.empty())
 	{
 		const float spacing = std::max(0.0f, uiScaled(layout.spacing) * iconScale);
-		if (orbitMode)
+		if (orbitMode || carouselMode)
 		{
 			scrollSelection = false;
-			drawOrbit(items, browserSource, iconScale, browserDrawList, orbitState, selected, selectedId, activated, observeItem);
+			drawOrbit(layout, carouselMode, items, browserSource, iconScale, browserDrawList, orbitState, selected, selectedId, activated, observeItem);
 		}
 		else if (paged)
 		{
@@ -1997,9 +2065,21 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 					if (!item.title.empty())
 					{
 						const float controlsWidth = std::min(uiScaled(32.f), rowHeight - padding) + padding * 2.f;
-						const float right = layout.list.systemBadge || layout.list.favouriteBadge
+						float right = layout.list.systemBadge || layout.list.favouriteBadge
 								? drawListBadges(layout, item, itemRect, textLeft, browserDrawList)
 								: itemRect.Max.x - controlsWidth;
+						if (layout.list.releaseYear)
+						{
+							const auto date = item.metadata.find("releaseDate");
+							if (date != item.metadata.end() && date->second.size() >= 4)
+							{
+								const std::string year = date->second.substr(0, 4);
+								const float width = ImGui::CalcTextSize(year.c_str()).x;
+								right -= width + padding;
+								browserDrawList->AddText(ImVec2(right + padding, itemRect.Min.y + (rowHeight - ImGui::GetFontSize()) * 0.5f),
+										browserTextColor(layout, isSelected), year.c_str());
+							}
+						}
 						const ImRect textRect(ImVec2(textLeft, itemRect.Min.y + (rowHeight - ImGui::GetFontSize()) * 0.5f),
 								ImVec2(std::max(textLeft, right - padding), itemRect.Max.y));
 						drawSingleLine(browserDrawList, textRect, item.title, browserTextColor(layout, selectedId == key || hovered));
@@ -2171,7 +2251,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	const bool detailsOnRight = layout.browser.x + layout.browser.w * 0.5f <= 0.5f;
 	const float split = detailsOnRight ? layout.browser.x + layout.browser.w : layout.browser.x;
 	const bool authoredDetails = std::any_of(layout.elements.begin(), layout.elements.end(), [](const Element& element) { return element.type == "details"; });
-	const Rect details{detailsOnRight ? split : 0.f, 0.f, (authoredDetails || orbitMode) ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
+	const Rect details{detailsOnRight ? split : 0.f, 0.f, (authoredDetails || orbitMode || carouselMode) ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
 	// Resolve background media after hover/navigation so both layers show the same game.
 	// The parent draw list is rendered beneath the browser child, regardless of submission order.
 	drawElements(layout, canvas, content, themeDirectory, current, drawList, ElementLayer::BehindBrowser, details, false, previewSource, libraryState);

@@ -133,12 +133,14 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `selectorBorderColor` | Optional selection outline color, separate from the selection fill. |
 | `separatorColor` | Optional list-row divider or rack shelf-edge color. |
 | `showArtwork` | Show square artwork thumbnails beside list titles; default `false`. |
+| `list.releaseYear` | Optional boolean for list layouts, default `false`. Shows the first four characters of a nonempty scraped release date at the right of each row. |
 | `compactControls` | Show favourite buttons only on hovered/focused items or saved favourites; default `false`. Context-menu actions remain available. |
 | `showInfoTooltip` | Show the app's hover information popup; default `true`. Layouts with their own details can disable it. |
 | `canvasAspect` | Optional fixed canvas width/height ratio, `0.4`–`3`. The canvas fits and centers within the content area, preserving authored asset proportions. Omit to use the complete content area as before. |
-| `toolbar` | `standard` (default) or `compact`. Compact uses smaller shared library controls and a **Filter** button that expands search. All Games, Continue Playing, Favourites, and Settings remain available. |
+| `toolbar` | `standard` (default), `compact`, `minimal`, or `hidden`. Compact uses smaller shared library controls and a **Filter** button that expands search. Minimal keeps package branding. Hidden gives the package the full library area; provide `navigation` for native view and search controls. |
+| `navigation` | Optional normalized rectangle containing native All Games, Favourites, Recent, By Year, Search and Settings controls. Year sorting uses scraped release dates; unknown dates follow known dates. |
 | `toolbarSelectedTextColor` | Optional foreground for the selected compact-toolbar view. Omit to inherit app text. The selected fill uses the app palette's `ButtonActive`. |
-| `toolbarLogo` | Optional package-relative image replacing the compact toolbar's text brand. It retains its aspect ratio at the toolbar control height. Omit to keep text branding. |
+| `toolbarLogo` | Optional package-relative image replacing the toolbar's text brand in compact or minimal mode. It retains its aspect ratio at the toolbar control height. Omit to keep text branding. |
 | `toolbarLogoHeight` | Optional logo height in logical UI pixels, `16`–`96`. Requires `toolbarLogo`; its original aspect ratio is preserved. Omit to match the control height. |
 | `activation` | Mouse activation: `singleClick` (default) or `doubleClick`. In double-click mode, a single click selects/previews; double-click, Enter/controller confirm, or an `activate` button launches the game. Touch always selects/previews, so every layout must provide a visible `activate` button. |
 | `minItemWidth` | Minimum grid-cell width in logical UI pixels, `32`–`256`; defaults to `96`. This controls when the renderer reduces the requested column count. |

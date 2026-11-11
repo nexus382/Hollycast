@@ -2081,6 +2081,46 @@ TEST_F(ThemeLibraryTest, FingerSwipesTurnTheOrbitAndPagedGridWithoutLaunching)
 	}
 }
 
+TEST_F(ThemeLibraryTest, CarouselWheelAndTouchFlickMoveTheCenteredCoverWithoutLaunching)
+{
+	layout.id = "carousel-input";
+	layout.mode = "carousel";
+	layout.browser = {0.04f, 0.2f, 0.92f, 0.42f};
+	layout.itemAspect = 0.78f;
+	iconScale = 1.2f;
+	items.clear();
+	for (int i = 0; i < 8; ++i)
+		items.push_back({std::to_string(i), "Game", {}, {}});
+	const ImVec2 away(-1, -1);
+	const auto settle = [&](ImVec2 pointer) {
+		for (int i = 0; i < 48; ++i)
+			renderFrame(pointer, false);
+	};
+	const auto centerX = [&](size_t index) { return (bounds[index].x + bounds[index].z) * 0.5f; };
+	settle(away);
+	const float browserCenter = canvasOrigin.x + canvasSize.x * 0.5f;
+	EXPECT_NEAR(centerX(0), browserCenter, 1.f);
+	EXPECT_EQ(detailsWindow, nullptr);
+
+	const ImVec2 browserPoint(browserCenter, canvasOrigin.y + canvasSize.y * 0.4f);
+	ImGui::GetIO().AddMouseWheelEvent(0, -1);
+	settle(browserPoint);
+	EXPECT_NEAR(centerX(1), browserCenter, 1.f);
+
+	ImGui::GetIO().MouseSource = ImGuiMouseSource_TouchScreen;
+	EXPECT_EQ(renderFrame(browserPoint, true), -1);
+	EXPECT_EQ(renderFrame(browserPoint - ImVec2(120.f, 0.f), true), -1);
+	EXPECT_EQ(renderFrame(browserPoint - ImVec2(120.f, 0.f), false), -1);
+	settle(away);
+	EXPECT_NEAR(centerX(6), browserCenter, 1.f);
+	EXPECT_EQ(detailsWindow, nullptr);
+	for (const size_t index : {0u, 4u, 5u, 6u, 7u})
+	{
+		EXPECT_GE(bounds[index].x, browserViewport.x - 1.f);
+		EXPECT_LE(bounds[index].z, browserViewport.z + 1.f);
+	}
+}
+
 TEST_F(ThemeLibraryTest, EveryBundledLayoutPreviewsOnTouchAndHasAnExplicitPlayButton)
 {
 	ImGui::GetIO().MouseSource = ImGuiMouseSource_TouchScreen;

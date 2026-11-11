@@ -1013,6 +1013,9 @@ GameBoxart Boxart::getBiosBoxart(const GameMedia& media, config::LibraryCoverMed
 	case config::LibraryCoverMediaMode::Spine:
 		filename = "dreamcast_bios_spine.png";
 		break;
+	case config::LibraryCoverMediaMode::Case:
+		filename = "dreamcast_bios_case.png";
+		break;
 	default:
 		return boxart;
 	}

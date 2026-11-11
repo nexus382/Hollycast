@@ -2649,11 +2649,13 @@ void gui_load_game()
 #endif
 
 static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& requestedLayout,
-		const SettingsUI::TextFilter& filter, library::View view)
+		SettingsUI::TextFilter& filter, library::View& view)
 {
+	static bool sortByYear = false;
 	const ImVec2 available = ImGui::GetContentRegionAvail();
 	const themes::Layout& layout = themes::responsiveLayout(theme, requestedLayout,
 			available.x / std::max(1.f, available.y));
+	if (!layout.navigation) sortByYear = false;
 	const std::string layoutKey = theme.directory + '/' + layout.id;
 	if (pendingRackLaunch && (layout.mode != "rack" || pendingRackLaunch->layoutKey != layoutKey))
 		pendingRackLaunch.reset();
@@ -2718,7 +2720,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		lastLibraryView = view;
 	}
 	const auto key = std::make_tuple(scannerGeneration, gameCount,
-			layoutKey, mediaSources, view, std::string(filter.InputBuf), config::LibraryFavourites.get(),
+			layoutKey, mediaSources, view, sortByYear, std::string(filter.InputBuf), config::LibraryFavourites.get(),
 			config::BoxartSourceMode.get(), config::LibraryCoverMedia.get(), config::ArtworkProvider.get(),
 			config::FetchBoxart.get(), config::LibraryImageSource.get(), config::ContentPath.get(),
 			get_writable_data_path(""), stateFolders.custom, stateFolders.data);
@@ -2728,7 +2730,10 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	const bool liveIcons = config::LibraryImageSource.get()
 			!= static_cast<int>(config::LibraryImageSourceMode::CurrentArtwork);
 	const double animationClock = getLibraryIconAnimationClock();
-	const bool fullStateRefresh = view == library::View::ContinuePlaying && stateChanges.fullRefresh;
+	// Year order uses scraped dates rather than entryBefore's normal title/history order.
+	// Rebuild those rows on incremental updates so their parallel vectors stay aligned.
+	const bool fullStateRefresh = (view == library::View::ContinuePlaying && stateChanges.fullRefresh)
+			|| (sortByYear && (!stateChanges.paths.empty() || !artworkChanges.gamePaths.empty()));
 	if (!prepared || key != preparedKey || frame != previousFrame + 1 || fullStateRefresh || artworkChanges.fullRefresh)
 	{
 		prepared = false;
@@ -2777,6 +2782,27 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			artwork.push_back(std::move(art));
 			visibleGames.push_back(std::move(game));
 			visibleGameIndices.push_back(gameIndex);
+		}
+
+		if (sortByYear)
+		{
+			std::vector<size_t> order(items.size());
+			for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+			std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+				const auto date = [&](size_t index) {
+					const auto found = items[index].metadata.find("releaseDate");
+					return found == items[index].metadata.end() || found->second.empty() ? std::string("9999") : found->second;
+				};
+				return date(a) < date(b);
+			});
+			// Apply the same permutation to the launch/context data and visible cards.
+			auto reorder = [&](auto& values) {
+				auto original = std::move(values);
+				values.clear();
+				values.reserve(order.size());
+				for (size_t index : order) values.push_back(std::move(original[index]));
+			};
+			reorder(items); reorder(artwork); reorder(visibleGames); reorder(visibleGameIndices);
 		}
 
 		// Store the revision captured before preparation. If a worker publishes
@@ -2968,6 +2994,43 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		}, [](const std::string& sound) { playUiSound(sound); },
 		pendingRackLaunch ? pendingRackLaunch->itemId : std::string(), drawEmptyBrowser);
 
+	if (layout.navigation)
+	{
+		const auto& rect = *layout.navigation;
+		const ImVec2 savedCursor = ImGui::GetCursorScreenPos();
+		ImGui::SetCursorScreenPos(ImVec2(origin.x + rect.x * canvasSize.x, origin.y + rect.y * canvasSize.y));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+		ImGui::BeginChild("##themeNavigation", ImVec2(rect.w * canvasSize.x, rect.h * canvasSize.y),
+				ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+		ImGui::PushFont(boldFont, std::clamp(canvasSize.y * 0.027f, 14.f, 32.f));
+		const float height = ImGui::GetContentRegionAvail().y / 6.f;
+		const char* labels[] = {T("All Games"), T("Favourites"), T("Recent"), T("By Year"), T("Search"), T("Settings")};
+		const library::View views[] = {library::View::All, library::View::Favourites, library::View::ContinuePlaying};
+		for (int i = 0; i < 6; ++i)
+		{
+			const bool active = i < 3 ? view == views[i] && !sortByYear : i == 3 && sortByYear;
+			ImGui::PushStyleColor(ImGuiCol_Button, active ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0, 0, 0, 0));
+			if (ImGui::Button(labels[i], ImVec2(-1, height - ImGui::GetStyle().ItemSpacing.y)))
+			{
+				if (i < 3) { view = views[i]; sortByYear = false; }
+				else if (i == 3) { view = library::View::All; sortByYear = !sortByYear; }
+				else if (i == 4) ImGui::OpenPopup("##themeSearch");
+				else gui_setState(GuiState::Settings);
+			}
+			ImGui::PopStyleColor();
+		}
+		if (ImGui::BeginPopup("##themeSearch"))
+		{
+			filter.Draw(T("Filter"), uiScaled(250));
+			if (ImGui::Button(T("Close"))) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		ImGui::PopFont();
+		ImGui::EndChild();
+		ImGui::PopStyleVar();
+		ImGui::SetCursorScreenPos(savedCursor);
+	}
+
 	auto startThemedGame = [&](size_t index, bool resume, bool fromContextMenu) {
 		const GameMedia& game = visibleGames[index];
 		const GameBoxart& art = artwork[index];
@@ -3060,9 +3123,11 @@ static void gui_display_content()
 	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
 	static library::View libraryView = library::View::All;
 	static SettingsUI::TextFilter filter;
+	static bool showFilter = false;
 	// Draw theme artwork first so all library controls remain above it. A dark
 	// wash preserves contrast even when users choose a bright background.
-	const std::string themeBackground = customLayout != nullptr && customLayout->toolbar == "compact"
+	const std::string themeBackground = customLayout != nullptr
+			&& (customLayout->toolbar == "compact" || customLayout->toolbar == "minimal" || customLayout->toolbar == "hidden")
 			? std::string() : CustomTheme::assetPath("background");
 	bool libraryThemeBackgroundVisible = false;
 	if (!themeBackground.empty()) {
@@ -3117,9 +3182,17 @@ static void gui_display_content()
 		return;
 	}
 
-	if (customLayout != nullptr && customLayout->toolbar == "compact")
+	if (customLayout != nullptr && customLayout->toolbar == "hidden")
 	{
-		// Compact chrome is a shared layout option, independent of package identity.
+		boxart.refreshCustomBoxartIndex(false);
+		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
+		ImGui::End();
+		contentpath_warning_popup();
+		return;
+	}
+	if (customLayout != nullptr && (customLayout->toolbar == "compact" || customLayout->toolbar == "minimal"))
+	{
+		// Compact and minimal chrome are shared layout options, independent of package identity.
 		const ImVec2 toolbarArea = ImGui::GetContentRegionAvail();
 		const themes::Layout& toolbarLayout = themes::responsiveLayout(*themes::current(), *customLayout,
 				toolbarArea.x / std::max(1.f, toolbarArea.y));
@@ -3141,54 +3214,60 @@ static void gui_display_content()
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextUnformatted("Hollycast");
 		}
-		const float controlsY = brandY + std::max(0.f, (brandHeight - ImGui::GetFrameHeight()) * 0.5f);
-		auto placeInline = [controlsY](const char* label) {
-			const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
-			if (ImGui::GetItemRectMax().x + width + ImGui::GetStyle().ItemSpacing.x
-					< ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
-			{
-				ImGui::SameLine();
-				ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), controlsY));
-			}
-		};
-		const char* labels[] = {T("All Games"), T("Continue Playing"), T("Favourites")};
-		const library::View views[] = {library::View::All, library::View::ContinuePlaying, library::View::Favourites};
-		const float spacing = ImGui::GetStyle().ItemSpacing.x;
-		float controlsWidth = ImGui::CalcTextSize(ICON_FA_MAGNIFYING_GLASS).x + ImGui::CalcTextSize(ICON_FA_GEAR).x
-				+ ImGui::GetStyle().FramePadding.x * 10 + spacing * 6;
-		for (const char* label : labels) controlsWidth += ImGui::CalcTextSize(label).x;
-		const float startX = ImGui::GetWindowContentRegionMax().x - controlsWidth;
-		const bool alignRight = ImGui::GetItemRectMax().x + spacing < ImGui::GetWindowPos().x + startX;
-		for (int i = 0; i < 3; ++i)
+		if (toolbarLayout.toolbar == "compact")
 		{
-			if (i == 0 && alignRight) ImGui::SameLine(startX);
-			else placeInline(labels[i]);
-			if (i == 0 && alignRight) ImGui::SetCursorPosY(controlsY);
-			const bool selected = libraryView == views[i];
-			if (selected)
-			{
-				// The selected fill holds on hover: its text color was chosen to suit this fill alone.
-				const ImVec4 selectedFill = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
-				ImGui::PushStyleColor(ImGuiCol_Button, selectedFill);
-				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selectedFill);
-				if (toolbarLayout.toolbarSelectedTextColor)
+			const float controlsY = brandY + std::max(0.f, (brandHeight - ImGui::GetFrameHeight()) * 0.5f);
+			auto placeInline = [controlsY](const char* label) {
+				const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+				if (ImGui::GetItemRectMax().x + width + ImGui::GetStyle().ItemSpacing.x
+						< ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
 				{
-					const uint32_t rgba = *toolbarLayout.toolbarSelectedTextColor;
-					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4((rgba >> 24) / 255.f, ((rgba >> 16) & 255) / 255.f,
-							((rgba >> 8) & 255) / 255.f, (rgba & 255) / 255.f));
+					ImGui::SameLine();
+					ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), controlsY));
 				}
+			};
+			const char* labels[] = {T("All Games"), T("Continue Playing"), T("Favourites")};
+			const library::View views[] = {library::View::All, library::View::ContinuePlaying, library::View::Favourites};
+			const float spacing = ImGui::GetStyle().ItemSpacing.x;
+			float controlsWidth = ImGui::CalcTextSize(ICON_FA_MAGNIFYING_GLASS).x + ImGui::CalcTextSize(ICON_FA_GEAR).x
+					+ ImGui::GetStyle().FramePadding.x * 10 + spacing * 6;
+			for (const char* label : labels) controlsWidth += ImGui::CalcTextSize(label).x;
+			const float startX = ImGui::GetWindowContentRegionMax().x - controlsWidth;
+			const bool alignRight = ImGui::GetItemRectMax().x + spacing < ImGui::GetWindowPos().x + startX;
+			for (int i = 0; i < 3; ++i)
+			{
+				if (i == 0 && alignRight) ImGui::SameLine(startX);
+				else placeInline(labels[i]);
+				if (i == 0 && alignRight) ImGui::SetCursorPosY(controlsY);
+				const bool selected = libraryView == views[i];
+				if (selected)
+				{
+					// The selected fill holds on hover: its text color was chosen to suit this fill alone.
+					const ImVec4 selectedFill = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+					ImGui::PushStyleColor(ImGuiCol_Button, selectedFill);
+					ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selectedFill);
+					if (toolbarLayout.toolbarSelectedTextColor)
+					{
+						const uint32_t rgba = *toolbarLayout.toolbarSelectedTextColor;
+						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4((rgba >> 24) / 255.f, ((rgba >> 16) & 255) / 255.f,
+								((rgba >> 8) & 255) / 255.f, (rgba & 255) / 255.f));
+					}
+				}
+				const bool pressed = ImGui::Button(labels[i]);
+				if (selected) ImGui::PopStyleColor(toolbarLayout.toolbarSelectedTextColor ? 3 : 2);
+				if (pressed) { libraryView = views[i]; librarySavestateCacheInvalidated = true; }
 			}
-			const bool pressed = ImGui::Button(labels[i]);
-			if (selected) ImGui::PopStyleColor(toolbarLayout.toolbarSelectedTextColor ? 3 : 2);
-			if (pressed) { libraryView = views[i]; librarySavestateCacheInvalidated = true; }
+			placeInline(ICON_FA_MAGNIFYING_GLASS);
+			if (ImGui::Button(ICON_FA_MAGNIFYING_GLASS "##themeFilter")) showFilter = !showFilter;
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Filter"));
+			placeInline(ICON_FA_GEAR);
+			if (ImGui::Button(ICON_FA_GEAR "##themeSettings")) gui_setState(GuiState::Settings);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
 		}
-		static bool showFilter = false;
-		placeInline(ICON_FA_MAGNIFYING_GLASS);
-		if (ImGui::Button(ICON_FA_MAGNIFYING_GLASS "##themeFilter")) showFilter = !showFilter;
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Filter"));
-		placeInline(ICON_FA_GEAR);
-		if (ImGui::Button(ICON_FA_GEAR "##themeSettings")) gui_setState(GuiState::Settings);
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
+		else
+		{
+			showFilter = false;
+		}
 		if (showFilter || filter.IsActive()) filter.Draw(T("Filter"), ImGui::GetContentRegionAvail().x - uiScaled(60));
 		ImGui::PopFont();
 		ImGui::PopStyleVar(2);

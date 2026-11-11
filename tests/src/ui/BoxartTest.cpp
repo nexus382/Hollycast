@@ -380,6 +380,24 @@ TEST_F(BoxartTest, BiosCoverRecoversLegacyFailureAndDeletedCache)
 	EXPECT_EQ(restored.boxartPath, boxart->getBoxartAndLoad(bios).boxartPath);
 }
 
+TEST_F(BoxartTest, BiosCaseUsesTransparentThreeDimensionalArtworkOffline)
+{
+	GameMedia bios;
+	bios.name = "Dreamcast BIOS";
+	const std::string cover = boxart->getBoxart(bios).boxartPath;
+	const std::string casePath = boxart->getCustomMediaPath(bios, config::LibraryCoverMediaMode::Case);
+	ASSERT_FALSE(casePath.empty());
+	EXPECT_NE(cover, casePath);
+	int width = 0, height = 0, channels = 0;
+	const auto image = stbi_load(casePath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+	ASSERT_NE(nullptr, image);
+	EXPECT_GT(height, width) << "Case artwork must retain the library's tall 3D case proportions";
+	EXPECT_EQ(0, image[3]) << "The exterior must reveal the theme background";
+	// Clear-plastic artwork may retain a small amount of translucency over the printed face.
+	EXPECT_GE(image[((height / 2) * width + width / 2) * 4 + 3], 250);
+	stbi_image_free(image);
+}
+
 TEST_F(BoxartTest, BiosArtworkKeepsCoverSpineAndPhysicalMediaInTheirOwnSlots)
 {
 	GameMedia bios;
@@ -430,7 +448,8 @@ TEST_F(BoxartTest, BiosSpineAndDiscRecoverDeletedCacheWithoutScraping)
 {
 	GameMedia bios;
 	bios.name = "Dreamcast BIOS";
-	for (const auto mode : {config::LibraryCoverMediaMode::Physical, config::LibraryCoverMediaMode::Spine})
+	for (const auto mode : {config::LibraryCoverMediaMode::Physical, config::LibraryCoverMediaMode::Spine,
+			config::LibraryCoverMediaMode::Case})
 	{
 		const std::string path = boxart->getCustomMediaPath(bios, mode);
 		ASSERT_FALSE(path.empty());
@@ -451,6 +470,7 @@ TEST_F(BoxartTest, BiosNamedCustomMediaOverridesOnlyItsMatchingBundledSlot)
 	const std::pair<const char*, config::LibraryCoverMediaMode> slots[] = {
 		{"covers", config::LibraryCoverMediaMode::Cover},
 		{"spines", config::LibraryCoverMediaMode::Spine},
+		{"3dboxes", config::LibraryCoverMediaMode::Case},
 		{"physicalmedia", config::LibraryCoverMediaMode::Physical},
 		{"screenshots", config::LibraryCoverMediaMode::Screenshot},
 		{"boxtexture", config::LibraryCoverMediaMode::BoxTexture},

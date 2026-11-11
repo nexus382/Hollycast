@@ -306,24 +306,26 @@ Theme parse(const std::string& json, const std::string& directory)
 	{
 		const std::string lp = "layouts[" + std::to_string(i) + "]";
 		const Json& item = layouts[i];
-		objectFields(item, lp, {"id", "name", "mode", "browser", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch", "pagedGrid", "requiredMedia", "list"});
+		objectFields(item, lp, {"id", "name", "mode", "browser", "navigation", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch", "pagedGrid", "requiredMedia", "list"});
 		Layout layout;
 		layout.id = stringValue(required(item, "id", lp), lp + ".id", false);
 		if (!validId(layout.id)) invalid(lp + ".id", "must contain 1 to 64 lowercase letters, digits, hyphens, or underscores");
 		if (!layoutIds.insert(layout.id).second) invalid(lp + ".id", "must be unique within the theme");
 		layout.name = stringValue(required(item, "name", lp), lp + ".name", false);
 		layout.mode = stringValue(required(item, "mode", lp), lp + ".mode", false);
-		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail" && layout.mode != "orbit") invalid(lp + ".mode", "must be grid, list, rack, rail, or orbit");
+		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail" && layout.mode != "orbit" && layout.mode != "carousel") invalid(lp + ".mode", "must be grid, list, rack, rail, orbit, or carousel");
 		layout.browser = parseRect(required(item, "browser", lp), lp + ".browser", 0.1);
+		if (auto it = item.find("navigation"); it != item.end()) layout.navigation = parseRect(*it, lp + ".navigation", 0.1);
 		if (auto it = item.find("list"); it != item.end())
 		{
 			const std::string path = lp + ".list";
 			if (layout.mode != "list") invalid(path, "requires list mode");
-			objectFields(*it, path, {"systemBadge", "favouriteBadge", "favouriteColor", "selectOnHover"});
+			objectFields(*it, path, {"systemBadge", "favouriteBadge", "favouriteColor", "selectOnHover", "releaseYear"});
 			if (auto field = it->find("systemBadge"); field != it->end()) layout.list.systemBadge = boolValue(*field, path + ".systemBadge");
 			if (auto field = it->find("favouriteBadge"); field != it->end()) layout.list.favouriteBadge = boolValue(*field, path + ".favouriteBadge");
 			if (auto field = it->find("favouriteColor"); field != it->end()) layout.list.favouriteColor = colorValue(*field, path + ".favouriteColor");
 			if (auto field = it->find("selectOnHover"); field != it->end()) layout.list.selectOnHover = boolValue(*field, path + ".selectOnHover");
+			if (auto field = it->find("releaseYear"); field != it->end()) layout.list.releaseYear = boolValue(*field, path + ".releaseYear");
 		}
 		if (auto it = item.find("requiredMedia"); it != item.end())
 		{
@@ -386,7 +388,8 @@ Theme parse(const std::string& json, const std::string& directory)
 		if (auto it = item.find("toolbar"); it != item.end())
 		{
 			layout.toolbar = stringValue(*it, lp + ".toolbar");
-			if (layout.toolbar != "standard" && layout.toolbar != "compact") invalid(lp + ".toolbar", "must be standard or compact");
+			if (layout.toolbar != "standard" && layout.toolbar != "compact" && layout.toolbar != "minimal" && layout.toolbar != "hidden")
+				invalid(lp + ".toolbar", "must be standard, compact, minimal, or hidden");
 		}
 		if (auto it = item.find("activation"); it != item.end())
 		{

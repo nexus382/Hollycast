@@ -102,6 +102,7 @@ struct ListPresentation
 {
 	bool systemBadge = false, favouriteBadge = false;
 	bool selectOnHover = true; // Preserve legacy hover previews unless explicitly disabled.
+	bool releaseYear = false; // Optional scraped release year at the right edge of list rows.
 	std::optional<uint32_t> favouriteColor;
 };
 struct Layout
@@ -109,6 +110,7 @@ struct Layout
 	std::string id, name;
 	std::string mode = "grid";
 	Rect browser;
+	std::optional<Rect> navigation; // Optional native library views, sorting and search sidebar.
 	int columns = 4;
 	float itemAspect = 0.8f; // width / height, including label
 	float spacing = 12; // logical UI pixels
@@ -128,9 +130,9 @@ struct Layout
 	bool showInfoTooltip = true;
 	// All presentation extensions are opt-in; defaults retain format-v1 behavior.
 	float canvasAspect = 0;
-	std::string toolbar = "standard";
+	std::string toolbar = "standard"; // "compact" keeps shared controls; "minimal" keeps only package branding.
 	std::optional<uint32_t> toolbarSelectedTextColor;
-	std::string toolbarLogoAsset; // Optional package image for compact-toolbar branding.
+	std::string toolbarLogoAsset; // Optional package image for compact or minimal toolbar branding.
 	float toolbarLogoHeight = 0; // Logical pixels; zero uses the toolbar control height.
 	std::string activation = "singleClick";
 	float minItemWidth = 96;

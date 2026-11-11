@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "gtest/gtest.h"
+#include <cstdlib>
 #include "audio/ui_sound.h"
 #include "ui/theme.h"
 #include "ui/boxart/artwork_media.h"
@@ -139,6 +140,30 @@ TEST(ThemeParserTest, AcceptsMiximageArtworkBinding)
 	std::ofstream(package.path / "art" / "overlay.png", std::ios::binary) << "fixture";
 	const auto theme = parseFixture(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"miximage\""), package.path);
 	EXPECT_EQ(theme.layouts[0].elements[2].source, "miximage");
+}
+
+TEST(ThemeParserTest, AcceptsCarouselLayoutMode)
+{
+	const auto theme = parseFixture(R"({"formatVersion":1,"id":"carousel","name":"Carousel","layouts":[{"id":"main","name":"Main","mode":"carousel","browser":[0,0,1,1]}]})");
+	ASSERT_EQ(theme.layouts.size(), 1u);
+	EXPECT_EQ(theme.layouts.front().mode, "carousel");
+}
+
+TEST(ThemeParserTest, AcceptsMinimalToolbar)
+{
+	const auto theme = parseFixture(R"({"formatVersion":1,"id":"minimal","name":"Minimal","layouts":[{"id":"main","name":"Main","mode":"carousel","browser":[0,0,1,1],"toolbar":"minimal"}]})");
+	ASSERT_EQ(theme.layouts.size(), 1u);
+	EXPECT_EQ(theme.layouts.front().toolbar, "minimal");
+}
+
+TEST(ThemeParserTest, LoadsExternalPreviewPackage)
+{
+	const char* directory = std::getenv("HOLLYCAST_THEME_TEST_PACKAGE");
+	if (directory == nullptr || *directory == '\0') GTEST_SKIP() << "No external preview package requested";
+	// Use the production loader on the complete package, including all asset and element validation.
+	const auto theme = themes::load(directory);
+	EXPECT_FALSE(theme.id.empty());
+	ASSERT_FALSE(theme.layouts.empty());
 }
 
 TEST(ThemeParserTest, ListPresentationIsOptionalAndValidatesItsFields)

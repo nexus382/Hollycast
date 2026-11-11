@@ -30,6 +30,7 @@ cmrc_add_resources(Hollycast-resources
         # Matching artwork for the virtual BIOS entry's explicit media slots.
         resources/picture/dreamcast_bios_disc.png
         resources/picture/dreamcast_bios_spine.png
+        resources/picture/dreamcast_bios_case.png
         resources/picture/hollycast_ascii.txt)
 
 cmrc_add_resources(Hollycast-resources
