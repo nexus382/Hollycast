@@ -1,3 +1,7 @@
+# Portions Copyright 2026 The Hollycast Authors
 # Preserve vendored upstream documentation byte-for-byte, including Markdown spaces.
 themes/art-book-next/UPSTREAM.md whitespace=-blank-at-eol
 themes/iconic/README.md whitespace=-blank-at-eol
+
+# This resource is executed by /bin/sh after extraction, including from Windows checkouts.
+resources/update/install-desktop.sh text eol=lf
