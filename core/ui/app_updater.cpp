@@ -197,9 +197,12 @@ void draw(bool idle) {
     const ImVec2 size(std::min(uiScaled(680), std::max(1.0f, display.x - uiScaled(20))),
         std::min(uiScaled(600), std::max(1.0f, display.y - uiScaled(20))));
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    // ImGui also clears p_open for a popup that has never opened. Only an
+    // already-open modal becoming closed represents a user's dismissal.
+    const bool wasOpen = ImGui::IsPopupOpen("Hollycast Updates###app-updates");
     bool shown = true;
     if (!ImGui::BeginPopupModal("Hollycast Updates###app-updates", state.installing ? nullptr : &shown, ImGuiWindowFlags_NoSavedSettings)) {
-        if (!shown) { state.dismissed = true; state.requested = false; }
+        if (wasOpen && !shown) { state.dismissed = true; state.requested = false; }
         return;
     }
     if (state.play && !state.playInstalledVersion.empty())
