@@ -27,7 +27,7 @@ struct State {
     std::atomic<bool> cancelled{false};
     std::future<detail::Check> work;
     detail::Check result;
-    bool started = false, requested = false, installing = false;
+    bool started = false, requested = false, installing = false, awaitingInstaller = false;
     bool quitRequested = false, helperStarted = false, dismissed = false;
     bool play = false, playChecking = false, playLaunching = false;
     int playNotesCode = 0, playAvailableCode = 0, playInstalledCode = 0;
@@ -35,7 +35,7 @@ struct State {
     std::string channel, error, status, staging;
     std::chrono::steady_clock::time_point installStarted;
     void check(bool switched = false) {
-        if (work.valid() || installing) return;
+        if (work.valid() || installing || awaitingInstaller) return;
         error.clear(); status.clear(); result = {}; dismissed = false;
 #if defined(__ANDROID__)
         if (play) {
@@ -167,11 +167,11 @@ void draw(bool idle) {
             state.error = e.what();
         }
     }
-    if (state.installing) {
+    if (state.installing || state.awaitingInstaller) {
         const auto status = helperStatus(state.staging);
         if (!status.empty()) state.helperStarted = true;
         if (status.rfind("Error\n", 0) == 0) {
-            state.error = status.substr(6); state.installing = false;
+            state.error = status.substr(6); state.installing = false; state.awaitingInstaller = false;
             state.status.clear();
             clearPending();
         } else if (status.rfind("Ready", 0) == 0 && idle && !state.quitRequested) {
@@ -182,9 +182,14 @@ void draw(bool idle) {
         } else if (status.rfind("Installer", 0) == 0) {
             state.status = T("Confirm the update in the Android package installer.");
             state.installing = false;
+            state.awaitingInstaller = true;
+        } else if (status.rfind("Done", 0) == 0 || status.rfind("Cancelled", 0) == 0) {
+            state.installing = false;
+            state.awaitingInstaller = false;
+            state.status = status.rfind("Done", 0) == 0 ? T("Update installed.") : T("Update cancelled.");
             clearPending();
-        } else if ((!state.helperStarted && std::chrono::steady_clock::now() - state.installStarted > std::chrono::seconds(20))
-                || std::chrono::steady_clock::now() - state.installStarted > std::chrono::minutes(8)) {
+        } else if (!state.awaitingInstaller && ((!state.helperStarted && std::chrono::steady_clock::now() - state.installStarted > std::chrono::seconds(20))
+                || std::chrono::steady_clock::now() - state.installStarted > std::chrono::minutes(8))) {
             cancelInstall();
             state.error = T("The update helper did not finish. Please retry.");
         }
@@ -218,7 +223,7 @@ void draw(bool idle) {
 #endif
     const char* tracks[]{"Master", "Dev"};
     int selected = state.channel == "master" ? 0 : 1;
-    ImGui::BeginDisabled(state.work.valid() || state.installing || state.playChecking || state.playLaunching);
+    ImGui::BeginDisabled(state.work.valid() || state.installing || state.awaitingInstaller || state.playChecking || state.playLaunching);
     if (!state.play && ImGui::Combo(T("Update track"), &selected, tracks, 2)) {
         state.channel = selected == 0 ? "master" : "dev";
         preferences();
@@ -246,7 +251,7 @@ void draw(bool idle) {
     ImGui::TextUnformatted(state.result.changelog.c_str());
     ImGui::PopTextWrapPos();
     ImGui::EndChild();
-    ImGui::BeginDisabled(!state.result.available || state.work.valid() || state.installing || state.playChecking || state.playLaunching);
+    ImGui::BeginDisabled(!state.result.available || state.work.valid() || state.installing || state.awaitingInstaller || state.playChecking || state.playLaunching);
 #if defined(__ANDROID__)
     const char* installLabel = state.play ? T("Update through Google Play") : T("Install update");
 #else
@@ -265,6 +270,7 @@ void draw(bool idle) {
                 config::saveStr("updates", "pending_directory", state.staging);
                 SaveSettings();
                 state.installing = true;
+                state.awaitingInstaller = false;
                 state.quitRequested = false;
                 state.helperStarted = false;
                 state.installStarted = std::chrono::steady_clock::now();
