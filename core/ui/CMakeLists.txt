@@ -1,6 +1,9 @@
 # Portions Copyright 2026 The Hollycast Authors
 
 if(NOT LIBRETRO)
+    if(ENABLE_CTEST)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE HOLLYCAST_DISABLE_STARTUP_UPDATES)
+    endif()
     option(HOLLYCAST_REQUIRE_SCREENSCRAPER "Require application access in official standalone builds"
             "$ENV{HOLLYCAST_REQUIRE_SCREENSCRAPER}")
     # Release builds receive application credentials through the build environment.
@@ -29,6 +32,11 @@ if(NOT LIBRETRO)
     unset(HOLLYCAST_SS_DEV_PASSWORD)
 
     target_sources(${PROJECT_NAME} PRIVATE
+            app_updater.cpp
+            app_updater.h
+            app_update_catalog.cpp
+            app_update_install.cpp
+            app_update_package.h
             game_scanner.cpp
             game_scanner.h
             imgui_driver.h
