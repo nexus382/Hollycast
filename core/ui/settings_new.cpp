@@ -82,7 +82,6 @@
 #endif
 
 extern ImFont *largeFont;
-extern ImFont *boldFont;
 extern ImFont *settingsTitleFont;
 extern ImFont *settingsRightValueFont;
 extern ImFont *settingsIconFont;
@@ -3763,54 +3762,24 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryThemeCfg,
 			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
 		gui_display_library_download_progress();
-		// Theme styles can make buttons blend into the settings surface; keep this action
-		// distinct by nudging its own theme button color away from the page background.
-		const ImGuiStyle& style = ImGui::GetStyle();
-		const ImVec4 windowColor = style.Colors[ImGuiCol_WindowBg];
-		const ImVec4 childColor = style.Colors[ImGuiCol_ChildBg];
-		const ImVec4 backgroundColor(childColor.x * childColor.w + windowColor.x * (1.f - childColor.w),
-				childColor.y * childColor.w + windowColor.y * (1.f - childColor.w),
-				childColor.z * childColor.w + windowColor.z * (1.f - childColor.w), 1.f);
-		const auto brightness = [](const ImVec4& color) {
-			return color.x * 0.299f + color.y * 0.587f + color.z * 0.114f;
-		};
-		const float backgroundBrightness = brightness(backgroundColor);
-		const bool darkBackground = backgroundBrightness < 0.5f;
-		ImVec4 buttonColor = style.Colors[ImGuiCol_Button];
-		if (std::abs(brightness(buttonColor) - backgroundBrightness) < 0.14f)
-		{
-			const ImVec4 originalColor = buttonColor;
-			const float target = darkBackground ? 1.f : 0.f;
-			for (int step = 1; step <= 20; ++step)
-			{
-				const float amount = step * 0.05f;
-				buttonColor.x = originalColor.x + (target - originalColor.x) * amount;
-				buttonColor.y = originalColor.y + (target - originalColor.y) * amount;
-				buttonColor.z = originalColor.z + (target - originalColor.z) * amount;
-				if (std::abs(brightness(buttonColor) - backgroundBrightness) >= 0.14f)
-					break;
-			}
-		}
-		buttonColor.w = 1.f;
-		const float buttonBrightness = brightness(buttonColor);
-		const ImVec4 themeTextColor = style.Colors[ImGuiCol_Text];
-		const ImVec4 labelColor = std::abs(brightness(themeTextColor) - buttonBrightness) >= 0.42f
-				? themeTextColor : (buttonBrightness >= 0.5f ? ImVec4(0.04f, 0.04f, 0.04f, 1.f)
-						: ImVec4(0.96f, 0.96f, 0.96f, 1.f));
-		const auto shadeButton = [darkBackground](const ImVec4& color, float amount) {
-			const float target = darkBackground ? 1.f : 0.f;
-			return ImVec4(color.x + (target - color.x) * amount,
-					color.y + (target - color.y) * amount,
-					color.z + (target - color.z) * amount, 1.f);
-		};
-		ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, shadeButton(buttonColor, 0.08f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, shadeButton(buttonColor, 0.16f));
-		ImGui::PushStyleColor(ImGuiCol_Text, labelColor);
-		ImGui::PushFont(boldFont != nullptr ? boldFont : ImGui::GetFont(), SettingsLayoutScaled(22.0f));
-		const bool downloadThemes = ImGui::Button(T("Download Themes"), SettingsLayoutSize(280.0f, 52.0f));
+		ImGui::PushID("ThemeDownloadRow");
+		const bool downloadThemes = BeginTwoLineSettingRow("##row",
+			T("Download Themes\nBrowse theme previews and descriptions, then download and install one for your library."));
+		const ImVec2 downloadThemesLine1Start = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_DOWNLOAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Download Themes"));
 		ImGui::PopFont();
-		ImGui::PopStyleColor(4);
+		ImGui::PushFont(settingsRightValueFont != nullptr ? settingsRightValueFont : largeFont);
+		ImGui::SameLine(RightColumnX(ImGui::CalcTextSize(T("Download")).x));
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f);
+		ImGui::TextUnformatted(T("Download"));
+		ImGui::PopFont();
+		RenderTwoLineSettingDescription(downloadThemesLine1Start, T("Browse and install library themes from the online catalogue."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
 		if (downloadThemes) themes::openBrowser();
 
 		if (const themes::Theme* activeTheme = themes::current())
@@ -3909,7 +3878,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	}
 
-	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
+	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper"), T("LaunchBox")};
 		SettingsUI::PopupConfig providerCfg {};
