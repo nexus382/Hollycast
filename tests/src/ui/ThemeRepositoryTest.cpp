@@ -9,6 +9,7 @@
 #include <stb_image_write.h>
 #include <chrono>
 #include <algorithm>
+#include <map>
 #include <filesystem>
 #include <fstream>
 
@@ -134,6 +135,91 @@ TEST_F(ThemeRepositoryTest, InstallsDownloadedPackageAndProtectsExistingFiles)
 	bool requested = false;
 	EXPECT_THROW(themes::repository::install(entry(), [&](const auto&, auto&) { requested = true; return 500; }), std::runtime_error);
 	EXPECT_FALSE(requested);
+}
+
+TEST_F(ThemeRepositoryTest, InstallsMultipleThemesInSequence)
+{
+	const auto entryFor = [](const std::string& id) {
+		themes::repository::Theme theme;
+		theme.id = id;
+		theme.packageUrl = "https://example.com/packages/" + id + ".zip";
+		return theme;
+	};
+	const auto bytesFor = [this](const std::string& id) {
+		std::string text = manifest;
+		text.replace(text.find("online-test"), 11, id);
+		return zip({{"theme.json", text}, {"art/readme.txt", id}});
+	};
+	const std::map<std::string, std::vector<unsigned char>> packages = {
+		{"https://example.com/packages/first-test.zip", bytesFor("first-test")},
+		{"https://example.com/packages/second-test.zip", bytesFor("second-test")},
+	};
+	const themes::repository::Transport serve = [&packages](const std::string& requested, std::vector<unsigned char>& out) {
+		const auto found = packages.find(requested);
+		if (found == packages.end()) return 404;
+		out = found->second;
+		return 200;
+	};
+
+	EXPECT_EQ(themes::repository::install(entryFor("first-test"), serve), "first-test");
+	themes::reload();
+	EXPECT_EQ(themes::repository::install(entryFor("second-test"), serve), "second-test");
+	themes::reload();
+
+	const auto& local = themes::catalog();
+	for (const char* id : {"first-test", "second-test"})
+	{
+		const auto found = std::find_if(local.begin(), local.end(), [&](const auto& item) { return item.id == id; });
+		ASSERT_NE(found, local.end()) << id;
+		EXPECT_TRUE(found->error.empty()) << id << ": " << found->error;
+		EXPECT_TRUE(fs::is_regular_file(fs::path(themes::directory()) / id / "theme.json")) << id;
+	}
+}
+
+TEST_F(ThemeRepositoryTest, InstallsCurrentCatalogueFormatsInSequence)
+{
+	// Mirrors the published catalogue shapes: a list layout using the newer
+	// navigation rect and releaseYear flag, and a carousel layout that this
+	// build renders as a grid. Both must install, one after the other.
+	const std::string archiveManifest = R"({"formatVersion":1,"id":"archive-test","name":"Archive Test",
+"layouts":[{"id":"room","name":"Room","mode":"list","browser":[0.2,0.2,0.6,0.7],
+"navigation":[0.04,0.25,0.16,0.4],"toolbar":"hidden","list":{"releaseYear":true}}]})";
+	const std::string bloomManifest = R"({"formatVersion":1,"id":"bloom-test","name":"Bloom Test",
+"layouts":[{"id":"gallery","name":"Gallery","mode":"carousel","browser":[0,0,1,1],"columns":5},
+{"id":"index","name":"Index","mode":"list","browser":[0,0,1,1]}]})";
+	const auto entryFor = [](const std::string& id) {
+		themes::repository::Theme theme;
+		theme.id = id;
+		theme.packageUrl = "https://example.com/packages/" + id + ".zip";
+		return theme;
+	};
+	const std::map<std::string, std::vector<unsigned char>> packages = {
+		{"https://example.com/packages/archive-test.zip", zip({{"theme.json", archiveManifest}})},
+		{"https://example.com/packages/bloom-test.zip", zip({{"theme.json", bloomManifest}})},
+	};
+	const themes::repository::Transport serve = [&packages](const std::string& requested, std::vector<unsigned char>& out) {
+		const auto found = packages.find(requested);
+		if (found == packages.end()) return 404;
+		out = found->second;
+		return 200;
+	};
+
+	EXPECT_EQ(themes::repository::install(entryFor("archive-test"), serve), "archive-test");
+	themes::reload();
+	EXPECT_EQ(themes::repository::install(entryFor("bloom-test"), serve), "bloom-test");
+	themes::reload();
+
+	const auto& local = themes::catalog();
+	for (const char* id : {"archive-test", "bloom-test"})
+	{
+		const auto found = std::find_if(local.begin(), local.end(), [&](const auto& item) { return item.id == id; });
+		ASSERT_NE(found, local.end()) << id;
+		EXPECT_TRUE(found->error.empty()) << id << ": " << found->error;
+	}
+	const themes::Theme bloom = themes::load((fs::path(themes::directory()) / "bloom-test").u8string());
+	ASSERT_EQ(bloom.layouts.size(), 2u);
+	EXPECT_EQ(bloom.layouts[0].mode, "grid");
+	EXPECT_EQ(bloom.layouts[1].mode, "list");
 }
 
 TEST_F(ThemeRepositoryTest, RejectsArchiveTraversalAndSymlinksWithoutPublishing)

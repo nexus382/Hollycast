@@ -3049,7 +3049,8 @@ static void gui_display_content()
 	static SettingsUI::TextFilter filter;
 	// Draw theme artwork first so all library controls remain above it. A dark
 	// wash preserves contrast even when users choose a bright background.
-	const std::string themeBackground = customLayout != nullptr && customLayout->toolbar == "compact"
+	const std::string themeBackground = customLayout != nullptr
+			&& (customLayout->toolbar == "compact" || customLayout->toolbar == "hidden")
 			? std::string() : CustomTheme::assetPath("background");
 	bool libraryThemeBackgroundVisible = false;
 	if (!themeBackground.empty()) {
@@ -3104,15 +3105,18 @@ static void gui_display_content()
 		return;
 	}
 
-	if (customLayout != nullptr && customLayout->toolbar == "compact")
+	if (customLayout != nullptr && (customLayout->toolbar == "compact" || customLayout->toolbar == "hidden"))
 	{
 		// Compact chrome is a shared layout option, independent of package identity.
+		// A hidden toolbar draws no app chrome: the theme provides its own.
+		const bool hideToolbar = customLayout->toolbar == "hidden";
 		const ImVec2 toolbarArea = ImGui::GetContentRegionAvail();
 		const themes::Layout& toolbarLayout = themes::responsiveLayout(*themes::current(), *customLayout,
 				toolbarArea.x / std::max(1.f, toolbarArea.y));
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 6));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(16));
 		ImGui::PushFont(largeFont, uiScaled(15.f));
+		if (!hideToolbar) {
 		const float brandY = ImGui::GetCursorPosY();
 		float brandHeight = ImGui::GetFrameHeight();
 		ImTextureID brand = {};
@@ -3177,9 +3181,11 @@ static void gui_display_content()
 		if (ImGui::Button(ICON_FA_GEAR "##themeSettings")) gui_setState(GuiState::Settings);
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
 		if (showFilter || filter.IsActive()) filter.Draw(T("Filter"), ImGui::GetContentRegionAvail().x - uiScaled(60));
+		}
 		ImGui::PopFont();
 		ImGui::PopStyleVar(2);
-		ImGui::Separator();
+		if (!hideToolbar)
+			ImGui::Separator();
 		boxart.refreshCustomBoxartIndex(false);
 		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
 		ImGui::End();

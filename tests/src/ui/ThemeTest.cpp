@@ -175,6 +175,32 @@ TEST(ThemeParserTest, RejectsUnsupportedVersionUnknownFieldsAndInvalidNumbers)
 	expectRejected(replaceOnce(kManifest, "\"Text\": \"112233\"", "\"Text\": \"12xz33\""), "hexadecimal digits");
 }
 
+TEST(ThemeParserTest, AcceptsNewerCatalogueFieldsAndDegradesCarouselToGrid)
+{
+	const std::string json = R"({"formatVersion":1,"id":"newer","name":"Newer","layouts":[
+		{"id":"room","name":"Room","mode":"list","browser":[0.2,0.2,0.6,0.7],"navigation":[0.04,0.25,0.16,0.4],"toolbar":"hidden","list":{"releaseYear":true}},
+		{"id":"gallery","name":"Gallery","mode":"carousel","browser":[0,0,1,1],"columns":5}
+	]})";
+	const auto theme = parseFixture(json);
+	ASSERT_EQ(theme.layouts.size(), 2u);
+	EXPECT_EQ(theme.layouts[0].mode, "list");
+	ASSERT_TRUE(theme.layouts[0].navigation.has_value());
+	EXPECT_FLOAT_EQ(theme.layouts[0].navigation->x, 0.04f);
+	EXPECT_FLOAT_EQ(theme.layouts[0].navigation->w, 0.16f);
+	EXPECT_TRUE(theme.layouts[0].list.releaseYear);
+	EXPECT_EQ(theme.layouts[0].toolbar, "hidden");
+	// The carousel layout installs but renders through the grid path.
+	EXPECT_EQ(theme.layouts[1].mode, "grid");
+	EXPECT_EQ(theme.layouts[1].columns, 5);
+
+	// Strict validation still applies elsewhere.
+	expectRejected(replaceOnce(json, "\"mode\":\"carousel\"", "\"mode\":\"hologram\""), "must be grid, list, rack, rail, or orbit");
+	expectRejected(replaceOnce(json, "\"toolbar\":\"hidden\"", "\"toolbar\":\"sidebar\""), "must be standard, compact, or hidden");
+	expectRejected(replaceOnce(json, "\"navigation\":[0.04,0.25,0.16,0.4]", "\"mystery\":true"), "unknown field");
+	expectRejected(replaceOnce(json, "[0.04,0.25,0.16,0.4]", "[0.9,0.25,0.16,0.4]"), "normalized bounds");
+	expectRejected(replaceOnce(json, "\"releaseYear\":true", "\"releaseYear\":1"), "must be a boolean");
+}
+
 TEST(ThemeParserTest, PresentationExtensionsAreOptionalAndKeepLegacyDefaults)
 {
 	const auto theme = parseFixture(R"({"formatVersion":1,"id":"plain","name":"Plain","layouts":[{"id":"grid","name":"Grid","mode":"grid","browser":[0,0,1,1]}]})");
@@ -288,7 +314,7 @@ TEST(ThemeParserTest, RejectsMalformedPresentationExtensionsInsteadOfSilentlyIgn
 {
 	const std::string minimal = R"({"formatVersion":1,"id":"test","name":"Test","layouts":[{"id":"grid","name":"Grid","mode":"grid","browser":[0,0,1,1], EXTRA}]})";
 	for (const std::string& value : {
-			R"("canvasAspect":0)", R"("toolbar":"hidden")", R"("activation":"never")",
+			R"("canvasAspect":0)", R"("toolbar":"sidebar")", R"("activation":"never")",
 			R"("minItemWidth":1)", R"("titleStyle":"guess")", R"("selectorStyle":"invalid")",
 			R"("pixelArt":{"resolution":1024})", R"("pixelArt":{"resolution":24,"typo":true})",
 			R"("pixelArt":{"resolution":128,"levels":1})", R"("pixelArt":{"resolution":128,"levels":257})",

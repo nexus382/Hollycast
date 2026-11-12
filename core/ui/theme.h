@@ -102,6 +102,7 @@ struct ListPresentation
 {
 	bool systemBadge = false, favouriteBadge = false;
 	bool selectOnHover = true; // Preserve legacy hover previews unless explicitly disabled.
+	bool releaseYear = false; // Accepted for newer catalogues; not yet shown in list rows.
 	std::optional<uint32_t> favouriteColor;
 };
 struct Layout
@@ -109,6 +110,7 @@ struct Layout
 	std::string id, name;
 	std::string mode = "grid";
 	Rect browser;
+	std::optional<Rect> navigation; // Newer catalogues may place library navigation; not yet positioned by the renderer.
 	int columns = 4;
 	float itemAspect = 0.8f; // width / height, including label
 	float spacing = 12; // logical UI pixels
