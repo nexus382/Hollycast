@@ -7,8 +7,9 @@
 #include "gui_util.h"
 #include "imgui.h"
 #include "oslib/i18n.h"
+#include "oslib/oslib.h"
 #include "version.h"
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
 #include "json.hpp"
 extern std::string androidAppUpdates(const std::string& action);
 #endif
@@ -28,16 +29,25 @@ struct State {
     std::future<detail::Check> work;
     detail::Check result;
     bool started = false, requested = false, installing = false, awaitingInstaller = false;
-    bool quitRequested = false, helperStarted = false, dismissed = false;
+    bool quitRequested = false, helperStarted = false, dismissed = false, manual = false, recovering = false;
     bool play = false, playChecking = false, playLaunching = false;
     int playNotesCode = 0, playAvailableCode = 0, playInstalledCode = 0;
     std::string playSnapshot, playInstalledVersion;
     std::string channel, error, status, staging;
     std::chrono::steady_clock::time_point installStarted;
+    std::chrono::steady_clock::time_point recoveryStarted, nextRecoveryPoll;
+    void start(std::function<detail::Check(const std::atomic<bool>&)> operation) {
+        cancelled = false;
+        // The transport observes cancellation while waiting for network I/O.
+        // Keep the worker joined so neither HTTP nor UI state can outlive teardown.
+        work = std::async(std::launch::async, [this, operation = std::move(operation)] {
+            return operation(cancelled);
+        });
+    }
     void check(bool switched = false) {
         if (work.valid() || installing || awaitingInstaller) return;
         error.clear(); status.clear(); result = {}; dismissed = false;
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
         if (play) {
             playChecking = true;
             playNotesCode = 0;
@@ -50,9 +60,8 @@ struct State {
         // A saved track different from this binary's track remains an explicit switch
         // across retries/restarts; only same-track checks suppress older builds.
         const bool switchingTrack = switched || selected != HOLLYCAST_UPDATE_CHANNEL;
-        cancelled = false;
-        work = std::async(std::launch::async, [this, selected, switchingTrack] {
-            return detail::check(selected, GIT_HASH, switchingTrack, cancelled);
+        start([selected, switchingTrack](const std::atomic<bool>& token) {
+            return detail::check(selected, GIT_HASH, switchingTrack, token);
         });
     }
 };
@@ -66,6 +75,9 @@ std::string helperStatus(const std::string& directory) {
 void clearPending() {
     config::saveStr("updates", "pending_directory", "");
     SaveSettings();
+#if !defined(__ANDROID__)
+    detail::cleanupDownloads(get_writable_data_path("app-updates"));
+#endif
 }
 void cancelInstall() {
     std::ofstream cancel(std::filesystem::u8path(state.staging) / "cancel");
@@ -88,6 +100,7 @@ void preferences() {
 void open() {
     state.dismissed = false;
     state.requested = true;
+    state.manual = true;
     if (state.started) state.check();
 }
 
@@ -99,7 +112,7 @@ void stop() {
 void draw(bool idle) {
     if (!state.started) {
         state.started = true;
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
         state.play = true; // Fail closed: a broken Android bridge must never select GitHub for a store build.
         try {
             state.playSnapshot = androidAppUpdates("");
@@ -113,19 +126,28 @@ void draw(bool idle) {
         // Recover a helper failure that happened after the previous process exited.
         const auto pending = config::loadStr("updates", "pending_directory", "");
         if (!pending.empty()) {
+            state.staging = pending;
             const auto status = helperStatus(pending);
             if (status.rfind("Error\n", 0) == 0) {
                 state.error = status.substr(6);
                 state.requested = true;
                 clearPending();
-            } else if (status.rfind("Done", 0) == 0 || status.rfind("Installer", 0) == 0) clearPending();
+            } else if (status.rfind("Done", 0) == 0 || status.rfind("Cancelled", 0) == 0
+                    || status.rfind("Installer", 0) == 0) clearPending();
+            else {
+                state.recovering = true;
+                state.recoveryStarted = std::chrono::steady_clock::now();
+            }
         }
+#if !defined(__ANDROID__)
+        detail::cleanupDownloads(get_writable_data_path("app-updates"), pending);
+#endif
         if (state.requested && state.error.empty()) state.check();
 #if !defined(TEST_AUTOMATION) && !defined(HOLLYCAST_DISABLE_STARTUP_UPDATES)
         else if (state.error.empty() && config::loadBool("updates", "startup", true)) state.check();
 #endif
     }
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
     if (state.play) {
         try {
             const auto snapshot = androidAppUpdates("");
@@ -147,9 +169,13 @@ void draw(bool idle) {
             state.playNotesCode = state.playAvailableCode;
             if (!state.dismissed && !ImGui::IsPopupOpen("Hollycast Updates###app-updates")) state.requested = true;
             const int code = state.playAvailableCode, installed = state.playInstalledCode;
-            state.cancelled = false;
-            state.work = std::async(std::launch::async, [installed, code] {
-                return detail::playNotes(installed, code, state.cancelled);
+            state.result = {};
+            state.result.available = true;
+            state.result.package.version = "Google Play (" + std::to_string(code) + ")";
+            state.result.package.date = T("Not provided by Google Play");
+            state.result.changelog = T("Loading release notes. You can update through Google Play now.");
+            state.start([installed, code](const std::atomic<bool>& token) {
+                return detail::playNotes(installed, code, token);
             });
         }
     }
@@ -165,6 +191,25 @@ void draw(bool idle) {
         } catch (const std::exception& e) {
             // Offline startup is silent. Manual checks expose errors and retain a retry action.
             state.error = e.what();
+        }
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (state.recovering && now >= state.nextRecoveryPoll) {
+        state.nextRecoveryPoll = now + std::chrono::milliseconds(250);
+        const auto status = helperStatus(state.staging);
+        const bool expired = now - state.recoveryStarted > std::chrono::minutes(8)
+            || (status.empty() && now - state.recoveryStarted > std::chrono::seconds(20));
+        if (status.rfind("Error\n", 0) == 0) {
+            state.error = status.substr(6);
+            state.requested = true;
+        }
+        if (expired) {
+            state.error = T("The previous update did not finish. Check the installed version and retry.");
+            state.requested = true;
+        }
+        if (expired || status.rfind("Error\n", 0) == 0 || status.rfind("Done", 0) == 0 || status.rfind("Cancelled", 0) == 0) {
+            state.recovering = false;
+            clearPending();
         }
     }
     if (state.installing || state.awaitingInstaller) {
@@ -194,7 +239,7 @@ void draw(bool idle) {
             state.error = T("The update helper did not finish. Please retry.");
         }
     }
-    if (state.requested && idle && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+    if (state.requested && (idle || state.manual) && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         ImGui::OpenPopup("Hollycast Updates###app-updates");
         state.requested = false;
     }
@@ -207,7 +252,7 @@ void draw(bool idle) {
     const bool wasOpen = ImGui::IsPopupOpen("Hollycast Updates###app-updates");
     bool shown = true;
     if (!ImGui::BeginPopupModal("Hollycast Updates###app-updates", state.installing ? nullptr : &shown, ImGuiWindowFlags_NoSavedSettings)) {
-        if (wasOpen && !shown) { state.dismissed = true; state.requested = false; }
+        if (wasOpen && !shown) { state.dismissed = true; state.requested = false; state.manual = false; }
         return;
     }
     if (state.play && !state.playInstalledVersion.empty())
@@ -215,7 +260,7 @@ void draw(bool idle) {
     else
         ImGui::TextWrapped("%s: %s (%s)", T("Current version"), GIT_VERSION, GIT_HASH);
     ImGui::TextWrapped("%s: %s", T("Build date"), BUILD_DATE);
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
     if (state.play) {
         ImGui::TextWrapped("%s", T("Updates are managed by Google Play. Your Play testing enrollment controls the update track."));
         if (ImGui::Button(T("Manage Play testing track"))) androidAppUpdates("testing");
@@ -241,9 +286,11 @@ void draw(bool idle) {
         ImGui::TextWrapped("%s: %s", T("Build date"), state.result.package.date.c_str());
     }
     if (state.result.olderTrack) ImGui::TextWrapped("%s", T("This track has a different history and may contain fewer features than your current build."));
-    if (state.work.valid() || state.playChecking) ImGui::TextUnformatted(T("Checking for updates..."));
+    if ((!state.play && state.work.valid()) || state.playChecking) ImGui::TextUnformatted(T("Checking for updates..."));
     if (!state.error.empty()) ImGui::TextWrapped("%s", state.error.c_str());
     if (!state.status.empty()) ImGui::TextWrapped("%s", state.status.c_str());
+    if (!state.result.installMessage.empty()) ImGui::TextWrapped("%s", state.result.installMessage.c_str());
+    if (!idle && state.result.available) ImGui::TextWrapped("%s", T("Close the current game before installing an update."));
     const float footer = uiScaled(85);
     ImGui::BeginChild("update-notes", ImVec2(0, -footer), ImGuiChildFlags_Borders);
     scrollWindowFromTouch();
@@ -251,8 +298,9 @@ void draw(bool idle) {
     ImGui::TextUnformatted(state.result.changelog.c_str());
     ImGui::PopTextWrapPos();
     ImGui::EndChild();
-    ImGui::BeginDisabled(!state.result.available || state.work.valid() || state.installing || state.awaitingInstaller || state.playChecking || state.playLaunching);
-#if defined(__ANDROID__)
+    ImGui::BeginDisabled(!idle || !state.result.available || !state.result.installMessage.empty()
+        || (!state.play && state.work.valid()) || state.installing || state.awaitingInstaller || state.playChecking || state.playLaunching);
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
     const char* installLabel = state.play ? T("Update through Google Play") : T("Install update");
 #else
     const char* installLabel = T("Update and restart");
@@ -260,13 +308,18 @@ void draw(bool idle) {
     if (ImGui::Button(installLabel)) {
         try {
             state.error.clear();
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
             if (state.play) {
                 androidAppUpdates("install");
             } else
 #endif
             {
+#if !defined(__ANDROID__)
+                detail::cleanupDownloads(get_writable_data_path("app-updates"),
+                    config::loadStr("updates", "pending_directory", ""));
+#endif
                 state.staging = detail::install(state.result.package);
+                state.recovering = false;
                 config::saveStr("updates", "pending_directory", state.staging);
                 SaveSettings();
                 state.installing = true;
@@ -274,7 +327,7 @@ void draw(bool idle) {
                 state.quitRequested = false;
                 state.helperStarted = false;
                 state.installStarted = std::chrono::steady_clock::now();
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
                 state.status = T("Downloading and verifying the update before opening the Android installer.");
 #else
                 state.status = T("Downloading and verifying the update. Hollycast will restart when it is ready.");
@@ -287,7 +340,7 @@ void draw(bool idle) {
     if (state.installing) {
         if (ImGui::Button(T("Cancel update"))) cancelInstall();
     } else if (ImGui::Button(T("Later"))) {
-        state.dismissed = true; state.requested = false;
+        state.dismissed = true; state.requested = false; state.manual = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();

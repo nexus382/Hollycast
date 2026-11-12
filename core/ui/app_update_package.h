@@ -15,6 +15,7 @@ struct Check {
     std::string changelog;
     bool available = false;
     bool olderTrack = false;
+    std::string installMessage;
 };
 using Fetch = std::function<std::string(const std::string&)>;
 // Fixed official catalogue/releases; the transport seam also exercises paginated history offline.
@@ -24,4 +25,6 @@ Check check(const std::string& channel, const std::string& current, bool switchT
 Check playNotes(int installedCode, int availableCode, const std::atomic<bool>& cancelled);
 // Starts a verified-package helper. Only the UI may request application shutdown after Ready.
 std::string install(const Package& package);
+// Remove only terminal updater-owned work folders; active helpers retain their files.
+void cleanupDownloads(const std::string& root, const std::string& pending = {});
 }

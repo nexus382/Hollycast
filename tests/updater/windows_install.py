@@ -30,6 +30,7 @@ def main():
     parser = argparse.ArgumentParser()
     for name in ("helper", "parent", "payload"):
         parser.add_argument("--" + name, required=True, type=pathlib.Path)
+    parser.add_argument("--failed-payload", required=True, type=pathlib.Path)
     parser.add_argument("--case", help="Run one transaction case when reproducing a failure")
     args = parser.parse_args()
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -41,7 +42,7 @@ def main():
     # The helper may live in artifact/bin, which CI publishes recursively. Keep all
     # retained dummy apps and packages beside the test executables, never beside it.
     root = pathlib.Path(tempfile.mkdtemp(prefix="hollycast-updater-", dir=args.parent.parent))
-    cases = ("success", "nested", "bad-checksum", "bad-executable", "cancel-before", "cancel-ready", "rollback", "parent-timeout")
+    cases = ("success", "nested", "bad-checksum", "bad-executable", "cancel-before", "cancel-ready", "rollback", "startup-failure", "parent-timeout")
     if args.case:
         if args.case not in cases:
             parser.error("Unknown transaction case")
@@ -62,7 +63,8 @@ def main():
         old_helper = sha(install / "HollycastUpdater.exe")
         content = io.BytesIO()
         with zipfile.ZipFile(content, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("Hollycast.exe", b"bad executable" if case == "bad-executable" else args.payload.read_bytes())
+            payload = args.failed_payload if case == "startup-failure" else args.payload
+            archive.writestr("Hollycast.exe", b"bad executable" if case == "bad-executable" else payload.read_bytes())
             archive.writestr("HollycastUpdater.exe", args.helper.read_bytes())
             archive.writestr("emu.cfg", "overwrite forbidden")
             archive.writestr("../escape", "must never extract")
@@ -94,7 +96,7 @@ def main():
                 except (FileNotFoundError, PermissionError):
                     return ""
             wait_for(lambda: status().startswith(("Ready", "Error")))
-            if case in ("success", "nested", "rollback"):
+            if case in ("success", "nested", "rollback", "startup-failure"):
                 assert status().startswith("Ready"), status()
                 (install / "exit").touch()
                 parent.wait(timeout=10)
@@ -110,12 +112,15 @@ def main():
                 assert helper.returncode != 0 and status().startswith("Error"), status()
                 assert sha(target) == original, "Failed update changed the application"
                 assert sha(install / "HollycastUpdater.exe") == old_helper
-                if case == "rollback":
+                if case in ("rollback", "startup-failure"):
                     wait_for(lambda: len((install / "old-started").read_text()) >= 2)
+                    if case == "startup-failure":
+                        assert (install / "new-started").exists(), "Replacement never reached its failing startup"
                 else:
                     assert parent.poll() is None, "Failure closed the original app"
             assert (install / "emu.cfg").read_text() == "keep my settings"
             assert (install / "save.vmu").read_bytes() == b"keep my saves"
+            assert not (work / "package.zip").exists(), "Terminal update retained its download"
             assert not (folder / "escape").exists() and not (work / "escape").exists()
             results.append({"case": case, "status": "passed"})
             print(case + ": passed", flush=True)

@@ -67,7 +67,7 @@ Check check(const std::string& channel, const std::string& current, bool switchT
             std::vector<u8> bytes;
             const http::Headers headers{{"Accept", "application/vnd.github+json"},
                     {"User-Agent", "Hollycast-Updater"}};
-            const int status = http::get(url, bytes, &headers, nullptr, 15000);
+            const int status = http::get(url, bytes, &headers, nullptr, 15000, &cancelled);
             if (!http::success(status))
                 throw std::runtime_error("Update check failed (HTTP " + std::to_string(status) + "). Please retry later.");
             text.assign(bytes.begin(), bytes.end());
@@ -76,9 +76,6 @@ Check check(const std::string& channel, const std::string& current, bool switchT
         require(text.size() <= 32 * 1024 * 1024, "Update response exceeds the metadata limit.");
         return Json::parse(text);
     };
-#if defined(__linux__) && !defined(__ANDROID__) && !defined(__x86_64__)
-    throw std::runtime_error("No matching Linux CI package is published for this architecture.");
-#endif
     const Json catalog = fetch("https://nexus382.github.io/Hollycast/builds.json");
     require(catalog.value("repository", "") == "nexus382/Hollycast", "Unexpected update catalogue.");
     const auto& builds = catalog.at("builds");
@@ -131,6 +128,14 @@ Check check(const std::string& channel, const std::string& current, bool switchT
     for (auto it = notes.rbegin(); it != notes.rend(); ++it) result.changelog += *it;
     if (result.changelog.empty()) result.changelog = latest.value("notes", "No additional release notes.");
     result.available = true;
+#if defined(TARGET_IPHONE) || defined(TARGET_UWP) || defined(__SWITCH__)
+    // Release information is still useful on hosts whose system owns installation.
+    result.installMessage = "Install this update through your system or homebrew installer.";
+    return result;
+#elif defined(__linux__) && !defined(__ANDROID__) && !defined(__x86_64__)
+    result.installMessage = "No matching Linux CI package is published for this architecture. Use your package manager.";
+    return result;
+#endif
     std::string fileUrl;
     for (const auto& file : latest.at("files"))
         if (file.value("platform", "") == platform() && !file.value("support", false)) fileUrl = file.value("url", "");
@@ -172,7 +177,7 @@ Check playNotes(int installedCode, int availableCode, const std::atomic<bool>& c
         http::init();
         std::vector<u8> bytes;
         const int status = http::get("https://raw.githubusercontent.com/nexus382/Hollycast/master/resources/update/play-releases.json",
-            bytes, nullptr, nullptr, 15000);
+            bytes, nullptr, nullptr, 15000, &cancelled);
         require(http::success(status) && bytes.size() <= 1024 * 1024, "Play release notes are unavailable.");
         require(!cancelled.load(), "Update check cancelled.");
         const auto releases = Json::parse(std::string(bytes.begin(), bytes.end())).at("releases");

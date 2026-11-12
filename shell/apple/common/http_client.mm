@@ -20,11 +20,15 @@
 #import <Foundation/Foundation.h>
 #include "oslib/http_client.h"
 #include "stdclass.h"
+#include <condition_variable>
+#include <memory>
+#include <mutex>
 
 namespace http {
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
 {
+	if (cancelled && cancelled->load()) return 499;
 	NSString *nsurl = [NSString stringWithCString:url.c_str() 
                                          encoding:[NSString defaultCStringEncoding]];
     NSString *userAgent = [NSString stringWithCString:getUserAgent().c_str()
@@ -44,6 +48,42 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
     }
     if (timeoutMs > 0)
         [urlRequest setTimeoutInterval:timeoutMs / 1000.0];
+	if (cancelled != nullptr) {
+		struct Result {
+			std::mutex mutex;
+			std::condition_variable changed;
+			bool done = false;
+			int status = 500;
+			std::vector<u8> bytes;
+			Headers headers;
+		};
+		auto result = std::make_shared<Result>();
+		NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:urlRequest
+			completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+				std::lock_guard<std::mutex> lock(result->mutex);
+				if (error == nil && [response isKindOfClass:[NSHTTPURLResponse class]]) {
+					NSHTTPURLResponse *reply = (NSHTTPURLResponse *)response;
+					result->status = (int)reply.statusCode;
+					if (data.length != 0) result->bytes.assign((const u8 *)data.bytes, (const u8 *)data.bytes + data.length);
+					for (NSString *key in reply.allHeaderFields) {
+						std::string name([key UTF8String]);
+						string_tolower(name);
+						result->headers.emplace_back(name, [[reply.allHeaderFields[key] description] UTF8String]);
+					}
+				}
+				result->done = true;
+				result->changed.notify_one();
+			}];
+		[task resume];
+		std::unique_lock<std::mutex> lock(result->mutex);
+		while (!result->done) {
+			result->changed.wait_for(lock, std::chrono::milliseconds(25));
+			if (cancelled->load()) [task cancel];
+		}
+		content = std::move(result->bytes);
+		if (respHeaders) *respHeaders = std::move(result->headers);
+		return cancelled->load() ? 499 : result->status;
+	}
 	NSURLResponse *response = nil;
 	NSError *error = nil;
 	NSData *data = [NSURLConnection sendSynchronousRequest:urlRequest

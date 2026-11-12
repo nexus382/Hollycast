@@ -36,6 +36,7 @@ if(NOT LIBRETRO)
             app_updater.h
             app_update_catalog.cpp
             app_update_install.cpp
+            app_update_cleanup.cpp
             app_update_package.h
             game_scanner.cpp
             game_scanner.h

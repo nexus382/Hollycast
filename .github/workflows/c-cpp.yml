@@ -148,7 +148,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF ${{ matrix.config.cmakeArgs }}
           cmake --build build --config ${{ matrix.config.buildType }}
           ./build/Hollycast
-          ctest --test-dir build --output-on-failure -R updater
+          ctest --test-dir build --output-on-failure -R updater -E updater_linux_install
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
       - name: Dump symbols
@@ -181,6 +181,8 @@ jobs:
           shell/linux/make-appimage.sh . artifact/bin appimage
           mv Hollycast-x86_64.AppImage artifact/bin
           rm artifact/bin/Hollycast
+          # The transaction fixture packages a real AppImage with the same tool.
+          ctest --test-dir build --output-on-failure -R updater_linux_install
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
       - name: Package app (macos)
