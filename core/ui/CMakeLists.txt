@@ -33,6 +33,7 @@ if(NOT LIBRETRO)
             game_scanner.h
             imgui_driver.h
             gui.cpp
+            library.cpp
             gui.h
             gui_font.cpp
             gui_font.h

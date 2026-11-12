@@ -16,15 +16,19 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <locale>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+class Boxart;
+struct GameMedia;
+class LibrarySavestateCache;
 
 namespace library {
 
@@ -115,36 +119,11 @@ inline std::vector<size_t> selectGames(const std::vector<Entry>& entries, View v
 
 enum class SortColumn { ProductId = 1, Title, Region, Format, TimePlayed, Date, Size, Favourite };
 
-// A metadata-only snapshot keeps sorting independent of UI formatting and disk access.
-struct SortEntry {
-	std::string productId, title, region, format;
-	std::optional<uint64_t> playTimeSeconds;
-	time_t date = 0;
-	size_t size = 0;
-	bool favourite = false;
-};
-
-inline void sortRows(std::vector<size_t>& rows, const std::vector<SortEntry>& entries,
-		SortColumn column, bool descending, const std::locale& locale)
-{
-	// Swap operands rather than reversing the result so equal keys retain view order.
-	std::stable_sort(rows.begin(), rows.end(), [&](size_t left, size_t right) {
-		const auto& a = entries[descending ? right : left];
-		const auto& b = entries[descending ? left : right];
-		switch (column)
-		{
-		case SortColumn::ProductId: return locale(a.productId, b.productId);
-		case SortColumn::Title: return locale(a.title, b.title);
-		case SortColumn::Region: return locale(a.region, b.region);
-		case SortColumn::Format: return locale(a.format, b.format);
-		case SortColumn::TimePlayed: return a.playTimeSeconds < b.playTimeSeconds;
-		case SortColumn::Date: return a.date < b.date;
-		case SortColumn::Size: return a.size < b.size;
-		case SortColumn::Favourite: return a.favourite < b.favourite;
-		}
-		return false;
-	});
-}
+std::string regionLabel(uint32_t region);
+std::string mediaFormat(const GameMedia& game);
+std::array<uint64_t, 2> sortRevisions(SortColumn column, Boxart& boxart, const LibrarySavestateCache* latestSaves);
+void sortRows(std::vector<size_t>& rows, const std::vector<GameMedia>& games, SortColumn column,
+		bool descending, const std::locale& locale, Boxart& boxart, const LibrarySavestateCache* latestSaves);
 
 // Cache scanner indices, which remain stable as save discovery adds visible games.
 // Updates accept new save dates and matcher changes for the listed source paths.

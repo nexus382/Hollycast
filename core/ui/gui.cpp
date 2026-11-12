@@ -2305,29 +2305,6 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	return art;
 }
 
-static std::string formatLibraryRegion(u32 region)
-{
-	if (region == 0)
-		return "Unknown";
-
-	std::string value;
-	if (region & GameBoxart::JAPAN)
-		value += "JP";
-	if (region & GameBoxart::USA)
-	{
-		if (!value.empty())
-			value += "/";
-		value += "US";
-	}
-	if (region & GameBoxart::EUROPE)
-	{
-		if (!value.empty())
-			value += "/";
-		value += "EU";
-	}
-	return value.empty() ? "Unknown" : value;
-}
-
 static std::string formatLibrarySize(size_t size)
 {
 	if (size == 0)
@@ -2592,7 +2569,7 @@ static bool prepareThemedLibraryItem(const GameMedia& source, library::View view
 		{"title", title}, {"description", game.desc},
 		{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
 		{"players", game.players}, {"system", game.system}, {"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
-		{"productId", art.uniqueId}, {"region", art.region == 0 ? std::string() : formatLibraryRegion(art.region)},
+		{"productId", art.uniqueId}, {"region", art.region == 0 ? std::string() : library::regionLabel(art.region)},
 		{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
 		{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
 		{"lastPlayed", ""}, {"size", formatLibrarySize(game.size)}
@@ -3433,7 +3410,8 @@ static void gui_display_content()
 		const float iconColumnWidth = std::max(iconSize.x, calcLibraryTextWidth("Icon"))
 				+ ImGui::GetStyle().CellPadding.x * 2.0f;
 		auto calcLibraryColumnWidth = [&](const char *header, const char *sample) {
-			return std::max(calcLibraryTextWidth(header), calcLibraryTextWidth(sample))
+			// A sortable header also reserves room for its direction arrow.
+			return std::max(calcLibraryTextWidth(header) + tableTextSize, calcLibraryTextWidth(sample))
 					+ ImGui::GetStyle().CellPadding.x * 2.0f;
 		};
 		const char* iconLabel = T("Icon");
@@ -3446,10 +3424,8 @@ static void gui_display_content()
 		const char* timePlayedLabel = T("Time Played");
 		const char* dateLabel = showContinueActions ? T("Latest Save") : T("Last Booted");
 		const float formatColumnWidth = calcLibraryColumnWidth(formatLabel, "Unknown");
-		const float dateColumnWidth = calcLibraryTextWidth("12/31/2026 12:59:59 PM")
-				+ ImGui::GetStyle().CellPadding.x * 2.0f;
-		const float timePlayedColumnWidth = std::max(calcLibraryTextWidth(T("Time Played")), calcLibraryTextWidth("999h 59m"))
-				+ ImGui::GetStyle().CellPadding.x * 2.0f;
+		const float dateColumnWidth = calcLibraryColumnWidth(dateLabel, "12/31/2026 12:59:59 PM");
+		const float timePlayedColumnWidth = calcLibraryColumnWidth(timePlayedLabel, "999h 59m");
 		const char* sizeLabel = T("Size");
 		const float sizeColumnWidth = calcLibraryColumnWidth(sizeLabel, "99999 MB");
 
@@ -3551,7 +3527,7 @@ static void gui_display_content()
 					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed, dateColumnWidth, static_cast<ImGuiID>(library::SortColumn::Date));
 					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed, sizeColumnWidth, static_cast<ImGuiID>(library::SortColumn::Size));
 					if (gui_state != GuiState::SelectDisk)
-						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, uiScaled(48.0f), static_cast<ImGuiID>(library::SortColumn::Favourite));
+						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, calcLibraryColumnWidth(T("Favourite"), ""), static_cast<ImGuiID>(library::SortColumn::Favourite));
 					if (showContinueActions)
 					{
 						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
@@ -3559,17 +3535,19 @@ static void gui_display_content()
 					}
 					ImGui::TableSetupScrollFreeze(0, 1);
 					ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-					const char *const libraryColumnHeaders[] = {
-						iconLabel, productIdLabel, titleLabel, regionLabel, formatLabel, timePlayedLabel, dateLabel, sizeLabel,
-						T("Favourite"), T("Resume"), T("Start Fresh")
-					};
 					for (int column = 0; column < columnCount; ++column)
 					{
-						ImGui::TableSetColumnIndex(column);
-						if (column >= 1 && column <= 8)
-							ImGui::TableHeader(libraryColumnHeaders[column]);
+						if (!ImGui::TableSetColumnIndex(column))
+							continue;
+						const char* label = ImGui::TableGetColumnName(column);
+						if (ImGui::TableGetColumnFlags(column) & ImGuiTableColumnFlags_NoSort)
+							textTableCellCentered(label, tableTextSize);
 						else
-							textTableCellCentered(libraryColumnHeaders[column], tableTextSize);
+						{
+							ImGui::PushID(column);
+							ImGui::TableHeader(label);
+							ImGui::PopID();
+						}
 					}
 
 					const auto& sourceRows = filter.IsActive() ? filteredRows : visibleGames;
@@ -3577,39 +3555,22 @@ static void gui_display_content()
 					ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
 					if (sortSpecs != nullptr && sortSpecs->SpecsCount > 0)
 					{
-						// Metadata-only lookups and sorting run when inputs change, never per visible row/frame.
-						const auto sortKey = std::make_tuple(filteredRowsKey, boxart.libraryRevision(),
-								getSystemLocale(), librarySavestateCache.getRevision(),
-								sortSpecs->Specs[0].ColumnUserID, sortSpecs->Specs[0].SortDirection);
+						const auto column = static_cast<library::SortColumn>(sortSpecs->Specs[0].ColumnUserID);
+						const bool descending = sortSpecs->Specs[0].SortDirection == ImGuiSortDirection_Descending;
+						const auto* latestSaves = showContinueActions ? &librarySavestateCache : nullptr;
+						const i18n::locale locale;
+						const auto sortKey = std::make_tuple(column, descending, locale, library::sortRevisions(column, boxart, latestSaves));
 						static auto previousSortKey = sortKey;
+						static auto previousRowSettings = filteredRowsKey;
 						static bool sortedRowsValid = false;
 						static std::vector<size_t> previousSourceRows, sortedRows;
-						if (!sortedRowsValid || sortKey != previousSortKey || sourceRows != previousSourceRows)
+						if (!sortedRowsValid || sortKey != previousSortKey || filteredRowsKey != previousRowSettings
+								|| sourceRows != previousSourceRows)
 						{
-							std::vector<library::SortEntry> sortEntries(gameList.size());
-							for (size_t index : sourceRows)
-							{
-								const GameMedia& game = gameList[index];
-								const GameBoxart art = game.device ? GameBoxart{} : boxart.getCachedBoxart(game);
-								auto& entry = sortEntries[index];
-								entry.title = art.name.empty() ? game.name : art.name;
-								entry.productId = art.uniqueId;
-								entry.region = art.region == 0 ? "Unknown" : formatLibraryRegion(art.region);
-								entry.format = game.path.empty() ? "BIOS" : game.device ? "Device" : get_file_extension(game.path);
-								if (entry.format.empty())
-									entry.format = "Unknown";
-								entry.playTimeSeconds = art.playTimeSeconds;
-								if (sortSpecs->Specs[0].ColumnUserID == static_cast<ImGuiID>(library::SortColumn::Date))
-									entry.date = showContinueActions ? librarySavestateCache.peek(game.path).creationDate
-											: getLibraryGameLastBooted(game, art.uniqueId);
-								entry.size = game.size;
-								entry.favourite = library::isFavourite(game.path, config::LibraryFavourites.get());
-							}
 							sortedRows = sourceRows;
-							library::sortRows(sortedRows, sortEntries,
-									static_cast<library::SortColumn>(sortSpecs->Specs[0].ColumnUserID),
-									sortSpecs->Specs[0].SortDirection == ImGuiSortDirection_Descending, i18n::locale());
+							library::sortRows(sortedRows, gameList, column, descending, locale, boxart, latestSaves);
 							previousSourceRows = sourceRows;
+							previousRowSettings = filteredRowsKey;
 							previousSortKey = sortKey;
 							sortedRowsValid = true;
 						}
@@ -3645,25 +3606,6 @@ static void gui_display_content()
 						if (!filterPassed)
 							displayedGameCount++;
 
-						std::string productId;
-						std::string region = "Unknown";
-						if (!art.uniqueId.empty())
-							productId = art.uniqueId;
-						if (art.region != 0)
-							region = formatLibraryRegion(art.region);
-
-						std::string format = "Unknown";
-						if (game.path.empty())
-							format = "BIOS";
-						else if (game.device)
-							format = "Device";
-						else
-						{
-							const std::string extension = get_file_extension(game.path);
-							if (!extension.empty())
-								format = extension;
-						}
-
 						ImguiID _(game.path.empty() ? "bios" : (game.path + "_row"));
 						ImGui::TableNextRow(ImGuiTableRowFlags_None, tableRowHeight);
 						ImGui::TableSetColumnIndex(0);
@@ -3679,13 +3621,13 @@ static void gui_display_content()
 						}
 
 						ImGui::TableSetColumnIndex(1);
-						textTableCellCentered(productId, tableRowContentHeight);
+						textTableCellCentered(art.uniqueId, tableRowContentHeight);
 						ImGui::TableSetColumnIndex(2);
 						textTableCellCentered(gameName, tableRowContentHeight, false);
 						ImGui::TableSetColumnIndex(3);
-						textTableCellCentered(region, tableRowContentHeight);
+						textTableCellCentered(library::regionLabel(art.region), tableRowContentHeight);
 						ImGui::TableSetColumnIndex(4);
-						textTableCellCentered(format, tableRowContentHeight);
+						textTableCellCentered(library::mediaFormat(game), tableRowContentHeight);
 						ImGui::TableSetColumnIndex(5);
 						const std::string timePlayed = art.playTimeSeconds.has_value()
 								? formatLibraryPlaytime(*art.playTimeSeconds) : std::string();

@@ -87,6 +87,7 @@ std::mutex cacheMutex;
 std::unordered_map<std::string, time_t> lastBootedByKey;
 std::unordered_map<std::string, time_t> lastBootedByPath;
 bool lastBootedIndexLoaded = false;
+u64 lastBootedRevision = 0;
 json sharedIconCache;
 std::string sharedIconCachePath;
 bool sharedIconCacheLoaded = false;
@@ -861,7 +862,14 @@ void markLibraryGameBooted(const std::string& gameId, const std::string& gamePat
 	const std::string cachePath = appendPath(libraryDir, "cache.json");
 	json& cache = getSharedIconCache(cachePath);
 	updateLastBootedCacheEntry(cache, key, gamePath, std::time(nullptr));
+	++lastBootedRevision;
 	saveSharedIconCache();
+}
+
+uint64_t getLibraryBootHistoryRevision()
+{
+	std::lock_guard<std::mutex> lock(cacheMutex);
+	return lastBootedRevision;
 }
 
 time_t getLibraryGameLastBooted(const GameMedia& media, const std::string& gameId)
