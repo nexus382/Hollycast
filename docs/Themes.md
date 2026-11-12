@@ -114,8 +114,9 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | --- | --- |
 | `id` | Unique within the package; 1–64 lowercase ASCII letters, digits, hyphens, or underscores. |
 | `name` | Display label used by **Library Layout**. |
-| `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), `rail`, or `orbit` (upright circular disc carousel). See [Rail mode](#rail-mode). |
+| `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), `rail`, or `orbit` (upright circular disc carousel). See [Rail mode](#rail-mode). Newer catalogues may use `carousel`; this build renders those layouts as `grid`. |
 | `browser` | `[x, y, width, height]` rectangle for the interactive game browser. Coordinates are fractions of the library content area. Position and size must fit wholly inside 0–1; width and height must each be at least `0.1`. |
+| `navigation` | Optional `[x, y, width, height]` rectangle for library navigation. With a hidden toolbar, the All Games / Continue Playing / Favourites buttons and a Settings button are placed inside it. |
 | `columns` | Grid column count, integer 1–12, or 1–64 for racks. Default `4`; list mode ignores it. The library Icon Size control adjusts the displayed column count to resize artwork. |
 | `itemAspect` | Cell width divided by height, from `0.3` to `3`, or `0.03` to `3` for racks. Default `0.8`; list mode ignores it. Rack heights are bounded to keep spines readable. |
 | `spacing` | Logical UI pixels between browser items, from `0` to `48`. Default `12`. |
@@ -136,7 +137,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `compactControls` | Show favourite buttons only on hovered/focused items or saved favourites; default `false`. Context-menu actions remain available. |
 | `showInfoTooltip` | Show the app's hover information popup; default `true`. Layouts with their own details can disable it. |
 | `canvasAspect` | Optional fixed canvas width/height ratio, `0.4`–`3`. The canvas fits and centers within the content area, preserving authored asset proportions. Omit to use the complete content area as before. |
-| `toolbar` | `standard` (default) or `compact`. Compact uses smaller shared library controls and a **Filter** button that expands search. All Games, Continue Playing, Favourites, and Settings remain available. |
+| `toolbar` | `standard` (default), `compact`, or `hidden`. Compact uses smaller shared library controls and a **Filter** button that expands search. All Games, Continue Playing, Favourites, and Settings remain available. Hidden draws no app toolbar; the theme provides its own chrome through elements. |
 | `toolbarSelectedTextColor` | Optional foreground for the selected compact-toolbar view. Omit to inherit app text. The selected fill uses the app palette's `ButtonActive`. |
 | `toolbarLogo` | Optional package-relative image replacing the compact toolbar's text brand. It retains its aspect ratio at the toolbar control height. Omit to keep text branding. |
 | `toolbarLogoHeight` | Optional logo height in logical UI pixels, `16`–`96`. Requires `toolbarLogo`; its original aspect ratio is preserved. Omit to match the control height. |
@@ -251,7 +252,9 @@ system and saved favourite state, reserving space beside the title. The badge
 flags default to `false`; the favourite color defaults to the selector outline
 or app accent. `selectOnHover` defaults to `true`. Set it to `false` to select
 by clicking or keyboard/controller focus while a resting pointer leaves the
-active artwork and metadata alone. These fields require list mode.
+active artwork and metadata alone. These fields require list mode. A list
+may also set `list.releaseYear` to show each game's release year as a badge
+in list rows.
 
 [Warning!](../themes/warning/theme.json) combines these optional primitives. Existing
 layouts retain their scrolling browser and decorative behavior when they omit them.
