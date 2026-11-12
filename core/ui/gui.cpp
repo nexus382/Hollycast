@@ -3543,15 +3543,15 @@ static void gui_display_content()
 					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
 					scrollWindowFromTouch();
 					ImGui::TableSetupColumn(iconLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoSort, iconColumnWidth);
-					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, productIdColumnWidth);
-					ImGui::TableSetupColumn(titleLabel, ImGuiTableColumnFlags_WidthStretch);
-					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, regionColumnWidth);
-					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, formatColumnWidth);
-					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, timePlayedColumnWidth);
-					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, dateColumnWidth);
-					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, sizeColumnWidth);
+					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed, productIdColumnWidth, static_cast<ImGuiID>(library::SortColumn::ProductId));
+					ImGui::TableSetupColumn(titleLabel, ImGuiTableColumnFlags_WidthStretch, 0.0f, static_cast<ImGuiID>(library::SortColumn::Title));
+					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed, regionColumnWidth, static_cast<ImGuiID>(library::SortColumn::Region));
+					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed, formatColumnWidth, static_cast<ImGuiID>(library::SortColumn::Format));
+					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed, timePlayedColumnWidth, static_cast<ImGuiID>(library::SortColumn::TimePlayed));
+					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed, dateColumnWidth, static_cast<ImGuiID>(library::SortColumn::Date));
+					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed, sizeColumnWidth, static_cast<ImGuiID>(library::SortColumn::Size));
 					if (gui_state != GuiState::SelectDisk)
-						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, uiScaled(48.0f));
+						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, uiScaled(48.0f), static_cast<ImGuiID>(library::SortColumn::Favourite));
 					if (showContinueActions)
 					{
 						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
@@ -3566,7 +3566,7 @@ static void gui_display_content()
 					for (int column = 0; column < columnCount; ++column)
 					{
 						ImGui::TableSetColumnIndex(column);
-						if (column == 2)
+						if (column >= 1 && column <= 8)
 							ImGui::TableHeader(libraryColumnHeaders[column]);
 						else
 							textTableCellCentered(libraryColumnHeaders[column], tableTextSize);
@@ -3579,22 +3579,35 @@ static void gui_display_content()
 					{
 						// Metadata-only lookups and sorting run when inputs change, never per visible row/frame.
 						const auto sortKey = std::make_tuple(filteredRowsKey, boxart.libraryRevision(),
-								getSystemLocale(), sortSpecs->Specs[0].SortDirection);
+								getSystemLocale(), librarySavestateCache.getRevision(),
+								sortSpecs->Specs[0].ColumnUserID, sortSpecs->Specs[0].SortDirection);
 						static auto previousSortKey = sortKey;
 						static bool sortedRowsValid = false;
 						static std::vector<size_t> previousSourceRows, sortedRows;
 						if (!sortedRowsValid || sortKey != previousSortKey || sourceRows != previousSourceRows)
 						{
-							std::vector<library::Entry> sortEntries = libraryEntries;
+							std::vector<library::SortEntry> sortEntries(gameList.size());
 							for (size_t index : sourceRows)
-								if (!gameList[index].device)
-								{
-									const GameBoxart art = boxart.getCachedBoxart(gameList[index]);
-									if (!art.name.empty())
-										sortEntries[index].name = art.name;
-								}
+							{
+								const GameMedia& game = gameList[index];
+								const GameBoxart art = game.device ? GameBoxart{} : boxart.getCachedBoxart(game);
+								auto& entry = sortEntries[index];
+								entry.title = art.name.empty() ? game.name : art.name;
+								entry.productId = art.uniqueId;
+								entry.region = art.region == 0 ? "Unknown" : formatLibraryRegion(art.region);
+								entry.format = game.path.empty() ? "BIOS" : game.device ? "Device" : get_file_extension(game.path);
+								if (entry.format.empty())
+									entry.format = "Unknown";
+								entry.playTimeSeconds = art.playTimeSeconds;
+								if (sortSpecs->Specs[0].ColumnUserID == static_cast<ImGuiID>(library::SortColumn::Date))
+									entry.date = showContinueActions ? librarySavestateCache.peek(game.path).creationDate
+											: getLibraryGameLastBooted(game, art.uniqueId);
+								entry.size = game.size;
+								entry.favourite = library::isFavourite(game.path, config::LibraryFavourites.get());
+							}
 							sortedRows = sourceRows;
-							library::sortByTitle(sortedRows, sortEntries,
+							library::sortRows(sortedRows, sortEntries,
+									static_cast<library::SortColumn>(sortSpecs->Specs[0].ColumnUserID),
 									sortSpecs->Specs[0].SortDirection == ImGuiSortDirection_Descending, i18n::locale());
 							previousSourceRows = sourceRows;
 							previousSortKey = sortKey;
