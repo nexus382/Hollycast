@@ -66,6 +66,7 @@
 #include "achievements/achievements.h"
 #include "vgamepad.h"
 #include "rend/vmu_window.h"
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cctype>
@@ -147,6 +148,21 @@ static ImVec4 SettingsErrorColor()
 	return CustomTheme::roleColor("error", fallback, "settings.feedback");
 }
 
+static ImVec4 SettingsAccentColor()
+{
+	return CustomTheme::roleColor("accent", ImVec4(0.93f, 0.51f, 0.39f, 1.0f), "settings.accent");
+}
+
+static ImVec4 SettingsSuccessColor()
+{
+	return CustomTheme::roleColor("success", ImVec4(0.36f, 0.77f, 0.46f, 1.0f), "settings.feedback");
+}
+
+static ImVec4 SettingsWarningColor()
+{
+	return CustomTheme::roleColor("warning", ImVec4(0.93f, 0.64f, 0.36f, 1.0f), "settings.feedback");
+}
+
 static std::string cfgLoadStr(const std::string& section, const std::string& key, const std::string& def)
 {
 	return config::loadStr(section, key, def);
@@ -222,7 +238,7 @@ static int g_tabSlideDirection = 0;
 static bool g_tabSlideFocusContent = false;
 static constexpr double kTabSlideSeconds = 0.18;
 static std::string g_settingsFooterText;
-static constexpr float kSettingsFooterHeightPx = 152.0f;
+static constexpr float kSettingsFooterHeightPx = 42.0f;
 
 #if defined(__ANDROID__)
 struct SettingsAndroidScaleState
@@ -328,11 +344,9 @@ static float SettingsFooterHeight()
 		return std::min(SettingsFixedFooterScaled(kSettingsFooterHeightPx), maximumHeight);
 
 	const float minimumHeight = displayHeight * 0.14f;
-	return std::clamp(SettingsFixedFooterScaled(112.0f), minimumHeight, maximumHeight);
+	return std::clamp(SettingsFixedFooterScaled(kSettingsFooterHeightPx), minimumHeight, maximumHeight);
 #else
-	if (!UseCompactSettingsLayout())
-		return SettingsFixedFooterScaled(kSettingsFooterHeightPx);
-	return std::clamp(ImGui::GetIO().DisplaySize.y * 0.20f, SettingsFixedFooterScaled(104.0f), SettingsFixedFooterScaled(136.0f));
+	return SettingsFixedFooterScaled(kSettingsFooterHeightPx);
 #endif
 }
 
@@ -574,6 +588,19 @@ static void AddWeightedFooterText(ImDrawList* drawList, ImFont* font, float font
 		FooterTextWeightColor(color, 0.33f), text, nullptr, wrapWidth);
 }
 
+static void ResetGeneralPageSettings()
+{
+	config::UILanguage = "";
+	config::UILanguage.save();
+	config::Language = 1;	// English
+	config::Region = 1;		// USA
+	config::Broadcast = 0;	// NTSC
+	config::Cable = 3;		// TV Composite
+	SaveSettings();
+	i18n::reloadLanguage();
+	mainui_reinit();
+}
+
 static void RenderSettingsFooterBar()
 {
 	const float footerHeight = SettingsFooterHeight();
@@ -582,220 +609,82 @@ static void RenderSettingsFooterBar()
 
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	const ImVec2 footerMin = ImGui::GetWindowPos();
-	const ImVec2 footerMax(footerMin.x + ImGui::GetWindowSize().x, footerMin.y + ImGui::GetWindowSize().y);
+	const float footerWidth = ImGui::GetWindowSize().x;
+	const float padX = SettingsLayoutScaled(14.0f);
+	const bool isGeneral = g_state.currentTab == SettingsTab::General;
 	ImVec4 border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
-	ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
-	border.w = std::min(border.w + 0.10f, 1.0f);
-	accent.w = 1.0f;
+	drawList->AddLine(footerMin, ImVec2(footerMin.x + footerWidth, footerMin.y),
+		ImGui::ColorConvertFloat4ToU32(border), 1.0f);
 
-	const bool compactLayout = UseCompactSettingsLayout();
-	const float padX = compactLayout ? SettingsLayoutScaled(1.0f) : SettingsLayoutScaled(2.0f);
-	const float padY = compactLayout ? SettingsLayoutScaled(1.0f) : SettingsLayoutScaled(2.0f);
-	ImFont* titleFont = settingsTitleFont != nullptr ? settingsTitleFont : largeFont;
-	ImFont* bodyFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
-#if defined(__ANDROID__)
-	const float footerTextScale = (compactLayout ? 1.0f : 1.15f) * SettingsTextPreviewScale();
-#else
-	const float footerTextScale = 1.25f;
-#endif
-	const float titleFontSize = titleFont->LegacySize * (compactLayout ? 1.00f : 1.06f) * footerTextScale;
-	const float bodyFontSize = bodyFont->LegacySize * (compactLayout ? 0.89f : 0.93f) * footerTextScale;
-	const float textPadX = compactLayout ? SettingsLayoutScaled(10.0f) : SettingsLayoutScaled(12.0f);
-	const float textPadY = compactLayout ? SettingsLayoutScaled(8.0f) : SettingsLayoutScaled(10.0f);
-	const ImVec2 textBoxMin(footerMin.x + padX, footerMin.y + padY);
-	const ImVec2 textBoxMax(footerMax.x - padX, footerMax.y - padY);
-	ImVec4 textBoxBg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
-	textBoxBg.w = std::min(textBoxBg.w + 0.35f, 1.0f);
-	drawList->AddRectFilled(textBoxMin, textBoxMax,
-		ImGui::ColorConvertFloat4ToU32(textBoxBg), SettingsLayoutScaled(10.0f));
-	drawList->AddRect(textBoxMin, textBoxMax,
-		ImGui::ColorConvertFloat4ToU32(border), SettingsLayoutScaled(10.0f), 0, 1.0f);
-	drawList->AddRectFilled(
-		textBoxMin,
-		ImVec2(textBoxMax.x, textBoxMin.y + SettingsLayoutScaled(3.0f)),
-		ImGui::ColorConvertFloat4ToU32(accent),
-		SettingsLayoutScaled(10.0f),
-		ImDrawFlags_RoundCornersTop);
-
-	const char* footerText = g_settingsFooterText.empty()
-		? T("Highlight or select a setting to see details here.")
-		: g_settingsFooterText.c_str();
-	const ImVec2 clipMin(textBoxMin.x + textPadX, textBoxMin.y + textPadY);
-	const ImVec2 clipMax(textBoxMax.x - textPadX, textBoxMax.y - textPadY);
-	const ImVec2 bodyPos(clipMin.x, clipMin.y);
-	const float wrapWidth = std::max(0.0f, clipMax.x - clipMin.x);
-	const ImVec4 bodyColor = ImGui::GetStyle().Colors[ImGuiCol_Text];
-	const char* bodyStart = footerText;
-	std::string titleLine;
-	if (const char* nl = strchr(footerText, '\n'); nl != nullptr)
+	// The General page can be returned to its defaults from here.
+	float resetWidth = 0.0f;
+	const float resetHeight = footerHeight - SettingsLayoutScaled(10.0f);
+	if (isGeneral)
 	{
-		titleLine.assign(footerText, nl);
-		bodyStart = nl + 1;
-	}
-	const auto normalizeFooterBody = [](const char* text) -> std::string
-	{
-		if (text == nullptr || text[0] == '\0')
-			return {};
-		std::string out;
-		out.reserve(strlen(text));
-		int newlineCount = 0;
-		for (const char* p = text; *p != '\0'; ++p)
-		{
-			char c = *p;
-			if (c == '\r')
-				continue;
-			if (c == '\n')
-			{
-				++newlineCount;
-				continue;
-			}
-
-			if (newlineCount > 0)
-			{
-				if (newlineCount >= 2)
-				{
-					while (!out.empty() && out.back() == ' ')
-						out.pop_back();
-					if (!out.empty() && out.back() != '\n')
-						out.push_back('\n');
-					out.push_back('\n');
-				}
-				else
-				{
-					if (!out.empty() && out.back() != ' ' && out.back() != '\n')
-						out.push_back(' ');
-				}
-				newlineCount = 0;
-			}
-
-			if (c == '\t')
-				c = ' ';
-			if (c == ' ')
-			{
-				if (out.empty() || out.back() == ' ' || out.back() == '\n')
-					continue;
-			}
-			out.push_back(c);
-		}
-
-		if (newlineCount >= 2)
-		{
-			while (!out.empty() && out.back() == ' ')
-				out.pop_back();
-			if (!out.empty() && out.back() != '\n')
-				out.push_back('\n');
-			out.push_back('\n');
-		}
-		else if (newlineCount == 1)
-		{
-			if (!out.empty() && out.back() != ' ' && out.back() != '\n')
-				out.push_back(' ');
-		}
-
-		while (!out.empty() && out.back() == ' ')
-			out.pop_back();
-		return out;
-	};
-	std::string bodyText = normalizeFooterBody(bodyStart);
-	const std::string displayTitle = titleLine.empty()
-		? std::string()
-		: std::string(T("Setting Details: ")) + titleLine;
-	const float titleSpacing = compactLayout ? SettingsLayoutScaled(3.0f) : SettingsLayoutScaled(5.0f);
-	const float availableHeight = std::max(0.0f, clipMax.y - clipMin.y);
-	float finalTitleSize = titleFontSize;
-	float finalBodySize = bodyFontSize;
-	if (availableHeight > 0.0f && (!displayTitle.empty() || !bodyText.empty()))
-	{
-		const auto measureFooterTextHeight = [&](float titleSize, float bodySize, const std::string& body) -> float
-		{
-			float totalHeight = 0.0f;
-			if (!displayTitle.empty())
-				totalHeight += titleFont->CalcTextSizeA(titleSize, FLT_MAX, wrapWidth, displayTitle.c_str()).y + titleSpacing;
-			if (!body.empty())
-				totalHeight += bodyFont->CalcTextSizeA(bodySize, FLT_MAX, wrapWidth, body.c_str()).y;
-			return totalHeight;
-		};
-		const auto compactOverflowBody = [](const std::string& text) -> std::string
-		{
-			std::string out;
-			out.reserve(text.size());
-			bool pendingSpace = false;
-			for (char c : text)
-			{
-				if (c == '\r' || c == '\n' || c == '\t' || c == ' ')
-				{
-					pendingSpace = !out.empty();
-					continue;
-				}
-				if (pendingSpace && !out.empty())
-				{
-					out.push_back(' ');
-					pendingSpace = false;
-				}
-				out.push_back(c);
-			}
-			return out;
-		};
-
-		float totalHeight = measureFooterTextHeight(titleFontSize, bodyFontSize, bodyText);
-#if defined(__ANDROID__)
-		// Keep paragraph breaks when they fit. At high Android UI scale, compact
-		// only overflowing footer copy so sentences use horizontal wrap space
-		// instead of being clipped below the fixed details box.
-		if (totalHeight > availableHeight)
-		{
-			std::string compactBodyText = compactOverflowBody(bodyText);
-			const float compactHeight = measureFooterTextHeight(titleFontSize, bodyFontSize, compactBodyText);
-			if (compactHeight < totalHeight)
-			{
-				bodyText = std::move(compactBodyText);
-				totalHeight = compactHeight;
-			}
-		}
-#endif
-		if (totalHeight > availableHeight)
-		{
-#if defined(__ANDROID__)
-			const float scale = std::clamp(availableHeight / totalHeight, 0.70f, 1.0f);
-#else
-			const float scale = std::clamp(availableHeight / totalHeight, 0.78f, 1.0f);
-#endif
-			finalTitleSize = titleFontSize * scale;
-			finalBodySize = bodyFontSize * scale;
-		}
+		ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : textFont;
+		const float fontSize = ImGui::GetFontSize();
+		resetWidth = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, T("Reset this page")).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ROTATE_LEFT).x
+			+ SettingsLayoutScaled(26.0f);
+		ImGui::SetCursorPos(ImVec2(footerWidth - padX - resetWidth, (footerHeight - resetHeight) * 0.5f));
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered));
+		const bool resetPressed = ImGui::Button("##ResetThisPage", ImVec2(resetWidth, resetHeight));
+		ImGui::PopStyleColor(3);
+		const ImVec2 btnMin = ImGui::GetItemRectMin();
+		const ImVec2 btnMax = ImGui::GetItemRectMax();
+		const bool highlighted = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+		const ImU32 color = ImGui::GetColorU32(highlighted ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+		const ImVec4 clipRect(btnMin.x, btnMin.y, btnMax.x, btnMax.y);
+		float x = btnMin.x + SettingsLayoutScaled(8.0f);
+		const float y = btnMin.y + (btnMax.y - btnMin.y - ImGui::GetTextLineHeight()) * 0.5f;
+		drawList->AddText(iconFont, fontSize, ImVec2(x, y), color, ICON_FA_ROTATE_LEFT, nullptr, 0.0f, &clipRect);
+		x += iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ROTATE_LEFT).x + SettingsLayoutScaled(8.0f);
+		drawList->AddText(textFont, fontSize, ImVec2(x, y), color, T("Reset this page"), nullptr, 0.0f, &clipRect);
+		if (resetPressed)
+			ResetGeneralPageSettings();
 	}
 
-	ImVec2 textPos(std::floor(bodyPos.x), std::floor(bodyPos.y));
-	drawList->PushClipRect(clipMin, clipMax, true);
-	if (!displayTitle.empty())
+	// Autosave note on the left.
+	const float textY = (footerHeight - ImGui::GetTextLineHeight()) * 0.5f;
+	ImGui::SetCursorPos(ImVec2(padX, textY));
+	if (settingsIconFont != nullptr)
 	{
-		const ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_HeaderActive];
-		const ImVec4 titleColor2(bodyColor.x + (accent.x - bodyColor.x) * 0.3f,
-				bodyColor.y + (accent.y - bodyColor.y) * 0.3f,
-				bodyColor.z + (accent.z - bodyColor.z) * 0.3f, 1.0f);
-		AddWeightedFooterText(
-			drawList,
-			titleFont,
-			finalTitleSize,
-			textPos,
-			titleColor2,
-			displayTitle.c_str(),
-			wrapWidth);
-		textPos.y = std::floor(textPos.y + finalTitleSize + titleSpacing);
+		ImGui::PushFont(settingsIconFont);
+		ImGui::PushStyleColor(ImGuiCol_Text, SettingsSuccessColor());
+		ImGui::TextUnformatted(ICON_FA_CIRCLE_CHECK);
+		ImGui::PopStyleColor();
+		ImGui::PopFont();
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
 	}
+	ImGui::TextUnformatted(T("Changes save automatically"));
 
-	if (!bodyText.empty())
+	// Context help: the first line of the current setting's explanation.
+	std::string helpTitle = g_settingsFooterText;
+	if (const size_t newline = helpTitle.find('\n'); newline != std::string::npos)
+		helpTitle.resize(newline);
+	if (!helpTitle.empty())
 	{
-		AddWeightedFooterText(
-			drawList,
-			bodyFont,
-			finalBodySize,
-			textPos,
-			bodyColor,
-			bodyText.c_str(),
-			wrapWidth);
+		ImFont* font = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		const float fontSize = SettingsPreviewFontSize(font);
+		const float autosaveWidth = (settingsIconFont != nullptr
+				? settingsIconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_CIRCLE_CHECK).x + SettingsLayoutScaled(8.0f)
+				: 0.0f)
+			+ font->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, T("Changes save automatically")).x;
+		const float helpX = footerMin.x + padX + autosaveWidth + SettingsLayoutScaled(28.0f);
+		const float helpMaxX = footerMin.x + footerWidth - padX
+			- (isGeneral ? resetWidth + SettingsLayoutScaled(16.0f) : 0.0f);
+		if (helpMaxX > helpX)
+		{
+			drawList->PushClipRect(ImVec2(helpX, footerMin.y), ImVec2(helpMaxX, footerMin.y + footerHeight), true);
+			AddWeightedFooterText(drawList, font, fontSize,
+				ImVec2(helpX, footerMin.y + textY), ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+				helpTitle.c_str(), 0.0f);
+			drawList->PopClipRect();
+		}
 	}
-	drawList->PopClipRect();
 
 	ImGui::EndChild();
 }
@@ -2348,11 +2237,11 @@ const char* getTabName(SettingsTab tab)
 	case SettingsTab::General:
 		return T("General");
 	case SettingsTab::Library:
-		return T("Library");
+		return T("Game library");
 	case SettingsTab::Video:
 		return T("Video");
 	case SettingsTab::OnScreenDisplay:
-		return T("On Screen Display");
+		return T("On-screen display");
 	case SettingsTab::Audio:
 		return T("Audio");
 	case SettingsTab::Controls:
@@ -2367,6 +2256,8 @@ const char* getTabName(SettingsTab tab)
 		return T("Unknown");
 	}
 }
+
+static const char* SettingsTabIcon(SettingsTab tab);
 
 static float SettingsNavigationWidth(const char* exitLabel)
 {
@@ -2396,9 +2287,9 @@ static float SettingsNavigationWidth(const char* exitLabel)
 	const float desiredWidth = std::max(themedWidth, labelWidth + SettingsLayoutScaled(24.0f));
 	return std::clamp(desiredWidth, minWidth, maxWidth);
 #else
-	const float minWidth = 136.0f;
-	const float maxWidth = std::clamp(displaySize.x * 0.20f, minWidth, 310.0f);
-	const float layoutWidth = UseCompactSettingsLayout() ? displaySize.x * 0.16f : uiScaled(225.0f);
+	const float minWidth = uiScaled(208.0f);
+	const float maxWidth = std::clamp(displaySize.x * 0.22f, minWidth, uiScaled(330.0f));
+	const float layoutWidth = UseCompactSettingsLayout() ? displaySize.x * 0.16f : uiScaled(245.0f);
 
 	ImFont* navFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
 	ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : navFont;
@@ -2406,10 +2297,17 @@ static float SettingsNavigationWidth(const char* exitLabel)
 	float labelWidth = navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, exitLabel).x
 			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ARROW_LEFT).x
 			+ uiScaled(8.0f);
+	// Brand row: mark plus the product name in the large font.
+	if (largeFont != nullptr)
+		labelWidth = std::max(labelWidth, largeFont->CalcTextSizeA(largeFont->LegacySize, FLT_MAX, -1.0f, "Hollycast").x
+			+ uiScaled(44.0f));
 	for (int i = 0; i < (int)SettingsTab::Count; i++)
 	{
 		const char* tabName = getTabName((SettingsTab)i);
-		labelWidth = std::max(labelWidth, navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabName).x);
+		// Rows carry an icon and gap before the label.
+		labelWidth = std::max(labelWidth, navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabName).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, SettingsTabIcon((SettingsTab)i)).x
+			+ uiScaled(14.0f));
 	}
 
 	const float themedWidth = themeLayout.settingsSidebarWidth > 0.0f
@@ -2447,6 +2345,261 @@ static bool SettingsBackButton(const char* icon, const char* label)
 	return pressed;
 }
 
+static const char* SettingsTabIcon(SettingsTab tab)
+{
+	switch (tab)
+	{
+	case SettingsTab::General: return ICON_FA_GEAR;
+	case SettingsTab::Library: return ICON_FA_FOLDER;
+	case SettingsTab::Video: return ICON_FA_DISPLAY;
+	case SettingsTab::OnScreenDisplay: return ICON_FA_RECTANGLE_LIST;
+	case SettingsTab::Audio: return ICON_FA_VOLUME_HIGH;
+	case SettingsTab::Controls: return ICON_FA_GAMEPAD;
+	case SettingsTab::Network: return ICON_FA_SHARE_NODES;
+	case SettingsTab::Advanced: return ICON_FA_SLIDERS;
+	case SettingsTab::About: return ICON_FA_CIRCLE_INFO;
+	default: return ICON_FA_GEAR;
+	}
+}
+
+static const char* GetTabSubtitle(SettingsTab tab)
+{
+	switch (tab)
+	{
+	case SettingsTab::General: return T("Make Hollycast feel right for you.");
+	case SettingsTab::Library: return T("Your games, artwork and library layout.");
+	case SettingsTab::Video: return T("Graphics quality, scaling and performance.");
+	case SettingsTab::OnScreenDisplay: return T("Overlays, VMU screens and in-game information.");
+	case SettingsTab::Audio: return T("Sound output, mixing and latency.");
+	case SettingsTab::Controls: return T("Controllers, mappings and input behavior.");
+	case SettingsTab::Network: return T("Online play, servers and link features.");
+	case SettingsTab::Advanced: return T("Power-user and developer options.");
+	case SettingsTab::About: return T("Version, credits and project information.");
+	default: return "";
+	}
+}
+
+// Card surface used by the General page: bordered, auto-sized to its rows.
+static bool BeginSettingsCard(const char* id, const char* icon, const char* title, const char* subtitle = nullptr)
+{
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(10.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
+	const bool open = ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize);
+	if (open)
+	{
+		const float headerX = ImGui::GetCursorPosX();
+		float titleX = headerX;
+		if (icon != nullptr && settingsIconFont != nullptr)
+		{
+			const float iconFontSize = SettingsPreviewFontSize(settingsIconFont) * 1.15f;
+			const float iconWidth = settingsIconFont->CalcTextSizeA(iconFontSize, FLT_MAX, -1.0f, icon).x;
+			ImGui::PushFont(settingsIconFont, iconFontSize);
+			ImGui::TextUnformatted(icon);
+			ImGui::PopFont();
+			ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
+			titleX = headerX + iconWidth + SettingsLayoutScaled(10.0f);
+		}
+		if (largeFont != nullptr)
+			ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(title);
+		if (largeFont != nullptr)
+			ImGui::PopFont();
+		if (subtitle != nullptr && subtitle[0] != '\0')
+		{
+			ImGui::SetCursorPosX(titleX);
+			ImGui::TextDisabled("%s", subtitle);
+		}
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+	}
+	return open;
+}
+
+static void EndSettingsCard()
+{
+	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
+	ImGui::Spacing();
+}
+
+// Small filled note shown at the bottom of a card.
+static void RenderSettingsInfoBanner(const char* id, const char* text)
+{
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(8.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+		ImVec2(SettingsLayoutScaled(12.0f), SettingsLayoutScaled(9.0f)));
+	if (ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+			ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize))
+	{
+		if (settingsIconFont != nullptr)
+		{
+			ImGui::PushFont(settingsIconFont);
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+			ImGui::TextUnformatted(ICON_FA_CIRCLE_INFO);
+			ImGui::PopStyleColor();
+			ImGui::PopFont();
+			ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
+		}
+		ImGui::TextWrapped("%s", text);
+	}
+	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
+	ImGui::PopStyleColor();
+}
+
+// Button whose icon and label are drawn centered over the button rect.
+static bool SettingsLabelButton(const char* id, const char* icon, const char* label, const ImVec2& size,
+	bool iconAfter = false)
+{
+	const bool pressed = ImGui::Button(id, size);
+	const ImVec2 min = ImGui::GetItemRectMin();
+	const ImVec2 max = ImGui::GetItemRectMax();
+	ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+	ImFont* iconFont = settingsIconFont;
+	const float fontSize = ImGui::GetFontSize();
+	const ImVec2 textSize = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, label);
+	const ImVec2 iconSize = iconFont != nullptr
+		? iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, icon) : ImVec2();
+	const float gap = iconFont != nullptr ? SettingsLayoutScaled(8.0f) : 0.0f;
+	float x = min.x + (max.x - min.x - (iconSize.x + gap + textSize.x)) * 0.5f;
+	const float y = min.y + (max.y - min.y - textSize.y) * 0.5f;
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+	const ImVec4 clipRect(min.x, min.y, max.x, max.y);
+	if (iconFont != nullptr && !iconAfter)
+	{
+		drawList->AddText(iconFont, fontSize, ImVec2(x, y), color, icon, nullptr, 0.0f, &clipRect);
+		x += iconSize.x + gap;
+	}
+	drawList->AddText(textFont, fontSize, ImVec2(x, y), color, label, nullptr, 0.0f, &clipRect);
+	if (iconFont != nullptr && iconAfter)
+		drawList->AddText(iconFont, fontSize, ImVec2(x + textSize.x + gap, y), color, icon, nullptr, 0.0f, &clipRect);
+	return pressed;
+}
+
+static char g_settingsSearchBuffer[128] = "";
+static bool g_focusSettingsSearch = false;
+
+static SettingsTab FindSettingsTabForQuery(const char* rawQuery)
+{
+	std::string query(rawQuery != nullptr ? rawQuery : "");
+	std::transform(query.begin(), query.end(), query.begin(),
+		[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	const size_t first = query.find_first_not_of(" \t");
+	if (first == std::string::npos)
+		return SettingsTab::Count;
+	query = query.substr(first, query.find_last_not_of(" \t") - first + 1);
+
+	for (int i = 0; i < (int)SettingsTab::Count; i++)
+	{
+		std::string name = getTabName((SettingsTab)i);
+		std::transform(name.begin(), name.end(), name.begin(),
+			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		if (name.find(query) != std::string::npos)
+			return (SettingsTab)i;
+	}
+	struct KeywordEntry { SettingsTab tab; const char* keywords; };
+	static const KeywordEntry entries[] = {
+		{ SettingsTab::General, "language region broadcast cable interface theme content folder data home ui system region tv" },
+		{ SettingsTab::Library, "library games boxart artwork cover metadata scan vmu folders scrape" },
+		{ SettingsTab::Video, "video graphics resolution render texture quality preset scaling fps display" },
+		{ SettingsTab::OnScreenDisplay, "osd overlay vmu screen notification display performance" },
+		{ SettingsTab::Audio, "audio sound volume latency mixing output speakers" },
+		{ SettingsTab::Controls, "controls controller gamepad mapping keyboard buttons sensitivity input" },
+		{ SettingsTab::Network, "network online server netplay match link dcnet" },
+		{ SettingsTab::Advanced, "advanced debug underclock developer experimental power" },
+		{ SettingsTab::About, "about version credits license links" },
+	};
+	for (const KeywordEntry& entry : entries)
+		if (std::string(entry.keywords).find(query) != std::string::npos)
+			return entry.tab;
+	return SettingsTab::Count;
+}
+
+static void RenderSettingsContentHeader()
+{
+	const SettingsTab tab = g_state.currentTab;
+	if ((ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper)
+			&& ImGui::IsKeyPressed(ImGuiKey_K, false))
+		g_focusSettingsSearch = true;
+
+	const float startX = ImGui::GetCursorPosX();
+	const float availWidth = ImGui::GetContentRegionAvail().x;
+	const ImVec2 headerTop = ImGui::GetCursorPos();
+
+	if (largeFont != nullptr)
+		ImGui::PushFont(largeFont, SettingsLayoutScaled(30.0f));
+	ImGui::TextUnformatted(getTabName(tab));
+	if (largeFont != nullptr)
+		ImGui::PopFont();
+	const float titleBottomY = ImGui::GetCursorPosY();
+
+	// Search box on the title row. Enter jumps to the matching page.
+	const float searchWidth = std::clamp(SettingsLayoutScaled(320.0f),
+		SettingsLayoutScaled(170.0f), availWidth * 0.45f);
+	ImGui::SetCursorPos(ImVec2(startX + availWidth - searchWidth, headerTop.y + SettingsLayoutScaled(2.0f)));
+	if (g_focusSettingsSearch)
+	{
+		ImGui::SetKeyboardFocusHere();
+		g_focusSettingsSearch = false;
+	}
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, SettingsLayoutScaled(8.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+		ImVec2(SettingsLayoutScaled(32.0f), SettingsLayoutScaled(8.0f)));
+	ImGui::SetNextItemWidth(searchWidth);
+	if (ImGui::InputTextWithHint("##SettingsSearch", T("Search settings"), g_settingsSearchBuffer,
+			sizeof(g_settingsSearchBuffer), ImGuiInputTextFlags_EnterReturnsTrue))
+	{
+		const SettingsTab match = FindSettingsTabForQuery(g_settingsSearchBuffer);
+		if (match != SettingsTab::Count)
+			openTab(match);
+		else
+			SetSettingsFooterText(T("No settings page matches that search."));
+	}
+	ImGui::PopStyleVar(2);
+	{
+		const ImVec2 boxMin = ImGui::GetItemRectMin();
+		const ImVec2 boxMax = ImGui::GetItemRectMax();
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const ImU32 dimColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+		if (settingsIconFont != nullptr)
+		{
+			const float iconSize = ImGui::GetFontSize();
+			const ImVec2 glyph = settingsIconFont->CalcTextSizeA(iconSize, FLT_MAX, -1.0f, ICON_FA_MAGNIFYING_GLASS);
+			drawList->AddText(settingsIconFont, iconSize,
+				ImVec2(boxMin.x + SettingsLayoutScaled(10.0f), boxMin.y + (boxMax.y - boxMin.y - glyph.y) * 0.5f),
+				dimColor, ICON_FA_MAGNIFYING_GLASS);
+		}
+#if defined(__APPLE__)
+		const char* shortcutLabel = "Cmd K";
+#else
+		const char* shortcutLabel = "Ctrl K";
+#endif
+		ImFont* badgeFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		const float badgeFontSize = ImGui::GetFontSize() * 0.85f;
+		const ImVec2 badgeText = badgeFont->CalcTextSizeA(badgeFontSize, FLT_MAX, -1.0f, shortcutLabel);
+		const ImVec2 badgeMin(boxMax.x - badgeText.x - SettingsLayoutScaled(18.0f),
+			boxMin.y + SettingsLayoutScaled(5.0f));
+		const ImVec2 badgeMax(boxMax.x - SettingsLayoutScaled(6.0f), boxMax.y - SettingsLayoutScaled(5.0f));
+		drawList->AddRectFilled(badgeMin, badgeMax, ImGui::GetColorU32(ImGuiCol_FrameBgHovered),
+			SettingsLayoutScaled(5.0f));
+		drawList->AddText(badgeFont, badgeFontSize,
+			ImVec2(badgeMin.x + SettingsLayoutScaled(6.0f), badgeMin.y + (badgeMax.y - badgeMin.y - badgeText.y) * 0.5f),
+			dimColor, shortcutLabel);
+		if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
+			SetSettingsFooterText(T("Search settings: type a setting name and press Enter to open its page."));
+	}
+
+	ImGui::SetCursorPos(ImVec2(startX, titleBottomY + SettingsLayoutScaled(4.0f)));
+	ImGui::TextDisabled("%s", GetTabSubtitle(tab));
+	ImGui::Spacing();
+	ImGui::Spacing();
+}
+
 // Render left navigation rail with tab buttons (225px wide)
 // This creates the vertical strip on the left side with navigation items
 static void renderNavigationRail(const std::function<void()>& exitSettings, const char* exitLabel)
@@ -2469,6 +2622,27 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 
 	ImGui::PushFont(settingsTitleFont);
 	g_navigationWindow = ImGui::GetCurrentWindow();
+
+	// Brand block: ring mark plus product name.
+	{
+		const ImVec2 markPos = ImGui::GetCursorScreenPos();
+		const float markSize = SettingsLayoutScaled(30.0f);
+		ImGui::Dummy(ImVec2(markSize, markSize));
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const ImVec2 center(markPos.x + markSize * 0.5f, markPos.y + markSize * 0.5f);
+		const ImU32 accentColor = ImGui::ColorConvertFloat4ToU32(SettingsAccentColor());
+		drawList->AddCircleFilled(center, markSize * 0.5f, accentColor, 32);
+		drawList->AddCircle(center, markSize * 0.30f, IM_COL32(255, 255, 255, 255), 32, SettingsLayoutScaled(3.0f));
+		drawList->AddCircleFilled(center, markSize * 0.10f, IM_COL32(255, 255, 255, 255), 16);
+		ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
+		if (largeFont != nullptr)
+			ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted("Hollycast");
+		if (largeFont != nullptr)
+			ImGui::PopFont();
+	}
+	ImGui::Spacing();
+	ImGui::Spacing();
 	if (SettingsBackButton(ICON_FA_ARROW_LEFT, exitLabel))
 		exitSettings();
 	g_backButtonId = ImGui::GetItemID();
@@ -2478,7 +2652,10 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 		g_focusSettingsBack = false;
 	}
 	ImGui::Spacing();
-	ImGui::Separator();
+	ImGui::Spacing();
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::TextUnformatted(T("SETTINGS"));
+	ImGui::PopStyleColor();
 	ImGui::Spacing();
 
 	// Iterate through all tabs and create navigation buttons
@@ -2494,8 +2671,48 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 		bool isSelected = (g_state.currentTab == tab);
 
 		// Create selectable item that fills the navigation rail width
-		// Clicking changes the current tab
-		if (ImGui::Selectable(tabName, isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+		// Clicking changes the current tab. The active page gets the accent
+		// tint and edge bar from the design; other rows keep theme colors.
+		const char* tabIcon = SettingsTabIcon(tab);
+		std::string tabLabel;
+		if (settingsIconFont != nullptr && settingsTitleFont != nullptr)
+		{
+			const float fontSize = ImGui::GetFontSize();
+			const float iconWidth = settingsIconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabIcon).x;
+			const float spaceWidth = std::max(1.0f, settingsTitleFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, " ").x);
+			const int spacerCount = std::max(2, static_cast<int>(std::ceil((iconWidth + SettingsLayoutScaled(10.0f)) / spaceWidth)));
+			tabLabel.append(spacerCount, ' ');
+		}
+		tabLabel += tabName;
+		if (isSelected)
+		{
+			const ImVec4 accent = SettingsAccentColor();
+			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(accent.x, accent.y, accent.z, 0.35f));
+			ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(accent.x, accent.y, accent.z, 0.45f));
+			ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(accent.x, accent.y, accent.z, 0.55f));
+		}
+		const bool tabClicked = ImGui::Selectable(tabLabel.c_str(), isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0));
+		if (isSelected)
+			ImGui::PopStyleColor(3);
+		if (settingsIconFont != nullptr)
+		{
+			const ImVec2 itemMin = ImGui::GetItemRectMin();
+			const ImVec2 itemMax = ImGui::GetItemRectMax();
+			const float fontSize = ImGui::GetFontSize();
+			const ImVec2 iconTextSize = settingsIconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabIcon);
+			ImGui::GetWindowDrawList()->AddText(settingsIconFont, fontSize,
+				ImVec2(itemMin.x + ImGui::GetStyle().FramePadding.x,
+					itemMin.y + (itemMax.y - itemMin.y - iconTextSize.y) * 0.5f),
+				ImGui::GetColorU32(isSelected ? ImGuiCol_Text : ImGuiCol_TextDisabled), tabIcon);
+			if (isSelected)
+			{
+				ImGui::GetWindowDrawList()->AddRectFilled(
+					ImVec2(itemMin.x, itemMin.y + SettingsLayoutScaled(4.0f)),
+					ImVec2(itemMin.x + SettingsLayoutScaled(3.0f), itemMax.y - SettingsLayoutScaled(4.0f)),
+					ImGui::ColorConvertFloat4ToU32(SettingsAccentColor()), SettingsLayoutScaled(2.0f));
+			}
+		}
+		if (tabClicked)
 		{
 			g_state.currentTab = tab;
 			g_tabSlideStart = -1.0;
@@ -2515,6 +2732,18 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			g_state.currentTab = tab;
 			g_focusSettingsContent = true;
 			ResetSettingsFooter();
+		}
+	}
+
+	// Product line pinned to the bottom of the rail.
+	{
+		const float railHeight = ImGui::GetWindowSize().y;
+		const float labelHeight = ImGui::GetTextLineHeight();
+		const float bottomY = railHeight - labelHeight - ImGui::GetStyle().WindowPadding.y;
+		if (bottomY > ImGui::GetCursorPosY() + SettingsLayoutScaled(16.0f))
+		{
+			ImGui::SetCursorPosY(bottomY);
+			ImGui::TextDisabled("%s", T("Dreamcast emulator"));
 		}
 	}
 
@@ -2554,6 +2783,7 @@ static void renderContentArea()
 	if (focusContent)
 		ImGui::SetKeyboardFocusHere();
 	g_contentWindow = ImGui::GetCurrentWindow();
+	RenderSettingsContentHeader();
 	const bool sliding = g_tabSlideStart >= 0.0;
 	const int firstVertex = g_contentWindow->DrawList->VtxBuffer.Size;
 	// Animation changes presentation only. Input is disabled until the visual
@@ -2707,6 +2937,157 @@ static bool RenderCollapsingHeader(
 	return open;
 }
 
+// Status strip at the top of the General page, mirroring the setup checklist.
+static void RenderReadyToPlayBanner()
+{
+	static bool biosChecked = false;
+	static bool biosFound = false;
+	static std::vector<std::string> checkedContentPaths, checkedBiosPaths;
+	if (!biosChecked || checkedContentPaths != config::ContentPath.get()
+			|| checkedBiosPaths != config::BiosPath.get())
+	{
+		checkedContentPaths = config::ContentPath.get();
+		checkedBiosPaths = config::BiosPath.get();
+		biosFound = !hostfs::findFlash("dc_", "%bios.bin;%boot.bin").empty();
+		biosChecked = true;
+	}
+	bool hasGamepad = false, hasKeyboard = false;
+	for (int i = 0; i < GamepadDevice::GetGamepadCount(); ++i)
+	{
+		auto device = GamepadDevice::GetGamepad(i);
+		if (!device) continue;
+		if (dynamic_cast<KeyboardDevice*>(device.get())) hasKeyboard = true;
+		else if (!dynamic_cast<Mouse*>(device.get()) && !device->is_virtual_gamepad()) hasGamepad = true;
+	}
+	const bool hasFolders = !config::ContentPath.get().empty();
+
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(10.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
+	if (ImGui::BeginChild("ReadyToPlayBanner", ImVec2(0.0f, 0.0f),
+			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize))
+	{
+		if (largeFont != nullptr)
+			ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(hasFolders ? T("Ready to play") : T("Set up your library"));
+		if (largeFont != nullptr)
+			ImGui::PopFont();
+
+		// Divider between the headline and the status chips.
+		ImGui::SameLine(0, SettingsLayoutScaled(22.0f));
+		{
+			const ImVec2 divPos = ImGui::GetCursorScreenPos();
+			const float divHeight = ImGui::GetTextLineHeight();
+			ImGui::Dummy(ImVec2(1.0f, divHeight));
+			ImGui::GetWindowDrawList()->AddLine(
+				ImVec2(divPos.x, divPos.y + SettingsLayoutScaled(2.0f)),
+				ImVec2(divPos.x, divPos.y + divHeight - SettingsLayoutScaled(2.0f)),
+				ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
+		}
+
+		auto statusChip = [](bool ready, const char* label) {
+			ImGui::SameLine(0, SettingsLayoutScaled(22.0f));
+			if (settingsIconFont != nullptr)
+			{
+				ImGui::PushFont(settingsIconFont);
+				ImGui::PushStyleColor(ImGuiCol_Text, ready ? SettingsSuccessColor() : SettingsWarningColor());
+				ImGui::TextUnformatted(ready ? ICON_FA_CIRCLE_CHECK : ICON_FA_CIRCLE);
+				ImGui::PopStyleColor();
+				ImGui::PopFont();
+				ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+			}
+			ImGui::TextUnformatted(label);
+		};
+		statusChip(hasFolders, T("Game folders"));
+		statusChip(biosFound, biosFound ? T("Firmware") : T("Firmware: optional"));
+		statusChip(hasGamepad, hasGamepad ? T("Controls")
+			: (hasKeyboard ? T("Controls: review") : T("Controls: set up")));
+
+		const char* reviewLabel = T("Review setup");
+		ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : textFont;
+		const float fontSize = ImGui::GetFontSize();
+		const float buttonWidth = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, reviewLabel).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ARROW_RIGHT).x
+			+ SettingsLayoutScaled(36.0f);
+		const float buttonHeight = SettingsLayoutScaled(36.0f);
+		ImGui::SameLine(RightColumnX(buttonWidth, 18.0f));
+		const ImVec2 buttonPos = ImGui::GetCursorPos();
+		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y - SettingsLayoutScaled(6.0f)));
+		const ImVec4 accent = SettingsAccentColor();
+		ImGui::PushStyleColor(ImGuiCol_Button, accent);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+			ImVec4(std::min(accent.x * 1.12f, 1.0f), std::min(accent.y * 1.12f, 1.0f), std::min(accent.z * 1.12f, 1.0f), 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+			ImVec4(accent.x * 0.88f, accent.y * 0.88f, accent.z * 0.88f, 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.13f, 0.09f, 0.08f, 1.0f));
+		const bool reviewPressed = SettingsLabelButton("##ReviewSetup", ICON_FA_ARROW_RIGHT,
+			reviewLabel, ImVec2(buttonWidth, buttonHeight), true);
+		ImGui::PopStyleColor(4);
+		if (reviewPressed)
+			gui_open_setup_checklist();
+	}
+	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
+	ImGui::Spacing();
+}
+
+// Shortcut card that jumps to the Game library page, where folders are managed.
+static void RenderGameFoldersCard()
+{
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(10.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
+	if (ImGui::BeginChild("GameFoldersCard", ImVec2(0.0f, 0.0f),
+			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize))
+	{
+		const float headerX = ImGui::GetCursorPosX();
+		float titleX = headerX;
+		if (settingsIconFont != nullptr)
+		{
+			const float iconFontSize = SettingsPreviewFontSize(settingsIconFont) * 1.15f;
+			const float iconWidth = settingsIconFont->CalcTextSizeA(iconFontSize, FLT_MAX, -1.0f, ICON_FA_FOLDER).x;
+			ImGui::PushFont(settingsIconFont, iconFontSize);
+			ImGui::TextUnformatted(ICON_FA_FOLDER);
+			ImGui::PopFont();
+			ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
+			titleX = headerX + iconWidth + SettingsLayoutScaled(10.0f);
+		}
+		if (largeFont != nullptr)
+			ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Game folders"));
+		if (largeFont != nullptr)
+			ImGui::PopFont();
+		ImGui::SetCursorPosX(titleX);
+		ImGui::TextDisabled("%s", T("Add and manage folders in Game library."));
+
+		const char* manageLabel = T("Manage folders");
+		ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : textFont;
+		const float fontSize = ImGui::GetFontSize();
+		const float buttonWidth = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, manageLabel).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ARROW_RIGHT).x
+			+ SettingsLayoutScaled(36.0f);
+		ImGui::SameLine(RightColumnX(buttonWidth, 18.0f));
+		const ImVec2 buttonPos = ImGui::GetCursorPos();
+		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y - SettingsLayoutScaled(26.0f)));
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+		ImGui::PushStyleColor(ImGuiCol_Border, SettingsAccentColor());
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, SettingsLayoutScaled(8.0f));
+		const bool managePressed = SettingsLabelButton("##ManageFolders", ICON_FA_ARROW_RIGHT,
+			manageLabel, ImVec2(buttonWidth, SettingsLayoutScaled(36.0f)), true);
+		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor(3);
+		if (managePressed)
+			openTab(SettingsTab::Library);
+	}
+	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
+	ImGui::Spacing();
+}
+
 // Render General tab with all settings from settings_general.cpp
 static void renderSettingsContentTab(SettingsTab tab)
 {
@@ -2715,17 +3096,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 	if (tab == SettingsTab::General)
 	{
 
-	ImGui::TextDisabled("%s", T("General Configuration"));
-	ImGui::Separator();
-	if (ImGui::Button(T("Ready to Play Checklist")))
-		gui_open_setup_checklist();
-	ImGui::TextWrapped("%s", T("Review game folders, firmware and controls."));
-	ImGui::Spacing();
+	RenderReadyToPlayBanner();
 
 	// ========================================
-	// Language & Region Section
+	// App Language Section
 	// ========================================
-	if (RenderCollapsingHeader("Language&RegionSection", ICON_FA_GLOBE, T("Language & Region"), ImGuiTreeNodeFlags_DefaultOpen))
+	if (BeginSettingsCard("AppLanguageCard", ICON_FA_GLOBE, T("App language")))
 	{
 		{
 			struct UILanguageOption
@@ -2735,7 +3111,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			};
 
 			const UILanguageOption uiLanguageOptions[] = {
-				{ T("System Default"), "" },
+				{ T("System default"), "" },
 				{ Tnop("English"), "en" },
 				{ Tnop("Deutsch"), "de" },
 				{ Tnop("Español"), "es" },
@@ -2769,7 +3145,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 			SettingsUI::PopupConfig uiLanguageCfg {};
 			uiLanguageCfg.type = SettingsUI::PopupType::Options;
-			uiLanguageCfg.options.label = T("UI Language");
+			uiLanguageCfg.options.label = T("Interface language");
 			uiLanguageCfg.options.icon = ICON_FA_LANGUAGE;
 			uiLanguageCfg.options.popupID = Tnop("UILanguagePopup");
 			uiLanguageCfg.options.options = uiLanguageLabels;
@@ -2797,12 +3173,21 @@ static void renderSettingsContentTab(SettingsTab tab)
 				)
 			);
 		}
+	}
+	EndSettingsCard();
+
+	// ========================================
+	// Dreamcast Defaults Section
+	// ========================================
+	if (BeginSettingsCard("DreamcastDefaultsCard", ICON_FA_GAMEPAD, T("Dreamcast defaults"),
+			T("Language, region and video settings for the emulated console.")))
+	{
 
 		// 0 -> JP, 1 -> EN, 2 -> DE, 3 -> FR, 4 -> SP, 5 -> IT, 6 -> default
 		const char* languages[] = { T("Japanese"), T("English"), T("German"), T("French"), T("Spanish"), T("Italian"), T("Default") };
 		SettingsUI::PopupConfig languageCfg {};
 		languageCfg.type = SettingsUI::PopupType::Options;
-		languageCfg.options.label = T("Dreamcast Language");
+		languageCfg.options.label = T("Game language");
 		languageCfg.options.icon = ICON_FA_LANGUAGE;
 		languageCfg.options.popupID = Tnop("LanguagePopup");
 		languageCfg.options.options = languages;
@@ -2813,7 +3198,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		languageCfg.options.valueWidth = 220.0f;
 			RenderGeneralPopupSettingRow(
 				Tnop("LanguageSetting"),
-				T("Dreamcast BIOS language (affects game text/menus)."),
+				T("Preferred language for supported games."),
 				languageCfg,
 				T(
 					"Language\n"
@@ -2823,10 +3208,35 @@ static void renderSettingsContentTab(SettingsTab tab)
 				)
 			);
 
+		const char* consoleRegion[] = { T("Japan"), T("USA"), T("Europe"), T("Default") };
+		const char* arcadeRegion[] = { T("Japan"), T("USA"), i18n::translateCtx("Arcade region", "Export"), T("Korea") };
+		const char* const* region = settings.platform.isArcade() ? arcadeRegion : consoleRegion;
+
+		SettingsUI::PopupConfig regionCfg {};
+		regionCfg.type = SettingsUI::PopupType::Options;
+		regionCfg.options.label = T("Console region");
+		regionCfg.options.icon = ICON_FA_EARTH_AMERICAS;
+		regionCfg.options.popupID = Tnop("RegionPopup");
+		regionCfg.options.options = region;
+		regionCfg.options.optionCount = 4;
+		regionCfg.options.currentValue = &config::Region.get();
+		regionCfg.options.valueWidth = 220.0f;
+			RenderGeneralPopupSettingRow(
+				Tnop("RegionSetting"),
+				T("Region reported by the Dreamcast BIOS."),
+				regionCfg,
+				T(
+					"Region\n"
+					"Sets the emulated BIOS region.\n"
+					"This can affect game compatibility, default language choices, and region-locked behavior in some titles.\n\n"
+					"If a game refuses to boot or behaves like the wrong region, try changing this."
+				)
+			);
+
 		const char* broadcast[] = { Tnop("NTSC"), Tnop("PAL"), Tnop("PAL/M"), Tnop("PAL/N"), T("Default") };
 		SettingsUI::PopupConfig broadcastCfg {};
 		broadcastCfg.type = SettingsUI::PopupType::Options;
-		broadcastCfg.options.label = T("Broadcast");
+		broadcastCfg.options.label = T("TV standard");
 		broadcastCfg.options.icon = ICON_FA_TV;
 		broadcastCfg.options.popupID = Tnop("BroadcastPopup");
 		broadcastCfg.options.options = broadcast;
@@ -2837,7 +3247,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		broadcastCfg.options.valueWidth = 220.0f;
 			RenderGeneralPopupSettingRow(
 				Tnop("BroadcastSetting"),
-				T("TV broadcast standard for non-VGA output modes."),
+				T("Broadcast format for non-VGA output."),
 				broadcastCfg,
 				T(
 					"Broadcast\n"
@@ -2846,37 +3256,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"If you see timing issues or a game expects a specific region video mode, try changing this."
 				));
 
-		const char* consoleRegion[] = { T("Japan"), T("USA"), T("Europe"), T("Default") };
-		const char* arcadeRegion[] = { T("Japan"), T("USA"), i18n::translateCtx("Arcade region", "Export"), T("Korea") };
-		const char* const* region = settings.platform.isArcade() ? arcadeRegion : consoleRegion;
-
-		SettingsUI::PopupConfig regionCfg {};
-		regionCfg.type = SettingsUI::PopupType::Options;
-		regionCfg.options.label = T("Region");
-		regionCfg.options.icon = ICON_FA_EARTH_AMERICAS;
-		regionCfg.options.popupID = Tnop("RegionPopup");
-		regionCfg.options.options = region;
-		regionCfg.options.optionCount = 4;
-		regionCfg.options.currentValue = &config::Region.get();
-		regionCfg.options.valueWidth = 220.0f;
-			RenderGeneralPopupSettingRow(
-				Tnop("RegionSetting"),
-				T("BIOS region (can affect compatibility and defaults)."),
-				regionCfg,
-				T(
-					"Region\n"
-					"Sets the emulated BIOS region.\n"
-					"This can affect game compatibility, default language choices, and region-locked behavior in some titles.\n\n"
-					"If a game refuses to boot or behaves like the wrong region, try changing this."
-				)
-			);
-
 		const char* cable[] = { T("VGA"), T("RGB Component"), T("TV Composite") };
 		const bool disabled = config::Cable.isReadOnly() || settings.platform.isArcade();
 
 		SettingsUI::PopupConfig cableCfg {};
 		cableCfg.type = SettingsUI::PopupType::Options;
-		cableCfg.options.label = T("Cable");
+		cableCfg.options.label = T("Video cable");
 		cableCfg.options.icon = ICON_FA_PLUG;
 		cableCfg.options.popupID = Tnop("CablePopup");
 		cableCfg.options.options = cable;
@@ -2904,7 +3289,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		};
 			RenderGeneralPopupSettingRow(
 				Tnop("CableSetting"),
-				T("Emulated video cable type (affects game video modes)."),
+				T("Emulated connection used by the console."),
 				cableCfg,
 				T(
 					"Cable\n"
@@ -2914,7 +3299,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 				),
 				disabled
 			);
+		RenderSettingsInfoBanner("DreamcastDefaultsNote",
+			T("Game language is separate from the Hollycast interface language."));
 	}
+	EndSettingsCard();
+
+	RenderGameFoldersCard();
 
 	// ========================================
 	// Content Paths Section
@@ -4690,8 +5080,6 @@ void renderVideoTab()
 {
 	ScopedTwoLineRowStyle videoRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Video Configuration"));
-	ImGui::Separator();
 
 	// ============================================================
 	// PRESET SELECTOR
@@ -6430,8 +6818,6 @@ void renderAudioTab()
 {
 	ScopedTwoLineRowStyle audioRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Audio Configuration"));
-	ImGui::Separator();
 
 	// Audio Playback Section
 	if (RenderCollapsingHeader("PlaybackSection", ICON_FA_VOLUME_HIGH, T("Playback"), ImGuiTreeNodeFlags_DefaultOpen))
@@ -7458,8 +7844,6 @@ void renderControlsTab()
 
 	ScopedTwoLineRowStyle controlsRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Controls Configuration"));
-	ImGui::Separator();
 
 	if (RenderCollapsingHeader("PhysicalDevicesSection", ICON_FA_GAMEPAD, T("Physical Devices"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -8128,8 +8512,6 @@ void renderNetworkTab()
 {
 	ScopedTwoLineRowStyle networkRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Network Configuration"));
-	ImGui::Separator();
 
 	if (RenderCollapsingHeader("NetworkTypeSection", ICON_FA_GLOBE, T("Network Type"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -8749,8 +9131,6 @@ void renderAdvancedTab()
 {
 	ScopedTwoLineRowStyle advancedRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Advanced Configuration"));
-	ImGui::Separator();
 
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
@@ -9508,8 +9888,6 @@ static void RenderHollycastAsciiText()
 void renderAboutTab()
 {
 	// Use TextDisabled for the title (theme-aware)
-	ImGui::TextDisabled("%s", T("About Hollycast"));
-	ImGui::Separator();
 
 	// Center content for better appearance
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ScaledVec2(20, 20));
@@ -9783,7 +10161,7 @@ void renderSettingsNew()
 				gui_setState(GuiState::Main);
 		};
 
-		const char* backLabel = game_started ? T("Back to Game") : T("Library");
+		const char* backLabel = game_started ? T("Back to Game") : T("Back to library");
 
 		// Split into left navigation rail and right content area
 		renderNavigationRail(exitSettings, backLabel);
