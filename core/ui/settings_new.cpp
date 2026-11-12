@@ -2330,10 +2330,6 @@ static float SettingsNavigationWidth(const char* exitLabel)
 	float labelWidth = navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, exitLabel).x
 			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ARROW_LEFT).x
 			+ uiScaled(8.0f);
-	// Brand row: mark plus the product name in the large font.
-	if (largeFont != nullptr)
-		labelWidth = std::max(labelWidth, largeFont->CalcTextSizeA(largeFont->LegacySize, FLT_MAX, -1.0f, "Hollycast").x
-			+ uiScaled(44.0f));
 	for (int i = 0; i < (int)SettingsTab::Count; i++)
 	{
 		const char* tabName = getTabName((SettingsTab)i);
@@ -2682,26 +2678,6 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 	ImGui::PushFont(settingsTitleFont);
 	g_navigationWindow = ImGui::GetCurrentWindow();
 
-	// Brand block: ring mark plus product name.
-	{
-		const ImVec2 markPos = ImGui::GetCursorScreenPos();
-		const float markSize = SettingsLayoutScaled(30.0f);
-		ImGui::Dummy(ImVec2(markSize, markSize));
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		const ImVec2 center(markPos.x + markSize * 0.5f, markPos.y + markSize * 0.5f);
-		const ImU32 accentColor = ImGui::ColorConvertFloat4ToU32(SettingsAccentColor());
-		drawList->AddCircleFilled(center, markSize * 0.5f, accentColor, 32);
-		drawList->AddCircle(center, markSize * 0.30f, IM_COL32(255, 255, 255, 255), 32, SettingsLayoutScaled(3.0f));
-		drawList->AddCircleFilled(center, markSize * 0.10f, IM_COL32(255, 255, 255, 255), 16);
-		ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
-		if (largeFont != nullptr)
-			ImGui::PushFont(largeFont);
-		ImGui::TextUnformatted("Hollycast");
-		if (largeFont != nullptr)
-			ImGui::PopFont();
-	}
-	ImGui::Spacing();
-	ImGui::Spacing();
 	if (SettingsBackButton(ICON_FA_ARROW_LEFT, exitLabel))
 		exitSettings();
 	g_backButtonId = ImGui::GetItemID();
