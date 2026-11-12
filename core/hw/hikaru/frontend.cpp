@@ -22,6 +22,7 @@
 #include "oslib/oslib.h"
 #include "oslib/storage.h"
 #include "input/gamepad_device.h"
+#include "input/haptic.h"
 #include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/naomi/naomi_cart.h"
@@ -505,7 +506,14 @@ void load(const std::string& path) {
     activeGame = selectedGame;
 }
 namespace {
+void stopForceFeedback() {
+    // Clear Naomi's retained native effects too, so Resume cannot reapply a
+    // prior title's torque before the restored Hikaru command is sampled.
+    haptic::stopAll(0);
+    GamepadDevice::ApplyForceFeedback(0, 0.f);
+}
 void releaseGraphicsLocked() {
+    stopForceFeedback();
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
     if (audioPacer) { audioPacer->reset(); audioPacer.reset(); audioModeKnown = false; }
     if (engine) {
@@ -552,6 +560,15 @@ void suspendGraphics() {
     nativeGraphics.reset();
 }
 const GameDescriptor* loadedGame() { return activeGame.load(); }
+bool gamepadPresetEnabled() {
+    const auto* game = loadedGame();
+    if (game == &SegaNascarGame) return config::HikaruNascarGamepad;
+    if (game == &StarWarsRacerGame) return config::HikaruStarWarsRacerGamepad;
+    if (game == &VirtualOn4Game) return config::HikaruVirtualOn4TwinStick;
+    if (game == &PlanetHarriersGame) return config::HikaruPlanetDpadStick;
+    if (game == &AirTrixGame) return config::HikaruAirTrixDpadBoard;
+    return game == &BraveFirefightersGame && config::HikaruBraveGamepad;
+}
 bool cardReaderAvailable() {
     const auto* game = loadedGame();
     return game && game->cardReader != CardReaderModel::None;
@@ -575,6 +592,8 @@ void unload() {
     shutdownFrameWorker();
     std::lock_guard<std::recursive_mutex> lock(stateMutex);
     activeGame = nullptr;
+    GamepadDevice::RefreshGamepadPresets();
+    stopForceFeedback();
     pendingRegion = CabinetRegion::Saved;
     initializeCabinet = false;
     pendingState.clear();
@@ -655,6 +674,7 @@ void insertCredit(unsigned player) {
 // A backend write can wait indefinitely for consumer progress. Drain the CPU producer before audio teardown,
 // without holding stateMutex, so a worker can finish machine state and publish its bounded PCM packet.
 void pauseAudio() {
+    stopForceFeedback();
     // Never wait for a producer while holding stateMutex: the producer needs
     // it to finish a machine boundary, and audio backend writes stay on render.
     drainFrameWorker();
@@ -987,6 +1007,10 @@ static bool renderFrame() {
             hikaru_engine_discard_frames(engine);
         }
     }
+    // The preceding CPU frame has completed under stateMutex. Host device
+    // calls stay on the render/input thread, outside the emulation worker.
+    if (loadedGame() == &SegaNascarGame)
+        GamepadDevice::ApplyForceFeedback(0, mie->nascarSteeringForce());
     std::array<ControllerInputs, 2> controllers;
     for (unsigned i = 0; i < controllers.size(); ++i)
         controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};

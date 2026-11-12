@@ -1177,15 +1177,15 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			return;
 		}
 		ImGui::NewLine();
-		if (gamepad->is_rumble_enabled())
+		if (gamepad->has_force_feedback() || gamepad->is_rumble_enabled())
 		{
-			header(T("Rumble"));
+			header(gamepad->has_force_feedback() ? T("Force Feedback") : T("Rumble"));
 			int power = gamepad->get_rumble_power();
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
 			if (ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%"))
 				gamepad->set_rumble_power(power);
 			ImGui::SameLine();
-			ShowFooterHelpMarker(T("Rumble power"));
+			ShowFooterHelpMarker(gamepad->has_force_feedback() ? T("Force-feedback strength") : T("Rumble power"));
 		}
 		if (gamepad->has_analog_stick())
 		{
@@ -7656,6 +7656,7 @@ void renderControlsTab()
 		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		ImGui::TextUnformatted(hikaruGame->title);
+		ImGui::TextWrapped("%s", T("Enabled gamepad controls use a built-in preset. Disable them to use your saved mapping. Wheels keep their mapped axes. L3 inserts a coin, R3 opens cabinet test, and Back opens the menu."));
 		auto* regionOption = hikaruGame == &hikaru::StarWarsRacerGame ? &config::HikaruStarWarsRacerRegion
 			: hikaruGame == &hikaru::SegaNascarGame ? &config::HikaruNascarRegion
 			: hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
@@ -7685,7 +7686,7 @@ void renderControlsTab()
 			RenderGeneralToggleSettingRow("HikaruStarWarsRacerGamepad", ICON_FA_GAMEPAD,
 				T("Gamepad pod controls"), T("Use triggers and shoulders while both thumbs operate the pod levers"),
 				bool(config::HikaruStarWarsRacerGamepad),
-				[](bool enabled) { config::HikaruStarWarsRacerGamepad.set(enabled); },
+				[](bool enabled) { config::HikaruStarWarsRacerGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
 				T("Disable to use only the individually mapped cabinet buttons. The two analog levers keep their assignments."));
 			ImGui::TextWrapped("%s", T("Push the left and right sticks forward to advance their respective pod levers. A is boost, B is brake, and X/Y are the left/right buttons."));
 			ImGui::TextWrapped("%s", T("With the default arcade gamepad layout, this option also maps LT to boost, RT to brake, and the left/right shoulders or D-pad to the corresponding left/right buttons. Coin and Start use their normal arcade bindings."));
@@ -7693,19 +7694,24 @@ void renderControlsTab()
 			RenderGeneralToggleSettingRow("HikaruNascarGamepad", ICON_FA_GAMEPAD,
 				T("Gamepad driving controls"), T("Keep the selected gear engaged and allow D-pad steering"),
 				bool(config::HikaruNascarGamepad),
-				[](bool enabled) { config::HikaruNascarGamepad.set(enabled); },
+				[](bool enabled) { config::HikaruNascarGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
 				T("Disable for a physical shifter whose gear buttons remain held. Analog steering and pedals always keep their cabinet assignments."));
-			ImGui::TextWrapped("%s", T("Standard cabinet: left stick steers, RT is gas, LT is brake. With the default arcade gamepad layout, A/B/X/Y select gears 1/2/3/4, right shoulder changes view, and left shoulder selects neutral. Coin and Start use their normal arcade bindings."));
+			ImGui::TextWrapped("%s", T("Standard cabinet: left stick steers, RT is gas, LT is brake. With the preset enabled, A/B/X/Y select gears 1/2/3/4, right shoulder changes view, and left shoulder selects neutral. L3 inserts a coin and Start begins the race."));
 			ImGui::TextWrapped("%s", T("Map Steering wheel, Gas pedal and Brake pedal above. Use Game Test > Input Assignments for calibration; select Automatic transmission in the game if you do not want to shift manually."));
 		} else if (hikaruGame == &hikaru::AirTrixGame) {
 			RenderGeneralToggleSettingRow("HikaruAirTrixDpadBoard", ICON_FA_GAMEPAD,
 				T("D-pad board steering"), T("Use the D-pad for board yaw and roll, alongside the analog stick"),
 				bool(config::HikaruAirTrixDpadBoard),
-				[](bool enabled) { config::HikaruAirTrixDpadBoard.set(enabled); },
+				[](bool enabled) { config::HikaruAirTrixDpadBoard.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
 				T("When disabled, D-pad up/down operate the original nose/tail kick switches. Action buttons always provide separate kicks."));
 			ImGui::TextWrapped("%s", T("Map Tail kick, Nose kick, Cabinet left/right, Coin, Yaw and Roll using Controller Mapping above. With the default arcade gamepad layout: A is tail kick, B is nose kick, X/Y are cabinet left/right, and the right shoulder inserts a coin."));
 			ImGui::TextWrapped("%s", T("Tricks combine board motion and kick timing. If steering is ignored, calibrate both axes in Game Test Mode > Calibration > Volume Calibration, then return to the center and save."));
 		} else if (hikaruGame == &hikaru::BraveFirefightersGame) {
+			RenderGeneralToggleSettingRow("HikaruBraveGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad hose controls"), T("Use the built-in gamepad layout for this cabinet"),
+				bool(config::HikaruBraveGamepad),
+				[](bool enabled) { config::HikaruBraveGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to use your saved controller mapping."));
 			RenderGeneralToggleSettingRow("HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
 				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
 				bool(config::HikaruBraveMouseAim),
@@ -7716,14 +7722,14 @@ void renderControlsTab()
 			RenderGeneralToggleSettingRow("HikaruVirtualOn4TwinStick", ICON_FA_GAMEPAD,
 				T("Single-controller bindings"), T("Use both sticks and triggers of controller A for one cabinet"),
 				bool(config::HikaruVirtualOn4TwinStick),
-				[](bool enabled) { config::HikaruVirtualOn4TwinStick.set(enabled); },
+				[](bool enabled) { config::HikaruVirtualOn4TwinStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
 				T("When disabled, controllers A and B each provide one lever. These are the two levers of one player, not linked cabinets."));
-			ImGui::TextWrapped("%s", T("Left/right sticks move the two levers. LT/RT fire; arcade buttons 3/4 are left/right turbo. Map Coin and Start separately. Personal information uses button 5."));
+			ImGui::TextWrapped("%s", T("Left/right sticks move the two levers. LT/RT fire. X/Y activate left/right turbo, L3 inserts a coin, and Start begins the game. Right shoulder opens personal information."));
 		} else if (hikaruGame == &hikaru::PlanetHarriersGame) {
 			RenderGeneralToggleSettingRow("HikaruPlanetDpadStick", ICON_FA_GAMEPAD,
 				T("D-pad flight controls"), T("Use the D-pad for full-range flight movement, alongside the analog stick"),
 				bool(config::HikaruPlanetDpadStick),
-				[](bool enabled) { config::HikaruPlanetDpadStick.set(enabled); },
+				[](bool enabled) { config::HikaruPlanetDpadStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
 				T("Disable to steer only with the mapped analog stick. Bullet, Missile, Bomb and View buttons keep their existing bindings."));
 			ImGui::TextWrapped("%s", T("Controller Mapping provides Bullet, Missile, Bomb, View left/right and Stick horizontal/vertical for this cabinet."));
 		}

@@ -39,6 +39,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/imgread/GdiTest.cpp
         src/input/ButtonComboTest.cpp
         src/input/GamepadInputHandlingTest.cpp
+        src/input/HikaruGamepadPresetTest.cpp
         src/input/MultiBindMappingTest.cpp
         src/input/InputDefTest.cpp
         src/input/InputMappingConfigFileTest.cpp

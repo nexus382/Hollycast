@@ -86,6 +86,7 @@ Option<HikaruSortingMode> HikaruSorting("HikaruSorting", HikaruSortingMode::PerT
 Option<int> HikaruMaxLayers("HikaruMaxLayers", 32);
 Option<bool> HikaruAudioPacing("HikaruAudioPacing", true);
 Option<bool> HikaruBraveMouseAim("HikaruBraveMouseAim", false, "input");
+Option<bool> HikaruBraveGamepad("HikaruBraveGamepad", true, "input");
 Option<bool> HikaruAirTrixDpadBoard("HikaruAirTrixDpadBoard", false, "input");
 Option<bool> HikaruPlanetDpadStick("HikaruPlanetDpadStick", true, "input");
 Option<int, false> HikaruAirTrixRegion("HikaruAirTrixRegion", -1, "input");

@@ -320,15 +320,30 @@ Saves use `sgnascar.hikaru.nvmem` and `sgnascar.mie.eeprom`; cabinet region is
 independent of the other games.
 
 Its **Gamepad driving controls** option appears only while NASCAR is loaded.
-It defaults on and adds D-pad steering plus a latched shifter. With the normal
-arcade gamepad mapping:
+It defaults on and selects a built-in gamepad preset with D-pad steering and
+a latched shifter. The controller API supplies the standard button and axis
+assignments. Disabling the temporary preset restores the saved mapping.
+Physical wheels retain their mapped axes.
+With the preset enabled:
 
 - Left stick steers; RT accelerates and LT brakes.
 - A/B/X/Y select gears 1/2/3/4. Right shoulder changes view; left shoulder selects neutral.
-- Start and Coin retain the normal arcade bindings.
+- Start begins a race. L3 inserts a coin, R3 opens cabinet test, and Back opens the menu.
 - Turning the option off removes the D-pad alias and gear latch for a physical
   shifter whose selected gear button remains held. Analog steering and pedals
   retain their cabinet assignments.
+
+NASCAR's original 838-13366 drive-board commands feed the same native constant
+torque effect used by Naomi. Force-feedback devices receive signed steering
+force; ordinary vibration-only controllers receive short rumble pulses as a
+fallback. The controller's existing vibration-strength setting scales the native
+effect. Cabinet right/left commands are converted to the host effect's steering
+convention. A steady force remains running until its level changes or it stops.
+Pause, cabinet reset, graphics teardown, controller reassignment and game unload
+release the force. Output is derived from the serialized JVS state, so loading a
+state restores the game's command without serializing a host device effect.
+The command ranges follow the documented
+[EPR-20512 drive-board protocol](https://github.com/njz3/vJoyIOFeederWithFFB/blob/master/DRIVEBOARD.md).
 
 Controller Mapping exposes each gear, neutral, view, wheel and pedal separately.
 Standard cabinet wheel/gas/brake use JVS analog 0/1/2; low is left/released.
@@ -341,8 +356,9 @@ retain the prior selection; Neutral explicitly disengages it.
 Use Game Test > Input Assignments for wheel and pedal calibration. The game
 also offers automatic transmission. Attract mode has booted with the track
 and cars rendered; race performance and the completed input integration still
-require runtime verification. Linked play, Deluxe cabinet wiring and steering
-force feedback are not implemented here. The
+require runtime verification. Physical force direction and strength still need
+confirmation on a supported wheel. Linked play and Deluxe cabinet wiring are
+not implemented here. The
 [Sega Standard cabinet manual](https://backup.segakore.fr/sauservice/Manuals/Nascar/NascarSTD/NascarSTD.pdf)
 documents the cabinet settings and calibration procedure.
 

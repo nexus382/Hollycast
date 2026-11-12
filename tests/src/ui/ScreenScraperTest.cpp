@@ -425,23 +425,66 @@ TEST_F(ScreenScraperTest, PartialMetadataResponseKeepsPreviousValues)
 	EXPECT_EQ(art.releaseDate, "1999-09-09");
 }
 
-TEST(ScreenScraperAccountTest, GuestAccessUsesReportedLimitsWithoutPersonalCredentials)
+TEST(ScreenScraperAccountTest, GuestAccessUsesInfrastructureWithoutPersonalCredentials)
 {
-	auto guestCredentials = credentials();
-	guestCredentials.username.clear();
-	guestCredentials.password.clear();
-	Session guest(guestCredentials, [](const std::string& url, std::vector<u8>& bytes, std::string&) {
-		EXPECT_NE(url.find("systemesListe.php"), std::string::npos);
-		EXPECT_NE(url.find("&ssid=&sspassword="), std::string::npos);
-		auto limits = user(1);
-		limits["id"] = "";
-		return reply(bytes, {{"ssuser", limits}});
-	});
-	guest.login();
-	EXPECT_TRUE(guest.ready());
-	EXPECT_FALSE(guest.status().personalAccount);
-	EXPECT_EQ(guest.status().maxThreads, 1);
-	EXPECT_EQ(guest.status().requestsPerDay, 1000u);
+	for (const auto& open : {json("0"), json(0)})
+	{
+		auto guestCredentials = credentials();
+		guestCredentials.username.clear();
+		guestCredentials.password.clear();
+		int calls = 0;
+		Session guest(guestCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+			EXPECT_NE(url.find("&ssid=&sspassword="), std::string::npos);
+			if (++calls == 1)
+			{
+				EXPECT_NE(url.find("ssinfraInfos.php"), std::string::npos);
+				// Real infrastructure replies omit ssuser; this capacity is shared by all guests.
+				return reply(bytes, {{"serveurs", {{"closefornomember", open}, {"maxthreadfornonmember", "256"}}}});
+			}
+			auto limits = user(2);
+			limits["id"] = "";
+			return reply(bytes, {{"ssuser", limits}});
+		});
+		guest.login();
+		EXPECT_TRUE(guest.ready());
+		EXPECT_FALSE(guest.status().personalAccount);
+		EXPECT_EQ(guest.status().maxThreads, 1);
+		EXPECT_EQ(guest.status().requestsPerDay, 0u);
+		guest.requestJson("jeuRecherche.php", "&recherche=test");
+		EXPECT_EQ(guest.status().maxThreads, 2);
+		EXPECT_EQ(guest.status().requestsPerDay, 1000u);
+	}
+}
+
+TEST(ScreenScraperAccountTest, RejectsClosedOrMalformedGuestInfrastructure)
+{
+	for (const auto& closed : {json("1"), json(1), json("invalid"), json(true), json(nullptr)})
+	{
+		auto guestCredentials = credentials();
+		guestCredentials.username.clear();
+		guestCredentials.password.clear();
+		Session guest(guestCredentials, [&](const std::string&, std::vector<u8>& bytes, std::string&) {
+			return reply(bytes, {{"serveurs", {{"closefornomember", closed}}}});
+		});
+		EXPECT_THROW(guest.login(), std::runtime_error);
+		EXPECT_FALSE(guest.ready());
+		EXPECT_FALSE(guest.status().connecting);
+		EXPECT_EQ(guest.status().activeRequests, 0);
+		if (closed == "1" || closed == 1)
+			EXPECT_EQ(guest.status().message, "ScreenScraper is temporarily closed. Reconnect later.");
+	}
+	for (const auto& response : {json::object(), json{{"serveurs", json::object()}},
+			json{{"serveurs", json::array()}}, json{{"ssuser", user()}}})
+	{
+		auto guestCredentials = credentials();
+		guestCredentials.username.clear();
+		guestCredentials.password.clear();
+		Session guest(guestCredentials, [&](const std::string&, std::vector<u8>& bytes, std::string&) {
+			return reply(bytes, response);
+		});
+		EXPECT_THROW(guest.login(), std::runtime_error);
+		EXPECT_FALSE(guest.ready());
+	}
 }
 
 TEST(ScreenScraperAccountTest, RefusesGuestFallbackAndDoesNotExposeTransportSecrets)

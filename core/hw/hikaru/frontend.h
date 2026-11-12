@@ -8,6 +8,7 @@ namespace hikaru { struct GameDescriptor; struct CardReaderInfo; }
 namespace hikaru::frontend {
 // Static descriptor of the loaded title, or null; safe for native settings UI.
 const GameDescriptor* loadedGame();
+bool gamepadPresetEnabled();
 // load is performed on the game loader thread. requestReset is thread-safe;
 // render, releaseGraphics and unload run on the thread owning the GL context.
 void load(const std::string& path);

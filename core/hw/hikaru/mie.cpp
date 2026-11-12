@@ -278,6 +278,7 @@ void Mie::reset()
 }
 void Mie::setInputs(const JvsNode::Inputs& inputs) { impl_->inputs = inputs; impl_->node.setInputs(inputs); }
 const JvsNode::Inputs& Mie::inputs() const { return impl_->inputs; }
+float Mie::nascarSteeringForce() const { return impl_->node.nascarSteeringForce(); }
 void Mie::setJvsBoardProfile(JvsNode::BoardProfile profile) { impl_->node.setBoardProfile(profile); }
 void Mie::setGpio(GpioRead read, GpioWrite write) { impl_->gpioRead = std::move(read); impl_->gpioWrite = std::move(write); }
 void Mie::setSerialDevice(std::function<void(uint8_t)> send,

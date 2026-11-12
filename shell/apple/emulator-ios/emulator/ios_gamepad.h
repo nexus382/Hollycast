@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -438,6 +439,16 @@ public:
 				return;
 			[hapticPlayer startAtTime:0 error:&error];
 		}
+	}
+
+	std::shared_ptr<InputMapping> getArcadeGamepadMapping() override
+	{
+		auto mapping = std::make_shared<DefaultIOSMapping<true, true>>();
+		mapping->set_button(DC_BTN_Y, IOS_BTN_R1);
+		mapping->set_button(DC_BTN_Z, IOS_BTN_L1);
+		mapping->set_button(DC_BTN_D, IOS_BTN_L3);
+		mapping->set_button(DC_DPAD2_DOWN, IOS_BTN_R3);
+		return mapping;
 	}
 
 	void resetMappingToDefault(bool arcade, bool gamepad) override

@@ -447,6 +447,7 @@ extern Option<HikaruSortingMode> HikaruSorting;
 extern Option<int> HikaruMaxLayers;
 extern Option<bool> HikaruAudioPacing;
 extern Option<bool> HikaruBraveMouseAim;
+extern Option<bool> HikaruBraveGamepad;
 extern Option<bool> HikaruAirTrixDpadBoard;
 extern Option<bool> HikaruPlanetDpadStick;
 extern Option<int, false> HikaruAirTrixRegion;

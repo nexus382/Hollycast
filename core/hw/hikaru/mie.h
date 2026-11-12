@@ -29,6 +29,7 @@ public:
     // be supplied through GpioRead (port 6, active-low bits 2 and 3).
     void setInputs(const JvsNode::Inputs& inputs);
     const JvsNode::Inputs& inputs() const;
+    float nascarSteeringForce() const;
     // Select the fixed cabinet board before execution; reset/load retain it.
     void setJvsBoardProfile(JvsNode::BoardProfile profile);
     void setGpio(GpioRead read, GpioWrite write = {});

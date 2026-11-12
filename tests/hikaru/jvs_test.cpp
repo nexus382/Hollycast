@@ -44,6 +44,48 @@ int main()
 {
     unsigned checks = 0, failures = 0;
     auto check = [&](bool ok, const char* label) { ++checks; if (!ok) { ++failures; std::cerr << label << '\n'; } };
+    // Wire bytes are fixed cabinet fixtures, independent of the decoder.
+    JvsNode drive;
+    drive.setBoardProfile(JvsNode::BoardProfile::Sega83713844);
+    send(drive, 0xff, {0xf1, 1}); read(drive);
+    struct DriveCase { uint8_t byte2, byte3; float force; };
+    const DriveCase driveCases[] = {
+        {0x03, 0xfc, 0.f}, {0x01, 0xfc, -1.f / 63.f}, {0x00, 0x0c, -1.f},
+        {0x03, 0xf4, 0.f}, {0x01, 0xf4, 1.f / 63.f}, {0x00, 0x04, 1.f},
+        {0x03, 0xf8, 0.f}, {0x01, 0xf8, 1.f}, {0x02, 0xf8, -1.f},
+        {0x00, 0x70, 0.f}, {0x00, 0xb0, 0.f}, {0x00, 0x00, 0.f},
+    };
+    for (const auto& entry : driveCases) {
+        send(drive, 1, {0x32, 3, 0xa5, entry.byte2, entry.byte3});
+        check(valid(read(drive)) && drive.nascarSteeringForce() == entry.force,
+            "NASCAR wire command reaches the correct signed force");
+        send(drive, 1, {0x32, 1, 0x5a});
+        check(valid(read(drive)) && drive.nascarSteeringForce() == entry.force,
+            "cabinet lamps do not affect steering force");
+    }
+    send(drive, 1, {0x32, 3, 0, 0, 0x0c}); read(drive);
+    hikaru::StateWriter driveState; drive.saveState(driveState);
+    send(drive, 1, {0x32, 3, 0, 0, 0x04}); read(drive);
+    hikaru::StateReader driveReader(driveState.data().data(), driveState.size());
+    drive.loadState(driveReader);
+    driveReader.finish();
+    check(drive.nascarSteeringForce() == -1.f, "load restores the saved cabinet torque");
+    send(drive, 1, {0x32, 3, 0, 0});
+    check(drive.nascarSteeringForce() == -1.f, "truncated output cannot change torque");
+    send(drive, 0xff, {0xf0, 0xd9});
+    check(!drive.addressed() && drive.outputs() == 0 && drive.nascarSteeringForce() == 0.f
+            && read(drive).empty(), "broadcast reset releases the motor output latch");
+    send(drive, 0xff, {0xf1, 1}); read(drive);
+    check(drive.nascarSteeringForce() == 0.f, "address assignment cannot restore stale torque");
+    send(drive, 1, {0x32, 3, 0, 0, 0x04}); read(drive);
+    check(drive.nascarSteeringForce() == 1.f, "drive accepts a new command after bus reset");
+    drive.reset();
+    check(drive.nascarSteeringForce() == 0.f, "reset releases steering torque");
+    drive.setBoardProfile(JvsNode::BoardProfile::Sega83713551);
+    send(drive, 0xff, {0xf1, 1}); read(drive);
+    send(drive, 1, {0x32, 3, 0, 0, 0x0c}); read(drive);
+    check(drive.nascarSteeringForce() == 0.f, "other cabinet outputs cannot enable NASCAR torque");
+
     JvsNode node;
     send(node, 0xff, {0xf0, 0xd9}); check(!node.addressed() && read(node).empty(), "broadcast reset has no reply");
     send(node, 0xff, {0xf1, 1}); auto r = read(node);

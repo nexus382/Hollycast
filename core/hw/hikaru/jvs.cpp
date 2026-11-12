@@ -126,6 +126,26 @@ void JvsNode::setInputs(const Inputs& inputs)
     }
     inputs_ = inputs;
 }
+float JvsNode::nascarSteeringForce() const
+{
+    if (boardProfile_ != BoardProfile::Sega83713844) return 0.f;
+    // 837-13844 outputs 15..22 carry active-low TX0..7. JVS counts
+    // each byte MSB first; outputs_ retains the bytes in wire order.
+    unsigned command = 0;
+    for (unsigned tx = 0; tx < 8; ++tx) {
+        const unsigned output = 14 + tx;
+        const unsigned shift = (output / 8) * 8 + 7 - output % 8;
+        if (!(outputs_ & (1u << shift))) command |= 1u << tx;
+    }
+    // 838-13366 / EPR-20512 protocol, also used by Sega Rally 2.
+    // https://github.com/njz3/vJoyIOFeederWithFFB/blob/master/DRIVEBOARD.md
+    if (command < 0x40) return -float(command) / 63.f;
+    if (command < 0x80) return float(command - 0x40) / 63.f;
+    if (command == 0x81) return 1.f;  // Cabinet test: roll right.
+    if (command == 0x82) return -1.f; // Cabinet test: roll left.
+    return 0.f; // Stop, initialization and reset commands carry no torque.
+}
+
 bool JvsNode::popByte(uint8_t& byte)
 {
     if (response_.empty()) return false;
@@ -168,7 +188,10 @@ void JvsNode::processFrame()
     if (destination != 0xff && (!node_ || destination != node_)) return;
     const std::size_t end = frameSize_ - 1;
     if (frame_[2] == 0xf0) {
-        if (destination == 0xff && end == 4 && frame_[3] == 0xd9) node_ = 0;
+        if (destination == 0xff && end == 4 && frame_[3] == 0xd9) {
+            node_ = 0;
+            outputs_ = 0; // Reset releases the cabinet motor as well as its address.
+        }
         return;
     }
     auto coins = coins_;

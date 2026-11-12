@@ -59,6 +59,7 @@ public:
     bool addressed() const { return node_ != 0; }
     uint8_t address() const { return node_; }
     uint32_t outputs() const { return outputs_; }
+    float nascarSteeringForce() const;
     std::size_t queuedBytes() const { return response_.size(); }
     const Inputs& inputs() const { return inputs_; }
     void saveState(StateWriter& writer) const;

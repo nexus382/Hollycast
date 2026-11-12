@@ -24,6 +24,7 @@
 #include "stdclass.h"
 #include "emulator.h"
 
+#include <atomic>
 #include <unordered_map>
 #include <memory>
 #include <mutex>
@@ -39,7 +40,7 @@ public:
 	const std::string& api_name() { return _api_name; }
 	const std::string& name() { return _name; }
 	int maple_port() const { return _maple_port; }
-	virtual void set_maple_port(int port) { _maple_port = port; }
+	virtual void set_maple_port(int port);
 	const std::string& unique_id() { return _unique_id; }
 	virtual const std::string& sort_id()
 	{
@@ -77,6 +78,10 @@ public:
 
 	virtual void rumble(float power, float inclination, u32 duration_ms) {}
 	virtual void update_rumble() {}
+	// Cabinet force is normalized to [-1, 1], with clockwise/right positive.
+	virtual void setForceFeedback(float force);
+	static void ApplyForceFeedback(unsigned port, float force);
+	virtual bool has_force_feedback() const { return false; }
 	bool is_rumble_enabled() const { return rumbleEnabled; }
 	int get_rumble_power() const { return rumblePower; }
 	void set_rumble_power(int power) {
@@ -131,6 +136,7 @@ public:
 	}
 
 	static void load_system_mappings();
+	static void RefreshGamepadPresets();
 	virtual bool find_mapping(int system = settings.platform.system);
 	virtual void resetMappingToDefault(bool arcade, bool gamepad) {
 		input_mapper = getDefaultMapping();
@@ -207,6 +213,10 @@ protected:
 		return _input_detected != nullptr;
 	}
 
+	// Factory gamepad layout used only by an enabled, loaded cabinet preset.
+	virtual std::shared_ptr<InputMapping> getArcadeGamepadMapping() { return {}; }
+	void setGamepadPreset(bool enabled);
+
 	virtual void registered() {}
 	virtual void refreshName() {}
 
@@ -218,6 +228,15 @@ protected:
 	int rumblePower = 100;
 
 private:
+	void applyGamepadPreset();
+	std::shared_ptr<InputMapping> gameplayMapping();
+	void releaseMappedInputs();
+	void resetAxisInput(u32 port, DreamcastKey key);
+	std::shared_ptr<InputMapping> gamepadPreset;
+	std::atomic<bool> gamepadPresetRequested{false};
+	u32 pressedButtons[4]{};
+
+	void setButtonState(int port, DreamcastKey key, bool pressed);
 	bool handleButtonInput(int port, DreamcastKey key, bool pressed);
 	bool handleButtonInputDef(const InputMapping::InputDef& inputDef, bool pressed);
 	std::string make_mapping_filename(bool instance, int system, bool perGame = false);
