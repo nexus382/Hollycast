@@ -205,6 +205,9 @@ Archive payload(const fs::path& work) {
         require(inner >= 0, "The update does not contain Hollycast.");
         path = work / ("inner-" + std::to_string(depth) + ".zip");
         extract(archive.get(), inner, path);
+        // Release each wrapper before opening its payload; no wrapper handle may
+        // survive into application restart or terminal download cleanup.
+        archive.reset();
     }
     throw std::runtime_error("The nested package format is unsupported.");
 }
@@ -221,20 +224,28 @@ uint16_t machine(const fs::path& path) {
     require(static_cast<bool>(file) && signature == IMAGE_NT_SIGNATURE, "Invalid executable header.");
     return result;
 }
-void launch(const fs::path& executable, const std::wstring& arguments, const fs::path& cwd, bool hidden) {
+Handle launch(const fs::path& executable, const std::wstring& arguments, const fs::path& cwd, bool hidden) {
     std::wstring command = L"\"" + executable.wstring() + L"\" " + arguments;
     STARTUPINFOW startup{}; startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESHOWWINDOW; startup.wShowWindow = hidden ? SW_HIDE : SW_SHOWNORMAL;
     PROCESS_INFORMATION process{};
     require(CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, hidden ? CREATE_NO_WINDOW : 0,
             nullptr, cwd.c_str(), &startup, &process), "Cannot start the updated application or helper.");
-    CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    CloseHandle(process.hThread);
+    return Handle(process.hProcess, CloseHandle);
 }
 struct Replacement { fs::path target, prepared, backup; bool existed = false, installed = false; };
+void discardPayloads(const fs::path& work) {
+    if (work.empty()) return;
+    for (const auto* name : {L"package.zip", L"inner-0.zip", L"inner-1.zip", L"inner-2.zip"}) {
+        std::error_code ignored;
+        fs::remove(work / name, ignored);
+    }
+}
 }
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    fs::path work, target, cwd;
+    fs::path work, target, cwd, transaction;
     Handle parent(nullptr, CloseHandle);
     std::vector<Replacement> changes;
     try {
@@ -297,7 +308,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         auto archive = payload(work);
         std::array<unsigned char, 16> random{};
         require(BCryptGenRandom(nullptr, random.data(), static_cast<ULONG>(random.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0, "Cannot create update staging.");
-        const auto transaction = target.parent_path() / (L".hollycast-update-" + wide(hex(random.data(), random.size())));
+        transaction = target.parent_path() / (L".hollycast-update-" + wide(hex(random.data(), random.size())));
         require(fs::create_directory(transaction), "The installation folder is not writable.");
         const std::array<std::string, 2> names{{"Hollycast.exe", "HollycastUpdater.exe"}};
         for (size_t i = 0; i < names.size(); ++i) {
@@ -330,8 +341,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             require(installed, "Cannot replace the application files; restoring the previous installation.");
             change.installed = true;
         }
-        status(work, "Done\n");
-        launch(target, L"", cwd, false);
+        auto child = launch(target, L"", cwd, false);
+        // CreateProcess can succeed before a missing DLL or startup error terminates
+        // the replacement. Retain the backups until that early failure window passes.
+        const DWORD started = WaitForSingleObject(child.get(), 3000);
+        require(started == WAIT_TIMEOUT || started == WAIT_OBJECT_0, "Cannot verify application startup.");
+        if (started == WAIT_OBJECT_0) {
+            DWORD exitCode = 0;
+            require(GetExitCodeProcess(child.get(), &exitCode) && exitCode == 0,
+                    "The updated application could not start; restoring the previous installation.");
+        }
+        // Once a live replacement is accepted, a progress-file failure must not
+        // attempt to overwrite its mapped executable or launch a second instance.
+        try { status(work, "Done\n"); } catch (...) {}
+        discardPayloads(work);
         return 0;
     } catch (const std::exception& error) {
         // Revert the whole managed binary set if any replacement or restart fails.
@@ -345,6 +368,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if (parent && WaitForSingleObject(parent.get(), 0) == WAIT_OBJECT_0 && fs::exists(target))
                 launch(target, L"", cwd, false);
         } catch (...) {}
+        if (!transaction.empty()) {
+            std::error_code ignored;
+            fs::remove(transaction / "Hollycast.exe", ignored);
+            fs::remove(transaction / "HollycastUpdater.exe", ignored);
+            fs::remove(transaction, ignored); // Retain any backup whose restoration failed.
+        }
+        discardPayloads(work);
         return 1;
     }
 }

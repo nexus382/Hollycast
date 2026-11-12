@@ -4599,6 +4599,7 @@ void gui_draw_osd()
 		vgamepad::draw();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
+	app_updates::draw(false);
 	// Use this frame's effective bar height, including fullscreen auto-hide.
 	performance_overlay::draw();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)

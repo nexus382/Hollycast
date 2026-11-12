@@ -58,7 +58,7 @@ void fails(const std::function<void()>& action, const char* message) {
 }
 namespace http {
 void init() {}
-int get(const std::string&, std::vector<u8>& bytes, const Headers*, Headers*, int) {
+int get(const std::string&, std::vector<u8>& bytes, const Headers*, Headers*, int, const std::atomic<bool>*) {
     bytes.assign(httpBody.begin(), httpBody.end()); return httpStatus;
 }
 }
@@ -67,6 +67,12 @@ int main() {
         std::atomic<bool> cancelled{false};
         auto run = [&](bool switched = false) { return check("dev", oldSha, switched, cancelled, fetch); };
         Check result;
+#if defined(TARGET_IPHONE) || defined(TARGET_UWP) || defined(__SWITCH__)
+        reset(); result = run();
+        expect(result.available && result.package.commit == newSha, "System-managed host lost release availability");
+        expect(result.package.url.empty() && !result.installMessage.empty(), "System-managed host offered an automatic installer");
+        expect(!result.changelog.empty(), "System-managed host lost release notes");
+#else
         // Other standalone hosts have no published CI asset. They still exercise Play
         // metadata below; positive package selection applies to supported CI platforms.
 #if (defined(_WIN32) && !defined(_M_ARM64) && !defined(__aarch64__)) \
@@ -85,6 +91,7 @@ int main() {
         reset(); incomplete = true; fails([&] { run(); }, "Incomplete changelog accepted");
         reset(); cancelled = true; fails([&] { run(); }, "Cancelled check continued"); cancelled = false;
         reset(); catalogue["repository"] = "someone/else"; fails([&] { run(); }, "Foreign catalogue accepted");
+#endif
 #endif
         httpBody = Json{{"releases", Json::array({
             {{"versionCode", 11}, {"versionName", "stable-11"}, {"date", "2026-11-01"}, {"channel", "master"}, {"notes", "stable change"}},

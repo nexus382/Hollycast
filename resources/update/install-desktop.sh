@@ -43,7 +43,17 @@ on_exit() {
             else nohup "$target" >/dev/null 2>&1 &
             fi
         fi
+        if [ -n "$transaction" ]; then
+            rm -f "$transaction/new.AppImage" || :
+            rm -rf "$transaction/payload" || :
+            if [ "$installed" = false ] && [ "$kind" = linux ]; then rm -f "$transaction/previous" || :; fi
+            # A failed restoration retains its backup; empty canceled transactions do not.
+            rmdir "$transaction" 2>/dev/null || :
+        fi
     fi
+    # Status and recovery backups outlive the helper; downloaded payloads do not.
+    rm -f "$work/package.zip" "$work/inner-0.zip" "$work/inner-1.zip" "$work/inner-2.zip" \
+        "$work/entries-0" "$work/entries-1" "$work/entries-2" || :
 }
 trap on_exit 0
 case "$kind" in linux|macos) ;; *) fail 'Unsupported desktop package.' ;; esac
@@ -95,8 +105,13 @@ while [ "$depth" -lt 3 ]; do
             prepared="$transaction/new.AppImage"
             unzip -p "$archive" "$entry" > "$prepared" || fail 'Cannot extract the AppImage.'
             [ "$(wc -c < "$prepared")" -le 536870912 ] || fail 'The unpacked application is too large.'
-            magic=$(dd if="$prepared" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d '[:space:]')
-            [ "$magic" = 7f454c46 ] || fail 'The update is not an executable AppImage.'
+            header=$(dd if="$prepared" bs=1 count=20 2>/dev/null | od -An -tx1 | tr -d '[:space:]')
+            # Official Linux releases are type-2, little-endian x86-64 AppImages.
+            # ELF alone also identifies ordinary executables, which cannot update Hollycast.
+            case "$header" in
+                7f454c46020101??414902??????????0[23]003e00) ;;
+                *) fail 'The update is not a matching x86-64 AppImage.' ;;
+            esac
             chmod 755 "$prepared"
             cp -p "$target" "$transaction/previous" || fail 'Cannot preserve the current application for recovery.'
             break
@@ -155,4 +170,4 @@ else
         wait "$launched_pid" || fail 'The updated application could not start; restoring the previous application.'
     fi
 fi
-publish Done
+publish Done || : # A successfully running replacement must not be rolled back for bookkeeping alone.

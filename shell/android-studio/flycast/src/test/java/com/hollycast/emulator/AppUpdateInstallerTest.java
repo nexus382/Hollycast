@@ -64,6 +64,7 @@ public class AppUpdateInstallerTest {
         doAnswer(call -> { posted.set(call.getArgument(0)); return null; }).when(activity).runOnUiThread(any(Runnable.class));
         ((AtomicBoolean)field("busy")).set(false);
         field("pendingApk", null); field("pendingWork", null); field("activeWork", null);
+        field("downloadingWork", null);
         field("foreground", new WeakReference<Activity>(null));
     }
     @Test public void pausedActivityRetainsPendingApkUntilItResumes() throws Exception {
@@ -83,6 +84,7 @@ public class AppUpdateInstallerTest {
         File old = new File(updates, "update-old"); assertTrue(old.mkdir());
         File active = new File(updates, "update-current"); assertTrue(active.mkdir());
         write(old, "source-version", "9"); write(active, "source-version", "10");
+        write(active, "status", "Installer\n");
         File oldApk = write(old, "update.apk", "completed APK");
         File oldZip = write(old, "package.zip", "completed archive");
         File activeApk = write(active, "update.apk", "installer may still read this");
@@ -90,6 +92,27 @@ public class AppUpdateInstallerTest {
         AppUpdateInstaller.resume(activity);
         assertFalse(oldApk.exists()); assertFalse(oldZip.exists());
         assertTrue(activeApk.exists()); assertTrue(unrelated.exists());
+    }
+    @Test public void restartReclaimsInterruptedDownloadsAtTheSameVersion() throws Exception {
+        File work = new File(updates, "update-interrupted"); assertTrue(work.mkdir());
+        write(work, "source-version", "10"); write(work, "status", "Downloading\n");
+        File zip = write(work, "package.zip", "interrupted download");
+        File inner = write(work, "inner-0.zip", "interrupted extraction");
+        File apk = write(work, "update.apk", "not handed to Android");
+        AppUpdateInstaller.resume(activity);
+        assertFalse(zip.exists()); assertFalse(inner.exists()); assertFalse(apk.exists());
+        // Android/POSIX rename replaces an existing status atomically. Windows
+        // host File.renameTo cannot replace it; Linux CI covers that native rule.
+        if (File.separatorChar == '/')
+            assertTrue(new String(Files.readAllBytes(new File(work, "status").toPath()), StandardCharsets.UTF_8).startsWith("Cancelled\n"));
+    }
+    @Test public void resumingKeepsTheLiveDownload() throws Exception {
+        File work = new File(updates, "update-live"); assertTrue(work.mkdir());
+        write(work, "source-version", "10"); write(work, "status", "Downloading\n");
+        File zip = write(work, "package.zip", "live download");
+        field("downloadingWork", work);
+        AppUpdateInstaller.resume(activity);
+        assertTrue(zip.exists());
     }
     @Test public void cancelledDownloadDiscardsItsPayloads() throws Exception {
         File work = new File(updates, "update-cancelled"); assertTrue(work.mkdir());

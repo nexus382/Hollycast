@@ -32,6 +32,7 @@ final class AppUpdateInstaller {
     private static File pendingApk;
     private static File pendingWork;
     private static File activeWork;
+    private static File downloadingWork;
 
     static synchronized void resume(Activity activity) {
         foreground = new WeakReference<>(activity);
@@ -84,16 +85,30 @@ final class AppUpdateInstaller {
             File[] folders = new File(context.getFilesDir(), "app-updates").listFiles();
             if (folders == null) return;
             for (File work : folders) {
-                if (work.equals(activeWork) || work.equals(pendingWork)) continue;
+                if (work.equals(activeWork) || work.equals(pendingWork) || work.equals(downloadingWork)) continue;
                 try {
                     validateWork(context, work);
                     File marker = new File(work, "source-version");
                     if (marker.length() == 0 || marker.length() > 32) continue;
                     try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(
                             new FileInputStream(marker), java.nio.charset.StandardCharsets.UTF_8))) {
-                        // A successful package replacement may kill this process before its result callback.
-                        // Only a newer installed version proves that the old APK is no longer in use.
-                        if (current > Long.parseLong(in.readLine())) discardPayloads(work, true);
+                        long source = Long.parseLong(in.readLine());
+                        File progress = new File(work, "status");
+                        String state = "";
+                        if (progress.length() > 0 && progress.length() <= 4096) {
+                            try (java.io.BufferedReader status = new java.io.BufferedReader(new java.io.InputStreamReader(
+                                    new FileInputStream(progress), java.nio.charset.StandardCharsets.UTF_8))) {
+                                state = status.readLine();
+                            }
+                        }
+                        // A killed download has no surviving worker. The system installer
+                        // may still read an APK after process death, so retain that handoff
+                        // until a newer installed version proves replacement completed.
+                        if (current > source || (current == source && ("Downloading".equals(state)
+                                || "Error".equals(state) || "Cancelled".equals(state)))) {
+                            discardPayloads(work, true);
+                            if ("Downloading".equals(state)) status(work, "Cancelled\nInterrupted download discarded. Please retry.");
+                        }
                     }
                 } catch (IOException | NumberFormatException ignored) {
                     // Unknown folders and incomplete markers are not ours to reclaim.
@@ -206,19 +221,26 @@ final class AppUpdateInstaller {
             if (!BuildConfig.GITHUB_UPDATES || !githubBuild) throw new IOException("Use your app store to update this installation. In-app APK installation is available in GitHub builds.");
             synchronized (AppUpdateInstaller.class) {
                 if (pendingWork != null || activeWork != null) throw new IOException("Finish the pending Android update before starting another.");
+                downloadingWork = work;
             }
             if (!digest.matches("[a-f0-9]{64}")
                     || !url.startsWith("https://github.com/nexus382/Hollycast/releases/download/")
                     || size <= 0 || size > LIMIT) throw new IOException("Invalid official update request.");
             if (work.getUsableSpace() < size * 3) throw new IOException("Not enough free space to stage the update.");
             checkCancelled(work);
-            if (!ensureInstallPermission(activity, work)) { busy.set(false); return; }
+            if (!ensureInstallPermission(activity, work)) {
+                synchronized (AppUpdateInstaller.class) { downloadingWork = null; }
+                busy.set(false); return;
+            }
             try (FileOutputStream out = new FileOutputStream(new File(work, "source-version"))) {
                 out.write(Long.toString(versionCode(current)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 out.getFD().sync();
             }
             status(work, "Downloading\n");
-        } catch (Exception e) { discardPayloads(work, true); busy.set(false); error(work, e); return; }
+        } catch (Exception e) {
+            synchronized (AppUpdateInstaller.class) { downloadingWork = null; }
+            discardPayloads(work, true); busy.set(false); error(work, e); return;
+        }
         new Thread(() -> {
             try {
                 File archive = new File(work, "package.zip");
@@ -293,7 +315,10 @@ final class AppUpdateInstaller {
                 discardPayloads(work, false);
                 synchronized (AppUpdateInstaller.class) { pendingApk = apk; pendingWork = work; present(); }
             } catch (Exception e) { discardPayloads(work, true); error(work, e); }
-            finally { busy.set(false); }
+            finally {
+                synchronized (AppUpdateInstaller.class) { downloadingWork = null; }
+                busy.set(false);
+            }
         }, "HollycastUpdate").start();
     }
 }
