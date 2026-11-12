@@ -26,6 +26,10 @@
 #include "hw/pvr/Renderer_if.h"
 #include "emulator.h"
 #include "dx11_driver.h"
+#include "dx11_quad.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#endif
 #include "imgui_impl_dx11.h"
 #include "ui/performance_overlay.h"
 #include <dxgi1_6.h>
@@ -214,6 +218,12 @@ bool DX11Context::init(bool keepCurrentWindow)
 void DX11Context::term()
 {
 	NOTICE_LOG(RENDERER, "DX11 Context terminating");
+#ifdef USE_HIKARU
+	// Release native board resources before device loss/recreation or API switch.
+	hikaru::frontend::suspendGraphics();
+#endif
+	externalFrame.reset();
+	externalQuad.reset();
 	overlay.term();
 	gpuTimingActive = false;
 	gpuTimingAvailable = false;
@@ -374,6 +384,39 @@ void DX11Context::Present()
 	}
 }
 
+void DX11Context::drawExternalFrame()
+{
+	if (!externalFrame || !renderTargetView)
+		return;
+	if (!externalQuad) {
+		externalQuad = std::make_unique<Quad>();
+		externalQuad->init(pDevice, pDeviceContext, &shaders);
+	}
+	pDeviceContext->OMSetRenderTargets(1, &renderTargetView.get(), nullptr);
+	pDeviceContext->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+	const D3D11_VIEWPORT viewport{0.f, 0.f, float(settings.display.width), float(settings.display.height), 0.f, 1.f};
+	pDeviceContext->RSSetViewports(1, &viewport);
+	externalQuad->draw(externalFrame, samplers.getSampler(false));
+}
+
+void DX11Context::presentFrame(const ComPtr<ID3D11ShaderResourceView>& image)
+{
+	externalFrame = image;
+	if (!externalFrame)
+		return;
+	drawExternalFrame();
+	const bool previousOverlay = overlayOnly;
+	overlayOnly = true;
+	try {
+		gui_display_osd();
+	} catch (...) {
+		overlayOnly = previousOverlay;
+		throw;
+	}
+	overlayOnly = previousOverlay;
+	frameRendered = true;
+}
+
 void DX11Context::EndImGuiFrame()
 {
 	if (pDevice && pDeviceContext && renderTargetView)
@@ -386,7 +429,9 @@ void DX11Context::EndImGuiFrame()
 			pDeviceContext->OMSetRenderTargets(1, &renderTargetView.get(), nullptr);
 			const FLOAT black[4] { 0.f, 0.f, 0.f, 1.f };
 			pDeviceContext->ClearRenderTargetView(renderTargetView, black);
-			if (renderer != nullptr)
+			if (externalFrame)
+				drawExternalFrame();
+			else if (renderer != nullptr)
 				renderer->RenderLastFrame();
 		}
 		ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

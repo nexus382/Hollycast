@@ -2,6 +2,7 @@
     Created on: Oct 18, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -38,6 +39,9 @@ public:
 	virtual bool hasPerPixel() { return false; }
 	// Set the game swap interval: 1 for 60 FPS, 2 for 30 FPS
 	virtual void setSwapInterval(int interval) {}
+	// Records the backend used to create this context. Configuration may
+	// already request a different API while the UI schedules its replacement.
+	RenderType renderType() const { return createdRenderType; }
 
 	void setWindow(void *window, void *display = nullptr) {
 		this->window = window;
@@ -64,6 +68,7 @@ protected:
 
 	void *window = nullptr;
 	void *display = nullptr;
+	RenderType createdRenderType;
 
 private:
 	static void onEvent(Event event, void *arg);

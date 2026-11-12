@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -17,11 +18,12 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "context.h"
+#include "cfg/option.h"
 
 GraphicsContext *GraphicsContext::instance;
 
 GraphicsContext::GraphicsContext(void *window, void *display)
-	: window(window), display(display)
+	: window(window), display(display), createdRenderType(config::RendererType)
 {
 	instance = this;
 	EventManager::listen(Event::Pause, GraphicsContext::onEvent, this);

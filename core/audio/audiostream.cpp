@@ -22,6 +22,8 @@
 #include "audiostream.h"
 #include "cfg/option.h"
 #include "emulator.h"
+#include <chrono>
+#include <limits>
 
 #include <cstring>
 
@@ -33,6 +35,18 @@ static SoundFrame Buffer[SAMPLE_COUNT];
 static u32 writePtr;  // next sample index
 
 static AudioBackend *currentBackend;
+static std::atomic<u64> requestedFrames, silentFrames, underruns, droppedFrames, blockedNanoseconds;
+
+AudioOutputDiagnostics audioOutputDiagnostics()
+{
+	return {requestedFrames.load(), silentFrames.load(), underruns.load(), droppedFrames.load()};
+}
+const char* audioOutputBackend() { return currentBackend ? currentBackend->slug.c_str() : "none"; }
+void audioOutputRequested(u32 frames) { requestedFrames.fetch_add(frames, std::memory_order_relaxed); }
+void audioOutputUnderrun(u32 frames) { silentFrames.fetch_add(frames, std::memory_order_relaxed); underruns.fetch_add(1, std::memory_order_relaxed); }
+void audioOutputDropped(u32 frames) { droppedFrames.fetch_add(frames, std::memory_order_relaxed); }
+void audioOutputWaited(u64 ns) { blockedNanoseconds.fetch_add(ns, std::memory_order_relaxed); }
+double audioOutputBlockedSeconds() { return blockedNanoseconds.load(std::memory_order_relaxed) / 1000000000.0; }
 std::vector<AudioBackend *> *AudioBackend::backends;
 
 static bool audio_recording_started;
@@ -80,7 +94,15 @@ void WriteSample(s16 r, s16 l)
 	if (++writePtr == SAMPLE_COUNT)
 	{
 		if (currentBackend != nullptr)
-			currentBackend->push(Buffer, SAMPLE_COUNT, config::LimitFPS && !settings.input.fastForwardMode);
+		{
+			const bool wait = config::LimitFPS && !settings.input.fastForwardMode;
+			if (wait && !currentBackend->hasQueueControl()) {
+				const auto start = std::chrono::steady_clock::now();
+				currentBackend->push(Buffer, SAMPLE_COUNT, wait);
+				audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+			} else
+				currentBackend->push(Buffer, SAMPLE_COUNT, wait);
+		}
 		writePtr = 0;
 	}
 }
@@ -121,6 +143,7 @@ void InitAudio()
 {
 	registerForEvents();
 	TermAudio();
+	requestedFrames = 0; silentFrames = 0; underruns = 0; droppedFrames = 0;
 
 	std::string slug = config::AudioBackend;
 	currentBackend = AudioBackend::getBackend(slug);
@@ -173,6 +196,27 @@ void TermAudio()
 	currentBackend->term();
 	INFO_LOG(AUDIO, "Terminating audio backend \"%s\" (%s)...", currentBackend->slug.c_str(), currentBackend->getName().c_str());
 	currentBackend = nullptr;
+}
+
+void ClearAudioOutput()
+{
+	writePtr = 0;
+	if (currentBackend != nullptr) {
+		if (currentBackend->hasQueueControl())
+			currentBackend->clear();
+		else {
+			// Backends without a queue API must be reopened to discard old PCM.
+			TermAudio();
+			InitAudio();
+		}
+	}
+}
+
+u32 AudioOutputQueuedFrames()
+{
+	if (!currentBackend || !currentBackend->hasQueueControl())
+		return std::numeric_limits<u32>::max();
+	return writePtr + currentBackend->queuedFrames();
 }
 
 void StartAudioRecording(bool eight_khz)

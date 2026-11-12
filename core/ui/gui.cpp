@@ -42,6 +42,10 @@
 #include "gui_font.h"
 #include "imgread/common.h"
 #include "emulator.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/roms.h"
+#include "hw/hikaru/frontend.h"
+#endif
 #include "mainui.h"
 #include "lua/lua.h"
 #include "gui_chat.h"
@@ -862,6 +866,9 @@ static void appendVectorData(void *context, void *data, int size)
 static void getScreenshot(std::vector<u8>& data, int width = 0)
 {
 	data.clear();
+	// Hikaru has its own presenter; the Dreamcast renderer retains unrelated
+	// pixels. Leave the optional thumbnail empty until that presenter supplies it.
+	if (settings.platform.isHikaru()) return;
 	std::vector<u8> rawData;
 	int height = 0;
 	if (renderer == nullptr || !renderer->GetLastFrame(rawData, width, height))
@@ -1123,6 +1130,15 @@ static void gui_display_commands()
 			if (IconButton(ICON_FA_TROPHY, T("Achievements"), ScaledVec2(buttonWidth, 50)).realize() && achievements::isActive())
 				gui_setState(GuiState::Achievements);
 		}
+#ifdef USE_HIKARU
+        if (hikaru::frontend::cardReaderAvailable()) {
+            if (ImGui::Button(T("Cards"), ScaledVec2(buttonWidth, 50))) ImGui::OpenPopup("HikaruCards");
+            if (ImGui::BeginPopup("HikaruCards")) {
+                GuiMenu::renderCardsMenu();
+                ImGui::EndPopup();
+            }
+        }
+#endif
 		// Barcode
 		if (card_reader::barcodeAvailable())
 		{
@@ -2273,6 +2289,12 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	// standalone path for arcade scraping and local-only disc-header discovery.
 	art = game.arcade || !config::FetchBoxart
 		? boxart.getBoxartAndLoad(game, false) : boxart.getBoxart(game);
+#ifdef USE_HIKARU
+	// Cached artwork can retain a title from an older scanner. Use the
+	// current library title while keeping the cached artwork and metadata.
+	if (game.arcade && !game.name.empty() && hikaru::findGame(get_file_basename(game.fileName)))
+		art.name = game.name;
+#endif
 	const std::string localCoverOverride = boxart.getLibraryCoverMediaPath(game);
 	if (!localCoverOverride.empty())
 		art.boxartPath = localCoverOverride;
@@ -4952,6 +4974,10 @@ void gui_term()
 		librarySavestateCache.stop();
 		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
+		// The atlas owns these fonts. A later UI context must start with its
+		// own default font until gui_loadFonts populates the new atlas.
+		boldFont = largeFont = aboutAsciiFont = nullptr;
+		settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
 		EventManager::unlisten(Event::Pause, emuEventCallback);

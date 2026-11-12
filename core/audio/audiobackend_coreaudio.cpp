@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /*
     Simple Core Audio backend for osx (and maybe ios?)
     Based off various audio core samples and dolphin's code
@@ -17,6 +18,7 @@
 #include "stdclass.h"
 
 #include <atomic>
+#include <chrono>
 
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioQueue.h>
@@ -43,6 +45,7 @@ class CoreAudioBackend : public AudioBackend
 								UInt32 bus, UInt32 frames, AudioBufferList* abl)
 	{
 		CoreAudioBackend *backend = (CoreAudioBackend *)ctx;
+		audioOutputRequested(frames);
 		for (int i = 0; i < abl->mNumberBuffers; i++)
 		{
 			int size = abl->mBuffers[i].mDataByteSize;
@@ -52,6 +55,7 @@ class CoreAudioBackend : public AudioBackend
 				int avail = (backend->samples_wptr - backend->samples_rptr + backend->BUFSIZE) % backend->BUFSIZE;
 				if (avail == 0)
 				{
+					audioOutputUnderrun(size / 4);
 					//printf("Core Audio: buffer underrun %d bytes (%d)", size, abl->mBuffers[i].mDataByteSize);
 					memset(outBuffer, '\0', size);
 					return noErr;
@@ -175,7 +179,9 @@ public:
 			{
 				if (!wait)
 					break;
+				const auto start = std::chrono::steady_clock::now();
 				bufferEmpty.Wait();
+				audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
 				continue;
 			}
 			avail = std::min(avail, size);
@@ -198,6 +204,20 @@ public:
 		delete [] samples_temp;
 		samples_temp = nullptr;
 	}
+
+	void clear() override
+	{
+		AudioOutputUnitStop(audioUnit);
+		samples_rptr = samples_wptr.load();
+		bufferEmpty.Set();
+		AudioOutputUnitStart(audioUnit);
+	}
+
+	u32 queuedFrames() override
+	{
+		return ((samples_wptr.load() - samples_rptr.load() + BUFSIZE) % BUFSIZE) / 4;
+	}
+	bool hasQueueControl() const override { return true; }
 
 	static void recordCallback(void *inUserData, AudioQueueRef inAQ, AudioQueueBufferRef inBuffer,
 			const AudioTimeStamp *inStartTime, UInt32 frameSize, const AudioStreamPacketDescription *dataFormat)

@@ -2,12 +2,11 @@
 // Audio Overload SDK
 //
 // Copyright (c) 2007-2009 R. Belmont and Richard Bannister, and others.
+// Portions Copyright 2026 The Hollycast Authors
 // All rights reserved.
 //
 
 #include "build.h"
-
-#if FEAT_DSPREC != DYNAREC_JIT
 
 #include "dsp.h"
 #include "aica.h"
@@ -19,7 +18,7 @@ namespace aica
 namespace dsp
 {
 
-void runStep()
+void runInterpreterStep()
 {
 	if (state.stopped)
 		return;
@@ -184,7 +183,7 @@ void runStep()
 					//if (NOFL)
 					//	MEMVAL[(step + 2) & 3] = (*(s16 *)&aica_ram[ADDR]) << 8;
 					//else
-						MEMVAL[(step + 2) & 3] = UNPACK(*(u16 *)&aica_ram[ADDR & ARAM_MASK]);
+						MEMVAL[(step + 2) & 3] = UNPACK(*(u16 *)&aica_ram[ADDR & ramMask()]);
 				}
 				if (MWT)
 				{
@@ -192,7 +191,7 @@ void runStep()
 					//if (NOFL)
 					//	*(s16 *)&aica_ram[ADDR] = SHIFTED >> 8;
 					//else
-						*(u16 *)&aica_ram[ADDR & ARAM_MASK] = PACK(SHIFTED);
+						*(u16 *)&aica_ram[ADDR & ramMask()] = PACK(SHIFTED);
 				}
 			}
 		}
@@ -217,6 +216,12 @@ void runStep()
 		state.MDEC_CT = state.RBL + 1;		// RBL is ring buffer length - 1
 }
 
+#if FEAT_DSPREC != DYNAREC_JIT
+void runStep()
+{
+	runInterpreterStep();
+}
+#endif
+
 } // namespace dsp
 } // namespace aica
-#endif

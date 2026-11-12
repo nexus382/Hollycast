@@ -1,5 +1,8 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "types.h"
+#include "emulator.h"
+#include "hw/mem/addrspace.h"
 #include "hw/sh4/modules/modules.h"
 #include "hw/sh4/sh4_if.h"
 #include "hw/sh4/sh4_mmr.h"
@@ -7,10 +10,10 @@
 
 class TimerTest : public ::testing::Test {
 	void SetUp() override {
-		tmu.init();
-	}
-	void TearDown() override {
-		tmu.term();
+		ASSERT_TRUE(addrspace::reserve());
+		// The shared emulator owns the timer registrations across hardware tests.
+		emu.init();
+		emu.dc_reset(true);
 	}
 
 protected:

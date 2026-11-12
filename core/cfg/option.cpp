@@ -81,6 +81,24 @@ Option<bool> AutoLatency("aica.AutoLatency",
 		);
 
 OptionString AudioBackend("backend", "auto", "audio");
+#ifdef USE_HIKARU
+Option<HikaruSortingMode> HikaruSorting("HikaruSorting", HikaruSortingMode::PerTriangle);
+Option<int> HikaruMaxLayers("HikaruMaxLayers", 32);
+Option<bool> HikaruAudioPacing("HikaruAudioPacing", true);
+Option<bool> HikaruBraveMouseAim("HikaruBraveMouseAim", false, "input");
+Option<bool> HikaruBraveGamepad("HikaruBraveGamepad", true, "input");
+Option<bool> HikaruAirTrixDpadBoard("HikaruAirTrixDpadBoard", false, "input");
+Option<bool> HikaruPlanetDpadStick("HikaruPlanetDpadStick", true, "input");
+Option<int, false> HikaruAirTrixRegion("HikaruAirTrixRegion", -1, "input");
+Option<int, false> HikaruBraveRegion("HikaruBraveRegion", -1, "input");
+Option<int, false> HikaruPlanetRegion("HikaruPlanetRegion", -1, "input");
+Option<int, false> HikaruVirtualOn4Region("HikaruVirtualOn4Region", -1, "input");
+Option<int, false> HikaruNascarRegion("HikaruNascarRegion", -1, "input");
+Option<int, false> HikaruStarWarsRacerRegion("HikaruStarWarsRacerRegion", -1, "input");
+Option<bool> HikaruStarWarsRacerGamepad("HikaruStarWarsRacerGamepad", true, "input");
+Option<bool> HikaruNascarGamepad("HikaruNascarGamepad", true, "input");
+Option<bool> HikaruVirtualOn4TwinStick("HikaruVirtualOn4TwinStick", true, "input");
+#endif
 AudioVolumeOption AudioVolume;
 Option<bool> VmuSound("VmuSound", false, "audio");
 

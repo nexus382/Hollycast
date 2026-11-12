@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "build.h"
 
@@ -125,6 +126,18 @@ static inline bool isPerPixel(RenderType renderType) {
 			|| renderType == RenderType::DirectX11_OIT || renderType == RenderType::Metal_OIT;
 }
 
+// Hikaru supplies its own transparency passes. The host still owns window/UI
+// resources, and must return to the requested OIT renderer for other systems.
+static inline RenderType hostRendererType(RenderType requested, bool hikaru) {
+	if (hikaru) {
+		if (isOpenGL(requested)) return RenderType::OpenGL;
+		if (isVulkan(requested)) return RenderType::Vulkan;
+		if (isMetal(requested)) return RenderType::Metal;
+		if (requested == RenderType::DirectX11_OIT) return RenderType::DirectX11;
+	}
+	return requested;
+}
+
 enum class KeyboardLayout {
 	JP = 1,
 	US,
@@ -160,6 +173,7 @@ struct settings_t
 		bool isNaomi1() const { return system == DC_PLATFORM_NAOMI; }
 		bool isNaomi2() const { return system == DC_PLATFORM_NAOMI2; }
 		bool isNaomi() const { return isNaomi1() || isNaomi2(); }
+		bool isHikaru() const { return system == DC_PLATFORM_HIKARU; }
 		bool isAtomiswave() const { return system == DC_PLATFORM_ATOMISWAVE; }
 		bool isArcade() const { return !isConsole(); }
 		bool isConsole() const { return system == DC_PLATFORM_DREAMCAST; }

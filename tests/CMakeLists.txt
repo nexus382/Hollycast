@@ -26,6 +26,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/Sh4InterpreterTest.cpp
         src/AssemblyDebuggerTest.cpp
         src/SorterTest.cpp
+        src/PvrMessageQueueTest.cpp
         src/MmuTest.cpp
         src/HttpTest.cpp
         src/IniFileTest.cpp
@@ -38,6 +39,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/imgread/GdiTest.cpp
         src/input/ButtonComboTest.cpp
         src/input/GamepadInputHandlingTest.cpp
+        src/input/HikaruGamepadPresetTest.cpp
         src/input/MultiBindMappingTest.cpp
         src/input/InputDefTest.cpp
         src/input/InputMappingConfigFileTest.cpp
@@ -67,6 +69,23 @@ if(LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
 endif()
 
+if(USE_HIKARU)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruStateTest.cpp src/HikaruCardStateTest.cpp src/HikaruAudioPacerTest.cpp src/HikaruSoundFrameTest.cpp src/HikaruAuditTest.cpp src/HikaruInputBindingsTest.cpp src/HikaruCabinetSettingsTest.cpp src/HikaruFrameWorkerTest.cpp)
+endif()
+
+if(USE_HIKARU AND USE_VULKAN AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruVulkanTest.cpp)
+    # Expose the generic-shader oracle only in the native test executable.
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/vulkan.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
+if(USE_HIKARU AND USE_DX11 AND WIN32 AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruDx11Test.cpp)
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/dx11.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/DcnetProbeTest.cpp
@@ -85,3 +104,6 @@ if(NOT LIBRETRO)
         src/ui/VideoPresetTest.cpp
         src/ui/AndroidMenuPopupTest.cpp)
 endif()
+
+# Hikaru bring-up checks also run without the rest of the emulator's dependencies.
+add_subdirectory(hikaru)

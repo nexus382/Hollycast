@@ -290,6 +290,8 @@ void input_sdl_init()
 	{
 		// We want joystick events even if we loose focus
 		SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+		// DualSense Bluetooth rumble requires extended reports before SDL queries capabilities.
+		SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
 #ifdef _WIN32
 		if (config::loadBool("input", "DisableXInput", false))
 		{

@@ -2,6 +2,7 @@
     Created on: Oct 19, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -19,6 +20,9 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "gl_context.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#endif
 #if defined(LIBRETRO)
 #include "libretro.h"
 #elif defined(TARGET_IPHONE)
@@ -184,6 +188,12 @@ void GLGraphicsContext::postInit()
 
 void GLGraphicsContext::preTerm()
 {
+#ifdef USE_HIKARU
+	// Release Hikaru GL objects while this context is still current; the
+	// live machine is restored when a replacement context renders.
+	if (settings.platform.isHikaru())
+		hikaru::frontend::suspendGraphics();
+#endif
 #ifndef LIBRETRO
 	imguiDriver.reset();
 #endif

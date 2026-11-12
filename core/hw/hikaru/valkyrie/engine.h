@@ -1,0 +1,162 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct HikaruEngine HikaruEngine;
+typedef struct HikaruFrame HikaruFrame;
+typedef enum {
+    HIKARU_ENGINE_GAME_AIRTRIX = 0,
+    HIKARU_ENGINE_GAME_BRAVEFF = 1,
+    HIKARU_ENGINE_GAME_PHARRIER = 2,
+    HIKARU_ENGINE_GAME_VON4 = 3,
+    HIKARU_ENGINE_GAME_SGNASCAR = 4,
+    HIKARU_ENGINE_GAME_SWRACER = 5
+} HikaruEngineGame;
+typedef enum {
+    /* Sort retained source strips back-to-front by transformed view-space centroid. */
+    HIKARU_TRANSPARENCY_PER_STRIP = 0,
+    /* Sort source triangles back-to-front by transformed view-space centroid. */
+    HIKARU_TRANSPARENCY_PER_TRIANGLE = 1,
+    /* Exact per-pixel depth peeling; the retained layer bound is configurable. */
+    HIKARU_TRANSPARENCY_PER_PIXEL = 2
+} HikaruTransparencySorting;
+#define HIKARU_MAX_TRANSPARENCY_LAYERS 128u
+#define HIKARU_DEFAULT_TRANSPARENCY_LAYERS 32u
+#define HIKARU_DEFAULT_TRANSPARENCY_BUDGET (UINT64_C(512) * 1024 * 1024)
+#define HIKARU_ENGINE_BRAM_SIZE 65536u
+typedef struct {
+    const uint8_t *boot; size_t boot_size;
+    const uint8_t *program; size_t program_size;
+    const uint8_t *data; size_t data_size;
+    // Opt in to immutable cartridge views. The caller must retain program/data
+    // until engine destruction. BIOS stays private for the optional bypass patch.
+    int borrow_cartridge;
+} HikaruEngineRoms;
+typedef struct {
+    uint16_t players[2];
+    uint16_t analog[8];
+    uint8_t test, service, coin[2];
+} HikaruEngineInputs;
+typedef struct {
+    void *opaque;
+    void (*reset)(void *opaque);
+    int (*read)(void *opaque, unsigned size, uint32_t address, uint64_t *value);
+    int (*write)(void *opaque, unsigned size, uint32_t address, uint64_t value);
+    int (*advance)(void *opaque, uint32_t sh4_cycles);
+    void (*set_inputs)(void *opaque, const HikaruEngineInputs *inputs);
+    // Set AICA pending level; return its level after the MIE interrupt mask.
+    // Required only when attaching a real sound backend.
+    int (*set_sound_irq)(void *opaque, int asserted);
+} HikaruEngineMie;
+typedef struct {
+    void *opaque;
+    void (*reset)(void *opaque);
+    int (*read)(void *opaque, unsigned size, uint32_t bus_address, uint64_t *value);
+    int (*write)(void *opaque, unsigned size, uint32_t bus_address, uint64_t value);
+} HikaruEngineProtection;
+
+// Optional dual sound-board backend. Calls are serialized on the emulation
+// thread and callbacks must not throw. RAM is engine-owned until detach.
+typedef struct {
+    void *opaque;
+    int (*attach)(void *opaque, unsigned board, uint8_t *ram, size_t size);
+    void (*detach)(void *opaque);
+    int (*reset)(void *opaque);
+    int (*set_reset)(void *opaque, int asserted); // MIE SND_RES pin
+    int (*read)(void *opaque, unsigned board, uint32_t offset, unsigned size, uint64_t *value);
+    int (*write)(void *opaque, unsigned board, uint32_t offset, unsigned size, uint64_t value);
+    int (*advance)(void *opaque, uint32_t sh4_cycles);
+    int (*irq)(void *opaque, unsigned board); // 0 clear, 1 asserted, -1 error
+} HikaruEngineSound;
+
+// Requires a current OpenGL 3.2 or OpenGL ES 3.0 context for graphics calls.
+// Machine/control calls must be serialized; completed packet drawing may
+// overlap frame building as described below. Only one instance is supported. ROM contents are
+// copied unless borrow_cartridge is set. BIOS EEPROM bypass is an upstream compatibility patch and must be
+// explicitly enabled. The caller retains ownership of MIE, protection, context
+// and target; protection callbacks receive absolute external-bus addresses.
+// Host callbacks must not throw exceptions through this C boundary.
+// The original entry point selects Air Trix for existing callers.
+HikaruEngine *hikaru_engine_create(const HikaruEngineRoms *roms,
+    const HikaruEngineMie *mie, const HikaruEngineProtection *protection,
+    uint32_t target_fbo, unsigned width, unsigned height,
+    int allow_bios_eeprom_bypass, char *error, size_t error_size);
+// Only the games listed above are accepted. ROM sections are already
+// assembled: all use a 2 MiB BIOS. Air Trix uses 8/128 MiB program/data;
+// Brave Firefighters, Planet Harriers, VON4 and NASCAR use 64/256 MiB regions,
+// retaining zero-filled program socket gaps and any unpopulated sockets.
+// Protection callbacks remain required; the host supplies an unprotected bus
+// backend for a board without a security processor. No game patches are enabled.
+HikaruEngine *hikaru_engine_create_game(HikaruEngineGame game, const HikaruEngineRoms *roms,
+    const HikaruEngineMie *mie, const HikaruEngineProtection *protection,
+    uint32_t target_fbo, unsigned width, unsigned height,
+    int allow_bios_eeprom_bypass, char *error, size_t error_size);
+int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inputs);
+// Reusable host-only graphics packets. Creation/destruction and frame building
+// require no graphics context. Build is serialized with machine/state/sound
+// access; drawing a different completed packet may run concurrently on the
+// graphics thread. A packet remains exclusively owned until drawing returns.
+HikaruFrame *hikaru_frame_create(void);
+void hikaru_frame_destroy(HikaruFrame *frame);
+int hikaru_engine_build_frame(HikaruEngine *engine, const HikaruEngineInputs *inputs, HikaruFrame *frame);
+// Requires the current graphics context/scope. Errors are separate from the
+// emulation thread's engine error buffer. Packets retain no graphics handles.
+int hikaru_engine_draw_frame(HikaruEngine *engine, HikaruFrame *frame, char *error, size_t error_size);
+// After discarding accepted packets, rebase the next draw against live RAM.
+// CPU-only, serialized with frame building; retains the live CP strip carry.
+void hikaru_engine_discard_frames(HikaruEngine *engine);
+// Frame-boundary, native-layout snapshots; external I/O/audio are saved by the
+// host. A load requires the exact measured size and a current graphics scope.
+// layout changes reject incompatible native CPU/GPU layouts before mutation.
+// Saves always write CURRENT. Legacy loads retain the low tables and clear
+// upper banks that were not represented by that encoding.
+enum { HIKARU_STATE_ENCODING_LEGACY = 1, HIKARU_STATE_ENCODING_CURRENT = 2 };
+uint64_t hikaru_engine_state_layout(uint32_t encoding);
+size_t hikaru_engine_state_size(HikaruEngine *engine, uint32_t encoding);
+int hikaru_engine_save_state(HikaruEngine *engine, uint8_t *data, size_t size);
+int hikaru_engine_load_state(HikaruEngine *engine, const uint8_t *data, size_t size, uint32_t encoding);
+
+// Configure both SH-4s in MHz (100..300). Device clocks remain at the board
+// baseline; changing the clock resets the fractional CPU-cycle accumulator.
+int hikaru_engine_set_cpu_clock_mhz(HikaruEngine *engine, unsigned mhz);
+// Installs both real boards before the first frame; failure leaves the legacy
+// compatibility path in place. Detach is called before RAM is destroyed.
+int hikaru_engine_set_sound(HikaruEngine *engine, const HikaruEngineSound *sound);
+// Battery-backed RAM is transferred as exactly HIKARU_ENGINE_BRAM_SIZE bytes.
+// Calls are serialized with frame execution. A new machine starts with blank RAM.
+int hikaru_engine_get_bram(const HikaruEngine *engine, uint8_t *data, size_t size);
+// Snapshot the known BIOS revisions' cabinet working copies at master RAM
+// 0x980. Callers validate them before initializing an erased MIE EEPROM.
+int hikaru_engine_get_cabinet_defaults(const HikaruEngine *engine, uint8_t *data, size_t size);
+int hikaru_engine_set_bram(HikaruEngine *engine, const uint8_t *data, size_t size);
+void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
+// Set the host output aspect ratio; the default preserves the board's 4:3 output.
+void hikaru_engine_set_output_aspect_ratio(HikaruEngine *engine, float aspect_ratio);
+// Release before the host context is destroyed, then restore on its replacement.
+// CPU, GPU registers, RAM and sound-board state survive this transition. A new
+// renderer starts with empty host render targets and decoded texture caches.
+int hikaru_engine_release_graphics(HikaruEngine *engine);
+int hikaru_engine_restore_graphics(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
+// Set the 4:3 internal 3D vertical resolution. Requires a current GL context;
+// targets are reallocated at the next frame. The default is 480 pixels.
+// Aspect ratio changes the 3D field of view; output stretching is independent.
+int hikaru_engine_set_internal_resolution(HikaruEngine *engine, unsigned height, float aspect_ratio);
+// Selects translucent mesh order, per-triangle centroid order, or per-pixel
+// depth peeling (bounded to the configured translucent layer capacity).
+int hikaru_engine_set_transparency_sorting(HikaruEngine *engine, HikaruTransparencySorting sorting);
+// Set retained per-pixel layers (1 through HIKARU_MAX_TRANSPARENCY_LAYERS).
+// The renderer probes one additional layer and reports when the bound is exceeded.
+int hikaru_engine_set_transparency_peel_capacity(HikaruEngine *engine, unsigned layers);
+// Budget for lazily allocated per-pixel color/depth targets, including the overflow probe.
+int hikaru_engine_set_transparency_memory_budget(HikaruEngine *engine, uint64_t bytes);
+const char *hikaru_engine_last_error(const HikaruEngine *engine);
+void hikaru_engine_destroy(HikaruEngine *engine);
+#ifdef __cplusplus
+}
+#endif

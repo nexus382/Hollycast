@@ -247,6 +247,18 @@ TEST_F(AssemblyDebuggerTest, ClosePreservesDisabledDynarecPreference)
     EXPECT_EQ(emu.getSh4Executor(), interpreter);
 }
 
+TEST_F(AssemblyDebuggerTest, RejectsHikaruAndReopensForDreamcast)
+{
+    assembly_debugger::close();
+    const auto previousSystem = settings.platform.system;
+    settings.platform.system = DC_PLATFORM_HIKARU;
+    EXPECT_FALSE(assembly_debugger::available());
+    EXPECT_FALSE(assembly_debugger::open());
+    EXPECT_FALSE(assembly_debugger::active());
+    settings.platform.system = previousSystem;
+    EXPECT_TRUE(assembly_debugger::open());
+}
+
 TEST_F(AssemblyDebuggerTest, BlocksConflictingDebuggerAndOnlineModes)
 {
     assembly_debugger::close();

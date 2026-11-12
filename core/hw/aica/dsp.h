@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "types.h"
 #include "serialize.h"
@@ -57,11 +58,14 @@ extern DSPState state;
 void init();
 void term();
 void step();
+void stepInterpreter();
 void writeProg(u32 addr);
 
 void recInit();
 void recTerm();
 void runStep();
+// Available even when the Dreamcast DSP recompiler is enabled.
+void runInterpreterStep();
 void recompile();
 
 struct Instruction

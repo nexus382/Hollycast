@@ -1,0 +1,273 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
+/* Exact saved Air Trix samples and synthetic boundaries exercise the actual
+ * command decoder and production GLSL. Q1.15 cutoff packing is established
+ * from the game builder. Compact-float reconstruction, LUT endpoints and
+ * bank orientation remain the documented experimental renderer contract. */
+#define GL_SILENCE_DEPRECATION
+#include <SDL.h>
+#ifdef __APPLE__
+#include <OpenGL/gl3.h>
+#else
+#include <glad/gl.h>
+#endif
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <math.h>
+#include <stddef.h>
+#include "mach/hikaru/hikaru-gpu-private.h"
+int hikaru_vendor_test_spot_pixels(const hikaru_light_t *,const float[3],const float[3],int,unsigned,unsigned,const uint16_t[16],uint8_t[4],unsigned);
+int hikaru_vendor_test_shader_uniform_cache(void);
+int hikaru_vendor_test_abgr_upload(void);
+int hikaru_vendor_test_prelit_material_pixels(uint32_t, const uint16_t[3], bool,
+    const uint8_t[3], const uint8_t[3], const uint8_t[4], uint8_t[4], uint32_t);
+int hikaru_vendor_test_decode_451(uint32_t,uint32_t,hikaru_light_t *);
+void hikaru_vendor_test_spot_upload_counts(unsigned *, unsigned *);
+void hikaru_vendor_test_spot_upload_counts_reset(void);
+void hikaru_vendor_test_reset_shader_cache(unsigned);
+void hikaru_vendor_test_uniform_cache_bypass(bool);
+void hikaru_vendor_test_with_gl_guard(void (*draw)(void));
+static int failed;
+static unsigned slot,curve,lamp_flags;
+static const uint16_t captured_table[16]={51,102,204,307,409,512,563,614,665,716,768,819,870,921,972,1024};
+static const uint16_t nonlinear_table[16]={0,0,0,0,0,0,0,256,768,768,768,768,768,768,768,1024};
+static const uint16_t *active_table=captured_table;
+static void decode(hikaru_light_t *light,uint32_t payload,int disabled){
+ if(!hikaru_vendor_test_decode_451(disabled?0x01000451:0x451,payload,light)){failed++;return;}
+ int ok=light->has_451 && light->has_specular==!disabled;
+ for(unsigned i=0;i<4;++i)if(((const uint8_t *)light)[offsetof(hikaru_light_t, specular)+i] != ((payload>>(8*i))&255))ok=0;
+ if(!ok){fprintf(stderr,"451 decoder payload%08x or enabled flag FAIL\n",payload);failed++;}
+}
+
+static void check(const char *name,const hikaru_light_t *light,const float position[3],const float normal[3],int unlit,const uint8_t expected[3]) {
+ uint8_t actual[4]={0};
+ if(!hikaru_vendor_test_spot_pixels(light,position,normal,unlit,slot,curve,active_table,actual,lamp_flags)){fprintf(stderr,"%s draw failed\n",name);failed++;return;}
+ int ok=actual[3]==255;
+ for(int c=0;c<3;c++){int d=(int)actual[c]-expected[c];if(d < -2 || d > 2)ok=0;}
+ printf("%s: RGB %u,%u,%u expected %u,%u,%u %s\n",name,actual[0],actual[1],actual[2],expected[0],expected[1],expected[2],ok?"PASS":"FAIL");
+ if(!ok)failed++;
+}
+static void expect_uploads(const char *name,unsigned expected_params,unsigned expected_tables) {
+ unsigned params,tables; hikaru_vendor_test_spot_upload_counts(&params,&tables);
+ if(params!=expected_params || tables!=expected_tables) {
+  fprintf(stderr,"%s: spot uploads params=%u tables=%u expected %u,%u\n",name,params,tables,expected_params,expected_tables);failed++;
+ }
+}
+static void cache_probe(void) {
+ hikaru_light_t light={0};const float pos[3]={0,0,-10},normal[3]={0,0,1};
+ const uint8_t full[3]={200,100,50},white[3]={255,255,255};
+ uint16_t table[16];memcpy(table,captured_table,sizeof table);active_table=table;slot=curve=0;
+ light.has_position=light.has_direction=1;light.direction[2]=-1;
+ light.attenuation[0]=-1;light.attenuation[1]=-100;
+ light.diffuse[0]=200;light.diffuse[1]=100;light.diffuse[2]=50;
+ decode(&light,0,0);hikaru_vendor_test_spot_upload_counts_reset();
+ check("cache initial",&light,pos,normal,0,full);expect_uploads("initial",1,1);
+ check("cache repeated values",&light,pos,normal,0,full);expect_uploads("repeat",1,1);
+ check("cache program switch control",&light,pos,normal,1,white);
+ check("cache switch back",&light,pos,normal,0,full);expect_uploads("switch back",1,1);
+ decode(&light,0x00100000,0);
+ check("cache parameters change",&light,pos,normal,0,full);expect_uploads("params",2,1);
+ table[0]++;
+ check("cache table change",&light,pos,normal,0,full);expect_uploads("table",2,2);
+ light.has_451=0;
+ check("cache absent 451",&light,pos,normal,0,full);expect_uploads("absent",3,2);
+ light.has_451=1;
+ check("cache enable same table",&light,pos,normal,0,full);expect_uploads("enable same",4,2);
+ light.has_451=0;
+ check("cache absent again",&light,pos,normal,0,full);expect_uploads("absent again",5,2);
+ table[1]++;
+ check("cache absent table change",&light,pos,normal,0,full);expect_uploads("absent table",5,2);
+ light.has_451=1;
+ check("cache reenable changed table",&light,pos,normal,0,full);expect_uploads("enable changed",6,3);
+ /* The disabled bit also changes the legacy specular shader variant. */
+ decode(&light,0x00100000,1);
+ check("cache disabled variant",&light,pos,normal,0,full);expect_uploads("disabled variant",7,3);
+ decode(&light,0x00100000,0);
+ check("cache enabled variant restored",&light,pos,normal,0,full);expect_uploads("variant restored",7,3);
+ /* A second spotlight variant must retain its own program slot on cache hits. */
+ slot=1;
+ check("cache second spotlight program",&light,pos,normal,0,full);expect_uploads("second program",8,4);
+ check("cache second spotlight hit",&light,pos,normal,0,full);expect_uploads("second hit",8,4);
+ hikaru_vendor_test_uniform_cache_bypass(true);
+ check("cache location bypass hit",&light,pos,normal,0,full);expect_uploads("bypass hit",8,4);
+ hikaru_vendor_test_uniform_cache_bypass(false);
+ slot=0;
+ check("cache first spotlight restored",&light,pos,normal,0,full);expect_uploads("first restored",8,4);
+ slot=1;
+ check("cache second spotlight restored",&light,pos,normal,0,full);expect_uploads("second restored",8,4);
+ slot=0;active_table=captured_table;
+}
+static void replacement_probe(void) {
+ hikaru_light_t light={0};const float pos[3]={0,0,-10},normal[3]={0,0,1};const uint8_t full[3]={200,100,50};
+ light.has_position=light.has_direction=1;light.direction[2]=-1;
+ light.attenuation[0]=-1;light.attenuation[1]=-100;
+ light.diffuse[0]=200;light.diffuse[1]=100;light.diffuse[2]=50;
+ slot=curve=0;active_table=captured_table;decode(&light,0,0);
+ /* Three real light-slot variants overflow the two-program cache. */
+ hikaru_vendor_test_reset_shader_cache(2);
+ check("cache replacement prime",&light,pos,normal,0,full);
+ slot=1;check("cache replacement second variant",&light,pos,normal,0,full);
+ slot=2;check("cache replacement third variant",&light,pos,normal,0,full);
+ slot=0;hikaru_vendor_test_spot_upload_counts_reset();
+ check("cache linked-program replacement",&light,pos,normal,0,full);expect_uploads("replacement",1,1);
+ hikaru_vendor_test_reset_shader_cache(0);
+}
+static void run(void) {
+ int cache_ok=hikaru_vendor_test_shader_uniform_cache();
+ printf("production uniform cache: %s\n",cache_ok?"PASS":"FAIL");
+ if(!cache_ok)failed++;
+ cache_probe();
+ {hikaru_light_t light={0};
+ const float pos[3]={0.356456961f,-1.16138943f,-45.3150313f}, normal[3]={0.19999989f,0.289478837f,0.929371739f};
+ const float lp[3]={-148.103729f,215.048843f,77.0369034f},ld[3]={48.1948547f,-230.997681f,-209.461975f},atten[2]={-0.0250000004f,-400.0};
+ const uint16_t rgb[3]={156,144,121}; const uint8_t expected[3]={0,0,0};
+ memcpy(light.position,lp,sizeof lp);memcpy(light.direction,ld,sizeof ld);memcpy(light.attenuation,atten,sizeof atten);memcpy(light.diffuse,rgb,sizeof rgb);
+ light.has_position=1;light.has_direction=1;light.att_type=0;light.has_specular=0;
+ decode(&light,0x003c7642,0);
+ check("captured22.5-degree cone rejects25.05-degree sample",&light,pos,normal,0,expected);
+ }
+ {hikaru_light_t light={0};
+ const float pos[3]={-1.32913608f,-0.676665852f,-47.9179479f}, normal[3]={-0.894063474f,0.228729249f,-0.348578463f};
+ const float lp[3]={-31.8713303f,199.078506f,-188.381592f},ld[3]={-28.1948605f,-204.214127f,235.666367f},atten[2]={-0.0250000004f,-400.0};
+ const uint16_t rgb[3]={156,144,121}; const uint8_t expected[3]={34,31,26};
+ memcpy(light.position,lp,sizeof lp);memcpy(light.direction,ld,sizeof ld);memcpy(light.attenuation,atten,sizeof atten);memcpy(light.diffuse,rgb,sizeof rgb);
+ light.has_position=1;light.has_direction=1;light.att_type=0;light.has_specular=0;
+ decode(&light,0x003c7642,0);
+ check("captured22.5-degree cone illuminates18.59-degree penumbra",&light,pos,normal,0,expected);
+ }
+ {hikaru_light_t light={0};
+ const float pos[3]={-1.77031479f,-1.47222201f,-32.791154f}, normal[3]={-0.938997115f,0.296541512f,0.136056429f};
+ const float lp[3]={-10.1986761f,19.8942986f,-4.23469925f},ld[3]={10.2688437f,-22.4858189f,-30.7749462f},atten[2]={-1.0,-10000.0};
+ const uint16_t rgb[3]={255,214,173}; const uint8_t expected[3]={127,107,86};
+ memcpy(light.position,lp,sizeof lp);memcpy(light.direction,ld,sizeof ld);memcpy(light.attenuation,atten,sizeof atten);memcpy(light.diffuse,rgb,sizeof rgb);
+ light.has_position=1;light.has_direction=1;light.att_type=0;light.has_specular=0;
+ decode(&light,0x005f7c33,0);
+ check("captured14-degree center unchanged",&light,pos,normal,0,expected);
+ }
+ {hikaru_light_t light={0};
+ const float pos[3]={0,0,-10},normal[3]={0,0,1};
+ const uint8_t full[3]={200,100,50},black[3]={0,0,0},quarter[3]={50,25,13},half[3]={100,50,25};
+ light.has_position=light.has_direction=1;
+ light.attenuation[0]=-1;light.attenuation[1]=-100;
+ light.diffuse[0]=200;light.diffuse[1]=100;light.diffuse[2]=50;
+ light.direction[0]=sinf(17.0f*3.14159265358979323846f/180.0f);light.direction[2]=-cosf(17.0f*3.14159265358979323846f/180.0f);
+ decode(&light,0x005f7c33,0);
+ check("authored14-degree cone rejects17degrees",&light,pos,normal,0,black);
+ light.direction[0]=0;light.direction[2]=-1;
+ decode(&light,0x003c8000,0);
+ check("Q1.15 cutoff exactly1 has zero angular response",&light,pos,normal,0,black);
+ decode(&light,0x00000000,0);
+ check("cutoff0 scale1 LUT endpoint1",&light,pos,normal,0,full);
+ light.direction[0]=1;light.direction[2]=0;
+ check("cutoff0 LUT endpoint0",&light,pos,normal,0,black);
+ active_table=nonlinear_table;
+ decode(&light,0x00104000,0); /* cutoff1/2, scale2 */
+ light.direction[0]=sqrtf(1.0f-0.75f*0.75f);light.direction[2]=-0.75f;
+ check("nonlinear LUT exact interior sample",&light,pos,normal,0,quarter);
+ light.direction[0]=sqrtf(1.0f-0.765625f*0.765625f);light.direction[2]=-0.765625f;
+ check("nonlinear LUT interpolates adjacent samples",&light,pos,normal,0,half);
+ slot=3;curve=3;decode(&light,0x06104000,0);
+ check("explicit bank3 curve3 upload and full451 payload",&light,pos,normal,0,half);
+ slot=0;curve=0;
+ decode(&light,0x003c8000,1);
+ check("disabled451 leaves positional Lambert unaffected",&light,pos,normal,0,full);
+ light.has_451=0;light.has_specular=0;
+ check("absent451 leaves positional Lambert unaffected",&light,pos,normal,0,full);
+ active_table=captured_table;
+ }
+ {hikaru_light_t light={0}; const float pos[3]={0,0,-10},normal[3]={0,0,1};const uint8_t expected[3]={64,128,192},white[3]={255,255,255};
+ light.has_position=1;light.diffuse[0]=64;light.diffuse[1]=128;light.diffuse[2]=192;light.attenuation[0]=-1;light.attenuation[1]=-100;
+ check("point-light control",&light,pos,normal,0,expected);
+ light.has_position=0;light.has_direction=1;light.direction[2]=1;light.attenuation[0]=1;light.attenuation[1]=1;
+ check("directional-light control",&light,pos,normal,0,expected);
+ check("unlit control",&light,pos,normal,1,white);
+ }
+ replacement_probe();
+}
+static void prelit_material_probe(void) {
+ /* The two tints and 0x881 flags are from the affected banquet-room heads.
+  * Synthetic texels keep these shader regressions independent of game data. */
+ static const struct {
+  const char *name; uint32_t flags; uint16_t tint[3]; bool present;
+  uint8_t diffuse[3], ambient[3], texel[4], expected[4];
+ } cases[]={
+  {"captured pale head",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,255},{200,138,92,255}},
+  {"captured shadowed head",0x000d0881,{105,54,58},true,{0,0,0},{0,0,0},{200,150,100,255},{82,32,23,255}},
+  {"691 above one keeps brightness",0x000d0881,{256,234,234},true,{0,0,0},{0,0,0},{200,150,100,255},{201,138,92,255}},
+  {"zero tint remains black",0x000d0881,{0,0,0},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"missing 691 remains black",0x000d0881,{255,234,234},false,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"691 supplies ambient instead of 291",0x000d0881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{200,150,100,255}},
+  {"plain texture is not multiplied by primary color",0x000d0881,{255,255,255},true,{64,64,64},{0,0,0},{200,150,100,255},{200,150,100,255}},
+  {"unlit plain texture ignores 291",0x00080881,{255,255,255},true,{0,0,0},{64,64,64},{200,150,100,255},{200,150,100,255}},
+  {"untextured material unchanged",0x00050881,{255,255,255},true,{0,0,0},{0,0,0},{200,150,100,255},{0,0,0,255}},
+  {"transparent cutout retained",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,0},{255,0,255,255}},
+  {"partial alpha retained",0x000d0881,{255,234,234},true,{0,0,0},{0,0,0},{200,150,100,128},{200,138,92,128}},
+ };
+ for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
+  uint8_t actual[4]={0};
+  int ok=hikaru_vendor_test_prelit_material_pixels(cases[i].flags,cases[i].tint,cases[i].present,
+      cases[i].diffuse,cases[i].ambient,cases[i].texel,actual,0);
+  for(unsigned c=0;c<4;++c){int d=(int)actual[c]-cases[i].expected[c];if(d < -1 || d > 1)ok=0;}
+  if(!ok){fprintf(stderr,"prelit %s: got RGBA %u,%u,%u,%u\n",cases[i].name,actual[0],actual[1],actual[2],actual[3]);failed++;}
+ }
+}
+static void lamp_ambient_probe(void) {
+ enum {MASKED=1,TWO_SIDED=2,VIEW_AMBIENT=4,NO_AMBIENT=8,NO_DIFFUSE=16};
+ hikaru_light_t light={0};
+ const float position[3]={0,0,-10},front[3]={0,0,1},back[3]={0,0,-1};
+ const uint8_t lit[3]={160,80,40},fill[3]={32,16,8},black[3]={0,0,0},viewport[3]={64,64,64};
+ light.has_direction=1;light.direction[2]=1;
+ light.attenuation[0]=light.attenuation[1]=1;
+ light.diffuse[0]=128;light.diffuse[1]=64;light.diffuse[2]=32;
+ light._051_index=4;slot=curve=lamp_flags=0;active_table=captured_table;
+ check("051 measured quarter fill on front",&light,position,front,0,lit);
+ check("051 measured quarter fill on back",&light,position,back,0,fill);
+ light._051_index=0;
+ check("051 zero resets prior fill",&light,position,back,0,black);
+ light._051_index=4;lamp_flags=MASKED;
+ check("masked light removes its constant fill",&light,position,back,0,black);
+ lamp_flags=MASKED|VIEW_AMBIENT;
+ check("masked light preserves viewport691 ambient",&light,position,back,0,viewport);
+ lamp_flags=TWO_SIDED;
+ check("two sided Lambert adds fill once",&light,position,back,0,lit);
+ lamp_flags=NO_AMBIENT;
+ check("ambient debug mask removes051 fill",&light,position,back,0,black);
+ lamp_flags=NO_DIFFUSE;
+ check("diffuse debug mask removes lamp color",&light,position,front,0,black);
+ lamp_flags=0;light.has_position=1;light.has_direction=0;
+ light.attenuation[0]=0.025f;light.attenuation[1]=0;
+ const uint8_t distance_fill[3]={8,4,2};
+ check("point distance attenuates constant fill",&light,position,back,0,distance_fill);
+ light.has_direction=1;light.direction[2]=-1;
+ light.attenuation[0]=-1;light.attenuation[1]=-100;decode(&light,0,0);
+ check("spot inside cone retains fill",&light,position,back,0,fill);
+ light.direction[0]=sqrtf(0.75f);light.direction[2]=-0.5f;
+ /* At unit .5, t=8 selects captured knot7=614/1024. */
+ const uint8_t curve_fill[3]={19,10,5};
+ check("spot cone attenuates fill with Lambert",&light,position,back,0,curve_fill);
+ light.direction[0]=1;light.direction[2]=0;
+ check("spot outside cone rejects fill",&light,position,back,0,black);
+ lamp_flags=0;
+}
+static void upload_probe(void) {
+ if(!hikaru_vendor_test_abgr_upload()) { fprintf(stderr,"packed texture upload failed\n");failed++; }
+}
+int main(int argc, char **argv){
+ const int gles=argc==2 && !strcmp(argv[1],"--gles");
+ if(SDL_Init(SDL_INIT_VIDEO))return 10;
+ SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,gles?SDL_GL_CONTEXT_PROFILE_ES:SDL_GL_CONTEXT_PROFILE_CORE);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,gles?0:2);
+ SDL_Window *w=SDL_CreateWindow("Hikaru lighting pixels",0,0,9,9,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN);if(!w)return 11;
+ SDL_GLContext context=SDL_GL_CreateContext(w);if(!context)return 12;
+#ifndef __APPLE__
+ if(!(gles?gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress):gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress)))return 9;
+#endif
+ hikaru_vendor_test_with_gl_guard(run);
+ hikaru_vendor_test_with_gl_guard(upload_probe);
+ hikaru_vendor_test_with_gl_guard(prelit_material_probe);
+ hikaru_vendor_test_with_gl_guard(lamp_ambient_probe);
+ SDL_GL_DeleteContext(context);SDL_DestroyWindow(w);SDL_Quit();
+ printf("lighting pixel cases: %s (%d failed)\n",failed?"FAIL":"PASS",failed);
+ return failed?1:0;
+}

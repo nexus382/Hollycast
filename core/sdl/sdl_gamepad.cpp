@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 /*
 	This file is part of Flycast.
 
@@ -320,6 +321,9 @@ SDLGamepad::SDLGamepad(int maple_port, int joystick_idx, SDL_Joystick* sdl_joyst
 }
 
 void SDLGamepad::set_maple_port(int port) {
+	// A wheel may also hold Naomi spring/damper effects on the old port.
+	if (port != maple_port())
+		stopHaptic();
 	GamepadDevice::set_maple_port(port);
 	SDL_JoystickSetPlayerIndex(sdl_joystick, port <= 3 ? port : -1);
 }
@@ -396,40 +400,56 @@ void SDLGamepad::update_rumble()
 	}
 }
 
+void SDLGamepad::setForceFeedback(float force)
+{
+	if (constEffectId != -1)
+		// Cabinet torque is right-positive; Naomi's native effect is left-positive.
+		setTorque(-force);
+	else
+		GamepadDevice::setForceFeedback(force);
+}
+
 void SDLGamepad::setTorque(float torque)
 {
 	if (haptic == nullptr || constEffectId == -1)
 		return;
-	if (torque != 0.f && rumblePower != 0)
+	torque = std::isfinite(torque) ? std::clamp(torque, -1.f, 1.f) : 0.f;
+	const Sint16 level = torque * 32767.f * std::clamp(rumblePower, 0, 100) / 100.f;
+	if (level == 0)
+	{
+		if (torqueRunning && SDL_HapticStopEffect(haptic, constEffectId) == 0)
+			torqueRunning = false;
+		return;
+	}
+	if (level != torqueLevel)
 	{
 		SDL_HapticEffect effect{};
 		effect.type = SDL_HAPTIC_CONSTANT;
 		effect.constant.length = SDL_HAPTIC_INFINITY;
-		if (isWheel)
+		effect.constant.direction.type = isWheel ? SDL_HAPTIC_STEERING_AXIS : SDL_HAPTIC_CARTESIAN;
+		effect.constant.direction.dir[0] = isWheel || level > 0 ? 1 : -1;
+		effect.constant.level = isWheel ? level : std::abs(level);
+		// An upload failure must neither apply stale torque nor prevent a retry.
+		if (SDL_HapticUpdateEffect(haptic, constEffectId, &effect) != 0)
 		{
-			effect.constant.direction.type = SDL_HAPTIC_STEERING_AXIS;
-			effect.constant.direction.dir[0] = 1;
-			effect.constant.level = torque * 32767.f * rumblePower / 100.f;
+			if (torqueRunning && SDL_HapticStopEffect(haptic, constEffectId) == 0)
+				torqueRunning = false;
+			return;
 		}
-		else
-		{
-			effect.constant.direction.type = SDL_HAPTIC_CARTESIAN;
-			effect.constant.direction.dir[0] = torque < 0 ? -1 : 1;	// west/cw if torque < 0
-			effect.constant.level = std::abs(torque) * 32767.f * rumblePower / 100.f;
-		}
-		SDL_HapticUpdateEffect(haptic, constEffectId, &effect);
-		SDL_HapticRunEffect(haptic, constEffectId, 1);
+		torqueLevel = level;
 	}
-	else {
-		SDL_HapticStopEffect(haptic, constEffectId);
-	}
+	// Constant force persists until stopped. Re-running it every frame resets
+	// the driver's effect instead of updating the already running motor.
+	if (!torqueRunning && SDL_HapticRunEffect(haptic, constEffectId, 1) == 0)
+		torqueRunning = true;
 }
 
 void SDLGamepad::stopHaptic()
 {
 	if (haptic != nullptr)
 	{
-		SDL_HapticStopAll(haptic);
+		if (SDL_HapticStopAll(haptic) == 0)
+			torqueRunning = false;
 		if (hasAutocenter)
 			SDL_HapticSetAutocenter(haptic, 0);
 		vib_inclination = 0;
@@ -499,6 +519,8 @@ void SDLGamepad::setDamper(float param, float speed)
 void SDLGamepad::close()
 {
 	NOTICE_LOG(INPUT, "SDL: Joystick '%s' on port %d disconnected", _name.c_str(), maple_port());
+	// Release force before destroying the native device handles.
+	GamepadDevice::Unregister(sdl_gamepads[sdl_joystick_instance]);
 	if (haptic != nullptr)
 	{
 		stopHaptic();
@@ -509,6 +531,8 @@ void SDLGamepad::close()
 		if (constEffectId != -1) {
 			SDL_HapticDestroyEffect(haptic, constEffectId);
 			constEffectId = -1;
+			torqueLevel = 0;
+			torqueRunning = false;
 		}
 		if (springEffectId != -1) {
 			SDL_HapticDestroyEffect(haptic, springEffectId);
@@ -527,7 +551,6 @@ void SDLGamepad::close()
 	if (sdl_controller != nullptr)
 		SDL_GameControllerClose(sdl_controller);
 	SDL_JoystickClose(sdl_joystick);
-	GamepadDevice::Unregister(sdl_gamepads[sdl_joystick_instance]);
 	sdl_gamepads.erase(sdl_joystick_instance);
 }
 
@@ -643,6 +666,21 @@ const char *SDLGamepad::get_axis_name(u32 code)
 			}
 		}
 	return nullptr;
+}
+
+std::shared_ptr<InputMapping> SDLGamepad::getArcadeGamepadMapping()
+{
+	// Wheels keep their individually calibrated steering and pedal mappings.
+	if (sdl_controller == nullptr || isWheel)
+		return {};
+	auto mapping = std::make_shared<DefaultInputMapping<true, true>>(sdl_controller);
+	for (auto [button, key] : {std::pair{SDL_CONTROLLER_BUTTON_LEFTSTICK, DC_BTN_D},
+			std::pair{SDL_CONTROLLER_BUTTON_RIGHTSTICK, DC_DPAD2_DOWN}}) {
+		const auto bind = SDL_GameControllerGetBindForButton(sdl_controller, button);
+		if (bind.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON)
+			mapping->set_button(key, bind.value.button);
+	}
+	return mapping;
 }
 
 std::shared_ptr<InputMapping> SDLGamepad::getDefaultMapping() {

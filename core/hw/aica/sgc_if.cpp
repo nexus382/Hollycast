@@ -30,6 +30,9 @@
 #include "hw/gdrom/gdrom_if.h"
 #include "cfg/option.h"
 #include "serialize.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/state_io.h"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -413,9 +416,19 @@ enum PCMSType
 
 */
 
+#ifdef USE_HIKARU
+#define ACTIVE_CHANNELS activeChannels()
+#else
+#define ACTIVE_CHANNELS Chans
+#endif
+
 struct ChannelEx
 {
 	static ChannelEx Chans[64];
+#ifdef USE_HIKARU
+	static ChannelEx (*selected)[64];
+	static ChannelEx (&activeChannels())[64] { return *selected; }
+#endif
 
 	ChannelCommonData* ccd;
 
@@ -678,6 +691,16 @@ struct ChannelEx
 		u32 dr = std::min(VolMix.DRAtt, max_att);
 		u32 ds = std::min(VolMix.DSPAtt, max_att);
 
+		// Hikaru diagnostics: HIKARU_BGM_TEST forces muted/quiet sends on
+		// sound boards up to send level 12 so silent tracks can be heard.
+		static const bool bgmTest = std::getenv("HIKARU_BGM_TEST") != nullptr;
+		if (bgmTest && collectChannelPeaks) {
+			const u32 floorAtt = u32(ccd->TL) + (3 << 3);
+			dl = std::min(dl, floorAtt);
+			dr = std::min(dr, floorAtt);
+			ds = std::min(ds, floorAtt);
+		}
+
 		oLeft = FPMul<s64>(sample, logtable[dl], 19);	// 16 bits
 		oRight = FPMul<s64>(sample, logtable[dr], 19);	// 16 bits
 		oDsp = FPMul<s64>(sample, logtable[ds], 15);	// 20 bits
@@ -699,11 +722,20 @@ struct ChannelEx
 		return true;
 	}
 
+	static bool collectChannelPeaks;
+	static u32 channelPeaks[64];
+
 	void Step(SampleType& mixl, SampleType& mixr)
 	{
 		SampleType oLeft, oRight, oDsp;
 
-		Step(oLeft, oRight, oDsp);
+		// A voice that ends during Step still contributes its final sample.
+		if (!Step(oLeft, oRight, oDsp))
+			return;
+		if (collectChannelPeaks) {
+			const u32 level = u32(std::abs(oLeft)) + u32(std::abs(oRight)) + u32(std::abs(oDsp >> 4));
+			if (level > channelPeaks[ChannelNumber]) channelPeaks[ChannelNumber] = level;
+		}
 
 		*VolMix.DSPOut += oDsp;
 		if (oLeft + oRight == 0 && !config::DSPEnabled)
@@ -715,7 +747,7 @@ struct ChannelEx
 
 	static void StepAll(SampleType& mixl, SampleType& mixr)
 	{
-		for (ChannelEx& channel : Chans)
+		for (ChannelEx& channel : ACTIVE_CHANNELS)
 			channel.Step(mixl, mixr);
 	}
 
@@ -942,7 +974,7 @@ struct ChannelEx
 			if ((offset == 1 || size == 2) && ccd->KYONEX)
 			{
 				ccd->KYONEX=0;
-				for (ChannelEx& channel : Chans)
+				for (ChannelEx& channel : ACTIVE_CHANNELS)
 				{
 					if (channel.ccd->KYONB)
 						channel.KEY_ON();
@@ -1026,10 +1058,12 @@ struct ChannelEx
 	} 
 
 	static void initAll() {
-		for (std::size_t i = 0; i < std::size(Chans); i++)
-			Chans[i].Init(i, aica_reg);
+		for (std::size_t i = 0; i < std::size(ACTIVE_CHANNELS); i++)
+			ACTIVE_CHANNELS[i].Init(i, aica_reg);
 	}
 };
+
+#undef ACTIVE_CHANNELS
 
 void (ChannelEx::*ChannelEx::STREAM_STEP_LUT[5][2][2])();
 void (ChannelEx::*ChannelEx::STREAM_INITAL_STEP_LUT[5])();
@@ -1058,7 +1092,7 @@ static SampleType DecodeADPCM(u32 sample, s32 prev, s32& quant)
 
 template<typename T>
 static T readAicaRam(u32 addr) {
-	return *(const T *)&aica_ram[addr & ARAM_MASK & ~(sizeof(T) - 1)];
+	return *(const T *)&aica_ram[addr & ramMask() & ~(sizeof(T) - 1)];
 }
 
 template<PCMSType PCMS, bool Last>
@@ -1461,7 +1495,233 @@ static OnLoad staticInit(staticinitialise);
 
 ChannelEx ChannelEx::Chans[64];
 
+static s16 boardExternalInput[2];
+
+struct ChannelState
+{
+	ChannelEx channels[64];
+#ifdef USE_HIKARU
+	s16 externalInput[2]{};
+	u32 channelPeaks[64]{};
+#endif
+};
+#ifdef USE_HIKARU
+static ChannelState* selectedChannels;
+ChannelEx (*ChannelEx::selected)[64] = &ChannelEx::Chans;
+ChannelState* activeChannelState() { return selectedChannels; }
+void selectChannelState(ChannelState* state)
+{
+	selectedChannels = state;
+	ChannelEx::selected = state ? &state->channels : &ChannelEx::Chans;
+	auto& channels = ChannelEx::activeChannels();
+	if (channels[0].ccd != (ChannelCommonData*)&aica_reg[0])
+		for (int i = 0; i < 64; ++i)
+			channels[i].ccd = (ChannelCommonData*)&aica_reg[i * 0x80];
+}
+#define Chans (ChannelEx::activeChannels())
+#else
 #define Chans ChannelEx::Chans
+#endif
+
+ChannelState* createChannelState()
+{
+	return new ChannelState{};
+}
+
+void destroyChannelState(ChannelState* state)
+{
+#ifdef USE_HIKARU
+	verify(selectedChannels != state);
+#endif
+	delete state;
+}
+
+void saveChannelState(ChannelState& state)
+{
+#ifdef USE_HIKARU
+	if (&state != selectedChannels)
+		std::copy(std::begin(Chans), std::end(Chans), std::begin(state.channels));
+	std::copy(std::begin(boardExternalInput), std::end(boardExternalInput), std::begin(state.externalInput));
+	std::copy(std::begin(ChannelEx::channelPeaks), std::end(ChannelEx::channelPeaks), std::begin(state.channelPeaks));
+#else
+	std::copy(std::begin(Chans), std::end(Chans), std::begin(state.channels));
+#endif
+}
+
+void loadChannelState(const ChannelState& state)
+{
+#ifdef USE_HIKARU
+	if (&state != selectedChannels)
+#endif
+		std::copy(std::begin(state.channels), std::end(state.channels), std::begin(Chans));
+#ifdef USE_HIKARU
+	/* Selecting a board already binds its complete channel bank. An
+	 * independent snapshot copy must still rebind every copied pointer. */
+	if (&state != selectedChannels || Chans[0].ccd != (ChannelCommonData*)&aica_reg[0])
+		for (int i = 0; i < 64; ++i)
+			Chans[i].ccd = (ChannelCommonData*)&aica_reg[i * 0x80];
+	std::copy(std::begin(state.externalInput), std::end(state.externalInput), std::begin(boardExternalInput));
+	std::copy(std::begin(state.channelPeaks), std::end(state.channelPeaks), std::begin(ChannelEx::channelPeaks));
+#endif
+}
+
+#ifdef USE_HIKARU
+void serializeHikaruState(const ChannelState& state, hikaru::StateWriter& writer)
+{
+	for (const ChannelEx& channel : state.channels)
+	{
+		writer.value(channel.SA);
+		writer.value(channel.CA);
+		writer.value(channel.step.full);
+		writer.value(channel.s0);
+		writer.value(channel.s1);
+		writer.value(channel.loop.looped);
+		writer.value(channel.adpcm.last_quant);
+		writer.value(channel.adpcm.loopstart_quant);
+		writer.value(channel.adpcm.loopstart_prev_sample);
+		writer.value(channel.adpcm.in_loop);
+		writer.value(channel.noise_state);
+		writer.value(channel.AEG.val);
+		writer.value(channel.AEG.state);
+		writer.value(channel.FEG.value);
+		writer.value(channel.FEG.state);
+		writer.value(channel.FEG.prev1);
+		writer.value(channel.FEG.prev2);
+		writer.value(channel.FEG.fractSave);
+		writer.value(channel.lfo.counter);
+		writer.value(channel.lfo.state);
+		writer.value(channel.enabled);
+	}
+	writer.value(state.externalInput);
+	writer.value(state.channelPeaks);
+}
+
+void deserializeHikaruState(ChannelState& state, hikaru::StateReader& reader)
+{
+	struct SavedChannel
+	{
+		u32 SA, CA, step;
+		SampleType s0, s1;
+		u8 looped;
+		s32 lastQuant, loopstartQuant;
+		SampleType loopstartPrevious;
+		bool inLoop;
+		u32 noiseState;
+		s32 aegValue;
+		EGState aegState;
+		u32 fegValue;
+		EGState fegState;
+		SampleType fegPrevious1, fegPrevious2;
+		s32 fegFraction;
+		u32 lfoCounter;
+		u8 lfoState;
+		bool enabled;
+	};
+	SavedChannel saved[64]{};
+	for (SavedChannel& channel : saved)
+	{
+		reader.value(channel.SA);
+		reader.value(channel.CA);
+		reader.value(channel.step);
+		reader.value(channel.s0);
+		reader.value(channel.s1);
+		reader.value(channel.looped);
+		reader.value(channel.lastQuant);
+		reader.value(channel.loopstartQuant);
+		reader.value(channel.loopstartPrevious);
+		reader.value(channel.inLoop);
+		reader.value(channel.noiseState);
+		reader.value(channel.aegValue);
+		reader.value(channel.aegState);
+		reader.value(channel.fegValue);
+		reader.value(channel.fegState);
+		reader.value(channel.fegPrevious1);
+		reader.value(channel.fegPrevious2);
+		reader.value(channel.fegFraction);
+		reader.value(channel.lfoCounter);
+		reader.value(channel.lfoState);
+		reader.value(channel.enabled);
+		// StreamStep keeps only the 10-bit fractional phase between samples.
+		hikaru::StateReader::require(channel.SA <= 0x7fffff && channel.CA <= 0xffff && channel.step <= 0x3ff,
+			"Invalid Hikaru AICA channel phase");
+		hikaru::StateReader::require(channel.looped <= 1, "Invalid Hikaru AICA loop state");
+		const int aegState = static_cast<int>(channel.aegState);
+		const int fegState = static_cast<int>(channel.fegState);
+		hikaru::StateReader::require(aegState >= EG_Attack && aegState <= EG_Release, "Invalid Hikaru AICA envelope state");
+		hikaru::StateReader::require(fegState >= EG_Attack && fegState <= EG_Release, "Invalid Hikaru AICA filter state");
+	}
+	s16 externalInput[2]{};
+	u32 channelPeaks[64]{};
+	reader.value(externalInput);
+	reader.value(channelPeaks);
+
+	for (size_t i = 0; i < std::size(saved); ++i)
+	{
+		const SavedChannel& source = saved[i];
+		ChannelEx& channel = state.channels[i];
+		channel.SA = source.SA;
+		channel.CA = source.CA;
+		channel.step.full = source.step;
+		channel.s0 = source.s0;
+		channel.s1 = source.s1;
+		channel.loop.looped = source.looped;
+		channel.adpcm.last_quant = source.lastQuant;
+		channel.adpcm.loopstart_quant = source.loopstartQuant;
+		channel.adpcm.loopstart_prev_sample = source.loopstartPrevious;
+		channel.adpcm.in_loop = source.inLoop;
+		channel.noise_state = source.noiseState;
+		channel.AEG.val = source.aegValue;
+		channel.AEG.state = source.aegState;
+		channel.FEG.value = source.fegValue;
+		channel.FEG.state = source.fegState;
+		channel.FEG.prev1 = source.fegPrevious1;
+		channel.FEG.prev2 = source.fegPrevious2;
+		channel.FEG.fractSave = source.fegFraction;
+		channel.lfo.counter = source.lfoCounter;
+		channel.lfo.state = source.lfoState;
+		channel.enabled = source.enabled;
+		channel.quiet = false;
+	}
+	std::copy(std::begin(externalInput), std::end(externalInput), std::begin(state.externalInput));
+	std::copy(std::begin(channelPeaks), std::end(channelPeaks), std::begin(state.channelPeaks));
+}
+
+// Rebuild register-derived caches and callbacks that are deliberately omitted
+// from snapshots because they contain board-local or code pointers.
+void rebuildHikaruChannels()
+{
+	for (ChannelEx& channel : Chans)
+	{
+		const u32 lfoCounter = channel.lfo.counter;
+		const u8 lfoState = channel.lfo.state;
+		channel.quiet = true;
+		channel.UpdatePitch();
+		channel.UpdateLoop();
+		channel.UpdateAtts();
+		channel.UpdateDSPMIX();
+		channel.StepAEG = ChannelEx::AEG_STEP_LUT[channel.AEG.state];
+		channel.UpdateAEG();
+		channel.StepFEG = ChannelEx::FEG_STEP_LUT[channel.FEG.state];
+		channel.UpdateFEG();
+		channel.UpdateStreamStep();
+		channel.UpdateLFO(true);
+		channel.lfo.counter = lfoCounter;
+		channel.lfo.state = lfoState;
+		channel.quiet = false;
+	}
+}
+#endif
+
+void resetBoardChannels()
+{
+	for (auto& channel : Chans)
+		channel = ChannelEx{};
+	ChannelEx::initAll();
+#ifdef USE_HIKARU
+	std::fill(std::begin(boardExternalInput), std::end(boardExternalInput), 0);
+	std::fill(std::begin(ChannelEx::channelPeaks), std::end(ChannelEx::channelPeaks), 0);
+#endif
+}
 
 void init()
 {
@@ -1547,26 +1807,43 @@ constexpr int CDDA_SIZE = 2352 / 2;
 static s16 cdda_sector[CDDA_SIZE];
 static u32 cdda_index = CDDA_SIZE;
 
-void AICA_Sample()
+bool ChannelEx::collectChannelPeaks;
+u32 ChannelEx::channelPeaks[64];
+
+void readBoardChannelPeaks(u32 peaks[64])
+{
+	std::memcpy(peaks, ChannelEx::channelPeaks, sizeof(ChannelEx::channelPeaks));
+	std::memset(ChannelEx::channelPeaks, 0, sizeof(ChannelEx::channelPeaks));
+}
+
+void setBoardExternalInput(s16 left, s16 right)
+{
+	boardExternalInput[0] = left;
+	boardExternalInput[1] = right;
+}
+
+static bool generateSample(bool board, s16& left, s16& right)
 {
 	SampleType mixl,mixr;
 	mixl = 0;
 	mixr = 0;
 	memset(dsp::state.MIXS, 0, sizeof(dsp::state.MIXS));
 
+	ChannelEx::collectChannelPeaks = board;
 	ChannelEx::StepAll(mixl,mixr);
 	
 	//OK , generated all Channels  , now DSP/ect + final mix ;p
 	//CDDA EXTS input
 	
-	if (cdda_index >= CDDA_SIZE)
+	if (!board && cdda_index >= CDDA_SIZE)
 	{
 		cdda_index = 0;
 		libCore_CDDA_Sector(cdda_sector);
 	}
-	s32 EXTS0L = cdda_sector[cdda_index];
-	s32 EXTS0R = cdda_sector[cdda_index+1];
-	cdda_index += 2;
+	s32 EXTS0L = board ? boardExternalInput[0] : cdda_sector[cdda_index];
+	s32 EXTS0R = board ? boardExternalInput[1] : cdda_sector[cdda_index+1];
+	if (!board)
+		cdda_index += 2;
 
 	//Final MIX ..
 	//Add CDDA / DSP effect(s)
@@ -1580,20 +1857,23 @@ void AICA_Sample()
 
 	if (config::DSPEnabled)
 	{
-		dsp::step();
+		if (board)
+			dsp::stepInterpreter();
+		else
+			dsp::step();
 
 		for (int i = 0; i < 16; i++)
 			VolumePan(*(s16*)&DSPData->EFREG[i], dsp_out_vol[i].EFSDL, dsp_out_vol[i].EFPAN, mixl, mixr);
 	}
 
 #ifdef LIBRETRO
-	if (settings.aica.muteAudio)
+	if (!board && settings.aica.muteAudio)
 #else
-	if (settings.aica.muteAudio || (settings.input.fastForwardMode && !config::FastForwardAudio))
+	if (!board && (settings.aica.muteAudio || (settings.input.fastForwardMode && !config::FastForwardAudio)))
 #endif
-		return;
+		return false;
 
-	if (config::VmuSound)
+	if (!board && config::VmuSound)
 	{
 		SampleType b = beep.getSample();
 		mixl += b;
@@ -1612,7 +1892,7 @@ void AICA_Sample()
 	mixr = (s32)FPMul<s64>(mixr, val, 15);
 
 #ifndef LIBRETRO
-	if (settings.input.fastForwardMode)
+	if (!board && settings.input.fastForwardMode)
 	{
 		mixl = (s32)((s64)mixl * 35 / 100);
 		mixr = (s32)((s64)mixr * 35 / 100);
@@ -1636,7 +1916,21 @@ void AICA_Sample()
 	mixl = std::clamp(mixl, -32768, 32767);
 	mixr = std::clamp(mixr, -32768, 32767);
 
-	WriteSample(mixr, mixl);
+	left = (s16)mixl;
+	right = (s16)mixr;
+	return true;
+}
+
+void AICA_Sample()
+{
+	s16 left, right;
+	if (generateSample(false, left, right))
+		WriteSample(right, left);
+}
+
+void boardSample(s16& left, s16& right)
+{
+	generateSample(true, left, right);
 }
 
 void serialize(Serializer& ser)

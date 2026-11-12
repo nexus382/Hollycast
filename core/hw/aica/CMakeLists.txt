@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 target_sources(${PROJECT_NAME} PRIVATE
         aica.cpp
         aica.h
@@ -5,6 +6,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         aica_if.h
         aica_mem.cpp
         aica_mem.h
+        board_state.cpp
+        board_state.h
         dsp.cpp
         dsp.h
         dsp_arm32.cpp
