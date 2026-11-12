@@ -21,7 +21,6 @@
 #include "cfg/option.h"
 #include "oslib/oslib.h"
 #include "oslib/storage.h"
-#include "oslib/directory.h"
 #include "input/gamepad_device.h"
 #include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
@@ -271,20 +270,6 @@ CabinetRegion configuredRegion(const GameDescriptor* game) {
     return value >= -1 && value <= 2 ? static_cast<CabinetRegion>(value) : CabinetRegion::Saved;
 }
 
-template<size_t Size>
-bool saveNvram(const std::string& path, const std::array<uint8_t, Size>& data) {
-    const std::string temporary = path + ".tmp";
-    FILE* file = nowide::fopen(temporary.c_str(), "wb");
-    if (!file) return false;
-    const bool written = std::fwrite(data.data(), 1, data.size(), file) == data.size();
-    const bool closed = std::fclose(file) == 0;
-    // flycast::rename replaces an existing save and accepts UTF-8 on Windows.
-    if (!written || !closed || flycast::rename(temporary.c_str(), path.c_str()) != 0) {
-        nowide::remove(temporary.c_str());
-        return false;
-    }
-    return true;
-}
 bool backupCabinetSettings(const std::array<uint8_t, 128>& eeprom) {
     if (!bramSaveAllowed || !mieSaveAllowed) return false;
     auto bram = savedBram;

@@ -10,6 +10,11 @@ extern "C" {
 // query[0..1] are caller-owned GL storage, unused by native backends.
 void hikaru_graphics_begin_occlusion(GLuint query[2]);
 GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]);
+/* Finish submits without collecting; result may block. Native backends return
+ * results in FIFO order. Drain every finished query before changing viewports,
+ * reallocating targets or resetting the renderer. */
+void hikaru_graphics_finish_occlusion(const GLuint query[2]);
+GLboolean hikaru_graphics_occlusion_result(const GLuint query[2]);
 void hikaru_graphics_delete_occlusion(GLuint query[2]);
 // Palette support belongs to the active backend, not the host GL loader.
 // Returns -1 for direct GL, otherwise the native texture-palette capability.
@@ -21,6 +26,8 @@ void hikaru_graphics_bind_draw_palette(GLuint state_buffer);
 typedef struct HikaruGraphicsDispatch {
     void (*BeginOcclusion)(void);
     GLboolean (*EndOcclusion)(void);
+    void (*FinishOcclusion)(void);
+    GLboolean (*OcclusionResult)(void);
     void (*ActiveTexture)(GLenum texture);
     void (*AttachShader)(GLuint program, GLuint shader);
     void (*BindAttribLocation)(GLuint program, GLuint index, const GLchar * name);

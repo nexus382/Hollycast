@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 target_sources(${PROJECT_NAME} PRIVATE
         aica.cpp
         aica.h

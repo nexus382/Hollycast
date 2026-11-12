@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Based on MAME's Sega 315-6154 device, copyright Samuele Zannoli.
+// Portions Copyright 2026 The Hollycast Authors
 // https://github.com/mamedev/mame/blob/43b995da4a2af46c9f48c6a5536953439adfb1ab/src/mame/sega/315-6154.cpp
 #pragma once
 

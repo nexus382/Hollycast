@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "arm7.h"
 #include "arm_mem.h"
 #include "arm7_rec.h"

@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # chips Z80
 
 Unmodified `chips/z80.h` from Andre Weissflog's [chips](https://github.com/floooh/chips)

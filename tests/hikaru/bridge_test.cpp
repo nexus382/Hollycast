@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 // Standalone, ROM-free regression checks for the Sega 315-6154 bridge.
 #include "hw/hikaru/bridge.h"
 

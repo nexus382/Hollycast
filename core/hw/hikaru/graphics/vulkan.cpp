@@ -131,12 +131,12 @@ class VulkanBackend final : public Backend {
         }
     };
     struct PipelineKey {
-        bool bitmap, familyResolve, palette, depthTest, depthWrite, blend, cull, depthBias;
+        bool bitmap, familyResolve, peelComposite, palette, depthTest, depthWrite, blend, cull, depthBias;
         GLenum depthFunc, cullFace, frontFace, srcRGB, dstRGB, srcAlpha, dstAlpha, equationRGB, equationAlpha, topology;
         std::array<bool,4> colorMask;
         vk::Format color, depth, metadata;
         std::array<int32_t,MeshShaderSpecializationCount> shader{};
-        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,familyResolve,palette,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader) < std::tie(b.bitmap,b.familyResolve,b.palette,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth,b.metadata,b.shader); }
+        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,familyResolve,peelComposite,palette,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader) < std::tie(b.bitmap,b.familyResolve,b.peelComposite,b.palette,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth,b.metadata,b.shader); }
     };
     VulkanContext* ctx = VulkanContext::Instance();
     vk::Device device = ctx->GetDevice();
@@ -148,7 +148,7 @@ class VulkanBackend final : public Backend {
     std::map<SamplerKey,vk::UniqueSampler> samplerCache;
     vk::UniqueRenderPass colorOnlyPass;
     std::map<std::tuple<vk::Format,vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
-    vk::UniqueShaderModule meshVertex, meshFragment, paletteVertex, paletteFragment, fixedTexturePaletteFragment, bitmapVertex, bitmapFragment, familyFragment;
+    vk::UniqueShaderModule meshVertex, meshFragment, paletteVertex, paletteFragment, fixedTexturePaletteFragment, bitmapVertex, bitmapFragment, familyFragment, peelFragment;
     struct CachedPipeline { vk::UniquePipeline pipeline; uint64_t touched; };
     std::map<PipelineKey,CachedPipeline> pipelines;
     uint64_t pipelineClock = 0;
@@ -194,8 +194,9 @@ class VulkanBackend final : public Backend {
         }
     } timing;
     bool renderPassOpen=false;
-    bool occlusionActive=false;
+    bool occlusionActive=false; bool occlusionQueryOpen=false; vk::QueryPool occlusionQuery;
     std::vector<vk::UniqueQueryPool> occlusionQueries;
+    std::deque<std::vector<vk::UniqueQueryPool>> pendingOcclusions;
 
     vk::DeviceSize liveStreamBytes() const {
         vk::DeviceSize bytes=(activeVertexBuffer?activeVertexBuffer->storage.bufferSize:0)+
@@ -271,7 +272,7 @@ class VulkanBackend final : public Backend {
     }
     void endRenderPass(vk::CommandBuffer cmd) {
         if(!renderPassOpen)return;
-        if(occlusionActive)cmd.endQuery(*occlusionQueries.back(),0);
+        if(occlusionQueryOpen){occlusionQueryOpen=false;cmd.endQuery(occlusionQuery,0);}
         cmd.endRenderPass();
         renderPassOpen=false;
         activeColor=activeDepth=activeMetadata=0;
@@ -451,7 +452,7 @@ class VulkanBackend final : public Backend {
         auto found=pipelines.find(k);
         if(found!=pipelines.end()){found->second.touched=++pipelineClock;return *found->second.pipeline;}
         auto pass=renderPass(k.color,k.depth,k.metadata);
-        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.familyResolve?*familyFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
+        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.familyResolve?*familyFragment:k.peelComposite?*peelFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
         std::array<vk::SpecializationMapEntry,MeshShaderSpecializationCount> entries{};
         for(unsigned i=0;i<entries.size();++i)entries[i]=vk::SpecializationMapEntry(i,uint32_t(i*sizeof(int32_t)),sizeof(int32_t));
         vk::SpecializationInfo specialization(entries.size(),entries.data(),sizeof(k.shader),k.shader.data());
@@ -510,20 +511,25 @@ public:
         occlusionQueries.clear();
         occlusionActive=true;
     }
-    bool endOcclusion() override {
+    void finishOcclusion() override {
         if(!occlusionActive)throw std::runtime_error("No active Hikaru visibility query");
-        waitForDraws();
         occlusionActive=false;
+        pendingOcclusions.push_back(std::move(occlusionQueries));occlusionQueries.clear();
+    }
+    bool occlusionResult() override {
+        if(pendingOcclusions.empty())throw std::runtime_error("No pending Hikaru visibility query");
+        auto pending=std::move(pendingOcclusions.front());pendingOcclusions.pop_front();
+        waitForDraws();
         bool visible=false;
-        for(const auto& query:occlusionQueries) {
+        for(const auto& query:pending) {
             uint64_t samples=0;
             auto result=device.getQueryPoolResults(*query,0,1,sizeof(samples),&samples,sizeof(samples),vk::QueryResultFlagBits::e64|vk::QueryResultFlagBits::eWait);
             if(result!=vk::Result::eSuccess)throw std::runtime_error("Failed reading Hikaru visibility query");
             visible|=samples!=0;
         }
-        occlusionQueries.clear();
         return visible;
     }
+    bool endOcclusion() override { finishOcclusion(); return occlusionResult(); }
     explicit VulkanBackend(bool specialize=true) : specializeShaders(specialize) {
         if(!ctx) throw std::runtime_error("Hikaru Vulkan backend requires an active Vulkan context");
         commandPool=device.createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eTransient|vk::CommandPoolCreateFlagBits::eResetCommandBuffer,ctx->GetGraphicsQueueFamilyIndex()});
@@ -545,6 +551,7 @@ public:
         bitmapVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(true));
         bitmapFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true,false,false,1));
         familyFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true,true,false,1));
+        peelFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(true,false,false,1,true));
         constexpr unsigned metadataFallback=0xfffffffcu;
         images.emplace(metadataFallback,makeImage(1,1,vk::Format::eR32G32Uint,1,false,false));
         immediate([&](vk::CommandBuffer cmd){auto& f=image(metadataFallback);barrier(cmd,f,vk::ImageLayout::eTransferDstOptimal);cmd.clearColorImage(*f.image,vk::ImageLayout::eTransferDstOptimal,vk::ClearColorValue(std::array<uint32_t,4>{}),vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor,0,1,0,1));barrier(cmd,f,vk::ImageLayout::eShaderReadOnlyOptimal);});
@@ -555,9 +562,9 @@ public:
         immediate([&](vk::CommandBuffer cmd){auto& f=image(fallback);barrier(cmd,f,vk::ImageLayout::eTransferDstOptimal);cmd.copyBufferToImage(*staging.buffer,*f.image,vk::ImageLayout::eTransferDstOptimal,vk::BufferImageCopy(0,0,0,{vk::ImageAspectFlagBits::eColor,0,0,1},{0,0,0},{1,1,1}));barrier(cmd,f,vk::ImageLayout::eShaderReadOnlyOptimal);});
     }
     ~VulkanBackend() override {
-        waitForDraws();
-        // PresentFrame retains the sampled view for subsequent OSD frames.
-        // Drain the device and clear that reference before destroying images.
+        // The last unfinished frame can be discarded. Submitting it or waiting on
+        // its fence can throw during device loss. Drain already submitted draws
+        // and presentation on their shared queue before releasing the OSD view.
         ctx->WaitIdle();
         ctx->PresentFrame({}, {}, {}, 1.f);
     }
@@ -739,7 +746,7 @@ public:
                 cmd.resetQueryPool(*occlusionQueries.back(),0,1);
             }
             vk::Rect2D area({0,0},target.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
-            if(occlusionActive)cmd.beginQuery(*occlusionQueries.back(),0,{});
+            if(occlusionActive){occlusionQueryOpen=true;occlusionQuery=*occlusionQueries.back();cmd.beginQuery(occlusionQuery,0,{});}
             renderPassOpen=true;activeColor=d.color;activeDepth=d.depth;activeMetadata=d.metadata;
         }
         // Vulkan's positive-height viewport has the opposite framebuffer Y
@@ -747,7 +754,7 @@ public:
         // orientation, so their front-face sense reverses; the presentation
         // target also flips clip Y in the shader and keeps the requested sense.
         const GLenum frontFace=(d.uniforms.inverted[2]!=0.f)?(d.frontFace==GL_CCW?GL_CW:GL_CCW):d.frontFace;
-        auto p=pipeline({d.bitmap,d.familyResolve,!d.palette.empty(),bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined,meshShaderSpecialization(d,specializeShaders)});
+        auto p=pipeline({d.bitmap,d.familyResolve,d.peelComposite,!d.palette.empty(),bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined,meshShaderSpecialization(d,specializeShaders)});
         if(boundPipeline!=p){cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);boundPipeline=p;}
         const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);
         const std::array<float,6> viewport{float(d.viewport[0]),viewportY,float(d.viewport[2]),float(d.viewport[3]),d.nearDepth,d.farDepth};

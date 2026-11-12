@@ -206,6 +206,45 @@ void testDispatchConversionUniformsAndState(RecordingBackend& backend, Device& d
     check(backend.draws==draws+2, "clear did not flush preceding triangles");
 }
 
+void testPeelDispatchAndDeferredQueries(RecordingBackend& backend, Device& device) {
+    Device::Scope scope(&device);
+    device.begin(16,16);
+    const GLuint program=makeProgram("#define PEEL_COMPOSITE 1\n uniform sampler2D u_front; uniform usampler2D u_peel_meta;\n");
+    GLuint images[2]={};hikaru_glGenTextures(2,images);
+    hikaru_glActiveTexture(GL_TEXTURE0);hikaru_glBindTexture(GL_TEXTURE_2D,images[0]);
+    hikaru_glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,16,16,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+    // Remapping metadata inside the original four units must work without
+    // texture-palette support (Metal and reduced-sampler Vulkan devices).
+    hikaru_glActiveTexture(GL_TEXTURE3);hikaru_glBindTexture(GL_TEXTURE_2D,images[1]);
+    hikaru_glTexImage2D(GL_TEXTURE_2D,0,GL_RG32UI,16,16,0,GL_RG_INTEGER,GL_UNSIGNED_INT,nullptr);
+    hikaru_glUniform1i(hikaru_glGetUniformLocation(program,"u_front"),0);
+    hikaru_glUniform1i(hikaru_glGetUniformLocation(program,"u_peel_meta"),3);
+    issueTriangle();device.checkError();
+    check(backend.lastDraw.bitmap&&backend.lastDraw.peelComposite&&backend.lastDraw.textures[0]==images[0]&&
+          backend.lastDraw.textures[2]==images[1]&&backend.lastDraw.sampling[2].format==GL_RG32UI,
+          "peel program lost its dedicated shader or integer sampler remapping");
+    for(int mode=0;mode<4;++mode) {
+        hikaru_glUniform1i(hikaru_glGetUniformLocation(program,"u_peel_mode"),mode);
+        hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
+        check(backend.lastDraw.uniforms.peel[1]==float(mode),"peel blend mode was not packed");
+    }
+    GLuint queries[3][2]={};
+    for(unsigned i=0;i<3;++i) {
+        hikaru_graphics_begin_occlusion(queries[i]);
+        if(i!=1)hikaru_glDrawArrays(GL_TRIANGLES,0,3);
+        hikaru_graphics_finish_occlusion(queries[i]);
+    }
+    for(unsigned i=0;i<3;++i)
+        check(bool(hikaru_graphics_occlusion_result(queries[i]))==(i!=1),"deferred query FIFO changed result ownership");
+    device.begin(32,32);
+    hikaru_graphics_begin_occlusion(queries[0]);
+    check(!hikaru_graphics_end_occlusion(queries[0]),"resize inherited an old query result");
+    makeProgram("uniform sampler2D u_front;\n");issueTriangle();device.checkError();
+    check(backend.lastDraw.bitmap&&!backend.lastDraw.peelComposite,"ordinary bitmap inherited peel composition");
+    for(auto& query:queries)hikaru_graphics_delete_occlusion(query);
+    hikaru_glDeleteTextures(2,images);device.checkError();
+}
+
 void testTexturePacking(RecordingBackend& backend, Device& device) {
     Device::Scope scope(&device);
     GLuint tex = 0;
@@ -662,6 +701,7 @@ int main() {
             catch (const std::exception& e) { ++failures; std::cerr << "FAIL: " << name << ": " << e.what() << "\n"; }
         };
         run("dispatch conversion, uniforms, draw state", [&] { testDispatchConversionUniformsAndState(*record, device); });
+        run("four-unit peel dispatch and deferred query ownership", [&] { testPeelDispatchAndDeferredQueries(*record, device); });
         run("texture unpack and packed precision", [&] { testTexturePacking(*record, device); });
         run("full texture update semantics", [&] { testFullTextureUpdates(*record, device); });
         run("family MRT, unsigned metadata and resolve dispatch", [&] { testFamilyAttachments(*record, device); });

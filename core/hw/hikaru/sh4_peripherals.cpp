@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 // Register reset values and masks follow core/hw/sh4/sh4_mmr.h and the
 // existing Flycast modules. This model owns its state and scheduler inputs.
 #include "sh4_peripherals.h"

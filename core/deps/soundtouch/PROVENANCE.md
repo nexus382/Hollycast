@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 SoundTouch 2.4.1, official repository https://codeberg.org/soundtouch/soundtouch,
 commit `0047e0b1ecfceb041348579119bf79b73a322a3a` (tag 2.4.1).
 

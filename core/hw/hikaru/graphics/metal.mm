@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <map>
 #include <sstream>
@@ -116,13 +117,13 @@ struct TextureEntry {
     std::vector<bool> initializedLevels;
 };
 struct PipelineKey {
-    bool bitmap=false, familyResolve=false, blend=false, cull=false, depth=false;
+    bool bitmap=false, familyResolve=false, peelComposite=false, blend=false, cull=false, depth=false;
     uint32_t format=0, metadataFormat=0, srcRGB=0, dstRGB=0, srcAlpha=0, dstAlpha=0;
     uint32_t eqRGB=0, eqAlpha=0, cullFace=0, frontFace=0;
     uint8_t colorMask=0;
     bool operator<(const PipelineKey& b) const {
-        return std::tie(bitmap,familyResolve,blend,cull,depth,format,metadataFormat,srcRGB,dstRGB,srcAlpha,dstAlpha,eqRGB,eqAlpha,cullFace,frontFace,colorMask) <
-               std::tie(b.bitmap,b.familyResolve,b.blend,b.cull,b.depth,b.format,b.metadataFormat,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.eqRGB,b.eqAlpha,b.cullFace,b.frontFace,b.colorMask);
+        return std::tie(bitmap,familyResolve,peelComposite,blend,cull,depth,format,metadataFormat,srcRGB,dstRGB,srcAlpha,dstAlpha,eqRGB,eqAlpha,cullFace,frontFace,colorMask) <
+               std::tie(b.bitmap,b.familyResolve,b.peelComposite,b.blend,b.cull,b.depth,b.format,b.metadataFormat,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.eqRGB,b.eqAlpha,b.cullFace,b.frontFace,b.colorMask);
     }
 };
 struct SamplerKey {
@@ -230,23 +231,29 @@ public:
         visibilityBuffers.clear();
         occlusionActive=true;
     }
-    bool endOcclusion() override {
+    void finishOcclusion() override {
         if(!occlusionActive)throw std::runtime_error("No active Hikaru visibility query");
         flushDraws();
         // A marker on the same queue waits only for the preceding query work.
         id<MTLCommandBuffer> marker=[queue commandBuffer];
         commitCommandBuffer(marker);
-        [marker waitUntilCompleted];
         occlusionActive=false;
-        if(marker.status==MTLCommandBufferStatusError)throw std::runtime_error("Hikaru visibility query failed");
+        pendingOcclusions.emplace_back(marker,visibilityBuffers);
+        visibilityBuffers.clear();
+    }
+    bool occlusionResult() override {
+        if(pendingOcclusions.empty())throw std::runtime_error("No pending Hikaru visibility query");
+        auto pending=std::move(pendingOcclusions.front());pendingOcclusions.pop_front();
+        [pending.first waitUntilCompleted];
+        if(pending.first.status==MTLCommandBufferStatusError)throw std::runtime_error("Hikaru visibility query failed");
         bool visible=false;
-        for(id<MTLBuffer> buffer:visibilityBuffers) {
+        for(id<MTLBuffer> buffer:pending.second) {
             const auto* results=static_cast<const uint64_t*>(buffer.contents);
             for(unsigned i=0;i<256;i++)visible|=results[i]!=0;
         }
-        visibilityBuffers.clear();
         return visible;
     }
+    bool endOcclusion() override { finishOcclusion(); return occlusionResult(); }
     void eraseTexture(unsigned id) override { @autoreleasepool { flushDraws();if (id) textures.erase(id); } }
 
     void clear(const Draw& state, GLbitfield mask, const Vec4& color, float depth) override {
@@ -305,7 +312,7 @@ public:
         if(d.scissorEnabled){sx=d.scissor[0];sy=d.color==0?(GLint)h-d.scissor[1]-d.scissor[3]:d.scissor[1];sw=d.scissor[2];sh=d.scissor[3];}
         sx=std::max<GLint>(0,sx);sy=std::max<GLint>(0,sy);sw=std::max<GLint>(0,std::min<GLint>(sw,(GLint)w-sx));sh=std::max<GLint>(0,std::min<GLint>(sh,(GLint)h-sy));
         [enc setScissorRect:MTLScissorRect{(NSUInteger)sx,(NSUInteger)sy,(NSUInteger)sw,(NSUInteger)sh}];
-        PipelineKey key{};key.bitmap=d.bitmap;key.familyResolve=d.familyResolve;key.metadataFormat=metadata?(uint32_t)MTLPixelFormatRG32Uint:0;key.blend=d.blend;key.cull=d.cull;key.depth=depth!=nil;key.format=(uint32_t)pixelFormat(textures[d.color].info.format);
+        PipelineKey key{};key.bitmap=d.bitmap;key.familyResolve=d.familyResolve;key.peelComposite=d.peelComposite;key.metadataFormat=metadata?(uint32_t)MTLPixelFormatRG32Uint:0;key.blend=d.blend;key.cull=d.cull;key.depth=depth!=nil;key.format=(uint32_t)pixelFormat(textures[d.color].info.format);
         key.srcRGB=d.srcRGB;key.dstRGB=d.dstRGB;key.srcAlpha=d.srcAlpha;key.dstAlpha=d.dstAlpha;key.eqRGB=d.equationRGB;key.eqAlpha=d.equationAlpha;key.cullFace=d.cullFace;key.frontFace=d.frontFace;
         for(unsigned i=0;i<4;i++)if(d.colorMask[i])key.colorMask|=1u<<i;
         id<MTLRenderPipelineState> pipeline=pipelineFor(key);if(!pipeline)return;
@@ -395,6 +402,7 @@ private:
     unsigned activeColor=~0u,activeDepth=~0u,activeMetadata=~0u,activeDraws=0;
     bool occlusionActive=false;
     std::vector<id<MTLBuffer>> visibilityBuffers;
+    std::deque<std::pair<id<MTLCommandBuffer>,std::vector<id<MTLBuffer>>>> pendingOcclusions;
     std::map<unsigned,TextureEntry> textures;std::map<PipelineKey,id<MTLRenderPipelineState>> pipelines;std::map<std::tuple<uint32_t,uint8_t,bool>,id<MTLRenderPipelineState>> clearPipelines;std::map<SamplerKey,id<MTLSamplerState>> samplers;std::map<std::pair<GLenum,bool>,id<MTLDepthStencilState>> depths;
     void commitCommandBuffer(id<MTLCommandBuffer> cmd) {
         if(!cmd)return;
@@ -455,7 +463,7 @@ private:
     id<MTLRenderPipelineState> pipelineFor(const PipelineKey& k){
         auto found=pipelines.find(k);if(found!=pipelines.end())return found->second;
         NSString *vertex=k.bitmap?@"bitmapVertex":@"meshVertex";
-        NSString *fragment=k.familyResolve?@"familyResolveFragment":k.bitmap?@"bitmapFragment":k.metadataFormat?@"familyMeshFragment":@"meshFragment";
+        NSString *fragment=k.familyResolve?@"familyResolveFragment":k.peelComposite?@"peelCompositeFragment":k.bitmap?@"bitmapFragment":k.metadataFormat?@"familyMeshFragment":@"meshFragment";
         MTLRenderPipelineDescriptor *descriptor=[MTLRenderPipelineDescriptor new];
         descriptor.vertexFunction=[library newFunctionWithName:vertex];descriptor.fragmentFunction=[library newFunctionWithName:fragment];
         descriptor.colorAttachments[0].pixelFormat=(MTLPixelFormat)k.format;

@@ -419,9 +419,9 @@ void GameScanner::add_game_directory(const std::string& path, bool hideLegacy, s
 			if (const auto* hikaruGame = hikaru::findGame(gameName))
 			{
 				gameName = hikaruGame->title;
-				GameMedia game = makeGameMedia(gameName + " (experimental)", item.path, item.name, gameName, true, false, getFileSize(item));
-				populateMetadata(game, metadata, manualIndex, gamelistPath);
-				insert_game(game);
+				GameMedia game = makeGameMedia(gameName + " (experimental)", item.path, item.name, gameName, true, false, getMediaSize(item));
+				game.system = "Hikaru";
+				result.push_back(std::move(game));
 				continue;
 			}
 #endif

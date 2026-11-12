@@ -2,6 +2,7 @@
 // Audio Overload SDK
 //
 // Copyright (c) 2007-2009 R. Belmont and Richard Bannister, and others.
+// Portions Copyright 2026 The Hollycast Authors
 // All rights reserved.
 //
 

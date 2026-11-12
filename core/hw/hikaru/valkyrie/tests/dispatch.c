@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // Generated programs only: no game instructions or ROM data.
 #include "vk/machine.h"
 #include "vk/mmap.h"

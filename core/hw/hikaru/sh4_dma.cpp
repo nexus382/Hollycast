@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // Register fields and auto-request operation follow the Renesas SH7750 manual
 // section 14 and core/hw/sh4/modules/dmac.cpp.
 #include "sh4_dma.h"

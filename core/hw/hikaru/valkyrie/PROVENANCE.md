@@ -1,5 +1,4 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
-<!-- Portions Copyright 2026 The Hollycast Authors -->
 Valkyrie source, revision fa52073f2ac6264d2f77242b3e3cca2935c31392,
 https://github.com/stefanoteso/valkyrie. The original per-file notices and
 GPL-3.0-or-later LICENSE are retained. The embedded adapter removes the SDL

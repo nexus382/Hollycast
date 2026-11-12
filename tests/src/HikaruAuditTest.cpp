@@ -6,15 +6,17 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 TEST(HikaruRendererTest, PlatformSwitchRestoresEachRequestedOitBackend)
 {
-    for (auto api : {RenderType::OpenGL_OIT, RenderType::Vulkan_OIT, RenderType::Metal_OIT}) {
+    for (auto api : {RenderType::OpenGL_OIT, RenderType::Vulkan_OIT, RenderType::Metal_OIT, RenderType::DirectX11_OIT}) {
         const auto host = hostRendererType(api, true);
         EXPECT_FALSE(isPerPixel(host));
         EXPECT_EQ(isOpenGL(host), isOpenGL(api));
         EXPECT_EQ(isVulkan(host), isVulkan(api));
         EXPECT_EQ(isMetal(host), isMetal(api));
+        EXPECT_EQ(host == RenderType::DirectX11, api == RenderType::DirectX11_OIT);
         EXPECT_EQ(hostRendererType(api, false), api);
         EXPECT_EQ(hostRendererType(host, true), host);
     }
@@ -30,6 +32,25 @@ protected:
     }
     void TearDown() override { std::filesystem::remove_all(directory); }
 };
+
+TEST_F(HikaruNvramTest, PublishesCompleteSaveWhileAnotherWriterOwnsAStagingFile)
+{
+    const auto file = directory / std::filesystem::u8path(u8"cabinet-\u65e5\u672c.eeprom");
+    const auto utf8 = file.u8string();
+    const std::string path(utf8.begin(), utf8.end());
+    auto occupied = file;
+    occupied += ".tmp.0";
+    std::ofstream(occupied, std::ios::binary) << "other writer";
+    const std::array<uint8_t, 4> first{{1,2,3,4}}, next{{4,3,2,1}};
+    ASSERT_TRUE(hikaru::saveNvram(path, first));
+    ASSERT_TRUE(hikaru::saveNvram(path, next));
+    std::array<uint8_t, 4> loaded{};
+    ASSERT_EQ(hikaru::loadNvram(path, loaded), hikaru::NvramLoadResult::Loaded);
+    EXPECT_EQ(loaded, next);
+    std::ifstream pending(occupied, std::ios::binary);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(pending), {}), "other writer");
+    EXPECT_EQ(std::distance(std::filesystem::directory_iterator(directory), {}), 2);
+}
 
 TEST_F(HikaruNvramTest, BackupPreservesTheFirstSnapshotAndSupportsUnicodePaths)
 {

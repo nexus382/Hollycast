@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 //#define STRICT_MODE
 #ifndef STRICT_MODE

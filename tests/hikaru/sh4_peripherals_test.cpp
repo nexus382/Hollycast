@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+// Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/sh4_peripherals.h"
 
 #include <cstdint>

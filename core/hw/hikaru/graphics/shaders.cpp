@@ -75,7 +75,7 @@ const char* meshFragmentBody=R"(
     float rawCode=0.0;
     if(u.family.y!=0.0||u.family.x>1.0)
         rawCode=u.depth.y==1.0?placementCode:ROUND_EVEN(meshWindowDepth(eyeZ,u)*16777215.0);
-    WRITE_METADATA(rawCode,u.family.z);
+    WRITE_METADATA(rawCode,u.family.z+(u.peel.x!=0.0?u.blend.z*4.0:0.0));
     if(u.family.x!=0.0){
         vec2 coordinate=o.position.xy/u.peel.zw;
         if(placementCode>ROUND_EVEN(DEPTH2(coordinate)*16777215.0))DISCARD;
@@ -139,6 +139,12 @@ const char* bitmapBody=R"(
     if(u.multipliers.y!=0.0&&u.direct.y!=0.0)color=mix(color,vec4(layer2.xyz*u.multipliers.y,1.0),key2);
     if(u.multipliers.x!=0.0&&u.direct.x!=0.0)color=mix(color,vec4(layer1.xyz*u.multipliers.x,1.0),key1);
     RETURN_COLOR(color);
+)";
+const char* peelCompositeBody=R"(
+    vec4 peelColor=COLOR0(o.position.xy);
+    uint storedMode=META2(o.position.xy).y/4u;
+    if(int(storedMode)!=int(u.peel.y+0.5))DISCARD;
+    RETURN_COLOR(peelColor);
 )";
 const char* metalPrelude=R"(
 #include <metal_stdlib>
@@ -242,6 +248,10 @@ std::string metalShaderSource() {
     s+="fragment MeshFragment meshFragment"+meshArgs+invoke+"return {value.color,value.depth};}\n";
     s+="fragment FamilyFragment familyMeshFragment"+meshArgs+invoke+"return {value.color,value.metadata,value.depth};}\n";
     s+="fragment vec4 bitmapFragment"+args+bitmapBody+"}\n";
+    std::string peelArgs=args;
+    const std::string peelTexture="texture2d<float> tex2";
+    peelArgs.replace(peelArgs.find(peelTexture),peelTexture.size(),"texture2d<uint> tex2");
+    s+="fragment vec4 peelCompositeFragment"+peelArgs+peelCompositeBody+"}\n";
     std::string resolveArgs=args;
     for(auto index:{2,3}){
         const std::string from="texture2d<float> tex"+std::to_string(index);
@@ -297,14 +307,15 @@ std::string vulkanVertexSource(bool bitmap, bool palette) {
     for(auto name:outNames)s+=std::string(name)+"=o."+name+";";
     return s+"}";
 }
-std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, unsigned textureSlots) {
+std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, unsigned textureSlots, bool peelComposite) {
     if(textureSlots!=1&&textureSlots!=16)throw std::invalid_argument("Invalid Hikaru Vulkan texture palette size");
     std::string s=glslPrelude;s+="mat3 mat3of(mat4 m){return mat3(m);}";s+=structures;s+="layout(set=0,binding=0,std140)uniform Constants{Uniforms u;};\n";
     s+=outputStruct;
     std::string inputs=fragmentInput;
     replaceAll(inputs,"uniform sampler2D tex0;","uniform sampler2D tex0["+std::to_string(textureSlots)+"];" );
-    for(int index=familyResolve?2:3;index<4;++index){
-        if(bitmap&&!familyResolve)break;
+    for(int index=(familyResolve||peelComposite)?2:3;index<4;++index){
+        if(peelComposite&&index>2)break;
+        if(bitmap&&!familyResolve&&!peelComposite)break;
         const std::string from="uniform sampler2D tex"+std::to_string(index);
         inputs.replace(inputs.find(from),from.size(),"uniform usampler2D tex"+std::to_string(index));
     }
@@ -349,7 +360,7 @@ std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, 
         s+="float meshWindowDepth(float z){";s+=depthFunctionBody;s+="}\n";
     }
     s+="void main(){Output o=Output(gl_FragCoord,viewPosition,normal,diffuse,ambient,specular,unknown,uv,alpha);";
-    if(bitmap)s+=familyResolve?familyResolveBody:bitmapBody;
+    if(bitmap)s+=familyResolve?familyResolveBody:peelComposite?peelCompositeBody:bitmapBody;
     else {
         const std::string textureMode=palette?"drawModes.z":"u.material.y";
         const std::string shadingMode=palette?"drawModes.w":"u.flags.y";
@@ -391,7 +402,7 @@ MeshShaderSpecialization meshShaderSpecialization(const Draw& d, bool specialize
     return result;
 }
 
-std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed, unsigned passFlags) {
+std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed, unsigned passFlags, bool peelComposite) {
     // Uniforms and DrawRecord contain only column-major matrices and 16-byte
     // vectors, matching both the native CPU layout and HLSL constant packing.
     std::string s=R"(
@@ -454,7 +465,9 @@ v.specular=input.specular;v.unknown=input.unknown;v.uv=input.uv;
     // ordering; the final output is top-left and ReadPixels flips only it.
     s+="if(u.inverted.z!=0.0)o.position.y=-o.position.y;o.position.z=(o.position.z+o.position.w)*0.5;return o;}\n";
     s+="Texture2D<float4> tex0[16]:register(t0);SamplerState samplers[16]:register(s0);\n";
-    if(bitmap&&!familyResolve) {
+    if(bitmap&&peelComposite) {
+        s+="Texture2D<float4> tex1:register(t16);Texture2D<uint2> tex2:register(t17);Texture2D<float4> tex3:register(t18);\n";
+    } else if(bitmap&&!familyResolve) {
         s+="Texture2D<float4> tex1:register(t16);Texture2D<float4> tex2:register(t17);Texture2D<float4> tex3:register(t18);\n";
         s+="#define SAMPLE0(coord) tex0[0].SampleBias(samplers[0],coord,u.lodBias.x)\n";
         s+="#define SAMPLE1(coord) tex1.SampleBias(samplers[1],coord,u.lodBias.y)\n";
@@ -480,7 +493,7 @@ float loadDepth(Texture2D<float> source,vec2 coordinate){
     s+="#define META2(pixel) tex2.Load(int3(int2(pixel),0)).xy\n#define META3(pixel) tex3.Load(int3(int2(pixel),0)).xy\n";
     if(bitmap) {
         s+="#define RETURN_COLOR(value) return value\nfloat4 pixelMain(Output o):SV_Target0{\n";
-        std::string body=familyResolve?familyResolveBody:bitmapBody;
+        std::string body=familyResolve?familyResolveBody:peelComposite?peelCompositeBody:bitmapBody;
         replaceAll(body,"vec4(0.0)","vec4(0.0,0.0,0.0,0.0)");
         s+=body;return s+"}\n";
     }

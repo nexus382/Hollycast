@@ -175,14 +175,11 @@ enabling fast-math. `-DHIKARU_VENDOR_OPTIMIZE=OFF` keeps the build configuration
 original optimization flags. Debug and sanitizer builds retain their requested
 flags.
 
-Hikaru follows the selected graphics API: OpenGL 3.2 on desktop or OpenGL ES
-3.0 on Android, with native Metal and Vulkan renderers where those backends
-are available. The Advanced **Multi-threading** setting enables Hikaru's
-bounded emulation/render pipeline; disabling it uses the direct frame path.
-Runtime scene checks have been performed with Metal and Vulkan on
-macOS; other platform and graphics-API combinations remain unverified.
-Direct3D has no Hikaru renderer. ES2-only hardware keeps the existing
-Dreamcast path; Hikaru itself is rejected there at load time.
+Hikaru supports desktop OpenGL 3.2, OpenGL ES 3.0 on Android, and native
+Vulkan, Metal or Direct3D 11 where those backends are available. On Windows,
+choose DirectX 11 for the native Direct3D path. DirectX 9 and OpenGL ES 2
+cannot run Hikaru. The Advanced **Multi-threading** setting enables Hikaru's
+bounded emulation/render pipeline. Disabling it uses the direct frame path.
 
 **Transparent Sorting** in Video settings selects per-strip, per-triangle or
 per-pixel sorting for translucent geometry. Per-strip sorts retained strips
@@ -196,9 +193,9 @@ host renderer. Hikaru retains its per-pixel layer setting when changing the
 graphics API. The pixel-buffer memory budget applies to its depth-peeling
 storage.
 
-Peeling uses GPU visibility queries, rather than full-frame color readbacks,
-to detect an empty layer. It still requires a query result before selecting
-the next layer. Vulkan batches clears and texture uploads with draws, retains
+Depth peeling submits visibility queries in batches. Each viewport uses its
+previous depth as an initial estimate and reads the current frame's results
+before extending the batch, up to the configured limit. Vulkan batches clears and texture uploads with draws, retains
 transient resources until their submission fences complete, and reuses
 compatible texture allocations. CPU readbacks wait for a submission fence;
 renderer destruction still drains the device to release presentation views.

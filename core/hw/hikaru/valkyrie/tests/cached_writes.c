@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "vk/mmap.h"
 #include "cpu/sh/sh4.h"
 void hikaru_vendor_test_write_hit(bool enabled);

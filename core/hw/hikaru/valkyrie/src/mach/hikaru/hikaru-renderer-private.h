@@ -124,6 +124,7 @@ typedef struct {
 	unsigned light_debug_flags;
 	vec3f_t ambient;
 	bool weigh_by_alpha, force_coverage;
+	unsigned blend_mode;
 	unsigned peel_mode, peel_width, peel_height;
 } hikaru_mesh_uniform_cache_t;
 
@@ -157,7 +158,7 @@ typedef struct {
 	struct {
 		GLuint position, direction, diffuse, ambient, specular, extents, spot, spot_table;
 	} u_lights[4];
-	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref, u_weigh_by_alpha, u_force_coverage, u_pattern, u_lod_bias;
+	GLuint u_ambient, u_texture, u_fog, u_fog_color, u_alpha_ref, u_weigh_by_alpha, u_force_coverage, u_pattern, u_lod_bias, u_blend_mode;
 	GLuint u_peel_enabled, u_peel_first, u_peel_size, u_peel_depth, u_peel_opaque_depth;
 	GLuint u_depth, u_sort_scale, u_family, u_family_other;
 	GLuint u_draw_depth;
@@ -313,10 +314,17 @@ typedef struct {
 	struct {
 		GLuint program;
 		GLuint fb[2], cb[2], db[2]; /* db are sampleable depth textures */
-		GLuint peel_fb, peel_color[HIKARU_MAX_PEEL_LAYERS + 1], peel_depth[HIKARU_MAX_PEEL_LAYERS + 1];
+		GLuint peel_fb, peel_color[HIKARU_MAX_PEEL_LAYERS + 1], peel_depth[HIKARU_MAX_PEEL_LAYERS + 1], peel_meta[HIKARU_MAX_PEEL_LAYERS + 1];
 		unsigned peel_width, peel_height;
 		unsigned peel_layers_allocated;
-		GLuint peel_query[2];
+		GLuint peel_layer_query[HIKARU_MAX_PEEL_LAYERS + 1][2];
+		/* Prediction is only a batch-size hint, never a transparency limit. */
+		unsigned peel_hint[8];
+		GLuint peel_aux_textures[3];
+		bool peel_aux_valid;
+		struct {
+			GLuint program, u_color, u_mode, u_metadata;
+		} peel_composite;
 		unsigned width, height;
 		GLuint vao, vbo;
 		struct {

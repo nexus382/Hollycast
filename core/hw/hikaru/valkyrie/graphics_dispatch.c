@@ -402,9 +402,16 @@ void hikaru_graphics_begin_occlusion(GLuint query[2]) {
     glBeginQuery(query[1], query[0]);
 }
 GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]) {
-    if (current_dispatch) return current_dispatch->EndOcclusion();
-    GLuint samples = 0;
+    hikaru_graphics_finish_occlusion(query);
+    return hikaru_graphics_occlusion_result(query);
+}
+void hikaru_graphics_finish_occlusion(const GLuint query[2]) {
+    if (current_dispatch) { current_dispatch->FinishOcclusion(); return; }
     glEndQuery(query[1]);
+}
+GLboolean hikaru_graphics_occlusion_result(const GLuint query[2]) {
+    if (current_dispatch) return current_dispatch->OcclusionResult();
+    GLuint samples = 0;
     glGetQueryObjectuiv(query[0], GL_QUERY_RESULT, &samples);
     return samples != 0;
 }

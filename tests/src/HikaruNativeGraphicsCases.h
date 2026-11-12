@@ -50,7 +50,61 @@ inline void equalPixels(const std::vector<uint8_t>& expected,const std::vector<u
         ADD_FAILURE()<<label<<" differs at byte "<<i<<": "<<int(expected[i])<<" vs "<<int(actual[i]);return;
     }
 }
+// Exercise real native GPU metadata and composition, rather than only comparing
+// two shader variants that could share the same blend/coverage bug.
+inline void exercisePeelCompositing(Backend& backend) {
+    allocate(backend);
+    Texture color;color.width=color.height=16;
+    backend.texture(20,color,0,TextureUpload::Definition,nullptr,0);
+    Texture metadata=color;metadata.format=GL_RG32UI;
+    backend.texture(21,metadata,0,TextureUpload::Definition,nullptr,0);
+    Texture depth=color;depth.format=GL_DEPTH_COMPONENT24;
+    backend.texture(22,depth,0,TextureUpload::Definition,nullptr,0);
+    backend.texture(23,depth,0,TextureUpload::Definition,nullptr,0);
+    auto capture=mesh();capture.color=20;capture.depth=22;capture.metadata=21;
+    capture.textures={0,23,23,0};capture.uniforms.flags={0,0,0,0};
+    capture.uniforms.fog={};capture.uniforms.peel={1,1,16,16};
+    for(auto& vertex:capture.vertices){vertex.diffuse={0.4f,0.2f,0.1f,0};vertex.extra[0]=0.5f;}
+    auto opaque=capture;opaque.depth=23;opaque.metadata=0;
+    backend.clear(opaque,GL_DEPTH_BUFFER_BIT,{},1);
+    Draw composite;composite.bitmap=composite.peelComposite=true;
+    composite.viewport={0,0,16,16};composite.topology=GL_TRIANGLE_STRIP;
+    composite.textures={20,0,21,0};composite.blend=true;
+    composite.vertices.resize(4);
+    composite.vertices[0].position={1,0,0,1};composite.vertices[1].position={0,0,0,1};
+    composite.vertices[2].position={1,1,0,1};composite.vertices[3].position={0,1,0,1};
+    const std::array<Vec4,4> expected={Vec4{0.3f,0.3f,0.35f,0.875f},Vec4{0.08f,0.08f,0.06f,1},
+        Vec4{0.4f,0.5f,0.65f,0.875f},Vec4{0.5f,0.4f,0.4f,0.875f}};
+    const Vec4 background={0.2f,0.4f,0.6f,0.75f};
+    const auto sample=(size_t(4)*16+4)*4;
+    for(unsigned mode=0;mode<4;++mode) {
+        SCOPED_TRACE(mode);
+        capture.uniforms.blend={0,mode==1?1.f:0.f,float(mode),0};
+        backend.clear(capture,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,{},1);
+        // Defer a visible and an empty query together. Their results must retain
+        // submit order, including when the Vulkan render pass ends after finish.
+        backend.beginOcclusion();backend.draw(capture);backend.finishOcclusion();
+        backend.beginOcclusion();backend.finishOcclusion();
+        ASSERT_TRUE(backend.occlusionResult());ASSERT_FALSE(backend.occlusionResult());
+        composite.uniforms.peel[1]=float(mode);
+        composite.srcRGB=mode==1?GL_DST_COLOR:mode==3?GL_ONE:GL_SRC_ALPHA;
+        composite.dstRGB=mode==1?GL_ZERO:mode==2?GL_ONE:GL_ONE_MINUS_SRC_ALPHA;
+        composite.srcAlpha=GL_ONE;composite.dstAlpha=mode==1?GL_ZERO:GL_ONE_MINUS_SRC_ALPHA;
+        backend.clear(composite,GL_COLOR_BUFFER_BIT,{0.2f,0.4f,0.6f,0.75f},1);
+        backend.draw(composite);
+        const auto actual=pixels(backend);
+        for(unsigned channel=0;channel<4;++channel)
+            EXPECT_NEAR(actual[sample+channel],expected[mode][channel]*255.f,2.f)<<"channel "<<channel;
+        // A mode mismatch must discard without changing color or coverage.
+        backend.clear(composite,GL_COLOR_BUFFER_BIT,{0.2f,0.4f,0.6f,0.75f},1);
+        composite.uniforms.peel[1]=float((mode+1)%4);backend.draw(composite);
+        const auto untouched=pixels(backend);
+        for(unsigned channel=0;channel<4;++channel)
+            EXPECT_NEAR(untouched[sample+channel],background[channel]*255.f,1.f);
+    }
+}
 inline void exerciseNativeGraphics(Backend& generic,Backend& optimized) {
+    exercisePeelCompositing(generic);exercisePeelCompositing(optimized);
     allocate(generic);allocate(optimized);
     // Compare actual GPU output from the generic and specialized programs.
     // Shader modes cover the existing material, spotlight, fog and mask fixes.
@@ -137,6 +191,10 @@ inline void exerciseNativeGraphics(Backend& generic,Backend& optimized) {
     optimized.draw(repeated);optimized.texture(0,resized,0,TextureUpload::Definition,nullptr,0);
     repeated.depth=0;repeated.viewport={0,0,8,8};optimized.clear(repeated,GL_COLOR_BUFFER_BIT,{0,1,0,1},1);
     auto smaller=pixels(optimized,8);EXPECT_EQ(smaller[1],255);
-    optimized.draw(repeated); // destructor must drain this final pending batch
+    // Retiring a sampled image submits the last draw on Vulkan. Leave the
+    // following clear unsubmitted to exercise both lifetimes during teardown.
+    optimized.draw(repeated);
+    optimized.eraseTexture(10);
+    optimized.clear(repeated,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);
 }
 } // namespace hikaru::graphics::test

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // Instruction semantics checked against Hollycast's hw/sh4/interpr/sh4_opcodes.cpp.
 #include "sh4_cpu.h"
 

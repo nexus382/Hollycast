@@ -614,7 +614,9 @@ void renderToolsMenu()
 		if (ImGui::MenuItem(T("Assembly Debugger"), nullptr, assembly_debugger::active(), assembly_debugger::available()))
 			gui_open_debugger();
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !assembly_debugger::available())
-			ImGui::SetTooltip("%s", T("Load an offline game with hardcore mode and the GDB server disabled."));
+			ImGui::SetTooltip("%s", settings.platform.isHikaru()
+					? T("The assembly debugger cannot access Hikaru's CPUs.")
+					: T("Load an offline game with hardcore mode and the GDB server disabled."));
 
 		// Custom Boxart
 		if (ImGui::MenuItem(T("Custom Boxart"), nullptr, false, true))

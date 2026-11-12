@@ -32,7 +32,7 @@ namespace {
 
 CustomTheme::Theme previewTheme;
 bool hasPreviewTheme = false;
-bool initialThemeMigrationAttempted = false;
+std::string lastThemeMigrationDirectory;
 
 void addContentPathCallback(const std::string& path)
 {
@@ -91,9 +91,11 @@ void applyCurrentTheme()
 #if defined(__ANDROID__) || defined(TARGET_IPHONE) || defined(__SWITCH__)
 	style.TouchExtraPadding = ImVec2(1, 1);
 #endif
-	if (!hasPreviewTheme && !initialThemeMigrationAttempted) {
-		initialThemeMigrationAttempted = true;
-		const std::string themeDirectory = CustomTheme::directory();
+	// Each writable settings folder owns its migration files. Live style
+	// reloads in the same folder must not repeat the migration.
+	const std::string themeDirectory = CustomTheme::directory();
+	if (!hasPreviewTheme && lastThemeMigrationDirectory != themeDirectory) {
+		lastThemeMigrationDirectory = themeDirectory;
 		const int initiallySelectedTheme = config::UITheme.get();
 		std::string migrationError;
 		int pendingId = -1;

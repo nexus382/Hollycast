@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "dsp.h"
 #include "aica.h"
 /*

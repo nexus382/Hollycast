@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "aica.h"
 #include "aica_if.h"
 #include "aica_mem.h"

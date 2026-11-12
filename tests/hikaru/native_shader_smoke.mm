@@ -1,4 +1,4 @@
-// Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Metal/Metal.h>
 

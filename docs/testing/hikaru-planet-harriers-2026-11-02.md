@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Planet Harriers rendering review — 2026-11-02
 
 Base: `0964a6750` (`hikaru-arcade-support`), fetched and fast-forwarded from `198be7ef6`. Prepared on local branch `hikaru-renderer-settings` for [PR #46](https://github.com/nexus382/Hollycast/pull/46), whose head is `hikaru-arcade-support`.

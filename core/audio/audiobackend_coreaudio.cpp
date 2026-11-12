@@ -1,3 +1,4 @@
+/* Portions Copyright 2026 The Hollycast Authors */
 /*
     Simple Core Audio backend for osx (and maybe ios?)
     Based off various audio core samples and dolphin's code

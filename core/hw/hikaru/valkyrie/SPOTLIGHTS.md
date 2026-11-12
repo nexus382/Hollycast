@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Experimental spotlight decoding
 
 The optional Hikaru renderer uses guest command `451` for the spotlight cutoff,

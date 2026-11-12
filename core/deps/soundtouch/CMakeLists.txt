@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 The Hollycast Authors
+# Portions Copyright 2026 The Hollycast Authors
 add_library(hollycast_soundtouch STATIC
     source/AAFilter.cpp source/FIFOSampleBuffer.cpp source/FIRFilter.cpp
     source/InterpolateCubic.cpp source/InterpolateLinear.cpp source/InterpolateShannon.cpp

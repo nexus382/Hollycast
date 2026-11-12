@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #if defined(USE_SDL_AUDIO)
 
 #include <SDL.h>

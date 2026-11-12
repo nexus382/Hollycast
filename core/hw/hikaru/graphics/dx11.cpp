@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <future>
 #include <system_error>
 #include <limits>
@@ -80,10 +81,10 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         bool depth=false,sampleable=true;
     };
     struct PixelKey {
-        bool bitmap=false,family=false,palette=false;
+        bool bitmap=false,family=false,palette=false,peelComposite=false;
         MeshShaderSpecialization constants{};
         unsigned passFlags=0;
-        bool operator<(const PixelKey& other) const {return std::tie(bitmap,family,palette,constants,passFlags)<std::tie(other.bitmap,other.family,other.palette,other.constants,other.passFlags);}
+        bool operator<(const PixelKey& other) const {return std::tie(bitmap,family,palette,peelComposite,constants,passFlags)<std::tie(other.bitmap,other.family,other.palette,other.peelComposite,other.constants,other.passFlags);}
     };
     struct PixelShader {ComPtr<ID3D11PixelShader> shader;uint64_t touched=0;bool deferred=false;};
     struct CompiledPixel {ComPtr<ID3DBlob> code;ComPtr<ID3D11PixelShader> shader;};
@@ -140,6 +141,7 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     // flags change; source, entry point and shader profile are already hashed.
     static constexpr const char* CacheFile="hikaru_dx11_shader_cache_v1.bin";
     std::vector<ComPtr<ID3D11Query>> queries;
+    std::deque<std::vector<ComPtr<ID3D11Query>>> pendingOcclusions;
     static constexpr unsigned ColorFallback=0x7ffffffdu,MetadataFallback=0x7ffffffcu;
 
     ComPtr<ID3DBlob> compile(const std::string& source,const char* entry,const char* profile) {
@@ -298,14 +300,14 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
                 if(separateDepth)passFlags|=Dx11SeparateDepth;
             }
         }
-        const PixelKey key{draw.bitmap,draw.familyResolve,!draw.palette.empty(),meshShaderSpecialization(draw,specialize),passFlags};
+        const PixelKey key{draw.bitmap,draw.familyResolve,!draw.palette.empty(),draw.peelComposite,meshShaderSpecialization(draw,specialize),passFlags};
         auto found=pixelShaders.find(key);
         // Cache deferred keys too: a pending compiler must not make every
         // sorted triangle rebuild and hash the same HLSL source each frame.
         if(found!=pixelShaders.end()&&(!found->second.deferred||pendingPixel)) {
             found->second.touched=++shaderClock;return found->second.shader;
         }
-        const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags);
+        const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags,key.peelComposite);
         ComPtr<ID3DBlob> code;const u64 hash=hashShader(source.c_str(),"pixelMain","ps_5_0");
         if(!lookupShader(hash,code)) {
             if(backgroundCompilation&&!draw.bitmap) {
@@ -599,7 +601,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             auto& input=sampledImage(id,state,draw,false);views[i]=input.view;sampling[i]=sampler(state,input);
         }
         for(unsigned i=1;i<4;++i) {
-            const bool integer=draw.familyResolve?i>=2:!draw.bitmap&&i==3;
+            const bool integer=draw.familyResolve?i>=2:draw.peelComposite?i==2:!draw.bitmap&&i==3;
             auto& input=sampledImage(draw.textures[i],draw.sampling[i],draw,integer);views[15+i]=input.view;
             if(draw.bitmap&&!draw.familyResolve)sampling[i]=sampler(draw.sampling[i],input);
         }
@@ -637,11 +639,17 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         if(occlusionActive)throw FlycastException("Nested Hikaru DX11 visibility query");
         queries.clear();occlusionActive=true;
     }
-    bool endOcclusion() override {
+    void finishOcclusion() override {
         if(!occlusionActive)throw FlycastException("No active Hikaru DX11 visibility query");
-        endQuerySegment();occlusionActive=false;bool visible=false;
+        endQuerySegment();occlusionActive=false;
+        pendingOcclusions.push_back(std::move(queries));queries.clear();
+    }
+    bool occlusionResult() override {
+        if(pendingOcclusions.empty())throw FlycastException("No pending Hikaru DX11 visibility query");
+        auto pending=std::move(pendingOcclusions.front());pendingOcclusions.pop_front();
+        bool visible=false;
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
-        for(auto& query:queries) {
+        for(auto& query:pending) {
             UINT64 samples=0;HRESULT result;
             while((result=context->GetData(query,&samples,sizeof(samples),0))==S_FALSE) {
                 if(std::chrono::steady_clock::now()>deadline)throw FlycastException("Hikaru DX11 visibility query timed out");
@@ -649,8 +657,9 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             }
             checkResult(result,"visibility query result");visible|=samples!=0;
         }
-        queries.clear();return visible;
+        return visible;
     }
+    bool endOcclusion() override { finishOcclusion(); return occlusionResult(); }
     void present(unsigned width,unsigned height) override {
         completePixelCompilation(false);
         auto& output=image(0);if(output.description.Width!=width||output.description.Height!=height)return;

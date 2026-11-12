@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "types.h"
 
 #if FEAT_AREC != DYNAREC_NONE

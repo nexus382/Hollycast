@@ -4938,6 +4938,10 @@ void gui_term()
 		librarySavestateCache.stop();
 		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
+		// The atlas owns these fonts. A later UI context must start with its
+		// own default font until gui_loadFonts populates the new atlas.
+		boldFont = largeFont = aboutAsciiFont = nullptr;
+		settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
 		EventManager::unlisten(Event::Pause, emuEventCallback);

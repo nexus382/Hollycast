@@ -19,6 +19,8 @@ Device::Device(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {
     dispatch.ClearBufferuiv = [](GLenum buffer, GLint drawbuffer, const GLuint *value) { try { active->ClearBufferuiv(buffer, drawbuffer, value); } catch (...) { active->error=std::current_exception(); } };
     dispatch.BeginOcclusion = [] { try { active->flushDraw(); active->backend->beginOcclusion(); } catch (...) { active->error=std::current_exception(); } };
     dispatch.EndOcclusion = []() -> GLboolean { try { active->flushDraw(); return active->backend->endOcclusion(); } catch (...) { active->error=std::current_exception(); return false; } };
+    dispatch.FinishOcclusion = [] { try { active->flushDraw(); active->backend->finishOcclusion(); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.OcclusionResult = []() -> GLboolean { try { return active->backend->occlusionResult(); } catch (...) { active->error=std::current_exception(); return false; } };
     dispatch.ActiveTexture = [](GLenum texture) -> void { try { active->ActiveTexture(texture); } catch (...) { active->error=std::current_exception(); } };
     dispatch.AttachShader = [](GLuint program, GLuint shader) -> void { try { active->AttachShader(program, shader); } catch (...) { active->error=std::current_exception(); } };
     dispatch.BindAttribLocation = [](GLuint program, GLuint index, const GLchar * name) -> void { try { active->BindAttribLocation(program, index, name); } catch (...) { active->error=std::current_exception(); } };
@@ -139,7 +141,7 @@ void Device::queueDraw(Draw draw) {
     // Triangle sorting replays individual triangles. Merge only adjacent,
     // identical draws, preserving their order and bounding staging memory.
     auto key=[](const Draw& d) {
-        return std::tie(d.color,d.depth,d.metadata,d.familyResolve,d.textures,d.viewport,d.scissor,
+        return std::tie(d.color,d.depth,d.metadata,d.familyResolve,d.peelComposite,d.textures,d.viewport,d.scissor,
             d.scissorEnabled,d.depthTest,d.depthWrite,d.blend,d.cull,d.bitmap,
             d.depthFunc,d.cullFace,d.frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,
             d.equationRGB,d.equationAlpha,d.topology,d.colorMask,d.biasFactor,
@@ -197,8 +199,9 @@ Uniforms Device::uniforms(const Program& p) const {
     u.family[3]=def("HAS_PATTERN")!=0.f?scalar("u_pattern"):65535.f;
     u.flags={def("HAS_TEXTURE"),def("SHADING_MODE"),def("HAS_TWO_SIDED_LIGHTING"),def("HAS_FOG")};
     u.material={def("ALPHA_MODE"),def("TEXTURE_MODE"),scalar("u_alpha_ref"),scalar("u_sort_scale")};
-    u.blend={scalar("u_weigh_by_alpha"),scalar("u_force_coverage"),0,0};
+    u.blend={scalar("u_weigh_by_alpha"),scalar("u_force_coverage"),scalar("u_blend_mode"),0};
     u.peel={scalar("u_peel_enabled"),scalar("u_peel_first"),1,1};
+    if(p.peelComposite)u.peel[1]=scalar("u_peel_mode");
     const auto& peelSize=value("u_peel_size");if(peelSize.size()>=2){u.peel[2]=peelSize[0];u.peel[3]=peelSize[1];}
     if(p.cachedLights) u.lights=*p.cachedLights;
     else {
@@ -394,6 +397,7 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
     if(first<0||count<0)throw std::runtime_error("Invalid Hikaru draw range");
     if(!count)return;
     auto d=drawState();auto& p=programs.at(program);d.bitmap=p.bitmap;d.familyResolve=p.familyResolve;d.uniforms=uniforms(p);d.topology=mode;d.uniforms.inverted[2]=d.color?1.f:0.f;
+    d.peelComposite=p.peelComposite;
     // Fragment depth is already in window coordinates, so viewport range must
     // be applied in the shader. Range changes do not invalidate program uniforms.
     d.uniforms.depth[2]=d.nearDepth;d.uniforms.depth[3]=d.farDepth;
@@ -514,7 +518,7 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
     }
     // Sampler uniforms select texture units; absent layers use the zero image.
     if(d.bitmap) {
-        const char* names[]={"u_front","u_back","u_layer1","u_layer2"};
+        const char* names[]={"u_front","u_back",d.peelComposite?"u_peel_meta":"u_layer1","u_layer2"};
         for(unsigned i=0;i<4;i++) {
             auto location=p.locations.find(names[i]);
             unsigned unit=i;
@@ -634,7 +638,22 @@ GLboolean Device::IsBuffer(GLuint id){return buffers.count(id);}
 GLboolean Device::IsEnabled(GLenum cap){return enabled.count(cap);}
 GLboolean Device::IsProgram(GLuint id){return programs.count(id);}
 GLboolean Device::IsVertexArray(GLuint id){return arrays.count(id);}
-void Device::LinkProgram(GLuint id){auto& p=programs.at(id);p.cachedUniforms.reset();p.cachedLights.reset();for(auto s:p.shaders){const auto& text=shaders.at(s);p.bitmap|=text.find("u_front")!=std::string::npos;p.familyResolve|=text.find("#define FAMILY_RESOLVE 1")!=std::string::npos;std::istringstream input(text);std::string line;while(std::getline(input,line)){std::istringstream words(line);std::string directive,name;int value;if(words>>directive>>name>>value && directive=="#define")p.definitions[name]=value;}}}
+void Device::LinkProgram(GLuint id) {
+    auto& p=programs.at(id);p.cachedUniforms.reset();p.cachedLights.reset();
+    p.bitmap=p.familyResolve=p.peelComposite=false;
+    p.definitions.clear();
+    for(auto s:p.shaders) {
+        const auto& text=shaders.at(s);
+        p.bitmap|=text.find("u_front")!=std::string::npos;
+        p.familyResolve|=text.find("#define FAMILY_RESOLVE 1")!=std::string::npos;
+        p.peelComposite|=text.find("#define PEEL_COMPOSITE 1")!=std::string::npos;
+        std::istringstream input(text);std::string line;
+        while(std::getline(input,line)) {
+            std::istringstream words(line);std::string directive,name;int value;
+            if(words>>directive>>name>>value && directive=="#define")p.definitions[name]=value;
+        }
+    }
+}
 void Device::PixelStorei(GLenum name,GLint v){pixelStore[name]=v;}
 void Device::PolygonOffset(GLfloat f,GLfloat u){state.biasFactor=f;state.biasUnits=u;}
 void Device::ReadPixels(GLint x,GLint y,GLsizei w,GLsizei h,GLenum format,GLenum type,void* data){flushDraw();if(format!=GL_RGBA||type!=GL_UNSIGNED_BYTE)throw std::runtime_error("Unsupported Hikaru readback format");backend->readPixels(targets.at(readFramebuffer)[0],x,y,w,h,static_cast<uint8_t*>(data));}

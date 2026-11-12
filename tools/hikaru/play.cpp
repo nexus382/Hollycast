@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 #include "hw/hikaru/roms.h"
 #include "hw/hikaru/mie.h"
 #include "hw/hikaru/protection.h"

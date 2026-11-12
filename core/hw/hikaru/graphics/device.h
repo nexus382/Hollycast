@@ -78,7 +78,7 @@ struct Draw {
     std::array<unsigned,4> textures{};
     std::array<Texture,4> sampling{};
     std::array<GLint,4> viewport{}, scissor{};
-    bool scissorEnabled = false, depthTest = false, depthWrite = true, blend = false, cull = false, bitmap = false, familyResolve = false;
+    bool scissorEnabled = false, depthTest = false, depthWrite = true, blend = false, cull = false, bitmap = false, familyResolve = false, peelComposite = false;
     GLenum depthFunc = GL_LESS, cullFace = GL_BACK, frontFace = GL_CCW;
     GLenum srcRGB = GL_ONE, dstRGB = GL_ZERO, srcAlpha = GL_ONE, dstAlpha = GL_ZERO;
     GLenum equationRGB = GL_FUNC_ADD, equationAlpha = GL_FUNC_ADD, topology = GL_TRIANGLES;
@@ -107,6 +107,21 @@ public:
     virtual void present(unsigned width, unsigned height) = 0;
     virtual void beginOcclusion() = 0;
     virtual bool endOcclusion() = 0;
+    // Every finished query must be collected in FIFO order before the caller
+    // changes viewport or targets. Result collection may wait for the GPU.
+    virtual void finishOcclusion() { deferredOcclusionResults.push_back(endOcclusion()); }
+    virtual bool occlusionResult() {
+        const bool result=deferredOcclusionResults.at(deferredOcclusionCursor);
+        ++deferredOcclusionCursor;
+        if(deferredOcclusionCursor==deferredOcclusionResults.size()) {
+            deferredOcclusionResults.clear();deferredOcclusionCursor=0;
+        }
+        return result;
+    }
+private:
+    // Blocking fallback for recording/host-only backends without GPU queries.
+    std::vector<bool> deferredOcclusionResults;
+    std::size_t deferredOcclusionCursor=0;
 };
 std::unique_ptr<Backend> makeMetalBackend();
 std::unique_ptr<Backend> makeVulkanBackend();
@@ -131,7 +146,7 @@ public:
 private:
     struct Attribute { unsigned buffer=0; GLint size=4; GLenum type=GL_FLOAT; bool normalized=false; GLsizei stride=0; size_t offset=0; bool enabled=false; };
     struct Program {
-        bool bitmap=false, familyResolve=false;
+        bool bitmap=false, familyResolve=false, peelComposite=false;
         std::unordered_map<std::string,int> definitions;
         std::unordered_map<std::string,GLint> locations;
         std::unordered_map<GLint,std::vector<float>> values;

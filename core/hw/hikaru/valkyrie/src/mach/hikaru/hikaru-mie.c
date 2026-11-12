@@ -1,6 +1,6 @@
 /* Modified for Hollycast on 2026-10-31; see valkyrie/PROVENANCE.md. */
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Embedded MIE bridge, Copyright 2026 The Hollycast Authors.
+ * Embedded MIE bridge, Portions Copyright 2026 The Hollycast Authors.
  * The host owns the actual device and its JVS firmware/interactions.
  */
 #include "engine_internal.h"

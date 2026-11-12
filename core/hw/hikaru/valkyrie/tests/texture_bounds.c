@@ -226,12 +226,12 @@ static unsigned test_texhead_switch(void)
 unsigned hikaru_vendor_test_transparency_budget(unsigned, unsigned, uint64_t, unsigned);
 static unsigned test_transparency_budget(void)
 {
-    const uint64_t layer_bytes = UINT64_C(640) * 480 * 8;
+    const uint64_t layer_bytes = UINT64_C(640) * 480 * 16;
     const struct { unsigned width, height; uint64_t bytes; unsigned requested, expected; } cases[] = {
-        {640, 480, UINT64_C(512) * 1024 * 1024, 128, 128},
-        {1280, 960, UINT64_C(512) * 1024 * 1024, 128, 53},
-        {1920, 1440, UINT64_C(512) * 1024 * 1024, 128, 23},
-        {1920, 1440, UINT64_C(4) * 1024 * 1024 * 1024, 128, 128},
+        {640, 480, UINT64_C(512) * 1024 * 1024, 128, 108},
+        {1280, 960, UINT64_C(512) * 1024 * 1024, 128, 26},
+        {1920, 1440, UINT64_C(512) * 1024 * 1024, 128, 11},
+        {1920, 1440, UINT64_C(4) * 1024 * 1024 * 1024, 128, 96},
         {640, 480, layer_bytes * 2 - 1, 128, 0},
         {640, 480, layer_bytes * 2, 128, 1},
         {640, 480, layer_bytes * 129, 128, 128},

@@ -1,4 +1,4 @@
-# Copyright 2026 The Hollycast Authors
+# Portions Copyright 2026 The Hollycast Authors
 cmake_minimum_required(VERSION 3.22)
 project(HikaruNativeBoot LANGUAGES C CXX)
 add_subdirectory(../../core/hw/hikaru "${CMAKE_CURRENT_BINARY_DIR}/hikaru")
