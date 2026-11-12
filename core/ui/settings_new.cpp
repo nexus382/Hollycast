@@ -3762,7 +3762,25 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryThemeCfg,
 			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
 		gui_display_library_download_progress();
-		if (ImGui::Button(T("Browse themes"))) themes::openBrowser();
+		ImGui::PushID("ThemeDownloadRow");
+		const bool downloadThemes = BeginTwoLineSettingRow("##row",
+			T("Download Themes\nBrowse theme previews and descriptions, then download and install one for your library."));
+		const ImVec2 downloadThemesLine1Start = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_DOWNLOAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Download Themes"));
+		ImGui::PopFont();
+		ImGui::PushFont(settingsRightValueFont != nullptr ? settingsRightValueFont : largeFont);
+		ImGui::SameLine(RightColumnX(ImGui::CalcTextSize(T("Download")).x));
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f);
+		ImGui::TextUnformatted(T("Download"));
+		ImGui::PopFont();
+		RenderTwoLineSettingDescription(downloadThemesLine1Start, T("Browse and install library themes from the online catalogue."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
+		if (downloadThemes) themes::openBrowser();
 
 		if (const themes::Theme* activeTheme = themes::current())
 		{
@@ -3860,7 +3878,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	}
 
-	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
+	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper"), T("LaunchBox")};
 		SettingsUI::PopupConfig providerCfg {};
