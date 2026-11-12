@@ -37,6 +37,11 @@ personal account to use that account's reported thread and quota allowances.
 Signing out returns to guest access. Reconnecting waits for old in-flight calls
 to finish so the two sessions cannot exceed the same account's thread allowance.
 
+Guest connections check ScreenScraper's infrastructure status, which does not
+require a personal account. They start with one request at a time, then apply
+the guest limits reported by game replies. The global guest thread capacity is
+never used as an individual session's allowance.
+
 The username is saved in settings. The password is masked and kept only for the
 current session; it is never written to the configuration or artwork database.
 Users sign in again after restarting; browsing can otherwise use guest access.

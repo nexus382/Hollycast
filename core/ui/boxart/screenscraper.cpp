@@ -325,8 +325,7 @@ json Session::requestJson(const std::string& endpoint, const std::string& parame
 	std::string contentType;
 	if (request(endpoint, parameters, bytes, contentType) == 404)
 		return json::object();
-	// The guest-capability reply includes the system catalog, which is larger than game replies.
-	const size_t limit = endpoint == "systemesListe.php" ? 16 * 1024 * 1024 : 4 * 1024 * 1024;
+	const size_t limit = 4 * 1024 * 1024;
 	// Parse JSON as text: recent Android NDKs do not define char_traits<u8>.
 	const char* jsonText = bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data());
 	const json root = bytes.size() <= limit ? json::parse(jsonText, jsonText + bytes.size(), nullptr, false) : json();
@@ -345,12 +344,28 @@ void Session::login()
 	}
 	try
 	{
-		// ssuserInfos requires a member login, even when the application is valid.
-		// The system catalog also reports the server's guest thread and quota limits.
-		const auto response = requestJson(account.personalAccount ? "ssuserInfos.php" : "systemesListe.php", "");
-		if (!response.contains("ssuser") || !number(response["ssuser"], "maxthreads")
-				|| (account.personalAccount && lowerCase(text(response["ssuser"], "id")) != lowerCase(credentials.username)))
-			fail(401); // Reject silent anonymous fallback; it must not borrow guest limits.
+		// Infrastructure replies report guest availability without requiring a member login.
+		// Catalog replies can omit ssuser entirely, so they cannot validate account quotas.
+		const auto response = requestJson(account.personalAccount ? "ssuserInfos.php" : "ssinfraInfos.php", "");
+		if (account.personalAccount)
+		{
+			if (!response.contains("ssuser") || !number(response["ssuser"], "maxthreads")
+					|| lowerCase(text(response["ssuser"], "id")) != lowerCase(credentials.username))
+				fail(401); // Reject silent anonymous fallback; it must not borrow guest limits.
+		}
+		else
+		{
+			const auto servers = response.find("serveurs");
+			if (servers == response.end() || !servers->is_object() || !servers->contains("closefornomember"))
+				fail(0);
+			const auto& closed = (*servers)["closefornomember"];
+			if (closed == "1" || closed == 1)
+				fail(423);
+			if (closed != "0" && closed != 0)
+				fail(0);
+			// Global guest capacity is not a per-session allowance. Keep one worker until
+			// a game response supplies this guest's own thread and quota limits.
+		}
 		std::lock_guard<std::mutex> guard(mutex);
 		account.connected = !cancelled;
 		account.connecting = false;
