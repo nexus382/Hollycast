@@ -178,6 +178,16 @@ void testDispatchConversionUniformsAndState(RecordingBackend& backend, Device& d
     check(near(backend.lastDraw.uniforms.lodBias[0], -0.75f)
           && backend.lastDraw.sampling[0].magFilter == GL_LINEAR,
           "sampler remapping lost filtering or fractional LOD bias");
+    check(near(backend.lastDraw.uniforms.factors[3], 1.f),
+          "bitmap aspect scale must default to native proportions");
+    const GLint layerScale = hikaru_glGetUniformLocation(bitmap, "u_layer_x_scale");
+    for (float scale : {0.75f, 0.5f, 1.f}) {
+        hikaru_glUniform1f(layerScale, scale);
+        hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
+        device.checkError();
+        check(near(backend.lastDraw.uniforms.factors[3], scale),
+              "bitmap widescreen scale lost during native uniform packing");
+    }
     hikaru_glUniform1f(hikaru_glGetUniformLocation(bitmap, "u_lod_bias"), -0.375f);
     hikaru_glDrawArrays(GL_TRIANGLES, 0, 3);
     device.checkError();

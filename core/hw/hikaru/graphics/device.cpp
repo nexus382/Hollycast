@@ -214,7 +214,8 @@ Uniforms Device::uniforms(const Program& p) const {
         }
         p.cachedLights=u.lights;
     }
-    u.factors={scalar("u_factor"),scalar("u_mult_f",1),scalar("u_mult_b",1),0};
+    // Bitmap layers retain 4:3 pixel proportions inside the wider 3D output.
+    u.factors={scalar("u_factor"),scalar("u_mult_f",1),scalar("u_mult_b",1),scalar("u_layer_x_scale",1)};
     u.multipliers={scalar("u_mult_1"),scalar("u_mult_2"),0,0};
     u.direct={scalar("u_direct_1"),scalar("u_direct_2"),0,0};u.keyed={scalar("u_keyed_1"),scalar("u_keyed_2"),0,0};
     u.inverted={scalar("u_invert_f"),scalar("u_invert_b"),0,0};

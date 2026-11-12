@@ -119,17 +119,20 @@ const char* meshFragmentBody=R"(
     RETURN_COLOR(color);
 )";
 const char* bitmapBody=R"(
-    vec2 inv=vec2(o.uv.x,1.0-o.uv.y);
-    vec4 front=SAMPLE0(u.inverted.x==0.0?o.uv:inv)*u.factors.y;
-    vec4 back=SAMPLE1(u.inverted.y==0.0?o.uv:inv)*u.factors.z;
+    // Match the GL compositor: centre bitmap planes without stretching them,
+    // including when a plane is selected as front/back or has its key disabled.
+    vec2 inv=vec2((o.uv.x-0.5)/u.factors.w+0.5,1.0-o.uv.y);
+    float visible=step(0.0,inv.x)*step(inv.x,1.0);
+    vec4 front=SAMPLE0(u.inverted.x==0.0?o.uv:inv)*u.factors.y*(u.inverted.x==0.0?1.0:visible);
+    vec4 back=SAMPLE1(u.inverted.y==0.0?o.uv:inv)*u.factors.z*(u.inverted.y==0.0?1.0:visible);
     vec4 layer1=SAMPLE2(inv),layer2=SAMPLE3(inv);
     vec4 scene=mix(front,back,u.factors.x);
     // Bitmap planes sit either behind the 3D picture or in front of it.
     // A keyed plane covers only where its alpha key is set; an unkeyed
     // plane covers everywhere. Behind-planes show only where the 3D
     // picture drew nothing, so a drawn pixel covers them in full.
-    float key1=u.keyed.x!=0.0?step(0.1,layer1.a):1.0;
-    float key2=u.keyed.y!=0.0?step(0.1,layer2.a):1.0;
+    float key1=visible*(u.keyed.x!=0.0?step(0.1,layer1.a):1.0);
+    float key2=visible*(u.keyed.y!=0.0?step(0.1,layer2.a):1.0);
     bool hasBehind=(u.multipliers.x!=0.0&&u.direct.x==0.0)||(u.multipliers.y!=0.0&&u.direct.y==0.0);
     vec4 color=vec4(0.0);
     if(u.multipliers.y!=0.0&&u.direct.y==0.0)color=mix(color,vec4(layer2.xyz*u.multipliers.y,1.0),key2);
