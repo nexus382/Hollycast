@@ -44,9 +44,9 @@ Between the two of you, you've given us more testing time on this work than anyo
 
 Hikaru is a difficult system to emulate. Having other people's research and experience to learn from has mattered a great deal.
 
-**Réda Chérif-Touil (Tovarichtch)**, the developer of [ODIN](https://github.com/Tovarichtch/Odin), deserves a special thank-you. The debugging steps and information he shared helped us work through our own Hikaru emulation, including understanding the Valkyrie code we used as a reference. That help made a real difference to our progress on a system that is very difficult to get right.
+**Réda Chérif-Touil (Tovarichtch)**, the developer of [ODIN](https://github.com/Tovarichtch/Odin), deserves a special thank-you. The debugging information his code provided, helped us work through our own Hikaru emulation, including understanding the Valkyrie code we used as a reference. That help made a real difference to our progress on a system that is very difficult to get right.
 
-I appreciate the time you've put into ODIN, and the help you've given us while working on your own emulator. You had your own project to spend that time on, and you still helped ours move forward. That means a lot to me.
+I appreciate the time you've put into ODIN, and the help your code has provided us. You had your own project to spend that time on, and you still helped ours move forward with that very same hardwork. That means a lot to me.
 
 ODIN deserves recognition as a project in its own right, too. I'm glad it exists, and I'm glad the community has another developer working to understand Hikaru and give people a way to enjoy its games. I'd encourage anyone interested in the system to take a look at [ODIN and the work going into it](https://github.com/Tovarichtch/Odin).
 
