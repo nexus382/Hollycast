@@ -116,7 +116,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `name` | Display label used by **Library Layout**. |
 | `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), `rail`, or `orbit` (upright circular disc carousel). See [Rail mode](#rail-mode). Newer catalogues may use `carousel`; this build renders those layouts as `grid`. |
 | `browser` | `[x, y, width, height]` rectangle for the interactive game browser. Coordinates are fractions of the library content area. Position and size must fit wholly inside 0–1; width and height must each be at least `0.1`. |
-| `navigation` | Optional `[x, y, width, height]` rectangle where newer builds place library navigation. Accepted and stored; this build does not position navigation with it yet. |
+| `navigation` | Optional `[x, y, width, height]` rectangle for library navigation. With a hidden toolbar, the All Games / Continue Playing / Favourites buttons and a Settings button are placed inside it. |
 | `columns` | Grid column count, integer 1–12, or 1–64 for racks. Default `4`; list mode ignores it. The library Icon Size control adjusts the displayed column count to resize artwork. |
 | `itemAspect` | Cell width divided by height, from `0.3` to `3`, or `0.03` to `3` for racks. Default `0.8`; list mode ignores it. Rack heights are bounded to keep spines readable. |
 | `spacing` | Logical UI pixels between browser items, from `0` to `48`. Default `12`. |
@@ -252,9 +252,9 @@ system and saved favourite state, reserving space beside the title. The badge
 flags default to `false`; the favourite color defaults to the selector outline
 or app accent. `selectOnHover` defaults to `true`. Set it to `false` to select
 by clicking or keyboard/controller focus while a resting pointer leaves the
-active artwork and metadata alone. These fields require list mode. Newer
-catalogues may also set `list.releaseYear`; it is accepted and stored, but
-list rows do not show a release year in this build yet.
+active artwork and metadata alone. These fields require list mode. A list
+may also set `list.releaseYear` to show each game's release year as a badge
+in list rows.
 
 [Warning!](../themes/warning/theme.json) combines these optional primitives. Existing
 layouts retain their scrolling browser and decorative behavior when they omit them.

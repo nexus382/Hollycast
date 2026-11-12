@@ -3049,8 +3049,7 @@ static void gui_display_content()
 	static SettingsUI::TextFilter filter;
 	// Draw theme artwork first so all library controls remain above it. A dark
 	// wash preserves contrast even when users choose a bright background.
-	const std::string themeBackground = customLayout != nullptr
-			&& (customLayout->toolbar == "compact" || customLayout->toolbar == "hidden")
+	const std::string themeBackground = customLayout != nullptr && customLayout->themedChrome()
 			? std::string() : CustomTheme::assetPath("background");
 	bool libraryThemeBackgroundVisible = false;
 	if (!themeBackground.empty()) {
@@ -3105,11 +3104,11 @@ static void gui_display_content()
 		return;
 	}
 
-	if (customLayout != nullptr && (customLayout->toolbar == "compact" || customLayout->toolbar == "hidden"))
+	if (customLayout != nullptr && customLayout->themedChrome())
 	{
 		// Compact chrome is a shared layout option, independent of package identity.
 		// A hidden toolbar draws no app chrome: the theme provides its own.
-		const bool hideToolbar = customLayout->toolbar == "hidden";
+		const bool hideToolbar = customLayout->hidesToolbar();
 		const ImVec2 toolbarArea = ImGui::GetContentRegionAvail();
 		const themes::Layout& toolbarLayout = themes::responsiveLayout(*themes::current(), *customLayout,
 				toolbarArea.x / std::max(1.f, toolbarArea.y));
@@ -3188,6 +3187,46 @@ static void gui_display_content()
 			ImGui::Separator();
 		boxart.refreshCustomBoxartIndex(false);
 		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
+		if (hideToolbar)
+		{
+			// The theme draws its own chrome, but view switching and Settings
+			// must stay reachable: place them in the layout's navigation rect
+			// when it provides one, else keep a lone Settings button.
+			const ImVec2 windowPos = ImGui::GetWindowPos();
+			const ImVec2 windowSize = ImGui::GetWindowSize();
+			if (toolbarLayout.navigation)
+			{
+				const themes::Rect& rect = *toolbarLayout.navigation;
+				const float navX = windowPos.x + rect.x * windowSize.x;
+				const float navY = windowPos.y + rect.y * windowSize.y;
+				const float navW = rect.w * windowSize.x;
+				const float rowStep = ImGui::GetFrameHeight() + uiScaled(6);
+				const char* navLabels[] = {T("All Games"), T("Continue Playing"), T("Favourites")};
+				const library::View navViews[] = {library::View::All, library::View::ContinuePlaying, library::View::Favourites};
+				for (int i = 0; i < 3; i++)
+				{
+					ImGui::SetCursorScreenPos(ImVec2(navX, navY + i * rowStep));
+					const bool selected = libraryView == navViews[i];
+					if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+					if (ImGui::Button(navLabels[i], ImVec2(navW, 0)))
+					{
+						libraryView = navViews[i];
+						librarySavestateCacheInvalidated = true;
+					}
+					if (selected) ImGui::PopStyleColor();
+				}
+				ImGui::SetCursorScreenPos(ImVec2(navX, navY + 3 * rowStep + uiScaled(6)));
+				if (ImGui::Button(ICON_FA_GEAR "##themeSettingsHidden", ImVec2(navW, 0)))
+					gui_setState(GuiState::Settings);
+			}
+			else
+			{
+				ImGui::SetCursorScreenPos(ImVec2(windowPos.x + windowSize.x - uiScaled(52), windowPos.y + uiScaled(8)));
+				if (ImGui::Button(ICON_FA_GEAR "##themeSettingsHidden"))
+					gui_setState(GuiState::Settings);
+				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
+			}
+		}
 		ImGui::End();
 		contentpath_warning_popup();
 		return;

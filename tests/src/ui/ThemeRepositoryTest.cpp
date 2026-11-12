@@ -61,6 +61,23 @@ protected:
 		return std::vector<unsigned char>(std::istreambuf_iterator<char>(in), {});
 	}
 	themes::repository::Theme entry() { return themes::repository::parse(catalog().dump(), url).front(); }
+	static themes::repository::Theme entryFor(const std::string& id)
+	{
+		themes::repository::Theme theme;
+		theme.id = id;
+		theme.packageUrl = "https://example.com/packages/" + id + ".zip";
+		return theme;
+	}
+	static themes::repository::Transport servePackages(
+		const std::map<std::string, std::vector<unsigned char>>& packages)
+	{
+		return [&packages](const std::string& requested, std::vector<unsigned char>& out) {
+			const auto found = packages.find(requested);
+			if (found == packages.end()) return 404;
+			out = found->second;
+			return 200;
+		};
+	}
 	themes::repository::Transport transport(const std::vector<unsigned char>& data, int status = 200)
 	{
 		return [data, status](const std::string&, std::vector<unsigned char>& out) { out = data; return status; };
@@ -139,12 +156,6 @@ TEST_F(ThemeRepositoryTest, InstallsDownloadedPackageAndProtectsExistingFiles)
 
 TEST_F(ThemeRepositoryTest, InstallsMultipleThemesInSequence)
 {
-	const auto entryFor = [](const std::string& id) {
-		themes::repository::Theme theme;
-		theme.id = id;
-		theme.packageUrl = "https://example.com/packages/" + id + ".zip";
-		return theme;
-	};
 	const auto bytesFor = [this](const std::string& id) {
 		std::string text = manifest;
 		text.replace(text.find("online-test"), 11, id);
@@ -154,12 +165,7 @@ TEST_F(ThemeRepositoryTest, InstallsMultipleThemesInSequence)
 		{"https://example.com/packages/first-test.zip", bytesFor("first-test")},
 		{"https://example.com/packages/second-test.zip", bytesFor("second-test")},
 	};
-	const themes::repository::Transport serve = [&packages](const std::string& requested, std::vector<unsigned char>& out) {
-		const auto found = packages.find(requested);
-		if (found == packages.end()) return 404;
-		out = found->second;
-		return 200;
-	};
+	const themes::repository::Transport serve = servePackages(packages);
 
 	EXPECT_EQ(themes::repository::install(entryFor("first-test"), serve), "first-test");
 	themes::reload();
@@ -187,22 +193,11 @@ TEST_F(ThemeRepositoryTest, InstallsCurrentCatalogueFormatsInSequence)
 	const std::string bloomManifest = R"({"formatVersion":1,"id":"bloom-test","name":"Bloom Test",
 "layouts":[{"id":"gallery","name":"Gallery","mode":"carousel","browser":[0,0,1,1],"columns":5},
 {"id":"index","name":"Index","mode":"list","browser":[0,0,1,1]}]})";
-	const auto entryFor = [](const std::string& id) {
-		themes::repository::Theme theme;
-		theme.id = id;
-		theme.packageUrl = "https://example.com/packages/" + id + ".zip";
-		return theme;
-	};
 	const std::map<std::string, std::vector<unsigned char>> packages = {
 		{"https://example.com/packages/archive-test.zip", zip({{"theme.json", archiveManifest}})},
 		{"https://example.com/packages/bloom-test.zip", zip({{"theme.json", bloomManifest}})},
 	};
-	const themes::repository::Transport serve = [&packages](const std::string& requested, std::vector<unsigned char>& out) {
-		const auto found = packages.find(requested);
-		if (found == packages.end()) return 404;
-		out = found->second;
-		return 200;
-	};
+	const themes::repository::Transport serve = servePackages(packages);
 
 	EXPECT_EQ(themes::repository::install(entryFor("archive-test"), serve), "archive-test");
 	themes::reload();

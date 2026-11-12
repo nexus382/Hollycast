@@ -10,6 +10,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <iomanip>
@@ -952,6 +953,19 @@ float drawListBadges(const Layout& layout, const LibraryItem& item, const ImRect
 	{
 		const auto system = item.metadata.find("system");
 		if (system != item.metadata.end()) badge(system->second, false);
+	}
+	if (layout.list.releaseYear)
+	{
+		const auto release = item.metadata.find("releaseDate");
+		if (release != item.metadata.end() && !release->second.empty())
+		{
+			// Dates arrive as ISO-like text ("1999-09-09"); show just the year.
+			const std::string& date = release->second;
+			const bool yearOnly = date.size() >= 4
+				&& std::isdigit(static_cast<unsigned char>(date[0])) && std::isdigit(static_cast<unsigned char>(date[1]))
+				&& std::isdigit(static_cast<unsigned char>(date[2])) && std::isdigit(static_cast<unsigned char>(date[3]));
+			badge(yearOnly ? date.substr(0, 4) : date, false);
+		}
 	}
 	return right;
 }

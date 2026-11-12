@@ -590,15 +590,27 @@ static void AddWeightedFooterText(ImDrawList* drawList, ImFont* font, float font
 
 static void ResetGeneralPageSettings()
 {
+	// Every preference on the General page returns to its declared default.
+	// Content folders are user data, not a preference, so they are kept.
 	config::UILanguage = "";
 	config::UILanguage.save();
 	config::Language = 1;	// English
 	config::Region = 1;		// USA
 	config::Broadcast = 0;	// NTSC
 	config::Cable = 3;		// TV Composite
+	config::UITheme = 0;
+	config::UICustomTheme = "";
+	config::MenuBarVisibility = static_cast<int>(config::MenuBarMode::Auto);
+	config::UIScaling = 100;
+	config::HideLegacyNaomiRoms = true;
+#if defined(__ANDROID__) && !defined(LIBRETRO)
+	config::UseSafFilePicker = true;
+#endif
 	SaveSettings();
 	i18n::reloadLanguage();
 	mainui_reinit();
+	gui_refresh_files();
+	g_applyThemeAfterSettings = true;
 }
 
 static void RenderSettingsFooterBar()
@@ -835,7 +847,8 @@ static const char* GetPopupId(const SettingsUI::PopupConfig& popupCfg)
 }
 
 static bool RenderGeneralPopupSettingRow(const char* id, const char* description,
-	SettingsUI::PopupConfig& popupCfg, const char* tooltip = nullptr, bool disabled = false)
+	SettingsUI::PopupConfig& popupCfg, const char* tooltip = nullptr, bool disabled = false,
+	bool infoMarker = false)
 {
 	ImGui::PushID(id);
 
@@ -908,6 +921,20 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 	{
 		DisabledScope _(disabled);
 		SettingsUI::SettingPopup(popupCfg);
+	}
+	if (infoMarker && settingsIconFont != nullptr && largeFont != nullptr
+			&& popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.label != nullptr)
+	{
+		// Small info glyph after the label; the row tooltip carries the text.
+		const float fontSize = SettingsPreviewFontSize(largeFont);
+		const float labelWidth = largeFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, popupCfg.options.label).x;
+		const ImVec2 windowPos = ImGui::GetWindowPos();
+		const float iconSize = ImGui::GetFontSize() * 0.85f;
+		const ImVec2 iconPos(
+			windowPos.x + line1Start.x + uiScaled(20.0f + 8.0f) + labelWidth + SettingsLayoutScaled(7.0f),
+			windowPos.y + line1Start.y + (fontSize - iconSize) * 0.5f);
+		ImGui::GetWindowDrawList()->AddText(settingsIconFont, iconSize, iconPos,
+			ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_FA_CIRCLE_INFO);
 	}
 	RenderTwoLineSettingDescription(line1Start, description);
 	EndTwoLineSettingRow();
@@ -2229,32 +2256,38 @@ void focusBoxArtSection()
 	g_scrollToBoxArtSection = true;
 }
 
+// One descriptor per tab: rail label, rail icon, and page subtitle.
+// Order must match the SettingsTab enum.
+struct SettingsTabInfo
+{
+	const char* name;
+	const char* icon;
+	const char* subtitle;
+};
+static const SettingsTabInfo kSettingsTabs[] = {
+	{ "General", ICON_FA_GEAR, "Make Hollycast feel right for you." },
+	{ "Game library", ICON_FA_FOLDER, "Your games, artwork and library layout." },
+	{ "Video", ICON_FA_DISPLAY, "Graphics quality, scaling and performance." },
+	{ "On-screen display", ICON_FA_RECTANGLE_LIST, "Overlays, VMU screens and in-game information." },
+	{ "Audio", ICON_FA_VOLUME_HIGH, "Sound output, mixing and latency." },
+	{ "Controls", ICON_FA_GAMEPAD, "Controllers, mappings and input behavior." },
+	{ "Network", ICON_FA_SHARE_NODES, "Online play, servers and link features." },
+	{ "Advanced", ICON_FA_SLIDERS, "Power-user and developer options." },
+	{ "About", ICON_FA_CIRCLE_INFO, "Version, credits and project information." },
+};
+static const SettingsTabInfo& GetTabInfo(SettingsTab tab)
+{
+	static const SettingsTabInfo unknown{ "Unknown", ICON_FA_GEAR, "" };
+	const int index = static_cast<int>(tab);
+	if (index < 0 || index >= static_cast<int>(std::size(kSettingsTabs)))
+		return unknown;
+	return kSettingsTabs[index];
+}
+
 // Get display name for each tab
 const char* getTabName(SettingsTab tab)
 {
-	switch (tab)
-	{
-	case SettingsTab::General:
-		return T("General");
-	case SettingsTab::Library:
-		return T("Game library");
-	case SettingsTab::Video:
-		return T("Video");
-	case SettingsTab::OnScreenDisplay:
-		return T("On-screen display");
-	case SettingsTab::Audio:
-		return T("Audio");
-	case SettingsTab::Controls:
-		return T("Controls");
-	case SettingsTab::Network:
-		return T("Network");
-	case SettingsTab::Advanced:
-		return T("Advanced");
-	case SettingsTab::About:
-		return T("About");
-	default:
-		return T("Unknown");
-	}
+	return T(GetTabInfo(tab).name);
 }
 
 static const char* SettingsTabIcon(SettingsTab tab);
@@ -2347,46 +2380,34 @@ static bool SettingsBackButton(const char* icon, const char* label)
 
 static const char* SettingsTabIcon(SettingsTab tab)
 {
-	switch (tab)
-	{
-	case SettingsTab::General: return ICON_FA_GEAR;
-	case SettingsTab::Library: return ICON_FA_FOLDER;
-	case SettingsTab::Video: return ICON_FA_DISPLAY;
-	case SettingsTab::OnScreenDisplay: return ICON_FA_RECTANGLE_LIST;
-	case SettingsTab::Audio: return ICON_FA_VOLUME_HIGH;
-	case SettingsTab::Controls: return ICON_FA_GAMEPAD;
-	case SettingsTab::Network: return ICON_FA_SHARE_NODES;
-	case SettingsTab::Advanced: return ICON_FA_SLIDERS;
-	case SettingsTab::About: return ICON_FA_CIRCLE_INFO;
-	default: return ICON_FA_GEAR;
-	}
+	return GetTabInfo(tab).icon;
 }
 
 static const char* GetTabSubtitle(SettingsTab tab)
 {
-	switch (tab)
-	{
-	case SettingsTab::General: return T("Make Hollycast feel right for you.");
-	case SettingsTab::Library: return T("Your games, artwork and library layout.");
-	case SettingsTab::Video: return T("Graphics quality, scaling and performance.");
-	case SettingsTab::OnScreenDisplay: return T("Overlays, VMU screens and in-game information.");
-	case SettingsTab::Audio: return T("Sound output, mixing and latency.");
-	case SettingsTab::Controls: return T("Controllers, mappings and input behavior.");
-	case SettingsTab::Network: return T("Online play, servers and link features.");
-	case SettingsTab::Advanced: return T("Power-user and developer options.");
-	case SettingsTab::About: return T("Version, credits and project information.");
-	default: return "";
-	}
+	return T(GetTabInfo(tab).subtitle);
 }
 
-// Card surface used by the General page: bordered, auto-sized to its rows.
-static bool BeginSettingsCard(const char* id, const char* icon, const char* title, const char* subtitle = nullptr)
+// Shared card surface: bordered, auto-sized to its rows.
+static bool BeginSettingsCardSurface(const char* id)
 {
 	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(10.0f));
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
 		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
-	const bool open = ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+	return ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
 		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize);
+}
+
+static void EndSettingsCardSurface()
+{
+	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
+}
+
+// Card with an icon, title, and optional subtitle header.
+static bool BeginSettingsCard(const char* id, const char* icon, const char* title, const char* subtitle = nullptr)
+{
+	const bool open = BeginSettingsCardSurface(id);
 	if (open)
 	{
 		const float headerX = ImGui::GetCursorPosX();
@@ -2420,8 +2441,7 @@ static bool BeginSettingsCard(const char* id, const char* icon, const char* titl
 
 static void EndSettingsCard()
 {
-	ImGui::EndChild();
-	ImGui::PopStyleVar(2);
+	EndSettingsCardSurface();
 	ImGui::Spacing();
 }
 
@@ -2484,39 +2504,55 @@ static bool SettingsLabelButton(const char* id, const char* icon, const char* la
 static char g_settingsSearchBuffer[128] = "";
 static bool g_focusSettingsSearch = false;
 
-static SettingsTab FindSettingsTabForQuery(const char* rawQuery)
+static std::string SettingsLowercase(const std::string& text)
 {
-	std::string query(rawQuery != nullptr ? rawQuery : "");
-	std::transform(query.begin(), query.end(), query.begin(),
+	std::string lowered = text;
+	std::transform(lowered.begin(), lowered.end(), lowered.begin(),
 		[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return lowered;
+}
+
+// Extra search terms per tab, indexed like kSettingsTabs.
+static const char* kSettingsTabKeywords[] = {
+	"language region broadcast cable interface theme content folder data home ui system tv",
+	"library games boxart artwork cover metadata scan vmu folders scrape",
+	"video graphics resolution render texture quality preset scaling fps display",
+	"osd overlay vmu screen notification display performance",
+	"audio sound volume latency mixing output speakers",
+	"controls controller gamepad mapping keyboard buttons sensitivity input",
+	"network online server netplay match link dcnet",
+	"advanced debug underclock developer experimental power",
+	"about version credits license links",
+};
+
+static bool SettingsTabMatchesQuery(SettingsTab tab, const std::string& loweredQuery)
+{
+	if (loweredQuery.empty())
+		return false;
+	if (SettingsLowercase(getTabName(tab)).find(loweredQuery) != std::string::npos)
+		return true;
+	const int index = static_cast<int>(tab);
+	return index >= 0 && index < static_cast<int>(std::size(kSettingsTabKeywords))
+		&& std::string(kSettingsTabKeywords[index]).find(loweredQuery) != std::string::npos;
+}
+
+static std::string NormalizedSettingsQuery(const char* rawQuery)
+{
+	std::string query = SettingsLowercase(rawQuery != nullptr ? rawQuery : "");
 	const size_t first = query.find_first_not_of(" \t");
 	if (first == std::string::npos)
-		return SettingsTab::Count;
-	query = query.substr(first, query.find_last_not_of(" \t") - first + 1);
+		return {};
+	return query.substr(first, query.find_last_not_of(" \t") - first + 1);
+}
 
+static SettingsTab FindSettingsTabForQuery(const char* rawQuery)
+{
+	const std::string query = NormalizedSettingsQuery(rawQuery);
+	if (query.empty())
+		return SettingsTab::Count;
 	for (int i = 0; i < (int)SettingsTab::Count; i++)
-	{
-		std::string name = getTabName((SettingsTab)i);
-		std::transform(name.begin(), name.end(), name.begin(),
-			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		if (name.find(query) != std::string::npos)
+		if (SettingsTabMatchesQuery((SettingsTab)i, query))
 			return (SettingsTab)i;
-	}
-	struct KeywordEntry { SettingsTab tab; const char* keywords; };
-	static const KeywordEntry entries[] = {
-		{ SettingsTab::General, "language region broadcast cable interface theme content folder data home ui system region tv" },
-		{ SettingsTab::Library, "library games boxart artwork cover metadata scan vmu folders scrape" },
-		{ SettingsTab::Video, "video graphics resolution render texture quality preset scaling fps display" },
-		{ SettingsTab::OnScreenDisplay, "osd overlay vmu screen notification display performance" },
-		{ SettingsTab::Audio, "audio sound volume latency mixing output speakers" },
-		{ SettingsTab::Controls, "controls controller gamepad mapping keyboard buttons sensitivity input" },
-		{ SettingsTab::Network, "network online server netplay match link dcnet" },
-		{ SettingsTab::Advanced, "advanced debug underclock developer experimental power" },
-		{ SettingsTab::About, "about version credits license links" },
-	};
-	for (const KeywordEntry& entry : entries)
-		if (std::string(entry.keywords).find(query) != std::string::npos)
-			return entry.tab;
 	return SettingsTab::Count;
 }
 
@@ -2597,6 +2633,29 @@ static void RenderSettingsContentHeader()
 	ImGui::SetCursorPos(ImVec2(startX, titleBottomY + SettingsLayoutScaled(4.0f)));
 	ImGui::TextDisabled("%s", GetTabSubtitle(tab));
 	ImGui::Spacing();
+
+	// While typing, offer the matching pages directly; Enter opens the first.
+	const std::string query = NormalizedSettingsQuery(g_settingsSearchBuffer);
+	if (!query.empty())
+	{
+		bool anyMatch = false;
+		for (int i = 0; i < (int)SettingsTab::Count; i++)
+		{
+			const SettingsTab candidate = (SettingsTab)i;
+			if (!SettingsTabMatchesQuery(candidate, query))
+				continue;
+			if (anyMatch)
+				ImGui::SameLine();
+			anyMatch = true;
+			if (ImGui::SmallButton(getTabName(candidate)))
+			{
+				g_settingsSearchBuffer[0] = '\0';
+				openTab(candidate);
+			}
+		}
+		if (anyMatch)
+			ImGui::Spacing();
+	}
 	ImGui::Spacing();
 }
 
@@ -2961,11 +3020,7 @@ static void RenderReadyToPlayBanner()
 	}
 	const bool hasFolders = !config::ContentPath.get().empty();
 
-	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(10.0f));
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
-	if (ImGui::BeginChild("ReadyToPlayBanner", ImVec2(0.0f, 0.0f),
-			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize))
+	if (BeginSettingsCardSurface("ReadyToPlayBanner"))
 	{
 		if (largeFont != nullptr)
 			ImGui::PushFont(largeFont);
@@ -3027,19 +3082,14 @@ static void RenderReadyToPlayBanner()
 		if (reviewPressed)
 			gui_open_setup_checklist();
 	}
-	ImGui::EndChild();
-	ImGui::PopStyleVar(2);
+	EndSettingsCardSurface();
 	ImGui::Spacing();
 }
 
 // Shortcut card that jumps to the Game library page, where folders are managed.
 static void RenderGameFoldersCard()
 {
-	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(10.0f));
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
-	if (ImGui::BeginChild("GameFoldersCard", ImVec2(0.0f, 0.0f),
-			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize))
+	if (BeginSettingsCardSurface("GameFoldersCard"))
 	{
 		const float headerX = ImGui::GetCursorPosX();
 		float titleX = headerX;
@@ -3083,8 +3133,7 @@ static void RenderGameFoldersCard()
 		if (managePressed)
 			openTab(SettingsTab::Library);
 	}
-	ImGui::EndChild();
-	ImGui::PopStyleVar(2);
+	EndSettingsCardSurface();
 	ImGui::Spacing();
 }
 
@@ -3254,7 +3303,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"Controls the TV broadcast standard used for non-VGA video modes.\n"
 					"NTSC is typically 60 Hz; PAL is typically 50 Hz.\n\n"
 					"If you see timing issues or a game expects a specific region video mode, try changing this."
-				));
+				), false, true);
 
 		const char* cable[] = { T("VGA"), T("RGB Component"), T("TV Composite") };
 		const bool disabled = config::Cable.isReadOnly() || settings.platform.isArcade();
@@ -3297,7 +3346,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"Games can change behavior depending on whether they detect VGA vs. TV output.\n\n"
 					"If a game has missing effects, wrong colors, or odd mode selection, this is worth trying."
 				),
-				disabled
+				disabled, true
 			);
 		RenderSettingsInfoBanner("DreamcastDefaultsNote",
 			T("Game language is separate from the Hollycast interface language."));
