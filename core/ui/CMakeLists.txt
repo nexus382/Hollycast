@@ -49,6 +49,8 @@ if(NOT LIBRETRO)
             vgamepad.h
             gui_chat.h
             gui_cheats.cpp
+            gui_debugger.cpp
+            gui_debugger.h
             gui_util.cpp
             gui_util.h
             mainui.cpp

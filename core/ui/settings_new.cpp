@@ -8991,8 +8991,8 @@ void renderAdvancedTab()
 			ICON_FA_BUG,
 			T("GDB Server"),
 			T("GDB debug server"),
-			static_cast<bool>(config::GDBWait),
-			[](bool enabled) { config::GDBWait.set(enabled); },
+			static_cast<bool>(config::GDB),
+			[](bool enabled) { config::GDB.set(enabled); },
 			T(
 				"GDB Server\n"
 				"Starts a GDB debug server for developers.\n\n"
@@ -9001,7 +9001,7 @@ void renderAdvancedTab()
 			));
 
 		// GDB Server options (shown when enabled)
-		if (config::GDBWait.get())
+		if (config::GDB.get())
 		{
 			ImGui::Indent();
 

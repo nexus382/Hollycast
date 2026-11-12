@@ -18,6 +18,8 @@
     along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "gui_debugger.h"
+#include "debug/assembly_debugger.h"
 #include "gui_dcnet.h"
 #include "audio/ui_sound.h"
 #include "custom_theme.h"
@@ -589,6 +591,8 @@ bool gui_resume_game()
 		return false;
 	}
 	gui_setState(GuiState::Closed);
+	if (assembly_debugger::active())
+		assembly_debugger::resume();
 	return true;
 }
 
@@ -1105,6 +1109,12 @@ static void gui_display_commands()
 
 			if (IconButton(ICON_FA_MASK, T("Cheats"), ScaledVec2(buttonWidth, 50)).realize() && !settings.network.online)
 				gui_setState(GuiState::Cheats);
+		}
+		// Assembly debugger
+		{
+			DisabledScope _{!assembly_debugger::available()};
+			if (IconButton(ICON_FA_BUG, T("Assembly Debugger"), ScaledVec2(buttonWidth, 50)).realize())
+				gui_open_debugger();
 		}
 		// Achievements
 		{
@@ -4735,6 +4745,9 @@ void gui_display_ui()
 	case GuiState::Cheats:
 		gui_cheats();
 		break;
+	case GuiState::Debugger:
+		gui_display_debugger();
+		break;
 	case GuiState::Achievements:
 #ifdef USE_RACHIEVEMENTS
 		achievements::achievementList();
@@ -4829,6 +4842,7 @@ void gui_draw_osd()
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
 	// Use this frame's effective bar height, including fullscreen auto-hide.
+	gui_display_debugger();
 	performance_overlay::draw();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::drawInApp();

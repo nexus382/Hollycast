@@ -24,6 +24,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/LibretroHelpersTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
+        src/AssemblyDebuggerTest.cpp
         src/SorterTest.cpp
         src/MmuTest.cpp
         src/HttpTest.cpp
