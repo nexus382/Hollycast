@@ -198,6 +198,18 @@ if(WINDOWS_STORE)
 	endif()
 endif()
 
+# Official branch builds retain their update track even when checkout is detached.
+set(HOLLYCAST_UPDATE_CHANNEL "dev")
+if("$ENV{GITHUB_REF_NAME}" STREQUAL "master"
+        OR ("$ENV{GITHUB_REF_TYPE}" STREQUAL "tag" AND NOT "$ENV{GITHUB_REF_NAME}" MATCHES "[Dd][Ee][Vv]"))
+    set(HOLLYCAST_UPDATE_CHANNEL "master")
+elseif(GIT_FOUND)
+    execute_process(COMMAND ${GIT_EXECUTABLE} branch --show-current
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE UPDATE_BRANCH OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(UPDATE_BRANCH STREQUAL "master")
+        set(HOLLYCAST_UPDATE_CHANNEL "master")
+    endif()
+endif()
 string(TIMESTAMP BUILD_TIMESTAMP UTC)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/core/version.h.in" "${CMAKE_CURRENT_SOURCE_DIR}/core/version.h" @ONLY)
 
@@ -1666,4 +1678,12 @@ endif()
 if(${CMAKE_GENERATOR} MATCHES "^Xcode.*|^Visual Studio.*")
 	file(GLOB_RECURSE SRC_FILES *.h *.cpp *.c *.cc *.mm)
 	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SRC_FILES})
+endif()
+
+if(WIN32 AND NOT WINDOWS_STORE AND NOT LIBRETRO)
+    add_subdirectory(tools/updater)
+endif()
+
+if(ENABLE_CTEST AND NOT LIBRETRO)
+    add_subdirectory(tests/updater)
 endif()

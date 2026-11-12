@@ -49,7 +49,11 @@ jobs:
 
       - name: Gradle
         working-directory: shell/android-studio
-        run: ./gradlew assembleRelease bundleRelease --parallel
+        run: |
+          ./gradlew assembleRelease --parallel -PgithubUpdates=true
+          ./gradlew bundleRelease --parallel
+          ./gradlew testDebugUnitTest
+          ./gradlew testDebugUnitTest -PgithubUpdates=true
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID }}
@@ -59,7 +63,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: Hollycast-release.apk
-          path: shell/android-studio/flycast/build/outputs/apk/release/Hollycast-release.apk
+          path: shell/android-studio/flycast/build/intermediates/apk/release/Hollycast-release.apk
 
       - name: Build dump_syms
         working-directory: core/deps/breakpad

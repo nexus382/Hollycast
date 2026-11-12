@@ -14,6 +14,7 @@
 #include "ui/gui_debugger.h"
 #include "ui/gui_menu.h"
 #include "debug/assembly_debugger.h"
+#include "ui/app_updater.h"
 #include "oslib/oslib.h"
 #include "sdl/sdl.h"
 #include <functional>
@@ -349,7 +350,7 @@ static void addMenuSeparator(NSMenu *menu)
 
 - (void)checkForUpdates:(id)sender
 {
-	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://nexus382.github.io/Hollycast/"]];
+	runMenuAction([]() { app_updates::open(); });
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem
