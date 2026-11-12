@@ -416,6 +416,7 @@ enum class VmuIconPlaybackMode
 };
 
 extern Option<int, false> LibraryDisplayStyle;
+extern Option<int, false> LibraryGameInfoHoverDelay; // Seconds (1-10); 11 disables hover panels.
 extern Option<int, false> LibraryImageSource;
 extern Option<int, false> LibraryCoverMedia;
 extern Option<int, false> LibraryIconScale;
@@ -555,6 +556,7 @@ CustomTexturePreloadMode customTexturePreloadMode();
 extern Option<bool> DumpTextures;
 extern Option<bool> DumpUniqueTextures;
 extern Option<bool> DumpReplacedTextures;
+extern Option<bool> SplitTextureSheets;
 extern Option<int> ScreenStretching;	// in percent. 150 means stretch from 4/3 to 6/3
 extern Option<bool> StretchToFill;
 extern Option<bool> Fog;
@@ -623,7 +625,6 @@ extern Option<std::vector<std::string>, false> CheatPath;
 extern Option<std::string, false> DreamPotatoFolderPath;
 #endif
 extern Option<bool, false> HideLegacyNaomiRoms;
-extern Option<bool, false> UploadCrashLogs;
 extern Option<bool, false> DiscordPresence;
 #if defined(__ANDROID__) && !defined(LIBRETRO)
 extern Option<bool, false> UseSafFilePicker;

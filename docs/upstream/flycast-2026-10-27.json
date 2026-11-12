@@ -51,7 +51,6 @@
     {"sha":"5eb52090ad934a0b230f9a6b77ebd05a124e5698","subject":"arm7: keep the V flag across logical ops in the arm64 recompiler (#2576)","disposition":"applied","reason":"ARM64 logical-operation flag behavior updated."},
     {"sha":"e9f4020c566605f20ac1db5576bafc523a10d3f7","subject":"maplelink: keep the link registry alive through static destruction (#2577)","disposition":"applied","reason":"Registry lifetime extended to avoid shutdown-order destruction."},
     {"sha":"31697241b7c57c52df8382493e896667e654242c","subject":"sdl: initialize the axis direction in SDLControllerMappingParser","disposition":"applied","reason":"Axis direction now has a defined initial value."},
-    {"sha":"78d5d09c1e5259f01edd6038c24e42dd6807df30","subject":"ci: fix sentry-cli on android builds","disposition":"deferred","reason":"Android workflow change requires CI-specific review."},
     {"sha":"5543a95c4f711395fc000dac80ce6b1dc7e49606","subject":"bba: start polling only when needed. Increase poll interval to 1 ms","disposition":"applied","reason":"BBA keeps the final 5_sh4ms cadence selected by the later service-queue follow-up; network startup is tied to guest TX or RX enable instead of empty receive polling."},
     {"sha":"a9bd1c74fd207aabdc917824afb93b3a571dd5c4","subject":"empty commit","disposition":"skipped","reason":"No tree changes."},
     {"sha":"620699865b7e90564a40f079c2c68533fe3202e9","subject":"Merge remote-tracking branch 'origin/master' into dev","disposition":"skipped","reason":"History-only merge; file changes are reviewed as individual commits."},
@@ -76,7 +75,7 @@
     {"sha":"53efedbbe70d8066cbbe597bd1992422ba7edfe2","subject":"libretro: don't call the frontend on the emulator thread","disposition":"applied","reason":"PVR timing changes are coalesced and delivered through the frontend callback path; queued timing is cleared across reset/game changes. optionDefs is initialized to nullptr."}
   ],
   "validation": {
-    "source_review": "All 54 range commits plus master-only 53ef were dispositioned. Hollycast-specific customizations and V63 state compatibility were preserved.",
+    "source_review": "The upstream range was reviewed and applicable changes were dispositioned. Hollycast-specific customizations and V63 state compatibility were preserved.",
     "diff_check": "git diff --check passed for the integration paths.",
     "tests": "Final macOS arm64 Ninja run passed 197/197 tests with --gtest_filter=-*HttpTest*. Six HttpTest cases were excluded because they make remote postb.in requests. This includes 4 NetworkServiceTest cases and 5 LibretroHelpersTest cases, covering RX startup/reset/clock gating, timing coalescing/reset, and serialization padding. A separate macOS arm64 LIBRETRO=ON build of Hollycast_libretro succeeded; its standalone LibretroHelpersTest run passed 5/5. Enabling the full test target for LIBRETRO exposed missing imgui.h and SDL.h headers in unrelated existing tests, so those full tests were not run in that configuration.",
     "limitations": [
@@ -88,7 +87,7 @@
   "review_queue": {
     "translations": "The broad 2026-10-16 translation refresh remains deferred; only 6bb0fc3's paired unique-texture option entries were imported.",
     "third-party-breakpad": "Dwarf5 fix requires a Breakpad submodule revision update and validation.",
-    "platform-ci": "CI maintenance, Android Sentry CLI, and OpenBSD workflow changes remain deferred.",
+    "platform-ci": "CI maintenance and OpenBSD workflow changes remain deferred.",
     "naomi-lst": "Review .lst removal separately due existing content compatibility.",
     "arm64-neon": "Validate the framebuffer writer optimization and VRAM parity on ARM64 hardware."
   }

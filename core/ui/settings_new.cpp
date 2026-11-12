@@ -23,6 +23,7 @@
 #endif
 #include "custom_theme.h"
 #include "theme.h"
+#include "theme_browser.h"
 #include "gui_util.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -3765,6 +3766,25 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryThemeCfg,
 			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
 		gui_display_library_download_progress();
+		ImGui::PushID("ThemeDownloadRow");
+		const bool downloadThemes = BeginTwoLineSettingRow("##row",
+			T("Download Themes\nBrowse theme previews and descriptions, then download and install one for your library."));
+		const ImVec2 downloadThemesLine1Start = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_DOWNLOAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Download Themes"));
+		ImGui::PopFont();
+		ImGui::PushFont(settingsRightValueFont != nullptr ? settingsRightValueFont : largeFont);
+		ImGui::SameLine(RightColumnX(ImGui::CalcTextSize(T("Download")).x));
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f);
+		ImGui::TextUnformatted(T("Download"));
+		ImGui::PopFont();
+		RenderTwoLineSettingDescription(downloadThemesLine1Start, T("Browse and install library themes from the online catalogue."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
+		if (downloadThemes) themes::openBrowser();
 
 		if (const themes::Theme* activeTheme = themes::current())
 		{
@@ -3862,7 +3882,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	}
 
-	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
+	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper"), T("LaunchBox")};
 		SettingsUI::PopupConfig providerCfg {};
@@ -4251,6 +4271,28 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"Selects the visual layout for the game library.\n"
 			"Classic keeps the existing gallery/list behavior.\n"
 			"List uses a compact row/table layout with title and metadata columns."));
+
+		SettingsUI::PopupConfig hoverDelayCfg {};
+		hoverDelayCfg.type = SettingsUI::PopupType::Slider;
+		hoverDelayCfg.slider.label = T("Game Info Hover Delay");
+		hoverDelayCfg.slider.icon = ICON_FA_CLOCK;
+		hoverDelayCfg.slider.popupID = "LibraryGameInfoHoverDelayPopup";
+		hoverDelayCfg.slider.description = T("Wait 1-10 seconds before showing game information when hovering over a game in Original or List views. The last position (11) turns hover panels off.");
+		hoverDelayCfg.slider.currentValue = &config::LibraryGameInfoHoverDelay.get();
+		hoverDelayCfg.slider.minValue = 1;
+		hoverDelayCfg.slider.maxValue = 11;
+		hoverDelayCfg.slider.defaultValue = 4;
+		hoverDelayCfg.slider.format = "%d s";
+		hoverDelayCfg.slider.valueWidth = 220.0f;
+		hoverDelayCfg.slider.sliderWidth = 320.0f;
+		hoverDelayCfg.slider.valueFormatter = [](int value) {
+			return value >= 11 ? std::string(T("Off")) : std::to_string(value) + " s";
+		};
+		hoverDelayCfg.slider.onValueChange = [] { config::LibraryGameInfoHoverDelay.save(); };
+		RenderGeneralPopupSettingRow(
+			"LibraryGameInfoHoverDelaySetting",
+			T("Set the game info hover delay, or turn hover panels off."),
+			hoverDelayCfg);
 
 		const char* vmuIconModes[] = { T("Static"), T("Active / Animated") };
 		SettingsUI::PopupConfig vmuIconModeCfg {};
@@ -9092,8 +9134,8 @@ void renderAdvancedTab()
 			ICON_FA_BUG,
 			T("GDB Server"),
 			T("GDB debug server"),
-			static_cast<bool>(config::GDBWait),
-			[](bool enabled) { config::GDBWait.set(enabled); },
+			static_cast<bool>(config::GDB),
+			[](bool enabled) { config::GDB.set(enabled); },
 			T(
 				"GDB Server\n"
 				"Starts a GDB debug server for developers.\n\n"
@@ -9102,7 +9144,7 @@ void renderAdvancedTab()
 			));
 
 		// GDB Server options (shown when enabled)
-		if (config::GDBWait.get())
+		if (config::GDB.get())
 		{
 			ImGui::Indent();
 
@@ -9408,6 +9450,19 @@ void renderAdvancedTab()
 				"It can create a large number of files quickly and may reduce performance due to disk I/O.\n\n"
 				"Enable it only when you specifically need a dump, then disable it again."
 			));
+		RenderGeneralToggleSettingRow(
+			"SplitTextureSheets",
+			ICON_FA_IMAGE,
+			T("Split Texture Sheets"),
+			T("Extract and rebuild pieces of texture sheets."),
+			static_cast<bool>(config::SplitTextureSheets),
+			[](bool enabled) { config::SplitTextureSheets.set(enabled); },
+			T("Enable for games that store several textures in one image.\n\n"
+				"With Texture Dumping enabled, saves rectangular pieces and texture-atlas.json beside the original sheets.\n"
+				"Copy the mapping, original sheets and edited pieces into the title's replacement folder.\n"
+				"Every piece from a sheet must use the same scale, such as 2x or 4x.\n"
+				"Sheets are rebuilt automatically when custom textures load. Uncertain regions remain in the original sheet."),
+			game_started);
 		if (config::DumpTextures)
 		{
 			ImGui::Indent();
@@ -9456,23 +9511,6 @@ void renderAdvancedTab()
 		ImGui::SameLine();
 		ShowFooterHelpMarker(T("Specify lua filename to use. Should be located in Hollycast config folder. Defaults to flycast.lua when empty."));
 #endif
-
-#ifdef SENTRY_UPLOAD
-		// Crash Reporting - 2x Row Pattern
-		RenderGeneralToggleSettingRow(
-			"CrashReporting",
-			ICON_FA_STETHOSCOPE,
-			T("Crash Reports"),
-			T("Auto-upload crash reports"),
-			static_cast<bool>(config::UploadCrashLogs),
-			[](bool enabled) { config::UploadCrashLogs.set(enabled); },
-			T(
-				"Crash Reports\n"
-				"Automatically uploads crash reports to help developers diagnose and fix issues.\n\n"
-				"Crash reports typically include technical details about the crash and environment.\n"
-				"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-			));
-	#endif
 
 #if defined(GDB_SERVER)
 		// Virtual Memory Addresses (debug builds)
@@ -9894,6 +9932,13 @@ void renderSettingsNew()
 		renderNavigationRail(exitSettings, backLabel);
 		ImGui::SameLine();
 		renderContentArea();
+		if (const auto chosen = themes::renderBrowser())
+		{
+			config::CustomTheme = *chosen;
+			config::ThemeLayout = "";
+			SaveSettings();
+			g_applyThemeAfterSettings = true;
+		}
 
 		if (pushedSettingsFont)
 			ImGui::PopFont();

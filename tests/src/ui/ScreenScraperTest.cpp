@@ -9,11 +9,13 @@
 #include <stb_image_write.h>
 #include <atomic>
 #include <algorithm>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <future>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -50,6 +52,39 @@ std::vector<u8> png()
 	}, &bytes, 1, 1, 4, pixel, 4);
 	return bytes;
 }
+
+class BlockedRequest
+{
+public:
+	~BlockedRequest() { release(); }
+
+	void wait()
+	{
+		std::unique_lock<std::mutex> lock(mutex);
+		entered = true;
+		changed.notify_all();
+		changed.wait(lock, [this] { return released; });
+	}
+
+	bool waitForEntry(std::chrono::milliseconds timeout)
+	{
+		std::unique_lock<std::mutex> lock(mutex);
+		return changed.wait_for(lock, timeout, [this] { return entered; });
+	}
+
+	void release()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		released = true;
+		changed.notify_all();
+	}
+
+private:
+	std::mutex mutex;
+	std::condition_variable changed;
+	bool entered = false;
+	bool released = false;
+};
 
 json game()
 {
@@ -603,6 +638,19 @@ protected:
 	{
 		boxart.runScreenScraperQueue(session, boxart.screenGeneration, root.u8string() + '/', std::move(launchbox), std::move(tgdb));
 	}
+	void startQueueAsync(const std::shared_ptr<Session>& session)
+	{
+		boxart.screenFetching = std::async(std::launch::async, [this, session] { run(session); });
+	}
+	bool setOfflineArtState(const GameBoxart& item, OfflineArtState state)
+	{
+		std::lock_guard<std::mutex> lock(boxart.mutex);
+		const auto record = boxart.games.find(item.sourceKey());
+		if (record == boxart.games.end())
+			return false;
+		record->second.offlineArtState = state;
+		return true;
+	}
 	bool runWithProducer(const std::shared_ptr<Session>& session, GameBoxart& preparing)
 	{
 		boxart.physicalWorking = true;
@@ -652,6 +700,16 @@ protected:
 		boxart.screenFetching.get();
 		return covered && waiting;
 	}
+	bool finishCacheRefresh()
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (boxart.refreshPending() && std::chrono::steady_clock::now() < deadline)
+		{
+			boxart.startFetch();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return !boxart.refreshPending();
+	}
 	GameBoxart queue(u32 mask = artwork::basicMedia)
 	{
 		return boxart.getBoxartAndQueue(media, false, mask);
@@ -688,6 +746,19 @@ protected:
 	int previousProvider = 0, previousSource = 0, previousSelection = 0;
 	bool previousFetch = false;
 };
+
+TEST_F(ScreenScraperQueueTest, UnconfiguredGuestAccessRetainsPendingDreamcastRequests)
+{
+	if (screenscraper::developerConfigured())
+		GTEST_SKIP() << "Requires an unprovisioned application identity.";
+	config::FetchBoxart = true;
+	seedPrepared(1);
+	for (int i = 0; i < 3; ++i)
+	{
+		boxart.startFetch();
+		EXPECT_EQ(queued(), 1u);
+	}
+}
 
 TEST_F(ScreenScraperQueueTest, BasicLibraryQueuesCoverMixLogoAndMetadataRegardlessOfManualChoices)
 {
@@ -929,7 +1000,94 @@ TEST_F(ScreenScraperQueueTest, SettingsGenerationStopsRefillAndPreservesRemainin
 	EXPECT_EQ(boxart.downloadProgress().games, 0u);
 }
 
+TEST_F(ScreenScraperQueueTest, RefreshDoesNotWaitForScreenScraperAndAcceptsNewWork)
+{
+	media.path = "/games/Game 0.chd";
+	media.fileName = "Game 0.chd";
+	media.name = "Game 0";
+	seedPrepared(1);
+	BlockedRequest blocked;
+	std::atomic<int> lookups{0};
+	auto activeSession = mockSession(1, [&](const std::string&, std::vector<u8>& bytes, std::string&) {
+		blocked.wait();
+		bytes = png();
+		return 200;
+	}, lookups);
+	startQueueAsync(activeSession);
+	const bool requestEntered = blocked.waitForEntry(std::chrono::seconds(5));
+
+	// Run refreshCache on a separate caller so a regression cannot hang this test.
+	// The blocker is always released before either async future is joined.
+	std::future<void> refresh;
+	std::future<void> repeatedRefresh;
+	bool refreshReturnedWhileBlocked = false;
+	bool repeatedRefreshReturnedWhileBlocked = false;
+	if (requestEntered)
+	{
+		refresh = std::async(std::launch::async, [&] { boxart.refreshCache(); });
+		refreshReturnedWhileBlocked = refresh.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		if (refreshReturnedWhileBlocked)
+		{
+			refresh.get();
+			repeatedRefresh = std::async(std::launch::async, [&] { boxart.refreshCache(); });
+			repeatedRefreshReturnedWhileBlocked = repeatedRefresh.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		}
+	}
+	blocked.release();
+	if (refresh.valid()) refresh.get();
+	if (repeatedRefresh.valid()) repeatedRefresh.get();
+	const bool refreshFinished = finishCacheRefresh();
+	if (!refreshFinished)
+		boxart.term(); // Reap refresh before TearDown touches screenFetching.
+
+	EXPECT_TRUE(requestEntered) << "The ScreenScraper worker did not reach the mocked image request";
+	EXPECT_TRUE(refreshReturnedWhileBlocked) << "Refresh waited for the active HTTP request";
+	EXPECT_TRUE(repeatedRefreshReturnedWhileBlocked) << "A repeated refresh waited for the active HTTP request";
+	EXPECT_TRUE(refreshFinished) << "The refresh worker did not finish after its request was released";
+	if (!requestEntered || !refreshFinished)
+		return;
+
+	const GameBoxart refreshed = boxart.getCachedBoxart(media);
+	EXPECT_TRUE(refreshed.screenScraperMedia.empty()) << "The stale in-flight result must not be published";
+
+	// Mark the new offline scan as complete, then verify online work can be queued
+	// and published after the refresh future has been reaped.
+	config::FetchBoxart = true;
+	EXPECT_TRUE(setOfflineArtState(refreshed, OfflineArtState::NoArtwork));
+	const GameBoxart queued = queue(artwork::coverMedia | artwork::metadataMedia);
+	ASSERT_TRUE(queued.busy);
+	std::atomic<int> refreshedLookups{0};
+	auto readySession = mockSession(1, [](const std::string&, std::vector<u8>& bytes, std::string&) {
+		bytes = png();
+		return 200;
+	}, refreshedLookups);
+	run(readySession);
+	EXPECT_EQ(boxart.getCachedBoxart(media).screenScraperMedia.count("cover"), 1u);
+}
+
 // Opt in explicitly: ordinary test runs must never consume a user's API quota.
+TEST(ScreenScraperLiveTest, DISABLED_ConnectsGuestWithoutPersonalCredentials)
+{
+	const char *output = std::getenv("HOLLYCAST_SCREENSCRAPER_LIVE_OUTPUT");
+	if (!output || !*output)
+		GTEST_SKIP() << "Opt in to a live guest connection check.";
+	ASSERT_TRUE(screenscraper::developerConfigured());
+	// Exercise automatic startup without a personal account or an explicit login.
+	const auto session = screenscraper::currentSession();
+	ASSERT_TRUE(session);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	auto account = screenscraper::status();
+	while (account.connecting && std::chrono::steady_clock::now() < deadline)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		account = screenscraper::status();
+	}
+	EXPECT_TRUE(account.connected) << account.message;
+	EXPECT_FALSE(account.personalAccount);
+	EXPECT_GT(account.maxThreads, 0);
+	screenscraper::disconnect();
+}
+
 TEST(ScreenScraperLiveTest, DISABLED_RecoversPreviouslyUnmatchedDreamcastTitles)
 {
 	const char *output = std::getenv("HOLLYCAST_SCREENSCRAPER_LIVE_OUTPUT");

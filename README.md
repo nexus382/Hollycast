@@ -1,6 +1,8 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 # Hollycast
 
+[Meet the people behind Hollycast — contributors, sources, and special thanks.](CREDITS.md)
+
 ![Hollycast](banner.png)
 
 <sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>

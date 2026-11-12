@@ -23,6 +23,7 @@
 #include "nowide/stackstring.hpp"
 #include <string>
 #include <cstring>
+#include <memory>
 #include <windows.h>
 
 #ifdef TARGET_UWP
@@ -44,6 +45,7 @@ struct DIR_UWP {
     WIN32_FIND_DATAW findData;
     bool firstRead;
     bool hasNext;
+    dirent entry;
 };
 
 DIR *opendir(char const *dirname)
@@ -80,6 +82,11 @@ DIR *opendir(char const *dirname)
     return (DIR*)dir;
 }
 #else
+struct WindowsDir {
+    _WDIR *handle;
+    dirent entry;
+};
+
 DIR *opendir(char const *dirname)
 {
     nowide::wstackstring wname;
@@ -87,7 +94,11 @@ DIR *opendir(char const *dirname)
         errno = EINVAL;
         return nullptr;
     }
-    return (DIR *)::_wopendir(wname.get());
+    auto dir = std::make_unique<WindowsDir>();
+    dir->handle = ::_wopendir(wname.get());
+    if (dir->handle == nullptr)
+        return nullptr;
+    return reinterpret_cast<DIR *>(dir.release());
 }
 #endif
 
@@ -99,7 +110,9 @@ dirent *readdir(DIR *dirstream)
     if (!dir->hasNext)
         return nullptr;
 
-    static dirent d;
+    // Library and artwork scans run concurrently. Each stream owns its result
+    // so another scan cannot change a filename while the caller copies it.
+    dirent& d = dir->entry;
 
     if (dir->firstRead) {
         dir->firstRead = false;
@@ -146,8 +159,8 @@ int closedir(DIR *dirstream)
 #else
 dirent *readdir(DIR *dirstream)
 {
-	_WDIR *wdir = (_WDIR *)dirstream;
-	_wdirent *wdirent = ::_wreaddir(wdir);
+	auto *dir = reinterpret_cast<WindowsDir *>(dirstream);
+	_wdirent *wdirent = ::_wreaddir(dir->handle);
 
 	if (wdirent == nullptr)
 		return nullptr;
@@ -157,7 +170,9 @@ dirent *readdir(DIR *dirstream)
         errno = EINVAL;
         return nullptr;
     }
-    static dirent d;
+    // Keep the returned name valid until the next read on this stream, including
+    // when a different thread enumerates artwork or saved games at the same time.
+    dirent& d = dir->entry;
 	d.d_ino = wdirent->d_ino;
 	d.d_off = wdirent->d_off;
 	d.d_type = wdirent->d_type;
@@ -171,7 +186,8 @@ dirent *readdir(DIR *dirstream)
 
 int closedir(DIR *dirstream)
 {
-	return ::_wclosedir((_WDIR *)dirstream);
+	std::unique_ptr<WindowsDir> dir(reinterpret_cast<WindowsDir *>(dirstream));
+	return ::_wclosedir(dir->handle);
 }
 #endif
 

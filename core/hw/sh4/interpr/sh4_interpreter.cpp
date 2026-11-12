@@ -13,6 +13,7 @@
 #include "../sh4_sched.h"
 #include "../sh4_cache.h"
 #include "debug/gdb_server.h"
+#include "debug/assembly_debugger.h"
 #include "../sh4_cycles.h"
 
 Sh4ICache icache;
@@ -51,6 +52,12 @@ void Sh4Interpreter::Run()
 				do
 				{
 					u32 op = ReadNexOp();
+					if (assembly_debugger::active()
+							&& assembly_debugger::checkBreakpoint(ctx->pc - 2, op, ctx->sr.T != 0))
+					{
+						ctx->pc -= 2;
+						throw debugger::Stop();
+					}
 
 					ExecuteOpcode(op);
 				} while (ctx->cycle_counter > 0);

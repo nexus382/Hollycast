@@ -2,17 +2,21 @@
 #include "gtest/gtest.h"
 #include "ui/theme_library.h"
 #include "ui/gui_util.h"
+#include "ui/imgui_driver.h"
 #include "ui/theme.h"
 #include "imgui.h"
 #include <stb_image_write.h>
 #include "imgui_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <chrono>
 #include <filesystem>
 #include <cmath>
+#include <memory>
 #include <string>
+#include <utility>
 
 class ThemeLibraryTest : public ::testing::Test
 {
@@ -125,6 +129,73 @@ protected:
 	std::string stateLayoutId;
 	std::function<void(size_t)> favouriteHandler;
 };
+
+TEST_F(ThemeLibraryTest, ListBadgesTrackFavouriteStateAndStayInsideTheRow)
+{
+	layout.id = "list-badges";
+	layout.mode = "list";
+	layout.browser = {0, 0, 1, 1};
+	layout.list.systemBadge = true;
+	layout.list.favouriteBadge = true;
+	layout.list.favouriteColor = 0xead171ff;
+	items[0].metadata["system"] = "Dreamcast";
+	items[1].metadata["system"] = "Naomi 2";
+	const ImU32 gold = IM_COL32(234, 209, 113, 255);
+	const auto goldCount = [&] {
+		return std::count_if(browserMesh.begin(), browserMesh.end(), [&](const ImDrawVert& vertex) { return vertex.col == gold; });
+	};
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_EQ(goldCount(), 0);
+	items[0].favourite = true;
+	for (const ImVec2 size : {ImVec2(800, 600), ImVec2(320, 600)})
+	{
+		windowSize = size;
+		renderFrame(ImVec2(-1, -1), false);
+		EXPECT_GT(goldCount(), 0);
+		for (const auto& vertex : browserMesh)
+			if (vertex.col == gold)
+			{
+				EXPECT_GE(vertex.pos.x, bounds[0].x - 1);
+				EXPECT_LE(vertex.pos.x, bounds[0].z + 1);
+				EXPECT_GE(vertex.pos.y, bounds[0].y - 1);
+				EXPECT_LE(vertex.pos.y, bounds[0].w + 1);
+			}
+	}
+	items[0].favourite = false;
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_EQ(goldCount(), 0);
+}
+
+TEST_F(ThemeLibraryTest, ClickSelectedListDoesNotUndoKeyboardNavigationUnderARestingPointer)
+{
+	layout.id = "click-list-keyboard";
+	layout.mode = "list";
+	layout.list.selectOnHover = false;
+	layout.activation = "doubleClick";
+	layout.elements = {{"metadata", {.6f, 0, .4f, .2f}, "title"}};
+	items[0].metadata["title"] = "A";
+	items[1].metadata["title"] = "BBBB";
+	layout.browser = {0, 0, .55f, 1};
+	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec4 first = bounds[0];
+	const ImVec2 pointer((first.x + first.z) / 2, (first.y + first.w) / 2);
+	renderFrame(pointer, false);
+	renderFrame(pointer, true);
+	renderFrame(pointer, false);
+	const size_t firstPreviewVertices = detailsMesh.size();
+	ASSERT_GT(firstPreviewVertices, 0u);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow, true);
+	renderFrame(pointer, false);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow, false);
+	renderFrame(pointer, false);
+	renderFrame(pointer, false);
+	EXPECT_EQ(GImGui->NavId, itemIds[1]);
+	EXPECT_GT(detailsMesh.size(), firstPreviewVertices) << "Keyboard focus must update the active preview before confirmation";
+	// Confirm must activate the item reached by keyboard, not the hovered old row.
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+	EXPECT_EQ(renderFrame(pointer, false), 1);
+}
 
 TEST_F(ThemeLibraryTest, GridWidgetActivatesTheClickedStableItem)
 {
@@ -2399,6 +2470,104 @@ TEST_F(ThemeLibraryTest, DiscOrbitSynopsisScrollsByFingerAndResetsForAnotherGame
 	EXPECT_FLOAT_EQ(pane->Scroll.y, 0.f);
 }
 
+TEST_F(ThemeLibraryTest, EveryBundledLayoutDrawsTheMatchingBiosArtwork)
+{
+	const std::filesystem::path repository = std::filesystem::path(FLYCAST_TEST_FILES) / "../..";
+	const std::array<std::string, 3> artworkPaths{
+		(repository / "resources/picture/dreamcast_logo_grey.jpg").string(),
+		(repository / "resources/picture/dreamcast_bios_disc.png").string(),
+		(repository / "resources/picture/dreamcast_bios_spine.png").string()
+	};
+	for (const auto& path : artworkPaths)
+		ASSERT_TRUE(std::filesystem::is_regular_file(path));
+	class BiosArtworkDriver : public ImGuiDriver
+	{
+	public:
+		explicit BiosArtworkDriver(const std::array<std::string, 3>& paths) : ImGuiDriver(false), paths(paths)
+		{
+			updateAspectRatio(1, 1.f);
+			updateAspectRatio(2, 1.f);
+			updateAspectRatio(3, 1360.f / 128.f);
+		}
+		void newFrame() override {}
+		void renderDrawData(ImDrawData*, bool) override {}
+		void present() override {}
+		ImTextureID getTexture(const std::string& name) override
+		{
+			for (size_t i = 0; i < paths.size(); ++i)
+				if (name.compare(0, paths[i].size(), paths[i]) == 0)
+					return static_cast<ImTextureID>(i + 1);
+			// Package decoration stays available without starting the asynchronous image loader.
+			return 4;
+		}
+		ImTextureID updateTexture(const std::string& name, const u8*, int, int, bool) override { return getTexture(name); }
+		void deleteTexture(const std::string&) override {}
+	private:
+		const std::array<std::string, 3> paths;
+	};
+	struct RestoreDriver
+	{
+		std::unique_ptr<ImGuiDriver> previous;
+		~RestoreDriver() { imguiDriver = std::move(previous); }
+	} restoreDriver{std::move(imguiDriver)};
+	imguiDriver = std::make_unique<BiosArtworkDriver>(artworkPaths);
+	items.resize(1);
+	items[0].id = "bios";
+	items[0].title = "Dreamcast BIOS";
+	items[0].image = artworkPaths[0];
+	items[0].isGame = false;
+	items[0].canFavourite = false;
+	items[0].metadata = {
+		{"title", items[0].title}, {"format", "BIOS"},
+		{"artwork.cover", artworkPaths[0]}, {"artwork.disc", artworkPaths[1]},
+		{"artwork.physical", artworkPaths[1]}, {"artwork.spine", artworkPaths[2]}
+	};
+	const auto expectArtwork = [&](bool expectedDisc, bool expectedSpine) {
+		std::array<bool, 3> drawn{};
+		for (const ImGuiWindow* window : GImGui->Windows)
+			if (window->Active)
+				for (const ImDrawCmd& command : window->DrawList->CmdBuffer)
+					if (command.ElemCount > 0)
+						for (size_t i = 0; i < drawn.size(); ++i)
+							if (command.GetTexID() == static_cast<ImTextureID>(i + 1))
+								drawn[i] = true;
+		EXPECT_TRUE(drawn[0]) << "Missing BIOS cover or authored cover fallback";
+		EXPECT_EQ(expectedDisc, drawn[1]) << "BIOS disc binding";
+		EXPECT_EQ(expectedSpine, drawn[2]) << "BIOS spine binding";
+	};
+	int themesChecked = 0, layoutsChecked = 0;
+	for (const auto& directory : std::filesystem::directory_iterator(repository / "themes"))
+	{
+		if (!std::filesystem::is_regular_file(directory.path() / "theme.json")) continue;
+		const auto theme = themes::load(directory.path().string());
+		++themesChecked;
+		for (const auto& authored : theme.layouts)
+		{
+			SCOPED_TRACE(theme.id + "/" + authored.id);
+			++layoutsChecked;
+			layout = authored;
+			layout.attract.idleSeconds = 0;
+			stateLayoutId = "bios-" + theme.id + "/" + authored.id;
+			windowSize = authored.id.find("portrait") == std::string::npos ? ImVec2(1400, 800) : ImVec2(800, 1400);
+			ImGui::GetIO().DisplaySize = windowSize;
+			renderFrame(ImVec2(-1, -1), false);
+			expectArtwork(theme.id == "demo-disc" || theme.id == "disc-orbit" || theme.id == "preview-fanart-disc",
+					theme.id == "preview-cd-rack");
+			if (theme.id == "pocket-dimension")
+			{
+				SCOPED_TRACE("initial disc preview");
+				// BIOS disc metadata must already be available when preview selection is validated.
+				layout.previewSource = "disc";
+				stateLayoutId += "-disc-preview";
+				renderFrame(ImVec2(-1, -1), false);
+				expectArtwork(true, false);
+			}
+		}
+	}
+	EXPECT_EQ(themesChecked, 8);
+	EXPECT_EQ(layoutsChecked, 11);
+}
+
 TEST_F(ThemeLibraryTest, EmptyFolderPromptIsCenteredInsideEveryBundledGameBrowserWithoutAPanel)
 {
 	items.clear();
@@ -2448,4 +2617,30 @@ TEST_F(ThemeLibraryTest, EmptyFolderPromptIsCenteredInsideEveryBundledGameBrowse
 		}
 	}
 	EXPECT_EQ(themesChecked, 8);
+}
+
+TEST_F(ThemeLibraryTest, ConfiguredFolderShowsScanProgressUntilTheEmptyScanFinishes)
+{
+	items.clear();
+	layout.id = "configured-empty-scan";
+	layout.browser = {0, 0, 1, 1};
+	auto promptText = [&](bool hasContentPath, bool scanning) {
+		std::string text;
+		renderFrame(ImVec2(-1, -1), false, [&] {
+			ImGui::LogToBuffer(0);
+			EXPECT_FALSE(drawEmptyLibraryPrompt(hasContentPath, scanning));
+			text = ImGui::GetCurrentContext()->LogBuffer.c_str();
+			ImGui::LogFinish();
+		});
+		return text;
+	};
+	const std::string scanning = promptText(true, true);
+	EXPECT_NE(scanning.find(i18n::T("Scanning for games...")), std::string::npos);
+	EXPECT_EQ(scanning.find(i18n::T("Add Game Folder")), std::string::npos);
+	const std::string completed = promptText(true, false);
+	EXPECT_NE(completed.find(i18n::T("No games found")), std::string::npos);
+	EXPECT_NE(completed.find(i18n::T("Add Game Folder")), std::string::npos);
+	const std::string unconfigured = promptText(false, true);
+	EXPECT_NE(unconfigured.find(i18n::T("Your game list is empty")), std::string::npos);
+	EXPECT_NE(unconfigured.find(i18n::T("Add Game Folder")), std::string::npos);
 }

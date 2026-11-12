@@ -134,15 +134,18 @@ jobs:
         if: runner.os != 'macOS'
 
       - name: CMake
-        run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact ${{ matrix.config.cmakeArgs }} -DSENTRY_UPLOAD_URL=${{ env.SENTRY_UPLOAD_URL }}
-          cmake --build build --config ${{ matrix.config.buildType }} --target install
         env:
-          SENTRY_UPLOAD_URL: ${{ secrets.SENTRY_UPLOAD_URL }}
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ !startsWith(matrix.config.name, 'libretro') && secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID || '' }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ !startsWith(matrix.config.name, 'libretro') && secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD || '' }}
+          HOLLYCAST_REQUIRE_SCREENSCRAPER: ${{ !startsWith(matrix.config.name, 'libretro') && github.repository == 'nexus382/Hollycast' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact ${{ matrix.config.cmakeArgs }}
+          cmake --build build --config ${{ matrix.config.buildType }} --target install
 
       - name: Unit Tests
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DBUILD_TESTING=ON -DHIKARU_VENDOR_BUILD_SMOKE=ON -DHIKARU_NATIVE_GRAPHICS_TESTS=ON ${{ matrix.config.cmakeArgs }}
+          # Unit tests use mocks and must not inherit the packaged application's access.
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF -DBUILD_TESTING=ON -DHIKARU_VENDOR_BUILD_SMOKE=ON -DHIKARU_NATIVE_GRAPHICS_TESTS=ON ${{ matrix.config.cmakeArgs }}
           cmake --build build --config ${{ matrix.config.buildType }}
           ./build/Hollycast
           LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ctest --test-dir build --output-on-failure
@@ -205,49 +208,3 @@ jobs:
       #   run: rclone copy artifact/bin scaleway:Hollycast-builds/${{ matrix.config.destDir }}/${GITHUB_REF#refs/}-$GITHUB_SHA
       #   shell: bash
       #   if: github.repository == 'OrangeFox86/Hollycast' && github.event_name == 'push' && matrix.config.destDir != ''
-
-      # - name: Setup Sentry CLI
-      #   uses: mathieu-bour/setup-sentry-cli@v2
-      #   env:
-      #     SENTRY_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-      #   with:
-      #     url: https://sentry.io
-      #     token: ${{ env.SENTRY_TOKEN }}
-      #     organization: Hollycast
-      #     project: minidump
-      #     version: 2.21.2
-      #   if: ${{ env.SENTRY_TOKEN != '' }}
-
-      # - name: Upload symbols to Sentry (Windows, macOS, Linux)
-      #   run: |
-      #     VERSION=$(git describe --tags --always)
-      #     sentry-cli releases new "$VERSION"
-      #     sentry-cli releases set-commits "$VERSION" --auto
-      #     sentry-cli debug-files upload symbols
-      #   shell: bash
-      #   env:
-      #     SENTRY_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-      #   if: ${{ env.SENTRY_TOKEN != '' && (matrix.config.name == 'x86_64-w64-mingw32' || matrix.config.name == 'apple-darwin' || matrix.config.name == 'x86_64-pc-linux-gnu') && github.event_name == 'push' }}
-
-      # - name: Setup Sentry CLI
-      #   uses: mathieu-bour/setup-sentry-cli@v2
-      #   env:
-      #     SENTRY_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-      #   with:
-      #     url: https://sentry.io
-      #     token: ${{ env.SENTRY_TOKEN }}
-      #     organization: flycast
-      #     project: minidump
-      #     version: 2.21.2
-      #   if: ${{ env.SENTRY_TOKEN != '' }}
-
-      # - name: Upload symbols to Sentry (Windows, macOS, Linux)
-      #   run: |
-      #     VERSION=$(git describe --tags --always)
-      #     sentry-cli releases new "$VERSION"
-      #     sentry-cli releases set-commits "$VERSION" --auto
-      #     sentry-cli debug-files upload symbols
-      #   shell: bash
-      #   env:
-      #     SENTRY_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-      #   if: ${{ env.SENTRY_TOKEN != '' && (matrix.config.name == 'x86_64-w64-mingw32' || matrix.config.name == 'apple-darwin' || matrix.config.name == 'x86_64-pc-linux-gnu') && github.event_name == 'push' }}

@@ -2449,18 +2449,6 @@ msgstr "Logga till fil"
 msgid "Log debug information to flycast.log"
 msgstr "Logga felsökningsinformation till flycast.log"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "Rapportera krascher automatiskt"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr ""
-"Skicka automatiskt upp rapporter till sentry.io för att hjälpa vid "
-"felsökning. Ingen personlig information inkluderas."
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Lua-skript"
@@ -9017,28 +9005,6 @@ msgstr ""
 #: core/ui/settings_new.cpp:8948
 msgid "Developer Tools"
 msgstr "Utvecklarverktyg"
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "Kraschrapporter"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "Ladda upp kraschrapporter automatiskt"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"Kraschrapporter\n"
-"Laddar automatiskt upp kraschrapporter för att hjälpa utvecklare att diagnostisera och åtgärda problem.\n"
-"\n"
-"Kraschrapporter innehåller vanligtvis tekniska detaljer om kraschen och systemmiljön.\n"
-"Låt detta vara aktiverat om du vill bidra till bättre stabilitet. Inaktivera om du inte vill skicka kraschdata."
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

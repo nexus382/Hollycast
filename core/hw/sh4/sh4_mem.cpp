@@ -6,6 +6,7 @@
 #include "types.h"
 
 #include "sh4_mem.h"
+#include "debug/assembly_debugger.h"
 #include "hw/holly/sb_mem.h"
 #include "sh4_mmr.h"
 #include "hw/pvr/elan.h"
@@ -296,14 +297,15 @@ void SetMemoryHandlers()
 #ifdef STRICT_MODE
 	static bool interpreterRunning;
 
-	if (config::DynarecEnabled && interpreterRunning)
+	const bool dynarecEnabled = config::DynarecEnabled && !assembly_debugger::active();
+	if (dynarecEnabled && interpreterRunning)
 	{
 		// Flush caches when interp -> dynarec
 		ocache.WriteBackAll();
 		icache.Invalidate();
 	}
 
-	if (!config::DynarecEnabled)
+	if (!dynarecEnabled)
 	{
 		interpreterRunning = true;
 		IReadMem16 = &IReadCachedMem;

@@ -50,8 +50,9 @@ Option<int, false> ScreenScraperMedia("ScreenScraperMedia", 4095); // Manual sel
 Option<bool, false> BoxartDisplayMode("BoxartDisplayMode", true);
 Option<int, false> BoxartSourceMode("BoxartSourceMode", 0);
 Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
+Option<int, false> LibraryGameInfoHoverDelay("Dreamcast.LibraryGameInfoHoverDelay", 4);
 Option<int, false> LibraryImageSource("Dreamcast.LibraryImageSource", 0);
-Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", 0);
+Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", static_cast<int>(LibraryCoverMediaMode::Cover));
 Option<int, false> LibraryIconScale("Dreamcast.LibraryIconScale", 100);
 Option<std::vector<std::string>, false> LibraryFavourites("LibraryFavourites", {}, "ui");
 Option<int, false> VmuIconMode("Dreamcast.VmuIconMode", 0);
@@ -118,6 +119,7 @@ Option<int> PreloadCustomTextures("rend.PreloadCustomTextures", 0);
 Option<bool> DumpTextures("rend.DumpTextures");
 Option<bool> DumpUniqueTextures("rend.DumpUniqueTextures");
 Option<bool> DumpReplacedTextures("rend.DumpReplacedTextures");
+Option<bool> SplitTextureSheets("rend.SplitTextureSheets");
 Option<int> ScreenStretching("rend.ScreenStretching", 100);
 Option<bool> StretchToFill("rend.StretchToFill");
 Option<bool> Fog("rend.Fog", true);
@@ -221,7 +223,6 @@ Option<std::string, false> BoxartPath("Dreamcast.BoxartPath");
 Option<std::vector<std::string>, false> MappingsPath("Dreamcast.MappingsPath");
 Option<std::vector<std::string>, false> CheatPath("Dreamcast.CheatPath");
 Option<bool, false> HideLegacyNaomiRoms("Dreamcast.HideLegacyNaomiRoms", true);
-Option<bool, false> UploadCrashLogs("UploadCrashLogs", true);
 Option<bool, false> DiscordPresence("DiscordPresence", true);
 #if defined(__ANDROID__) && !defined(LIBRETRO)
 Option<bool, false> UseSafFilePicker("UseSafFilePicker", true);

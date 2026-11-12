@@ -24,6 +24,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/LibretroHelpersTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
+        src/AssemblyDebuggerTest.cpp
         src/SorterTest.cpp
         src/PvrMessageQueueTest.cpp
         src/MmuTest.cpp
@@ -45,7 +46,10 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/SDLControllerMappingTest.cpp
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
+        src/oslib/DirectoryTest.cpp
         src/rend/SampleTextureFilterTest.cpp
+        src/rend/TextureAtlasTest.cpp
+        src/rend/CustomTextureDumpTest.cpp
         src/ui/BoxartTest.cpp
         src/ui/ScreenScraperTest.cpp
         src/ui/LaunchBoxTest.cpp
@@ -88,10 +92,13 @@ if(NOT LIBRETRO)
         src/ui/SettingsPopupTest.cpp
         src/ui/CustomThemeTest.cpp
         src/ui/LibrarySavestateTest.cpp
+        src/ui/LibraryImageTest.cpp
+        src/ui/GameScannerTest.cpp
         src/ui/ThemeTest.cpp
         src/ui/ThemeLibraryTest.cpp
         src/ui/ThemeArtworkTest.cpp
         src/ui/ThemeInstallTest.cpp
+        src/ui/ThemeRepositoryTest.cpp
         src/ui/VideoPresetTest.cpp
         src/ui/AndroidMenuPopupTest.cpp)
 endif()

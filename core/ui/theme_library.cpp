@@ -903,6 +903,59 @@ ImU32 withAlpha(ImU32 value, float alpha)
 	return (value & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
 }
 
+// Reserve badge space before laying out the title, so long titles never run beneath tags.
+float drawListBadges(const Layout& layout, const LibraryItem& item, const ImRect& row,
+		float left, ImDrawList* draw)
+{
+	const float padding = uiScaled(8.f);
+	const float actionsWidth = layout.showItemActions ? std::min(uiScaled(32.f), row.GetHeight() - padding) + padding : 0.f;
+	float right = row.Max.x - padding - actionsWidth;
+	const float size = std::max(9.f, ImGui::GetFontSize() * 0.62f);
+	const float height = std::min(row.GetHeight() - uiScaled(6.f), size * 1.9f);
+	const float centerY = row.GetCenter().y;
+	const float budget = std::max(0.f, (right - left) * 0.48f);
+	const float minRight = right - budget;
+	const auto badge = [&](const std::string& label, bool favourite) {
+		if (label.empty() || right - minRight < size * 2.f) return;
+		const float starWidth = favourite ? size * 1.35f : 0.f;
+		const float width = std::min(right - minRight,
+				ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0, label.c_str()).x + size + starWidth);
+		const ImRect rect(right - width, centerY - height * 0.5f, right, centerY + height * 0.5f);
+		const ImU32 accent = layout.list.favouriteColor ? color(*layout.list.favouriteColor)
+				: layout.selectorBorderColor ? color(*layout.selectorBorderColor) : ImGui::GetColorU32(ImGuiCol_CheckMark);
+		const ImVec4 accentRgb = ImGui::ColorConvertU32ToFloat4(accent);
+		const float luminance = accentRgb.x * 0.299f + accentRgb.y * 0.587f + accentRgb.z * 0.114f;
+		const ImU32 ink = favourite ? (luminance > 0.55f ? IM_COL32(12, 30, 22, 255) : IM_COL32_WHITE)
+				: browserTextColor(layout, false);
+		draw->AddRectFilled(rect.Min, rect.Max, favourite ? accent : color(layout.background), height * 0.25f);
+		draw->AddRect(rect.Min, rect.Max, favourite ? accent : withAlpha(ink, 0.6f), height * 0.25f);
+		float x = rect.Min.x + size * 0.5f;
+		if (favourite)
+		{
+			ImVec2 points[10];
+			for (int i = 0; i < 10; ++i)
+			{
+				const float angle = -IM_PI * 0.5f + i * IM_PI * 0.2f;
+				const float radius = size * (i % 2 ? 0.22f : 0.48f);
+				points[i] = ImVec2(x + size * 0.5f + std::cos(angle) * radius, centerY + std::sin(angle) * radius);
+			}
+			draw->AddConcavePolyFilled(points, 10, ink);
+			x += starWidth;
+		}
+		draw->PushClipRect(ImVec2(x, rect.Min.y), ImVec2(rect.Max.x - size * 0.3f, rect.Max.y), true);
+		draw->AddText(ImGui::GetFont(), size, ImVec2(x, centerY - size * 0.5f), ink, label.c_str());
+		draw->PopClipRect();
+		right = rect.Min.x - padding * 0.6f;
+	};
+	if (layout.list.favouriteBadge && item.favourite) badge(i18n::T("Favourite"), true);
+	if (layout.list.systemBadge)
+	{
+		const auto system = item.metadata.find("system");
+		if (system != item.metadata.end()) badge(system->second, false);
+	}
+	return right;
+}
+
 
 struct OrbitState
 {
@@ -1922,13 +1975,14 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 					const bool isSelected = selectedId == key;
 					const bool pressed = browserSelectable(layout, isSelected, ImVec2(0.0f, rowHeight));
 					const bool hovered = ImGui::IsItemHovered();
+					const bool focused = ImGui::IsItemFocused() && GImGui->NavCursorVisible && GImGui->NavHighlightItemUnderNav;
 					const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-					if (pulledItemId.empty() && (hovered || pressed))
+					if (pulledItemId.empty() && (pressed || focused || (hovered && layout.list.selectOnHover)))
 					{
 						selected = i;
 						selectedId = key;
 					}
-		if (pulledItemId.empty() && activatesItem(layout, pressed))
+					if (pulledItemId.empty() && activatesItem(layout, pressed))
 						activated = i;
 					const float padding = uiScaled(8.f);
 					float textLeft = itemRect.Min.x + padding;
@@ -1943,8 +1997,11 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 					if (!item.title.empty())
 					{
 						const float controlsWidth = std::min(uiScaled(32.f), rowHeight - padding) + padding * 2.f;
+						const float right = layout.list.systemBadge || layout.list.favouriteBadge
+								? drawListBadges(layout, item, itemRect, textLeft, browserDrawList)
+								: itemRect.Max.x - controlsWidth;
 						const ImRect textRect(ImVec2(textLeft, itemRect.Min.y + (rowHeight - ImGui::GetFontSize()) * 0.5f),
-								ImVec2(itemRect.Max.x - controlsWidth, itemRect.Max.y));
+								ImVec2(std::max(textLeft, right - padding), itemRect.Max.y));
 						drawSingleLine(browserDrawList, textRect, item.title, browserTextColor(layout, selectedId == key || hovered));
 					}
 					if (layout.separatorColor)
@@ -1952,7 +2009,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 								ImVec2(itemRect.Max.x - padding, itemRect.Max.y), color(*layout.separatorColor));
 					if (layout.selectorBorderColor && (selectedId == key || hovered))
 						browserDrawList->AddRect(itemRect.Min, itemRect.Max, color(*layout.selectorBorderColor), uiScaled(layout.rounding));
-					if (layout.showFavouriteMarker && item.favourite) drawFavouriteMarker(layout, itemRect, browserDrawList);
+					if (layout.showFavouriteMarker && item.favourite && !layout.list.favouriteBadge) drawFavouriteMarker(layout, itemRect, browserDrawList);
 					// Draw per-game controls after the artwork/title, retaining the selectable's item data.
 					observeItem(static_cast<size_t>(i));
 				}

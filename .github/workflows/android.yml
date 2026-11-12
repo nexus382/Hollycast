@@ -51,8 +51,10 @@ jobs:
         working-directory: shell/android-studio
         run: ./gradlew assembleRelease bundleRelease --parallel
         env:
-          SENTRY_UPLOAD_URL: ${{ secrets.SENTRY_UPLOAD_URL }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD }}
+          HOLLYCAST_REQUIRE_SCREENSCRAPER: ${{ github.repository == 'nexus382/Hollycast' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -87,18 +89,3 @@ jobs:
       #     cp shell/android-studio/flycast/build/outputs/bundle/release/*.aab shell/android-studio/flycast/build/outputs/apk/release/
       #     rclone copy shell/android-studio/flycast/build/outputs/apk/release scaleway:hollycast-builds/android/${GITHUB_REF#refs/}-$GITHUB_SHA --exclude '*.json'
       #   if: github.repository == 'OrangeFox86/Hollycast' && github.event_name == 'push'
-
-      # - uses: getsentry/action-setup-cli@v1
-
-      # - name: Upload symbols to Sentry
-      #   run: |
-      #     VERSION=$(git describe --tags --always)
-      #     sentry-cli releases new "$VERSION"
-      #     sentry-cli releases set-commits "$VERSION" --auto
-      #     sentry-cli debug-files upload symbols
-      #   shell: bash
-      #   env:
-      #     SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_TOKEN }}
-      #     SENTRY_ORG: flycast
-      #     SENTRY_PROJECT: minidump
-      #   if: ${{ env.SENTRY_AUTH_TOKEN != '' && github.event_name == 'push' }}

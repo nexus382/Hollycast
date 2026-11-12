@@ -30,6 +30,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 static bool operator<(const GameMedia &left, const GameMedia &right)
 {
@@ -299,25 +302,80 @@ GameMedia makeGameMedia(const std::string& name, const std::string& path, const 
 
 } // namespace
 
-void GameScanner::insert_game(const GameMedia& game)
+static size_t getMediaSize(const hostfs::FileInfo& item)
 {
-	LockGuard _(mutex);
-	game_list.insert(std::upper_bound(game_list.begin(), game_list.end(), game), game);
-}
-
-static size_t getFileSize(const hostfs::FileInfo& item)
-{
-	if (item.size != 0)
-		return item.size;
+	size_t size = item.size;
 	try {
-		return hostfs::storage().getFileInfo(item.path).size;
+		if (size == 0)
+			size = hostfs::storage().getFileInfo(item.path).size;
+		const std::string extension = get_file_extension(item.name);
+		if (extension != "gdi" && extension != "cue")
+			return size;
+
+		// Only read the small descriptor; track contents are never loaded during a scan.
+		std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(item.path, "rb"));
+		if (file == nullptr)
+			return size;
+		char data[64_KB];
+		const size_t length = file->read(data, 1, sizeof(data));
+		if (length == sizeof(data) || file->error())
+			return size;
+		std::istringstream descriptor(std::string(data, length));
+		descriptor.imbue(std::locale::classic());
+		std::unordered_set<std::string> trackFiles;
+		if (extension == "gdi")
+		{
+			u32 trackCount;
+			if (!(descriptor >> trackCount) || trackCount < 3 || trackCount > 99)
+				return size;
+			for (u32 i = 0; i < trackCount; ++i)
+			{
+				u32 track, fad, control, sectorSize;
+				s32 offset;
+				std::string name;
+				// GDI/CUE filenames do not escape backslashes inside quotes.
+				if (!(descriptor >> track >> fad >> control >> sectorSize
+						>> std::quoted(name, '"', '\0') >> offset) || name.empty())
+					return size;
+				trackFiles.insert(name);
+			}
+		}
+		else
+		{
+			std::string line;
+			while (std::getline(descriptor, line))
+			{
+				std::istringstream entry(line);
+				entry.imbue(std::locale::classic());
+				std::string token;
+				entry >> token;
+				if (token != "FILE")
+					continue;
+				std::string name, type;
+				if (!(entry >> std::quoted(name, '"', '\0') >> type) || name.empty() || type != "BINARY")
+					return size;
+				trackFiles.insert(name);
+			}
+		}
+
+		// Several tracks may share one BIN; count each referenced file only once.
+		const std::string parent = hostfs::storage().getParentPath(item.path);
+		size_t totalSize = size;
+		for (const std::string& name : trackFiles)
+		{
+			const hostfs::FileInfo track = hostfs::storage().getFileInfo(hostfs::storage().getSubPath(parent, name));
+			if (track.isDirectory || track.size > std::numeric_limits<size_t>::max() - totalSize)
+				return size;
+			totalSize += track.size;
+		}
+		return totalSize;
 	} catch (const hostfs::StorageException&) {
-		return 0;
+		// Keep the descriptor size when a track is missing or inaccessible.
+		return size;
 	}
 }
 
-void GameScanner::add_game_directory(const std::string& path, const GameListMetadataMap& metadata,
-		const std::unordered_map<std::string, std::string>& manualIndex, const std::string& gamelistPath)
+void GameScanner::add_game_directory(const std::string& path, bool hideLegacy, std::vector<GameMedia>& result)
 {
 	hostfs::DirectoryTree tree(path);
 	std::string emptyParentPath;
@@ -326,7 +384,7 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 		if (!running)
 			break;
 
-		if (game_list.empty())
+		if (result.empty())
 		{
 			// This won't work for android content uris
 			size_t slash = get_last_slash_pos(item.path);
@@ -372,20 +430,18 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 				continue;
 			gameName = it->second->description;
 			fileName = fileName + " (" + gameName + ")";
-			GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
+			GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getMediaSize(item));
 			game.system = arcadeSystemName(*it->second);
-			populateMetadata(game, metadata, manualIndex, gamelistPath);
-			insert_game(game);
+			result.push_back(std::move(game));
 			continue;
 		}
 		else if (extension == "bin" || extension == "lst" || extension == "dat")
 		{
-			if (!config::HideLegacyNaomiRoms)
+			if (!hideLegacy)
 			{
-				GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getFileSize(item));
+				GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getMediaSize(item));
 				game.system = "Naomi"; // Legacy ROM files always load as Naomi.
-				populateMetadata(game, metadata, manualIndex, gamelistPath);
-				insert_game(game);
+				result.push_back(std::move(game));
 			}
 			continue;
 		}
@@ -399,9 +455,8 @@ void GameScanner::add_game_directory(const std::string& path, const GameListMeta
 		}
 		else if (extension != "cdi" && extension != "cue")
 			continue;
-		GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, false, false, getFileSize(item));
-		populateMetadata(game, metadata, manualIndex, gamelistPath);
-		insert_game(game);
+		GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, false, false, getMediaSize(item));
+		result.push_back(std::move(game));
 	}
 }
 
@@ -423,7 +478,12 @@ void GameScanner::fetch_game_list()
 	if (scan_thread && scan_thread->joinable())
 		scan_thread->join();
 	running = true;
-	scan_thread = std::make_unique<std::thread>([this]()
+	// A scan owns its configuration and working list. Sort and publish in batches
+	// so large libraries do not shift thousands of rich records for every file.
+	scan_thread = std::make_unique<std::thread>([this, paths = config::ContentPath.get(),
+			gamelistPath = config::GameListPath.get(), artworkPath = config::BoxartPath.get(),
+			hideLegacy = config::HideLegacyNaomiRoms.get(),
+			hideDrives = config::loadBool("config", "HideCdromDrives", false)]()
 		{
 			ThreadName _("GameScanner");
 			if (arcade_games.empty())
@@ -434,46 +494,77 @@ void GameScanner::fetch_game_list()
 					if (game->gdrom_name != nullptr)
 						arcade_gdroms.insert(game->gdrom_name);
 				}
-			const GameListMetadataMap metadata = parseGamelistMetadata(config::GameListPath.get());
-			const std::unordered_map<std::string, std::string> manualIndex = buildManualPathIndex(config::BoxartPath.get());
-			{
-				LockGuard _(mutex);
-				game_list.clear();
-			}
-			for (const auto& path : config::ContentPath.get())
+			std::vector<GameMedia> result;
+			for (const auto& path : paths)
 			{
 				try {
-					add_game_directory(path, metadata, manualIndex, config::GameListPath.get());
+					add_game_directory(path, hideLegacy, result);
 				} catch (const hostfs::StorageException& e) {
 					// ignore
 				}
 				if (!running)
 					break;
 			}
-			std::string dcbios = hostfs::findFlash("dc_", "%bios.bin;%boot.bin");
+			if (!running)
+				return;
+			bool initialSnapshot = false;
+			if (!result.empty())
 			{
 				LockGuard _(mutex);
-				if (!config::loadBool("config", "HideCdromDrives", false))
+				initialSnapshot = std::none_of(game_list.begin(), game_list.end(), [](const GameMedia& game) {
+					return !game.device && !game.path.empty();
+				});
+			}
+			if (initialSnapshot)
+			{
+				// Cold metadata/manual storage and optical-drive probing can take seconds.
+				// Show configured games first; refreshes retain their previous
+				// complete snapshot until all enrichment and device discovery finish.
+				std::stable_sort(result.begin(), result.end());
+				LockGuard _(mutex);
+				if (!running)
+					return;
+				game_list = result;
+				++generation;
+			}
+			const GameListMetadataMap metadata = parseGamelistMetadata(gamelistPath);
+			if (!running)
+				return;
+			const std::unordered_map<std::string, std::string> manualIndex = buildManualPathIndex(artworkPath);
+			for (GameMedia& game : result)
+			{
+				if (!running)
+					return;
+				populateMetadata(game, metadata, manualIndex, gamelistPath);
+			}
+			if (!initialSnapshot || !metadata.empty())
+				std::stable_sort(result.begin(), result.end());
+			std::string dcbios = hostfs::findFlash("dc_", "%bios.bin;%boot.bin");
+			{
+				if (!hideDrives)
 				{
 					// CD-ROM devices
-					for (const auto& drive : hostfs::getCdromDrives())
+					const auto drives = enumerateDrives ? enumerateDrives() : hostfs::getCdromDrives();
+					for (const auto& drive : drives)
 					{
 						std::string name;
 						if (drive.substr(0, 4) == "\\\\.\\")
 							name = drive.substr(4);
 						else
 							name = drive;
-						game_list.insert(game_list.begin(), makeGameMedia(name, drive, name, "", false, true, 0));
+						result.insert(result.begin(), makeGameMedia(name, drive, name, "", false, true, 0));
 					}
 				}
 				// Dreamcast BIOS
 				if (!dcbios.empty())
-					game_list.insert(game_list.begin(), { i18n::T("Dreamcast BIOS") });
+					result.insert(result.begin(), { i18n::T("Dreamcast BIOS") });
 			}
 			if (running)
 			{
-				scan_done = true;
+				LockGuard _(mutex);
+				game_list.swap(result);
 				++generation;
+				scan_done = true;
 			}
 			running = false;
 		});

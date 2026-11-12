@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 target_sources(${PROJECT_NAME} PRIVATE
         CustomTexture.cpp
         CustomTexture.h
@@ -5,6 +6,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 		custom_texture/CustomTextureTypes.h
 		custom_texture/TextureTranscoder.cpp
 		custom_texture/TextureTranscoder.h
+		custom_texture/TextureAtlas.cpp
+		custom_texture/TextureAtlas.h
         osd.cpp
         osd.h
         sorter.cpp

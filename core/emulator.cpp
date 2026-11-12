@@ -34,6 +34,7 @@
 #include "cheats.h"
 #include "audio/audiostream.h"
 #include "debug/gdb_server.h"
+#include "debug/assembly_debugger.h"
 #include "hw/pvr/Renderer_if.h"
 #include "hw/arm7/arm7_rec.h"
 #include "network/ggpo.h"
@@ -600,7 +601,7 @@ void Emulator::init()
 Sh4Executor *Emulator::getSh4Executor()
 {
 #if FEAT_SHREC != DYNAREC_NONE
-	if(config::DynarecEnabled)
+	if(config::DynarecEnabled && !assembly_debugger::active())
 		return recompiler;
 	else
 #endif
@@ -649,6 +650,7 @@ int getGamePlatform(const std::string& filename)
 void Emulator::loadGame(const char *path, LoadProgress *progress)
 {
 	init();
+	assembly_debugger::reset();
 	try {
 		DEBUG_LOG(BOOT, "Loading game %s", path == nullptr ? "(nil)" : path);
 
@@ -846,6 +848,8 @@ void Emulator::runInternal()
 				resetRequested = false;
 
 				getSh4Executor()->Run();
+				if (assembly_debugger::breakPending())
+					rend_cancel_emu_wait();
 
 				if (resetRequested)
 				{
@@ -871,6 +875,7 @@ void Emulator::unloadGame(bool allowAutoSave)
 	} catch (...) { }
 	if (state == Loaded || state == Error)
 	{
+		assembly_debugger::reset();
 #ifdef USE_HIKARU
 		if (settings.platform.isHikaru())
 		{
@@ -1216,6 +1221,8 @@ void Emulator::start()
 					{
 						startTime = sh4_sched_now64();
 						runInternal();
+						if (assembly_debugger::breakPending())
+							break;
 						if (!ggpo::nextFrame())
 							break;
 					}

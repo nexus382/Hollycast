@@ -2467,19 +2467,6 @@ msgstr "Registra su file"
 msgid "Log debug information to flycast.log"
 msgstr "Registra le informazioni di debug in flycast.log"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "Segnala automaticamente gli arresti anomali"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr ""
-"Carica automaticamente i rapporti sugli arresti anomali su sentry.io per "
-"agevolare la risoluzione dei problemi. Non vengono incluse informazioni "
-"personali."
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Script Lua"
@@ -9073,28 +9060,6 @@ msgid ""
 msgstr ""
 "Specifica il nome del file Lua da usare. Deve trovarsi nella cartella di "
 "configurazione di Hollycast. Se il campo è vuoto, viene usato flycast.lua."
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "Rapporti sugli arresti anomali"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "Carica automaticamente i rapporti sugli arresti anomali"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"Rapporti sugli arresti anomali\n"
-"Carica automaticamente i rapporti per aiutare gli sviluppatori a diagnosticare e risolvere i problemi.\n"
-"\n"
-"In genere i rapporti includono dettagli tecnici sull'arresto anomalo e sull'ambiente.\n"
-"Lasciala attiva se vuoi contribuire a migliorare la stabilità; disattivala se preferisci non inviare dati sugli arresti anomali."
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

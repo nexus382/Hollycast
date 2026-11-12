@@ -14,7 +14,9 @@
 #include <sys/param.h> /* for MAXPATHLEN */
 #include <unistd.h>
 #include "ui/gui.h"
+#include "ui/gui_debugger.h"
 #include "ui/gui_menu.h"
+#include "debug/assembly_debugger.h"
 #include "oslib/oslib.h"
 #include "sdl/sdl.h"
 #include <functional>
@@ -301,6 +303,11 @@ static void addMenuSeparator(NSMenu *menu)
 	runMenuAction([]() { GuiMenu::openCustomBoxartSettings(); });
 }
 
+- (void)openAssemblyDebugger:(id)sender
+{
+	runMenuAction([]() { gui_open_debugger(); });
+}
+
 - (void)openGeneralSettings:(id)sender
 {
 	runMenuAction([]() { GuiMenu::openGeneralSettings(); });
@@ -371,6 +378,9 @@ static void addMenuSeparator(NSMenu *menu)
 #endif
 	case MENU_TAG_DISABLED:
 		return NO;
+	case MENU_TAG_ASSEMBLY_DEBUGGER:
+		[menuItem setState:assembly_debugger::active() ? NSControlStateValueOn : NSControlStateValueOff];
+		return assembly_debugger::available();
 	default:
 		return YES;
 	}
@@ -487,6 +497,7 @@ static void setupHollycastMenus(void)
 	NSMenuItem *toolsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Tools" action:nil keyEquivalent:@""];
 	NSMenu *toolsMenu = [[NSMenu alloc] initWithTitle:@"Tools"];
 	addMenuItem(toolsMenu, @"CHD Convert", nil, @"", MENU_TAG_DISABLED);
+	addMenuItem(toolsMenu, @"Assembly Debugger", @selector(openAssemblyDebugger:), @"", MENU_TAG_ASSEMBLY_DEBUGGER);
 	addMenuItem(toolsMenu, @"Custom Boxart", @selector(openCustomBoxart:), @"", 0);
 	[toolsMenuItem setSubmenu:toolsMenu];
 	[[NSApp mainMenu] addItem:toolsMenuItem];
@@ -623,7 +634,7 @@ static bool dumpCallback(const char *dump_dir, const char *minidump_id, void *co
 	    char path[512];
 	    sprintf(path, "%s/%s.dmp", dump_dir, minidump_id);
 	    printf("Minidump saved to '%s'\n", path);
-	    registerCrash(dump_dir, path);
+	    registerCrash(path);
 	}
     return succeeded;
 }

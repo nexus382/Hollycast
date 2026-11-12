@@ -18,6 +18,8 @@
 	along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui_menu.h"
+#include "gui_debugger.h"
+#include "debug/assembly_debugger.h"
 #include "gui.h"
 #include "gui_util.h"
 #include "cfg/cfg.h"
@@ -608,6 +610,11 @@ void renderToolsMenu()
 		ImGui::MenuItem(T("CHD Convert"), nullptr, false, false);
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("%s", T("CHD conversion is not available yet."));
+
+		if (ImGui::MenuItem(T("Assembly Debugger"), nullptr, assembly_debugger::active(), assembly_debugger::available()))
+			gui_open_debugger();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !assembly_debugger::available())
+			ImGui::SetTooltip("%s", T("Load an offline game with hardcore mode and the GDB server disabled."));
 
 		// Custom Boxart
 		if (ImGui::MenuItem(T("Custom Boxart"), nullptr, false, true))
