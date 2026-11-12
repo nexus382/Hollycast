@@ -55,6 +55,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/ui/ArtworkAdapterTest.cpp
         src/ui/TheGamesDbTest.cpp
         src/ui/LibraryTest.cpp
+        src/ui/LibrarySortTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp
         src/util/PeriodicThreadTest.cpp

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <ctime>
+#include <locale>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -108,6 +109,16 @@ inline std::vector<size_t> selectGames(const std::vector<Entry>& entries, View v
 			return entryBefore(left, right, entries, view);
 		});
 	return result;
+}
+
+inline void sortByTitle(std::vector<size_t>& rows, const std::vector<Entry>& entries,
+		bool descending, const std::locale& locale)
+{
+	// Preserve view ordering for equal titles, including the newest save first.
+	std::stable_sort(rows.begin(), rows.end(), [&](size_t left, size_t right) {
+		return descending ? locale(entries[right].name, entries[left].name)
+				: locale(entries[left].name, entries[right].name);
+	});
 }
 
 // Cache scanner indices, which remain stable as save discovery adds visible games.

@@ -3536,26 +3536,26 @@ static void gui_display_content()
 				const int columnCount = gui_state == GuiState::SelectDisk ? 8 : showContinueActions ? 11 : 9;
 				if (ImGui::BeginTable("libraryTable", columnCount, ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_Borders
 						| ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit
-						| ImGuiTableFlags_ScrollY, ImVec2(0.0f, 0.0f)))
+						| ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate, ImVec2(0.0f, 0.0f)))
 				{
 					// ScrollY tables create their own child; the outer library cannot
 					// capture a swipe that starts over one of these rows.
 					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
 					scrollWindowFromTouch();
-					ImGui::TableSetupColumn(iconLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, iconColumnWidth);
-					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed, productIdColumnWidth);
+					ImGui::TableSetupColumn(iconLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoSort, iconColumnWidth);
+					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, productIdColumnWidth);
 					ImGui::TableSetupColumn(titleLabel, ImGuiTableColumnFlags_WidthStretch);
-					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed, regionColumnWidth);
-					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed, formatColumnWidth);
-					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed, timePlayedColumnWidth);
-					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed, dateColumnWidth);
-					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed, sizeColumnWidth);
+					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, regionColumnWidth);
+					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, formatColumnWidth);
+					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, timePlayedColumnWidth);
+					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, dateColumnWidth);
+					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, sizeColumnWidth);
 					if (gui_state != GuiState::SelectDisk)
-						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, uiScaled(48.0f));
+						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, uiScaled(48.0f));
 					if (showContinueActions)
 					{
-						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
-						ImGui::TableSetupColumn(T("Start Fresh"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Start Fresh")) + ImGui::GetStyle().CellPadding.x * 2.0f);
+						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
+						ImGui::TableSetupColumn(T("Start Fresh"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, calcLibraryTextWidth(T("Start Fresh")) + ImGui::GetStyle().CellPadding.x * 2.0f);
 					}
 					ImGui::TableSetupScrollFreeze(0, 1);
 					ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
@@ -3566,8 +3566,44 @@ static void gui_display_content()
 					for (int column = 0; column < columnCount; ++column)
 					{
 						ImGui::TableSetColumnIndex(column);
-						textTableCellCentered(libraryColumnHeaders[column], tableTextSize);
+						if (column == 2)
+							ImGui::TableHeader(libraryColumnHeaders[column]);
+						else
+							textTableCellCentered(libraryColumnHeaders[column], tableTextSize);
 					}
+
+					const auto& sourceRows = filter.IsActive() ? filteredRows : visibleGames;
+					const std::vector<size_t>* tableRows = &sourceRows;
+					ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
+					if (sortSpecs != nullptr && sortSpecs->SpecsCount > 0)
+					{
+						// Metadata-only lookups and sorting run when inputs change, never per visible row/frame.
+						const auto sortKey = std::make_tuple(filteredRowsKey, boxart.libraryRevision(),
+								getSystemLocale(), sortSpecs->Specs[0].SortDirection);
+						static auto previousSortKey = sortKey;
+						static bool sortedRowsValid = false;
+						static std::vector<size_t> previousSourceRows, sortedRows;
+						if (!sortedRowsValid || sortKey != previousSortKey || sourceRows != previousSourceRows)
+						{
+							std::vector<library::Entry> sortEntries = libraryEntries;
+							for (size_t index : sourceRows)
+								if (!gameList[index].device)
+								{
+									const GameBoxart art = boxart.getCachedBoxart(gameList[index]);
+									if (!art.name.empty())
+										sortEntries[index].name = art.name;
+								}
+							sortedRows = sourceRows;
+							library::sortByTitle(sortedRows, sortEntries,
+									sortSpecs->Specs[0].SortDirection == ImGuiSortDirection_Descending, i18n::locale());
+							previousSourceRows = sourceRows;
+							previousSortKey = sortKey;
+							sortedRowsValid = true;
+						}
+						tableRows = &sortedRows;
+					}
+					if (sortSpecs != nullptr)
+						sortSpecs->SpecsDirty = false;
 
 					auto drawTableGame = [&](const GameMedia& game, int rowIndex, bool filterPassed = false) -> bool
 					{
@@ -3706,7 +3742,7 @@ static void gui_display_content()
 						displayedGameCount = static_cast<int>(filteredRows.size());
 						if (gui_state == GuiState::SelectDisk)
 						{
-							for (size_t gameIndex : filteredRows)
+							for (size_t gameIndex : *tableRows)
 								if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
 									break;
 						}
@@ -3718,7 +3754,7 @@ static void gui_display_content()
 							while (clipper.Step() && !gameStartedFromRow)
 								for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
 								{
-									const size_t gameIndex = filteredRows[i];
+									const size_t gameIndex = (*tableRows)[i];
 									if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
 									{
 										gameStartedFromRow = true;
@@ -3734,7 +3770,7 @@ static void gui_display_content()
 						bool gameStartedFromRow = false;
 						while (clipper.Step() && !gameStartedFromRow)
 							for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-								if (drawTableGame(gameList[visibleGames[i]], visibleGames[i]))
+								if (drawTableGame(gameList[(*tableRows)[i]], static_cast<int>((*tableRows)[i])))
 								{
 									gameStartedFromRow = true;
 									break;
@@ -3742,7 +3778,7 @@ static void gui_display_content()
 					}
 					else
 					{
-						for (size_t i : visibleGames)
+						for (size_t i : *tableRows)
 							if (drawTableGame(gameList[i], static_cast<int>(i)))
 								break;
 					}
