@@ -932,7 +932,7 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 		const float iconSize = ImGui::GetFontSize() * 0.85f;
 		const ImVec2 iconPos(
 			windowPos.x + line1Start.x + uiScaled(20.0f + 8.0f) + labelWidth + SettingsLayoutScaled(7.0f),
-			windowPos.y + line1Start.y + (fontSize - iconSize) * 0.5f);
+			windowPos.y + line1Start.y + (fontSize - iconSize) * 0.5f - SettingsLayoutScaled(7.0f));
 		ImGui::GetWindowDrawList()->AddText(settingsIconFont, iconSize, iconPos,
 			ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_FA_CIRCLE_INFO);
 	}
