@@ -9,8 +9,11 @@ fun gitVersionName(): String {
     }.standardOutput.asText.get().trim()
 }
 
+val githubUpdates = providers.gradleProperty("githubUpdates").orNull == "true"
+
 android {
     namespace = "com.hollycast.emulator"
+    buildFeatures { buildConfig = true }
     ndkVersion = "29.0.14206865"
     compileSdk {
         version = release(36) {
@@ -19,6 +22,7 @@ android {
     }
 
     defaultConfig {
+        buildConfigField("boolean", "GITHUB_UPDATES", githubUpdates.toString())
         applicationId = "com.hollycast.emu"
         minSdk = 21
         targetSdk = 36
@@ -35,6 +39,14 @@ android {
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // GitHub APKs use Android's package installer. Store bundles omit this permission.
+    if (githubUpdates) {
+        sourceSets.configureEach {
+            if (name in listOf("debug", "release", "developerRelease"))
+                manifest.srcFile("src/github/AndroidManifest.xml")
+        }
     }
 
     signingConfigs {
@@ -103,6 +115,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation("com.google.android.play:app-update:2.1.0")
     implementation(libs.appcompat)
     implementation(libs.commons.lang3)
     implementation(libs.httpclient5)
@@ -110,6 +123,8 @@ dependencies {
     implementation(fileTree("libs") { include("*.aar", "*.jar") })
     implementation(libs.documentfile)
     testImplementation(libs.junit)
+    testImplementation("org.mockito:mockito-core:5.14.2")
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.ext.junit)
 }
