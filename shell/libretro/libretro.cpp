@@ -72,7 +72,7 @@
 #include "oslib/oslib.h"
 #include "rend/CustomTexture.h"
 #include "oslib/i18n.h"
-#include "input/dreampotato.h"
+#include "input/dreamlink/dreampotato.h"
 #include "storage.h"
 
 // SMB support does not work when the path contains a back-slash, so just stick to using the portable forward-slash instead.

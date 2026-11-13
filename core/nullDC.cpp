@@ -19,8 +19,9 @@
 #include "stdclass.h"
 #include "serialize.h"
 #include "oslib/i18n.h"
-#include "input/maplelinkregistry.h"
-#include "input/maplelink.h"
+#include "input/dreamlink/maplelinkregistry.h"
+#include "input/dreamlink/maplelink.h"
+#include <time.h>
 #ifdef TARGET_UWP
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.Foundation.h>
