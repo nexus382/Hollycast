@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "settings_new.h"
+#include "app_update_package.h"
 #ifdef USE_METAL
 #include "rend/metal/metal_api.h"
 #endif
@@ -9926,7 +9927,7 @@ void renderAboutTab()
 	// Version Information
 	if (RenderCollapsingHeader("VersionInformationSection", ICON_FA_TAG, T("Version Information"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
-		ImGui::Text(T("Version: %s"), GIT_VERSION);
+		ImGui::Text(T("Version: %s"), app_updates::detail::versionLabel(HOLLYCAST_UPDATE_CHANNEL, GIT_HASH).c_str());
 		ImGui::Text(T("Git Hash: %s"), GIT_HASH);
 		ImGui::Text(T("Build Date: %s"), BUILD_DATE);
 		ImGui::Spacing();
