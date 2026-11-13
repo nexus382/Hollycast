@@ -51,6 +51,9 @@ void push_vmu_screen(int bus_id, int bus_port, u8* buffer)
 #ifdef HAVE_MOVABLE_VMUS
 	vmu_window::publishScreen(vmu_id, vmu_lcd_data[vmu_id], true);
 #endif
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::publishScreen(vmu_id, vmu_lcd_data[vmu_id], true);
+#endif
 }
 
 void reset_vmu_screen(int bus_id, int bus_port)
@@ -62,6 +65,9 @@ void reset_vmu_screen(int bus_id, int bus_port)
 	vmu_lcd_status[vmu_id] = false;
 #ifdef HAVE_MOVABLE_VMUS
 	vmu_window::publishScreen(vmu_id, nullptr, false);
+#endif
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::publishScreen(vmu_id, nullptr, false);
 #endif
 #endif
 }

@@ -5016,6 +5016,9 @@ void gui_cancel_load() {
 void gui_term()
 {
 	app_updates::stop();
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::stop();
+#endif
 	if (inited)
 	{
 		inited = false;
@@ -5069,6 +5072,9 @@ void reset_vmus() {
 		vmu_lcd_status[i] = false;
 #ifdef HAVE_MOVABLE_VMUS
 		vmu_window::publishScreen(i, nullptr, false);
+#endif
+#ifdef HAVE_PHONE_VMU
+		phone_vmu::publishScreen(i, nullptr, false);
 #endif
 	}
 }

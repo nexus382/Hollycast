@@ -20,6 +20,7 @@
 #include "types.h"
 #include "cfg/option.h"
 #include "rend/vmu_window.h"
+#include "network/phone_vmu.h"
 
 // VMUs
 extern u32 vmu_lcd_data[8][48 * 32];
@@ -62,5 +63,9 @@ static inline void blankVmus()
 #ifdef HAVE_MOVABLE_VMUS
 	for (int i = 0; i < 8; ++i)
 		vmu_window::publishScreen(i, vmu_lcd_data[i], vmu_lcd_status[i]);
+#endif
+#ifdef HAVE_PHONE_VMU
+	for (int i = 0; i < 8; ++i)
+		phone_vmu::publishScreen(i, vmu_lcd_data[i], vmu_lcd_status[i]);
 #endif
 }

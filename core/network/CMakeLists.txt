@@ -14,6 +14,11 @@ target_sources(${PROJECT_NAME} PRIVATE
         net_handshake.cpp
         net_handshake.h
         net_platform.h
+        phone_vmu.cpp
+        phone_vmu.h
+        phone_vmu_page.h
+        phone_vmu_player.h
+        ../deps/vmu-softvms/core.h
         output.cpp
         output.h
         picoppp.cpp
