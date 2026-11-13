@@ -2,6 +2,8 @@
 
 # Hollycast
 
+[Meet the people behind Hollycast — contributors, sources, and special thanks.](CREDITS.md)
+
 ![Hollycast](banner.png)
 
 <sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>
