@@ -258,6 +258,19 @@ Option<int> VirtualGamepadVibration("VirtualGamepadVibration", 20, "input");
 Option<int> VirtualGamepadTransparency("VirtualGamepadTransparency", 37, "input");
 Option<int> VirtualGamepadIdleTimeout("VirtualGamepadIdleTimeout", 10, "input");
 Option<int> VirtualGamepadFingerSize("VirtualGamepadFingerSize", 0, "input");
+Option<int> RemotePlayPort("RemotePlayPort", 8765, "remoteplay");
+Option<int> RemotePlayFps("RemotePlayFps", 30, "remoteplay");
+Option<int> RemotePlayWidth("RemotePlayWidth", 640, "remoteplay");
+Option<int> RemotePlayJpegQuality("RemotePlayJpegQuality", 70, "remoteplay");
+Option<bool> RemotePlayBindLan("RemotePlayBindLan", false, "remoteplay");
+Option<bool> RemotePlayAutoTunnel("RemotePlayAutoTunnel", true, "remoteplay");
+Option<bool, false> RemotePlayAutoStart("RemotePlayAutoStart", false, "remoteplay");
+OptionString RemotePlayPin("RemotePlayPin", "", "remoteplay");
+OptionString RemotePlayCloudflaredPath("RemotePlayCloudflaredPath", "", "remoteplay");
+Option<int> RemotePlayBitrateKbps("RemotePlayBitrateKbps", 1500, "remoteplay");
+OptionString RemotePlayTurnUrl("RemotePlayTurnUrl", "", "remoteplay");
+OptionString RemotePlayTurnUsername("RemotePlayTurnUsername", "", "remoteplay");
+OptionString RemotePlayTurnPassword("RemotePlayTurnPassword", "", "remoteplay");
 
 std::array<Option<MapleDeviceType>, 4> MapleMainDevices {
 	Option<MapleDeviceType>("device1", MDT_SegaController, "input"),

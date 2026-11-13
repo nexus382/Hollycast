@@ -64,6 +64,10 @@ private:
 void InitAudio();
 void TermAudio();
 void WriteSample(s16 right, s16 left);
+// The tap receives borrowed interleaved L/R PCM16 frames at 44.1 kHz,
+// before host volume. It must copy promptly and never wait for the consumer.
+using AudioOutputTap = void (*)(const void *frames, u32 count);
+void SetAudioOutputTap(AudioOutputTap tap);
 // Plays interleaved stereo frames while no game is running, opening the backend if needed.
 void PushUiAudio(const s16 *frames, u32 count);
 // Closes a backend opened by PushUiAudio. A running game's backend is left alone.

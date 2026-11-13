@@ -22,6 +22,7 @@
 #include "debug/assembly_debugger.h"
 #include "app_updater.h"
 #include "gui_dcnet.h"
+#include "remoteplay/remote_play.h"
 #include "audio/ui_sound.h"
 #include "custom_theme.h"
 #include "rend/osd.h"
@@ -307,6 +308,7 @@ void gui_init()
 	EventManager::listen(Event::Terminate, emuEventCallback);
 	EventManager::listen(Event::VBlank, emuEventCallback);
     ggpo::receiveChatMessages([](int playerNum, const std::string& msg) { chat.receive(playerNum, msg); });
+	remoteplay::autoStartIfEnabled();
 
 #ifdef TARGET_UWP
 	{
@@ -4963,9 +4965,9 @@ void gui_draw_osd()
 	uiThreadRunner.execTasks(std::chrono::steady_clock::now());
 }
 
-void gui_display_osd() {
+void gui_display_osd(bool redrawGameFrame) {
 	gui_draw_osd();
-	gui_endFrame(gui_is_open());
+	gui_endFrame(gui_is_open() || redrawGameFrame);
 }
 
 void gui_display_profiler()
@@ -5015,6 +5017,7 @@ void gui_cancel_load() {
 
 void gui_term()
 {
+	remoteplay::serverStop();
 	app_updates::stop();
 	if (inited)
 	{
