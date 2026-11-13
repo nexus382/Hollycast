@@ -1,12 +1,12 @@
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+import {readAsset} from './embedded_assets.mjs';
 
-const source=readFileSync(new URL('../../core/network/phone_vmu_page.h',import.meta.url),'utf8');
+const source=readAsset('../../core/network/phone_vmu_page.h','HTML');
 const script=source.match(/<script>([\s\S]*?)<\/script>/)[1];
-const media=readFileSync(new URL('../../core/deps/nosleep/media.h',import.meta.url),'utf8').split('R"WAKEJS(')[1].split(')WAKEJS"')[0];
+const media=readAsset('../../core/deps/nosleep/media.h','WAKEJS');
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 function element(){
  return {callbacks:{},classList:{add(){},remove(){},toggle(){}},dataset:{},

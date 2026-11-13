@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
+import {readAsset} from './embedded_assets.mjs';
 export function engine(context=vm.createContext({Uint8Array})) {
   for (const [file,tag] of [['../../core/deps/vmu-softvms/core.h','VMUJS'],['../../core/network/phone_vmu_player.h','VMUPLAYER']]) {
-    const text=readFileSync(new URL(file,import.meta.url),'utf8');
-    vm.runInContext(text.split('R"'+tag+'(')[1].split(')'+tag+'";')[0],context);
+    vm.runInContext(readAsset(file,tag),context);
   }
   return {context,core:vm.runInContext('VMS',context),Player:vm.runInContext('PhoneVmuPlayer',context)};
 }
@@ -19,7 +20,7 @@ export function inputProgram() {
   code.push(0x03,0x4c,0x51,0x13,0x80,0x21,loop>>8,loop&255);
   bytes.set(code,0x200); return bytes;
 }
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const {core,Player}=engine();
   const game=inputProgram(),original=game.slice();
   const frames=[],messages=[];

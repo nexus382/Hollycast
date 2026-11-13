@@ -25,6 +25,10 @@ The wake-lock check covers native acquisition and refusal, opt-out, backgroundin
 history restoration, pending-request races, VMU Sleep, and the user-activated
 silent-video fallback used on local HTTP. The server also verifies that the
 fallback's media and MIT license are served with a compatible media policy.
+The embedded-asset check enforces MSVC's per-literal and concatenated-string
+limits and verifies that the complete VMU license is preserved. JavaScript tests
+reassemble the same literal chunks that the C++ compiler joins when serving assets.
+This suite also runs in the VMU regression workflow on Windows, macOS and Linux.
 
 For browser acceptance without a game, run `phone_vmu_server --preview` and open
 the printed address. A synthetic LCD is served in A1 and a test pattern in D2.

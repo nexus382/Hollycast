@@ -1,5 +1,6 @@
 // VMU JavaScript engine from bucanero/dcvmu-tool, GPL-3.0-only.
 // See README.md and COPYING. The engine below is unmodified.
+// Adjacent raw literals preserve the assets while staying below MSVC's size limit.
 #pragma once
 namespace phone_vmu {
 inline constexpr char standaloneCore[] = R"VMUJS(
@@ -409,7 +410,8 @@ const VMS = (() => {
     for (i = 4; i < 16; i++)
       parity[i] = parity[i & 3] ^ parity[i >> 2];
     for (i = 16; i < 255; i++)
-      parity[i] = parity[i & 15] ^ parity[i >> 4];
+)VMUJS"
+R"VMUJS(      parity[i] = parity[i & 15] ^ parity[i >> 4];
     sfr[0x06] = 0x7f;
     sfr[0x4c] = 0xff;
     sfr[0x01] = 0x02;
@@ -793,7 +795,8 @@ const VMS = (() => {
               cy = 2;
               s = readmem(r);
               r = readmem(0x100);
-              writemem(0x101, (readmem(0x101) & 0x7f) | (r < s ? 0x80 : 0));
+)VMUJS"
+R"VMUJS(              writemem(0x101, (readmem(0x101) & 0x7f) | (r < s ? 0x80 : 0));
               if ((i >> 4) === 3 ? r === s : r !== s) branch(); else nobranch();
               break;
             default:
@@ -1262,7 +1265,8 @@ terms of section 4, provided that you also meet all of these conditions:
   A compilation of a covered work with other separate and independent
 works, which are not by their nature extensions of the covered work,
 and which are not combined with it such as to form a larger program,
-in or on a volume of a storage or distribution medium, is called an
+)VMULICENSE"
+R"VMULICENSE(in or on a volume of a storage or distribution medium, is called an
 "aggregate" if the compilation and its resulting copyright are not
 used to limit the access or legal rights of the compilation's users
 beyond what the individual works permit.  Inclusion of a covered work
@@ -1487,7 +1491,8 @@ give under the previous paragraph, plus a right to possession of the
 Corresponding Source of the work from the predecessor in interest, if
 the predecessor has it or can get it with reasonable efforts.
 
-  You may not impose any further restrictions on the exercise of the
+)VMULICENSE"
+R"VMULICENSE(  You may not impose any further restrictions on the exercise of the
 rights granted or affirmed under this License.  For example, you may
 not impose a license fee, royalty, or other charge for exercise of
 rights granted under this License, and you may not initiate litigation

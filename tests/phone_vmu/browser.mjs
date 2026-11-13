@@ -1,10 +1,10 @@
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {engine,inputProgram} from './mini_game.mjs';
-const source=readFileSync(new URL('../../core/network/phone_vmu_page.h',import.meta.url),'utf8');
+import {readAsset} from './embedded_assets.mjs';
+const source=readAsset('../../core/network/phone_vmu_page.h','HTML');
 const script=source.match(/<script>([\s\S]*?)<\/script>/)[1];
 function classList() {
  const values=new Set();
