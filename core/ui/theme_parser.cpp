@@ -9,6 +9,7 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -164,7 +165,7 @@ Rect parseRect(const Json& value, const std::string& path, double minSize)
 
 const std::set<std::string>& metadataFields()
 {
-	static const std::set<std::string> values = {"title", "description", "developer", "publisher", "genre", "players", "releaseDate", "productId", "region", "format", "playTime", "lastPlayed", "size", "system"};
+	static const std::set<std::string> values = {"title", "description", "developer", "publisher", "genre", "players", "releaseDate", "productId", "region", "format", "playTime", "lastPlayed", "saveDate", "size", "system"};
 	return values;
 }
 
@@ -306,8 +307,14 @@ Theme parse(const std::string& json, const std::string& directory)
 	{
 		const std::string lp = "layouts[" + std::to_string(i) + "]";
 		const Json& item = layouts[i];
-		objectFields(item, lp, {"id", "name", "mode", "browser", "navigation", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch", "pagedGrid", "requiredMedia", "list"});
+		objectFields(item, lp, {"id", "name", "screen", "mode", "browser", "navigation", "columns", "itemAspect", "spacing", "showTitles", "background", "elements", "fontSize", "rowHeight", "textColor", "selectedTextColor", "selectorColor", "artworkSource", "rounding", "inactiveOpacity", "selectorBorderColor", "separatorColor", "showArtwork", "compactControls", "showInfoTooltip", "canvasAspect", "toolbar", "toolbarSelectedTextColor", "toolbarLogo", "toolbarLogoHeight", "activation", "minItemWidth", "titleStyle", "selectorStyle", "showItemActions", "showSystemEntries", "showFavouriteMarker", "hoverDetails", "pixelArt", "placeholder", "previewSource", "narrowLayout", "narrowAspect", "rail", "attract", "sounds", "launch", "pagedGrid", "requiredMedia", "list"});
 		Layout layout;
+		if (auto it = item.find("screen"); it != item.end())
+		{
+			layout.screen = stringValue(*it, lp + ".screen", false);
+			if (layout.screen != "library" && layout.screen != "dcnet") invalid(lp + ".screen", "must be library or dcnet");
+		}
+		if (auto it = item.find("showSystemEntries"); it != item.end()) layout.showSystemEntries = boolValue(*it, lp + ".showSystemEntries");
 		layout.id = stringValue(required(item, "id", lp), lp + ".id", false);
 		if (!validId(layout.id)) invalid(lp + ".id", "must contain 1 to 64 lowercase letters, digits, hyphens, or underscores");
 		if (!layoutIds.insert(layout.id).second) invalid(lp + ".id", "must be unique within the theme");
@@ -455,8 +462,13 @@ Theme parse(const std::string& json, const std::string& directory)
 		{
 			const std::string gp = lp + ".pagedGrid";
 			if (layout.mode != "grid") invalid(gp, "requires grid mode");
-			objectFields(*it, gp, {"rows", "padding", "frame", "unplayedFrame"});
+			objectFields(*it, gp, {"rows", "padding", "frame", "unplayedFrame", "selectedScale"});
 			layout.pagedGrid.rows = integerValue(required(*it, "rows", gp), gp + ".rows", 1, 12);
+			if (auto field = it->find("selectedScale"); field != it->end())
+			{
+				if (layout.pagedGrid.rows != 1) invalid(gp + ".selectedScale", "requires a single row");
+				layout.pagedGrid.selectedScale = static_cast<float>(numberValue(*field, gp + ".selectedScale", 1, 2));
+			}
 			if (auto field = it->find("padding"); field != it->end()) layout.pagedGrid.padding = static_cast<float>(numberValue(*field, gp + ".padding", 0, 24));
 			for (auto binding : {std::pair{"frame", &layout.pagedGrid.frame}, std::pair{"unplayedFrame", &layout.pagedGrid.unplayedFrame}})
 				if (auto field = it->find(binding.first); field != it->end())
@@ -496,7 +508,7 @@ Theme parse(const std::string& json, const std::string& directory)
 				objectFields(source, ep, {"type", "rect", "source", "text", "color", "fontSize", "zIndex", "fit", "align", "endColor", "gradient", "rounding", "bold", "wrap", "fallback", "requiresArtwork", "selectedText", "icon", "selectedIcon", "borderColor", "selectedBorderColor", "action", "background", "selectedColor", "selectedBackground", "fields", "columns", "autoFit", "fallbackImage", "separator", "when", "launchFadeFrom", "bleed", "image", "hoverImage", "selectedImage", "selectedHoverImage", "slant", "marqueeSeconds", "sweepSeconds", "spin", "anchor", "onSelection", "tileSeconds", "maximum", "valueScale", "digits"});
 				Element element;
 				element.type = stringValue(required(source, "type", ep), ep + ".type", false);
-				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "metadata" && element.type != "details" && element.type != "button" && element.type != "stat" && element.type != "meter") invalid(ep + ".type", "must be panel, image, artwork, text, metadata, details, button, stat, or meter");
+				if (element.type != "panel" && element.type != "image" && element.type != "artwork" && element.type != "text" && element.type != "clock" && element.type != "metadata" && element.type != "details" && element.type != "button" && element.type != "stat" && element.type != "meter") invalid(ep + ".type", "must be panel, image, artwork, text, clock, metadata, details, button, stat, or meter");
 				element.rect = parseRect(required(source, "rect", ep), ep + ".rect", element.type == "panel" ? 0.001 : 0.01);
 				if (auto field = source.find("source"); field != source.end()) element.source = stringValue(*field, ep + ".source");
 				if (auto field = source.find("text"); field != source.end()) element.text = stringValue(*field, ep + ".text");
@@ -516,7 +528,7 @@ Theme parse(const std::string& json, const std::string& directory)
 				if (auto field = source.find("when"); field != source.end())
 				{
 					element.when = stringValue(*field, ep + ".when");
-					if (element.when != "attract" && element.when != "interactive" && element.when != "launching" && element.when != "unplayed" && element.when != "played") invalid(ep + ".when", "must be attract, interactive, launching, unplayed, or played");
+					if (element.when != "attract" && element.when != "interactive" && element.when != "launching" && element.when != "unplayed" && element.when != "played" && element.when != "saved" && element.when != "unsaved") invalid(ep + ".when", "must be attract, interactive, launching, unplayed, played, saved, or unsaved");
 					if (element.type == "button" || element.type == "details") invalid(ep + ".when", "is not valid on interactive elements");
 				}
 				if (auto field = source.find("bleed"); field != source.end())
@@ -529,7 +541,7 @@ Theme parse(const std::string& json, const std::string& directory)
 					if (element.when != "launching") invalid(ep + ".launchFadeFrom", "requires when to be launching");
 					element.launchFadeFrom = static_cast<float>(numberValue(*field, ep + ".launchFadeFrom", 0, 0.99));
 				}
-				const bool textElement = element.type == "text" || element.type == "metadata" || element.type == "stat";
+				const bool textElement = element.type == "text" || element.type == "clock" || element.type == "metadata" || element.type == "stat";
 				if (auto field = source.find("anchor"); field != source.end())
 				{
 					if (element.type == "button" || element.type == "details") invalid(ep + ".anchor", "is not valid on interactive elements");
@@ -684,12 +696,12 @@ Theme parse(const std::string& json, const std::string& directory)
 				{
 					if (element.fields.empty() && !metadataFields().count(element.source)) invalid(ep + ".source", "must name a supported metadata field");
 				}
-				else if (element.type == "artwork" && element.source != "preview" && !artworkSources().count(element.source))
-					invalid(ep + ".source", "must name a supported artwork source or preview");
+				else if (element.type == "artwork" && element.source != "preview" && element.source != "savestate" && !artworkSources().count(element.source))
+					invalid(ep + ".source", "must name a supported artwork source, preview, or savestate");
 				else if (element.type == "button")
 				{
-					if (element.action != "previous" && element.action != "next" && element.action != "up" && element.action != "down" && element.action != "activate" && element.action != "artwork" && element.action != "favourite" && element.action != "previousPage" && element.action != "nextPage")
-						invalid(ep + ".action", "must be previous, next, up, down, activate, artwork, favourite, previousPage, or nextPage");
+					if (!isLibraryAction(element.action) && element.action != "previous" && element.action != "next" && element.action != "up" && element.action != "down" && element.action != "activate" && element.action != "resume" && element.action != "startFresh" && element.action != "artwork" && element.action != "favourite" && element.action != "previousPage" && element.action != "nextPage")
+						invalid(ep + ".action", "must be previous, next, up, down, activate, resume, startFresh, artwork, favourite, previousPage, nextPage, allGames, continuePlaying, favourites, dcnet, settings, filter, or libraryMenu");
 					if (element.zIndex < 0) invalid(ep + ".zIndex", "buttons must draw above the browser");
 					if ((element.action == "previousPage" || element.action == "nextPage") && layout.pagedGrid.rows == 0)
 						invalid(ep + ".action", "page buttons require pagedGrid");
@@ -708,7 +720,12 @@ Theme parse(const std::string& json, const std::string& directory)
 		{
 			if (layout.narrowLayout == layout.id || !layoutIds.count(layout.narrowLayout))
 				invalid("layouts." + layout.id + ".narrowLayout", "must reference a different layout in this package");
+			for (const auto& narrow : theme.layouts)
+				if (narrow.id == layout.narrowLayout && narrow.screen != layout.screen)
+					invalid("layouts." + layout.id + ".narrowLayout", "must reference the same screen");
 		}
+	if (std::none_of(theme.layouts.begin(), theme.layouts.end(), [](const Layout& layout) { return layout.screen == "library"; }))
+		invalid("layouts", "must include a library layout");
 	return theme;
 }
 

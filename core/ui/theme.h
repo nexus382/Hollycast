@@ -20,6 +20,11 @@ struct PixelArt
 	uint32_t dark = 0x263e32ff, light = 0x9eae91ff;
 	int levels = 4; // Higher counts retain cover detail in a smooth LCD tint.
 };
+inline bool isLibraryAction(const std::string& action)
+{
+	return action == "allGames" || action == "continuePlaying" || action == "favourites"
+			|| action == "dcnet" || action == "settings" || action == "filter" || action == "libraryMenu";
+}
 struct Element
 {
 	std::string type; // panel, image, artwork, text, metadata, details, button, stat, meter
@@ -77,6 +82,7 @@ struct PagedGrid
 	int rows = 0;
 	float padding = 4;
 	std::string frame, unplayedFrame; // Validated package cell overlays.
+	float selectedScale = 1; // Single-row grids can reserve extra width for the selected cover.
 };
 // A perspective list that keeps the selected game at its center.
 struct Rail
@@ -108,6 +114,7 @@ struct ListPresentation
 struct Layout
 {
 	std::string id, name;
+	std::string screen = "library"; // Library choices and optional DCnet page layouts share the renderer.
 	std::string mode = "grid";
 	Rect browser;
 	std::optional<Rect> navigation; // Where hidden-toolbar layouts place the library view buttons.
@@ -143,6 +150,7 @@ struct Layout
 	std::string titleStyle = "full";
 	std::string selectorStyle = "fill";
 	bool showItemActions = true, hoverDetails = true;
+	bool showSystemEntries = true; // Keep BIOS/device entries unless a game-only layout opts out.
 	bool showFavouriteMarker = false; // Passive star; inherits text/pixel-art colors.
 	PixelArt pixelArt;
 	std::string placeholderAsset; // Validated package image for items with no artwork.

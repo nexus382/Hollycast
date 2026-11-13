@@ -16,6 +16,7 @@ struct LibraryItem
 	bool isGame = true; // BIOS/device entries are excluded from play-history statistics.
 	double playTimeSeconds = 0;
 	int64_t lastPlayed = 0; // Unix seconds; zero means no recorded launch.
+	bool canResume = false; // Supplied by the shared asynchronous save-state cache.
 };
 bool hasPlayed(const LibraryItem& item);
 // Numeric bindings use raw play history, never parse localized display strings.
@@ -35,6 +36,12 @@ std::vector<std::string> railBadges(const Rail& rail, const LibraryItem& item);
 // A metadata element's text: its field values joined, or its fallback when none has a value.
 std::string metadataText(const Element& element, const LibraryItem& item);
 struct DiscVertex { float x, y, u, v; };
+enum class LibraryLaunch { Default, Resume, Fresh };
+struct LibraryActions
+{
+	std::string selectedView; // allGames, continuePlaying, or favourites.
+	std::function<void(const std::string&)> dispatch;
+};
 // A ring showing an image cut to a circle and turned by angle. Each of the segments + 1 spokes
 // holds its outer vertex, then its inner one. The texture turns, so the outline stays round.
 std::vector<DiscVertex> discRing(float centerX, float centerY, float radius, float hole, float angle, int segments);
@@ -50,5 +57,9 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::function<void(size_t)>& toggleFavourite = {},
 		const std::function<void(const std::string&)>& playSound = {},
 		const std::string& pulledItemId = {},
-		const std::function<void()>& drawEmptyBrowser = {});
+		const std::function<void()>& drawEmptyBrowser = {},
+		LibraryLaunch* launch = nullptr,
+		const std::function<ImTextureID(size_t)>& saveThumbnail = {},
+		const LibraryActions& actions = {},
+		const std::function<void()>& drawContent = {});
 }

@@ -219,9 +219,11 @@ const Layout* currentLayout()
 	if (theme == nullptr || theme->layouts.empty())
 		return nullptr;
 	for (const auto& layout : theme->layouts)
-		if (layout.id == config::ThemeLayout.get())
+		if (layout.screen == "library" && layout.id == config::ThemeLayout.get())
 			return &layout;
-	return &theme->layouts.front();
+	for (const auto& layout : theme->layouts)
+		if (layout.screen == "library") return &layout;
+	return nullptr;
 }
 
 

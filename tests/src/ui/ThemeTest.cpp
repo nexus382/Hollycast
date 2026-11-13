@@ -201,6 +201,32 @@ TEST(ThemeParserTest, AcceptsNewerCatalogueFieldsAndDegradesCarouselToGrid)
 	expectRejected(replaceOnce(json, "\"releaseYear\":true", "\"releaseYear\":1"), "must be a boolean");
 }
 
+TEST(ThemeParserTest, CinematicPackagesValidateSaveActionsAndSingleRowScaling)
+{
+	const std::string json = R"({"formatVersion":1,"id":"cinematic","name":"Cinematic","layouts":[{
+		"id":"wide","name":"Wide","mode":"grid","toolbar":"hidden","showSystemEntries":false,"browser":[0.04,0.1,0.7,0.3],
+		"pagedGrid":{"rows":1,"selectedScale":1.4},"elements":[
+		{"type":"button","action":"resume","text":"Resume","rect":[0.04,0.7,0.2,0.1]},
+		{"type":"button","action":"startFresh","text":"Start Fresh","rect":[0.26,0.7,0.2,0.1]},
+		{"type":"artwork","source":"savestate","rect":[0.7,0.7,0.2,0.1],"when":"saved"},
+		{"type":"metadata","source":"saveDate","rect":[0.7,0.82,0.2,0.04]},
+		{"type":"text","text":"Start a new game","rect":[0.04,0.84,0.4,0.04],"when":"unsaved"},
+		{"type":"button","action":"allGames","text":"All Games","rect":[0.1,0.02,0.2,0.05]},
+		{"type":"clock","rect":[0.8,0.02,0.15,0.05]}
+	]}]})";
+	const auto layout = parseFixture(json).layouts.front();
+	EXPECT_TRUE(layout.hidesToolbar());
+	EXPECT_TRUE(layout.themedChrome());
+	EXPECT_FALSE(layout.showSystemEntries);
+	EXPECT_FLOAT_EQ(layout.pagedGrid.selectedScale, 1.4f);
+	EXPECT_EQ(layout.elements[0].action, "resume");
+	EXPECT_EQ(layout.elements[1].action, "startFresh");
+	EXPECT_EQ(parseFixture(replaceOnce(json, "\"action\":\"allGames\"", "\"action\":\"dcnet\"")).layouts.front().elements[5].action, "dcnet");
+	expectRejected(replaceOnce(json, "\"rows\":1", "\"rows\":2"), "requires a single row");
+	expectRejected(replaceOnce(json, "\"selectedScale\":1.4", "\"selectedScale\":2.1"), "between");
+	expectRejected(replaceOnce(json, "\"when\":\"saved\"", "\"when\":\"missing\""), "must be attract");
+}
+
 TEST(ThemeParserTest, PresentationExtensionsAreOptionalAndKeepLegacyDefaults)
 {
 	const auto theme = parseFixture(R"({"formatVersion":1,"id":"plain","name":"Plain","layouts":[{"id":"grid","name":"Grid","mode":"grid","browser":[0,0,1,1]}]})");
@@ -221,6 +247,23 @@ TEST(ThemeParserTest, PresentationExtensionsAreOptionalAndKeepLegacyDefaults)
 	EXPECT_TRUE(layout.toolbarLogoAsset.empty());
 	EXPECT_FLOAT_EQ(layout.toolbarLogoHeight, 0);
 	EXPECT_TRUE(theme.fonts.empty());
+}
+
+TEST(ThemeParserTest, DcnetLayoutsReuseElementsAndKeepResponsivePagesOnTheirScreen)
+{
+	const std::string json = R"({"formatVersion":1,"id":"pages","name":"Pages","layouts":[
+		{"id":"main","name":"Library","screen":"library","mode":"grid","browser":[0,0,1,1]},
+		{"id":"network","name":"DCnet","screen":"dcnet","mode":"grid","toolbar":"hidden","browser":[0.05,0.15,0.9,0.8],
+		 "elements":[{"type":"button","action":"allGames","text":"Library","rect":[0.1,0.02,0.2,0.05]}]}
+	]})";
+	const auto theme = parseFixture(json);
+	EXPECT_EQ(theme.layouts[0].screen, "library");
+	EXPECT_EQ(theme.layouts[1].screen, "dcnet");
+	EXPECT_TRUE(theme.layouts[1].hidesToolbar());
+	EXPECT_EQ(theme.layouts[1].elements[0].action, "allGames");
+	expectRejected(replaceOnce(json, "\"screen\":\"dcnet\"", "\"screen\":\"unknown\""), "must be library or dcnet");
+	expectRejected(replaceOnce(json, "\"screen\":\"library\"", "\"screen\":\"dcnet\""), "must include a library layout");
+	expectRejected(replaceOnce(json, "\"id\":\"main\"", "\"id\":\"main\",\"narrowLayout\":\"network\""), "same screen");
 }
 
 TEST(ThemeParserTest, BrandingAndArtworkFallbackStayInsideThePackage)
@@ -744,7 +787,7 @@ TEST(ThemeParserTest, RackAllowsNarrowSpinesWithoutChangingGridLimits)
 TEST(ThemeParserTest, RejectsDuplicateLayoutIdsAndUnsupportedElementsOrBindings)
 {
 	expectRejected(replaceOnce(kManifest, "\"compact-list\"", "\"main-grid\""), "must be unique within the theme");
-	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, metadata, details, button, stat, or meter");
+	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, clock, metadata, details, button, stat, or meter");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"developer\"", "\"source\": \"command\""), "supported metadata field");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "supported artwork source");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"art/overlay.png\"", "\"source\": \"\""), "is required for image elements");

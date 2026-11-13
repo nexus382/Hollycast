@@ -2541,8 +2541,9 @@ static void textTableCellCentered(const std::string& text, float rowContentHeigh
 
 static bool prepareThemedLibraryItem(const GameMedia& source, library::View view,
 		const SettingsUI::TextFilter& filter, const std::vector<std::string>& mediaSources,
-		double animationClock, GameMedia& game, GameBoxart& art, themes::LibraryItem& item)
+		double animationClock, GameMedia& game, GameBoxart& art, themes::LibraryItem& item, bool showSystemEntries)
 {
+	if (!showSystemEntries && (source.device || source.path.empty())) return false;
 	game = source;
 	art = getLibraryDisplayArtwork(game, animationClock);
 	art.applyMetadata(game);
@@ -2565,6 +2566,8 @@ static bool prepareThemedLibraryItem(const GameMedia& source, library::View view
 	item.canFavourite = !game.device && !game.path.empty();
 	item.favourite = item.canFavourite && library::isFavourite(game.path, config::LibraryFavourites.get());
 	item.isGame = item.canFavourite;
+	const SavestateInfo& latestState = librarySavestateCache.peek(game.path);
+	item.canResume = item.isGame && !latestState.path.empty();
 	item.playTimeSeconds = art.playTimeSeconds.value_or(0);
 	item.metadata = {
 		{"title", title}, {"description", game.desc},
@@ -2573,7 +2576,8 @@ static bool prepareThemedLibraryItem(const GameMedia& source, library::View view
 		{"productId", art.uniqueId}, {"region", art.region == 0 ? std::string() : library::regionLabel(art.region)},
 		{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
 		{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
-		{"lastPlayed", ""}, {"size", formatLibrarySize(game.size)}
+		{"lastPlayed", ""}, {"saveDate", item.canResume ? formatShortDateTime(latestState.creationDate) : std::string()},
+		{"size", formatLibrarySize(game.size)}
 	};
 	const time_t lastPlayed = getLibraryGameLastBooted(game, art.uniqueId);
 	item.lastPlayed = lastPlayed;
@@ -2637,10 +2641,11 @@ void gui_load_game()
 #endif
 
 static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& requestedLayout,
-		const SettingsUI::TextFilter& filter, library::View view)
+		const SettingsUI::TextFilter& filter, library::View view, const themes::LibraryActions& actions = {},
+		const themes::Layout* pageLayout = nullptr, const std::function<void()>& drawContent = {})
 {
 	const ImVec2 available = ImGui::GetContentRegionAvail();
-	const themes::Layout& layout = themes::responsiveLayout(theme, requestedLayout,
+	const themes::Layout& layout = themes::responsiveLayout(theme, pageLayout ? *pageLayout : requestedLayout,
 			available.x / std::max(1.f, available.y));
 	const std::string layoutKey = theme.directory + '/' + layout.id;
 	if (pendingRackLaunch && (layout.mode != "rack" || pendingRackLaunch->layoutKey != layoutKey))
@@ -2671,7 +2676,12 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		gameCount = scanner.get_game_list().size();
 		scannerGeneration = scanner.get_generation();
 	}
-	if (view == library::View::ContinuePlaying)
+	const bool needsSaveStates = std::any_of(layout.elements.begin(), layout.elements.end(), [](const themes::Element& element) {
+		return element.action == "resume" || element.source == "savestate" || element.source == "saveDate"
+				|| element.when == "saved" || element.when == "unsaved"
+				|| std::find(element.fields.begin(), element.fields.end(), "saveDate") != element.fields.end();
+	});
+	if (view == library::View::ContinuePlaying || needsSaveStates)
 		advanceLibrarySavestates();
 	const auto stateFolders = hostfs::getSavestateFolders();
 	const LibrarySavestateCache::StateChanges stateChanges = librarySavestateCache.changesSince(preparedStateRevision);
@@ -2716,7 +2726,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	const bool liveIcons = config::LibraryImageSource.get()
 			!= static_cast<int>(config::LibraryImageSourceMode::CurrentArtwork);
 	const double animationClock = getLibraryIconAnimationClock();
-	const bool fullStateRefresh = view == library::View::ContinuePlaying && stateChanges.fullRefresh;
+	const bool fullStateRefresh = (view == library::View::ContinuePlaying || needsSaveStates) && stateChanges.fullRefresh;
 	if (!prepared || key != preparedKey || frame != previousFrame + 1 || fullStateRefresh || artworkChanges.fullRefresh)
 	{
 		prepared = false;
@@ -2759,7 +2769,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			GameBoxart art;
 			themes::LibraryItem item;
 			if (!prepareThemedLibraryItem(games[gameIndex], view, filter, mediaSources, animationClock,
-					game, art, item))
+					game, art, item, layout.showSystemEntries))
 				continue;
 			items.push_back(std::move(item));
 			artwork.push_back(std::move(art));
@@ -2815,7 +2825,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			GameBoxart art;
 			themes::LibraryItem item;
 			const bool matches = prepareThemedLibraryItem(games[gameIndex], view, filter, mediaSources,
-					animationClock, game, art, item);
+					animationClock, game, art, item, layout.showSystemEntries);
 			if (matches)
 			{
 				if (wasVisible)
@@ -2857,6 +2867,7 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	int contextAction = -1;
 	int favouriteAction = -1;
 	bool contextResume = false;
+	themes::LibraryLaunch themeLaunch = themes::LibraryLaunch::Default;
 	const ImVec2 origin = ImGui::GetCursorScreenPos();
 	const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
 	std::vector<ImVec4> itemBounds(items.size());
@@ -2954,7 +2965,10 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			config::LibraryFavourites.set(favourites); config::LibraryFavourites.save();
 			favouriteAction = static_cast<int>(index); resetLibraryGameInfoHover();
 		}, [](const std::string& sound) { playUiSound(sound); },
-		pendingRackLaunch ? pendingRackLaunch->itemId : std::string(), drawEmptyBrowser);
+		pendingRackLaunch ? pendingRackLaunch->itemId : std::string(), drawEmptyBrowser, &themeLaunch,
+		[&](size_t index) {
+			return LibraryStateThumbnail(librarySavestateCache.peek(visibleGames[index].path)).getId();
+		}, actions, drawContent);
 
 	auto startThemedGame = [&](size_t index, bool resume, bool fromContextMenu) {
 		const GameMedia& game = visibleGames[index];
@@ -3006,7 +3020,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	if (contextAction >= 0)
 		startThemedGame(static_cast<size_t>(contextAction), contextResume, true);
 	else if (favouriteAction < 0 && activated >= 0)
-		startThemedGame(static_cast<size_t>(activated), false, false);
+		startThemedGame(static_cast<size_t>(activated), themeLaunch == themes::LibraryLaunch::Resume,
+				themeLaunch != themes::LibraryLaunch::Default);
 	if (pendingRackLaunch)
 	{
 		// Never wait for a download on launch. Render cached art, then run the usual
@@ -3038,16 +3053,51 @@ static void gui_display_content()
 #if defined(__ANDROID__)
 	touchedLibraryItemThisFrame = false;
 #endif
+	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
+	const bool customChrome = customLayout != nullptr && customLayout->hidesToolbar();
 	fullScreenWindow(false);
 	if (libraryMediaRefreshPending || (libraryMediaBatch.progress.total && (!libraryMediaBatch.finishedAt || ImGui::GetTime() - libraryMediaBatch.finishedAt < 5)))
 		gui_display_library_download_progress();
 	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
+	ImguiStyleVar contentPadding(ImGuiStyleVar_WindowPadding, customChrome ? ImVec2(0, 0) : ImGui::GetStyle().WindowPadding);
 
     ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration);
-	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
 	static library::View libraryView = library::View::All;
+	static bool themedDcnet = false;
 	static SettingsUI::TextFilter filter;
+	bool openSearch = false, openMenu = false;
+	themes::LibraryActions themeActions;
+	themeActions.selectedView = themedDcnet ? "dcnet" : libraryView == library::View::All ? "allGames"
+			: libraryView == library::View::ContinuePlaying ? "continuePlaying" : "favourites";
+	themeActions.dispatch = [&](const std::string& action) {
+		if (action == "settings") gui_setState(GuiState::Settings);
+		else if (action == "dcnet") themedDcnet = true;
+		else if (action == "filter") openSearch = true;
+		else if (action == "libraryMenu") openMenu = true;
+		else
+		{
+			themedDcnet = false;
+			libraryView = action == "allGames" ? library::View::All
+					: action == "continuePlaying" ? library::View::ContinuePlaying : library::View::Favourites;
+			librarySavestateCacheInvalidated = true;
+		}
+	};
+	const auto drawThemePopups = [&] {
+		if (openSearch) ImGui::OpenPopup("##themeLibrarySearch");
+		if (ImGui::BeginPopup("##themeLibrarySearch"))
+		{
+			filter.Draw(T("Filter"), std::min(ImGui::GetIO().DisplaySize.x * 0.7f, uiScaled(400.f)));
+			ImGui::EndPopup();
+		}
+		if (openMenu) ImGui::OpenPopup("##themeLibraryMenu");
+		if (ImGui::BeginPopup("##themeLibraryMenu"))
+		{
+			if (ImGui::MenuItem("DCnet")) themedDcnet = true;
+			if (ImGui::MenuItem(T("Settings"))) gui_setState(GuiState::Settings);
+			ImGui::EndPopup();
+		}
+	};
 	// Draw theme artwork first so all library controls remain above it. A dark
 	// wash preserves contrast even when users choose a bright background.
 	const std::string themeBackground = customLayout != nullptr && customLayout->themedChrome()
@@ -3084,7 +3134,7 @@ static void gui_display_content()
 	}
 
 	bool showDcnet = false;
-	if (gui_state == GuiState::Main && ImGui::BeginTabBar("mainTabs"))
+	if (!customChrome && gui_state == GuiState::Main && ImGui::BeginTabBar("mainTabs"))
 	{
 		if (ImGui::BeginTabItem(T("Games")))
 			ImGui::EndTabItem();
@@ -3095,12 +3145,27 @@ static void gui_display_content()
 		}
 		ImGui::EndTabBar();
 	}
-	if (showDcnet)
+	if (showDcnet || (customChrome && themedDcnet))
 	{
 		// Both tabs share GuiState::Main, so cancel the rack launch here.
 		pendingRackLaunch.reset();
 		resetLibraryGameInfoHover();
-		gui_display_dcnet(scanner, boxart);
+		const themes::Theme* theme = customChrome ? themes::current() : nullptr;
+		const themes::Layout* networkLayout = nullptr;
+		if (theme)
+			for (const auto& layout : theme->layouts)
+				if (layout.screen == "dcnet") { networkLayout = &layout; break; }
+		if (networkLayout)
+		{
+			drawThemedLibrary(*theme, *customLayout, filter, libraryView, themeActions, networkLayout,
+					[&] { gui_display_dcnet(scanner, boxart); });
+			drawThemePopups();
+		}
+		else
+		{
+			if (customChrome && ImGui::Button(T("Back to Library"))) themedDcnet = false;
+			gui_display_dcnet(scanner, boxart);
+		}
 		ImGui::End();
 		return;
 	}
@@ -3187,8 +3252,12 @@ static void gui_display_content()
 		if (!hideToolbar)
 			ImGui::Separator();
 		boxart.refreshCustomBoxartIndex(false);
-		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
-		if (hideToolbar)
+		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView, themeActions);
+		drawThemePopups();
+		const bool hasSettingsAction = std::any_of(toolbarLayout.elements.begin(), toolbarLayout.elements.end(), [](const themes::Element& element) {
+			return element.type == "button" && element.action == "settings";
+		});
+		if (hideToolbar && !hasSettingsAction)
 		{
 			// The theme draws its own chrome, but view switching and Settings
 			// must stay reachable: place them in the layout's navigation rect

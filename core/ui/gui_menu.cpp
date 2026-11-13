@@ -23,6 +23,7 @@
 #include "app_updater.h"
 #include "gui.h"
 #include "gui_util.h"
+#include "theme.h"
 #include "cfg/cfg.h"
 #include "emulator.h"
 #include "log/LogManager.h"
@@ -351,6 +352,14 @@ bool isGameRunning()
 // Render the main menu bar using standard ImGui.
 void renderMainMenuBar()
 {
+	const themes::Layout* layout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
+	if (layout != nullptr && layout->hidesToolbar())
+	{
+		menuBarVisibleThisFrame = false;
+		menuBarHeightThisFrame = 0.f;
+		publishMenuTouchState(false, false);
+		return;
+	}
 #if defined(TARGET_MAC)
 	menuBarVisibleThisFrame = false;
 	menuBarHeightThisFrame = 0.0f;
