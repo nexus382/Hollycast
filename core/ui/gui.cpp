@@ -18,6 +18,7 @@
     along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "app_updater.h"
 #include "gui_dcnet.h"
 #include "audio/ui_sound.h"
 #include "custom_theme.h"
@@ -4398,6 +4399,7 @@ void gui_display_ui()
 	if (gui_state == GuiState::Settings)
 		SettingsNew::prepareControllerNavigation();
 	ImGui::NewFrame();
+	app_updates::draw(!game_started && (gui_state == GuiState::Main || gui_state == GuiState::Settings));
 	error_msg_shown = false;
 	bool gui_open = gui_is_open();
 	auto finishFrame = [&]() {
@@ -4597,6 +4599,7 @@ void gui_draw_osd()
 		vgamepad::draw();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
+	app_updates::draw(false);
 	// Use this frame's effective bar height, including fullscreen auto-hide.
 	performance_overlay::draw();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
@@ -4662,6 +4665,7 @@ void gui_cancel_load() {
 
 void gui_term()
 {
+	app_updates::stop();
 	if (inited)
 	{
 		inited = false;

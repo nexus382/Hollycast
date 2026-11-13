@@ -3,6 +3,7 @@ cmrc_add_resource_library(Hollycast-resources ALIAS Hollycast::res NAMESPACE Hol
 
 cmrc_add_resources(Hollycast-resources
         WHENCE resources
+        resources/update/install-desktop.sh
         resources/flash/alienfnt.nvmem.zip	# network settings
         resources/flash/gunsur2.nvmem.zip
         resources/flash/mazan.nvmem.zip		# free play, calibrated

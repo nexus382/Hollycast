@@ -153,6 +153,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF ${{ matrix.config.cmakeArgs }}
           cmake --build build --config ${{ matrix.config.buildType }}
           ./build/Hollycast
+          ctest --test-dir build --output-on-failure -R updater -E updater_linux_install
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
       - name: Dump symbols
@@ -161,6 +162,13 @@ jobs:
           core/deps/breakpad/bin/dump_syms artifact/bin/Hollycast.exe > symbols/Hollycast.sym 2>/dev/null
           strip artifact/bin/Hollycast.exe
         if: matrix.config.name == 'x86_64-w64-mingw32'
+
+      - name: Updater tests (Windows)
+        if: matrix.config.name == 'x86_64-pc-windows-msvc'
+        run: |
+          cmake -S tests/updater -B build-updater-tests -G Ninja -DCMAKE_BUILD_TYPE=Release "-DUPDATER_HELPER=${{ github.workspace }}/artifact/bin/HollycastUpdater.exe"
+          cmake --build build-updater-tests --parallel 16
+          ctest --test-dir build-updater-tests --output-on-failure
 
       - name: Build breakpad (linux)
         working-directory: core/deps/breakpad
@@ -178,6 +186,8 @@ jobs:
           shell/linux/make-appimage.sh . artifact/bin appimage
           mv Hollycast-x86_64.AppImage artifact/bin
           rm artifact/bin/Hollycast
+          # The transaction fixture packages a real AppImage with the same tool.
+          ctest --test-dir build --output-on-failure -R updater_linux_install
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
       - name: Package app (macos)
@@ -190,7 +200,7 @@ jobs:
 
       - name: Package app (windows)
         run: |
-          powershell Compress-Archive artifact/bin/Hollycast.exe artifact/bin/Hollycast.zip
+          powershell -NoProfile -Command "Compress-Archive -LiteralPath 'artifact/bin/Hollycast.exe','artifact/bin/HollycastUpdater.exe' -DestinationPath 'artifact/bin/Hollycast.zip'"
           rm artifact/bin/Hollycast.exe
           cp artifact/bin/Hollycast.zip "${{ matrix.config.packagePath }}"
         if: matrix.config.name == 'x86_64-w64-mingw32'
