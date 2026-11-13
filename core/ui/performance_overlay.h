@@ -31,6 +31,11 @@ void recordPvrWork(std::uint64_t microseconds);
 void recordRenderedResolution(int rawWidth, int rawHeight, int renderedWidth, int renderedHeight);
 void recordOutputViewport(int width, int height);
 void recordPresentedFrame();
+bool isPresentationTimingRequested();
+std::uint32_t getPresentationTimingEpoch();
+// Asynchronous backends pass the actual monotonic display timestamp and the
+// generation captured before submitting the frame. Zero or stale samples are ignored.
+void recordPresentedFrameAt(std::uint64_t microseconds, std::uint32_t epoch);
 void recordPvrScene(bool displayScene, std::uint32_t primitiveCount, std::uint32_t vertexCount);
 void recordRendererPass(std::uint32_t count = 1);
 void recordGpuTimingSample(std::uint64_t nanoseconds, std::uint32_t epoch);

@@ -130,6 +130,14 @@ fragment FragmentOut pvr_fragment(Varyings in [[stage_in]], constant Uniforms& u
         texture2d<float> palette [[texture(1)]], texture2d<float> fog [[texture(2)]]) {
     return pvrShade(in, u, tex, samp, palette, fog);
 }
+fragment FragmentOut pvr_secondary(Varyings in [[stage_in]], constant Uniforms& u [[buffer(1)]],
+        texture2d<float, access::read> secondary [[texture(3)]]) {
+    if (u.flags2.z && in.position.x >= u.clip.x && in.position.y >= u.clip.y &&
+            in.position.x <= u.clip.z && in.position.y <= u.clip.w) discard_fragment();
+    float z = max(in.uv.z, 1e-20);
+    float actualZ = u.flags4.z ? 1.0 / z : z;
+    return {secondary.read(uint2(in.position.xy)), log2(1.0 + max(100000.0 * actualZ, -0.999999)) / 34.0};
+}
 struct MirrorOut { float4 color [[color(0)]]; float depthMirror [[color(1)]]; float depth [[depth(any)]]; };
 fragment MirrorOut pvr_mirror(Varyings in [[stage_in]], constant Uniforms& u [[buffer(1)]],
         texture2d<float> tex [[texture(0)]], sampler samp [[sampler(0)]],
