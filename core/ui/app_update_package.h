@@ -6,6 +6,10 @@
 #include <string>
 
 namespace app_updates::detail {
+// Match the public catalogue's branch/commit label without changing package versions.
+inline std::string versionLabel(const std::string& channel, const std::string& commit) {
+    return std::string(channel == "master" ? "Master" : "Dev") + " \xC2\xB7 " + commit.substr(0, 9);
+}
 struct Package {
     std::string version, commit, date, url, sha256;
     uint64_t size = 0;

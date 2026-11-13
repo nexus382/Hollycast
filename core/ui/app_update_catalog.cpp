@@ -95,7 +95,7 @@ Check check(const std::string& channel, const std::string& current, bool switchT
     require(!latest.is_null(), "No complete build is available on this channel.");
     Check result;
     result.package.commit = latest.at("commit").get<std::string>();
-    result.package.version = channel + " " + result.package.commit.substr(0, 9);
+    result.package.version = versionLabel(channel, result.package.commit);
     result.package.date = latest.at("date").get<std::string>();
     if (result.package.commit.compare(0, current.size(), current) == 0) return result;
 

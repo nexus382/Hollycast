@@ -133,3 +133,9 @@ test('legacy artifact wrappers retain the matching variant without falling back 
   assert.equal(standaloneDownloads(names.map(name => ({ name, platform: platformFor(name) }))).length, 6);
   assert.deepEqual(standaloneDownloads([{ name: 'Hollycast-windows-msvc-x64.zip', platform: 'Windows' }]), []);
 });
+
+test('CI version labels match the app branch and nine-character commit format', () => {
+  const commit = '8e8b15ccfd48f2cd6f9f35e95e7996f0bee52c71';
+  assert.equal(releaseBuild(automaticRelease(1, 'dev', commit)).title, 'Dev · 8e8b15ccf');
+  assert.equal(releaseBuild(automaticRelease(2, 'master', commit)).title, 'Master · 8e8b15ccf');
+});

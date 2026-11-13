@@ -258,7 +258,7 @@ void draw(bool idle) {
     if (state.play && !state.playInstalledVersion.empty())
         ImGui::TextWrapped("%s: %s (%d)", T("Current version"), state.playInstalledVersion.c_str(), state.playInstalledCode);
     else
-        ImGui::TextWrapped("%s: %s (%s)", T("Current version"), GIT_VERSION, GIT_HASH);
+        ImGui::TextWrapped("%s: %s", T("Current version"), detail::versionLabel(HOLLYCAST_UPDATE_CHANNEL, GIT_HASH).c_str());
     ImGui::TextWrapped("%s: %s", T("Build date"), BUILD_DATE);
 #if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
     if (state.play) {

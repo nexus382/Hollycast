@@ -64,6 +64,9 @@ int get(const std::string&, std::vector<u8>& bytes, const Headers*, Headers*, in
 }
 int main() {
     try {
+        expect(versionLabel("dev", "8e8b15ccfd48f2cd6f9f35e95e7996f0bee52c71") == "Dev \xC2\xB7 8e8b15ccf", "Dev label does not match catalogue format");
+        expect(versionLabel("master", "390c7dbf9b0cd8333984cef73720fd7cb266ae57") == "Master \xC2\xB7 390c7dbf9", "Master label does not match catalogue format");
+        expect(versionLabel("dev", "1234567") == "Dev \xC2\xB7 1234567", "Short hashes were padded or truncated incorrectly");
         std::atomic<bool> cancelled{false};
         auto run = [&](bool switched = false) { return check("dev", oldSha, switched, cancelled, fetch); };
         Check result;
