@@ -4210,14 +4210,17 @@ static void renderSettingsContentTab(SettingsTab tab)
 			if (!activeTheme->layouts.empty())
 			{
 				std::vector<std::string> layoutLabelStorage;
+				std::vector<std::string> selectableLayoutIds;
 				std::vector<const char*> layoutLabels;
 				int selectedLayoutIndex = 0;
 				for (size_t i = 0; i < activeTheme->layouts.size(); ++i)
 				{
 					const themes::Layout& layout = activeTheme->layouts[i];
-					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
+					if (layout.screen != "library") continue;
 					if (layout.id == config::ThemeLayout.get())
-						selectedLayoutIndex = static_cast<int>(i);
+						selectedLayoutIndex = static_cast<int>(selectableLayoutIds.size());
+					selectableLayoutIds.push_back(layout.id);
+					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
 				}
 				for (const std::string& label : layoutLabelStorage)
 					layoutLabels.push_back(label.c_str());
@@ -4231,9 +4234,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 				layoutCfg.options.currentValue = &selectedLayoutIndex;
 				layoutCfg.options.valueWidth = 220.0f;
 				layoutCfg.options.onChange = [&](int index) {
-					if (index >= 0 && index < static_cast<int>(activeTheme->layouts.size()))
+					if (index >= 0 && index < static_cast<int>(selectableLayoutIds.size()))
 					{
-						config::ThemeLayout.get() = activeTheme->layouts[index].id;
+						config::ThemeLayout.get() = selectableLayoutIds[index];
 						SaveSettings();
 					}
 					return true;

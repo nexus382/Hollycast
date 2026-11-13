@@ -114,6 +114,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | --- | --- |
 | `id` | Unique within the package; 1–64 lowercase ASCII letters, digits, hyphens, or underscores. |
 | `name` | Display label used by **Library Layout**. |
+| `screen` | `library` (default) or `dcnet`. DCnet layouts frame the native dashboard inside `browser` and are excluded from the Library Layout picker. The first DCnet layout is used, with its normal responsive fallback. Hidden-toolbar themes retain their authored navigation and backgrounds on that page. |
 | `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), `rail`, or `orbit` (upright circular disc carousel). See [Rail mode](#rail-mode). Newer catalogues may use `carousel`; this build renders those layouts as `grid`. |
 | `browser` | `[x, y, width, height]` rectangle for the interactive game browser. Coordinates are fractions of the library content area. Position and size must fit wholly inside 0–1; width and height must each be at least `0.1`. |
 | `navigation` | Optional `[x, y, width, height]` rectangle for library navigation. With a hidden toolbar, the All Games / Continue Playing / Favourites buttons and a Settings button are placed inside it. |
@@ -126,6 +127,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `selectedTextColor` | Optional selected/hovered browser title color. Defaults to `textColor`. |
 | `selectorColor` | Optional browser selection color. Defaults to the app selection color. |
 | `showTitles` | Whether grid cells show their title, default `true`. List rows always show the game title. |
+| `showSystemEntries` | Include BIOS/device entries, default `true`. Set `false` for a game-only layout. |
 | `background` | Library canvas color, 6- or 8-digit hex; default `151820ff`. |
 | `elements` | Optional array of up to 64 decorative or selected-game elements. |
 | `artworkSource` | Browser artwork: empty (default library media), `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, `spine`, `disc`, or `boxtexture`. Missing media falls back to library artwork, except racks, which show a vertical title label. Rack spines fill the case height with proportional widths and wrap onto shelves; horizontal scans rotate to fit. |
@@ -183,7 +185,7 @@ Every element is an object with required `type` and `rect`. Element rectangles u
 
 | Field | Meaning and bounds |
 | --- | --- |
-| `type` | `panel`, `image`, `artwork`, `text`, `metadata`, `details`, or `button`. |
+| `type` | `panel`, `image`, `artwork`, `text`, `clock`, `metadata`, `details`, `button`, `stat`, or `meter`. |
 | `rect` | `[x, y, width, height]` normalized to the full library content area. |
 | `source` | Required for `image`; a library artwork name for `artwork`; a metadata field for `metadata`. |
 | `text` | Literal string for `text`; optional fallback for a `metadata` field that is absent or empty. Omit to leave missing metadata blank. |
@@ -199,7 +201,7 @@ Every element is an object with required `type` and `rect`. Element rectangles u
 | `requiresArtwork` | Optional artwork source that must be present before drawing this artwork element. For example, require `screenshot` on cover/disc/logo overlays so they disappear when a hero uses a precomposed miximage instead. Empty (default) has no condition. |
 | `fontSize` | Text height as a fraction of the library canvas height, from `0.01` to `0.15`; default `0.035`. At render time it is clamped to 10–96 UI pixels. Uses the application font, including optional package fonts. |
 | `zIndex` | Integer from `-100` to `100`; default `0`. Negative elements draw behind the browser. Zero or positive decorative elements draw above it and can obscure its visuals. Buttons draw after decoration. |
-| `action` | Required only for `button`: `previous`, `next`, `up`, `down`, `activate`, `artwork`, or `favourite`. Buttons require a nonnegative `zIndex` and render as independent input regions above decoration. |
+| `action` | Required only for `button`: `previous`, `next`, `up`, `down`, `activate`, `resume`, `startFresh`, `artwork`, `favourite`, `previousPage`, `nextPage`, `allGames`, `continuePlaying`, `favourites`, `dcnet`, `settings`, `filter`, or `libraryMenu`. Buttons require a nonnegative `zIndex` and render as independent input regions above decoration. See [Cinematic console layouts](#cinematic-console-layouts) for library and save actions. |
 | `background` | Optional button fill color. `00000000` permits a transparent hit region over a package image, such as a physical button. Omit to use the selected app palette. `color` controls button text. |
 | `selectedColor`, `selectedBackground` | Optional text/fill overrides for a selected artwork choice or a game marked as favourite. They allow shared-state controls without a theme-specific widget. |
 | `launchFadeFrom` | Requires `when: "launching"`. Fades the element in from this fraction of the launch sequence to its end, `0`–`0.99`. |
@@ -226,6 +228,7 @@ Element types:
 - **`image`** draws a package image using `fit` and `color`. Its `source` is a relative file path inside the package, such as `images/panel.png`. Use PNG or JPEG; SVG and WebP must be rasterized or decoded first. Absolute paths, `..`, and paths escaping through symlinks are rejected. The referenced file must exist.
 - **`artwork`** draws selected-game media using `fit`: default art, `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, `spine`, `disc`, or `boxtexture`. Named slots prefer matching local media, then the selected provider and TGDB fallback, and obey `fallback`. `preview` follows the selected artwork button; unavailable non-cover choices remain empty instead of borrowing cover art. A `fallbackImage` package asset can fill an empty region. Backgrounds and details follow mouse and keyboard/controller selection.
 - **`text`** draws the literal `text` value.
+- **`clock`** draws local system time using optional `text` as a strftime format (default `%H:%M`). It shares text styling and works without a selected game.
 - **`metadata`** draws the selected game's value for `source`; a missing value draws nothing. Supported fields: `title`, `description`, `developer`, `publisher`, `genre`, `players`, `releaseDate`, `productId`, `region`, `format`, `playTime`, `lastPlayed`, `size`, and `system`, which names the hardware a game runs on: `Dreamcast`, `Naomi`, `Naomi 2`, `Atomiswave`, or `System SP`.
 - **`details`** displays selected-game metadata with translated field labels in its own scrollable rectangle. `fields` chooses the content and order; `columns` controls density. Empty fields are omitted, long values wrap, and the panel scrolls back to the top when the selected game changes. It requires a nonnegative `zIndex`, and retains normal mouse, keyboard, and controller scrolling. Other themes have no details panel unless they add this element.
 - **`button`** uses the same normalized rectangles as other elements. `previous` and `next` wrap through filtered games; `up` and `down` move by the current grid column count (one row in a list). Navigation scrolls the selected game into view. `activate` launches it using the normal library path. An `artwork` button requires a named artwork `source` and switches `preview` elements to that source; unavailable choices are disabled with an explanatory tooltip. `favourite` toggles the selected game's persistent favourite state, including in the Favourites view. BIOS/device entries disable that action. Empty libraries disable the controls. `text` may be empty for an asset-backed hit region. Keyboard/controller activation and focus remain native ImGui widgets.
@@ -235,6 +238,59 @@ Explicit `details` elements retain their own authored scrollable regions; layout
 Themes do not run scripts or load remote resources. Keep a package self-contained and use only package-relative paths for images and fonts. Every presentation extension above is optional; existing manifests keep their previous behavior. [Pocket Dimension](../themes/pocket-dimension/theme.json) demonstrates them together without any package-specific renderer code.
 
 Artwork availability comes from the shared library. LaunchBox, ScreenScraper and TheGamesDB use the same named theme bindings, while keeping their provider caches separate. Matching local ES-DE artwork keeps priority, followed by the selected provider and TheGamesDB fallback; existing images from another provider remain usable. Basic views request covers, hover miximages, title logos and metadata. Selecting a theme queues its additional manifest requirements and shows progress. **Settings > Library > Artwork Downloads > Download All Media for All Themes** prepares the union used by installed layouts. Disc scans use `physical`; front box artwork uses `cover`, 3D boxes use `case`, and back covers and spines use `backcover` and `spine`. These bindings are reusable and opt-in for every theme. LaunchBox supplies ten categories including discs and box artwork; ScreenScraper also supplies `miximage`. ScreenScraper completes first; LaunchBox then fills only missing requested types, followed by TheGamesDB after the LaunchBox pass completes. Earlier artwork and metadata retain priority. See [LaunchBox artwork](launchbox-artwork.md), [TheGamesDB media](thegamesdb.md) and [ScreenScraper setup](screenscraper.md).
+
+## Cinematic console layouts
+
+Use the existing `toolbar: "hidden"` and ordinary elements to author a
+full-window console layout. As with Demo Disc, the manifest owns positions,
+fonts, artwork, panels and image-backed button states. Hidden chrome now also
+suppresses the standard menu/tab stack and automatic opposite-side details
+column. Omit `canvasAspect` to fill the entire window.
+
+The following optional primitives require the enhanced library-action renderer;
+earlier format-v1 parsers reject them:
+
+- Buttons can dispatch `allGames`, `continuePlaying`, `favourites`, `dcnet`,
+  `settings`, `filter`, and `libraryMenu`. These remain enabled in an empty library/view so
+  users can leave a filter or reach settings. The three view buttons use the
+  existing `selectedColor`, `selectedImage` and other selected-state properties.
+  A package providing its own Settings action does not get a duplicate fallback
+  toolbar. `dcnet` opens the native DCnet dashboard with a Back to Library control;
+  `libraryMenu` also exposes DCnet and Settings.
+- A `clock` element draws the real local time. Its optional `text` is a strftime
+  format (default `%H:%M`); normal text appearance and rectangles apply. It also
+  works when no game is selected.
+- `showSystemEntries: false` hides BIOS/device entries from this layout. Defaults
+  to `true`, preserving existing themes.
+- A one-row `pagedGrid` can set `selectedScale` from `1` to `2`. The selected
+  square gets extra width while the other covers move aside; all hit regions
+  stay inside the browser. Defaults to `1`. Enlarged rows use horizontal finger
+  swipes for paging, and retain wheel, Page Up/Down and controller navigation.
+- A button's `resume` action loads the selected game's latest state. It is
+  disabled for devices and games without an available state. `startFresh`
+  explicitly boots without loading a state. Existing `activate` buttons keep
+  the normal launch behavior and configured automatic-load preferences.
+- `artwork` with `source: "savestate"` displays the selected game's actual latest
+  saved-state thumbnail. Only the selected preview is decoded, using the normal
+  bounded thumbnail cache. Missing or invalid thumbnails draw nothing.
+- `metadata` with `source: "saveDate"` displays that state's creation date.
+- Decorative elements may use `when: "saved"` or `when: "unsaved"` to provide
+  honest alternative cards/captions. The shared asynchronous state cache drives
+  availability; themes do not inspect files or execute scripts.
+
+These features are reusable by any package and do not depend on theme IDs.
+
+To style DCnet, include a layout with `screen: "dcnet"`, `toolbar: "hidden"`,
+and a `browser` rectangle for the dashboard. Its ordinary elements provide the
+background and navigation. `dcnet` buttons use their selected appearance while
+the page is open; `allGames`, `continuePlaying`, and `favourites` return to the
+library. The native dashboard keeps its search, filters, network settings and
+game actions, with `spacing` supplying its content padding. Game tiles, attract
+mode and library launch sequences do not run in the dashboard area. The selected
+library game remains available to artwork bindings and is retained on return.
+Use another DCnet layout as `narrowLayout` for portrait. Responsive fallbacks must
+stay on the same screen, and every package must include a library layout. Themes
+without a DCnet layout keep the standard dashboard.
 
 ## Troubleshooting
 

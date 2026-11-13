@@ -65,15 +65,10 @@ std::string itemKey(const LibraryItem& item, size_t index)
 	return item.id.empty() ? "##index-" + std::to_string(index) : item.id;
 }
 
-void drawFittedImage(ImDrawList* drawList, const ImRect& rect, const std::string& path,
-		const std::string& fit = "contain", uint32_t tint = 0xffffffff, float rounding = 0, const PixelArt& pixelArt = {})
+void drawFittedTexture(ImDrawList* drawList, const ImRect& rect, ImTextureID id,
+		const std::string& fit, uint32_t tint, float rounding)
 {
-	if (!imguiDriver || path.empty() || rect.GetWidth() <= 0 || rect.GetHeight() <= 0)
-		return;
-	ImguiFileTexture texture(path, pixelArt.resolution > 0);
-	texture.setPixelArt(pixelArt);
-	const ImTextureID id = texture.getId();
-	if (id == ImTextureID{})
+	if (!imguiDriver || id == ImTextureID{} || rect.GetWidth() <= 0 || rect.GetHeight() <= 0)
 		return;
 	float aspect = std::max(0.001f, imguiDriver->getAspectRatio(id));
 	// Spine scans may be stored horizontally; rotate them instead of stretching a cover.
@@ -123,6 +118,15 @@ void drawFittedImage(ImDrawList* drawList, const ImRect& rect, const std::string
 	else
 		drawList->AddImageRounded(id, pos, ImVec2(pos.x + size.x, pos.y + size.y), uv0, uv1, color(tint), uiScaled(rounding));
 	drawList->PopClipRect();
+}
+
+void drawFittedImage(ImDrawList* drawList, const ImRect& rect, const std::string& path,
+		const std::string& fit = "contain", uint32_t tint = 0xffffffff, float rounding = 0, const PixelArt& pixelArt = {})
+{
+	if (!imguiDriver || path.empty() || rect.GetWidth() <= 0 || rect.GetHeight() <= 0) return;
+	ImguiFileTexture texture(path, pixelArt.resolution > 0);
+	texture.setPixelArt(pixelArt);
+	drawFittedTexture(drawList, rect, texture.getId(), fit, tint, rounding);
 }
 
 void drawSingleLine(ImDrawList* drawList, const ImRect& rect, const std::string& text, ImU32 textColor)
@@ -195,6 +199,7 @@ struct LibraryState
 	float selectionElapsed = 0;
 	const std::vector<LibraryItem>* items = nullptr;
 	int selected = -1, pageSize = 0;
+	ImTextureID saveThumbnail = {};
 };
 
 // Spin and sweep share an image's rectangle as their clip region.
@@ -284,6 +289,8 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 			|| (element.when == "launching" && state.launchElapsed < 0)
 			|| (element.when == "unplayed" && (!item || !item->isGame || hasPlayed(*item)))
 			|| (element.when == "played" && (!item || !item->isGame || !hasPlayed(*item)))
+			|| (element.when == "saved" && (!item || !item->canResume))
+			|| (element.when == "unsaved" && (!item || !item->isGame || item->canResume))
 			|| (element.onSelection > 0 && state.selectionElapsed >= element.onSelection))
 		return;
 	uint32_t tint = element.color;
@@ -358,6 +365,11 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 	}
 	else if (item && element.type == "artwork")
 	{
+		if (element.source == "savestate")
+		{
+			drawFittedTexture(drawList, visible, state.saveThumbnail, element.fit, tint, element.rounding);
+			return;
+		}
 		if (!element.requiresArtwork.empty() && artworkPath(*item, element.requiresArtwork, "none").empty())
 			return;
 		const std::string& source = element.source == "preview" ? previewSource : element.source;
@@ -372,9 +384,17 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 		else
 			drawFittedImage(drawList, visible, path, element.fit, tint, element.rounding);
 	}
-	else if (element.type == "text" || element.type == "stat" || (item && element.type == "metadata"))
+	else if (element.type == "text" || element.type == "clock" || element.type == "stat" || (item && element.type == "metadata"))
 	{
 		std::string text = item ? elementText(element, *item) : element.type == "text" ? element.text : std::string();
+		if (element.type == "clock")
+		{
+			char formatted[128] = {};
+			const std::time_t now = std::time(nullptr);
+			if (const std::tm* local = std::localtime(&now))
+				std::strftime(formatted, sizeof(formatted), element.text.empty() ? "%H:%M" : element.text.c_str(), local);
+			text = formatted;
+		}
 		if (element.type == "stat" && state.items)
 		{
 			const auto value = libraryStat(element.source, *state.items, state.selected, state.pageSize, std::time(nullptr));
@@ -410,8 +430,8 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 		}
 		else if (element.align != "left")
 		{
-			const float textWidth = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX,
-					element.wrap ? visible.GetWidth() : 0.f, text.c_str()).x;
+			const float textWidth = ImGui::CalcTextSize(text.c_str(), nullptr, false,
+					element.wrap ? visible.GetWidth() : -1.f).x;
 			textPos.x += std::max(0.f, visible.GetWidth() - textWidth) * (element.align == "center" ? 0.5f : 1.f);
 		}
 		if (element.marqueeSeconds > 0 || element.slant > 0)
@@ -553,7 +573,7 @@ const char* metadataLabel(const std::string& field)
 		{"title", "Title"}, {"developer", "Developer"}, {"publisher", "Publisher"},
 		{"genre", "Genre"}, {"players", "Players"}, {"releaseDate", "Released"},
 		{"productId", "Product ID"}, {"region", "Region"}, {"format", "Format"},
-		{"playTime", "Play time"}, {"lastPlayed", "Last played"}, {"size", "File size"},
+		{"playTime", "Play time"}, {"lastPlayed", "Last played"}, {"saveDate", "Latest save"}, {"size", "File size"},
 		{"system", "System"}
 	};
 	const auto label = labels.find(field);
@@ -771,7 +791,7 @@ void drawButtonContents(const ImRect& rect, const std::string& label, const std:
 
 void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<LibraryItem>& items,
 		int columns, int& selected, std::string& previewSource, bool& scrollSelection, int& activated,
-		const std::function<void(size_t)>& toggleFavourite, bool& focusFirst)
+		const std::function<void(size_t)>& toggleFavourite, bool& focusFirst, LibraryLaunch& launch, const LibraryActions& actions)
 {
 	const size_t count = items.size();
 	for (size_t i = 0; i < layout.elements.size(); ++i)
@@ -790,10 +810,14 @@ void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<L
 		if (element.buttonRounding) ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, *element.buttonRounding * std::min(rect.GetWidth(), rect.GetHeight()));
 		const LibraryItem* item = selected >= 0 ? &items[selected] : nullptr;
 		const bool selectedButton = (element.action == "artwork" && element.source == previewSource)
-				|| (element.action == "favourite" && item && item->favourite);
+				|| (element.action == "favourite" && item && item->favourite)
+				|| (isLibraryAction(element.action) && element.action == actions.selectedView);
 		const bool missingArtwork = element.action == "artwork" && item && artworkPath(*item, element.source, element.source == "cover" ? "default" : "none").empty();
 		const int pageSize = std::max(1, columns * layout.pagedGrid.rows);
-		const bool disabled = count == 0 || missingArtwork
+		const bool libraryAction = isLibraryAction(element.action);
+		const bool disabled = (count == 0 && !libraryAction) || (libraryAction && !actions.dispatch) || missingArtwork
+				|| (element.action == "resume" && (!item || !item->isGame || !item->canResume))
+				|| (element.action == "startFresh" && (!item || !item->isGame))
 				|| (element.action == "previousPage" && selected < pageSize)
 				|| (element.action == "nextPage" && selected / pageSize >= (static_cast<int>(count) - 1) / pageSize)
 				|| (element.action == "favourite" && (!item || !item->canFavourite || !toggleFavourite));
@@ -831,7 +855,7 @@ void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<L
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hovered);
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, hovered);
 		}
-		ImGui::PushFont(nullptr, std::clamp(element.fontSize * canvas.size.y, 10.f, 96.f));
+		ImGui::PushFont(element.bold ? boldFont : nullptr, std::clamp(element.fontSize * canvas.size.y, 10.f, 96.f));
 		const std::string& label = selectedButton && !element.selectedText.empty() ? element.selectedText : element.text;
 		const std::string& icon = selectedButton && !element.selectedIcon.empty() ? element.selectedIcon : element.icon;
 		const float contentWidth = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetFontSize() * (label.empty() ? 1.f : 1.45f);
@@ -872,8 +896,15 @@ void drawButtons(const Layout& layout, const Canvas& canvas, const std::vector<L
 			else if (element.action == "favourite" && item && item->canFavourite)
 				ImGui::SetTooltip("%s", i18n::T(item->favourite ? "Remove from favourites" : "Add to favourites"));
 		}
-		if (!pressed || count == 0) continue;
-		if (element.action == "activate") activated = selected;
+		if (!pressed) continue;
+		if (libraryAction) { actions.dispatch(element.action); continue; }
+		if (count == 0) continue;
+		if (element.action == "activate" || element.action == "resume" || element.action == "startFresh")
+		{
+			activated = selected;
+			launch = element.action == "resume" ? LibraryLaunch::Resume
+					: element.action == "startFresh" ? LibraryLaunch::Fresh : LibraryLaunch::Default;
+		}
 		else if (element.action == "artwork") previewSource = element.source;
 		else if (element.action == "favourite") toggleFavourite(static_cast<size_t>(selected));
 		else if (element.action == "previousPage" || element.action == "nextPage")
@@ -1468,8 +1499,10 @@ int drawPagedGrid(const Layout& layout, const std::vector<LibraryItem>& items, c
 {
 	const ImVec2 origin = ImGui::GetCursorScreenPos(), area = ImGui::GetContentRegionAvail();
 	const float gap = std::min(uiScaled(layout.spacing) * iconScale, std::max(0.f, area.y) / (layout.pagedGrid.rows * 2.f));
+	const float selectionScale = layout.pagedGrid.rows == 1 ? layout.pagedGrid.selectedScale : 1.f;
+	const float minimumWidth = uiScaled(layout.minItemWidth) * iconScale;
 	const int columns = std::clamp(static_cast<int>(std::round(layout.columns / iconScale)), 1,
-			std::max(1, static_cast<int>((area.x + gap) / (uiScaled(layout.minItemWidth) * iconScale + gap))));
+			std::max(1, static_cast<int>((area.x + gap - minimumWidth * (selectionScale - 1.f)) / (minimumWidth + gap))));
 	const int pageSize = columns * layout.pagedGrid.rows;
 	ImGuiContext& g = *GImGui;
 	const bool locked = (g.CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
@@ -1487,7 +1520,8 @@ int drawPagedGrid(const Layout& layout, const std::vector<LibraryItem>& items, c
 				moveFocus = true;
 			}
 		}
-		int pages = swipeSteps(swipe, std::max(40.f, area.y * 0.3f), false, true);
+		const bool horizontalSwipe = selectionScale > 1.f;
+		int pages = swipeSteps(swipe, std::max(40.f, (horizontalSwipe ? area.x : area.y) * 0.3f), horizontalSwipe, true);
 		if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0) pages = ImGui::GetIO().MouseWheel < 0 ? 1 : -1;
 		if (focusedLastFrame)
 		{
@@ -1510,15 +1544,26 @@ int drawPagedGrid(const Layout& layout, const std::vector<LibraryItem>& items, c
 			std::max(1.f, (area.y - gap * (layout.pagedGrid.rows - 1)) / layout.pagedGrid.rows));
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	bool focused = false;
+	const float stripWidth = std::max(1.f, (area.x - gap * (columns - 1)) / (columns + selectionScale - 1.f));
+	float stripX = origin.x;
 	for (int i = first; i < last; ++i)
 	{
 		const LibraryItem& item = items[i];
 		const std::string key = itemKey(item, static_cast<size_t>(i));
 		ImguiID id(key);
 		const int slot = i - first;
-		ImGui::SetCursorScreenPos(origin + ImVec2((slot % columns) * (cell.x + gap), (slot / columns) * (cell.y + gap)));
+		ImVec2 itemSize = cell;
+		if (selectionScale > 1.f)
+		{
+			const float side = std::min(stripWidth, area.y / selectionScale) * (i == selected ? selectionScale : 1.f);
+			itemSize = ImVec2(side, side);
+			ImGui::SetCursorScreenPos(ImVec2(stripX, origin.y + (area.y - side) * 0.5f));
+			stripX += side + gap;
+		}
+		else
+			ImGui::SetCursorScreenPos(origin + ImVec2((slot % columns) * (cell.x + gap), (slot / columns) * (cell.y + gap)));
 		ImGui::PushItemFlag(ImGuiItemFlags_NoTabStop, i != selected);
-		const bool pressed = browserSelectable(layout, i == selected, cell);
+		const bool pressed = browserSelectable(layout, i == selected, itemSize);
 		ImGui::PopItemFlag();
 		if (i == selected)
 		{
@@ -1535,13 +1580,19 @@ int drawPagedGrid(const Layout& layout, const std::vector<LibraryItem>& items, c
 		if (activatesItem(layout, pressed)) activated = i;
 		const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
 		const float titleHeight = layout.showTitles ? ImGui::GetFontSize() + uiScaled(4.f) : 0;
-		const float padding = std::min(uiScaled(layout.pagedGrid.padding), std::min(cell.x, cell.y) * 0.2f);
-		const float side = std::max(1.f, std::min(cell.x, cell.y - titleHeight));
-		const ImVec2 artPos(rect.Min.x + (cell.x - side) * 0.5f, rect.Min.y);
+		const float padding = std::min(uiScaled(layout.pagedGrid.padding), std::min(itemSize.x, itemSize.y) * 0.2f);
+		const float side = std::max(1.f, std::min(itemSize.x, itemSize.y - titleHeight));
+		const ImVec2 artPos(rect.Min.x + (itemSize.x - side) * 0.5f, rect.Min.y);
 		const ImRect artRect(artPos + ImVec2(padding, padding), artPos + ImVec2(side - padding, side - padding));
 		std::string image = artworkPath(item, source);
 		if (image.empty()) image = layout.placeholderAsset;
 		drawFittedImage(drawList, artRect, image, "cover", 0xffffffff, layout.rounding);
+		if (selectionScale > 1.f && selected == i)
+		{
+			const float radius = uiScaled(layout.rounding);
+			drawList->AddRect(rect.Min + ImVec2(1, 1), rect.Max - ImVec2(1, 1),
+					color(layout.selectorBorderColor.value_or(0xffffffff)), radius, 0, 2.f);
+		}
 		const std::string& frame = item.isGame && !hasPlayed(item) && !layout.pagedGrid.unplayedFrame.empty() ? layout.pagedGrid.unplayedFrame : layout.pagedGrid.frame;
 		if (!frame.empty()) drawFittedImage(drawList, ImRect(artPos, artPos + ImVec2(side, side)), frame, "stretch");
 		if (layout.showTitles)
@@ -1790,8 +1841,12 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		const std::optional<std::string>& iconSource, float iconScale,
 		const std::string& stateLayoutId, const std::function<void(size_t)>& toggleFavourite,
 		const std::function<void(const std::string&)>& playSound, const std::string& pulledItemId,
-		const std::function<void()>& drawEmptyBrowser)
+		const std::function<void()>& drawEmptyBrowser, LibraryLaunch* launch,
+		const std::function<ImTextureID(size_t)>& saveThumbnail, const LibraryActions& actions,
+		const std::function<void()>& drawContent)
 {
+	LibraryLaunch requestedLaunch = LibraryLaunch::Default;
+	if (launch) *launch = LibraryLaunch::Default;
 	iconScale = std::clamp(iconScale, 0.5f, 2.f);
 	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
 	static std::string selectedId;
@@ -1806,6 +1861,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	static double selectionTime = 0;
 	static double lastInputTime = 0, lastAttractStep = 0;
 	static std::string launchingId;
+	static LibraryLaunch launchingMode = LibraryLaunch::Default;
 	static double launchStart = 0;
 	static int launchLastFrame = 0;
 	const std::string layoutKey = themeDirectory + '/' + (stateLayoutId.empty() ? layout.id : stateLayoutId);
@@ -1839,6 +1895,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	}
 	const std::string selectionBeforeBrowsing = selectedId;
 	int launchingIndex = -1;
+	if (drawContent) launchingId.clear();
 	// Leaving the library abandons a launch, so it can not fire when the player comes back.
 	if (ImGui::GetFrameCount() > launchLastFrame + 1)
 		launchingId.clear();
@@ -1856,7 +1913,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	// ImGui normally reserves the left stick for panning, which leaves rail,
 	// orbit and paged libraries with no stick navigation at all. Submit the same
 	// focus moves as the D-pad, retaining native scrolling in text-only panes.
-	if (!launching && (io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad)
+	if (!drawContent && !launching && (io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad)
 			&& (io.BackendFlags & ImGuiBackendFlags_HasGamepad) && !io.WantTextInput
 			&& !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup)
 			&& g.NavWindow != nullptr && g.NavWindow->RootWindow == ImGui::GetCurrentWindow()->RootWindow
@@ -1887,9 +1944,9 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		libraryState.launchProgress = std::clamp(libraryState.launchElapsed / layout.launchSeconds, 0.f, 1.f);
 	}
 	bool selectionMoved = false;
-	if (playerInputThisFrame())
+	if (drawContent || playerInputThisFrame())
 		lastInputTime = ImGui::GetTime();
-	const bool attracting = !launching && layout.attract.idleSeconds > 0 && ImGui::GetTime() - lastInputTime >= layout.attract.idleSeconds;
+	const bool attracting = !drawContent && !launching && layout.attract.idleSeconds > 0 && ImGui::GetTime() - lastInputTime >= layout.attract.idleSeconds;
 	libraryState.attracting = attracting;
 	if (!attracting)
 		lastAttractStep = ImGui::GetTime();
@@ -1929,15 +1986,18 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	// Nothing else can be chosen once a game is on its way, but it should not look dimmed either.
 	ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, launching ? 1.f : ImGui::GetStyle().DisabledAlpha);
 	ImGui::BeginDisabled(launching);
-	const bool railMode = layout.mode == "rail";
-	const bool orbitMode = layout.mode == "orbit";
-	const bool paged = layout.pagedGrid.rows > 0;
-	const bool childVisible = ImGui::BeginChild("##themeLibraryBrowser", browserSize, ImGuiChildFlags_NavFlattened,
+	const bool railMode = !drawContent && layout.mode == "rail";
+	const bool orbitMode = !drawContent && layout.mode == "orbit";
+	const bool paged = !drawContent && layout.pagedGrid.rows > 0;
+	if (drawContent) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ScaledVec2(layout.spacing, layout.spacing));
+	const bool childVisible = ImGui::BeginChild("##themeLibraryBrowser", browserSize,
+			ImGuiChildFlags_NavFlattened | (drawContent ? ImGuiChildFlags_AlwaysUseWindowPadding : ImGuiChildFlags_None),
 			ImGuiWindowFlags_NoBackground | ((railMode || orbitMode || paged) ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_DragScrolling));
 	if (!railMode && !orbitMode && !paged)
 	{
 		scrollWindowFromTouch();
 	}
+	if (childVisible && drawContent) drawContent();
 	if (layout.fontSize > 0)
 		ImGui::PushFont(nullptr, std::clamp(layout.fontSize * canvas.size.y * iconScale, 10.f, 96.f));
 	const ImVec2 previousItemSpacing = ImGui::GetStyle().ItemSpacing;
@@ -1952,7 +2012,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 			libraryState.selectionRect = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
 		if (afterItem) afterItem(index);
 	};
-	if (childVisible && !items.empty())
+	if (!drawContent && childVisible && !items.empty())
 	{
 		const float spacing = std::max(0.0f, uiScaled(layout.spacing) * iconScale);
 		if (orbitMode)
@@ -2161,7 +2221,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 				}
 		}
 	}
-	else if (childVisible)
+	else if (!drawContent && childVisible)
 	{
 		if (drawEmptyBrowser) drawEmptyBrowser();
 		else ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(browserTextColor(layout, false)), "%s", i18n::T("No games found"));
@@ -2170,6 +2230,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	if (layout.fontSize > 0)
 		ImGui::PopFont();
 	ImGui::EndChild();
+	if (drawContent) ImGui::PopStyleVar();
 	const LibraryItem* current = selected >= 0 ? &items[selected] : nullptr;
 	if (effectSelection != selectedId || layoutChanged || ImGui::GetTime() < selectionTime)
 	{
@@ -2180,12 +2241,17 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	libraryState.items = &items;
 	libraryState.selected = selected;
 	libraryState.pageSize = browserColumns * layout.pagedGrid.rows;
+	if (selected >= 0 && items[selected].canResume && saveThumbnail
+			&& std::any_of(layout.elements.begin(), layout.elements.end(), [](const Element& element) {
+				return element.type == "artwork" && element.source == "savestate";
+			}))
+		libraryState.saveThumbnail = saveThumbnail(static_cast<size_t>(selected));
 	// Theme details sit opposite the browser. Keep full-canvas backdrops fixed,
 	// while the cover and metadata share a vertically scrollable scaled column.
 	const bool detailsOnRight = layout.browser.x + layout.browser.w * 0.5f <= 0.5f;
 	const float split = detailsOnRight ? layout.browser.x + layout.browser.w : layout.browser.x;
 	const bool authoredDetails = std::any_of(layout.elements.begin(), layout.elements.end(), [](const Element& element) { return element.type == "details"; });
-	const Rect details{detailsOnRight ? split : 0.f, 0.f, (authoredDetails || orbitMode) ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
+	const Rect details{detailsOnRight ? split : 0.f, 0.f, (authoredDetails || orbitMode || layout.hidesToolbar()) ? 0.f : detailsOnRight ? 1.f - split : split, 1.f};
 	// Resolve background media after hover/navigation so both layers show the same game.
 	// The parent draw list is rendered beneath the browser child, regardless of submission order.
 	drawElements(layout, canvas, content, themeDirectory, current, drawList, ElementLayer::BehindBrowser, details, false, previewSource, libraryState);
@@ -2220,7 +2286,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		ImGui::PopStyleVar();
 	}
 	drawDetails(layout, canvas, current);
-	drawButtons(layout, canvas, items, browserColumns, selected, previewSource, scrollSelection, activated, toggleFavourite, railState.focusButtons);
+	drawButtons(layout, canvas, items, browserColumns, selected, previewSource, scrollSelection, activated, toggleFavourite, railState.focusButtons, requestedLaunch, actions);
 	ImGui::EndDisabled();
 	ImGui::PopStyleVar();
 	if (selected >= 0) selectedId = itemKey(items[selected], static_cast<size_t>(selected));
@@ -2238,12 +2304,14 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 		if (libraryState.launchProgress >= 1.f || playerPressedAnything())
 		{
 			activated = launchingIndex;
+			requestedLaunch = launchingMode;
 			launchingId.clear();
 		}
 	}
 	else if (activated >= 0 && layout.launchSeconds > 0)
 	{
 		launchingId = itemKey(items[activated], static_cast<size_t>(activated));
+		launchingMode = requestedLaunch;
 		launchStart = ImGui::GetTime();
 		launchLastFrame = ImGui::GetFrameCount();
 		selected = activated;
@@ -2254,6 +2322,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 	}
 	ImGui::SetCursorScreenPos(contentOrigin);
 	ImGui::Dummy(contentSize);
+	if (launch) *launch = requestedLaunch;
 	return activated;
 }
 } // namespace themes
