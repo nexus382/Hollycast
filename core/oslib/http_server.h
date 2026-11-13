@@ -225,6 +225,9 @@ public:
 
 	/// Stop all asynchronous operations associated with the connection.
 	void stop() {
+		// Polling clients otherwise retain a complete connection buffer until
+		// the 30-second deadline, even after the response socket has closed.
+		timeoutTimer.cancel();
 		socket.close();
 	}
 
@@ -298,6 +301,9 @@ public:
 
 	/// Construct the server to listen on the specified TCP address and port.
 	explicit HttpServer(asio::io_context& io_context, const std::string& address, uint16_t port);
+
+	/// The bound port, including when the OS selected a free port (port = 0).
+	uint16_t port() const { return acceptor.local_endpoint().port(); }
 
 	/// Adds a URI handler to the request handler. See RequestHandler::addHandler
 	void addUriHandler(const std::string& path, RequestHandler::HttpHandler handler) {

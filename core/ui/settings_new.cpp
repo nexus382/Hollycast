@@ -67,6 +67,10 @@
 #include "achievements/achievements.h"
 #include "vgamepad.h"
 #include "rend/vmu_window.h"
+#include "network/phone_vmu.h"
+#ifdef HAVE_PHONE_VMU
+#include "deps/qrcodegen/qrcodegen.hpp"
+#endif
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -2514,7 +2518,7 @@ static const char* kSettingsTabKeywords[] = {
 	"language region broadcast cable interface theme content folder data home ui system tv",
 	"library games boxart artwork cover metadata scan vmu folders scrape",
 	"video graphics resolution render texture quality preset scaling fps display",
-	"osd overlay vmu screen notification display performance",
+	"osd overlay vmu screen notification display performance connect phone wifi remote",
 	"audio sound volume latency mixing output speakers",
 	"controls controller gamepad mapping keyboard buttons sensitivity input",
 	"network online server netplay match link dcnet",
@@ -6523,6 +6527,74 @@ void renderVideoTab()
 	}
 }
 
+#ifdef HAVE_PHONE_VMU
+static void renderPhoneVmuSettings()
+{
+	if (!RenderCollapsingHeader("PhoneVmuSection", ICON_FA_MOBILE_SCREEN, T("Phone VMU"), ImGuiTreeNodeFlags_DefaultOpen))
+		return;
+
+	RenderGeneralToggleSettingRow("ConnectPhone", ICON_FA_MOBILE_SCREEN,
+		T("Connect Phone"), T("Use your phone as a VMU display and play VMU mini-games."),
+		phone_vmu::status().running, [](bool enabled) {
+			if (enabled)
+				phone_vmu::start();
+			else
+				phone_vmu::stop();
+		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a mini-game from a copy of the selected VMU card. Turn this off to stop sharing."));
+
+	const auto connection = phone_vmu::status();
+	if (!connection.error.empty())
+		ImGui::TextWrapped("%s: %s", T("Unable to share the VMU display"), connection.error.c_str());
+	if (!connection.running || connection.urls.empty())
+		return;
+
+	ImGui::TextUnformatted(connection.connected ? T("Phone connected") : T("Waiting for phone"));
+	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi, then scan this code or open the address below in its browser. Choose a VMU slot on your phone, then return to your game."));
+	static int selectedAddress = 0;
+	selectedAddress = std::clamp(selectedAddress, 0, static_cast<int>(connection.urls.size()) - 1);
+	if (connection.urls.size() > 1)
+	{
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo(T("##PhoneVmuAddress"), connection.urls[selectedAddress].c_str()))
+		{
+			for (int i = 0; i < static_cast<int>(connection.urls.size()); ++i)
+				if (ImGui::Selectable(connection.urls[i].c_str(), i == selectedAddress))
+					selectedAddress = i;
+			ImGui::EndCombo();
+		}
+		ImGui::TextWrapped("%s", T("If the phone cannot connect, choose the address for your Wi-Fi or Ethernet network."));
+	}
+	const std::string& url = connection.urls[selectedAddress];
+	static std::string cachedUrl;
+	static std::unique_ptr<qrcodegen::QrCode> qr;
+	if (cachedUrl != url)
+	{
+		qr = std::make_unique<qrcodegen::QrCode>(qrcodegen::QrCode::encodeText(url.c_str(), qrcodegen::QrCode::Ecc::MEDIUM));
+		cachedUrl = url;
+	}
+	// Integral module sizes and a four-module quiet zone keep the code scannable
+	// at every UI scale, without creating a renderer-specific texture.
+	const int modules = qr->getSize() + 8;
+	const float cell = std::max(1.f, std::floor(std::min(ImGui::GetContentRegionAvail().x, SettingsLayoutScaled(260.f)) / modules));
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const ImVec2 size(modules * cell, modules * cell);
+	auto *draw = ImGui::GetWindowDrawList();
+	draw->AddRectFilled(origin, origin + size, IM_COL32(255, 255, 255, 255));
+	for (int y = 0; y < qr->getSize(); ++y)
+		for (int x = 0; x < qr->getSize(); ++x)
+			if (qr->getModule(x, y))
+			{
+				const ImVec2 pos = origin + ImVec2((x + 4) * cell, (y + 4) * cell);
+				draw->AddRectFilled(pos, pos + ImVec2(cell, cell), IM_COL32(0, 0, 0, 255));
+			}
+	ImGui::Dummy(size);
+	ImGui::TextWrapped("%s", url.c_str());
+	if (ImGui::Button(T("Copy address")))
+		ImGui::SetClipboardText(url.c_str());
+	ImGui::TextWrapped("%s", T("Sharing stays on when you close settings. Turn off Connect Phone to disconnect all phones. Allow Hollycast through your firewall on private networks if needed."));
+}
+#endif
+
 void renderOnScreenDisplayTab()
 {
 	ScopedTwoLineRowStyle osdRowStyle(12.0f, true, 0.5f);
@@ -6614,6 +6686,10 @@ void renderOnScreenDisplayTab()
 		}
 #endif
 	}
+
+#ifdef HAVE_PHONE_VMU
+	renderPhoneVmuSettings();
+#endif
 
 	if (RenderCollapsingHeader("OsdPerformanceSection", ICON_FA_CHART_LINE, T("Performance Overlay"), ImGuiTreeNodeFlags_DefaultOpen))
 	{

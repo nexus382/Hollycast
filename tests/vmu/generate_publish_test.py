@@ -20,6 +20,7 @@ source = r'''
 #include <cstdlib>
 #include <iostream>
 #define HAVE_MOVABLE_VMUS
+#define HAVE_PHONE_VMU
 using u8=std::uint8_t; using u32=std::uint32_t; using u64=std::uint64_t;
 u64 getTimeMs() { return 123; }
 u32 vmu_lcd_data[8][48*32] {};
@@ -29,6 +30,12 @@ int publications=0, lastSlot=-1; bool lastActive=false; u32 firstPixel=0;
 namespace vmu_window {
 void publishScreen(int slot, const u32* pixels, bool active) {
  ++publications; lastSlot=slot; lastActive=active; firstPixel=pixels ? pixels[0] : 0;
+}
+}
+int phonePublications=0, phoneSlot=-1; bool phoneActive=false; u32 phonePixel=0;
+namespace phone_vmu {
+void publishScreen(int slot, const u32* pixels, bool active) {
+ ++phonePublications; phoneSlot=slot; phoneActive=active; phonePixel=pixels ? pixels[0] : 0;
 }
 }
 '''
@@ -45,15 +52,21 @@ int main() {
  push_vmu_screen(3,1,pixels);
  require(publications==1 && lastSlot==7 && lastActive && firstPixel==0xffffffff,
    "producer publishes LCD pixels to portable backends");
+ require(phonePublications==1 && phoneSlot==7 && phoneActive && phonePixel==0xffffffff,
+   "producer publishes LCD pixels to phones");
  push_vmu_screen(-1,0,pixels); push_vmu_screen(4,0,pixels);
  require(publications==1,"invalid slots do not publish");
  blankVmus();
  require(publications==9 && lastSlot==7 && lastActive && firstPixel==0,
    "explicit framebuffer blank reaches every portable screen without disconnecting it");
+ require(phonePublications==9 && phoneSlot==7 && phoneActive && phonePixel==0,
+   "explicit framebuffer blank reaches phones without disconnecting them");
  reset_vmu_screen(3,1);
  require(publications==10 && !lastActive,"disconnect publishes inactivity");
+ require(phonePublications==10 && !phoneActive,"disconnect publishes inactivity to phones");
  reset_vmus();
  require(publications==18 && !lastActive,"game reset clears every portable screen");
+ require(phonePublications==18 && !phoneActive,"game reset clears every phone screen");
  std::cout<<checks<<" checks passed\n";
 }
 '''

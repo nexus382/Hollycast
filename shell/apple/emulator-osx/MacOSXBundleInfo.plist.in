@@ -55,6 +55,8 @@
 	<string>MainMenu</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hollycast requires microphone access to emulate the Dreamcast microphone</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Hollycast connects to devices on your local network, including phones used as VMU displays.</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHighResolutionCapable</key>

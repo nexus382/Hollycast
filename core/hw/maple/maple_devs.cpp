@@ -13,6 +13,7 @@
 #include "hw/aica/sgc_if.h"
 #include "cfg/option.h"
 #include "input/maplelinkregistry.h"
+#include "network/phone_vmu.h"
 #include <zlib.h>
 #include <cerrno>
 #include <ctime>
@@ -405,6 +406,9 @@ void maple_sega_vmu::deserialize(Deserializer& deser)
 			break;
 		}
 	fullSaveNeeded = true;
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data));
+#endif
 }
 
 bool maple_sega_vmu::fullSave()
@@ -480,6 +484,9 @@ void maple_sega_vmu::OnSetup()
 		// This means the existing VMU file is completely empty and needs to be recreated
 		initializeVmu();
 	fullSaveNeeded = false;
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data));
+#endif
 }
 
 maple_sega_vmu::~maple_sega_vmu()
@@ -705,6 +712,9 @@ u32 maple_sega_vmu::dma(u32 cmd)
 						return MDRE_FileError; //invalid params
 					}
 					rptr(&flash_data[write_adr],write_len);
+#ifdef HAVE_PHONE_VMU
+					phone_vmu::updateCard(bus_id * 2 + bus_port, write_adr, &flash_data[write_adr], write_len);
+#endif
 					if (Block < sizeof(accessed_blocks))
 						accessed_blocks[Block] = true;
 					last_write_tick = sh4_sched_now64();

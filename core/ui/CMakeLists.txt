@@ -32,6 +32,8 @@ if(NOT LIBRETRO)
     unset(HOLLYCAST_SS_DEV_PASSWORD)
 
     target_sources(${PROJECT_NAME} PRIVATE
+            ../deps/qrcodegen/qrcodegen.cpp
+            ../deps/qrcodegen/qrcodegen.hpp
             app_updater.cpp
             app_updater.h
             app_update_catalog.cpp
