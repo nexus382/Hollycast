@@ -33,7 +33,8 @@ void gui_open_texture_filter_settings();
 bool gui_resume_game();
 void gui_display_ui();
 void gui_draw_osd();
-void gui_display_osd();
+// Redraw the last game image when no new game frame exists underneath the OSD.
+void gui_display_osd(bool redrawGameFrame = false);
 void gui_display_profiler();
 void gui_open_onboarding();
 void gui_open_setup_checklist();

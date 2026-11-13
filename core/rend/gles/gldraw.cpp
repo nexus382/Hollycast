@@ -874,6 +874,40 @@ bool OpenGLRenderer::renderLastFrame()
 	return true;
 }
 
+bool OpenGLRenderer::GetLastFrameForRemotePlay(std::vector<u8>& data, int& width, int& height)
+{
+	if (clearLastFrame)
+		return false;
+#ifndef GLES2
+	if (gl.gl_major >= 3 && !gl.bogusBlitFramebuffer)
+	{
+		auto *framebuffer = gl.ofbo2.ready ? gl.ofbo2.framebuffer.get() : gl.ofbo.framebuffer.get();
+		if (framebuffer == nullptr || gl.ofbo.aspectRatio <= 0)
+			return false;
+		if (width > 0) height = std::max(1, (int)(width / gl.ofbo.aspectRatio));
+		else if (height > 0) width = std::max(1, (int)(height * gl.ofbo.aspectRatio));
+		else {
+			height = framebuffer->getHeight();
+			width = std::max(1, (int)(height * gl.ofbo.aspectRatio));
+		}
+		std::vector<u8> rotated;
+		bool ready = remotePlayReadback.capture(framebuffer->getFramebuffer(), framebuffer->getWidth(),
+			framebuffer->getHeight(), config::Rotate90 ? height : width,
+			config::Rotate90 ? width : height, config::Rotate90 ? rotated : data);
+		if (ready && config::Rotate90)
+		{
+			data.resize((size_t)width * height * 3);
+			for (int y = 0; y < height; y++)
+				for (int x = 0; x < width; x++)
+					for (int c = 0; c < 3; c++)
+						data[((size_t)y * width + x) * 3 + c] = rotated[((size_t)x * height + height - 1 - y) * 3 + c];
+		}
+		return ready;
+	}
+#endif
+	return GetLastFrame(data, width, height);
+}
+
 bool OpenGLRenderer::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 {
 	GlFramebuffer *framebuffer = gl.ofbo2.ready ? gl.ofbo2.framebuffer.get() : gl.ofbo.framebuffer.get();

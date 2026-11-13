@@ -279,6 +279,7 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         void renderDrawData(ImDrawData*, bool guiOpen) override
         {
             ++draws;
+            if (guiOpen) ++backgroundRedraws;
             frameReady |= guiOpen;
         }
         void setFrameRendered() override { frameReady = true; }
@@ -292,6 +293,7 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         ImTextureID updateTexture(const std::string&, const u8*, int, int, bool) override { return {}; }
         void deleteTexture(const std::string&) override {}
         int draws = 0;
+        int backgroundRedraws = 0;
         int presents = 0;
         bool frameReady = false;
     };
@@ -322,6 +324,7 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         assembly_debugger::resume();
         gui_state = GuiState::Closed;
         const int previousDraws = driver->draws;
+        const int previousBackgroundRedraws = driver->backgroundRedraws;
         const int previousPresents = driver->presents;
         EXPECT_TRUE(mainui_rend_frame());
         // On x86 Linux fegetround() only reports x87 state; nearbyint also
@@ -329,6 +332,10 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         volatile double roundingProbe = 1.75;
         EXPECT_EQ(std::nearbyint(roundingProbe), 2.0);
         EXPECT_EQ(driver->draws, previousDraws + 1);
+        // Loading games also time out without submitting PVR frames. Swapping
+        // an OSD-only buffer here flashes blank unless the driver redraws the
+        // last game image underneath it, using its full-background contract.
+        EXPECT_EQ(driver->backgroundRedraws, previousBackgroundRedraws + 1);
         EXPECT_TRUE(driver->frameReady);
         driver->present();
         EXPECT_EQ(driver->presents, previousPresents + 1);

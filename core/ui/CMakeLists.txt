@@ -55,6 +55,17 @@ if(NOT LIBRETRO)
             dcnet_probe.h
             gui_dcnet.cpp
             gui_dcnet.h
+            remoteplay/remote_play.cpp
+            remoteplay/remote_play.h
+            remoteplay/remote_play_page.h
+            remoteplay/remote_play_protocol.h
+            remoteplay/cloudflare_tunnel.cpp
+            remoteplay/cloudflare_tunnel.h
+            remoteplay/webrtc_peer.cpp
+            remoteplay/webrtc_peer.h
+            remoteplay/audio_stream.cpp
+            remoteplay/audio_stream.h
+            remoteplay/h264_encoder.h
             vgamepad.cpp
             vgamepad.h
             gui_chat.h
@@ -111,6 +122,60 @@ if(NOT LIBRETRO)
             boxart/scraper.h
             boxart/vmu_icon.cpp
             boxart/vmu_icon.h)
+
+    # WebRTC Remote Play: libdatachannel + a platform H.264 encoder.
+    # Currently wired on macOS (VideoToolbox); other platforms keep the
+    # MJPEG stream until an encoder lands there.
+    option(HOLLYCAST_REMOTEPLAY_WEBRTC "Enable WebRTC for Remote Play" ON)
+    if(APPLE AND NOT IOS AND HOLLYCAST_REMOTEPLAY_WEBRTC
+            AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../core/deps/libdatachannel/CMakeLists.txt")
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../core/deps/opus/CMakeLists.txt")
+            message(FATAL_ERROR "Remote Play audio requires Opus. Run git submodule update --init core/deps/opus")
+        endif()
+        function(add_remoteplay_opus)
+            set(BUILD_TESTING OFF)
+            set(BUILD_SHARED_LIBS OFF)
+            set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+            set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+            add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../core/deps/opus"
+                    "${CMAKE_CURRENT_BINARY_DIR}/opus" EXCLUDE_FROM_ALL)
+        endfunction()
+        add_remoteplay_opus()
+        target_sources(${PROJECT_NAME} PRIVATE remoteplay/h264_encoder_vt.mm remoteplay/opus_encoder.cpp)
+        # Hollycast already vendors libjuice: reuse it instead of letting
+        # libdatachannel create a second "juice" target.
+        if(TARGET juice-static AND NOT TARGET LibJuice::LibJuice)
+            add_library(LibJuice::LibJuice ALIAS juice-static)
+        endif()
+        set(USE_SYSTEM_JUICE ON CACHE BOOL "" FORCE)
+        set(NO_WEBSOCKET ON CACHE BOOL "" FORCE)
+        set(NO_EXAMPLES ON CACHE BOOL "" FORCE)
+        set(NO_TESTS ON CACHE BOOL "" FORCE)
+        if(NOT OPENSSL_ROOT_DIR AND EXISTS "/opt/homebrew/opt/openssl@3")
+            set(OPENSSL_ROOT_DIR "/opt/homebrew/opt/openssl@3")
+        elseif(NOT OPENSSL_ROOT_DIR AND EXISTS "/usr/local/opt/openssl@3")
+            set(OPENSSL_ROOT_DIR "/usr/local/opt/openssl@3")
+        endif()
+        # The top-level HTTP configuration also has ENABLE_OPENSSL and
+        # defaults it to OFF on Apple. libdatachannel's bundled libSRTP
+        # needs its crypto backend enabled to support the GCM profiles it
+        # advertises during DTLS negotiation. Keep this override local to
+        # this directory, without changing Hollycast's HTTP backend.
+        if(NOT USE_SYSTEM_SRTP)
+            if(USE_MBEDTLS)
+                set(ENABLE_MBEDTLS ON)
+            elseif(NOT USE_GNUTLS)
+                set(ENABLE_OPENSSL ON)
+            endif()
+        endif()
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../core/deps/libdatachannel"
+                "${CMAKE_CURRENT_BINARY_DIR}/libdatachannel" EXCLUDE_FROM_ALL)
+        target_link_libraries(${PROJECT_NAME} PRIVATE datachannel-static opus
+                "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo")
+        target_compile_definitions(${PROJECT_NAME} PRIVATE HOLLYCAST_HAVE_WEBRTC=1)
+    else()
+        target_sources(${PROJECT_NAME} PRIVATE remoteplay/h264_encoder_stub.cpp)
+    endif()
 
     if(USE_DISCORD)
         target_sources(${PROJECT_NAME} PRIVATE discord.cpp)

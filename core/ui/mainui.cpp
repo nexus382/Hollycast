@@ -34,6 +34,9 @@
 #include "rend/vmu_window.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
+#ifndef LIBRETRO
+#include "remoteplay/remote_play.h"
+#endif
 
 #include <chrono>
 #include <thread>
@@ -91,10 +94,10 @@ bool mainui_rend_frame()
 			// the overlay twice when a game frame already drew it.
 			if (ImGui::GetFrameCount() == uiFrame)
 			{
-				gui_display_osd();
-				// DX/OpenGL drivers normally receive this signal from a game
-				// frame. An overlay drawn on its own must also be presented.
-				imguiDriver->setFrameRendered();
+				// A timeout during loading has no game image in the backbuffer.
+				// Recompose the last frame before presenting the controls, just
+				// as a menu does, rather than swapping an empty OSD-only buffer.
+				gui_display_osd(true);
 			}
 			if (config::ProfilerEnabled && config::ProfilerDrawToGUI)
 				gui_display_profiler();
@@ -149,6 +152,9 @@ void mainui_loop(bool forceStart)
 		{
 			try {
 				imguiDriver->present();
+#ifndef LIBRETRO
+				remoteplay::capturePresentedFrame();
+#endif
 			} catch (const FlycastException& e) {
 				forceReinit = true;
 			}

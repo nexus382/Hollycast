@@ -37,6 +37,8 @@
 #include "widgets/widgets.h"
 #include "version.h"
 #include "wsi/context.h"
+#include "remoteplay/cloudflare_tunnel.h"
+#include "remoteplay/remote_play.h"
 #include "input/dreampotato.h"
 #include "input/gamepad_device.h"
 #include "input/keyboard_device.h"
@@ -9139,6 +9141,105 @@ void renderNetworkTab()
 			),
 			config::UseDCNet);
 #endif
+	}
+
+	// Remote Play: play on phones through a Cloudflare quick tunnel.
+	ImGui::Spacing();
+	if (RenderCollapsingHeader("RemotePlaySection", ICON_FA_MOBILE_SCREEN, T("Remote Play (Phone)"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		remoteplay::ServerStatus rp = remoteplay::serverStatus();
+		remoteplay::TunnelStatus tunnel = remoteplay::tunnelStatus();
+		ImGui::TextWrapped("%s", T("Play on your phone: start Remote Play, open the address on your phone, and enter the PIN. Up to four phones can connect, one per controller. Video is streamed from this computer, so keep it running."));
+		if (!rp.running)
+		{
+			if (ImGui::Button(T("Start Remote Play")))
+			{
+				std::string error;
+				if (remoteplay::serverStart(error) && config::RemotePlayAutoTunnel)
+				{
+					std::string tunnelError;
+					remoteplay::tunnelStart((int)config::RemotePlayPort, tunnelError);
+				}
+			}
+		}
+		else
+		{
+			if (ImGui::Button(T("Stop Remote Play")))
+				remoteplay::serverStop();
+			ImGui::Text("%s: %s", T("PIN"), rp.pin.c_str());
+			ImGui::Text("%s: %s", T("On this computer"), rp.localUrl.c_str());
+			if (!tunnel.publicUrl.empty())
+			{
+				ImGui::Text("%s:", T("On your phone"));
+				ImGui::TextWrapped("%s", tunnel.publicUrl.c_str());
+				if (ImGui::Button(T("Copy phone address")))
+					ImGui::SetClipboardText(tunnel.publicUrl.c_str());
+			}
+			else if (tunnel.state == remoteplay::TunnelState::Starting)
+				ImGui::Text("%s", T("Opening Cloudflare tunnel..."));
+			else if (tunnel.state == remoteplay::TunnelState::Failed)
+				ImGui::TextWrapped("%s: %s", T("Tunnel failed"), tunnel.error.c_str());
+			int connected = 0;
+			for (remoteplay::PlayerState state : rp.players)
+				connected += state == remoteplay::PlayerState::Connected ? 1 : 0;
+			ImGui::Spacing();
+			ImGui::Text("%s: %d / 4", T("Players connected"), connected);
+			if (ImGui::BeginTable("RemotePlayPlayers", 3,
+					ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoSavedSettings))
+			{
+				ImGui::TableSetupColumn(T("Player"));
+				ImGui::TableSetupColumn(T("Controller"));
+				ImGui::TableSetupColumn(T("Status"), ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableHeadersRow();
+				for (int i = 0; i < 4; i++)
+				{
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::Text("%s %d", T("Player"), i + 1);
+					ImGui::TableSetColumnIndex(1);
+					ImGui::Text("%s %c", T("Port"), 'A' + i);
+					ImGui::TableSetColumnIndex(2);
+					switch (rp.players[i])
+					{
+					case remoteplay::PlayerState::Connected: ImGui::TextUnformatted(T("Connected")); break;
+					case remoteplay::PlayerState::Joining: ImGui::TextUnformatted(T("Joining...")); break;
+					case remoteplay::PlayerState::Available: ImGui::TextDisabled("%s", T("Available")); break;
+					}
+				}
+				ImGui::EndTable();
+			}
+		}
+		if (!rp.error.empty())
+			ImGui::TextWrapped("%s", rp.error.c_str());
+		if (tunnel.binaryPath.empty())
+		{
+			remoteplay::InstallStatus install = remoteplay::installStatus();
+			if (install.state == remoteplay::InstallState::Downloading || install.state == remoteplay::InstallState::Extracting)
+				ImGui::TextWrapped("%s", install.message.c_str());
+			else
+			{
+				ImGui::TextWrapped("%s", T("cloudflared is not installed. Hollycast can download it from Cloudflare into its data folder (no administrator password needed), or you can install it yourself from cloudflare.com. Remote Play still works on this computer without it."));
+				if (install.state == remoteplay::InstallState::Failed)
+					ImGui::TextWrapped("%s", install.message.c_str());
+				if (ImGui::Button(T("Install cloudflared")))
+					remoteplay::installCloudflared();
+			}
+		}
+		int port = (int)config::RemotePlayPort;
+		if (ImGui::InputInt(T("Port"), &port))
+			config::RemotePlayPort = std::max(1, std::min(65535, port));
+		int fps = (int)config::RemotePlayFps;
+		if (ImGui::SliderInt(T("Stream frame rate"), &fps, 10, 60))
+			config::RemotePlayFps = fps;
+		int width = (int)config::RemotePlayWidth;
+		if (ImGui::SliderInt(T("Stream width"), &width, 320, 1280))
+			config::RemotePlayWidth = width;
+		bool autoTunnel = (bool)config::RemotePlayAutoTunnel;
+		if (ImGui::Checkbox(T("Open Cloudflare tunnel automatically"), &autoTunnel))
+			config::RemotePlayAutoTunnel = autoTunnel;
+		bool bindLan = (bool)config::RemotePlayBindLan;
+		if (ImGui::Checkbox(T("Also allow connections on the local network"), &bindLan))
+			config::RemotePlayBindLan = bindLan;
 	}
 
 #ifdef NAOMI_MULTIBOARD

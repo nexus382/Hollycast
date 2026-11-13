@@ -7,6 +7,7 @@
 #include "rend/TexCache.h"
 #include "wsi/gl_context.h"
 #include "glcache.h"
+#include "frame_readback.h"
 #include "rend/shader_util.h"
 #include "rend/transform_matrix.h"
 #ifndef LIBRETRO
@@ -538,6 +539,7 @@ struct OpenGLRenderer : Renderer
 		return ret;
 	}
 	bool GetLastFrame(std::vector<u8>& data, int& width, int& height) override;
+	bool GetLastFrameForRemotePlay(std::vector<u8>& data, int& width, int& height) override;
 	void processCustomTexturePreloads() override;
 	bool supportsGpuTexturePreload() const override { return gl.textureStorageSupported; }
 
@@ -620,6 +622,9 @@ protected:
 	}
 
 private:
+#ifndef GLES2
+	GlFrameReadback remotePlayReadback;
+#endif
 	static constexpr std::size_t GpuTimingQueryCount = 4;
 	std::array<GLuint, GpuTimingQueryCount> gpuTimingQueries {};
 	std::array<u32, GpuTimingQueryCount> gpuTimingEpochs {};

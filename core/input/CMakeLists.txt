@@ -16,5 +16,7 @@ if(NOT LIBRETRO)
             mapping.cpp
             mapping.h
             mouse.cpp
-            mouse.h)
+            mouse.h
+            remote_gamepad.cpp
+            remote_gamepad.h)
 endif()

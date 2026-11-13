@@ -31,6 +31,9 @@ struct SoundFrame { s16 l; s16 r; };
 
 static SoundFrame Buffer[SAMPLE_COUNT];
 static u32 writePtr;  // next sample index
+static std::atomic<AudioOutputTap> outputTap { nullptr };
+
+void SetAudioOutputTap(AudioOutputTap tap) { outputTap.store(tap); }
 
 static AudioBackend *currentBackend;
 std::vector<AudioBackend *> *AudioBackend::backends;
@@ -74,13 +77,23 @@ AudioBackend *AudioBackend::getBackend(const std::string& slug)
 
 void WriteSample(s16 r, s16 l)
 {
-	Buffer[writePtr].r = r * config::AudioVolume.dbPower();
-	Buffer[writePtr].l = l * config::AudioVolume.dbPower();
+	Buffer[writePtr].r = r;
+	Buffer[writePtr].l = l;
 
 	if (++writePtr == SAMPLE_COUNT)
 	{
+		if (auto tap = outputTap.load())
+			tap(Buffer, SAMPLE_COUNT);
 		if (currentBackend != nullptr)
-			currentBackend->push(Buffer, SAMPLE_COUNT, config::LimitFPS && !settings.input.fastForwardMode);
+		{
+			SoundFrame output[SAMPLE_COUNT];
+			const float volume = config::AudioVolume.dbPower();
+			for (u32 i = 0; i < SAMPLE_COUNT; i++) {
+				output[i].l = Buffer[i].l * volume;
+				output[i].r = Buffer[i].r * volume;
+			}
+			currentBackend->push(output, SAMPLE_COUNT, config::LimitFPS && !settings.input.fastForwardMode);
+		}
 		writePtr = 0;
 	}
 }
