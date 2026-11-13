@@ -245,6 +245,7 @@ struct PresentSamples {
 };
 
 PresentSamples presentSamples;
+std::atomic<std::uint32_t> presentationTimingEpoch { 0 };
 
 struct MetricHistory {
 	std::array<float, FrameTimeHistorySize> values {};
@@ -424,6 +425,7 @@ void updateMetrics(std::uint32_t items)
 		outputViewportWidth.store(0, std::memory_order_relaxed);
 		outputViewportHeight.store(0, std::memory_order_relaxed);
 		std::lock_guard<std::mutex> lock(presentSamples.mutex);
+		presentationTimingEpoch.fetch_add(1, std::memory_order_relaxed);
 		presentSamples.lastPresentMicroseconds = 0;
 		presentSamples.intervalSumMicroseconds = 0;
 		presentSamples.intervalMinimumMicroseconds = std::numeric_limits<std::uint64_t>::max();
@@ -916,6 +918,7 @@ bool isResolutionRequested()
 
 void reset()
 {
+	presentationTimingEpoch.fetch_add(1, std::memory_order_relaxed);
 	collectionEnabled.store(false, std::memory_order_release);
 	gpuTimingRequested.store(false, std::memory_order_release);
 	resetPending.store(true, std::memory_order_release);
@@ -957,15 +960,26 @@ void recordOutputViewport(int width, int height)
 	outputViewportHeight.store(height, std::memory_order_relaxed);
 }
 
-void recordPresentedFrame()
+bool isPresentationTimingRequested()
 {
-	if (!isCollectionEnabled() || (requestedItems.load(std::memory_order_relaxed) & (OutputFps | FrameTimes | FrameTimeGraph)) == 0)
+	return isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & (OutputFps | FrameTimes | FrameTimeGraph)) != 0;
+}
+
+std::uint32_t getPresentationTimingEpoch()
+{
+	return presentationTimingEpoch.load(std::memory_order_relaxed);
+}
+
+void recordPresentedFrameAt(std::uint64_t now, std::uint32_t epoch)
+{
+	if (!isPresentationTimingRequested())
 		return;
-	const std::uint64_t now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count());
 	std::lock_guard<std::mutex> lock(presentSamples.mutex);
+	if (!isPresentationTimingRequested() || epoch != getPresentationTimingEpoch()
+			|| now == 0 || now <= presentSamples.lastPresentMicroseconds)
+		return;
 	++presentSamples.presentCount;
-	if (presentSamples.lastPresentMicroseconds != 0 && now > presentSamples.lastPresentMicroseconds)
+	if (presentSamples.lastPresentMicroseconds != 0)
 	{
 		const std::uint64_t interval = now - presentSamples.lastPresentMicroseconds;
 		presentSamples.intervalSumMicroseconds += interval;
@@ -977,6 +991,16 @@ void recordPresentedFrame()
 		presentSamples.intervalHistoryCount = std::min<std::uint32_t>(presentSamples.intervalHistoryCount + 1, FrameTimeHistorySize);
 	}
 	presentSamples.lastPresentMicroseconds = now;
+}
+
+void recordPresentedFrame()
+{
+	if (!isPresentationTimingRequested())
+		return;
+	const std::uint32_t epoch = getPresentationTimingEpoch();
+	const std::uint64_t now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count());
+	recordPresentedFrameAt(now, epoch);
 }
 
 void recordPvrScene(bool displayScene, std::uint32_t primitiveCount, std::uint32_t vertexCount)
@@ -1086,6 +1110,7 @@ void draw()
 		requestedItems.store(0, std::memory_order_relaxed);
 		if (collectionEnabled.exchange(false, std::memory_order_acq_rel))
 		{
+			presentationTimingEpoch.fetch_add(1, std::memory_order_relaxed);
 			metrics.lastSampleTime = 0;
 			metrics.lastMemorySampleTime = 0;
 			metrics.gpuAdapters.clear();

@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+#if !__has_feature(objc_arc)
+#error "The Metal renderer requires Objective-C ARC to release GPU resources."
+#endif
+
 #define Rect MacOSRect
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>

@@ -57,9 +57,9 @@ int main() { @autoreleasepool {
  scene.modtrig={{0,0,4,64,0,4,0,64,4},{64,0,4,64,64,4,0,64,4}};
  ModifierVolumeParam mv{};mv.init();mv.first=0;mv.count=2;mv.isp.DepthMode=1;
  scene.global_param_mvo.push_back(mv);scene.render_passes[0].mvo_count=1;
- auto run=[&](const char *label, int er, int eg, int eb) {
-   r.Process(&ctx); if(!r.Render()) { fprintf(stderr,"%s render failed\n",label); return false; }
-   id<MTLTexture> t=r.targets.frameOutput;
+ auto runRenderer=[&](MetalRenderer& renderer, const char *label, int er, int eg, int eb) {
+   renderer.Process(&ctx); if(!renderer.Render()) { fprintf(stderr,"%s render failed\n",label); return false; }
+   id<MTLTexture> t=renderer.targets.frameOutput;
    id<MTLDevice> dev=MetalContext::Instance()->GetDevice();
    id<MTLBuffer> buf=[dev newBufferWithLength:t.width*t.height*4 options:MTLResourceStorageModeShared];
    id<MTLCommandBuffer> cmd=[MetalContext::Instance()->GetQueue() commandBuffer]; id<MTLBlitCommandEncoder> blit=[cmd blitCommandEncoder];
@@ -68,6 +68,7 @@ int main() { @autoreleasepool {
    fprintf(stderr,"%s: %u,%u,%u,%u\n",label,px[0],px[1],px[2],px[3]);
    return cmd.status==MTLCommandBufferStatusCompleted && abs((int)px[0]-er)<4 && abs((int)px[1]-eg)<4 && abs((int)px[2]-eb)<4;
  };
+ auto run=[&](const char *label, int er, int eg, int eb) { return runRenderer(r,label,er,eg,eb); };
  bool ok=run("opaque blended shadow",127,0,64);
  scene.global_param_op.pop_back(); scene.global_param_tr.push_back(front); scene.render_passes[0].op_count=1;scene.render_passes[0].tr_count=1;
  scene.global_param_op[0].pcw.Shadow=1;
@@ -142,5 +143,53 @@ int main() { @autoreleasepool {
    scene.global_param_op[0].pcw.Texture=1; scene.global_param_op[0].texture=rtt;
    ok=run("RTT cache sampled by screen",255,0,0) && ok;
  }
- r.Term(); delete MetalContext::Instance(); SDL_Quit();return ok ? 0 : 5;
+ r.Term();
+ config::RendererType=RenderType::Metal;
+ MetalRenderer regular;
+ if(!regular.Init()) return 2;
+ scene.verts={a,b,c,d}; scene.idx={0,1,2,3};
+ for(auto v:std::vector<Vertex>{a,b,c,d}) { v.z=3;v.col[0]=0;v.col[1]=128;scene.verts.push_back(v); }
+ for(auto v:std::vector<Vertex>{a,b,c,d}) { v.z=2;v.col[0]=0;v.col[2]=255;scene.verts.push_back(v); }
+ scene.idx.insert(scene.idx.end(),{4,5,6,7,8,9,10,11,4,5,6,5,7,6});
+ scene.sortedTriangles.clear(); scene.global_param_tr.clear(); scene.global_param_pt.clear(); scene.global_param_mvo.clear();
+ config::ModifierVolumes=false; config::TranslucentPolygonDepthMask=false; config::PerStripSorting=false;
+ PolyParam secondary=p; secondary.first=4;secondary.tsp.DstSelect=1;
+ PolyParam readSecondary=p;readSecondary.first=8;readSecondary.tsp.SrcSelect=1;
+ PolyParam blue=p;blue.first=8;
+ RenderPass regularPass{};regularPass.op_count=2;
+ scene.global_param_op={p,secondary};scene.render_passes={regularPass};
+ ok=runRenderer(regular,"regular secondary preserves primary",255,0,0) && ok;
+ scene.global_param_op.push_back(readSecondary);scene.render_passes[0].op_count=3;
+ ok=runRenderer(regular,"regular secondary source replaces vertex color",0,128,0) && ok;
+ PolyParam accumulate=readSecondary;accumulate.tsp.DstSelect=1;accumulate.tsp.DstInstr=1;
+ scene.global_param_op={p,secondary,accumulate,readSecondary};scene.render_passes[0].op_count=4;
+ ok=runRenderer(regular,"regular secondary read modify write",0,255,0) && ok;
+ scene.global_param_op={p,readSecondary};scene.render_passes[0].op_count=2;
+ ok=runRenderer(regular,"regular secondary cleared each frame",0,0,0) && ok;
+ PolyParam secondaryBlue=blue;secondaryBlue.tsp.DstSelect=1;
+ PolyParam addSecondary=readSecondary;addSecondary.tsp.DstInstr=1;
+ scene.global_param_op={p,secondary,readSecondary,secondaryBlue};scene.global_param_tr={addSecondary};
+ RenderPass regularFirst{};regularFirst.op_count=3;
+ RenderPass regularSecond=regularFirst;regularSecond.op_count=4;regularSecond.tr_count=1;
+ scene.render_passes={regularFirst,regularSecond};
+ ok=runRenderer(regular,"regular secondary submission order across passes",0,128,255) && ok;
+ PolyParam behind=blue;behind.isp.DepthMode=4;
+ scene.global_param_op={p,secondary,behind};scene.global_param_tr.clear();
+ scene.render_passes={regularPass};scene.render_passes[0].op_count=3;
+ ok=runRenderer(regular,"regular secondary shares depth",255,0,0) && ok;
+ scene.global_param_op={p,secondary};scene.global_param_tr={accumulate};scene.global_param_op.push_back(behind);
+ scene.sortedTriangles={{0,12,6}};
+ regularFirst.op_count=2;regularFirst.tr_count=1;regularFirst.sorted_tr_count=1;regularFirst.autosort=true;
+ regularSecond=regularFirst;regularSecond.op_count=3;regularSecond.autosort=false;
+ scene.render_passes={regularFirst,regularSecond};
+ scene.global_param_op[1].isp.ZWriteDis=1;config::TranslucentPolygonDepthMask=true;
+ ok=runRenderer(regular,"regular secondary depth-only replay preserves primary",255,0,0) && ok;
+ config::TranslucentPolygonDepthMask=false;
+ ok=runRenderer(regular,"regular secondary disabled depth-only replay",0,0,255) && ok;
+ scene.global_param_op={p,secondary};scene.global_param_tr.clear();scene.sortedTriangles.clear();
+ scene.render_passes={regularPass};scene.render_passes[0].mvo_count=1;
+ scene.global_param_op[0].pcw.Shadow=1;scene.global_param_op[1].pcw.Shadow=1;
+ scene.global_param_mvo={mv};config::ModifierVolumes=true;
+ ok=runRenderer(regular,"regular secondary modifier targets primary",128,0,0) && ok;
+ regular.Term(); delete MetalContext::Instance(); SDL_Quit();return ok ? 0 : 5;
 }}

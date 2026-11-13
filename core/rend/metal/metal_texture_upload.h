@@ -34,7 +34,9 @@ inline id<MTLTexture> makeTexture(id<MTLDevice> device, unsigned width, unsigned
 	return [device newTextureWithDescriptor:descriptor];
 }
 
-inline void generateMipmaps(id<MTLCommandQueue> queue, id<MTLTexture> texture)
+// GPU consumers must submit on this queue after the upload returns. CPU reads
+// and consumers on another queue must request completion before using the mips.
+inline void generateMipmaps(id<MTLCommandQueue> queue, id<MTLTexture> texture, bool waitForCompletion = false)
 {
 	if (texture.mipmapLevelCount <= 1)
 		return;
@@ -43,10 +45,12 @@ inline void generateMipmaps(id<MTLCommandQueue> queue, id<MTLTexture> texture)
 	[blit generateMipmapsForTexture:texture];
 	[blit endEncoding];
 	[commands commit];
-	[commands waitUntilCompleted];
+	if (waitForCompletion)
+		[commands waitUntilCompleted];
 }
 inline id<MTLTexture> decoded(id<MTLDevice> device, id<MTLCommandQueue> queue,
-        int width, int height, const uint8_t *data, PixelKind kind, bool mipmapped, bool mipmapsIncluded)
+        int width, int height, const uint8_t *data, PixelKind kind, bool mipmapped, bool mipmapsIncluded,
+        bool waitForMipmaps = false)
 {
 	if (!data || width <= 0 || height <= 0)
 		return nil;
@@ -104,11 +108,11 @@ inline id<MTLTexture> decoded(id<MTLDevice> device, id<MTLCommandQueue> queue,
 				withBytes:pixels bytesPerRow:w * (packed16 ? 4 : bytesPerPixel)];
 	}
 	if (mipmapped && !mipmapsIncluded)
-		generateMipmaps(queue, replacement);
+		generateMipmaps(queue, replacement, waitForMipmaps);
 	return replacement;
 }
 inline id<MTLTexture> custom(id<MTLDevice> device, id<MTLCommandQueue> queue,
-        const PreparedCustomTexture& prepared, bool mipmapped)
+        const PreparedCustomTexture& prepared, bool mipmapped, bool waitForMipmaps = false)
 {
 	if (prepared.nativeFormat != NativeTextureFormat::Rgba8Unorm)
 		return nil;
@@ -127,7 +131,7 @@ inline id<MTLTexture> custom(id<MTLDevice> device, id<MTLCommandQueue> queue,
 				bytesPerRow:level.rowPitchBytes];
 	}
 	if (generate)
-		generateMipmaps(queue, replacement);
+		generateMipmaps(queue, replacement, waitForMipmaps);
 	return replacement;
 }
 }
