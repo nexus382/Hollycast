@@ -17,9 +17,15 @@
     You should have received a copy of the GNU General Public License
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
+// Portions Copyright 2026 The Hollycast Authors
 #include "ggpo.h"
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_devs.h"
+#include "hw/maple/maple_if.h"
+#include "hw/mem/addrspace.h"
+#include "hw/flashrom/nvmem.h"
+#include "session_state.h"
+#include <thread>
 #include "input/gamepad_device.h"
 #include "input/keyboard_device.h"
 #include "input/mouse.h"
@@ -91,6 +97,7 @@ static void getLocalInput(MapleInputState inputState[4])
 #include "ui/gui_util.h"
 #include "hw/mem/mem_watch.h"
 #include <string.h>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <mutex>
@@ -102,9 +109,7 @@ static void getLocalInput(MapleInputState inputState[4])
 
 //#define SYNC_TEST 1
 
-#ifdef SYNC_TEST
 #include <xxhash.h>
-#endif
 
 namespace ggpo
 {
@@ -117,12 +122,24 @@ constexpr u32 BTN_TRIGGER_LEFT	= DC_BTN_BITMAPPED_LAST << 1;
 constexpr u32 BTN_TRIGGER_RIGHT	= DC_BTN_BITMAPPED_LAST << 2;
 
 #pragma pack(push, 1)
+// Exchanged byte-for-byte by GGPO during initial synchronization, so all
+// integer fields are fixed-width. Protocol 3 adds the input layout and the
+// created Maple device topology: incompatible peers now fail verification
+// before gameplay instead of starting a session that can only diverge.
+// Protocol 2 peers fail verification. Baseline: Flycast Dojo protocol 2
+// exchanged only the game and state digests (core/network/ggpo.cpp at
+// blueminder/flycast-dojo fa518ac574b17fbc70837f97275c019b208a8740).
 struct VerificationData
 {
-	const int protocol = 2;
+	u32 protocol = 3;
 	u8 gameMD5[16] { };
 	u8 stateMD5[16] { };
-} ;
+	u16 inputSize = 0;
+	u8 analogAxes = 0;
+	u8 inputFlags = 0;	// 1: absolute pointer, 2: keyboard, 4: mouse
+	u8 mapleDevices[MAPLE_PORTS * 6] { };
+};
+static_assert(sizeof(VerificationData) == 64);
 #pragma pack(pop)
 
 static GGPOSession *ggpoSession;
@@ -160,6 +177,32 @@ struct MemPages
 };
 static std::unordered_map<int, MemPages> deltaStates;
 static int lastSavedFrame = -1;
+struct FrameChecksums
+{
+	u64 full = 0;
+	u64 ram = 0;
+};
+static std::unordered_map<int, FrameChecksums> localChecksums;
+static std::unordered_map<int, FrameChecksums> remoteChecksums;
+static int lastChecksumFrameSent;
+static bool desyncReported;
+
+static void compareChecksums(int frame, const FrameChecksums& local, const FrameChecksums& remote)
+{
+	if ((local.full == remote.full && local.ram == remote.ram) || desyncReported)
+		return;
+	desyncReported = true;
+	WARN_LOG(NETWORK, "GGPO state desync at frame %d (full local %llx remote %llx, ram local %llx remote %llx, %s)", frame, local.full, remote.full, local.ram, remote.ram, local.ram == remote.ram ? "non-RAM state only" : "RAM diverged");
+	os_notify(i18n::T("Connection desynchronized"), 3000);
+}
+
+static void resetChecksumState()
+{
+	localChecksums.clear();
+	remoteChecksums.clear();
+	lastChecksumFrameSent = 0;
+	desyncReported = false;
+}
 
 static int timesyncOccurred;
 
@@ -194,7 +237,8 @@ struct GameEvent
 {
 	enum : char {
 		Chat,
-		VF4Card
+		VF4Card,
+		StateSync
 	} type;
 	union {
 		struct {
@@ -205,6 +249,11 @@ struct GameEvent
 			u8 playerNum;
 			u8 data[128];
 		} card;
+		struct {
+			u32 frame;
+			u64 checksum;
+			u64 ramChecksum;
+		} sync;
 	} u;
 
 	constexpr static int chatMessageLen(int len) { return len - sizeof(u.chat.playerNum) - sizeof(type); }
@@ -367,9 +416,31 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 		*len = 0;
 		return false;
 	}
-#ifdef SYNC_TEST
-	*checksum = XXH3_64bits(*buffer, usedSize);
-#endif
+	const u64 fullChecksum = XXH3_64bits(*buffer, *len);
+	*checksum = (int)fullChecksum;
+	localChecksums[frame] = { fullChecksum, addrspace::ram_base != nullptr ? XXH3_64bits(addrspace::ram_base, settings.platform.ram_size) : 0 };
+	{
+		auto remote = remoteChecksums.find(frame);
+		if (remote != remoteChecksums.end())
+		{
+			compareChecksums(frame, localChecksums[frame], remote->second);
+			remoteChecksums.erase(remote);
+		}
+		for (auto it = localChecksums.begin(); it != localChecksums.end();)
+		{
+			if (it->first < frame - 600)
+				it = localChecksums.erase(it);
+			else
+				++it;
+		}
+		for (auto it = remoteChecksums.begin(); it != remoteChecksums.end();)
+		{
+			if (it->first < frame - 600)
+				it = remoteChecksums.erase(it);
+			else
+				++it;
+		}
+	}
 	memwatch::protect();
 	if (frame > 0)
 	{
@@ -481,6 +552,19 @@ static void on_message(u8 *msg, int len)
 			chatCallback(event->u.chat.playerNum, std::string(event->u.chat.message, GameEvent::chatMessageLen(len)));
 		break;
 
+	case GameEvent::StateSync:
+		{
+			const u32 frame = event->u.sync.frame;
+			auto local = localChecksums.find(frame);
+			if (local != localChecksums.end())
+			{
+				compareChecksums((int)frame, local->second, { event->u.sync.checksum, event->u.sync.ramChecksum });
+			}
+			else
+				remoteChecksums[frame] = { event->u.sync.checksum, event->u.sync.ramChecksum };
+		}
+		break;
+
 	case GameEvent::VF4Card:
 		setRfidCardData(event->u.card.playerNum, event->u.card.data);
 		break;
@@ -491,8 +575,238 @@ static void on_message(u8 *msg, int len)
 	}
 }
 
+// --- Host-to-guest session state (memory cards + console flash) ---
+// The guest adopts the host's images in memory so both sides verify and
+// emulate from the same initial state. The guest's own files are never
+// overwritten: VMU save files are detached for the session, and the guest's
+// original images are restored when the session stops.
+static bool sessionStateAdopted;
+static std::vector<u8> guestFlashBackup;
+static std::vector<std::pair<int, int>> guestAdoptedVmus;
+static std::vector<std::vector<u8>> guestVmuBackups;
+
+static std::vector<sessionstate::Item> collectSessionState()
+{
+	std::vector<sessionstate::Item> items;
+	const u8* flash = nvmem::getFlashData();
+	if (flash != nullptr)
+	{
+		sessionstate::Item item;
+		item.kind = sessionstate::KIND_FLASH;
+		item.data.assign(flash, flash + settings.platform.flash_size);
+		items.push_back(std::move(item));
+	}
+	for (int bus = 0; bus < MAPLE_PORTS; bus++)
+		for (int port = 0; port < 6; port++)
+		{
+			const auto& device = MapleDevices[bus][port];
+			if (device == nullptr || device->get_device_type() != MDT_SegaVMU)
+				continue;
+			size_t size = 0;
+			const void* data = device->getData(size);
+			if (data == nullptr || size == 0)
+				continue;
+			sessionstate::Item item;
+			item.kind = sessionstate::KIND_VMU;
+			item.bus = (u8)bus;
+			item.port = (u8)port;
+			item.data.assign((const u8*)data, (const u8*)data + size);
+			items.push_back(std::move(item));
+		}
+	return items;
+}
+
+static std::atomic<bool> sessionStateServeStop{ true };
+static std::thread sessionStateThread;
+
+static void serveSessionState(int statePort)
+{
+	sock_t listener = socket(AF_INET, SOCK_STREAM, 0);
+	if (!VALID(listener))
+	{
+		WARN_LOG(NETWORK, "Session state server: socket failed");
+		return;
+	}
+	int reuse = 1;
+	setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = INADDR_ANY;
+	addr.sin_port = htons((u_short)statePort);
+	if (bind(listener, (sockaddr*)&addr, sizeof(addr)) != 0 || listen(listener, 1) != 0)
+	{
+		WARN_LOG(NETWORK, "Session state server: bind/listen on port %d failed", statePort);
+		closesocket(listener);
+		return;
+	}
+	// Serve for the whole session, not a single attempt: the guest may
+	// load minutes after the host, and may need more than one try.
+	while (!sessionStateServeStop)
+	{
+		fd_set readFds;
+		FD_ZERO(&readFds);
+		FD_SET(listener, &readFds);
+		timeval timeout{ 0, 500000 };
+		if (select((int)listener + 1, &readFds, nullptr, nullptr, &timeout) <= 0)
+			continue;
+		sock_t conn = accept(listener, nullptr, nullptr);
+		if (!VALID(conn))
+			continue;
+		set_recv_timeout(conn, 10000);
+		set_send_timeout(conn, 10000);
+		u32 protocol = 0;
+		if (sessionstate::receiveRequest(conn, protocol) && protocol == 3)
+		{
+			const auto items = collectSessionState();
+			if (sessionstate::sendItems(conn, items))
+				NOTICE_LOG(NETWORK, "Served session state to guest (%d items)", (int)items.size());
+			else
+				WARN_LOG(NETWORK, "Session state server: sending to guest failed");
+		}
+		else
+			WARN_LOG(NETWORK, "Session state server: bad request (protocol %d)", protocol);
+		closesocket(conn);
+	}
+	closesocket(listener);
+}
+
+static void stopSessionStateServer()
+{
+	sessionStateServeStop = true;
+	if (sessionStateThread.joinable())
+		sessionStateThread.join();
+}
+
+static void startSessionStateServer(int statePort)
+{
+	stopSessionStateServer();
+	sessionStateServeStop = false;
+	sessionStateThread = std::thread(serveSessionState, statePort);
+}
+
+static std::vector<sessionstate::Item> fetchSessionState(const std::string& hostIp, int statePort)
+{
+	NOTICE_LOG(NETWORK, "Fetching host session state from %s:%d", hostIp.c_str(), statePort);
+	const char* stage = "connect";
+	const auto deadline = steady_clock::now() + std::chrono::seconds(60);
+	while (steady_clock::now() < deadline)
+	{
+		stage = "connect";
+		sock_t sock = sessionstate::connectWithTimeout(hostIp, statePort, 1000);
+		if (VALID(sock))
+		{
+			set_recv_timeout(sock, 10000);
+			set_send_timeout(sock, 10000);
+			std::vector<sessionstate::Item> items;
+			stage = "send-request";
+			bool ok = sessionstate::sendRequest(sock, 3);
+			if (ok)
+			{
+				stage = "receive-items";
+				ok = sessionstate::receiveItems(sock, items);
+			}
+			closesocket(sock);
+			if (ok)
+			{
+				NOTICE_LOG(NETWORK, "Received host session state (%d items)", (int)items.size());
+				return items;
+			}
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+	}
+	WARN_LOG(NETWORK, "Fetching host session state failed at stage %s", stage);
+	throw FlycastException("Could not receive the host's memory card and console settings. Make sure the host uses the same HollyCast version and is reachable.");
+}
+
+static maple_sega_vmu* getSessionVmu(int bus, int port)
+{
+	if (bus >= MAPLE_PORTS || port >= 6 || MapleDevices[bus][port] == nullptr)
+		return nullptr;
+	return dynamic_cast<maple_sega_vmu*>(MapleDevices[bus][port].get());
+}
+
+static void applySessionState(const std::vector<sessionstate::Item>& items)
+{
+	// Validate everything first so a bad bundle changes nothing.
+	const sessionstate::Item* flashItem = nullptr;
+	for (const sessionstate::Item& item : items)
+	{
+		if (item.kind == sessionstate::KIND_FLASH)
+		{
+			if (item.data.size() != settings.platform.flash_size)
+				throw FlycastException("The host's console settings have an unexpected size");
+			flashItem = &item;
+		}
+		else if (item.kind == sessionstate::KIND_VMU)
+		{
+			maple_sega_vmu* vmu = getSessionVmu(item.bus, item.port);
+			if (vmu == nullptr)
+				throw FlycastException("The host uses a memory card in a slot that is empty on this device. Match the host's controller setup and try again.");
+			if (item.data.size() != sizeof(vmu->flash_data))
+				throw FlycastException("The host's memory card has an unexpected size");
+		}
+	}
+	if (flashItem == nullptr)
+		throw FlycastException("The host did not send its console settings");
+
+	u8* flash = nvmem::getFlashData();
+	guestFlashBackup.assign(flash, flash + settings.platform.flash_size);
+	std::memcpy(flash, flashItem->data.data(), flashItem->data.size());
+	nvmem::refreshFlashDigest();
+
+	for (const sessionstate::Item& item : items)
+	{
+		if (item.kind != sessionstate::KIND_VMU)
+			continue;
+		maple_sega_vmu* vmu = getSessionVmu(item.bus, item.port);
+		guestAdoptedVmus.emplace_back(item.bus, item.port);
+		guestVmuBackups.emplace_back(vmu->flash_data, vmu->flash_data + sizeof(vmu->flash_data));
+		std::memcpy(vmu->flash_data, item.data.data(), item.data.size());
+		vmu->detachSaveFile();
+	}
+	mcfg_UpdateVmuDigest();
+	sessionStateAdopted = true;
+	NOTICE_LOG(NETWORK, "Adopted the host's memory card and console settings for this session");
+}
+
+static void restoreSessionState()
+{
+	sessionStateAdopted = false;
+	if (!guestFlashBackup.empty())
+	{
+		std::memcpy(nvmem::getFlashData(), guestFlashBackup.data(), guestFlashBackup.size());
+		guestFlashBackup.clear();
+	}
+	for (size_t i = 0; i < guestAdoptedVmus.size(); i++)
+	{
+		if (maple_sega_vmu* vmu = getSessionVmu(guestAdoptedVmus[i].first, guestAdoptedVmus[i].second))
+		{
+			std::memcpy(vmu->flash_data, guestVmuBackups[i].data(), guestVmuBackups[i].size());
+			vmu->restoreSaveFile();
+		}
+	}
+	guestAdoptedVmus.clear();
+	guestVmuBackups.clear();
+}
+
+static void syncSessionState(int localPort, int playerNum, const std::string& peerIp, u32 peerPort)
+{
+	if (playerNum == 0)
+	{
+		// Host: serve for the whole session so session start is never
+		// blocked and the guest can join (or retry) at any time.
+		startSessionStateServer(localPort + 1);
+	}
+	else
+	{
+		applySessionState(fetchSessionState(peerIp, (int)peerPort + 1));
+	}
+}
+
 void startSession(int localPort, int localPlayerNum)
 {
+	resetChecksumState();
+	lastSavedFrame = -1;
 	GGPOSessionCallbacks cb{};
 	cb.begin_game      = begin_game;
 	cb.advance_frame   = advance_frame;
@@ -547,10 +861,40 @@ void startSession(int localPort, int localPlayerNum)
 		}
 		NOTICE_LOG(NETWORK, "GGPO: Using %d full analog axes", analogAxes);
 	}
+	// The wire format carries at most two analog axes (see Inputs).
+	if (analogAxes < 0 || analogAxes > 2)
+		throw FlycastException("GGPO analog axes must be between 0 and 2");
 	inputSize = sizeof(kcode[0]) + analogAxes + (int)absPointerPos * sizeof(Inputs::u.absPos)
 		+ (int)keyboardGame * sizeof(Inputs::u.keys) + (int)mouseGame * sizeof(Inputs::u.relPos);
 
+
+	size_t colon = config::NetworkServer.get().find(':');
+	std::string peerIp = config::NetworkServer.get().substr(0, colon);
+	if (peerIp.empty())
+		peerIp = "127.0.0.1";
+	u32 peerPort;
+	if (colon == std::string::npos)
+	{
+		if (peerIp == "127.0.0.1")
+			peerPort = localPort ^ 1;
+		else
+			peerPort = SERVER_PORT;
+	}
+	else
+	{
+		peerPort = atoi(config::NetworkServer.get().substr(colon + 1).c_str());
+	}
+
+	// The guest adopts the host's memory card and console flash before
+	// verification, so both sides start from the same saved state.
+	if (settings.platform.isConsole())
+		syncSessionState(localPort, localPlayerNum, peerIp, peerPort);
+
 	VerificationData verif;
+	verif.inputSize = static_cast<u16>(inputSize);
+	verif.analogAxes = static_cast<u8>(analogAxes);
+	verif.inputFlags = static_cast<u8>((absPointerPos ? 1 : 0) | (keyboardGame ? 2 : 0) | (mouseGame ? 4 : 0));
+	mcfg_GetDeviceTypes(verif.mapleDevices);
 	MD5Sum().add(settings.network.md5.bios)
 			.add(settings.network.md5.game)
 			.getDigest(verif.gameMD5);
@@ -592,22 +936,6 @@ void startSession(int localPort, int localPlayerNum)
 	}
 	ggpo_set_frame_delay(ggpoSession, localPlayer, config::GGPODelay.get());
 
-	size_t colon = config::NetworkServer.get().find(':');
-	std::string peerIp = config::NetworkServer.get().substr(0, colon);
-	if (peerIp.empty())
-		peerIp = "127.0.0.1";
-	u32 peerPort;
-	if (colon == std::string::npos)
-	{
-		if (peerIp == "127.0.0.1")
-			peerPort = localPort ^ 1;
-		else
-			peerPort = SERVER_PORT;
-	}
-	else
-	{
-		peerPort = atoi(config::NetworkServer.get().substr(colon + 1).c_str());
-	}
 	player.type = GGPO_PLAYERTYPE_REMOTE;
 	// GGPO expects a numeric IPv4 address, so resolve configured host names first.
 	in_addr peerAddr;
@@ -644,7 +972,12 @@ void startSession(int localPort, int localPlayerNum)
 
 void stopSession()
 {
+	stopSessionStateServer();
 	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
+	resetChecksumState();
+	lastSavedFrame = -1;
+	if (sessionStateAdopted)
+		restoreSessionState();
 	if (ggpoSession == nullptr)
 		return;
 	ggpo_close_session(ggpoSession);
@@ -741,6 +1074,25 @@ bool nextFrame()
 			throw FlycastException("GGPO analog settings are different from peer");
 		else
 			throw FlycastException("GGPO error");
+	}
+
+	// Exchange a checksum for a safely confirmed frame every second or
+	// so. Lockstep only links inputs, so without this a split between
+	// the two emulated consoles stays invisible until gameplay breaks.
+	if (lastSavedFrame > 90)
+	{
+		const int frame = (lastSavedFrame - 90) / 60 * 60;
+		auto local = localChecksums.find(frame);
+		if (frame > lastChecksumFrameSent && local != localChecksums.end())
+		{
+			GameEvent event;
+			event.type = GameEvent::StateSync;
+			event.u.sync.frame = frame;
+			event.u.sync.checksum = local->second.full;
+			event.u.sync.ramChecksum = local->second.ram;
+			ggpo_send_message(ggpoSession, &event, sizeof(event.type) + sizeof(event.u.sync), true);
+			lastChecksumFrameSent = frame;
+		}
 	}
 
 	// may call save_game_state
@@ -858,7 +1210,10 @@ std::future<bool> startNetwork()
 					break;
 				GGPOErrorCode result = ggpo_idle(ggpoSession, 0);
 				if (result == GGPO_ERRORCODE_VERIFICATION_ERROR)
-					throw FlycastException("Peer verification failed");
+				{
+					WARN_LOG(NETWORK, "Peer verification failed. Local profile: input %d bytes, %d analog axes, pointer %d keyboard %d mouse %d", inputSize, analogAxes, (int)absPointerPos, (int)keyboardGame, (int)mouseGame);
+					throw FlycastException("Peer verification failed: incompatible game, saved state, controller or input settings");
+				}
 				else if (result != GGPO_OK)
 				{
 					WARN_LOG(NETWORK, "ggpo_idle failed %d", result);

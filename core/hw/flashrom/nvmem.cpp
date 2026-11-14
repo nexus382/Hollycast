@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 /*
 	Copyright 2023 flyinghead
 
@@ -347,6 +348,12 @@ void writeFlash(u32 addr, u32 data, u32 sz)
 u8 *getFlashData()
 {
 	return sys_nvmem->data;
+}
+
+void refreshFlashDigest()
+{
+	if (sys_nvmem != nullptr)
+		sys_nvmem->digest(settings.network.md5.nvmem);
 }
 
 u32 readBios(u32 addr, u32 sz)
