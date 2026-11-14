@@ -413,6 +413,12 @@ void maple_sega_vmu::deserialize(Deserializer& deser)
 
 bool maple_sega_vmu::fullSave()
 {
+	if (fileDetached)
+	{
+		// Session-adopted image: writes stay in memory, never in the file
+		fullSaveNeeded = false;
+		return true;
+	}
 	if (file == nullptr)
 		return false;
 	if (std::fseek(file, 0, SEEK_SET) != 0) {
@@ -425,6 +431,27 @@ bool maple_sega_vmu::fullSave()
 	}
 	fullSaveNeeded = false;
 	return true;
+}
+
+void maple_sega_vmu::detachSaveFile()
+{
+	if (file != nullptr)
+	{
+		std::fclose(file);
+		file = nullptr;
+	}
+	fileDetached = true;
+}
+
+void maple_sega_vmu::restoreSaveFile()
+{
+	fileDetached = false;
+	if (file != nullptr)
+		return;
+	std::string path = hostfs::getVmuPath(logical_port, true);
+	file = nowide::fopen(path.c_str(), "rb+");
+	if (file == nullptr)
+		file = nowide::fopen(path.c_str(), "wb+");
 }
 
 void maple_sega_vmu::initializeVmu()

@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 /*
 	Copyright 2023 flyinghead
 
@@ -38,6 +39,8 @@ void writeAWBios(u32 addr, u32 data, u32 sz);
 u8 *getBiosData();
 
 bool loadFiles();
+//! Recompute the GGPO flash digest after the flash contents were replaced in memory
+void refreshFlashDigest();
 void saveFiles();
 bool loadHle();
 
