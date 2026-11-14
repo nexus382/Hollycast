@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 
@@ -6,6 +7,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <functional>
 
 // The phone is a browser client; hosting is available in standalone desktop builds.
 #if !defined(LIBRETRO) && !defined(TARGET_UWP) && !defined(__ANDROID__) \
@@ -33,8 +35,13 @@ Status status();
 // Called by the emulation thread even while sharing is off, so pairing mid-game
 // immediately displays the latest LCD. Never performs network or UI work.
 void publishScreen(int index, const std::uint32_t *pixels, bool active);
-// Independent copies for browser mini-games; callers retain ownership.
-void publishCard(int index, const std::uint8_t *data, std::size_t size);
+// The emulation thread owns live cards. Network handlers only queue complete copies.
+void publishCard(int index, const std::uint8_t *data, std::size_t size, bool writable = true);
 void updateCard(int index, std::size_t offset, const std::uint8_t *data, std::size_t size);
+void unpublishCard(int index, const std::uint8_t *data);
+// Returns true while the phone has removed this card from the virtual controller.
+// Persist must back up the original on the first write and report flushed disk writes.
+bool syncCard(int index, std::uint8_t *data, std::size_t size, bool writable,
+		const std::function<bool(const std::uint8_t *, std::size_t, bool)>& persist);
 #endif
 }

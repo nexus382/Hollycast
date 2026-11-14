@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -37,7 +38,7 @@ function page({native=true,blockVideo=false}={}){
  }
  const context=vm.createContext({document,window,navigator,PhoneVmuPlayer:Player,VMS:{},Uint8Array,AbortController,
   requestAnimationFrame(){},setTimeout(){},clearTimeout(){},fetch:()=>new Promise(()=>{})});
- vm.runInContext(media,context);vm.runInContext(script,context);
+ vm.runInContext(media,context);vm.runInContext(readAsset('../../core/network/phone_vmu_sync.h','VMUSYNC'),context);vm.runInContext(script,context);
  return {elements,hardware,document,window,requests,videos,allowVideo(){blockVideo=false;},
   tap(){document.callbacks.pointerdown();},
   visible(visible){document.hidden=!visible;document.callbacks.visibilitychange();},
