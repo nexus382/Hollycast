@@ -1,12 +1,18 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "network/phone_vmu.h"
+#include "oslib/http_server.h"
 #include <asio.hpp>
 #include <array>
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
 #include <thread>
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
 
 namespace
 {
@@ -29,13 +35,14 @@ Address parse(const std::string& url)
 	return { static_cast<unsigned short>(std::stoi(url.substr(colon + 1, slash - colon - 1))), url.substr(slash) };
 }
 
-std::string request(Address address, const std::string& path, const std::string& method = "GET")
+std::string request(Address address, const std::string& path, const std::string& method = "GET",
+		const std::string& data = "x", const std::string& headers = "", std::size_t declaredLength = std::string::npos)
 {
 	asio::io_context io;
 	asio::ip::tcp::socket socket(io);
 	socket.connect({asio::ip::address_v4::loopback(), address.port});
 	const auto text = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
-		+ (method == "POST" ? "Content-Length: 1\r\n\r\nx" : "\r\n");
+		+ headers + (method == "POST" ? "Content-Length: " + std::to_string(declaredLength == std::string::npos ? data.size() : declaredLength) + "\r\n\r\n" + data : "\r\n");
 	asio::write(socket, asio::buffer(text));
 	std::string response;
 	std::array<char, 4096> buffer;
@@ -44,9 +51,16 @@ std::string request(Address address, const std::string& path, const std::string&
 	{
 		const auto count = socket.read_some(asio::buffer(buffer), ec);
 		response.append(buffer.data(), count);
+		// Read a complete HTTP response without waiting for EOF. Rejecting a
+		// declared oversized body may reset a socket with unread request bytes.
+		const auto split = response.find("\r\n\r\n");
+		const auto length = response.find("\r\nContent-Length: ");
+		if (split != std::string::npos && length != std::string::npos
+				&& response.size() >= split + 4 + std::stoul(response.substr(length + 18)))
+			return response;
 		if (ec)
 		{
-			check(ec == asio::error::eof, "HTTP read failed");
+			check(ec == asio::error::eof, ("HTTP read failed for " + path + ": " + ec.message()).c_str());
 			return response;
 		}
 	}
@@ -58,13 +72,28 @@ std::string body(const std::string& response)
 	check(split != std::string::npos, "Missing HTTP headers");
 	return response.substr(split + 4);
 }
+
+std::string header(const std::string& response, const std::string& name)
+{
+	const auto start = response.find("\r\n" + name + ": ");
+	check(start != std::string::npos, "Missing response header");
+	const auto value = start + name.size() + 4;
+	return response.substr(value, response.find("\r\n", value) - value);
 }
+}
+
+#include "maple_sync.inc"
 
 int main(int argc, char **argv)
 {
 	try
 	{
 		check(!phone_vmu::status().running, "Sharing must start disabled");
+		RequestParser defaultParser;
+		Request parserRequest;
+		const std::string largeHeader = "POST / HTTP/1.1\r\nContent-Length: 5000\r\n\r\n";
+		check(std::get<0>(defaultParser.parse(parserRequest, largeHeader.begin(), largeHeader.end())) == RequestParser::bad,
+			"Phone VMU body limits must not increase the shared HTTP parser's default limit");
 		std::array<std::uint32_t, 48 * 32> pixels {};
 		pixels[0] = pixels[7] = pixels[8] = pixels.back() = 0xff000000;
 		phone_vmu::publishScreen(0, pixels.data(), true);
@@ -75,6 +104,25 @@ int main(int argc, char **argv)
 		auto status = phone_vmu::status();
 		check(status.error.empty(), status.error.c_str());
 		check(status.running && !status.urls.empty() && !status.connected, "Server did not start ready for pairing");
+		// The first pairing link must follow the active route, rather than a
+		// numerically earlier virtual interface such as Windows' WSL adapter.
+		asio::io_context routeIo;
+		asio::ip::udp::socket routeSocket(routeIo);
+		asio::error_code routeError;
+		routeSocket.open(asio::ip::udp::v4(), routeError);
+		if (!routeError)
+			routeSocket.connect({ asio::ip::make_address_v4("1.1.1.1"), 9 }, routeError);
+		if (!routeError)
+		{
+			const auto endpoint = routeSocket.local_endpoint(routeError);
+			if (!routeError)
+			{
+				const auto prefix = "http://" + endpoint.address().to_string() + ":";
+				const bool published = std::any_of(status.urls.begin(), status.urls.end(), [&](const auto& url) { return url.find(prefix) == 0; });
+				if (published)
+					check(status.urls.front().find(prefix) == 0, "Pairing selected a virtual interface ahead of the active network");
+			}
+		}
 		const Address address = parse(status.urls.front());
 		if (argc >= 2 && std::string(argv[1]) == "--preview")
 		{
@@ -141,6 +189,7 @@ int main(int argc, char **argv)
 		}
 		check(request(address, address.path, "POST").find("HTTP/1.1 405") == 0, "Write request was accepted");
 		check(request(address, address.path + "%2e%2e/").find("HTTP/1.1 400") == 0, "Traversal was accepted");
+		testMapleSync(address);
 
 		// Slow clients and ongoing producers must not prevent immediate shutdown.
 		asio::io_context io;

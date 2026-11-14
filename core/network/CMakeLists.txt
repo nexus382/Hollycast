@@ -18,6 +18,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         phone_vmu.h
         phone_vmu_page.h
         phone_vmu_player.h
+        phone_vmu_sync.h
         ../deps/vmu-softvms/core.h
         output.cpp
         output.h

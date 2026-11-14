@@ -6543,7 +6543,7 @@ static void renderPhoneVmuSettings()
 				phone_vmu::start();
 			else
 				phone_vmu::stop();
-		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a mini-game from a copy of the selected VMU card. Turn this off to stop sharing."));
+		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a VMU mini-game with automatic progress sync. The card is unplugged while the phone uses it; choose Return to Dreamcast to reconnect it. Turn this off to stop sharing."));
 
 	const auto connection = phone_vmu::status();
 	if (!connection.error.empty())

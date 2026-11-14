@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -9,6 +10,7 @@ const assets=[
  ['../../core/deps/vmu-softvms/core.h','VMUJS'],
  ['../../core/deps/vmu-softvms/core.h','VMULICENSE'],
  ['../../core/network/phone_vmu_player.h','VMUPLAYER'],
+ ['../../core/network/phone_vmu_sync.h','VMUSYNC'],
  ['../../core/deps/nosleep/media.h','WAKEJS'],
 ];
 export function assetChunks(file,tag){

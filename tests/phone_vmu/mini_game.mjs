@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
@@ -42,6 +43,30 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   assert.throws(()=>player.load(game,'game.vms',new Uint8Array(100)),/64 KiB/);
   player.stop(); assert.equal(player.active,false);
   assert.ok(frames.length>0);
+  // Count guest time without depending on a game's animation or frame rate.
+  let slicesRun=0;
+  const clockCore={hooks:{},lcd:new Uint8Array(48*40),key(){},run(slices){slicesRun+=slices;}};
+  const clockPlayer=new Player(clockCore,()=>{},()=>{},()=>{});
+  clockPlayer.active=true;
+  assert.equal(clockPlayer.speed,1,'Mini-games default to normal speed');
+  for(let speed=1;speed<=10;++speed){
+    clockPlayer.setSpeed(speed);slicesRun=0;
+    for(const time of [1000,1016,1033,1050,1066,1083,1100])clockPlayer.tick(time);
+    assert.equal(slicesRun,10*speed,`${speed}x must advance the requested amount of guest time`);
+  }
+  for(const speed of [0.25,0.5]){
+    clockPlayer.setSpeed(speed);slicesRun=0;
+    for(let time=1000;time<=1400;time+=10)clockPlayer.tick(time);
+    assert.equal(slicesRun,40*speed,`${speed}x must preserve fractional guest time across frames`);
+  }
+  clockPlayer.setSpeed(10);
+  clockPlayer.tick(2000,true);slicesRun=0;
+  clockPlayer.tick(3000);clockPlayer.tick(3010);
+  assert.equal(slicesRun,10,'Resuming a hidden page must not catch up hidden time');
+  clockPlayer.setSpeed(1);slicesRun=0;
+  clockPlayer.tick(4000);clockPlayer.tick(4010);
+  assert.equal(slicesRun,1,'Returning to normal speed must discard accelerated timing');
+  for(const speed of [0,0.1,0.75,11,1.5,NaN,Infinity])assert.throws(()=>clockPlayer.setSpeed(speed),/Choose 0.25, 0.5/);
   // Optional local acceptance fixture, downloaded separately from its author.
   if(process.argv[2]) {
     const tetris=new Uint8Array(readFileSync(process.argv[2]));

@@ -407,7 +407,7 @@ void maple_sega_vmu::deserialize(Deserializer& deser)
 		}
 	fullSaveNeeded = true;
 #ifdef HAVE_PHONE_VMU
-	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data));
+	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data), file != nullptr && !settings.network.online);
 #endif
 }
 
@@ -485,15 +485,64 @@ void maple_sega_vmu::OnSetup()
 		initializeVmu();
 	fullSaveNeeded = false;
 #ifdef HAVE_PHONE_VMU
-	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data));
+	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data), file != nullptr && !settings.network.online);
 #endif
 }
 
 maple_sega_vmu::~maple_sega_vmu()
 {
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::unpublishCard(bus_id * 2 + bus_port, flash_data);
+#endif
 	if (file != nullptr)
 		std::fclose(file);
 	memset(lcd_data, 0, sizeof(lcd_data));
+}
+
+bool maple_sega_vmu::linkStatus()
+{
+#ifdef HAVE_PHONE_VMU
+	// linkStatus runs on the emulation thread, including for detached expansion
+	// devices. Never let the HTTP thread touch live flash or its FILE handle.
+	if (phone_vmu::syncCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data),
+			file != nullptr && !settings.network.online,
+			[this](const std::uint8_t *data, std::size_t size, bool backupNeeded) {
+		if (backupNeeded)
+		{
+			const std::string backupPath = hostfs::getVmuPath(logical_port, true) + ".phone-backup";
+			FILE *backup = nowide::fopen(backupPath.c_str(), "wb");
+			if (backup == nullptr)
+				return false;
+			const bool written = std::fwrite(flash_data, sizeof(flash_data), 1, backup) == 1;
+			const bool closed = std::fclose(backup) == 0;
+			if (!written || !closed)
+				return false;
+		}
+		if (std::fseek(file, 0, SEEK_SET) != 0 || std::fwrite(data, size, 1, file) != 1 || std::fflush(file) != 0)
+		{
+			// Keep the live card unchanged and restore its disk image on a failed
+			// checkpoint. The separate backup survives even if restoration fails.
+			std::clearerr(file);
+			fullSaveNeeded = true;
+			fullSave();
+			std::fflush(file);
+			ERROR_LOG(MAPLE, "Failed to sync phone VMU %s to disk", logical_port);
+			return false;
+		}
+		fullSaveNeeded = false;
+		memset(accessed_blocks, 0, sizeof(accessed_blocks));
+		accessed_blocks_valid = true;
+		last_write_tick = sh4_sched_now64();
+		return true;
+	}))
+	{
+		// Preserve a visible unplug/replug even if checkout and return arrive
+		// between two guest polls, so games discard their cached VMU contents.
+		reconnect_requested = true;
+		return false;
+	}
+#endif
+	return maple_base::linkStatus();
 }
 
 u32 maple_sega_vmu::dma(u32 cmd)

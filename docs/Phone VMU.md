@@ -1,4 +1,5 @@
 <!-- Copyright 2026 The Hollycast Authors -->
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Use your phone as a VMU
 
 Standalone Hollycast on Windows, macOS and Linux can show the Dreamcast VMU LCD
@@ -38,8 +39,10 @@ adjust the phone's Auto-Lock/display-timeout setting while playing.
 
 Wait until the Dreamcast has finished saving, then press **Mode** or choose
 **Play mini-game on this card**. Hollycast sends a snapshot of that slot's VMU
-card to the phone. The mini-game runs in the browser on its own VMU processor.
-The phone must remain awake with the browser visible.
+card to the phone and temporarily unplugs that card from the virtual controller.
+The mini-game runs in the browser on its own VMU processor. Progress saved by the
+mini-game syncs back to Hollycast automatically while connected. The phone must
+remain awake with the browser visible.
 
 Alternatively, use **Open VMU game** to open a `.vms` mini-game, or a raw 128 KiB
 `.bin`/`.vmu` card containing one, from your phone. The chosen file stays on the
@@ -52,15 +55,32 @@ VMU game. Nexus `.dci`/`.dcm` files must be converted to a supported format firs
   exit when pressed. Use **Restart mini-game** to play again.
 - **Sleep** pauses the mini-game and blanks the LCD; press it again to resume.
 - **Sound on** enables the VMU buzzer in browsers supporting Web Audio.
-- **Dreamcast display** returns to the live LCD stream. You can then change slots.
+- **Return to Dreamcast** saves the latest progress, reconnects the VMU card and
+  returns to the live LCD stream. You can then bring the character back using the
+  Dreamcast game's normal VMU transfer option. No files need to be moved. This
+  does not bypass the game's own transfer steps or guarantee minigame compatibility.
 - Keyboard controls: arrows for the D-pad, A/Z for A, B/X for B, M/Enter for Mode,
   and S/Space for Sleep. Focused VMU buttons also work with Enter or Space.
 
-The browser uses a copy. **Download VMU copy** exports a 128 KiB card image with
-any changes the mini-game made. Download it before closing or reloading the tab
-to keep progress. Changes are not automatically sent back to Hollycast or merged
-into the active memory card. To use an exported card in Hollycast, transfer it to
-the computer and select it through Hollycast's memory-card settings.
+The sync status confirms when progress has reached Hollycast's memory-card file.
+If the Dreamcast is paused, resume it so queued updates can finish. Connection
+failures retry automatically. The current phone copy and unfinished sync are kept
+in browser session storage when available, allowing the same tab to recover after
+a reload. Keep the tab open until **Return to Dreamcast** confirms the save.
+
+Only one phone can use a card at a time, and the Dreamcast cannot access that card
+while it is on the phone. Before the first update of each phone session, Hollycast
+saves the original card beside its VMU file with a `.phone-backup` suffix. Loading
+a save state, replacing the card, entering netplay or stopping sharing invalidates
+the phone's ownership. Sync then stops instead of overwriting desktop changes.
+Read-only cards and netplay do not support automatic sync.
+
+Games opened through **Open VMU game** stay local and are never uploaded.
+**Download VMU copy** remains available to export a 128 KiB card image for local
+games or as a fallback after a sync conflict. Browser storage may be cleared by
+the phone or unavailable in private browsing; download the copy if syncing cannot
+finish. To use an exported card in Hollycast, transfer it to the computer and
+select it through Hollycast's memory-card settings.
 
 The core is a JavaScript port of SoftVMS 1.10. It is not cycle exact, so game
 compatibility varies. Firmware calls used by many mini-games work without a
@@ -74,11 +94,18 @@ are available through **Credits and license** on the phone.
 Turn off **Connect Phone** or exit Hollycast to end live network access. Sharing
 starts disabled each time Hollycast launches. Enabling it again creates a new
 address and pairing code; rescan instead of reusing the old address. A mini-game
-already loaded on the phone can continue locally after sharing stops.
+already loaded on the phone can continue locally after sharing stops. Return the
+card before stopping sharing to keep the latest progress in Hollycast. Unsynced
+phone progress is retained locally when browser session storage is available.
+
+Reload recovery applies to the same pairing page. A new pairing code starts a
+separate session; return the VMU before restarting Hollycast, or download its
+copy from the old phone tab first.
 
 Anyone with the pairing address on a reachable network can view the LCD and
-obtain copies of published VMU cards until sharing stops. The server is read-only:
-phone input and modified cards are never sent back to the computer. It uses local
+obtain copies of published VMU cards until sharing stops. Opening a card's minigame
+also permits that phone to sync progress to the card while it owns it. Phone
+buttons do not control the Dreamcast game. The service uses local
 HTTP on an automatically selected TCP port; do not forward that port to the internet.
 
 ## Connection problems
@@ -91,6 +118,9 @@ HTTP on an automatically selected TCP port; do not forward that port to the inte
 - Background tabs stop LCD requests and pause mini-game execution. Lost touches
   or keyboard focus release held buttons. A lost LCD connection retries automatically.
 - After changing networks, turn sharing off and back on to refresh the addresses.
+- If a VMU is already in use, return it from the phone holding it. If that tab
+  was lost, turn **Connect Phone** off and on, then scan the new QR code. This
+  reconnects the last saved card without taking over another phone's unsaved copy.
 
 Hosting is not offered by the libretro core, mobile, Switch or UWP builds. Phones
 with a browser can still connect to supported desktop hosts.
