@@ -10,6 +10,7 @@
 #include "ui/settings.h"
 #include <stb_image.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -174,6 +175,21 @@ TEST_F(ThemeInstallTest, MissingAndInvalidSelectionsFallBackAndUnknownLayoutUses
 	EXPECT_NE(themes::error().find("unavailable"), std::string::npos);
 }
 
+TEST_F(ThemeInstallTest, DcnetPagesCannotReplaceTheSelectedLibraryLayout)
+{
+	const std::string manifest = R"({"formatVersion":1,"id":"install-test","name":"Pages","layouts":[
+		{"id":"network","name":"DCnet","screen":"dcnet","mode":"grid","browser":[0,0,1,1]},
+		{"id":"grid","name":"Library","mode":"grid","browser":[0,0,1,1]}]})";
+	EXPECT_EQ(themes::install(makePackage("install-test", manifest).u8string()), "install-test");
+	config::CustomTheme = "install-test";
+	for (const char* selected : {"", "network", "grid"})
+	{
+		config::ThemeLayout = selected;
+		ASSERT_NE(themes::currentLayout(), nullptr);
+		EXPECT_EQ(themes::currentLayout()->id, "grid");
+	}
+}
+
 TEST_F(ThemeInstallTest, FolderManifestIdMismatchAppearsAsCatalogError)
 {
 	writeFile(fs::path(themes::directory()) / "folder-name" / "theme.json", kManifest);
@@ -287,6 +303,55 @@ TEST_F(ThemeInstallTest, MissingExternalPackageRestoresTheSelectedAppCustomTheme
 	EXPECT_FLOAT_EQ(ImGui::GetStyle().FrameRounding, appFrameRounding);
 }
 
+#ifdef FLYCAST_TEST_FILES
+TEST_F(ThemeInstallTest, InstallsPublishedBlueHourManifestAndKeepsLibraryLayoutSelection)
+{
+	const fs::path fixturePath = fs::path(FLYCAST_TEST_FILES) / "community-theme-catalog/themes/blue-hour/theme.json";
+	std::ifstream input(fixturePath, std::ios::binary);
+	ASSERT_TRUE(input) << fixturePath;
+	const std::string manifest((std::istreambuf_iterator<char>(input)), {});
+	const fs::path source = makePackage("blue-hour", manifest);
+
+	std::size_t assetCount = 0;
+	std::size_t position = 0;
+	while ((position = manifest.find("\"assets/", position)) != std::string::npos)
+	{
+		const std::size_t end = manifest.find('"', position + 1);
+		ASSERT_NE(end, std::string::npos);
+		const std::string asset = manifest.substr(position + 1, end - position - 1);
+		writeFile(source / fs::u8path(asset), "fixture-image");
+		++assetCount;
+		position = end + 1;
+	}
+	ASSERT_GT(assetCount, 0u);
+
+	EXPECT_EQ(themes::install(source.u8string()), "blue-hour");
+	themes::reload();
+	const auto* installed = findEntry("blue-hour");
+	ASSERT_NE(installed, nullptr);
+	EXPECT_TRUE(installed->error.empty()) << installed->error;
+	config::CustomTheme = "blue-hour";
+	const themes::Theme* theme = themes::current();
+	ASSERT_NE(theme, nullptr);
+	ASSERT_EQ(theme->layouts.size(), 4u);
+	EXPECT_EQ(std::count_if(theme->layouts.begin(), theme->layouts.end(), [](const auto& layout) {
+		return layout.screen == "dcnet";
+	}), 2);
+
+	config::ThemeLayout = "cinema";
+	ASSERT_NE(themes::currentLayout(), nullptr);
+	EXPECT_EQ(themes::currentLayout()->id, "cinema");
+	for (const char* page : {"dcnet", "dcnet-portrait"})
+	{
+		config::ThemeLayout = page;
+		ASSERT_NE(themes::currentLayout(), nullptr);
+		EXPECT_EQ(themes::currentLayout()->id, "cinema");
+	}
+	config::ThemeLayout = "portrait";
+	ASSERT_NE(themes::currentLayout(), nullptr);
+	EXPECT_EQ(themes::currentLayout()->id, "portrait");
+}
+#endif
 #ifdef FLYCAST_TEST_FILES
 TEST_F(ThemeInstallTest, PreviewThemesValidateAssetsNoticesLimitsAndEveryInstalledLayout)
 {

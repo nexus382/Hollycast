@@ -51,6 +51,12 @@ public:
 		return textureId;
 	}
 
+	void deleteTextureAndAspectRatio(const std::string& name)
+	{
+		aspectRatios.erase(getTexture(name));
+		deleteTexture(name);
+	}
+
 	float getAspectRatio(ImTextureID textureId)
 	{
 		auto it = aspectRatios.find(textureId);

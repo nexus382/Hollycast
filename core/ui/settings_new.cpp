@@ -23,6 +23,7 @@
 #endif
 #include "custom_theme.h"
 #include "theme.h"
+#include "theme_browser.h"
 #include "gui_util.h"
 #include "imgui.h"
 #include "imgui_stdlib.h"
@@ -3761,6 +3762,25 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryThemeCfg,
 			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
 		gui_display_library_download_progress();
+		ImGui::PushID("ThemeDownloadRow");
+		const bool downloadThemes = BeginTwoLineSettingRow("##row",
+			T("Download Themes\nBrowse theme previews and descriptions, then download and install one for your library."));
+		const ImVec2 downloadThemesLine1Start = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_DOWNLOAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Download Themes"));
+		ImGui::PopFont();
+		ImGui::PushFont(settingsRightValueFont != nullptr ? settingsRightValueFont : largeFont);
+		ImGui::SameLine(RightColumnX(ImGui::CalcTextSize(T("Download")).x));
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f);
+		ImGui::TextUnformatted(T("Download"));
+		ImGui::PopFont();
+		RenderTwoLineSettingDescription(downloadThemesLine1Start, T("Browse and install library themes from the online catalogue."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
+		if (downloadThemes) themes::openBrowser();
 
 		if (const themes::Theme* activeTheme = themes::current())
 		{
@@ -3774,14 +3794,17 @@ static void renderSettingsContentTab(SettingsTab tab)
 			if (!activeTheme->layouts.empty())
 			{
 				std::vector<std::string> layoutLabelStorage;
+				std::vector<std::string> selectableLayoutIds;
 				std::vector<const char*> layoutLabels;
 				int selectedLayoutIndex = 0;
 				for (size_t i = 0; i < activeTheme->layouts.size(); ++i)
 				{
 					const themes::Layout& layout = activeTheme->layouts[i];
-					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
+					if (layout.screen != "library") continue;
 					if (layout.id == config::ThemeLayout.get())
-						selectedLayoutIndex = static_cast<int>(i);
+						selectedLayoutIndex = static_cast<int>(selectableLayoutIds.size());
+					selectableLayoutIds.push_back(layout.id);
+					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
 				}
 				for (const std::string& label : layoutLabelStorage)
 					layoutLabels.push_back(label.c_str());
@@ -3795,9 +3818,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 				layoutCfg.options.currentValue = &selectedLayoutIndex;
 				layoutCfg.options.valueWidth = 220.0f;
 				layoutCfg.options.onChange = [&](int index) {
-					if (index >= 0 && index < static_cast<int>(activeTheme->layouts.size()))
+					if (index >= 0 && index < static_cast<int>(selectableLayoutIds.size()))
 					{
-						config::ThemeLayout.get() = activeTheme->layouts[index].id;
+						config::ThemeLayout.get() = selectableLayoutIds[index];
 						SaveSettings();
 					}
 					return true;
@@ -3858,7 +3881,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	}
 
-	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
+	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper"), T("LaunchBox")};
 		SettingsUI::PopupConfig providerCfg {};
@@ -4247,6 +4270,28 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"Selects the visual layout for the game library.\n"
 			"Classic keeps the existing gallery/list behavior.\n"
 			"List uses a compact row/table layout with title and metadata columns."));
+
+		SettingsUI::PopupConfig hoverDelayCfg {};
+		hoverDelayCfg.type = SettingsUI::PopupType::Slider;
+		hoverDelayCfg.slider.label = T("Game Info Hover Delay");
+		hoverDelayCfg.slider.icon = ICON_FA_CLOCK;
+		hoverDelayCfg.slider.popupID = "LibraryGameInfoHoverDelayPopup";
+		hoverDelayCfg.slider.description = T("Wait 1-10 seconds before showing game information when hovering over a game in Original or List views. The last position (11) turns hover panels off.");
+		hoverDelayCfg.slider.currentValue = &config::LibraryGameInfoHoverDelay.get();
+		hoverDelayCfg.slider.minValue = 1;
+		hoverDelayCfg.slider.maxValue = 11;
+		hoverDelayCfg.slider.defaultValue = 4;
+		hoverDelayCfg.slider.format = "%d s";
+		hoverDelayCfg.slider.valueWidth = 220.0f;
+		hoverDelayCfg.slider.sliderWidth = 320.0f;
+		hoverDelayCfg.slider.valueFormatter = [](int value) {
+			return value >= 11 ? std::string(T("Off")) : std::to_string(value) + " s";
+		};
+		hoverDelayCfg.slider.onValueChange = [] { config::LibraryGameInfoHoverDelay.save(); };
+		RenderGeneralPopupSettingRow(
+			"LibraryGameInfoHoverDelaySetting",
+			T("Set the game info hover delay, or turn hover panels off."),
+			hoverDelayCfg);
 
 		const char* vmuIconModes[] = { T("Static"), T("Active / Animated") };
 		SettingsUI::PopupConfig vmuIconModeCfg {};
@@ -9314,23 +9359,6 @@ void renderAdvancedTab()
 		ShowFooterHelpMarker(T("Specify lua filename to use. Should be located in Hollycast config folder. Defaults to flycast.lua when empty."));
 #endif
 
-#ifdef SENTRY_UPLOAD
-		// Crash Reporting - 2x Row Pattern
-		RenderGeneralToggleSettingRow(
-			"CrashReporting",
-			ICON_FA_STETHOSCOPE,
-			T("Crash Reports"),
-			T("Auto-upload crash reports"),
-			static_cast<bool>(config::UploadCrashLogs),
-			[](bool enabled) { config::UploadCrashLogs.set(enabled); },
-			T(
-				"Crash Reports\n"
-				"Automatically uploads crash reports to help developers diagnose and fix issues.\n\n"
-				"Crash reports typically include technical details about the crash and environment.\n"
-				"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-			));
-	#endif
-
 #if defined(GDB_SERVER)
 		// Virtual Memory Addresses (debug builds)
 		if (config::GDB)
@@ -9751,6 +9779,13 @@ void renderSettingsNew()
 		renderNavigationRail(exitSettings, backLabel);
 		ImGui::SameLine();
 		renderContentArea();
+		if (const auto chosen = themes::renderBrowser())
+		{
+			config::CustomTheme = *chosen;
+			config::ThemeLayout = "";
+			SaveSettings();
+			g_applyThemeAfterSettings = true;
+		}
 
 		if (pushedSettingsFont)
 			ImGui::PopFont();

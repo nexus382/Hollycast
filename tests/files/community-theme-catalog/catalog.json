@@ -1,0 +1,65 @@
+{
+  "formatVersion": 1,
+  "themes": [
+    {
+      "id": "blue-hour",
+      "name": "Blue Hour",
+      "creator": "The Hollycast Authors",
+      "description": "A cinematic navy-and-white library with full-screen game artwork, enlarged cover selection, Resume / Start Fresh, real save previews, and a matching DCnet page. Requires a build containing Hollycast PR #69 (aeddc1441); older stable and dev builds reject its manifest.",
+      "version": "1.0.0",
+      "package": "packages/blue-hour-1.0.0.zip",
+      "screenshots": [
+        "screenshots/blue-hour/library.jpg",
+        "screenshots/blue-hour/portrait.jpg",
+        "screenshots/blue-hour/continue-playing.jpg",
+        "screenshots/blue-hour/dcnet.jpg",
+        "screenshots/blue-hour/dcnet-portrait.jpg"
+      ]
+    },
+    {
+      "id": "christmas-morning",
+      "name": "Christmas Morning",
+      "creator": "Hollycast contributors",
+      "description": "A nostalgic Christmas room with ivory serif type, a cover list, cranberry and gold controls, and a CRT preview. Requires Hollycast with list badges and keyboard preview support; see README.",
+      "version": "1.0.0",
+      "package": "packages/christmas-morning-1.0.0.zip",
+      "screenshots": [
+        "screenshots/christmas-morning/library.png",
+        "screenshots/christmas-morning/portrait.png"
+      ]
+    },
+    {
+      "id": "harvest-afterglow",
+      "name": "Harvest Afterglow",
+      "creator": "The Hollycast Authors",
+      "description": "A candlelit Thanksgiving lodge with painted maple leaves, a harvest feast, cranberry and brass controls, storybook typography, a full-width cover gallery, a tall fireside list, fitted game descriptions, and a dedicated portrait layout.",
+      "version": "1.0.0",
+      "package": "packages/harvest-afterglow-1.0.0.zip",
+      "screenshots": [
+        "screenshots/harvest-afterglow/list.jpg"
+      ]
+    },
+    {
+      "id": "play-archive",
+      "name": "Play Archive",
+      "creator": "The Hollycast Authors",
+      "description": "An antique reading room with a live game index, parchment pages and scraped case artwork. Requires the new Play Archive-enabled Hollycast development build.",
+      "version": "1.0.0",
+      "package": "packages/play-archive-1.0.0.zip",
+      "screenshots": [
+        "screenshots/play-archive/library.jpg"
+      ]
+    },
+    {
+      "id": "signal-bloom",
+      "name": "Signal Bloom",
+      "creator": "The Hollycast Authors",
+      "description": "A midnight-neon cover carousel with selected-game backgrounds, cyan selection and coral PLAY controls. Requires the new carousel-enabled Hollycast development build.",
+      "version": "1.0.0",
+      "package": "packages/signal-bloom-1.0.0.zip",
+      "screenshots": [
+        "screenshots/signal-bloom/library.jpg"
+      ]
+    }
+  ]
+}

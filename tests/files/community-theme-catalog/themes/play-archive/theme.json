@@ -1,0 +1,386 @@
+{
+  "formatVersion": 1,
+  "id": "play-archive",
+  "name": "Play Archive",
+  "author": "The Hollycast Authors",
+  "description": "An antique reading room with a live game index, parchment pages and scraped case artwork. Requires the new Play Archive-enabled Hollycast development build.",
+  "baseTheme": 0,
+  "fonts": {
+    "body": "assets/Alegreya-Regular.ttf",
+    "bold": "assets/Alegreya-Bold.ttf"
+  },
+  "colors": {
+    "Text": "f3e4bd",
+    "TextDisabled": "b7a684",
+    "WindowBg": "26160e",
+    "ChildBg": "00000000",
+    "PopupBg": "312519",
+    "Border": "c7a665",
+    "FrameBg": "493b26",
+    "FrameBgHovered": "675237",
+    "FrameBgActive": "681e18",
+    "Button": "443b2700",
+    "ButtonHovered": "79502daa",
+    "ButtonActive": "681e18",
+    "Header": "681e18",
+    "HeaderHovered": "813427",
+    "HeaderActive": "681e18",
+    "Separator": "b49861",
+    "ScrollbarBg": "b4976030",
+    "ScrollbarGrab": "8d673c",
+    "ScrollbarGrabHovered": "a87b49",
+    "ScrollbarGrabActive": "681e18",
+    "CheckMark": "c7a665",
+    "NavCursor": "c7a665",
+    "TextSelectedBg": "a98a4c88"
+  },
+  "layouts": [
+    {
+      "id": "archive-reading-room",
+      "name": "Reading Room",
+      "mode": "list",
+      "browser": [
+        0.225,
+        0.225,
+        0.315,
+        0.72
+      ],
+      "navigation": [
+        0.039,
+        0.255,
+        0.16,
+        0.4
+      ],
+      "showArtwork": true,
+      "rowHeight": 0.085,
+      "fontSize": 0.029,
+      "list": {
+        "selectOnHover": false,
+        "releaseYear": true
+      },
+      "spacing": 8,
+      "activation": "doubleClick",
+      "toolbar": "hidden",
+      "background": "26160e",
+      "textColor": "351c12",
+      "selectedTextColor": "f3e4bd",
+      "selectorColor": "681e18ed",
+      "selectorStyle": "fill",
+      "selectorBorderColor": "c7a665",
+      "separatorColor": "b79b6c88",
+      "rounding": 3,
+      "artworkSource": "cover",
+      "requiredMedia": [
+        "cover",
+        "case"
+      ],
+      "showItemActions": false,
+      "showFavouriteMarker": false,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/archive-reading-room.png",
+          "fit": "stretch",
+          "zIndex": -100,
+          "bleed": true
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.075,
+            0.055,
+            0.2,
+            0.062
+          ],
+          "source": "assets/hollycast-banner.png",
+          "fit": "contain",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.385,
+            0.044,
+            0.31,
+            0.075
+          ],
+          "text": "The Play Archive",
+          "fontSize": 0.062,
+          "color": "f3e4bd",
+          "wrap": false,
+          "zIndex": 2,
+          "slant": 0.12
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.757,
+            0.078,
+            0.15,
+            0.025
+          ],
+          "text": "GAME LIBRARY",
+          "fontSize": 0.021,
+          "color": "f3e4bd",
+          "wrap": false,
+          "zIndex": 2,
+          "align": "center"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.05,
+            0.181,
+            0.14,
+            0.047
+          ],
+          "color": "d0b477",
+          "rounding": 3,
+          "zIndex": 1
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.055,
+            0.183,
+            0.13,
+            0.042
+          ],
+          "text": "COLLECTION",
+          "fontSize": 0.027,
+          "color": "351c12",
+          "wrap": false,
+          "zIndex": 2,
+          "bold": true,
+          "align": "center"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.23,
+            0.17,
+            0.16,
+            0.04
+          ],
+          "text": "GAME INDEX",
+          "fontSize": 0.028,
+          "color": "351c12",
+          "wrap": false,
+          "zIndex": 2,
+          "bold": true
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.43,
+            0.17,
+            0.055,
+            0.04
+          ],
+          "source": "gameCount",
+          "fontSize": 0.025,
+          "color": "351c12",
+          "align": "right",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.49,
+            0.174,
+            0.047,
+            0.035
+          ],
+          "text": "games",
+          "fontSize": 0.021,
+          "color": "351c12",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.225,
+            0.216,
+            0.315,
+            0.0015
+          ],
+          "color": "9a743c",
+          "zIndex": 1
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.594,
+            0.23,
+            0.162,
+            0.35
+          ],
+          "source": "case",
+          "fallback": "cover",
+          "fit": "contain",
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.775,
+            0.265,
+            0.185,
+            0.14
+          ],
+          "source": "title",
+          "fontSize": 0.048,
+          "color": "351c12",
+          "zIndex": 2,
+          "bold": true,
+          "wrap": true,
+          "text": "Select a game"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.775,
+            0.425,
+            0.185,
+            0.0015
+          ],
+          "color": "9a743c",
+          "zIndex": 1
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.78,
+            0.444,
+            0.17,
+            0.035
+          ],
+          "text": "RELEASE DATE",
+          "fontSize": 0.023,
+          "color": "696039",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.78,
+            0.49,
+            0.17,
+            0.055
+          ],
+          "source": "releaseDate",
+          "fontSize": 0.034,
+          "color": "351c12",
+          "zIndex": 2,
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.585,
+            0.617,
+            0.14,
+            0.04
+          ],
+          "color": "d9c698",
+          "rounding": 3,
+          "zIndex": 1
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.59,
+            0.62,
+            0.13,
+            0.035
+          ],
+          "text": "OVERVIEW",
+          "fontSize": 0.026,
+          "color": "351c12",
+          "wrap": false,
+          "zIndex": 2,
+          "bold": true,
+          "align": "center"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.73,
+            0.642,
+            0.23,
+            0.0015
+          ],
+          "color": "9a743c",
+          "zIndex": 1
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.6,
+            0.68,
+            0.355,
+            0.13
+          ],
+          "fields": [
+            "description"
+          ],
+          "autoFit": true,
+          "fontSize": 0.029,
+          "color": "351c12",
+          "zIndex": 2
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.59,
+            0.825,
+            0.37,
+            0.0015
+          ],
+          "color": "9a743c",
+          "zIndex": 1
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.662,
+            0.868,
+            0.232,
+            0.077
+          ],
+          "color": "c7a665",
+          "rounding": 8,
+          "zIndex": 2
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.665,
+            0.872,
+            0.226,
+            0.069
+          ],
+          "action": "activate",
+          "text": "\u25b6  PLAY",
+          "fontSize": 0.037,
+          "bold": true,
+          "color": "f3e4bd",
+          "background": "681e18",
+          "borderColor": "c7a665",
+          "rounding": 0.1,
+          "zIndex": 5
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -18,8 +19,8 @@
  */
 package com.hollycast.emulator.emu;
 
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.Locale;
@@ -27,8 +28,9 @@ import java.util.Locale;
 public class LocaleUtils {
     // called by native code
     private static String formatShortDateTime(long t) {
-        LocalDateTime date = LocalDateTime.ofEpochSecond(t, 0, ZoneOffset.UTC);
-        String s = date.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT));
+        // Resolve the device zone on every call so changes take effect without restarting.
+        String s = Instant.ofEpochSecond(t).atZone(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT));
         // 'Narrow No-Break Space' isn't defined in our imgui font. Replace with 'Thin Space'
         s = s.replace('\u202F', '\u2009');
         return s;

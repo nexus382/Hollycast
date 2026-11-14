@@ -192,7 +192,7 @@ int post(const std::string& url, const char *payload, const char *contentType, s
 }
 
 int post(const std::string & url, const std::vector<PostField>&fields) {
-	// not implemented (used by sentry minidump upload)
+	// Not implemented on UWP.
 	return 500;
 }
 

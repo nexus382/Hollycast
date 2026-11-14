@@ -29,7 +29,6 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += "-DANDROID_ARM_MODE=arm"
-                arguments += "-DSENTRY_UPLOAD_URL=" + (System.getenv("SENTRY_UPLOAD_URL") ?: "")
                 arguments += "-DUSE_OPENMP=OFF"
                 arguments += "-DANDROID_WEAK_API_DEFS=ON"
             }
