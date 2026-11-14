@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Phone VMU checks
 
 These tests compile the production phone service and HTTP server. They need CMake,
@@ -13,7 +14,7 @@ ctest --test-dir build/phone-vmu-tests -C Release --output-on-failure
 
 Coverage includes pre-pairing publication, all slot boundaries, LCD bit order,
 blank/inactive frames, independent slots, unpaired/malformed URLs, read-only
-requests, cache/privacy headers, activity reporting, stopping with partial
+requests outside the sync endpoints, cache/privacy headers, activity reporting, stopping with partial
 requests, closing the listener, and invalidating pairing links on restart.
 The browser check exercises the actual embedded script, including stale responses,
 inactive displays, retries, rotation, hidden tabs, A+B multi-touch, cancelled/lost
@@ -29,6 +30,15 @@ The embedded-asset check enforces MSVC's per-literal and concatenated-string
 limits and verifies that the complete VMU license is preserved. JavaScript tests
 reassemble the same literal chunks that the C++ compiler joins when serving assets.
 This suite also runs in the VMU regression workflow on Windows, macOS and Linux.
+
+Progress-sync checks cover exclusive card ownership, revision conflicts, cross-origin
+write rejection, bounded full-card uploads, idempotent and delayed requests, automatic
+checkpoints, return/reinsertion, offline retries, reload recovery, disk errors and
+local-file isolation. The server test extracts the production VMU `linkStatus` and
+`fullSave` methods and uses real temporary card/backup files with the production HTTP
+service. It verifies that only the emulation-side path changes live flash, and that
+successful replies follow flushed disk writes. Physical-phone and actual game
+transfer compatibility remain separate acceptance checks.
 
 For browser acceptance without a game, run `phone_vmu_server --preview` and open
 the printed address. A synthetic LCD is served in A1 and a test pattern in D2.

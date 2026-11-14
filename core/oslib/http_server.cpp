@@ -1,5 +1,6 @@
 //
 // Copyright (c) 2003-2025 Christopher M. Kohlhoff (chris at kohlhoff dot com)
+// Portions Copyright 2026 The Hollycast Authors
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -41,6 +42,8 @@ const std::string not_found =
 		"HTTP/1.1 404 Not Found\r\n";
 const std::string method_not_allowed =
 		"HTTP/1.1 405 Method Not Allowed\r\n";
+const std::string conflict =
+		"HTTP/1.1 409 Conflict\r\n";
 const std::string internal_server_error =
 		"HTTP/1.1 500 Internal Server Error\r\n";
 const std::string not_implemented =
@@ -80,6 +83,8 @@ asio::const_buffer toBuffer(Reply::status_type status)
 		return asio::buffer(not_found);
 	case Reply::method_not_allowed:
 		return asio::buffer(method_not_allowed);
+	case Reply::conflict:
+		return asio::buffer(conflict);
 	case Reply::internal_server_error:
 		return asio::buffer(internal_server_error);
 	case Reply::not_implemented:
@@ -246,6 +251,8 @@ std::string to_string(Reply::status_type status)
 		return not_found;
 	case Reply::method_not_allowed:
 		return method_not_allowed;
+	case Reply::conflict:
+		return "<html><body><h1>409 Conflict</h1></body></html>";
 	case Reply::internal_server_error:
 		return internal_server_error;
 	case Reply::not_implemented:
@@ -611,13 +618,13 @@ RequestParser::result_type RequestParser::consume(Request& req, char input)
 					if (!strcasecmp(header.name.c_str(), "Content-Length"))
 					{
 						contentLength = std::atol(header.value.c_str());
-						if (contentLength > MAX_BODY_LEN)
+						if (contentLength > maxBodyLength)
 							return bad;
 						break;
 					}
 				}
 
-				return indeterminate;
+				return contentLength == 0 ? good : indeterminate;
 			}
 			else {
 				return good;
@@ -628,7 +635,7 @@ RequestParser::result_type RequestParser::consume(Request& req, char input)
 		}
 	case reading_content:
 		req.content.push_back(input);
-		if (req.content.size() > MAX_BODY_LEN)
+		if (req.content.size() > maxBodyLength)
 			return bad;
 		else if (req.content.size() == contentLength)
 			return good;
@@ -654,8 +661,9 @@ bool RequestParser::isTSpecial(int c)
 }
 
 Connection::Connection(asio::ip::tcp::socket socket,
-		ConnectionManager& manager, RequestHandler& handler)
+		ConnectionManager& manager, RequestHandler& handler, size_t maxBodyLength)
 	: socket(std::move(socket)), connectionManager(manager), requestHandler(handler),
+	  requestParser(maxBodyLength),
 	  timeoutTimer(socket.get_executor())
 {
 }
@@ -755,9 +763,10 @@ void ConnectionManager::stopAll()
 	connections.clear();
 }
 
-HttpServer::HttpServer(asio::io_context& io_context, const std::string& address, uint16_t port)
+HttpServer::HttpServer(asio::io_context& io_context, const std::string& address, uint16_t port, size_t maxBodyLength)
   : io_context(io_context),
     acceptor(io_context),
+    maxBodyLength(maxBodyLength),
     connectionManager(),
     requestHandler()
 {
@@ -784,7 +793,7 @@ void HttpServer::doAccept()
 
 			if (!ec) {
 			  connectionManager.start(std::make_shared<Connection>(
-				  std::move(socket), connectionManager, requestHandler));
+				  std::move(socket), connectionManager, requestHandler, maxBodyLength));
 			}
 
 			doAccept();

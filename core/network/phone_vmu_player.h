@@ -1,10 +1,11 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 namespace phone_vmu {
 inline constexpr char standalonePlayer[] = R"VMUPLAYER(
 'use strict';
-// Runs entirely in the phone. Neither input nor modified flash is sent to the host.
+// CPU and input run in the phone. PhoneVmuSync checkpoints paired cards to the host.
 class PhoneVmuPlayer {
   constructor(core, redraw, describe, tone) {
     this.core = core; this.redraw = redraw; this.describe = describe; this.tone = tone;
