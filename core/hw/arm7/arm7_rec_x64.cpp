@@ -1,5 +1,6 @@
 /*
 	Copyright 2020 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of flycast.
 
@@ -360,6 +361,12 @@ class Arm7Compiler : public Xbyak::CodeGenerator
 
 		Xbyak::Operand arg0 = getOperand(op.arg[0], r8d);
 		Xbyak::Operand arg1 = getOperand(op.arg[1], r9d);
+		if (op.arg[0].isImmediate() && op.op_type != ArmOp::MOV && op.op_type != ArmOp::MVN)
+		{
+			// The decoder folds Rn == PC into an immediate, but data processing needs a register operand.
+			mov(r8d, op.arg[0].getImmediate());
+			arg0 = r8d;
+		}
 		Xbyak::Reg32 rd;
 		if (op.rd.isReg())
 			rd = regalloc->map(op.rd.getReg().armreg);
@@ -368,7 +375,8 @@ class Arm7Compiler : public Xbyak::CodeGenerator
 			// When an Operand2 constant is used with the instructions MOVS, MVNS, ANDS, ORRS, ORNS, EORS, BICS, TEQ or TST,
 			// the carry flag is updated to bit[31] of the constant,
 			// if the constant is greater than 255 and can be produced by shifting an 8-bit value.
-			if (op.arg[0].isImmediate() && op.arg[0].getImmediate() > 255)
+			if ((op.op_type == ArmOp::MOV || op.op_type == ArmOp::MVN)
+					&& op.arg[0].isImmediate() && op.arg[0].getImmediate() > 255)
 			{
 				set_carry_bit = true;
 				mov(r10d, (op.arg[0].getImmediate() & 0x80000000) >> 31);
@@ -406,11 +414,7 @@ class Arm7Compiler : public Xbyak::CodeGenerator
 			{
 				if (rd != arg0)
 				{
-					// FIXME need static evaluation or this must be duplicated
-					if (arg0.isNone())
-						mov(rd, op.arg[0].getImmediate());
-					else
-						mov(rd, arg0);
+					mov(rd, arg0);
 					verify(rd != arg1);
 				}
 				if (!arg1.isNone())
@@ -580,13 +584,7 @@ class Arm7Compiler : public Xbyak::CodeGenerator
 			else
 			{
 				if (rd != arg0)
-				{
-					// FIXME need static evaluation or this must be duplicated
-					if (arg0.isNone())
-						mov(rd, op.arg[0].getImmediate());
-					else
-						mov(rd, arg0);
-				}
+					mov(rd, arg0);
 				if (arg1.isNone())
 					add(rd, op.arg[1].getImmediate());
 				else
