@@ -40,7 +40,7 @@ function page({native=true,blockVideo=false}={}){
   requestAnimationFrame(){},setTimeout(){},clearTimeout(){},fetch:()=>new Promise(()=>{})});
  vm.runInContext(media,context);vm.runInContext(readAsset('../../core/network/phone_vmu_sync.h','VMUSYNC'),context);vm.runInContext(script,context);
  return {elements,hardware,document,window,requests,videos,allowVideo(){blockVideo=false;},
-  tap(){document.callbacks.pointerdown();},
+  tap(){document.callbacks.pointerdown({target:{closest:()=>null}});},
   visible(visible){document.hidden=!visible;document.callbacks.visibilitychange();},
   status(){return elements['awake-status'].textContent;}};
 }

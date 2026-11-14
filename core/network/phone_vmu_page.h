@@ -172,7 +172,7 @@ canvas[height="40"] + .lcd-icons { display: none; }
   box-shadow: none;
   color: var(--print);
 }
-.system button { width: 48%; height: 76px; }
+.system button { flex: 1; min-width: 44px; height: 76px; }
 .key-label { display: block; pointer-events: none; }
 .system .key-label {
   position: absolute;
@@ -354,7 +354,7 @@ body.lcd-only canvas { width: 100%; height: 100%; }
   .screen-bezel { padding: 11px; }
   .hardware { grid-area: 1 / 2 / 3 / 3; }
   .dpad { width: 132px; top: 56%; }
-  .system { top: 10%; width: 48%; }
+  .system { top: 10%; width: 54%; }
   .system button { height: 70px; }
   .system .key-label { font-size: 13px; }
   .system button::before { width: 25px; height: 25px; top: 26px; }
@@ -383,6 +383,7 @@ R"HTML(<svg viewBox="0 0 64 64" fill="none"><path d="M32.00,30.80 L32.13,30.63 L
 <div class="system">
 <button type="button" data-key="7" aria-label="Sleep or wake VMU"><span class="key-label">Sleep</span></button>
 <button type="button" data-key="6" aria-label="VMU Mode"><span class="key-label">Mode</span></button>
+<button id="ff" type="button" aria-label="Toggle selected mini-game speed" aria-pressed="false" disabled><span class="key-label">FF</span></button>
 </div>
 <div class="pad"><div class="dpad" role="group" aria-label="Directional pad">
 <svg class="dpad-face" viewBox="0 0 100 100" aria-hidden="true">
@@ -410,6 +411,8 @@ R"HTML(<svg viewBox="0 0 64 64" fill="none"><path d="M32.00,30.80 L32.13,30.63 L
 <button id="mirror" type="button" hidden>Return to Dreamcast</button><button id="restart" type="button" hidden>Restart mini-game</button><button id="download" type="button" hidden>Download VMU copy</button>
 <p id="sync-status" role="status" aria-live="polite"></p>
 <button id="sound" type="button" aria-pressed="false">Sound off</button>
+<label for="speed">FF speed <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1× (Normal)</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="5">5×</option><option value="6">6×</option><option value="7">7×</option><option value="8">8×</option><option value="9">9×</option><option value="10">10×</option></select></label>
+<p>FF toggles between the selected mini-game speed and normal speed.</p>
 <label class="file">Load VMU BIOS<input id="bios-file" type="file" accept=".bin"></label>
 <p>Mode opens the card's mini-game. Progress syncs to Hollycast automatically. Choose Return to Dreamcast to reconnect the card. Games opened from your phone stay local.</p>
 <p>Game files: .vms, .bin or .vmu. Optional BIOS: your own 64 KiB VMU firmware dump.</p>
@@ -421,7 +424,7 @@ R"HTML(<svg viewBox="0 0 64 64" fill="none"><path d="M32.00,30.80 L32.13,30.63 L
 const $ = id => document.getElementById(id);
 const lcd=$('lcd'),ctx=lcd.getContext('2d'),slot=$('slot'),status=$('status'),controls=$('controls'),menu=$('menu');
 let controlsTimeout,bios=null,mirrorSleeping=false,loading=false,audio,oscillator,gain,muted=true;
-function hideControls(){controls.hidden=true;menu.setAttribute('aria-expanded','false');document.body.classList.add('controls-hidden');}
+function hideControls(){clearTimeout(controlsTimeout);controls.hidden=true;menu.setAttribute('aria-expanded','false');document.body.classList.add('controls-hidden');}
 function showControls(){controls.hidden=false;menu.setAttribute('aria-expanded','true');document.body.classList.remove('controls-hidden');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(hideControls,4000);}
 function notice(message,connected=false){status.textContent=message;document.body.classList.toggle('connected',connected);}
 function blank(height=32){if(lcd.height!==height)lcd.height=height;ctx.fillStyle='#9eb3a5';ctx.fillRect(0,0,48,height);}
@@ -446,6 +449,11 @@ function startAudio(){
  }catch(_){audio=oscillator=gain=null;}
 }
 const player=new PhoneVmuPlayer(VMS,pixels=>draw(pixels,40),message=>notice(message,player.active&&!player.sleeping&&!VMS.halted),tone);
+let selectedSpeed=1,speedEnabled=false;
+function setSpeedEnabled(enabled){
+ speedEnabled=enabled&&selectedSpeed!==1;player.setSpeed(speedEnabled?selectedSpeed:1);
+ $('ff').setAttribute('aria-pressed',String(speedEnabled));$('ff').classList.toggle('pressed',speedEnabled);
+}
 let progressStorage=null;try{progressStorage=window.sessionStorage;}catch(_){}
 const cardSync=new PhoneVmuSync(VMS,message=>{$('sync-status').textContent=message;updateMode();},progressStorage,'hollycast-vmu-progress:'+window.location?.href);
 let keepAwake=true,wakeLock=null,wakeVideo=null,wakePending=false,wakeGeneration=0,wakeInteracted=false,pageVisible=true;
@@ -494,13 +502,18 @@ async function keepScreenAwake(){
  }
 }
 function wakeInteraction(){wakeInteracted=true;keepScreenAwake();}
-document.addEventListener('pointerdown',wakeInteraction);
+document.addEventListener('pointerdown',event=>{
+ wakeInteraction();
+ if(event.target.closest('#controls, #menu'))return;
+ // Handle LCD opening and outside dismissal together so one tap cannot do both.
+ if(!controls.hidden)hideControls();else if(event.target===lcd)showControls();
+});
 $('awake').addEventListener('click',()=>{keepAwake=!keepAwake;$('awake').textContent=keepAwake?'Keep awake: On':'Keep awake: Off';$('awake').setAttribute('aria-pressed',String(keepAwake));wakeInteracted=true;keepScreenAwake();showControls();});
 const hardware=Array.from(document.querySelectorAll('[data-key]')),held=new Map();
 function releaseAll(){held.clear();player.releaseAll();hardware.forEach(button=>button.classList.remove('pressed'));}
 )HTML"
 R"HTML(
-function updateMode(){slot.disabled=player.active||loading;$('game-file').disabled=!!cardSync.owner||loading;$('mirror').disabled=cardOpening();$('restart').disabled=cardOpening();for(const id of ['mirror','restart','download'])$(id).hidden=!player.active;$('play').hidden=player.active;hardware.forEach(button=>{button.disabled=+button.dataset.key<6&&!player.active;});}
+function updateMode(){slot.disabled=player.active||loading;$('game-file').disabled=!!cardSync.owner||loading;$('mirror').disabled=cardOpening();$('restart').disabled=cardOpening();$('ff').disabled=!player.active||cardOpening()||cardSync.returning||selectedSpeed===1;if(!player.active&&speedEnabled)setSpeedEnabled(false);for(const id of ['mirror','restart','download'])$(id).hidden=!player.active;$('play').hidden=player.active;hardware.forEach(button=>{button.disabled=+button.dataset.key<6&&!player.active;});}
 function openGame(bytes,name){releaseAll();player.load(bytes,name,bios);mirrorSleeping=false;updateMode();showControls();startAudio();keepScreenAwake();}
 function returnToDisplay(){cardSync.returned=false;releaseAll();player.stop();mirrorSleeping=false;updateMode();blank();notice('Connecting to Hollycast…');showControls();keepScreenAwake();}
 function cardOpening(){return loading||!!(cardSync.owner&&!cardSync.owner.ready);}
@@ -544,7 +557,7 @@ document.addEventListener('keydown',event=>{
  wakeInteraction();
  if(event.defaultPrevented)return;
  if(event.key==='Escape'){hideControls();return;}if(event.key==='Tab'){showControls();return;}
- if(event.target.closest&&event.target.closest('#controls'))return;
+ if(event.target.closest&&event.target.closest('#controls, #ff'))return;
  const index=keys[event.key.length===1?event.key.toLowerCase():event.key];
  if(index!==undefined){event.preventDefault();if(!event.repeat)key(index,true,'key:'+event.code);}
 });
@@ -552,7 +565,7 @@ document.addEventListener('keyup',event=>{if(event.defaultPrevented)return;const
 window.addEventListener('blur',()=>{releaseAll();tone(-1);});window.addEventListener('pagehide',()=>{pageVisible=false;releaseAll();tone(-1);cardSync.remember();keepScreenAwake();});
 window.addEventListener('pageshow',()=>{pageVisible=true;keepScreenAwake();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){releaseAll();tone(-1);if(!loading)cardSync.checkpoint();}keepScreenAwake();});
-lcd.addEventListener('pointerdown',showControls);menu.addEventListener('click',showControls);menu.addEventListener('focus',showControls);
+menu.addEventListener('click',showControls);menu.addEventListener('focus',showControls);
 controls.addEventListener('pointerdown',showControls);controls.addEventListener('focusin',()=>clearTimeout(controlsTimeout));controls.addEventListener('focusout',()=>{if(!controls.hidden)showControls();});
 $('hide').addEventListener('click',hideControls);$('play').addEventListener('click',playCard);
 $('mirror').addEventListener('click',async()=>{if(!player.active||cardOpening())return;releaseAll();$('mirror').disabled=true;try{if(!await cardSync.checkpoint(true)){showControls();return;}returnToDisplay();}finally{$('mirror').disabled=false;}});
@@ -560,6 +573,8 @@ $('restart').addEventListener('click',()=>{if(cardOpening()||cardSync.returning)
 $('layout').addEventListener('click',()=>{const only=document.body.classList.toggle('lcd-only');$('layout').textContent=only?'Show buttons':'LCD only';showControls();});
 $('rotate').addEventListener('click',()=>{$('rotate').setAttribute('aria-pressed',String(lcd.classList.toggle('rotated')));showControls();});
 $('sound').addEventListener('click',()=>{muted=!muted;$('sound').textContent=muted?'Sound off':'Sound on';$('sound').setAttribute('aria-pressed',String(!muted));if(muted)tone(-1);else startAudio();showControls();});
+$('speed').addEventListener('change',()=>{selectedSpeed=Number($('speed').value);setSpeedEnabled(speedEnabled);updateMode();showControls();});
+$('ff').addEventListener('click',()=>{if($('ff').disabled)return;setSpeedEnabled(!speedEnabled);});
 slot.addEventListener('change',()=>{releaseAll();blank();notice('Connecting to VMU '+slot.selectedOptions[0].text+'…');showControls();});
 $('game-file').addEventListener('change',async event=>{
  if(cardSync.owner)return;
