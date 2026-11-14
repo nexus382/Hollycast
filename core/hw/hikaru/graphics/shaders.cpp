@@ -2,6 +2,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "shaders.h"
+#include "fragment_list_shared.h"
 #include "device.h"
 #include <stdexcept>
 #include <utility>
@@ -280,11 +281,23 @@ std::string vulkanMeshConstants() {
     return source;
 }
 }
-std::string vulkanVertexSource(bool bitmap, bool palette) {
+std::string vulkanVertexSource(bool bitmap, bool palette, bool packed) {
+    if(bitmap&&packed)throw std::invalid_argument("Packed Hikaru bitmap vertices are unsupported");
     std::string s=glslPrelude;s+="mat3 mat3of(mat4 m){return mat3(m);}";s+=structures;s+="layout(set=0,binding=0,std140)uniform Constants{Uniforms u;};\n";s+=outputStruct;
     s+="struct Vertex{vec4 position,normal,diffuse,ambient,specular,unknown,uv,extra;};\n";
     const char* fields[]={"position","normal","diffuse","ambient","specular","unknown","uv","extra"};
-    for(int i=0;i<8;i++)s+="layout(location="+std::to_string(i)+")in vec4 i_"+fields[i]+";\n";
+    if(packed) {
+        s+=R"(
+layout(location=0) in vec3 i_position;
+layout(location=1) in vec4 i_diffuse;
+layout(location=2) in vec3 i_normal;
+layout(location=3) in vec4 i_ambient;
+layout(location=4) in vec2 i_uv;
+layout(location=5) in vec4 i_specular;
+layout(location=6) in vec4 i_unknown;
+layout(location=7) in float i_drawIndex;
+)";
+    } else for(int i=0;i<8;i++)s+="layout(location="+std::to_string(i)+")in vec4 i_"+fields[i]+";\n";
     const char* outTypes[]={"vec4","vec3","vec3","vec3","vec4","vec3","vec2","float"};
     const char* outNames[]={"viewPosition","normal","diffuse","ambient","specular","unknown","uv","alpha"};
     for(int i=0;i<8;i++)s+="layout(location="+std::to_string(i)+")out "+outTypes[i]+" "+outNames[i]+";\n";
@@ -293,7 +306,11 @@ std::string vulkanVertexSource(bool bitmap, bool palette) {
         s+="layout(set=0,binding=5,std430) readonly buffer Palette{DrawRecord records[];};\n";
         s+="layout(location=8) flat out vec4 drawModes;layout(location=9) flat out float textureBias;layout(location=10) flat out int drawIndex;\n";
     }
-    s+="void main(){Vertex v=Vertex(i_position,i_normal,i_diffuse,i_ambient,i_specular,i_unknown,i_uv,i_extra);Output o;";
+    if(packed) {
+        // The source body packs alpha beside diffuse and the exact selector
+        // byte beside ambient. Recover both before the shared matrix logic.
+        s+="void main(){Vertex v=Vertex(vec4(i_position,1),vec4(i_normal,0),i_diffuse,i_ambient,i_specular,i_unknown,vec4(i_uv,0,0),vec4(i_diffuse.w,round(i_ambient.w*255.0),i_drawIndex,0));Output o;";
+    } else s+="void main(){Vertex v=Vertex(i_position,i_normal,i_diffuse,i_ambient,i_specular,i_unknown,i_uv,i_extra);Output o;";
     if(bitmap)s+="o.position=vec4(v.position.x*2.0-1.0,1.0-v.position.y*2.0,0.0,1.0);o.uv=v.uv.xy;o.viewPosition=vec4(0);o.normal=o.diffuse=o.ambient=o.unknown=vec3(0);o.specular=vec4(0);o.alpha=0.0;";
     else {
         std::string body=vertexBody;
@@ -310,7 +327,7 @@ std::string vulkanVertexSource(bool bitmap, bool palette) {
     for(auto name:outNames)s+=std::string(name)+"=o."+name+";";
     return s+"}";
 }
-std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, unsigned textureSlots, bool peelComposite) {
+std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, unsigned textureSlots, bool peelComposite, bool fragmentList) {
     if(textureSlots!=1&&textureSlots!=16)throw std::invalid_argument("Invalid Hikaru Vulkan texture palette size");
     std::string s=glslPrelude;s+="mat3 mat3of(mat4 m){return mat3(m);}";s+=structures;s+="layout(set=0,binding=0,std140)uniform Constants{Uniforms u;};\n";
     s+=outputStruct;
@@ -362,6 +379,25 @@ std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, 
         }
         s+="float meshWindowDepth(float z){";s+=depthFunctionBody;s+="}\n";
     }
+    if(fragmentList) {
+        if(bitmap||palette)throw std::invalid_argument("Invalid Hikaru fragment-list collector");
+        s+="#define LIST_HEADS_LAYOUT layout(set=1,binding=0,std430)\n";
+        s+="#define LIST_NODES_LAYOUT layout(set=1,binding=1,std430)\n";
+        s+="#define LIST_STATUS_LAYOUT layout(set=1,binding=2,std430)\n";
+        s+="#define LIST_HELPER_GUARD if(gl_HelperInvocation)return;\n";
+        s+=HIKARU_FRAGMENT_LIST_TYPES_SOURCE;
+        s+="layout(push_constant) uniform ListParameters { HikaruListParameters listParams; };\n";
+        s+=HIKARU_FRAGMENT_LIST_BUFFERS_SOURCE;
+        s+=HIKARU_FRAGMENT_LIST_COLLECT_SOURCE;
+        s+=R"(
+#undef WRITE_DEPTH
+#define WRITE_DEPTH(value)
+#undef WRITE_METADATA
+#define WRITE_METADATA(code,order)
+#undef RETURN_COLOR
+#define RETURN_COLOR(value) collectListFragment(value,depthCode,uint(u.blend.z+0.5));return
+)";
+    }
     s+="void main(){Output o=Output(gl_FragCoord,viewPosition,normal,diffuse,ambient,specular,unknown,uv,alpha);";
     if(bitmap)s+=familyResolve?familyResolveBody:peelComposite?peelCompositeBody:bitmapBody;
     else {
@@ -390,6 +426,37 @@ std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, 
         s+=body;
     }
     return s+"}";
+}
+
+
+std::string vulkanFullscreenVertexSource() {
+    return R"(#version 450
+void main() {
+    vec2 corner=vec2((gl_VertexIndex<<1)&2,gl_VertexIndex&2);
+    gl_Position=vec4(corner*2.0-1.0,0.0,1.0);
+}
+)";
+}
+std::string vulkanClearFragmentSource(bool integer) {
+    return std::string("#version 450\nlayout(push_constant) uniform Clear { vec4 color; } clear;\n")+
+        (integer?"layout(location=0) out uvec2 outColor;\nvoid main(){outColor=uvec2(clear.color.xy);}\n":
+            "layout(location=0) out vec4 outColor;\nvoid main(){outColor=clear.color;}\n");
+}
+std::string vulkanFragmentListResolveSource(bool smallList) {
+    std::string s="#version 450\n";
+    s+="#define LIST_HEADS_LAYOUT layout(set=1,binding=0,std430)\n";
+    s+="#define LIST_NODES_LAYOUT layout(set=1,binding=1,std430)\n";
+    s+="#define LIST_STATUS_LAYOUT layout(set=1,binding=2,std430)\n";
+    s+=HIKARU_FRAGMENT_LIST_TYPES_SOURCE;
+    s+="layout(push_constant) uniform ListParameters { HikaruListParameters listParams; };\n";
+    s+=HIKARU_FRAGMENT_LIST_BUFFERS_SOURCE;
+    s+=R"(
+layout(set=1,binding=3) uniform sampler2D listBackground;
+layout(location=0) out vec4 outColor;
+)";
+    s+=HIKARU_FRAGMENT_LIST_RESOLVE_HEAD_SOURCE;
+    if(smallList)s+=HIKARU_FRAGMENT_LIST_RESOLVE_SMALL_SOURCE;
+    return s+HIKARU_FRAGMENT_LIST_RESOLVE_TAIL_SOURCE;
 }
 
 MeshShaderSpecialization meshShaderSpecialization(const Draw& d, bool specialize) {

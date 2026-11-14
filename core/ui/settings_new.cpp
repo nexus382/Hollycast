@@ -5500,7 +5500,7 @@ void renderVideoTab()
 			hikaruPlatform
 				? T("Pixel Buffer Size\n"
 					"Controls the memory budget for Hikaru per-pixel transparency. Targets are allocated as needed.\n"
-					"Higher resolutions require more memory per layer; increase this budget to retain more layers.")
+					"Higher resolutions and overlapping effects require more memory. Increase this budget if transparency is missing or the renderer falls back to depth peeling.")
 				: T("Pixel Buffer Size\n"
 					"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
 					"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
@@ -5520,7 +5520,9 @@ void renderVideoTab()
 		perPixelLayersCfg.label = T("Maximum Layers");
 		perPixelLayersCfg.icon = ICON_FA_LAYER_GROUP;
 		perPixelLayersCfg.popupID = Tnop("PerPixelMaximumLayersPopup");
-		perPixelLayersCfg.description = renderApi == 4
+		perPixelLayersCfg.description = hikaruPlatform
+			? T("Limits Hikaru depth-peeling layers. Supported OpenGL and Vulkan fragment lists use Pixel Buffer Size instead; this limit still applies to their peeling fallback.")
+			: renderApi == 4
 			? T("Controls how many transparent layers are resolved per pixel. Metal retains the nearest layers when the limit is exceeded. Lower values can improve performance.")
 			: T("Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
 				"Increase this if you see missing transparency or incorrect layering.\n"
@@ -5543,7 +5545,9 @@ void renderVideoTab()
 			Tnop("PerPixelMaximumLayersSetting"),
 			T("Maximum transparent layers resolved per pixel."),
 			perPixelLayersPopupCfg,
-			renderApi == 4
+			hikaruPlatform
+				? T("Per-Pixel Maximum Layers\nLimits depth peeling and its fallback paths. Successful OpenGL and Vulkan fragment lists retain fragments within Pixel Buffer Size, without a fixed layer count.")
+				: renderApi == 4
 				? T("Per-Pixel Maximum Layers\nMetal retains the nearest layers when the limit is exceeded. Increase the limit if transparency is missing; lower it to reduce resolve work.")
 				: T("Per-Pixel Maximum Layers\n"
 					"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"

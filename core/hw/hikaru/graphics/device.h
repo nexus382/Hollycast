@@ -15,6 +15,8 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
+#include <map>
+#include <tuple>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -73,6 +75,12 @@ struct Texture {
 };
 // Distinguish TexImage storage definitions from full level-zero replacements.
 enum class TextureUpload : uint8_t { Definition, FullUpdate };
+// Immutable converted vertices can be shared by repeated transparency passes.
+// Backends consume their bytes synchronously and retain only bounded lookups.
+struct Geometry {
+    std::vector<Vertex> vertices;
+    std::vector<PackedVertex> packedVertices;
+};
 struct Draw {
     unsigned color = 0, depth = 0, metadata = 0;
     std::array<unsigned,4> textures{};
@@ -87,6 +95,9 @@ struct Draw {
     Uniforms uniforms{};
     std::vector<Vertex> vertices;
     std::vector<PackedVertex> packedVertices; // Mutually exclusive with vertices.
+    std::shared_ptr<const Geometry> geometry; // Exclusive with the owned vectors.
+    const std::vector<Vertex>& vertexData() const { return geometry?geometry->vertices:vertices; }
+    const std::vector<PackedVertex>& packedVertexData() const { return geometry?geometry->packedVertices:packedVertices; }
     std::vector<DrawRecord> palette;
     std::vector<unsigned> paletteTextures;
     std::vector<Texture> paletteSampling;
@@ -98,6 +109,10 @@ public:
     virtual bool supportsDrawPalette() const { return false; }
     virtual bool supportsTexturePalette() const { return false; }
     virtual bool supportsPackedVertices() const { return false; }
+    virtual bool supportsGeometryReuse() const { return false; }
+    // A failed collection leaves the opaque target untouched for depth peeling.
+    virtual bool beginFragmentList(unsigned, uint64_t) { return false; }
+    virtual bool endFragmentList() { return false; }
     // Pixel data is borrowed for the call; implementations copy or stage it before returning.
     virtual void texture(unsigned id, const Texture& info, unsigned level, TextureUpload upload, const void* pixels, size_t bytes) = 0;
     virtual void eraseTexture(unsigned id) = 0;
@@ -144,7 +159,24 @@ public:
     const Texture& textureInfo(unsigned id) const { return textures.at(id); }
     static thread_local Device* active;
 private:
-    struct Attribute { unsigned buffer=0; GLint size=4; GLenum type=GL_FLOAT; bool normalized=false; GLsizei stride=0; size_t offset=0; bool enabled=false; };
+    struct Attribute {
+        unsigned buffer=0; GLint size=4; GLenum type=GL_FLOAT; bool normalized=false; GLsizei stride=0; size_t offset=0; bool enabled=false;
+        bool operator<(const Attribute& other) const {
+            return std::tie(buffer,size,type,normalized,stride,offset,enabled)<
+                std::tie(other.buffer,other.size,other.type,other.normalized,other.stride,other.offset,other.enabled);
+        }
+    };
+    struct GeometryKey {
+        unsigned buffer=0;
+        size_t offset=0;
+        GLsizei count=0;
+        // Canonical packed inputs need only their source range. Generic inputs
+        // retain the complete decode layout, including disabled attributes.
+        std::optional<std::array<Attribute,9>> attributes;
+        bool operator<(const GeometryKey& other) const {
+            return std::tie(buffer,offset,count,attributes)<std::tie(other.buffer,other.offset,other.count,other.attributes);
+        }
+    };
     struct Program {
         bool bitmap=false, familyResolve=false, peelComposite=false;
         std::unordered_map<std::string,int> definitions;
@@ -165,6 +197,11 @@ private:
     std::optional<Draw> pendingDraw;
     std::vector<Vertex> vertexScratch;
     std::vector<PackedVertex> packedVertexScratch;
+    // Bound retained vertex payload per frame; lookup overhead scales with it.
+    static constexpr size_t GeometryCacheBytes=64*1024*1024;
+    std::map<GeometryKey,std::shared_ptr<const Geometry>> geometryCache;
+    size_t geometryCacheBytes=0;
+    void invalidateGeometry() { geometryCache.clear();geometryCacheBytes=0; }
     HikaruGraphicsDispatch dispatch{};
     std::exception_ptr error;
     unsigned nextId=1, program=0, buffer=0, vao=0, framebuffer=0, readFramebuffer=0, renderbuffer=0, activeTexture=0;

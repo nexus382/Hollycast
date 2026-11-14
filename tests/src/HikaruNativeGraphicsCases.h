@@ -103,6 +103,97 @@ inline void exercisePeelCompositing(Backend& backend) {
             EXPECT_NEAR(untouched[sample+channel],background[channel]*255.f,1.f);
     }
 }
+inline void exercisePackedVertices(Backend& backend) {
+    allocate(backend);
+    for(bool palette:{false,true})for(bool textured:{false,true})for(unsigned selector:{0u,1u,64u,65u,128u,129u,192u,193u}) {
+        if(palette&&textured&&!backend.supportsTexturePalette())continue;
+        auto expanded=mesh();expanded.depthTest=false;expanded.uniforms.flags={float(textured),1,1,1};
+        expanded.uniforms.lights[0].flags={1,0,0,1};expanded.uniforms.modelview[12]=-0.05f;expanded.uniforms.alternate[12]=0.05f;
+        expanded.uniforms.alternateNormal[10]=-1;
+        auto packed=expanded;packed.vertices.clear();
+        for(unsigned i=0;i<3;++i) {
+            PackedVertex vertex;std::copy_n(expanded.vertices[i].position.begin(),3,vertex.position.begin());
+            vertex.normal={0.25f,0.75f,1};vertex.diffuse={96,128,191};vertex.ambient={48,64,80};vertex.alpha=191;
+            vertex.specular={80,50,20,5};vertex.unknown={10,20,30};vertex.matrixSelect=uint8_t(selector);vertex.uv={0.25f,0.75f};
+            vertex.drawIndex=palette?1.f:0.f;packed.packedVertices.push_back(vertex);
+            auto& decoded=expanded.vertices[i];std::copy(vertex.normal.begin(),vertex.normal.end(),decoded.normal.begin());
+            for(unsigned c=0;c<3;++c){decoded.diffuse[c]=vertex.diffuse[c]/255.f;decoded.ambient[c]=vertex.ambient[c]/255.f;decoded.unknown[c]=vertex.unknown[c]/65535.f;}
+            for(unsigned c=0;c<4;++c)decoded.specular[c]=vertex.specular[c]/255.f;
+            decoded.uv={0.25f,0.75f,0,0};decoded.extra={191.f/255.f,float(selector),vertex.drawIndex,0};
+        }
+        if(palette) {
+            for(unsigned i=0;i<2;++i) {
+                DrawRecord record;record.modelview=expanded.uniforms.modelview;record.alternate=expanded.uniforms.alternate;
+                record.normal=expanded.uniforms.normal;record.alternateNormal=expanded.uniforms.alternateNormal;
+                record.modes={1,1,0,1};record.modelview[12]+=float(i)*0.1f;
+                expanded.palette.push_back(record);expanded.paletteTextures.push_back(i?11:10);expanded.paletteSampling.push_back(expanded.sampling[0]);
+            }
+            expanded.texturePalette=textured;packed.palette=expanded.palette;packed.paletteTextures=expanded.paletteTextures;
+            packed.paletteSampling=expanded.paletteSampling;packed.texturePalette=textured;
+        }
+        clear(backend);backend.draw(expanded);const auto expected=pixels(backend);
+        clear(backend);backend.draw(packed);equalPixels(expected,pixels(backend),"packed normalized attributes and selector",1);
+        // The two strides are not multiples of one another. Alternating them
+        // catches truncated first-vertex offsets and stale IA stride/layout.
+        backend.draw(expanded);equalPixels(expected,pixels(backend),"expanded following packed stream",1);
+        backend.draw(packed);equalPixels(expected,pixels(backend),"packed following expanded stream",1);
+        auto left=packed,middle=expanded,right=packed;
+        left.scissorEnabled=middle.scissorEnabled=right.scissorEnabled=true;
+        left.scissor={0,0,5,16};middle.scissor={5,0,6,16};right.scissor={11,0,5,16};
+        clear(backend);
+        for(const auto* draw:{&left,&middle,&right}){backend.draw(*draw);(void)pixels(backend);}
+        const auto mixed=pixels(backend);
+        // Keep all three strides in one command buffer and read back once.
+        // Disjoint scissors prevent the final draw from hiding a bad middle.
+        clear(backend);backend.draw(left);backend.draw(middle);backend.draw(right);
+        equalPixels(mixed,pixels(backend),"queued packed/expanded/packed stream",1);
+    }
+}
+
+inline void exerciseGeometryReuse(Backend& backend,std::array<uint64_t,2> (*counts)(const Backend&)) {
+    for(bool packed:{false,true}) {
+        if(packed&&!backend.supportsPackedVertices())continue;
+        SCOPED_TRACE(packed?"retained packed geometry":"retained expanded geometry");
+        allocate(backend);
+        auto owned=mesh();owned.depthTest=false;
+        owned.uniforms.flags={0,0,0,1};owned.uniforms.fog={4,0,0,0};
+        owned.uniforms.fogColor={0.2f,0.4f,0.6f,0};
+        for(auto& vertex:owned.vertices)vertex.extra[0]=1;
+        if(packed) {
+            for(const auto& source:owned.vertices) {
+                PackedVertex vertex;std::copy_n(source.position.begin(),3,vertex.position.begin());
+                vertex.normal={0,0,1};vertex.diffuse={255,255,255};vertex.alpha=255;
+                owned.packedVertices.push_back(vertex);
+            }
+            owned.vertices.clear();
+        }
+        clear(backend);backend.draw(owned);const auto expected=pixels(backend);
+        auto geometry=std::make_shared<Geometry>();
+        geometry->vertices=owned.vertices;geometry->packedVertices=owned.packedVertices;
+        auto retained=owned;retained.vertices.clear();retained.packedVertices.clear();retained.geometry=geometry;
+        const auto before=counts(backend);
+        clear(backend);
+        for(unsigned i=0;i<64;++i) {
+            retained.uniforms.fogColor[0]=0.2f*float(i)/63.f;
+            backend.draw(retained);
+        }
+        const auto warm=counts(backend);
+        EXPECT_EQ(warm[0]-before[0],1u);
+        EXPECT_EQ(warm[1]-before[1],63u);
+        // Exceed the initial 1 MiB stream, then reuse the earlier geometry.
+        // A recording batch must retire before its storage can grow.
+        auto large=mesh();large.depthTest=false;large.vertices.resize(8193);
+        backend.draw(large);
+        backend.draw(retained);
+        const auto wrapped=counts(backend);
+        // A fence-retired stream may still contain the exact immutable range.
+        // Otherwise the retained geometry must be uploaded into the new stream.
+        EXPECT_GE(wrapped[0]-warm[0],1u);
+        EXPECT_LE(wrapped[0]-warm[0],2u);
+        equalPixels(expected,pixels(backend),"retained geometry after stream rollover",1);
+    }
+}
+
 inline void exerciseNativeGraphics(Backend& generic,Backend& optimized) {
     exercisePeelCompositing(generic);exercisePeelCompositing(optimized);
     allocate(generic);allocate(optimized);

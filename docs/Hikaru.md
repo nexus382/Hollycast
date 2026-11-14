@@ -134,10 +134,12 @@ changing machine or graphics ownership. Saving uses a completed machine
 boundary, which may be one frame ahead of the displayed image. Loading discards
 queued work from the prior timeline before presenting restored frames.
 
-Bitmap-layer textures and their 16-bit conversion staging memory are retained
-until the renderer is destroyed. Every active layer still receives a full-image
-update each frame; its alpha, pixel layout and compositing order are unchanged.
-Native texture updates are ordered after prior draws and before later draws.
+Bitmap-layer textures and their conversion staging memory are retained until
+the renderer is destroyed. Exact snapshots of active source bytes let unchanged
+layers skip conversion and upload. Changed layers receive a full-image update;
+their alpha, pixel layout and compositing order are unchanged. Snapshot allocation
+failure keeps the normal upload path. Native texture updates are ordered after
+prior draws and before later draws.
 
 MEMCTL DMA can bulk-copy disjoint, contiguous plain little-endian RAM ranges.
 Overlaps, custom buffer accessors, device windows and other bus side effects
@@ -184,23 +186,47 @@ bounded emulation/render pipeline. Disabling it uses the direct frame path.
 **Transparent Sorting** in Video settings selects per-strip, per-triangle or
 per-pixel sorting for translucent geometry. Per-strip sorts retained strips
 by transformed depth centroid; per-triangle sorts individual triangles by
-their transformed depth centroids. Per-pixel sorting uses depth peeling and
-retains the configured **Maximum Layers** count, from 1 to 128 (default 32).
-If another layer is present beyond that bound, deeper fragments are discarded
-and a warning is reported. Hikaru keeps its sorting and layer settings separate
-from Dreamcast/Naomi. Returning to those systems recreates their requested
-host renderer. Hikaru retains its per-pixel layer setting when changing the
-graphics API. The pixel-buffer memory budget applies to its depth-peeling
-storage.
+their transformed depth centroids. Per-pixel sorting uses fragment lists on
+supported Vulkan devices and desktop OpenGL 4.3 contexts. Direct3D 11,
+OpenGL ES, older desktop GL and unsupported targets retain depth peeling. Fragment lists collect and sort transparent fragments within
+the pixel-buffer memory budget, without a fixed per-pixel layer count.
+An incomplete collection leaves the scene intact and falls back to peeling.
+Both list backends share the same fragment format, stable depth/submission-order
+sorting, blend rules, eight-fragment fast path and adaptive pool policy. OpenGL
+requires six fragment-stage storage-buffer bindings and a single-sample RGBA8 or
+RGB10_A2 scene target. Its attachmentless collection framebuffer cannot modify
+the opaque scene color or depth; overflow is checked before the resolve writes
+scene color. Resource or shader failures retain the established peeling path.
+
+Depth peeling retains the configured **Maximum Layers** count, from 1 to 128
+(default 32), subject to the pixel-buffer memory budget. If another layer is
+present beyond the effective bound, deeper fragments are discarded and a warning
+is reported. Hikaru keeps its sorting and layer settings separate from
+Dreamcast/Naomi. Returning to those systems recreates their requested host
+renderer. The layer setting remains stored across graphics API changes and
+applies when peeling is active, including Vulkan and OpenGL fallback.
 
 Depth peeling submits visibility queries in batches. Each viewport uses its
 previous depth as an initial estimate and reads the current frame's results
-before extending the batch, up to the configured limit. Vulkan batches clears and texture uploads with draws, retains
-transient resources until their submission fences complete, and reuses
-compatible texture allocations. CPU readbacks wait for a submission fence;
-renderer destruction still drains the device to release presentation views.
-These changes remove synchronization costs; they do not establish a measured
-frame-rate improvement.
+before extending the batch, up to the configured limit. Vulkan batches ordinary
+clears and texture uploads with draws, retires transient resources after their
+submission fences, and reuses compatible allocations. Unchanged fragment-list
+buffers use GPU barriers for reuse; replacement of storage or descriptors still
+retires their users. The collection counter readback remains a synchronization
+point before deciding whether to resolve or fall back.
+
+Vulkan channel-masked clears use a cached GPU pipeline rather than a host
+readback. Repeated identical uniforms and palettes reuse immutable ranges within
+the current submission batch; pipeline lookups have a last-key fast path.
+The shared renderer also caches texture/shading palette mode prefixes, reducing
+updates to OpenGL and the native backends. Array tails and per-program state
+remain valid across shorter palettes, program switches and cache invalidation.
+
+Set `HIKARU_TRACE_GPU_TIMING=1` to enable supported Vulkan fragment-phase GPU
+timestamps in addition to CPU diagnostics. Queries are polled without adding a
+wait. The [renderer optimization parity audit](performance/hikaru-renderer-parity.md)
+documents the current shared paths, API differences, measured scope and remaining
+work. These Hikaru diagnostics are separate from the Dreamcast/Naomi PVR path.
 
 Malformed or unreadable nonvolatile files now use in-memory defaults for the
 session. They are preserved and will not be overwritten on exit. The frontend

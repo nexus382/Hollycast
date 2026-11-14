@@ -5,6 +5,15 @@
 #define HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
 #include "graphics_dispatch.h"
 static _Thread_local const HikaruGraphicsDispatch *current_dispatch;
+GLboolean hikaru_graphics_has_native_dispatch(void) {
+    return current_dispatch != NULL;
+}
+GLboolean hikaru_graphics_begin_fragment_list(uint64_t budget) {
+    return current_dispatch && current_dispatch->BeginFragmentList && current_dispatch->BeginFragmentList(budget);
+}
+GLboolean hikaru_graphics_end_fragment_list(void) {
+    return current_dispatch && current_dispatch->EndFragmentList && current_dispatch->EndFragmentList();
+}
 GLboolean hikaru_graphics_supports_draw_palette(void) {
     return current_dispatch == NULL || (current_dispatch->SupportsDrawPalette && current_dispatch->SupportsDrawPalette());
 }
@@ -396,8 +405,18 @@ void hikaru_graphics_begin_occlusion(GLuint query[2]) {
     if (current_dispatch) { current_dispatch->BeginOcclusion(); return; }
     if (!query[0]) {
         glGenQueries(1, &query[0]);
+        // Only occupancy is needed. GLES 3 and desktop GL 3.3 provide a
+        // boolean query; retain the count-query fallback for desktop GL 3.2.
         const char *version = (const char *)glGetString(GL_VERSION);
-        query[1] = version && !strncmp(version, "OpenGL ES", 9) ? GL_ANY_SAMPLES_PASSED : GL_SAMPLES_PASSED;
+        if (version && !strncmp(version, "OpenGL ES", 9)) {
+            query[1] = GL_ANY_SAMPLES_PASSED;
+        } else {
+            GLint major = 0, minor = 0;
+            glGetIntegerv(GL_MAJOR_VERSION, &major);
+            glGetIntegerv(GL_MINOR_VERSION, &minor);
+            query[1] = major > 3 || (major == 3 && minor >= 3)
+                ? GL_ANY_SAMPLES_PASSED : GL_SAMPLES_PASSED;
+        }
     }
     glBeginQuery(query[1], query[0]);
 }

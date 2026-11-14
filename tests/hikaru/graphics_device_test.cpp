@@ -18,10 +18,12 @@ using namespace hikaru::graphics;
 namespace {
 struct RecordingBackend final : Backend {
     struct TextureCall { unsigned id=0, level=0; Texture info{}; TextureUpload upload=TextureUpload::Definition; std::vector<uint8_t> pixels; };
-    bool paletteSupport=false, texturePaletteSupport=false, packedSupport=false;
+    bool paletteSupport=false, texturePaletteSupport=false, packedSupport=false, reuseSupport=false;
+    bool fragmentSupport=false,fragmentThrow=false;
     bool supportsDrawPalette() const override { return paletteSupport; }
     bool supportsTexturePalette() const override { return texturePaletteSupport; }
     bool supportsPackedVertices() const override { return packedSupport; }
+    bool supportsGeometryReuse() const override { return reuseSupport; }
     Draw lastDraw{}, lastClear{};
     GLbitfield lastClearMask=0;
     bool drew = false;
@@ -50,6 +52,11 @@ struct RecordingBackend final : Backend {
     unsigned queryStartDraws = 0;
     void beginOcclusion() override { queryStartDraws = draws; }
     bool endOcclusion() override { return draws != queryStartDraws; }
+    bool beginFragmentList(unsigned,uint64_t) override {
+        if(fragmentThrow)throw std::runtime_error("collection failure");
+        events.push_back("list_begin");return fragmentSupport;
+    }
+    bool endFragmentList() override { events.push_back("list_end");return fragmentSupport; }
     void present(unsigned width, unsigned height) override { lastPresentWidth = width; lastPresentHeight = height; }
 };
 
@@ -547,6 +554,66 @@ void testVertexRanges(RecordingBackend& backend, Device& device) {
     device.checkError();
 }
 
+void testRetainedGeometry() {
+    auto backend=std::make_unique<RecordingBackend>();auto* record=backend.get();record->reuseSupport=true;
+    Device device(std::move(backend));Device::Scope scope(&device);device.begin(16,16);
+    const GLuint program=makeProgram("");
+    const GLint peel=hikaru_glGetUniformLocation(program,"u_peel_enabled");
+    hikaru_glUniform1i(peel,1);
+    GLuint vao=0,buffer=0;hikaru_glGenVertexArrays(1,&vao);hikaru_glBindVertexArray(vao);
+    hikaru_glGenBuffers(1,&buffer);hikaru_glBindBuffer(GL_ARRAY_BUFFER,buffer);
+    std::array<float,18> values={0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17};
+    hikaru_glBufferData(GL_ARRAY_BUFFER,sizeof(values),values.data(),GL_STATIC_DRAW);
+    hikaru_glEnableVertexAttribArray(0);
+    hikaru_glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3*sizeof(float),nullptr);
+    auto render=[&](GLint first=0,GLsizei count=3) {
+        hikaru_glDrawArrays(GL_TRIANGLES,first,count);device.checkError();
+        return record->lastDraw.geometry;
+    };
+    const auto initial=render();
+    check(initial&&initial->vertices[0].position[0]==0,"retained geometry was not captured");
+    check(render()==initial,"unchanged geometry was converted again");
+    hikaru_glUniform1f(hikaru_glGetUniformLocation(program,"u_alpha_ref"),0.25f);
+    check(render()==initial,"a uniform update invalidated immutable vertices");
+    hikaru_glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3*sizeof(float),nullptr);
+    check(render()==initial,"an identical attribute write invalidated geometry");
+    check(render(1)!=initial&&render(0,6)->vertices.size()==6,"first/count did not select separate geometry");
+    values[0]=42;
+    hikaru_glBufferData(GL_ARRAY_BUFFER,sizeof(values),values.data(),GL_STATIC_DRAW);
+    const auto redefined=render();
+    check(redefined!=initial&&redefined->vertices[0].position[0]==42&&initial->vertices[0].position[0]==0,
+          "same-size redefinition changed an earlier snapshot");
+    const float updated=84;
+    hikaru_glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(updated),&updated);
+    const auto edited=render();
+    check(edited!=redefined&&edited->vertices[0].position[0]==84,"subdata reused stale geometry");
+    // A write between queueing and flushing must leave the queued draw intact.
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);
+    values[0]=126;hikaru_glBufferData(GL_ARRAY_BUFFER,sizeof(values),values.data(),GL_STATIC_DRAW);
+    device.checkError();
+    check(record->lastDraw.geometry==edited&&edited->vertices[0].position[0]==84,"queued geometry changed after a VBO write");
+    const auto latest=render();
+    check(latest->vertices[0].position[0]==126,"new VBO data was not visible");
+    hikaru_glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3*sizeof(float),reinterpret_cast<const void*>(3*sizeof(float)));
+    check(render()->vertices[0].position[0]==3,"attribute offset reused stale geometry");
+    hikaru_glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3*sizeof(float),nullptr);
+    check(render()==latest,"returning to an earlier source layout converted geometry again");
+    hikaru_glDeleteBuffers(1,&buffer);
+    bool rejected=false;
+    hikaru_glDrawArrays(GL_TRIANGLES,0,3);
+    try {device.checkError();}catch(const std::out_of_range&){rejected=true;}
+    check(rejected,"a cache hit hid a deleted vertex buffer");
+    hikaru_glGenBuffers(1,&buffer);hikaru_glBindBuffer(GL_ARRAY_BUFFER,buffer);
+    hikaru_glBufferData(GL_ARRAY_BUFFER,sizeof(values),values.data(),GL_STATIC_DRAW);
+    hikaru_glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,3*sizeof(float),nullptr);
+    const auto replacement=render();
+    check(replacement&&replacement!=latest,"replacement storage reused an earlier snapshot");
+    device.present();
+    check(render()!=replacement,"presentation retained the preceding frame's CPU cache");
+    hikaru_glUniform1i(peel,0);render();
+    check(!record->lastDraw.geometry&&!record->lastDraw.vertices.empty(),"ordinary draws lost their staging path");
+}
+
 void testPackedVertexDispatch() {
     auto backend=std::make_unique<RecordingBackend>();auto* record=backend.get();record->packedSupport=true;record->paletteSupport=true;
     Device device(std::move(backend));Device::Scope scope(&device);device.begin(16,16);makeProgram("");
@@ -675,6 +742,30 @@ void testNativePalettes() {
 const HikaruGraphicsDispatch* priorDispatch = nullptr;
 void restoredClearColor(GLfloat, GLfloat, GLfloat, GLfloat) { priorDispatch = reinterpret_cast<const HikaruGraphicsDispatch*>(uintptr_t(1)); }
 
+
+void testFragmentListDispatch() {
+    auto backend=std::make_unique<RecordingBackend>();auto* record=backend.get();
+    Device device(std::move(backend));
+    {
+        Device::Scope scope(&device);
+        makeProgram("");issueTriangle();
+        check(!hikaru_graphics_begin_fragment_list(4096),"unsupported collection did not select fallback");
+        check(record->events.size()>=2&&record->events[record->events.size()-2]=="draw"&&
+              record->events.back()=="list_begin","opaque draw was not flushed before collection");
+        record->fragmentSupport=true;
+        check(hikaru_graphics_begin_fragment_list(4096),"native collection was not dispatched");
+        issueTriangle();
+        check(hikaru_graphics_end_fragment_list(),"collection completion was not dispatched");
+        check(record->events[record->events.size()-2]=="draw"&&record->events.back()=="list_end",
+              "the last transparent draw was not flushed before resolving");
+        record->fragmentThrow=true;
+        check(!hikaru_graphics_begin_fragment_list(4096),"dispatch exception crossed the C boundary");
+        bool threw=false;try{device.checkError();}catch(const std::runtime_error&){threw=true;}
+        check(threw,"collection exception was swallowed instead of deferred");
+    }
+    check(!hikaru_graphics_begin_fragment_list(4096),"direct GL attempted a native collection");
+}
+
 void testScopeAndExceptionContainment(Device& device) {
     HikaruGraphicsDispatch sentinel{}; sentinel.ClearColor = restoredClearColor;
     hikaru_graphics_set_dispatch(&sentinel);
@@ -719,6 +810,8 @@ int main() {
         run("light cache across matrices, light edits and relink", [&] { testLightCacheUpdates(*record, device); });
         run("cached placement, sort depth and family updates", [&] { testCachedDepthAndFamilyUpdates(*record, device); });
         run("strided vertex conversion and complete-range bounds", [&] { testVertexRanges(*record, device); });
+        run("fragment-list dispatch, flush ordering and exception containment", [&] { testFragmentListDispatch(); });
+        run("retained geometry mutations, ranges and frame ownership", [&] { testRetainedGeometry(); });
         run("packed layout, fallback, ordering and palette records", [&] { testPackedVertexDispatch(); });
         run("native matrix, texture and shading palettes", [&] { testNativePalettes(); });
         run("nested scope restoration and exception containment", [&] { testScopeAndExceptionContainment(device); });

@@ -25,6 +25,7 @@
 
 #define HIKARU_MAX_PEEL_LAYERS HIKARU_MAX_TRANSPARENCY_LAYERS
 #include "engine.h"
+#include "gl_fragment_list.h"
 
 enum {
 	HR_DEBUG_LOG,
@@ -83,6 +84,7 @@ typedef union {
 		uint64_t has_draw_palette	: 1;
 		uint64_t has_texture_palette	: 1;
 		uint64_t has_shading_palette	: 1;
+		uint64_t has_fragment_list	: 1;
 	};
 	uint64_t full;
 } hikaru_glsl_variant_t;
@@ -111,6 +113,8 @@ typedef struct {
 typedef struct {
 	bool viewport_valid, modelview_valid[2], lightset_valid, ambient_valid;
 	bool blend_valid, peel_valid, depth_valid, family_valid;
+	bool list_valid;
+	HikaruFragmentListParameters list_parameters;
 	vec3f_t family;
 	float sort_scale;
 	vec2f_t depth;
@@ -120,6 +124,8 @@ typedef struct {
 	unsigned palette_counts[3];
 	mtx4x4f_t palette_modelviews[2][HIKARU_DRAW_PALETTE_SIZE];
 	vec2f_t palette_depths[HIKARU_DRAW_PALETTE_SIZE];
+	unsigned palette_mode_counts[2]; /* texture, shading */
+	GLint palette_modes[2][HIKARU_DRAW_PALETTE_SIZE];
 	hikaru_lightset_t lightset;
 	unsigned light_debug_flags;
 	vec3f_t ambient;
@@ -163,6 +169,7 @@ typedef struct {
 	GLuint u_depth, u_sort_scale, u_family, u_family_other;
 	GLuint u_draw_depth;
 	GLuint u_textures, u_texture_modes, u_shading_modes;
+	GLint u_list_parameters[7];
 } hikaru_uniform_locations_t;
 
 typedef struct {
@@ -247,6 +254,11 @@ typedef struct {
 	unsigned transparency_peel_capacity;
 	uint64_t transparency_memory_budget;
 	bool transparency_overflow_seen, transparency_overflow_warned;
+	/* Host GPU storage stays with the render thread, outside frame packets. */
+	struct {
+		HikaruGlFragmentList *state;
+		bool collecting, failed;
+	} fragment_lists;
 	struct {
 		bool enabled, first;
 		GLuint previous_depth, opaque_depth;

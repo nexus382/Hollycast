@@ -3,6 +3,7 @@
 
 	Copyright 2019 flyinghead
 	Portions Copyright 2026 The Hollycast Authors
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -79,6 +80,13 @@ public:
 			vmaInvalidateAllocation(allocator, allocation, 0, allocInfo.size);
 		return p;
 	}
+    // Explicit readback invalidation is needed even for uncached host-visible
+    // heaps when they are not coherent. Call after mapping and GPU completion.
+    void InvalidateMemory(VkDeviceSize offset, VkDeviceSize size) const
+    {
+        const VkResult result = vmaInvalidateAllocation(allocator, allocation, offset, size);
+        vk::detail::resultCheck(static_cast<vk::Result>(result), "vmaInvalidateAllocation failed");
+    }
     // VMA ranges are allocation-relative; it handles coherent heaps and atom
     // alignment. Native streaming buffers stay mapped and flush before submit.
     void FlushMemory(VkDeviceSize offset, VkDeviceSize size) const

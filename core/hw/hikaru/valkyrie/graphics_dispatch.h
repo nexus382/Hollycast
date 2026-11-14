@@ -2,6 +2,7 @@
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include <stdint.h>
 // GL types are supplied by vk/core.h before this internal header.
 #ifdef __cplusplus
 extern "C" {
@@ -16,6 +17,11 @@ GLboolean hikaru_graphics_end_occlusion(const GLuint query[2]);
 void hikaru_graphics_finish_occlusion(const GLuint query[2]);
 GLboolean hikaru_graphics_occlusion_result(const GLuint query[2]);
 void hikaru_graphics_delete_occlusion(GLuint query[2]);
+// Raw OpenGL resources must never be created by a native dispatch or capture.
+GLboolean hikaru_graphics_has_native_dispatch(void);
+// Native per-pixel collection is transactional. False selects depth peeling.
+GLboolean hikaru_graphics_begin_fragment_list(uint64_t budget);
+GLboolean hikaru_graphics_end_fragment_list(void);
 // Palette support belongs to the active backend, not the host GL loader.
 // Returns -1 for direct GL, otherwise the native texture-palette capability.
 GLint hikaru_graphics_native_texture_palette(void);
@@ -24,6 +30,8 @@ GLboolean hikaru_graphics_supports_draw_palette(void);
 // callers restore their ordinary vertex buffer before configuring attributes.
 void hikaru_graphics_bind_draw_palette(GLuint state_buffer);
 typedef struct HikaruGraphicsDispatch {
+    GLboolean (*BeginFragmentList)(uint64_t budget);
+    GLboolean (*EndFragmentList)(void);
     void (*BeginOcclusion)(void);
     GLboolean (*EndOcclusion)(void);
     void (*FinishOcclusion)(void);

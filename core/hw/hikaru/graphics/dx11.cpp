@@ -107,6 +107,12 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     std::map<DepthKey,ComPtr<ID3D11DepthStencilState>> depths;
     std::map<RasterKey,ComPtr<ID3D11RasterizerState>> rasters;
     std::map<SamplerKey,ComPtr<ID3D11SamplerState>> samplers;
+    // These maps own immutable states until backend destruction. Insertions
+    // preserve iterators, including across clears and context rebindings.
+    decltype(blends)::iterator lastBlend=blends.end();
+    decltype(depths)::iterator lastDepth=depths.end();
+    decltype(rasters)::iterator lastRaster=rasters.end();
+    decltype(samplers)::iterator lastSampler=samplers.end();
     std::array<ComPtr<ID3D11VertexShader>,6> vertexShaders;
     std::array<ComPtr<ID3D11InputLayout>,6> inputLayouts;
     ComPtr<ID3D11VertexShader> clearVertex;
@@ -235,7 +241,9 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     ID3D11BlendState* blendState(const Draw& draw) {
         unsigned mask=0;for(unsigned i=0;i<4;++i)if(draw.colorMask[i])mask|=1u<<i;
         const BlendKey key{draw.blend,draw.srcRGB,draw.dstRGB,draw.srcAlpha,draw.dstAlpha,draw.equationRGB,draw.equationAlpha,mask};
-        auto found=blends.find(key);if(found!=blends.end())return found->second;
+        if(lastBlend!=blends.end()&&lastBlend->first==key)return lastBlend->second;
+        auto found=blends.find(key);
+        if(found!=blends.end()){lastBlend=found;return found->second;}
         D3D11_BLEND_DESC desc{};desc.IndependentBlendEnable=true;
         for(auto& state:desc.RenderTarget) {
             state.SrcBlend=state.SrcBlendAlpha=D3D11_BLEND_ONE;state.DestBlend=state.DestBlendAlpha=D3D11_BLEND_ZERO;
@@ -245,16 +253,18 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         state.SrcBlend=blendFactor(draw.srcRGB);state.DestBlend=blendFactor(draw.dstRGB);state.BlendOp=blendOperation(draw.equationRGB);
         state.SrcBlendAlpha=blendFactor(draw.srcAlpha,true);state.DestBlendAlpha=blendFactor(draw.dstAlpha,true);state.BlendOpAlpha=blendOperation(draw.equationAlpha);
         state.RenderTargetWriteMask=UINT8(mask);desc.RenderTarget[1].RenderTargetWriteMask=UINT8(mask);
-        ComPtr<ID3D11BlendState> result;checkResult(device->CreateBlendState(&desc,&result.get()),"blend state");return blends.emplace(key,std::move(result)).first->second;
+        ComPtr<ID3D11BlendState> result;checkResult(device->CreateBlendState(&desc,&result.get()),"blend state");return (lastBlend=blends.emplace(key,std::move(result)).first)->second;
     }
     ID3D11DepthStencilState* depthState(const Draw& draw) {
         const bool enabled=draw.depth&&draw.depthTest;
         const DepthKey key{enabled,enabled&&draw.depthWrite,draw.depthFunc};
-        auto found=depths.find(key);if(found!=depths.end())return found->second;
+        if(lastDepth!=depths.end()&&lastDepth->first==key)return lastDepth->second;
+        auto found=depths.find(key);
+        if(found!=depths.end()){lastDepth=found;return found->second;}
         D3D11_DEPTH_STENCIL_DESC desc{};desc.DepthEnable=enabled;desc.DepthWriteMask=enabled&&draw.depthWrite?D3D11_DEPTH_WRITE_MASK_ALL:D3D11_DEPTH_WRITE_MASK_ZERO;
         desc.DepthFunc=comparison(draw.depthFunc);desc.StencilReadMask=D3D11_DEFAULT_STENCIL_READ_MASK;desc.StencilWriteMask=D3D11_DEFAULT_STENCIL_WRITE_MASK;
         desc.FrontFace={D3D11_STENCIL_OP_KEEP,D3D11_STENCIL_OP_KEEP,D3D11_STENCIL_OP_KEEP,D3D11_COMPARISON_ALWAYS};desc.BackFace=desc.FrontFace;
-        ComPtr<ID3D11DepthStencilState> result;checkResult(device->CreateDepthStencilState(&desc,&result.get()),"depth state");return depths.emplace(key,std::move(result)).first->second;
+        ComPtr<ID3D11DepthStencilState> result;checkResult(device->CreateDepthStencilState(&desc,&result.get()),"depth state");return (lastDepth=depths.emplace(key,std::move(result)).first)->second;
     }
     ID3D11RasterizerState* rasterState(const Draw& draw) {
         // D3D and Metal use the same visual front-face convention. Our extra
@@ -263,23 +273,27 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         if(!std::isfinite(draw.biasFactor)||!std::isfinite(draw.biasUnits)||draw.biasUnits<INT_MIN||draw.biasUnits>=float(INT_MAX))
             throw FlycastException("Invalid Hikaru DX11 depth bias");
         const RasterKey key{draw.cull,draw.cullFace,draw.scissorEnabled,ccw,draw.biasFactor,draw.biasUnits};
-        auto found=rasters.find(key);if(found!=rasters.end())return found->second;
+        if(lastRaster!=rasters.end()&&lastRaster->first==key)return lastRaster->second;
+        auto found=rasters.find(key);
+        if(found!=rasters.end()){lastRaster=found;return found->second;}
         D3D11_RASTERIZER_DESC desc{};desc.FillMode=D3D11_FILL_SOLID;desc.CullMode=!draw.cull?D3D11_CULL_NONE:draw.cullFace==GL_FRONT?D3D11_CULL_FRONT:D3D11_CULL_BACK;
         desc.FrontCounterClockwise=ccw;desc.ScissorEnable=draw.scissorEnabled;desc.DepthClipEnable=true;
         desc.DepthBias=INT(std::lround(draw.biasUnits));desc.SlopeScaledDepthBias=draw.biasFactor;
-        ComPtr<ID3D11RasterizerState> result;checkResult(device->CreateRasterizerState(&desc,&result.get()),"rasterizer state");return rasters.emplace(key,std::move(result)).first->second;
+        ComPtr<ID3D11RasterizerState> result;checkResult(device->CreateRasterizerState(&desc,&result.get()),"rasterizer state");return (lastRaster=rasters.emplace(key,std::move(result)).first)->second;
     }
     ID3D11SamplerState* sampler(const Texture& sampling,const Image& sampled) {
         const unsigned maxLod=isMipmapped(sampling.minFilter)?std::min(sampled.description.MipLevels-1,sampling.maxLevel):0;
         SamplerKey key{sampling.minFilter,sampling.magFilter,sampling.wrapS,sampling.wrapT,maxLod};
-        auto found=samplers.find(key);if(found!=samplers.end())return found->second;
+        if(lastSampler!=samplers.end()&&lastSampler->first==key)return lastSampler->second;
+        auto found=samplers.find(key);
+        if(found!=samplers.end()){lastSampler=found;return found->second;}
         const bool minLinear=sampling.minFilter==GL_LINEAR||sampling.minFilter==GL_LINEAR_MIPMAP_NEAREST||sampling.minFilter==GL_LINEAR_MIPMAP_LINEAR;
         const bool mipLinear=sampling.minFilter==GL_NEAREST_MIPMAP_LINEAR||sampling.minFilter==GL_LINEAR_MIPMAP_LINEAR;
         D3D11_SAMPLER_DESC desc{};desc.Filter=D3D11_ENCODE_BASIC_FILTER(minLinear?D3D11_FILTER_TYPE_LINEAR:D3D11_FILTER_TYPE_POINT,
             sampling.magFilter==GL_LINEAR?D3D11_FILTER_TYPE_LINEAR:D3D11_FILTER_TYPE_POINT,mipLinear?D3D11_FILTER_TYPE_LINEAR:D3D11_FILTER_TYPE_POINT,0);
         desc.AddressU=addressMode(sampling.wrapS);desc.AddressV=addressMode(sampling.wrapT);desc.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP;
         desc.MaxAnisotropy=1;desc.ComparisonFunc=D3D11_COMPARISON_NEVER;desc.MaxLOD=float(maxLod);
-        ComPtr<ID3D11SamplerState> result;checkResult(device->CreateSamplerState(&desc,&result.get()),"sampler state");return samplers.emplace(key,std::move(result)).first->second;
+        ComPtr<ID3D11SamplerState> result;checkResult(device->CreateSamplerState(&desc,&result.get()),"sampler state");return (lastSampler=samplers.emplace(key,std::move(result)).first)->second;
     }
     ID3D11PixelShader* pixelShader(const Draw& draw) {
         unsigned passFlags=0;
@@ -593,12 +607,19 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             draw.topology==GL_LINES?D3D11_PRIMITIVE_TOPOLOGY_LINELIST:D3D11_PRIMITIVE_TOPOLOGY_POINTLIST;
         if(bindingsDirty||topology!=boundTopology){context->IASetPrimitiveTopology(topology);boundTopology=topology;}
         std::array<ID3D11ShaderResourceView*,19> views{};std::array<ID3D11SamplerState*,16> sampling{};
-        const unsigned baseSlots=draw.texturePalette?DrawPaletteSize:1;
+        const bool texturePalette=draw.texturePalette&&!draw.palette.empty();
+        const unsigned baseSlots=texturePalette?static_cast<unsigned>(draw.palette.size()):1;
         for(unsigned i=0;i<baseSlots;++i) {
-            const bool palette=draw.texturePalette&&i<draw.palette.size();
-            const auto& state=palette?draw.paletteSampling[i]:draw.sampling[0];
-            const unsigned id=palette?draw.paletteTextures[i]:i?0:draw.textures[0];
+            const auto& state=texturePalette?draw.paletteSampling[i]:draw.sampling[0];
+            const unsigned id=texturePalette?draw.paletteTextures[i]:draw.textures[0];
             auto& input=sampledImage(id,state,draw,false);views[i]=input.view;sampling[i]=sampler(state,input);
+        }
+        if(draw.texturePalette&&baseSlots<DrawPaletteSize) {
+            // The shader declares all palette slots. Unused entries share the
+            // same transparent image and sampler, regardless of the last draw.
+            auto& fallback=sampledImage(0,draw.sampling[0],draw,false);
+            std::fill(views.begin()+baseSlots,views.begin()+DrawPaletteSize,fallback.view.get());
+            std::fill(sampling.begin()+baseSlots,sampling.end(),sampler(draw.sampling[0],fallback));
         }
         for(unsigned i=1;i<4;++i) {
             const bool integer=draw.familyResolve?i>=2:draw.peelComposite?i==2:!draw.bitmap&&i==3;

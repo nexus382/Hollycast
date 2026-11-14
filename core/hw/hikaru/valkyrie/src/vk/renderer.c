@@ -102,12 +102,12 @@ compile_shader (GLenum type, const char *src)
 	GLint status;
 
 	id = glCreateShader (type);
-	/* Shared shader bodies use only GLSL 150 / ESSL 300 features. Keep the
-	 * version and ES precision declarations ahead of every generated variant. */
+	/* Preserve the explicit desktop SSBO version; legacy and ES variants keep
+	 * their existing versions and precision declarations. */
 	const char *body = strchr(src, '\n');
 	if (!body) { glDeleteShader(id); return 0; }
 	const char *sources[] = {
-		vk_renderer_is_gles() ? "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp usampler2D;\n" : "#version 150\n",
+		vk_renderer_is_gles() ? "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp usampler2D;\n" : (!strncmp(src, "#version 430", 12) ? "#version 430\n" : "#version 150\n"),
 		type == GL_FRAGMENT_SHADER ? (vk_renderer_is_gles()
             ? "layout(location=0) out vec4 vk_frag_color;\nlayout(location=1) out uvec2 vk_frag_metadata;\n"
             : "out vec4 vk_frag_color;\nout uvec2 vk_frag_metadata;\n") : "",

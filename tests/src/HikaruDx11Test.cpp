@@ -119,12 +119,23 @@ TEST_F(HikaruDx11Test, WindingRowsMaskedClearsQueriesAndBitmaps) {
     const uint8_t scene[]={128,0,0,128};hikaru::graphics::Texture texel;texel.width=texel.height=1;texel.maxLevel=0;
     backend->texture(12,texel,0,TextureUpload::Definition,scene,sizeof(scene));
     Draw bitmap;bitmap.bitmap=true;bitmap.color=0;bitmap.viewport={0,0,16,16};bitmap.textures={12,12,11,0};
-    bitmap.uniforms.factors={0,1,1,0};bitmap.uniforms.multipliers={1,0,0,0};bitmap.uniforms.keyed={1,0,0,0};
+    bitmap.uniforms.factors={0,1,1,1};bitmap.uniforms.multipliers={1,0,0,0};bitmap.uniforms.keyed={1,0,0,0};
     const std::array<std::array<float,2>,6> points={{{0,0},{1,0},{0,1},{1,0},{1,1},{0,1}}};
     for(auto point:points){Vertex vertex;vertex.position={point[0],point[1],0,1};vertex.uv={point[0],point[1],0,0};bitmap.vertices.push_back(vertex);}
     backend->clear(bitmap,GL_COLOR_BUFFER_BIT,{0,0,0,1},1);backend->draw(bitmap);image=pixels(*backend);
     EXPECT_NEAR(image[inside],128,1);EXPECT_NEAR(image[inside+1],127,1);EXPECT_EQ(image[inside+2],0);EXPECT_EQ(image[inside+3],255);
     bitmap.uniforms.direct[0]=1;backend->draw(bitmap);image=pixels(*backend);EXPECT_EQ(image[inside],0);EXPECT_EQ(image[inside+1],255);
+    // At 16:9 the 4:3 overlay covers the middle twelve pixels of this row.
+    // The 3D scene remains visible in both two-pixel side bands.
+    bitmap.uniforms.factors[3]=0.75f;
+    backend->draw(bitmap);image=pixels(*backend);
+    for(unsigned x=0;x<16;++x) {
+        const size_t pixel=(3*16+x)*4;
+        const bool covered=x>=2&&x<14;
+        EXPECT_EQ(image[pixel],covered?0:128) << x;
+        EXPECT_EQ(image[pixel+1],covered?255:0) << x;
+    }
+    bitmap.uniforms.factors[3]=1.f;
     // Nonuniform texels catch a bitmap input layout that accidentally maps
     // UVs to the mesh shader's optimized-away attribute registers.
     const std::array<uint8_t,16> gradient={255,0,0,255,255,0,0,255,0,255,0,255,0,255,0,255};
@@ -135,39 +146,8 @@ TEST_F(HikaruDx11Test, WindingRowsMaskedClearsQueriesAndBitmaps) {
     EXPECT_EQ(image[(3*16+3)*4],255);EXPECT_EQ(image[(12*16+3)*4+1],255);
 }
 TEST_F(HikaruDx11Test, PackedVerticesMatchExpandedLightingAndMixedStreams) {
-    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);allocate(*backend);
-    for(bool palette:{false,true})for(bool textured:{false,true})for(unsigned selector:{0u,1u,64u,65u,128u,129u,192u,193u}) {
-        auto expanded=mesh();expanded.depthTest=false;expanded.uniforms.flags={float(textured),1,1,1};
-        expanded.uniforms.lights[0].flags={1,0,0,1};expanded.uniforms.modelview[12]=-0.05f;expanded.uniforms.alternate[12]=0.05f;
-        expanded.uniforms.alternateNormal[10]=-1;
-        auto packed=expanded;packed.vertices.clear();
-        for(unsigned i=0;i<3;++i) {
-            PackedVertex vertex;std::copy_n(expanded.vertices[i].position.begin(),3,vertex.position.begin());
-            vertex.normal={0.25f,0.75f,1};vertex.diffuse={96,128,191};vertex.ambient={48,64,80};vertex.alpha=191;
-            vertex.specular={80,50,20,5};vertex.unknown={10,20,30};vertex.matrixSelect=uint8_t(selector);vertex.uv={0.25f,0.75f};
-            vertex.drawIndex=palette?1.f:0.f;packed.packedVertices.push_back(vertex);
-            auto& decoded=expanded.vertices[i];std::copy(vertex.normal.begin(),vertex.normal.end(),decoded.normal.begin());
-            for(unsigned c=0;c<3;++c){decoded.diffuse[c]=vertex.diffuse[c]/255.f;decoded.ambient[c]=vertex.ambient[c]/255.f;decoded.unknown[c]=vertex.unknown[c]/65535.f;}
-            for(unsigned c=0;c<4;++c)decoded.specular[c]=vertex.specular[c]/255.f;
-            decoded.uv={0.25f,0.75f,0,0};decoded.extra={191.f/255.f,float(selector),vertex.drawIndex,0};
-        }
-        if(palette) {
-            for(unsigned i=0;i<2;++i) {
-                DrawRecord record;record.modelview=expanded.uniforms.modelview;record.alternate=expanded.uniforms.alternate;
-                record.normal=expanded.uniforms.normal;record.alternateNormal=expanded.uniforms.alternateNormal;
-                record.modes={1,1,0,1};record.modelview[12]+=float(i)*0.1f;
-                expanded.palette.push_back(record);expanded.paletteTextures.push_back(i?11:10);expanded.paletteSampling.push_back(expanded.sampling[0]);
-            }
-            expanded.texturePalette=textured;packed.palette=expanded.palette;packed.paletteTextures=expanded.paletteTextures;
-            packed.paletteSampling=expanded.paletteSampling;packed.texturePalette=textured;
-        }
-        clear(*backend);backend->draw(expanded);const auto expected=pixels(*backend);
-        clear(*backend);backend->draw(packed);equalPixels(expected,pixels(*backend),"packed normalized attributes and selector",1);
-        // The two strides are not multiples of one another. Alternating them
-        // catches truncated first-vertex offsets and stale IA stride/layout.
-        backend->draw(expanded);equalPixels(expected,pixels(*backend),"expanded following packed stream",1);
-        backend->draw(packed);equalPixels(expected,pixels(*backend),"packed following expanded stream",1);
-    }
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    exercisePackedVertices(*backend);
 }
 TEST_F(HikaruDx11Test, SpecializedPassControlsMatchGenericDepthAndCoverage) {
     auto generic=makeDx11BackendForTesting(device,context,D3DCompile,false);

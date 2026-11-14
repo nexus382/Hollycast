@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "device.h"
 #include "shaders.h"
+#include "fragment_list_shared.h"
 
 #ifdef USE_VULKAN
 #include "rend/vulkan/buffer.h"
@@ -102,11 +103,25 @@ class VulkanBackend final : public Backend {
         uint64_t revision = 0;
     };
     static constexpr unsigned BatchDraws = 256, BatchSlots = 8;
+    // Four-component UNORM fields include the neighboring alpha/selector bytes.
+    // Avoid optional three-component byte/word formats on mobile devices.
+    static constexpr std::array<vk::Format,8> PackedFormats={
+        vk::Format::eR32G32B32Sfloat,vk::Format::eR8G8B8A8Unorm,
+        vk::Format::eR32G32B32Sfloat,vk::Format::eR8G8B8A8Unorm,
+        vk::Format::eR32G32Sfloat,vk::Format::eR8G8B8A8Unorm,
+        vk::Format::eR16G16B16A16Unorm,vk::Format::eR32Sfloat};
     static constexpr vk::DeviceSize RetainedStreamBytes = 32 * 1024 * 1024;
     static constexpr vk::DeviceSize LiveStreamBytes = 64 * 1024 * 1024;
     struct StreamBuffer {
         BufferData storage;
         uint8_t* mapping;
+        std::unordered_map<std::shared_ptr<const Geometry>,vk::DeviceSize> geometryOffsets;
+        vk::DeviceSize used=0;
+        uint64_t geometryFrame=0;
+        void beginGeometryFrame(uint64_t frame) {
+            if(geometryFrame==frame)return;
+            geometryOffsets.clear();used=0;geometryFrame=frame;
+        }
         StreamBuffer(vk::DeviceSize bytes, vk::BufferUsageFlags usage)
             : storage(bytes,usage), mapping(static_cast<uint8_t*>(storage.MapMemory())) {}
         ~StreamBuffer() { storage.UnmapMemory(); }
@@ -131,12 +146,29 @@ class VulkanBackend final : public Backend {
         }
     };
     struct PipelineKey {
-        bool bitmap, familyResolve, peelComposite, palette, depthTest, depthWrite, blend, cull, depthBias;
+        bool bitmap, familyResolve, peelComposite, palette, packed, depthTest, depthWrite, blend, cull, depthBias;
         GLenum depthFunc, cullFace, frontFace, srcRGB, dstRGB, srcAlpha, dstAlpha, equationRGB, equationAlpha, topology;
         std::array<bool,4> colorMask;
         vk::Format color, depth, metadata;
         std::array<int32_t,MeshShaderSpecializationCount> shader{};
-        bool operator<(const PipelineKey& b) const { return std::tie(bitmap,familyResolve,peelComposite,palette,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader) < std::tie(b.bitmap,b.familyResolve,b.peelComposite,b.palette,b.depthTest,b.depthWrite,b.blend,b.cull,b.depthBias,b.depthFunc,b.cullFace,b.frontFace,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.equationRGB,b.equationAlpha,b.topology,b.colorMask,b.color,b.depth,b.metadata,b.shader); }
+        bool fragmentCollect=false;
+        auto values() const { return std::tie(bitmap,familyResolve,peelComposite,palette,packed,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader,fragmentCollect); }
+        bool operator==(const PipelineKey& b) const { return values()==b.values(); }
+        bool operator<(const PipelineKey& b) const { return values()<b.values(); }
+    };
+    struct DescriptorKey {
+        bool texturePalette=false;
+        unsigned slots=1;
+        std::array<vk::DescriptorImageInfo,DrawPaletteSize+3> images{};
+        vk::DescriptorBufferInfo palette;
+        bool operator==(const DescriptorKey& other) const {
+            return texturePalette==other.texturePalette&&slots==other.slots&&palette==other.palette&&
+                std::equal(images.begin(),images.begin()+slots+3,other.images.begin());
+        }
+    };
+    struct CachedDescriptors {
+        DescriptorKey key;
+        vk::DescriptorSet set;
     };
     VulkanContext* ctx = VulkanContext::Instance();
     vk::Device device = ctx->GetDevice();
@@ -149,11 +181,54 @@ class VulkanBackend final : public Backend {
     vk::UniqueRenderPass colorOnlyPass;
     std::map<std::tuple<vk::Format,vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
     vk::UniqueShaderModule meshVertex, meshFragment, paletteVertex, paletteFragment, fixedTexturePaletteFragment, bitmapVertex, bitmapFragment, familyFragment, peelFragment;
+    struct FragmentListStorage {
+        std::unique_ptr<BufferData> heads,status,readback;
+        std::array<std::unique_ptr<BufferData>,4> nodes;
+        Image background;
+        vk::UniqueDescriptorPool descriptors;
+        vk::DescriptorSet set;
+        uint32_t capacity=0;
+    };
+    std::unique_ptr<FragmentListStorage> fragmentLists;
+    vk::UniqueDescriptorSetLayout fragmentListLayout;
+    vk::UniquePipelineLayout fragmentPipelineLayout;
+    vk::UniqueShaderModule fragmentCollectShader,fragmentResolveVertex,fragmentResolveShader;
+    std::map<vk::Format,vk::UniquePipeline> fragmentResolvePipelines;
+    struct FragmentGpuTimer {
+        vk::UniqueQueryPool pool;
+        uint32_t pending=0;
+        uint64_t mask=0;
+        double period=0;
+        bool enabled=false,recording=false;
+    } fragmentGpu;
+    HikaruFragmentListParameters fragmentParameters{};
+    bool fragmentListSupported=false,fragmentCollectActive=false,fragmentListFailed=false;
+    bool fragmentOverflowWarned=false,fragmentSmallList=true;
+    unsigned fragmentColor=0;
+    HikaruFragmentPoolPolicy fragmentPoolPolicy{};
+    vk::Extent2D fragmentPoolExtent{};
+    vk::Format fragmentPoolFormat=vk::Format::eUndefined;
+    uint64_t fragmentPoolAllocations=0;
+
+#ifdef HIKARU_NATIVE_TESTING
+    std::array<uint64_t,3> fragmentListCounts{}; // collections, resolves, overflows
+#endif
     struct CachedPipeline { vk::UniquePipeline pipeline; uint64_t touched; };
     std::map<PipelineKey,CachedPipeline> pipelines;
+    decltype(pipelines)::iterator lastPipeline=pipelines.end();
+#ifdef HIKARU_NATIVE_TESTING
+    size_t pipelineCacheLimit=512;
+#else
+    static constexpr size_t pipelineCacheLimit=512;
+#endif
     uint64_t pipelineClock = 0;
+    vk::UniquePipelineLayout clearPipelineLayout;
+    vk::UniqueShaderModule clearVertex;
+    std::array<vk::UniqueShaderModule,2> clearFragments;
+    std::map<std::tuple<vk::Format,vk::Format,unsigned>,vk::UniquePipeline> clearPipelines;
     unsigned textureSlots = 1;
-    bool specializeShaders = true;
+    bool specializeShaders = true, packedVerticesSupported = false;
+    vk::UniqueShaderModule packedMeshVertex,packedPaletteVertex;
     std::unordered_map<unsigned, Image> images;
     std::unordered_map<unsigned, Texture> imageInfo;
     std::map<std::tuple<unsigned,unsigned,unsigned>,vk::UniqueFramebuffer> framebuffers;
@@ -163,23 +238,59 @@ class VulkanBackend final : public Backend {
     vk::UniqueCommandBuffer activeCommand;
     vk::UniqueFence activeFence;
     vk::UniqueDescriptorPool activeDescriptors;
+    // Sets are immutable after recording and live in the active batch's pool.
+    // Its uniform buffer stays fixed, so only the dynamic offset changes per draw.
+    // A small ring retains nearby materials without allocating CPU map nodes
+    // for each batch. Eviction drops only the lookup; the pool owns every set.
+    std::array<CachedDescriptors,8> materialDescriptors;
+    size_t nextDescriptors=0;
+    const CachedDescriptors* lastDescriptors=nullptr;
     std::unique_ptr<StreamBuffer> activeVertexBuffer,activeUniformBuffer,activePaletteBuffer;
     std::vector<std::unique_ptr<BufferData>> activeTransfers;
     std::vector<Image> retiredImages;
     std::vector<vk::UniqueFramebuffer> retiredFramebuffers;
     std::vector<vk::UniquePipeline> retiredPipelines;
+    // Each stream retains its own immutable ranges within a frame. It is
+    // reacquired only after its previous fence, and never borrowed by another
+    // slot. Preserve its high-water mark until safe recycling or frame end.
+    uint64_t geometryFrame=1;
+#ifdef HIKARU_NATIVE_TESTING
+    uint64_t vertexUploadCount=0,geometryReuseCount=0;
+#endif
     vk::DeviceSize activeVertexOffset=0,activeUniformOffset=0,activePaletteOffset=0;
     unsigned activeDrawCount=0,activeColor=0,activeDepth=0,activeMetadata=0;
+    // Reuse only the last immutable range in this batch. CPU snapshots avoid
+    // reading write-combined mapped GPU memory just to compare payloads.
+    Uniforms uploadedUniforms{};
+    bool uniformUploadValid=false,paletteUploadValid=false;
+    vk::DeviceSize uploadedUniformOffset=0;
+    std::array<DrawRecord,DrawPaletteSize> uploadedPalette{};
+    size_t uploadedPaletteSize=0;
+    vk::DescriptorBufferInfo uploadedPaletteInfo;
     vk::Pipeline boundPipeline;
     vk::Buffer boundVertexBuffer;
+    vk::DeviceSize boundVertexOffset=0;
     std::optional<std::array<float,6>> boundViewport;
     std::optional<vk::Rect2D> boundScissor;
     std::optional<std::array<float,2>> boundDepthBias;
     // Opt-in diagnostics distinguish CPU pipeline work from queue backpressure.
     struct Timings {
-        const bool enabled=std::getenv("HIKARU_TRACE_TIMING")!=nullptr;
+        bool enabled=std::getenv("HIKARU_TRACE_TIMING")!=nullptr||std::getenv("HIKARU_TRACE_GPU_TIMING")!=nullptr;
+        enum class WaitReason { Readback, FragmentStartup, FragmentStorage, FragmentCounter, StreamBudget, BatchSlot, Count };
+        std::array<double,size_t(WaitReason::Count)> waitReasonsMs{};
+        std::array<uint64_t,size_t(WaitReason::Count)> waitCounts{};
+        uint64_t fragmentReuses=0;
         unsigned frames=0,draws=0,palettes=0,pipelines=0,passes=0,batches=0,queries=0,uploads=0;
+        unsigned descriptorSets=0,descriptorHits=0,packedDraws=0,vertexUploads=0,geometryHits=0;
+        uint64_t vertexBytes=0,listFragments=0;
+        uint64_t uniformUploads=0,uniformHits=0,uniformBytes=0,paletteUploads=0,paletteHits=0,paletteBytes=0;
+        uint64_t pipelineLookups=0,pipelineFastHits=0,maskedClears=0,maskedPixels=0;
+        unsigned listResolves=0,listOverflows=0,listCapacity=0,listPeakFragments=0;
+        uint64_t listPoolBytes=0,poolAllocations=0;
         double waitMs=0,pipelineMs=0,submitMs=0,descriptorMs=0;
+        bool gpuTiming=false;
+        std::array<double,4> gpuMs{};
+        std::array<uint64_t,4> gpuSamples{};
         struct Span {
             double& total; bool enabled;
             std::chrono::steady_clock::time_point start;
@@ -189,8 +300,25 @@ class VulkanBackend final : public Backend {
         };
         void present() {
             if(!enabled||++frames<60)return;
-            std::fprintf(stderr,"Hikaru Vulkan timing: draws=%u palettes=%u pipelines=%u passes=%u batches=%u queries=%u uploads=%u wait_ms=%.3f pipeline_ms=%.3f submit_ms=%.3f descriptor_ms=%.3f\n",draws,palettes,pipelines,passes,batches,queries,uploads,waitMs/frames,pipelineMs/frames,submitMs/frames,descriptorMs/frames);
-            frames=draws=palettes=pipelines=passes=batches=queries=uploads=0;waitMs=pipelineMs=submitMs=descriptorMs=0;
+            std::fprintf(stderr,"Hikaru Vulkan timing: draws=%u palettes=%u pipelines=%u passes=%u batches=%u queries=%u uploads=%u wait_ms=%.3f pipeline_ms=%.3f submit_ms=%.3f descriptor_ms=%.3f descriptor_sets=%u descriptor_hits=%u packed_draws=%u vertex_uploads=%u geometry_hits=%u vertex_bytes=%llu\n",draws,palettes,pipelines,passes,batches,queries,uploads,waitMs/frames,pipelineMs/frames,submitMs/frames,descriptorMs/frames,descriptorSets,descriptorHits,packedDraws,vertexUploads,geometryHits,static_cast<unsigned long long>(vertexBytes));
+            std::fprintf(stderr,"Hikaru Vulkan fragment lists: resolves=%u overflows=%u fragments=%llu capacity=%u peak_used=%u pool_bytes=%llu allocations=%llu\n",listResolves,listOverflows,static_cast<unsigned long long>(listFragments),listCapacity,listPeakFragments,static_cast<unsigned long long>(listPoolBytes),static_cast<unsigned long long>(poolAllocations));
+            if(gpuTiming)std::fprintf(stderr,"Hikaru Vulkan fragment GPU timing: clear_ms=%.3f collect_ms=%.3f copy_ms=%.3f resolve_ms=%.3f clear_samples=%llu collect_samples=%llu copy_samples=%llu resolve_samples=%llu\n",gpuMs[0]/frames,gpuMs[1]/frames,gpuMs[2]/frames,gpuMs[3]/frames,static_cast<unsigned long long>(gpuSamples[0]),static_cast<unsigned long long>(gpuSamples[1]),static_cast<unsigned long long>(gpuSamples[2]),static_cast<unsigned long long>(gpuSamples[3]));
+            std::fprintf(stderr,"Hikaru Vulkan waits: readback_ms=%.3f startup_ms=%.3f storage_ms=%.3f counter_ms=%.3f stream_ms=%.3f slots_ms=%.3f readback_waits=%llu startup_waits=%llu storage_waits=%llu counter_waits=%llu stream_waits=%llu slots_waits=%llu reused_collections=%llu\n",
+                waitReasonsMs[0]/frames,waitReasonsMs[1]/frames,waitReasonsMs[2]/frames,waitReasonsMs[3]/frames,waitReasonsMs[4]/frames,waitReasonsMs[5]/frames,
+                static_cast<unsigned long long>(waitCounts[0]),static_cast<unsigned long long>(waitCounts[1]),static_cast<unsigned long long>(waitCounts[2]),
+                static_cast<unsigned long long>(waitCounts[3]),static_cast<unsigned long long>(waitCounts[4]),static_cast<unsigned long long>(waitCounts[5]),
+                static_cast<unsigned long long>(fragmentReuses));
+            std::fprintf(stderr,"Hikaru Vulkan reuse: uniform_uploads=%llu uniform_hits=%llu uniform_bytes=%llu palette_uploads=%llu palette_hits=%llu palette_bytes=%llu pipeline_lookups=%llu pipeline_fast_hits=%llu masked_clears=%llu masked_pixels=%llu\n",
+                static_cast<unsigned long long>(uniformUploads),static_cast<unsigned long long>(uniformHits),static_cast<unsigned long long>(uniformBytes),
+                static_cast<unsigned long long>(paletteUploads),static_cast<unsigned long long>(paletteHits),static_cast<unsigned long long>(paletteBytes),
+                static_cast<unsigned long long>(pipelineLookups),static_cast<unsigned long long>(pipelineFastHits),
+                static_cast<unsigned long long>(maskedClears),static_cast<unsigned long long>(maskedPixels));
+            uniformUploads=uniformHits=uniformBytes=paletteUploads=paletteHits=paletteBytes=0;
+            pipelineLookups=pipelineFastHits=maskedClears=maskedPixels=0;
+            gpuMs={};gpuSamples={};waitReasonsMs={};waitCounts={};fragmentReuses=0;
+            listResolves=listOverflows=listPeakFragments=0;listFragments=0;
+            frames=draws=palettes=pipelines=passes=batches=queries=uploads=descriptorSets=descriptorHits=packedDraws=vertexUploads=geometryHits=0;
+            vertexBytes=0;waitMs=pipelineMs=submitMs=descriptorMs=0;
         }
     } timing;
     bool renderPassOpen=false;
@@ -208,13 +336,13 @@ class VulkanBackend final : public Backend {
     }
     void allocateStream(std::unique_ptr<StreamBuffer>& target,vk::DeviceSize bytes,vk::BufferUsageFlags usage) {
         if(target&&target->storage.bufferSize>=bytes)return;
+        if(&target==&activeUniformBuffer)uniformUploadValid=false;
+        if(&target==&activePaletteBuffer)paletteUploadValid=false;
         target.reset(); // only unused storage from a fence-retired slot can grow
         while(liveStreamBytes()+bytes>LiveStreamBytes) {
             for(auto& batch:freeBatches){batch.vertexBuffer.reset();batch.uniformBuffer.reset();batch.paletteBuffer.reset();}
             if(liveStreamBytes()+bytes<=LiveStreamBytes||pendingBatches.empty())break;
-            Timings::Span measured(timing.waitMs,timing.enabled);
-            if(device.waitForFences(*pendingBatches.front().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
-                throw std::runtime_error("Failed waiting for Hikaru Vulkan stream budget");
+            waitForBatch(pendingBatches.front(),Timings::WaitReason::StreamBudget);
             reapCompletedDraws();
         }
         // A single oversized guest draw is still rendered, after other batches
@@ -237,12 +365,20 @@ class VulkanBackend final : public Backend {
             freeBatches.push_back(std::move(batch));
         }
     }
-    void waitForDraws() {
+    void waitForBatch(const PendingBatch& batch,Timings::WaitReason reason) {
+        // Only fence latency belongs here; submission and resource recycling
+        // have their own costs and must not be attributed to a GPU wait.
         Timings::Span measured(timing.waitMs,timing.enabled);
+        const auto index=size_t(reason);
+        Timings::Span classified(timing.waitReasonsMs[index],timing.enabled);
+        if(timing.enabled)++timing.waitCounts[index];
+        if(device.waitForFences(*batch.fence,true,UINT64_MAX)!=vk::Result::eSuccess)
+            throw std::runtime_error("Failed waiting for Hikaru Vulkan submission");
+    }
+    void waitForDraws(Timings::WaitReason reason=Timings::WaitReason::Readback) {
         flushBatch();
         if(pendingBatches.empty())return;
-        if(device.waitForFences(*pendingBatches.back().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
-            throw std::runtime_error("Failed waiting for Hikaru Vulkan submission");
+        waitForBatch(pendingBatches.back(),reason);
         reapCompletedDraws();
     }
     vk::CommandBuffer startBatch() {
@@ -250,9 +386,7 @@ class VulkanBackend final : public Backend {
         if(activeCommand)return *activeCommand;
         reapCompletedDraws();
         if(freeBatches.empty()&&pendingBatches.size()>=BatchSlots) {
-            Timings::Span measured(timing.waitMs,timing.enabled);
-            if(device.waitForFences(*pendingBatches.front().fence,true,UINT64_MAX)!=vk::Result::eSuccess)
-                throw std::runtime_error("Failed waiting for Hikaru Vulkan batch slot");
+            waitForBatch(pendingBatches.front(),Timings::WaitReason::BatchSlot);
             reapCompletedDraws();
         }
         if(!freeBatches.empty()) {
@@ -265,6 +399,13 @@ class VulkanBackend final : public Backend {
             auto commands=device.allocateCommandBuffersUnique({*commandPool,vk::CommandBufferLevel::ePrimary,1});
             activeCommand=std::move(commands.front());activeFence=device.createFenceUnique({});
         }
+        if(activeVertexBuffer) {
+            activeVertexBuffer->beginGeometryFrame(geometryFrame);
+            activeVertexOffset=activeVertexBuffer->used;
+        }
+        for(auto& entry:materialDescriptors)entry.set=nullptr;
+        nextDescriptors=0;lastDescriptors=nullptr;
+        uniformUploadValid=paletteUploadValid=false;
         boundPipeline=nullptr;boundVertexBuffer=nullptr;boundViewport.reset();boundScissor.reset();boundDepthBias.reset();
         auto cmd=*activeCommand;
         cmd.begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
@@ -449,16 +590,28 @@ class VulkanBackend final : public Backend {
         return *it->second;
     }
     vk::Pipeline pipeline(const PipelineKey& k) {
+        if(lastPipeline!=pipelines.end()&&lastPipeline->first==k) {
+            lastPipeline->second.touched=++pipelineClock;
+            if(timing.enabled)++timing.pipelineFastHits;
+            return *lastPipeline->second.pipeline;
+        }
+        if(timing.enabled)++timing.pipelineLookups;
         auto found=pipelines.find(k);
-        if(found!=pipelines.end()){found->second.touched=++pipelineClock;return *found->second.pipeline;}
+        if(found!=pipelines.end()){lastPipeline=found;found->second.touched=++pipelineClock;return *found->second.pipeline;}
         auto pass=renderPass(k.color,k.depth,k.metadata);
-        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.familyResolve?*familyFragment:k.peelComposite?*peelFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
+        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.packed?(k.palette?*packedPaletteVertex:*packedMeshVertex):k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.fragmentCollect?*fragmentCollectShader:k.familyResolve?*familyFragment:k.peelComposite?*peelFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
         std::array<vk::SpecializationMapEntry,MeshShaderSpecializationCount> entries{};
         for(unsigned i=0;i<entries.size();++i)entries[i]=vk::SpecializationMapEntry(i,uint32_t(i*sizeof(int32_t)),sizeof(int32_t));
         vk::SpecializationInfo specialization(entries.size(),entries.data(),sizeof(k.shader),k.shader.data());
         if(!k.bitmap)stages[1].pSpecializationInfo=&specialization;
-        vk::VertexInputBindingDescription binding(0,sizeof(Vertex),vk::VertexInputRate::eVertex);
-        std::array<vk::VertexInputAttributeDescription,8> attrs; for(uint32_t i=0;i<8;i++)attrs[i]={i,0,vk::Format::eR32G32B32A32Sfloat,i*16};
+        vk::VertexInputBindingDescription binding(0,k.packed?sizeof(PackedVertex):sizeof(Vertex),vk::VertexInputRate::eVertex);
+        std::array<vk::VertexInputAttributeDescription,8> attrs;
+        if(k.packed) {
+            constexpr uint32_t offsets[]={offsetof(PackedVertex,position),offsetof(PackedVertex,diffuse),
+                offsetof(PackedVertex,normal),offsetof(PackedVertex,ambient),offsetof(PackedVertex,uv),
+                offsetof(PackedVertex,specular),offsetof(PackedVertex,unknown),offsetof(PackedVertex,drawIndex)};
+            for(uint32_t i=0;i<attrs.size();++i)attrs[i]={i,0,PackedFormats[i],offsets[i]};
+        } else for(uint32_t i=0;i<attrs.size();++i)attrs[i]={i,0,vk::Format::eR32G32B32A32Sfloat,i*16};
         vk::PipelineVertexInputStateCreateInfo vi({},1,&binding,attrs.size(),attrs.data());
         vk::PrimitiveTopology topology=k.topology==GL_TRIANGLE_STRIP?vk::PrimitiveTopology::eTriangleStrip:k.topology==GL_LINES?vk::PrimitiveTopology::eLineList:k.topology==GL_POINTS?vk::PrimitiveTopology::ePointList:vk::PrimitiveTopology::eTriangleList;
         vk::PipelineInputAssemblyStateCreateInfo ia({},topology,false);
@@ -472,28 +625,63 @@ class VulkanBackend final : public Backend {
         // The metadata attachment is used only by unblended depth writers.
         vk::PipelineColorBlendStateCreateInfo cb({},false,vk::LogicOp::eCopy,k.metadata==vk::Format::eUndefined?1:2,blends.data());
         vk::DynamicState dyns[]={vk::DynamicState::eViewport,vk::DynamicState::eScissor,vk::DynamicState::eDepthBias}; vk::PipelineDynamicStateCreateInfo dyn({},3,dyns);
-        vk::GraphicsPipelineCreateInfo ci({},2,stages,&vi,&ia,nullptr,&vp,&rs,&ms,&ds,&cb,&dyn,k.shader[8]?*palettePipelineLayout:*pipelineLayout,pass);
+        vk::GraphicsPipelineCreateInfo ci({},2,stages,&vi,&ia,nullptr,&vp,&rs,&ms,&ds,&cb,&dyn,k.fragmentCollect?*fragmentPipelineLayout:k.shader[8]?*palettePipelineLayout:*pipelineLayout,pass);
         Timings::Span measured(timing.pipelineMs,timing.enabled);
         if(timing.enabled)++timing.pipelines;
         auto result=device.createGraphicsPipelineUnique(ctx->GetPipelineCache(),ci);
         // Evicted pipelines can still be referenced by recorded or submitted
         // draws. Retire them on this queue before reclaiming their handles.
-        if(pipelines.size()>=512) {
+        if(pipelines.size()>=pipelineCacheLimit) {
             auto oldest=std::min_element(pipelines.begin(),pipelines.end(),[](const auto& a,const auto& b){return a.second.touched<b.second.touched;});
+            if(lastPipeline==oldest)lastPipeline=pipelines.end();
             retiredPipelines.push_back(std::move(oldest->second.pipeline));pipelines.erase(oldest);
         }
-        return *pipelines.emplace(k,CachedPipeline{std::move(result.value),++pipelineClock}).first->second.pipeline;
+        lastPipeline=pipelines.emplace(k,CachedPipeline{std::move(result.value),++pipelineClock}).first;
+        return *lastPipeline->second.pipeline;
+    }
+    vk::Pipeline maskedClearPipeline(vk::Format format,vk::Format depthFormat,unsigned channels) {
+        const auto key=std::make_tuple(format,depthFormat,channels);
+        auto found=clearPipelines.find(key);
+        if(found!=clearPipelines.end())return *found->second;
+        if(!clearPipelineLayout) {
+            const vk::PushConstantRange color(vk::ShaderStageFlagBits::eFragment,0,sizeof(Vec4));
+            clearPipelineLayout=device.createPipelineLayoutUnique({{},0,nullptr,1,&color});
+            clearVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanFullscreenVertexSource());
+        }
+        const unsigned integer=format==vk::Format::eR32G32Uint?1:0;
+        if(!clearFragments[integer])
+            clearFragments[integer]=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanClearFragmentSource(integer!=0));
+        const std::array<vk::PipelineShaderStageCreateInfo,2> stages={{
+            {{},vk::ShaderStageFlagBits::eVertex,*clearVertex,"main"},
+            {{},vk::ShaderStageFlagBits::eFragment,*clearFragments[integer],"main"}}};
+        const vk::PipelineVertexInputStateCreateInfo vertices;
+        const vk::PipelineInputAssemblyStateCreateInfo assembly({},vk::PrimitiveTopology::eTriangleList,false);
+        const vk::PipelineViewportStateCreateInfo viewport({},1,nullptr,1,nullptr);
+        const vk::PipelineRasterizationStateCreateInfo raster({},false,false,vk::PolygonMode::eFill,
+            vk::CullModeFlagBits::eNone,vk::FrontFace::eCounterClockwise,false,0,0,0,1);
+        const vk::PipelineMultisampleStateCreateInfo samples({},vk::SampleCountFlagBits::e1);
+        const vk::PipelineDepthStencilStateCreateInfo depth;
+        vk::PipelineColorBlendAttachmentState attachment;
+        attachment.colorWriteMask=vk::ColorComponentFlags(channels);
+        const vk::PipelineColorBlendStateCreateInfo blending({},false,vk::LogicOp::eCopy,1,&attachment);
+        const std::array<vk::DynamicState,2> states={vk::DynamicState::eViewport,vk::DynamicState::eScissor};
+        const vk::PipelineDynamicStateCreateInfo dynamic({},states.size(),states.data());
+        const vk::GraphicsPipelineCreateInfo info({},stages.size(),stages.data(),&vertices,&assembly,nullptr,
+            &viewport,&raster,&samples,&depth,&blending,&dynamic,*clearPipelineLayout,
+            renderPass(format,depthFormat));
+        auto result=device.createGraphicsPipelineUnique(ctx->GetPipelineCache(),info);
+        return *clearPipelines.emplace(key,std::move(result.value)).first->second;
     }
     vk::UniqueDescriptorSetLayout makeDescriptorLayout(unsigned slots) {
         std::array<vk::DescriptorSetLayoutBinding,6> bindings;
-        bindings[0]={0,vk::DescriptorType::eUniformBuffer,1,vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment};
+        bindings[0]={0,vk::DescriptorType::eUniformBufferDynamic,1,vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment};
         for(uint32_t i=1;i<5;i++)bindings[i]={i,vk::DescriptorType::eCombinedImageSampler,i==1?slots:1,vk::ShaderStageFlagBits::eFragment};
         bindings[5]={5,vk::DescriptorType::eStorageBuffer,1,vk::ShaderStageFlagBits::eVertex};
         return device.createDescriptorSetLayoutUnique({{},bindings.size(),bindings.data()});
     }
     vk::DescriptorPool descriptorPool() {
         if(!activeDescriptors) {
-            std::array<vk::DescriptorPoolSize,3> sizes={vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,BatchDraws),
+            std::array<vk::DescriptorPoolSize,3> sizes={vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic,BatchDraws),
                 vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,BatchDraws),
                 vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler,(textureSlots+3)*BatchDraws)};
             activeDescriptors=device.createDescriptorPoolUnique({{},BatchDraws,sizes.size(),sizes.data()});
@@ -501,13 +689,341 @@ class VulkanBackend final : public Backend {
         return *activeDescriptors;
     }
 
+    bool enableFragmentGpuTiming() {
+        if(fragmentGpu.enabled)return true;
+        const auto physical=ctx->GetPhysicalDevice();
+        const auto queues=physical.getQueueFamilyProperties();
+        const unsigned family=ctx->GetGraphicsQueueFamilyIndex();
+        if(family>=queues.size()||!queues[family].timestampValidBits)return false;
+        const double period=physical.getProperties().limits.timestampPeriod;
+        if(!(period>0)||!std::isfinite(period))return false;
+        const unsigned bits=queues[family].timestampValidBits;
+        fragmentGpu.mask=bits>=64?~uint64_t{0}:(uint64_t{1}<<bits)-1;
+        fragmentGpu.period=period;fragmentGpu.enabled=true;
+        timing.gpuTiming=true;
+        return true;
+    }
+    void pollFragmentGpuTiming() {
+        if(!fragmentGpu.pool||!fragmentGpu.pending)return;
+        struct Result { uint64_t value=0,available=0; };
+        for(unsigned phase=0;phase<4;++phase) {
+            const uint32_t pair=3u<<(phase*2);
+            if((fragmentGpu.pending&pair)!=pair)continue;
+            std::array<Result,2> results{};
+            const auto status=device.getQueryPoolResults(*fragmentGpu.pool,phase*2,2,sizeof(results),
+                results.data(),sizeof(Result),vk::QueryResultFlagBits::e64|vk::QueryResultFlagBits::eWithAvailability);
+            if(status==vk::Result::eNotReady)continue;
+            if(status!=vk::Result::eSuccess)throw std::runtime_error("Failed reading Hikaru GPU timestamps");
+            if(!results[0].available||!results[1].available)continue;
+            const uint64_t ticks=(results[1].value-results[0].value)&fragmentGpu.mask;
+            timing.gpuMs[phase]+=double(ticks)*fragmentGpu.period/1000000.0;
+            ++timing.gpuSamples[phase];fragmentGpu.pending&=~pair;
+        }
+    }
+    void beginFragmentGpuTiming(vk::CommandBuffer cmd) {
+        fragmentGpu.recording=false;
+        if(!fragmentGpu.enabled||fragmentGpu.pending)return;
+        if(!fragmentGpu.pool) {
+            try { fragmentGpu.pool=device.createQueryPoolUnique({{},vk::QueryType::eTimestamp,8}); }
+            catch(const vk::OutOfDeviceMemoryError&) {
+                fragmentGpu.enabled=false;timing.gpuTiming=false;
+                std::fprintf(stderr,"Hikaru Vulkan fragment GPU timestamp allocation failed; rendering continues\n");
+                return; // Optional diagnostics must not disable rendering.
+            }
+        }
+        cmd.resetQueryPool(*fragmentGpu.pool,0,8);
+        fragmentGpu.recording=true;
+    }
+    void fragmentTimestamp(vk::CommandBuffer cmd,unsigned index,bool end) {
+        if(!fragmentGpu.recording)return;
+        cmd.writeTimestamp(end?vk::PipelineStageFlagBits::eBottomOfPipe:vk::PipelineStageFlagBits::eTopOfPipe,
+            *fragmentGpu.pool,index);
+        fragmentGpu.pending|=1u<<index;
+    }
+    void initializeFragmentLists() {
+        if(fragmentListLayout)return;
+        std::array<vk::DescriptorSetLayoutBinding,4> bindings{};
+        for(uint32_t i=0;i<3;++i)bindings[i]={i,vk::DescriptorType::eStorageBuffer,1,vk::ShaderStageFlagBits::eFragment};
+        bindings[1].descriptorCount=4;
+        bindings[3]={3,vk::DescriptorType::eCombinedImageSampler,1,vk::ShaderStageFlagBits::eFragment};
+        fragmentListLayout=device.createDescriptorSetLayoutUnique({{},bindings.size(),bindings.data()});
+        const std::array<vk::DescriptorSetLayout,2> layouts={*descriptorLayout,*fragmentListLayout};
+        const vk::PushConstantRange parameters(vk::ShaderStageFlagBits::eFragment,0,sizeof(HikaruFragmentListParameters));
+        fragmentPipelineLayout=device.createPipelineLayoutUnique({{},layouts.size(),layouts.data(),1,&parameters});
+        fragmentCollectShader=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,false,1,false,true));
+        fragmentResolveVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanFullscreenVertexSource());
+        fragmentResolveShader=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentListResolveSource(fragmentSmallList));
+    }
+    vk::Pipeline fragmentResolvePipeline(vk::Format format) {
+        auto found=fragmentResolvePipelines.find(format);
+        if(found!=fragmentResolvePipelines.end())return *found->second;
+        const std::array<vk::PipelineShaderStageCreateInfo,2> stages={{
+            {{},vk::ShaderStageFlagBits::eVertex,*fragmentResolveVertex,"main"},
+            {{},vk::ShaderStageFlagBits::eFragment,*fragmentResolveShader,"main"}}};
+        const vk::PipelineVertexInputStateCreateInfo vertices;
+        const vk::PipelineInputAssemblyStateCreateInfo assembly({},vk::PrimitiveTopology::eTriangleList,false);
+        const vk::PipelineViewportStateCreateInfo viewport({},1,nullptr,1,nullptr);
+        const vk::PipelineRasterizationStateCreateInfo raster({},false,false,vk::PolygonMode::eFill,vk::CullModeFlagBits::eNone,vk::FrontFace::eCounterClockwise,false,0,0,0,1);
+        const vk::PipelineMultisampleStateCreateInfo samples({},vk::SampleCountFlagBits::e1);
+        const vk::PipelineDepthStencilStateCreateInfo depth;
+        vk::PipelineColorBlendAttachmentState attachment;
+        attachment.colorWriteMask=vk::ColorComponentFlagBits::eR|vk::ColorComponentFlagBits::eG|vk::ColorComponentFlagBits::eB|vk::ColorComponentFlagBits::eA;
+        const vk::PipelineColorBlendStateCreateInfo blending({},false,vk::LogicOp::eCopy,1,&attachment);
+        const std::array<vk::DynamicState,2> states={vk::DynamicState::eViewport,vk::DynamicState::eScissor};
+        const vk::PipelineDynamicStateCreateInfo dynamic({},states.size(),states.data());
+        const vk::GraphicsPipelineCreateInfo info({},stages.size(),stages.data(),&vertices,&assembly,nullptr,
+            &viewport,&raster,&samples,&depth,&blending,&dynamic,*fragmentPipelineLayout,
+            renderPass(format,vk::Format::eUndefined));
+        auto pipeline=device.createGraphicsPipelineUnique(ctx->GetPipelineCache(),info);
+        return *fragmentResolvePipelines.emplace(format,std::move(pipeline.value)).first->second;
+    }
+    std::unique_ptr<BufferData> allocateFragmentBuffer(vk::DeviceSize bytes,vk::BufferUsageFlags usage) {
+        // UMA devices can expose small local heaps plus a much larger coherent
+        // system heap. Prefer local storage, then allow the GPU-visible shared
+        // heap instead of disabling per-pixel collection at high resolutions.
+        try { return std::make_unique<BufferData>(bytes,usage,vk::MemoryPropertyFlagBits::eDeviceLocal); }
+        catch(const vk::OutOfDeviceMemoryError&) {
+            if(timing.enabled)std::fprintf(stderr,"Hikaru Vulkan fragment storage: %llu bytes on shared memory\n",static_cast<unsigned long long>(bytes));
+            return std::make_unique<BufferData>(bytes,usage,
+                vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+        }
+    }
+    void resizeFragmentNodes(FragmentListStorage& storage,uint32_t capacity) {
+        // The caller has retired all users of this descriptor set and its
+        // buffers. Keep the fixed-size heads/background while resizing nodes.
+        for(auto& block:storage.nodes)block.reset();
+        for(auto& block:storage.nodes)block=allocateFragmentBuffer(vk::DeviceSize(capacity/4)*16,
+            vk::BufferUsageFlagBits::eStorageBuffer);
+        std::array<vk::DescriptorBufferInfo,4> nodes;
+        for(size_t i=0;i<nodes.size();++i)nodes[i]=vk::DescriptorBufferInfo(*storage.nodes[i]->buffer,0,storage.nodes[i]->bufferSize);
+        const vk::WriteDescriptorSet write(storage.set,1,0,4,vk::DescriptorType::eStorageBuffer,nullptr,nodes.data());
+        device.updateDescriptorSets(1,&write,0,nullptr);
+        storage.capacity=capacity;
+        ++fragmentPoolAllocations;
+        fragmentPoolPolicy.hint=capacity;
+        hikaru_fragment_pool_reset_window(&fragmentPoolPolicy);
+    }
+    std::unique_ptr<FragmentListStorage> allocateFragmentLists(const Image& target,uint32_t capacity) {
+        auto result=std::make_unique<FragmentListStorage>();
+        const auto storage=vk::BufferUsageFlagBits::eStorageBuffer;
+        result->background=makeImage(target.extent.width,target.extent.height,target.format,1,false,false);
+        result->heads=allocateFragmentBuffer(vk::DeviceSize(target.extent.width)*target.extent.height*4,
+            storage|vk::BufferUsageFlagBits::eTransferDst);
+        result->status=allocateFragmentBuffer(16,storage|vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst);
+        result->readback=std::make_unique<BufferData>(16,vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCached);
+        const std::array<vk::DescriptorPoolSize,2> sizes={{{vk::DescriptorType::eStorageBuffer,6},
+            {vk::DescriptorType::eCombinedImageSampler,1}}};
+        result->descriptors=device.createDescriptorPoolUnique({{},1,sizes.size(),sizes.data()});
+        const auto layout=*fragmentListLayout;
+        result->set=device.allocateDescriptorSets({*result->descriptors,1,&layout}).front();
+        const vk::DescriptorBufferInfo heads(*result->heads->buffer,0,result->heads->bufferSize);
+        const vk::DescriptorBufferInfo status(*result->status->buffer,0,result->status->bufferSize);
+        const vk::DescriptorImageInfo background(sampler(Texture{},result->background,false),
+            *result->background.view,vk::ImageLayout::eShaderReadOnlyOptimal);
+        std::array<vk::WriteDescriptorSet,3> writes{};
+        writes[0]={result->set,0,0,1,vk::DescriptorType::eStorageBuffer,nullptr,&heads};
+        writes[1]={result->set,2,0,1,vk::DescriptorType::eStorageBuffer,nullptr,&status};
+        writes[2]={result->set,3,0,1,vk::DescriptorType::eCombinedImageSampler,&background};
+        device.updateDescriptorSets(writes,nullptr);
+        resizeFragmentNodes(*result,capacity);
+        return result;
+    }
+
 public:
+    bool beginFragmentList(unsigned color,uint64_t budget) override {
+        if(fragmentCollectActive)throw std::runtime_error("Nested Hikaru fragment-list collection");
+        if(!fragmentListSupported||occlusionActive||!pendingOcclusions.empty())return false;
+        auto& target=image(color);
+        if(target.depth||
+            (target.format!=vk::Format::eR8G8B8A8Unorm&&target.format!=vk::Format::eA2B10G10R10UnormPack32))return false;
+        const auto limits=ctx->GetPhysicalDevice().getProperties().limits;
+        const uint64_t pixels=uint64_t(target.extent.width)*target.extent.height;
+        // Heads, the preserved opaque color, status and readback all count
+        // against the user's budget, alongside the 16-byte fragment nodes.
+        const uint64_t fixedBytes=pixels*8+32;
+        const uint64_t blockLimit=std::min<uint64_t>(limits.maxStorageBufferRange,ctx->GetMaxMemoryAllocationSize());
+        const uint64_t maximum=budget>fixedBytes?std::min<uint64_t>((budget-fixedBytes)/16,(blockLimit/16)*4):0;
+        if(pixels>UINT32_MAX||pixels*4>blockLimit||maximum<4) {
+            if(fragmentLists){waitForDraws(Timings::WaitReason::FragmentStorage);fragmentLists.reset();}
+            fragmentPoolPolicy={};return false;
+        }
+        if(fragmentPoolExtent!=target.extent||fragmentPoolFormat!=target.format) {
+            fragmentPoolPolicy={};fragmentPoolExtent=target.extent;fragmentPoolFormat=target.format;
+        }
+        // Start with one node per pixel; observed peaks then size the shared
+        // pool across viewports without reallocating for each individual view.
+        const uint64_t desired=fragmentPoolPolicy.hint?std::max(4096u,fragmentPoolPolicy.hint):std::max<uint64_t>(4096,pixels);
+        const uint32_t capacity=uint32_t(std::min(maximum,desired)/4*4);
+        const bool storageChanges=!fragmentLists||fragmentLists->background.extent!=target.extent||
+            fragmentLists->background.format!=target.format||fragmentLists->capacity!=capacity;
+        // Replacing buffers or updating their descriptors needs host retirement.
+        // Unchanged storage remains immutable on the CPU; the barrier below
+        // orders the previous resolve before this collection on the same queue.
+        if(storageChanges)waitForDraws(Timings::WaitReason::FragmentStorage);
+        else if(timing.enabled)++timing.fragmentReuses;
+        pollFragmentGpuTiming();
+        initializeFragmentLists();
+        try {
+            if(!fragmentLists||fragmentLists->background.extent!=target.extent||fragmentLists->background.format!=target.format) {
+                fragmentLists.reset();fragmentLists=allocateFragmentLists(target,capacity);
+            } else if(fragmentLists->capacity!=capacity)resizeFragmentNodes(*fragmentLists,capacity);
+        } catch(const vk::OutOfDeviceMemoryError&) {
+            fragmentLists.reset();fragmentListSupported=false;
+            std::fprintf(stderr,"Hikaru: fragment-list allocation failed; using depth peeling\n");
+            return false;
+        }
+        timing.listCapacity=fragmentLists->capacity;
+        timing.listPoolBytes=fixedBytes+uint64_t(fragmentLists->capacity)*16;
+        timing.poolAllocations=fragmentPoolAllocations;
+        fragmentParameters={target.extent.width,target.extent.height,fragmentLists->capacity,0,
+            target.format==vk::Format::eA2B10G10R10UnormPack32?1023.f:255.f,
+            target.format==vk::Format::eA2B10G10R10UnormPack32?3.f:255.f,fragmentLists->capacity/4};
+        fragmentColor=color;fragmentListFailed=false;
+        auto cmd=startBatch();endRenderPass(cmd);
+        beginFragmentGpuTiming(cmd);
+        fragmentTimestamp(cmd,0,false);
+        // Include transfer accesses for empty collections too: their heads and
+        // counter were cleared/read even when no fragment shader ran.
+        const auto reuseStages=vk::PipelineStageFlagBits::eTransfer|vk::PipelineStageFlagBits::eFragmentShader;
+        const vk::MemoryBarrier retired(vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite|
+            vk::AccessFlagBits::eTransferRead|vk::AccessFlagBits::eTransferWrite,
+            vk::AccessFlagBits::eTransferWrite|vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+        cmd.pipelineBarrier(reuseStages,reuseStages,{},retired,nullptr,nullptr);
+        cmd.fillBuffer(*fragmentLists->heads->buffer,0,fragmentLists->heads->bufferSize,0);
+        cmd.fillBuffer(*fragmentLists->status->buffer,0,16,0);
+        fragmentTimestamp(cmd,1,true);
+        const vk::MemoryBarrier initialized(vk::AccessFlagBits::eTransferWrite,
+            vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,vk::PipelineStageFlagBits::eFragmentShader,
+            {},initialized,nullptr,nullptr);
+        fragmentTimestamp(cmd,2,false);
+        fragmentCollectActive=true;
+#ifdef HIKARU_NATIVE_TESTING
+        ++fragmentListCounts[0];
+#endif
+        return true;
+    }
+    bool endFragmentList() override {
+        if(!fragmentCollectActive)throw std::runtime_error("No active Hikaru fragment-list collection");
+        fragmentCollectActive=false;
+        auto cmd=startBatch();endRenderPass(cmd);
+        fragmentTimestamp(cmd,3,true);
+        const vk::MemoryBarrier countReady(vk::AccessFlagBits::eShaderWrite,vk::AccessFlagBits::eTransferRead);
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,vk::PipelineStageFlagBits::eTransfer,
+            {},countReady,nullptr,nullptr);
+        cmd.copyBuffer(*fragmentLists->status->buffer,*fragmentLists->readback->buffer,vk::BufferCopy(0,0,16));
+        const vk::MemoryBarrier hostReady(vk::AccessFlagBits::eTransferWrite,vk::AccessFlagBits::eHostRead);
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,vk::PipelineStageFlagBits::eHost,
+            {},hostReady,nullptr,nullptr);
+        waitForDraws(Timings::WaitReason::FragmentCounter);
+        pollFragmentGpuTiming();
+        std::array<uint32_t,4> status{};
+        const void* mapped=fragmentLists->readback->MapMemory();
+        fragmentLists->readback->allocation.InvalidateMemory(0,sizeof(status));
+        std::memcpy(status.data(),mapped,sizeof(status));
+        fragmentLists->readback->UnmapMemory();
+        if(status[1]||fragmentListFailed) {
+#ifdef HIKARU_NATIVE_TESTING
+            ++fragmentListCounts[2];
+#endif
+            if(fragmentListFailed)fragmentListSupported=false;
+            else hikaru_fragment_pool_grow(&fragmentPoolPolicy,status[0],fragmentLists->capacity);
+            if(!fragmentOverflowWarned) {
+                std::fprintf(stderr,"Hikaru: fragment-list capacity (%u nodes) exceeded or unsupported draw; using depth peeling for this viewport\n",fragmentLists->capacity);
+                fragmentOverflowWarned=true;
+            }
+            if(timing.enabled)++timing.listOverflows;
+            fragmentLists.reset(); // Collection has retired; fallback owns the budget now.
+            return false;
+        }
+        hikaru_fragment_pool_observe(&fragmentPoolPolicy,status[0],fragmentLists->capacity);
+        if(timing.enabled){++timing.listResolves;timing.listFragments+=status[0];
+            timing.listPeakFragments=std::max(timing.listPeakFragments,status[0]);}
+#ifdef HIKARU_NATIVE_TESTING
+        ++fragmentListCounts[1];
+#endif
+        if(!status[0])return true;
+        auto& target=image(fragmentColor);auto& background=fragmentLists->background;
+        cmd=startBatch();
+        // Every node belongs to one pixel; the resolver may rewrite its links.
+        const vk::MemoryBarrier collected(vk::AccessFlagBits::eShaderWrite,
+            vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,vk::PipelineStageFlagBits::eFragmentShader,
+            {},collected,nullptr,nullptr);
+        fragmentTimestamp(cmd,4,false);
+        barrier(cmd,target,vk::ImageLayout::eTransferSrcOptimal);
+        barrier(cmd,background,vk::ImageLayout::eTransferDstOptimal);
+        const vk::ImageSubresourceLayers color(vk::ImageAspectFlagBits::eColor,0,0,1);
+        cmd.copyImage(*target.image,target.layout,*background.image,background.layout,
+            vk::ImageCopy(color,{0,0,0},color,{0,0,0},{target.extent.width,target.extent.height,1}));
+        fragmentTimestamp(cmd,5,true);
+        barrier(cmd,background,vk::ImageLayout::eShaderReadOnlyOptimal);
+        barrier(cmd,target,vk::ImageLayout::eColorAttachmentOptimal);
+        const auto pass=renderPass(target.format,vk::Format::eUndefined);
+        const auto fb=framebuffer(fragmentColor,0,target,nullptr,pass);
+        cmd.beginRenderPass({pass,fb,vk::Rect2D({0,0},target.extent),0,nullptr},vk::SubpassContents::eInline);
+        fragmentTimestamp(cmd,6,false);
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,fragmentResolvePipeline(target.format));
+        cmd.setViewport(0,vk::Viewport(0,0,float(target.extent.width),float(target.extent.height),0,1));
+        cmd.setScissor(0,vk::Rect2D({0,0},target.extent));
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,*fragmentPipelineLayout,1,fragmentLists->set,nullptr);
+        cmd.pushConstants(*fragmentPipelineLayout,vk::ShaderStageFlagBits::eFragment,0,sizeof(fragmentParameters),&fragmentParameters);
+        cmd.draw(3,1,0,0);
+        cmd.endRenderPass();
+        fragmentTimestamp(cmd,7,true);
+        boundPipeline=nullptr;boundVertexBuffer=nullptr;boundViewport.reset();boundScissor.reset();boundDepthBias.reset();
+        lastDescriptors=nullptr;
+        flushBatch();
+        return true;
+    }
+
     bool supportsDrawPalette() const override { return true; }
+    bool supportsPackedVertices() const override { return packedVerticesSupported; }
+    bool supportsGeometryReuse() const override { return true; }
+#ifdef HIKARU_NATIVE_TESTING
+    std::array<uint64_t,2> geometryCountsForTesting() const { return {vertexUploadCount,geometryReuseCount}; }
+    std::array<uint64_t,3> fragmentCountsForTesting() const { return fragmentListCounts; }
+    void disableFragmentListsForTesting() { fragmentListSupported=false; }
+    std::array<uint64_t,4> fragmentPoolForTesting() const {
+        return {fragmentLists?fragmentLists->capacity:0,fragmentPoolAllocations,
+            fragmentPoolPolicy.hint,fragmentPoolPolicy.samples};
+    }
+    void forceGeneralFragmentResolveForTesting() {
+        if(fragmentListLayout)throw std::runtime_error("Fragment resolver already initialized");
+        fragmentSmallList=false;
+    }
+    void enableWaitProfilingForTesting() { timing.enabled=true; }
+    void limitPipelineCacheForTesting(size_t limit) {
+        if(!limit||!pipelines.empty())throw std::runtime_error("Pipeline test limit requires an empty cache");
+        pipelineCacheLimit=limit;
+    }
+    std::array<uint64_t,8> reuseCountsForTesting() const {
+        return {timing.uniformUploads,timing.uniformHits,timing.paletteUploads,timing.paletteHits,
+            timing.pipelineLookups,timing.pipelineFastHits,timing.maskedClears,
+            timing.waitCounts[size_t(Timings::WaitReason::Readback)]};
+    }
+    std::array<uint64_t,4> fragmentWaitCountsForTesting() const {
+        return {timing.waitCounts[size_t(Timings::WaitReason::FragmentStartup)],
+            timing.waitCounts[size_t(Timings::WaitReason::FragmentStorage)],
+            timing.waitCounts[size_t(Timings::WaitReason::FragmentCounter)],timing.fragmentReuses};
+    }
+    bool enableFragmentGpuTimingForTesting() { return enableFragmentGpuTiming(); }
+    std::array<uint64_t,4> fragmentGpuSamplesForTesting() {
+        pollFragmentGpuTiming();return timing.gpuSamples;
+    }
+    std::array<double,4> fragmentGpuTimesForTesting() {
+        pollFragmentGpuTiming();return timing.gpuMs;
+    }
+
+#endif
     bool supportsTexturePalette() const override { return textureSlots==DrawPaletteSize; }
     void beginOcclusion() override {
         if(timing.enabled)++timing.queries;
         if(occlusionActive)throw std::runtime_error("Nested Hikaru visibility query");
-        flushBatch();
+        // A query needs a pass boundary, while its results are collected only
+        // after the existing final submission wait. Keep layers in one stream.
+        endRenderPass(startBatch());
         occlusionQueries.clear();
         occlusionActive=true;
     }
@@ -533,7 +1049,16 @@ public:
     explicit VulkanBackend(bool specialize=true) : specializeShaders(specialize) {
         if(!ctx) throw std::runtime_error("Hikaru Vulkan backend requires an active Vulkan context");
         commandPool=device.createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eTransient|vk::CommandPoolCreateFlagBits::eResetCommandBuffer,ctx->GetGraphicsQueueFamilyIndex()});
-        const auto limits=ctx->GetPhysicalDevice().getProperties().limits;
+        const auto physical=ctx->GetPhysicalDevice();
+        const auto limits=physical.getProperties().limits;
+        if(std::getenv("HIKARU_TRACE_GPU_TIMING")&&!enableFragmentGpuTiming())
+            std::fprintf(stderr,"Hikaru Vulkan fragment GPU timing is unavailable on this queue\n");
+        packedVerticesSupported=std::all_of(PackedFormats.begin(),PackedFormats.end(),[&](vk::Format format) {
+            return bool(physical.getFormatProperties(format).bufferFeatures&vk::FormatFeatureFlagBits::eVertexBuffer);
+        });
+        fragmentListSupported=ctx->hasPerPixel()&&physical.getFeatures().geometryShader&&
+            limits.maxPerStageDescriptorStorageBuffers>=6&&limits.maxDescriptorSetStorageBuffers>=7&&
+            limits.maxBoundDescriptorSets>=2&&limits.maxPushConstantsSize>=sizeof(HikaruFragmentListParameters);
         // The base texture aliases palette slot zero; the other three inputs
         // remain depth/metadata or bitmap layers. No descriptor-indexing feature
         // is needed, and small mobile sampler limits keep the scalar texture path.
@@ -546,6 +1071,10 @@ public:
         meshVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false));
         meshFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,false,1));
         paletteVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false,true));
+        if(packedVerticesSupported) {
+            packedMeshVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false,false,true));
+            packedPaletteVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(false,true,true));
+        }
         paletteFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,true,textureSlots));
         fixedTexturePaletteFragment=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,true,1));
         bitmapVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanVertexSource(true));
@@ -606,73 +1135,160 @@ public:
     }
     void eraseTexture(unsigned id) override { reapCompletedDraws();retireImage(id);imageInfo.erase(id); }
     void clear(const Draw& d,GLbitfield mask,const Vec4& color,float depth) override {
-        Image& c=image(d.color); Image* z=d.depth?&image(d.depth):nullptr;
-        if(z&&z->extent!=c.extent) throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
-        const bool clearColor=(mask&GL_COLOR_BUFFER_BIT)!=0;
-        const bool colorMaskFull=std::all_of(d.colorMask.begin(),d.colorMask.end(),[](bool enabled){return enabled;});
-        if(clearColor&&!colorMaskFull) {
-            const size_t bytes=size_t(c.extent.width)*c.extent.height*4;
-            BufferData pixels(bytes,vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst);
-            immediate([&](vk::CommandBuffer cmd){barrier(cmd,c,vk::ImageLayout::eTransferSrcOptimal);vk::BufferImageCopy copy(0,c.extent.width,c.extent.height,{vk::ImageAspectFlagBits::eColor,0,0,1},{0,0,0},{c.extent.width,c.extent.height,1});cmd.copyImageToBuffer(*c.image,vk::ImageLayout::eTransferSrcOptimal,*pixels.buffer,copy);});
-            std::vector<uint8_t> raw(bytes);pixels.download(bytes,raw.data());
-            int x0=0,y0=0,x1=c.extent.width,y1=c.extent.height;
-            if(d.scissorEnabled){x0=std::clamp(d.scissor[0],0,int(c.extent.width));x1=std::clamp(d.scissor[0]+d.scissor[2],0,int(c.extent.width));y0=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1],0,int(c.extent.height));y1=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]:d.scissor[1]+d.scissor[3],0,int(c.extent.height));}
-            if(c.format==vk::Format::eA2B10G10R10UnormPack32){
-                auto quant=[](float v,uint32_t max){return uint32_t(std::lround(std::clamp(v,0.f,1.f)*max));};
-                for(int y=y0;y<y1;y++)for(int x=x0;x<x1;x++){auto* ptr=raw.data()+(size_t(y)*c.extent.width+x)*4;uint32_t packed;std::memcpy(&packed,ptr,4);for(unsigned channel=0;channel<4;channel++)if(d.colorMask[channel]){unsigned bits=channel==3?2:10,shift=channel*10;uint32_t m=(1u<<bits)-1;packed=(packed&~(m<<shift))|(quant(color[channel],m)<<shift);}std::memcpy(ptr,&packed,4);}
-            } else {
-                for(int y=y0;y<y1;y++)for(int x=x0;x<x1;x++){auto* pixel=raw.data()+(size_t(y)*c.extent.width+x)*4;for(unsigned channel=0;channel<4;channel++)if(d.colorMask[channel])pixel[channel]=uint8_t(std::lround(std::clamp(color[channel],0.f,1.f)*255.f));}
-            }
-            pixels.upload(bytes,raw.data());
-            immediate([&](vk::CommandBuffer cmd){barrier(cmd,c,vk::ImageLayout::eTransferDstOptimal);vk::BufferImageCopy copy(0,c.extent.width,c.extent.height,{vk::ImageAspectFlagBits::eColor,0,0,1},{0,0,0},{c.extent.width,c.extent.height,1});cmd.copyBufferToImage(*pixels.buffer,*c.image,vk::ImageLayout::eTransferDstOptimal,copy);barrier(cmd,c,vk::ImageLayout::eShaderReadOnlyOptimal);});
+        Image& c=image(d.color);Image* z=d.depth?&image(d.depth):nullptr;
+        if(z&&z->extent!=c.extent)throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
+        unsigned channels=0;
+        for(unsigned i=0;i<d.colorMask.size();++i)if(d.colorMask[i])channels|=1u<<i;
+        const bool clearColor=(mask&GL_COLOR_BUFFER_BIT)&&channels;
+        const bool clearDepth=(mask&GL_DEPTH_BUFFER_BIT)&&z&&d.depthWrite;
+        if(!clearColor&&!clearDepth)return;
+        vk::Rect2D rect({0,0},c.extent);
+        if(d.scissorEnabled) {
+            const int64_t left=d.scissor[0],right=left+d.scissor[2];
+            const int64_t bottom=d.scissor[1],top=bottom+d.scissor[3];
+            const auto clip=[](int64_t value,uint32_t size){return int32_t(std::clamp<int64_t>(value,0,size));};
+            const int32_t x0=clip(left,c.extent.width),x1=clip(right,c.extent.width);
+            const int32_t y0=clip(d.color==0?int64_t(c.extent.height)-top:bottom,c.extent.height);
+            const int32_t y1=clip(d.color==0?int64_t(c.extent.height)-bottom:top,c.extent.height);
+            rect.offset=vk::Offset2D(x0,y0);rect.extent=vk::Extent2D(std::max(0,x1-x0),std::max(0,y1-y0));
         }
-        const bool gpuColor=clearColor&&colorMaskFull;
-        const bool gpuDepth=(mask&GL_DEPTH_BUFFER_BIT)&&z&&d.depthWrite;
-        if(!gpuColor&&!gpuDepth)return;
+        if(!rect.extent.width||!rect.extent.height)return;
         auto cmd=startBatch();
+        // Clears must not contribute to an open visibility query.
         endRenderPass(cmd);
-        {
-            barrier(cmd,c,vk::ImageLayout::eColorAttachmentOptimal);
-            if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
-            auto rp=renderPass(c.format,z?z->format:vk::Format::eUndefined);
-            auto fb=framebuffer(d.color,d.depth,c,z,rp);
-            vk::Rect2D area({0,0},c.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
-            std::array<vk::ClearAttachment,2> attachments{};uint32_t count=0;
-            if(gpuColor){attachments[count].aspectMask=vk::ImageAspectFlagBits::eColor;attachments[count].colorAttachment=0;attachments[count].clearValue.color=vk::ClearColorValue(std::array<float,4>{color[0],color[1],color[2],color[3]});++count;}
-            if(gpuDepth){attachments[count].aspectMask=vk::ImageAspectFlagBits::eDepth;attachments[count].clearValue.depthStencil=vk::ClearDepthStencilValue(depth,0);++count;}
-            vk::Rect2D rect({0,0},c.extent);
-            if(d.scissorEnabled){int x0=std::clamp(d.scissor[0],0,int(c.extent.width)),x1=std::clamp(d.scissor[0]+d.scissor[2],0,int(c.extent.width));int y0=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]-d.scissor[3]:d.scissor[1],0,int(c.extent.height)),y1=std::clamp(d.color==0?int(c.extent.height)-d.scissor[1]:d.scissor[1]+d.scissor[3],0,int(c.extent.height));rect.offset=vk::Offset2D(x0,y0);rect.extent=vk::Extent2D(std::max(0,x1-x0),std::max(0,y1-y0));}
-            if(count&&rect.extent.width&&rect.extent.height){std::vector<vk::ClearAttachment> selected(attachments.begin(),attachments.begin()+count);std::array<vk::ClearRect,1> rects{vk::ClearRect(rect,0,1)};cmd.clearAttachments(selected,rects);}
-            cmd.endRenderPass();
+        barrier(cmd,c,vk::ImageLayout::eColorAttachmentOptimal);
+        if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        const auto depthFormat=z?z->format:vk::Format::eUndefined;
+        const auto rp=renderPass(c.format,depthFormat);
+        const auto fb=framebuffer(d.color,d.depth,c,z,rp);
+        cmd.beginRenderPass({rp,fb,vk::Rect2D({0,0},c.extent),0,nullptr},vk::SubpassContents::eInline);
+        std::array<vk::ClearAttachment,2> attachments{};uint32_t count=0;
+        if(clearColor&&channels==15) {
+            attachments[count].aspectMask=vk::ImageAspectFlagBits::eColor;attachments[count].colorAttachment=0;
+            attachments[count].clearValue.color=vk::ClearColorValue(std::array<float,4>{color[0],color[1],color[2],color[3]});++count;
         }
+        if(clearDepth) {
+            attachments[count].aspectMask=vk::ImageAspectFlagBits::eDepth;
+            attachments[count].clearValue.depthStencil=vk::ClearDepthStencilValue(depth,0);++count;
+        }
+        const vk::ClearRect area(rect,0,1);
+        if(count)cmd.clearAttachments(count,attachments.data(),1,&area);
+        if(clearColor&&channels!=15) {
+            // Attachment clears ignore colorWriteMask. A tiny GPU draw preserves
+            // the other channels without reading the image back to the host.
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,maskedClearPipeline(c.format,depthFormat,channels));
+            cmd.setViewport(0,vk::Viewport(0,0,float(c.extent.width),float(c.extent.height),0,1));
+            cmd.setScissor(0,rect);
+            cmd.pushConstants(*clearPipelineLayout,vk::ShaderStageFlagBits::eFragment,0,sizeof(Vec4),&color);
+            cmd.draw(3,1,0,0);
+            boundPipeline=nullptr;boundVertexBuffer=nullptr;boundViewport.reset();boundScissor.reset();boundDepthBias.reset();
+            lastDescriptors=nullptr;
+            if(timing.enabled){++timing.maskedClears;timing.maskedPixels+=uint64_t(rect.extent.width)*rect.extent.height;}
+        }
+        cmd.endRenderPass();
     }
     void draw(const Draw& d) override {
-        if(d.vertices.empty())return;
-        if(timing.enabled){++timing.draws;timing.palettes+=!d.palette.empty();}
+        if(d.geometry&&(!d.vertices.empty()||!d.packedVertices.empty()))
+            throw std::runtime_error("Ambiguous Hikaru Vulkan geometry");
+        const auto& vertices=d.vertexData();const auto& packedVertices=d.packedVertexData();
+        const bool packed=!packedVertices.empty();
+        const size_t count=packed?packedVertices.size():vertices.size();
+        const size_t stride=packed?sizeof(PackedVertex):sizeof(Vertex);
+        if(!count)return;
+        if(packed&&(!packedVerticesSupported||!vertices.empty()||d.bitmap))
+            throw std::runtime_error("Invalid Hikaru Vulkan packed vertices");
+        const bool collecting=fragmentCollectActive;
+        uint32_t primitives=0;
+        if(collecting) {
+            if(fragmentListFailed)return;
+            const size_t primitiveCount=d.topology==GL_TRIANGLES?count/3:
+                d.topology==GL_TRIANGLE_STRIP&&count>=3?count-2:0;
+            if(d.color!=fragmentColor||d.bitmap||!d.palette.empty()||!primitiveCount||
+                primitiveCount>UINT32_MAX-fragmentParameters.orderBase) {
+                fragmentListFailed=true;return;
+            }
+            primitives=uint32_t(primitiveCount);
+        }
+        if(timing.enabled){++timing.draws;timing.palettes+=!d.palette.empty();timing.packedDraws+=packed;}
         // Slot acquisition and pressure waits reap completed work. Polling a
         // fence for every triangle draw adds driver calls without freeing any
         // resource the active slot can use.
         if(activeDrawCount>=BatchDraws)flushBatch();
-        Image& target=image(d.color);Image* z=d.depth?&image(d.depth):nullptr;
-        Image* metadata=d.metadata?&image(d.metadata):nullptr;
+        const unsigned depthId=collecting?0:d.depth,metadataId=collecting?0:d.metadata;
+        Image& target=image(d.color);Image* z=depthId?&image(depthId):nullptr;
+        Image* metadata=metadataId?&image(metadataId):nullptr;
         if(metadata&&(metadata->extent!=target.extent||metadata->format!=vk::Format::eR32G32Uint))throw std::runtime_error("Invalid Hikaru family metadata target");
         if(z&&z->extent!=target.extent) throw std::runtime_error("Hikaru Vulkan color/depth attachment size mismatch");
-        if(renderPassOpen&&(d.color!=activeColor||d.depth!=activeDepth||d.metadata!=activeMetadata))flushBatch();
-        if(d.vertices.size()>UINT32_MAX/sizeof(Vertex))throw std::runtime_error("Hikaru Vulkan draw exceeds buffer upload limit");
-        const vk::DeviceSize vertexBytes=d.vertices.size()*sizeof(Vertex);
+        // Attachment transitions are ordered by render-pass dependencies and
+        // image barriers on this queue. Submit at stream pressure or readback.
+        if(renderPassOpen&&(d.color!=activeColor||depthId!=activeDepth||metadataId!=activeMetadata))endRenderPass(*activeCommand);
+        if(count>UINT32_MAX/stride)throw std::runtime_error("Hikaru Vulkan draw exceeds buffer upload limit");
+        const vk::DeviceSize vertexBytes=count*stride;
         if(d.palette.size()>DrawPaletteSize||(d.texturePalette&&(!supportsTexturePalette()||d.paletteTextures.size()!=d.palette.size()||d.paletteSampling.size()!=d.palette.size())))
             throw std::runtime_error("Invalid Hikaru Vulkan draw palette");
-        if(activeVertexBuffer&&activeVertexOffset+vertexBytes>activeVertexBuffer->storage.bufferSize)flushBatch();
         auto cmd=startBatch();
+        const auto retained=[&] {
+            return d.geometry&&activeVertexBuffer&&
+                activeVertexBuffer->geometryOffsets.find(d.geometry)!=activeVertexBuffer->geometryOffsets.end();
+        };
+        if(activeVertexBuffer&&activeVertexOffset+vertexBytes>activeVertexBuffer->storage.bufferSize&&!retained()) {
+            if(activeDrawCount) {flushBatch();cmd=startBatch();}
+            if(activeVertexBuffer&&activeVertexOffset+vertexBytes>activeVertexBuffer->storage.bufferSize&&!retained()) {
+                // This slot was fence-retired and has recorded no vertex draw.
+                // Rewinding it here cannot overwrite a pending GPU read.
+                activeVertexBuffer->geometryOffsets.clear();
+                activeVertexBuffer->used=activeVertexOffset=0;
+            }
+        }
         allocateStream(activeVertexBuffer,std::max<vk::DeviceSize>(1024*1024,vertexBytes),vk::BufferUsageFlagBits::eVertexBuffer);
+        activeVertexBuffer->beginGeometryFrame(geometryFrame);
+        activeVertexOffset=activeVertexBuffer->used;
         const vk::DeviceSize alignment=std::max<vk::DeviceSize>(1,ctx->GetUniformBufferAlignment());
         const vk::DeviceSize uniformStride=(sizeof(Uniforms)+alignment-1)/alignment*alignment;
         allocateStream(activeUniformBuffer,uniformStride*BatchDraws,vk::BufferUsageFlagBits::eUniformBuffer);
-        const vk::DeviceSize uniformOffset=(activeUniformOffset+alignment-1)/alignment*alignment;
+        // Owner rank is emitted only to integer metadata. Ignore that field
+        // for comparison when unused; keep the actual immutable payload in the
+        // snapshot so a later metadata draw still compares its owner exactly.
+        // Compare the source directly: copying the whole block before a hit
+        // would replace avoided GPU writes with unnecessary CPU memory traffic.
+        constexpr size_t ownerOffset=offsetof(Uniforms,family)+2*sizeof(float);
+        const auto* uniformData=reinterpret_cast<const uint8_t*>(&d.uniforms);
+        const auto* previousUniformData=reinterpret_cast<const uint8_t*>(&uploadedUniforms);
+        const bool uniformHit=uniformUploadValid&&(metadata?
+            std::memcmp(previousUniformData,uniformData,sizeof(Uniforms))==0:
+            std::memcmp(previousUniformData,uniformData,ownerOffset)==0&&
+            std::memcmp(previousUniformData+ownerOffset+sizeof(float),uniformData+ownerOffset+sizeof(float),
+                sizeof(Uniforms)-ownerOffset-sizeof(float))==0);
+        const vk::DeviceSize uniformOffset=uniformHit?uploadedUniformOffset:
+            (activeUniformOffset+alignment-1)/alignment*alignment;
         if(uniformOffset+sizeof(Uniforms)>activeUniformBuffer->storage.bufferSize)throw std::runtime_error("Hikaru Vulkan uniform batch capacity exceeded");
-        const uint32_t vertexOffset=uint32_t(activeVertexOffset);
-        std::memcpy(activeVertexBuffer->mapping+vertexOffset,d.vertices.data(),size_t(vertexBytes));
-        std::memcpy(activeUniformBuffer->mapping+uniformOffset,&d.uniforms,sizeof(Uniforms));
+        auto& geometryOffsets=activeVertexBuffer->geometryOffsets;
+        const auto cached=d.geometry?geometryOffsets.find(d.geometry):geometryOffsets.end();
+        const bool uploaded=cached==geometryOffsets.end();
+        const vk::DeviceSize vertexOffset=uploaded?activeVertexOffset:cached->second;
+        if(uploaded) {
+            const void* vertexData=packed?static_cast<const void*>(packedVertices.data()):vertices.data();
+            std::memcpy(activeVertexBuffer->mapping+vertexOffset,vertexData,size_t(vertexBytes));
+            activeVertexOffset+=vertexBytes;activeVertexBuffer->used=activeVertexOffset;
+            if(timing.enabled){++timing.vertexUploads;timing.vertexBytes+=vertexBytes;}
+            if(d.geometry)geometryOffsets.emplace(d.geometry,vertexOffset);
+#ifdef HIKARU_NATIVE_TESTING
+            ++vertexUploadCount;
+#endif
+        } else {
+            if(timing.enabled)++timing.geometryHits;
+#ifdef HIKARU_NATIVE_TESTING
+            ++geometryReuseCount;
+#endif
+        }
+        if(uniformHit) {
+            if(timing.enabled)++timing.uniformHits;
+        } else {
+            std::memcpy(activeUniformBuffer->mapping+uniformOffset,&d.uniforms,sizeof(Uniforms));
+            uploadedUniforms=d.uniforms;uploadedUniformOffset=uniformOffset;uniformUploadValid=true;
+            activeUniformOffset=uniformOffset+sizeof(Uniforms);
+            if(timing.enabled){++timing.uniformUploads;timing.uniformBytes+=sizeof(Uniforms);}
+        }
         vk::DescriptorBufferInfo paletteInfo;
         if(!d.palette.empty()) {
             const vk::DeviceSize storageAlignment=std::max<vk::DeviceSize>(1,ctx->GetStorageBufferAlignment());
@@ -682,18 +1298,29 @@ public:
             const vk::DeviceSize offset=(activePaletteOffset+storageAlignment-1)/storageAlignment*storageAlignment;
             const size_t bytes=d.palette.size()*sizeof(DrawRecord);
             if(offset+bytes>activePaletteBuffer->storage.bufferSize)throw std::runtime_error("Hikaru Vulkan palette capacity exceeded");
-            for(const auto& vertex:d.vertices)if(!std::isfinite(vertex.extra[2])||vertex.extra[2]<0||vertex.extra[2]>=d.palette.size()||std::floor(vertex.extra[2])!=vertex.extra[2])
-                throw std::runtime_error("Invalid Hikaru Vulkan palette index");
-            std::memcpy(activePaletteBuffer->mapping+offset,d.palette.data(),bytes);
-            activePaletteOffset=offset+bytes;paletteInfo=vk::DescriptorBufferInfo(*activePaletteBuffer->storage.buffer,offset,bytes);
+            for(size_t i=0;i<count;++i) {
+                const float index=packed?packedVertices[i].drawIndex:vertices[i].extra[2];
+                if(!std::isfinite(index)||index<0||index>=d.palette.size()||std::floor(index)!=index)
+                    throw std::runtime_error("Invalid Hikaru Vulkan palette index");
+            }
+            if(paletteUploadValid&&uploadedPaletteSize==d.palette.size()&&
+                std::memcmp(uploadedPalette.data(),d.palette.data(),bytes)==0) {
+                paletteInfo=uploadedPaletteInfo;
+                if(timing.enabled)++timing.paletteHits;
+            } else {
+                std::memcpy(activePaletteBuffer->mapping+offset,d.palette.data(),bytes);
+                activePaletteOffset=offset+bytes;
+                paletteInfo=vk::DescriptorBufferInfo(*activePaletteBuffer->storage.buffer,offset,bytes);
+                std::copy(d.palette.begin(),d.palette.end(),uploadedPalette.begin());
+                uploadedPaletteSize=d.palette.size();uploadedPaletteInfo=paletteInfo;paletteUploadValid=true;
+                if(timing.enabled){++timing.paletteUploads;timing.paletteBytes+=bytes;}
+            }
         }
         const unsigned slots=d.texturePalette?textureSlots:1;
         const auto layout=d.texturePalette?*paletteDescriptorLayout:*descriptorLayout;
         Timings::Span descriptorWork(timing.descriptorMs,timing.enabled);
-        auto sets=device.allocateDescriptorSets({descriptorPool(),1,&layout});const auto set=sets.front();
-        vk::DescriptorBufferInfo bi(*activeUniformBuffer->storage.buffer,uniformOffset,sizeof(Uniforms));
-        std::array<vk::WriteDescriptorSet,6> writes{};writes[0]={set,0,0,1,vk::DescriptorType::eUniformBuffer,nullptr,&bi};
-        std::array<vk::DescriptorImageInfo,DrawPaletteSize+3> imgs{};
+        DescriptorKey descriptorKey;descriptorKey.texturePalette=d.texturePalette;descriptorKey.slots=slots;descriptorKey.palette=paletteInfo;
+        auto& imgs=descriptorKey.images;
         constexpr unsigned transparentFallback=0xfffffffdu;
         std::array<unsigned,DrawPaletteSize+3> resolvedTextures{};
         for(unsigned n=0;n<slots+3;n++) {
@@ -704,7 +1331,7 @@ public:
             const GLenum mf=sampling.minFilter;
             const bool mipmapped=mf==GL_NEAREST_MIPMAP_NEAREST||mf==GL_NEAREST_MIPMAP_LINEAR||mf==GL_LINEAR_MIPMAP_NEAREST||mf==GL_LINEAR_MIPMAP_LINEAR;
             const unsigned tid=paletteTexture?d.paletteTextures[n]:base&&n!=0?0:d.textures[unit];Image* sampled=nullptr;
-            if(tid&&tid!=d.color&&tid!=d.depth&&tid!=d.metadata){auto it=images.find(tid);if(it!=images.end())sampled=&it->second;}
+            if(tid&&tid!=d.color&&tid!=depthId&&tid!=metadataId){auto it=images.find(tid);if(it!=images.end())sampled=&it->second;}
             if(sampled&&sampled->sampleable&&sampled->initializedLevels[0]) {
                 const unsigned geometric=1u+unsigned(std::floor(std::log2(std::max(sampled->extent.width,sampled->extent.height))));
                 const unsigned expected=sampling.maxLevel==1000?geometric:std::min(geometric,sampling.maxLevel+1);
@@ -718,21 +1345,35 @@ public:
             } else resolvedTextures[n]=tid;
             imgs[n]={sampler(sampling,*sampled,mipmapped),*sampled->view,sampled->depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal};
         }
-        writes[1]={set,1,0,slots,vk::DescriptorType::eCombinedImageSampler,imgs.data()};
-        for(unsigned unit=1;unit<4;++unit)writes[unit+1]={set,unit+1,0,1,vk::DescriptorType::eCombinedImageSampler,&imgs[slots+unit-1]};
-        if(!d.palette.empty())writes[5]={set,5,0,1,vk::DescriptorType::eStorageBuffer,nullptr,&paletteInfo};
-        device.updateDescriptorSets(d.palette.empty()?5:6,writes.data(),0,nullptr);
+        if(!lastDescriptors||!(lastDescriptors->key==descriptorKey)) {
+            auto found=std::find_if(materialDescriptors.begin(),materialDescriptors.end(),
+                [&](const CachedDescriptors& entry){return entry.set&&entry.key==descriptorKey;});
+            if(found==materialDescriptors.end()) {
+                const auto set=device.allocateDescriptorSets({descriptorPool(),1,&layout}).front();
+                vk::DescriptorBufferInfo bi(*activeUniformBuffer->storage.buffer,0,sizeof(Uniforms));
+                std::array<vk::WriteDescriptorSet,6> writes{};writes[0]={set,0,0,1,vk::DescriptorType::eUniformBufferDynamic,nullptr,&bi};
+                writes[1]={set,1,0,slots,vk::DescriptorType::eCombinedImageSampler,imgs.data()};
+                for(unsigned unit=1;unit<4;++unit)writes[unit+1]={set,unit+1,0,1,vk::DescriptorType::eCombinedImageSampler,&imgs[slots+unit-1]};
+                if(!d.palette.empty())writes[5]={set,5,0,1,vk::DescriptorType::eStorageBuffer,nullptr,&paletteInfo};
+                device.updateDescriptorSets(d.palette.empty()?5:6,writes.data(),0,nullptr);
+                found=materialDescriptors.begin()+nextDescriptors;
+                *found={std::move(descriptorKey),set};
+                nextDescriptors=(nextDescriptors+1)%materialDescriptors.size();
+                if(timing.enabled)++timing.descriptorSets;
+            } else if(timing.enabled)++timing.descriptorHits;
+            lastDescriptors=&*found;
+        } else if(timing.enabled)++timing.descriptorHits;
+        const auto set=lastDescriptors->set;
         descriptorWork.stop();
-        bool sampleTransition=false;
-        for(unsigned n=0;n<slots+3;n++)if(resolvedTextures[n]!=transparentFallback){
-            const auto& sampled=image(resolvedTextures[n]);
-            const auto layout=sampled.depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal;
-            sampleTransition|=sampled.layout!=layout;
-        }
-        if(renderPassOpen&&sampleTransition)endRenderPass(cmd);
         for(unsigned n=0;n<slots+3;n++)if(resolvedTextures[n]!=transparentFallback){
             auto& sampled=image(resolvedTextures[n]);
-            barrier(cmd,sampled,sampled.depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal);
+            const auto layout=sampled.depth?vk::ImageLayout::eDepthStencilReadOnlyOptimal:vk::ImageLayout::eShaderReadOnlyOptimal;
+            if(sampled.layout!=layout) {
+                // End the pass at the first transition. Repeated bindings of
+                // the same image then observe its updated layout.
+                endRenderPass(cmd);
+                barrier(cmd,sampled,layout);
+            }
         }
         if(!renderPassOpen){
             if(timing.enabled)++timing.passes;
@@ -740,21 +1381,23 @@ public:
             if(z)barrier(cmd,*z,vk::ImageLayout::eDepthStencilAttachmentOptimal);
             if(metadata)barrier(cmd,*metadata,vk::ImageLayout::eColorAttachmentOptimal);
             auto rp=renderPass(target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined);
-            auto fb=framebuffer(d.color,d.depth,target,z,rp,d.metadata,metadata);
+            auto fb=framebuffer(d.color,depthId,target,z,rp,metadataId,metadata);
             if(occlusionActive) {
                 occlusionQueries.push_back(device.createQueryPoolUnique({{},vk::QueryType::eOcclusion,1}));
                 cmd.resetQueryPool(*occlusionQueries.back(),0,1);
             }
             vk::Rect2D area({0,0},target.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
             if(occlusionActive){occlusionQueryOpen=true;occlusionQuery=*occlusionQueries.back();cmd.beginQuery(occlusionQuery,0,{});}
-            renderPassOpen=true;activeColor=d.color;activeDepth=d.depth;activeMetadata=d.metadata;
+            renderPassOpen=true;activeColor=d.color;activeDepth=depthId;activeMetadata=metadataId;
         }
         // Vulkan's positive-height viewport has the opposite framebuffer Y
         // orientation from GL. Internal targets keep the shader's GL clip Y
         // orientation, so their front-face sense reverses; the presentation
         // target also flips clip Y in the shader and keeps the requested sense.
         const GLenum frontFace=(d.uniforms.inverted[2]!=0.f)?(d.frontFace==GL_CCW?GL_CW:GL_CCW):d.frontFace;
-        auto p=pipeline({d.bitmap,d.familyResolve,d.peelComposite,!d.palette.empty(),bool(z&&d.depthTest),bool(z&&d.depthWrite),d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined,meshShaderSpecialization(d,specializeShaders)});
+        PipelineKey key{d.bitmap,d.familyResolve,d.peelComposite,!d.palette.empty(),packed,bool(z&&d.depthTest),bool(z&&d.depthWrite),collecting?false:d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,collecting?std::array<bool,4>{false,false,false,false}:d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined,meshShaderSpecialization(d,specializeShaders)};
+        key.fragmentCollect=collecting;
+        auto p=pipeline(key);
         if(boundPipeline!=p){cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);boundPipeline=p;}
         const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);
         const std::array<float,6> viewport{float(d.viewport[0]),viewportY,float(d.viewport[2]),float(d.viewport[3]),d.nearDepth,d.farDepth};
@@ -764,11 +1407,18 @@ public:
         if(!boundScissor||*boundScissor!=sc){cmd.setScissor(0,sc);boundScissor=sc;}
         const std::array<float,2> bias{d.biasUnits,d.biasFactor};
         if(!boundDepthBias||*boundDepthBias!=bias){cmd.setDepthBias(bias[0],0,bias[1]);boundDepthBias=bias;}
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,d.texturePalette?*palettePipelineLayout:*pipelineLayout,0,set,nullptr);
+        const uint32_t dynamicOffset=uint32_t(uniformOffset);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,collecting?*fragmentPipelineLayout:d.texturePalette?*palettePipelineLayout:*pipelineLayout,0,set,dynamicOffset);
+        if(collecting) {
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,*fragmentPipelineLayout,1,fragmentLists->set,nullptr);
+            cmd.pushConstants(*fragmentPipelineLayout,vk::ShaderStageFlagBits::eFragment,0,sizeof(fragmentParameters),&fragmentParameters);
+            fragmentParameters.orderBase+=primitives;
+        }
         const auto vertexBuffer=*activeVertexBuffer->storage.buffer;
-        if(boundVertexBuffer!=vertexBuffer){cmd.bindVertexBuffers(0,vertexBuffer,{vk::DeviceSize(0)});boundVertexBuffer=vertexBuffer;}
-        cmd.draw(uint32_t(d.vertices.size()),1,uint32_t(vertexOffset/sizeof(Vertex)),0);
-        activeVertexOffset+=vertexBytes;activeUniformOffset=uniformOffset+sizeof(Uniforms);
+        if(boundVertexBuffer!=vertexBuffer||boundVertexOffset!=vertexOffset) {
+            cmd.bindVertexBuffers(0,vertexBuffer,vertexOffset);boundVertexBuffer=vertexBuffer;boundVertexOffset=vertexOffset;
+        }
+        cmd.draw(uint32_t(count),1,0,0);
         ++activeDrawCount;
     }
     void readPixels(unsigned id,int x,int y,int w,int h,uint8_t* rgba) override {
@@ -791,6 +1441,8 @@ public:
         barrier(cmd,out,vk::ImageLayout::eShaderReadOnlyOptimal);
         flushBatch();
         ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f);
+        ++geometryFrame;
+        pollFragmentGpuTiming();
         timing.present();
     }
 };
@@ -798,6 +1450,42 @@ public:
 std::unique_ptr<Backend> makeVulkanBackend() { return std::make_unique<VulkanBackend>(); }
 #ifdef HIKARU_NATIVE_TESTING
 std::unique_ptr<Backend> makeVulkanBackendForTesting(bool specialize) { return std::make_unique<VulkanBackend>(specialize); }
+std::array<uint64_t,3> vulkanFragmentCountsForTesting(const Backend& backend) {
+    return static_cast<const VulkanBackend&>(backend).fragmentCountsForTesting();
+}
+std::array<uint64_t,4> vulkanFragmentPoolForTesting(const Backend& backend) {
+    return static_cast<const VulkanBackend&>(backend).fragmentPoolForTesting();
+}
+void forceVulkanGeneralFragmentResolveForTesting(Backend& backend) {
+    static_cast<VulkanBackend&>(backend).forceGeneralFragmentResolveForTesting();
+}
+void limitVulkanPipelineCacheForTesting(Backend& backend,size_t limit) {
+    static_cast<VulkanBackend&>(backend).limitPipelineCacheForTesting(limit);
+}
+std::array<uint64_t,8> vulkanReuseCountsForTesting(const Backend& backend) {
+    return static_cast<const VulkanBackend&>(backend).reuseCountsForTesting();
+}
+void enableVulkanWaitProfilingForTesting(Backend& backend) {
+    static_cast<VulkanBackend&>(backend).enableWaitProfilingForTesting();
+}
+std::array<uint64_t,4> vulkanFragmentWaitCountsForTesting(const Backend& backend) {
+    return static_cast<const VulkanBackend&>(backend).fragmentWaitCountsForTesting();
+}
+bool enableVulkanFragmentGpuTimingForTesting(Backend& backend) {
+    return static_cast<VulkanBackend&>(backend).enableFragmentGpuTimingForTesting();
+}
+std::array<uint64_t,4> vulkanFragmentGpuSamplesForTesting(Backend& backend) {
+    return static_cast<VulkanBackend&>(backend).fragmentGpuSamplesForTesting();
+}
+std::array<double,4> vulkanFragmentGpuTimesForTesting(Backend& backend) {
+    return static_cast<VulkanBackend&>(backend).fragmentGpuTimesForTesting();
+}
+void disableVulkanFragmentListsForTesting(Backend& backend) {
+    static_cast<VulkanBackend&>(backend).disableFragmentListsForTesting();
+}
+std::array<uint64_t,2> vulkanGeometryCountsForTesting(const Backend& backend) {
+    return static_cast<const VulkanBackend&>(backend).geometryCountsForTesting();
+}
 #endif
 } // namespace hikaru::graphics
 #else

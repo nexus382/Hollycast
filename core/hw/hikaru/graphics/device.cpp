@@ -17,6 +17,14 @@ Device::Device(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {
     if (!this->backend) throw std::runtime_error("Hikaru graphics backend is unavailable");
     dispatch.BindFragDataLocation = [](GLuint program, GLuint color, const GLchar *name) { active->BindFragDataLocation(program, color, name); };
     dispatch.ClearBufferuiv = [](GLenum buffer, GLint drawbuffer, const GLuint *value) { try { active->ClearBufferuiv(buffer, drawbuffer, value); } catch (...) { active->error=std::current_exception(); } };
+    dispatch.BeginFragmentList = [](uint64_t budget) -> GLboolean {
+        try { active->flushDraw(); return active->backend->beginFragmentList(active->drawState().color,budget); }
+        catch (...) { active->error=std::current_exception(); return false; }
+    };
+    dispatch.EndFragmentList = []() -> GLboolean {
+        try { active->flushDraw(); return active->backend->endFragmentList(); }
+        catch (...) { active->error=std::current_exception(); return false; }
+    };
     dispatch.BeginOcclusion = [] { try { active->flushDraw(); active->backend->beginOcclusion(); } catch (...) { active->error=std::current_exception(); } };
     dispatch.EndOcclusion = []() -> GLboolean { try { active->flushDraw(); return active->backend->endOcclusion(); } catch (...) { active->error=std::current_exception(); return false; } };
     dispatch.FinishOcclusion = [] { try { active->flushDraw(); active->backend->finishOcclusion(); } catch (...) { active->error=std::current_exception(); } };
@@ -148,8 +156,8 @@ void Device::queueDraw(Draw draw) {
             d.biasUnits,d.nearDepth,d.farDepth);
     };
     bool merge=pendingDraw && draw.palette.empty() && pendingDraw->palette.empty() && draw.topology==GL_TRIANGLES
-        && pendingDraw->packedVertices.empty()==draw.packedVertices.empty()
-        && pendingDraw->vertices.size()+draw.vertices.size()+pendingDraw->packedVertices.size()+draw.packedVertices.size()<=16384
+        && pendingDraw->packedVertexData().empty()==draw.packedVertexData().empty()
+        && pendingDraw->vertexData().size()+draw.vertexData().size()+pendingDraw->packedVertexData().size()+draw.packedVertexData().size()<=16384
         && key(*pendingDraw)==key(draw)
         && std::memcmp(&pendingDraw->uniforms,&draw.uniforms,sizeof(Uniforms))==0;
     for(unsigned i=0;merge&&i<4;i++) {
@@ -158,8 +166,14 @@ void Device::queueDraw(Draw draw) {
             ==std::tie(b.minFilter,b.magFilter,b.wrapS,b.wrapT,b.maxLevel);
     }
     if(merge) {
-        pendingDraw->vertices.insert(pendingDraw->vertices.end(),draw.vertices.begin(),draw.vertices.end());
-        pendingDraw->packedVertices.insert(pendingDraw->packedVertices.end(),draw.packedVertices.begin(),draw.packedVertices.end());
+        const auto& vertices=draw.vertexData();const auto& packedVertices=draw.packedVertexData();
+        if(pendingDraw->geometry) {
+            pendingDraw->vertices=pendingDraw->geometry->vertices;
+            pendingDraw->packedVertices=pendingDraw->geometry->packedVertices;
+            pendingDraw->geometry.reset();
+        }
+        pendingDraw->vertices.insert(pendingDraw->vertices.end(),vertices.begin(),vertices.end());
+        pendingDraw->packedVertices.insert(pendingDraw->packedVertices.end(),packedVertices.begin(),packedVertices.end());
         if(!draw.vertices.empty()&&draw.vertices.capacity()<=16384){vertexScratch=std::move(draw.vertices);vertexScratch.clear();}
         if(!draw.packedVertices.empty()&&draw.packedVertices.capacity()<=16384){packedVertexScratch=std::move(draw.packedVertices);packedVertexScratch.clear();}
     }
@@ -168,7 +182,7 @@ void Device::queueDraw(Draw draw) {
 void Device::begin(unsigned w,unsigned h) {
     if (w!=width || h!=height) { flushDraw();width=w;height=h; Texture t; t.width=w;t.height=h;t.revision=++textures[0].revision; textures[0]=t; backend->texture(0,t,0,TextureUpload::Definition,nullptr,0); }
 }
-void Device::present() { checkError(); backend->present(width,height); }
+void Device::present() { checkError(); backend->present(width,height);invalidateGeometry(); }
 Draw Device::drawState() const {
     Draw d=state;
     const auto& target=targets.at(framebuffer);
@@ -315,11 +329,24 @@ void Device::packPalette(Draw& draw,const Program& p) const {
         auto location=p.locations.find(name);if(location==p.locations.end())return empty;
         auto value=p.values.find(location->second);return value==p.values.end()?empty:value->second;
     };
+    const bool packed=!draw.packedVertices.empty();
+    const size_t vertexCount=packed?draw.packedVertices.size():draw.vertices.size();
     unsigned count=0;
-    for(const auto& vertex:draw.vertices)count=std::max(count,unsigned(vertex.extra[2])+1);
-    for(const auto& vertex:draw.packedVertices)count=std::max(count,unsigned(vertex.drawIndex)+1);
+    float triangleRecord=0;
+    for(size_t i=0;i<vertexCount;++i) {
+        const float record=packed?draw.packedVertices[i].drawIndex:draw.vertices[i].extra[2];
+        if(!std::isfinite(record)||record<0||record>=DrawPaletteSize||std::floor(record)!=record)
+            throw std::runtime_error("Invalid Hikaru palette index");
+        // Size the palette as we validate each triangle's shared record.
+        if(i%3==0) {
+            triangleRecord=record;
+            count=std::max(count,static_cast<unsigned>(record)+1);
+        } else if(record!=triangleRecord) {
+            throw std::runtime_error("Hikaru triangle crosses palette records");
+        }
+    }
     const auto& depths=values("u_draw_depth");
-    if(!count||count>DrawPaletteSize||depths.size()<size_t(count)*2)
+    if(!count||depths.size()<size_t(count)*2)
         throw std::runtime_error("Incomplete Hikaru depth palette");
     draw.palette.resize(count);
     auto matrices=[&](const char* name,Matrix DrawRecord::* member,bool normal) {
@@ -370,8 +397,8 @@ void Device::BlendEquation(GLenum e){state.equationRGB=state.equationAlpha=e;}
 void Device::BlendEquationSeparate(GLenum rgb,GLenum a){state.equationRGB=rgb;state.equationAlpha=a;}
 void Device::BlendFunc(GLenum s,GLenum d){BlendFuncSeparate(s,d,s,d);}
 void Device::BlendFuncSeparate(GLenum sr,GLenum dr,GLenum sa,GLenum da){state.srcRGB=sr;state.dstRGB=dr;state.srcAlpha=sa;state.dstAlpha=da;}
-void Device::BufferData(GLenum target,GLsizeiptr size,const void* data,GLenum){if(target!=GL_ARRAY_BUFFER||size<0)throw std::runtime_error("Invalid Hikaru vertex buffer");auto& b=buffers.at(buffer);b.resize(size);if(data)std::memcpy(b.data(),data,size);}
-void Device::BufferSubData(GLenum,GLintptr offset,GLsizeiptr size,const void* data){auto& b=buffers.at(buffer);if(offset<0||size<0||size_t(offset)>b.size()||size_t(size)>b.size()-size_t(offset))throw std::runtime_error("Hikaru vertex update exceeds buffer");std::memcpy(b.data()+offset,data,size);}
+void Device::BufferData(GLenum target,GLsizeiptr size,const void* data,GLenum){if(target!=GL_ARRAY_BUFFER||size<0)throw std::runtime_error("Invalid Hikaru vertex buffer");auto& b=buffers.at(buffer);invalidateGeometry();b.resize(size);if(data)std::memcpy(b.data(),data,size);}
+void Device::BufferSubData(GLenum,GLintptr offset,GLsizeiptr size,const void* data){auto& b=buffers.at(buffer);if(offset<0||size<0||size_t(offset)>b.size()||size_t(size)>b.size()-size_t(offset))throw std::runtime_error("Hikaru vertex update exceeds buffer");if(size)invalidateGeometry();std::memcpy(b.data()+offset,data,size);}
 GLenum Device::CheckFramebufferStatus(GLenum){return GL_FRAMEBUFFER_COMPLETE;}
 void Device::Clear(GLbitfield mask){flushDraw();backend->clear(drawState(),mask,clearColor,clearDepth);}
 void Device::ClearColor(GLfloat r,GLfloat g,GLfloat b,GLfloat a){clearColor={r,g,b,a};}
@@ -382,13 +409,13 @@ void Device::CompileShader(GLuint){}
 GLuint Device::CreateProgram(){auto id=nextId++;programs[id]={};return id;}
 GLuint Device::CreateShader(GLenum){auto id=nextId++;shaders[id]={};return id;}
 void Device::CullFace(GLenum mode){state.cullFace=mode;}
-void Device::DeleteBuffers(GLsizei n,const GLuint* ids){for(int i=0;i<n;i++)buffers.erase(ids[i]);}
+void Device::DeleteBuffers(GLsizei n,const GLuint* ids){if(n)invalidateGeometry();for(int i=0;i<n;i++)buffers.erase(ids[i]);}
 void Device::DeleteFramebuffers(GLsizei n,const GLuint* ids){for(int i=0;i<n;i++)targets.erase(ids[i]);}
 void Device::DeleteProgram(GLuint id){programs.erase(id);}
 void Device::DeleteRenderbuffers(GLsizei n,const GLuint* ids){flushDraw();for(int i=0;i<n;i++){auto id=ids[i]|0x80000000u;textures.erase(id);backend->eraseTexture(id);}}
 void Device::DeleteShader(GLuint id){shaders.erase(id);}
 void Device::DeleteTextures(GLsizei n,const GLuint* ids){flushDraw();for(int i=0;i<n;i++){if(!ids[i])continue;textures.erase(ids[i]);backend->eraseTexture(ids[i]);}}
-void Device::DeleteVertexArrays(GLsizei n,const GLuint* ids){for(int i=0;i<n;i++)arrays.erase(ids[i]);}
+void Device::DeleteVertexArrays(GLsizei n,const GLuint* ids){if(n)invalidateGeometry();for(int i=0;i<n;i++)arrays.erase(ids[i]);}
 void Device::DepthFunc(GLenum f){state.depthFunc=f;}
 void Device::DepthMask(GLboolean flag){state.depthWrite=flag;}
 void Device::DepthRange(GLdouble n,GLdouble f){state.nearDepth=n;state.farDepth=f;}
@@ -457,66 +484,89 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
         packed=sources[i].data&&attrs[i].buffer==attrs[0].buffer&&sources[i].stride==bodySize&&sources[i].size==widths[i]&&
             sources[i].type==formats[i]&&sources[i].normalized==normalized[i]&&sources[i].data==sources[0].data+offsets[i];
     if(packed&&paletted)packed=sources[9].type==GL_UNSIGNED_BYTE&&sources[9].size==1&&!sources[9].normalized;
-    if(packed) {
-        d.packedVertices=std::move(packedVertexScratch);d.packedVertices.resize(count);
-        for(size_t i=0;i<size_t(count);++i) {
-            std::memcpy(&d.packedVertices[i],sources[0].data+i*bodySize,bodySize);
-            d.packedVertices[i].drawIndex=paletted?float(sources[9].data[i*sources[9].stride]):0.f;
+    // Peeling replays immutable source ranges. Layout changes select another
+    // key; buffer mutations clear all keys before they can expose stale bytes.
+    const bool retainGeometry=!paletted&&!d.bitmap&&d.uniforms.peel[0]!=0.f&&backend->supportsGeometryReuse();
+    GeometryKey geometryKey;
+    if(retainGeometry) {
+        geometryKey.count=count;
+        if(packed) {
+            geometryKey.buffer=attrs[0].buffer;
+            geometryKey.offset=attrs[0].offset+size_t(first)*bodySize;
+        } else {
+            geometryKey.offset=size_t(first);
+            auto& layout=geometryKey.attributes.emplace();
+            std::copy_n(attrs.begin(),layout.size(),layout.begin());
         }
-    } else {
-        d.vertices=std::move(vertexScratch);
-        // clear() before recycling makes resize value-initialize every attribute,
-        // including fields disabled by the next VAO.
-        d.vertices.resize(count);
-        auto scatter=[&](const AttributeSource& a,Vec4 Vertex::*field,unsigned offset=0,unsigned limit=4) {
-            if(!a.data)return;
-            const unsigned components=std::min(unsigned(a.size),limit);
-            if(a.type==GL_FLOAT) {
-                // Dispatch the format once per attribute. Constant-size memcpy
-                // permits unaligned GL storage while avoiding a runtime memcpy
-                // and format branch for every field of every vertex.
-                auto copy=[&](auto size) {
-                    for(size_t i=0;i<size_t(count);++i)
-                        std::memcpy((d.vertices[i].*field).data()+offset,a.data+i*a.stride,size.value*sizeof(float));
-                };
-                switch(components) {
-                case 1:copy(std::integral_constant<unsigned,1>{});break;
-                case 2:copy(std::integral_constant<unsigned,2>{});break;
-                case 3:copy(std::integral_constant<unsigned,3>{});break;
-                case 4:copy(std::integral_constant<unsigned,4>{});break;
-                }
-            } else if(a.type==GL_UNSIGNED_SHORT) {
-                for(size_t i=0;i<size_t(count);++i)for(unsigned c=0;c<components;++c) {
-                    uint16_t value;std::memcpy(&value,a.data+i*a.stride+c*2,2);
-                    (d.vertices[i].*field)[offset+c]=a.normalized?value/65535.f:float(value);
-                }
-            } else {
-                for(size_t i=0;i<size_t(count);++i)for(unsigned c=0;c<components;++c) {
-                    const uint8_t value=a.data[i*a.stride+c];
-                    (d.vertices[i].*field)[offset+c]=a.normalized?value/255.f:float(value);
-                }
+    }
+    auto cached=geometryCache.end();
+    if(retainGeometry)cached=geometryCache.find(geometryKey);
+    if(cached!=geometryCache.end())d.geometry=cached->second;
+    else {
+        if(packed) {
+            d.packedVertices=std::move(packedVertexScratch);d.packedVertices.resize(count);
+            for(size_t i=0;i<size_t(count);++i) {
+                std::memcpy(&d.packedVertices[i],sources[0].data+i*bodySize,bodySize);
+                d.packedVertices[i].drawIndex=paletted?float(sources[9].data[i*sources[9].stride]):0.f;
             }
-        };
-        scatter(sources[0],&Vertex::position);
-        if(d.bitmap)scatter(sources[1],&Vertex::uv);
-        else {
-            scatter(sources[1],&Vertex::normal);scatter(sources[2],&Vertex::diffuse);
-            scatter(sources[3],&Vertex::ambient);scatter(sources[4],&Vertex::specular);
-            scatter(sources[5],&Vertex::unknown);scatter(sources[6],&Vertex::uv);
-            scatter(sources[7],&Vertex::extra,0,1);scatter(sources[8],&Vertex::extra,1,1);
+        } else {
+            d.vertices=std::move(vertexScratch);
+            // clear() before recycling makes resize value-initialize every attribute,
+            // including fields disabled by the next VAO.
+            d.vertices.resize(count);
+            auto scatter=[&](const AttributeSource& a,Vec4 Vertex::*field,unsigned offset=0,unsigned limit=4) {
+                if(!a.data)return;
+                const unsigned components=std::min(unsigned(a.size),limit);
+                if(a.type==GL_FLOAT) {
+                    // Dispatch the format once per attribute. Constant-size memcpy
+                    // permits unaligned GL storage while avoiding a runtime memcpy
+                    // and format branch for every field of every vertex.
+                    auto copy=[&](auto size) {
+                        for(size_t i=0;i<size_t(count);++i)
+                            std::memcpy((d.vertices[i].*field).data()+offset,a.data+i*a.stride,size.value*sizeof(float));
+                    };
+                    switch(components) {
+                    case 1:copy(std::integral_constant<unsigned,1>{});break;
+                    case 2:copy(std::integral_constant<unsigned,2>{});break;
+                    case 3:copy(std::integral_constant<unsigned,3>{});break;
+                    case 4:copy(std::integral_constant<unsigned,4>{});break;
+                    }
+                } else if(a.type==GL_UNSIGNED_SHORT) {
+                    for(size_t i=0;i<size_t(count);++i)for(unsigned c=0;c<components;++c) {
+                        uint16_t value;std::memcpy(&value,a.data+i*a.stride+c*2,2);
+                        (d.vertices[i].*field)[offset+c]=a.normalized?value/65535.f:float(value);
+                    }
+                } else {
+                    for(size_t i=0;i<size_t(count);++i)for(unsigned c=0;c<components;++c) {
+                        const uint8_t value=a.data[i*a.stride+c];
+                        (d.vertices[i].*field)[offset+c]=a.normalized?value/255.f:float(value);
+                    }
+                }
+            };
+            scatter(sources[0],&Vertex::position);
+            if(d.bitmap)scatter(sources[1],&Vertex::uv);
+            else {
+                scatter(sources[1],&Vertex::normal);scatter(sources[2],&Vertex::diffuse);
+                scatter(sources[3],&Vertex::ambient);scatter(sources[4],&Vertex::specular);
+                scatter(sources[5],&Vertex::unknown);scatter(sources[6],&Vertex::uv);
+                scatter(sources[7],&Vertex::extra,0,1);scatter(sources[8],&Vertex::extra,1,1);
+            }
+            if(paletted)scatter(sources[9],&Vertex::extra,2,1);
         }
-        if(paletted)scatter(sources[9],&Vertex::extra,2,1);
-    }
-    if(paletted) {
-        for(size_t i=0;i<size_t(count);++i) {
-            const float record=packed?d.packedVertices[i].drawIndex:d.vertices[i].extra[2];
-            if(!std::isfinite(record)||record<0||record>=DrawPaletteSize||std::floor(record)!=record)
-                throw std::runtime_error("Invalid Hikaru palette index");
-            if(i%3&&record!=(packed?d.packedVertices[i-i%3].drawIndex:d.vertices[i-i%3].extra[2]))
-                throw std::runtime_error("Hikaru triangle crosses palette records");
+        if(retainGeometry) {
+            const size_t bytes=d.vertices.size()*sizeof(Vertex)+d.packedVertices.size()*sizeof(PackedVertex);
+            if(bytes<=GeometryCacheBytes) {
+                if(geometryCacheBytes>GeometryCacheBytes-bytes)invalidateGeometry();
+                auto geometry=std::make_shared<Geometry>();
+                geometry->vertices=std::move(d.vertices);
+                geometry->packedVertices=std::move(d.packedVertices);
+                d.geometry=std::move(geometry);
+                geometryCache.emplace(geometryKey,d.geometry);
+                geometryCacheBytes+=bytes;
+            }
         }
-        packPalette(d,p);
     }
+    if(paletted)packPalette(d,p);
     // Sampler uniforms select texture units; absent layers use the zero image.
     if(d.bitmap) {
         const char* names[]={"u_front","u_back",d.peelComposite?"u_peel_meta":"u_layer1","u_layer2"};
@@ -723,6 +773,9 @@ void Device::Uniform3fv(GLint l,GLsizei n,const GLfloat* v){uniform(l,size_t(n)*
 void Device::UniformMatrix3fv(GLint l,GLsizei n,GLboolean t,const GLfloat* v){if(t)throw std::runtime_error("Transposed Hikaru matrix upload");uniform(l,size_t(n)*9,v);}
 void Device::UniformMatrix4fv(GLint l,GLsizei n,GLboolean t,const GLfloat* v){if(t)throw std::runtime_error("Transposed Hikaru matrix upload");uniform(l,size_t(n)*16,v);}
 void Device::UseProgram(GLuint id){program=id;}
-void Device::VertexAttribPointer(GLuint i,GLint size,GLenum type,GLboolean normalized,GLsizei stride,const void* pointer){auto& a=arrays.at(vao).at(i);bool wasEnabled=a.enabled;a={buffer,size,type,bool(normalized),stride,reinterpret_cast<size_t>(pointer),wasEnabled};}
+void Device::VertexAttribPointer(GLuint i,GLint size,GLenum type,GLboolean normalized,GLsizei stride,const void* pointer){
+    auto& a=arrays.at(vao).at(i);const bool wasEnabled=a.enabled;
+    a={buffer,size,type,bool(normalized),stride,reinterpret_cast<size_t>(pointer),wasEnabled};
+}
 void Device::Viewport(GLint x,GLint y,GLsizei w,GLsizei h){state.viewport={x,y,w,h};}
 } // namespace hikaru::graphics
