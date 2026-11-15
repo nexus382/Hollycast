@@ -58,16 +58,19 @@ void BaseDrawer::scaleAndWriteFramebuffer(vk::CommandBuffer commandBuffer, Frame
 	Rect finalClip;
 	getWriteFBToVramParams(*rendContext, scaledSize, finalClip);
 
-	FramebufferAttachment *scaledFB = nullptr;
-
 	if (scaledSize.x != (int)width || scaledSize.y != (int)height)
 	{
 		const u32 scaledW = scaledSize.x;
 		const u32 scaledH = scaledSize.y;
 
-		scaledFB = new FramebufferAttachment(GetContext()->GetPhysicalDevice(), GetContext()->GetDevice());
-		scaledFB->Init(scaledW, scaledH, vk::Format::eR8G8B8A8Unorm, vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
-				"SCALED FRAMEBUFFER");
+		// Each readback waits for its copy to finish before reusing this attachment.
+		if (!scaledFB || scaledFB->getExtent() != vk::Extent2D(scaledW, scaledH))
+		{
+			auto attachment = std::make_unique<FramebufferAttachment>(GetContext()->GetPhysicalDevice(), GetContext()->GetDevice());
+			attachment->Init(scaledW, scaledH, vk::Format::eR8G8B8A8Unorm,
+					vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst, "SCALED FRAMEBUFFER");
+			scaledFB = std::move(attachment);
+		}
 
 		setImageLayout(commandBuffer, scaledFB->GetImage(), vk::Format::eR8G8B8A8Unorm, 1, vk::ImageLayout::eUndefined,
 				vk::ImageLayout::eTransferDstOptimal);
@@ -83,7 +86,7 @@ void BaseDrawer::scaleAndWriteFramebuffer(vk::CommandBuffer commandBuffer, Frame
 		setImageLayout(commandBuffer, scaledFB->GetImage(), vk::Format::eR8G8B8A8Unorm, 1, vk::ImageLayout::eTransferDstOptimal,
 				vk::ImageLayout::eTransferSrcOptimal);
 
-		finalFB = scaledFB;
+		finalFB = scaledFB.get();
 		width = scaledW;
 		height = scaledH;
 	}
@@ -107,14 +110,9 @@ void BaseDrawer::scaleAndWriteFramebuffer(vk::CommandBuffer commandBuffer, Frame
 	commandBuffer.end();
 	commandPool->EndFrameAndWait();
 
-	PixelBuffer<u32> tmpBuf;
-	tmpBuf.init(width, height);
-	finalFB->GetBufferData()->download(width * height * 4, tmpBuf.data());
-
-	WriteFramebuffer(width, height, (u8 *)tmpBuf.data(), rendContext->fb_W_SOF1 & VRAM_MASK,
+	MappedBufferRead pixels(*finalFB->GetBufferData(), width * height * 4);
+	WriteFramebuffer(width, height, pixels.data, rendContext->fb_W_SOF1 & VRAM_MASK,
 			rendContext->fb_W_CTRL, rendContext->fb_W_LINESTRIDE * 8, finalClip);
-
-	delete scaledFB;
 }
 
 void Drawer::Init(SamplerManager *samplerManager, ShaderManager *shaderManager)
@@ -132,6 +130,7 @@ void Drawer::Term()
 {
 	renderDelegate->term();
 	colorAttachments.clear();
+	scaledFB.reset();
 	depthAttachment.reset();
 	descriptorSets.term();
 	mainBuffers.clear();
@@ -271,13 +270,13 @@ void Drawer::DrawList(const vk::CommandBuffer& cmdBuffer, u32 listType, bool sor
 
 void Drawer::DrawModVols(const vk::CommandBuffer& cmdBuffer, int first, int count)
 {
-	if (count == 0 || rendContext->modtrig.empty() || !config::ModifierVolumes)
+	if (count == 0 || !modVolOffset)
 		return;
 
 	static const float scopeColor[4] = { 0.75f, 0.25f, 0.25f, 1.0f };
 	CommandBufferDebugScope _(cmdBuffer, "DrawModVols", scopeColor);
 
-	cmdBuffer.bindVertexBuffers(0, curMainBuffer, offsets.modVolOffset);
+	cmdBuffer.bindVertexBuffers(0, curMainBuffer, *modVolOffset);
 
 	ModifierVolumeParam* params = &rendContext->global_param_mvo[first];
 
@@ -336,7 +335,7 @@ void Drawer::UploadMainBuffer(const VertexShaderUniforms& vertexUniforms, const 
 	// Vertex
 	packer.add(rendContext->verts.data(), rendContext->verts.size() * sizeof(decltype(*rendContext->verts.data())));
 	// Modifier Volumes
-	offsets.modVolOffset = packer.add(rendContext->modtrig.data(), rendContext->modtrig.size() * sizeof(decltype(*rendContext->modtrig.data())));
+	packModifierVolumes(packer);
 	// Index
 	offsets.indexOffset = packer.add(rendContext->idx.data(), rendContext->idx.size() * sizeof(decltype(*rendContext->idx.data())));
 	// Uniform buffers
@@ -591,10 +590,8 @@ void TextureDrawer::EndRenderPass()
 
 		u16 *dst = (u16 *)&vram[textureAddr];
 
-		PixelBuffer<u32> tmpBuf;
-		tmpBuf.init(fbw, fbh);
-		colorAttachments[0]->GetBufferData()->download(fbw * fbh * 4, tmpBuf.data());
-		WriteTextureToVRam(fbw, fbh, (u8 *)tmpBuf.data(), dst, rendContext->fb_W_CTRL, rendContext->fb_W_LINESTRIDE * 8, rendContext->fbClip);
+		MappedBufferRead pixels(*colorAttachments[0]->GetBufferData(), fbw * fbh * 4);
+		WriteTextureToVRam(fbw, fbh, pixels.data, dst, rendContext->fb_W_CTRL, rendContext->fb_W_LINESTRIDE * 8, rendContext->fbClip);
 	}
 	else
 	{

@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path, help="configured and fully built Ninja directory")
+    parser.add_argument("--baseline-readback", metavar="REF",
+                        help="exercise writeFramebuffer from this Git revision with the current fixture")
     args = parser.parse_args()
     build = args.build.resolve()
     commands = json.loads((build / "compile_commands.json").read_text())
@@ -52,8 +54,31 @@ def main():
         fixture = directory / "fixture.o"
         ta = directory / "ta.o"
         overlay = directory / "overlay.o"
-        compile_object("metal_renderer.mm", fixture, ["-fno-access-control"],
-                       ROOT / "tests/metal/renderer_entry_regression.mm")
+        fixture_source = ROOT / "tests/metal/renderer_entry_regression.mm"
+        fixture_flags = ["-fno-access-control"]
+        if args.baseline_readback:
+            def method(source, signature):
+                start = source.index(signature)
+                end = source.index("{", start) + 1
+                depth = 1
+                while depth:
+                    depth += (source[end] == "{") - (source[end] == "}")
+                    end += 1
+                return source[start:end]
+
+            relative = "core/rend/metal/metal_renderer.mm"
+            current = (ROOT / relative).read_text()
+            baseline = subprocess.check_output(["git", "show", f"{args.baseline_readback}:{relative}"],
+                                               cwd=ROOT, text=True)
+            signature = "void MetalRenderer::writeFramebuffer("
+            renderer_source = directory / "metal_renderer.mm"
+            renderer_source.write_text(current.replace(method(current, signature), method(baseline, signature), 1))
+            replacement = directory / "renderer_entry_regression.mm"
+            replacement.write_text(fixture_source.read_text().replace(
+                '#include "rend/metal/metal_renderer.mm"', f'#include "{renderer_source}"', 1))
+            fixture_source = replacement
+            fixture_flags += ["-I", str(ROOT / "core/rend/metal")]
+        compile_object("metal_renderer.mm", fixture, fixture_flags, fixture_source)
         compile_object("ta_vtx.cpp", ta, ["-Dta_parse=hollycast_original_ta_parse"])
         # Keep unrelated overlay entry points real while intercepting timing calls.
         compile_object("performance_overlay.cpp", overlay, [

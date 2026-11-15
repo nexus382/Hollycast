@@ -96,6 +96,7 @@ protected:
 	};
 
 	virtual void resize(int w, int h);
+	bool resizeFramebuffer(int w, int h);
 	bool ensureBufferSize(ComPtr<ID3D11Buffer>& buffer, D3D11_BIND_FLAG bind, u32& currentSize, u32 minSize);
 	void createDepthTexAndView(ComPtr<ID3D11Texture2D>& texture, ComPtr<ID3D11DepthStencilView>& view, int width, int height, DXGI_FORMAT format = DXGI_FORMAT_D24_UNORM_S8_UINT, UINT bindFlags = 0);
 	void createTexAndRenderTarget(ComPtr<ID3D11Texture2D>& texture, ComPtr<ID3D11RenderTargetView>& renderTarget, int width, int height);
@@ -149,6 +150,7 @@ protected:
 	bool renderingToSecAccum = false;
 
 private:
+	HRESULT ensureReadbackTexture(ComPtr<ID3D11Texture2D>& texture, const D3D11_TEXTURE2D_DESC& desc);
 	void prepareRttRenderTarget(u32 texAddress);
 	void setBaseScissor();
 	void drawStrips();
@@ -171,6 +173,8 @@ private:
 	ComPtr<ID3D11Texture2D> fogTexture;
 	ComPtr<ID3D11ShaderResourceView> fogTextureView;
 	ComPtr<ID3D11Texture2D> rttTexture;
+	ComPtr<ID3D11Texture2D> rttReadbackTexture;
+	ComPtr<ID3D11Texture2D> fbReadbackTexture;
 	ComPtr<ID3D11Texture2D> rttDepthTex;
 	ComPtr<ID3D11DepthStencilView> rttDepthTexView;
 	ComPtr<ID3D11Texture2D> whiteTexture;

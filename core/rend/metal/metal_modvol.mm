@@ -71,13 +71,10 @@ void MetalModifierVolumes::Term()
     device = nil;
 }
 
-void MetalModifierVolumes::Draw(id<MTLRenderCommandEncoder> encoder, const rend_context& context,
+void MetalModifierVolumes::Draw(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> vertices, const rend_context& context,
         TransformMatrix& matrices, int first, int count, int width, int height, bool finalize)
 {
-    if (!config::ModifierVolumes || count <= 0 || context.modtrig.empty()) return;
-    id<MTLBuffer> vertices = [device newBufferWithBytes:context.modtrig.data()
-        length:context.modtrig.size() * sizeof(ModTriangle) options:MTLResourceStorageModeShared];
-    if (!vertices) throw RendererException("Metal modifier-volume allocation failed");
+    if (count <= 0 || context.modtrig.empty()) return;
     [encoder setRenderPipelineState:geometryPipeline];
     [encoder setVertexBuffer:vertices offset:0 atIndex:0];
     [encoder setFrontFacingWinding:MTLWindingCounterClockwise];

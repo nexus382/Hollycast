@@ -1167,6 +1167,7 @@ static void resize(int w, int h)
 
 bool OpenGL4Renderer::renderFrame(int rendering_width, int rendering_height)
 {
+	gl.modifierVolumes = config::ModifierVolumes;
 	if (!config::EmulateFramebuffer)
 		initVideoRoutingFrameBuffer();
 	
@@ -1192,7 +1193,7 @@ bool OpenGL4Renderer::renderFrame(int rendering_width, int rendering_height)
 	gl.rendContext->fog_clamp_min.getRGBAColor(gl4ShaderUniforms.fog_clamp_min);
 	gl.rendContext->fog_clamp_max.getRGBAColor(gl4ShaderUniforms.fog_clamp_max);
 	
-	if (config::ModifierVolumes)
+	if (gl.modifierVolumes)
 	{
 		create_modvol_shader();
 		glcache.UseProgram(gl4.modvol_shader.program);
@@ -1239,7 +1240,7 @@ bool OpenGL4Renderer::renderFrame(int rendering_width, int rendering_height)
 	gl4.vbo.getIndexBuffer()->update(gl.rendContext->idx.data(), gl.rendContext->idx.size() * sizeof(decltype(*gl.rendContext->idx.data())));
 
 	//Modvol VBO
-	if (!gl.rendContext->modtrig.empty())
+	if (gl.modifierVolumes && !gl.rendContext->modtrig.empty())
 		gl4.vbo.getModVolBuffer()->update(gl.rendContext->modtrig.data(), gl.rendContext->modtrig.size() * sizeof(decltype(*gl.rendContext->modtrig.data())));
 
 	// TR PolyParam data

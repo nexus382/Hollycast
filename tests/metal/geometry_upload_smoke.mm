@@ -16,19 +16,23 @@ int main() { @autoreleasepool {
     rend_context scene {};
     scene.verts.resize(3); scene.idx = {0, 1, 2};
     scene.verts[0].x = 11;
+    scene.modtrig = {{1,0,1, 0,1,1, 0,0,1}};
     MetalGeometryUploadPool pool;
     id<MTLCommandBuffer> commands[3];
     MetalGeometryBuffers frames[3];
     for (unsigned i = 0; i < 3; ++i) {
         commands[i] = [queue commandBuffer];
-        frames[i] = pool.upload(device, scene, commands[i]);
+        frames[i] = pool.upload(device, scene, commands[i], true);
         for (unsigned previous = 0; previous < i; ++previous)
             require(frames[i].vertices != frames[previous].vertices, "pending uploads keep distinct buffers");
     }
     scene.verts[0].x = 22;
+    scene.modtrig[0].x0 = 2;
     id<MTLCommandBuffer> overflow = [queue commandBuffer];
-    MetalGeometryBuffers transient = pool.upload(device, scene, overflow);
+    MetalGeometryBuffers transient = pool.upload(device, scene, overflow, true);
     for (const auto& frame : frames) {
+        require(transient.modifiers != frame.modifiers, "busy modifier uploads stay independent");
+        require(static_cast<const ModTriangle *>(frame.modifiers.contents)->x0 == 1, "pending modifier geometry stays unchanged");
         require(transient.vertices != frame.vertices, "busy pool uses a transient upload");
         require(static_cast<const Vertex *>(frame.vertices.contents)[0].x == 11, "pending geometry stays unchanged");
     }
@@ -41,9 +45,10 @@ int main() { @autoreleasepool {
     [overflow waitUntilCompleted];
     require(static_cast<const Vertex *>(readback.contents)[0].x == 11, "GPU sees the original pending geometry");
     id<MTLCommandBuffer> reuseCommand = [queue commandBuffer];
-    MetalGeometryBuffers reused = pool.upload(device, scene, reuseCommand);
+    MetalGeometryBuffers reused = pool.upload(device, scene, reuseCommand, true);
     bool reusedSlot = false;
-    for (const auto& frame : frames) reusedSlot |= reused.vertices == frame.vertices;
+    for (const auto& frame : frames) reusedSlot |= reused.vertices == frame.vertices && reused.modifiers == frame.modifiers;
+    require(static_cast<const ModTriangle *>(reused.modifiers.contents)->x0 == 2, "reused modifier buffer receives new geometry");
     require(reusedSlot, "completed uploads reuse a retained buffer");
     require(static_cast<const Vertex *>(reused.vertices.contents)[0].x == 22, "reused buffer receives new geometry");
     [reuseCommand commit]; [reuseCommand waitUntilCompleted];

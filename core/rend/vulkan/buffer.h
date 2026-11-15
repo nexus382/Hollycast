@@ -84,6 +84,21 @@ private:
 	vk::BufferUsageFlags    m_usage;
 };
 
+class MappedBufferRead
+{
+	const BufferData& buffer;
+public:
+	MappedBufferRead(const BufferData& buffer, vk::DeviceSize size) : buffer(buffer)
+	{
+		verify(size <= buffer.bufferSize);
+		data = static_cast<const u8 *>(buffer.MapMemory());
+	}
+	MappedBufferRead(const MappedBufferRead&) = delete;
+	~MappedBufferRead() { buffer.UnmapMemory(); }
+
+	const u8 *data;
+};
+
 class BufferPacker
 {
 public:

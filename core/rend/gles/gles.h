@@ -327,6 +327,8 @@ struct gl_ctx
 	bool prim_restart_supported;
 	bool prim_restart_fixed_supported;
 	bool bogusBlitFramebuffer;
+	bool modifierVolumes = false;
+	bool translucentDepthMask = false;
 	rend_context *rendContext = nullptr;
 	TransformMatrix matrices;
 

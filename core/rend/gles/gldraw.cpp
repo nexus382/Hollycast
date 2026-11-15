@@ -238,7 +238,7 @@ void OpenGLRenderer::setGPState(const PolyParam *gp, u32 cflip)
 		glUniform4f(CurrentShader->pp_ClipTest, (float)clip_rect.origin.x, (float)clip_rect.origin.y,
 				(float)clip_rect.bottomRight().x, (float)clip_rect.bottomRight().y);
 
-	if (config::ModifierVolumes)
+	if (gl.modifierVolumes)
 	{
 		//This bit control which pixels are affected
 		//by modvols
@@ -375,7 +375,7 @@ void OpenGLRenderer::drawSorted(int first, int count, bool multipass)
 				(GLvoid*)(gl.get_index_size() * gl.rendContext->sortedTriangles[p].first));
 	}
 
-	if (multipass && config::TranslucentPolygonDepthMask)
+	if (multipass && gl.translucentDepthMask)
 	{
 		// Write to the depth buffer now. The next render pass might need it. (Cosmic Smash)
 		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -668,7 +668,7 @@ void OpenGLRenderer::drawStrips()
 		drawList<ListType_Punch_Through,false>(gl.rendContext->global_param_pt, previous_pass.pt_count, current_pass.pt_count - previous_pass.pt_count);
 
 		// Modifier volumes
-		if (config::ModifierVolumes)
+		if (gl.modifierVolumes)
 			drawModVols(previous_pass.mvo_count, current_pass.mvo_count - previous_pass.mvo_count);
 
 		//Alpha blended
@@ -690,11 +690,13 @@ void OpenGLRenderer::drawStrips()
 void OpenGLRenderer::RenderFramebuffer(const FramebufferInfo& info)
 {
 	gl.rendContext = nullptr;
-	ReadFramebuffer(info, gl.framebufferBuffer, gl.dcfb.width, gl.dcfb.height);
+	const bool blank = info.fb_r_ctrl.fb_enable == 0 || info.vo_control.blank_video == 1;
+	ReadFramebuffer(info, gl.framebufferBuffer, gl.dcfb.width, gl.dcfb.height, !blank);
 	// Decode on the CPU before timing the upload, so an idle GPU cannot
 	// count the VRAM conversion time as framebuffer GPU work.
 	OpenGLGpuTimingScope gpuTiming(this, true);
-	glUploadFramebuffer();
+	if (!blank)
+		glUploadFramebuffer();
 	saveCurrentFramebuffer();
 	initVideoRoutingFrameBuffer();
 	getVideoShift(gl.ofbo.shiftX, gl.ofbo.shiftY);
@@ -720,7 +722,7 @@ void OpenGLRenderer::RenderFramebuffer(const FramebufferInfo& info)
 	glViewport(0, 0, gl.dcfb.width, gl.dcfb.height);
 	glcache.Disable(GL_SCISSOR_TEST);
 
-	if (info.fb_r_ctrl.fb_enable == 0 || info.vo_control.blank_video == 1)
+	if (blank)
 	{
 		// Video output disabled
 		glcache.ClearColor(info.vo_border_col.red(), info.vo_border_col.green(), info.vo_border_col.blue(), 1.f);

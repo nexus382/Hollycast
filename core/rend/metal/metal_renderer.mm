@@ -87,7 +87,9 @@ private:
     MetalTextureCache textureCache;
     MetalModifierVolumes modifiers;
     MetalOITBuffers oitBuffers;
+    MetalOITScratch oitScratch;
     MetalGeometryUploadPool geometryUploads;
+    id<MTLBuffer> framebufferReadback = nil;
     rend_context *renderContext = nullptr;
     TransformMatrix matrices { true };
     id<MTLLibrary> library = nil, oitLibrary = nil;
@@ -139,6 +141,8 @@ void MetalRenderer::Term() {
     MetalContext::Instance()->WaitIdle();
     modifiers.Term(); clearTextureCache(); clearGpuPreloadedTextures();
     geometryUploads.clear();
+    framebufferReadback = nil;
+    oitScratch = {};
     performance_overlay::setGpuTimingSupported(false);
     pvrTimingEvidence.reset();
     regularSecondary = nil; regularSecondaryCopy = nil;
@@ -396,7 +400,8 @@ bool MetalRenderer::Render() {
     if (renderContext->verts.empty() || renderContext->idx.empty()) return false;
     id<MTLCommandBuffer> command = [MetalContext::Instance()->GetQueue() commandBuffer];
     if (!command) throw RendererException("Metal command buffer allocation failed");
-    MetalGeometryBuffers geometry = geometryUploads.upload(device, *renderContext, command);
+    const bool useModifierVolumes = config::ModifierVolumes;
+    MetalGeometryBuffers geometry = geometryUploads.upload(device, *renderContext, command, useModifierVolumes);
     id<MTLBuffer> vertices = geometry.vertices;
     id<MTLBuffer> indices = geometry.indices;
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -483,9 +488,9 @@ bool MetalRenderer::Render() {
         for (u32 i = prev.pt_count; i < cur.pt_count; ++i) {
             auto& p = renderContext->global_param_pt[i]; drawRegular(p, p.first, p.count, MTLPrimitiveTypeTriangleStrip, true, false);
         }
-        if (config::ModifierVolumes && cur.mvo_count > prev.mvo_count) {
+        if (useModifierVolumes && cur.mvo_count > prev.mvo_count) {
             beginEncoder(targets.output);
-            modifiers.Draw(enc, *renderContext, matrices, prev.mvo_count, cur.mvo_count - prev.mvo_count, w, h);
+            modifiers.Draw(enc, geometry.modifiers, *renderContext, matrices, prev.mvo_count, cur.mvo_count - prev.mvo_count, w, h);
             [enc setVertexBuffer:vertices offset:0 atIndex:0];
         }
         if (cur.autosort && !config::PerStripSorting) {
@@ -554,10 +559,16 @@ bool MetalRenderer::renderPerPixel() {
         performance_overlay::setGpuTimingSupported(true);
     }
     struct TimingGuard { std::shared_ptr<OITGpuTiming> state; ~TimingGuard() { if (state) state->finishOne(); } } timingGuard {timing};
-    auto track = [timing](id<MTLCommandBuffer> cmd) {
+    const bool useModifierVolumes = config::ModifierVolumes;
+    auto geometry = geometryUploads.acquire(device, *renderContext, useModifierVolumes);
+    auto track = [timing, geometry](id<MTLCommandBuffer> cmd) {
         if (!cmd) throw RendererException("Metal per-pixel command buffer allocation failed");
         if (timing) timing->pending.fetch_add(1, std::memory_order_relaxed);
+        // Any command in this scene can outlive Render(), including during unwinding.
+        // Hold the upload slot until the last command that could read it completes.
+        __block auto pendingGeometry = geometry;
         [cmd addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+            pendingGeometry.reset();
             if (completed.status == MTLCommandBufferStatusError) {
                 ERROR_LOG(RENDERER, "Metal per-pixel GPU command failed: %s", completed.error.localizedDescription.UTF8String ?: "unknown error");
                 if (timing) timing->failed.store(true, std::memory_order_relaxed);
@@ -571,40 +582,25 @@ bool MetalRenderer::renderPerPixel() {
     bool fresh = targets.begin(device, w, h, renderContext->isRTT);
     if (!targets.output || !targets.depth) throw RendererException("Metal per-pixel framebuffer allocation failed");
     matrices.CalcMatrices(renderContext, w, h);
-    MetalGeometryBuffers geometry = metalUploadGeometry(device, *renderContext);
-    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:w height:h mipmapped:NO];
-    descriptor.storageMode = MTLStorageModePrivate;
-    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-    id<MTLTexture> opaqueDepth = [device newTextureWithDescriptor:descriptor];
-    descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
-    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    id<MTLTexture> resolved = [device newTextureWithDescriptor:descriptor];
-    descriptor.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
-    descriptor.usage = MTLTextureUsageRenderTarget;
-    id<MTLTexture> replayDepth = [device newTextureWithDescriptor:descriptor];
-    descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
-    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    id<MTLTexture> secondary = [device newTextureWithDescriptor:descriptor];
-    id<MTLTexture> secondaryCopy = [device newTextureWithDescriptor:descriptor];
-    if (!opaqueDepth || !resolved || !secondary || !secondaryCopy || !replayDepth) throw RendererException("Metal per-pixel render target allocation failed");
+    oitScratch.resize(device, w, h);
     id<MTLCommandBuffer> clearSecondary = newCommand();
     MTLRenderPassDescriptor *secondaryPass = [MTLRenderPassDescriptor renderPassDescriptor];
-    secondaryPass.colorAttachments[0].texture = secondary; secondaryPass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    secondaryPass.colorAttachments[0].texture = oitScratch.secondary; secondaryPass.colorAttachments[0].loadAction = MTLLoadActionClear;
     secondaryPass.colorAttachments[0].storeAction = MTLStoreActionStore; secondaryPass.colorAttachments[0].clearColor = MTLClearColorMake(0,0,0,0);
     [[clearSecondary renderCommandEncoderWithDescriptor:secondaryPass] endEncoding]; [clearSecondary commit];
     auto copySecondary = [&] {
         id<MTLCommandBuffer> command = newCommand(); id<MTLBlitCommandEncoder> copy = [command blitCommandEncoder];
-        [copy copyFromTexture:secondary sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
-                  sourceSize:MTLSizeMake(w,h,1) toTexture:secondaryCopy destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
+        [copy copyFromTexture:oitScratch.secondary sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
+                  sourceSize:MTLSizeMake(w,h,1) toTexture:oitScratch.secondaryCopy destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
         [copy endEncoding]; [command commit];
     };
     // Color replay has its own depth history; the modifier stencil plane is
     // copied into it after the depth prepass for each TA render pass.
     id<MTLCommandBuffer> clearReplay = newCommand();
     MTLRenderPassDescriptor *replayClear = [MTLRenderPassDescriptor renderPassDescriptor];
-    replayClear.depthAttachment.texture = replayDepth; replayClear.depthAttachment.loadAction = MTLLoadActionClear;
+    replayClear.depthAttachment.texture = oitScratch.replayDepth; replayClear.depthAttachment.loadAction = MTLLoadActionClear;
     replayClear.depthAttachment.clearDepth = 0; replayClear.depthAttachment.storeAction = MTLStoreActionStore;
-    replayClear.stencilAttachment.texture = replayDepth; replayClear.stencilAttachment.loadAction = MTLLoadActionClear;
+    replayClear.stencilAttachment.texture = oitScratch.replayDepth; replayClear.stencilAttachment.loadAction = MTLLoadActionClear;
     replayClear.stencilAttachment.clearStencil = 0; replayClear.stencilAttachment.storeAction = MTLStoreActionStore;
     [[clearReplay renderCommandEncoderWithDescriptor:replayClear] endEncoding]; [clearReplay commit];
     auto makePass = [&](bool first, bool withMirror, id<MTLTexture> colorTarget = nil, id<MTLTexture> depthTarget = nil) {
@@ -614,7 +610,7 @@ bool MetalRenderer::renderPerPixel() {
         p.colorAttachments[0].storeAction = MTLStoreActionStore;
         p.colorAttachments[0].clearColor = renderContext->isRTT ? MTLClearColorMake(0,0,0,0) : MTLClearColorMake(VO_BORDER_COL.red(),VO_BORDER_COL.green(),VO_BORDER_COL.blue(),1);
         if (withMirror) {
-            p.colorAttachments[1].texture = opaqueDepth;
+            p.colorAttachments[1].texture = oitScratch.opaqueDepth;
             p.colorAttachments[1].loadAction = first ? MTLLoadActionClear : MTLLoadActionLoad;
             p.colorAttachments[1].storeAction = MTLStoreActionStore;
             p.colorAttachments[1].clearColor = MTLClearColorMake(0,0,0,0);
@@ -635,18 +631,18 @@ bool MetalRenderer::renderPerPixel() {
     for (const RenderPass& cur : renderContext->render_passes) {
         id<MTLCommandBuffer> command = newCommand();
         id<MTLRenderCommandEncoder> enc = [command renderCommandEncoderWithDescriptor:makePass(first, true)];
-        [enc setVertexBuffer:geometry.vertices offset:0 atIndex:0];
-        for (u32 i=prev.op_count;i<cur.op_count;i++) { const auto& p=renderContext->global_param_op[i]; draw(enc,geometry.indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,false,true,true,nullptr,nil,0,4); }
-        for (u32 i=prev.pt_count;i<cur.pt_count;i++) { const auto& p=renderContext->global_param_pt[i]; draw(enc,geometry.indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,true,false,true,true,nullptr,nil,0,4); }
+        [enc setVertexBuffer:geometry->vertices offset:0 atIndex:0];
+        for (u32 i=prev.op_count;i<cur.op_count;i++) { const auto& p=renderContext->global_param_op[i]; draw(enc,geometry->indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,false,true,true,nullptr,nil,0,4); }
+        for (u32 i=prev.pt_count;i<cur.pt_count;i++) { const auto& p=renderContext->global_param_pt[i]; draw(enc,geometry->indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,true,false,true,true,nullptr,nil,0,4); }
         [enc endEncoding]; [command commit];
         first = false;
-        if (config::ModifierVolumes && cur.mvo_count > prev.mvo_count) {
+        if (useModifierVolumes && cur.mvo_count > prev.mvo_count) {
             command = newCommand(); enc = [command renderCommandEncoderWithDescriptor:makePass(false, false)];
-            modifiers.Draw(enc,*renderContext,matrices,prev.mvo_count,cur.mvo_count-prev.mvo_count,w,h,false);
+            modifiers.Draw(enc,geometry->modifiers,*renderContext,matrices,prev.mvo_count,cur.mvo_count-prev.mvo_count,w,h,false);
             [enc endEncoding]; [command commit];
         }
         command = newCommand();
-        metalOITCopyDepthStencilAspect(device, command, targets.depth, replayDepth, w, h, true);
+        oitScratch.copyDepthStencilAspect(command, targets.depth, oitScratch.replayDepth, true);
         [command commit];
         // Replay in submission order; secondary-source draws sample a snapshot
         // so Metal never reads and writes the same attachment concurrently.
@@ -661,11 +657,11 @@ bool MetalRenderer::renderPerPixel() {
             if (!colorEncoder) {
                 colorCommand = newCommand();
                 colorEncoder = [colorCommand renderCommandEncoderWithDescriptor:
-                        makePass(false, false, p.tsp.DstSelect ? secondary : targets.output, replayDepth)];
-                [colorEncoder setVertexBuffer:geometry.vertices offset:0 atIndex:0];
+                        makePass(false, false, p.tsp.DstSelect ? oitScratch.secondary : targets.output, oitScratch.replayDepth)];
+                [colorEncoder setVertexBuffer:geometry->vertices offset:0 atIndex:0];
             }
-            draw(colorEncoder,geometry.indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,punch,false,false,false,nullptr,
-                    p.tsp.SrcSelect ? secondaryCopy : nil,0,variant);
+            draw(colorEncoder,geometry->indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,punch,false,false,false,nullptr,
+                    p.tsp.SrcSelect ? oitScratch.secondaryCopy : nil,0,variant);
             if (secondaryOperation) flushColor();
         };
         auto opaqueColor = [&](const PolyParam& p, bool punch) {
@@ -680,7 +676,7 @@ bool MetalRenderer::renderPerPixel() {
         for (u32 i=prev.op_count;i<cur.op_count;i++) opaqueColor(renderContext->global_param_op[i],false);
         for (u32 i=prev.pt_count;i<cur.pt_count;i++) opaqueColor(renderContext->global_param_pt[i],true);
         flushColor();
-        if (config::ModifierVolumes && cur.mvo_count > prev.mvo_count) {
+        if (useModifierVolumes && cur.mvo_count > prev.mvo_count) {
             command = newCommand(); enc = [command renderCommandEncoderWithDescriptor:makePass(false, false)];
             modifiers.ClearStencil(enc,w,h); [enc endEncoding]; [command commit];
         }
@@ -688,7 +684,7 @@ bool MetalRenderer::renderPerPixel() {
             // Keep the opaque modifier stencil snapshot while translucent depth
             // writes advance independently of the prepass attachment.
             command = newCommand();
-            metalOITCopyDepthStencilAspect(device, command, targets.depth, replayDepth, w, h, false);
+            oitScratch.copyDepthStencilAspect(command, targets.depth, oitScratch.replayDepth, false);
             [command commit];
             id<MTLCommandBuffer> trCommand = nil; id<MTLRenderCommandEncoder> trEncoder = nil;
             auto flushTranslucent = [&] {
@@ -699,11 +695,11 @@ bool MetalRenderer::renderPerPixel() {
                 if (secondaryOperation) { flushTranslucent(); if (p.tsp.SrcSelect) copySecondary(); }
                 if (!trEncoder) {
                     trCommand = newCommand(); trEncoder = [trCommand renderCommandEncoderWithDescriptor:
-                            makePass(false, true, p.tsp.DstSelect ? secondary : targets.output, replayDepth)];
-                    [trEncoder setVertexBuffer:geometry.vertices offset:0 atIndex:0];
+                            makePass(false, true, p.tsp.DstSelect ? oitScratch.secondary : targets.output, oitScratch.replayDepth)];
+                    [trEncoder setVertexBuffer:geometry->vertices offset:0 atIndex:0];
                 }
-                draw(trEncoder,geometry.indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,false,false,true,nullptr,
-                        p.tsp.SrcSelect ? secondaryCopy : nil,0,variant);
+                draw(trEncoder,geometry->indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,false,false,true,nullptr,
+                        p.tsp.SrcSelect ? oitScratch.secondaryCopy : nil,0,variant);
                 if (secondaryOperation) flushTranslucent();
             };
             for (u32 i=prev.tr_count;i<cur.tr_count;i++) {
@@ -718,7 +714,7 @@ bool MetalRenderer::renderPerPixel() {
             }
             flushTranslucent();
             command = newCommand();
-            metalOITCopyDepthStencilAspect(device, command, replayDepth, targets.depth, w, h, false);
+            oitScratch.copyDepthStencilAspect(command, oitScratch.replayDepth, targets.depth, false);
             [command commit];
         } else if (cur.tr_count > prev.tr_count) {
             MetalOITBuffers& oit = oitBuffers;
@@ -728,26 +724,26 @@ bool MetalRenderer::renderPerPixel() {
             for (;;) {
                 command = newCommand(); oit.clear(command);
                 enc = [command renderCommandEncoderWithDescriptor:makePass(false, false)];
-                [enc setVertexBuffer:geometry.vertices offset:0 atIndex:0];
-                for (u32 i=prev.tr_count;i<cur.tr_count;i++) { const auto& p=renderContext->global_param_tr[i]; draw(enc,geometry.indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,true,false,false,&oit,opaqueDepth,i); }
+                [enc setVertexBuffer:geometry->vertices offset:0 atIndex:0];
+                for (u32 i=prev.tr_count;i<cur.tr_count;i++) { const auto& p=renderContext->global_param_tr[i]; draw(enc,geometry->indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,true,false,false,&oit,oitScratch.opaqueDepth,i); }
                 [enc endEncoding]; finish(command);
                 if (!oit.overflowed()) break;
                 if (!oit.grow()) throw RendererException("Metal per-pixel fragment buffer exhausted; increase Pixel Buffer Size");
             }
-            if (config::ModifierVolumes) {
+            if (useModifierVolumes) {
                 if (cur.mv_op_tr_shared)
-                    oit.modifiers(queue, targets.output, targets.depth, *renderContext, matrices,
+                    oit.modifiers(queue, targets.output, targets.depth, geometry->modifiers, *renderContext, matrices,
                             renderContext->global_param_mvo.data(), prev.mvo_count, cur.mvo_count - prev.mvo_count, track);
                 else
-                    oit.modifiers(queue, targets.output, targets.depth, *renderContext, matrices,
+                    oit.modifiers(queue, targets.output, targets.depth, geometry->modifiers, *renderContext, matrices,
                             renderContext->global_param_mvo_tr.data(), prev.mvo_tr_count, cur.mvo_tr_count - prev.mvo_tr_count, track);
             }
-            command = newCommand(); oit.resolve(command,targets.output,resolved,secondary,secondaryCopy);
+            command = newCommand(); oit.resolve(command,targets.output,oitScratch.resolved,oitScratch.secondary,oitScratch.secondaryCopy);
             id<MTLBlitCommandEncoder> copy = [command blitCommandEncoder];
-            [copy copyFromTexture:resolved sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
+            [copy copyFromTexture:oitScratch.resolved sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
                       sourceSize:MTLSizeMake(w,h,1) toTexture:targets.output destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
-            [copy copyFromTexture:secondaryCopy sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
-                      sourceSize:MTLSizeMake(w,h,1) toTexture:secondary destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
+            [copy copyFromTexture:oitScratch.secondaryCopy sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
+                      sourceSize:MTLSizeMake(w,h,1) toTexture:oitScratch.secondary destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
             [copy endEncoding]; finish(command);
             if (oit.layersExceeded() && !layerWarningShown) {
                 layerWarningShown = true;
@@ -756,16 +752,16 @@ bool MetalRenderer::renderPerPixel() {
             }
             if (&cur != &renderContext->render_passes.back() && config::TranslucentPolygonDepthMask) {
                 command = newCommand(); enc = [command renderCommandEncoderWithDescriptor:makePass(false, true)];
-                [enc setVertexBuffer:geometry.vertices offset:0 atIndex:0];
+                [enc setVertexBuffer:geometry->vertices offset:0 atIndex:0];
                 for (u32 i=prev.tr_count;i<cur.tr_count;i++) { const auto& p=renderContext->global_param_tr[i];
-                    if (!p.isp.ZWriteDis) draw(enc,geometry.indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,true,true,true);
+                    if (!p.isp.ZWriteDis) draw(enc,geometry->indices,p,p.first,p.count,MTLPrimitiveTypeTriangleStrip,false,true,true,true);
                 }
                 [enc endEncoding]; [command commit];
             }
         }
         if (&cur != &renderContext->render_passes.back()) {
             command = newCommand();
-            metalOITCopyDepthStencilAspect(device, command, targets.depth, replayDepth, w, h, false);
+            oitScratch.copyDepthStencilAspect(command, targets.depth, oitScratch.replayDepth, false);
             [command commit];
         }
         prev = cur;
@@ -789,11 +785,13 @@ bool MetalRenderer::renderPerPixel() {
 void MetalRenderer::writeFramebuffer(id<MTLCommandBuffer> command, id<MTLTexture> image) {
     const int w = (int)image.width, h = (int)image.height;
     const size_t stride = ((size_t)w * 4 + 255) & ~size_t(255);
-    id<MTLBuffer> buffer = [MetalContext::Instance()->GetDevice() newBufferWithLength:stride * h options:MTLResourceStorageModeShared];
-    if (!buffer) throw RendererException("Metal framebuffer readback allocation failed");
+    if (framebufferReadback.length < stride * h) {
+        framebufferReadback = [image.device newBufferWithLength:stride * h options:MTLResourceStorageModeShared];
+        if (!framebufferReadback) throw RendererException("Metal framebuffer readback allocation failed");
+    }
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     [blit copyFromTexture:image sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
-               sourceSize:MTLSizeMake(w, h, 1) toBuffer:buffer destinationOffset:0
+               sourceSize:MTLSizeMake(w, h, 1) toBuffer:framebufferReadback destinationOffset:0
        destinationBytesPerRow:stride destinationBytesPerImage:stride * h];
     [blit endEncoding]; [command commit]; [command waitUntilCompleted];
     if (command.status == MTLCommandBufferStatusError)
@@ -808,41 +806,46 @@ void MetalRenderer::writeFramebuffer(id<MTLCommandBuffer> command, id<MTLTexture
         targetW = size.x; targetH = size.y;
     }
     if (targetW <= 0 || targetH <= 0) return;
-    std::vector<u8> pixels((size_t)targetW * targetH * 4);
-    const u8 *source = static_cast<const u8 *>(buffer.contents);
+    u8 *source = static_cast<u8 *>(framebufferReadback.contents);
+    const size_t rowBytes = (size_t)w * 4;
     size_t sourceStride = stride;
-    std::vector<u8> dithered;
-    if (!renderContext->isRTT && config::EmulateFramebuffer && renderContext->fb_W_CTRL.fb_dither
-            && renderContext->fb_W_CTRL.fb_packmode <= 3) {
-        dithered.resize((size_t)w * h * 4);
-        for (int y = 0; y < h; ++y)
-            memcpy(dithered.data() + (size_t)y * w * 4, source + (size_t)y * stride, (size_t)w * 4);
-        metalDitherFramebuffer(dithered.data(), w, h, renderContext->fb_W_CTRL.fb_packmode, true);
-        source = dithered.data(); sourceStride = (size_t)w * 4;
+    const bool scale = targetW != w || targetH != h;
+    const bool dither = !renderContext->isRTT && config::EmulateFramebuffer && renderContext->fb_W_CTRL.fb_dither
+            && renderContext->fb_W_CTRL.fb_packmode <= 3;
+    // Packing and dithering expect contiguous rows. The completed blit grants
+    // the CPU exclusive use of this staging buffer until the next readback.
+    if ((!scale || dither) && stride != rowBytes) {
+        for (int y = 1; y < h; ++y)
+            memmove(source + (size_t)y * rowBytes, source + (size_t)y * stride, rowBytes);
+        sourceStride = rowBytes;
     }
-    if (targetW == w && targetH == h) {
-        for (int y = 0; y < h; ++y)
-            memcpy(pixels.data() + (size_t)y * w * 4, source + (size_t)y * sourceStride, (size_t)w * 4);
-    } else for (int y = 0; y < targetH; ++y) for (int x = 0; x < targetW; ++x) {
-        float sx = (x + 0.5f) * w / targetW - 0.5f, sy = (y + 0.5f) * h / targetH - 0.5f;
-        int x0 = (int)std::floor(sx), y0 = (int)std::floor(sy);
-        float fx = sx - x0, fy = sy - y0;
-        int xa = std::clamp(x0, 0, w - 1), xb = std::clamp(x0 + 1, 0, w - 1);
-        int ya = std::clamp(y0, 0, h - 1), yb = std::clamp(y0 + 1, 0, h - 1);
-        u8 *out = &pixels[((size_t)y * targetW + x) * 4];
-        for (int c = 0; c < 4; ++c) {
-            float a = source[(size_t)ya * sourceStride + xa * 4 + c] * (1 - fx) + source[(size_t)ya * sourceStride + xb * 4 + c] * fx;
-            float b = source[(size_t)yb * sourceStride + xa * 4 + c] * (1 - fx) + source[(size_t)yb * sourceStride + xb * 4 + c] * fx;
-            out[c] = (u8)std::clamp((int)std::lround(a * (1 - fy) + b * fy), 0, 255);
+    if (dither)
+        metalDitherFramebuffer(source, w, h, renderContext->fb_W_CTRL.fb_packmode, true);
+    std::vector<u8> scaled;
+    if (scale) {
+        scaled.resize((size_t)targetW * targetH * 4);
+        for (int y = 0; y < targetH; ++y) for (int x = 0; x < targetW; ++x) {
+            float sx = (x + 0.5f) * w / targetW - 0.5f, sy = (y + 0.5f) * h / targetH - 0.5f;
+            int x0 = (int)std::floor(sx), y0 = (int)std::floor(sy);
+            float fx = sx - x0, fy = sy - y0;
+            int xa = std::clamp(x0, 0, w - 1), xb = std::clamp(x0 + 1, 0, w - 1);
+            int ya = std::clamp(y0, 0, h - 1), yb = std::clamp(y0 + 1, 0, h - 1);
+            u8 *out = &scaled[((size_t)y * targetW + x) * 4];
+            for (int c = 0; c < 4; ++c) {
+                float a = source[(size_t)ya * sourceStride + xa * 4 + c] * (1 - fx) + source[(size_t)ya * sourceStride + xb * 4 + c] * fx;
+                float b = source[(size_t)yb * sourceStride + xa * 4 + c] * (1 - fx) + source[(size_t)yb * sourceStride + xb * 4 + c] * fx;
+                out[c] = (u8)std::clamp((int)std::lround(a * (1 - fy) + b * fy), 0, 255);
+            }
         }
     }
     u32 address = renderContext->fb_W_SOF1 & VRAM_MASK;
     u32 lineStride = renderContext->fb_W_LINESTRIDE * 8;
+    const u8 *pixels = scale ? scaled.data() : source;
     if (renderContext->isRTT) {
         if (!lineStride) lineStride = targetW * 2;
-        WriteTextureToVRam(targetW, targetH, pixels.data(), (u16 *)&vram[address], renderContext->fb_W_CTRL, lineStride, clip);
+        WriteTextureToVRam(targetW, targetH, pixels, (u16 *)&vram[address], renderContext->fb_W_CTRL, lineStride, clip);
     } else {
-        WriteFramebuffer(targetW, targetH, pixels.data(), address, renderContext->fb_W_CTRL, lineStride, clip);
+        WriteFramebuffer(targetW, targetH, pixels, address, renderContext->fb_W_CTRL, lineStride, clip);
     }
 }
 

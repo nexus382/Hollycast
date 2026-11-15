@@ -131,14 +131,26 @@ void DescriptorSets::bindPerPolyDescriptorSets(vk::CommandBuffer cmdBuffer, cons
 	auto it = perPolyDescSets.find(&poly);
 	if (it == perPolyDescSets.end())
 	{
+		vk::DescriptorImageInfo imageInfo;
+		if (poly.texture != nullptr)
+			imageInfo = vk::DescriptorImageInfo(samplerManager->GetSampler(poly, punchThrough),
+					((Texture *)poly.texture)->GetReadOnlyImageView(), vk::ImageLayout::eShaderReadOnlyOptimal);
+		const ImageDescriptorKey imageKey{imageInfo.imageView, imageInfo.sampler, {}, {}};
+		if (!poly.isNaomi2())
+		{
+			vk::DescriptorSet imageSet = perImageDescSets.find(imageKey);
+			if (imageSet)
+			{
+				perPolyDescSets[&poly] = imageSet;
+				cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, imageSet, nullptr);
+				return;
+			}
+		}
 		perPolyDescSet = perPolyAlloc.alloc();
 		std::vector<vk::WriteDescriptorSet> writeDescriptorSets;
 
-		vk::DescriptorImageInfo imageInfo;
 		if (poly.texture != nullptr)
 		{
-			imageInfo = vk::DescriptorImageInfo(samplerManager->GetSampler(poly, punchThrough),
-					((Texture *)poly.texture)->GetReadOnlyImageView(), vk::ImageLayout::eShaderReadOnlyOptimal);
 			writeDescriptorSets.emplace_back(perPolyDescSet, 0, 0, vk::DescriptorType::eCombinedImageSampler, imageInfo);
 		}
 		else {
@@ -165,6 +177,8 @@ void DescriptorSets::bindPerPolyDescriptorSets(vk::CommandBuffer cmdBuffer, cons
 
 		getContext()->GetDevice().updateDescriptorSets(writeDescriptorSets, nullptr);
 		perPolyDescSets[&poly] = perPolyDescSet;
+		if (!poly.isNaomi2())
+			perImageDescSets.emplace(imageKey, perPolyDescSet);
 	}
 	else {
 		perPolyDescSet = it->second;
@@ -207,10 +221,13 @@ void DescriptorSets::nextFrame()
 	perPolyAlloc.nextFrame();
 	perFrameDescSet = vk::DescriptorSet{};
 	perPolyDescSets.clear();
+	perImageDescSets.clear();
 }
 
 void DescriptorSets::term()
 {
+	perPolyDescSets.clear();
+	perImageDescSets.clear();
 	perFrameAlloc.term();
 	perPolyAlloc.term();
 	BaseDescriptorSets::term();

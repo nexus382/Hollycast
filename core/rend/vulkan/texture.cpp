@@ -726,22 +726,5 @@ void FramebufferAttachment::Init(u32 width, u32 height, vk::Format format, const
 
 void TextureCache::Cleanup()
 {
-	std::vector<u64> list;
-
-	u32 TargetFrame = std::max((u32)120, FrameCount) - 120;
-
-	for (const auto& [id, texture] : cache)
-	{
-		if (texture.dirty && texture.dirty < TargetFrame)
-			list.push_back(id);
-
-		if (list.size() > 5)
-			break;
-	}
-
-	for (u64 id : list)
-	{
-		if (clearTexture(&cache[id]))
-			cache.erase(id);
-	}
+	collectCleanup([this](Texture& texture) { return clearTexture(&texture); });
 }

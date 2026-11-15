@@ -1633,6 +1633,8 @@ static void upload_vertex_indices()
 
 bool OpenGLRenderer::renderFrame(int width, int height)
 {
+	gl.modifierVolumes = config::ModifierVolumes;
+	gl.translucentDepthMask = config::TranslucentPolygonDepthMask;
 	if (!config::EmulateFramebuffer)
 		initVideoRoutingFrameBuffer();
 	
@@ -1666,7 +1668,8 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 	gl.rendContext->fog_clamp_min.getRGBAColor(ShaderUniforms.fog_clamp_min);
 	gl.rendContext->fog_clamp_max.getRGBAColor(ShaderUniforms.fog_clamp_max);
 	
-	if (config::ModifierVolumes)
+	// The same shader also writes translucent depth between render passes.
+	if (gl.modifierVolumes || gl.translucentDepthMask)
 	{
 		create_modvol_shader();
 		glcache.UseProgram(gl.modvol_shader.program);
@@ -1776,7 +1779,7 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 	upload_vertex_indices();
 
 	//Modvol VBO
-	if (!gl.rendContext->modtrig.empty())
+	if (gl.modifierVolumes && !gl.rendContext->modtrig.empty())
 		gl.vbo.modvols->update(&gl.rendContext->modtrig[0], gl.rendContext->modtrig.size() * sizeof(decltype(gl.rendContext->modtrig[0])));
 
 	Rect scissor = gl.matrices.getBaseScissor();
