@@ -1,0 +1,664 @@
+{
+  "formatVersion": 1,
+  "id": "christmas-morning",
+  "name": "Christmas Morning",
+  "author": "Hollycast contributors",
+  "description": "A nostalgic Christmas room with ivory serif type, a cover list, cranberry and gold controls, and a CRT preview. Requires Hollycast with list badges and keyboard preview support; see README.",
+  "baseTheme": 0,
+  "fonts": {
+    "body": "assets/ChristmasSerif-Regular.ttf",
+    "bold": "assets/ChristmasSerif-Bold.ttf"
+  },
+  "colors": {
+    "Text": "fff0cf",
+    "TextDisabled": "d1c5a2",
+    "WindowBg": "08251c",
+    "ChildBg": "08251c",
+    "PopupBg": "10291f",
+    "Border": "a88c4e",
+    "Separator": "78683b",
+    "FrameBg": "16372a",
+    "FrameBgHovered": "254c37",
+    "FrameBgActive": "366244",
+    "Button": "0e2c20",
+    "ButtonHovered": "234734",
+    "ButtonActive": "850c20",
+    "Header": "850c20",
+    "HeaderHovered": "a32535",
+    "HeaderActive": "6a0617",
+    "CheckMark": "e7bf69",
+    "SliderGrab": "e7bf69",
+    "SliderGrabActive": "fff0cf",
+    "NavCursor": "e7bf69",
+    "ScrollbarBg": "08251c00",
+    "ScrollbarGrab": "a88c4e66",
+    "ScrollbarGrabHovered": "d9b777aa",
+    "ScrollbarGrabActive": "e7bf69",
+    "TitleBg": "08251c",
+    "TitleBgActive": "16372a",
+    "TableHeaderBg": "16372a",
+    "TextLink": "e7bf69"
+  },
+  "layouts": [
+    {
+      "mode": "list",
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarLogo": "assets/hollycast-christmas.png",
+      "toolbarLogoHeight": 32,
+      "toolbarSelectedTextColor": "fff0cf",
+      "background": "08251c",
+      "textColor": "fff0cf",
+      "selectedTextColor": "fff0cf",
+      "selectorColor": "850c20f5",
+      "selectorBorderColor": "e7bf69",
+      "separatorColor": "d9b77735",
+      "rounding": 8,
+      "showArtwork": true,
+      "artworkSource": "cover",
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "previewSource": "screenshot",
+      "spacing": 0,
+      "list": {
+        "systemBadge": true,
+        "favouriteBadge": true,
+        "favouriteColor": "e7bf69",
+        "selectOnHover": false
+      },
+      "launch": {
+        "seconds": 0.55
+      },
+      "id": "christmas-morning",
+      "name": "Christmas Morning",
+      "canvasAspect": 1.7768331562167907,
+      "browser": [
+        0.022,
+        0.268,
+        0.432,
+        0.373
+      ],
+      "rowHeight": 0.073,
+      "fontSize": 0.0275,
+      "narrowLayout": "christmas-morning-portrait",
+      "narrowAspect": 1.15,
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/christmas-room.png",
+          "zIndex": -100,
+          "fit": "stretch"
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.005,
+            0.027,
+            0.335,
+            0.226
+          ],
+          "source": "assets/christmas-title.png",
+          "fit": "contain"
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.526,
+            0.266,
+            0.261,
+            0.308
+          ],
+          "source": "preview",
+          "fit": "contain",
+          "rounding": 8
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.526,
+            0.266,
+            0.261,
+            0.308
+          ],
+          "source": "assets/crt-glass.png",
+          "fit": "stretch",
+          "rounding": 8,
+          "zIndex": 1
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.526,
+            0.266,
+            0.261,
+            0.308
+          ],
+          "source": "assets/crt-retune.png",
+          "tileSeconds": 0.5,
+          "onSelection": 0.65,
+          "zIndex": 2,
+          "fit": "contain"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.023,
+            0.653,
+            0.416,
+            0.074
+          ],
+          "source": "title",
+          "fontSize": 0.06,
+          "color": "fff0cf",
+          "bold": true,
+          "wrap": false
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.024,
+            0.739,
+            0.414,
+            0.03
+          ],
+          "fields": [
+            "developer",
+            "genre",
+            "releaseDate",
+            "players"
+          ],
+          "separator": "   |   ",
+          "fontSize": 0.019,
+          "color": "d1c5a2",
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.024,
+            0.781,
+            0.025,
+            0.0015
+          ],
+          "color": "e7bf69"
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.024,
+            0.793,
+            0.414,
+            0.049
+          ],
+          "fields": [
+            "description"
+          ],
+          "columns": 1,
+          "fontSize": 0.0195,
+          "color": "d1c5a2"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.023,
+            0.854,
+            0.179,
+            0.073
+          ],
+          "action": "activate",
+          "text": "\u25b6  Play",
+          "fontSize": 0.032,
+          "color": "fff0cf",
+          "background": "850c20",
+          "borderColor": "e7bf69",
+          "rounding": 0.2
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.211,
+            0.854,
+            0.17,
+            0.073
+          ],
+          "action": "favourite",
+          "text": "Favourite",
+          "fontSize": 0.024,
+          "color": "fff0cf",
+          "background": "061b14e8",
+          "borderColor": "e7bf69",
+          "rounding": 0.2,
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedText": "Favourited",
+          "selectedBackground": "e7bf69",
+          "selectedColor": "08251c",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.023,
+            0.962,
+            0.425,
+            0.025
+          ],
+          "text": "Enter  Play     Arrows  Browse     Right-click  Game actions",
+          "fontSize": 0.0155,
+          "color": "d1c5a2",
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.519,
+            0.903,
+            0.228,
+            0.043
+          ],
+          "color": "c9a758",
+          "rounding": 22
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.52,
+            0.9048,
+            0.226,
+            0.0394
+          ],
+          "color": "041b14f4",
+          "rounding": 22
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.519,
+            0.903,
+            0.073,
+            0.043
+          ],
+          "action": "artwork",
+          "text": "Cover",
+          "fontSize": 0.018,
+          "color": "fff0cf",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "source": "cover",
+          "selectedColor": "1b1a10",
+          "selectedBackground": "e7bf69",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.592,
+            0.903,
+            0.098,
+            0.043
+          ],
+          "action": "artwork",
+          "text": "Screenshot",
+          "fontSize": 0.018,
+          "color": "fff0cf",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "source": "screenshot",
+          "selectedColor": "1b1a10",
+          "selectedBackground": "e7bf69",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.69,
+            0.903,
+            0.057,
+            0.043
+          ],
+          "action": "artwork",
+          "text": "Disc",
+          "fontSize": 0.018,
+          "color": "fff0cf",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "source": "disc",
+          "selectedColor": "1b1a10",
+          "selectedBackground": "e7bf69",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "fff0cf",
+          "when": "launching",
+          "launchFadeFrom": 0.45,
+          "zIndex": 90,
+          "bleed": true
+        }
+      ]
+    },
+    {
+      "mode": "list",
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarLogo": "assets/hollycast-christmas.png",
+      "toolbarLogoHeight": 16,
+      "toolbarSelectedTextColor": "fff0cf",
+      "background": "08251c",
+      "textColor": "fff0cf",
+      "selectedTextColor": "fff0cf",
+      "selectorColor": "850c20f5",
+      "selectorBorderColor": "e7bf69",
+      "separatorColor": "d9b77735",
+      "rounding": 8,
+      "showArtwork": true,
+      "artworkSource": "cover",
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "previewSource": "screenshot",
+      "spacing": 0,
+      "list": {
+        "systemBadge": true,
+        "favouriteBadge": true,
+        "favouriteColor": "e7bf69",
+        "selectOnHover": false
+      },
+      "launch": {
+        "seconds": 0.55
+      },
+      "id": "christmas-morning-portrait",
+      "name": "Christmas Morning (portrait)",
+      "canvasAspect": 0.6666666666666666,
+      "browser": [
+        0.06,
+        0.611,
+        0.88,
+        0.18
+      ],
+      "rowHeight": 0.044,
+      "fontSize": 0.019,
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/christmas-room-portrait.png",
+          "zIndex": -100,
+          "fit": "stretch"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.06,
+            0.049,
+            0.88,
+            0.045
+          ],
+          "text": "Christmas Morning",
+          "fontSize": 0.034,
+          "color": "fff0cf",
+          "bold": true,
+          "wrap": false
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.261,
+            0.166,
+            0.365,
+            0.155
+          ],
+          "source": "preview",
+          "fit": "contain",
+          "rounding": 8
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.261,
+            0.166,
+            0.365,
+            0.155
+          ],
+          "source": "assets/crt-glass.png",
+          "fit": "stretch",
+          "rounding": 8,
+          "zIndex": 1
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.261,
+            0.166,
+            0.365,
+            0.155
+          ],
+          "source": "assets/crt-retune.png",
+          "tileSeconds": 0.5,
+          "onSelection": 0.65,
+          "zIndex": 2,
+          "fit": "contain"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.19,
+            0.522,
+            0.53,
+            0.032
+          ],
+          "color": "c9a758",
+          "rounding": 22
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.191,
+            0.5238,
+            0.528,
+            0.0284
+          ],
+          "color": "041b14f4",
+          "rounding": 22
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.19,
+            0.522,
+            0.16,
+            0.032
+          ],
+          "action": "artwork",
+          "text": "Cover",
+          "fontSize": 0.015,
+          "color": "fff0cf",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "source": "cover",
+          "selectedColor": "1b1a10",
+          "selectedBackground": "e7bf69",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.35,
+            0.522,
+            0.23,
+            0.032
+          ],
+          "action": "artwork",
+          "text": "Screenshot",
+          "fontSize": 0.015,
+          "color": "fff0cf",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "source": "screenshot",
+          "selectedColor": "1b1a10",
+          "selectedBackground": "e7bf69",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.58,
+            0.522,
+            0.14,
+            0.032
+          ],
+          "action": "artwork",
+          "text": "Disc",
+          "fontSize": 0.015,
+          "color": "fff0cf",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "source": "disc",
+          "selectedColor": "1b1a10",
+          "selectedBackground": "e7bf69",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.06,
+            0.565,
+            0.88,
+            0.038
+          ],
+          "source": "title",
+          "fontSize": 0.028,
+          "color": "fff0cf",
+          "bold": true,
+          "wrap": false
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.06,
+            0.806,
+            0.88,
+            0.023
+          ],
+          "fields": [
+            "developer",
+            "genre",
+            "releaseDate",
+            "players"
+          ],
+          "separator": "  |  ",
+          "fontSize": 0.014,
+          "color": "d1c5a2",
+          "wrap": false
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.06,
+            0.841,
+            0.88,
+            0.041
+          ],
+          "fields": [
+            "description"
+          ],
+          "columns": 1,
+          "fontSize": 0.015,
+          "color": "d1c5a2"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.06,
+            0.905,
+            0.47,
+            0.051
+          ],
+          "action": "activate",
+          "text": "\u25b6  Play",
+          "fontSize": 0.025,
+          "color": "fff0cf",
+          "background": "850c20",
+          "borderColor": "e7bf69",
+          "rounding": 0.2
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.55,
+            0.905,
+            0.39,
+            0.051
+          ],
+          "action": "favourite",
+          "text": "Favourite",
+          "fontSize": 0.019,
+          "color": "fff0cf",
+          "background": "061b14e8",
+          "borderColor": "e7bf69",
+          "rounding": 0.2,
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedText": "Favourited",
+          "selectedBackground": "e7bf69",
+          "selectedColor": "08251c",
+          "selectedBorderColor": "e7bf69"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.06,
+            0.974,
+            0.88,
+            0.018
+          ],
+          "text": "HOLLYCAST / CHRISTMAS EDITION",
+          "fontSize": 0.012,
+          "color": "e7bf69",
+          "align": "center",
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "fff0cf",
+          "when": "launching",
+          "launchFadeFrom": 0.45,
+          "zIndex": 90,
+          "bleed": true
+        }
+      ]
+    }
+  ]
+}

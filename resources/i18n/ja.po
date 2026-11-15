@@ -2385,16 +2385,6 @@ msgstr "ログをファイルに保存"
 msgid "Log debug information to flycast.log"
 msgstr "flycast.logにデバッグ情報を記録する"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "クラッシュを自動的に報告"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr "トラブルシューティングに役立てるため、クラッシュレポートをsentry.ioに自動的にアップロードします。個人情報は含まれません。"
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Luaスクリプト"
@@ -8760,28 +8750,6 @@ msgid ""
 "Defaults to flycast.lua when empty."
 msgstr ""
 "使用するLuaファイル名を指定します。Hollycastの設定フォルダーに配置してください。空欄の場合は既定のflycast.luaを使用します。"
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "クラッシュレポート"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "クラッシュレポートを自動送信"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"クラッシュレポート\n"
-"問題を診断して修正する開発者を支援するため、クラッシュレポートを自動的に送信します。\n"
-"\n"
-"通常、クラッシュや実行環境に関する技術情報が含まれます。\n"
-"安定性の向上に協力する場合は有効にしてください。クラッシュデータを送信したくない場合は無効にしてください。"
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

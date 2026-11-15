@@ -300,9 +300,10 @@ public:
 	float getAspectRatio() const;
 	void setPixelArt(const themes::PixelArt& style) { pixelArt = style; }
 
-	static void resetLoadCount() {
-		textureLoadCount = 0;
-	}
+	static void resetLoadCount();
+	// Defer GPU eviction until the current frame has been submitted.
+	static void invalidateFileImages();
+	static void stopImageLoader();
 	static void clearThemeImageFailures();
 
 private:

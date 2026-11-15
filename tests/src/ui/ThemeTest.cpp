@@ -141,6 +141,27 @@ TEST(ThemeParserTest, AcceptsMiximageArtworkBinding)
 	EXPECT_EQ(theme.layouts[0].elements[2].source, "miximage");
 }
 
+TEST(ThemeParserTest, ListPresentationIsOptionalAndValidatesItsFields)
+{
+	const std::string plain = R"({"formatVersion":1,"id":"plain","name":"Plain","layouts":[{"id":"list","name":"List","mode":"list","browser":[0,0,1,1]}]})";
+	const auto defaults = parseFixture(plain).layouts.front().list;
+	EXPECT_FALSE(defaults.systemBadge);
+	EXPECT_FALSE(defaults.favouriteBadge);
+	EXPECT_FALSE(defaults.favouriteColor.has_value());
+	EXPECT_TRUE(defaults.selectOnHover);
+	const auto configured = replaceOnce(plain, "\"mode\":\"list\"",
+		R"("mode":"list","list":{"systemBadge":true,"favouriteBadge":true,"favouriteColor":"EAD171","selectOnHover":false})");
+	const auto list = parseFixture(configured).layouts.front().list;
+	EXPECT_TRUE(list.systemBadge);
+	EXPECT_TRUE(list.favouriteBadge);
+	ASSERT_TRUE(list.favouriteColor.has_value());
+	EXPECT_EQ(*list.favouriteColor, 0xead171ff);
+	EXPECT_FALSE(list.selectOnHover);
+	expectRejected(replaceOnce(configured, "\"mode\":\"list\"", "\"mode\":\"grid\""), "requires list mode");
+	expectRejected(replaceOnce(configured, "\"selectOnHover\":false", "\"selectOnHover\":1"), "must be a boolean");
+	expectRejected(replaceOnce(configured, "\"systemBadge\":true", "\"unknown\":true"), "unknown field");
+}
+
 TEST(ThemeParserTest, RejectsUnsupportedVersionUnknownFieldsAndInvalidNumbers)
 {
 	expectRejected(replaceOnce(kManifest, "\"formatVersion\": 1", "\"formatVersion\": 2"), "must be between 1 and 1");
@@ -152,6 +173,58 @@ TEST(ThemeParserTest, RejectsUnsupportedVersionUnknownFieldsAndInvalidNumbers)
 	expectRejected(replaceOnce(kManifest, "\"zIndex\": 4", "\"zIndex\": 18446744073709551615"), "");
 	expectRejected(replaceOnce(kManifest, "\"Text\": \"112233\"", "\"NotAnImGuiColor\": \"112233\""), "unknown ImGui color name");
 	expectRejected(replaceOnce(kManifest, "\"Text\": \"112233\"", "\"Text\": \"12xz33\""), "hexadecimal digits");
+}
+
+TEST(ThemeParserTest, AcceptsNewerCatalogueFieldsAndDegradesCarouselToGrid)
+{
+	const std::string json = R"({"formatVersion":1,"id":"newer","name":"Newer","layouts":[
+		{"id":"room","name":"Room","mode":"list","browser":[0.2,0.2,0.6,0.7],"navigation":[0.04,0.25,0.16,0.4],"toolbar":"hidden","list":{"releaseYear":true}},
+		{"id":"gallery","name":"Gallery","mode":"carousel","browser":[0,0,1,1],"columns":5}
+	]})";
+	const auto theme = parseFixture(json);
+	ASSERT_EQ(theme.layouts.size(), 2u);
+	EXPECT_EQ(theme.layouts[0].mode, "list");
+	ASSERT_TRUE(theme.layouts[0].navigation.has_value());
+	EXPECT_FLOAT_EQ(theme.layouts[0].navigation->x, 0.04f);
+	EXPECT_FLOAT_EQ(theme.layouts[0].navigation->w, 0.16f);
+	EXPECT_TRUE(theme.layouts[0].list.releaseYear);
+	EXPECT_EQ(theme.layouts[0].toolbar, "hidden");
+	// The carousel layout installs but renders through the grid path.
+	EXPECT_EQ(theme.layouts[1].mode, "grid");
+	EXPECT_EQ(theme.layouts[1].columns, 5);
+
+	// Strict validation still applies elsewhere.
+	expectRejected(replaceOnce(json, "\"mode\":\"carousel\"", "\"mode\":\"hologram\""), "must be grid, list, rack, rail, or orbit");
+	expectRejected(replaceOnce(json, "\"toolbar\":\"hidden\"", "\"toolbar\":\"sidebar\""), "must be standard, compact, or hidden");
+	expectRejected(replaceOnce(json, "\"navigation\":[0.04,0.25,0.16,0.4]", "\"mystery\":true"), "unknown field");
+	expectRejected(replaceOnce(json, "[0.04,0.25,0.16,0.4]", "[0.9,0.25,0.16,0.4]"), "normalized bounds");
+	expectRejected(replaceOnce(json, "\"releaseYear\":true", "\"releaseYear\":1"), "must be a boolean");
+}
+
+TEST(ThemeParserTest, CinematicPackagesValidateSaveActionsAndSingleRowScaling)
+{
+	const std::string json = R"({"formatVersion":1,"id":"cinematic","name":"Cinematic","layouts":[{
+		"id":"wide","name":"Wide","mode":"grid","toolbar":"hidden","showSystemEntries":false,"browser":[0.04,0.1,0.7,0.3],
+		"pagedGrid":{"rows":1,"selectedScale":1.4},"elements":[
+		{"type":"button","action":"resume","text":"Resume","rect":[0.04,0.7,0.2,0.1]},
+		{"type":"button","action":"startFresh","text":"Start Fresh","rect":[0.26,0.7,0.2,0.1]},
+		{"type":"artwork","source":"savestate","rect":[0.7,0.7,0.2,0.1],"when":"saved"},
+		{"type":"metadata","source":"saveDate","rect":[0.7,0.82,0.2,0.04]},
+		{"type":"text","text":"Start a new game","rect":[0.04,0.84,0.4,0.04],"when":"unsaved"},
+		{"type":"button","action":"allGames","text":"All Games","rect":[0.1,0.02,0.2,0.05]},
+		{"type":"clock","rect":[0.8,0.02,0.15,0.05]}
+	]}]})";
+	const auto layout = parseFixture(json).layouts.front();
+	EXPECT_TRUE(layout.hidesToolbar());
+	EXPECT_TRUE(layout.themedChrome());
+	EXPECT_FALSE(layout.showSystemEntries);
+	EXPECT_FLOAT_EQ(layout.pagedGrid.selectedScale, 1.4f);
+	EXPECT_EQ(layout.elements[0].action, "resume");
+	EXPECT_EQ(layout.elements[1].action, "startFresh");
+	EXPECT_EQ(parseFixture(replaceOnce(json, "\"action\":\"allGames\"", "\"action\":\"dcnet\"")).layouts.front().elements[5].action, "dcnet");
+	expectRejected(replaceOnce(json, "\"rows\":1", "\"rows\":2"), "requires a single row");
+	expectRejected(replaceOnce(json, "\"selectedScale\":1.4", "\"selectedScale\":2.1"), "between");
+	expectRejected(replaceOnce(json, "\"when\":\"saved\"", "\"when\":\"missing\""), "must be attract");
 }
 
 TEST(ThemeParserTest, PresentationExtensionsAreOptionalAndKeepLegacyDefaults)
@@ -174,6 +247,23 @@ TEST(ThemeParserTest, PresentationExtensionsAreOptionalAndKeepLegacyDefaults)
 	EXPECT_TRUE(layout.toolbarLogoAsset.empty());
 	EXPECT_FLOAT_EQ(layout.toolbarLogoHeight, 0);
 	EXPECT_TRUE(theme.fonts.empty());
+}
+
+TEST(ThemeParserTest, DcnetLayoutsReuseElementsAndKeepResponsivePagesOnTheirScreen)
+{
+	const std::string json = R"({"formatVersion":1,"id":"pages","name":"Pages","layouts":[
+		{"id":"main","name":"Library","screen":"library","mode":"grid","browser":[0,0,1,1]},
+		{"id":"network","name":"DCnet","screen":"dcnet","mode":"grid","toolbar":"hidden","browser":[0.05,0.15,0.9,0.8],
+		 "elements":[{"type":"button","action":"allGames","text":"Library","rect":[0.1,0.02,0.2,0.05]}]}
+	]})";
+	const auto theme = parseFixture(json);
+	EXPECT_EQ(theme.layouts[0].screen, "library");
+	EXPECT_EQ(theme.layouts[1].screen, "dcnet");
+	EXPECT_TRUE(theme.layouts[1].hidesToolbar());
+	EXPECT_EQ(theme.layouts[1].elements[0].action, "allGames");
+	expectRejected(replaceOnce(json, "\"screen\":\"dcnet\"", "\"screen\":\"unknown\""), "must be library or dcnet");
+	expectRejected(replaceOnce(json, "\"screen\":\"library\"", "\"screen\":\"dcnet\""), "must include a library layout");
+	expectRejected(replaceOnce(json, "\"id\":\"main\"", "\"id\":\"main\",\"narrowLayout\":\"network\""), "same screen");
 }
 
 TEST(ThemeParserTest, BrandingAndArtworkFallbackStayInsideThePackage)
@@ -267,7 +357,7 @@ TEST(ThemeParserTest, RejectsMalformedPresentationExtensionsInsteadOfSilentlyIgn
 {
 	const std::string minimal = R"({"formatVersion":1,"id":"test","name":"Test","layouts":[{"id":"grid","name":"Grid","mode":"grid","browser":[0,0,1,1], EXTRA}]})";
 	for (const std::string& value : {
-			R"("canvasAspect":0)", R"("toolbar":"hidden")", R"("activation":"never")",
+			R"("canvasAspect":0)", R"("toolbar":"sidebar")", R"("activation":"never")",
 			R"("minItemWidth":1)", R"("titleStyle":"guess")", R"("selectorStyle":"invalid")",
 			R"("pixelArt":{"resolution":1024})", R"("pixelArt":{"resolution":24,"typo":true})",
 			R"("pixelArt":{"resolution":128,"levels":1})", R"("pixelArt":{"resolution":128,"levels":257})",
@@ -697,7 +787,7 @@ TEST(ThemeParserTest, RackAllowsNarrowSpinesWithoutChangingGridLimits)
 TEST(ThemeParserTest, RejectsDuplicateLayoutIdsAndUnsupportedElementsOrBindings)
 {
 	expectRejected(replaceOnce(kManifest, "\"compact-list\"", "\"main-grid\""), "must be unique within the theme");
-	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, metadata, details, button, stat, or meter");
+	expectRejected(replaceOnce(kManifest, "\"type\": \"panel\"", "\"type\": \"video\""), "must be panel, image, artwork, text, clock, metadata, details, button, stat, or meter");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"developer\"", "\"source\": \"command\""), "supported metadata field");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"cover\"", "\"source\": \"../../outside.png\""), "supported artwork source");
 	expectRejected(replaceOnce(kManifest, "\"source\": \"art/overlay.png\"", "\"source\": \"\""), "is required for image elements");

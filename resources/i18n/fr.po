@@ -2462,18 +2462,6 @@ msgstr "Journal dans fichier"
 msgid "Log debug information to flycast.log"
 msgstr "Sauvegarde le journal de débogage dans flycast.log"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "Rapport de crash automatique"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr ""
-"Envoie un rapport de crash automatiquement à sentry.io. Aucune information "
-"personnelle n'est envoyée."
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Script Lua"
@@ -9097,28 +9085,6 @@ msgstr ""
 "Indiquez le nom du fichier Lua à utiliser. Il doit se trouver dans le "
 "dossier de configuration de Hollycast. Si ce champ est vide, le fichier "
 "flycast.lua est utilisé par défaut."
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "Rapports de plantage"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "Envoyer automatiquement les rapports de plantage"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"Rapports de plantage\n"
-"Envoie automatiquement les rapports de plantage pour aider les développeurs à diagnostiquer et corriger les problèmes.\n"
-"\n"
-"Ces rapports contiennent généralement des détails techniques sur le plantage et l’environnement.\n"
-"Laissez cette option activée pour contribuer à améliorer la stabilité ; désactivez-la si vous préférez ne pas envoyer de données de plantage."
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

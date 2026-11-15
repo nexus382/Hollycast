@@ -14,8 +14,6 @@ if(CCACHE_PROGRAM)
 	set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM} CACHE STRING "Compiler launcher for CXX.")
 endif()
 
-set(SENTRY_UPLOAD_URL "" CACHE STRING "Sentry upload URL")
-
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmake")
 
 # Set WINDOWS_STORE flag for UWP builds
@@ -383,10 +381,6 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 if(UNIX AND NOT ANDROID AND NOT APPLE)
 	execute_process(COMMAND getconf PAGESIZE OUTPUT_VARIABLE PAGE_SIZE OUTPUT_STRIP_TRAILING_WHITESPACE)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE PAGE_SIZE=${PAGE_SIZE})
-endif()
-
-if(NOT "${SENTRY_UPLOAD_URL}" STREQUAL "")
-	target_compile_definitions(${PROJECT_NAME} PRIVATE SENTRY_UPLOAD="${SENTRY_UPLOAD_URL}")
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE core core/deps core/deps/stb core/deps/json core/deps/asio/asio/include)

@@ -78,7 +78,7 @@ protected:
 			browserWindow = ImGui::GetCurrentWindow();
 			const ImRect viewport = ImGui::GetCurrentWindow()->InnerRect;
 			browserViewport = ImVec4(viewport.Min.x, viewport.Min.y, viewport.Max.x, viewport.Max.y);
-		}, std::nullopt, iconScale, stateLayoutId, favouriteHandler, {}, pulledItemId, emptyBrowser);
+		}, std::nullopt, iconScale, stateLayoutId, favouriteHandler, {}, pulledItemId, emptyBrowser, &launchMode, saveThumbnailHandler, libraryActions, pageContent);
 		const auto& vertices = ImGui::GetWindowDrawList()->VtxBuffer;
 		backgroundMesh.assign(vertices.begin(), vertices.end());
 		detailsMesh.clear();
@@ -128,7 +128,223 @@ protected:
 	ImVec2 canvasOrigin, canvasSize;
 	std::string stateLayoutId;
 	std::function<void(size_t)> favouriteHandler;
+	themes::LibraryLaunch launchMode = themes::LibraryLaunch::Default;
+	std::function<ImTextureID(size_t)> saveThumbnailHandler;
+	themes::LibraryActions libraryActions;
+	std::function<void()> pageContent;
 };
+
+TEST_F(ThemeLibraryTest, NativePageContentKeepsThemedNavigationAndDoesNotDrawOrLaunchGameTiles)
+{
+	layout.id = "network-page";
+	layout.screen = "dcnet";
+	layout.toolbar = "hidden";
+	layout.browser = {.05f, .2f, .9f, .75f};
+	layout.spacing = 12;
+	layout.attract.idleSeconds = 1;
+	themes::Element button;
+	button.type = "button"; button.action = "allGames"; button.text = "All Games";
+	button.rect = {.1f, .05f, .3f, .1f};
+	layout.elements = {button};
+	int contentFrames = 0;
+	pageContent = [&] {
+		++contentFrames;
+		EXPECT_GT(ImGui::GetStyle().WindowPadding.x, 0.f);
+		EXPECT_GT(ImGui::GetStyle().ItemSpacing.y, 0.f);
+		ImGui::Button("DCnet control");
+	};
+	std::string action;
+	libraryActions.dispatch = [&](const std::string& value) { action = value; };
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec2 point = canvasOrigin + ImVec2(canvasSize.x * .25f, canvasSize.y * .1f);
+	renderFrame(point, false); renderFrame(point, true);
+	EXPECT_EQ(renderFrame(point, false), -1);
+	EXPECT_EQ(action, "allGames");
+	EXPECT_GT(contentFrames, 0);
+	EXPECT_TRUE(std::all_of(itemIds.begin(), itemIds.end(), [](ImGuiID id) { return id == 0; }));
+	EXPECT_EQ(launchMode, themes::LibraryLaunch::Default);
+}
+
+TEST_F(ThemeLibraryTest, LibraryNavigationRemainsUsableWhenTheFilteredViewIsEmpty)
+{
+	layout.id = "empty-view-navigation";
+	layout.toolbar = "hidden";
+	layout.browser = {0, .3f, 1, .7f};
+	themes::Element button;
+	button.type = "button"; button.action = "allGames"; button.text = "All Games";
+	button.rect = {.1f, .05f, .3f, .1f};
+	layout.elements = {button};
+	items.clear();
+	std::vector<std::string> actions;
+	libraryActions.dispatch = [&](const std::string& action) { actions.push_back(action); };
+	for (const char* action : {"allGames", "dcnet"})
+	{
+		SCOPED_TRACE(action);
+		layout.elements[0].action = action;
+		actions.clear();
+		renderFrame(ImVec2(-1, -1), false);
+		const ImVec2 point = canvasOrigin + ImVec2(canvasSize.x * .25f, canvasSize.y * .1f);
+		renderFrame(point, false); renderFrame(point, true);
+		EXPECT_EQ(renderFrame(point, false), -1);
+		ASSERT_EQ(actions.size(), 1u);
+		EXPECT_EQ(actions.front(), action);
+	}
+}
+
+TEST_F(ThemeLibraryTest, ExplicitSaveActionsKeepTheirLaunchIntentAndDisableUnavailableResume)
+{
+	layout.id = "explicit-save-launch";
+	layout.browser = {0, 0, .6f, 1};
+	themes::Element button;
+	button.type = "button"; button.action = "resume"; button.text = "Resume";
+	button.rect = {.65f, .1f, .3f, .15f};
+	layout.elements = {button};
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec2 point = canvasOrigin + ImVec2(canvasSize.x * .8f, canvasSize.y * .175f);
+	const auto click = [&] {
+		renderFrame(point, false); renderFrame(point, true); return renderFrame(point, false);
+	};
+	EXPECT_EQ(click(), -1);
+	items[0].canResume = true;
+	EXPECT_EQ(click(), 0);
+	EXPECT_EQ(launchMode, themes::LibraryLaunch::Resume);
+	layout.elements[0].action = "startFresh";
+	items[0].canResume = false;
+	EXPECT_EQ(click(), 0);
+	EXPECT_EQ(launchMode, themes::LibraryLaunch::Fresh);
+	items[0].isGame = false;
+	EXPECT_EQ(click(), -1);
+}
+
+TEST_F(ThemeLibraryTest, SavePreviewOnlyRequestsTheSelectedAvailableState)
+{
+	layout.id = "selected-save-preview";
+	layout.browser = {0, 0, 1, .6f}; layout.columns = 2;
+	layout.pagedGrid.rows = 1; layout.activation = "doubleClick";
+	themes::Element preview;
+	preview.type = "artwork"; preview.source = "savestate"; preview.rect = {.1f, .7f, .3f, .2f};
+	layout.elements = {preview};
+	items[1].canResume = true;
+	std::vector<size_t> requests;
+	saveThumbnailHandler = [&](size_t index) { requests.push_back(index); return ImTextureID{}; };
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_TRUE(requests.empty());
+	const auto box = bounds[1];
+	const ImVec2 second((box.x + box.z) * .5f, (box.y + box.w) * .5f);
+	renderFrame(second, false); renderFrame(second, true); renderFrame(second, false);
+	ASSERT_FALSE(requests.empty());
+	EXPECT_TRUE(std::all_of(requests.begin(), requests.end(), [](size_t index) { return index == 1; }));
+	requests.clear(); items[1].canResume = false;
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_TRUE(requests.empty());
+}
+
+TEST_F(ThemeLibraryTest, EnlargedCoverRowReservesSpaceWithoutOverlappingOrLeavingTheViewport)
+{
+	layout.id = "enlarged-cover-row";
+	layout.browser = {0, 0, 1, .7f}; layout.columns = 3;
+	layout.pagedGrid.rows = 1; layout.pagedGrid.selectedScale = 1.4f;
+	layout.minItemWidth = 32; layout.showTitles = false;
+	items.push_back({"third", "Third", {}, {}});
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_GT(bounds[0].z - bounds[0].x, (bounds[1].z - bounds[1].x) * 1.3f);
+	for (size_t i = 0; i < bounds.size(); ++i)
+	{
+		EXPECT_GE(bounds[i].x, browserViewport.x - 1.f);
+		EXPECT_LE(bounds[i].z, browserViewport.z + 1.f);
+		EXPECT_GE(bounds[i].y, browserViewport.y - 1.f);
+		EXPECT_LE(bounds[i].w, browserViewport.w + 1.f);
+		if (i) EXPECT_GT(bounds[i].x, bounds[i - 1].z);
+	}
+}
+
+TEST_F(ThemeLibraryTest, ListBadgesTrackFavouriteStateAndStayInsideTheRow)
+{
+	layout.id = "list-badges";
+	layout.mode = "list";
+	layout.browser = {0, 0, 1, 1};
+	layout.list.systemBadge = true;
+	layout.list.favouriteBadge = true;
+	layout.list.favouriteColor = 0xead171ff;
+	items[0].metadata["system"] = "Dreamcast";
+	items[1].metadata["system"] = "Naomi 2";
+	const ImU32 gold = IM_COL32(234, 209, 113, 255);
+	const auto goldCount = [&] {
+		return std::count_if(browserMesh.begin(), browserMesh.end(), [&](const ImDrawVert& vertex) { return vertex.col == gold; });
+	};
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_EQ(goldCount(), 0);
+	items[0].favourite = true;
+	for (const ImVec2 size : {ImVec2(800, 600), ImVec2(320, 600)})
+	{
+		windowSize = size;
+		renderFrame(ImVec2(-1, -1), false);
+		EXPECT_GT(goldCount(), 0);
+		for (const auto& vertex : browserMesh)
+			if (vertex.col == gold)
+			{
+				EXPECT_GE(vertex.pos.x, bounds[0].x - 1);
+				EXPECT_LE(vertex.pos.x, bounds[0].z + 1);
+				EXPECT_GE(vertex.pos.y, bounds[0].y - 1);
+				EXPECT_LE(vertex.pos.y, bounds[0].w + 1);
+			}
+	}
+	items[0].favourite = false;
+	renderFrame(ImVec2(-1, -1), false);
+	EXPECT_EQ(goldCount(), 0);
+}
+
+TEST_F(ThemeLibraryTest, ListReleaseYearBadgeRendersWhenItIsTheOnlyListBadge)
+{
+	layout.id = "list-release-year";
+	layout.mode = "list";
+	layout.browser = {0, 0, 1, 1};
+	layout.list.releaseYear = true;
+	layout.textColor = 0x123456ff;
+	items.resize(1);
+	items[0].metadata["releaseDate"] = "1999-09-09";
+
+	renderFrame(ImVec2(-1, -1), false);
+
+	const ImVec4 row = bounds[0];
+	const ImU32 yearText = IM_COL32(0x12, 0x34, 0x56, 0xff);
+	const auto yearTextVertices = std::count_if(browserMesh.begin(), browserMesh.end(), [&](const ImDrawVert& vertex) {
+		return vertex.col == yearText && vertex.pos.x > (row.x + row.z) * 0.5f
+				&& vertex.pos.y >= row.y && vertex.pos.y <= row.w;
+	});
+	EXPECT_EQ(yearTextVertices, 16);
+}
+
+TEST_F(ThemeLibraryTest, ClickSelectedListDoesNotUndoKeyboardNavigationUnderARestingPointer)
+{
+	layout.id = "click-list-keyboard";
+	layout.mode = "list";
+	layout.list.selectOnHover = false;
+	layout.activation = "doubleClick";
+	layout.elements = {{"metadata", {.6f, 0, .4f, .2f}, "title"}};
+	items[0].metadata["title"] = "A";
+	items[1].metadata["title"] = "BBBB";
+	layout.browser = {0, 0, .55f, 1};
+	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	renderFrame(ImVec2(-1, -1), false);
+	const ImVec4 first = bounds[0];
+	const ImVec2 pointer((first.x + first.z) / 2, (first.y + first.w) / 2);
+	renderFrame(pointer, false);
+	renderFrame(pointer, true);
+	renderFrame(pointer, false);
+	const size_t firstPreviewVertices = detailsMesh.size();
+	ASSERT_GT(firstPreviewVertices, 0u);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow, true);
+	renderFrame(pointer, false);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_DownArrow, false);
+	renderFrame(pointer, false);
+	renderFrame(pointer, false);
+	EXPECT_EQ(GImGui->NavId, itemIds[1]);
+	EXPECT_GT(detailsMesh.size(), firstPreviewVertices) << "Keyboard focus must update the active preview before confirmation";
+	// Confirm must activate the item reached by keyboard, not the hovered old row.
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+	EXPECT_EQ(renderFrame(pointer, false), 1);
+}
 
 TEST_F(ThemeLibraryTest, GridWidgetActivatesTheClickedStableItem)
 {
@@ -2460,7 +2676,8 @@ TEST_F(ThemeLibraryTest, EveryBundledLayoutDrawsTheMatchingBiosArtwork)
 		for (const ImGuiWindow* window : GImGui->Windows)
 			if (window->Active)
 				for (const ImDrawCmd& command : window->DrawList->CmdBuffer)
-					if (command.ElemCount > 0)
+					// Only inspect explicit image handles. The headless font atlas is not uploaded to a GPU.
+					if (command.ElemCount > 0 && command.TexRef._TexData == nullptr)
 						for (size_t i = 0; i < drawn.size(); ++i)
 							if (command.GetTexID() == static_cast<ImTextureID>(i + 1))
 								drawn[i] = true;

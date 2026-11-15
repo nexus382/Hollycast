@@ -1,0 +1,1725 @@
+{
+  "formatVersion": 1,
+  "id": "blue-hour",
+  "name": "Blue Hour",
+  "author": "The Hollycast Authors",
+  "description": "A cinematic navy-and-white library with full-screen game artwork, enlarged cover selection, Resume / Start Fresh, real save previews, and a matching DCnet page. Requires a build containing Hollycast PR #69 (aeddc1441); older stable and dev builds reject its manifest.",
+  "baseTheme": 0,
+  "colors": {
+    "Text": "F5F8FF",
+    "TextDisabled": "A9BDD7",
+    "WindowBg": "061328",
+    "ChildBg": "00000000",
+    "PopupBg": "0A1B34F5",
+    "Border": "83ADD64D",
+    "BorderShadow": "00000000",
+    "FrameBg": "102B4AE6",
+    "FrameBgHovered": "204970",
+    "FrameBgActive": "315B83",
+    "TitleBg": "061328",
+    "TitleBgActive": "0B2341",
+    "MenuBarBg": "061328",
+    "ScrollbarBg": "06132855",
+    "ScrollbarGrab": "769ACB66",
+    "ScrollbarGrabHovered": "A3C6EFAA",
+    "ScrollbarGrabActive": "D4E8FF",
+    "CheckMark": "C2E1FF",
+    "SliderGrab": "91BCE8",
+    "SliderGrabActive": "D5EBFF",
+    "Button": "102B4ABB",
+    "ButtonHovered": "32577FD9",
+    "ButtonActive": "315B83",
+    "Header": "15365399",
+    "HeaderHovered": "315B83B3",
+    "HeaderActive": "436F9E",
+    "Separator": "C2DCFF33",
+    "ResizeGrip": "8CC9FF33",
+    "ResizeGripHovered": "8CC9FF99",
+    "ResizeGripActive": "CAE8FF",
+    "Tab": "0C2340",
+    "TabHovered": "315B83",
+    "TabSelected": "244B75",
+    "TabSelectedOverline": "FFFFFF",
+    "TextLink": "B6D9FF",
+    "TextSelectedBg": "70B9FF55",
+    "NavCursor": "FFFFFF",
+    "NavWindowingHighlight": "FFFFFF",
+    "NavWindowingDimBg": "010A1A99",
+    "ModalWindowDimBg": "010A1ABB",
+    "TableHeaderBg": "102B4AE6",
+    "TableBorderStrong": "83ADD633",
+    "TableBorderLight": "83ADD61F",
+    "TableRowBg": "06132820",
+    "TableRowBgAlt": "29486638"
+  },
+  "layouts": [
+    {
+      "mode": "grid",
+      "columns": 7,
+      "itemAspect": 1,
+      "spacing": 12,
+      "pagedGrid": {
+        "rows": 1,
+        "padding": 5,
+        "selectedScale": 1.42
+      },
+      "showTitles": false,
+      "minItemWidth": 48,
+      "activation": "doubleClick",
+      "toolbar": "hidden",
+      "background": "061328",
+      "textColor": "D7E7FA",
+      "selectedTextColor": "FFFFFF",
+      "selectorColor": "00000000",
+      "selectorBorderColor": "FFFFFF",
+      "selectorStyle": "outline",
+      "rounding": 7,
+      "artworkSource": "cover",
+      "requiredMedia": [
+        "cover",
+        "fanart",
+        "screenshot"
+      ],
+      "placeholder": "assets/placeholder.png",
+      "showItemActions": false,
+      "showFavouriteMarker": false,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "id": "cinema",
+      "name": "Cinema",
+      "browser": [
+        0.035,
+        0.105,
+        0.685,
+        0.235
+      ],
+      "narrowLayout": "portrait",
+      "narrowAspect": 1.2,
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "07162D",
+          "endColor": "154E86",
+          "gradient": "horizontal",
+          "zIndex": -100
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "screenshot",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -99
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "fanart",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -98
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "03112BDE",
+          "endColor": "03112B00",
+          "gradient": "horizontal",
+          "zIndex": -97
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0.38,
+            1,
+            0.62
+          ],
+          "color": "03112B00",
+          "endColor": "03112BE6",
+          "zIndex": -96
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.3
+          ],
+          "color": "03112B70",
+          "endColor": "03112B00",
+          "zIndex": -95
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0,
+            0.355,
+            0.22,
+            0.034
+          ],
+          "source": "title",
+          "fontSize": 0.02,
+          "color": "E3EDFA",
+          "wrap": false,
+          "anchor": "selectionX",
+          "align": "center"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.035,
+            0.518,
+            0.064,
+            0.026
+          ],
+          "color": "EAF2FF1F",
+          "rounding": 2,
+          "when": "unplayed"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.035,
+            0.518,
+            0.064,
+            0.026
+          ],
+          "color": "EAF2FF1F",
+          "rounding": 2,
+          "when": "played"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.041,
+            0.523,
+            0.052,
+            0.02
+          ],
+          "source": "system",
+          "fontSize": 0.0145,
+          "color": "DCE7F5",
+          "wrap": false,
+          "bold": true,
+          "align": "center"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.035,
+            0.563,
+            0.35,
+            0.092
+          ],
+          "source": "title",
+          "fontSize": 0.063,
+          "color": "FFFFFF",
+          "wrap": false,
+          "text": "Choose a game"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.037,
+            0.656,
+            0.58,
+            0.033
+          ],
+          "fields": [
+            "publisher",
+            "genre",
+            "players"
+          ],
+          "separator": "   \u2022   ",
+          "fontSize": 0.023,
+          "color": "E3EDFA",
+          "wrap": false
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.39,
+            0.566,
+            0.037,
+            0.058
+          ],
+          "action": "favourite",
+          "text": "",
+          "fontSize": 0.03,
+          "color": "F5FAFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedBackground": "00000000"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.035,
+            0.733,
+            0.174,
+            0.079
+          ],
+          "action": "resume",
+          "text": "Resume",
+          "fontSize": 0.033,
+          "color": "08162E",
+          "background": "F7F9FF",
+          "borderColor": "FFFFFF",
+          "rounding": 0.5
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.22,
+            0.733,
+            0.154,
+            0.079
+          ],
+          "action": "startFresh",
+          "text": "Start Fresh",
+          "fontSize": 0.03,
+          "color": "FFFFFF",
+          "background": "153B5B99",
+          "borderColor": "B2C8E080",
+          "rounding": 0.5
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.038,
+            0.829,
+            0.55,
+            0.032
+          ],
+          "text": "Continue from your latest save.",
+          "fontSize": 0.02,
+          "color": "C5D4E9",
+          "wrap": false,
+          "when": "saved"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.038,
+            0.829,
+            0.55,
+            0.032
+          ],
+          "text": "Choose Start Fresh to begin.",
+          "fontSize": 0.02,
+          "color": "C5D4E9",
+          "wrap": false,
+          "when": "unsaved"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.709,
+            0.737,
+            0.265,
+            0.139
+          ],
+          "color": "092C45B8",
+          "endColor": "10455EB0",
+          "gradient": "horizontal",
+          "rounding": 12
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.718,
+            0.75,
+            0.12,
+            0.112
+          ],
+          "source": "savestate",
+          "fit": "cover",
+          "fallback": "none",
+          "when": "saved",
+          "rounding": 8
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.718,
+            0.75,
+            0.12,
+            0.112
+          ],
+          "source": "screenshot",
+          "fit": "cover",
+          "fallback": "none",
+          "when": "unsaved",
+          "fallbackImage": "assets/placeholder.png",
+          "rounding": 8
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.852,
+            0.767,
+            0.111,
+            0.026
+          ],
+          "text": "Latest save",
+          "fontSize": 0.02,
+          "color": "D4E3EF",
+          "wrap": false,
+          "when": "saved"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.852,
+            0.767,
+            0.111,
+            0.026
+          ],
+          "text": "Gameplay",
+          "fontSize": 0.02,
+          "color": "D4E3EF",
+          "wrap": false,
+          "when": "unsaved"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.852,
+            0.802,
+            0.111,
+            0.053
+          ],
+          "source": "saveDate",
+          "fontSize": 0.02,
+          "color": "FFFFFF",
+          "wrap": true,
+          "when": "saved"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.852,
+            0.802,
+            0.111,
+            0.053
+          ],
+          "source": "title",
+          "fontSize": 0.02,
+          "color": "FFFFFF",
+          "wrap": true,
+          "when": "unsaved"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.027,
+            0.944,
+            0.58,
+            0.031
+          ],
+          "text": "\u00d7  Select     \u25cb  Back     \u2261  Options",
+          "fontSize": 0.021,
+          "color": "D0DEF0",
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "source": "page",
+          "rect": [
+            0.69,
+            0.948,
+            0.022,
+            0.024
+          ],
+          "fontSize": 0.017,
+          "color": "BBCDE3",
+          "align": "right"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.716,
+            0.948,
+            0.012,
+            0.024
+          ],
+          "text": "/",
+          "fontSize": 0.017,
+          "color": "BBCDE3",
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "source": "pageCount",
+          "rect": [
+            0.732,
+            0.948,
+            0.03,
+            0.024
+          ],
+          "fontSize": 0.017,
+          "color": "BBCDE3"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.858,
+            0.944,
+            0.065,
+            0.031
+          ],
+          "text": "GAMES",
+          "fontSize": 0.017,
+          "color": "C7D8EC",
+          "wrap": false,
+          "align": "right"
+        },
+        {
+          "type": "stat",
+          "source": "gameCount",
+          "rect": [
+            0.935,
+            0.944,
+            0.04,
+            0.031
+          ],
+          "fontSize": 0.021,
+          "color": "D0DEF0",
+          "align": "right"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.034,
+            0.018,
+            0.12,
+            0.052
+          ],
+          "action": "libraryMenu",
+          "text": "Hollycast",
+          "fontSize": 0.037,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "bold": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.154,
+            0.026,
+            0.001,
+            0.038
+          ],
+          "color": "B3C9E066"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.174,
+            0.02,
+            0.09,
+            0.058
+          ],
+          "action": "allGames",
+          "text": "All Games",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.275,
+            0.02,
+            0.15,
+            0.058
+          ],
+          "action": "continuePlaying",
+          "text": "Continue Playing",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.438,
+            0.02,
+            0.115,
+            0.058
+          ],
+          "action": "favourites",
+          "text": "Favourites",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.568,
+            0.02,
+            0.09,
+            0.058
+          ],
+          "action": "dcnet",
+          "text": "DCnet",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.775,
+            0.019,
+            0.035,
+            0.057
+          ],
+          "action": "filter",
+          "text": "\uf002",
+          "fontSize": 0.035,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.817,
+            0.019,
+            0.035,
+            0.057
+          ],
+          "action": "settings",
+          "text": "\uf013",
+          "fontSize": 0.035,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "image",
+          "source": "assets/profile.png",
+          "rect": [
+            0.872,
+            0.018,
+            0.03,
+            0.053
+          ],
+          "fit": "contain"
+        },
+        {
+          "type": "clock",
+          "rect": [
+            0.923,
+            0.025,
+            0.052,
+            0.04
+          ],
+          "fontSize": 0.028,
+          "color": "F7FAFF",
+          "align": "right",
+          "wrap": false
+        }
+      ],
+      "showSystemEntries": false
+    },
+    {
+      "mode": "grid",
+      "columns": 4,
+      "itemAspect": 1,
+      "spacing": 12,
+      "pagedGrid": {
+        "rows": 1,
+        "padding": 4,
+        "selectedScale": 1.3
+      },
+      "showTitles": false,
+      "minItemWidth": 48,
+      "activation": "doubleClick",
+      "toolbar": "hidden",
+      "background": "061328",
+      "textColor": "D7E7FA",
+      "selectedTextColor": "FFFFFF",
+      "selectorColor": "00000000",
+      "selectorBorderColor": "FFFFFF",
+      "selectorStyle": "outline",
+      "rounding": 7,
+      "artworkSource": "cover",
+      "requiredMedia": [
+        "cover",
+        "fanart",
+        "screenshot"
+      ],
+      "placeholder": "assets/placeholder.png",
+      "showItemActions": false,
+      "showFavouriteMarker": false,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "id": "portrait",
+      "name": "Portrait",
+      "browser": [
+        0.045,
+        0.71,
+        0.91,
+        0.19
+      ],
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "07162D",
+          "endColor": "154E86",
+          "gradient": "horizontal",
+          "zIndex": -100
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "screenshot",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -99
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "fanart",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -98
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "03112BDE",
+          "endColor": "03112B00",
+          "gradient": "horizontal",
+          "zIndex": -97
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0.38,
+            1,
+            0.62
+          ],
+          "color": "03112B00",
+          "endColor": "03112BE6",
+          "zIndex": -96
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.3
+          ],
+          "color": "03112B70",
+          "endColor": "03112B00",
+          "zIndex": -95
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.045,
+            0.379,
+            0.142,
+            0.026
+          ],
+          "color": "EAF2FF1F",
+          "rounding": 2,
+          "when": "unplayed"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.045,
+            0.379,
+            0.142,
+            0.026
+          ],
+          "color": "EAF2FF1F",
+          "rounding": 2,
+          "when": "played"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.057,
+            0.384,
+            0.118,
+            0.02
+          ],
+          "source": "system",
+          "fontSize": 0.0145,
+          "color": "DCE7F5",
+          "wrap": false,
+          "bold": true,
+          "align": "center"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.045,
+            0.415,
+            0.91,
+            0.092
+          ],
+          "source": "title",
+          "fontSize": 0.043,
+          "color": "FFFFFF",
+          "wrap": true,
+          "text": "Choose a game"
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.045,
+            0.521,
+            0.91,
+            0.032
+          ],
+          "fields": [
+            "publisher",
+            "genre",
+            "players"
+          ],
+          "separator": "   \u2022   ",
+          "fontSize": 0.019,
+          "color": "D6E3F3",
+          "wrap": false
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.045,
+            0.583,
+            0.43,
+            0.067
+          ],
+          "action": "resume",
+          "text": "Resume",
+          "fontSize": 0.028,
+          "color": "08162E",
+          "background": "F7F9FF",
+          "borderColor": "FFFFFF",
+          "rounding": 0.5
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.525,
+            0.583,
+            0.43,
+            0.067
+          ],
+          "action": "startFresh",
+          "text": "Start Fresh",
+          "fontSize": 0.026,
+          "color": "FFFFFF",
+          "background": "153B5B99",
+          "borderColor": "B2C8E080",
+          "rounding": 0.5
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.045,
+            0.665,
+            0.91,
+            0.026
+          ],
+          "text": "Continue from your latest save.",
+          "fontSize": 0.017,
+          "color": "C5D4E9",
+          "wrap": false,
+          "when": "saved"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.045,
+            0.665,
+            0.91,
+            0.026
+          ],
+          "text": "Choose Start Fresh to begin.",
+          "fontSize": 0.017,
+          "color": "C5D4E9",
+          "wrap": false,
+          "when": "unsaved"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.865,
+            0.368,
+            0.09,
+            0.047
+          ],
+          "action": "favourite",
+          "text": "",
+          "fontSize": 0.03,
+          "color": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0.5,
+          "icon": "star",
+          "selectedIcon": "star-filled"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.045,
+            0.935,
+            0.62,
+            0.025
+          ],
+          "text": "\u00d7  Select    \u25cb  Back",
+          "fontSize": 0.018,
+          "color": "C7D8EC",
+          "wrap": false
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.69,
+            0.935,
+            0.15,
+            0.025
+          ],
+          "text": "GAMES",
+          "fontSize": 0.016,
+          "color": "C7D8EC",
+          "wrap": false,
+          "align": "right"
+        },
+        {
+          "type": "stat",
+          "source": "gameCount",
+          "rect": [
+            0.86,
+            0.935,
+            0.095,
+            0.025
+          ],
+          "fontSize": 0.019,
+          "color": "D0DEF0",
+          "align": "right"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.045,
+            0.02,
+            0.3,
+            0.05
+          ],
+          "action": "libraryMenu",
+          "text": "Hollycast",
+          "fontSize": 0.033,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "bold": true
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.045,
+            0.083,
+            0.18,
+            0.046
+          ],
+          "action": "allGames",
+          "text": "All Games",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.235,
+            0.083,
+            0.33,
+            0.046
+          ],
+          "action": "continuePlaying",
+          "text": "Continue Playing",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.58,
+            0.083,
+            0.21,
+            0.046
+          ],
+          "action": "favourites",
+          "text": "Favourites",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.805,
+            0.083,
+            0.15,
+            0.046
+          ],
+          "action": "dcnet",
+          "text": "DCnet",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.61,
+            0.02,
+            0.055,
+            0.045
+          ],
+          "action": "filter",
+          "text": "\uf002",
+          "fontSize": 0.029,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.69,
+            0.02,
+            0.055,
+            0.045
+          ],
+          "action": "settings",
+          "text": "\uf013",
+          "fontSize": 0.029,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "image",
+          "source": "assets/profile.png",
+          "rect": [
+            0.785,
+            0.018,
+            0.065,
+            0.043
+          ],
+          "fit": "contain"
+        },
+        {
+          "type": "clock",
+          "rect": [
+            0.865,
+            0.021,
+            0.09,
+            0.037
+          ],
+          "fontSize": 0.02,
+          "color": "F7FAFF",
+          "align": "right",
+          "wrap": false
+        }
+      ],
+      "showSystemEntries": false
+    },
+    {
+      "id": "dcnet",
+      "name": "DCnet",
+      "screen": "dcnet",
+      "mode": "grid",
+      "toolbar": "hidden",
+      "showSystemEntries": false,
+      "browser": [
+        0.035,
+        0.14,
+        0.93,
+        0.815
+      ],
+      "background": "061328",
+      "spacing": 8,
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "07162D",
+          "endColor": "154E86",
+          "gradient": "horizontal",
+          "zIndex": -100
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "screenshot",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -99
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "fanart",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -98
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "03112BDE",
+          "endColor": "03112B00",
+          "gradient": "horizontal",
+          "zIndex": -97
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0.38,
+            1,
+            0.62
+          ],
+          "color": "03112B00",
+          "endColor": "03112BE6",
+          "zIndex": -96
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.3
+          ],
+          "color": "03112B70",
+          "endColor": "03112B00",
+          "zIndex": -95
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "07162D99",
+          "zIndex": -94
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.025,
+            0.125,
+            0.95,
+            0.84
+          ],
+          "color": "07162DB3",
+          "rounding": 12,
+          "zIndex": -1
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.034,
+            0.018,
+            0.12,
+            0.052
+          ],
+          "action": "libraryMenu",
+          "text": "Hollycast",
+          "fontSize": 0.037,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "bold": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.154,
+            0.026,
+            0.001,
+            0.038
+          ],
+          "color": "B3C9E066"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.174,
+            0.02,
+            0.09,
+            0.058
+          ],
+          "action": "allGames",
+          "text": "All Games",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.275,
+            0.02,
+            0.15,
+            0.058
+          ],
+          "action": "continuePlaying",
+          "text": "Continue Playing",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.438,
+            0.02,
+            0.115,
+            0.058
+          ],
+          "action": "favourites",
+          "text": "Favourites",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.568,
+            0.02,
+            0.09,
+            0.058
+          ],
+          "action": "dcnet",
+          "text": "DCnet",
+          "fontSize": 0.03,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.775,
+            0.019,
+            0.035,
+            0.057
+          ],
+          "action": "filter",
+          "text": "\uf002",
+          "fontSize": 0.035,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.817,
+            0.019,
+            0.035,
+            0.057
+          ],
+          "action": "settings",
+          "text": "\uf013",
+          "fontSize": 0.035,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "image",
+          "source": "assets/profile.png",
+          "rect": [
+            0.872,
+            0.018,
+            0.03,
+            0.053
+          ],
+          "fit": "contain"
+        },
+        {
+          "type": "clock",
+          "rect": [
+            0.923,
+            0.025,
+            0.052,
+            0.04
+          ],
+          "fontSize": 0.028,
+          "color": "F7FAFF",
+          "align": "right",
+          "wrap": false
+        }
+      ],
+      "narrowLayout": "dcnet-portrait",
+      "narrowAspect": 1.2
+    },
+    {
+      "id": "dcnet-portrait",
+      "name": "DCnet Portrait",
+      "screen": "dcnet",
+      "mode": "grid",
+      "toolbar": "hidden",
+      "showSystemEntries": false,
+      "browser": [
+        0.045,
+        0.16,
+        0.91,
+        0.795
+      ],
+      "background": "061328",
+      "spacing": 8,
+      "elements": [
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "07162D",
+          "endColor": "154E86",
+          "gradient": "horizontal",
+          "zIndex": -100
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "screenshot",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -99
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "fanart",
+          "fit": "cover",
+          "fallback": "none",
+          "zIndex": -98
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "03112BDE",
+          "endColor": "03112B00",
+          "gradient": "horizontal",
+          "zIndex": -97
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0.38,
+            1,
+            0.62
+          ],
+          "color": "03112B00",
+          "endColor": "03112BE6",
+          "zIndex": -96
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.3
+          ],
+          "color": "03112B70",
+          "endColor": "03112B00",
+          "zIndex": -95
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "07162D99",
+          "zIndex": -94
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.025,
+            0.15,
+            0.95,
+            0.815
+          ],
+          "color": "07162DB3",
+          "rounding": 12,
+          "zIndex": -1
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.045,
+            0.02,
+            0.3,
+            0.05
+          ],
+          "action": "libraryMenu",
+          "text": "Hollycast",
+          "fontSize": 0.033,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "bold": true
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.045,
+            0.083,
+            0.18,
+            0.046
+          ],
+          "action": "allGames",
+          "text": "All Games",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.235,
+            0.083,
+            0.33,
+            0.046
+          ],
+          "action": "continuePlaying",
+          "text": "Continue Playing",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.58,
+            0.083,
+            0.21,
+            0.046
+          ],
+          "action": "favourites",
+          "text": "Favourites",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.805,
+            0.083,
+            0.15,
+            0.046
+          ],
+          "action": "dcnet",
+          "text": "DCnet",
+          "fontSize": 0.0185,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0,
+          "image": "assets/nav-idle.png",
+          "hoverImage": "assets/nav-hover.png",
+          "selectedImage": "assets/nav-selected.png",
+          "selectedHoverImage": "assets/nav-selected-hover.png"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.61,
+            0.02,
+            0.055,
+            0.045
+          ],
+          "action": "filter",
+          "text": "\uf002",
+          "fontSize": 0.029,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.69,
+            0.02,
+            0.055,
+            0.045
+          ],
+          "action": "settings",
+          "text": "\uf013",
+          "fontSize": 0.029,
+          "color": "CED9EA",
+          "selectedColor": "FFFFFF",
+          "background": "00000000",
+          "borderColor": "00000000",
+          "rounding": 0
+        },
+        {
+          "type": "image",
+          "source": "assets/profile.png",
+          "rect": [
+            0.785,
+            0.018,
+            0.065,
+            0.043
+          ],
+          "fit": "contain"
+        },
+        {
+          "type": "clock",
+          "rect": [
+            0.865,
+            0.021,
+            0.09,
+            0.037
+          ],
+          "fontSize": 0.02,
+          "color": "F7FAFF",
+          "align": "right",
+          "wrap": false
+        }
+      ]
+    }
+  ]
+}

@@ -20,6 +20,7 @@
 #include "build.h"
 #include "http_client.h"
 #include "stdclass.h"
+#include <chrono>
 
 namespace http
 {
@@ -87,8 +88,16 @@ static HINTERNET connect(const URL_COMPONENTS& comp) {
 	return InternetConnect(hInet, comp.lpszHostName, comp.nPort, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs,
+		size_t maxBytes, const std::atomic_bool* cancelled)
 {
+	content.clear();
+	const auto started = std::chrono::steady_clock::now();
+	auto interrupted = [&] {
+		return (cancelled != nullptr && cancelled->load()) ? 499
+				: timeoutMs > 0 && std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(timeoutMs) ? 408 : 0;
+	};
+	if (const int status = interrupted()) return status;
 	CrackedUrl cracked;
 	if (!crackUrl(url, cracked))
 		return 500;
@@ -99,7 +108,10 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 	int rc = 500;
 	HINTERNET ic = connect(components);
 	if (ic == NULL)
-		return rc;
+	{
+		const int status = interrupted();
+		return status != 0 ? status : rc;
+	}
 
 	HINTERNET hreq = HttpOpenRequest(ic, "GET", components.lpszUrlPath, NULL, NULL, NULL, https ? INTERNET_FLAG_SECURE : 0, 0);
 	if (hreq == NULL) {
@@ -122,6 +134,8 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 	}
 	if (!HttpSendRequest(hreq, nullptr, -1, nullptr, 0)) {
 		WARN_LOG(NETWORK, "HttpSendRequest Error %d", GetLastError());
+		const int status = interrupted();
+		rc = status != 0 ? status : 500;
 	}
 	else
 	{
@@ -170,15 +184,26 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		content.clear();
 		while (true)
 		{
+			if (const int status = interrupted()) { rc = status; content.clear(); break; }
+			if (timeoutMs > 0)
+			{
+				const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+				DWORD remaining = static_cast<DWORD>(std::max<int64_t>(1, timeoutMs - elapsed));
+				InternetSetOption(hreq, INTERNET_OPTION_RECEIVE_TIMEOUT, &remaining, sizeof(remaining));
+			}
 			if (!InternetReadFile(hreq, buffer, sizeof(buffer), &bytesRead))
 			{
 				WARN_LOG(NETWORK, "InternetReadFile failed: %lx", GetLastError());
 				InternetCloseHandle(hreq);
 				InternetCloseHandle(ic);
-				return 500;
+				content.clear();
+				const int status = interrupted();
+				return status != 0 ? status : 500;
 			}
+			if (const int status = interrupted()) { rc = status; content.clear(); break; }
 			if (bytesRead == 0)
 				break;
+			if (bytesRead > maxBytes - content.size()) { rc = 413; content.clear(); break; }
 			content.insert(content.end(), buffer, buffer + bytesRead);
 		}
 	}
@@ -348,6 +373,34 @@ static size_t receiveData(void *buffer, size_t size, size_t nmemb, std::vector<u
 	return nmemb * size;
 }
 
+struct GetTransfer
+{
+	std::vector<u8>& content;
+	size_t maxBytes;
+	const std::atomic_bool* cancelled;
+	bool oversized = false;
+};
+
+static size_t receiveGetData(void *buffer, size_t size, size_t count, GetTransfer* transfer)
+{
+	if ((size != 0 && count > std::numeric_limits<size_t>::max() / size)
+			|| size * count > transfer->maxBytes - transfer->content.size())
+	{
+		transfer->oversized = true;
+		return 0;
+	}
+	if (transfer->cancelled != nullptr && transfer->cancelled->load()) return 0;
+	const size_t bytes = size * count;
+	transfer->content.insert(transfer->content.end(), static_cast<u8*>(buffer), static_cast<u8*>(buffer) + bytes);
+	return bytes;
+}
+
+static int cancelGet(void* data, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+{
+	const auto* transfer = static_cast<GetTransfer*>(data);
+	return transfer->cancelled != nullptr && transfer->cancelled->load() ? 1 : 0;
+}
+
 static size_t receiveHeader(const char *buffer, size_t size, size_t nitems, Headers *headers)
 {
 	const char *sep = strchr(buffer, ':');
@@ -364,6 +417,7 @@ static size_t receiveHeader(const char *buffer, size_t size, size_t nitems, Head
 static CURL *makeCurlEasy(const std::string& url)
 {
 	CURL *curl = curl_easy_init();
+	if (curl == nullptr) return nullptr;
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, getUserAgent().c_str());
 	curl_easy_setopt(curl, CURLOPT_AUTOREFERER, 1);
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
@@ -376,9 +430,13 @@ static CURL *makeCurlEasy(const std::string& url)
 	return curl;
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs,
+		size_t maxBytes, const std::atomic_bool* cancelled)
 {
+	content.clear();
+	if (cancelled != nullptr && cancelled->load()) return 499;
 	CURL *curl = makeCurlEasy(url);
+	if (curl == nullptr) return 500;
 
 	if (timeoutMs > 0)
 	{
@@ -394,8 +452,15 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	}
 	std::vector<u8> recvBuffer;
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveData);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &recvBuffer);
+	GetTransfer transfer{recvBuffer, maxBytes, cancelled};
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveGetData);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &transfer);
+	if (cancelled != nullptr)
+	{
+		curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+		curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, cancelGet);
+		curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &transfer);
+	}
 	if (respHeaders != nullptr) {
 		curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, receiveHeader);
 		curl_easy_setopt(curl, CURLOPT_HEADERDATA, respHeaders);
@@ -405,8 +470,11 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 	if (res == CURLE_OK)
 	{
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-		content = recvBuffer;
+		content = std::move(recvBuffer);
 	}
+	else if (transfer.oversized) httpCode = 413;
+	else if (cancelled != nullptr && cancelled->load()) httpCode = 499;
+	else if (res == CURLE_OPERATION_TIMEDOUT) httpCode = 408;
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 
@@ -416,6 +484,7 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 int post(const std::string& url, const char *payload, const char *contentType, std::vector<u8>& reply)
 {
 	CURL *curl = makeCurlEasy(url);
+	if (curl == nullptr) return 500;
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
 
 	curl_easy_setopt(curl, CURLOPT_POST, 1);
@@ -451,6 +520,7 @@ static size_t nullCallback(char *ptr, size_t size, size_t nmemb, void *userdata)
 int post(const std::string& url, const std::vector<PostField>& fields)
 {
 	CURL *curl = makeCurlEasy(url);
+	if (curl == nullptr) return 500;
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
 
 	curl_mime *mime = curl_mime_init(curl);

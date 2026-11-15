@@ -1,0 +1,1351 @@
+{
+  "formatVersion": 1,
+  "id": "harvest-afterglow",
+  "name": "Harvest Afterglow",
+  "author": "The Hollycast Authors",
+  "description": "A candlelit Thanksgiving lodge with painted maple leaves, a harvest feast, cranberry and brass controls, storybook typography, a full-width cover gallery, a tall fireside list, fitted game descriptions, and a dedicated portrait layout.",
+  "baseTheme": 0,
+  "fonts": {
+    "body": "assets/Alegreya-Regular.ttf",
+    "bold": "assets/Alegreya-Bold.ttf"
+  },
+  "colors": {
+    "Text": "fff1d7",
+    "TextDisabled": "d8bea0",
+    "WindowBg": "21150f",
+    "ChildBg": "21150f",
+    "PopupBg": "291b16",
+    "Border": "a57449",
+    "BorderShadow": "00000044",
+    "FrameBg": "39251c",
+    "FrameBgHovered": "583b2a",
+    "FrameBgActive": "694631",
+    "TitleBg": "21150f",
+    "TitleBgActive": "38251c",
+    "TitleBgCollapsed": "21150f",
+    "MenuBarBg": "281a14",
+    "ScrollbarBg": "21150f00",
+    "ScrollbarGrab": "98674088",
+    "ScrollbarGrabHovered": "bd8d57cc",
+    "ScrollbarGrabActive": "e6bd72",
+    "CheckMark": "e6bd72",
+    "SliderGrab": "c28a50",
+    "SliderGrabActive": "e6bd72",
+    "Button": "3e291e",
+    "ButtonHovered": "5d3a29",
+    "ButtonActive": "782e40",
+    "Header": "672b39",
+    "HeaderHovered": "874153",
+    "HeaderActive": "782e40",
+    "Separator": "9d6d405c",
+    "SeparatorHovered": "bd8d57",
+    "SeparatorActive": "e6bd72",
+    "ResizeGrip": "b7824c55",
+    "ResizeGripHovered": "b7824caa",
+    "ResizeGripActive": "e6bd72",
+    "InputTextCursor": "e6bd72",
+    "Tab": "34231b",
+    "TabHovered": "754736",
+    "TabSelected": "782e40",
+    "TabSelectedOverline": "e6bd72",
+    "TabDimmed": "291c17",
+    "TabDimmedSelected": "51312b",
+    "TabDimmedSelectedOverline": "b7824c",
+    "PlotLines": "e6bd72",
+    "PlotLinesHovered": "fff1d7",
+    "PlotHistogram": "c88044",
+    "PlotHistogramHovered": "e6bd72",
+    "TableHeaderBg": "3c281e",
+    "TableBorderStrong": "96643d",
+    "TableBorderLight": "96643d44",
+    "TableRowBg": "00000000",
+    "TableRowBgAlt": "c08a4310",
+    "TextLink": "e6bd72",
+    "TextSelectedBg": "a44e6677",
+    "TreeLines": "96643d",
+    "DragDropTarget": "e6bd72",
+    "DragDropTargetBg": "e6bd7233",
+    "UnsavedMarker": "e6bd72",
+    "NavCursor": "e6bd72",
+    "NavWindowingHighlight": "fff1d7cc",
+    "NavWindowingDimBg": "100b0aaa",
+    "ModalWindowDimBg": "100b0ab8"
+  },
+  "layouts": [
+    {
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarSelectedTextColor": "fff1d7",
+      "background": "21150f",
+      "textColor": "fff1d7",
+      "selectedTextColor": "fff1d7",
+      "selectorColor": "782e40ec",
+      "selectorBorderColor": "e6bd72",
+      "separatorColor": "b7824c40",
+      "rounding": 8,
+      "artworkSource": "cover",
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "previewSource": "screenshot",
+      "placeholder": "assets/storybook-cover.png",
+      "launch": {
+        "seconds": 0.32
+      },
+      "id": "harvest-gallery",
+      "name": "Harvest Gallery",
+      "mode": "grid",
+      "browser": [
+        0.04,
+        0.176,
+        0.569,
+        0.691
+      ],
+      "fontSize": 0.024,
+      "spacing": 10,
+      "narrowLayout": "pocket-harvest",
+      "narrowAspect": 1.15,
+      "columns": 4,
+      "itemAspect": 0.95,
+      "minItemWidth": 96,
+      "inactiveOpacity": 0.94,
+      "showTitles": true,
+      "pagedGrid": {
+        "rows": 2,
+        "padding": 7
+      },
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/harvest-lodge.png",
+          "fit": "stretch",
+          "zIndex": -100
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.105
+          ],
+          "color": "1b110bbc",
+          "endColor": "1b110b00",
+          "zIndex": -90
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.012,
+            0.23,
+            0.03,
+            0.55
+          ],
+          "source": "assets/maple-leaf.png",
+          "color": "ffffff94",
+          "sweepSeconds": 23,
+          "zIndex": -20
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.958,
+            0.23,
+            0.03,
+            0.55
+          ],
+          "source": "assets/maple-leaf.png",
+          "color": "ffffff94",
+          "sweepSeconds": 31,
+          "zIndex": -20
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "24160f",
+          "when": "launching",
+          "launchFadeFrom": 0,
+          "zIndex": 90,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.025,
+            0.112,
+            0.6,
+            0.843
+          ],
+          "color": "b37b455e",
+          "rounding": 14,
+          "zIndex": -80
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.026000000000000002,
+            0.1138,
+            0.598,
+            0.8393999999999999
+          ],
+          "color": "24160fe8",
+          "endColor": "140f0df2",
+          "rounding": 13,
+          "zIndex": -79
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.641,
+            0.112,
+            0.334,
+            0.843
+          ],
+          "color": "b37b455e",
+          "rounding": 14,
+          "zIndex": -80
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.642,
+            0.1138,
+            0.332,
+            0.8393999999999999
+          ],
+          "color": "24160fe8",
+          "endColor": "140f0df2",
+          "rounding": 13,
+          "zIndex": -79
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.04,
+            0.025,
+            0.68,
+            0.063
+          ],
+          "text": "Harvest Afterglow",
+          "fontSize": 0.047,
+          "color": "fff1d7",
+          "wrap": false,
+          "bold": true
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.04,
+            0.127,
+            0.4,
+            0.032
+          ],
+          "text": "Your collection",
+          "fontSize": 0.025,
+          "color": "fff1d7",
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.523,
+            0.131,
+            0.039,
+            0.026
+          ],
+          "source": "gameCount",
+          "fontSize": 0.021,
+          "color": "e6bd72",
+          "align": "right"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.57,
+            0.131,
+            0.041,
+            0.025
+          ],
+          "text": "games",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "wrap": false
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.661,
+            0.127,
+            0.294,
+            0.068
+          ],
+          "source": "title",
+          "fontSize": 0.031,
+          "color": "fff1d7",
+          "bold": true
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.661,
+            0.205,
+            0.294,
+            0.028
+          ],
+          "fields": [
+            "system",
+            "genre"
+          ],
+          "separator": "  /  ",
+          "fontSize": 0.019,
+          "color": "e6bd72",
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.659,
+            0.249,
+            0.298,
+            0.251
+          ],
+          "color": "b7824c88",
+          "rounding": 8
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.66,
+            0.251,
+            0.296,
+            0.247
+          ],
+          "color": "100d0b",
+          "rounding": 7
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.663,
+            0.254,
+            0.29,
+            0.241
+          ],
+          "source": "preview",
+          "fit": "contain",
+          "fallbackImage": "assets/storybook-cover.png",
+          "rounding": 5
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.661,
+            0.519,
+            0.094,
+            0.042
+          ],
+          "action": "artwork",
+          "text": "Cover",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "cover",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.761,
+            0.519,
+            0.094,
+            0.042
+          ],
+          "action": "artwork",
+          "text": "Screenshot",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "screenshot",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.861,
+            0.519,
+            0.094,
+            0.042
+          ],
+          "action": "artwork",
+          "text": "Disc",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "disc",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.661,
+            0.578,
+            0.294,
+            0.287
+          ],
+          "fields": [
+            "description"
+          ],
+          "columns": 1,
+          "autoFit": true,
+          "fontSize": 0.02,
+          "color": "d8bea0"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.661,
+            0.892,
+            0.17,
+            0.043
+          ],
+          "action": "activate",
+          "text": "Play",
+          "fontSize": 0.026,
+          "color": "fff1d7",
+          "background": "782e40",
+          "borderColor": "e6bd72",
+          "rounding": 0.15
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.843,
+            0.892,
+            0.112,
+            0.043
+          ],
+          "action": "favourite",
+          "text": "Favourite",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedText": "Saved",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.04,
+            0.892,
+            0.092,
+            0.042
+          ],
+          "action": "previousPage",
+          "text": "Previous",
+          "fontSize": 0.021,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.516,
+            0.892,
+            0.092,
+            0.042
+          ],
+          "action": "nextPage",
+          "text": "Next",
+          "fontSize": 0.021,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.194,
+            0.903,
+            0.084,
+            0.026
+          ],
+          "text": "PAGE",
+          "fontSize": 0.018,
+          "color": "fff1d7",
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.286,
+            0.898,
+            0.05,
+            0.033
+          ],
+          "source": "page",
+          "fontSize": 0.025,
+          "color": "e6bd72",
+          "align": "right"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.343,
+            0.898,
+            0.023,
+            0.033
+          ],
+          "text": "/",
+          "fontSize": 0.023,
+          "color": "fff1d7",
+          "wrap": false,
+          "align": "center"
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.372,
+            0.898,
+            0.075,
+            0.033
+          ],
+          "source": "pageCount",
+          "fontSize": 0.025,
+          "color": "d8bea0"
+        }
+      ]
+    },
+    {
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarSelectedTextColor": "fff1d7",
+      "background": "21150f",
+      "textColor": "fff1d7",
+      "selectedTextColor": "fff1d7",
+      "selectorColor": "782e40ec",
+      "selectorBorderColor": "e6bd72",
+      "separatorColor": "b7824c40",
+      "rounding": 8,
+      "artworkSource": "cover",
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "previewSource": "screenshot",
+      "placeholder": "assets/storybook-cover.png",
+      "launch": {
+        "seconds": 0.32
+      },
+      "id": "fireside-list",
+      "name": "Fireside List",
+      "mode": "list",
+      "browser": [
+        0.04,
+        0.176,
+        0.569,
+        0.691
+      ],
+      "fontSize": 0.024,
+      "spacing": 0,
+      "narrowLayout": "pocket-harvest",
+      "narrowAspect": 1.15,
+      "showArtwork": true,
+      "rowHeight": 0.064,
+      "list": {
+        "systemBadge": true,
+        "favouriteBadge": true,
+        "favouriteColor": "e6bd72",
+        "selectOnHover": false
+      },
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/harvest-lodge.png",
+          "fit": "stretch",
+          "zIndex": -100
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.105
+          ],
+          "color": "1b110bbc",
+          "endColor": "1b110b00",
+          "zIndex": -90
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.012,
+            0.23,
+            0.03,
+            0.55
+          ],
+          "source": "assets/maple-leaf.png",
+          "color": "ffffff94",
+          "sweepSeconds": 23,
+          "zIndex": -20
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.958,
+            0.23,
+            0.03,
+            0.55
+          ],
+          "source": "assets/maple-leaf.png",
+          "color": "ffffff94",
+          "sweepSeconds": 31,
+          "zIndex": -20
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "24160f",
+          "when": "launching",
+          "launchFadeFrom": 0,
+          "zIndex": 90,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.025,
+            0.112,
+            0.6,
+            0.843
+          ],
+          "color": "b37b455e",
+          "rounding": 14,
+          "zIndex": -80
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.026000000000000002,
+            0.1138,
+            0.598,
+            0.8393999999999999
+          ],
+          "color": "24160fe8",
+          "endColor": "140f0df2",
+          "rounding": 13,
+          "zIndex": -79
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.641,
+            0.112,
+            0.334,
+            0.843
+          ],
+          "color": "b37b455e",
+          "rounding": 14,
+          "zIndex": -80
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.642,
+            0.1138,
+            0.332,
+            0.8393999999999999
+          ],
+          "color": "24160fe8",
+          "endColor": "140f0df2",
+          "rounding": 13,
+          "zIndex": -79
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.04,
+            0.025,
+            0.68,
+            0.063
+          ],
+          "text": "Harvest Afterglow",
+          "fontSize": 0.047,
+          "color": "fff1d7",
+          "wrap": false,
+          "bold": true
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.04,
+            0.127,
+            0.4,
+            0.032
+          ],
+          "text": "Fireside collection",
+          "fontSize": 0.025,
+          "color": "fff1d7",
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.523,
+            0.131,
+            0.039,
+            0.026
+          ],
+          "source": "gameCount",
+          "fontSize": 0.021,
+          "color": "e6bd72",
+          "align": "right"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.57,
+            0.131,
+            0.041,
+            0.025
+          ],
+          "text": "games",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "wrap": false
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.661,
+            0.127,
+            0.294,
+            0.068
+          ],
+          "source": "title",
+          "fontSize": 0.031,
+          "color": "fff1d7",
+          "bold": true
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.661,
+            0.205,
+            0.294,
+            0.028
+          ],
+          "fields": [
+            "system",
+            "genre"
+          ],
+          "separator": "  /  ",
+          "fontSize": 0.019,
+          "color": "e6bd72",
+          "wrap": false
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.659,
+            0.249,
+            0.298,
+            0.251
+          ],
+          "color": "b7824c88",
+          "rounding": 8
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.66,
+            0.251,
+            0.296,
+            0.247
+          ],
+          "color": "100d0b",
+          "rounding": 7
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.663,
+            0.254,
+            0.29,
+            0.241
+          ],
+          "source": "preview",
+          "fit": "contain",
+          "fallbackImage": "assets/storybook-cover.png",
+          "rounding": 5
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.661,
+            0.519,
+            0.094,
+            0.042
+          ],
+          "action": "artwork",
+          "text": "Cover",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "cover",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.761,
+            0.519,
+            0.094,
+            0.042
+          ],
+          "action": "artwork",
+          "text": "Screenshot",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "screenshot",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.861,
+            0.519,
+            0.094,
+            0.042
+          ],
+          "action": "artwork",
+          "text": "Disc",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "disc",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.661,
+            0.578,
+            0.294,
+            0.287
+          ],
+          "fields": [
+            "description"
+          ],
+          "columns": 1,
+          "autoFit": true,
+          "fontSize": 0.02,
+          "color": "d8bea0"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.661,
+            0.892,
+            0.17,
+            0.043
+          ],
+          "action": "activate",
+          "text": "Play",
+          "fontSize": 0.026,
+          "color": "fff1d7",
+          "background": "782e40",
+          "borderColor": "e6bd72",
+          "rounding": 0.15
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.843,
+            0.892,
+            0.112,
+            0.043
+          ],
+          "action": "favourite",
+          "text": "Favourite",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedText": "Saved",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.04,
+            0.892,
+            0.092,
+            0.042
+          ],
+          "action": "previous",
+          "text": "Previous",
+          "fontSize": 0.021,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.516,
+            0.892,
+            0.092,
+            0.042
+          ],
+          "action": "next",
+          "text": "Next",
+          "fontSize": 0.021,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.194,
+            0.903,
+            0.084,
+            0.026
+          ],
+          "text": "SELECTED",
+          "fontSize": 0.018,
+          "color": "fff1d7",
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.286,
+            0.898,
+            0.05,
+            0.033
+          ],
+          "source": "position",
+          "fontSize": 0.025,
+          "color": "e6bd72",
+          "align": "right"
+        }
+      ]
+    },
+    {
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarSelectedTextColor": "fff1d7",
+      "background": "21150f",
+      "textColor": "fff1d7",
+      "selectedTextColor": "fff1d7",
+      "selectorColor": "782e40ec",
+      "selectorBorderColor": "e6bd72",
+      "separatorColor": "b7824c40",
+      "rounding": 8,
+      "artworkSource": "cover",
+      "showItemActions": false,
+      "showFavouriteMarker": true,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "previewSource": "screenshot",
+      "placeholder": "assets/storybook-cover.png",
+      "launch": {
+        "seconds": 0.32
+      },
+      "id": "pocket-harvest",
+      "name": "Pocket Harvest (portrait)",
+      "mode": "list",
+      "browser": [
+        0.06,
+        0.484,
+        0.88,
+        0.392
+      ],
+      "fontSize": 0.018,
+      "rowHeight": 0.048,
+      "spacing": 0,
+      "showArtwork": true,
+      "list": {
+        "favouriteBadge": true,
+        "favouriteColor": "e6bd72",
+        "selectOnHover": false
+      },
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/harvest-portrait.png",
+          "fit": "stretch",
+          "zIndex": -100
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.105
+          ],
+          "color": "1b110bbc",
+          "endColor": "1b110b00",
+          "zIndex": -90
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.012,
+            0.23,
+            0.03,
+            0.55
+          ],
+          "source": "assets/maple-leaf.png",
+          "color": "ffffff94",
+          "sweepSeconds": 23,
+          "zIndex": -20
+        },
+        {
+          "type": "image",
+          "rect": [
+            0.958,
+            0.23,
+            0.03,
+            0.55
+          ],
+          "source": "assets/maple-leaf.png",
+          "color": "ffffff94",
+          "sweepSeconds": 31,
+          "zIndex": -20
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "24160f",
+          "when": "launching",
+          "launchFadeFrom": 0,
+          "zIndex": 90,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.04,
+            0.112,
+            0.92,
+            0.864
+          ],
+          "color": "b37b455e",
+          "rounding": 14,
+          "zIndex": -80
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.041,
+            0.1138,
+            0.918,
+            0.8603999999999999
+          ],
+          "color": "24160fe8",
+          "endColor": "140f0df2",
+          "rounding": 13,
+          "zIndex": -79
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.055,
+            0.025,
+            0.89,
+            0.063
+          ],
+          "text": "Harvest Afterglow",
+          "fontSize": 0.039,
+          "color": "fff1d7",
+          "wrap": false,
+          "bold": true,
+          "align": "center"
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.055,
+            0.129,
+            0.31,
+            0.244
+          ],
+          "color": "b7824c88",
+          "rounding": 8
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0.057,
+            0.131,
+            0.306,
+            0.24
+          ],
+          "color": "100d0b",
+          "rounding": 7
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0.06,
+            0.134,
+            0.3,
+            0.234
+          ],
+          "source": "preview",
+          "fit": "contain",
+          "fallbackImage": "assets/storybook-cover.png",
+          "rounding": 5
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.398,
+            0.13,
+            0.542,
+            0.049
+          ],
+          "source": "title",
+          "fontSize": 0.023,
+          "color": "fff1d7",
+          "bold": true
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.398,
+            0.189,
+            0.542,
+            0.029
+          ],
+          "fields": [
+            "system",
+            "genre"
+          ],
+          "separator": "  /  ",
+          "fontSize": 0.016,
+          "color": "e6bd72"
+        },
+        {
+          "type": "details",
+          "rect": [
+            0.398,
+            0.23,
+            0.542,
+            0.138
+          ],
+          "fields": [
+            "description"
+          ],
+          "columns": 1,
+          "autoFit": true,
+          "fontSize": 0.017,
+          "color": "d8bea0"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.06,
+            0.389,
+            0.289333,
+            0.037
+          ],
+          "action": "artwork",
+          "text": "Cover",
+          "fontSize": 0.016,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "cover",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.355333,
+            0.389,
+            0.289333,
+            0.037
+          ],
+          "action": "artwork",
+          "text": "Screenshot",
+          "fontSize": 0.016,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "screenshot",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.650667,
+            0.389,
+            0.289333,
+            0.037
+          ],
+          "action": "artwork",
+          "text": "Disc",
+          "fontSize": 0.016,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "source": "disc",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.06,
+            0.443,
+            0.65,
+            0.026
+          ],
+          "text": "Your collection",
+          "fontSize": 0.019,
+          "color": "fff1d7",
+          "wrap": false
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.86,
+            0.443,
+            0.08,
+            0.026
+          ],
+          "source": "gameCount",
+          "fontSize": 0.019,
+          "color": "e6bd72",
+          "align": "right"
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.06,
+            0.907,
+            0.47,
+            0.052
+          ],
+          "action": "activate",
+          "text": "Play",
+          "fontSize": 0.026,
+          "color": "fff1d7",
+          "background": "782e40",
+          "borderColor": "e6bd72",
+          "rounding": 0.15
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.55,
+            0.907,
+            0.39,
+            0.052
+          ],
+          "action": "favourite",
+          "text": "Favourite",
+          "fontSize": 0.02,
+          "color": "fff1d7",
+          "background": "302018ed",
+          "borderColor": "b7824c",
+          "rounding": 0.15,
+          "icon": "star",
+          "selectedIcon": "star-filled",
+          "selectedText": "Saved",
+          "selectedBackground": "e6bd72",
+          "selectedColor": "21150f",
+          "selectedBorderColor": "e6bd72"
+        }
+      ]
+    }
+  ]
+}

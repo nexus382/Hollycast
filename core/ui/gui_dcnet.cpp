@@ -463,7 +463,8 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 	const float availableWidth = ImGui::GetContentRegionAvail().x;
 	const float pageWidth = std::min(availableWidth, uiScaled(1280));
 	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availableWidth - pageWidth) / 2);
-	if (!ImGui::BeginChild("dcnetPage", ImVec2(pageWidth, 0), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_NoBackground))
+	if (!ImGui::BeginChild("dcnetPage", ImVec2(pageWidth, 0), ImGuiChildFlags_NavFlattened,
+			ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_DragScrolling))
 	{
 		ImGui::EndChild();
 		return;
@@ -561,7 +562,8 @@ void gui_display_dcnet(GameScanner& scanner, Boxart& boxart)
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("A dash means no count is available. * Shared counts include both editions and count once in totals. No report does not mean online play is unsupported."));
 
-	if (ImGui::BeginChild("dcnetActivity", ImVec2(0, 0),
+	const float activityHeight = std::max(ImGui::GetContentRegionAvail().y, uiScaled(240));
+	if (ImGui::BeginChild("dcnetActivity", ImVec2(0, activityHeight),
 			ImGuiChildFlags_NavFlattened | ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_DragScrolling))
 	{
 		if (ImGui::BeginTabBar("dcnetViews"))

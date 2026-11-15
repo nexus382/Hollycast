@@ -1,0 +1,848 @@
+{
+  "formatVersion": 1,
+  "id": "signal-bloom",
+  "name": "Signal Bloom",
+  "author": "The Hollycast Authors",
+  "description": "A midnight-neon cover carousel with selected-game backgrounds, cyan selection and coral PLAY controls. Requires the new carousel-enabled Hollycast development build.",
+  "baseTheme": 0,
+  "fonts": {
+    "bold": "assets/Jura-wght.ttf"
+  },
+  "colors": {
+    "Text": "e8f2ff",
+    "TextDisabled": "a2b7d0",
+    "WindowBg": "070b18",
+    "ChildBg": "081020",
+    "PopupBg": "0b1427",
+    "Border": "287184",
+    "BorderShadow": "00000066",
+    "FrameBg": "101a30",
+    "FrameBgHovered": "172a47",
+    "FrameBgActive": "1d3958",
+    "TitleBg": "070b18",
+    "TitleBgActive": "101a30",
+    "TitleBgCollapsed": "070b18",
+    "MenuBarBg": "081020",
+    "ScrollbarBg": "050918",
+    "ScrollbarGrab": "246477",
+    "ScrollbarGrabHovered": "34a0b0",
+    "ScrollbarGrabActive": "43e8f2",
+    "CheckMark": "43e8f2",
+    "SliderGrab": "328da4",
+    "SliderGrabActive": "43e8f2",
+    "Button": "132844",
+    "ButtonHovered": "1d4162",
+    "ButtonActive": "ff627f",
+    "Header": "102d43",
+    "HeaderHovered": "17455e",
+    "HeaderActive": "ff627f",
+    "Separator": "27839766",
+    "SeparatorHovered": "32b8ca",
+    "SeparatorActive": "43e8f2",
+    "ResizeGrip": "43e8f255",
+    "ResizeGripHovered": "43e8f2aa",
+    "ResizeGripActive": "43e8f2",
+    "InputTextCursor": "43e8f2",
+    "Tab": "111e34",
+    "TabHovered": "1d3b56",
+    "TabSelected": "17394f",
+    "TabSelectedOverline": "ff627f",
+    "TabDimmed": "0b1424",
+    "TabDimmedSelected": "13243a",
+    "TabDimmedSelectedOverline": "287184",
+    "PlotLines": "43e8f2",
+    "PlotLinesHovered": "e8f2ff",
+    "PlotHistogram": "ff627f",
+    "PlotHistogramHovered": "ff94a6",
+    "TableHeaderBg": "102038",
+    "TableBorderStrong": "287184",
+    "TableBorderLight": "28718455",
+    "TableRowBg": "00000000",
+    "TableRowBgAlt": "43e8f20d",
+    "TextLink": "43e8f2",
+    "TextSelectedBg": "32d9e055",
+    "TreeLines": "287184",
+    "DragDropTarget": "43e8f2",
+    "DragDropTargetBg": "43e8f233",
+    "UnsavedMarker": "ff627f",
+    "NavCursor": "43e8f2",
+    "NavWindowingHighlight": "e8f2ffcc",
+    "NavWindowingDimBg": "050918aa",
+    "ModalWindowDimBg": "050918bb"
+  },
+  "layouts": [
+    {
+      "id": "signal-gallery",
+      "name": "Signal Gallery",
+      "mode": "carousel",
+      "browser": [
+        0.04,
+        0.205,
+        0.92,
+        0.43
+      ],
+      "columns": 5,
+      "itemAspect": 0.78,
+      "spacing": 14,
+      "showTitles": false,
+      "fontSize": 0.021,
+      "minItemWidth": 80,
+      "inactiveOpacity": 0.94,
+      "canvasAspect": 1.7777777777777777,
+      "narrowLayout": "signal-portrait",
+      "narrowAspect": 1.15,
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarLogo": "assets/hollycast-banner.png",
+      "toolbarLogoHeight": 64,
+      "toolbarSelectedTextColor": "e8f2ff",
+      "background": "070b18",
+      "textColor": "e8f2ff",
+      "selectedTextColor": "e8f2ff",
+      "selectorColor": "102338aa",
+      "selectorBorderColor": "43e8f2",
+      "separatorColor": "23899b77",
+      "rounding": 9,
+      "artworkSource": "cover",
+      "requiredMedia": [
+        "cover",
+        "fanart",
+        "screenshot"
+      ],
+      "showItemActions": false,
+      "showFavouriteMarker": false,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "selectorStyle": "outline",
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/signal-bloom-landscape.png",
+          "fit": "stretch",
+          "zIndex": -100,
+          "bleed": true
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "screenshot",
+          "fallback": "none",
+          "fit": "cover",
+          "zIndex": -99,
+          "bleed": true
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "fanart",
+          "fallback": "none",
+          "fit": "cover",
+          "zIndex": -98,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "070b188c",
+          "endColor": "070b18e8",
+          "zIndex": -97,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.105
+          ],
+          "color": "050919e8",
+          "endColor": "050919b0",
+          "zIndex": -90,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0.103,
+            1,
+            0.002
+          ],
+          "color": "258ca0aa",
+          "zIndex": -80,
+          "bleed": true
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.05,
+            0.125,
+            0.38,
+            0.047
+          ],
+          "text": "COLLECTION",
+          "fontSize": 0.032,
+          "bold": true,
+          "color": "e8f2ff",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.84,
+            0.133,
+            0.073,
+            0.027
+          ],
+          "source": "gameCount",
+          "fontSize": 0.019,
+          "color": "43e8f2",
+          "align": "right",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.92,
+            0.133,
+            0.045,
+            0.027
+          ],
+          "text": "GAMES",
+          "fontSize": 0.016,
+          "color": "a2b7d0",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.06,
+            0.684,
+            0.62,
+            0.057
+          ],
+          "source": "title",
+          "fontSize": 0.043,
+          "bold": true,
+          "wrap": false,
+          "text": "SELECT A GAME",
+          "color": "e8f2ff",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.06,
+            0.754,
+            0.082,
+            0.032
+          ],
+          "text": "RELEASED",
+          "fontSize": 0.016,
+          "color": "a2b7d0",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.15200000000000002,
+            0.754,
+            0.238,
+            0.032
+          ],
+          "source": "releaseDate",
+          "fontSize": 0.019,
+          "color": "43e8f2",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.06,
+            0.802,
+            0.26,
+            0.027
+          ],
+          "text": "OVERVIEW",
+          "fontSize": 0.017,
+          "color": "43e8f2",
+          "bold": true,
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.06,
+            0.837,
+            0.65,
+            0.112
+          ],
+          "source": "description",
+          "fontSize": 0.018,
+          "color": "e8f2ff",
+          "wrap": true,
+          "zIndex": 2
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.79,
+            0.766,
+            0.155,
+            0.082
+          ],
+          "action": "activate",
+          "text": "PLAY",
+          "fontSize": 0.04,
+          "bold": true,
+          "color": "e8f2ff",
+          "background": "ff627f",
+          "borderColor": "43e8f2",
+          "rounding": 0.18,
+          "zIndex": 5
+        }
+      ]
+    },
+    {
+      "id": "signal-index",
+      "name": "Signal Index",
+      "mode": "list",
+      "browser": [
+        0.045,
+        0.185,
+        0.46,
+        0.77
+      ],
+      "showArtwork": true,
+      "rowHeight": 0.071,
+      "fontSize": 0.023,
+      "canvasAspect": 1.7777777777777777,
+      "narrowLayout": "signal-portrait",
+      "narrowAspect": 1.15,
+      "list": {
+        "selectOnHover": false
+      },
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarLogo": "assets/hollycast-banner.png",
+      "toolbarLogoHeight": 64,
+      "toolbarSelectedTextColor": "e8f2ff",
+      "background": "070b18",
+      "textColor": "e8f2ff",
+      "selectedTextColor": "e8f2ff",
+      "selectorColor": "102338aa",
+      "selectorBorderColor": "43e8f2",
+      "separatorColor": "23899b77",
+      "rounding": 9,
+      "artworkSource": "cover",
+      "requiredMedia": [
+        "cover",
+        "fanart",
+        "screenshot"
+      ],
+      "showItemActions": false,
+      "showFavouriteMarker": false,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "selectorStyle": "outline",
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/signal-bloom-landscape.png",
+          "fit": "stretch",
+          "zIndex": -100,
+          "bleed": true
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "screenshot",
+          "fallback": "none",
+          "fit": "cover",
+          "zIndex": -99,
+          "bleed": true
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "fanart",
+          "fallback": "none",
+          "fit": "cover",
+          "zIndex": -98,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "070b188c",
+          "endColor": "070b18e8",
+          "zIndex": -97,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.105
+          ],
+          "color": "050919e8",
+          "endColor": "050919b0",
+          "zIndex": -90,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0.103,
+            1,
+            0.002
+          ],
+          "color": "258ca0aa",
+          "zIndex": -80,
+          "bleed": true
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.05,
+            0.125,
+            0.38,
+            0.047
+          ],
+          "text": "COLLECTION",
+          "fontSize": 0.032,
+          "bold": true,
+          "color": "e8f2ff",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.84,
+            0.133,
+            0.073,
+            0.027
+          ],
+          "source": "gameCount",
+          "fontSize": 0.019,
+          "color": "43e8f2",
+          "align": "right",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.92,
+            0.133,
+            0.045,
+            0.027
+          ],
+          "text": "GAMES",
+          "fontSize": 0.016,
+          "color": "a2b7d0",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.56,
+            0.215,
+            0.37,
+            0.072
+          ],
+          "source": "title",
+          "fontSize": 0.043,
+          "bold": true,
+          "wrap": false,
+          "text": "SELECT A GAME",
+          "color": "e8f2ff",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.56,
+            0.305,
+            0.082,
+            0.04
+          ],
+          "text": "RELEASED",
+          "fontSize": 0.016,
+          "color": "a2b7d0",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.652,
+            0.305,
+            0.27799999999999997,
+            0.04
+          ],
+          "source": "releaseDate",
+          "fontSize": 0.019,
+          "color": "43e8f2",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.56,
+            0.38,
+            0.3,
+            0.034
+          ],
+          "text": "OVERVIEW",
+          "fontSize": 0.017,
+          "color": "43e8f2",
+          "bold": true,
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.56,
+            0.425,
+            0.36,
+            0.34
+          ],
+          "source": "description",
+          "fontSize": 0.018,
+          "color": "e8f2ff",
+          "wrap": true,
+          "zIndex": 2
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.56,
+            0.84,
+            0.36,
+            0.075
+          ],
+          "action": "activate",
+          "text": "PLAY",
+          "fontSize": 0.04,
+          "bold": true,
+          "color": "e8f2ff",
+          "background": "ff627f",
+          "borderColor": "43e8f2",
+          "rounding": 0.18,
+          "zIndex": 5
+        }
+      ]
+    },
+    {
+      "id": "signal-portrait",
+      "name": "Signal Pocket",
+      "mode": "list",
+      "browser": [
+        0.055,
+        0.515,
+        0.89,
+        0.385
+      ],
+      "showArtwork": true,
+      "rowHeight": 0.046,
+      "fontSize": 0.017,
+      "canvasAspect": 0.6666666666666666,
+      "toolbarLogoHeight": 44,
+      "list": {
+        "selectOnHover": false
+      },
+      "activation": "doubleClick",
+      "toolbar": "compact",
+      "toolbarLogo": "assets/hollycast-banner.png",
+      "toolbarSelectedTextColor": "e8f2ff",
+      "background": "070b18",
+      "textColor": "e8f2ff",
+      "selectedTextColor": "e8f2ff",
+      "selectorColor": "102338aa",
+      "selectorBorderColor": "43e8f2",
+      "separatorColor": "23899b77",
+      "rounding": 9,
+      "artworkSource": "cover",
+      "requiredMedia": [
+        "cover",
+        "fanart",
+        "screenshot"
+      ],
+      "showItemActions": false,
+      "showFavouriteMarker": false,
+      "hoverDetails": false,
+      "showInfoTooltip": false,
+      "selectorStyle": "outline",
+      "elements": [
+        {
+          "type": "image",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "assets/signal-bloom-portrait.png",
+          "fit": "stretch",
+          "zIndex": -100,
+          "bleed": true
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "screenshot",
+          "fallback": "none",
+          "fit": "cover",
+          "zIndex": -99,
+          "bleed": true
+        },
+        {
+          "type": "artwork",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "source": "fanart",
+          "fallback": "none",
+          "fit": "cover",
+          "zIndex": -98,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "color": "070b188c",
+          "endColor": "070b18e8",
+          "zIndex": -97,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0,
+            1,
+            0.105
+          ],
+          "color": "050919e8",
+          "endColor": "050919b0",
+          "zIndex": -90,
+          "bleed": true
+        },
+        {
+          "type": "panel",
+          "rect": [
+            0,
+            0.103,
+            1,
+            0.002
+          ],
+          "color": "258ca0aa",
+          "zIndex": -80,
+          "bleed": true
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.07,
+            0.035,
+            0.6,
+            0.045
+          ],
+          "text": "COLLECTION",
+          "fontSize": 0.028,
+          "bold": true,
+          "color": "e8f2ff",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "stat",
+          "rect": [
+            0.78,
+            0.044,
+            0.1,
+            0.027
+          ],
+          "source": "gameCount",
+          "fontSize": 0.018,
+          "color": "43e8f2",
+          "align": "right",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.89,
+            0.044,
+            0.075,
+            0.027
+          ],
+          "text": "GAMES",
+          "fontSize": 0.015,
+          "color": "a2b7d0",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.08,
+            0.125,
+            0.83,
+            0.056
+          ],
+          "source": "title",
+          "fontSize": 0.043,
+          "bold": true,
+          "wrap": false,
+          "text": "SELECT A GAME",
+          "color": "e8f2ff",
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.08,
+            0.192,
+            0.16,
+            0.032
+          ],
+          "text": "RELEASED",
+          "fontSize": 0.016,
+          "color": "a2b7d0",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.25,
+            0.192,
+            0.6599999999999999,
+            0.032
+          ],
+          "source": "releaseDate",
+          "fontSize": 0.019,
+          "color": "43e8f2",
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "text",
+          "rect": [
+            0.08,
+            0.239,
+            0.4,
+            0.027
+          ],
+          "text": "OVERVIEW",
+          "fontSize": 0.017,
+          "color": "43e8f2",
+          "bold": true,
+          "wrap": false,
+          "zIndex": 2
+        },
+        {
+          "type": "metadata",
+          "rect": [
+            0.08,
+            0.272,
+            0.82,
+            0.192
+          ],
+          "source": "description",
+          "fontSize": 0.018,
+          "color": "e8f2ff",
+          "wrap": true,
+          "zIndex": 2
+        },
+        {
+          "type": "button",
+          "rect": [
+            0.27,
+            0.918,
+            0.46,
+            0.058
+          ],
+          "action": "activate",
+          "text": "PLAY",
+          "fontSize": 0.04,
+          "bold": true,
+          "color": "e8f2ff",
+          "background": "ff627f",
+          "borderColor": "43e8f2",
+          "rounding": 0.18,
+          "zIndex": 5
+        }
+      ]
+    }
+  ]
+}

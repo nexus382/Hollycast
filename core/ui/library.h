@@ -19,6 +19,8 @@
 #include <cstddef>
 #include <ctime>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace library {
@@ -72,28 +74,103 @@ inline void setFavourite(const std::string& path, bool value, std::vector<std::s
 	}
 }
 
+inline bool matchesView(const Entry& entry, View view, const std::vector<std::string>& favourites)
+{
+	return view == View::All || (!entry.device && !entry.path.empty()
+			&& (view == View::ContinuePlaying ? entry.latestStateDate > 0 : isFavourite(entry.path, favourites)));
+}
+
+inline bool entryBefore(size_t left, size_t right, const std::vector<Entry>& entries, View view)
+{
+	if (view != View::ContinuePlaying)
+		return left < right;
+	const Entry& a = entries[left];
+	const Entry& b = entries[right];
+	if (a.latestStateDate != b.latestStateDate)
+		return a.latestStateDate > b.latestStateDate;
+	if (a.name != b.name)
+		return a.name < b.name;
+	if (a.path != b.path)
+		return a.path < b.path;
+	// Equal metadata keeps the scanner's original order during insertion too.
+	return left < right;
+}
+
 inline std::vector<size_t> selectGames(const std::vector<Entry>& entries, View view,
 		const std::vector<std::string>& favourites)
 {
 	std::vector<size_t> result;
 	for (size_t i = 0; i < entries.size(); i++)
-	{
-		const Entry& entry = entries[i];
-		if (view == View::All || (!entry.device && !entry.path.empty() &&
-				(view == View::ContinuePlaying ? entry.latestStateDate > 0 : isFavourite(entry.path, favourites))))
+		if (matchesView(entries[i], view, favourites))
 			result.push_back(i);
-	}
 	if (view == View::ContinuePlaying)
-		std::stable_sort(result.begin(), result.end(), [&entries](size_t left, size_t right) {
-			const Entry& a = entries[left];
-			const Entry& b = entries[right];
-			if (a.latestStateDate != b.latestStateDate)
-				return a.latestStateDate > b.latestStateDate;
-			if (a.name != b.name)
-				return a.name < b.name;
-			return a.path < b.path;
+		std::sort(result.begin(), result.end(), [&entries, view](size_t left, size_t right) {
+			return entryBefore(left, right, entries, view);
 		});
 	return result;
 }
+
+// Cache scanner indices, which remain stable as save discovery adds visible games.
+// Updates accept new save dates and matcher changes for the listed source paths.
+// Rebuild when the scanner, view, filter or existing save dates are invalidated.
+class FilteredGames
+{
+public:
+	template<typename Matcher>
+	void rebuild(const std::vector<Entry>& entries, View view,
+			const std::vector<std::string>& favourites, const Matcher& matches)
+	{
+		this->view = view;
+		this->favourites = favourites;
+		matched.assign(entries.size(), false);
+		indicesByPath.clear();
+		for (size_t i = 0; i < entries.size(); ++i)
+			if (!entries[i].path.empty())
+				indicesByPath[entries[i].path].push_back(i);
+		rows = selectGames(entries, view, favourites);
+		rows.erase(std::remove_if(rows.begin(), rows.end(), [&](size_t index) {
+			matched[index] = matches(index);
+			return !matched[index];
+		}), rows.end());
+	}
+
+	template<typename Matcher>
+	void update(const std::vector<Entry>& entries, const std::vector<std::string>& changedPaths,
+			const Matcher& matches)
+	{
+		std::unordered_set<std::string> updated;
+		for (const std::string& path : changedPaths)
+		{
+			if (!updated.insert(path).second)
+				continue;
+			auto found = indicesByPath.find(path);
+			if (found == indicesByPath.end())
+				continue;
+			for (size_t index : found->second)
+			{
+				const bool match = matchesView(entries[index], view, favourites) && matches(index);
+				if (match == matched[index])
+					continue;
+				auto row = std::lower_bound(rows.begin(), rows.end(), index, [&](size_t left, size_t right) {
+					return entryBefore(left, right, entries, view);
+				});
+				if (match)
+					rows.insert(row, index);
+				else if (row != rows.end() && *row == index)
+					rows.erase(row);
+				matched[index] = match;
+			}
+		}
+	}
+
+	const std::vector<size_t>& getRows() const { return rows; }
+
+private:
+	View view = View::All;
+	std::vector<std::string> favourites;
+	std::vector<bool> matched;
+	std::vector<size_t> rows;
+	std::unordered_map<std::string, std::vector<size_t>> indicesByPath;
+};
 
 } // namespace library

@@ -57,22 +57,33 @@ public class HttpClient {
     }
 
     public int openUrl(String url_string, byte[][] content, String[] reqHeaderNames, String[] reqHeaderValues,
-                       String[][] respHeaderNames, String[][] respHeaderValues, int timeoutMs)
+                       String[][] respHeaderNames, String[][] respHeaderValues, int timeoutMs,
+                       long maxBytes, long cancellationToken)
     {
+        final long startedAtNanos = System.nanoTime();
         HttpURLConnection conn = null;
         try {
+            if (cancellationToken != 0 && isCancelled(cancellationToken))
+                return 499;
             URL url = new URL(url_string);
             conn = (HttpURLConnection)url.openConnection();
             conn.setConnectTimeout(timeoutMs > 0 ? timeoutMs : 30 * 1000);
             if (timeoutMs > 0)
                 conn.setReadTimeout(timeoutMs);
+            else if (cancellationToken != 0)
+                conn.setReadTimeout(30 * 1000);
             conn.setRequestProperty("User-Agent", userAgent);
             if (reqHeaderNames != null) {
                 for (int i = 0; i < reqHeaderNames.length; i++)
                     conn.setRequestProperty(reqHeaderNames[i], reqHeaderValues[i]);
             }
             conn.connect();
-            if (conn.getResponseCode() >= 200 && conn.getResponseCode() < 300) {
+            int responseCode = conn.getResponseCode();
+            if (cancellationToken != 0 && isCancelled(cancellationToken))
+                return 499;
+            if (timeoutMs > 0 && TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos) >= timeoutMs)
+                return 408;
+            if (responseCode >= 200 && responseCode < 300) {
                 if (respHeaderNames != null)
                 {
                     List<String> keys = new ArrayList<>();
@@ -90,25 +101,49 @@ public class HttpClient {
                     respHeaderNames[0] = keys.toArray(new String[keys.size()]);
                     respHeaderValues[0] = values.toArray(new String[values.size()]);
                 }
-                InputStream is = conn.getInputStream();
-
+                int contentLength = conn.getContentLength();
+                if (maxBytes >= 0 && contentLength >= 0 && contentLength > maxBytes)
+                    return 413;
                 byte[] buffer = new byte[1024];
-                int length;
-
+                long bytesRead = 0;
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                while ((length = is.read(buffer)) > 0) {
-                    baos.write(buffer, 0, length);
+                try (InputStream is = conn.getInputStream()) {
+                    while (true) {
+                        if (cancellationToken != 0 && isCancelled(cancellationToken))
+                            return 499;
+                        if (timeoutMs > 0) {
+                            long remainingMs = timeoutMs - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
+                            if (remainingMs <= 0)
+                                return 408;
+                            conn.setReadTimeout((int)Math.min(Integer.MAX_VALUE, remainingMs));
+                        }
+                        int length = is.read(buffer);
+                        if (length < 0)
+                            break;
+                        if (length == 0)
+                            continue;
+                        if (cancellationToken != 0 && isCancelled(cancellationToken))
+                            return 499;
+                        if (maxBytes >= 0 && length > maxBytes - bytesRead)
+                            return 413;
+                        baos.write(buffer, 0, length);
+                        bytesRead += length;
+                    }
                 }
-                is.close();
-                baos.close();
+                if (timeoutMs > 0 && TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos) >= timeoutMs)
+                    return 408;
                 content[0] = baos.toByteArray();
             }
 
-            return conn.getResponseCode();
+            return responseCode;
         } catch (MalformedURLException e) {
             Log.e("hollycast", "Malformed URL", e);
         } catch (IOException e) {
             Log.e("hollycast", "I/O error", e);
+            if (cancellationToken != 0 && isCancelled(cancellationToken))
+                return 499;
+            if (timeoutMs > 0 && TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos) >= timeoutMs)
+                return 408;
         } catch (SecurityException e) {
             Log.e("hollycast", "Security error", e);
         } catch (Throwable t) {
@@ -119,6 +154,8 @@ public class HttpClient {
         }
         return 500;
     }
+
+    private static native boolean isCancelled(long cancellationToken);
 
     private CloseableHttpClient getHttpClient()
     {
