@@ -385,6 +385,7 @@ std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, 
         s+="#define LIST_NODES_LAYOUT layout(set=1,binding=1,std430)\n";
         s+="#define LIST_STATUS_LAYOUT layout(set=1,binding=2,std430)\n";
         s+="#define LIST_HELPER_GUARD if(gl_HelperInvocation)return;\n";
+        s+="#define LIST_PRIMITIVE_ID uint(gl_PrimitiveID)\n";
         s+=HIKARU_FRAGMENT_LIST_TYPES_SOURCE;
         s+="layout(push_constant) uniform ListParameters { HikaruListParameters listParams; };\n";
         s+=HIKARU_FRAGMENT_LIST_BUFFERS_SOURCE;

@@ -97,7 +97,7 @@ static inline void hikaru_fragment_pool_observe(HikaruFragmentPoolPolicy *policy
     "uint index=atomicAdd(listCount,1u); if(index>=listParams.capacity){atomicOr(listOverflow,1u);return;}\n" \
     "uint previous=atomicExchange(listHeads[pixel.y*listParams.width+pixel.x],index+1u);\n" \
     "writeListNode(index,uvec4(packUnorm4x8(clamp(color,0.0,1.0)),uint(depthCode)|(blendMode<<24),\n" \
-    "listParams.orderBase+uint(gl_PrimitiveID),previous));\n" \
+    "listParams.orderBase+LIST_PRIMITIVE_ID,previous));\n" \
     "}\n"
 
 #define HIKARU_FRAGMENT_LIST_RESOLVE_HEAD_SOURCE \

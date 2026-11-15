@@ -982,8 +982,14 @@ out vec3 p_ambient;								\n \
 out vec3 p_unknown;								\n \
 out vec2 p_texcoords;								\n \
 out float p_alpha;								\n \
+#if HAS_FRAGMENT_LIST\n \
+flat out uint p_list_primitive;\n \
+#endif\n \
 										\n \
 void main (void) {								\n \
+#if HAS_FRAGMENT_LIST\n \
+	p_list_primitive = uint(gl_VertexID) / 3u;\n \
+#endif\n \
 #if HAS_DRAW_PALETTE\n \
 	int draw_index = int(i_draw_state + 0.5);\n \
 	p_draw_depth = u_draw_depth[draw_index];\n #if HAS_TEXTURE_PALETTE\n 	p_draw_index = draw_index; p_texture_mode = u_texture_modes[draw_index];\n #endif\n #if HAS_SHADING_PALETTE\n 	p_shading_mode = u_shading_modes[draw_index];\n #endif\n \
@@ -3379,12 +3385,18 @@ triangle_view_depth(hikaru_renderer_t *hr, hikaru_mesh_t *mesh,
 /* Primitive IDs restart at each draw. A monotonically increasing rank keeps
  * equal-depth blending deterministic across mesh and instance boundaries. */
 static bool
-prepare_fragment_list_draw(hikaru_renderer_t *hr, unsigned triangles)
+prepare_fragment_list_draw(hikaru_renderer_t *hr, unsigned triangles, unsigned first_vertex)
 {
 	if (!hr->fragment_lists.collecting) return true;
 	if (hr->fragment_lists.failed) return false;
-	const HikaruFragmentListParameters value =
+	HikaruFragmentListParameters value =
 		*hikaru_gl_fragment_list_parameters(hr->fragment_lists.state);
+	/* Mesa 26's fragment gl_PrimitiveID path can corrupt smooth varyings.
+	 * Triangle-list vertices carry the primitive rank instead. Subtract this
+	 * draw's vertex offset using unsigned arithmetic so the stored rank still
+	 * starts at the original orderBase, including a nonzero VBO offset. */
+	VK_ASSERT(first_vertex % 3u == 0);
+	value.orderBase -= first_vertex / 3u;
 	hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 	const HikaruFragmentListParameters *previous = &cache->list_parameters;
 	const GLint *loc = hr->meshes.locs.u_list_parameters;
@@ -3410,12 +3422,12 @@ draw_mesh_geometry(hikaru_renderer_t *hr, hikaru_mesh_t *mesh,
 {
 	if (hr->triangle_replay.enabled) {
 		if (hr->triangle_replay.mesh == mesh && hr->triangle_replay.instance == instance &&
-		    prepare_fragment_list_draw(hr, hr->triangle_replay.count))
+		    prepare_fragment_list_draw(hr, hr->triangle_replay.count, hr->triangle_replay.first * 3u))
 			glDrawArrays(GL_TRIANGLES, hr->triangle_replay.first * 3, hr->triangle_replay.count * 3);
 		return;
 	}
 	(void)polytype;
-	if (prepare_fragment_list_draw(hr, mesh->num_tris))
+	if (prepare_fragment_list_draw(hr, mesh->num_tris, mesh->first_vertex))
 		glDrawArrays(GL_TRIANGLES, mesh->first_vertex, mesh->num_tris * 3);
 }
 
@@ -5834,6 +5846,58 @@ static int test_transparency_sorting_pixels(bool test_lists)
 		meshes[1].pattern = meshes[1].alpha_thresh[1] = 0;
 		hr->mat_list[0].depth_blend = 0;
 		hr->vp_list[0].depth.q_enabled = 0;
+		/* Two equal-depth primitives in one draw must retain their individual
+		 * ranks before the next mesh. Swap which draw starts at a nonzero VBO
+		 * offset to catch both a constant primitive ID and offset-dependent ties. */
+		static const unsigned tie_offsets[2][2] = {{9, 0}, {0, 9}};
+		meshes[0].num_tris = 2;
+		hr->transparency_memory_budget = HIKARU_DEFAULT_TRANSPARENCY_BUDGET;
+		for (unsigned layout = 0; layout < NUMELEM(tie_offsets); ++layout) {
+			meshes[0].first_vertex = tie_offsets[layout][0];
+			meshes[1].first_vertex = tie_offsets[layout][1];
+			for (unsigned triangle = 0; triangle < 3; ++triangle) {
+				const unsigned side = triangle == 2;
+				const unsigned local = triangle == 1 ? 3 : 0;
+				for (unsigned v = 0; v < 3; ++v) {
+					hikaru_vertex_body_t vertex = {0};
+					vertex.position[0] = coverage_xy[v][0];
+					vertex.position[1] = coverage_xy[v][1];
+					vertex.position[2] = -6.0f;
+					vertex.diffuse[triangle] = 255;
+					vertex.alpha = 128;
+					vertices[meshes[side].first_vertex + local + v] = vertex;
+					meshes[side].cpu_vertices[local + v] = vertex;
+				}
+			}
+			glBindVertexArray(hr->vertex_chunks[0].vao);
+			glBindBuffer(GL_ARRAY_BUFFER, hr->vertex_chunks[0].vbo);
+			glBufferData(GL_ARRAY_BUFFER, total_vertices * sizeof(*vertices), vertices, GL_DYNAMIC_DRAW);
+			for (unsigned pass = 0; pass < 2; ++pass) {
+				hr->transparency_sorting = pass ? HIKARU_TRANSPARENCY_PER_PIXEL : HIKARU_TRANSPARENCY_PER_TRIANGLE;
+				glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+				const unsigned completed = fragment_list_completions;
+				draw_scene(hr);
+				/* An initial pool overflow may peel while learning the required
+				 * capacity. Require an actual list resolve for this order test. */
+				if (pass && fragment_list_completions == completed) {
+					glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+					draw_scene(hr);
+				}
+				if (pass && fragment_list_completions == completed) {
+					fprintf(stderr, "fragment-list primitive order layout %u never collected\n", layout);
+					ok = 0;
+				}
+				glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
+				glReadPixels(320, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pass ? right : left);
+			}
+			for (unsigned channel = 0; channel < 4; ++channel) {
+				if (abs((int)left[channel] - right[channel]) > 1) {
+					fprintf(stderr, "fragment-list primitive order layout %u channel %u: triangle=%u pixel=%u\n",
+					        layout, channel, left[channel], right[channel]);
+					ok = 0;
+				}
+			}
+		}
 		if (fragment_list_completions == list_start) {
 			fprintf(stderr, "modern GL test never completed fragment-list collection\n");
 			ok = 0;
@@ -7866,6 +7930,11 @@ hikaru_vendor_test_layer_upload_storage (void)
 	static const uint8_t blue_alpha_85[4] = {0, 0, 255, 85};
 	static const uint8_t blue_alpha_255[4] = {0, 0, 255, 255};
 	if (!probe || !gpu || !fb || !other_fb) goto cleanup;
+	/* The pointer-swap checks compare the complete upload, not just the
+	 * pixels set below. vk_buffer_new uses malloc, so initialize both sources
+	 * identically instead of depending on freshly zeroed allocator pages. */
+	memset(fb->ptr, 0, fb->size);
+	memset(other_fb->ptr, 0, other_fb->size);
 	probe->gpu = gpu;
 	gpu->fb = fb;
 	layer_texture_definitions = layer_texture_updates = 0;

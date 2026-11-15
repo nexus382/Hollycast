@@ -109,6 +109,8 @@ static void trace_collection(HikaruGlFragmentList *state)
 
 static const char fragmentListSource[] =
     "#define LIST_HELPER_GUARD if(gl_SampleMaskIn[0]==0)return;\n"
+    "flat in uint p_list_primitive;\n"
+    "#define LIST_PRIMITIVE_ID p_list_primitive\n"
     "#define LIST_HEADS_LAYOUT layout(std430,binding=0)\n"
     "#define LIST_NODES_LAYOUT layout(std430,binding=1)\n"
     "#define LIST_STATUS_LAYOUT layout(std430,binding=5)\n"
