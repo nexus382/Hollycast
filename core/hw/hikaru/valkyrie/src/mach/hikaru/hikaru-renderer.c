@@ -1548,9 +1548,13 @@ upload_palette_modes(hikaru_mesh_uniform_cache_t *cache, unsigned which,
     if (location < 0) return;
     const size_t bytes = (size_t)count * sizeof(*values);
     if (cache->palette_mode_counts[which] >= count &&
-        !memcmp(cache->palette_modes[which], values, bytes))
+        !memcmp(cache->palette_modes[which], values, bytes)) {
+        if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PALETTE_HITS, 1);
         return;
+    }
+    if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_palette(true);
     glUniform1iv(location, (GLsizei)count, values);
+    if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_palette(false);
     /* Uniform array writes replace only the active prefix. Retain the cached
      * tail and high-water count so a shorter update cannot hide stale values
      * when a later draw grows the palette again. Each linked program owns it. */
@@ -1602,6 +1606,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	unsigned slot;
 
 	variant = get_glsl_variant (hr, mesh, texture_available);
+    if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PROGRAM_LOOKUPS, 1);
 	if (hr->meshes.variant.full == variant.full && hr->meshes.cache_slot < num_programs &&
 	    program_cache[hr->meshes.cache_slot].program == hr->meshes.program &&
 	    program_cache[hr->meshes.cache_slot].variant.full == variant.full &&
@@ -1609,6 +1614,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	             sizeof (hr->meshes.locs))) {
 		/* Layer resolve can bind the bitmap program between mesh passes. */
 		program_cache_touch (hr->meshes.cache_slot);
+        if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PROGRAM_HITS, 1);
 		bind_mesh_program(hr);
 		return;
 	}
@@ -1619,6 +1625,7 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 
 	for (i = 0; i < num_programs; i++) {
 		if (program_cache[i].variant.full == variant.full) {
+            if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PROGRAM_HITS, 1);
 			program_cache_touch ((unsigned)i);
 			hr->meshes.cache_slot = (unsigned)i;
 			hr->meshes.program = program_cache[i].program;
@@ -1672,7 +1679,10 @@ upload_glsl_program (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, bool texture_av
 	if (ret < 0) { free(vs_source); free(definitions); VK_ABORT("out of memory building fragment shader"); }
 
 	hr->meshes.variant = variant;
+    const uint64_t compile_started = hikaru_gl_diagnostics_cpu_begin();
 	hr->meshes.program = vk_renderer_compile_program (vs_source, fs_source);
+    if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PROGRAM_COMPILES, 1);
+    hikaru_gl_diagnostics_cpu_end(HIKARU_GL_DIAG_PROGRAM_COMPILE_NS, compile_started);
 
 	free (definitions);
 	free (vs_source);
@@ -2061,7 +2071,10 @@ upload_viewport (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 	}
 	if (cache->viewport_valid && cache->viewport_horizontal_scale == horizontal_scale &&
 	    cache->alpha_ref == hr->pass_alpha_ref &&
-	    !memcmp(&cache->viewport, vp, sizeof(*vp))) return;
+	    !memcmp(&cache->viewport, vp, sizeof(*vp))) {
+        if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_UNIFORM_HITS, 1);
+        return;
+    }
 	cache->viewport_horizontal_scale = horizontal_scale;
 	cache->viewport = *vp;
 	cache->alpha_ref = hr->pass_alpha_ref;
@@ -2165,6 +2178,7 @@ upload_modelview (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned i)
 		 * Cache the active prefix per linked program: tiny sorted runs often
 		 * revisit identical records, and redundant arrays stall GL drivers. */
 		const GLsizei count = (GLsizei)hr->triangle_replay.palette_count;
+        if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_palette(true);
 		hikaru_mesh_uniform_cache_t *cache = &program_cache[hr->meshes.cache_slot].uniforms;
 		const mtx4x4f_t *matrices[2] = {hr->triangle_replay.modelviews, hr->triangle_replay.alternate_modelviews};
 		const GLuint modelview_locations[2] = {hr->meshes.locs.u_modelview, hr->meshes.locs.u_modelview_alternate};
@@ -2187,7 +2201,9 @@ upload_modelview (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned i)
 #ifdef HIKARU_VENDOR_TESTING
 				++palette_uploads[which];
 #endif
-			}
+			} else if (hikaru_gl_diagnostics_collecting) {
+                hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PALETTE_HITS, 1);
+            }
 		}
 		const size_t depth_bytes = (size_t)count * sizeof(*hr->triangle_replay.depths);
 		if (cache->palette_counts[2] < (unsigned)count ||
@@ -2198,7 +2214,10 @@ upload_modelview (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned i)
 #ifdef HIKARU_VENDOR_TESTING
 			++palette_uploads[2];
 #endif
-		}
+		} else if (hikaru_gl_diagnostics_collecting) {
+            hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PALETTE_HITS, 1);
+        }
+        if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_palette(false);
 		if (hr->triangle_replay.shading_palette_enabled)
 			upload_palette_modes(cache, 1, (GLint)hr->meshes.locs.u_shading_modes,
 			                     (unsigned)count, hr->triangle_replay.shading_modes);
@@ -2227,7 +2246,9 @@ upload_modelview (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, unsigned i)
 #ifdef HIKARU_VENDOR_TESTING
 			++state_uploads[1];
 #endif
-		}
+		} else if (hikaru_gl_diagnostics_collecting) {
+            hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_UNIFORM_HITS, 1);
+        }
 	}
 }
 
@@ -2499,7 +2520,9 @@ upload_lightset (hikaru_renderer_t *hr, hikaru_mesh_t *mesh)
 		cache->lightset = *ls;
 		cache->light_debug_flags = debug_flags;
 		cache->lightset_valid = true;
-	}
+	} else if (hikaru_gl_diagnostics_collecting) {
+        hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_UNIFORM_HITS, 1);
+    }
 #ifdef HIKARU_VENDOR_TESTING
 	if (changed) ++state_uploads[2];
 #endif
@@ -5890,6 +5913,7 @@ destroy_3d_state (hikaru_renderer_t *hr)
 {
 	unsigned vpi, i;
 
+	hikaru_gl_diagnostics_destroy(&hr->diagnostics);
 	hikaru_gl_fragment_list_destroy(&hr->fragment_lists.state);
 	release_pending_frame_handles(hr);
 	free(hr->pending_buffers);
@@ -6546,6 +6570,15 @@ composite_framebuffers (hikaru_renderer_t *hr, GLuint n1, GLuint n2,
 static void
 draw (hikaru_renderer_t *hr)
 {
+    /* Capture packets do no GL work. Queries and CPU counters stay with the
+     * real graphics owner, and the native backends collect their own costs. */
+    if (!hr->capture_only && !hikaru_graphics_has_native_dispatch()) {
+        if (!hr->diagnostics_checked) {
+            hr->diagnostics = hikaru_gl_diagnostics_create();
+            hr->diagnostics_checked = true;
+        }
+        hikaru_gl_diagnostics_begin_frame(hr->diagnostics);
+    }
 	hikaru_gpu_t *gpu = hr->gpu;
 	GLuint n1, n2, layer1 = 0, layer2 = 0;
 	float factor, mult1 = 0.0f, mult2 = 0.0f;
@@ -6682,6 +6715,7 @@ draw (hikaru_renderer_t *hr)
 	glBindVertexArray (0);
 	glUseProgram (0);
 	VK_ASSERT_NO_GL_ERROR ();
+    hikaru_gl_diagnostics_end_frame(hr->diagnostics, true);
 
 }
 
@@ -6796,6 +6830,7 @@ static void
 hikaru_renderer_reset (vk_renderer_t *renderer)
 {
 	hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
+    hikaru_gl_diagnostics_end_frame(hr->diagnostics, false);
 	hikaru_gl_fragment_list_reset(hr->fragment_lists.state);
 	hr->fragment_lists.collecting = hr->fragment_lists.failed = false;
 	clear_frame_meshes (hr);
@@ -6995,6 +7030,9 @@ hikaru_renderer_finish_packet(vk_renderer_t *renderer, HikaruFrame *frame)
 {
 	hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
 	if (!hr->packet_active) return;
+    /* An aborted draw can leave a timestamp pair open. Retire it as invalid
+     * without borrowing the emulation thread or waiting for the GPU. */
+    hikaru_gl_diagnostics_end_frame(hr->diagnostics, false);
 	swap_packet_state(hr, frame->capture);
 	hr->packet_active = false;
 	frame->ready = false;

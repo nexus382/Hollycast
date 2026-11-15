@@ -48,7 +48,8 @@ static uint64_t profile_clock(void)
 
 static void profile_init(HikaruEngine *engine)
 {
-    if (!getenv("HIKARU_TRACE_TIMING")) return;
+    const char *trace = getenv("HIKARU_TRACE_TIMING");
+    if (!trace || !trace[0] || strcmp(trace, "0") == 0) return;
 #ifdef _WIN32
     LARGE_INTEGER frequency;
     if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) return;

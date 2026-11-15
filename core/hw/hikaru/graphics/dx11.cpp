@@ -7,6 +7,7 @@
 #if defined(HAVE_D3D11) && !defined(LIBRETRO)
 #include "rend/dx11/dx11context.h"
 #include "rend/dx11/dx11_shaders.h"
+#include "dx11_diagnostics.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -14,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <exception>
 #include <future>
 #include <system_error>
 #include <limits>
@@ -25,6 +27,15 @@
 
 namespace hikaru::graphics {
 namespace {
+bool traceFlagEnabled(const char* name) {
+    const char* value=std::getenv(name);
+    return value&&value[0]!='\0'&&std::strcmp(value,"0")!=0;
+}
+using DiagnosticClock=std::chrono::steady_clock;
+uint64_t elapsedNanoseconds(DiagnosticClock::time_point start) {
+    const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(DiagnosticClock::now()-start).count();
+    return elapsed>0?uint64_t(elapsed):0;
+}
 void checkResult(HRESULT result,const char* operation) {
     if(FAILED(result)) {
         std::ostringstream message;message<<"Hikaru DX11 "<<operation<<" failed (0x"<<std::hex<<unsigned(result)<<")";
@@ -108,8 +119,41 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     };
     static_assert(sizeof(FragmentConstants)==32,"Hikaru DX11 list constant layout changed");
     struct PixelShader {ComPtr<ID3D11PixelShader> shader;uint64_t touched=0;bool deferred=false;};
-    struct CompiledPixel {ComPtr<ID3DBlob> code;ComPtr<ID3D11PixelShader> shader;};
+    struct CompiledPixel {
+        ComPtr<ID3DBlob> code;
+        ComPtr<ID3D11PixelShader> shader;
+        std::exception_ptr error;
+        uint64_t compileNanoseconds=0;
+        bool compileAttempted=false;
+    };
     struct PendingPixel {PixelKey key;u64 hash;std::future<CompiledPixel> result;};
+    struct CostCounters {
+        uint64_t draws=0,vertexUploads=0,vertexBytes=0;
+        uint64_t uniformUploads=0,uniformHits=0,uniformBytes=0;
+        uint64_t paletteUploads=0,paletteHits=0,paletteBytes=0;
+        uint64_t shaderCacheLookups=0,shaderCacheHits=0,shaderCompiles=0,shaderCompileNanoseconds=0;
+        uint64_t textureUploads=0,textureBytes=0,queriesCreated=0,gpuQueryObjects=0,queryWaitNanoseconds=0;
+        uint64_t fragmentCounterWaitNanoseconds=0,maskedClears=0,maskedPixels=0;
+    };
+    // A slot cannot be reused until its disjoint query and all recorded timestamps complete.
+    struct GpuFrame {
+        ComPtr<ID3D11Query> disjoint;
+        std::array<ComPtr<ID3D11Query>,10> timestamps;
+        unsigned recordedTimestamps=0,phaseMask=0;
+        bool open=false,inFlight=false,valid=true,listClaimed=false,listRecording=false;
+    };
+    struct Diagnostics {
+        Diagnostics(bool isEnabled,bool requestsGpu):enabled(isEnabled),gpuRequested(requestsGpu) {}
+        const bool enabled,gpuRequested;
+        bool gpuSupported=false,gpuFailureReported=false;
+        CostCounters costs;
+        std::array<GpuFrame,4> frames{};
+        std::array<double,5> gpuMilliseconds{};
+        std::array<uint64_t,5> gpuSamples{};
+        unsigned activeFrame=4,nextFrame=0;
+        bool frameAttempted=false;
+        uint64_t gpuDropped=0,gpuInvalid=0,presentedFrames=0;
+    };
     using BlendKey=std::tuple<bool,GLenum,GLenum,GLenum,GLenum,GLenum,GLenum,unsigned>;
     using DepthKey=std::tuple<bool,bool,GLenum>;
     using RasterKey=std::tuple<bool,GLenum,bool,bool,float,float>;
@@ -132,7 +176,10 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     size_t fragmentConstantsCursor=0;
     bool fragmentListSupported=true,fragmentCollectActive=false,fragmentListFailed=false,fragmentSmallList=true;
     bool fragmentOverflowWarned=false;
-    const bool fragmentTrace=std::getenv("HIKARU_TRACE_TIMING")!=nullptr;
+    const bool traceTiming=traceFlagEnabled("HIKARU_TRACE_TIMING");
+    const bool traceGpuTiming=traceFlagEnabled("HIKARU_TRACE_GPU_TIMING");
+    const bool fragmentTrace=traceTiming;
+    Diagnostics diagnostics{traceTiming||traceGpuTiming,traceGpuTiming};
     std::array<uint64_t,3> fragmentCounts{};
     uint64_t fragmentAllocations=0,fragmentResolves=0;
     std::unordered_map<unsigned,Image> images;
@@ -184,10 +231,28 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     std::deque<std::vector<ComPtr<ID3D11Query>>> pendingOcclusions;
     static constexpr unsigned ColorFallback=0x7ffffffdu,MetadataFallback=0x7ffffffcu;
 
+    void recordShaderCompile(DiagnosticClock::time_point started) {
+        if(diagnostics.enabled) {
+            ++diagnostics.costs.shaderCompiles;
+            diagnostics.costs.shaderCompileNanoseconds+=elapsedNanoseconds(started);
+        }
+    }
     ComPtr<ID3DBlob> compile(const std::string& source,const char* entry,const char* profile) {
         ComPtr<ID3DBlob> code;const u64 hash=hashShader(source.c_str(),entry,profile);
-        if(lookupShader(hash,code))return code;
-        code=compileCode(compiler,source,entry,profile);cacheShader(hash,code);return code;
+        const bool cached=lookupShader(hash,code);
+        if(diagnostics.enabled) {
+            ++diagnostics.costs.shaderCacheLookups;
+            diagnostics.costs.shaderCacheHits+=cached;
+        }
+        if(cached)return code;
+        if(!diagnostics.enabled)code=compileCode(compiler,source,entry,profile);
+        else {
+            const auto started=DiagnosticClock::now();
+            try {code=compileCode(compiler,source,entry,profile);}
+            catch(...) {recordShaderCompile(started);throw;}
+            recordShaderCompile(started);
+        }
+        cacheShader(hash,code);return code;
     }
     const ComPtr<ID3D11PixelShader>& genericPixel(const PixelKey& key) const {
         if(key.fragmentList)return fragmentGenericPixels[key.constants[8]?1:0];
@@ -206,8 +271,13 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         auto pending=std::move(*pendingPixel);pendingPixel.reset();
         ComPtr<ID3D11PixelShader> shader;
         try {
-            auto compiled=pending.result.get();shader=std::move(compiled.shader);
-            cacheShader(pending.hash,compiled.code);
+            auto compiled=pending.result.get();
+            if(diagnostics.enabled&&compiled.compileAttempted) {
+                ++diagnostics.costs.shaderCompiles;
+                diagnostics.costs.shaderCompileNanoseconds+=compiled.compileNanoseconds;
+            }
+            if(compiled.error)std::rethrow_exception(compiled.error);
+            shader=std::move(compiled.shader);cacheShader(pending.hash,compiled.code);
         } catch(const std::exception& error) {
             // The generic shader remains exact if an optional specialization
             // fails. Cache that fallback under this key to avoid a retry storm.
@@ -429,14 +499,19 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         }
         const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags,key.peelComposite,key.fragmentList);
         ComPtr<ID3DBlob> code;const u64 hash=hashShader(source.c_str(),"pixelMain","ps_5_0");
-        if(!lookupShader(hash,code)) {
+        const bool cached=lookupShader(hash,code);
+        if(diagnostics.enabled) {
+            ++diagnostics.costs.shaderCacheLookups;
+            diagnostics.costs.shaderCacheHits+=cached;
+        }
+        if(!cached) {
             if(backgroundCompilation&&!draw.bitmap) {
                 // One outstanding job bounds CPU/memory use. All immediate-
                 // context work and bytecode-cache access stay on this thread.
                 // The worker owns its source/device until compilation finishes.
                 if(!pendingPixel) {
                     try {
-                        auto result=std::async(std::launch::async,[dxDevice=device,dxCompiler=compiler,source] {
+                        auto result=std::async(std::launch::async,[dxDevice=device,dxCompiler=compiler,source,measureCompile=diagnostics.enabled] {
                             // MSVC may reuse an async pool thread. Restore its
                             // priority on success and on compiler/device failure.
                             struct PriorityRestore {
@@ -444,9 +519,17 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
                                 ~PriorityRestore(){SetThreadPriority(GetCurrentThread(),previous);}
                             } priority;
                             SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
-                            CompiledPixel compiled;compiled.code=compileCode(dxCompiler,source,"pixelMain","ps_5_0");
-                            checkResult(dxDevice->CreatePixelShader(compiled.code->GetBufferPointer(),compiled.code->GetBufferSize(),
-                                nullptr,&compiled.shader.get()),"background pixel shader");
+                            CompiledPixel compiled;compiled.compileAttempted=true;
+                            const auto started=measureCompile?DiagnosticClock::now():DiagnosticClock::time_point{};
+                            try {compiled.code=compileCode(dxCompiler,source,"pixelMain","ps_5_0");}
+                            catch(...) {compiled.error=std::current_exception();}
+                            if(measureCompile)compiled.compileNanoseconds=elapsedNanoseconds(started);
+                            if(!compiled.error) {
+                                try {
+                                    checkResult(dxDevice->CreatePixelShader(compiled.code->GetBufferPointer(),compiled.code->GetBufferSize(),
+                                        nullptr,&compiled.shader.get()),"background pixel shader");
+                                } catch(...) {compiled.error=std::current_exception();}
+                            }
                             return compiled;
                         });
                         pendingPixel.emplace(PendingPixel{key,hash,std::move(result)});
@@ -506,6 +589,157 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         }
         if(sampled&&(sampled->description.Format==DXGI_FORMAT_R32G32_UINT)!=integer)sampled=nullptr;
         return sampled?*sampled:image(integer?MetadataFallback:ColorFallback);
+    }
+    static constexpr unsigned GpuPhaseCount=5,GpuFrameRingSize=4,NoGpuFrame=GpuFrameRingSize;
+    static constexpr unsigned GpuFramePhase=0,GpuClearPhase=1,GpuCollectPhase=2,GpuCopyPhase=3,GpuResolvePhase=4;
+    static constexpr unsigned GpuTimestampCount=GpuPhaseCount*2;
+    void disableGpuTiming(HRESULT result) {
+        if(diagnostics.activeFrame<NoGpuFrame) {
+            auto& frame=diagnostics.frames[diagnostics.activeFrame];
+            if(frame.open) {
+                const unsigned endIndex=GpuFramePhase*2+1;
+                context->End(frame.timestamps[endIndex]);
+                frame.recordedTimestamps|=1u<<endIndex;
+                frame.phaseMask|=1u<<GpuFramePhase;
+                context->End(frame.disjoint);frame.open=false;
+            }
+        }
+        diagnostics.gpuSupported=false;
+        diagnostics.activeFrame=NoGpuFrame;
+        diagnostics.frameAttempted=false;
+        for(auto& frame:diagnostics.frames)frame=GpuFrame{};
+        if(!diagnostics.gpuFailureReported) {
+            std::fprintf(stderr,"Hikaru DX11 GPU timing unavailable (0x%08X); rendering continues\n",unsigned(result));
+            diagnostics.gpuFailureReported=true;
+        }
+    }
+    bool createDiagnosticQuery(D3D11_QUERY type,ComPtr<ID3D11Query>& query) {
+        const D3D11_QUERY_DESC description{type,0};
+        const HRESULT result=device->CreateQuery(&description,&query.get());
+        if(FAILED(result)) {
+            checkResult(device->GetDeviceRemovedReason(),"diagnostic query device");
+            disableGpuTiming(result);return false;
+        }
+        if(diagnostics.enabled)++diagnostics.costs.gpuQueryObjects;
+        return true;
+    }
+    bool initializeGpuQueries(GpuFrame& frame) {
+        if(!frame.disjoint&&!createDiagnosticQuery(D3D11_QUERY_TIMESTAMP_DISJOINT,frame.disjoint))return false;
+        for(auto& timestamp:frame.timestamps)
+            if(!timestamp&&!createDiagnosticQuery(D3D11_QUERY_TIMESTAMP,timestamp))return false;
+        return true;
+    }
+    // Sample the first list attempt only, including overflow. Later viewports must not
+    // replace its timestamps or make a failed pass look like a successful resolve.
+    void markGpuTimestamp(unsigned phase,bool end) {
+        if(diagnostics.activeFrame>=GpuFrameRingSize||(phase&&!diagnostics.frames[diagnostics.activeFrame].listRecording))return;
+        auto& frame=diagnostics.frames[diagnostics.activeFrame];
+        const unsigned index=phase*2+unsigned(end);
+        context->End(frame.timestamps[index]);
+        frame.recordedTimestamps|=1u<<index;
+        if(end&&(frame.recordedTimestamps&(3u<<(phase*2)))==(3u<<(phase*2)))
+            frame.phaseMask|=1u<<phase;
+    }
+    bool readDiagnosticQuery(ID3D11Query* query,void* data,UINT bytes) {
+        const HRESULT result=context->GetData(query,data,bytes,D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if(result==S_FALSE)return false;
+        if(FAILED(result)) {
+            checkResult(device->GetDeviceRemovedReason(),"diagnostic query device");
+            disableGpuTiming(result);return false;
+        }
+        return true;
+    }
+    void pollGpuFrames() {
+        if(!diagnostics.gpuRequested||!diagnostics.gpuSupported)return;
+        // Poll each outstanding result once; S_FALSE keeps the entire slot in flight.
+        for(auto& frame:diagnostics.frames) {
+            if(!frame.inFlight)continue;
+            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+            bool ready=readDiagnosticQuery(frame.disjoint,&disjoint,sizeof(disjoint));
+            std::array<UINT64,GpuTimestampCount> timestamps{};
+            for(unsigned i=0;i<GpuTimestampCount&&diagnostics.gpuSupported;++i) {
+                if(frame.recordedTimestamps&(1u<<i))
+                    ready=readDiagnosticQuery(frame.timestamps[i],&timestamps[i],sizeof(timestamps[i]))&&ready;
+            }
+            if(!diagnostics.gpuSupported)return;
+            if(!ready)continue;
+            bool valid=frame.valid&&!disjoint.Disjoint&&disjoint.Frequency!=0;
+            std::array<double,GpuPhaseCount> milliseconds{};
+            for(unsigned phase=0;valid&&phase<GpuPhaseCount;++phase) {
+                if(!(frame.phaseMask&(1u<<phase)))continue;
+                const UINT64 begin=timestamps[phase*2],end=timestamps[phase*2+1];
+                if(end<begin) {valid=false;break;}
+                milliseconds[phase]=double(end-begin)*1000.0/double(disjoint.Frequency);
+                valid=std::isfinite(milliseconds[phase])&&milliseconds[phase]>=0;
+            }
+            // Reject the whole frame before publishing any phase of a bad sample.
+            if(!valid)++diagnostics.gpuInvalid;
+            else for(unsigned phase=0;phase<GpuPhaseCount;++phase) {
+                if(!(frame.phaseMask&(1u<<phase)))continue;
+                diagnostics.gpuMilliseconds[phase]+=milliseconds[phase];++diagnostics.gpuSamples[phase];
+            }
+            frame.inFlight=false;frame.recordedTimestamps=0;frame.phaseMask=0;frame.listClaimed=false;frame.listRecording=false;
+        }
+    }
+    void ensureGpuFrame() {
+        if(!diagnostics.gpuRequested||diagnostics.gpuFailureReported||diagnostics.frameAttempted)return;
+        diagnostics.frameAttempted=true;pollGpuFrames();
+        if(diagnostics.gpuFailureReported)return;
+        // A saturated ring skips this frame instead of blocking or reusing pending queries.
+        for(unsigned offset=0;offset<GpuFrameRingSize;++offset) {
+            const unsigned index=(diagnostics.nextFrame+offset)%GpuFrameRingSize;
+            auto& frame=diagnostics.frames[index];
+            if(frame.open||frame.inFlight)continue;
+            if(!initializeGpuQueries(frame)) {++diagnostics.gpuDropped;return;}
+            diagnostics.gpuSupported=true;
+            frame.recordedTimestamps=0;frame.phaseMask=0;frame.listClaimed=false;frame.listRecording=false;
+            frame.open=true;frame.valid=true;diagnostics.activeFrame=index;diagnostics.nextFrame=(index+1)%GpuFrameRingSize;
+            context->Begin(frame.disjoint);markGpuTimestamp(GpuFramePhase,false);return;
+        }
+        ++diagnostics.gpuDropped;
+    }
+    void finishGpuFrame(bool valid=true) {
+        if(diagnostics.activeFrame<NoGpuFrame) {
+            auto& frame=diagnostics.frames[diagnostics.activeFrame];
+            frame.valid=valid;
+            markGpuTimestamp(GpuFramePhase,true);context->End(frame.disjoint);
+            frame.open=false;frame.inFlight=true;diagnostics.activeFrame=NoGpuFrame;
+        }
+        diagnostics.frameAttempted=false;
+    }
+    void presentDiagnostics() {
+        if(!diagnostics.enabled||++diagnostics.presentedFrames<60)return;
+        const auto& costs=diagnostics.costs;
+        std::fprintf(stderr,
+            "Hikaru DX11 costs: draws=%llu vertex_uploads=%llu vertex_bytes=%llu uniform_uploads=%llu uniform_hits=%llu uniform_bytes=%llu palette_uploads=%llu palette_hits=%llu palette_bytes=%llu shadercache_lookups=%llu shadercache_hits=%llu shadercache_compiles=%llu shadercache_compile_ns=%llu texture_uploads=%llu texture_bytes=%llu queries_created=%llu gpu_query_objects=%llu query_wait_ns=%llu fragment_counter_wait_ns=%llu masked_clears=%llu masked_pixels=%llu\n",
+            (unsigned long long)costs.draws,(unsigned long long)costs.vertexUploads,(unsigned long long)costs.vertexBytes,
+            (unsigned long long)costs.uniformUploads,(unsigned long long)costs.uniformHits,(unsigned long long)costs.uniformBytes,
+            (unsigned long long)costs.paletteUploads,(unsigned long long)costs.paletteHits,(unsigned long long)costs.paletteBytes,
+            (unsigned long long)costs.shaderCacheLookups,(unsigned long long)costs.shaderCacheHits,
+            (unsigned long long)costs.shaderCompiles,(unsigned long long)costs.shaderCompileNanoseconds,
+            (unsigned long long)costs.textureUploads,(unsigned long long)costs.textureBytes,
+            (unsigned long long)costs.queriesCreated,(unsigned long long)costs.gpuQueryObjects,
+            (unsigned long long)costs.queryWaitNanoseconds,
+            (unsigned long long)costs.fragmentCounterWaitNanoseconds,(unsigned long long)costs.maskedClears,
+            (unsigned long long)costs.maskedPixels);
+        if(traceGpuTiming) {
+            char milliseconds[GpuPhaseCount][32]{};
+            for(unsigned phase=0;phase<GpuPhaseCount;++phase) {
+                if(diagnostics.gpuSamples[phase])
+                    std::snprintf(milliseconds[phase],sizeof(milliseconds[phase]),"%.3f",
+                        diagnostics.gpuMilliseconds[phase]/double(diagnostics.gpuSamples[phase]));
+                else std::snprintf(milliseconds[phase],sizeof(milliseconds[phase]),"unavailable");
+            }
+            std::fprintf(stderr,
+                "Hikaru DX11 GPU timing: frame_ms=%s clear_ms=%s collect_ms=%s copy_ms=%s resolve_ms=%s frame_samples=%llu clear_samples=%llu collect_samples=%llu copy_samples=%llu resolve_samples=%llu dropped=%llu invalid=%llu supported=%u\n",
+                milliseconds[0],milliseconds[1],milliseconds[2],milliseconds[3],milliseconds[4],
+                (unsigned long long)diagnostics.gpuSamples[0],(unsigned long long)diagnostics.gpuSamples[1],
+                (unsigned long long)diagnostics.gpuSamples[2],(unsigned long long)diagnostics.gpuSamples[3],
+                (unsigned long long)diagnostics.gpuSamples[4],(unsigned long long)diagnostics.gpuDropped,
+                (unsigned long long)diagnostics.gpuInvalid,unsigned(diagnostics.gpuSupported));
+        }
+        diagnostics.costs={};diagnostics.gpuMilliseconds={};diagnostics.gpuSamples={};
+        diagnostics.gpuDropped=diagnostics.gpuInvalid=diagnostics.presentedFrames=0;
     }
     void endQuerySegment() {if(queryOpen){context->End(queries.back());queryOpen=false;}}
 public:
@@ -582,7 +816,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         // Finish before the owner unloads its compiler/device. The worker never
         // borrows this backend or its context, so there is no shutdown lock cycle.
         try {completePixelCompilation(true);}catch(const std::exception& error){WARN_LOG(RENDERER,"Hikaru DX11 shader shutdown: %s",error.what());}
-        endQuerySegment();
+        endQuerySegment();finishGpuFrame();
         if(owner)saveCache(CacheFile);
         if(owner&&GraphicsContext::Instance()==owner)owner->presentFrame({});
         // The immediate context owns submitted resource references. Releasing
@@ -591,6 +825,29 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
     }
 #ifdef HIKARU_NATIVE_TESTING
     void completeCompilationForTesting() {completePixelCompilation(true);}
+    Dx11DiagnosticsSnapshot diagnosticsForTesting() const {
+        Dx11DiagnosticsSnapshot result;
+        result.enabled=diagnostics.enabled;result.gpuRequested=diagnostics.gpuRequested;result.gpuSupported=diagnostics.gpuSupported;
+        const auto& costs=diagnostics.costs;
+        result.draws=costs.draws;result.vertexUploads=costs.vertexUploads;result.vertexBytes=costs.vertexBytes;
+        result.uniformUploads=costs.uniformUploads;result.uniformHits=costs.uniformHits;result.uniformBytes=costs.uniformBytes;
+        result.paletteUploads=costs.paletteUploads;result.paletteHits=costs.paletteHits;result.paletteBytes=costs.paletteBytes;
+        result.shaderCacheLookups=costs.shaderCacheLookups;result.shaderCacheHits=costs.shaderCacheHits;
+        result.shaderCompiles=costs.shaderCompiles;result.shaderCompileNanoseconds=costs.shaderCompileNanoseconds;
+        result.textureUploads=costs.textureUploads;result.textureBytes=costs.textureBytes;
+        result.queriesCreated=costs.queriesCreated;result.gpuQueryObjects=costs.gpuQueryObjects;
+        result.queryWaitNanoseconds=costs.queryWaitNanoseconds;
+        result.fragmentCounterWaitNanoseconds=costs.fragmentCounterWaitNanoseconds;
+        result.maskedClears=costs.maskedClears;result.maskedPixels=costs.maskedPixels;
+        const auto phase=[&](unsigned index) {
+            return Dx11GpuTimingPhase{diagnostics.gpuSamples[index],
+                diagnostics.gpuSamples[index]?diagnostics.gpuMilliseconds[index]/double(diagnostics.gpuSamples[index]):0.0};
+        };
+        result.frame=phase(0);result.clear=phase(1);result.collect=phase(2);result.copy=phase(3);result.resolve=phase(4);
+        result.gpuDropped=diagnostics.gpuDropped;result.gpuInvalid=diagnostics.gpuInvalid;return result;
+    }
+    void finishDiagnosticFrameForTesting() {finishGpuFrame();}
+    void pollDiagnosticFramesForTesting() {pollGpuFrames();}
     std::array<uint64_t,3> fragmentCountsForTesting() const {return fragmentCounts;}
     std::array<uint64_t,4> fragmentPoolForTesting() const {
         return {fragmentLists?fragmentLists->capacity:0,fragmentAllocations,
@@ -646,19 +903,30 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         fragmentParameters={desc.Width,desc.Height,capacity,0,
             desc.Format==DXGI_FORMAT_R10G10B10A2_UNORM?1023.f:255.f,
             desc.Format==DXGI_FORMAT_R10G10B10A2_UNORM?3.f:255.f,capacity/4};
+        ensureGpuFrame();
+        if(diagnostics.activeFrame<GpuFrameRingSize) {
+            auto& frame=diagnostics.frames[diagnostics.activeFrame];
+            frame.listRecording=!frame.listClaimed;frame.listClaimed=true;
+        }
+        markGpuTimestamp(GpuClearPhase,false);
         const UINT zero[4]={};context->ClearUnorderedAccessViewUint(fragmentLists->heads.view,zero);
         context->ClearUnorderedAccessViewUint(fragmentLists->status.view,zero);
+        markGpuTimestamp(GpuClearPhase,true);markGpuTimestamp(GpuCollectPhase,false);
         fragmentColor=color;fragmentListFailed=false;fragmentCollectActive=true;++fragmentCounts[0];
         bindFragmentViews(nullptr);return true;
     }
     bool endFragmentList() override {
         if(!fragmentCollectActive)throw FlycastException("No active Hikaru DX11 fragment-list collection");
-        fragmentCollectActive=false;finishFragmentBindings();
+        fragmentCollectActive=false;finishFragmentBindings();markGpuTimestamp(GpuCollectPhase,true);
         // Map(READ) waits for this tiny copy and the preceding UAV writes. The
         // opaque image is still untouched, including on overflow or bad draws.
         context->CopyResource(fragmentLists->readback,fragmentLists->status.buffer);
         D3D11_MAPPED_SUBRESOURCE mapped{};
-        checkResult(context->Map(fragmentLists->readback,0,D3D11_MAP_READ,0,&mapped),"fragment counter map");
+        HRESULT mapResult;
+        const auto mapStarted=diagnostics.enabled?DiagnosticClock::now():DiagnosticClock::time_point{};
+        mapResult=context->Map(fragmentLists->readback,0,D3D11_MAP_READ,0,&mapped);
+        if(diagnostics.enabled)diagnostics.costs.fragmentCounterWaitNanoseconds+=elapsedNanoseconds(mapStarted);
+        checkResult(mapResult,"fragment counter map");
         std::array<uint32_t,4> status{};std::memcpy(status.data(),mapped.pData,sizeof(status));
         context->Unmap(fragmentLists->readback,0);
         const bool failed=fragmentListFailed||status[1]||status[0]>fragmentLists->capacity;
@@ -671,6 +939,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
                 fragmentOverflowWarned=true;
             }
             traceFragmentEnd(status[0],true);
+            if(diagnostics.activeFrame<GpuFrameRingSize)diagnostics.frames[diagnostics.activeFrame].listRecording=false;
             fragmentLists.reset();return false;
         }
         hikaru_fragment_pool_observe(&fragmentPoolPolicy,status[0],fragmentLists->capacity);
@@ -679,7 +948,9 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             auto& target=image(fragmentColor);
             // Copy only mip zero: a color target can own a mip chain, whereas
             // the preserved background intentionally has a single level.
+            markGpuTimestamp(GpuCopyPhase,false);
             context->CopySubresourceRegion(fragmentLists->background.texture,0,0,0,0,target.texture,0,nullptr);
+            markGpuTimestamp(GpuCopyPhase,true);markGpuTimestamp(GpuResolvePhase,false);
             bindFragmentViews(target.target);
             Draw state;state.color=fragmentColor;state.depthTest=state.depthWrite=false;state.blend=false;state.cull=false;
             state.viewport={0,0,GLint(fragmentParameters.width),GLint(fragmentParameters.height)};
@@ -690,9 +961,10 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             context->GSSetShader(nullptr,nullptr,0);context->HSSetShader(nullptr,nullptr,0);context->DSSetShader(nullptr,nullptr,0);
             bindFragmentConstants();
             context->PSSetShaderResources(0,1,&fragmentLists->background.view.get());boundInputs[0]=fragmentLists->background.view;
-            context->Draw(3,0);++fragmentResolves;
+            context->Draw(3,0);markGpuTimestamp(GpuResolvePhase,true);++fragmentResolves;
             finishFragmentBindings();
         }
+        if(diagnostics.activeFrame<GpuFrameRingSize)diagnostics.frames[diagnostics.activeFrame].listRecording=false;
         traceFragmentEnd(status[0],false);return true;
     }
     bool supportsDrawPalette() const override {return true;}
@@ -720,7 +992,11 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         else bindingsDirty=true;
         if(!compatible){images.erase(id);images.emplace(id,makeImage(id,info));}
         auto& target=image(id);if(level>=target.description.MipLevels)throw FlycastException("Hikaru DX11 mip exceeds texture storage");
-        if(pixels){if(depth)throw FlycastException("Hikaru DX11 CPU depth uploads are unsupported");context->UpdateSubresource(target.texture,level,nullptr,pixels,width*UINT(pixelBytes),0);}
+        if(pixels) {
+            if(depth)throw FlycastException("Hikaru DX11 CPU depth uploads are unsupported");
+            context->UpdateSubresource(target.texture,level,nullptr,pixels,width*UINT(pixelBytes),0);
+            if(diagnostics.enabled) {++diagnostics.costs.textureUploads;diagnostics.costs.textureBytes+=bytes;}
+        }
         target.initialized[level]=true;
     }
     void eraseTexture(unsigned id) override {
@@ -733,7 +1009,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
     }
     void clear(const Draw& draw,GLbitfield mask,const Vec4& color,float depth) override {
         if(fragmentCollectActive)throw FlycastException("Hikaru DX11 clear during fragment collection");
-        endQuerySegment();
+        ensureGpuFrame();endQuerySegment();
         auto& target=image(draw.color);const bool colors=(mask&GL_COLOR_BUFFER_BIT)!=0;
         const bool z=(mask&GL_DEPTH_BUFFER_BIT)&&draw.depth&&draw.depthWrite;
         if(!colors&&!z)return;
@@ -754,6 +1030,20 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         context->IASetInputLayout(nullptr);context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context->VSSetShader(clearVertex,nullptr,0);context->PSSetShader(target.description.Format==DXGI_FORMAT_R32G32_UINT?clearIntegerPixel:clearPixel,nullptr,0);
         context->PSSetConstantBuffers(0,1,&pixelUniformBuffer.get());context->Draw(3,0);bindingsDirty=true;
+        if(diagnostics.enabled&&colors&&!allChannels) {
+            ++diagnostics.costs.maskedClears;
+            uint64_t width=target.description.Width,height=target.description.Height;
+            if(draw.scissorEnabled) {
+                const auto clippedExtent=[](int origin,int extent,unsigned limit) {
+                    const int64_t first=std::clamp<int64_t>(origin,0,limit);
+                    const int64_t last=std::clamp<int64_t>(int64_t(origin)+std::max(0,extent),0,limit);
+                    return uint64_t(std::max<int64_t>(0,last-first));
+                };
+                width=clippedExtent(draw.scissor[0],draw.scissor[2],target.description.Width);
+                height=clippedExtent(draw.scissor[1],draw.scissor[3],target.description.Height);
+            }
+            diagnostics.costs.maskedPixels+=width*height;
+        }
     }
     void draw(const Draw& draw) override {
         const bool packed=!draw.packedVertices.empty();
@@ -774,6 +1064,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             }
             primitives=uint32_t(primitiveCount);
         }
+        ensureGpuFrame();
         const size_t bytes=count*stride;
         if(vertexCapacity<bytes){vertexCapacity=std::max(size_t(1024*1024),bytes);vertexBuffer=buffer(vertexCapacity,D3D11_BIND_VERTEX_BUFFER);vertexOffset=0;}
         // Scalar, packed and bitmap draws share a stream. Align to the
@@ -782,6 +1073,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         if(vertexOffset+bytes>vertexCapacity)vertexOffset=0;
         const void* vertices=packed?static_cast<const void*>(draw.packedVertices.data()):draw.vertices.data();
         upload(vertexBuffer,vertices,bytes,vertexOffset?D3D11_MAP_WRITE_NO_OVERWRITE:D3D11_MAP_WRITE_DISCARD,vertexOffset);
+        if(diagnostics.enabled) {++diagnostics.costs.vertexUploads;diagnostics.costs.vertexBytes+=bytes;}
         // The VS reads the five matrices and clip-Y inversion; the PS reads
         // the material/light tail. Preserve the HLSL layout in both buffers,
         // but do not rename/re-upload lighting for each new model transform.
@@ -809,6 +1101,13 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             upload(pixelUniformBuffer,data+materialOffset,sizeof(Uniforms)-materialOffset,mode,pixelConstantsOffset+materialOffset);
             pixelUniformsValid=true;
         }
+        if(diagnostics.enabled) {
+            if(vertexChanged||pixelChanged) {
+                ++diagnostics.costs.uniformUploads;
+                if(vertexChanged)diagnostics.costs.uniformBytes+=materialOffset+sizeof(uniforms.inverted);
+                if(pixelChanged)diagnostics.costs.uniformBytes+=sizeof(Uniforms)-materialOffset;
+            } else ++diagnostics.costs.uniformHits;
+        }
         uploadedUniforms=uniforms;
         if(!draw.palette.empty()) {
             for(size_t i=0;i<count;++i) {
@@ -816,10 +1115,12 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
                 if(!std::isfinite(index)||index<0||index>=draw.palette.size()||std::floor(index)!=index)
                     throw FlycastException("Invalid Hikaru DX11 draw palette index");
             }
-            if(uploadedPaletteSize!=draw.palette.size()||std::memcmp(uploadedPalette.data(),draw.palette.data(),draw.palette.size()*sizeof(DrawRecord))!=0) {
-                upload(paletteBuffer,draw.palette.data(),draw.palette.size()*sizeof(DrawRecord));
+            const size_t paletteBytes=draw.palette.size()*sizeof(DrawRecord);
+            if(uploadedPaletteSize!=draw.palette.size()||std::memcmp(uploadedPalette.data(),draw.palette.data(),paletteBytes)!=0) {
+                upload(paletteBuffer,draw.palette.data(),paletteBytes);
                 std::copy(draw.palette.begin(),draw.palette.end(),uploadedPalette.begin());uploadedPaletteSize=draw.palette.size();
-            }
+                if(diagnostics.enabled) {++diagnostics.costs.paletteUploads;diagnostics.costs.paletteBytes+=paletteBytes;}
+            } else if(diagnostics.enabled)++diagnostics.costs.paletteHits;
         }
         bindTargets(draw);bindStates(draw);
         const unsigned vertexKind=(packed?3:0)+(draw.bitmap?2:draw.palette.empty()?0:1);
@@ -867,10 +1168,13 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         if(bindingsDirty||sampling!=boundSamplers){context->PSSetSamplers(0,UINT(sampling.size()),sampling.data());boundSamplers=sampling;}
         if(occlusionActive&&!queryOpen) {
             D3D11_QUERY_DESC desc{D3D11_QUERY_OCCLUSION,0};ComPtr<ID3D11Query> query;
-            checkResult(device->CreateQuery(&desc,&query.get()),"occlusion query");queries.push_back(std::move(query));context->Begin(queries.back());queryOpen=true;
+            checkResult(device->CreateQuery(&desc,&query.get()),"occlusion query");
+            if(diagnostics.enabled)++diagnostics.costs.queriesCreated;
+            queries.push_back(std::move(query));context->Begin(queries.back());queryOpen=true;
         }
         if(fragmentCollectActive)bindFragmentConstants();
         context->Draw(UINT(count),UINT(vertexOffset/stride));vertexOffset+=bytes;bindingsDirty=false;
+        if(diagnostics.enabled)++diagnostics.costs.draws;
         if(fragmentCollectActive)fragmentParameters.orderBase+=primitives;
     }
     void readPixels(unsigned id,int x,int y,int width,int height,uint8_t* rgba) override {
@@ -907,6 +1211,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
     }
     bool occlusionResult() override {
         if(pendingOcclusions.empty())throw FlycastException("No pending Hikaru DX11 visibility query");
+        const auto waitStarted=diagnostics.enabled?DiagnosticClock::now():DiagnosticClock::time_point{};
         auto pending=std::move(pendingOcclusions.front());pendingOcclusions.pop_front();
         bool visible=false;
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
@@ -918,15 +1223,20 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             }
             checkResult(result,"visibility query result");visible|=samples!=0;
         }
+        if(diagnostics.enabled)diagnostics.costs.queryWaitNanoseconds+=elapsedNanoseconds(waitStarted);
         return visible;
     }
     bool endOcclusion() override { finishOcclusion(); return occlusionResult(); }
     void present(unsigned width,unsigned height) override {
         if(fragmentCollectActive)throw FlycastException("Hikaru DX11 presentation during fragment collection");
         completePixelCompilation(false);
-        auto& output=image(0);if(output.description.Width!=width||output.description.Height!=height)return;
+        auto& output=image(0);
+        if(output.description.Width!=width||output.description.Height!=height){finishGpuFrame(false);return;}
         if(!owner)throw FlycastException("Hikaru DX11 presenter is unavailable");
-        unbindInputs();unbindTargets();owner->presentFrame(output.view);bindingsDirty=true;
+        unbindInputs();unbindTargets();
+        // Timestamp deltas are elapsed command intervals; close before Present to exclude display time.
+        finishGpuFrame();owner->presentFrame(output.view);bindingsDirty=true;
+        pollGpuFrames();presentDiagnostics();
     }
 };
 }
@@ -943,6 +1253,9 @@ std::unique_ptr<Backend> makeBackgroundDx11BackendForTesting(ID3D11Device* devic
     return std::make_unique<Dx11Backend>(device,context,compiler,nullptr,true,true);
 }
 void completeDx11CompilationForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).completeCompilationForTesting();}
+Dx11DiagnosticsSnapshot dx11DiagnosticsForTesting(const Backend& backend) {return static_cast<const Dx11Backend&>(backend).diagnosticsForTesting();}
+void finishDx11DiagnosticFrameForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).finishDiagnosticFrameForTesting();}
+void pollDx11DiagnosticFramesForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).pollDiagnosticFramesForTesting();}
 std::array<uint64_t,3> dx11FragmentCountsForTesting(const Backend& backend) {return static_cast<const Dx11Backend&>(backend).fragmentCountsForTesting();}
 std::array<uint64_t,4> dx11FragmentPoolForTesting(const Backend& backend) {return static_cast<const Dx11Backend&>(backend).fragmentPoolForTesting();}
 void forceDx11GeneralFragmentResolveForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).forceGeneralFragmentResolveForTesting();}

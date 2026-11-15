@@ -763,7 +763,10 @@ void buildFrame(FrameSlot& frame, bool workerThread) {
 }
 }
 static bool renderFrame() {
-    static const bool traceTiming = std::getenv("HIKARU_TRACE_TIMING") != nullptr;
+    static const bool traceTiming = [] {
+        const char* value = std::getenv("HIKARU_TRACE_TIMING");
+        return value && value[0] && (value[0] != '0' || value[1] != '\0');
+    }();
     const auto renderStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     const bool threaded = config::ThreadedRendering.get();
     const auto workerWaitStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};

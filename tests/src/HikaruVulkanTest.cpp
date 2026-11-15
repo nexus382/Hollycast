@@ -36,6 +36,10 @@ void limitVulkanPipelineCacheForTesting(Backend&,size_t);
 std::array<uint64_t,8> vulkanReuseCountsForTesting(const Backend&);
 void enableVulkanWaitProfilingForTesting(Backend&);
 std::array<uint64_t,4> vulkanFragmentWaitCountsForTesting(const Backend&);
+bool enableVulkanFrameGpuTimingForTesting(Backend&);
+void finishVulkanDiagnosticFrameForTesting(Backend&);
+std::array<uint64_t,3> vulkanFrameGpuSamplesForTesting(Backend&);
+double vulkanFrameGpuMsForTesting(Backend&);
 bool enableVulkanFragmentGpuTimingForTesting(Backend&);
 std::array<uint64_t,4> vulkanFragmentGpuSamplesForTesting(Backend&);
 std::array<double,4> vulkanFragmentGpuTimesForTesting(Backend&);
@@ -350,6 +354,41 @@ TEST_F(HikaruVulkanTest, FragmentReuseRetiresBeforeBudgetChangesAndOverflow) {
     EXPECT_EQ(vulkanFragmentPoolForTesting(*backend)[1],3u);
     equalPixels(result,pixels(*backend),"empty collection after overflow recovery");
 }
+TEST_F(HikaruVulkanTest, FrameGpuDiagnosticsRetireWithSubmissionGenerationWithoutChangingPixels) {
+    auto reference=makeVulkanBackendForTesting(true);
+    auto timed=makeVulkanBackendForTesting(true);
+    allocate(*reference);allocate(*timed);
+    if(!enableVulkanFrameGpuTimingForTesting(*timed))GTEST_SKIP()<<"queue has no timestamp support";
+    for(unsigned frame=0;frame<8;++frame) {
+        auto draw=mesh();draw.depthTest=false;
+        for(auto& vertex:draw.vertices)vertex.diffuse[0]=float(frame+1)/16.f;
+        clear(*reference);reference->draw(draw);const auto expected=pixels(*reference);
+        clear(*timed);timed->draw(draw);
+        finishVulkanDiagnosticFrameForTesting(*timed);
+        // The fixture's ordinary color readback retires the submission. The
+        // diagnostic poll itself must never wait or reuse a stale query result.
+        equalPixels(expected,pixels(*timed),"Vulkan frame GPU diagnostics preserve pixels",1);
+        const auto samples=vulkanFrameGpuSamplesForTesting(*timed);
+        EXPECT_EQ(samples[0],frame+1);EXPECT_EQ(samples[1],0u);EXPECT_EQ(samples[2],0u);
+        EXPECT_TRUE(std::isfinite(vulkanFrameGpuMsForTesting(*timed)));
+        EXPECT_GE(vulkanFrameGpuMsForTesting(*timed),0);
+    }
+    finishVulkanDiagnosticFrameForTesting(*timed);
+    (void)pixels(*timed);
+    EXPECT_EQ(vulkanFrameGpuSamplesForTesting(*timed)[0],8u)<<"empty finish must not fabricate a GPU frame";
+
+    clear(*timed);timed->draw(mesh());
+    timed->present(15,16); // A resize can skip presentation after drawing began.
+    (void)pixels(*timed);
+    auto samples=vulkanFrameGpuSamplesForTesting(*timed);
+    EXPECT_EQ(samples[0],8u);EXPECT_EQ(samples[2],1u);
+    clear(*timed);timed->draw(mesh());
+    finishVulkanDiagnosticFrameForTesting(*timed);
+    (void)pixels(*timed);
+    samples=vulkanFrameGpuSamplesForTesting(*timed);
+    EXPECT_EQ(samples[0],9u);EXPECT_EQ(samples[2],1u)<<"timing must recover after the skipped presentation";
+}
+
 TEST_F(HikaruVulkanTest, FragmentGpuTimestampsRetireAcrossEmptyCollectionsAndResizes) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     if(!enableVulkanFragmentGpuTimingForTesting(*backend))GTEST_SKIP()<<"queue has no timestamp support";

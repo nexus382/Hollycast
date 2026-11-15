@@ -25,6 +25,10 @@
 
 namespace hikaru::graphics {
 namespace {
+bool diagnosticFlagEnabled(const char* name) {
+    const char* value=std::getenv(name);
+    return value&&value[0]&&std::strcmp(value,"0")!=0;
+}
 vk::Format colorFormat(GLenum format) {
     switch (format) {
     case GL_RGB10_A2: return vk::Format::eA2B10G10R10UnormPack32;
@@ -139,6 +143,7 @@ class VulkanBackend final : public Backend {
         // after the submission fence. Never use UniqueDescriptorSet here.
         vk::UniqueDescriptorPool descriptors;
         unsigned drawCount = 0;
+        uint64_t serial = 0;
         vk::DeviceSize streamBytes() const {
             return (vertexBuffer?vertexBuffer->storage.bufferSize:0)+
                 (uniformBuffer?uniformBuffer->storage.bufferSize:0)+
@@ -199,8 +204,16 @@ class VulkanBackend final : public Backend {
         uint32_t pending=0;
         uint64_t mask=0;
         double period=0;
-        bool enabled=false,recording=false;
+        bool enabled=false,recording=false,claimed=false;
     } fragmentGpu;
+    struct FrameGpuTimer {
+        vk::UniqueQueryPool pool;
+        std::array<uint64_t,4> pending{};
+        std::array<bool,4> discarded{};
+        int active=-1,ending=-1;
+        bool attempted=false,requested=diagnosticFlagEnabled("HIKARU_TRACE_GPU_TIMING");
+    } frameGpu;
+    uint64_t submissionSerial=0,retiredSerial=0;
     HikaruFragmentListParameters fragmentParameters{};
     bool fragmentListSupported=false,fragmentCollectActive=false,fragmentListFailed=false;
     bool fragmentOverflowWarned=false,fragmentSmallList=true;
@@ -275,14 +288,14 @@ class VulkanBackend final : public Backend {
     std::optional<std::array<float,2>> boundDepthBias;
     // Opt-in diagnostics distinguish CPU pipeline work from queue backpressure.
     struct Timings {
-        bool enabled=std::getenv("HIKARU_TRACE_TIMING")!=nullptr||std::getenv("HIKARU_TRACE_GPU_TIMING")!=nullptr;
+        bool enabled=diagnosticFlagEnabled("HIKARU_TRACE_TIMING")||diagnosticFlagEnabled("HIKARU_TRACE_GPU_TIMING");
         enum class WaitReason { Readback, FragmentStartup, FragmentStorage, FragmentCounter, StreamBudget, BatchSlot, Count };
         std::array<double,size_t(WaitReason::Count)> waitReasonsMs{};
         std::array<uint64_t,size_t(WaitReason::Count)> waitCounts{};
         uint64_t fragmentReuses=0;
         unsigned frames=0,draws=0,palettes=0,pipelines=0,passes=0,batches=0,queries=0,uploads=0;
         unsigned descriptorSets=0,descriptorHits=0,packedDraws=0,vertexUploads=0,geometryHits=0;
-        uint64_t vertexBytes=0,listFragments=0;
+        uint64_t vertexBytes=0,listFragments=0,textureUploads=0,textureBytes=0;
         uint64_t uniformUploads=0,uniformHits=0,uniformBytes=0,paletteUploads=0,paletteHits=0,paletteBytes=0;
         uint64_t pipelineLookups=0,pipelineFastHits=0,maskedClears=0,maskedPixels=0;
         unsigned listResolves=0,listOverflows=0,listCapacity=0,listPeakFragments=0;
@@ -291,6 +304,8 @@ class VulkanBackend final : public Backend {
         bool gpuTiming=false;
         std::array<double,4> gpuMs{};
         std::array<uint64_t,4> gpuSamples{};
+        double frameGpuMs=0;
+        uint64_t frameGpuSamples=0,frameGpuDropped=0,frameGpuInvalid=0;
         struct Span {
             double& total; bool enabled;
             std::chrono::steady_clock::time_point start;
@@ -302,7 +317,18 @@ class VulkanBackend final : public Backend {
             if(!enabled||++frames<60)return;
             std::fprintf(stderr,"Hikaru Vulkan timing: draws=%u palettes=%u pipelines=%u passes=%u batches=%u queries=%u uploads=%u wait_ms=%.3f pipeline_ms=%.3f submit_ms=%.3f descriptor_ms=%.3f descriptor_sets=%u descriptor_hits=%u packed_draws=%u vertex_uploads=%u geometry_hits=%u vertex_bytes=%llu\n",draws,palettes,pipelines,passes,batches,queries,uploads,waitMs/frames,pipelineMs/frames,submitMs/frames,descriptorMs/frames,descriptorSets,descriptorHits,packedDraws,vertexUploads,geometryHits,static_cast<unsigned long long>(vertexBytes));
             std::fprintf(stderr,"Hikaru Vulkan fragment lists: resolves=%u overflows=%u fragments=%llu capacity=%u peak_used=%u pool_bytes=%llu allocations=%llu\n",listResolves,listOverflows,static_cast<unsigned long long>(listFragments),listCapacity,listPeakFragments,static_cast<unsigned long long>(listPoolBytes),static_cast<unsigned long long>(poolAllocations));
-            if(gpuTiming)std::fprintf(stderr,"Hikaru Vulkan fragment GPU timing: clear_ms=%.3f collect_ms=%.3f copy_ms=%.3f resolve_ms=%.3f clear_samples=%llu collect_samples=%llu copy_samples=%llu resolve_samples=%llu\n",gpuMs[0]/frames,gpuMs[1]/frames,gpuMs[2]/frames,gpuMs[3]/frames,static_cast<unsigned long long>(gpuSamples[0]),static_cast<unsigned long long>(gpuSamples[1]),static_cast<unsigned long long>(gpuSamples[2]),static_cast<unsigned long long>(gpuSamples[3]));
+            if(gpuTiming) {
+                // Query slots can still be in flight across report windows.
+                // Average only completed samples; missing data is not zero GPU time.
+                constexpr const char* names[]={"clear","collect","copy","resolve"};
+                std::fprintf(stderr,"Hikaru Vulkan fragment GPU timing:");
+                for(unsigned phase=0;phase<gpuSamples.size();++phase) {
+                    if(gpuSamples[phase])std::fprintf(stderr," %s_ms=%.3f",names[phase],gpuMs[phase]/gpuSamples[phase]);
+                    else std::fprintf(stderr," %s_ms=unavailable",names[phase]);
+                    std::fprintf(stderr," %s_samples=%llu",names[phase],static_cast<unsigned long long>(gpuSamples[phase]));
+                }
+                std::fputc('\n',stderr);
+            }
             std::fprintf(stderr,"Hikaru Vulkan waits: readback_ms=%.3f startup_ms=%.3f storage_ms=%.3f counter_ms=%.3f stream_ms=%.3f slots_ms=%.3f readback_waits=%llu startup_waits=%llu storage_waits=%llu counter_waits=%llu stream_waits=%llu slots_waits=%llu reused_collections=%llu\n",
                 waitReasonsMs[0]/frames,waitReasonsMs[1]/frames,waitReasonsMs[2]/frames,waitReasonsMs[3]/frames,waitReasonsMs[4]/frames,waitReasonsMs[5]/frames,
                 static_cast<unsigned long long>(waitCounts[0]),static_cast<unsigned long long>(waitCounts[1]),static_cast<unsigned long long>(waitCounts[2]),
@@ -313,12 +339,23 @@ class VulkanBackend final : public Backend {
                 static_cast<unsigned long long>(paletteUploads),static_cast<unsigned long long>(paletteHits),static_cast<unsigned long long>(paletteBytes),
                 static_cast<unsigned long long>(pipelineLookups),static_cast<unsigned long long>(pipelineFastHits),
                 static_cast<unsigned long long>(maskedClears),static_cast<unsigned long long>(maskedPixels));
+            std::fprintf(stderr,"Hikaru Vulkan costs: texture_uploads=%llu texture_bytes=%llu\n",
+                static_cast<unsigned long long>(textureUploads),static_cast<unsigned long long>(textureBytes));
             uniformUploads=uniformHits=uniformBytes=paletteUploads=paletteHits=paletteBytes=0;
             pipelineLookups=pipelineFastHits=maskedClears=maskedPixels=0;
+            if(gpuTiming) {
+                std::fprintf(stderr,"Hikaru Vulkan GPU timing: frame_ms=");
+                if(frameGpuSamples)std::fprintf(stderr,"%.3f",frameGpuMs/frameGpuSamples);
+                else std::fputs("unavailable",stderr);
+                std::fprintf(stderr," frame_samples=%llu dropped=%llu invalid=%llu\n",
+                    static_cast<unsigned long long>(frameGpuSamples),static_cast<unsigned long long>(frameGpuDropped),
+                    static_cast<unsigned long long>(frameGpuInvalid));
+            }
+            frameGpuMs=0;frameGpuSamples=frameGpuDropped=frameGpuInvalid=0;
             gpuMs={};gpuSamples={};waitReasonsMs={};waitCounts={};fragmentReuses=0;
             listResolves=listOverflows=listPeakFragments=0;listFragments=0;
             frames=draws=palettes=pipelines=passes=batches=queries=uploads=descriptorSets=descriptorHits=packedDraws=vertexUploads=geometryHits=0;
-            vertexBytes=0;waitMs=pipelineMs=submitMs=descriptorMs=0;
+            vertexBytes=textureUploads=textureBytes=0;waitMs=pipelineMs=submitMs=descriptorMs=0;
         }
     } timing;
     bool renderPassOpen=false;
@@ -355,6 +392,7 @@ class VulkanBackend final : public Backend {
             if(status==vk::Result::eNotReady)break;
             if(status!=vk::Result::eSuccess)throw std::runtime_error("Failed querying Hikaru Vulkan draw fence");
             auto batch=std::move(pendingBatches.front());pendingBatches.pop_front();
+            retiredSerial=std::max(retiredSerial,batch.serial);
             // The fence covers all commands that reference these resources.
             if(batch.descriptors)device.resetDescriptorPool(*batch.descriptors);
             batch.retiredFramebuffers.clear();batch.retiredPipelines.clear();batch.retiredImages.clear();batch.transfers.clear();
@@ -440,6 +478,11 @@ class VulkanBackend final : public Backend {
             auto& submitted=pendingBatches.back();
             Timings::Span measured(timing.submitMs,timing.enabled);
             ctx->SubmitCommandBuffers({*submitted.command},*submitted.fence);
+            submitted.serial=++submissionSerial;
+            if(frameGpu.ending>=0) {
+                frameGpu.pending[size_t(frameGpu.ending)]=submitted.serial;
+                frameGpu.active=frameGpu.ending=-1;
+            }
             if(timing.enabled)++timing.batches;
         } catch (...) {
             // Its retirement lists may still protect earlier queue work. Keep
@@ -689,6 +732,76 @@ class VulkanBackend final : public Backend {
         return *activeDescriptors;
     }
 
+    void pollFrameGpuTiming() {
+        if(!frameGpu.pool)return;
+        struct Result { uint64_t value=0,available=0; };
+        for(unsigned slot=0;slot<frameGpu.pending.size();++slot) {
+            const uint64_t serial=frameGpu.pending[slot];
+            if(!serial||serial>retiredSerial)continue;
+            if(frameGpu.discarded[slot]) {
+                ++timing.frameGpuInvalid;frameGpu.pending[slot]=0;frameGpu.discarded[slot]=false;
+                continue;
+            }
+            // Availability alone can still describe the previous generation
+            // until a recorded reset executes. The existing batch fence proves
+            // that this generation's reset and end timestamp have both retired.
+            std::array<Result,2> results{};
+            const auto status=device.getQueryPoolResults(*frameGpu.pool,slot*2,2,sizeof(results),
+                results.data(),sizeof(Result),vk::QueryResultFlagBits::e64|vk::QueryResultFlagBits::eWithAvailability);
+            if(status==vk::Result::eNotReady)continue;
+            if(status!=vk::Result::eSuccess)throw std::runtime_error("Failed reading Hikaru frame GPU timestamps");
+            if(!results[0].available||!results[1].available)continue;
+            if(fragmentGpu.mask==~uint64_t{0}&&results[1].value<results[0].value) {
+                ++timing.frameGpuInvalid;frameGpu.pending[slot]=0;continue;
+            }
+            const uint64_t ticks=(results[1].value-results[0].value)&fragmentGpu.mask;
+            const double ms=double(ticks)*fragmentGpu.period/1000000.0;
+            if(std::isfinite(ms)&&ms>=0) { timing.frameGpuMs+=ms;++timing.frameGpuSamples; }
+            else ++timing.frameGpuInvalid;
+            frameGpu.pending[slot]=0;
+        }
+    }
+    void beginFrameGpuTiming(vk::CommandBuffer cmd) {
+        if(!frameGpu.requested||frameGpu.attempted)return;
+        frameGpu.attempted=true;
+        // An abandoned frame can still own timestamps in the active batch.
+        // Let the next ordinary submission retire it; do not submit just for diagnostics.
+        if(frameGpu.ending>=0){++timing.frameGpuDropped;return;}
+        if(!enableFragmentGpuTiming()){frameGpu.requested=false;return;}
+        pollFrameGpuTiming();
+        if(!frameGpu.pool) {
+            try { frameGpu.pool=device.createQueryPoolUnique({{},vk::QueryType::eTimestamp,8}); }
+            catch(const vk::OutOfDeviceMemoryError&) {
+                frameGpu.requested=false;
+                std::fprintf(stderr,"Hikaru Vulkan frame GPU timestamp allocation failed; rendering continues\n");
+                return;
+            }
+        }
+        for(unsigned slot=0;slot<frameGpu.pending.size();++slot)if(!frameGpu.pending[slot]) {
+            endRenderPass(cmd);
+            cmd.resetQueryPool(*frameGpu.pool,slot*2,2);
+            cmd.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe,*frameGpu.pool,slot*2);
+            frameGpu.active=int(slot);return;
+        }
+        ++timing.frameGpuDropped; // Keep all in-flight slots immutable; never wait for diagnostics.
+    }
+    void endFrameGpuTiming(vk::CommandBuffer cmd) {
+        if(frameGpu.active<0)return;
+        cmd.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe,*frameGpu.pool,unsigned(frameGpu.active)*2+1);
+        frameGpu.ending=frameGpu.active; // flushBatch assigns the actual submission serial on success.
+    }
+    void discardFrameGpuTiming() {
+        if(frameGpu.active>=0) {
+            const unsigned slot=unsigned(frameGpu.active);
+            frameGpu.discarded[slot]=true;
+            // Only the start endpoint exists. Its ordinary submission fence is
+            // enough to retire the slot; never read an unissued end endpoint.
+            if(activeCommand)frameGpu.ending=int(slot);
+            else frameGpu.pending[slot]=submissionSerial;
+            frameGpu.active=-1;
+        }
+        frameGpu.attempted=false;fragmentGpu.claimed=false;
+    }
     bool enableFragmentGpuTiming() {
         if(fragmentGpu.enabled)return true;
         const auto physical=ctx->GetPhysicalDevice();
@@ -722,6 +835,11 @@ class VulkanBackend final : public Backend {
     }
     void beginFragmentGpuTiming(vk::CommandBuffer cmd) {
         fragmentGpu.recording=false;
+        // Use the same first-transaction sampling rule as GL/DX when frame
+        // profiling is active. Ownerless transaction tests can still operate
+        // without a presentation boundary.
+        if(frameGpu.attempted&&fragmentGpu.claimed)return;
+        fragmentGpu.claimed=true;
         if(!fragmentGpu.enabled||fragmentGpu.pending)return;
         if(!fragmentGpu.pool) {
             try { fragmentGpu.pool=device.createQueryPoolUnique({{},vk::QueryType::eTimestamp,8}); }
@@ -1008,6 +1126,18 @@ public:
             timing.waitCounts[size_t(Timings::WaitReason::FragmentStorage)],
             timing.waitCounts[size_t(Timings::WaitReason::FragmentCounter)],timing.fragmentReuses};
     }
+    bool enableFrameGpuTimingForTesting() {
+        frameGpu.requested=enableFragmentGpuTiming();return frameGpu.requested;
+    }
+    void finishFrameGpuTimingForTesting() {
+        auto cmd=startBatch();endRenderPass(cmd);endFrameGpuTiming(cmd);flushBatch();
+        frameGpu.attempted=false;fragmentGpu.claimed=false;
+    }
+    std::array<uint64_t,3> frameGpuSamplesForTesting() {
+        reapCompletedDraws();pollFrameGpuTiming();
+        return {timing.frameGpuSamples,timing.frameGpuDropped,timing.frameGpuInvalid};
+    }
+    double frameGpuMsForTesting() { return timing.frameGpuMs; }
     bool enableFragmentGpuTimingForTesting() { return enableFragmentGpuTiming(); }
     std::array<uint64_t,4> fragmentGpuSamplesForTesting() {
         pollFragmentGpuTiming();return timing.gpuSamples;
@@ -1019,7 +1149,6 @@ public:
 #endif
     bool supportsTexturePalette() const override { return textureSlots==DrawPaletteSize; }
     void beginOcclusion() override {
-        if(timing.enabled)++timing.queries;
         if(occlusionActive)throw std::runtime_error("Nested Hikaru visibility query");
         // A query needs a pass boundary, while its results are collected only
         // after the existing final submission wait. Keep layers in one stream.
@@ -1051,7 +1180,7 @@ public:
         commandPool=device.createCommandPoolUnique({vk::CommandPoolCreateFlagBits::eTransient|vk::CommandPoolCreateFlagBits::eResetCommandBuffer,ctx->GetGraphicsQueueFamilyIndex()});
         const auto physical=ctx->GetPhysicalDevice();
         const auto limits=physical.getProperties().limits;
-        if(std::getenv("HIKARU_TRACE_GPU_TIMING")&&!enableFragmentGpuTiming())
+        if(diagnosticFlagEnabled("HIKARU_TRACE_GPU_TIMING")&&!enableFragmentGpuTiming())
             std::fprintf(stderr,"Hikaru Vulkan fragment GPU timing is unavailable on this queue\n");
         packedVerticesSupported=std::all_of(PackedFormats.begin(),PackedFormats.end(),[&](vk::Format format) {
             return bool(physical.getFormatProperties(format).bufferFeatures&vk::FormatFeatureFlagBits::eVertexBuffer);
@@ -1122,6 +1251,7 @@ public:
         if(depth)throw std::runtime_error("CPU uploads to Hikaru Vulkan depth textures are unsupported");
         auto staging=std::make_unique<BufferData>(bytes,vk::BufferUsageFlagBits::eTransferSrc);
         staging->upload(bytes,pixels);
+        if(timing.enabled){++timing.textureUploads;timing.textureBytes+=bytes;}
         auto cmd=startBatch();
         // End prior sampling before the transfer write; the shared queue and image barriers order later draws after the replacement.
         endRenderPass(cmd);
@@ -1154,6 +1284,7 @@ public:
         }
         if(!rect.extent.width||!rect.extent.height)return;
         auto cmd=startBatch();
+        beginFrameGpuTiming(cmd);
         // Clears must not contribute to an open visibility query.
         endRenderPass(cmd);
         barrier(cmd,c,vk::ImageLayout::eColorAttachmentOptimal);
@@ -1227,6 +1358,7 @@ public:
         if(d.palette.size()>DrawPaletteSize||(d.texturePalette&&(!supportsTexturePalette()||d.paletteTextures.size()!=d.palette.size()||d.paletteSampling.size()!=d.palette.size())))
             throw std::runtime_error("Invalid Hikaru Vulkan draw palette");
         auto cmd=startBatch();
+        beginFrameGpuTiming(cmd);
         const auto retained=[&] {
             return d.geometry&&activeVertexBuffer&&
                 activeVertexBuffer->geometryOffsets.find(d.geometry)!=activeVertexBuffer->geometryOffsets.end();
@@ -1384,6 +1516,7 @@ public:
             auto fb=framebuffer(d.color,depthId,target,z,rp,metadataId,metadata);
             if(occlusionActive) {
                 occlusionQueries.push_back(device.createQueryPoolUnique({{},vk::QueryType::eOcclusion,1}));
+                if(timing.enabled)++timing.queries;
                 cmd.resetQueryPool(*occlusionQueries.back(),0,1);
             }
             vk::Rect2D area({0,0},target.extent);cmd.beginRenderPass({rp,fb,area,0,nullptr},vk::SubpassContents::eInline);
@@ -1435,13 +1568,17 @@ public:
         }
     }
     void present(unsigned w,unsigned h) override {
-        Image& out=image(0);if(out.extent.width!=w||out.extent.height!=h)return;
+        Image& out=image(0);
+        if(out.extent.width!=w||out.extent.height!=h){discardFrameGpuTiming();return;}
         auto cmd=startBatch();
         endRenderPass(cmd);
         barrier(cmd,out,vk::ImageLayout::eShaderReadOnlyOptimal);
+        endFrameGpuTiming(cmd);
         flushBatch();
+        frameGpu.attempted=false;fragmentGpu.claimed=false;
         ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f);
         ++geometryFrame;
+        if(frameGpu.requested){reapCompletedDraws();pollFrameGpuTiming();}
         pollFragmentGpuTiming();
         timing.present();
     }
@@ -1470,6 +1607,18 @@ void enableVulkanWaitProfilingForTesting(Backend& backend) {
 }
 std::array<uint64_t,4> vulkanFragmentWaitCountsForTesting(const Backend& backend) {
     return static_cast<const VulkanBackend&>(backend).fragmentWaitCountsForTesting();
+}
+bool enableVulkanFrameGpuTimingForTesting(Backend& backend) {
+    return static_cast<VulkanBackend&>(backend).enableFrameGpuTimingForTesting();
+}
+void finishVulkanDiagnosticFrameForTesting(Backend& backend) {
+    static_cast<VulkanBackend&>(backend).finishFrameGpuTimingForTesting();
+}
+std::array<uint64_t,3> vulkanFrameGpuSamplesForTesting(Backend& backend) {
+    return static_cast<VulkanBackend&>(backend).frameGpuSamplesForTesting();
+}
+double vulkanFrameGpuMsForTesting(Backend& backend) {
+    return static_cast<VulkanBackend&>(backend).frameGpuMsForTesting();
 }
 bool enableVulkanFragmentGpuTimingForTesting(Backend& backend) {
     return static_cast<VulkanBackend&>(backend).enableFragmentGpuTimingForTesting();

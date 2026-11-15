@@ -68,8 +68,8 @@ Sources: [GL scene renderer](../../core/hw/hikaru/valkyrie/src/mach/hikaru/hikar
 | Reusing list buffers safely | Retained SSBOs with buffer-update/shader-storage barriers; GL object lifetime protects replacement; failed collection releases storage before peeling | No unchanged-storage startup wait; GPU barriers order reuse; descriptor/storage replacement still retires users | Retained structured UAV buffers; D3D orders reuse and owns submitted resource references | Preserve ownership guarantees using each API's mechanisms |
 | Overflow handling | Collection checks overflow before scene-color resolve and releases failed storage before peeling; fallback peeling retains its bounded-layer warning | Collection never commits partial color; overflow/unsupported collection falls back to peeling | Status staging readback before resolve; failed collection leaves scene intact and frees list storage before peeling | All three share transactional collection and the bounded peeling fallback |
 | Fragment scene backup/heads clear | GPU head/status clear per collection; full opaque-scene copy only after successful, nonempty collection | Same deferred scene-copy rule and full GPU head/status clears | GPU UAV head/status clears and deferred mip-zero scene copy | Region-based clears/copies need phase measurements before added complexity |
-| CPU phase diagnostics | Shared frontend/engine wall-time diagnostics | Shared diagnostics plus waits, uploads, descriptors, pools and pipeline counters | Shared frontend/engine wall-time diagnostics | Backend-level measurement detail is not at parity |
-| GPU phase diagnostics | No Hikaru-specific asynchronous phase timers found | Opt-in fragment clear/collect/copy/resolve timestamps | No Hikaru-specific timestamp/disjoint phase timers found | Add comparable nonblocking GPU diagnostics before cross-API bottleneck claims |
+| CPU cost diagnostics | Opt-in actual upload bytes, uniform/palette cache hits, program lookups/compile time, visibility-query allocation/wait and list-counter wait | Existing waits, uploads, descriptors, pools and pipeline counters; texture counters now distinguish actual transfers | Equivalent native upload/cache/compile/query/list-counter counters; async compile results consumed on graphics owner | Comparable categories with API-specific scope; see counter rules below |
+| GPU phase diagnostics | Opt-in desktop timer-query ring: frame and list clear/collect/copy/resolve | Frame queries retired by existing submission fences, plus list phase timestamps | Opt-in timestamp/disjoint-query ring: frame and list phases | Nonblocking polling; unavailable/busy samples never become zero-duration measurements |
 
 Key source anchors: GL packed chunks/VAOs at lines 3269, 3373-3402 and upload_vertex_data; GL program/uniform caches at 1424-1605, 2064-2110 and 2257-2277. Vulkan streaming/retirement at 332-435, pipeline at 584-624, fragment pool/timer/collection at 643-930, masked clear at 1083-1099, per-draw uploads/descriptors at 1176-1265. DX state caches at 241-296, compilation at 298-354, capability fallback at 403-417, clears at 506-530, constants/palettes at 551-585, query allocation/results at 632-683.
 
@@ -77,7 +77,7 @@ Key source anchors: GL packed chunks/VAOs at lines 3269, 3373-3402 and upload_ve
 
 Frame scheduling, texture/bitmap reuse, ordinary state caches and compact vertex paths benefit all sorting modes where those operations are used. Per Triangle's stable triangle ordering and compatible-run palettes are implemented in the shared C renderer for all three APIs. Per Strip preserves whole-strip ordering. Fragment lists implement Per Pixel sorting; applying that algorithm to Per Triangle or Per Strip would change the selected mode's semantics.
 
-The three desktop list paths now share ordering, blending and adaptive pool semantics. Their peeling fallbacks and GL/GLES still benefit from shared peeling improvements. Backend counters and GPU phase timing remain uneven, so performance equality must be measured rather than inferred from matching feature lists.
+The three desktop list paths now share ordering, blending and adaptive pool semantics. Their peeling fallbacks and GL/GLES still benefit from shared peeling improvements. Opt-in backend counters and GPU timestamps now expose comparable cost categories; performance equality must still be measured rather than inferred from matching feature lists.
 
 ## Per Pixel visual and setting semantics
 
@@ -93,13 +93,41 @@ The current implementations are nevertheless not interchangeable in every settin
 
 Maximum Layers applies to peeling/fallback; Pixel Buffer Size bounds both algorithms. Compare algorithms with sufficient storage and check overflow diagnostics; identical Per Pixel menu selections alone do not guarantee identical retained depth.
 
+## Diagnostic scope
+
+Unset, empty or `0` trace flags keep diagnostics off. `HIKARU_TRACE_TIMING=1`
+enables CPU costs; `HIKARU_TRACE_GPU_TIMING=1` also requests GPU timestamps.
+No diagnostic clocks or queries are used in ordinary runs. Reports cover
+60 presented/rendered frames, with GPU averages divided by each phase's
+completed-sample count. A full ring drops the new sample; it never waits.
+
+The frame interval spans submitted render commands, not the whole emulator loop
+or pure GPU busy time. CPU submission gaps can be included. GL begins at shared
+scene drawing; native backends begin at their first clear/draw. The list phases
+sample the first attempted transaction per frame, including failed collection.
+Copy/resolve are unavailable for empty or failed collection. Unsupported timers
+and missing samples are explicit, rather than a fabricated zero.
+
+Upload bytes count requested payload, excluding driver padding and storage-only
+allocation. GL uses individual uniforms/palette arrays; native APIs upload stage
+constants and DrawRecord buffers, so their bytes and hit counts need not match.
+GL uniform hits count cached groups, DX hits count unchanged draw constants, and
+Vulkan counts reused batch ranges. GL masked-clear count is measured, but its
+pixel area is unavailable: viewport dimensions are not a valid clear extent.
+Query creation counts visibility queries separately from timer objects. Wait
+counters measure existing visibility/counter-readback waits; polling timestamp
+availability is never charged as a blocking visibility wait. Vulkan additionally
+reports submission-fence waits. Compilation timings cover actual program/shader
+or pipeline creation in each API; DX async results are attributed when consumed
+by the graphics owner. Startup and cache persistence differ between APIs.
+
 ## Implementation order
 
 Effort and risk are relative engineering estimates, not calendar promises or measured FPS gains.
 
 | Priority | Work | Effort / risk | Why and required evidence |
 | --- | --- | --- | --- |
-| 1 | Align diagnostics and count expensive paths | Medium / low | Add per-backend constant/palette bytes and skips, cache lookups/hits, masked clears/bytes, query creation/wait, compile time and GPU phase timing. Keep queries nonblocking and diagnostics opt-in. Use the shared frontend total for end-to-end comparison |
+| 1 (implemented) | Align diagnostics and count expensive paths | Medium / low | Opt-in counters and nonblocking frame/list timestamps now cover all three APIs. GL masked-clear pixel area remains unavailable. Use the shared frontend total for end-to-end comparison |
 | 2 (implemented) | Vulkan GPU channel-masked clears | Medium / medium | Remove the verified readback/edit/upload path. Count real usage first. Match GL/DX scissor, offscreen orientation, channel preservation, RGBA8/RGB10A2 rounding, depth-only/depth-write-disabled and following-draw state |
 | 3 (implemented) | Vulkan last-pipeline and same-batch constant/palette reuse | Small for pipeline; medium for uploads / medium lifetime risk | Reuse only immutable ranges owned by the current fence-protected batch. Invalidate shortcuts on eviction, slot recycle, resize and layout changes. Measure bytes saved, descriptor hits and total cost; do not replace correctness checks with mutable trust flags |
 | 4 (implemented) | Shared C texture/shading palette mode cache | Small / low-medium | Extend the existing per-program prefix cache. This reduces GL driver updates and native Device uniform updates from the same source change. Test unchanged, changed, shorter, regrown and A/B/A program sequences across APIs; preserve GLES fallback |
@@ -152,7 +180,7 @@ Final comparison windows used a 640x360 normal client area with WS_EX_NOACTIVATE
 
 1. Implemented — OpenGL fragment lists on explicitly supported devices: carry over the current Vulkan ordering, 16-byte node semantics, short-list/long-list sort, adaptive storage, transactional overflow fallback and safe reuse guarantees. Keep existing GL/GLES peeling support.
 2. Implemented — DX11 fragment lists using its native shader/storage/binding model, with the same budgets, ordering, rounding and fallback tests. The CPU parameter ABI and adaptive pool policy are shared across all three.
-3. Comparable diagnostics across all three APIs: constant/palette bytes and hits, expensive clear/query counts, compilation stalls and nonblocking GPU phase measurements. Use identical visible content and sufficient transparency storage for comparisons.
+3. Implemented — comparable opt-in CPU cost categories and nonblocking GPU frame/list measurements across all three APIs. Use identical visible content and sufficient transparency storage; retain the scope differences below.
 4. Smaller measured gaps: completed-query reuse/boolean occupancy in native backends, then compilation/prewarm work where traces show first-use stalls.
 
 Each future improvement must record a status for OpenGL, Vulkan and DX11: implemented in shared code, efficient API equivalent, capability fallback, pending port, or measured rejection. Every applicable port needs accuracy/lifetime checks plus a matched cost comparison. Hardware/driver performance may still differ.

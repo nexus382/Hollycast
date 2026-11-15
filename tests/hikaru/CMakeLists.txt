@@ -35,7 +35,8 @@ if(HIKARU_NATIVE_GRAPHICS_TESTS)
     enable_language(C)
     add_executable(hikaru_graphics_device_test graphics_device_test.cpp
         ../../core/hw/hikaru/graphics/device.cpp
-        ../../core/hw/hikaru/valkyrie/graphics_dispatch.c)
+        ../../core/hw/hikaru/valkyrie/graphics_dispatch.c
+        ../../core/hw/hikaru/valkyrie/gl_diagnostics.c)
     target_include_directories(hikaru_graphics_device_test PRIVATE ../../core
         ../../core/hw/hikaru/valkyrie/src)
     target_compile_features(hikaru_graphics_device_test PRIVATE cxx_std_17 c_std_11)

@@ -226,11 +226,22 @@ The shared renderer also caches texture/shading palette mode prefixes, reducing
 updates to OpenGL and the native backends. Array tails and per-program state
 remain valid across shorter palettes, program switches and cache invalidation.
 
-Set `HIKARU_TRACE_GPU_TIMING=1` to enable supported Vulkan fragment-phase GPU
-timestamps in addition to CPU diagnostics. Queries are polled without adding a
-wait. The [renderer optimization parity audit](performance/hikaru-renderer-parity.md)
-documents the current shared paths, API differences, measured scope and remaining
-work. These Hikaru diagnostics are separate from the Dreamcast/Naomi PVR path.
+Set `HIKARU_TRACE_TIMING=1` for opt-in CPU cost diagnostics, or
+`HIKARU_TRACE_GPU_TIMING=1` for CPU costs plus supported desktop OpenGL, Vulkan
+and DX11 GPU timestamps. Unset, empty and `0` values disable each flag. Ordinary
+runs allocate no diagnostic queries and take no diagnostic clock readings.
+
+GPU reports cover a render-command frame span in every sorting mode, plus the
+first Per Pixel fragment-list attempt's clear, collection, scene-copy and resolve
+phases. Empty or failed collections have no copy/resolve sample. Averages use
+completed samples; missing data is `unavailable`. These are elapsed command
+intervals, not GPU utilization. Results are polled without a new wait or flush;
+a busy query ring skips the sample. Vulkan reuses its existing submission fences
+to retire frame queries. GLES and unsupported GL devices retain CPU counters.
+
+The [renderer optimization parity audit](performance/hikaru-renderer-parity.md)
+documents counter scope, API differences and remaining work. These diagnostics
+are separate from the Dreamcast/Naomi PVR path.
 
 Malformed or unreadable nonvolatile files now use in-memory defaults for the
 session. They are preserved and will not be overwritten on exit. The frontend

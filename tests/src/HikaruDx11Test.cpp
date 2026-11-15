@@ -3,10 +3,15 @@
 #include "gtest/gtest.h"
 #if defined(HAVE_D3D11) && defined(_WIN32) && !defined(LIBRETRO)
 #include "HikaruNativeGraphicsCases.h"
+#include "hw/hikaru/graphics/dx11_diagnostics.h"
 #include "rend/dx11/dx11_shaders.h"
 #include <d3d11sdklayers.h>
 #include <cstdlib>
 #include <atomic>
+#include <chrono>
+#include <cmath>
+#include <string>
+#include <thread>
 
 namespace hikaru::graphics {
 std::unique_ptr<Backend> makeDx11BackendForTesting(ID3D11Device*,ID3D11DeviceContext*,pD3DCompile,bool);
@@ -22,6 +27,17 @@ using namespace hikaru::graphics::test;
 namespace {
 std::atomic<bool> failCompilation{false};
 std::atomic<unsigned> compilationCalls{0};
+class ScopedEnvironmentVariable {
+    std::string name;
+    std::string previous;
+    bool wasSet=false;
+public:
+    ScopedEnvironmentVariable(const char* variable,const char* value):name(variable) {
+        if(const char* existing=std::getenv(variable)){previous=existing;wasSet=true;}
+        _putenv_s(name.c_str(),value?value:"");
+    }
+    ~ScopedEnvironmentVariable() {_putenv_s(name.c_str(),wasSet?previous.c_str():"");}
+};
 HRESULT WINAPI compileWithFailure(LPCVOID source,SIZE_T bytes,LPCSTR name,const D3D_SHADER_MACRO* defines,ID3DInclude* include,
     LPCSTR entry,LPCSTR profile,UINT flags,UINT flags2,ID3DBlob** code,ID3DBlob** errors) {
     ++compilationCalls;
@@ -541,6 +557,157 @@ TEST_F(HikaruDx11Test, FragmentCollectionRemainsDistinctWhileBackgroundCompilati
     background->draw(draw);ASSERT_TRUE(background->endFragmentList());
     equalPixels(expected,pixels(*background),"collector shader while material specialization is pending",1);
     completeDx11CompilationForTesting(*background);
+}
+TEST_F(HikaruDx11Test, DiagnosticsFlagsTreatUnsetEmptyAndZeroAsDisabled) {
+    const std::array<const char*,3> values={nullptr,"","0"};
+    for(const char* value:values) {
+        ScopedEnvironmentVariable timing("HIKARU_TRACE_TIMING",value);
+        ScopedEnvironmentVariable gpuTiming("HIKARU_TRACE_GPU_TIMING",value);
+        auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);
+        const auto snapshot=dx11DiagnosticsForTesting(*backend);
+        EXPECT_FALSE(snapshot.enabled);
+        EXPECT_FALSE(snapshot.gpuRequested);
+        EXPECT_FALSE(snapshot.gpuSupported);
+        EXPECT_EQ(snapshot.queriesCreated,0u);
+        EXPECT_EQ(snapshot.gpuQueryObjects,0u);
+    }
+}
+TEST_F(HikaruDx11Test, CpuDiagnosticsCountUploadsAndOwnerThreadCompilation) {
+    ScopedEnvironmentVariable timing("HIKARU_TRACE_TIMING","1");
+    ScopedEnvironmentVariable gpuTiming("HIKARU_TRACE_GPU_TIMING",nullptr);
+    auto backend=makeBackgroundDx11BackendForTesting(device,context,D3DCompile);
+    allocate(*backend);
+    const auto before=dx11DiagnosticsForTesting(*backend);
+    auto draw=mesh();draw.depthTest=false;draw.uniforms.flags={1,1,1,1};
+    draw.uniforms.lights[0].flags={1,2,1,1};
+    DrawRecord record;record.modelview=draw.uniforms.modelview;record.alternate=draw.uniforms.alternate;
+    record.normal=draw.uniforms.normal;record.alternateNormal=draw.uniforms.alternateNormal;
+    draw.palette.push_back(record);
+    for(auto& vertex:draw.vertices)vertex.extra[2]=0;
+    backend->draw(draw);
+    const auto first=dx11DiagnosticsForTesting(*backend);
+    EXPECT_EQ(first.shaderCompiles,before.shaderCompiles)<<"worker results are counted only when consumed on the owner thread";
+    backend->draw(draw);
+    const auto repeated=dx11DiagnosticsForTesting(*backend);
+    EXPECT_EQ(repeated.vertexUploads-before.vertexUploads,2u);
+    EXPECT_EQ(repeated.vertexBytes-before.vertexBytes,2u*draw.vertices.size()*sizeof(Vertex));
+    EXPECT_EQ(repeated.uniformUploads-before.uniformUploads,1u);
+    EXPECT_EQ(repeated.uniformHits-before.uniformHits,1u);
+    EXPECT_EQ(repeated.uniformBytes-before.uniformBytes,sizeof(Uniforms)+sizeof(draw.uniforms.inverted));
+    EXPECT_EQ(repeated.paletteUploads-before.paletteUploads,1u);
+    EXPECT_EQ(repeated.paletteHits-before.paletteHits,1u);
+    EXPECT_EQ(repeated.paletteBytes-before.paletteBytes,sizeof(DrawRecord));
+    EXPECT_EQ(repeated.queriesCreated,0u);
+    EXPECT_EQ(repeated.gpuQueryObjects,0u);
+    completeDx11CompilationForTesting(*backend);
+    const auto completed=dx11DiagnosticsForTesting(*backend);
+    EXPECT_GT(completed.shaderCompiles,before.shaderCompiles);
+    EXPECT_GE(completed.shaderCompileNanoseconds,first.shaderCompileNanoseconds);
+}
+TEST_F(HikaruDx11Test, GpuDiagnosticsRetireAsynchronouslyWithoutChangingPixels) {
+    ScopedEnvironmentVariable timing("HIKARU_TRACE_TIMING","0");
+    ScopedEnvironmentVariable gpuTiming("HIKARU_TRACE_GPU_TIMING","1");
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    allocate(*backend);clear(*backend);backend->draw(mesh());
+    const auto expected=pixels(*backend);
+    finishDx11DiagnosticFrameForTesting(*backend);
+    context->Flush();
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+    Dx11DiagnosticsSnapshot snapshot;
+    do {
+        pollDx11DiagnosticFramesForTesting(*backend);
+        snapshot=dx11DiagnosticsForTesting(*backend);
+        if(snapshot.frame.samples)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while(std::chrono::steady_clock::now()<deadline);
+    equalPixels(expected,pixels(*backend),"diagnostic timestamps preserve rendered pixels");
+    EXPECT_TRUE(snapshot.enabled);
+    EXPECT_TRUE(snapshot.gpuRequested);
+    EXPECT_TRUE(snapshot.gpuSupported);
+    EXPECT_EQ(snapshot.queriesCreated,0u);
+    EXPECT_GT(snapshot.gpuQueryObjects,0u);
+    ASSERT_GT(snapshot.frame.samples,0u);
+    EXPECT_TRUE(std::isfinite(snapshot.frame.milliseconds));
+    EXPECT_GE(snapshot.frame.milliseconds,0.0);
+}
+TEST_F(HikaruDx11Test, GpuDiagnosticsDiscardSkippedPresentationAndRecover) {
+    ScopedEnvironmentVariable timing("HIKARU_TRACE_TIMING","0");
+    ScopedEnvironmentVariable gpuTiming("HIKARU_TRACE_GPU_TIMING","1");
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    allocate(*backend);clear(*backend);backend->draw(mesh());
+    backend->present(15,16); // Mismatch returns before the offscreen presenter is needed.
+    clear(*backend);backend->draw(mesh());
+    finishDx11DiagnosticFrameForTesting(*backend);
+    context->Flush();
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+    Dx11DiagnosticsSnapshot snapshot;
+    do {
+        pollDx11DiagnosticFramesForTesting(*backend);
+        snapshot=dx11DiagnosticsForTesting(*backend);
+        if(snapshot.frame.samples)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while(std::chrono::steady_clock::now()<deadline);
+    EXPECT_EQ(snapshot.frame.samples,1u);
+    EXPECT_EQ(snapshot.gpuInvalid,1u);
+}
+TEST_F(HikaruDx11Test, GpuDiagnosticsKeepFirstOverflowSampleWhenLaterListSucceeds) {
+    ScopedEnvironmentVariable timing("HIKARU_TRACE_TIMING","0");
+    ScopedEnvironmentVariable gpuTiming("HIKARU_TRACE_GPU_TIMING","1");
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    allocate(*backend);clear(*backend);
+    ASSERT_TRUE(backend->beginFragmentList(0,16*16*8+32+64));
+    backend->draw(fragmentMesh(-0.25f,{1,0,0,0.5f}));
+    ASSERT_FALSE(backend->endFragmentList());
+    ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+    backend->draw(fragmentMesh(-0.25f,{0,1,0,0.5f}));
+    ASSERT_TRUE(backend->endFragmentList());
+    finishDx11DiagnosticFrameForTesting(*backend);
+    context->Flush();
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+    Dx11DiagnosticsSnapshot snapshot;
+    do {
+        pollDx11DiagnosticFramesForTesting(*backend);
+        snapshot=dx11DiagnosticsForTesting(*backend);
+        if(snapshot.frame.samples)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while(std::chrono::steady_clock::now()<deadline);
+    ASSERT_EQ(snapshot.frame.samples,1u);
+    EXPECT_EQ(snapshot.clear.samples,1u);
+    EXPECT_EQ(snapshot.collect.samples,1u);
+    EXPECT_EQ(snapshot.copy.samples,0u);
+    EXPECT_EQ(snapshot.resolve.samples,0u);
+    EXPECT_EQ(snapshot.gpuInvalid,0u);
+}
+TEST_F(HikaruDx11Test, GpuDiagnosticsReportOnlyCompletedFragmentListPhases) {
+    ScopedEnvironmentVariable timing("HIKARU_TRACE_TIMING","0");
+    ScopedEnvironmentVariable gpuTiming("HIKARU_TRACE_GPU_TIMING","1");
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    allocate(*backend);clear(*backend);
+    ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+    backend->draw(fragmentMesh(-0.25f,{0.2f,0.6f,0.9f,0.5f}));
+    ASSERT_TRUE(backend->endFragmentList());
+    const auto expected=pixels(*backend);
+    finishDx11DiagnosticFrameForTesting(*backend);
+    context->Flush();
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+    Dx11DiagnosticsSnapshot snapshot;
+    do {
+        pollDx11DiagnosticFramesForTesting(*backend);
+        snapshot=dx11DiagnosticsForTesting(*backend);
+        if(snapshot.frame.samples)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while(std::chrono::steady_clock::now()<deadline);
+    equalPixels(expected,pixels(*backend),"fragment timing preserves resolved pixels");
+    ASSERT_GT(snapshot.frame.samples,0u);
+    EXPECT_GT(snapshot.clear.samples,0u);
+    EXPECT_GT(snapshot.collect.samples,0u);
+    EXPECT_GT(snapshot.copy.samples,0u);
+    EXPECT_GT(snapshot.resolve.samples,0u);
+    for(const double milliseconds:{snapshot.frame.milliseconds,snapshot.clear.milliseconds,snapshot.collect.milliseconds,
+        snapshot.copy.milliseconds,snapshot.resolve.milliseconds}) {
+        EXPECT_TRUE(std::isfinite(milliseconds));
+        EXPECT_GE(milliseconds,0.0);
+    }
 }
 
 }

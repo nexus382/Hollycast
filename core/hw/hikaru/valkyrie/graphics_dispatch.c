@@ -4,6 +4,7 @@
 #include "vk/core.h"
 #define HIKARU_GRAPHICS_DISPATCH_IMPLEMENTATION
 #include "graphics_dispatch.h"
+#include "gl_diagnostics.h"
 static _Thread_local const HikaruGraphicsDispatch *current_dispatch;
 GLboolean hikaru_graphics_has_native_dispatch(void) {
     return current_dispatch != NULL;
@@ -94,10 +95,18 @@ void hikaru_glBlendFuncSeparate(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfa
 }
 void hikaru_glBufferData(GLenum target, GLsizeiptr size, const void * data, GLenum usage) {
     if (current_dispatch) { current_dispatch->BufferData(target, size, data, usage); return; }
+    if (hikaru_gl_diagnostics_collecting && target == GL_ARRAY_BUFFER && size > 0 && data) {
+        hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_VERTEX_UPLOADS, 1);
+        hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_VERTEX_BYTES, (uint64_t)size);
+    }
     glBufferData(target, size, data, usage);
 }
 void hikaru_glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void * data) {
     if (current_dispatch) { current_dispatch->BufferSubData(target, offset, size, data); return; }
+    if (hikaru_gl_diagnostics_collecting && target == GL_ARRAY_BUFFER && size > 0 && data) {
+        hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_VERTEX_UPLOADS, 1);
+        hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_VERTEX_BYTES, (uint64_t)size);
+    }
     glBufferSubData(target, offset, size, data);
 }
 GLenum hikaru_glCheckFramebufferStatus(GLenum target) {
@@ -106,6 +115,12 @@ GLenum hikaru_glCheckFramebufferStatus(GLenum target) {
 }
 void hikaru_glClear(GLbitfield mask) {
     if (current_dispatch) { current_dispatch->Clear(mask); return; }
+    if (hikaru_gl_diagnostics_collecting && (mask & GL_COLOR_BUFFER_BIT)) {
+        GLboolean channels[4];
+        glGetBooleanv(GL_COLOR_WRITEMASK, channels);
+        if (!channels[0] || !channels[1] || !channels[2] || !channels[3])
+            hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_MASKED_CLEARS, 1);
+    }
     glClear(mask);
 }
 void hikaru_glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
@@ -198,6 +213,8 @@ void hikaru_glDisable(GLenum cap) {
 }
 void hikaru_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     if (current_dispatch) { current_dispatch->DrawArrays(mode, first, count); return; }
+    if (hikaru_gl_diagnostics_collecting && count > 0)
+        hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_DRAWS, 1);
     glDrawArrays(mode, first, count);
 }
 void hikaru_glDrawBuffers(GLsizei n, const GLenum * bufs) {
@@ -336,8 +353,39 @@ void hikaru_glShaderSource(GLuint shader, GLsizei count, const GLchar *const* st
     if (current_dispatch) { current_dispatch->ShaderSource(shader, count, string, length); return; }
     glShaderSource(shader, count, string, length);
 }
+/* Submitted texel payload, excluding driver padding and null storage
+ * definitions. Unknown formats are left uncounted instead of guessing. */
+static uint64_t texture_payload_bytes(GLsizei width, GLsizei height, GLenum format, GLenum type)
+{
+    if (width <= 0 || height <= 0) return 0;
+    unsigned bytes = 0;
+    if (type == GL_UNSIGNED_SHORT_5_6_5 || type == GL_UNSIGNED_SHORT_4_4_4_4 ||
+        type == GL_UNSIGNED_SHORT_5_5_5_1) bytes = 2;
+    else if (type == GL_UNSIGNED_INT_8_8_8_8 || type == GL_UNSIGNED_INT_8_8_8_8_REV ||
+             type == GL_UNSIGNED_INT_10_10_10_2 || type == GL_UNSIGNED_INT_2_10_10_10_REV) bytes = 4;
+    else {
+        unsigned components = 0;
+        if (format == GL_RGBA || format == GL_BGRA || format == GL_RGBA_INTEGER) components = 4;
+        else if (format == GL_RGB || format == GL_RGB_INTEGER) components = 3;
+        else if (format == GL_RG || format == GL_RG_INTEGER) components = 2;
+        else if (format == GL_RED || format == GL_RED_INTEGER || format == GL_DEPTH_COMPONENT) components = 1;
+        const unsigned scalar = type == GL_UNSIGNED_BYTE || type == GL_BYTE ? 1 :
+            type == GL_UNSIGNED_SHORT || type == GL_SHORT || type == GL_HALF_FLOAT ? 2 :
+            type == GL_UNSIGNED_INT || type == GL_INT || type == GL_FLOAT ? 4 : 0;
+        bytes = components * scalar;
+    }
+    const uint64_t pixels = (uint64_t)(unsigned)width * (unsigned)height;
+    return bytes && pixels <= UINT64_MAX / bytes ? pixels * bytes : 0;
+}
 void hikaru_glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void * pixels) {
     if (current_dispatch) { current_dispatch->TexImage2D(target, level, internalformat, width, height, border, format, type, pixels); return; }
+    if (hikaru_gl_diagnostics_collecting && pixels) {
+        const uint64_t bytes = texture_payload_bytes(width, height, format, type);
+        if (bytes) {
+            hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_TEXTURE_UPLOADS, 1);
+            hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_TEXTURE_BYTES, bytes);
+        }
+    }
     glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
 }
 void hikaru_glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
@@ -350,42 +398,67 @@ void hikaru_glTexParameteri(GLenum target, GLenum pname, GLint param) {
 }
 void hikaru_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void * pixels) {
     if (current_dispatch) { current_dispatch->TexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels); return; }
+    if (hikaru_gl_diagnostics_collecting && pixels) {
+        const uint64_t bytes = texture_payload_bytes(width, height, format, type);
+        if (bytes) {
+            hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_TEXTURE_UPLOADS, 1);
+            hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_TEXTURE_BYTES, bytes);
+        }
+    }
     glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
 }
 void hikaru_glUniform1f(GLint location, GLfloat v0) {
     if (current_dispatch) { current_dispatch->Uniform1f(location, v0); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0)
+        hikaru_gl_diagnostics_uniform(sizeof(GLfloat));
     glUniform1f(location, v0);
 }
 void hikaru_glUniform1fv(GLint location, GLsizei count, const GLfloat * value) {
     if (current_dispatch) { current_dispatch->Uniform1fv(location, count, value); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0 && count > 0)
+        hikaru_gl_diagnostics_uniform((uint64_t)count * sizeof(GLfloat));
     glUniform1fv(location, count, value);
 }
 void hikaru_glUniform1i(GLint location, GLint v0) {
     if (current_dispatch) { current_dispatch->Uniform1i(location, v0); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0)
+        hikaru_gl_diagnostics_uniform(sizeof(GLint));
     glUniform1i(location, v0);
 }
 void hikaru_glUniform2f(GLint location, GLfloat v0, GLfloat v1) {
     if (current_dispatch) { current_dispatch->Uniform2f(location, v0, v1); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0)
+        hikaru_gl_diagnostics_uniform(2 * sizeof(GLfloat));
     glUniform2f(location, v0, v1);
 }
 void hikaru_glUniform2fv(GLint location, GLsizei count, const GLfloat * value) {
     if (current_dispatch) { current_dispatch->Uniform2fv(location, count, value); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0 && count > 0)
+        hikaru_gl_diagnostics_uniform((uint64_t)count * 2 * sizeof(GLfloat));
     glUniform2fv(location, count, value);
 }
 void hikaru_glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) {
     if (current_dispatch) { current_dispatch->Uniform3f(location, v0, v1, v2); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0)
+        hikaru_gl_diagnostics_uniform(3 * sizeof(GLfloat));
     glUniform3f(location, v0, v1, v2);
 }
 void hikaru_glUniform3fv(GLint location, GLsizei count, const GLfloat * value) {
     if (current_dispatch) { current_dispatch->Uniform3fv(location, count, value); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0 && count > 0)
+        hikaru_gl_diagnostics_uniform((uint64_t)count * 3 * sizeof(GLfloat));
     glUniform3fv(location, count, value);
 }
 void hikaru_glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat * value) {
     if (current_dispatch) { current_dispatch->UniformMatrix3fv(location, count, transpose, value); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0 && count > 0)
+        hikaru_gl_diagnostics_uniform((uint64_t)count * 9 * sizeof(GLfloat));
     glUniformMatrix3fv(location, count, transpose, value);
 }
 void hikaru_glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat * value) {
     if (current_dispatch) { current_dispatch->UniformMatrix4fv(location, count, transpose, value); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0 && count > 0)
+        hikaru_gl_diagnostics_uniform((uint64_t)count * 16 * sizeof(GLfloat));
     glUniformMatrix4fv(location, count, transpose, value);
 }
 void hikaru_glUseProgram(GLuint program) {
@@ -405,6 +478,7 @@ void hikaru_graphics_begin_occlusion(GLuint query[2]) {
     if (current_dispatch) { current_dispatch->BeginOcclusion(); return; }
     if (!query[0]) {
         glGenQueries(1, &query[0]);
+        if (hikaru_gl_diagnostics_collecting) hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_QUERIES, 1);
         // Only occupancy is needed. GLES 3 and desktop GL 3.3 provide a
         // boolean query; retain the count-query fallback for desktop GL 3.2.
         const char *version = (const char *)glGetString(GL_VERSION);
@@ -431,7 +505,9 @@ void hikaru_graphics_finish_occlusion(const GLuint query[2]) {
 GLboolean hikaru_graphics_occlusion_result(const GLuint query[2]) {
     if (current_dispatch) return current_dispatch->OcclusionResult();
     GLuint samples = 0;
+    const uint64_t started = hikaru_gl_diagnostics_cpu_begin();
     glGetQueryObjectuiv(query[0], GL_QUERY_RESULT, &samples);
+    hikaru_gl_diagnostics_cpu_end(HIKARU_GL_DIAG_QUERY_WAIT_NS, started);
     return samples != 0;
 }
 void hikaru_graphics_delete_occlusion(GLuint query[2]) {
@@ -466,5 +542,7 @@ void hikaru_glSamplerParameterf(GLuint id, GLenum name, GLfloat value) {
 
 void hikaru_glUniform1iv(GLint location, GLsizei count, const GLint* values) {
     if (current_dispatch) { current_dispatch->Uniform1iv(location, count, values); return; }
+    if (hikaru_gl_diagnostics_collecting && location >= 0 && count > 0)
+        hikaru_gl_diagnostics_uniform((uint64_t)count * sizeof(GLint));
     glUniform1iv(location, count, values);
 }

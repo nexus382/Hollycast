@@ -26,6 +26,7 @@
 #define HIKARU_MAX_PEEL_LAYERS HIKARU_MAX_TRANSPARENCY_LAYERS
 #include "engine.h"
 #include "gl_fragment_list.h"
+#include "gl_diagnostics.h"
 
 enum {
 	HR_DEBUG_LOG,
@@ -259,6 +260,8 @@ typedef struct {
 		HikaruGlFragmentList *state;
 		bool collecting, failed;
 	} fragment_lists;
+	HikaruGlDiagnostics *diagnostics;
+	bool diagnostics_checked;
 	struct {
 		bool enabled, first;
 		GLuint previous_depth, opaque_depth;

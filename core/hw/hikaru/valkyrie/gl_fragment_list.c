@@ -1,6 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "gl_fragment_list.h"
+#include "gl_diagnostics.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -407,13 +408,26 @@ static GLuint create_resolve_program(GlResolver *resolver)
 static bool ensure_resolver(HikaruGlFragmentList *state)
 {
     if (state->resolver.program && state->resolver.vertexArray) return true;
+    const bool collectDiagnostics = hikaru_gl_diagnostics_collecting;
+    if (collectDiagnostics)
+        hikaru_gl_diagnostics_count(HIKARU_GL_DIAG_PROGRAM_COMPILES, 1);
+    const uint64_t compileStart = collectDiagnostics
+        ? hikaru_gl_diagnostics_cpu_begin() : 0;
     state->resolver.program = create_resolve_program(&state->resolver);
-    if (!state->resolver.program) return false;
+    if (!state->resolver.program) {
+        if (collectDiagnostics)
+            hikaru_gl_diagnostics_cpu_end(HIKARU_GL_DIAG_PROGRAM_COMPILE_NS, compileStart);
+        return false;
+    }
     glGenVertexArrays(1, &state->resolver.vertexArray);
     if (!state->resolver.vertexArray) {
         delete_resolver(&state->resolver);
+        if (collectDiagnostics)
+            hikaru_gl_diagnostics_cpu_end(HIKARU_GL_DIAG_PROGRAM_COMPILE_NS, compileStart);
         return false;
     }
+    if (collectDiagnostics)
+        hikaru_gl_diagnostics_cpu_end(HIKARU_GL_DIAG_PROGRAM_COMPILE_NS, compileStart);
     return true;
 }
 
@@ -657,6 +671,8 @@ bool hikaru_gl_fragment_list_begin(HikaruGlFragmentList **statePointer,
     state->lastUsed = 0;
     state->lastOverflow = false;
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+    if (hikaru_gl_diagnostics_collecting)
+        hikaru_gl_diagnostics_phase_begin(HIKARU_GL_DIAG_PHASE_CLEAR);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, resources->heads);
     const GLuint zero = 0;
     glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER,
@@ -665,6 +681,10 @@ bool hikaru_gl_fragment_list_begin(HikaruGlFragmentList **statePointer,
     glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER,
                       GL_UNSIGNED_INT, &zero);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    if (hikaru_gl_diagnostics_collecting)
+        hikaru_gl_diagnostics_phase_end(HIKARU_GL_DIAG_PHASE_CLEAR);
+    if (hikaru_gl_diagnostics_collecting)
+        hikaru_gl_diagnostics_phase_begin(HIKARU_GL_DIAG_PHASE_COLLECT);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resources->collectorFramebuffer);
     glViewport(0, 0, (GLsizei)width, (GLsizei)height);
     glDisable(GL_SCISSOR_TEST);
@@ -676,6 +696,8 @@ bool hikaru_gl_fragment_list_begin(HikaruGlFragmentList **statePointer,
     glDepthMask(GL_FALSE);
     bind_storage(resources);
     if (take_gl_errors()) {
+        if (hikaru_gl_diagnostics_collecting)
+            hikaru_gl_diagnostics_phase_end(HIKARU_GL_DIAG_PHASE_COLLECT);
         restore_gl_state(&state->saved);
         delete_storage(resources);
         state->disabled = true;
@@ -704,9 +726,16 @@ bool hikaru_gl_fragment_list_end(HikaruGlFragmentList *state)
     if (!state || !state->active) return false;
     GlResources *resources = &state->resources;
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+    if (hikaru_gl_diagnostics_collecting)
+        hikaru_gl_diagnostics_phase_end(HIKARU_GL_DIAG_PHASE_COLLECT);
     GLuint status[4] = {0};
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, resources->status);
+    const uint64_t counterWaitStart = hikaru_gl_diagnostics_collecting
+        ? hikaru_gl_diagnostics_cpu_begin() : 0;
     glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(status), status);
+    if (hikaru_gl_diagnostics_collecting)
+        hikaru_gl_diagnostics_cpu_end(HIKARU_GL_DIAG_FRAGMENT_COUNTER_WAIT_NS,
+                                      counterWaitStart);
     const bool readbackFailed = take_gl_errors();
     state->lastUsed = status[0];
     state->lastOverflow = status[1] || status[0] > state->parameters.capacity;
@@ -721,9 +750,13 @@ bool hikaru_gl_fragment_list_end(HikaruGlFragmentList *state)
     }
     if (complete) {
         if (status[0]) {
+            if (hikaru_gl_diagnostics_collecting)
+                hikaru_gl_diagnostics_phase_begin(HIKARU_GL_DIAG_PHASE_COPY);
             glCopyImageSubData(state->sceneTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
                                resources->background, GL_TEXTURE_2D, 0, 0, 0, 0,
                                (GLsizei)resources->width, (GLsizei)resources->height, 1);
+            if (hikaru_gl_diagnostics_collecting)
+                hikaru_gl_diagnostics_phase_end(HIKARU_GL_DIAG_PHASE_COPY);
             glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
             if (take_gl_errors()) {
                 state->disabled = true;
@@ -751,7 +784,11 @@ bool hikaru_gl_fragment_list_end(HikaruGlFragmentList *state)
             glUseProgram(state->resolver.program);
             set_resolve_parameters(state);
             glBindVertexArray(state->resolver.vertexArray);
+            if (hikaru_gl_diagnostics_collecting)
+                hikaru_gl_diagnostics_phase_begin(HIKARU_GL_DIAG_PHASE_RESOLVE);
             glDrawArrays(GL_TRIANGLES, 0, 3);
+            if (hikaru_gl_diagnostics_collecting)
+                hikaru_gl_diagnostics_phase_end(HIKARU_GL_DIAG_PHASE_RESOLVE);
             if (take_gl_errors()) {
                 state->disabled = true;
                 /* A resolve error can leave a partial fullscreen write. Roll
