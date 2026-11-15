@@ -162,11 +162,11 @@ void saveImage(const std::string& path, const std::vector<u8>& bytes)
 
 namespace screenscraper {
 
-Session::Session(Credentials credentials, Transport transport)
+Session::Session(Credentials credentials, Transport transport, std::chrono::milliseconds retryDelay)
 	: credentials(std::move(credentials)), transport(transport ? std::move(transport)
 		: Transport([](const std::string& url, std::vector<u8>& bytes, std::string& type) {
 			return http::get(url, bytes, type);
-		}))
+		})), retryDelay(retryDelay)
 {
 	account.personalAccount = !this->credentials.username.empty();
 }
@@ -187,6 +187,7 @@ void Session::cancel()
 {
 	std::lock_guard<std::mutex> guard(mutex);
 	cancelled = true;
+	requestRetryPending = false;
 	account.connected = false;
 	account.message = "Signed out.";
 	wake.notify_all();
@@ -202,14 +203,33 @@ void Session::pause(const std::string& message)
 {
 	std::lock_guard<std::mutex> guard(mutex);
 	account.message = message;
-	retryAt = Clock::now() + std::chrono::minutes(1);
+	requestRetryPending = false;
+	retryAt = Clock::now() + retryDelay;
 	wake.notify_all();
 }
 
-void Session::fail(int code)
+Session::RequestType Session::classifyRequest(const std::string& endpoint)
+{
+	if (endpoint == "ssuserInfos.php" || endpoint == "ssinfraInfos.php") return RequestType::Login;
+	if (endpoint == "jeuInfos.php") return RequestType::GameInfo;
+	if (endpoint == "jeuRecherche.php") return RequestType::GameSearch;
+	if (endpoint == "mediaJeu.php") return RequestType::Artwork;
+	return RequestType::Other;
+}
+
+void Session::fail(int code, RequestType requestType, FailureType failureType)
 {
 	std::lock_guard<std::mutex> guard(mutex);
-	const char *message;
+	const char *requestName;
+	switch (requestType)
+	{
+	case RequestType::Login: requestName = "login"; break;
+	case RequestType::GameInfo: requestName = "game information"; break;
+	case RequestType::GameSearch: requestName = "game search"; break;
+	case RequestType::Artwork: requestName = "artwork"; break;
+	default: requestName = "other"; break;
+	}
+	std::string message;
 	switch (code)
 	{
 	case 401: message = "ScreenScraper rejected the account or is closed to this account."; break;
@@ -220,21 +240,45 @@ void Session::fail(int code)
 	case 430: message = "ScreenScraper daily request allowance reached. Reconnect after it resets."; break;
 	case 431: message = "ScreenScraper daily unmatched-game allowance reached. Reconnect after it resets."; break;
 	case 400: message = "ScreenScraper rejected the request parameters."; break;
-	default: message = "ScreenScraper request failed. Retrying after one minute."; break;
+	default:
+		if (code != 0)
+		{
+			message = "ScreenScraper " + std::string(requestName) + " request failed with HTTP status ";
+			if (code == 500)
+				message += "500 or network error.";
+			else
+				message += std::to_string(code) + ".";
+			message += " Retrying after one minute.";
+		}
+		else if (failureType == FailureType::InvalidJson)
+			message = "ScreenScraper " + std::string(requestName)
+				+ " response is invalid or oversized JSON. Retrying after one minute.";
+		else if (failureType == FailureType::InvalidResponse)
+			message = "ScreenScraper " + std::string(requestName)
+				+ " response is invalid. Retrying after one minute.";
+		else
+			message = "ScreenScraper " + std::string(requestName)
+				+ " request failed because of a transport failure. Retrying after one minute.";
+		break;
 	}
 	account.message = message;
 	if (code == 400 || code == 401 || code == 403 || code == 423 || code == 426 || code == 430 || code == 431)
+	{
 		account.connected = false;
+		requestRetryPending = false;
+	}
 	else
-		retryAt = Clock::now() + std::chrono::minutes(1);
+	{
+		requestRetryPending = true;
+		retryAt = Clock::now() + retryDelay;
+	}
 	wake.notify_all();
 	throw std::runtime_error(message);
 }
 
 int Session::request(const std::string& endpoint, const std::string& parameters,
-		std::vector<u8>& bytes, std::string& contentType)
+		std::vector<u8>& bytes, std::string& contentType, Clock::time_point& started)
 {
-	Clock::time_point started;
 	{
 		std::unique_lock<std::mutex> lock(mutex);
 		while (true)
@@ -275,7 +319,7 @@ int Session::request(const std::string& endpoint, const std::string& parameters,
 		+ "&sspassword=" + http::urlEncode(credentials.password) + parameters;
 	int code = 0;
 	try { code = transport(url, bytes, contentType); }
-	catch (...) { /* Transport exceptions can contain the URL. Report only a fixed message below. */ }
+	catch (...) { /* Transport exceptions can contain the URL; report only its safe failure category. */ }
 	{
 		std::unique_lock<std::mutex> lock(mutex);
 		// Share the KB/s allowance across workers, counting time already spent transferring.
@@ -294,8 +338,21 @@ int Session::request(const std::string& endpoint, const std::string& parameters,
 			throw std::runtime_error("ScreenScraper download cancelled.");
 	}
 	if (!http::success(code) && code != 404)
-		fail(code);
+		fail(code, classifyRequest(endpoint));
 	return code;
+}
+
+void Session::requestSucceeded(Clock::time_point started)
+{
+	std::lock_guard<std::mutex> guard(mutex);
+	// A reply already in flight when another request failed cannot prove recovery.
+	// HTTP success does not prove recovery from local save errors set by pause().
+	if (requestRetryPending && account.connected && !cancelled && started >= retryAt)
+	{
+		requestRetryPending = false;
+		retryAt = {};
+		account.message = account.personalAccount ? "Signed in to ScreenScraper." : "Using ScreenScraper guest access.";
+	}
 }
 
 void Session::updateLimits(const json& response)
@@ -323,15 +380,20 @@ json Session::requestJson(const std::string& endpoint, const std::string& parame
 {
 	std::vector<u8> bytes;
 	std::string contentType;
-	if (request(endpoint, parameters, bytes, contentType) == 404)
+	Clock::time_point started;
+	if (request(endpoint, parameters, bytes, contentType, started) == 404)
+	{
+		requestSucceeded(started);
 		return json::object();
+	}
 	const size_t limit = 4 * 1024 * 1024;
 	// Parse JSON as text: recent Android NDKs do not define char_traits<u8>.
 	const char* jsonText = bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data());
 	const json root = bytes.size() <= limit ? json::parse(jsonText, jsonText + bytes.size(), nullptr, false) : json();
 	if (!root.is_object() || !root.contains("response") || !root["response"].is_object())
-		fail(0);
+		fail(0, classifyRequest(endpoint), FailureType::InvalidJson);
 	updateLimits(root["response"]);
+	requestSucceeded(started);
 	return root["response"];
 }
 
@@ -351,24 +413,25 @@ void Session::login()
 		{
 			if (!response.contains("ssuser") || !number(response["ssuser"], "maxthreads")
 					|| lowerCase(text(response["ssuser"], "id")) != lowerCase(credentials.username))
-				fail(401); // Reject silent anonymous fallback; it must not borrow guest limits.
+				fail(401, RequestType::Login); // Reject silent anonymous fallback; it must not borrow guest limits.
 		}
 		else
 		{
 			const auto servers = response.find("serveurs");
 			if (servers == response.end() || !servers->is_object() || !servers->contains("closefornomember"))
-				fail(0);
+				fail(0, RequestType::Login, FailureType::InvalidResponse);
 			const auto& closed = (*servers)["closefornomember"];
 			if (closed == "1" || closed == 1)
 				fail(423);
 			if (closed != "0" && closed != 0)
-				fail(0);
+				fail(0, RequestType::Login, FailureType::InvalidResponse);
 			// Global guest capacity is not a per-session allowance. Keep one worker until
 			// a game response supplies this guest's own thread and quota limits.
 		}
 		std::lock_guard<std::mutex> guard(mutex);
 		account.connected = !cancelled;
 		account.connecting = false;
+		requestRetryPending = false;
 		account.message = cancelled ? "Signed out." : account.personalAccount
 			? "Signed in to ScreenScraper." : "Using ScreenScraper guest access.";
 	}
@@ -385,14 +448,22 @@ std::vector<u8> Session::requestImage(u32 gameId, const std::string& type, const
 {
 	std::vector<u8> bytes;
 	std::string contentType;
+	Clock::time_point started;
 	const std::string selector = type + (region.empty() ? "" : "(" + region + ")");
 	if (request("mediaJeu.php", "&systemeid=23&jeuid=" + std::to_string(gameId)
-			+ "&media=" + http::urlEncode(selector) + "&outputformat=png&maxwidth=1920&maxheight=1920", bytes, contentType) == 404)
+			+ "&media=" + http::urlEncode(selector) + "&outputformat=png&maxwidth=1920&maxheight=1920", bytes, contentType, started) == 404)
+	{
+		requestSucceeded(started);
 		return {};
+	}
 	if (bytes.size() < 32 && trim_ws(std::string(bytes.begin(), bytes.end())) == "NOMEDIA")
+	{
+		requestSucceeded(started);
 		return {};
+	}
 	if (!imageValid(bytes))
-		fail(0);
+		fail(0, RequestType::Artwork, FailureType::InvalidResponse);
+	requestSucceeded(started);
 	return bytes;
 }
 
@@ -528,7 +599,9 @@ json ScreenScraper::findGame(const GameBoxart& item)
 	for (auto query : queries)
 	{
 		query = trim_ws(query.substr(0, query.find_first_of("([")));
-		if (query.empty() || std::find(searched.begin(), searched.end(), lowerCase(query)) != searched.end())
+		// Short terms return a plain-text API error. Try another title or filename
+		// candidate instead of pausing every game's artwork downloads.
+		if (query.size() < 3 || std::find(searched.begin(), searched.end(), lowerCase(query)) != searched.end())
 			continue;
 		searched.push_back(lowerCase(query));
 		const auto response = session->requestJson("jeuRecherche.php", "&systemeid=23&recherche=" + http::urlEncode(query));
