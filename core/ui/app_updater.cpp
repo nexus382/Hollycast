@@ -274,10 +274,6 @@ void draw(bool idle) {
         preferences();
         state.check(true);
     }
-    bool startup = config::loadBool("updates", "startup", true);
-    if (ImGui::Checkbox(T("Check for updates on startup"), &startup)) {
-        config::saveBool("updates", "startup", startup); SaveSettings();
-    }
     if (ImGui::Button(T("Check now"))) state.check();
     ImGui::EndDisabled();
     if (!state.result.package.version.empty()) {

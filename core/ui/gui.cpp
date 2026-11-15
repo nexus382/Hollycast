@@ -4745,7 +4745,6 @@ void gui_display_ui()
 	if (gui_state == GuiState::Settings)
 		SettingsNew::prepareControllerNavigation();
 	ImGui::NewFrame();
-	app_updates::draw(!game_started && (gui_state == GuiState::Main || gui_state == GuiState::Settings));
 	error_msg_shown = false;
 	bool gui_open = gui_is_open();
 	auto finishFrame = [&]() {
@@ -4771,6 +4770,9 @@ void gui_display_ui()
 		finishFrame();
 		return;
 	}
+	// The UI renders during the final fade, so wait until the splash is fully cleared.
+	if (!launchScreenPending)
+		app_updates::draw(!game_started && (gui_state == GuiState::Main || gui_state == GuiState::Settings));
 
 	// Render menu bar BEFORE any early returns.
 	// Hide it for the full-screen GameInfo screen on Android.

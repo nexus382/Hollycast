@@ -9236,6 +9236,26 @@ void renderAdvancedTab()
 {
 	ScopedTwoLineRowStyle advancedRowStyle(12.0f, true, 0.5f);
 
+	// Updates Section
+	ImGui::Spacing();
+	if (RenderCollapsingHeader("UpdatesSection", ICON_FA_DOWNLOAD, T("Updates"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderGeneralToggleSettingRow(
+			"CheckForUpdatesOnStartup",
+			ICON_FA_DOWNLOAD,
+			T("Check for updates on startup"),
+			T("Automatically check after the startup animation"),
+			cfgLoadBool("updates", "startup", true),
+			[](bool enabled) {
+				cfgSaveBool("updates", "startup", enabled);
+				SaveSettings();
+			},
+			T(
+				"Check for updates on startup\n"
+				"Checks Hollycast's selected update track after the startup intro.\n\n"
+				"If an update is available, Hollycast shows its details. Download and installation start only after you confirm."
+			));
+	}
 
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
