@@ -26,6 +26,7 @@
 #include "mach/hikaru/hikaru-renderer-private.h"
 #include "graphics_dispatch.h"
 #include "engine_internal.h"
+#include <limits.h>
 
 #ifdef _MSC_VER
 #include <intrin.h>
