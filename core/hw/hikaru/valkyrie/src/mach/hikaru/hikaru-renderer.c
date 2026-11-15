@@ -2641,7 +2641,9 @@ int hikaru_vendor_test_mesh_uniform_values(void)
 	vp.clip.r = 640; vp.clip.t = 480; vp.clip.n = 1; vp.clip.f = 2;
 	vp.offset.x = 320; vp.offset.y = 240;
 	vp.depth.q_enabled = 1; vp.depth.density = 0.01f; vp.depth.bias = 0.1f;
-	material.shading_mode = 2; material.depth_blend = 1; material.has_alpha = 1;
+	/* Mode 1 consumes ambient; mode 2 permits drivers to optimize that
+	 * uniform out, making its value unreadable through glGetUniformfv. */
+	material.shading_mode = 1; material.depth_blend = 1; material.has_alpha = 1;
 	mesh.depth_bias = 31;
 	lights.mask = 14; lights.lights[0].has_direction = 1;
 	lights.lights[0].direction[2] = -1; lights.lights[0].diffuse[0] = 128;
@@ -5470,7 +5472,10 @@ static int test_transparency_sorting_pixels(bool test_lists)
 				glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->framebuffer.fb[0]);
 				glReadPixels(0, 0, 640, 480, GL_RGBA, GL_UNSIGNED_BYTE, batched_pixels);
 				const bool same_pixels = !memcmp(reference_pixels, batched_pixels, image_bytes);
-				const unsigned expected_runs = boundary == 1 || boundary == 7 || boundary == 8 || boundary == 11 ? 2u : 1u;
+				/* GLES uses scalar texture bindings, so differing formats still
+				 * split draws even when the transform palette is available. */
+				const unsigned expected_runs = boundary == 1 || boundary == 7 || boundary == 8 || boundary == 11 ||
+					(boundary == 2 && !texture_palette_supported()) ? 2u : 1u;
 				const unsigned expected_viewports = boundary == 11 ? 2u : 1u;
 				if (boundary == 15 && state_uploads[2] != batched_light_start) {
 					fprintf(stderr, "masked light change invalidated active light uniforms\n");
@@ -5762,7 +5767,17 @@ static int test_transparency_sorting_pixels(bool test_lists)
 		 * two meshes use a nonzero vertex offset and separate primitive IDs. */
 		meshes[0].num_tris = meshes[1].num_tris = 1;
 		meshes[0].mat_index = meshes[1].mat_index = 0;
+		/* Keep pixel centers inside the geometry for the full-image material
+		 * comparisons below. A clipped triangle edge through a pixel center
+		 * makes that oracle depend on rasterization at the boundary instead
+		 * of the pattern, fog, alpha and stable-order behavior being tested.
+		 * These coordinates project to (-2,-2), (6,-2), (-2,6). */
+		static const float coverage_xy[3][2] = {
+			{-1920,-1440}, {5760,-1440}, {-1920,4320}
+		};
 		for (unsigned v = 0; v < 3; ++v) {
+			for (unsigned axis = 0; axis < 2; ++axis)
+				vertices[v].position[axis] = vertices[mesh0_triangles * 3 + v].position[axis] = coverage_xy[v][axis];
 			vertices[v].position[2] = vertices[mesh0_triangles * 3 + v].position[2] = -6.0f;
 			memset(vertices[v].diffuse, 0, sizeof(vertices[v].diffuse));
 			vertices[v].diffuse[0] = 255; vertices[v].alpha = 128;
@@ -7061,6 +7076,11 @@ hikaru_renderer_finish_packet(vk_renderer_t *renderer, HikaruFrame *frame)
  * no game content is needed to reproduce their former D24 collision. */
 int hikaru_vendor_test_depth_precision_pixels(void)
 {
+	/* Equal-depth expectations below exercise peeling's single-layer ties.
+	 * A 3.2 context request can return 4.3+, enabling stable fragment lists;
+	 * those have their own tie-order coverage in the fragment-list fixture. */
+	const bool previous_force_peeling = force_depth_peeling;
+	force_depth_peeling = true;
 	typedef struct {
 		float z, bias;
 		unsigned type;
@@ -7282,6 +7302,7 @@ cleanup:
 		free(hr);
 	}
 	free(gpu);
+	force_depth_peeling = previous_force_peeling;
 	return ok;
 }
 
