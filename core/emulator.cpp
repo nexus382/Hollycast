@@ -679,9 +679,11 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 #ifdef USE_HIKARU
 		if (platform == DC_PLATFORM_HIKARU)
 		{
+			// Platform-specific settings must see the target system, not the
+			// previous game, while they load their compatibility overrides.
+			settings.platform.system = DC_PLATFORM_HIKARU;
 			config::Settings::instance().reset();
 			config::Settings::instance().load(false);
-			settings.platform.system = DC_PLATFORM_HIKARU;
 			settings.input.lightgunGame = false;
 			settings.input.keyboardGame = false;
 			settings.input.mouseGame = false;
@@ -885,10 +887,10 @@ void Emulator::unloadGame(bool allowAutoSave)
 				gui_saveState(dc_getAutoSaveSlot(), false);
 #endif
 			hikaru::frontend::unload();
+			settings.platform.system = DC_PLATFORM_DREAMCAST;
 			config::Settings::instance().reset();
 			config::Settings::instance().load(false);
 			settings.content.reset();
-			settings.platform.system = DC_PLATFORM_DREAMCAST;
 			state = Init;
 			EventManager::event(Event::Terminate);
 			return;

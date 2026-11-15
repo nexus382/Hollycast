@@ -42,10 +42,10 @@ class SDLAudioBackend : AudioBackend
 		backend->stream_mutex.lock();
 		// Wait until there's enough samples to feed the kraken
 		unsigned oslen = len / sizeof(uint32_t);
-		audioOutputRequested(oslen);
 #ifdef USE_HIKARU
 		if (backend->partialUnderrun)
 		{
+			audioOutputRequested(oslen);
 			auto convert = [backend](const uint32_t* src, unsigned frames, uint8_t* scratch, size_t capacity) -> int {
 				SDL_AudioCVT& cvt = backend->audioCvt;
 				const size_t bytes = size_t(frames) * sizeof(uint32_t);
@@ -72,7 +72,6 @@ class SDLAudioBackend : AudioBackend
 
 		if (backend->sample_count < islen)
 		{
-			audioOutputUnderrun(oslen);
 			// No data, just output a bit of silence for the underrun
 			memset(stream, 0, len);
 			backend->stream_mutex.unlock();
@@ -90,9 +89,7 @@ class SDLAudioBackend : AudioBackend
 			cvt.len = islen * sizeof(uint32_t);
 			memcpy(cvt.buf, &backend->sample_buffer[0], cvt.len);
 			SDL_ConvertAudio(&cvt);
-			const int copied = std::max(0, std::min(len, cvt.len_cvt));
-			memcpy(stream, cvt.buf, copied);
-			if (copied < len) memset(stream + copied, 0, len - copied);
+			memcpy(stream, cvt.buf, cvt.len_cvt);
 		}
 
 		// Move samples in the buffer and consume them
@@ -182,9 +179,14 @@ public:
 		if (wait) {
 			while (sample_count + samples > sample_buffer_size) {
 				stream_mutex.unlock();
-				const auto start = std::chrono::steady_clock::now();
-				read_wait.Wait();
-				audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+#ifdef USE_HIKARU
+				if (partialUnderrun) {
+					const auto start = std::chrono::steady_clock::now();
+					read_wait.Wait();
+					audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+				} else
+#endif
+					read_wait.Wait();
 				stream_mutex.lock();
 			}
 		}
@@ -192,7 +194,9 @@ public:
 		// Copy as many samples as possible, drop any remaining (this should not happen usually)
 		unsigned free_samples = sample_buffer_size - sample_count;
 		unsigned tocopy = samples < free_samples ? samples : free_samples;
-		if (tocopy < samples) audioOutputDropped(samples - tocopy);
+#ifdef USE_HIKARU
+		if (partialUnderrun && tocopy < samples) audioOutputDropped(samples - tocopy);
+#endif
 		memcpy(&sample_buffer[sample_count], frame, tocopy * sizeof(uint32_t));
 		sample_count += tocopy;
 		stream_mutex.unlock();

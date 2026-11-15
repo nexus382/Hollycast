@@ -43,10 +43,13 @@ SDLGLGraphicsContext::~SDLGLGraphicsContext() {
 
 bool SDLGLGraphicsContext::init()
 {
+#if defined(GLES) && defined(USE_HIKARU)
+	const bool forHikaru = settings.platform.isHikaru();
+#endif
 #ifdef GLES
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 #ifdef USE_HIKARU
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, forHikaru ? 3 : 2);
 #else
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 #endif
@@ -68,9 +71,9 @@ bool SDLGLGraphicsContext::init()
 	SDL_Window * const sdlWindow = (SDL_Window *)window;
 	glcontext = SDL_GL_CreateContext(sdlWindow);
 #if defined(GLES) && defined(USE_HIKARU)
-	if (glcontext == SDL_GLContext())
+	if (glcontext == SDL_GLContext() && forHikaru)
 	{
-		// ES2-only hardware keeps Dreamcast working; Hikaru rejects < ES 3.0.
+		// Preserve ES2 for Dreamcast; Hikaru rejects unsupported ES2 at load.
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 		glcontext = SDL_GL_CreateContext(sdlWindow);
@@ -104,8 +107,27 @@ bool SDLGLGraphicsContext::init()
 	INFO_LOG(RENDERER, "Created SDL Window and GL Context successfully");
 
 	SDL_GL_MakeCurrent(sdlWindow, glcontext);
-	gameSwapIntervalChanged = true;
-	changeGLSwapInterval();
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru())
+	{
+		gameSwapIntervalChanged = true;
+		changeGLSwapInterval();
+	}
+	else
+#endif
+	{
+		// Preserve Dreamcast's initial swap policy independently of Hikaru.
+		swapOnVSync = config::VSync;
+		int swapInterval = 0;
+		if (swapOnVSync)
+		{
+			if (settings.display.refreshRate > 60.f)
+				swapInterval = settings.display.refreshRate / 60.f;
+			else
+				swapInterval = 1;
+		}
+		SDL_GL_SetSwapInterval(swapInterval);
+	}
 
 #ifdef GLES
 	if (gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress) == 0)

@@ -26,7 +26,6 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/Sh4InterpreterTest.cpp
         src/AssemblyDebuggerTest.cpp
         src/SorterTest.cpp
-        src/PvrMessageQueueTest.cpp
         src/MmuTest.cpp
         src/HttpTest.cpp
         src/IniFileTest.cpp

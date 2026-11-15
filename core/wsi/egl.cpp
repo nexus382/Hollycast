@@ -57,6 +57,9 @@ bool EGLGraphicsContext::makeCurrent()
 
 bool EGLGraphicsContext::init()
 {
+#ifdef USE_HIKARU
+	const bool forHikaru = settings.platform.isHikaru();
+#endif
 	int version = gladLoaderLoadEGL(EGL_NO_DISPLAY);
 	if (version == 0 || eglGetDisplay == nullptr || eglInitialize == nullptr) {
 		ERROR_LOG(RENDERER, "Failed to load libEGL.so");
@@ -86,7 +89,7 @@ bool EGLGraphicsContext::init()
 		EGLint pi32ConfigAttribs[]  = {
 				EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
 #ifdef USE_HIKARU
-				EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT | EGL_OPENGL_ES2_BIT,
+				EGL_RENDERABLE_TYPE, forHikaru ? (EGL_OPENGL_ES3_BIT | EGL_OPENGL_ES2_BIT) : EGL_OPENGL_ES2_BIT,
 #else
 				EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
 #endif
@@ -99,16 +102,20 @@ bool EGLGraphicsContext::init()
 		int num_config;
 
 		EGLConfig config;
-		if (!eglChooseConfig(display, pi32ConfigAttribs, &config, 1, &num_config) || (num_config != 1))
+		EGLBoolean configChosen = eglChooseConfig(display, pi32ConfigAttribs, &config, 1, &num_config);
+#ifdef USE_HIKARU
+		if ((!configChosen || num_config != 1) && forHikaru)
 		{
 			// Config masks require every requested bit, so ES2-only drivers
 			// need a separate selection before the context fallback can work.
 			pi32ConfigAttribs[3] = EGL_OPENGL_ES2_BIT;
-			if (!eglChooseConfig(display, pi32ConfigAttribs, &config, 1, &num_config) || num_config != 1)
-			{
-				ERROR_LOG(RENDERER, "EGL Error: eglChooseConfig failed");
-				return false;
-			}
+			configChosen = eglChooseConfig(display, pi32ConfigAttribs, &config, 1, &num_config);
+		}
+#endif
+		if (!configChosen || num_config != 1)
+		{
+			ERROR_LOG(RENDERER, "EGL Error: eglChooseConfig failed");
+			return false;
 		}
 #ifdef __ANDROID__
 		EGLint format;
@@ -159,17 +166,20 @@ bool EGLGraphicsContext::init()
 			// Prefer ES 3.0 (required by Hikaru); ES2-only hardware keeps
 			// the existing Dreamcast path and Hikaru rejects it at load.
 #ifdef USE_HIKARU
-			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, forHikaru ? 3 : 2, EGL_NONE };
 #else
 			EGLint contextAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
 #endif
 
 			context = eglCreateContext(display, config,  EGL_NO_CONTEXT, contextAttrs);
-			if (context == EGL_NO_CONTEXT)
+#ifdef USE_HIKARU
+			if (context == EGL_NO_CONTEXT && forHikaru)
 			{
-				EGLint fallbackAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 2 , EGL_NONE };
-				context = eglCreateContext(display, config,  EGL_NO_CONTEXT, fallbackAttrs);
+				// Keep an ES2 context so Hikaru can report its unsupported backend clearly.
+				contextAttrs[1] = 2;
+				context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttrs);
 			}
+#endif
 
 			if (context == EGL_NO_CONTEXT)
 			{

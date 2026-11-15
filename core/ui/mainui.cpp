@@ -21,7 +21,6 @@
 #include "audio/ui_sound.h"
 #include "mainui.h"
 #include "test_harness.h"
-#include "debug/assembly_debugger.h"
 #include "hw/pvr/Renderer_if.h"
 #include "hw/sh4/sh4_core.h"
 #include "gui.h"
@@ -69,6 +68,18 @@ bool mainui_rend_frame()
 	os_UpdateInputState();
 	test_harness::poll();
 	gui_poll_debugger();
+#ifdef USE_HIKARU
+	// Recreate before the first frame when entering or leaving Hikaru. In
+	// particular, an ES2 context (including an EGL desktop fallback) cannot
+	// be reused by Hikaru, which requires ES3.
+	const auto* context = GraphicsContext::Instance();
+	if (context != nullptr && isOpenGL(context->renderType())
+			&& context->isHikaruContext() != settings.platform.isHikaru())
+	{
+		forceReinit = true;
+		return false;
+	}
+#endif
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::update(!gui_is_open());
 #endif
@@ -95,17 +106,16 @@ bool mainui_rend_frame()
 			// including when a breakpoint or no-video program ends the slice.
 			if (!config::ThreadedRendering)
 				setDefaultRoundingMode();
-			// A render wait can expire between normal 30 Hz game frames. Do not
-			// turn that timeout into an extra swap of an incomplete backbuffer.
-			// The running debugger still needs controls for programs with no video.
-			if (!frameRendered && (!emu.running() || !assembly_debugger::active()))
+			// Hikaru presents its completed image and OSD together. A wait
+			// without a frame must not request the shared PVR fallback below.
+			if (!frameRendered && (!emu.running() || settings.platform.isHikaru()))
 				return false;
-			// Fresh game frames already draw their overlay. A shared-thread CPU
-			// slice can also finish without an image, so only the active debugger
-			// may request a redraw here, over a completed game background.
-			if (ImGui::GetFrameCount() == uiFrame && assembly_debugger::active())
+			// A boot loop or hung game may never submit a frame. In either
+			// rendering mode, keep menus and Pause responsive without drawing
+			// the overlay twice when a game frame already drew it.
+			if (ImGui::GetFrameCount() == uiFrame && !settings.platform.isHikaru())
 			{
-				gui_display_osd(true);
+				gui_display_osd();
 				// DX/OpenGL drivers normally receive this signal from a game
 				// frame. An overlay drawn on its own must also be presented.
 				imguiDriver->setFrameRendered();
@@ -142,7 +152,8 @@ void mainui_term()
 {
 	test_harness::releaseInputs();
 #ifdef USE_HIKARU
-	if (settings.platform.isHikaru())
+	if (settings.platform.isHikaru()
+			|| (GraphicsContext::Instance() != nullptr && GraphicsContext::Instance()->isHikaruContext()))
 		hikaru::frontend::suspendGraphics();
 #endif
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)

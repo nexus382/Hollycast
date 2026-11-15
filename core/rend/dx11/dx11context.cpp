@@ -220,7 +220,8 @@ void DX11Context::term()
 	NOTICE_LOG(RENDERER, "DX11 Context terminating");
 #ifdef USE_HIKARU
 	// Release native board resources before device loss/recreation or API switch.
-	hikaru::frontend::suspendGraphics();
+	if (settings.platform.isHikaru() || isHikaruContext())
+		hikaru::frontend::suspendGraphics();
 #endif
 	externalFrame.reset();
 	externalQuad.reset();

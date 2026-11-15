@@ -3,7 +3,6 @@
 
 	Copyright 2019 flyinghead
 	Portions Copyright 2026 The Hollycast Authors
-	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -67,17 +66,22 @@ public:
 		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
 		return flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
 	}
-	void *MapMemory() const
+	// Hikaru controls visibility around submissions and readbacks explicitly;
+	// other callers retain the legacy implicit map/unmap cache operations.
+	void *MapMemory(bool invalidate = true) const
 	{
 		if (allocInfo.pMappedData != nullptr)
 			return allocInfo.pMappedData;
 		void *p;
 		VkResult res = vmaMapMemory(allocator, allocation, &p);
 		vk::detail::resultCheck(static_cast<vk::Result>(res), "vmaMapMemory failed");
-		VkMemoryPropertyFlags flags;
-		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
-		if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
-			vmaInvalidateAllocation(allocator, allocation, 0, allocInfo.size);
+		if (invalidate)
+		{
+			VkMemoryPropertyFlags flags;
+			vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
+			if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
+				vmaInvalidateAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
+		}
 		return p;
 	}
     // Explicit readback invalidation is needed even for uncached host-visible
@@ -94,14 +98,18 @@ public:
         const VkResult result = vmaFlushAllocation(allocator, allocation, offset, size);
         vk::detail::resultCheck(static_cast<vk::Result>(result), "vmaFlushAllocation failed");
     }
-	void UnmapMemory() const
+	void UnmapMemory(bool flush = true) const
 	{
-		VkMemoryPropertyFlags flags;
-		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
-		if ((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
-			vmaFlushAllocation(allocator, allocation, 0, allocInfo.size);
-		if (allocInfo.pMappedData == nullptr)
-			vmaUnmapMemory(allocator, allocation);
+		if (allocInfo.pMappedData != nullptr)
+			return;
+		if (flush)
+		{
+			VkMemoryPropertyFlags flags;
+			vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
+			if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
+				vmaFlushAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
+		}
+		vmaUnmapMemory(allocator, allocation);
 	}
 
 private:

@@ -53,6 +53,10 @@ TEST_F(GamepadFeedbackTest, PortReassignmentReleasesThePreviousForce) {
     pad->set_maple_port(1);
     EXPECT_EQ(pad->calls, running);
 }
+TEST_F(GamepadFeedbackTest, OrdinaryPortAssignmentDoesNotSendAForceStop) {
+    pad->set_maple_port(1);
+    EXPECT_EQ(pad->calls, 0u);
+}
 TEST_F(GamepadFeedbackTest, UnregisterReleasesForceAndStopsFurtherRouting) {
     GamepadDevice::ApplyForceFeedback(2, -1.f);
     ASSERT_EQ(pad->lastPower, 1.f);
@@ -64,6 +68,10 @@ TEST_F(GamepadFeedbackTest, UnregisterReleasesForceAndStopsFurtherRouting) {
     EXPECT_EQ(pad->calls, stopped);
     GamepadDevice::Unregister(pad);
     EXPECT_EQ(pad->calls, stopped);
+}
+TEST_F(GamepadFeedbackTest, OrdinaryUnregisterDoesNotSendAForceStop) {
+    GamepadDevice::Unregister(pad);
+    EXPECT_EQ(pad->calls, 0u);
 }
 TEST_F(GamepadFeedbackTest, SupportsAllPortsAndRejectsInvalidPorts) {
     pad->set_maple_port(4);

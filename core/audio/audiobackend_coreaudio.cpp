@@ -33,6 +33,8 @@ class CoreAudioBackend : public AudioBackend
 	std::atomic<int> samples_wptr;
 	std::atomic<int> samples_rptr;
 	cResetEvent bufferEmpty;
+	// Captured before the callback starts; DC keeps its original output path.
+	bool hikaruOutput = false;
 
 	// input buffer and indexes
 	u8 samples_input[2400];
@@ -45,7 +47,7 @@ class CoreAudioBackend : public AudioBackend
 								UInt32 bus, UInt32 frames, AudioBufferList* abl)
 	{
 		CoreAudioBackend *backend = (CoreAudioBackend *)ctx;
-		audioOutputRequested(frames);
+		if (backend->hikaruOutput) audioOutputRequested(frames);
 		for (int i = 0; i < abl->mNumberBuffers; i++)
 		{
 			int size = abl->mBuffers[i].mDataByteSize;
@@ -55,7 +57,7 @@ class CoreAudioBackend : public AudioBackend
 				int avail = (backend->samples_wptr - backend->samples_rptr + backend->BUFSIZE) % backend->BUFSIZE;
 				if (avail == 0)
 				{
-					audioOutputUnderrun(size / 4);
+					if (backend->hikaruOutput) audioOutputUnderrun(size / 4);
 					//printf("Core Audio: buffer underrun %d bytes (%d)", size, abl->mBuffers[i].mDataByteSize);
 					memset(outBuffer, '\0', size);
 					return noErr;
@@ -154,6 +156,7 @@ public:
 		samples_temp = new u8[BUFSIZE]();
 		samples_rptr = 0;
 		samples_wptr = 0;
+		hikaruOutput = settings.platform.isHikaru();
 
 		err = AudioOutputUnitStart(audioUnit);
 		if (err != noErr)
@@ -179,9 +182,12 @@ public:
 			{
 				if (!wait)
 					break;
-				const auto start = std::chrono::steady_clock::now();
-				bufferEmpty.Wait();
-				audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+				if (hikaruOutput) {
+					const auto start = std::chrono::steady_clock::now();
+					bufferEmpty.Wait();
+					audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+				} else
+					bufferEmpty.Wait();
 				continue;
 			}
 			avail = std::min(avail, size);

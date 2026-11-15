@@ -183,6 +183,12 @@ choose DirectX 11 for the native Direct3D path. DirectX 9 and OpenGL ES 2
 cannot run Hikaru. The Advanced **Multi-threading** setting enables Hikaru's
 bounded emulation/render pipeline. Disabling it uses the direct frame path.
 
+Hikaru's worker, presentation timing and renderer optimizations are separate
+from the Dreamcast/Naomi PVR queue. Shared startup and audio extensions select
+the Hikaru path only for a loaded Hikaru platform. GLES contexts are recreated
+when entering or leaving Hikaru so other systems retain their existing context
+request. Existing save-state formats and buffers are retained.
+
 **Transparent Sorting** in Video settings selects per-strip, per-triangle or
 per-pixel sorting for translucent geometry. Per-strip sorts retained strips
 by transformed depth centroid; per-triangle sorts individual triangles by

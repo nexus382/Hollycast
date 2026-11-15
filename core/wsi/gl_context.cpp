@@ -191,7 +191,7 @@ void GLGraphicsContext::preTerm()
 #ifdef USE_HIKARU
 	// Release Hikaru GL objects while this context is still current; the
 	// live machine is restored when a replacement context renders.
-	if (settings.platform.isHikaru())
+	if (settings.platform.isHikaru() || isHikaruContext())
 		hikaru::frontend::suspendGraphics();
 #endif
 #ifndef LIBRETRO

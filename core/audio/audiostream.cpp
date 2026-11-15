@@ -96,7 +96,7 @@ void WriteSample(s16 r, s16 l)
 		if (currentBackend != nullptr)
 		{
 			const bool wait = config::LimitFPS && !settings.input.fastForwardMode;
-			if (wait && !currentBackend->hasQueueControl()) {
+			if (settings.platform.isHikaru() && wait && !currentBackend->hasQueueControl()) {
 				const auto start = std::chrono::steady_clock::now();
 				currentBackend->push(Buffer, SAMPLE_COUNT, wait);
 				audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());

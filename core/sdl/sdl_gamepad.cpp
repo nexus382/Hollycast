@@ -321,9 +321,6 @@ SDLGamepad::SDLGamepad(int maple_port, int joystick_idx, SDL_Joystick* sdl_joyst
 }
 
 void SDLGamepad::set_maple_port(int port) {
-	// A wheel may also hold Naomi spring/damper effects on the old port.
-	if (port != maple_port())
-		stopHaptic();
 	GamepadDevice::set_maple_port(port);
 	SDL_JoystickSetPlayerIndex(sdl_joystick, port <= 3 ? port : -1);
 }
@@ -400,25 +397,48 @@ void SDLGamepad::update_rumble()
 	}
 }
 
-void SDLGamepad::setForceFeedback(float force)
+bool SDLGamepad::has_force_feedback() const
 {
-	if (constEffectId != -1)
-		// Cabinet torque is right-positive; Naomi's native effect is left-positive.
-		setTorque(-force);
-	else
-		GamepadDevice::setForceFeedback(force);
+#ifdef USE_HIKARU
+	// Cabinet force feedback is a Hikaru feature; other systems keep the
+	// dev Rumble presentation for the same haptic device.
+	return constEffectId != -1 && settings.platform.isHikaru();
+#else
+	return false;
+#endif
 }
 
-void SDLGamepad::setTorque(float torque)
+#ifdef USE_HIKARU
+void SDLGamepad::setForceFeedback(float force)
 {
-	if (haptic == nullptr || constEffectId == -1)
+	force = std::isfinite(force) ? std::clamp(force, -1.f, 1.f) : 0.f;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+	if (force != 0.f && rumblePower > 0 && sdl_controller != nullptr
+			&& SDL_GameControllerGetType(sdl_controller) == SDL_CONTROLLER_TYPE_PS5
+			&& !SDL_GetHintBoolean(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, SDL_FALSE))
+	{
+		// SDL's PS5 driver reports no rumble until this live hint enables extended reports.
+		SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
+		rumbleEnabled = SDL_JoystickHasRumble(sdl_joystick);
+	}
+#endif
+	if (constEffectId == -1)
+	{
+		GamepadDevice::setForceFeedback(force);
 		return;
-	torque = std::isfinite(torque) ? std::clamp(torque, -1.f, 1.f) : 0.f;
+	}
+	if (haptic == nullptr)
+		return;
+	const float torque = -force;
 	const Sint16 level = torque * 32767.f * std::clamp(rumblePower, 0, 100) / 100.f;
 	if (level == 0)
 	{
 		if (torqueRunning && SDL_HapticStopEffect(haptic, constEffectId) == 0)
 			torqueRunning = false;
+		else if (torqueRunning)
+			// The stop did not apply; keep ownership so a later port
+			// change or unregister retries it instead of losing cleanup.
+			cabinetForceActive.store(true, std::memory_order_relaxed);
 		return;
 	}
 	if (level != torqueLevel)
@@ -434,6 +454,8 @@ void SDLGamepad::setTorque(float torque)
 		{
 			if (torqueRunning && SDL_HapticStopEffect(haptic, constEffectId) == 0)
 				torqueRunning = false;
+			else if (torqueRunning)
+				cabinetForceActive.store(true, std::memory_order_relaxed);
 			return;
 		}
 		torqueLevel = level;
@@ -443,13 +465,47 @@ void SDLGamepad::setTorque(float torque)
 	if (!torqueRunning && SDL_HapticRunEffect(haptic, constEffectId, 1) == 0)
 		torqueRunning = true;
 }
+#endif
+
+void SDLGamepad::setTorque(float torque)
+{
+	if (haptic == nullptr || constEffectId == -1)
+		return;
+	if (torque != 0.f && rumblePower != 0)
+	{
+		SDL_HapticEffect effect{};
+		effect.type = SDL_HAPTIC_CONSTANT;
+		effect.constant.length = SDL_HAPTIC_INFINITY;
+		if (isWheel)
+		{
+			effect.constant.direction.type = SDL_HAPTIC_STEERING_AXIS;
+			effect.constant.direction.dir[0] = 1;
+			effect.constant.level = torque * 32767.f * rumblePower / 100.f;
+		}
+		else
+		{
+			effect.constant.direction.type = SDL_HAPTIC_CARTESIAN;
+			effect.constant.direction.dir[0] = torque < 0 ? -1 : 1; // west/cw if torque < 0
+			effect.constant.level = std::abs(torque) * 32767.f * rumblePower / 100.f;
+		}
+		SDL_HapticUpdateEffect(haptic, constEffectId, &effect);
+		SDL_HapticRunEffect(haptic, constEffectId, 1);
+	}
+	else {
+		SDL_HapticStopEffect(haptic, constEffectId);
+	}
+}
 
 void SDLGamepad::stopHaptic()
 {
 	if (haptic != nullptr)
 	{
+#ifdef USE_HIKARU
 		if (SDL_HapticStopAll(haptic) == 0)
 			torqueRunning = false;
+#else
+		SDL_HapticStopAll(haptic);
+#endif
 		if (hasAutocenter)
 			SDL_HapticSetAutocenter(haptic, 0);
 		vib_inclination = 0;
@@ -519,8 +575,9 @@ void SDLGamepad::setDamper(float param, float speed)
 void SDLGamepad::close()
 {
 	NOTICE_LOG(INPUT, "SDL: Joystick '%s' on port %d disconnected", _name.c_str(), maple_port());
-	// Release force before destroying the native device handles.
-	GamepadDevice::Unregister(sdl_gamepads[sdl_joystick_instance]);
+	const bool unregisterEarly = cabinetForceActive.load(std::memory_order_relaxed);
+	if (unregisterEarly)
+		GamepadDevice::Unregister(sdl_gamepads[sdl_joystick_instance]);
 	if (haptic != nullptr)
 	{
 		stopHaptic();
@@ -531,8 +588,10 @@ void SDLGamepad::close()
 		if (constEffectId != -1) {
 			SDL_HapticDestroyEffect(haptic, constEffectId);
 			constEffectId = -1;
+#ifdef USE_HIKARU
 			torqueLevel = 0;
 			torqueRunning = false;
+#endif
 		}
 		if (springEffectId != -1) {
 			SDL_HapticDestroyEffect(haptic, springEffectId);
@@ -551,6 +610,8 @@ void SDLGamepad::close()
 	if (sdl_controller != nullptr)
 		SDL_GameControllerClose(sdl_controller);
 	SDL_JoystickClose(sdl_joystick);
+	if (!unregisterEarly)
+		GamepadDevice::Unregister(sdl_gamepads[sdl_joystick_instance]);
 	sdl_gamepads.erase(sdl_joystick_instance);
 }
 

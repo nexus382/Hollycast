@@ -128,8 +128,8 @@ class VulkanBackend final : public Backend {
             geometryOffsets.clear();used=0;geometryFrame=frame;
         }
         StreamBuffer(vk::DeviceSize bytes, vk::BufferUsageFlags usage)
-            : storage(bytes,usage), mapping(static_cast<uint8_t*>(storage.MapMemory())) {}
-        ~StreamBuffer() { storage.UnmapMemory(); }
+            : storage(bytes,usage), mapping(static_cast<uint8_t*>(storage.allocation.MapMemory(false))) {}
+        ~StreamBuffer() { storage.allocation.UnmapMemory(false); }
         void flush(vk::DeviceSize used) { if(used)storage.allocation.FlushMemory(0,used); }
     };
     struct PendingBatch {
@@ -1095,10 +1095,15 @@ public:
         waitForDraws(Timings::WaitReason::FragmentCounter);
         pollFragmentGpuTiming();
         std::array<uint32_t,4> status{};
-        const void* mapped=fragmentLists->readback->MapMemory();
-        fragmentLists->readback->allocation.InvalidateMemory(0,sizeof(status));
-        std::memcpy(status.data(),mapped,sizeof(status));
-        fragmentLists->readback->UnmapMemory();
+        const void* mapped=fragmentLists->readback->allocation.MapMemory(false);
+        try {
+            fragmentLists->readback->allocation.InvalidateMemory(0,sizeof(status));
+            std::memcpy(status.data(),mapped,sizeof(status));
+        } catch (...) {
+            fragmentLists->readback->allocation.UnmapMemory(false);
+            throw;
+        }
+        fragmentLists->readback->allocation.UnmapMemory(false);
         if(status[1]||fragmentListFailed) {
 #ifdef HIKARU_NATIVE_TESTING
             ++fragmentListCounts[2];
@@ -1277,7 +1282,16 @@ public:
         image(metadataFallback).initializedLevels[0]=true;
         constexpr unsigned fallback=0xfffffffdu;
         images.emplace(fallback,makeImage(1,1,vk::Format::eR8G8B8A8Unorm,1,false,false));
-        uint8_t zero[4]={};BufferData staging(4,vk::BufferUsageFlagBits::eTransferSrc);staging.upload(4,zero);
+        uint8_t zero[4]={};BufferData staging(4,vk::BufferUsageFlagBits::eTransferSrc);
+        void* mapped=staging.allocation.MapMemory(false);
+        try {
+            std::memcpy(mapped,zero,sizeof(zero));
+            staging.allocation.FlushMemory(0,sizeof(zero));
+        } catch (...) {
+            staging.allocation.UnmapMemory(false);
+            throw;
+        }
+        staging.allocation.UnmapMemory(false);
         immediate([&](vk::CommandBuffer cmd){auto& f=image(fallback);barrier(cmd,f,vk::ImageLayout::eTransferDstOptimal);cmd.copyBufferToImage(*staging.buffer,*f.image,vk::ImageLayout::eTransferDstOptimal,vk::BufferImageCopy(0,0,0,{vk::ImageAspectFlagBits::eColor,0,0,1},{0,0,0},{1,1,1}));barrier(cmd,f,vk::ImageLayout::eShaderReadOnlyOptimal);});
     }
     ~VulkanBackend() override {
@@ -1311,7 +1325,15 @@ public:
         if(!pixels||bytes==0){im.initializedLevels[level]=true;return;}
         if(depth)throw std::runtime_error("CPU uploads to Hikaru Vulkan depth textures are unsupported");
         auto staging=std::make_unique<BufferData>(bytes,vk::BufferUsageFlagBits::eTransferSrc);
-        staging->upload(bytes,pixels);
+        void* mapped=staging->allocation.MapMemory(false);
+        try {
+            std::memcpy(mapped,pixels,bytes);
+            staging->allocation.FlushMemory(0,bytes);
+        } catch (...) {
+            staging->allocation.UnmapMemory(false);
+            throw;
+        }
+        staging->allocation.UnmapMemory(false);
         if(timing.enabled){++timing.textureUploads;timing.textureBytes+=bytes;}
         auto cmd=startBatch();
         // End prior sampling before the transfer write; the shared queue and image barriers order later draws after the replacement.
@@ -1620,7 +1642,16 @@ public:
         const bool flipReadback=id==0;
         const int imageY=flipReadback?int(im.extent.height)-y-h:y;
         immediate([&](vk::CommandBuffer cmd){barrier(cmd,im,vk::ImageLayout::eTransferSrcOptimal);vk::BufferImageCopy region(0,w,h,{vk::ImageAspectFlagBits::eColor,0,0,1},{x,imageY,0},{uint32_t(w),uint32_t(h),1});cmd.copyImageToBuffer(*im.image,vk::ImageLayout::eTransferSrcOptimal,*dst.buffer,region);barrier(cmd,im,vk::ImageLayout::eShaderReadOnlyOptimal);});
-        std::vector<uint8_t> raw(size_t(w)*h*4);dst.download(raw.size(),raw.data());
+        std::vector<uint8_t> raw(size_t(w)*h*4);
+        const void* mapped=dst.allocation.MapMemory(false);
+        try {
+            dst.allocation.InvalidateMemory(0,raw.size());
+            std::memcpy(raw.data(),mapped,raw.size());
+        } catch (...) {
+            dst.allocation.UnmapMemory(false);
+            throw;
+        }
+        dst.allocation.UnmapMemory(false);
         for(int row=0;row<h;row++)for(int col=0;col<w;col++){
             const unsigned sourceRow=flipReadback?unsigned(h-1-row):unsigned(row);
             const auto* src=raw.data()+(size_t(sourceRow)*w+col)*4;auto* dstPixel=rgba+(size_t(row)*w+col)*4;

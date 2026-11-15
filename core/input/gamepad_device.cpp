@@ -869,8 +869,8 @@ void GamepadDevice::set_maple_port(int port)
 {
 	if (port != _maple_port)
 	{
-		// The old port will no longer route its stop command to this device.
-		setForceFeedback(0.f);
+		if (cabinetForceActive.exchange(false, std::memory_order_relaxed))
+			setForceFeedback(0.f);
 		_maple_port = port;
 	}
 }
@@ -889,7 +889,10 @@ void GamepadDevice::ApplyForceFeedback(unsigned port, float force)
 	for (int i = 0; i < GetGamepadCount(); ++i)
 		if (auto gamepad = GetGamepad(i); gamepad
 				&& (gamepad->maple_port() == int(port) || gamepad->maple_port() == MAPLE_PORTS))
+		{
+			gamepad->cabinetForceActive.store(force != 0.f, std::memory_order_relaxed);
 			gamepad->setForceFeedback(force);
+		}
 }
 
 static void updateVibration(u32 port, float power, float inclination, u32 duration_ms)
@@ -982,7 +985,7 @@ void GamepadDevice::Unregister(const std::shared_ptr<GamepadDevice>& gamepad)
 		}
 	}
 	// Keep the device alive, and run native callbacks outside the registry lock.
-	if (removed)
+	if (removed && removed->cabinetForceActive.exchange(false, std::memory_order_relaxed))
 		removed->setForceFeedback(0.f);
 }
 

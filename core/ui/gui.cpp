@@ -44,6 +44,7 @@
 #include "gui_font.h"
 #include "imgread/common.h"
 #include "emulator.h"
+#include "wsi/context.h"
 #ifdef USE_HIKARU
 #include "hw/hikaru/roms.h"
 #include "hw/hikaru/frontend.h"
@@ -5008,9 +5009,9 @@ void gui_draw_osd()
 	uiThreadRunner.execTasks(std::chrono::steady_clock::now());
 }
 
-void gui_display_osd(bool redrawGame) {
+void gui_display_osd() {
 	gui_draw_osd();
-	gui_endFrame(gui_is_open() || redrawGame);
+	gui_endFrame(gui_is_open());
 }
 
 void gui_display_profiler()
@@ -5073,10 +5074,16 @@ void gui_term()
 		librarySavestateCache.stop();
 		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
-		// The atlas owns these fonts. A later UI context must start with its
-		// own default font until gui_loadFonts populates the new atlas.
-		boldFont = largeFont = aboutAsciiFont = nullptr;
-		settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
+#ifdef USE_HIKARU
+		// Hikaru may replace a GLES context when entering or leaving a game.
+		// Its old atlas must not survive that replacement through font globals.
+		if (settings.platform.isHikaru()
+				|| (GraphicsContext::Instance() != nullptr && GraphicsContext::Instance()->isHikaruContext()))
+		{
+			boldFont = largeFont = aboutAsciiFont = nullptr;
+			settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
+		}
+#endif
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
 		EventManager::unlisten(Event::Pause, emuEventCallback);

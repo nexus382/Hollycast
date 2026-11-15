@@ -23,7 +23,8 @@
 GraphicsContext *GraphicsContext::instance;
 
 GraphicsContext::GraphicsContext(void *window, void *display)
-	: window(window), display(display), createdRenderType(config::RendererType)
+	: window(window), display(display), createdRenderType(config::RendererType),
+	  createdForHikaru(settings.platform.isHikaru())
 {
 	instance = this;
 	EventManager::listen(Event::Pause, GraphicsContext::onEvent, this);

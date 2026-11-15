@@ -42,6 +42,9 @@ public:
 	// Records the backend used to create this context. Configuration may
 	// already request a different API while the UI schedules its replacement.
 	RenderType renderType() const { return createdRenderType; }
+	// GLES context requirements belong to the loaded platform, not merely to
+	// whether Hikaru support was compiled into this executable.
+	bool isHikaruContext() const { return createdForHikaru; }
 
 	void setWindow(void *window, void *display = nullptr) {
 		this->window = window;
@@ -69,6 +72,7 @@ protected:
 	void *window = nullptr;
 	void *display = nullptr;
 	RenderType createdRenderType;
+	bool createdForHikaru;
 
 private:
 	static void onEvent(Event event, void *arg);

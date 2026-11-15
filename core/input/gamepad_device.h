@@ -226,6 +226,7 @@ protected:
 	bool rumbleEnabled = false;
 	bool hasAnalogStick = false;
 	int rumblePower = 100;
+	std::atomic<bool> cabinetForceActive{false};
 
 private:
 	void applyGamepadPreset();

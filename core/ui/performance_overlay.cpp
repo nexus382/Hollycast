@@ -1058,8 +1058,8 @@ void recordPvrScene(bool displayScene, std::uint32_t primitiveCount, std::uint32
 	// for the Dreamcast display, excluding render-to-texture passes. It must not
 	// be derived from Present(), which can repeat or omit a host output frame.
 	const std::uint32_t items = requestedItems.load(std::memory_order_relaxed);
-	if (displayScene)
-		recordGuestFrame();
+	if (displayScene && (items & Fps) != 0)
+		gameFrameCount.fetch_add(1, std::memory_order_relaxed);
 	if ((items & RendererStats) != 0)
 	{
 		rendererSceneCount.fetch_add(1, std::memory_order_relaxed);
