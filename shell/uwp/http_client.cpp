@@ -21,6 +21,7 @@
 #include "stdclass.h"
 #include <windows.h>
 #include <memory>
+#include <chrono>
 
 namespace http {
 
@@ -64,8 +65,9 @@ static void getHeaders(IIterator<IKeyValuePair<String^, String^>^>^ it, Headers&
 	}
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
 {
+	if (cancelled && cancelled->load()) return 499;
 	nowide::wstackstring wurl;
 	if (!wurl.convert(url.c_str()))
 		return 500;
@@ -89,14 +91,22 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		// Cancellation can complete after this function returns. Keep the event
 		// alive until both WinRT completion callbacks have released their copies.
 		auto asyncEvent = std::make_shared<cResetEvent>();
+		const auto wait = [&](bool initial) {
+			const auto deadline = !initial && timeoutMs <= 0 ? std::chrono::steady_clock::time_point::max()
+				: std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 30000);
+			while (!asyncEvent->Wait(25)) {
+				if ((cancelled && cancelled->load()) || std::chrono::steady_clock::now() >= deadline) return false;
+			}
+			return !cancelled || !cancelled->load();
+		};
 		op->Completed = ref new AsyncOperationWithProgressCompletedHandler<HttpResponseMessage^, HttpProgress>(
 				[asyncEvent](IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^, Windows::Foundation::AsyncStatus) {
 					asyncEvent->Set();
 		        });
-		if (!asyncEvent->Wait(timeoutMs > 0 ? timeoutMs : 30000))
+		if (!wait(true))
 		{
 			op->Cancel();
-			return 408;
+			return cancelled && cancelled->load() ? 499 : 408;
 		}
 		HttpResponseMessage^ resp = op->GetResults();
 
@@ -115,13 +125,11 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 				[asyncEvent](IAsyncOperationWithProgress<IBuffer^, uint64_t>^, Windows::Foundation::AsyncStatus) {
 					asyncEvent->Set();
 				});
-			if (timeoutMs > 0 && !asyncEvent->Wait(timeoutMs))
+			if (!wait(false))
 			{
 				readOp->Cancel();
-				return 408;
+				return cancelled && cancelled->load() ? 499 : 408;
 			}
-			if (timeoutMs <= 0)
-				asyncEvent->Wait();
 			IBuffer^ buffer = readOp->GetResults();
 
 			Array<u8>^ array = ref new Array<u8>(buffer->Length);

@@ -16,12 +16,19 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <ctime>
+#include <locale>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+class Boxart;
+struct GameMedia;
+class LibrarySavestateCache;
 
 namespace library {
 
@@ -109,6 +116,14 @@ inline std::vector<size_t> selectGames(const std::vector<Entry>& entries, View v
 		});
 	return result;
 }
+
+enum class SortColumn { ProductId = 1, Title, Region, Format, TimePlayed, Date, Size, Favourite };
+
+std::string regionLabel(uint32_t region);
+std::string mediaFormat(const GameMedia& game);
+std::array<uint64_t, 2> sortRevisions(SortColumn column, Boxart& boxart, const LibrarySavestateCache* latestSaves);
+void sortRows(std::vector<size_t>& rows, const std::vector<GameMedia>& games, SortColumn column,
+		bool descending, const std::locale& locale, Boxart& boxart, const LibrarySavestateCache* latestSaves);
 
 // Cache scanner indices, which remain stable as save discovery adds visible games.
 // Updates accept new save dates and matcher changes for the listed source paths.

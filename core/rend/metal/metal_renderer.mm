@@ -76,7 +76,8 @@ protected:
     void clearTextureCache() override { textureCache.Clear(); textureCache.Cleanup(); }
 private:
     id<MTLRenderPipelineState> pipeline(u32 src, u32 dst, bool depthOnly = false,
-            bool mirror = false, bool mirrorWrite = false, bool collect = false, bool colorStage = false);
+            bool mirror = false, bool mirrorWrite = false, bool collect = false, bool colorStage = false,
+            bool secondarySource = false);
     void draw(id<MTLRenderCommandEncoder> enc, id<MTLBuffer> indices, const PolyParam& poly,
               u32 first, u32 count, MTLPrimitiveType primitive, bool punch, bool sorted, bool depthOnly = false,
               bool mirror = false, MetalOITBuffers *oit = nullptr, id<MTLTexture> opaqueDepth = nil, u32 sequence = 0,
@@ -86,12 +87,14 @@ private:
     MetalTextureCache textureCache;
     MetalModifierVolumes modifiers;
     MetalOITBuffers oitBuffers;
+    MetalGeometryUploadPool geometryUploads;
     rend_context *renderContext = nullptr;
     TransformMatrix matrices { true };
     id<MTLLibrary> library = nil, oitLibrary = nil;
     const bool perPixel;
     MetalRenderTargets targets;
     id<MTLTexture> white = nil;
+    id<MTLTexture> regularSecondary = nil, regularSecondaryCopy = nil;
     id<MTLTexture> palette = nil, fog = nil;
     std::unordered_map<unsigned, id<MTLRenderPipelineState>> pipelines;
     std::unordered_map<unsigned, id<MTLDepthStencilState>> depthStates;
@@ -127,6 +130,7 @@ bool MetalRenderer::Init() {
     modifiers.Init(device);
     performance_overlay::setGpuTimingSupported(false);
     if (!white || !pipeline(1, 0)) return false;
+    if (!perPixel) pipeline(4, 5);
     NOTICE_LOG(RENDERER, "%s", perPixel ? "Native Metal per-pixel renderer initialized" : "Native Metal regular renderer initialized");
     return true;
     }
@@ -134,8 +138,10 @@ bool MetalRenderer::Init() {
 void MetalRenderer::Term() {
     MetalContext::Instance()->WaitIdle();
     modifiers.Term(); clearTextureCache(); clearGpuPreloadedTextures();
+    geometryUploads.clear();
     performance_overlay::setGpuTimingSupported(false);
     pvrTimingEvidence.reset();
+    regularSecondary = nil; regularSecondaryCopy = nil;
     pipelines.clear(); depthStates.clear(); samplers.clear(); targets.clear(); white = nil; palette = nil; fog = nil; library = nil; oitLibrary = nil;
 }
 void MetalRenderer::Process(TA_context *ctx) {
@@ -144,6 +150,8 @@ void MetalRenderer::Process(TA_context *ctx) {
     if (resetTextureCache) { clearTextureCache(); resetTextureCache = false; }
     textureCache.Cleanup();
     if (!ctx->rend.isRTT && !config::EmulateFramebuffer) clearLastFrame = false;
+    if (!ctx->rend.isRTT)
+        MetalContext::Instance()->setVideoMode(ctx->rend.palVideoMode);
     if (!ctx->rend.isRTT && ctx->rend.swapInterval > 0)
         MetalContext::Instance()->setSwapInterval(ctx->rend.swapInterval);
     // Use degenerate indices for strip joins; no primitive-restart state is required.
@@ -169,8 +177,8 @@ void MetalRenderer::Process(TA_context *ctx) {
     }
 }
 
-id<MTLRenderPipelineState> MetalRenderer::pipeline(u32 src, u32 dst, bool depthOnly, bool mirror, bool mirrorWrite, bool collect, bool colorStage) {
-    unsigned key = src * 8 + dst + (depthOnly ? 64 : 0) + (mirror ? 128 : 0) + (mirrorWrite ? 256 : 0) + (collect ? 512 : 0) + (colorStage ? 1024 : 0);
+id<MTLRenderPipelineState> MetalRenderer::pipeline(u32 src, u32 dst, bool depthOnly, bool mirror, bool mirrorWrite, bool collect, bool colorStage, bool secondarySource) {
+    unsigned key = src * 8 + dst + (depthOnly ? 64 : 0) + (mirror ? 128 : 0) + (mirrorWrite ? 256 : 0) + (collect ? 512 : 0) + (colorStage ? 1024 : 0) + (secondarySource ? 2048 : 0);
     auto found = pipelines.find(key);
     if (found != pipelines.end()) return found->second;
     static const MTLBlendFactor source[] = { MTLBlendFactorZero, MTLBlendFactorOne,
@@ -184,7 +192,7 @@ id<MTLRenderPipelineState> MetalRenderer::pipeline(u32 src, u32 dst, bool depthO
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     id<MTLLibrary> activeLibrary = (collect || colorStage) ? oitLibrary : library;
     d.vertexFunction = [activeLibrary newFunctionWithName:(collect || colorStage) ? @"pvr_oit_vertex" : @"pvr_vertex"];
-    d.fragmentFunction = [activeLibrary newFunctionWithName:collect ? @"pvr_collect" : colorStage ? (mirror ? @"pvr_oit_color_mirror" : @"pvr_oit_color") : mirror ? @"pvr_mirror" : @"pvr_fragment"];
+    d.fragmentFunction = [activeLibrary newFunctionWithName:collect ? @"pvr_collect" : colorStage ? (mirror ? @"pvr_oit_color_mirror" : @"pvr_oit_color") : mirror ? @"pvr_mirror" : secondarySource ? @"pvr_secondary" : @"pvr_fragment"];
     d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
     d.colorAttachments[0].blendingEnabled = !depthOnly && !collect;
     if (depthOnly || collect) d.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
@@ -223,14 +231,13 @@ void MetalRenderer::draw(id<MTLRenderCommandEncoder> enc, id<MTLBuffer> indices,
         bool mirror, MetalOITBuffers *oit, id<MTLTexture> opaqueDepth, u32 sequence, unsigned oitColor) {
     if (count < 3) return;
     if (p.isNaomi2()) throw RendererException("Metal regular renderer does not yet support Naomi 2 geometry");
-    if (!perPixel && !oit && (p.tsp.SrcSelect || p.tsp.DstSelect))
-        throw RendererException("Metal regular renderer does not yet support the PVR secondary accumulation buffer");
     bool stencilStage = oitColor > 0 && oitColor < 4;
     bool colorStage = stencilStage || oitColor == 5;
     bool writeDepth = oitColor == 4 ? (punch || !p.isp.ZWriteDis)
             : stencilStage ? (punch || !p.isp.ZWriteDis)
             : depthOnly || punch || (!sorted && !p.isp.ZWriteDis);
-    [enc setRenderPipelineState:pipeline(p.tsp.SrcInstr, p.tsp.DstInstr, depthOnly, mirror, mirror && writeDepth, oit != nullptr, colorStage)];
+    [enc setRenderPipelineState:pipeline(p.tsp.SrcInstr, p.tsp.DstInstr, depthOnly, mirror, mirror && writeDepth, oit != nullptr, colorStage,
+            !perPixel && !depthOnly && p.tsp.SrcSelect)];
     static const MTLCompareFunction compare[] = { MTLCompareFunctionNever, MTLCompareFunctionLess,
         MTLCompareFunctionEqual, MTLCompareFunctionLessEqual, MTLCompareFunctionGreater,
         MTLCompareFunctionNotEqual, MTLCompareFunctionGreaterEqual, MTLCompareFunctionAlways };
@@ -304,7 +311,8 @@ void MetalRenderer::draw(id<MTLRenderCommandEncoder> enc, id<MTLBuffer> indices,
     [enc setFragmentTexture:texture && texture->texture() ? texture->texture() : white atIndex:0];
     [enc setFragmentTexture:palette atIndex:1];
     [enc setFragmentTexture:fog atIndex:2];
-    if (colorStage) [enc setFragmentTexture:opaqueDepth ? opaqueDepth : white atIndex:3];
+    if (colorStage || (!perPixel && !depthOnly && p.tsp.SrcSelect))
+        [enc setFragmentTexture:opaqueDepth ? opaqueDepth : white atIndex:3];
     if (paletted || mode) linear = false;
     bool mip = linear && !punch && texture && texture->IsMipmapped();
     unsigned anisotropy = linear ? std::clamp((int)config::AnisotropicFiltering, 1, 16) : 1;
@@ -386,11 +394,11 @@ bool MetalRenderer::Render() {
     matrices.CalcMatrices(renderContext, w, h);
     id<MTLDevice> device = MetalContext::Instance()->GetDevice();
     if (renderContext->verts.empty() || renderContext->idx.empty()) return false;
-    MetalGeometryBuffers geometry = metalUploadGeometry(device, *renderContext);
-    id<MTLBuffer> vertices = geometry.vertices;
-    id<MTLBuffer> indices = geometry.indices;
     id<MTLCommandBuffer> command = [MetalContext::Instance()->GetQueue() commandBuffer];
     if (!command) throw RendererException("Metal command buffer allocation failed");
+    MetalGeometryBuffers geometry = geometryUploads.upload(device, *renderContext, command);
+    id<MTLBuffer> vertices = geometry.vertices;
+    id<MTLBuffer> indices = geometry.indices;
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = targets.output;
     pass.colorAttachments[0].loadAction = newTarget || renderContext->clearFramebuffer ? MTLLoadActionClear : MTLLoadActionLoad;
@@ -398,43 +406,108 @@ bool MetalRenderer::Render() {
     pass.colorAttachments[0].clearColor = renderContext->isRTT ? MTLClearColorMake(0, 0, 0, 0)
         : MTLClearColorMake(VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1);
     pass.depthAttachment.texture = targets.depth; pass.depthAttachment.loadAction = MTLLoadActionClear;
-    pass.depthAttachment.storeAction = MTLStoreActionStore; pass.depthAttachment.clearDepth = 0;
+    pass.depthAttachment.storeAction = MTLStoreActionUnknown; pass.depthAttachment.clearDepth = 0;
     pass.stencilAttachment.texture = targets.depth; pass.stencilAttachment.loadAction = MTLLoadActionClear;
-    pass.stencilAttachment.storeAction = MTLStoreActionStore; pass.stencilAttachment.clearStencil = 0;
+    pass.stencilAttachment.storeAction = MTLStoreActionUnknown; pass.stencilAttachment.clearStencil = 0;
     id<MTLRenderCommandEncoder> enc = [command renderCommandEncoderWithDescriptor:pass];
     [enc setVertexBuffer:vertices offset:0 atIndex:0];
+    id<MTLTexture> destination = targets.output;
+    bool secondaryInitialized = false;
+    const auto endEncoder = [&](bool final = false) {
+        [enc setDepthStoreAction:final ? MTLStoreActionDontCare : MTLStoreActionStore];
+        [enc setStencilStoreAction:final ? MTLStoreActionDontCare : MTLStoreActionStore];
+        [enc endEncoding];
+        enc = nil;
+    };
+    const auto beginEncoder = [&](id<MTLTexture> output) {
+        if (enc && destination == output) return;
+        endEncoder();
+        pass.colorAttachments[0].texture = output;
+        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        pass.depthAttachment.loadAction = MTLLoadActionLoad;
+        pass.stencilAttachment.loadAction = MTLLoadActionLoad;
+        enc = [command renderCommandEncoderWithDescriptor:pass];
+        if (!enc) throw RendererException("Metal render encoder allocation failed");
+        destination = output;
+        [enc setVertexBuffer:vertices offset:0 atIndex:0];
+    };
+    const auto makeSecondary = [&]() {
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                width:w height:h mipmapped:NO];
+        descriptor.storageMode = MTLStorageModePrivate;
+        descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+        if (!texture) throw RendererException("Metal secondary accumulation allocation failed");
+        return texture;
+    };
+    const auto drawRegular = [&](const PolyParam& p, u32 first, u32 count, MTLPrimitiveType primitive,
+            bool punch, bool sorted, bool depthOnly = false) {
+        if (count < 3) return;
+        id<MTLTexture> source = nil;
+        const bool secondaryOperation = !depthOnly && (p.tsp.SrcSelect || p.tsp.DstSelect);
+        if (secondaryOperation && !secondaryInitialized) {
+            endEncoder();
+            if (!regularSecondary || regularSecondary.width != (NSUInteger)w || regularSecondary.height != (NSUInteger)h) {
+                regularSecondary = makeSecondary();
+                regularSecondaryCopy = nil;
+            }
+            MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
+            clear.colorAttachments[0].texture = regularSecondary;
+            clear.colorAttachments[0].loadAction = MTLLoadActionClear;
+            clear.colorAttachments[0].storeAction = MTLStoreActionStore;
+            clear.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+            [[command renderCommandEncoderWithDescriptor:clear] endEncoding];
+            secondaryInitialized = true;
+        }
+        if (!depthOnly && p.tsp.SrcSelect) {
+            source = regularSecondary;
+            if (p.tsp.DstSelect) {
+                endEncoder();
+                if (!regularSecondaryCopy) regularSecondaryCopy = makeSecondary();
+                id<MTLBlitCommandEncoder> copy = [command blitCommandEncoder];
+                [copy copyFromTexture:regularSecondary sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                        sourceSize:MTLSizeMake(w, h, 1) toTexture:regularSecondaryCopy destinationSlice:0
+                        destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [copy endEncoding];
+                source = regularSecondaryCopy;
+            }
+        }
+        beginEncoder(!depthOnly && p.tsp.DstSelect ? regularSecondary : targets.output);
+        draw(enc, indices, p, first, count, primitive, punch, sorted, depthOnly, false, nullptr, source);
+    };
     RenderPass prev {};
     for (const RenderPass& cur : renderContext->render_passes) {
         for (u32 i = prev.op_count; i < cur.op_count; ++i) {
-            auto& p = renderContext->global_param_op[i]; draw(enc, indices, p, p.first, p.count, MTLPrimitiveTypeTriangleStrip, false, false);
+            auto& p = renderContext->global_param_op[i]; drawRegular(p, p.first, p.count, MTLPrimitiveTypeTriangleStrip, false, false);
         }
         for (u32 i = prev.pt_count; i < cur.pt_count; ++i) {
-            auto& p = renderContext->global_param_pt[i]; draw(enc, indices, p, p.first, p.count, MTLPrimitiveTypeTriangleStrip, true, false);
+            auto& p = renderContext->global_param_pt[i]; drawRegular(p, p.first, p.count, MTLPrimitiveTypeTriangleStrip, true, false);
         }
         if (config::ModifierVolumes && cur.mvo_count > prev.mvo_count) {
+            beginEncoder(targets.output);
             modifiers.Draw(enc, *renderContext, matrices, prev.mvo_count, cur.mvo_count - prev.mvo_count, w, h);
             [enc setVertexBuffer:vertices offset:0 atIndex:0];
         }
         if (cur.autosort && !config::PerStripSorting) {
             for (u32 i = prev.sorted_tr_count; i < cur.sorted_tr_count; ++i) {
                 auto& t = renderContext->sortedTriangles[i]; auto& p = renderContext->global_param_tr[t.polyIndex];
-                draw(enc, indices, p, t.first, t.count, MTLPrimitiveTypeTriangle, false, true);
+                drawRegular(p, t.first, t.count, MTLPrimitiveTypeTriangle, false, true);
             }
             if (&cur != &renderContext->render_passes.back() && config::TranslucentPolygonDepthMask) {
                 for (u32 i = prev.sorted_tr_count; i < cur.sorted_tr_count; ++i) {
                     auto& t = renderContext->sortedTriangles[i]; auto& p = renderContext->global_param_tr[t.polyIndex];
                     if (!p.isp.ZWriteDis)
-                        draw(enc, indices, p, t.first, t.count, MTLPrimitiveTypeTriangle, false, false, true);
+                        drawRegular(p, t.first, t.count, MTLPrimitiveTypeTriangle, false, false, true);
                 }
             }
         } else {
             for (u32 i = prev.tr_count; i < cur.tr_count; ++i) {
-                auto& p = renderContext->global_param_tr[i]; draw(enc, indices, p, p.first, p.count, MTLPrimitiveTypeTriangleStrip, false, cur.autosort);
+                auto& p = renderContext->global_param_tr[i]; drawRegular(p, p.first, p.count, MTLPrimitiveTypeTriangleStrip, false, cur.autosort);
             }
         }
         prev = cur;
     }
-    [enc endEncoding];
+    endEncoder(true);
     if (!renderContext->isRTT) {
         int rawWidth, rawHeight; getPvrFramebufferSize(*renderContext, rawWidth, rawHeight);
         performance_overlay::recordRenderedResolution(rawWidth, rawHeight, w, h);

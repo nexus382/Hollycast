@@ -44,9 +44,9 @@ Between the two of you, you've given us more testing time on this work than anyo
 
 Hikaru is a difficult system to emulate. Having other people's research and experience to learn from has mattered a great deal.
 
-**Réda Chérif-Touil (Tovarichtch)**, the developer of [ODIN](https://github.com/Tovarichtch/Odin), deserves a special thank-you. The debugging steps and information he shared helped us work through our own Hikaru emulation, including understanding the Valkyrie code we used as a reference. That help made a real difference to our progress on a system that is very difficult to get right.
+**Réda Chérif-Touil (Tovarichtch)**, the developer of [ODIN](https://github.com/Tovarichtch/Odin), deserves a special thank-you. The debugging information his code provided, helped us work through our own Hikaru emulation, including understanding the Valkyrie code we used as a reference. That help made a real difference to our progress on a system that is very difficult to get right.
 
-I appreciate the time you've put into ODIN, and the help you've given us while working on your own emulator. You had your own project to spend that time on, and you still helped ours move forward. That means a lot to me.
+I appreciate the time you've put into ODIN, and the help your code has provided us. You had your own project to spend that time on, and you still helped ours move forward with that very same hardwork. That means a lot to me.
 
 ODIN deserves recognition as a project in its own right, too. I'm glad it exists, and I'm glad the community has another developer working to understand Hikaru and give people a way to enjoy its games. I'd encourage anyone interested in the system to take a look at [ODIN and the work going into it](https://github.com/Tovarichtch/Odin).
 
@@ -59,6 +59,12 @@ Having that work available, and people willing to help explain it, has saved us 
 [MAME](https://github.com/mamedev/mame) has also been a major reference for our Hikaru work. Its source and hardware notes hold years of research that would be much harder to piece together alone.
 
 Thank you to the MAME developers and contributors, including **MetalliC**, credited on the [Hikaru driver](https://github.com/mamedev/mame/blob/master/src/mame/sega/hikaru.cpp), and everyone who helped investigate and document the system. That knowledge has been a real help to us.
+
+## Phone VMU contributors
+
+Phone VMU mini-games use **Bucanero**'s JavaScript port of **Marcus Comstedt**'s SoftVMS 1.10, from [dcvmu-tool](https://github.com/bucanero/dcvmu-tool). The browser engine and its GPLv3 license are included with the source. Pairing codes use **Project Nayuki**'s [QR Code generator](https://github.com/nayuki/QR-Code-generator), under the MIT license.
+
+The phone screen's keep-awake fallback uses the silent video assets from **Rich Tibbett**'s [NoSleep.js](https://github.com/richtr/NoSleep.js), under the MIT license. The media and license are included with the source.
 
 ## To everyone playing Hollycast
 

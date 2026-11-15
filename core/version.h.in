@@ -1,5 +1,7 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 
 #define GIT_VERSION		"@GIT_VERSION@"
 #define GIT_HASH		"@GIT_HASH@"
 #define BUILD_DATE		"@BUILD_TIMESTAMP@"
+#define HOLLYCAST_UPDATE_CHANNEL "@HOLLYCAST_UPDATE_CHANNEL@"

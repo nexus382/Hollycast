@@ -174,6 +174,21 @@ TEST_F(ThemeInstallTest, MissingAndInvalidSelectionsFallBackAndUnknownLayoutUses
 	EXPECT_NE(themes::error().find("unavailable"), std::string::npos);
 }
 
+TEST_F(ThemeInstallTest, DcnetPagesCannotReplaceTheSelectedLibraryLayout)
+{
+	const std::string manifest = R"({"formatVersion":1,"id":"install-test","name":"Pages","layouts":[
+		{"id":"network","name":"DCnet","screen":"dcnet","mode":"grid","browser":[0,0,1,1]},
+		{"id":"grid","name":"Library","mode":"grid","browser":[0,0,1,1]}]})";
+	EXPECT_EQ(themes::install(makePackage("install-test", manifest).u8string()), "install-test");
+	config::CustomTheme = "install-test";
+	for (const char* selected : {"", "network", "grid"})
+	{
+		config::ThemeLayout = selected;
+		ASSERT_NE(themes::currentLayout(), nullptr);
+		EXPECT_EQ(themes::currentLayout()->id, "grid");
+	}
+}
+
 TEST_F(ThemeInstallTest, FolderManifestIdMismatchAppearsAsCatalogError)
 {
 	writeFile(fs::path(themes::directory()) / "folder-name" / "theme.json", kManifest);

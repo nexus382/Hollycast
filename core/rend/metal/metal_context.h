@@ -21,6 +21,7 @@ class MetalContext final : public GraphicsContext
 	void WaitIdle();
 	void resize() override;
 	void setSwapInterval(int interval) override;
+	void setVideoMode(bool pal);
 	std::string getDriverName() override;
 	std::string getDriverVersion() override;
 	bool isAMD() override { return false; }

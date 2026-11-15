@@ -22,6 +22,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <chrono>
+#include <thread>
 
 #if defined(VIDEO_ROUTING) && defined(TARGET_MAC)
 void os_VideoRoutingPublishMetalTexture(id<MTLDevice>, id<MTLTexture>, id<MTLCommandBuffer>);
@@ -36,9 +39,13 @@ struct MetalContext::Impl
 		if (view)
 			SDL_Metal_DestroyView(view);
 	}
-	dispatch_semaphore_t slots = dispatch_semaphore_create(3);
+	static constexpr NSUInteger drawableCount = 3;
+	dispatch_semaphore_t slots = dispatch_semaphore_create(drawableCount);
 	int swapInterval = 1;
+	double videoRefreshRate = 60.0;
 	CFTimeInterval nextPresentationTime = 0;
+	CFTimeInterval lastGameFrameTime = 0;
+	bool gameFramePending = false;
 	CAMetalLayer *layer = nil;
 	id<MTLRenderPipelineState> pipeline = nil;
 	id<MTLSamplerState> sampler = nil;
@@ -161,6 +168,7 @@ MetalContext::MetalContext(void *window, void *display)
 		throw FlycastException("Metal initialization failed: command queue creation failed");
 	impl->layer = (__bridge CAMetalLayer *)SDL_Metal_GetLayer(impl->view);
 	impl->layer.device = device;
+	impl->layer.maximumDrawableCount = 2;
 	impl->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
 	impl->layer.framebufferOnly = YES;
 	NSError *error = nil;
@@ -200,7 +208,23 @@ void MetalContext::WaitIdle()
 }
 void MetalContext::setSwapInterval(int interval)
 {
-	impl->swapInterval = std::max(0, interval);
+	interval = std::max(0, interval);
+	if (impl->swapInterval != interval)
+	{
+		impl->swapInterval = interval;
+		impl->nextPresentationTime = 0;
+		impl->lastGameFrameTime = 0;
+	}
+}
+void MetalContext::setVideoMode(bool pal)
+{
+	const double refreshRate = pal ? 50.0 : 60.0;
+	if (impl->videoRefreshRate != refreshRate)
+	{
+		impl->videoRefreshRate = refreshRate;
+		impl->nextPresentationTime = 0;
+		impl->lastGameFrameTime = 0;
+	}
 }
 void MetalContext::resize()
 {
@@ -222,6 +246,7 @@ void MetalContext::PresentFrame(id<MTLTexture> texture, float aspectRatio)
 {
 	if (texture)
 	{
+		impl->gameFramePending = true;
 		impl->lastFrame = texture;
 		impl->aspect = aspectRatio > 0 ? aspectRatio : (float)texture.width / texture.height;
 	}
@@ -249,13 +274,52 @@ void MetalContext::PresentLastFrame()
 			return;
 #endif
 		if (SDL_GetWindowFlags((SDL_Window *)window) & SDL_WINDOW_MINIMIZED)
+		{
+			impl->nextPresentationTime = 0;
+			impl->lastGameFrameTime = 0;
 			return;
+		}
 		resize();
 		if (settings.display.width <= 0 || settings.display.height <= 0)
+		{
+			impl->nextPresentationTime = 0;
+			impl->lastGameFrameTime = 0;
 			return;
+		}
 		const bool synchronized = config::VSync && !settings.input.fastForwardMode && impl->swapInterval > 0;
 		if (impl->layer.displaySyncEnabled != synchronized)
 			impl->layer.displaySyncEnabled = synchronized;
+		const bool paceGame = synchronized && impl->swapInterval > 1 && !gui_is_open();
+		const NSUInteger drawableCount = paceGame ? Impl::drawableCount : 2;
+		if (impl->layer.maximumDrawableCount != drawableCount)
+			impl->layer.maximumDrawableCount = drawableCount;
+		const bool gameFrame = impl->gameFramePending;
+		const CFTimeInterval now = CACurrentMediaTime();
+		const double framePeriod = impl->swapInterval / impl->videoRefreshRate;
+		// A slow game may not have a new image when the UI polls for input.
+		// Keep its last image on screen; an extra swap would delay the next
+		// game frame. Still redraw the OSD if the game stops producing frames.
+		if (paceGame && !gameFrame && impl->lastGameFrameTime > 0
+				&& now - impl->lastGameFrameTime < 3 * framePeriod)
+			return;
+		if (!paceGame)
+		{
+			impl->nextPresentationTime = 0;
+			impl->lastGameFrameTime = 0;
+		}
+		CFTimeInterval presentationTime = 0;
+		if (paceGame && gameFrame)
+		{
+			presentationTime = impl->nextPresentationTime;
+			if (presentationTime == 0 || now - presentationTime > 3 * framePeriod)
+				presentationTime = now;
+			presentationTime += framePeriod;
+			// A hidden window can recycle drawables without displaying them.
+			// Bound that path to two future guest periods without a display callback.
+			const double lead = presentationTime - CACurrentMediaTime() - 2 * framePeriod;
+			if (lead > 0)
+				std::this_thread::sleep_for(std::chrono::duration<double>(lead));
+		}
 		if (dispatch_semaphore_wait(impl->slots, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC)) != 0)
 			return;
 		id<CAMetalDrawable> drawable = [impl->layer nextDrawable];
@@ -380,24 +444,39 @@ void MetalContext::PresentLastFrame()
 			os_VideoRoutingPublishMetalTexture(device, routed, cmd);
 		}
 #endif
-		if (synchronized && impl->swapInterval > 1)
+		if (paceGame && gameFrame)
 		{
-			if (@available(macOS 10.15.4, *))
-				[cmd presentDrawable:drawable afterMinimumDuration:impl->swapInterval / 60.0];
-			else
-			{
-				impl->nextPresentationTime = std::max(CACurrentMediaTime(), impl->nextPresentationTime)
-					+ impl->swapInterval / 60.0;
-				[cmd presentDrawable:drawable atTime:impl->nextPresentationTime];
-			}
+			const CFTimeInterval scheduleTime = CACurrentMediaTime();
+			if (scheduleTime - presentationTime > 3 * framePeriod)
+				presentationTime = scheduleTime + framePeriod;
+			impl->nextPresentationTime = presentationTime;
+			[cmd presentDrawable:drawable atTime:presentationTime];
 		}
 		else
 		{
 			impl->nextPresentationTime = 0;
 			[cmd presentDrawable:drawable];
 		}
+		bool recordsDisplayTime = false;
+		if (@available(macOS 10.15.4, *))
+		{
+			recordsDisplayTime = true;
+			const bool collectPresentation = performance_overlay::isPresentationTimingRequested();
+			const std::uint32_t epoch = performance_overlay::getPresentationTimingEpoch();
+			if (collectPresentation)
+				[drawable addPresentedHandler:^(id<MTLDrawable> presented) {
+					const double seconds = presented.presentedTime;
+					if (std::isfinite(seconds) && seconds > 0
+							&& seconds < static_cast<double>(std::numeric_limits<std::uint64_t>::max()) / 1000000.0)
+						performance_overlay::recordPresentedFrameAt(static_cast<std::uint64_t>(seconds * 1000000.0), epoch);
+				}];
+		}
 		[cmd commit];
-		performance_overlay::recordPresentedFrame();
+		if (!recordsDisplayTime)
+			performance_overlay::recordPresentedFrame();
+		impl->gameFramePending = false;
+		if (paceGame && gameFrame)
+			impl->lastGameFrameTime = CACurrentMediaTime();
 	}
 }
 bool MetalContext::GetLastFrame(std::vector<u8> &data, int &width, int &height)

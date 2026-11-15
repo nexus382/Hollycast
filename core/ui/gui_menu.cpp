@@ -20,8 +20,10 @@
 #include "gui_menu.h"
 #include "gui_debugger.h"
 #include "debug/assembly_debugger.h"
+#include "app_updater.h"
 #include "gui.h"
 #include "gui_util.h"
+#include "theme.h"
 #include "cfg/cfg.h"
 #include "emulator.h"
 #include "log/LogManager.h"
@@ -358,6 +360,14 @@ bool isGameRunning()
 // Render the main menu bar using standard ImGui.
 void renderMainMenuBar()
 {
+	const themes::Layout* layout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
+	if (layout != nullptr && layout->hidesToolbar())
+	{
+		menuBarVisibleThisFrame = false;
+		menuBarHeightThisFrame = 0.f;
+		publishMenuTouchState(false, false);
+		return;
+	}
 #if defined(TARGET_MAC)
 	menuBarVisibleThisFrame = false;
 	menuBarHeightThisFrame = 0.0f;
@@ -708,13 +718,8 @@ void renderHelpMenu()
 
 		ImGui::Separator();
 
-		if (ImGui::MenuItem(T("Check for Updates"), nullptr, false, canOpenLinks))
-		{
-			if (!openUrlInShell("https://nexus382.github.io/Hollycast/"))
-				WARN_LOG(COMMON, "Unable to open updates page from Help menu");
-		}
-		if (!canOpenLinks && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("%s", T("Opening links is not supported on this platform."));
+		if (ImGui::MenuItem(T("Check for Updates")))
+			app_updates::open();
 
 		ImGui::Separator();
 

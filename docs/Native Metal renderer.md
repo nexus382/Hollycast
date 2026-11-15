@@ -26,9 +26,11 @@ The build option is restricted to standalone macOS. iOS, tvOS and libretro integ
 - Native Syphon publication, including its output scaling option. GPU resources stay alive through command-buffer completion.
 - Renderer/resolution metrics and completed-command-buffer GPU timing for screen render work, excluding general UI and RTT rendering. Per-pixel timing sums its PVR command buffers. Full-framebuffer presentation retains evidence of that PVR work; CPU-only framebuffer video reports GPU timing unavailable.
 
+With VSync enabled, games that draw once every two or more guest refreshes use absolute presentation times. For example, an NTSC game drawing every other refresh targets a new image every 33.3 ms. A late frame does not move every subsequent deadline. In this mode Metal can use a third drawable so that preparing the next frame does not have to wait for a display callback. Menus, fast-forward and games that draw every refresh use two drawables.
+
 ## Current limitations
 
-This is experimental and does not establish whole-game compatibility parity. Naomi 2 geometry is not implemented. The regular renderer rejects secondary-accumulator drawing; that path is implemented by the per-pixel renderer.
+This is experimental and does not establish whole-game compatibility parity. Naomi 2 geometry is not implemented. Both regular and per-pixel Metal support the PVR secondary accumulation buffer.
 
 Per-pixel rendering prioritizes correctness over throughput: collection, dependent modifier steps and resolve use explicit GPU ordering/waits, and resolve sorting is quadratic in fragment count. Pixel Buffer Size is a hard budget bounded by the device allocation limit; allocation grows lazily within it and exhaustion reports an error. Maximum Layers keeps the nearest configured number of fragments deterministically and reports truncation. Full-framebuffer dithering runs at the existing CPU readback boundary on RGBA8 pixels; fractional pre-quantization parity with other backends is not guaranteed.
 

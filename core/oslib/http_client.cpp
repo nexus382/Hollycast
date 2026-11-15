@@ -45,6 +45,9 @@ int get(const std::string& url, std::vector<u8>& content, std::string& contentTy
 #include "stdclass.h"
 #include <windows.h>
 #include <wininet.h>
+#include <condition_variable>
+#include <mutex>
+#include <memory>
 
 namespace http {
 
@@ -87,8 +90,104 @@ static HINTERNET connect(const URL_COMPONENTS& comp) {
 	return InternetConnect(hInet, comp.lpszHostName, comp.nPort, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
+struct AsyncGetState {
+	std::mutex mutex;
+	std::condition_variable changed;
+	bool complete = false, closed = false;
+	DWORD error = 0;
+};
+
+static void CALLBACK getCallback(HINTERNET, DWORD_PTR context, DWORD status, void* info, DWORD) {
+	if (context == 0) return;
+	auto& state = *reinterpret_cast<AsyncGetState*>(context);
+	std::lock_guard<std::mutex> lock(state.mutex);
+	if (status == INTERNET_STATUS_REQUEST_COMPLETE) {
+		state.error = static_cast<INTERNET_ASYNC_RESULT*>(info)->dwError;
+		state.complete = true;
+	} else if (status == INTERNET_STATUS_HANDLE_CLOSING) state.closed = true;
+	state.changed.notify_one();
+}
+
+static int cancellableGet(const std::string& url, std::vector<u8>& content, const Headers* reqHeaders,
+		Headers* respHeaders, int timeoutMs, const std::atomic<bool>& cancelled) {
+	if (cancelled.load()) return 499;
+	CrackedUrl cracked;
+	if (!crackUrl(url, cracked)) return 500;
+	using Internet = std::unique_ptr<void, decltype(&InternetCloseHandle)>;
+	Internet session(InternetOpenA(getUserAgent().c_str(), INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, INTERNET_FLAG_ASYNC), InternetCloseHandle);
+	if (!session || InternetSetStatusCallbackA(session.get(), getCallback) == INTERNET_INVALID_STATUS_CALLBACK) return 500;
+	const auto& parts = cracked.components;
+	Internet connection(InternetConnectA(session.get(), parts.lpszHostName, parts.nPort, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0), InternetCloseHandle);
+	if (!connection) return 500;
+	AsyncGetState state;
+	const auto close = [&](void* handle) {
+		InternetCloseHandle(handle);
+		// WinINet can finish cancellation asynchronously. HANDLE_CLOSING is its
+		// final callback; wait for it before releasing the context or I/O buffers.
+		std::unique_lock<std::mutex> lock(state.mutex);
+		state.changed.wait(lock, [&] { return state.closed; });
+	};
+	std::unique_ptr<void, decltype(close)> request(HttpOpenRequestA(connection.get(), "GET", parts.lpszUrlPath,
+		nullptr, nullptr, nullptr, !strcmp(parts.lpszScheme, "https") ? INTERNET_FLAG_SECURE : 0,
+		reinterpret_cast<DWORD_PTR>(&state)), close);
+	if (!request) return 500;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 30000);
+	const auto prepare = [&] {
+		std::lock_guard<std::mutex> lock(state.mutex);
+		state.complete = false;
+		state.error = 0;
+	};
+	const auto wait = [&](BOOL issued) {
+		if (issued) return true;
+		if (GetLastError() != ERROR_IO_PENDING) return false;
+		std::unique_lock<std::mutex> lock(state.mutex);
+		while (!state.complete) {
+			if (cancelled.load() || std::chrono::steady_clock::now() >= deadline) {
+				lock.unlock();
+				request.reset(); // No WinINet call is active: cancel only pending asynchronous I/O.
+				return false;
+			}
+			state.changed.wait_for(lock, std::chrono::milliseconds(25));
+		}
+		return state.error == 0;
+	};
+	std::string headers;
+	if (reqHeaders) for (const auto& [name, value] : *reqHeaders) headers += name + ": " + value + "\r\n";
+	prepare();
+	if (!wait(HttpSendRequestA(request.get(), headers.c_str(), static_cast<DWORD>(headers.size()), nullptr, 0)))
+		return cancelled.load() ? 499 : 500;
+	if (cancelled.load()) return 499;
+	DWORD status = 500, size = sizeof(status);
+	if (!HttpQueryInfoA(request.get(), HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &size, nullptr)) return 500;
+	if (respHeaders) {
+		char raw[4096]; size = sizeof(raw);
+		if (HttpQueryInfoA(request.get(), HTTP_QUERY_RAW_HEADERS_CRLF, raw, &size, nullptr)) {
+			std::istringstream lines(std::string(raw, size));
+			std::string line;
+			while (std::getline(lines, line)) {
+				const auto colon = line.find(':');
+				if (colon == std::string::npos) continue;
+				auto name = trim_ws(line.substr(0, colon), " \t\r\n");
+				string_tolower(name);
+				respHeaders->emplace_back(name, trim_ws(line.substr(colon + 1), " \t\r\n"));
+			}
+		}
+	}
+	content.clear();
+	for (;;) {
+		if (cancelled.load()) return 499;
+		u8 buffer[4096]; DWORD read = 0;
+		prepare();
+		if (!wait(InternetReadFile(request.get(), buffer, sizeof(buffer), &read))) return cancelled.load() ? 499 : 500;
+		if (read == 0) break;
+		content.insert(content.end(), buffer, buffer + read);
+	}
+	return static_cast<int>(status);
+}
+
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
 {
+	if (cancelled != nullptr) return cancellableGet(url, content, reqHeaders, respHeaders, timeoutMs, *cancelled);
 	CrackedUrl cracked;
 	if (!crackUrl(url, cracked))
 		return 500;
@@ -376,9 +475,17 @@ static CURL *makeCurlEasy(const std::string& url)
 	return curl;
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
 {
 	CURL *curl = makeCurlEasy(url);
+	if (cancelled != nullptr) {
+		curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+		curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancelled);
+		curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION,
+			+[](void* token, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+				return static_cast<const std::atomic<bool>*>(token)->load() ? 1 : 0;
+			});
+	}
 
 	if (timeoutMs > 0)
 	{

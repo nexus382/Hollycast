@@ -57,12 +57,27 @@ public class HttpClient {
     }
 
     public int openUrl(String url_string, byte[][] content, String[] reqHeaderNames, String[] reqHeaderValues,
-                       String[][] respHeaderNames, String[][] respHeaderValues, int timeoutMs)
+                       String[][] respHeaderNames, String[][] respHeaderValues, int timeoutMs, long cancellationToken)
     {
         HttpURLConnection conn = null;
+        Thread canceller = null;
         try {
             URL url = new URL(url_string);
             conn = (HttpURLConnection)url.openConnection();
+            if (cancellationToken != 0) {
+                final HttpURLConnection request = conn;
+                canceller = new Thread(() -> {
+                    try {
+                        // disconnect before connect can be a no-op. Keep the
+                        // cancellation latched until the request's finally block.
+                        for (;;) {
+                            if (isCancelled(cancellationToken)) request.disconnect();
+                            Thread.sleep(25);
+                        }
+                    } catch (InterruptedException stopped) { /* Request completed normally. */ }
+                }, "HollycastHttpCancel");
+                canceller.start();
+            }
             conn.setConnectTimeout(timeoutMs > 0 ? timeoutMs : 30 * 1000);
             if (timeoutMs > 0)
                 conn.setReadTimeout(timeoutMs);
@@ -71,6 +86,7 @@ public class HttpClient {
                 for (int i = 0; i < reqHeaderNames.length; i++)
                     conn.setRequestProperty(reqHeaderNames[i], reqHeaderValues[i]);
             }
+            if (cancellationToken != 0 && isCancelled(cancellationToken)) return 499;
             conn.connect();
             if (conn.getResponseCode() >= 200 && conn.getResponseCode() < 300) {
                 if (respHeaderNames != null)
@@ -114,11 +130,23 @@ public class HttpClient {
         } catch (Throwable t) {
             Log.e("hollycast", "Unknown error", t);
         } finally {
+            if (canceller != null) {
+                canceller.interrupt();
+                boolean interrupted = false;
+                // The token points to the joined caller's atomic. Join its monitor
+                // before returning, so no native pointer escapes this request.
+                for (;;) {
+                    try { canceller.join(); break; }
+                    catch (InterruptedException e) { interrupted = true; }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+            }
             if (conn != null)
                 conn.disconnect();
         }
         return 500;
     }
+    private static native boolean isCancelled(long cancellationToken);
 
     private CloseableHttpClient getHttpClient()
     {

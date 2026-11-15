@@ -9,7 +9,9 @@ set(METAL_SOURCES
     metal_oit_shaders.mm
     metal_overlay.mm)
 target_sources(${PROJECT_NAME} PRIVATE ${METAL_SOURCES})
-set_source_files_properties(${METAL_SOURCES} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+# Source properties are read in the directory that created the app target.
+set_source_files_properties(${METAL_SOURCES} TARGET_DIRECTORY ${PROJECT_NAME}
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_compile_definitions(${PROJECT_NAME} PRIVATE USE_METAL)
 find_library(HOLLYCAST_METAL_FRAMEWORK Metal REQUIRED)
 find_library(HOLLYCAST_QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
@@ -26,8 +28,7 @@ foreach(check texture_upload regular_shader modifier_shader)
         ${HOLLYCAST_METAL_FRAMEWORK} "-framework Foundation")
 endforeach()
 target_sources(metal_regular_shader_smoke PRIVATE metal_shaders.mm)
-set_source_files_properties(metal_shaders.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-foreach(check cull_compare flat_punch_regression alpha_semantics_regression native_depth_regression)
+foreach(check cull_compare flat_punch_regression alpha_semantics_regression native_depth_regression geometry_upload_smoke)
     add_executable(metal_${check} EXCLUDE_FROM_ALL
         "${PROJECT_SOURCE_DIR}/tests/metal/${check}.mm" metal_shaders.mm)
     target_include_directories(metal_${check} PRIVATE
@@ -40,6 +41,7 @@ foreach(check cull_compare flat_punch_regression alpha_semantics_regression nati
     target_link_libraries(metal_${check} PRIVATE
         ${HOLLYCAST_METAL_FRAMEWORK} "-framework Foundation")
 endforeach()
+target_sources(metal_geometry_upload_smoke PRIVATE "${PROJECT_SOURCE_DIR}/core/rend/sorter.cpp")
 target_sources(metal_flat_punch_regression PRIVATE "${PROJECT_SOURCE_DIR}/core/rend/sorter.cpp")
 target_link_libraries(metal_cull_compare PRIVATE "-framework OpenGL")
 
@@ -177,6 +179,7 @@ add_custom_target(metal-smoke
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_oit_modifier_regression>
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_reconstruction_compare> "${PROJECT_SOURCE_DIR}/core/rend/gles/gles.cpp"
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_native_depth_regression>
+    COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_geometry_upload_smoke>
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_texture_upload_smoke>
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_regular_shader_smoke>
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_modifier_shader_smoke>
@@ -186,7 +189,7 @@ add_custom_target(metal-smoke
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_flat_punch_regression>
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_alpha_semantics_regression>
     DEPENDS metal_framebuffer_dither_regression metal_context_unavailable_smoke metal_overlay_smoke metal_renderer_type_test metal_reconstruction_compare metal_native_depth_regression metal_oit_buffer_regression metal_oit_modifier_regression metal_oit_blend_matrix metal_oit_collect_regression metal_oit_depth_replay_regression
-        metal_texture_upload_smoke metal_regular_shader_smoke metal_modifier_shader_smoke
+        metal_geometry_upload_smoke metal_texture_upload_smoke metal_regular_shader_smoke metal_modifier_shader_smoke
         metal_cull_compare metal_modvol_cull_compare metal_target_preservation_regression
         metal_flat_punch_regression metal_alpha_semantics_regression
     USES_TERMINAL)
