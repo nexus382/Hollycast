@@ -11,6 +11,12 @@ import os from 'node:os';
 const BUTTONS = new Set(['A', 'B', 'C', 'D', 'X', 'Y', 'Z', 'START', 'UP', 'DOWN', 'LEFT', 'RIGHT',
   'UP2', 'DOWN2', 'LEFT2', 'RIGHT2', 'RELOAD', 'INSERT_CARD']);
 const ID = /^[0-9a-f]{32}$/;
+const SETTINGS_PAGES = new Set(['general', 'library', 'video', 'osd', 'audio', 'controls', 'network', 'advanced', 'about']);
+const UI_MODIFIERS = new Set(['Ctrl', 'Shift', 'Alt']);
+const UI_EXPECTABLE_FIELDS = new Set(['semantic_id', 'semantic_label', 'kind', 'value', 'value_label', 'value_type', 'checked',
+  'checkable', 'inputable', 'requires_apply', 'draft_value', 'active', 'text_input_focused', 'password', 'disabled', 'visible']);
+
+const UI_OBSERVATION_MAX_AGE_MS = 4000;
 
 export function agentInvocation(nodeExecutable, cli, directory, command, args = [], wsl = false) {
   check([nodeExecutable, cli, directory, command, ...args].every(value => typeof value === 'string' && !/[\r\n\0]/.test(value)),
@@ -45,12 +51,13 @@ async function readJson(file, maximum = 8 * 1024 * 1024) {
   return JSON.parse(await fs.readFile(file, 'utf8'));
 }
 
-async function writeNewJson(file, value) {
+async function writeNewJson(file, value, beforePublish = null) {
   const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
     // Linking publishes the complete file atomically and refuses replacement,
     // including when another process wins the race to this evidence path.
+    beforePublish?.();
     try { await fs.link(temporary, file); }
     catch (error) { if (error.code === 'EEXIST') throw new Error(`Refusing to overwrite evidence: ${file}`); throw error; }
   } finally { await fs.rm(temporary, { force: true }); }
@@ -76,6 +83,192 @@ export function controllerState(options = {}) {
   check(Array.isArray(triggers) && triggers.length === 2 && triggers.every(value => Number.isInteger(value) && value >= 0 && value <= 65535),
     'Two triggers must be integers in 0..65535');
   return { port, buttons: [...buttons], axes: [...axes], triggers: [...triggers], lease_ms: leaseMs };
+}
+
+export function validateSettingsPage(page) {
+  check(typeof page === 'string' && SETTINGS_PAGES.has(page), 'Settings page must be general, library, video, osd, audio, controls, network, advanced, or about');
+  return page;
+}
+
+export function validateUiTarget(target) {
+  const value = typeof target === 'string' ? { label: target } : target;
+  check(value && typeof value === 'object' && !Array.isArray(value), 'UI target must be a label or selector object');
+  const allowed = new Set(['label', 'item_id', 'semantic_id', 'window']);
+  check(Object.keys(value).every(key => allowed.has(key)), 'UI target contains an unknown field');
+  const selectors = ['label', 'item_id', 'semantic_id'].filter(key => Object.hasOwn(value, key));
+  check(selectors.length === 1, 'UI target requires exactly one of label, item_id, or semantic_id');
+  const key = selectors[0], selected = value[key];
+  if (key === 'label') check(typeof selected === 'string' && selected.length >= 1 && selected.length <= 256
+    && !/[\u0000-\u001f\u007f]/.test(selected), 'UI label must be 1..256 characters without controls');
+  if (key === 'item_id') check(Number.isInteger(selected) && selected >= 1 && selected <= 0xffffffff, 'UI item_id must be a nonzero uint32');
+  if (key === 'semantic_id') check(typeof selected === 'string' && selected.length >= 1 && Buffer.byteLength(selected, 'utf8') <= 128
+    && !/[\u0000-\u001f\u007f]/.test(selected), 'UI semantic_id must be at most 128 UTF-8 bytes without controls');
+  if (Object.hasOwn(value, 'window')) check(typeof value.window === 'string' && value.window.length >= 1 && Buffer.byteLength(value.window, 'utf8') <= 512
+    && !/[\u0000-\u001f\u007f]/.test(value.window), 'UI window must be at most 512 UTF-8 bytes without controls');
+  return { [key]: selected, ...(value.window === undefined ? {} : { window: value.window }) };
+}
+
+export function validateMappingArgs(args) {
+  check(args && typeof args === 'object' && !Array.isArray(args) && typeof args.action === 'string', 'Mapping input must be an object with an action');
+  const exactFields = expected => check(Object.keys(args).length === expected.length && expected.every(key => Object.hasOwn(args, key)),
+    `Mapping ${args.action} accepts exactly: ${expected.join(', ')}`);
+  if (args.action === 'create' || args.action === 'status' || args.action === 'cancel') exactFields(['action']);
+  else if (args.action === 'button') {
+    exactFields(['action', 'code', 'pressed']);
+    check(Number.isInteger(args.code) && args.code >= 0 && args.code <= 65535, 'Mapping button code must be an integer in 0..65535');
+    check(typeof args.pressed === 'boolean', 'Mapping button pressed must be boolean');
+  } else if (args.action === 'axis') {
+    exactFields(['action', 'code', 'value']);
+    check(Number.isInteger(args.code) && args.code >= 0 && args.code <= 65535, 'Mapping axis code must be an integer in 0..65535');
+    check(Number.isInteger(args.value) && args.value >= -32768 && args.value <= 32767, 'Mapping axis value must be an integer in -32768..32767');
+  } else throw new Error(`Unsupported mapping action: ${args.action}`);
+  return args;
+}
+
+export function validateUiClickOptions(options = {}) {
+  check(options && typeof options === 'object' && !Array.isArray(options), 'Click options must be an object');
+  const allowed = new Set(['modifiers', 'mouse_button', 'click_count']);
+  check(Object.keys(options).every(key => allowed.has(key)), 'Click options contain an unknown field');
+  if (Object.hasOwn(options, 'modifiers')) check(Array.isArray(options.modifiers) && options.modifiers.length <= UI_MODIFIERS.size
+    && options.modifiers.every(value => UI_MODIFIERS.has(value)) && new Set(options.modifiers).size === options.modifiers.length,
+  'Click modifiers must be unique values from Ctrl, Shift, Alt');
+  if (Object.hasOwn(options, 'mouse_button')) check(['left', 'right', 'middle'].includes(options.mouse_button), 'Mouse button must be left, right, or middle');
+  if (Object.hasOwn(options, 'click_count')) check(options.click_count === 1 || options.click_count === 2, 'Click count must be 1 or 2');
+  return { ...options, ...(options.modifiers ? { modifiers: [...options.modifiers] } : {}) };
+}
+
+export function validateUiExpectedFields(expected) {
+  check(expected && typeof expected === 'object' && !Array.isArray(expected), 'Expected UI fields must be an object');
+  const keys = Object.keys(expected);
+  check(keys.length >= 1 && keys.length <= 16 && keys.every(key => UI_EXPECTABLE_FIELDS.has(key)),
+    'Expected UI fields must be 1..16 supported scalar fields');
+  check(keys.every(key => expectedUiValue(expected[key])), 'Expected UI values must be finite scalars or 2/4-number vectors');
+  return expected;
+}
+
+function checkUiContext({ signal, deadline } = {}) {
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('UI action aborted');
+  if (deadline !== undefined) check(Number.isFinite(deadline) && Date.now() < deadline, 'Plan timeout elapsed');
+}
+
+function uiRequestOptions(context = {}) {
+  checkUiContext(context);
+  const remaining = context.deadline === undefined ? 10000 : Math.floor(context.deadline - Date.now());
+  check(remaining >= 1, 'Plan timeout elapsed');
+  return { timeoutMs: Math.max(1, Math.min(10000, remaining)), signal: context.signal, deadline: context.deadline };
+}
+
+function freshUiObservation(observation) {
+  const age = Date.now() - observation?.wall_ms;
+  check(Number.isFinite(age) && age >= 0 && age <= UI_OBSERVATION_MAX_AGE_MS, 'Native UI inspection is stale; inspect again');
+  check(Array.isArray(observation.ui?.items), 'Native UI inspection has no item list');
+}
+
+function findUiItem(observation, target, { requireEnabled = true } = {}) {
+  freshUiObservation(observation);
+  const selector = validateUiTarget(target);
+  const key = Object.keys(selector).find(name => name !== 'window');
+  const expected = selector[key];
+  const matches = observation.ui.items.filter(item => {
+    const selectorMatches = key === 'label'
+      ? item.semantic_label === expected || item.label === expected
+      : key === 'item_id' ? item.id === expected : item.semantic_id === expected;
+    return selectorMatches && (selector.window === undefined || item.window === selector.window);
+  });
+  check(matches.length === 1, `Expected one native UI item for ${key} ${expected}; found ${matches.length}`);
+  const item = matches[0];
+  check(Number.isInteger(item.id) && item.id > 0, 'Selected native UI item has no valid ID');
+  check(item.visible === true, 'Selected native UI item is not visible');
+  if (requireEnabled) check(item.disabled === false, 'Selected native UI item is disabled');
+  return { selector, item };
+}
+
+function uiItemEvidence(item) {
+  return { id: item.id, semantic_id: item.semantic_id ?? null, label: item.semantic_label ?? item.label ?? null,
+    kind: item.kind ?? null, requires_apply: typeof item.requires_apply === 'boolean' ? item.requires_apply : null };
+}
+
+function focusedUiTextInput(observation, itemId) {
+  const item = observation?.ui?.items?.find(candidate => candidate.id === itemId);
+  const input = observation?.ui?.text_input;
+  return { item, input, focused: Boolean(item && input && input.active_item_id === itemId
+    && observation.ui.active_item_id === itemId && item.text_input_focused === true),
+    password: item?.password === true || input?.password === true };
+}
+
+function toggleState(item) {
+  if (typeof item.value === 'boolean') return item.value;
+  if (typeof item.checked === 'boolean') return item.checked;
+  return undefined;
+}
+
+function scalar(value) {
+  return typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function matchesTextValue(value, text, valueType) {
+  if (typeof value === 'string') return value === text;
+  if (typeof value !== 'number' || text.trim() === '') return false;
+  const numericValue = Number(text);
+  if (!Number.isFinite(numericValue)) return false;
+  return value === (valueType === 'float32' ? Math.fround(numericValue) : numericValue);
+}
+
+function safeUiExpected(value) {
+  return typeof value === 'string' ? '[redacted]' : value;
+}
+
+function safeUiActual(item, field) {
+  const value = item[field];
+  if (item.password === true && ['value', 'value_label', 'draft_value'].includes(field)) return '[redacted]';
+  if (item.inputable === true && ['value', 'draft_value'].includes(field) && typeof value === 'string') return '[redacted]';
+  if (item.inputable === true && ['value_label'].includes(field) && ['text', 'path', 'file'].includes(item.kind)) return '[redacted]';
+  return value;
+}
+
+function expectedUiValue(value) {
+  return scalar(value) || (Array.isArray(value) && [2, 4].includes(value.length)
+    && value.every(component => typeof component === 'number' && Number.isFinite(component)));
+}
+
+function sameUiValue(left, right) {
+  return Array.isArray(left) && Array.isArray(right)
+    ? left.length === right.length && left.every((value, index) => value === right[index])
+    : left === right;
+}
+
+function redactTextInputValues(observation, itemIds = []) {
+  const copy = structuredClone(observation);
+  const redactIds = new Set(itemIds.filter(Number.isInteger));
+  if (copy.ui?.text_input?.password === true && Number.isInteger(copy.ui.text_input.active_item_id))
+    redactIds.add(copy.ui.text_input.active_item_id);
+  for (const item of copy.ui?.items ?? []) {
+    const password = item.password === true;
+    const typedText = item.inputable === true && ['text', 'path', 'file'].includes(item.kind);
+    if (!redactIds.has(item.id) && !password && !typedText && item.text_input_focused !== true) continue;
+    for (const key of ['value', 'value_label', 'draft_value']) {
+      if (!Object.hasOwn(item, key)) continue;
+      if (password || (typeof item[key] === 'string' && (['value', 'draft_value'].includes(key) || typedText)))
+        item[key] = '[redacted]';
+    }
+    if (password || typedText || redactIds.has(item.id)) item.text_value_redacted = true;
+  }
+  return copy;
+}
+
+function auditArguments(op, args) {
+  if (op !== 'ui' || args?.action !== 'text' || typeof args.text !== 'string') return args;
+  const { text, ...safe } = args;
+  return { ...safe, text: '[redacted]', text_redacted: true, text_length: Buffer.byteLength(text, 'utf8') };
+}
+
+function auditResult(op, args, result) {
+  return op === 'ui' && args?.action === 'text' ? { text_redacted: true } : result;
+}
+
+function safeResponseError(op, args, error) {
+  return op === 'ui' && args?.action === 'text'
+    ? (error === undefined || error === null ? null : 'Native UI text action rejected') : error ?? null;
 }
 
 export function summarizePerformance(result) {
@@ -216,34 +409,47 @@ export class HollycastHarness {
     }
   }
 
-  request(op, args = {}, { timeoutMs = 10000 } = {}) {
-    const pending = this.queue.then(() => this.send(op, args, timeoutMs));
+  request(op, args = {}, { timeoutMs = 10000, signal, deadline } = {}) {
+    const context = { signal, deadline };
+    const pending = this.queue.then(() => {
+      checkUiContext(context);
+      const remaining = deadline === undefined ? timeoutMs : Math.min(timeoutMs, Math.floor(deadline - Date.now()));
+      check(remaining >= 1, 'Plan timeout elapsed before request publication');
+      return this.send(op, args, remaining, context);
+    });
     this.queue = pending.catch(() => {});
     return pending;
   }
 
-  async send(op, args, timeoutMs) {
+  async send(op, args, timeoutMs, context = {}) {
     check(Number.isInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 30000, 'Timeout must be 1..30000 ms');
+    checkUiContext(context);
     const lock = path.join(this.directory, 'client.lock');
     const start = Date.now();
+    const expiresMs = Math.min(start + timeoutMs, context.deadline ?? Infinity);
     // A monitor and controller may share a session. Wait for ownership, but
     // never steal an abandoned lock or retry a command with an unknown outcome.
     while (true) {
       try { await fs.mkdir(lock); break; }
       catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        check(Date.now() < start + timeoutMs, 'Harness client lock is busy; it has not been stolen');
-        await delay(Math.min(10, Math.max(1, start + timeoutMs - Date.now())));
+        checkUiContext(context);
+        check(Date.now() < expiresMs, 'Harness client lock is busy; it has not been stolen');
+        await delay(Math.min(10, Math.max(1, expiresMs - Date.now())), undefined, { signal: context.signal });
       }
     }
     const id = randomBytes(16).toString('hex');
-    const request = { version: 1, session: this.manifest.session, id, expires_ms: start + timeoutMs, op, args };
+    const request = { version: 1, session: this.manifest.session, id, expires_ms: expiresMs, op, args };
     const responsePath = path.join(this.directory, `response-${id}.json`);
     const commandPath = path.join(this.directory, 'command.json');
     try {
+      checkUiContext(context);
       check(Date.now() < request.expires_ms, 'Request deadline elapsed while waiting for the client lock');
       check(!await exists(commandPath), 'An earlier command is still pending; commands are never retried automatically');
-      await writeNewJson(commandPath, request);
+      await writeNewJson(commandPath, request, () => {
+        checkUiContext(context);
+        check(Date.now() < request.expires_ms, 'Request deadline elapsed before command publication');
+      });
       while (!await exists(responsePath)) {
         check(Date.now() < request.expires_ms, 'Command timed out; outcome is unknown. Inputs expire within their lease on the next emulator UI tick');
         await delay(10);
@@ -251,29 +457,33 @@ export class HollycastHarness {
       const response = await readJson(responsePath);
       check(response.version === 1 && response.session === this.manifest.session && response.id === id && typeof response.ok === 'boolean',
         'Response identity mismatch');
-      await fs.appendFile(path.join(this.directory, 'events.jsonl'), `${JSON.stringify({ id, op, args, start_wall_ms: start,
-        end_wall_ms: Date.now(), ok: response.ok, error: response.error ?? null,
-        result: op === 'performance_end' ? { artifact: path.basename(responsePath) } : response.result })}\n`);
-      check(response.ok, response.error || 'Native bridge rejected the command');
+      await fs.appendFile(path.join(this.directory, 'events.jsonl'), `${JSON.stringify({ id, op, args: auditArguments(op, args), start_wall_ms: start,
+        end_wall_ms: Date.now(), ok: response.ok, error: safeResponseError(op, args, response.error),
+        result: op === 'performance_end' ? { artifact: path.basename(responsePath) } : auditResult(op, args, response.result) })}\n`);
+      check(response.ok, safeResponseError(op, args, response.error) || 'Native bridge rejected the command');
       if (op !== 'observe') this.observation = null;
-      return response.result;
+      return op === 'ui' && args?.action === 'text' ? { text_redacted: true } : response.result;
     } finally {
-      await fs.rmdir(lock);
+      try {
+        if (op === 'ui' && args?.action === 'text') await fs.rm(responsePath, { force: true });
+      } finally {
+        await fs.rmdir(lock);
+      }
     }
   }
 
-  async setController(options = {}) {
-    return this.request('controller', controllerState(options));
+  async setController(options = {}, context = {}) {
+    return this.request('controller', controllerState(options), context);
   }
 
-  async hold(options, milliseconds, { signal } = {}) {
+  async hold(options, milliseconds, { signal, deadline } = {}) {
     check(Number.isInteger(milliseconds) && milliseconds >= 1 && milliseconds <= 600000, 'Hold duration must be 1..600000 ms');
     const input = { ...controllerState(options), lease_ms: 1000 };
     let end = null;
     try {
       do {
         if (signal?.aborted) throw signal.reason || new Error('Input aborted');
-        await this.request('controller', input);
+        await this.request('controller', input, { signal, deadline });
         end ??= Date.now() + milliseconds;
         await delay(Math.min(250, Math.max(1, end - Date.now())), undefined, { signal });
       } while (Date.now() < end);
@@ -351,9 +561,12 @@ export class HollycastHarness {
     return job;
   }
 
-  async observe({ screenshot = false } = {}) {
-    const result = await this.request('inspect', { screenshot });
-    check(ID.test(result.observation_id) && Array.isArray(result.ui?.items), 'Invalid native UI inspection');
+  async observe({ screenshot = false, signal, deadline, redactTextItemId } = {}) {
+    check(typeof screenshot === 'boolean', 'Screenshot option must be boolean');
+    const context = { signal, deadline };
+    const result = await this.request('inspect', { screenshot }, uiRequestOptions(context));
+    checkUiContext(context);
+    check(ID.test(result.observation_id) && Array.isArray(result.ui?.items) && Number.isFinite(result.wall_ms), 'Invalid native UI inspection');
     if (result.screenshot) {
       check(/^screenshots\/[0-9a-f]{32}\.png$/.test(result.screenshot.file), 'Invalid native screenshot path');
       const file = path.join(this.directory, result.screenshot.file);
@@ -361,25 +574,177 @@ export class HollycastHarness {
       check(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024 * 1024, 'Invalid native screenshot artifact');
       result.screenshot.sha256 = await sha256(file);
     }
-    await fs.appendFile(path.join(this.directory, 'observations.jsonl'), `${JSON.stringify(result)}\n`);
+    const evidence = redactTextInputValues(result, [redactTextItemId]);
+    await fs.appendFile(path.join(this.directory, 'observations.jsonl'), `${JSON.stringify(evidence)}\n`);
     this.observation = result;
     return result;
   }
 
-  async ui(action, options = {}) {
+  async ui(action, options = {}, context = {}) {
     check(['click', 'key', 'text', 'scroll', 'drag'].includes(action), 'Unsupported native UI action');
+    checkUiContext(context);
     const observation = this.observation;
-    check(observation && Date.now() - observation.wall_ms <= 10000, 'Inspect the native UI immediately before input');
+    freshUiObservation(observation);
     this.observation = null;
-    await this.request('ui', { ...options, observation_id: observation.observation_id, action });
-    return this.observe();
+    await this.request('ui', { ...options, observation_id: observation.observation_id, action }, uiRequestOptions(context));
+    checkUiContext(context);
+    const textItemId = context.redactTextItemId
+      ?? (action === 'text' ? observation.ui.text_input?.active_item_id : undefined);
+    const after = await this.observe({ ...context, redactTextItemId: textItemId });
+    return action === 'text' && context.preserveTextReadback !== true
+      ? redactTextInputValues(after, [textItemId]) : after;
   }
 
-  async click(label) {
-    if (!this.observation || Date.now() - this.observation.wall_ms > 4000) await this.observe();
-    const matches = this.observation.ui.items.filter(item => item.label === label && item.visible && !item.disabled);
-    check(matches.length === 1, `Expected one visible enabled UI item named ${label}; found ${matches.length}`);
-    return this.ui('click', { item_id: matches[0].id });
+  async click(target, options = {}, context = {}) {
+    const selector = validateUiTarget(target);
+    const clickOptions = validateUiClickOptions(options);
+    checkUiContext(context);
+    if (!this.observation || Date.now() - this.observation.wall_ms < 0 || Date.now() - this.observation.wall_ms > UI_OBSERVATION_MAX_AGE_MS)
+      await this.observe(context);
+    const { item } = findUiItem(this.observation, selector);
+    return this.ui('click', { item_id: item.id, ...clickOptions,
+      ...(selector.window === undefined ? {} : { window: selector.window }) }, context);
+  }
+
+  async settings(page, context = {}) {
+    validateSettingsPage(page);
+    checkUiContext(context);
+    this.observation = null;
+    const result = await this.request('settings', { page }, uiRequestOptions(context));
+    checkUiContext(context);
+    const observation = await this.observe(context);
+    for (const snapshot of [result, result?.ui, result?.state, result?.state?.ui, observation, observation.ui]) {
+      if (snapshot && Object.hasOwn(snapshot, 'settings_page'))
+        check(snapshot.settings_page === page, `Settings page readback mismatch: expected ${page}`);
+    }
+    return { page, result, observation };
+  }
+
+  async mapping(args, context = {}) {
+    validateMappingArgs(args);
+    checkUiContext(context);
+    this.observation = null;
+    const result = await this.request('mapping', args, uiRequestOptions(context));
+    checkUiContext(context);
+    return result;
+  }
+
+  async fill(target, text, { commit = true, modifiers = [], signal, deadline } = {}) {
+    check(typeof text === 'string' && Buffer.byteLength(text, 'utf8') <= 4096 && !text.includes('\0'), 'Fill text must be at most 4096 UTF-8 bytes without NUL');
+    check(typeof commit === 'boolean', 'Fill commit must be boolean');
+    const selector = validateUiTarget(target);
+    const context = { signal, deadline };
+    const observation = await this.observe(context);
+    const { item } = findUiItem(observation, selector);
+    check(item.inputable === true && item.read_only !== true, 'Selected control is not a writable native text input');
+    const numeric = item.kind === 'slider' || (item.range && typeof item.range === 'object');
+    const clickModifiers = new Set(validateUiClickOptions({ modifiers }).modifiers);
+    if (numeric) clickModifiers.add('Ctrl');
+    let currentObservation = await this.click(selector, { modifiers: [...clickModifiers] }, context);
+    const fillContext = { ...context, preserveTextReadback: true, redactTextItemId: item.id };
+    let focused = focusedUiTextInput(currentObservation, item.id);
+    if (!focused.focused || typeof focused.input?.password !== 'boolean')
+      return { outcome: 'INCONCLUSIVE', reason: 'native_text_input_focus_unverified', target: uiItemEvidence(item) };
+    const password = focused.password;
+
+    currentObservation = await this.ui('key', { key: 'Ctrl+A' }, fillContext);
+    focused = focusedUiTextInput(currentObservation, item.id);
+    if (!focused.focused || focused.password !== password)
+      return { outcome: 'INCONCLUSIVE', reason: 'native_text_input_focus_changed', target: uiItemEvidence(item) };
+    currentObservation = text.length === 0
+      ? await this.ui('key', { key: 'Backspace' }, fillContext)
+      : await this.ui('text', { text }, fillContext);
+    focused = focusedUiTextInput(currentObservation, item.id);
+    if (commit && !focused.focused)
+      return { outcome: 'INCONCLUSIVE', reason: 'native_text_input_focus_changed_before_commit', target: uiItemEvidence(item) };
+    const typedItem = currentObservation.ui.items.find(candidate => candidate.id === item.id);
+    if (!typedItem) return { outcome: 'INCONCLUSIVE', reason: 'native_text_input_missing_after_edit', target: uiItemEvidence(item) };
+
+    let verification = password ? 'write_only' : 'text_buffer_not_exported';
+    if (!password && Object.hasOwn(typedItem, 'value')) {
+      if (!matchesTextValue(typedItem.value, text, typedItem.value_type))
+        return { outcome: 'FAIL', reason: 'text_readback_mismatch', target: uiItemEvidence(typedItem) };
+      verification = 'native_value_readback';
+    }
+    if (!commit) return { outcome: 'PASS', target: uiItemEvidence(typedItem), committed: false,
+      verification, text_length: Buffer.byteLength(text, 'utf8') };
+
+    currentObservation = await this.ui('key', { key: 'Enter' }, fillContext);
+    const committedItem = currentObservation.ui.items.find(candidate => candidate.id === item.id);
+    if (committedItem) {
+      if (!password && Object.hasOwn(committedItem, 'value')) {
+        if (!matchesTextValue(committedItem.value, text, committedItem.value_type))
+          return { outcome: 'FAIL', reason: 'text_readback_mismatch', target: uiItemEvidence(committedItem) };
+        verification = 'native_value_readback';
+      } else if (!password && verification === 'native_value_readback') verification = 'native_value_before_commit';
+      return { outcome: 'PASS', target: uiItemEvidence(committedItem), committed: true, verification,
+        ...(verification === 'native_value_before_commit' ? { post_effect_readback: 'required' } : {}),
+        text_length: Buffer.byteLength(text, 'utf8') };
+    }
+    if (!password && verification === 'native_value_readback') verification = 'native_value_before_commit';
+    return { outcome: 'PASS', target: uiItemEvidence(typedItem), committed: true, verification,
+      ...(verification === 'native_value_before_commit' ? { post_effect_readback: 'required' } : {}),
+      text_length: Buffer.byteLength(text, 'utf8') };
+  }
+  async setToggle(target, desired, context = {}) {
+    check(typeof desired === 'boolean', 'Toggle value must be boolean');
+    const selector = validateUiTarget(target);
+    const before = await this.observe(context);
+    const { item } = findUiItem(before, selector);
+    check(item.kind === 'toggle' || item.checkable === true, 'Selected control is not a toggle');
+    const current = toggleState(item);
+    if (current === undefined) return { outcome: 'INCONCLUSIVE', reason: 'toggle_value_unavailable', target: uiItemEvidence(item) };
+    if (current === desired) return { outcome: 'PASS', changed: false, value: current, requires_apply: item.requires_apply ?? null,
+      target: uiItemEvidence(item) };
+    const after = await this.click(selector, {}, context);
+    const verified = findUiItem(after, selector, { requireEnabled: false }).item;
+    const value = toggleState(verified);
+    if (value === undefined) return { outcome: 'INCONCLUSIVE', reason: 'toggle_readback_unavailable', target: uiItemEvidence(verified) };
+    if (value !== desired) return { outcome: 'FAIL', reason: 'toggle_readback_mismatch', expected: desired, actual: value,
+      target: uiItemEvidence(verified) };
+    return { outcome: 'PASS', changed: true, value, requires_apply: verified.requires_apply ?? null, target: uiItemEvidence(verified) };
+  }
+
+  async expectUi(target, expected, context = {}) {
+    validateUiExpectedFields(expected);
+    const observation = await this.observe(context);
+    const { item } = findUiItem(observation, target, { requireEnabled: false });
+    const activePassword = observation.ui.text_input?.active_item_id === item.id && observation.ui.text_input.password === true;
+    const secretFields = Object.keys(expected).filter(key => ['value', 'value_label', 'draft_value'].includes(key));
+    if ((item.password === true || activePassword) && secretFields.length)
+      return { outcome: 'INCONCLUSIVE', reason: 'password_value_is_write_only', target: uiItemEvidence(item), missing_fields: secretFields };
+    const missing = Object.keys(expected).filter(key => !Object.hasOwn(item, key) || !expectedUiValue(item[key]));
+    if (missing.length) return { outcome: 'INCONCLUSIVE', reason: 'ui_value_unavailable', target: uiItemEvidence(item), missing_fields: missing };
+    const mismatches = Object.keys(expected).filter(key => !sameUiValue(item[key], expected[key]));
+    if (mismatches.length) return { outcome: 'FAIL', reason: 'ui_value_mismatch', target: uiItemEvidence(item),
+      mismatches: mismatches.map(field => ({ field, expected: safeUiExpected(expected[field]), actual: safeUiActual(item, field) })) };
+    return { outcome: 'PASS', target: uiItemEvidence(item), matched_fields: Object.keys(expected),
+      actual_fields: Object.fromEntries(Object.keys(expected).map(field => [field, safeUiActual(item, field)])) };
+  }
+
+  async scrollWindow(windowName, deltaY, { deltaX = 0, signal, deadline } = {}) {
+    check(typeof windowName === 'string' && windowName.length >= 1 && Buffer.byteLength(windowName, 'utf8') <= 512,
+    'Window name must be at most 512 UTF-8 bytes');
+    check(Number.isInteger(deltaX) && deltaX >= -100 && deltaX <= 100, 'Horizontal scroll must be -100..100');
+    check(Number.isInteger(deltaY) && deltaY >= -100 && deltaY <= 100, 'Vertical scroll must be -100..100');
+    const context = { signal, deadline };
+    const before = await this.observe(context);
+    const windows = before.ui.windows?.filter(window => window.name === windowName) ?? [];
+    check(windows.length === 1, `Expected one visible native UI window named ${windowName}; found ${windows.length}`);
+    const window = windows[0];
+    const rect = window.inner_rect;
+    check(Array.isArray(rect) && rect.length === 4 && rect.every(Number.isFinite) && rect[0] < rect[2] && rect[1] < rect[3],
+      'Selected UI window has no valid inner rectangle');
+    check(Array.isArray(window.scroll) && window.scroll.length === 2 && window.scroll.every(Number.isFinite), 'Selected UI window has no valid scroll readback');
+    const x = Math.floor((rect[0] + rect[2]) / 2), y = Math.floor((rect[1] + rect[3]) / 2);
+    check(x >= 0 && x <= 8191 && y >= 0 && y <= 8191, 'Selected UI window center is outside native coordinate bounds');
+    const after = await this.ui('scroll', { x, y, delta_x: deltaX, delta_y: deltaY }, context);
+    const readback = (after.ui.windows ?? []).filter(candidate => candidate.name === windowName);
+    if (readback.length !== 1 || !Array.isArray(readback[0].scroll) || readback[0].scroll.length !== 2
+        || !readback[0].scroll.every(Number.isFinite))
+      return { outcome: 'INCONCLUSIVE', reason: 'scroll_readback_unavailable', window: windowName };
+    return { outcome: 'PASS', window: windowName, requested: { delta_x: deltaX, delta_y: deltaY },
+      before: window.scroll, after: readback[0].scroll, scroll_max: readback[0].scroll_max ?? null };
   }
 
   async *watch({ intervalMs = 100, durationMs = 5000, signal } = {}) {
@@ -453,6 +818,31 @@ export class HollycastHarness {
   }
 }
 
+function cliUiTarget(options) {
+  const selectors = [['--label', 'label'], ['--item-id', 'item_id'], ['--semantic-id', 'semantic_id']]
+    .filter(([option]) => options[option] !== undefined);
+  check(selectors.length === 1, 'Choose exactly one of --label, --item-id, or --semantic-id');
+  const [option, key] = selectors[0];
+  const selected = key === 'item_id' ? Number(options[option]) : options[option];
+  const target = { [key]: selected, ...(options['--window'] === undefined ? {} : { window: options['--window'] }) };
+  return validateUiTarget(target);
+}
+
+function parseJsonArgument(value, maximum, description) {
+  check(typeof value === 'string' && value.length <= maximum, `${description} JSON must be at most ${maximum} characters`);
+  const parsed = JSON.parse(value);
+  check(parsed && typeof parsed === 'object' && !Array.isArray(parsed), `${description} JSON must be an object`);
+  return parsed;
+}
+
+async function readTextFile(file, maximum = 4096) {
+  const stat = await fs.lstat(path.resolve(file));
+  check(stat.isFile() && !stat.isSymbolicLink() && stat.size <= maximum, 'Text file must be a regular non-symlink file up to 4096 bytes');
+  const value = await fs.readFile(file, 'utf8');
+  check(Buffer.byteLength(value, 'utf8') <= maximum && !value.includes('\0'), 'Text file must contain at most 4096 UTF-8 bytes without NUL');
+  return value;
+}
+
 async function main(argv) {
   const [command, ...args] = argv;
   if (!command || command === '--help') {
@@ -466,7 +856,13 @@ async function main(argv) {
       + 'job --run DIRECTORY --out NEW_JOB_JSON [--workspace PATH] [--objective TEXT] [--milliseconds 300000]\n'
       + 'watch --run DIRECTORY [--milliseconds 5000] [--interval 100]\n'
       + 'profile --run DIRECTORY --file PROFILE_JSON\n'
-      + 'click --run DIRECTORY --label "Settings"\n'
+      + 'settings --run DIRECTORY --page PAGE\n'
+      + 'mapping --run DIRECTORY --input JSON\n'
+      + 'click --run DIRECTORY (--label LABEL|--item-id ID|--semantic-id ID) [--window NAME] [--input JSON]\n'
+      + 'fill --run DIRECTORY --target SELECTOR_JSON (--text TEXT|--text-file PATH) [--modifiers JSON] [--commit true|false]\n'
+      + 'set-toggle --run DIRECTORY --target SELECTOR_JSON --value true|false\n'
+      + 'expect-ui --run DIRECTORY --target SELECTOR_JSON --expected JSON\n'
+      + 'scroll-window --run DIRECTORY --window NAME --delta-y N [--delta-x N]\n'
       + 'press --run DIRECTORY --button A [--port 0..3] [--milliseconds 120]\n'
       + 'controller|hold --run DIRECTORY --state JSON [--milliseconds 500]\n'
       + 'ui --run DIRECTORY --input JSON\n'
@@ -579,7 +975,45 @@ async function main(argv) {
     case 'screenshot': result = await harness.observe({ screenshot: true }); break;
     case 'live': result = await harness.live(); break;
     case 'profile': result = await harness.setWatchProfile(await readJson(options['--file'], 65536)); break;
-    case 'click': result = await harness.click(options['--label']); break;
+    case 'settings': result = await harness.settings(options['--page']); break;
+    case 'mapping': result = await harness.mapping(parseJsonArgument(options['--input'], 4096, 'Mapping')); break;
+    case 'click': {
+      const target = cliUiTarget(options);
+      const clickOptions = options['--input'] === undefined ? {} : parseJsonArgument(options['--input'], 4096, 'Click');
+      result = await harness.click(target, clickOptions);
+      break;
+    }
+    case 'fill': {
+      const target = parseJsonArgument(options['--target'], 4096, 'UI target');
+      check((options['--text'] === undefined) !== (options['--text-file'] === undefined), 'fill requires exactly one of --text or --text-file');
+      check(options['--commit'] === undefined || ['true', 'false'].includes(options['--commit']), 'Fill commit must be true or false');
+      const modifiers = options['--modifiers'] === undefined ? [] : JSON.parse(options['--modifiers']);
+      validateUiClickOptions({ modifiers });
+      const text = options['--text-file'] === undefined ? options['--text'] : await readTextFile(options['--text-file']);
+      result = await harness.fill(target, text, { commit: options['--commit'] !== 'false', modifiers });
+      if (result.outcome !== 'PASS') globalThis.process.exitCode = 2;
+      break;
+    }
+    case 'set-toggle': {
+      const target = parseJsonArgument(options['--target'], 4096, 'UI target');
+      check(['true', 'false'].includes(options['--value']), 'set-toggle requires --value true or false');
+      result = await harness.setToggle(target, options['--value'] === 'true');
+      if (result.outcome !== 'PASS') globalThis.process.exitCode = 2;
+      break;
+    }
+    case 'expect-ui': {
+      const target = parseJsonArgument(options['--target'], 4096, 'UI target');
+      const expected = parseJsonArgument(options['--expected'], 4096, 'Expected UI fields');
+      result = await harness.expectUi(target, expected);
+      if (result.outcome !== 'PASS') globalThis.process.exitCode = 2;
+      break;
+    }
+    case 'scroll-window': {
+      check(options['--window'], 'scroll-window requires --window');
+      result = await harness.scrollWindow(options['--window'], Number(options['--delta-y']), { deltaX: Number(options['--delta-x'] ?? 0) });
+      if (result.outcome !== 'PASS') globalThis.process.exitCode = 2;
+      break;
+    }
     case 'watch':
       for await (const sample of harness.watch({ durationMs: Number(options['--milliseconds'] || 5000), intervalMs: Number(options['--interval'] || 100) })) {
         console.log(JSON.stringify(sample));

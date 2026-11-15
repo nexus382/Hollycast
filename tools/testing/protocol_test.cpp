@@ -108,9 +108,40 @@ int main()
 		const auto observed = std::string(32, 'e');
 		Json click = {{"observation_id", observed}, {"action", "click"}, {"item_id", 12}};
 		validateUiAction(click);
+		auto detailedClick = click;
+		detailedClick["window"] = "Settings##NewSettings";
+		detailedClick["modifiers"] = {"Ctrl", "Shift"};
+		detailedClick["mouse_button"] = "middle";
+		detailedClick["click_count"] = 2;
+		validateUiAction(detailedClick);
+		detailedClick["window"] = std::string(512, 'W');
+		validateUiAction(detailedClick);
 		auto badClick = click;
 		badClick["x"] = 0;
 		reject([&] { validateUiAction(badClick); });
+		badClick = click;
+		badClick["window"] = "Settings\n";
+		reject([&] { validateUiAction(badClick); });
+		badClick = click;
+		badClick["window"] = std::string(513, 'W');
+		reject([&] { validateUiAction(badClick); });
+		badClick = click;
+		badClick["modifiers"] = {"Ctrl", "Ctrl"};
+		reject([&] { validateUiAction(badClick); });
+		badClick = click;
+		badClick["modifiers"] = {"Meta"};
+		reject([&] { validateUiAction(badClick); });
+		badClick = click;
+		badClick["mouse_button"] = "x1";
+		reject([&] { validateUiAction(badClick); });
+		for (const int count : {0, 3})
+		{
+			badClick = click;
+			badClick["click_count"] = count;
+			reject([&] { validateUiAction(badClick); });
+		}
+		reject([&] { validateUiAction({{"observation_id", observed}, {"action", "click"},
+			{"x", 1}, {"y", 1}, {"window", "Settings"}}); });
 		reject([&] { validateUiAction({{"observation_id", observed}, {"action", "click"}, {"x", -1}, {"y", 0}}); });
 		reject([&] { validateUiAction({{"observation_id", observed}, {"action", "key"}, {"key", ""}}); });
 		reject([&] { validateUiAction({{"observation_id", observed}, {"action", "text"}, {"text", std::string(4097, 'x')}}); });

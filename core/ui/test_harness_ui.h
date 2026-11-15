@@ -12,5 +12,9 @@ void poll();
 bool actionReady();
 void release();
 bool open();
+bool collectingInspection();
+void markTruncated();
+std::uint32_t lastItemId();
+void annotateItem(std::uint32_t itemId, const Json& metadata);
 
 } // namespace test_harness::ui

@@ -81,17 +81,46 @@ inline void validateUiAction(const Json& args)
 	const auto action = args.at("action").get<std::string>();
 	if (action == "click")
 	{
-		fields(args, {"observation_id", "action", "item_id", "x", "y"});
+		fields(args, {"observation_id", "action", "item_id", "window", "x", "y",
+			"modifiers", "mouse_button", "click_count"});
 		if (args.contains("item_id"))
 		{
 			integer(args.at("item_id"), 1, UINT32_MAX);
 			require(!args.contains("x") && !args.contains("y"), "Choose an item or coordinates");
+			if (args.contains("window"))
+			{
+				const auto& window = args.at("window").get_ref<const std::string&>();
+				require(!window.empty() && window.size() <= 512, "Invalid UI window selector");
+				for (const unsigned char c : window)
+					require(c >= 0x20 && c != 0x7f, "Invalid UI window selector");
+			}
 		}
 		else
 		{
+			require(!args.contains("window"), "A UI window selector requires an item ID");
 			integer(args.at("x"), 0, 8191);
 			integer(args.at("y"), 0, 8191);
 		}
+		if (args.contains("modifiers"))
+		{
+			const auto& modifiers = args.at("modifiers");
+			require(modifiers.is_array() && modifiers.size() <= 3, "Invalid UI click modifiers");
+			std::set<std::string> seen;
+			for (const auto& modifier : modifiers)
+			{
+				require(modifier.is_string(), "UI click modifiers must be strings");
+				const auto name = modifier.get<std::string>();
+				require(name == "Ctrl" || name == "Shift" || name == "Alt", "Unknown UI click modifier");
+				require(seen.insert(name).second, "Duplicate UI click modifier");
+			}
+		}
+		if (args.contains("mouse_button"))
+		{
+			const auto button = args.at("mouse_button").get<std::string>();
+			require(button == "left" || button == "right" || button == "middle", "Unknown UI mouse button");
+		}
+		if (args.contains("click_count"))
+			integer(args.at("click_count"), 1, 2);
 	}
 	else if (action == "key")
 	{
