@@ -12,6 +12,10 @@ namespace hikaru::graphics {
 std::unique_ptr<Backend> makeDx11BackendForTesting(ID3D11Device*,ID3D11DeviceContext*,pD3DCompile,bool);
 std::unique_ptr<Backend> makeBackgroundDx11BackendForTesting(ID3D11Device*,ID3D11DeviceContext*,pD3DCompile);
 void completeDx11CompilationForTesting(Backend&);
+std::array<uint64_t,3> dx11FragmentCountsForTesting(const Backend&);
+std::array<uint64_t,4> dx11FragmentPoolForTesting(const Backend&);
+void forceDx11GeneralFragmentResolveForTesting(Backend&);
+void disableDx11FragmentListsForTesting(Backend&);
 }
 using namespace hikaru::graphics;
 using namespace hikaru::graphics::test;
@@ -248,5 +252,296 @@ TEST_F(HikaruDx11Test, IntegerFamilyMetadataAndResolve) {
     backend->readPixels(3,0,0,16,16,output.data());
     EXPECT_GT(output[(3*16+3)*4],0);EXPECT_EQ(output[(12*16+12)*4],0);
 }
+Draw fragmentMesh(float z,const Vec4& color,unsigned mode=0) {
+    auto draw=mesh();draw.depthTest=false;draw.depthWrite=false;
+    draw.uniforms.flags={};draw.uniforms.blend={0,mode==1?1.f:0.f,float(mode),0};
+    draw.uniforms.peel={1,1,16,16};draw.textures={0,0,2,0};
+    draw.vertices.resize(6);
+    const std::array<std::array<float,2>,6> corners={{{-1,-1},{1,-1},{-1,1},{1,-1},{1,1},{-1,1}}};
+    for(size_t i=0;i<corners.size();++i) {
+        draw.vertices[i].position={corners[i][0],corners[i][1],z,1};
+        draw.vertices[i].diffuse=color;draw.vertices[i].extra[0]=color[3];
+    }
+    return draw;
+}
+void drawOrderedFragment(Backend& backend,Draw draw) {
+    draw.uniforms.peel[0]=0;draw.blend=true;
+    const unsigned mode=unsigned(draw.uniforms.blend[2]);
+    draw.srcRGB=mode==1?GL_DST_COLOR:mode==3?GL_ONE:GL_SRC_ALPHA;
+    draw.dstRGB=mode==1?GL_ZERO:mode==2?GL_ONE:GL_ONE_MINUS_SRC_ALPHA;
+    draw.srcAlpha=GL_ONE;draw.dstAlpha=mode==1?GL_ZERO:GL_ONE_MINUS_SRC_ALPHA;
+    backend.draw(draw);
+}
+std::vector<uint8_t> targetPixels(Backend& backend,unsigned id,unsigned extent) {
+    std::vector<uint8_t> result(size_t(extent)*extent*4);
+    backend.readPixels(id,0,0,int(extent),int(extent),result.data());
+    return result;
+}
+void clearTarget(Backend& backend,unsigned id,unsigned extent,const Vec4& color) {
+    auto state=mesh();state.color=id;state.depth=0;state.viewport={0,0,int(extent),int(extent)};
+    backend.clear(state,GL_COLOR_BUFFER_BIT,color,1);
+}
+TEST_F(HikaruDx11Test, FragmentListsMatchMixedBlendsAndD24TiesAcrossSceneFormats) {
+    auto reference=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto lists=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    allocate(*reference);allocate(*lists);
+    std::vector<Draw> layers;
+    for(unsigned i=0;i<12;++i) {
+        layers.push_back(fragmentMesh(-0.1f*float(i%4+1),
+            {float(17*(i%5+1))/255.f,float(13*(i%7+1))/255.f,0.2f,0.4f},i%4));
+    }
+    const Vec4 background={0.2f,0.4f,0.6f,0.8f};
+    for(GLenum format:{GL_RGBA8,GL_RGB10_A2}) {
+        hikaru::graphics::Texture target;target.width=target.height=16;target.format=format;
+        reference->texture(0,target,0,TextureUpload::Definition,nullptr,0);
+        lists->texture(0,target,0,TextureUpload::Definition,nullptr,0);
+        auto state=mesh();
+        reference->clear(state,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,background,1);
+        auto ordered=layers;
+        std::stable_sort(ordered.begin(),ordered.end(),[](const Draw& a,const Draw& b) {
+            return a.vertices[0].position[2]<b.vertices[0].position[2];
+        });
+        for(const auto& draw:ordered)drawOrderedFragment(*reference,draw);
+        const auto expected=pixels(*reference);
+        lists->clear(state,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,background,1);
+        ASSERT_TRUE(lists->beginFragmentList(0,1024*1024));
+        for(const auto& draw:layers)lists->draw(draw);
+        ASSERT_TRUE(lists->endFragmentList());
+        equalPixels(expected,pixels(*lists),format==GL_RGBA8?"RGBA8 blend/depth ties":"RGB10A2 quantized blend/depth ties",
+            format==GL_RGBA8?1:2);
+    }
+}
+TEST_F(HikaruDx11Test, FragmentListsMatchThreeHundredScissoredLayersAcrossVertexStreamWrap) {
+    auto reference=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto lists=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    allocate(*reference);allocate(*lists);
+    const auto render=[](Backend& backend,bool collect) {
+        clear(backend);
+        if(collect&&!backend.beginFragmentList(0,1024*1024)) {
+            ADD_FAILURE()<<"DX11 rejected a valid 300-layer collection";
+            return std::vector<uint8_t>{};
+        }
+        auto wrap=mesh();wrap.depthTest=false;wrap.vertices.resize(8190,wrap.vertices[0]);
+        for(auto& vertex:wrap.vertices)vertex.position={3,3,-0.25f,1};
+        if(collect)backend.draw(wrap);else drawOrderedFragment(backend,wrap);
+        for(unsigned i=0;i<300;++i) {
+            auto draw=fragmentMesh(-0.25f,{float(17*(i%8))/255.f,51.f/255.f,float(17*(i%3))/255.f,26.f/255.f},i%4);
+            draw.scissorEnabled=true;draw.scissor={4,4,2,2};
+            if(collect)backend.draw(draw);else drawOrderedFragment(backend,draw);
+        }
+        if(collect)EXPECT_TRUE(backend.endFragmentList());
+        return pixels(backend);
+    };
+    const auto expected=render(*reference,false);
+    equalPixels(expected,render(*lists,true),"300 tied layers across vertex-stream wrap",1);
+}
+TEST_F(HikaruDx11Test, FragmentListOverflowPreservesColorForFallbackAndResize) {
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);allocate(*backend);
+    const Vec4 background={0.2f,0.3f,0.4f,1};
+    backend->clear(mesh(),GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,background,1);
+    const auto before=pixels(*backend);
+    ASSERT_TRUE(backend->beginFragmentList(0,16*16*8+32+64));
+    backend->draw(fragmentMesh(-0.25f,{1,0,0,0.5f}));
+    EXPECT_FALSE(backend->endFragmentList());
+    equalPixels(before,pixels(*backend),"overflow must leave opaque target unchanged");
+    drawOrderedFragment(*backend,fragmentMesh(-0.25f,{1,0,0,0.5f}));
+    EXPECT_NE(pixels(*backend),before)<<"ordered fallback must remain usable";
+    hikaru::graphics::Texture resized;resized.width=resized.height=32;
+    backend->texture(0,resized,0,TextureUpload::Definition,nullptr,0);
+    hikaru::graphics::Texture depth=resized;depth.format=GL_DEPTH_COMPONENT24;
+    backend->texture(2,depth,0,TextureUpload::Definition,nullptr,0);
+    auto state=mesh();state.viewport={0,0,32,32};
+    backend->clear(state,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,background,1);
+    const auto resizedBefore=pixels(*backend,32);
+    ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+    ASSERT_TRUE(backend->endFragmentList());
+    equalPixels(resizedBefore,pixels(*backend,32),"empty collection after resize");
+    const auto counts=dx11FragmentCountsForTesting(*backend);
+    EXPECT_EQ(counts[0],2u);EXPECT_EQ(counts[1],1u);EXPECT_EQ(counts[2],1u);
+}
+TEST_F(HikaruDx11Test, FragmentListsPreserveOpaqueDepthPatternFogAndPackedStripShading) {
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);allocate(*backend);
+    auto opaque=fragmentMesh(-0.2f,{0.1f,0.4f,0.7f,1});
+    opaque.depthTest=opaque.depthWrite=true;opaque.uniforms.peel[0]=0;
+    clear(*backend);backend->draw(opaque);const auto opaqueOnly=pixels(*backend);
+    ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+    backend->draw(fragmentMesh(-0.8f,{1,0,0,0.5f}));
+    ASSERT_TRUE(backend->endFragmentList());
+    equalPixels(opaqueOnly,pixels(*backend),"opaque depth rejects farther transparency",1);
+    ASSERT_TRUE(backend->supportsPackedVertices());
+    for(bool packed:{false,true}) {
+        auto strip=fragmentMesh(-0.1f,{128.f/255.f,64.f/255.f,1,128.f/255.f});
+        strip.topology=GL_TRIANGLE_STRIP;strip.uniforms.family[3]=float(0xa5a5);
+        strip.uniforms.flags={0,0,0,1};strip.uniforms.fog={2,0,0,0};strip.uniforms.fogColor={0.2f,0.3f,0.4f,0};
+        strip.vertices.resize(4);
+        const std::array<std::array<float,2>,4> corners={{{-1,-1},{1,-1},{-1,1},{1,1}}};
+        for(size_t i=0;i<corners.size();++i) {
+            strip.vertices[i].position={corners[i][0],corners[i][1],-0.1f,1};
+            strip.vertices[i].diffuse={128.f/255.f,64.f/255.f,1,1};strip.vertices[i].extra[0]=128.f/255.f;
+        }
+        if(packed) {
+            for(const auto& source:strip.vertices) {
+                PackedVertex vertex;std::copy_n(source.position.begin(),3,vertex.position.begin());
+                vertex.diffuse={128,64,255};vertex.alpha=128;strip.packedVertices.push_back(vertex);
+            }
+            strip.vertices.clear();
+        }
+        clear(*backend);drawOrderedFragment(*backend,strip);const auto expected=pixels(*backend);
+        clear(*backend);
+        ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+        backend->draw(strip);ASSERT_TRUE(backend->endFragmentList());
+        equalPixels(expected,pixels(*backend),packed?"packed strip fog/pattern":"expanded strip fog/pattern",1);
+    }
+}
+TEST_F(HikaruDx11Test, FragmentResolverBoundariesMatchGenericAndSpecializedPipelines) {
+    auto general=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto shortLists=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    forceDx11GeneralFragmentResolveForTesting(*general);
+    allocate(*general);allocate(*shortLists);
+    for(unsigned count:{0u,1u,2u,7u,8u,9u,16u,64u,300u}) {
+        SCOPED_TRACE(count);
+        const auto render=[&](Backend& backend) {
+            clear(backend);const auto before=pixels(backend);
+            if(!backend.beginFragmentList(0,1024*1024)) {
+                ADD_FAILURE()<<"DX11 rejected resolver boundary "<<count;
+                return std::vector<uint8_t>{};
+            }
+            for(unsigned i=0;i<count;++i) {
+                auto draw=fragmentMesh(-0.1f*float(i%4+1),
+                    {float(17*(i%8))/255.f,51.f/255.f,float(17*(i%3))/255.f,102.f/255.f},i%4);
+                draw.scissorEnabled=true;draw.scissor={4,4,2,2};backend.draw(draw);
+            }
+            EXPECT_TRUE(backend.endFragmentList());
+            auto result=pixels(backend);
+            if(count)EXPECT_NE(result,before)<<"nonempty resolver must produce visible fragments";
+            return result;
+        };
+        equalPixels(render(*general),render(*shortLists),"general/small resolver boundary");
+    }
+}
+TEST_F(HikaruDx11Test, FragmentPoolReusesSameSizeTargetsAndTracksExtentFormatBudget) {
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);allocate(*backend);
+    constexpr uint64_t budget=1024*1024;
+    ASSERT_TRUE(backend->beginFragmentList(0,budget));
+    const auto initial=dx11FragmentPoolForTesting(*backend);
+    ASSERT_GE(initial[0],4u);EXPECT_EQ(initial[0]%4,0u);EXPECT_GE(initial[2],initial[0]*16);
+    ASSERT_TRUE(backend->endFragmentList());
+    for(unsigned i=0;i<3;++i) {
+        ASSERT_TRUE(backend->beginFragmentList(0,budget));
+        ASSERT_TRUE(backend->endFragmentList());
+        EXPECT_EQ(dx11FragmentPoolForTesting(*backend)[1],initial[1]);
+    }
+    hikaru::graphics::Texture alternate;alternate.width=alternate.height=16;
+    backend->texture(20,alternate,0,TextureUpload::Definition,nullptr,0);
+    const Vec4 alternateColor={0.2f,0.3f,0.4f,1};clearTarget(*backend,20,16,alternateColor);
+    const auto sameSizeBefore=targetPixels(*backend,20,16);
+    ASSERT_TRUE(backend->beginFragmentList(20,budget));
+    ASSERT_TRUE(backend->endFragmentList());
+    equalPixels(sameSizeBefore,targetPixels(*backend,20,16),"empty collection on same-size target switch");
+    EXPECT_EQ(dx11FragmentPoolForTesting(*backend)[1],initial[1])<<"equal-size target switch should reuse storage";
+    hikaru::graphics::Texture resized;resized.width=resized.height=32;
+    backend->texture(20,resized,0,TextureUpload::Definition,nullptr,0);
+    clearTarget(*backend,20,32,alternateColor);const auto extentBefore=targetPixels(*backend,20,32);
+    ASSERT_TRUE(backend->beginFragmentList(20,budget));
+    const auto extentPool=dx11FragmentPoolForTesting(*backend);
+    ASSERT_TRUE(backend->endFragmentList());
+    equalPixels(extentBefore,targetPixels(*backend,20,32),"empty collection after extent change");
+    EXPECT_GT(extentPool[1],initial[1]);
+    resized.format=GL_RGB10_A2;backend->texture(20,resized,0,TextureUpload::Definition,nullptr,0);
+    clearTarget(*backend,20,32,alternateColor);const auto formatBefore=targetPixels(*backend,20,32);
+    ASSERT_TRUE(backend->beginFragmentList(20,budget));
+    const auto formatPool=dx11FragmentPoolForTesting(*backend);
+    ASSERT_TRUE(backend->endFragmentList());
+    equalPixels(formatBefore,targetPixels(*backend,20,32),"empty collection after format change");
+    EXPECT_GT(formatPool[1],extentPool[1]);
+    const uint64_t fixed=32*32*8+32;
+    ASSERT_TRUE(backend->beginFragmentList(20,fixed+64));
+    EXPECT_EQ(dx11FragmentPoolForTesting(*backend)[0],4u);
+    ASSERT_TRUE(backend->endFragmentList());
+    EXPECT_FALSE(backend->beginFragmentList(20,fixed));
+}
+TEST_F(HikaruDx11Test, FragmentListBudgetAndCapabilityFailuresLeaveTargetUsable) {
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);allocate(*backend);
+    clear(*backend);const auto before=pixels(*backend);
+    EXPECT_FALSE(backend->beginFragmentList(0,0));
+    equalPixels(before,pixels(*backend),"zero budget leaves opaque color unchanged");
+    ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+    ASSERT_TRUE(backend->endFragmentList());
+    disableDx11FragmentListsForTesting(*backend);
+    const auto unsupportedBefore=pixels(*backend);
+    EXPECT_FALSE(backend->beginFragmentList(0,1024*1024));
+    equalPixels(unsupportedBefore,pixels(*backend),"unsupported collector leaves opaque color unchanged");
+    drawOrderedFragment(*backend,fragmentMesh(-0.25f,{1,0,0,0.5f}));
+    EXPECT_NE(pixels(*backend),unsupportedBefore)<<"ordered fallback must remain usable";
+    auto unsupported=makeDx11BackendForTesting(device,context,D3DCompile,true);allocate(*unsupported);
+    clear(*unsupported);const auto unsupportedDrawBefore=pixels(*unsupported);
+    ASSERT_TRUE(unsupported->beginFragmentList(0,1024*1024));
+    auto bitmap=fragmentMesh(-0.25f,{1,0,0,0.5f});bitmap.bitmap=true;
+    unsupported->draw(bitmap);
+    EXPECT_FALSE(unsupported->endFragmentList());
+    equalPixels(unsupportedDrawBefore,pixels(*unsupported),"unsupported draw must not partially commit");
+    EXPECT_FALSE(unsupported->beginFragmentList(0,1024*1024));
+    drawOrderedFragment(*unsupported,fragmentMesh(-0.25f,{1,0,0,0.5f}));
+    EXPECT_NE(pixels(*unsupported),unsupportedDrawBefore)<<"depth-peel fallback remains usable";
+}
+TEST_F(HikaruDx11Test, FragmentCollectionSurvivesTextureUploadsAndPeelTargetRetirement) {
+    auto reference=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto backend=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    allocate(*reference);allocate(*backend);
+    hikaru::graphics::Texture peelTarget;peelTarget.width=peelTarget.height=16;
+    for(auto* renderer:{reference.get(),backend.get()}) {
+        renderer->texture(20,peelTarget,0,TextureUpload::Definition,nullptr,0);
+        clearTarget(*renderer,20,16,{0.1f,0.2f,0.3f,1});
+    }
+    const uint8_t red[]={255,0,0,255},blue[]={0,0,255,255};
+    hikaru::graphics::Texture decoded;decoded.width=decoded.height=1;decoded.maxLevel=0;
+    reference->texture(40,decoded,0,TextureUpload::Definition,red,sizeof(red));
+    reference->texture(40,decoded,0,TextureUpload::FullUpdate,blue,sizeof(blue));
+    auto textured=fragmentMesh(-0.25f,{1,1,1,0.5f});
+    textured.uniforms.flags[0]=1;textured.textures[0]=40;
+    clear(*reference);drawOrderedFragment(*reference,textured);const auto expected=pixels(*reference);
+    clear(*backend);
+    ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+    // The renderer's decoded-texture miss and peel-target release happen after
+    // list collection starts but before its first collected draw.
+    backend->texture(40,decoded,0,TextureUpload::Definition,red,sizeof(red));
+    backend->texture(40,decoded,0,TextureUpload::FullUpdate,blue,sizeof(blue));
+    backend->eraseTexture(20);
+    backend->draw(textured);
+    ASSERT_TRUE(backend->endFragmentList());
+    equalPixels(expected,pixels(*backend),"texture updates and unrelated target retirement during collection",1);
+}
+TEST_F(HikaruDx11Test, FragmentCollectorCompileFailureFallsBackWithoutRetryStorm) {
+    auto reference=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto backend=makeDx11BackendForTesting(device,context,compileWithFailure,true);
+    allocate(*reference);allocate(*backend);
+    auto draw=fragmentMesh(-0.25f,{1,0,0,0.5f});
+    clear(*reference);drawOrderedFragment(*reference,draw);const auto expected=pixels(*reference);
+    clear(*backend);const auto before=pixels(*backend);
+    compilationCalls.store(0);failCompilation=true;
+    EXPECT_FALSE(backend->beginFragmentList(0,1024*1024));
+    equalPixels(before,pixels(*backend),"collector compile failure leaves opaque color untouched");
+    const unsigned calls=compilationCalls.load();EXPECT_GT(calls,0u);
+    EXPECT_FALSE(backend->beginFragmentList(0,1024*1024));
+    EXPECT_EQ(compilationCalls.load(),calls)<<"failed collector compilation must not be retried each frame";
+    drawOrderedFragment(*backend,draw);
+    equalPixels(expected,pixels(*backend),"ordered fallback after collector compile failure",1);
+}
+TEST_F(HikaruDx11Test, FragmentCollectionRemainsDistinctWhileBackgroundCompilationIsPending) {
+    auto reference=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto background=makeBackgroundDx11BackendForTesting(device,context,D3DCompile);
+    allocate(*reference);allocate(*background);
+    auto draw=fragmentMesh(-0.25f,{0.2f,0.6f,0.9f,0.4f});
+    clear(*reference);drawOrderedFragment(*reference,draw);const auto expected=pixels(*reference);
+    clear(*background);
+    auto warm=mesh();warm.depthTest=false;warm.uniforms.flags={1,1,1,1};warm.uniforms.lights[0].flags={1,2,1,1};
+    background->draw(warm); // Leave a specialized material shader compiling in the background.
+    clear(*background);
+    ASSERT_TRUE(background->beginFragmentList(0,1024*1024));
+    background->draw(draw);ASSERT_TRUE(background->endFragmentList());
+    equalPixels(expected,pixels(*background),"collector shader while material specialization is pending",1);
+    completeDx11CompilationForTesting(*background);
+}
+
 }
 #endif

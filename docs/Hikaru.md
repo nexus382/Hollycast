@@ -187,16 +187,20 @@ bounded emulation/render pipeline. Disabling it uses the direct frame path.
 per-pixel sorting for translucent geometry. Per-strip sorts retained strips
 by transformed depth centroid; per-triangle sorts individual triangles by
 their transformed depth centroids. Per-pixel sorting uses fragment lists on
-supported Vulkan devices and desktop OpenGL 4.3 contexts. Direct3D 11,
+supported Vulkan devices, Direct3D 11 and desktop OpenGL 4.3 contexts.
 OpenGL ES, older desktop GL and unsupported targets retain depth peeling. Fragment lists collect and sort transparent fragments within
 the pixel-buffer memory budget, without a fixed per-pixel layer count.
 An incomplete collection leaves the scene intact and falls back to peeling.
-Both list backends share the same fragment format, stable depth/submission-order
+All three list backends share the same fragment format, stable depth/submission-order
 sorting, blend rules, eight-fragment fast path and adaptive pool policy. OpenGL
 requires six fragment-stage storage-buffer bindings and a single-sample RGBA8 or
 RGB10_A2 scene target. Its attachmentless collection framebuffer cannot modify
 the opaque scene color or depth; overflow is checked before the resolve writes
-scene color. Resource or shader failures retain the established peeling path.
+scene color. DX11 similarly collects through six pixel-shader UAVs with no
+color or depth attachment, then synchronizes the small status readback before
+committing color. Its constant streams and retained structured buffers use
+D3D11 resource ordering and lifetime rules. Resource or shader failures retain
+the established peeling path.
 
 Depth peeling retains the configured **Maximum Layers** count, from 1 to 128
 (default 32), subject to the pixel-buffer memory budget. If another layer is
@@ -204,7 +208,7 @@ present beyond the effective bound, deeper fragments are discarded and a warning
 is reported. Hikaru keeps its sorting and layer settings separate from
 Dreamcast/Naomi. Returning to those systems recreates their requested host
 renderer. The layer setting remains stored across graphics API changes and
-applies when peeling is active, including Vulkan and OpenGL fallback.
+applies when peeling is active, including Vulkan, OpenGL and DX11 fallback.
 
 Depth peeling submits visibility queries in batches. Each viewport uses its
 previous depth as an initial estimate and reads the current frame's results

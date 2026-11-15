@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* CPU policy shared by the native Vulkan backend and the GL renderer. */
+/* CPU parameter ABI and pool policy shared by Vulkan, DX11 and OpenGL. */
 typedef struct HikaruFragmentListParameters {
     uint32_t width, height, capacity, orderBase;
     float colorLevels, alphaLevels;

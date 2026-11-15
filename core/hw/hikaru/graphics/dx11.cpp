@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "device.h"
 #include "shaders.h"
+#include "fragment_list_shared.h"
 
 #if defined(HAVE_D3D11) && !defined(LIBRETRO)
 #include "rend/dx11/dx11context.h"
@@ -10,6 +11,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <future>
 #include <system_error>
@@ -84,8 +87,26 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         bool bitmap=false,family=false,palette=false,peelComposite=false;
         MeshShaderSpecialization constants{};
         unsigned passFlags=0;
-        bool operator<(const PixelKey& other) const {return std::tie(bitmap,family,palette,peelComposite,constants,passFlags)<std::tie(other.bitmap,other.family,other.palette,other.peelComposite,other.constants,other.passFlags);}
+        bool fragmentList=false;
+        bool operator<(const PixelKey& other) const {return std::tie(bitmap,family,palette,peelComposite,constants,passFlags,fragmentList)<std::tie(other.bitmap,other.family,other.palette,other.peelComposite,other.constants,other.passFlags,other.fragmentList);}
     };
+    struct FragmentBuffer {
+        ComPtr<ID3D11Buffer> buffer;
+        ComPtr<ID3D11UnorderedAccessView> view;
+    };
+    struct FragmentStorage {
+        FragmentBuffer heads,status;
+        std::array<FragmentBuffer,4> nodes;
+        ComPtr<ID3D11Buffer> readback;
+        Image background;
+        uint32_t capacity=0;
+    };
+    // HLSL cbuffers round the shared 28-byte parameter ABI to 16-byte rows.
+    struct FragmentConstants {
+        HikaruFragmentListParameters parameters;
+        uint32_t padding=0;
+    };
+    static_assert(sizeof(FragmentConstants)==32,"Hikaru DX11 list constant layout changed");
     struct PixelShader {ComPtr<ID3D11PixelShader> shader;uint64_t touched=0;bool deferred=false;};
     struct CompiledPixel {ComPtr<ID3DBlob> code;ComPtr<ID3D11PixelShader> shader;};
     struct PendingPixel {PixelKey key;u64 hash;std::future<CompiledPixel> result;};
@@ -101,6 +122,19 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     bool specialize=true,bindingsDirty=true,backgroundCompilation=false;
     std::array<ComPtr<ID3D11PixelShader>,4> genericPixels;
     std::optional<PendingPixel> pendingPixel;
+    std::unique_ptr<FragmentStorage> fragmentLists;
+    HikaruFragmentListParameters fragmentParameters{};
+    HikaruFragmentPoolPolicy fragmentPoolPolicy{};
+    unsigned fragmentPoolWidth=0,fragmentPoolHeight=0,fragmentColor=0;
+    DXGI_FORMAT fragmentPoolFormat=DXGI_FORMAT_UNKNOWN;
+    ComPtr<ID3D11Buffer> fragmentConstants;
+    std::array<ComPtr<ID3D11PixelShader>,2> fragmentGenericPixels,fragmentResolvePixels;
+    size_t fragmentConstantsCursor=0;
+    bool fragmentListSupported=true,fragmentCollectActive=false,fragmentListFailed=false,fragmentSmallList=true;
+    bool fragmentOverflowWarned=false;
+    const bool fragmentTrace=std::getenv("HIKARU_TRACE_TIMING")!=nullptr;
+    std::array<uint64_t,3> fragmentCounts{};
+    uint64_t fragmentAllocations=0,fragmentResolves=0;
     std::unordered_map<unsigned,Image> images;
     std::map<PixelKey,PixelShader> pixelShaders;
     std::map<BlendKey,ComPtr<ID3D11BlendState>> blends;
@@ -156,6 +190,7 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         code=compileCode(compiler,source,entry,profile);cacheShader(hash,code);return code;
     }
     const ComPtr<ID3D11PixelShader>& genericPixel(const PixelKey& key) const {
+        if(key.fragmentList)return fragmentGenericPixels[key.constants[8]?1:0];
         // Transform palettes and indexed textures are independent shader modes.
         return genericPixels[(key.palette?2u:0u)+(key.constants[8]?1u:0u)];
     }
@@ -196,10 +231,80 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         if(cursor+ConstantWindow>ConstantStream)cursor=0;
         const UINT offset=UINT(cursor);cursor+=ConstantWindow;return offset;
     }
+    FragmentBuffer fragmentBuffer(uint64_t elements,UINT stride) {
+        if(!elements||elements>(1ull<<27)||elements*stride>uint64_t(D3D11_REQ_RESOURCE_SIZE_IN_MEGABYTES_EXPRESSION_C_TERM)*1024*1024)
+            throw FlycastException("Invalid Hikaru DX11 fragment buffer size");
+        D3D11_BUFFER_DESC desc{};desc.ByteWidth=UINT(elements*stride);desc.Usage=D3D11_USAGE_DEFAULT;
+        desc.BindFlags=D3D11_BIND_UNORDERED_ACCESS;desc.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;desc.StructureByteStride=stride;
+        FragmentBuffer result;checkResult(device->CreateBuffer(&desc,nullptr,&result.buffer.get()),"fragment buffer");
+        D3D11_UNORDERED_ACCESS_VIEW_DESC view{};view.ViewDimension=D3D11_UAV_DIMENSION_BUFFER;view.Buffer.NumElements=UINT(elements);
+        checkResult(device->CreateUnorderedAccessView(result.buffer,&view,&result.view.get()),"fragment buffer view");return result;
+    }
+    void resizeFragmentNodes(FragmentStorage& storage,uint32_t capacity) {
+        // Construct all four blocks before replacing live storage. The D3D
+        // command stream retains references used by the preceding resolve.
+        std::array<FragmentBuffer,4> nodes;
+        for(auto& node:nodes)node=fragmentBuffer(capacity/4,16);
+        storage.nodes=std::move(nodes);storage.capacity=capacity;
+        ++fragmentAllocations;hikaru_fragment_pool_reset_window(&fragmentPoolPolicy);
+    }
+    void initializeFragmentPrograms() {
+        if(!fragmentConstants)fragmentConstants=buffer(context1?ConstantStream:sizeof(FragmentConstants),D3D11_BIND_CONSTANT_BUFFER);
+        // Indexed textures are an independent mode even without a transform
+        // palette. Exact generic collectors remain available while the one
+        // optional material-specialization job is compiling.
+        for(unsigned indexed=0;indexed<fragmentGenericPixels.size();++indexed)if(!fragmentGenericPixels[indexed]) {
+            MeshShaderSpecialization dynamic{};dynamic[8]=indexed;
+            auto code=compile(dx11ShaderSource(false,false,false,dynamic,false,0,false,true),"pixelMain","ps_5_0");
+            checkResult(device->CreatePixelShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,&fragmentGenericPixels[indexed].get()),"fragment collector shader");
+        }
+        auto& resolve=fragmentResolvePixels[fragmentSmallList?0:1];
+        if(!resolve) {
+            auto code=compile(dx11FragmentListResolveSource(fragmentSmallList),"pixelMain","ps_5_0");
+            checkResult(device->CreatePixelShader(code->GetBufferPointer(),code->GetBufferSize(),nullptr,&resolve.get()),"fragment resolve shader");
+        }
+    }
+    void bindFragmentConstants() {
+        UINT offset=0;
+        if(context1) {
+            if(fragmentConstantsCursor+256>ConstantStream)fragmentConstantsCursor=0;
+            offset=UINT(fragmentConstantsCursor);fragmentConstantsCursor+=256;
+        }
+        const FragmentConstants constants{fragmentParameters,0};
+        upload(fragmentConstants,&constants,sizeof(constants),offset?D3D11_MAP_WRITE_NO_OVERWRITE:D3D11_MAP_WRITE_DISCARD,offset);
+        if(context1) {
+            const UINT first=offset/16,count=16;
+            context1->PSSetConstantBuffers1(2,1,&fragmentConstants.get(),&first,&count);
+        } else context->PSSetConstantBuffers(2,1,&fragmentConstants.get());
+    }
+    void bindFragmentViews(ID3D11RenderTargetView* color) {
+        std::array<ID3D11UnorderedAccessView*,6> views{fragmentLists->heads.view,
+            fragmentLists->nodes[0].view,fragmentLists->nodes[1].view,fragmentLists->nodes[2].view,fragmentLists->nodes[3].view,fragmentLists->status.view};
+        // UAV slots share the RTV namespace. Reserve slot zero even in the
+        // collector, which deliberately has no color or depth attachment.
+        context->OMSetRenderTargetsAndUnorderedAccessViews(1,&color,nullptr,1,UINT(views.size()),views.data(),nullptr);
+        boundTargets={color,nullptr};boundDepth=nullptr;bindingsDirty=true;
+    }
+    void finishFragmentBindings() {
+        unbindInputs();unbindFragmentViews();
+        ID3D11Buffer* empty=nullptr;context->PSSetConstantBuffers(2,1,&empty);
+    }
+    void traceFragmentEnd(uint32_t used,bool failed) const {
+        if(fragmentTrace&&(fragmentCounts[0]==1||fragmentCounts[0]%60==0||failed))
+            std::fprintf(stderr,"Hikaru DX11 fragment lists: %ux%u used=%u capacity=%u fallback=%u resolves=%llu allocations=%llu poolBytes=%llu\n",
+                fragmentParameters.width,fragmentParameters.height,used,fragmentParameters.capacity,unsigned(failed),
+                static_cast<unsigned long long>(fragmentResolves),static_cast<unsigned long long>(fragmentAllocations),
+                static_cast<unsigned long long>(fragmentLists?uint64_t(fragmentParameters.width)*fragmentParameters.height*8+32+uint64_t(fragmentLists->capacity)*16:0));
+    }
     void unbindInputs() {
         if(bindingsDirty||std::any_of(boundInputs.begin(),boundInputs.end(),[](auto* view){return view!=nullptr;})) {
             boundInputs={};context->PSSetShaderResources(0,UINT(boundInputs.size()),boundInputs.data());
         }
+    }
+    void unbindFragmentViews() {
+        std::array<ID3D11UnorderedAccessView*,6> empty{};
+        context->OMSetRenderTargetsAndUnorderedAccessViews(0,nullptr,nullptr,1,UINT(empty.size()),empty.data(),nullptr);
+        boundTargets={};boundDepth=nullptr;bindingsDirty=true;
     }
     void unbindTargets() {
         context->OMSetRenderTargets(0,nullptr,nullptr);boundTargets={};boundDepth=nullptr;bindingsDirty=true;
@@ -256,7 +361,7 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         ComPtr<ID3D11BlendState> result;checkResult(device->CreateBlendState(&desc,&result.get()),"blend state");return (lastBlend=blends.emplace(key,std::move(result)).first)->second;
     }
     ID3D11DepthStencilState* depthState(const Draw& draw) {
-        const bool enabled=draw.depth&&draw.depthTest;
+        const bool enabled=!fragmentCollectActive&&draw.depth&&draw.depthTest;
         const DepthKey key{enabled,enabled&&draw.depthWrite,draw.depthFunc};
         if(lastDepth!=depths.end()&&lastDepth->first==key)return lastDepth->second;
         auto found=depths.find(key);
@@ -314,14 +419,15 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
                 if(separateDepth)passFlags|=Dx11SeparateDepth;
             }
         }
-        const PixelKey key{draw.bitmap,draw.familyResolve,!draw.palette.empty(),draw.peelComposite,meshShaderSpecialization(draw,specialize),passFlags};
+        const PixelKey key{draw.bitmap,draw.familyResolve,!draw.palette.empty(),draw.peelComposite,meshShaderSpecialization(draw,specialize),passFlags,fragmentCollectActive};
+        if(fragmentCollectActive&&!specialize)return genericPixel(key);
         auto found=pixelShaders.find(key);
         // Cache deferred keys too: a pending compiler must not make every
         // sorted triangle rebuild and hash the same HLSL source each frame.
         if(found!=pixelShaders.end()&&(!found->second.deferred||pendingPixel)) {
             found->second.touched=++shaderClock;return found->second.shader;
         }
-        const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags,key.peelComposite);
+        const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags,key.peelComposite,key.fragmentList);
         ComPtr<ID3DBlob> code;const u64 hash=hashShader(source.c_str(),"pixelMain","ps_5_0");
         if(!lookupShader(hash,code)) {
             if(backgroundCompilation&&!draw.bitmap) {
@@ -357,6 +463,7 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         return retainPixel(key,std::move(result));
     }
     void bindTargets(const Draw& draw) {
+        if(fragmentCollectActive)return; // UAV-only collection must not bind or modify the opaque attachments.
         auto& color=image(draw.color);auto* depth=draw.depth?&image(draw.depth):nullptr;
         auto* metadata=draw.metadata?&image(draw.metadata):nullptr;
         if((depth&&(depth->description.Width!=color.description.Width||depth->description.Height!=color.description.Height))||
@@ -387,7 +494,11 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     }
     Image& sampledImage(unsigned id,const Texture& sampling,const Draw& draw,bool integer) {
         auto found=images.find(id);Image* sampled=found!=images.end()?&found->second:nullptr;
-        if(!id||id==draw.color||id==draw.depth||id==draw.metadata||!sampled||!sampled->sampleable||!sampled->initialized[0])sampled=nullptr;
+        // Collection has no DSV/MRT attachments. Its material shader must
+        // sample the opaque depth and family metadata instead of replacing
+        // them with the zero fallback reserved for real attachment feedback.
+        const bool attachment=id==draw.color||(!fragmentCollectActive&&(id==draw.depth||id==draw.metadata));
+        if(!id||attachment||!sampled||!sampled->sampleable||!sampled->initialized[0])sampled=nullptr;
         if(sampled&&isMipmapped(sampling.minFilter)) {
             const unsigned levels=1+std::min(sampling.maxLevel,mipCount(sampled->description.Width,sampled->description.Height)-1);
             if(levels>sampled->initialized.size())sampled=nullptr;
@@ -476,15 +587,119 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         if(owner&&GraphicsContext::Instance()==owner)owner->presentFrame({});
         // The immediate context owns submitted resource references. Releasing
         // CPU cache entries never requires a device-wide GPU idle wait.
-        unbindInputs();unbindTargets();
+        finishFragmentBindings();unbindTargets();
     }
 #ifdef HIKARU_NATIVE_TESTING
     void completeCompilationForTesting() {completePixelCompilation(true);}
+    std::array<uint64_t,3> fragmentCountsForTesting() const {return fragmentCounts;}
+    std::array<uint64_t,4> fragmentPoolForTesting() const {
+        return {fragmentLists?fragmentLists->capacity:0,fragmentAllocations,
+            fragmentLists?uint64_t(fragmentLists->background.description.Width)*fragmentLists->background.description.Height*8+32+uint64_t(fragmentLists->capacity)*16:0,
+            fragmentPoolPolicy.hint};
+    }
+    void forceGeneralFragmentResolveForTesting() {fragmentSmallList=false;}
+    void disableFragmentListsForTesting() {fragmentListSupported=false;}
 #endif
+    bool beginFragmentList(unsigned color,uint64_t budget) override {
+        if(fragmentCollectActive)throw FlycastException("Nested Hikaru DX11 fragment-list collection");
+        if(!fragmentListSupported||occlusionActive||!pendingOcclusions.empty())return false;
+        auto& target=image(color);const auto& desc=target.description;
+        if(target.depth||desc.SampleDesc.Count!=1||
+            (desc.Format!=DXGI_FORMAT_R8G8B8A8_UNORM&&desc.Format!=DXGI_FORMAT_R10G10B10A2_UNORM)) {
+            finishFragmentBindings();fragmentLists.reset();return false;
+        }
+        const uint64_t pixels=uint64_t(desc.Width)*desc.Height,fixedBytes=pixels*8+32;
+        const uint64_t blockLimit=uint64_t(D3D11_REQ_RESOURCE_SIZE_IN_MEGABYTES_EXPRESSION_C_TERM)*1024*1024;
+        const uint64_t maximum=budget>fixedBytes?std::min((budget-fixedBytes)/16,(blockLimit/16)*4):0;
+        if(pixels>(1ull<<27)||pixels*4>blockLimit||maximum<4) {
+            // Release storage before peeling takes ownership of the same budget.
+            finishFragmentBindings();fragmentLists.reset();fragmentPoolPolicy={};return false;
+        }
+        if(fragmentPoolWidth!=desc.Width||fragmentPoolHeight!=desc.Height||fragmentPoolFormat!=desc.Format) {
+            fragmentPoolPolicy={};fragmentPoolWidth=desc.Width;fragmentPoolHeight=desc.Height;fragmentPoolFormat=desc.Format;
+        }
+        const uint64_t desired=fragmentPoolPolicy.hint?std::max(4096u,fragmentPoolPolicy.hint):std::max<uint64_t>(4096,pixels);
+        const uint32_t capacity=uint32_t(std::min(maximum,desired)/4*4);
+        unbindInputs();unbindFragmentViews();
+        try {
+            initializeFragmentPrograms();
+            if(!fragmentLists||fragmentLists->background.description.Width!=desc.Width||
+                fragmentLists->background.description.Height!=desc.Height||fragmentLists->background.description.Format!=desc.Format) {
+                fragmentLists.reset();
+                auto storage=std::make_unique<FragmentStorage>();
+                storage->heads=fragmentBuffer(pixels,4);storage->status=fragmentBuffer(4,4);
+                D3D11_BUFFER_DESC readback{};readback.ByteWidth=16;readback.Usage=D3D11_USAGE_STAGING;readback.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+                checkResult(device->CreateBuffer(&readback,nullptr,&storage->readback.get()),"fragment readback");
+                Texture info;info.width=desc.Width;info.height=desc.Height;info.maxLevel=0;
+                info.format=desc.Format==DXGI_FORMAT_R10G10B10A2_UNORM?GL_RGB10_A2:GL_RGBA;
+                storage->background=makeImage(0,info);resizeFragmentNodes(*storage,capacity);fragmentLists=std::move(storage);
+            } else if(fragmentLists->capacity!=capacity)resizeFragmentNodes(*fragmentLists,capacity);
+        } catch(const std::exception& error) {
+            finishFragmentBindings();fragmentLists.reset();
+            // A device removal is fatal, unlike an optional program/allocation
+            // failure. Do not disguise it as a recoverable sorting fallback.
+            checkResult(device->GetDeviceRemovedReason(),"fragment-list device");
+            fragmentListSupported=false;
+            WARN_LOG(RENDERER,"Hikaru DX11 fragment lists unavailable; using depth peeling: %s",error.what());
+            return false;
+        }
+        fragmentParameters={desc.Width,desc.Height,capacity,0,
+            desc.Format==DXGI_FORMAT_R10G10B10A2_UNORM?1023.f:255.f,
+            desc.Format==DXGI_FORMAT_R10G10B10A2_UNORM?3.f:255.f,capacity/4};
+        const UINT zero[4]={};context->ClearUnorderedAccessViewUint(fragmentLists->heads.view,zero);
+        context->ClearUnorderedAccessViewUint(fragmentLists->status.view,zero);
+        fragmentColor=color;fragmentListFailed=false;fragmentCollectActive=true;++fragmentCounts[0];
+        bindFragmentViews(nullptr);return true;
+    }
+    bool endFragmentList() override {
+        if(!fragmentCollectActive)throw FlycastException("No active Hikaru DX11 fragment-list collection");
+        fragmentCollectActive=false;finishFragmentBindings();
+        // Map(READ) waits for this tiny copy and the preceding UAV writes. The
+        // opaque image is still untouched, including on overflow or bad draws.
+        context->CopyResource(fragmentLists->readback,fragmentLists->status.buffer);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        checkResult(context->Map(fragmentLists->readback,0,D3D11_MAP_READ,0,&mapped),"fragment counter map");
+        std::array<uint32_t,4> status{};std::memcpy(status.data(),mapped.pData,sizeof(status));
+        context->Unmap(fragmentLists->readback,0);
+        const bool failed=fragmentListFailed||status[1]||status[0]>fragmentLists->capacity;
+        if(failed) {
+            ++fragmentCounts[2];
+            if(fragmentListFailed)fragmentListSupported=false;
+            else hikaru_fragment_pool_grow(&fragmentPoolPolicy,status[0],fragmentLists->capacity);
+            if(!fragmentOverflowWarned) {
+                WARN_LOG(RENDERER,"Hikaru DX11 fragment-list pool exceeded or unsupported draw; using depth peeling for this viewport");
+                fragmentOverflowWarned=true;
+            }
+            traceFragmentEnd(status[0],true);
+            fragmentLists.reset();return false;
+        }
+        hikaru_fragment_pool_observe(&fragmentPoolPolicy,status[0],fragmentLists->capacity);
+        ++fragmentCounts[1];
+        if(status[0]) {
+            auto& target=image(fragmentColor);
+            // Copy only mip zero: a color target can own a mip chain, whereas
+            // the preserved background intentionally has a single level.
+            context->CopySubresourceRegion(fragmentLists->background.texture,0,0,0,0,target.texture,0,nullptr);
+            bindFragmentViews(target.target);
+            Draw state;state.color=fragmentColor;state.depthTest=state.depthWrite=false;state.blend=false;state.cull=false;
+            state.viewport={0,0,GLint(fragmentParameters.width),GLint(fragmentParameters.height)};
+            bindStates(state);
+            context->IASetInputLayout(nullptr);context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context->VSSetShader(clearVertex,nullptr,0);
+            context->PSSetShader(fragmentResolvePixels[fragmentSmallList?0:1],nullptr,0);
+            context->GSSetShader(nullptr,nullptr,0);context->HSSetShader(nullptr,nullptr,0);context->DSSetShader(nullptr,nullptr,0);
+            bindFragmentConstants();
+            context->PSSetShaderResources(0,1,&fragmentLists->background.view.get());boundInputs[0]=fragmentLists->background.view;
+            context->Draw(3,0);++fragmentResolves;
+            finishFragmentBindings();
+        }
+        traceFragmentEnd(status[0],false);return true;
+    }
     bool supportsDrawPalette() const override {return true;}
     bool supportsTexturePalette() const override {return true;}
     bool supportsPackedVertices() const override {return true;}
     void texture(unsigned id,const Texture& info,unsigned level,TextureUpload uploadType,const void* pixels,size_t bytes) override {
+        if(fragmentCollectActive&&id==fragmentColor)throw FlycastException("Hikaru DX11 scene replacement during fragment collection");
         const bool update=uploadType==TextureUpload::FullUpdate;
         if(!info.width||!info.height||level>=mipCount(info.width,info.height))throw FlycastException("Invalid Hikaru DX11 mip definition");
         auto found=images.find(id);
@@ -497,16 +712,27 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         const unsigned width=std::max(1u,info.width>>level),height=std::max(1u,info.height>>level);
         if(pixels&&bytes!=size_t(width)*height*pixelBytes)throw FlycastException("Invalid Hikaru DX11 texture byte count");
         if(update&&(!compatible||level||!pixels||depth))throw FlycastException("Hikaru DX11 full update requires compatible level-zero color storage");
-        unbindInputs();unbindTargets();
+        unbindInputs();
+        // Texture cache misses and release of old peel targets can occur
+        // between BeginFragmentList and the first mesh. Keep the collector's
+        // UAV binding intact while unrelated texture storage changes.
+        if(!fragmentCollectActive)unbindTargets();
+        else bindingsDirty=true;
         if(!compatible){images.erase(id);images.emplace(id,makeImage(id,info));}
         auto& target=image(id);if(level>=target.description.MipLevels)throw FlycastException("Hikaru DX11 mip exceeds texture storage");
         if(pixels){if(depth)throw FlycastException("Hikaru DX11 CPU depth uploads are unsupported");context->UpdateSubresource(target.texture,level,nullptr,pixels,width*UINT(pixelBytes),0);}
         target.initialized[level]=true;
     }
     void eraseTexture(unsigned id) override {
-        unbindInputs();unbindTargets();if(id==0&&owner&&GraphicsContext::Instance()==owner)owner->presentFrame({});images.erase(id);
+        if(fragmentCollectActive&&id==fragmentColor)throw FlycastException("Hikaru DX11 scene deletion during fragment collection");
+        unbindInputs();
+        if(!fragmentCollectActive)unbindTargets();
+        else bindingsDirty=true;
+        if(id==0&&owner&&GraphicsContext::Instance()==owner)owner->presentFrame({});
+        images.erase(id);
     }
     void clear(const Draw& draw,GLbitfield mask,const Vec4& color,float depth) override {
+        if(fragmentCollectActive)throw FlycastException("Hikaru DX11 clear during fragment collection");
         endQuerySegment();
         auto& target=image(draw.color);const bool colors=(mask&GL_COLOR_BUFFER_BIT)!=0;
         const bool z=(mask&GL_DEPTH_BUFFER_BIT)&&draw.depth&&draw.depthWrite;
@@ -537,6 +763,17 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         if((packed&&(!draw.vertices.empty()||draw.bitmap))||count>UINT_MAX/stride||draw.palette.size()>DrawPaletteSize||
             (draw.texturePalette&&(draw.paletteTextures.size()!=draw.palette.size()||draw.paletteSampling.size()!=draw.palette.size())))
             throw FlycastException("Invalid Hikaru DX11 draw size");
+        uint32_t primitives=0;
+        if(fragmentCollectActive) {
+            const uint64_t primitiveCount=draw.topology==GL_TRIANGLES?count/3:count>=3?count-2:0;
+            if(fragmentListFailed)return;
+            if(draw.color!=fragmentColor||draw.bitmap||draw.familyResolve||draw.peelComposite||!draw.palette.empty()||
+                (draw.topology!=GL_TRIANGLES&&draw.topology!=GL_TRIANGLE_STRIP)||
+                primitiveCount>UINT32_MAX-fragmentParameters.orderBase) {
+                fragmentListFailed=true;return;
+            }
+            primitives=uint32_t(primitiveCount);
+        }
         const size_t bytes=count*stride;
         if(vertexCapacity<bytes){vertexCapacity=std::max(size_t(1024*1024),bytes);vertexBuffer=buffer(vertexCapacity,D3D11_BIND_VERTEX_BUFFER);vertexOffset=0;}
         // Scalar, packed and bitmap draws share a stream. Align to the
@@ -632,7 +869,9 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
             D3D11_QUERY_DESC desc{D3D11_QUERY_OCCLUSION,0};ComPtr<ID3D11Query> query;
             checkResult(device->CreateQuery(&desc,&query.get()),"occlusion query");queries.push_back(std::move(query));context->Begin(queries.back());queryOpen=true;
         }
+        if(fragmentCollectActive)bindFragmentConstants();
         context->Draw(UINT(count),UINT(vertexOffset/stride));vertexOffset+=bytes;bindingsDirty=false;
+        if(fragmentCollectActive)fragmentParameters.orderBase+=primitives;
     }
     void readPixels(unsigned id,int x,int y,int width,int height,uint8_t* rgba) override {
         if(width<=0||height<=0)return;
@@ -657,6 +896,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         context->Unmap(staging,0);
     }
     void beginOcclusion() override {
+        if(fragmentCollectActive)throw FlycastException("Hikaru DX11 visibility query during fragment collection");
         if(occlusionActive)throw FlycastException("Nested Hikaru DX11 visibility query");
         queries.clear();occlusionActive=true;
     }
@@ -682,6 +922,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
     }
     bool endOcclusion() override { finishOcclusion(); return occlusionResult(); }
     void present(unsigned width,unsigned height) override {
+        if(fragmentCollectActive)throw FlycastException("Hikaru DX11 presentation during fragment collection");
         completePixelCompilation(false);
         auto& output=image(0);if(output.description.Width!=width||output.description.Height!=height)return;
         if(!owner)throw FlycastException("Hikaru DX11 presenter is unavailable");
@@ -702,6 +943,10 @@ std::unique_ptr<Backend> makeBackgroundDx11BackendForTesting(ID3D11Device* devic
     return std::make_unique<Dx11Backend>(device,context,compiler,nullptr,true,true);
 }
 void completeDx11CompilationForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).completeCompilationForTesting();}
+std::array<uint64_t,3> dx11FragmentCountsForTesting(const Backend& backend) {return static_cast<const Dx11Backend&>(backend).fragmentCountsForTesting();}
+std::array<uint64_t,4> dx11FragmentPoolForTesting(const Backend& backend) {return static_cast<const Dx11Backend&>(backend).fragmentPoolForTesting();}
+void forceDx11GeneralFragmentResolveForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).forceGeneralFragmentResolveForTesting();}
+void disableDx11FragmentListsForTesting(Backend& backend) {static_cast<Dx11Backend&>(backend).disableFragmentListsForTesting();}
 #endif
 } // namespace hikaru::graphics
 #endif

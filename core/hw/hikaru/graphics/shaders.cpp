@@ -472,7 +472,176 @@ MeshShaderSpecialization meshShaderSpecialization(const Draw& d, bool specialize
     return result;
 }
 
-std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed, unsigned passFlags, bool peelComposite) {
+namespace {
+const char* dx11FragmentListBindings=R"(
+// Keep this cbuffer at 32 bytes: the shared CPU/Vulkan structure is 28 bytes,
+// while D3D11 constant buffers occupy complete 16-byte registers.
+cbuffer ListParameters : register(b2) {
+    uint listWidth,listHeight,listCapacity,listOrderBase;
+    float listColorLevels,listAlphaLevels;
+    uint listBlockCapacity,listPadding;
+};
+RWStructuredBuffer<uint> listHeads : register(u1);
+RWStructuredBuffer<uint4> listNodes0 : register(u2);
+RWStructuredBuffer<uint4> listNodes1 : register(u3);
+RWStructuredBuffer<uint4> listNodes2 : register(u4);
+RWStructuredBuffer<uint4> listNodes3 : register(u5);
+RWStructuredBuffer<uint> listStatus : register(u6);
+)";
+
+const char* dx11FragmentListNodeAccess=R"(
+uint4 readListNode(uint index) {
+    uint block=index/listBlockCapacity,offset=index%listBlockCapacity;
+    if(block==0u)return listNodes0[offset];
+    if(block==1u)return listNodes1[offset];
+    if(block==2u)return listNodes2[offset];
+    return listNodes3[offset];
+}
+void writeListNode(uint index,uint4 value) {
+    uint block=index/listBlockCapacity,offset=index%listBlockCapacity;
+    if(block==0u)listNodes0[offset]=value;
+    else if(block==1u)listNodes1[offset]=value;
+    else if(block==2u)listNodes2[offset]=value;
+    else listNodes3[offset]=value;
+}
+void writeListNext(uint index,uint next) {
+    uint block=index/listBlockCapacity,offset=index%listBlockCapacity;
+    if(block==0u)listNodes0[offset].w=next;
+    else if(block==1u)listNodes1[offset].w=next;
+    else if(block==2u)listNodes2[offset].w=next;
+    else listNodes3[offset].w=next;
+}
+)";
+
+const char* dx11FragmentListCollector=R"(
+uint packListColor(float4 color) {
+    uint4 channels=uint4(round(saturate(color)*255.0));
+    return channels.x|(channels.y<<8u)|(channels.z<<16u)|(channels.w<<24u);
+}
+void collectListFragment(float4 color,float depthCode,uint blendMode,float2 position,
+                         uint primitiveId) {
+    // D3D11 suppresses UAV writes and atomics for helper/discarded pixels
+    // (functional specification 16.13). No coverage-mask input is needed;
+    // derivatives above remain quad-wide, before the material discards.
+    uint2 pixel=uint2(position);
+    if(pixel.x>=listWidth||pixel.y>=listHeight)return;
+    uint index;
+    InterlockedAdd(listStatus[0],1u,index);
+    if(index>=listCapacity) {
+        uint ignored;
+        InterlockedOr(listStatus[1],1u,ignored);
+        return;
+    }
+    uint previous;
+    InterlockedExchange(listHeads[pixel.y*listWidth+pixel.x],index+1u,previous);
+    uint packedDepth=(uint(depthCode)&0xffffffu)|((blendMode&0xffu)<<24u);
+    writeListNode(index,uint4(packListColor(color),packedDepth,listOrderBase+primitiveId,previous));
+}
+)";
+
+const char* dx11FragmentListResolveHead=R"(
+Texture2D<float4> listBackground : register(t0);
+bool fragmentBefore(uint4 first,uint4 second) {
+    uint z1=first.y&0xffffffu,z2=second.y&0xffffffu;
+    return z1>z2||(z1==z2&&first.z<second.z);
+}
+bool earlier(uint a,uint b) { return fragmentBefore(readListNode(a-1u),readListNode(b-1u)); }
+float4 blendListFragment(float4 destination,uint4 node) {
+    uint packed=node.x;
+    float4 source=float4(packed&0xffu,(packed>>8u)&0xffu,(packed>>16u)&0xffu,(packed>>24u)&0xffu)/255.0;
+    uint mode=node.y>>24u;
+    precise float4 result;
+    if(mode==1u)result=float4(source.rgb*destination.rgb,source.a);
+    else {
+        precise float3 contribution=mode==3u?source.rgb:source.rgb*source.a;
+        result=float4(contribution+destination.rgb*(mode==2u?1.0:1.0-source.a),
+                      source.a+destination.a*(1.0-source.a));
+    }
+    float4 levels=float4(listColorLevels,listColorLevels,listColorLevels,listAlphaLevels);
+    precise float4 quantized=round(saturate(result)*levels)/levels;
+    return quantized;
+}
+float4 pixelMain(float4 position:SV_Position):SV_Target0 {
+    uint2 pixel=uint2(position.xy);
+    if(pixel.x>=listWidth||pixel.y>=listHeight)discard;
+    uint head=listHeads[pixel.y*listWidth+pixel.x];
+    if(head==0u)discard;
+)";
+
+const char* dx11FragmentListResolveSmall=R"(
+    uint4 localFragments[8];
+    uint localCount=0u,link=head;
+    while(link!=0u&&localCount<8u) {
+        uint4 node=readListNode(link-1u);
+        uint place=localCount;
+        while(place>0u) {
+            if(!fragmentBefore(node,localFragments[place-1u]))break;
+            localFragments[place]=localFragments[place-1u];
+            --place;
+        }
+        localFragments[place]=node;
+        ++localCount;
+        link=node.w;
+    }
+    if(link==0u) {
+        precise float4 localColor=listBackground.Load(int3(int2(pixel),0));
+        for(uint i=0u;i<localCount;++i)localColor=blendListFragment(localColor,localFragments[i]);
+        return localColor;
+    }
+)";
+
+const char* dx11FragmentListResolveTail=R"(
+    uint run=1u,sorted=head;
+    for(;;) {
+        uint cursor=sorted,tail=0u,merges=0u;
+        sorted=0u;
+        while(cursor!=0u) {
+            ++merges;
+            uint left=cursor,right=cursor,leftCount=0u,rightCount=run;
+            for(uint i=0u;i<run&&right!=0u;++i) {
+                right=readListNode(right-1u).w;
+                ++leftCount;
+            }
+            while(leftCount!=0u||(rightCount!=0u&&right!=0u)) {
+                uint chosen;
+                bool takeLeft=false;
+                if(leftCount!=0u) {
+                    if(rightCount==0u||right==0u)takeLeft=true;
+                    else takeLeft=earlier(left,right);
+                }
+                if(takeLeft) {
+                    chosen=left;
+                    left=readListNode(left-1u).w;
+                    --leftCount;
+                } else {
+                    chosen=right;
+                    right=readListNode(right-1u).w;
+                    --rightCount;
+                }
+                if(tail==0u)sorted=chosen;
+                else writeListNext(tail-1u,chosen);
+                tail=chosen;
+            }
+            cursor=right;
+        }
+        writeListNext(tail-1u,0u);
+        if(merges<=1u)break;
+        run*=2u;
+    }
+    precise float4 result=listBackground.Load(int3(int2(pixel),0));
+    while(sorted!=0u) {
+        uint4 node=readListNode(sorted-1u);
+        result=blendListFragment(result,node);
+        sorted=node.w;
+    }
+    return result;
+}
+)";
+} // namespace
+
+std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed, unsigned passFlags, bool peelComposite, bool fragmentList) {
+    if(fragmentList&&(bitmap||familyResolve||palette||peelComposite))
+        throw std::invalid_argument("Invalid Hikaru DX11 fragment-list collector");
     // Uniforms and DrawRecord contain only column-major matrices and 16-byte
     // vectors, matching both the native CPU layout and HLSL constant packing.
     std::string s=R"(
@@ -535,6 +704,7 @@ v.specular=input.specular;v.unknown=input.unknown;v.uv=input.uv;
     // ordering; the final output is top-left and ReadPixels flips only it.
     s+="if(u.inverted.z!=0.0)o.position.y=-o.position.y;o.position.z=(o.position.z+o.position.w)*0.5;return o;}\n";
     s+="Texture2D<float4> tex0[16]:register(t0);SamplerState samplers[16]:register(s0);\n";
+    if(fragmentList)s+=dx11FragmentListBindings+std::string(dx11FragmentListNodeAccess)+dx11FragmentListCollector;
     if(bitmap&&peelComposite) {
         s+="Texture2D<float4> tex1:register(t16);Texture2D<uint2> tex2:register(t17);Texture2D<float4> tex3:register(t18);\n";
     } else if(bitmap&&!familyResolve) {
@@ -581,7 +751,16 @@ float loadDepth(Texture2D<float> source,vec2 coordinate){
     s+="#define SAMPLE0(coord) sampleBase(kTexturePalette!=0?o.drawIndex:0,coord,uvDx,uvDy,kTexturePalette!=0?o.textureBias:u.lodBias.x)\n";
     s+="float meshWindowDepth(float z){";
     s+=depthFunctionBody;s+="}\n";
-    s+=R"(
+    if(fragmentList) {
+        s+=R"(
+#define WRITE_DEPTH(value)
+#define WRITE_METADATA(code,order)
+#define RETURN_COLOR(value) collectListFragment(value,depthCode,uint(u.blend.z+0.5),o.position.xy,primitiveId);return
+void pixelMain(Output o,uint primitiveId:SV_PrimitiveID) {
+// Preserve the ordinary shader's derivative quad behavior before mesh discards.
+vec2 uvDx=ddx(o.uv),uvDy=ddy(o.uv);
+)";
+    } else s+=R"(
 struct PixelResult{vec4 color:SV_Target0;uint2 metadata:SV_Target1;float depth:SV_Depth;};
 #define WRITE_DEPTH(value) result.depth=value
 #define WRITE_METADATA(code,order) result.metadata=uint2(uint(code),uint(order+0.5))
@@ -648,5 +827,14 @@ vec2 uvDx=ddx(o.uv),uvDy=ddy(o.uv);
     // The generic/mixed path still evaluates the original per-record test.
     replaceAll(body,"if(!commonDepth&&"+sorting+">0.0&&"+sorting+"!="+placement+")","if(!commonDepth&&!separateDepth&&"+sorting+">0.0&&"+sorting+"!="+placement+")");
     return s+body+"}\n";
+}
+
+std::string dx11FragmentListResolveSource(bool smallList) {
+    // The backend reuses its existing SV_VertexID fullscreen clear vertex shader.
+    std::string s=dx11FragmentListBindings;
+    s+=dx11FragmentListNodeAccess;
+    s+=dx11FragmentListResolveHead;
+    if(smallList)s+=dx11FragmentListResolveSmall;
+    return s+dx11FragmentListResolveTail;
 }
 } // namespace hikaru::graphics
