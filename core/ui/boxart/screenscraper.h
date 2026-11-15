@@ -63,7 +63,9 @@ class Session
 {
 public:
 	using Transport = std::function<int(const std::string&, std::vector<u8>&, std::string&)>;
-	explicit Session(Credentials credentials, Transport transport = {});
+	// Tests can exercise retry recovery without waiting for the production backoff.
+	explicit Session(Credentials credentials, Transport transport = {},
+		std::chrono::milliseconds retryDelay = std::chrono::minutes(1));
 	void login();
 	void cancel();
 	void waitUntilIdle();
@@ -74,17 +76,24 @@ public:
 	std::vector<u8> requestImage(u32 gameId, const std::string& type, const std::string& region);
 
 private:
+	enum class RequestType { Login, GameInfo, GameSearch, Artwork, Other };
+	enum class FailureType { Transport, InvalidResponse, InvalidJson };
+	static RequestType classifyRequest(const std::string& endpoint);
 	int request(const std::string& endpoint, const std::string& parameters,
-		std::vector<u8>& bytes, std::string& contentType);
+		std::vector<u8>& bytes, std::string& contentType, std::chrono::steady_clock::time_point& started);
+	void requestSucceeded(std::chrono::steady_clock::time_point started);
 	void updateLimits(const json& response);
-	void fail(int code);
+	void fail(int code, RequestType requestType = RequestType::Other,
+		FailureType failureType = FailureType::Transport);
 
 	const Credentials credentials;
 	const Transport transport;
+	const std::chrono::milliseconds retryDelay;
 	mutable std::mutex mutex;
 	std::condition_variable wake;
 	Account account;
 	bool cancelled = false;
+	bool requestRetryPending = false;
 	std::deque<std::chrono::steady_clock::time_point> recentRequests;
 	std::chrono::steady_clock::time_point retryAt{}, nextDownload{};
 };
