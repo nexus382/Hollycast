@@ -514,11 +514,9 @@ void writeListNext(uint index,uint next) {
 }
 )";
 
+// Match the shared GLSL node encoding, including RGB10 plus eight-bit source
+// alpha in the color word and the six spare bits above the blend mode.
 const char* dx11FragmentListCollector=R"(
-uint packListColor(float4 color) {
-    uint4 channels=uint4(round(saturate(color)*255.0));
-    return channels.x|(channels.y<<8u)|(channels.z<<16u)|(channels.w<<24u);
-}
 void collectListFragment(float4 color,float depthCode,uint blendMode,float2 position,
                          uint primitiveId) {
     // D3D11 suppresses UAV writes and atomics for helper/discarded pixels
@@ -535,8 +533,19 @@ void collectListFragment(float4 color,float depthCode,uint blendMode,float2 posi
     }
     uint previous;
     InterlockedExchange(listHeads[pixel.y*listWidth+pixel.x],index+1u,previous);
-    uint packedDepth=(uint(depthCode)&0xffffffu)|((blendMode&0xffu)<<24u);
-    writeListNode(index,uint4(packListColor(color),packedDepth,listOrderBase+primitiveId,previous));
+    float4 source=saturate(color);
+    uint packedColor;
+    uint packedDepth=(uint(depthCode)&0xffffffu)|((blendMode&3u)<<24u);
+    if(listColorLevels>255.0) {
+        uint3 rgb=uint3(round(source.rgb*1023.0));
+        uint alpha=uint(round(source.a*255.0));
+        packedColor=rgb.r|(rgb.g<<10u)|(rgb.b<<20u)|((alpha&3u)<<30u);
+        packedDepth|=(alpha>>2u)<<26u;
+    } else {
+        uint4 channels=uint4(round(source*255.0));
+        packedColor=channels.x|(channels.y<<8u)|(channels.z<<16u)|(channels.w<<24u);
+    }
+    writeListNode(index,uint4(packedColor,packedDepth,listOrderBase+primitiveId,previous));
 }
 )";
 
@@ -549,8 +558,13 @@ bool fragmentBefore(uint4 first,uint4 second) {
 bool earlier(uint a,uint b) { return fragmentBefore(readListNode(a-1u),readListNode(b-1u)); }
 float4 blendListFragment(float4 destination,uint4 node) {
     uint packed=node.x;
-    float4 source=float4(packed&0xffu,(packed>>8u)&0xffu,(packed>>16u)&0xffu,(packed>>24u)&0xffu)/255.0;
-    uint mode=node.y>>24u;
+    float4 source;
+    if(listColorLevels>255.0) {
+        uint3 rgb=uint3(packed,packed>>10u,packed>>20u)&uint3(1023u,1023u,1023u);
+        uint alpha=(packed>>30u)|((node.y>>26u)<<2u);
+        source=float4(float3(rgb)/1023.0,float(alpha)/255.0);
+    } else source=float4(packed&0xffu,(packed>>8u)&0xffu,(packed>>16u)&0xffu,(packed>>24u)&0xffu)/255.0;
+    uint mode=(node.y>>24u)&3u;
     precise float4 result;
     if(mode==1u)result=float4(source.rgb*destination.rgb,source.a);
     else {

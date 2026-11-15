@@ -50,6 +50,69 @@ inline void equalPixels(const std::vector<uint8_t>& expected,const std::vector<u
         ADD_FAILURE()<<label<<" differs at byte "<<i<<": "<<int(expected[i])<<" vs "<<int(actual[i]);return;
     }
 }
+inline void exerciseRgb10FragmentListPrecision(Backend& reference,Backend& lists) {
+    struct Case { Vec4 color,background;unsigned mode,fragments;unsigned alpha;const char* label; };
+    const auto unorm8=[](unsigned value){return float(value)/255.f;};
+    std::vector<Case> cases={
+        {{1.f/1023.f,5.f/1023.f,9.f/1023.f,1},{0,0,0,1},2,8,255,"small-list additive RGB10 precision"},
+        {{1.f/1023.f,5.f/1023.f,9.f/1023.f,1},{0,0,0,1},2,32,255,"general additive RGB10 precision"},
+        {{1022.f/1023.f,1022.f/1023.f,1022.f/1023.f,1},{1,1,1,1},1,64,255,"multiplicative RGB10 precision"}
+    };
+    for(unsigned alpha:{63u,64u,127u,128u,254u}) {
+        const float a=unorm8(alpha);
+        const Vec4 background={unorm8(31),unorm8(75),unorm8(167),1};
+        cases.push_back({{unorm8(211),unorm8(113),unorm8(47),a},background,0,9,alpha,"alpha-over A8 boundary"});
+        cases.push_back({{a,0,0,a},background,3,9,alpha,"premultiplied A8 boundary"});
+    }
+
+    allocate(reference);allocate(lists);
+    auto clearState=mesh();clearState.scissorEnabled=false;
+    const auto makeFragment=[](const Vec4& color,unsigned mode) {
+        Draw draw=mesh();draw.depthTest=false;draw.depthWrite=false;draw.scissorEnabled=true;draw.scissor={6,6,4,4};
+        draw.uniforms.flags={};draw.uniforms.blend={0,mode==1?1.f:0.f,float(mode),0};draw.uniforms.peel={1,1,16,16};
+        draw.textures={0,2,2,0};draw.vertices.resize(6);
+        const std::array<std::array<float,2>,6> corners={{{-1,-1},{1,-1},{-1,1},{1,-1},{1,1},{-1,1}}};
+        for(size_t i=0;i<corners.size();++i) {
+            draw.vertices[i].position={corners[i][0],corners[i][1],-0.25f,1};
+            draw.vertices[i].diffuse=color;draw.vertices[i].extra[0]=color[3];
+        }
+        return draw;
+    };
+    for(GLenum format:{GL_RGBA8,GL_RGB10_A2,GL_RGBA8}) {
+        Texture target;target.width=target.height=16;target.format=format;
+        reference.texture(0,target,0,TextureUpload::Definition,nullptr,0);
+        lists.texture(0,target,0,TextureUpload::Definition,nullptr,0);
+        for(const auto& test:cases) {
+            SCOPED_TRACE(testing::Message()<<"format "<<format<<", mode "<<test.mode<<", fragments "<<test.fragments<<", alpha "<<test.alpha);
+            const auto fragment=makeFragment(test.color,test.mode);
+            auto ordered=fragment;ordered.uniforms.peel[0]=0;ordered.blend=true;
+            ordered.srcRGB=test.mode==1?GL_DST_COLOR:test.mode==3?GL_ONE:GL_SRC_ALPHA;
+            ordered.dstRGB=test.mode==1?GL_ZERO:test.mode==2?GL_ONE:GL_ONE_MINUS_SRC_ALPHA;
+            ordered.srcAlpha=GL_ONE;ordered.dstAlpha=test.mode==1?GL_ZERO:GL_ONE_MINUS_SRC_ALPHA;
+            reference.clear(clearState,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,test.background,1);
+            for(unsigned i=0;i<test.fragments;++i)reference.draw(ordered);
+            const auto expected=pixels(reference);
+            if(test.mode==2&&(test.fragments==8||test.fragments==32)) {
+                const size_t center=(size_t(7)*16+7)*4;
+                const bool rgb10=format==GL_RGB10_A2;
+                const unsigned scale=test.fragments==8?1u:4u;
+                EXPECT_EQ(expected[center],rgb10?2u*scale:0u);
+                EXPECT_EQ(expected[center+1],(rgb10?10u:8u)*scale);
+                EXPECT_EQ(expected[center+2],(rgb10?18u:16u)*scale);
+                EXPECT_EQ(expected[center+3],255u);
+            }
+
+            lists.clear(clearState,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,test.background,1);
+            ASSERT_TRUE(lists.beginFragmentList(0,1024*1024))<<test.label;
+            for(unsigned i=0;i<test.fragments;++i)lists.draw(fragment);
+            ASSERT_TRUE(lists.endFragmentList())<<test.label;
+            // Fixed-function alpha blending can round one UNORM8 code differently
+            // from the float resolver; keep the other byte-format cases exact.
+            const int tolerance=format==GL_RGB10_A2||test.mode==0?1:0;
+            equalPixels(expected,pixels(lists),test.label,tolerance);
+        }
+    }
+}
 // Exercise real native GPU metadata and composition, rather than only comparing
 // two shader variants that could share the same blend/coverage bug.
 inline void exercisePeelCompositing(Backend& backend) {

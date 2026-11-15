@@ -175,6 +175,10 @@ TEST_F(HikaruVulkanTest, FragmentListsMatchOrderedMixedBlendsAndDepthTies) {
     ASSERT_TRUE(backend->endFragmentList());
     equalPixels(expected,pixels(*backend),"mixed blends and equal-depth display order",1);
 }
+TEST_F(HikaruVulkanTest, FragmentListsKeepRgb10PrecisionAcrossTargetFormatReuse) {
+    auto reference=makeVulkanBackendForTesting(false),lists=makeVulkanBackendForTesting(true);
+    exerciseRgb10FragmentListPrecision(*reference,*lists);
+}
 TEST_F(HikaruVulkanTest, FragmentListsSurviveBatchRolloverWithoutALayerArrayLimit) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     const auto render=[&](bool lists){

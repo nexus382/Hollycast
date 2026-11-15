@@ -327,6 +327,11 @@ TEST_F(HikaruDx11Test, FragmentListsMatchMixedBlendsAndD24TiesAcrossSceneFormats
             format==GL_RGBA8?1:2);
     }
 }
+TEST_F(HikaruDx11Test, FragmentListsKeepRgb10PrecisionAcrossTargetFormatReuse) {
+    auto reference=makeDx11BackendForTesting(device,context,D3DCompile,false);
+    auto lists=makeDx11BackendForTesting(device,context,D3DCompile,true);
+    exerciseRgb10FragmentListPrecision(*reference,*lists);
+}
 TEST_F(HikaruDx11Test, FragmentListsMatchThreeHundredScissoredLayersAcrossVertexStreamWrap) {
     auto reference=makeDx11BackendForTesting(device,context,D3DCompile,false);
     auto lists=makeDx11BackendForTesting(device,context,D3DCompile,true);

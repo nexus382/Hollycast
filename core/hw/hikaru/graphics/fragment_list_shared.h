@@ -70,8 +70,12 @@ static inline void hikaru_fragment_pool_observe(HikaruFragmentPoolPolicy *policy
     hikaru_fragment_pool_reset_window(policy);
 }
 
-/* The GLSL node ABI is uvec4: packed UNORM RGBA, D24 plus blend mode,
+/* The GLSL node ABI is uvec4: packed UNORM color, D24 plus blend mode,
  * stable primitive order, and one-based next link (zero means empty).
+ * RGBA8 keeps its original encoding. RGB10 targets retain eight-bit source
+ * alpha: its low two bits share the RGB word and its upper six bits occupy
+ * the unused metadata bits above the two-bit blend mode. This preserves
+ * precision without growing nodes or reducing the memory-budget capacity.
  * API-specific storage qualifiers and helper guards precede these chunks. */
 #define HIKARU_FRAGMENT_LIST_TYPES_SOURCE \
     "struct HikaruListParameters { uint width,height,capacity,orderBase; float colorLevels,alphaLevels; uint blockCapacity; };\n"
@@ -96,7 +100,13 @@ static inline void hikaru_fragment_pool_observe(HikaruFragmentPoolPolicy *policy
     "uvec2 pixel=uvec2(gl_FragCoord.xy); if(pixel.x>=listParams.width||pixel.y>=listParams.height)return;\n" \
     "uint index=atomicAdd(listCount,1u); if(index>=listParams.capacity){atomicOr(listOverflow,1u);return;}\n" \
     "uint previous=atomicExchange(listHeads[pixel.y*listParams.width+pixel.x],index+1u);\n" \
-    "writeListNode(index,uvec4(packUnorm4x8(clamp(color,0.0,1.0)),uint(depthCode)|(blendMode<<24),\n" \
+    "vec4 source=clamp(color,0.0,1.0); uint packedColor; " \
+    "uint packedDepth=(uint(depthCode)&0xffffffu)|((blendMode&3u)<<24u);\n" \
+    "if(listParams.colorLevels>255.0) { uvec3 rgb=uvec3(roundEven(source.rgb*1023.0)); " \
+    "uint alpha=uint(roundEven(source.a*255.0)); " \
+    "packedColor=rgb.r|(rgb.g<<10u)|(rgb.b<<20u)|((alpha&3u)<<30u); " \
+    "packedDepth|=(alpha>>2u)<<26u; } else packedColor=packUnorm4x8(source);\n" \
+    "writeListNode(index,uvec4(packedColor,packedDepth,\n" \
     "listParams.orderBase+LIST_PRIMITIVE_ID,previous));\n" \
     "}\n"
 
@@ -104,7 +114,11 @@ static inline void hikaru_fragment_pool_observe(HikaruFragmentPoolPolicy *policy
     "bool fragmentBefore(uvec4 first,uvec4 second) { uint z1=first.y&0xffffffu,z2=second.y&0xffffffu; " \
     "return z1>z2||(z1==z2&&first.z<second.z); }\n" \
     "bool earlier(uint a,uint b) { return fragmentBefore(readListNode(a-1u),readListNode(b-1u)); }\n" \
-    "vec4 blendListFragment(vec4 destination,uvec4 node) { vec4 source=unpackUnorm4x8(node.x); uint mode=node.y>>24; " \
+    "vec4 blendListFragment(vec4 destination,uvec4 node) { vec4 source; " \
+    "if(listParams.colorLevels>255.0) { uvec3 rgb=uvec3(node.x,node.x>>10u,node.x>>20u)&uvec3(1023u); " \
+    "uint alpha=(node.x>>30u)|((node.y>>26u)<<2u); " \
+    "source=vec4(vec3(rgb)/1023.0,float(alpha)/255.0); } else source=unpackUnorm4x8(node.x); " \
+    "uint mode=(node.y>>24u)&3u; " \
     "precise vec4 result; if(mode==1u)result=vec4(source.rgb*destination.rgb,source.a); else { " \
     "vec3 contribution=(mode==3u?source.rgb:source.rgb*source.a); " \
     "result=vec4(contribution+destination.rgb*(mode==2u?1.0:1.0-source.a),source.a+destination.a*(1.0-source.a)); } " \

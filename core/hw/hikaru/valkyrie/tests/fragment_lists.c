@@ -114,37 +114,73 @@ static bool same_test_gl_state(const TestGlState *a, const TestGlState *b)
     return same;
 }
 
-static GLuint make_test_program(void)
+static GLuint compile_test_shader(GLenum type, const char *const *sources,
+                                  GLsizei sourceCount, const char *label)
 {
-    static const char *const sources[] = {
-        "#version 430 core\nvoid main(){gl_Position=vec4(0.0);}\n",
-        "#version 430 core\nout vec4 color; void main(){color=vec4(0.0);}\n"
-    };
-    GLuint shaders[2] = {0};
-    for (unsigned i = 0; i < 2; ++i) {
-        shaders[i] = glCreateShader(i == 0 ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER);
-        if (!shaders[i]) goto fail;
-        glShaderSource(shaders[i], 1, &sources[i], NULL);
-        glCompileShader(shaders[i]);
-        GLint compiled = GL_FALSE;
-        glGetShaderiv(shaders[i], GL_COMPILE_STATUS, &compiled);
-        if (!compiled) goto fail;
+    GLuint shader = glCreateShader(type);
+    if (!shader) return 0;
+    glShaderSource(shader, sourceCount, (const GLchar *const *)sources, NULL);
+    glCompileShader(shader);
+    GLint compiled = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        char log[2048] = {0};
+        glGetShaderInfoLog(shader, (GLsizei)sizeof(log), NULL, log);
+        fprintf(stderr, "fragment-list fixture %s shader compile failed: %s\n", label, log);
+        glDeleteShader(shader);
+        return 0;
     }
-    GLuint program = glCreateProgram();
+    return shader;
+}
+
+static GLuint make_test_program_from_sources(const char *const *vertexSources,
+    GLsizei vertexSourceCount, const char *const *fragmentSources,
+    GLsizei fragmentSourceCount, const char *label)
+{
+    GLuint shaders[2] = {0};
+    GLuint program = 0;
+    GLint linked = GL_FALSE;
+    shaders[0] = compile_test_shader(GL_VERTEX_SHADER, vertexSources,
+                                     vertexSourceCount, label);
+    if (!shaders[0]) goto fail;
+    shaders[1] = compile_test_shader(GL_FRAGMENT_SHADER, fragmentSources,
+                                     fragmentSourceCount, label);
+    if (!shaders[1]) goto fail;
+    program = glCreateProgram();
     if (!program) goto fail;
     glAttachShader(program, shaders[0]);
     glAttachShader(program, shaders[1]);
     glLinkProgram(program);
-    GLint linked = GL_FALSE;
     glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[2048] = {0};
+        glGetProgramInfoLog(program, (GLsizei)sizeof(log), NULL, log);
+        fprintf(stderr, "fragment-list fixture %s program link failed: %s\n", label, log);
+    }
     glDeleteShader(shaders[0]);
     glDeleteShader(shaders[1]);
-    if (!linked) { glDeleteProgram(program); return 0; }
+    if (!linked) {
+        glDeleteProgram(program);
+        return 0;
+    }
     return program;
 fail:
+    if (program) glDeleteProgram(program);
     if (shaders[0]) glDeleteShader(shaders[0]);
     if (shaders[1]) glDeleteShader(shaders[1]);
     return 0;
+}
+
+static GLuint make_test_program(void)
+{
+    static const char *const vertexSources[] = {
+        "#version 430 core\nvoid main(){gl_Position=vec4(0.0);}\n"
+    };
+    static const char *const fragmentSources[] = {
+        "#version 430 core\nout vec4 color; void main(){color=vec4(0.0);}\n"
+    };
+    return make_test_program_from_sources(vertexSources, 1, fragmentSources, 1,
+                                          "sentinel");
 }
 
 static bool make_test_target(GLuint *framebuffer, GLuint *texture,
@@ -303,6 +339,371 @@ cleanup:
     return ok;
 }
 
+enum { FRAGMENT_TEST_SIZE = 16, FRAGMENT_TEST_SCISSOR = 4 };
+
+typedef struct FragmentTestLayer {
+    GLfloat color[4];
+    GLfloat depthCode;
+    GLuint blendMode;
+} FragmentTestLayer;
+
+typedef struct FragmentTestUniforms {
+    GLint width, height, capacity, orderBase, colorLevels, blockCapacity;
+    GLint color, depthCode, blendMode;
+} FragmentTestUniforms;
+
+/* One oversized triangle per draw covers the fixed scissor region. */
+static const char *const fragmentTestVertex[] = {
+    "#version 430 core\n"
+    "flat out uint p_list_primitive;\n"
+    "void main(){const vec2 p[3]=vec2[3](vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0));"
+    "gl_Position=vec4(p[gl_VertexID],0.0,1.0);p_list_primitive=uint(gl_VertexID/3);}\n"
+};
+
+static GLuint make_fragment_test_program(bool collector)
+{
+    static const char *const referenceFragment[] = {
+        "#version 430 core\nuniform vec4 testColor;out vec4 outColor;"
+        "void main(){outColor=testColor;}\n"
+    };
+    const char *const collectorFragment[] = {
+        "#version 430 core\n"
+        "uniform vec4 testColor;uniform float testDepthCode;uniform uint testBlendMode;\n",
+        hikaru_gl_fragment_list_shader_source(),
+        "void main(){collectListFragment(testColor,testDepthCode,testBlendMode);}\n"
+    };
+    if (collector)
+        return make_test_program_from_sources(fragmentTestVertex, 1, collectorFragment, 3,
+                                              "production collector");
+    return make_test_program_from_sources(fragmentTestVertex, 1, referenceFragment, 1,
+                                          "blend reference");
+}
+
+static GLint required_test_uniform(GLuint program, const char *name)
+{
+    const GLint location = glGetUniformLocation(program, name);
+    if (location < 0)
+        fprintf(stderr, "fragment-list fixture uniform is missing: %s\n", name);
+    return location;
+}
+
+static bool get_fragment_test_uniforms(GLuint program, FragmentTestUniforms *uniforms)
+{
+    uniforms->width = required_test_uniform(program, "listParams.width");
+    uniforms->height = required_test_uniform(program, "listParams.height");
+    uniforms->capacity = required_test_uniform(program, "listParams.capacity");
+    uniforms->orderBase = required_test_uniform(program, "listParams.orderBase");
+    /* Optional so a byte-only collector reaches the raw pixel precision checks. */
+    uniforms->colorLevels = glGetUniformLocation(program, "listParams.colorLevels");
+    uniforms->blockCapacity = required_test_uniform(program, "listParams.blockCapacity");
+    uniforms->color = required_test_uniform(program, "testColor");
+    uniforms->depthCode = required_test_uniform(program, "testDepthCode");
+    uniforms->blendMode = required_test_uniform(program, "testBlendMode");
+    return uniforms->width >= 0 && uniforms->height >= 0 && uniforms->capacity >= 0 &&
+        uniforms->orderBase >= 0 && uniforms->blockCapacity >= 0 &&
+        uniforms->color >= 0 && uniforms->depthCode >= 0 && uniforms->blendMode >= 0;
+}
+
+static void prepare_fragment_test_target(GLuint framebuffer, const GLfloat background[4])
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glViewport(0, 0, FRAGMENT_TEST_SIZE, FRAGMENT_TEST_SIZE);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_RASTERIZER_DISCARD);
+    glDisable(GL_DITHER);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glClearBufferfv(GL_COLOR, 0, background);
+    glScissor(6, 6, FRAGMENT_TEST_SCISSOR, FRAGMENT_TEST_SCISSOR);
+    glEnable(GL_SCISSOR_TEST);
+}
+
+static bool set_fragment_test_blend(GLuint mode)
+{
+    glBlendEquation(GL_FUNC_ADD);
+    switch (mode) {
+    case 0:
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        return true;
+    case 1:
+        glBlendFuncSeparate(GL_DST_COLOR, GL_ZERO, GL_ONE, GL_ZERO);
+        return true;
+    case 2:
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE,
+                            GL_ONE_MINUS_SRC_ALPHA);
+        return true;
+    case 3:
+        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE,
+                            GL_ONE_MINUS_SRC_ALPHA);
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool read_fragment_test_pixel(GLuint framebuffer, GLenum format,
+                                     uint32_t pixel[4])
+{
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    if (format == GL_RGB10_A2) {
+        /* Read packed target codes so RGBA8 conversion cannot hide precision loss. */
+        GLuint packed = 0;
+        glReadPixels(8, 8, 1, 1, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, &packed);
+        pixel[0] = packed & 1023u;
+        pixel[1] = (packed >> 10u) & 1023u;
+        pixel[2] = (packed >> 20u) & 1023u;
+        pixel[3] = (packed >> 30u) & 3u;
+    } else {
+        GLubyte rgba[4] = {0};
+        glReadPixels(8, 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        for (unsigned channel = 0; channel < 4; ++channel) pixel[channel] = rgba[channel];
+    }
+    return test_gl_errors();
+}
+
+static bool fragment_test_pixels_match(const uint32_t a[4], const uint32_t b[4],
+                                       uint32_t tolerance)
+{
+    for (unsigned channel = 0; channel < 4; ++channel) {
+        const uint32_t difference = a[channel] > b[channel]
+            ? a[channel] - b[channel] : b[channel] - a[channel];
+        if (difference > tolerance) return false;
+    }
+    return true;
+}
+
+static bool render_fragment_test_reference(GLuint program, GLuint vertexArray,
+    GLint colorLocation, GLuint framebuffer, GLenum format,
+    const GLfloat background[4], const FragmentTestLayer *layers,
+    unsigned layerCount, uint32_t pixel[4])
+{
+    prepare_fragment_test_target(framebuffer, background);
+    glUseProgram(program);
+    glBindVertexArray(vertexArray);
+    glEnable(GL_BLEND);
+    for (unsigned i = 0; i < layerCount; ++i) {
+        if (!set_fragment_test_blend(layers[i].blendMode)) return false;
+        glUniform4fv(colorLocation, 1, layers[i].color);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    return read_fragment_test_pixel(framebuffer, format, pixel);
+}
+
+static bool render_fragment_test_list(HikaruGlFragmentList **state,
+    GLuint program, GLuint vertexArray, const FragmentTestUniforms *uniforms,
+    GLuint framebuffer, GLuint texture, GLenum format, const GLfloat background[4],
+    const FragmentTestLayer *layers, unsigned layerCount, uint32_t pixel[4])
+{
+    if (!layerCount || (uint64_t)layerCount * FRAGMENT_TEST_SCISSOR *
+        FRAGMENT_TEST_SCISSOR >= 4096u) return false;
+    prepare_fragment_test_target(framebuffer, background);
+    if (!hikaru_gl_fragment_list_begin(state, framebuffer, texture,
+        FRAGMENT_TEST_SIZE, FRAGMENT_TEST_SIZE, UINT64_C(1) << 20)) return false;
+    const HikaruFragmentListParameters *parameters =
+        hikaru_gl_fragment_list_parameters(*state);
+    if (!parameters) {
+        hikaru_gl_fragment_list_fail(*state);
+        (void)hikaru_gl_fragment_list_end(*state);
+        return false;
+    }
+    glUseProgram(program);
+    glBindVertexArray(vertexArray);
+    glScissor(6, 6, FRAGMENT_TEST_SCISSOR, FRAGMENT_TEST_SCISSOR);
+    glEnable(GL_SCISSOR_TEST);
+    glUniform1ui(uniforms->width, parameters->width);
+    glUniform1ui(uniforms->height, parameters->height);
+    glUniform1ui(uniforms->capacity, parameters->capacity);
+    if (uniforms->colorLevels >= 0)
+        glUniform1f(uniforms->colorLevels, parameters->colorLevels);
+    glUniform1ui(uniforms->blockCapacity, parameters->blockCapacity);
+    for (unsigned i = 0; i < layerCount; ++i) {
+        parameters = hikaru_gl_fragment_list_parameters(*state);
+        glUniform1ui(uniforms->orderBase, parameters->orderBase);
+        glUniform4fv(uniforms->color, 1, layers[i].color);
+        glUniform1f(uniforms->depthCode, layers[i].depthCode);
+        glUniform1ui(uniforms->blendMode, layers[i].blendMode);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (i + 1 < layerCount && !hikaru_gl_fragment_list_advance(*state, 1)) {
+            hikaru_gl_fragment_list_fail(*state);
+            (void)hikaru_gl_fragment_list_end(*state);
+            return false;
+        }
+    }
+    if (!hikaru_gl_fragment_list_end(*state)) return false;
+    return read_fragment_test_pixel(framebuffer, format, pixel);
+}
+
+static bool check_fragment_test_case(HikaruGlFragmentList **state,
+    GLuint collectorProgram, GLuint referenceProgram, GLuint vertexArray,
+    const FragmentTestUniforms *uniforms, GLint referenceColor,
+    GLuint targetFramebuffer, GLuint targetTexture, GLuint referenceFramebuffer,
+    GLenum format, const GLfloat background[4], const FragmentTestLayer *layers,
+    unsigned layerCount, const uint32_t *exact, uint32_t tolerance,
+    const char *label)
+{
+    uint32_t expected[4], actual[4];
+    if (!render_fragment_test_reference(referenceProgram, vertexArray, referenceColor,
+        referenceFramebuffer, format, background, layers, layerCount, expected) ||
+        !render_fragment_test_list(state, collectorProgram, vertexArray, uniforms,
+            targetFramebuffer, targetTexture, format, background, layers, layerCount, actual)) {
+        fprintf(stderr, "fragment-list fixture failed: %s\n", label);
+        return false;
+    }
+    if ((exact && (!fragment_test_pixels_match(expected, exact, 0) ||
+                   !fragment_test_pixels_match(actual, exact, 0))) ||
+        !fragment_test_pixels_match(expected, actual, tolerance)) {
+        fprintf(stderr, "fragment-list fixture %s: reference=%u/%u/%u/%u list=%u/%u/%u/%u\n",
+            label, expected[0], expected[1], expected[2], expected[3],
+            actual[0], actual[1], actual[2], actual[3]);
+        return false;
+    }
+    return true;
+}
+
+static bool test_fragment_list_rgb10_precision(void)
+{
+    const GLenum formats[2] = {GL_RGBA8, GL_RGB10_A2};
+    GLuint targetFramebuffer[2] = {0}, targetTexture[2] = {0};
+    GLuint referenceFramebuffer[2] = {0}, referenceTexture[2] = {0};
+    GLuint collectorProgram = 0, referenceProgram = 0, vertexArray = 0;
+    GLint referenceColor = -1;
+    FragmentTestUniforms uniforms = {0};
+    HikaruGlFragmentList *state = NULL;
+    bool ok = false;
+    const GLfloat rgba8Background[4] = {
+        51.0f/255.0f, 102.0f/255.0f, 153.0f/255.0f, 204.0f/255.0f
+    };
+    const GLfloat rgb10Black[4] = {0, 0, 0, 0};
+    const GLfloat rgb10White[4] = {1, 1, 1, 1};
+    const GLfloat rgb10Background[4] = {
+        205.0f/1023.0f, 410.0f/1023.0f, 615.0f/1023.0f, 2.0f/3.0f
+    };
+    const FragmentTestLayer rgba8Layers[4] = {
+        {{64.0f/255.0f, 128.0f/255.0f, 192.0f/255.0f, 128.0f/255.0f}, 0, 0},
+        {{64.0f/255.0f, 128.0f/255.0f, 192.0f/255.0f, 128.0f/255.0f}, 0, 1},
+        {{64.0f/255.0f, 128.0f/255.0f, 192.0f/255.0f, 128.0f/255.0f}, 0, 2},
+        {{64.0f/255.0f, 128.0f/255.0f, 192.0f/255.0f, 128.0f/255.0f}, 0, 3}
+    };
+    const FragmentTestLayer rgb10AlphaLayers[2] = {
+        {{410.0f/1023.0f, 615.0f/1023.0f, 820.0f/1023.0f, 63.0f/255.0f}, 0, 0},
+        {{820.0f/1023.0f, 205.0f/1023.0f, 410.0f/1023.0f, 128.0f/255.0f}, 0, 3}
+    };
+    static const unsigned additiveCounts[] = {1, 8, 9, 32};
+    static const char *const additiveLabels[] = {
+        "RGB10 one-layer 1/5/9 precision",
+        "RGB10 eight-layer small resolver",
+        "RGB10 nine-layer general resolver",
+        "RGB10 32-layer additive precision"
+    };
+    FragmentTestLayer additiveLayers[32];
+    FragmentTestLayer multiplyLayers[64];
+
+    for (unsigned i = 0; i < 2; ++i) {
+        if (!make_test_target(&targetFramebuffer[i], &targetTexture[i],
+                FRAGMENT_TEST_SIZE, FRAGMENT_TEST_SIZE, formats[i]) ||
+            !make_test_target(&referenceFramebuffer[i], &referenceTexture[i],
+                FRAGMENT_TEST_SIZE, FRAGMENT_TEST_SIZE, formats[i])) goto cleanup;
+    }
+    collectorProgram = make_fragment_test_program(true);
+    referenceProgram = make_fragment_test_program(false);
+    if (!collectorProgram || !referenceProgram) goto cleanup;
+    referenceColor = required_test_uniform(referenceProgram, "testColor");
+    if (referenceColor < 0 || !get_fragment_test_uniforms(collectorProgram, &uniforms))
+        goto cleanup;
+    glGenVertexArrays(1, &vertexArray);
+    if (!vertexArray) goto cleanup;
+
+    if (!check_fragment_test_case(&state, collectorProgram, referenceProgram, vertexArray,
+        &uniforms, referenceColor, targetFramebuffer[0], targetTexture[0],
+        referenceFramebuffer[0], formats[0], rgba8Background, rgba8Layers, 4,
+        NULL, 1, "RGBA8 control before format switch")) goto cleanup;
+
+    for (unsigned i = 0; i < 32; ++i) {
+        additiveLayers[i] = (FragmentTestLayer){
+            {1.0f/1023.0f, 5.0f/1023.0f, 9.0f/1023.0f, 1.0f}, 0, 2
+        };
+    }
+    for (unsigned i = 0; i < sizeof(additiveCounts) / sizeof(additiveCounts[0]); ++i) {
+        const unsigned count = additiveCounts[i];
+        const uint32_t expected[4] = {count, count*5u, count*9u, 3u};
+        if (!check_fragment_test_case(&state, collectorProgram, referenceProgram,
+            vertexArray, &uniforms, referenceColor, targetFramebuffer[1], targetTexture[1],
+            referenceFramebuffer[1], formats[1], rgb10Black, additiveLayers, count,
+            expected, 0, additiveLabels[i])) goto cleanup;
+    }
+
+    for (unsigned i = 0; i < 64; ++i) {
+        multiplyLayers[i] = (FragmentTestLayer){
+            {1022.0f/1023.0f, 1022.0f/1023.0f, 1022.0f/1023.0f, 1.0f}, 0, 1
+        };
+    }
+    const uint32_t multiplyExpected[4] = {1022u, 1022u, 1022u, 3u};
+    if (!check_fragment_test_case(&state, collectorProgram, referenceProgram,
+        vertexArray, &uniforms, referenceColor, targetFramebuffer[1], targetTexture[1],
+        referenceFramebuffer[1], formats[1], rgb10White, multiplyLayers, 1,
+        multiplyExpected, 0, "RGB10 one-layer 1022/1023 multiply")) goto cleanup;
+
+    /* RTE after each layer subtracts exactly one RGB10 code: 1023 - 64 = 959.
+     * Fixed-function UNORM conversions may accumulate driver-specific rounding,
+     * so use the resolver's explicit quantization contract for this long chain. */
+    const uint32_t multiplyChainExpected[4] = {959u, 959u, 959u, 3u};
+    uint32_t multiplyChainActual[4] = {0};
+    if (!render_fragment_test_list(&state, collectorProgram, vertexArray, &uniforms,
+        targetFramebuffer[1], targetTexture[1], formats[1], rgb10White,
+        multiplyLayers, 64, multiplyChainActual) ||
+        !fragment_test_pixels_match(multiplyChainActual, multiplyChainExpected, 0)) {
+        fprintf(stderr, "RGB10 64-layer multiply: expected=959/959/959/3 list=%u/%u/%u/%u\n",
+            multiplyChainActual[0], multiplyChainActual[1],
+            multiplyChainActual[2], multiplyChainActual[3]);
+        goto cleanup;
+    }
+
+    if (!check_fragment_test_case(&state, collectorProgram, referenceProgram,
+        vertexArray, &uniforms, referenceColor, targetFramebuffer[1], targetTexture[1],
+        referenceFramebuffer[1], formats[1], rgb10Background, rgb10AlphaLayers, 2,
+        NULL, 1, "RGB10 eight-bit source alpha and blend mode")) goto cleanup;
+
+    if (!check_fragment_test_case(&state, collectorProgram, referenceProgram, vertexArray,
+        &uniforms, referenceColor, targetFramebuffer[0], targetTexture[0],
+        referenceFramebuffer[0], formats[0], rgba8Background, rgba8Layers, 4,
+        NULL, 1, "RGBA8 control after format switch")) goto cleanup;
+    ok = true;
+
+cleanup:
+    if (!ok) fprintf(stderr, "GL fragment-list RGB10 fixture failed\n");
+    if (state) hikaru_gl_fragment_list_destroy(&state);
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_RASTERIZER_DISCARD);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_DITHER);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glDeleteFramebuffers(2, referenceFramebuffer);
+    glDeleteTextures(2, referenceTexture);
+    glDeleteFramebuffers(2, targetFramebuffer);
+    glDeleteTextures(2, targetTexture);
+    if (collectorProgram) glDeleteProgram(collectorProgram);
+    if (referenceProgram) glDeleteProgram(referenceProgram);
+    if (vertexArray) glDeleteVertexArrays(1, &vertexArray);
+    if (!test_gl_errors()) ok = false;
+    return ok;
+}
 static int skip(const char *reason)
 {
     fprintf(stderr, "fragment-list pixel test skipped: %s\n", reason);
@@ -374,6 +775,14 @@ int main(void)
         return 1;
     }
     puts("GL fragment-list empty resize/state preservation: PASS");
+
+    if (!test_fragment_list_rgb10_precision()) {
+        SDL_GL_DeleteContext(context);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+    puts("GL fragment-list RGB10 precision: PASS");
 
     const int passed = hikaru_vendor_test_fragment_list_pixels();
     SDL_GL_DeleteContext(context);
