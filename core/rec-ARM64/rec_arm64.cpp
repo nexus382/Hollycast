@@ -44,6 +44,13 @@ using namespace vixl::aarch64;
 #include "hw/mem/addrspace.h"
 #include "oslib/virtmem.h"
 #include "emulator.h"
+#include "profiler/sh4_loop_profiler.h"
+#include "cfg/option.h"
+
+#ifdef TEST_AUTOMATION
+static u64 guarded_poll_trace_entries;
+u64 arm64_guarded_poll_trace_entries() { return guarded_poll_trace_entries; }
+#endif
 
 struct DynaRBI : RuntimeBlockInfo
 {
@@ -259,6 +266,14 @@ public:
 		//printf("REC-ARM64 compiling %08x\n", block->addr);
 		jitWriteProtect(codeBuffer, false);
 		this->block = block;
+#ifdef SH4_LOOP_PROFILER
+		block->profile_spans.clear();
+		profile_metadata = sh4_loop_metadata_enabled();
+		profile_guest_pc = block->vaddr;
+#endif
+		Label original_block;
+		if (EmitGuardedPollTrace(block, force_checks, &original_block))
+			Bind(&original_block);
 		CheckBlock(force_checks, block);
 		
 		// run register allocator
@@ -277,14 +292,26 @@ public:
 		Sub(w1, w1, block->guest_cycles);
 		Str(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
 
+#ifdef SH4_LOOP_PROFILER
+		ProfileIncrement(block, 0);
+#endif
+
 		for (size_t i = 0; i < block->oplist.size(); i++)
 		{
 			shil_opcode& op  = block->oplist[i];
+#ifdef SH4_LOOP_PROFILER
+			profile_guest_pc = (block->vaddr + op.guest_offs) & ~1u;
+			const u32 profile_op_start = GetBuffer()->GetCursorOffset();
+#endif
 			regalloc.OpBegin(&op, i);
 
 			switch (op.op)
 			{
 			case shop_ifb:	// Interpreter fallback
+			{
+#ifdef SH4_LOOP_PROFILER
+				const u32 profile_fallback_start = GetBuffer()->GetCursorOffset();
+#endif
 				if (op.rs1._imm)	// if NeedPC()
 				{
 					Mov(w10, op.rs2._imm);
@@ -305,7 +332,11 @@ public:
 					GenCallRuntime(interpreter_fallback);
 				}
 
+#ifdef SH4_LOOP_PROFILER
+				RecordProfileSpan(profile_fallback_start, Sh4ProfileSpanKind::InterpreterFallback);
+#endif
 				break;
+			}
 
 			case shop_jcond:
 			case shop_jdyn:
@@ -976,6 +1007,9 @@ public:
 				break;
 			}
 			regalloc.OpEnd(&op);
+#ifdef SH4_LOOP_PROFILER
+			RecordProfileSpan(profile_op_start, Sh4ProfileSpanKind::Opcode);
+#endif
 		}
 		regalloc.Cleanup();
 
@@ -986,6 +1020,209 @@ public:
 
 		Finalize();
 		jitWriteProtect(codeBuffer, true);
+	}
+
+#ifdef SH4_LOOP_PROFILER
+	void RecordProfileSpan(u32 start, Sh4ProfileSpanKind kind, uintptr_t target = 0)
+	{
+		if (block != nullptr && profile_metadata)
+		{
+			const u32 end = GetBuffer()->GetCursorOffset();
+			if (end > start)
+				block->profile_spans.push_back({start, end - start, profile_guest_pc, kind, target});
+		}
+	}
+#endif
+
+	// A bounded, exact-code specialization of the measured two-block poll loop.
+	// There are no calls or guest writes inside it. We leave before either
+	// original scheduler boundary, with all guest state materialized, so callbacks
+	// and code invalidation retain the normal dispatcher/CheckBlock paths.
+	bool EmitGuardedPollTrace(RuntimeBlockInfo* second, bool force_checks, Label* original)
+	{
+		constexpr u32 first_pc = 0x8c05b3a4, second_pc = 0x8c05b3d0;
+		if (!config::GuardedPollTrace || mmu_enabled() || force_checks || second->vaddr != second_pc
+			|| !second->read_only || second->temp_block || second->BlockType != BET_Cond_1
+			|| second->has_jcond || second->has_fpu_op || second->guest_opcodes != 3
+			|| second->BranchBlock != 0x8c05b3da || second->NextBlock != first_pc
+			|| second->sh4_code_size != 6 || (RAM_SIZE != 16_MB && RAM_SIZE != 32_MB))
+			return false;
+		auto first_owner = bm_GetBlock(first_pc);
+		auto* first = first_owner.get();
+		if (!first || !first->read_only || first->temp_block || first->BlockType != BET_Cond_0
+			|| first->has_jcond || first->has_fpu_op || first->guest_opcodes != 6
+			|| first->BranchBlock != second_pc || first->NextBlock != 0x8c05b3b0
+			|| first->sh4_code_size != 12 || (first->vaddr >> 12) != (second_pc >> 12))
+			return false;
+		const u16 first_ops[] = {0xd309, 0x6130, 0xe013, 0x02fc, 0x3122, 0x8b0f};
+		const u16 second_ops[] = {0x53f3, 0x2338, 0x8901};
+		auto* first_code = GetMemPtr(first_pc, sizeof(first_ops));
+		auto* second_code = GetMemPtr(second_pc, sizeof(second_ops));
+		auto* literal = GetMemPtr(0x8c05b3cc, sizeof(u32));
+		if (!first_code || !second_code || !literal
+			|| std::memcmp(first_code, first_ops, sizeof(first_ops))
+			|| std::memcmp(second_code, second_ops, sizeof(second_ops)))
+			return false;
+		// Match exactly the bounded BRA/NOP forwarding that the existing SSA pass
+		// already folded into B. The measured game uses two islands; simple
+		// programs can branch directly back to A. No cycles are recomputed here.
+		struct BranchIsland { const u8* ptr; u16 opcode, delay; };
+		std::array<BranchIsland, 5> islands{};
+		unsigned island_count = 0;
+		u32 next_pc = second_pc + sizeof(second_ops);
+		while (next_pc != first_pc && island_count < islands.size())
+		{
+			if ((next_pc >> 12) != (second_pc >> 12) || ((next_pc + 2) >> 12) != (second_pc >> 12))
+				return false;
+			auto* ptr = GetMemPtr(next_pc, 4);
+			if (!ptr || (reinterpret_cast<uintptr_t>(ptr) & ~uintptr_t(PAGE_MASK))
+				!= (reinterpret_cast<uintptr_t>(second_code) & ~uintptr_t(PAGE_MASK)))
+				return false;
+			u16 op, delay;
+			std::memcpy(&op, ptr, sizeof(op)); std::memcpy(&delay, ptr + 2, sizeof(delay));
+			if ((op & 0xf000) != 0xa000 || (delay != 0 && delay != 9))
+				return false;
+			islands[island_count++] = {ptr, op, delay};
+			s32 displacement = op & 0x0fff;
+			if (displacement & 0x0800) displacement -= 0x1000;
+			displacement = displacement * 2 + 4;
+			if (displacement == 0) return false;
+			next_pc += displacement;
+		}
+		if (next_pc != first_pc || island_count == 0) return false;
+		u32 poll_address;
+		std::memcpy(&poll_address, literal, sizeof(poll_address));
+		auto* poll_byte = GetMemPtr(poll_address, 1);
+		if (!poll_byte)
+			return false;
+		// RAM can have changed since A was compiled. Confirm its cached IR is
+		// exactly this operation sequence too, including the folded literal.
+		auto reg_is = [](const shil_param& p, Sh4RegType reg) { return p.is_r32i() && p._reg == reg; };
+		auto imm_is = [](const shil_param& p, u32 value) { return p.is_imm() && p._imm == value; };
+		unsigned matched = 0;
+		for (const auto& op : first->oplist)
+		{
+			unsigned bit = 0;
+			if (!op.rd2.is_null()) return false;
+			if (op.op == shop_mov32 && reg_is(op.rd, reg_r3) && imm_is(op.rs1, poll_address)) bit = 1;
+			else if (op.op == shop_readm && op.size == 1 && reg_is(op.rd, reg_r1)
+				&& imm_is(op.rs1, poll_address) && op.rs3.is_null()) bit = 2;
+			else if (op.op == shop_mov32 && reg_is(op.rd, reg_r0) && imm_is(op.rs1, 19)) bit = 4;
+			else if (op.op == shop_readm && op.size == 1 && reg_is(op.rd, reg_r2)
+				&& reg_is(op.rs1, reg_r15) && imm_is(op.rs3, 19)) bit = 8;
+			else if (op.op == shop_setae && reg_is(op.rd, reg_sr_T)
+				&& reg_is(op.rs1, reg_r1) && reg_is(op.rs2, reg_r2)) bit = 16;
+			if (!bit || (matched & bit)) return false;
+			matched |= bit;
+		}
+		if (matched != 31) return false;
+
+		// Entry guards have no guest-visible reads: these are protected main RAM.
+		auto guard = [&](const void* ptr, u64 expected, unsigned bytes) {
+			Mov(x9, reinterpret_cast<uintptr_t>(ptr));
+			if (bytes == 8) { Ldr(x10, MemOperand(x9)); Mov(x11, expected); Cmp(x10, x11); }
+			else if (bytes == 4) { Ldr(w10, MemOperand(x9)); Mov(w11, u32(expected)); Cmp(w10, w11); }
+			else { Ldrh(w10, MemOperand(x9)); Mov(w11, u32(expected)); Cmp(w10, w11); }
+			B(ne, original);
+		};
+		guard(first_code, 0x02fce0136130d309ULL, 8);
+		guard(first_code + 8, 0x8b0f3122, 4);
+		guard(second_code, 0x233853f3, 4);
+		guard(second_code + 4, 0x8901, 2);
+		for (unsigned i = 0; i < island_count; ++i)
+			guard(islands[i].ptr, u32(islands[i].opcode) | (u32(islands[i].delay) << 16), 4);
+		guard(literal, poll_address, 4);
+		Ldr(w9, sh4_context_mem_operand(&sh4ctx.r[15]));
+		Tst(w9, 3);
+		B(ne, original);
+		Lsr(w10, w9, 26); And(w10, w10, 7); Cmp(w10, 3); B(ne, original);
+		Lsr(w10, w9, 29); Cmp(w10, 7); B(eq, original);
+		And(w10, w9, RAM_MASK); Cmp(w10, RAM_SIZE - 20); B(hi, original);
+		Mov(x11, reinterpret_cast<uintptr_t>(&mem_b[0]));
+		Add(x26, x11, Operand(w10, UXTW));
+		Mov(x25, reinterpret_cast<uintptr_t>(poll_byte));
+		Ldr(w19, sh4_context_mem_operand(&sh4ctx.r[0]));
+		Ldr(w20, sh4_context_mem_operand(&sh4ctx.r[1]));
+		Ldr(w21, sh4_context_mem_operand(&sh4ctx.r[2]));
+		Ldr(w22, sh4_context_mem_operand(&sh4ctx.r[3]));
+		Ldr(w23, sh4_context_mem_operand(&sh4ctx.sr.T));
+		Ldr(w24, sh4_context_mem_operand(&sh4ctx.cycle_counter));
+#ifdef TEST_AUTOMATION
+		Cmp(w24, 0);
+		Label can_enter;
+		B(pl, &can_enter);
+		B(original);
+		Bind(&can_enter);
+		Mov(x9, reinterpret_cast<uintptr_t>(&guarded_poll_trace_entries));
+		Ldr(x10, MemOperand(x9)); Add(x10, x10, 1); Str(x10, MemOperand(x9));
+#endif
+		Label first_step, second_step, schedule_first, schedule_second, exit_first, exit_second;
+		auto commit = [&] {
+			Str(w19, sh4_context_mem_operand(&sh4ctx.r[0]));
+			Str(w20, sh4_context_mem_operand(&sh4ctx.r[1]));
+			Str(w21, sh4_context_mem_operand(&sh4ctx.r[2]));
+			Str(w22, sh4_context_mem_operand(&sh4ctx.r[3]));
+			Str(w23, sh4_context_mem_operand(&sh4ctx.sr.T));
+			Str(w24, sh4_context_mem_operand(&sh4ctx.cycle_counter));
+		};
+		auto dispatch = [&](u32 pc) {
+			commit(); Mov(w29, pc); Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
+			GenBranch(arm64_no_update);
+		};
+		auto charge = [&](RuntimeBlockInfo* guest, Label* scheduler) {
+			Cmp(w24, 0); B(mi, scheduler);
+			Sub(w24, w24, guest->guest_cycles);
+#ifdef SH4_LOOP_PROFILER
+			ProfileIncrement(guest, offsetof(Sh4LoopCounters, executions));
+#endif
+		};
+		auto emit_instruction = [&](u32 pc, auto emit) {
+#ifdef SH4_LOOP_PROFILER
+			profile_guest_pc = pc;
+			const u32 start = GetBuffer()->GetCursorOffset();
+#endif
+			emit();
+#ifdef SH4_LOOP_PROFILER
+			RecordProfileSpan(start, Sh4ProfileSpanKind::Opcode);
+#endif
+		};
+		Bind(&second_step);
+		charge(second, &schedule_second);
+		emit_instruction(second_pc, [&] { Ldr(w22, MemOperand(x26, 12)); });
+		emit_instruction(second_pc + 2, [&] { Cmp(w22, 0); Cset(w23, eq); });
+		B(eq, &exit_second);
+#ifdef SH4_LOOP_PROFILER
+		ProfileIncrement(second, offsetof(Sh4LoopCounters, next));
+#endif
+		Bind(&first_step);
+		charge(first, &schedule_first);
+		emit_instruction(first_pc, [&] { Mov(x9, reinterpret_cast<uintptr_t>(literal)); Ldr(w22, MemOperand(x9)); });
+		emit_instruction(first_pc + 2, [&] { Ldrsb(w20, MemOperand(x25)); });
+		emit_instruction(first_pc + 4, [&] { Mov(w19, 19); });
+		emit_instruction(first_pc + 6, [&] { Ldrsb(w21, MemOperand(x26, 19)); });
+		emit_instruction(first_pc + 8, [&] { Cmp(w20, w21); Cset(w23, hs); });
+		B(hs, &exit_first);
+#ifdef SH4_LOOP_PROFILER
+		ProfileIncrement(first, offsetof(Sh4LoopCounters, branch));
+#endif
+		B(&second_step);
+		Bind(&exit_first);
+#ifdef SH4_LOOP_PROFILER
+		ProfileIncrement(first, offsetof(Sh4LoopCounters, next));
+#endif
+		dispatch(0x8c05b3b0);
+		Bind(&exit_second);
+#ifdef SH4_LOOP_PROFILER
+		ProfileIncrement(second, offsetof(Sh4LoopCounters, branch));
+#endif
+		dispatch(0x8c05b3da);
+		Bind(&schedule_first);
+		dispatch(first_pc);
+		Bind(&schedule_second);
+		commit();
+		B(original); // The original B prologue performs its scheduler check once.
+		NOTICE_LOG(DYNAREC, "Guarded SH4 poll trace %08x <-> %08x (cycles %u/%u, %u branch islands)", first_pc, second_pc, first->guest_cycles, second->guest_cycles, island_count);
+		return true;
 	}
 
 	void canonStart(const shil_opcode *op)
@@ -1163,6 +1400,21 @@ public:
 			Nop();
 	}
 
+#ifdef SH4_LOOP_PROFILER
+	// x9/x10 are volatile scratch registers, outside the guest register allocator.
+	// No guest register, FPSCR, cycle counter or condition flags are modified.
+	void ProfileIncrement(RuntimeBlockInfo* target, unsigned offset)
+	{
+		if (auto* counters = sh4_loop_counters(target))
+		{
+			Mov(x9, reinterpret_cast<uintptr_t>(counters) + offset);
+			Ldr(x10, MemOperand(x9));
+			Add(x10, x10, 1);
+			Str(x10, MemOperand(x9));
+		}
+	}
+#endif
+
 	u32 RelinkBlock(RuntimeBlockInfo *block)
 	{
 		ptrdiff_t start_offset = GetBuffer()->GetCursorOffset();
@@ -1172,6 +1424,9 @@ public:
 
 		case BET_StaticJump:
 		case BET_StaticCall:
+#ifdef SH4_LOOP_PROFILER
+			ProfileIncrement(block, offsetof(Sh4LoopCounters, branch));
+#endif
 			// next_pc = block->BranchBlock;
 #ifndef NO_BLOCK_LINKING
 			if (block->pBranchBlock != NULL)
@@ -1219,6 +1474,9 @@ public:
 				Label branch_not_taken;
 
 				B(ne, &branch_not_taken);
+#ifdef SH4_LOOP_PROFILER
+				ProfileIncrement(block, offsetof(Sh4LoopCounters, branch));
+#endif
 #ifndef NO_BLOCK_LINKING
 				if (block->pBranchBlock != NULL)
 				{
@@ -1248,6 +1506,9 @@ public:
 				}
 
 				Bind(&branch_not_taken);
+#ifdef SH4_LOOP_PROFILER
+				ProfileIncrement(block, offsetof(Sh4LoopCounters, next));
+#endif
 
 #ifndef NO_BLOCK_LINKING
 				if (block->pNextBlock != NULL)
@@ -1283,6 +1544,15 @@ public:
 		case BET_DynamicCall:
 		case BET_DynamicRet:
 			// next_pc = *jdyn;
+
+#ifdef SH4_LOOP_PROFILER
+			if (auto* counters = sh4_loop_counters(block))
+			{
+				Mov(x0, reinterpret_cast<uintptr_t>(counters));
+				Mov(w1, w29);
+				GenCallRuntime(sh4_loop_dynamic_edge);
+			}
+#endif
 
 			Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
 			if (!mmu_enabled() && sh4ctx.CpuRunning)
@@ -1320,6 +1590,14 @@ public:
 			GenCallRuntime(UpdateINTC);
 
 			Ldr(w29, sh4_context_mem_operand(&sh4ctx.pc));
+#ifdef SH4_LOOP_PROFILER
+			if (auto* counters = sh4_loop_counters(block))
+			{
+				Mov(x0, reinterpret_cast<uintptr_t>(counters));
+				Mov(w1, w29);
+				GenCallRuntime(sh4_loop_dynamic_edge);
+			}
+#endif
 			GenBranch(arm64_no_update);
 
 			break;
@@ -1653,6 +1931,9 @@ private:
 	template <typename R, typename... P>
 	void GenCallRuntime(R (*function)(P...))
 	{
+#ifdef SH4_LOOP_PROFILER
+		const u32 profile_call_start = GetBuffer()->GetCursorOffset();
+#endif
 		ptrdiff_t offset = reinterpret_cast<uintptr_t>(function) - reinterpret_cast<uintptr_t>(CC_RW2RX(GetBuffer()->GetStartAddress<void*>()));
 		verify((offset & 3) == 0);
 		if (offset < -128 * 1024 * 1024 || offset > 128 * 1024 * 1024)
@@ -1666,6 +1947,10 @@ private:
 			BindToOffset(&function_label, offset);
 			Bl(&function_label);
 		}
+#ifdef SH4_LOOP_PROFILER
+		RecordProfileSpan(profile_call_start, Sh4ProfileSpanKind::RuntimeCall,
+			reinterpret_cast<uintptr_t>(function));
+#endif
 	}
 
 	void GenCall(DynaCode *function)
@@ -2229,6 +2514,10 @@ private:
 	std::vector<const VRegister*> call_fregs;
 	Arm64RegAlloc regalloc;
 	RuntimeBlockInfo* block = NULL;
+#ifdef SH4_LOOP_PROFILER
+	u32 profile_guest_pc = 0;
+	bool profile_metadata = false;
+#endif
 	const int read_memory_rewrite_size = 5;	// ubfx, add, ldr for fast access. calling a handler can use more than 3 depending on offset
 	const int write_memory_rewrite_size = 5; // ubfx, add, str
 	Sh4Context& sh4ctx;
@@ -2443,18 +2732,42 @@ u32 DynaRBI::Relink()
 
 void Arm64RegAlloc::Preload(u32 reg, eReg nreg)
 {
+#ifdef SH4_LOOP_PROFILER
+	const u32 start = assembler->GetBuffer()->GetCursorOffset();
+#endif
 	assembler->Ldr(Register(nreg, 32), assembler->sh4_context_mem_operand((Sh4RegType)reg));
+#ifdef SH4_LOOP_PROFILER
+	assembler->RecordProfileSpan(start, Sh4ProfileSpanKind::RegisterLoad);
+#endif
 }
 void Arm64RegAlloc::Writeback(u32 reg, eReg nreg)
 {
+#ifdef SH4_LOOP_PROFILER
+	const u32 start = assembler->GetBuffer()->GetCursorOffset();
+#endif
 	assembler->Str(Register(nreg, 32), assembler->sh4_context_mem_operand((Sh4RegType)reg));
+#ifdef SH4_LOOP_PROFILER
+	assembler->RecordProfileSpan(start, Sh4ProfileSpanKind::RegisterStore);
+#endif
 }
 void Arm64RegAlloc::Preload_FPU(u32 reg, eFReg nreg)
 {
+#ifdef SH4_LOOP_PROFILER
+	const u32 start = assembler->GetBuffer()->GetCursorOffset();
+#endif
 	assembler->Ldr(VRegister(nreg, 32), assembler->sh4_context_mem_operand((Sh4RegType)reg));
+#ifdef SH4_LOOP_PROFILER
+	assembler->RecordProfileSpan(start, Sh4ProfileSpanKind::RegisterLoad);
+#endif
 }
 void Arm64RegAlloc::Writeback_FPU(u32 reg, eFReg nreg)
 {
+#ifdef SH4_LOOP_PROFILER
+	const u32 start = assembler->GetBuffer()->GetCursorOffset();
+#endif
 	assembler->Str(VRegister(nreg, 32), assembler->sh4_context_mem_operand((Sh4RegType)reg));
+#ifdef SH4_LOOP_PROFILER
+	assembler->RecordProfileSpan(start, Sh4ProfileSpanKind::RegisterStore);
+#endif
 }
 #endif	// FEAT_SHREC == DYNAREC_JIT

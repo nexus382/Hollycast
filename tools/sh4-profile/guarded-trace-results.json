@@ -1,0 +1,2843 @@
+{
+  "schema": "hollycast-guarded-poll-comparison-v1",
+  "capture_report": "<checkout>/.cache/sh4-trace-v3-comparison/sh4-7sddj_2x/capture.json",
+  "capture_sha256": "46ecc4e34246c35d792077d4eca5942aabd30f2990be3fbea9f60783c5c615c9",
+  "baseline_counts": {
+    "path": "<checkout>/.cache/sh4-profile-captures/sh4-lghycjxt/sample-02-both/sh4-profile.json",
+    "sha256": "3a52a78c5b0f778e122eef8972bc2e04d61f4a71278914834c18ddda468bf0e2"
+  },
+  "candidate_counts": {
+    "path": "<checkout>/.cache/sh4-trace-v3-smoke/sh4-x8dbd3dv/sample-01-candidate-both/sh4-profile.json",
+    "sha256": "876048ba2f95995e001715d08315d26fae64da586fe85c82aae185c0bf163712"
+  },
+  "binaries": {
+    "baseline": {
+      "path": "<checkout>/.cache/sh4-trace-baseline/Hollycast.app/Contents/MacOS/Hollycast",
+      "sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+      "build": {},
+      "attribution": "supplied executable; checkout commit is context only",
+      "provenance": {
+        "capability": "HOLLYBENCH_METAL_FRAME_TRACE_V1",
+        "architecture": "arm64",
+        "build": "<checkout>/.cache/sh4-profile-build",
+        "cmake_source": "<checkout>",
+        "cmake_cache_sha256": "dcc319bc8e33504d2969b8277150cd9149427307ba5779301fdab0295b9bb9b9",
+        "schema": 1,
+        "build_type": "Release",
+        "sources": {
+          "core/rend/metal/metal_context.mm": {
+            "original_sha256": "99780ea9876467cd7f0bd8102528e526320d53932833af0fa35ece7de8ed15f4",
+            "instrumented_sha256": "fb1eca6b8ab79afc8234debf64c0c88a76d76fa5f17463f6289ed490decd856e"
+          },
+          "core/input/gamepad_device.cpp": {
+            "original_sha256": "f86526746ddeb7d2deeda4ba81ca00cadb2473937ae378eb43f432c6f442cfac",
+            "instrumented_sha256": "741c861e5578286e1c74deafc1d86c1873335b77cfea6005d87657271c938cc5"
+          },
+          "core/nullDC.cpp": {
+            "original_sha256": "bce42e6289454986e8a4a9c377e4eabda5d50f90c86058dec8962b1ef71605d3",
+            "instrumented_sha256": "b49f69d93482640fcfb2257c71ec28a812b9309ea9ff3d6142b218903b65dc8e"
+          }
+        },
+        "cmake_settings": {
+          "TEST_AUTOMATION": "ON",
+          "USE_METAL": "ON",
+          "USE_VULKAN": "OFF",
+          "CMAKE_BUILD_TYPE": "Release",
+          "CMAKE_OSX_ARCHITECTURES": "arm64",
+          "CMAKE_OSX_DEPLOYMENT_TARGET": "10.15"
+        },
+        "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+        "build_host_macos": "26.6",
+        "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+        "probe_sha256": "cf3b947cfd2e74c324b410e5ad20590fa420d82e05f511fae46fbedcebb34d61",
+        "build_script_sha256": "363b98862328f626d03912ff13e36037e8ad60e00194a3e49cc05572a4c9263d",
+        "bundle_sha256": {
+          "Contents/Info.plist": "cda18868b874c2b8346aaa0bf2c9a85901a3e76c218b5d54dbcd4e758eb28559",
+          "Contents/Resources/default.metallib": "e5c5023d96e02e7431c13d78b22f7bca513deae7f181b55b9b1affa2adbcca5b"
+        },
+        "comparison_checkout": "<checkout>",
+        "comparison_revision": "2ba1521bf7e1f030e2dc9adfd4d389792fe6acbf",
+        "tracked_file_differences_excluding_submodules": [
+          "CMakeLists.txt",
+          "core/hw/sh4/dyna/blockmanager.cpp",
+          "core/hw/sh4/dyna/blockmanager.h",
+          "core/hw/sh4/dyna/decoder.cpp",
+          "core/hw/sh4/sh4_sched.cpp",
+          "core/profiler/CMakeLists.txt",
+          "core/rec-ARM64/rec_arm64.cpp",
+          "core/rend/metal/metal_context.mm"
+        ]
+      }
+    },
+    "candidate": {
+      "path": "<checkout>/.cache/sh4-trace-candidate-v3-probe/Hollycast.app/Contents/MacOS/Hollycast",
+      "sha256": "3c819006592c7251a459f8245a21e167b636fa13e638cb897bfe0368070e6c23",
+      "build": {},
+      "attribution": "supplied executable; checkout commit is context only",
+      "provenance": {
+        "capability": "HOLLYBENCH_METAL_FRAME_TRACE_V1",
+        "architecture": "arm64",
+        "build": "<checkout>/.cache/sh4-profile-build",
+        "cmake_source": "<checkout>",
+        "cmake_cache_sha256": "dcc319bc8e33504d2969b8277150cd9149427307ba5779301fdab0295b9bb9b9",
+        "schema": 1,
+        "build_type": "Release",
+        "sources": {
+          "core/rend/metal/metal_context.mm": {
+            "original_sha256": "99780ea9876467cd7f0bd8102528e526320d53932833af0fa35ece7de8ed15f4",
+            "instrumented_sha256": "fb1eca6b8ab79afc8234debf64c0c88a76d76fa5f17463f6289ed490decd856e"
+          },
+          "core/input/gamepad_device.cpp": {
+            "original_sha256": "f86526746ddeb7d2deeda4ba81ca00cadb2473937ae378eb43f432c6f442cfac",
+            "instrumented_sha256": "741c861e5578286e1c74deafc1d86c1873335b77cfea6005d87657271c938cc5"
+          },
+          "core/nullDC.cpp": {
+            "original_sha256": "bce42e6289454986e8a4a9c377e4eabda5d50f90c86058dec8962b1ef71605d3",
+            "instrumented_sha256": "b49f69d93482640fcfb2257c71ec28a812b9309ea9ff3d6142b218903b65dc8e"
+          }
+        },
+        "cmake_settings": {
+          "TEST_AUTOMATION": "ON",
+          "USE_METAL": "ON",
+          "USE_VULKAN": "OFF",
+          "CMAKE_BUILD_TYPE": "Release",
+          "CMAKE_OSX_ARCHITECTURES": "arm64",
+          "CMAKE_OSX_DEPLOYMENT_TARGET": "10.15"
+        },
+        "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+        "build_host_macos": "26.6",
+        "binary_sha256": "3c819006592c7251a459f8245a21e167b636fa13e638cb897bfe0368070e6c23",
+        "probe_sha256": "cf3b947cfd2e74c324b410e5ad20590fa420d82e05f511fae46fbedcebb34d61",
+        "build_script_sha256": "363b98862328f626d03912ff13e36037e8ad60e00194a3e49cc05572a4c9263d",
+        "bundle_sha256": {
+          "Contents/Info.plist": "cda18868b874c2b8346aaa0bf2c9a85901a3e76c218b5d54dbcd4e758eb28559",
+          "Contents/Resources/default.metallib": "e5c5023d96e02e7431c13d78b22f7bca513deae7f181b55b9b1affa2adbcca5b"
+        },
+        "comparison_checkout": "<checkout>",
+        "comparison_revision": "2ba1521bf7e1f030e2dc9adfd4d389792fe6acbf",
+        "tracked_file_differences_excluding_submodules": [
+          "CMakeLists.txt",
+          "core/cfg/option.cpp",
+          "core/cfg/option.h",
+          "core/hw/sh4/dyna/blockmanager.cpp",
+          "core/hw/sh4/dyna/blockmanager.h",
+          "core/hw/sh4/dyna/decoder.cpp",
+          "core/hw/sh4/sh4_sched.cpp",
+          "core/profiler/CMakeLists.txt",
+          "core/rec-ARM64/rec_arm64.cpp",
+          "core/rend/metal/metal_context.mm",
+          "tests/CMakeLists.txt"
+        ]
+      }
+    }
+  },
+  "host": {
+    "name": "<local-host>",
+    "os": "Darwin",
+    "release": "25.6.0",
+    "arch": "arm64",
+    "cpu": "Apple M5",
+    "logical_cpus": 10
+  },
+  "profile": {
+    "schema": "hollybench-gameplay-v1",
+    "name": "metal-slug",
+    "scene": "Metal Slug 6, Mission 1. Marco advances while firing through the mountain stage.",
+    "game": "~/Downloads/Metal Slug 6/disc.gdi",
+    "game_id": "T0000M",
+    "bios_dir": "~/Downloads/dc_bios",
+    "start_cycle": 16000000000,
+    "end_cycle": 19980000000,
+    "target_fps": 30.0,
+    "stutter_factor": 1.5,
+    "files": {
+      "disc/disc.gdi": "db763b740f857db02439c5af8820a28ce2b7eefabebf1c3bd79a493348b77ed2",
+      "replay.input": "48d9d8281d4146683a8f34acef277757647f028653754a694f93bfab3bcd9511",
+      "disc/track01.iso": "412fa72268a90e6e8dfb4b470b209526bb736d55b6619855ccb02f45458de24e",
+      "disc/track02.raw": "a16e60d73bf78be180e6fe321a3e2b8046da24eb06040fb28e01a2dc1ee19eab",
+      "disc/track03.iso": "c416f486c5c1a3b0306d4fd56d42ffcb04f1996e64945342830615cdd84599d3",
+      "disc/track04.iso": "eadc4e2ce9998a5419e40d290d737070a79277013364effb22e367bf25c7c714",
+      "bios/dc_boot.bin": "88d6a666495ad14ab5988d8cb730533cfc94ec2cfd53a7eeda14642ab0d4abf9",
+      "bios/dc_flash.bin": "dd8b365521a9c08bb4c170da3592212580f7251f35a45d6083774d1c030bc3e3"
+    },
+    "reference_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+  },
+  "sequence": [
+    {
+      "application": "baseline",
+      "mode": "off"
+    },
+    {
+      "application": "candidate",
+      "mode": "off"
+    },
+    {
+      "application": "candidate",
+      "mode": "off"
+    },
+    {
+      "application": "baseline",
+      "mode": "off"
+    },
+    {
+      "application": "baseline",
+      "mode": "off"
+    },
+    {
+      "application": "candidate",
+      "mode": "off"
+    },
+    {
+      "application": "candidate",
+      "mode": "sample"
+    }
+  ],
+  "config": "[config]\nDynarec.Enabled = yes\nDynarec.GuardedPollTrace = yes\nDreamcast.AutoSaveState = no\nrend.Resolution = 480\nrend.PerStripSorting = no\nrend.ThreadedRendering = no\nrend.PixelBufferSize = 536870912\nrend.PerPixelLayers = 32\nrend.EmulateFramebuffer = no\nrend.ModifierVolumes = yes\nFetchBoxart = no\nrend.vsync = no\nUseReios = no\nDreamcast.AutoLoadState = no\npvr.rend = 7\nSh4Clock = 200\nta.skip = 0\npvr.AutoSkipFrame = 0\n[record]\nreplay_input = yes\ncapture_delay_ms = 0\n[audio]\nbackend = null\n[window]\nwidth = 640\nheight = 480\nfullscreen = no\n",
+  "capture_guest_timing_validation": {
+    "all_guest_frame_cycles_identical": true,
+    "all_profile_boundaries_identical": true,
+    "all_probe_boundaries_identical": true,
+    "all_screenshots_identical": true,
+    "traces": [
+      {
+        "application": "baseline",
+        "mode": "off",
+        "frame_rows": 3328,
+        "guest_cycle_sequence_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "same_guest_cycle_sequence_as_first": true,
+        "profile_start_cycle": 16000000128,
+        "profile_end_cycle": 19980003904,
+        "probe_start_cycle": 16002262976,
+        "probe_terminal_cycle": 20002576832,
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      {
+        "application": "candidate",
+        "mode": "off",
+        "frame_rows": 3328,
+        "guest_cycle_sequence_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "same_guest_cycle_sequence_as_first": true,
+        "profile_start_cycle": 16000000128,
+        "profile_end_cycle": 19980003904,
+        "probe_start_cycle": 16002262976,
+        "probe_terminal_cycle": 20002576832,
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      {
+        "application": "candidate",
+        "mode": "off",
+        "frame_rows": 3328,
+        "guest_cycle_sequence_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "same_guest_cycle_sequence_as_first": true,
+        "profile_start_cycle": 16000000128,
+        "profile_end_cycle": 19980003904,
+        "probe_start_cycle": 16002262976,
+        "probe_terminal_cycle": 20002576832,
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      {
+        "application": "baseline",
+        "mode": "off",
+        "frame_rows": 3328,
+        "guest_cycle_sequence_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "same_guest_cycle_sequence_as_first": true,
+        "profile_start_cycle": 16000000128,
+        "profile_end_cycle": 19980003904,
+        "probe_start_cycle": 16002262976,
+        "probe_terminal_cycle": 20002576832,
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      {
+        "application": "baseline",
+        "mode": "off",
+        "frame_rows": 3328,
+        "guest_cycle_sequence_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "same_guest_cycle_sequence_as_first": true,
+        "profile_start_cycle": 16000000128,
+        "profile_end_cycle": 19980003904,
+        "probe_start_cycle": 16002262976,
+        "probe_terminal_cycle": 20002576832,
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      {
+        "application": "candidate",
+        "mode": "off",
+        "frame_rows": 3328,
+        "guest_cycle_sequence_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "same_guest_cycle_sequence_as_first": true,
+        "profile_start_cycle": 16000000128,
+        "profile_end_cycle": 19980003904,
+        "probe_start_cycle": 16002262976,
+        "probe_terminal_cycle": 20002576832,
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      {
+        "application": "candidate",
+        "mode": "sample",
+        "frame_rows": 3328,
+        "guest_cycle_sequence_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "same_guest_cycle_sequence_as_first": true,
+        "profile_start_cycle": 16000000128,
+        "profile_end_cycle": 19980003904,
+        "probe_start_cycle": 16002262976,
+        "probe_terminal_cycle": 20002576832,
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      }
+    ]
+  },
+  "off_mode_metrics": {
+    "baseline": {
+      "scene_thread_cpu_seconds": {
+        "median": 4.155240333,
+        "min": 3.809877084,
+        "max": 4.365513333,
+        "samples": [
+          3.809877084,
+          4.365513333,
+          4.155240333
+        ]
+      },
+      "scene_process_cpu_seconds": {
+        "median": 4.31046,
+        "min": 3.944461,
+        "max": 4.500124,
+        "samples": [
+          3.944461,
+          4.500124,
+          4.31046
+        ]
+      },
+      "process_cpu_seconds": {
+        "median": 20.185652,
+        "min": 19.515933,
+        "max": 20.431027999999998,
+        "samples": [
+          20.185652,
+          20.431027999999998,
+          19.515933
+        ]
+      },
+      "process_wall_seconds": {
+        "median": 100.519212167,
+        "min": 100.496557417,
+        "max": 100.52674425,
+        "samples": [
+          100.496557417,
+          100.519212167,
+          100.52674425
+        ]
+      },
+      "average_fps": {
+        "median": 29.968137117095342,
+        "min": 29.965370583330408,
+        "max": 29.96858150057145,
+        "samples": [
+          29.965370583330408,
+          29.968137117095342,
+          29.96858150057145
+        ]
+      },
+      "p99_frame_ms": {
+        "median": 37.871208,
+        "min": 37.783416,
+        "max": 38.150167,
+        "samples": [
+          37.871208,
+          38.150167,
+          37.783416
+        ]
+      },
+      "worst_frame_ms": {
+        "median": 39.320916,
+        "min": 38.199875,
+        "max": 40.263584,
+        "samples": [
+          38.199875,
+          39.320916,
+          40.263584
+        ]
+      }
+    },
+    "candidate": {
+      "scene_thread_cpu_seconds": {
+        "median": 3.50861325,
+        "min": 3.2002375,
+        "max": 4.015384542,
+        "samples": [
+          3.2002375,
+          3.50861325,
+          4.015384542
+        ]
+      },
+      "scene_process_cpu_seconds": {
+        "median": 3.644836,
+        "min": 3.345335,
+        "max": 4.148356,
+        "samples": [
+          3.345335,
+          3.644836,
+          4.148356
+        ]
+      },
+      "process_cpu_seconds": {
+        "median": 16.915444,
+        "min": 15.938996999999999,
+        "max": 16.946326,
+        "samples": [
+          16.915444,
+          15.938996999999999,
+          16.946326
+        ]
+      },
+      "process_wall_seconds": {
+        "median": 100.507442333,
+        "min": 100.50106575,
+        "max": 100.512493209,
+        "samples": [
+          100.512493209,
+          100.507442333,
+          100.50106575
+        ]
+      },
+      "average_fps": {
+        "median": 29.96774309636844,
+        "min": 29.964047584187163,
+        "max": 29.968186342114734,
+        "samples": [
+          29.96774309636844,
+          29.964047584187163,
+          29.968186342114734
+        ]
+      },
+      "p99_frame_ms": {
+        "median": 37.924334,
+        "min": 37.906708,
+        "max": 38.071041,
+        "samples": [
+          37.906708,
+          37.924334,
+          38.071041
+        ]
+      },
+      "worst_frame_ms": {
+        "median": 39.058625,
+        "min": 39.023667,
+        "max": 39.273458,
+        "samples": [
+          39.023667,
+          39.058625,
+          39.273458
+        ]
+      }
+    }
+  },
+  "off_mode_changes": {
+    "scene_thread_cpu_seconds": {
+      "median_change_percent": -15.56172522356002,
+      "ranges_overlap": true
+    },
+    "scene_process_cpu_seconds": {
+      "median_change_percent": -15.44206418804489,
+      "ranges_overlap": true
+    },
+    "process_cpu_seconds": {
+      "median_change_percent": -16.200655792540164,
+      "ranges_overlap": false
+    },
+    "process_wall_seconds": {
+      "median_change_percent": -0.011709039243612551,
+      "ranges_overlap": true
+    },
+    "average_fps": {
+      "median_change_percent": -0.0013147988657480347,
+      "ranges_overlap": true
+    },
+    "p99_frame_ms": {
+      "median_change_percent": 0.14028071140481657,
+      "ranges_overlap": true
+    },
+    "worst_frame_ms": {
+      "median_change_percent": -0.6670521103831817,
+      "ranges_overlap": true
+    }
+  },
+  "adjacent_pair_changes": [
+    {
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "thread_cpu_change_percent": -16.00155518298081,
+      "process_cpu_change_percent": -15.189046107947323
+    },
+    {
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "thread_cpu_change_percent": -19.628850438331725,
+      "process_cpu_change_percent": -19.005876282520205
+    },
+    {
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "thread_cpu_change_percent": -3.36576899991311,
+      "process_cpu_change_percent": -3.7607123137669785
+    }
+  ],
+  "count_checks": {
+    "baseline": {
+      "block_sha256": "27b4b85c92325ad99cecd7f4ba614b3ac2b7ae0cf35dd06cfd8ebb7a61436e71",
+      "edge_sha256": "7b555595eb2b16effb7dfd626ded77d99fa30de900ef2e87b9784655251c1fad",
+      "entries": 458330648,
+      "non_estimated_exits": 458330648,
+      "executed_code_groups": 8221,
+      "entry_exit_mismatches": []
+    },
+    "candidate": {
+      "block_sha256": "27b4b85c92325ad99cecd7f4ba614b3ac2b7ae0cf35dd06cfd8ebb7a61436e71",
+      "edge_sha256": "7b555595eb2b16effb7dfd626ded77d99fa30de900ef2e87b9784655251c1fad",
+      "entries": 458330648,
+      "non_estimated_exits": 458330648,
+      "executed_code_groups": 8221,
+      "entry_exit_mismatches": []
+    },
+    "block_counts_identical": true,
+    "edge_counts_identical": true
+  },
+  "regression_test_evidence": {
+    "path": "<checkout>/.cache/sh4-trace-tests/v3-regression-tests.log",
+    "sha256": "09dca177a012d77d84fd78f9888057f40641dd85a12309f21d28c33239bf547b",
+    "passed_tests": 43,
+    "failure_summary_present": false
+  },
+  "fixed_work_benchmark": {
+    "path": "<checkout>/.cache/sh4-trace-tests/fixed-work-benchmark-v3.json",
+    "sha256": "d45ab6979f45d479bd47dc39d1093f7694ac988d3e4461891044ad6c0fff0d28",
+    "data": {
+      "all_context_and_scheduler_checks_passed": true,
+      "callback_interval_cycles": 8192,
+      "method": "same Release test binary; config off/on; precompile with CpuRunning true; continuous untimed warm then fixed guest-cycle CPU interval; normal scheduler/AICA/PVR work retained; audio backend closed and renderer disabled",
+      "requested_guest_cycles": 400000000,
+      "samples": [
+        {
+          "guarded_trace": false,
+          "guest_cycles": 400007104,
+          "round": 1,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.048934166999999994,
+          "trace_entries": 0,
+          "wall_seconds": 0.049026957999999995
+        },
+        {
+          "guarded_trace": true,
+          "guest_cycles": 400007104,
+          "round": 1,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.029924542,
+          "trace_entries": 892873,
+          "wall_seconds": 0.029949542
+        },
+        {
+          "guarded_trace": true,
+          "guest_cycles": 400007104,
+          "round": 2,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.029886582999999998,
+          "trace_entries": 892873,
+          "wall_seconds": 0.029918167
+        },
+        {
+          "guarded_trace": false,
+          "guest_cycles": 400007104,
+          "round": 2,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.048459999999999996,
+          "trace_entries": 0,
+          "wall_seconds": 0.048528790999999995
+        },
+        {
+          "guarded_trace": false,
+          "guest_cycles": 400007104,
+          "round": 3,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.04883025,
+          "trace_entries": 0,
+          "wall_seconds": 0.048897375
+        },
+        {
+          "guarded_trace": true,
+          "guest_cycles": 400007104,
+          "round": 3,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.030125332999999997,
+          "trace_entries": 892873,
+          "wall_seconds": 0.030175041
+        },
+        {
+          "guarded_trace": true,
+          "guest_cycles": 400007104,
+          "round": 4,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.030372833,
+          "trace_entries": 892873,
+          "wall_seconds": 0.030425459
+        },
+        {
+          "guarded_trace": false,
+          "guest_cycles": 400007104,
+          "round": 4,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.050782707999999996,
+          "trace_entries": 0,
+          "wall_seconds": 0.050982625
+        },
+        {
+          "guarded_trace": false,
+          "guest_cycles": 400007104,
+          "round": 5,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.050424332999999995,
+          "trace_entries": 0,
+          "wall_seconds": 0.05056375
+        },
+        {
+          "guarded_trace": true,
+          "guest_cycles": 400007104,
+          "round": 5,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.034290375,
+          "trace_entries": 892873,
+          "wall_seconds": 0.034427792
+        },
+        {
+          "guarded_trace": true,
+          "guest_cycles": 400007104,
+          "round": 6,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.032634582999999995,
+          "trace_entries": 892873,
+          "wall_seconds": 0.032742125
+        },
+        {
+          "guarded_trace": false,
+          "guest_cycles": 400007104,
+          "round": 6,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.050755249999999995,
+          "trace_entries": 0,
+          "wall_seconds": 0.050829415999999995
+        },
+        {
+          "guarded_trace": false,
+          "guest_cycles": 400007104,
+          "round": 7,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.050962375,
+          "trace_entries": 0,
+          "wall_seconds": 0.051067999999999995
+        },
+        {
+          "guarded_trace": true,
+          "guest_cycles": 400007104,
+          "round": 7,
+          "scheduler_callbacks": 48830,
+          "scheduler_digest": 18081345606337134654,
+          "thread_cpu_seconds": 0.033576749999999995,
+          "trace_entries": 892873,
+          "wall_seconds": 0.033879707999999994
+        }
+      ],
+      "samples_per_mode": 7,
+      "schema": "hollycast-guarded-poll-fixed-work-v1",
+      "warmup_guest_cycles_min": 100000000
+    },
+    "groups": {
+      "generic": {
+        "thread_cpu_seconds": {
+          "median": 0.050424332999999995,
+          "min": 0.048459999999999996,
+          "max": 0.050962375,
+          "samples": [
+            0.048934166999999994,
+            0.048459999999999996,
+            0.04883025,
+            0.050782707999999996,
+            0.050424332999999995,
+            0.050755249999999995,
+            0.050962375
+          ]
+        },
+        "wall_seconds": {
+          "median": 0.05056375,
+          "min": 0.048528790999999995,
+          "max": 0.051067999999999995,
+          "samples": [
+            0.049026957999999995,
+            0.048528790999999995,
+            0.048897375,
+            0.050982625,
+            0.05056375,
+            0.050829415999999995,
+            0.051067999999999995
+          ]
+        }
+      },
+      "guarded": {
+        "thread_cpu_seconds": {
+          "median": 0.030372833,
+          "min": 0.029886582999999998,
+          "max": 0.034290375,
+          "samples": [
+            0.029924542,
+            0.029886582999999998,
+            0.030125332999999997,
+            0.030372833,
+            0.034290375,
+            0.032634582999999995,
+            0.033576749999999995
+          ]
+        },
+        "wall_seconds": {
+          "median": 0.030425459,
+          "min": 0.029918167,
+          "max": 0.034427792,
+          "samples": [
+            0.029949542,
+            0.029918167,
+            0.030175041,
+            0.030425459,
+            0.034427792,
+            0.032742125,
+            0.033879707999999994
+          ]
+        }
+      }
+    },
+    "thread_cpu_median_change_percent": -39.76552352214554,
+    "thread_cpu_ranges_overlap": false,
+    "provenance": {
+      "schema": "hollycast-fixed-work-provenance-v1",
+      "variant": "v3 cached private cycle budget",
+      "sha256": {
+        ".cache/sh4-trace-tests/Hollycast.app/Contents/MacOS/Hollycast": "8c27794db22859e3e29e983fbf25878cbd6205c23707d35c72cbfe7374c6970e",
+        ".cache/sh4-trace-tests/CMakeCache.txt": "20636e2354623823dfe6c3f4a8c43735eda502d269b7ff86adf5ba3f8e1baac3",
+        "core/rec-ARM64/rec_arm64.cpp": "38f54ed44a131d8fd70f7ab72e219c0c9f37c66c91cf79d2b41227dd7264c609",
+        "core/cfg/option.cpp": "d7c1c94f76562053107ce4caed94851ac5806cda1a9eb1e670fbaf2c5c6bc4b0",
+        "core/cfg/option.h": "a7928b20722ea9190d8cee6beda5da6a7ef5e33cc056ca5ef7f4b55cf8483543",
+        "tests/src/GuardedPollTraceTest.cpp": "ea0ab41f215aa420d8d2b79d94e43874596b7e2dd7c68453c8abf1765ddb8152",
+        "tests/CMakeLists.txt": "8ed36d84a2af9236622a08245c56743226e3ffb49b88bb830b73f03dd2453592",
+        ".cache/sh4-trace-tests/fixed-work-benchmark-v3.json": "d45ab6979f45d479bd47dc39d1093f7694ac988d3e4461891044ad6c0fff0d28",
+        ".cache/sh4-trace-tests/v3-regression-tests.log": "09dca177a012d77d84fd78f9888057f40641dd85a12309f21d28c33239bf547b"
+      },
+      "cmake_build_type": "Release",
+      "cmake_options": {
+        "ENABLE_CTEST": "ON",
+        "BUILD_TESTING": "ON",
+        "TEST_AUTOMATION": "ON",
+        "ENABLE_SH4_LOOP_PROFILER": "OFF",
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
+      },
+      "regression_tests": {
+        "passed": 43,
+        "guarded_trace_tests_included": 8
+      },
+      "note": "Fingerprints recorded immediately after v3 regression and fixed-work execution, before subsequent test builds."
+    }
+  },
+  "exploratory_calibration": {
+    "comparison": {
+      "path": "<checkout>/.cache/sh4-trace-comparison/sh4-h3l397ln/v2-analysis.json",
+      "sha256": "87345ae83ab0d7b2bb04f8bb3144be71a206e553f34ec9340a198a53973e3f8d",
+      "data": {
+        "schema": "hollycast-guarded-poll-comparison-v1",
+        "capture_report": "<checkout>/.cache/sh4-trace-comparison/sh4-h3l397ln/capture.json",
+        "capture_sha256": "402892e9ab45ad8f480653e153ef909116340289a2afa183982c21e3ea6b3782",
+        "baseline_counts": {
+          "path": "<checkout>/.cache/sh4-profile-captures/sh4-lghycjxt/sample-02-both/sh4-profile.json",
+          "sha256": "3a52a78c5b0f778e122eef8972bc2e04d61f4a71278914834c18ddda468bf0e2"
+        },
+        "candidate_counts": {
+          "path": "<checkout>/.cache/sh4-trace-v2-smoke/sh4-pqzbaybr/sample-01-candidate-both/sh4-profile.json",
+          "sha256": "8f983c1977f2de4101f7838eb3915529de6a9806c2cd24d795c3033b6aef3b4d"
+        },
+        "binaries": {
+          "baseline": {
+            "path": "<checkout>/.cache/sh4-trace-baseline/Hollycast.app/Contents/MacOS/Hollycast",
+            "sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+            "build": {},
+            "attribution": "supplied executable; checkout commit is context only",
+            "provenance": {
+              "capability": "HOLLYBENCH_METAL_FRAME_TRACE_V1",
+              "architecture": "arm64",
+              "build": "<checkout>/.cache/sh4-profile-build",
+              "cmake_source": "<checkout>",
+              "cmake_cache_sha256": "dcc319bc8e33504d2969b8277150cd9149427307ba5779301fdab0295b9bb9b9",
+              "schema": 1,
+              "build_type": "Release",
+              "sources": {
+                "core/rend/metal/metal_context.mm": {
+                  "original_sha256": "99780ea9876467cd7f0bd8102528e526320d53932833af0fa35ece7de8ed15f4",
+                  "instrumented_sha256": "fb1eca6b8ab79afc8234debf64c0c88a76d76fa5f17463f6289ed490decd856e"
+                },
+                "core/input/gamepad_device.cpp": {
+                  "original_sha256": "f86526746ddeb7d2deeda4ba81ca00cadb2473937ae378eb43f432c6f442cfac",
+                  "instrumented_sha256": "741c861e5578286e1c74deafc1d86c1873335b77cfea6005d87657271c938cc5"
+                },
+                "core/nullDC.cpp": {
+                  "original_sha256": "bce42e6289454986e8a4a9c377e4eabda5d50f90c86058dec8962b1ef71605d3",
+                  "instrumented_sha256": "b49f69d93482640fcfb2257c71ec28a812b9309ea9ff3d6142b218903b65dc8e"
+                }
+              },
+              "cmake_settings": {
+                "TEST_AUTOMATION": "ON",
+                "USE_METAL": "ON",
+                "USE_VULKAN": "OFF",
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "10.15"
+              },
+              "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+              "build_host_macos": "26.6",
+              "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+              "probe_sha256": "cf3b947cfd2e74c324b410e5ad20590fa420d82e05f511fae46fbedcebb34d61",
+              "build_script_sha256": "363b98862328f626d03912ff13e36037e8ad60e00194a3e49cc05572a4c9263d",
+              "bundle_sha256": {
+                "Contents/Info.plist": "cda18868b874c2b8346aaa0bf2c9a85901a3e76c218b5d54dbcd4e758eb28559",
+                "Contents/Resources/default.metallib": "e5c5023d96e02e7431c13d78b22f7bca513deae7f181b55b9b1affa2adbcca5b"
+              },
+              "comparison_checkout": "<checkout>",
+              "comparison_revision": "2ba1521bf7e1f030e2dc9adfd4d389792fe6acbf",
+              "tracked_file_differences_excluding_submodules": [
+                "CMakeLists.txt",
+                "core/hw/sh4/dyna/blockmanager.cpp",
+                "core/hw/sh4/dyna/blockmanager.h",
+                "core/hw/sh4/dyna/decoder.cpp",
+                "core/hw/sh4/sh4_sched.cpp",
+                "core/profiler/CMakeLists.txt",
+                "core/rec-ARM64/rec_arm64.cpp",
+                "core/rend/metal/metal_context.mm"
+              ]
+            }
+          },
+          "candidate": {
+            "path": "<checkout>/.cache/sh4-trace-candidate-v2-probe/Hollycast.app/Contents/MacOS/Hollycast",
+            "sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+            "build": {},
+            "attribution": "supplied executable; checkout commit is context only",
+            "provenance": {
+              "capability": "HOLLYBENCH_METAL_FRAME_TRACE_V1",
+              "architecture": "arm64",
+              "build": "<checkout>/.cache/sh4-profile-build",
+              "cmake_source": "<checkout>",
+              "cmake_cache_sha256": "dcc319bc8e33504d2969b8277150cd9149427307ba5779301fdab0295b9bb9b9",
+              "schema": 1,
+              "build_type": "Release",
+              "sources": {
+                "core/rend/metal/metal_context.mm": {
+                  "original_sha256": "99780ea9876467cd7f0bd8102528e526320d53932833af0fa35ece7de8ed15f4",
+                  "instrumented_sha256": "fb1eca6b8ab79afc8234debf64c0c88a76d76fa5f17463f6289ed490decd856e"
+                },
+                "core/input/gamepad_device.cpp": {
+                  "original_sha256": "f86526746ddeb7d2deeda4ba81ca00cadb2473937ae378eb43f432c6f442cfac",
+                  "instrumented_sha256": "741c861e5578286e1c74deafc1d86c1873335b77cfea6005d87657271c938cc5"
+                },
+                "core/nullDC.cpp": {
+                  "original_sha256": "bce42e6289454986e8a4a9c377e4eabda5d50f90c86058dec8962b1ef71605d3",
+                  "instrumented_sha256": "b49f69d93482640fcfb2257c71ec28a812b9309ea9ff3d6142b218903b65dc8e"
+                }
+              },
+              "cmake_settings": {
+                "TEST_AUTOMATION": "ON",
+                "USE_METAL": "ON",
+                "USE_VULKAN": "OFF",
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "10.15"
+              },
+              "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+              "build_host_macos": "26.6",
+              "binary_sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+              "probe_sha256": "cf3b947cfd2e74c324b410e5ad20590fa420d82e05f511fae46fbedcebb34d61",
+              "build_script_sha256": "363b98862328f626d03912ff13e36037e8ad60e00194a3e49cc05572a4c9263d",
+              "bundle_sha256": {
+                "Contents/Info.plist": "cda18868b874c2b8346aaa0bf2c9a85901a3e76c218b5d54dbcd4e758eb28559",
+                "Contents/Resources/default.metallib": "e5c5023d96e02e7431c13d78b22f7bca513deae7f181b55b9b1affa2adbcca5b"
+              },
+              "comparison_checkout": "<checkout>",
+              "comparison_revision": "2ba1521bf7e1f030e2dc9adfd4d389792fe6acbf",
+              "tracked_file_differences_excluding_submodules": [
+                "CMakeLists.txt",
+                "core/cfg/option.cpp",
+                "core/cfg/option.h",
+                "core/hw/sh4/dyna/blockmanager.cpp",
+                "core/hw/sh4/dyna/blockmanager.h",
+                "core/hw/sh4/dyna/decoder.cpp",
+                "core/hw/sh4/sh4_sched.cpp",
+                "core/profiler/CMakeLists.txt",
+                "core/rec-ARM64/rec_arm64.cpp",
+                "core/rend/metal/metal_context.mm",
+                "tests/CMakeLists.txt"
+              ]
+            }
+          }
+        },
+        "host": {
+          "name": "<local-host>",
+          "os": "Darwin",
+          "release": "25.6.0",
+          "arch": "arm64",
+          "cpu": "Apple M5",
+          "logical_cpus": 10
+        },
+        "profile": {
+          "schema": "hollybench-gameplay-v1",
+          "name": "metal-slug",
+          "scene": "Metal Slug 6, Mission 1. Marco advances while firing through the mountain stage.",
+          "game": "~/Downloads/Metal Slug 6/disc.gdi",
+          "game_id": "T0000M",
+          "bios_dir": "~/Downloads/dc_bios",
+          "start_cycle": 16000000000,
+          "end_cycle": 19980000000,
+          "target_fps": 30.0,
+          "stutter_factor": 1.5,
+          "files": {
+            "disc/disc.gdi": "db763b740f857db02439c5af8820a28ce2b7eefabebf1c3bd79a493348b77ed2",
+            "replay.input": "48d9d8281d4146683a8f34acef277757647f028653754a694f93bfab3bcd9511",
+            "disc/track01.iso": "412fa72268a90e6e8dfb4b470b209526bb736d55b6619855ccb02f45458de24e",
+            "disc/track02.raw": "a16e60d73bf78be180e6fe321a3e2b8046da24eb06040fb28e01a2dc1ee19eab",
+            "disc/track03.iso": "c416f486c5c1a3b0306d4fd56d42ffcb04f1996e64945342830615cdd84599d3",
+            "disc/track04.iso": "eadc4e2ce9998a5419e40d290d737070a79277013364effb22e367bf25c7c714",
+            "bios/dc_boot.bin": "88d6a666495ad14ab5988d8cb730533cfc94ec2cfd53a7eeda14642ab0d4abf9",
+            "bios/dc_flash.bin": "dd8b365521a9c08bb4c170da3592212580f7251f35a45d6083774d1c030bc3e3"
+          },
+          "reference_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+        },
+        "sequence": [
+          {
+            "application": "baseline",
+            "mode": "off"
+          },
+          {
+            "application": "candidate",
+            "mode": "off"
+          },
+          {
+            "application": "candidate",
+            "mode": "off"
+          },
+          {
+            "application": "baseline",
+            "mode": "off"
+          },
+          {
+            "application": "baseline",
+            "mode": "off"
+          },
+          {
+            "application": "candidate",
+            "mode": "off"
+          },
+          {
+            "application": "candidate",
+            "mode": "sample"
+          },
+          {
+            "application": "candidate",
+            "mode": "sample"
+          },
+          {
+            "application": "candidate",
+            "mode": "sample"
+          }
+        ],
+        "off_mode_metrics": {
+          "baseline": {
+            "scene_thread_cpu_seconds": {
+              "median": 3.396257208,
+              "min": 3.327073417,
+              "max": 3.883102625,
+              "samples": [
+                3.396257208,
+                3.327073417,
+                3.883102625
+              ]
+            },
+            "scene_process_cpu_seconds": {
+              "median": 3.537487,
+              "min": 3.446248,
+              "max": 4.030087,
+              "samples": [
+                3.537487,
+                3.446248,
+                4.030087
+              ]
+            },
+            "process_cpu_seconds": {
+              "median": 15.733704999999999,
+              "min": 14.775713,
+              "max": 16.88769,
+              "samples": [
+                15.733704999999999,
+                14.775713,
+                16.88769
+              ]
+            },
+            "process_wall_seconds": {
+              "median": 100.542079584,
+              "min": 100.493217875,
+              "max": 101.285594292,
+              "samples": [
+                101.285594292,
+                100.542079584,
+                100.493217875
+              ]
+            },
+            "average_fps": {
+              "median": 29.96755942427938,
+              "min": 29.964956493117725,
+              "max": 29.96989754625059,
+              "samples": [
+                29.96755942427938,
+                29.964956493117725,
+                29.96989754625059
+              ]
+            },
+            "p99_frame_ms": {
+              "median": 37.6785,
+              "min": 37.601667,
+              "max": 37.749958,
+              "samples": [
+                37.6785,
+                37.749958,
+                37.601667
+              ]
+            },
+            "worst_frame_ms": {
+              "median": 38.272458,
+              "min": 38.22575,
+              "max": 38.540458,
+              "samples": [
+                38.540458,
+                38.272458,
+                38.22575
+              ]
+            }
+          },
+          "candidate": {
+            "scene_thread_cpu_seconds": {
+              "median": 3.919455125,
+              "min": 2.778481041,
+              "max": 4.067743917,
+              "samples": [
+                2.778481041,
+                4.067743917,
+                3.919455125
+              ]
+            },
+            "scene_process_cpu_seconds": {
+              "median": 4.03879,
+              "min": 2.887746,
+              "max": 4.212209,
+              "samples": [
+                2.887746,
+                4.212209,
+                4.03879
+              ]
+            },
+            "process_cpu_seconds": {
+              "median": 14.122323,
+              "min": 13.091598000000001,
+              "max": 15.596060000000001,
+              "samples": [
+                13.091598000000001,
+                14.122323,
+                15.596060000000001
+              ]
+            },
+            "process_wall_seconds": {
+              "median": 100.544840917,
+              "min": 100.531417584,
+              "max": 100.785899167,
+              "samples": [
+                100.785899167,
+                100.544840917,
+                100.531417584
+              ]
+            },
+            "average_fps": {
+              "median": 29.966643050353905,
+              "min": 29.966275668001494,
+              "max": 29.967422349292924,
+              "samples": [
+                29.967422349292924,
+                29.966275668001494,
+                29.966643050353905
+              ]
+            },
+            "p99_frame_ms": {
+              "median": 38.073,
+              "min": 37.166667,
+              "max": 38.094291,
+              "samples": [
+                37.166667,
+                38.073,
+                38.094291
+              ]
+            },
+            "worst_frame_ms": {
+              "median": 38.545541,
+              "min": 38.026584,
+              "max": 38.881958,
+              "samples": [
+                38.026584,
+                38.545541,
+                38.881958
+              ]
+            }
+          }
+        },
+        "off_mode_changes": {
+          "scene_thread_cpu_seconds": {
+            "median_change_percent": 15.405132325301786,
+            "ranges_overlap": true
+          },
+          "scene_process_cpu_seconds": {
+            "median_change_percent": 14.171161618403104,
+            "ranges_overlap": true
+          },
+          "process_cpu_seconds": {
+            "median_change_percent": -10.241592809830868,
+            "ranges_overlap": true
+          },
+          "process_wall_seconds": {
+            "median_change_percent": 0.0027464450819136843,
+            "ranges_overlap": true
+          },
+          "average_fps": {
+            "median_change_percent": -0.003057886404755905,
+            "ranges_overlap": true
+          },
+          "p99_frame_ms": {
+            "median_change_percent": 1.047016202874329,
+            "ranges_overlap": true
+          },
+          "worst_frame_ms": {
+            "median_change_percent": 0.7135235474031942,
+            "ranges_overlap": true
+          }
+        },
+        "adjacent_pair_changes": [
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "thread_cpu_change_percent": -18.18991110404734,
+            "process_cpu_change_percent": -18.367304247337167
+          },
+          {
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "thread_cpu_change_percent": 22.261922331364037,
+            "process_cpu_change_percent": 22.22593963057793
+          },
+          {
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "thread_cpu_change_percent": 0.9361714976564572,
+            "process_cpu_change_percent": 0.21595067302515591
+          }
+        ],
+        "count_checks": {
+          "baseline": {
+            "block_sha256": "27b4b85c92325ad99cecd7f4ba614b3ac2b7ae0cf35dd06cfd8ebb7a61436e71",
+            "edge_sha256": "7b555595eb2b16effb7dfd626ded77d99fa30de900ef2e87b9784655251c1fad",
+            "entries": 458330648,
+            "non_estimated_exits": 458330648,
+            "entry_exit_mismatches": []
+          },
+          "candidate": {
+            "block_sha256": "27b4b85c92325ad99cecd7f4ba614b3ac2b7ae0cf35dd06cfd8ebb7a61436e71",
+            "edge_sha256": "7b555595eb2b16effb7dfd626ded77d99fa30de900ef2e87b9784655251c1fad",
+            "entries": 458330648,
+            "non_estimated_exits": 458330648,
+            "entry_exit_mismatches": []
+          },
+          "block_counts_identical": true,
+          "edge_counts_identical": true
+        },
+        "regression_test_evidence": {
+          "path": "<checkout>/.cache/sh4-trace-tests/final-regression-tests.log",
+          "sha256": "95841c9e1aa00d1d727be7c666bfce3432b7c5cbe8635da82a75b4219616ef7c",
+          "passed_tests": 43,
+          "failure_summary_present": false
+        },
+        "profiling_and_trace_source_sha256": {
+          "<checkout>/tools/sh4-profile/compare.py": "e6a701a94c78e7cdded548372df134678a1b61a73d1c2e8f73d722c0b3c0f28c",
+          "<checkout>/tools/sh4-profile/analyze.py": "b24745c4f1115f8db6236884aba88c34c17e469c4de323cddde54fbacd9c7e76",
+          "<checkout>/core/rec-ARM64/rec_arm64.cpp": "74f996ed5b472d55a47f75c9b7b71fa9116d5fe2412a71483eb59bd3ddb320fd",
+          "<checkout>/tests/src/GuardedPollTraceTest.cpp": "ea0ab41f215aa420d8d2b79d94e43874596b7e2dd7c68453c8abf1765ddb8152"
+        },
+        "runs": [
+          {
+            "application": "baseline",
+            "mode": "off",
+            "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 0,
+            "thread_cpu_seconds": 3.396257208,
+            "process_cpu_seconds": 3.537487,
+            "average_fps": 29.96755942427938,
+            "p99_frame_ms": 37.6785,
+            "worst_frame_ms": 38.540458,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "off",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 93887507751041,
+              "end_ns": 93907407190833,
+              "thread_cpu_ns": 3396257208,
+              "process_cpu_ns": 3537487000,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 0,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 0,
+              "total_runnable_samples": 0,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "candidate",
+            "mode": "off",
+            "binary_sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 6748762,
+            "thread_cpu_seconds": 2.778481041,
+            "process_cpu_seconds": 2.887746,
+            "average_fps": 29.967422349292924,
+            "p99_frame_ms": 37.166667,
+            "worst_frame_ms": 38.026584,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "off",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 93988509460916,
+              "end_ns": 94008409633750,
+              "thread_cpu_ns": 2778481041,
+              "process_cpu_ns": 2887746000,
+              "guarded_poll_trace_enabled": true,
+              "guarded_poll_trace_entries": 6748762,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 0,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 0,
+              "total_runnable_samples": 0,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "candidate",
+            "mode": "off",
+            "binary_sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 6748762,
+            "thread_cpu_seconds": 4.067743917,
+            "process_cpu_seconds": 4.212209,
+            "average_fps": 29.966275668001494,
+            "p99_frame_ms": 38.073,
+            "worst_frame_ms": 38.545541,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "off",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 94089236483708,
+              "end_ns": 94109137750458,
+              "thread_cpu_ns": 4067743917,
+              "process_cpu_ns": 4212209000,
+              "guarded_poll_trace_enabled": true,
+              "guarded_poll_trace_entries": 6748762,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 0,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 0,
+              "total_runnable_samples": 0,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "baseline",
+            "mode": "off",
+            "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 0,
+            "thread_cpu_seconds": 3.327073417,
+            "process_cpu_seconds": 3.446248,
+            "average_fps": 29.964956493117725,
+            "p99_frame_ms": 37.749958,
+            "worst_frame_ms": 38.272458,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "off",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 94189992882750,
+              "end_ns": 94209894081833,
+              "thread_cpu_ns": 3327073417,
+              "process_cpu_ns": 3446248000,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 0,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 0,
+              "total_runnable_samples": 0,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "baseline",
+            "mode": "off",
+            "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 0,
+            "thread_cpu_seconds": 3.883102625,
+            "process_cpu_seconds": 4.030087,
+            "average_fps": 29.96989754625059,
+            "p99_frame_ms": 37.601667,
+            "worst_frame_ms": 38.22575,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "off",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 94290721605625,
+              "end_ns": 94310621005041,
+              "thread_cpu_ns": 3883102625,
+              "process_cpu_ns": 4030087000,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 0,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 0,
+              "total_runnable_samples": 0,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "candidate",
+            "mode": "off",
+            "binary_sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 6748762,
+            "thread_cpu_seconds": 3.919455125,
+            "process_cpu_seconds": 4.03879,
+            "average_fps": 29.966643050353905,
+            "p99_frame_ms": 38.094291,
+            "worst_frame_ms": 38.881958,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "off",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 94391467197083,
+              "end_ns": 94411367210083,
+              "thread_cpu_ns": 3919455125,
+              "process_cpu_ns": 4038790000,
+              "guarded_poll_trace_enabled": true,
+              "guarded_poll_trace_entries": 6748762,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 0,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 0,
+              "total_runnable_samples": 0,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "candidate",
+            "mode": "sample",
+            "binary_sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 6748762,
+            "thread_cpu_seconds": 2.475218167,
+            "process_cpu_seconds": 2.812776,
+            "average_fps": 29.968114914736827,
+            "p99_frame_ms": 37.228042,
+            "worst_frame_ms": 38.728,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "sample",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 94492177815041,
+              "end_ns": 94512078148750,
+              "thread_cpu_ns": 2475218167,
+              "process_cpu_ns": 2812776000,
+              "guarded_poll_trace_enabled": true,
+              "guarded_poll_trace_entries": 6748762,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 19743,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 83,
+              "total_runnable_samples": 2758,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "candidate",
+            "mode": "sample",
+            "binary_sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 6748762,
+            "thread_cpu_seconds": 3.694555667,
+            "process_cpu_seconds": 4.119574,
+            "average_fps": 29.967196200535486,
+            "p99_frame_ms": 38.012625,
+            "worst_frame_ms": 39.954459,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "sample",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 94593227444625,
+              "end_ns": 94613127135708,
+              "thread_cpu_ns": 3694555667,
+              "process_cpu_ns": 4119574000,
+              "guarded_poll_trace_enabled": true,
+              "guarded_poll_trace_entries": 6748762,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 19837,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 44,
+              "total_runnable_samples": 3971,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          },
+          {
+            "application": "candidate",
+            "mode": "sample",
+            "binary_sha256": "842cc2ea6725ae4aa59b9f6634f1b99f5694c95d9ebb39a4f5dd01ad553dcb02",
+            "timing": {
+              "frame_rows": 3328,
+              "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+              "profile_bounds": [
+                16000000128,
+                19980003904
+              ],
+              "probe_bounds": [
+                16002262976,
+                20002576832
+              ],
+              "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+            },
+            "trace_entries": 6748762,
+            "thread_cpu_seconds": 2.973999375,
+            "process_cpu_seconds": 3.329181,
+            "average_fps": 29.963355969062224,
+            "p99_frame_ms": 37.894791,
+            "worst_frame_ms": 38.843917,
+            "stutter_count": 0,
+            "all_intervals_over_threshold": [],
+            "stutter_threshold_ms": 50.0,
+            "profile_metadata": {
+              "schema_version": 1,
+              "mode": "sample",
+              "jit_backend": "ARM64",
+              "complete": true,
+              "start_cycle": 16000000128,
+              "end_cycle": 19980003904,
+              "start_ns": 94694330513000,
+              "end_ns": 94714231274958,
+              "thread_cpu_ns": 2973999375,
+              "process_cpu_ns": 3329181000,
+              "guarded_poll_trace_enabled": true,
+              "guarded_poll_trace_entries": 6748762,
+              "sample_period_ns": 1003009,
+              "sample_attempts": 19830,
+              "sample_errors": 0,
+              "dropped_samples": 0,
+              "missed_sample_deadlines": 62,
+              "total_runnable_samples": 3205,
+              "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+            }
+          }
+        ],
+        "all_timing_fingerprints_identical": true,
+        "candidate_trace_entered_every_run": true,
+        "candidate_sample_profiles": [
+          {
+            "capture": "<checkout>/.cache/sh4-trace-comparison/sh4-h3l397ln/sample-07-candidate-sample/sh4-profile.json",
+            "capture_sha256": "69d2651439cac17a377435d523f5c3ddf3085374e894d9baa11e008cdfee53eb",
+            "accounting": {
+              "total_cpu_samples": 2758.0,
+              "mapped_cpu_samples": 2054.0,
+              "exclusive_loop_samples": 827.0,
+              "two_block_cycle_exclusive_samples": 604.0,
+              "natural_loop_exclusive_samples": 211.0,
+              "irreducible_residual_exclusive_samples": 12.0,
+              "unknown_entry_cyclic_residual_samples": 0.0,
+              "outside_loop_samples": 1227.0,
+              "ambiguous_overlap_samples": 0.0,
+              "unmapped_cpu_samples": 704.0,
+              "excluded_boundary_edge_executions": 18097570,
+              "unresolved_target_edge_executions": 133,
+              "mapped_coverage_percent": 74.47425670775925,
+              "mapped_to_guest_instruction_samples": 1294.0,
+              "call_continuation_upper_bound_estimate": 9044247
+            },
+            "sample_summary": {
+              "total": 2758.0,
+              "mapped_direct_jit": 1208.0,
+              "mapped_via_jit_caller": 846.0,
+              "unmapped": 704.0,
+              "excluded_non_runnable": 0.0,
+              "cpu_period_ns": 1003009,
+              "unmapped_native_leaf_samples": {
+                "_Z17sh4_sched_requestii": 27.0,
+                "_xzm_xzone_malloc": 2.0,
+                "_Z15dec_DecodeBlockP16RuntimeBlockInfoj": 7.0,
+                "_Z17UpdateSystem_INTCv": 25.0,
+                "unknown native leaf": 125.0,
+                "__sfvwrite": 1.0,
+                "_ZN4aica16writeRegInternalIhEEvjT_": 9.0,
+                "_ZN4aica3sgc9ChannelEx3Lfo8CalcPlfoILNS0_7LFOTypeE3EEEvv": 144.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb1ELb0EEEjjj": 25.0,
+                "_Z14sh4_sched_ticki": 48.0,
+                "mach_msg2_trap": 3.0,
+                "_ZN4aica4initEv": 1.0,
+                "_ZN4aica3arm7readRegIjEET_j": 4.0,
+                "_ZN4aica3sgc11AICA_SampleEv": 117.0,
+                "_ZN4vixl7aarch6414MacroAssembler4FdivERKNS0_9VRegisterES4_S4_": 3.0,
+                "_platform_memmove": 5.0,
+                "_ZN16RuntimeBlockInfo6AddRefERKNSt3__110shared_ptrIS_EE": 1.0,
+                "_ZN12SSAOptimizer8OptimizeEv": 1.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE0ELb1ELb0EEEvv": 10.0,
+                "_ZN9Sh4Cycles11countCyclesEt": 3.0,
+                "_ZN8Emulator9openGdromEv": 4.0,
+                "_Z8spg_Initv": 10.0,
+                "_xzm_xzone_malloc_tiny": 3.0,
+                "_DPSNextEvent": 1.0,
+                "_ZN4aica8timeStepEv": 4.0,
+                "_xzm_free": 3.0,
+                "_Z13sh4_loop_ticky": 4.0,
+                "_ZN4aica3arm10recompiler9interpretEj": 5.0,
+                "__mprotect": 1.0,
+                "GetMainEventLoop": 1.0,
+                "_Z16input_sdl_handlev": 2.0,
+                "_ZN4aica19writeTimerAndIntRegIhEEvjT_": 2.0,
+                "_ZN13Arm64RegAlloc13Writeback_FPUEj5eFReg": 3.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb1ELb1EEEjjj": 6.0,
+                "_Z11rend_vblankv": 1.0,
+                "-[NSString compare:]": 1.0,
+                "sys_icache_invalidate": 1.0,
+                "_Z11WriteSampless": 5.0,
+                "__semwait_signal": 12.0,
+                "_ZN4aica15readRegInternalItEET_j": 5.0,
+                "_xzm_xzone_malloc_small_freelist": 1.0,
+                "_ZL16MainLoopObserverjP14OpaqueEventRefPv": 1.0,
+                "_ZN4aica3arm13CPUUpdateCPSREv": 3.0,
+                "_ZNK4vixl7aarch647Operand17IsShiftedRegisterEv": 1.0,
+                "_Z12maple_vblankv": 1.0,
+                "_Z19libCore_CDDA_SectorPs": 1.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE2ELb0ELb0EEEvv": 8.0,
+                "_ZN4aica3arm3runEj": 3.0,
+                "objc_msgSend$count": 1.0,
+                "_ZN4aica19writeTimerAndIntRegItEEvjT_": 1.0,
+                "_ZN4aica3sgc13ReadCommonRegEjb": 4.0,
+                "_ZN12SSAOptimizer22SimplifyExpressionPassEv": 1.0,
+                "_xzm_xzone_thread_cache_fill_and_malloc": 1.0,
+                "_platform_strlen": 2.0,
+                "usbi_get_real_time": 1.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE2ELb1ELb0EEEvv": 1.0,
+                "_ZN12SSAOptimizer14AddVersionPassEv": 1.0,
+                "_Z14disassemble_opPKcjt": 2.0,
+                "-[__NSArrayM countByEnumeratingWithState:objects:count:]": 1.0,
+                "_ZN8Emulator6vblankEv": 1.0,
+                "_ZN7NetDimm6rebootEv": 1.0,
+                "_ZN4aica13Write_SB_STAGILj6256736EL16HollyInterruptID530EXadL_ZNS_8DDEV_TAGEEEEEvjj": 1.0,
+                "_ZN4aica3arm15interruptChangeEjj": 1.0,
+                "_Z15rend_is_enabledv": 1.0,
+                "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9push_backEc": 1.0,
+                "_ZN4aica3sgc9ChannelEx7AegStepILNS0_7EGStateE2EEEvv": 1.0,
+                "_free": 1.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb0ELb0EEEjjj": 2.0,
+                "-[NSMenuItem title]": 2.0,
+                "_ZN10vmu_window6updateEP10SDL_Windowb": 2.0,
+                "_platform_memset": 1.0,
+                "SDL_DYNAPI_entry": 1.0,
+                "_Z11bm_GetBlockj": 2.0,
+                "_ZN12SSAOptimizer19DeadCodeRemovalPassEv": 1.0,
+                "objc_msgSend": 1.0,
+                "-[NSMenu indexOfItemWithTitle:]": 1.0,
+                "pthread_mutex_lock": 1.0,
+                "_DPSConvertMaskToEventTypeList": 1.0,
+                "_kernelrpc_mach_port_extract_member_trap": 1.0,
+                "_ZN4aica3sgc9ChannelEx7FegStepILNS0_7EGStateE0EEEvv": 2.0,
+                "-[NSArray makeObjectsPerformSelector:]": 1.0,
+                "_Z17mainui_rend_framev": 1.0,
+                "_kernelrpc_mach_port_insert_member_trap": 1.0,
+                "__CF_IS_OBJC": 1.0,
+                "_ZN16RuntimeBlockInfo17SetProtectedFlagsEv": 1.0,
+                "_Z8gui_initv": 1.0,
+                "_pthread_mutex_lock_init_slow": 1.0,
+                "_pthread_exit_if_canceled": 1.0
+              },
+              "mapped_to_guest_instruction_samples": 1294.0,
+              "mapped_to_guest_block_only_samples": 760.0
+            },
+            "boundary_match": true,
+            "unmatched_code_samples": 0.0,
+            "cycle": {
+              "exclusive_cpu_samples": 589.0,
+              "exclusive_cpu_percent": 21.35605511240029,
+              "exclusive_cpu_ms_estimate": 528.6089558966643,
+              "exclusive_process_cpu_percent_estimate": 18.79314086499118,
+              "exclusive_cpu_sample_categories": {
+                "jit_self/unclassified": 560.0,
+                "callee_via_jit_return/unclassified": 25.0,
+                "jit_self/register_load": 3.0,
+                "jit_self/register_store": 1.0
+              },
+              "exclusive_guest_pc_samples": {
+                "0x8c05b3d0": 27.0,
+                "0x8c05b3d2": 18.0,
+                "0x8c05b3aa": 143.0,
+                "0x8c05b3a6": 2.0,
+                "0x8c05b3a4": 3.0,
+                "0x8c05b3a8": 1.0
+              },
+              "cycle_edge_traversals": [
+                {
+                  "from": "13418",
+                  "to": "13419",
+                  "count": 188904658,
+                  "call_continuation_upper_bound_estimate": 0
+                },
+                {
+                  "from": "13419",
+                  "to": "13418",
+                  "count": 188904061,
+                  "call_continuation_upper_bound_estimate": 0
+                }
+              ]
+            }
+          },
+          {
+            "capture": "<checkout>/.cache/sh4-trace-comparison/sh4-h3l397ln/sample-08-candidate-sample/sh4-profile.json",
+            "capture_sha256": "0369d16916719e9e4a54c0ecfbd01cdc43be4e471612c1c7a44361240d416be1",
+            "accounting": {
+              "total_cpu_samples": 3971.0,
+              "mapped_cpu_samples": 3129.0,
+              "exclusive_loop_samples": 1258.0,
+              "two_block_cycle_exclusive_samples": 934.0,
+              "natural_loop_exclusive_samples": 301.0,
+              "irreducible_residual_exclusive_samples": 23.0,
+              "unknown_entry_cyclic_residual_samples": 0.0,
+              "outside_loop_samples": 1870.0,
+              "ambiguous_overlap_samples": 1.0,
+              "unmapped_cpu_samples": 842.0,
+              "excluded_boundary_edge_executions": 18097570,
+              "unresolved_target_edge_executions": 133,
+              "mapped_coverage_percent": 78.79627297909846,
+              "mapped_to_guest_instruction_samples": 1876.0,
+              "call_continuation_upper_bound_estimate": 9044247
+            },
+            "sample_summary": {
+              "total": 3971.0,
+              "mapped_direct_jit": 1797.0,
+              "mapped_via_jit_caller": 1332.0,
+              "unmapped": 842.0,
+              "excluded_non_runnable": 0.0,
+              "cpu_period_ns": 1003009,
+              "unmapped_native_leaf_samples": {
+                "_ZN4aica15readRegInternalItEET_j": 6.0,
+                "_ZN4aica3sgc9ChannelEx3Lfo8CalcPlfoILNS0_7LFOTypeE3EEEvv": 139.0,
+                "clock_gettime": 1.0,
+                "_ZN6config24customTexturePreloadModeEv": 1.0,
+                "_ZN4aica19writeTimerAndIntRegIhEEvjT_": 3.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb1ELb0EEEjjj": 26.0,
+                "_ZN4aica3sgc11AICA_SampleEv": 135.0,
+                "unknown native leaf": 158.0,
+                "_Z17sh4_sched_requestii": 30.0,
+                "_platform_memset": 1.0,
+                "mach_msg2_trap": 7.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb1ELb1EEEjjj": 7.0,
+                "_ZN4aica3sgc9ChannelEx7AegStepILNS0_7EGStateE2EEEvv": 3.0,
+                "_Z14sh4_sched_ticki": 43.0,
+                "_Z17UpdateSystem_INTCv": 36.0,
+                "_ZL16MainLoopObserverjP14OpaqueEventRefPv": 1.0,
+                "_ZN4aica3arm13CPUUpdateCPSREv": 3.0,
+                "_Z13sh4_loop_ticky": 13.0,
+                "_ZN4aica3arm10recompiler9interpretEj": 15.0,
+                "_ZN4aica3arm7readRegIjEET_j": 6.0,
+                "_ZN4vixl7aarch6414MacroAssembler4FdivERKNS0_9VRegisterES4_S4_": 7.0,
+                "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcm": 1.0,
+                "_xzm_free": 2.0,
+                "mach_continuous_time": 1.0,
+                "_Znwm": 2.0,
+                "xzm_malloc": 3.0,
+                "_ZN9Sh4Cycles11countCyclesEt": 3.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE0ELb1ELb0EEEvv": 8.0,
+                "__semwait_signal": 17.0,
+                "_ZN4aica8timeStepEv": 15.0,
+                "_Z8spg_Initv": 10.0,
+                "CFHash": 2.0,
+                "__ultoa": 1.0,
+                "_Z15dec_DecodeBlockP16RuntimeBlockInfoj": 3.0,
+                "_ZN12SSAOptimizer13ConstPropPassEv": 3.0,
+                "_ZN4vixl7aarch6414MacroAssembler11AddSubMacroERKNS0_8RegisterES4_RKNS0_7OperandENS0_11FlagsUpdateENS0_8AddSubOpE": 1.0,
+                "_ZN7NetDimm6rebootEv": 1.0,
+                "_ZN13Arm64RegAlloc13Writeback_FPUEj5eFReg": 1.0,
+                "sys_icache_invalidate": 2.0,
+                "__CF_IS_OBJC": 1.0,
+                "_ZN4aica19writeTimerAndIntRegItEEvjT_": 4.0,
+                "_Z11WriteSampless": 7.0,
+                "_DPSAllKitAndDPSModes": 1.0,
+                "_ZN4vixl7aarch649Assembler9LoadOpForERKNS0_11CPURegisterE": 1.0,
+                "_platform_memmove": 2.0,
+                "objc_msgSend$title": 2.0,
+                "_xzm_xzone_malloc_freelist_outlined": 3.0,
+                "_Z14sdl_stopHaptici": 1.0,
+                "_xzm_xzone_malloc_tiny": 5.0,
+                "_ZnwmSt19__type_descriptor_t": 1.0,
+                "_Z11bm_GetBlockPv": 1.0,
+                "+[NSObject performSelector:]": 1.0,
+                "__vfprintf": 1.0,
+                "_ZN4aica3arm3runEj": 3.0,
+                "CFRunLoopRemoveObserver": 1.0,
+                "_ZN4aica3sgc13ReadCommonRegEjb": 5.0,
+                "_ZN6Boxart18checkpointPlaytimeEb": 1.0,
+                "_Z19libCore_CDDA_SectorPs": 1.0,
+                "_xzm_xzone_malloc": 2.0,
+                "objc_msgSend$objectAtIndex:": 1.0,
+                "_ZN4aica3sgc9ChannelEx7FegStepILNS0_7EGStateE0EEEvv": 3.0,
+                "_ZN17assembly_debugger12breakPendingEv": 1.0,
+                "_ZN4aica3arm8writeRegIhEEvjT_": 2.0,
+                "_ZN19performance_overlay15recordSh4VblankEv": 1.0,
+                "_ZN4aica4initEv": 5.0,
+                "nanosleep": 2.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb0ELb0EEEjjj": 1.0,
+                "_sigtramp": 1.0,
+                "__v2printf": 1.0,
+                "-[__NSArrayM count]": 1.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE2ELb1ELb0EEEvv": 1.0,
+                "getenv": 1.0,
+                "_ZN4aica3dsp7runStepEv": 2.0,
+                "_Z24dec_i0000_0000_0000_1001j": 1.0,
+                "MPCurrentTaskID": 1.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb0ELb1EEEjjj": 4.0,
+                "_ZN19performance_overlay20recordPvrFrameBudgetEj": 1.0,
+                "_ZN16RuntimeBlockInfo17SetProtectedFlagsEv": 1.0,
+                "_Z17mainui_rend_framev": 1.0,
+                "_ZN4aica16writeRegInternalIhEEvjT_": 5.0,
+                "GetCurrentEventQueue": 2.0,
+                "_pthread_mutex_unlock_init_slow": 1.0,
+                "_Z14disassemble_opPKcjt": 1.0,
+                "_Z11bm_GetBlockj": 1.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE2ELb0ELb0EEEvv": 6.0,
+                "_Z24dec_i1000_1001_iiii_iiiij": 1.0,
+                "-[NSMenu itemWithTag:]": 1.0,
+                "_Z17sh4_loop_registerP16RuntimeBlockInfo": 1.0,
+                "SDL_DYNAPI_entry": 3.0,
+                "_ZNSt3__111this_thread9sleep_forERKNS_6chrono8durationIxNS_5ratioILl1ELl1000000000EEEEE": 1.0,
+                "-[NSMenuItem title]": 1.0,
+                "_TSThreadManagerInitialized": 1.0,
+                "_ZNK4vixl7aarch649Assembler6CPUHasENS0_14SystemRegisterE": 1.0,
+                "_ZN16CoreAudioBackend14recordCallbackEPvP16OpaqueAudioQueueP16AudioQueueBufferPK14AudioTimeStampjPK28AudioStreamPacketDescription": 1.0,
+                "+[_NSTrackingAreaCGManager discardTrackingAndCursorEventsIfNeeded]": 1.0,
+                "_platform_strlen": 1.0,
+                "_kernelrpc_mach_port_insert_member_trap": 1.0,
+                "_ZN12SSAOptimizer19DeadCodeRemovalPassEv": 1.0,
+                "clock_get_time": 1.0,
+                "_ZN7dpp_api9DppDevice8getEpOutEv": 1.0,
+                "+[NSEvent _delayedEventMatchingMask:pull:]": 1.0,
+                "_Z16input_sdl_handlev": 1.0,
+                "objc_autorelease": 1.0,
+                "__sfvwrite": 1.0,
+                "_ZN12SSAOptimizer16DeadRegisterPassEv": 1.0,
+                "__CFCheckCFInfoPACSignature_Bridged": 1.0,
+                "_Z8gui_initv": 1.0,
+                "_availability_version_check": 1.0,
+                "_ZN8Emulator6vblankEv": 1.0,
+                "objc_msgSend": 1.0,
+                "_xzm_chunk_list_pop": 1.0,
+                "-[NSMenu indexOfItemWithTitle:]": 1.0,
+                "-[NSApplication mainMenu]": 1.0,
+                "objc_autoreleasePoolPop": 1.0,
+                "+[_NSTrackingAreaAKManager discardTrackingAndCursorEventsIfNeeded]": 1.0,
+                "objc_msgSend$compare:": 1.0
+              },
+              "mapped_to_guest_instruction_samples": 1876.0,
+              "mapped_to_guest_block_only_samples": 1253.0
+            },
+            "boundary_match": true,
+            "unmatched_code_samples": 0.0,
+            "cycle": {
+              "exclusive_cpu_samples": 917.0,
+              "exclusive_cpu_percent": 23.092420045328634,
+              "exclusive_cpu_ms_estimate": 853.1623134321329,
+              "exclusive_process_cpu_percent_estimate": 20.70996451167361,
+              "exclusive_cpu_sample_categories": {
+                "jit_self/unclassified": 882.0,
+                "callee_via_jit_return/unclassified": 24.0,
+                "jit_self/register_load": 8.0,
+                "jit_self/register_store": 3.0
+              },
+              "exclusive_guest_pc_samples": {
+                "0x8c05b3aa": 140.0,
+                "0x8c05b3d2": 6.0,
+                "0x8c05b3a4": 2.0,
+                "0x8c05b3d0": 17.0,
+                "0x8c05b3a6": 3.0
+              },
+              "cycle_edge_traversals": [
+                {
+                  "from": "13418",
+                  "to": "13419",
+                  "count": 188904658,
+                  "call_continuation_upper_bound_estimate": 0
+                },
+                {
+                  "from": "13419",
+                  "to": "13418",
+                  "count": 188904061,
+                  "call_continuation_upper_bound_estimate": 0
+                }
+              ]
+            }
+          },
+          {
+            "capture": "<checkout>/.cache/sh4-trace-comparison/sh4-h3l397ln/sample-09-candidate-sample/sh4-profile.json",
+            "capture_sha256": "fc055ba1caeb3d0d7c68ca2502c450fe167d12b157de55dcc430f404236d9876",
+            "accounting": {
+              "total_cpu_samples": 3205.0,
+              "mapped_cpu_samples": 2523.0,
+              "exclusive_loop_samples": 1043.0,
+              "two_block_cycle_exclusive_samples": 803.0,
+              "natural_loop_exclusive_samples": 212.0,
+              "irreducible_residual_exclusive_samples": 27.0,
+              "unknown_entry_cyclic_residual_samples": 1.0,
+              "outside_loop_samples": 1479.0,
+              "ambiguous_overlap_samples": 1.0,
+              "unmapped_cpu_samples": 682.0,
+              "excluded_boundary_edge_executions": 18097570,
+              "unresolved_target_edge_executions": 133,
+              "mapped_coverage_percent": 78.7207488299532,
+              "mapped_to_guest_instruction_samples": 1536.0,
+              "call_continuation_upper_bound_estimate": 9044247
+            },
+            "sample_summary": {
+              "total": 3205.0,
+              "mapped_direct_jit": 1451.0,
+              "mapped_via_jit_caller": 1072.0,
+              "unmapped": 682.0,
+              "excluded_non_runnable": 0.0,
+              "cpu_period_ns": 1003009,
+              "unmapped_native_leaf_samples": {
+                "_ZN4aica19writeTimerAndIntRegIhEEvjT_": 3.0,
+                "_ZN4aica3sgc11AICA_SampleEv": 140.0,
+                "_platform_memmove": 3.0,
+                "_kernelrpc_mach_port_insert_member_trap": 2.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb1ELb0EEEjjj": 21.0,
+                "_ZN12SSAOptimizer16DeadRegisterPassEv": 2.0,
+                "_ZN4aica3sgc9ChannelEx3Lfo8CalcPlfoILNS0_7LFOTypeE3EEEvv": 126.0,
+                "unknown native leaf": 118.0,
+                "_Z17UpdateSystem_INTCv": 25.0,
+                "_ZN4aica3sgc9ChannelEx7FegStepILNS0_7EGStateE0EEEvv": 5.0,
+                "_Z14sh4_sched_ticki": 47.0,
+                "_ZN4aica15readRegInternalItEET_j": 3.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE0ELb1ELb0EEEvv": 11.0,
+                "_ZN4aica3sgc9ChannelEx7AegStepILNS0_7EGStateE2EEEvv": 3.0,
+                "__semwait_signal": 15.0,
+                "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9push_backEc": 2.0,
+                "_ZN4aica3arm10recompiler9interpretEj": 16.0,
+                "_ZZNK3$_0clEvENUlmSt19__type_descriptor_tE0_8__invokeEmS0_": 1.0,
+                "_xzm_xzone_malloc_small_freelist": 2.0,
+                "_ZN4vixl7aarch6414MacroAssembler4FdivERKNS0_9VRegisterES4_S4_": 5.0,
+                "_Z17sh4_sched_requestii": 20.0,
+                "_ZN4aica3arm3runEj": 3.0,
+                "_ZN4vixl7aarch649Assembler27OneInstrMoveImmediateHelperEPS1_RKNS0_8RegisterEy": 1.0,
+                "_Z11WriteSampless": 4.0,
+                "_Z15dec_DecodeBlockP16RuntimeBlockInfoj": 2.0,
+                "mach_msg2_trap": 3.0,
+                "_ZN4aica8timeStepEv": 8.0,
+                "_ZN8Emulator6renderEv": 1.0,
+                "_ZN4aica3arm15interruptChangeEjj": 2.0,
+                "+[NSThread isMainThread]": 2.0,
+                "_xzm_xzone_malloc_tiny": 2.0,
+                "xzm_malloc_zone_try_free_default": 1.0,
+                "_Z14disassemble_opPKcjt": 2.0,
+                "_free": 2.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb0ELb0EEEjjj": 2.0,
+                "_ZN4aica3arm13CPUUpdateCPSREv": 2.0,
+                "_Z8UpdateSRv": 1.0,
+                "_ZN4aica3sgc13ReadCommonRegEjb": 5.0,
+                "__CFRunLoopCopyMode": 1.0,
+                "__CFCheckCFInfoPACSignature_Bridged": 1.0,
+                "_ZN4aica16writeRegInternalIhEEvjT_": 4.0,
+                "_Z13sh4_loop_ticky": 5.0,
+                "_ZN16RuntimeBlockInfo17SetProtectedFlagsEv": 1.0,
+                "_platform_memset": 2.0,
+                "_xzm_xzone_malloc": 1.0,
+                "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcm": 1.0,
+                "-[__NSArrayI count]": 1.0,
+                "_Z8spg_Initv": 3.0,
+                "_ZN4vixl7aarch649Assembler7LogicalERKNS0_8RegisterES4_NS0_7OperandENS0_9LogicalOpE": 1.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb0ELb1EEEjjj": 3.0,
+                "_Z17mainui_rend_framev": 1.0,
+                "SDL_DYNAPI_entry": 2.0,
+                "_xzm_xzone_thread_cache_fill_and_malloc": 3.0,
+                "__vfprintf": 1.0,
+                "sys_icache_invalidate": 2.0,
+                "_ZN4aica4initEv": 2.0,
+                "_ZN4aica3arm8writeRegIhEEvjT_": 2.0,
+                "_ZN4aica19writeTimerAndIntRegItEEvjT_": 3.0,
+                "_ZN7NetDimm6rebootEv": 1.0,
+                "-[NSMenuItem tag]": 1.0,
+                "_DPSNextEvent": 1.0,
+                "_ZN4aica3arm10recompiler7DoMemOpILb1ELb1EEEjjj": 2.0,
+                "CFRunLoopRunInModeWithOptions": 1.0,
+                "_ZN4aica3arm7readRegIjEET_j": 5.0,
+                "_sigtramp": 1.0,
+                "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE2ELb0ELb0EEEvv": 6.0,
+                "__CFRunLoopDoObservers": 1.0,
+                "_xzm_free": 1.0,
+                "_pthread_exit_if_canceled": 1.0,
+                "_ZN13Arm64RegAlloc7PreloadEj4eReg": 1.0,
+                "_NotifyEventLoopObservers": 1.0,
+                "_ZN19performance_overlay20recordPvrFrameBudgetEj": 1.0,
+                "_platform_strlen": 1.0,
+                "-[NSDate timeIntervalSinceNow]": 1.0,
+                "resolveUpdateCycleEnabledOnce": 1.0,
+                "_Z11mainui_loopb": 1.0,
+                "CFRunLoopRunInMode": 1.0
+              },
+              "mapped_to_guest_instruction_samples": 1536.0,
+              "mapped_to_guest_block_only_samples": 987.0
+            },
+            "boundary_match": true,
+            "unmatched_code_samples": 0.0,
+            "cycle": {
+              "exclusive_cpu_samples": 786.0,
+              "exclusive_cpu_percent": 24.52418096723869,
+              "exclusive_cpu_ms_estimate": 729.3489886895477,
+              "exclusive_process_cpu_percent_estimate": 21.907760157514645,
+              "exclusive_cpu_sample_categories": {
+                "jit_self/unclassified": 750.0,
+                "callee_via_jit_return/unclassified": 27.0,
+                "jit_self/register_load": 8.0,
+                "jit_self/register_store": 1.0
+              },
+              "exclusive_guest_pc_samples": {
+                "0x8c05b3d0": 25.0,
+                "0x8c05b3aa": 135.0,
+                "0x8c05b3a4": 3.0,
+                "0x8c05b3a6": 6.0,
+                "0x8c05b3d2": 12.0
+              },
+              "cycle_edge_traversals": [
+                {
+                  "from": "13418",
+                  "to": "13419",
+                  "count": 188904658,
+                  "call_continuation_upper_bound_estimate": 0
+                },
+                {
+                  "from": "13419",
+                  "to": "13418",
+                  "count": 188904061,
+                  "call_continuation_upper_bound_estimate": 0
+                }
+              ]
+            }
+          }
+        ],
+        "post_change_hot_cycle": {
+          "exclusive_cpu_samples": 2292.0,
+          "total_thread_samples": 9934.0,
+          "thread_cpu_percent_estimate": 23.072277028387358,
+          "per_run_thread_cpu_percent_estimate": [
+            21.35605511240029,
+            23.092420045328634,
+            24.52418096723869
+          ],
+          "per_run_cpu_ms_estimate": [
+            528.6089558966643,
+            853.1623134321329,
+            729.3489886895477
+          ]
+        },
+        "limitations": [
+          "Off-mode clocks provide the paired optimization comparison; sample profiles are statistical attribution.",
+          "Fused native code in block B contains guest instructions from both A and B; compare the cycle union, not isolated native-block shares.",
+          "Manually emitted trace state commits/reloads do not pass allocator span hooks; allocator-span category changes do not measure total eliminated synchronization.",
+          "Three paired off-mode samples per application are not a formal regression-confidence guarantee."
+        ]
+      }
+    },
+    "fixed_work": {
+      "path": "<checkout>/.cache/sh4-trace-tests/fixed-work-benchmark-v2.json",
+      "sha256": "a307d2d55060dbb22798bfa3b53e65a274a91ab1a2a6c56e50e9791a5e8e8377",
+      "data": {
+        "all_context_and_scheduler_checks_passed": true,
+        "callback_interval_cycles": 8192,
+        "method": "same Release test binary; config off/on; precompile with CpuRunning true; continuous untimed warm then fixed guest-cycle CPU interval; normal scheduler/AICA/PVR work retained; audio backend closed and renderer disabled",
+        "requested_guest_cycles": 400000000,
+        "samples": [
+          {
+            "guarded_trace": false,
+            "guest_cycles": 400007104,
+            "round": 1,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.048613082999999994,
+            "trace_entries": 0,
+            "wall_seconds": 0.048659292
+          },
+          {
+            "guarded_trace": true,
+            "guest_cycles": 400007104,
+            "round": 1,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.036287165999999996,
+            "trace_entries": 892873,
+            "wall_seconds": 0.036304458
+          },
+          {
+            "guarded_trace": true,
+            "guest_cycles": 400007104,
+            "round": 2,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.035432208,
+            "trace_entries": 892873,
+            "wall_seconds": 0.035451041999999995
+          },
+          {
+            "guarded_trace": false,
+            "guest_cycles": 400007104,
+            "round": 2,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.04815,
+            "trace_entries": 0,
+            "wall_seconds": 0.048215333
+          },
+          {
+            "guarded_trace": false,
+            "guest_cycles": 400007104,
+            "round": 3,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.048069583,
+            "trace_entries": 0,
+            "wall_seconds": 0.048134791999999996
+          },
+          {
+            "guarded_trace": true,
+            "guest_cycles": 400007104,
+            "round": 3,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.035025833,
+            "trace_entries": 892873,
+            "wall_seconds": 0.035056541999999996
+          },
+          {
+            "guarded_trace": true,
+            "guest_cycles": 400007104,
+            "round": 4,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.035228541999999995,
+            "trace_entries": 892873,
+            "wall_seconds": 0.035254416999999996
+          },
+          {
+            "guarded_trace": false,
+            "guest_cycles": 400007104,
+            "round": 4,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.0482,
+            "trace_entries": 0,
+            "wall_seconds": 0.048239291999999996
+          },
+          {
+            "guarded_trace": false,
+            "guest_cycles": 400007104,
+            "round": 5,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.04810116699999999,
+            "trace_entries": 0,
+            "wall_seconds": 0.048177292
+          },
+          {
+            "guarded_trace": true,
+            "guest_cycles": 400007104,
+            "round": 5,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.035547249999999996,
+            "trace_entries": 892873,
+            "wall_seconds": 0.035594375
+          },
+          {
+            "guarded_trace": true,
+            "guest_cycles": 400007104,
+            "round": 6,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.034975333,
+            "trace_entries": 892873,
+            "wall_seconds": 0.034996666999999995
+          },
+          {
+            "guarded_trace": false,
+            "guest_cycles": 400007104,
+            "round": 6,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.04845625,
+            "trace_entries": 0,
+            "wall_seconds": 0.048494917
+          },
+          {
+            "guarded_trace": false,
+            "guest_cycles": 400007104,
+            "round": 7,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.048496958,
+            "trace_entries": 0,
+            "wall_seconds": 0.048544624999999994
+          },
+          {
+            "guarded_trace": true,
+            "guest_cycles": 400007104,
+            "round": 7,
+            "scheduler_callbacks": 48830,
+            "scheduler_digest": 18081345606337134654,
+            "thread_cpu_seconds": 0.034998875,
+            "trace_entries": 892873,
+            "wall_seconds": 0.035044457999999994
+          }
+        ],
+        "samples_per_mode": 7,
+        "schema": "hollycast-guarded-poll-fixed-work-v1",
+        "warmup_guest_cycles_min": 100000000
+      }
+    }
+  },
+  "profiling_and_trace_source_sha256": {
+    "<checkout>/tools/sh4-profile/compare.py": "2bbfb8087594141db9e18c474e065aba85b89a1e757d66d230057fd213b9d118",
+    "<checkout>/tools/sh4-profile/analyze.py": "b24745c4f1115f8db6236884aba88c34c17e469c4de323cddde54fbacd9c7e76",
+    "<checkout>/core/rec-ARM64/rec_arm64.cpp": "38f54ed44a131d8fd70f7ab72e219c0c9f37c66c91cf79d2b41227dd7264c609",
+    "<checkout>/tests/src/GuardedPollTraceTest.cpp": "ea0ab41f215aa420d8d2b79d94e43874596b7e2dd7c68453c8abf1765ddb8152"
+  },
+  "runs": [
+    {
+      "application": "baseline",
+      "mode": "off",
+      "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+      "timing": {
+        "frame_rows": 3328,
+        "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "profile_bounds": [
+          16000000128,
+          19980003904
+        ],
+        "probe_bounds": [
+          16002262976,
+          20002576832
+        ],
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      "trace_entries": 0,
+      "scene_thread_cpu_seconds": 3.809877084,
+      "scene_process_cpu_seconds": 3.944461,
+      "whole_replay_cpu_seconds": 20.185652,
+      "average_fps": 29.965370583330408,
+      "p99_frame_ms": 37.871208,
+      "worst_frame_ms": 38.199875,
+      "stutter_count": 0,
+      "all_intervals_over_threshold": [],
+      "stutter_threshold_ms": 50.0,
+      "profile_metadata": {
+        "schema_version": 1,
+        "mode": "off",
+        "jit_backend": "ARM64",
+        "complete": true,
+        "start_cycle": 16000000128,
+        "end_cycle": 19980003904,
+        "start_ns": 95296641609125,
+        "end_ns": 95316543150833,
+        "thread_cpu_ns": 3809877084,
+        "process_cpu_ns": 3944461000,
+        "sample_period_ns": 1003009,
+        "sample_attempts": 0,
+        "sample_errors": 0,
+        "dropped_samples": 0,
+        "missed_sample_deadlines": 0,
+        "total_runnable_samples": 0,
+        "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+      }
+    },
+    {
+      "application": "candidate",
+      "mode": "off",
+      "binary_sha256": "3c819006592c7251a459f8245a21e167b636fa13e638cb897bfe0368070e6c23",
+      "timing": {
+        "frame_rows": 3328,
+        "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "profile_bounds": [
+          16000000128,
+          19980003904
+        ],
+        "probe_bounds": [
+          16002262976,
+          20002576832
+        ],
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      "trace_entries": 6748762,
+      "scene_thread_cpu_seconds": 3.2002375,
+      "scene_process_cpu_seconds": 3.345335,
+      "whole_replay_cpu_seconds": 16.915444,
+      "average_fps": 29.96774309636844,
+      "p99_frame_ms": 37.906708,
+      "worst_frame_ms": 39.023667,
+      "stutter_count": 0,
+      "all_intervals_over_threshold": [],
+      "stutter_threshold_ms": 50.0,
+      "profile_metadata": {
+        "schema_version": 1,
+        "mode": "off",
+        "jit_backend": "ARM64",
+        "complete": true,
+        "start_cycle": 16000000128,
+        "end_cycle": 19980003904,
+        "start_ns": 95397369245208,
+        "end_ns": 95417269932750,
+        "thread_cpu_ns": 3200237500,
+        "process_cpu_ns": 3345335000,
+        "guarded_poll_trace_enabled": true,
+        "guarded_poll_trace_entries": 6748762,
+        "sample_period_ns": 1003009,
+        "sample_attempts": 0,
+        "sample_errors": 0,
+        "dropped_samples": 0,
+        "missed_sample_deadlines": 0,
+        "total_runnable_samples": 0,
+        "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+      }
+    },
+    {
+      "application": "candidate",
+      "mode": "off",
+      "binary_sha256": "3c819006592c7251a459f8245a21e167b636fa13e638cb897bfe0368070e6c23",
+      "timing": {
+        "frame_rows": 3328,
+        "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "profile_bounds": [
+          16000000128,
+          19980003904
+        ],
+        "probe_bounds": [
+          16002262976,
+          20002576832
+        ],
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      "trace_entries": 6748762,
+      "scene_thread_cpu_seconds": 3.50861325,
+      "scene_process_cpu_seconds": 3.644836,
+      "whole_replay_cpu_seconds": 15.938996999999999,
+      "average_fps": 29.964047584187163,
+      "p99_frame_ms": 37.924334,
+      "worst_frame_ms": 39.058625,
+      "stutter_count": 0,
+      "all_intervals_over_threshold": [],
+      "stutter_threshold_ms": 50.0,
+      "profile_metadata": {
+        "schema_version": 1,
+        "mode": "off",
+        "jit_backend": "ARM64",
+        "complete": true,
+        "start_cycle": 16000000128,
+        "end_cycle": 19980003904,
+        "start_ns": 95498067629458,
+        "end_ns": 95517969191416,
+        "thread_cpu_ns": 3508613250,
+        "process_cpu_ns": 3644836000,
+        "guarded_poll_trace_enabled": true,
+        "guarded_poll_trace_entries": 6748762,
+        "sample_period_ns": 1003009,
+        "sample_attempts": 0,
+        "sample_errors": 0,
+        "dropped_samples": 0,
+        "missed_sample_deadlines": 0,
+        "total_runnable_samples": 0,
+        "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+      }
+    },
+    {
+      "application": "baseline",
+      "mode": "off",
+      "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+      "timing": {
+        "frame_rows": 3328,
+        "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "profile_bounds": [
+          16000000128,
+          19980003904
+        ],
+        "probe_bounds": [
+          16002262976,
+          20002576832
+        ],
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      "trace_entries": 0,
+      "scene_thread_cpu_seconds": 4.365513333,
+      "scene_process_cpu_seconds": 4.500124,
+      "whole_replay_cpu_seconds": 20.431027999999998,
+      "average_fps": 29.968137117095342,
+      "p99_frame_ms": 38.150167,
+      "worst_frame_ms": 39.320916,
+      "stutter_count": 0,
+      "all_intervals_over_threshold": [],
+      "stutter_threshold_ms": 50.0,
+      "profile_metadata": {
+        "schema_version": 1,
+        "mode": "off",
+        "jit_backend": "ARM64",
+        "complete": true,
+        "start_cycle": 16000000128,
+        "end_cycle": 19980003904,
+        "start_ns": 95598803470166,
+        "end_ns": 95618704137500,
+        "thread_cpu_ns": 4365513333,
+        "process_cpu_ns": 4500124000,
+        "sample_period_ns": 1003009,
+        "sample_attempts": 0,
+        "sample_errors": 0,
+        "dropped_samples": 0,
+        "missed_sample_deadlines": 0,
+        "total_runnable_samples": 0,
+        "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+      }
+    },
+    {
+      "application": "baseline",
+      "mode": "off",
+      "binary_sha256": "6d83ae5b0f85dff60c09f9e279059d167de19a345f6edd4c3cee813cec97b953",
+      "timing": {
+        "frame_rows": 3328,
+        "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "profile_bounds": [
+          16000000128,
+          19980003904
+        ],
+        "probe_bounds": [
+          16002262976,
+          20002576832
+        ],
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      "trace_entries": 0,
+      "scene_thread_cpu_seconds": 4.155240333,
+      "scene_process_cpu_seconds": 4.31046,
+      "whole_replay_cpu_seconds": 19.515933,
+      "average_fps": 29.96858150057145,
+      "p99_frame_ms": 37.783416,
+      "worst_frame_ms": 40.263584,
+      "stutter_count": 0,
+      "all_intervals_over_threshold": [],
+      "stutter_threshold_ms": 50.0,
+      "profile_metadata": {
+        "schema_version": 1,
+        "mode": "off",
+        "jit_backend": "ARM64",
+        "complete": true,
+        "start_cycle": 16000000128,
+        "end_cycle": 19980003904,
+        "start_ns": 95699541317958,
+        "end_ns": 95719440628041,
+        "thread_cpu_ns": 4155240333,
+        "process_cpu_ns": 4310460000,
+        "sample_period_ns": 1003009,
+        "sample_attempts": 0,
+        "sample_errors": 0,
+        "dropped_samples": 0,
+        "missed_sample_deadlines": 0,
+        "total_runnable_samples": 0,
+        "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+      }
+    },
+    {
+      "application": "candidate",
+      "mode": "off",
+      "binary_sha256": "3c819006592c7251a459f8245a21e167b636fa13e638cb897bfe0368070e6c23",
+      "timing": {
+        "frame_rows": 3328,
+        "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "profile_bounds": [
+          16000000128,
+          19980003904
+        ],
+        "probe_bounds": [
+          16002262976,
+          20002576832
+        ],
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      "trace_entries": 6748762,
+      "scene_thread_cpu_seconds": 4.015384542,
+      "scene_process_cpu_seconds": 4.148356,
+      "whole_replay_cpu_seconds": 16.946326,
+      "average_fps": 29.968186342114734,
+      "p99_frame_ms": 38.071041,
+      "worst_frame_ms": 39.273458,
+      "stutter_count": 0,
+      "all_intervals_over_threshold": [],
+      "stutter_threshold_ms": 50.0,
+      "profile_metadata": {
+        "schema_version": 1,
+        "mode": "off",
+        "jit_backend": "ARM64",
+        "complete": true,
+        "start_cycle": 16000000128,
+        "end_cycle": 19980003904,
+        "start_ns": 95800280899416,
+        "end_ns": 95820181093958,
+        "thread_cpu_ns": 4015384542,
+        "process_cpu_ns": 4148356000,
+        "guarded_poll_trace_enabled": true,
+        "guarded_poll_trace_entries": 6748762,
+        "sample_period_ns": 1003009,
+        "sample_attempts": 0,
+        "sample_errors": 0,
+        "dropped_samples": 0,
+        "missed_sample_deadlines": 0,
+        "total_runnable_samples": 0,
+        "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+      }
+    },
+    {
+      "application": "candidate",
+      "mode": "sample",
+      "binary_sha256": "3c819006592c7251a459f8245a21e167b636fa13e638cb897bfe0368070e6c23",
+      "timing": {
+        "frame_rows": 3328,
+        "guest_frame_cycles_sha256": "ffd579fc390c38a07dac1329e785038e62d3b6fdfa379c6adbb3bac6fe6166c4",
+        "profile_bounds": [
+          16000000128,
+          19980003904
+        ],
+        "probe_bounds": [
+          16002262976,
+          20002576832
+        ],
+        "screenshot_sha256": "c3dc072b81531e1ce3b7abbef28256c2062b4fb83ed4082b649f3c1aa01c980c"
+      },
+      "trace_entries": 6748762,
+      "scene_thread_cpu_seconds": 3.876025708,
+      "scene_process_cpu_seconds": 4.381688,
+      "whole_replay_cpu_seconds": 19.536378000000003,
+      "average_fps": 29.96892486907441,
+      "p99_frame_ms": 38.087916,
+      "worst_frame_ms": 38.776458,
+      "stutter_count": 0,
+      "all_intervals_over_threshold": [],
+      "stutter_threshold_ms": 50.0,
+      "profile_metadata": {
+        "schema_version": 1,
+        "mode": "sample",
+        "jit_backend": "ARM64",
+        "complete": true,
+        "start_cycle": 16000000128,
+        "end_cycle": 19980003904,
+        "start_ns": 95900962881958,
+        "end_ns": 95920864211416,
+        "thread_cpu_ns": 3876025708,
+        "process_cpu_ns": 4381688000,
+        "guarded_poll_trace_enabled": true,
+        "guarded_poll_trace_entries": 6748762,
+        "sample_period_ns": 1003009,
+        "sample_attempts": 19841,
+        "sample_errors": 0,
+        "dropped_samples": 0,
+        "missed_sample_deadlines": 5,
+        "total_runnable_samples": 4253,
+        "cpu_method": "997Hz wall observations conditional on Mach RUNNING (includes runnable); CPU time and attribution are estimates, emulation thread only"
+      }
+    }
+  ],
+  "all_timing_fingerprints_identical": true,
+  "candidate_trace_entered_every_run": true,
+  "candidate_sample_profiles": [
+    {
+      "capture": "<checkout>/.cache/sh4-trace-v3-comparison/sh4-7sddj_2x/sample-07-candidate-sample/sh4-profile.json",
+      "capture_sha256": "faf1577c82088adf92b632d7f8e77962c05cafd61328bf08b9718b8280b6502c",
+      "accounting": {
+        "total_cpu_samples": 4253.0,
+        "mapped_cpu_samples": 3209.0,
+        "exclusive_loop_samples": 998.0,
+        "two_block_cycle_exclusive_samples": 564.0,
+        "natural_loop_exclusive_samples": 410.0,
+        "irreducible_residual_exclusive_samples": 23.0,
+        "unknown_entry_cyclic_residual_samples": 1.0,
+        "outside_loop_samples": 2211.0,
+        "ambiguous_overlap_samples": 0.0,
+        "unmapped_cpu_samples": 1044.0,
+        "excluded_boundary_edge_executions": 18097570,
+        "unresolved_target_edge_executions": 133,
+        "mapped_coverage_percent": 75.45262167881495,
+        "mapped_to_guest_instruction_samples": 2155.0,
+        "call_continuation_upper_bound_estimate": 9044247
+      },
+      "sample_summary": {
+        "total": 4253.0,
+        "mapped_direct_jit": 1618.0,
+        "mapped_via_jit_caller": 1591.0,
+        "unmapped": 1044.0,
+        "excluded_non_runnable": 0.0,
+        "cpu_period_ns": 1003009,
+        "unmapped_native_leaf_samples": {
+          "unknown native leaf": 194.0,
+          "_Z14sh4_sched_ticki": 77.0,
+          "_ZN4aica3arm10recompiler7DoMemOpILb1ELb0EEEjjj": 36.0,
+          "_Z11bm_AddBlockP16RuntimeBlockInfo": 3.0,
+          "_Z15dec_DecodeBlockP16RuntimeBlockInfoj": 2.0,
+          "_Z14disassemble_opPKcjt": 2.0,
+          "_ZN4aica8timeStepEv": 12.0,
+          "_ZN4aica3sgc9ChannelEx3Lfo8CalcPlfoILNS0_7LFOTypeE3EEEvv": 181.0,
+          "_ZN4aica3sgc11AICA_SampleEv": 216.0,
+          "__sfvwrite": 2.0,
+          "_ZN12SSAOptimizer14AddVersionPassEv": 2.0,
+          "_Z11WriteSampless": 4.0,
+          "+[NSDate distantPast]": 2.0,
+          "_ZN4aica3arm10recompiler9interpretEj": 11.0,
+          "_Z17sh4_sched_requestii": 49.0,
+          "_ZN4aica15readRegInternalItEET_j": 3.0,
+          "sys_icache_invalidate": 2.0,
+          "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE0ELb1ELb0EEEvv": 9.0,
+          "_ZN4aica3arm7readRegIjEET_j": 8.0,
+          "objc_msgSend$indexOfItemWithTag:": 1.0,
+          "_Z17UpdateSystem_INTCv": 30.0,
+          "mach_msg2_trap": 9.0,
+          "_Z25sh4_loop_metadata_enabledv": 1.0,
+          "_platform_memmove": 3.0,
+          "_ZN4aica3arm3runEj": 5.0,
+          "_ZN4aica3sgc9ChannelEx7FegStepILNS0_7EGStateE0EEEvv": 2.0,
+          "_Z17sh4_loop_countersP16RuntimeBlockInfo": 1.0,
+          "_ZN9Sh4Cycles11countCyclesEt": 1.0,
+          "_xzm_free": 5.0,
+          "_xzm_xzone_malloc_small_freelist": 2.0,
+          "_ZN4vixl7aarch649Assembler4ubfmERKNS0_8RegisterES4_jj": 1.0,
+          "_ZN4aica3arm10recompiler7DoMemOpILb1ELb1EEEjjj": 10.0,
+          "_xzm_xzone_malloc_tiny": 5.0,
+          "_ZN16RuntimeBlockInfo17SetProtectedFlagsEv": 2.0,
+          "_ZN4aica3dsp7runStepEv": 2.0,
+          "objc_msgSend": 1.0,
+          "__bzero": 1.0,
+          "_ZN4aica3sgc9ChannelEx7AegStepILNS0_7EGStateE2EEEvv": 4.0,
+          "_kernelrpc_mach_port_insert_member_trap": 2.0,
+          "__semwait_signal": 18.0,
+          "_ZN4aica3sgc13ReadCommonRegEjb": 6.0,
+          "_ZN8Emulator3runEv": 1.0,
+          "_Z8spg_Initv": 8.0,
+          "_ZN4vixl7aarch6423UseScratchRegisterScope16ReleaseByRegListEPNS0_10CPURegListEy": 1.0,
+          "_Znwm": 1.0,
+          "_ZN4aica3arm13CPUUpdateCPSREv": 1.0,
+          "_ZN4aica16writeRegInternalIhEEvjT_": 2.0,
+          "_xzm_xzone_thread_cache_fill_and_malloc": 1.0,
+          "_platform_strlen": 2.0,
+          "__vfprintf": 4.0,
+          "pthread_mutex_lock": 1.0,
+          "_ZN4aica3arm10recompiler7DoMemOpILb0ELb0EEEjjj": 2.0,
+          "_ZN4aica4initEv": 3.0,
+          "_ZN4aica3arm8writeRegIhEEvjT_": 4.0,
+          "_ZN4aica3arm10recompiler7DoMemOpILb0ELb1EEEjjj": 5.0,
+          "AcquireEventFromQueue": 1.0,
+          "objc_msgSend$isEqualToDate:": 1.0,
+          "+[_NSTrackingAreaCGManager discardTrackingAndCursorEventsIfNeeded]": 1.0,
+          "ReceiveNextEventCommon": 1.0,
+          "objc_msgSend$discardTrackingAndCursorEventsIfNeeded": 1.0,
+          "-[NSMenu indexOfItemWithTag:]": 1.0,
+          "_ZN4aica19writeTimerAndIntRegItEEvjT_": 1.0,
+          "objc_retain_x28": 1.0,
+          "_ZN13Arm64RegAlloc13Writeback_FPUEj5eFReg": 2.0,
+          "_ZN4aica3arm15interruptChangeEjj": 2.0,
+          "__findenv_locked": 1.0,
+          "CFEqual": 1.0,
+          "-[NSMenu itemWithTitle:]": 1.0,
+          "_ZN4vixl7aarch6414MacroAssembler4FdivERKNS0_9VRegisterES4_S4_": 6.0,
+          "os_unfair_lock_lock": 1.0,
+          "_xzm_xzone_malloc_freelist_outlined": 3.0,
+          "_ZN8Emulator9openGdromEv": 1.0,
+          "_ZN4vixl7aarch649Assembler9LoadStoreERKNS0_11CPURegisterERKNS0_10MemOperandENS0_11LoadStoreOpENS0_22LoadStoreScalingOptionE": 1.0,
+          "_Z20gui_display_debuggerv": 1.0,
+          "_Z11bm_GetBlockj": 1.0,
+          "_ZN4vixl7aarch6414MacroAssembler3CmpERKNS0_8RegisterERKNS0_7OperandE": 1.0,
+          "GetCurrentEventLoop": 1.0,
+          "_ZdlPv": 1.0,
+          "xzm_malloc": 2.0,
+          "SDL_DYNAPI_entry": 2.0,
+          "_free": 2.0,
+          "MPCurrentTaskID": 1.0,
+          "_Z13sh4_loop_ticky": 5.0,
+          "-[__NSCFString length]": 1.0,
+          "_ZNSt3__111this_thread9sleep_forERKNS_6chrono8durationIxNS_5ratioILl1ELl1000000000EEEEE": 1.0,
+          "_ZN12SSAOptimizer19DeadCodeRemovalPassEv": 1.0,
+          "_ZNK4vixl7aarch647Operand11IsImmediateEv": 2.0,
+          "_sigtramp": 1.0,
+          "_ZN4aica3sgc9ChannelEx10StreamStepILNS0_8PCMSTypeE2ELb0ELb0EEEvv": 4.0,
+          "-[NSDate timeIntervalSinceNow]": 2.0,
+          "_Z17mainui_rend_framev": 1.0,
+          "_ZN10hollybench6vblankEy": 1.0,
+          "-[NSApplication mainMenu]": 2.0,
+          "_platform_memset": 1.0,
+          "_Z15sh4_loop_finishv": 1.0,
+          "_Z11bm_GetBlockPv": 1.0,
+          "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9push_backEc": 1.0,
+          "PullEventsFromCGEventQueue": 1.0,
+          "-[NSString compare:options:range:locale:]": 2.0,
+          "_ZN12SSAOptimizer17CombineShiftsPassEv": 1.0,
+          "_Z12maple_vblankv": 1.0,
+          "pthread_testcancel": 1.0,
+          "_ZN4aica13Write_SB_STAGILj6256736EL16HollyInterruptID530EXadL_ZNS_8DDEV_TAGEEEEEvjj": 1.0,
+          "CFStringGetLength": 1.0,
+          "_Z11mainui_loopb": 1.0,
+          "_ZN4aica16writeRegInternalItEEvjT_": 1.0,
+          "_ZN4aica19writeTimerAndIntRegIhEEvjT_": 2.0,
+          "_Z19asic_RaiseInterrupt16HollyInterruptID": 1.0,
+          "_CFRelease": 1.0,
+          "_ZN4vixl7aarch6410VeneerPool34DeleteUnresolvedBranchInfoForLabelEPNS0_5LabelE": 1.0,
+          "objc_msgSend$_delayedEventMatchingMask:pull:": 1.0,
+          "_ZN16CoreAudioBackend14recordCallbackEPvP16OpaqueAudioQueueP16AudioQueueBufferPK14AudioTimeStampjPK28AudioStreamPacketDescription": 1.0
+        },
+        "mapped_to_guest_instruction_samples": 2155.0,
+        "mapped_to_guest_block_only_samples": 1054.0
+      },
+      "boundary_match": true,
+      "unmatched_code_samples": 0.0,
+      "cycle": {
+        "exclusive_cpu_samples": 543.0,
+        "exclusive_cpu_percent": 12.767458264754291,
+        "exclusive_cpu_ms_estimate": 494.86996460004707,
+        "exclusive_process_cpu_percent_estimate": 11.294048426087093,
+        "exclusive_cpu_sample_categories": {
+          "callee_via_jit_return/unclassified": 18.0,
+          "jit_self/unclassified": 513.0,
+          "jit_self/register_load": 5.0,
+          "jit_self/register_store": 7.0
+        },
+        "exclusive_guest_pc_samples": {
+          "0x8c05b3aa": 48.0,
+          "0x8c05b3a6": 6.0,
+          "0x8c05b3d0": 11.0
+        },
+        "cycle_edge_traversals": [
+          {
+            "from": "13418",
+            "to": "13419",
+            "count": 188904658,
+            "call_continuation_upper_bound_estimate": 0
+          },
+          {
+            "from": "13419",
+            "to": "13418",
+            "count": 188904061,
+            "call_continuation_upper_bound_estimate": 0
+          }
+        ]
+      }
+    }
+  ],
+  "post_change_hot_cycle": {
+    "exclusive_cpu_samples": 543.0,
+    "total_thread_samples": 4253.0,
+    "thread_cpu_percent_estimate": 12.767458264754291,
+    "per_run_thread_cpu_percent_estimate": [
+      12.767458264754291
+    ],
+    "per_run_cpu_ms_estimate": [
+      494.86996460004707
+    ]
+  },
+  "limitations": [
+    "Off-mode clocks provide the paired optimization comparison; sample profiles are statistical attribution.",
+    "Fused native code in block B contains guest instructions from both A and B; compare the cycle union, not isolated native-block shares.",
+    "Manually emitted trace state commits/reloads do not pass allocator span hooks; allocator-span category changes do not measure total eliminated synchronization.",
+    "Three paired off-mode samples per application are not a formal regression-confidence guarantee."
+  ],
+  "publication_note": "Absolute checkout paths are represented by <checkout>, home paths by ~, and host names by <local-host>. Original local captures and their SHA-256 hashes are unchanged."
+}

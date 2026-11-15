@@ -14,6 +14,7 @@
 #include "rend/osd.h"
 #ifdef TEST_AUTOMATION
 #include "rend/TexCache.h"
+#include "profiler/sh4_loop_profiler.h"
 #include <cstdlib>
 #include <cstring>
 #endif
@@ -266,6 +267,7 @@ void MetalContext::PresentLastFrame()
 			if (readFrame(pixels, width, height, false))
 			{
 				dump_screenshot(pixels.data(), width, height);
+				sh4_loop_finish();
 				std::_Exit(0);
 			}
 		}

@@ -18,6 +18,7 @@
 #include "hw/sh4/modules/mmu.h"
 #include "decoder_opcodes.h"
 #include "cfg/option.h"
+#include "profiler/sh4_loop_profiler.h"
 
 #define BLOCK_MAX_SH_OPS_SOFT 500
 #define BLOCK_MAX_SH_OPS_HARD 511
@@ -845,6 +846,11 @@ static bool dec_generic(u32 op)
 					for (int i = 1; i <= 64; i++)
 					{
 						u16 op = IReadMem16(state.cpu.rpc + i * 2);
+#ifdef SH4_LOOP_PROFILER
+						// The leading DIV opcode was captured by the decode loop.
+						if (!blk->profile_guest_opcodes.empty())
+							blk->profile_guest_opcodes.emplace_back(state.cpu.rpc + i * 2, op);
+#endif
 						blk->guest_cycles += cycleCounter.countCycles(op);
 					}
 					//skip the aggregated opcodes
@@ -881,6 +887,10 @@ static bool dec_generic(u32 op)
 					for (int i = 1; i <= 64; i++)
 					{
 						u16 op = IReadMem16(state.cpu.rpc + i * 2);
+#ifdef SH4_LOOP_PROFILER
+						if (!blk->profile_guest_opcodes.empty())
+							blk->profile_guest_opcodes.emplace_back(state.cpu.rpc + i * 2, op);
+#endif
 						blk->guest_cycles += cycleCounter.countCycles(op);
 					}
 					//skip the aggregated opcodes
@@ -954,6 +964,10 @@ void dec_updateBlockCycles(RuntimeBlockInfo *block, u16 op)
 bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles)
 {
 	blk=rbi;
+#ifdef SH4_LOOP_PROFILER
+	blk->profile_guest_opcodes.clear();
+	const bool profile_opcodes = sh4_loop_metadata_enabled();
+#endif
 	state_Setup(blk->vaddr, blk->fpu_cfg);
 	
 	blk->guest_opcodes = 0;
@@ -979,6 +993,10 @@ bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles)
 				else
 				{
 					u32 op = IReadMem16(state.cpu.rpc);
+#ifdef SH4_LOOP_PROFILER
+					if (profile_opcodes)
+						blk->profile_guest_opcodes.emplace_back(state.cpu.rpc, static_cast<u16>(op));
+#endif
 
 					blk->guest_opcodes++;
 					dec_updateBlockCycles(blk, op);
