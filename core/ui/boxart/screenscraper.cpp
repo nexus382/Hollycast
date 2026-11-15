@@ -599,7 +599,9 @@ json ScreenScraper::findGame(const GameBoxart& item)
 	for (auto query : queries)
 	{
 		query = trim_ws(query.substr(0, query.find_first_of("([")));
-		if (query.empty() || std::find(searched.begin(), searched.end(), lowerCase(query)) != searched.end())
+		// Short terms return a plain-text API error. Try another title or filename
+		// candidate instead of pausing every game's artwork downloads.
+		if (query.size() < 3 || std::find(searched.begin(), searched.end(), lowerCase(query)) != searched.end())
 			continue;
 		searched.push_back(lowerCase(query));
 		const auto response = session->requestJson("jeuRecherche.php", "&systemeid=23&recherche=" + http::urlEncode(query));

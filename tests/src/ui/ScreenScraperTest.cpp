@@ -248,6 +248,103 @@ TEST_F(ScreenScraperTest, FilenamePunctuationAndWholeWordSearchRecoverPreviously
 	}
 }
 
+TEST_F(ScreenScraperTest, ShortSearchFallsBackToFullFilenameAndKeepsSessionHealthy)
+{
+	std::vector<std::string> queries;
+	auto session = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const auto search = url.find("&recherche=");
+		EXPECT_NE(search, std::string::npos);
+		if (search == std::string::npos)
+			return 500;
+		const std::string query = url.substr(search + 11);
+		queries.push_back(query);
+		if (query == "F1")
+		{
+			const std::string body = "Erreur : informations obligatoires manquantes !  \r\n";
+			bytes.assign(body.begin(), body.end());
+			return 200;
+		}
+		if (query == http::urlEncode("F1 World Grand Prix"))
+		{
+			auto found = game();
+			found["id"] = "1234";
+			found["noms"] = json::array({{{"region", "us"}, {"text", "F1 World Grand Prix"}}});
+			return reply(bytes, {{"jeux", json::array({found})}});
+		}
+		return reply(bytes, {{"jeux", json::array()}});
+	});
+	session->login();
+	ScreenScraper scraper(session);
+	ASSERT_TRUE(scraper.initialize(root.u8string() + '/'));
+	auto art = item();
+	art.fileName = "F1 World Grand Prix (USA).chd";
+	art.name = "F1";
+	art.searchName = "F1";
+	art.requestedMedia = artwork::metadataMedia;
+	scraper.scrape(art);
+
+	EXPECT_EQ(std::find(queries.begin(), queries.end(), "F1"), queries.end());
+	EXPECT_NE(std::find(queries.begin(), queries.end(), http::urlEncode("F1 World Grand Prix")), queries.end());
+	EXPECT_EQ(art.screenScraperId, 1234u);
+	EXPECT_TRUE(session->ready());
+	EXPECT_EQ(session->status().message, "Signed in to ScreenScraper.");
+}
+
+TEST_F(ScreenScraperTest, SkipsAllShortSearchesAndStillSearchesThreeCharacterNames)
+{
+	int shortSearches = 0;
+	auto shortSession = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		if (url.find("jeuRecherche.php") != std::string::npos)
+			++shortSearches;
+		return reply(bytes, {{"jeux", json::array()}});
+	});
+	shortSession->login();
+	ScreenScraper shortScraper(shortSession);
+	ASSERT_TRUE(shortScraper.initialize(root.u8string() + '/'));
+	auto shortTitle = item();
+	shortTitle.fileName = "F1.chd";
+	shortTitle.name = "F1";
+	shortTitle.searchName = "F1";
+	shortTitle.requestedMedia = artwork::metadataMedia;
+	shortScraper.scrape(shortTitle);
+	EXPECT_EQ(shortSearches, 0);
+	EXPECT_TRUE(shortTitle.screenScraperSearched);
+	EXPECT_TRUE(shortSession->ready());
+	EXPECT_EQ(shortSession->status().message, "Signed in to ScreenScraper.");
+
+	std::vector<std::string> queries;
+	auto fullSession = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const auto search = url.find("&recherche=");
+		EXPECT_NE(search, std::string::npos);
+		if (search == std::string::npos)
+			return 500;
+		queries.push_back(url.substr(search + 11));
+		auto found = game();
+		found["id"] = "1234";
+		found["noms"] = json::array({{{"region", "us"}, {"text", "F16 Fighter Pilot"}}});
+		return reply(bytes, {{"jeux", json::array({found})}});
+	});
+	fullSession->login();
+	ScreenScraper fullScraper(fullSession);
+	ASSERT_TRUE(fullScraper.initialize(root.u8string() + '/'));
+	auto fullTitle = item();
+	fullTitle.fileName = "F16 Fighter Pilot (USA).chd";
+	fullTitle.name = "F16";
+	fullTitle.searchName = "F16";
+	fullTitle.requestedMedia = artwork::metadataMedia;
+	fullScraper.scrape(fullTitle);
+	ASSERT_FALSE(queries.empty());
+	EXPECT_EQ(queries.front(), "F16");
+	EXPECT_EQ(fullTitle.screenScraperId, 1234u);
+	EXPECT_TRUE(fullSession->ready());
+}
+
 TEST_F(ScreenScraperTest, WordSearchNeverAcceptsAnUnrelatedTopResult)
 {
 	auto session = std::make_shared<Session>(credentials(), [](const std::string& url, std::vector<u8>& bytes, std::string&) {
