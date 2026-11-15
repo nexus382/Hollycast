@@ -161,16 +161,26 @@ test('firmware seeding copies only supported files and detects original mutation
   const { directory, executable } = await fixture(t);
   const seeds = path.join(directory, 'seeds');
   await fs.mkdir(seeds);
+  const expectedSeeds = new Map([
+    ['vmu_save_A1.bin', Buffer.alloc(128 * 1024, 5)],
+    ['dc_flash.bin', Buffer.alloc(128 * 1024, 6)],
+    ['naomi.zip', Buffer.from('fixture Naomi BIOS archive')],
+    ['awbios.7z', Buffer.from('fixture Atomiswave BIOS archive')],
+    ['segasp.zip', Buffer.from('fixture SystemSP BIOS archive')],
+  ]);
+  for (const [name, contents] of expectedSeeds) await fs.writeFile(path.join(seeds, name), contents);
   const original = path.join(seeds, 'vmu_save_A1.bin');
-  await fs.writeFile(original, Buffer.alloc(128 * 1024, 5));
   await fs.writeFile(path.join(seeds, 'private.txt'), 'do not copy');
   const harness = await HollycastHarness.prepare({ executable, out: path.join(directory, 'seeded'), firmwareDirectory: seeds });
-  assert.equal(harness.manifest.seeds.length, 1);
-  await assert.rejects(fs.stat(path.join(harness.directory, 'home', 'data', 'private.txt')), { code: 'ENOENT' });
-  await fs.writeFile(path.join(harness.directory, 'home', 'data', 'vmu_save_A1.bin'), Buffer.alloc(128 * 1024, 6));
+  const data = path.join(harness.directory, 'home', 'data');
+  assert.deepEqual(harness.manifest.seeds.map(seed => path.basename(seed.source)).sort(), [...expectedSeeds.keys()].sort());
+  assert.deepEqual((await fs.readdir(data)).sort(), [...expectedSeeds.keys()].sort());
+  for (const [name, contents] of expectedSeeds) assert.deepEqual(await fs.readFile(path.join(data, name)), contents);
+  await assert.rejects(fs.stat(path.join(data, 'private.txt')), { code: 'ENOENT' });
+  await fs.writeFile(path.join(data, 'vmu_save_A1.bin'), Buffer.alloc(128 * 1024, 7));
   await harness.verifySources();
   assert.equal((await fs.readFile(original))[0], 5);
-  await fs.writeFile(original, Buffer.alloc(128 * 1024, 7));
+  await fs.writeFile(original, Buffer.alloc(128 * 1024, 8));
   await assert.rejects(harness.verifySources(), /Original inputs changed/);
 });
 
@@ -277,7 +287,7 @@ async function benchmarkFixture(t, { playing = true, nativeValid = true, sourceM
     }
     return {};
   });
-  return { ...fixtureState, requests };
+  return { ...fixtureState, requests, state };
 }
 
 test('benchmark performs native startup, excludes it from capture, and retains a readable report', async t => {
@@ -353,33 +363,66 @@ test('stale benchmark telemetry fails and releases controller input', async t =>
 });
 
 test('current-game startup timeout retains an invalid report and releases input', async t => {
-  const { harness, requests } = await benchmarkFixture(t);
+  const { harness, requests, state } = await benchmarkFixture(t);
   const originalRequest = harness.request.bind(harness);
-  harness.request = async (...args) => {
-    const result = await originalRequest(...args);
-    if (args[0] === 'live') return { ...result, telemetry: { ...result.telemetry, stale: true, sample_age_ms: 501 } };
-    return result;
+  let startupReads = 0;
+  harness.request = async (op, args, options) => {
+    if (op === 'live') {
+      if (options?.timeoutMs !== undefined) startupReads++;
+      const sample = state();
+      return { ...sample, telemetry: { ...sample.telemetry, stale: true, sample_age_ms: 501 } };
+    }
+    return originalRequest(op, args, options);
   };
-  const report = await runBenchmark(harness, { durationMs: 100, warmupMs: 0, startupTimeoutMs: 100, after: 'leave' });
+  const report = await runBenchmark(harness, { durationMs: 100, warmupMs: 0, startupTimeoutMs: 300, after: 'leave' });
   assert.equal(report.valid, false);
-  assert.ok(report.errors.some(error => error.includes('Timed out waiting')));
+  assert.ok(report.errors.some(error => error === 'Timed out waiting for a fresh running game state'), JSON.stringify(report.errors));
+  assert.ok(startupReads > 0);
   assert.equal(requests.some(request => request.op === 'performance_begin'), false);
   assert.equal(requests.filter(request => request.op === 'release').length, 1);
   assert.equal(report.cleanup.inputs_released, true);
 });
 
 test('current-game startup rejects a fresh sample returned after the deadline', async t => {
-  const { harness, requests } = await benchmarkFixture(t);
+  const { harness, requests, state } = await benchmarkFixture(t);
   const originalRequest = harness.request.bind(harness);
   let liveReads = 0;
-  harness.request = async (...args) => {
-    const result = await originalRequest(...args);
-    if (args[0] === 'live' && liveReads++ === 1) await delay(125);
-    return result;
+  harness.request = async (op, args, options) => {
+    if (op === 'live') {
+      const sample = state();
+      if (++liveReads === 2) await delay(125);
+      return sample;
+    }
+    return originalRequest(op, args, options);
   };
   const report = await runBenchmark(harness, { durationMs: 100, warmupMs: 0, startupTimeoutMs: 100, after: 'leave' });
   assert.equal(report.valid, false);
-  assert.ok(report.errors.some(error => error.includes('Timed out waiting')));
+  assert.ok(report.errors.some(error => error === 'Timed out waiting for a fresh running game state'), JSON.stringify(report.errors));
+  assert.equal(liveReads, 2);
+  assert.equal(requests.some(request => request.op === 'performance_begin'), false);
+  assert.equal(requests.filter(request => request.op === 'release').length, 1);
+  assert.equal(report.cleanup.inputs_released, true);
+});
+
+test('bounded current-game live request timeout is reported and inputs are released', async t => {
+  const { harness, requests, state } = await benchmarkFixture(t);
+  const originalRequest = harness.request.bind(harness);
+  const startupTimeoutMs = 1000;
+  let liveReads = 0;
+  let requestBudget;
+  const transportError = 'Command timed out; outcome is unknown. Inputs expire within their lease on the next emulator UI tick';
+  harness.request = async (op, args, options) => {
+    if (op === 'live') {
+      if (++liveReads === 1) return state();
+      requestBudget = options?.timeoutMs;
+      throw new Error(transportError);
+    }
+    return originalRequest(op, args, options);
+  };
+  const report = await runBenchmark(harness, { durationMs: 100, warmupMs: 0, startupTimeoutMs, after: 'leave' });
+  assert.equal(report.valid, false);
+  assert.ok(report.errors.includes(transportError), JSON.stringify(report.errors));
+  assert.ok(Number.isInteger(requestBudget) && requestBudget > 0 && requestBudget <= startupTimeoutMs);
   assert.equal(requests.some(request => request.op === 'performance_begin'), false);
   assert.equal(requests.filter(request => request.op === 'release').length, 1);
   assert.equal(report.cleanup.inputs_released, true);

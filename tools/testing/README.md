@@ -33,6 +33,25 @@ not an A/B comparison or proof of full-game correctness.
 branch does not include Hikaru game support; Planet Harriers scenarios and the
 included Hikaru mappings require a Hikaru-enabled branch.
 
+## Current support boundaries
+
+| Area | Supported or verified scope | Not established |
+| --- | --- | --- |
+| Host | Standalone Windows and Linux native builds | Android, libretro, Switch, UWP, macOS, and device acceptance |
+| Systems | Generic SH-4 telemetry for Dreamcast, Naomi, Naomi 2, Atomiswave, and System SP | A platform-wide or all-title gameplay pass |
+| Title semantics | A game-specific claim requires a mapping verified against that title and build | Generic telemetry does not establish what a mapped value means; current dev has no Hikaru support |
+| Rendering | Crazy Taxi live-control/capture smoke on Dreamcast OpenGL/DX11/Vulkan and Naomi OpenGL | Visual parity, comparative performance, or full-title playthrough |
+| Guest controls | Native controller API drives emulated gamepad state | Guest keyboard, mouse, lightgun, operator, or JVS controls; native UI keys operate the host emulator UI, not a guest keyboard |
+| Media identity | The selected primary game file and explicitly seeded originals are hashed | Companion tracks/images, parent ROMs, or which BIOS/archive member the loader selected unless separately verified |
+
+Tested title smoke: Crazy Taxi on Dreamcast (OpenGL, DX11, Vulkan) and Naomi
+(OpenGL), with live controller input and capture. Naomi 2, Atomiswave, and System
+SP were architecture-only in this validation and were not live-tested.
+
+Treat unsupported systems, titles, input devices, and rendering backends as
+untested. A successful harness session proves only the observations and actions
+recorded for that exact build, media, and configuration.
+
 ## Current-game single-run benchmark
 
 The general benchmark uses the `current` scenario and external input by default:
@@ -136,10 +155,18 @@ Auto state saving/loading, networking, crash uploads, scripts, and boxart fetchi
 are disabled in the disposable profile. Original user configuration is not copied.
 The launcher has an independent process lifetime after readiness.
 
-`--firmware-dir` can seed supported Dreamcast BIOS/flash/VMU files; unrelated
-files and credentials are excluded. `verify` rehashes the original executable,
-content, and seed files. Session directories must support atomic rename and hard
-links for exclusive publication of complete command/evidence files.
+`--firmware-dir` accepts only named seed files: fixed-size Dreamcast
+`dc_boot.bin`, `dc_flash.bin`, `dc_nvmem.bin`, and VMU saves; optional Hikaru/MIE
+profile seeds and archives; and Naomi BIOS archives named `airlbios`, `awbios`,
+`f355bios`, `f355dlx`, `hod2bios`, `naomi`, `naomidev`, `naomigd`, `naomi2`, or
+`segasp` with `.zip` or `.7z` extensions (nonempty, at most 16 MiB). Archive
+contents are not inspected; unrelated names and credentials are excluded.
+`verify` rehashes the original executable, selected primary media, and each
+explicitly seeded source file. That verifies source-file bytes, not the BIOS
+variant or archive member the emulator selected. Companion tracks/images and
+parent ROM files are not bound unless selected or separately verified. Session
+directories must support atomic rename and hard links for exclusive publication
+of complete command/evidence files.
 
 The optional Hikaru build locates its BIOS/MIE archives beside the game or in
 configured BIOS locations, uses isolated NVRAM, and publishes assembled

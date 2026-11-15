@@ -146,9 +146,11 @@ export class HollycastHarness {
     const seeds = [];
     if (firmwareDirectory) {
       const fixture = await fs.realpath(path.resolve(firmwareDirectory));
-      const files = [['dc_boot.bin', 2 * 1024 * 1024], ['dc_nvmem.bin', 128 * 1024]];
+      const files = [['dc_boot.bin', 2 * 1024 * 1024], ['dc_flash.bin', 128 * 1024], ['dc_nvmem.bin', 128 * 1024]];
       files.push(['pharrier.hikaru.nvmem', 65536], ['pharrier.mie.eeprom', 128]);
       for (const name of ['hikaru.zip', 'hikaru.7z', 'mie.zip', 'mie.7z']) files.push([name, null]);
+      for (const name of ['airlbios', 'awbios', 'f355bios', 'f355dlx', 'hod2bios', 'naomi', 'naomidev', 'naomigd', 'naomi2', 'segasp'])
+        for (const extension of ['zip', '7z']) files.push([`${name}.${extension}`, null]);
       for (const port of 'ABCD') for (const slot of [1, 2]) files.push([`vmu_save_${port}${slot}.bin`, 128 * 1024]);
       for (const [name, size] of files) {
         const source = path.join(fixture, name);
