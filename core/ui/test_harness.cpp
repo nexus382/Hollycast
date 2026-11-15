@@ -9,6 +9,9 @@
 #include "emulator.h"
 #include "input/gamepad_device.h"
 #include "gui.h"
+#include "imgui.h"
+#include "settings_new.h"
+#include "settings.h"
 #include "mainui.h"
 #include "stb_image_write.h"
 
@@ -19,6 +22,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <set>
 #include <vector>
 #ifdef _WIN32
 #include <process.h>
@@ -126,6 +130,74 @@ private:
 	Clock::time_point deadline;
 };
 
+class MappingTestDevice final : public GamepadDevice {
+public:
+	MappingTestDevice() : GamepadDevice(-1, ControllerApiName, true)
+	{
+		_name = "Hollycast Mapping Test Device";
+		_unique_id = "hollycast-test-mapping-device";
+		hasAnalogStick = true;
+		input_mapper = std::make_shared<InputMapping>();
+	}
+
+	void set_maple_port(int) override {}
+
+	const char *get_button_name(u32 code) override
+	{
+		return inputName("Button", code);
+	}
+
+	const char *get_axis_name(u32 code) override
+	{
+		return inputName("Axis", code);
+	}
+
+	bool buttonHeld(u32 code) const
+	{
+		return heldButtons.find(code) != heldButtons.end();
+	}
+
+	void setButtonHeld(u32 code, bool held)
+	{
+		if (held)
+			heldButtons.insert(code);
+		else
+			heldButtons.erase(code);
+	}
+
+	bool sendButton(u32 code, bool pressed)
+	{
+		return gamepad_btn_input(code, pressed);
+	}
+
+	bool sendAxis(u32 code, int value)
+	{
+		return gamepad_axis_input(code, value);
+	}
+
+	void cancelDetection()
+	{
+		cancel_detect_input();
+		heldButtons.clear();
+	}
+
+private:
+	const char *inputName(const char *kind, u32 code)
+	{
+		nameBuffer = kind;
+		nameBuffer += ' ';
+		nameBuffer += std::to_string(code);
+		return nameBuffer.c_str();
+	}
+
+	std::string nameBuffer;
+	std::set<u32> heldButtons;
+};
+
+static std::shared_ptr<MappingTestDevice> mappingDevice;
+static Clock::time_point mappingDetectionStarted;
+static bool mappingDetectionObserved;
+static Json mappingLastInput = nullptr;
 // The adapters use the regular mapping path without registering persistent
 // physical devices or changing the user's controller-to-port assignments.
 static std::array<std::unique_ptr<HarnessGamepad>, 4> gamepads;
@@ -133,6 +205,9 @@ static std::array<std::unique_ptr<HarnessGamepad>, 4> gamepads;
 void releaseInputs()
 {
 	ui::release();
+	if (mappingDevice)
+		mappingDevice->cancelDetection();
+	mappingDetectionObserved = false;
 	for (auto& pad : gamepads)
 		if (pad)
 		{
@@ -147,6 +222,237 @@ static bool restricted()
 }
 
 static bool recording;
+static Json state();
+
+static const char *settingsPageName()
+{
+	if (gui_state != GuiState::Settings)
+		return nullptr;
+	switch (SettingsNew::g_state.currentTab)
+	{
+	case SettingsNew::SettingsTab::General: return "general";
+	case SettingsNew::SettingsTab::Library: return "library";
+	case SettingsNew::SettingsTab::Video: return "video";
+	case SettingsNew::SettingsTab::OnScreenDisplay: return "osd";
+	case SettingsNew::SettingsTab::Audio: return "audio";
+	case SettingsNew::SettingsTab::Controls: return "controls";
+	case SettingsNew::SettingsTab::Network: return "network";
+	case SettingsNew::SettingsTab::Advanced: return "advanced";
+	case SettingsNew::SettingsTab::About: return "about";
+	default: return nullptr;
+	}
+}
+
+static bool hasOpenPopup()
+{
+	return ImGui::GetCurrentContext() != nullptr
+		&& ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+}
+
+static SettingsNew::SettingsTab settingsTabFromName(const std::string& page)
+{
+	if (page == "general") return SettingsNew::SettingsTab::General;
+	if (page == "library") return SettingsNew::SettingsTab::Library;
+	if (page == "video") return SettingsNew::SettingsTab::Video;
+	if (page == "osd") return SettingsNew::SettingsTab::OnScreenDisplay;
+	if (page == "audio") return SettingsNew::SettingsTab::Audio;
+	if (page == "controls") return SettingsNew::SettingsTab::Controls;
+	if (page == "network") return SettingsNew::SettingsTab::Network;
+	if (page == "advanced") return SettingsNew::SettingsTab::Advanced;
+	if (page == "about") return SettingsNew::SettingsTab::About;
+	throw std::runtime_error("Unknown settings page");
+}
+
+static bool mappingInputReady()
+{
+	if (!mappingDevice || !mappingDevice->is_input_detecting())
+	{
+		mappingDetectionObserved = false;
+		return false;
+	}
+	if (!mappingDetectionObserved)
+	{
+		mappingDetectionObserved = true;
+		mappingDetectionStarted = Clock::now();
+	}
+	return Clock::now() - mappingDetectionStarted >= std::chrono::milliseconds(225);
+}
+
+static void sampleMappingDetection()
+{
+	(void)mappingInputReady();
+}
+
+static Json mappingStatus()
+{
+	const bool ready = mappingInputReady();
+	const bool detecting = mappingDevice && mappingDevice->is_input_detecting();
+	Json device = nullptr;
+	Json mapState = nullptr;
+	if (mappingDevice)
+	{
+		device = {{"api", mappingDevice->api_name()}, {"name", mappingDevice->name()},
+			{"unique_id", mappingDevice->unique_id()}, {"role", "mapping_only"},
+			{"maple_port", mappingDevice->maple_port()}};
+		const auto mapping = mappingDevice->get_input_mapping();
+		mapState = {{"dirty", mapping != nullptr && mapping->is_dirty()}};
+	}
+	return {{"device", device}, {"registered", mappingDevice != nullptr}, {"detecting", detecting},
+		{"input_window_ready", ready}, {"last_input", mappingLastInput}, {"map_state", mapState}};
+}
+
+static Json mappingInputResult(bool delivered, bool accepted, const char *reason = nullptr)
+{
+	Json result = mappingStatus();
+	result["delivered"] = delivered;
+	result["accepted"] = accepted;
+	if (reason != nullptr)
+		result["reason"] = reason;
+	return result;
+}
+
+static Json openSettingsPage(const Json& args)
+{
+	fields(args, {"page"});
+	require(args.at("page").is_string(), "Settings page must be a string");
+	const std::string page = args.at("page").get<std::string>();
+	const SettingsNew::SettingsTab tab = settingsTabFromName(page);
+	require(!recording, "Settings navigation is unavailable during performance capture");
+	require(!settings.naomi.slave, "Settings navigation is unavailable on a Naomi slave");
+	require(!hasOpenPopup(), "Close the current popup before changing settings pages");
+
+	const bool allowedState = gui_state == GuiState::Main || gui_state == GuiState::Settings
+		|| gui_state == GuiState::Commands || gui_state == GuiState::Pause || gui_state == GuiState::Closed;
+	require(allowedState, "Settings navigation is unavailable from the current UI state");
+
+	if (gui_state == GuiState::Closed && game_started)
+	{
+		releaseInputs();
+		gui_open_settings();
+		require(gui_state == GuiState::Commands || gui_state == GuiState::Settings,
+			"Could not pause the running game for settings");
+	}
+	else if (gui_state == GuiState::Pause)
+	{
+		releaseInputs();
+		gui_open_settings();
+		require(gui_state == GuiState::Commands || gui_state == GuiState::Settings,
+			"Could not open settings from the paused game");
+	}
+	else if (gui_state == GuiState::Closed)
+	{
+		gui_setState(GuiState::Main);
+	}
+	else
+	{
+		releaseInputs();
+	}
+
+	SettingsNew::openTab(tab);
+	if (gui_state != GuiState::Settings)
+		gui_setState(GuiState::Settings);
+	return state();
+}
+
+static Json mappingOperation(const Json& args)
+{
+	require(args.is_object() && args.contains("action") && args.at("action").is_string(),
+		"Mapping action must be a string");
+	const std::string action = args.at("action").get<std::string>();
+	if (action == "create")
+	{
+		fields(args, {"action"});
+		require(gui_state == GuiState::Settings && SettingsNew::g_state.currentTab == SettingsNew::SettingsTab::Controls,
+			"Create the mapping test device from Settings > Controls");
+		require(!hasOpenPopup(), "Close the current popup before creating the mapping test device");
+		bool created = false;
+		if (!mappingDevice)
+		{
+			mappingDevice = std::make_shared<MappingTestDevice>();
+			GamepadDevice::Register(mappingDevice);
+			mappingLastInput = nullptr;
+			created = true;
+		}
+		Json result = mappingStatus();
+		result["created"] = created;
+		return result;
+	}
+	if (action == "status")
+	{
+		fields(args, {"action"});
+		return mappingStatus();
+	}
+	if (action == "cancel")
+	{
+		fields(args, {"action"});
+		const bool cancelled = mappingDevice && mappingDevice->is_input_detecting();
+		if (mappingDevice)
+			mappingDevice->cancelDetection();
+		mappingDetectionObserved = false;
+		Json result = mappingStatus();
+		result["cancelled"] = true;
+		result["was_detecting"] = cancelled;
+		return result;
+	}
+
+	if (action == "button")
+	{
+		fields(args, {"action", "code", "pressed"});
+		const u32 code = static_cast<u32>(integer(args.at("code"), 0, 65535));
+		require(args.at("pressed").is_boolean(), "Button pressed state must be boolean");
+		const bool pressed = args.at("pressed").get<bool>();
+		require(mappingDevice != nullptr, "Create the mapping test device first");
+		require(gui_state == GuiState::Settings && SettingsNew::g_state.currentTab == SettingsNew::SettingsTab::Controls,
+			"Mapping input requires Settings > Controls");
+		if (pressed && mappingDevice->buttonHeld(code))
+			return mappingInputResult(false, false, "button_already_pressed");
+		if (!pressed && !mappingDevice->buttonHeld(code))
+		{
+			Json result = mappingInputResult(false, false);
+			result["released"] = true;
+			return result;
+		}
+		if (!mappingDevice->is_input_detecting())
+		{
+			if (!pressed)
+			{
+				mappingDevice->setButtonHeld(code, false);
+				Json result = mappingInputResult(false, false);
+				result["released"] = true;
+				return result;
+			}
+			return mappingInputResult(false, false, "mapping_detection_inactive");
+		}
+		if (!mappingInputReady())
+			return mappingInputResult(false, false, "input_window_not_ready");
+		const bool accepted = mappingDevice->sendButton(code, pressed);
+		mappingDevice->setButtonHeld(code, pressed);
+		mappingLastInput = {{"type", "button"}, {"code", code}, {"pressed", pressed}};
+		Json result = mappingInputResult(true, accepted);
+		if (!pressed)
+			result["released"] = true;
+		return result;
+	}
+	if (action == "axis")
+	{
+		fields(args, {"action", "code", "value"});
+		const u32 code = static_cast<u32>(integer(args.at("code"), 0, 65535));
+		const int value = static_cast<int>(integer(args.at("value"), -32768, 32767));
+		require(mappingDevice != nullptr, "Create the mapping test device first");
+		require(gui_state == GuiState::Settings && SettingsNew::g_state.currentTab == SettingsNew::SettingsTab::Controls,
+			"Mapping input requires Settings > Controls");
+		if (!mappingDevice->is_input_detecting())
+			return mappingInputResult(false, false, "mapping_detection_inactive");
+		if (!mappingInputReady())
+			return mappingInputResult(false, false, "input_window_not_ready");
+		const bool accepted = mappingDevice->sendAxis(code, value);
+		mappingLastInput = {{"type", "axis"}, {"code", code}, {"value", value}};
+		return mappingInputResult(true, accepted);
+	}
+	fields(args, {"action"});
+	throw std::runtime_error("Unknown mapping action");
+}
+
 static bool captureExists;
 static bool previousPresent;
 static Clock::time_point lastPresent;
@@ -170,7 +476,9 @@ static Json state()
 	for (int port = 0; port < 4; ++port)
 		pads.push_back({{"port", port}, {"buttons_active_low", kcode[port]},
 			{"axes", {joyx[port], joyy[port], joyrx[port], joyry[port]}}, {"triggers", {lt[port], rt[port]}}});
+	const char *page = settingsPageName();
 	return {{"wall_ms", wallMs()}, {"ui_frame_count", MainFrameCount}, {"gui_state", static_cast<int>(gui_state)},
+		{"settings_page", page == nullptr ? Json(nullptr) : Json(page)},
 		{"menu_open", ui::open()}, {"running", emu.running()}, {"input_restricted", restricted()},
 		{"exclusive_controller_input", controllerInputOwned()},
 		{"exclusive_ui_input", controllerInputOwned()},
@@ -201,6 +509,9 @@ static Json execute(const std::string& op, const Json& args)
 		releaseInputs();
 		return Json::object();
 	}
+	if (op == "mapping" && args.is_object() && args.contains("action")
+			&& args.at("action").is_string() && args.at("action").get<std::string>() == "cancel")
+		return mappingOperation(args);
 	require(!restricted() || op == "performance_end" || op == "quit",
 		"Interactive control is unavailable during hardcore, netplay or multiboard sessions");
 	if (op == "live")
@@ -231,6 +542,10 @@ static Json execute(const std::string& op, const Json& args)
 		pad->apply(input);
 		return {{"lease_ms", input.leaseMs}};
 	}
+	if (op == "settings")
+		return openSettingsPage(args);
+	if (op == "mapping")
+		return mappingOperation(args);
 	if (op == "menu")
 	{
 		fields(args, {});
@@ -317,6 +632,7 @@ void poll()
 		return;
 	const auto now = Clock::now();
 	ui::poll();
+	sampleMappingDetection();
 	for (auto& pad : gamepads)
 		if (pad)
 			pad->expire(now);
@@ -357,7 +673,7 @@ void poll()
 #else
 				getpid()
 #endif
-			)}, {"capabilities", {"controller", "exclusive_controller_input", "exclusive_ui_input", "native_ui", "native_capture", "live_telemetry", "typed_memory_watches", "osd_metrics", "present_intervals", "benchmark_frame_counts"}}});
+			)}, {"capabilities", {"controller", "exclusive_controller_input", "exclusive_ui_input", "native_ui", "settings_navigation", "mapping_test_device", "native_capture", "live_telemetry", "typed_memory_watches", "osd_metrics", "present_intervals", "benchmark_frame_counts"}}});
 			announced = true;
 		}
 		const auto path = root / "command.json";

@@ -8,7 +8,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { HollycastHarness, controllerState, summarizePerformance, agentInvocation } from './hollytest.mjs';
+import { HollycastHarness, controllerState, summarizePerformance, agentInvocation,
+  validateSettingsPage, validateUiTarget, validateUiClickOptions, validateMappingArgs, validateUiExpectedFields } from './hollytest.mjs';
 import { runBenchmark, summarizeOsd, renderBenchmarkReport, benchmarkSettings, auditConditions } from './benchmark.mjs';
 
 const capture = () => ({ domain: 'host_present_interval_ms', samples_ms: [10, 20, 30, 40],
@@ -57,6 +58,208 @@ async function fakeBridge(t, harness, handler = async () => ({}), transform = re
   t.after(async () => { running = false; await loop; if (failure) throw failure; });
   return requests;
 }
+
+async function fakeUiBridge(t, harness, overrides = {}) {
+  const state = { page: 'video', focused: false, password: false, readOnly: false, value: 'old text', value_type: undefined,
+    readbackOverride: undefined, toggle: undefined, changeToggle: true, scroll: [0, 0], loseFocusOnSelectAll: false, updateText: true, failText: false, ...overrides };
+  const itemId = 73;
+  const inspection = request => {
+    const page = overrides.mismatchPage ? (state.page === 'video' ? 'audio' : 'video') : state.page;
+    return { observation_id: request.id, wall_ms: Date.now(), screenshot: null, state: { settings_page: page },
+    ui: { settings_page: page, active_item_id: state.focused ? itemId : 0,
+      text_input: state.focused ? { active_item_id: itemId, window_id: 1, window: 'Settings', password: state.password } : null,
+      windows: [{ id: 1, name: 'Settings', rect: [0, 0, 800, 600], inner_rect: [10, 20, 790, 590],
+        scroll: [...state.scroll], scroll_max: [0, 100] }],
+      items: [{ id: itemId, label: 'Friendly label', raw_label: 'Raw label', semantic_id: 'setting.example',
+        semantic_label: 'Friendly label', window: 'Settings', window_id: 1, visible: true, disabled: false,
+        checkable: state.toggle !== undefined, checked: state.toggle, kind: state.toggle !== undefined ? 'toggle' : 'text',
+        ...(state.password ? {} : { value: state.readbackOverride === undefined
+          ? (state.toggle !== undefined ? state.toggle : state.value) : state.readbackOverride }),
+        ...(state.value_type === undefined ? {} : { value_type: state.value_type }),
+        inputable: state.toggle === undefined, read_only: state.readOnly, password: state.password,
+        active: state.focused, text_input_focused: state.focused }] } };
+  };
+  const requests = await fakeBridge(t, harness, async request => {
+    if (request.op === 'settings') {
+      state.page = request.args.page;
+      return { settings_page: request.args.page };
+    }
+    if (request.op === 'inspect') return inspection(request);
+    if (request.op !== 'ui') return {};
+    const { action, key, item_id: selected, delta_y: deltaY = 0 } = request.args;
+    if (action === 'click' && selected === itemId) {
+      if (state.toggle !== undefined) { if (state.changeToggle) state.toggle = !state.toggle; }
+      else state.focused = true;
+    } else if (action === 'key' && key === 'Ctrl+A') {
+      if (state.loseFocusOnSelectAll) state.focused = false;
+      else if (!state.password) state.value = '';
+    } else if (action === 'key' && key === 'Backspace') {
+      if (!state.password) state.value = '';
+    } else if (action === 'text' && state.updateText && !state.password)
+      state.value = state.value_type === 'float32' ? Math.fround(Number(request.args.text))
+        : state.value_type === 'int32' ? Number(request.args.text) : request.args.text;
+    else if (action === 'key' && key === 'Enter') state.focused = false;
+    else if (action === 'scroll') state.scroll[1] = Math.max(0, Math.min(100, state.scroll[1] + deltaY));
+    return {};
+  }, (response, request) => state.failText && request.op === 'ui' && request.args.action === 'text'
+    ? { ...response, ok: false, error: `echo:${request.args.text}` } : response);
+  return { state, requests };
+}
+
+test('settings, UI selectors, vectors, and mapping inputs validate exact contracts', () => {
+  assert.equal(validateSettingsPage('advanced'), 'advanced');
+  for (const page of ['Settings', 'render', '', 3]) assert.throws(() => validateSettingsPage(page));
+  assert.deepEqual(validateUiTarget({ semantic_id: 'setting.example', window: 'Settings' }),
+    { semantic_id: 'setting.example', window: 'Settings' });
+  for (const target of [{ label: 'A', item_id: 1 }, { semantic_id: 'x'.repeat(129) }, { label: 'x', typo: true }])
+    assert.throws(() => validateUiTarget(target));
+  assert.deepEqual(validateUiClickOptions({ modifiers: ['Ctrl'], mouse_button: 'middle', click_count: 2 }),
+    { modifiers: ['Ctrl'], mouse_button: 'middle', click_count: 2 });
+  assert.throws(() => validateUiClickOptions({ modifiers: ['Ctrl', 'Ctrl'] }));
+  assert.deepEqual(validateMappingArgs({ action: 'axis', code: 65535, value: -32768 }), { action: 'axis', code: 65535, value: -32768 });
+  for (const bad of [{ action: 'button', code: true, pressed: true }, { action: 'button', code: 1, pressed: 1 },
+    { action: 'axis', code: 1, value: 32768 }, { action: 'create', extra: 1 }]) assert.throws(() => validateMappingArgs(bad));
+  assert.deepEqual(validateUiExpectedFields({ kind: 'vector2', value: [1, 2] }), { kind: 'vector2', value: [1, 2] });
+  assert.throws(() => validateUiExpectedFields({ value: [[1], [2]] }));
+});
+
+test('settings page command checks fresh readback when exposed', async t => {
+  const { harness } = await fixture(t);
+  const { requests } = await fakeUiBridge(t, harness);
+  const result = await harness.settings('video');
+  assert.equal(result.page, 'video');
+  assert.equal(result.observation.ui.settings_page, 'video');
+  assert.deepEqual(requests.filter(request => ['settings', 'inspect'].includes(request.op)).map(request => request.op), ['settings', 'inspect']);
+
+  const mismatch = await fixture(t);
+  await fakeUiBridge(t, mismatch.harness, { mismatchPage: true });
+  await assert.rejects(mismatch.harness.settings('video'), /page readback mismatch/);
+});
+
+test('fill verifies readable fields while redacting text action payloads', async t => {
+  const { harness } = await fixture(t);
+  const { requests } = await fakeUiBridge(t, harness);
+  const result = await harness.fill({ semantic_id: 'setting.example' }, 'replacement-value');
+  assert.equal(result.outcome, 'PASS');
+  assert.equal(result.verification, 'native_value_readback');
+  assert.equal(result.text_length, Buffer.byteLength('replacement-value'));
+  assert.deepEqual(requests.filter(request => request.op === 'ui').map(request => request.args.action),
+    ['click', 'key', 'text', 'key']);
+  const events = await fs.readFile(path.join(harness.directory, 'events.jsonl'), 'utf8');
+  const observations = await fs.readFile(path.join(harness.directory, 'observations.jsonl'), 'utf8');
+  const textEvent = events.split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .find(event => event.op === 'ui' && event.args?.action === 'text');
+  assert.equal(textEvent.args.text, '[redacted]');
+  assert.equal(textEvent.args.text_redacted, true);
+  assert.equal(textEvent.result.text_redacted, true);
+  assert.equal(textEvent.error, null);
+  assert.equal(observations.includes('replacement-value'), false);
+  assert.match(events, /text_redacted/);
+});
+
+test('fill clears empty values, rejects read-only items, and stops when focus changes', async t => {
+  const cleared = await fixture(t);
+  const bridge = await fakeUiBridge(t, cleared.harness);
+  const result = await cleared.harness.fill({ label: 'Friendly label' }, '');
+  assert.equal(result.outcome, 'PASS');
+  assert.equal(bridge.state.value, '');
+  assert.ok(bridge.requests.some(request => request.op === 'ui' && request.args.key === 'Backspace'));
+
+  const readOnly = await fixture(t);
+  const readOnlyBridge = await fakeUiBridge(t, readOnly.harness, { readOnly: true });
+  await assert.rejects(readOnly.harness.fill('Friendly label', 'x'), /writable/);
+  assert.equal(readOnlyBridge.requests.some(request => request.op === 'ui'), false);
+
+  const lost = await fixture(t);
+  const lostBridge = await fakeUiBridge(t, lost.harness, { loseFocusOnSelectAll: true });
+  const lostResult = await lost.harness.fill('Friendly label', 'should-not-type');
+  assert.equal(lostResult.outcome, 'INCONCLUSIVE');
+  assert.deepEqual(lostBridge.requests.filter(request => request.op === 'ui').map(request => request.args.action), ['click', 'key']);
+});
+
+test('password fill is write-only and raw native text errors never echo payloads', async t => {
+  const { harness } = await fixture(t);
+  const { state } = await fakeUiBridge(t, harness, { password: true, value: undefined });
+  const result = await harness.fill('Friendly label', 'password-fixture-only');
+  assert.equal(result.outcome, 'PASS');
+  assert.equal(result.verification, 'write_only');
+  assert.equal(Object.hasOwn((await harness.observe()).ui.items[0], 'value'), false);
+  assert.equal(state.password, true);
+  for (const name of ['events.jsonl', 'observations.jsonl'])
+    assert.equal((await fs.readFile(path.join(harness.directory, name), 'utf8')).includes('password-fixture-only'), false);
+
+  const failed = await fixture(t);
+  await fakeUiBridge(t, failed.harness, { failText: true });
+  await failed.harness.observe();
+  const secret = 'bridge-error-secret';
+  await assert.rejects(failed.harness.fill('Friendly label', secret), /Native UI text action rejected/);
+  const events = await fs.readFile(path.join(failed.harness.directory, 'events.jsonl'), 'utf8');
+  assert.equal(events.includes(secret), false);
+  const textEvent = events.split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .find(event => event.op === 'ui' && event.args?.action === 'text');
+  assert.ok(textEvent);
+  assert.equal(await fs.stat(path.join(failed.harness.directory, `response-${textEvent.id}.json`)).then(() => true, () => false), false);
+
+  const echo = await fixture(t);
+  await fakeBridge(t, echo.harness, async request => ({ echo: request.args.text ?? null }));
+  const echoSecret = 'response-secret-fixture';
+  assert.deepEqual(await echo.harness.request('ui', { action: 'text', text: echoSecret }), { text_redacted: true });
+  assert.equal((await fs.readdir(echo.harness.directory)).some(name => name.startsWith('response-')), false);
+  assert.equal((await fs.readFile(path.join(echo.harness.directory, 'events.jsonl'), 'utf8')).includes(echoSecret), false);
+});
+
+test('float32 fill readback uses native rounding while integer readback remains exact', async t => {
+  const float = await fixture(t);
+  const floatBridge = await fakeUiBridge(t, float.harness, { value: 0.25, value_type: 'float32' });
+  const entered = '0.333';
+  const floatResult = await float.harness.fill('Friendly label', entered);
+  assert.equal(floatResult.outcome, 'PASS');
+  assert.equal(floatBridge.state.value, Math.fround(Number(entered)));
+
+  const integer = await fixture(t);
+  await fakeUiBridge(t, integer.harness, { value: 0, value_type: 'int32', readbackOverride: 1 });
+  const integerResult = await integer.harness.fill('Friendly label', '0.333');
+  assert.equal(integerResult.outcome, 'FAIL');
+  assert.equal(integerResult.reason, 'text_readback_mismatch');
+});
+test('toggle is idempotent and scroll uses fresh window geometry', async t => {
+  const { harness } = await fixture(t);
+  const bridge = await fakeUiBridge(t, harness, { toggle: false });
+  assert.equal((await harness.setToggle('Friendly label', true)).changed, true);
+  assert.equal((await harness.setToggle('Friendly label', true)).changed, false);
+  assert.equal(bridge.requests.filter(request => request.op === 'ui' && request.args.action === 'click').length, 1);
+
+  const mismatch = await fixture(t);
+  const noChange = await fakeUiBridge(t, mismatch.harness, { toggle: false, changeToggle: false });
+  assert.equal((await mismatch.harness.setToggle('Friendly label', true)).outcome, 'FAIL');
+  assert.equal(noChange.requests.filter(request => request.op === 'ui' && request.args.action === 'click').length, 1);
+
+  const scroll = await fixture(t);
+  const scrollBridge = await fakeUiBridge(t, scroll.harness);
+  const result = await scroll.harness.scrollWindow('Settings', 4);
+  const action = scrollBridge.requests.find(request => request.op === 'ui' && request.args.action === 'scroll');
+  assert.deepEqual([action.args.x, action.args.y, action.args.delta_y], [400, 305, 4]);
+  assert.equal(result.after[1], 4);
+});
+
+test('a queued or lock-delayed UI request expires before publishing input', async t => {
+  const queued = await fixture(t);
+  let releaseQueue;
+  queued.harness.queue = new Promise(resolve => { releaseQueue = resolve; });
+  const deadline = Date.now() + 40;
+  const pending = queued.harness.request('ui', { action: 'text', text: 'queued-secret' }, { deadline });
+  await delay(60);
+  releaseQueue();
+  await assert.rejects(pending, /timeout/i);
+  await assert.rejects(fs.access(path.join(queued.harness.directory, 'command.json')));
+
+  const locked = await fixture(t);
+  await fs.mkdir(path.join(locked.harness.directory, 'client.lock'));
+  const lockPending = locked.harness.request('ui', { action: 'text', text: 'lock-secret' }, { deadline: Date.now() + 40 });
+  await assert.rejects(lockPending, /timeout|lock is busy/i);
+  await fs.rmdir(path.join(locked.harness.directory, 'client.lock'));
+  await assert.rejects(fs.access(path.join(locked.harness.directory, 'command.json')));
+});
 
 test('controller snapshots preserve simultaneous buttons, both sticks and analog triggers', () => {
   assert.deepEqual(controllerState({ port: 3, buttons: ['A', 'START'], axes: [-32767, 32767, 100, -100],
@@ -510,7 +713,7 @@ test('native UI actions require a fresh inspection and use widget IDs', async t 
   const requests = await fakeBridge(t, harness, async request => request.op === 'inspect'
     ? { observation_id: request.id, wall_ms: Date.now(), state: { running: true }, screenshot: null,
       ui: { items: [{ id: 42, label: 'Settings', visible: true, disabled: false }], text: 'Settings' } } : {});
-  await assert.rejects(harness.ui('click', { item_id: 42 }), /Inspect/);
+  await assert.rejects(harness.ui('click', { item_id: 42 }), /inspect/i);
   const observed = await harness.observe();
   assert.equal(observed.state.running, true);
   await harness.click('Settings');
@@ -521,7 +724,7 @@ test('native UI actions require a fresh inspection and use widget IDs', async t 
   assert.equal(requests.at(-1).op, 'inspect');
   assert.equal(requests[0].args.screenshot, false);
   await harness.setController();
-  await assert.rejects(harness.ui('click', { item_id: 42 }), /Inspect/);
+  await assert.rejects(harness.ui('click', { item_id: 42 }), /inspect/i);
 });
 
 test('semantic clicks reject ambiguous or disabled items', async t => {
@@ -531,10 +734,17 @@ test('semantic clicks reject ambiguous or disabled items', async t => {
       { id: 2, label: 'Duplicate', visible: true, disabled: false }, { id: 3, label: 'Disabled', visible: true, disabled: true }] } }));
   await harness.observe();
   await assert.rejects(harness.click('Duplicate'), /found 2/);
-  await assert.rejects(harness.click('Disabled'), /found 0/);
+  await assert.rejects(harness.click('Disabled'), /disabled/);
   await harness.note('Native item fixture', { verdict: 'UNCERTAIN' });
 });
 
+test('UI mismatch reports expected and actual vector values', async t => {
+  const { harness } = await fixture(t);
+  await fakeUiBridge(t, harness, { value: [1, 2] });
+  const result = await harness.expectUi('Friendly label', { value: [1, 3] });
+  assert.equal(result.outcome, 'FAIL');
+  assert.deepEqual(result.mismatches, [{ field: 'value', expected: [1, 3], actual: [1, 2] }]);
+});
 test('native capture rejects paths outside the session evidence directory', async t => {
   const { harness } = await fixture(t);
   await fakeBridge(t, harness, async request => ({ observation_id: request.id, wall_ms: Date.now(), ui: { items: [] },

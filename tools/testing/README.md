@@ -40,6 +40,7 @@ included Hikaru mappings require a Hikaru-enabled branch.
 | Host | Standalone Windows and Linux native builds | Android, libretro, Switch, UWP, macOS, and device acceptance |
 | Systems | Generic SH-4 telemetry for Dreamcast, Naomi, Naomi 2, Atomiswave, and System SP | A platform-wide or all-title gameplay pass |
 | Title semantics | A game-specific claim requires a mapping verified against that title and build | Generic telemetry does not establish what a mapped value means; current dev has no Hikaru support |
+| Windows settings UI | Standalone Windows exposes native controls for General, Library, Video, OSD, Audio, Controls, Network, Advanced, and About | Hardware/network prerequisites, read-only state, apply/restart behavior, and per-control acceptance still require separate verification |
 | Rendering | Crazy Taxi live-control/capture smoke on Dreamcast OpenGL/DX11/Vulkan and Naomi OpenGL | Visual parity, comparative performance, or full-title playthrough |
 | Guest controls | Native controller API drives emulated gamepad state | Guest keyboard, mouse, lightgun, operator, or JVS controls; native UI keys operate the host emulator UI, not a guest keyboard |
 | Media identity | The selected primary game file and explicitly seeded originals are hashed | Companion tracks/images, parent ROMs, or which BIOS/archive member the loader selected unless separately verified |
@@ -263,34 +264,75 @@ in `finally`. Expired input releases on the next emulator UI tick. A completely
 stalled owner cannot service input until it resumes. This tests the emulator's mapping/consumption path;
 physical USB/Bluetooth latency requires separate hardware measurements.
 
-## Native UI inspection and operation
+## Native UI inspection and Windows settings
+
+The native UI inspector is the primary way to inspect settings and widget state.
+It reports item IDs, exact and semantic labels, visible/enabled state, typed
+values where the native widget exposes them, apply requirements, active windows,
+scroll offsets, and focused text-input metadata. It exports the current typed
+value of non-password InputText controls when available, but never the internal
+ImGui editing buffer or a password value. It does not infer controls from screenshots or
+accessibility trees, and it does not expand collapsed sections or expose clipped
+offscreen widgets. A truncated inspection is marked explicitly.
 
 ```powershell
+node tools/testing/hollytest.mjs settings --run D:/tmp/hollytest-session-001 --page video
 node tools/testing/hollytest.mjs observe --run D:/tmp/hollytest-session-001
-node tools/testing/hollytest.mjs click --run D:/tmp/hollytest-session-001 --label Settings
+node tools/testing/hollytest.mjs click --run D:/tmp/hollytest-session-001 --semantic-id EXACT_SEMANTIC_ID
+node tools/testing/hollytest.mjs set-toggle --run D:/tmp/hollytest-session-001 --target '{"semantic_id":"EXACT_SEMANTIC_ID"}' --value false
+node tools/testing/hollytest.mjs expect-ui --run D:/tmp/hollytest-session-001 --target '{"semantic_id":"EXACT_SEMANTIC_ID"}' --expected '{"requires_apply":true}'
+node tools/testing/hollytest.mjs fill --run D:/tmp/hollytest-session-001 --target '{"label":"EXACT_VISIBLE_INPUT_LABEL"}' --text-file D:/tmp/hollytest-value.txt --commit false
+node tools/testing/hollytest.mjs scroll-window --run D:/tmp/hollytest-session-001 --window EXACT_OBSERVED_WINDOW_NAME --delta-y 1
 ```
 
-Inspection returns native ImGui widget IDs, labels, bounds, visibility, disabled,
-checked and inputable state, plus submitted UI text. It does not infer widgets
-from screenshots or accessibility trees. Logging does not expand collapsed nodes
-or unclip offscreen widgets. A truncated inspection is marked explicitly.
+`settings --page` accepts `general`, `library`, `video`, `osd`, `audio`,
+`controls`, `network`, `advanced`, or `about`; it requests that page and checks
+fresh page readback when the native snapshot exposes it. Select one visible,
+enabled item by a unique exact label, semantic ID, or current item ID. A label
+can match its friendly semantic label or displayed label; if more than one item
+matches, add a `--window` selector or use an item ID from a fresh inspection.
+`click --input` accepts native click modifiers (`Ctrl`, `Shift`, `Alt`), mouse
+button, and click count. `fill --modifiers '["Ctrl"]'` supplies a modifier for an
+unannotated numeric input; supported slider/range widgets add Ctrl automatically.
+`fill` selects the exact field, verifies native focus,
+replaces the field with Ctrl+A and text (or Backspace for an empty value), and
+optionally presses Enter. It rejects read-only inputs. An exported non-password
+typed value is checked before commit; when available, a fresh post-commit value
+is checked too. If Enter closes the field, the result reports
+`native_value_before_commit`; follow it with `expect_ui` for a separate
+post-effect assertion. Raw ImGui inputs may report `text_buffer_not_exported`.
+Password fields are writable but write-only. Use dummy values for form-entry
+tests; perform real-account sign-in only when it is part of the requested
+scenario. Text-action arguments are redacted in saved events and copied plans.
+Ordinary non-password values remain readable in structured UI state and may
+appear in its evidence. Password contents are never exported.
 
-```javascript
-await h.observe();
-await h.click('Settings');             // exact, unique visible enabled label
-await h.ui('key', { key: 'Down' });     // also Enter, Escape, Tab, Ctrl+A, etc.
-await h.ui('text', { text: 'query' });  // requires a focused native text field
-```
+`set-toggle` reads the current value and clicks only when it differs from the
+requested boolean, then verifies a fresh value. `expect-ui` compares only
+declared scalar or 2/4-number vector fields: missing typed state is
+INCONCLUSIVE, while a mismatch is FAIL. Password values are never assertable.
+`scroll-window` uses the selected visible window's freshly inspected inner bounds
+and reports the new scroll offset.
 
-`ui --run DIRECTORY --input '{"action":"key","key":"Escape"}'` inspects
-the current UI, performs the action, and returns a fresh inspection. Click,
-text, scroll, and drag use the same native action fields as the JavaScript API.
+Mapping controls use a synthetic device only after explicit creation on Settings
+> Controls. Start the app's normal detect-input flow before sending a button or
+axis code. Mapping input is not evidence of the final binding: axis baseline
+samples can be delivered before a binding is accepted. Confirm a binding using
+fresh Settings UI readback. Cleanup is reported only after native cancellation
+is acknowledged and detection is confirmed stopped. The synthetic device is never physical or rumble
+hardware. Mapping cancellation and plan cleanup stop detection.
 
-Each UI action requires a current observation token and refreshes afterward.
-Coordinates, scrolling and dragging are also supported. Native mouse/key states
-are held across emulator frames, so rapid OS clicks cannot disappear between
-frames. Actions neither move the desktop pointer nor type into other apps.
-Hardcore, netplay, and Naomi multiboard disable UI control and memory observation.
+The UI also supports exact-window `click`, native `key`/`text`/`scroll`/`drag`,
+and opt-in screenshots. Native UI keys operate the emulator UI; they do not send
+guest keyboard input. Guest keyboard, mouse, lightgun, operator, and JVS APIs
+are not exposed by this harness. Settings pages and controls remain subject to
+their hardware, network, read-only, apply, and restart requirements. The command
+surface does not certify that every setting can be changed or that a changed
+setting takes effect in every renderer.
+
+Inspect native telemetry and UI state before requesting a screenshot. Screenshots
+are a visual fallback for a specific question, not the first observation.
+Do not inspect, capture, or use UI controls during a quiet performance window.
 
 ## Version-bound game watches
 
@@ -387,15 +429,40 @@ identity. `verify` re-hashes the executable, game and seed inputs. The plan
 command repeats both checks before any game action. A `status` command reads a
 benchmark status file; use `doctor` to establish an interactive session.
 
-Plans use schema `hollytest.playtest-plan.v1`, a short unique `id`, an `identity`
-with required exact `game_id` copied from `doctor` or `live` and optional
-`profile_id`, `game_sha256`, or
-`executable_sha256`, a global `timeout_ms`, and 1..64 ordered steps. The example
-checks a generic live session. Mapped assertions
+Plans use schema `hollytest.playtest-plan.v1`, a short unique `id`, an optional
+`scope` (`game` by default or `ui`), an `identity`, a global `timeout_ms`, and
+1..64 ordered steps. Game scope requires the exact `game_id` copied from
+`doctor` or `live`, and may also bind `profile_id`, `game_sha256`, and
+`executable_sha256`. UI scope requires the exact `executable_sha256`; it can run
+without a game or while emulation is paused. Optional UI-scope game/content IDs
+and hashes still have to match. Both scopes run `doctor` and verify original
+executable/media/seed hashes before operations. Only game scope requires fresh
+SH-4 gameplay telemetry.
+
+The example below checks a generic live game session. Mapped assertions
 must use `telemetry.game_state.values.<name>.value`, name the expected
 `profile_id`, and pass only when the native mapping is identity-matched and the
 field is valid. Supported comparisons are `eq`, `ne`, `gt`, `gte`, `lt`, `lte`,
 `is_true`, and `is_false`.
+
+A UI-only plan uses the exact executable hash from `doctor` and can navigate
+settings while paused without asserting gameplay telemetry:
+
+```json
+{
+  "schema": "hollytest.playtest-plan.v1",
+  "id": "video-settings-inspection",
+  "scope": "ui",
+  "identity": { "executable_sha256": "EXACT_SHA256_FROM_DOCTOR" },
+  "timeout_ms": 10000,
+  "steps": [
+    { "id": "open-video", "op": "settings", "page": "video" },
+    { "id": "check-control-kind", "op": "expect_ui",
+      "target": { "semantic_id": "EXACT_ID_FROM_FRESH_INSPECTION" },
+      "expected": { "kind": "toggle" } }
+  ]
+}
+```
 
 ```json
 {
@@ -415,9 +482,14 @@ field is valid. Supported comparisons are `eq`, `ne`, `gt`, `gte`, `lt`, `lte`,
 }
 ```
 
-Supported operations are `observe` with optional assertions, `wait_for` with
-assertions and bounded timeout/interval, `press`, `hold`, `controller`, `release`,
-`click` by visible label, native `ui` key/text/scroll/drag, and opt-in `screenshot`.
+Game plans support `observe` with optional assertions, `wait_for` with assertions
+and bounded timeout/interval, `press`, `hold`, `controller`, `release`, `click`,
+native `ui`, and opt-in `screenshot`. Both scopes support `settings`, `mapping`,
+`fill`, `set_toggle`, `expect_ui`, and `scroll_window`. Click selectors can use
+`label`, `item_id`, or `semantic_id`, with an optional `window`; click modifiers,
+mouse button, and click count are bounded native fields. Mapping button/axis
+operations report delivery separately from binding acceptance; use UI readback
+to assert the actual setting.
 Plans are fully validated before attaching or issuing input. There is no shell,
 evaluation, arbitrary output path, automatic retries, or implicit process stop.
 The runner stops after the first failed step, marks later steps not-run, and
@@ -426,11 +498,13 @@ step JSONL are written to a unique directory inside the session; a non-PASS
 result exits with code 2. Missing, stale, or unmapped telemetry is inconclusive,
 never a pass.
 
-This generic plan establishes a fresh running emulator and the selected game
-identity; it does not establish any game-specific behavior. The runner makes live
-tests repeatable in structure, not deterministic. For game behavior, assert only
-fields whose meanings and identities are verified. The interactive benchmark
-reports a single-run measurement, not a comparison.
+The generic game plan establishes a fresh running emulator and the selected game
+identity; it does not establish any game-specific behavior. A UI-scope plan makes
+no gameplay or telemetry claim. It can navigate settings without CPU freshness,
+but still binds the tested executable and any optional game identity. The runner
+makes tests repeatable in structure, not deterministic. Assert only fields whose
+meanings and identities are verified. The interactive benchmark reports a
+single-run measurement, not a comparison.
 
 For the optional Hikaru branch, `playtest.planet-harriers.example.json` shows a
 game-specific mapping plan. It must be used with a Hikaru-enabled build and the

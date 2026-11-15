@@ -30,6 +30,9 @@
 #include "imgui_driver.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "test_harness_ui.h"
+#endif
 #include "misc/freetype/imgui_text_shaping.h"
 #include "imgui_stdlib.h"
 #include "gui_font.h"
@@ -43,6 +46,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <future>
 #include <map>
 #include <string>
@@ -401,6 +405,12 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 			{
 				const bool submitted = ImGui::InputTextEx("##pathbox", T("Path"), filePathText, sizeof(filePathText),
 						ImVec2(-uiScaled(220), navSize), ImGuiInputTextFlags_EnterReturnsTrue);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.path"},
+						{"semantic_label", "Current directory path"}, {"kind", "text"}, {"value", filePathText},
+						{"password", false}, {"read_only", false}});
+#endif
 				if (submitted)
 				{
 					navigateToDirectory(filePathText, true);
@@ -490,6 +500,11 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 				else if (!inContentPane)
 					navigateToDirectory(entry.path, true);
 			}
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.folder:" + entry.path},
+					{"semantic_label", entry.name}, {"kind", "folder"}, {"value", entry.path}});
+#endif
 			drawBrowserItemLabel(icon, entry.name, rowPos, false,
 					inContentPane ? 0.0f : uiScaled(14.0f) * treeDepth);
 			ImGui::PopID();
@@ -519,6 +534,11 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					finalizeSelection(entry.name);
 			}
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.file:" + entry.path},
+					{"semantic_label", entry.name}, {"kind", "file"}, {"value", entry.path}});
+#endif
 			drawBrowserItemLabel(ICON_FA_FILE, entry.name, rowPos, false, 0.0f);
 			ImGui::PopID();
 
@@ -574,6 +594,12 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 				ImVec2(-FLT_MIN, navSize), 0))
 		{
 		}
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.search"},
+				{"semantic_label", "Search files"}, {"kind", "text"}, {"value", fileSearchText},
+				{"password", false}, {"read_only", false}});
+#endif
 		ImGui::Separator();
 
 		const ImGuiStyle& style = ImGui::GetStyle();
@@ -706,6 +732,12 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 		const bool inputSubmitted = ImGui::InputTextEx("##file_input", T("Filename"), fileInputText, sizeof(fileInputText),
 				ImVec2(-FLT_MIN, 0),
 				ImGuiInputTextFlags_EnterReturnsTrue);
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.selection"},
+				{"semantic_label", selectFile ? "File name" : "Folder"}, {"kind", "text"}, {"value", fileInputText},
+				{"password", false}, {"read_only", false}});
+#endif
 		if (ImGui::IsItemEdited())
 			fileInputIsDirectory = false;
 		if (inputSubmitted)
@@ -2041,6 +2073,30 @@ static int switchInputTextCallback(ImGuiInputTextCallbackData *data)
 }
 #endif
 
+#ifdef HOLLYCAST_TEST_HARNESS
+static void annotateHarnessTextInput(const char* label, const char* value, ImGuiInputTextFlags flags)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const std::string rawLabel = label ? label : "";
+	const std::size_t hiddenLabel = rawLabel.find("##");
+	const std::string visibleLabel = rawLabel.substr(0, hiddenLabel);
+	const bool password = (flags & ImGuiInputTextFlags_Password) != 0;
+	test_harness::Json metadata = {{"semantic_id", "input." + rawLabel},
+		{"semantic_label", visibleLabel}, {"kind", "text"}, {"password", password},
+		{"read_only", (flags & ImGuiInputTextFlags_ReadOnly) != 0}};
+	if (!password && value != nullptr)
+	{
+		const std::size_t valueLength = std::strlen(value);
+		if (valueLength <= 1024)
+			metadata["value"] = std::string(value, valueLength);
+		else
+			test_harness::ui::markTruncated();
+	}
+	test_harness::ui::annotateItem(test_harness::ui::lastItemId(), metadata);
+}
+#endif
+
 bool InputText(const char *label, std::string *str, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
 {
 #ifdef __SWITCH__
@@ -2048,28 +2104,56 @@ bool InputText(const char *label, std::string *str, ImGuiInputTextFlags flags, I
 	{
 		// TODO This doesn't handle growing the string capacity dynamically
 		str->reserve(512);
-		return ImGui::InputText(label, str, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+		const bool changed = ImGui::InputText(label, str, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+#ifdef HOLLYCAST_TEST_HARNESS
+		annotateHarnessTextInput(label, str->c_str(), flags);
+#endif
+		return changed;
 	}
 #endif
-	return ImGui::InputText(label, str, flags, callback, user_data);
+	const bool changed = ImGui::InputText(label, str, flags, callback, user_data);
+#ifdef HOLLYCAST_TEST_HARNESS
+	annotateHarnessTextInput(label, str->c_str(), flags);
+#endif
+	return changed;
 }
 
 bool InputText(const char *label, char *str, size_t size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
 {
 #ifdef __SWITCH__
 	if ((flags & ImGuiInputTextFlags_ReadOnly) == 0)
-		return ImGui::InputText(label, str, size, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+	{
+		const bool changed = ImGui::InputText(label, str, size, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+#ifdef HOLLYCAST_TEST_HARNESS
+		annotateHarnessTextInput(label, str, flags);
 #endif
-	return ImGui::InputText(label, str, size, flags, callback, user_data);
+		return changed;
+	}
+#endif
+	const bool changed = ImGui::InputText(label, str, size, flags, callback, user_data);
+#ifdef HOLLYCAST_TEST_HARNESS
+	annotateHarnessTextInput(label, str, flags);
+#endif
+	return changed;
 }
 
 bool InputTextMultiline(const char* label, char* buf, size_t buf_size, const ImVec2& size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
 {
 #ifdef __SWITCH__
 	if ((flags & ImGuiInputTextFlags_ReadOnly) == 0)
-		return ImGui::InputTextMultiline(label, buf, buf_size, size, flags | ImGuiInputTextFlags_CallbackAlways | Flags_Multiline, switchInputTextCallback);
+	{
+		const bool changed = ImGui::InputTextMultiline(label, buf, buf_size, size, flags | ImGuiInputTextFlags_CallbackAlways | Flags_Multiline, switchInputTextCallback);
+#ifdef HOLLYCAST_TEST_HARNESS
+		annotateHarnessTextInput(label, buf, flags);
 #endif
-	return ImGui::InputTextMultiline(label, buf, buf_size, size, flags, callback, user_data);
+		return changed;
+	}
+#endif
+	const bool changed = ImGui::InputTextMultiline(label, buf, buf_size, size, flags, callback, user_data);
+#ifdef HOLLYCAST_TEST_HARNESS
+	annotateHarnessTextInput(label, buf, flags);
+#endif
+	return changed;
 }
 
 // ============================================================================
@@ -2247,6 +2331,11 @@ bool SettingsOption(const char* label, config::Option<bool, PerGameOption>& opti
 
 	bool value = option;
 	bool changed = ToggleSwitch(("##" + std::string(label)).c_str(), &value);
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", std::string("settings.option.") + label},
+			{"semantic_label", label ? label : ""}, {"kind", "toggle"}, {"value", value}});
+#endif
 	if (changed)
 		option = value;
 
@@ -2374,6 +2463,16 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 			pendingSelection = openingValue;
 		}
 	}
+
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (cfg.multiSelect && editingPopup == ownerPopup && isTopmost
+			&& test_harness::ui::collectingInspection())
+	{
+		const ImGuiID rowItemId = ImGui::GetID("##row");
+		if (rowItemId != 0)
+			test_harness::ui::annotateItem(rowItemId, {{"draft_value", pendingSelection}});
+	}
+#endif
 
 	if (editingPopup == ownerPopup && isTopmost && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
 		const bool changed = !cfg.multiSelect && *cfg.currentValue != openingValue;

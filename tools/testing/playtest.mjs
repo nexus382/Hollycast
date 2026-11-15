@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { controllerState } from './hollytest.mjs';
+import { controllerState, validateMappingArgs, validateSettingsPage, validateUiClickOptions, validateUiTarget, validateUiExpectedFields } from './hollytest.mjs';
 
 const PLAN_SCHEMA = 'hollytest.playtest-plan.v1';
 const MAX_PLAN_STEPS = 64;
@@ -92,14 +92,25 @@ function validateUiStep(step) {
 }
 
 export function validatePlaytestPlan(plan) {
-  fields(plan, new Set(['schema', 'id', 'identity', 'timeout_ms', 'steps']), 'plan');
+  fields(plan, new Set(['schema', 'id', 'scope', 'identity', 'timeout_ms', 'steps']), 'plan');
   check(plan.schema === PLAN_SCHEMA, `Plan schema must be ${PLAN_SCHEMA}`);
   planId(plan.id, 'Plan id');
+  const scope = plan.scope ?? 'game';
+  check(scope === 'game' || scope === 'ui', 'Plan scope must be game or ui');
   fields(plan.identity, new Set(['game_id', 'profile_id', 'game_sha256', 'executable_sha256']), 'identity');
-  check(typeof plan.identity.game_id === 'string' && plan.identity.game_id.length >= 1
-    && plan.identity.game_id.length <= 128 && !/[\u0000-\u001f\u007f]/.test(plan.identity.game_id),
-  'identity.game_id must be a nonempty literal without control characters');
-  if (Object.hasOwn(plan.identity, 'profile_id')) planId(plan.identity.profile_id, 'identity.profile_id');
+  if (scope === 'game' || Object.hasOwn(plan.identity, 'game_id')) {
+    check(typeof plan.identity.game_id === 'string' && plan.identity.game_id.length >= 1
+      && plan.identity.game_id.length <= 128 && !/[\u0000-\u001f\u007f]/.test(plan.identity.game_id),
+    'identity.game_id must be a nonempty literal without control characters');
+  }
+  if (scope === 'ui') {
+    check(typeof plan.identity.executable_sha256 === 'string' && HASH.test(plan.identity.executable_sha256),
+      'UI scope requires identity.executable_sha256');
+  }
+  if (Object.hasOwn(plan.identity, 'profile_id')) {
+    planId(plan.identity.profile_id, 'identity.profile_id');
+    check(typeof plan.identity.game_id === 'string', 'identity.profile_id requires identity.game_id');
+  }
   if (Object.hasOwn(plan.identity, 'game_sha256'))
     check(typeof plan.identity.game_sha256 === 'string' && HASH.test(plan.identity.game_sha256), 'identity.game_sha256 must be SHA-256');
   if (Object.hasOwn(plan.identity, 'executable_sha256'))
@@ -161,8 +172,39 @@ export function validatePlaytestPlan(plan) {
       fields(step, new Set(['id', 'op']), `${step.op} step`);
       if (step.op === 'screenshot') screenshots++;
     } else if (step.op === 'click') {
-      fields(step, new Set(['id', 'op', 'label']), 'click step');
-      check(typeof step.label === 'string' && step.label.length >= 1 && step.label.length <= 256, 'click label must contain 1..256 characters');
+      fields(step, new Set(['id', 'op', 'label', 'target', 'modifiers', 'mouse_button', 'click_count']), 'click step');
+      check(Object.hasOwn(step, 'label') !== Object.hasOwn(step, 'target'), 'click requires exactly one of label or target');
+      validateUiTarget(step.target ?? step.label);
+      validateUiClickOptions({ ...(step.modifiers === undefined ? {} : { modifiers: step.modifiers }),
+        ...(step.mouse_button === undefined ? {} : { mouse_button: step.mouse_button }),
+        ...(step.click_count === undefined ? {} : { click_count: step.click_count }) });
+    } else if (step.op === 'settings') {
+      fields(step, new Set(['id', 'op', 'page']), 'settings step');
+      validateSettingsPage(step.page);
+    } else if (step.op === 'mapping') {
+      fields(step, new Set(['id', 'op', 'input']), 'mapping step');
+      validateMappingArgs(step.input);
+    } else if (step.op === 'fill') {
+      fields(step, new Set(['id', 'op', 'target', 'text', 'commit', 'modifiers']), 'fill step');
+      validateUiTarget(step.target);
+      if (Object.hasOwn(step, 'modifiers')) validateUiClickOptions({ modifiers: step.modifiers });
+      check(typeof step.text === 'string' && Buffer.byteLength(step.text, 'utf8') <= 4096 && !step.text.includes('\0'),
+        'fill text must be at most 4096 UTF-8 bytes without NUL');
+      if (Object.hasOwn(step, 'commit')) check(typeof step.commit === 'boolean', 'fill commit must be boolean');
+    } else if (step.op === 'set_toggle') {
+      fields(step, new Set(['id', 'op', 'target', 'value']), 'set_toggle step');
+      validateUiTarget(step.target);
+      check(typeof step.value === 'boolean', 'set_toggle value must be boolean');
+    } else if (step.op === 'expect_ui') {
+      fields(step, new Set(['id', 'op', 'target', 'expected']), 'expect_ui step');
+      validateUiTarget(step.target);
+      validateUiExpectedFields(step.expected);
+    } else if (step.op === 'scroll_window') {
+      fields(step, new Set(['id', 'op', 'window', 'delta_x', 'delta_y']), 'scroll_window step');
+      check(typeof step.window === 'string' && step.window.length >= 1 && step.window.length <= 128,
+        'scroll_window requires a window name');
+      boundedInteger(step.delta_x ?? 0, -100, 100, 'Horizontal scroll');
+      boundedInteger(step.delta_y, -100, 100, 'Vertical scroll');
     } else if (step.op === 'ui') {
       validateUiStep(step);
     } else {
@@ -172,6 +214,10 @@ export function validatePlaytestPlan(plan) {
   check(screenshots <= 4, 'A plan may request at most four screenshots');
   check(declaredDurationMs <= plan.timeout_ms, 'Declared step durations exceed the plan timeout');
   if (hasMappedAssertions) check(typeof plan.identity.profile_id === 'string', 'Mapped game assertions require identity.profile_id');
+  if (scope === 'ui') {
+    const allowed = new Set(['settings', 'mapping', 'click', 'ui', 'fill', 'set_toggle', 'expect_ui', 'scroll_window', 'release', 'screenshot']);
+    check(plan.steps.every(step => allowed.has(step.op)), 'UI scope permits only native settings and UI operations');
+  }
   return plan;
 }
 
@@ -265,6 +311,32 @@ function abortError(signal) {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Playtest cancelled');
 }
 
+function requireUiOperationPass(result, operation) {
+  if (result?.outcome === 'PASS') return result;
+  const outcome = result?.outcome === 'FAIL' ? 'FAIL' : 'INCONCLUSIVE';
+  throw new PlaytestResultError(`${operation} did not pass: ${result?.reason ?? 'native readback unavailable'}`, outcome, { result });
+}
+
+function redactUiEvidence(value) {
+  if (Array.isArray(value)) return value.map(redactUiEvidence);
+  if (!value || typeof value !== 'object') return value;
+  const copy = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactUiEvidence(child)]));
+  if (Array.isArray(copy.ui?.items)) {
+    for (const item of copy.ui.items) {
+      const password = item.password === true;
+      const typedText = item.inputable === true && ['text', 'path', 'file'].includes(item.kind);
+      if (!password && !typedText && item.text_input_focused !== true) continue;
+      for (const key of ['value', 'value_label', 'draft_value']) {
+        if (!Object.hasOwn(item, key)) continue;
+        if (password || (typeof item[key] === 'string' && (['value', 'draft_value'].includes(key) || typedText)))
+          item[key] = '[redacted]';
+      }
+      if (password || typedText) item.text_value_redacted = true;
+    }
+  }
+  return copy;
+}
+
 async function writeNewJson(file, value) {
   const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
   try {
@@ -315,7 +387,34 @@ async function runWaitFor(harness, step, plan, signal, deadline, onProgress) {
     polls, observation: lastObservation, assertions: lastEvaluation?.results ?? [] });
 }
 
-async function runStep(harness, step, plan, signal, deadline, onProgress, markInputTouched, markInputReleased) {
+function evidencePlan(plan) {
+  const saved = structuredClone(plan);
+  for (const step of saved.steps) {
+    if (step.op === 'fill') {
+      const text = step.text;
+      step.text = '[redacted]';
+      step.text_redacted = true;
+      step.text_length = Buffer.byteLength(text, 'utf8');
+    } else if (step.op === 'ui' && step.action === 'text') {
+      const text = step.text;
+      step.text = '[redacted]';
+      step.text_redacted = true;
+      step.text_length = Buffer.byteLength(text, 'utf8');
+    } else if (step.op === 'expect_ui') {
+      let redacted = false;
+      step.expected = Object.fromEntries(Object.entries(step.expected).map(([key, value]) => {
+        if (typeof value !== 'string') return [key, value];
+        redacted = true;
+        return [key, '[redacted]'];
+      }));
+      if (redacted) step.expected_values_redacted = true;
+    }
+  }
+  return saved;
+}
+
+async function runStep(harness, step, plan, signal, deadline, onProgress, markInputTouched, markInputReleased,
+  markMappingCreated, markMappingCancelled) {
   abortError(signal);
   if (Date.now() >= deadline) throw new PlaytestResultError('Plan deadline elapsed', 'INCONCLUSIVE');
   switch (step.op) {
@@ -337,14 +436,14 @@ async function runStep(harness, step, plan, signal, deadline, onProgress, markIn
       return runWaitFor(harness, step, plan, signal, deadline, onProgress);
     case 'press': {
       markInputTouched(step.port ?? 0);
-      await harness.hold({ port: step.port ?? 0, buttons: [step.button] }, step.duration_ms ?? 120, { signal });
+      await harness.hold({ port: step.port ?? 0, buttons: [step.button] }, step.duration_ms ?? 120, { signal, deadline });
       markInputReleased();
       abortError(signal);
       return { button: step.button, port: step.port ?? 0, duration_ms: step.duration_ms ?? 120 };
     }
     case 'hold': {
       markInputTouched(step.state.port ?? 0);
-      await harness.hold(step.state, step.duration_ms, { signal });
+      await harness.hold(step.state, step.duration_ms, { signal, deadline });
       markInputReleased();
       abortError(signal);
       return { state: step.state, duration_ms: step.duration_ms };
@@ -352,7 +451,7 @@ async function runStep(harness, step, plan, signal, deadline, onProgress, markIn
     case 'controller': {
       const state = controllerState(step.state);
       markInputTouched(state.port);
-      const result = await harness.setController(step.state);
+      const result = await harness.setController(step.state, { signal, deadline });
       abortError(signal);
       return { state: step.state, result };
     }
@@ -363,20 +462,76 @@ async function runStep(harness, step, plan, signal, deadline, onProgress, markIn
       return { released: true, result };
     }
     case 'click': {
-      const observation = await harness.click(step.label);
+      const target = step.target ?? step.label;
+      const options = { ...(step.modifiers === undefined ? {} : { modifiers: step.modifiers }),
+        ...(step.mouse_button === undefined ? {} : { mouse_button: step.mouse_button }),
+        ...(step.click_count === undefined ? {} : { click_count: step.click_count }) };
+      const observation = await harness.click(target, options, { signal, deadline });
       abortError(signal);
-      return { label: step.label, observation };
+      return { target: typeof target === 'string' ? { label: target } : target, observation: redactUiEvidence(observation) };
+    }
+    case 'settings': {
+      const result = await harness.settings(step.page, { signal, deadline });
+      abortError(signal);
+      return redactUiEvidence(result);
+    }
+    case 'mapping': {
+      const result = await harness.mapping(step.input, { signal, deadline });
+      if (step.input.action === 'create') {
+        markMappingCreated();
+        if (result.registered !== true) throw new PlaytestResultError('Mapping device registration was not confirmed', 'INCONCLUSIVE', { result });
+      }
+      if (step.input.action === 'cancel') {
+        if (result.cancelled !== true || result.detecting !== false)
+          throw new PlaytestResultError('Mapping cancellation was not confirmed stopped', 'INCONCLUSIVE', { result });
+        markMappingCancelled();
+      }
+      if (step.input.action === 'button' || step.input.action === 'axis') {
+        const isRelease = step.input.action === 'button' && step.input.pressed === false;
+        if (isRelease ? result.released !== true : result.delivered !== true)
+          throw new PlaytestResultError('Mapping input was not confirmed delivered', 'INCONCLUSIVE', { result });
+      }
+      abortError(signal);
+      return { action: step.input.action, result };
+    }
+    case 'fill': {
+      const result = await harness.fill(step.target, step.text, { commit: step.commit ?? true, modifiers: step.modifiers ?? [], signal, deadline });
+      abortError(signal);
+      const safe = { outcome: result.outcome, reason: result.reason, target: result.target,
+        committed: result.committed, verification: result.verification, post_effect_readback: result.post_effect_readback,
+        text_length: result.text_length };
+      if (safe.post_effect_readback === 'required') {
+        const stepIndex = plan.steps.findIndex(candidate => candidate.id === step.id);
+        if (plan.steps[stepIndex + 1]?.op !== 'expect_ui')
+          throw new PlaytestResultError('Fill needs a following expect_ui post-effect assertion', 'INCONCLUSIVE', { result: safe });
+      }
+      return requireUiOperationPass(safe, 'fill');
+    }
+    case 'set_toggle': {
+      const result = await harness.setToggle(step.target, step.value, { signal, deadline });
+      abortError(signal);
+      return requireUiOperationPass(result, 'set_toggle');
+    }
+    case 'expect_ui': {
+      const result = await harness.expectUi(step.target, step.expected, { signal, deadline });
+      abortError(signal);
+      return requireUiOperationPass(result, 'expect_ui');
+    }
+    case 'scroll_window': {
+      const result = await harness.scrollWindow(step.window, step.delta_y, { deltaX: step.delta_x ?? 0, signal, deadline });
+      abortError(signal);
+      return requireUiOperationPass(result, 'scroll_window');
     }
     case 'ui': {
-      await harness.observe();
+      await harness.observe({ signal, deadline });
       abortError(signal);
       const { id, op, action, ...fields } = step;
-      const observation = await harness.ui(action, fields);
+      const observation = await harness.ui(action, fields, { signal, deadline });
       abortError(signal);
-      return { action, observation };
+      return { action, observation: redactUiEvidence(observation) };
     }
     case 'screenshot': {
-      const observation = await harness.observe({ screenshot: true });
+      const observation = await harness.observe({ screenshot: true, signal, deadline });
       abortError(signal);
       if (!observation.screenshot)
         throw new PlaytestResultError('Native screenshot is unavailable', 'INCONCLUSIVE', { observation });
@@ -412,9 +567,10 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
       executable_sha256: harness.manifest?.executable_sha256 ?? null,
       game_sha256: harness.manifest?.game_sha256 ?? null },
     artifacts: { report: path.join(reportLocation.relative, 'report.json'), steps: path.join(reportLocation.relative, 'steps.jsonl') },
-    preflight: { status: 'not_run' }, steps, cleanup: { input_touched_ports: [], input_released: null }, errors: [],
+    preflight: { status: 'not_run' }, steps, cleanup: { input_touched_ports: [], input_released: null,
+      mapping_cancelled: null }, errors: [],
   };
-  await writeNewJson(path.join(reportLocation.directory, 'plan.json'), plan);
+  await writeNewJson(path.join(reportLocation.directory, 'plan.json'), evidencePlan(plan));
 
   const timeoutController = new AbortController();
   const timeout = setTimeout(() => timeoutController.abort(new Error('Plan timeout elapsed')), plan.timeout_ms);
@@ -424,6 +580,7 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
   const runSignal = timeoutController.signal;
   const touchedPorts = new Set();
   let inputTouched = false;
+  let mappingCreated = false;
   const recordStep = async (stepRecord) => {
     await fs.appendFile(path.join(reportLocation.directory, 'steps.jsonl'), `${JSON.stringify(stepRecord)}\n`, { flag: 'a' });
   };
@@ -437,22 +594,37 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
       const sourceCheck = await harness.verifySources();
       abortError(runSignal);
       const initial = doctor.live;
-      const freshness = isFreshObservation(initial, plan);
-      check(freshness.fresh, freshness.reason || 'Initial live observation is unavailable');
-      check(doctor.game_id === plan.identity.game_id, 'Attached session game_id does not match the plan');
-      if (plan.identity.executable_sha256)
+      if (plan.scope === 'ui') {
         check(doctor.executable_sha256 === plan.identity.executable_sha256, 'Executable identity does not match the plan');
-      if (plan.identity.game_sha256)
-        check(harness.manifest?.game_sha256 === plan.identity.game_sha256, 'Game content identity does not match the plan');
-      if (plan.identity.profile_id)
-        check(initial.telemetry.game_state?.status === 'matched_operator_mapping', 'The requested game profile is not identity-matched');
-      for (const name of mappedAssertionNames(plan))
-        check(Object.hasOwn(initial.telemetry.game_state?.values ?? {}, name), `Mapped field is not in the active profile: ${name}`);
-      report.identity = { source_revision_declared: doctor.source_revision ?? null,
-        executable_sha256: doctor.executable_sha256 ?? null, game_sha256: harness.manifest?.game_sha256 ?? null,
-        game_id: doctor.game_id ?? null, profile_id: initial.telemetry.game_state?.profile_id ?? null,
-        verified_inputs: sourceCheck };
-      report.preflight = { status: 'pass', capabilities: doctor.capabilities, verified_inputs: sourceCheck };
+        if (plan.identity.game_id !== undefined)
+          check(doctor.game_id === plan.identity.game_id, 'Attached session game_id does not match the plan');
+        if (plan.identity.game_sha256)
+          check(harness.manifest?.game_sha256 === plan.identity.game_sha256, 'Game content identity does not match the plan');
+        if (plan.identity.profile_id)
+          check(initial.telemetry?.game_state?.profile_id === plan.identity.profile_id
+            && initial.telemetry?.game_state?.status === 'matched_operator_mapping', 'Attached session profile_id is not identity-matched');
+        report.identity = { scope: 'ui', source_revision_declared: doctor.source_revision ?? null,
+          executable_sha256: doctor.executable_sha256 ?? null, game_sha256: harness.manifest?.game_sha256 ?? null,
+          game_id: doctor.game_id ?? null, profile_id: initial.telemetry?.game_state?.profile_id ?? null,
+          verified_inputs: sourceCheck };
+      } else {
+        const freshness = isFreshObservation(initial, plan);
+        check(freshness.fresh, freshness.reason || 'Initial live observation is unavailable');
+        check(doctor.game_id === plan.identity.game_id, 'Attached session game_id does not match the plan');
+        if (plan.identity.executable_sha256)
+          check(doctor.executable_sha256 === plan.identity.executable_sha256, 'Executable identity does not match the plan');
+        if (plan.identity.game_sha256)
+          check(harness.manifest?.game_sha256 === plan.identity.game_sha256, 'Game content identity does not match the plan');
+        if (plan.identity.profile_id)
+          check(initial.telemetry.game_state?.status === 'matched_operator_mapping', 'The requested game profile is not identity-matched');
+        for (const name of mappedAssertionNames(plan))
+          check(Object.hasOwn(initial.telemetry.game_state?.values ?? {}, name), `Mapped field is not in the active profile: ${name}`);
+        report.identity = { scope: 'game', source_revision_declared: doctor.source_revision ?? null,
+          executable_sha256: doctor.executable_sha256 ?? null, game_sha256: harness.manifest?.game_sha256 ?? null,
+          game_id: doctor.game_id ?? null, profile_id: initial.telemetry.game_state?.profile_id ?? null,
+          verified_inputs: sourceCheck };
+      }
+      report.preflight = { status: 'pass', scope: plan.scope ?? 'game', capabilities: doctor.capabilities, verified_inputs: sourceCheck };
       preflightPassed = true;
     } catch (error) {
       const details = errorDetails(error);
@@ -475,6 +647,12 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
           }, () => {
             inputTouched = false;
             report.cleanup.input_released = true;
+          }, () => {
+            mappingCreated = true;
+            report.cleanup.mapping_cancelled = null;
+          }, () => {
+            mappingCreated = false;
+            report.cleanup.mapping_cancelled = true;
           });
         stepRecord.status = 'pass';
         stepRecord.result = result;
@@ -484,6 +662,10 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
         onProgress?.({ phase: 'step_finished', plan_id: plan.id, step_id: step.id, status: 'pass' });
       } catch (error) {
         const details = errorDetails(error);
+        if (step.op === 'fill' || (step.op === 'ui' && step.action === 'text')) {
+          details.message = `${step.op} failed; text input is redacted`;
+          details.details = null;
+        }
         stepRecord.status = 'fail';
         stepRecord.outcome = details.outcome;
         stepRecord.error = details.message;
@@ -505,6 +687,18 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
         report.cleanup.input_released = true;
       } catch (error) {
         report.cleanup.input_released = false;
+        report.errors.push({ phase: 'cleanup', outcome: 'FAIL', message: error.message || String(error) });
+        report.outcome = 'FAIL';
+      }
+    }
+    if (mappingCreated) {
+      try {
+        const result = await harness.mapping({ action: 'cancel' });
+        if (result.cancelled !== true || result.detecting !== false)
+          throw new Error('Mapping cancellation was not confirmed stopped');
+        report.cleanup.mapping_cancelled = true;
+      } catch (error) {
+        report.cleanup.mapping_cancelled = false;
         report.errors.push({ phase: 'cleanup', outcome: 'FAIL', message: error.message || String(error) });
         report.outcome = 'FAIL';
       }
