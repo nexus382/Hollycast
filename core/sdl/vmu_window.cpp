@@ -161,17 +161,31 @@ void publishScreen(int index, const u32 *pixels, bool active) { frames.publish(i
 
 void update(SDL_Window *parent, bool pointerAvailable)
 {
-	PreserveGLContext preserveContext;
 	owner = parent;
 	savePositions(false);
+	if (!placementActive())
+	{
+		for (auto& lcd : windows)
+		{
+			if (lcd.window != nullptr)
+			{
+				PreserveGLContext preserveContext;
+				destroy(lcd);
+			}
+			lcd.displayed = false;
+			lcd.dismissed = false;
+			lcd.placing = false;
+		}
+		return;
+	}
+	PreserveGLContext preserveContext;
 	const char *driver = SDL_GetCurrentVideoDriver();
 	wayland = driver != nullptr && std::strcmp(driver, "wayland") == 0;
-	const bool enabled = placementActive();
 	const float alpha = opacity(config::VmuWindowTransparency.get(), gui_is_open());
 	const auto screens = frames.snapshot();
 	SDL_Window *focus = SDL_GetKeyboardFocus();
 	const bool focused = focus == parent || isVmuWindow(focus);
-	const bool visible = enabled && parent != nullptr && (pointerAvailable || !config::MovableVMUs) && focused
+	const bool visible = parent != nullptr && (pointerAvailable || !config::MovableVMUs) && focused
 		&& (SDL_GetWindowFlags(parent) & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0
 		&& gui_state != GuiState::Main && gui_state != GuiState::Onboarding
 		&& gui_state != GuiState::Loading && gui_state != GuiState::NetworkStart;
@@ -186,7 +200,7 @@ void update(SDL_Window *parent, bool pointerAvailable)
 	{
 		LcdWindow& lcd = windows[i];
 		lcd.placing = false;
-		if (!enabled || !screens[i].active)
+		if (!screens[i].active)
 		{
 			destroy(lcd);
 			lcd.dismissed = false;
