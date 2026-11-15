@@ -19,17 +19,24 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path, help="configured and fully built Ninja directory")
+    parser.add_argument("--resource-check", action="store_true", help="report real depth/stencil copy calls and GPU output hashes")
+    parser.add_argument("--renderer-source", type=Path, help="renderer source to compare against the current fixture")
     args = parser.parse_args()
     build = args.build.resolve()
     commands = json.loads((build / "compile_commands.json").read_text())
+    ninja = subprocess.check_output(["ninja", "-C", str(build), "-t", "commands", "Hollycast"], text=True)
 
     def command_for(name):
-        return next(c for c in commands if c["file"].endswith("/" + name))
+        entry = next((c for c in commands if c["file"].endswith("/" + name)), None)
+        if entry:
+            return entry
+        # Some CMake versions omit Objective-C++ from compile_commands.json.
+        command = next(line for line in ninja.splitlines() if " -c " in line and line.endswith("/" + name))
+        return {"command": command, "directory": str(build), "file": shlex.split(command)[-1]}
 
     renderer = command_for("metal_renderer.mm")
     if "-DTEST_AUTOMATION" not in renderer["command"]:
         raise RuntimeError("build must enable TEST_AUTOMATION for hidden windows")
-    ninja = subprocess.check_output(["ninja", "-C", str(build), "-t", "commands", "Hollycast"], text=True)
     link = next(line for line in reversed(ninja.splitlines())
                 if "/usr/bin/c++" in line and " -o Hollycast.app/" in line)
     link_args = shlex.split(link.split(" && ", 1)[1].split(" && ", 1)[0])
@@ -39,6 +46,7 @@ def main():
         def compile_object(name, output, extra, source=None):
             entry = command_for(name)
             cmd = shlex.split(entry["command"])
+            cmd[1:1] = ["-I" + str(ROOT / "core"), "-I" + str(ROOT / "core/rend/metal")]
             cmd[cmd.index("-o") + 1] = str(output)
             # Keep compiler dependency side effects out of the shared app build.
             if "-MF" in cmd:
@@ -52,7 +60,13 @@ def main():
         fixture = directory / "fixture.o"
         ta = directory / "ta.o"
         overlay = directory / "overlay.o"
-        compile_object("metal_renderer.mm", fixture, ["-fno-access-control"],
+        renderer_source = (args.renderer_source or ROOT / "core/rend/metal/metal_renderer.mm").resolve()
+        fixture_flags = ["-fno-access-control", '-DHOLLYCAST_METAL_RENDERER_SOURCE="' + str(renderer_source) + '"']
+        if args.resource_check:
+            fixture_flags.append("-DHOLLYCAST_METAL_RESOURCE_CHECK")
+            if not args.renderer_source:
+                fixture_flags.append("-DHOLLYCAST_METAL_RESOURCE_CHECK_ASSERT")
+        compile_object("metal_renderer.mm", fixture, fixture_flags,
                        ROOT / "tests/metal/renderer_entry_regression.mm")
         compile_object("ta_vtx.cpp", ta, ["-Dta_parse=hollycast_original_ta_parse"])
         # Keep unrelated overlay entry points real while intercepting timing calls.
