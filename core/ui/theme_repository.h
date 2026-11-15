@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include <functional>
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -17,10 +18,10 @@ using Transport = std::function<int(const std::string&, std::vector<unsigned cha
 
 // Catalogue URLs and all referenced downloads must use HTTPS.
 std::vector<Theme> parse(const std::string& json, const std::string& catalogUrl);
-std::vector<Theme> fetch(const std::string& catalogUrl, const Transport& transport = {});
+std::vector<Theme> fetch(const std::string& catalogUrl, const Transport& transport = {}, const std::atomic_bool* cancelled = nullptr);
 // Worker-safe: publishes a validated package without touching the UI-owned catalogue.
 // The caller must call themes::reload() on the UI thread after success.
-std::string install(const Theme& theme, const Transport& transport = {});
+std::string install(const Theme& theme, const Transport& transport = {}, const std::atomic_bool* cancelled = nullptr);
 // Downloads a bounded, validated image to a caller-owned cache file.
-void preview(const std::string& url, const std::string& path, const Transport& transport = {});
+void preview(const std::string& url, const std::string& path, const Transport& transport = {}, const std::atomic_bool* cancelled = nullptr);
 }

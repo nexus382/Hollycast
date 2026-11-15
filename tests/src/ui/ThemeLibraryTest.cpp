@@ -294,6 +294,27 @@ TEST_F(ThemeLibraryTest, ListBadgesTrackFavouriteStateAndStayInsideTheRow)
 	EXPECT_EQ(goldCount(), 0);
 }
 
+TEST_F(ThemeLibraryTest, ListReleaseYearBadgeRendersWhenItIsTheOnlyListBadge)
+{
+	layout.id = "list-release-year";
+	layout.mode = "list";
+	layout.browser = {0, 0, 1, 1};
+	layout.list.releaseYear = true;
+	layout.textColor = 0x123456ff;
+	items.resize(1);
+	items[0].metadata["releaseDate"] = "1999-09-09";
+
+	renderFrame(ImVec2(-1, -1), false);
+
+	const ImVec4 row = bounds[0];
+	const ImU32 yearText = IM_COL32(0x12, 0x34, 0x56, 0xff);
+	const auto yearTextVertices = std::count_if(browserMesh.begin(), browserMesh.end(), [&](const ImDrawVert& vertex) {
+		return vertex.col == yearText && vertex.pos.x > (row.x + row.z) * 0.5f
+				&& vertex.pos.y >= row.y && vertex.pos.y <= row.w;
+	});
+	EXPECT_EQ(yearTextVertices, 16);
+}
+
 TEST_F(ThemeLibraryTest, ClickSelectedListDoesNotUndoKeyboardNavigationUnderARestingPointer)
 {
 	layout.id = "click-list-keyboard";

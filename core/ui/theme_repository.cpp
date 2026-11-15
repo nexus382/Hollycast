@@ -61,14 +61,18 @@ std::string resolve(const std::string& base, const std::string& path)
 	return base.substr(0, base.rfind('/') + 1) + path;
 }
 
-std::vector<unsigned char> download(const std::string& url, size_t limit, const Transport& transport)
+std::vector<unsigned char> download(const std::string& url, size_t limit, const Transport& transport, const std::atomic_bool* cancelled)
 {
 	require(https(url), "Theme downloads require an HTTPS URL.");
+	require(cancelled == nullptr || !cancelled->load(), "Theme download cancelled.");
 	std::vector<unsigned char> bytes;
 	// The browser may be the first HTTP user, especially with artwork fetching disabled.
 	if (!transport)
 		http::init();
-	const int status = transport ? transport(url, bytes) : http::get(url, bytes);
+	// Limit received bytes, including chunked replies, before the HTTP client buffers them.
+	// A finite network timeout also bounds shutdown while a server stops responding.
+	const int status = transport ? transport(url, bytes) : http::get(url, bytes, nullptr, nullptr, 30000, limit, cancelled);
+	require(cancelled == nullptr || !cancelled->load(), "Theme download cancelled.");
 	require(http::success(status), "Theme download failed (HTTP " + std::to_string(status) + "). Check your connection and retry.");
 	require(!bytes.empty() && bytes.size() <= limit, "Theme download is empty or exceeds the size limit.");
 	return bytes;
@@ -147,20 +151,20 @@ std::vector<Theme> parse(const std::string& json, const std::string& catalogUrl)
 	}
 }
 
-std::vector<Theme> fetch(const std::string& catalogUrl, const Transport& transport)
+std::vector<Theme> fetch(const std::string& catalogUrl, const Transport& transport, const std::atomic_bool* cancelled)
 {
-	const auto bytes = download(catalogUrl, 2 * 1024 * 1024, transport);
+	const auto bytes = download(catalogUrl, 2 * 1024 * 1024, transport, cancelled);
 	return parse(std::string(bytes.begin(), bytes.end()), catalogUrl);
 }
 
-std::string install(const Theme& theme, const Transport& transport)
+std::string install(const Theme& theme, const Transport& transport, const std::atomic_bool* cancelled)
 {
 	// Validate even when a caller constructs an entry without going through parse().
 	require(!theme.id.empty() && theme.id.size() <= 64 && std::all_of(theme.id.begin(), theme.id.end(), [](char c) {
 		return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
 	}), "Invalid theme id.");
 	require(!fs::exists(fs::u8path(themes::directory()) / theme.id), "This theme is already installed.");
-	const auto bytes = download(theme.packageUrl, packageLimit, transport);
+	const auto bytes = download(theme.packageUrl, packageLimit, transport, cancelled);
 	TemporaryDirectory temporary;
 	zip_source_t* source = zip_source_buffer_create(bytes.data(), bytes.size(), 0, nullptr);
 	require(source != nullptr, "Cannot read the downloaded theme ZIP.");
@@ -173,6 +177,7 @@ std::string install(const Theme& theme, const Transport& transport)
 	std::set<std::string> paths;
 	for (zip_int64_t i = 0; i < count; ++i)
 	{
+		require(cancelled == nullptr || !cancelled->load(), "Theme download cancelled.");
 		zip_stat_t stat;
 		require(zip_stat_index(archive.get(), i, 0, &stat) == 0 && stat.name != nullptr, "Cannot read theme ZIP entry.");
 		std::string path = stat.name;
@@ -205,12 +210,13 @@ std::string install(const Theme& theme, const Transport& transport)
 	}
 	const themes::Theme validated = themes::load(temporary.path.u8string());
 	require(validated.id == theme.id, "Downloaded theme id does not match its catalogue entry.");
+	require(cancelled == nullptr || !cancelled->load(), "Theme download cancelled.");
 	return themes::install(temporary.path.u8string(), false);
 }
 
-void preview(const std::string& url, const std::string& path, const Transport& transport)
+void preview(const std::string& url, const std::string& path, const Transport& transport, const std::atomic_bool* cancelled)
 {
-	const auto bytes = download(url, 8 * 1024 * 1024, transport);
+	const auto bytes = download(url, 8 * 1024 * 1024, transport, cancelled);
 	int width = 0, height = 0, channels = 0;
 	require(stbi_info_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, &channels)
 		&& width > 0 && height > 0 && width <= 8192 && height <= 8192

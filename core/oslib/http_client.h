@@ -27,6 +27,8 @@
 #include <iomanip>
 #include <sstream>
 #include <locale>
+#include <atomic>
+#include <limits>
 
 namespace http {
 
@@ -36,8 +38,11 @@ void term();
 using Headers = std::vector<std::pair<std::string, std::string>>;
 
 // A positive timeout bounds network waits; zero retains the platform defaults.
+// GET limits are enforced while receiving, even without Content-Length. The
+// cancellation flag must outlive the synchronous call; defaults preserve existing callers.
 int get(const std::string& url, std::vector<u8>& content,
-		const Headers *reqHeaders = nullptr, Headers *respHeaders = nullptr, int timeoutMs = 0);
+		const Headers *reqHeaders = nullptr, Headers *respHeaders = nullptr, int timeoutMs = 0,
+		size_t maxBytes = std::numeric_limits<size_t>::max(), const std::atomic_bool* cancelled = nullptr);
 
 int get(const std::string& url, std::vector<u8>& content, std::string& contentType);
 

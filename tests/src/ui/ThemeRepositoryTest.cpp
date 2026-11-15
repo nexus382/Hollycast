@@ -206,6 +206,29 @@ TEST_F(ThemeRepositoryTest, ReportsHttpFailuresAndInvalidCatalogues)
 	EXPECT_EQ(themes::repository::fetch(url, transport({json.begin(), json.end()})).size(), 1u);
 }
 
+TEST_F(ThemeRepositoryTest, CancelledFetchDoesNotStartTransport)
+{
+	std::atomic_bool cancelled{true};
+	bool requested = false;
+	EXPECT_THROW(themes::repository::fetch(url, [&](const auto&, auto&) {
+		requested = true;
+		return 200;
+	}, &cancelled), std::runtime_error);
+	EXPECT_FALSE(requested);
+}
+
+TEST_F(ThemeRepositoryTest, CancellationAfterDownloadDoesNotPublishTheme)
+{
+	std::atomic_bool cancelled{false};
+	const auto bytes = zip({{"theme.json", manifest}});
+	EXPECT_THROW(themes::repository::install(entry(), [&](const auto&, auto& content) {
+		content = bytes;
+		cancelled = true;
+		return 200;
+	}, &cancelled), std::runtime_error);
+	EXPECT_FALSE(fs::exists(fs::u8path(themes::directory()) / "online-test"));
+}
+
 TEST_F(ThemeRepositoryTest, InstallsDownloadedPackageAndProtectsExistingFiles)
 {
 	const auto bytes = zip({{"theme.json", manifest}, {"art/readme.txt", "preserved"}});

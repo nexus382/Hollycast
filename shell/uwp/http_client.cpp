@@ -20,6 +20,10 @@
 #include "oslib/http_client.h"
 #include "stdclass.h"
 #include <windows.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <limits>
 #include <memory>
 
 namespace http {
@@ -64,8 +68,39 @@ static void getHeaders(IIterator<IKeyValuePair<String^, String^>^>^ it, Headers&
 	}
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs)
+// Polling in short slices keeps cancellation responsive. The shared event may
+// outlive this function because WinRT operations can finish after Cancel().
+static int waitForCompletion(const std::shared_ptr<cResetEvent>& asyncEvent,
+		const std::chrono::steady_clock::time_point& deadline, const std::atomic_bool *cancelled)
 {
+	while (true)
+	{
+		if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed))
+			return 499;
+		const auto now = std::chrono::steady_clock::now();
+		if (now >= deadline)
+			return 408;
+		const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+		const u32 waitMs = static_cast<u32>(std::min<int64_t>(50, std::max<int64_t>(1, remainingMs)));
+		if (asyncEvent->Wait(waitMs))
+		{
+			if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed))
+				return 499;
+			return std::chrono::steady_clock::now() < deadline ? 0 : 408;
+		}
+	}
+}
+
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders,
+		int timeoutMs, size_t maxBytes, const std::atomic_bool *cancelled)
+{
+	const bool bounded = maxBytes != std::numeric_limits<size_t>::max() || cancelled != nullptr;
+	if (bounded)
+	{
+		content.clear();
+		if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed))
+			return 499;
+	}
 	nowide::wstackstring wurl;
 	if (!wurl.convert(url.c_str()))
 		return 500;
@@ -83,6 +118,89 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 				if (wname.convert(name.c_str()) && wvalue.convert(value.c_str()))
 					request->Headers->Insert(ref new String(wname.get()), ref new String(wvalue.get()));
 			}
+		}
+
+		if (bounded)
+		{
+			const int timeout = timeoutMs > 0 ? timeoutMs : 30000;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
+			auto asyncEvent = std::make_shared<cResetEvent>();
+			IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^ responseOp =
+					httpClient->SendRequestAsync(request, HttpCompletionOption::ResponseHeadersRead);
+			responseOp->Completed = ref new AsyncOperationWithProgressCompletedHandler<HttpResponseMessage^, HttpProgress>(
+				[asyncEvent](IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^, Windows::Foundation::AsyncStatus) {
+					asyncEvent->Set();
+				});
+			int waitStatus = waitForCompletion(asyncEvent, deadline, cancelled);
+			if (waitStatus != 0)
+			{
+				responseOp->Cancel();
+				return waitStatus;
+			}
+			HttpResponseMessage^ resp = responseOp->GetResults();
+			if (!resp->IsSuccessStatusCode)
+				return (int)resp->StatusCode;
+
+			IHttpContent^ httpContent = resp->Content;
+			if (respHeaders != nullptr)
+			{
+				getHeaders(resp->Headers->First(), *respHeaders);
+				getHeaders(httpContent->Headers->First(), *respHeaders);
+			}
+
+			asyncEvent->Reset();
+			IAsyncOperation<IInputStream^>^ streamOp = httpContent->ReadAsInputStreamAsync();
+			streamOp->Completed = ref new AsyncOperationCompletedHandler<IInputStream^>(
+				[asyncEvent](IAsyncOperation<IInputStream^>^, Windows::Foundation::AsyncStatus) {
+					asyncEvent->Set();
+				});
+			waitStatus = waitForCompletion(asyncEvent, deadline, cancelled);
+			if (waitStatus != 0)
+			{
+				streamOp->Cancel();
+				return waitStatus;
+			}
+			IInputStream^ inputStream = streamOp->GetResults();
+
+			constexpr unsigned int chunkSize = 16 * 1024;
+			while (true)
+			{
+				const size_t remaining = maxBytes - content.size();
+				// Read at most one byte beyond the limit so oversize bodies are
+				// detected before any part of that chunk is appended.
+				const unsigned int requested = maxBytes == std::numeric_limits<size_t>::max()
+						? chunkSize
+						: static_cast<unsigned int>(std::min<size_t>(chunkSize, remaining + 1));
+				Buffer^ buffer = ref new Buffer(chunkSize);
+				asyncEvent->Reset();
+				IAsyncOperationWithProgress<IBuffer^, unsigned int>^ readOp =
+						inputStream->ReadAsync(buffer, requested, InputStreamOptions::Partial);
+				readOp->Completed = ref new AsyncOperationWithProgressCompletedHandler<IBuffer^, unsigned int>(
+					[asyncEvent](IAsyncOperationWithProgress<IBuffer^, unsigned int>^, Windows::Foundation::AsyncStatus) {
+						asyncEvent->Set();
+					});
+				waitStatus = waitForCompletion(asyncEvent, deadline, cancelled);
+				if (waitStatus != 0)
+				{
+					readOp->Cancel();
+					content.clear();
+					return waitStatus;
+				}
+				IBuffer^ chunk = readOp->GetResults();
+				const size_t length = chunk->Length;
+				if (length == 0)
+					break;
+				if (length > maxBytes - content.size())
+				{
+					readOp->Cancel();
+					content.clear();
+					return 413;
+				}
+				Array<u8>^ array = ref new Array<u8>(chunk->Length);
+				DataReader::FromBuffer(chunk)->ReadBytes(array);
+				content.insert(content.end(), array->begin(), array->end());
+			}
+			return (int)resp->StatusCode;
 		}
 
 		IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^ op = httpClient->SendRequestAsync(request);
@@ -132,6 +250,8 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 	}
 	catch (Exception^ e)
 	{
+		if (bounded)
+			content.clear();
 		WARN_LOG(COMMON, "http::get error %.*S", e->Message->Length(), e->Message->Data());
 		return 500;
 	}

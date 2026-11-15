@@ -29,6 +29,7 @@ struct Browser
 	bool requested = false, loaded = false, onlyNew = false;
 	std::string search, error, message, installing;
 	std::vector<repository::Theme> themes;
+	std::atomic_bool cancelled{false};
 	std::future<Result> work;
 	std::future<Preview> imageWork;
 	std::string imageUrl;
@@ -42,18 +43,21 @@ struct Browser
 	}
 	void stop()
 	{
+		// Signal both workers before joining; their HTTP requests have finite timeouts.
+		cancelled = true;
 		if (work.valid()) work.wait();
 		if (imageWork.valid()) imageWork.wait();
 		work = {}; imageWork = {};
 		std::error_code ec;
 		if (!cache.empty()) std::filesystem::remove_all(cache, ec);
 		cache.clear(); images.clear(); loaded = false;
+		cancelled = false;
 	}
 	void refresh()
 	{
 		error.clear(); message.clear(); installing.clear();
 		images.clear();
-		work = std::async(std::launch::async, [] { return Result{repository::fetch(catalogUrl), {}}; });
+		work = std::async(std::launch::async, [this] { return Result{repository::fetch(catalogUrl, {}, &cancelled), {}}; });
 	}
 	void poll()
 	{
@@ -93,8 +97,8 @@ struct Browser
 					if (!std::filesystem::create_directory(cache)) throw std::runtime_error("Cannot create screenshot cache.");
 				}
 				const std::string path = (cache / (std::to_string(imageSerial++) + ".image")).u8string();
-				imageWork = std::async(std::launch::async, [url, path] {
-					try { repository::preview(url, path); return Preview{path, {}}; }
+				imageWork = std::async(std::launch::async, [this, url, path] {
+					try { repository::preview(url, path, {}, &cancelled); return Preview{path, {}}; }
 					catch (const std::exception& e) { return Preview{{}, e.what()}; }
 				});
 			}
@@ -217,7 +221,7 @@ std::optional<std::string> renderBrowser()
 				if (ImGui::Button(T("Download and install")))
 				{
 					browser.error.clear(); browser.message.clear(); browser.installing = theme.id;
-					browser.work = std::async(std::launch::async, [theme] { return Result{{}, repository::install(theme)}; });
+					browser.work = std::async(std::launch::async, [theme] { return Result{{}, repository::install(theme, {}, &browser.cancelled)}; });
 				}
 				ImGui::EndDisabled();
 			}

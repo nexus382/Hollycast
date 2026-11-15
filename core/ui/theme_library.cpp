@@ -2071,7 +2071,7 @@ int renderLibrary(const Layout& layout, const std::string& themeDirectory,
 					if (!item.title.empty())
 					{
 						const float controlsWidth = std::min(uiScaled(32.f), rowHeight - padding) + padding * 2.f;
-						const float right = layout.list.systemBadge || layout.list.favouriteBadge
+						const float right = layout.list.systemBadge || layout.list.favouriteBadge || layout.list.releaseYear
 								? drawListBadges(layout, item, itemRect, textLeft, browserDrawList)
 								: itemRect.Max.x - controlsWidth;
 						const ImRect textRect(ImVec2(textLeft, itemRect.Min.y + (rowHeight - ImGui::GetFontSize()) * 0.5f),

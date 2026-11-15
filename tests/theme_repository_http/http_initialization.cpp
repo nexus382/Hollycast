@@ -36,8 +36,10 @@ namespace http
 {
 void init() { initialized = true; ++initCalls; }
 void term() { initialized = false; }
-int get(const std::string& request, std::vector<u8>& content, const Headers*, Headers*, int)
+int get(const std::string& request, std::vector<u8>& content, const Headers*, Headers*, int timeoutMs,
+        size_t maxBytes, const std::atomic_bool*)
 {
+    check(timeoutMs > 0 && maxBytes == 2 * 1024 * 1024, "Catalogue request is not bounded");
     ++getCalls;
     check(request == url, "Unexpected request URL");
     if (!initialized) return 500;
