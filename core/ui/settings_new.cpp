@@ -26,6 +26,10 @@
 #include "theme.h"
 #include "theme_browser.h"
 #include "gui_util.h"
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "test_harness.h"
+#include "test_harness_ui.h"
+#endif
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "audio/audiostream.h"
@@ -81,6 +85,7 @@
 #include <cctype>
 #include <cstring>
 #include <cfloat>
+#include <cstdio>
 #include <memory>
 #include <filesystem>
 #include <mutex>
@@ -101,6 +106,83 @@ namespace SettingsNew {
 
 static bool g_applyThemeAfterSettings = false;
 static bool g_reloadThemeFontsAfterSettings = false;
+
+#ifdef HOLLYCAST_TEST_HARNESS
+static void annotateTestToggle(const char* prefix, const char* id, const char* label, bool value)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "toggle"}, {"value", value}});
+}
+
+static void annotateTestFloat(const char* prefix, const char* id, const char* label,
+		float value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value_type", "float32"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestInteger(const char* prefix, const char* id, const char* label,
+		int value, int minimum, int maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestVector2(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const ImVec2& value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID groupId = ImGui::GetID(widgetLabel);
+	const std::string semanticId = std::string(prefix) + "." + id;
+	for (int component = 0; component < 2; ++component)
+	{
+		const ImGuiID componentId = ImGui::GetIDWithSeed(component, groupId);
+		const ImGuiID itemId = ImGui::GetIDWithSeed("", nullptr, componentId);
+		const char axis = component == 0 ? 'X' : 'Y';
+		const std::string componentLabel = std::string(label ? label : "") + " " + axis;
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", semanticId + (component == 0 ? ".x" : ".y")},
+			{"semantic_label", componentLabel}, {"kind", "slider"}, {"value_type", "float32"}, {"value", component == 0 ? value.x : value.y},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+	}
+}
+
+static void annotateTestColor(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const float value[4])
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID colorEditId = ImGui::GetID(widgetLabel);
+	const ImGuiID colorButtonId = ImGui::GetIDWithSeed("##ColorButton", nullptr, colorEditId);
+	test_harness::ui::annotateItem(colorButtonId, {{"semantic_id", std::string(prefix) + "." + id},
+		{"semantic_label", label ? label : ""}, {"kind", "color"},
+		{"value", {value[0], value[1], value[2], value[3]}}});
+}
+
+static void annotateTestText(const char* prefix, const char* id, const char* label)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "text"}});
+}
+#endif
 
 struct ThemeEditorState {
 	bool open = false;
@@ -906,6 +988,9 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 	}
 
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		const char* popupId = GetPopupId(popupCfg);
@@ -931,6 +1016,71 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 		DisabledScope _(disabled);
 		SettingsUI::SettingPopup(popupCfg);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+	{
+		using test_harness::Json;
+		Json metadata = {{"semantic_id", id ? id : ""}, {"semantic_label", popupCfg.type == SettingsUI::PopupType::Options
+			? (popupCfg.options.label ? popupCfg.options.label : "")
+			: (popupCfg.slider.label ? popupCfg.slider.label : "")}};
+		if (popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.currentValue != nullptr)
+		{
+			const auto& options = popupCfg.options;
+			const int currentValue = *options.currentValue;
+			metadata["kind"] = options.multiSelect ? "multi_select" : "options";
+			metadata["value"] = currentValue;
+			metadata["requires_apply"] = options.multiSelect;
+			Json entries = Json::array();
+			const int optionCount = std::min(options.optionCount, 128);
+			for (int i = 0; i < optionCount && options.options != nullptr; ++i)
+			{
+				const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+				const bool selected = options.multiSelect
+					? storageValue >= 0 && storageValue < 31 && (currentValue & (1 << storageValue)) != 0
+					: currentValue == storageValue;
+				entries.push_back({{"value", storageValue}, {"label", options.options[i] ? options.options[i] : ""},
+					{"selected", selected}});
+			}
+			metadata["options"] = std::move(entries);
+			if (options.valueToString)
+			{
+				const char* valueLabel = options.valueToString(currentValue);
+				if (valueLabel != nullptr)
+					metadata["value_label"] = valueLabel;
+			}
+			else if (!options.multiSelect && options.options != nullptr)
+			{
+				for (int i = 0; i < optionCount; ++i)
+				{
+					const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+					if (storageValue == currentValue && options.options[i] != nullptr)
+					{
+						metadata["value_label"] = options.options[i];
+						break;
+					}
+				}
+			}
+		}
+		else if (popupCfg.type == SettingsUI::PopupType::Slider && popupCfg.slider.currentValue != nullptr)
+		{
+			const auto& slider = popupCfg.slider;
+			const int currentValue = *slider.currentValue;
+			metadata["kind"] = "slider";
+			metadata["value"] = currentValue;
+			metadata["range"] = {{"min", slider.minValue}, {"max", slider.maxValue}};
+			metadata["requires_apply"] = slider.onApply != nullptr;
+			if (slider.valueFormatter)
+				metadata["value_label"] = slider.valueFormatter(currentValue);
+			else
+			{
+				char valueLabel[128];
+				std::snprintf(valueLabel, sizeof(valueLabel), slider.format ? slider.format : "%d", currentValue);
+				metadata["value_label"] = valueLabel;
+			}
+		}
+		test_harness::ui::annotateItem(rowItemId, metadata);
+	}
+#endif
 	if (infoMarker && settingsIconFont != nullptr && largeFont != nullptr
 			&& popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.label != nullptr)
 	{
@@ -960,11 +1110,19 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		value = !value;
 		onToggle(value);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""}, {"semantic_label", label ? label : ""},
+			{"kind", "toggle"}, {"value", value}});
+#endif
 
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
@@ -995,7 +1153,7 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 template <typename DrawInput>
 static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, const char* label,
 	const char* description, DrawInput&& drawInput, const char* tooltip = nullptr, bool disabled = false,
-	float inputWidthPx = 220.0f)
+	float inputWidthPx = 220.0f, const char* controlKind = "text")
 {
 	ImGui::PushID(id);
 
@@ -1017,6 +1175,11 @@ static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, c
 			ImGui::SetKeyboardFocusHere();
 		ImGui::SetNextItemWidth(inputWidth);
 		drawInput();
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : ""},
+				{"semantic_label", label ? label : ""}, {"kind", controlKind ? controlKind : "text"}});
+#endif
 	}
 
 	RenderTwoLineSettingDescription(line1Start, description);
@@ -1103,7 +1266,12 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			header(gamepad->has_force_feedback() ? T("Force Feedback") : T("Rumble"));
 			int power = gamepad->get_rumble_power();
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%"))
+			const bool powerChanged = ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".rumble_power").c_str(), T("Power"), power, 0, 100);
+#endif
+			if (powerChanged)
 				gamepad->set_rumble_power(power);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(gamepad->has_force_feedback() ? T("Force-feedback strength") : T("Rumble power"));
@@ -1113,13 +1281,23 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			header(T("Thumbsticks"));
 			int deadzone = std::round(gamepad->get_dead_zone() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%"))
+			const bool deadzoneChanged = ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".dead_zone").c_str(), T("Dead zone"), deadzone, 0, 100);
+#endif
+			if (deadzoneChanged)
 				gamepad->set_dead_zone(deadzone / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Minimum deflection to register as input"));
 			int saturation = std::round(gamepad->get_saturation() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%"))
+			const bool saturationChanged = ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".saturation").c_str(), T("Saturation"), saturation, 50, 200);
+#endif
+			if (saturationChanged)
 				gamepad->set_saturation(saturation / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Value sent to the game at 100% thumbstick deflection. "
@@ -1520,7 +1698,13 @@ static void displayMappedControl(const std::shared_ptr<GamepadDevice>& gamepad, 
 			ImguiStyleVar checkboxBorder(ImGuiStyleVar_FrameBorderSize, 1.0f);
 			ImguiStyleColor checkboxBorderColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_Text));
 			ImguiStyleColor checkboxCheckColor(ImGuiCol_CheckMark, ImGui::GetStyleColorVec4(ImGuiCol_Text));
-			if (ImGui::Checkbox(T("Sequential"), &(combo.sequential)))
+			const bool sequentialChanged = ImGui::Checkbox(T("Sequential"), &(combo.sequential));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestToggle("controls.mapping.sequential", (gamepad->unique_id() + "." + std::to_string(static_cast<int>(key))).c_str(),
+					T("Sequential"), combo.sequential);
+#endif
+			if (sequentialChanged)
 				input_mapping->set_button(g_gamepad_port_for_mapping, key, combo);
 		}
 		ImGui::SameLine();
@@ -1688,11 +1872,23 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 			if (g_arcade_button_mode)
 			{
 				ImGui::Text("%s", T("Controller Type:"));
-				if (ImGui::RadioButton(T("Gamepad"), !hitbox))
+				const bool gamepadSelected = ImGui::RadioButton(T("Gamepad"), !hitbox);
+				if (gamepadSelected)
 					hitbox = false;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.gamepad"},
+						{"semantic_label", T("Gamepad")}, {"kind", "radio"}, {"value", !hitbox}});
+#endif
 				ImGui::SameLine();
-				if (ImGui::RadioButton(T("Arcade / Hit Box"), hitbox))
+				const bool arcadeSelected = ImGui::RadioButton(T("Arcade / Hit Box"), hitbox);
+				if (arcadeSelected)
 					hitbox = true;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.arcade"},
+						{"semantic_label", T("Arcade / Hit Box")}, {"kind", "radio"}, {"value", hitbox}});
+#endif
 			}
 			ImGui::NewLine();
 			{
@@ -1721,6 +1917,17 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
 		ImVec2(ImGui::GetStyle().FramePadding.x, (SettingsLayoutScaled(30) - ImGui::GetFontSize()) / 2));
 	ImGui::Combo("##arcadeMode", &item_current_map_idx, items, IM_ARRAYSIZE(items));
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+	{
+		test_harness::Json options = test_harness::Json::array();
+		for (int i = 0; i < IM_ARRAYSIZE(items); ++i)
+			options.push_back({{"value", i}, {"label", items[i]}, {"selected", item_current_map_idx == i}});
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.mode." + gamepad->unique_id()},
+			{"semantic_label", "Controller mappings"}, {"kind", "options"}, {"value", item_current_map_idx},
+			{"value_label", items[item_current_map_idx]}, {"options", std::move(options)}});
+	}
+#endif
 	ImGui::PopStyleVar();
 	if (last_item_current_map_idx != 2 && item_current_map_idx != last_item_current_map_idx)
 		gamepad->save_mapping(map_system);
@@ -1864,6 +2071,9 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	ImGui::PushID(id);
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	BeginTwoLineSettingRow("##row", rowTooltip, true);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(icon, SettingsLayoutSize(20.0f, 20.0f));
@@ -1874,6 +2084,11 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	RenderGeneralRightValue(value, 280.0f, 0.0f, disabledValue);
 	RenderTwoLineSettingDescription(line1Start, description);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "info"}, {"value", value}});
+#endif
 
 	ImGui::PopID();
 }
@@ -1883,6 +2098,9 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 {
 	ImGui::PushID(label);
 	const bool rowActivated = BeginTwoLineSettingRow("##row", helpText);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(ICON_FA_FOLDER_OPEN, SettingsLayoutSize(20.0f, 20.0f));
@@ -1907,7 +2125,13 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 		ImGui::SameLine(RightColumnX(buttonWidth));
 		ImVec2 buttonPos = ImGui::GetCursorPos();
 		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y + verticalOffset));
-		if (SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight)))
+		const bool clearPath = SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight));
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", std::string(label) + ".clear"},
+				{"semantic_label", std::string("Clear ") + label}, {"kind", "button"}});
+#endif
+		if (clearPath)
 		{
 			pathOption.get().clear();
 			openPopup = false;
@@ -1920,6 +2144,11 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 
 	RenderTwoLineSettingDescription(line1Start, helpText);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", label ? label : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "path"}, {"value", pathOption.get()}});
+#endif
 	ImGui::PopID();
 
 	const std::string popupName = std::string(T("Select ")) + label;
@@ -2736,6 +2965,9 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(accent.x, accent.y, accent.z, 0.55f));
 		}
 		const bool tabClicked = ImGui::Selectable(tabLabel.c_str(), isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0));
+#ifdef HOLLYCAST_TEST_HARNESS
+		const std::uint32_t tabItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 		if (isSelected)
 			ImGui::PopStyleColor(3);
 		if (settingsIconFont != nullptr)
@@ -2762,6 +2994,11 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			g_tabSlideStart = -1.0;
 			ResetSettingsFooter();
 		}
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (tabItemId != 0)
+			test_harness::ui::annotateItem(tabItemId, {{"semantic_id", "settings.tab." + std::to_string(i)},
+				{"semantic_label", tabName ? tabName : ""}, {"kind", "tab"}, {"value", g_state.currentTab == tab}});
+#endif
 		if (focusSelectedTab && isSelected)
 			FocusCurrentSettingsItem();
 		if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
@@ -2958,6 +3195,11 @@ static bool RenderCollapsingHeader(
 
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(SettingsLayoutScaled(8.0f), SettingsLayoutScaled(10.0f)));
 	bool open = ImGui::CollapsingHeader(labelStr.c_str(), flags);
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : labelText},
+			{"semantic_label", labelText ? labelText : ""}, {"kind", "section"}, {"value", open}});
+#endif
 	if (labelIcon && *labelIcon != '\0')
 	{
 		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : ImGui::GetFont();
@@ -3729,9 +3971,27 @@ static void renderSettingsContentTab(SettingsTab tab)
 			} else {
 				ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
 				ImGui::InputText(T("Theme name"), &g_themeEditor.newFilename);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestText("theme.editor", "new_name", T("Theme name"));
+#endif
 			}
 			ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
-			if (ImGui::Combo(T("Base theme"), &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()))) {
+			const char* baseThemeLabel = T("Base theme");
+			const bool baseThemeChanged = ImGui::Combo(baseThemeLabel, &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+			{
+				test_harness::Json options = test_harness::Json::array();
+				for (int i = 0; i < static_cast<int>(baseNames.size()); ++i)
+					options.push_back({{"value", i}, {"label", baseNames[i]}, {"selected", baseIndex == i}});
+				test_harness::Json metadata = {{"semantic_id", "theme.editor.base"}, {"semantic_label", baseThemeLabel},
+					{"kind", "options"}, {"value", baseIndex}, {"options", std::move(options)}, {"requires_apply", true}};
+				if (baseIndex >= 0 && baseIndex < static_cast<int>(baseNames.size()))
+					metadata["value_label"] = baseNames[baseIndex];
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), metadata);
+			}
+#endif
+			if (baseThemeChanged) {
 				g_themeEditor.draft.base = baseIndex;
 				g_themeEditor.previewing = true;
 			}
@@ -3778,7 +4038,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								ImGui::PushID(role);
 								auto found = g_themeEditor.draft.roles.find(role);
 								bool enabled = found != g_themeEditor.draft.roles.end();
-								if (ImGui::Checkbox(labels[i], &enabled)) {
+								const bool enabledChanged = ImGui::Checkbox(labels[i], &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestToggle("theme.role", role, labels[i], enabled);
+#endif
+								if (enabledChanged) {
 									if (enabled) {
 										auto inherited = baseTheme.roles.find(role);
 										g_themeEditor.draft.roles[role] = inherited != baseTheme.roles.end() ? inherited->second : suggestions[i];
@@ -3788,7 +4052,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								found = g_themeEditor.draft.roles.find(role);
 								if (found != g_themeEditor.draft.roles.end()) {
 									ImVec4 value = found->second;
-									if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) {
+									const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									annotateTestColor("theme.role.color", role, labels[i], "##color", &value.x);
+#endif
+									if (colorChanged) {
 										found->second = value;
 										g_themeEditor.previewing = true;
 									}
@@ -3802,6 +4070,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 						if (ImGui::CollapsingHeader(T("Advanced interface colors"))) {
 							ImGui::SetNextItemWidth(-FLT_MIN);
 							ImGui::InputTextWithHint("##colorSearch", T("Search colors"), &g_themeEditor.colorSearch);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestText("theme.colors", "search", T("Search colors"));
+#endif
 							std::string query = g_themeEditor.colorSearch;
 							std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 							for (int i = 0; i < ImGuiCol_COUNT; ++i) {
@@ -3810,7 +4081,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								std::transform(searchable.begin(), searchable.end(), searchable.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 								if (!query.empty() && searchable.find(query) == std::string::npos) continue;
 								ImVec4 value = previewStyle.Colors[i];
-								if (ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar)) {
+								const bool colorChanged = ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestColor("theme.interface_color", name, name, name, &value.x);
+#endif
+								if (colorChanged) {
 									auto found = std::find_if(g_themeEditor.draft.colors.begin(), g_themeEditor.draft.colors.end(), [i](const auto& c) { return c.first == i; });
 									if (found == g_themeEditor.draft.colors.end()) g_themeEditor.draft.colors.emplace_back(i, value); else found->second = value;
 									g_themeEditor.previewing = true;
@@ -3828,7 +4103,16 @@ static void renderSettingsContentTab(SettingsTab tab)
 									bool enabled = found != roles.end();
 									ImGui::PushID(widget);
 									ImGui::PushID(role);
-									if (ImGui::Checkbox(role, &enabled)) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					const bool collectThemeMetadata = test_harness::ui::collectingInspection();
+					const std::string widgetRoleId = collectThemeMetadata ? std::string(widget) + "." + role : std::string();
+#endif
+									const bool enabledChanged = ImGui::Checkbox(role, &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (collectThemeMetadata)
+						annotateTestToggle("theme.widget_role", widgetRoleId.c_str(), role, enabled);
+#endif
+									if (enabledChanged) {
 										if (enabled) {
 											auto global = g_themeEditor.draft.roles.find(role);
 											auto inherited = baseTheme.roles.find(role);
@@ -3840,7 +4124,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 									found = roles.find(role);
 									if (found != roles.end()) {
 										ImVec4 value = found->second;
-										if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) { found->second = value; g_themeEditor.previewing = true; }
+										const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									if (collectThemeMetadata)
+										annotateTestColor("theme.widget_role.color", widgetRoleId.c_str(), role, "##color", &value.x);
+#endif
+										if (colorChanged) { found->second = value; g_themeEditor.previewing = true; }
 									}
 									ImGui::PopID();
 									ImGui::PopID();
@@ -3857,7 +4146,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					auto scalar = [&](const char* name, float ImGuiStyle::*member, float max) {
 						float value = previewStyle.*member;
 						const float upper = std::strstr(name, "BorderSize") != nullptr ? 20.f : max;
-						if (ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.style", name, name, value, 0.f, upper);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3865,7 +4158,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					};
 					auto vector = [&](const char* name, ImVec2 ImGuiStyle::*member, float max) {
 						ImVec2 value = previewStyle.*member;
-						if (ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestVector2("theme.style", name, name, name, value, 0.f, max);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.vectors.begin(), g_themeEditor.draft.vectors.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.vectors.end()) g_themeEditor.draft.vectors.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3883,7 +4180,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					for (const auto& item : scalars) {
 						if (item.second == &ImGuiStyle::Alpha) {
 							float value = previewStyle.*item.second;
-							if (ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+							const bool changed = ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestFloat("theme.style", item.first, item.first, value, 0.2f, 1.f);
+#endif
+							if (changed) {
 								auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == item.second; });
 								if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(item.second, value); else it->second = value;
 								g_themeEditor.previewing = true;
@@ -3902,7 +4203,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 						ImGui::TextDisabled("%s", T("Hollycast layout"));
 					auto layoutSlider = [&](const char* name, float& value, float minimum, float maximum, float fallback, bool& present) {
 						float shown = present ? value : fallback;
-						if (ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { value = shown; present = true; g_themeEditor.previewing = true; }
+						const bool changed = ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.layout", name, name, shown, minimum, maximum);
+#endif
+						if (changed) { value = shown; present = true; g_themeEditor.previewing = true; }
 					};
 					layoutSlider("Density", g_themeEditor.draft.layout.density, 0.75f, 1.5f, 1.f, g_themeEditor.draft.layout.hasDensity);
 					layoutSlider("Settings sidebar width", g_themeEditor.draft.layout.settingsSidebarWidth, 136.f, 310.f, 225.f, g_themeEditor.draft.layout.hasSettingsSidebarWidth);
@@ -3917,33 +4222,67 @@ static void renderSettingsContentTab(SettingsTab tab)
 					if (ImGui::BeginChild("ThemeAssetsList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
 					ImGui::TextWrapped("%s", T("Use paths relative to the custom theme folder. Copy files there first; import and export copy referenced files automatically."));
 					ImGui::Spacing();
-					auto assetInput = [&](const char* label, std::string& value, bool font = false) {
+					auto assetInput = [&](const char* id, const char* label, std::string& value, bool font = false) {
 						const bool changed = ImGui::InputText(label, &value);
 						const bool editCommitted = font && ImGui::IsItemDeactivatedAfterEdit();
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestText("theme.asset", id, label);
+#endif
 						if (changed) { g_themeEditor.previewing = true; g_themeEditor.fontChanged |= font; }
 						if (editCommitted) { g_themeEditor.previewing = true; g_themeEditor.fontReloadPending = true; }
 					};
-					assetInput(T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
-					assetInput(T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
-					assetInput(T("Background image path"), g_themeEditor.draft.assets.background);
+					assetInput("body_font", T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
+					assetInput("bold_font", T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
+					assetInput("background_image", T("Background image path"), g_themeEditor.draft.assets.background);
 					std::string settingsIconPath;
 					auto settingsIcon = g_themeEditor.draft.assets.icons.find("settings");
 					if (settingsIcon != g_themeEditor.draft.assets.icons.end()) settingsIconPath = settingsIcon->second;
-					if (ImGui::InputText(T("Settings icon path"), &settingsIconPath)) {
+					const bool settingsIconChanged = ImGui::InputText(T("Settings icon path"), &settingsIconPath);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "settings_icon", T("Settings icon path"));
+#endif
+					if (settingsIconChanged) {
 						if (settingsIconPath.empty()) g_themeEditor.draft.assets.icons.erase("settings");
 						else g_themeEditor.draft.assets.icons["settings"] = settingsIconPath;
 						g_themeEditor.previewing = true;
 					}
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
-					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
+					const char* opacityLabel = T("Background opacity");
+					const bool opacityChanged = ImGui::SliderFloat(opacityLabel, &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestFloat("theme.asset", "background_opacity", opacityLabel, opacity, 0.f, 1.f);
+#endif
+					if (opacityChanged) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
 					const char* fits[] = {"cover", "contain", "stretch"};
 					// Keep the JSON values independent of the translated option labels.
 					const char* fitLabels[] = {i18n::translateCtx("Background fit", "Cover"),
 						i18n::translateCtx("Background fit", "Contain"), i18n::translateCtx("Background fit", "Stretch")};
 					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
-					if (ImGui::Combo(T("Background fit"), &fit, fitLabels, IM_ARRAYSIZE(fitLabels))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
+					const char* fitLabel = T("Background fit");
+					const bool fitChanged = ImGui::Combo(fitLabel, &fit, fitLabels, IM_ARRAYSIZE(fitLabels));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						test_harness::Json options = test_harness::Json::array();
+						for (int i = 0; i < IM_ARRAYSIZE(fitLabels); ++i)
+							options.push_back({{"value", fits[i]}, {"label", fitLabels[i]}, {"selected", fit == i}});
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.background_fit"},
+							{"semantic_label", fitLabel}, {"kind", "options"}, {"value", fits[fit]},
+							{"value_label", fitLabels[fit]}, {"options", std::move(options)}});
+					}
+#endif
+					if (fitChanged) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
 					ImGui::InputText(T("Export folder"), &g_themeEditor.exportFolder);
-					if (ImGui::Button(T("Export theme and assets"))) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "export_folder", T("Export folder"));
+#endif
+					const bool exportClicked = ImGui::Button(T("Export theme and assets"));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.export"},
+							{"semantic_label", T("Export theme and assets")}, {"kind", "button"}});
+#endif
+					if (exportClicked) {
 						const std::string exportName = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
 						if (CustomTheme::exportToDirectory(g_themeEditor.draft, exportName, g_themeEditor.exportFolder, g_themeEditor.error))
 							g_themeEditor.error = strprintf(T("Exported %s and its referenced assets."), exportName.c_str());
@@ -6943,13 +7282,17 @@ void renderOnScreenDisplayTab()
 			T("Text Color"),
 			T("Choose the overlay text color."),
 			[&]() {
-				if (ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs))
+				const bool colorChanged = ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestColor("settings.overlay", "OverlayColor", T("Text Color"), "##OverlayColor", overlayColor);
+#endif
+				if (colorChanged)
 					cfgSaveInt("rend", "OverlayColor", static_cast<int>(std::round(overlayColor[0] * 255.f))
 						| (static_cast<int>(std::round(overlayColor[1] * 255.f)) << 8)
 						| (static_cast<int>(std::round(overlayColor[2] * 255.f)) << 16)
 						| (static_cast<int>(std::round(overlayColor[3] * 255.f)) << 24));
 			},
-			T("Text Color\nControls the overlay text color."));
+			T("Text Color\nControls the overlay text color."), false, 220.0f, "color");
 	}
 }
 
@@ -8065,7 +8408,39 @@ void renderControlsTab()
 
 				// Port selection combo (None, A, B, C, D, All)
 				const char* current_port = kMaplePorts[gamepad->maple_port() + 1];
-				if (ImGui::BeginCombo(port_name, current_port))
+#ifdef HOLLYCAST_TEST_HARNESS
+				const bool mappingOnlyTestDevice = gamepad->remappable()
+					&& gamepad->api_name() == test_harness::ControllerApiName
+					&& gamepad->unique_id() == "hollycast-test-mapping-device";
+				if (mappingOnlyTestDevice)
+					ImGui::BeginDisabled(true);
+#endif
+				const bool portPopupOpen = ImGui::BeginCombo(port_name, current_port);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+				{
+					const auto portItemId = test_harness::ui::lastItemId();
+					if (portItemId != 0)
+					{
+						using test_harness::Json;
+						Json options = Json::array();
+						for (int port = -1; port <= 4; ++port)
+							options.push_back({{"value", port}, {"label", kMaplePorts[port + 1]},
+								{"selected", gamepad->maple_port() == port}});
+						const std::string semanticId = "controls.physical.port." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Port";
+						test_harness::ui::annotateItem(portItemId, {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "options"}, {"value", gamepad->maple_port()},
+							{"value_label", current_port}, {"options", std::move(options)},
+							{"requires_apply", !mappingOnlyTestDevice}});
+					}
+				}
+#endif
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (mappingOnlyTestDevice)
+					ImGui::EndDisabled();
+#endif
+				if (portPopupOpen)
 				{
 					for (int j = -1; j < IM_ARRAYSIZE(kMaplePorts) - 1; j++)
 					{
@@ -8085,13 +8460,26 @@ void renderControlsTab()
 				ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
 
 				// Map button for controller mapping
-				if (gamepad->remappable() && ImGui::Button(T("Map"), deviceButtonSize))
+				if (gamepad->remappable())
 				{
-					ResetControllerMappingRuntime();
-					g_currentGamepadForMapping = gamepad;
-					g_currentGamepadForMapping->listenButtons(buttonListener);
-					g_gamepad_port_for_mapping = 0;
-					ImGui::OpenPopup(T("Controller Mapping"));
+					const bool mapClicked = ImGui::Button(T("Map"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.mapping." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Mapping";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (mapClicked)
+					{
+						ResetControllerMappingRuntime();
+						g_currentGamepadForMapping = gamepad;
+						g_currentGamepadForMapping->listenButtons(buttonListener);
+						g_gamepad_port_for_mapping = 0;
+						ImGui::OpenPopup(T("Controller Mapping"));
+					}
 				}
 
 				// Virtual controllers open the live editor; physical controllers keep
@@ -8099,7 +8487,17 @@ void renderControlsTab()
 				if (gamepad->is_rumble_enabled() || gamepad->has_analog_stick() || gamepad->is_virtual_gamepad())
 				{
 					ImGui::SameLine(0, SettingsLayoutScaled(16.0f));
-					if (ImGui::Button(T("Settings"), deviceButtonSize))
+					const bool settingsClicked = ImGui::Button(T("Settings"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.settings." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Settings";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (settingsClicked)
 					{
 						if (gamepad->is_virtual_gamepad())
 						{
@@ -8592,6 +8990,10 @@ void renderControlsTab()
 							config::CrosshairColor[bus] = 0;
 						}
 					}
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestToggle("controls.crosshair", std::to_string(bus).c_str(), T("Crosshair"), enabled);
+#endif
 
 					ImGui::SameLine(0, 0);
 
@@ -8615,6 +9017,11 @@ void renderControlsTab()
 					bool colorChanged = ImGui::ColorEdit4("##crosshair_color", xhairColor,
 						ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf
 						| ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoLabel);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestColor("controls.crosshair.color", std::to_string(bus).c_str(), T("Crosshair color"),
+							"##crosshair_color", xhairColor);
+#endif
 
 					if (colorChanged)
 					{
@@ -9702,7 +10109,14 @@ void renderAdvancedTab()
 					ImGui::SetKeyboardFocusHere();
 				ImGui::SetNextItemWidth(inputWidth);
 				static int gdbport = config::GDBPort;
-				if (ImGui::InputInt("##GDBPortInput", &gdbport))
+				const bool gdbPortChanged = ImGui::InputInt("##GDBPortInput", &gdbport);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "settings.debug.gdb_port"},
+						{"semantic_label", T("GDB Port")}, {"kind", "number"}, {"value", gdbport},
+						{"read_only", false}});
+#endif
+				if (gdbPortChanged)
 					config::GDBPort = gdbport;
 
 				RenderTwoLineSettingDescription(line1Start, T("Default port is 3263"));

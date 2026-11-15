@@ -22,6 +22,7 @@
 #include "cfg/cfg.h"
 #include "stdclass.h"
 #include "ui/gui.h"
+#include "ui/test_harness.h"
 #include "emulator.h"
 #include "hw/maple/maple_devs.h"
 #include "mouse.h"
@@ -260,6 +261,10 @@ bool GamepadDevice::handleButtonInputDef(const InputMapping::InputDef& inputDef,
 
 bool GamepadDevice::gamepad_btn_input(u32 code, bool pressed)
 {
+	// Harness runs consume the normal mapping path, but physical devices must
+	// not overwrite their leased inputs or trigger unrelated emulator hotkeys.
+	if (test_harness::controllerInputOwned() && api_name() != test_harness::ControllerApiName)
+		return false;
 	const InputMapping::InputDef inputDef = InputMapping::InputDef::from_button(code);
 
 	// When detecting input for button mapping
@@ -370,6 +375,8 @@ bool GamepadDevice::detectAxis(u32 code, int value)
 //
 bool GamepadDevice::gamepad_axis_input(u32 code, int value)
 {
+	if (test_harness::controllerInputOwned() && api_name() != test_harness::ControllerApiName)
+		return false;
 	if (detectAxis(code, value))
 		return true;
 

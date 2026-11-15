@@ -6,8 +6,25 @@
 #pragma once
 
 #include <cstdint>
+#ifdef HOLLYCAST_TEST_HARNESS
+#include <optional>
+#endif
 
 namespace performance_overlay {
+
+#ifdef HOLLYCAST_TEST_HARNESS
+struct HarnessMetrics {
+	bool collecting = false;
+	std::uint64_t sampledAtMs = 0;
+	std::uint64_t sampleAgeMs = 0;
+	std::optional<float> gameFps, outputFps, vblankHz, processCpuPercent, systemCpuPercent;
+	std::optional<float> emulationSpeedPercent;
+	std::optional<float> gpuBusyPercent, gpuRenderMs, frameAverageMs, frameMinimumMs, frameMaximumMs;
+	std::optional<std::uint64_t> processResidentBytes;
+};
+// The UI owner reads the same published values and validity gates as the OSD.
+HarnessMetrics harnessMetrics();
+#endif
 
 int mode();
 void draw();

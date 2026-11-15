@@ -1,0 +1,19 @@
+{
+  "schema": "hollytest.playtest-plan.v1",
+  "id": "current-game-smoke",
+  "identity": {
+    "game_id": "EXACT_GAME_ID_FROM_LIVE"
+  },
+  "timeout_ms": 5000,
+  "steps": [
+    {
+      "id": "running-and-fresh",
+      "op": "observe",
+      "assertions": [
+        { "path": ["state", "running"], "op": "is_true" },
+        { "path": ["telemetry", "sample_available"], "op": "is_true" },
+        { "path": ["telemetry", "stale"], "op": "is_false" }
+      ]
+    }
+  ]
+}

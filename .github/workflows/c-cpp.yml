@@ -152,6 +152,25 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ctest --test-dir build --output-on-failure -R '^(hikaru_|updater_)' -E '^updater_linux_install$'
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
+      - name: Set up native harness client runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+        if: matrix.config.name == 'x86_64-pc-linux-gnu' || matrix.config.name == 'x86_64-pc-windows-msvc'
+
+      - name: Native harness checks
+        shell: bash
+        if: matrix.config.name == 'x86_64-pc-linux-gnu' || matrix.config.name == 'x86_64-pc-windows-msvc'
+        run: |
+          node --test tools/testing/hollytest.test.mjs tools/testing/playtest.test.mjs
+          pwsh -NoProfile -File tools/testing/build-helpers.test.ps1
+          cmake -S tools/testing -B build-harness-protocol -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-harness-protocol --parallel 4
+          ctest --test-dir build-harness-protocol --output-on-failure
+          cmake -S . -B build-native-harness -G Ninja -DCMAKE_BUILD_TYPE=Release -DHOLLYCAST_TEST_HARNESS=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF -DENABLE_CTEST=OFF -DBUILD_TESTING=OFF -DTEST_AUTOMATION=OFF -DUSE_DISCORD=OFF -DUSE_LUA=OFF
+          cmake --build build-native-harness --target Hollycast --parallel 4
+
       - name: Dump symbols
         run: |
           mkdir -p symbols

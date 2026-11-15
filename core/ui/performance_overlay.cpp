@@ -267,6 +267,9 @@ float historyValue(const MetricHistory& history, std::uint32_t index)
 }
 
 struct Metrics {
+#ifdef HOLLYCAST_TEST_HARNESS
+	std::uint64_t completedSamples = 0;
+#endif
 	float gameFps = 0.f;
 	float outputFps = 0.f;
 	float vps = 0.f;
@@ -372,6 +375,9 @@ void updateMetrics(std::uint32_t items)
 	}
 	if (metrics.lastSampleTime == 0)
 	{
+#ifdef HOLLYCAST_TEST_HARNESS
+		metrics.completedSamples = 0;
+#endif
 		metrics.lastSampleTime = now;
 		metrics.lastTextureUploadCount = getTextureUploadCount();
 		metrics.gameFps = 0.f;
@@ -536,6 +542,9 @@ void updateMetrics(std::uint32_t items)
 	metrics.textureUploadsPerSecond = static_cast<float>(textureUploads - metrics.lastTextureUploadCount) * 1000.f / static_cast<float>(elapsed);
 	metrics.lastTextureUploadCount = textureUploads;
 	metrics.lastSampleTime = now;
+#ifdef HOLLYCAST_TEST_HARNESS
+	++metrics.completedSamples;
+#endif
 }
 
 std::string formatSpeed()
@@ -871,6 +880,38 @@ void drawUsageGraph(ImDrawList *drawList, ImFont *font, float fontSize, const Im
 }
 
 } // namespace
+
+#ifdef HOLLYCAST_TEST_HARNESS
+HarnessMetrics harnessMetrics()
+{
+	HarnessMetrics result;
+	result.collecting = collectionEnabled.load(std::memory_order_relaxed) && !resetPending.load(std::memory_order_relaxed);
+	if (!result.collecting || metrics.completedSamples == 0)
+		return result;
+	result.sampledAtMs = metrics.lastSampleTime;
+	result.sampleAgeMs = getTimeMs() - metrics.lastSampleTime;
+	const auto items = requestedItems.load(std::memory_order_relaxed);
+	if (items & Fps) result.gameFps = metrics.gameFps;
+	if (items & OutputFps) result.outputFps = metrics.outputFps;
+	if (items & (Fps | Speed)) result.vblankHz = metrics.vps;
+	if (items & Speed) result.emulationSpeedPercent = metrics.vps / (SPG_CONTROL.isPAL() ? 50.f : 60.f) * 100.f;
+	if ((items & HostCpu) && metrics.hostProcessCpuValid) result.processCpuPercent = metrics.hostProcessCpuUsage;
+	if ((items & HostCpu) && metrics.hostSystemCpuValid) result.systemCpuPercent = metrics.hostSystemCpuUsage;
+	if ((items & HostGpu) && metrics.gpuTimingValid)
+	{
+		result.gpuBusyPercent = metrics.gpuUsage;
+		result.gpuRenderMs = metrics.gpuTimePerRender;
+	}
+	if ((items & FrameTimes) && metrics.frameTimeValid)
+	{
+		result.frameAverageMs = metrics.frameTimeAverage;
+		result.frameMinimumMs = metrics.frameTimeMinimum;
+		result.frameMaximumMs = metrics.frameTimeMaximum;
+	}
+	if ((items & Ram) && metrics.processMemoryValid) result.processResidentBytes = metrics.processResidentBytes;
+	return result;
+}
+#endif
 
 int mode()
 {

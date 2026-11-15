@@ -2,6 +2,10 @@
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include <string>
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "valkyrie/engine.h"
+#include <array>
+#endif
 class Serializer;
 class Deserializer;
 namespace hikaru { struct GameDescriptor; struct CardReaderInfo; }
@@ -36,4 +40,9 @@ void releaseGraphics();
 // Called while the old GL context is still current; preserves the live game.
 void suspendGraphics();
 void unload();
+#ifdef HOLLYCAST_TEST_HARNESS
+// Render-owner diagnostics; these drain the producer before reading the machine.
+bool harnessState(HikaruHarnessState& state, std::array<uint32_t, 3>& romCrc32);
+bool harnessRead(unsigned region, uint32_t offset, uint8_t *data, size_t size);
+#endif
 }

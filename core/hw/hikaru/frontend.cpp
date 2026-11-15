@@ -9,6 +9,9 @@
 #include "cabinet_settings.h"
 #include "roms.h"
 #include "nvram.h"
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "ui/test_harness_telemetry.h"
+#endif
 #include "mie.h"
 #include "protection.h"
 #include "sound.h"
@@ -1215,6 +1218,9 @@ static bool renderFrame() {
                 runMs = waitMs = totalMs = maxMs = presentMs = outputWaitMs = 0;
             }
         }
+#ifdef HOLLYCAST_TEST_HARNESS
+        test_harness::telemetry::hikaruFrame(input);
+#endif
         return true;
     }
     const uint64_t currentGeneration = frameGeneration.load(std::memory_order_acquire);
@@ -1335,6 +1341,9 @@ static bool renderFrame() {
             buildMs = consumerDrawMs = workerWaitTotalMs = overlapMs = totalMs = maximumMs = presentMs = audioBlockedMs = 0;
         }
     }
+#ifdef HOLLYCAST_TEST_HARNESS
+    test_harness::telemetry::hikaruFrame(displaySlot->input);
+#endif
     return true;
 }
 void framePresented() {
@@ -1353,5 +1362,24 @@ bool render() {
     catch (const FlycastException&) { throw; }
     catch (const std::exception& e) { throw FlycastException(std::string("Hikaru graphics: ") + e.what()); }
 }
+
+#ifdef HOLLYCAST_TEST_HARNESS
+bool harnessState(HikaruHarnessState& state, std::array<uint32_t, 3>& romCrc32) {
+    // These callbacks run on the render owner. Drain before stateMutex because
+    // the frame producer also takes stateMutex while executing the machine.
+    drainFrameWorker();
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    if (!engine || !images || hikaru_engine_harness_state(engine, &state) != 0) return false;
+    romCrc32 = romIdentity();
+    return true;
+}
+
+bool harnessRead(unsigned region, uint32_t offset, uint8_t *data, size_t size) {
+    // Keep the same producer-before-state lock order as the other snapshots.
+    drainFrameWorker();
+    std::lock_guard<std::recursive_mutex> lock(stateMutex);
+    return engine && hikaru_engine_harness_read(engine, region, offset, data, size) == 0;
+}
+#endif
 
 }

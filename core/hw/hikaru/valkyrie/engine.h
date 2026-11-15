@@ -30,6 +30,11 @@ typedef enum {
 #define HIKARU_DEFAULT_TRANSPARENCY_LAYERS 32u
 #define HIKARU_DEFAULT_TRANSPARENCY_BUDGET (UINT64_C(512) * 1024 * 1024)
 #define HIKARU_ENGINE_BRAM_SIZE 65536u
+#ifdef HOLLYCAST_TEST_HARNESS
+typedef struct {
+    uint32_t pc[2], sr[2], cpu_state[2], ram_size[2], cpu_clock_mhz;
+} HikaruHarnessState;
+#endif
 typedef struct {
     const uint8_t *boot; size_t boot_size;
     const uint8_t *program; size_t program_size;
@@ -157,6 +162,13 @@ int hikaru_engine_set_transparency_peel_capacity(HikaruEngine *engine, unsigned 
 int hikaru_engine_set_transparency_memory_budget(HikaruEngine *engine, uint64_t bytes);
 const char *hikaru_engine_last_error(const HikaruEngine *engine);
 void hikaru_engine_destroy(HikaruEngine *engine);
+#ifdef HOLLYCAST_TEST_HARNESS
+// The caller must hold the machine idle. Reads never access bus/MMIO devices.
+int hikaru_engine_harness_state(const HikaruEngine *engine, HikaruHarnessState *state);
+// Regions: master RAM, slave RAM, command RAM, BRAM; at most 4096 bytes.
+int hikaru_engine_harness_read(const HikaruEngine *engine, unsigned region,
+    uint32_t offset, uint8_t *data, size_t size);
+#endif
 #ifdef __cplusplus
 }
 #endif

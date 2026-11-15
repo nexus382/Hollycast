@@ -31,6 +31,7 @@
 #include "network/net_handshake.h"
 #include "network/ice.h"
 #include "input/gamepad_device.h"
+#include "test_harness.h"
 #include "input/keyboard_device.h"
 #include "input/mouse.h"
 #include "readiness.h"
@@ -413,6 +414,8 @@ void gui_requestStyleReload() { styleReloadRequested = true; }
 
 void gui_keyboard_input(u32 wc)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	ImGuiIO& io = ImGui::GetIO();
 	if (io.WantCaptureKeyboard)
 		io.AddInputCharacter(wc);
@@ -420,6 +423,8 @@ void gui_keyboard_input(u32 wc)
 
 void gui_keyboard_inputUTF8(const std::string& s)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	ImGuiIO& io = ImGui::GetIO();
 	if (io.WantCaptureKeyboard)
 		io.AddInputCharactersUTF8(s.c_str());
@@ -427,6 +432,8 @@ void gui_keyboard_inputUTF8(const std::string& s)
 
 void gui_keyboard_key(u8 keyCode, bool pressed)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	if (!inited)
 		return;
 	ImGuiKey key = keycodeToImGuiKey(keyCode);
@@ -451,10 +458,16 @@ bool gui_mouse_captured() {
 	return io.WantCaptureMouse;
 }
 
-void gui_set_mouse_position(int x, int y, bool touchscreen)
+void gui_set_mouse_position(int x, int y, bool touchscreen, bool harnessInput)
 {
-	mouseX = std::round(x * settings.display.pointScale);
-	mouseY = std::round(y * settings.display.pointScale);
+	// Keep desktop activity outside disposable native sessions. The harness
+	// marks its own UI events explicitly; ordinary builds accept normal input.
+	if (test_harness::controllerInputOwned() && !harnessInput)
+		return;
+	// Native UI observations already use the framebuffer coordinates ImGui consumes.
+	const float scale = harnessInput ? 1.f : settings.display.pointScale;
+	mouseX = std::round(x * scale);
+	mouseY = std::round(y * scale);
 	mouseTouchscreen = touchscreen;
 }
 
@@ -466,8 +479,10 @@ bool gui_is_menu_touch_target(float x, float y)
 			std::round(y * settings.display.pointScale));
 }
 
-void gui_set_mouse_button(int button, bool pressed, bool touchscreen)
+void gui_set_mouse_button(int button, bool pressed, bool touchscreen, bool harnessInput)
 {
+	if (test_harness::controllerInputOwned() && !harnessInput)
+		return;
 	if (pressed)
 		mouseButtons |= 1 << button;
 	else
@@ -476,6 +491,8 @@ void gui_set_mouse_button(int button, bool pressed, bool touchscreen)
 }
 
 void gui_set_mouse_wheel(float delta) {
+	if (test_harness::controllerInputOwned())
+		return;
 	mouseWheel += delta;
 	mouseTouchscreen = false;
 }
@@ -505,22 +522,26 @@ static void gui_newFrame()
 
 	// shows a popup navigation window even in game because of the OSD
 	//io.AddKeyEvent(ImGuiKey_GamepadFaceLeft, ((kcode[0] & DC_BTN_X) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, ((kcode[0] & DC_BTN_B) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceUp, ((kcode[0] & DC_BTN_Y) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceDown, ((kcode[0] & DC_BTN_A) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, ((kcode[0] & DC_DPAD_LEFT) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadRight, ((kcode[0] & DC_DPAD_RIGHT) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadUp, ((kcode[0] & DC_DPAD_UP) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, ((kcode[0] & DC_DPAD_DOWN) == 0));
+	// A harness cabinet input must not also navigate the always-visible menu
+	// bar while playing. Explicit native UI keys/mouse remain independent, and
+	// controller navigation is available after opening the emulator menu.
+	const bool padNavigation = !test_harness::controllerInputOwned() || gui_is_open();
+	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, padNavigation && ((kcode[0] & DC_BTN_B) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadFaceUp, padNavigation && ((kcode[0] & DC_BTN_Y) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadFaceDown, padNavigation && ((kcode[0] & DC_BTN_A) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, padNavigation && ((kcode[0] & DC_DPAD_LEFT) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadRight, padNavigation && ((kcode[0] & DC_DPAD_RIGHT) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadUp, padNavigation && ((kcode[0] & DC_DPAD_UP) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, padNavigation && ((kcode[0] & DC_DPAD_DOWN) == 0));
 
 	float analog;
-	analog = joyx[0] < 0 ? -(float)joyx[0] / 32768.f : 0.f;
+	analog = padNavigation && joyx[0] < 0 ? -(float)joyx[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, analog > 0.1f, analog);
-	analog = joyx[0] > 0 ? (float)joyx[0] / 32768.f : 0.f;
+	analog = padNavigation && joyx[0] > 0 ? (float)joyx[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, analog > 0.1f, analog);
-	analog = joyy[0] < 0 ? -(float)joyy[0] / 32768.f : 0.f;
+	analog = padNavigation && joyy[0] < 0 ? -(float)joyy[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, analog > 0.1f, analog);
-	analog = joyy[0] > 0 ? (float)joyy[0] / 32768.f : 0.f;
+	analog = padNavigation && joyy[0] > 0 ? (float)joyy[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, analog > 0.1f, analog);
 
 	// Emergency quit: Shift+Esc or Ctrl+Shift+Esc to force quit (bypasses save dialog)

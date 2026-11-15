@@ -106,6 +106,43 @@ static void profile_end_frame(HikaruEngine *engine, bool success)
     engine->profile.frames = 0;
 }
 
+#ifdef HOLLYCAST_TEST_HARNESS
+int hikaru_engine_harness_state(const HikaruEngine *engine, HikaruHarnessState *state)
+{
+    if (!engine || !engine->machine || !state) return -1;
+    const hikaru_t *machine = (const hikaru_t *)engine->machine;
+    const sh4_t *cpus[2] = {(const sh4_t *)machine->sh_m, (const sh4_t *)machine->sh_s};
+    if (!cpus[0] || !cpus[1] || !machine->ram_m || !machine->ram_s) return -1;
+    for (unsigned i = 0; i < 2; ++i) {
+        state->pc[i] = cpus[i]->regs.pc;
+        state->sr[i] = cpus[i]->regs.sr.full;
+        state->cpu_state[i] = (uint32_t)cpus[i]->base.state;
+    }
+    state->ram_size[0] = (uint32_t)machine->ram_m->size;
+    state->ram_size[1] = (uint32_t)machine->ram_s->size;
+    state->cpu_clock_mhz = machine->cpu_clock_mhz;
+    return 0;
+}
+
+int hikaru_engine_harness_read(const HikaruEngine *engine, unsigned region,
+    uint32_t offset, uint8_t *data, size_t size)
+{
+    if (!engine || !engine->machine || !data || !size || size > 4096) return -1;
+    const hikaru_t *machine = (const hikaru_t *)engine->machine;
+    const vk_buffer_t *buffer = NULL;
+    switch (region) {
+    case 0: buffer = machine->ram_m; break;
+    case 1: buffer = machine->ram_s; break;
+    case 2: buffer = machine->cmdram; break;
+    case 3: buffer = machine->bram; break;
+    default: return -1;
+    }
+    if (!buffer || !buffer->ptr || size > buffer->size || offset > buffer->size - size) return -1;
+    memcpy(data, buffer->ptr + offset, size);
+    return 0;
+}
+#endif
+
 int hikaru_engine_get_cabinet_defaults(const HikaruEngine *engine, uint8_t *data, size_t size)
 {
     if (!engine || !engine->machine || !data || size != 128) return -1;
