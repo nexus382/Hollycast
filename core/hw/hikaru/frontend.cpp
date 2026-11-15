@@ -28,6 +28,7 @@
 #include "hw/naomi/naomi_cart.h"
 #include "card_reader.h"
 #include "rend/gles/glcache.h"
+#include "rend/osd.h"
 #include "rend/transform_matrix.h"
 #include "ui/imgui_driver.h"
 #include "ui/gui.h"
@@ -97,9 +98,7 @@ std::exception_ptr waitFrameWorker() {
     return frameWorker ? frameWorker->wait() : std::exception_ptr{};
 }
 
-void recordHikaruOutputViewport() {
-    const int width = settings.display.width;
-    const int height = settings.display.height;
+void recordHikaruOutputViewport(int width, int height) {
     float aspectRatio = getOutputFramebufferAspectRatio();
     if (!std::isfinite(aspectRatio) || aspectRatio <= 0.0f)
         aspectRatio = 4.0f / 3.0f;
@@ -819,7 +818,11 @@ static bool renderFrame() {
             (!context->isGLES() && context->getMajorVersion() == 3 && context->getMinorVersion() < 2) || !glGetString(GL_VERSION))
             throw FlycastException("Hikaru OpenGL requires OpenGL 3.2 or OpenGL ES 3.0");
     }
-    if (settings.display.width <= 0 || settings.display.height <= 0) return false;
+    const int outputWidth = settings.display.width;
+    // GL draws from the bottom of the window; native presenters place this same
+    // canvas below the menu. Fit the game once inside the usable area on every API.
+    const int outputHeight = settings.display.height - std::max(0, getScaledTopInset());
+    if (outputWidth <= 0 || outputHeight <= 0) return false;
     if (resetRequested.exchange(false)) {
         if (cardReader) cardReader->reset();
         frameGeneration.fetch_add(1, std::memory_order_release);
@@ -897,7 +900,7 @@ static bool renderFrame() {
         if (!backend) throw FlycastException("The selected Hikaru renderer is unavailable in this build");
         nativeGraphics = std::make_unique<graphics::Device>(std::move(backend));
     }
-    if (nativeGraphics) nativeGraphics->begin(unsigned(settings.display.width), unsigned(settings.display.height));
+    if (nativeGraphics) nativeGraphics->begin(unsigned(outputWidth), unsigned(outputHeight));
     std::optional<graphics::Device::Scope> graphicsScope;
     graphicsScope.emplace(nativeGraphics.get());
     if (!engine) {
@@ -909,7 +912,7 @@ static bool renderFrame() {
             : activeGame == &VirtualOn4Game ? HIKARU_ENGINE_GAME_VON4
             : activeGame == &PlanetHarriersGame ? HIKARU_ENGINE_GAME_PHARRIER
             : activeGame == &BraveFirefightersGame ? HIKARU_ENGINE_GAME_BRAVEFF : HIKARU_ENGINE_GAME_AIRTRIX;
-        engine = hikaru_engine_create_game(game, &roms, &io, &security, 0, unsigned(settings.display.width), unsigned(settings.display.height), 1, error.data(), error.size());
+        engine = hikaru_engine_create_game(game, &roms, &io, &security, 0, unsigned(outputWidth), unsigned(outputHeight), 1, error.data(), error.size());
         glcache.Reset();
         if (nativeGraphics) nativeGraphics->checkError();
         if (!engine) throw FlycastException(std::string("Hikaru renderer: ") + error.data());
@@ -968,7 +971,7 @@ static bool renderFrame() {
         if (hikaru_engine_set_sound(engine, &audio) != 0)
             throw FlycastException(std::string("Hikaru sound: ") + hikaru_engine_last_error(engine));
     }
-    if (hikaru_engine_restore_graphics(engine, 0, unsigned(settings.display.width), unsigned(settings.display.height)) != 0)
+    if (hikaru_engine_restore_graphics(engine, 0, unsigned(outputWidth), unsigned(outputHeight)) != 0)
         throw FlycastException(std::string("Hikaru renderer: ") + hikaru_engine_last_error(engine));
     const bool restoredState = applyPendingState();
     if (restoredState)
@@ -1093,7 +1096,7 @@ static bool renderFrame() {
     GLint target = 0;
     if (!nativeGraphics) glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
     hikaru_engine_set_output_aspect_ratio(engine, getOutputFramebufferAspectRatio());
-    hikaru_engine_resize(engine, uint32_t(target), unsigned(settings.display.width), unsigned(settings.display.height));
+    hikaru_engine_resize(engine, uint32_t(target), unsigned(outputWidth), unsigned(outputHeight));
     if (!threaded && readyFrameSlot >= 0
             && frameSlots[readyFrameSlot].generation == frameGeneration.load(std::memory_order_acquire)) {
         // A mode switch drains the accepted packet and presents it once before returning to direct run_frame.
@@ -1108,7 +1111,7 @@ static bool renderFrame() {
         performance_overlay::recordGuestFrame();
         performance_overlay::recordRenderedResolution(640, 480,
             completed.internalWidth, completed.internalHeight);
-        recordHikaruOutputViewport();
+        recordHikaruOutputViewport(outputWidth, outputHeight);
         if (completed.clearAudio) ClearAudioOutput();
         for (size_t i = 0; i < completed.audioCount; ++i)
             WriteSample(completed.audio[i].first, completed.audio[i].second);
@@ -1174,7 +1177,7 @@ static bool renderFrame() {
         performance_overlay::recordGuestFrame();
         performance_overlay::recordRenderedResolution(640, 480,
             internalWidth, internalHeight);
-        recordHikaruOutputViewport();
+        recordHikaruOutputViewport(outputWidth, outputHeight);
         stateLock.unlock();
         if (audioFrame.clearAudio) ClearAudioOutput();
         const double audioBlockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
@@ -1280,7 +1283,7 @@ static bool renderFrame() {
     performance_overlay::recordGuestFrame();
     const unsigned renderedHeight = displaySlot->internalHeight;
     performance_overlay::recordRenderedResolution(640, 480, displaySlot->internalWidth, renderedHeight);
-    recordHikaruOutputViewport();
+    recordHikaruOutputViewport(outputWidth, outputHeight);
     if (displaySlot->clearAudio) ClearAudioOutput();
     const double blockedStart = traceTiming ? audioOutputBlockedSeconds() : 0;
     for (size_t i = 0; i < displaySlot->audioCount; ++i)

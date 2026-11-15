@@ -148,7 +148,8 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF -DBUILD_TESTING=ON -DHIKARU_VENDOR_BUILD_SMOKE=ON -DHIKARU_NATIVE_GRAPHICS_TESTS=ON ${{ matrix.config.cmakeArgs }}
           cmake --build build --config ${{ matrix.config.buildType }}
           ./build/Hollycast
-          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ctest --test-dir build --output-on-failure -E updater_linux_install
+          # Dependencies register tests excluded from our build; run every project-owned suite.
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ctest --test-dir build --output-on-failure -R '^(hikaru_|updater_)' -E '^updater_linux_install$'
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
       - name: Dump symbols
@@ -182,7 +183,7 @@ jobs:
           mv Hollycast-x86_64.AppImage artifact/bin
           rm artifact/bin/Hollycast
           # The transaction fixture packages a real AppImage with the same tool.
-          ctest --test-dir build --output-on-failure -R updater_linux_install
+          ctest --test-dir build --output-on-failure -R '^updater_linux_install$'
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
       - name: Package app (macos)

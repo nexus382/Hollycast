@@ -19,6 +19,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <new>
 #include <stdexcept>
 #include <tuple>
 #include <limits>
@@ -225,6 +226,10 @@ class VulkanBackend final : public Backend {
 
 #ifdef HIKARU_NATIVE_TESTING
     std::array<uint64_t,3> fragmentListCounts{}; // collections, resolves, overflows
+    enum class FragmentListInitFaultForTesting : unsigned {
+        None=0,OutOfDeviceMemory=1,OutOfHostMemory=2,BadAlloc=3,InvalidShader=4,DeviceLost=5
+    };
+    FragmentListInitFaultForTesting fragmentListInitFaultForTesting=FragmentListInitFaultForTesting::None;
 #endif
     struct CachedPipeline { vk::UniquePipeline pipeline; uint64_t touched; };
     std::map<PipelineKey,CachedPipeline> pipelines;
@@ -858,26 +863,11 @@ class VulkanBackend final : public Backend {
             *fragmentGpu.pool,index);
         fragmentGpu.pending|=1u<<index;
     }
-    void initializeFragmentLists() {
-        if(fragmentListLayout)return;
-        std::array<vk::DescriptorSetLayoutBinding,4> bindings{};
-        for(uint32_t i=0;i<3;++i)bindings[i]={i,vk::DescriptorType::eStorageBuffer,1,vk::ShaderStageFlagBits::eFragment};
-        bindings[1].descriptorCount=4;
-        bindings[3]={3,vk::DescriptorType::eCombinedImageSampler,1,vk::ShaderStageFlagBits::eFragment};
-        fragmentListLayout=device.createDescriptorSetLayoutUnique({{},bindings.size(),bindings.data()});
-        const std::array<vk::DescriptorSetLayout,2> layouts={*descriptorLayout,*fragmentListLayout};
-        const vk::PushConstantRange parameters(vk::ShaderStageFlagBits::eFragment,0,sizeof(HikaruFragmentListParameters));
-        fragmentPipelineLayout=device.createPipelineLayoutUnique({{},layouts.size(),layouts.data(),1,&parameters});
-        fragmentCollectShader=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentSource(false,false,false,1,false,true));
-        fragmentResolveVertex=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,vulkanFullscreenVertexSource());
-        fragmentResolveShader=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,vulkanFragmentListResolveSource(fragmentSmallList));
-    }
-    vk::Pipeline fragmentResolvePipeline(vk::Format format) {
-        auto found=fragmentResolvePipelines.find(format);
-        if(found!=fragmentResolvePipelines.end())return *found->second;
+    vk::UniquePipeline createFragmentResolvePipeline(vk::Format format,vk::PipelineLayout layout,
+        vk::ShaderModule vertexShader,vk::ShaderModule fragmentShader) {
         const std::array<vk::PipelineShaderStageCreateInfo,2> stages={{
-            {{},vk::ShaderStageFlagBits::eVertex,*fragmentResolveVertex,"main"},
-            {{},vk::ShaderStageFlagBits::eFragment,*fragmentResolveShader,"main"}}};
+            {{},vk::ShaderStageFlagBits::eVertex,vertexShader,"main"},
+            {{},vk::ShaderStageFlagBits::eFragment,fragmentShader,"main"}}};
         const vk::PipelineVertexInputStateCreateInfo vertices;
         const vk::PipelineInputAssemblyStateCreateInfo assembly({},vk::PrimitiveTopology::eTriangleList,false);
         const vk::PipelineViewportStateCreateInfo viewport({},1,nullptr,1,nullptr);
@@ -890,10 +880,61 @@ class VulkanBackend final : public Backend {
         const std::array<vk::DynamicState,2> states={vk::DynamicState::eViewport,vk::DynamicState::eScissor};
         const vk::PipelineDynamicStateCreateInfo dynamic({},states.size(),states.data());
         const vk::GraphicsPipelineCreateInfo info({},stages.size(),stages.data(),&vertices,&assembly,nullptr,
-            &viewport,&raster,&samples,&depth,&blending,&dynamic,*fragmentPipelineLayout,
-            renderPass(format,vk::Format::eUndefined));
+            &viewport,&raster,&samples,&depth,&blending,&dynamic,layout,renderPass(format,vk::Format::eUndefined));
         auto pipeline=device.createGraphicsPipelineUnique(ctx->GetPipelineCache(),info);
-        return *fragmentResolvePipelines.emplace(format,std::move(pipeline.value)).first->second;
+        return std::move(pipeline.value);
+    }
+    vk::Pipeline fragmentResolvePipeline(vk::Format format) {
+        auto found=fragmentResolvePipelines.find(format);
+        if(found!=fragmentResolvePipelines.end())return *found->second;
+        auto pipeline=createFragmentResolvePipeline(format,*fragmentPipelineLayout,*fragmentResolveVertex,*fragmentResolveShader);
+        return *fragmentResolvePipelines.emplace(format,std::move(pipeline)).first->second;
+    }
+    bool initializeFragmentLists(vk::Format format) {
+        if(fragmentListLayout) {
+            fragmentResolvePipeline(format);
+            return true;
+        }
+        std::array<vk::DescriptorSetLayoutBinding,4> bindings{};
+        for(uint32_t i=0;i<3;++i)bindings[i]={i,vk::DescriptorType::eStorageBuffer,1,vk::ShaderStageFlagBits::eFragment};
+        bindings[1].descriptorCount=4;
+        bindings[3]={3,vk::DescriptorType::eCombinedImageSampler,1,vk::ShaderStageFlagBits::eFragment};
+        auto listLayout=device.createDescriptorSetLayoutUnique({{},bindings.size(),bindings.data()});
+#ifdef HIKARU_NATIVE_TESTING
+        const auto fault=fragmentListInitFaultForTesting;
+        fragmentListInitFaultForTesting=FragmentListInitFaultForTesting::None;
+        switch(fault) {
+        case FragmentListInitFaultForTesting::OutOfDeviceMemory: throw vk::OutOfDeviceMemoryError("Injected fragment-list initialization failure");
+        case FragmentListInitFaultForTesting::OutOfHostMemory: throw vk::OutOfHostMemoryError("Injected fragment-list initialization failure");
+        case FragmentListInitFaultForTesting::BadAlloc: throw std::bad_alloc();
+        case FragmentListInitFaultForTesting::DeviceLost: throw vk::DeviceLostError("Injected fragment-list initialization failure");
+        default: break;
+        }
+        const bool invalidShader=fault==FragmentListInitFaultForTesting::InvalidShader;
+#endif
+        const std::array<vk::DescriptorSetLayout,2> layouts={*descriptorLayout,*listLayout};
+        const vk::PushConstantRange parameters(vk::ShaderStageFlagBits::eFragment,0,sizeof(HikaruFragmentListParameters));
+        auto pipelineLayout=device.createPipelineLayoutUnique({{},layouts.size(),layouts.data(),1,&parameters});
+        auto collectSource=vulkanFragmentSource(false,false,false,1,false,true);
+#ifdef HIKARU_NATIVE_TESTING
+        if(invalidShader)collectSource="invalid GLSL";
+#endif
+        auto collectShader=ShaderCompiler::CompileOptional(vk::ShaderStageFlagBits::eFragment,collectSource);
+        if(!collectShader)return false;
+        auto resolveVertex=ShaderCompiler::CompileOptional(vk::ShaderStageFlagBits::eVertex,vulkanFullscreenVertexSource());
+        if(!resolveVertex)return false;
+        auto resolveShader=ShaderCompiler::CompileOptional(vk::ShaderStageFlagBits::eFragment,
+            vulkanFragmentListResolveSource(fragmentSmallList));
+        if(!resolveShader)return false;
+        // Create the target-format pipeline before publishing first-use handles.
+        auto resolvePipeline=createFragmentResolvePipeline(format,*pipelineLayout,*resolveVertex,*resolveShader);
+        fragmentResolvePipelines.emplace(format,std::move(resolvePipeline));
+        fragmentListLayout=std::move(listLayout);
+        fragmentPipelineLayout=std::move(pipelineLayout);
+        fragmentCollectShader=std::move(collectShader);
+        fragmentResolveVertex=std::move(resolveVertex);
+        fragmentResolveShader=std::move(resolveShader);
+        return true;
     }
     std::unique_ptr<BufferData> allocateFragmentBuffer(vk::DeviceSize bytes,vk::BufferUsageFlags usage) {
         // UMA devices can expose small local heaps plus a much larger coherent
@@ -981,15 +1022,32 @@ public:
         if(storageChanges)waitForDraws(Timings::WaitReason::FragmentStorage);
         else if(timing.enabled)++timing.fragmentReuses;
         pollFragmentGpuTiming();
-        initializeFragmentLists();
+        const bool initializedBefore=bool(fragmentListLayout);
+        auto failFragmentListSetup=[&](const char* reason) {
+            fragmentLists.reset();
+            fragmentPoolPolicy={};
+            timing.listCapacity=0;timing.listPoolBytes=0;
+            if(!initializedBefore) {
+                // First-use setup has no recorded users; retain caches after any later failure.
+                fragmentResolvePipelines.clear();
+                fragmentCollectShader.reset();fragmentResolveVertex.reset();fragmentResolveShader.reset();
+                fragmentPipelineLayout.reset();fragmentListLayout.reset();
+            }
+            fragmentListSupported=false;
+            std::fprintf(stderr,"Hikaru: fragment-list %s failed; using depth peeling\n",reason);
+            return false;
+        };
         try {
+            if(!initializeFragmentLists(target.format))return failFragmentListSetup("optional shader compilation");
             if(!fragmentLists||fragmentLists->background.extent!=target.extent||fragmentLists->background.format!=target.format) {
                 fragmentLists.reset();fragmentLists=allocateFragmentLists(target,capacity);
             } else if(fragmentLists->capacity!=capacity)resizeFragmentNodes(*fragmentLists,capacity);
         } catch(const vk::OutOfDeviceMemoryError&) {
-            fragmentLists.reset();fragmentListSupported=false;
-            std::fprintf(stderr,"Hikaru: fragment-list allocation failed; using depth peeling\n");
-            return false;
+            return failFragmentListSetup("optional allocation");
+        } catch(const vk::OutOfHostMemoryError&) {
+            return failFragmentListSetup("optional allocation");
+        } catch(const std::bad_alloc&) {
+            return failFragmentListSetup("optional allocation");
         }
         timing.listCapacity=fragmentLists->capacity;
         timing.listPoolBytes=fixedBytes+uint64_t(fragmentLists->capacity)*16;
@@ -1103,6 +1161,9 @@ public:
     std::array<uint64_t,2> geometryCountsForTesting() const { return {vertexUploadCount,geometryReuseCount}; }
     std::array<uint64_t,3> fragmentCountsForTesting() const { return fragmentListCounts; }
     void disableFragmentListsForTesting() { fragmentListSupported=false; }
+    void setFragmentListInitFaultForTesting(unsigned fault) {
+        fragmentListInitFaultForTesting=static_cast<FragmentListInitFaultForTesting>(fault);
+    }
     std::array<uint64_t,4> fragmentPoolForTesting() const {
         return {fragmentLists?fragmentLists->capacity:0,fragmentPoolAllocations,
             fragmentPoolPolicy.hint,fragmentPoolPolicy.samples};
@@ -1631,6 +1692,9 @@ std::array<double,4> vulkanFragmentGpuTimesForTesting(Backend& backend) {
 }
 void disableVulkanFragmentListsForTesting(Backend& backend) {
     static_cast<VulkanBackend&>(backend).disableFragmentListsForTesting();
+}
+void injectVulkanFragmentListInitFaultForTesting(Backend& backend,unsigned fault) {
+    static_cast<VulkanBackend&>(backend).setFragmentListInitFaultForTesting(fault);
 }
 std::array<uint64_t,2> vulkanGeometryCountsForTesting(const Backend& backend) {
     return static_cast<const VulkanBackend&>(backend).geometryCountsForTesting();

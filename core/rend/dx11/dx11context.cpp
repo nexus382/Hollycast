@@ -388,13 +388,19 @@ void DX11Context::drawExternalFrame()
 {
 	if (!externalFrame || !renderTargetView)
 		return;
+	const int topInset = std::max(0, getScaledTopInset());
+	const int outputHeight = settings.display.height - topInset;
+	if (settings.display.width <= 0 || outputHeight <= 0)
+		return;
 	if (!externalQuad) {
 		externalQuad = std::make_unique<Quad>();
 		externalQuad->init(pDevice, pDeviceContext, &shaders);
 	}
 	pDeviceContext->OMSetRenderTargets(1, &renderTargetView.get(), nullptr);
 	pDeviceContext->OMSetBlendState(nullptr, nullptr, 0xffffffff);
-	const D3D11_VIEWPORT viewport{0.f, 0.f, float(settings.display.width), float(settings.display.height), 0.f, 1.f};
+	// Hikaru has already fitted the game inside this canvas. Reserve the menu
+	// here without fitting it again or stretching it back to the full window.
+	const D3D11_VIEWPORT viewport{0.f, float(topInset), float(settings.display.width), float(outputHeight), 0.f, 1.f};
 	pDeviceContext->RSSetViewports(1, &viewport);
 	externalQuad->draw(externalFrame, samplers.getSampler(false));
 }

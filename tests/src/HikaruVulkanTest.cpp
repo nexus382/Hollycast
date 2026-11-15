@@ -9,6 +9,7 @@
 #endif
 #if defined(USE_VULKAN) && defined(USE_SDL) && !defined(LIBRETRO)
 #include "hw/hikaru/graphics/device.h"
+#include "rend/vulkan/compiler.h"
 #include "rend/vulkan/vulkan_context.h"
 #include "sdl/sdl.h"
 #include "cfg/option.h"
@@ -25,6 +26,9 @@
 #include <filesystem>
 
 namespace hikaru::graphics {
+enum class FragmentListInitFaultForTesting : unsigned {
+    OutOfDeviceMemory=1,OutOfHostMemory=2,BadAlloc=3,InvalidShader=4,DeviceLost=5
+};
 // Defined only when the native test executable compiles the Vulkan backend.
 std::unique_ptr<Backend> makeVulkanBackendForTesting(bool specialize);
 std::array<uint64_t,2> vulkanGeometryCountsForTesting(const Backend&);
@@ -43,6 +47,7 @@ double vulkanFrameGpuMsForTesting(Backend&);
 bool enableVulkanFragmentGpuTimingForTesting(Backend&);
 std::array<uint64_t,4> vulkanFragmentGpuSamplesForTesting(Backend&);
 std::array<double,4> vulkanFragmentGpuTimesForTesting(Backend&);
+void injectVulkanFragmentListInitFaultForTesting(Backend&,unsigned fault);
 #if defined(HAVE_D3D11) && defined(_WIN32)
 std::unique_ptr<Backend> makeDx11BackendForTesting(ID3D11Device*,ID3D11DeviceContext*,pD3DCompile,bool);
 #endif
@@ -113,6 +118,41 @@ void drawOrderedFragment(Backend& backend,Draw draw) {
     draw.dstRGB=mode==1?GL_ZERO:mode==2?GL_ONE:GL_ONE_MINUS_SRC_ALPHA;
     draw.srcAlpha=GL_ONE;draw.dstAlpha=mode==1?GL_ZERO:GL_ONE_MINUS_SRC_ALPHA;
     backend.draw(draw);
+}
+TEST_F(HikaruVulkanTest, OptionalShaderCompilationRejectsInvalidGlslWithoutChangingRequiredCompilation) {
+    EXPECT_FALSE(ShaderCompiler::CompileOptional(vk::ShaderStageFlagBits::eFragment,"invalid GLSL"));
+    const std::string validVertex="#version 450\nvoid main() { gl_Position=vec4(0.0); }";
+    auto optional=ShaderCompiler::CompileOptional(vk::ShaderStageFlagBits::eVertex,validVertex);
+    ASSERT_TRUE(optional);
+    auto required=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,validVertex);
+    EXPECT_TRUE(required);
+}
+TEST_F(HikaruVulkanTest, FragmentListInitializationFailuresFallBackWithoutChangingTheScene) {
+    const std::array<FragmentListInitFaultForTesting,4> faults={
+        FragmentListInitFaultForTesting::OutOfDeviceMemory,
+        FragmentListInitFaultForTesting::OutOfHostMemory,
+        FragmentListInitFaultForTesting::BadAlloc,
+        FragmentListInitFaultForTesting::InvalidShader};
+    for(const auto fault:faults) {
+        SCOPED_TRACE(static_cast<unsigned>(fault));
+        auto backend=makeVulkanBackendForTesting(true);allocate(*backend);clear(*backend);
+        const auto before=pixels(*backend);
+        injectVulkanFragmentListInitFaultForTesting(*backend,static_cast<unsigned>(fault));
+        EXPECT_FALSE(backend->beginFragmentList(0,1024*1024));
+        equalPixels(before,pixels(*backend),"failed optional initialization preserves the scene");
+        drawOrderedFragment(*backend,fragmentMesh(-0.25f,{1,0,0,0.5f}));
+        const auto drawn=pixels(*backend);
+        EXPECT_NE(drawn,before);
+        EXPECT_FALSE(backend->beginFragmentList(0,1024*1024));
+        equalPixels(drawn,pixels(*backend),"disabled fragment lists leave ordinary drawing available");
+    }
+}
+TEST_F(HikaruVulkanTest, FragmentListInitializationPropagatesDeviceLossWithoutDisablingLists) {
+    auto backend=makeVulkanBackendForTesting(true);allocate(*backend);clear(*backend);
+    injectVulkanFragmentListInitFaultForTesting(*backend,static_cast<unsigned>(FragmentListInitFaultForTesting::DeviceLost));
+    EXPECT_THROW(backend->beginFragmentList(0,1024*1024),vk::DeviceLostError);
+    ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
+    EXPECT_TRUE(backend->endFragmentList());
 }
 TEST_F(HikaruVulkanTest, FragmentListsMatchOrderedMixedBlendsAndDepthTies) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
