@@ -47,6 +47,7 @@ Releases tagged `-dev` are built from the `dev` branch and contain the newest, l
 - **Ready to play.** Sensible defaults let new players start a game straight away, and the advanced settings are still there for power users.
 - **Performance overlay.** A configurable on-screen display with frame timing plus RAM and texture VRAM usage.
 - **Real hardware and VMU support.** [DreamLink](docs/DreamLink.md) connects Hollycast to DreamConn and DreamPicoPort controllers and to the [DreamPotato](docs/DreamPotato%20Integrated%20Mode.md) VMU emulator.
+- **Phone VMU.** Use **Connect Phone** in the on-screen display settings to mirror the VMU LCD or play standalone VMU mini-games with touch buttons in your phone's browser. See the [phone VMU guide](docs/Phone%20VMU.md).
 - **Editable virtual controller.** The on-screen touch controls can be rearranged and resized on mobile.
 - **Frequent quality-of-life updates.** Old components are kept up to date, and new features come from requests by people who play every day.
 

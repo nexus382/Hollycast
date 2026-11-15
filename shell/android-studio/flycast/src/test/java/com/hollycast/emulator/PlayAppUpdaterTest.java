@@ -27,6 +27,7 @@ public class PlayAppUpdaterTest {
     private Task<AppUpdateInfo> task;
     private OnSuccessListener<AppUpdateInfo> completion;
     private OnFailureListener failure;
+    private int notifications;
 
     private void field(String name, Object value) throws Exception {
         Field field = PlayAppUpdater.class.getDeclaredField(name);
@@ -36,6 +37,8 @@ public class PlayAppUpdaterTest {
 
     @Before @SuppressWarnings("unchecked")
     public void prepare() throws Exception {
+        notifications = 0;
+        PlayAppUpdater.observe(() -> ++notifications);
         activity = mock(Activity.class);
         manager = mock(AppUpdateManager.class);
         info = mock(AppUpdateInfo.class);
@@ -57,6 +60,37 @@ public class PlayAppUpdaterTest {
     }
 
     private JSONObject snapshot() throws Exception { return new JSONObject(PlayAppUpdater.control(activity, "")); }
+
+    @Test public void snapshotsNotifyOnlyOnPublicationAndObserverReplacement() throws Exception {
+        assumeFalse(BuildConfig.GITHUB_UPDATES);
+        assertEquals(1, notifications);
+        for (int i = 0; i < 120; ++i) snapshot();
+        assertEquals(1, notifications);
+        PlayAppUpdater.control(activity, "check");
+        assertEquals(2, notifications);
+        assertTrue(snapshot().getBoolean("checking"));
+        completion.onSuccess(info);
+        assertEquals(3, notifications);
+        assertEquals(14, snapshot().getInt("availableCode"));
+        int[] replacement = {0};
+        PlayAppUpdater.observe(() -> ++replacement[0]);
+        assertEquals(1, replacement[0]);
+        PlayAppUpdater.result(19581, Activity.RESULT_CANCELED);
+        assertEquals(2, replacement[0]);
+        assertEquals(3, notifications);
+        assertFalse(snapshot().getBoolean("launching"));
+    }
+
+    @Test public void replacementActivityReceivesPendingUpdate() throws Exception {
+        assumeFalse(BuildConfig.GITHUB_UPDATES);
+        Activity replacement = mock(Activity.class);
+        PlayAppUpdater.control(activity, "install");
+        OnSuccessListener<AppUpdateInfo> pending = completion;
+        PlayAppUpdater.pause(activity);
+        PlayAppUpdater.resume(replacement);
+        pending.onSuccess(info);
+        verify(manager).startUpdateFlowForResult(same(info), same(replacement), any(AppUpdateOptions.class), anyInt());
+    }
 
     @Test public void newerCiReleaseDoesNotCreatePlayUpdate() throws Exception {
         assumeFalse(BuildConfig.GITHUB_UPDATES);

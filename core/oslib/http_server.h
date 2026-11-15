@@ -1,5 +1,6 @@
 //
 // Copyright (c) 2003-2025 Christopher M. Kohlhoff (chris at kohlhoff dot com)
+// Portions Copyright 2026 The Hollycast Authors
 //
 // Distributed under the Boost Software License, Version 1.0. (See accompanying
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -50,6 +51,7 @@ struct Reply
 		forbidden = 403,
 		not_found = 404,
 		method_not_allowed = 405,
+		conflict = 409,
 		internal_server_error = 500,
 		not_implemented = 501,
 		bad_gateway = 502,
@@ -112,7 +114,7 @@ class RequestParser
 {
 public:
 	/// Construct ready to parse the request method.
-	RequestParser() : state(method_start) {}
+	explicit RequestParser(size_t maxBodyLength = 4096) : state(method_start), maxBodyLength(maxBodyLength) {}
 
 	/// Reset to initial parser state.
 	void reset() {
@@ -200,7 +202,7 @@ private:
 	size_t contentLength = 0;
 
 	static constexpr size_t MAX_HEAD_LEN = 2048;
-	static constexpr size_t MAX_BODY_LEN = 4096;
+	const size_t maxBodyLength;
 };
 
 class ConnectionManager;
@@ -215,7 +217,7 @@ public:
 
 	/// Construct a connection with the given socket.
 	explicit Connection(asio::ip::tcp::socket socket,
-		  ConnectionManager& manager, RequestHandler& handler);
+		  ConnectionManager& manager, RequestHandler& handler, size_t maxBodyLength = 4096);
 
 	/// Start the first asynchronous operation for the connection.
 	void start() {
@@ -225,6 +227,9 @@ public:
 
 	/// Stop all asynchronous operations associated with the connection.
 	void stop() {
+		// Polling clients otherwise retain a complete connection buffer until
+		// the 30-second deadline, even after the response socket has closed.
+		timeoutTimer.cancel();
 		socket.close();
 	}
 
@@ -297,7 +302,10 @@ public:
 	HttpServer& operator=(const HttpServer&) = delete;
 
 	/// Construct the server to listen on the specified TCP address and port.
-	explicit HttpServer(asio::io_context& io_context, const std::string& address, uint16_t port);
+	explicit HttpServer(asio::io_context& io_context, const std::string& address, uint16_t port, size_t maxBodyLength = 4096);
+
+	/// The bound port, including when the OS selected a free port (port = 0).
+	uint16_t port() const { return acceptor.local_endpoint().port(); }
 
 	/// Adds a URI handler to the request handler. See RequestHandler::addHandler
 	void addUriHandler(const std::string& path, RequestHandler::HttpHandler handler) {
@@ -313,6 +321,7 @@ private:
 
 	/// Acceptor used to listen for incoming connections.
 	asio::ip::tcp::acceptor acceptor;
+	const size_t maxBodyLength;
 
 	/// The connection manager which owns all live connections.
 	ConnectionManager connectionManager;

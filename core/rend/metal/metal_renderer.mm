@@ -680,7 +680,7 @@ bool MetalRenderer::renderPerPixel() {
             command = newCommand(); enc = [command renderCommandEncoderWithDescriptor:makePass(false, false)];
             modifiers.ClearStencil(enc,w,h); [enc endEncoding]; [command commit];
         }
-        if (!cur.autosort) {
+        if (!cur.autosort && cur.tr_count > prev.tr_count) {
             // Keep the opaque modifier stencil snapshot while translucent depth
             // writes advance independently of the prepass attachment.
             command = newCommand();

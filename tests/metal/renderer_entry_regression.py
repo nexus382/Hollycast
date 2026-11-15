@@ -21,17 +21,24 @@ def main():
     parser.add_argument("build", type=Path, help="configured and fully built Ninja directory")
     parser.add_argument("--baseline-readback", metavar="REF",
                         help="exercise writeFramebuffer from this Git revision with the current fixture")
+    parser.add_argument("--resource-check", action="store_true", help="report real depth/stencil copy calls and GPU output hashes")
+    parser.add_argument("--renderer-source", type=Path, help="renderer source to compare against the current fixture")
     args = parser.parse_args()
     build = args.build.resolve()
     commands = json.loads((build / "compile_commands.json").read_text())
+    ninja = subprocess.check_output(["ninja", "-C", str(build), "-t", "commands", "Hollycast"], text=True)
 
     def command_for(name):
-        return next(c for c in commands if c["file"].endswith("/" + name))
+        entry = next((c for c in commands if c["file"].endswith("/" + name)), None)
+        if entry:
+            return entry
+        # Some CMake versions omit Objective-C++ from compile_commands.json.
+        command = next(line for line in ninja.splitlines() if " -c " in line and line.endswith("/" + name))
+        return {"command": command, "directory": str(build), "file": shlex.split(command)[-1]}
 
     renderer = command_for("metal_renderer.mm")
     if "-DTEST_AUTOMATION" not in renderer["command"]:
         raise RuntimeError("build must enable TEST_AUTOMATION for hidden windows")
-    ninja = subprocess.check_output(["ninja", "-C", str(build), "-t", "commands", "Hollycast"], text=True)
     link = next(line for line in reversed(ninja.splitlines())
                 if "/usr/bin/c++" in line and " -o Hollycast.app/" in line)
     link_args = shlex.split(link.split(" && ", 1)[1].split(" && ", 1)[0])
@@ -41,6 +48,7 @@ def main():
         def compile_object(name, output, extra, source=None):
             entry = command_for(name)
             cmd = shlex.split(entry["command"])
+            cmd[1:1] = ["-I" + str(ROOT / "core"), "-I" + str(ROOT / "core/rend/metal")]
             cmd[cmd.index("-o") + 1] = str(output)
             # Keep compiler dependency side effects out of the shared app build.
             if "-MF" in cmd:
@@ -54,8 +62,7 @@ def main():
         fixture = directory / "fixture.o"
         ta = directory / "ta.o"
         overlay = directory / "overlay.o"
-        fixture_source = ROOT / "tests/metal/renderer_entry_regression.mm"
-        fixture_flags = ["-fno-access-control"]
+        renderer_source = (args.renderer_source or ROOT / "core/rend/metal/metal_renderer.mm").resolve()
         if args.baseline_readback:
             def method(source, signature):
                 start = source.index(signature)
@@ -67,18 +74,19 @@ def main():
                 return source[start:end]
 
             relative = "core/rend/metal/metal_renderer.mm"
-            current = (ROOT / relative).read_text()
+            current = renderer_source.read_text()
             baseline = subprocess.check_output(["git", "show", f"{args.baseline_readback}:{relative}"],
                                                cwd=ROOT, text=True)
             signature = "void MetalRenderer::writeFramebuffer("
             renderer_source = directory / "metal_renderer.mm"
             renderer_source.write_text(current.replace(method(current, signature), method(baseline, signature), 1))
-            replacement = directory / "renderer_entry_regression.mm"
-            replacement.write_text(fixture_source.read_text().replace(
-                '#include "rend/metal/metal_renderer.mm"', f'#include "{renderer_source}"', 1))
-            fixture_source = replacement
-            fixture_flags += ["-I", str(ROOT / "core/rend/metal")]
-        compile_object("metal_renderer.mm", fixture, fixture_flags, fixture_source)
+        fixture_flags = ["-fno-access-control", '-DHOLLYCAST_METAL_RENDERER_SOURCE="' + str(renderer_source) + '"']
+        if args.resource_check:
+            fixture_flags.append("-DHOLLYCAST_METAL_RESOURCE_CHECK")
+            if not args.renderer_source:
+                fixture_flags.append("-DHOLLYCAST_METAL_RESOURCE_CHECK_ASSERT")
+        compile_object("metal_renderer.mm", fixture, fixture_flags,
+                       ROOT / "tests/metal/renderer_entry_regression.mm")
         compile_object("ta_vtx.cpp", ta, ["-Dta_parse=hollycast_original_ta_parse"])
         # Keep unrelated overlay entry points real while intercepting timing calls.
         compile_object("performance_overlay.cpp", overlay, [

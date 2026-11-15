@@ -3,7 +3,28 @@
 // Production Process/Render integration with pre-parsed geometry and GPU readback.
 // Run through renderer_entry_regression.py after building a TEST_AUTOMATION app.
 // TA parsing, ImGui presentation, and timing observers are replaced; renderer logic is real.
-#include "rend/metal/metal_renderer.mm"
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK
+#include "hw/pvr/ta.h"
+#include "rend/metal/metal_oit.h"
+static unsigned depthCopies = 0;
+static unsigned stencilCopies = 0;
+class CountedMetalOITScratch : public MetalOITScratch {
+public:
+    void copyDepthStencilAspect(id<MTLCommandBuffer> command, id<MTLTexture> source,
+            id<MTLTexture> destination, bool stencil) {
+        (stencil ? stencilCopies : depthCopies)++;
+        MetalOITScratch::copyDepthStencilAspect(command, source, destination, stencil);
+    }
+};
+#define MetalOITScratch CountedMetalOITScratch
+#endif
+#ifndef HOLLYCAST_METAL_RENDERER_SOURCE
+#define HOLLYCAST_METAL_RENDERER_SOURCE "rend/metal/metal_renderer.mm"
+#endif
+#include HOLLYCAST_METAL_RENDERER_SOURCE
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK
+#undef MetalOITScratch
+#endif
 #include <SDL.h>
 #include <cstdio>
 #include <chrono>
@@ -242,7 +263,10 @@ int main() { @autoreleasepool {
  scene.modtrig={{0,0,4,64,0,4,0,64,4},{64,0,4,64,64,4,0,64,4}};
  ModifierVolumeParam mv{};mv.init();mv.first=0;mv.count=2;mv.isp.DepthMode=1;
  scene.global_param_mvo.push_back(mv);scene.render_passes[0].mvo_count=1;
- auto runRenderer=[&](MetalRenderer& renderer, const char *label, int er, int eg, int eb) {
+ auto runRenderer=[&](MetalRenderer& renderer, const char *label, int er, int eg, int eb, int expectedDepth=-1) {
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK
+   depthCopies=0; stencilCopies=0;
+#endif
    renderer.Process(&ctx); if(!renderer.Render()) { fprintf(stderr,"%s render failed\n",label); return false; }
    id<MTLTexture> t=renderer.targets.frameOutput;
    id<MTLDevice> dev=MetalContext::Instance()->GetDevice();
@@ -251,22 +275,32 @@ int main() { @autoreleasepool {
    [blit copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(t.width,t.height,1) toBuffer:buf destinationOffset:0 destinationBytesPerRow:t.width*4 destinationBytesPerImage:t.width*t.height*4]; [blit endEncoding];[cmd commit];[cmd waitUntilCompleted];
    auto px=(unsigned char*)buf.contents + ((t.height/2)*t.width+t.width/2)*4;
    fprintf(stderr,"%s: %u,%u,%u,%u\n",label,px[0],px[1],px[2],px[3]);
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK
+   uint64_t hash=14695981039346656037ull;
+   for (size_t i=0;i<t.width*t.height*4;i++) { hash^=static_cast<unsigned char *>(buf.contents)[i]; hash*=1099511628211ull; }
+   fprintf(stderr,"RESOURCE %s depth=%u stencil=%u hash=%llu\n",label,depthCopies,stencilCopies,(unsigned long long)hash);
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK_ASSERT
+   if (expectedDepth>=0 && (depthCopies!=static_cast<unsigned>(expectedDepth) || stencilCopies!=scene.render_passes.size())) {
+     fprintf(stderr,"%s unexpected depth/stencil copy counts\n",label); return false;
+   }
+#endif
+#endif
    return cmd.status==MTLCommandBufferStatusCompleted && abs((int)px[0]-er)<4 && abs((int)px[1]-eg)<4 && abs((int)px[2]-eb)<4;
  };
- auto run=[&](const char *label, int er, int eg, int eb) { return runRenderer(r,label,er,eg,eb); };
- bool ok=run("opaque blended shadow",127,0,64);
+ auto run=[&](const char *label, int er, int eg, int eb, int expectedDepth=-1) { return runRenderer(r,label,er,eg,eb,expectedDepth); };
+ bool ok=run("opaque blended shadow",127,0,64,0);
  scene.global_param_op.pop_back(); scene.global_param_tr.push_back(front); scene.render_passes[0].op_count=1;scene.render_passes[0].tr_count=1;
  scene.global_param_op[0].pcw.Shadow=1;
- ok=run("unsorted translucent shadow",64,0,64) && ok;
+ ok=run("unsorted translucent shadow",64,0,64,2) && ok;
  // Two-volume translucent polygons select the second vertex color in the modifier.
  for (size_t i=4;i<8;i++) { scene.verts[i].col1[1]=255;scene.verts[i].col1[3]=128; }
  scene.global_param_tr[0].tsp1=front.tsp;
- ok=run("unsorted translucent second volume",64,128,0) && ok;
+ ok=run("unsorted translucent second volume",64,128,0,2) && ok;
  // The translucent list runs the OR and inclusion encoders in order before
  // resolving the shadowed second volume into the primary color.
  scene.render_passes[0].autosort=true;
  scene.render_passes[0].mv_op_tr_shared=true;
- ok=run("sorted translucent second volume with ordered modifiers",64,128,0) && ok;
+ ok=run("sorted translucent second volume with ordered modifiers",64,128,0,0) && ok;
  scene.render_passes[0].autosort=false;
  scene.render_passes[0].mv_op_tr_shared=false;
  scene.global_param_op[0].pcw.Shadow=0;
@@ -275,7 +309,7 @@ int main() { @autoreleasepool {
  scene.idx.insert(scene.idx.end(),{8,9,10,11});
  PolyParam green=p;green.first=8;green.isp.DepthMode=4;green.isp.ZWriteDis=1;
  scene.global_param_op.push_back(green);scene.global_param_op.push_back(front);scene.render_passes[0].op_count=3;
- ok=run("no-depth-write opaque",0,127,64) && ok;
+ ok=run("no-depth-write opaque",0,127,64,0) && ok;
  // A closer sorted translucent layer must write depth before the next pass
  // when the translucent depth-mask option is enabled.
  for (size_t i=4;i<8;i++) scene.verts[i].z=3;
@@ -287,9 +321,14 @@ int main() { @autoreleasepool {
  RenderPass second=first;second.op_count=2;second.autosort=false;
  scene.render_passes={first,second}; config::ModifierVolumes=false;
  config::TranslucentPolygonDepthMask=true;
- ok=run("sorted translucent depth mask",127,0,128) && ok;
+ ok=run("sorted translucent depth mask",127,0,128,1) && ok;
  config::TranslucentPolygonDepthMask=false;
- ok=run("disabled translucent depth mask",0,255,0) && ok;
+ ok=run("disabled translucent depth mask",0,255,0,1) && ok;
+ first.autosort=false;
+ RenderPass middle=first;
+ scene.render_passes={first,middle,second};
+ ok=run("unsorted depth across empty middle pass",127,0,128,4) && ok;
+ first.autosort=true; scene.render_passes={first,second};
  // Observe production OIT command completion, including the framebuffer path.
  observeTiming.store(true);
  { std::lock_guard<std::mutex> lock(timingMutex); timingNanoseconds=0; timingEpoch=0; }
@@ -329,7 +368,16 @@ int main() { @autoreleasepool {
  observeTiming.store(false); config::EmulateFramebuffer=false; config::RenderToTextureBuffer=false;
  scene.isRTT=true; scene.global_param_op={p}; scene.global_param_op[0].isp.DepthMode=4;
  scene.global_param_tr.clear(); RenderPass rttPass{};rttPass.op_count=1; scene.render_passes={rttPass};
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK
+ depthCopies=0; stencilCopies=0;
+#endif
  r.Process(&ctx); bool rttResult=r.Render();
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK
+ fprintf(stderr,"RESOURCE RTT render depth=%u stencil=%u\n",depthCopies,stencilCopies);
+#ifdef HOLLYCAST_METAL_RESOURCE_CHECK_ASSERT
+ ok=(depthCopies==0 && stencilCopies==1) && ok;
+#endif
+#endif
  MetalTexture *rtt=r.textureCache.getRTTexture(scene.fb_W_SOF1 & VRAM_MASK,scene.fb_W_CTRL.fb_packmode,64,64);
  if (rttResult || !rtt || !rtt->texture() || rtt->dirty) { fprintf(stderr,"RTT cache target missing\n"); ok=false; }
  else {
@@ -337,7 +385,7 @@ int main() { @autoreleasepool {
    scene.verts[0].u=0;scene.verts[0].v=0; scene.verts[1].u=1;scene.verts[1].v=0;
    scene.verts[2].u=0;scene.verts[2].v=1; scene.verts[3].u=1;scene.verts[3].v=1;
    scene.global_param_op[0].pcw.Texture=1; scene.global_param_op[0].texture=rtt;
-   ok=run("RTT cache sampled by screen",255,0,0) && ok;
+   ok=run("RTT cache sampled by screen",255,0,0,0) && ok;
  }
  scene.isRTT=false;scene.global_param_op={p};
  bool queued=queuedSceneColors(r,ctx);

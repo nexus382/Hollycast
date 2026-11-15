@@ -1990,6 +1990,68 @@ TEST(ThemeStatsTest, RecencyAndPageStatisticsHandleEmptyFutureAndOldHistory)
 	EXPECT_FALSE(themes::libraryStat("neglect", {}, -1, 16, now));
 }
 
+TEST_F(ThemeLibraryTest, StatisticsAndMetersFollowHistoryAndFilteringOnEveryDraw)
+{
+	layout.id = "live-library-statistics";
+	layout.browser = {0, 0, 1, 1};
+	const std::array<const char*, 5> sources{{"gameCount", "favouriteCount", "unplayedCount", "totalPlayHours", "maxPlayHours"}};
+	for (size_t i = 0; i < sources.size(); ++i)
+	{
+		themes::Element stat;
+		stat.type = "stat"; stat.source = sources[i]; stat.rect = {.05f, .05f + .12f * i, .3f, .1f};
+		stat.color = 0xe15a77ff; stat.digits = 3; stat.valueScale = 2; stat.zIndex = i % 2 ? -1 : 0;
+		layout.elements.push_back(stat);
+		auto meter = stat;
+		meter.type = "meter"; meter.rect.x = .5f; meter.maximum = 20;
+		layout.elements.push_back(meter);
+	}
+	const auto authored = layout.elements;
+	items.resize(4);
+	items[0].isGame = false; items[0].favourite = true; items[0].playTimeSeconds = 360000;
+	items[1].favourite = true; items[1].playTimeSeconds = 7200; items[1].lastPlayed = 1000;
+	items[2].playTimeSeconds = 1800;
+	auto mesh = [&] {
+		std::vector<ImDrawVert> result;
+		for (const auto* vertices : {&backgroundMesh, &overlayMesh})
+			for (const auto& vertex : *vertices)
+				if (vertex.col == IM_COL32(0xe1, 0x5a, 0x77, 0xff)) result.push_back(vertex);
+		return result;
+	};
+	auto expectValues = [&](const std::array<double, 5>& values) {
+		layout.elements = authored;
+		renderFrame(ImVec2(-1, -1), false);
+		const auto actual = mesh();
+		for (size_t i = 0; i < values.size(); ++i)
+		{
+			auto& text = layout.elements[i * 2];
+			text.type = "text";
+			text.text = std::to_string(static_cast<int>(values[i] * 2));
+			text.text.insert(0, 3 - text.text.size(), '0');
+			auto& meter = layout.elements[i * 2 + 1];
+			meter.source = "pageCount";
+			meter.valueScale = values[i] * 2;
+		}
+		renderFrame(ImVec2(-1, -1), false);
+		const auto expected = mesh();
+		ASSERT_EQ(actual.size(), expected.size());
+		for (size_t i = 0; i < actual.size(); ++i)
+		{
+			EXPECT_NEAR(actual[i].pos.x, expected[i].pos.x, .001f);
+			EXPECT_NEAR(actual[i].pos.y, expected[i].pos.y, .001f);
+			EXPECT_FLOAT_EQ(actual[i].uv.x, expected[i].uv.x);
+			EXPECT_FLOAT_EQ(actual[i].uv.y, expected[i].uv.y);
+		}
+	};
+	renderFrame(ImVec2(-1, -1), false);
+	expectValues({3, 1, 1, 2.5, 2});
+	items[1].favourite = false; items[3].playTimeSeconds = 3600;
+	expectValues({3, 0, 0, 3.5, 2});
+	items.erase(items.begin() + 1);
+	expectValues({2, 0, 0, 1.5, 1});
+	items.clear();
+	expectValues({0, 0, 0, 0, 0});
+}
+
 TEST_F(ThemeLibraryTest, PagedGridSubmitsOneWaveAndPageButtonsReachThePartialLastWave)
 {
 	layout.id = "paged-grid-buttons";

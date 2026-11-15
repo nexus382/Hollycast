@@ -34,6 +34,7 @@
 #include <unistd.h>
 #include <exception>
 #include <stdexcept>
+#include <atomic>
 
 JavaVM* g_jvm;
 namespace jni
@@ -475,7 +476,21 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_AudioBackend_s
     for(;;) ;
 }
 
-// Java publishes immutable snapshots; no Play API objects cross into the rendering thread.
+static std::atomic<bool> appUpdateSnapshotDirty{true};
+
+extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_BaseGLActivity_appUpdateSnapshotChanged(JNIEnv *, jclass)
+{
+    appUpdateSnapshotDirty.store(true, std::memory_order_release);
+}
+
+bool androidAppUpdatesChanged()
+{
+    return appUpdateSnapshotDirty.load(std::memory_order_acquire)
+        && appUpdateSnapshotDirty.exchange(false, std::memory_order_acquire);
+}
+
+// Java publishes the snapshot before signalling. Consume the signal before reading
+// so a concurrent publication remains pending for the next frame.
 std::string androidAppUpdates(const std::string& action)
 {
     if (g_activity == nullptr) throw std::runtime_error("The Android activity is not available.");
