@@ -12,6 +12,7 @@
 #if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
 #include "json.hpp"
 extern std::string androidAppUpdates(const std::string& action);
+extern bool androidAppUpdatesChanged();
 #endif
 #include <algorithm>
 #include <array>
@@ -30,7 +31,7 @@ struct State {
     detail::Check result;
     bool started = false, requested = false, installing = false, awaitingInstaller = false;
     bool quitRequested = false, helperStarted = false, dismissed = false, manual = false, recovering = false;
-    bool play = false, playChecking = false, playLaunching = false;
+    bool play = false, playChecking = false, playLaunching = false, playSnapshotPending = false;
     int playNotesCode = 0, playAvailableCode = 0, playInstalledCode = 0;
     std::string playSnapshot, playInstalledVersion;
     std::string channel, error, status, staging;
@@ -115,11 +116,15 @@ void draw(bool idle) {
 #if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
         state.play = true; // Fail closed: a broken Android bridge must never select GitHub for a store build.
         try {
+            androidAppUpdatesChanged();
             state.playSnapshot = androidAppUpdates("");
             const auto source = nlohmann::json::parse(state.playSnapshot).value("source", "");
             if (source != "play" && source != "github") throw std::runtime_error("Unknown Android update source.");
             state.play = source == "play";
-        } catch (const std::exception& e) { state.error = e.what(); state.requested = true; }
+        } catch (const std::exception& e) {
+            state.playSnapshotPending = true;
+            state.error = e.what(); state.requested = true;
+        }
 #endif
         state.channel = config::loadStr("updates", "channel", HOLLYCAST_UPDATE_CHANNEL);
         if (state.channel != "master" && state.channel != "dev") state.channel = HOLLYCAST_UPDATE_CHANNEL;
@@ -150,20 +155,26 @@ void draw(bool idle) {
 #if defined(__ANDROID__) || defined(HOLLYCAST_TEST_PLAY_UPDATES)
     if (state.play) {
         try {
-            const auto snapshot = androidAppUpdates("");
-            if (snapshot != state.playSnapshot) {
-                state.playSnapshot = snapshot;
-                const auto info = nlohmann::json::parse(snapshot);
-                state.playChecking = info.value("checking", false);
-                state.playLaunching = info.value("launching", false);
-                state.error = info.value("error", "");
-                state.status = info.value("message", "");
-                state.playAvailableCode = info.value("availableCode", 0);
-                state.playInstalledCode = info.value("installedCode", 0);
-                state.playInstalledVersion = info.value("installedName", "");
-                if (!state.playChecking && state.playAvailableCode == 0) { state.result = {}; state.playNotesCode = 0; }
+            if (androidAppUpdatesChanged() || state.playSnapshotPending) {
+                auto snapshot = androidAppUpdates("");
+                if (state.playSnapshotPending || snapshot != state.playSnapshot) {
+                    const auto info = nlohmann::json::parse(snapshot);
+                    state.playChecking = info.value("checking", false);
+                    state.playLaunching = info.value("launching", false);
+                    state.error = info.value("error", "");
+                    state.status = info.value("message", "");
+                    state.playAvailableCode = info.value("availableCode", 0);
+                    state.playInstalledCode = info.value("installedCode", 0);
+                    state.playInstalledVersion = info.value("installedName", "");
+                    if (!state.playChecking && state.playAvailableCode == 0) { state.result = {}; state.playNotesCode = 0; }
+                    state.playSnapshot = std::move(snapshot);
+                }
+                state.playSnapshotPending = false;
             }
-        } catch (const std::exception& e) { state.playChecking = false; state.error = e.what(); }
+        } catch (const std::exception& e) {
+            state.playSnapshotPending = true;
+            state.playChecking = false; state.error = e.what();
+        }
         if (!state.playChecking && state.playAvailableCode > 0
                 && state.playAvailableCode != state.playNotesCode && !state.work.valid()) {
             state.playNotesCode = state.playAvailableCode;
