@@ -149,9 +149,9 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 			}
 
 			asyncEvent->Reset();
-			IAsyncOperation<IInputStream^>^ streamOp = httpContent->ReadAsInputStreamAsync();
-			streamOp->Completed = ref new AsyncOperationCompletedHandler<IInputStream^>(
-				[asyncEvent](IAsyncOperation<IInputStream^>^, Windows::Foundation::AsyncStatus) {
+			IAsyncOperationWithProgress<IInputStream^, uint64_t>^ streamOp = httpContent->ReadAsInputStreamAsync();
+			streamOp->Completed = ref new AsyncOperationWithProgressCompletedHandler<IInputStream^, uint64_t>(
+				[asyncEvent](IAsyncOperationWithProgress<IInputStream^, uint64_t>^, Windows::Foundation::AsyncStatus) {
 					asyncEvent->Set();
 				});
 			waitStatus = waitForCompletion(asyncEvent, deadline, cancelled);
