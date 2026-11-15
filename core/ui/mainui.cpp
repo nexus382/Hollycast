@@ -21,6 +21,7 @@
 #include "audio/ui_sound.h"
 #include "mainui.h"
 #include "test_harness.h"
+#include "debug/assembly_debugger.h"
 #include "hw/pvr/Renderer_if.h"
 #include "hw/sh4/sh4_core.h"
 #include "gui.h"
@@ -94,14 +95,17 @@ bool mainui_rend_frame()
 			// including when a breakpoint or no-video program ends the slice.
 			if (!config::ThreadedRendering)
 				setDefaultRoundingMode();
-			if (!frameRendered && !emu.running())
+			// A render wait can expire between normal 30 Hz game frames. Do not
+			// turn that timeout into an extra swap of an incomplete backbuffer.
+			// The running debugger still needs controls for programs with no video.
+			if (!frameRendered && (!emu.running() || !assembly_debugger::active()))
 				return false;
-			// A boot loop or hung game may never submit a frame. In either
-			// rendering mode, keep menus and Pause responsive without drawing
-			// the overlay twice when a game frame already drew it.
-			if (ImGui::GetFrameCount() == uiFrame)
+			// Fresh game frames already draw their overlay. A shared-thread CPU
+			// slice can also finish without an image, so only the active debugger
+			// may request a redraw here, over a completed game background.
+			if (ImGui::GetFrameCount() == uiFrame && assembly_debugger::active())
 			{
-				gui_display_osd();
+				gui_display_osd(true);
 				// DX/OpenGL drivers normally receive this signal from a game
 				// frame. An overlay drawn on its own must also be presented.
 				imguiDriver->setFrameRendered();
