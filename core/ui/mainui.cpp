@@ -20,6 +20,7 @@
 
 #include "audio/ui_sound.h"
 #include "mainui.h"
+#include "test_harness.h"
 #include "hw/pvr/Renderer_if.h"
 #include "hw/sh4/sh4_core.h"
 #include "gui.h"
@@ -57,6 +58,7 @@ bool mainui_rend_frame()
 
 	os_DoEvents();
 	os_UpdateInputState();
+	test_harness::poll();
 	gui_poll_debugger();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::update(!gui_is_open());
@@ -126,6 +128,7 @@ void mainui_init()
 
 void mainui_term()
 {
+	test_harness::releaseInputs();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::shutdown();
 #endif
@@ -148,7 +151,9 @@ void mainui_loop(bool forceStart)
 		if (mainui_rend_frame() && imguiDriver != nullptr)
 		{
 			try {
+				test_harness::beforePresent();
 				imguiDriver->present();
+				test_harness::presented();
 			} catch (const FlycastException& e) {
 				forceReinit = true;
 			}
