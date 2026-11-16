@@ -62,7 +62,7 @@ Thank you to the MAME developers and contributors, including **MetalliC**, credi
 
 ## Phone VMU contributors
 
-Thank you to [MacHatter1](https://github.com/MacHatter1) for the new phone VMU implementation.
+Thank you to **Bucanero** for the JavaScript port in [dcvmu-tool](https://github.com/bucanero/dcvmu-tool), and to **Marcus Comstedt** for the SoftVMS 1.10 VMU emulator it is based on.
 
 Phone VMU mini-games use **Bucanero**'s JavaScript port of **Marcus Comstedt**'s SoftVMS 1.10, from [dcvmu-tool](https://github.com/bucanero/dcvmu-tool). The browser engine and its GPLv3 license are included with the source. Pairing codes use **Project Nayuki**'s [QR Code generator](https://github.com/nayuki/QR-Code-generator), under the MIT license.
 
