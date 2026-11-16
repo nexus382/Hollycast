@@ -50,9 +50,13 @@ static time_t lastStateTime;
 #endif
 
 #ifdef HAS_FMEMOPEN
+const u32 QUICKSAVE_DEFAULT_SIZE = 32 * 1024 * 1024; // 32 MB
+static u8 quicksave_buf[QUICKSAVE_DEFAULT_SIZE] = {0};
+#ifdef USE_HIKARU
 #include <zlib.h>
-// Hikaru RAM alone exceeds the former fixed 32 MiB quicksave buffer.
-static std::vector<u8> quicksave_buf;
+// Hikaru RAM alone exceeds the fixed 32 MiB quicksave buffer above.
+static std::vector<u8> hikaru_quicksave_buf;
+#endif
 #endif
 
 struct SavestateHeader
@@ -212,7 +216,7 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 #endif
 	Serializer ser;
 	std::vector<u8> data;
-#ifdef HAS_FMEMOPEN
+#if defined(HAS_FMEMOPEN) && defined(USE_HIKARU)
 	std::vector<u8> ramState;
 #endif
 	try {
@@ -220,8 +224,8 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 		data.resize(ser.size());
 		ser = Serializer(data.data(), data.size());
 		dc_serialize(ser);
-#ifdef HAS_FMEMOPEN
-		if (index == -2) {
+#if defined(HAS_FMEMOPEN) && defined(USE_HIKARU)
+		if (index == -2 && settings.platform.isHikaru()) {
 			// RZIP uses 1 MiB zlib chunks. Include each worst-case compressed
 			// chunk and its length, plus the RZIP and savestate headers.
 			constexpr size_t chunkSize = 1024 * 1024;
@@ -246,8 +250,15 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 	{
 		// in-ram savestate
 		filename = "RAM";
-		if (FILE* stream = fmemopen(ramState.data(), ramState.size(), "wb"))
-			f = new hostfs::StdFile(stream);
+#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+		{
+			if (FILE* stream = fmemopen(ramState.data(), ramState.size(), "wb"))
+				f = new hostfs::StdFile(stream);
+		}
+		else
+#endif
+			f = new hostfs::StdFile(fmemopen(quicksave_buf, QUICKSAVE_DEFAULT_SIZE, "wb"));
 	}
 	else
 #endif
@@ -279,8 +290,8 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 		goto fail;
 	zipFile.Close();
 
-#ifdef HAS_FMEMOPEN
-	if (index == -2) quicksave_buf.swap(ramState);
+#if defined(HAS_FMEMOPEN) && defined(USE_HIKARU)
+	if (index == -2 && settings.platform.isHikaru()) hikaru_quicksave_buf.swap(ramState);
 #endif
 	NOTICE_LOG(SAVESTATE, "Saved state to %s size %d", filename.c_str(), (int)ser.size());
 	os_notify(i18n::T("State saved"), 2000);
@@ -309,9 +320,16 @@ static bool loadState(int index, const std::string& statePath)
 	{
 		// in-ram savestate
 		filename = "RAM";
-		if (!quicksave_buf.empty())
-			if (FILE* stream = fmemopen(quicksave_buf.data(), quicksave_buf.size(), "rb"))
-				f = new hostfs::StdFile(stream);
+#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+		{
+			if (!hikaru_quicksave_buf.empty())
+				if (FILE* stream = fmemopen(hikaru_quicksave_buf.data(), hikaru_quicksave_buf.size(), "rb"))
+					f = new hostfs::StdFile(stream);
+		}
+		else
+#endif
+			f = new hostfs::StdFile(fmemopen(quicksave_buf, QUICKSAVE_DEFAULT_SIZE, "rb"));
 	}
 	else
 #endif

@@ -175,9 +175,13 @@ Deserializer::Deserializer(const void *data, size_t limit, bool rollback)
 Serializer::Serializer(void *data, size_t limit, bool rollback)
 	: SerializeBase(limit, rollback), data((u8 *)data)
 {
-	Version v = Current;
+	// Only Hikaru states use the platform-tagged V64 header; every other
+	// platform keeps the V63 header byte-for-byte.
+	const bool tagged = settings.platform.isHikaru();
+	Version v = tagged ? V64 : V63;
 	serialize(v);
-	serialize(u32(settings.platform.system));
+	if (tagged)
+		serialize(u32(settings.platform.system));
 	if (settings.platform.isConsole())
 		serialize(settings.platform.ram_size);
 }

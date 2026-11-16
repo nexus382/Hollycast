@@ -39,8 +39,7 @@ protected:
 		Serializer ser(data.data(), data.size());
 		gdrom::serialize(ser);
 		data.resize(ser.size() - sizeof(int));
-		// Legacy versions predate the platform tag in the V64 header.
-		data.erase(data.begin() + sizeof(u32), data.begin() + 2 * sizeof(u32));
+		// Non-Hikaru headers carry no platform tag, exactly as in dev.
 		if (version == Deserializer::V61)
 		{
 			// V61 stored data_write_mode before the registers and no GD-ROM timers.
@@ -79,8 +78,70 @@ TEST_F(SerializeTest, SizeTest)
 	std::vector<char> data(30000000);
 	Serializer ser(data.data(), data.size());
 	dc_serialize(ser);
-	ASSERT_EQ(28050914u, ser.size());
+	ASSERT_EQ(28050910u, ser.size());
 }
+
+TEST_F(SerializeTest, DreamcastHeaderMatchesDevV63)
+{
+	std::vector<char> data(64);
+	Serializer ser(data.data(), data.size());
+	u32 version = 0, ramSize = 0;
+	std::memcpy(&version, data.data(), sizeof(version));
+	std::memcpy(&ramSize, data.data() + sizeof(u32), sizeof(ramSize));
+	EXPECT_EQ(u32(Deserializer::V63), version);
+	EXPECT_EQ(settings.platform.ram_size, ramSize);
+	EXPECT_EQ(2 * sizeof(u32), ser.size());
+}
+
+TEST_F(SerializeTest, TaggedV64DreamcastHeaderStillLoads)
+{
+	// States written by earlier Hikaru test builds carry the V64 platform
+	// tag even for Dreamcast; the reader must keep consuming it.
+	std::vector<char> data(64);
+	Serializer ser(data.data(), data.size());
+	const u32 marker = 0x12345678;
+	ser << marker;
+	data.resize(ser.size());
+
+	std::vector<char> tagged = data;
+	const u32 platform = u32(DC_PLATFORM_DREAMCAST);
+	tagged.insert(tagged.begin() + sizeof(u32), sizeof(u32), 0);
+	std::memcpy(tagged.data() + sizeof(u32), &platform, sizeof(platform));
+	const u32 version = u32(Deserializer::V64);
+	std::memcpy(tagged.data(), &version, sizeof(version));
+
+	Deserializer deser(tagged.data(), tagged.size());
+	EXPECT_EQ(Deserializer::V64, deser.version());
+	u32 readMarker = 0;
+	deser >> readMarker;
+	EXPECT_EQ(marker, readMarker);
+}
+
+#ifdef USE_HIKARU
+TEST_F(SerializeTest, HikaruHeaderIsTaggedV64)
+{
+	struct PlatformRestore {
+		int system = settings.platform.system;
+		~PlatformRestore() { settings.platform.system = system; }
+	} restore;
+	settings.platform.system = DC_PLATFORM_HIKARU;
+
+	std::vector<char> data(64);
+	Serializer ser(data.data(), data.size());
+	u32 version = 0, platform = 0;
+	std::memcpy(&version, data.data(), sizeof(version));
+	std::memcpy(&platform, data.data() + sizeof(u32), sizeof(platform));
+	EXPECT_EQ(u32(Deserializer::V64), version);
+	EXPECT_EQ(u32(DC_PLATFORM_HIKARU), platform);
+	EXPECT_EQ(2 * sizeof(u32), ser.size());
+	data.resize(ser.size());
+
+	Deserializer deser(data.data(), data.size());
+	EXPECT_EQ(Deserializer::V64, deser.version());
+	settings.platform.system = DC_PLATFORM_DREAMCAST;
+	EXPECT_THROW(Deserializer(data.data(), data.size()), Deserializer::Exception);
+}
+#endif
 
 TEST_F(SerializeTest, GdromPendingSeekSurvivesSaveLoad)
 {

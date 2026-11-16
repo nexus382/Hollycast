@@ -187,7 +187,9 @@ Hikaru's worker, presentation timing and renderer optimizations are separate
 from the Dreamcast/Naomi PVR queue. Shared startup and audio extensions select
 the Hikaru path only for a loaded Hikaru platform. GLES contexts are recreated
 when entering or leaving Hikaru so other systems retain their existing context
-request. Existing save-state formats and buffers are retained.
+request. Only Hikaru save states use the platform-tagged V64 header and the
+dynamically sized quicksave buffer; other systems keep the existing V63
+save-state format and fixed quicksave buffer unchanged.
 
 **Transparent Sorting** in Video settings selects per-strip, per-triangle or
 per-pixel sorting for translucent geometry. Per-strip sorts retained strips

@@ -55,7 +55,7 @@ public:
 		V61,
 		V62,
 		V63,
-		V64, // Platform-tagged state headers, including the Hikaru payload.
+		V64, // Platform-tagged Hikaru state headers; other platforms write V63.
 		Current = V64,
 
 		Next = Current + 1,
