@@ -29,17 +29,18 @@ There is no deterministic replay integration in this checkout's harness. A live
 benchmark is a single-run measurement with `comparison_verdict: NOT_EVALUATED`,
 not an A/B comparison or proof of full-game correctness.
 
-[Muse CLI setup](MUSE.md) describes optional bridge handoffs. The current dev
-branch does not include Hikaru game support; Planet Harriers scenarios and the
-included Hikaru mappings require a Hikaru-enabled branch.
+[Muse CLI setup](MUSE.md) describes optional bridge handoffs. Planet Harriers
+scenarios and the included Hikaru mappings require `USE_HIKARU=ON`. Hikaru's
+read-only CPU/RAM diagnostics also require `HOLLYCAST_TEST_HARNESS=ON`; they are
+excluded from ordinary release builds.
 
 ## Current support boundaries
 
 | Area | Supported or verified scope | Not established |
 | --- | --- | --- |
 | Host | Standalone Windows and Linux native builds | Android, libretro, Switch, UWP, macOS, and device acceptance |
-| Systems | Generic SH-4 telemetry for Dreamcast, Naomi, Naomi 2, Atomiswave, and System SP | A platform-wide or all-title gameplay pass |
-| Title semantics | A game-specific claim requires a mapping verified against that title and build | Generic telemetry does not establish what a mapped value means; current dev has no Hikaru support |
+| Systems | Generic SH-4 telemetry for Dreamcast, Naomi, Naomi 2, Atomiswave, and System SP; bounded dual-CPU/RAM diagnostics for Hikaru-enabled builds | A platform-wide or all-title gameplay pass |
+| Title semantics | A game-specific claim requires a mapping verified against that title and build | Generic telemetry does not establish what a mapped value means |
 | Windows settings UI | Standalone Windows exposes native controls for General, Library, Video, OSD, Audio, Controls, Network, Advanced, and About | Hardware/network prerequisites, read-only state, apply/restart behavior, and per-control acceptance still require separate verification |
 | Rendering | Crazy Taxi live-control/capture smoke on Dreamcast OpenGL/DX11/Vulkan and Naomi OpenGL | Visual parity, comparative performance, or full-title playthrough |
 | Guest controls | Native controller API drives emulated gamepad state | Guest keyboard, mouse, lightgun, operator, or JVS controls; native UI keys operate the host emulator UI, not a guest keyboard |

@@ -75,6 +75,7 @@ bool game_started = false;
 struct Boxart { void resumePlaytime() {} void startPlaytime(const std::string&, const std::string&) {} void checkpointPlaytime(bool) {} } boxart;
 struct GamepadDevice { static void load_system_mappings() {} };
 namespace vgamepad { void startGame() {} }
+namespace SettingsNew { void stopTextureFilterLiveTune() {} }
 void markLibraryGameBooted(const std::string&, const std::string&) {}
 namespace SettingsNew { void stopTextureFilterLiveTune() {} }
 '''
@@ -97,7 +98,7 @@ for signature in ['bool isCollectionEnabled(', 'bool isPvrWorkRequested(',
                   'std::uint32_t getPresentationTimingEpoch(', 'void recordPresentedFrameAt(',
                   'void recordPresentedFrame(',
                   'void recordRenderedResolution(', 'void recordOutputViewport(', 'void reset(',
-                  'void recordSh4Vblank(', 'void recordPvrWork(', 'void recordPvrScene(',
+                  'void recordSh4Vblank(', 'void recordPvrWork(', 'void recordGuestFrame(', 'void recordPvrScene(',
                   'void recordRendererPass(', 'void recordPvrRenderSchedule(',
                   'void recordPvrFrameBudget(']:
     # Keep presentation intervals deterministic without sleeping between frames.
@@ -163,6 +164,14 @@ int main() {
     assert(pvrScheduledRenderCycles == 1000 && pvrVideoFrameCycles == 2000);
     assert(rawRenderWidth == 640 && outputViewportWidth == 1440);
     std::cout << "PASS requested producers and RTT-excluded game FPS\n";
+    reset();
+    auditItems = Fps | RendererStats;
+    drawSample();
+    recordGuestFrame();
+    recordSh4Vblank();
+    assert(gameFrameCount == 1 && vblankCount == 1);
+    assert(rendererSceneCount == 0 && pvrPrimitiveCount == 0 && pvrVertexCount == 0);
+    std::cout << "PASS guest frame without fabricated PVR scene statistics\n";
     auditItems = PvrWork;
     drawSample();
     recordPvrWork(5000);

@@ -18,6 +18,10 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "card_reader.h"
+#include "hw/hikaru/state_io.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#endif
 #include "oslib/oslib.h"
 #include "hw/sh4/modules/modules.h"
 #include "hw/maple/maple_cfg.h"
@@ -28,6 +32,9 @@
 #include <deque>
 #include <memory>
 #include <cerrno>
+#include <cstring>
+#include <stdexcept>
+#include <vector>
 
 namespace card_reader {
 
@@ -192,6 +199,9 @@ public:
 	int available() override {
 		return outBuffer.size();
 	}
+
+	void saveState(hikaru::StateWriter& writer) const;
+	void loadState(hikaru::StateReader& reader);
 
 protected:
 	enum Commands
@@ -359,13 +369,111 @@ protected:
 		outBuffer.push_back(calcCrc(outBuffer.begin() + crcIdx, outBuffer.end()));
 	}
 
-	u8 rxCommand[256];
+	u8 rxCommand[256]{};
 	u32 rxCommandLen = 0;
 
 	static constexpr u32 TRACK_SIZE = 0x45;
-	u8 cardData[TRACK_SIZE * 3];
+	u8 cardData[TRACK_SIZE * 3]{};
 	bool doorOpen = false;
 };
+
+void SanwaCRP1231BR::saveState(hikaru::StateWriter& writer) const
+{
+    constexpr u32 maxQueuedBytes = 1024 * 1024;
+    if (outBuffer.size() > maxQueuedBytes || inBuffer.size() > 255)
+        throw std::runtime_error("Sanwa card-reader state exceeds bounds");
+    writer.value(cardInserted);
+    writer.value(static_cast<u32>(outBuffer.size()));
+    for (u8 byte : outBuffer)
+        writer.value(byte);
+    writer.value(static_cast<u32>(inBuffer.size()));
+    if (!inBuffer.empty())
+        writer.bytes(inBuffer.data(), inBuffer.size());
+    writer.bytes(rxCommand, sizeof(rxCommand));
+    writer.value(rxCommandLen);
+    writer.bytes(cardData, sizeof(cardData));
+    writer.value(doorOpen);
+}
+
+void SanwaCRP1231BR::loadState(hikaru::StateReader& reader)
+{
+    constexpr u32 maxQueuedBytes = 1024 * 1024;
+    bool stagedCardInserted, stagedDoorOpen;
+    u32 queuedSize, inputSize, stagedCommandLength;
+    std::deque<u8> stagedOutput;
+    std::vector<u8> stagedInput;
+    u8 stagedCommand[sizeof(rxCommand)];
+    u8 stagedCardData[sizeof(cardData)];
+    reader.value(stagedCardInserted);
+    reader.value(queuedSize);
+    hikaru::StateReader::require(queuedSize <= maxQueuedBytes,
+        "Sanwa card-reader response queue is too large");
+    for (u32 i = 0; i < queuedSize; ++i) {
+        u8 byte;
+        reader.value(byte);
+        stagedOutput.push_back(byte);
+    }
+    reader.value(inputSize);
+    hikaru::StateReader::require(inputSize <= 255, "Sanwa card-reader input is too large");
+    stagedInput.resize(inputSize);
+    if (!stagedInput.empty())
+        reader.bytes(stagedInput.data(), stagedInput.size());
+    reader.bytes(stagedCommand, sizeof(stagedCommand));
+    reader.value(stagedCommandLength);
+    reader.bytes(stagedCardData, sizeof(stagedCardData));
+    reader.value(stagedDoorOpen);
+
+    hikaru::StateReader::require(stagedCommandLength <= sizeof(rxCommand),
+        "Invalid Sanwa card-reader command length");
+    if (!stagedInput.empty()) {
+        hikaru::StateReader::require(stagedInput.size() < 3 || stagedInput[0] == STX,
+            "Invalid Sanwa card-reader packet start");
+        if (stagedInput.size() >= 3) {
+            hikaru::StateReader::require(stagedInput.size() < static_cast<size_t>(stagedInput[1]) + 2,
+                "Invalid Sanwa card-reader partial packet");
+        }
+    }
+    if (stagedCommandLength) {
+        if (stagedCommand[0] == CARD_DOOR)
+            hikaru::StateReader::require(stagedCommandLength >= 5,
+                "Truncated Sanwa door command");
+        if (stagedCommand[0] == CARD_READ || stagedCommand[0] == CARD_WRITE)
+            hikaru::StateReader::require(stagedCommandLength >= 7,
+                "Truncated Sanwa card command");
+    }
+
+    cardInserted = stagedCardInserted;
+    outBuffer.swap(stagedOutput);
+    inBuffer.swap(stagedInput);
+    std::memcpy(rxCommand, stagedCommand, sizeof(rxCommand));
+    rxCommandLen = stagedCommandLength;
+    std::memcpy(cardData, stagedCardData, sizeof(cardData));
+    doorOpen = stagedDoorOpen;
+}
+
+void saveSanwaReaderState(SerialPort::Pipe& pipe, hikaru::StateWriter& writer)
+{
+    auto* reader = dynamic_cast<SanwaCRP1231BR*>(&pipe);
+    writer.value(reader != nullptr);
+    if (reader)
+        reader->saveState(writer);
+}
+
+void loadSanwaReaderState(SerialPort::Pipe& pipe, hikaru::StateReader& reader)
+{
+    bool hasSanwaReader;
+    reader.value(hasSanwaReader);
+    auto* sanwaReader = dynamic_cast<SanwaCRP1231BR*>(&pipe);
+    hikaru::StateReader::require(hasSanwaReader == (sanwaReader != nullptr),
+        "Hikaru card-reader type does not match saved state");
+    if (sanwaReader)
+        sanwaReader->loadState(reader);
+}
+
+std::unique_ptr<SerialPort::Pipe> createSanwaReader()
+{
+	return std::make_unique<SanwaCRP1231BR>();
+}
 
 class SanwaCRP1231LR : public SanwaCRP1231BR
 {
@@ -1091,6 +1199,12 @@ void barcodeSetCard(const std::string& card)
 
 void insertCard(int playerNum)
 {
+#ifdef USE_HIKARU
+    if (settings.platform.isHikaru()) {
+        hikaru::frontend::cardAction();
+        return;
+    }
+#endif
 	if (cardReader != nullptr)
 		cardReader->insertCard();
 	else if (barcodeReader != nullptr)
@@ -1106,6 +1220,9 @@ void ejectCard()
 
 bool readerAvailable()
 {
+#ifdef USE_HIKARU
+    if (settings.platform.isHikaru()) return hikaru::frontend::cardReaderAvailable();
+#endif
 	return cardReader != nullptr
 			|| barcodeAvailable()
 			|| getRfidCardData(0) != nullptr;

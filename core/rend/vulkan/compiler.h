@@ -3,6 +3,8 @@
 
 	Copyright 2019 flyinghead
 
+	Portions Copyright 2026 The Hollycast Authors
+
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -27,6 +29,8 @@ public:
 	static void Init();
 	static void Term();
 	static vk::UniqueShaderModule Compile(vk::ShaderStageFlagBits shaderStage, std::string const& shaderText);
+	// Returns empty on GLSL parse/link failure; Vulkan API errors still propagate.
+	static vk::UniqueShaderModule CompileOptional(vk::ShaderStageFlagBits shaderStage, std::string const& shaderText);
 private:
 	static int initCount;
 };

@@ -48,6 +48,8 @@ void recordPvrWork(std::uint64_t microseconds);
 void recordRenderedResolution(int rawWidth, int rawHeight, int renderedWidth, int renderedHeight);
 void recordOutputViewport(int width, int height);
 void recordPresentedFrame();
+// A completed guest display frame, independent of its graphics backend.
+void recordGuestFrame();
 bool isPresentationTimingRequested();
 std::uint32_t getPresentationTimingEpoch();
 // Asynchronous backends pass the actual monotonic display timestamp and the

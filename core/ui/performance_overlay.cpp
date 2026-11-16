@@ -1034,6 +1034,12 @@ void recordPresentedFrameAt(std::uint64_t now, std::uint32_t epoch)
 	presentSamples.lastPresentMicroseconds = now;
 }
 
+void recordGuestFrame()
+{
+	if (isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & Fps) != 0)
+		gameFrameCount.fetch_add(1, std::memory_order_relaxed);
+}
+
 void recordPresentedFrame()
 {
 	if (!isPresentationTimingRequested())

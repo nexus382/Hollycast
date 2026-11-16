@@ -33,7 +33,8 @@ void gui_open_texture_filter_settings();
 bool gui_resume_game();
 void gui_display_ui();
 void gui_draw_osd();
-void gui_display_osd();
+// Redraw the completed game background when no new game image was rendered.
+void gui_display_osd(bool redrawGame = false);
 void gui_display_profiler();
 void gui_open_onboarding();
 void gui_open_setup_checklist();

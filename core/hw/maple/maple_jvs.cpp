@@ -1,5 +1,6 @@
 /*
 	 Copyright 2020 flyinghead
+	 Portions Copyright 2026 The Hollycast Authors
 
 	 This file is part of flycast.
 
@@ -75,7 +76,7 @@ const char *GetCurrentGameButtonName(DreamcastKey key)
 		val >>= 1;
 	}
 	u32 arcade_key;
-	if (settings.platform.isNaomi())
+	if (settings.platform.isNaomi() || settings.platform.isHikaru())
 	{
 		if (pos >= std::size(naomi_button_mapping))
 			return nullptr;

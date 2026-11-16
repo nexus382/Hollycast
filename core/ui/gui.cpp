@@ -44,6 +44,11 @@
 #include "gui_font.h"
 #include "imgread/common.h"
 #include "emulator.h"
+#include "wsi/context.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/roms.h"
+#include "hw/hikaru/frontend.h"
+#endif
 #include "mainui.h"
 #include "lua/lua.h"
 #include "gui_chat.h"
@@ -884,6 +889,9 @@ static void appendVectorData(void *context, void *data, int size)
 static void getScreenshot(std::vector<u8>& data, int width = 0)
 {
 	data.clear();
+	// Hikaru has its own presenter; the Dreamcast renderer retains unrelated
+	// pixels. Leave the optional thumbnail empty until that presenter supplies it.
+	if (settings.platform.isHikaru()) return;
 	std::vector<u8> rawData;
 	int height = 0;
 	if (renderer == nullptr || !renderer->GetLastFrame(rawData, width, height))
@@ -1145,6 +1153,15 @@ static void gui_display_commands()
 			if (IconButton(ICON_FA_TROPHY, T("Achievements"), ScaledVec2(buttonWidth, 50)).realize() && achievements::isActive())
 				gui_setState(GuiState::Achievements);
 		}
+#ifdef USE_HIKARU
+        if (hikaru::frontend::cardReaderAvailable()) {
+            if (ImGui::Button(T("Cards"), ScaledVec2(buttonWidth, 50))) ImGui::OpenPopup("HikaruCards");
+            if (ImGui::BeginPopup("HikaruCards")) {
+                GuiMenu::renderCardsMenu();
+                ImGui::EndPopup();
+            }
+        }
+#endif
 		// Barcode
 		if (card_reader::barcodeAvailable())
 		{
@@ -2295,6 +2312,12 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	// standalone path for arcade scraping and local-only disc-header discovery.
 	art = game.arcade || !config::FetchBoxart
 		? boxart.getBoxartAndLoad(game, false) : boxart.getBoxart(game);
+#ifdef USE_HIKARU
+	// Cached artwork can retain a title from an older scanner. Use the
+	// current library title while keeping the cached artwork and metadata.
+	if (game.arcade && !game.name.empty() && hikaru::findGame(get_file_basename(game.fileName)))
+		art.name = game.name;
+#endif
 	const std::string localCoverOverride = boxart.getLibraryCoverMediaPath(game);
 	if (!localCoverOverride.empty())
 		art.boxartPath = localCoverOverride;
@@ -4986,9 +5009,9 @@ void gui_draw_osd()
 	uiThreadRunner.execTasks(std::chrono::steady_clock::now());
 }
 
-void gui_display_osd() {
+void gui_display_osd(bool redrawGame) {
 	gui_draw_osd();
-	gui_endFrame(gui_is_open());
+	gui_endFrame(gui_is_open() || redrawGame);
 }
 
 void gui_display_profiler()
@@ -5051,6 +5074,16 @@ void gui_term()
 		librarySavestateCache.stop();
 		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
+#ifdef USE_HIKARU
+		// Hikaru may replace a GLES context when entering or leaving a game.
+		// Its old atlas must not survive that replacement through font globals.
+		if (settings.platform.isHikaru()
+				|| (GraphicsContext::Instance() != nullptr && GraphicsContext::Instance()->isHikaruContext()))
+		{
+			boldFont = largeFont = aboutAsciiFont = nullptr;
+			settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
+		}
+#endif
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
 		EventManager::unlisten(Event::Pause, emuEventCallback);
