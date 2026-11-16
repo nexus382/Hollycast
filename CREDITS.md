@@ -62,6 +62,8 @@ Thank you to the MAME developers and contributors, including **MetalliC**, credi
 
 ## Phone VMU contributors
 
+Thank you to [MacHatter1](https://github.com/MacHatter1) for the new phone VMU implementation.
+
 Phone VMU mini-games use **Bucanero**'s JavaScript port of **Marcus Comstedt**'s SoftVMS 1.10, from [dcvmu-tool](https://github.com/bucanero/dcvmu-tool). The browser engine and its GPLv3 license are included with the source. Pairing codes use **Project Nayuki**'s [QR Code generator](https://github.com/nayuki/QR-Code-generator), under the MIT license.
 
 The phone screen's keep-awake fallback uses the silent video assets from **Rich Tibbett**'s [NoSleep.js](https://github.com/richtr/NoSleep.js), under the MIT license. The media and license are included with the source.
