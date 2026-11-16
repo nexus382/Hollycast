@@ -83,6 +83,8 @@ Option<bool> AutoLatency("aica.AutoLatency",
 OptionString AudioBackend("backend", "auto", "audio");
 AudioVolumeOption AudioVolume;
 Option<bool> VmuSound("VmuSound", false, "audio");
+Option<int, false> PhoneVmuPort("PhoneVmuPort", 28743, "network");
+Option<std::string, false> PhoneVmuToken("PhoneVmuToken", "", "network");
 
 // Rendering
 

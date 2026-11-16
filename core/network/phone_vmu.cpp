@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <cctype>
 #include <mutex>
 #include <random>
@@ -141,7 +142,14 @@ public:
 		return { cards[index].data, cards[index].revision };
 	}
 
-	Reply::status_type checkout(int index, const std::string& revision, const std::string& lease)
+	// Slot and local time of the last save-back that reached disk.
+	std::pair<int, std::string> lastSync()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		return { lastSyncSlot, lastSyncTime };
+	}
+
+	Reply::status_type checkout(int index, const std::string& revision, const std::string& lease, bool force = false)
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		auto& card = cards[index];
@@ -149,13 +157,35 @@ public:
 			return Reply::forbidden;
 		if (card.detached && card.lease == lease)
 			return Reply::ok; // Retrying a lost checkout response must not strand the VMU.
-		if (card.detached || "\"" + card.revision + "\"" != revision)
+		// Force is the user's explicit conflict resolution: it may replace the
+		// desktop revision, but never another phone's active ownership.
+		if (card.detached || (!force && "\"" + card.revision + "\"" != revision))
 			return Reply::conflict;
 		card.lease = lease;
 		card.operation.clear();
+		card.returning = false;
 		card.detached = true;
 		card.disconnectObserved = false;
 		card.backupNeeded = true;
+		card.state = Reply::ok;
+		return Reply::ok;
+	}
+
+	Reply::status_type release(int index, const std::string& lease)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		auto& card = cards[index];
+		if (!card.detached)
+			return Reply::ok;
+		if (card.lease != lease)
+			return Reply::conflict;
+		card.pending.clear();
+		card.operation.clear();
+		card.lease.clear();
+		card.detached = false;
+		card.disconnectObserved = false;
+		card.returning = false;
+		card.backupNeeded = false;
 		card.state = Reply::ok;
 		return Reply::ok;
 	}
@@ -233,6 +263,20 @@ public:
 				card.revision = std::to_string(++revision);
 				card.backupNeeded = false;
 				card.state = Reply::ok;
+				// Record only writes persist() confirmed on disk.
+				lastSyncSlot = index;
+				{
+					const std::time_t now = std::time(nullptr);
+					std::tm local {};
+#ifdef _WIN32
+					localtime_s(&local, &now);
+#else
+					localtime_r(&now, &local);
+#endif
+					char text[32] = {};
+					if (std::strftime(text, sizeof(text), "%H:%M:%S", &local) != 0)
+						lastSyncTime = text;
+				}
 				card.detached = !card.returning;
 				card.pending.clear();
 			}
@@ -288,15 +332,20 @@ private:
 	std::mutex mutex;
 	std::array<Card, vmu_window::ScreenCount> cards;
 	std::uint64_t revision = 0;
+	int lastSyncSlot = -1;
+	std::string lastSyncTime;
 };
 
 class Session
 {
 public:
-	Session(vmu_window::FrameStore& frames, CardStore& cards)
+	Session(vmu_window::FrameStore& frames, CardStore& cards, const std::string& token, int port)
+		: cards(cards)
 	{
-		const std::string path = "/" + sessionToken() + "/";
-		server = std::make_unique<HttpServer>(io, "0.0.0.0", 0, CardSize);
+		// The caller supplies the persisted pairing token and port so the
+		// QR code and any bookmarked phone page stay valid across restarts.
+		const std::string path = "/" + token + "/";
+		server = std::make_unique<HttpServer>(io, "0.0.0.0", port, CardSize);
 		for (const std::string& address : localAddresses())
 			urls.push_back("http://" + address + ":" + std::to_string(server->port()) + path);
 		if (urls.empty())
@@ -317,8 +366,9 @@ public:
 				return std::string();
 			};
 			const bool checkout = req.uri.size() == path.size() + 10 && req.uri.compare(0, path.size() + 9, path + "checkout/") == 0;
+			const bool release = req.uri.size() == path.size() + 9 && req.uri.compare(0, path.size() + 8, path + "release/") == 0;
 			const bool sync = req.uri.size() == path.size() + 6 && req.uri.compare(0, path.size() + 5, path + "sync/") == 0;
-			if ((checkout || sync) && req.uri.back() >= '0' && req.uri.back() <= '7')
+			if ((checkout || release || sync) && req.uri.back() >= '0' && req.uri.back() <= '7')
 			{
 				// A non-simple content type plus a private lease header prevents a
 				// third-party webpage from submitting writes through a paired browser.
@@ -336,10 +386,12 @@ public:
 				else if (req.method != "POST")
 					result = Reply::method_not_allowed;
 				else if (header("content-type") != "application/octet-stream"
-						|| req.content.size() != (checkout ? 1 : CardSize))
+						|| req.content.size() != (sync ? CardSize : 1))
 					result = Reply::bad_request;
 				else if (checkout)
-					result = cards.checkout(req.uri.back() - '0', header("if-match"), lease);
+					result = cards.checkout(req.uri.back() - '0', header("if-match"), lease, header("x-vmu-force") == "1");
+				else if (release)
+					result = cards.release(req.uri.back() - '0', lease);
 				else
 					result = cards.queue(req.uri.back() - '0', lease, operation, req.content, header("x-vmu-return") == "1");
 				rep.setContent(result == Reply::ok ? "saved" : result == Reply::accepted ? "pending" : "VMU sync unavailable");
@@ -384,6 +436,27 @@ public:
 					&& req.uri.back() >= '0' && req.uri.back() <= '7')
 			{
 				const auto frame = frames.snapshot()[req.uri.back() - '0'];
+				// Phones poll this endpoint continuously. A stable content hash
+				// lets an unchanged LCD answer 304 instead of resending the frame.
+				std::uint32_t hash = 2166136261u;
+				auto mix = [&hash](std::uint8_t byte) { hash = (hash ^ byte) * 16777619u; };
+				mix(frame.active ? 1 : 0);
+				for (const std::uint32_t pixel : frame.pixels)
+				{
+					mix(static_cast<std::uint8_t>(pixel));
+					mix(static_cast<std::uint8_t>(pixel >> 8));
+					mix(static_cast<std::uint8_t>(pixel >> 16));
+					mix(static_cast<std::uint8_t>(pixel >> 24));
+				}
+				const std::string etag = "\"f" + std::to_string(hash) + "\"";
+				rep.addHeader("ETag", etag);
+				if (header("if-none-match") == etag)
+				{
+					rep.setContent("");
+					rep.status = Reply::not_modified;
+					lastFrameRequest = nowMs();
+					return;
+				}
 				// Send top-down rows for the browser; LCD producers use bottom-up rows.
 				// A status byte followed by the 48x32 monochrome LCD, LSB first.
 				std::string data(1 + vmu_window::LcdWidth * vmu_window::LcdHeight / 8, '\0');
@@ -428,10 +501,12 @@ public:
 	Status status()
 	{
 		std::lock_guard<std::mutex> lock(errorMutex);
-		return { running.load(), lastFrameRequest != 0 && nowMs() - lastFrameRequest < 3000, urls, error };
+		const auto [slot, time] = cards.lastSync();
+		return { running.load(), lastFrameRequest != 0 && nowMs() - lastFrameRequest < 3000, urls, error, slot, time };
 	}
 
 private:
+	CardStore& cards;
 	// Destroy the server and all outstanding operations before the context.
 	asio::io_context io;
 	std::unique_ptr<HttpServer> server;
@@ -449,6 +524,8 @@ struct Service
 	CardStore cards;
 	std::unique_ptr<Session> session;
 	std::string error;
+	std::string pairingToken;
+	int pairingPort = 0;
 };
 
 Service& service()
@@ -458,10 +535,26 @@ Service& service()
 }
 }
 
+void setPairing(const std::string& token, int port)
+{
+	if (token.size() == 32 && token.find_first_not_of("0123456789abcdef") == std::string::npos)
+		service().pairingToken = token;
+	if (port == 0 || (port >= 1024 && port <= 65535))
+		service().pairingPort = port;
+}
+
+std::string pairingToken()
+{
+	return service().pairingToken;
+}
+
 void start()
 {
 	stop();
-	try { service().session = std::make_unique<Session>(service().frames, service().cards); }
+	if (service().pairingToken.empty())
+		service().pairingToken = sessionToken();
+	try { service().session = std::make_unique<Session>(service().frames, service().cards,
+			service().pairingToken, service().pairingPort); }
 	catch (const std::exception& e) { service().error = e.what(); }
 }
 
@@ -470,6 +563,16 @@ void stop()
 	service().session.reset();
 	service().cards.endSharing();
 	service().error.clear();
+}
+
+std::string regeneratePairing()
+{
+	const bool wasRunning = service().session != nullptr;
+	stop();
+	service().pairingToken = sessionToken();
+	if (wasRunning)
+		start();
+	return service().pairingToken;
 }
 
 Status status()

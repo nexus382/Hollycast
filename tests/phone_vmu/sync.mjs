@@ -8,7 +8,7 @@ import {engine,inputProgram} from './mini_game.mjs';
 
 function setup(){
  const values=new Map(),storage={setItem:(k,v)=>values.set(k,v),getItem:k=>values.get(k),removeItem:k=>values.delete(k)};
- const server={owner:null,operations:new Map(),requests:0,writes:0,paused:false,failBefore:false,loseReply:false,disk:false,conflict:false,card:null};
+ const server={owner:null,operations:new Map(),requests:0,writes:0,uploads:[],paused:false,failBefore:false,loseReply:false,disk:false,conflict:false,card:new Uint8Array(131072).fill(0x55),checkoutPending:false,settleCheckout:null};
  const fetch=async(path,options={})=>{
   ++server.requests;
   if(server.failBefore){server.failBefore=false;throw new Error('offline');}
@@ -16,16 +16,21 @@ function setup(){
   let status;
   if(server.conflict)status=409;
   else if(path.startsWith('checkout/')){
+   if(server.checkoutPending)return new Promise(resolve=>{server.settleCheckout=()=>{server.owner=lease;resolve({status:200,ok:true});};});
    status=server.owner&&server.owner!==lease?409:200;if(status===200)server.owner=lease;
+  }else if(path.startsWith('release/')){
+   status=server.owner&&server.owner!==lease?409:200;
+   if(status===200&&server.owner===lease){server.owner=null;server.operations.clear();}
   }else{
    assert.equal(path,'sync/0');assert.equal(server.owner,lease);
    let entry=server.operations.get(operation);
    if(!entry&&options.method==='POST'){
     entry={data:new Uint8Array(options.body),returning:headers['X-VMU-Return']==='1',status:202};server.operations.set(operation,entry);
+    server.uploads.push({returning:entry.returning,data:new Uint8Array(entry.data)});
    }
    if(entry?.status===202&&!server.paused){
     entry.status=server.disk?500:200;
-    if(entry.status===200){server.card=entry.data;++server.writes;}
+    if(entry.status===200){server.card=entry.data;++server.writes;if(entry.returning)server.owner=null;}
    }
    status=entry?.status||404;
   }
@@ -81,6 +86,47 @@ const conflict=setup();await conflict.sync.checkout('0','"1"',conflict.lease);co
 assert.equal(await conflict.sync.checkpoint(true),false);assert.equal(conflict.server.writes,0);assert.ok(conflict.sync.blocked);
 assert.equal(JSON.parse(conflict.storage.getItem('test')).card.length>0,true,'Conflicts must retain a recoverable local card');
 const blockedRequests=conflict.server.requests;await conflict.sync.checkpoint();assert.equal(conflict.server.requests,blockedRequests);
+
+const forced=setup();await forced.sync.checkout('0','"1"',forced.lease);
+forced.core.flash[123]=78;assert.equal(await forced.sync.checkpoint(),true);
+forced.core.flash[124]=1;forced.server.conflict=true;assert.equal(await forced.sync.checkpoint(),false);
+forced.core.flash[124]=0;forced.server.conflict=false;
+const beforeForce=forced.server.writes;
+assert.equal(await forced.sync.forceTakeover(),true);
+assert.equal(forced.server.writes,beforeForce+1,'Forced takeover must upload even when phone bytes match the last saved snapshot');
+assert.equal(forced.server.card[123],78);assert.equal(forced.server.card[124],0);
+
+const serialized=setup();await serialized.sync.checkout('0','"1"',serialized.lease);
+serialized.core.flash[123]=79;assert.equal(await serialized.sync.checkpoint(),true);
+serialized.core.flash[124]=1;serialized.server.conflict=true;assert.equal(await serialized.sync.checkpoint(),false);
+serialized.core.flash[124]=0;serialized.server.conflict=false;serialized.server.checkoutPending=true;
+const startRequests=serialized.server.requests,startWrites=serialized.server.writes;
+const forcePending=serialized.sync.forceTakeover();
+await new Promise(resolve=>setImmediate(resolve));
+assert.ok(serialized.server.settleCheckout,'Force claim should remain the active conflict operation');
+const periodic=serialized.sync.checkpoint(),returning=serialized.sync.checkpoint(true);
+assert.equal(serialized.server.requests,startRequests+1,'Periodic and return checkpoints must wait behind force claim');
+serialized.server.checkoutPending=false;serialized.server.settleCheckout();
+assert.equal(await forcePending,true);assert.equal(await periodic,true);assert.equal(await returning,true);
+assert.equal(serialized.server.writes,startWrites+2,'Return during force must perform a separate persisted return upload');
+assert.equal(serialized.server.uploads.at(-2).returning,false);
+assert.equal(serialized.server.uploads.at(-1).returning,true,'Return requested during takeover must use a returning upload');
+assert.equal(serialized.sync.owner,null,'The serialized return must release phone ownership');
+assert.equal(serialized.server.owner,null,'The mock desktop must regain ownership after return');
+
+const discarded=setup();await discarded.sync.checkout('0','"1"',discarded.lease);
+discarded.server.paused=true;discarded.core.flash[123]=80;
+assert.equal(await discarded.sync.checkpoint(),false,'Pending phone progress must remain unsaved before discard');
+const desktopBeforeDiscard=new Uint8Array(discarded.server.card),writesBeforeDiscard=discarded.server.writes;
+discarded.server.owner='other-lease';
+await assert.rejects(discarded.sync.discard(),/another phone/,'A different phone lease must prevent discard from clearing local recovery data');
+assert.ok(discarded.sync.owner);assert.ok(discarded.storage.getItem('test'));
+discarded.server.owner=discarded.lease;
+assert.equal(await discarded.sync.discard(),true);
+assert.equal(discarded.server.owner,null,'Discard must release the desktop lease');
+assert.equal(discarded.server.writes,writesBeforeDiscard,'Discard must not upload the phone copy');
+assert.deepEqual(discarded.server.card,desktopBeforeDiscard,'Discard must preserve the desktop card');
+assert.equal(discarded.sync.owner,null);assert.equal(discarded.storage.getItem('test'),undefined);
 
 const checkout=setup();checkout.server.loseReply=true;
 await assert.rejects(checkout.sync.checkout('0','"1"',checkout.lease));

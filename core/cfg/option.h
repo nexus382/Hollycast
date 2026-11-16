@@ -469,6 +469,10 @@ public:
 };
 extern AudioVolumeOption AudioVolume;
 extern Option<bool> VmuSound;
+// Persistent Phone VMU pairing: a stable address lets a paired phone reconnect
+// after Hollycast restarts instead of expiring with each server session.
+extern Option<int, false> PhoneVmuPort;
+extern Option<std::string, false> PhoneVmuToken;
 
 // Rendering
 

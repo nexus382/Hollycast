@@ -6,18 +6,20 @@ import sys
 root = Path(__file__).resolve().parents[2]
 source = (root / "core/hw/maple/maple_devs.cpp").read_text(encoding="utf-8")
 header = (root / "core/hw/maple/maple_devs.h").read_text(encoding="utf-8")
-link = source[source.index("bool maple_sega_vmu::linkStatus()"):source.index("u32 maple_sega_vmu::dma(u32 cmd)")]
+link = source[source.index("bool maple_sega_vmu::linkStatus()"):source.index("u32 maple_sega_vmu::dma(u32 cmd)")].replace("std::time(", "testTime(")
 save = source[source.index("bool maple_sega_vmu::fullSave()"):source.index("void maple_sega_vmu::initializeVmu()")]
 base_link = header[header.index("\tvirtual bool linkStatus()"):header.index("\tvirtual void requestReconnect()")]
 
 prefix = r'''
 // Portions Copyright 2026 The Hollycast Authors
 // The transport, ownership checks, VMU linkStatus and fullSave bodies are production code.
+#include <ctime>
 #define ERROR_LOG(...) ((void)0)
 using u64 = std::uint64_t;
 constexpr u64 SH4_MAIN_CLOCK = 200000000;
 u64 testTicks = 1;
 u64 sh4_sched_now64() { return testTicks; }
+std::time_t testTime(std::time_t *out) { const std::time_t now = 1700000000; if(out)*out=now; return now; }
 struct { struct { bool online = false; } network; } settings;
 std::string testCardPath;
 namespace hostfs { std::string getVmuPath(const char *, bool) { return testCardPath; } }
@@ -48,8 +50,10 @@ void testMapleSync(Address address)
  const std::string diskPath = testCardPath;
  struct Cleanup {
   maple_sega_vmu& vmu; std::string path;
-  ~Cleanup() { if(vmu.file)std::fclose(vmu.file); std::filesystem::remove(path); std::filesystem::remove(path + ".phone-backup"); }
+  ~Cleanup() { if(vmu.file)std::fclose(vmu.file); std::filesystem::remove(path); std::error_code ec; for(const auto& e:std::filesystem::directory_iterator(std::filesystem::current_path(),ec)) if(e.path().filename().string().rfind("phone-vmu-sync-regression.bin.phone-backup-",0)==0) std::filesystem::remove(e.path(),ec); }
  } cleanup {vmu, diskPath};
+ const std::string backupPrefix = "phone-vmu-sync-regression.bin.phone-backup-";
+ for(unsigned i=0;i<6;++i){const auto old=std::filesystem::current_path()/(backupPrefix+"20200101-00000"+std::to_string(i));std::ofstream output(old,std::ios::binary);output<<"old";check(output.good(),"Could not seed old backup fixtures");}
  vmu.file = std::fopen(diskPath.c_str(), "wb+");
  check(vmu.file != nullptr, "Could not create test VMU");
  std::fill_n(vmu.flash_data, sizeof(vmu.flash_data), 0x55);
@@ -82,7 +86,12 @@ void testMapleSync(Address address)
  check(queue('1', progress).find("HTTP/1.1 200") == 0, "Saved operation was reapplied");
  auto readDisk = [](const std::string& path) { std::ifstream input(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(input), {}); };
  check(readDisk(diskPath) == progress, "Progress was acknowledged before the VMU file was flushed");
- check(readDisk(diskPath + ".phone-backup") == std::string(131072, '\x55'), "Original card backup is missing or altered");
+ auto backupPaths = [&]() { std::vector<std::filesystem::path> paths; std::error_code ec; std::filesystem::directory_iterator it(std::filesystem::current_path(),ec),end; while(!ec&&it!=end){if(it->path().filename().string().rfind(backupPrefix,0)==0)paths.push_back(it->path());it.increment(ec);} check(!ec,"Could not enumerate VMU backups");std::sort(paths.begin(),paths.end());return paths; };
+ // Backups are timestamped snapshots beside the VMU file; the newest must hold the pre-phone card.
+ std::string backupPath; { std::error_code ec; for(const auto& e:std::filesystem::directory_iterator(std::filesystem::current_path(),ec)) { const auto name=e.path().filename().string(); if(name.rfind("phone-vmu-sync-regression.bin.phone-backup-",0)==0 && (backupPath.empty()||name>backupPath)) backupPath=e.path().string(); } }
+ check(!backupPath.empty() && readDisk(backupPath) == std::string(131072, '\x55'), "Original card backup is missing or altered");
+ const std::string firstBackupPath=backupPath;
+ check(backupPaths().size()==5,"Backup pruning must keep five snapshots after a checkout");
 
  // Send only the oversized declaration: the server rejects it before reading
  // a body, so writing a large body here would race its intentional close.
@@ -101,6 +110,7 @@ void testMapleSync(Address address)
  const auto current = header(request(address, address.path + "card/2"), "ETag");
  check(checkout("If-Match: " + current + "\r\n").find("HTTP/1.1 200") == 0, "Second checkout failed");
  check(!vmu.linkStatus(), "Second checkout was not detached");
+ const std::string beforeSecondPhoneWrite=readDisk(diskPath);
  testCardPath = diskPath + "/missing/card";
  progress[123] = 44;
  check(queue('3', progress).find("HTTP/1.1 202") == 0, "Failed-write fixture not queued");
@@ -110,6 +120,9 @@ void testMapleSync(Address address)
  check(queue('4', progress).find("HTTP/1.1 202") == 0, "Disk retry failed to queue");
  check(!vmu.linkStatus() && state('4').find("HTTP/1.1 200") == 0, "Disk retry failed");
  check(vmu.flash_data[123] == 44 && readDisk(diskPath)[123] == 44, "Disk retry lost progress");
+ check(backupPaths().size()==5,"Backup rotation must retain at most five snapshots");
+ check(readDisk(firstBackupPath)==std::string(131072,'\x55'),"A same-second backup overwrote the first snapshot");
+ check(readDisk(firstBackupPath+"-000001")==beforeSecondPhoneWrite,"A same-second checkout did not get a unique snapshot");
 
  check(queue('3', progress).find("HTTP/1.1 409") == 0, "Delayed checkpoint was accepted while detached");
  progress[123] = 45; check(queue('5', progress).find("HTTP/1.1 202") == 0, "State-load fixture not queued");
@@ -125,6 +138,27 @@ void testMapleSync(Address address)
  phone_vmu::unpublishCard(2, vmu.flash_data);
  check(body(request(address, address.path + "card/2"))[0] == 0x66, "Old device removed its replacement's card");
  phone_vmu::unpublishCard(2, replacement.data());
+ phone_vmu::publishCard(2, vmu.flash_data, sizeof(vmu.flash_data));
+ std::vector<std::string> expectedSnapshots { std::string(131072, '\x55'), beforeSecondPhoneWrite };
+ for(unsigned session=0;session<7;++session){
+  const std::string before=readDisk(diskPath),revision=header(request(address,address.path+"card/2"),"ETag");
+  check(checkout("If-Match: "+revision+"\r\n").find("HTTP/1.1 200")==0,"Repeated backup checkout failed");
+  check(!vmu.linkStatus(),"Repeated checkout did not detach the card");
+  std::string data(131072,static_cast<char>(0x60+session));data[123]=static_cast<char>(20+session);
+  const char operation=static_cast<char>('1'+session);
+  check(queue(operation,data).find("HTTP/1.1 202")==0,"Repeated checkpoint was not queued");
+  check(!vmu.linkStatus()&&state(operation).find("HTTP/1.1 200")==0,"Repeated checkpoint did not save while detached");
+  expectedSnapshots.push_back(before);
+  check(queue('f',data,true).find("HTTP/1.1 202")==0&&!vmu.linkStatus(),"Repeated return must visibly unplug the card");
+  testTicks += SH4_MAIN_CLOCK / 10;
+  check(vmu.linkStatus(),"Repeated return did not reconnect the card after the bus delay");
+  check(state('f').find("HTTP/1.1 200")==0&&readDisk(diskPath)==data,"Repeated return lost card contents");
+ }
+ const auto retained=backupPaths();
+ check(retained.size()==5,"More than five same-second checkouts must retain only the newest five snapshots");
+ for(std::size_t i=0;i<retained.size();++i)
+  check(readDisk(retained[i].string())==expectedSnapshots[expectedSnapshots.size()-retained.size()+i],"Backup rotation must retain the newest snapshots in timestamp order");
+ phone_vmu::unpublishCard(2,vmu.flash_data);
 }
 '''
 Path(sys.argv[1]).write_text(prefix + base_link + middle + save + link + tests, encoding="utf-8")

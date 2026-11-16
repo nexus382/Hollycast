@@ -32,9 +32,11 @@ function page({native=true,blockVideo=false}={}){
  const window={callbacks:{},addEventListener(name,cb){this.callbacks[name]=cb;}};
  const navigator=native?{wakeLock:{request(type){assert.equal(type,'screen');return new Promise((resolve,reject)=>requests.push({resolve,reject}));}}}:{};
  class Player{
-  constructor(){this.active=false;this.sleeping=false;}
+  static listFiles(){return null;}
+  constructor(){this.active=false;this.sleeping=false;this.core={flash:new Uint8Array(131072)};}
   releaseAll(){} key(){} tick(){} stop(){this.active=false;this.sleeping=false;}
   load(){this.active=true;this.sleeping=false;} reset(){this.sleeping=false;} sleep(){this.sleeping=!this.sleeping;}
+  setSpeed(){}
  }
  const context=vm.createContext({document,window,navigator,PhoneVmuPlayer:Player,VMS:{},Uint8Array,AbortController,
   requestAnimationFrame(){},setTimeout(){},clearTimeout(){},fetch:()=>new Promise(()=>{})});

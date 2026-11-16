@@ -15,8 +15,11 @@
 #include "input/maplelinkregistry.h"
 #include "network/phone_vmu.h"
 #include <zlib.h>
+#include <algorithm>
 #include <cerrno>
 #include <ctime>
+#include <filesystem>
+#include <vector>
 #include <thread>
 #include <chrono>
 #include <limits>
@@ -509,14 +512,127 @@ bool maple_sega_vmu::linkStatus()
 			[this](const std::uint8_t *data, std::size_t size, bool backupNeeded) {
 		if (backupNeeded)
 		{
-			const std::string backupPath = hostfs::getVmuPath(logical_port, true) + ".phone-backup";
-			FILE *backup = nowide::fopen(backupPath.c_str(), "wb");
+			// Keep a short history, not one overwritten file: each phone
+			// checkout snapshots the pre-phone card under a timestamped
+			// name so a bad session can be rolled back from Settings.
+			const std::string vmuPath = hostfs::getVmuPath(logical_port, true);
+			char stamp[32] = {};
+			const std::time_t now = std::time(nullptr);
+			std::tm local {};
+#ifdef _WIN32
+			localtime_s(&local, &now);
+#else
+			localtime_r(&now, &local);
+#endif
+			if (std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local) == 0)
+				return false;
+			namespace fs = std::filesystem;
+			std::error_code fsError;
+			const fs::path dir = fs::u8path(vmuPath).parent_path();
+			const std::string prefix = fs::u8path(vmuPath).filename().u8string() + ".phone-backup-";
+			const std::string snapshotBase = prefix + stamp;
+			const std::string backupBase = vmuPath + ".phone-backup-" + stamp;
+			const auto parseBackupSuffix = [&snapshotBase](const std::string& name, unsigned& suffix) {
+				if (name == snapshotBase)
+				{
+					suffix = 0;
+					return true;
+				}
+				if (name.size() != snapshotBase.size() + 7 || name.compare(0, snapshotBase.size(), snapshotBase) != 0
+						|| name[snapshotBase.size()] != '-')
+					return false;
+				unsigned value = 0;
+				for (std::size_t i = snapshotBase.size() + 1; i < name.size(); ++i)
+				{
+					if (name[i] < '0' || name[i] > '9')
+						return false;
+					value = value * 10 + static_cast<unsigned>(name[i] - '0');
+				}
+				suffix = value;
+				return true;
+			};
+			unsigned suffix = 0;
+			fs::directory_iterator existing(dir.empty() ? fs::path(".") : dir, fsError), end;
+			while (!fsError && existing != end)
+			{
+				if (existing->is_regular_file(fsError) && !fsError)
+				{
+					unsigned found = 0;
+					if (parseBackupSuffix(existing->path().filename().u8string(), found))
+					{
+						if (found == 999999)
+							return false;
+						suffix = std::max(suffix, found + 1);
+					}
+				}
+				if (fsError)
+					break;
+				existing.increment(fsError);
+			}
+			if (fsError)
+				return false;
+			std::string backupPath;
+			FILE *backup = nullptr;
+			for (unsigned attempt = 0; attempt < 16 && suffix <= 999999; ++attempt, ++suffix)
+			{
+				backupPath = backupBase;
+				if (suffix != 0)
+				{
+					std::string number = std::to_string(suffix);
+					backupPath += "-" + std::string(6 - number.size(), '0') + number;
+				}
+				errno = 0;
+				backup = nowide::fopen(backupPath.c_str(), "wbx");
+				if (backup != nullptr || errno != EEXIST)
+					break;
+			}
 			if (backup == nullptr)
 				return false;
 			const bool written = std::fwrite(flash_data, sizeof(flash_data), 1, backup) == 1;
 			const bool closed = std::fclose(backup) == 0;
 			if (!written || !closed)
+			{
+				std::error_code removeError;
+				fs::remove(fs::u8path(backupPath), removeError);
 				return false;
+			}
+			// Prune to the newest five snapshots for this card.
+			const auto isSnapshot = [&prefix](const std::string& name) {
+				if (name.rfind(prefix, 0) != 0)
+					return false;
+				const std::string suffix = name.substr(prefix.size());
+				if (suffix.size() < 15 || suffix[8] != '-')
+					return false;
+				for (std::size_t i = 0; i < 15; ++i)
+					if (i != 8 && (suffix[i] < '0' || suffix[i] > '9'))
+						return false;
+				if (suffix.size() == 15)
+					return true;
+				if (suffix.size() != 22 || suffix[15] != '-')
+					return false;
+				for (std::size_t i = 16; i < suffix.size(); ++i)
+					if (suffix[i] < '0' || suffix[i] > '9')
+						return false;
+				return true;
+			};
+			std::vector<fs::path> snapshots;
+			fs::directory_iterator it(dir.empty() ? fs::path(".") : dir, fsError);
+			while (!fsError && it != end)
+			{
+				if (it->is_regular_file(fsError) && !fsError && isSnapshot(it->path().filename().u8string()))
+					snapshots.push_back(it->path());
+				if (fsError)
+					break;
+				it.increment(fsError);
+			}
+			std::sort(snapshots.begin(), snapshots.end());
+			while (snapshots.size() > 5)
+			{
+				fs::remove(snapshots.front(), fsError);
+				if (fsError)
+					break;
+				snapshots.erase(snapshots.begin());
+			}
 		}
 		if (std::fseek(file, 0, SEEK_SET) != 0 || std::fwrite(data, size, 1, file) != 1 || std::fflush(file) != 0)
 		{
