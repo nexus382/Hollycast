@@ -187,6 +187,40 @@ int main(int argc, char **argv)
 			const auto response = request(address, path);
 			check(response.find("HTTP/1.1 404") == 0, ("Invalid or unpaired path was accepted: " + path + " => " + response.substr(0, 40)).c_str());
 		}
+		// Unchanged LCD frames must answer 304 to the client's cached ETag.
+		const auto frameResponse = request(address, address.path + "frame/0");
+		const std::string frameEtag = header(frameResponse, "ETag");
+		check(request(address, address.path + "frame/0", "GET", "x", "If-None-Match: " + frameEtag + "\r\n").find("HTTP/1.1 304") == 0,
+				"Unchanged frame was resent instead of 304");
+		// Conflict resolution: a stale checkout is refused until the user
+		// explicitly forces keeping the phone copy.
+		const std::string forceLease(32, 'a'), otherLease(32, 'b');
+		const std::string forceHeaders = "Content-Type: application/octet-stream\r\nX-VMU-Lease: " + forceLease + "\r\nIf-Match: \"stale\"\r\n";
+		check(request(address, address.path + "checkout/0", "POST", "x", forceHeaders).find("HTTP/1.1 409") == 0,
+				"Stale checkout was accepted without force");
+		check(request(address, address.path + "checkout/0", "POST", "x", forceHeaders + "X-VMU-Force: 1\r\n").find("HTTP/1.1 200") == 0,
+				"Forced conflict resolution was refused");
+		const std::string operation(32, 'c'), pendingCard(131072, '\x66');
+		const std::string pendingHeaders = "Content-Type: application/octet-stream\r\nX-VMU-Lease: " + forceLease
+				+ "\r\nX-VMU-Operation: " + operation + "\r\n";
+		check(request(address, address.path + "sync/0", "POST", pendingCard, pendingHeaders).find("HTTP/1.1 202") == 0,
+				"Pending phone data was not queued before release");
+		const std::string releasePath = address.path + "release/0";
+		check(request(address, releasePath, "POST", "x", "Content-Type: application/octet-stream\r\nX-VMU-Lease: " + otherLease + "\r\n").find("HTTP/1.1 409") == 0,
+				"A different phone released the active lease");
+		check(request(address, releasePath, "POST", "x", "Content-Type: application/octet-stream\r\nX-VMU-Lease: " + forceLease + "\r\n").find("HTTP/1.1 200") == 0,
+				"The active phone could not release its VMU");
+		check(body(request(address, address.path + "card/0")) == copy,
+				"Discarding a phone copy changed the desktop card bytes");
+		check(request(address, address.path + "sync/0", "GET", "", pendingHeaders).find("HTTP/1.1 409") == 0,
+				"Release left a queued phone operation owned or retryable");
+		const std::string reopenLease(32, 'd');
+		const auto reopenedRevision = header(request(address, address.path + "card/0"), "ETag");
+		check(request(address, address.path + "checkout/0", "POST", "x", "Content-Type: application/octet-stream\r\nX-VMU-Lease: "
+				+ reopenLease + "\r\nIf-Match: " + reopenedRevision + "\r\n").find("HTTP/1.1 200") == 0,
+				"Released desktop card could not be opened again");
+		check(request(address, releasePath, "POST", "x", "Content-Type: application/octet-stream\r\nX-VMU-Lease: " + reopenLease + "\r\n").find("HTTP/1.1 200") == 0,
+				"Reopened card could not release cleanly");
 		check(request(address, address.path, "POST").find("HTTP/1.1 405") == 0, "Write request was accepted");
 		check(request(address, address.path + "%2e%2e/").find("HTTP/1.1 400") == 0, "Traversal was accepted");
 		testMapleSync(address);
@@ -208,9 +242,15 @@ int main(int argc, char **argv)
 		status = phone_vmu::status();
 		check(status.running, "Sharing did not restart");
 		const auto restarted = parse(status.urls.front());
-		check(restarted.path != address.path, "Restart reused the old pairing token");
-		check(request(restarted, address.path).find("HTTP/1.1 404") == 0, "Old pairing link remained authorized");
+		// A restart must keep the pairing address so paired phones reconnect.
+		check(restarted.path == address.path, "Restart changed the pairing address");
 		check(body(request(restarted, restarted.path + "frame/7"))[0] == 1, "Pairing mid-game lost the latest LCD");
+		// Only an explicit regenerate revokes previously paired phones.
+		const std::string rotated = phone_vmu::regeneratePairing();
+		check(rotated.size() == 32 && phone_vmu::pairingToken() == rotated, "Pairing was not regenerated");
+		const auto regenerated = parse(phone_vmu::status().urls.front());
+		check(regenerated.path != address.path, "Regenerate reused the old pairing token");
+		check(request(regenerated, address.path).find("HTTP/1.1 404") == 0, "Old pairing link remained authorized after regenerate");
 		phone_vmu::stop();
 		phone_vmu::stop();
 		std::cout << "Phone VMU server checks passed\n";

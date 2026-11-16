@@ -143,9 +143,12 @@ jobs:
           cmake --build build --config ${{ matrix.config.buildType }} --target install
 
       - name: Unit Tests
+        env:
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD }}
         run: |
-          # Unit tests use mocks and must not inherit the packaged application's access.
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF ${{ matrix.config.cmakeArgs }}
+          # Unit tests use mocks; the standalone application still requires the provisioned identity.
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=ON ${{ matrix.config.cmakeArgs }}
           cmake --build build --config ${{ matrix.config.buildType }}
           ./build/Hollycast
           ctest --test-dir build --output-on-failure -R updater -E updater_linux_install
@@ -159,6 +162,9 @@ jobs:
         if: matrix.config.name == 'x86_64-pc-linux-gnu' || matrix.config.name == 'x86_64-pc-windows-msvc'
 
       - name: Native harness checks
+        env:
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD }}
         shell: bash
         if: matrix.config.name == 'x86_64-pc-linux-gnu' || matrix.config.name == 'x86_64-pc-windows-msvc'
         run: |
@@ -167,7 +173,7 @@ jobs:
           cmake -S tools/testing -B build-harness-protocol -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-harness-protocol --parallel 4
           ctest --test-dir build-harness-protocol --output-on-failure
-          cmake -S . -B build-native-harness -G Ninja -DCMAKE_BUILD_TYPE=Release -DHOLLYCAST_TEST_HARNESS=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF -DENABLE_CTEST=OFF -DBUILD_TESTING=OFF -DTEST_AUTOMATION=OFF -DUSE_DISCORD=OFF -DUSE_LUA=OFF
+          cmake -S . -B build-native-harness -G Ninja -DCMAKE_BUILD_TYPE=Release -DHOLLYCAST_TEST_HARNESS=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=ON -DENABLE_CTEST=OFF -DBUILD_TESTING=OFF -DTEST_AUTOMATION=OFF -DUSE_DISCORD=OFF -DUSE_LUA=OFF
           cmake --build build-native-harness --target Hollycast --parallel 4
 
       - name: Dump symbols
