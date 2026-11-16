@@ -49,7 +49,9 @@ public:
             const unsigned needed = unsigned(std::ceil(remaining / outputPerInput));
             const unsigned n = std::min({queued - consumed, maxInput, std::max(1u, needed)});
             const int bytes = converter(samples + consumed, n, scratch, scratchCapacity);
-            if (bytes < 0 || size_t(bytes) > scratchCapacity || bytes % FrameBytes) break;
+            // Zero output means the converter needs more input; retaining the
+            // queued frames loses nothing, unlike consuming them here.
+            if (bytes <= 0 || size_t(bytes) > scratchCapacity || bytes % FrameBytes) break;
             consumed += n;
             const size_t take = std::min(size_t(bytes), outputBytes - written);
             std::memcpy(output + written, scratch, take);

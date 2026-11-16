@@ -355,6 +355,25 @@ TEST(HikaruSdlPartialTest, ShortConversionAndFailureAreBounded)
     for (unsigned i = 0; i < 8; ++i) EXPECT_EQ(dest[i], i + 1);
     EXPECT_EQ(dest[8], 0xdeadbeefu);
 }
+
+TEST(HikaruSdlPartialTest, ZeroByteConversionRetainsQueuedFrames)
+{
+    audio::SdlPartialOutput output;
+    std::array<uint32_t, 8> queue{1, 2, 3, 4, 5, 6, 7, 8};
+    std::array<uint32_t, 10> dest{};
+    std::array<uint32_t, 8> scratch{};
+    unsigned queued = 3;
+    // A resampler can need more input before producing any output; those
+    // frames must survive for the next callback instead of being consumed.
+    auto zero = [](const uint32_t*, unsigned, uint8_t*, size_t) { return 0; };
+    EXPECT_EQ(output.render(queue.data(), queued, reinterpret_cast<uint8_t*>(dest.data()), 8,
+                            reinterpret_cast<uint8_t*>(scratch.data()), sizeof(scratch), 8,
+                            1.0, true, zero), 8u);
+    EXPECT_EQ(queued, 3u);
+    EXPECT_EQ(queue[0], 1u); EXPECT_EQ(queue[1], 2u); EXPECT_EQ(queue[2], 3u);
+    EXPECT_EQ(output.pendingBytes(), 0u);
+    for (unsigned i = 0; i < 8; ++i) EXPECT_EQ(dest[i], 0u);
+}
 #endif
 
 TEST(HikaruAudioPacerTest, RecoversQueueDuringSlightRealtimeDeficit)

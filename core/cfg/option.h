@@ -516,7 +516,7 @@ public:
 		// Older Hikaru settings could persist this unsupported host renderer.
 		// Normalize it only while loading Hikaru; other systems retain their
 		// existing renderer selection behavior.
-		if (settings.platform.isHikaru() && v == RenderType::OpenGL_OIT) v = RenderType::OpenGL;
+		if (::settings.platform.isHikaru() && v == RenderType::OpenGL_OIT) v = RenderType::OpenGL;
 #endif
 		Option<RenderType>::set(v);
 	}
