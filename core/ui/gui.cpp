@@ -5009,9 +5009,9 @@ void gui_draw_osd()
 	uiThreadRunner.execTasks(std::chrono::steady_clock::now());
 }
 
-void gui_display_osd() {
+void gui_display_osd(bool redrawGame) {
 	gui_draw_osd();
-	gui_endFrame(gui_is_open());
+	gui_endFrame(gui_is_open() || redrawGame);
 }
 
 void gui_display_profiler()
