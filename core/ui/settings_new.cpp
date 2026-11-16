@@ -80,16 +80,20 @@
 #include "deps/qrcodegen/qrcodegen.hpp"
 #endif
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstring>
 #include <cfloat>
 #include <cstdio>
+#include <ctime>
 #include <memory>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -6913,7 +6917,13 @@ static void renderPhoneVmuSettings()
 		T("Connect Phone"), T("Use your phone as a VMU display and play VMU mini-games."),
 		phone_vmu::status().running, [](bool enabled) {
 			if (enabled)
+			{
+				phone_vmu::setPairing(config::PhoneVmuToken.get(), config::PhoneVmuPort.get());
 				phone_vmu::start();
+				// Persist a first-time generated token so the address survives restarts.
+				if (config::PhoneVmuToken.get() != phone_vmu::pairingToken())
+					config::PhoneVmuToken.set(phone_vmu::pairingToken());
+			}
 			else
 				phone_vmu::stop();
 		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a VMU mini-game with automatic progress sync. The card is unplugged while the phone uses it; choose Return to Dreamcast to reconnect it. Turn this off to stop sharing."));
@@ -6925,6 +6935,174 @@ static void renderPhoneVmuSettings()
 		return;
 
 	ImGui::TextUnformatted(connection.connected ? T("Phone connected") : T("Waiting for phone"));
+	if (connection.lastSyncSlot >= 0 && connection.lastSyncSlot < 8 && !connection.lastSyncTime.empty())
+	{
+		const char slotLabel[] = { static_cast<char>('A' + connection.lastSyncSlot / 2),
+				static_cast<char>('1' + connection.lastSyncSlot % 2), '\0' };
+		ImGui::TextWrapped("%s: VMU %s at %s", T("Last phone save synced"), slotLabel, connection.lastSyncTime.c_str());
+	}
+	ImGui::TextWrapped("%s", T("This address stays the same when Hollycast restarts, so a paired phone can reconnect without a new scan."));
+	if (ImGui::Button(T("New pairing address")))
+		config::PhoneVmuToken.set(phone_vmu::regeneratePairing());
+	ImGui::SameLine();
+	ImGui::TextWrapped("%s", T("Disconnects all paired phones. Scan the new code to pair again."));
+	// Phone save-back keeps timestamped snapshots next to each VMU file.
+	// Restoring replaces that VMU, so only offer it while no game is loaded.
+	{
+		static std::string phoneRestoreMessage;
+		namespace fs = std::filesystem;
+		const char *ports[] = { "A1", "A2", "B1", "B2", "C1", "C2", "D1", "D2" };
+		struct PhoneVmuBackup { fs::path card; fs::path snapshot; };
+		static std::vector<PhoneVmuBackup> newestBackups;
+		static double lastBackupScan = -1.0;
+		constexpr char backupMarker[] = ".phone-backup-";
+		constexpr std::size_t backupMarkerLength = sizeof(backupMarker) - 1;
+		const double now = ImGui::GetTime();
+		if (!game_started && (lastBackupScan < 0.0 || now - lastBackupScan >= 1.0))
+		{
+			newestBackups.clear();
+			std::vector<fs::path> directories;
+			for (const char *port : ports)
+			{
+				const fs::path vmuPath = fs::u8path(hostfs::getVmuPath(port, true));
+				const fs::path dir = vmuPath.parent_path().empty() ? fs::path(".") : vmuPath.parent_path();
+				if (std::find(directories.begin(), directories.end(), dir) == directories.end())
+					directories.push_back(dir);
+			}
+			for (const fs::path& dir : directories)
+			{
+				std::error_code fsError;
+				fs::directory_iterator entry(dir, fsError), end;
+				for (; !fsError && entry != end; entry.increment(fsError))
+				{
+					const std::string filename = entry->path().filename().u8string();
+					const std::size_t marker = filename.rfind(backupMarker);
+					if (marker == std::string::npos || marker == 0)
+						continue;
+					const std::string stamp = filename.substr(marker + backupMarkerLength);
+					auto isDigits = [](auto first, auto last) {
+						return std::all_of(first, last, [](char c) { return c >= '0' && c <= '9'; });
+					};
+					const bool validStamp = stamp.size() == 15 && stamp[8] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.end());
+					const bool validCollisionStamp = stamp.size() == 22 && stamp[8] == '-' && stamp[15] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.begin() + 15)
+							&& isDigits(stamp.begin() + 16, stamp.end());
+					if (!validStamp && !validCollisionStamp)
+						continue;
+					std::error_code fileError;
+					if (!entry->is_regular_file(fileError) || fileError)
+						continue;
+					const fs::path card = dir / fs::u8path(filename.substr(0, marker));
+					auto backup = std::find_if(newestBackups.begin(), newestBackups.end(), [&](const PhoneVmuBackup& item) {
+						return item.card == card;
+					});
+					if (backup == newestBackups.end())
+						newestBackups.push_back({ card, entry->path() });
+					else if (entry->path() > backup->snapshot)
+						backup->snapshot = entry->path();
+				}
+			}
+			std::sort(newestBackups.begin(), newestBackups.end(), [](const PhoneVmuBackup& a, const PhoneVmuBackup& b) {
+				return a.card < b.card;
+			});
+			lastBackupScan = now;
+		}
+		for (const PhoneVmuBackup& backup : newestBackups)
+		{
+			const fs::path& vmuPath = backup.card;
+			const fs::path& newest = backup.snapshot;
+			if (game_started)
+				continue;
+			const std::string label = std::string(T("Restore VMU backup for ")) + vmuPath.filename().u8string();
+			if (ImGui::Button(label.c_str()))
+			{
+				constexpr std::size_t VmuSize = 128 * 1024;
+				std::error_code fsError;
+				fsError.clear();
+				if (fs::file_size(newest, fsError) != VmuSize || fsError)
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				std::string data(VmuSize, '\0');
+				std::ifstream in(newest, std::ios::binary);
+				if (!in || !in.read(data.data(), data.size())
+						|| in.peek() != std::ifstream::traits_type::eof())
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				fs::path tempPath = vmuPath;
+				tempPath += ".phone-restore.tmp";
+				const std::string tempPathUtf8 = tempPath.u8string();
+				const std::string vmuPathUtf8 = vmuPath.u8string();
+				FILE *out = nowide::fopen(tempPathUtf8.c_str(), "wb");
+				bool tempWritten = out != nullptr;
+				if (out != nullptr)
+				{
+					tempWritten = std::fwrite(data.data(), 1, data.size(), out) == data.size()
+							&& std::fflush(out) == 0;
+					if (std::fclose(out) != 0)
+						tempWritten = false;
+				}
+				if (!tempWritten)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				bool snapshotOk = true;
+				fsError.clear();
+				if (fs::exists(vmuPath, fsError))
+				{
+					std::time_t now = std::time(nullptr);
+					std::tm local {};
+					bool timeReady = false;
+#ifdef _WIN32
+					timeReady = localtime_s(&local, &now) == 0;
+#else
+					timeReady = localtime_r(&now, &local) != nullptr;
+#endif
+					char timestamp[16] = {};
+					timeReady = timeReady && std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &local) != 0;
+					snapshotOk = timeReady && !fsError;
+					bool snapshotCreated = false;
+					for (unsigned suffix = 0; snapshotOk && suffix < 100; ++suffix)
+					{
+						fs::path snapshotPath = vmuPath;
+						const std::string suffixText = std::to_string(suffix);
+						snapshotPath += backupMarker + std::string(timestamp)
+								+ (suffix == 0 ? "" : "-" + std::string(6 - suffixText.size(), '0') + suffixText);
+						fsError.clear();
+						snapshotCreated = fs::copy_file(vmuPath, snapshotPath, fs::copy_options::none, fsError);
+						if (snapshotCreated)
+							break;
+						if (fsError != std::errc::file_exists)
+							snapshotOk = false;
+					}
+					snapshotOk = snapshotOk && snapshotCreated;
+				}
+				else if (fsError)
+					snapshotOk = false;
+				if (!snapshotOk || nowide::rename(tempPathUtf8.c_str(), vmuPathUtf8.c_str()) != 0)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+				lastBackupScan = -1.0;
+				phoneRestoreMessage = std::string(T("Restored VMU ")) + vmuPath.filename().u8string() + ".";
+			}
+		}
+		if (!newestBackups.empty() && game_started)
+			ImGui::TextWrapped("%s", T("Phone VMU backups found. Stop emulation to restore one."));
+		if (!phoneRestoreMessage.empty())
+			ImGui::TextWrapped("%s", phoneRestoreMessage.c_str());
+	}
 	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi, then scan this code or open the address below in its browser. Choose a VMU slot on your phone, then return to your game."));
 	static int selectedAddress = 0;
 	selectedAddress = std::clamp(selectedAddress, 0, static_cast<int>(connection.urls.size()) - 1);

@@ -9,7 +9,7 @@ inline constexpr char cardSync[] = R"VMUSYNC(
 class PhoneVmuSync {
  constructor(core,report,storage,key){
   this.core=core;this.report=report;this.storage=storage;this.key=key;
-  this.owner=null;this.pending=null;this.saved=null;this.inFlight=null;this.returning=false;this.returned=false;this.blocked=false;
+  this.owner=null;this.pending=null;this.saved=null;this.inFlight=null;this.resolution=null;this.returning=false;this.returned=false;this.blocked=false;
  }
  static token(){return Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');}
  static encode(bytes){let text='';for(const b of bytes)text+=String.fromCharCode(b);return btoa(text);}
@@ -17,7 +17,7 @@ class PhoneVmuSync {
  remember(){
   if(!this.owner)return;
   try{
-   this.storage?.setItem(this.key,JSON.stringify({owner:this.owner,card:PhoneVmuSync.encode(this.core.flash),
+   this.storage?.setItem(this.key,JSON.stringify({savedAt:Date.now(),owner:this.owner,card:PhoneVmuSync.encode(this.core.flash),
     pending:this.pending?{...this.pending,data:PhoneVmuSync.encode(this.pending.data)}:null}));
   }catch(_){this.report('Browser storage unavailable. Keep this tab open until progress is synced.');}
  }
@@ -48,13 +48,65 @@ class PhoneVmuSync {
   }
   this.report('Progress sync is on. The VMU is unplugged from the Dreamcast while you play.');
  }
- async claim(){
+ // Conflict resolution chosen by the user: keep this phone's card and take
+ // ownership even though the desktop revision moved on.
+ async forceTakeover(){
+  if(!this.owner)throw new Error('No phone session to keep.');
+  if(this.resolution)throw new Error('A VMU conflict action is already in progress.');
+  const previous=this.inFlight;
+  const operation=(async()=>{
+   if(previous)await previous;
+   if(!this.owner)throw new Error('No phone session to keep.');
+   this.blocked=false;this.returning=false;this.owner.ready=false;
+   this.pending=null;this.saved=null;this.remember();
+   await this.claim(true);
+   this.pending={operation:(++this.owner.sequence).toString(16).padStart(32,'0'),data:new Uint8Array(this.core.flash),returning:false};
+   this.remember();
+   await this.sendPending();
+   return true;
+  })();
+  this.resolution=operation;
+  try{return await operation;}
+  catch(error){
+   if(error.conflict)this.blocked=true;
+   this.report(error.conflict?'The desktop card is still in use. Your phone copy is preserved; retry when it is available.':
+    error.disk?'Hollycast could not save the VMU. Your phone copy is preserved; retry keeping it.':
+    'The phone copy is preserved, but Hollycast has not confirmed the save. Retry keeping it.');
+   throw error;
+  }
+  finally{this.resolution=null;this.returning=!!this.pending?.returning;}
+ }
+ // Conflict resolution: drop the phone copy so the caller can reload the card.
+ async discard(){
+  if(this.resolution)throw new Error('A VMU conflict action is already in progress.');
+  const previous=this.inFlight;
+  const operation=(async()=>{
+   if(previous)await previous;
+   const owner=this.owner;
+   if(owner){
+    const response=await this.request('release/'+owner.slot,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-VMU-Lease':owner.lease},body:new Uint8Array([0])});
+    if(!response.ok&&response.status!==403&&response.status!==404){
+     const error=new Error(response.status===409?'This VMU is now in use by another phone. Your phone copy is preserved.':'Hollycast could not reconnect the VMU. Your phone copy is preserved.');
+     error.conflict=response.status===409;throw error;
+    }
+   }
+   this.owner=null;this.pending=null;this.saved=null;this.blocked=false;this.returning=false;this.returned=false;
+   try{this.storage?.removeItem(this.key);}catch(_){}
+   return true;
+  })();
+  this.resolution=operation;
+  try{return await operation;}
+  catch(error){if(error.conflict)this.blocked=true;throw error;}
+  finally{this.resolution=null;}
+ }
+ async claim(force=false){
   const {slot,revision,lease}=this.owner;
-  const response=await this.request('checkout/'+slot,{method:'POST',headers:{'Content-Type':'application/octet-stream','If-Match':revision,'X-VMU-Lease':lease},body:new Uint8Array([0])});
-  if(!response.ok){const error=new Error(response.status===409?'This VMU changed or is already in use. Try again after the Dreamcast finishes saving. If its phone session was lost, turn Connect Phone off and on in Hollycast, then scan the new QR code.':'This VMU cannot sync. Use a writable card outside netplay.');error.conflict=response.status===403||response.status===409;throw error;}
+  const response=await this.request('checkout/'+slot,{method:'POST',headers:{'Content-Type':'application/octet-stream','If-Match':revision,'X-VMU-Lease':lease,...(force?{'X-VMU-Force':'1'}:{})},body:new Uint8Array([0])});
+  if(!response.ok){const error=new Error(response.status===409?'This VMU changed or is already in use. Try again after the Dreamcast finishes saving. If its phone session was lost, turn Connect Phone off and on in Hollycast, then reload the saved pairing page.':'This VMU cannot sync. Use a writable card outside netplay.');error.conflict=response.status===403||response.status===409;throw error;}
   this.owner.ready=true;this.remember();
  }
  checkpoint(returning=false){
+  if(this.resolution)return returning?this.resolution.then(ok=>ok?this.checkpoint(true):false):this.resolution;
   if(!this.owner)return Promise.resolve(true);
   if(this.inFlight)return returning?this.inFlight.then(ok=>ok?this.checkpoint(true):false):this.inFlight;
   if(this.blocked)return Promise.resolve(false);
@@ -93,7 +145,7 @@ class PhoneVmuSync {
    const error=new Error('Sync pending');error.conflict=response.status===409||response.status===403||response.status===404;error.disk=response.status===500;
    // A failed disk write is acknowledged as failed, so retry with a fresh
    // operation while retaining the phone's complete current card.
-   if(error.disk)this.pending=null;
+    if(error.disk){this.pending=null;this.remember();}
    throw error;
   }
   this.saved=operation.data;this.pending=null;

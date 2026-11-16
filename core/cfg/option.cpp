@@ -101,6 +101,8 @@ Option<bool> HikaruVirtualOn4TwinStick("HikaruVirtualOn4TwinStick", true, "input
 #endif
 AudioVolumeOption AudioVolume;
 Option<bool> VmuSound("VmuSound", false, "audio");
+Option<int, false> PhoneVmuPort("PhoneVmuPort", 28743, "network");
+Option<std::string, false> PhoneVmuToken("PhoneVmuToken", "", "network");
 
 // Rendering
 

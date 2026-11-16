@@ -25,12 +25,23 @@ struct Status
 	bool connected = false;
 	std::vector<std::string> urls;
 	std::string error;
+	// Last successful phone save-back, for the settings status line.
+	int lastSyncSlot = -1;
+	std::string lastSyncTime;
 };
 
 // Lifecycle and status are owned by the UI thread. Sharing is opt-in per session.
 void start();
 void stop();
 Status status();
+// Supplies the persisted pairing identity before start(). An empty token is
+// generated once and retained until regeneratePairing(); port 0 asks the OS
+// for an available port. The UI layer owns saving these values.
+void setPairing(const std::string& token, int port);
+std::string pairingToken();
+// Revokes every paired phone by replacing the pairing token, then restarts
+// sharing if it was running. Returns the new token for the caller to persist.
+std::string regeneratePairing();
 
 // Called by the emulation thread even while sharing is off, so pairing mid-game
 // immediately displays the latest LCD. Never performs network or UI work.
