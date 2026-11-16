@@ -88,7 +88,8 @@ void testMapleSync(Address address)
  check(readDisk(diskPath) == progress, "Progress was acknowledged before the VMU file was flushed");
  auto backupPaths = [&]() { std::vector<std::filesystem::path> paths; std::error_code ec; std::filesystem::directory_iterator it(std::filesystem::current_path(),ec),end; while(!ec&&it!=end){if(it->path().filename().string().rfind(backupPrefix,0)==0)paths.push_back(it->path());it.increment(ec);} check(!ec,"Could not enumerate VMU backups");std::sort(paths.begin(),paths.end());return paths; };
  // Backups are timestamped snapshots beside the VMU file; the newest must hold the pre-phone card.
- std::string backupPath; { std::error_code ec; for(const auto& e:std::filesystem::directory_iterator(std::filesystem::current_path(),ec)) { const auto name=e.path().filename().string(); if(name.rfind("phone-vmu-sync-regression.bin.phone-backup-",0)==0 && (backupPath.empty()||name>backupPath)) backupPath=e.path().string(); } }
+ const auto firstSnapshots = backupPaths();
+ const std::string backupPath = firstSnapshots.empty() ? std::string() : firstSnapshots.back().string();
  check(!backupPath.empty() && readDisk(backupPath) == std::string(131072, '\x55'), "Original card backup is missing or altered");
  const std::string firstBackupPath=backupPath;
  check(backupPaths().size()==5,"Backup pruning must keep five snapshots after a checkout");
