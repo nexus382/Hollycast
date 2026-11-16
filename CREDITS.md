@@ -60,7 +60,7 @@ Having that work available, and people willing to help explain it, has saved us 
 
 Thank you to the MAME developers and contributors, including **MetalliC**, credited on the [Hikaru driver](https://github.com/mamedev/mame/blob/master/src/mame/sega/hikaru.cpp), and everyone who helped investigate and document the system. That knowledge has been a real help to us.
 
-Thank you to [MacHatter1](https://github.com/MacHatter1) for the new phone VMU implementation.
+Thank you to **Bucanero** for the JavaScript port in [dcvmu-tool](https://github.com/bucanero/dcvmu-tool), and to **Marcus Comstedt** for the SoftVMS 1.10 VMU emulator it is based on.
 
 ## To everyone playing Hollycast
 
