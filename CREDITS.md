@@ -60,6 +60,8 @@ Having that work available, and people willing to help explain it, has saved us 
 
 Thank you to the MAME developers and contributors, including **MetalliC**, credited on the [Hikaru driver](https://github.com/mamedev/mame/blob/master/src/mame/sega/hikaru.cpp), and everyone who helped investigate and document the system. That knowledge has been a real help to us.
 
+Thank you to [MacHatter1](https://github.com/MacHatter1) for the new phone VMU implementation.
+
 ## To everyone playing Hollycast
 
 You are a big part of what makes this community great. So many of you are already enjoying Hollycast, and just about everything we've heard back has been positive. People have been encouraging, patient, and willing to help. With the way things often go on the internet these days, that's been a welcome change of pace. It makes me want to keep working on this.
