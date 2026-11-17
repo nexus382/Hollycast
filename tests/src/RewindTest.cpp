@@ -146,8 +146,11 @@ TEST_F(RewindTest, SharedThreadRequirementMatchesRewindPolicy)
 
 TEST_F(RewindTest, MapleLinkDeviceBlocksRewindAndSharedThreadRequirement)
 {
-	const std::shared_ptr<maple_device> previousDevice = MapleDevices[0][5];
-	MapleDevices[0][5] = std::make_shared<MapleLinkStub>();
+	const std::shared_ptr<maple_device> previousDevice = MapleDevices[0][MAPLE_MAIN_DEV_IDX];
+	auto linkStub = std::make_shared<MapleLinkStub>();
+	// Setup initializes config, which maple_device's destructor expects.
+	linkStub->Setup(0, MAPLE_MAIN_DEV_IDX, -1, false);
+	MapleDevices[0][MAPLE_MAIN_DEV_IDX] = linkStub;
 
 	EXPECT_FALSE(rewind_state::requiresSharedThread());
 	EXPECT_STREQ("Rewind is unavailable with passthrough DreamLink devices.", rewind_state::unavailableReason());
@@ -156,7 +159,7 @@ TEST_F(RewindTest, MapleLinkDeviceBlocksRewindAndSharedThreadRequirement)
 	EXPECT_FALSE(rewind_state::canStep());
 	EXPECT_EQ(rewind_state::FrameAction::Run, rewind_state::beforeFrame());
 
-	MapleDevices[0][5] = previousDevice;
+	MapleDevices[0][MAPLE_MAIN_DEV_IDX] = previousDevice;
 }
 
 TEST_F(RewindTest, RestrictedRewindRequestsDoNotRestoreFrames)
