@@ -1209,13 +1209,16 @@ target_sources(${PROJECT_NAME} PRIVATE
 		core/nullDC.cpp
 		core/serialize.cpp
 		core/serialize.h
-		core/rewind.cpp
 		core/util/rewind_buffer.cpp
 		core/stbi.h
 		core/stdclass.cpp
 		core/stdclass.h
 		core/types.h
 		core/debug/gdb_server.h)
+
+if(NOT LIBRETRO)
+	target_sources(${PROJECT_NAME} PRIVATE core/rewind.cpp)
+endif()
 
 set(IMGUI_BACKENDS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/core/deps/imgui/backends")
 

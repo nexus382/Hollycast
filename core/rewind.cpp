@@ -107,9 +107,9 @@ void harvestCompression()
 	pendingCompression.reset();
 	try
 	{
-		std::vector<u8> compressed = pending.result.get();
 		if (pending.token != pendingToken)
 			return;
+		std::vector<u8> compressed = pending.result.get();
 		if (!history.pushCompressed(std::move(compressed), pending.rawSize, pending.timestamp))
 			throw std::runtime_error("The rewind memory limit cannot hold this game's state.");
 		const u64 historyTicks = u64(duration) * SH4_MAIN_CLOCK;
@@ -127,9 +127,12 @@ void harvestCompression()
 std::size_t captureSnapshot()
 {
 	constexpr std::size_t MaxStateSize = 128 * 1024 * 1024;
+	// reserve() alone does not create writable vector elements. Reuse the
+	// retained allocation, including after pop() resized it to an older state.
+	scratch.resize(scratch.capacity());
 	try
 	{
-		Serializer ser(scratch.data(), scratch.capacity());
+		Serializer ser(scratch.data(), scratch.size());
 		dc_serialize(ser);
 		if (ser.size() > MaxStateSize)
 			throw std::runtime_error("This game's state exceeds the rewind workspace limit.");
@@ -142,7 +145,8 @@ std::size_t captureSnapshot()
 		if (measure.size() > MaxStateSize)
 			throw std::runtime_error("This game's state exceeds the rewind workspace limit.");
 		scratch.reserve(measure.size());
-		Serializer ser(scratch.data(), scratch.capacity());
+		scratch.resize(scratch.capacity());
+		Serializer ser(scratch.data(), scratch.size());
 		dc_serialize(ser);
 		return ser.size();
 	}

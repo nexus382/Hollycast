@@ -8,6 +8,13 @@ namespace rewind_state
 {
 enum class FrameAction { Run, Restore, Hold };
 
+#ifdef LIBRETRO
+// Libretro frontends own rewind controls and state; shared engine hooks stay inert.
+inline void invalidate() {}
+inline void releaseRequests() {}
+inline FrameAction beforeFrame() { return FrameAction::Run; }
+inline void afterFrame(bool) {}
+#else
 // Requests are refcounted per source so several inputs bound to Rewind on one
 // device, or several devices, cannot release each other's hold. Matching a
 // press with one release per bound input is the caller's responsibility;
@@ -29,4 +36,5 @@ void invalidate();
 void poll();
 FrameAction beforeFrame();
 void afterFrame(bool restored);
+#endif
 }
