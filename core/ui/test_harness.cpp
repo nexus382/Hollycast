@@ -474,11 +474,14 @@ static std::uint64_t captureGuestStart;
 
 static Json rewindStatus()
 {
-	const char *reason = rewind_state::unavailableReason();
+	// Loading runs on a worker and may still be building the Maple device array.
+	// Resume marks the completed game ready before host-side device inspection.
+	const char *reason = game_started ? rewind_state::unavailableReason()
+			: "Start a game to record rewind history.";
 	return {{"enabled", static_cast<bool>(config::RewindEnable)},
 		{"available", reason == nullptr},
 		{"unavailable_reason", reason == nullptr ? Json(nullptr) : Json(reason)},
-		{"can_step", rewind_state::canStep()}, {"requested", rewind_state::requested()},
+		{"can_step", game_started && rewind_state::canStep()}, {"requested", rewind_state::requested()},
 		{"held_by_harness", harnessRewindHeld},
 		{"snapshots", rewind_state::snapshotCount()}, {"memory_bytes", rewind_state::memoryUsed()},
 		{"interval_ms", config::RewindInterval.get()}, {"duration_s", config::RewindDuration.get()},

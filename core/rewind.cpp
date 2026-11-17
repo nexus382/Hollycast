@@ -152,7 +152,7 @@ std::size_t captureSnapshot()
 	}
 }
 
-const char* unsupportedReason()
+const char* unsupportedReason(bool checkThreadMode)
 {
 	if (settings.platform.isHikaru() || settings.platform.isSystemSP())
 		return Tnop("Rewind is not available for this arcade platform.");
@@ -161,6 +161,12 @@ const char* unsupportedReason()
 	if (settings.network.online || config::GGPOEnable || settings.naomi.multiboard
 			|| settings.naomi.slave || settings.naomi.drivingSimSlave)
 		return Tnop("Rewind is unavailable during network or linked-cabinet play.");
+	if (checkThreadMode && config::ThreadedRendering)
+	{
+		// MapleDevices is changed by guest-thread reconnect handling; do not scan it
+		// from host-thread availability checks while threaded emulation is active.
+		return Tnop("Restart the game to use Rewind with shared emulation and rendering.");
+	}
 #ifdef HAVE_PHONE_VMU
 	if (phone_vmu::status().running)
 		return Tnop("Stop phone VMU sharing before using Rewind.");
@@ -216,10 +222,8 @@ const char* unavailableReason()
 		return Tnop("Enable Rewind in Advanced settings before starting a game.");
 	if (settings.content.path.empty())
 		return Tnop("Start a game to record rewind history.");
-	if (const char* reason = unsupportedReason())
+	if (const char* reason = unsupportedReason(true))
 		return reason;
-	if (config::ThreadedRendering)
-		return Tnop("Restart the game to use Rewind with shared emulation and rendering.");
 	if (failed)
 		return Tnop("Rewind stopped after an error. Restart the game or change its rewind settings.");
 	return nullptr;
@@ -227,7 +231,7 @@ const char* unavailableReason()
 
 bool requiresSharedThread()
 {
-	return config::RewindEnable && !settings.content.path.empty() && unsupportedReason() == nullptr;
+	return config::RewindEnable && !settings.content.path.empty() && unsupportedReason(false) == nullptr;
 }
 
 bool canStep()

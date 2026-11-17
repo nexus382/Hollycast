@@ -153,6 +153,9 @@ TEST_F(RewindTest, MapleLinkDeviceBlocksRewindAndSharedThreadRequirement)
 	MapleDevices[0][MAPLE_MAIN_DEV_IDX] = linkStub;
 
 	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	config::ThreadedRendering = true;
+	EXPECT_STREQ("Restart the game to use Rewind with shared emulation and rendering.", rewind_state::unavailableReason());
+	config::ThreadedRendering = false;
 	EXPECT_STREQ("Rewind is unavailable with passthrough DreamLink devices.", rewind_state::unavailableReason());
 	int source = 0;
 	rewind_state::setRequested(&source, true);
