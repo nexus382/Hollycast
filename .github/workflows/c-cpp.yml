@@ -128,7 +128,7 @@ jobs:
               libomp) libfile="$prefix/lib/libomp.a" ;;
               libpng-flycast) libfile="$prefix/lib/libpng16.a" ;;
             esac
-            lipo -verify_arch arm64 x86_64 "$libfile"
+            lipo "$libfile" -verify_arch arm64 x86_64
             # Export prefix for subsequent CMake steps
             if [ -z "$CMAKE_PREFIX_PATH" ]; then
               CMAKE_PREFIX_PATH="$prefix"
