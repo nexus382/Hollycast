@@ -798,6 +798,12 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 		}
 		// reload settings so that all settings can be overridden
 		loadGameSpecificSettings();
+#ifndef LIBRETRO
+		// Apply the rewind thread policy only after per-game settings, Maple
+		// devices, and the effective achievement mode are known.
+		if (rewind_state::requiresSharedThread())
+			config::ThreadedRendering.override(false);
+#endif
 		NetworkHandshake::init();
 		settings.input.fastForwardMode = false;
 		EventManager::event(Event::Start);
@@ -1053,14 +1059,6 @@ void loadGameSpecificSettings()
 		config::WidescreenGameHacks.override(false);
 		config::DynarecEnabled.override(true);
 	}
-#ifndef LIBRETRO
-	// Full snapshots are owned by the rendering thread, after a synchronous CPU
-	// slice. Leave the user's threaded-rendering preference intact for other games.
-	if (config::RewindEnable && !settings.platform.isHikaru() && !settings.platform.isSystemSP()
-			&& !config::GGPOEnable && !settings.raHardcoreMode && !settings.network.online
-			&& !settings.naomi.multiboard && !settings.naomi.slave && !settings.naomi.drivingSimSlave)
-		config::ThreadedRendering.override(false);
-#endif
 }
 
 void Emulator::step()
@@ -1440,6 +1438,10 @@ void Emulator::diskChange()
 		settings.content.reset();
 		settings.content.title = BIOS_TITLE;
 	}
+#ifndef LIBRETRO
+	if (rewind_state::requiresSharedThread())
+		config::ThreadedRendering.override(false);
+#endif
 	cheatManager.reset(settings.content.gameId);
 	if (cheatManager.isWidescreen())
 		config::ScreenStretching.override(134);	// 4:3 -> 16:9

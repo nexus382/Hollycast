@@ -23,15 +23,16 @@ settings below are locked, because changing them clears recorded history.
 | History Duration | 30 s | 5–120 s | How far back rewind can go |
 | Compression | Fast | Fast / Balanced / Maximum | Trade capture CPU for memory use |
 
-History Duration is the promise: Hollycast keeps enough snapshots to cover
-it. Memory use is the result, not a second limit — it grows with a longer
-duration, a shorter interval, and larger game states. Compression controls
+History Duration sets the target window. Recorded history can be shorter
+when compression cannot keep up or the internal memory ceiling is reached.
+Memory use grows with longer duration, shorter intervals, and larger game
+states. Compression controls
 how much memory that same duration needs: Fast favors smooth gameplay,
 Balanced and Maximum spend more CPU per snapshot to store history smaller.
 Capturing also needs temporary raw-state and compression workspace, each
 bounded at roughly 128 MiB. A fixed internal safety ceiling still protects
-the device from runaway allocation; if a device truly runs out of memory,
-rewind stops with an error instead of crashing.
+the device from runaway allocation. Allocation, serialization, or compression
+failures stop rewind and report an error.
 
 ## Controls
 

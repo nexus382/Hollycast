@@ -151,6 +151,26 @@ std::size_t captureSnapshot()
 		return ser.size();
 	}
 }
+
+const char* unsupportedReason()
+{
+	if (settings.platform.isHikaru() || settings.platform.isSystemSP())
+		return Tnop("Rewind is not available for this arcade platform.");
+	if (settings.raHardcoreMode)
+		return Tnop("Rewind is unavailable in RetroAchievements hardcore mode.");
+	if (settings.network.online || config::GGPOEnable || settings.naomi.multiboard
+			|| settings.naomi.slave || settings.naomi.drivingSimSlave)
+		return Tnop("Rewind is unavailable during network or linked-cabinet play.");
+#ifdef HAVE_PHONE_VMU
+	if (phone_vmu::status().running)
+		return Tnop("Stop phone VMU sharing before using Rewind.");
+#endif
+	for (const auto& port : MapleDevices)
+		for (const auto& device : port)
+			if (std::dynamic_pointer_cast<MapleLinkDevice>(device))
+				return Tnop("Rewind is unavailable with passthrough DreamLink devices.");
+	return nullptr;
+}
 }
 
 void setRequested(const void* source, bool pressed)
@@ -192,34 +212,22 @@ bool requested()
 const char* unavailableReason()
 {
 	// Callers translate the returned pointer, so mark every literal for extraction.
-#ifdef LIBRETRO
-	return Tnop("Use your frontend's rewind controls with the libretro core.");
-#else
 	if (!config::RewindEnable)
 		return Tnop("Enable Rewind in Advanced settings before starting a game.");
 	if (settings.content.path.empty())
 		return Tnop("Start a game to record rewind history.");
-	if (settings.platform.isHikaru() || settings.platform.isSystemSP())
-		return Tnop("Rewind is not available for this arcade platform.");
-	if (settings.raHardcoreMode)
-		return Tnop("Rewind is unavailable in RetroAchievements hardcore mode.");
-	if (settings.network.online || config::GGPOEnable || settings.naomi.multiboard
-			|| settings.naomi.slave || settings.naomi.drivingSimSlave)
-		return Tnop("Rewind is unavailable during network or linked-cabinet play.");
+	if (const char* reason = unsupportedReason())
+		return reason;
 	if (config::ThreadedRendering)
 		return Tnop("Restart the game to use Rewind with shared emulation and rendering.");
-#ifdef HAVE_PHONE_VMU
-	if (phone_vmu::status().running)
-		return Tnop("Stop phone VMU sharing before using Rewind.");
-#endif
-	for (const auto& port : MapleDevices)
-		for (const auto& device : port)
-			if (std::dynamic_pointer_cast<MapleLinkDevice>(device))
-				return Tnop("Rewind is unavailable with passthrough DreamLink devices.");
 	if (failed)
 		return Tnop("Rewind stopped after an error. Restart the game or change its rewind settings.");
 	return nullptr;
-#endif
+}
+
+bool requiresSharedThread()
+{
+	return config::RewindEnable && !settings.content.path.empty() && unsupportedReason() == nullptr;
 }
 
 bool canStep()

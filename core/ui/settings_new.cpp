@@ -61,6 +61,7 @@
 #include "hw/mem/addrspace.h"
 #include "settings.h"
 #include "emulator.h"
+#include "rewind.h"
 #include "gui.h"
 #include "boxart/boxart.h"
 #include "boxart/screenscraper.h"
@@ -10249,18 +10250,14 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		// Rewind forces shared emulation/rendering only for a running game it
-		// can actually serve; otherwise show and allow editing the preference.
-		const bool rewindForcingShared = game_started && config::RewindEnable.get()
-			&& !settings.platform.isHikaru() && !settings.platform.isSystemSP()
-			&& !config::GGPOEnable && !settings.raHardcoreMode && !settings.network.online
-			&& !settings.naomi.multiboard && !settings.naomi.slave && !settings.naomi.drivingSimSlave;
+		const bool rewindForcingShared = game_started && rewind_state::requiresSharedThread()
+			&& !config::ThreadedRendering;
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
 			ICON_FA_GEAR,
 			T("Multi-threading"),
 			T("Use additional CPU threads"),
-			rewindForcingShared ? false : static_cast<bool>(config::ThreadedRendering),
+			static_cast<bool>(config::ThreadedRendering),
 			[](bool enabled) { config::ThreadedRendering.set(enabled); },
 			T(
 				"Multi-threading\n"

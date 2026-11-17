@@ -12,6 +12,7 @@ enum class FrameAction { Run, Restore, Hold };
 // Libretro frontends own rewind controls and state; shared engine hooks stay inert.
 inline void invalidate() {}
 inline void releaseRequests() {}
+inline bool requiresSharedThread() { return false; }
 inline FrameAction beforeFrame() { return FrameAction::Run; }
 inline void afterFrame(bool) {}
 #else
@@ -26,6 +27,9 @@ void releaseRequests();
 bool requested();
 void requestStep();
 bool canStep();
+// Ignores current thread mode and capture failure so callers can choose the
+// session thread layout before rewind recording begins.
+bool requiresSharedThread();
 const char* unavailableReason();
 // History counters are owned by the rendering thread; read them only there.
 std::size_t snapshotCount();

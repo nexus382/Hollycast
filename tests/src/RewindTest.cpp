@@ -3,11 +3,14 @@
 #include "cfg/option.h"
 #include "emulator.h"
 #include "hw/flashrom/flashrom.h"
+#include "hw/maple/maple_if.h"
+#include "input/maplelink.h"
 #include "rewind.h"
 #include "serialize.h"
 #include "types.h"
 
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -95,6 +98,99 @@ TEST_F(RewindTest, AvailableWhenAllGatesPass)
 {
 	EXPECT_EQ(nullptr, rewind_state::unavailableReason());
 	EXPECT_FALSE(rewind_state::canStep());
+}
+
+TEST_F(RewindTest, SharedThreadRequirementIgnoresCurrentThreadMode)
+{
+	config::ThreadedRendering = true;
+	EXPECT_TRUE(rewind_state::requiresSharedThread());
+	EXPECT_STREQ("Restart the game to use Rewind with shared emulation and rendering.", rewind_state::unavailableReason());
+}
+
+TEST_F(RewindTest, SharedThreadRequirementMatchesRewindPolicy)
+{
+	EXPECT_TRUE(rewind_state::requiresSharedThread());
+
+	config::RewindEnable = false;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	config::RewindEnable = true;
+
+	settings.content.path.clear();
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	settings.content.path = "rewind-test.iso";
+
+	settings.platform.system = DC_PLATFORM_HIKARU;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	settings.platform.system = DC_PLATFORM_SYSTEMSP;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	settings.platform.system = DC_PLATFORM_DREAMCAST;
+
+	settings.raHardcoreMode = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	settings.raHardcoreMode = false;
+	settings.network.online = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	settings.network.online = false;
+	config::GGPOEnable = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	config::GGPOEnable = false;
+	settings.naomi.multiboard = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	settings.naomi.multiboard = false;
+	settings.naomi.slave = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	settings.naomi.slave = false;
+	settings.naomi.drivingSimSlave = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+}
+
+TEST_F(RewindTest, MapleLinkDeviceBlocksRewindAndSharedThreadRequirement)
+{
+	const std::shared_ptr<maple_device> previousDevice = MapleDevices[0][5];
+	MapleDevices[0][5] = std::make_shared<MapleLinkStub>();
+
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	EXPECT_STREQ("Rewind is unavailable with passthrough DreamLink devices.", rewind_state::unavailableReason());
+	int source = 0;
+	rewind_state::setRequested(&source, true);
+	EXPECT_FALSE(rewind_state::canStep());
+	EXPECT_EQ(rewind_state::FrameAction::Run, rewind_state::beforeFrame());
+
+	MapleDevices[0][5] = previousDevice;
+}
+
+TEST_F(RewindTest, RestrictedRewindRequestsDoNotRestoreFrames)
+{
+	int source = 0;
+	rewind_state::setRequested(&source, true);
+	auto expectBlocked = [] {
+		EXPECT_FALSE(rewind_state::canStep());
+		EXPECT_EQ(rewind_state::FrameAction::Run, rewind_state::beforeFrame());
+	};
+
+	settings.raHardcoreMode = true;
+	expectBlocked();
+	settings.raHardcoreMode = false;
+	settings.network.online = true;
+	expectBlocked();
+	settings.network.online = false;
+	config::GGPOEnable = true;
+	expectBlocked();
+	config::GGPOEnable = false;
+	settings.naomi.multiboard = true;
+	expectBlocked();
+	settings.naomi.multiboard = false;
+	settings.naomi.slave = true;
+	expectBlocked();
+	settings.naomi.slave = false;
+	settings.naomi.drivingSimSlave = true;
+	expectBlocked();
+	settings.naomi.drivingSimSlave = false;
+	settings.platform.system = DC_PLATFORM_HIKARU;
+	expectBlocked();
+	settings.platform.system = DC_PLATFORM_SYSTEMSP;
+	expectBlocked();
+	EXPECT_TRUE(rewind_state::requested());
 }
 
 TEST_F(RewindTest, TwoBindingsOnOneSourceNeedTwoReleases)
