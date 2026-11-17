@@ -8,7 +8,12 @@
 #include "audio/audiostream.h"
 #include "hw/sh4/sh4_sched.h"
 #include "hw/maple/maple_if.h"
+#include "hw/naomi/card_reader.h"
+#include "hw/naomi/hopper.h"
+#include "hw/naomi/netdimm.h"
 #include "input/maplelink.h"
+#include "network/ice.h"
+#include "network/net_handshake.h"
 #include "network/phone_vmu.h"
 #include "oslib/i18n.h"
 #include "oslib/oslib.h"
@@ -35,19 +40,19 @@ std::mutex requestMutex;
 std::unordered_map<const void*, unsigned> heldSources;
 std::atomic<bool> held{false};
 std::atomic<bool> stepRequested{false};
-std::atomic<unsigned> generation{0};
-unsigned observedGeneration = 0;
+std::atomic<bool> invalidated{false};
 bool reversing = false;
 bool failed = false;
-bool rejected = false;
 bool configuredEnabled = false;
 int interval = 0, duration = 0, compression = -1;
 
-// Duration is the user-facing promise, so retained history is sized from it
-// (duration / interval states), not from a second user memory budget. This
-// fixed ceiling only protects the device from runaway allocation; compression
-// is how users trade capture CPU for lower memory use.
-constexpr std::size_t SafetyMemoryLimit = std::size_t{1} << 31;
+// Leave room for the emulator, renderer and compression workspace on devices
+// with a small address space or an OS-enforced application memory budget.
+#if defined(__ANDROID__) || defined(TARGET_IPHONE) || defined(__SWITCH__) || defined(TARGET_UWP)
+constexpr std::size_t SafetyMemoryLimit = 256_MB;
+#else
+constexpr std::size_t SafetyMemoryLimit = sizeof(void*) == 4 ? 256_MB : 2048_MB;
+#endif
 
 int compressionLevel()
 {
@@ -61,14 +66,16 @@ int compressionLevel()
 u64 lastCapture = 0;
 std::chrono::steady_clock::time_point nextRestore;
 
-// Compression is the only capture work that may leave the render thread: it
-// is a pure function of an owned byte copy. Serialization itself must stay
-// here, where the machine is quiescent between frames. One job at a time;
-// a snapshot that cannot start compressing promptly is skipped rather than
-// allowed to queue latency into gameplay.
+// The worker borrows no machine state. It owns the serialized buffer until
+// compression finishes, then returns the workspace for the next capture.
+struct CompressionResult
+{
+	std::vector<u8> compressed;
+	std::vector<u8> workspace;
+};
 struct PendingCompression
 {
-	std::future<std::vector<u8>> result;
+	std::future<CompressionResult> result;
 	std::size_t rawSize = 0;
 	u64 timestamp = 0;
 	unsigned token = 0;
@@ -109,8 +116,9 @@ void harvestCompression()
 	{
 		if (pending.token != pendingToken)
 			return;
-		std::vector<u8> compressed = pending.result.get();
-		if (!history.pushCompressed(std::move(compressed), pending.rawSize, pending.timestamp))
+		CompressionResult result = pending.result.get();
+		scratch = std::move(result.workspace);
+		if (!history.pushCompressed(std::move(result.compressed), pending.rawSize, pending.timestamp))
 			throw std::runtime_error("The rewind memory limit cannot hold this game's state.");
 		const u64 historyTicks = u64(duration) * SH4_MAIN_CLOCK;
 		history.discardOlderThan(pending.timestamp > historyTicks ? pending.timestamp - historyTicks : 0);
@@ -121,35 +129,37 @@ void harvestCompression()
 	}
 }
 
-// Serialize once into the retained scratch capacity. The size pass remains
-// only as the growth fallback for a first or growing state, so steady-state
-// captures pay one traversal and one copy instead of two traversals.
+void syncHistory()
+{
+	// Multiple guest writes before the next frame share one history boundary.
+	if (invalidated.load(std::memory_order_relaxed) && invalidated.exchange(false, std::memory_order_relaxed))
+		clearHistory();
+	harvestCompression();
+}
+
+// Measure only the first or growing snapshot. Subsequent frames serialize
+// directly into the workspace returned by the compression worker.
 std::size_t captureSnapshot()
 {
-	constexpr std::size_t MaxStateSize = 128 * 1024 * 1024;
-	// reserve() alone does not create writable vector elements. Reuse the
-	// retained allocation, including after pop() resized it to an older state.
-	scratch.resize(scratch.capacity());
-	try
+	if (!scratch.empty())
 	{
-		Serializer ser(scratch.data(), scratch.size());
-		dc_serialize(ser);
-		if (ser.size() > MaxStateSize)
-			throw std::runtime_error("This game's state exceeds the rewind workspace limit.");
-		return ser.size();
+		try
+		{
+			Serializer ser(scratch.data(), scratch.size());
+			dc_serialize(ser);
+			return ser.size();
+		}
+		catch (const Serializer::Exception&) {} // A device's serialized state can grow.
 	}
-	catch (const SerializeBase::Exception&)
-	{
-		Serializer measure;
-		dc_serialize(measure);
-		if (measure.size() > MaxStateSize)
-			throw std::runtime_error("This game's state exceeds the rewind workspace limit.");
-		scratch.reserve(measure.size());
-		scratch.resize(scratch.capacity());
-		Serializer ser(scratch.data(), scratch.size());
-		dc_serialize(ser);
-		return ser.size();
-	}
+	Serializer measure;
+	dc_serialize(measure);
+	if (measure.size() > RewindBuffer::MaxStateSize)
+		throw std::runtime_error("This game's state exceeds the rewind workspace limit.");
+	scratch.reserve(measure.size());
+	scratch.resize(measure.size());
+	Serializer ser(scratch.data(), scratch.size());
+	dc_serialize(ser);
+	return ser.size();
 }
 
 const char* unsupportedReason(bool checkThreadMode)
@@ -158,14 +168,29 @@ const char* unsupportedReason(bool checkThreadMode)
 		return Tnop("Rewind is not available for this arcade platform.");
 	if (settings.raHardcoreMode)
 		return Tnop("Rewind is unavailable in RetroAchievements hardcore mode.");
-	if (settings.network.online || config::GGPOEnable || settings.naomi.multiboard
+	const bool threaded = checkThreadMode && config::ThreadedRendering;
+	const char* restartReason = Tnop("Restart the game to use Rewind with shared emulation and rendering.");
+	// The guest thread can change the network connection and reconnect Maple devices.
+	if (emu.running() && config::ThreadedRendering)
+		return restartReason;
+	// Battle Cable uses a serial pipe and never sets the modem's online flag.
+	// The active handshake still owns that pipe if the user changes the setting.
+	if (settings.network.online || config::GGPOEnable || config::BattleCableEnable
+			|| NetworkHandshake::instance != nullptr || ice::getState() != ice::Offline || settings.naomi.multiboard
 			|| settings.naomi.slave || settings.naomi.drivingSimSlave)
 		return Tnop("Rewind is unavailable during network or linked-cabinet play.");
-	if (checkThreadMode && config::ThreadedRendering)
+	if (threaded)
+		return restartReason;
+	if (config::SerialConsole)
+		return Tnop("Rewind is unavailable with host serial output enabled.");
+	const char* cardReason = Tnop("Rewind is unavailable with an arcade card reader or medal hopper.");
+	if (settings.platform.isArcade())
 	{
-		// MapleDevices is changed by guest-thread reconnect handling; do not scan it
-		// from host-thread availability checks while threaded emulation is active.
-		return Tnop("Restart the game to use Rewind with shared emulation and rendering.");
+		// NetDIMM state omits writable DIMM memory and drops host sockets on load.
+		if (dynamic_cast<NetDimm*>(CurrentCartridge) != nullptr)
+			return Tnop("Rewind is unavailable for NetDIMM cartridges.");
+		if (card_reader::serialReaderActive() || hopper::active())
+			return cardReason;
 	}
 #ifdef HAVE_PHONE_VMU
 	if (phone_vmu::status().running)
@@ -173,8 +198,12 @@ const char* unsupportedReason(bool checkThreadMode)
 #endif
 	for (const auto& port : MapleDevices)
 		for (const auto& device : port)
-			if (std::dynamic_pointer_cast<MapleLinkDevice>(device))
+		{
+			if (dynamic_cast<MapleLinkDevice*>(device.get()) != nullptr)
 				return Tnop("Rewind is unavailable with passthrough DreamLink devices.");
+			if (device && device->get_device_type() == MDT_RFIDReaderWriter)
+				return cardReason;
+		}
 	return nullptr;
 }
 }
@@ -215,6 +244,12 @@ bool requested()
 	return held.load(std::memory_order_relaxed);
 }
 
+bool requested(const void* source)
+{
+	const std::lock_guard<std::mutex> lock(requestMutex);
+	return heldSources.count(source) != 0;
+}
+
 const char* unavailableReason()
 {
 	// Callers translate the returned pointer, so mark every literal for extraction.
@@ -251,40 +286,49 @@ std::size_t memoryUsed() { return history.memoryUsed(); }
 void invalidate()
 {
 	// Device writes can originate on the CPU thread when rewind is disabled.
-	generation.fetch_add(1, std::memory_order_relaxed);
+	invalidated.store(true, std::memory_order_relaxed);
 }
 
-void poll()
+void poll(bool loading)
 {
+	syncHistory();
+	if (loading)
+	{
+		// The loader owns the per-game options until the new game is ready.
+		failed = false;
+		return;
+	}
+	if (!config::RewindEnable)
+	{
+		if (configuredEnabled)
+		{
+			clearHistory();
+			configuredEnabled = false;
+			failed = false;
+		}
+		if (requested() || stepRequested.load(std::memory_order_relaxed))
+			releaseRequests();
+		return;
+	}
 	const int newInterval = std::clamp(config::RewindInterval.get(), 100, 1000);
 	const int newDuration = std::clamp(config::RewindDuration.get(), 5, 120);
 	const int newCompression = compressionLevel();
-	const unsigned currentGeneration = generation.load(std::memory_order_relaxed);
-	if (configuredEnabled != config::RewindEnable || interval != newInterval
-			|| duration != newDuration || compression != newCompression || observedGeneration != currentGeneration)
+	if (!configuredEnabled || interval != newInterval || duration != newDuration || compression != newCompression)
 	{
 		clearHistory();
 		failed = false;
-		configuredEnabled = config::RewindEnable;
+		configuredEnabled = true;
 		interval = newInterval;
 		duration = newDuration;
 		compression = newCompression;
-		observedGeneration = currentGeneration;
 		history.configure(SafetyMemoryLimit,
 				(std::size_t(duration) * 1000 + interval - 1) / interval + 1, compression);
-	}
-	if (!configuredEnabled)
-	{
-		if (history.size() != 0 || !scratch.empty())
-			clearHistory();
-		releaseRequests();
 	}
 }
 
 FrameAction beforeFrame()
 {
-	poll();
-	harvestCompression();
+	syncHistory();
 	const bool singleStep = stepRequested.exchange(false, std::memory_order_relaxed);
 	if (!requested() && !singleStep)
 	{
@@ -294,16 +338,14 @@ FrameAction beforeFrame()
 			lastCapture = sh4_sched_now64();
 			reversing = false;
 		}
-		rejected = false;
 		return FrameAction::Run;
 	}
 	const char* reason = unavailableReason();
 	if (reason != nullptr)
 	{
-		if (!rejected)
-			os_notify(i18n::T(reason), 3000);
-		rejected = true;
+		os_notify(i18n::T(reason), 3000);
 		clearHistory();
+		releaseRequests();
 		return FrameAction::Run;
 	}
 	const auto now = std::chrono::steady_clock::now();
@@ -321,11 +363,8 @@ FrameAction beforeFrame()
 			ClearAudioOutput();
 			// A snapshot still compressing belongs to the future being abandoned.
 			++pendingToken;
-			// Skip a snapshot of the frame already on screen, when an older one exists.
-			if (lastCapture == sh4_sched_now64() && history.size() > 1)
-				history.pop(scratch);
 		}
-		if (!history.pop(scratch))
+		if (!history.pop(scratch, sh4_sched_now64()))
 			return FrameAction::Hold;
 		Deserializer deser(scratch.data(), scratch.size(), false, true);
 		applying = true;
@@ -348,18 +387,18 @@ FrameAction beforeFrame()
 	}
 }
 
-void afterFrame(bool restored)
+void afterFrame()
 {
-	if (restored || !config::RewindEnable)
-		return;
+	// Guest storage and networking can change during the frame we just ran.
+	syncHistory();
 	if (unavailableReason() != nullptr)
 	{
-		if (history.size() != 0)
+		if (history.size() != 0 || !scratch.empty() || (pendingCompression && pendingCompression->token == pendingToken))
 			clearHistory();
+		if (requested())
+			releaseRequests();
 		return;
 	}
-	poll();
-	harvestCompression();
 	const u64 now = sh4_sched_now64();
 	const u64 ticks = u64(interval) * (SH4_MAIN_CLOCK / 1000);
 	if (lastCapture != 0 && now >= lastCapture && now - lastCapture < ticks)
@@ -369,14 +408,14 @@ void afterFrame(bool restored)
 	try
 	{
 		const std::size_t stateSize = captureSnapshot();
-		std::vector<u8> snapshot(scratch.data(), scratch.data() + stateSize);
 		if (!compressWorker)
 			compressWorker = std::make_unique<WorkerThread>("RewindCompress");
 		const int level = compression;
 		const unsigned token = pendingToken;
 		pendingCompression = PendingCompression{
-			compressWorker->runFuture([snapshot = std::move(snapshot), level]() {
-				return RewindBuffer::compress(snapshot.data(), snapshot.size(), level);
+			compressWorker->runFuture([workspace = std::move(scratch), stateSize, level]() mutable {
+				auto compressed = RewindBuffer::compress(workspace.data(), stateSize, level);
+				return CompressionResult{std::move(compressed), std::move(workspace)};
 			}), stateSize, now, token};
 		lastCapture = now;
 	}

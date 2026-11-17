@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <vector>
 
 // Bounded LIFO history of compressed full states. Not thread-safe: every
@@ -15,6 +16,8 @@
 class RewindBuffer
 {
 public:
+	static constexpr std::size_t MaxStateSize = 128U * 1024U * 1024U;
+
 	// compressionLevel is a zlib level (1 fastest, 9 maximum). It is part of
 	// the configuration identity: changing capture settings clears history.
 	void configure(std::size_t maxBytes, std::size_t maxStates, int compressionLevel = 1);
@@ -23,9 +26,11 @@ public:
 	bool push(const std::uint8_t* data, std::size_t size, std::uint64_t timestamp = 0);
 	// Stores a payload produced by compress() without compressing again.
 	bool pushCompressed(std::vector<std::uint8_t>&& compressed, std::size_t uncompressedSize, std::uint64_t timestamp = 0);
-	// The stored state is removed only after a successful decode; on failure
-	// it is retained and output contents are unspecified.
-	bool pop(std::vector<std::uint8_t>& output);
+	// When currentTimestamp matches the newest state, pop selects its predecessor
+	// if available. The selected state and any newer state are removed only after
+	// a successful decode; on failure history is retained and output is unspecified.
+	bool pop(std::vector<std::uint8_t>& output,
+			std::optional<std::uint64_t> currentTimestamp = std::nullopt);
 	void discardOlderThan(std::uint64_t timestamp);
 	void clear();
 

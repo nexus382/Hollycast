@@ -26,6 +26,7 @@
 #include "hw/pvr/Renderer_if.h"
 #include "hw/sh4/sh4_core.h"
 #include "gui.h"
+#include "settings.h"
 #include "gui_debugger.h"
 #include "gui_menu.h"
 #include "oslib/oslib.h"
@@ -68,7 +69,7 @@ bool mainui_rend_frame()
 
 	os_DoEvents();
 	os_UpdateInputState();
-	rewind_state::poll();
+	rewind_state::poll(gui_state == GuiState::Loading && !game_started);
 	test_harness::poll();
 	gui_poll_debugger();
 #ifdef USE_HIKARU

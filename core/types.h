@@ -71,6 +71,7 @@ inline static void JITWriteProtect(bool enabled) {
 #endif
 
 //includes from c++rt
+#include <atomic>
 #include <string>
 #include <stdexcept>
 
@@ -224,7 +225,7 @@ struct settings_t
 
 	struct
 	{
-		bool online;
+		std::atomic<bool> online{false}; // Network startup can complete on a worker.
 		struct
 		{
 			u8 game[16];
@@ -244,7 +245,7 @@ struct settings_t
 		int drivingSimSlave;
 	} naomi;
 
-	bool raHardcoreMode;
+	std::atomic<bool> raHardcoreMode{false}; // Updated by achievement server callbacks.
 };
 
 extern settings_t settings;

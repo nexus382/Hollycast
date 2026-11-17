@@ -26,13 +26,12 @@ settings below are locked, because changing them clears recorded history.
 History Duration sets the target window. Recorded history can be shorter
 when compression cannot keep up or the internal memory ceiling is reached.
 Memory use grows with longer duration, shorter intervals, and larger game
-states. Compression controls
-how much memory that same duration needs: Fast favors smooth gameplay,
-Balanced and Maximum spend more CPU per snapshot to store history smaller.
-Capturing also needs temporary raw-state and compression workspace, each
-bounded at roughly 128 MiB. A fixed internal safety ceiling still protects
-the device from runaway allocation. Allocation, serialization, or compression
-failures stop rewind and report an error.
+states. Fast compression favors gameplay speed. Balanced and Maximum spend
+more CPU time compressing each snapshot. Hollycast retains up to 256 MiB of
+compressed history on 32-bit, Android, iOS, Switch and UWP builds, and up to
+2 GiB on other 64-bit builds. Capture and playback also use temporary memory.
+Each raw snapshot is limited to 128 MiB. Allocation, serialization, or
+compression failures stop rewind and report an error.
 
 ## Controls
 
@@ -61,6 +60,8 @@ Rewinding must never resurrect an old save over a newer one:
 - As a second line of defense, rewinding does not restore the contents of
   persistent flash/SRAM chips at all. They keep their live contents, so a
   later pause or stop always saves the newest data.
+- Exporting an arcade printout starts a new history so rewinding cannot
+  replay the command that wrote the image.
 
 Normal save states are unchanged:
 
@@ -82,7 +83,9 @@ does not run:
 
 - on Hikaru or System SP;
 - in RetroAchievements hardcore mode;
-- during online, rollback (GGPO), or linked-cabinet play;
+- during online, rollback (GGPO), Battle Cable, or linked-cabinet play;
+- with a NetDIMM cartridge, arcade card reader, or medal hopper;
+- with host serial output enabled;
 - with passthrough DreamLink hardware connected;
 - while phone VMU sharing is running;
 - in the libretro core. Use your frontend's own rewind controls there.
@@ -96,6 +99,6 @@ Back or a mapped physical/keyboard button.
 ## For testers
 
 The native test harness can hold and release Rewind in disposable sessions.
-Enable it through the profile keys (`Dreamcast.RewindEnable` and friends,
-with `rend.ThreadedRendering = false`) and drive it with the `rewind`
-command. See [the testing guide](../tools/testing/README.md).
+Set `Dreamcast.RewindEnable = true` before launching a supported game.
+Hollycast selects shared threading for the session. The harness `rewind`
+command is documented in [the testing guide](../tools/testing/README.md).

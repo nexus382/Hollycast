@@ -798,12 +798,6 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 		}
 		// reload settings so that all settings can be overridden
 		loadGameSpecificSettings();
-#ifndef LIBRETRO
-		// Apply the rewind thread policy only after per-game settings, Maple
-		// devices, and the effective achievement mode are known.
-		if (rewind_state::requiresSharedThread())
-			config::ThreadedRendering.override(false);
-#endif
 		NetworkHandshake::init();
 		settings.input.fastForwardMode = false;
 		EventManager::event(Event::Start);
@@ -1089,7 +1083,9 @@ void Emulator::loadstate(Deserializer& deser)
 		return;
 	}
 #endif
-	if (config::customTexturePreloadMode() == config::CustomTexturePreloadMode::Off)
+	// Rewind stays in this title. LoadState already invalidates the renderer's
+	// VRAM textures, so keep the on-demand replacement pack and its file index.
+	if (!deser.rewind() && config::customTexturePreloadMode() == config::CustomTexturePreloadMode::Off)
 		custom_texture.refresh();
 #if FEAT_AREC == DYNAREC_JIT
 	aica::arm::recompiler::flush();
@@ -1110,10 +1106,9 @@ void Emulator::loadstate(Deserializer& deser)
 
 void Emulator::setNetworkState(bool online)
 {
-	if (settings.network.online != online)
+	if (settings.network.online.exchange(online) != online)
 	{
 		rewind_state::invalidate();
-		settings.network.online = online;
 		DEBUG_LOG(NETWORK, "Network state %d", online);
 		if (online && settings.platform.isConsole()
 				&& config::Sh4Clock != 200)
@@ -1201,6 +1196,12 @@ void Emulator::start()
 		WARN_LOG(COMMON, "Unexpected emu state %d", state);
 		return;
 	}
+#ifndef LIBRETRO
+	// Network startup has finished. Select the layout before Android's render
+	// thread can observe Running on a resume from the UI thread.
+	if (rewind_state::requiresSharedThread())
+		config::ThreadedRendering.override(false);
+#endif
 	state = Running;
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru()) {
@@ -1337,21 +1338,31 @@ bool Emulator::render()
 		}
 		if (state != Running)
 			return false;
+		if (!config::RewindEnable)
+		{
+			run();
+			return true;
+		}
 		const auto action = rewind_state::beforeFrame();
 		if (action == rewind_state::FrameAction::Hold)
 			return false;
-		const bool restored = action == rewind_state::FrameAction::Restore;
-		const bool previousMute = settings.aica.muteAudio;
-		if (restored)
+		if (action == rewind_state::FrameAction::Restore)
+		{
+			const bool previousMute = settings.aica.muteAudio;
 			settings.aica.muteAudio = true;
-		try {
-			run();
-		} catch (...) {
+			try {
+				run();
+			} catch (...) {
+				settings.aica.muteAudio = previousMute;
+				throw;
+			}
 			settings.aica.muteAudio = previousMute;
-			throw;
 		}
-		settings.aica.muteAudio = previousMute;
-		rewind_state::afterFrame(restored);
+		else
+		{
+			run();
+			rewind_state::afterFrame();
+		}
 		return true;
 	}
 	if (!checkStatus())
@@ -1438,10 +1449,6 @@ void Emulator::diskChange()
 		settings.content.reset();
 		settings.content.title = BIOS_TITLE;
 	}
-#ifndef LIBRETRO
-	if (rewind_state::requiresSharedThread())
-		config::ThreadedRendering.override(false);
-#endif
 	cheatManager.reset(settings.content.gameId);
 	if (cheatManager.isWidescreen())
 		config::ScreenStretching.override(134);	// 4:3 -> 16:9

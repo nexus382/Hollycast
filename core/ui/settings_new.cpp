@@ -9989,7 +9989,8 @@ void renderAdvancedTab()
 			T("Rewind\n"
 				"This setting takes effect the next time a game starts and can only be changed while no game is running.\n\n"
 				"When available, Rewind uses the shared emulation/rendering thread and may reduce performance. It is unavailable for Hikaru, System SP, "
-				"Hardcore mode, online or multiboard play, passthrough hardware, and phone sharing."),
+				"Hardcore mode, online or multiboard play, NetDIMM cartridges, arcade card readers or medal hoppers, "
+				"host serial output, passthrough hardware, and phone sharing."),
 			game_started);
 
 		static constexpr int rewindIntervals[] = { 100, 250, 500, 1000 };
@@ -10013,7 +10014,6 @@ void renderAdvancedTab()
 			T("Choose the guest-time interval between rewind snapshots. Changes clear recorded history, so this can only be changed while no game is running."),
 			game_started);
 
-		static constexpr int rewindCompressions[] = { 0, 1, 2 };
 		const char* rewindCompressionLabels[] = { T("Fast"), T("Balanced"), T("Maximum") };
 		SettingsUI::PopupConfig rewindCompressionCfg {};
 		rewindCompressionCfg.type = SettingsUI::PopupType::Options;
@@ -10023,13 +10023,10 @@ void renderAdvancedTab()
 		rewindCompressionCfg.options.options = rewindCompressionLabels;
 		rewindCompressionCfg.options.optionCount = IM_ARRAYSIZE(rewindCompressionLabels);
 		rewindCompressionCfg.options.currentValue = &config::RewindCompression.get();
-		rewindCompressionCfg.options.storageIndexMap = [](int index) {
-			return index >= 0 && index < IM_ARRAYSIZE(rewindCompressions) ? rewindCompressions[index] : 0;
-		};
 		rewindCompressionCfg.options.valueWidth = 170.0f;
 		RenderGeneralPopupSettingRow(
 			Tnop("RewindCompressionSetting"),
-			T("Trade capture speed for memory. Higher compression keeps the same history duration in less memory, but costs more CPU per snapshot."),
+			T("Trade capture speed for memory. Higher compression can reduce memory use for the target history window, but costs more CPU per snapshot."),
 			rewindCompressionCfg,
 			T("Fast favors smooth gameplay. Balanced and Maximum reduce memory use and can cost performance. Changes clear recorded history, so this can only be changed while no game is running."),
 			game_started);
@@ -10039,7 +10036,7 @@ void renderAdvancedTab()
 		rewindDurationCfg.slider.label = T("History Duration");
 		rewindDurationCfg.slider.icon = ICON_FA_HOURGLASS_HALF;
 		rewindDurationCfg.slider.popupID = Tnop("RewindDurationPopup");
-		rewindDurationCfg.slider.description = T("How far back rewind can go.");
+		rewindDurationCfg.slider.description = T("Target length of recorded gameplay.");
 		rewindDurationCfg.slider.currentValue = &config::RewindDuration.get();
 		rewindDurationCfg.slider.minValue = 5;
 		rewindDurationCfg.slider.maxValue = 120;
@@ -10048,7 +10045,7 @@ void renderAdvancedTab()
 		rewindDurationCfg.slider.valueWidth = 170.0f;
 		RenderGeneralPopupSettingRow(
 			Tnop("RewindDurationSetting"),
-			T("How far back rewind can go. Memory use grows with duration and shorter intervals; Compression controls how much memory that history needs."),
+			T("How much gameplay to keep. Memory limits and skipped captures can shorten the recorded history."),
 			rewindDurationCfg, nullptr, game_started);
 	}
 

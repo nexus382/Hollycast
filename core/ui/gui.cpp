@@ -1200,9 +1200,8 @@ static void gui_display_commands()
 
 		ImGui::NextColumn();
 		{
-			const bool canStepBack = rewind_state::canStep();
 			const char* rewindUnavailableReason = rewind_state::unavailableReason();
-			if (canStepBack || rewindUnavailableReason != nullptr || config::RewindEnable)
+			const bool canStepBack = rewindUnavailableReason == nullptr && rewind_state::snapshotCount() != 0;
 			{
 				DisabledScope _{!canStepBack};
 				const bool stepBackClicked = IconButton(ICON_FA_BACKWARD_STEP, T("Step Back"), ScaledVec2(buttonWidth, 50)).realize();
@@ -5188,7 +5187,7 @@ void gui_loadState(int slot)
 	{
 		// User feedback when load not allowed
 		WARN_LOG(COMMON, "Load state not allowed: network=%d, multiboard=%d",
-				 settings.network.online, settings.naomi.multiboard);
+				 settings.network.online.load(), settings.naomi.multiboard);
 		os_notify(T("Cannot load state during online play"), 3000);
 	}
 }

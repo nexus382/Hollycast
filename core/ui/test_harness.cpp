@@ -205,12 +205,10 @@ static std::array<std::unique_ptr<HarnessGamepad>, 4> gamepads;
 // Stable identity for this harness's rewind hold, refcounted in the core by
 // source so releasing it never drops a physical device's hold.
 static const char harnessRewindSource = 0;
-static bool harnessRewindHeld;
 
 void releaseInputs()
 {
 	rewind_state::releaseSource(&harnessRewindSource);
-	harnessRewindHeld = false;
 	ui::release();
 	if (mappingDevice)
 		mappingDevice->cancelDetection();
@@ -476,16 +474,19 @@ static Json rewindStatus()
 {
 	// Loading runs on a worker and may still be building the Maple device array.
 	// Resume marks the completed game ready before host-side device inspection.
+	const bool optionsReady = gui_state != GuiState::Loading || game_started;
 	const char *reason = game_started ? rewind_state::unavailableReason()
+			: gui_state == GuiState::Loading ? "Game is still loading."
 			: "Start a game to record rewind history.";
-	return {{"enabled", static_cast<bool>(config::RewindEnable)},
+	return {{"enabled", optionsReady ? Json(static_cast<bool>(config::RewindEnable)) : Json(nullptr)},
 		{"available", reason == nullptr},
 		{"unavailable_reason", reason == nullptr ? Json(nullptr) : Json(reason)},
-		{"can_step", game_started && rewind_state::canStep()}, {"requested", rewind_state::requested()},
-		{"held_by_harness", harnessRewindHeld},
+		{"can_step", reason == nullptr && rewind_state::snapshotCount() != 0}, {"requested", rewind_state::requested()},
+		{"held_by_harness", rewind_state::requested(&harnessRewindSource)},
 		{"snapshots", rewind_state::snapshotCount()}, {"memory_bytes", rewind_state::memoryUsed()},
-		{"interval_ms", config::RewindInterval.get()}, {"duration_s", config::RewindDuration.get()},
-		{"compression", config::RewindCompression.get()}};
+		{"interval_ms", optionsReady ? Json(config::RewindInterval.get()) : Json(nullptr)},
+		{"duration_s", optionsReady ? Json(config::RewindDuration.get()) : Json(nullptr)},
+		{"compression", optionsReady ? Json(config::RewindCompression.get()) : Json(nullptr)}};
 }
 
 static Json rewindOperation(const Json& args)
@@ -495,22 +496,16 @@ static Json rewindOperation(const Json& args)
 	const bool held = args.at("held").get<bool>();
 	if (held)
 	{
-		require(emu.running(), "Rewind hold requires a running game");
+		require(game_started && emu.running(), "Rewind hold requires a running game");
 		const char *reason = rewind_state::unavailableReason();
 		require(reason == nullptr, reason == nullptr ? "" : reason);
 		if (recording)
 			captureProblems.insert("rewind_restore");
-		if (!harnessRewindHeld)
-		{
+		if (!rewind_state::requested(&harnessRewindSource))
 			rewind_state::setRequested(&harnessRewindSource, true);
-			harnessRewindHeld = true;
-		}
 	}
-	else if (harnessRewindHeld)
-	{
-		rewind_state::setRequested(&harnessRewindSource, false);
-		harnessRewindHeld = false;
-	}
+	else
+		rewind_state::releaseSource(&harnessRewindSource);
 	return rewindStatus();
 }
 

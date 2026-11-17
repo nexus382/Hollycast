@@ -21,7 +21,6 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/div32_test.cpp
         src/test_stubs.cpp
         src/serialize_test.cpp
-        src/util/RewindBufferTest.cpp
         src/LibretroHelpersTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
@@ -89,6 +88,7 @@ endif()
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/RewindTest.cpp
+        src/util/RewindBufferTest.cpp
         src/DcnetProbeTest.cpp
         src/network/HttpTimeoutTest.cpp
         src/ui/SetupChecklistPopupTest.cpp

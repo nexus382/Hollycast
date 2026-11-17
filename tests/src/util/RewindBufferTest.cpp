@@ -152,7 +152,7 @@ TEST(RewindBufferTest, RejectsOversizedRawStateWithoutReadingIt)
 	RewindBuffer buffer;
 	buffer.configure(1024, 1);
 	const std::uint8_t byte = 0;
-	const std::size_t oversized = 128U * 1024U * 1024U + 1U;
+	const std::size_t oversized = RewindBuffer::MaxStateSize + 1U;
 
 	EXPECT_FALSE(buffer.push(&byte, oversized));
 	EXPECT_EQ(0U, buffer.size());
@@ -296,5 +296,57 @@ TEST(RewindBufferTest, AgeLimitUsesGuestTimeRatherThanSnapshotCount)
 	ASSERT_TRUE(buffer.pop(output));
 	EXPECT_EQ(boundary, output[0]);
 	EXPECT_FALSE(buffer.pop(output));
+	EXPECT_EQ(0U, buffer.memoryUsed());
+}
+
+TEST(RewindBufferTest, PopUsesNewestWhenCurrentFrameSnapshotIsStillCompressing)
+{
+	RewindBuffer buffer;
+	buffer.configure(1024, 8);
+	const std::vector<std::uint8_t> older = {1};
+	const std::vector<std::uint8_t> newest = {2};
+
+	ASSERT_TRUE(buffer.push(older.data(), older.size(), 100));
+	const std::size_t olderBytes = buffer.memoryUsed();
+	ASSERT_TRUE(buffer.push(newest.data(), newest.size(), 200));
+
+	std::vector<std::uint8_t> output;
+	ASSERT_TRUE(buffer.pop(output, 300));
+	EXPECT_EQ(newest, output);
+	EXPECT_EQ(1U, buffer.size());
+	EXPECT_EQ(olderBytes, buffer.memoryUsed());
+}
+
+TEST(RewindBufferTest, PopSkipsSnapshotAtCurrentTimestampAndUpdatesMemoryAccounting)
+{
+	RewindBuffer buffer;
+	buffer.configure(1024, 8);
+	const std::vector<std::uint8_t> oldest = {1};
+	const std::vector<std::uint8_t> previous = {2};
+	const std::vector<std::uint8_t> current = {3};
+
+	ASSERT_TRUE(buffer.push(oldest.data(), oldest.size(), 100));
+	const std::size_t oldestBytes = buffer.memoryUsed();
+	ASSERT_TRUE(buffer.push(previous.data(), previous.size(), 150));
+	ASSERT_TRUE(buffer.push(current.data(), current.size(), 200));
+
+	std::vector<std::uint8_t> output;
+	ASSERT_TRUE(buffer.pop(output, 200));
+	EXPECT_EQ(previous, output);
+	EXPECT_EQ(1U, buffer.size());
+	EXPECT_EQ(oldestBytes, buffer.memoryUsed());
+}
+
+TEST(RewindBufferTest, PopKeepsLoneSnapshotFallbackAtCurrentTimestamp)
+{
+	RewindBuffer buffer;
+	buffer.configure(1024, 8);
+	const std::vector<std::uint8_t> only = {1};
+	ASSERT_TRUE(buffer.push(only.data(), only.size(), 100));
+
+	std::vector<std::uint8_t> output;
+	ASSERT_TRUE(buffer.pop(output, 100));
+	EXPECT_EQ(only, output);
+	EXPECT_EQ(0U, buffer.size());
 	EXPECT_EQ(0U, buffer.memoryUsed());
 }

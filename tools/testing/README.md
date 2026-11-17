@@ -280,8 +280,8 @@ node tools/testing/hollytest.mjs rewind --run D:/tmp/hollytest-session-001 --hel
 Enable Rewind in a disposable profile with the `config` keys
 `Dreamcast.RewindEnable`, `Dreamcast.RewindInterval`,
 `Dreamcast.RewindCompression` (0 Fast, 1 Balanced, 2 Maximum), and
-`Dreamcast.RewindDuration`, plus
-`rend.ThreadedRendering = false`, then launch the game. Holds stay active
+`Dreamcast.RewindDuration`, then launch the game. Hollycast automatically
+uses shared threading when Rewind is available. Holds stay active
 until released (there is no lease expiry), and every `release`, `quit`, menu,
 or restricted-session path also drops the harness hold. Holding fails with
 the emulator's unavailable reason when Rewind cannot run; releasing always
@@ -292,7 +292,8 @@ with reason `rewind_restore`.
 Each rewind reply and `state.rewind` in `observe`/`live` report
 `enabled`, `available`, `unavailable_reason`, `can_step`, `requested`,
 `held_by_harness`, `snapshots`, `memory_bytes`,
-`interval_ms`, `duration_s`, and `compression`. `unavailable_reason` is
+`interval_ms`, `duration_s`, and `compression`. While the game loader is
+applying its settings, the four configuration fields are `null`. `unavailable_reason` is
 user-facing text and may change; assert on `available`/`can_step` instead.
 To prove time moved backwards, compare the sampled `sh4_cycles` string in
 `live` telemetry before and after holding (it is sampled on the CPU's VBlank

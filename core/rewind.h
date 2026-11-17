@@ -14,7 +14,7 @@ inline void invalidate() {}
 inline void releaseRequests() {}
 inline bool requiresSharedThread() { return false; }
 inline FrameAction beforeFrame() { return FrameAction::Run; }
-inline void afterFrame(bool) {}
+inline void afterFrame() {}
 #else
 // Requests are refcounted per source so several inputs bound to Rewind on one
 // device, or several devices, cannot release each other's hold. Matching a
@@ -25,10 +25,10 @@ void setRequested(const void* source, bool held);
 void releaseSource(const void* source);
 void releaseRequests();
 bool requested();
+bool requested(const void* source);
 void requestStep();
 bool canStep();
-// Ignores current thread mode and capture failure so callers can choose the
-// session thread layout before rewind recording begins.
+// Selects the layout while the guest is stopped. Never switches a running CPU thread.
 bool requiresSharedThread();
 const char* unavailableReason();
 // History counters are owned by the rendering thread; read them only there.
@@ -37,8 +37,8 @@ std::size_t memoryUsed();
 
 // Invalidation is thread-safe; history is released by poll() on the render thread.
 void invalidate();
-void poll();
+void poll(bool loading = false);
 FrameAction beforeFrame();
-void afterFrame(bool restored);
+void afterFrame();
 #endif
 }

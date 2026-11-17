@@ -36,6 +36,7 @@
 #define ERROR_LOG INFO_LOG
 #else
 #include "oslib/resources.h"
+#include "rewind.h"
 #endif
 #include "oslib/i18n.h"
 #include <stb/stb_image.h>
@@ -343,6 +344,10 @@ public:
 	{
 		if (page.empty())
 			return false;
+#ifndef STANDALONE_TEST
+		// Once a printout is exported, replaying the guest command would print it twice.
+		rewind_state::invalidate();
+#endif
 		const auto& appendData = [](void *context, void *data, int size) {
 			std::vector<u8>& v = *(std::vector<u8> *)context;
 			v.insert(v.end(), (u8 *)data, (u8 *)data + size);

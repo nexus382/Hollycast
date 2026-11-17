@@ -4,7 +4,9 @@
 #include "emulator.h"
 #include "hw/flashrom/flashrom.h"
 #include "hw/maple/maple_if.h"
+#include "hw/naomi/card_reader.h"
 #include "input/maplelink.h"
+#include "network/net_handshake.h"
 #include "rewind.h"
 #include "serialize.h"
 #include "types.h"
@@ -28,6 +30,8 @@ protected:
 		config::RewindCompression = 0;
 		config::ThreadedRendering = false;
 		config::GGPOEnable = false;
+		config::BattleCableEnable = false;
+		config::SerialConsole = false;
 		settings.content.path = "rewind-test.iso";
 		settings.platform.system = DC_PLATFORM_DREAMCAST;
 		settings.platform.ram_size = 16 * 1024 * 1024;
@@ -49,6 +53,8 @@ protected:
 		config::RewindCompression = previousRewindCompression;
 		config::ThreadedRendering = previousThreadedRendering;
 		config::GGPOEnable = previousGgpoEnable;
+		config::BattleCableEnable = previousBattleCableEnable;
+		config::SerialConsole = previousSerialConsole;
 		settings.content.path = previousContentPath;
 		settings.platform.system = previousPlatform;
 		settings.platform.ram_size = previousRamSize;
@@ -68,6 +74,8 @@ private:
 	const int previousRewindCompression = config::RewindCompression.get();
 	const bool previousThreadedRendering = config::ThreadedRendering.get();
 	const bool previousGgpoEnable = config::GGPOEnable.get();
+	const bool previousBattleCableEnable = config::BattleCableEnable.get();
+	const bool previousSerialConsole = config::SerialConsole.get();
 	const std::string previousContentPath = settings.content.path;
 	const int previousPlatform = settings.platform.system;
 	const u32 previousRamSize = settings.platform.ram_size;
@@ -90,6 +98,8 @@ TEST_F(RewindTest, ReleasingOneInputSourceDoesNotReleaseAnother)
 
 	rewind_state::setRequested(&keyboardSource, false);
 	EXPECT_TRUE(rewind_state::requested());
+	EXPECT_FALSE(rewind_state::requested(&keyboardSource));
+	EXPECT_TRUE(rewind_state::requested(&controllerSource));
 	rewind_state::setRequested(&controllerSource, false);
 	EXPECT_FALSE(rewind_state::requested());
 }
@@ -165,13 +175,40 @@ TEST_F(RewindTest, MapleLinkDeviceBlocksRewindAndSharedThreadRequirement)
 	MapleDevices[0][MAPLE_MAIN_DEV_IDX] = previousDevice;
 }
 
+TEST_F(RewindTest, ArcadeCardReadersBlockRewindUntilDetached)
+{
+	settings.platform.system = DC_PLATFORM_NAOMI;
+	card_reader::barcodeInit();
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	EXPECT_NE(nullptr, rewind_state::unavailableReason());
+	card_reader::barcodeTerm();
+	EXPECT_EQ(nullptr, rewind_state::unavailableReason());
+
+	auto reader = RFIDReaderWriter::Create();
+	reader->Setup(0, MAPLE_MAIN_DEV_IDX, 0, false);
+	auto& device = MapleDevices[0][MAPLE_MAIN_DEV_IDX];
+	device.swap(reader);
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	EXPECT_FALSE(rewind_state::canStep());
+	device.swap(reader);
+	EXPECT_EQ(nullptr, rewind_state::unavailableReason());
+}
+
+TEST_F(RewindTest, HostSerialOutputBlocksRewind)
+{
+	config::SerialConsole = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	EXPECT_STREQ("Rewind is unavailable with host serial output enabled.", rewind_state::unavailableReason());
+}
+
 TEST_F(RewindTest, RestrictedRewindRequestsDoNotRestoreFrames)
 {
 	int source = 0;
-	rewind_state::setRequested(&source, true);
-	auto expectBlocked = [] {
+	auto expectBlocked = [&source] {
+		rewind_state::setRequested(&source, true);
 		EXPECT_FALSE(rewind_state::canStep());
 		EXPECT_EQ(rewind_state::FrameAction::Run, rewind_state::beforeFrame());
+		EXPECT_FALSE(rewind_state::requested());
 	};
 
 	settings.raHardcoreMode = true;
@@ -196,7 +233,6 @@ TEST_F(RewindTest, RestrictedRewindRequestsDoNotRestoreFrames)
 	expectBlocked();
 	settings.platform.system = DC_PLATFORM_SYSTEMSP;
 	expectBlocked();
-	EXPECT_TRUE(rewind_state::requested());
 }
 
 TEST_F(RewindTest, TwoBindingsOnOneSourceNeedTwoReleases)
@@ -295,6 +331,23 @@ TEST_F(RewindTest, GgpoReportsUnavailable)
 {
 	config::GGPOEnable = true;
 	EXPECT_STREQ("Rewind is unavailable during network or linked-cabinet play.", rewind_state::unavailableReason());
+}
+
+TEST_F(RewindTest, BattleCableBlocksRewindUntilTheHandshakeEnds)
+{
+	ASSERT_EQ(nullptr, NetworkHandshake::instance);
+	config::BattleCableEnable = true;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	// Creating the handshake reserves the link. Starting it would open the socket.
+	NetworkHandshake::init();
+	config::BattleCableEnable = false;
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	EXPECT_STREQ("Rewind is unavailable during network or linked-cabinet play.", rewind_state::unavailableReason());
+	int source = 0;
+	rewind_state::setRequested(&source, true);
+	EXPECT_EQ(rewind_state::FrameAction::Run, rewind_state::beforeFrame());
+	NetworkHandshake::term();
+	EXPECT_TRUE(rewind_state::requiresSharedThread());
 }
 
 TEST_F(RewindTest, OnlineAndLinkedCabinetsReportUnavailable)

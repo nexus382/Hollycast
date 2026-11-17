@@ -212,19 +212,6 @@ const u32 NULL_CONTEXT = ~0u;
 
 static void serializeContext(Serializer& ser, const TA_context *ctx)
 {
-	if (ser.dryrun())
-	{
-		// Account the real payload, not the 8 MB capacity: size passes run
-		// per rewind capture and must not over-reserve by megabytes.
-		if (ctx == nullptr)
-		{
-			ser.skip(4);
-			return;
-		}
-		const tad_context& tad = ctx == ::ta_ctx ? ta_tad : ctx->tad;
-		ser.skip(4 + 4 + static_cast<std::size_t>(tad.thd_data - tad.thd_root));
-		return;
-	}
 	if (ctx == nullptr)
 	{
 		ser << NULL_CONTEXT;

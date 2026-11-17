@@ -1223,9 +1223,12 @@ bool readerAvailable()
 #ifdef USE_HIKARU
     if (settings.platform.isHikaru()) return hikaru::frontend::cardReaderAvailable();
 #endif
-	return cardReader != nullptr
-			|| barcodeAvailable()
-			|| getRfidCardData(0) != nullptr;
+	return serialReaderActive() || getRfidCardData(0) != nullptr;
+}
+
+bool serialReaderActive()
+{
+	return cardReader != nullptr || barcodeAvailable();
 }
 
 }
