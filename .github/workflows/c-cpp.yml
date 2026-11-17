@@ -177,6 +177,14 @@ jobs:
           cmake -S . -B build-native-harness -G Ninja -DCMAKE_BUILD_TYPE=Release -DHOLLYCAST_TEST_HARNESS=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=ON -DENABLE_CTEST=OFF -DBUILD_TESTING=OFF -DTEST_AUTOMATION=OFF -DUSE_DISCORD=OFF -DUSE_LUA=OFF
           cmake --build build-native-harness --target Hollycast --parallel 4
 
+      - name: Hikaru Windows save regressions
+        if: matrix.config.name == 'x86_64-w64-mingw32'
+        run: |
+          # The published Windows package uses legacy MSVCRT, unlike local MSVC builds.
+          cmake -S tests/hikaru -B build-hikaru-host -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-hikaru-host --target hikaru_host_test --parallel 4
+          ctest --test-dir build-hikaru-host --output-on-failure --no-tests=error -R '^hikaru_host$'
+
       - name: Dump symbols
         run: |
           mkdir -p symbols

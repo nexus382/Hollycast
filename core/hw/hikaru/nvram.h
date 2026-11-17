@@ -8,9 +8,36 @@
 #include <cstdio>
 #include <string>
 #include <nowide/cstdio.hpp>
+#ifdef NOWIDE_WINDOWS
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#include <nowide/stackstring.hpp>
+#endif
 
 namespace hikaru {
 enum class NvramLoadResult { Missing, Loaded, Invalid };
+
+inline FILE* openExclusiveNvramFile(const std::string& path) {
+#ifdef NOWIDE_WINDOWS
+    // MinGW's legacy MSVCRT rejects fopen's "x" mode; _wopen keeps the
+    // exclusive-create guarantee while accepting the converted UTF-8 path.
+    const nowide::wstackstring widePath(path.c_str());
+    const int fd = _wopen(widePath.get(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY,
+        _S_IREAD | _S_IWRITE);
+    if (fd < 0) return nullptr;
+    FILE* file = _fdopen(fd, "wb");
+    if (file == nullptr) {
+        const int error = errno;
+        _close(fd);
+        _wremove(widePath.get());
+        errno = error;
+    }
+    return file;
+#else
+    return nowide::fopen(path.c_str(), "wbx");
+#endif
+}
 
 template<size_t Size>
 NvramLoadResult loadNvram(const std::string& path, std::array<uint8_t, Size>& data) {
@@ -34,7 +61,7 @@ bool saveNvram(const std::string& path, const std::array<uint8_t, Size>& data) {
     std::string temporary;
     for (size_t attempt = 0; ; ++attempt) {
         temporary = path + ".tmp." + std::to_string(attempt);
-        file = nowide::fopen(temporary.c_str(), "wbx");
+        file = openExclusiveNvramFile(temporary);
         if (file) break;
         if (errno != EEXIST) return false;
     }
@@ -55,7 +82,7 @@ bool backupNvram(const std::string& path, const std::array<uint8_t, Size>& data)
     std::array<uint8_t, Size> existing{};
     const auto previous = loadNvram(path, existing);
     if (previous != NvramLoadResult::Missing) return previous == NvramLoadResult::Loaded;
-    FILE* file = nowide::fopen(path.c_str(), "wbx");
+    FILE* file = openExclusiveNvramFile(path);
     if (!file) return errno == EEXIST && loadNvram(path, existing) == NvramLoadResult::Loaded;
     const bool written = std::fwrite(data.data(), 1, Size, file) == Size;
     const bool closed = std::fclose(file) == 0;
