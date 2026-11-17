@@ -3,6 +3,8 @@
 cmake_minimum_required(VERSION 3.22)
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     project(HikaruBusTests LANGUAGES CXX)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
     enable_testing()
 endif()
 
