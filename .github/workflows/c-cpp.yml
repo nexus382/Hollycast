@@ -108,11 +108,18 @@ jobs:
 
       - name: Compile universal dependencies (macOS)
         run: |
+          # Install repository formulae through a runner-local tap for Homebrew resolution.
+          tap="hollycast/universal"
+          brew tap-new --no-git "$tap"
+          tap_path=$(brew --repository "$tap")
+          mkdir -p "$tap_path/Formula"
           for formula in ./shell/apple/libomp.rb ./shell/apple/libpng-flycast.rb; do
             libname=$(basename "$formula" .rb)
-            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew install --build-from-source --formula "$formula" || \
-            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew reinstall --build-from-source --formula "$formula"
-            prefix=$(brew --prefix $libname)
+            cp "$formula" "$tap_path/Formula/$libname.rb"
+            formula_ref="$tap/$libname"
+            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew install --build-from-source --formula "$formula_ref" || \
+            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew reinstall --build-from-source --formula "$formula_ref"
+            prefix=$(brew --prefix "$formula_ref")
             # Find and verify the static library
             libfile=$(find "$prefix/lib" -name "*.a" | head -n1)
             lipo -info "$libfile"
