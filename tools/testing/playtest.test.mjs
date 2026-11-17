@@ -205,9 +205,7 @@ test('wait_for passes only after fresh observations satisfy every assertion', as
 });
 
 test('wait timeout fails without running later actions', async t => {
-  const harness = await fakeHarness(t);
-  // Keep the assertion false regardless of how many polls fit before the deadline.
-  harness.live = async () => liveSample({ mode: 1 });
+  const harness = await fakeHarness(t, { samples: [liveSample({ mode: 1 }), liveSample({ mode: 1 })] });
   const report = await runPlaytestPlan(harness, plan([
     { id: 'wait-active', op: 'wait_for', timeout_ms: 100, interval_ms: 50, assertions: [
       { path: ['telemetry', 'game_state', 'values', 'main_mode', 'value'], op: 'eq', value: 3 },
