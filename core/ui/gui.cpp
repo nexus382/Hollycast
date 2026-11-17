@@ -19,6 +19,7 @@
  */
 #include "gui.h"
 #include "gui_debugger.h"
+#include "rewind.h"
 #include "debug/assembly_debugger.h"
 #include "app_updater.h"
 #include "gui_dcnet.h"
@@ -1199,6 +1200,29 @@ static void gui_display_commands()
 
 		ImGui::NextColumn();
 		{
+			const bool canStepBack = rewind_state::canStep();
+			const char* rewindUnavailableReason = rewind_state::unavailableReason();
+			if (canStepBack || rewindUnavailableReason != nullptr || config::RewindEnable)
+			{
+				DisabledScope _{!canStepBack};
+				const bool stepBackClicked = IconButton(ICON_FA_BACKWARD_STEP, T("Step Back"), ScaledVec2(buttonWidth, 50)).realize();
+				if (canStepBack && ImGui::IsItemHovered())
+					ImGui::SetTooltip("%s", T("Restore the previous snapshot and resume gameplay."));
+				if (stepBackClicked && canStepBack)
+				{
+					GamepadDevice::load_system_mappings();
+					// Resume first: a failed resume (for example a texture
+					// refresh) keeps the GUI open, where pending rewind
+					// requests are released instead of being honored later.
+					if (gui_resume_game())
+						rewind_state::requestStep();
+				}
+			}
+			if (rewindUnavailableReason != nullptr)
+				ImGui::TextWrapped("%s", T(rewindUnavailableReason));
+			else if (config::RewindEnable && !canStepBack)
+				ImGui::TextWrapped("%s", T("No rewind snapshots yet. Play a little longer to record history."));
+
 			DisabledScope _{!dc_savestateAllowed()};
 			ImguiStateTexture savestatePic;
 			time_t savestateDate = dc_getStateCreationDate(config::SavestateSlot);
@@ -5256,6 +5280,8 @@ void gui_togglePause()
 
 void gui_setState(GuiState newState)
 {
+	if (newState != GuiState::Closed)
+		rewind_state::releaseRequests();
 	if (newState != GuiState::Main)
 		pendingRackLaunch.reset();
 	if (gui_state != newState)

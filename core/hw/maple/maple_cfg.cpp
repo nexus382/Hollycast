@@ -9,6 +9,7 @@
 #include "cfg/option.h"
 #include "stdclass.h"
 #include "serialize.h"
+#include "rewind.h"
 #include "input/maplelinkregistry.h"
 #include "input/mouse.h"
 
@@ -568,6 +569,7 @@ static void vmuDigest()
 
 void mcfg_CreateDevices()
 {
+	rewind_state::invalidate();
 	settings.input.lightgunGame = false;
 	settings.input.keyboardGame = false;
 	settings.input.mouseGame = false;
@@ -598,6 +600,7 @@ void mcfg_CreateDevices()
 // Don't destroy the JVS MIE or DreamLink if full is false
 void mcfg_DestroyDevices(bool full)
 {
+	rewind_state::invalidate();
 	for (int i = 0; i < MAPLE_PORTS; i++)
 		for (int j = 0; j < MAPLE_DEVS_PER_PORT; j++)
 		{
@@ -651,7 +654,7 @@ void mcfg_SerializeDevices(Serializer& ser)
 
 void mcfg_DeserializeDevices(Deserializer& deser)
 {
-	if (!deser.rollback())
+	if (!deser.rollback() && !deser.rewind())
 		mcfg_DestroyDevices(false);
 	deser >> maple_ddt_pending_reset;
 	if (deser.version() >= Deserializer::V47)
@@ -677,9 +680,18 @@ void mcfg_DeserializeDevices(Deserializer& deser)
 		{
 			u8 deviceType;
 			deser >> deviceType;
+			if (deser.rewind())
+			{
+				// Recreating VMUs closes their files and writes transient historical cards.
+				// A topology change invalidates history instead of reconnecting during rewind.
+				const auto& device = MapleDevices[i][j];
+				const u8 liveType = device ? device->get_device_type() : MDT_None;
+				if (liveType != deviceType)
+					throw Deserializer::Exception("Maple devices changed during rewind");
+			}
 			if (deviceType != MDT_None)
 			{
-				if (!deser.rollback() && deviceType != MDT_NaomiJamma)
+				if (!deser.rollback() && !deser.rewind() && deviceType != MDT_NaomiJamma)
 					mcfg_Create((MapleDeviceType)deviceType, i, j);
 
 				std::shared_ptr<maple_device> dev = MapleDevices[i][j];

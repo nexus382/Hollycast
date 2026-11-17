@@ -19,6 +19,7 @@
  */
 
 #include "gamepad_device.h"
+#include "rewind.h"
 #include "cfg/cfg.h"
 #include "stdclass.h"
 #include "ui/gui.h"
@@ -129,6 +130,9 @@ bool GamepadDevice::handleButtonInput(int port, DreamcastKey key, bool pressed)
 		case EMU_BTN_FFORWARD:
 			if (pressed && !gui_is_open())
 				settings.input.fastForwardMode = !settings.input.fastForwardMode && !settings.network.online && !settings.naomi.multiboard;
+			break;
+		case EMU_BTN_REWIND:
+			rewind_state::setRequested(this, pressed && !gui_is_open());
 			break;
 		case EMU_BTN_LOADSTATE:
 			if (pressed)
@@ -615,6 +619,7 @@ std::shared_ptr<InputMapping> GamepadDevice::gameplayMapping()
 
 void GamepadDevice::releaseMappedInputs()
 {
+	rewind_state::releaseSource(this);
 	const auto mapping = gamepadPreset ? gamepadPreset : input_mapper;
 	if (!mapping || _maple_port < 0 || _maple_port > MAPLE_PORTS)
 		return;
@@ -984,6 +989,7 @@ void GamepadDevice::Unregister(const std::shared_ptr<GamepadDevice>& gamepad)
 			_gamepads.erase(it);
 		}
 	}
+	rewind_state::releaseSource(gamepad.get());
 	// Keep the device alive, and run native callbacks outside the registry lock.
 	if (removed && removed->cabinetForceActive.exchange(false, std::memory_order_relaxed))
 		removed->setForceFeedback(0.f);

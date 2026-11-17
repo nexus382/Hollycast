@@ -1,4 +1,5 @@
 /*
+	Portions Copyright 2026 The Hollycast Authors
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -17,6 +18,7 @@
 #pragma once
 #include "types.h"
 #include "serialize.h"
+#include "rewind.h"
 #include <cmath>
 
 struct MemChip
@@ -98,6 +100,9 @@ struct SRamChip : WritableChip
 		addr &= mask;
 		if (addr < write_protect_size)
 			return;
+		// Persistent storage is a save boundary: recorded history must not
+		// cross a guest write that a later pause/stop will save to disk.
+		rewind_state::invalidate();
 		switch (sz)
 		{
 		case 1:
@@ -120,7 +125,12 @@ struct SRamChip : WritableChip
 	}
 	void Deserialize(Deserializer& deser) override
 	{
-		deser.deserialize(&this->data[write_protect_size], size - write_protect_size);
+		// Safety net with invalidate-on-write: a rewind restore never rolls
+		// persistent storage back over newer saved data.
+		if (deser.rewind())
+			deser.skip(size - write_protect_size);
+		else
+			deser.deserialize(&this->data[write_protect_size], size - write_protect_size);
 	}
 };
 
@@ -410,7 +420,11 @@ private:
 	void Deserialize(Deserializer& deser) override
 	{
 		deser >> state;
-		deser.deserialize(&this->data[write_protect_size], size - write_protect_size);
+		// See SRamChip: rewind restores must preserve live persistent data.
+		if (deser.rewind())
+			deser.skip(size - write_protect_size);
+		else
+			deser.deserialize(&this->data[write_protect_size], size - write_protect_size);
 	}
 
 	void erase_partition(u32 part_id)

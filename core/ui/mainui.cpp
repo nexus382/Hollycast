@@ -20,6 +20,7 @@
 
 #include "audio/ui_sound.h"
 #include "mainui.h"
+#include "rewind.h"
 #include "test_harness.h"
 #include "debug/assembly_debugger.h"
 #include "hw/pvr/Renderer_if.h"
@@ -67,6 +68,7 @@ bool mainui_rend_frame()
 
 	os_DoEvents();
 	os_UpdateInputState();
+	rewind_state::poll();
 	test_harness::poll();
 	gui_poll_debugger();
 #ifdef USE_HIKARU

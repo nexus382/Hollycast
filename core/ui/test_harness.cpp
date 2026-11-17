@@ -7,6 +7,7 @@
 #include "cfg/cfg.h"
 #include "cfg/option.h"
 #include "emulator.h"
+#include "rewind.h"
 #include "input/gamepad_device.h"
 #include "gui.h"
 #include "imgui.h"
@@ -201,9 +202,15 @@ static Json mappingLastInput = nullptr;
 // The adapters use the regular mapping path without registering persistent
 // physical devices or changing the user's controller-to-port assignments.
 static std::array<std::unique_ptr<HarnessGamepad>, 4> gamepads;
+// Stable identity for this harness's rewind hold, refcounted in the core by
+// source so releasing it never drops a physical device's hold.
+static const char harnessRewindSource = 0;
+static bool harnessRewindHeld;
 
 void releaseInputs()
 {
+	rewind_state::releaseSource(&harnessRewindSource);
+	harnessRewindHeld = false;
 	ui::release();
 	if (mappingDevice)
 		mappingDevice->cancelDetection();
@@ -465,6 +472,45 @@ static std::string captureGame;
 static int captureRenderer;
 static std::uint64_t captureGuestStart;
 
+static Json rewindStatus()
+{
+	const char *reason = rewind_state::unavailableReason();
+	return {{"enabled", static_cast<bool>(config::RewindEnable)},
+		{"available", reason == nullptr},
+		{"unavailable_reason", reason == nullptr ? Json(nullptr) : Json(reason)},
+		{"can_step", rewind_state::canStep()}, {"requested", rewind_state::requested()},
+		{"held_by_harness", harnessRewindHeld},
+		{"snapshots", rewind_state::snapshotCount()}, {"memory_bytes", rewind_state::memoryUsed()},
+		{"interval_ms", config::RewindInterval.get()}, {"duration_s", config::RewindDuration.get()},
+		{"compression", config::RewindCompression.get()}};
+}
+
+static Json rewindOperation(const Json& args)
+{
+	fields(args, {"held"});
+	require(args.at("held").is_boolean(), "Rewind held state must be boolean");
+	const bool held = args.at("held").get<bool>();
+	if (held)
+	{
+		require(emu.running(), "Rewind hold requires a running game");
+		const char *reason = rewind_state::unavailableReason();
+		require(reason == nullptr, reason == nullptr ? "" : reason);
+		if (recording)
+			captureProblems.insert("rewind_restore");
+		if (!harnessRewindHeld)
+		{
+			rewind_state::setRequested(&harnessRewindSource, true);
+			harnessRewindHeld = true;
+		}
+	}
+	else if (harnessRewindHeld)
+	{
+		rewind_state::setRequested(&harnessRewindSource, false);
+		harnessRewindHeld = false;
+	}
+	return rewindStatus();
+}
+
 static Json state()
 {
 	Json osd = Json::object();
@@ -491,7 +537,7 @@ static Json state()
 			{"threaded_rendering", config::ThreadedRendering.get()}, {"frame_skip", config::SkipFrame.get()},
 			{"auto_frame_skip", config::AutoSkipFrame.get()}, {"show_fps", config::ShowFPS.get()},
 			{"dsp", config::DSPEnabled.get()}, {"osd", osd}}},
-		{"controllers", pads}, {"performance_recording", recording}};
+		{"controllers", pads}, {"rewind", rewindStatus()}, {"performance_recording", recording}};
 }
 
 static Json execute(const std::string& op, const Json& args)
@@ -512,6 +558,10 @@ static Json execute(const std::string& op, const Json& args)
 	if (op == "mapping" && args.is_object() && args.contains("action")
 			&& args.at("action").is_string() && args.at("action").get<std::string>() == "cancel")
 		return mappingOperation(args);
+	// Releasing a rewind hold stays available if the session became restricted.
+	if (op == "rewind" && args.is_object() && args.contains("held")
+			&& args.at("held").is_boolean() && !args.at("held").get<bool>())
+		return rewindOperation(args);
 	require(!restricted() || op == "performance_end" || op == "quit",
 		"Interactive control is unavailable during hardcore, netplay or multiboard sessions");
 	if (op == "live")
@@ -544,6 +594,8 @@ static Json execute(const std::string& op, const Json& args)
 	}
 	if (op == "settings")
 		return openSettingsPage(args);
+	if (op == "rewind")
+		return rewindOperation(args);
 	if (op == "mapping")
 		return mappingOperation(args);
 	if (op == "menu")
@@ -673,7 +725,7 @@ void poll()
 #else
 				getpid()
 #endif
-			)}, {"capabilities", {"controller", "exclusive_controller_input", "exclusive_ui_input", "native_ui", "settings_navigation", "mapping_test_device", "native_capture", "live_telemetry", "typed_memory_watches", "osd_metrics", "present_intervals", "benchmark_frame_counts"}}});
+			)}, {"capabilities", {"controller", "exclusive_controller_input", "exclusive_ui_input", "native_ui", "settings_navigation", "mapping_test_device", "native_capture", "live_telemetry", "typed_memory_watches", "osd_metrics", "present_intervals", "benchmark_frame_counts", "rewind"}}});
 			announced = true;
 		}
 		const auto path = root / "command.json";

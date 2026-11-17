@@ -42,6 +42,10 @@ Option<bool> AutoLoadState("Dreamcast.AutoLoadState");
 Option<bool> AutoSaveState("Dreamcast.AutoSaveState");
 Option<bool> SaveProtection("Dreamcast.SaveProtection", true);
 Option<int, false> SavestateSlot("Dreamcast.SavestateSlot");
+Option<bool> RewindEnable("Dreamcast.RewindEnable", false);
+Option<int> RewindInterval("Dreamcast.RewindInterval", 250);
+Option<int> RewindCompression("Dreamcast.RewindCompression", 0);
+Option<int> RewindDuration("Dreamcast.RewindDuration", 30);
 Option<bool> ForceFreePlay("ForceFreePlay", true);
 Option<bool, false> FetchBoxart("FetchBoxart", true);
 Option<int, false> ArtworkProvider("ArtworkProvider", 1); // ScreenScraper first, then library-wide LaunchBox and TGDB passes.

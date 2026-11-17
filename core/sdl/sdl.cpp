@@ -2,6 +2,7 @@
 
 #if defined(USE_SDL)
 #include "types.h"
+#include "rewind.h"
 #include "cfg/cfg.h"
 #include "sdl/sdl.h"
 #ifdef _WIN32
@@ -665,6 +666,7 @@ void input_sdl_handle()
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
 				{
+					rewind_state::releaseRequests();
 					if (window_fullscreen)
 						SDL_ShowCursor(SDL_ENABLE);
 				}

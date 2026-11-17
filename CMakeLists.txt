@@ -1209,6 +1209,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 		core/nullDC.cpp
 		core/serialize.cpp
 		core/serialize.h
+		core/rewind.cpp
+		core/util/rewind_buffer.cpp
 		core/stbi.h
 		core/stdclass.cpp
 		core/stdclass.h

@@ -42,6 +42,7 @@
 #include "hw/mem/mem_watch.h"
 #include "network/net_handshake.h"
 #include "serialize.h"
+#include "rewind.h"
 #include "hw/pvr/pvr.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/storage.h"
@@ -501,6 +502,7 @@ static void loadSpecialSettings()
 
 void Emulator::dc_reset(bool hard)
 {
+	rewind_state::invalidate();
 	if (hard)
 	{
 		NetworkHandshake::term();
@@ -649,6 +651,8 @@ int getGamePlatform(const std::string& filename)
 
 void Emulator::loadGame(const char *path, LoadProgress *progress)
 {
+	rewind_state::invalidate();
+	rewind_state::releaseRequests();
 	init();
 	assembly_debugger::reset();
 	try {
@@ -870,6 +874,8 @@ void Emulator::runInternal()
 
 void Emulator::unloadGame(bool allowAutoSave)
 {
+	rewind_state::invalidate();
+	rewind_state::releaseRequests();
 	bool skipAutoSaveThisUnload = skipAutoSaveOnNextUnload;
 	skipAutoSaveOnNextUnload = false;
 	try {
@@ -951,6 +957,7 @@ void Emulator::term()
 
 void Emulator::stop()
 {
+	rewind_state::releaseRequests();
 	if (state != Running)
 		return;
 #ifdef USE_HIKARU
@@ -1046,6 +1053,14 @@ void loadGameSpecificSettings()
 		config::WidescreenGameHacks.override(false);
 		config::DynarecEnabled.override(true);
 	}
+#ifndef LIBRETRO
+	// Full snapshots are owned by the rendering thread, after a synchronous CPU
+	// slice. Leave the user's threaded-rendering preference intact for other games.
+	if (config::RewindEnable && !settings.platform.isHikaru() && !settings.platform.isSystemSP()
+			&& !config::GGPOEnable && !settings.raHardcoreMode && !settings.network.online
+			&& !settings.naomi.multiboard && !settings.naomi.slave && !settings.naomi.drivingSimSlave)
+		config::ThreadedRendering.override(false);
+#endif
 }
 
 void Emulator::step()
@@ -1066,6 +1081,8 @@ void Emulator::stepRange(u32 from, u32 to)
 
 void Emulator::loadstate(Deserializer& deser)
 {
+	if (!deser.rewind())
+		rewind_state::invalidate();
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru()) {
 		// Apply on the render thread; it owns native graphics and emits LoadState
@@ -1097,6 +1114,7 @@ void Emulator::setNetworkState(bool online)
 {
 	if (settings.network.online != online)
 	{
+		rewind_state::invalidate();
 		settings.network.online = online;
 		DEBUG_LOG(NETWORK, "Network state %d", online);
 		if (online && settings.platform.isConsole()
@@ -1321,7 +1339,21 @@ bool Emulator::render()
 		}
 		if (state != Running)
 			return false;
-		run();
+		const auto action = rewind_state::beforeFrame();
+		if (action == rewind_state::FrameAction::Hold)
+			return false;
+		const bool restored = action == rewind_state::FrameAction::Restore;
+		const bool previousMute = settings.aica.muteAudio;
+		if (restored)
+			settings.aica.muteAudio = true;
+		try {
+			run();
+		} catch (...) {
+			settings.aica.muteAudio = previousMute;
+			throw;
+		}
+		settings.aica.muteAudio = previousMute;
+		rewind_state::afterFrame(restored);
 		return true;
 	}
 	if (!checkStatus())
@@ -1394,6 +1426,7 @@ void Emulator::openGdrom()
 
 void Emulator::diskChange()
 {
+	rewind_state::invalidate();
 	config::Settings::instance().reset();
 	config::Settings::instance().load(false);
 	if (!settings.content.path.empty())
