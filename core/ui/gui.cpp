@@ -647,7 +647,8 @@ void gui_open_settings()
 void gui_open_shader_settings()
 {
 	const LockGuard lock(guiMutex);
-	if (gui_state != GuiState::Closed || !game_started || ggpo::active() || !achievements::canPause())
+	if (gui_state != GuiState::Closed || !game_started || settings.network.online
+			|| ggpo::active() || !achievements::canPause())
 		return;
 
 	try {
@@ -4747,7 +4748,7 @@ void gui_loadState(int slot)
 	{
 		// User feedback when load not allowed
 		WARN_LOG(COMMON, "Load state not allowed: network=%d, multiboard=%d",
-				 settings.network.online, settings.naomi.multiboard);
+				 settings.network.online.load(), settings.naomi.multiboard);
 		os_notify(T("Cannot load state during online play"), 3000);
 	}
 }

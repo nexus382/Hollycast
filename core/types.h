@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "build.h"
 
@@ -70,6 +71,7 @@ inline static void JITWriteProtect(bool enabled) {
 #endif
 
 //includes from c++rt
+#include <atomic>
 #include <string>
 #include <stdexcept>
 
@@ -210,7 +212,7 @@ struct settings_t
 
 	struct
 	{
-		bool online;
+		std::atomic_bool online{false}; // The render thread also reads network transitions.
 		struct
 		{
 			u8 game[16];

@@ -6150,6 +6150,11 @@ static bool shaderRendererSupported()
 			|| config::RendererType == RenderType::DirectX11 || config::RendererType == RenderType::DirectX11_OIT;
 }
 
+static bool shaderPreviewBlockedByNetwork()
+{
+	return settings.network.online || ggpo::active();
+}
+
 static void queueShaderAction(std::function<void()> action)
 {
 	if (g_shaderAction) return;
@@ -6886,7 +6891,8 @@ void renderShaderTab()
 	ensureShaderPreview();
 	if (g_shaderAction) return;
 	if (!shaderLiveTuneActive()) {
-		const bool canLiveTune = shaderRendererSupported() && game_started && !ggpo::active()
+		const bool online = shaderPreviewBlockedByNetwork();
+		const bool canLiveTune = !online && shaderRendererSupported() && game_started
 				&& (!emu.running() || achievements::canPause());
 		if (!canLiveTune)
 			ImGui::BeginDisabled();
@@ -6899,7 +6905,9 @@ void renderShaderTab()
 		}
 		if (!canLiveTune)
 			ImGui::EndDisabled();
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		if (online)
+			ImGui::TextWrapped("%s", T("Live shader preview is unavailable during online play."));
+		else if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("%s", !shaderRendererSupported() ? T("Select OpenGL, Vulkan, DirectX 11, or Metal in Video settings to preview shaders.")
 					: !game_started ? T("Start a game to preview shader changes.")
 					: T("See shader changes beside the running game. Gameplay must be pausable."));
@@ -7136,7 +7144,7 @@ void renderShaderLiveTuneOverlay()
 {
 	if (!g_shaderLiveTune)
 		return;
-	if (!game_started || ggpo::active() || !shaderRendererSupported()) {
+	if (!game_started || shaderPreviewBlockedByNetwork() || !shaderRendererSupported()) {
 		closeShaderLiveTune();
 		postprocess::finishShaderCompilation();
 		return;
@@ -7198,7 +7206,8 @@ void renderShaderLiveTuneOverlay()
 
 bool shaderLiveTuneActive()
 {
-	return g_shaderLiveTune.load(std::memory_order_relaxed);
+	return g_shaderLiveTune.load(std::memory_order_relaxed)
+			&& !settings.network.online.load(std::memory_order_relaxed);
 }
 
 bool liveTuneActive()
