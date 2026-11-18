@@ -58,7 +58,6 @@ jobs:
 
       - name: Set up build environment (Linux)
         run: |
-          sudo add-apt-repository ppa:christianrauch/libdecoration
           sudo apt-get update
           sudo apt-get -y install ccache libao-dev libasound2-dev libevdev-dev libgl1-mesa-dev liblua5.3-dev libminiupnpc-dev libpulse-dev libsdl2-dev libudev-dev libzip-dev libcurl4-openssl-dev libcdio-dev libfuse2 locales xvfb xauth libgl1-mesa-dri
           sudo apt-get -y install libwayland-dev libdecor-0-dev libaudio-dev libjack-dev libsndio-dev libsamplerate0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev
@@ -108,14 +107,27 @@ jobs:
 
       - name: Compile universal dependencies (macOS)
         run: |
-          for formula in ./shell/apple/libomp.rb ./shell/apple/libpng-flycast.rb; do
-            libname=$(basename "$formula" .rb)
-            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew install --build-from-source --formula "$formula" || \
-            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew reinstall --build-from-source --formula "$formula"
-            prefix=$(brew --prefix $libname)
-            # Find and verify the static library
-            libfile=$(find "$prefix/lib" -name "*.a" | head -n1)
-            lipo -info "$libfile"
+          # Homebrew resolves formula names through taps. Use our pinned recipes
+          # so both libraries are built as universal static archives.
+          tap=hollycast/universal
+          brew tap-new --no-git "$tap"
+          cp shell/apple/libomp.rb shell/apple/libpng-flycast.rb "$(brew --repository "$tap")/Formula/"
+          brew trust --formula "$tap/libomp" "$tap/libpng-flycast"
+          export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+
+          for libname in libomp libpng-flycast; do
+            formula="$tap/$libname"
+            if [ -n "$(brew list --versions "$libname")" ]; then
+              brew reinstall --build-from-source --formula "$formula"
+            else
+              brew install --build-from-source --formula "$formula"
+            fi
+            prefix=$(brew --prefix "$formula")
+            case "$libname" in
+              libomp) libfile="$prefix/lib/libomp.a" ;;
+              libpng-flycast) libfile="$prefix/lib/libpng16.a" ;;
+            esac
+            lipo "$libfile" -verify_arch arm64 x86_64
             # Export prefix for subsequent CMake steps
             if [ -z "$CMAKE_PREFIX_PATH" ]; then
               CMAKE_PREFIX_PATH="$prefix"
