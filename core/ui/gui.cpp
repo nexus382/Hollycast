@@ -18,6 +18,10 @@
     along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "gui_debugger.h"
+#include "debug/assembly_debugger.h"
+#include "app_updater.h"
+#include "gui_dcnet.h"
 #include "audio/ui_sound.h"
 #include "custom_theme.h"
 #include "rend/osd.h"
@@ -27,6 +31,7 @@
 #include "network/net_handshake.h"
 #include "network/ice.h"
 #include "input/gamepad_device.h"
+#include "test_harness.h"
 #include "input/keyboard_device.h"
 #include "input/mouse.h"
 #include "readiness.h"
@@ -34,10 +39,16 @@
 #include "exit_save_prompt.h"
 #include "library.h"
 #include "library_savestates.h"
+#include "library_media.h"
 #include "gui_util.h"
 #include "gui_font.h"
 #include "imgread/common.h"
 #include "emulator.h"
+#include "wsi/context.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/roms.h"
+#include "hw/hikaru/frontend.h"
+#endif
 #include "mainui.h"
 #include "lua/lua.h"
 #include "gui_chat.h"
@@ -48,6 +59,7 @@
 #include "boxart/boxart.h"
 #include "boxart/screenscraper.h"
 #include "theme_library.h"
+#include "theme_browser.h"
 #include <set>
 #include "boxart/vmu_icon.h"
 #include "profiler/fc_profiler.h"
@@ -87,9 +99,11 @@ using namespace i18n;
 #include <array>
 #include <cctype>
 #include <utility>
+#include <tuple>
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 
 bool game_started;
@@ -142,67 +156,72 @@ static LibrarySavestateCache librarySavestateCache;
 static std::future<bool> networkStatus;
 static Boxart boxart;
 
-// UI-thread owned batch; count image/metadata outcomes, never HTTP requests. Provider
-// quotas and fallback can require multiple requests for one unit. Cached/local units
-// are immediately ready; checked-but-absent types are unavailable, not downloaded.
-struct LibraryMediaBatch
+static library::MediaBatch libraryMediaBatch;
+static bool libraryMediaRefreshPending = false;
+static bool libraryMediaRetryPending = false;
+static bool libraryStateThumbnailCacheInvalidated = false;
+
+static void advanceLibrarySavestates()
 {
-	std::vector<GameMedia> games;
-	std::vector<Boxart::MediaProgress> outcomes;
-	Boxart::MediaProgress progress;
-	u32 mask = 0;
-	std::string label;
-	size_t cursor = 0;
-	bool checked = false, notified = false;
-	double nextCheck = 0, finishedAt = 0;
-};
-static LibraryMediaBatch libraryMediaBatch;
+	static bool cacheInitialized = false;
+	static hostfs::SavestateFolders cachedFolders;
+	static u64 scanGeneration = std::numeric_limits<u64>::max();
+	const auto folders = hostfs::getSavestateFolders();
+	const bool invalidated = librarySavestateCacheInvalidated.exchange(false);
+	if (!cacheInitialized || invalidated
+			|| folders.custom != cachedFolders.custom || folders.data != cachedFolders.data)
+	{
+		cachedFolders = folders;
+		librarySavestateCache.reset([folders](const std::string& path, const std::string& fileName) {
+			return dc_getLatestStateForGame(path, fileName, folders);
+		});
+		libraryStateThumbnailCacheInvalidated = true;
+		cacheInitialized = true;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(scanner.get_mutex());
+		const u64 currentGeneration = scanner.get_generation();
+		if (scanGeneration != currentGeneration)
+		{
+			const auto& games = scanner.get_game_list();
+			std::vector<LibrarySavestateCache::ScanRequest> requests;
+			requests.reserve(games.size());
+			for (const GameMedia& game : games)
+				requests.push_back({game.path, game.fileName, game.device});
+			librarySavestateCache.setScanGames(std::move(requests));
+			scanGeneration = currentGeneration;
+		}
+	}
+	librarySavestateCache.advance();
+}
 
 static void updateLibraryMediaProgress()
 {
+	if (libraryMediaRefreshPending)
+	{
+		boxart.startFetch();
+		if (boxart.refreshPending())
+			return;
+		libraryMediaRefreshPending = false;
+		// Inventory the reviewed database only after its background reset is published.
+		const bool retryUnavailable = libraryMediaRetryPending;
+		libraryMediaRetryPending = false;
+		gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia, retryUnavailable);
+	}
 	auto& batch = libraryMediaBatch;
 	const bool enabled = config::FetchBoxart
 		&& config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
 	boxart.setMediaBatchPending(enabled && !batch.checked && !batch.games.empty());
 	if (!enabled || batch.games.empty() || (batch.checked && !batch.progress.pending)
 		|| ImGui::GetTime() < batch.nextCheck || !boxart.customMediaReady()) return;
-	// Inventory and enqueue together in bounded slices. Completed categories are
-	// never polled again in this batch; only pending work incurs further checks.
-	// A single slow filesystem call cannot be preempted, but never scan the entire
-	// library in one frame. The cover barrier stays up until this first pass ends.
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
-	const size_t end = std::min(batch.cursor + 16, batch.games.size());
-	while (batch.cursor < end)
+	const auto advanced = batch.advance(boxart);
+	if (advanced.notifyPending)
 	{
-		auto& prior = batch.outcomes[batch.cursor];
-		const auto& game = batch.games[batch.cursor];
-		if (prior.pendingMedia)
-		{
-			const auto current = boxart.mediaProgress(game, prior.pendingMedia);
-			batch.progress.ready += current.ready;
-			batch.progress.pending = batch.progress.pending - prior.pending + current.pending;
-			batch.progress.unavailable += current.unavailable;
-			prior.ready += current.ready;
-			prior.unavailable += current.unavailable;
-			prior.pending = current.pending;
-			prior.pendingMedia = current.pendingMedia;
-			if (!batch.checked && current.pendingMedia)
-			{
-				boxart.queueBoxart(game, current.pendingMedia);
-				if (!batch.notified)
-				{
-					os_notify(T("Downloading library media"), 6000, batch.label.c_str());
-					batch.notified = true;
-				}
-			}
-		}
-		++batch.cursor;
-		if (std::chrono::steady_clock::now() >= deadline) break;
+		os_notify(T("Downloading library media"), 6000, batch.label.c_str());
 	}
-	if (batch.cursor == batch.games.size())
+	if (advanced.completedPass)
 	{
-		batch.cursor = 0;
-		batch.checked = true;
 		boxart.setMediaBatchPending(false);
 		batch.nextCheck = ImGui::GetTime() + 0.5;
 		if (batch.progress.pending) batch.finishedAt = 0;
@@ -218,7 +237,6 @@ static Toast toast;
 static ScheduledThreadRunner<std::chrono::steady_clock::time_point> uiThreadRunner;
 
 static constexpr float GAME_INFO_LONG_PRESS_SECONDS = 3.f;
-static constexpr double LIBRARY_GAME_INFO_HOVER_SECONDS = 1.0;
 static bool resetLibraryGameInfoHoverState;
 struct LibraryLongPressState
 {
@@ -402,6 +420,8 @@ void gui_requestStyleReload() { styleReloadRequested = true; }
 
 void gui_keyboard_input(u32 wc)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	ImGuiIO& io = ImGui::GetIO();
 	if (io.WantCaptureKeyboard)
 		io.AddInputCharacter(wc);
@@ -409,6 +429,8 @@ void gui_keyboard_input(u32 wc)
 
 void gui_keyboard_inputUTF8(const std::string& s)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	ImGuiIO& io = ImGui::GetIO();
 	if (io.WantCaptureKeyboard)
 		io.AddInputCharactersUTF8(s.c_str());
@@ -416,6 +438,8 @@ void gui_keyboard_inputUTF8(const std::string& s)
 
 void gui_keyboard_key(u8 keyCode, bool pressed)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 #ifndef LIBRETRO
 	postprocess::setShaderHostKey(keyCode, pressed);
 #endif
@@ -443,10 +467,16 @@ bool gui_mouse_captured() {
 	return io.WantCaptureMouse;
 }
 
-void gui_set_mouse_position(int x, int y, bool touchscreen)
+void gui_set_mouse_position(int x, int y, bool touchscreen, bool harnessInput)
 {
-	mouseX = std::round(x * settings.display.pointScale);
-	mouseY = std::round(y * settings.display.pointScale);
+	// Keep desktop activity outside disposable native sessions. The harness
+	// marks its own UI events explicitly; ordinary builds accept normal input.
+	if (test_harness::controllerInputOwned() && !harnessInput)
+		return;
+	// Native UI observations already use the framebuffer coordinates ImGui consumes.
+	const float scale = harnessInput ? 1.f : settings.display.pointScale;
+	mouseX = std::round(x * scale);
+	mouseY = std::round(y * scale);
 	mouseTouchscreen = touchscreen;
 #ifndef LIBRETRO
 	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
@@ -461,8 +491,10 @@ bool gui_is_menu_touch_target(float x, float y)
 			std::round(y * settings.display.pointScale));
 }
 
-void gui_set_mouse_button(int button, bool pressed, bool touchscreen)
+void gui_set_mouse_button(int button, bool pressed, bool touchscreen, bool harnessInput)
 {
+	if (test_harness::controllerInputOwned() && !harnessInput)
+		return;
 	if (pressed)
 		mouseButtons |= 1 << button;
 	else
@@ -474,6 +506,8 @@ void gui_set_mouse_button(int button, bool pressed, bool touchscreen)
 }
 
 void gui_set_mouse_wheel(float delta) {
+	if (test_harness::controllerInputOwned())
+		return;
 	mouseWheel += delta;
 #ifndef LIBRETRO
 	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons, delta);
@@ -506,22 +540,26 @@ static void gui_newFrame()
 
 	// shows a popup navigation window even in game because of the OSD
 	//io.AddKeyEvent(ImGuiKey_GamepadFaceLeft, ((kcode[0] & DC_BTN_X) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, ((kcode[0] & DC_BTN_B) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceUp, ((kcode[0] & DC_BTN_Y) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceDown, ((kcode[0] & DC_BTN_A) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, ((kcode[0] & DC_DPAD_LEFT) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadRight, ((kcode[0] & DC_DPAD_RIGHT) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadUp, ((kcode[0] & DC_DPAD_UP) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, ((kcode[0] & DC_DPAD_DOWN) == 0));
+	// A harness cabinet input must not also navigate the always-visible menu
+	// bar while playing. Explicit native UI keys/mouse remain independent, and
+	// controller navigation is available after opening the emulator menu.
+	const bool padNavigation = !test_harness::controllerInputOwned() || gui_is_open();
+	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, padNavigation && ((kcode[0] & DC_BTN_B) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadFaceUp, padNavigation && ((kcode[0] & DC_BTN_Y) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadFaceDown, padNavigation && ((kcode[0] & DC_BTN_A) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, padNavigation && ((kcode[0] & DC_DPAD_LEFT) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadRight, padNavigation && ((kcode[0] & DC_DPAD_RIGHT) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadUp, padNavigation && ((kcode[0] & DC_DPAD_UP) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, padNavigation && ((kcode[0] & DC_DPAD_DOWN) == 0));
 
 	float analog;
-	analog = joyx[0] < 0 ? -(float)joyx[0] / 32768.f : 0.f;
+	analog = padNavigation && joyx[0] < 0 ? -(float)joyx[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, analog > 0.1f, analog);
-	analog = joyx[0] > 0 ? (float)joyx[0] / 32768.f : 0.f;
+	analog = padNavigation && joyx[0] > 0 ? (float)joyx[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, analog > 0.1f, analog);
-	analog = joyy[0] < 0 ? -(float)joyy[0] / 32768.f : 0.f;
+	analog = padNavigation && joyy[0] < 0 ? -(float)joyy[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, analog > 0.1f, analog);
-	analog = joyy[0] > 0 ? (float)joyy[0] / 32768.f : 0.f;
+	analog = padNavigation && joyy[0] > 0 ? (float)joyy[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, analog > 0.1f, analog);
 
 	// Emergency quit: Shift+Esc or Ctrl+Shift+Esc to force quit (bypasses save dialog)
@@ -597,6 +635,8 @@ bool gui_resume_game()
 		return false;
 	}
 	gui_setState(GuiState::Closed);
+	if (assembly_debugger::active())
+		assembly_debugger::resume();
 	return true;
 }
 
@@ -884,6 +924,9 @@ static void appendVectorData(void *context, void *data, int size)
 static void getScreenshot(std::vector<u8>& data, int width = 0)
 {
 	data.clear();
+	// Hikaru has its own presenter; the Dreamcast renderer retains unrelated
+	// pixels. Leave the optional thumbnail empty until that presenter supplies it.
+	if (settings.platform.isHikaru()) return;
 	std::vector<u8> rawData;
 	int height = 0;
 	if (renderer == nullptr || !renderer->GetLastFrame(rawData, width, height))
@@ -1132,6 +1175,12 @@ static void gui_display_commands()
 			if (IconButton(ICON_FA_MASK, T("Cheats"), ScaledVec2(buttonWidth, 50)).realize() && !settings.network.online)
 				gui_setState(GuiState::Cheats);
 		}
+		// Assembly debugger
+		{
+			DisabledScope _{!assembly_debugger::available()};
+			if (IconButton(ICON_FA_BUG, T("Assembly Debugger"), ScaledVec2(buttonWidth, 50)).realize())
+				gui_open_debugger();
+		}
 		// Achievements
 		{
 			DisabledScope _{!achievements::isActive()};
@@ -1139,6 +1188,15 @@ static void gui_display_commands()
 			if (IconButton(ICON_FA_TROPHY, T("Achievements"), ScaledVec2(buttonWidth, 50)).realize() && achievements::isActive())
 				gui_setState(GuiState::Achievements);
 		}
+#ifdef USE_HIKARU
+        if (hikaru::frontend::cardReaderAvailable()) {
+            if (ImGui::Button(T("Cards"), ScaledVec2(buttonWidth, 50))) ImGui::OpenPopup("HikaruCards");
+            if (ImGui::BeginPopup("HikaruCards")) {
+                GuiMenu::renderCardsMenu();
+                ImGui::EndPopup();
+            }
+        }
+#endif
 		// Barcode
 		if (card_reader::barcodeAvailable())
 		{
@@ -1283,7 +1341,7 @@ static void contentpath_warning_popup()
         if (ImGui::BeginPopupModal(incorrectContentPopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
         {
             ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + uiScaled(400.f));
-            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned);
+            ImGui::TextWrapped((std::string("  ") + T("Scanned %d folders but no game can be found!") + std::string("  ")).c_str(), scanner.empty_folders_scanned.load());
 			{
 				ImguiStyleVar _(ImGuiStyleVar_FramePadding, ScaledVec2(16, 3));
 				float currentwidth = ImGui::GetContentRegionAvail().x;
@@ -1916,8 +1974,11 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	static ImVec2 hoverPanelMin;
 	static ImVec2 hoverPanelMax;
 	static bool hasHoverPanelPos = false;
+	static int previousHoverDelay = 0;
 
-	if (resetLibraryGameInfoHoverState)
+	const int hoverDelay = std::clamp(config::LibraryGameInfoHoverDelay.get(), 1, 11);
+	// Restart the timer and discard cached panel state when the preference changes.
+	if (resetLibraryGameInfoHoverState || previousHoverDelay != hoverDelay)
 	{
 		hoveredGameId.clear();
 		hoverStartTime = 0.0;
@@ -1927,7 +1988,10 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverPanelMin = ImVec2();
 		hoverPanelMax = ImVec2();
 		resetLibraryGameInfoHoverState = false;
+		previousHoverDelay = hoverDelay;
 	}
+	if (hoverDelay == 11)
+		return;
 
 	const std::string gameId = !game.path.empty() ? game.path : (!game.fileName.empty() ? game.fileName : game.name);
 	const ImVec2 mousePos = ImGui::GetMousePos();
@@ -1951,7 +2015,9 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hasHoverPanelPos = false;
 	}
 	const double hoverElapsed = ImGui::GetTime() - hoverStartTime;
-	if (hoverElapsed >= 1.0 && (!hoverCache.ready || hoverCache.gameId != gameId))
+	if (hoverElapsed < hoverDelay)
+		return;
+	if (!hoverCache.ready || hoverCache.gameId != gameId)
 	{
 		hoverCache.gameId = gameId;
 		hoverCache.art = displayArt != nullptr ? *displayArt : getLibraryDisplayArtwork(game, 0.0);
@@ -1976,8 +2042,6 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 		hoverCache.selectedMediaIndex = default_game_info_media_index(hoverCache);
 		hoverCache.ready = true;
 	}
-	if (hoverElapsed < LIBRARY_GAME_INFO_HOVER_SECONDS || !hoverCache.ready)
-		return;
 
 	const ImGuiViewport *viewport = ImGui::GetMainViewport();
 	const ImVec2 displaySize = viewport->Size;
@@ -2283,6 +2347,12 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	// standalone path for arcade scraping and local-only disc-header discovery.
 	art = game.arcade || !config::FetchBoxart
 		? boxart.getBoxartAndLoad(game, false) : boxart.getBoxart(game);
+#ifdef USE_HIKARU
+	// Cached artwork can retain a title from an older scanner. Use the
+	// current library title while keeping the cached artwork and metadata.
+	if (game.arcade && !game.name.empty() && hikaru::findGame(get_file_basename(game.fileName)))
+		art.name = game.name;
+#endif
 	const std::string localCoverOverride = boxart.getLibraryCoverMediaPath(game);
 	if (!localCoverOverride.empty())
 		art.boxartPath = localCoverOverride;
@@ -2313,29 +2383,6 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	}
 
 	return art;
-}
-
-static std::string formatLibraryRegion(u32 region)
-{
-	if (region == 0)
-		return "Unknown";
-
-	std::string value;
-	if (region & GameBoxart::JAPAN)
-		value += "JP";
-	if (region & GameBoxart::USA)
-	{
-		if (!value.empty())
-			value += "/";
-		value += "US";
-	}
-	if (region & GameBoxart::EUROPE)
-	{
-		if (!value.empty())
-			value += "/";
-		value += "EU";
-	}
-	return value.empty() ? "Unknown" : value;
 }
 
 static std::string formatLibrarySize(size_t size)
@@ -2467,8 +2514,6 @@ static void startLibraryGame(const GameMedia& game, const GameBoxart& art, bool 
 	scanner.get_mutex().lock();
 }
 
-static bool libraryStateThumbnailCacheInvalidated = false;
-
 class LibraryStateThumbnail : public ImguiTexture
 {
 public:
@@ -2573,6 +2618,71 @@ static void textTableCellCentered(const std::string& text, float rowContentHeigh
 	ImGui::TextUnformatted(text.c_str());
 }
 
+static bool prepareThemedLibraryItem(const GameMedia& source, library::View view,
+		const SettingsUI::TextFilter& filter, const std::vector<std::string>& mediaSources,
+		double animationClock, GameMedia& game, GameBoxart& art, themes::LibraryItem& item, bool showSystemEntries)
+{
+	if (!showSystemEntries && (source.device || source.path.empty())) return false;
+	game = source;
+	art = getLibraryDisplayArtwork(game, animationClock);
+	art.applyMetadata(game);
+	std::string title = art.name.empty() ? game.name : art.name;
+	if (view == library::View::ContinuePlaying)
+	{
+		if (!art.name.empty())
+			title = art.name;
+		if (!art.searchName.empty() && (title.empty() || title == game.fileName
+				|| title == get_file_basename(game.fileName)))
+			title = art.searchName;
+	}
+	const std::string searchable = title + '\n' + game.name;
+	if (!filter.PassFilter(searchable.c_str()))
+		return false;
+
+	item.id = game.path.empty() ? "bios" : game.path;
+	item.title = title;
+	item.image = art.boxartPath;
+	item.canFavourite = !game.device && !game.path.empty();
+	item.favourite = item.canFavourite && library::isFavourite(game.path, config::LibraryFavourites.get());
+	item.isGame = item.canFavourite;
+	const SavestateInfo& latestState = librarySavestateCache.peek(game.path);
+	item.canResume = item.isGame && !latestState.path.empty();
+	item.playTimeSeconds = art.playTimeSeconds.value_or(0);
+	item.metadata = {
+		{"title", title}, {"description", game.desc},
+		{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
+		{"players", game.players}, {"system", game.system}, {"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
+		{"productId", art.uniqueId}, {"region", art.region == 0 ? std::string() : library::regionLabel(art.region)},
+		{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
+		{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
+		{"lastPlayed", ""}, {"saveDate", item.canResume ? formatShortDateTime(latestState.creationDate) : std::string()},
+		{"size", formatLibrarySize(game.size)}
+	};
+	const time_t lastPlayed = getLibraryGameLastBooted(game, art.uniqueId);
+	item.lastPlayed = lastPlayed;
+	if (lastPlayed != 0)
+		item.metadata["lastPlayed"] = formatShortDateTime(lastPlayed);
+
+	for (const std::string& sourceMedia : mediaSources)
+	{
+		if (sourceMedia == "disc")
+		{
+			// The virtual BIOS disc is bundled, so resolve it before the theme checks
+			// preview availability. Real disc-image reads remain visible-item work.
+			item.metadata["artwork.disc"] = !game.device && !game.arcade && game.path.empty() && game.fileName.empty()
+					? boxart.getDiscArtPath(game) : std::string();
+			continue;
+		}
+		for (const auto& media : artwork::mediaTypes)
+			if (sourceMedia == media.name)
+			{
+				item.metadata["artwork." + sourceMedia] = boxart.getCustomMediaPath(game, media.mode);
+				break;
+			}
+	}
+	return true;
+}
+
 #ifdef TARGET_UWP
 void gui_load_game()
 {
@@ -2610,10 +2720,11 @@ void gui_load_game()
 #endif
 
 static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& requestedLayout,
-		const SettingsUI::TextFilter& filter, library::View view)
+		const SettingsUI::TextFilter& filter, library::View view, const themes::LibraryActions& actions = {},
+		const themes::Layout* pageLayout = nullptr, const std::function<void()>& drawContent = {})
 {
 	const ImVec2 available = ImGui::GetContentRegionAvail();
-	const themes::Layout& layout = themes::responsiveLayout(theme, requestedLayout,
+	const themes::Layout& layout = themes::responsiveLayout(theme, pageLayout ? *pageLayout : requestedLayout,
 			available.x / std::max(1.f, available.y));
 	const std::string layoutKey = theme.directory + '/' + layout.id;
 	if (pendingRackLaunch && (layout.mode != "rack" || pendingRackLaunch->layoutKey != layoutKey))
@@ -2623,48 +2734,37 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		// Give the selected case priority over other shelf textures in the per-frame load budget.
 		ImguiFileTexture(pendingRackLaunch->visual.texture).getId();
 	}
-	std::vector<GameMedia> games;
-	std::vector<library::Entry> libraryEntries;
+	// Scrolling changes the viewport, not the metadata of every game. Retain the
+	// prepared cards until their inputs change instead of copying descriptions,
+	// formatting history and resolving every artwork path on every rendered frame.
+	static std::vector<GameMedia> games, visibleGames;
+	static std::vector<GameBoxart> artwork;
+	static std::vector<themes::LibraryItem> items;
+	static std::vector<size_t> candidateIndices, visibleGameIndices;
+	static std::vector<bool> candidateFlags;
+	static std::vector<library::Entry> libraryEntries;
+	static std::unordered_map<std::string, std::vector<size_t>> gameIndicesByPath;
+	static bool prepared = false;
+	static int previousFrame = -2;
+	static u64 preparedStateRevision = 0;
+	static u64 preparedArtworkRevision = 0;
+	size_t gameCount;
+	u64 scannerGeneration;
 	{
 		std::lock_guard<std::mutex> lock(scanner.get_mutex());
-		games = scanner.get_game_list();
-		// Firmware/device entries must not hide the game-folder prompt.
-		if (config::ContentPath.get().empty()) games.clear();
-		if (view == library::View::ContinuePlaying)
-		{
-			static hostfs::SavestateFolders cachedFolders;
-			const auto folders = hostfs::getSavestateFolders();
-			if (librarySavestateCacheInvalidated.exchange(false)
-					|| folders.custom != cachedFolders.custom || folders.data != cachedFolders.data)
-			{
-				cachedFolders = folders;
-				librarySavestateCache.reset([folders](const std::string& path, const std::string& fileName) {
-					return dc_getLatestStateForGame(path, fileName, folders);
-				});
-				libraryStateThumbnailCacheInvalidated = true;
-			}
-		}
-
-		libraryEntries.reserve(games.size());
-		for (const GameMedia& game : games)
-		{
-			const time_t latestStateDate = view == library::View::ContinuePlaying && !game.device
-					? librarySavestateCache.get(game.path, game.fileName).creationDate : 0;
-			libraryEntries.push_back({game.path, game.name, latestStateDate, game.device});
-		}
+		gameCount = scanner.get_game_list().size();
+		scannerGeneration = scanner.get_generation();
 	}
-
-	static library::View lastLibraryView = view;
-	if (lastLibraryView != view)
-	{
-		resetLibraryGameInfoHover();
-		lastLibraryView = view;
-	}
-	const std::vector<size_t> candidates = library::selectGames(libraryEntries, view,
-			config::LibraryFavourites.get());
-	std::vector<GameMedia> visibleGames;
-	std::vector<GameBoxart> artwork;
-	std::vector<themes::LibraryItem> items;
+	const bool needsSaveStates = std::any_of(layout.elements.begin(), layout.elements.end(), [](const themes::Element& element) {
+		return element.action == "resume" || element.source == "savestate" || element.source == "saveDate"
+				|| element.when == "saved" || element.when == "unsaved"
+				|| std::find(element.fields.begin(), element.fields.end(), "saveDate") != element.fields.end();
+	});
+	if (view == library::View::ContinuePlaying || needsSaveStates)
+		advanceLibrarySavestates();
+	const auto stateFolders = hostfs::getSavestateFolders();
+	const LibrarySavestateCache::StateChanges stateChanges = librarySavestateCache.changesSince(preparedStateRevision);
+	const Boxart::ArtworkChanges artworkChanges = boxart.artworkChangesSince(preparedArtworkRevision);
 	const auto iconSource = themes::iconArtworkSource(config::ThemeIconMedia.get());
 	const std::string& browserSource = iconSource ? *iconSource : layout.artworkSource;
 	// Resolve each requested media type once per game, including explicit fallbacks.
@@ -2688,79 +2788,186 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			mediaSources.push_back(element.source);
 	std::sort(mediaSources.begin(), mediaSources.end());
 	mediaSources.erase(std::unique(mediaSources.begin(), mediaSources.end()), mediaSources.end());
-	const double animationClock = getLibraryIconAnimationClock();
-	for (size_t gameIndex : candidates)
+	static library::View lastLibraryView = view;
+	if (lastLibraryView != view)
 	{
-		GameMedia game = games[gameIndex];
-		GameBoxart art = getLibraryDisplayArtwork(game, animationClock);
-		art.applyMetadata(game);
-		std::string title = art.name.empty() ? game.name : art.name;
-		if (view == library::View::ContinuePlaying)
-		{
-			if (!art.name.empty())
-				title = art.name;
-			if (!art.searchName.empty() && (title.empty() || title == game.fileName
-					|| title == get_file_basename(game.fileName)))
-				title = art.searchName;
-		}
-		const std::string searchable = title + '\n' + game.name;
-		if (!filter.PassFilter(searchable.c_str()))
-			continue;
-
-		themes::LibraryItem item;
-		item.id = game.path.empty() ? "bios" : game.path;
-		item.title = title;
-		item.image = art.boxartPath;
-		item.canFavourite = !game.device && !game.path.empty();
-		item.favourite = item.canFavourite && library::isFavourite(game.path, config::LibraryFavourites.get());
-		item.isGame = item.canFavourite;
-		item.playTimeSeconds = art.playTimeSeconds.value_or(0);
-		item.metadata = {
-			{"title", title}, {"description", game.desc},
-			{"developer", game.developer}, {"publisher", game.publisher}, {"genre", game.genre},
-			{"players", game.players}, {"system", game.system}, {"releaseDate", format_game_info_release_date(game.releaseDate.empty() ? art.releaseDate : game.releaseDate)},
-			{"productId", art.uniqueId}, {"region", art.region == 0 ? std::string() : formatLibraryRegion(art.region)},
-			{"format", game.path.empty() ? "BIOS" : get_file_extension(game.path)},
-			{"playTime", art.playTimeSeconds.has_value() ? formatLibraryPlaytime(*art.playTimeSeconds) : std::string()},
-			{"lastPlayed", ""}, {"size", formatLibrarySize(game.size)}
-		};
-		const time_t lastPlayed = getLibraryGameLastBooted(game, art.uniqueId);
-		item.lastPlayed = lastPlayed;
-		if (lastPlayed != 0)
-			item.metadata["lastPlayed"] = formatShortDateTime(lastPlayed);
-
-		for (const std::string& source : mediaSources)
-		{
-			if (source == "disc")
-			{
-				// No cover standing in here: the theme's own disc shows until there is real art.
-				item.metadata["artwork.disc"] = boxart.getDiscArtPath(game);
-				continue;
-			}
-			// Resolve named media through the same registry as requirements and providers.
-			for (const auto& media : artwork::mediaTypes)
-				if (source == media.name)
-				{
-					item.metadata["artwork." + source] = boxart.getCustomMediaPath(game, media.mode);
-					break;
-				}
-		}
-		items.push_back(std::move(item));
-		artwork.push_back(std::move(art));
-		visibleGames.push_back(game);
+		resetLibraryGameInfoHover();
+		lastLibraryView = view;
 	}
+	const auto key = std::make_tuple(scannerGeneration, gameCount,
+			layoutKey, mediaSources, view, std::string(filter.InputBuf), config::LibraryFavourites.get(),
+			config::BoxartSourceMode.get(), config::LibraryCoverMedia.get(), config::ArtworkProvider.get(),
+			config::FetchBoxart.get(), config::LibraryImageSource.get(), config::ContentPath.get(),
+			get_writable_data_path(""), stateFolders.custom, stateFolders.data);
+	static auto preparedKey = key;
+	const int frame = ImGui::GetFrameCount();
+	const bool needsDiscArtwork = std::find(mediaSources.begin(), mediaSources.end(), "disc") != mediaSources.end();
+	const bool liveIcons = config::LibraryImageSource.get()
+			!= static_cast<int>(config::LibraryImageSourceMode::CurrentArtwork);
+	const double animationClock = getLibraryIconAnimationClock();
+	const bool fullStateRefresh = (view == library::View::ContinuePlaying || needsSaveStates) && stateChanges.fullRefresh;
+	if (!prepared || key != preparedKey || frame != previousFrame + 1 || fullStateRefresh || artworkChanges.fullRefresh)
+	{
+		prepared = false;
+		libraryEntries.clear();
+		{
+			std::lock_guard<std::mutex> lock(scanner.get_mutex());
+			games = scanner.get_game_list();
+			// Firmware/device entries must not hide the game-folder prompt.
+			if (config::ContentPath.get().empty()) games.clear();
+
+			libraryEntries.reserve(games.size());
+			gameIndicesByPath.clear();
+			for (size_t i = 0; i < games.size(); ++i)
+				if (!games[i].path.empty())
+					gameIndicesByPath[games[i].path].push_back(i);
+			for (const GameMedia& game : games)
+			{
+				const time_t latestStateDate = view == library::View::ContinuePlaying && !game.device
+						? librarySavestateCache.peek(game.path).creationDate : 0;
+				libraryEntries.push_back({game.path, game.name, latestStateDate, game.device});
+			}
+		}
+
+		candidateIndices = library::selectGames(libraryEntries, view,
+				config::LibraryFavourites.get());
+		candidateFlags.assign(games.size(), false);
+		for (size_t gameIndex : candidateIndices)
+			candidateFlags[gameIndex] = true;
+		visibleGames.clear();
+		visibleGameIndices.clear();
+		artwork.clear();
+		items.clear();
+		visibleGames.reserve(candidateIndices.size());
+		visibleGameIndices.reserve(candidateIndices.size());
+		artwork.reserve(candidateIndices.size());
+		items.reserve(candidateIndices.size());
+		for (size_t gameIndex : candidateIndices)
+		{
+			GameMedia game;
+			GameBoxart art;
+			themes::LibraryItem item;
+			if (!prepareThemedLibraryItem(games[gameIndex], view, filter, mediaSources, animationClock,
+					game, art, item, layout.showSystemEntries))
+				continue;
+			items.push_back(std::move(item));
+			artwork.push_back(std::move(art));
+			visibleGames.push_back(std::move(game));
+			visibleGameIndices.push_back(gameIndex);
+		}
+
+		// Store the revision captured before preparation. If a worker publishes
+		// during this pass, the next frame must pick up that newer result too.
+		preparedKey = key;
+		preparedStateRevision = stateChanges.revision;
+		preparedArtworkRevision = artworkChanges.revision;
+		prepared = true;
+	}
+	else if (!stateChanges.paths.empty() || !artworkChanges.gamePaths.empty())
+	{
+		std::vector<std::string> changedPaths;
+		std::unordered_set<std::string> uniquePaths;
+		for (const std::string& path : stateChanges.paths)
+			if (uniquePaths.insert(path).second)
+				changedPaths.push_back(path);
+		for (const std::string& path : artworkChanges.gamePaths)
+			if (uniquePaths.insert(path).second)
+				changedPaths.push_back(path);
+
+		for (const std::string& path : stateChanges.paths)
+		{
+			auto found = gameIndicesByPath.find(path);
+			if (found == gameIndicesByPath.end())
+				continue;
+			const time_t stateDate = librarySavestateCache.peek(path).creationDate;
+			for (size_t gameIndex : found->second)
+			{
+				libraryEntries[gameIndex].latestStateDate = stateDate;
+				if (view == library::View::ContinuePlaying && stateDate > 0 && !candidateFlags[gameIndex])
+				{
+					auto position = std::lower_bound(candidateIndices.begin(), candidateIndices.end(), gameIndex,
+							[&](size_t left, size_t right) { return library::entryBefore(left, right, libraryEntries, view); });
+					candidateIndices.insert(position, gameIndex);
+					candidateFlags[gameIndex] = true;
+				}
+			}
+		}
+
+		auto updateCandidateRow = [&](size_t gameIndex) {
+			if (!candidateFlags[gameIndex])
+				return;
+			auto position = std::lower_bound(visibleGameIndices.begin(), visibleGameIndices.end(), gameIndex,
+					[&](size_t left, size_t right) { return library::entryBefore(left, right, libraryEntries, view); });
+			const size_t row = static_cast<size_t>(position - visibleGameIndices.begin());
+			const bool wasVisible = position != visibleGameIndices.end() && *position == gameIndex;
+			GameMedia game;
+			GameBoxart art;
+			themes::LibraryItem item;
+			const bool matches = prepareThemedLibraryItem(games[gameIndex], view, filter, mediaSources,
+					animationClock, game, art, item, layout.showSystemEntries);
+			if (matches)
+			{
+				if (wasVisible)
+				{
+					visibleGames[row] = std::move(game);
+					artwork[row] = std::move(art);
+					items[row] = std::move(item);
+				}
+				else
+				{
+					visibleGameIndices.insert(position, gameIndex);
+					visibleGames.insert(visibleGames.begin() + row, std::move(game));
+					artwork.insert(artwork.begin() + row, std::move(art));
+					items.insert(items.begin() + row, std::move(item));
+				}
+			}
+			else if (wasVisible)
+			{
+				visibleGameIndices.erase(position);
+				visibleGames.erase(visibleGames.begin() + row);
+				artwork.erase(artwork.begin() + row);
+				items.erase(items.begin() + row);
+			}
+		};
+
+		for (const std::string& path : changedPaths)
+		{
+			auto found = gameIndicesByPath.find(path);
+			if (found == gameIndicesByPath.end())
+				continue;
+			for (size_t gameIndex : found->second)
+				updateCandidateRow(gameIndex);
+		}
+		preparedStateRevision = stateChanges.revision;
+		preparedArtworkRevision = artworkChanges.revision;
+	}
+	previousFrame = frame;
 
 	int contextAction = -1;
 	int favouriteAction = -1;
 	bool contextResume = false;
+	themes::LibraryLaunch themeLaunch = themes::LibraryLaunch::Default;
 	const ImVec2 origin = ImGui::GetCursorScreenPos();
 	const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
 	std::vector<ImVec4> itemBounds(items.size());
 	bool addFolder = false;
 	std::function<void()> drawEmptyBrowser;
-	if (games.empty()) drawEmptyBrowser = [&] { addFolder = drawEmptyLibraryPrompt(); };
+	if (games.empty()) drawEmptyBrowser = [&] {
+		addFolder = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
+	};
 	const int activated = themes::renderLibrary(layout, theme.directory, items, [&](size_t index) {
 		const GameMedia& game = visibleGames[index];
+		if (liveIcons && items[index].isGame)
+		{
+			// Animate/recheck VMU artwork only for clipped or selected items. Its
+			// metadata is unchanged, so it must not rebuild every card each frame.
+			artwork[index] = getLibraryDisplayArtwork(game, animationClock);
+			items[index].image = artwork[index].boxartPath;
+		}
+		// The browser clips its items before this callback and includes the selected
+		// row. Keep asynchronous disc labels current without opening every game.
+		if (needsDiscArtwork && !game.device)
+			items[index].metadata["artwork.disc"] = boxart.getDiscArtPath(game);
 		const ImVec2 itemMin = ImGui::GetItemRectMin();
 		const ImVec2 itemMax = ImGui::GetItemRectMax();
 		itemBounds[index] = ImVec4(itemMin.x, itemMin.y, itemMax.x, itemMax.y);
@@ -2837,7 +3044,10 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 			config::LibraryFavourites.set(favourites); config::LibraryFavourites.save();
 			favouriteAction = static_cast<int>(index); resetLibraryGameInfoHover();
 		}, [](const std::string& sound) { playUiSound(sound); },
-		pendingRackLaunch ? pendingRackLaunch->itemId : std::string(), drawEmptyBrowser);
+		pendingRackLaunch ? pendingRackLaunch->itemId : std::string(), drawEmptyBrowser, &themeLaunch,
+		[&](size_t index) {
+			return LibraryStateThumbnail(librarySavestateCache.peek(visibleGames[index].path)).getId();
+		}, actions, drawContent);
 
 	auto startThemedGame = [&](size_t index, bool resume, bool fromContextMenu) {
 		const GameMedia& game = visibleGames[index];
@@ -2889,7 +3099,8 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 	if (contextAction >= 0)
 		startThemedGame(static_cast<size_t>(contextAction), contextResume, true);
 	else if (favouriteAction < 0 && activated >= 0)
-		startThemedGame(static_cast<size_t>(activated), false, false);
+		startThemedGame(static_cast<size_t>(activated), themeLaunch == themes::LibraryLaunch::Resume,
+				themeLaunch != themes::LibraryLaunch::Default);
 	if (pendingRackLaunch)
 	{
 		// Never wait for a download on launch. Render cached art, then run the usual
@@ -2921,19 +3132,54 @@ static void gui_display_content()
 #if defined(__ANDROID__)
 	touchedLibraryItemThisFrame = false;
 #endif
+	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
+	const bool customChrome = customLayout != nullptr && customLayout->hidesToolbar();
 	fullScreenWindow(false);
-	if (libraryMediaBatch.progress.total && (!libraryMediaBatch.finishedAt || ImGui::GetTime() - libraryMediaBatch.finishedAt < 5))
+	if (libraryMediaRefreshPending || (libraryMediaBatch.progress.total && (!libraryMediaBatch.finishedAt || ImGui::GetTime() - libraryMediaBatch.finishedAt < 5)))
 		gui_display_library_download_progress();
 	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
+	ImguiStyleVar contentPadding(ImGuiStyleVar_WindowPadding, customChrome ? ImVec2(0, 0) : ImGui::GetStyle().WindowPadding);
 
     ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration);
-	const themes::Layout* customLayout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
 	static library::View libraryView = library::View::All;
+	static bool themedDcnet = false;
 	static SettingsUI::TextFilter filter;
+	bool openSearch = false, openMenu = false;
+	themes::LibraryActions themeActions;
+	themeActions.selectedView = themedDcnet ? "dcnet" : libraryView == library::View::All ? "allGames"
+			: libraryView == library::View::ContinuePlaying ? "continuePlaying" : "favourites";
+	themeActions.dispatch = [&](const std::string& action) {
+		if (action == "settings") gui_setState(GuiState::Settings);
+		else if (action == "dcnet") themedDcnet = true;
+		else if (action == "filter") openSearch = true;
+		else if (action == "libraryMenu") openMenu = true;
+		else
+		{
+			themedDcnet = false;
+			libraryView = action == "allGames" ? library::View::All
+					: action == "continuePlaying" ? library::View::ContinuePlaying : library::View::Favourites;
+			librarySavestateCacheInvalidated = true;
+		}
+	};
+	const auto drawThemePopups = [&] {
+		if (openSearch) ImGui::OpenPopup("##themeLibrarySearch");
+		if (ImGui::BeginPopup("##themeLibrarySearch"))
+		{
+			filter.Draw(T("Filter"), std::min(ImGui::GetIO().DisplaySize.x * 0.7f, uiScaled(400.f)));
+			ImGui::EndPopup();
+		}
+		if (openMenu) ImGui::OpenPopup("##themeLibraryMenu");
+		if (ImGui::BeginPopup("##themeLibraryMenu"))
+		{
+			if (ImGui::MenuItem("DCnet")) themedDcnet = true;
+			if (ImGui::MenuItem(T("Settings"))) gui_setState(GuiState::Settings);
+			ImGui::EndPopup();
+		}
+	};
 	// Draw theme artwork first so all library controls remain above it. A dark
 	// wash preserves contrast even when users choose a bright background.
-	const std::string themeBackground = customLayout != nullptr && customLayout->toolbar == "compact"
+	const std::string themeBackground = customLayout != nullptr && customLayout->themedChrome()
 			? std::string() : CustomTheme::assetPath("background");
 	bool libraryThemeBackgroundVisible = false;
 	if (!themeBackground.empty()) {
@@ -2966,15 +3212,55 @@ static void gui_display_content()
 		}
 	}
 
-	if (customLayout != nullptr && customLayout->toolbar == "compact")
+	bool showDcnet = false;
+	if (!customChrome && gui_state == GuiState::Main && ImGui::BeginTabBar("mainTabs"))
+	{
+		if (ImGui::BeginTabItem(T("Games")))
+			ImGui::EndTabItem();
+		if (ImGui::BeginTabItem("DCnet"))
+		{
+			showDcnet = true;
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
+	}
+	if (showDcnet || (customChrome && themedDcnet))
+	{
+		// Both tabs share GuiState::Main, so cancel the rack launch here.
+		pendingRackLaunch.reset();
+		resetLibraryGameInfoHover();
+		const themes::Theme* theme = customChrome ? themes::current() : nullptr;
+		const themes::Layout* networkLayout = nullptr;
+		if (theme)
+			for (const auto& layout : theme->layouts)
+				if (layout.screen == "dcnet") { networkLayout = &layout; break; }
+		if (networkLayout)
+		{
+			drawThemedLibrary(*theme, *customLayout, filter, libraryView, themeActions, networkLayout,
+					[&] { gui_display_dcnet(scanner, boxart); });
+			drawThemePopups();
+		}
+		else
+		{
+			if (customChrome && ImGui::Button(T("Back to Library"))) themedDcnet = false;
+			gui_display_dcnet(scanner, boxart);
+		}
+		ImGui::End();
+		return;
+	}
+
+	if (customLayout != nullptr && customLayout->themedChrome())
 	{
 		// Compact chrome is a shared layout option, independent of package identity.
+		// A hidden toolbar draws no app chrome: the theme provides its own.
+		const bool hideToolbar = customLayout->hidesToolbar();
 		const ImVec2 toolbarArea = ImGui::GetContentRegionAvail();
 		const themes::Layout& toolbarLayout = themes::responsiveLayout(*themes::current(), *customLayout,
 				toolbarArea.x / std::max(1.f, toolbarArea.y));
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ScaledVec2(10, 6));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(16));
 		ImGui::PushFont(largeFont, uiScaled(15.f));
+		if (!hideToolbar) {
 		const float brandY = ImGui::GetCursorPosY();
 		float brandHeight = ImGui::GetFrameHeight();
 		ImTextureID brand = {};
@@ -3039,12 +3325,57 @@ static void gui_display_content()
 		if (ImGui::Button(ICON_FA_GEAR "##themeSettings")) gui_setState(GuiState::Settings);
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
 		if (showFilter || filter.IsActive()) filter.Draw(T("Filter"), ImGui::GetContentRegionAvail().x - uiScaled(60));
+		}
 		ImGui::PopFont();
 		ImGui::PopStyleVar(2);
-		ImGui::Separator();
+		if (!hideToolbar)
+			ImGui::Separator();
 		boxart.refreshCustomBoxartIndex(false);
-		scanner.fetch_game_list();
-		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView);
+		drawThemedLibrary(*themes::current(), *customLayout, filter, libraryView, themeActions);
+		drawThemePopups();
+		const bool hasSettingsAction = std::any_of(toolbarLayout.elements.begin(), toolbarLayout.elements.end(), [](const themes::Element& element) {
+			return element.type == "button" && element.action == "settings";
+		});
+		if (hideToolbar && !hasSettingsAction)
+		{
+			// The theme draws its own chrome, but view switching and Settings
+			// must stay reachable: place them in the layout's navigation rect
+			// when it provides one, else keep a lone Settings button.
+			const ImVec2 windowPos = ImGui::GetWindowPos();
+			const ImVec2 windowSize = ImGui::GetWindowSize();
+			if (toolbarLayout.navigation)
+			{
+				const themes::Rect& rect = *toolbarLayout.navigation;
+				const float navX = windowPos.x + rect.x * windowSize.x;
+				const float navY = windowPos.y + rect.y * windowSize.y;
+				const float navW = rect.w * windowSize.x;
+				const float rowStep = ImGui::GetFrameHeight() + uiScaled(6);
+				const char* navLabels[] = {T("All Games"), T("Continue Playing"), T("Favourites")};
+				const library::View navViews[] = {library::View::All, library::View::ContinuePlaying, library::View::Favourites};
+				for (int i = 0; i < 3; i++)
+				{
+					ImGui::SetCursorScreenPos(ImVec2(navX, navY + i * rowStep));
+					const bool selected = libraryView == navViews[i];
+					if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+					if (ImGui::Button(navLabels[i], ImVec2(navW, 0)))
+					{
+						libraryView = navViews[i];
+						librarySavestateCacheInvalidated = true;
+					}
+					if (selected) ImGui::PopStyleColor();
+				}
+				ImGui::SetCursorScreenPos(ImVec2(navX, navY + 3 * rowStep + uiScaled(6)));
+				if (ImGui::Button(ICON_FA_GEAR "##themeSettingsHidden", ImVec2(navW, 0)))
+					gui_setState(GuiState::Settings);
+			}
+			else
+			{
+				ImGui::SetCursorScreenPos(ImVec2(windowPos.x + windowSize.x - uiScaled(52), windowPos.y + uiScaled(8)));
+				if (ImGui::Button(ICON_FA_GEAR "##themeSettingsHidden"))
+					gui_setState(GuiState::Settings);
+				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Settings"));
+			}
+		}
 		ImGui::End();
 		contentpath_warning_popup();
 		return;
@@ -3064,7 +3395,7 @@ static void gui_display_content()
 	ImGui::PushFont(largeFont, 18.5f * libraryToolbarScale);
     ImGui::AlignTextToFramePadding();
     // Position "GAMES" text and search bar below the menu bar (window is already positioned below menu bar)
-    ImGui::SetCursorPosY(ImGui::GetStyle().FramePadding.y);
+    ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), ImGui::GetStyle().FramePadding.y));
     ImGui::Indent(10.0f * libraryToolbarScale);
     ImGui::Text("%s", T("GAMES"));
     ImGui::Unindent(10.0f * libraryToolbarScale);
@@ -3202,7 +3533,6 @@ static void gui_display_content()
     ImGui::PopStyleVar(3);
 
     boxart.refreshCustomBoxartIndex(false);
-    scanner.fetch_game_list();
 	// Themes draw this inside their own browser viewport; stock views share the
 	// full library area. Firmware/device entries must not hide the folder action.
 	if (customLayout == nullptr && gui_state != GuiState::SelectDisk && config::ContentPath.get().empty())
@@ -3210,7 +3540,7 @@ static void gui_display_content()
 		ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
 				ImGuiWindowFlags_DragScrolling);
 		scrollWindowFromTouch();
-		const bool addFolder = drawEmptyLibraryPrompt();
+		const bool addFolder = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
 		ImGui::EndChild();
 		addContentPath(addFolder);
 		ImGui::End();
@@ -3274,7 +3604,8 @@ static void gui_display_content()
 		const float iconColumnWidth = std::max(iconSize.x, calcLibraryTextWidth("Icon"))
 				+ ImGui::GetStyle().CellPadding.x * 2.0f;
 		auto calcLibraryColumnWidth = [&](const char *header, const char *sample) {
-			return std::max(calcLibraryTextWidth(header), calcLibraryTextWidth(sample))
+			// A sortable header also reserves room for its direction arrow.
+			return std::max(calcLibraryTextWidth(header) + tableTextSize, calcLibraryTextWidth(sample))
 					+ ImGui::GetStyle().CellPadding.x * 2.0f;
 		};
 		const char* iconLabel = T("Icon");
@@ -3287,10 +3618,8 @@ static void gui_display_content()
 		const char* timePlayedLabel = T("Time Played");
 		const char* dateLabel = showContinueActions ? T("Latest Save") : T("Last Booted");
 		const float formatColumnWidth = calcLibraryColumnWidth(formatLabel, "Unknown");
-		const float dateColumnWidth = calcLibraryTextWidth("12/31/2026 12:59:59 PM")
-				+ ImGui::GetStyle().CellPadding.x * 2.0f;
-		const float timePlayedColumnWidth = std::max(calcLibraryTextWidth(T("Time Played")), calcLibraryTextWidth("999h 59m"))
-				+ ImGui::GetStyle().CellPadding.x * 2.0f;
+		const float dateColumnWidth = calcLibraryColumnWidth(dateLabel, "12/31/2026 12:59:59 PM");
+		const float timePlayedColumnWidth = calcLibraryColumnWidth(timePlayedLabel, "999h 59m");
 		const char* sizeLabel = T("Size");
 		const float sizeColumnWidth = calcLibraryColumnWidth(sizeLabel, "99999 MB");
 
@@ -3298,75 +3627,153 @@ static void gui_display_content()
 		bool gameListEmpty = false;
 		bool libraryViewEmpty = false;
 		bool noFilteredResults = false;
+		const library::View visibleView = gui_state == GuiState::SelectDisk ? library::View::All : libraryView;
+		if (visibleView == library::View::ContinuePlaying)
+			advanceLibrarySavestates();
 		{
 			scanner.get_mutex().lock();
 			const auto& gameList = scanner.get_game_list();
 			gameListEmpty = gameList.empty();
-			const library::View visibleView = gui_state == GuiState::SelectDisk ? library::View::All : libraryView;
-			if (visibleView == library::View::ContinuePlaying)
-			{
-				static hostfs::SavestateFolders cachedFolders;
-				const auto folders = hostfs::getSavestateFolders();
-				if (librarySavestateCacheInvalidated.exchange(false)
-						|| folders.custom != cachedFolders.custom || folders.data != cachedFolders.data)
-				{
-					cachedFolders = folders;
-					librarySavestateCache.reset([folders](const std::string& path, const std::string& fileName) {
-						return dc_getLatestStateForGame(path, fileName, folders);
-					});
-					libraryStateThumbnailCacheInvalidated = true;
-				}
-			}
+			const u64 scannerGeneration = scanner.get_generation();
 			std::vector<library::Entry> libraryEntries;
 			libraryEntries.reserve(gameList.size());
 			for (const GameMedia& game : gameList)
 				libraryEntries.push_back({ game.path, game.name,
 						visibleView == library::View::ContinuePlaying && !game.device
-								? librarySavestateCache.get(game.path, game.fileName).creationDate : 0, game.device });
+								? librarySavestateCache.peek(game.path).creationDate : 0, game.device });
 			const std::vector<size_t> visibleGames = library::selectGames(libraryEntries, visibleView,
 					config::LibraryFavourites.get());
 			libraryViewEmpty = visibleGames.empty();
 			int displayedGameCount = 0;
+			static bool filteredRowsValid = false;
+			static u64 filteredArtworkRevision = 0;
+			static u64 filteredStateRevision = 0;
+			static library::FilteredGames filteredGames;
+			const auto filteredRowsKey = std::make_tuple(scannerGeneration, gameList.size(),
+					std::string(filter.InputBuf), visibleView, gui_state == GuiState::SelectDisk,
+					config::LibraryFavourites.get(),
+					config::BoxartSourceMode.get(),
+					config::LibraryCoverMedia.get(), config::ArtworkProvider.get(), config::FetchBoxart.get(),
+					config::LibraryImageSource.get(), config::ContentPath.get(), get_writable_data_path(""));
+			static auto previousFilteredRowsKey = filteredRowsKey;
+			Boxart::ArtworkChanges artworkChanges;
+			LibrarySavestateCache::StateChanges stateChanges;
+			if (useListStyle && filter.IsActive())
+			{
+				artworkChanges = boxart.artworkChangesSince(filteredArtworkRevision);
+				if (visibleView == library::View::ContinuePlaying)
+					stateChanges = librarySavestateCache.changesSince(filteredStateRevision);
+			}
+			const auto matchesFilter = [&](size_t gameIndex) {
+				const GameMedia& game = gameList[gameIndex];
+				if (gui_state == GuiState::SelectDisk)
+				{
+					const std::string extension = get_file_extension(game.path);
+					if ((!game.device && extension != "gdi" && extension != "chd"
+							&& extension != "cdi" && extension != "cue") || game.path.empty())
+						return false;
+				}
+				if (filter.PassFilter(game.name.c_str()))
+					return true;
+				if (game.device)
+					return false;
+				const GameBoxart art = getLibraryDisplayArtwork(game, iconAnimationClock);
+				return !art.name.empty() && filter.PassFilter(art.name.c_str());
+			};
+			if (useListStyle && filter.IsActive())
+			{
+				if (!filteredRowsValid || filteredRowsKey != previousFilteredRowsKey
+						|| artworkChanges.fullRefresh || stateChanges.fullRefresh)
+				{
+					filteredGames.rebuild(libraryEntries, visibleView, config::LibraryFavourites.get(), matchesFilter);
+					previousFilteredRowsKey = filteredRowsKey;
+					filteredRowsValid = true;
+				}
+				else if (!artworkChanges.gamePaths.empty() || !stateChanges.paths.empty())
+				{
+					// Save batches add candidates without invalidating matches for existing rows.
+					std::vector<std::string> changedPaths = std::move(artworkChanges.gamePaths);
+					changedPaths.insert(changedPaths.end(), stateChanges.paths.begin(), stateChanges.paths.end());
+					filteredGames.update(libraryEntries, changedPaths, matchesFilter);
+				}
+				filteredArtworkRevision = artworkChanges.revision;
+				filteredStateRevision = stateChanges.revision;
+			}
+			const auto& filteredRows = filteredGames.getRows();
 			if (useListStyle)
 			{
 				ImGui::PushFont(largeFont, tableTextSize);
 				const int columnCount = gui_state == GuiState::SelectDisk ? 8 : showContinueActions ? 11 : 9;
 				if (ImGui::BeginTable("libraryTable", columnCount, ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_Borders
 						| ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit
-						| ImGuiTableFlags_ScrollY, ImVec2(0.0f, 0.0f)))
+						| ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate, ImVec2(0.0f, 0.0f)))
 				{
 					// ScrollY tables create their own child; the outer library cannot
 					// capture a swipe that starts over one of these rows.
 					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
 					scrollWindowFromTouch();
-					ImGui::TableSetupColumn(iconLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, iconColumnWidth);
-					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed, productIdColumnWidth);
-					ImGui::TableSetupColumn(titleLabel, ImGuiTableColumnFlags_WidthStretch);
-					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed, regionColumnWidth);
-					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed, formatColumnWidth);
-					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed, timePlayedColumnWidth);
-					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed, dateColumnWidth);
-					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed, sizeColumnWidth);
+					ImGui::TableSetupColumn(iconLabel, ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoSort, iconColumnWidth);
+					ImGui::TableSetupColumn(productIdLabel, ImGuiTableColumnFlags_WidthFixed, productIdColumnWidth, static_cast<ImGuiID>(library::SortColumn::ProductId));
+					ImGui::TableSetupColumn(titleLabel, ImGuiTableColumnFlags_WidthStretch, 0.0f, static_cast<ImGuiID>(library::SortColumn::Title));
+					ImGui::TableSetupColumn(regionLabel, ImGuiTableColumnFlags_WidthFixed, regionColumnWidth, static_cast<ImGuiID>(library::SortColumn::Region));
+					ImGui::TableSetupColumn(formatLabel, ImGuiTableColumnFlags_WidthFixed, formatColumnWidth, static_cast<ImGuiID>(library::SortColumn::Format));
+					ImGui::TableSetupColumn(timePlayedLabel, ImGuiTableColumnFlags_WidthFixed, timePlayedColumnWidth, static_cast<ImGuiID>(library::SortColumn::TimePlayed));
+					ImGui::TableSetupColumn(dateLabel, ImGuiTableColumnFlags_WidthFixed, dateColumnWidth, static_cast<ImGuiID>(library::SortColumn::Date));
+					ImGui::TableSetupColumn(sizeLabel, ImGuiTableColumnFlags_WidthFixed, sizeColumnWidth, static_cast<ImGuiID>(library::SortColumn::Size));
 					if (gui_state != GuiState::SelectDisk)
-						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, uiScaled(48.0f));
+						ImGui::TableSetupColumn(T("Favourite"), ImGuiTableColumnFlags_WidthFixed, calcLibraryColumnWidth(T("Favourite"), ""), static_cast<ImGuiID>(library::SortColumn::Favourite));
 					if (showContinueActions)
 					{
-						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
-						ImGui::TableSetupColumn(T("Start Fresh"), ImGuiTableColumnFlags_WidthFixed, calcLibraryTextWidth(T("Start Fresh")) + ImGui::GetStyle().CellPadding.x * 2.0f);
+						ImGui::TableSetupColumn(T("Resume"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, calcLibraryTextWidth(T("Resume")) + ImGui::GetStyle().CellPadding.x * 2.0f);
+						ImGui::TableSetupColumn(T("Start Fresh"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, calcLibraryTextWidth(T("Start Fresh")) + ImGui::GetStyle().CellPadding.x * 2.0f);
 					}
 					ImGui::TableSetupScrollFreeze(0, 1);
 					ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-					const char *const libraryColumnHeaders[] = {
-						iconLabel, productIdLabel, titleLabel, regionLabel, formatLabel, timePlayedLabel, dateLabel, sizeLabel,
-						T("Favourite"), T("Resume"), T("Start Fresh")
-					};
 					for (int column = 0; column < columnCount; ++column)
 					{
-						ImGui::TableSetColumnIndex(column);
-						textTableCellCentered(libraryColumnHeaders[column], tableTextSize);
+						if (!ImGui::TableSetColumnIndex(column))
+							continue;
+						const char* label = ImGui::TableGetColumnName(column);
+						if (ImGui::TableGetColumnFlags(column) & ImGuiTableColumnFlags_NoSort)
+							textTableCellCentered(label, tableTextSize);
+						else
+						{
+							ImGui::PushID(column);
+							ImGui::TableHeader(label);
+							ImGui::PopID();
+						}
 					}
 
-					auto drawTableGame = [&](const GameMedia& game, int rowIndex) -> bool
+					const auto& sourceRows = filter.IsActive() ? filteredRows : visibleGames;
+					const std::vector<size_t>* tableRows = &sourceRows;
+					ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
+					if (sortSpecs != nullptr && sortSpecs->SpecsCount > 0)
+					{
+						const auto column = static_cast<library::SortColumn>(sortSpecs->Specs[0].ColumnUserID);
+						const bool descending = sortSpecs->Specs[0].SortDirection == ImGuiSortDirection_Descending;
+						const auto* latestSaves = showContinueActions ? &librarySavestateCache : nullptr;
+						const i18n::locale locale;
+						const auto sortKey = std::make_tuple(column, descending, locale, library::sortRevisions(column, boxart, latestSaves));
+						static auto previousSortKey = sortKey;
+						static auto previousRowSettings = filteredRowsKey;
+						static bool sortedRowsValid = false;
+						static std::vector<size_t> previousSourceRows, sortedRows;
+						if (!sortedRowsValid || sortKey != previousSortKey || filteredRowsKey != previousRowSettings
+								|| sourceRows != previousSourceRows)
+						{
+							sortedRows = sourceRows;
+							library::sortRows(sortedRows, gameList, column, descending, locale, boxart, latestSaves);
+							previousSourceRows = sourceRows;
+							previousRowSettings = filteredRowsKey;
+							previousSortKey = sortKey;
+							sortedRowsValid = true;
+						}
+						tableRows = &sortedRows;
+					}
+					if (sortSpecs != nullptr)
+						sortSpecs->SpecsDirty = false;
+
+					auto drawTableGame = [&](const GameMedia& game, int rowIndex, bool filterPassed = false) -> bool
 					{
 						if (gui_state == GuiState::SelectDisk)
 						{
@@ -3379,38 +3786,19 @@ static void gui_display_content()
 						}
 
 						std::string gameName = game.name;
-						bool passFilter = filter.PassFilter(gameName.c_str());
 						GameBoxart art;
 						if (!game.device)
 						{
 							art = getLibraryDisplayArtwork(game, iconAnimationClock);
 							if (!art.name.empty())
 								gameName = art.name;
-							passFilter = passFilter || filter.PassFilter(gameName.c_str());
 						}
 
-						if (!passFilter)
+						if (!filterPassed && !filter.PassFilter(game.name.c_str())
+								&& (art.name.empty() || !filter.PassFilter(art.name.c_str())))
 							return false;
-						displayedGameCount++;
-
-						std::string productId;
-						std::string region = "Unknown";
-						if (!art.uniqueId.empty())
-							productId = art.uniqueId;
-						if (art.region != 0)
-							region = formatLibraryRegion(art.region);
-
-						std::string format = "Unknown";
-						if (game.path.empty())
-							format = "BIOS";
-						else if (game.device)
-							format = "Device";
-						else
-						{
-							const std::string extension = get_file_extension(game.path);
-							if (!extension.empty())
-								format = extension;
-						}
+						if (!filterPassed)
+							displayedGameCount++;
 
 						ImguiID _(game.path.empty() ? "bios" : (game.path + "_row"));
 						ImGui::TableNextRow(ImGuiTableRowFlags_None, tableRowHeight);
@@ -3427,13 +3815,13 @@ static void gui_display_content()
 						}
 
 						ImGui::TableSetColumnIndex(1);
-						textTableCellCentered(productId, tableRowContentHeight);
+						textTableCellCentered(art.uniqueId, tableRowContentHeight);
 						ImGui::TableSetColumnIndex(2);
 						textTableCellCentered(gameName, tableRowContentHeight, false);
 						ImGui::TableSetColumnIndex(3);
-						textTableCellCentered(region, tableRowContentHeight);
+						textTableCellCentered(library::regionLabel(art.region), tableRowContentHeight);
 						ImGui::TableSetColumnIndex(4);
-						textTableCellCentered(format, tableRowContentHeight);
+						textTableCellCentered(library::mediaFormat(game), tableRowContentHeight);
 						ImGui::TableSetColumnIndex(5);
 						const std::string timePlayed = art.playTimeSeconds.has_value()
 								? formatLibraryPlaytime(*art.playTimeSeconds) : std::string();
@@ -3498,14 +3886,40 @@ static void gui_display_content()
 						return false;
 					};
 
-					if (!filter.IsActive() && gui_state != GuiState::SelectDisk)
+					if (filter.IsActive())
+					{
+						displayedGameCount = static_cast<int>(filteredRows.size());
+						if (gui_state == GuiState::SelectDisk)
+						{
+							for (size_t gameIndex : *tableRows)
+								if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
+									break;
+						}
+						else
+						{
+							ImGuiListClipper clipper;
+							clipper.Begin(static_cast<int>(filteredRows.size()), tableRowHeight);
+							bool gameStartedFromRow = false;
+							while (clipper.Step() && !gameStartedFromRow)
+								for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+								{
+									const size_t gameIndex = (*tableRows)[i];
+									if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
+									{
+										gameStartedFromRow = true;
+										break;
+									}
+								}
+						}
+					}
+					else if (gui_state != GuiState::SelectDisk)
 					{
 						ImGuiListClipper clipper;
 						clipper.Begin(static_cast<int>(visibleGames.size()), tableRowHeight);
 						bool gameStartedFromRow = false;
 						while (clipper.Step() && !gameStartedFromRow)
 							for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-								if (drawTableGame(gameList[visibleGames[i]], visibleGames[i]))
+								if (drawTableGame(gameList[(*tableRows)[i]], static_cast<int>((*tableRows)[i])))
 								{
 									gameStartedFromRow = true;
 									break;
@@ -3513,7 +3927,7 @@ static void gui_display_content()
 					}
 					else
 					{
-						for (size_t i : visibleGames)
+						for (size_t i : *tableRows)
 							if (drawTableGame(gameList[i], static_cast<int>(i)))
 								break;
 					}
@@ -3711,7 +4125,7 @@ static void gui_display_content()
 #if !defined(TARGET_IPHONE)
 		if (gameListEmpty && gui_state != GuiState::SelectDisk)
 		{
-			addContent = drawEmptyLibraryPrompt();
+			addContent = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
 		}
 		if (!gameListEmpty && (libraryViewEmpty || noFilteredResults) && gui_state != GuiState::SelectDisk)
 		{
@@ -3784,13 +4198,15 @@ static bool systemdir_selected_callback(bool cancelled, std::string selection)
 
 	if (config::open())
 	{
+		// Imported settings replace the scan's captured paths, even if an earlier
+		// scan completed before the home folder was selected.
+		scanner.refresh();
 		config::Settings::instance().load(false);
 		// Make sure the renderer type doesn't change mid-flight
 		config::RendererType = RenderType::OpenGL;
 		gui_setState(GuiState::Main);
 		if (config::ContentPath.get().empty())
 		{
-			scanner.stop();
 			config::ContentPath.get().push_back(selection);
 		}
 		SaveSettings();
@@ -4390,7 +4806,7 @@ void gui_display_ui()
 		+ std::to_string(config::ArtworkProvider.get()) + "/" + config::BoxartPath.get() + "/"
 		+ (selectedTheme ? selectedTheme->id : "basic") + "/" + (selectedLayout ? selectedLayout->id : "")
 		+ (enabled ? "/on" : "/off");
-	if (enabled && generation && key != queuedMediaKey)
+	if (enabled && generation && !scanner.is_scanning() && key != queuedMediaKey)
 	{
 		gui_download_library_media(requirements, false, selectedTheme ? selectedTheme->name : T("Basic library media"));
 		queuedMediaKey = key;
@@ -4423,11 +4839,20 @@ void gui_display_ui()
 	const bool protocolActivated = gui_state == GuiState::Main && checkUWPProtocolActivation();
 #endif
 
+	// Scan library paths during the intro, but keep direct launches free of a
+	// worker that gui_start_game would have to join before loading the game.
+	if (gui_state == GuiState::SelectDisk || (gui_state == GuiState::Main
+			&& settings.content.path.empty() && !settings.naomi.slave))
+		scanner.fetch_game_list();
+
 	if (gui_display_launch_screen())
 	{
 		finishFrame();
 		return;
 	}
+	// The UI renders during the final fade, so wait until the splash is fully cleared.
+	if (!launchScreenPending)
+		app_updates::draw(!game_started && (gui_state == GuiState::Main || gui_state == GuiState::Settings));
 
 	// Render menu bar BEFORE any early returns.
 	// Hide it for the full-screen GameInfo screen on Android.
@@ -4508,6 +4933,9 @@ void gui_display_ui()
 		break;
 	case GuiState::Cheats:
 		gui_cheats();
+		break;
+	case GuiState::Debugger:
+		gui_display_debugger();
 		break;
 	case GuiState::Achievements:
 #ifdef USE_RACHIEVEMENTS
@@ -4603,7 +5031,9 @@ void gui_draw_osd()
 	SettingsNew::renderShaderLiveTuneOverlay();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
+	app_updates::draw(false);
 	// Use this frame's effective bar height, including fullscreen auto-hide.
+	gui_display_debugger();
 	performance_overlay::draw();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::drawInApp();
@@ -4617,9 +5047,9 @@ void gui_draw_osd()
 	uiThreadRunner.execTasks(std::chrono::steady_clock::now());
 }
 
-void gui_display_osd() {
+void gui_display_osd(bool redrawGame) {
 	gui_draw_osd();
-	gui_endFrame(gui_is_open());
+	gui_endFrame(gui_is_open() || redrawGame);
 }
 
 void gui_display_profiler()
@@ -4669,12 +5099,29 @@ void gui_cancel_load() {
 
 void gui_term()
 {
+	app_updates::stop();
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::stop();
+#endif
 	if (inited)
 	{
 		inited = false;
+		gui_term_dcnet();
+		themes::stopBrowser();
 		scanner.stop();
 		librarySavestateCache.stop();
+		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
+#ifdef USE_HIKARU
+		// Hikaru may replace a GLES context when entering or leaving a game.
+		// Its old atlas must not survive that replacement through font globals.
+		if (settings.platform.isHikaru()
+				|| (GraphicsContext::Instance() != nullptr && GraphicsContext::Instance()->isHikaruContext()))
+		{
+			boldFont = largeFont = aboutAsciiFont = nullptr;
+			settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
+		}
+#endif
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
 		EventManager::unlisten(Event::Pause, emuEventCallback);
@@ -4704,7 +5151,11 @@ extern bool subfolders_read;
 void gui_refresh_files(bool invalidateArtwork) {
 	librarySavestateCacheInvalidated = true;
 	if (invalidateArtwork)
+	{
 		boxart.invalidateOfflineArtwork();
+		boxart.refreshCustomBoxartIndex(true);
+		ImguiFileTexture::invalidateFileImages();
+	}
 	scanner.refresh();
 	subfolders_read = false;
 }
@@ -4715,6 +5166,9 @@ void reset_vmus() {
 		vmu_lcd_status[i] = false;
 #ifdef HAVE_MOVABLE_VMUS
 		vmu_window::publishScreen(i, nullptr, false);
+#endif
+#ifdef HAVE_PHONE_VMU
+		phone_vmu::publishScreen(i, nullptr, false);
 #endif
 	}
 }
@@ -4882,6 +5336,7 @@ std::string gui_getCurGameBoxartUrl()
 
 void gui_refresh_custom_boxart(bool force)
 {
+	ImguiFileTexture::invalidateFileImages();
 	boxart.invalidateOfflineArtwork();
 	boxart.refreshLibraryPlaytimeDatabase();
 	boxart.refreshCustomBoxartIndex(force);
@@ -4892,14 +5347,20 @@ void gui_refresh_custom_boxart(bool force)
 
 void gui_refresh_boxart_cache()
 {
+	ImguiFileTexture::invalidateFileImages();
 	clearVmuIconLookups();
 	boxart.refreshCache();
-	scanner.fetch_game_list_sync();
-	gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia);
+	// Reviewing artwork does not change the ROM inventory or require a blocking rescan.
+	libraryMediaRefreshPending = true;
 }
 
 void gui_display_library_download_progress()
 {
+	if (libraryMediaRefreshPending)
+	{
+		ImGui::TextWrapped("%s", T("Reviewing artwork..."));
+		return;
+	}
 	const auto& batch = libraryMediaBatch;
 	if (!batch.progress.total) return;
 	ImGui::TextWrapped("%s", batch.label.c_str());
@@ -4931,8 +5392,11 @@ void gui_display_library_download_progress()
 
 void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const std::string& label)
 {
-	if (retryUnavailable) boxart.retryArtworkMedia();
-	LibraryMediaBatch batch;
+	if (retryUnavailable && boxart.refreshPending())
+		libraryMediaRetryPending = true;
+	else if (retryUnavailable)
+		boxart.retryArtworkMedia();
+	library::MediaBatch batch;
 	batch.mask = requestedMedia | artwork::metadataMedia;
 	// Switching themes must not discard a manually requested batch that is still
 	// being inventoried. Merging masks is safe: each source has one active job.
@@ -4942,22 +5406,15 @@ void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const
 		if (libraryMediaBatch.mask & ~batch.mask) batch.label = T("Queued library media");
 		batch.mask |= libraryMediaBatch.mask;
 	}
+	std::vector<GameMedia> games;
 	{
 		std::lock_guard<std::mutex> guard(scanner.get_mutex());
 		std::unordered_set<std::string> paths;
 		for (const auto& game : scanner.get_game_list())
 			if (!game.device && !game.path.empty() && !game.arcade && paths.insert(game.path).second)
-				batch.games.push_back(game);
+				games.push_back(game);
 	}
-	size_t units = 1; // metadata
-	for (size_t i = 0; i < artwork::mediaTypes.size(); ++i) if (batch.mask & (1u << i)) ++units;
-	batch.progress.total = batch.progress.pending = units * batch.games.size();
-	batch.outcomes.resize(batch.games.size());
-	for (auto& outcome : batch.outcomes)
-	{
-		outcome.total = outcome.pending = units;
-		outcome.pendingMedia = batch.mask;
-	}
+	batch.reset(std::move(games), batch.mask, std::move(batch.label));
 	libraryMediaBatch = std::move(batch);
 	boxart.startFetch();
 }

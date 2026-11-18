@@ -50,8 +50,9 @@ Option<int, false> ScreenScraperMedia("ScreenScraperMedia", 4095); // Manual sel
 Option<bool, false> BoxartDisplayMode("BoxartDisplayMode", true);
 Option<int, false> BoxartSourceMode("BoxartSourceMode", 0);
 Option<int, false> LibraryDisplayStyle("Dreamcast.LibraryDisplayStyle", 0);
+Option<int, false> LibraryGameInfoHoverDelay("Dreamcast.LibraryGameInfoHoverDelay", 4);
 Option<int, false> LibraryImageSource("Dreamcast.LibraryImageSource", 0);
-Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", 0);
+Option<int, false> LibraryCoverMedia("Dreamcast.LibraryCoverMedia", static_cast<int>(LibraryCoverMediaMode::Cover));
 Option<int, false> LibraryIconScale("Dreamcast.LibraryIconScale", 100);
 Option<std::vector<std::string>, false> LibraryFavourites("LibraryFavourites", {}, "ui");
 Option<int, false> VmuIconMode("Dreamcast.VmuIconMode", 0);
@@ -80,8 +81,28 @@ Option<bool> AutoLatency("aica.AutoLatency",
 		);
 
 OptionString AudioBackend("backend", "auto", "audio");
+#ifdef USE_HIKARU
+Option<HikaruSortingMode> HikaruSorting("HikaruSorting", HikaruSortingMode::PerTriangle);
+Option<int> HikaruMaxLayers("HikaruMaxLayers", 32);
+Option<bool> HikaruAudioPacing("HikaruAudioPacing", true);
+Option<bool> HikaruBraveMouseAim("HikaruBraveMouseAim", false, "input");
+Option<bool> HikaruBraveGamepad("HikaruBraveGamepad", true, "input");
+Option<bool> HikaruAirTrixDpadBoard("HikaruAirTrixDpadBoard", false, "input");
+Option<bool> HikaruPlanetDpadStick("HikaruPlanetDpadStick", true, "input");
+Option<int, false> HikaruAirTrixRegion("HikaruAirTrixRegion", -1, "input");
+Option<int, false> HikaruBraveRegion("HikaruBraveRegion", -1, "input");
+Option<int, false> HikaruPlanetRegion("HikaruPlanetRegion", -1, "input");
+Option<int, false> HikaruVirtualOn4Region("HikaruVirtualOn4Region", -1, "input");
+Option<int, false> HikaruNascarRegion("HikaruNascarRegion", -1, "input");
+Option<int, false> HikaruStarWarsRacerRegion("HikaruStarWarsRacerRegion", -1, "input");
+Option<bool> HikaruStarWarsRacerGamepad("HikaruStarWarsRacerGamepad", true, "input");
+Option<bool> HikaruNascarGamepad("HikaruNascarGamepad", true, "input");
+Option<bool> HikaruVirtualOn4TwinStick("HikaruVirtualOn4TwinStick", true, "input");
+#endif
 AudioVolumeOption AudioVolume;
 Option<bool> VmuSound("VmuSound", false, "audio");
+Option<int, false> PhoneVmuPort("PhoneVmuPort", 28743, "network");
+Option<std::string, false> PhoneVmuToken("PhoneVmuToken", "", "network");
 
 // Rendering
 
@@ -101,6 +122,7 @@ Option<int> PreloadCustomTextures("rend.PreloadCustomTextures", 0);
 Option<bool> DumpTextures("rend.DumpTextures");
 Option<bool> DumpUniqueTextures("rend.DumpUniqueTextures");
 Option<bool> DumpReplacedTextures("rend.DumpReplacedTextures");
+Option<bool> SplitTextureSheets("rend.SplitTextureSheets");
 Option<int> ScreenStretching("rend.ScreenStretching", 100);
 Option<bool> StretchToFill("rend.StretchToFill");
 Option<bool> Fog("rend.Fog", true);
@@ -209,7 +231,6 @@ Option<std::string, false> BoxartPath("Dreamcast.BoxartPath");
 Option<std::vector<std::string>, false> MappingsPath("Dreamcast.MappingsPath");
 Option<std::vector<std::string>, false> CheatPath("Dreamcast.CheatPath");
 Option<bool, false> HideLegacyNaomiRoms("Dreamcast.HideLegacyNaomiRoms", true);
-Option<bool, false> UploadCrashLogs("UploadCrashLogs", true);
 Option<bool, false> DiscordPresence("DiscordPresence", true);
 #if defined(__ANDROID__) && !defined(LIBRETRO)
 Option<bool, false> UseSafFilePicker("UseSafFilePicker", true);

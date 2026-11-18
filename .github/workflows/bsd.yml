@@ -48,12 +48,16 @@ jobs:
           restore-keys: ccache-${{ matrix.operating_system }}-${{ matrix.architecture }}-${{ matrix.libretro }}-
 
       - name: Start VM
+        env:
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ matrix.libretro == 'OFF' && secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID || '' }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ matrix.libretro == 'OFF' && secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD || '' }}
+          HOLLYCAST_REQUIRE_SCREENSCRAPER: ${{ matrix.libretro == 'OFF' && github.repository == 'nexus382/Hollycast' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: cross-platform-actions/action@v1
         with:
           operating_system: ${{ matrix.operating_system }}
           architecture: ${{ matrix.architecture }}
           version: ${{ matrix.version }}
-          environment_variables: CCACHE_DIR
+          environment_variables: CCACHE_DIR HOLLYCAST_SCREENSCRAPER_DEV_ID HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD HOLLYCAST_REQUIRE_SCREENSCRAPER
 
       - name: Set up build environment
         run: ${{ matrix.pkginstall }}

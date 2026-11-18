@@ -87,6 +87,7 @@ std::mutex cacheMutex;
 std::unordered_map<std::string, time_t> lastBootedByKey;
 std::unordered_map<std::string, time_t> lastBootedByPath;
 bool lastBootedIndexLoaded = false;
+u64 lastBootedRevision = 0;
 json sharedIconCache;
 std::string sharedIconCachePath;
 bool sharedIconCacheLoaded = false;
@@ -135,18 +136,18 @@ std::string appendPath(const std::string& path, const std::string& name)
 #endif
 }
 
-std::string getVmuIconLibraryDir()
+std::string getVmuIconLibraryDir(bool createDirectories = true)
 {
 	std::string base = get_writable_data_path("boxart/");
-	if (!ensureDirectory(base))
+	if (base.empty() || (createDirectories && !ensureDirectory(base)))
 		return {};
 
 	std::string icons = appendPath(base, "vmu-icons");
-	if (!ensureDirectory(icons))
+	if (createDirectories && !ensureDirectory(icons))
 		return {};
 
 	std::string library = appendPath(icons, "library");
-	if (!ensureDirectory(library))
+	if (createDirectories && !ensureDirectory(library))
 		return {};
 	return library;
 }
@@ -861,7 +862,14 @@ void markLibraryGameBooted(const std::string& gameId, const std::string& gamePat
 	const std::string cachePath = appendPath(libraryDir, "cache.json");
 	json& cache = getSharedIconCache(cachePath);
 	updateLastBootedCacheEntry(cache, key, gamePath, std::time(nullptr));
+	++lastBootedRevision;
 	saveSharedIconCache();
+}
+
+uint64_t getLibraryBootHistoryRevision()
+{
+	std::lock_guard<std::mutex> lock(cacheMutex);
+	return lastBootedRevision;
 }
 
 time_t getLibraryGameLastBooted(const GameMedia& media, const std::string& gameId)
@@ -871,7 +879,9 @@ time_t getLibraryGameLastBooted(const GameMedia& media, const std::string& gameI
 	if (key.empty() && media.path.empty())
 		return 0;
 
-	const std::string libraryDir = getVmuIconLibraryDir();
+	// History reads happen for every game in a library. Resolve the cache path
+	// without stat/mkdir calls; the writers create these directories when needed.
+	const std::string libraryDir = getVmuIconLibraryDir(false);
 	if (libraryDir.empty())
 		return 0;
 

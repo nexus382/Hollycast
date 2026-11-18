@@ -20,12 +20,18 @@
 #include "settings_new.h"
 #include "shader_preview_layout.h"
 #include "gui_menu.h"
+#include "app_update_package.h"
 #ifdef USE_METAL
 #include "rend/metal/metal_api.h"
 #endif
 #include "custom_theme.h"
 #include "theme.h"
+#include "theme_browser.h"
 #include "gui_util.h"
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "test_harness.h"
+#include "test_harness_ui.h"
+#endif
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "audio/audiostream.h"
@@ -46,6 +52,10 @@
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/pvr/Renderer_if.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#include "hw/hikaru/roms.h"
+#endif
 #ifdef USE_DREAMLINK_DEVICES
 #include "sdl/dreamlink/dreamlinkgamepad.h"
 #endif
@@ -69,21 +79,30 @@
 #include "achievements/achievements.h"
 #include "vgamepad.h"
 #include "rend/vmu_window.h"
+#include "network/phone_vmu.h"
+#ifdef HAVE_PHONE_VMU
+#include "deps/qrcodegen/qrcodegen.hpp"
+#endif
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstring>
 #include <cfloat>
-#include <cctype>
 #include <future>
 #include <functional>
+#include <cstdio>
+#include <ctime>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -100,6 +119,83 @@ namespace SettingsNew {
 
 static bool g_applyThemeAfterSettings = false;
 static bool g_reloadThemeFontsAfterSettings = false;
+
+#ifdef HOLLYCAST_TEST_HARNESS
+static void annotateTestToggle(const char* prefix, const char* id, const char* label, bool value)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "toggle"}, {"value", value}});
+}
+
+static void annotateTestFloat(const char* prefix, const char* id, const char* label,
+		float value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value_type", "float32"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestInteger(const char* prefix, const char* id, const char* label,
+		int value, int minimum, int maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestVector2(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const ImVec2& value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID groupId = ImGui::GetID(widgetLabel);
+	const std::string semanticId = std::string(prefix) + "." + id;
+	for (int component = 0; component < 2; ++component)
+	{
+		const ImGuiID componentId = ImGui::GetIDWithSeed(component, groupId);
+		const ImGuiID itemId = ImGui::GetIDWithSeed("", nullptr, componentId);
+		const char axis = component == 0 ? 'X' : 'Y';
+		const std::string componentLabel = std::string(label ? label : "") + " " + axis;
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", semanticId + (component == 0 ? ".x" : ".y")},
+			{"semantic_label", componentLabel}, {"kind", "slider"}, {"value_type", "float32"}, {"value", component == 0 ? value.x : value.y},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+	}
+}
+
+static void annotateTestColor(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const float value[4])
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID colorEditId = ImGui::GetID(widgetLabel);
+	const ImGuiID colorButtonId = ImGui::GetIDWithSeed("##ColorButton", nullptr, colorEditId);
+	test_harness::ui::annotateItem(colorButtonId, {{"semantic_id", std::string(prefix) + "." + id},
+		{"semantic_label", label ? label : ""}, {"kind", "color"},
+		{"value", {value[0], value[1], value[2], value[3]}}});
+}
+
+static void annotateTestText(const char* prefix, const char* id, const char* label)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "text"}});
+}
+#endif
 
 struct ThemeEditorState {
 	bool open = false;
@@ -154,6 +250,21 @@ static ImVec4 SettingsErrorColor()
 			accent.y + (error.y - accent.y) * errorWeight,
 			accent.z + (error.z - accent.z) * errorWeight, 1.0f);
 	return CustomTheme::roleColor("error", fallback, "settings.feedback");
+}
+
+static ImVec4 SettingsAccentColor()
+{
+	return CustomTheme::roleColor("accent", ImVec4(0.93f, 0.51f, 0.39f, 1.0f), "settings.accent");
+}
+
+static ImVec4 SettingsSuccessColor()
+{
+	return CustomTheme::roleColor("success", ImVec4(0.36f, 0.77f, 0.46f, 1.0f), "settings.feedback");
+}
+
+static ImVec4 SettingsWarningColor()
+{
+	return CustomTheme::roleColor("warning", ImVec4(0.93f, 0.64f, 0.36f, 1.0f), "settings.feedback");
 }
 
 static std::string cfgLoadStr(const std::string& section, const std::string& key, const std::string& def)
@@ -231,7 +342,7 @@ static int g_tabSlideDirection = 0;
 static bool g_tabSlideFocusContent = false;
 static constexpr double kTabSlideSeconds = 0.18;
 static std::string g_settingsFooterText;
-static constexpr float kSettingsFooterHeightPx = 152.0f;
+static constexpr float kSettingsFooterHeightPx = 42.0f;
 
 #if defined(__ANDROID__)
 struct SettingsAndroidScaleState
@@ -337,11 +448,9 @@ static float SettingsFooterHeight()
 		return std::min(SettingsFixedFooterScaled(kSettingsFooterHeightPx), maximumHeight);
 
 	const float minimumHeight = displayHeight * 0.14f;
-	return std::clamp(SettingsFixedFooterScaled(112.0f), minimumHeight, maximumHeight);
+	return std::clamp(SettingsFixedFooterScaled(kSettingsFooterHeightPx), minimumHeight, maximumHeight);
 #else
-	if (!UseCompactSettingsLayout())
-		return SettingsFixedFooterScaled(kSettingsFooterHeightPx);
-	return std::clamp(ImGui::GetIO().DisplaySize.y * 0.20f, SettingsFixedFooterScaled(104.0f), SettingsFixedFooterScaled(136.0f));
+	return SettingsFixedFooterScaled(kSettingsFooterHeightPx);
 #endif
 }
 
@@ -585,6 +694,31 @@ static void AddWeightedFooterText(ImDrawList* drawList, ImFont* font, float font
 		FooterTextWeightColor(color, 0.33f), text, nullptr, wrapWidth);
 }
 
+static void ResetGeneralPageSettings()
+{
+	// Every preference on the General page returns to its declared default.
+	// Content folders are user data, not a preference, so they are kept.
+	config::UILanguage = "";
+	config::UILanguage.save();
+	config::Language = 1;	// English
+	config::Region = 1;		// USA
+	config::Broadcast = 0;	// NTSC
+	config::Cable = 3;		// TV Composite
+	config::UITheme = 0;
+	config::UICustomTheme = "";
+	config::MenuBarVisibility = static_cast<int>(config::MenuBarMode::Auto);
+	config::UIScaling = 100;
+	config::HideLegacyNaomiRoms = true;
+#if defined(__ANDROID__) && !defined(LIBRETRO)
+	config::UseSafFilePicker = true;
+#endif
+	SaveSettings();
+	i18n::reloadLanguage();
+	mainui_reinit();
+	gui_refresh_files();
+	g_applyThemeAfterSettings = true;
+}
+
 static void RenderSettingsFooterBar()
 {
 	const float footerHeight = SettingsFooterHeight();
@@ -593,220 +727,82 @@ static void RenderSettingsFooterBar()
 
 	ImDrawList* drawList = ImGui::GetWindowDrawList();
 	const ImVec2 footerMin = ImGui::GetWindowPos();
-	const ImVec2 footerMax(footerMin.x + ImGui::GetWindowSize().x, footerMin.y + ImGui::GetWindowSize().y);
+	const float footerWidth = ImGui::GetWindowSize().x;
+	const float padX = SettingsLayoutScaled(14.0f);
+	const bool isGeneral = g_state.currentTab == SettingsTab::General;
 	ImVec4 border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
-	ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
-	border.w = std::min(border.w + 0.10f, 1.0f);
-	accent.w = 1.0f;
+	drawList->AddLine(footerMin, ImVec2(footerMin.x + footerWidth, footerMin.y),
+		ImGui::ColorConvertFloat4ToU32(border), 1.0f);
 
-	const bool compactLayout = UseCompactSettingsLayout();
-	const float padX = compactLayout ? SettingsLayoutScaled(1.0f) : SettingsLayoutScaled(2.0f);
-	const float padY = compactLayout ? SettingsLayoutScaled(1.0f) : SettingsLayoutScaled(2.0f);
-	ImFont* titleFont = settingsTitleFont != nullptr ? settingsTitleFont : largeFont;
-	ImFont* bodyFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
-#if defined(__ANDROID__)
-	const float footerTextScale = (compactLayout ? 1.0f : 1.15f) * SettingsTextPreviewScale();
-#else
-	const float footerTextScale = 1.25f;
-#endif
-	const float titleFontSize = titleFont->LegacySize * (compactLayout ? 1.00f : 1.06f) * footerTextScale;
-	const float bodyFontSize = bodyFont->LegacySize * (compactLayout ? 0.89f : 0.93f) * footerTextScale;
-	const float textPadX = compactLayout ? SettingsLayoutScaled(10.0f) : SettingsLayoutScaled(12.0f);
-	const float textPadY = compactLayout ? SettingsLayoutScaled(8.0f) : SettingsLayoutScaled(10.0f);
-	const ImVec2 textBoxMin(footerMin.x + padX, footerMin.y + padY);
-	const ImVec2 textBoxMax(footerMax.x - padX, footerMax.y - padY);
-	ImVec4 textBoxBg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
-	textBoxBg.w = std::min(textBoxBg.w + 0.35f, 1.0f);
-	drawList->AddRectFilled(textBoxMin, textBoxMax,
-		ImGui::ColorConvertFloat4ToU32(textBoxBg), SettingsLayoutScaled(10.0f));
-	drawList->AddRect(textBoxMin, textBoxMax,
-		ImGui::ColorConvertFloat4ToU32(border), SettingsLayoutScaled(10.0f), 0, 1.0f);
-	drawList->AddRectFilled(
-		textBoxMin,
-		ImVec2(textBoxMax.x, textBoxMin.y + SettingsLayoutScaled(3.0f)),
-		ImGui::ColorConvertFloat4ToU32(accent),
-		SettingsLayoutScaled(10.0f),
-		ImDrawFlags_RoundCornersTop);
-
-	const char* footerText = g_settingsFooterText.empty()
-		? T("Highlight or select a setting to see details here.")
-		: g_settingsFooterText.c_str();
-	const ImVec2 clipMin(textBoxMin.x + textPadX, textBoxMin.y + textPadY);
-	const ImVec2 clipMax(textBoxMax.x - textPadX, textBoxMax.y - textPadY);
-	const ImVec2 bodyPos(clipMin.x, clipMin.y);
-	const float wrapWidth = std::max(0.0f, clipMax.x - clipMin.x);
-	const ImVec4 bodyColor = ImGui::GetStyle().Colors[ImGuiCol_Text];
-	const char* bodyStart = footerText;
-	std::string titleLine;
-	if (const char* nl = strchr(footerText, '\n'); nl != nullptr)
+	// The General page can be returned to its defaults from here.
+	float resetWidth = 0.0f;
+	const float resetHeight = footerHeight - SettingsLayoutScaled(10.0f);
+	if (isGeneral)
 	{
-		titleLine.assign(footerText, nl);
-		bodyStart = nl + 1;
-	}
-	const auto normalizeFooterBody = [](const char* text) -> std::string
-	{
-		if (text == nullptr || text[0] == '\0')
-			return {};
-		std::string out;
-		out.reserve(strlen(text));
-		int newlineCount = 0;
-		for (const char* p = text; *p != '\0'; ++p)
-		{
-			char c = *p;
-			if (c == '\r')
-				continue;
-			if (c == '\n')
-			{
-				++newlineCount;
-				continue;
-			}
-
-			if (newlineCount > 0)
-			{
-				if (newlineCount >= 2)
-				{
-					while (!out.empty() && out.back() == ' ')
-						out.pop_back();
-					if (!out.empty() && out.back() != '\n')
-						out.push_back('\n');
-					out.push_back('\n');
-				}
-				else
-				{
-					if (!out.empty() && out.back() != ' ' && out.back() != '\n')
-						out.push_back(' ');
-				}
-				newlineCount = 0;
-			}
-
-			if (c == '\t')
-				c = ' ';
-			if (c == ' ')
-			{
-				if (out.empty() || out.back() == ' ' || out.back() == '\n')
-					continue;
-			}
-			out.push_back(c);
-		}
-
-		if (newlineCount >= 2)
-		{
-			while (!out.empty() && out.back() == ' ')
-				out.pop_back();
-			if (!out.empty() && out.back() != '\n')
-				out.push_back('\n');
-			out.push_back('\n');
-		}
-		else if (newlineCount == 1)
-		{
-			if (!out.empty() && out.back() != ' ' && out.back() != '\n')
-				out.push_back(' ');
-		}
-
-		while (!out.empty() && out.back() == ' ')
-			out.pop_back();
-		return out;
-	};
-	std::string bodyText = normalizeFooterBody(bodyStart);
-	const std::string displayTitle = titleLine.empty()
-		? std::string()
-		: std::string(T("Setting Details: ")) + titleLine;
-	const float titleSpacing = compactLayout ? SettingsLayoutScaled(3.0f) : SettingsLayoutScaled(5.0f);
-	const float availableHeight = std::max(0.0f, clipMax.y - clipMin.y);
-	float finalTitleSize = titleFontSize;
-	float finalBodySize = bodyFontSize;
-	if (availableHeight > 0.0f && (!displayTitle.empty() || !bodyText.empty()))
-	{
-		const auto measureFooterTextHeight = [&](float titleSize, float bodySize, const std::string& body) -> float
-		{
-			float totalHeight = 0.0f;
-			if (!displayTitle.empty())
-				totalHeight += titleFont->CalcTextSizeA(titleSize, FLT_MAX, wrapWidth, displayTitle.c_str()).y + titleSpacing;
-			if (!body.empty())
-				totalHeight += bodyFont->CalcTextSizeA(bodySize, FLT_MAX, wrapWidth, body.c_str()).y;
-			return totalHeight;
-		};
-		const auto compactOverflowBody = [](const std::string& text) -> std::string
-		{
-			std::string out;
-			out.reserve(text.size());
-			bool pendingSpace = false;
-			for (char c : text)
-			{
-				if (c == '\r' || c == '\n' || c == '\t' || c == ' ')
-				{
-					pendingSpace = !out.empty();
-					continue;
-				}
-				if (pendingSpace && !out.empty())
-				{
-					out.push_back(' ');
-					pendingSpace = false;
-				}
-				out.push_back(c);
-			}
-			return out;
-		};
-
-		float totalHeight = measureFooterTextHeight(titleFontSize, bodyFontSize, bodyText);
-#if defined(__ANDROID__)
-		// Keep paragraph breaks when they fit. At high Android UI scale, compact
-		// only overflowing footer copy so sentences use horizontal wrap space
-		// instead of being clipped below the fixed details box.
-		if (totalHeight > availableHeight)
-		{
-			std::string compactBodyText = compactOverflowBody(bodyText);
-			const float compactHeight = measureFooterTextHeight(titleFontSize, bodyFontSize, compactBodyText);
-			if (compactHeight < totalHeight)
-			{
-				bodyText = std::move(compactBodyText);
-				totalHeight = compactHeight;
-			}
-		}
-#endif
-		if (totalHeight > availableHeight)
-		{
-#if defined(__ANDROID__)
-			const float scale = std::clamp(availableHeight / totalHeight, 0.70f, 1.0f);
-#else
-			const float scale = std::clamp(availableHeight / totalHeight, 0.78f, 1.0f);
-#endif
-			finalTitleSize = titleFontSize * scale;
-			finalBodySize = bodyFontSize * scale;
-		}
+		ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : textFont;
+		const float fontSize = ImGui::GetFontSize();
+		resetWidth = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, T("Reset this page")).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ROTATE_LEFT).x
+			+ SettingsLayoutScaled(26.0f);
+		ImGui::SetCursorPos(ImVec2(footerWidth - padX - resetWidth, (footerHeight - resetHeight) * 0.5f));
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered));
+		const bool resetPressed = ImGui::Button("##ResetThisPage", ImVec2(resetWidth, resetHeight));
+		ImGui::PopStyleColor(3);
+		const ImVec2 btnMin = ImGui::GetItemRectMin();
+		const ImVec2 btnMax = ImGui::GetItemRectMax();
+		const bool highlighted = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+		const ImU32 color = ImGui::GetColorU32(highlighted ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+		const ImVec4 clipRect(btnMin.x, btnMin.y, btnMax.x, btnMax.y);
+		float x = btnMin.x + SettingsLayoutScaled(8.0f);
+		const float y = btnMin.y + (btnMax.y - btnMin.y - ImGui::GetTextLineHeight()) * 0.5f;
+		drawList->AddText(iconFont, fontSize, ImVec2(x, y), color, ICON_FA_ROTATE_LEFT, nullptr, 0.0f, &clipRect);
+		x += iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ROTATE_LEFT).x + SettingsLayoutScaled(8.0f);
+		drawList->AddText(textFont, fontSize, ImVec2(x, y), color, T("Reset this page"), nullptr, 0.0f, &clipRect);
+		if (resetPressed)
+			ResetGeneralPageSettings();
 	}
 
-	ImVec2 textPos(std::floor(bodyPos.x), std::floor(bodyPos.y));
-	drawList->PushClipRect(clipMin, clipMax, true);
-	if (!displayTitle.empty())
+	// Autosave note on the left.
+	const float textY = (footerHeight - ImGui::GetTextLineHeight()) * 0.5f;
+	ImGui::SetCursorPos(ImVec2(padX, textY));
+	if (settingsIconFont != nullptr)
 	{
-		const ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_HeaderActive];
-		const ImVec4 titleColor2(bodyColor.x + (accent.x - bodyColor.x) * 0.3f,
-				bodyColor.y + (accent.y - bodyColor.y) * 0.3f,
-				bodyColor.z + (accent.z - bodyColor.z) * 0.3f, 1.0f);
-		AddWeightedFooterText(
-			drawList,
-			titleFont,
-			finalTitleSize,
-			textPos,
-			titleColor2,
-			displayTitle.c_str(),
-			wrapWidth);
-		textPos.y = std::floor(textPos.y + finalTitleSize + titleSpacing);
+		ImGui::PushFont(settingsIconFont);
+		ImGui::PushStyleColor(ImGuiCol_Text, SettingsSuccessColor());
+		ImGui::TextUnformatted(ICON_FA_CIRCLE_CHECK);
+		ImGui::PopStyleColor();
+		ImGui::PopFont();
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
 	}
+	ImGui::TextUnformatted(T("Changes save automatically"));
 
-	if (!bodyText.empty())
+	// Context help: the first line of the current setting's explanation.
+	std::string helpTitle = g_settingsFooterText;
+	if (const size_t newline = helpTitle.find('\n'); newline != std::string::npos)
+		helpTitle.resize(newline);
+	if (!helpTitle.empty())
 	{
-		AddWeightedFooterText(
-			drawList,
-			bodyFont,
-			finalBodySize,
-			textPos,
-			bodyColor,
-			bodyText.c_str(),
-			wrapWidth);
+		ImFont* font = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		const float fontSize = SettingsPreviewFontSize(font);
+		const float autosaveWidth = (settingsIconFont != nullptr
+				? settingsIconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_CIRCLE_CHECK).x + SettingsLayoutScaled(8.0f)
+				: 0.0f)
+			+ font->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, T("Changes save automatically")).x;
+		const float helpX = footerMin.x + padX + autosaveWidth + SettingsLayoutScaled(28.0f);
+		const float helpMaxX = footerMin.x + footerWidth - padX
+			- (isGeneral ? resetWidth + SettingsLayoutScaled(16.0f) : 0.0f);
+		if (helpMaxX > helpX)
+		{
+			drawList->PushClipRect(ImVec2(helpX, footerMin.y), ImVec2(helpMaxX, footerMin.y + footerHeight), true);
+			AddWeightedFooterText(drawList, font, fontSize,
+				ImVec2(helpX, footerMin.y + textY), ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+				helpTitle.c_str(), 0.0f);
+			drawList->PopClipRect();
+		}
 	}
-	drawList->PopClipRect();
 
 	ImGui::EndChild();
 }
@@ -957,7 +953,8 @@ static const char* GetPopupId(const SettingsUI::PopupConfig& popupCfg)
 }
 
 static bool RenderGeneralPopupSettingRow(const char* id, const char* description,
-	SettingsUI::PopupConfig& popupCfg, const char* tooltip = nullptr, bool disabled = false)
+	SettingsUI::PopupConfig& popupCfg, const char* tooltip = nullptr, bool disabled = false,
+	bool infoMarker = false)
 {
 	ImGui::PushID(id);
 
@@ -1006,6 +1003,9 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 	}
 
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		const char* popupId = GetPopupId(popupCfg);
@@ -1031,6 +1031,85 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 		DisabledScope _(disabled);
 		SettingsUI::SettingPopup(popupCfg);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+	{
+		using test_harness::Json;
+		Json metadata = {{"semantic_id", id ? id : ""}, {"semantic_label", popupCfg.type == SettingsUI::PopupType::Options
+			? (popupCfg.options.label ? popupCfg.options.label : "")
+			: (popupCfg.slider.label ? popupCfg.slider.label : "")}};
+		if (popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.currentValue != nullptr)
+		{
+			const auto& options = popupCfg.options;
+			const int currentValue = *options.currentValue;
+			metadata["kind"] = options.multiSelect ? "multi_select" : "options";
+			metadata["value"] = currentValue;
+			metadata["requires_apply"] = options.multiSelect;
+			Json entries = Json::array();
+			const int optionCount = std::min(options.optionCount, 128);
+			for (int i = 0; i < optionCount && options.options != nullptr; ++i)
+			{
+				const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+				const bool selected = options.multiSelect
+					? storageValue >= 0 && storageValue < 31 && (currentValue & (1 << storageValue)) != 0
+					: currentValue == storageValue;
+				entries.push_back({{"value", storageValue}, {"label", options.options[i] ? options.options[i] : ""},
+					{"selected", selected}});
+			}
+			metadata["options"] = std::move(entries);
+			if (options.valueToString)
+			{
+				const char* valueLabel = options.valueToString(currentValue);
+				if (valueLabel != nullptr)
+					metadata["value_label"] = valueLabel;
+			}
+			else if (!options.multiSelect && options.options != nullptr)
+			{
+				for (int i = 0; i < optionCount; ++i)
+				{
+					const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+					if (storageValue == currentValue && options.options[i] != nullptr)
+					{
+						metadata["value_label"] = options.options[i];
+						break;
+					}
+				}
+			}
+		}
+		else if (popupCfg.type == SettingsUI::PopupType::Slider && popupCfg.slider.currentValue != nullptr)
+		{
+			const auto& slider = popupCfg.slider;
+			const int currentValue = *slider.currentValue;
+			metadata["kind"] = "slider";
+			metadata["value"] = currentValue;
+			metadata["range"] = {{"min", slider.minValue}, {"max", slider.maxValue}};
+			metadata["requires_apply"] = slider.onApply != nullptr;
+			if (slider.valueFormatter)
+				metadata["value_label"] = slider.valueFormatter(currentValue);
+			else
+			{
+				char valueLabel[128];
+				std::snprintf(valueLabel, sizeof(valueLabel), slider.format ? slider.format : "%d", currentValue);
+				metadata["value_label"] = valueLabel;
+			}
+		}
+		test_harness::ui::annotateItem(rowItemId, metadata);
+	}
+#endif
+	if (infoMarker && settingsIconFont != nullptr && largeFont != nullptr
+			&& popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.label != nullptr)
+	{
+		// Small info glyph after the label; the row tooltip carries the text.
+		const float fontSize = SettingsPreviewFontSize(largeFont);
+		const float labelWidth = largeFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, popupCfg.options.label).x;
+		const ImVec2 windowPos = ImGui::GetWindowPos();
+		const float iconSize = ImGui::GetFontSize() * 0.85f;
+		const ImVec2 iconPos(
+			windowPos.x + line1Start.x + uiScaled(20.0f + 8.0f) + labelWidth + SettingsLayoutScaled(7.0f),
+			windowPos.y + line1Start.y + (fontSize - iconSize) * 0.5f - SettingsLayoutScaled(7.0f));
+		ImGui::GetWindowDrawList()->AddText(settingsIconFont, iconSize, iconPos,
+			ImGui::GetColorU32(ImGuiCol_TextDisabled), ICON_FA_CIRCLE_INFO);
+	}
 	RenderTwoLineSettingDescription(line1Start, description);
 	EndTwoLineSettingRow();
 	ImGui::PopID();
@@ -1046,11 +1125,19 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		value = !value;
 		onToggle(value);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""}, {"semantic_label", label ? label : ""},
+			{"kind", "toggle"}, {"value", value}});
+#endif
 
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
@@ -1081,7 +1168,7 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 template <typename DrawInput>
 static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, const char* label,
 	const char* description, DrawInput&& drawInput, const char* tooltip = nullptr, bool disabled = false,
-	float inputWidthPx = 220.0f)
+	float inputWidthPx = 220.0f, const char* controlKind = "text")
 {
 	ImGui::PushID(id);
 
@@ -1103,6 +1190,11 @@ static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, c
 			ImGui::SetKeyboardFocusHere();
 		ImGui::SetNextItemWidth(inputWidth);
 		drawInput();
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : ""},
+				{"semantic_label", label ? label : ""}, {"kind", controlKind ? controlKind : "text"}});
+#endif
 	}
 
 	RenderTwoLineSettingDescription(line1Start, description);
@@ -1184,28 +1276,43 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			return;
 		}
 		ImGui::NewLine();
-		if (gamepad->is_rumble_enabled())
+		if (gamepad->has_force_feedback() || gamepad->is_rumble_enabled())
 		{
-			header(T("Rumble"));
+			header(gamepad->has_force_feedback() ? T("Force Feedback") : T("Rumble"));
 			int power = gamepad->get_rumble_power();
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%"))
+			const bool powerChanged = ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".rumble_power").c_str(), T("Power"), power, 0, 100);
+#endif
+			if (powerChanged)
 				gamepad->set_rumble_power(power);
 			ImGui::SameLine();
-			ShowFooterHelpMarker(T("Rumble power"));
+			ShowFooterHelpMarker(gamepad->has_force_feedback() ? T("Force-feedback strength") : T("Rumble power"));
 		}
 		if (gamepad->has_analog_stick())
 		{
 			header(T("Thumbsticks"));
 			int deadzone = std::round(gamepad->get_dead_zone() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%"))
+			const bool deadzoneChanged = ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".dead_zone").c_str(), T("Dead zone"), deadzone, 0, 100);
+#endif
+			if (deadzoneChanged)
 				gamepad->set_dead_zone(deadzone / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Minimum deflection to register as input"));
 			int saturation = std::round(gamepad->get_saturation() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%"))
+			const bool saturationChanged = ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".saturation").c_str(), T("Saturation"), saturation, 50, 200);
+#endif
+			if (saturationChanged)
 				gamepad->set_saturation(saturation / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Value sent to the game at 100% thumbstick deflection. "
@@ -1606,7 +1713,13 @@ static void displayMappedControl(const std::shared_ptr<GamepadDevice>& gamepad, 
 			ImguiStyleVar checkboxBorder(ImGuiStyleVar_FrameBorderSize, 1.0f);
 			ImguiStyleColor checkboxBorderColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_Text));
 			ImguiStyleColor checkboxCheckColor(ImGuiCol_CheckMark, ImGui::GetStyleColorVec4(ImGuiCol_Text));
-			if (ImGui::Checkbox(T("Sequential"), &(combo.sequential)))
+			const bool sequentialChanged = ImGui::Checkbox(T("Sequential"), &(combo.sequential));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestToggle("controls.mapping.sequential", (gamepad->unique_id() + "." + std::to_string(static_cast<int>(key))).c_str(),
+					T("Sequential"), combo.sequential);
+#endif
+			if (sequentialChanged)
 				input_mapping->set_button(g_gamepad_port_for_mapping, key, combo);
 		}
 		ImGui::SameLine();
@@ -1774,11 +1887,23 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 			if (g_arcade_button_mode)
 			{
 				ImGui::Text("%s", T("Controller Type:"));
-				if (ImGui::RadioButton(T("Gamepad"), !hitbox))
+				const bool gamepadSelected = ImGui::RadioButton(T("Gamepad"), !hitbox);
+				if (gamepadSelected)
 					hitbox = false;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.gamepad"},
+						{"semantic_label", T("Gamepad")}, {"kind", "radio"}, {"value", !hitbox}});
+#endif
 				ImGui::SameLine();
-				if (ImGui::RadioButton(T("Arcade / Hit Box"), hitbox))
+				const bool arcadeSelected = ImGui::RadioButton(T("Arcade / Hit Box"), hitbox);
+				if (arcadeSelected)
 					hitbox = true;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.arcade"},
+						{"semantic_label", T("Arcade / Hit Box")}, {"kind", "radio"}, {"value", hitbox}});
+#endif
 			}
 			ImGui::NewLine();
 			{
@@ -1807,6 +1932,17 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
 		ImVec2(ImGui::GetStyle().FramePadding.x, (SettingsLayoutScaled(30) - ImGui::GetFontSize()) / 2));
 	ImGui::Combo("##arcadeMode", &item_current_map_idx, items, IM_ARRAYSIZE(items));
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+	{
+		test_harness::Json options = test_harness::Json::array();
+		for (int i = 0; i < IM_ARRAYSIZE(items); ++i)
+			options.push_back({{"value", i}, {"label", items[i]}, {"selected", item_current_map_idx == i}});
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.mode." + gamepad->unique_id()},
+			{"semantic_label", "Controller mappings"}, {"kind", "options"}, {"value", item_current_map_idx},
+			{"value_label", items[item_current_map_idx]}, {"options", std::move(options)}});
+	}
+#endif
 	ImGui::PopStyleVar();
 	if (last_item_current_map_idx != 2 && item_current_map_idx != last_item_current_map_idx)
 		gamepad->save_mapping(map_system);
@@ -1950,6 +2086,9 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	ImGui::PushID(id);
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	BeginTwoLineSettingRow("##row", rowTooltip, true);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(icon, SettingsLayoutSize(20.0f, 20.0f));
@@ -1960,6 +2099,11 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	RenderGeneralRightValue(value, 280.0f, 0.0f, disabledValue);
 	RenderTwoLineSettingDescription(line1Start, description);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "info"}, {"value", value}});
+#endif
 
 	ImGui::PopID();
 }
@@ -1969,6 +2113,9 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 {
 	ImGui::PushID(label);
 	const bool rowActivated = BeginTwoLineSettingRow("##row", helpText);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(ICON_FA_FOLDER_OPEN, SettingsLayoutSize(20.0f, 20.0f));
@@ -1993,7 +2140,13 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 		ImGui::SameLine(RightColumnX(buttonWidth));
 		ImVec2 buttonPos = ImGui::GetCursorPos();
 		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y + verticalOffset));
-		if (SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight)))
+		const bool clearPath = SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight));
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", std::string(label) + ".clear"},
+				{"semantic_label", std::string("Clear ") + label}, {"kind", "button"}});
+#endif
+		if (clearPath)
 		{
 			pathOption.get().clear();
 			openPopup = false;
@@ -2006,6 +2159,11 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 
 	RenderTwoLineSettingDescription(line1Start, helpText);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", label ? label : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "path"}, {"value", pathOption.get()}});
+#endif
 	ImGui::PopID();
 
 	const std::string popupName = std::string(T("Select ")) + label;
@@ -2351,35 +2509,42 @@ void focusBoxArtSection()
 	g_scrollToBoxArtSection = true;
 }
 
+// One descriptor per tab: rail label, rail icon, and page subtitle.
+// Order must match the SettingsTab enum.
+struct SettingsTabInfo
+{
+	const char* name;
+	const char* icon;
+	const char* subtitle;
+};
+static const SettingsTabInfo kSettingsTabs[] = {
+	{ "General", ICON_FA_GEAR, "Make Hollycast feel right for you." },
+	{ "Game library", ICON_FA_FOLDER, "Your games, artwork and library layout." },
+	{ "Video", ICON_FA_DISPLAY, "Graphics quality, scaling and performance." },
+	{ "Shader", ICON_FA_WAND_MAGIC, "Shader Configuration" },
+	{ "On-screen display", ICON_FA_RECTANGLE_LIST, "Overlays, VMU screens and in-game information." },
+	{ "Audio", ICON_FA_VOLUME_HIGH, "Sound output, mixing and latency." },
+	{ "Controls", ICON_FA_GAMEPAD, "Controllers, mappings and input behavior." },
+	{ "Network", ICON_FA_SHARE_NODES, "Online play, servers and link features." },
+	{ "Advanced", ICON_FA_SLIDERS, "Power-user and developer options." },
+	{ "About", ICON_FA_CIRCLE_INFO, "Version, credits and project information." },
+};
+static const SettingsTabInfo& GetTabInfo(SettingsTab tab)
+{
+	static const SettingsTabInfo unknown{ "Unknown", ICON_FA_GEAR, "" };
+	const int index = static_cast<int>(tab);
+	if (index < 0 || index >= static_cast<int>(std::size(kSettingsTabs)))
+		return unknown;
+	return kSettingsTabs[index];
+}
+
 // Get display name for each tab
 const char* getTabName(SettingsTab tab)
 {
-	switch (tab)
-	{
-	case SettingsTab::General:
-		return T("General");
-	case SettingsTab::Library:
-		return T("Library");
-	case SettingsTab::Video:
-		return T("Video");
-	case SettingsTab::Shader:
-		return T("Shader");
-	case SettingsTab::OnScreenDisplay:
-		return T("On Screen Display");
-	case SettingsTab::Audio:
-		return T("Audio");
-	case SettingsTab::Controls:
-		return T("Controls");
-	case SettingsTab::Network:
-		return T("Network");
-	case SettingsTab::Advanced:
-		return T("Advanced");
-	case SettingsTab::About:
-		return T("About");
-	default:
-		return T("Unknown");
-	}
+	return T(GetTabInfo(tab).name);
 }
+
+static const char* SettingsTabIcon(SettingsTab tab);
 
 static float SettingsNavigationWidth(const char* exitLabel)
 {
@@ -2409,9 +2574,9 @@ static float SettingsNavigationWidth(const char* exitLabel)
 	const float desiredWidth = std::max(themedWidth, labelWidth + SettingsLayoutScaled(24.0f));
 	return std::clamp(desiredWidth, minWidth, maxWidth);
 #else
-	const float minWidth = 136.0f;
-	const float maxWidth = std::clamp(displaySize.x * 0.20f, minWidth, 310.0f);
-	const float layoutWidth = UseCompactSettingsLayout() ? displaySize.x * 0.16f : uiScaled(225.0f);
+	const float minWidth = uiScaled(208.0f);
+	const float maxWidth = std::clamp(displaySize.x * 0.22f, minWidth, uiScaled(330.0f));
+	const float layoutWidth = UseCompactSettingsLayout() ? displaySize.x * 0.16f : uiScaled(245.0f);
 
 	ImFont* navFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
 	ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : navFont;
@@ -2422,7 +2587,10 @@ static float SettingsNavigationWidth(const char* exitLabel)
 	for (int i = 0; i < (int)SettingsTab::Count; i++)
 	{
 		const char* tabName = getTabName((SettingsTab)i);
-		labelWidth = std::max(labelWidth, navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabName).x);
+		// Rows carry an icon and gap before the label.
+		labelWidth = std::max(labelWidth, navFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabName).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, SettingsTabIcon((SettingsTab)i)).x
+			+ uiScaled(14.0f));
 	}
 
 	const float themedWidth = themeLayout.settingsSidebarWidth > 0.0f
@@ -2460,6 +2628,288 @@ static bool SettingsBackButton(const char* icon, const char* label)
 	return pressed;
 }
 
+static const char* SettingsTabIcon(SettingsTab tab)
+{
+	return GetTabInfo(tab).icon;
+}
+
+static const char* GetTabSubtitle(SettingsTab tab)
+{
+	return T(GetTabInfo(tab).subtitle);
+}
+
+// Shared card surface: bordered, auto-sized to its rows.
+static bool BeginSettingsCardSurface(const char* id)
+{
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(10.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
+	return ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize);
+}
+
+static void EndSettingsCardSurface()
+{
+	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
+}
+
+// Card with an icon, title, and optional subtitle header.
+static bool BeginSettingsCard(const char* id, const char* icon, const char* title, const char* subtitle = nullptr)
+{
+	const bool open = BeginSettingsCardSurface(id);
+	if (open)
+	{
+		const float headerX = ImGui::GetCursorPosX();
+		float titleX = headerX;
+		if (icon != nullptr && settingsIconFont != nullptr)
+		{
+			const float iconFontSize = SettingsPreviewFontSize(settingsIconFont) * 1.15f;
+			const float iconWidth = settingsIconFont->CalcTextSizeA(iconFontSize, FLT_MAX, -1.0f, icon).x;
+			ImGui::PushFont(settingsIconFont, iconFontSize);
+			ImGui::TextUnformatted(icon);
+			ImGui::PopFont();
+			ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
+			titleX = headerX + iconWidth + SettingsLayoutScaled(10.0f);
+		}
+		if (largeFont != nullptr)
+			ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(title);
+		if (largeFont != nullptr)
+			ImGui::PopFont();
+		if (subtitle != nullptr && subtitle[0] != '\0')
+		{
+			ImGui::SetCursorPosX(titleX);
+			ImGui::TextDisabled("%s", subtitle);
+		}
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+	}
+	return open;
+}
+
+static void EndSettingsCard()
+{
+	EndSettingsCardSurface();
+	ImGui::Spacing();
+}
+
+// Small filled note shown at the bottom of a card.
+static void RenderSettingsInfoBanner(const char* id, const char* text)
+{
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, SettingsLayoutScaled(8.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+		ImVec2(SettingsLayoutScaled(12.0f), SettingsLayoutScaled(9.0f)));
+	if (ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
+			ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize))
+	{
+		if (settingsIconFont != nullptr)
+		{
+			ImGui::PushFont(settingsIconFont);
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+			ImGui::TextUnformatted(ICON_FA_CIRCLE_INFO);
+			ImGui::PopStyleColor();
+			ImGui::PopFont();
+			ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
+		}
+		ImGui::TextWrapped("%s", text);
+	}
+	ImGui::EndChild();
+	ImGui::PopStyleVar(2);
+	ImGui::PopStyleColor();
+}
+
+// Button whose icon and label are drawn centered over the button rect.
+static bool SettingsLabelButton(const char* id, const char* icon, const char* label, const ImVec2& size,
+	bool iconAfter = false)
+{
+	const bool pressed = ImGui::Button(id, size);
+	const ImVec2 min = ImGui::GetItemRectMin();
+	const ImVec2 max = ImGui::GetItemRectMax();
+	ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+	ImFont* iconFont = settingsIconFont;
+	const float fontSize = ImGui::GetFontSize();
+	const ImVec2 textSize = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, label);
+	const ImVec2 iconSize = iconFont != nullptr
+		? iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, icon) : ImVec2();
+	const float gap = iconFont != nullptr ? SettingsLayoutScaled(8.0f) : 0.0f;
+	float x = min.x + (max.x - min.x - (iconSize.x + gap + textSize.x)) * 0.5f;
+	const float y = min.y + (max.y - min.y - textSize.y) * 0.5f;
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+	const ImVec4 clipRect(min.x, min.y, max.x, max.y);
+	if (iconFont != nullptr && !iconAfter)
+	{
+		drawList->AddText(iconFont, fontSize, ImVec2(x, y), color, icon, nullptr, 0.0f, &clipRect);
+		x += iconSize.x + gap;
+	}
+	drawList->AddText(textFont, fontSize, ImVec2(x, y), color, label, nullptr, 0.0f, &clipRect);
+	if (iconFont != nullptr && iconAfter)
+		drawList->AddText(iconFont, fontSize, ImVec2(x + textSize.x + gap, y), color, icon, nullptr, 0.0f, &clipRect);
+	return pressed;
+}
+
+static char g_settingsSearchBuffer[128] = "";
+static bool g_focusSettingsSearch = false;
+
+static std::string SettingsLowercase(const std::string& text)
+{
+	std::string lowered = text;
+	std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+		[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	return lowered;
+}
+
+// Extra search terms per tab, indexed like kSettingsTabs.
+static const char* kSettingsTabKeywords[] = {
+	"language region broadcast cable interface theme content folder data home ui system tv",
+	"library games boxart artwork cover metadata scan vmu folders scrape",
+	"video graphics resolution render texture quality preset scaling fps display",
+	"shader post processing effects filter layers preview parameters",
+	"osd overlay vmu screen notification display performance connect phone wifi remote",
+	"audio sound volume latency mixing output speakers",
+	"controls controller gamepad mapping keyboard buttons sensitivity input",
+	"network online server netplay match link dcnet",
+	"advanced debug underclock developer experimental power",
+	"about version credits license links",
+};
+
+static bool SettingsTabMatchesQuery(SettingsTab tab, const std::string& loweredQuery)
+{
+	if (loweredQuery.empty())
+		return false;
+	if (SettingsLowercase(getTabName(tab)).find(loweredQuery) != std::string::npos)
+		return true;
+	const int index = static_cast<int>(tab);
+	return index >= 0 && index < static_cast<int>(std::size(kSettingsTabKeywords))
+		&& std::string(kSettingsTabKeywords[index]).find(loweredQuery) != std::string::npos;
+}
+
+static std::string NormalizedSettingsQuery(const char* rawQuery)
+{
+	std::string query = SettingsLowercase(rawQuery != nullptr ? rawQuery : "");
+	const size_t first = query.find_first_not_of(" \t");
+	if (first == std::string::npos)
+		return {};
+	return query.substr(first, query.find_last_not_of(" \t") - first + 1);
+}
+
+static SettingsTab FindSettingsTabForQuery(const char* rawQuery)
+{
+	const std::string query = NormalizedSettingsQuery(rawQuery);
+	if (query.empty())
+		return SettingsTab::Count;
+	for (int i = 0; i < (int)SettingsTab::Count; i++)
+		if (SettingsTabMatchesQuery((SettingsTab)i, query))
+			return (SettingsTab)i;
+	return SettingsTab::Count;
+}
+
+static void RenderSettingsContentHeader()
+{
+	const SettingsTab tab = g_state.currentTab;
+	if ((ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper)
+			&& ImGui::IsKeyPressed(ImGuiKey_K, false))
+		g_focusSettingsSearch = true;
+
+	const float startX = ImGui::GetCursorPosX();
+	const float availWidth = ImGui::GetContentRegionAvail().x;
+	const ImVec2 headerTop = ImGui::GetCursorPos();
+
+	if (largeFont != nullptr)
+		ImGui::PushFont(largeFont, SettingsLayoutScaled(30.0f));
+	ImGui::TextUnformatted(getTabName(tab));
+	if (largeFont != nullptr)
+		ImGui::PopFont();
+	const float titleBottomY = ImGui::GetCursorPosY();
+
+	// Search box on the title row. Enter jumps to the matching page.
+	const float searchWidth = std::clamp(SettingsLayoutScaled(320.0f),
+		SettingsLayoutScaled(170.0f), availWidth * 0.45f);
+	ImGui::SetCursorPos(ImVec2(startX + availWidth - searchWidth, headerTop.y + SettingsLayoutScaled(2.0f)));
+	if (g_focusSettingsSearch)
+	{
+		ImGui::SetKeyboardFocusHere();
+		g_focusSettingsSearch = false;
+	}
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, SettingsLayoutScaled(8.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+		ImVec2(SettingsLayoutScaled(32.0f), SettingsLayoutScaled(8.0f)));
+	ImGui::SetNextItemWidth(searchWidth);
+	if (ImGui::InputTextWithHint("##SettingsSearch", T("Search settings"), g_settingsSearchBuffer,
+			sizeof(g_settingsSearchBuffer), ImGuiInputTextFlags_EnterReturnsTrue))
+	{
+		const SettingsTab match = FindSettingsTabForQuery(g_settingsSearchBuffer);
+		if (match != SettingsTab::Count)
+			openTab(match);
+		else
+			SetSettingsFooterText(T("No settings page matches that search."));
+	}
+	ImGui::PopStyleVar(2);
+	{
+		const ImVec2 boxMin = ImGui::GetItemRectMin();
+		const ImVec2 boxMax = ImGui::GetItemRectMax();
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		const ImU32 dimColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+		if (settingsIconFont != nullptr)
+		{
+			const float iconSize = ImGui::GetFontSize();
+			const ImVec2 glyph = settingsIconFont->CalcTextSizeA(iconSize, FLT_MAX, -1.0f, ICON_FA_MAGNIFYING_GLASS);
+			drawList->AddText(settingsIconFont, iconSize,
+				ImVec2(boxMin.x + SettingsLayoutScaled(10.0f), boxMin.y + (boxMax.y - boxMin.y - glyph.y) * 0.5f),
+				dimColor, ICON_FA_MAGNIFYING_GLASS);
+		}
+#if defined(__APPLE__)
+		const char* shortcutLabel = "Cmd K";
+#else
+		const char* shortcutLabel = "Ctrl K";
+#endif
+		ImFont* badgeFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		const float badgeFontSize = ImGui::GetFontSize() * 0.85f;
+		const ImVec2 badgeText = badgeFont->CalcTextSizeA(badgeFontSize, FLT_MAX, -1.0f, shortcutLabel);
+		const ImVec2 badgeMin(boxMax.x - badgeText.x - SettingsLayoutScaled(18.0f),
+			boxMin.y + SettingsLayoutScaled(5.0f));
+		const ImVec2 badgeMax(boxMax.x - SettingsLayoutScaled(6.0f), boxMax.y - SettingsLayoutScaled(5.0f));
+		drawList->AddRectFilled(badgeMin, badgeMax, ImGui::GetColorU32(ImGuiCol_FrameBgHovered),
+			SettingsLayoutScaled(5.0f));
+		drawList->AddText(badgeFont, badgeFontSize,
+			ImVec2(badgeMin.x + SettingsLayoutScaled(6.0f), badgeMin.y + (badgeMax.y - badgeMin.y - badgeText.y) * 0.5f),
+			dimColor, shortcutLabel);
+		if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
+			SetSettingsFooterText(T("Search settings: type a setting name and press Enter to open its page."));
+	}
+
+	ImGui::SetCursorPos(ImVec2(startX, titleBottomY + SettingsLayoutScaled(4.0f)));
+	ImGui::TextDisabled("%s", GetTabSubtitle(tab));
+	ImGui::Spacing();
+
+	// While typing, offer the matching pages directly; Enter opens the first.
+	const std::string query = NormalizedSettingsQuery(g_settingsSearchBuffer);
+	if (!query.empty())
+	{
+		bool anyMatch = false;
+		for (int i = 0; i < (int)SettingsTab::Count; i++)
+		{
+			const SettingsTab candidate = (SettingsTab)i;
+			if (!SettingsTabMatchesQuery(candidate, query))
+				continue;
+			if (anyMatch)
+				ImGui::SameLine();
+			anyMatch = true;
+			if (ImGui::SmallButton(getTabName(candidate)))
+			{
+				g_settingsSearchBuffer[0] = '\0';
+				openTab(candidate);
+			}
+		}
+		if (anyMatch)
+			ImGui::Spacing();
+	}
+	ImGui::Spacing();
+}
+
 // Render left navigation rail with tab buttons (225px wide)
 // This creates the vertical strip on the left side with navigation items
 static void renderNavigationRail(const std::function<void()>& exitSettings, const char* exitLabel)
@@ -2482,6 +2932,7 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 
 	ImGui::PushFont(settingsTitleFont);
 	g_navigationWindow = ImGui::GetCurrentWindow();
+
 	if (SettingsBackButton(ICON_FA_ARROW_LEFT, exitLabel))
 		exitSettings();
 	g_backButtonId = ImGui::GetItemID();
@@ -2491,7 +2942,10 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 		g_focusSettingsBack = false;
 	}
 	ImGui::Spacing();
-	ImGui::Separator();
+	ImGui::Spacing();
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::TextUnformatted(T("SETTINGS"));
+	ImGui::PopStyleColor();
 	ImGui::Spacing();
 
 	// Iterate through all tabs and create navigation buttons
@@ -2507,13 +2961,61 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 		bool isSelected = (g_state.currentTab == tab);
 
 		// Create selectable item that fills the navigation rail width
-		// Clicking changes the current tab
-		if (ImGui::Selectable(tabName, isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+		// Clicking changes the current tab. The active page gets the accent
+		// tint and edge bar from the design; other rows keep theme colors.
+		const char* tabIcon = SettingsTabIcon(tab);
+		std::string tabLabel;
+		if (settingsIconFont != nullptr && settingsTitleFont != nullptr)
+		{
+			const float fontSize = ImGui::GetFontSize();
+			const float iconWidth = settingsIconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabIcon).x;
+			const float spaceWidth = std::max(1.0f, settingsTitleFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, " ").x);
+			const int spacerCount = std::max(2, static_cast<int>(std::ceil((iconWidth + SettingsLayoutScaled(10.0f)) / spaceWidth)));
+			tabLabel.append(spacerCount, ' ');
+		}
+		tabLabel += tabName;
+		if (isSelected)
+		{
+			const ImVec4 accent = SettingsAccentColor();
+			ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(accent.x, accent.y, accent.z, 0.35f));
+			ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(accent.x, accent.y, accent.z, 0.45f));
+			ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(accent.x, accent.y, accent.z, 0.55f));
+		}
+		const bool tabClicked = ImGui::Selectable(tabLabel.c_str(), isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0));
+#ifdef HOLLYCAST_TEST_HARNESS
+		const std::uint32_t tabItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
+		if (isSelected)
+			ImGui::PopStyleColor(3);
+		if (settingsIconFont != nullptr)
+		{
+			const ImVec2 itemMin = ImGui::GetItemRectMin();
+			const ImVec2 itemMax = ImGui::GetItemRectMax();
+			const float fontSize = ImGui::GetFontSize();
+			const ImVec2 iconTextSize = settingsIconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, tabIcon);
+			ImGui::GetWindowDrawList()->AddText(settingsIconFont, fontSize,
+				ImVec2(itemMin.x + ImGui::GetStyle().FramePadding.x,
+					itemMin.y + (itemMax.y - itemMin.y - iconTextSize.y) * 0.5f),
+				ImGui::GetColorU32(isSelected ? ImGuiCol_Text : ImGuiCol_TextDisabled), tabIcon);
+			if (isSelected)
+			{
+				ImGui::GetWindowDrawList()->AddRectFilled(
+					ImVec2(itemMin.x, itemMin.y + SettingsLayoutScaled(4.0f)),
+					ImVec2(itemMin.x + SettingsLayoutScaled(3.0f), itemMax.y - SettingsLayoutScaled(4.0f)),
+					ImGui::ColorConvertFloat4ToU32(SettingsAccentColor()), SettingsLayoutScaled(2.0f));
+			}
+		}
+		if (tabClicked)
 		{
 			g_state.currentTab = tab;
 			g_tabSlideStart = -1.0;
 			ResetSettingsFooter();
 		}
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (tabItemId != 0)
+			test_harness::ui::annotateItem(tabItemId, {{"semantic_id", "settings.tab." + std::to_string(i)},
+				{"semantic_label", tabName ? tabName : ""}, {"kind", "tab"}, {"value", g_state.currentTab == tab}});
+#endif
 		if (focusSelectedTab && isSelected)
 			FocusCurrentSettingsItem();
 		if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
@@ -2528,6 +3030,18 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			g_state.currentTab = tab;
 			g_focusSettingsContent = true;
 			ResetSettingsFooter();
+		}
+	}
+
+	// Product line pinned to the bottom of the rail.
+	{
+		const float railHeight = ImGui::GetWindowSize().y;
+		const float labelHeight = ImGui::GetTextLineHeight();
+		const float bottomY = railHeight - labelHeight - ImGui::GetStyle().WindowPadding.y;
+		if (bottomY > ImGui::GetCursorPosY() + SettingsLayoutScaled(16.0f))
+		{
+			ImGui::SetCursorPosY(bottomY);
+			ImGui::TextDisabled("%s", T("Dreamcast emulator"));
 		}
 	}
 
@@ -2567,6 +3081,7 @@ static void renderContentArea()
 	if (focusContent)
 		ImGui::SetKeyboardFocusHere();
 	g_contentWindow = ImGui::GetCurrentWindow();
+	RenderSettingsContentHeader();
 	const bool sliding = g_tabSlideStart >= 0.0;
 	const int firstVertex = g_contentWindow->DrawList->VtxBuffer.Size;
 	// Animation changes presentation only. Input is disabled until the visual
@@ -2700,6 +3215,11 @@ static bool RenderCollapsingHeader(
 
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(SettingsLayoutScaled(8.0f), SettingsLayoutScaled(10.0f)));
 	bool open = ImGui::CollapsingHeader(labelStr.c_str(), flags);
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : labelText},
+			{"semantic_label", labelText ? labelText : ""}, {"kind", "section"}, {"value", open}});
+#endif
 	if (labelIcon && *labelIcon != '\0')
 	{
 		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : ImGui::GetFont();
@@ -2723,6 +3243,147 @@ static bool RenderCollapsingHeader(
 	return open;
 }
 
+// Status strip at the top of the General page, mirroring the setup checklist.
+static void RenderReadyToPlayBanner()
+{
+	static bool biosChecked = false;
+	static bool biosFound = false;
+	static std::vector<std::string> checkedContentPaths, checkedBiosPaths;
+	if (!biosChecked || checkedContentPaths != config::ContentPath.get()
+			|| checkedBiosPaths != config::BiosPath.get())
+	{
+		checkedContentPaths = config::ContentPath.get();
+		checkedBiosPaths = config::BiosPath.get();
+		biosFound = !hostfs::findFlash("dc_", "%bios.bin;%boot.bin").empty();
+		biosChecked = true;
+	}
+	bool hasGamepad = false, hasKeyboard = false;
+	for (int i = 0; i < GamepadDevice::GetGamepadCount(); ++i)
+	{
+		auto device = GamepadDevice::GetGamepad(i);
+		if (!device) continue;
+		if (dynamic_cast<KeyboardDevice*>(device.get())) hasKeyboard = true;
+		else if (!dynamic_cast<Mouse*>(device.get()) && !device->is_virtual_gamepad()) hasGamepad = true;
+	}
+	const bool hasFolders = !config::ContentPath.get().empty();
+
+	if (BeginSettingsCardSurface("ReadyToPlayBanner"))
+	{
+		if (largeFont != nullptr)
+			ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(hasFolders ? T("Ready to play") : T("Set up your library"));
+		if (largeFont != nullptr)
+			ImGui::PopFont();
+
+		// Divider between the headline and the status chips.
+		ImGui::SameLine(0, SettingsLayoutScaled(22.0f));
+		{
+			const ImVec2 divPos = ImGui::GetCursorScreenPos();
+			const float divHeight = ImGui::GetTextLineHeight();
+			ImGui::Dummy(ImVec2(1.0f, divHeight));
+			ImGui::GetWindowDrawList()->AddLine(
+				ImVec2(divPos.x, divPos.y + SettingsLayoutScaled(2.0f)),
+				ImVec2(divPos.x, divPos.y + divHeight - SettingsLayoutScaled(2.0f)),
+				ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
+		}
+
+		auto statusChip = [](bool ready, const char* label) {
+			ImGui::SameLine(0, SettingsLayoutScaled(22.0f));
+			if (settingsIconFont != nullptr)
+			{
+				ImGui::PushFont(settingsIconFont);
+				ImGui::PushStyleColor(ImGuiCol_Text, ready ? SettingsSuccessColor() : SettingsWarningColor());
+				ImGui::TextUnformatted(ready ? ICON_FA_CIRCLE_CHECK : ICON_FA_CIRCLE);
+				ImGui::PopStyleColor();
+				ImGui::PopFont();
+				ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+			}
+			ImGui::TextUnformatted(label);
+		};
+		statusChip(hasFolders, T("Game folders"));
+		statusChip(biosFound, biosFound ? T("Firmware") : T("Firmware: optional"));
+		statusChip(hasGamepad, hasGamepad ? T("Controls")
+			: (hasKeyboard ? T("Controls: review") : T("Controls: set up")));
+
+		const char* reviewLabel = T("Review setup");
+		ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : textFont;
+		const float fontSize = ImGui::GetFontSize();
+		const float buttonWidth = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, reviewLabel).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ARROW_RIGHT).x
+			+ SettingsLayoutScaled(36.0f);
+		const float buttonHeight = SettingsLayoutScaled(36.0f);
+		ImGui::SameLine(RightColumnX(buttonWidth, 18.0f));
+		const ImVec2 buttonPos = ImGui::GetCursorPos();
+		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y - SettingsLayoutScaled(6.0f)));
+		const ImVec4 accent = SettingsAccentColor();
+		ImGui::PushStyleColor(ImGuiCol_Button, accent);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+			ImVec4(std::min(accent.x * 1.12f, 1.0f), std::min(accent.y * 1.12f, 1.0f), std::min(accent.z * 1.12f, 1.0f), 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+			ImVec4(accent.x * 0.88f, accent.y * 0.88f, accent.z * 0.88f, 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.13f, 0.09f, 0.08f, 1.0f));
+		const bool reviewPressed = SettingsLabelButton("##ReviewSetup", ICON_FA_ARROW_RIGHT,
+			reviewLabel, ImVec2(buttonWidth, buttonHeight), true);
+		ImGui::PopStyleColor(4);
+		if (reviewPressed)
+			gui_open_setup_checklist();
+	}
+	EndSettingsCardSurface();
+	ImGui::Spacing();
+}
+
+// Shortcut card that jumps to the Game library page, where folders are managed.
+static void RenderGameFoldersCard()
+{
+	if (BeginSettingsCardSurface("GameFoldersCard"))
+	{
+		const float headerX = ImGui::GetCursorPosX();
+		float titleX = headerX;
+		if (settingsIconFont != nullptr)
+		{
+			const float iconFontSize = SettingsPreviewFontSize(settingsIconFont) * 1.15f;
+			const float iconWidth = settingsIconFont->CalcTextSizeA(iconFontSize, FLT_MAX, -1.0f, ICON_FA_FOLDER).x;
+			ImGui::PushFont(settingsIconFont, iconFontSize);
+			ImGui::TextUnformatted(ICON_FA_FOLDER);
+			ImGui::PopFont();
+			ImGui::SameLine(0, SettingsLayoutScaled(10.0f));
+			titleX = headerX + iconWidth + SettingsLayoutScaled(10.0f);
+		}
+		if (largeFont != nullptr)
+			ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Game folders"));
+		if (largeFont != nullptr)
+			ImGui::PopFont();
+		ImGui::SetCursorPosX(titleX);
+		ImGui::TextDisabled("%s", T("Add and manage folders in Game library."));
+
+		const char* manageLabel = T("Manage folders");
+		ImFont* textFont = settingsTitleFont != nullptr ? settingsTitleFont : ImGui::GetFont();
+		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : textFont;
+		const float fontSize = ImGui::GetFontSize();
+		const float buttonWidth = textFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, manageLabel).x
+			+ iconFont->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, ICON_FA_ARROW_RIGHT).x
+			+ SettingsLayoutScaled(36.0f);
+		ImGui::SameLine(RightColumnX(buttonWidth, 18.0f));
+		const ImVec2 buttonPos = ImGui::GetCursorPos();
+		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y - SettingsLayoutScaled(26.0f)));
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+		ImGui::PushStyleColor(ImGuiCol_Border, SettingsAccentColor());
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, SettingsLayoutScaled(8.0f));
+		const bool managePressed = SettingsLabelButton("##ManageFolders", ICON_FA_ARROW_RIGHT,
+			manageLabel, ImVec2(buttonWidth, SettingsLayoutScaled(36.0f)), true);
+		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor(3);
+		if (managePressed)
+			openTab(SettingsTab::Library);
+	}
+	EndSettingsCardSurface();
+	ImGui::Spacing();
+}
+
 // Render General tab with all settings from settings_general.cpp
 static void renderSettingsContentTab(SettingsTab tab)
 {
@@ -2731,17 +3392,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 	if (tab == SettingsTab::General)
 	{
 
-	ImGui::TextDisabled("%s", T("General Configuration"));
-	ImGui::Separator();
-	if (ImGui::Button(T("Ready to Play Checklist")))
-		gui_open_setup_checklist();
-	ImGui::TextWrapped("%s", T("Review game folders, firmware and controls."));
-	ImGui::Spacing();
+	RenderReadyToPlayBanner();
 
 	// ========================================
-	// Language & Region Section
+	// App Language Section
 	// ========================================
-	if (RenderCollapsingHeader("Language&RegionSection", ICON_FA_GLOBE, T("Language & Region"), ImGuiTreeNodeFlags_DefaultOpen))
+	if (BeginSettingsCard("AppLanguageCard", ICON_FA_GLOBE, T("App language")))
 	{
 		{
 			struct UILanguageOption
@@ -2751,7 +3407,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			};
 
 			const UILanguageOption uiLanguageOptions[] = {
-				{ T("System Default"), "" },
+				{ T("System default"), "" },
 				{ Tnop("English"), "en" },
 				{ Tnop("Deutsch"), "de" },
 				{ Tnop("Español"), "es" },
@@ -2785,7 +3441,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 			SettingsUI::PopupConfig uiLanguageCfg {};
 			uiLanguageCfg.type = SettingsUI::PopupType::Options;
-			uiLanguageCfg.options.label = T("UI Language");
+			uiLanguageCfg.options.label = T("Interface language");
 			uiLanguageCfg.options.icon = ICON_FA_LANGUAGE;
 			uiLanguageCfg.options.popupID = Tnop("UILanguagePopup");
 			uiLanguageCfg.options.options = uiLanguageLabels;
@@ -2813,12 +3469,21 @@ static void renderSettingsContentTab(SettingsTab tab)
 				)
 			);
 		}
+	}
+	EndSettingsCard();
+
+	// ========================================
+	// Dreamcast Defaults Section
+	// ========================================
+	if (BeginSettingsCard("DreamcastDefaultsCard", ICON_FA_GAMEPAD, T("Dreamcast defaults"),
+			T("Language, region and video settings for the emulated console.")))
+	{
 
 		// 0 -> JP, 1 -> EN, 2 -> DE, 3 -> FR, 4 -> SP, 5 -> IT, 6 -> default
 		const char* languages[] = { T("Japanese"), T("English"), T("German"), T("French"), T("Spanish"), T("Italian"), T("Default") };
 		SettingsUI::PopupConfig languageCfg {};
 		languageCfg.type = SettingsUI::PopupType::Options;
-		languageCfg.options.label = T("Dreamcast Language");
+		languageCfg.options.label = T("Game language");
 		languageCfg.options.icon = ICON_FA_LANGUAGE;
 		languageCfg.options.popupID = Tnop("LanguagePopup");
 		languageCfg.options.options = languages;
@@ -2829,7 +3494,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		languageCfg.options.valueWidth = 220.0f;
 			RenderGeneralPopupSettingRow(
 				Tnop("LanguageSetting"),
-				T("Dreamcast BIOS language (affects game text/menus)."),
+				T("Preferred language for supported games."),
 				languageCfg,
 				T(
 					"Language\n"
@@ -2839,10 +3504,35 @@ static void renderSettingsContentTab(SettingsTab tab)
 				)
 			);
 
+		const char* consoleRegion[] = { T("Japan"), T("USA"), T("Europe"), T("Default") };
+		const char* arcadeRegion[] = { T("Japan"), T("USA"), i18n::translateCtx("Arcade region", "Export"), T("Korea") };
+		const char* const* region = settings.platform.isArcade() ? arcadeRegion : consoleRegion;
+
+		SettingsUI::PopupConfig regionCfg {};
+		regionCfg.type = SettingsUI::PopupType::Options;
+		regionCfg.options.label = T("Console region");
+		regionCfg.options.icon = ICON_FA_EARTH_AMERICAS;
+		regionCfg.options.popupID = Tnop("RegionPopup");
+		regionCfg.options.options = region;
+		regionCfg.options.optionCount = 4;
+		regionCfg.options.currentValue = &config::Region.get();
+		regionCfg.options.valueWidth = 220.0f;
+			RenderGeneralPopupSettingRow(
+				Tnop("RegionSetting"),
+				T("Region reported by the Dreamcast BIOS."),
+				regionCfg,
+				T(
+					"Region\n"
+					"Sets the emulated BIOS region.\n"
+					"This can affect game compatibility, default language choices, and region-locked behavior in some titles.\n\n"
+					"If a game refuses to boot or behaves like the wrong region, try changing this."
+				)
+			);
+
 		const char* broadcast[] = { Tnop("NTSC"), Tnop("PAL"), Tnop("PAL/M"), Tnop("PAL/N"), T("Default") };
 		SettingsUI::PopupConfig broadcastCfg {};
 		broadcastCfg.type = SettingsUI::PopupType::Options;
-		broadcastCfg.options.label = T("Broadcast");
+		broadcastCfg.options.label = T("TV standard");
 		broadcastCfg.options.icon = ICON_FA_TV;
 		broadcastCfg.options.popupID = Tnop("BroadcastPopup");
 		broadcastCfg.options.options = broadcast;
@@ -2853,46 +3543,21 @@ static void renderSettingsContentTab(SettingsTab tab)
 		broadcastCfg.options.valueWidth = 220.0f;
 			RenderGeneralPopupSettingRow(
 				Tnop("BroadcastSetting"),
-				T("TV broadcast standard for non-VGA output modes."),
+				T("Broadcast format for non-VGA output."),
 				broadcastCfg,
 				T(
 					"Broadcast\n"
 					"Controls the TV broadcast standard used for non-VGA video modes.\n"
 					"NTSC is typically 60 Hz; PAL is typically 50 Hz.\n\n"
 					"If you see timing issues or a game expects a specific region video mode, try changing this."
-				));
-
-		const char* consoleRegion[] = { T("Japan"), T("USA"), T("Europe"), T("Default") };
-		const char* arcadeRegion[] = { T("Japan"), T("USA"), i18n::translateCtx("Arcade region", "Export"), T("Korea") };
-		const char* const* region = settings.platform.isArcade() ? arcadeRegion : consoleRegion;
-
-		SettingsUI::PopupConfig regionCfg {};
-		regionCfg.type = SettingsUI::PopupType::Options;
-		regionCfg.options.label = T("Region");
-		regionCfg.options.icon = ICON_FA_EARTH_AMERICAS;
-		regionCfg.options.popupID = Tnop("RegionPopup");
-		regionCfg.options.options = region;
-		regionCfg.options.optionCount = 4;
-		regionCfg.options.currentValue = &config::Region.get();
-		regionCfg.options.valueWidth = 220.0f;
-			RenderGeneralPopupSettingRow(
-				Tnop("RegionSetting"),
-				T("BIOS region (can affect compatibility and defaults)."),
-				regionCfg,
-				T(
-					"Region\n"
-					"Sets the emulated BIOS region.\n"
-					"This can affect game compatibility, default language choices, and region-locked behavior in some titles.\n\n"
-					"If a game refuses to boot or behaves like the wrong region, try changing this."
-				)
-			);
+				), false, true);
 
 		const char* cable[] = { T("VGA"), T("RGB Component"), T("TV Composite") };
 		const bool disabled = config::Cable.isReadOnly() || settings.platform.isArcade();
 
 		SettingsUI::PopupConfig cableCfg {};
 		cableCfg.type = SettingsUI::PopupType::Options;
-		cableCfg.options.label = T("Cable");
+		cableCfg.options.label = T("Video cable");
 		cableCfg.options.icon = ICON_FA_PLUG;
 		cableCfg.options.popupID = Tnop("CablePopup");
 		cableCfg.options.options = cable;
@@ -2920,7 +3585,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 		};
 			RenderGeneralPopupSettingRow(
 				Tnop("CableSetting"),
-				T("Emulated video cable type (affects game video modes)."),
+				T("Emulated connection used by the console."),
 				cableCfg,
 				T(
 					"Cable\n"
@@ -2928,9 +3593,14 @@ static void renderSettingsContentTab(SettingsTab tab)
 					"Games can change behavior depending on whether they detect VGA vs. TV output.\n\n"
 					"If a game has missing effects, wrong colors, or odd mode selection, this is worth trying."
 				),
-				disabled
+				disabled, true
 			);
+		RenderSettingsInfoBanner("DreamcastDefaultsNote",
+			T("Game language is separate from the Hollycast interface language."));
 	}
+	EndSettingsCard();
+
+	RenderGameFoldersCard();
 
 	// ========================================
 	// Content Paths Section
@@ -3321,9 +3991,27 @@ static void renderSettingsContentTab(SettingsTab tab)
 			} else {
 				ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
 				ImGui::InputText(T("Theme name"), &g_themeEditor.newFilename);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestText("theme.editor", "new_name", T("Theme name"));
+#endif
 			}
 			ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
-			if (ImGui::Combo(T("Base theme"), &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()))) {
+			const char* baseThemeLabel = T("Base theme");
+			const bool baseThemeChanged = ImGui::Combo(baseThemeLabel, &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+			{
+				test_harness::Json options = test_harness::Json::array();
+				for (int i = 0; i < static_cast<int>(baseNames.size()); ++i)
+					options.push_back({{"value", i}, {"label", baseNames[i]}, {"selected", baseIndex == i}});
+				test_harness::Json metadata = {{"semantic_id", "theme.editor.base"}, {"semantic_label", baseThemeLabel},
+					{"kind", "options"}, {"value", baseIndex}, {"options", std::move(options)}, {"requires_apply", true}};
+				if (baseIndex >= 0 && baseIndex < static_cast<int>(baseNames.size()))
+					metadata["value_label"] = baseNames[baseIndex];
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), metadata);
+			}
+#endif
+			if (baseThemeChanged) {
 				g_themeEditor.draft.base = baseIndex;
 				g_themeEditor.previewing = true;
 			}
@@ -3370,7 +4058,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								ImGui::PushID(role);
 								auto found = g_themeEditor.draft.roles.find(role);
 								bool enabled = found != g_themeEditor.draft.roles.end();
-								if (ImGui::Checkbox(labels[i], &enabled)) {
+								const bool enabledChanged = ImGui::Checkbox(labels[i], &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestToggle("theme.role", role, labels[i], enabled);
+#endif
+								if (enabledChanged) {
 									if (enabled) {
 										auto inherited = baseTheme.roles.find(role);
 										g_themeEditor.draft.roles[role] = inherited != baseTheme.roles.end() ? inherited->second : suggestions[i];
@@ -3380,7 +4072,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								found = g_themeEditor.draft.roles.find(role);
 								if (found != g_themeEditor.draft.roles.end()) {
 									ImVec4 value = found->second;
-									if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) {
+									const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									annotateTestColor("theme.role.color", role, labels[i], "##color", &value.x);
+#endif
+									if (colorChanged) {
 										found->second = value;
 										g_themeEditor.previewing = true;
 									}
@@ -3394,6 +4090,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 						if (ImGui::CollapsingHeader(T("Advanced interface colors"))) {
 							ImGui::SetNextItemWidth(-FLT_MIN);
 							ImGui::InputTextWithHint("##colorSearch", T("Search colors"), &g_themeEditor.colorSearch);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestText("theme.colors", "search", T("Search colors"));
+#endif
 							std::string query = g_themeEditor.colorSearch;
 							std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 							for (int i = 0; i < ImGuiCol_COUNT; ++i) {
@@ -3402,7 +4101,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								std::transform(searchable.begin(), searchable.end(), searchable.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 								if (!query.empty() && searchable.find(query) == std::string::npos) continue;
 								ImVec4 value = previewStyle.Colors[i];
-								if (ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar)) {
+								const bool colorChanged = ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestColor("theme.interface_color", name, name, name, &value.x);
+#endif
+								if (colorChanged) {
 									auto found = std::find_if(g_themeEditor.draft.colors.begin(), g_themeEditor.draft.colors.end(), [i](const auto& c) { return c.first == i; });
 									if (found == g_themeEditor.draft.colors.end()) g_themeEditor.draft.colors.emplace_back(i, value); else found->second = value;
 									g_themeEditor.previewing = true;
@@ -3420,7 +4123,16 @@ static void renderSettingsContentTab(SettingsTab tab)
 									bool enabled = found != roles.end();
 									ImGui::PushID(widget);
 									ImGui::PushID(role);
-									if (ImGui::Checkbox(role, &enabled)) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					const bool collectThemeMetadata = test_harness::ui::collectingInspection();
+					const std::string widgetRoleId = collectThemeMetadata ? std::string(widget) + "." + role : std::string();
+#endif
+									const bool enabledChanged = ImGui::Checkbox(role, &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (collectThemeMetadata)
+						annotateTestToggle("theme.widget_role", widgetRoleId.c_str(), role, enabled);
+#endif
+									if (enabledChanged) {
 										if (enabled) {
 											auto global = g_themeEditor.draft.roles.find(role);
 											auto inherited = baseTheme.roles.find(role);
@@ -3432,7 +4144,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 									found = roles.find(role);
 									if (found != roles.end()) {
 										ImVec4 value = found->second;
-										if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) { found->second = value; g_themeEditor.previewing = true; }
+										const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									if (collectThemeMetadata)
+										annotateTestColor("theme.widget_role.color", widgetRoleId.c_str(), role, "##color", &value.x);
+#endif
+										if (colorChanged) { found->second = value; g_themeEditor.previewing = true; }
 									}
 									ImGui::PopID();
 									ImGui::PopID();
@@ -3449,7 +4166,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					auto scalar = [&](const char* name, float ImGuiStyle::*member, float max) {
 						float value = previewStyle.*member;
 						const float upper = std::strstr(name, "BorderSize") != nullptr ? 20.f : max;
-						if (ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.style", name, name, value, 0.f, upper);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3457,7 +4178,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					};
 					auto vector = [&](const char* name, ImVec2 ImGuiStyle::*member, float max) {
 						ImVec2 value = previewStyle.*member;
-						if (ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestVector2("theme.style", name, name, name, value, 0.f, max);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.vectors.begin(), g_themeEditor.draft.vectors.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.vectors.end()) g_themeEditor.draft.vectors.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3475,7 +4200,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					for (const auto& item : scalars) {
 						if (item.second == &ImGuiStyle::Alpha) {
 							float value = previewStyle.*item.second;
-							if (ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+							const bool changed = ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestFloat("theme.style", item.first, item.first, value, 0.2f, 1.f);
+#endif
+							if (changed) {
 								auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == item.second; });
 								if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(item.second, value); else it->second = value;
 								g_themeEditor.previewing = true;
@@ -3494,7 +4223,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 						ImGui::TextDisabled("%s", T("Hollycast layout"));
 					auto layoutSlider = [&](const char* name, float& value, float minimum, float maximum, float fallback, bool& present) {
 						float shown = present ? value : fallback;
-						if (ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { value = shown; present = true; g_themeEditor.previewing = true; }
+						const bool changed = ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.layout", name, name, shown, minimum, maximum);
+#endif
+						if (changed) { value = shown; present = true; g_themeEditor.previewing = true; }
 					};
 					layoutSlider("Density", g_themeEditor.draft.layout.density, 0.75f, 1.5f, 1.f, g_themeEditor.draft.layout.hasDensity);
 					layoutSlider("Settings sidebar width", g_themeEditor.draft.layout.settingsSidebarWidth, 136.f, 310.f, 225.f, g_themeEditor.draft.layout.hasSettingsSidebarWidth);
@@ -3509,33 +4242,67 @@ static void renderSettingsContentTab(SettingsTab tab)
 					if (ImGui::BeginChild("ThemeAssetsList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
 					ImGui::TextWrapped("%s", T("Use paths relative to the custom theme folder. Copy files there first; import and export copy referenced files automatically."));
 					ImGui::Spacing();
-					auto assetInput = [&](const char* label, std::string& value, bool font = false) {
+					auto assetInput = [&](const char* id, const char* label, std::string& value, bool font = false) {
 						const bool changed = ImGui::InputText(label, &value);
 						const bool editCommitted = font && ImGui::IsItemDeactivatedAfterEdit();
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestText("theme.asset", id, label);
+#endif
 						if (changed) { g_themeEditor.previewing = true; g_themeEditor.fontChanged |= font; }
 						if (editCommitted) { g_themeEditor.previewing = true; g_themeEditor.fontReloadPending = true; }
 					};
-					assetInput(T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
-					assetInput(T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
-					assetInput(T("Background image path"), g_themeEditor.draft.assets.background);
+					assetInput("body_font", T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
+					assetInput("bold_font", T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
+					assetInput("background_image", T("Background image path"), g_themeEditor.draft.assets.background);
 					std::string settingsIconPath;
 					auto settingsIcon = g_themeEditor.draft.assets.icons.find("settings");
 					if (settingsIcon != g_themeEditor.draft.assets.icons.end()) settingsIconPath = settingsIcon->second;
-					if (ImGui::InputText(T("Settings icon path"), &settingsIconPath)) {
+					const bool settingsIconChanged = ImGui::InputText(T("Settings icon path"), &settingsIconPath);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "settings_icon", T("Settings icon path"));
+#endif
+					if (settingsIconChanged) {
 						if (settingsIconPath.empty()) g_themeEditor.draft.assets.icons.erase("settings");
 						else g_themeEditor.draft.assets.icons["settings"] = settingsIconPath;
 						g_themeEditor.previewing = true;
 					}
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
-					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
+					const char* opacityLabel = T("Background opacity");
+					const bool opacityChanged = ImGui::SliderFloat(opacityLabel, &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestFloat("theme.asset", "background_opacity", opacityLabel, opacity, 0.f, 1.f);
+#endif
+					if (opacityChanged) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
 					const char* fits[] = {"cover", "contain", "stretch"};
 					// Keep the JSON values independent of the translated option labels.
 					const char* fitLabels[] = {i18n::translateCtx("Background fit", "Cover"),
 						i18n::translateCtx("Background fit", "Contain"), i18n::translateCtx("Background fit", "Stretch")};
 					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
-					if (ImGui::Combo(T("Background fit"), &fit, fitLabels, IM_ARRAYSIZE(fitLabels))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
+					const char* fitLabel = T("Background fit");
+					const bool fitChanged = ImGui::Combo(fitLabel, &fit, fitLabels, IM_ARRAYSIZE(fitLabels));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						test_harness::Json options = test_harness::Json::array();
+						for (int i = 0; i < IM_ARRAYSIZE(fitLabels); ++i)
+							options.push_back({{"value", fits[i]}, {"label", fitLabels[i]}, {"selected", fit == i}});
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.background_fit"},
+							{"semantic_label", fitLabel}, {"kind", "options"}, {"value", fits[fit]},
+							{"value_label", fitLabels[fit]}, {"options", std::move(options)}});
+					}
+#endif
+					if (fitChanged) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
 					ImGui::InputText(T("Export folder"), &g_themeEditor.exportFolder);
-					if (ImGui::Button(T("Export theme and assets"))) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "export_folder", T("Export folder"));
+#endif
+					const bool exportClicked = ImGui::Button(T("Export theme and assets"));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.export"},
+							{"semantic_label", T("Export theme and assets")}, {"kind", "button"}});
+#endif
+					if (exportClicked) {
 						const std::string exportName = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
 						if (CustomTheme::exportToDirectory(g_themeEditor.draft, exportName, g_themeEditor.exportFolder, g_themeEditor.error))
 							g_themeEditor.error = strprintf(T("Exported %s and its referenced assets."), exportName.c_str());
@@ -3778,6 +4545,25 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryThemeCfg,
 			T("Library Theme\nThemes are loaded from the library themes folder shown below."));
 		gui_display_library_download_progress();
+		ImGui::PushID("ThemeDownloadRow");
+		const bool downloadThemes = BeginTwoLineSettingRow("##row",
+			T("Download Themes\nBrowse theme previews and descriptions, then download and install one for your library."));
+		const ImVec2 downloadThemesLine1Start = BeginTwoLineSettingRowContent();
+		SettingIcon(ICON_FA_DOWNLOAD, SettingsLayoutSize(20.0f, 20.0f));
+		ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
+		ImGui::PushFont(largeFont);
+		ImGui::TextUnformatted(T("Download Themes"));
+		ImGui::PopFont();
+		ImGui::PushFont(settingsRightValueFont != nullptr ? settingsRightValueFont : largeFont);
+		ImGui::SameLine(RightColumnX(ImGui::CalcTextSize(T("Download")).x));
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+				+ (TwoLineSettingContentHeight() - ImGui::GetTextLineHeight()) * 0.5f);
+		ImGui::TextUnformatted(T("Download"));
+		ImGui::PopFont();
+		RenderTwoLineSettingDescription(downloadThemesLine1Start, T("Browse and install library themes from the online catalogue."));
+		EndTwoLineSettingRow();
+		ImGui::PopID();
+		if (downloadThemes) themes::openBrowser();
 
 		if (const themes::Theme* activeTheme = themes::current())
 		{
@@ -3791,14 +4577,17 @@ static void renderSettingsContentTab(SettingsTab tab)
 			if (!activeTheme->layouts.empty())
 			{
 				std::vector<std::string> layoutLabelStorage;
+				std::vector<std::string> selectableLayoutIds;
 				std::vector<const char*> layoutLabels;
 				int selectedLayoutIndex = 0;
 				for (size_t i = 0; i < activeTheme->layouts.size(); ++i)
 				{
 					const themes::Layout& layout = activeTheme->layouts[i];
-					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
+					if (layout.screen != "library") continue;
 					if (layout.id == config::ThemeLayout.get())
-						selectedLayoutIndex = static_cast<int>(i);
+						selectedLayoutIndex = static_cast<int>(selectableLayoutIds.size());
+					selectableLayoutIds.push_back(layout.id);
+					layoutLabelStorage.push_back(layout.name.empty() ? layout.id : layout.name);
 				}
 				for (const std::string& label : layoutLabelStorage)
 					layoutLabels.push_back(label.c_str());
@@ -3812,9 +4601,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 				layoutCfg.options.currentValue = &selectedLayoutIndex;
 				layoutCfg.options.valueWidth = 220.0f;
 				layoutCfg.options.onChange = [&](int index) {
-					if (index >= 0 && index < static_cast<int>(activeTheme->layouts.size()))
+					if (index >= 0 && index < static_cast<int>(selectableLayoutIds.size()))
 					{
-						config::ThemeLayout.get() = activeTheme->layouts[index].id;
+						config::ThemeLayout.get() = selectableLayoutIds[index];
 						SaveSettings();
 					}
 					return true;
@@ -3875,7 +4664,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 
 	}
 
-	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads")))
+	if (RenderCollapsingHeader("ArtworkScraperSection", ICON_FA_DOWNLOAD, T("Artwork Downloads"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		const char *providers[] = {T("TheGamesDB"), T("ScreenScraper"), T("LaunchBox")};
 		SettingsUI::PopupConfig providerCfg {};
@@ -4264,6 +5053,28 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"Selects the visual layout for the game library.\n"
 			"Classic keeps the existing gallery/list behavior.\n"
 			"List uses a compact row/table layout with title and metadata columns."));
+
+		SettingsUI::PopupConfig hoverDelayCfg {};
+		hoverDelayCfg.type = SettingsUI::PopupType::Slider;
+		hoverDelayCfg.slider.label = T("Game Info Hover Delay");
+		hoverDelayCfg.slider.icon = ICON_FA_CLOCK;
+		hoverDelayCfg.slider.popupID = "LibraryGameInfoHoverDelayPopup";
+		hoverDelayCfg.slider.description = T("Wait 1-10 seconds before showing game information when hovering over a game in Original or List views. The last position (11) turns hover panels off.");
+		hoverDelayCfg.slider.currentValue = &config::LibraryGameInfoHoverDelay.get();
+		hoverDelayCfg.slider.minValue = 1;
+		hoverDelayCfg.slider.maxValue = 11;
+		hoverDelayCfg.slider.defaultValue = 4;
+		hoverDelayCfg.slider.format = "%d s";
+		hoverDelayCfg.slider.valueWidth = 220.0f;
+		hoverDelayCfg.slider.sliderWidth = 320.0f;
+		hoverDelayCfg.slider.valueFormatter = [](int value) {
+			return value >= 11 ? std::string(T("Off")) : std::to_string(value) + " s";
+		};
+		hoverDelayCfg.slider.onValueChange = [] { config::LibraryGameInfoHoverDelay.save(); };
+		RenderGeneralPopupSettingRow(
+			"LibraryGameInfoHoverDelaySetting",
+			T("Set the game info hover delay, or turn hover panels off."),
+			hoverDelayCfg);
 
 		const char* vmuIconModes[] = { T("Static"), T("Active / Animated") };
 		SettingsUI::PopupConfig vmuIconModeCfg {};
@@ -4665,8 +5476,6 @@ void renderVideoTab()
 {
 	ScopedTwoLineRowStyle videoRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Video Configuration"));
-	ImGui::Separator();
 
 	// ============================================================
 	// PRESET SELECTOR
@@ -4801,6 +5610,11 @@ void renderVideoTab()
 #ifdef USE_METAL
 	const bool metalAvailable = metalIsAvailable();
 #endif
+	const bool hikaruPlatform = settings.platform.isHikaru();
+#ifdef USE_HIKARU
+	if (hikaruPlatform)
+		perPixel = config::HikaruSorting.get() == config::HikaruSortingMode::PerPixel;
+#endif
 	const int apiCount = 0
 #ifdef USE_METAL
 		+ (metalAvailable ? 1 : 0)
@@ -4809,7 +5623,7 @@ void renderVideoTab()
 		+ 1
 #endif
 #ifdef USE_DX9
-		+ 1
+		+ (hikaruPlatform ? 0 : 1)
 #endif
 #ifdef USE_OPENGL
 		+ 1
@@ -4839,8 +5653,10 @@ void renderVideoTab()
 			apiValues[apiOptionCount++] = 1;
 #endif
 #ifdef USE_DX9
-			apiLabels[apiOptionCount] = "DirectX 9";
-			apiValues[apiOptionCount++] = 2;
+			if (!hikaruPlatform) {
+				apiLabels[apiOptionCount] = "DirectX 9";
+				apiValues[apiOptionCount++] = 2;
+			}
 #endif
 #ifdef USE_DX11
 			apiLabels[apiOptionCount] = "DirectX 11";
@@ -4928,7 +5744,7 @@ void renderVideoTab()
 				if (renderApi == 2)
 					perPixel = false;
 #ifdef USE_METAL
-				if (renderApi == 4 && !metalSupportsPerPixel())
+				if (renderApi == 4 && !settings.platform.isHikaru() && !metalSupportsPerPixel())
 					perPixel = false;
 #endif
 				return true;
@@ -4952,12 +5768,15 @@ void renderVideoTab()
 	if (RenderCollapsingHeader("TransparentSortingSection", ICON_FA_WAND_SPARKLES, T("Transparent Sorting"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		{
-			bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+			bool has_per_pixel = hikaruPlatform || GraphicsContext::Instance()->hasPerPixel();
 #ifdef USE_METAL
-			if (renderApi == 4)
+			if (renderApi == 4 && !hikaruPlatform)
 				has_per_pixel = metalSupportsPerPixel();
 #endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;
+#ifdef USE_HIKARU
+			if (hikaruPlatform) renderer = static_cast<int>(config::HikaruSorting.get());
+#endif
 
 			std::array<const char*, 3> sortingLabels {};
 			std::array<int, 3> sortingValues {};
@@ -5033,6 +5852,13 @@ void renderVideoTab()
 				if (selectedIndex < 0 || selectedIndex >= sortingOptionCount)
 					return false;
 				const int selectedRenderer = sortingValues[selectedIndex];
+#ifdef USE_HIKARU
+				if (hikaruPlatform) {
+					config::HikaruSorting.set(static_cast<config::HikaruSortingMode>(selectedRenderer));
+					perPixel = selectedRenderer == 2;
+					return true;
+				}
+#endif
 				switch (selectedRenderer)
 				{
 				case 0:
@@ -5088,7 +5914,7 @@ void renderVideoTab()
 			const int configuredRenderResolution = config::RenderResolution.get();
 			// Read both toggles every frame so labels also preview widescreen cheats before a game is loaded.
 			float widthScale = 1.f;
-			if ((config::Widescreen || config::WidescreenGameHacks)
+			if (!settings.platform.isHikaru() && (config::Widescreen || config::WidescreenGameHacks)
 					&& !config::Rotate90 && !config::EmulateFramebuffer)
 			{
 				widthScale = config::Widescreen && config::SuperWidescreen
@@ -5451,35 +6277,44 @@ void renderVideoTab()
 			Tnop("PixelBufferSizeSetting"),
 			T("Memory budget for Per-Pixel transparency rendering."),
 			pixelBufferCfg,
-			T(
-				"Pixel Buffer Size\n"
-				"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
-				"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
-				"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
-			)
+			hikaruPlatform
+				? T("Pixel Buffer Size\n"
+					"Controls the memory budget for Hikaru per-pixel transparency. Targets are allocated as needed.\n"
+					"Higher resolutions and overlapping effects require more memory. Increase this budget if transparency is missing or the renderer falls back to depth peeling.")
+				: T("Pixel Buffer Size\n"
+					"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
+					"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
+					"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes.")
 		);
 
-		static int perPixelLayersTemp = config::PerPixelLayers.get();
+#ifdef USE_HIKARU
+		auto& maximumLayers = hikaruPlatform ? config::HikaruMaxLayers : config::PerPixelLayers;
+#else
+		auto& maximumLayers = config::PerPixelLayers;
+#endif
+		static int perPixelLayersTemp = maximumLayers.get();
 		if (!ImGui::IsPopupOpen("PerPixelMaximumLayersPopup"))
-			perPixelLayersTemp = config::PerPixelLayers.get();
+			perPixelLayersTemp = maximumLayers.get();
 
 		SettingsUI::PopupSliderConfig perPixelLayersCfg {};
 		perPixelLayersCfg.label = T("Maximum Layers");
 		perPixelLayersCfg.icon = ICON_FA_LAYER_GROUP;
 		perPixelLayersCfg.popupID = Tnop("PerPixelMaximumLayersPopup");
-		perPixelLayersCfg.description = renderApi == 4
+		perPixelLayersCfg.description = hikaruPlatform
+			? T("Limits Hikaru depth-peeling layers. Supported OpenGL and Vulkan fragment lists use Pixel Buffer Size instead; this limit still applies to their peeling fallback.")
+			: renderApi == 4
 			? T("Controls how many transparent layers are resolved per pixel. Metal retains the nearest layers when the limit is exceeded. Lower values can improve performance.")
 			: T("Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
 				"Increase this if you see missing transparency or incorrect layering.\n"
 				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
-		perPixelLayersCfg.minValue = 8;
+		perPixelLayersCfg.minValue = hikaruPlatform ? 1 : 8;
 		perPixelLayersCfg.maxValue = 128;
 		perPixelLayersCfg.format = "%d";
 		perPixelLayersCfg.valueWidth = 220.0f;
 		perPixelLayersCfg.sliderWidth = 320.0f;
 		perPixelLayersCfg.onValueChange = [&]() {
-			config::PerPixelLayers.set(perPixelLayersTemp);
+			maximumLayers.set(perPixelLayersTemp);
 		};
 
 		SettingsUI::PopupConfig perPixelLayersPopupCfg {};
@@ -5490,7 +6325,9 @@ void renderVideoTab()
 			Tnop("PerPixelMaximumLayersSetting"),
 			T("Maximum transparent layers resolved per pixel."),
 			perPixelLayersPopupCfg,
-			renderApi == 4
+			hikaruPlatform
+				? T("Per-Pixel Maximum Layers\nLimits depth peeling and its fallback paths. Successful OpenGL and Vulkan fragment lists retain fragments within Pixel Buffer Size, without a fixed layer count.")
+				: renderApi == 4
 				? T("Per-Pixel Maximum Layers\nMetal retains the nearest layers when the limit is exceeded. Increase the limit if transparency is missing; lower it to reduce resolve work.")
 				: T("Per-Pixel Maximum Layers\n"
 					"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
@@ -6064,23 +6901,25 @@ void renderVideoTab()
 	}
 #endif
 
-	// Update renderer type based on selections
+	// Changing Hikaru sorting must not overwrite Dreamcast/Naomi's OIT choice.
+	// The API remains a shared preference; the sorting modes are independent.
+	const bool hostPerPixel = hikaruPlatform ? isPerPixel(config::RendererType) : perPixel;
 	switch (renderApi)
 	{
 	case 0:
-		config::RendererType = perPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
+		config::RendererType = hostPerPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
 		break;
 	case 1:
-		config::RendererType = perPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
+		config::RendererType = hostPerPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
 		break;
 	case 4:
-		config::RendererType = perPixel ? RenderType::Metal_OIT : RenderType::Metal;
+		config::RendererType = hostPerPixel ? RenderType::Metal_OIT : RenderType::Metal;
 		break;
 	case 2:
 		config::RendererType = RenderType::DirectX9;
 		break;
 		case 3:
-			config::RendererType = perPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
+			config::RendererType = hostPerPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
 			break;
 	}
 }
@@ -7220,6 +8059,248 @@ void closeShaderLiveTune()
 	g_shaderLiveTune = false;
 }
 
+#ifdef HAVE_PHONE_VMU
+static void renderPhoneVmuSettings()
+{
+	if (!RenderCollapsingHeader("PhoneVmuSection", ICON_FA_MOBILE_SCREEN, T("Phone VMU"), ImGuiTreeNodeFlags_DefaultOpen))
+		return;
+
+	RenderGeneralToggleSettingRow("ConnectPhone", ICON_FA_MOBILE_SCREEN,
+		T("Connect Phone"), T("Use your phone as a VMU display and play VMU mini-games."),
+		phone_vmu::status().running, [](bool enabled) {
+			if (enabled)
+			{
+				phone_vmu::setPairing(config::PhoneVmuToken.get(), config::PhoneVmuPort.get());
+				phone_vmu::start();
+				// Persist a first-time generated token so the address survives restarts.
+				if (config::PhoneVmuToken.get() != phone_vmu::pairingToken())
+					config::PhoneVmuToken.set(phone_vmu::pairingToken());
+			}
+			else
+				phone_vmu::stop();
+		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a VMU mini-game with automatic progress sync. The card is unplugged while the phone uses it; choose Return to Dreamcast to reconnect it. Turn this off to stop sharing."));
+
+	const auto connection = phone_vmu::status();
+	if (!connection.error.empty())
+		ImGui::TextWrapped("%s: %s", T("Unable to share the VMU display"), connection.error.c_str());
+	if (!connection.running || connection.urls.empty())
+		return;
+
+	ImGui::TextUnformatted(connection.connected ? T("Phone connected") : T("Waiting for phone"));
+	if (connection.lastSyncSlot >= 0 && connection.lastSyncSlot < 8 && !connection.lastSyncTime.empty())
+	{
+		const char slotLabel[] = { static_cast<char>('A' + connection.lastSyncSlot / 2),
+				static_cast<char>('1' + connection.lastSyncSlot % 2), '\0' };
+		ImGui::TextWrapped("%s: VMU %s at %s", T("Last phone save synced"), slotLabel, connection.lastSyncTime.c_str());
+	}
+	ImGui::TextWrapped("%s", T("This address stays the same when Hollycast restarts, so a paired phone can reconnect without a new scan."));
+	if (ImGui::Button(T("New pairing address")))
+		config::PhoneVmuToken.set(phone_vmu::regeneratePairing());
+	ImGui::SameLine();
+	ImGui::TextWrapped("%s", T("Disconnects all paired phones. Scan the new code to pair again."));
+	// Phone save-back keeps timestamped snapshots next to each VMU file.
+	// Restoring replaces that VMU, so only offer it while no game is loaded.
+	{
+		static std::string phoneRestoreMessage;
+		namespace fs = std::filesystem;
+		const char *ports[] = { "A1", "A2", "B1", "B2", "C1", "C2", "D1", "D2" };
+		struct PhoneVmuBackup { fs::path card; fs::path snapshot; };
+		static std::vector<PhoneVmuBackup> newestBackups;
+		static double lastBackupScan = -1.0;
+		constexpr char backupMarker[] = ".phone-backup-";
+		constexpr std::size_t backupMarkerLength = sizeof(backupMarker) - 1;
+		const double now = ImGui::GetTime();
+		if (!game_started && (lastBackupScan < 0.0 || now - lastBackupScan >= 1.0))
+		{
+			newestBackups.clear();
+			std::vector<fs::path> directories;
+			for (const char *port : ports)
+			{
+				const fs::path vmuPath = fs::u8path(hostfs::getVmuPath(port, true));
+				const fs::path dir = vmuPath.parent_path().empty() ? fs::path(".") : vmuPath.parent_path();
+				if (std::find(directories.begin(), directories.end(), dir) == directories.end())
+					directories.push_back(dir);
+			}
+			for (const fs::path& dir : directories)
+			{
+				std::error_code fsError;
+				fs::directory_iterator entry(dir, fsError), end;
+				for (; !fsError && entry != end; entry.increment(fsError))
+				{
+					const std::string filename = entry->path().filename().u8string();
+					const std::size_t marker = filename.rfind(backupMarker);
+					if (marker == std::string::npos || marker == 0)
+						continue;
+					const std::string stamp = filename.substr(marker + backupMarkerLength);
+					auto isDigits = [](auto first, auto last) {
+						return std::all_of(first, last, [](char c) { return c >= '0' && c <= '9'; });
+					};
+					const bool validStamp = stamp.size() == 15 && stamp[8] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.end());
+					const bool validCollisionStamp = stamp.size() == 22 && stamp[8] == '-' && stamp[15] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.begin() + 15)
+							&& isDigits(stamp.begin() + 16, stamp.end());
+					if (!validStamp && !validCollisionStamp)
+						continue;
+					std::error_code fileError;
+					if (!entry->is_regular_file(fileError) || fileError)
+						continue;
+					const fs::path card = dir / fs::u8path(filename.substr(0, marker));
+					auto backup = std::find_if(newestBackups.begin(), newestBackups.end(), [&](const PhoneVmuBackup& item) {
+						return item.card == card;
+					});
+					if (backup == newestBackups.end())
+						newestBackups.push_back({ card, entry->path() });
+					else if (entry->path() > backup->snapshot)
+						backup->snapshot = entry->path();
+				}
+			}
+			std::sort(newestBackups.begin(), newestBackups.end(), [](const PhoneVmuBackup& a, const PhoneVmuBackup& b) {
+				return a.card < b.card;
+			});
+			lastBackupScan = now;
+		}
+		for (const PhoneVmuBackup& backup : newestBackups)
+		{
+			const fs::path& vmuPath = backup.card;
+			const fs::path& newest = backup.snapshot;
+			if (game_started)
+				continue;
+			const std::string label = std::string(T("Restore VMU backup for ")) + vmuPath.filename().u8string();
+			if (ImGui::Button(label.c_str()))
+			{
+				constexpr std::size_t VmuSize = 128 * 1024;
+				std::error_code fsError;
+				fsError.clear();
+				if (fs::file_size(newest, fsError) != VmuSize || fsError)
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				std::string data(VmuSize, '\0');
+				std::ifstream in(newest, std::ios::binary);
+				if (!in || !in.read(data.data(), data.size())
+						|| in.peek() != std::ifstream::traits_type::eof())
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				fs::path tempPath = vmuPath;
+				tempPath += ".phone-restore.tmp";
+				const std::string tempPathUtf8 = tempPath.u8string();
+				const std::string vmuPathUtf8 = vmuPath.u8string();
+				FILE *out = nowide::fopen(tempPathUtf8.c_str(), "wb");
+				bool tempWritten = out != nullptr;
+				if (out != nullptr)
+				{
+					tempWritten = std::fwrite(data.data(), 1, data.size(), out) == data.size()
+							&& std::fflush(out) == 0;
+					if (std::fclose(out) != 0)
+						tempWritten = false;
+				}
+				if (!tempWritten)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				bool snapshotOk = true;
+				fsError.clear();
+				if (fs::exists(vmuPath, fsError))
+				{
+					std::time_t now = std::time(nullptr);
+					std::tm local {};
+					bool timeReady = false;
+#ifdef _WIN32
+					timeReady = localtime_s(&local, &now) == 0;
+#else
+					timeReady = localtime_r(&now, &local) != nullptr;
+#endif
+					char timestamp[16] = {};
+					timeReady = timeReady && std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &local) != 0;
+					snapshotOk = timeReady && !fsError;
+					bool snapshotCreated = false;
+					for (unsigned suffix = 0; snapshotOk && suffix < 100; ++suffix)
+					{
+						fs::path snapshotPath = vmuPath;
+						const std::string suffixText = std::to_string(suffix);
+						snapshotPath += backupMarker + std::string(timestamp)
+								+ (suffix == 0 ? "" : "-" + std::string(6 - suffixText.size(), '0') + suffixText);
+						fsError.clear();
+						snapshotCreated = fs::copy_file(vmuPath, snapshotPath, fs::copy_options::none, fsError);
+						if (snapshotCreated)
+							break;
+						if (fsError != std::errc::file_exists)
+							snapshotOk = false;
+					}
+					snapshotOk = snapshotOk && snapshotCreated;
+				}
+				else if (fsError)
+					snapshotOk = false;
+				if (!snapshotOk || nowide::rename(tempPathUtf8.c_str(), vmuPathUtf8.c_str()) != 0)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+				lastBackupScan = -1.0;
+				phoneRestoreMessage = std::string(T("Restored VMU ")) + vmuPath.filename().u8string() + ".";
+			}
+		}
+		if (!newestBackups.empty() && game_started)
+			ImGui::TextWrapped("%s", T("Phone VMU backups found. Stop emulation to restore one."));
+		if (!phoneRestoreMessage.empty())
+			ImGui::TextWrapped("%s", phoneRestoreMessage.c_str());
+	}
+	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi, then scan this code or open the address below in its browser. Choose a VMU slot on your phone, then return to your game."));
+	static int selectedAddress = 0;
+	selectedAddress = std::clamp(selectedAddress, 0, static_cast<int>(connection.urls.size()) - 1);
+	if (connection.urls.size() > 1)
+	{
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo(T("##PhoneVmuAddress"), connection.urls[selectedAddress].c_str()))
+		{
+			for (int i = 0; i < static_cast<int>(connection.urls.size()); ++i)
+				if (ImGui::Selectable(connection.urls[i].c_str(), i == selectedAddress))
+					selectedAddress = i;
+			ImGui::EndCombo();
+		}
+		ImGui::TextWrapped("%s", T("If the phone cannot connect, choose the address for your Wi-Fi or Ethernet network."));
+	}
+	const std::string& url = connection.urls[selectedAddress];
+	static std::string cachedUrl;
+	static std::unique_ptr<qrcodegen::QrCode> qr;
+	if (cachedUrl != url)
+	{
+		qr = std::make_unique<qrcodegen::QrCode>(qrcodegen::QrCode::encodeText(url.c_str(), qrcodegen::QrCode::Ecc::MEDIUM));
+		cachedUrl = url;
+	}
+	// Integral module sizes and a four-module quiet zone keep the code scannable
+	// at every UI scale, without creating a renderer-specific texture.
+	const int modules = qr->getSize() + 8;
+	const float cell = std::max(1.f, std::floor(std::min(ImGui::GetContentRegionAvail().x, SettingsLayoutScaled(260.f)) / modules));
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const ImVec2 size(modules * cell, modules * cell);
+	auto *draw = ImGui::GetWindowDrawList();
+	draw->AddRectFilled(origin, origin + size, IM_COL32(255, 255, 255, 255));
+	for (int y = 0; y < qr->getSize(); ++y)
+		for (int x = 0; x < qr->getSize(); ++x)
+			if (qr->getModule(x, y))
+			{
+				const ImVec2 pos = origin + ImVec2((x + 4) * cell, (y + 4) * cell);
+				draw->AddRectFilled(pos, pos + ImVec2(cell, cell), IM_COL32(0, 0, 0, 255));
+			}
+	ImGui::Dummy(size);
+	ImGui::TextWrapped("%s", url.c_str());
+	if (ImGui::Button(T("Copy address")))
+		ImGui::SetClipboardText(url.c_str());
+	ImGui::TextWrapped("%s", T("Sharing stays on when you close settings. Turn off Connect Phone to disconnect all phones. Allow Hollycast through your firewall on private networks if needed."));
+}
+#endif
+
 void renderOnScreenDisplayTab()
 {
 	ScopedTwoLineRowStyle osdRowStyle(12.0f, true, 0.5f);
@@ -7311,6 +8392,10 @@ void renderOnScreenDisplayTab()
 		}
 #endif
 	}
+
+#ifdef HAVE_PHONE_VMU
+	renderPhoneVmuSettings();
+#endif
 
 	if (RenderCollapsingHeader("OsdPerformanceSection", ICON_FA_CHART_LINE, T("Performance Overlay"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -7527,13 +8612,17 @@ void renderOnScreenDisplayTab()
 			T("Text Color"),
 			T("Choose the overlay text color."),
 			[&]() {
-				if (ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs))
+				const bool colorChanged = ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestColor("settings.overlay", "OverlayColor", T("Text Color"), "##OverlayColor", overlayColor);
+#endif
+				if (colorChanged)
 					cfgSaveInt("rend", "OverlayColor", static_cast<int>(std::round(overlayColor[0] * 255.f))
 						| (static_cast<int>(std::round(overlayColor[1] * 255.f)) << 8)
 						| (static_cast<int>(std::round(overlayColor[2] * 255.f)) << 16)
 						| (static_cast<int>(std::round(overlayColor[3] * 255.f)) << 24));
 			},
-			T("Text Color\nControls the overlay text color."));
+			T("Text Color\nControls the overlay text color."), false, 220.0f, "color");
 	}
 }
 
@@ -7541,12 +8630,19 @@ void renderAudioTab()
 {
 	ScopedTwoLineRowStyle audioRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Audio Configuration"));
-	ImGui::Separator();
 
 	// Audio Playback Section
 	if (RenderCollapsingHeader("PlaybackSection", ICON_FA_VOLUME_HIGH, T("Playback"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+	#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			RenderGeneralToggleSettingRow(
+				"HikaruAudioPacing", ICON_FA_VOLUME_HIGH,
+				T("Match audio to game speed"), T("Keep pitch steady when the game runs slowly"),
+				static_cast<bool>(config::HikaruAudioPacing),
+				[](bool enabled) { config::HikaruAudioPacing.set(enabled); },
+				T("Match audio to game speed\nWhen the game runs slowly, slows audio to match while keeping its pitch. Adds some audio latency."));
+	#endif
 
 		RenderGeneralToggleSettingRow(
 			"EnableDSP",
@@ -8569,8 +9665,6 @@ void renderControlsTab()
 
 	ScopedTwoLineRowStyle controlsRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Controls Configuration"));
-	ImGui::Separator();
 
 	if (RenderCollapsingHeader("PhysicalDevicesSection", ICON_FA_GAMEPAD, T("Physical Devices"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -8644,7 +9738,39 @@ void renderControlsTab()
 
 				// Port selection combo (None, A, B, C, D, All)
 				const char* current_port = kMaplePorts[gamepad->maple_port() + 1];
-				if (ImGui::BeginCombo(port_name, current_port))
+#ifdef HOLLYCAST_TEST_HARNESS
+				const bool mappingOnlyTestDevice = gamepad->remappable()
+					&& gamepad->api_name() == test_harness::ControllerApiName
+					&& gamepad->unique_id() == "hollycast-test-mapping-device";
+				if (mappingOnlyTestDevice)
+					ImGui::BeginDisabled(true);
+#endif
+				const bool portPopupOpen = ImGui::BeginCombo(port_name, current_port);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+				{
+					const auto portItemId = test_harness::ui::lastItemId();
+					if (portItemId != 0)
+					{
+						using test_harness::Json;
+						Json options = Json::array();
+						for (int port = -1; port <= 4; ++port)
+							options.push_back({{"value", port}, {"label", kMaplePorts[port + 1]},
+								{"selected", gamepad->maple_port() == port}});
+						const std::string semanticId = "controls.physical.port." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Port";
+						test_harness::ui::annotateItem(portItemId, {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "options"}, {"value", gamepad->maple_port()},
+							{"value_label", current_port}, {"options", std::move(options)},
+							{"requires_apply", !mappingOnlyTestDevice}});
+					}
+				}
+#endif
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (mappingOnlyTestDevice)
+					ImGui::EndDisabled();
+#endif
+				if (portPopupOpen)
 				{
 					for (int j = -1; j < IM_ARRAYSIZE(kMaplePorts) - 1; j++)
 					{
@@ -8664,13 +9790,26 @@ void renderControlsTab()
 				ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
 
 				// Map button for controller mapping
-				if (gamepad->remappable() && ImGui::Button(T("Map"), deviceButtonSize))
+				if (gamepad->remappable())
 				{
-					ResetControllerMappingRuntime();
-					g_currentGamepadForMapping = gamepad;
-					g_currentGamepadForMapping->listenButtons(buttonListener);
-					g_gamepad_port_for_mapping = 0;
-					ImGui::OpenPopup(T("Controller Mapping"));
+					const bool mapClicked = ImGui::Button(T("Map"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.mapping." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Mapping";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (mapClicked)
+					{
+						ResetControllerMappingRuntime();
+						g_currentGamepadForMapping = gamepad;
+						g_currentGamepadForMapping->listenButtons(buttonListener);
+						g_gamepad_port_for_mapping = 0;
+						ImGui::OpenPopup(T("Controller Mapping"));
+					}
 				}
 
 				// Virtual controllers open the live editor; physical controllers keep
@@ -8678,7 +9817,17 @@ void renderControlsTab()
 				if (gamepad->is_rumble_enabled() || gamepad->has_analog_stick() || gamepad->is_virtual_gamepad())
 				{
 					ImGui::SameLine(0, SettingsLayoutScaled(16.0f));
-					if (ImGui::Button(T("Settings"), deviceButtonSize))
+					const bool settingsClicked = ImGui::Button(T("Settings"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.settings." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Settings";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (settingsClicked)
 					{
 						if (gamepad->is_virtual_gamepad())
 						{
@@ -8719,6 +9868,95 @@ void renderControlsTab()
 	}
 
 	ImGui::Spacing();
+
+#ifdef USE_HIKARU
+	// Platform alone stays Hikaru after unload. Gate cabinet controls on the
+	// published loaded descriptor so another title never exposes these options.
+	const auto* hikaruGame = hikaru::frontend::loadedGame();
+	if (hikaruGame && RenderCollapsingHeader("HikaruCompatibilityBindings", ICON_FA_GAMEPAD,
+		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::TextUnformatted(hikaruGame->title);
+		ImGui::TextWrapped("%s", T("Enabled gamepad controls use a built-in preset. Disable them to use your saved mapping. Wheels keep their mapped axes. L3 inserts a coin, R3 opens cabinet test, and Back opens the menu."));
+		auto* regionOption = hikaruGame == &hikaru::StarWarsRacerGame ? &config::HikaruStarWarsRacerRegion
+			: hikaruGame == &hikaru::SegaNascarGame ? &config::HikaruNascarRegion
+			: hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
+			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion
+			: hikaruGame == &hikaru::VirtualOn4Game ? &config::HikaruVirtualOn4Region : &config::HikaruPlanetRegion;
+		const char* regionLabels[] = {T("Keep saved region"), T("Japan"), T("USA (English)"), T("Export")};
+		int regionSelection = std::clamp(regionOption->get(), -1, 2) + 1;
+		SettingsUI::PopupConfig regionCfg {};
+		regionCfg.type = SettingsUI::PopupType::Options;
+		regionCfg.options.label = T("Cabinet region");
+		regionCfg.options.icon = ICON_FA_GLOBE;
+		regionCfg.options.popupID = Tnop("HikaruCabinetRegionPopup");
+		regionCfg.options.options = regionLabels;
+		regionCfg.options.optionCount = 4;
+		regionCfg.options.currentValue = &regionSelection;
+		regionCfg.options.valueWidth = 220.0f;
+		regionCfg.options.onChange = [regionOption](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex > 3 || regionOption->get() == selectedIndex - 1) return false;
+			regionOption->set(selectedIndex - 1);
+			hikaru::frontend::requestCabinetRegion();
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
+			T("Choose a region for this game. Changing it restarts the cabinet; calibration and saved records are retained. A backup is kept before the first change."), regionCfg);
+		ImGui::TextWrapped("%s", T("USA selects the English cabinet configuration. Export uses the game's export language options. New cabinets must finish creating their settings before the region can apply."));
+		if (hikaruGame == &hikaru::StarWarsRacerGame) {
+			RenderGeneralToggleSettingRow("HikaruStarWarsRacerGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad pod controls"), T("Use triggers and shoulders while both thumbs operate the pod levers"),
+				bool(config::HikaruStarWarsRacerGamepad),
+				[](bool enabled) { config::HikaruStarWarsRacerGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to use only the individually mapped cabinet buttons. The two analog levers keep their assignments."));
+			ImGui::TextWrapped("%s", T("Push the left and right sticks forward to advance their respective pod levers. A is boost, B is brake, and X/Y are the left/right buttons."));
+			ImGui::TextWrapped("%s", T("With the default arcade gamepad layout, this option also maps LT to boost, RT to brake, and the left/right shoulders or D-pad to the corresponding left/right buttons. Coin and Start use their normal arcade bindings."));
+		} else if (hikaruGame == &hikaru::SegaNascarGame) {
+			RenderGeneralToggleSettingRow("HikaruNascarGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad driving controls"), T("Keep the selected gear engaged and allow D-pad steering"),
+				bool(config::HikaruNascarGamepad),
+				[](bool enabled) { config::HikaruNascarGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable for a physical shifter whose gear buttons remain held. Analog steering and pedals always keep their cabinet assignments."));
+			ImGui::TextWrapped("%s", T("Standard cabinet: left stick steers, RT is gas, LT is brake. With the preset enabled, A/B/X/Y select gears 1/2/3/4, right shoulder changes view, and left shoulder selects neutral. L3 inserts a coin and Start begins the race."));
+			ImGui::TextWrapped("%s", T("Map Steering wheel, Gas pedal and Brake pedal above. Use Game Test > Input Assignments for calibration; select Automatic transmission in the game if you do not want to shift manually."));
+		} else if (hikaruGame == &hikaru::AirTrixGame) {
+			RenderGeneralToggleSettingRow("HikaruAirTrixDpadBoard", ICON_FA_GAMEPAD,
+				T("D-pad board steering"), T("Use the D-pad for board yaw and roll, alongside the analog stick"),
+				bool(config::HikaruAirTrixDpadBoard),
+				[](bool enabled) { config::HikaruAirTrixDpadBoard.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("When disabled, D-pad up/down operate the original nose/tail kick switches. Action buttons always provide separate kicks."));
+			ImGui::TextWrapped("%s", T("Map Tail kick, Nose kick, Cabinet left/right, Coin, Yaw and Roll using Controller Mapping above. With the default arcade gamepad layout: A is tail kick, B is nose kick, X/Y are cabinet left/right, and the right shoulder inserts a coin."));
+			ImGui::TextWrapped("%s", T("Tricks combine board motion and kick timing. If steering is ignored, calibrate both axes in Game Test Mode > Calibration > Volume Calibration, then return to the center and save."));
+		} else if (hikaruGame == &hikaru::BraveFirefightersGame) {
+			RenderGeneralToggleSettingRow("HikaruBraveGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad hose controls"), T("Use the built-in gamepad layout for this cabinet"),
+				bool(config::HikaruBraveGamepad),
+				[](bool enabled) { config::HikaruBraveGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to use your saved controller mapping."));
+			RenderGeneralToggleSettingRow("HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
+				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
+				bool(config::HikaruBraveMouseAim),
+				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
+				T("Uses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Spray, Fog, Horizontal aim and Vertical aim for this cabinet."));
+		} else if (hikaruGame == &hikaru::VirtualOn4Game) {
+			RenderGeneralToggleSettingRow("HikaruVirtualOn4TwinStick", ICON_FA_GAMEPAD,
+				T("Single-controller bindings"), T("Use both sticks and triggers of controller A for one cabinet"),
+				bool(config::HikaruVirtualOn4TwinStick),
+				[](bool enabled) { config::HikaruVirtualOn4TwinStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("When disabled, controllers A and B each provide one lever. These are the two levers of one player, not linked cabinets."));
+			ImGui::TextWrapped("%s", T("Left/right sticks move the two levers. LT/RT fire. X/Y activate left/right turbo, L3 inserts a coin, and Start begins the game. Right shoulder opens personal information."));
+		} else if (hikaruGame == &hikaru::PlanetHarriersGame) {
+			RenderGeneralToggleSettingRow("HikaruPlanetDpadStick", ICON_FA_GAMEPAD,
+				T("D-pad flight controls"), T("Use the D-pad for full-range flight movement, alongside the analog stick"),
+				bool(config::HikaruPlanetDpadStick),
+				[](bool enabled) { config::HikaruPlanetDpadStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to steer only with the mapped analog stick. Bullet, Missile, Bomb and View buttons keep their existing bindings."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Bullet, Missile, Bomb, View left/right and Stick horizontal/vertical for this cabinet."));
+		}
+		ImGui::Spacing();
+	}
+#endif
 
 	if (RenderCollapsingHeader("Mouse&RawInputSection", ICON_FA_CROSSHAIRS, T("Mouse & Raw Input"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -9082,6 +10320,10 @@ void renderControlsTab()
 							config::CrosshairColor[bus] = 0;
 						}
 					}
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestToggle("controls.crosshair", std::to_string(bus).c_str(), T("Crosshair"), enabled);
+#endif
 
 					ImGui::SameLine(0, 0);
 
@@ -9105,6 +10347,11 @@ void renderControlsTab()
 					bool colorChanged = ImGui::ColorEdit4("##crosshair_color", xhairColor,
 						ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf
 						| ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoLabel);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestColor("controls.crosshair.color", std::to_string(bus).c_str(), T("Crosshair color"),
+							"##crosshair_color", xhairColor);
+#endif
 
 					if (colorChanged)
 					{
@@ -9239,8 +10486,6 @@ void renderNetworkTab()
 {
 	ScopedTwoLineRowStyle networkRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Network Configuration"));
-	ImGui::Separator();
 
 	if (RenderCollapsingHeader("NetworkTypeSection", ICON_FA_GLOBE, T("Network Type"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -9860,14 +11105,37 @@ void renderAdvancedTab()
 {
 	ScopedTwoLineRowStyle advancedRowStyle(12.0f, true, 0.5f);
 
-	ImGui::TextDisabled("%s", T("Advanced Configuration"));
-	ImGui::Separator();
+	// Updates Section
+	ImGui::Spacing();
+	if (RenderCollapsingHeader("UpdatesSection", ICON_FA_DOWNLOAD, T("Updates"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderGeneralToggleSettingRow(
+			"CheckForUpdatesOnStartup",
+			ICON_FA_DOWNLOAD,
+			T("Check for updates on startup"),
+			T("Automatically check after the startup animation"),
+			cfgLoadBool("updates", "startup", true),
+			[](bool enabled) {
+				cfgSaveBool("updates", "startup", enabled);
+				SaveSettings();
+			},
+			T(
+				"Check for updates on startup\n"
+				"Checks Hollycast's selected update track after the startup intro.\n\n"
+				"If an update is available, Hollycast shows its details. Download and installation start only after you confirm."
+			));
+	}
 
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+		if (settings.platform.isHikaru()) {
+			RenderGeneralInfoRow("CpuModeSetting", ICON_FA_MICROCHIP, T("CPU Mode"),
+				T("Hikaru uses the interpreter; CPU mode applies to Dreamcast."), T("Interpreter"));
+		}
 #if FEAT_SHREC != DYNAREC_NONE
 		// CPU Mode
+		if (!settings.platform.isHikaru())
 		{
 			const char* cpuModeLabels[] = { T("Dynarec"), T("Interpreter") };
 			int cpuModeSelection = config::DynarecEnabled.get() ? 0 : 1;
@@ -9918,15 +11186,27 @@ void renderAdvancedTab()
 				));
 		}
 
+#endif
+#if FEAT_SHREC == DYNAREC_NONE
+		if (settings.platform.isHikaru())
+#endif
 		// SH4 Clock
 		{
+			const bool hikaru = settings.platform.isHikaru();
 			static int sh4ClockTemp = config::Sh4Clock.get();
+			if (hikaru) {
+				sh4ClockTemp = std::clamp(config::Sh4Clock.get(), 100, 300);
+				if (sh4ClockTemp != config::Sh4Clock.get())
+					config::Sh4Clock.set(sh4ClockTemp);
+			}
 
 			SettingsUI::PopupSliderConfig sh4ClockCfg {};
 			sh4ClockCfg.label = T("SH4 Clock");
 			sh4ClockCfg.icon = ICON_FA_GAUGE_HIGH;
 			sh4ClockCfg.popupID = Tnop("Sh4ClockPopup");
-			sh4ClockCfg.description = T(
+			sh4ClockCfg.description = hikaru ? T(
+				"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n"
+				"Higher settings require more CPU work and can change game timing.") : T(
 				"Adjusts the emulated SH4 CPU clock. Default is 200 MHz.\n"
 				"Higher values may reduce CPU-side frame drops in some games, but can also break timing.\n"
 				"Lower values can reduce CPU load, but may cause slowdowns or audio/video instability.");
@@ -9947,9 +11227,13 @@ void renderAdvancedTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("Sh4ClockSetting"),
-				T("Over/Underclock the main SH4 CPU."),
+				hikaru ? T("Adjust both Hikaru SH4 CPU clocks; audio and video clocks stay unchanged.")
+				       : T("Over/Underclock the main SH4 CPU."),
 				sh4ClockPopupCfg,
-				T(
+				hikaru ? T(
+					"SH4 Clock\n"
+					"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n\n"
+					"The default is 200 MHz. Higher settings require more CPU work and can change game timing.") : T(
 					"SH4 Clock\n"
 					"Overclocks/underclocks the emulated Dreamcast CPU.\n\n"
 					"Default is 200 MHz.\n"
@@ -9959,6 +11243,7 @@ void renderAdvancedTab()
 				));
 		}
 
+#if FEAT_SHREC != DYNAREC_NONE
 		// Fast-Forward Speed Limit
 		{
 			static int fastForwardLimitTemp = config::FastForwardSpeedLimit.get();
@@ -10039,7 +11324,6 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		// Multi-threaded emulation
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
 			ICON_FA_GEAR,
@@ -10102,8 +11386,8 @@ void renderAdvancedTab()
 			ICON_FA_BUG,
 			T("GDB Server"),
 			T("GDB debug server"),
-			static_cast<bool>(config::GDBWait),
-			[](bool enabled) { config::GDBWait.set(enabled); },
+			static_cast<bool>(config::GDB),
+			[](bool enabled) { config::GDB.set(enabled); },
 			T(
 				"GDB Server\n"
 				"Starts a GDB debug server for developers.\n\n"
@@ -10112,7 +11396,7 @@ void renderAdvancedTab()
 			));
 
 		// GDB Server options (shown when enabled)
-		if (config::GDBWait.get())
+		if (config::GDB.get())
 		{
 			ImGui::Indent();
 
@@ -10155,7 +11439,14 @@ void renderAdvancedTab()
 					ImGui::SetKeyboardFocusHere();
 				ImGui::SetNextItemWidth(inputWidth);
 				static int gdbport = config::GDBPort;
-				if (ImGui::InputInt("##GDBPortInput", &gdbport))
+				const bool gdbPortChanged = ImGui::InputInt("##GDBPortInput", &gdbport);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "settings.debug.gdb_port"},
+						{"semantic_label", T("GDB Port")}, {"kind", "number"}, {"value", gdbport},
+						{"read_only", false}});
+#endif
+				if (gdbPortChanged)
 					config::GDBPort = gdbport;
 
 				RenderTwoLineSettingDescription(line1Start, T("Default port is 3263"));
@@ -10418,6 +11709,19 @@ void renderAdvancedTab()
 				"It can create a large number of files quickly and may reduce performance due to disk I/O.\n\n"
 				"Enable it only when you specifically need a dump, then disable it again."
 			));
+		RenderGeneralToggleSettingRow(
+			"SplitTextureSheets",
+			ICON_FA_IMAGE,
+			T("Split Texture Sheets"),
+			T("Extract and rebuild pieces of texture sheets."),
+			static_cast<bool>(config::SplitTextureSheets),
+			[](bool enabled) { config::SplitTextureSheets.set(enabled); },
+			T("Enable for games that store several textures in one image.\n\n"
+				"With Texture Dumping enabled, saves rectangular pieces and texture-atlas.json beside the original sheets.\n"
+				"Copy the mapping, original sheets and edited pieces into the title's replacement folder.\n"
+				"Every piece from a sheet must use the same scale, such as 2x or 4x.\n"
+				"Sheets are rebuilt automatically when custom textures load. Uncertain regions remain in the original sheet."),
+			game_started);
 		if (config::DumpTextures)
 		{
 			ImGui::Indent();
@@ -10466,23 +11770,6 @@ void renderAdvancedTab()
 		ImGui::SameLine();
 		ShowFooterHelpMarker(T("Specify lua filename to use. Should be located in Hollycast config folder. Defaults to flycast.lua when empty."));
 #endif
-
-#ifdef SENTRY_UPLOAD
-		// Crash Reporting - 2x Row Pattern
-		RenderGeneralToggleSettingRow(
-			"CrashReporting",
-			ICON_FA_STETHOSCOPE,
-			T("Crash Reports"),
-			T("Auto-upload crash reports"),
-			static_cast<bool>(config::UploadCrashLogs),
-			[](bool enabled) { config::UploadCrashLogs.set(enabled); },
-			T(
-				"Crash Reports\n"
-				"Automatically uploads crash reports to help developers diagnose and fix issues.\n\n"
-				"Crash reports typically include technical details about the crash and environment.\n"
-				"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-			));
-	#endif
 
 #if defined(GDB_SERVER)
 		// Virtual Memory Addresses (debug builds)
@@ -10623,8 +11910,6 @@ static void RenderHollycastAsciiText()
 void renderAboutTab()
 {
 	// Use TextDisabled for the title (theme-aware)
-	ImGui::TextDisabled("%s", T("About Hollycast"));
-	ImGui::Separator();
 
 	// Center content for better appearance
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ScaledVec2(20, 20));
@@ -10638,7 +11923,7 @@ void renderAboutTab()
 	// Version Information
 	if (RenderCollapsingHeader("VersionInformationSection", ICON_FA_TAG, T("Version Information"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
-		ImGui::Text(T("Version: %s"), GIT_VERSION);
+		ImGui::Text(T("Version: %s"), app_updates::detail::versionLabel(HOLLYCAST_UPDATE_CHANNEL, GIT_HASH).c_str());
 		ImGui::Text(T("Git Hash: %s"), GIT_HASH);
 		ImGui::Text(T("Build Date: %s"), BUILD_DATE);
 		ImGui::Spacing();
@@ -10898,12 +12183,19 @@ void renderSettingsNew()
 				gui_setState(GuiState::Main);
 		};
 
-		const char* backLabel = game_started ? T("Back to Game") : T("Library");
+		const char* backLabel = game_started ? T("Back to Game") : T("Back to library");
 
 		// Split into left navigation rail and right content area
 		renderNavigationRail(exitSettings, backLabel);
 		ImGui::SameLine();
 		renderContentArea();
+		if (const auto chosen = themes::renderBrowser())
+		{
+			config::CustomTheme = *chosen;
+			config::ThemeLayout = "";
+			SaveSettings();
+			g_applyThemeAfterSettings = true;
+		}
 
 		if (pushedSettingsFont)
 			ImGui::PopFont();

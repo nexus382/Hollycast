@@ -22,6 +22,7 @@
 #include "version.h"
 
 #include <string>
+#include <atomic>
 #include <vector>
 #include <cctype>
 #include <iomanip>
@@ -35,8 +36,10 @@ void term();
 
 using Headers = std::vector<std::pair<std::string, std::string>>;
 
+// A positive timeout bounds network waits; zero retains the platform defaults.
 int get(const std::string& url, std::vector<u8>& content,
-		const Headers *reqHeaders = nullptr, Headers *respHeaders = nullptr);
+		const Headers *reqHeaders = nullptr, Headers *respHeaders = nullptr, int timeoutMs = 0,
+		const std::atomic<bool> *cancelled = nullptr);
 
 int get(const std::string& url, std::vector<u8>& content, std::string& contentType);
 

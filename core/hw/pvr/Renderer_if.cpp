@@ -482,7 +482,11 @@ static void rend_create_renderer()
 #ifdef NO_REND
 	renderer	 = rend_norend();
 #else
-	switch (config::RendererType)
+	auto hostRenderer = config::RendererType.get();
+#ifdef USE_HIKARU
+	hostRenderer = hostRendererType(hostRenderer, settings.platform.isHikaru());
+#endif
+	switch (hostRenderer)
 	{
 	default:
 #ifdef USE_OPENGL
@@ -693,6 +697,7 @@ void rend_start_render()
 			ctx->rend.clearFramebuffer = false;
 		}
 		ggpo::endOfFrame();
+		ctx->rend.palVideoMode = SPG_CONTROL.isPAL();
 		swapIntervalDetector.render();
 		if (!config::EmulateFramebuffer)
 			ctx->rend.swapInterval = swapIntervalDetector.swapInterval();

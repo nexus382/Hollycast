@@ -33,6 +33,8 @@
 #include <jni.h>
 #include <unistd.h>
 #include <exception>
+#include <stdexcept>
+#include <atomic>
 
 JavaVM* g_jvm;
 namespace jni
@@ -90,17 +92,10 @@ static bool dumpCallback(const google_breakpad::MinidumpDescriptor& descriptor, 
 {
     if (succeeded)
     {
-    	__android_log_print(ANDROID_LOG_ERROR, "Flycast", "Minidump saved to '%s'\n", descriptor.path());
-    	registerCrash(descriptor.directory().c_str(), descriptor.path());
+        __android_log_print(ANDROID_LOG_ERROR, "Flycast", "Minidump saved to '%s'\n", descriptor.path());
+        registerCrash(descriptor.path());
     }
 	return succeeded;
-}
-
-static void *uploadCrashThread(void *p)
-{
-	uploadCrashes(*(std::string *)p);
-
-	return nullptr;
 }
 
 static google_breakpad::ExceptionHandler *exceptionHandler;
@@ -172,16 +167,6 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_hollycast_emulator_emu_JNIdc_initE
         int rc = flycast_init(0, nullptr);
         if (rc == -1)
             msg = env->NewStringUTF(i18n::T("Memory initialization failed"));
-#ifdef USE_BREAKPAD
-        else
-        {
-			static std::string crashPath;
-			static cThread uploadThread(uploadCrashThread, &crashPath, "SentryUpload");
-			crashPath = get_writable_config_path("");
-			uploadThread.Start();
-        }
-#endif
-
         return msg;
     }
     else {
@@ -489,6 +474,66 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_AudioBackend_s
 
     // Attach debugger here to figure out what went wrong
     for(;;) ;
+}
+
+static std::atomic<bool> appUpdateSnapshotDirty{true};
+
+extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_BaseGLActivity_appUpdateSnapshotChanged(JNIEnv *, jclass)
+{
+    appUpdateSnapshotDirty.store(true, std::memory_order_release);
+}
+
+bool androidAppUpdatesChanged()
+{
+    return appUpdateSnapshotDirty.load(std::memory_order_acquire)
+        && appUpdateSnapshotDirty.exchange(false, std::memory_order_acquire);
+}
+
+// Java publishes the snapshot before signalling. Consume the signal before reading
+// so a concurrent publication remains pending for the next frame.
+std::string androidAppUpdates(const std::string& action)
+{
+    if (g_activity == nullptr) throw std::runtime_error("The Android activity is not available.");
+    JNIEnv* env = jni::env();
+    jclass cls = env->GetObjectClass(g_activity);
+    if (cls == nullptr) { env->ExceptionClear(); throw std::runtime_error("Cannot access Android updates."); }
+    jmethodID method = env->GetMethodID(cls, "appUpdates", "(Ljava/lang/String;)Ljava/lang/String;");
+    env->DeleteLocalRef(cls);
+    if (method == nullptr) { env->ExceptionClear(); throw std::runtime_error("Android update support is unavailable."); }
+    jni::String command(action);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(g_activity, method, (jstring)command));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); throw std::runtime_error("Cannot query Android updates."); }
+    if (result == nullptr) throw std::runtime_error("Android returned no update information.");
+    const char* bytes = env->GetStringUTFChars(result, nullptr);
+    if (bytes == nullptr) { env->DeleteLocalRef(result); env->ExceptionClear(); throw std::runtime_error("Cannot read Android update information."); }
+    std::string snapshot(bytes);
+    env->ReleaseStringUTFChars(result, bytes);
+    env->DeleteLocalRef(result);
+    return snapshot;
+}
+
+void installAndroidUpdate(const std::string& url, const std::string& checksum,
+        const std::string& directory, uint64_t size)
+{
+    if (g_activity == nullptr) throw std::runtime_error("The Android activity is not available.");
+    JNIEnv* env = jni::env();
+    jclass activityClass = env->GetObjectClass(g_activity);
+    if (activityClass == nullptr) {
+        env->ExceptionClear();
+        throw std::runtime_error("Cannot access the Android update installer.");
+    }
+    const auto method = env->GetMethodID(activityClass, "installUpdate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V");
+    env->DeleteLocalRef(activityClass);
+    if (method == nullptr) {
+        env->ExceptionClear();
+        throw std::runtime_error("The Android update installer is not available in this build.");
+    }
+    jni::String jurl(url), jchecksum(checksum), jdirectory(directory);
+    env->CallVoidMethod(g_activity, method, (jstring)jurl, (jstring)jchecksum, (jstring)jdirectory, static_cast<jlong>(size));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        throw std::runtime_error("Android could not start the update installer.");
+    }
 }
 
 void SaveAndroidSettings()

@@ -28,7 +28,6 @@
 #include "ui/mainui.h"
 #include "ui/gui.h"
 #include "SDLApplicationDelegate.h"
-#include <future>
 #include <exception>
 
 int darw_printf(const char* text, ...)
@@ -141,10 +140,6 @@ extern "C" int SDL_main(int argc, char *argv[])
 		[[NSApp dockTile] setBadgeLabel:label];
 	}
 	
-#ifdef USE_BREAKPAD
-	auto async = std::async(std::launch::async, uploadCrashes, "/tmp");
-#endif
-
 	try {
 		mainui_loop();
 	} catch (const std::exception& e) {

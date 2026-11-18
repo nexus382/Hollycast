@@ -260,6 +260,7 @@ struct rend_context
 	u32 framebufferWidth;
 	u32 framebufferHeight;
 	int swapInterval;
+	bool palVideoMode = false;
 
 	RGBAColor fog_clamp_min;
 	RGBAColor fog_clamp_max;

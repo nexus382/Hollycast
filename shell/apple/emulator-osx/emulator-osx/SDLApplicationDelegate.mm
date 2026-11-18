@@ -8,10 +8,16 @@
 #include <SDL.h>
 #include "SDLApplicationDelegate.h"
 #include "emulator.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#endif
 #include <sys/param.h> /* for MAXPATHLEN */
 #include <unistd.h>
 #include "ui/gui.h"
+#include "ui/gui_debugger.h"
 #include "ui/gui_menu.h"
+#include "debug/assembly_debugger.h"
+#include "ui/app_updater.h"
 #include "oslib/oslib.h"
 #include "sdl/sdl.h"
 #include <functional>
@@ -265,6 +271,14 @@ static void addMenuSeparator(NSMenu *menu)
 	runMenuAction([]() { GuiMenu::pauseOrResume(); });
 }
 
+#ifdef USE_HIKARU
+- (void)insertCredit:(id)sender
+{
+	if (GuiMenu::isGameRunning() && settings.platform.isHikaru())
+		hikaru::frontend::insertCredit();
+}
+#endif
+
 - (void)restartGame:(id)sender
 {
 	runMenuAction([]() { GuiMenu::restartGame(); });
@@ -288,6 +302,11 @@ static void addMenuSeparator(NSMenu *menu)
 - (void)openCustomBoxart:(id)sender
 {
 	runMenuAction([]() { GuiMenu::openCustomBoxartSettings(); });
+}
+
+- (void)openAssemblyDebugger:(id)sender
+{
+	runMenuAction([]() { gui_open_debugger(); });
 }
 
 - (void)openGeneralSettings:(id)sender
@@ -342,7 +361,7 @@ static void addMenuSeparator(NSMenu *menu)
 
 - (void)checkForUpdates:(id)sender
 {
-	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://nexus382.github.io/Hollycast/"]];
+	runMenuAction([]() { app_updates::open(); });
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem
@@ -354,8 +373,15 @@ static void addMenuSeparator(NSMenu *menu)
 	case MENU_TAG_PAUSE_RESUME:
 		[menuItem setTitle:(gui_state == GuiState::Closed) ? @"Pause" : @"Resume"];
 		return GuiMenu::isGameRunning();
+#ifdef USE_HIKARU
+	case MENU_TAG_HIKARU_GAME_REQUIRED:
+		return GuiMenu::isGameRunning() && settings.platform.isHikaru();
+#endif
 	case MENU_TAG_DISABLED:
 		return NO;
+	case MENU_TAG_ASSEMBLY_DEBUGGER:
+		[menuItem setState:assembly_debugger::active() ? NSControlStateValueOn : NSControlStateValueOff];
+		return assembly_debugger::available();
 	default:
 		return YES;
 	}
@@ -456,6 +482,9 @@ static void setupHollycastMenus(void)
 	NSMenu *systemMenu = [[NSMenu alloc] initWithTitle:@"System"];
 	addMenuItem(systemMenu, @"Pause", @selector(pauseResume:), @"", MENU_TAG_PAUSE_RESUME);
 	addMenuItem(systemMenu, @"Restart", @selector(restartGame:), @"", MENU_TAG_GAME_REQUIRED);
+#ifdef USE_HIKARU
+	addMenuItem(systemMenu, @"Insert Credit", @selector(insertCredit:), @"", MENU_TAG_HIKARU_GAME_REQUIRED);
+#endif
 	addMenuSeparator(systemMenu);
 	addMenuItem(systemMenu, @"Fast Forward", @selector(toggleFastForward:), @"", MENU_TAG_GAME_REQUIRED);
 	addMenuItem(systemMenu, @"Screenshot", @selector(takeScreenshot:), @"", MENU_TAG_GAME_REQUIRED);
@@ -469,6 +498,7 @@ static void setupHollycastMenus(void)
 	NSMenuItem *toolsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Tools" action:nil keyEquivalent:@""];
 	NSMenu *toolsMenu = [[NSMenu alloc] initWithTitle:@"Tools"];
 	addMenuItem(toolsMenu, @"CHD Convert", nil, @"", MENU_TAG_DISABLED);
+	addMenuItem(toolsMenu, @"Assembly Debugger", @selector(openAssemblyDebugger:), @"", MENU_TAG_ASSEMBLY_DEBUGGER);
 	addMenuItem(toolsMenu, @"Custom Boxart", @selector(openCustomBoxart:), @"", 0);
 	[toolsMenuItem setSubmenu:toolsMenu];
 	[[NSApp mainMenu] addItem:toolsMenuItem];
@@ -605,7 +635,7 @@ static bool dumpCallback(const char *dump_dir, const char *minidump_id, void *co
 	    char path[512];
 	    sprintf(path, "%s/%s.dmp", dump_dir, minidump_id);
 	    printf("Minidump saved to '%s'\n", path);
-	    registerCrash(dump_dir, path);
+	    registerCrash(path);
 	}
     return succeeded;
 }

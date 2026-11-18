@@ -15,6 +15,7 @@ endif()
         
 target_include_directories(${PROJECT_NAME} PUBLIC inc)
 target_sources(${PROJECT_NAME} PRIVATE
+        src/DcnetStatusTest.cpp
         src/CheatManagerTest.cpp
         src/ConfigFileTest.cpp
         src/div32_test.cpp
@@ -23,6 +24,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/LibretroHelpersTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
+        src/AssemblyDebuggerTest.cpp
         src/SorterTest.cpp
         src/MmuTest.cpp
         src/HttpTest.cpp
@@ -43,6 +45,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/imgread/GdiTest.cpp
         src/input/ButtonComboTest.cpp
         src/input/GamepadInputHandlingTest.cpp
+        src/input/HikaruGamepadPresetTest.cpp
         src/input/MultiBindMappingTest.cpp
         src/input/InputDefTest.cpp
         src/input/InputMappingConfigFileTest.cpp
@@ -50,13 +53,17 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/SDLControllerMappingTest.cpp
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
+        src/oslib/DirectoryTest.cpp
         src/rend/SampleTextureFilterTest.cpp
+        src/rend/TextureAtlasTest.cpp
+        src/rend/CustomTextureDumpTest.cpp
         src/ui/BoxartTest.cpp
         src/ui/ScreenScraperTest.cpp
         src/ui/LaunchBoxTest.cpp
         src/ui/ArtworkAdapterTest.cpp
         src/ui/TheGamesDbTest.cpp
         src/ui/LibraryTest.cpp
+        src/ui/LibrarySortTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp
         src/util/PeriodicThreadTest.cpp
@@ -64,16 +71,42 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/util/TsQueueTest.cpp
         src/util/WorkerThreadTest.cpp)
 
+if(LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
+endif()
+
+if(USE_HIKARU)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruStateTest.cpp src/HikaruCardStateTest.cpp src/HikaruAudioPacerTest.cpp src/HikaruSoundFrameTest.cpp src/HikaruAuditTest.cpp src/HikaruInputBindingsTest.cpp src/HikaruCabinetSettingsTest.cpp src/HikaruFrameWorkerTest.cpp)
+endif()
+
+if(USE_HIKARU AND USE_VULKAN AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruVulkanTest.cpp)
+    # Expose the generic-shader oracle only in the native test executable.
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/vulkan.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
+if(USE_HIKARU AND USE_DX11 AND WIN32 AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruDx11Test.cpp)
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/dx11.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
+        src/DcnetProbeTest.cpp
+        src/network/HttpTimeoutTest.cpp
         src/ui/SetupChecklistPopupTest.cpp
         src/ui/SettingsPopupTest.cpp
         src/ui/CustomThemeTest.cpp
         src/ui/LibrarySavestateTest.cpp
+        src/ui/LibraryImageTest.cpp
+        src/ui/GameScannerTest.cpp
         src/ui/ThemeTest.cpp
         src/ui/ThemeLibraryTest.cpp
         src/ui/ThemeArtworkTest.cpp
         src/ui/ThemeInstallTest.cpp
+        src/ui/ThemeRepositoryTest.cpp
         src/ui/VideoPresetTest.cpp
         src/ui/AndroidMenuPopupTest.cpp
         src/ui/ShaderPreviewLayoutTest.cpp)
@@ -83,3 +116,6 @@ if(USE_METAL)
     target_sources(${PROJECT_NAME} PRIVATE src/rend/MetalShaderChainTest.mm)
     set_source_files_properties(src/rend/MetalShaderChainTest.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
+
+# Hikaru bring-up checks also run without the rest of the emulator's dependencies.
+add_subdirectory(hikaru)

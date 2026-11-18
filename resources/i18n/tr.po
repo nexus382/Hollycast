@@ -2460,18 +2460,6 @@ msgstr "Dosyaya Günlük Kaydı"
 msgid "Log debug information to flycast.log"
 msgstr "Hata ayıklama bilgilerini flycast.log dosyasına kaydeder"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "Çökmeleri Otomatik Bildir"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr ""
-"Sorun gidermeye yardımcı olmak için çökme raporlarını sentry.io adresine "
-"otomatik olarak yükler. Kişisel bilgi içermez."
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Lua Betik Desteği"
@@ -9036,28 +9024,6 @@ msgid ""
 msgstr ""
 "Kullanılacak Lua dosya adını belirtin. Hollycast yapılandırma klasöründe "
 "bulunmalıdır. Boş bırakılırsa flycast.lua kullanılır."
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "Çökme Raporları"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "Çökme raporlarını otomatik yükle"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"Çökme Raporları\n"
-"Geliştiricilerin sorunları tanılayıp düzeltmesine yardımcı olmak için çökme raporlarını otomatik yükler.\n"
-"\n"
-"Çökme raporları genellikle çökme ve ortam hakkındaki teknik ayrıntıları içerir.\n"
-"Kararlılığı iyileştirmeye yardımcı olmak istiyorsanız etkin bırakın; çökme verisi göndermeyi tercih etmiyorsanız devre dışı bırakın."
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

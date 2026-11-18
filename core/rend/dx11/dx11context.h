@@ -32,6 +32,8 @@
 #include "dx11_overlay.h"
 #include "wsi/context.h"
 
+class Quad;
+
 class DX11Context : public GraphicsContext
 {
 public:
@@ -39,6 +41,9 @@ public:
 	static DX11Context *Instance() { return static_cast<DX11Context *>(GraphicsContext::Instance()); }
 
 	void EndImGuiFrame();
+	// Native board renderers retain a completed texture for OSD and pause menus.
+	// Passing an empty view releases that frame without drawing or presenting.
+	void presentFrame(const ComPtr<ID3D11ShaderResourceView>& image);
 	void Present();
 	void BeginGpuTiming();
 	void EndGpuTiming();
@@ -88,6 +93,7 @@ private:
 	DX11Context(void *window, void *display);
 	~DX11Context();
 	bool init(bool keepCurrentWindow = false);
+	void drawExternalFrame();
 	void term();
 	void handleDeviceLost();
 	bool checkTextureSupport();
@@ -100,6 +106,8 @@ private:
 	ComPtr<IDXGISwapChain1> swapchain1;
 	ComPtr<ID3D11RenderTargetView> renderTargetView;
 	bool overlayOnly = false;
+	ComPtr<ID3D11ShaderResourceView> externalFrame;
+	std::unique_ptr<Quad> externalQuad;
 	DX11Overlay overlay;
 	bool allowTearing = false;
 	bool swapOnVSync = false;

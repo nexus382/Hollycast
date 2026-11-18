@@ -3,6 +3,7 @@ cmrc_add_resource_library(Hollycast-resources ALIAS Hollycast::res NAMESPACE Hol
 
 cmrc_add_resources(Hollycast-resources
         WHENCE resources
+        resources/update/install-desktop.sh
         resources/flash/alienfnt.nvmem.zip	# network settings
         resources/flash/gunsur2.nvmem.zip
         resources/flash/mazan.nvmem.zip		# free play, calibrated
@@ -25,6 +26,11 @@ cmrc_add_resources(Hollycast-resources
         resources/flash/westdrmg.nvmem.zip	# debug: comm and all errors disabled
         resources/flash/smarinef.nvmem.zip	# standard cabinet
         resources/picture/f355_print_template.png
+        # Same BIOS cover used by Flycast's flycast-content console artwork.
+        resources/picture/dreamcast_logo_grey.jpg
+        # Matching artwork for the virtual BIOS entry's explicit media slots.
+        resources/picture/dreamcast_bios_disc.png
+        resources/picture/dreamcast_bios_spine.png
         resources/picture/hollycast_ascii.txt)
 
 # Keep shaders inside the executable/native library, including mobile releases.

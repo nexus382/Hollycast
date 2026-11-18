@@ -18,7 +18,13 @@ struct PixelArt
 {
 	int resolution = 0; // Zero preserves the original artwork and sampling.
 	uint32_t dark = 0x263e32ff, light = 0x9eae91ff;
+	int levels = 4; // Higher counts retain cover detail in a smooth LCD tint.
 };
+inline bool isLibraryAction(const std::string& action)
+{
+	return action == "allGames" || action == "continuePlaying" || action == "favourites"
+			|| action == "dcnet" || action == "settings" || action == "filter" || action == "libraryMenu";
+}
 struct Element
 {
 	std::string type; // panel, image, artwork, text, metadata, details, button, stat, meter
@@ -76,6 +82,7 @@ struct PagedGrid
 	int rows = 0;
 	float padding = 4;
 	std::string frame, unplayedFrame; // Validated package cell overlays.
+	float selectedScale = 1; // Single-row grids can reserve extra width for the selected cover.
 };
 // A perspective list that keeps the selected game at its center.
 struct Rail
@@ -97,11 +104,20 @@ struct Attract
 	float idleSeconds = 0; // Zero disables attract mode.
 	float intervalSeconds = 3.5f;
 };
+struct ListPresentation
+{
+	bool systemBadge = false, favouriteBadge = false;
+	bool selectOnHover = true; // Preserve legacy hover previews unless explicitly disabled.
+	bool releaseYear = false; // Show the release year as a badge in list rows.
+	std::optional<uint32_t> favouriteColor;
+};
 struct Layout
 {
 	std::string id, name;
+	std::string screen = "library"; // Library choices and optional DCnet page layouts share the renderer.
 	std::string mode = "grid";
 	Rect browser;
+	std::optional<Rect> navigation; // Where hidden-toolbar layouts place the library view buttons.
 	int columns = 4;
 	float itemAspect = 0.8f; // width / height, including label
 	float spacing = 12; // logical UI pixels
@@ -122,6 +138,10 @@ struct Layout
 	// All presentation extensions are opt-in; defaults retain format-v1 behavior.
 	float canvasAspect = 0;
 	std::string toolbar = "standard";
+	// Themed chrome replaces the stock library toolbar; a hidden toolbar
+	// additionally draws no app chrome (the theme provides its own).
+	bool themedChrome() const { return toolbar == "compact" || toolbar == "hidden"; }
+	bool hidesToolbar() const { return toolbar == "hidden"; }
 	std::optional<uint32_t> toolbarSelectedTextColor;
 	std::string toolbarLogoAsset; // Optional package image for compact-toolbar branding.
 	float toolbarLogoHeight = 0; // Logical pixels; zero uses the toolbar control height.
@@ -130,6 +150,7 @@ struct Layout
 	std::string titleStyle = "full";
 	std::string selectorStyle = "fill";
 	bool showItemActions = true, hoverDetails = true;
+	bool showSystemEntries = true; // Keep BIOS/device entries unless a game-only layout opts out.
 	bool showFavouriteMarker = false; // Passive star; inherits text/pixel-art colors.
 	PixelArt pixelArt;
 	std::string placeholderAsset; // Validated package image for items with no artwork.
@@ -142,6 +163,7 @@ struct Layout
 	float launchSeconds = 0; // Delay between choosing a game and starting it; zero starts at once.
 	Attract attract;
 	PagedGrid pagedGrid;
+	ListPresentation list;
 };
 struct Theme
 {
@@ -175,6 +197,7 @@ const Theme* current();
 const Layout* currentLayout();
 const std::string& error();
 // Copy a validated folder into the user theme directory. Never overwrites.
-std::string install(const std::string& sourceDirectory);
+// Set refreshCatalog=false on a worker; reload() must then run on the UI thread.
+std::string install(const std::string& sourceDirectory, bool refreshCatalog = true);
 void applyPalette();
 } // namespace themes

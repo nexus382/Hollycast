@@ -4,6 +4,8 @@
 	Copyright 2019 flyinghead
 	Portions Copyright 2026 The Hollycast Authors
 
+	Portions Copyright 2026 The Hollycast Authors
+
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -121,9 +123,16 @@ static bool GLSLtoSPV(const vk::ShaderStageFlagBits shaderType, std::string cons
 
 vk::UniqueShaderModule ShaderCompiler::Compile(vk::ShaderStageFlagBits shaderStage, std::string const& shaderText)
 {
+	auto shader = CompileOptional(shaderStage, shaderText);
+	verify(bool(shader));
+	return shader;
+}
+
+vk::UniqueShaderModule ShaderCompiler::CompileOptional(vk::ShaderStageFlagBits shaderStage, std::string const& shaderText)
+{
 	std::vector<unsigned int> shaderSPV;
-	bool ok = GLSLtoSPV(shaderStage, shaderText, shaderSPV);
-	verify(ok);
+	if (!GLSLtoSPV(shaderStage, shaderText, shaderSPV))
+		return {};
 
 	return VulkanContext::Instance()->GetDevice().createShaderModuleUnique
 			(vk::ShaderModuleCreateInfo(vk::ShaderModuleCreateFlags(), shaderSPV));

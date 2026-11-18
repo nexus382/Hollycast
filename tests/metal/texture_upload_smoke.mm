@@ -70,6 +70,14 @@ int main() {
         tex = custom(device, queue, customTexture, true);
         require(tex && readLevel(device, queue, tex, 0, 4) == std::vector<uint8_t>(customTexture.bytes.begin(), customTexture.bytes.begin()+16), "custom base level");
         require(readLevel(device, queue, tex, 1, 4) == std::vector<uint8_t>(customTexture.bytes.begin()+16, customTexture.bytes.end()), "custom mip level");
+        customTexture.bytes.assign(4 * 4 * 4, 96);
+        customTexture.width = customTexture.height = 4;
+        customTexture.levels = { {4,4,4,4,0,64,16} };
+        customTexture.generateMipmaps = true;
+        tex = custom(device, queue, customTexture, true);
+        require(tex && readLevel(device, queue, tex, 2, 4)[0] == 96, "custom generated mip is ordered before same-queue readback");
+        tex = custom(device, queue, customTexture, true, true);
+        require(tex && readLevel(device, queue, tex, 2, 4)[0] == 96, "explicit mip completion");
         customTexture.nativeFormat = NativeTextureFormat::Bc7Unorm;
         require(!custom(device, queue, customTexture, true), "unsupported compressed format rejected");
         std::puts("Metal texture upload smoke passed");

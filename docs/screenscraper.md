@@ -17,6 +17,12 @@ directory; credential values are not stored in CMakeCache, compiler arguments
 or tracked source files. Users of a provisioned build only enter their optional
 personal login in Library settings.
 
+The repository's Actions secrets use those same two variable names. Every
+official standalone build requires them through `HOLLYCAST_REQUIRE_SCREENSCRAPER`;
+configuration fails if either is missing, so guest access cannot be silently
+removed from a package. Fork pull requests and offline unit tests do not receive
+the application key and can build with this requirement disabled.
+
 For local development, the same pair of environment variables can override the
 application credentials at runtime. Both must be provided together; a partial
 override disables application access instead of mixing credentials. Personal
@@ -30,6 +36,11 @@ apply, including periods when ScreenScraper closes guest access. Sign in with a
 personal account to use that account's reported thread and quota allowances.
 Signing out returns to guest access. Reconnecting waits for old in-flight calls
 to finish so the two sessions cannot exceed the same account's thread allowance.
+
+Guest connections check ScreenScraper's infrastructure status, which does not
+require a personal account. They start with one request at a time, then apply
+the guest limits reported by game replies. The global guest thread capacity is
+never used as an individual session's allowance.
 
 The username is saved in settings. The password is masked and kept only for the
 current session; it is never written to the configuration or artwork database.

@@ -1,6 +1,8 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 # Hollycast
 
+[Meet the people behind Hollycast — contributors, sources, and special thanks.](CREDITS.md)
+
 ![Hollycast](banner.png)
 
 <sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>
@@ -45,10 +47,15 @@ Releases tagged `-dev` are built from the `dev` branch and contain the newest, l
 - **Ready to play.** Sensible defaults let new players start a game straight away, and the advanced settings are still there for power users.
 - **Performance overlay.** A configurable on-screen display with frame timing plus RAM and texture VRAM usage.
 - **Real hardware and VMU support.** [DreamLink](docs/DreamLink.md) connects Hollycast to DreamConn and DreamPicoPort controllers and to the [DreamPotato](docs/DreamPotato%20Integrated%20Mode.md) VMU emulator.
+- **Phone VMU.** Use **Connect Phone** in the on-screen display settings to mirror the VMU LCD or play standalone VMU mini-games with touch buttons in your phone's browser. See the [phone VMU guide](docs/Phone%20VMU.md).
 - **Editable virtual controller.** The on-screen touch controls can be rearranged and resized on mobile.
 - **Frequent quality-of-life updates.** Old components are kept up to date, and new features come from requests by people who play every day.
 
 Everything Flycast offers is still included: the full Dreamcast, Naomi, Naomi 2 and Atomiswave core, RetroAchievements, upscaling and widescreen options, and the libretro core.
+
+An optional desktop OpenGL backend adds experimental **Sega Hikaru / Air Trix**
+support. It is disabled by default and still has graphics and audio limitations.
+See [Hikaru setup and compatibility](docs/Hikaru.md) before enabling `USE_HIKARU`.
 
 ## Why a fork?
 
@@ -214,5 +221,9 @@ If you enjoy Hollycast, you can support its development on [Ko-fi](https://ko-fi
 ## License and credits
 
 Hollycast is licensed under the [GNU General Public License v2.0](LICENSE).
+
+The optional Hikaru backend includes GPL-3.0-or-later Valkyrie code. Builds
+including it must respect those terms; its original notices and license are
+retained in `core/hw/hikaru/valkyrie`.
 
 Hollycast exists because of [flyinghead](https://github.com/flyinghead) and the [Flycast](https://github.com/flyinghead/flycast) contributors, whose work on the core makes this project possible. Thanks as well to the authors of the libraries in [`core/deps`](core/deps) and to everyone who translates Hollycast on Crowdin.

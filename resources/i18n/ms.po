@@ -2282,14 +2282,6 @@ msgstr ""
 msgid "Log debug information to flycast.log"
 msgstr ""
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr ""
-
-#: core/ui/settings.cpp:126
-msgid "Automatically upload crash reports to sentry.io to help in troubleshooting. No personal information is included."
-msgstr ""
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr ""

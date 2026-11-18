@@ -7,6 +7,13 @@ namespace aica
 {
 
 extern RamRegion aica_ram;
+#ifdef USE_HIKARU
+inline u32 ramSize() { return static_cast<u32>(aica_ram.getSize()); }
+inline u32 ramMask() { return ramSize() - 1; }
+#else
+inline u32 ramSize() { return ARAM_SIZE; }
+inline u32 ramMask() { return ARAM_MASK; }
+#endif
 extern int aica_schid;
 extern int rtc_schid;
 extern int dma_sched_id;
@@ -20,6 +27,12 @@ void init();
 void reset(bool hard);
 void term();
 void timeStep();
+// Selects the interpreter-only arcade host while a board context is active.
+// Returns the previous selection; callers must restore it before Dreamcast runs.
+bool setBoardHost(bool active);
+bool isBoardHost();
+bool boardTimeStep(s16& left, s16& right);
+bool boardInterruptPending();
 void serialize(Serializer& ser);
 void deserialize(Deserializer& deser);
 

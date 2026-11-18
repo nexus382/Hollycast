@@ -441,6 +441,8 @@ void LaunchBox::scrape(GameBoxart& item)
  const u32 selection = (item.requestedMedia ? item.requestedMedia : artwork::coverMedia) & supportedMedia;
  if (!needsMedia(item, item.requestedMedia ? item.requestedMedia : artwork::coverMedia)) return;
  if (!ready()) throw std::runtime_error("");
+ // Keep category progress current in memory, but serialize once per item.
+ bool matchesChanged = false;
  try {
   const std::string key = LaunchBoxCatalog::identity(item);
   LaunchBoxCatalog::Match match;
@@ -510,13 +512,13 @@ void LaunchBox::scrape(GameBoxart& item)
     const auto remaining = item.launchboxMedia.find(kind);
     if (remaining != item.launchboxMedia.end() && !file_exists(remaining->second)) item.launchboxMedia.erase(remaining);
     item.launchboxCheckedMedia |= bit;
-    // Persist each successful category before another request can fail.
+    // Keep partial paths and catalogue URLs for the item-level flush.
     if (!key.empty())
     {
      for (const auto& remote : match.media)
       cachedImages[remote.first]["url"] = remote.second;
      matches[key] = {{"id", match.id}, {"name", match.name}, {"metadata", match.metadata}, {"expanded", expanded}, {"media", cachedImages}};
-     saveMatches();
+     matchesChanged = true;
     }
    }
   }
@@ -525,6 +527,20 @@ void LaunchBox::scrape(GameBoxart& item)
   item.scraped = true;
  } catch (const std::exception&) {
   retryAfter = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+  if (matchesChanged)
+  {
+   try { saveMatches(); }
+   catch (const std::exception& error) { WARN_LOG(COMMON, "Cannot save partial LaunchBox match cache: %s", error.what()); }
+  }
   throw;
+ }
+ if (matchesChanged)
+ {
+  try { saveMatches(); }
+  catch (const std::exception&)
+  {
+   retryAfter = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+   throw;
+  }
  }
 }

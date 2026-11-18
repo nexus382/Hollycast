@@ -1,0 +1,302 @@
+// Portions Copyright 2026 The Hollycast Authors
+#include "TextureAtlas.h"
+#include "json.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <locale>
+#include <numeric>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <tuple>
+
+namespace texture_atlas
+{
+namespace
+{
+constexpr size_t MaxSheets = 4096;
+constexpr size_t MaxRegions = 4096;
+constexpr uint64_t MaxImageBytes = 512ull * 1024 * 1024;
+
+bool overlaps(const Region& a, const Region& b)
+{
+	return a.x < b.x + b.width && b.x < a.x + a.width
+			&& a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+bool regionLess(const Region& a, const Region& b)
+{
+	return std::tie(a.x, a.y, a.width, a.height) < std::tie(b.x, b.y, b.width, b.height);
+}
+
+bool validRegion(const Sheet& sheet, const Region& region)
+{
+	return region.width != 0 && region.height != 0 && region.x < sheet.width
+			&& region.y < sheet.height && region.width <= sheet.width - region.x
+			&& region.height <= sheet.height - region.y;
+}
+
+uint32_t unsignedValue(const nlohmann::json& value)
+{
+	if (!value.is_number_unsigned() || value.get<uint64_t>() > UINT32_MAX)
+		throw std::runtime_error("atlas mapping requires unsigned 32-bit integers");
+	return value.get<uint32_t>();
+}
+
+void validateImage(const Image& image)
+{
+	if (image.width > 16384 || image.height > 16384)
+		throw std::runtime_error("atlas image exceeds supported dimensions");
+	const uint64_t bytes = uint64_t(image.width) * image.height * 4;
+	if (image.width == 0 || image.height == 0 || bytes > MaxImageBytes
+			|| bytes != image.pixels.size())
+		throw std::runtime_error("invalid atlas image dimensions or pixel data");
+}
+}
+
+bool Region::operator==(const Region& other) const
+{
+	return x == other.x && y == other.y && width == other.width && height == other.height;
+}
+
+std::optional<Region> RegionDetector::submitTriangle(const std::array<std::array<float, 2>, 3>& uv)
+{
+	if (width == 0 || height == 0 || width > 8192 || height > 8192)
+		return std::nullopt;
+	std::array<std::array<uint32_t, 2>, 3> points;
+	uint32_t minU = width * 2, minV = height * 2, maxU = 0, maxV = 0;
+	for (size_t i = 0; i < uv.size(); i++)
+	{
+		const auto& point = uv[i];
+		if (!std::isfinite(point[0]) || !std::isfinite(point[1])
+				|| point[0] < 0 || point[0] > 1 || point[1] < 0 || point[1] > 1)
+			return std::nullopt; // Wrapped/mirrored UV ranges do not identify a single crop.
+		for (size_t axis = 0; axis < 2; axis++)
+		{
+			const double coordinate = double(point[axis]) * (axis == 0 ? width : height) * 2;
+			const double rounded = std::round(coordinate);
+			// Chronicles submits individually clipped triangles. Arbitrary clipping intersections
+			// must not become crop boundaries; authored edges normally lie on texels or texel centers.
+			if (std::abs(coordinate - rounded) > 0.002)
+				return std::nullopt;
+			points[i][axis] = static_cast<uint32_t>(rounded);
+		}
+		minU = std::min(minU, points[i][0]);
+		maxU = std::max(maxU, points[i][0]);
+		minV = std::min(minV, points[i][1]);
+		maxV = std::max(maxV, points[i][1]);
+	}
+	if (maxU - minU < 2 || maxV - minV < 2)
+		return std::nullopt;
+	unsigned corners = 0;
+	for (const auto& point : points)
+	{
+		if ((point[0] != minU && point[0] != maxU) || (point[1] != minV && point[1] != maxV))
+			return std::nullopt;
+		corners |= 1u << (unsigned(point[0] == maxU) + 2 * unsigned(point[1] == maxV));
+	}
+	if (corners != 7 && corners != 11 && corners != 13 && corners != 14)
+		return std::nullopt;
+	const uint32_t left = minU / 2, top = minV / 2;
+	const uint32_t right = (maxU + 1) / 2, bottom = (maxV + 1) / 2;
+	// Inset UVs on a standalone image (e.g. the Dreamcast spiral) are still whole-image use.
+	if (right - left + 2 >= width && bottom - top + 2 >= height)
+		return std::nullopt;
+	const std::array<uint32_t, 4> bounds { minU, minV, maxU, maxV };
+	auto found = triangles.find(bounds);
+	if (found == triangles.end())
+	{
+		if (triangles.size() >= MaxRegions)
+			return std::nullopt;
+		found = triangles.emplace(bounds, 0).first;
+	}
+	uint16_t& observed = found->second;
+	constexpr uint16_t Confirmed = 1;
+	if ((observed & Confirmed) != 0)
+		return std::nullopt;
+	observed |= uint16_t(1u << corners);
+	// The halves may belong to different strips or frames. Only opposite missing corners
+	// cover the rectangle: sharing a side would leave a gap and double-cover another area.
+	if (!((observed & (1u << 7)) && (observed & (1u << 14)))
+			&& !((observed & (1u << 11)) && (observed & (1u << 13))))
+		return std::nullopt;
+	observed |= Confirmed;
+	// Dumped PNGs are flipped vertically relative to PVR sampling coordinates.
+	return Region { left, height - bottom, right - left, bottom - top };
+}
+
+bool addRegion(Sheet& sheet, const Region& region)
+{
+	if (!validRegion(sheet, region) || sheet.regions.size() >= MaxRegions
+			|| std::find(sheet.regions.begin(), sheet.regions.end(), region) != sheet.regions.end())
+		return false;
+	// Every confirmed rectangle has a permanent identity, even when another crop contains it.
+	sheet.regions.push_back(region);
+	return true;
+}
+
+std::string imageFilename(uint32_t hash)
+{
+	std::ostringstream name;
+	name.imbue(std::locale::classic());
+	name << std::hex << hash << ".png";
+	return name.str();
+}
+
+std::string regionFilename(uint32_t hash, const Region& region)
+{
+	std::ostringstream name;
+	name.imbue(std::locale::classic());
+	name << "atlas_" << std::hex << hash << std::dec << '_' << region.x << '_' << region.y
+			<< '_' << region.width << '_' << region.height << ".png";
+	return name.str();
+}
+
+std::vector<Sheet> parseMapping(const std::string& text)
+{
+	if (text.size() > 4 * 1024 * 1024)
+		throw std::runtime_error("atlas mapping exceeds 4 MiB");
+	const auto root = nlohmann::json::parse(text);
+	const uint32_t version = unsignedValue(root.at("version"));
+	if ((version != 1 && version != 2) || !root.at("sheets").is_array() || root.at("sheets").size() > MaxSheets)
+		throw std::runtime_error("unsupported atlas mapping version or sheet count");
+	std::vector<Sheet> sheets;
+	std::set<uint32_t> hashes;
+	for (const auto& entry : root.at("sheets"))
+	{
+		Sheet sheet { unsignedValue(entry.at("hash")), unsignedValue(entry.at("width")),
+				unsignedValue(entry.at("height")), {} };
+		if (!hashes.insert(sheet.hash).second || sheet.width == 0 || sheet.height == 0
+				|| sheet.width > 8192 || sheet.height > 8192 || !entry.at("regions").is_array()
+				|| entry.at("regions").empty() || entry.at("regions").size() > MaxRegions)
+			throw std::runtime_error("invalid atlas sheet dimensions, hash or region count");
+		for (const auto& box : entry.at("regions"))
+		{
+			if (!box.is_array() || box.size() != 4)
+				throw std::runtime_error("atlas region must contain x, y, width and height");
+			Region region { unsignedValue(box[0]), unsignedValue(box[1]),
+					unsignedValue(box[2]), unsignedValue(box[3]) };
+			if ((version == 1 && std::any_of(sheet.regions.begin(), sheet.regions.end(),
+					[&](const Region& existing) { return overlaps(existing, region); })) || !addRegion(sheet, region))
+				throw std::runtime_error("invalid or duplicate atlas region, or overlapping version 1 regions");
+		}
+		sheets.push_back(std::move(sheet));
+	}
+	return sheets;
+}
+
+std::string writeMapping(const std::vector<Sheet>& sheets)
+{
+	auto ordered = sheets;
+	std::sort(ordered.begin(), ordered.end(), [](const Sheet& a, const Sheet& b) { return a.hash < b.hash; });
+	nlohmann::json entries = nlohmann::json::array();
+	for (Sheet& sheet : ordered)
+	{
+		std::sort(sheet.regions.begin(), sheet.regions.end(), regionLess);
+		nlohmann::json regions = nlohmann::json::array();
+		for (const Region& region : sheet.regions)
+			regions.push_back({ region.x, region.y, region.width, region.height });
+		entries.push_back({ { "hash", sheet.hash }, { "width", sheet.width },
+				{ "height", sheet.height }, { "regions", std::move(regions) } });
+	}
+	return nlohmann::json({ { "version", 2 }, { "sheets", std::move(entries) } }).dump(2) + '\n';
+}
+
+std::pair<uint32_t, uint32_t> scaledDimensions(const Sheet& sheet, uint32_t numerator, uint32_t denominator,
+		uint32_t maxWidth, uint32_t maxHeight)
+{
+	if (sheet.width == 0 || sheet.height == 0 || sheet.width > 16384 || sheet.height > 16384
+			|| numerator == 0 || denominator == 0)
+		throw std::runtime_error("invalid atlas dimensions or scale");
+	const uint64_t width = (uint64_t(sheet.width) * numerator + denominator / 2) / denominator;
+	const uint64_t height = (uint64_t(sheet.height) * numerator + denominator / 2) / denominator;
+	if (width == 0 || height == 0 || width > maxWidth || height > maxHeight || width > 16384 || height > 16384
+			|| width * height * 4 > MaxImageBytes)
+		throw std::runtime_error("rebuilt atlas exceeds renderer or memory limits");
+	return { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
+}
+
+Image rebuild(const Sheet& sheet, const Image& original,
+		const std::vector<std::optional<Image>>& tiles, uint32_t maxWidth, uint32_t maxHeight,
+		const std::function<bool()>& cancelled)
+{
+	validateImage(original);
+	if (original.width != sheet.width || original.height != sheet.height || tiles.size() != sheet.regions.size())
+		throw std::runtime_error("atlas original or tile count does not match the mapping");
+	uint32_t numerator = 0, denominator = 1;
+	for (size_t i = 0; i < tiles.size(); i++)
+	{
+		if (!validRegion(sheet, sheet.regions[i]))
+			throw std::runtime_error("invalid atlas region");
+		if (!tiles[i])
+			continue;
+		validateImage(*tiles[i]);
+		const Region& region = sheet.regions[i];
+		const uint32_t divisor = std::gcd(tiles[i]->width, region.width);
+		const uint32_t tileNumerator = tiles[i]->width / divisor, tileDenominator = region.width / divisor;
+		if (uint64_t(region.height) * tileNumerator != uint64_t(tiles[i]->height) * tileDenominator
+				|| (numerator != 0 && (numerator != tileNumerator || denominator != tileDenominator)))
+			throw std::runtime_error("atlas piece has a different scale: " + regionFilename(sheet.hash, region));
+		numerator = tileNumerator;
+		denominator = tileDenominator;
+	}
+	if (numerator == 0)
+		numerator = 1;
+	const auto scaled = [numerator, denominator](uint32_t value) -> uint64_t {
+		// A shared fractional scale can put sheet boundaries between output pixels.
+		// Round consistently so adjacent regions retain a shared boundary.
+		return (uint64_t(value) * numerator + denominator / 2) / denominator;
+	};
+	const auto [width, height] = scaledDimensions(sheet, numerator, denominator, maxWidth, maxHeight);
+	for (size_t i = 0; i < tiles.size(); i++)
+		if (tiles[i])
+		{
+			const Region& region = sheet.regions[i];
+			if (scaled(region.x) + tiles[i]->width > width || scaled(region.y) + tiles[i]->height > height)
+				throw std::runtime_error("scaled atlas piece extends outside its sheet");
+		}
+	if (cancelled && cancelled())
+		return {};
+	Image output { width, height, {} };
+	output.pixels.resize(size_t(width) * height * 4);
+	// Keep unknown/missing regions intact, scaling their original pixels to the same size.
+	for (uint32_t y = 0; y < output.height; y++)
+	{
+		if (cancelled && cancelled())
+			return {};
+		for (uint32_t x = 0; x < output.width; x++)
+			std::copy_n(&original.pixels[(size_t(uint64_t(y) * denominator / numerator) * sheet.width
+					+ uint64_t(x) * denominator / numerator) * 4], 4,
+					&output.pixels[(size_t(y) * output.width + x) * 4]);
+	}
+	std::vector<size_t> order;
+	order.reserve(tiles.size());
+	for (size_t i = 0; i < tiles.size(); i++)
+		if (tiles[i])
+			order.push_back(i);
+	std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+		const Region& first = sheet.regions[a];
+		const Region& second = sheet.regions[b];
+		const uint64_t firstArea = uint64_t(first.width) * first.height;
+		const uint64_t secondArea = uint64_t(second.width) * second.height;
+		return firstArea != secondArea ? firstArea > secondArea : regionLess(second, first);
+	});
+	// Smaller supplied crops keep their pixels when a larger overlapping crop is added later.
+	// Equal-area overlaps prefer the lowest (x, y, width, height), independent of mapping order.
+	for (size_t i : order)
+	{
+		const Region& region = sheet.regions[i];
+		const Image& tile = *tiles[i];
+		const size_t left = static_cast<size_t>(scaled(region.x)), top = static_cast<size_t>(scaled(region.y));
+		for (uint32_t y = 0; y < tile.height; y++)
+		{
+			if (cancelled && cancelled())
+				return {};
+			std::copy_n(&tile.pixels[size_t(y) * tile.width * 4], size_t(tile.width) * 4,
+					&output.pixels[((top + y) * output.width + left) * 4]);
+		}
+	}
+	return output;
+}
+}

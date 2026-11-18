@@ -245,6 +245,7 @@ struct PresentSamples {
 };
 
 PresentSamples presentSamples;
+std::atomic<std::uint32_t> presentationTimingEpoch { 0 };
 
 struct MetricHistory {
 	std::array<float, FrameTimeHistorySize> values {};
@@ -266,6 +267,9 @@ float historyValue(const MetricHistory& history, std::uint32_t index)
 }
 
 struct Metrics {
+#ifdef HOLLYCAST_TEST_HARNESS
+	std::uint64_t completedSamples = 0;
+#endif
 	float gameFps = 0.f;
 	float outputFps = 0.f;
 	float vps = 0.f;
@@ -371,6 +375,9 @@ void updateMetrics(std::uint32_t items)
 	}
 	if (metrics.lastSampleTime == 0)
 	{
+#ifdef HOLLYCAST_TEST_HARNESS
+		metrics.completedSamples = 0;
+#endif
 		metrics.lastSampleTime = now;
 		metrics.lastTextureUploadCount = getTextureUploadCount();
 		metrics.gameFps = 0.f;
@@ -424,6 +431,7 @@ void updateMetrics(std::uint32_t items)
 		outputViewportWidth.store(0, std::memory_order_relaxed);
 		outputViewportHeight.store(0, std::memory_order_relaxed);
 		std::lock_guard<std::mutex> lock(presentSamples.mutex);
+		presentationTimingEpoch.fetch_add(1, std::memory_order_relaxed);
 		presentSamples.lastPresentMicroseconds = 0;
 		presentSamples.intervalSumMicroseconds = 0;
 		presentSamples.intervalMinimumMicroseconds = std::numeric_limits<std::uint64_t>::max();
@@ -534,6 +542,9 @@ void updateMetrics(std::uint32_t items)
 	metrics.textureUploadsPerSecond = static_cast<float>(textureUploads - metrics.lastTextureUploadCount) * 1000.f / static_cast<float>(elapsed);
 	metrics.lastTextureUploadCount = textureUploads;
 	metrics.lastSampleTime = now;
+#ifdef HOLLYCAST_TEST_HARNESS
+	++metrics.completedSamples;
+#endif
 }
 
 std::string formatSpeed()
@@ -870,6 +881,38 @@ void drawUsageGraph(ImDrawList *drawList, ImFont *font, float fontSize, const Im
 
 } // namespace
 
+#ifdef HOLLYCAST_TEST_HARNESS
+HarnessMetrics harnessMetrics()
+{
+	HarnessMetrics result;
+	result.collecting = collectionEnabled.load(std::memory_order_relaxed) && !resetPending.load(std::memory_order_relaxed);
+	if (!result.collecting || metrics.completedSamples == 0)
+		return result;
+	result.sampledAtMs = metrics.lastSampleTime;
+	result.sampleAgeMs = getTimeMs() - metrics.lastSampleTime;
+	const auto items = requestedItems.load(std::memory_order_relaxed);
+	if (items & Fps) result.gameFps = metrics.gameFps;
+	if (items & OutputFps) result.outputFps = metrics.outputFps;
+	if (items & (Fps | Speed)) result.vblankHz = metrics.vps;
+	if (items & Speed) result.emulationSpeedPercent = metrics.vps / (SPG_CONTROL.isPAL() ? 50.f : 60.f) * 100.f;
+	if ((items & HostCpu) && metrics.hostProcessCpuValid) result.processCpuPercent = metrics.hostProcessCpuUsage;
+	if ((items & HostCpu) && metrics.hostSystemCpuValid) result.systemCpuPercent = metrics.hostSystemCpuUsage;
+	if ((items & HostGpu) && metrics.gpuTimingValid)
+	{
+		result.gpuBusyPercent = metrics.gpuUsage;
+		result.gpuRenderMs = metrics.gpuTimePerRender;
+	}
+	if ((items & FrameTimes) && metrics.frameTimeValid)
+	{
+		result.frameAverageMs = metrics.frameTimeAverage;
+		result.frameMinimumMs = metrics.frameTimeMinimum;
+		result.frameMaximumMs = metrics.frameTimeMaximum;
+	}
+	if ((items & Ram) && metrics.processMemoryValid) result.processResidentBytes = metrics.processResidentBytes;
+	return result;
+}
+#endif
+
 int mode()
 {
 	return std::clamp(config::loadInt(Section, "ResourceMonitorMode", 0), 0, 2);
@@ -916,6 +959,7 @@ bool isResolutionRequested()
 
 void reset()
 {
+	presentationTimingEpoch.fetch_add(1, std::memory_order_relaxed);
 	collectionEnabled.store(false, std::memory_order_release);
 	gpuTimingRequested.store(false, std::memory_order_release);
 	resetPending.store(true, std::memory_order_release);
@@ -957,15 +1001,26 @@ void recordOutputViewport(int width, int height)
 	outputViewportHeight.store(height, std::memory_order_relaxed);
 }
 
-void recordPresentedFrame()
+bool isPresentationTimingRequested()
 {
-	if (!isCollectionEnabled() || (requestedItems.load(std::memory_order_relaxed) & (OutputFps | FrameTimes | FrameTimeGraph)) == 0)
+	return isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & (OutputFps | FrameTimes | FrameTimeGraph)) != 0;
+}
+
+std::uint32_t getPresentationTimingEpoch()
+{
+	return presentationTimingEpoch.load(std::memory_order_relaxed);
+}
+
+void recordPresentedFrameAt(std::uint64_t now, std::uint32_t epoch)
+{
+	if (!isPresentationTimingRequested())
 		return;
-	const std::uint64_t now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count());
 	std::lock_guard<std::mutex> lock(presentSamples.mutex);
+	if (!isPresentationTimingRequested() || epoch != getPresentationTimingEpoch()
+			|| now == 0 || now <= presentSamples.lastPresentMicroseconds)
+		return;
 	++presentSamples.presentCount;
-	if (presentSamples.lastPresentMicroseconds != 0 && now > presentSamples.lastPresentMicroseconds)
+	if (presentSamples.lastPresentMicroseconds != 0)
 	{
 		const std::uint64_t interval = now - presentSamples.lastPresentMicroseconds;
 		presentSamples.intervalSumMicroseconds += interval;
@@ -977,6 +1032,22 @@ void recordPresentedFrame()
 		presentSamples.intervalHistoryCount = std::min<std::uint32_t>(presentSamples.intervalHistoryCount + 1, FrameTimeHistorySize);
 	}
 	presentSamples.lastPresentMicroseconds = now;
+}
+
+void recordGuestFrame()
+{
+	if (isCollectionEnabled() && (requestedItems.load(std::memory_order_relaxed) & Fps) != 0)
+		gameFrameCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void recordPresentedFrame()
+{
+	if (!isPresentationTimingRequested())
+		return;
+	const std::uint32_t epoch = getPresentationTimingEpoch();
+	const std::uint64_t now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count());
+	recordPresentedFrameAt(now, epoch);
 }
 
 void recordPvrScene(bool displayScene, std::uint32_t primitiveCount, std::uint32_t vertexCount)
@@ -1086,6 +1157,7 @@ void draw()
 		requestedItems.store(0, std::memory_order_relaxed);
 		if (collectionEnabled.exchange(false, std::memory_order_acq_rel))
 		{
+			presentationTimingEpoch.fetch_add(1, std::memory_order_relaxed);
 			metrics.lastSampleTime = 0;
 			metrics.lastMemorySampleTime = 0;
 			metrics.gpuAdapters.clear();

@@ -59,7 +59,7 @@ void scrollWhenDraggingOnVoid(ImGuiMouseButton mouse_button = ImGuiMouseButton_L
 // Capturing a finger swipe before widgets run cancels their pending tap.
 void scrollWindowFromTouch();
 // Shared empty state for classic, table and themed libraries; caller opens the folder picker.
-bool drawEmptyLibraryPrompt();
+bool drawEmptyLibraryPrompt(bool hasContentPath = false, bool scanning = false);
 // First-run theme choice; caller persists changes and refreshes style after rendering.
 bool drawSetupThemePicker();
 
@@ -300,9 +300,10 @@ public:
 	float getAspectRatio() const;
 	void setPixelArt(const themes::PixelArt& style) { pixelArt = style; }
 
-	static void resetLoadCount() {
-		textureLoadCount = 0;
-	}
+	static void resetLoadCount();
+	// Defer GPU eviction until the current frame has been submitted.
+	static void invalidateFileImages();
+	static void stopImageLoader();
 	static void clearThemeImageFailures();
 
 private:

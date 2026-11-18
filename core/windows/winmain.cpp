@@ -242,7 +242,7 @@ static bool dumpCallback(const wchar_t* dump_path,
 			if (path.convert(minidump_id))
 			{
 				std::string fullPath = directory + '\\' + std::string(path.get()) + ".dmp";
-				registerCrash(directory.c_str(), fullPath.c_str());
+				registerCrash(fullPath.c_str());
 			}
 		}
 	}
@@ -408,14 +408,6 @@ int main(int argc, char* argv[])
 
 	if (flycast_init(argc, argv) != 0)
 		die("Flycast initialization failed");
-
-#ifdef USE_BREAKPAD
-	nowide::stackstring nws;
-	static std::string tempDir8;
-	if (nws.convert(tempDir))
-		tempDir8 = nws.get();
-	auto async = std::async(std::launch::async, uploadCrashes, tempDir8);
-#endif
 
 #ifdef TARGET_UWP
 	if (config::ContentPath.get().empty())

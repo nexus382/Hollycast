@@ -131,6 +131,10 @@ public:
 	vk::SwapchainKHR GetSwapChain() const { return *swapChain; }
 	u32 GetSwapChainSize() const { return (u32)imageViews.size(); }
 	int GetCurrentImageIndex() const { return currentImage; }
+#ifdef HOLLYCAST_TEST_HARNESS
+	bool CanCaptureOutput() const { return harnessCanCapture; }
+	vk::Format GetPresentFormat() const { return presentFormat; }
+#endif
 	void WaitIdle() const;
 	bool IsRendering() const { return rendering; }
 	vk::DeviceSize GetUniformBufferAlignment() const { return uniformBufferAlignment; }
@@ -262,6 +266,9 @@ private:
 	std::vector<vk::UniqueImageView> imageViews;
 	u32 currentImage = 0;
 	vk::Format presentFormat = vk::Format::eUndefined;
+#ifdef HOLLYCAST_TEST_HARNESS
+	bool harnessCanCapture = false;
+#endif
 
 	vk::Queue graphicsQueue;
 	vk::Queue presentQueue;

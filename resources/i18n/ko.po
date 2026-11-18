@@ -2388,16 +2388,6 @@ msgstr "파일에 로그 저장"
 msgid "Log debug information to flycast.log"
 msgstr "디버그 정보를 flycast.log에 저장합니다"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "충돌 보고서 자동 전송"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr "문제 해결에 도움이 되도록 충돌 보고서를 sentry.io에 자동 업로드합니다. 개인 정보는 포함되지 않습니다."
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Lua 스크립트"
@@ -8798,28 +8788,6 @@ msgid ""
 "Defaults to flycast.lua when empty."
 msgstr ""
 "사용할 Lua 파일 이름을 지정합니다. Hollycast 설정 폴더에 있어야 합니다. 비워 두면 기본값은 flycast.lua입니다."
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "충돌 보고서"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "충돌 보고서 자동 업로드"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"충돌 보고서\n"
-"개발자가 문제를 진단하고 수정할 수 있도록 충돌 보고서를 자동으로 업로드합니다.\n"
-"\n"
-"충돌 보고서에는 일반적으로 충돌 및 환경에 관한 기술 정보가 포함됩니다.\n"
-"안정성 개선에 도움을 주려면 켜 두세요. 충돌 데이터를 전송하지 않으려면 끄세요."
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

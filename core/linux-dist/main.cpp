@@ -305,7 +305,7 @@ void os_Process::terminate()
 static bool dumpCallback(const google_breakpad::MinidumpDescriptor& descriptor, void* context, bool succeeded)
 {
 	if (succeeded)
-		registerCrash(descriptor.directory().c_str(), descriptor.path());
+		registerCrash(descriptor.path());
 
 	return succeeded;
 }
@@ -344,10 +344,6 @@ int main(int argc, char* argv[])
 
 	if (flycast_init(argc, argv))
 		die("Hollycast initialization failed\n");
-
-#if defined(USE_BREAKPAD)
-	auto async = std::async(std::launch::async, uploadCrashes, "/tmp");
-#endif
 
 	try {
 		mainui_loop();

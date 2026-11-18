@@ -220,6 +220,16 @@ public:
 		this->rumbleEnabled = rumbleEnabled;
 	}
 
+	std::shared_ptr<InputMapping> getArcadeGamepadMapping() override
+	{
+		if (_name == "SHIELD Remote" || hasFullAxis(AMOTION_EVENT_AXIS_WHEEL))
+			return {};
+		auto mapping = std::make_shared<DefaultInputMapping<true, true>>(*this);
+		mapping->set_button(DC_BTN_D, AKEYCODE_BUTTON_THUMBL);
+		mapping->set_button(DC_DPAD2_DOWN, AKEYCODE_BUTTON_THUMBR);
+		return mapping;
+	}
+
 	bool hasHalfAxis(int axis) const { return std::find(halfAxes.begin(), halfAxes.end(), axis) != halfAxes.end(); }
 	bool hasFullAxis(int axis) const { return std::find(fullAxes.begin(), fullAxes.end(), axis) != fullAxes.end(); }
 

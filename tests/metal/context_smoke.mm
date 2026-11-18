@@ -25,6 +25,12 @@
 #undef RGBColor
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
+#include <limits>
+#include <objc/runtime.h>
+#include <atomic>
+#include <thread>
+#include <chrono>
 
 settings_t settings{};
 GuiState gui_state = GuiState::Closed;
@@ -92,12 +98,84 @@ void getWindowboxDimensions(int, int, float, int &x, int &y, bool)
 }
 #endif
 int getScaledTopInset() { return testInset; }
-static int presents = 0;
+static std::atomic<int> presents{0};
+static int presentationSamples = 0;
+static int callbackRegistrations = 0;
+static bool presentationTimingRequested = false;
+static std::uint32_t presentationEpoch = 47, sampledEpoch = 0;
+static std::uint64_t sampledMicroseconds = 0;
+static double minimumDuration = 0;
+static double scheduledTime = 0;
+static NSMutableArray *pendingPresentationHandlers;
+static bool completePresentations = true;
+
+@interface TestPresentedDrawable : NSObject
+@property CFTimeInterval presentedTime;
+@end
+@implementation TestPresentedDrawable
+@end
+
 namespace performance_overlay
 {
 void recordOutputViewport(int, int) {}
-void recordPresentedFrame() { ++presents; }
+void recordPresentedFrame() { if (presentationTimingRequested) ++presentationSamples; }
+bool isPresentationTimingRequested() { return presentationTimingRequested; }
+std::uint32_t getPresentationTimingEpoch() { return presentationEpoch; }
+void recordPresentedFrameAt(std::uint64_t microseconds, std::uint32_t epoch)
+{
+	++presentationSamples;
+	sampledMicroseconds = microseconds;
+	sampledEpoch = epoch;
+}
 } // namespace performance_overlay
+
+static void finishPresentation(double seconds)
+{
+	TestPresentedDrawable *sample = [TestPresentedDrawable new];
+	sample.presentedTime = seconds;
+	NSArray *handlers = [pendingPresentationHandlers copy];
+	[pendingPresentationHandlers removeAllObjects];
+	for (MTLDrawablePresentedHandler handler in handlers)
+		handler((id<MTLDrawable>)sample);
+}
+
+static void observePresentations(CAMetalLayer *layer, id<MTLCommandQueue> queue)
+{
+	pendingPresentationHandlers = [NSMutableArray new];
+	id<MTLCommandBuffer> command = [queue commandBuffer];
+	Class commandClass = object_getClass(command);
+	auto observe = [&](SEL selector, id block)
+	{
+		Method method = class_getInstanceMethod(commandClass, selector);
+		return method_setImplementation(method, imp_implementationWithBlock(block));
+	};
+	__block IMP present;
+	present = observe(@selector(presentDrawable:), ^(id buffer, id<MTLDrawable> drawable) {
+		++presents;
+		((void (*)(id, SEL, id<MTLDrawable>))present)(buffer, @selector(presentDrawable:), drawable);
+	});
+	__block IMP presentMinimum;
+	presentMinimum = observe(@selector(presentDrawable:afterMinimumDuration:), ^(id buffer, id<MTLDrawable> drawable, double duration) {
+		++presents;
+		minimumDuration = duration;
+		((void (*)(id, SEL, id<MTLDrawable>, double))presentMinimum)(buffer, @selector(presentDrawable:afterMinimumDuration:), drawable, duration);
+	});
+	__block IMP presentAt;
+	presentAt = observe(@selector(presentDrawable:atTime:), ^(id buffer, id<MTLDrawable> drawable, double time) {
+		++presents;
+		scheduledTime = time;
+		// Inspect the requested deadline without holding the isolated test window on a synthetic timeline.
+		((void (*)(id, SEL, id<MTLDrawable>, double))presentAt)(buffer, @selector(presentDrawable:atTime:), drawable, CACurrentMediaTime());
+	});
+	id<CAMetalDrawable> drawable = [layer nextDrawable];
+	Method method = class_getInstanceMethod(object_getClass(drawable), @selector(addPresentedHandler:));
+	method_setImplementation(method, imp_implementationWithBlock(^(id, MTLDrawablePresentedHandler handler) {
+		++callbackRegistrations;
+		[pendingPresentationHandlers addObject:[handler copy]];
+		if (completePresentations)
+			finishPresentation(1000.0 + callbackRegistrations / 60.0);
+	}));
+}
 void GenericLog(LogTypes::LOG_LEVELS, LogTypes::LOG_TYPE, const char *, int, const char *, ...) {}
 
 static void require(bool ok, const char *message)
@@ -138,6 +216,8 @@ int main()
 		require(SDL_GetWindowWMInfo(testWindow, &info), "native window lookup");
 		CAMetalLayer *layer = findLayer([info.info.cocoa.window contentView]);
 		require(layer != nil, "SDL Metal layer lookup");
+		require(layer.maximumDrawableCount == 2, "only one drawable can queue behind the displayed frame");
+		observePresentations(layer, context->GetQueue());
 		MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
 																						width:2
 																					   height:2
@@ -181,6 +261,24 @@ int main()
 		settings.input.fastForwardMode = false;
 		context->PresentLastFrame();
 		require(layer.displaySyncEnabled && presents == 1, "VSync on and frame presented");
+		require(callbackRegistrations == 0 && presentationSamples == 0, "hidden output timing registers no callback or submission sample");
+		presentationTimingRequested = true;
+		completePresentations = false;
+		context->PresentLastFrame();
+		require(callbackRegistrations == 1 && presentationSamples == 0, "output timing waits for drawable presentation");
+		finishPresentation(0);
+		context->PresentLastFrame();
+		finishPresentation(std::numeric_limits<double>::quiet_NaN());
+		context->PresentLastFrame();
+		finishPresentation(std::numeric_limits<double>::infinity());
+		require(presentationSamples == 0, "zero or invalid drawable timestamps have no timing sample");
+		context->PresentLastFrame();
+		++presentationEpoch;
+		finishPresentation(1234.5);
+		require(presentationSamples == 1 && sampledMicroseconds == 1234500000 && sampledEpoch == 47,
+				"actual display timestamp retains its submission epoch");
+		presentationTimingRequested = false;
+		completePresentations = true;
 		config::VSync = false;
 		context->PresentLastFrame();
 		require(!layer.displaySyncEnabled, "VSync off");
@@ -192,11 +290,130 @@ int main()
 		context->PresentLastFrame();
 		require(layer.displaySyncEnabled, "VSync restores after fast forward");
 		context->setSwapInterval(2);
+		presentationTimingRequested = true;
+		const int callbacksBeforePacing = callbackRegistrations;
+		const int samplesBeforePacing = presentationSamples;
+		context->PresentFrame(texture, 1.f);
+		const double ntscStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(callbackRegistrations == callbacksBeforePacing + 1 && presentationSamples == samplesBeforePacing + 1,
+				"requested output timing observes the paced drawable");
+		require(scheduledTime >= ntscStart + 2.0 / 60.0
+				&& scheduledTime <= CACurrentMediaTime() + 2.0 / 60.0,
+				"NTSC starts an absolute timeline one guest interval ahead");
+		presentationTimingRequested = false;
+		context->setVideoMode(true);
+		context->PresentFrame(texture, 1.f);
+		const double palStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(scheduledTime >= palStart + 2.0 / 50.0
+				&& scheduledTime <= CACurrentMediaTime() + 2.0 / 50.0,
+				"PAL transition starts a fresh 50 Hz guest timeline");
+		require(callbackRegistrations == callbacksBeforePacing + 1 && presentationSamples == samplesBeforePacing + 1,
+				"hidden output timing registers no game pacing callback");
+		require(layer.maximumDrawableCount == 3, "slow game pacing permits three drawables");
+		const double firstPalDeadline = scheduledTime;
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		context->PresentFrame(texture, 1.f);
+		context->PresentLastFrame();
+		require(std::abs(scheduledTime - firstPalDeadline - 2.0 / 50.0) < 1e-8,
+				"a delayed submission advances the guest timeline without host phase drift");
+		const double beforeLateDeadline = scheduledTime;
+		const double lateDelay = std::max(0.0, beforeLateDeadline + 3.0 / 50.0 - CACurrentMediaTime());
+		std::this_thread::sleep_for(std::chrono::duration<double>(lateDelay));
+		context->PresentFrame(texture, 1.f);
+		const double lateStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(scheduledTime < lateStart && std::abs(scheduledTime - beforeLateDeadline - 2.0 / 50.0) < 1e-8,
+				"a missed deadline requests immediate display without resetting the guest phase");
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		context->PresentFrame(texture, 1.f);
+		const double resumeStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(scheduledTime >= resumeStart + 2.0 / 50.0
+				&& scheduledTime <= CACurrentMediaTime() + 2.0 / 50.0,
+				"a long interruption rebases instead of replaying stale deadlines");
+		require(minimumDuration == 0, "slow game pacing uses only absolute presentation deadlines");
+		const int afterGameFrame = presents;
+		context->PresentLastFrame();
+		require(presents == afterGameFrame, "an OSD poll does not queue a second slow game frame");
+		gui_state = GuiState::Settings;
+		context->PresentLastFrame();
+		require(presents == afterGameFrame + 1, "opening settings immediately presents over the last game frame");
+		gui_state = GuiState::Closed;
+		context->setVideoMode(false);
 		settings.input.fastForwardMode = true;
 		context->PresentLastFrame();
 		require(!layer.displaySyncEnabled, "fast forward overrides game interval");
 		settings.input.fastForwardMode = false;
+		context->setSwapInterval(10);
+		presentationTimingRequested = true;
+		completePresentations = false;
+		const int beforeUncompleted = callbackRegistrations;
+		context->PresentFrame(texture, 1.f);
+		const double firstStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(CACurrentMediaTime() - firstStart < 0.15,
+				"first slow frame does not wait for its overlay display callback");
+		context->PresentFrame(texture, 1.f);
+		const double secondStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(CACurrentMediaTime() - secondStart < 0.15,
+				"second buffered frame does not wait for the previous overlay display callback");
+		require(callbackRegistrations == beforeUncompleted + 2 && pendingPresentationHandlers.count == 2,
+				"uncompleted optional timing callbacks do not serialize guest presentation");
+		context->PresentFrame(texture, 1.f);
+		context->PresentLastFrame();
+		require(scheduledTime <= CACurrentMediaTime() + 20.0 / 60.0,
+				"immediately recycled drawables cannot run the timeline beyond two future guest periods");
+		presentationTimingRequested = false;
+		const int beforeHiddenTiming = callbackRegistrations;
+		context->PresentFrame(texture, 1.f);
+		context->PresentLastFrame();
+		require(callbackRegistrations == beforeHiddenTiming,
+				"hidden timing performs no callback registration even while buffering slow game frames");
+		gui_state = GuiState::Settings;
+		context->PresentLastFrame();
+		require(layer.maximumDrawableCount == 2, "menus restore the two-drawable pool");
+		gui_state = GuiState::Closed;
+		settings.input.fastForwardMode = true;
+		context->PresentFrame(texture, 1.f);
+		context->PresentLastFrame();
+		require(!layer.displaySyncEnabled && layer.maximumDrawableCount == 2,
+				"fast forward uses unsynchronized presentation with two drawables");
+		settings.input.fastForwardMode = false;
+		finishPresentation(1237.0);
+		completePresentations = true;
+		context->PresentFrame(texture, 1.f);
+		const double afterFastStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(scheduledTime >= afterFastStart + 10.0 / 60.0
+				&& scheduledTime <= CACurrentMediaTime() + 10.0 / 60.0,
+				"leaving fast forward starts a fresh guest timeline");
+		require(layer.maximumDrawableCount == 3, "slow pacing restores the three-drawable pool");
+		config::VSync = false;
+		context->PresentLastFrame();
+		require(layer.maximumDrawableCount == 2, "disabling VSync restores the two-drawable pool");
+		config::VSync = true;
+		context->PresentFrame(texture, 1.f);
+		const double afterVSyncStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(scheduledTime >= afterVSyncStart + 10.0 / 60.0
+				&& scheduledTime <= CACurrentMediaTime() + 10.0 / 60.0,
+				"restoring VSync starts a fresh guest timeline");
+		gui_state = GuiState::Settings;
+		context->PresentLastFrame();
+		gui_state = GuiState::Closed;
+		context->PresentFrame(texture, 1.f);
+		const double afterMenuStart = CACurrentMediaTime();
+		context->PresentLastFrame();
+		require(scheduledTime >= afterMenuStart + 10.0 / 60.0
+				&& scheduledTime <= CACurrentMediaTime() + 10.0 / 60.0,
+				"closing settings starts a fresh guest timeline");
 		context->setSwapInterval(1);
+		context->PresentFrame(texture, 1.f);
+		context->PresentLastFrame();
+		require(layer.maximumDrawableCount == 2, "60 FPS presentation retains two drawables");
 		int initialW = 0, initialH = 0;
 		SDL_Metal_GetDrawableSize(testWindow, &initialW, &initialH);
 		SDL_SetWindowSize(testWindow, 80, 60);

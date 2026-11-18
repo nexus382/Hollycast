@@ -7,6 +7,7 @@ on:
       - 'core/**'
       - 'shell/android-studio/**'
       - 'tests/vmu/**'
+      - 'tests/phone_vmu/**'
       - '.github/workflows/vmu-regressions.yml'
   push:
     branches: [dev, master]
@@ -14,6 +15,7 @@ on:
       - 'core/**'
       - 'shell/android-studio/**'
       - 'tests/vmu/**'
+      - 'tests/phone_vmu/**'
       - '.github/workflows/vmu-regressions.yml'
 
 permissions:
@@ -34,7 +36,14 @@ jobs:
           java-version: '21'
       - name: Install SDL (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev xvfb
+        run: |
+          # The runner's Azure HTTP mirror can stall before the VMU tests start.
+          # Keep the mirror fallback on HTTPS and bound each network attempt.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y libsdl2-dev xvfb
       - name: Install SDL (macOS)
         if: runner.os == 'macOS'
         run: brew list sdl2 >/dev/null 2>&1 || brew install sdl2
@@ -54,3 +63,16 @@ jobs:
         if: runner.os == 'Windows'
         # Native Win32 pointer/focus tests require an unlocked interactive desktop.
         run: ctest --test-dir build/vmu-tests -C Release --output-on-failure -LE interactive
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Configure phone VMU checks
+        run: |
+          git submodule update --init core/deps/asio
+          cmake -S tests/phone_vmu -B build/phone-vmu-tests
+      - name: Build phone VMU checks
+        run: cmake --build build/phone-vmu-tests --config Release --parallel 4
+      - name: Test phone VMU
+        run: ctest --test-dir build/phone-vmu-tests -C Release --output-on-failure

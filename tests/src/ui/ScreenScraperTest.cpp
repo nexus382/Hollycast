@@ -9,11 +9,13 @@
 #include <stb_image_write.h>
 #include <atomic>
 #include <algorithm>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <future>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -50,6 +52,39 @@ std::vector<u8> png()
 	}, &bytes, 1, 1, 4, pixel, 4);
 	return bytes;
 }
+
+class BlockedRequest
+{
+public:
+	~BlockedRequest() { release(); }
+
+	void wait()
+	{
+		std::unique_lock<std::mutex> lock(mutex);
+		entered = true;
+		changed.notify_all();
+		changed.wait(lock, [this] { return released; });
+	}
+
+	bool waitForEntry(std::chrono::milliseconds timeout)
+	{
+		std::unique_lock<std::mutex> lock(mutex);
+		return changed.wait_for(lock, timeout, [this] { return entered; });
+	}
+
+	void release()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		released = true;
+		changed.notify_all();
+	}
+
+private:
+	std::mutex mutex;
+	std::condition_variable changed;
+	bool entered = false;
+	bool released = false;
+};
 
 json game()
 {
@@ -211,6 +246,103 @@ TEST_F(ScreenScraperTest, FilenamePunctuationAndWholeWordSearchRecoverPreviously
 		EXPECT_EQ(art.screenScraperId, title.id);
 		EXPECT_EQ(images, 1);
 	}
+}
+
+TEST_F(ScreenScraperTest, ShortSearchFallsBackToFullFilenameAndKeepsSessionHealthy)
+{
+	std::vector<std::string> queries;
+	auto session = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const auto search = url.find("&recherche=");
+		EXPECT_NE(search, std::string::npos);
+		if (search == std::string::npos)
+			return 500;
+		const std::string query = url.substr(search + 11);
+		queries.push_back(query);
+		if (query == "F1")
+		{
+			const std::string body = "Erreur : informations obligatoires manquantes !  \r\n";
+			bytes.assign(body.begin(), body.end());
+			return 200;
+		}
+		if (query == http::urlEncode("F1 World Grand Prix"))
+		{
+			auto found = game();
+			found["id"] = "1234";
+			found["noms"] = json::array({{{"region", "us"}, {"text", "F1 World Grand Prix"}}});
+			return reply(bytes, {{"jeux", json::array({found})}});
+		}
+		return reply(bytes, {{"jeux", json::array()}});
+	});
+	session->login();
+	ScreenScraper scraper(session);
+	ASSERT_TRUE(scraper.initialize(root.u8string() + '/'));
+	auto art = item();
+	art.fileName = "F1 World Grand Prix (USA).chd";
+	art.name = "F1";
+	art.searchName = "F1";
+	art.requestedMedia = artwork::metadataMedia;
+	scraper.scrape(art);
+
+	EXPECT_EQ(std::find(queries.begin(), queries.end(), "F1"), queries.end());
+	EXPECT_NE(std::find(queries.begin(), queries.end(), http::urlEncode("F1 World Grand Prix")), queries.end());
+	EXPECT_EQ(art.screenScraperId, 1234u);
+	EXPECT_TRUE(session->ready());
+	EXPECT_EQ(session->status().message, "Signed in to ScreenScraper.");
+}
+
+TEST_F(ScreenScraperTest, SkipsAllShortSearchesAndStillSearchesThreeCharacterNames)
+{
+	int shortSearches = 0;
+	auto shortSession = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		if (url.find("jeuRecherche.php") != std::string::npos)
+			++shortSearches;
+		return reply(bytes, {{"jeux", json::array()}});
+	});
+	shortSession->login();
+	ScreenScraper shortScraper(shortSession);
+	ASSERT_TRUE(shortScraper.initialize(root.u8string() + '/'));
+	auto shortTitle = item();
+	shortTitle.fileName = "F1.chd";
+	shortTitle.name = "F1";
+	shortTitle.searchName = "F1";
+	shortTitle.requestedMedia = artwork::metadataMedia;
+	shortScraper.scrape(shortTitle);
+	EXPECT_EQ(shortSearches, 0);
+	EXPECT_TRUE(shortTitle.screenScraperSearched);
+	EXPECT_TRUE(shortSession->ready());
+	EXPECT_EQ(shortSession->status().message, "Signed in to ScreenScraper.");
+
+	std::vector<std::string> queries;
+	auto fullSession = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const auto search = url.find("&recherche=");
+		EXPECT_NE(search, std::string::npos);
+		if (search == std::string::npos)
+			return 500;
+		queries.push_back(url.substr(search + 11));
+		auto found = game();
+		found["id"] = "1234";
+		found["noms"] = json::array({{{"region", "us"}, {"text", "F16 Fighter Pilot"}}});
+		return reply(bytes, {{"jeux", json::array({found})}});
+	});
+	fullSession->login();
+	ScreenScraper fullScraper(fullSession);
+	ASSERT_TRUE(fullScraper.initialize(root.u8string() + '/'));
+	auto fullTitle = item();
+	fullTitle.fileName = "F16 Fighter Pilot (USA).chd";
+	fullTitle.name = "F16";
+	fullTitle.searchName = "F16";
+	fullTitle.requestedMedia = artwork::metadataMedia;
+	fullScraper.scrape(fullTitle);
+	ASSERT_FALSE(queries.empty());
+	EXPECT_EQ(queries.front(), "F16");
+	EXPECT_EQ(fullTitle.screenScraperId, 1234u);
+	EXPECT_TRUE(fullSession->ready());
 }
 
 TEST_F(ScreenScraperTest, WordSearchNeverAcceptsAnUnrelatedTopResult)
@@ -390,23 +522,66 @@ TEST_F(ScreenScraperTest, PartialMetadataResponseKeepsPreviousValues)
 	EXPECT_EQ(art.releaseDate, "1999-09-09");
 }
 
-TEST(ScreenScraperAccountTest, GuestAccessUsesReportedLimitsWithoutPersonalCredentials)
+TEST(ScreenScraperAccountTest, GuestAccessUsesInfrastructureWithoutPersonalCredentials)
 {
-	auto guestCredentials = credentials();
-	guestCredentials.username.clear();
-	guestCredentials.password.clear();
-	Session guest(guestCredentials, [](const std::string& url, std::vector<u8>& bytes, std::string&) {
-		EXPECT_NE(url.find("systemesListe.php"), std::string::npos);
-		EXPECT_NE(url.find("&ssid=&sspassword="), std::string::npos);
-		auto limits = user(1);
-		limits["id"] = "";
-		return reply(bytes, {{"ssuser", limits}});
-	});
-	guest.login();
-	EXPECT_TRUE(guest.ready());
-	EXPECT_FALSE(guest.status().personalAccount);
-	EXPECT_EQ(guest.status().maxThreads, 1);
-	EXPECT_EQ(guest.status().requestsPerDay, 1000u);
+	for (const auto& open : {json("0"), json(0)})
+	{
+		auto guestCredentials = credentials();
+		guestCredentials.username.clear();
+		guestCredentials.password.clear();
+		int calls = 0;
+		Session guest(guestCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+			EXPECT_NE(url.find("&ssid=&sspassword="), std::string::npos);
+			if (++calls == 1)
+			{
+				EXPECT_NE(url.find("ssinfraInfos.php"), std::string::npos);
+				// Real infrastructure replies omit ssuser; this capacity is shared by all guests.
+				return reply(bytes, {{"serveurs", {{"closefornomember", open}, {"maxthreadfornonmember", "256"}}}});
+			}
+			auto limits = user(2);
+			limits["id"] = "";
+			return reply(bytes, {{"ssuser", limits}});
+		});
+		guest.login();
+		EXPECT_TRUE(guest.ready());
+		EXPECT_FALSE(guest.status().personalAccount);
+		EXPECT_EQ(guest.status().maxThreads, 1);
+		EXPECT_EQ(guest.status().requestsPerDay, 0u);
+		guest.requestJson("jeuRecherche.php", "&recherche=test");
+		EXPECT_EQ(guest.status().maxThreads, 2);
+		EXPECT_EQ(guest.status().requestsPerDay, 1000u);
+	}
+}
+
+TEST(ScreenScraperAccountTest, RejectsClosedOrMalformedGuestInfrastructure)
+{
+	for (const auto& closed : {json("1"), json(1), json("invalid"), json(true), json(nullptr)})
+	{
+		auto guestCredentials = credentials();
+		guestCredentials.username.clear();
+		guestCredentials.password.clear();
+		Session guest(guestCredentials, [&](const std::string&, std::vector<u8>& bytes, std::string&) {
+			return reply(bytes, {{"serveurs", {{"closefornomember", closed}}}});
+		});
+		EXPECT_THROW(guest.login(), std::runtime_error);
+		EXPECT_FALSE(guest.ready());
+		EXPECT_FALSE(guest.status().connecting);
+		EXPECT_EQ(guest.status().activeRequests, 0);
+		if (closed == "1" || closed == 1)
+			EXPECT_EQ(guest.status().message, "ScreenScraper is temporarily closed. Reconnect later.");
+	}
+	for (const auto& response : {json::object(), json{{"serveurs", json::object()}},
+			json{{"serveurs", json::array()}}, json{{"ssuser", user()}}})
+	{
+		auto guestCredentials = credentials();
+		guestCredentials.username.clear();
+		guestCredentials.password.clear();
+		Session guest(guestCredentials, [&](const std::string&, std::vector<u8>& bytes, std::string&) {
+			return reply(bytes, response);
+		});
+		EXPECT_THROW(guest.login(), std::runtime_error);
+		EXPECT_FALSE(guest.ready());
+	}
 }
 
 TEST(ScreenScraperAccountTest, RefusesGuestFallbackAndDoesNotExposeTransportSecrets)
@@ -418,13 +593,194 @@ TEST(ScreenScraperAccountTest, RefusesGuestFallbackAndDoesNotExposeTransportSecr
 	});
 	EXPECT_THROW(guest.login(), std::runtime_error);
 	EXPECT_FALSE(guest.ready());
-	Session failure(credentials(), [](const std::string& url, std::vector<u8>&, std::string&) -> int {
-		throw std::runtime_error(url);
+	auto diagnosticCredentials = Credentials{"diagnostic-developer-id", "diagnostic-developer-password",
+		"diagnostic-user-id", "diagnostic-user-password"};
+	Session failure(diagnosticCredentials, [](const std::string& url, std::vector<u8>&, std::string&) -> int {
+		throw std::runtime_error(url + "&exception=diagnostic-exception-detail");
 	});
 	try { failure.login(); FAIL(); }
-	catch (const std::runtime_error& error) { EXPECT_EQ(std::string(error.what()).find("secret"), std::string::npos); }
-	EXPECT_EQ(failure.status().message.find("secret"), std::string::npos);
+	catch (const std::runtime_error& error)
+	{
+		const std::string message = error.what();
+		EXPECT_NE(message.find("login"), std::string::npos);
+		EXPECT_NE(message.find("transport failure"), std::string::npos);
+		for (const std::string& privateValue : {"ssuserInfos.php", "diagnostic-developer-id",
+				"diagnostic-developer-password", "diagnostic-user-id", "diagnostic-user-password",
+				"diagnostic-exception-detail"})
+			EXPECT_EQ(message.find(privateValue), std::string::npos);
+		EXPECT_EQ(message, failure.status().message);
+	}
+	EXPECT_EQ(failure.status().message.find("diagnostic-user-password"), std::string::npos);
 	EXPECT_EQ(failure.status().activeRequests, 0);
+}
+
+TEST(ScreenScraperAccountTest, ReportsSafeHttpAndInvalidJsonDiagnostics)
+{
+	const auto diagnosticCredentials = Credentials{"diagnostic-developer-id", "diagnostic-developer-password",
+		"tester", "diagnostic-user-password"};
+	auto expectSafe = [&](const std::string& message, const std::string& category,
+			const std::string& endpoint, const std::string& parameter, const std::string& body) {
+		EXPECT_NE(message.find(category), std::string::npos);
+		for (const std::string& privateValue : std::initializer_list<std::string>{endpoint, parameter, body, "diagnostic-developer-id",
+				"diagnostic-developer-password", "tester", "diagnostic-user-password"})
+			if (!privateValue.empty())
+				EXPECT_EQ(message.find(privateValue), std::string::npos);
+	};
+
+	const std::string privateEndpoint = "internal-private-endpoint.php";
+	const std::string privateParameter = "diagnostic-request-parameter";
+	Session httpFailure(diagnosticCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		return 500;
+	});
+	httpFailure.login();
+	std::string httpMessage;
+	try { httpFailure.requestJson(privateEndpoint, "&needle=" + privateParameter); FAIL(); }
+	catch (const std::runtime_error& error) { httpMessage = error.what(); }
+	expectSafe(httpMessage, "HTTP status 500 or network error", privateEndpoint, privateParameter, "");
+	EXPECT_NE(httpMessage.find("other"), std::string::npos);
+	EXPECT_EQ(httpMessage, httpFailure.status().message);
+
+	const std::string knownEndpoint = "jeuRecherche.php";
+	const std::string privateBody = "diagnostic-response-body";
+	Session invalidJson(diagnosticCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const std::string body = "invalid " + privateBody;
+		bytes.assign(body.begin(), body.end());
+		return 200;
+	});
+	invalidJson.login();
+	std::string jsonMessage;
+	try { invalidJson.requestJson(knownEndpoint, "&recherche=" + privateParameter); FAIL(); }
+	catch (const std::runtime_error& error) { jsonMessage = error.what(); }
+	expectSafe(jsonMessage, "invalid or oversized JSON", knownEndpoint, privateParameter, privateBody);
+	EXPECT_NE(jsonMessage.find("game search"), std::string::npos);
+	EXPECT_EQ(jsonMessage, invalidJson.status().message);
+}
+
+TEST(ScreenScraperAccountTest, RecoversTransientFailuresAfterValidatedReplies)
+{
+	int personalRequests = 0;
+	Session personal(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		return ++personalRequests == 1 ? 500 : reply(bytes, json::object());
+	}, std::chrono::milliseconds(0));
+	personal.login();
+	EXPECT_THROW(personal.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_NE(personal.status().message.find("HTTP status 500 or network error"), std::string::npos);
+	EXPECT_EQ(personal.requestJson("jeuRecherche.php", ""), json::object());
+	EXPECT_EQ(personal.status().message, "Signed in to ScreenScraper.");
+
+	auto guestCredentials = credentials();
+	guestCredentials.username.clear();
+	guestCredentials.password.clear();
+	int guestRequests = 0;
+	Session guest(guestCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssinfraInfos.php") != std::string::npos)
+			return reply(bytes, {{"serveurs", {{"closefornomember", "0"}}}});
+		return ++guestRequests == 1 ? 500 : 404;
+	}, std::chrono::milliseconds(0));
+	guest.login();
+	EXPECT_THROW(guest.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_EQ(guest.requestJson("jeuRecherche.php", ""), json::object());
+	EXPECT_EQ(guest.status().message, "Using ScreenScraper guest access.");
+}
+
+TEST(ScreenScraperAccountTest, ClearsArtworkFailureOnlyAfterValidOrMissingMedia)
+{
+	for (int result : {0, 1, 2, 3})
+	{
+		SCOPED_TRACE(result);
+		int requests = 0;
+		Session session(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+			if (url.find("ssuserInfos.php") != std::string::npos)
+				return reply(bytes, {{"ssuser", user()}});
+			if (++requests == 1) return 500;
+			if (result == 2) return 404;
+			if (result == 0) bytes = png();
+			else
+			{
+				const std::string body = result == 1 ? "NOMEDIA" : "invalid image";
+				bytes.assign(body.begin(), body.end());
+			}
+			return 200;
+		}, std::chrono::milliseconds(0));
+		session.login();
+		EXPECT_THROW(session.requestImage(1234, "box-2D", "us"), std::runtime_error);
+		if (result == 3)
+		{
+			EXPECT_THROW(session.requestImage(1234, "box-2D", "us"), std::runtime_error);
+			EXPECT_NE(session.status().message.find("artwork response is invalid"), std::string::npos);
+		}
+		else
+		{
+			EXPECT_NO_THROW(session.requestImage(1234, "box-2D", "us"));
+			EXPECT_EQ(session.status().message, "Signed in to ScreenScraper.");
+		}
+	}
+}
+
+TEST(ScreenScraperAccountTest, KeepsInvalidResponseAndPausedErrorMessagesAfterSuccess)
+{
+	int invalidRequests = 0;
+	Session invalidJson(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		if (++invalidRequests == 1)
+			return 500;
+		const std::string body = "invalid response";
+		bytes.assign(body.begin(), body.end());
+		return 200;
+	}, std::chrono::milliseconds(0));
+	invalidJson.login();
+	EXPECT_THROW(invalidJson.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_THROW(invalidJson.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_NE(invalidJson.status().message.find("invalid or oversized JSON"), std::string::npos);
+
+	const std::string writeFailure = "ScreenScraper could not save artwork. Check the writable data folder.";
+	Session paused(credentials(), [](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		return reply(bytes, json::object());
+	}, std::chrono::milliseconds(0));
+	paused.login();
+	paused.pause(writeFailure);
+	EXPECT_EQ(paused.requestJson("jeuRecherche.php", ""), json::object());
+	EXPECT_EQ(paused.status().message, writeFailure);
+}
+
+TEST(ScreenScraperAccountTest, OlderInFlightSuccessCannotClearNewerFailure)
+{
+	BlockedRequest blocked;
+	int requests = 0;
+	Session session(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		if (++requests == 1)
+		{
+			blocked.wait();
+			return reply(bytes, json::object());
+		}
+		return 500;
+	}, std::chrono::milliseconds(0));
+	session.login();
+	auto olderRequest = std::async(std::launch::async, [&] {
+		session.requestJson("jeuRecherche.php", "");
+	});
+	const bool olderRequestEntered = blocked.waitForEntry(std::chrono::seconds(1));
+	if (!olderRequestEntered)
+		blocked.release();
+	ASSERT_TRUE(olderRequestEntered);
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	EXPECT_THROW(session.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	const std::string failureMessage = session.status().message;
+	EXPECT_NE(failureMessage.find("HTTP status 500 or network error"), std::string::npos);
+	blocked.release();
+	EXPECT_NO_THROW(olderRequest.get());
+	EXPECT_EQ(session.status().message, failureMessage);
 }
 
 TEST(ScreenScraperAccountTest, EnforcesDailyReservationsAndHandlesApiLimits)
@@ -603,6 +959,19 @@ protected:
 	{
 		boxart.runScreenScraperQueue(session, boxart.screenGeneration, root.u8string() + '/', std::move(launchbox), std::move(tgdb));
 	}
+	void startQueueAsync(const std::shared_ptr<Session>& session)
+	{
+		boxart.screenFetching = std::async(std::launch::async, [this, session] { run(session); });
+	}
+	bool setOfflineArtState(const GameBoxart& item, OfflineArtState state)
+	{
+		std::lock_guard<std::mutex> lock(boxart.mutex);
+		const auto record = boxart.games.find(item.sourceKey());
+		if (record == boxart.games.end())
+			return false;
+		record->second.offlineArtState = state;
+		return true;
+	}
 	bool runWithProducer(const std::shared_ptr<Session>& session, GameBoxart& preparing)
 	{
 		boxart.physicalWorking = true;
@@ -652,6 +1021,16 @@ protected:
 		boxart.screenFetching.get();
 		return covered && waiting;
 	}
+	bool finishCacheRefresh()
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while (boxart.refreshPending() && std::chrono::steady_clock::now() < deadline)
+		{
+			boxart.startFetch();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return !boxart.refreshPending();
+	}
 	GameBoxart queue(u32 mask = artwork::basicMedia)
 	{
 		return boxart.getBoxartAndQueue(media, false, mask);
@@ -688,6 +1067,19 @@ protected:
 	int previousProvider = 0, previousSource = 0, previousSelection = 0;
 	bool previousFetch = false;
 };
+
+TEST_F(ScreenScraperQueueTest, UnconfiguredGuestAccessRetainsPendingDreamcastRequests)
+{
+	if (screenscraper::developerConfigured())
+		GTEST_SKIP() << "Requires an unprovisioned application identity.";
+	config::FetchBoxart = true;
+	seedPrepared(1);
+	for (int i = 0; i < 3; ++i)
+	{
+		boxart.startFetch();
+		EXPECT_EQ(queued(), 1u);
+	}
+}
 
 TEST_F(ScreenScraperQueueTest, BasicLibraryQueuesCoverMixLogoAndMetadataRegardlessOfManualChoices)
 {
@@ -929,7 +1321,94 @@ TEST_F(ScreenScraperQueueTest, SettingsGenerationStopsRefillAndPreservesRemainin
 	EXPECT_EQ(boxart.downloadProgress().games, 0u);
 }
 
+TEST_F(ScreenScraperQueueTest, RefreshDoesNotWaitForScreenScraperAndAcceptsNewWork)
+{
+	media.path = "/games/Game 0.chd";
+	media.fileName = "Game 0.chd";
+	media.name = "Game 0";
+	seedPrepared(1);
+	BlockedRequest blocked;
+	std::atomic<int> lookups{0};
+	auto activeSession = mockSession(1, [&](const std::string&, std::vector<u8>& bytes, std::string&) {
+		blocked.wait();
+		bytes = png();
+		return 200;
+	}, lookups);
+	startQueueAsync(activeSession);
+	const bool requestEntered = blocked.waitForEntry(std::chrono::seconds(5));
+
+	// Run refreshCache on a separate caller so a regression cannot hang this test.
+	// The blocker is always released before either async future is joined.
+	std::future<void> refresh;
+	std::future<void> repeatedRefresh;
+	bool refreshReturnedWhileBlocked = false;
+	bool repeatedRefreshReturnedWhileBlocked = false;
+	if (requestEntered)
+	{
+		refresh = std::async(std::launch::async, [&] { boxart.refreshCache(); });
+		refreshReturnedWhileBlocked = refresh.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		if (refreshReturnedWhileBlocked)
+		{
+			refresh.get();
+			repeatedRefresh = std::async(std::launch::async, [&] { boxart.refreshCache(); });
+			repeatedRefreshReturnedWhileBlocked = repeatedRefresh.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		}
+	}
+	blocked.release();
+	if (refresh.valid()) refresh.get();
+	if (repeatedRefresh.valid()) repeatedRefresh.get();
+	const bool refreshFinished = finishCacheRefresh();
+	if (!refreshFinished)
+		boxart.term(); // Reap refresh before TearDown touches screenFetching.
+
+	EXPECT_TRUE(requestEntered) << "The ScreenScraper worker did not reach the mocked image request";
+	EXPECT_TRUE(refreshReturnedWhileBlocked) << "Refresh waited for the active HTTP request";
+	EXPECT_TRUE(repeatedRefreshReturnedWhileBlocked) << "A repeated refresh waited for the active HTTP request";
+	EXPECT_TRUE(refreshFinished) << "The refresh worker did not finish after its request was released";
+	if (!requestEntered || !refreshFinished)
+		return;
+
+	const GameBoxart refreshed = boxart.getCachedBoxart(media);
+	EXPECT_TRUE(refreshed.screenScraperMedia.empty()) << "The stale in-flight result must not be published";
+
+	// Mark the new offline scan as complete, then verify online work can be queued
+	// and published after the refresh future has been reaped.
+	config::FetchBoxart = true;
+	EXPECT_TRUE(setOfflineArtState(refreshed, OfflineArtState::NoArtwork));
+	const GameBoxart queued = queue(artwork::coverMedia | artwork::metadataMedia);
+	ASSERT_TRUE(queued.busy);
+	std::atomic<int> refreshedLookups{0};
+	auto readySession = mockSession(1, [](const std::string&, std::vector<u8>& bytes, std::string&) {
+		bytes = png();
+		return 200;
+	}, refreshedLookups);
+	run(readySession);
+	EXPECT_EQ(boxart.getCachedBoxart(media).screenScraperMedia.count("cover"), 1u);
+}
+
 // Opt in explicitly: ordinary test runs must never consume a user's API quota.
+TEST(ScreenScraperLiveTest, DISABLED_ConnectsGuestWithoutPersonalCredentials)
+{
+	const char *output = std::getenv("HOLLYCAST_SCREENSCRAPER_LIVE_OUTPUT");
+	if (!output || !*output)
+		GTEST_SKIP() << "Opt in to a live guest connection check.";
+	ASSERT_TRUE(screenscraper::developerConfigured());
+	// Exercise automatic startup without a personal account or an explicit login.
+	const auto session = screenscraper::currentSession();
+	ASSERT_TRUE(session);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+	auto account = screenscraper::status();
+	while (account.connecting && std::chrono::steady_clock::now() < deadline)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		account = screenscraper::status();
+	}
+	EXPECT_TRUE(account.connected) << account.message;
+	EXPECT_FALSE(account.personalAccount);
+	EXPECT_GT(account.maxThreads, 0);
+	screenscraper::disconnect();
+}
+
 TEST(ScreenScraperLiveTest, DISABLED_RecoversPreviouslyUnmatchedDreamcastTitles)
 {
 	const char *output = std::getenv("HOLLYCAST_SCREENSCRAPER_LIVE_OUTPUT");

@@ -30,6 +30,9 @@
 #include "imgui_driver.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "test_harness_ui.h"
+#endif
 #include "misc/freetype/imgui_text_shaping.h"
 #include "imgui_stdlib.h"
 #include "gui_font.h"
@@ -37,10 +40,13 @@
 #include "stdclass.h"
 #include "rend/osd.h"
 #include "stbi.h"
+#include "util/worker_thread.h"
+#include <limits>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <future>
 #include <map>
 #include <string>
@@ -402,6 +408,12 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 			{
 				const bool submitted = ImGui::InputTextEx("##pathbox", T("Path"), filePathText, sizeof(filePathText),
 						ImVec2(-uiScaled(220), navSize), ImGuiInputTextFlags_EnterReturnsTrue);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.path"},
+						{"semantic_label", "Current directory path"}, {"kind", "text"}, {"value", filePathText},
+						{"password", false}, {"read_only", false}});
+#endif
 				if (submitted)
 				{
 					navigateToDirectory(filePathText, true);
@@ -491,6 +503,11 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 				else if (!inContentPane)
 					navigateToDirectory(entry.path, true);
 			}
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.folder:" + entry.path},
+					{"semantic_label", entry.name}, {"kind", "folder"}, {"value", entry.path}});
+#endif
 			drawBrowserItemLabel(icon, entry.name, rowPos, false,
 					inContentPane ? 0.0f : uiScaled(14.0f) * treeDepth);
 			ImGui::PopID();
@@ -520,6 +537,11 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					finalizeSelection(entry.name);
 			}
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.file:" + entry.path},
+					{"semantic_label", entry.name}, {"kind", "file"}, {"value", entry.path}});
+#endif
 			drawBrowserItemLabel(ICON_FA_FILE, entry.name, rowPos, false, 0.0f);
 			ImGui::PopID();
 
@@ -575,6 +597,12 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 				ImVec2(-FLT_MIN, navSize), 0))
 		{
 		}
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.search"},
+				{"semantic_label", "Search files"}, {"kind", "text"}, {"value", fileSearchText},
+				{"password", false}, {"read_only", false}});
+#endif
 		ImGui::Separator();
 
 		const ImGuiStyle& style = ImGui::GetStyle();
@@ -707,6 +735,12 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 		const bool inputSubmitted = ImGui::InputTextEx("##file_input", T("Filename"), fileInputText, sizeof(fileInputText),
 				ImVec2(-FLT_MIN, 0),
 				ImGuiInputTextFlags_EnterReturnsTrue);
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "file_picker.selection"},
+				{"semantic_label", selectFile ? "File name" : "Folder"}, {"kind", "text"}, {"value", fileInputText},
+				{"password", false}, {"read_only", false}});
+#endif
 		if (ImGui::IsItemEdited())
 			fileInputIsDirectory = false;
 		if (inputSubmitted)
@@ -1200,17 +1234,20 @@ void scrollWindowFromTouch()
 	}
 }
 
-bool drawEmptyLibraryPrompt()
+bool drawEmptyLibraryPrompt(bool hasContentPath, bool scanning)
 {
-	const char* label = i18n::T("Your game list is empty");
+	const char* label = !hasContentPath ? i18n::T("Your game list is empty")
+			: scanning ? i18n::T("Scanning for games...") : i18n::T("No games found");
+	const bool showAddFolder = !hasContentPath || !scanning;
 	const char* button = i18n::T("Add Game Folder");
 	const ImVec2 available = ImGui::GetContentRegionAvail(), origin = ImGui::GetCursorPos();
 	const float preferredSize = uiLargeFontSize();
 	const ImVec2 padding = ScaledVec2(20, 8);
 	const ImVec2 labelSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, label);
-	const ImVec2 buttonSize = ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, button) + padding * 2;
+	const ImVec2 buttonSize = showAddFolder
+			? ImGui::GetFont()->CalcTextSizeA(preferredSize, FLT_MAX, 0, button) + padding * 2 : ImVec2();
 	const float gap = std::max(ImGui::GetStyle().ItemSpacing.y, uiScaled(8));
-	const float height = labelSize.y + gap + buttonSize.y;
+	const float height = labelSize.y + (showAddFolder ? gap + buttonSize.y : 0.f);
 	// Small game browsers (such as Pocket's VMU screen) use the same prompt,
 	// scaled to their own viewport. No child panel obscures the theme artwork.
 	const float scale = std::clamp(std::min(available.x / std::max(labelSize.x, buttonSize.x), available.y / height), 0.01f, 1.f);
@@ -1222,8 +1259,12 @@ bool drawEmptyLibraryPrompt()
 	ImGui::BeginGroup();
 	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - labelSize.x * scale) * 0.5f), top));
 	ImGui::TextUnformatted(label);
-	ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - buttonSize.x * scale) * 0.5f), top + (labelSize.y + gap) * scale));
-	const bool addFolder = ImGui::Button(button);
+	bool addFolder = false;
+	if (showAddFolder)
+	{
+		ImGui::SetCursorPos(ImVec2(origin.x + std::max(0.f, (available.x - buttonSize.x * scale) * 0.5f), top + (labelSize.y + gap) * scale));
+		addFolder = ImGui::Button(button);
+	}
 	ImGui::EndGroup();
 	ImGui::PopFont();
 	return addFolder;
@@ -1402,7 +1443,8 @@ static u8 *loadImage(const std::string& path, int& width, int& height, bool boun
 	int channels;
 	stbi_set_flip_vertically_on_load_thread(0);
 	const s64 fileSize = file->size();
-	if (fileSize <= 0 || (boundedImage && fileSize > 16 * 1024 * 1024))
+	if (fileSize <= 0 || fileSize > std::numeric_limits<int>::max()
+			|| (boundedImage && fileSize > 16 * 1024 * 1024))
 		return nullptr;
 	std::vector<u8> data(fileSize);
 	if (file->read(data.data(), 1, data.size()) != data.size())
@@ -1434,6 +1476,78 @@ struct ThemeImageFileStamp
 static std::map<std::string, ThemeImageFileStamp> failedThemeImages;
 static std::map<std::string, float> fileImageAspects;
 static constexpr size_t MaxFailedThemeImages = 64;
+
+// Only one file read/decode can be outstanding. Fast scrolling therefore cannot
+// queue the whole library or accumulate decoded images behind the render thread.
+struct DecodedFileImage
+{
+	std::unique_ptr<u8, decltype(&free)> pixels{nullptr, free};
+	std::string key;
+	int width = 0, height = 0;
+	u64 generation = 0;
+	bool nearest = false;
+	themes::PixelArt pixelArt;
+};
+static WorkerThread fileImageWorker{"LibraryImages"};
+static std::future<DecodedFileImage> pendingFileImage;
+static u64 fileImageGeneration = 0;
+static bool invalidateFileTextures = false;
+struct FileTextureUse
+{
+	size_t bytes;
+	int frame;
+};
+static std::map<std::string, FileTextureUse> fileTextureUses;
+static size_t fileTextureBytes = 0;
+static constexpr size_t FileTextureBudget = 256 * 1024 * 1024;
+static std::map<std::string, std::chrono::steady_clock::time_point> failedFileImages;
+
+static void finishFileImage(int& loads)
+{
+	if (loads >= 5 || !pendingFileImage.valid()
+			|| pendingFileImage.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+		return;
+	++loads;
+	DecodedFileImage image = pendingFileImage.get();
+	if (image.generation != fileImageGeneration || !imguiDriver)
+		return;
+	if (!image.pixels)
+	{
+		// Retry transient/missing files, including artwork published by a scraper
+		// after the first lookup. A failed cover must not starve the next request.
+		if (failedFileImages.size() >= 128)
+			failedFileImages.erase(failedFileImages.begin());
+		failedFileImages[image.key] = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		return;
+	}
+	ImTextureID id{};
+	try {
+		if (image.pixelArt.resolution > 0)
+		{
+			const auto pixels = themes::makePixelArtwork(image.pixels.get(), image.width, image.height, image.pixelArt);
+			if (!pixels.pixels.empty())
+			{
+				image.width = pixels.width;
+				image.height = pixels.height;
+				id = imguiDriver->updateTextureAndAspectRatio(image.key, pixels.pixels.data(),
+						image.width, image.height, image.pixelArt.levels <= 4);
+			}
+		}
+		else
+			id = imguiDriver->updateTextureAndAspectRatio(image.key, image.pixels.get(),
+					image.width, image.height, image.nearest);
+	} catch (...) {
+		// A renderer resize can reject the upload; a subsequent lookup retries it.
+	}
+	if (id != ImTextureID{})
+	{
+		auto& use = fileTextureUses[image.key];
+		fileTextureBytes -= use.bytes;
+		use = {static_cast<size_t>(image.width) * image.height * 4, ImGui::GetFrameCount()};
+		fileTextureBytes += use.bytes;
+	}
+}
+
 struct DecodedThemeImage
 {
 	ThemeImageFileStamp stamp;
@@ -1475,6 +1589,49 @@ static ThemeImageFileStamp themeImageFileStamp(const std::string& path)
 }
 }
 
+void ImguiFileTexture::invalidateFileImages()
+{
+	++fileImageGeneration;
+	invalidateFileTextures = true;
+	failedFileImages.clear();
+	fileImageAspects.clear();
+}
+
+void ImguiFileTexture::stopImageLoader()
+{
+	fileImageWorker.stop();
+	pendingFileImage = {};
+	invalidateFileImages();
+}
+
+void ImguiFileTexture::resetLoadCount()
+{
+	textureLoadCount = 0;
+	// Called after draw submission. Keep recent/visible textures even when their
+	// working set exceeds the budget; evicting them would cause flicker and churn.
+	const int frame = ImGui::GetFrameCount();
+	if (invalidateFileTextures)
+	{
+		if (imguiDriver)
+			for (const auto& image : fileTextureUses)
+				imguiDriver->deleteTextureAndAspectRatio(image.first);
+		fileTextureUses.clear();
+		fileTextureBytes = 0;
+		invalidateFileTextures = false;
+	}
+	while (!fileTextureUses.empty() && fileTextureBytes > FileTextureBudget)
+	{
+		auto oldest = std::min_element(fileTextureUses.begin(), fileTextureUses.end(),
+				[](const auto& a, const auto& b) { return a.second.frame < b.second.frame; });
+		if (oldest->second.frame >= frame - 2)
+			break;
+		if (imguiDriver)
+			imguiDriver->deleteTextureAndAspectRatio(oldest->first);
+		fileTextureBytes -= oldest->second.bytes;
+		fileTextureUses.erase(oldest);
+	}
+}
+
 void ImguiFileTexture::clearThemeImageFailures()
 {
 	failedThemeImages.clear();
@@ -1510,11 +1667,52 @@ float ImguiFileTexture::getAspectRatio() const
 
 ImTextureID ImguiFileTexture::getId()
 {
-	if (path.empty())
+	if (path.empty() || !imguiDriver)
 		return {};
+	if (!themeAsset)
+		finishFileImage(textureLoadCount);
 	const std::string textureKey = pixelArt.resolution == 0 ? path : path + "#pixel-art/"
-			+ std::to_string(pixelArt.resolution) + "/" + std::to_string(pixelArt.dark) + "/" + std::to_string(pixelArt.light);
+			+ std::to_string(pixelArt.resolution) + "/" + std::to_string(pixelArt.dark) + "/" + std::to_string(pixelArt.light)
+			+ "/" + std::to_string(pixelArt.levels);
 	ImTextureID id = imguiDriver->getTexture(textureKey);
+	if (!themeAsset)
+	{
+		if (id != ImTextureID{})
+		{
+			const auto use = fileTextureUses.find(textureKey);
+			if (use != fileTextureUses.end())
+				use->second.frame = ImGui::GetFrameCount();
+			return id;
+		}
+		const auto failed = failedFileImages.find(textureKey);
+		if (failed != failedFileImages.end())
+		{
+			if (std::chrono::steady_clock::now() < failed->second)
+				return {};
+			failedFileImages.erase(failed);
+		}
+		if (!pendingFileImage.valid() && !invalidateFileTextures)
+		{
+			// Copy all inputs: the temporary ImguiFileTexture and renderer can be
+			// destroyed while storage is busy. The worker never touches the GPU.
+			pendingFileImage = fileImageWorker.runFuture([path = path, key = textureKey,
+					bounded = boundedImage, nearest = nearestSampling, style = pixelArt,
+					generation = fileImageGeneration] {
+				DecodedFileImage image;
+				image.key = key;
+				image.generation = generation;
+				image.nearest = nearest;
+				image.pixelArt = style;
+				try {
+					image.pixels.reset(loadImage(path, image.width, image.height, bounded));
+				} catch (const std::exception& e) {
+					WARN_LOG(COMMON, "Cannot load library image %s: %s", path.c_str(), e.what());
+				}
+				return image;
+			});
+		}
+		return {};
+	}
 	if (id == ImTextureID())
 	{
 		ThemeImageFileStamp fileStamp;
@@ -1580,7 +1778,7 @@ ImTextureID ImguiFileTexture::getId()
 					{
 						const auto pixels = themes::makePixelArtwork(imgData, width, height, pixelArt);
 						if (!pixels.pixels.empty())
-							id = imguiDriver->updateTextureAndAspectRatio(textureKey, pixels.pixels.data(), pixels.width, pixels.height, true);
+							id = imguiDriver->updateTextureAndAspectRatio(textureKey, pixels.pixels.data(), pixels.width, pixels.height, pixelArt.levels <= 4);
 					}
 					else
 						id = imguiDriver->updateTextureAndAspectRatio(textureKey, imgData, width, height, nearestSampling);
@@ -1878,6 +2076,30 @@ static int switchInputTextCallback(ImGuiInputTextCallbackData *data)
 }
 #endif
 
+#ifdef HOLLYCAST_TEST_HARNESS
+static void annotateHarnessTextInput(const char* label, const char* value, ImGuiInputTextFlags flags)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const std::string rawLabel = label ? label : "";
+	const std::size_t hiddenLabel = rawLabel.find("##");
+	const std::string visibleLabel = rawLabel.substr(0, hiddenLabel);
+	const bool password = (flags & ImGuiInputTextFlags_Password) != 0;
+	test_harness::Json metadata = {{"semantic_id", "input." + rawLabel},
+		{"semantic_label", visibleLabel}, {"kind", "text"}, {"password", password},
+		{"read_only", (flags & ImGuiInputTextFlags_ReadOnly) != 0}};
+	if (!password && value != nullptr)
+	{
+		const std::size_t valueLength = std::strlen(value);
+		if (valueLength <= 1024)
+			metadata["value"] = std::string(value, valueLength);
+		else
+			test_harness::ui::markTruncated();
+	}
+	test_harness::ui::annotateItem(test_harness::ui::lastItemId(), metadata);
+}
+#endif
+
 bool InputText(const char *label, std::string *str, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
 {
 #ifdef __SWITCH__
@@ -1885,28 +2107,56 @@ bool InputText(const char *label, std::string *str, ImGuiInputTextFlags flags, I
 	{
 		// TODO This doesn't handle growing the string capacity dynamically
 		str->reserve(512);
-		return ImGui::InputText(label, str, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+		const bool changed = ImGui::InputText(label, str, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+#ifdef HOLLYCAST_TEST_HARNESS
+		annotateHarnessTextInput(label, str->c_str(), flags);
+#endif
+		return changed;
 	}
 #endif
-	return ImGui::InputText(label, str, flags, callback, user_data);
+	const bool changed = ImGui::InputText(label, str, flags, callback, user_data);
+#ifdef HOLLYCAST_TEST_HARNESS
+	annotateHarnessTextInput(label, str->c_str(), flags);
+#endif
+	return changed;
 }
 
 bool InputText(const char *label, char *str, size_t size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
 {
 #ifdef __SWITCH__
 	if ((flags & ImGuiInputTextFlags_ReadOnly) == 0)
-		return ImGui::InputText(label, str, size, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+	{
+		const bool changed = ImGui::InputText(label, str, size, flags | ImGuiInputTextFlags_CallbackAlways, switchInputTextCallback);
+#ifdef HOLLYCAST_TEST_HARNESS
+		annotateHarnessTextInput(label, str, flags);
 #endif
-	return ImGui::InputText(label, str, size, flags, callback, user_data);
+		return changed;
+	}
+#endif
+	const bool changed = ImGui::InputText(label, str, size, flags, callback, user_data);
+#ifdef HOLLYCAST_TEST_HARNESS
+	annotateHarnessTextInput(label, str, flags);
+#endif
+	return changed;
 }
 
 bool InputTextMultiline(const char* label, char* buf, size_t buf_size, const ImVec2& size, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data)
 {
 #ifdef __SWITCH__
 	if ((flags & ImGuiInputTextFlags_ReadOnly) == 0)
-		return ImGui::InputTextMultiline(label, buf, buf_size, size, flags | ImGuiInputTextFlags_CallbackAlways | Flags_Multiline, switchInputTextCallback);
+	{
+		const bool changed = ImGui::InputTextMultiline(label, buf, buf_size, size, flags | ImGuiInputTextFlags_CallbackAlways | Flags_Multiline, switchInputTextCallback);
+#ifdef HOLLYCAST_TEST_HARNESS
+		annotateHarnessTextInput(label, buf, flags);
 #endif
-	return ImGui::InputTextMultiline(label, buf, buf_size, size, flags, callback, user_data);
+		return changed;
+	}
+#endif
+	const bool changed = ImGui::InputTextMultiline(label, buf, buf_size, size, flags, callback, user_data);
+#ifdef HOLLYCAST_TEST_HARNESS
+	annotateHarnessTextInput(label, buf, flags);
+#endif
+	return changed;
 }
 
 // ============================================================================
@@ -2084,6 +2334,11 @@ bool SettingsOption(const char* label, config::Option<bool, PerGameOption>& opti
 
 	bool value = option;
 	bool changed = ToggleSwitch(("##" + std::string(label)).c_str(), &value);
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", std::string("settings.option.") + label},
+			{"semantic_label", label ? label : ""}, {"kind", "toggle"}, {"value", value}});
+#endif
 	if (changed)
 		option = value;
 
@@ -2211,6 +2466,16 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
 			pendingSelection = openingValue;
 		}
 	}
+
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (cfg.multiSelect && editingPopup == ownerPopup && isTopmost
+			&& test_harness::ui::collectingInspection())
+	{
+		const ImGuiID rowItemId = ImGui::GetID("##row");
+		if (rowItemId != 0)
+			test_harness::ui::annotateItem(rowItemId, {{"draft_value", pendingSelection}});
+	}
+#endif
 
 	if (editingPopup == ownerPopup && isTopmost && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
 		const bool changed = !cfg.multiSelect && *cfg.currentValue != openingValue;

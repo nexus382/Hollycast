@@ -82,3 +82,57 @@ TEST_F(VideoPresetTest, ReapplyingLowDisablesReconstructionAndUpdatesDisplayedPr
 	EXPECT_EQ(detectCurrentPreset(), VideoPresetLevel::Low);
 	EXPECT_NE(renderVideoTab().find(std::string("{ ") + i18n::T("Low") + " }"), std::string::npos);
 }
+
+TEST_F(VideoPresetTest, ApplyingPresetsResetsFilteringAndFrameSkipChoices)
+{
+	using namespace SettingsNew;
+	const int anisotropy[] = {1, 1, 16, 8, 16};
+	const int automaticFrameSkip[] = {2, 1, 0, 0, 0};
+
+	for (size_t i = 0; i < getVideoPresetCount(); ++i)
+	{
+		const auto level = static_cast<VideoPresetLevel>(i);
+		SCOPED_TRACE(getPresetByLevel(level)->name);
+		config::TextureFiltering = 2;
+		config::SampleTextureFilter = 19;
+		config::TextureUpscale = 6;
+		config::MaxFilteredTextureSize = 1024;
+		config::UseMipmaps = false;
+		config::FixUpscaleBleedingEdge = false;
+		config::AnisotropicFiltering = 2;
+		config::AutoSkipFrame = 2;
+		config::SkipFrame = 6;
+		config::Widescreen = true;
+		config::SuperWidescreen = true;
+		config::WidescreenGameHacks = true;
+		config::FloatVMUs = true;
+
+		applyVideoPreset(*getPresetByLevel(level));
+
+		EXPECT_EQ(config::TextureFiltering.get(), 0);
+		EXPECT_EQ(config::SampleTextureFilter.get(), 0);
+		EXPECT_EQ(config::TextureUpscale.get(), 1);
+		EXPECT_EQ(config::MaxFilteredTextureSize.get(), 256);
+		EXPECT_TRUE(config::UseMipmaps.get());
+		EXPECT_TRUE(config::FixUpscaleBleedingEdge.get());
+		EXPECT_EQ(config::AnisotropicFiltering.get(), anisotropy[i]);
+		EXPECT_EQ(config::AutoSkipFrame.get(), automaticFrameSkip[i]);
+		EXPECT_EQ(config::SkipFrame.get(), 0);
+		EXPECT_EQ(detectCurrentPreset(), level);
+
+		if (level == VideoPresetLevel::Potato)
+		{
+			EXPECT_FALSE(config::Widescreen.get());
+			EXPECT_FALSE(config::SuperWidescreen.get());
+			EXPECT_FALSE(config::WidescreenGameHacks.get());
+			EXPECT_FALSE(config::FloatVMUs.get());
+		}
+		else
+		{
+			EXPECT_TRUE(config::Widescreen.get());
+			EXPECT_TRUE(config::SuperWidescreen.get());
+			EXPECT_TRUE(config::WidescreenGameHacks.get());
+			EXPECT_TRUE(config::FloatVMUs.get());
+		}
+	}
+}

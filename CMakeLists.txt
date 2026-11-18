@@ -14,8 +14,6 @@ if(CCACHE_PROGRAM)
 	set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM} CACHE STRING "Compiler launcher for CXX.")
 endif()
 
-set(SENTRY_UPLOAD_URL "" CACHE STRING "Sentry upload URL")
-
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmake")
 
 # Set WINDOWS_STORE flag for UWP builds
@@ -104,6 +102,19 @@ option(USE_DX9 "Build with Direct3D 9 support" ON)
 option(USE_DX11 "Build with Direct3D 11 support" ON)
 option(LIBRETRO "Build libretro core" OFF)
 option(USE_OPENGL "Use OpenGL API" ON)
+set(USE_HIKARU_DEFAULT OFF)
+if(NOT LIBRETRO AND NOT WINDOWS_STORE AND NOT WEBOS AND NOT IOS AND NOT NINTENDO_SWITCH
+   AND USE_OPENGL AND NOT USE_VIDEOCORE AND NOT USE_GLES2
+   AND (WIN32 OR ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+	set(USE_HIKARU_DEFAULT ON)
+endif()
+option(USE_HIKARU "Build the experimental Sega Hikaru backend" ${USE_HIKARU_DEFAULT})
+if(USE_HIKARU)
+	if(LIBRETRO OR WINDOWS_STORE OR WEBOS OR IOS OR NINTENDO_SWITCH OR USE_VIDEOCORE OR USE_GLES2 OR NOT USE_OPENGL)
+		message(FATAL_ERROR "USE_HIKARU requires standalone OpenGL 3.2 or OpenGL ES 3.0 support; configure with -DUSE_HIKARU=OFF for this target")
+	endif()
+	add_compile_definitions(USE_HIKARU)
+endif()
 option(USE_VIDEOCORE "RPI: use the legacy Broadcom GLES libraries" OFF)
 option(USE_ALSA "Build with ALSA support" ON)
 option(USE_LIBAO "Build with AO support" ON)
@@ -158,6 +169,11 @@ if(ENABLE_CTEST)
 	include(CTest)
 	add_compile_definitions(FLYCAST_TEST_FILES="${CMAKE_CURRENT_SOURCE_DIR}/tests/files")
 endif()
+# Synthetic vendor tests can accompany a playable build (BUILD_TESTING=OFF).
+# Without this, CTest silently keeps any manifest left by an older test build.
+if(USE_HIKARU AND HIKARU_VENDOR_BUILD_SMOKE)
+	enable_testing()
+endif()
 
 if(IOS AND NOT LIBRETRO)
 	set(CMAKE_Swift_LANGUAGE_VERSION 5.0)
@@ -200,6 +216,18 @@ if(WINDOWS_STORE)
 	endif()
 endif()
 
+# Official branch builds retain their update track even when checkout is detached.
+set(HOLLYCAST_UPDATE_CHANNEL "dev")
+if("$ENV{GITHUB_REF_NAME}" STREQUAL "master"
+        OR ("$ENV{GITHUB_REF_TYPE}" STREQUAL "tag" AND NOT "$ENV{GITHUB_REF_NAME}" MATCHES "[Dd][Ee][Vv]"))
+    set(HOLLYCAST_UPDATE_CHANNEL "master")
+elseif(GIT_FOUND)
+    execute_process(COMMAND ${GIT_EXECUTABLE} branch --show-current
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} OUTPUT_VARIABLE UPDATE_BRANCH OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(UPDATE_BRANCH STREQUAL "master")
+        set(HOLLYCAST_UPDATE_CHANNEL "master")
+    endif()
+endif()
 string(TIMESTAMP BUILD_TIMESTAMP UTC)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/core/version.h.in" "${CMAKE_CURRENT_SOURCE_DIR}/core/version.h" @ONLY)
 
@@ -383,10 +411,6 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 if(UNIX AND NOT ANDROID AND NOT APPLE)
 	execute_process(COMMAND getconf PAGESIZE OUTPUT_VARIABLE PAGE_SIZE OUTPUT_STRIP_TRAILING_WHITESPACE)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE PAGE_SIZE=${PAGE_SIZE})
-endif()
-
-if(NOT "${SENTRY_UPLOAD_URL}" STREQUAL "")
-	target_compile_definitions(${PROJECT_NAME} PRIVATE SENTRY_UPLOAD="${SENTRY_UPLOAD_URL}")
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE core core/deps core/deps/stb core/deps/json core/deps/asio/asio/include)
@@ -1229,6 +1253,8 @@ endif()
 
 add_subdirectory(core/rend)
 
+target_sources(${PROJECT_NAME} PRIVATE core/debug/assembly_debugger.cpp)
+
 if(ENABLE_GDB_SERVER)
 
 	target_sources(${PROJECT_NAME} PRIVATE
@@ -1681,4 +1707,12 @@ endif()
 if(${CMAKE_GENERATOR} MATCHES "^Xcode.*|^Visual Studio.*")
 	file(GLOB_RECURSE SRC_FILES *.h *.cpp *.c *.cc *.mm)
 	source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SRC_FILES})
+endif()
+
+if(WIN32 AND NOT WINDOWS_STORE AND NOT LIBRETRO)
+    add_subdirectory(tools/updater)
+endif()
+
+if(ENABLE_CTEST AND NOT LIBRETRO)
+    add_subdirectory(tests/updater)
 endif()

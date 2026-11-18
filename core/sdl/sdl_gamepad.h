@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 /*
 	This file is part of Flycast.
 
@@ -29,6 +30,11 @@ public:
 	void update_rumble() override;
 
 	void setSine(float power, float freq, u32 duration_ms);
+#ifdef USE_HIKARU
+	void setForceFeedback(float force) override;
+#endif
+	bool has_force_feedback() const override;
+	std::shared_ptr<InputMapping> getArcadeGamepadMapping() override;
 	void setTorque(float torque);
 	void setSpring(float saturation, float speed);
 	void setDamper(float param, float speed);
@@ -107,6 +113,10 @@ private:
 	bool isWheel = false;
 	int sineEffectId = -1;
 	int constEffectId = -1;
+#ifdef USE_HIKARU
+	Sint16 torqueLevel = 0;
+	bool torqueRunning = false;
+#endif
 	int springEffectId = -1;
 	int damperEffectId = -1;
 };

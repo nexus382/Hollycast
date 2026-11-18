@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -33,7 +34,7 @@ namespace http {
     	jni::env()->CallVoidMethod(HttpClient, initMid, static_cast<jstring>(juserAgent));
     }
 
-    int get(const std::string &url, std::vector<u8> &content, const Headers *reqHeaders, Headers *respHeaders)
+    int get(const std::string &url, std::vector<u8> &content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
     {
         jni::String jurl(url);
         jni::ObjectArray<jni::ByteArray> contentOut(1);
@@ -63,7 +64,8 @@ namespace http {
         		static_cast<jobjectArray>(reqHeaderKeys),
                 static_cast<jobjectArray>(reqHeaderValues),
                 static_cast<jobjectArray>(respHeaderKeys),
-                static_cast<jobjectArray>(respHeaderValues));
+                static_cast<jobjectArray>(respHeaderValues),
+                static_cast<jint>(timeoutMs), reinterpret_cast<jlong>(cancelled));
 
         content = contentOut[0];
         if (respHeaders != nullptr)
@@ -132,7 +134,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_HttpClient_nat
     																		"[Ljava/lang/String;"	// req header values
     																		"[[Ljava/lang/String;"	// resp header names (out)
     																		"[[Ljava/lang/String;"	// resp header values (out)
+																		"IJ"					// network timeout (ms), cancellation token
     																		")I");
     http::postMid = env->GetMethodID(env->GetObjectClass(obj), "post", "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)I");
     http::postRawMid = env->GetMethodID(env->GetObjectClass(obj), "post", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[[B)I");
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_com_hollycast_emulator_emu_HttpClient_isCancelled(JNIEnv*, jclass, jlong token) {
+    return token != 0 && reinterpret_cast<const std::atomic<bool>*>(token)->load() ? JNI_TRUE : JNI_FALSE;
 }

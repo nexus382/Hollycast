@@ -4,6 +4,8 @@
 	Copyright 2019 flyinghead
 	Portions Copyright 2026 The Hollycast Authors
 
+	Portions Copyright 2026 The Hollycast Authors
+
 	This file is part of Flycast.
 
     Flycast is free software: you can redistribute it and/or modify
@@ -34,6 +36,8 @@ public:
 			vk::UniqueShaderModule& shaderModule, std::string& error);
 	// Syntax and SPIR-V validation without requiring a live Vulkan device.
 	static bool Validate(vk::ShaderStageFlagBits shaderStage, const std::string& shaderText, std::string& error);
+	// Returns empty on GLSL parse/link failure; Vulkan API errors still propagate.
+	static vk::UniqueShaderModule CompileOptional(vk::ShaderStageFlagBits shaderStage, std::string const& shaderText);
 private:
 	static int initCount;
 };

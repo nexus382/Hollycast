@@ -2464,18 +2464,6 @@ msgstr "Naplózás fájlba"
 msgid "Log debug information to flycast.log"
 msgstr "Hibakeresési adatok mentése a flycast.log fájlba"
 
-#: core/ui/settings.cpp:125
-msgid "Automatically Report Crashes"
-msgstr "Összeomlási jelentések automatikus küldése"
-
-#: core/ui/settings.cpp:126
-msgid ""
-"Automatically upload crash reports to sentry.io to help in troubleshooting. "
-"No personal information is included."
-msgstr ""
-"Az összeomlási jelentések automatikus feltöltése a sentry.io oldalra a "
-"hibakeresés megkönnyítésére. Személyes adatot nem tartalmaz."
-
 #: core/ui/settings.cpp:131
 msgid "Lua Scripting"
 msgstr "Lua szkriptelés"
@@ -9051,28 +9039,6 @@ msgstr ""
 "Add meg a használni kívánt lua-fájl nevét. A Hollycast konfigurációs "
 "mappájában kell lennie. Ha üresen hagyod, a rendszer alapértelmezés szerint "
 "a flycast.lua fájlt használja."
-
-#: core/ui/settings_new.cpp:8965
-msgid "Crash Reports"
-msgstr "Összeomlási jelentések"
-
-#: core/ui/settings_new.cpp:8966
-msgid "Auto-upload crash reports"
-msgstr "Összeomlási jelentések automatikus feltöltése"
-
-#: core/ui/settings_new.cpp:8970
-msgid ""
-"Crash Reports\n"
-"Automatically uploads crash reports to help developers diagnose and fix issues.\n"
-"\n"
-"Crash reports typically include technical details about the crash and environment.\n"
-"Leave this enabled if you want to help improve stability; disable it if you prefer not to send crash data."
-msgstr ""
-"Összeomlási jelentések\n"
-"Összeomlási jelentések automatikus feltöltése, hogy a fejlesztők diagnosztizálhassák és kijavíthassák a hibákat.\n"
-"\n"
-"A jelentések jellemzően az összeomlás és a környezet technikai adatait tartalmazzák.\n"
-"A stabilitás javításának támogatásához hagyd bekapcsolva; ha nem szeretnél összeomlási adatokat küldeni, kapcsold ki."
 
 #: core/ui/settings_new.cpp:8982
 msgid "Virtual Memory Addresses"

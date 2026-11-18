@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -21,6 +22,7 @@
 #include "cfg/option.h"
 #include "gamepad_device.h"
 #include "ui/gui.h"
+#include "ui/test_harness.h"
 #include "hw/maple/maple_devs.h"
 #include "oslib/i18n.h"
 #include <memory>
@@ -62,7 +64,11 @@ public:
 		set_button(DC_AXIS_DOWN, 14);			// K
 		set_button(DC_AXIS_LEFT, 13);			// J
 		set_button(DC_AXIS_RIGHT, 15);			// L
-		set_button(DC_BTN_D, 4);				// Q (Coin)
+		set_button(DC_BTN_D, 4);				// A on a US layout (Coin)
+		if (settings.platform.isHikaru()) {
+			set_button(DC_DPAD2_DOWN, 59);		// F2: Test
+			set_button(DC_DPAD2_UP, 60);		// F3: Service
+		}
 		set_button(EMU_BTN_SCREENSHOT, 69);		// F12
 
 		dirty = false;
@@ -88,6 +94,8 @@ protected:
 
 	void input(u8 keycode, bool pressed, int modifier_keys)
 	{
+		if (test_harness::controllerInputOwned())
+			return;
 		const int port = maple_port();
 		const bool portIsValid = port >= 0 && port < MAPLE_PORTS;
 

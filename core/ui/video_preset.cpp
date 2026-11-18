@@ -31,7 +31,7 @@ namespace SettingsNew {
 static const PresetSetting potatoSettings[] = {
 	{"Sh4Clock", 200},                            // 100% SH4 clock
 	{"RenderResolution", 240},                    // 0.5x - 320x240
-	{"AnisotropicFiltering", 1},                  // 2x
+	{"AnisotropicFiltering", 1},                  // Disabled
 	{"AutoSkipFrame", 2},                         // Maximum skip
 	{"SkipFrame", 0},                             // No fixed skip
 	{"DupeFrames", false},                        // Keep frame pacing clean
@@ -62,11 +62,17 @@ static const PresetSetting potatoSettings[] = {
 };
 
 static const PresetSetting lowSettings[] = {
-	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
+	{"TextureFiltering", 0},                      // Default per-title filtering
+	{"SampleTextureFilter", 0},                   // Disable reconstruction filtering
+	{"TextureUpscale", 1},                        // Disable texture upscaling
+	{"MaxFilteredTextureSize", 256},              // Default reconstruction limit
+	{"UseMipmaps", true},                         // Keep mipmapped sampling enabled
+	{"FixUpscaleBleedingEdge", true},             // Keep scaled framebuffer edges clean
 	{"Sh4Clock", 190},                            // Underclock SH4
 	{"RenderResolution", 480},                    // 1x - 640x480 (Native)
-	{"AnisotropicFiltering", 0},                  // Disabled
+	{"AnisotropicFiltering", 1},                  // Disabled
 	{"AutoSkipFrame", 1},                         // Normal skip
+	{"SkipFrame", 0},                             // No fixed skip
 	{"DupeFrames", true},                         // Enable duplicate frames
 	{"VSync", false},                             // Disable VSync
 	{"PerStripSorting", false},                   // Per-triangle sorting
@@ -78,10 +84,15 @@ static const PresetSetting lowSettings[] = {
 };
 
 static const PresetSetting mediumSettings[] = {
-	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
+	{"TextureFiltering", 0},                      // Default per-title filtering
+	{"SampleTextureFilter", 0},                   // Disable reconstruction filtering
+	{"TextureUpscale", 1},                        // Disable texture upscaling
+	{"MaxFilteredTextureSize", 256},              // Default reconstruction limit
+	{"UseMipmaps", true},                         // Keep mipmapped sampling enabled
+	{"FixUpscaleBleedingEdge", true},             // Keep scaled framebuffer edges clean
 	{"Sh4Clock", 215},                            // Mild SH4 overclock
 	{"RenderResolution", 720},                    // 1.5x - 960x720
-	{"AnisotropicFiltering", 4},                  // 16x
+	{"AnisotropicFiltering", 16},                 // 16x
 	{"AutoSkipFrame", 0},                         // No skip
 	{"SkipFrame", 0},                             // No fixed skip
 	{"DupeFrames", false},                        // Disable duplicate frames
@@ -95,10 +106,15 @@ static const PresetSetting mediumSettings[] = {
 };
 
 static const PresetSetting highSettings[] = {
-	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
+	{"TextureFiltering", 0},                      // Default per-title filtering
+	{"SampleTextureFilter", 0},                   // Disable reconstruction filtering
+	{"TextureUpscale", 1},                        // Disable texture upscaling
+	{"MaxFilteredTextureSize", 256},              // Default reconstruction limit
+	{"UseMipmaps", true},                         // Keep mipmapped sampling enabled
+	{"FixUpscaleBleedingEdge", true},             // Keep scaled framebuffer edges clean
 	{"Sh4Clock", 220},                            // Overclock SH4
 	{"RenderResolution", 1200},                   // 2.5x - 1600x1200
-	{"AnisotropicFiltering", 3},                  // 8x
+	{"AnisotropicFiltering", 8},                  // 8x
 	{"AutoSkipFrame", 0},                         // No skip
 	{"SkipFrame", 0},                             // No fixed skip
 	{"DupeFrames", false},                        // Disable duplicate frames
@@ -112,10 +128,15 @@ static const PresetSetting highSettings[] = {
 };
 
 static const PresetSetting godModeSettings[] = {
-	{"SampleTextureFilter", 0},                   // Keep reconstruction opt-in
+	{"TextureFiltering", 0},                      // Default per-title filtering
+	{"SampleTextureFilter", 0},                   // Disable reconstruction filtering
+	{"TextureUpscale", 1},                        // Disable texture upscaling
+	{"MaxFilteredTextureSize", 256},              // Default reconstruction limit
+	{"UseMipmaps", true},                         // Keep mipmapped sampling enabled
+	{"FixUpscaleBleedingEdge", true},             // Keep scaled framebuffer edges clean
 	{"Sh4Clock", 250},                            // Overclock SH4
 	{"RenderResolution", 1920},                   // 4x - 2560x1920
-	{"AnisotropicFiltering", 4},                  // 16x (max)
+	{"AnisotropicFiltering", 16},                 // 16x (max)
 	{"AutoSkipFrame", 0},                         // No skip
 	{"SkipFrame", 0},                             // No fixed skip
 	{"DupeFrames", false},                        // Disable duplicate frames
@@ -136,7 +157,7 @@ static const VideoPreset videoPresets[] = {
 			"Potato",
 			"Potato\n"
 			"For the oldest and weakest machines that will not play on higher presets, even with the lowest resolution. Use this only when nothing else can reach full speed. It is more of an \"any type of playing is better than no playing\" setup.\n\n"
-			"Expect some graphics glitching due to per-strip sorting. Some games may still drop frames because of the SH4 underclock and maximum auto frame skipping. If you have a little headroom, raise resolution in small steps to bring image quality back up.",
+			"Expect some graphics glitching due to per-strip sorting. Some games may still drop frames even with maximum automatic frame skipping. If you have a little headroom, raise resolution in small steps to bring image quality back up.",
 			potatoSettings,
 			sizeof(potatoSettings) / sizeof(PresetSetting)
 		},
@@ -159,7 +180,7 @@ static const VideoPreset videoPresets[] = {
 		{
 			"High",
 			"High\n"
-			"This is for higher-end devices. Perfect sorting means games do not risk transparency sorting glitches, so layering should render correctly everywhere.\n\n"
+			"This is for higher-end devices. Per-triangle sorting reduces transparency glitches compared with per-strip sorting, though some games may still need a different sorting mode for correct layering.\n\n"
 			"The stronger SH4 overclock helps heavier titles hold better-than-native frame rates, and the higher resolutions give you a very sharp, smooth image with clean, stable graphics.",
 			highSettings,
 			sizeof(highSettings) / sizeof(PresetSetting)

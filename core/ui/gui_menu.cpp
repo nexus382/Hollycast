@@ -18,14 +18,22 @@
 	along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui_menu.h"
+#include "gui_debugger.h"
+#include "debug/assembly_debugger.h"
+#include "app_updater.h"
 #include "gui.h"
 #include "gui_util.h"
+#include "theme.h"
 #include "cfg/cfg.h"
 #include "emulator.h"
 #include "log/LogManager.h"
 #include "imgui.h"
 #include "cfg/option.h"
 #include "types.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#include "hw/hikaru/card_reader.h"
+#endif
 #include "settings.h"
 #include "oslib/i18n.h"
 #if defined(__ANDROID__)
@@ -261,6 +269,10 @@ void restartGame()
 	if (::game_started)
 	{
 		emu.stop();
+#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			emu.requestReset();
+#endif
 		emu.start();
 	}
 }
@@ -348,6 +360,14 @@ bool isGameRunning()
 // Render the main menu bar using standard ImGui.
 void renderMainMenuBar()
 {
+	const themes::Layout* layout = gui_state == GuiState::Main ? themes::currentLayout() : nullptr;
+	if (layout != nullptr && layout->hidesToolbar())
+	{
+		menuBarVisibleThisFrame = false;
+		menuBarHeightThisFrame = 0.f;
+		publishMenuTouchState(false, false);
+		return;
+	}
 #if defined(TARGET_MAC)
 	menuBarVisibleThisFrame = false;
 	menuBarHeightThisFrame = 0.0f;
@@ -487,6 +507,27 @@ void renderFileMenu()
 }
 
 // Render System menu (only visible when game is running)
+void renderCardsMenu()
+{
+#ifdef USE_HIKARU
+    const auto info = hikaru::frontend::cardReaderInfo();
+    const bool inside = info.location == hikaru::CardLocation::Inside;
+    const bool atSlot = info.location == hikaru::CardLocation::Slot;
+    ImGui::TextUnformatted(T(inside ? "Card inside reader" : atSlot ? "Card at slot" : "No card in reader"));
+    if (ImGui::MenuItem(T(atSlot ? "Take Card" : "Insert Card"), nullptr, false,
+            atSlot || (info.location == hikaru::CardLocation::Hand && info.shutterOpen)))
+        hikaru::frontend::cardAction();
+    if (ImGui::BeginMenu(T("Card in Hand"), !inside && !atSlot)) {
+        if (ImGui::MenuItem(T("None"), nullptr, info.selected.empty())) hikaru::frontend::selectCard("");
+        for (const auto& name : info.cards)
+            if (ImGui::MenuItem(name.c_str(), nullptr, name == info.selected)) hikaru::frontend::selectCard(name);
+        ImGui::EndMenu();
+    }
+    if (info.cards.empty()) ImGui::TextWrapped("%s", T("New cards are issued by the game."));
+    if (!info.error.empty()) ImGui::TextWrapped("%s", info.error.c_str());
+#endif
+}
+
 void renderSystemMenu()
 {
 	if (ImGui::BeginMenu(T("System"), ::game_started))
@@ -509,6 +550,13 @@ void renderSystemMenu()
 				}
 			}
 		}
+
+#ifdef USE_HIKARU
+        if (hikaru::frontend::cardReaderAvailable() && ImGui::BeginMenu(T("Cards"))) {
+            renderCardsMenu();
+            ImGui::EndMenu();
+        }
+#endif
 
 		// Restart
 		if (ImGui::MenuItem(T("Restart"), nullptr, false, ::game_started))
@@ -572,6 +620,13 @@ void renderToolsMenu()
 		ImGui::MenuItem(T("CHD Convert"), nullptr, false, false);
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("%s", T("CHD conversion is not available yet."));
+
+		if (ImGui::MenuItem(T("Assembly Debugger"), nullptr, assembly_debugger::active(), assembly_debugger::available()))
+			gui_open_debugger();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !assembly_debugger::available())
+			ImGui::SetTooltip("%s", settings.platform.isHikaru()
+					? T("The assembly debugger cannot access Hikaru's CPUs.")
+					: T("Load an offline game with hardcore mode and the GDB server disabled."));
 
 		// Custom Boxart
 		if (ImGui::MenuItem(T("Custom Boxart"), nullptr, false, true))
@@ -668,13 +723,8 @@ void renderHelpMenu()
 
 		ImGui::Separator();
 
-		if (ImGui::MenuItem(T("Check for Updates"), nullptr, false, canOpenLinks))
-		{
-			if (!openUrlInShell("https://nexus382.github.io/Hollycast/"))
-				WARN_LOG(COMMON, "Unable to open updates page from Help menu");
-		}
-		if (!canOpenLinks && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("%s", T("Opening links is not supported on this platform."));
+		if (ImGui::MenuItem(T("Check for Updates")))
+			app_updates::open();
 
 		ImGui::Separator();
 

@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -19,6 +20,8 @@
 #include "oslib/http_client.h"
 #include "stdclass.h"
 #include <windows.h>
+#include <memory>
+#include <chrono>
 
 namespace http {
 
@@ -62,8 +65,9 @@ static void getHeaders(IIterator<IKeyValuePair<String^, String^>^>^ it, Headers&
 	}
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
 {
+	if (cancelled && cancelled->load()) return 499;
 	nowide::wstackstring wurl;
 	if (!wurl.convert(url.c_str()))
 		return 500;
@@ -84,13 +88,26 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		}
 
 		IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^ op = httpClient->SendRequestAsync(request);
-		cResetEvent asyncEvent;
+		// Cancellation can complete after this function returns. Keep the event
+		// alive until both WinRT completion callbacks have released their copies.
+		auto asyncEvent = std::make_shared<cResetEvent>();
+		const auto wait = [&](bool initial) {
+			const auto deadline = !initial && timeoutMs <= 0 ? std::chrono::steady_clock::time_point::max()
+				: std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 30000);
+			while (!asyncEvent->Wait(25)) {
+				if ((cancelled && cancelled->load()) || std::chrono::steady_clock::now() >= deadline) return false;
+			}
+			return !cancelled || !cancelled->load();
+		};
 		op->Completed = ref new AsyncOperationWithProgressCompletedHandler<HttpResponseMessage^, HttpProgress>(
-				[&asyncEvent](IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^, Windows::Foundation::AsyncStatus) {
-					asyncEvent.Set();
+				[asyncEvent](IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^, Windows::Foundation::AsyncStatus) {
+					asyncEvent->Set();
 		        });
-		if (!asyncEvent.Wait(30000))
-			return 408;
+		if (!wait(true))
+		{
+			op->Cancel();
+			return cancelled && cancelled->load() ? 499 : 408;
+		}
 		HttpResponseMessage^ resp = op->GetResults();
 
 		if (resp->IsSuccessStatusCode)
@@ -103,12 +120,16 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 			}
 
 			IAsyncOperationWithProgress<IBuffer^, uint64_t>^ readOp = httpContent->ReadAsBufferAsync();
-			asyncEvent.Reset();
+			asyncEvent->Reset();
 			readOp->Completed = ref new AsyncOperationWithProgressCompletedHandler<IBuffer^, uint64_t>(
-				[&asyncEvent](IAsyncOperationWithProgress<IBuffer^, uint64_t>^, Windows::Foundation::AsyncStatus) {
-					asyncEvent.Set();
+				[asyncEvent](IAsyncOperationWithProgress<IBuffer^, uint64_t>^, Windows::Foundation::AsyncStatus) {
+					asyncEvent->Set();
 				});
-			asyncEvent.Wait();
+			if (!wait(false))
+			{
+				readOp->Cancel();
+				return cancelled && cancelled->load() ? 499 : 408;
+			}
 			IBuffer^ buffer = readOp->GetResults();
 
 			Array<u8>^ array = ref new Array<u8>(buffer->Length);
@@ -179,7 +200,7 @@ int post(const std::string& url, const char *payload, const char *contentType, s
 }
 
 int post(const std::string & url, const std::vector<PostField>&fields) {
-	// not implemented (used by sentry minidump upload)
+	// Not implemented on UWP.
 	return 500;
 }
 

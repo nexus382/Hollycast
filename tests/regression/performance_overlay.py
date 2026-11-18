@@ -93,9 +93,11 @@ pieces = [shim, stdincludes, declarations,
 for signature in ['bool isCollectionEnabled(', 'bool isPvrWorkRequested(',
                   'bool isRendererStatsRequested(', 'bool isResolutionRequested(',
                   'bool isGpuTimingRequested(', 'std::uint32_t getGpuTimingEpoch(',
-                  'void recordGpuTimingSample(', 'void recordPresentedFrame(',
+                  'void recordGpuTimingSample(', 'bool isPresentationTimingRequested(',
+                  'std::uint32_t getPresentationTimingEpoch(', 'void recordPresentedFrameAt(',
+                  'void recordPresentedFrame(',
                   'void recordRenderedResolution(', 'void recordOutputViewport(', 'void reset(',
-                  'void recordSh4Vblank(', 'void recordPvrWork(', 'void recordPvrScene(',
+                  'void recordSh4Vblank(', 'void recordPvrWork(', 'void recordGuestFrame(', 'void recordPvrScene(',
                   'void recordRendererPass(', 'void recordPvrRenderSchedule(',
                   'void recordPvrFrameBudget(']:
     # Keep presentation intervals deterministic without sleeping between frames.
@@ -161,6 +163,14 @@ int main() {
     assert(pvrScheduledRenderCycles == 1000 && pvrVideoFrameCycles == 2000);
     assert(rawRenderWidth == 640 && outputViewportWidth == 1440);
     std::cout << "PASS requested producers and RTT-excluded game FPS\n";
+    reset();
+    auditItems = Fps | RendererStats;
+    drawSample();
+    recordGuestFrame();
+    recordSh4Vblank();
+    assert(gameFrameCount == 1 && vblankCount == 1);
+    assert(rendererSceneCount == 0 && pvrPrimitiveCount == 0 && pvrVertexCount == 0);
+    std::cout << "PASS guest frame without fabricated PVR scene statistics\n";
     auditItems = PvrWork;
     drawSample();
     recordPvrWork(5000);
@@ -232,6 +242,37 @@ int main() {
         assert(metrics.frameTimeHistoryCount == 2 && metrics.frameTimeAverage == 17.f);
     }
     std::cout << "PASS frame-time graph collects without the frame times row\n";
+    auditItems = OutputFps | FrameTimes;
+    drawSample();
+    auto presentationEpoch = getPresentationTimingEpoch();
+    const auto timestamp = clockMs * 1000;
+    recordPresentedFrameAt(0, presentationEpoch);
+    recordPresentedFrameAt(timestamp, presentationEpoch);
+    recordPresentedFrameAt(timestamp + 40000, presentationEpoch);
+    recordPresentedFrameAt(timestamp + 20000, presentationEpoch);
+    recordPresentedFrameAt(timestamp + 40000, presentationEpoch);
+    recordPresentedFrameAt(0, presentationEpoch);
+    recordPresentedFrameAt(timestamp + 80000, presentationEpoch);
+    clockMs += 1000; drawSample();
+    assert(metrics.outputFps == 3.f && metrics.frameTimeValid);
+    assert(metrics.frameTimeAverage == 40.f && metrics.frameTimeMinimum == 40.f && metrics.frameTimeMaximum == 40.f);
+    assert(metrics.frameTimeHistoryCount == 2);
+    auditItems = Ram; drawSample();
+    recordPresentedFrameAt(timestamp + 120000, presentationEpoch);
+    auditItems = OutputFps | FrameTimes; drawSample();
+    recordPresentedFrameAt(timestamp + 160000, presentationEpoch);
+    recordPresentedFrameAt(timestamp + 200000, getPresentationTimingEpoch());
+    clockMs += 1000; drawSample();
+    assert(metrics.outputFps == 1.f && !metrics.frameTimeValid && metrics.frameTimeHistoryCount == 0);
+    presentationEpoch = getPresentationTimingEpoch();
+    reset();
+    recordPresentedFrameAt(timestamp + 240000, presentationEpoch);
+    drawSample();
+    recordPresentedFrameAt(timestamp + 280000, presentationEpoch);
+    recordPresentedFrameAt(timestamp + 320000, getPresentationTimingEpoch());
+    clockMs += 1000; drawSample();
+    assert(metrics.outputFps == 1.f && !metrics.frameTimeValid && metrics.frameTimeHistoryCount == 0);
+    std::cout << "PASS display timestamps ignore zero, duplicate, out-of-order, hidden and previous-session callbacks\n";
     config::boolOverrides.clear();
     config::boolOverrides["OverlayShowLatencyStatistics"] = true;
     // Bit 13 is the retired Latency row: a stale saved setting must not resurrect it.

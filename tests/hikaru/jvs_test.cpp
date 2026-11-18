@@ -1,0 +1,265 @@
+// Portions Copyright 2026 The Hollycast Authors
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright 2026 The Hollycast Authors
+#include "hw/hikaru/jvs.h"
+#include "hw/hikaru/state_io.h"
+#include <algorithm>
+#include <cstdint>
+#include <stdexcept>
+#include <iostream>
+#include <string>
+#include <vector>
+
+using hikaru::JvsNode;
+namespace {
+std::vector<uint8_t> encode(uint8_t destination, const std::vector<uint8_t>& commands)
+{
+    std::vector<uint8_t> raw{destination, static_cast<uint8_t>(commands.size() + 1)};
+    raw.insert(raw.end(), commands.begin(), commands.end());
+    unsigned sum = 0; for (uint8_t b : raw) sum += b; raw.push_back(static_cast<uint8_t>(sum));
+    std::vector<uint8_t> result{0xe0};
+    for (uint8_t b : raw) { if (b == 0xe0 || b == 0xd0) { result.push_back(0xd0); --b; } result.push_back(b); }
+    return result;
+}
+void send(JvsNode& node, uint8_t dest, const std::vector<uint8_t>& commands)
+{ for (uint8_t b : encode(dest, commands)) node.pushByte(b); }
+std::vector<uint8_t> read(JvsNode& node)
+{
+    std::vector<uint8_t> result; uint8_t b; bool escaped = false;
+    while (node.popByte(b)) {
+        if (result.empty()) { result.push_back(b); continue; }
+        if (!escaped && b == 0xd0) { escaped = true; continue; }
+        result.push_back(static_cast<uint8_t>(b + (escaped ? 1 : 0))); escaped = false;
+    }
+    return result;
+}
+bool valid(const std::vector<uint8_t>& r)
+{
+    if (r.size() < 4 || r[0] != 0xe0 || r[1] != 0 || r.size() != unsigned(r[2]) + 3) return false;
+    unsigned sum = 0; for (std::size_t i = 1; i + 1 < r.size(); ++i) sum += r[i];
+    return static_cast<uint8_t>(sum) == r.back();
+}
+}
+int main()
+{
+    unsigned checks = 0, failures = 0;
+    auto check = [&](bool ok, const char* label) { ++checks; if (!ok) { ++failures; std::cerr << label << '\n'; } };
+    // Wire bytes are fixed cabinet fixtures, independent of the decoder.
+    JvsNode drive;
+    drive.setBoardProfile(JvsNode::BoardProfile::Sega83713844);
+    send(drive, 0xff, {0xf1, 1}); read(drive);
+    struct DriveCase { uint8_t byte2, byte3; float force; };
+    const DriveCase driveCases[] = {
+        {0x03, 0xfc, 0.f}, {0x01, 0xfc, -1.f / 63.f}, {0x00, 0x0c, -1.f},
+        {0x03, 0xf4, 0.f}, {0x01, 0xf4, 1.f / 63.f}, {0x00, 0x04, 1.f},
+        {0x03, 0xf8, 0.f}, {0x01, 0xf8, 1.f}, {0x02, 0xf8, -1.f},
+        {0x00, 0x70, 0.f}, {0x00, 0xb0, 0.f}, {0x00, 0x00, 0.f},
+    };
+    for (const auto& entry : driveCases) {
+        send(drive, 1, {0x32, 3, 0xa5, entry.byte2, entry.byte3});
+        check(valid(read(drive)) && drive.nascarSteeringForce() == entry.force,
+            "NASCAR wire command reaches the correct signed force");
+        send(drive, 1, {0x32, 1, 0x5a});
+        check(valid(read(drive)) && drive.nascarSteeringForce() == entry.force,
+            "cabinet lamps do not affect steering force");
+    }
+    send(drive, 1, {0x32, 3, 0, 0, 0x0c}); read(drive);
+    hikaru::StateWriter driveState; drive.saveState(driveState);
+    send(drive, 1, {0x32, 3, 0, 0, 0x04}); read(drive);
+    hikaru::StateReader driveReader(driveState.data().data(), driveState.size());
+    drive.loadState(driveReader);
+    driveReader.finish();
+    check(drive.nascarSteeringForce() == -1.f, "load restores the saved cabinet torque");
+    send(drive, 1, {0x32, 3, 0, 0});
+    check(drive.nascarSteeringForce() == -1.f, "truncated output cannot change torque");
+    send(drive, 0xff, {0xf0, 0xd9});
+    check(!drive.addressed() && drive.outputs() == 0 && drive.nascarSteeringForce() == 0.f
+            && read(drive).empty(), "broadcast reset releases the motor output latch");
+    send(drive, 0xff, {0xf1, 1}); read(drive);
+    check(drive.nascarSteeringForce() == 0.f, "address assignment cannot restore stale torque");
+    send(drive, 1, {0x32, 3, 0, 0, 0x04}); read(drive);
+    check(drive.nascarSteeringForce() == 1.f, "drive accepts a new command after bus reset");
+    drive.reset();
+    check(drive.nascarSteeringForce() == 0.f, "reset releases steering torque");
+    drive.setBoardProfile(JvsNode::BoardProfile::Sega83713551);
+    send(drive, 0xff, {0xf1, 1}); read(drive);
+    send(drive, 1, {0x32, 3, 0, 0, 0x0c}); read(drive);
+    check(drive.nascarSteeringForce() == 0.f, "other cabinet outputs cannot enable NASCAR torque");
+
+    JvsNode node;
+    send(node, 0xff, {0xf0, 0xd9}); check(!node.addressed() && read(node).empty(), "broadcast reset has no reply");
+    send(node, 0xff, {0xf1, 1}); auto r = read(node);
+    check(node.addressed() && node.address() == 1 && valid(r) && r[3] == 1 && r[4] == 1, "address assignment");
+    send(node, 1, {0x10}); r = read(node);
+    check(valid(r) && std::string(r.begin()+5, r.end()-2) == "SEGA ENTERPRISES,LTD.;I/O BD JVS;837-13551 ;Ver1.00;98/10" && r[r.size()-2] == 0, "837-13551 identity");
+    send(node, 1, {0x11,0x12,0x13}); r = read(node);
+    check(valid(r) && r[4] == 1 && r[5] == 0x11 && r[6] == 1 && r[7] == 0x20 && r[8] == 1 && r[9] == 0x10, "batched version queries");
+    send(node, 1, {0x14}); r = read(node);
+    const std::vector<uint8_t> defaultFeatures{1,2,13,0, 2,2,0,0, 3,8,16,0, 0x12,6,0,0, 0};
+    check(valid(r) && r.size() == defaultFeatures.size() + 6 && r[4] == 1
+            && std::equal(defaultFeatures.begin(), defaultFeatures.end(), r.begin() + 5),
+        "default 837-13551 features remain two players, 13 switch bits, eight analog channels and six outputs");
+    JvsNode::Inputs inputs; inputs.test = true; inputs.service = true; inputs.players[0] = 0x8401; inputs.players[1] = 0x0202; inputs.coin[0] = true; inputs.analog[0] = 0xe0d0; inputs.analog[1] = 0x1234;
+    node.setInputs(inputs); node.setInputs(inputs); // held switch counts once
+    send(node, 1, {0x20,2,2,0x21,2,0x22,2}); r = read(node);
+    check(valid(r) && r[3] == 1 && r[4] == 1 && r[5] == 0x80 && r[6] == 0xc4 && r[7] == 1 && r[8] == 2 && r[9] == 2 && r[10] == 1 && r[11] == 0 && r[12] == 1 && r[13] == 0 && r[14] == 0 && r[15] == 1 && r[16] == 0xe0 && r[17] == 0xd0 && r[18] == 0x12 && r[19] == 0x34, "digital coin analog poll and escaped data");
+    inputs.coin[0] = false; node.setInputs(inputs); inputs.coin[0] = true; node.setInputs(inputs);
+    send(node, 1, {0x30,1,0,1,0x21,1}); r = read(node);
+    check(valid(r) && r[4] == 1 && r[5] == 1 && r[6] == 0 && r[7] == 1, "coin edge and subtraction");
+    send(node, 1, {0x35,2,0xff,0xff,0x21,2}); r = read(node);
+    check(valid(r) && r[4] == 1 && r[5] == 1 && r[6] == 0 && r[7] == 1 && r[8] == 0x3f && r[9] == 0xff, "coin add targets slot and saturates at 14 bits");
+    send(node, 1, {0x32,2,0x5a,0xa5}); r = read(node);
+    check(valid(r) && node.outputs() == 0xa55a, "output bytes");
+    send(node, 2, {0x10}); check(read(node).empty(), "ignore another address");
+    auto bad = encode(1, {0x30,1,0,1}); bad.back() ^= 1; for (uint8_t b : bad) node.pushByte(b);
+    check(read(node).empty(), "bad checksum discarded");
+    send(node, 1, {0x30,1,0}); check(read(node).empty(), "truncated command discarded");
+    send(node, 1, {0x21,1}); r = read(node);
+    check(valid(r) && r[5] == 0 && r[6] == 1, "malformed commands have no coin side effects");
+    send(node, 1, {0x20,3,2}); r = read(node); check(valid(r) && r[4] == 2, "unsupported dimensions return command error");
+    for (unsigned i = 0; i < 100; ++i) send(node, 1, {0x10});
+    check(node.queuedBytes() <= 1024, "response queue bounded");
+    JvsNode::Inputs held = inputs;
+    held.coin = {{true, true}};
+    node.reset(held);
+    check(!node.addressed() && node.queuedBytes() == 0 && node.outputs() == 0,
+        "reset with held inputs clears address, queued replies, and outputs");
+    node.setInputs(held);
+    node.setInputs(held);
+    send(node, 0xff, {0xf1, 1}); r = read(node);
+    check(valid(r) && node.address() == 1, "held-input reset permits normal JVS reassignment");
+    send(node, 1, {0x21, 2}); r = read(node);
+    check(valid(r) && r.size() == 10 && r[4] == 1 && r[5] == 0 && r[6] == 0 && r[7] == 0 && r[8] == 0,
+        "coins already held at reset do not generate phantom edges or retain credits");
+    send(node, 1, {0x20, 1, 2, 0x22, 1}); r = read(node);
+    check(valid(r) && r.size() == 12 && r[4] == 1 && r[5] == 0x80 && r[6] == 0xc4 && r[7] == 1
+            && r[8] == 1 && r[9] == 0xe0 && r[10] == 0xd0,
+        "reset preserves held switch and analog input levels");
+    held.coin[0] = false; node.setInputs(held);
+    held.coin[0] = true; node.setInputs(held); node.setInputs(held);
+    send(node, 1, {0x21, 2}); r = read(node);
+    check(valid(r) && r.size() == 10 && r[5] == 0 && r[6] == 1 && r[7] == 0 && r[8] == 0,
+        "first release and repress after reset counts exactly one coin in its slot");
+    held.coin[1] = false; node.setInputs(held);
+    held.coin[1] = true; node.setInputs(held);
+    send(node, 1, {0x21, 2}); r = read(node);
+    check(valid(r) && r.size() == 10 && r[5] == 0 && r[6] == 1 && r[7] == 0 && r[8] == 1,
+        "second held coin slot requires its own new edge after reset");
+    node.reset(held); node.setInputs(held);
+    send(node, 0xff, {0xf1, 1}); read(node);
+    send(node, 1, {0x21, 2}); r = read(node);
+    check(valid(r) && r.size() == 10 && r[5] == 0 && r[6] == 0 && r[7] == 0 && r[8] == 0,
+        "repeated reset while coins stay held never adds a phantom credit");
+    node.reset(); check(!node.addressed() && node.queuedBytes() == 0, "reset clears node and response queue");
+    for (unsigned seed = 0; seed < 1000; ++seed) {
+        uint32_t v = seed; for (unsigned i = 0; i < 400; ++i) { v = v * 1664525u + 1013904223u; node.pushByte(v >> 24); }
+        check(node.queuedBytes() <= 1024, "random malformed stream remains bounded");
+    }
+    hikaru::CoinPulseQueue queue;
+    node.reset();
+    send(node, 0xff, {0xf1, 1}); read(node);
+    JvsNode::Inputs coinInputs;
+    auto sampleCoin = [&](bool physical) {
+        coinInputs.coin[0] = queue.sample(physical);
+        node.setInputs(coinInputs);
+    };
+    sampleCoin(true);
+    queue.enqueue(); queue.enqueue();
+    sampleCoin(true); sampleCoin(false); sampleCoin(false);
+    sampleCoin(false); sampleCoin(false); sampleCoin(false);
+    send(node, 1, {0x21, 1}); r = read(node);
+    check(valid(r) && r[5] == 0 && r[6] == 3,
+        "queued credits survive physical release and each produce a distinct JVS edge");
+    queue.enqueue(); queue.reset();
+    sampleCoin(false); sampleCoin(false);
+    send(node, 1, {0x21, 1}); r = read(node);
+    check(valid(r) && r[6] == 3, "reset discards queued menu credits");
+
+    queue.reset(); queue.enqueue(); queue.enqueue();
+    hikaru::StateWriter queueState;
+    queue.saveState(queueState);
+    hikaru::CoinPulseQueue resumedQueue;
+    hikaru::StateReader queueReader(queueState.data());
+    resumedQueue.loadState(queueReader);
+    queueReader.finish();
+    const bool firstPulse = resumedQueue.sample(false);
+    const bool release = resumedQueue.sample(false);
+    const bool secondPulse = resumedQueue.sample(false);
+    check(firstPulse && !release && secondPulse, "coin queue restores pending pulses and release latch");
+
+    node.reset();
+    for (uint8_t byte : encode(0xff, {0xf1, 1})) node.pushByte(byte);
+    const auto partial = encode(1, {0x10});
+    for (unsigned i = 0; i < 3; ++i) node.pushByte(partial[i]);
+    hikaru::StateWriter nodeState;
+    node.saveState(nodeState);
+    JvsNode resumedNode;
+    hikaru::StateReader nodeReader(nodeState.data());
+    resumedNode.loadState(nodeReader);
+    nodeReader.finish();
+    for (std::size_t i = 3; i < partial.size(); ++i) {
+        node.pushByte(partial[i]);
+        resumedNode.pushByte(partial[i]);
+    }
+    const auto originalReply = read(node);
+    const auto resumedReply = read(resumedNode);
+    check(originalReply == resumedReply && !originalReply.empty() && resumedNode.addressed(),
+        "JVS state restores queued replies and a partial input frame");
+
+    auto truncated = nodeState.data();
+    truncated.pop_back();
+    hikaru::StateWriter before;
+    resumedNode.saveState(before);
+    bool rejected = false;
+    try {
+        hikaru::StateReader broken(truncated);
+        resumedNode.loadState(broken);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    hikaru::StateWriter after;
+    resumedNode.saveState(after);
+    check(rejected && before.data() == after.data(), "rejected JVS state preserves parser and queue");
+
+    JvsNode nascar;
+    nascar.setBoardProfile(JvsNode::BoardProfile::Sega83713844);
+    hikaru::StateWriter defaultProfileState, nascarProfileState;
+    JvsNode{}.saveState(defaultProfileState);
+    nascar.saveState(nascarProfileState);
+    check(defaultProfileState.data() == nascarProfileState.data(),
+        "fixed JVS board profile does not change the save-state payload");
+    hikaru::StateReader profileReader(defaultProfileState.data());
+    nascar.loadState(profileReader);
+    profileReader.finish();
+    nascar.reset();
+    send(nascar, 0xff, {0xf1, 1}); read(nascar);
+    send(nascar, 1, {0x10}); r = read(nascar);
+    check(valid(r) && r.size() > 6
+            && std::string(r.begin() + 5, r.end() - 2) == "SEGA ENTERPRISES,LTD.;837-13844-01 I/O CNTL BD2 ;Ver1.00;99/07"
+            && r[r.size() - 2] == 0,
+        "837-13844 identity survives state load and reset");
+    send(nascar, 1, {0x14}); r = read(nascar);
+    const std::vector<uint8_t> nascarFeatures{1,2,12,0, 2,2,0,0, 3,8,16,0, 0x12,22,0,0, 0};
+    check(valid(r) && r.size() == nascarFeatures.size() + 6 && r[4] == 1
+            && std::equal(nascarFeatures.begin(), nascarFeatures.end(), r.begin() + 5),
+        "NASCAR type-2 features match the operator manual");
+    send(nascar, 1, {0x32,3,0x5a,0xa5,0xfc}); r = read(nascar);
+    check(valid(r) && r[4] == 1 && nascar.outputs() == 0x00fca55a,
+        "type-2 node accepts the three output bytes needed for 22 drivers");
+    const auto nascarPartial = encode(1, {0x14});
+    for (unsigned i = 0; i < 3; ++i) nascar.pushByte(nascarPartial[i]);
+    hikaru::StateWriter nascarState;
+    nascar.saveState(nascarState);
+    nascar.reset(held);
+    hikaru::StateReader nascarReader(nascarState.data());
+    nascar.loadState(nascarReader);
+    nascarReader.finish();
+    for (std::size_t i = 3; i < nascarPartial.size(); ++i) nascar.pushByte(nascarPartial[i]);
+    r = read(nascar);
+    check(valid(r) && r.size() == nascarFeatures.size() + 6 && r[4] == 1
+            && std::equal(nascarFeatures.begin(), nascarFeatures.end(), r.begin() + 5)
+            && nascar.outputs() == 0x00fca55a,
+        "type-2 state restores partial requests and outputs while retaining the configured profile");
+    std::cout << "JVS synthetic checks: " << checks << " checks, " << failures << " failures\n";
+    return failures ? 1 : 0;
+}
