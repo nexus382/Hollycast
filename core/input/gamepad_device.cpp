@@ -27,6 +27,7 @@
 #include "emulator.h"
 #include "hw/maple/maple_devs.h"
 #include "mouse.h"
+#include "oslib/oslib.h"
 #ifdef USE_HIKARU
 #include "hw/hikaru/frontend.h"
 #endif
@@ -117,15 +118,15 @@ bool GamepadDevice::handleButtonInput(int port, DreamcastKey key, bool pressed)
 		{
 		case EMU_BTN_MENU:
 			if (pressed)
-				gui_open_settings();
+				os_DispatchInputAction(gui_open_settings);
 			break;
 		case EMU_BTN_ESCAPE:
 			if (pressed)
-				dc_exit();
+				os_DispatchInputAction(dc_exit);
 			break;
 		case EMU_BTN_PAUSE:
 			if (pressed)
-				gui_togglePause();
+				os_DispatchInputAction(gui_togglePause);
 			break;
 		case EMU_BTN_FFORWARD:
 			if (pressed && !gui_is_open())
@@ -136,27 +137,27 @@ bool GamepadDevice::handleButtonInput(int port, DreamcastKey key, bool pressed)
 			break;
 		case EMU_BTN_LOADSTATE:
 			if (pressed)
-				gui_loadState();
+				os_DispatchInputAction([] { gui_loadState(); });
 			break;
 		case EMU_BTN_SAVESTATE:
 			if (pressed)
-				gui_saveState();
+				os_DispatchInputAction([] { gui_saveState(); });
 			break;
 		case EMU_BTN_NEXTSLOT:
 			if (pressed)
-				gui_cycleSaveStateSlot(1);
+				os_DispatchInputAction([] { gui_cycleSaveStateSlot(1); });
 			break;
 		case EMU_BTN_PREVSLOT:
 			if (pressed)
-				gui_cycleSaveStateSlot(-1);
+				os_DispatchInputAction([] { gui_cycleSaveStateSlot(-1); });
 			break;
 		case EMU_BTN_LOADSTATE_RAM:
 			if (pressed)
-				gui_loadState(true);
+				os_DispatchInputAction([] { gui_loadState(true); });
 			break;
 		case EMU_BTN_SAVESTATE_RAM:
 			if (pressed)
-				gui_saveState(true, true);
+				os_DispatchInputAction([] { gui_saveState(true, true); });
 			break;
 		case EMU_BTN_SCREENSHOT:
 			if (pressed)

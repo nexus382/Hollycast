@@ -78,7 +78,7 @@ Normal save states are unchanged:
 
 ## When Rewind is unavailable
 
-The Commands menu and the hold button explain the reason. The first version
+Open the in-game Commands menu to see why Rewind is unavailable. The first version
 does not run:
 
 - on Hikaru or System SP;
@@ -86,6 +86,7 @@ does not run:
 - during online, rollback (GGPO), Battle Cable, or linked-cabinet play;
 - with a NetDIMM cartridge, arcade card reader, or medal hopper;
 - with host serial output enabled;
+- in Fish Life or Alien Front, which use serial devices whose state cannot be rewound;
 - with passthrough DreamLink hardware connected;
 - while phone VMU sharing is running;
 - in the libretro core. Use your frontend's own rewind controls there.

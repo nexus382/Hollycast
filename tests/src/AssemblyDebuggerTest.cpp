@@ -15,6 +15,8 @@
 #include <thread>
 
 #ifndef LIBRETRO
+#include "../../shell/android-studio/flycast/src/main/jni/src/frontend_input_queue.h"
+#include "rewind.h"
 #include "ui/gui_debugger.h"
 #include "ui/gui_util.h"
 #include "ui/imgui_driver.h"
@@ -281,6 +283,89 @@ TEST_F(AssemblyDebuggerTest, BlocksConflictingDebuggerAndOnlineModes)
 }
 
 #ifndef LIBRETRO
+TEST_F(AssemblyDebuggerTest, AndroidRewindPauseWaitsForRestoreAndQueuedSave)
+{
+    const bool previousRewind = config::RewindEnable;
+    config::RewindEnable = true;
+    emu.start();
+    rewind_state::poll();
+    rewind_state::afterFrame();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (rewind_state::snapshotCount() == 0 && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        rewind_state::poll();
+    }
+    EXPECT_EQ(1u, rewind_state::snapshotCount());
+
+    struct Frontend
+    {
+        FrontendInputQueue actions;
+        std::future<bool> paused;
+        void requestPause()
+        {
+            paused = actions.postPause([] {
+                const bool running = emu.running();
+                emu.stop();
+                emu.finishPendingPause();
+                return running;
+            });
+        }
+    } frontend;
+    frontend.actions.setActive(true);
+    const auto pauseOnRestore = +[](Event, void* param) {
+        std::thread(&Frontend::requestPause, static_cast<Frontend*>(param)).join();
+    };
+    EventManager::listen(Event::LoadState, pauseOnRestore, &frontend);
+    Sh4cntx.r[0] = 42;
+    int source = 0;
+    rewind_state::setRequested(&source, true);
+    EXPECT_EQ(rewind_state::FrameAction::Restore, rewind_state::beforeFrame());
+    EventManager::unlisten(Event::LoadState, pauseOnRestore, &frontend);
+    EXPECT_EQ(0u, Sh4cntx.r[0]);
+    EXPECT_EQ(pc, Sh4cntx.pc);
+    EXPECT_TRUE(emu.running());
+    ASSERT_TRUE(frontend.paused.valid());
+    EXPECT_EQ(std::future_status::timeout, frontend.paused.wait_for(std::chrono::seconds(0)));
+    frontend.actions.drain();
+    EXPECT_TRUE(frontend.paused.get());
+    EXPECT_FALSE(emu.running());
+
+    // The UI can also request pause while an earlier save hotkey has temporarily stopped execution.
+    emu.start();
+    frontend.actions.post([&] {
+        emu.stop();
+        EXPECT_TRUE(emu.usesSharedRewind());
+        std::thread(&Frontend::requestPause, &frontend).join();
+        emu.start();
+    });
+    frontend.actions.drain();
+    EXPECT_TRUE(emu.running());
+    ASSERT_TRUE(frontend.paused.valid());
+    EXPECT_EQ(std::future_status::timeout, frontend.paused.wait_for(std::chrono::seconds(0)));
+    frontend.actions.drain();
+    EXPECT_TRUE(frontend.paused.get());
+    EXPECT_FALSE(emu.running());
+    frontend.requestPause();
+    frontend.actions.drain();
+    EXPECT_FALSE(frontend.paused.get()); // A game paused in Commands must stay paused on resume.
+
+    rewind_state::releaseRequests();
+    config::RewindEnable = previousRewind;
+}
+
+TEST(RewindFrontendQueueTest, RendererExitReleasesPendingPause)
+{
+    FrontendInputQueue actions;
+    EXPECT_FALSE(actions.postPause([] { return true; }).valid());
+    actions.setActive(true);
+    auto paused = actions.postPause([] { return true; });
+    ASSERT_TRUE(paused.valid());
+    actions.setActive(false);
+    ASSERT_EQ(std::future_status::ready, paused.wait_for(std::chrono::seconds(0)));
+    EXPECT_THROW(paused.get(), std::future_error);
+}
+
 TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoFrames)
 {
     // Model the DX/OpenGL presentation contract without a GPU. The driver is

@@ -183,6 +183,10 @@ const char* unsupportedReason(bool checkThreadMode)
 		return restartReason;
 	if (config::SerialConsole)
 		return Tnop("Rewind is unavailable with host serial output enabled.");
+	// Fish Life's touchscreen and Alien Front's modem keep serial queues outside savestates.
+	if ((settings.platform.isConsole() && settings.content.gameId == "HDR-0094")
+			|| (settings.platform.isNaomi() && settings.content.gameId == "ALIEN FRONT"))
+		return Tnop("Rewind is unavailable for this game's serial device.");
 	const char* cardReason = Tnop("Rewind is unavailable with an arcade card reader or medal hopper.");
 	if (settings.platform.isArcade())
 	{

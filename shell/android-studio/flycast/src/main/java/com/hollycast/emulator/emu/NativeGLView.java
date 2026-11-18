@@ -120,10 +120,11 @@ public class NativeGLView extends SurfaceView implements SurfaceHolder.Callback 
     public void surfaceDestroyed(SurfaceHolder surfaceHolder) {
         Log.i("hollycast", "NativeGLView.surfaceDestroyed");
         surfaceReady = false;
-        JNIdc.rendinitNative(null, 0, 0);
         BaseGLActivity activity = Emulator.getCurrentActivity();
         if (activity != null)
             activity.handleStateChange(true);
+        // A shared-thread pause is acknowledged by the render thread before it exits.
+        JNIdc.rendinitNative(null, 0, 0);
     }
 
     public boolean isSurfaceReady() {

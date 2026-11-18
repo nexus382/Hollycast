@@ -920,6 +920,9 @@ void Emulator::unloadGame(bool allowAutoSave)
 		settings.platform.system = DC_PLATFORM_DREAMCAST;
 		custom_texture.terminate();
 		state = Init;
+#ifndef LIBRETRO
+		sharedRewind = false;
+#endif
 		EventManager::event(Event::Terminate);
 	}
 }
@@ -1193,7 +1196,7 @@ void Emulator::start()
 	if (state == Running)
 		return;
 	if (state != Loaded) {
-		WARN_LOG(COMMON, "Unexpected emu state %d", state);
+		WARN_LOG(COMMON, "Unexpected emu state %d", state.load());
 		return;
 	}
 #ifndef LIBRETRO
@@ -1201,6 +1204,8 @@ void Emulator::start()
 	// thread can observe Running on a resume from the UI thread.
 	if (rewind_state::requiresSharedThread())
 		config::ThreadedRendering.override(false);
+	sharedRewind = config::RewindEnable && !config::ThreadedRendering
+			&& !config::GGPOEnable && !settings.platform.isHikaru();
 #endif
 	state = Running;
 #ifdef USE_HIKARU
@@ -1289,19 +1294,39 @@ bool Emulator::checkStatus(bool wait)
 	}
 }
 
-bool Emulator::render()
+bool Emulator::finishPendingPause()
 {
-	FC_PROFILE_SCOPE;
+	if (!stopRequested.load(std::memory_order_relaxed) || !stopRequested.exchange(false))
+		return false;
+	if (state != Loaded && state != Running)
+		return false;
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru())
 	{
-		if (stopRequested.exchange(false)) {
-			hikaru::frontend::pauseAudio();
-			TermAudio();
-			hikaruAudioActive = false;
-			EventManager::event(Event::Pause);
+		hikaru::frontend::pauseAudio();
+		TermAudio();
+		hikaruAudioActive = false;
+	}
+	else
+#endif
+	{
+		if (state != Loaded || config::ThreadedRendering)
 			return false;
-		}
+		TermAudio();
+		nvmem::saveFiles();
+	}
+	EventManager::event(Event::Pause);
+	return true;
+}
+
+bool Emulator::render()
+{
+	FC_PROFILE_SCOPE;
+	if (finishPendingPause())
+		return false;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru())
+	{
 		if (state != Running) return false;
 #ifdef __ANDROID__
 		if (!hikaruAudioActive) {
@@ -1313,14 +1338,7 @@ bool Emulator::render()
 #endif
 		try {
 			const bool rendered = hikaru::frontend::render();
-			if (stopRequested.exchange(false)) {
-				hikaru::frontend::pauseAudio();
-				TermAudio();
-				hikaruAudioActive = false;
-				EventManager::event(Event::Pause);
-				return false;
-			}
-			return rendered;
+			return !finishPendingPause() && rendered;
 		}
 		catch (...) { state = Error; hikaru::frontend::pauseAudio(); TermAudio(); hikaruAudioActive = false; EventManager::event(Event::Pause); throw; }
 	}
@@ -1328,41 +1346,36 @@ bool Emulator::render()
 
 	if (!config::ThreadedRendering)
 	{
-		if (stopRequested)
-		{
-			stopRequested = false;
-			TermAudio();
-			nvmem::saveFiles();
-			EventManager::event(Event::Pause);
-			return false;
-		}
 		if (state != Running)
 			return false;
-		if (!config::RewindEnable)
+#ifndef LIBRETRO
+		if (usesSharedRewind())
 		{
-			run();
+			const auto action = rewind_state::beforeFrame();
+			if (action == rewind_state::FrameAction::Hold || state != Running)
+				return false;
+			if (action == rewind_state::FrameAction::Restore)
+			{
+				const bool previousMute = settings.aica.muteAudio;
+				settings.aica.muteAudio = true;
+				try {
+					run();
+				} catch (...) {
+					settings.aica.muteAudio = previousMute;
+					throw;
+				}
+				settings.aica.muteAudio = previousMute;
+			}
+			else
+			{
+				run();
+				if (state == Running)
+					rewind_state::afterFrame();
+			}
 			return true;
 		}
-		const auto action = rewind_state::beforeFrame();
-		if (action == rewind_state::FrameAction::Hold)
-			return false;
-		if (action == rewind_state::FrameAction::Restore)
-		{
-			const bool previousMute = settings.aica.muteAudio;
-			settings.aica.muteAudio = true;
-			try {
-				run();
-			} catch (...) {
-				settings.aica.muteAudio = previousMute;
-				throw;
-			}
-			settings.aica.muteAudio = previousMute;
-		}
-		else
-		{
-			run();
-			rewind_state::afterFrame();
-		}
+#endif
+		run();
 		return true;
 	}
 	if (!checkStatus())

@@ -33,6 +33,7 @@ protected:
 		config::BattleCableEnable = false;
 		config::SerialConsole = false;
 		settings.content.path = "rewind-test.iso";
+		settings.content.gameId.clear();
 		settings.platform.system = DC_PLATFORM_DREAMCAST;
 		settings.platform.ram_size = 16 * 1024 * 1024;
 		settings.network.online = false;
@@ -56,6 +57,7 @@ protected:
 		config::BattleCableEnable = previousBattleCableEnable;
 		config::SerialConsole = previousSerialConsole;
 		settings.content.path = previousContentPath;
+		settings.content.gameId = previousGameId;
 		settings.platform.system = previousPlatform;
 		settings.platform.ram_size = previousRamSize;
 		settings.network.online = previousOnline;
@@ -77,6 +79,7 @@ private:
 	const bool previousBattleCableEnable = config::BattleCableEnable.get();
 	const bool previousSerialConsole = config::SerialConsole.get();
 	const std::string previousContentPath = settings.content.path;
+	const std::string previousGameId = settings.content.gameId;
 	const int previousPlatform = settings.platform.system;
 	const u32 previousRamSize = settings.platform.ram_size;
 	const bool previousOnline = settings.network.online;
@@ -199,6 +202,23 @@ TEST_F(RewindTest, HostSerialOutputBlocksRewind)
 	config::SerialConsole = true;
 	EXPECT_FALSE(rewind_state::requiresSharedThread());
 	EXPECT_STREQ("Rewind is unavailable with host serial output enabled.", rewind_state::unavailableReason());
+}
+
+TEST_F(RewindTest, TitlesWithUnsavedSerialDevicesBlockRewindOffline)
+{
+	const char* reason = "Rewind is unavailable for this game's serial device.";
+	settings.content.gameId = "HDR-0094";
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	EXPECT_STREQ(reason, rewind_state::unavailableReason());
+
+	settings.platform.system = DC_PLATFORM_NAOMI;
+	settings.content.gameId = "ALIEN FRONT";
+	EXPECT_FALSE(rewind_state::requiresSharedThread());
+	EXPECT_STREQ(reason, rewind_state::unavailableReason());
+
+	settings.content.gameId = "CRAZY TAXI";
+	EXPECT_TRUE(rewind_state::requiresSharedThread());
+	EXPECT_EQ(nullptr, rewind_state::unavailableReason());
 }
 
 TEST_F(RewindTest, RestrictedRewindRequestsDoNotRestoreFrames)

@@ -91,6 +91,10 @@ bool mainui_rend_frame()
 	if (gui_is_open())
 	{
 		try {
+#ifdef __ANDROID__
+			// A menu hotkey can open Commands before the lifecycle pause is acknowledged.
+			emu.finishPendingPause();
+#endif
 			gui_display_ui();
 		} catch (const FlycastException& e) {
 			// Assume this is a graphics API issue

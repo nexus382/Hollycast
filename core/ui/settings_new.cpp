@@ -9995,6 +9995,7 @@ void renderAdvancedTab()
 
 		static constexpr int rewindIntervals[] = { 100, 250, 500, 1000 };
 		const char* rewindIntervalLabels[] = { T("0.1 s"), T("0.25 s"), T("0.5 s"), T("1 s") };
+		char customIntervalLabel[16];
 		SettingsUI::PopupConfig rewindIntervalCfg {};
 		rewindIntervalCfg.type = SettingsUI::PopupType::Options;
 		rewindIntervalCfg.options.label = T("Snapshot Interval");
@@ -10005,6 +10006,16 @@ void renderAdvancedTab()
 		rewindIntervalCfg.options.currentValue = &config::RewindInterval.get();
 		rewindIntervalCfg.options.storageIndexMap = [](int index) {
 			return index >= 0 && index < IM_ARRAYSIZE(rewindIntervals) ? rewindIntervals[index] : 250;
+		};
+		rewindIntervalCfg.options.valueToString = [&rewindIntervalLabels, &customIntervalLabel](int milliseconds) -> const char* {
+			// Match the effective interval used by rewind for hand-edited configurations.
+			milliseconds = std::clamp(milliseconds, rewindIntervals[0], rewindIntervals[IM_ARRAYSIZE(rewindIntervals) - 1]);
+			for (int i = 0; i < IM_ARRAYSIZE(rewindIntervals); ++i)
+				if (rewindIntervals[i] == milliseconds)
+					return rewindIntervalLabels[i];
+			std::snprintf(customIntervalLabel, sizeof(customIntervalLabel), "%d.%03d s",
+				milliseconds / 1000, milliseconds % 1000);
+			return customIntervalLabel;
 		};
 		rewindIntervalCfg.options.valueWidth = 170.0f;
 		RenderGeneralPopupSettingRow(
