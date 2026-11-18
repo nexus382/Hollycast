@@ -43,7 +43,6 @@ bool rtcAnySession();
 bool rtcAnyConnected();
 void rtcPushSample(const std::vector<u8>& sample, bool keyframe, uint32_t rtpTimestamp);
 void rtcPushAudioSample(const std::vector<u8>& packet, uint32_t rtpTimestamp);
-bool rtcKeyframeRequested();
-void rtcClearKeyframeRequest();
+bool rtcTakeKeyframeRequest();
 
 } // namespace remoteplay

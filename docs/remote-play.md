@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # Remote Play (phone)
 
 Play on your phone while Hollycast runs on your computer. Video and game
@@ -29,16 +30,14 @@ so games can detect every phone.
 - The tunnel address changes every time you start Remote Play. Anyone with
   the address still needs the PIN; five wrong PIN attempts lock logins from
   that network for a minute.
-- macOS builds with WebRTC support stream H.264 video, stereo Opus game audio
+- macOS and supported Windows builds with WebRTC stream H.264 video, stereo Opus game audio
   at 48 kHz and controller input over a direct connection. The latency badge
   shows the controller round-trip
   time and whether input uses WebRTC or the tunnel. This is network latency;
   video capture, decoding and the game's own processing add further delay.
-- If WebRTC cannot connect, video falls back to motion JPEG and input uses
-  the tunnel. This fallback has more delay and no phone audio. Other platforms
-  currently use
-  this fallback because their H.264 encoders are not implemented yet.
-- OpenGL 3+ capture uses bounded asynchronous GPU readback, preserving the
+- If WebRTC is unavailable, video falls back to motion JPEG and input uses
+  WebSocket. This fallback has more delay and no phone audio.
+- Desktop OpenGL 3.2+ and OpenGL ES 3+ capture use bounded asynchronous GPU readback, preserving the
   game's rendering state and dropping captures while the GPU is busy.
 - Direct WebRTC may require a TURN relay on restrictive networks. Configure
   the TURN URL and credentials below if the connection repeatedly falls back.
@@ -76,6 +75,11 @@ so games can detect every phone.
 | `RemotePlayTurnPassword` | (empty) | TURN password |
 
 ## Developer checks
+
+For a Windows desktop MSVC build with WebRTC, initialize the submodules
+recursively and configure with `-DHOLLYCAST_REMOTEPLAY_WINDOWS_WEBRTC=ON`.
+CMake must be able to find OpenSSL for the target architecture. The Windows
+encoder uses Media Foundation, and game video capture uses OpenGL.
 
 `RemotePlayCaptureTest.*` opens a hidden OpenGL context and verifies that
 repeated captures preserve rendering state and return the expected pixels.

@@ -114,7 +114,7 @@ inline const char *remotePlayPage()
   </div>
   <div class="padbtn" id="startBtn" data-btn="START">START</div>
 </div>
-<script>
+)HTML" R"HTML(<script>
 "use strict";
 const $ = s => document.querySelector(s);
 let ws = null, player = -1, pingStart = 0;
@@ -210,6 +210,10 @@ function startRtc() {
   };
   rtcPc.ontrack = e => {
     if (rtcPc !== pc) return;
+    if (e.receiver && "jitterBufferTarget" in e.receiver) {
+      // Request low buffering on both tracks because synchronized audio can hold back video.
+      try { e.receiver.jitterBufferTarget = 0; } catch (error) {}
+    }
     stream.addTrack(e.track);
     if (e.track.kind === "audio") $("#sound").hidden = false;
     const showVideo = () => {

@@ -879,7 +879,9 @@ bool OpenGLRenderer::GetLastFrameForRemotePlay(std::vector<u8>& data, int& width
 	if (clearLastFrame)
 		return false;
 #ifndef GLES2
-	if (gl.gl_major >= 3 && !gl.bogusBlitFramebuffer)
+	// Fence sync is core in GLES 3.0 and desktop OpenGL 3.2.
+	const bool hasFenceSync = gl.gl_major > 3 || (gl.gl_major == 3 && (gl.is_gles || gl.gl_minor >= 2));
+	if (hasFenceSync && !gl.bogusBlitFramebuffer)
 	{
 		auto *framebuffer = gl.ofbo2.ready ? gl.ofbo2.framebuffer.get() : gl.ofbo.framebuffer.get();
 		if (framebuffer == nullptr || gl.ofbo.aspectRatio <= 0)

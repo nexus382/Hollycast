@@ -124,10 +124,11 @@ if(NOT LIBRETRO)
             boxart/vmu_icon.h)
 
     # WebRTC Remote Play: libdatachannel + a platform H.264 encoder.
-    # Currently wired on macOS (VideoToolbox); other platforms keep the
-    # MJPEG stream until an encoder lands there.
+    # macOS uses VideoToolbox and Windows desktop uses Media Foundation.
     option(HOLLYCAST_REMOTEPLAY_WEBRTC "Enable WebRTC for Remote Play" ON)
-    if(APPLE AND NOT IOS AND HOLLYCAST_REMOTEPLAY_WEBRTC
+    option(HOLLYCAST_REMOTEPLAY_WINDOWS_WEBRTC "Enable the Windows Remote Play encoder and its OpenSSL dependency" OFF)
+    if(((APPLE AND NOT IOS) OR (MSVC AND NOT WINDOWS_STORE AND HOLLYCAST_REMOTEPLAY_WINDOWS_WEBRTC))
+            AND HOLLYCAST_REMOTEPLAY_WEBRTC
             AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../core/deps/libdatachannel/CMakeLists.txt")
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../core/deps/opus/CMakeLists.txt")
             message(FATAL_ERROR "Remote Play audio requires Opus. Run git submodule update --init core/deps/opus")
@@ -141,7 +142,15 @@ if(NOT LIBRETRO)
                     "${CMAKE_CURRENT_BINARY_DIR}/opus" EXCLUDE_FROM_ALL)
         endfunction()
         add_remoteplay_opus()
-        target_sources(${PROJECT_NAME} PRIVATE remoteplay/h264_encoder_vt.mm remoteplay/opus_encoder.cpp)
+        target_sources(${PROJECT_NAME} PRIVATE remoteplay/opus_encoder.cpp)
+        if(APPLE)
+            target_sources(${PROJECT_NAME} PRIVATE remoteplay/h264_encoder_vt.mm)
+            target_link_libraries(${PROJECT_NAME} PRIVATE
+                    "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo")
+        else()
+            target_sources(${PROJECT_NAME} PRIVATE remoteplay/h264_encoder_mf.cpp)
+            target_link_libraries(${PROJECT_NAME} PRIVATE mfplat mfuuid ole32)
+        endif()
         # Hollycast already vendors libjuice: reuse it instead of letting
         # libdatachannel create a second "juice" target.
         if(TARGET juice-static AND NOT TARGET LibJuice::LibJuice)
@@ -170,8 +179,7 @@ if(NOT LIBRETRO)
         endif()
         add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../core/deps/libdatachannel"
                 "${CMAKE_CURRENT_BINARY_DIR}/libdatachannel" EXCLUDE_FROM_ALL)
-        target_link_libraries(${PROJECT_NAME} PRIVATE datachannel-static opus
-                "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo")
+        target_link_libraries(${PROJECT_NAME} PRIVATE datachannel-static opus)
         target_compile_definitions(${PROJECT_NAME} PRIVATE HOLLYCAST_HAVE_WEBRTC=1)
     else()
         target_sources(${PROJECT_NAME} PRIVATE remoteplay/h264_encoder_stub.cpp)

@@ -41,6 +41,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <future>
 #include <map>
@@ -514,6 +515,10 @@ void captureLoop()
 {
 	bool haveRealFrame = false;
 	std::unique_ptr<H264Encoder> encoder;
+	// Short per-session averages for diagnosing host delay without logging each frame.
+	const bool traceLatency = std::getenv("HOLLYCAST_REMOTE_PLAY_TIMING") != nullptr;
+	double captureTotal = 0, encodeTotal = 0, encodeMax = 0;
+	unsigned timingFrames = 0;
 	while (running)
 	{
 		bool wantJpeg = streamViewers > 0;
@@ -571,12 +576,27 @@ void captureLoop()
 			}
 			if (encoder != nullptr)
 			{
-				if (rtcKeyframeRequested())
-				{
+				if (rtcTakeKeyframeRequest())
 					encoder->requestKeyframe();
-					rtcClearKeyframeRequest();
+				if (traceLatency)
+				{
+					using Milliseconds = std::chrono::duration<double, std::milli>;
+					const auto encodeStart = std::chrono::steady_clock::now();
+					encoder->encodeRgb(rgb.data(), w, h);
+					const double encode = Milliseconds(std::chrono::steady_clock::now() - encodeStart).count();
+					captureTotal += Milliseconds(encodeStart - frameStart).count();
+					encodeTotal += encode;
+					encodeMax = std::max(encodeMax, encode);
+					if (++timingFrames == 120)
+					{
+						NOTICE_LOG(NETWORK, "Remote Play host timing: capture wait %.1f ms, encode and send %.1f ms (max %.1f ms), %dx%d",
+								captureTotal / timingFrames, encodeTotal / timingFrames, encodeMax, w, h);
+						captureTotal = encodeTotal = encodeMax = 0;
+						timingFrames = 0;
+					}
 				}
-				encoder->encodeRgb(rgb.data(), w, h);
+				else
+					encoder->encodeRgb(rgb.data(), w, h);
 			}
 		}
 		auto elapsed = std::chrono::steady_clock::now() - frameStart;

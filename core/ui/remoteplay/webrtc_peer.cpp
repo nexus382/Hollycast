@@ -39,12 +39,14 @@ namespace {
 std::atomic<bool> keyframeRequested { false };
 } // namespace
 
-bool rtcKeyframeRequested() { return keyframeRequested; }
-void rtcClearKeyframeRequest() { keyframeRequested = false; }
+bool rtcTakeKeyframeRequest() { return keyframeRequested.exchange(false); }
 
 #ifdef HOLLYCAST_HAVE_WEBRTC
 
 namespace {
+
+constexpr int playoutDelayId = 1;
+constexpr char playoutDelayUri[] = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
 
 struct RtcSession
 {
@@ -52,6 +54,7 @@ struct RtcSession
 	RtcInputCallback input;
 	std::shared_ptr<rtc::PeerConnection> pc;
 	std::shared_ptr<rtc::Track> track;
+	std::shared_ptr<rtc::RtpPacketizationConfig> videoRtpConfig;
 	std::shared_ptr<rtc::Track> audioTrack;
 	std::shared_ptr<rtc::DataChannel> inputChannel;
 	std::atomic<bool> connected { false };
@@ -178,12 +181,18 @@ void createPeer(int player, const std::shared_ptr<RtcSession>& session)
 	const uint32_t ssrc = 42 + (uint32_t)player;
 	rtc::Description::Video media("video", rtc::Description::Direction::SendOnly);
 	media.addH264Codec(96);
+	media.addExtMap({ playoutDelayId, playoutDelayUri, rtc::Description::Direction::SendOnly });
 	media.addSSRC(ssrc, "remoteplay", "remoteplay", "video");
 	auto track = pc->addTrack(media);
 	auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(ssrc, "remoteplay", 96, rtc::H264RtpPacketizer::ClockRate);
+	// Prefer prompt display for interactive video. The wire units are 10 ms.
+	rtpConfig->playoutDelayMin = 0;
+	rtpConfig->playoutDelayMax = 3;
+	session->videoRtpConfig = rtpConfig;
 	auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::Length, rtpConfig);
 	packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
 	packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>());
+	packetizer->addToChain(std::make_shared<rtc::PliHandler>([] { keyframeRequested = true; }));
 	track->setMediaHandler(packetizer);
 	session->track = track;
 	rtc::Description::Audio audio("audio", rtc::Description::Direction::SendOnly);
@@ -267,7 +276,29 @@ void rtcSessionHandleMessage(int player, const std::string& json)
 		{
 			std::string sdp;
 			if (jsonField(json, "sdp", sdp) && !sdp.empty())
-				session->pc->setRemoteDescription(rtc::Description(sdp, "answer"));
+			{
+				rtc::Description answer(sdp, "answer");
+				bool usePlayoutDelay = false;
+				using Direction = rtc::Description::Direction;
+				for (int i = 0; i < answer.mediaCount(); i++)
+				{
+					auto entry = answer.media(i);
+					auto video = std::get_if<rtc::Description::Media *>(&entry);
+					if (video == nullptr || (*video)->type() != "video" || (*video)->mid() != "video"
+						|| (*video)->isRemoved())
+						continue;
+					auto direction = (*video)->direction();
+					auto extension = (*video)->extMap(playoutDelayId);
+					usePlayoutDelay = (direction == Direction::RecvOnly || direction == Direction::SendRecv)
+						&& extension != nullptr && extension->uri == playoutDelayUri
+						&& extension->direction != Direction::SendOnly && extension->direction != Direction::Inactive;
+					break;
+				}
+				session->pc->setRemoteDescription(std::move(answer));
+				// The outgoing packetizer reads this field under the same lock in rtcPushSample.
+				std::lock_guard<std::mutex> lock(rtcMutex);
+				session->videoRtpConfig->playoutDelayId = usePlayoutDelay ? playoutDelayId : 0;
+			}
 		}
 		else if (kind == "candidate" && session->pc != nullptr)
 		{

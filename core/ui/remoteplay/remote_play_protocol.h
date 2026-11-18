@@ -164,8 +164,9 @@ inline std::string wsEncodeFrame(WsOpcode opcode, const std::string& payload)
 	else
 	{
 		out += (char)127;
+		const u64 length = payload.size();
 		for (int i = 7; i >= 0; i--)
-			out += (char)(payload.size() >> (8 * i));
+			out += (char)(length >> (8 * i));
 	}
 	out += payload;
 	return out;
