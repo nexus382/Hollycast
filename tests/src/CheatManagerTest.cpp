@@ -8,12 +8,6 @@
 #include "cheats.h"
 #include "emulator.h"
 #include "hw/sh4/sh4_mem.h"
-#include "rend/transform_matrix.h"
-
-#include <chrono>
-#include <cstdio>
-#include <fstream>
-#include <iterator>
 
 class CheatManagerTest : public ::testing::Test {
 protected:
@@ -43,7 +37,6 @@ cheat0_repeat_add_to_address = "4"
 cheat0_repeat_add_to_value = "16"
 cheat0_repeat_count = "3"
 cheat0_value = "5678"
-cheat0_widescreen = "true"
 cheats = "1"
 )";
 	fputs(s, fp);
@@ -55,14 +48,10 @@ cheats = "1"
 	ASSERT_EQ(1, (int)mgr.cheatCount());
 	ASSERT_EQ("widescreen", mgr.cheatDescription(0));
 	ASSERT_FALSE(mgr.cheatEnabled(0));
-	ASSERT_TRUE(mgr.cheatWidescreen(0));
-	ASSERT_FALSE(mgr.hasManualWidescreenCheat());
 	mgr.enableCheat(0, true);
 	ASSERT_TRUE(mgr.cheatEnabled(0));
-	ASSERT_TRUE(mgr.hasManualWidescreenCheat());
 	mgr.enableCheat(0, false);
 	ASSERT_FALSE(mgr.cheatEnabled(0));
-	ASSERT_FALSE(mgr.hasManualWidescreenCheat());
 
 	ASSERT_EQ(1234u, mgr.cheats[0].address);
 	ASSERT_EQ(5678u, mgr.cheats[0].value);
@@ -72,104 +61,6 @@ cheats = "1"
 	ASSERT_EQ(4u, mgr.cheats[0].repeatAddressIncrement);
 	ASSERT_EQ(16u, mgr.cheats[0].repeatValueIncrement);
 	ASSERT_EQ(7890u, mgr.cheats[0].destAddress);
-}
-
-TEST_F(CheatManagerTest, TestImportedWidescreenOverride)
-{
-	const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-	const std::string gameId = "TESTWIDESCREEN-" + std::to_string(nonce);
-	const std::string filename = gameId + ".cht";
-	const std::string imported = R"(cheats = "2"
-cheat0_address = "1234"
-cheat0_cheat_type = "1"
-cheat0_desc = "Widescreen"
-cheat0_enable = "true"
-cheat0_widescreen = "true"
-cheat0_notes = "Preserve this custom field"
-cheat1_address = "1234"
-cheat1_cheat_type = "1"
-cheat1_desc = "Widescreen"
-cheat1_widescreen = "false"
-)";
-	{
-		std::ofstream output(filename, std::ios::binary);
-		output << imported;
-		ASSERT_TRUE(output.good());
-	}
-
-	CheatManager mgr;
-	mgr.reset(gameId);
-	mgr.loadCheatFile(filename);
-	ASSERT_EQ(2u, mgr.cheatCount());
-	EXPECT_TRUE(mgr.cheatEnabled(0));
-	EXPECT_TRUE(mgr.cheatWidescreen(0));
-	EXPECT_FALSE(mgr.cheatWidescreen(1));
-	mgr.setCheatWidescreen(0, false);
-	mgr.setCheatWidescreen(1, true);
-
-	CheatManager reloaded;
-	reloaded.reset(gameId);
-	ASSERT_EQ(2u, reloaded.cheatCount());
-	EXPECT_TRUE(reloaded.cheatEnabled(0));
-	EXPECT_FALSE(reloaded.cheatWidescreen(0));
-	EXPECT_TRUE(reloaded.cheatWidescreen(1));
-	EXPECT_FALSE(reloaded.hasManualWidescreenCheat());
-
-	{
-		std::ifstream input(filename, std::ios::binary);
-		const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-		EXPECT_EQ(imported, contents);
-	}
-	std::remove(filename.c_str());
-	config::deleteEntry("cheats", gameId);
-}
-
-TEST_F(CheatManagerTest, TestManualWidescreenPresentation)
-{
-	const bool oldWidescreen = config::Widescreen.get();
-	const bool oldSuperWidescreen = config::SuperWidescreen.get();
-	const bool oldEmulateFramebuffer = config::EmulateFramebuffer.get();
-	const bool oldRotate = config::Rotate90.get();
-	const int oldStretching = config::ScreenStretching.get();
-	const int oldDisplayWidth = settings.display.width;
-	const int oldDisplayHeight = settings.display.height;
-	config::Widescreen.set(false);
-	config::SuperWidescreen.set(false);
-	config::EmulateFramebuffer.set(false);
-	config::Rotate90.set(false);
-	config::ScreenStretching.set(100);
-
-	cheatManager.reset("TESTMANUALWIDE");
-	cheatManager.addGameSharkCheat("widescreen", "00123456 deadc0d3", true);
-	cheatManager.enableCheat(0, true);
-	EXPECT_NEAR(16.f / 9.f, getOutputFramebufferAspectRatio(), 0.000001f);
-	EXPECT_NEAR(16.f / 9.f, getDCFramebufferAspectRatio(), 0.000001f);
-
-	// Stretching is part of the final presentation rectangle, so display shaders
-	// must receive the same widened game area on every renderer.
-	config::ScreenStretching.set(150);
-	EXPECT_NEAR(16.f / 9.f * 1.5f, getOutputFramebufferAspectRatio(), 0.000001f);
-	EXPECT_NEAR(16.f / 9.f * 1.5f, getDCFramebufferAspectRatio(), 0.000001f);
-	config::Rotate90.set(true);
-	EXPECT_NEAR(9.f / 16.f * 1.5f, getOutputFramebufferAspectRatio(), 0.000001f);
-	EXPECT_NEAR(9.f / 16.f * 1.5f, getDCFramebufferAspectRatio(), 0.000001f);
-
-	config::Rotate90.set(false);
-	config::Widescreen.set(true);
-	config::SuperWidescreen.set(true);
-	config::ScreenStretching.set(100);
-	settings.display.width = 3440;
-	settings.display.height = 1440;
-	EXPECT_NEAR(3440.f / 1440.f, getOutputFramebufferAspectRatio(), 0.000001f);
-
-	cheatManager.reset("");
-	config::Widescreen.set(oldWidescreen);
-	config::SuperWidescreen.set(oldSuperWidescreen);
-	config::EmulateFramebuffer.set(oldEmulateFramebuffer);
-	config::Rotate90.set(oldRotate);
-	config::ScreenStretching.set(oldStretching);
-	settings.display.width = oldDisplayWidth;
-	settings.display.height = oldDisplayHeight;
 }
 
 TEST_F(CheatManagerTest, TestGameShark)
@@ -286,13 +177,6 @@ TEST_F(CheatManagerTest, TestGameShark)
 	ASSERT_EQ(0x1111u, mgr.cheats[2].value);
 	ASSERT_EQ(16u, mgr.cheats[2].size);
 	ASSERT_EQ(1u, mgr.cheats[2].repeatCount);
-
-	mgr.reset("TESTGS12");
-	mgr.addGameSharkCheat("widescreen", "00123456 deadc0d3", true);
-	ASSERT_TRUE(mgr.cheatWidescreen(0));
-	ASSERT_FALSE(mgr.hasManualWidescreenCheat());
-	mgr.enableCheat(0, true);
-	ASSERT_TRUE(mgr.hasManualWidescreenCheat());
 }
 
 
@@ -326,7 +210,7 @@ TEST_F(CheatManagerTest, TestSave)
 {
 	CheatManager mgr;
 	mgr.reset("TESTSAVE");
-	mgr.addGameSharkCheat("cheat1", "00010000 000000d3", true);
+	mgr.addGameSharkCheat("cheat1", "00010000 000000d3");
 	mgr.addGameSharkCheat("cheat2", "01020000 0000c0d3");
 	mgr.addGameSharkCheat("cheat3", "02030000 deadc0d3");
 	mgr.addGameSharkCheat("cheat4", "03000004 8c040000 00000001 00000002 00000003 00000004");
@@ -339,7 +223,6 @@ TEST_F(CheatManagerTest, TestSave)
 	ASSERT_EQ(0xd3u, mgr.cheats[0].value);
 	ASSERT_EQ(8u, mgr.cheats[0].size);
 	ASSERT_EQ(1u, mgr.cheats[0].repeatCount);
-	ASSERT_TRUE(mgr.cheatWidescreen(0));
 	ASSERT_EQ(Cheat::Type::setValue, mgr.cheats[1].type);
 	ASSERT_EQ(0x020000u, mgr.cheats[1].address);
 	ASSERT_EQ(0xc0d3u, mgr.cheats[1].value);

@@ -30,11 +30,8 @@
 #include "emulator.h"
 #include "oslib/storage.h"
 #include "oslib/i18n.h"
-#include "stdclass.h"
 
-#include <algorithm>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 using namespace i18n;
@@ -386,68 +383,6 @@ void CheatManager::setActive(bool active)
 		EventManager::unlisten(Event::VBlank, vblankCallback, this);
 }
 
-void CheatManager::refreshManualWidescreenState()
-{
-	manualWidescreenActive.store(std::any_of(cheats.begin(), cheats.end(), [](const Cheat& cheat) {
-		return cheat.enabled && cheat.widescreen;
-	}), std::memory_order_relaxed);
-}
-
-void CheatManager::enableCheat(size_t index, bool enabled)
-{
-	cheats[index].enabled = enabled;
-	refreshManualWidescreenState();
-}
-
-#ifndef LIBRETRO
-static std::string cheatWidescreenId(const std::string& gameId, const std::string& filename, const Cheat& cheat)
-{
-	// Length-prefix the title and path. Encode the code fields as decimal so
-	// the key is independent of platform byte order and .cht formatting.
-	std::string identity = std::to_string(gameId.size()) + ":" + gameId
-			+ std::to_string(filename.size()) + ":" + filename;
-	for (u32 field : { static_cast<u32>(cheat.type), cheat.size, cheat.address, cheat.value,
-			static_cast<u32>(cheat.valueMask), cheat.repeatCount, cheat.repeatValueIncrement,
-			cheat.repeatAddressIncrement, cheat.destAddress })
-		identity += std::to_string(field) + ":";
-	identity += cheat.description;
-
-	constexpr char hex[] = "0123456789abcdef";
-	u8 digest[16];
-	MD5Sum().add(identity.data(), static_cast<unsigned long>(identity.size())).getDigest(digest);
-	std::string id;
-	id.reserve(sizeof(digest) * 2);
-	for (u8 byte : digest)
-	{
-		id += hex[byte >> 4];
-		id += hex[byte & 0xf];
-	}
-	return id;
-}
-#endif
-
-void CheatManager::setCheatWidescreen(size_t index, bool widescreen)
-{
-	Cheat& cheat = cheats[index];
-	if (cheat.widescreen == widescreen)
-		return;
-	cheat.widescreen = widescreen;
-	refreshManualWidescreenState();
-#ifndef LIBRETRO
-	if (!cheat.builtIn && !cheatFilePath.empty())
-	{
-		const std::string id = cheatWidescreenId(gameId, cheatFilePath, cheat);
-		// Only identical cheats depend on their relative order in the file.
-		size_t occurrence = 0;
-		for (size_t i = 0; i < index; i++)
-			if (!cheats[i].builtIn && cheats[i].description == cheat.description
-					&& cheatWidescreenId(gameId, cheatFilePath, cheats[i]) == id)
-				occurrence++;
-		config::saveBool("cheatWidescreen", id + "." + std::to_string(occurrence), widescreen);
-	}
-#endif
-}
-
 void CheatManager::loadCheatFile(const std::string& filename)
 {
 #ifndef LIBRETRO
@@ -474,8 +409,6 @@ void CheatManager::loadCheatFile(const std::string& filename)
 
 	int count = cfg.getInt("", "cheats", 0);
 	cheats.clear();
-	cheatFilePath = filename;
-	std::unordered_map<std::string, size_t> occurrences;
 	for (int i = 0; count == 0 || i < count; i++)
 	{
 		std::string prefix = "cheat" + std::to_string(i) + "_";
@@ -496,7 +429,6 @@ void CheatManager::loadCheatFile(const std::string& filename)
 		cheat.repeatValueIncrement = cfg.getInt("", prefix + "repeat_add_to_value", cheat.repeatValueIncrement);
 		cheat.repeatAddressIncrement = cfg.getInt("", prefix + "repeat_add_to_address", cheat.repeatAddressIncrement);
 		cheat.enabled = cfg.getBool("", prefix + "enable", false);
-		cheat.widescreen = cfg.getBool("", prefix + "widescreen", false);
 		cheat.destAddress = cfg.getInt("", prefix + "dest_address", 0);
 		if (cheat.destAddress >= RAM_SIZE)
 		{
@@ -505,14 +437,8 @@ void CheatManager::loadCheatFile(const std::string& filename)
 		}
 		cheat.valueMask = cfg.getInt("", prefix + "address_bit_position", 0);
 		if (cheat.type != Cheat::Type::disabled)
-		{
-			const std::string id = cheatWidescreenId(gameId, filename, cheat);
-			cheat.widescreen = config::loadBool("cheatWidescreen", id + "." + std::to_string(occurrences[id]++),
-					cheat.widescreen);
 			cheats.push_back(cheat);
-		}
 	}
-	refreshManualWidescreenState();
 	setActive(!cheats.empty());
 	INFO_LOG(COMMON, "%d cheats loaded", (int)cheats.size());
 	if (!cheats.empty())
@@ -526,10 +452,6 @@ void CheatManager::reset(const std::string& gameId)
 	if (this->gameId != gameId)
 	{
 		cheats.clear();
-#ifndef LIBRETRO
-		cheatFilePath.clear();
-#endif
-		refreshManualWidescreenState();
 		setActive(false);
 		this->gameId = gameId;
 
@@ -904,7 +826,7 @@ static u32 decryptArg(u32 v) {
 	return (((v + 0x543700D0) >> 29) | ((v + 0x543700D0) * 8)) ^ Seeds[0];
 }
 
-void CheatManager::addGameSharkCheat(const std::string& name, const std::string& s, bool widescreen)
+void CheatManager::addGameSharkCheat(const std::string& name, const std::string& s)
 {
 	std::vector<u32> codes = parseCodes(s);
 	Cheat conditionCheat;
@@ -918,7 +840,6 @@ void CheatManager::addGameSharkCheat(const std::string& name, const std::string&
 				cheats.push_back(conditionCheat);
 			Cheat cheat{};
 			cheat.description = name;
-			cheat.widescreen = widescreen;
 			u32 code = (codes[i] & 0xff000000) >> 24;
 			if (code & 0xf0)
 			{
@@ -1188,7 +1109,6 @@ void CheatManager::saveCheatFile(const std::string& filename)
 		cfg.set("", prefix + "repeat_count", cheat.repeatCount);
 		cfg.set("", prefix + "repeat_add_to_value", cheat.repeatValueIncrement);
 		cfg.set("", prefix + "repeat_add_to_address", cheat.repeatAddressIncrement);
-		cfg.set("", prefix + "widescreen", cheat.widescreen);
 		i++;
 	}
 	cfg.set("", "cheats", i);
@@ -1197,6 +1117,5 @@ void CheatManager::saveCheatFile(const std::string& filename)
 		throw FlycastException(Ts("Can't save cheat file"));
 	cfg.save(fp);
 	delete fp;
-	cheatFilePath = filename;
 #endif
 }
