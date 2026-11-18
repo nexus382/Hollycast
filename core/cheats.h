@@ -105,6 +105,9 @@ private:
 	std::atomic_bool manualWidescreenActive { false };
 	std::vector<Cheat> cheats;
 	std::string gameId;
+#ifndef LIBRETRO
+	std::string cheatFilePath;
+#endif
 
 	friend class CheatManagerTest_TestLoad_Test;
 	friend class CheatManagerTest_TestGameShark_Test;

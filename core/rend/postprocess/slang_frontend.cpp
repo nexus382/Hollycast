@@ -20,6 +20,7 @@
 #include <regex>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace postprocess {
@@ -439,14 +440,18 @@ bool looksLikeResourceDeclaration(const std::string& line)
 	return std::regex_search(line, resourceStart);
 }
 
+// Match the Slang package resolver so metadata, includes, and stage code use the same branches.
+const std::unordered_map<std::string, std::string> SlangDefines {
+	{ "__VERSION__", "450" }, { "PARAMETER_UNIFORM", "1" }, { "GL_core_profile", "1" },
+	{ "_HAS_ORIGINALASPECT_UNIFORMS", "1" }, { "_HAS_FRAMETIME_UNIFORMS", "1" }
+};
+
 bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader, std::string& error)
 {
 	if (source.empty())
 		return true;
 	std::string preprocessed;
-	if (!preprocessShaderSource(source, { { "__VERSION__", "450" }, { "PARAMETER_UNIFORM", "1" },
-			{ "_HAS_ORIGINALASPECT_UNIFORMS", "1" }, { "_HAS_FRAMETIME_UNIFORMS", "1" } },
-			preprocessed, error))
+	if (!preprocessShaderSource(source, SlangDefines, preprocessed, error))
 		return false;
 	// Macro expansion has already happened. Keeping the definitions would expand
 	// normalized host symbols a second time in the backend compiler.
@@ -626,7 +631,10 @@ bool parseSlangFrontend(const std::string& shaderText, SlangShaderIR& shader, st
 	bool computeSeen = false;
 	enum class Stage { None, Vertex, Fragment, Compute } stage = Stage::None;
 
-	std::istringstream stream(shaderText);
+	std::string filteredSource;
+	if (!preprocessShaderSource(shaderText, SlangDefines, filteredSource, error, {}, {}, true, true))
+		return false;
+	std::istringstream stream(filteredSource);
 	std::string rawLine;
 	while (std::getline(stream, rawLine)) {
 		const std::string line = trim(stripComments(rawLine, inBlockComment));

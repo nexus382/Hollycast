@@ -152,32 +152,23 @@ std::vector<std::string> splitChoiceLabels(const std::string& values)
 	return labels;
 }
 
-std::string samplerTexture(const ReShadeSampler& sampler)
+bool isSourceTexture(const ReShadeEffect& effect, const reshadefx::texture& texture, const std::string& sampler)
 {
-	std::smatch match;
-	if (std::regex_search(sampler.definition, match,
-			std::regex(R"(\bTexture\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*))",
-					std::regex::icase)))
-		return match[1].str();
-	return sampler.name;
-}
-
-bool isSourceTexture(const ReShadeEffect& effect, const std::string& texture, const std::string& sampler)
-{
-	const std::string lowerTexture = lowercase(texture);
-	const std::string lowerSampler = lowercase(sampler);
-	if (lowerTexture == "source" || lowerTexture == "sourcetex" || lowerTexture == "backbuffer"
-			|| lowerTexture == "backbuffertex" || lowerSampler == "source" || lowerSampler == "sourcesampler"
-			|| lowerSampler == "backbuffer")
-		return true;
 	const auto resource = std::find_if(effect.textures.begin(), effect.textures.end(), [&](const ReShadeTexture& value) {
-		return value.name == texture;
+		return value.name == texture.name;
 	});
-	if (resource == effect.textures.end())
+	if (resource != effect.textures.end())
+		for (const auto& annotation : resource->annotations)
+			if (lowercase(annotation.name) == "source")
+				return lowercase(annotation.value) == "color";
+	// A writer in any technique can provide a named texture to another layer.
+	if (texture.render_target || texture.storage_access)
 		return false;
-	return std::any_of(resource->annotations.begin(), resource->annotations.end(), [](const ReShadeAnnotation& annotation) {
-		return lowercase(annotation.name) == "source" && lowercase(annotation.value) == "color";
-	});
+	const std::string lowerTexture = lowercase(texture.name);
+	const std::string lowerSampler = lowercase(sampler);
+	return lowerTexture == "source" || lowerTexture == "sourcetex" || lowerTexture == "backbuffer"
+			|| lowerTexture == "backbuffertex" || lowerSampler == "source" || lowerSampler == "sourcesampler"
+			|| lowerSampler == "backbuffer";
 }
 
 size_t renderTargetProducer(const reshadefx::effect_module& module, size_t techniqueIndex, size_t consumer,
@@ -669,22 +660,24 @@ bool extractReShadeFxPass(const ReShadeEffect& effect, reshadefx::codegen& compi
 				[&](const ReShadeSampler& candidate) { return candidate.name == sampler.name; });
 		if (metadata == effect.samplers.end())
 			return fail(error, "ReShade FX compiler returned an unknown sampler.");
-		const std::string texture = samplerTexture(*metadata);
 		const auto textureInfo = std::find_if(module.textures.begin(), module.textures.end(),
 				[&](const reshadefx::texture& candidate) { return candidate.unique_name == sampler.texture_name; });
+		if (textureInfo == module.textures.end())
+			return fail(error, "ReShade FX compiler returned an unknown sampler texture.");
+		const std::string& texture = textureInfo->name;
+		const std::string semantic = lowercase(textureInfo->semantic);
+		const size_t producer = renderTargetProducer(module, techniqueIndex, passIndex, sampler.texture_name);
 		SlangResource resource;
 		resource.type = sampler.type.texture_dimension() == 1 ? SlangResourceType::Sampler1D
 				: sampler.type.texture_dimension() == 3 ? SlangResourceType::Sampler3D : SlangResourceType::Sampler2D;
 		resource.numericType = sampler.type.is_integral() ? (sampler.type.is_signed() ? ShaderNumericType::SignedInteger : ShaderNumericType::UnsignedInteger) : ShaderNumericType::Float;
 		resource.name = sampler.name;
 		resource.alias = texture;
-		if (textureInfo != module.textures.end() && lowercase(textureInfo->semantic) == "depth")
+		if (semantic == "depth")
 			resource.convention = SlangResourceConvention::Depth;
-		else if ((textureInfo != module.textures.end() && lowercase(textureInfo->semantic) == "color")
-				|| isSourceTexture(effect, texture, sampler.name))
+		else if (semantic == "color" || isSourceTexture(effect, *textureInfo, sampler.name))
 			resource.convention = SlangResourceConvention::Source;
 		else {
-			const size_t producer = renderTargetProducer(module, techniqueIndex, passIndex, sampler.texture_name);
 			resource.convention = producer != InvalidShaderPass && producer >= passIndex
 					? SlangResourceConvention::Feedback : SlangResourceConvention::PassAlias;
 		}

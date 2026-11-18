@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include "effect_lexer.hpp"
 #include <locale>
+#include <unordered_map>
 
 TEST(ReShadeCompilerTest, ExtractsDistinctPassesFromOneCompiledTechnique)
 {
@@ -32,6 +33,52 @@ TEST(ReShadeCompilerTest, ExtractsDistinctPassesFromOneCompiledTechnique)
 		EXPECT_FLOAT_EQ(0.5f, sources[i].parameters[0].value);
 	}
 	EXPECT_NE(sources[0].fragment, sources[1].fragment);
+}
+
+TEST(ReShadeCompilerTest, PrefersExplicitTextureBindingsOverSourceSamplerNames)
+{
+	const std::string text = R"(
+texture2D SourceTex;
+texture2D Source;
+texture2D BloomTarget;
+texture2D OtherLayerTarget;
+texture2D BackBufferTex < source = "palette.png"; >;
+texture2D SceneColor : COLOR;
+texture2D SceneDepth : DEPTH;
+sampler2D SourceSampler { Texture = BloomTarget; };
+sampler2D BackBuffer { Texture = BackBufferTex; };
+sampler2D OtherLayerSampler { Texture = OtherLayerTarget; };
+sampler2D ColorSampler { Texture = SceneColor; };
+sampler2D DepthSampler { Texture = SceneDepth; };
+sampler2D SceneSampler { Texture = SourceTex; };
+sampler2D LegacySampler { Texture = Source; };
+float4 Produce() : SV_Target { return 1.0; }
+float4 Read(float2 uv : TEXCOORD0) : SV_Target {
+	return tex2D(SourceSampler, uv) + tex2D(OtherLayerSampler, uv) + tex2D(BackBuffer, uv)
+		+ tex2D(ColorSampler, uv) + tex2D(DepthSampler, uv) + tex2D(SceneSampler, uv) + tex2D(LegacySampler, uv);
+}
+technique Main {
+	pass { PixelShader = Produce; RenderTarget = BloomTarget; }
+	pass { PixelShader = Read; }
+}
+)";
+	postprocess::ShaderPassSource source;
+	std::string error;
+	ASSERT_TRUE(postprocess::compileReShadeFxPass(text, 0, 1, source, error)) << error;
+	using Convention = postprocess::SlangResourceConvention;
+	std::unordered_map<std::string, Convention> conventions;
+	for (const auto& resource : source.slangResources)
+		conventions.emplace(resource.alias, resource.convention);
+	const std::unordered_map<std::string, Convention> expected {
+		{ "BloomTarget", Convention::PassAlias },
+		{ "OtherLayerTarget", Convention::PassAlias },
+		{ "BackBufferTex", Convention::PassAlias },
+		{ "SceneColor", Convention::Source },
+		{ "SceneDepth", Convention::Depth },
+		{ "Source", Convention::Source },
+		{ "SourceTex", Convention::Source },
+	};
+	EXPECT_EQ(expected, conventions);
 }
 
 TEST(ReShadeCompilerTest, PreservesIntegerVectorControlsAndSignedViewportBounds)

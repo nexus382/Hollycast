@@ -1041,8 +1041,23 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 					const uint32_t requestedFrame = frame.frameCount - (config.previousFrame ? 1u : 0u);
 					auto& source = targets[config.previousPass][config.previousOutput][requestedFrame % programs[config.previousPass].historyDepth];
 					if (source.initialized && source.renderedFrame == requestedFrame && source.width == destination.width
-							&& source.height == destination.height && source.depth == destination.depth && source.type == destination.type && source.format == destination.format)
-						deviceContext->CopySubresourceRegion(destination.resource(), 0, 0, 0, 0, source.resource(), 0, nullptr);
+							&& source.height == destination.height && source.depth == destination.depth && source.type == destination.type && source.format == destination.format) {
+						if (source.type == postprocess::SlangResourceType::Sampler2DArray) {
+							D3D11_TEXTURE2D_DESC sourceDesc {};
+							D3D11_TEXTURE2D_DESC destinationDesc {};
+							source.texture->GetDesc(&sourceDesc);
+							destination.texture->GetDesc(&destinationDesc);
+							// Writers may have different mip counts, so each slice has its own subresource index.
+							for (UINT slice = 0; slice < sourceDesc.ArraySize; ++slice) {
+								const UINT sourceBase = D3D11CalcSubresource(0, slice, sourceDesc.MipLevels);
+								const UINT destinationBase = D3D11CalcSubresource(0, slice, destinationDesc.MipLevels);
+								deviceContext->CopySubresourceRegion(destination.resource(), destinationBase, 0, 0, 0,
+										source.resource(), sourceBase, nullptr);
+							}
+						} else {
+							deviceContext->CopySubresourceRegion(destination.resource(), 0, 0, 0, 0, source.resource(), 0, nullptr);
+						}
+					}
 				}
 			}
 			if (program.pass.renderState.clearRenderTargets) {

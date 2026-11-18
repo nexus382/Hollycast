@@ -46,6 +46,45 @@ TEST(SlangFrontendTest, ParsesTypedParametersStagesAndConventionalResources)
 	EXPECT_NE(std::string::npos, shader.fragment.source.find("void main"));
 }
 
+TEST(SlangFrontendTest, IgnoresInactiveMetadataInCommonAndStageScopes)
+{
+	const std::string source = R"(#version 450
+#define SELECTED 2
+#if SELECTED == 1
+#pragma parameter GAIN "Inactive" 0.2 0 1
+#pragma name "Inactive"
+#pragma stage compute
+#elif SELECTED == 2
+#pragma parameter GAIN "Gain" 0.5 0 1
+#pragma name "Active"
+#else
+#pragma alias InactiveAlias
+#endif
+#pragma stage vertex
+#define VERTEX_ONLY 1
+void main() { gl_Position = vec4(0.0); }
+#pragma stage fragment
+#ifdef VERTEX_ONLY
+#pragma format R8_UNORM
+uniform sampler2D InactiveTexture;
+#else
+#pragma format R8G8B8A8_UNORM
+uniform sampler2D Source;
+#endif
+layout(location = 0) out vec4 Color;
+void main() { Color = texture(Source, vec2(0.5)); }
+)";
+	postprocess::SlangShaderIR shader;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseSlangFrontend(source, shader, error)) << error;
+	EXPECT_EQ("Active", shader.displayName);
+	EXPECT_EQ("R8G8B8A8_UNORM", shader.format);
+	ASSERT_EQ(1u, shader.parameters.size());
+	EXPECT_EQ("Gain", shader.parameters[0].label);
+	ASSERT_EQ(1u, shader.resources.size());
+	EXPECT_EQ("Source", shader.resources[0].name);
+}
+
 TEST(SlangFrontendTest, RejectsMalformedParametersAndResources)
 {
 	postprocess::SlangShaderIR shader;

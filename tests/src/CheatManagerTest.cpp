@@ -10,6 +10,11 @@
 #include "hw/sh4/sh4_mem.h"
 #include "rend/transform_matrix.h"
 
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
+
 class CheatManagerTest : public ::testing::Test {
 protected:
 	void SetUp() override
@@ -67,6 +72,56 @@ cheats = "1"
 	ASSERT_EQ(4u, mgr.cheats[0].repeatAddressIncrement);
 	ASSERT_EQ(16u, mgr.cheats[0].repeatValueIncrement);
 	ASSERT_EQ(7890u, mgr.cheats[0].destAddress);
+}
+
+TEST_F(CheatManagerTest, TestImportedWidescreenOverride)
+{
+	const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+	const std::string gameId = "TESTWIDESCREEN-" + std::to_string(nonce);
+	const std::string filename = gameId + ".cht";
+	const std::string imported = R"(cheats = "2"
+cheat0_address = "1234"
+cheat0_cheat_type = "1"
+cheat0_desc = "Widescreen"
+cheat0_enable = "true"
+cheat0_widescreen = "true"
+cheat0_notes = "Preserve this custom field"
+cheat1_address = "1234"
+cheat1_cheat_type = "1"
+cheat1_desc = "Widescreen"
+cheat1_widescreen = "false"
+)";
+	{
+		std::ofstream output(filename, std::ios::binary);
+		output << imported;
+		ASSERT_TRUE(output.good());
+	}
+
+	CheatManager mgr;
+	mgr.reset(gameId);
+	mgr.loadCheatFile(filename);
+	ASSERT_EQ(2u, mgr.cheatCount());
+	EXPECT_TRUE(mgr.cheatEnabled(0));
+	EXPECT_TRUE(mgr.cheatWidescreen(0));
+	EXPECT_FALSE(mgr.cheatWidescreen(1));
+	mgr.setCheatWidescreen(0, false);
+	mgr.setCheatWidescreen(1, true);
+
+	CheatManager reloaded;
+	reloaded.reset(gameId);
+	ASSERT_EQ(2u, reloaded.cheatCount());
+	EXPECT_TRUE(reloaded.cheatEnabled(0));
+	EXPECT_FALSE(reloaded.cheatWidescreen(0));
+	EXPECT_TRUE(reloaded.cheatWidescreen(1));
+	EXPECT_FALSE(reloaded.hasManualWidescreenCheat());
+
+	{
+		std::ifstream input(filename, std::ios::binary);
+		const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+		EXPECT_EQ(imported, contents);
+	}
+	std::remove(filename.c_str());
+	config::deleteEntry("cheats", gameId);
 }
 
 TEST_F(CheatManagerTest, TestManualWidescreenPresentation)

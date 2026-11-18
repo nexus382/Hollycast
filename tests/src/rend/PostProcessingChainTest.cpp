@@ -303,7 +303,7 @@ TEST(PostProcessingChainTest, LoadsReferencedPresetsWithinSelectedShaderFolder)
 			<< "#pragma parameter GAIN \"Gain\" 0.5 0 1 0.1\n"
 			"void main() { FragColor = texture(Source, vTexCoord) * GAIN; }\n";
 	std::ofstream(directory.path / "base" / "original.glslp")
-			<< "shaders = 1\nshader0 = ../shared.glsl\nparameters = GAIN\nGAIN = 0.25\n";
+			<< "shaders = 1\nshader0 = ../shared.glsl\nGAIN = 0.25\n";
 	const auto selected = directory.path / "custom" / "selected.glslp";
 	std::ofstream(selected) << "#reference \"../base/original.glslp\"\nGAIN = 0.75\n";
 	postprocess::ShaderChain chain;
@@ -2806,6 +2806,62 @@ TEST(PostProcessingChainTest, DecodesThreeDimensionalCubeLutsWithValidatedEntryC
 	EXPECT_FALSE(postprocess::loadShaderTexture(texture, data, error));
 }
 
+TEST(PostProcessingChainTest, ResolvesIndexedSlangLookupShapeBeforePreflight)
+{
+	ShaderResourceDirectory directory;
+	std::ofstream(directory.path / "lookup.cube") << "LUT_3D_SIZE 2\n"
+			"0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+	std::ofstream(directory.path / "stage.slang")
+			<< "#version 450\nlayout(binding = 0) uniform sampler3D User0;\n"
+			"void main() { FragColor = texture(User0, vec3(0.5)); }\n";
+	const auto preset = directory.path / "lookup.slangp";
+	std::ofstream(preset) << "shaders = 1\nshader0 = stage.slang\ntextures = Lookup\nLookup = lookup.cube\n";
+
+	postprocess::ShaderChain chain;
+	std::string error;
+	ASSERT_TRUE(postprocess::loadShaderChain(preset.string(), chain, error)) << error;
+	ASSERT_EQ(1u, chain.textures.size());
+	EXPECT_EQ(postprocess::SlangResourceType::Sampler3D, chain.textures[0].type);
+	ASSERT_TRUE(postprocess::preflightShaderAssets(chain, error)) << error;
+}
+
+TEST(PostProcessingChainTest, ValidatesReShadeMultiRenderTargetDimensions)
+{
+	ShaderResourceDirectory directory;
+	const auto path = directory.path / "targets.fx";
+	const auto writeEffect = [&](const char* firstWidth, const char* secondWidth) {
+		std::ofstream file(path);
+		file << "texture First { Width = " << firstWidth
+				<< "; Height = BUFFER_HEIGHT; Format = RGBA8; };\n"
+				"texture Second { ";
+		if (secondWidth != nullptr)
+			file << "Width = " << secondWidth << "; ";
+		file << "Height = BUFFER_HEIGHT; Format = RGBA8; };\n"
+				"struct Outputs { float4 first : SV_Target0; float4 second : SV_Target1; };\n"
+				"Outputs MainPS() { Outputs output; output.first = (float4)1.0; output.second = (float4)0.5; return output; }\n"
+				"technique Main { pass { PixelShader = MainPS; RenderTarget0 = First; RenderTarget1 = Second; } }\n";
+	};
+	postprocess::ShaderChain chain;
+	std::string error;
+	int width = 0, height = 0;
+	const postprocess::ShaderFrameInfo frame {640, 480, 640, 480};
+	writeEffect("BUFFER_WIDTH", "BUFFER_WIDTH + 0");
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	ASSERT_TRUE(postprocess::resolveTargetSize(chain.passes[0], frame, width, height, error)) << error;
+	EXPECT_EQ(640, width);
+	writeEffect("1", nullptr);
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	ASSERT_TRUE(postprocess::resolveTargetSize(chain.passes[0], frame, width, height, error)) << error;
+	EXPECT_EQ(1, width);
+	writeEffect("BUFFER_WIDTH", nullptr);
+	ASSERT_TRUE(postprocess::loadShaderChain(path.string(), chain, error)) << error;
+	EXPECT_FALSE(postprocess::resolveTargetSize(chain.passes[0], frame, width, height, error));
+	EXPECT_NE(std::string::npos, error.find("matching dimensions"));
+	writeEffect("640", "320");
+	EXPECT_FALSE(postprocess::loadShaderChain(path.string(), chain, error));
+	EXPECT_NE(std::string::npos, error.find("matching dimensions"));
+}
+
 TEST(PostProcessingChainTest, RoutesSourceMipmapsAroundAuxiliaryEffectPasses)
 {
 	postprocess::ShaderChain chain; chain.passes.resize(3);
@@ -2813,6 +2869,24 @@ TEST(PostProcessingChainTest, RoutesSourceMipmapsAroundAuxiliaryEffectPasses)
 	chain.passes[2].useMipmaps = true;
 	const auto mipmaps = postprocess::resolveShaderPassOutputMipmaps(chain);
 	EXPECT_TRUE(mipmaps[0][0]); EXPECT_FALSE(mipmaps[1][0]);
+}
+
+TEST(PostProcessingChainTest, ProvisionsOriginalMipmapsForLaterPassesInALayer)
+{
+	postprocess::ShaderChain chain;
+	chain.passes.resize(3);
+	chain.passes[1].layerIndex = chain.passes[2].layerIndex = 1;
+	chain.passes[1].composeDisplayInput = true;
+	chain.passes[2].useMipmaps = true;
+	chain.passes[2].inputs.emplace_back().kind = postprocess::ShaderInputKind::Original;
+
+	EXPECT_FALSE(postprocess::shaderInputNeedsMipmaps(chain.passes));
+	EXPECT_TRUE(postprocess::shaderInputNeedsMipmaps(chain.passes, 1));
+	const auto mipmaps = postprocess::resolveShaderPassOutputMipmaps(chain);
+	EXPECT_TRUE(mipmaps[0][0]);
+	EXPECT_TRUE(mipmaps[1][0]);
+	chain.passes[0].updatesSource = false;
+	EXPECT_TRUE(postprocess::shaderInputNeedsMipmaps(chain.passes));
 }
 
 TEST(PostProcessingChainTest, ProvisionsInputMipmapsForConsumersAfterAuxiliaryPasses)
@@ -2958,7 +3032,8 @@ TEST(PostProcessingChainTest, KeepsIndependentIncludeStateForGlslAndSlangStages)
 		const bool slang = std::string(extension) == ".slang";
 		const auto path = directory.path / (std::string("stages") + extension);
 		std::ofstream file(path);
-		if (slang) file << "#version 450\n";
+		if (slang)
+			file << "#version 450\n#if 0\n#pragma format invalid\n#endif\n#pragma format R8G8B8A8_UNORM\n";
 		file << (slang ? "#pragma stage vertex\n" : "#if defined(VERTEX)\n")
 			<< "#include \"shared.inc\"\n#define VERTEX_ONLY\n"
 			"void main() { gl_Position = vec4(stageValue()); }\n"

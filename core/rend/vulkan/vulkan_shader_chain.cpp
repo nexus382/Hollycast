@@ -435,6 +435,8 @@ void VulkanShaderChain::ensureResources()
 
 	VulkanContext *context = VulkanContext::Instance();
 	renderPass = createRenderPass({ vk::Format::eR8G8B8A8Unorm });
+	// Display composition can leave borders outside the copied viewport.
+	displayRenderPass = createRenderPass({ vk::Format::eR8G8B8A8Unorm }, false, false, true);
 
 	const uint32_t storageLimit = std::min(MaxShaderStorage, context->GetPhysicalDevice().getProperties().limits.maxPerStageDescriptorStorageImages);
 	std::vector<vk::DescriptorSetLayoutBinding> bindings(MaxShaderInputs + 1 + storageLimit);
@@ -466,9 +468,10 @@ void VulkanShaderChain::ensureResources()
 	copyFragmentShader = ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,
 			VulkanSource().addSource(fragmentPreamble({}, {}, 1)).addSource("void main() { gl_FragColor = texture(Source, vTexCoord); }").generate());
 	const postprocess::ShaderPass copyPass;
+	// The fullscreen copy pipeline also works with the compatible clear-load display pass.
 	copyPipeline = createPipeline({}, copyFragmentShader.get(), renderPass.get(), copyPass, 1);
 	copyRotatePipeline = createPipeline(VulkanContext::Instance()->GetShaderManager()->GetQuadVertexShader(true),
-			copyFragmentShader.get(), renderPass.get(), copyPass, 1);
+			copyFragmentShader.get(), displayRenderPass.get(), copyPass, 1);
 }
 
 vk::UniqueRenderPass VulkanShaderChain::createRenderPass(const std::vector<vk::Format>& formats, bool preserveContents, bool stencil, bool clear) const
@@ -549,6 +552,8 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 		std::string& error)
 {
 	VulkanContext *context = VulkanContext::Instance();
+	const auto finalSourcePass = std::find_if(chain.passes.rbegin(), chain.passes.rend(),
+			[](const postprocess::ShaderPass& pass) { return pass.updatesSource; });
 	candidate.reserve(chain.passes.size());
 	for (size_t passIndex = 0; passIndex < chain.passes.size(); ++passIndex) {
 		const postprocess::ShaderPass& pass = chain.passes[passIndex];
@@ -643,6 +648,11 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 			const vk::Format targetFormat = resolveTargetFormat(output.targetFormat, output.targetFormatName, error);
 			if (targetFormat == vk::Format::eUndefined)
 				return false;
+			if (finalSourcePass != chain.passes.rend() && &pass == &*finalSourcePass && program.outputs.empty()
+					&& postprocess::shaderFormatNumericType(output.targetFormatName) != postprocess::ShaderNumericType::Float) {
+				error = "Vulkan cannot present an integer shader output. Add an explicit final pass that outputs a normalized or floating-point format.";
+				return false;
+			}
 			const vk::FormatFeatureFlags formatFeatures = context->GetPhysicalDevice().getFormatProperties(targetFormat).optimalTilingFeatures;
 			if (!(formatFeatures & (program.outputs.size() >= pass.colorOutputCount ? vk::FormatFeatureFlagBits::eStorageImage : vk::FormatFeatureFlagBits::eColorAttachment)) || !(formatFeatures & vk::FormatFeatureFlagBits::eSampledImage)) {
 				error = "Vulkan does not support a requested post-processing target format.";
@@ -1331,6 +1341,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	vk::Extent2D inputExtent = extent;
 	vk::Extent2D originalExtent = extent;
 	bool inputHasMipmaps = false;
+	bool originalHasMipmaps = false;
 	bool displaySpaceReached = false;
 	if (displayTargets.size() <= imageIndex)
 		displayTargets.resize(imageIndex + 1);
@@ -1366,12 +1377,12 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 			if (!displayTarget.framebuffer) {
 				const std::array<vk::ImageView, 1> attachments = { displayTarget.renderView.get() };
 				displayTarget.framebuffer = context->GetDevice().createFramebufferUnique(
-						vk::FramebufferCreateInfo({}, renderPass.get(), attachments,
+						vk::FramebufferCreateInfo({}, displayRenderPass.get(), attachments,
 							displayExtent.width, displayExtent.height, 1));
 			}
 			const vk::ClearValue clearColor(vk::ClearColorValue(frame.presentationExpanded
 					? frame.presentation.borderColor : std::array<float, 4> { 0.f, 0.f, 0.f, 1.f }));
-			commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(renderPass.get(), displayTarget.framebuffer.get(),
+			commandBuffer.beginRenderPass(vk::RenderPassBeginInfo(displayRenderPass.get(), displayTarget.framebuffer.get(),
 					vk::Rect2D({}, displayExtent), clearColor), vk::SubpassContents::eInline);
 			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
 					frame.rotationPending ? copyRotatePipeline.get() : copyPipeline.get());
@@ -1398,7 +1409,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					const vk::FormatFeatureFlags required = vk::FormatFeatureFlagBits::eColorAttachment | vk::FormatFeatureFlagBits::eSampledImage;
 					if ((features & required) != required)
 						throw std::runtime_error("Vulkan rotated depth requires sampled R32F color-attachment support.");
-					depthRotateRenderPass = createRenderPass({ vk::Format::eR32Sfloat });
+					depthRotateRenderPass = createRenderPass({ vk::Format::eR32Sfloat }, false, false, true);
 				}
 				if (rotateDepth && !depthRotatePipeline)
 					depthRotatePipeline = createPipeline(context->GetShaderManager()->GetQuadVertexShader(true),
@@ -1459,7 +1470,8 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		originalView = inputView;
 		inputExtent = displayExtent;
 		originalExtent = displayExtent;
-		inputHasMipmaps = needsMipmaps;
+		inputHasMipmaps = displayTarget.mipLevels > 1;
+		originalHasMipmaps = inputHasMipmaps;
 		passFrame.sourceWidth = frame.viewportWidth;
 		passFrame.sourceHeight = frame.viewportHeight;
 		composedDisplayInput = true;
@@ -1534,7 +1546,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		sourceTarget.initialized = true;
 		if (sourceNeedsMipmaps) {
 			inputView = sourceTarget.sampleView.get();
-			inputHasMipmaps = sourceNeedsMipmaps;
+			inputHasMipmaps = sourceTarget.mipLevels > 1;
 		}
 	}
 	for (size_t index = 0; index < programs.size(); ++index) {
@@ -1544,6 +1556,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		if (index == 0 || program.pass.layerIndex != programs[index - 1].pass.layerIndex) {
 			originalView = inputView;
 			originalExtent = inputExtent;
+			originalHasMipmaps = inputHasMipmaps;
 		}
 		const int outputWidth = static_cast<int>(program.targetWidth);
 		const int outputHeight = static_cast<int>(program.targetHeight);
@@ -1693,6 +1706,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				break;
 			case postprocess::ShaderInputKind::Original:
 				view = originalView;
+				resourceHasMipmaps = originalHasMipmaps;
 				break;
 			case postprocess::ShaderInputKind::Depth:
 				view = effectiveDepthView;
@@ -1713,7 +1727,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 				if (binding.input.sourcePass == postprocess::InvalidShaderPass) {
 					const Target *history = requestedFrameAvailable ? findSourceHistoryTarget(requestedFrame) : nullptr;
 					view = history != nullptr ? history->sampleView.get() : originalView;
-					resourceHasMipmaps = history != nullptr && history->mipLevels > 1;
+					resourceHasMipmaps = history != nullptr ? history->mipLevels > 1 : originalHasMipmaps;
 					break;
 				}
 				const TargetSet *historySet = requestedFrameAvailable
@@ -1742,8 +1756,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					history = &image;
 				}
 				view = history != nullptr && history->initialized ? history->sampleView.get() : originalView;
-				resourceHasMipmaps = history != nullptr && history->initialized
-						&& programs[binding.input.sourcePass].outputs[binding.input.sourceOutput].needsMipmaps;
+				resourceHasMipmaps = history != nullptr && history->initialized ? history->mipLevels > 1 : originalHasMipmaps;
 				break;
 			}
 			case postprocess::ShaderInputKind::LookupTexture: {
@@ -1899,7 +1912,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		if (program.pass.updatesSource) {
 		inputView = targetSet.outputs[0].sampleView.get();
 		inputExtent = targetExtent;
-		inputHasMipmaps = program.outputs[0].needsMipmaps;
+		inputHasMipmaps = targetSet.outputs[0].mipLevels > 1;
 		passFrame.sourceWidth = outputWidth;
 		passFrame.sourceHeight = outputHeight;
 		}
@@ -1937,6 +1950,7 @@ void VulkanShaderChain::term()
 	linearSampler.reset();
 	pipelineLayout.reset();
 	descriptorSetLayout.reset();
+	displayRenderPass.reset();
 	renderPass.reset();
 	configuredPaths.clear();
 	configuredGeneration = 0;

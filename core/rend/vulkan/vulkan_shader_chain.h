@@ -150,6 +150,7 @@ private:
 	std::deque<std::map<std::pair<uint32_t, uint32_t>, StencilTarget>> stencilTargets;
 
 	vk::UniqueRenderPass renderPass;
+	vk::UniqueRenderPass displayRenderPass;
 	vk::UniqueDescriptorSetLayout descriptorSetLayout;
 	vk::UniquePipelineLayout pipelineLayout;
 	vk::UniqueSampler linearSampler;

@@ -182,7 +182,7 @@ jobs:
 
       - name: Package app (windows)
         run: |
-          powershell Compress-Archive artifact/bin/Hollycast.exe artifact/bin/Hollycast.zip
+          powershell -Command "Compress-Archive -Path artifact/bin/Hollycast.exe, artifact/share/licenses/Hollycast/ReShadeFX-LICENSE.md, artifact/share/licenses/Hollycast/SPIRV-Cross-LICENSE.txt -DestinationPath artifact/bin/Hollycast.zip"
           rm artifact/bin/Hollycast.exe
           cp artifact/bin/Hollycast.zip "${{ matrix.config.packagePath }}"
         if: matrix.config.name == 'x86_64-w64-mingw32'

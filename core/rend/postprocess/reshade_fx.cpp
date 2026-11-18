@@ -739,7 +739,13 @@ bool preprocess(const std::string& source,
 			continue;
 		}
 		if (!active()) {
-			if (preserveSource && command != "include") output += line + '\n';
+			// Slang reads these pragmas before preprocessing individual stages.
+			// Keep inactive shader code for that later pass, but omit its metadata.
+			const std::string pragma = stageScopes && command == "pragma"
+					? argument.substr(0, argument.find_first_of(" \t")) : std::string();
+			const bool slangMetadata = pragma == "stage" || pragma == "parameter" || pragma == "name"
+					|| pragma == "alias" || pragma == "format";
+			if (preserveSource && command != "include" && !slangMetadata) output += line + '\n';
 			continue;
 		}
 		if (command == "include") {

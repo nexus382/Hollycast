@@ -162,6 +162,8 @@ struct ShaderPassOutput {
 	// version, including the preceding frame when this is the first writer.
 	uint32_t previousPass = InvalidShaderPass, previousOutput = 0;
 	bool previousFrame = false;
+	// Additional FX color attachments must resolve to the primary target's size.
+	std::string widthExpression, heightExpression;
 };
 
 struct ShaderParameter {

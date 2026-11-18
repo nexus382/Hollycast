@@ -317,13 +317,23 @@ bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std:
 	return true;
 }
 
-bool configureReShadeOutputFormat(const ReShadeEffect& effect, ShaderPassOutput& output, std::string& error)
+bool configureReShadeColorOutput(const ReShadeEffect& effect, ShaderPassOutput& output, std::string& error)
 {
 	const auto texture = std::find_if(effect.textures.begin(), effect.textures.end(), [&](const ReShadeTexture& value) {
 		return value.name == output.alias;
 	});
 	if (texture == effect.textures.end())
 		return true;
+	// Named ReShade textures default each omitted dimension to one texel.
+	output.widthExpression = "1";
+	output.heightExpression = "1";
+	static const std::regex width(R"(\bWidth\s*=\s*([^;]+))", std::regex::icase);
+	static const std::regex height(R"(\bHeight\s*=\s*([^;]+))", std::regex::icase);
+	std::smatch dimension;
+	if (std::regex_search(texture->definition, dimension, width))
+		output.widthExpression = trim_ws(dimension[1].str(), " \t\r\n");
+	if (std::regex_search(texture->definition, dimension, height))
+		output.heightExpression = trim_ws(dimension[1].str(), " \t\r\n");
 	std::smatch formatMatch;
 	if (!std::regex_search(texture->definition, formatMatch,
 			std::regex(R"(\bFormat\s*=\s*([A-Za-z0-9_]+)\s*;)", std::regex::icase)))
@@ -1336,8 +1346,20 @@ bool resolveTargetSize(const ShaderPass& pass, const ShaderFrameInfo& frame,
 	if (!resolveDimension(pass.scaleTypeX, pass.scaleX, frame.sourceWidth, frame.viewportWidth, width, error)
 			|| !resolveDimension(pass.scaleTypeY, pass.scaleY, frame.sourceHeight, frame.viewportHeight, height, error))
 		return false;
+	const int defaultWidth = width;
+	const int defaultHeight = height;
 	if (!pass.widthExpression.empty() && !resolveShaderSizeExpression(pass.widthExpression, frame, width, error)) return false;
 	if (!pass.heightExpression.empty() && !resolveShaderSizeExpression(pass.heightExpression, frame, height, error)) return false;
+	for (size_t index = 1; index < pass.colorOutputCount && index < pass.outputs.size(); ++index) {
+		const auto& output = pass.outputs[index];
+		int attachmentWidth = defaultWidth;
+		int attachmentHeight = defaultHeight;
+		if ((!output.widthExpression.empty() && !resolveShaderSizeExpression(output.widthExpression, frame, attachmentWidth, error))
+				|| (!output.heightExpression.empty() && !resolveShaderSizeExpression(output.heightExpression, frame, attachmentHeight, error)))
+			return false;
+		if (attachmentWidth != width || attachmentHeight != height)
+			return fail(error, "ReShade FX color render targets in the same pass must have matching dimensions.");
+	}
 	if (!pass.outputs.empty() && pass.outputs.front().type == SlangResourceType::Sampler1D)
 		height = 1;
 	error.clear();
@@ -1354,32 +1376,51 @@ std::vector<std::vector<bool>> resolveShaderPassOutputMipmaps(const ShaderChain&
 		for (size_t outputIndex = 0; outputIndex < pass.outputs.size(); ++outputIndex)
 			requirements[passIndex][outputIndex] = pass.outputs[outputIndex].useMipmaps;
 	}
+	size_t sourcePass = chain.passes.size();
+	size_t originalPass = sourcePass;
 	for (size_t consumerIndex = 0; consumerIndex < chain.passes.size(); ++consumerIndex) {
 		const ShaderPass& consumer = chain.passes[consumerIndex];
-		if (!consumer.useMipmaps)
-			continue;
-		size_t source = consumerIndex;
-		while (source > 0 && !chain.passes[source - 1].updatesSource) --source;
-		if (source > 0) requirements[source - 1][0] = true;
-		for (const ShaderPassInput& input : consumer.inputs) {
-			if ((input.kind != ShaderInputKind::PassOutput && input.kind != ShaderInputKind::History
-						&& input.kind != ShaderInputKind::Feedback)
-					|| input.sourcePass >= requirements.size()
-					|| input.sourceOutput >= requirements[input.sourcePass].size())
-				continue;
-			requirements[input.sourcePass][input.sourceOutput] = true;
+		// Composition may be skipped when the image already fills the viewport.
+		// Keep the actual source producer provisioned for that case.
+		if (consumerIndex == 0 || consumer.composeDisplayInput
+				|| consumer.layerIndex != chain.passes[consumerIndex - 1].layerIndex)
+			originalPass = sourcePass;
+		if (consumer.useMipmaps) {
+			if (sourcePass < requirements.size())
+				requirements[sourcePass][0] = true;
+			for (const ShaderPassInput& input : consumer.inputs) {
+				if (input.kind == ShaderInputKind::Original && originalPass < requirements.size())
+					requirements[originalPass][0] = true;
+				if ((input.kind == ShaderInputKind::PassOutput || input.kind == ShaderInputKind::History
+							|| input.kind == ShaderInputKind::Feedback)
+						&& input.sourcePass < requirements.size()
+						&& input.sourceOutput < requirements[input.sourcePass].size())
+					requirements[input.sourcePass][input.sourceOutput] = true;
+			}
 		}
+		if (consumer.updatesSource)
+			sourcePass = consumerIndex;
 	}
 	return requirements;
 }
 
 bool shaderInputNeedsMipmaps(const std::vector<ShaderPass>& passes, size_t firstPass)
 {
-	// Auxiliary writers leave Source intact. Its first real consumer can occur
-	// later in the graph, so allocate the needed mip levels before rendering.
+	// Auxiliary writers leave Source intact. A layer's Original stays the same
+	// after Source changes, so a later pass can still require these mip levels.
+	bool sourceReplaced = false;
+	bool tracksOriginal = firstPass == 0 || (firstPass < passes.size()
+			&& (passes[firstPass].composeDisplayInput || passes[firstPass].layerIndex != passes[firstPass - 1].layerIndex));
 	for (size_t index = firstPass; index < passes.size(); ++index) {
-		if (passes[index].useMipmaps) return true;
-		if (passes[index].updatesSource) break;
+		const auto& pass = passes[index];
+		if (index != firstPass && (pass.composeDisplayInput || pass.layerIndex != passes[index - 1].layerIndex))
+			tracksOriginal = !sourceReplaced;
+		if (sourceReplaced && !tracksOriginal)
+			break;
+		if (pass.useMipmaps && (!sourceReplaced || std::any_of(pass.inputs.begin(), pass.inputs.end(),
+				[](const ShaderPassInput& input) { return input.kind == ShaderInputKind::Original; })))
+			return true;
+		sourceReplaced |= pass.updatesSource;
 	}
 	return false;
 }
@@ -2195,7 +2236,7 @@ static bool loadPresetDocument(const std::string& path, const std::string& root,
 }
 
 static bool loadPresetFile(const std::string& presetPath, ShaderFormat format,
-		ShaderChain& chain, std::string& error)
+		ShaderChain& chain, std::string& error, config::IniFile* mergedPreset = nullptr)
 {
 	std::string root = parentPath(presetPath);
 	const std::string configuredRoot = shaderLibraryDirectory();
@@ -2209,9 +2250,12 @@ static bool loadPresetFile(const std::string& presetPath, ShaderFormat format,
 		return false;
 	std::string presetText;
 	document.save(presetText);
-	return format == ShaderFormat::SlangPreset
+	const bool loaded = format == ShaderFormat::SlangPreset
 			? parsePreset(presetText, presetPath, ShaderFormat::Slang, "Slang preset", ".slang", chain, error, root)
 			: parsePreset(presetText, presetPath, ShaderFormat::GLSL, "GLSL preset", ".glsl", chain, error, root);
+	if (loaded && mergedPreset != nullptr)
+		*mergedPreset = std::move(document);
+	return loaded;
 }
 
 bool loadSlangPreset(const std::string& presetPath, ShaderChain& chain, std::string& error)
@@ -2353,10 +2397,10 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 {
 	chain = {};
 	std::vector<ShaderPassSource> effectSources;
+	config::IniFile preset;
 	const ShaderFormat format = detectFormat(path);
 	if (format == ShaderFormat::SlangPreset || format == ShaderFormat::GlslPreset) {
-		if (!(format == ShaderFormat::SlangPreset ? loadSlangPreset(path, chain, error)
-				: loadGlslPreset(path, chain, error)))
+		if (!loadPresetFile(path, format, chain, error, &preset))
 			return false;
 	}
 	else if (format == ShaderFormat::ReShadeFX) {
@@ -2412,17 +2456,6 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			pass.format = format;
 			pass.effectTechnique = static_cast<uint32_t>(selectedTechnique);
 			pass.effectPass = static_cast<uint32_t>(passIndex);
-			const auto targetName = [&]() -> std::string {
-				std::smatch match;
-				if (std::regex_search(effectPass.stateBlock, match, std::regex(R"(RenderTarget0?\s*=\s*(\w+))", std::regex::icase))) return match[1].str();
-				return {};
-			}();
-			for (const auto& texture : effect.textures) if (texture.name == targetName) {
-				std::smatch size;
-				if (std::regex_search(texture.definition, size, std::regex(R"(\bWidth\s*=\s*([^;]+))"))) pass.widthExpression = size[1].str();
-				if (std::regex_search(texture.definition, size, std::regex(R"(\bHeight\s*=\s*([^;]+))"))) pass.heightExpression = size[1].str();
-			}
-
 			const std::regex renderTarget(R"(\bRenderTarget([0-9]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)", std::regex::icase);
 			for (std::sregex_iterator it(effectPass.stateBlock.begin(), effectPass.stateBlock.end(), renderTarget), end; it != end; ++it) {
 				const std::string indexText = (*it)[1].str();
@@ -2443,9 +2476,22 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 				if (pass.outputs.front().alias.empty())
 					return fail(error, "ReShade FX MRT passes must define RenderTarget0.");
 				for (ShaderPassOutput& output : pass.outputs)
-					if (!configureReShadeOutputFormat(effect, output, error))
+					if (!configureReShadeColorOutput(effect, output, error))
 						return false;
-				pass.alias = pass.outputs.front().alias;
+				const auto& primary = pass.outputs.front();
+				pass.alias = primary.alias;
+				pass.widthExpression = primary.widthExpression;
+				pass.heightExpression = primary.heightExpression;
+				const auto differentConstants = [](const std::string& left, const std::string& right) {
+					uint32_t first, second;
+					return parseShaderUnsigned(left, first) && parseShaderUnsigned(right, second) && first != second;
+				};
+				// The FX compiler uses placeholder sizes. Reject known mismatches here
+				// and compare dynamic sizes when a backend resolves the pass geometry.
+				for (const ShaderPassOutput& output : pass.outputs)
+					if (differentConstants(pass.widthExpression, output.widthExpression)
+							|| differentConstants(pass.heightExpression, output.heightExpression))
+						return fail(error, "ReShade FX color render targets in the same pass must have matching dimensions.");
 			}
 			else
 				pass.alias = effectPass.name.empty() ? "FxPass" + std::to_string(passIndex) : effectPass.name;
@@ -2603,35 +2649,55 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 		if (passSourceBytes > MaxExpandedShaderSourceBytes - totalSourceBytes)
 			return fail(error, "Compiled shader sources exceed the 32 MiB chain limit.");
 		totalSourceBytes += passSourceBytes;
-		for (const auto& resource : passSource.slangResources)
-			for (auto& texture : chain.textures) if (texture.name == resource.alias) {
-				SlangResourceType sampledType = resource.type;
-				if (sampledType >= SlangResourceType::Texture1D && sampledType <= SlangResourceType::TextureCube)
-					sampledType = static_cast<SlangResourceType>(static_cast<unsigned>(sampledType) - static_cast<unsigned>(SlangResourceType::Texture1D));
-				const auto type = std::make_pair(sampledType, resource.numericType);
-				const auto [previous, inserted] = lookupTypes.emplace(texture.name, type);
-				if (!inserted && previous->second != type)
-					return fail(error, "Lookup texture '" + texture.name + "' uses incompatible types between passes.");
-				texture.type = sampledType; texture.numericType = resource.numericType;
-			}
-		for (const auto& resource : passSource.slangResources)
-			if (resource.numericType != ShaderNumericType::Float) {
-				for (auto& sampler : pass.samplers)
-					if (sampler.bindingName == resource.name) { sampler.minLinear = sampler.magLinear = sampler.mipLinear = false; sampler.useMipmaps = false; }
-				for (auto& texture : chain.textures)
-					if (texture.name == resource.alias) { texture.linearFilter = false; texture.useMipmaps = false; }
-			}
 		chain.sources.push_back(std::move(passSource));
+	}
+	// Simple reference presets can override reflected scalars without a legacy parameters list.
+	for (auto& parameter : chain.parameters) {
+		if (parameter.hasPresetValue || parameter.componentCount != 1 || !parameter.hostSource.empty()
+				|| !preset.hasEntry("", parameter.name))
+			continue;
+		if (!getPresetFloat(preset, parameter.name, parameter.value, parameter.value, error))
+			return false;
+		parameter.values[0] = parameter.value;
+		parameter.hasPresetValue = true;
 	}
 	// Later passes may supply a named feedback target via their own pragma.
 	// Resolve the graph after every source has contributed its alias metadata.
 	std::unordered_set<std::string> aliases;
 	for (size_t index = 0; index < chain.passes.size(); ++index) {
-		if (format != ShaderFormat::ReShadeFX && !chain.passes[index].alias.empty()
-				&& !aliases.emplace(chain.passes[index].alias).second)
-			return fail(error, "Shader chain contains duplicate pass alias '" + chain.passes[index].alias + "'.");
+		ShaderPass& pass = chain.passes[index];
+		if (format != ShaderFormat::ReShadeFX && !pass.alias.empty() && !aliases.emplace(pass.alias).second)
+			return fail(error, "Shader chain contains duplicate pass alias '" + pass.alias + "'.");
 		if (!resolveSlangResourceInputs(chain, index, chain.sources[index], error, allowExternalFxTargets))
 			return false;
+		for (const ShaderPassInput& input : pass.inputs) {
+			const bool integer = input.numericType != ShaderNumericType::Float;
+			if (integer) {
+				for (auto& sampler : pass.samplers) {
+					if (sampler.bindingName == input.bindingName) {
+						sampler.minLinear = sampler.magLinear = sampler.mipLinear = false;
+						sampler.useMipmaps = false;
+					}
+				}
+			}
+			if (input.kind != ShaderInputKind::LookupTexture)
+				continue;
+			// Indexed User bindings already carry the resolved preset texture name.
+			auto texture = std::find_if(chain.textures.begin(), chain.textures.end(),
+					[&](const ShaderPresetTexture& lookup) { return lookup.name == input.resourceName; });
+			if (texture == chain.textures.end())
+				return fail(error, "Unknown preset texture '" + input.resourceName + "'.");
+			const auto type = std::make_pair(input.type, input.numericType);
+			const auto [previous, inserted] = lookupTypes.emplace(texture->name, type);
+			if (!inserted && previous->second != type)
+				return fail(error, "Lookup texture '" + texture->name + "' uses incompatible types between passes.");
+			texture->type = input.type;
+			texture->numericType = input.numericType;
+			if (integer) {
+				texture->linearFilter = false;
+				texture->useMipmaps = false;
+			}
+		}
 	}
 	const uint32_t parameterComponents = std::accumulate(chain.parameters.begin(), chain.parameters.end(), 0u,
 			[](uint32_t count, const ShaderParameter& parameter) { return count + parameter.componentCount; });
