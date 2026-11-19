@@ -12,7 +12,7 @@ public:
 	MetalShaderChain(id<MTLDevice> device, id<MTLCommandQueue> queue);
 	~MetalShaderChain();
 	bool render(id<MTLTexture> source, id<MTLTexture> depth,
-			const postprocess::ShaderFrameInfo& frame, id<MTLTexture>& output,
+			const postprocess::ShaderFrameInfo& frame, id<MTLTexture> __strong& output,
 			bool& transformed, bool& fullPresentation);
 private:
 	struct Impl;

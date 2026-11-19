@@ -204,7 +204,7 @@ struct MetalShaderChain::Impl {
 			bool rotate = false, const ShaderPresentation *presentation = nullptr, bool sceneDepth = false, bool smooth = false);
 	void generateMipmaps(id<MTLCommandBuffer> command, id<MTLTexture> texture);
 	bool render(id<MTLTexture> source, id<MTLTexture> depth, ShaderFrameInfo frame,
-			id<MTLTexture>& output, bool& transformed, bool& fullPresentation);
+			id<MTLTexture> __strong& output, bool& transformed, bool& fullPresentation);
 };
 
 void MetalShaderChain::Impl::resetTargets()
@@ -588,7 +588,7 @@ bool MetalShaderChain::Impl::update()
 }
 
 bool MetalShaderChain::Impl::render(id<MTLTexture> source, id<MTLTexture> depth, ShaderFrameInfo frame,
-		id<MTLTexture>& output, bool& transformed, bool& fullPresentation)
+		id<MTLTexture> __strong& output, bool& transformed, bool& fullPresentation)
 {
 	output = nil; transformed = fullPresentation = false;
 	if (!update() || !source || frame.sourceWidth <= 0 || frame.sourceHeight <= 0) return false;
@@ -863,7 +863,7 @@ MetalShaderChain::MetalShaderChain(id<MTLDevice> device, id<MTLCommandQueue> que
 	: impl(std::make_unique<Impl>(device, queue)) {}
 MetalShaderChain::~MetalShaderChain() = default;
 bool MetalShaderChain::render(id<MTLTexture> source, id<MTLTexture> depth, const ShaderFrameInfo& frame,
-		id<MTLTexture>& output, bool& transformed, bool& fullPresentation)
+		id<MTLTexture> __strong& output, bool& transformed, bool& fullPresentation)
 {
 	@autoreleasepool { return impl->render(source, depth, frame, output, transformed, fullPresentation); }
 }
