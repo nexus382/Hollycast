@@ -5280,7 +5280,7 @@ void gui_togglePause()
 void gui_setState(GuiState newState)
 {
 	if (newState != GuiState::Closed)
-		rewind_state::releaseRequests();
+		rewind_state::setButtonInputAllowed(false);
 	if (newState != GuiState::Main)
 		pendingRackLaunch.reset();
 	if (gui_state != newState)
@@ -5296,6 +5296,7 @@ void gui_setState(GuiState newState)
 	gui_state = newState;
 	if (newState == GuiState::Closed)
 	{
+		rewind_state::setButtonInputAllowed(true);
 		clearThumbnailCache();
 		// If the game isn't rendering any frame, these flags won't be updated and keyboard/mouse input will be ignored.
 		// So we force them false here. They will be set in the next ImGUI::NewFrame() anyway

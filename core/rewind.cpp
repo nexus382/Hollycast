@@ -37,6 +37,7 @@ namespace
 RewindBuffer history;
 std::vector<u8> scratch;
 std::mutex requestMutex;
+bool buttonInputAllowed = false;
 std::unordered_map<const void*, unsigned> heldSources;
 std::atomic<bool> held{false};
 std::atomic<bool> stepRequested{false};
@@ -45,6 +46,13 @@ bool reversing = false;
 bool failed = false;
 bool configuredEnabled = false;
 int interval = 0, duration = 0, compression = -1;
+
+void clearRequestsLocked()
+{
+	heldSources.clear();
+	held.store(false, std::memory_order_relaxed);
+	stepRequested.store(false, std::memory_order_relaxed);
+}
 
 // Leave room for the emulator, renderer and compression workspace on devices
 // with a small address space or an OS-enforced application memory budget.
@@ -212,13 +220,25 @@ const char* unsupportedReason(bool checkThreadMode)
 }
 }
 
+void setButtonInputAllowed(bool allowed)
+{
+	const std::lock_guard<std::mutex> lock(requestMutex);
+	buttonInputAllowed = allowed;
+	if (!allowed)
+		clearRequestsLocked();
+}
+
 void setRequested(const void* source, bool pressed)
 {
 	if (source == nullptr)
 		return;
 	const std::lock_guard<std::mutex> lock(requestMutex);
 	if (pressed)
+	{
+		if (!buttonInputAllowed)
+			return;
 		++heldSources[source];
+	}
 	else
 	{
 		const auto it = heldSources.find(source);
@@ -238,9 +258,7 @@ void releaseSource(const void* source)
 void releaseRequests()
 {
 	const std::lock_guard<std::mutex> lock(requestMutex);
-	heldSources.clear();
-	held.store(false, std::memory_order_relaxed);
-	stepRequested.store(false, std::memory_order_relaxed);
+	clearRequestsLocked();
 }
 
 bool requested()

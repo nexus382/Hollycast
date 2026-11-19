@@ -17,6 +17,7 @@
 #ifndef LIBRETRO
 #include "../../shell/android-studio/flycast/src/main/jni/src/frontend_input_queue.h"
 #include "rewind.h"
+#include "ui/gui.h"
 #include "ui/gui_debugger.h"
 #include "ui/gui_util.h"
 #include "ui/imgui_driver.h"
@@ -319,8 +320,11 @@ TEST_F(AssemblyDebuggerTest, AndroidRewindPauseWaitsForRestoreAndQueuedSave)
     EventManager::listen(Event::LoadState, pauseOnRestore, &frontend);
     Sh4cntx.r[0] = 42;
     int source = 0;
+    rewind_state::setButtonInputAllowed(true);
     rewind_state::setRequested(&source, true);
     EXPECT_EQ(rewind_state::FrameAction::Restore, rewind_state::beforeFrame());
+    rewind_state::releaseSource(&source);
+    rewind_state::setButtonInputAllowed(!gui_is_open());
     EventManager::unlisten(Event::LoadState, pauseOnRestore, &frontend);
     EXPECT_EQ(0u, Sh4cntx.r[0]);
     EXPECT_EQ(pc, Sh4cntx.pc);

@@ -12,7 +12,11 @@ enum class FrameAction { Run, Restore, Hold };
 // Libretro frontends own rewind controls and state; shared engine hooks stay inert.
 inline void invalidate() {}
 inline void releaseRequests() {}
+inline void setButtonInputAllowed(bool) {}
 #else
+// Disallowing buttons also clears pending held and step requests.
+void setButtonInputAllowed(bool allowed);
+
 // Requests are refcounted per source so several inputs bound to Rewind on one
 // device, or several devices, cannot release each other's hold. Matching a
 // press with one release per bound input is the caller's responsibility;

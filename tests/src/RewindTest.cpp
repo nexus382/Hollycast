@@ -10,6 +10,7 @@
 #include "rewind.h"
 #include "serialize.h"
 #include "types.h"
+#include "ui/gui.h"
 
 #include <limits>
 #include <memory>
@@ -24,6 +25,7 @@ protected:
 	void SetUp() override
 	{
 		rewind_state::releaseRequests();
+		rewind_state::setButtonInputAllowed(true);
 		config::RewindEnable = true;
 		config::RewindInterval = 200;
 		config::RewindDuration = 30;
@@ -48,6 +50,7 @@ protected:
 	void TearDown() override
 	{
 		rewind_state::releaseRequests();
+		rewind_state::setButtonInputAllowed(!gui_is_open());
 		config::RewindEnable = previousRewindEnable;
 		config::RewindInterval = previousRewindInterval;
 		config::RewindDuration = previousRewindDuration;
@@ -102,6 +105,31 @@ TEST_F(RewindTest, ReleasingOneInputSourceDoesNotReleaseAnother)
 	rewind_state::setRequested(&keyboardSource, false);
 	EXPECT_TRUE(rewind_state::requested());
 	EXPECT_FALSE(rewind_state::requested(&keyboardSource));
+	EXPECT_TRUE(rewind_state::requested(&controllerSource));
+	rewind_state::setRequested(&controllerSource, false);
+	EXPECT_FALSE(rewind_state::requested());
+}
+
+TEST_F(RewindTest, MenuClearsAndBlocksButtonRequests)
+{
+	int keyboardSource = 0;
+	int controllerSource = 0;
+	rewind_state::setRequested(&keyboardSource, true);
+	rewind_state::setRequested(&controllerSource, true);
+	EXPECT_TRUE(rewind_state::requested(&keyboardSource));
+	EXPECT_TRUE(rewind_state::requested(&controllerSource));
+
+	rewind_state::setButtonInputAllowed(false);
+	EXPECT_FALSE(rewind_state::requested());
+	EXPECT_FALSE(rewind_state::requested(&keyboardSource));
+	EXPECT_FALSE(rewind_state::requested(&controllerSource));
+	rewind_state::setRequested(&keyboardSource, false);
+	rewind_state::setRequested(&controllerSource, true);
+	EXPECT_FALSE(rewind_state::requested());
+
+	rewind_state::setButtonInputAllowed(true);
+	EXPECT_FALSE(rewind_state::requested());
+	rewind_state::setRequested(&controllerSource, true);
 	EXPECT_TRUE(rewind_state::requested(&controllerSource));
 	rewind_state::setRequested(&controllerSource, false);
 	EXPECT_FALSE(rewind_state::requested());
