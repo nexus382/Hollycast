@@ -20,8 +20,8 @@
 #include "stdclass.h"
 #include "serialize.h"
 #include "oslib/i18n.h"
-#include "input/maplelinkregistry.h"
-#include "input/maplelink.h"
+#include "input/dreamlink/maplelinkregistry.h"
+#include "input/dreamlink/maplelink.h"
 #ifdef USE_HIKARU
 #include "hw/hikaru/frontend.h"
 #endif

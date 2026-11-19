@@ -27,12 +27,12 @@
 #include "types.h"
 #include "emulator.h"
 #include "../sdl_gamepad.h"
-#include "sdldreamlink.h"
+#include "input/dreamlink/gamepad_dreamlink.h"
 
 #include <memory>
 #include <string>
 
-class DreamLinkGamepad : public SDLGamepad
+class DreamLinkSDLGamepad : public SDLGamepad
 {
 public:
 	const char* dreamLinkStatus();
@@ -43,14 +43,14 @@ public:
 	void close() override;
 
 protected:
-	DreamLinkGamepad(std::shared_ptr<SDLDreamLink> dreamlink, int maple_port, int joystick_idx, SDL_Joystick* sdl_joystick);
+	DreamLinkSDLGamepad(std::shared_ptr<GamepadDreamLink> dreamlink, int maple_port, int joystick_idx, SDL_Joystick* sdl_joystick);
 	std::shared_ptr<InputMapping> getDefaultMapping() override;
 	void setBaseDefaultMapping(const std::shared_ptr<InputMapping>& mapping) const;
 	virtual void setCustomMapping(const std::shared_ptr<InputMapping>& mapping) {}
 
-	std::shared_ptr<SDLDreamLink> dreamlink;
+	std::shared_ptr<GamepadDreamLink> dreamlink;
 	std::string device_guid;
 };
 
-std::shared_ptr<DreamLinkGamepad> createDreamLinkGamepad(int maple_port, int joystick_idx, SDL_Joystick* sdl_joystick);
+std::shared_ptr<DreamLinkSDLGamepad> createDreamLinkSDLGamepad(int maple_port, int joystick_idx, SDL_Joystick* sdl_joystick);
 #endif // USE_DREAMLINK_DEVICES
