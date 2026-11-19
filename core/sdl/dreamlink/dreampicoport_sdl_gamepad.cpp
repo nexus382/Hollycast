@@ -18,10 +18,10 @@
 	along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "dreampicoport.h"
+#include "dreampicoport_sdl_gamepad.h"
 
-#include "input/maplelink.h"
-#include "input/maplelinkregistry.h"
+#include "input/dreamlink/maplelink.h"
+#include "input/dreamlink/maplelinkregistry.h"
 
 #include "hw/maple/maple_devs.h"
 #include "hw/maple/maple_if.h"
@@ -69,6 +69,7 @@ namespace dream_pico_port
 constexpr size_t DPP_VMU_BLOCK_SIZE = 512;
 constexpr size_t DPP_VMU_BLOCK_COUNT = 256;
 constexpr size_t DPP_VMU_FLASH_SIZE = DPP_VMU_BLOCK_SIZE * DPP_VMU_BLOCK_COUNT;
+constexpr u32 DPP_DEVICE_CHANGE_BUTTON = 20;
 
 bool vmuIconCachingEnabled(const std::string& gameId)
 {
@@ -429,7 +430,7 @@ private:
 std::unordered_map<std::string, std::weak_ptr<dpp_api::DppDevice>> ApiDreamPicoPortComms::all_dpp_api_devices;
 std::mutex ApiDreamPicoPortComms::all_dpp_api_devices_mutex;
 
-class DreamPicoPort : public SDLDreamLink
+class DreamPicoPort : public GamepadDreamLink
 {
 	//! Duration to delay before trying to connect again
 	static constexpr std::chrono::milliseconds CONNECT_RETRY_DELAY = std::chrono::milliseconds(1000);
@@ -510,7 +511,7 @@ class DreamPicoPort : public SDLDreamLink
 
 public:
     DreamPicoPort(int bus, int joystick_idx, SDL_Joystick* sdl_joystick) :
-		SDLDreamLink(true),
+		GamepadDreamLink(true),
 		software_bus(bus),
 		hw_info(parseHardwareInfo(joystick_idx, sdl_joystick)),
 		activeGameId(settings.content.gameId),
@@ -577,7 +578,7 @@ public:
 	}
 
 	void onGameStarted() override {
-		SDLDreamLink::onGameStarted();
+		GamepadDreamLink::onGameStarted();
 		activeGameId = settings.content.gameId;
 		activeGameTitle = settings.content.title;
 		vmuMirrorSnapshotAvailable = false;
@@ -585,7 +586,7 @@ public:
 	}
 
 	void onGameTermination() override {
-		SDLDreamLink::onGameTermination();
+		GamepadDreamLink::onGameTermination();
 		if (!cacheVmuIconFromMirror())
 			cacheLoadedVmuIconFromHardware();
 		// Need a short delay to wait for last screen draw to complete
@@ -789,7 +790,7 @@ public:
 		if (update_required) {
 			return i18n::T("Firmware Update Required");
 		} else {
-			return SDLDreamLink::getIssueDescription();
+			return GamepadDreamLink::getIssueDescription();
 		}
 	}
 
@@ -1666,12 +1667,12 @@ u32 MapleLinkMainDevice::dma(u32 cmd)
 
 } // namespace dream_pico_port
 
-DreamPicoPortGamepad::DreamPicoPortGamepad(
+DreamPicoPortSDLGamepad::DreamPicoPortSDLGamepad(
 	int maple_port,
 	int joystick_idx,
 	SDL_Joystick* sdl_joystick
 ) :
-	DreamLinkGamepad(
+	DreamLinkSDLGamepad(
 		std::make_shared<dream_pico_port::DreamPicoPort>(
 			maple_port, joystick_idx, sdl_joystick), maple_port, joystick_idx, sdl_joystick)
 {
@@ -1694,7 +1695,7 @@ DreamPicoPortGamepad::DreamPicoPortGamepad(
 		set_maple_port(bus);
 }
 
-bool DreamPicoPortGamepad::identify(int deviceIndex)
+bool DreamPicoPortSDLGamepad::identify(int deviceIndex)
 {
 	char guid_str[33] {};
 	SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(deviceIndex), guid_str, sizeof(guid_str));
@@ -1706,7 +1707,7 @@ bool DreamPicoPortGamepad::identify(int deviceIndex)
 	return false;
 }
 
-void DreamPicoPortGamepad::setCustomMapping(const std::shared_ptr<InputMapping>& mapping)
+void DreamPicoPortSDLGamepad::setCustomMapping(const std::shared_ptr<InputMapping>& mapping)
 {
 	// Since this is a real DC controller, no deadzone adjustment is needed
 	mapping->dead_zone = 0.0f;
@@ -1720,11 +1721,11 @@ void DreamPicoPortGamepad::setCustomMapping(const std::shared_ptr<InputMapping>&
 	mapping->set_button(DC_DPAD2_RIGHT, 6);
 }
 
-const char *DreamPicoPortGamepad::get_button_name(u32 code)
+const char *DreamPicoPortSDLGamepad::get_button_name(u32 code)
 {
 	using namespace i18n;
 	switch (code) {
-		// Coincides with buttons setup in setDefaultMapping
+		// Coincides with buttons setup in setCustomMapping
 		case 2: return "C";
 		case 5: return "Z";
 		case 10: return "D";
@@ -1733,6 +1734,12 @@ const char *DreamPicoPortGamepad::get_button_name(u32 code)
 		case 7: return T("DPad2 Left");
 		case 6: return T("DPad2 Right");
 
+		// Alternate directional buttons exposed by DreamPicoPort firmware.
+		case 24: return T("Alt Up");
+		case 25: return T("Alt Down");
+		case 26: return T("Alt Left");
+		case 27: return T("Alt Right");
+
 		// These buttons are normally not physically accessible but are mapped on DreamPicoPort
 		case 12: return T("VMU1 A");
 		case 15: return T("VMU1 B");
@@ -1740,14 +1747,15 @@ const char *DreamPicoPortGamepad::get_button_name(u32 code)
 		case 17: return T("VMU1 Down");
 		case 18: return T("VMU1 Left");
 		case 19: return T("VMU1 Right");
+		case dream_pico_port::DPP_DEVICE_CHANGE_BUTTON: return T("Device Change");
 
-		default: return DreamLinkGamepad::get_button_name(code); // default name
+		default: return DreamLinkSDLGamepad::get_button_name(code); // default name
 	}
 }
 
-bool DreamPicoPortGamepad::gamepad_btn_input(u32 code, bool pressed)
+bool DreamPicoPortSDLGamepad::gamepad_btn_input(u32 code, bool pressed)
 {
-	if (code == 20 && !pressed)
+	if (code == dream_pico_port::DPP_DEVICE_CHANGE_BUTTON && !pressed)
 	{
 		dream_pico_port::DreamPicoPort *picoPort = dynamic_cast<dream_pico_port::DreamPicoPort*>(dreamlink.get());
 		if (picoPort)
@@ -1756,5 +1764,5 @@ bool DreamPicoPortGamepad::gamepad_btn_input(u32 code, bool pressed)
 		}
 	}
 
-	return DreamLinkGamepad::gamepad_btn_input(code, pressed);
+	return DreamLinkSDLGamepad::gamepad_btn_input(code, pressed);
 }

@@ -21,18 +21,19 @@
 
 #pragma once
 
-#include <input/dreamlink.h>
+#include "dreamlink.h"
 
-class SDLDreamLink : public BaseDreamLink
+//! This is the base class for a DreamLink associated with a gamepad.
+class GamepadDreamLink : public BaseDreamLink
 {
 public:
     //! Constructor
     //! @param[in] storageSupported True if this DreamLink supports physical VMU memory
-    inline SDLDreamLink(bool storageSupported) : BaseDreamLink(storageSupported)
+    inline GamepadDreamLink(bool storageSupported) : BaseDreamLink(storageSupported)
     {}
 
     //! Destructor (virtual, default)
-    virtual ~SDLDreamLink() = default;
+    virtual ~GamepadDreamLink() = default;
 
 	//! Changes the selected maple port is changed by the user
 	virtual void changeBus(int newBus) = 0;

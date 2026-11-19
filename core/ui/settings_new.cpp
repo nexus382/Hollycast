@@ -41,10 +41,10 @@
 #include "widgets/widgets.h"
 #include "version.h"
 #include "wsi/context.h"
-#include "input/dreampotato.h"
+#include "input/dreamlink/dreampotato.h"
 #include "input/gamepad_device.h"
 #include "input/keyboard_device.h"
-#include "input/maplelinkregistry.h"
+#include "input/dreamlink/maplelinkregistry.h"
 #include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/maple/maple_cfg.h"
@@ -55,7 +55,7 @@
 #include "hw/hikaru/roms.h"
 #endif
 #ifdef USE_DREAMLINK_DEVICES
-#include "sdl/dreamlink/dreamlinkgamepad.h"
+#include "sdl/dreamlink/dreamlink_sdl_gamepad.h"
 #endif
 #include "log/LogManager.h"
 #include "hw/mem/addrspace.h"
@@ -8572,7 +8572,7 @@ void renderControlsTab()
 
 				ImGui::TableSetColumnIndex(2);
 #if defined(USE_DREAMLINK_DEVICES)
-				DreamLinkGamepad* dreamLinkGamepad = dynamic_cast<DreamLinkGamepad*>(gamepad.get());
+				DreamLinkSDLGamepad* dreamLinkGamepad = dynamic_cast<DreamLinkSDLGamepad*>(gamepad.get());
 				if (dreamLinkGamepad != nullptr) {
 					ImGui::Text("%s", dreamLinkGamepad->dreamLinkStatus());
 				}
