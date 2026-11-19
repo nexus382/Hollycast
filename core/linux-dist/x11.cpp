@@ -15,6 +15,7 @@
 #include "wsi/gl_context.h"
 #include "hw/maple/maple_devs.h"
 #include "emulator.h"
+#include "rewind.h"
 
 #include "x11_keyboard.h"
 
@@ -208,6 +209,8 @@ void input_x11_handle()
 				if (capturing_mouse)
 					x11_uncapture_mouse();
 				capturing_mouse = false;
+				// A held rewind key won't deliver its release without focus.
+				rewind_state::releaseRequests();
 				break;
 
 			case ButtonPress:

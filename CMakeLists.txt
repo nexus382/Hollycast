@@ -1215,6 +1215,10 @@ target_sources(${PROJECT_NAME} PRIVATE
 		core/types.h
 		core/debug/gdb_server.h)
 
+if(NOT LIBRETRO)
+	target_sources(${PROJECT_NAME} PRIVATE core/rewind.cpp core/util/rewind_buffer.cpp)
+endif()
+
 set(IMGUI_BACKENDS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/core/deps/imgui/backends")
 
 if(USE_VULKAN)

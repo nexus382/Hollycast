@@ -369,6 +369,10 @@ extern Option<bool> AutoLoadState;
 extern Option<bool> AutoSaveState;
 extern Option<bool> SaveProtection;
 extern Option<int, false> SavestateSlot;
+extern Option<bool> RewindEnable;
+extern Option<int> RewindInterval;
+extern Option<int> RewindCompression;
+extern Option<int> RewindDuration;
 extern Option<bool> ForceFreePlay;
 extern Option<bool, false> FetchBoxart;
 extern Option<int, false> ArtworkProvider; // 0 -> TheGamesDB, 1 -> ScreenScraper (then LaunchBox, TGDB), 2 -> LaunchBox.

@@ -19,6 +19,7 @@
  */
 #include "maple_devs.h"
 #include "maple_if.h"
+#include "rewind.h"
 #include "hw/naomi/naomi_cart.h"
 #include <xxhash.h>
 #include "oslib/oslib.h"
@@ -1957,6 +1958,9 @@ void MIEImpl::handle_86_subcommand()
 			//printState(Command,buffer_in,buffer_in_len);
 			address = address % sizeof(eeprom);
 			size = std::min((int)sizeof(eeprom) - address, size);
+			// The EEPROM file is rewritten below; keep rewind history from
+			// crossing this durable write like other save boundaries.
+			rewind_state::invalidate();
 			memcpy(eeprom + address, dma_buffer_in + 4, size);
 
 			std::string eeprom_file = getEepromPath();

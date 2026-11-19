@@ -20,6 +20,8 @@ constexpr u64 SH4_MAIN_CLOCK = 200000000;
 u64 testTicks = 1;
 u64 sh4_sched_now64() { return testTicks; }
 std::time_t testTime(std::time_t *out) { const std::time_t now = 1700000000; if(out)*out=now; return now; }
+unsigned rewindInvalidationCount = 0;
+namespace rewind_state { void invalidate() { ++rewindInvalidationCount; } }
 struct { struct { bool online = false; } network; } settings;
 std::string testCardPath;
 namespace hostfs { std::string getVmuPath(const char *, bool) { return testCardPath; } }
@@ -81,8 +83,11 @@ void testMapleSync(Address address)
  check(queue('1', "short").find("HTTP/1.1 400") == 0, "Truncated card was accepted");
  check(queue('1', progress).find("HTTP/1.1 202") == 0, "Progress was not queued");
  check(state('1').find("HTTP/1.1 202") == 0 && vmu.flash_data[123] == 0x55, "HTTP thread changed live flash or falsely acknowledged persistence");
+ const unsigned invalidationsBeforeProgressSave = rewindInvalidationCount;
  check(!vmu.linkStatus(), "Checkpoint reinserted VMU before return");
- check(state('1').find("HTTP/1.1 200") == 0 && vmu.flash_data[123] == 42, "Emulation thread failed to commit progress");
+ const auto progressSave = state('1');
+ check(progressSave.find("HTTP/1.1 200") == 0 && vmu.flash_data[123] == 42, "Emulation thread failed to commit progress");
+ check(rewindInvalidationCount == invalidationsBeforeProgressSave + 1, "Successful phone VMU persistence did not invalidate rewind history");
  check(queue('1', progress).find("HTTP/1.1 200") == 0, "Saved operation was reapplied");
  auto readDisk = [](const std::string& path) { std::ifstream input(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(input), {}); };
  check(readDisk(diskPath) == progress, "Progress was acknowledged before the VMU file was flushed");
@@ -115,7 +120,11 @@ void testMapleSync(Address address)
  testCardPath = diskPath + "/missing/card";
  progress[123] = 44;
  check(queue('3', progress).find("HTTP/1.1 202") == 0, "Failed-write fixture not queued");
- check(!vmu.linkStatus() && state('3').find("HTTP/1.1 500") == 0, "Disk error was reported as saved");
+ const unsigned invalidationsBeforeFailedSave = rewindInvalidationCount;
+ check(!vmu.linkStatus(), "VMU reconnected before failed phone persistence");
+ const auto failedSave = state('3');
+ check(failedSave.find("HTTP/1.1 500") == 0, "Disk error was reported as saved");
+ check(rewindInvalidationCount == invalidationsBeforeFailedSave, "Failed phone VMU persistence invalidated rewind history");
  check(vmu.flash_data[123] == 43 && readDisk(diskPath)[123] == 43, "Disk failure changed live data");
  testCardPath = diskPath;
  check(queue('4', progress).find("HTTP/1.1 202") == 0, "Disk retry failed to queue");

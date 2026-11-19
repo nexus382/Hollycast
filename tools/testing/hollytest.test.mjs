@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { HollycastHarness, controllerState, summarizePerformance, agentInvocation,
-  validateSettingsPage, validateUiTarget, validateUiClickOptions, validateMappingArgs, validateUiExpectedFields } from './hollytest.mjs';
+  validateSettingsPage, validateUiTarget, validateUiClickOptions, validateMappingArgs, validateRewindArgs, validateUiExpectedFields } from './hollytest.mjs';
 import { runBenchmark, summarizeOsd, renderBenchmarkReport, benchmarkSettings, auditConditions } from './benchmark.mjs';
 
 const capture = () => ({ domain: 'host_present_interval_ms', samples_ms: [10, 20, 30, 40],
@@ -121,6 +121,38 @@ test('settings, UI selectors, vectors, and mapping inputs validate exact contrac
     { action: 'axis', code: 1, value: 32768 }, { action: 'create', extra: 1 }]) assert.throws(() => validateMappingArgs(bad));
   assert.deepEqual(validateUiExpectedFields({ kind: 'vector2', value: [1, 2] }), { kind: 'vector2', value: [1, 2] });
   assert.throws(() => validateUiExpectedFields({ value: [[1], [2]] }));
+  assert.deepEqual(validateRewindArgs({ held: true }), { held: true });
+  for (const bad of [{}, { held: 'true' }, { held: 1 }, { held: true, extra: 1 }, [], null])
+    assert.throws(() => validateRewindArgs(bad));
+});
+
+test('rewind profile keys are written and the native hold round-trips', async t => {
+  const { harness } = await fixture(t, { profile: { config: {
+    'Dreamcast.RewindEnable': true, 'Dreamcast.RewindInterval': 250,
+    'Dreamcast.RewindCompression': 2, 'Dreamcast.RewindDuration': 10, 'rend.ThreadedRendering': false } } });
+  const config = await fs.readFile(path.join(harness.directory, 'home', 'emu.cfg'), 'utf8');
+  for (const line of ['Dreamcast.RewindEnable = yes', 'Dreamcast.RewindInterval = 250',
+    'Dreamcast.RewindCompression = 2', 'Dreamcast.RewindDuration = 10'])
+    assert.ok(config.includes(line), `missing profile line: ${line}`);
+
+  await fs.writeFile(path.join(harness.directory, 'ready.json'), JSON.stringify(
+    { version: 1, session: harness.manifest.session, pid: 1, capabilities: ['controller'] }));
+  await assert.rejects(harness.rewind({ held: true }), /does not expose rewind/);
+
+  await fs.writeFile(path.join(harness.directory, 'ready.json'), JSON.stringify(
+    { version: 1, session: harness.manifest.session, pid: 1, capabilities: ['rewind'] }));
+  let heldByHarness = false;
+  const requests = await fakeBridge(t, harness, async request => {
+    if (request.op !== 'rewind') return {};
+    heldByHarness = request.args.held;
+    return { enabled: true, held_by_harness: heldByHarness, snapshots: heldByHarness ? 3 : 4 };
+  });
+  const held = await harness.rewind({ held: true });
+  assert.equal(held.held_by_harness, true);
+  const released = await harness.rewind({ held: false });
+  assert.equal(released.held_by_harness, false);
+  assert.deepEqual(requests.filter(request => request.op === 'rewind').map(request => request.args),
+    [{ held: true }, { held: false }]);
 });
 
 test('settings page command checks fresh readback when exposed', async t => {
