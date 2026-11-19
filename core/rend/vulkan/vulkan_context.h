@@ -117,7 +117,7 @@ public:
 	void ResetGpuTiming();
 	void Present() noexcept;
 	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-			vk::Image depthImage = {}, vk::ImageView depthView = {}) noexcept;
+			vk::Image depthImage = {}, vk::ImageView depthView = {}, bool hikaru = false) noexcept;
 	void PresentLastFrame();
 	bool GetLastFrame(std::vector<u8>& data, int& width, int& height);
 
@@ -223,7 +223,7 @@ private:
 	void InitImgui();
 	void DoSwapAutomation();
 	void DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-			bool presentationTransformApplied = false, bool fullPresentation = false);
+			bool presentationTransformApplied, bool fullPresentation, bool precomposed);
 	void pollGpuTiming();
 	vk::SurfaceKHR GetSurface() const { return *surface; }
 
@@ -319,6 +319,8 @@ private:
 	float lastFrameAR = 0.f;
 	bool lastFramePresentationTransformApplied = false;
 	bool lastFrameFullPresentation = false;
+	bool lastFramePrecomposed = false;
+	bool lastFramePrecomposedRotation = false;
 
 	std::unique_ptr<VulkanOverlay> overlay;
 	std::vector<std::vector<std::unique_ptr<Deletable>>> inFlightObjects;

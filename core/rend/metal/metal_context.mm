@@ -53,6 +53,7 @@ struct MetalContext::Impl
 	id<MTLSamplerState> pointSampler = nil;
 	std::unique_ptr<MetalOverlay> overlay;
 	id<MTLTexture> lastFrame = nil;
+	std::weak_ptr<const HikaruFrameShader> hikaruFrameShader;
 	id<MTLTexture> shaderOutput = nil;
 	bool shaderTransformed = false, shaderFullPresentation = false;
 	std::array<int, 4> gameArea {};
@@ -248,10 +249,21 @@ std::string MetalContext::getDriverName() { return device.name.UTF8String ?: "Me
 std::string MetalContext::getDriverVersion() { return "Metal"; }
 void MetalContext::PresentFrame(id<MTLTexture> texture, float aspectRatio)
 {
+	presentFrame(texture, aspectRatio, {});
+}
+void MetalContext::PresentHikaruFrame(id<MTLTexture> texture, float aspectRatio,
+		const std::shared_ptr<const HikaruFrameShader>& shader)
+{
+	presentFrame(texture, aspectRatio, shader);
+}
+void MetalContext::presentFrame(id<MTLTexture> texture, float aspectRatio,
+		const std::shared_ptr<const HikaruFrameShader>& shader)
+{
 	if (texture)
 	{
 		impl->gameFramePending = true;
 		impl->lastFrame = texture;
+		impl->hikaruFrameShader = shader;
 		impl->shaderOutput = nil;
 		impl->shaderTransformed = impl->shaderFullPresentation = false;
 		impl->aspect = aspectRatio > 0 ? aspectRatio : (float)texture.width / texture.height;
@@ -384,8 +396,34 @@ void MetalContext::PresentLastFrame()
 		// Reprocess the retained scene once per presentation so paused settings
 		// and live parameter edits use the same path as running gameplay. Submit
 		// those commands before this presentation buffer on the shared queue.
-		bool showFrame = impl->lastFrame && (!gui_is_open() || renderer);
-		if (showFrame && renderer) showFrame = renderer->RenderLastFrame();
+		const bool guiOpen = gui_is_open();
+		bool showFrame = impl->lastFrame && (!guiOpen || renderer);
+		bool hikaruCanvas = false;
+		int hikaruWidth = 0, hikaruHeight = 0, hikaruTop = 0, hikaruX = 0, hikaruY = 0;
+		if (showFrame && !guiOpen)
+		{
+			if (auto shader = impl->hikaruFrameShader.lock())
+			{
+				const int width = (int)drawable.texture.width, height = (int)drawable.texture.height;
+				hikaruTop = std::clamp(getScaledTopInset(), 0, height - 1);
+				hikaruWidth = std::min(width, (int)impl->lastFrame.width);
+				hikaruHeight = std::min(height - hikaruTop, (int)impl->lastFrame.height);
+				if (config::IntegerScale)
+				{
+					getWindowboxDimensions(hikaruWidth, hikaruHeight, impl->aspect, hikaruX, hikaruY, config::Rotate90);
+					hikaruWidth = std::max(1, hikaruWidth - 2 * hikaruX);
+					hikaruHeight = std::max(1, hikaruHeight - 2 * hikaruY);
+				}
+				id<MTLTexture> output = nil;
+				bool transformed = false;
+				hikaruCanvas = (*shader)(impl->lastFrame, hikaruWidth, hikaruHeight, output, transformed);
+				if (hikaruCanvas)
+					SetShaderOutput(output ? output : impl->lastFrame, output && transformed, true);
+				else if (impl->shaderOutput)
+					SetShaderOutput(nil, false, false);
+			}
+		}
+		if (showFrame && renderer && !hikaruCanvas) showFrame = renderer->RenderLastFrame();
 		MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
 		pass.colorAttachments[0].texture = renderTarget;
 		pass.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -395,28 +433,36 @@ void MetalContext::PresentLastFrame()
 		if (showFrame)
 		{
 			int width = (int)drawable.texture.width, height = (int)drawable.texture.height;
-			int top = std::min(height - 1, std::max(0, getScaledTopInset())), dx = 0, dy = 0;
+			int top = hikaruCanvas ? hikaruTop : std::clamp(getScaledTopInset(), 0, height - 1);
+			int dx = 0, dy = 0;
 			int areaWidth = width, areaHeight = height - top;
 			if (impl->gameArea[2] > 0 && impl->gameArea[3] > 0) {
 				areaWidth = std::min(width, impl->gameArea[2]);
 				top = std::clamp(impl->gameArea[1], 0, height - 1);
 				areaHeight = std::min(height - top, impl->gameArea[3]);
 			}
-			getWindowboxDimensions(areaWidth, areaHeight, impl->aspect, dx, dy, config::Rotate90);
+			if (!hikaruCanvas)
+				getWindowboxDimensions(areaWidth, areaHeight, impl->aspect, dx, dy, config::Rotate90);
 			const int contentWidth = std::max(1, areaWidth - 2 * dx), contentHeight = std::max(1, areaHeight - 2 * dy);
 			int vw = contentWidth, vh = contentHeight;
-			if (impl->shaderFullPresentation) { dx = dy = 0; vw = areaWidth; vh = areaHeight; }
+			if (hikaruCanvas) { dx = hikaruX; dy = hikaruY; vw = hikaruWidth; vh = hikaruHeight; }
+			else if (impl->shaderFullPresentation) { dx = dy = 0; vw = areaWidth; vh = areaHeight; }
 			performance_overlay::recordOutputViewport(vw, vh);
 			[enc setViewport:MTLViewport{(double)dx, (double)(top + dy), (double)vw, (double)vh, 0, 1}];
-			float shiftX, shiftY;
-			getVideoShift(shiftX, shiftY);
-			float x = 2.f * shiftX / impl->lastFrame.width;
-			float y = 2.f * shiftY / impl->lastFrame.height;
-			float scale[4] = {config::Rotate90 ? y : x, config::Rotate90 ? x : -y,
-					config::Rotate90 && !impl->shaderTransformed ? 1.f : 0.f, 0.f};
-			if (impl->shaderFullPresentation) {
-				scale[0] *= (float)contentWidth / areaWidth;
-				scale[1] *= (float)contentHeight / areaHeight;
+			// Hikaru's canvas already positions the guest image, but still needs any pending rotation.
+			float scale[4] = {0.f, 0.f, config::Rotate90 && !impl->shaderTransformed ? 1.f : 0.f, 0.f};
+			if (!hikaruCanvas)
+			{
+				float shiftX, shiftY;
+				getVideoShift(shiftX, shiftY);
+				float x = 2.f * shiftX / impl->lastFrame.width;
+				float y = 2.f * shiftY / impl->lastFrame.height;
+				scale[0] = config::Rotate90 ? y : x;
+				scale[1] = config::Rotate90 ? x : -y;
+				if (impl->shaderFullPresentation) {
+					scale[0] *= (float)contentWidth / areaWidth;
+					scale[1] *= (float)contentHeight / areaHeight;
+				}
 			}
 			[enc setScissorRect:MTLScissorRect{(NSUInteger)dx, (NSUInteger)(top + dy), (NSUInteger)vw, (NSUInteger)vh}];
 			[enc setRenderPipelineState:impl->pipeline];

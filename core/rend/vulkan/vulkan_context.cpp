@@ -1285,7 +1285,7 @@ static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspect
 }
 
 void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-		bool presentationTransformApplied, bool fullPresentation)
+		bool presentationTransformApplied, bool fullPresentation, bool precomposed)
 {
 	const vk::Rect2D contentRect = getPresentRect(width, height, aspectRatio);
 	const vk::Rect2D presentRect = fullPresentation ? getPresentRect(width, height, aspectRatio, true) : contentRect;
@@ -1297,31 +1297,34 @@ void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& exten
 		{ -1,  1, 0, 0, 1 },
 		{  1,  1, 0, 1, 1 },
 	};
-	float shiftX, shiftY;
-	getVideoShift(shiftX, shiftY);
-	// The guest shift is relative to the source image and follows its rotation.
-	shiftX /= extent.width;
-	shiftY /= extent.height;
-	if (presentationTransformApplied && config::Rotate90) {
-		const float sourceShiftX = shiftX;
-		shiftX = shiftY;
-		shiftY = -sourceShiftX;
+	if (!precomposed) {
+		float shiftX, shiftY;
+		getVideoShift(shiftX, shiftY);
+		// The guest shift is relative to the source image and follows its rotation.
+		shiftX /= extent.width;
+		shiftY /= extent.height;
+		if (presentationTransformApplied && config::Rotate90) {
+			const float sourceShiftX = shiftX;
+			shiftX = shiftY;
+			shiftY = -sourceShiftX;
+		}
+		if (fullPresentation) {
+			shiftX *= static_cast<float>(contentRect.extent.width) / presentRect.extent.width;
+			shiftY *= static_cast<float>(contentRect.extent.height) / presentRect.extent.height;
+		}
+		vtx[0].x = vtx[2].x = -1.f + shiftX * 2.f;
+		vtx[1].x = vtx[3].x = vtx[0].x + 2;
+		vtx[0].y = vtx[1].y = -1.f + shiftY * 2.f;
+		vtx[2].y = vtx[3].y = vtx[0].y + 2;
 	}
-	if (fullPresentation) {
-		shiftX *= static_cast<float>(contentRect.extent.width) / presentRect.extent.width;
-		shiftY *= static_cast<float>(contentRect.extent.height) / presentRect.extent.height;
-	}
-	vtx[0].x = vtx[2].x = -1.f + shiftX * 2.f;
-	vtx[1].x = vtx[3].x = vtx[0].x + 2;
-	vtx[0].y = vtx[1].y = -1.f + shiftY * 2.f;
-	vtx[2].y = vtx[3].y = vtx[0].y + 2;
 
 	vk::CommandBuffer commandBuffer = GetCurrentCommandBuffer();
 
 	static const float scopeColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	CommandBufferDebugScope _(commandBuffer, "DrawFrame", scopeColor);
 
-	const bool rotateAtPresentation = config::Rotate90 && !presentationTransformApplied;
+	const bool rotate = precomposed ? lastFramePrecomposedRotation : config::Rotate90.get();
+	const bool rotateAtPresentation = rotate && !presentationTransformApplied;
 	if (rotateAtPresentation)
 		quadRotatePipeline->BindPipeline(commandBuffer);
 	else
@@ -1369,13 +1372,19 @@ bool VulkanContext::ShouldPreserveSceneDepth() const
 }
 
 void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-		vk::Image depthImage, vk::ImageView depthView) noexcept
+		vk::Image depthImage, vk::ImageView depthView, bool hikaru) noexcept
 {
 	lastFrameView = imageView;
 	lastFrameSourceExtent = extent;
 	lastFrameSourceAR = aspectRatio;
 	bool presentationTransformApplied = image ? false : lastFramePresentationTransformApplied;
 	bool fullPresentation = image ? false : lastFrameFullPresentation;
+	// With shaders or preview active, Hikaru has already composed the display canvas.
+	const bool precomposed = image
+			? hikaru && (postprocess::hasConfiguredShaderSelection() || SettingsNew::shaderLiveTuneActive())
+			: lastFramePrecomposed;
+	const bool rotate = !image && precomposed ? lastFramePrecomposedRotation : config::Rotate90.get();
+	const float displayAspectRatio = rotate ? 1.f / aspectRatio : aspectRatio;
 
 	if (imageView && IsValid())
 	{
@@ -1389,7 +1398,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 				const vk::Rect2D fullRect = getPresentRect(width, height, aspectRatio, true);
 				postprocess::ShaderFrameInfo shaderFrame { static_cast<int>(extent.width), static_cast<int>(extent.height),
 						static_cast<int>(presentRect.extent.width), static_cast<int>(presentRect.extent.height),
-						static_cast<uint32_t>(FrameCount), config::Rotate90, config::Rotate90 ? 1.f / aspectRatio : aspectRatio };
+						static_cast<uint32_t>(FrameCount), rotate, displayAspectRatio };
 				shaderFrame.presentation = { static_cast<int>(fullRect.extent.width), static_cast<int>(fullRect.extent.height),
 						presentRect.offset.x - fullRect.offset.x, presentRect.offset.y - fullRect.offset.y,
 						shaderFrame.viewportWidth, shaderFrame.viewportHeight,
@@ -1406,9 +1415,12 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 			lastFrameView = imageView;
 			lastFrameExtent = drawExtent;
 			lastFrameAR = presentationTransformApplied
-					? static_cast<float>(drawExtent.width) / drawExtent.height : aspectRatio;
+					? static_cast<float>(drawExtent.width) / drawExtent.height
+					: precomposed ? displayAspectRatio : aspectRatio;
 			lastFramePresentationTransformApplied = presentationTransformApplied;
 			lastFrameFullPresentation = fullPresentation;
+			lastFramePrecomposed = precomposed;
+			lastFramePrecomposedRotation = precomposed && rotate;
 			auto overlayCmdBuffer = PrepareOverlay(config::FloatVMUs, true);
 			gui_draw_osd();
 			if (GetVendorID() == VulkanContext::VENDOR_NVIDIA && image && !processed)
@@ -1433,7 +1445,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 			BeginRenderPass();
 
 			if (lastFrameView) // Might have been nullified if swap chain recreated
-				DrawFrame(imageView, extent, aspectRatio, presentationTransformApplied, fullPresentation);
+				DrawFrame(imageView, extent, aspectRatio, presentationTransformApplied, fullPresentation, precomposed);
 
 			DrawOverlay(settings.display.uiScale, config::FloatVMUs, true);
 			imguiDriver->renderDrawData(ImGui::GetDrawData(), false);
@@ -1451,7 +1463,7 @@ void VulkanContext::PresentLastFrame()
 {
 	if (lastFrameView && IsValid())
 		DrawFrame(lastFrameView, lastFrameSourceExtent, lastFrameSourceAR,
-				lastFramePresentationTransformApplied, lastFrameFullPresentation);
+				lastFramePresentationTransformApplied, lastFrameFullPresentation, lastFramePrecomposed);
 }
 
 void VulkanContext::term()
@@ -1713,7 +1725,8 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 	if (!lastFrameView)
 		return false;
 	// The retained shader output may already include the display rotation.
-	const bool rotateAtCapture = config::Rotate90 && !lastFramePresentationTransformApplied;
+	const bool rotate = lastFramePrecomposed ? lastFramePrecomposedRotation : config::Rotate90.get();
+	const bool rotateAtCapture = rotate && !lastFramePresentationTransformApplied;
 
 	if (width != 0) {
 		height = width / lastFrameAR;

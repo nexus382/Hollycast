@@ -11,7 +11,10 @@
 #include "device.h"
 #include "shaders.h"
 #include "metal_test.h"
+#include "cfg/option.h"
 #include "rend/metal/metal_context.h"
+#include "rend/metal/metal_shader_chain.h"
+#include "ui/settings_new.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -483,7 +486,31 @@ private:
 std::unique_ptr<Backend> makeMetalBackend() {
     auto* context=dynamic_cast<MetalContext*>(GraphicsContext::Instance());
     if(!context||!context->GetDevice()||!context->GetQueue())return {};
-    return std::make_unique<MetalBackend>(context->GetDevice(),context->GetQueue(),[context](id<MTLTexture> texture,float aspect){context->PresentFrame(texture,aspect);});
+    id<MTLDevice> device = context->GetDevice();
+    id<MTLCommandQueue> queue = context->GetQueue();
+    auto shader = std::make_shared<const MetalContext::HikaruFrameShader>(
+        [device, queue, chain = std::shared_ptr<MetalShaderChain>{}](id<MTLTexture> source, int width, int height,
+                id<MTLTexture> __strong& output, bool& transformed) mutable {
+            const bool selected = postprocess::hasConfiguredShaderSelection();
+            if (!selected && !chain)
+                return SettingsNew::shaderLiveTuneActive();
+            if (!chain)
+                chain = std::make_shared<MetalShaderChain>(device, queue);
+            const bool rotate = config::Rotate90;
+            const float aspect = (float)source.width / source.height;
+            postprocess::ShaderFrameInfo frame { (int)source.width, (int)source.height, width, height,
+                    0, rotate, rotate ? 1.f / aspect : aspect };
+            frame.presentation = { width, height, 0, 0, width, height, { 0, 0, 0, 1 } };
+            bool fullPresentation = false;
+            // The final Hikaru canvas contains several composited layers and has no scene depth.
+            chain->render(source, nil, frame, output, transformed, fullPresentation);
+            if (!selected)
+                chain.reset();
+            return selected || SettingsNew::shaderLiveTuneActive();
+        });
+    return std::make_unique<MetalBackend>(device, queue, [context, shader](id<MTLTexture> texture, float aspect) {
+        context->PresentHikaruFrame(texture, aspect, shader);
+    });
 }
 std::unique_ptr<Backend> makeMetalBackendForTesting(id<MTLDevice> device,id<MTLCommandQueue> queue) { return std::make_unique<MetalBackend>(device,queue); }
 } // namespace hikaru::graphics

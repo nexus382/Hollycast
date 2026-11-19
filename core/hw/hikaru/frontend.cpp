@@ -18,6 +18,7 @@
 #include "audio_pacer.h"
 #include "frame_worker.h"
 #include "graphics/device.h"
+#include "shader_presentation_gl.h"
 #include "valkyrie/engine.h"
 #include "audio/audiostream.h"
 #include "archive/archive.h"
@@ -36,6 +37,8 @@
 #include "ui/imgui_driver.h"
 #include "ui/gui.h"
 #include "ui/performance_overlay.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
 #include "types.h"
 #include <algorithm>
 #include <array>
@@ -157,6 +160,7 @@ std::unique_ptr<AudioPacer> audioPacer;
 bool audioModeKnown = false, previousFastForward = false, previousMuted = false, previousPacing = false;
 HikaruEngine* engine = nullptr;
 std::unique_ptr<graphics::Device> nativeGraphics;
+GlShaderPresentation glShaderPresentation;
 unsigned internalWidth = 0, internalHeight = 0;
 float internalAspectRatio = 0;
 uint64_t clocks = 0;
@@ -527,6 +531,7 @@ void releaseGraphicsLocked() {
         if (mieSaveAllowed && !saveNvram(mieEepromPath, mie->eepromContents())) os_notify("Could not save Hikaru I/O EEPROM", 10000);
     }
     nativeGraphics.reset();
+    glShaderPresentation.reset();
 }
 }
 void releaseGraphics() {
@@ -546,6 +551,7 @@ void suspendGraphics() {
     if (loadStateEventGeneration.load(std::memory_order_acquire) != 0)
         loadStateEventGeneration.store(generation, std::memory_order_release);
     graphics::Device::Scope graphicsScope(nativeGraphics.get());
+    glShaderPresentation.reset();
     if (!engine) { nativeGraphics.reset(); return; }
     if (hikaru_engine_get_bram(engine, savedBram.data(), savedBram.size()) == 0) {
         hasSavedBram = true;
@@ -821,11 +827,19 @@ static bool renderFrame() {
             (!context->isGLES() && context->getMajorVersion() == 3 && context->getMinorVersion() < 2) || !glGetString(GL_VERSION))
             throw FlycastException("Hikaru OpenGL requires OpenGL 3.2 or OpenGL ES 3.0");
     }
-    const int outputWidth = settings.display.width;
+    const int topInset = std::max(0, getScaledTopInset());
+    const bool shaderPreview = SettingsNew::shaderLiveTuneActive();
+    int outputWidth = settings.display.width;
     // GL draws from the bottom of the window; native presenters place this same
     // canvas below the menu. Fit the game once inside the usable area on every API.
-    const int outputHeight = settings.display.height - std::max(0, getScaledTopInset());
+    const int drawableHeight = settings.display.height - topInset;
+    int outputHeight = drawableHeight;
     if (outputWidth <= 0 || outputHeight <= 0) return false;
+    if (shaderPreview) {
+        const auto pane = SettingsNew::shaderPreviewLayout(outputWidth, settings.display.height, topInset);
+        outputWidth = std::max(1, pane.gameWidth);
+        outputHeight = std::max(1, pane.gameHeight);
+    }
     if (resetRequested.exchange(false)) {
         if (cardReader) cardReader->reset();
         frameGeneration.fetch_add(1, std::memory_order_release);
@@ -1020,16 +1034,17 @@ static bool renderFrame() {
     // calls stay on the render/input thread, outside the emulation worker.
     if (loadedGame() == &SegaNascarGame)
         GamepadDevice::ApplyForceFeedback(0, mie->nascarSteeringForce());
-    std::array<ControllerInputs, 2> controllers;
-    for (unsigned i = 0; i < controllers.size(); ++i)
-        controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};
+    std::array<ControllerInputs, 2> controllers{};
+    if (!shaderPreview)
+        for (unsigned i = 0; i < controllers.size(); ++i)
+            controllers[i] = {kcode[i], joyx[i], joyy[i], lt[i], rt[i], joyrx[i], joyry[i]};
     if (cardReader) {
         // Hikaru does not execute Maple DMA, where other systems consume this
         // action. Use its host edge here, once, across all assigned controllers.
         bool pressed = false;
         for (unsigned port = 0; port < 4; ++port)
             pressed |= (kcode[port] & DC_BTN_INSERT_CARD) == 0;
-        if (pressed && !cardButtonDown && !gui_is_open()) cardAction();
+        if (pressed && !cardButtonDown && !gui_is_open() && !shaderPreview) cardAction();
         cardButtonDown = pressed;
     }
     const auto* game = loadedGame();
@@ -1049,13 +1064,13 @@ static bool renderFrame() {
             static s32 lastMouseX = -1, lastMouseY = -1;
             static float wheelAccum = 0.0f;
             const s32 mx = mo_x_abs[0], my = mo_y_abs[0];
-            if (mx != lastMouseX || my != lastMouseY) {
-                lastMouseX = mx; lastMouseY = my;
+            if (!shaderPreview && (mx != lastMouseX || my != lastMouseY)) {
                 // mo_x_abs/mo_y_abs are native 640x480 picture coords;
                 // letterbox offsets were removed when they were stored.
                 aimFx = std::clamp(float(mx) / 640.0f, 0.0f, 1.0f);
                 aimFy = std::clamp(float(my) / 480.0f, 0.0f, 1.0f);
             }
+            lastMouseX = mx; lastMouseY = my;
             // While the pointer is captured for play, SDL delivers
             // relative motion instead of absolute positions, so the
             // absolute values freeze. Integrate the relative deltas
@@ -1063,8 +1078,10 @@ static bool renderFrame() {
             // consumer for them, so consuming them here is safe.
             {
                 std::lock_guard<std::mutex> lock(relPosMutex);
-                aimFx = std::clamp(aimFx + mo_x_delta[0] / 640.0f, 0.0f, 1.0f);
-                aimFy = std::clamp(aimFy + mo_y_delta[0] / 480.0f, 0.0f, 1.0f);
+                if (!shaderPreview) {
+                    aimFx = std::clamp(aimFx + mo_x_delta[0] / 640.0f, 0.0f, 1.0f);
+                    aimFy = std::clamp(aimFy + mo_y_delta[0] / 480.0f, 0.0f, 1.0f);
+                }
                 mo_x_delta[0] = 0.0f;
                 mo_y_delta[0] = 0.0f;
             }
@@ -1075,7 +1092,8 @@ static bool renderFrame() {
             // is Start. OR them in so they work regardless of which
             // device is assigned to the port; other bindings unchanged.
             u8 buttons = 0xff;
-            for (unsigned port = 0; port < 4; ++port) buttons &= mo_buttons[port];
+            if (!shaderPreview)
+                for (unsigned port = 0; port < 4; ++port) buttons &= mo_buttons[port];
             if (!(buttons & (1 << 2))) input.players[0] |= 0x0200;
             // Fog hold: set both JVS push-2 positions. The cabinet's
             // second switch byte is unassigned in the Brave mapping,
@@ -1090,14 +1108,24 @@ static bool renderFrame() {
                     lastButtons = buttons;
                 }
             }
-            wheelAccum += mo_wheel_delta[0];
+            wheelAccum = shaderPreview ? 0.0f : wheelAccum + mo_wheel_delta[0];
             mo_wheel_delta[0] = 0.0f;
             while (wheelAccum >= 1.0f) { wheelAccum -= 1.0f; insertCredit(0); }
             while (wheelAccum <= -1.0f) { wheelAccum += 1.0f; }
         }
     }
     GLint target = 0;
-    if (!nativeGraphics) glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
+    if (!nativeGraphics) {
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
+        const auto capture = glShaderPresentation.begin(uint32_t(target), outputWidth, outputHeight);
+        if (capture == uint32_t(target) && shaderPreview) {
+            // A failed capture must leave the game visible in the normal viewport.
+            SettingsNew::closeShaderLiveTune();
+            outputWidth = settings.display.width;
+            outputHeight = drawableHeight;
+        }
+        target = GLint(capture);
+    }
     hikaru_engine_set_output_aspect_ratio(engine, getOutputFramebufferAspectRatio());
     hikaru_engine_resize(engine, uint32_t(target), unsigned(outputWidth), unsigned(outputHeight));
     if (!threaded && readyFrameSlot >= 0
@@ -1120,6 +1148,7 @@ static bool renderFrame() {
             WriteSample(completed.audio[i].first, completed.audio[i].second);
         graphicsScope.reset();
         if (nativeGraphics) nativeGraphics->present();
+        else glShaderPresentation.present(drawableHeight - outputHeight);
         if (imguiDriver) {
             imguiDriver->setFrameRendered();
             if (!nativeGraphics) gui_display_osd();
@@ -1191,6 +1220,7 @@ static bool renderFrame() {
         graphicsScope.reset();
         const auto presentStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (nativeGraphics) nativeGraphics->present();
+        else glShaderPresentation.present(drawableHeight - outputHeight);
         const auto presentEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (imguiDriver) {
             imguiDriver->setFrameRendered();
@@ -1298,6 +1328,7 @@ static bool renderFrame() {
         audioWaitMs = std::max(0.0, audioOutputBlockedSeconds() - blockedStart) * 1000;
     const auto presentStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (nativeGraphics) nativeGraphics->present();
+    else glShaderPresentation.present(drawableHeight - outputHeight);
     const auto presentEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     nativePresentMs = traceTiming ? std::chrono::duration<double, std::milli>(presentEnd - presentStart).count() : 0;
     if (imguiDriver) {

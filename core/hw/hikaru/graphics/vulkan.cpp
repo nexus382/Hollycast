@@ -1668,7 +1668,8 @@ public:
         endFrameGpuTiming(cmd);
         flushBatch();
         frameGpu.attempted=false;fragmentGpu.claimed=false;
-        ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f);
+        // The display canvas has no scene depth attachment to lend to post-processing.
+        ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f,{}, {},true);
         ++geometryFrame;
         if(frameGpu.requested){reapCompletedDraws();pollFrameGpuTiming();}
         pollFragmentGpuTiming();

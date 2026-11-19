@@ -818,7 +818,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         try {completePixelCompilation(true);}catch(const std::exception& error){WARN_LOG(RENDERER,"Hikaru DX11 shader shutdown: %s",error.what());}
         endQuerySegment();finishGpuFrame();
         if(owner)saveCache(CacheFile);
-        if(owner&&GraphicsContext::Instance()==owner)owner->presentFrame({});
+        if(owner&&GraphicsContext::Instance()==owner)owner->resetHikaruPresentation();
         // The immediate context owns submitted resource references. Releasing
         // CPU cache entries never requires a device-wide GPU idle wait.
         finishFragmentBindings();unbindTargets();
@@ -1004,7 +1004,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         unbindInputs();
         if(!fragmentCollectActive)unbindTargets();
         else bindingsDirty=true;
-        if(id==0&&owner&&GraphicsContext::Instance()==owner)owner->presentFrame({});
+        if(id==0&&owner&&GraphicsContext::Instance()==owner)owner->presentHikaruFrame({});
         images.erase(id);
     }
     void clear(const Draw& draw,GLbitfield mask,const Vec4& color,float depth) override {
@@ -1235,7 +1235,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         if(!owner)throw FlycastException("Hikaru DX11 presenter is unavailable");
         unbindInputs();unbindTargets();
         // Timestamp deltas are elapsed command intervals; close before Present to exclude display time.
-        finishGpuFrame();owner->presentFrame(output.view);bindingsDirty=true;
+        finishGpuFrame();owner->presentHikaruFrame(output.view,width,height);bindingsDirty=true;
         pollGpuFrames();presentDiagnostics();
     }
 };
