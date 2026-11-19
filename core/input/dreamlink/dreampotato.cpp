@@ -98,6 +98,8 @@ namespace dreampotato
 //! A specialized VMU which interfaces with a MapleLink's VMU, including read/write operations
 struct DreamPotatoVmu : public MapleLinkVmu
 {
+	bool userNotified = false;
+
 	DreamPotatoVmu(const MapleLink& link) : MapleLinkVmu(link)
 	{}
 
@@ -161,6 +163,12 @@ struct DreamPotatoVmu : public MapleLinkVmu
 				{
 				case MDCF_BlockWrite:
 				{
+					if (!userNotified)
+					{
+						os_notify("ATTENTION: You are saving to a physical VMU", 6000,
+								"Do not disconnect the VMU or close the game");
+						userNotified = true;
+					}
 					MapleMsg rxMsg;
 					if (!link.sendReceive(*inMsg, rxMsg)) {
 						ERROR_LOG(MAPLE, "Failed to write VMU %s: I/O error", logical_port);
