@@ -19,7 +19,8 @@ x64. MSVC, 32-bit, ARM64 UWP, AAB and libretro alternatives are not substituted.
 The page lists a build only when all six matching platform downloads are uploaded.
 Automatic builds are grouped by branch and commit before checking completeness;
 downloads from another branch or commit cannot fill a missing platform. Incomplete
-automatic builds and tagged releases stay hidden until their downloads are ready.
+automatic builds and tagged releases stay hidden until their standalone downloads are
+ready. The Linux ARM64 Libretro core appears on the matching CI build when available.
 Actions artifact packages may add an outer ZIP around the matching build. Additional
 formats remain available on the linked GitHub release.
 
@@ -34,15 +35,15 @@ not expire with the original Actions artifact. Manual releases are not modified
 or displaced as GitHub's latest release.
 
 The [Latest Development Build](https://github.com/nexus382/Hollycast/releases/tag/latest-dev)
-is a rolling prerelease sourced exclusively from `dev`. It uses the same six-platform,
-same-commit completeness rule as the catalog. Newer incomplete commits, master builds,
-drafts and unfinished assets cannot fill missing platforms or displace the current
+is a rolling prerelease sourced exclusively from `dev`. It waits for the six standalone
+downloads and the Linux ARM64 Libretro core from the same commit. Newer incomplete
+commits, master builds, drafts and unfinished assets cannot displace the current
 complete dev build. Older completions cannot roll it back.
 
-The publisher copies the six selected CI release archives into a separate draft using
+The publisher copies the seven selected CI release archives into a separate draft using
 consistent filenames, verifies their SHA256 digests, and adds `SHA256SUMS.txt`. Existing
 downloads stay available during staging; retries reuse verified draft assets. Once
-all seven assets are verified, the previous rolling release is retained under
+all eight assets are verified, the previous rolling release is retained under
 `latest-dev-<commit>`, the `latest-dev` Git tag moves to the new source commit, and the
 draft is promoted. A failed promotion attempts to restore the previous release and
 tag; retry the workflow if GitHub is unavailable during recovery. Rolling releases

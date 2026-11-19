@@ -64,9 +64,10 @@ function render() {
     if (build.channel === 'ci') content.append(element('p', 'Public ZIP archives. Extract before use.', 'meta'));
     const downloads = element('div', '', 'download-columns');
     for (const [device, label] of [['Android', 'Android'], ['Windows', 'Windows x64'], ['Linux', 'Linux AppImage'],
-      ['macOS', 'macOS'], ['Switch', 'Switch'], ['UWP', 'Xbox One']]) {
+      ['macOS', 'macOS'], ['Switch', 'Switch'], ['UWP', 'Xbox One'], ['Linux ARM64 Libretro', 'Linux ARM64 Libretro']]) {
       if (platform.value !== 'all' && platform.value !== device) continue;
       const deviceFiles = files.filter(file => !file.support && file.platform === device);
+      if (device === 'Linux ARM64 Libretro' && !deviceFiles.length) continue;
       const column = element('section', '', 'download-platform');
       column.append(element('h4', label));
       column.append(deviceFiles.length ? fileList(deviceFiles) : element('p', 'Unavailable', 'meta'));
