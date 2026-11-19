@@ -1229,7 +1229,7 @@ void VulkanContext::Present() noexcept
 				const int interval = swapInterval * gameSwapInterval;
 				for (int i = 1; i < interval; i++)
 				{
-					PresentFrame(vk::Image(), lastFrameView, lastFrameExtent, lastFrameAR);
+					PresentFrame(vk::Image(), lastFrameView, lastFrameSourceExtent, lastFrameSourceAR);
 					res = presentQueue.presentKHR(vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentSemaphore]), 1, &(*swapChain), &currentImage));
 					if (res == vk::Result::eSuccess || res == vk::Result::eSuboptimalKHR)
 						performance_overlay::recordPresentedFrame();
@@ -1268,7 +1268,7 @@ void VulkanContext::Present() noexcept
 
 static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspectRatio, bool includeBorders = false)
 {
-	const int topInset = getScaledTopInset();
+	const int topInset = std::clamp(getScaledTopInset(), 0, outputHeight);
 	int drawableWidth = outputWidth;
 	int drawableHeight = outputHeight - topInset;
 	if (SettingsNew::shaderLiveTuneActive()) {
@@ -1287,6 +1287,10 @@ static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspect
 void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
 		bool presentationTransformApplied, bool fullPresentation)
 {
+	const vk::Rect2D contentRect = getPresentRect(width, height, aspectRatio);
+	const vk::Rect2D presentRect = fullPresentation ? getPresentRect(width, height, aspectRatio, true) : contentRect;
+	if (extent.width == 0 || extent.height == 0 || presentRect.extent.width == 0 || presentRect.extent.height == 0)
+		return;
 	QuadVertex vtx[4] {
 		{ -1, -1, 0, 0, 0 },
 		{  1, -1, 0, 1, 0 },
@@ -1295,9 +1299,21 @@ void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& exten
 	};
 	float shiftX, shiftY;
 	getVideoShift(shiftX, shiftY);
-	vtx[0].x = vtx[2].x = -1.f + shiftX * 2.f / extent.width;
+	// The guest shift is relative to the source image and follows its rotation.
+	shiftX /= extent.width;
+	shiftY /= extent.height;
+	if (presentationTransformApplied && config::Rotate90) {
+		const float sourceShiftX = shiftX;
+		shiftX = shiftY;
+		shiftY = -sourceShiftX;
+	}
+	if (fullPresentation) {
+		shiftX *= static_cast<float>(contentRect.extent.width) / presentRect.extent.width;
+		shiftY *= static_cast<float>(contentRect.extent.height) / presentRect.extent.height;
+	}
+	vtx[0].x = vtx[2].x = -1.f + shiftX * 2.f;
 	vtx[1].x = vtx[3].x = vtx[0].x + 2;
-	vtx[0].y = vtx[1].y = -1.f + shiftY * 2.f / extent.height;
+	vtx[0].y = vtx[1].y = -1.f + shiftY * 2.f;
 	vtx[2].y = vtx[3].y = vtx[0].y + 2;
 
 	vk::CommandBuffer commandBuffer = GetCurrentCommandBuffer();
@@ -1311,7 +1327,6 @@ void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& exten
 	else
 		quadPipeline->BindPipeline(commandBuffer);
 
-	const vk::Rect2D presentRect = getPresentRect(width, height, aspectRatio, fullPresentation);
 #ifndef LIBRETRO
 	performance_overlay::recordOutputViewport(presentRect.extent.width, presentRect.extent.height);
 #endif
@@ -1347,12 +1362,18 @@ vk::CommandBuffer VulkanContext::PrepareOverlay(bool vmu, bool crosshair)
 
 extern Renderer *renderer;
 
+bool VulkanContext::ShouldPreserveSceneDepth() const
+{
+	return shaderChain && CanSampleDepth() && !config::EmulateFramebuffer
+			&& postprocess::hasConfiguredShaderSelection();
+}
+
 void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
 		vk::Image depthImage, vk::ImageView depthView) noexcept
 {
 	lastFrameView = imageView;
-	lastFrameExtent = extent;
-	lastFrameAR = aspectRatio;
+	lastFrameSourceExtent = extent;
+	lastFrameSourceAR = aspectRatio;
 	bool presentationTransformApplied = image ? false : lastFramePresentationTransformApplied;
 	bool fullPresentation = image ? false : lastFrameFullPresentation;
 
@@ -1361,7 +1382,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 		try {
 			NewFrame();
 			bool processed = false;
-			vk::Extent2D drawExtent = extent;
+			vk::Extent2D drawExtent = image ? extent : lastFrameExtent;
 			if (image && shaderChain) {
 				vk::ImageView processedView;
 				const vk::Rect2D presentRect = getPresentRect(width, height, aspectRatio);
@@ -1384,7 +1405,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 			}
 			lastFrameView = imageView;
 			lastFrameExtent = drawExtent;
-			lastFrameAR = processed && presentationTransformApplied
+			lastFrameAR = presentationTransformApplied
 					? static_cast<float>(drawExtent.width) / drawExtent.height : aspectRatio;
 			lastFramePresentationTransformApplied = presentationTransformApplied;
 			lastFrameFullPresentation = fullPresentation;
@@ -1412,7 +1433,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 			BeginRenderPass();
 
 			if (lastFrameView) // Might have been nullified if swap chain recreated
-				DrawFrame(imageView, drawExtent, aspectRatio, presentationTransformApplied, fullPresentation);
+				DrawFrame(imageView, extent, aspectRatio, presentationTransformApplied, fullPresentation);
 
 			DrawOverlay(settings.display.uiScale, config::FloatVMUs, true);
 			imguiDriver->renderDrawData(ImGui::GetDrawData(), false);
@@ -1429,7 +1450,8 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 void VulkanContext::PresentLastFrame()
 {
 	if (lastFrameView && IsValid())
-		DrawFrame(lastFrameView, lastFrameExtent, lastFrameAR, lastFramePresentationTransformApplied, lastFrameFullPresentation);
+		DrawFrame(lastFrameView, lastFrameSourceExtent, lastFrameSourceAR,
+				lastFramePresentationTransformApplied, lastFrameFullPresentation);
 }
 
 void VulkanContext::term()

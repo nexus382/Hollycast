@@ -176,6 +176,26 @@ TEST_F(MetalShaderChainTest, UsesDepthAndRecoversFromMissingSceneDepth)
 	output = render(frame,depth);
 	EXPECT_NEAR(64, pixel(output,4,4)[0], 1); EXPECT_EQ(0, pixel(output,0,4)[0]);
 	EXPECT_FALSE(getShaderChainStatus().frameError);
+
+	// The regular scene renderer stores depth independently of stencil on the same queue.
+	desc.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+	desc.storageMode = MTLStorageModePrivate;
+	desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+	depth = [device newTextureWithDescriptor:desc]; ASSERT_TRUE(depth != nil);
+	MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+	pass.depthAttachment.texture = pass.stencilAttachment.texture = depth;
+	pass.depthAttachment.loadAction = pass.stencilAttachment.loadAction = MTLLoadActionClear;
+	pass.depthAttachment.storeAction = pass.stencilAttachment.storeAction = MTLStoreActionUnknown;
+	pass.depthAttachment.clearDepth = 0.75;
+	id<MTLCommandBuffer> command = [queue commandBuffer];
+	id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+	ASSERT_TRUE(encoder != nil);
+	[encoder setDepthStoreAction:MTLStoreActionStore];
+	[encoder setStencilStoreAction:MTLStoreActionDontCare];
+	[encoder endEncoding]; [command commit];
+	output = render(frame, depth);
+	EXPECT_NEAR(191, pixel(output,4,4)[0], 1);
+	EXPECT_EQ(MTLCommandBufferStatusCompleted, command.status);
 }
 
 TEST_F(MetalShaderChainTest, ConvertsIntegerComputeOutputsWithTypedReads)

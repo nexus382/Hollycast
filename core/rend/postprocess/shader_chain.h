@@ -443,7 +443,7 @@ bool shouldComposeDisplayInput(const ShaderFrameInfo& frame, bool wantsUnscaledI
 // intentionally renderer-free so loaders and backend compilers enforce the
 // same alias ordering and feedback contract.
 bool resolveShaderPassInputs(ShaderChain& chain, size_t passIndex,
-		const ShaderPassSource& source, std::string& error);
+		ShaderPassSource& source, std::string& error);
 
 // Backends publish a copy so UI code can report a rejected candidate without
 // reaching into renderer-specific state or racing the render thread.
@@ -513,6 +513,7 @@ bool loadShaderChain(const std::vector<std::string>& paths, ShaderChain& chain, 
 // configurations created before the Shader page was introduced.
 std::string shaderLibraryDirectory();
 std::vector<std::string> configuredShaderPaths();
+bool hasConfiguredShaderSelection();
 std::string shaderSelectionLabel(const std::vector<std::string>& paths);
 
 // Loads and reflects one pass. Includes stay within the shader package; FX

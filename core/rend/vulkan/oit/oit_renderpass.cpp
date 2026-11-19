@@ -26,7 +26,7 @@ void RenderPasses::Reset() {
 		renderPass.reset();
 }
 
-vk::UniqueRenderPass RenderPasses::MakeRenderPass(bool initial, bool last, bool loadClear)
+vk::UniqueRenderPass RenderPasses::MakeRenderPass(bool initial, bool last, bool loadClear, bool preserveSceneDepth)
 {
 	vk::AttachmentDescription attach0 = GetAttachment0Description(initial, last, loadClear);
     std::array<vk::AttachmentDescription, 4> attachmentDescriptions = {
@@ -51,11 +51,10 @@ vk::UniqueRenderPass RenderPasses::MakeRenderPass(bool initial, bool last, bool 
 					vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
 					initial ? vk::ImageLayout::eUndefined : vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal),
     };
-#ifndef LIBRETRO
-	// The geometry depth remains available after OIT resolves the color image.
-	if (GetContext()->CanSampleDepth())
+	// Intermediate passes always store depth for the next guest pass. The final
+	// pass needs a store only when presentation shaders can sample geometry depth.
+	if (preserveSceneDepth)
 		attachmentDescriptions[2].storeOp = vk::AttachmentStoreOp::eStore;
-#endif
     vk::AttachmentReference swapChainReference(0, vk::ImageLayout::eColorAttachmentOptimal);
     vk::AttachmentReference colorReference(1, vk::ImageLayout::eColorAttachmentOptimal);
     vk::AttachmentReference depthReference(2, vk::ImageLayout::eDepthStencilAttachmentOptimal);

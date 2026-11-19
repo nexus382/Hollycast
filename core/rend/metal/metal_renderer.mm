@@ -423,8 +423,11 @@ bool MetalRenderer::Render() {
     [enc setVertexBuffer:vertices offset:0 atIndex:0];
     id<MTLTexture> destination = targets.output;
     bool secondaryInitialized = false;
+    const bool presentsScene = !renderContext->isRTT && !config::EmulateFramebuffer;
+    // A pending chain can activate at presentation and sample this frame.
+    const bool preserveSceneDepth = presentsScene && shaderChain && postprocess::hasConfiguredShaderSelection();
     const auto endEncoder = [&](bool final = false) {
-        [enc setDepthStoreAction:final ? MTLStoreActionDontCare : MTLStoreActionStore];
+        [enc setDepthStoreAction:final && !preserveSceneDepth ? MTLStoreActionDontCare : MTLStoreActionStore];
         [enc setStencilStoreAction:final ? MTLStoreActionDontCare : MTLStoreActionStore];
         [enc endEncoding];
         enc = nil;
@@ -542,10 +545,13 @@ bool MetalRenderer::Render() {
     else [command commit];
     if (renderContext->isRTT) { targets.end(true); return false; }
     if (config::EmulateFramebuffer) {
+        targets.frameDepth = nil;
         if (timing) pvrTimingEvidence.submitted(epoch);
         return true;
     }
-    aspect = getOutputFramebufferAspectRatio(); targets.frameOutput = targets.output; targets.frameDepth = targets.depth; frameReady = true; clearLastFrame = false;
+    aspect = getOutputFramebufferAspectRatio(); targets.frameOutput = targets.output;
+    targets.frameDepth = preserveSceneDepth ? targets.depth : nil;
+    frameReady = true; clearLastFrame = false;
     return true;
     }
 }

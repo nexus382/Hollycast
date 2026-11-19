@@ -102,6 +102,8 @@ struct SlangResource {
 	uint32_t historyOffset = 1;
 	ShaderNumericType numericType = ShaderNumericType::Float;
 	std::string formatName;
+	// The frontend introduced this binding for textureSize without a sampler declaration.
+	bool sizeOnly = false;
 };
 
 struct SlangStageSource {

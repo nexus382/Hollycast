@@ -6982,8 +6982,16 @@ static ShaderPreviewState g_shaderPreview;
 static std::atomic_bool g_shaderLiveTune { false };
 static std::function<void()> g_shaderAction;
 
+static bool shaderUsesHikaruPresenter()
+{
+	// The platform remains Hikaru after a game is closed.
+	return game_started && settings.platform.isHikaru();
+}
+
 static bool shaderRendererSupported()
 {
+	if (shaderUsesHikaruPresenter())
+		return false;
 	return isOpenGL(config::RendererType) || isVulkan(config::RendererType)
 			|| isMetal(config::RendererType)
 			|| config::RendererType == RenderType::DirectX11 || config::RendererType == RenderType::DirectX11_OIT;
@@ -7727,6 +7735,10 @@ void renderShaderTab()
 {
 	ImGui::TextDisabled("%s", T("Shader Configuration"));
 	ImGui::Separator();
+	if (shaderUsesHikaruPresenter()) {
+		ImGui::TextWrapped("%s", T("Display shaders are currently unavailable for Hikaru games."));
+		return;
+	}
 	ensureShaderPreview();
 	if (g_shaderAction) return;
 	if (!shaderLiveTuneActive()) {

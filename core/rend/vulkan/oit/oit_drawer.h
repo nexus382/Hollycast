@@ -95,6 +95,7 @@ protected:
 	int maxWidth = 0;
 	int maxHeight = 0;
 	int framebufferIndex = 0;
+	bool preserveSceneDepth = false;
 
 private:
 	void DrawPoly(const vk::CommandBuffer& cmdBuffer, u32 listType, bool autosort, Pass pass,
@@ -185,8 +186,8 @@ public:
 		GetContext()->PresentFrame(colorAttachments[framebufferIndex]->GetImage(),
 				colorAttachments[framebufferIndex]->GetImageView(), viewport.extent, aspectRatio
 #ifndef LIBRETRO
-				, GetContext()->CanSampleDepth() ? depthAttachments[0]->GetImage() : vk::Image {},
-				GetContext()->CanSampleDepth() ? depthAttachments[0]->GetImageView() : vk::ImageView {}
+				, preserveSceneDepth ? depthAttachments[0]->GetImage() : vk::Image {},
+				preserveSceneDepth ? depthAttachments[0]->GetImageView() : vk::ImageView {}
 #endif
 		);
 

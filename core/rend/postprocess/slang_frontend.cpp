@@ -468,6 +468,8 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 					[&](const SlangResource& value) { return value.name == resource.name; });
 			if (existing == shader.resources.end())
 				shader.resources.push_back(std::move(resource));
+			else if (existing->sizeOnly)
+				*existing = std::move(resource);
 			else if (existing->type != resource.type || existing->numericType != resource.numericType
 					|| existing->formatName != resource.formatName || existing->arrayCount != resource.arrayCount
 					|| (existing->hasExplicitBinding && resource.hasExplicitBinding
@@ -487,6 +489,7 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 	// those names into the common host interface before any API compiles them.
 	const std::regex block(R"((?:layout\s*\([^)]*\)\s*)?uniform\s+[A-Za-z_][A-Za-z0-9_]*\s*\{([^{}]*)\}\s*([A-Za-z_][A-Za-z0-9_]*)?\s*;)");
 	const std::regex member(R"(^\s*(?:layout\s*\([^)]*\)\s*)?(float|int|uint|bool|vec[234]|mat[234])\s+([A-Za-z_][A-Za-z0-9_]*)\s*$)");
+	static const std::regex indexedSize(R"(^(PassOutput|PassFeedback|OriginalHistory)Size([0-9]+)$)");
 	std::vector<std::pair<std::string, std::string>> replacements;
 	std::smatch match;
 	while (std::regex_search(source, match, block)) {
@@ -508,6 +511,7 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 			const std::string name = field[2].str();
 			const std::string binding = instance.empty() ? name : instance + "\\s*\\.\\s*" + name;
 			std::string expression;
+			std::smatch indexedTexture;
 			if (name == "MVP" || name == "MVPMatrix")
 				expression = "mat4(1.0)";
 			else if (name == "SourceSize" || name == "OriginalSize" || name == "OutputSize" || name == "FinalViewportSize")
@@ -535,12 +539,18 @@ bool lowerStageInterface(std::string& source, bool vertex, SlangShaderIR& shader
 			else if (std::any_of(shader.parameters.begin(), shader.parameters.end(),
 					[&](const SlangParameter& parameter) { return parameter.name == name; }))
 				expression = name;
-			else if (type == "vec4" && endsWith(name, "Size")) {
-				const std::string textureName = name.substr(0, name.size() - 4);
+			else if (type == "vec4" && (endsWith(name, "Size") || std::regex_match(name, indexedTexture, indexedSize))) {
+				if (!indexedTexture.empty() && !std::regex_search(source, std::regex("\\b" + binding + "\\b")))
+					continue;
+				// Indexed semantics put Size before the index. Aliases and legacy
+				// bindings put it after the texture name.
+				const std::string textureName = indexedTexture.empty() ? name.substr(0, name.size() - 4)
+						: indexedTexture[1].str() + indexedTexture[2].str();
 				if (std::none_of(shader.resources.begin(), shader.resources.end(),
 						[&](const SlangResource& resource) { return resource.name == textureName; })) {
 					SlangResource resource;
 					resource.name = textureName;
+					resource.sizeOnly = true;
 					classifyResource(resource);
 					shader.resources.push_back(std::move(resource));
 				}

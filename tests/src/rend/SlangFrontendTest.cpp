@@ -167,6 +167,48 @@ TEST(SlangFrontendTest, ReflectsSizeOnlyTexturesAndMatchingDuplicateParameters)
 	EXPECT_NE(std::string::npos, error.find("Conflicting"));
 }
 
+TEST(SlangFrontendTest, LowersIndexedAndAliasedTextureSizes)
+{
+	postprocess::SlangShaderIR shader;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseSlangFrontend(
+		"#version 450\n"
+		"layout(push_constant) uniform Size { vec4 PassOutputSize1; vec4 PassFeedbackSize0;"
+		" vec4 OriginalHistorySize1; vec4 BloomSize; vec4 PassOutputSize9; } pc;\n"
+		"void main() { vec4 size = pc.PassOutputSize1 + pc.PassFeedbackSize0"
+		" + pc.OriginalHistorySize1 + pc.BloomSize; }\n", shader, error)) << error;
+	ASSERT_EQ(4u, shader.resources.size());
+	EXPECT_EQ("PassOutput1", shader.resources[0].alias);
+	EXPECT_EQ(postprocess::SlangResourceConvention::PassAlias, shader.resources[0].convention);
+	EXPECT_EQ("PassFeedback0", shader.resources[1].alias);
+	EXPECT_EQ(postprocess::SlangResourceConvention::Feedback, shader.resources[1].convention);
+	EXPECT_EQ("Original", shader.resources[2].alias);
+	EXPECT_EQ(postprocess::SlangResourceConvention::History, shader.resources[2].convention);
+	EXPECT_EQ(1u, shader.resources[2].historyOffset);
+	EXPECT_EQ("Bloom", shader.resources[3].alias);
+	for (const auto& resource : shader.resources)
+		EXPECT_NE(std::string::npos, shader.fragment.source.find("textureSize(" + resource.name + ", 0)"));
+}
+
+TEST(SlangFrontendTest, PreservesAnExplicitSamplerDeclaredAfterASizeOnlyUse)
+{
+	postprocess::SlangShaderIR shader;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseSlangFrontend(
+		"#version 450\n"
+		"layout(push_constant) uniform Size { vec4 PassOutputSize0; } pc;\n"
+		"#pragma stage vertex\n"
+		"void main() { gl_Position = pc.PassOutputSize0; }\n"
+		"#pragma stage fragment\n"
+		"layout(binding = 3) uniform usampler2D PassOutput0;\n"
+		"void main() {}\n", shader, error)) << error;
+	ASSERT_EQ(1u, shader.resources.size());
+	EXPECT_FALSE(shader.resources[0].sizeOnly);
+	EXPECT_EQ(postprocess::ShaderNumericType::UnsignedInteger, shader.resources[0].numericType);
+	EXPECT_TRUE(shader.resources[0].hasExplicitBinding);
+	EXPECT_EQ(3u, shader.resources[0].binding);
+}
+
 TEST(SlangFrontendTest, DiscardsUnusedUniformFieldsButRejectsUnsupportedReads)
 {
 	postprocess::SlangShaderIR shader;

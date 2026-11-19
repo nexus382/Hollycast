@@ -401,7 +401,8 @@ bool OITDrawer::Draw(const Texture *fogTexture, const Texture *paletteTexture)
 
     	vk::Framebuffer targetFramebuffer = getFramebuffer(render_pass, rendContext->render_passes.size());
     	cmdBuffer.beginRenderPass(
-    			vk::RenderPassBeginInfo(pipelineManager->GetRenderPass(initialPass, finalPass, initialPass && rendContext->clearFramebuffer),
+				vk::RenderPassBeginInfo(pipelineManager->GetRenderPass(initialPass, finalPass,
+						initialPass && rendContext->clearFramebuffer, finalPass && preserveSceneDepth),
     					targetFramebuffer, viewport, clear_colors),
     			vk::SubpassContents::eInline);
 
@@ -715,6 +716,9 @@ vk::CommandBuffer OITScreenDrawer::NewFrame()
 {
 	if (!frameStarted)
 	{
+#ifndef LIBRETRO
+		preserveSceneDepth = GetContext()->ShouldPreserveSceneDepth();
+#endif
 		frameStarted = true;
 		frameRendered = false;
 		NewImage();

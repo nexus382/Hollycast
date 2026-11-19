@@ -430,12 +430,12 @@ bool parseIndexedSemantic(const std::string& value, const char *prefix, uint32_t
 }
 
 bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
-		const ShaderPassSource& source, std::string& error, bool allowExternalFxTargets = false)
+		ShaderPassSource& source, std::string& error, bool allowExternalFxTargets = false)
 {
 	ShaderPass& pass = chain.passes[passIndex];
 	pass.inputs.clear();
 	pass.inputs.reserve(source.slangResources.size());
-	for (const SlangResource& resource : source.slangResources) {
+	for (SlangResource& resource : source.slangResources) {
 		ShaderPassInput input;
 		input.bindingName = resource.name;
 		input.resourceName = resource.alias;
@@ -576,8 +576,13 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 				const auto& producer = chain.passes[input.sourcePass];
 				const auto& output = producer.outputs.empty() ? ShaderPassOutput{} : producer.outputs[input.sourceOutput];
 				const auto format = output.targetFormatName.empty() ? producer.targetFormatName : output.targetFormatName;
-				if (input.type != output.type || input.numericType != shaderFormatNumericType(format))
+				const auto numericType = shaderFormatNumericType(format);
+				if (input.type != output.type || (!resource.sizeOnly && input.numericType != numericType))
 					return fail(error, "Shader resource '" + resource.name + "' has a different dimension or texel type from its producer.");
+				// OpenGL emits sampler declarations from the source resource. Keep its
+				// inferred type in sync with the input consumed by the other backends.
+				if (resource.sizeOnly)
+					resource.numericType = input.numericType = numericType;
 			}
 		}
 		else if (input.kind != ShaderInputKind::LookupTexture
@@ -1323,6 +1328,13 @@ std::vector<std::string> configuredShaderPaths()
 	return paths;
 }
 
+bool hasConfiguredShaderSelection()
+{
+	const auto& paths = config::PostProcessShaders.get();
+	return paths.empty() ? !config::PostProcessShader.get().empty()
+			: std::any_of(paths.begin(), paths.end(), [](const auto& path) { return !path.empty(); });
+}
+
 std::string shaderSelectionLabel(const std::vector<std::string>& paths)
 {
 	if (paths.empty())
@@ -1426,7 +1438,7 @@ bool shaderInputNeedsMipmaps(const std::vector<ShaderPass>& passes, size_t first
 }
 
 bool resolveShaderPassInputs(ShaderChain& chain, size_t passIndex,
-		const ShaderPassSource& source, std::string& error)
+		ShaderPassSource& source, std::string& error)
 {
 	if (passIndex >= chain.passes.size())
 		return fail(error, "Shader pass input resolution received an invalid pass index.");
@@ -1667,7 +1679,7 @@ std::string serializeShaderChainParameterValues(const std::vector<ShaderParamete
 bool getPresetFloat(const config::IniFile& preset, const std::string& key,
 		float defaultValue, float& value, std::string& error)
 {
-	const std::string& text = preset.getString("", key);
+	const std::string text = preset.getString("", key);
 	if (text.empty()) {
 		value = defaultValue;
 		return true;
@@ -1676,16 +1688,34 @@ bool getPresetFloat(const config::IniFile& preset, const std::string& key,
 			|| fail(error, "Shader preset value '" + key + "' is not a valid number.");
 }
 
-static bool parsePreset(const std::string& presetText, const std::string& presetPath,
+static config::IniFile readPresetAssignments(const std::string& text)
+{
+	std::istringstream lines(text);
+	std::string normalized;
+	normalized.reserve(text.size());
+	for (std::string line; std::getline(lines, line);) {
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		const size_t start = line.find_first_not_of(" \t");
+		if (start != std::string::npos && line[start] != ';' && line[start] != '[') {
+			// IniFile strips one leading space before looking for a quoted value.
+			// Trim assignment whitespace while the quotes still protect their contents.
+			const size_t separator = line.find('=', start);
+			if (separator != std::string::npos)
+				line.replace(separator + 1, std::string::npos, trim_ws(line.substr(separator + 1), " \t"));
+		}
+		normalized += line;
+		normalized += '\n';
+	}
+	config::IniFile preset;
+	preset.load(normalized);
+	return preset;
+}
+
+static bool parsePreset(const config::IniFile& preset, const std::string& presetPath,
 		ShaderFormat passFormat, const char *presetName, const char *passExtension,
 		ShaderChain& chain, std::string& error, const std::string& packageRoot = {})
 {
-	// RetroArch's repositories use CRLF presets. IniFile retains carriage returns,
-	// which would otherwise become part of paths and enum-like values.
-	std::string normalizedPreset = presetText;
-	normalizedPreset.erase(std::remove(normalizedPreset.begin(), normalizedPreset.end(), '\r'), normalizedPreset.end());
-	config::IniFile preset;
-	preset.load(normalizedPreset);
 	const int passCount = preset.getInt("", "shaders", -1);
 	if (passCount < 1 || passCount > MaxPassCount)
 		return fail(error, std::string(presetName) + " must declare between 1 and " + std::to_string(MaxPassCount) + " shader passes.");
@@ -1701,7 +1731,7 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 	parsedChain.passes.reserve(passCount);
 	for (int index = 0; index < passCount; ++index) {
 		const std::string suffix = std::to_string(index);
-		const std::string& source = preset.getString("", "shader" + suffix);
+		const std::string source = preset.getString("", "shader" + suffix);
 		if (source.empty())
 			return fail(error, std::string(presetName) + " is missing shader" + suffix + ".");
 		if (packageRoot.empty() && !isSafeRelativePath(source))
@@ -1783,7 +1813,7 @@ static bool parsePreset(const std::string& presetText, const std::string& preset
 			return fail(error, std::string(presetName) + " texture names must be valid identifiers.");
 		if (!textureNames.emplace(name).second)
 			return fail(error, std::string(presetName) + " contains duplicate texture '" + name + "'.");
-		const std::string& texturePath = preset.getString("", name);
+		const std::string texturePath = preset.getString("", name);
 		if (texturePath.empty() || (packageRoot.empty() && !isSafeRelativePath(texturePath)))
 			return fail(error, std::string(presetName) + " texture paths must be relative to the preset.");
 		ShaderPresetTexture texture;
@@ -1879,13 +1909,13 @@ void prepareShaderPresentation(ShaderFrameInfo& frame, bool startsInDisplaySpace
 bool parseSlangPreset(const std::string& presetText, const std::string& presetPath,
 		ShaderChain& chain, std::string& error)
 {
-	return parsePreset(presetText, presetPath, ShaderFormat::Slang, "Slang preset", ".slang", chain, error);
+	return parsePreset(readPresetAssignments(presetText), presetPath, ShaderFormat::Slang, "Slang preset", ".slang", chain, error);
 }
 
 bool parseGlslPreset(const std::string& presetText, const std::string& presetPath,
 		ShaderChain& chain, std::string& error)
 {
-	return parsePreset(presetText, presetPath, ShaderFormat::GLSL, "GLSL preset", ".glsl", chain, error);
+	return parsePreset(readPresetAssignments(presetText), presetPath, ShaderFormat::GLSL, "GLSL preset", ".glsl", chain, error);
 }
 
 bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, std::string& error)
@@ -2211,8 +2241,7 @@ static bool loadPresetDocument(const std::string& path, const std::string& root,
 		for (const std::string& name : inherited.getEntryNames(""))
 			document.set("", name, inherited.getString("", name));
 	}
-	config::IniFile own;
-	own.load(ownText);
+	const config::IniFile own = readPresetAssignments(ownText);
 	// Resolve paths at the file that authored them before applying overrides.
 	// Otherwise a simple preset in a different folder misresolves every inherited
 	// stage and lookup image relative to itself.
@@ -2248,11 +2277,9 @@ static bool loadPresetFile(const std::string& presetPath, ShaderFormat format,
 	size_t sourceBytes = 0;
 	if (!loadPresetDocument(presetPath, root, format, stack, fileCount, sourceBytes, document, error))
 		return false;
-	std::string presetText;
-	document.save(presetText);
 	const bool loaded = format == ShaderFormat::SlangPreset
-			? parsePreset(presetText, presetPath, ShaderFormat::Slang, "Slang preset", ".slang", chain, error, root)
-			: parsePreset(presetText, presetPath, ShaderFormat::GLSL, "GLSL preset", ".glsl", chain, error, root);
+			? parsePreset(document, presetPath, ShaderFormat::Slang, "Slang preset", ".slang", chain, error, root)
+			: parsePreset(document, presetPath, ShaderFormat::GLSL, "GLSL preset", ".glsl", chain, error, root);
 	if (loaded && mergedPreset != nullptr)
 		*mergedPreset = std::move(document);
 	return loaded;
@@ -2670,6 +2697,12 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			return fail(error, "Shader chain contains duplicate pass alias '" + pass.alias + "'.");
 		if (!resolveSlangResourceInputs(chain, index, chain.sources[index], error, allowExternalFxTargets))
 			return false;
+		for (const SlangResource& resource : chain.sources[index].slangResources) {
+			// Size queries do not sample texels. Give synthesized integer bindings
+			// a compatible sampler even if the preset filters its other inputs.
+			if (resource.sizeOnly && resource.numericType != ShaderNumericType::Float)
+				pass.samplers.push_back({ resource.name });
+		}
 		for (const ShaderPassInput& input : pass.inputs) {
 			const bool integer = input.numericType != ShaderNumericType::Float;
 			if (integer) {

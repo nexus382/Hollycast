@@ -165,6 +165,7 @@ public:
 	void setSwapInterval(int interval) override;
 	vk::Format GetDepthFormat() const { return depthFormat; }
 	bool CanSampleDepth() const { return depthSamplingSupported; }
+	bool ShouldPreserveSceneDepth() const;
 	ShaderManager *GetShaderManager() const { return shaderManager.get(); }
 	static VulkanContext *Instance() { return static_cast<VulkanContext *>(GraphicsContext::Instance()); }
 	bool SupportsSamplerAnisotropy() const { return samplerAnisotropy; }
@@ -313,6 +314,8 @@ private:
 
 	vk::ImageView lastFrameView;
 	vk::Extent2D lastFrameExtent;
+	vk::Extent2D lastFrameSourceExtent;
+	float lastFrameSourceAR = 0.f;
 	float lastFrameAR = 0.f;
 	bool lastFramePresentationTransformApplied = false;
 	bool lastFrameFullPresentation = false;

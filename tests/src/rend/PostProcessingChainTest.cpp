@@ -123,10 +123,10 @@ static void expectHlslCompiles(const std::string& source, const char *target)
 TEST(PostProcessingChainTest, ParsesSlangPresetPassesAndParameters)
 {
 	const std::string preset =
-		"shaders = 2\n"
-		"shader0 = shaders/scanlines.slang\n"
-		"filter_linear0 = true\n"
-		"scale_type0 = viewport\n"
+		"shaders =  2 \t\n"
+		"shader0 =  \"shaders/scan lines.slang\" \t\n"
+		"filter_linear0 =\ttrue \n"
+		"scale_type0 =  viewport \t\n"
 		"scale_x0 = 2.0\n"
 		"shader1 = shaders/blur.slang\n"
 		"scale_type_x1 = source\n"
@@ -144,8 +144,10 @@ TEST(PostProcessingChainTest, ParsesSlangPresetPassesAndParameters)
 	EXPECT_TRUE(chain.wantsUnscaledInput);
 	ASSERT_EQ(2u, chain.passes.size());
 	EXPECT_EQ(postprocess::ShaderFormat::Slang, chain.passes[0].format);
+	EXPECT_EQ("C:/Shaders/shaders/scan lines.slang", std::filesystem::u8path(chain.passes[0].sourcePath).generic_u8string());
 	EXPECT_TRUE(chain.passes[0].linearFilter);
 	EXPECT_EQ(postprocess::ScaleType::Viewport, chain.passes[0].scaleTypeX);
+	EXPECT_FLOAT_EQ(1.f, chain.passes[0].scaleY);
 	EXPECT_EQ(postprocess::ScaleType::Absolute, chain.passes[1].scaleTypeY);
 	EXPECT_EQ(4u, chain.passes[1].frameCountModulo);
 	ASSERT_EQ(2u, chain.parameters.size());
@@ -303,9 +305,9 @@ TEST(PostProcessingChainTest, LoadsReferencedPresetsWithinSelectedShaderFolder)
 			<< "#pragma parameter GAIN \"Gain\" 0.5 0 1 0.1\n"
 			"void main() { FragColor = texture(Source, vTexCoord) * GAIN; }\n";
 	std::ofstream(directory.path / "base" / "original.glslp")
-			<< "shaders = 1\nshader0 = ../shared.glsl\nGAIN = 0.25\n";
+			<< "shaders = 1\nshader0 =  \"../shared.glsl\" \nGAIN = 0.25\n";
 	const auto selected = directory.path / "custom" / "selected.glslp";
-	std::ofstream(selected) << "#reference \"../base/original.glslp\"\nGAIN = 0.75\n";
+	std::ofstream(selected) << "#reference \"../base/original.glslp\"\nGAIN =\t 0.75 \t\n";
 	postprocess::ShaderChain chain;
 	std::string error;
 	ASSERT_TRUE(postprocess::loadShaderChain(selected.string(), chain, error)) << error;
@@ -1440,6 +1442,31 @@ TEST(PostProcessingChainTest, ResolvesStandardSlangIndexedResources)
 	EXPECT_EQ(1u, chain.passes[2].inputs[3].sourcePass);
 	EXPECT_EQ(postprocess::ShaderInputKind::LookupTexture, chain.passes[2].inputs[4].kind);
 	EXPECT_EQ("LUT", chain.passes[2].inputs[4].resourceName);
+}
+
+TEST(PostProcessingChainTest, InfersSlangSizeOnlySamplerTypeFromPassOutput)
+{
+	postprocess::SlangShaderIR shader;
+	std::string error;
+	ASSERT_TRUE(postprocess::parseSlangFrontend(
+		"#version 450\n"
+		"layout(push_constant) uniform Size { vec4 PassOutputSize0; } pc;\n"
+		"void main() { vec2 size = pc.PassOutputSize0.xy; }\n", shader, error)) << error;
+	postprocess::ShaderPassSource source;
+	source.slangResources = std::move(shader.resources);
+	ASSERT_EQ(1u, source.slangResources.size());
+	ASSERT_TRUE(source.slangResources[0].sizeOnly);
+	postprocess::ShaderChain chain;
+	chain.passes.resize(2);
+	chain.passes[0].targetFormatName = "R32_UINT";
+	ASSERT_TRUE(postprocess::resolveShaderPassInputs(chain, 1, source, error)) << error;
+	ASSERT_EQ(1u, chain.passes[1].inputs.size());
+	EXPECT_EQ(postprocess::ShaderNumericType::UnsignedInteger, chain.passes[1].inputs[0].numericType);
+	EXPECT_EQ(postprocess::ShaderNumericType::UnsignedInteger, source.slangResources[0].numericType);
+	chain.passes[0].targetFormatName = "R8G8B8A8_UNORM";
+	ASSERT_TRUE(postprocess::resolveShaderPassInputs(chain, 1, source, error)) << error;
+	EXPECT_EQ(postprocess::ShaderNumericType::Float, chain.passes[1].inputs[0].numericType);
+	EXPECT_EQ(postprocess::ShaderNumericType::Float, source.slangResources[0].numericType);
 }
 
 TEST(PostProcessingChainTest, RejectsExcessiveHistoryRetention)

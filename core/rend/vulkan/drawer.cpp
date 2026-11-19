@@ -633,17 +633,23 @@ void ScreenDrawer::Init(SamplerManager *samplerManager, ShaderManager *shaderMan
 
 void ScreenDrawer::createAttachments(vk::CommandBuffer cmdBuffer)
 {
+#ifndef LIBRETRO
+	const bool preserveDepth = GetContext()->ShouldPreserveSceneDepth();
+	if (preserveSceneDepth != preserveDepth) {
+		if (depthAttachment)
+			commandPool->addToFlight(new Deleter(std::move(depthAttachment)));
+		preserveSceneDepth = preserveDepth;
+	}
+#endif
 	if (!depthAttachment)
 	{
 		depthAttachment = std::make_unique<FramebufferAttachment>(
 				GetContext()->GetPhysicalDevice(), GetContext()->GetDevice());
 		vk::ImageUsageFlags depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransientAttachment;
-#ifndef LIBRETRO
 		// Display shaders borrow the completed scene depth. Sampled attachments
 		// cannot use transient allocation, which may discard depth after the pass.
-		if (GetContext()->CanSampleDepth())
+		if (preserveSceneDepth)
 			depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
-#endif
 		depthAttachment->Init(viewport.width, viewport.height, GetContext()->GetDepthFormat(), depthUsage,
 				"DEPTH ATTACHMENT");
 	}
@@ -734,8 +740,8 @@ bool ScreenDrawer::PresentFrame()
 	GetContext()->PresentFrame(colorAttachments[GetCurrentImage()]->GetImage(),
 			colorAttachments[GetCurrentImage()]->GetImageView(), viewport, aspectRatio
 #ifndef LIBRETRO
-			, GetContext()->CanSampleDepth() ? depthAttachment->GetImage() : vk::Image {},
-			GetContext()->CanSampleDepth() ? depthAttachment->GetImageView() : vk::ImageView {}
+			, preserveSceneDepth ? depthAttachment->GetImage() : vk::Image {},
+			preserveSceneDepth ? depthAttachment->GetImageView() : vk::ImageView {}
 #endif
 	);
 
@@ -763,6 +769,11 @@ void ClassicRender::createAttachments(int index, vk::ImageView imageView, vk::Im
 			imageView,
 			drawer->depthAttachment->GetImageView(),
 	};
+	if (framebufferDepthView != attachments[1]) {
+		if (!framebuffers.empty())
+			drawer->commandPool->addToFlight(new Deleter(std::move(framebuffers)));
+		framebufferDepthView = attachments[1];
+	}
 	if ((int)framebuffers.size() < index + 1)
 		framebuffers.resize(index + 1);
 	if (!framebuffers[index])
@@ -807,11 +818,6 @@ void ScreenClassicRender::init(Drawer *drawer)
 					vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
 					vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal),
 	};
-#ifndef LIBRETRO
-	if (vkCtx()->CanSampleDepth())
-		attachmentDescriptions[1].storeOp = vk::AttachmentStoreOp::eStore;
-#endif
-
 	vk::AttachmentReference colorReference(0, vk::ImageLayout::eColorAttachmentOptimal);
 	vk::AttachmentReference depthReference(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
@@ -824,23 +830,27 @@ void ScreenClassicRender::init(Drawer *drawer)
 	vk::SubpassDependency dependency(0, vk::SubpassExternal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eFragmentShader,
 			vk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eShaderRead,vk::DependencyFlagBits::eByRegion);
 
-	renderPassLoad = vkCtx()->GetDevice().createRenderPassUnique(vk::RenderPassCreateInfo(vk::RenderPassCreateFlags(),
-			attachmentDescriptions,
-			subpass,
-			dependency));
-
-	attachmentDescriptions[0].loadOp = vk::AttachmentLoadOp::eClear;
-	renderPassClear = vkCtx()->GetDevice().createRenderPassUnique(vk::RenderPassCreateInfo(vk::RenderPassCreateFlags(),
-			attachmentDescriptions,
-			subpass,
-			dependency));
-	drawer->pipelineManager->setRenderPass(*renderPassClear);
+	auto createRenderPasses = [&](bool preserveDepth) {
+		attachmentDescriptions[1].storeOp = preserveDepth ? vk::AttachmentStoreOp::eStore : vk::AttachmentStoreOp::eDontCare;
+		attachmentDescriptions[0].loadOp = vk::AttachmentLoadOp::eClear;
+		renderPasses[preserveDepth][false] = vkCtx()->GetDevice().createRenderPassUnique(
+				vk::RenderPassCreateInfo({}, attachmentDescriptions, subpass, dependency));
+		attachmentDescriptions[0].loadOp = vk::AttachmentLoadOp::eLoad;
+		renderPasses[preserveDepth][true] = vkCtx()->GetDevice().createRenderPassUnique(
+				vk::RenderPassCreateInfo({}, attachmentDescriptions, subpass, dependency));
+	};
+	createRenderPasses(false);
+#ifndef LIBRETRO
+	if (vkCtx()->CanSampleDepth())
+		createRenderPasses(true);
+#endif
+	// Load and store ops do not affect render pass compatibility.
+	drawer->pipelineManager->setRenderPass(*renderPasses[false][false]);
 }
 
 void ScreenClassicRender::term()
 {
-	renderPassLoad.reset();
-	renderPassClear.reset();
+	renderPasses = {};
 	ClassicRender::term();
 }
 
@@ -948,10 +958,8 @@ void DynamicRender::beginRender(vk::CommandBuffer cmdBuffer, int index)
 	depthAttachment.imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 	depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
 	depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
-#ifndef LIBRETRO
-	if (!drawer->rendContext->isRTT && vkCtx()->CanSampleDepth())
+	if (drawer->preserveSceneDepth)
 		depthAttachment.storeOp = vk::AttachmentStoreOp::eStore;
-#endif
 	depthAttachment.clearValue.depthStencil = vk::ClearDepthStencilValue{ 0.f, 0 };
 
 	vk::RenderingInfoKHR renderingInfo {};
