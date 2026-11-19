@@ -1130,6 +1130,15 @@ void GlShaderChain::updateConfiguredChain()
 	parameterGeneration = postprocess::shaderChainStatusGeneration();
 }
 
+bool GlShaderChain::needsSceneDepth() const
+{
+	return std::any_of(programs.begin(), programs.end(), [](const Program& program) {
+		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceUniform& resource) {
+			return resource.kind == postprocess::ShaderInputKind::Depth;
+		});
+	});
+}
+
 GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::ShaderFrameInfo& inputFrame,
 		bool& presentationTransformApplied, GLuint depthTexture, int depthWidth, int depthHeight)
 {
@@ -1147,11 +1156,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 	// left a restricted mask on its final draw. glColorMask resets all attachments.
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	frame.frameCount = renderedFrames;
-	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
-		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceUniform& resource) {
-			return resource.kind == postprocess::ShaderInputKind::Depth;
-		});
-	});
+	const bool needsDepth = needsSceneDepth();
 	if (needsDepth && depthTexture == 0) {
 		postprocess::reportShaderFrameStatus(activePath, "This frame has no scene depth available for the selected shader.");
 		return nullptr;

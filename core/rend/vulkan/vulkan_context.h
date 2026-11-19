@@ -117,7 +117,9 @@ public:
 	void ResetGpuTiming();
 	void Present() noexcept;
 	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-			vk::Image depthImage = {}, vk::ImageView depthView = {}, bool hikaru = false) noexcept;
+			vk::Image depthImage = {}, vk::ImageView depthView = {}, bool hikaru = false,
+			vk::ImageAspectFlags depthAspects = vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil) noexcept;
+	bool HikaruShaderNeedsSceneDepth() const;
 	void PresentLastFrame();
 	bool GetLastFrame(std::vector<u8>& data, int& width, int& height);
 

@@ -20,6 +20,22 @@ struct GlShaderPresentation::State
     GLuint drawFramebuffer = 0;
     GLuint readFramebuffer = 0;
     bool shaderRequested = false;
+    GLuint shaderDepth = 0;
+    int depthWidth = 0;
+    int depthHeight = 0;
+
+    ~State()
+    {
+        releaseDepth();
+    }
+
+    void releaseDepth()
+    {
+        if (shaderDepth) {
+            glDeleteTextures(1, &shaderDepth);
+            shaderDepth = 0;
+        }
+    }
 };
 
 GlShaderPresentation::GlShaderPresentation() = default;
@@ -42,6 +58,7 @@ uint32_t GlShaderPresentation::begin(uint32_t target, int width, int height)
     } else if (!shaderRequested && state->shaderRequested) {
         state->chain.term();
         state->shaderInput.reset();
+        state->releaseDepth();
         glcache.Reset();
     }
     GLint readFramebuffer = 0;
@@ -75,7 +92,12 @@ uint32_t GlShaderPresentation::begin(uint32_t target, int width, int height)
     return state->capture->getFramebuffer();
 }
 
-void GlShaderPresentation::present(int destY)
+bool GlShaderPresentation::needsSceneDepth() const
+{
+    return capturePending && state->shaderRequested && state->chain.needsSceneDepth();
+}
+
+void GlShaderPresentation::present(int destY, uint32_t depthTexture)
 {
     if (!capturePending)
         return;
@@ -104,10 +126,42 @@ void GlShaderPresentation::present(int destY)
             state->capture->bind(GL_READ_FRAMEBUFFER);
             state->shaderInput->bind(GL_DRAW_FRAMEBUFFER);
             glBlitFramebuffer(0, 0, width, height, 0, height, width, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            GLuint shaderDepth = 0;
+            if (depthTexture) {
+                if (!state->shaderDepth || state->depthWidth != width || state->depthHeight != height) {
+                    if (!state->shaderDepth)
+                        glGenTextures(1, &state->shaderDepth);
+                    glActiveTexture(GL_TEXTURE0);
+                    glcache.BindTexture(GL_TEXTURE_2D, state->shaderDepth);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0,
+                        GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+                    glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                    glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    state->depthWidth = width;
+                    state->depthHeight = height;
+                }
+                // The chain sees the same top-origin rows for color and depth.
+                glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTexture, 0);
+                glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, state->shaderDepth, 0);
+                if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE
+                        && glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                    glBlitFramebuffer(0, 0, width, height, 0, height, width, 0, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+                    shaderDepth = state->shaderDepth;
+                }
+                glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+                glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+                if (!shaderDepth)
+                    state->releaseDepth();
+            } else {
+                state->releaseDepth();
+            }
             postprocess::ShaderFrameInfo frame { width, height, width, height, 0, false,
                 static_cast<float>(width) / height };
             bool presentationTransformApplied = false;
-            if (auto* output = state->chain.render(state->shaderInput->getTexture(), frame, presentationTransformApplied)) {
+            if (auto* output = state->chain.render(state->shaderInput->getTexture(), frame, presentationTransformApplied,
+                    shaderDepth, shaderDepth ? width : 0, shaderDepth ? height : 0)) {
                 image = output;
                 flipOutput = true;
             }

@@ -46,7 +46,9 @@ public:
 	void EndImGuiFrame();
 #ifdef USE_HIKARU
 	// An empty view invalidates the retained Hikaru frame when its canvas is replaced.
-	void presentHikaruFrame(const ComPtr<ID3D11ShaderResourceView>& image, unsigned width = 0, unsigned height = 0);
+	bool hikaruNeedsSceneDepth() const;
+	void presentHikaruFrame(const ComPtr<ID3D11ShaderResourceView>& image, unsigned width = 0, unsigned height = 0,
+			const ComPtr<ID3D11ShaderResourceView>& depth = {});
 	void resetHikaruPresentation();
 #endif
 	void Present();
@@ -115,6 +117,7 @@ private:
 	bool overlayOnly = false;
 #ifdef USE_HIKARU
 	ComPtr<ID3D11ShaderResourceView> externalFrame;
+	ComPtr<ID3D11ShaderResourceView> externalDepth;
 	ComPtr<ID3D11ShaderResourceView> externalShaderFrame;
 	std::unique_ptr<Quad> externalQuad;
 	std::unique_ptr<Dx11ShaderChain> externalShaderChain;

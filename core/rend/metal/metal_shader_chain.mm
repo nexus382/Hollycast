@@ -666,7 +666,9 @@ bool MetalShaderChain::Impl::render(id<MTLTexture> source, id<MTLTexture> depth,
 		id<MTLTexture> effectiveDepth = nil;
 		if (needsDepth) {
 			ensure(depthCopy, frame.sourceWidth, frame.sourceHeight, MTLPixelFormatR32Float, false);
-			copy(command, depth, depthCopy.texture, false, nullptr, depth.pixelFormat == MTLPixelFormatDepth32Float_Stencil8);
+			const bool nativeDepth = depth.pixelFormat == MTLPixelFormatDepth32Float_Stencil8
+					|| depth.pixelFormat == MTLPixelFormatDepth32Float;
+			copy(command, depth, depthCopy.texture, false, nullptr, nativeDepth);
 			effectiveDepth = depthCopy.texture;
 		}
 		id<MTLTexture> input = source;
@@ -862,6 +864,15 @@ bool MetalShaderChain::Impl::render(id<MTLTexture> source, id<MTLTexture> depth,
 MetalShaderChain::MetalShaderChain(id<MTLDevice> device, id<MTLCommandQueue> queue)
 	: impl(std::make_unique<Impl>(device, queue)) {}
 MetalShaderChain::~MetalShaderChain() = default;
+bool MetalShaderChain::needsSceneDepth() const
+{
+	return std::any_of(impl->programs.begin(), impl->programs.end(), [](const Program& program) {
+		return std::any_of(program.bindings.begin(), program.bindings.end(), [](const auto& binding) {
+			return binding.input.kind == ShaderInputKind::Depth;
+		});
+	});
+}
+
 bool MetalShaderChain::render(id<MTLTexture> source, id<MTLTexture> depth, const ShaderFrameInfo& frame,
 		id<MTLTexture> __strong& output, bool& transformed, bool& fullPresentation)
 {

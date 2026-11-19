@@ -1371,8 +1371,13 @@ bool VulkanContext::ShouldPreserveSceneDepth() const
 			&& postprocess::hasConfiguredShaderSelection();
 }
 
+bool VulkanContext::HikaruShaderNeedsSceneDepth() const
+{
+	return shaderChain && shaderChain->needsSceneDepth();
+}
+
 void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
-		vk::Image depthImage, vk::ImageView depthView, bool hikaru) noexcept
+		vk::Image depthImage, vk::ImageView depthView, bool hikaru, vk::ImageAspectFlags depthAspects) noexcept
 {
 	lastFrameView = imageView;
 	lastFrameSourceExtent = extent;
@@ -1405,7 +1410,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 						{ VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f } };
 				processed = shaderChain->render(image, imageView, extent,
 						shaderFrame, processedView,
-						presentationTransformApplied, depthImage, depthView);
+						presentationTransformApplied, depthImage, depthView, depthAspects);
 				fullPresentation = processed && shaderChain->startsInDisplaySpace() && shaderFrame.presentation.hasBorders();
 				if (processed)
 					imageView = processedView;

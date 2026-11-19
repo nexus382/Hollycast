@@ -9,6 +9,7 @@
 class MetalShaderChain
 {
 public:
+	bool needsSceneDepth() const;
 	MetalShaderChain(id<MTLDevice> device, id<MTLCommandQueue> queue);
 	~MetalShaderChain();
 	bool render(id<MTLTexture> source, id<MTLTexture> depth,

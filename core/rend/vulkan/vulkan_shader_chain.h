@@ -36,13 +36,14 @@ bool buildVulkanShaderSources(const ShaderPassSource& source, const std::vector<
 class VulkanShaderChain
 {
 public:
+	bool needsSceneDepth() const;
 	~VulkanShaderChain();
 
 	// GLSL files are fragment bodies. HollyCast supplies Source, SourceSize,
 	// OutputSize and FrameCount, matching the OpenGL executor contract.
 	bool render(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
-			bool& presentationTransformApplied, vk::Image depthImage = {}, vk::ImageView depthView = {});
+			bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView, vk::ImageAspectFlags depthAspects);
 	void term();
 	bool startsInDisplaySpace() const { return !programs.empty() && programs.front().pass.composeDisplayInput; }
 
@@ -123,7 +124,7 @@ private:
 	bool updateConfiguredChain();
 	bool renderInternal(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
-			bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView);
+			bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView, vk::ImageAspectFlags depthAspects);
 	bool compileCandidate(const postprocess::ShaderChain& chain, std::vector<Program>& candidate, std::string& error);
 	bool ensureTarget(Target& target, const vk::Extent2D& extent, vk::Format format, bool mipmapped, bool storage = false, postprocess::SlangResourceType type = postprocess::SlangResourceType::Sampler2D, uint32_t depth = 1, uint32_t layers = 1);
 	bool ensureTargetSet(TargetSet& targets, const Program& program, const vk::Extent2D& extent);

@@ -653,6 +653,15 @@ bool Dx11ShaderChain::prepareMipmappedSource(ComPtr<ID3D11ShaderResourceView>& s
 	return true;
 }
 
+bool Dx11ShaderChain::needsSceneDepth() const
+{
+	return std::any_of(programs.begin(), programs.end(), [](const Program& program) {
+		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceBinding& resource) {
+			return resource.input.kind == postprocess::ShaderInputKind::Depth;
+		});
+	});
+}
+
 bool Dx11ShaderChain::render(ComPtr<ID3D11ShaderResourceView>& sourceView, const postprocess::ShaderFrameInfo& inputFrame,
 		ComPtr<ID3D11ShaderResourceView>& outputView, bool& presentationTransformApplied,
 		const ComPtr<ID3D11ShaderResourceView>& depthView)
@@ -669,11 +678,7 @@ bool Dx11ShaderChain::render(ComPtr<ID3D11ShaderResourceView>& sourceView, const
 	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
 	if (stencilFrameSize != currentStencilSize) { stencilTargets.clear(); stencilFrameSize = currentStencilSize; }
 	frame.frameCount = renderedFrames;
-	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
-		return std::any_of(program.resources.begin(), program.resources.end(), [](const ResourceBinding& resource) {
-			return resource.input.kind == postprocess::ShaderInputKind::Depth;
-		});
-	});
+	const bool needsDepth = needsSceneDepth();
 	if (needsDepth && !depthView) {
 		postprocess::reportShaderFrameStatus(activePath, "This frame has no scene depth available for the selected shader.");
 		return false;

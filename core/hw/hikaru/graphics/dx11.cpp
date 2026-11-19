@@ -99,7 +99,8 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         MeshShaderSpecialization constants{};
         unsigned passFlags=0;
         bool fragmentList=false;
-        bool operator<(const PixelKey& other) const {return std::tie(bitmap,family,palette,peelComposite,constants,passFlags,fragmentList)<std::tie(other.bitmap,other.family,other.palette,other.peelComposite,other.constants,other.passFlags,other.fragmentList);}
+        DepthPass depthPass=DepthPass::None;
+        bool operator<(const PixelKey& other) const {return std::tie(bitmap,family,palette,peelComposite,constants,passFlags,fragmentList,depthPass)<std::tie(other.bitmap,other.family,other.palette,other.peelComposite,other.constants,other.passFlags,other.fragmentList,other.depthPass);}
     };
     struct FragmentBuffer {
         ComPtr<ID3D11Buffer> buffer;
@@ -489,7 +490,7 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
                 if(separateDepth)passFlags|=Dx11SeparateDepth;
             }
         }
-        const PixelKey key{draw.bitmap,draw.familyResolve,!draw.palette.empty(),draw.peelComposite,meshShaderSpecialization(draw,specialize),passFlags,fragmentCollectActive};
+        const PixelKey key{draw.bitmap,draw.familyResolve,!draw.palette.empty(),draw.peelComposite,meshShaderSpecialization(draw,specialize),passFlags,fragmentCollectActive,draw.depthPass};
         if(fragmentCollectActive&&!specialize)return genericPixel(key);
         auto found=pixelShaders.find(key);
         // Cache deferred keys too: a pending compiler must not make every
@@ -497,7 +498,7 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
         if(found!=pixelShaders.end()&&(!found->second.deferred||pendingPixel)) {
             found->second.touched=++shaderClock;return found->second.shader;
         }
-        const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags,key.peelComposite,key.fragmentList);
+        const auto source=dx11ShaderSource(key.bitmap,key.family,key.palette,key.constants,false,key.passFlags,key.peelComposite,key.fragmentList,key.depthPass);
         ComPtr<ID3DBlob> code;const u64 hash=hashShader(source.c_str(),"pixelMain","ps_5_0");
         const bool cached=lookupShader(hash,code);
         if(diagnostics.enabled) {
@@ -1227,15 +1228,22 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         return visible;
     }
     bool endOcclusion() override { finishOcclusion(); return occlusionResult(); }
+    bool needsSceneDepth() const override { return owner&&owner->hikaruNeedsSceneDepth(); }
     void present(unsigned width,unsigned height) override {
         if(fragmentCollectActive)throw FlycastException("Hikaru DX11 presentation during fragment collection");
         completePixelCompilation(false);
         auto& output=image(0);
         if(output.description.Width!=width||output.description.Height!=height){finishGpuFrame(false);return;}
         if(!owner)throw FlycastException("Hikaru DX11 presenter is unavailable");
+        ComPtr<ID3D11ShaderResourceView> depth;
+        if(presentedDepthTexture) {
+            auto& sceneDepth=image(presentedDepthTexture);
+            if(sceneDepth.depth&&sceneDepth.description.Width==width&&sceneDepth.description.Height==height)
+                depth=sceneDepth.view;
+        }
         unbindInputs();unbindTargets();
         // Timestamp deltas are elapsed command intervals; close before Present to exclude display time.
-        finishGpuFrame();owner->presentHikaruFrame(output.view,width,height);bindingsDirty=true;
+        finishGpuFrame();owner->presentHikaruFrame(output.view,width,height,depth);bindingsDirty=true;
         pollGpuFrames();presentDiagnostics();
     }
 };

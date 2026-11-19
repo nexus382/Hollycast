@@ -59,6 +59,14 @@ vk::Format depthFormat(GLenum format, bool sampled = false) {
         if ((format == GL_DEPTH_COMPONENT16 || candidate != vk::Format::eD16Unorm) && supported(candidate)) return candidate;
     throw std::runtime_error("No supported Hikaru Vulkan depth format");
 }
+vk::ImageAspectFlags imageAspects(vk::Format format, bool depth) {
+    if (!depth)
+        return vk::ImageAspectFlagBits::eColor;
+    auto aspects = vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth);
+    if (format == vk::Format::eD24UnormS8Uint || format == vk::Format::eD32SfloatS8Uint)
+        aspects |= vk::ImageAspectFlagBits::eStencil;
+    return aspects;
+}
 vk::Filter filter(GLenum f) { return f == GL_LINEAR ? vk::Filter::eLinear : vk::Filter::eNearest; }
 vk::SamplerAddressMode address(GLenum w) {
     if (w == GL_REPEAT) return vk::SamplerAddressMode::eRepeat;
@@ -158,7 +166,8 @@ class VulkanBackend final : public Backend {
         vk::Format color, depth, metadata;
         std::array<int32_t,MeshShaderSpecializationCount> shader{};
         bool fragmentCollect=false;
-        auto values() const { return std::tie(bitmap,familyResolve,peelComposite,palette,packed,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader,fragmentCollect); }
+        DepthPass depthPass=DepthPass::None;
+        auto values() const { return std::tie(bitmap,familyResolve,peelComposite,palette,packed,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader,fragmentCollect,depthPass); }
         bool operator==(const PipelineKey& b) const { return values()==b.values(); }
         bool operator<(const PipelineKey& b) const { return values()<b.values(); }
     };
@@ -187,6 +196,7 @@ class VulkanBackend final : public Backend {
     vk::UniqueRenderPass colorOnlyPass;
     std::map<std::tuple<vk::Format,vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
     vk::UniqueShaderModule meshVertex, meshFragment, paletteVertex, paletteFragment, fixedTexturePaletteFragment, bitmapVertex, bitmapFragment, familyFragment, peelFragment;
+    vk::UniqueShaderModule captureDepthFragment, composeDepthFragment;
     struct FragmentListStorage {
         std::unique_ptr<BufferData> heads,status,readback;
         std::array<std::unique_ptr<BufferData>,4> nodes;
@@ -577,9 +587,7 @@ class VulkanBackend final : public Backend {
             src = vk::AccessFlagBits::eShaderRead;
             srcStage = vk::PipelineStageFlagBits::eFragmentShader;
         }
-        vk::ImageAspectFlags aspect = image.depth ? vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth) : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
-        if (image.format == vk::Format::eD24UnormS8Uint || image.format == vk::Format::eD32SfloatS8Uint)
-            aspect |= vk::ImageAspectFlagBits::eStencil;
+        const auto aspect = imageAspects(image.format, image.depth);
         vk::ImageMemoryBarrier b(src,dst,image.layout,next,VK_QUEUE_FAMILY_IGNORED,VK_QUEUE_FAMILY_IGNORED,*image.image,{aspect,0,image.levels,0,1});
         cmd.pipelineBarrier(srcStage,dstStage,{},nullptr,nullptr,b);
         image.layout=next;
@@ -647,7 +655,16 @@ class VulkanBackend final : public Backend {
         auto found=pipelines.find(k);
         if(found!=pipelines.end()){lastPipeline=found;found->second.touched=++pipelineClock;return *found->second.pipeline;}
         auto pass=renderPass(k.color,k.depth,k.metadata);
-        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.packed?(k.palette?*packedPaletteVertex:*packedMeshVertex):k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.fragmentCollect?*fragmentCollectShader:k.familyResolve?*familyFragment:k.peelComposite?*peelFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
+        vk::ShaderModule depthFragment;
+        if (k.depthPass != DepthPass::None) {
+            const bool capture = k.depthPass == DepthPass::Capture;
+            auto& cached = capture ? captureDepthFragment : composeDepthFragment;
+            if (!cached)
+                cached = ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,
+                    vulkanFragmentSource(true, capture, false, 1, false, false, k.depthPass));
+            depthFragment = *cached;
+        }
+        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.packed?(k.palette?*packedPaletteVertex:*packedMeshVertex):k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,depthFragment?depthFragment:k.fragmentCollect?*fragmentCollectShader:k.familyResolve?*familyFragment:k.peelComposite?*peelFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
         std::array<vk::SpecializationMapEntry,MeshShaderSpecializationCount> entries{};
         for(unsigned i=0;i<entries.size();++i)entries[i]=vk::SpecializationMapEntry(i,uint32_t(i*sizeof(int32_t)),sizeof(int32_t));
         vk::SpecializationInfo specialization(entries.size(),entries.data(),sizeof(k.shader),k.shader.data());
@@ -1613,6 +1630,7 @@ public:
         const GLenum frontFace=(d.uniforms.inverted[2]!=0.f)?(d.frontFace==GL_CCW?GL_CW:GL_CCW):d.frontFace;
         PipelineKey key{d.bitmap,d.familyResolve,d.peelComposite,!d.palette.empty(),packed,bool(z&&d.depthTest),bool(z&&d.depthWrite),collecting?false:d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,collecting?std::array<bool,4>{false,false,false,false}:d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined,meshShaderSpecialization(d,specializeShaders)};
         key.fragmentCollect=collecting;
+        key.depthPass=d.depthPass;
         auto p=pipeline(key);
         if(boundPipeline!=p){cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);boundPipeline=p;}
         const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);
@@ -1659,6 +1677,9 @@ public:
             else std::memcpy(dstPixel,src,4);
         }
     }
+    bool needsSceneDepth() const override {
+        return ctx->HikaruShaderNeedsSceneDepth();
+    }
     void present(unsigned w,unsigned h) override {
         Image& out=image(0);
         if(out.extent.width!=w||out.extent.height!=h){discardFrameGpuTiming();return;}
@@ -1668,8 +1689,17 @@ public:
         endFrameGpuTiming(cmd);
         flushBatch();
         frameGpu.attempted=false;fragmentGpu.claimed=false;
-        // The display canvas has no scene depth attachment to lend to post-processing.
-        ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f,{}, {},true);
+        const Image* sceneDepth = nullptr;
+        if (presentedDepthTexture) {
+            const auto depth = images.find(presentedDepthTexture);
+            if (depth != images.end() && depth->second.depth && depth->second.sampleable
+                    && depth->second.extent == out.extent
+                    && depth->second.layout == vk::ImageLayout::eDepthStencilAttachmentOptimal)
+                sceneDepth = &depth->second;
+        }
+        ctx->PresentFrame(*out.image, *out.view, out.extent, h ? float(w) / float(h) : 1.f,
+            sceneDepth ? *sceneDepth->image : vk::Image {}, sceneDepth ? *sceneDepth->view : vk::ImageView {}, true,
+            sceneDepth ? imageAspects(sceneDepth->format, true) : vk::ImageAspectFlags {});
         ++geometryFrame;
         if(frameGpu.requested){reapCompletedDraws();pollFrameGpuTiming();}
         pollFragmentGpuTiming();

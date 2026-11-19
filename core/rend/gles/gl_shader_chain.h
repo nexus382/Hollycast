@@ -25,6 +25,7 @@
 class GlShaderChain
 {
 public:
+	bool needsSceneDepth() const;
 	~GlShaderChain();
 
 	// A candidate replaces the active chain only after every pass has compiled.

@@ -33,6 +33,7 @@
 #include "card_reader.h"
 #include "rend/gles/glcache.h"
 #include "rend/osd.h"
+#include "rend/postprocess/shader_chain.h"
 #include "rend/transform_matrix.h"
 #include "ui/imgui_driver.h"
 #include "ui/gui.h"
@@ -1126,6 +1127,17 @@ static bool renderFrame() {
         }
         target = GLint(capture);
     }
+    // The chain discovers depth bindings when it activates. Subsequent frames
+    // export the matching depth canvas only while that chain asks for it.
+    const bool exportDepth = postprocess::hasConfiguredShaderSelection()
+            && (nativeGraphics ? nativeGraphics->needsSceneDepth() : glShaderPresentation.needsSceneDepth());
+    hikaru_engine_set_depth_output(engine, exportDepth);
+    const auto present = [&](uint32_t depthTexture) {
+        if (nativeGraphics)
+            nativeGraphics->present(depthTexture);
+        else
+            glShaderPresentation.present(drawableHeight - outputHeight, depthTexture);
+    };
     hikaru_engine_set_output_aspect_ratio(engine, getOutputFramebufferAspectRatio());
     hikaru_engine_resize(engine, uint32_t(target), unsigned(outputWidth), unsigned(outputHeight));
     if (!threaded && readyFrameSlot >= 0
@@ -1139,6 +1151,7 @@ static bool renderFrame() {
         glcache.Reset();
         if (nativeGraphics) nativeGraphics->checkError();
         if (drawResult != 0) throw FlycastException(std::string("Hikaru renderer: ") + drawError.data());
+        const uint32_t depthTexture = exportDepth ? hikaru_engine_depth_texture(engine) : 0;
         performance_overlay::recordGuestFrame();
         performance_overlay::recordRenderedResolution(640, 480,
             completed.internalWidth, completed.internalHeight);
@@ -1147,8 +1160,7 @@ static bool renderFrame() {
         for (size_t i = 0; i < completed.audioCount; ++i)
             WriteSample(completed.audio[i].first, completed.audio[i].second);
         graphicsScope.reset();
-        if (nativeGraphics) nativeGraphics->present();
-        else glShaderPresentation.present(drawableHeight - outputHeight);
+        present(depthTexture);
         if (imguiDriver) {
             imguiDriver->setFrameRendered();
             if (!nativeGraphics) gui_display_osd();
@@ -1206,6 +1218,7 @@ static bool renderFrame() {
 #ifndef LIBRETRO
         performance_overlay::recordSh4Vblank();
 #endif
+        const uint32_t depthTexture = exportDepth ? hikaru_engine_depth_texture(engine) : 0;
         performance_overlay::recordGuestFrame();
         performance_overlay::recordRenderedResolution(640, 480,
             internalWidth, internalHeight);
@@ -1219,8 +1232,7 @@ static bool renderFrame() {
             ? std::max(0.0, audioOutputBlockedSeconds() - audioBlockedStart) * 1000 : 0;
         graphicsScope.reset();
         const auto presentStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-        if (nativeGraphics) nativeGraphics->present();
-        else glShaderPresentation.present(drawableHeight - outputHeight);
+        present(depthTexture);
         const auto presentEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         if (imguiDriver) {
             imguiDriver->setFrameRendered();
@@ -1316,6 +1328,7 @@ static bool renderFrame() {
     if (nativeGraphics) nativeGraphics->checkError();
     graphicsScope.reset();
     if (drawResult != 0) throw FlycastException(std::string("Hikaru renderer: ") + drawError.data());
+    const uint32_t depthTexture = exportDepth ? hikaru_engine_depth_texture(engine) : 0;
     performance_overlay::recordGuestFrame();
     const unsigned renderedHeight = displaySlot->internalHeight;
     performance_overlay::recordRenderedResolution(640, 480, displaySlot->internalWidth, renderedHeight);
@@ -1327,8 +1340,7 @@ static bool renderFrame() {
     if (traceTiming)
         audioWaitMs = std::max(0.0, audioOutputBlockedSeconds() - blockedStart) * 1000;
     const auto presentStart = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    if (nativeGraphics) nativeGraphics->present();
-    else glShaderPresentation.present(drawableHeight - outputHeight);
+    present(depthTexture);
     const auto presentEnd = traceTiming ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     nativePresentMs = traceTiming ? std::chrono::duration<double, std::milli>(presentEnd - presentStart).count() : 0;
     if (imguiDriver) {

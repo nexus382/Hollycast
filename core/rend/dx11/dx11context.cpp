@@ -424,7 +424,8 @@ void DX11Context::drawExternalFrame(unsigned sourceWidth, unsigned sourceHeight)
 			frame.viewportHeight = height;
 			bool presentationTransformApplied = false;
 			externalShaderGeneration = postprocess::shaderChainReloadGeneration();
-			if (externalShaderChain->render(externalFrame, frame, externalShaderFrame, presentationTransformApplied))
+			if (externalShaderChain->render(externalFrame, frame, externalShaderFrame, presentationTransformApplied,
+					externalDepth))
 				externalShaderViewport = viewport;
 			else
 				externalShaderFrame.reset();
@@ -449,9 +450,18 @@ void DX11Context::drawExternalFrame(unsigned sourceWidth, unsigned sourceHeight)
 	externalQuad->draw(filtered ? externalShaderFrame : externalFrame, samplers.getSampler(false));
 }
 
-void DX11Context::presentHikaruFrame(const ComPtr<ID3D11ShaderResourceView>& image, unsigned width, unsigned height)
+bool DX11Context::hikaruNeedsSceneDepth() const
+{
+	return externalShaderChain && postprocess::hasConfiguredShaderSelection()
+			&& externalShaderGeneration == postprocess::shaderChainReloadGeneration()
+			&& externalShaderChain->needsSceneDepth();
+}
+
+void DX11Context::presentHikaruFrame(const ComPtr<ID3D11ShaderResourceView>& image, unsigned width, unsigned height,
+		const ComPtr<ID3D11ShaderResourceView>& depth)
 {
 	externalFrame = image;
+	externalDepth = image ? depth : ComPtr<ID3D11ShaderResourceView>{};
 	externalShaderFrame.reset();
 	if (!externalFrame)
 		return;
@@ -471,6 +481,7 @@ void DX11Context::presentHikaruFrame(const ComPtr<ID3D11ShaderResourceView>& ima
 void DX11Context::resetHikaruPresentation()
 {
 	externalFrame.reset();
+	externalDepth.reset();
 	externalShaderFrame.reset();
 	if (externalShaderChain) {
 		externalShaderChain->term();

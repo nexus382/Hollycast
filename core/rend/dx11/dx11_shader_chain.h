@@ -28,6 +28,7 @@ class Quad;
 class Dx11ShaderChain
 {
 public:
+	bool needsSceneDepth() const;
 	void init(const ComPtr<ID3D11Device>& device, const ComPtr<ID3D11DeviceContext>& deviceContext, Quad *quad);
 	bool render(ComPtr<ID3D11ShaderResourceView>& sourceView, const postprocess::ShaderFrameInfo& frame,
 			ComPtr<ID3D11ShaderResourceView>& outputView, bool& presentationTransformApplied,

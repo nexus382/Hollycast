@@ -53,6 +53,7 @@ struct MetalContext::Impl
 	id<MTLSamplerState> pointSampler = nil;
 	std::unique_ptr<MetalOverlay> overlay;
 	id<MTLTexture> lastFrame = nil;
+	id<MTLTexture> lastFrameDepth = nil;
 	std::weak_ptr<const HikaruFrameShader> hikaruFrameShader;
 	id<MTLTexture> shaderOutput = nil;
 	bool shaderTransformed = false, shaderFullPresentation = false;
@@ -201,6 +202,7 @@ MetalContext::~MetalContext()
 #endif
 	imguiDriver.reset();
 	impl->lastFrame = nil;
+	impl->lastFrameDepth = nil;
 }
 void MetalContext::WaitIdle()
 {
@@ -249,20 +251,21 @@ std::string MetalContext::getDriverName() { return device.name.UTF8String ?: "Me
 std::string MetalContext::getDriverVersion() { return "Metal"; }
 void MetalContext::PresentFrame(id<MTLTexture> texture, float aspectRatio)
 {
-	presentFrame(texture, aspectRatio, {});
+	presentFrame(texture, nil, aspectRatio, {});
 }
-void MetalContext::PresentHikaruFrame(id<MTLTexture> texture, float aspectRatio,
+void MetalContext::PresentHikaruFrame(id<MTLTexture> texture, id<MTLTexture> depth, float aspectRatio,
 		const std::shared_ptr<const HikaruFrameShader>& shader)
 {
-	presentFrame(texture, aspectRatio, shader);
+	presentFrame(texture, depth, aspectRatio, shader);
 }
-void MetalContext::presentFrame(id<MTLTexture> texture, float aspectRatio,
+void MetalContext::presentFrame(id<MTLTexture> texture, id<MTLTexture> depth, float aspectRatio,
 		const std::shared_ptr<const HikaruFrameShader>& shader)
 {
 	if (texture)
 	{
 		impl->gameFramePending = true;
 		impl->lastFrame = texture;
+		impl->lastFrameDepth = depth;
 		impl->hikaruFrameShader = shader;
 		impl->shaderOutput = nil;
 		impl->shaderTransformed = impl->shaderFullPresentation = false;
@@ -416,12 +419,15 @@ void MetalContext::PresentLastFrame()
 				}
 				id<MTLTexture> output = nil;
 				bool transformed = false;
-				hikaruCanvas = (*shader)(impl->lastFrame, hikaruWidth, hikaruHeight, output, transformed);
+				hikaruCanvas = (*shader)(impl->lastFrame, impl->lastFrameDepth, hikaruWidth, hikaruHeight,
+						output, transformed);
 				if (hikaruCanvas)
 					SetShaderOutput(output ? output : impl->lastFrame, output && transformed, true);
 				else if (impl->shaderOutput)
 					SetShaderOutput(nil, false, false);
 			}
+			else
+				impl->lastFrameDepth = nil;
 		}
 		if (showFrame && renderer && !hikaruCanvas) showFrame = renderer->RenderLastFrame();
 		MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];

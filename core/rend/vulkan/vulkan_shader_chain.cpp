@@ -1149,12 +1149,21 @@ bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commands, std::ve
 	return true;
 }
 
+bool VulkanShaderChain::needsSceneDepth() const
+{
+	return std::any_of(programs.begin(), programs.end(), [](const Program& program) {
+		return std::any_of(program.bindings.begin(), program.bindings.end(), [](const Binding& binding) {
+			return binding.input.kind == postprocess::ShaderInputKind::Depth;
+		});
+	});
+}
+
 bool VulkanShaderChain::render(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 		const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
-		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView)
+		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView, vk::ImageAspectFlags depthAspects)
 {
 	try {
-		return renderInternal(sourceImage, sourceView, extent, frame, outputView, presentationTransformApplied, depthImage, depthView);
+		return renderInternal(sourceImage, sourceView, extent, frame, outputView, presentationTransformApplied, depthImage, depthView, depthAspects);
 	} catch (const std::exception& exception) {
 		try {
 			postprocess::reportShaderFrameStatus(activePath, exception.what());
@@ -1170,7 +1179,7 @@ bool VulkanShaderChain::render(vk::Image sourceImage, vk::ImageView sourceView, 
 
 bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 		const postprocess::ShaderFrameInfo& inputFrame, vk::ImageView& outputView,
-		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView)
+		bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView, vk::ImageAspectFlags depthAspects)
 {
 	postprocess::ShaderFrameInfo frame = inputFrame;
 	presentationTransformApplied = false;
@@ -1191,11 +1200,7 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	frame.frameCount = renderedFrames;
 	VulkanContext *context = VulkanContext::Instance();
 	vk::CommandBuffer commandBuffer = context->GetCurrentCommandBuffer();
-	const bool needsDepth = std::any_of(programs.begin(), programs.end(), [](const Program& program) {
-		return std::any_of(program.bindings.begin(), program.bindings.end(), [](const Binding& binding) {
-			return binding.input.kind == postprocess::ShaderInputKind::Depth;
-		});
-	});
+	const bool needsDepth = needsSceneDepth();
 	if (needsDepth && (!depthImage || !depthView)) {
 		postprocess::reportShaderFrameStatus(activePath, "This frame has no scene depth available for the selected shader.");
 		return false;
@@ -1205,14 +1210,16 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	struct DepthReadScope {
 		vk::CommandBuffer commands;
 		vk::Image image;
-		DepthReadScope(vk::CommandBuffer commands, vk::Image image) : commands(commands), image(image)
+		vk::ImageAspectFlags aspects;
+		DepthReadScope(vk::CommandBuffer commands, vk::Image image, vk::ImageAspectFlags aspects)
+			: commands(commands), image(image), aspects(aspects)
 		{
 			if (!image)
 				return;
 			const vk::ImageMemoryBarrier barrier(vk::AccessFlagBits::eDepthStencilAttachmentWrite,
 					vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eDepthStencilAttachmentOptimal,
 					vk::ImageLayout::eDepthStencilReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					image, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1));
+					image, vk::ImageSubresourceRange(aspects, 0, 1, 0, 1));
 			commands.pipelineBarrier(vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
 					shaderReadStages(), {}, nullptr, nullptr, barrier);
 		}
@@ -1224,12 +1231,12 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 					vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
 					vk::ImageLayout::eDepthStencilReadOnlyOptimal, vk::ImageLayout::eDepthStencilAttachmentOptimal,
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image,
-					vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1));
+					vk::ImageSubresourceRange(aspects, 0, 1, 0, 1));
 			commands.pipelineBarrier(shaderReadStages(),
 					vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
 					{}, nullptr, nullptr, barrier);
 		}
-	} depthRead(commandBuffer, needsDepth ? depthImage : vk::Image {});
+	} depthRead(commandBuffer, needsDepth ? depthImage : vk::Image {}, depthAspects);
 	const size_t imageIndex = static_cast<size_t>(context->GetCurrentImageIndex());
 	if (targets.size() <= imageIndex)
 		targets.resize(imageIndex + 1);

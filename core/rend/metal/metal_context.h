@@ -20,8 +20,8 @@ class MetalContext final : public GraphicsContext
 	id<MTLCommandQueue> GetQueue() const { return queue; }
 	void PresentFrame(id<MTLTexture> texture, float aspectRatio);
 	// The Hikaru backend owns the filter. Its retained frame can outlive it.
-	using HikaruFrameShader = std::function<bool(id<MTLTexture>, int, int, id<MTLTexture> __strong&, bool&)>;
-	void PresentHikaruFrame(id<MTLTexture> texture, float aspectRatio,
+	using HikaruFrameShader = std::function<bool(id<MTLTexture>, id<MTLTexture>, int, int, id<MTLTexture> __strong&, bool&)>;
+	void PresentHikaruFrame(id<MTLTexture> texture, id<MTLTexture> depth, float aspectRatio,
 			const std::shared_ptr<const HikaruFrameShader>& shader);
 	// Updated by the renderer before presentation, including paused shader edits.
 	void SetShaderOutput(id<MTLTexture> texture, bool transformed, bool fullPresentation,
@@ -39,7 +39,7 @@ class MetalContext final : public GraphicsContext
 
   private:
 	MetalContext(void *window, void *display);
-	void presentFrame(id<MTLTexture> texture, float aspectRatio,
+	void presentFrame(id<MTLTexture> texture, id<MTLTexture> depth, float aspectRatio,
 			const std::shared_ptr<const HikaruFrameShader>& shader);
 	bool readFrame(std::vector<u8> &data, int &width, int &height, bool normalize);
 	struct Impl;
