@@ -2,11 +2,7 @@
 name: Nintendo Switch
 
 on:
-  push:
-    branches:
-      - dev
-      - master
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:

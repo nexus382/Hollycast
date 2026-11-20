@@ -1,27 +1,7 @@
 # Portions Copyright 2026 The Hollycast Authors
 name: Text shaping
 on:
-  pull_request:
-    paths:
-      - 'core/deps/imgui/**'
-      - 'core/deps/harfbuzz'
-      - 'core/deps/freetype'
-      - 'core/ui/gui_font.cpp'
-      - 'core/ui/gui_util.cpp'
-      - 'fonts/**'
-      - 'tests/text_shaping/**'
-      - '.github/workflows/text-shaping.yml'
-  push:
-    branches: [dev, master]
-    paths:
-      - 'core/deps/imgui/**'
-      - 'core/deps/harfbuzz'
-      - 'core/deps/freetype'
-      - 'core/ui/gui_font.cpp'
-      - 'core/ui/gui_util.cpp'
-      - 'fonts/**'
-      - 'tests/text_shaping/**'
-      - '.github/workflows/text-shaping.yml'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
