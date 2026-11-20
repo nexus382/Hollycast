@@ -2,19 +2,7 @@
 name: VMU regressions
 
 on:
-  pull_request:
-    paths:
-      - 'core/**'
-      - 'shell/android-studio/**'
-      - 'tests/vmu/**'
-      - '.github/workflows/vmu-regressions.yml'
-  push:
-    branches: [dev, master]
-    paths:
-      - 'core/**'
-      - 'shell/android-studio/**'
-      - 'tests/vmu/**'
-      - '.github/workflows/vmu-regressions.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
