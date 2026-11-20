@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -126,20 +127,39 @@ ggpo_add_local_input(GGPOSession *ggpo,
    }
 }
 
-GGPOErrorCode
-ggpo_synchronize_input(GGPOSession *ggpo,
-                       void *values,
-                       int size,
-                       int *disconnect_flags)
+static GGPOErrorCode
+synchronize_input(GGPOSession *ggpo, void *values, int size,
+                  int *disconnect_flags, int *predicted_flags)
 {
+   if (predicted_flags)
+      *predicted_flags = 0;
    if (!ggpo)
       return GGPO_ERRORCODE_INVALID_SESSION;
    try {
+      if (predicted_flags)
+         return ggpo->SyncInputWithPrediction(values, size, predicted_flags);
       return ggpo->SyncInput(values, size, disconnect_flags);
    } catch (const GGPOException& e) {
 	  ERROR_LOG(NETWORK, "GGPOException in ggpo_synchronize_input: %s", e.what());
       return e.ggpoError;
    }
+}
+
+GGPOErrorCode
+ggpo_synchronize_input(GGPOSession *ggpo, void *values, int size, int *disconnect_flags)
+{
+   return synchronize_input(ggpo, values, size, disconnect_flags, nullptr);
+}
+
+GGPOErrorCode
+ggpo_synchronize_input_with_prediction(GGPOSession *ggpo, void *values, int size, int *predicted_flags)
+{
+   return synchronize_input(ggpo, values, size, nullptr, predicted_flags);
+}
+
+int ggpo_get_last_confirmed_frame(GGPOSession *ggpo)
+{
+   return ggpo ? ggpo->GetLastConfirmedFrame() : -1;
 }
 
 GGPOErrorCode ggpo_disconnect_player(GGPOSession *ggpo,

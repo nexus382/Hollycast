@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -518,6 +519,15 @@ GGPO_API GGPOErrorCode __cdecl ggpo_synchronize_input(GGPOSession *,
                                                       void *values,
                                                       int size,
                                                       int *disconnect_flags);
+
+/* Synchronizes input and reports a bit for each player whose input was predicted. */
+GGPO_API GGPOErrorCode __cdecl ggpo_synchronize_input_with_prediction(GGPOSession *,
+                                                                      void *values,
+                                                                      int size,
+                                                                      int *predicted_flags);
+
+/* Returns the last confirmed peer-to-peer frame, or -1 if unavailable. */
+GGPO_API int __cdecl ggpo_get_last_confirmed_frame(GGPOSession *);
 
 /*
  * ggpo_disconnect_player --

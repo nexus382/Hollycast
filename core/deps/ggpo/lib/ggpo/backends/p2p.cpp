@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -259,6 +260,7 @@ Peer2PeerBackend::AddPlayer(GGPOPlayer *player,
       return GGPO_ERRORCODE_PLAYER_OUT_OF_RANGE;
    }
    *handle = QueueToPlayerHandle(queue);
+   _registered_players |= 1 << queue;
 
    if (player->type == GGPO_PLAYERTYPE_REMOTE) {
       AddRemotePlayer(player->u.remote.ip_address, player->u.remote.port, queue);
@@ -319,16 +321,28 @@ Peer2PeerBackend::SyncInput(void *values,
                             int size,
                             int *disconnect_flags)
 {
-   int flags;
+   return SyncInput(values, size, disconnect_flags, nullptr);
+}
 
+GGPOErrorCode
+Peer2PeerBackend::SyncInputWithPrediction(void *values, int size, int *predicted_flags)
+{
+   return SyncInput(values, size, nullptr, predicted_flags);
+}
+
+GGPOErrorCode
+Peer2PeerBackend::SyncInput(void *values, int size, int *disconnect_flags, int *predicted_flags)
+{
    // Wait until we've started to return inputs.
    if (_synchronizing) {
       return GGPO_ERRORCODE_NOT_SYNCHRONIZED;
    }
-   flags = _sync.SynchronizeInputs(values, size);
+   int flags = _sync.SynchronizeInputs(values, size, predicted_flags);
    if (disconnect_flags) {
       *disconnect_flags = flags;
    }
+   if (predicted_flags)
+      *predicted_flags &= _registered_players;
    return GGPO_OK;
 }
 

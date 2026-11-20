@@ -12,7 +12,7 @@
 // save-file copying that matching GGPO verification digests used to require.
 //
 // Wire format (all integers little-endian, fixed width):
-//   request:  "HCRQ" + u32 session protocol (3)
+//   request:  "HCRQ" + u32 GGPO protocol version
 //   response: "HCS1" + u16 version (1) + u16 item count, then per item
 //             u8 kind + u8 bus + u8 port + u32 length + payload bytes.
 // Kind 1 is the console flash, kind 2 a VMU in the given bus/slot. Payloads

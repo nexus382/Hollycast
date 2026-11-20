@@ -223,15 +223,28 @@ sock_t connectWithTimeout(const std::string& host, int port, int timeoutMs)
 
 		set_non_blocking(sock);
 		bool connected = connect(sock, (sockaddr*)&target, sizeof(target)) == 0;
-		if (!connected && get_last_error() == L_EINPROGRESS)
+		// Winsock reports WSAEWOULDBLOCK while a nonblocking connection is pending.
+#ifdef _WIN32
+		constexpr int connectPending = L_EWOULDBLOCK;
+#else
+		constexpr int connectPending = L_EINPROGRESS;
+#endif
+		if (!connected && get_last_error() == connectPending)
 		{
 			fd_set writeFds;
 			FD_ZERO(&writeFds);
 			FD_SET(sock, &writeFds);
+			fd_set errorFds = writeFds;
 			timeval tv{};
 			tv.tv_sec = timeoutMs / 1000;
 			tv.tv_usec = (timeoutMs % 1000) * 1000;
-			connected = select((int)sock + 1, nullptr, &writeFds, nullptr, &tv) > 0;
+			if (select((int)sock + 1, nullptr, &writeFds, &errorFds, &tv) > 0
+					&& FD_ISSET(sock, &writeFds) && !FD_ISSET(sock, &errorFds))
+			{
+				int error = 0;
+				socklen_t errorSize = sizeof(error);
+				connected = getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&error, &errorSize) == 0 && error == 0;
+			}
 		}
 		if (connected)
 		{

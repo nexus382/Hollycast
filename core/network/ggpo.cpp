@@ -22,7 +22,7 @@
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/maple/maple_if.h"
-#include "hw/mem/addrspace.h"
+#include "hw/sh4/sh4_mem.h"
 #include "hw/flashrom/nvmem.h"
 #include "session_state.h"
 #include <thread>
@@ -103,9 +103,15 @@ static void getLocalInput(MapleInputState inputState[4])
 #include <mutex>
 #include <unordered_map>
 #include <numeric>
+#include <limits>
 #include "imgui.h"
 #include "miniupnp.h"
 #include "hw/naomi/naomi_cart.h"
+
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+#include "hw/sh4/sh4_sched.h"
+#include "nowide/cstdio.hpp"
+#endif
 
 //#define SYNC_TEST 1
 
@@ -121,6 +127,9 @@ constexpr int SERVER_PORT = 19713;
 constexpr u32 BTN_TRIGGER_LEFT	= DC_BTN_BITMAPPED_LAST << 1;
 constexpr u32 BTN_TRIGGER_RIGHT	= DC_BTN_BITMAPPED_LAST << 2;
 
+// Protocol 4 changes deterministic execution and the guest RAM checksum.
+static constexpr u32 GGPO_PROTOCOL_VERSION = 4;
+
 #pragma pack(push, 1)
 // Exchanged byte-for-byte by GGPO during initial synchronization, so all
 // integer fields are fixed-width. Protocol 3 adds the input layout and the
@@ -131,7 +140,7 @@ constexpr u32 BTN_TRIGGER_RIGHT	= DC_BTN_BITMAPPED_LAST << 2;
 // blueminder/flycast-dojo fa518ac574b17fbc70837f97275c019b208a8740).
 struct VerificationData
 {
-	u32 protocol = 3;
+	u32 protocol = GGPO_PROTOCOL_VERSION;
 	u8 gameMD5[16] { };
 	u8 stateMD5[16] { };
 	u16 inputSize = 0;
@@ -177,6 +186,14 @@ struct MemPages
 };
 static std::unordered_map<int, MemPages> deltaStates;
 static int lastSavedFrame = -1;
+
+static u64 guestRamChecksum()
+{
+	// mem_b references guest RAM in both the mapped and allocated memory layouts.
+	const size_t size = mem_b.getSize();
+	return size != 0 ? XXH3_64bits(&mem_b[0], size) : 0;
+}
+
 struct FrameChecksums
 {
 	u64 full = 0;
@@ -184,15 +201,28 @@ struct FrameChecksums
 };
 static std::unordered_map<int, FrameChecksums> localChecksums;
 static std::unordered_map<int, FrameChecksums> remoteChecksums;
+static constexpr int CHECKSUM_INTERVAL = 60;
+static constexpr int CHECKSUM_HISTORY = 600;
 static int lastChecksumFrameSent;
 static bool desyncReported;
+static bool snapshotDifferenceLogged;
 
 static void compareChecksums(int frame, const FrameChecksums& local, const FrameChecksums& remote)
 {
-	if ((local.full == remote.full && local.ram == remote.ram) || desyncReported)
+	if (local.ram == remote.ram)
+	{
+		// SH4 rollback snapshots include native pointers and padding.
+		if (local.full != remote.full && !snapshotDifferenceLogged)
+		{
+			snapshotDifferenceLogged = true;
+			INFO_LOG(NETWORK, "GGPO rollback snapshot bytes differ at boundary %d; guest RAM agrees", frame);
+		}
+		return;
+	}
+	if (desyncReported)
 		return;
 	desyncReported = true;
-	WARN_LOG(NETWORK, "GGPO state desync at frame %d (full local %llx remote %llx, ram local %llx remote %llx, %s)", frame, local.full, remote.full, local.ram, remote.ram, local.ram == remote.ram ? "non-RAM state only" : "RAM diverged");
+	WARN_LOG(NETWORK, "GGPO guest RAM differs after confirmed frame %d (local %llx remote %llx)", frame - 1, local.ram, remote.ram);
 	os_notify(i18n::T("Connection desynchronized"), 3000);
 }
 
@@ -202,6 +232,7 @@ static void resetChecksumState()
 	remoteChecksums.clear();
 	lastChecksumFrameSent = 0;
 	desyncReported = false;
+	snapshotDifferenceLogged = false;
 }
 
 static int timesyncOccurred;
@@ -259,6 +290,134 @@ struct GameEvent
 	constexpr static int chatMessageLen(int len) { return len - sizeof(u.chat.playerNum) - sizeof(type); }
 };
 #pragma pack(pop)
+
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+// Diagnostic builds use isolated profiles. An empty ggpo-trace.enable file
+// records a session. Copy ggpo-replay.out to ggpo-replay.in to run it offline.
+using WireInputs = std::array<u8, sizeof(Inputs) * MAX_PLAYERS>;
+struct AppliedInputs
+{
+	WireInputs bytes{};
+	int polls = 0;
+};
+
+static std::unique_ptr<FILE, decltype(&fclose)> frameTrace(nullptr, fclose);
+static std::unique_ptr<FILE, decltype(&fclose)> replayOutput(nullptr, fclose);
+static std::unique_ptr<FILE, decltype(&fclose)> replayInput(nullptr, fclose);
+static std::unordered_map<int, AppliedInputs> finalInputs;
+static AppliedInputs replayInputs;
+static int traceFrame;
+static int nextConfirmedInput;
+static int replayPolls;
+static bool replayFinished;
+
+static void openFrameTrace()
+{
+	replayInput.reset(nowide::fopen(get_writable_data_path("ggpo-replay.in").c_str(), "rb"));
+	auto *enable = nowide::fopen(get_writable_data_path("ggpo-trace.enable").c_str(), "rb");
+	if (enable == nullptr && !replayInput)
+		return;
+	if (enable != nullptr)
+		fclose(enable);
+	frameTrace.reset(nowide::fopen(get_writable_data_path("ggpo-frames.log").c_str(), "w"));
+	if (!replayInput)
+		replayOutput.reset(nowide::fopen(get_writable_data_path("ggpo-replay.out").c_str(), "wb"));
+	if (!frameTrace || (!replayInput && !replayOutput))
+		throw FlycastException("Cannot open GGPO frame trace");
+	traceFrame = nextConfirmedInput = replayPolls = 0;
+	replayFinished = false;
+}
+
+static std::array<u64, 4> traceGuestState(u64 ram)
+{
+	// Hash named guest registers, including raw FPU bits, without context
+	// padding, host callbacks or dynarec temporaries.
+	const auto& ctx = Sh4cntx;
+	const u32 regs[] = {ctx.pc, ctx.sr.getFull(), ctx.gbr, ctx.ssr, ctx.spc, ctx.sgr,
+		ctx.dbr, ctx.vbr, ctx.pr, ctx.mac.l, ctx.mac.h, ctx.interrupt_pend};
+	const u32 fpu[] = {ctx.fpscr.full, ctx.fpul};
+	return { ram,
+		XXH3_64bits(regs, sizeof(regs)) ^ XXH3_64bits(ctx.r, sizeof(ctx.r))
+			^ XXH3_64bits_withSeed(ctx.r_bank, sizeof(ctx.r_bank), 1),
+		XXH3_64bits(fpu, sizeof(fpu)) ^ XXH3_64bits(ctx.fr, sizeof(ctx.fr))
+			^ XXH3_64bits_withSeed(ctx.xf, sizeof(ctx.xf), 1),
+		sh4_sched_now64() };
+}
+
+static void traceBoundary(int frame, u64 ram)
+{
+	const auto guest = traceGuestState(ram);
+	fprintf(frameTrace.get(), "S %d %d %016llx %016llx %016llx %llu\n",
+			frame, (int)inRollback, guest[0], guest[1], guest[2], guest[3]);
+}
+
+static bool readReplayFrame()
+{
+	u8 polled;
+	if (fread(&polled, 1, 1, replayInput.get()) != 1)
+	{
+		if (ferror(replayInput.get()))
+			throw FlycastException("Could not read GGPO replay");
+		return false;
+	}
+	if (polled > 1 || fread(replayInputs.bytes.data(), inputSize * MAX_PLAYERS, 1, replayInput.get()) != 1)
+		throw FlycastException("Truncated GGPO replay frame");
+	replayInputs.polls = polled;
+	replayPolls = 0;
+	return true;
+}
+
+static void startFrameTrace(const VerificationData& verification)
+{
+	const u32 timing[] = { (u32)config::Cable.get(), (u32)config::Broadcast.get(),
+		(u32)config::Region.get(), (u32)config::Language.get(), (u32)config::Sh4Clock.get(),
+		(u32)config::UseReios.get(), settings.platform.ram_size };
+	const auto start = traceGuestState(guestRamChecksum());
+	const u64 header[] = { 0x3145434152545047ULL, XXH3_64bits(&verification, sizeof(verification)),
+		XXH3_64bits(timing, sizeof(timing)), start[0], start[1], start[2], start[3] };
+	fprintf(frameTrace.get(), "H %s port=%d wire=%d axes=%d dynarec=%d game_bios_flash_vmu=%016llx timing=%016llx\n",
+			settings.content.gameId.c_str(), localPlayerNum, inputSize, analogAxes, (int)config::DynarecEnabled.get(),
+			header[1], header[2]);
+	traceBoundary(0, start[0]);
+	if (replayInput)
+	{
+		u64 savedHeader[std::size(header)];
+		if (fread(savedHeader, sizeof(savedHeader), 1, replayInput.get()) != 1
+				|| memcmp(header, savedHeader, sizeof(header)) != 0)
+			throw FlycastException("GGPO replay starting state or settings differ");
+		if (!readReplayFrame())
+			throw FlycastException("GGPO replay has no confirmed inputs");
+	}
+	else if (fwrite(header, sizeof(header), 1, replayOutput.get()) != 1)
+		throw FlycastException("Could not write GGPO replay header");
+}
+
+static void confirmTracedFrames(int snapshot)
+{
+	// Boundary N closes input N-1. Earlier forward attempts have already
+	// been superseded by any rollback driven by this poll.
+	for (; nextConfirmedInput < snapshot; ++nextConfirmedInput)
+	{
+		AppliedInputs applied;
+		const auto it = finalInputs.find(nextConfirmedInput);
+		if (it != finalInputs.end())
+		{
+			applied = it->second;
+			finalInputs.erase(it);
+		}
+		const u8 polled = applied.polls != 0;
+		if (fwrite(&polled, 1, 1, replayOutput.get()) != 1
+				|| fwrite(applied.bytes.data(), inputSize * MAX_PLAYERS, 1, replayOutput.get()) != 1)
+			throw FlycastException("Could not write GGPO replay frames");
+		fprintf(frameTrace.get(), "C %d %d\n", nextConfirmedInput, applied.polls);
+	}
+	if (snapshot % 60 == 0)
+	{
+		fflush(frameTrace.get());
+		fflush(replayOutput.get());
+	}
+}
+#endif
 
 /*
  * begin_game callback - This callback has been deprecated.  You must
@@ -360,6 +519,15 @@ static bool load_game_state(unsigned char *buffer, int len)
 	Deserializer deser(buffer, len, true);
 	int frame;
 	deser >> frame;
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (frameTrace)
+	{
+		fprintf(frameTrace.get(), "R %d %d\n", lastSavedFrame, frame);
+		for (int f = frame; f < lastSavedFrame; ++f)
+			finalInputs.erase(f);
+		traceFrame = frame;
+	}
+#endif
 	memwatch::unprotect();
 	for (int f = lastSavedFrame - 1; f >= frame; f--)
 	{
@@ -418,24 +586,32 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	}
 	const u64 fullChecksum = XXH3_64bits(*buffer, *len);
 	*checksum = (int)fullChecksum;
-	localChecksums[frame] = { fullChecksum, addrspace::ram_base != nullptr ? XXH3_64bits(addrspace::ram_base, settings.platform.ram_size) : 0 };
+	const bool exchangeChecksum = frame > 0 && frame % CHECKSUM_INTERVAL == 0;
+	bool hashRam = exchangeChecksum;
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	hashRam = hashRam || frameTrace != nullptr;
+#endif
+	const u64 ramChecksum = hashRam ? guestRamChecksum() : 0;
+	if (exchangeChecksum)
+		localChecksums[frame] = { fullChecksum, ramChecksum };
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (frameTrace)
 	{
-		auto remote = remoteChecksums.find(frame);
-		if (remote != remoteChecksums.end())
-		{
-			compareChecksums(frame, localChecksums[frame], remote->second);
-			remoteChecksums.erase(remote);
-		}
+		traceFrame = frame;
+		traceBoundary(frame, ramChecksum);
+	}
+#endif
+	{
 		for (auto it = localChecksums.begin(); it != localChecksums.end();)
 		{
-			if (it->first < frame - 600)
+			if (it->first < frame - CHECKSUM_HISTORY)
 				it = localChecksums.erase(it);
 			else
 				++it;
 		}
 		for (auto it = remoteChecksums.begin(); it != remoteChecksums.end();)
 		{
-			if (it->first < frame - 600)
+			if (it->first < frame - CHECKSUM_HISTORY)
 				it = remoteChecksums.erase(it);
 			else
 				++it;
@@ -553,15 +729,14 @@ static void on_message(u8 *msg, int len)
 		break;
 
 	case GameEvent::StateSync:
+		if (len == sizeof(event->type) + sizeof(event->u.sync))
 		{
-			const u32 frame = event->u.sync.frame;
-			auto local = localChecksums.find(frame);
-			if (local != localChecksums.end())
-			{
-				compareChecksums((int)frame, local->second, { event->u.sync.checksum, event->u.sync.ramChecksum });
-			}
-			else
-				remoteChecksums[frame] = { event->u.sync.checksum, event->u.sync.ramChecksum };
+			const s64 frame = event->u.sync.frame;
+			if (frame > 0 && frame % CHECKSUM_INTERVAL == 0
+					&& frame >= (s64)lastSavedFrame - CHECKSUM_HISTORY
+					&& frame <= (s64)lastSavedFrame + CHECKSUM_HISTORY
+					&& frame <= std::numeric_limits<int>::max())
+				remoteChecksums[static_cast<int>(frame)] = { event->u.sync.checksum, event->u.sync.ramChecksum };
 		}
 		break;
 
@@ -655,7 +830,7 @@ static void serveSessionState(int statePort)
 		set_recv_timeout(conn, 10000);
 		set_send_timeout(conn, 10000);
 		u32 protocol = 0;
-		if (sessionstate::receiveRequest(conn, protocol) && protocol == 3)
+		if (sessionstate::receiveRequest(conn, protocol) && protocol == GGPO_PROTOCOL_VERSION)
 		{
 			const auto items = collectSessionState();
 			if (sessionstate::sendItems(conn, items))
@@ -699,7 +874,7 @@ static std::vector<sessionstate::Item> fetchSessionState(const std::string& host
 			set_send_timeout(sock, 10000);
 			std::vector<sessionstate::Item> items;
 			stage = "send-request";
-			bool ok = sessionstate::sendRequest(sock, 3);
+			bool ok = sessionstate::sendRequest(sock, GGPO_PROTOCOL_VERSION);
 			if (ok)
 			{
 				stage = "receive-items";
@@ -807,6 +982,12 @@ void startSession(int localPort, int localPlayerNum)
 {
 	resetChecksumState();
 	lastSavedFrame = -1;
+	// A previous arcade session may have used a different wire layout.
+	analogAxes = 0;
+	absPointerPos = false;
+	keyboardGame = false;
+	mouseGame = false;
+
 	GGPOSessionCallbacks cb{};
 	cb.begin_game      = begin_game;
 	cb.advance_frame   = advance_frame;
@@ -818,7 +999,8 @@ void startSession(int localPort, int localPlayerNum)
 	cb.on_message      = on_message;
 
 #ifdef SYNC_TEST
-	GGPOErrorCode result = ggpo_start_synctest(&ggpoSession, &cb, settings.content.gameId.c_str(), MAX_PLAYERS, sizeof(kcode[0]), 1);
+	inputSize = sizeof(kcode[0]);
+	GGPOErrorCode result = ggpo_start_synctest(&ggpoSession, &cb, settings.content.gameId.c_str(), MAX_PLAYERS, inputSize, 1);
 	if (result != GGPO_OK)
 	{
 		WARN_LOG(NETWORK, "GGPO start sync session failed: %d", result);
@@ -832,17 +1014,12 @@ void startSession(int localPort, int localPlayerNum)
 	player.player_num = (1 - localPlayerNum) + 1;
 	result = ggpo_add_player(ggpoSession, &player, &remotePlayer);
 	synchronized = true;
-	analogAxes = 0;
 	NOTICE_LOG(NETWORK, "GGPO synctest session started");
 #else
 	if (settings.platform.isConsole())
 		analogAxes = config::GGPOAnalogAxes;
 	else
 	{
-		analogAxes = 0;
-		absPointerPos = false;
-		keyboardGame = false;
-		mouseGame = false;
 		if (settings.input.lightgunGame)
 			absPointerPos = true;
 		else if (settings.input.keyboardGame)
@@ -864,9 +1041,15 @@ void startSession(int localPort, int localPlayerNum)
 	// The wire format carries at most two analog axes (see Inputs).
 	if (analogAxes < 0 || analogAxes > 2)
 		throw FlycastException("GGPO analog axes must be between 0 and 2");
-	inputSize = sizeof(kcode[0]) + analogAxes + (int)absPointerPos * sizeof(Inputs::u.absPos)
+	const size_t sessionInputSize = sizeof(kcode[0]) + analogAxes + (int)absPointerPos * sizeof(Inputs::u.absPos)
 		+ (int)keyboardGame * sizeof(Inputs::u.keys) + (int)mouseGame * sizeof(Inputs::u.relPos);
+	if (sessionInputSize > sizeof(Inputs))
+		throw FlycastException("GGPO input layout exceeds the wire buffer");
+	inputSize = static_cast<int>(sessionInputSize);
 
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	openFrameTrace();
+#endif
 
 	size_t colon = config::NetworkServer.get().find(':');
 	std::string peerIp = config::NetworkServer.get().substr(0, colon);
@@ -887,7 +1070,11 @@ void startSession(int localPort, int localPlayerNum)
 
 	// The guest adopts the host's memory card and console flash before
 	// verification, so both sides start from the same saved state.
-	if (settings.platform.isConsole())
+	if (settings.platform.isConsole()
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+			&& !replayInput
+#endif
+		)
 		syncSessionState(localPort, localPlayerNum, peerIp, peerPort);
 
 	VerificationData verif;
@@ -897,6 +1084,8 @@ void startSession(int localPort, int localPlayerNum)
 	mcfg_GetDeviceTypes(verif.mapleDevices);
 	MD5Sum().add(settings.network.md5.bios)
 			.add(settings.network.md5.game)
+			// The Dreamcast guest can read the cable type directly.
+			.add(settings.platform.isConsole() ? static_cast<u32>(config::Cable.get()) : 0u)
 			.getDigest(verif.gameMD5);
 	auto& digest = settings.network.md5.savestate;
 	if (std::find_if(std::begin(digest), std::end(digest), [](u8 b) { return b != 0; }) != std::end(digest))
@@ -909,6 +1098,20 @@ void startSession(int localPort, int localPlayerNum)
 				.add(settings.network.md5.vmu)
 				.getDigest(verif.stateMD5);
 	}
+
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (frameTrace)
+	{
+		ggpo::localPlayerNum = localPlayerNum;
+		startFrameTrace(verif);
+		if (replayInput)
+		{
+			begin_game(nullptr);
+			synchronized = true;
+			return;
+		}
+	}
+#endif
 
 	GGPOErrorCode result = ggpo_start_session(&ggpoSession, &cb, settings.content.gameId.c_str(), MAX_PLAYERS, inputSize, localPort,
 			&verif, sizeof(verif));
@@ -976,6 +1179,14 @@ void stopSession()
 	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
 	resetChecksumState();
 	lastSavedFrame = -1;
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (replayInput)
+		emu.setNetworkState(false);
+	replayInput.reset();
+	replayOutput.reset();
+	frameTrace.reset();
+	finalInputs.clear();
+#endif
 	if (sessionStateAdopted)
 		restoreSessionState();
 	if (ggpoSession == nullptr)
@@ -991,7 +1202,7 @@ void stopSession()
 void getInput(MapleInputState inputState[4])
 {
 	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
-	if (ggpoSession == nullptr)
+	if (!active())
 	{
 		getLocalInput(inputState);
 		return;
@@ -999,9 +1210,23 @@ void getInput(MapleInputState inputState[4])
 	for (int player = 0; player < 4; player++)
 		inputState[player] = {};
 
-	std::vector<u8> inputData(inputSize * MAX_PLAYERS);
+	std::array<u8, sizeof(Inputs) * MAX_PLAYERS> inputData{};
+	const int wireSize = inputSize * MAX_PLAYERS;
+	GGPOErrorCode error;
 	// should not call any callback
-	GGPOErrorCode error = ggpo_synchronize_input(ggpoSession, (void *)&inputData[0], inputData.size(), nullptr);
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	int predicted = 0;
+	if (replayInput)
+	{
+		inputData = replayInputs.bytes;
+		++replayPolls;
+		error = GGPO_OK;
+	}
+	else if (frameTrace)
+		error = ggpo_synchronize_input_with_prediction(ggpoSession, inputData.data(), wireSize, &predicted);
+	else
+#endif
+		error = ggpo_synchronize_input(ggpoSession, inputData.data(), wireSize, nullptr);
 	if (error != GGPO_OK)
 	{
 		stopSession();
@@ -1039,6 +1264,29 @@ void getInput(MapleInputState inputState[4])
 		state.halfAxes[PJTI_R] = (state.kcode & BTN_TRIGGER_RIGHT) == 0 ? 0xffff : 0;
 		state.halfAxes[PJTI_L] = (state.kcode & BTN_TRIGGER_LEFT) == 0 ? 0xffff : 0;
 	}
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (frameTrace)
+	{
+		if (!replayInput)
+		{
+			auto& applied = finalInputs[traceFrame];
+			applied.bytes = inputData;
+			++applied.polls;
+		}
+		fprintf(frameTrace.get(), "I %d %d %x %llu ", traceFrame, (int)inRollback,
+				(unsigned)predicted, sh4_sched_now64());
+		for (int i = 0; i < wireSize; ++i)
+			fprintf(frameTrace.get(), "%02x", (unsigned)inputData[i]);
+		for (int port = 0; port < MAX_PLAYERS; ++port)
+		{
+			const auto& state = inputState[port];
+			fprintf(frameTrace.get(), " port=%d/buttons=%08x/x=%d/y=%d/l=%u/r=%u", port, (unsigned)state.kcode,
+					(int)state.fullAxes[PJAI_X1], (int)state.fullAxes[PJAI_Y1],
+					(unsigned)state.halfAxes[PJTI_L], (unsigned)state.halfAxes[PJTI_R]);
+		}
+		fputc('\n', frameTrace.get());
+	}
+#endif
 }
 
 bool nextFrame()
@@ -1059,6 +1307,27 @@ bool nextFrame()
 	lastFrameTime = now;
 
 	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (replayInput)
+	{
+		if (replayFinished)
+			return false;
+		++traceFrame;
+		traceBoundary(traceFrame, guestRamChecksum());
+		if ((replayPolls != 0) != (replayInputs.polls != 0))
+			fprintf(frameTrace.get(), "P %d expected_poll=%d actual=%d\n",
+					traceFrame - 1, replayInputs.polls, replayPolls);
+		if (!readReplayFrame())
+		{
+			replayFinished = true;
+			fflush(frameTrace.get());
+			NOTICE_LOG(NETWORK, "GGPO offline replay completed %d frames", traceFrame);
+			return false;
+		}
+		emu.getSh4Executor()->Start();
+		return true;
+	}
+#endif
 	if (ggpoSession == nullptr)
 		return false;
 	// will call save_game_state
@@ -1076,22 +1345,38 @@ bool nextFrame()
 			throw FlycastException("GGPO error");
 	}
 
-	// Exchange a checksum for a safely confirmed frame every second or
-	// so. Lockstep only links inputs, so without this a split between
-	// the two emulated consoles stays invisible until gameplay breaks.
-	if (lastSavedFrame > 90)
+	// Snapshot N is the state before input N. Poll has completed any replay
+	// before publishing the latest confirmed input frame.
+	const int confirmedSnapshot = std::min(lastSavedFrame, ggpo_get_last_confirmed_frame(ggpoSession) + 1);
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (replayOutput)
+		confirmTracedFrames(confirmedSnapshot);
+#endif
+	for (auto remote = remoteChecksums.begin(); remote != remoteChecksums.end();)
 	{
-		const int frame = (lastSavedFrame - 90) / 60 * 60;
+		if (remote->first > confirmedSnapshot)
+		{
+			++remote;
+			continue;
+		}
+		const auto local = localChecksums.find(remote->first);
+		if (local != localChecksums.end())
+			compareChecksums(remote->first, local->second, remote->second);
+		remote = remoteChecksums.erase(remote);
+	}
+	const int frame = confirmedSnapshot / CHECKSUM_INTERVAL * CHECKSUM_INTERVAL;
+	if (frame > lastChecksumFrameSent)
+	{
 		auto local = localChecksums.find(frame);
-		if (frame > lastChecksumFrameSent && local != localChecksums.end())
+		if (local != localChecksums.end())
 		{
 			GameEvent event;
 			event.type = GameEvent::StateSync;
 			event.u.sync.frame = frame;
 			event.u.sync.checksum = local->second.full;
 			event.u.sync.ramChecksum = local->second.ram;
-			ggpo_send_message(ggpoSession, &event, sizeof(event.type) + sizeof(event.u.sync), true);
-			lastChecksumFrameSent = frame;
+			if (ggpo_send_message(ggpoSession, &event, sizeof(event.type) + sizeof(event.u.sync), true) == GGPO_OK)
+				lastChecksumFrameSent = frame;
 		}
 	}
 
@@ -1171,6 +1456,10 @@ bool nextFrame()
 
 bool active()
 {
+#ifdef HOLLYCAST_GGPO_FRAME_TRACE
+	if (replayInput)
+		return !replayFinished;
+#endif
 	return ggpoSession != nullptr;
 }
 
@@ -1252,7 +1541,7 @@ std::future<bool> startNetwork()
 
 void displayStats()
 {
-	if (!active())
+	if (ggpoSession == nullptr)
 		return;
 	GGPONetworkStats stats;
 	ggpo_get_network_stats(ggpoSession, remotePlayer, &stats);
@@ -1318,7 +1607,7 @@ void endOfFrame()
 }
 
 void sendChatMessage(int playerNum, const std::string& msg) {
-	if (!active())
+	if (ggpoSession == nullptr)
 		return;
 	GameEvent event;
 	event.type = GameEvent::Chat;
