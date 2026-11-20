@@ -401,11 +401,12 @@ void MetalContext::PresentLastFrame()
 		// those commands before this presentation buffer on the shared queue.
 		const bool guiOpen = gui_is_open();
 		bool showFrame = impl->lastFrame && (!guiOpen || renderer);
+		const auto hikaruShader = impl->hikaruFrameShader.lock();
 		bool hikaruCanvas = false;
 		int hikaruWidth = 0, hikaruHeight = 0, hikaruTop = 0, hikaruX = 0, hikaruY = 0;
 		if (showFrame && !guiOpen)
 		{
-			if (auto shader = impl->hikaruFrameShader.lock())
+			if (hikaruShader)
 			{
 				const int width = (int)drawable.texture.width, height = (int)drawable.texture.height;
 				hikaruTop = std::clamp(getScaledTopInset(), 0, height - 1);
@@ -419,7 +420,7 @@ void MetalContext::PresentLastFrame()
 				}
 				id<MTLTexture> output = nil;
 				bool transformed = false;
-				hikaruCanvas = (*shader)(impl->lastFrame, impl->lastFrameDepth, hikaruWidth, hikaruHeight,
+				hikaruCanvas = (*hikaruShader)(impl->lastFrame, impl->lastFrameDepth, hikaruWidth, hikaruHeight,
 						output, transformed);
 				if (hikaruCanvas)
 					SetShaderOutput(output ? output : impl->lastFrame, output && transformed, true);
@@ -429,7 +430,9 @@ void MetalContext::PresentLastFrame()
 			else
 				impl->lastFrameDepth = nil;
 		}
-		if (showFrame && renderer && !hikaruCanvas) showFrame = renderer->RenderLastFrame();
+		// During gameplay, Hikaru owns the retained frame even when shaders are off.
+		if (showFrame && renderer && (guiOpen || !hikaruShader))
+			showFrame = renderer->RenderLastFrame();
 		MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
 		pass.colorAttachments[0].texture = renderTarget;
 		pass.colorAttachments[0].loadAction = MTLLoadActionClear;
