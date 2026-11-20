@@ -26,6 +26,10 @@
 #include "theme.h"
 #include "theme_browser.h"
 #include "gui_util.h"
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "test_harness.h"
+#include "test_harness_ui.h"
+#endif
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "audio/audiostream.h"
@@ -39,17 +43,21 @@
 #include "wsi/context.h"
 #include "remoteplay/cloudflare_tunnel.h"
 #include "remoteplay/remote_play.h"
-#include "input/dreampotato.h"
+#include "input/dreamlink/dreampotato.h"
 #include "input/gamepad_device.h"
 #include "input/keyboard_device.h"
-#include "input/maplelinkregistry.h"
+#include "input/dreamlink/maplelinkregistry.h"
 #include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/pvr/Renderer_if.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#include "hw/hikaru/roms.h"
+#endif
 #ifdef USE_DREAMLINK_DEVICES
-#include "sdl/dreamlink/dreamlinkgamepad.h"
+#include "sdl/dreamlink/dreamlink_sdl_gamepad.h"
 #endif
 #include "log/LogManager.h"
 #include "hw/mem/addrspace.h"
@@ -69,16 +77,25 @@
 #include "achievements/achievements.h"
 #include "vgamepad.h"
 #include "rend/vmu_window.h"
+#include "network/phone_vmu.h"
+#ifdef HAVE_PHONE_VMU
+#include "deps/qrcodegen/qrcodegen.hpp"
+#endif
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstring>
 #include <cfloat>
+#include <cstdio>
+#include <ctime>
 #include <memory>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -95,6 +112,83 @@ namespace SettingsNew {
 
 static bool g_applyThemeAfterSettings = false;
 static bool g_reloadThemeFontsAfterSettings = false;
+
+#ifdef HOLLYCAST_TEST_HARNESS
+static void annotateTestToggle(const char* prefix, const char* id, const char* label, bool value)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "toggle"}, {"value", value}});
+}
+
+static void annotateTestFloat(const char* prefix, const char* id, const char* label,
+		float value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value_type", "float32"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestInteger(const char* prefix, const char* id, const char* label,
+		int value, int minimum, int maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestVector2(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const ImVec2& value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID groupId = ImGui::GetID(widgetLabel);
+	const std::string semanticId = std::string(prefix) + "." + id;
+	for (int component = 0; component < 2; ++component)
+	{
+		const ImGuiID componentId = ImGui::GetIDWithSeed(component, groupId);
+		const ImGuiID itemId = ImGui::GetIDWithSeed("", nullptr, componentId);
+		const char axis = component == 0 ? 'X' : 'Y';
+		const std::string componentLabel = std::string(label ? label : "") + " " + axis;
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", semanticId + (component == 0 ? ".x" : ".y")},
+			{"semantic_label", componentLabel}, {"kind", "slider"}, {"value_type", "float32"}, {"value", component == 0 ? value.x : value.y},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+	}
+}
+
+static void annotateTestColor(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const float value[4])
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID colorEditId = ImGui::GetID(widgetLabel);
+	const ImGuiID colorButtonId = ImGui::GetIDWithSeed("##ColorButton", nullptr, colorEditId);
+	test_harness::ui::annotateItem(colorButtonId, {{"semantic_id", std::string(prefix) + "." + id},
+		{"semantic_label", label ? label : ""}, {"kind", "color"},
+		{"value", {value[0], value[1], value[2], value[3]}}});
+}
+
+static void annotateTestText(const char* prefix, const char* id, const char* label)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "text"}});
+}
+#endif
 
 struct ThemeEditorState {
 	bool open = false;
@@ -900,6 +994,9 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 	}
 
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		const char* popupId = GetPopupId(popupCfg);
@@ -925,6 +1022,71 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 		DisabledScope _(disabled);
 		SettingsUI::SettingPopup(popupCfg);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+	{
+		using test_harness::Json;
+		Json metadata = {{"semantic_id", id ? id : ""}, {"semantic_label", popupCfg.type == SettingsUI::PopupType::Options
+			? (popupCfg.options.label ? popupCfg.options.label : "")
+			: (popupCfg.slider.label ? popupCfg.slider.label : "")}};
+		if (popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.currentValue != nullptr)
+		{
+			const auto& options = popupCfg.options;
+			const int currentValue = *options.currentValue;
+			metadata["kind"] = options.multiSelect ? "multi_select" : "options";
+			metadata["value"] = currentValue;
+			metadata["requires_apply"] = options.multiSelect;
+			Json entries = Json::array();
+			const int optionCount = std::min(options.optionCount, 128);
+			for (int i = 0; i < optionCount && options.options != nullptr; ++i)
+			{
+				const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+				const bool selected = options.multiSelect
+					? storageValue >= 0 && storageValue < 31 && (currentValue & (1 << storageValue)) != 0
+					: currentValue == storageValue;
+				entries.push_back({{"value", storageValue}, {"label", options.options[i] ? options.options[i] : ""},
+					{"selected", selected}});
+			}
+			metadata["options"] = std::move(entries);
+			if (options.valueToString)
+			{
+				const char* valueLabel = options.valueToString(currentValue);
+				if (valueLabel != nullptr)
+					metadata["value_label"] = valueLabel;
+			}
+			else if (!options.multiSelect && options.options != nullptr)
+			{
+				for (int i = 0; i < optionCount; ++i)
+				{
+					const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+					if (storageValue == currentValue && options.options[i] != nullptr)
+					{
+						metadata["value_label"] = options.options[i];
+						break;
+					}
+				}
+			}
+		}
+		else if (popupCfg.type == SettingsUI::PopupType::Slider && popupCfg.slider.currentValue != nullptr)
+		{
+			const auto& slider = popupCfg.slider;
+			const int currentValue = *slider.currentValue;
+			metadata["kind"] = "slider";
+			metadata["value"] = currentValue;
+			metadata["range"] = {{"min", slider.minValue}, {"max", slider.maxValue}};
+			metadata["requires_apply"] = slider.onApply != nullptr;
+			if (slider.valueFormatter)
+				metadata["value_label"] = slider.valueFormatter(currentValue);
+			else
+			{
+				char valueLabel[128];
+				std::snprintf(valueLabel, sizeof(valueLabel), slider.format ? slider.format : "%d", currentValue);
+				metadata["value_label"] = valueLabel;
+			}
+		}
+		test_harness::ui::annotateItem(rowItemId, metadata);
+	}
+#endif
 	if (infoMarker && settingsIconFont != nullptr && largeFont != nullptr
 			&& popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.label != nullptr)
 	{
@@ -954,11 +1116,19 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		value = !value;
 		onToggle(value);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""}, {"semantic_label", label ? label : ""},
+			{"kind", "toggle"}, {"value", value}});
+#endif
 
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
@@ -989,7 +1159,7 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 template <typename DrawInput>
 static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, const char* label,
 	const char* description, DrawInput&& drawInput, const char* tooltip = nullptr, bool disabled = false,
-	float inputWidthPx = 220.0f)
+	float inputWidthPx = 220.0f, const char* controlKind = "text")
 {
 	ImGui::PushID(id);
 
@@ -1011,6 +1181,11 @@ static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, c
 			ImGui::SetKeyboardFocusHere();
 		ImGui::SetNextItemWidth(inputWidth);
 		drawInput();
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : ""},
+				{"semantic_label", label ? label : ""}, {"kind", controlKind ? controlKind : "text"}});
+#endif
 	}
 
 	RenderTwoLineSettingDescription(line1Start, description);
@@ -1092,28 +1267,43 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			return;
 		}
 		ImGui::NewLine();
-		if (gamepad->is_rumble_enabled())
+		if (gamepad->has_force_feedback() || gamepad->is_rumble_enabled())
 		{
-			header(T("Rumble"));
+			header(gamepad->has_force_feedback() ? T("Force Feedback") : T("Rumble"));
 			int power = gamepad->get_rumble_power();
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%"))
+			const bool powerChanged = ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".rumble_power").c_str(), T("Power"), power, 0, 100);
+#endif
+			if (powerChanged)
 				gamepad->set_rumble_power(power);
 			ImGui::SameLine();
-			ShowFooterHelpMarker(T("Rumble power"));
+			ShowFooterHelpMarker(gamepad->has_force_feedback() ? T("Force-feedback strength") : T("Rumble power"));
 		}
 		if (gamepad->has_analog_stick())
 		{
 			header(T("Thumbsticks"));
 			int deadzone = std::round(gamepad->get_dead_zone() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%"))
+			const bool deadzoneChanged = ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".dead_zone").c_str(), T("Dead zone"), deadzone, 0, 100);
+#endif
+			if (deadzoneChanged)
 				gamepad->set_dead_zone(deadzone / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Minimum deflection to register as input"));
 			int saturation = std::round(gamepad->get_saturation() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%"))
+			const bool saturationChanged = ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".saturation").c_str(), T("Saturation"), saturation, 50, 200);
+#endif
+			if (saturationChanged)
 				gamepad->set_saturation(saturation / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Value sent to the game at 100% thumbstick deflection. "
@@ -1514,7 +1704,13 @@ static void displayMappedControl(const std::shared_ptr<GamepadDevice>& gamepad, 
 			ImguiStyleVar checkboxBorder(ImGuiStyleVar_FrameBorderSize, 1.0f);
 			ImguiStyleColor checkboxBorderColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_Text));
 			ImguiStyleColor checkboxCheckColor(ImGuiCol_CheckMark, ImGui::GetStyleColorVec4(ImGuiCol_Text));
-			if (ImGui::Checkbox(T("Sequential"), &(combo.sequential)))
+			const bool sequentialChanged = ImGui::Checkbox(T("Sequential"), &(combo.sequential));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestToggle("controls.mapping.sequential", (gamepad->unique_id() + "." + std::to_string(static_cast<int>(key))).c_str(),
+					T("Sequential"), combo.sequential);
+#endif
+			if (sequentialChanged)
 				input_mapping->set_button(g_gamepad_port_for_mapping, key, combo);
 		}
 		ImGui::SameLine();
@@ -1682,11 +1878,23 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 			if (g_arcade_button_mode)
 			{
 				ImGui::Text("%s", T("Controller Type:"));
-				if (ImGui::RadioButton(T("Gamepad"), !hitbox))
+				const bool gamepadSelected = ImGui::RadioButton(T("Gamepad"), !hitbox);
+				if (gamepadSelected)
 					hitbox = false;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.gamepad"},
+						{"semantic_label", T("Gamepad")}, {"kind", "radio"}, {"value", !hitbox}});
+#endif
 				ImGui::SameLine();
-				if (ImGui::RadioButton(T("Arcade / Hit Box"), hitbox))
+				const bool arcadeSelected = ImGui::RadioButton(T("Arcade / Hit Box"), hitbox);
+				if (arcadeSelected)
 					hitbox = true;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.arcade"},
+						{"semantic_label", T("Arcade / Hit Box")}, {"kind", "radio"}, {"value", hitbox}});
+#endif
 			}
 			ImGui::NewLine();
 			{
@@ -1715,6 +1923,17 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
 		ImVec2(ImGui::GetStyle().FramePadding.x, (SettingsLayoutScaled(30) - ImGui::GetFontSize()) / 2));
 	ImGui::Combo("##arcadeMode", &item_current_map_idx, items, IM_ARRAYSIZE(items));
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+	{
+		test_harness::Json options = test_harness::Json::array();
+		for (int i = 0; i < IM_ARRAYSIZE(items); ++i)
+			options.push_back({{"value", i}, {"label", items[i]}, {"selected", item_current_map_idx == i}});
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.mode." + gamepad->unique_id()},
+			{"semantic_label", "Controller mappings"}, {"kind", "options"}, {"value", item_current_map_idx},
+			{"value_label", items[item_current_map_idx]}, {"options", std::move(options)}});
+	}
+#endif
 	ImGui::PopStyleVar();
 	if (last_item_current_map_idx != 2 && item_current_map_idx != last_item_current_map_idx)
 		gamepad->save_mapping(map_system);
@@ -1858,6 +2077,9 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	ImGui::PushID(id);
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	BeginTwoLineSettingRow("##row", rowTooltip, true);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(icon, SettingsLayoutSize(20.0f, 20.0f));
@@ -1868,6 +2090,11 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	RenderGeneralRightValue(value, 280.0f, 0.0f, disabledValue);
 	RenderTwoLineSettingDescription(line1Start, description);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "info"}, {"value", value}});
+#endif
 
 	ImGui::PopID();
 }
@@ -1877,6 +2104,9 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 {
 	ImGui::PushID(label);
 	const bool rowActivated = BeginTwoLineSettingRow("##row", helpText);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(ICON_FA_FOLDER_OPEN, SettingsLayoutSize(20.0f, 20.0f));
@@ -1901,7 +2131,13 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 		ImGui::SameLine(RightColumnX(buttonWidth));
 		ImVec2 buttonPos = ImGui::GetCursorPos();
 		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y + verticalOffset));
-		if (SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight)))
+		const bool clearPath = SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight));
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", std::string(label) + ".clear"},
+				{"semantic_label", std::string("Clear ") + label}, {"kind", "button"}});
+#endif
+		if (clearPath)
 		{
 			pathOption.get().clear();
 			openPopup = false;
@@ -1914,6 +2150,11 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 
 	RenderTwoLineSettingDescription(line1Start, helpText);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", label ? label : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "path"}, {"value", pathOption.get()}});
+#endif
 	ImGui::PopID();
 
 	const std::string popupName = std::string(T("Select ")) + label;
@@ -2516,7 +2757,7 @@ static const char* kSettingsTabKeywords[] = {
 	"language region broadcast cable interface theme content folder data home ui system tv",
 	"library games boxart artwork cover metadata scan vmu folders scrape",
 	"video graphics resolution render texture quality preset scaling fps display",
-	"osd overlay vmu screen notification display performance",
+	"osd overlay vmu screen notification display performance connect phone wifi remote",
 	"audio sound volume latency mixing output speakers",
 	"controls controller gamepad mapping keyboard buttons sensitivity input",
 	"network online server netplay match link dcnet",
@@ -2730,6 +2971,9 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(accent.x, accent.y, accent.z, 0.55f));
 		}
 		const bool tabClicked = ImGui::Selectable(tabLabel.c_str(), isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0));
+#ifdef HOLLYCAST_TEST_HARNESS
+		const std::uint32_t tabItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 		if (isSelected)
 			ImGui::PopStyleColor(3);
 		if (settingsIconFont != nullptr)
@@ -2756,6 +3000,11 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			g_tabSlideStart = -1.0;
 			ResetSettingsFooter();
 		}
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (tabItemId != 0)
+			test_harness::ui::annotateItem(tabItemId, {{"semantic_id", "settings.tab." + std::to_string(i)},
+				{"semantic_label", tabName ? tabName : ""}, {"kind", "tab"}, {"value", g_state.currentTab == tab}});
+#endif
 		if (focusSelectedTab && isSelected)
 			FocusCurrentSettingsItem();
 		if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
@@ -2952,6 +3201,11 @@ static bool RenderCollapsingHeader(
 
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(SettingsLayoutScaled(8.0f), SettingsLayoutScaled(10.0f)));
 	bool open = ImGui::CollapsingHeader(labelStr.c_str(), flags);
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : labelText},
+			{"semantic_label", labelText ? labelText : ""}, {"kind", "section"}, {"value", open}});
+#endif
 	if (labelIcon && *labelIcon != '\0')
 	{
 		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : ImGui::GetFont();
@@ -3723,9 +3977,27 @@ static void renderSettingsContentTab(SettingsTab tab)
 			} else {
 				ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
 				ImGui::InputText(T("Theme name"), &g_themeEditor.newFilename);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestText("theme.editor", "new_name", T("Theme name"));
+#endif
 			}
 			ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
-			if (ImGui::Combo(T("Base theme"), &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()))) {
+			const char* baseThemeLabel = T("Base theme");
+			const bool baseThemeChanged = ImGui::Combo(baseThemeLabel, &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+			{
+				test_harness::Json options = test_harness::Json::array();
+				for (int i = 0; i < static_cast<int>(baseNames.size()); ++i)
+					options.push_back({{"value", i}, {"label", baseNames[i]}, {"selected", baseIndex == i}});
+				test_harness::Json metadata = {{"semantic_id", "theme.editor.base"}, {"semantic_label", baseThemeLabel},
+					{"kind", "options"}, {"value", baseIndex}, {"options", std::move(options)}, {"requires_apply", true}};
+				if (baseIndex >= 0 && baseIndex < static_cast<int>(baseNames.size()))
+					metadata["value_label"] = baseNames[baseIndex];
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), metadata);
+			}
+#endif
+			if (baseThemeChanged) {
 				g_themeEditor.draft.base = baseIndex;
 				g_themeEditor.previewing = true;
 			}
@@ -3772,7 +4044,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								ImGui::PushID(role);
 								auto found = g_themeEditor.draft.roles.find(role);
 								bool enabled = found != g_themeEditor.draft.roles.end();
-								if (ImGui::Checkbox(labels[i], &enabled)) {
+								const bool enabledChanged = ImGui::Checkbox(labels[i], &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestToggle("theme.role", role, labels[i], enabled);
+#endif
+								if (enabledChanged) {
 									if (enabled) {
 										auto inherited = baseTheme.roles.find(role);
 										g_themeEditor.draft.roles[role] = inherited != baseTheme.roles.end() ? inherited->second : suggestions[i];
@@ -3782,7 +4058,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								found = g_themeEditor.draft.roles.find(role);
 								if (found != g_themeEditor.draft.roles.end()) {
 									ImVec4 value = found->second;
-									if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) {
+									const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									annotateTestColor("theme.role.color", role, labels[i], "##color", &value.x);
+#endif
+									if (colorChanged) {
 										found->second = value;
 										g_themeEditor.previewing = true;
 									}
@@ -3796,6 +4076,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 						if (ImGui::CollapsingHeader(T("Advanced interface colors"))) {
 							ImGui::SetNextItemWidth(-FLT_MIN);
 							ImGui::InputTextWithHint("##colorSearch", T("Search colors"), &g_themeEditor.colorSearch);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestText("theme.colors", "search", T("Search colors"));
+#endif
 							std::string query = g_themeEditor.colorSearch;
 							std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 							for (int i = 0; i < ImGuiCol_COUNT; ++i) {
@@ -3804,7 +4087,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								std::transform(searchable.begin(), searchable.end(), searchable.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 								if (!query.empty() && searchable.find(query) == std::string::npos) continue;
 								ImVec4 value = previewStyle.Colors[i];
-								if (ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar)) {
+								const bool colorChanged = ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestColor("theme.interface_color", name, name, name, &value.x);
+#endif
+								if (colorChanged) {
 									auto found = std::find_if(g_themeEditor.draft.colors.begin(), g_themeEditor.draft.colors.end(), [i](const auto& c) { return c.first == i; });
 									if (found == g_themeEditor.draft.colors.end()) g_themeEditor.draft.colors.emplace_back(i, value); else found->second = value;
 									g_themeEditor.previewing = true;
@@ -3822,7 +4109,16 @@ static void renderSettingsContentTab(SettingsTab tab)
 									bool enabled = found != roles.end();
 									ImGui::PushID(widget);
 									ImGui::PushID(role);
-									if (ImGui::Checkbox(role, &enabled)) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					const bool collectThemeMetadata = test_harness::ui::collectingInspection();
+					const std::string widgetRoleId = collectThemeMetadata ? std::string(widget) + "." + role : std::string();
+#endif
+									const bool enabledChanged = ImGui::Checkbox(role, &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (collectThemeMetadata)
+						annotateTestToggle("theme.widget_role", widgetRoleId.c_str(), role, enabled);
+#endif
+									if (enabledChanged) {
 										if (enabled) {
 											auto global = g_themeEditor.draft.roles.find(role);
 											auto inherited = baseTheme.roles.find(role);
@@ -3834,7 +4130,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 									found = roles.find(role);
 									if (found != roles.end()) {
 										ImVec4 value = found->second;
-										if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) { found->second = value; g_themeEditor.previewing = true; }
+										const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									if (collectThemeMetadata)
+										annotateTestColor("theme.widget_role.color", widgetRoleId.c_str(), role, "##color", &value.x);
+#endif
+										if (colorChanged) { found->second = value; g_themeEditor.previewing = true; }
 									}
 									ImGui::PopID();
 									ImGui::PopID();
@@ -3851,7 +4152,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					auto scalar = [&](const char* name, float ImGuiStyle::*member, float max) {
 						float value = previewStyle.*member;
 						const float upper = std::strstr(name, "BorderSize") != nullptr ? 20.f : max;
-						if (ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.style", name, name, value, 0.f, upper);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3859,7 +4164,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					};
 					auto vector = [&](const char* name, ImVec2 ImGuiStyle::*member, float max) {
 						ImVec2 value = previewStyle.*member;
-						if (ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestVector2("theme.style", name, name, name, value, 0.f, max);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.vectors.begin(), g_themeEditor.draft.vectors.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.vectors.end()) g_themeEditor.draft.vectors.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3877,7 +4186,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					for (const auto& item : scalars) {
 						if (item.second == &ImGuiStyle::Alpha) {
 							float value = previewStyle.*item.second;
-							if (ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+							const bool changed = ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestFloat("theme.style", item.first, item.first, value, 0.2f, 1.f);
+#endif
+							if (changed) {
 								auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == item.second; });
 								if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(item.second, value); else it->second = value;
 								g_themeEditor.previewing = true;
@@ -3896,7 +4209,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 						ImGui::TextDisabled("%s", T("Hollycast layout"));
 					auto layoutSlider = [&](const char* name, float& value, float minimum, float maximum, float fallback, bool& present) {
 						float shown = present ? value : fallback;
-						if (ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { value = shown; present = true; g_themeEditor.previewing = true; }
+						const bool changed = ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.layout", name, name, shown, minimum, maximum);
+#endif
+						if (changed) { value = shown; present = true; g_themeEditor.previewing = true; }
 					};
 					layoutSlider("Density", g_themeEditor.draft.layout.density, 0.75f, 1.5f, 1.f, g_themeEditor.draft.layout.hasDensity);
 					layoutSlider("Settings sidebar width", g_themeEditor.draft.layout.settingsSidebarWidth, 136.f, 310.f, 225.f, g_themeEditor.draft.layout.hasSettingsSidebarWidth);
@@ -3911,33 +4228,67 @@ static void renderSettingsContentTab(SettingsTab tab)
 					if (ImGui::BeginChild("ThemeAssetsList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
 					ImGui::TextWrapped("%s", T("Use paths relative to the custom theme folder. Copy files there first; import and export copy referenced files automatically."));
 					ImGui::Spacing();
-					auto assetInput = [&](const char* label, std::string& value, bool font = false) {
+					auto assetInput = [&](const char* id, const char* label, std::string& value, bool font = false) {
 						const bool changed = ImGui::InputText(label, &value);
 						const bool editCommitted = font && ImGui::IsItemDeactivatedAfterEdit();
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestText("theme.asset", id, label);
+#endif
 						if (changed) { g_themeEditor.previewing = true; g_themeEditor.fontChanged |= font; }
 						if (editCommitted) { g_themeEditor.previewing = true; g_themeEditor.fontReloadPending = true; }
 					};
-					assetInput(T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
-					assetInput(T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
-					assetInput(T("Background image path"), g_themeEditor.draft.assets.background);
+					assetInput("body_font", T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
+					assetInput("bold_font", T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
+					assetInput("background_image", T("Background image path"), g_themeEditor.draft.assets.background);
 					std::string settingsIconPath;
 					auto settingsIcon = g_themeEditor.draft.assets.icons.find("settings");
 					if (settingsIcon != g_themeEditor.draft.assets.icons.end()) settingsIconPath = settingsIcon->second;
-					if (ImGui::InputText(T("Settings icon path"), &settingsIconPath)) {
+					const bool settingsIconChanged = ImGui::InputText(T("Settings icon path"), &settingsIconPath);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "settings_icon", T("Settings icon path"));
+#endif
+					if (settingsIconChanged) {
 						if (settingsIconPath.empty()) g_themeEditor.draft.assets.icons.erase("settings");
 						else g_themeEditor.draft.assets.icons["settings"] = settingsIconPath;
 						g_themeEditor.previewing = true;
 					}
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
-					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
+					const char* opacityLabel = T("Background opacity");
+					const bool opacityChanged = ImGui::SliderFloat(opacityLabel, &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestFloat("theme.asset", "background_opacity", opacityLabel, opacity, 0.f, 1.f);
+#endif
+					if (opacityChanged) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
 					const char* fits[] = {"cover", "contain", "stretch"};
 					// Keep the JSON values independent of the translated option labels.
 					const char* fitLabels[] = {i18n::translateCtx("Background fit", "Cover"),
 						i18n::translateCtx("Background fit", "Contain"), i18n::translateCtx("Background fit", "Stretch")};
 					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
-					if (ImGui::Combo(T("Background fit"), &fit, fitLabels, IM_ARRAYSIZE(fitLabels))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
+					const char* fitLabel = T("Background fit");
+					const bool fitChanged = ImGui::Combo(fitLabel, &fit, fitLabels, IM_ARRAYSIZE(fitLabels));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						test_harness::Json options = test_harness::Json::array();
+						for (int i = 0; i < IM_ARRAYSIZE(fitLabels); ++i)
+							options.push_back({{"value", fits[i]}, {"label", fitLabels[i]}, {"selected", fit == i}});
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.background_fit"},
+							{"semantic_label", fitLabel}, {"kind", "options"}, {"value", fits[fit]},
+							{"value_label", fitLabels[fit]}, {"options", std::move(options)}});
+					}
+#endif
+					if (fitChanged) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
 					ImGui::InputText(T("Export folder"), &g_themeEditor.exportFolder);
-					if (ImGui::Button(T("Export theme and assets"))) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "export_folder", T("Export folder"));
+#endif
+					const bool exportClicked = ImGui::Button(T("Export theme and assets"));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.export"},
+							{"semantic_label", T("Export theme and assets")}, {"kind", "button"}});
+#endif
+					if (exportClicked) {
 						const std::string exportName = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
 						if (CustomTheme::exportToDirectory(g_themeEditor.draft, exportName, g_themeEditor.exportFolder, g_themeEditor.error))
 							g_themeEditor.error = strprintf(T("Exported %s and its referenced assets."), exportName.c_str());
@@ -5245,6 +5596,11 @@ void renderVideoTab()
 #ifdef USE_METAL
 	const bool metalAvailable = metalIsAvailable();
 #endif
+	const bool hikaruPlatform = settings.platform.isHikaru();
+#ifdef USE_HIKARU
+	if (hikaruPlatform)
+		perPixel = config::HikaruSorting.get() == config::HikaruSortingMode::PerPixel;
+#endif
 	const int apiCount = 0
 #ifdef USE_METAL
 		+ (metalAvailable ? 1 : 0)
@@ -5253,7 +5609,7 @@ void renderVideoTab()
 		+ 1
 #endif
 #ifdef USE_DX9
-		+ 1
+		+ (hikaruPlatform ? 0 : 1)
 #endif
 #ifdef USE_OPENGL
 		+ 1
@@ -5283,8 +5639,10 @@ void renderVideoTab()
 			apiValues[apiOptionCount++] = 1;
 #endif
 #ifdef USE_DX9
-			apiLabels[apiOptionCount] = "DirectX 9";
-			apiValues[apiOptionCount++] = 2;
+			if (!hikaruPlatform) {
+				apiLabels[apiOptionCount] = "DirectX 9";
+				apiValues[apiOptionCount++] = 2;
+			}
 #endif
 #ifdef USE_DX11
 			apiLabels[apiOptionCount] = "DirectX 11";
@@ -5372,7 +5730,7 @@ void renderVideoTab()
 				if (renderApi == 2)
 					perPixel = false;
 #ifdef USE_METAL
-				if (renderApi == 4 && !metalSupportsPerPixel())
+				if (renderApi == 4 && !settings.platform.isHikaru() && !metalSupportsPerPixel())
 					perPixel = false;
 #endif
 				return true;
@@ -5396,12 +5754,15 @@ void renderVideoTab()
 	if (RenderCollapsingHeader("TransparentSortingSection", ICON_FA_WAND_SPARKLES, T("Transparent Sorting"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		{
-			bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+			bool has_per_pixel = hikaruPlatform || GraphicsContext::Instance()->hasPerPixel();
 #ifdef USE_METAL
-			if (renderApi == 4)
+			if (renderApi == 4 && !hikaruPlatform)
 				has_per_pixel = metalSupportsPerPixel();
 #endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;
+#ifdef USE_HIKARU
+			if (hikaruPlatform) renderer = static_cast<int>(config::HikaruSorting.get());
+#endif
 
 			std::array<const char*, 3> sortingLabels {};
 			std::array<int, 3> sortingValues {};
@@ -5477,6 +5838,13 @@ void renderVideoTab()
 				if (selectedIndex < 0 || selectedIndex >= sortingOptionCount)
 					return false;
 				const int selectedRenderer = sortingValues[selectedIndex];
+#ifdef USE_HIKARU
+				if (hikaruPlatform) {
+					config::HikaruSorting.set(static_cast<config::HikaruSortingMode>(selectedRenderer));
+					perPixel = selectedRenderer == 2;
+					return true;
+				}
+#endif
 				switch (selectedRenderer)
 				{
 				case 0:
@@ -5532,7 +5900,7 @@ void renderVideoTab()
 			const int configuredRenderResolution = config::RenderResolution.get();
 			// Read both toggles every frame so labels also preview widescreen cheats before a game is loaded.
 			float widthScale = 1.f;
-			if ((config::Widescreen || config::WidescreenGameHacks)
+			if (!settings.platform.isHikaru() && (config::Widescreen || config::WidescreenGameHacks)
 					&& !config::Rotate90 && !config::EmulateFramebuffer)
 			{
 				widthScale = config::Widescreen && config::SuperWidescreen
@@ -5895,35 +6263,44 @@ void renderVideoTab()
 			Tnop("PixelBufferSizeSetting"),
 			T("Memory budget for Per-Pixel transparency rendering."),
 			pixelBufferCfg,
-			T(
-				"Pixel Buffer Size\n"
-				"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
-				"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
-				"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
-			)
+			hikaruPlatform
+				? T("Pixel Buffer Size\n"
+					"Controls the memory budget for Hikaru per-pixel transparency. Targets are allocated as needed.\n"
+					"Higher resolutions and overlapping effects require more memory. Increase this budget if transparency is missing or the renderer falls back to depth peeling.")
+				: T("Pixel Buffer Size\n"
+					"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
+					"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
+					"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes.")
 		);
 
-		static int perPixelLayersTemp = config::PerPixelLayers.get();
+#ifdef USE_HIKARU
+		auto& maximumLayers = hikaruPlatform ? config::HikaruMaxLayers : config::PerPixelLayers;
+#else
+		auto& maximumLayers = config::PerPixelLayers;
+#endif
+		static int perPixelLayersTemp = maximumLayers.get();
 		if (!ImGui::IsPopupOpen("PerPixelMaximumLayersPopup"))
-			perPixelLayersTemp = config::PerPixelLayers.get();
+			perPixelLayersTemp = maximumLayers.get();
 
 		SettingsUI::PopupSliderConfig perPixelLayersCfg {};
 		perPixelLayersCfg.label = T("Maximum Layers");
 		perPixelLayersCfg.icon = ICON_FA_LAYER_GROUP;
 		perPixelLayersCfg.popupID = Tnop("PerPixelMaximumLayersPopup");
-		perPixelLayersCfg.description = renderApi == 4
+		perPixelLayersCfg.description = hikaruPlatform
+			? T("Limits Hikaru depth-peeling layers. Supported OpenGL and Vulkan fragment lists use Pixel Buffer Size instead; this limit still applies to their peeling fallback.")
+			: renderApi == 4
 			? T("Controls how many transparent layers are resolved per pixel. Metal retains the nearest layers when the limit is exceeded. Lower values can improve performance.")
 			: T("Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
 				"Increase this if you see missing transparency or incorrect layering.\n"
 				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
-		perPixelLayersCfg.minValue = 8;
+		perPixelLayersCfg.minValue = hikaruPlatform ? 1 : 8;
 		perPixelLayersCfg.maxValue = 128;
 		perPixelLayersCfg.format = "%d";
 		perPixelLayersCfg.valueWidth = 220.0f;
 		perPixelLayersCfg.sliderWidth = 320.0f;
 		perPixelLayersCfg.onValueChange = [&]() {
-			config::PerPixelLayers.set(perPixelLayersTemp);
+			maximumLayers.set(perPixelLayersTemp);
 		};
 
 		SettingsUI::PopupConfig perPixelLayersPopupCfg {};
@@ -5934,7 +6311,9 @@ void renderVideoTab()
 			Tnop("PerPixelMaximumLayersSetting"),
 			T("Maximum transparent layers resolved per pixel."),
 			perPixelLayersPopupCfg,
-			renderApi == 4
+			hikaruPlatform
+				? T("Per-Pixel Maximum Layers\nLimits depth peeling and its fallback paths. Successful OpenGL and Vulkan fragment lists retain fragments within Pixel Buffer Size, without a fixed layer count.")
+				: renderApi == 4
 				? T("Per-Pixel Maximum Layers\nMetal retains the nearest layers when the limit is exceeded. Increase the limit if transparency is missing; lower it to reduce resolve work.")
 				: T("Per-Pixel Maximum Layers\n"
 					"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
@@ -6507,26 +6886,270 @@ void renderVideoTab()
 	}
 #endif
 
-	// Update renderer type based on selections
+	// Changing Hikaru sorting must not overwrite Dreamcast/Naomi's OIT choice.
+	// The API remains a shared preference; the sorting modes are independent.
+	const bool hostPerPixel = hikaruPlatform ? isPerPixel(config::RendererType) : perPixel;
 	switch (renderApi)
 	{
 	case 0:
-		config::RendererType = perPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
+		config::RendererType = hostPerPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
 		break;
 	case 1:
-		config::RendererType = perPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
+		config::RendererType = hostPerPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
 		break;
 	case 4:
-		config::RendererType = perPixel ? RenderType::Metal_OIT : RenderType::Metal;
+		config::RendererType = hostPerPixel ? RenderType::Metal_OIT : RenderType::Metal;
 		break;
 	case 2:
 		config::RendererType = RenderType::DirectX9;
 		break;
 		case 3:
-			config::RendererType = perPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
+			config::RendererType = hostPerPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
 			break;
 	}
 }
+
+#ifdef HAVE_PHONE_VMU
+static void renderPhoneVmuSettings()
+{
+	if (!RenderCollapsingHeader("PhoneVmuSection", ICON_FA_MOBILE_SCREEN, T("Phone VMU"), ImGuiTreeNodeFlags_DefaultOpen))
+		return;
+
+	RenderGeneralToggleSettingRow("ConnectPhone", ICON_FA_MOBILE_SCREEN,
+		T("Connect Phone"), T("Use your phone as a VMU display and play VMU mini-games."),
+		phone_vmu::status().running, [](bool enabled) {
+			if (enabled)
+			{
+				phone_vmu::setPairing(config::PhoneVmuToken.get(), config::PhoneVmuPort.get());
+				phone_vmu::start();
+				// Persist a first-time generated token so the address survives restarts.
+				if (config::PhoneVmuToken.get() != phone_vmu::pairingToken())
+					config::PhoneVmuToken.set(phone_vmu::pairingToken());
+			}
+			else
+				phone_vmu::stop();
+		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a VMU mini-game with automatic progress sync. The card is unplugged while the phone uses it; choose Return to Dreamcast to reconnect it. Turn this off to stop sharing."));
+
+	const auto connection = phone_vmu::status();
+	if (!connection.error.empty())
+		ImGui::TextWrapped("%s: %s", T("Unable to share the VMU display"), connection.error.c_str());
+	if (!connection.running || connection.urls.empty())
+		return;
+
+	ImGui::TextUnformatted(connection.connected ? T("Phone connected") : T("Waiting for phone"));
+	if (connection.lastSyncSlot >= 0 && connection.lastSyncSlot < 8 && !connection.lastSyncTime.empty())
+	{
+		const char slotLabel[] = { static_cast<char>('A' + connection.lastSyncSlot / 2),
+				static_cast<char>('1' + connection.lastSyncSlot % 2), '\0' };
+		ImGui::TextWrapped("%s: VMU %s at %s", T("Last phone save synced"), slotLabel, connection.lastSyncTime.c_str());
+	}
+	ImGui::TextWrapped("%s", T("This address stays the same when Hollycast restarts, so a paired phone can reconnect without a new scan."));
+	if (ImGui::Button(T("New pairing address")))
+		config::PhoneVmuToken.set(phone_vmu::regeneratePairing());
+	ImGui::SameLine();
+	ImGui::TextWrapped("%s", T("Disconnects all paired phones. Scan the new code to pair again."));
+	// Phone save-back keeps timestamped snapshots next to each VMU file.
+	// Restoring replaces that VMU, so only offer it while no game is loaded.
+	{
+		static std::string phoneRestoreMessage;
+		namespace fs = std::filesystem;
+		const char *ports[] = { "A1", "A2", "B1", "B2", "C1", "C2", "D1", "D2" };
+		struct PhoneVmuBackup { fs::path card; fs::path snapshot; };
+		static std::vector<PhoneVmuBackup> newestBackups;
+		static double lastBackupScan = -1.0;
+		constexpr char backupMarker[] = ".phone-backup-";
+		constexpr std::size_t backupMarkerLength = sizeof(backupMarker) - 1;
+		const double now = ImGui::GetTime();
+		if (!game_started && (lastBackupScan < 0.0 || now - lastBackupScan >= 1.0))
+		{
+			newestBackups.clear();
+			std::vector<fs::path> directories;
+			for (const char *port : ports)
+			{
+				const fs::path vmuPath = fs::u8path(hostfs::getVmuPath(port, true));
+				const fs::path dir = vmuPath.parent_path().empty() ? fs::path(".") : vmuPath.parent_path();
+				if (std::find(directories.begin(), directories.end(), dir) == directories.end())
+					directories.push_back(dir);
+			}
+			for (const fs::path& dir : directories)
+			{
+				std::error_code fsError;
+				fs::directory_iterator entry(dir, fsError), end;
+				for (; !fsError && entry != end; entry.increment(fsError))
+				{
+					const std::string filename = entry->path().filename().u8string();
+					const std::size_t marker = filename.rfind(backupMarker);
+					if (marker == std::string::npos || marker == 0)
+						continue;
+					const std::string stamp = filename.substr(marker + backupMarkerLength);
+					auto isDigits = [](auto first, auto last) {
+						return std::all_of(first, last, [](char c) { return c >= '0' && c <= '9'; });
+					};
+					const bool validStamp = stamp.size() == 15 && stamp[8] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.end());
+					const bool validCollisionStamp = stamp.size() == 22 && stamp[8] == '-' && stamp[15] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.begin() + 15)
+							&& isDigits(stamp.begin() + 16, stamp.end());
+					if (!validStamp && !validCollisionStamp)
+						continue;
+					std::error_code fileError;
+					if (!entry->is_regular_file(fileError) || fileError)
+						continue;
+					const fs::path card = dir / fs::u8path(filename.substr(0, marker));
+					auto backup = std::find_if(newestBackups.begin(), newestBackups.end(), [&](const PhoneVmuBackup& item) {
+						return item.card == card;
+					});
+					if (backup == newestBackups.end())
+						newestBackups.push_back({ card, entry->path() });
+					else if (entry->path() > backup->snapshot)
+						backup->snapshot = entry->path();
+				}
+			}
+			std::sort(newestBackups.begin(), newestBackups.end(), [](const PhoneVmuBackup& a, const PhoneVmuBackup& b) {
+				return a.card < b.card;
+			});
+			lastBackupScan = now;
+		}
+		for (const PhoneVmuBackup& backup : newestBackups)
+		{
+			const fs::path& vmuPath = backup.card;
+			const fs::path& newest = backup.snapshot;
+			if (game_started)
+				continue;
+			const std::string label = std::string(T("Restore VMU backup for ")) + vmuPath.filename().u8string();
+			if (ImGui::Button(label.c_str()))
+			{
+				constexpr std::size_t VmuSize = 128 * 1024;
+				std::error_code fsError;
+				fsError.clear();
+				if (fs::file_size(newest, fsError) != VmuSize || fsError)
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				std::string data(VmuSize, '\0');
+				std::ifstream in(newest, std::ios::binary);
+				if (!in || !in.read(data.data(), data.size())
+						|| in.peek() != std::ifstream::traits_type::eof())
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				fs::path tempPath = vmuPath;
+				tempPath += ".phone-restore.tmp";
+				const std::string tempPathUtf8 = tempPath.u8string();
+				const std::string vmuPathUtf8 = vmuPath.u8string();
+				FILE *out = nowide::fopen(tempPathUtf8.c_str(), "wb");
+				bool tempWritten = out != nullptr;
+				if (out != nullptr)
+				{
+					tempWritten = std::fwrite(data.data(), 1, data.size(), out) == data.size()
+							&& std::fflush(out) == 0;
+					if (std::fclose(out) != 0)
+						tempWritten = false;
+				}
+				if (!tempWritten)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				bool snapshotOk = true;
+				fsError.clear();
+				if (fs::exists(vmuPath, fsError))
+				{
+					std::time_t now = std::time(nullptr);
+					std::tm local {};
+					bool timeReady = false;
+#ifdef _WIN32
+					timeReady = localtime_s(&local, &now) == 0;
+#else
+					timeReady = localtime_r(&now, &local) != nullptr;
+#endif
+					char timestamp[16] = {};
+					timeReady = timeReady && std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &local) != 0;
+					snapshotOk = timeReady && !fsError;
+					bool snapshotCreated = false;
+					for (unsigned suffix = 0; snapshotOk && suffix < 100; ++suffix)
+					{
+						fs::path snapshotPath = vmuPath;
+						const std::string suffixText = std::to_string(suffix);
+						snapshotPath += backupMarker + std::string(timestamp)
+								+ (suffix == 0 ? "" : "-" + std::string(6 - suffixText.size(), '0') + suffixText);
+						fsError.clear();
+						snapshotCreated = fs::copy_file(vmuPath, snapshotPath, fs::copy_options::none, fsError);
+						if (snapshotCreated)
+							break;
+						if (fsError != std::errc::file_exists)
+							snapshotOk = false;
+					}
+					snapshotOk = snapshotOk && snapshotCreated;
+				}
+				else if (fsError)
+					snapshotOk = false;
+				if (!snapshotOk || nowide::rename(tempPathUtf8.c_str(), vmuPathUtf8.c_str()) != 0)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+				lastBackupScan = -1.0;
+				phoneRestoreMessage = std::string(T("Restored VMU ")) + vmuPath.filename().u8string() + ".";
+			}
+		}
+		if (!newestBackups.empty() && game_started)
+			ImGui::TextWrapped("%s", T("Phone VMU backups found. Stop emulation to restore one."));
+		if (!phoneRestoreMessage.empty())
+			ImGui::TextWrapped("%s", phoneRestoreMessage.c_str());
+	}
+	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi, then scan this code or open the address below in its browser. Choose a VMU slot on your phone, then return to your game."));
+	static int selectedAddress = 0;
+	selectedAddress = std::clamp(selectedAddress, 0, static_cast<int>(connection.urls.size()) - 1);
+	if (connection.urls.size() > 1)
+	{
+		ImGui::SetNextItemWidth(-1);
+		if (ImGui::BeginCombo(T("##PhoneVmuAddress"), connection.urls[selectedAddress].c_str()))
+		{
+			for (int i = 0; i < static_cast<int>(connection.urls.size()); ++i)
+				if (ImGui::Selectable(connection.urls[i].c_str(), i == selectedAddress))
+					selectedAddress = i;
+			ImGui::EndCombo();
+		}
+		ImGui::TextWrapped("%s", T("If the phone cannot connect, choose the address for your Wi-Fi or Ethernet network."));
+	}
+	const std::string& url = connection.urls[selectedAddress];
+	static std::string cachedUrl;
+	static std::unique_ptr<qrcodegen::QrCode> qr;
+	if (cachedUrl != url)
+	{
+		qr = std::make_unique<qrcodegen::QrCode>(qrcodegen::QrCode::encodeText(url.c_str(), qrcodegen::QrCode::Ecc::MEDIUM));
+		cachedUrl = url;
+	}
+	// Integral module sizes and a four-module quiet zone keep the code scannable
+	// at every UI scale, without creating a renderer-specific texture.
+	const int modules = qr->getSize() + 8;
+	const float cell = std::max(1.f, std::floor(std::min(ImGui::GetContentRegionAvail().x, SettingsLayoutScaled(260.f)) / modules));
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const ImVec2 size(modules * cell, modules * cell);
+	auto *draw = ImGui::GetWindowDrawList();
+	draw->AddRectFilled(origin, origin + size, IM_COL32(255, 255, 255, 255));
+	for (int y = 0; y < qr->getSize(); ++y)
+		for (int x = 0; x < qr->getSize(); ++x)
+			if (qr->getModule(x, y))
+			{
+				const ImVec2 pos = origin + ImVec2((x + 4) * cell, (y + 4) * cell);
+				draw->AddRectFilled(pos, pos + ImVec2(cell, cell), IM_COL32(0, 0, 0, 255));
+			}
+	ImGui::Dummy(size);
+	ImGui::TextWrapped("%s", url.c_str());
+	if (ImGui::Button(T("Copy address")))
+		ImGui::SetClipboardText(url.c_str());
+	ImGui::TextWrapped("%s", T("Sharing stays on when you close settings. Turn off Connect Phone to disconnect all phones. Allow Hollycast through your firewall on private networks if needed."));
+}
+#endif
 
 void renderOnScreenDisplayTab()
 {
@@ -6619,6 +7242,10 @@ void renderOnScreenDisplayTab()
 		}
 #endif
 	}
+
+#ifdef HAVE_PHONE_VMU
+	renderPhoneVmuSettings();
+#endif
 
 	if (RenderCollapsingHeader("OsdPerformanceSection", ICON_FA_CHART_LINE, T("Performance Overlay"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -6835,13 +7462,17 @@ void renderOnScreenDisplayTab()
 			T("Text Color"),
 			T("Choose the overlay text color."),
 			[&]() {
-				if (ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs))
+				const bool colorChanged = ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestColor("settings.overlay", "OverlayColor", T("Text Color"), "##OverlayColor", overlayColor);
+#endif
+				if (colorChanged)
 					cfgSaveInt("rend", "OverlayColor", static_cast<int>(std::round(overlayColor[0] * 255.f))
 						| (static_cast<int>(std::round(overlayColor[1] * 255.f)) << 8)
 						| (static_cast<int>(std::round(overlayColor[2] * 255.f)) << 16)
 						| (static_cast<int>(std::round(overlayColor[3] * 255.f)) << 24));
 			},
-			T("Text Color\nControls the overlay text color."));
+			T("Text Color\nControls the overlay text color."), false, 220.0f, "color");
 	}
 }
 
@@ -6853,6 +7484,15 @@ void renderAudioTab()
 	// Audio Playback Section
 	if (RenderCollapsingHeader("PlaybackSection", ICON_FA_VOLUME_HIGH, T("Playback"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+	#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			RenderGeneralToggleSettingRow(
+				"HikaruAudioPacing", ICON_FA_VOLUME_HIGH,
+				T("Match audio to game speed"), T("Keep pitch steady when the game runs slowly"),
+				static_cast<bool>(config::HikaruAudioPacing),
+				[](bool enabled) { config::HikaruAudioPacing.set(enabled); },
+				T("Match audio to game speed\nWhen the game runs slowly, slows audio to match while keeping its pitch. Adds some audio latency."));
+	#endif
 
 		RenderGeneralToggleSettingRow(
 			"EnableDSP",
@@ -7934,7 +8574,7 @@ void renderControlsTab()
 
 				ImGui::TableSetColumnIndex(2);
 #if defined(USE_DREAMLINK_DEVICES)
-				DreamLinkGamepad* dreamLinkGamepad = dynamic_cast<DreamLinkGamepad*>(gamepad.get());
+				DreamLinkSDLGamepad* dreamLinkGamepad = dynamic_cast<DreamLinkSDLGamepad*>(gamepad.get());
 				if (dreamLinkGamepad != nullptr) {
 					ImGui::Text("%s", dreamLinkGamepad->dreamLinkStatus());
 				}
@@ -7948,7 +8588,39 @@ void renderControlsTab()
 
 				// Port selection combo (None, A, B, C, D, All)
 				const char* current_port = kMaplePorts[gamepad->maple_port() + 1];
-				if (ImGui::BeginCombo(port_name, current_port))
+#ifdef HOLLYCAST_TEST_HARNESS
+				const bool mappingOnlyTestDevice = gamepad->remappable()
+					&& gamepad->api_name() == test_harness::ControllerApiName
+					&& gamepad->unique_id() == "hollycast-test-mapping-device";
+				if (mappingOnlyTestDevice)
+					ImGui::BeginDisabled(true);
+#endif
+				const bool portPopupOpen = ImGui::BeginCombo(port_name, current_port);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+				{
+					const auto portItemId = test_harness::ui::lastItemId();
+					if (portItemId != 0)
+					{
+						using test_harness::Json;
+						Json options = Json::array();
+						for (int port = -1; port <= 4; ++port)
+							options.push_back({{"value", port}, {"label", kMaplePorts[port + 1]},
+								{"selected", gamepad->maple_port() == port}});
+						const std::string semanticId = "controls.physical.port." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Port";
+						test_harness::ui::annotateItem(portItemId, {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "options"}, {"value", gamepad->maple_port()},
+							{"value_label", current_port}, {"options", std::move(options)},
+							{"requires_apply", !mappingOnlyTestDevice}});
+					}
+				}
+#endif
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (mappingOnlyTestDevice)
+					ImGui::EndDisabled();
+#endif
+				if (portPopupOpen)
 				{
 					for (int j = -1; j < IM_ARRAYSIZE(kMaplePorts) - 1; j++)
 					{
@@ -7968,13 +8640,26 @@ void renderControlsTab()
 				ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
 
 				// Map button for controller mapping
-				if (gamepad->remappable() && ImGui::Button(T("Map"), deviceButtonSize))
+				if (gamepad->remappable())
 				{
-					ResetControllerMappingRuntime();
-					g_currentGamepadForMapping = gamepad;
-					g_currentGamepadForMapping->listenButtons(buttonListener);
-					g_gamepad_port_for_mapping = 0;
-					ImGui::OpenPopup(T("Controller Mapping"));
+					const bool mapClicked = ImGui::Button(T("Map"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.mapping." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Mapping";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (mapClicked)
+					{
+						ResetControllerMappingRuntime();
+						g_currentGamepadForMapping = gamepad;
+						g_currentGamepadForMapping->listenButtons(buttonListener);
+						g_gamepad_port_for_mapping = 0;
+						ImGui::OpenPopup(T("Controller Mapping"));
+					}
 				}
 
 				// Virtual controllers open the live editor; physical controllers keep
@@ -7982,7 +8667,17 @@ void renderControlsTab()
 				if (gamepad->is_rumble_enabled() || gamepad->has_analog_stick() || gamepad->is_virtual_gamepad())
 				{
 					ImGui::SameLine(0, SettingsLayoutScaled(16.0f));
-					if (ImGui::Button(T("Settings"), deviceButtonSize))
+					const bool settingsClicked = ImGui::Button(T("Settings"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.settings." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Settings";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (settingsClicked)
 					{
 						if (gamepad->is_virtual_gamepad())
 						{
@@ -8023,6 +8718,95 @@ void renderControlsTab()
 	}
 
 	ImGui::Spacing();
+
+#ifdef USE_HIKARU
+	// Platform alone stays Hikaru after unload. Gate cabinet controls on the
+	// published loaded descriptor so another title never exposes these options.
+	const auto* hikaruGame = hikaru::frontend::loadedGame();
+	if (hikaruGame && RenderCollapsingHeader("HikaruCompatibilityBindings", ICON_FA_GAMEPAD,
+		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::TextUnformatted(hikaruGame->title);
+		ImGui::TextWrapped("%s", T("Enabled gamepad controls use a built-in preset. Disable them to use your saved mapping. Wheels keep their mapped axes. L3 inserts a coin, R3 opens cabinet test, and Back opens the menu."));
+		auto* regionOption = hikaruGame == &hikaru::StarWarsRacerGame ? &config::HikaruStarWarsRacerRegion
+			: hikaruGame == &hikaru::SegaNascarGame ? &config::HikaruNascarRegion
+			: hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
+			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion
+			: hikaruGame == &hikaru::VirtualOn4Game ? &config::HikaruVirtualOn4Region : &config::HikaruPlanetRegion;
+		const char* regionLabels[] = {T("Keep saved region"), T("Japan"), T("USA (English)"), T("Export")};
+		int regionSelection = std::clamp(regionOption->get(), -1, 2) + 1;
+		SettingsUI::PopupConfig regionCfg {};
+		regionCfg.type = SettingsUI::PopupType::Options;
+		regionCfg.options.label = T("Cabinet region");
+		regionCfg.options.icon = ICON_FA_GLOBE;
+		regionCfg.options.popupID = Tnop("HikaruCabinetRegionPopup");
+		regionCfg.options.options = regionLabels;
+		regionCfg.options.optionCount = 4;
+		regionCfg.options.currentValue = &regionSelection;
+		regionCfg.options.valueWidth = 220.0f;
+		regionCfg.options.onChange = [regionOption](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex > 3 || regionOption->get() == selectedIndex - 1) return false;
+			regionOption->set(selectedIndex - 1);
+			hikaru::frontend::requestCabinetRegion();
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
+			T("Choose a region for this game. Changing it restarts the cabinet; calibration and saved records are retained. A backup is kept before the first change."), regionCfg);
+		ImGui::TextWrapped("%s", T("USA selects the English cabinet configuration. Export uses the game's export language options. New cabinets must finish creating their settings before the region can apply."));
+		if (hikaruGame == &hikaru::StarWarsRacerGame) {
+			RenderGeneralToggleSettingRow("HikaruStarWarsRacerGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad pod controls"), T("Use triggers and shoulders while both thumbs operate the pod levers"),
+				bool(config::HikaruStarWarsRacerGamepad),
+				[](bool enabled) { config::HikaruStarWarsRacerGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to use only the individually mapped cabinet buttons. The two analog levers keep their assignments."));
+			ImGui::TextWrapped("%s", T("Push the left and right sticks forward to advance their respective pod levers. A is boost, B is brake, and X/Y are the left/right buttons."));
+			ImGui::TextWrapped("%s", T("With the default arcade gamepad layout, this option also maps LT to boost, RT to brake, and the left/right shoulders or D-pad to the corresponding left/right buttons. Coin and Start use their normal arcade bindings."));
+		} else if (hikaruGame == &hikaru::SegaNascarGame) {
+			RenderGeneralToggleSettingRow("HikaruNascarGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad driving controls"), T("Keep the selected gear engaged and allow D-pad steering"),
+				bool(config::HikaruNascarGamepad),
+				[](bool enabled) { config::HikaruNascarGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable for a physical shifter whose gear buttons remain held. Analog steering and pedals always keep their cabinet assignments."));
+			ImGui::TextWrapped("%s", T("Standard cabinet: left stick steers, RT is gas, LT is brake. With the preset enabled, A/B/X/Y select gears 1/2/3/4, right shoulder changes view, and left shoulder selects neutral. L3 inserts a coin and Start begins the race."));
+			ImGui::TextWrapped("%s", T("Map Steering wheel, Gas pedal and Brake pedal above. Use Game Test > Input Assignments for calibration; select Automatic transmission in the game if you do not want to shift manually."));
+		} else if (hikaruGame == &hikaru::AirTrixGame) {
+			RenderGeneralToggleSettingRow("HikaruAirTrixDpadBoard", ICON_FA_GAMEPAD,
+				T("D-pad board steering"), T("Use the D-pad for board yaw and roll, alongside the analog stick"),
+				bool(config::HikaruAirTrixDpadBoard),
+				[](bool enabled) { config::HikaruAirTrixDpadBoard.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("When disabled, D-pad up/down operate the original nose/tail kick switches. Action buttons always provide separate kicks."));
+			ImGui::TextWrapped("%s", T("Map Tail kick, Nose kick, Cabinet left/right, Coin, Yaw and Roll using Controller Mapping above. With the default arcade gamepad layout: A is tail kick, B is nose kick, X/Y are cabinet left/right, and the right shoulder inserts a coin."));
+			ImGui::TextWrapped("%s", T("Tricks combine board motion and kick timing. If steering is ignored, calibrate both axes in Game Test Mode > Calibration > Volume Calibration, then return to the center and save."));
+		} else if (hikaruGame == &hikaru::BraveFirefightersGame) {
+			RenderGeneralToggleSettingRow("HikaruBraveGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad hose controls"), T("Use the built-in gamepad layout for this cabinet"),
+				bool(config::HikaruBraveGamepad),
+				[](bool enabled) { config::HikaruBraveGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to use your saved controller mapping."));
+			RenderGeneralToggleSettingRow("HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
+				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
+				bool(config::HikaruBraveMouseAim),
+				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
+				T("Uses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Spray, Fog, Horizontal aim and Vertical aim for this cabinet."));
+		} else if (hikaruGame == &hikaru::VirtualOn4Game) {
+			RenderGeneralToggleSettingRow("HikaruVirtualOn4TwinStick", ICON_FA_GAMEPAD,
+				T("Single-controller bindings"), T("Use both sticks and triggers of controller A for one cabinet"),
+				bool(config::HikaruVirtualOn4TwinStick),
+				[](bool enabled) { config::HikaruVirtualOn4TwinStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("When disabled, controllers A and B each provide one lever. These are the two levers of one player, not linked cabinets."));
+			ImGui::TextWrapped("%s", T("Left/right sticks move the two levers. LT/RT fire. X/Y activate left/right turbo, L3 inserts a coin, and Start begins the game. Right shoulder opens personal information."));
+		} else if (hikaruGame == &hikaru::PlanetHarriersGame) {
+			RenderGeneralToggleSettingRow("HikaruPlanetDpadStick", ICON_FA_GAMEPAD,
+				T("D-pad flight controls"), T("Use the D-pad for full-range flight movement, alongside the analog stick"),
+				bool(config::HikaruPlanetDpadStick),
+				[](bool enabled) { config::HikaruPlanetDpadStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to steer only with the mapped analog stick. Bullet, Missile, Bomb and View buttons keep their existing bindings."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Bullet, Missile, Bomb, View left/right and Stick horizontal/vertical for this cabinet."));
+		}
+		ImGui::Spacing();
+	}
+#endif
 
 	if (RenderCollapsingHeader("Mouse&RawInputSection", ICON_FA_CROSSHAIRS, T("Mouse & Raw Input"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -8386,6 +9170,10 @@ void renderControlsTab()
 							config::CrosshairColor[bus] = 0;
 						}
 					}
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestToggle("controls.crosshair", std::to_string(bus).c_str(), T("Crosshair"), enabled);
+#endif
 
 					ImGui::SameLine(0, 0);
 
@@ -8409,6 +9197,11 @@ void renderControlsTab()
 					bool colorChanged = ImGui::ColorEdit4("##crosshair_color", xhairColor,
 						ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf
 						| ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoLabel);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestColor("controls.crosshair.color", std::to_string(bus).c_str(), T("Crosshair color"),
+							"##crosshair_color", xhairColor);
+#endif
 
 					if (colorChanged)
 					{
@@ -9261,12 +10054,37 @@ void renderAdvancedTab()
 {
 	ScopedTwoLineRowStyle advancedRowStyle(12.0f, true, 0.5f);
 
+	// Updates Section
+	ImGui::Spacing();
+	if (RenderCollapsingHeader("UpdatesSection", ICON_FA_DOWNLOAD, T("Updates"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderGeneralToggleSettingRow(
+			"CheckForUpdatesOnStartup",
+			ICON_FA_DOWNLOAD,
+			T("Check for updates on startup"),
+			T("Automatically check after the startup animation"),
+			cfgLoadBool("updates", "startup", true),
+			[](bool enabled) {
+				cfgSaveBool("updates", "startup", enabled);
+				SaveSettings();
+			},
+			T(
+				"Check for updates on startup\n"
+				"Checks Hollycast's selected update track after the startup intro.\n\n"
+				"If an update is available, Hollycast shows its details. Download and installation start only after you confirm."
+			));
+	}
 
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+		if (settings.platform.isHikaru()) {
+			RenderGeneralInfoRow("CpuModeSetting", ICON_FA_MICROCHIP, T("CPU Mode"),
+				T("Hikaru uses the interpreter; CPU mode applies to Dreamcast."), T("Interpreter"));
+		}
 #if FEAT_SHREC != DYNAREC_NONE
 		// CPU Mode
+		if (!settings.platform.isHikaru())
 		{
 			const char* cpuModeLabels[] = { T("Dynarec"), T("Interpreter") };
 			int cpuModeSelection = config::DynarecEnabled.get() ? 0 : 1;
@@ -9317,15 +10135,27 @@ void renderAdvancedTab()
 				));
 		}
 
+#endif
+#if FEAT_SHREC == DYNAREC_NONE
+		if (settings.platform.isHikaru())
+#endif
 		// SH4 Clock
 		{
+			const bool hikaru = settings.platform.isHikaru();
 			static int sh4ClockTemp = config::Sh4Clock.get();
+			if (hikaru) {
+				sh4ClockTemp = std::clamp(config::Sh4Clock.get(), 100, 300);
+				if (sh4ClockTemp != config::Sh4Clock.get())
+					config::Sh4Clock.set(sh4ClockTemp);
+			}
 
 			SettingsUI::PopupSliderConfig sh4ClockCfg {};
 			sh4ClockCfg.label = T("SH4 Clock");
 			sh4ClockCfg.icon = ICON_FA_GAUGE_HIGH;
 			sh4ClockCfg.popupID = Tnop("Sh4ClockPopup");
-			sh4ClockCfg.description = T(
+			sh4ClockCfg.description = hikaru ? T(
+				"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n"
+				"Higher settings require more CPU work and can change game timing.") : T(
 				"Adjusts the emulated SH4 CPU clock. Default is 200 MHz.\n"
 				"Higher values may reduce CPU-side frame drops in some games, but can also break timing.\n"
 				"Lower values can reduce CPU load, but may cause slowdowns or audio/video instability.");
@@ -9346,9 +10176,13 @@ void renderAdvancedTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("Sh4ClockSetting"),
-				T("Over/Underclock the main SH4 CPU."),
+				hikaru ? T("Adjust both Hikaru SH4 CPU clocks; audio and video clocks stay unchanged.")
+				       : T("Over/Underclock the main SH4 CPU."),
 				sh4ClockPopupCfg,
-				T(
+				hikaru ? T(
+					"SH4 Clock\n"
+					"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n\n"
+					"The default is 200 MHz. Higher settings require more CPU work and can change game timing.") : T(
 					"SH4 Clock\n"
 					"Overclocks/underclocks the emulated Dreamcast CPU.\n\n"
 					"Default is 200 MHz.\n"
@@ -9358,6 +10192,7 @@ void renderAdvancedTab()
 				));
 		}
 
+#if FEAT_SHREC != DYNAREC_NONE
 		// Fast-Forward Speed Limit
 		{
 			static int fastForwardLimitTemp = config::FastForwardSpeedLimit.get();
@@ -9438,7 +10273,6 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		// Multi-threaded emulation
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
 			ICON_FA_GEAR,
@@ -9554,7 +10388,14 @@ void renderAdvancedTab()
 					ImGui::SetKeyboardFocusHere();
 				ImGui::SetNextItemWidth(inputWidth);
 				static int gdbport = config::GDBPort;
-				if (ImGui::InputInt("##GDBPortInput", &gdbport))
+				const bool gdbPortChanged = ImGui::InputInt("##GDBPortInput", &gdbport);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "settings.debug.gdb_port"},
+						{"semantic_label", T("GDB Port")}, {"kind", "number"}, {"value", gdbport},
+						{"read_only", false}});
+#endif
+				if (gdbPortChanged)
 					config::GDBPort = gdbport;
 
 				RenderTwoLineSettingDescription(line1Start, T("Default port is 3263"));

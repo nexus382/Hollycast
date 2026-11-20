@@ -6,8 +6,25 @@
 #pragma once
 
 #include <cstdint>
+#ifdef HOLLYCAST_TEST_HARNESS
+#include <optional>
+#endif
 
 namespace performance_overlay {
+
+#ifdef HOLLYCAST_TEST_HARNESS
+struct HarnessMetrics {
+	bool collecting = false;
+	std::uint64_t sampledAtMs = 0;
+	std::uint64_t sampleAgeMs = 0;
+	std::optional<float> gameFps, outputFps, vblankHz, processCpuPercent, systemCpuPercent;
+	std::optional<float> emulationSpeedPercent;
+	std::optional<float> gpuBusyPercent, gpuRenderMs, frameAverageMs, frameMinimumMs, frameMaximumMs;
+	std::optional<std::uint64_t> processResidentBytes;
+};
+// The UI owner reads the same published values and validity gates as the OSD.
+HarnessMetrics harnessMetrics();
+#endif
 
 int mode();
 void draw();
@@ -31,6 +48,8 @@ void recordPvrWork(std::uint64_t microseconds);
 void recordRenderedResolution(int rawWidth, int rawHeight, int renderedWidth, int renderedHeight);
 void recordOutputViewport(int width, int height);
 void recordPresentedFrame();
+// A completed guest display frame, independent of its graphics backend.
+void recordGuestFrame();
 bool isPresentationTimingRequested();
 std::uint32_t getPresentationTimingEpoch();
 // Asynchronous backends pass the actual monotonic display timestamp and the

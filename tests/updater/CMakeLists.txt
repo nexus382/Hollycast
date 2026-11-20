@@ -106,6 +106,9 @@ if(UNIX)
     target_link_libraries(update_play_ui PRIVATE Threads::Threads)
 endif()
 add_test(NAME updater_play_without_notes COMMAND update_play_ui play)
+add_test(NAME updater_play_snapshot_changes COMMAND update_play_ui play-count)
+add_test(NAME updater_play_queued_check COMMAND update_play_ui play-queued)
 
 set_tests_properties(updater_startup_popup updater_deferred_popup updater_manual_without_startup
-    updater_manual_during_game updater_shutdown_during_check updater_play_without_notes PROPERTIES TIMEOUT 15)
+    updater_manual_during_game updater_shutdown_during_check updater_play_without_notes
+    updater_play_snapshot_changes updater_play_queued_check PROPERTIES TIMEOUT 15)

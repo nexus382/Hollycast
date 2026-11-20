@@ -23,6 +23,7 @@ reset = between(gui, 'void reset_vmus()', 'void gui_error(')
 events = between(sdl[sdl.index('void input_sdl_handle()'):], '\tSDL_Event event;', '\t\tswitch (event.type)')
 motion = between(sdl, '\t\t\tcase SDL_MOUSEMOTION:', '\t\t\tcase SDL_MOUSEBUTTONDOWN:')
 position = between(mouse, 'static void screenToNative(', 'void SetRelativeMousePosition(')
+relative_position = mouse[mouse.index('void SetRelativeMousePosition('):]
 raw_input = between(raw, 'void RawMouse::buttonInput(', 'static LRESULT CALLBACK rawWindowProc(')
 focus = between(utility, 'bool focusGameWindow()', 'bool consumeMousePositionReset()')
 
@@ -123,6 +124,7 @@ namespace Multiboard { void keyboardEvent(int,bool) { ++multiboardInputs; } }
 namespace card_reader { bool barcodeAvailable() { return false; } }
 bool handleBarcodeScanner(const SDL_Event&) { return false; }
 bool blockVmuMouse=false, pendingMouseReset=false;
+namespace test_harness { bool harnessInputOwned=false; bool controllerInputOwned() { return harnessInputOwned; } }
 namespace vmu_window {
 #ifdef HAVE_MOVABLE_VMUS
 #ifdef HAVE_SDL_VMUS
@@ -153,7 +155,7 @@ s32 mo_width=640, mo_height=480;
 float mo_x_delta[4]{}, mo_y_delta[4]{};
 std::mutex relPosMutex;
 '''
-prefix += position
+prefix += position + relative_position
 prefix += r'''
 class Mouse {
 public:
@@ -236,6 +238,42 @@ int main() {
   SDL_Event event{}; event.motion.type=SDL_MOUSEMOTION; event.motion.x=x; event.motion.y=y;
   eventQueue.push_back(event); input_sdl_handle();
  };
+ test_harness::harnessInputOwned = false;
+ for (unsigned port = 0; port < 4; ++port) {
+  mo_x_delta[port] = mo_y_delta[port] = 0;
+  mo_x_prev[port] = mo_y_prev[port] = -1;
+  mo_x_abs[port] = mo_y_abs[port] = 0;
+ }
+ SetMousePosition(100,100,640,480,0);
+ require(mo_x_abs[0]==100 && mo_y_abs[0]==100 && mo_x_prev[0]==100 && mo_y_prev[0]==100,
+  "unowned absolute mouse input updates guest position and baseline");
+ SetRelativeMousePosition(10,4,0);
+ require(mo_x_abs[0]==110 && mo_y_abs[0]==104 && mo_x_delta[0]==10 && mo_y_delta[0]==4
+  && mo_x_prev[0]==-1 && mo_y_prev[0]==-1,
+  "unowned relative mouse input updates guest position and deltas");
+ SetMousePosition(120,110,640,480,0);
+ require(mo_x_prev[0]==120 && mo_y_prev[0]==110,"absolute mouse input establishes a fresh baseline");
+ const s32 ownedX=mo_x_abs[0], ownedY=mo_y_abs[0], ownedPrevX=mo_x_prev[0], ownedPrevY=mo_y_prev[0];
+ const float ownedDeltaX=mo_x_delta[0], ownedDeltaY=mo_y_delta[0];
+ const s32 ownedWidth=mo_width, ownedHeight=mo_height;
+ test_harness::harnessInputOwned = true;
+ pendingMouseReset = true;
+ SetMousePosition(300,200,800,600,0);
+ SetRelativeMousePosition(40,-20,0);
+ require(mo_x_abs[0]==ownedX && mo_y_abs[0]==ownedY && mo_x_prev[0]==ownedPrevX && mo_y_prev[0]==ownedPrevY
+  && mo_x_delta[0]==ownedDeltaX && mo_y_delta[0]==ownedDeltaY && mo_width==ownedWidth && mo_height==ownedHeight,
+  "owned mouse input leaves guest position, deltas, dimensions and baselines unchanged");
+#ifdef HAVE_MOVABLE_VMUS
+ require(pendingMouseReset,"owned absolute input preserves a pending VMU motion reset");
+#endif
+ pendingMouseReset=false;
+ test_harness::harnessInputOwned = false;
+ mo_x_delta[0]=mo_y_delta[0]=0;
+ SetMousePosition(130,115,640,480,0);
+ SetRelativeMousePosition(5,-3,0);
+ require(mo_x_abs[0]==135 && mo_y_abs[0]==112 && mo_x_delta[0]==15 && mo_y_delta[0]==2,
+  "unowned mouse input resumes normal absolute and relative updates");
+ mo_x_delta[0]=mo_y_delta[0]=0;
  reset_vmus();
 #ifdef HAVE_MOVABLE_VMUS
  require(published==8,"supported standalone reset publishes all slots");

@@ -269,7 +269,10 @@ private:
 	std::chrono::steady_clock::time_point fastForwardThrottleDeadline {};
 	u32 stepRangeFrom = 0;
 	u32 stepRangeTo = 0;
-	bool stopRequested = false;
+	std::atomic<bool> stopRequested{false};
+#ifdef USE_HIKARU
+	bool hikaruAudioActive = false; // Android render thread only
+#endif
 	std::mutex mutex;
 	Sh4Executor *interpreter = nullptr;
 	Sh4Executor *recompiler = nullptr;

@@ -1,5 +1,6 @@
 /*
 	Copyright 2026 The Hollycast Authors
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Hollycast.
 
@@ -49,6 +50,8 @@ void renderFileMenu();
 // System Menu - emulation control
 // Items: Start, Pause, Reset, Settings, Close
 void renderSystemMenu();
+// Shared contents for the gameplay menu and the touch-friendly pause popup.
+void renderCardsMenu();
 
 // Tools Menu - utilities and debugging
 // Items: Cheats, Achievements, Profiler, Network, Disk Swap

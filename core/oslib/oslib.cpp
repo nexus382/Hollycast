@@ -42,7 +42,7 @@
 #endif
 #include "profiler/fc_profiler.h"
 #include "input/gamepad_device.h"
-#include "input/dreampotato.h"
+#include "input/dreamlink/dreampotato.h"
 #include "i18n.h"
 #include <algorithm>
 

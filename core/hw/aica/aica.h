@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "types.h"
 #include <deque>
@@ -312,6 +313,19 @@ struct DSP_OUT_VOL_REG
 	u32 :16;
 };
 
+#ifdef USE_HIKARU
+extern InterruptInfo * MCIEB;
+extern InterruptInfo * MCIPD;
+extern InterruptInfo * MCIRE;
+extern InterruptInfo * SCIEB;
+extern InterruptInfo * SCIPD;
+extern InterruptInfo * SCIRE;
+extern std::deque<u8> midiSendBuffer;
+
+extern CommonData_struct * CommonData;
+extern DSPData_struct * DSPData;
+extern const DSP_OUT_VOL_REG * dsp_out_vol;
+#else
 extern InterruptInfo * const MCIEB;
 extern InterruptInfo * const MCIPD;
 extern InterruptInfo * const MCIRE;
@@ -323,6 +337,7 @@ extern std::deque<u8> midiSendBuffer;
 extern CommonData_struct * const CommonData;
 extern DSPData_struct * const DSPData;
 extern const DSP_OUT_VOL_REG * const dsp_out_vol;
+#endif
 
 template<typename T>
 void writeTimerAndIntReg(u32 reg, T data);
@@ -356,6 +371,10 @@ public:
 		m_step=1<<(data->md);
 		c_step=m_step;
 	}
+
+#ifdef USE_HIKARU
+	void rebind(u8* regbase) { data = (AicaTimerData*)&regbase[0x2890 + id*4]; }
+#endif
 
 	void StepTimer(u32 samples)
 	{

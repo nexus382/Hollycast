@@ -27,7 +27,8 @@ bool available()
     if (config::GDB)
         return false;
 #endif
-    return EventManager::isGameRunning() && !settings.network.online
+    // Hikaru runs its two SH-4s outside the Dreamcast execution and memory APIs.
+    return EventManager::isGameRunning() && !settings.platform.isHikaru() && !settings.network.online
             && !settings.naomi.multiboard && !settings.raHardcoreMode
             && !config::GGPOEnable;
 }

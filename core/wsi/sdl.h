@@ -2,6 +2,7 @@
     Created on: Oct 18, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -38,4 +39,7 @@ private:
 
 	SDL_GLContext glcontext = nullptr;
 	bool swapOnVSync = false;
+#ifdef USE_HIKARU
+	bool swapForHikaru = false;
+#endif
 };

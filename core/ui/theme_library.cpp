@@ -189,6 +189,51 @@ std::string elementText(const Element& element, const LibraryItem& item)
 	return {};
 }
 
+struct LibraryTotals
+{
+	double games = 0, favourites = 0, unplayed = 0, totalHours = 0, maxHours = 0;
+};
+
+std::optional<double> statValue(const std::string& source, const std::vector<LibraryItem>& items,
+		int selected, int pageSize, int64_t now, std::optional<LibraryTotals>& totals)
+{
+	if (source == "position") return selected >= 0 ? selected + 1 : 0;
+	if (source == "page") return selected < 0 ? 0 : pageSize > 0 ? selected / pageSize + 1 : 1;
+	if (source == "pageCount") return items.empty() ? 0 : pageSize > 0 ? (items.size() + pageSize - 1) / pageSize : 1;
+	if (source == "playHours" || source == "neglect")
+	{
+		if (selected < 0 || selected >= static_cast<int>(items.size()) || !items[selected].isGame) return std::nullopt;
+		const LibraryItem& item = items[selected];
+		if (source == "playHours") return std::max(0.0, item.playTimeSeconds) / 3600.0;
+		if (!hasPlayed(item)) return 1.0;
+		if (item.lastPlayed <= 0) return std::nullopt; // History can contain duration without a timestamp.
+		const double days = std::max(0.0, static_cast<double>(now - item.lastPlayed) / 86400.0);
+		return std::clamp(std::log2(days + 1.0) / 9.0, 0.05, 1.0);
+	}
+	double LibraryTotals::* field = nullptr;
+	if (source == "gameCount") field = &LibraryTotals::games;
+	else if (source == "favouriteCount") field = &LibraryTotals::favourites;
+	else if (source == "unplayedCount") field = &LibraryTotals::unplayed;
+	else if (source == "totalPlayHours") field = &LibraryTotals::totalHours;
+	else if (source == "maxPlayHours") field = &LibraryTotals::maxHours;
+	else return std::nullopt;
+	if (!totals)
+	{
+		totals.emplace();
+		for (const LibraryItem& item : items)
+		{
+			if (!item.isGame) continue;
+			const double hours = std::max(0.0, item.playTimeSeconds) / 3600.0;
+			totals->games++;
+			totals->favourites += item.favourite;
+			totals->unplayed += !hasPlayed(item);
+			totals->totalHours += hours;
+			totals->maxHours = std::max(totals->maxHours, hours);
+		}
+	}
+	return (*totals).*field;
+}
+
 // The library's overall state, for elements that respond to it.
 struct LibraryState
 {
@@ -200,6 +245,7 @@ struct LibraryState
 	const std::vector<LibraryItem>* items = nullptr;
 	int selected = -1, pageSize = 0;
 	ImTextureID saveThumbnail = {};
+	mutable std::optional<LibraryTotals> totals;
 };
 
 // Spin and sweep share an image's rectangle as their clip region.
@@ -329,7 +375,7 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 	if (element.type == "meter")
 	{
 		if (!state.items) return;
-		const auto value = libraryStat(element.source, *state.items, state.selected, state.pageSize, std::time(nullptr));
+		const auto value = statValue(element.source, *state.items, state.selected, state.pageSize, std::time(nullptr), state.totals);
 		if (!value) return;
 		const float fraction = std::clamp(static_cast<float>(*value * element.valueScale / element.maximum), 0.f, 1.f);
 		drawList->AddRectFilled(visible.Min, ImVec2(visible.Min.x + visible.GetWidth() * fraction, visible.Max.y), color(tint), uiScaled(element.rounding));
@@ -397,7 +443,7 @@ void drawElement(const Element& element, const Canvas& canvas, const std::string
 		}
 		if (element.type == "stat" && state.items)
 		{
-			const auto value = libraryStat(element.source, *state.items, state.selected, state.pageSize, std::time(nullptr));
+			const auto value = statValue(element.source, *state.items, state.selected, state.pageSize, std::time(nullptr), state.totals);
 			if (value)
 			{
 				std::ostringstream number;
@@ -1680,32 +1726,8 @@ bool hasPlayed(const LibraryItem& item)
 std::optional<double> libraryStat(const std::string& source, const std::vector<LibraryItem>& items,
 		int selected, int pageSize, int64_t now)
 {
-	if (source == "position") return selected >= 0 ? selected + 1 : 0;
-	if (source == "page") return selected < 0 ? 0 : pageSize > 0 ? selected / pageSize + 1 : 1;
-	if (source == "pageCount") return items.empty() ? 0 : pageSize > 0 ? (items.size() + pageSize - 1) / pageSize : 1;
-	if (source == "playHours" || source == "neglect")
-	{
-		if (selected < 0 || selected >= static_cast<int>(items.size()) || !items[selected].isGame) return std::nullopt;
-		const LibraryItem& item = items[selected];
-		if (source == "playHours") return std::max(0.0, item.playTimeSeconds) / 3600.0;
-		if (!hasPlayed(item)) return 1.0;
-		if (item.lastPlayed <= 0) return std::nullopt; // History can contain duration without a timestamp.
-		const double days = std::max(0.0, static_cast<double>(now - item.lastPlayed) / 86400.0);
-		return std::clamp(std::log2(days + 1.0) / 9.0, 0.05, 1.0);
-	}
-	double result = 0;
-	for (const LibraryItem& item : items)
-	{
-		if (!item.isGame) continue;
-		const double hours = std::max(0.0, item.playTimeSeconds) / 3600.0;
-		if (source == "gameCount") result++;
-		else if (source == "favouriteCount") result += item.favourite;
-		else if (source == "unplayedCount") result += !hasPlayed(item);
-		else if (source == "totalPlayHours") result += hours;
-		else if (source == "maxPlayHours") result = std::max(result, hours);
-	}
-	if (source != "gameCount" && source != "favouriteCount" && source != "unplayedCount" && source != "totalPlayHours" && source != "maxPlayHours") return std::nullopt;
-	return result;
+	std::optional<LibraryTotals> totals;
+	return statValue(source, items, selected, pageSize, now, totals);
 }
 
 void drawRackCasePullOut(const RackCaseAnimation& animation, float progress)

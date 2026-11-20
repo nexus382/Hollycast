@@ -16,6 +16,9 @@ public:
 	virtual bool init() = 0;
 	virtual u32 push(const void *data, u32 frames, bool wait) = 0;
 	virtual void term() {}
+	virtual void clear() {}
+	virtual u32 queuedFrames() { return 0; }
+	virtual bool hasQueueControl() const { return false; }
 
 	struct Option {
 		std::string name;
@@ -63,6 +66,8 @@ private:
 
 void InitAudio();
 void TermAudio();
+void ClearAudioOutput();
+u32 AudioOutputQueuedFrames();
 void WriteSample(s16 right, s16 left);
 // The tap receives borrowed interleaved L/R PCM16 frames at 44.1 kHz,
 // before host volume. It must copy promptly and never wait for the consumer.
@@ -72,6 +77,19 @@ void SetAudioOutputTap(AudioOutputTap tap);
 void PushUiAudio(const s16 *frames, u32 count);
 // Closes a backend opened by PushUiAudio. A running game's backend is left alone.
 void StopUiAudio();
+
+// Monotonic backend counters for opt-in diagnostics. The audio callback only
+// updates atomics; reporting happens on the emulation thread.
+struct AudioOutputDiagnostics {
+	u64 requestedFrames, silentFrames, underruns, droppedFrames;
+};
+AudioOutputDiagnostics audioOutputDiagnostics();
+const char* audioOutputBackend();
+void audioOutputRequested(u32 frames);
+void audioOutputUnderrun(u32 silentFrames);
+void audioOutputDropped(u32 frames);
+void audioOutputWaited(u64 nanoseconds);
+double audioOutputBlockedSeconds();
 
 void StartAudioRecording(bool eight_khz);
 u32 RecordAudio(void *buffer, u32 samples);

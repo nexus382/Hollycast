@@ -20,6 +20,7 @@
 #include "mouse.h"
 #include "cfg/option.h"
 #include "ui/gui.h"
+#include "ui/test_harness.h"
 #include <algorithm>
 #include "rend/vmu_window.h"
 
@@ -55,6 +56,8 @@ void Mouse::setRelPos(float deltax, float deltay) {
 }
 
 void Mouse::setWheel(int delta) {
+	if (test_harness::controllerInputOwned())
+		return;
 	std::lock_guard<std::mutex> lock(relPosMutex);
 	if (maple_port() >= 0 && maple_port() < (int)std::size(mo_wheel_delta))
 		mo_wheel_delta[maple_port()] += delta;
@@ -62,6 +65,8 @@ void Mouse::setWheel(int delta) {
 
 void Mouse::setButton(Button button, bool pressed)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	if (maple_port() >= 0 && maple_port() < (int)std::size(mo_buttons))
 	{
 		if (pressed)
@@ -124,6 +129,8 @@ static void screenToNative(int& x, int& y, int width, int height)
 
 void SetMousePosition(int x, int y, int width, int height, u32 mouseId)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	if (mouseId >= std::size(mo_x_abs))
 		return;
 #ifdef HAVE_MOVABLE_VMUS
@@ -161,6 +168,8 @@ void SetMousePosition(int x, int y, int width, int height, u32 mouseId)
 
 void SetRelativeMousePosition(float xrel, float yrel, u32 mouseId)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	if (mouseId >= std::size(mo_x_delta))
 		return;
 	mo_x_prev[mouseId] = -1;

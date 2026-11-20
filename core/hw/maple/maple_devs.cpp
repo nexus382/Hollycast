@@ -12,10 +12,14 @@
 #include "oslib/i18n.h"
 #include "hw/aica/sgc_if.h"
 #include "cfg/option.h"
-#include "input/maplelinkregistry.h"
+#include "input/dreamlink/maplelinkregistry.h"
+#include "network/phone_vmu.h"
 #include <zlib.h>
+#include <algorithm>
 #include <cerrno>
 #include <ctime>
+#include <filesystem>
+#include <vector>
 #include <thread>
 #include <chrono>
 #include <limits>
@@ -405,6 +409,9 @@ void maple_sega_vmu::deserialize(Deserializer& deser)
 			break;
 		}
 	fullSaveNeeded = true;
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data), file != nullptr && !settings.network.online);
+#endif
 }
 
 bool maple_sega_vmu::fullSave()
@@ -480,13 +487,178 @@ void maple_sega_vmu::OnSetup()
 		// This means the existing VMU file is completely empty and needs to be recreated
 		initializeVmu();
 	fullSaveNeeded = false;
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data), file != nullptr && !settings.network.online);
+#endif
 }
 
 maple_sega_vmu::~maple_sega_vmu()
 {
+#ifdef HAVE_PHONE_VMU
+	phone_vmu::unpublishCard(bus_id * 2 + bus_port, flash_data);
+#endif
 	if (file != nullptr)
 		std::fclose(file);
 	memset(lcd_data, 0, sizeof(lcd_data));
+}
+
+bool maple_sega_vmu::linkStatus()
+{
+#ifdef HAVE_PHONE_VMU
+	// linkStatus runs on the emulation thread, including for detached expansion
+	// devices. Never let the HTTP thread touch live flash or its FILE handle.
+	if (phone_vmu::syncCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data),
+			file != nullptr && !settings.network.online,
+			[this](const std::uint8_t *data, std::size_t size, bool backupNeeded) {
+		if (backupNeeded)
+		{
+			// Keep a short history, not one overwritten file: each phone
+			// checkout snapshots the pre-phone card under a timestamped
+			// name so a bad session can be rolled back from Settings.
+			const std::string vmuPath = hostfs::getVmuPath(logical_port, true);
+			char stamp[32] = {};
+			const std::time_t now = std::time(nullptr);
+			std::tm local {};
+#ifdef _WIN32
+			localtime_s(&local, &now);
+#else
+			localtime_r(&now, &local);
+#endif
+			if (std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local) == 0)
+				return false;
+			namespace fs = std::filesystem;
+			std::error_code fsError;
+			const fs::path dir = fs::u8path(vmuPath).parent_path();
+			const std::string prefix = fs::u8path(vmuPath).filename().u8string() + ".phone-backup-";
+			const std::string snapshotBase = prefix + stamp;
+			const std::string backupBase = vmuPath + ".phone-backup-" + stamp;
+			const auto parseBackupSuffix = [&snapshotBase](const std::string& name, unsigned& suffix) {
+				if (name == snapshotBase)
+				{
+					suffix = 0;
+					return true;
+				}
+				if (name.size() != snapshotBase.size() + 7 || name.compare(0, snapshotBase.size(), snapshotBase) != 0
+						|| name[snapshotBase.size()] != '-')
+					return false;
+				unsigned value = 0;
+				for (std::size_t i = snapshotBase.size() + 1; i < name.size(); ++i)
+				{
+					if (name[i] < '0' || name[i] > '9')
+						return false;
+					value = value * 10 + static_cast<unsigned>(name[i] - '0');
+				}
+				suffix = value;
+				return true;
+			};
+			unsigned suffix = 0;
+			fs::directory_iterator existing(dir.empty() ? fs::path(".") : dir, fsError), end;
+			while (!fsError && existing != end)
+			{
+				if (existing->is_regular_file(fsError) && !fsError)
+				{
+					unsigned found = 0;
+					if (parseBackupSuffix(existing->path().filename().u8string(), found))
+					{
+						if (found == 999999)
+							return false;
+						suffix = std::max(suffix, found + 1);
+					}
+				}
+				if (fsError)
+					break;
+				existing.increment(fsError);
+			}
+			if (fsError)
+				return false;
+			std::string backupPath;
+			FILE *backup = nullptr;
+			for (unsigned attempt = 0; attempt < 16 && suffix <= 999999; ++attempt, ++suffix)
+			{
+				backupPath = backupBase;
+				if (suffix != 0)
+				{
+					std::string number = std::to_string(suffix);
+					backupPath += "-" + std::string(6 - number.size(), '0') + number;
+				}
+				errno = 0;
+				backup = nowide::fopen(backupPath.c_str(), "wbx");
+				if (backup != nullptr || errno != EEXIST)
+					break;
+			}
+			if (backup == nullptr)
+				return false;
+			const bool written = std::fwrite(flash_data, sizeof(flash_data), 1, backup) == 1;
+			const bool closed = std::fclose(backup) == 0;
+			if (!written || !closed)
+			{
+				std::error_code removeError;
+				fs::remove(fs::u8path(backupPath), removeError);
+				return false;
+			}
+			// Prune to the newest five snapshots for this card.
+			const auto isSnapshot = [&prefix](const std::string& name) {
+				if (name.rfind(prefix, 0) != 0)
+					return false;
+				const std::string suffix = name.substr(prefix.size());
+				if (suffix.size() < 15 || suffix[8] != '-')
+					return false;
+				for (std::size_t i = 0; i < 15; ++i)
+					if (i != 8 && (suffix[i] < '0' || suffix[i] > '9'))
+						return false;
+				if (suffix.size() == 15)
+					return true;
+				if (suffix.size() != 22 || suffix[15] != '-')
+					return false;
+				for (std::size_t i = 16; i < suffix.size(); ++i)
+					if (suffix[i] < '0' || suffix[i] > '9')
+						return false;
+				return true;
+			};
+			std::vector<fs::path> snapshots;
+			fs::directory_iterator it(dir.empty() ? fs::path(".") : dir, fsError);
+			while (!fsError && it != end)
+			{
+				if (it->is_regular_file(fsError) && !fsError && isSnapshot(it->path().filename().u8string()))
+					snapshots.push_back(it->path());
+				if (fsError)
+					break;
+				it.increment(fsError);
+			}
+			std::sort(snapshots.begin(), snapshots.end());
+			while (snapshots.size() > 5)
+			{
+				fs::remove(snapshots.front(), fsError);
+				if (fsError)
+					break;
+				snapshots.erase(snapshots.begin());
+			}
+		}
+		if (std::fseek(file, 0, SEEK_SET) != 0 || std::fwrite(data, size, 1, file) != 1 || std::fflush(file) != 0)
+		{
+			// Keep the live card unchanged and restore its disk image on a failed
+			// checkpoint. The separate backup survives even if restoration fails.
+			std::clearerr(file);
+			fullSaveNeeded = true;
+			fullSave();
+			std::fflush(file);
+			ERROR_LOG(MAPLE, "Failed to sync phone VMU %s to disk", logical_port);
+			return false;
+		}
+		fullSaveNeeded = false;
+		memset(accessed_blocks, 0, sizeof(accessed_blocks));
+		accessed_blocks_valid = true;
+		last_write_tick = sh4_sched_now64();
+		return true;
+	}))
+	{
+		// Preserve a visible unplug/replug even if checkout and return arrive
+		// between two guest polls, so games discard their cached VMU contents.
+		reconnect_requested = true;
+		return false;
+	}
+#endif
+	return maple_base::linkStatus();
 }
 
 u32 maple_sega_vmu::dma(u32 cmd)
@@ -705,6 +877,9 @@ u32 maple_sega_vmu::dma(u32 cmd)
 						return MDRE_FileError; //invalid params
 					}
 					rptr(&flash_data[write_adr],write_len);
+#ifdef HAVE_PHONE_VMU
+					phone_vmu::updateCard(bus_id * 2 + bus_port, write_adr, &flash_data[write_adr], write_len);
+#endif
 					if (Block < sizeof(accessed_blocks))
 						accessed_blocks[Block] = true;
 					last_write_tick = sh4_sched_now64();

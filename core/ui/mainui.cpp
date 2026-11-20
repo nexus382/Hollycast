@@ -20,6 +20,8 @@
 
 #include "audio/ui_sound.h"
 #include "mainui.h"
+#include "test_harness.h"
+#include "debug/assembly_debugger.h"
 #include "hw/pvr/Renderer_if.h"
 #include "hw/sh4/sh4_core.h"
 #include "gui.h"
@@ -37,8 +39,16 @@
 #ifndef LIBRETRO
 #include "remoteplay/remote_play.h"
 #endif
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#ifdef __APPLE__
+#include "wsi/gl_context.h"
+#endif
+#endif
 
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 static bool mainui_enabled;
@@ -60,7 +70,20 @@ bool mainui_rend_frame()
 
 	os_DoEvents();
 	os_UpdateInputState();
+	test_harness::poll();
 	gui_poll_debugger();
+#ifdef USE_HIKARU
+	// Recreate before the first frame when entering or leaving Hikaru. In
+	// particular, an ES2 context (including an EGL desktop fallback) cannot
+	// be reused by Hikaru, which requires ES3.
+	const auto* context = GraphicsContext::Instance();
+	if (context != nullptr && isOpenGL(context->renderType())
+			&& context->isHikaruContext() != settings.platform.isHikaru())
+	{
+		forceReinit = true;
+		return false;
+	}
+#endif
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::update(!gui_is_open());
 #endif
@@ -87,17 +110,22 @@ bool mainui_rend_frame()
 			// including when a breakpoint or no-video program ends the slice.
 			if (!config::ThreadedRendering)
 				setDefaultRoundingMode();
-			if (!frameRendered && !emu.running())
+			// A render wait can expire between normal 30 Hz game frames. Do not
+			// turn that timeout into an extra swap of an incomplete backbuffer.
+			// Hikaru presents its completed image and OSD together, so a wait
+			// without a frame must not request the shared PVR fallback below.
+			// The running debugger still needs controls for programs with no video.
+			if (!frameRendered && (!emu.running() || settings.platform.isHikaru() || !assembly_debugger::active()))
 				return false;
-			// A boot loop or hung game may never submit a frame. In either
-			// rendering mode, keep menus and Pause responsive without drawing
-			// the overlay twice when a game frame already drew it.
-			if (ImGui::GetFrameCount() == uiFrame)
+			// Fresh game frames already draw their overlay. A shared-thread CPU
+			// slice can also finish without an image, so only the active debugger
+			// may request a redraw here, over a completed game background.
+			if (ImGui::GetFrameCount() == uiFrame && assembly_debugger::active() && !settings.platform.isHikaru())
 			{
-				// A timeout during loading has no game image in the backbuffer.
-				// Recompose the last frame before presenting the controls, just
-				// as a menu does, rather than swapping an empty OSD-only buffer.
 				gui_display_osd(true);
+				// DX/OpenGL drivers normally receive this signal from a game
+				// frame. An overlay drawn on its own must also be presented.
+				imguiDriver->setFrameRendered();
 			}
 			if (config::ProfilerEnabled && config::ProfilerDrawToGUI)
 				gui_display_profiler();
@@ -129,6 +157,12 @@ void mainui_init()
 
 void mainui_term()
 {
+	test_harness::releaseInputs();
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru()
+			|| (GraphicsContext::Instance() != nullptr && GraphicsContext::Instance()->isHikaruContext()))
+		hikaru::frontend::suspendGraphics();
+#endif
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::shutdown();
 #endif
@@ -142,16 +176,38 @@ void mainui_loop(bool forceStart)
 		mainui_enabled = true;
 	mainui_init();
 	RenderType currentRenderer = config::RendererType;
+	RenderType currentHostRenderer = hostRendererType(currentRenderer, settings.platform.isHikaru());
 
 	while (mainui_enabled)
 	{
 		fc_profiler::startThread("main");
 		tickUiSound();
 
-		if (mainui_rend_frame() && imguiDriver != nullptr)
+#ifdef USE_HIKARU
+		static const bool traceHikaru = std::getenv("HIKARU_TRACE_TIMING") != nullptr;
+		const bool measure = traceHikaru && settings.platform.isHikaru() && !gui_is_open();
+		const auto frameStart = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
+		const bool rendered = mainui_rend_frame();
+#ifdef USE_HIKARU
+		const auto renderEnd = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
+		if (rendered && imguiDriver != nullptr)
 		{
 			try {
+				test_harness::beforePresent();
+#if defined(USE_HIKARU) && defined(__APPLE__)
+				// Submit the game and overlay before the macOS SDL display wait,
+				// so the GPU can work while presentation is synchronized.
+				if (settings.platform.isHikaru() && isOpenGL(config::RendererType) && !gui_is_open() && config::VSync
+					&& !settings.input.fastForwardMode)
+					glFlush();
+#endif
 				imguiDriver->present();
+#ifdef USE_HIKARU
+				if (settings.platform.isHikaru()) hikaru::frontend::framePresented();
+#endif
+				test_harness::presented();
 #ifndef LIBRETRO
 				remoteplay::capturePresentedFrame();
 #endif
@@ -159,10 +215,28 @@ void mainui_loop(bool forceStart)
 				forceReinit = true;
 			}
 		}
+#ifdef USE_HIKARU
+		if (measure && rendered && !gui_is_open())
+		{
+			static unsigned frames;
+			static double renderMs, presentMs;
+			const auto end = std::chrono::steady_clock::now();
+			renderMs += std::chrono::duration<double, std::milli>(renderEnd - frameStart).count();
+			presentMs += std::chrono::duration<double, std::milli>(end - renderEnd).count();
+			if (++frames == 60)
+			{
+				std::fprintf(stderr, "Hikaru host timing: frames=%u render_ms=%.3f present_ms=%.3f total_ms=%.3f vsync=%d fast_forward=%d\n",
+					frames, renderMs / frames, presentMs / frames, (renderMs + presentMs) / frames,
+					int(bool(config::VSync)), int(settings.input.fastForwardMode));
+				frames = 0; renderMs = presentMs = 0;
+			}
+		}
+#endif
 		if (imguiDriver == nullptr)
 			forceReinit = true;
 
-		if (config::RendererType != currentRenderer || forceReinit)
+		const auto desiredHostRenderer = hostRendererType(config::RendererType, settings.platform.isHikaru());
+		if (config::RendererType != currentRenderer || desiredHostRenderer != currentHostRenderer || forceReinit)
 		{
 			mainui_term();
 			int prevApi = renderApi(currentRenderer);
@@ -199,6 +273,7 @@ void mainui_loop(bool forceStart)
 			}
 			forceReinit = false;
 			currentRenderer = config::RendererType;
+			currentHostRenderer = hostRendererType(currentRenderer, settings.platform.isHikaru());
 		}
 
 		fc_profiler::endThread(config::ProfilerFrameWarningTime);
