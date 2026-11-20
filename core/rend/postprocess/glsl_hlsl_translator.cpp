@@ -410,6 +410,9 @@ bool translateDisplayGlslToOpenGL(const std::string& source, bool es, std::strin
 		// GL uploads parameters and sampler units by name. Auto-mapped SPIR-V
 		// locations/bindings must not require newer GL extensions or alter that ABI.
 		const auto resources = compiler.get_shader_resources();
+		// The fullscreen vertex shader exposes varyings by name.
+		for (const auto& input : resources.stage_inputs)
+			compiler.unset_decoration(input.id, spv::DecorationLocation);
 		for (const auto& uniform : resources.gl_plain_uniforms) {
 			compiler.unset_decoration(uniform.id, spv::DecorationLocation);
 			compiler.unset_decoration(uniform.id, spv::DecorationBinding);

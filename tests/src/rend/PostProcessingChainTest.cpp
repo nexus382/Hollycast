@@ -2576,6 +2576,24 @@ TEST(PostProcessingChainTest, LowersDisplayNumericConversionsWithoutChangingInte
 	}
 }
 
+TEST(PostProcessingChainTest, DisplayOpenGLLinksFullscreenVaryingsByName)
+{
+	const std::string body =
+		"in vec2 vTexCoord;\n"
+		"layout(location = 0) out vec4 FragColor;\n"
+		"void main() { FragColor = vec4(vTexCoord, 0.0, 1.0); }\n";
+	const std::regex namedInput(R"((^|\n)[ \t]*in\s+(?:(?:highp|mediump|lowp)\s+)?vec2\s+vTexCoord\s*;)");
+	const std::regex locatedOutput(R"(layout\s*\(\s*location\s*=\s*0\s*\)\s*out\s+(?:(?:highp|mediump|lowp)\s+)?vec4\s+FragColor\s*;)");
+	for (const std::string& profile : { "#version 430\n", "#version 410\n", "#version 310 es\n" }) {
+		SCOPED_TRACE(profile);
+		std::string translated, error;
+		ASSERT_TRUE(postprocess::translateDisplayGlslToOpenGL(profile + body,
+				profile.find(" es") != std::string::npos, translated, error)) << error;
+		EXPECT_TRUE(std::regex_search(translated, namedInput)) << translated;
+		EXPECT_TRUE(std::regex_search(translated, locatedOutput)) << translated;
+	}
+}
+
 TEST(PostProcessingChainTest, CompilesDisplayOptionPredicatesForBoolIntAndFloat)
 {
 	ShaderResourceDirectory directory;
