@@ -1,3 +1,6 @@
+/*
+	Portions Copyright 2026 The Hollycast Authors
+*/
 #pragma once
 #include "wsi/gl_context.h"
 #include <map>
@@ -19,11 +22,27 @@ public:
 			glBindTexture(target, texture);
 	}
 
+	// The legacy cache tracks one 2D binding, not one per texture unit. Call this
+	// after changing units so multi-sampler draws cannot inherit another unit's binding.
+	void InvalidateTextureBinding() {
+		_texture = 0xFFFFFFFFu;
+	}
+
+	// Indexed shader blending bypasses the legacy single-attachment cache.
+	void InvalidateBlendState() { _src_blend_factor = _dst_blend_factor = _blend_equation = 0xFFFFFFFFu; _en_blend = 0xFF; }
+
 	void BlendFunc(GLenum sfactor, GLenum dfactor) {
 		if (sfactor != _src_blend_factor || dfactor != _dst_blend_factor || _disable_cache) {
 			_src_blend_factor = sfactor;
 			_dst_blend_factor = dfactor;
 			glBlendFunc(sfactor, dfactor);
+		}
+	}
+
+	void BlendEquation(GLenum equation) {
+		if (equation != _blend_equation || _disable_cache) {
+			_blend_equation = equation;
+			glBlendEquation(equation);
 		}
 	}
 
@@ -175,6 +194,7 @@ public:
 		_texture_params.clear();
 		_src_blend_factor = 0xFFFFFFFFu;
 		_dst_blend_factor = 0xFFFFFFFFu;
+		_blend_equation = 0xFFFFFFFFu;
 		_clear_r = -1.f;
 		_clear_g = -1.f;
 		_clear_b = -1.f;
@@ -289,6 +309,7 @@ private:
 	GLuint _texture;
 	GLenum _src_blend_factor;
 	GLenum _dst_blend_factor;
+	GLenum _blend_equation;
 	GLclampf _clear_r;
 	GLclampf _clear_g;
 	GLclampf _clear_b;

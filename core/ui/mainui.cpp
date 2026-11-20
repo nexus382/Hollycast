@@ -27,6 +27,7 @@
 #include "gui.h"
 #include "gui_debugger.h"
 #include "gui_menu.h"
+#include "settings_new.h"
 #include "oslib/oslib.h"
 #include "wsi/context.h"
 #include "cfg/option.h"
@@ -65,6 +66,7 @@ bool mainui_rend_frame()
 {
 	FC_PROFILE_SCOPE;
 
+	SettingsNew::processShaderLoading();
 	os_DoEvents();
 	os_UpdateInputState();
 	test_harness::poll();

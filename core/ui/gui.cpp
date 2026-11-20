@@ -80,6 +80,9 @@
 #include "vgamepad.h"
 #include "settings.h"
 #include "settings_new.h"
+#ifndef LIBRETRO
+#include "rend/postprocess/shader_chain.h"
+#endif
 #include "oslib/i18n.h"
 #include "gui_font.h"
 using namespace i18n;
@@ -259,6 +262,9 @@ static void emuEventCallback(Event event, void *)
 		break;
 	case Event::Start:
 		SettingsNew::stopTextureFilterLiveTune();
+		SettingsNew::closeShaderLiveTune();
+		// Renderer contexts can outlive a title, even when the shader paths match.
+		postprocess::requestShaderChainReload();
 		performance_overlay::reset();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
@@ -270,6 +276,8 @@ static void emuEventCallback(Event event, void *)
 		boxart.checkpointPlaytime(true);
 		GamepadDevice::load_system_mappings();
 		game_started = false;
+		SettingsNew::closeShaderLiveTune();
+		postprocess::requestShaderChainReload();
 		break;
 	case Event::Pause:
 		performance_overlay::reset();
@@ -435,6 +443,9 @@ void gui_keyboard_key(u8 keyCode, bool pressed)
 {
 	if (test_harness::controllerInputOwned())
 		return;
+#ifndef LIBRETRO
+	postprocess::setShaderHostKey(keyCode, pressed);
+#endif
 	if (!inited)
 		return;
 	ImGuiKey key = keycodeToImGuiKey(keyCode);
@@ -470,12 +481,15 @@ void gui_set_mouse_position(int x, int y, bool touchscreen, bool harnessInput)
 	mouseX = std::round(x * scale);
 	mouseY = std::round(y * scale);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 bool gui_is_menu_touch_target(float x, float y)
 {
 	// Reuse Android's gesture capture so virtual controls never consume panel taps.
-	return SettingsNew::textureFilterLiveTuneActive()
+	return SettingsNew::liveTuneActive()
 			|| GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
 			std::round(y * settings.display.pointScale));
 }
@@ -489,12 +503,18 @@ void gui_set_mouse_button(int button, bool pressed, bool touchscreen, bool harne
 	else
 		mouseButtons &= ~(1 << button);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 void gui_set_mouse_wheel(float delta) {
 	if (test_harness::controllerInputOwned())
 		return;
 	mouseWheel += delta;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons, delta);
+#endif
 	mouseTouchscreen = false;
 }
 
@@ -664,6 +684,24 @@ void gui_open_settings()
 	else if (gui_state == GuiState::GameInfo)
 	{
 		gui_setState(GuiState::Main);
+	}
+}
+
+void gui_open_shader_settings()
+{
+	const LockGuard lock(guiMutex);
+	if (gui_state != GuiState::Closed || !game_started || settings.network.online
+			|| ggpo::active() || !achievements::canPause())
+		return;
+
+	try {
+		SettingsNew::stopTextureFilterLiveTune();
+		vgamepad::hide();
+		emu.stop();
+		SettingsNew::openTab(SettingsNew::SettingsTab::Shader);
+		gui_setState(GuiState::Settings);
+	} catch (const FlycastException& e) {
+		gui_stop_game(e.what());
 	}
 }
 
@@ -4792,6 +4830,7 @@ void gui_display_ui()
 	error_msg_shown = false;
 	bool gui_open = gui_is_open();
 	auto finishFrame = [&]() {
+		SettingsNew::renderShaderLoadingOverlay();
 		ImGui::Render();
 		gui_endFrame(gui_open);
 		uiThreadRunner.execTasks(std::chrono::steady_clock::now());
@@ -4990,8 +5029,9 @@ void gui_draw_osd()
 	if (!settings.raHardcoreMode)
 		lua::overlay();
 	SettingsNew::renderTextureFilterLiveTuneOverlay();
-	if (!SettingsNew::textureFilterLiveTuneActive())
+	if (!SettingsNew::liveTuneActive())
 		vgamepad::draw();
+	SettingsNew::renderShaderLiveTuneOverlay();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
 	app_updates::draw(false);
@@ -5002,6 +5042,7 @@ void gui_draw_osd()
 	vmu_window::drawInApp();
 #endif
 
+	SettingsNew::renderShaderLoadingOverlay();
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
 
@@ -5164,7 +5205,7 @@ void gui_loadState(int slot)
 	{
 		// User feedback when load not allowed
 		WARN_LOG(COMMON, "Load state not allowed: network=%d, multiboard=%d",
-				 settings.network.online, settings.naomi.multiboard);
+				 settings.network.online.load(), settings.naomi.multiboard);
 		os_notify(T("Cannot load state during online play"), 3000);
 	}
 }
@@ -5269,6 +5310,8 @@ void gui_setState(GuiState newState)
 		resetLibraryGameInfoHover();
 	}
 	gui_state = newState;
+	if (newState != GuiState::Closed && newState != GuiState::Loading)
+		SettingsNew::closeShaderLiveTune();
 	if (newState == GuiState::Closed)
 	{
 		clearThumbnailCache();

@@ -2,6 +2,7 @@
     Created on: Nov 10, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -25,11 +26,11 @@
 class RenderPasses
 {
 public:
-	vk::RenderPass GetRenderPass(bool initial, bool last, bool loadClear = false)
+	vk::RenderPass GetRenderPass(bool initial, bool last, bool loadClear = false, bool preserveSceneDepth = false)
 	{
-		size_t index = (initial ? 1 : 0) | (last ? 2 : 0) | (loadClear ? 4 : 0);
+		size_t index = (initial ? 1 : 0) | (last ? 2 : 0) | (loadClear ? 4 : 0) | (preserveSceneDepth ? 8 : 0);
 		if (!renderPasses[index])
-			renderPasses[index] = MakeRenderPass(initial, last, loadClear);
+			renderPasses[index] = MakeRenderPass(initial, last, loadClear, preserveSceneDepth);
 		return *renderPasses[index];
 	}
 	void Reset();
@@ -37,12 +38,12 @@ public:
 
 protected:
 	VulkanContext *GetContext() const { return VulkanContext::Instance(); }
-	vk::UniqueRenderPass MakeRenderPass(bool initial, bool last, bool loadClear);
+	vk::UniqueRenderPass MakeRenderPass(bool initial, bool last, bool loadClear, bool preserveSceneDepth);
 	virtual vk::AttachmentDescription GetAttachment0Description(bool initial, bool last, bool loadClear) const;
 	virtual std::vector<vk::SubpassDependency> GetSubpassDependencies() const;
 
 private:
-	std::array<vk::UniqueRenderPass, 8> renderPasses;
+	std::array<vk::UniqueRenderPass, 16> renderPasses;
 };
 
 class RttRenderPasses : public RenderPasses

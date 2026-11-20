@@ -2,6 +2,7 @@
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "shaders.h"
 #if defined(__APPLE__) && !defined(USE_OPENGL)
 #include <OpenGL/gl3.h>
 #else
@@ -83,6 +84,7 @@ struct Geometry {
 };
 struct Draw {
     unsigned color = 0, depth = 0, metadata = 0;
+    DepthPass depthPass = DepthPass::None;
     std::array<unsigned,4> textures{};
     std::array<Texture,4> sampling{};
     std::array<GLint,4> viewport{}, scissor{};
@@ -120,6 +122,7 @@ public:
     virtual void draw(const Draw& draw) = 0;
     virtual void readPixels(unsigned id, int x, int y, int width, int height, uint8_t* rgba) = 0;
     virtual void present(unsigned width, unsigned height) = 0;
+    virtual bool needsSceneDepth() const { return false; }
     virtual void beginOcclusion() = 0;
     virtual bool endOcclusion() = 0;
     // Every finished query must be collected in FIFO order before the caller
@@ -134,9 +137,12 @@ public:
         return result;
     }
 private:
+    friend class Device;
     // Blocking fallback for recording/host-only backends without GPU queries.
     std::vector<bool> deferredOcclusionResults;
     std::size_t deferredOcclusionCursor=0;
+protected:
+    unsigned presentedDepthTexture = 0;
 };
 std::unique_ptr<Backend> makeMetalBackend();
 std::unique_ptr<Backend> makeVulkanBackend();
@@ -146,7 +152,8 @@ public:
     explicit Device(std::unique_ptr<Backend> backend);
     ~Device();
     void begin(unsigned width, unsigned height);
-    void present();
+    bool needsSceneDepth() const { return backend->needsSceneDepth(); }
+    void present(unsigned depthTexture = 0);
     void checkError();
     class Scope {
     public:
@@ -179,6 +186,7 @@ private:
     };
     struct Program {
         bool bitmap=false, familyResolve=false, peelComposite=false;
+        DepthPass depthPass = DepthPass::None;
         std::unordered_map<std::string,int> definitions;
         std::unordered_map<std::string,GLint> locations;
         std::unordered_map<GLint,std::vector<float>> values;

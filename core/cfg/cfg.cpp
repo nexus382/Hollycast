@@ -107,6 +107,10 @@ bool hasSection(const std::string& section) {
 	return cfgdb.hasSection(section);
 }
 
+bool hasEntry(const std::string& section, const std::string& key) {
+	return cfgdb.hasEntry(section, key);
+}
+
 void deleteSection(const std::string& section) {
 	cfgdb.deleteSection(section);
 }

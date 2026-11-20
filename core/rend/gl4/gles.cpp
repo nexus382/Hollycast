@@ -24,6 +24,9 @@
 #include "gl4naomi2.h"
 #include "rend/gles/naomi2.h"
 #include "rend/gles/quad.h"
+#ifndef LIBRETRO
+#include "rend/gles/gl_shader_chain.h"
+#endif
 
 #ifdef LIBRETRO
 #include "rend/gles/postprocess.h"
@@ -1132,6 +1135,12 @@ bool OpenGL4Renderer::Init()
 	// into the same timestamp-query lifecycle as the standard OpenGL renderer.
 	initGpuTiming();
 
+#ifndef LIBRETRO
+	// GL4 presents through OpenGLRenderer::renderLastFrame(), which owns the
+	// post-processing handoff shared with the GLES renderer.
+	gl.shaderChain = std::make_unique<GlShaderChain>();
+#endif
+
 	initABuffer();
 
 	if (config::TextureUpscale > 1)
@@ -1303,6 +1312,9 @@ bool OpenGL4Renderer::renderFrame(int rendering_width, int rendering_height)
 		gl.ofbo.aspectRatio = getOutputFramebufferAspectRatio();
 #ifndef LIBRETRO
 		gl.ofbo2.ready = false;
+		gl.postProcessDepthTexture = framebuffers[1]->getDepthTexture();
+		gl.postProcessDepthWidth = max_image_width;
+		gl.postProcessDepthHeight = max_image_height;
 		renderLastFrame();
 #endif
 	}

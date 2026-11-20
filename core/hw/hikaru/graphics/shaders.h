@@ -19,10 +19,11 @@ enum Dx11PassFlag : unsigned {
     Dx11PeelEnabled=1u<<3, Dx11PeelAfterFirst=1u<<4,
     Dx11WeighByAlpha=1u<<5, Dx11ForceCoverage=1u<<6, Dx11CommonDepth=1u<<7, Dx11SeparateDepth=1u<<8
 };
-std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed = false, unsigned passFlags = 0, bool peelComposite = false, bool fragmentList = false);
+enum class DepthPass : uint8_t { None, Capture, Compose };
+std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed = false, unsigned passFlags = 0, bool peelComposite = false, bool fragmentList = false, DepthPass depthPass = DepthPass::None);
 std::string dx11FragmentListResolveSource(bool smallList = true);
 std::string vulkanVertexSource(bool bitmap, bool palette = false, bool packed = false);
-std::string vulkanFragmentSource(bool bitmap, bool familyResolve = false, bool palette = false, unsigned textureSlots = 1, bool peelComposite = false, bool fragmentList = false);
+std::string vulkanFragmentSource(bool bitmap, bool familyResolve = false, bool palette = false, unsigned textureSlots = 1, bool peelComposite = false, bool fragmentList = false, DepthPass depthPass = DepthPass::None);
 std::string vulkanFullscreenVertexSource();
 std::string vulkanClearFragmentSource(bool integer);
 std::string vulkanFragmentListResolveSource(bool smallList = true);

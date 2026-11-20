@@ -174,6 +174,13 @@ typedef struct {
 } hikaru_uniform_locations_t;
 
 typedef struct {
+	GLint u_front, u_back, u_layer1, u_layer2, u_factor;
+	GLint u_mult_f, u_mult_b, u_mult_1, u_mult_2;
+	GLint u_direct_1, u_direct_2, u_keyed_1, u_keyed_2;
+	GLint u_invert_f, u_invert_b, u_layer_x_scale;
+} hikaru_composite_uniforms_t;
+
+typedef struct {
 	vk_renderer_t base;
 
 	hikaru_gpu_t *gpu;
@@ -250,6 +257,13 @@ typedef struct {
         GLuint fb[2], color[2], metadata[2], depth[2], second_depth;
         GLuint color_fb, program;
     } families;
+	struct {
+		bool enabled, ready, failed, capture_writers;
+		GLuint capture_program, compose_program;
+		hikaru_composite_uniforms_t locs;
+		GLuint metadata, retained[2], capture_fb, output, output_fb;
+		unsigned width, height, output_width, output_height;
+	} scene_depth;
 	float pass_alpha_ref;
 	HikaruTransparencySorting transparency_sorting;
 	unsigned transparency_peel_capacity;
@@ -342,24 +356,7 @@ typedef struct {
 		} peel_composite;
 		unsigned width, height;
 		GLuint vao, vbo;
-		struct {
-			GLuint u_front;
-			GLuint u_back;
-			GLuint u_layer1;
-			GLuint u_layer2;
-			GLuint u_factor;
-			GLuint u_mult_f;
-			GLuint u_mult_b;
-			GLuint u_mult_1;
-			GLuint u_mult_2;
-			GLuint u_direct_1;
-			GLuint u_direct_2;
-			GLuint u_keyed_1;
-			GLuint u_keyed_2;
-			GLuint u_invert_f;
-			GLuint u_invert_b;
-			GLuint u_layer_x_scale;
-		} locs;
+		hikaru_composite_uniforms_t locs;
 	} framebuffer;
 	struct {
 		hikaru_layer_texture_t textures[2];

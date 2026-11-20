@@ -2,6 +2,7 @@
 // Copyright 2026 The Hollycast Authors
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -141,6 +142,10 @@ int hikaru_engine_get_bram(const HikaruEngine *engine, uint8_t *data, size_t siz
 int hikaru_engine_get_cabinet_defaults(const HikaruEngine *engine, uint8_t *data, size_t size);
 int hikaru_engine_set_bram(HikaruEngine *engine, const uint8_t *data, size_t size);
 void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned width, unsigned height);
+// Graphics-thread only. A completed draw owns this sampleable D24 texture until the next draw.
+// Zero means no depth output. Post-processing uses reverse Z (near 1, far 0).
+void hikaru_engine_set_depth_output(HikaruEngine *engine, bool enabled);
+uint32_t hikaru_engine_depth_texture(HikaruEngine *engine);
 // Set the host output aspect ratio; the default preserves the board's 4:3 output.
 void hikaru_engine_set_output_aspect_ratio(HikaruEngine *engine, float aspect_ratio);
 // Release before the host context is destroyed, then restore on its replacement.

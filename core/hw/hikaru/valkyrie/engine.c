@@ -594,6 +594,7 @@ int hikaru_engine_run_frame(HikaruEngine *engine, const HikaruEngineInputs *inpu
         return -1;
     }
     hikaru_renderer_t *renderer = (hikaru_renderer_t *)engine->machine->renderer;
+    renderer->scene_depth.ready = false;
     if (renderer->capture_started || renderer->capture_invalidate_all) {
         // A displayed packet can trail live machine RAM. Switching back to
         // direct drawing must not reuse textures from that older snapshot;
@@ -684,6 +685,7 @@ int hikaru_engine_draw_frame(HikaruEngine *engine, HikaruFrame *frame, char *err
     graphicsFatal = NULL;
     graphicsError = NULL;
     graphicsErrorSize = 0;
+    if (failed) ((hikaru_renderer_t *)renderer)->scene_depth.ready = false;
     restore_gl_state(&host);
     return failed ? -1 : 0;
 }
@@ -712,6 +714,23 @@ void hikaru_engine_resize(HikaruEngine *engine, uint32_t target_fbo, unsigned wi
     engine->machine->renderer->internal_width = engine->internal_width;
     engine->machine->renderer->internal_height = engine->internal_height;
 }
+void hikaru_engine_set_depth_output(HikaruEngine *engine, bool enabled)
+{
+    if (engine && engine->machine && engine->machine->renderer) {
+        hikaru_renderer_t *renderer = (hikaru_renderer_t *)engine->machine->renderer;
+        if (enabled && !renderer->scene_depth.enabled) renderer->scene_depth.failed = false;
+        renderer->scene_depth.enabled = enabled;
+        if (!enabled) renderer->scene_depth.ready = false;
+    }
+}
+
+uint32_t hikaru_engine_depth_texture(HikaruEngine *engine)
+{
+    if (!engine || !engine->machine || !engine->machine->renderer) return 0;
+    const hikaru_renderer_t *renderer = (const hikaru_renderer_t *)engine->machine->renderer;
+    return renderer->scene_depth.ready ? renderer->scene_depth.output : 0;
+}
+
 void hikaru_engine_set_output_aspect_ratio(HikaruEngine *engine, float aspect_ratio)
 {
     if (!engine || !isfinite(aspect_ratio) || aspect_ratio <= 0.0f) return;

@@ -20,12 +20,15 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "vulkan_context.h"
+#include "vulkan_shader_chain.h"
 #include "vulkan_renderer.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "ui/gui.h"
 #ifndef LIBRETRO
 #include "ui/performance_overlay.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
 #endif
 #ifdef USE_SDL
 #include <sdl/sdl.h>
@@ -437,6 +440,8 @@ bool VulkanContext::InitDevice()
 			ERROR_LOG(RENDERER, "Could not find a queue for graphics or present");
 			return false;
 		}
+
+		graphicsComputeSupported = static_cast<bool>(queueFamilyProperties[graphicsQueueIndex].queueFlags & vk::QueueFlagBits::eCompute);
 		if (graphicsQueueIndex == presentQueueIndex)
 			DEBUG_LOG(RENDERER, "Using Graphics+Present queue family");
 		else
@@ -638,7 +643,7 @@ bool VulkanContext::InitDevice()
             vk::DescriptorPoolSize(vk::DescriptorType::eSampler, 2),
             vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 40000),
             vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, 2),
-            vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, 12),
+            vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, 4096),
             vk::DescriptorPoolSize(vk::DescriptorType::eUniformTexelBuffer, 2),
 			vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, 2),
             vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, 80000),
@@ -693,6 +698,7 @@ bool VulkanContext::InitDevice()
 	    quadDrawer = std::make_unique<QuadDrawer>();
 	    quadRotatePipeline = std::make_unique<QuadPipeline>(true, true);
 	    quadRotateDrawer = std::make_unique<QuadDrawer>();
+	    shaderChain = std::make_unique<VulkanShaderChain>();
 
 		vk::PhysicalDeviceProperties props = physicalDevice.getProperties();
 		driverName = (const char *)props.deviceName;
@@ -907,6 +913,9 @@ void VulkanContext::CreateSwapChain()
 			SetWindowSize(0, 0);
 			throw InvalidVulkanContext();
 		}
+
+		depthSamplingSupported = static_cast<bool>(physicalDevice.getFormatProperties(depthFormat).optimalTilingFeatures
+				& vk::FormatFeatureFlagBits::eSampledImage);
 
 	    // Render pass
 	    vk::AttachmentDescription attachmentDescription = vk::AttachmentDescription(vk::AttachmentDescriptionFlags(), presentFormat, vk::SampleCountFlagBits::e1,
@@ -1220,7 +1229,7 @@ void VulkanContext::Present() noexcept
 				const int interval = swapInterval * gameSwapInterval;
 				for (int i = 1; i < interval; i++)
 				{
-					PresentFrame(vk::Image(), lastFrameView, lastFrameExtent, lastFrameAR);
+					PresentFrame(vk::Image(), lastFrameView, lastFrameSourceExtent, lastFrameSourceAR);
 					res = presentQueue.presentKHR(vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentSemaphore]), 1, &(*swapChain), &currentImage));
 					if (res == vk::Result::eSuccess || res == vk::Result::eSuboptimalKHR)
 						performance_overlay::recordPresentedFrame();
@@ -1257,47 +1266,78 @@ void VulkanContext::Present() noexcept
 		}
 }
 
-void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio)
+static vk::Rect2D getPresentRect(int outputWidth, int outputHeight, float aspectRatio, bool includeBorders = false)
 {
+	const int topInset = std::clamp(getScaledTopInset(), 0, outputHeight);
+	int drawableWidth = outputWidth;
+	int drawableHeight = outputHeight - topInset;
+	if (SettingsNew::shaderLiveTuneActive()) {
+		const auto layout = SettingsNew::shaderPreviewLayout(outputWidth, outputHeight, topInset);
+		drawableWidth = layout.gameWidth;
+		drawableHeight = layout.gameHeight;
+	}
+	int dx = 0;
+	int dy = 0;
+	if (!includeBorders)
+		getWindowboxDimensions(drawableWidth, drawableHeight, aspectRatio, dx, dy, config::Rotate90);
+	return vk::Rect2D(vk::Offset2D(dx, dy + topInset),
+			vk::Extent2D(drawableWidth - dx * 2, drawableHeight - dy * 2));
+}
+
+void VulkanContext::DrawFrame(vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
+		bool presentationTransformApplied, bool fullPresentation, bool precomposed)
+{
+	const vk::Rect2D contentRect = getPresentRect(width, height, aspectRatio);
+	const vk::Rect2D presentRect = fullPresentation ? getPresentRect(width, height, aspectRatio, true) : contentRect;
+	if (extent.width == 0 || extent.height == 0 || presentRect.extent.width == 0 || presentRect.extent.height == 0)
+		return;
 	QuadVertex vtx[4] {
 		{ -1, -1, 0, 0, 0 },
 		{  1, -1, 0, 1, 0 },
 		{ -1,  1, 0, 0, 1 },
 		{  1,  1, 0, 1, 1 },
 	};
-	float shiftX, shiftY;
-	getVideoShift(shiftX, shiftY);
-	vtx[0].x = vtx[2].x = -1.f + shiftX * 2.f / extent.width;
-	vtx[1].x = vtx[3].x = vtx[0].x + 2;
-	vtx[0].y = vtx[1].y = -1.f + shiftY * 2.f / extent.height;
-	vtx[2].y = vtx[3].y = vtx[0].y + 2;
+	if (!precomposed) {
+		float shiftX, shiftY;
+		getVideoShift(shiftX, shiftY);
+		// The guest shift is relative to the source image and follows its rotation.
+		shiftX /= extent.width;
+		shiftY /= extent.height;
+		if (presentationTransformApplied && config::Rotate90) {
+			const float sourceShiftX = shiftX;
+			shiftX = shiftY;
+			shiftY = -sourceShiftX;
+		}
+		if (fullPresentation) {
+			shiftX *= static_cast<float>(contentRect.extent.width) / presentRect.extent.width;
+			shiftY *= static_cast<float>(contentRect.extent.height) / presentRect.extent.height;
+		}
+		vtx[0].x = vtx[2].x = -1.f + shiftX * 2.f;
+		vtx[1].x = vtx[3].x = vtx[0].x + 2;
+		vtx[0].y = vtx[1].y = -1.f + shiftY * 2.f;
+		vtx[2].y = vtx[3].y = vtx[0].y + 2;
+	}
 
 	vk::CommandBuffer commandBuffer = GetCurrentCommandBuffer();
 
 	static const float scopeColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	CommandBufferDebugScope _(commandBuffer, "DrawFrame", scopeColor);
 
-	if (config::Rotate90)
+	const bool rotate = precomposed ? lastFramePrecomposedRotation : config::Rotate90.get();
+	const bool rotateAtPresentation = rotate && !presentationTransformApplied;
+	if (rotateAtPresentation)
 		quadRotatePipeline->BindPipeline(commandBuffer);
 	else
 		quadPipeline->BindPipeline(commandBuffer);
 
-	// Adjust 'viewport.y', 'viewport.height', 'Offset2D.y', and 'Extent2D.height'
-	// to avoid framebuffer overlapping with the menu bar
-	int topInset = getScaledTopInset();
-	int outheight = height - topInset;
-
-	int dx = 0;
-	int dy = 0;
-	getWindowboxDimensions(width, outheight, aspectRatio, dx, dy, config::Rotate90);
 #ifndef LIBRETRO
-	performance_overlay::recordOutputViewport(width - dx * 2, outheight - dy * 2);
+	performance_overlay::recordOutputViewport(presentRect.extent.width, presentRect.extent.height);
 #endif
-
-	vk::Viewport viewport(dx, dy + topInset, width - dx * 2, outheight - dy * 2);
+	vk::Viewport viewport(static_cast<float>(presentRect.offset.x), static_cast<float>(presentRect.offset.y),
+			static_cast<float>(presentRect.extent.width), static_cast<float>(presentRect.extent.height));
 	commandBuffer.setViewport(0, viewport);
-	commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(dx, dy + topInset), vk::Extent2D(width - dx * 2, outheight - dy * 2)));
-	if (config::Rotate90)
+	commandBuffer.setScissor(0, presentRect);
+	if (rotateAtPresentation)
 		quadRotateDrawer->Draw(commandBuffer, imageView, vtx, !config::LinearInterpolation);
 	else
 		quadDrawer->Draw(commandBuffer, imageView, vtx, !config::LinearInterpolation);
@@ -1325,19 +1365,70 @@ vk::CommandBuffer VulkanContext::PrepareOverlay(bool vmu, bool crosshair)
 
 extern Renderer *renderer;
 
-void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio) noexcept
+bool VulkanContext::ShouldPreserveSceneDepth() const
+{
+	return shaderChain && CanSampleDepth() && !config::EmulateFramebuffer
+			&& postprocess::hasConfiguredShaderSelection();
+}
+
+bool VulkanContext::HikaruShaderNeedsSceneDepth() const
+{
+	return shaderChain && shaderChain->needsSceneDepth();
+}
+
+void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio,
+		vk::Image depthImage, vk::ImageView depthView, bool hikaru, vk::ImageAspectFlags depthAspects) noexcept
 {
 	lastFrameView = imageView;
-	lastFrameExtent = extent;
-	lastFrameAR = aspectRatio;
+	lastFrameSourceExtent = extent;
+	lastFrameSourceAR = aspectRatio;
+	bool presentationTransformApplied = image ? false : lastFramePresentationTransformApplied;
+	bool fullPresentation = image ? false : lastFrameFullPresentation;
+	// With shaders or preview active, Hikaru has already composed the display canvas.
+	const bool precomposed = image
+			? hikaru && (postprocess::hasConfiguredShaderSelection() || SettingsNew::shaderLiveTuneActive())
+			: lastFramePrecomposed;
+	const bool rotate = !image && precomposed ? lastFramePrecomposedRotation : config::Rotate90.get();
+	const float displayAspectRatio = rotate ? 1.f / aspectRatio : aspectRatio;
 
 	if (imageView && IsValid())
 	{
 		try {
 			NewFrame();
+			bool processed = false;
+			vk::Extent2D drawExtent = image ? extent : lastFrameExtent;
+			if (image && shaderChain) {
+				vk::ImageView processedView;
+				const vk::Rect2D presentRect = getPresentRect(width, height, aspectRatio);
+				const vk::Rect2D fullRect = getPresentRect(width, height, aspectRatio, true);
+				postprocess::ShaderFrameInfo shaderFrame { static_cast<int>(extent.width), static_cast<int>(extent.height),
+						static_cast<int>(presentRect.extent.width), static_cast<int>(presentRect.extent.height),
+						static_cast<uint32_t>(FrameCount), rotate, displayAspectRatio };
+				shaderFrame.presentation = { static_cast<int>(fullRect.extent.width), static_cast<int>(fullRect.extent.height),
+						presentRect.offset.x - fullRect.offset.x, presentRect.offset.y - fullRect.offset.y,
+						shaderFrame.viewportWidth, shaderFrame.viewportHeight,
+						{ VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f } };
+				processed = shaderChain->render(image, imageView, extent,
+						shaderFrame, processedView,
+						presentationTransformApplied, depthImage, depthView, depthAspects);
+				fullPresentation = processed && shaderChain->startsInDisplaySpace() && shaderFrame.presentation.hasBorders();
+				if (processed)
+					imageView = processedView;
+				if (processed && presentationTransformApplied)
+					drawExtent = fullPresentation ? fullRect.extent : presentRect.extent;
+			}
+			lastFrameView = imageView;
+			lastFrameExtent = drawExtent;
+			lastFrameAR = presentationTransformApplied
+					? static_cast<float>(drawExtent.width) / drawExtent.height
+					: precomposed ? displayAspectRatio : aspectRatio;
+			lastFramePresentationTransformApplied = presentationTransformApplied;
+			lastFrameFullPresentation = fullPresentation;
+			lastFramePrecomposed = precomposed;
+			lastFramePrecomposedRotation = precomposed && rotate;
 			auto overlayCmdBuffer = PrepareOverlay(config::FloatVMUs, true);
 			gui_draw_osd();
-			if (GetVendorID() == VulkanContext::VENDOR_NVIDIA && image)
+			if (GetVendorID() == VulkanContext::VENDOR_NVIDIA && image && !processed)
 			{
 				vk::ImageMemoryBarrier barrier(
 						vk::AccessFlagBits::eColorAttachmentWrite,
@@ -1359,7 +1450,7 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 			BeginRenderPass();
 
 			if (lastFrameView) // Might have been nullified if swap chain recreated
-				DrawFrame(imageView, extent, aspectRatio);
+				DrawFrame(imageView, extent, aspectRatio, presentationTransformApplied, fullPresentation, precomposed);
 
 			DrawOverlay(settings.display.uiScale, config::FloatVMUs, true);
 			imguiDriver->renderDrawData(ImGui::GetDrawData(), false);
@@ -1376,7 +1467,8 @@ void VulkanContext::PresentFrame(vk::Image image, vk::ImageView imageView, const
 void VulkanContext::PresentLastFrame()
 {
 	if (lastFrameView && IsValid())
-		DrawFrame(lastFrameView, lastFrameExtent, lastFrameAR);
+		DrawFrame(lastFrameView, lastFrameSourceExtent, lastFrameSourceAR,
+				lastFramePresentationTransformApplied, lastFrameFullPresentation, lastFramePrecomposed);
 }
 
 void VulkanContext::term()
@@ -1424,6 +1516,7 @@ void VulkanContext::term()
 	quadPipelineWithAlpha.reset();
 	quadRotateDrawer.reset();
 	quadRotatePipeline.reset();
+	shaderChain.reset();
 	shaderManager.reset();
 	descriptorPool.reset();
 	commandBuffers.clear();
@@ -1636,6 +1729,9 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 {
 	if (!lastFrameView)
 		return false;
+	// The retained shader output may already include the display rotation.
+	const bool rotate = lastFramePrecomposed ? lastFramePrecomposedRotation : config::Rotate90.get();
+	const bool rotateAtCapture = rotate && !lastFramePresentationTransformApplied;
 
 	if (width != 0) {
 		height = width / lastFrameAR;
@@ -1647,7 +1743,7 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 	{
 		width = lastFrameExtent.width;
 		height = lastFrameExtent.height;
-		if (config::Rotate90)
+		if (rotateAtCapture)
 			std::swap(width, height);
 		// We need square pixels for PNG
 		int w = lastFrameAR * height;
@@ -1698,7 +1794,7 @@ bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
 			vk::SubpassContents::eInline);
 
 	// Pipeline
-	QuadPipeline pipeline(true, config::Rotate90);
+	QuadPipeline pipeline(true, rotateAtCapture);
 	pipeline.Init(shaderManager.get(), *renderPass, 0);
 	pipeline.BindPipeline(*commandBuffer);
 

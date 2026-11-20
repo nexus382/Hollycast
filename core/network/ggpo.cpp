@@ -42,7 +42,7 @@ static void getLocalInput(MapleInputState inputState[4])
 	if (!config::ThreadedRendering)
 		os_UpdateInputState();
 #ifndef LIBRETRO
-	const bool captureInput = SettingsNew::textureFilterLiveTuneActive();
+	const bool captureInput = SettingsNew::liveTuneActive();
 #endif
 	std::lock_guard<std::mutex> lock(relPosMutex);
 	for (int player = 0; player < 4; player++)
