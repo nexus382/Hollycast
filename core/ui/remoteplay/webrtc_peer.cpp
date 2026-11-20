@@ -30,7 +30,6 @@
 #endif
 
 #include <atomic>
-#include <locale>
 #include <map>
 #include <mutex>
 
@@ -117,16 +116,6 @@ bool jsonField(const std::string& msg, const char *key, std::string& out)
 	return false;
 }
 
-// SDP is locale-independent by definition, but libdatachannel formats
-// numbers with the process locale (Hollycast sets one for translations),
-// which would turn 90000 into "90,000" and produce invalid SDP.
-struct ClassicLocaleGuard
-{
-	std::locale previous;
-	ClassicLocaleGuard() : previous(std::locale::global(std::locale::classic())) {}
-	~ClassicLocaleGuard() { std::locale::global(previous); }
-};
-
 std::shared_ptr<RtcSession> getSession(int player)
 {
 	std::lock_guard<std::mutex> lock(rtcMutex);
@@ -155,18 +144,12 @@ void createPeer(int player, const std::shared_ptr<RtcSession>& session)
 	// configured on our track (browsers accept them in their answer).
 	pc->onLocalDescription([send](rtc::Description description) {
 		if (send && description.type() == rtc::Description::Type::Offer)
-		{
-			ClassicLocaleGuard localeGuard;
 			send("{\"t\":\"rtc\",\"kind\":\"offer\",\"sdp\":\"" + jsonEscape(std::string(description)) + "\"}");
-		}
 	});
 	pc->onLocalCandidate([send](rtc::Candidate candidate) {
 		if (send)
-		{
-			ClassicLocaleGuard localeGuard;
 			send("{\"t\":\"rtc\",\"kind\":\"candidate\",\"candidate\":\"" + jsonEscape(std::string(candidate))
 				+ "\",\"mid\":\"" + jsonEscape(candidate.mid()) + "\"}");
-		}
 	});
 	pc->onStateChange([weak = std::weak_ptr<RtcSession>(session), player](rtc::PeerConnection::State state) {
 		auto session = weak.lock();
@@ -222,10 +205,7 @@ void createPeer(int player, const std::shared_ptr<RtcSession>& session)
 		}
 	});
 
-	{
-		ClassicLocaleGuard localeGuard;
-		pc->setLocalDescription();
-	}
+	pc->setLocalDescription();
 	keyframeRequested = true;
 }
 

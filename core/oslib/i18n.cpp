@@ -1,5 +1,6 @@
 /*
 	Copyright 2025 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -118,11 +119,15 @@ void init()
 	inited = true;
 #ifndef LIBRETRO
 	try {
-		std::locale::global(std::locale(""));
+		// Network formats such as WebRTC SDP and ICE use ungrouped numbers
+		// and a decimal point, regardless of the user's language settings.
+		const std::locale systemLocale("");
+		std::locale::global(std::locale(systemLocale, std::locale::classic(), std::locale::numeric));
 	} catch (const std::runtime_error& e) {
 		INFO_LOG(BOOT, "Error setting c++ locale: %s", e.what());
-		setlocale(LC_ALL, "");
 	}
+	setlocale(LC_ALL, "");
+	setlocale(LC_NUMERIC, "C");
 #endif
 	Log::set_log_info_callback([](const std::string& msg)
 	{
