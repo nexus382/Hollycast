@@ -26,7 +26,7 @@ formats remain available on the linked GitHub release.
 Reference: [Flycast's CI page implementation](https://github.com/flyinghead/flycast-builds/blob/master/builds.js)
 and [its desktop build matrix](https://github.com/flyinghead/flycast/blob/master/.github/workflows/c-cpp.yml).
 
-The publisher copies ZIP artifacts from successful platform push workflows into
+The publisher copies ZIP artifacts from successful platform workflows into
 automatic prereleases tagged `ci-<branch>-<run-id>`, targeting the exact source
 commit. It never extracts or executes artifacts. Archives retain GitHub's artifact
 ZIP layout, so users must extract them. Published assets are not replaced and do
@@ -51,15 +51,31 @@ Notes include the source commit, build date and changelog. ZIP contents are copi
 without extraction, including any existing outer artifact ZIP. Stable releases
 keep GitHub's official Latest designation.
 
-Only this repository's `master` and `dev` platform pushes are eligible. Failed,
-pull-request and fork builds are excluded. New releases remain drafts until all
-uploads succeed; retries reuse completed assets and remove only empty, unfinished
-assets belonging to that draft before uploading again.
+## Build once before merging
+
+1. Open [Full build batch](https://github.com/nexus382/Hollycast/actions/workflows/full-build-batch.yml)
+   and choose **Run workflow**. Select the PR's target branch (`master` or `dev`),
+   enter the number of an open same-repository PR you have reviewed, and run it.
+2. In the batch summary, find the `ci-candidate/pr-…` branch. Wait for all eight
+   runs on that branch to pass before merging. The candidate is GitHub's test
+   merge of the current target and PR head, with the normal build secrets
+   available. If the PR or target changes, validate the new merge candidate.
+3. Merge the PR. The promotion workflow asks the publisher to reuse those
+   artifacts only if the tested Git tree exactly matches the merged tree.
+   Releases and the downloads page are updated without compiling again. If
+   publication needs a retry, run **Build downloads page** on `master` and enter
+   the merged PR number.
+
+Direct manual platform builds on this repository's `master` and `dev` branches
+also publish. Legacy push builds remain eligible. Failed runs, fork PRs and
+expired artifacts are excluded. New releases remain drafts until their uploads
+succeed; retries reuse completed assets and remove only empty, unfinished assets
+belonging to that draft before uploading again.
 
 Updates run after releases and platform build completions, hourly, and on manual
 dispatch. Publishing runs are serialized, and waiting build completions are queued
-instead of replacing one another. Non-workflow-run events backfill the latest
-successful build of each platform from the most recent 100 successful runs per branch.
+instead of replacing one another. Regular backfills look for the latest
+successful build of each platform among recent manual and historical push runs.
 Build completions publish that specific run. Expired source artifacts cannot be
 backfilled; the next successful build will provide fresh downloads. Open
 pages reload the static catalog every five minutes, without using visitors'

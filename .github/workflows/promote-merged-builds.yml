@@ -1,0 +1,33 @@
+# Portions Copyright 2026 The Hollycast Authors
+name: Promote merged builds
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [master, dev]
+
+jobs:
+  promote:
+    if: >-
+      github.repository == 'nexus382/Hollycast' &&
+      github.event.pull_request.merged &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Queue publication from master
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          candidate=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/ci-candidate/pr-$PR_NUMBER-" --jq '.[0].ref // empty')
+          if [[ -z "$candidate" ]]; then
+            echo "PR #$PR_NUMBER has no saved build candidate."
+            exit 0
+          fi
+          # Deploy Pages from the default branch even when the PR merged into dev.
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/builds-pages.yml/dispatches" \
+            -f ref=master -f "inputs[pull_request]=$PR_NUMBER" --silent

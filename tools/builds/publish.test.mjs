@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { archiveName, eligibleRun, publishBuilds, publishRun, uploadArtifact, uploadReleaseAsset } from './publish.mjs';
+import { archiveName, eligibleRun, publishBuilds, publishMergedPullRequest, publishRun, uploadArtifact, uploadReleaseAsset } from './publish.mjs';
 
 const repository = 'nexus382/Hollycast';
 function run(overrides = {}) {
@@ -24,7 +24,7 @@ const artifact = { id: 456, name: 'Hollycast-release.apk', size_in_bytes: 100,
   expires_at: '2099-01-01T00:00:00Z', expired: false, digest: 'sha256:abc' };
 const notFound = () => { throw Object.assign(new Error('Not found'), { status: 404 }); };
 
-test('only successful same-repository master/dev platform pushes can publish', async () => {
+test('only successful same-repository master/dev platform pushes and dispatches can publish directly', async () => {
   for (const overrides of [
     { event: 'pull_request' }, { conclusion: 'failure' }, { status: 'in_progress' },
     { head_repository: { full_name: 'someone/fork' } }, { head_repository: null },
@@ -35,6 +35,8 @@ test('only successful same-repository master/dev platform pushes can publish', a
     assert.equal(await publishRun(repository, candidate, () => assert.fail('API must not be called'), () => assert.fail('No upload'), []), null);
   }
   assert.equal(eligibleRun(run({ head_branch: 'master' }), repository), true);
+  assert.equal(eligibleRun(run({ event: 'workflow_dispatch' }), repository), true);
+  assert.equal(eligibleRun(run({ event: 'workflow_dispatch', head_branch: 'ci-candidate/pr-23-example' }), repository), false);
 });
 
 test('draft publication targets the exact commit and happens only after all uploads', async () => {
@@ -169,8 +171,105 @@ test('backfill selects the latest successful run of each platform for both branc
     if (path.includes('/artifacts?')) { selected.push(Number(/runs\/(\d+)/.exec(path)[1])); return { artifacts: [] }; }
     const branch = path.includes('branch=master') ? 'master' : 'dev';
     const id = branch === 'master' ? 200 : 300;
+    if (path.includes('event=workflow_dispatch')) return { workflow_runs: [
+      run({ id: id + 1, event: 'workflow_dispatch', head_branch: branch, run_started_at: '2026-10-27T12:00:00Z' }),
+    ] };
     return { workflow_runs: [run({ id, head_branch: branch }),
       run({ id: id - 1, head_branch: branch, run_started_at: '2026-10-25T12:00:00Z' })] };
   }, () => assert.fail('No artifacts'));
-  assert.deepEqual(selected, [200, 300]);
+  assert.deepEqual(selected, [201, 301]);
+});
+
+test('promotion reuses a complete candidate only when its tree is on the merged branch', async () => {
+  const sha = 'a'.repeat(40);
+  const mergedSha = 'b'.repeat(40);
+  const tree = 'c'.repeat(40);
+  const tip = 'd'.repeat(40);
+  const candidateBranch = `ci-candidate/pr-23-${sha}`;
+  const repo = { full_name: repository };
+  const mergedAt = '2026-10-28T12:00:00Z';
+  const paths = ['android', 'c-cpp', 'switch', 'uwp', 'linux-arm64', 'bsd', 'text-shaping', 'vmu-regressions'];
+  const archiveNames = [
+    ['Hollycast-release.apk'],
+    ['Hollycast-x86_64-w64-mingw32', 'Hollycast-x86_64-pc-linux-gnu', 'Hollycast-apple-darwin'],
+    ['Hollycast-switch-standalone'],
+    ['flycast-uwp-x64'],
+    ['Hollycast-libretro-aarch64-pc-linux-gnu'],
+  ];
+  const runs = paths.map((path, index) => run({
+    id: 123 + index, workflow_id: 10 + index, path: `.github/workflows/${path}.yml`,
+    event: 'workflow_dispatch', head_sha: sha, head_branch: candidateBranch,
+  }));
+
+  for (const rejected of [null, 'fork', 'not merged', 'outside branch', 'different tree', 'missing test', 'failed rerun',
+    'moved ref', 'expired archive', 'missing digest', 'missing macOS archive']) {
+    const releases = [];
+    const uploads = [];
+    const api = async (path, options) => {
+      const endpoint = path.slice(`repos/${repository}/`.length);
+      if (endpoint === 'pulls/23') return {
+        merged: rejected !== 'not merged', base: { ref: 'dev', repo },
+        head: { repo: rejected === 'fork' ? { full_name: 'someone/fork' } : repo },
+        merge_commit_sha: mergedSha, merged_at: mergedAt,
+      };
+      if (endpoint === 'git/matching-refs/heads/ci-candidate/pr-23-') return [{
+        ref: `refs/heads/${candidateBranch}`, object: { type: 'commit', sha: rejected === 'moved ref' ? tip : sha },
+      }];
+      if (endpoint === 'git/ref/heads/dev') return { object: { type: 'commit', sha: tip } };
+      if (endpoint === `compare/${mergedSha}...${tip}?per_page=1`) return {
+        status: rejected === 'outside branch' ? 'diverged' : 'ahead',
+      };
+      if (endpoint === `git/commits/${mergedSha}`) return { tree: { sha: tree }, message: 'Merged commit' };
+      if (endpoint === `git/commits/${sha}`) return { tree: { sha: rejected === 'different tree' ? tip : tree } };
+      if (endpoint.startsWith('actions/runs?')) {
+        assert.match(endpoint, /event=workflow_dispatch&branch=ci-candidate%2Fpr-23-/);
+        if (rejected === 'missing test') return { workflow_runs: runs.slice(0, -1) };
+        if (rejected === 'failed rerun') return {
+          workflow_runs: [...runs, { ...runs.at(-1), id: 400, conclusion: 'failure' }],
+        };
+        return { workflow_runs: runs };
+      }
+      if (endpoint.includes('/artifacts?')) {
+        const id = Number(endpoint.split('/')[2]);
+        assert.ok(id >= 123 && id <= 127);
+        const names = archiveNames[id - 123];
+        return { artifacts: names.filter(name =>
+          rejected !== 'missing macOS archive' || !name.endsWith('apple-darwin')).map((name, index) => ({
+          ...artifact, id: 100 * id + index, name, expired: rejected === 'expired archive' && id === 127,
+          digest: rejected === 'missing digest' && id === 127 ? null : `sha256:${'a'.repeat(64)}`,
+        })) };
+      }
+      if (endpoint === 'releases?per_page=100') return [...releases];
+      if (endpoint.startsWith('releases/tags/')) {
+        return releases.find(item => item.tag_name === endpoint.split('/').at(-1) && !item.draft) ?? notFound();
+      }
+      if (endpoint === 'releases' && options?.method === 'POST') {
+        assert.equal(rejected, null);
+        assert.equal(options.body.target_commitish, mergedSha);
+        assert.match(options.body.body, new RegExp(`"date":"${mergedAt}"`));
+        assert.match(options.body.body, new RegExp(`"candidate":"${sha}"`));
+        const item = release({ ...options.body, id: 99 + releases.length });
+        releases.push(item);
+        return item;
+      }
+      if (endpoint.startsWith('releases/') && options?.method === 'PATCH') {
+        const item = releases.find(entry => entry.id === Number(endpoint.split('/')[1]));
+        Object.assign(item, options.body);
+        return item;
+      }
+      assert.fail(`Unexpected endpoint ${endpoint}`);
+    };
+    const upload = async (target, item) => {
+      assert.equal(target.draft, true);
+      assert.equal(target.tag_name, `ci-dev-${Math.floor(item.id / 100)}`);
+      uploads.push(item.id);
+    };
+    assert.equal(await publishMergedPullRequest(repository, 23, api, upload), rejected ? 0 : 5, rejected);
+    if (!rejected) {
+      assert.equal(await publishMergedPullRequest(repository, 23, api, upload), 5);
+      assert.deepEqual(uploads, [12700, 12300, 12400, 12401, 12402, 12500, 12600]);
+    } else {
+      assert.deepEqual(uploads, [], rejected);
+    }
+  }
 });
