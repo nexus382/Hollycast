@@ -5,11 +5,19 @@ Hollycast theme packages are JSON descriptions of the app palette and game-libra
 
 ## Browse and download themes
 
-Open **Settings → Library → Browse themes**. Each listing shows screenshots,
-creator, description and version. Search by name or creator, or select **Not
-installed** to find new packages. Choose **Download and install**, then **Use
-theme** when you want to apply it. Downloads run in the background, and existing
-packages are never overwritten. Screenshots are downloaded as they become visible.
+An internet connection is required to browse and download community themes.
+
+1. Open **Settings > Library > Library Themes > Download Themes**.
+2. Search by name or creator, or select **Not installed** to find new packages.
+   Each listing shows screenshots, creator, description and version.
+3. Choose **Download and install** and wait for the installation message. If
+   you enabled **Not installed**, clear it to see the newly installed theme.
+4. Choose **Use theme** on the installed package. Return to the library to
+   see the new layout. To switch layouts, use **Settings > Library > Library
+   Themes > Library Layout**.
+
+Downloads run in the background, and existing packages are never overwritten.
+Screenshots are downloaded as they become visible.
 
 The community catalogue is hosted at
 [`TnT-Studio-s/Hollycast-themes`](https://github.com/TnT-Studio-s/Hollycast-themes).
@@ -27,11 +35,15 @@ installs and reject unsafe paths, symlinks and mismatched theme IDs.
 
 Every standalone download includes all eight library themes and their assets inside
 the executable or app. On startup Hollycast restores missing packages to its data
-folder and updates bundled assets when their content version changes. No theme
-installation or reload action is required. Open **Settings > Library > Library
-Themes**, choose **Library Theme**, then **Library Layout**. **App UI Theme** returns
-to the standard library. This packaging is shared by Windows, Linux, macOS,
-Android, iOS and Switch; libretro uses its frontend's library.
+folder and updates bundled assets when their content version changes. This
+packaging is shared by Windows, Linux, macOS, Android, iOS and Switch.
+Libretro uses its frontend's library.
+
+1. Open **Settings > Library > Library Themes**.
+2. Open **Library Theme** and select a bundled theme. To return to the
+   standard library, select **App UI Theme**.
+3. If you selected a bundled theme, open **Library Layout** to choose a layout.
+   Return to the library to see your selection.
 
 New settings default to **Demo Disc**. The first-run checklist lets players keep
 that theme, choose another bundled theme, or use the original icon or list view.

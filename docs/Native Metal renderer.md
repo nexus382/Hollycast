@@ -3,6 +3,12 @@
 
 Hollycast's native Metal backend is an independently implemented, experimental option for standalone macOS. It uses Metal directly and does not route drawing through Vulkan or MoltenVK. Standalone macOS builds include it by default, and the runtime option appears automatically when usable Metal support is detected. Existing renderer preferences are preserved.
 
+## Try Metal on macOS
+
+1. Open the standalone macOS app and choose **Settings → Video → Graphics API → Metal (Experimental)**.
+2. Choose a **Transparent Sorting** mode. Per-pixel appears when the device supports it.
+3. Start a game and check that it draws as expected. If Metal is unavailable or a title has issues, choose another available API.
+
 ## Build and select
 
 Use the usual macOS CMake configuration; `USE_METAL` defaults to `ON` for standalone macOS and `OFF` elsewhere. Both Xcode and Ninja builds are supported. Keep the existing MoltenVK path configured if Vulkan is also enabled; a build with `USE_VULKAN=OFF` does not require MoltenVK. An explicit `-DUSE_METAL=OFF` excludes the backend.

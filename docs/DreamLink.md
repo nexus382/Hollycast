@@ -1,3 +1,5 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
+
 # DreamLink
 
 ## Summary
@@ -8,6 +10,15 @@ Example devices which use the DreamLink interface:
 - DreamConn controllers
 - DreamPicoPort controllers
 - DreamPotato (VMU emulator)
+
+## Quick start
+
+1. On desktop, connect your DreamPicoPort by USB or connect your DreamConn and start the DreamConn Utility.
+2. In **Settings > Controls > Physical Devices**, find your controller and assign it a **Port** from **A** to **D**. Check the **Status** column for connection details.
+3. Insert the VMU or other accessory into the physical controller. In **Controls > Dreamcast Devices**, find the same port and choose the hardware name in the matching expansion slot.
+4. For DreamPicoPort VMU saves, enable **Controls > VMU Settings > Use External VMU Storage** to read and write the physical VMU. DreamConn supports the VMU screen and buzzer and uses Hollycast's VMU save file.
+
+For a software VMU, follow the [DreamPotato quick start](DreamPotato%20Integrated%20Mode.md#quick-start).
 
 ## Motivation
 
@@ -26,7 +37,7 @@ We want users to be able to connect/disconnect DreamLinks in the middle of a gam
 
 ### Configuration
 
-DreamLinks with associated physical controllers can be used by selecting certain controller types for the port in the Input UI. For example, the controller in port A, could be set to DreamPicoPort, which means that the state and behavior of the controller and expansion slots for that port, is determined by the behavior of the DreamPicoPort device connected via a DreamLink.
+In Controls, assign the physical controller to a port under **Physical Devices**. Configure the devices in that port's expansion slots under **Dreamcast Devices**.
 
 DreamPotato can be used in a given expansion slot by choosing it as the expansion device type in a given slot. For example, instead of using a VMU or Vibration Pack in a given slot, a DreamPotato can be selected instead. This means that the state and behavior of that slot is determined by a DreamPotato instance connected via a DreamLink. This includes: is any device connected to the slot at all (which can change over time), and, what are the contents/state of the device in the slot.
 
@@ -41,7 +52,7 @@ When determining what Hollycast should do under some particular conditions, it i
 
 ### Physical memory access
 
-A DreamLink implementation can indicate support for memory access on external VMUs. At time of writing, DreamConn doesn't support this, but DreamPicoPort and DreamPotato do. The user setting "Use Physical VMU Memory" controls whether to use the physical memory, or to use Flycast's built-in memory card files instead (similarly to if a DreamLink were not being used at all).
+A DreamLink implementation can indicate support for memory access on external VMUs. At time of writing, DreamConn doesn't support this, but DreamPicoPort and DreamPotato do. The user setting **Use External VMU Storage** controls whether to use the physical memory, or to use Flycast's built-in memory card files instead (similarly to if a DreamLink were not being used at all).
 
 When the DreamLink supports physical memory, and the user enables the option, then VMU read/write messages will be forwarded through the DreamLink and fulfilled by the external device.
 

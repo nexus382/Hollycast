@@ -1,3 +1,4 @@
+<!-- Portions Copyright 2026 The Hollycast Authors -->
 # DreamPotato Integrated Mode
 
 We want to make Hollycast a "one stop shop" for emulating the Dreamcast and VMU together.
@@ -5,6 +6,13 @@ We want to make Hollycast a "one stop shop" for emulating the Dreamcast and VMU 
 The goal is that a user can just launch Hollycast, enable this mode, and have the VMU emulator appear, and use the correct VMU file automatically, based on what Hollycast is doing. This removes the need to manually launch DreamPotato, manually select a file for the particular game, and so on.
 
 We refer to this functionality as "integrated mode". The existing feature where both DreamPotato and Hollycast are launched manually, is called "standalone mode".
+
+## Quick start
+
+1. On desktop, place DreamPotato alongside Hollycast. If Hollycast cannot find it, use **Settings > General > Custom Paths > DreamPotato Path** to choose the folder containing DreamPotato.
+2. In **Settings > Controls > Dreamcast Devices**, select **DreamPotato** in the expansion slot you want, such as **Port A**, slot **1**.
+3. In **Controls > VMU Settings**, enable **DreamPotato Integrated Mode**.
+4. Start a Dreamcast game. Hollycast opens DreamPotato with the VMU file for that slot. With **Per Game VMU** enabled, **A1** uses the current game's VMU file.
 
 ## New command line flags
 
