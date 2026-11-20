@@ -101,7 +101,11 @@ if(NOT LIBRETRO)
         src/ui/ThemeInstallTest.cpp
         src/ui/ThemeRepositoryTest.cpp
         src/ui/VideoPresetTest.cpp
-        src/ui/AndroidMenuPopupTest.cpp)
+        src/ui/AndroidMenuPopupTest.cpp
+        src/ui/RemotePlayTest.cpp
+        src/ui/RemotePlayWebRtcTest.cpp
+        src/ui/RemotePlayAudioTest.cpp
+        src/ui/RemotePlayCaptureTest.cpp)
 endif()
 
 # Hikaru bring-up checks also run without the rest of the emulator's dependencies.

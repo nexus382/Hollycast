@@ -33,6 +33,9 @@ struct SoundFrame { s16 l; s16 r; };
 
 static SoundFrame Buffer[SAMPLE_COUNT];
 static u32 writePtr;  // next sample index
+static std::atomic<AudioOutputTap> outputTap { nullptr };
+
+void SetAudioOutputTap(AudioOutputTap tap) { outputTap.store(tap); }
 
 static AudioBackend *currentBackend;
 static std::atomic<u64> requestedFrames, silentFrames, underruns, droppedFrames, blockedNanoseconds;
@@ -88,20 +91,28 @@ AudioBackend *AudioBackend::getBackend(const std::string& slug)
 
 void WriteSample(s16 r, s16 l)
 {
-	Buffer[writePtr].r = r * config::AudioVolume.dbPower();
-	Buffer[writePtr].l = l * config::AudioVolume.dbPower();
+	Buffer[writePtr].r = r;
+	Buffer[writePtr].l = l;
 
 	if (++writePtr == SAMPLE_COUNT)
 	{
+		if (auto tap = outputTap.load())
+			tap(Buffer, SAMPLE_COUNT);
 		if (currentBackend != nullptr)
 		{
+			SoundFrame output[SAMPLE_COUNT];
+			const float volume = config::AudioVolume.dbPower();
+			for (u32 i = 0; i < SAMPLE_COUNT; i++) {
+				output[i].l = Buffer[i].l * volume;
+				output[i].r = Buffer[i].r * volume;
+			}
 			const bool wait = config::LimitFPS && !settings.input.fastForwardMode;
 			if (settings.platform.isHikaru() && wait && !currentBackend->hasQueueControl()) {
 				const auto start = std::chrono::steady_clock::now();
-				currentBackend->push(Buffer, SAMPLE_COUNT, wait);
+				currentBackend->push(output, SAMPLE_COUNT, wait);
 				audioOutputWaited(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
 			} else
-				currentBackend->push(Buffer, SAMPLE_COUNT, wait);
+				currentBackend->push(output, SAMPLE_COUNT, wait);
 		}
 		writePtr = 0;
 	}

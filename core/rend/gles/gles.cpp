@@ -1844,6 +1844,9 @@ void OpenGLRenderer::initVideoRoutingFrameBuffer()
 
 void OpenGLRenderer::Term()
 {
+#ifndef GLES2
+	remotePlayReadback.reset();
+#endif
 	termGpuTiming();
 	TexCache.Clear();
 	clearGpuPreloadedTextures();

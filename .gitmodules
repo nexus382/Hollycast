@@ -73,3 +73,9 @@
 [submodule "core/deps/harfbuzz"]
 	path = core/deps/harfbuzz
 	url = https://github.com/harfbuzz/harfbuzz.git
+[submodule "core/deps/libdatachannel"]
+	path = core/deps/libdatachannel
+	url = https://github.com/paullouisageneau/libdatachannel.git
+[submodule "core/deps/opus"]
+	path = core/deps/opus
+	url = https://github.com/xiph/opus.git

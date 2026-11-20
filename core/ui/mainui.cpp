@@ -36,6 +36,9 @@
 #include "rend/vmu_window.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
+#ifndef LIBRETRO
+#include "remoteplay/remote_play.h"
+#endif
 #ifdef USE_HIKARU
 #include "hw/hikaru/frontend.h"
 #ifdef __APPLE__
@@ -205,6 +208,9 @@ void mainui_loop(bool forceStart)
 				if (settings.platform.isHikaru()) hikaru::frontend::framePresented();
 #endif
 				test_harness::presented();
+#ifndef LIBRETRO
+				remoteplay::capturePresentedFrame();
+#endif
 			} catch (const FlycastException& e) {
 				forceReinit = true;
 			}
