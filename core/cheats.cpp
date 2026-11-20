@@ -4,7 +4,6 @@
 	Credits for cheats: Esppiral, S4pph4rad, yzb37859365, Shenmue_Trilogy, Radaron, Virgin KLM, Joel, Zorlon,
 		ELOTROLADO.NET, SEGARETRO.ORG, Sakuragi @ emutalk.net
 	Copyright 2019 flyinghead
-	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 

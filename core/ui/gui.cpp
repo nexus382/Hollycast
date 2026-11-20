@@ -5308,11 +5308,7 @@ void gui_setState(GuiState newState)
 	}
 	gui_state = newState;
 	if (newState != GuiState::Closed && newState != GuiState::Loading)
-	{
-		// Loading may refresh replacement textures before resuming a tuning session.
-		SettingsNew::stopTextureFilterLiveTune();
 		SettingsNew::closeShaderLiveTune();
-	}
 	if (newState == GuiState::Closed)
 	{
 		clearThumbnailCache();

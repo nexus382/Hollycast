@@ -2,7 +2,6 @@
     Created on: Sep 23, 2019
 
 	Copyright 2019 flyinghead
-	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
