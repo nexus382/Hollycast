@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -50,6 +51,7 @@ struct UdpMsg
       struct {
          uint32      random_reply;    /* OK, here's your random data back */
          uint8       verification_failure; /* set to one by peer if verification failed */
+         uint8       auto_frame_delay;
       } sync_reply;
       
       struct {

@@ -99,6 +99,14 @@ ggpo_set_frame_delay(GGPOSession *ggpo,
 }
 
 GGPOErrorCode
+ggpo_set_auto_frame_delay(GGPOSession *ggpo, bool enabled)
+{
+   if (!ggpo)
+      return GGPO_ERRORCODE_INVALID_SESSION;
+   return ggpo->SetAutoFrameDelay(enabled);
+}
+
+GGPOErrorCode
 ggpo_idle(GGPOSession *ggpo, int timeout)
 {
    if (!ggpo)

@@ -64,6 +64,15 @@ bool mainui_rend_frame()
 
 	if (gui_is_open())
 	{
+		if (gui_has_held_netplay_session())
+		{
+			try {
+				emu.pollHeldNetplay();
+			} catch (const FlycastException& e) {
+				gui_stop_game(e.what());
+				return false;
+			}
+		}
 		try {
 			gui_display_ui();
 		} catch (const FlycastException& e) {

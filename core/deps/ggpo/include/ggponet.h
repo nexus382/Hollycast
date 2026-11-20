@@ -308,6 +308,8 @@ typedef struct GGPONetworkStats {
       int   recv_queue_len;
       int   ping;
       int   kbps_sent;
+      bool  auto_frame_delay;
+      int   startup_rtt_ms;
    } network;
    struct {
       int   local_frames_behind;
@@ -465,6 +467,14 @@ GGPO_API GGPOErrorCode __cdecl ggpo_close_session(GGPOSession *);
 GGPO_API GGPOErrorCode __cdecl ggpo_set_frame_delay(GGPOSession *,
                                                     GGPOPlayerHandle player,
                                                     int frame_delay);
+
+/*
+ * Set the local automatic frame-delay policy for a peer-to-peer session
+ * before adding players. Network stats report whether either peer opted
+ * in once the first sync reply arrives. The startup RTT is the longest
+ * subsequent round trip in milliseconds, or -1 before one is measured.
+ */
+GGPO_API GGPOErrorCode __cdecl ggpo_set_auto_frame_delay(GGPOSession *, bool enabled);
 
 /*
  * ggpo_idle --

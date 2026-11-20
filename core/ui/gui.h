@@ -103,6 +103,8 @@ extern bool showExitSaveDialog;
 
 void gui_setState(GuiState newState);
 
+bool gui_has_held_netplay_session();
+
 static inline bool gui_is_open()
 {
 	return gui_state != GuiState::Closed;

@@ -8667,6 +8667,26 @@ void renderNetworkTab()
 				));
 		}
 
+		if (config::GGPOEnable)
+		{
+			ImGui::Spacing();
+			if (RenderCollapsingHeader(Tnop("GGPOSetupSection"), ICON_FA_CIRCLE_INFO, T("GGPO Setup")))
+			{
+				ImGui::TextWrapped("%s", T("Connect both devices to the same local network (Wi-Fi or Ethernet). "
+					"Use the same Hollycast build and game on both devices."));
+				ImGui::TextWrapped("%s", T("Select GGPO under Network Type on both devices. "
+					"Turn on Play as Player 1 on the host only."));
+				ImGui::TextWrapped("%s", T("On each device, enter the other device's local IPv4 address in Peer. "
+					"Find the address in the device's Wi-Fi or Ethernet connection details. "
+					"Entering just the IP address uses port 19713 automatically."));
+				ImGui::TextWrapped("%s", T("Player 1 can enable Test Connection and Set Delay before starting. "
+					"Each device can settle on a different delay during play."));
+				ImGui::TextWrapped("%s", T("Launch the same game on both devices, with Player 1 starting first."));
+				ImGui::TextWrapped("%s", T("To resume a held match, choose Close Game and select the same game again within 60 seconds. "
+					"Choose End Session to end the match."));
+			}
+		}
+
 		// Show configuration section if any network type is enabled
 		if (config::GGPOEnable || config::NetworkEnable || config::BattleCableEnable)
 		{
@@ -8708,6 +8728,16 @@ void renderNetworkTab()
 							"Enter your peer's IP address (and optional port).\n"
 							"Use this when connecting directly without matchmaking."
 						));
+
+					if (config::ActAsServer)
+						RenderGeneralToggleSettingRow(
+							"GGPOAutoDelay",
+							ICON_FA_CLOCK,
+							T("Test Connection and Set Delay"),
+							T("Measure the connection before play and adjust frame delay based on how often the game waits for peer inputs."),
+							static_cast<bool>(config::GGPOAutoDelay),
+							[](bool enabled) { config::GGPOAutoDelay = enabled; },
+							T("Player 1 controls this option. Each player keeps their saved manual delay for sessions that do not use the test."));
 
 					// Frame Delay
 					{
@@ -9414,6 +9444,7 @@ void renderAdvancedTab()
 			));
 
 		// Multi-threaded emulation
+		ImGui::BeginDisabled(gui_has_held_netplay_session());
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
 			ICON_FA_GEAR,
@@ -9428,6 +9459,7 @@ void renderAdvancedTab()
 				"On some drivers/devices it can introduce instability or odd timing issues.\n\n"
 				"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
 			));
+		ImGui::EndDisabled();
 
 		ImGui::Spacing();
 
@@ -10257,16 +10289,17 @@ void renderSettingsNew()
 		if (pushedSettingsFont)
 			ImGui::PushFont(settingsTitleFont);
 
+		const bool fromGame = game_started && !gui_has_held_netplay_session();
 		const std::function<void()> exitSettings = [&]() {
 			applyPendingSettings();
 
-			if (game_started)
+			if (fromGame)
 				gui_setState(GuiState::Commands);
 			else
 				gui_setState(GuiState::Main);
 		};
 
-		const char* backLabel = game_started ? T("Back to Game") : T("Back to library");
+		const char* backLabel = fromGame ? T("Back to Game") : T("Back to library");
 
 		// Split into left navigation rail and right content area
 		renderNavigationRail(exitSettings, backLabel);

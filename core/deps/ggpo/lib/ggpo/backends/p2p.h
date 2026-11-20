@@ -34,6 +34,7 @@ public:
    GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) override;
    GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle) override;
    GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay) override;
+   GGPOErrorCode SetAutoFrameDelay(bool enabled) override;
    GGPOErrorCode SetDisconnectTimeout(int timeout) override;
    GGPOErrorCode SetDisconnectNotifyStart(int timeout) override;
    GGPOErrorCode SendMessage(const void *msg, int len, bool spectators) override;
@@ -72,6 +73,7 @@ protected:
    bool                  _synchronizing;
    int                   _num_players;
    int                   _registered_players = 0;
+   bool                  _auto_frame_delay = false;
    int                   _next_recommended_sleep;
 
    int                   _next_spectator_frame;

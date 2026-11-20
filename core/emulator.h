@@ -179,6 +179,7 @@ public:
 	 * Wait for the next frame and render it. If in single-thread mode, it will run the emulator until a frame is rendered.
 	 */
 	bool render();
+	void pollHeldNetplay();
 	/**
 	 * Set the network state.
 	 */

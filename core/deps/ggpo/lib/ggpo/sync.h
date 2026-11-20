@@ -49,6 +49,9 @@ public:
    void SetFrameDelay(int queue, int delay);
    bool AddLocalInput(int queue, GameInput &input);
    void AddRemoteInput(int queue, GameInput &input);
+   bool GetConfirmedInput(int queue, int frame, GameInput *input) {
+      return _input_queues[queue].GetConfirmedInput(frame, input);
+   }
    int GetConfirmedInputs(void *values, int size, int frame);
    int SynchronizeInputs(void *values, int size, int *predicted_flags);
    int GetLastConfirmedFrame() const { return _last_confirmed_frame; }

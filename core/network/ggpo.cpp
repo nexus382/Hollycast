@@ -116,6 +116,8 @@ static void getLocalInput(MapleInputState inputState[4])
 //#define SYNC_TEST 1
 
 #include <xxhash.h>
+#include "ggpo_adaptive_delay.h"
+#include "ggpo_resume_barrier.h"
 
 namespace ggpo
 {
@@ -127,8 +129,10 @@ constexpr int SERVER_PORT = 19713;
 constexpr u32 BTN_TRIGGER_LEFT	= DC_BTN_BITMAPPED_LAST << 1;
 constexpr u32 BTN_TRIGGER_RIGHT	= DC_BTN_BITMAPPED_LAST << 2;
 
-// Protocol 4 changes deterministic execution and the guest RAM checksum.
-static constexpr u32 GGPO_PROTOCOL_VERSION = 4;
+// Protocol 8 coordinates return to play after a GGPO interruption.
+static constexpr u32 GGPO_PROTOCOL_VERSION = 8;
+static constexpr int INTERRUPT_NOTICE_MS = 1000;
+static constexpr int RECONNECT_GRACE_MS = 60000;
 
 #pragma pack(push, 1)
 // Exchanged byte-for-byte by GGPO during initial synchronization, so all
@@ -153,6 +157,19 @@ static_assert(sizeof(VerificationData) == 64);
 
 static GGPOSession *ggpoSession;
 static int localPlayerNum;
+static std::atomic<int> sessionFrameDelay{ 0 };
+// Zero means idle, a positive deadline means waiting, and -1 requests cancellation.
+static std::atomic<s64> reconnectDeadlineMs{ 0 };
+static std::atomic<s64> reconnectCountdownEndMs{ 0 };
+static std::atomic<bool> reconnectInputPending{ false };
+static std::atomic<bool> sessionStopRequested{ false };
+static std::atomic<bool> canHoldSession{ false };
+static std::atomic<bool> libraryHoldRequested{ false };
+static std::atomic<bool> libraryHoldAtBoundary{ false };
+static bool libraryHoldApplied;
+static ResumeBarrier resumeBarrier;
+static time_point<steady_clock> nextResumeStatus;
+static bool startupProbeActive;
 static GGPOPlayerHandle localPlayer;
 static GGPOPlayerHandle remotePlayer;
 static bool synchronized;
@@ -269,7 +286,9 @@ struct GameEvent
 	enum : char {
 		Chat,
 		VF4Card,
-		StateSync
+		StateSync,
+		DelayFeedback,
+		ResumeStatus
 	} type;
 	union {
 		struct {
@@ -285,11 +304,33 @@ struct GameEvent
 			u64 checksum;
 			u64 ramChecksum;
 		} sync;
+		struct {
+			u16 stallMs;
+			u8 episodes;
+			u8 quiet;
+		} delay;
+		struct {
+			u32 generation;
+			u32 acknowledged;
+			u8 flags;
+		} resume;
 	} u;
 
 	constexpr static int chatMessageLen(int len) { return len - sizeof(u.chat.playerNum) - sizeof(type); }
 };
 #pragma pack(pop)
+
+static struct
+{
+	AdaptiveDelayPolicy policy;
+	AdaptiveDelayWindow window;
+	time_point<steady_clock> lastFeedback;
+	int peerStallMs = 0;
+	int pendingChange = 0;
+	Inputs previousInput{};
+	bool hasPreviousInput = false;
+	bool interrupted = false;
+} adaptiveDelay;
 
 #ifdef HOLLYCAST_GGPO_FRAME_TRACE
 // Diagnostic builds use isolated profiles. An empty ggpo-trace.enable file
@@ -430,6 +471,59 @@ static bool begin_game(const char *)
 	return true;
 }
 
+static s64 monotonicMilliseconds()
+{
+	return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+int reconnectSecondsRemaining()
+{
+	const s64 deadline = reconnectDeadlineMs.load();
+	if (deadline <= 0 || reconnectCountdownEndMs.load() > 0)
+		return -1;
+	return static_cast<int>(std::max<s64>(0, deadline - monotonicMilliseconds() + 999) / 1000);
+}
+
+int reconnectUnpauseSecondsRemaining()
+{
+	const s64 countdownEnd = reconnectCountdownEndMs.load();
+	if (countdownEnd <= 0 || reconnectDeadlineMs.load() <= 0)
+		return -1;
+	return static_cast<int>(std::max<s64>(0, countdownEnd - monotonicMilliseconds() + 999) / 1000);
+}
+
+bool holdSessionForLibrary()
+{
+	if (!canHoldSession || libraryHoldRequested)
+		return false;
+	libraryHoldAtBoundary = false;
+	libraryHoldRequested = true;
+	return true;
+}
+
+bool sessionHeldForLibrary()
+{
+	return libraryHoldRequested && libraryHoldAtBoundary;
+}
+
+void returnToHeldSession()
+{
+	libraryHoldRequested = false;
+}
+
+void cancelReconnect()
+{
+	s64 deadline = reconnectDeadlineMs.load();
+	if (deadline > 0)
+		reconnectDeadlineMs.compare_exchange_strong(deadline, -1);
+}
+
+bool reconnectFramePending()
+{
+	// Network polling can call back into the emulator to replay guest frames.
+	return !inRollback && reconnectInputPending.load();
+}
+
 /*
  * on_event - Notification that something has happened.  See the GGPOEventCode
  * structure for more information.
@@ -439,6 +533,12 @@ static bool on_event(GGPOEvent *info)
 	using namespace i18n;
 	switch (info->code) {
 	case GGPO_EVENTCODE_CONNECTED_TO_PEER:
+		if (localPlayerNum != 0)
+		{
+			GGPONetworkStats stats{};
+			if (ggpo_get_network_stats(ggpoSession, info->u.connected.player, &stats) == GGPO_OK)
+				startupProbeActive = stats.network.auto_frame_delay;
+		}
 		INFO_LOG(NETWORK, "Connected to peer %d", info->u.connected.player);
 		os_notify(T("Connected to peer"), 2000);
 		break;
@@ -454,23 +554,38 @@ static bool on_event(GGPOEvent *info)
 		INFO_LOG(NETWORK, "Running");
 		os_notify(T("Running"), 2000);
 		synchronized = true;
+		canHoldSession = true;
 		break;
 	case GGPO_EVENTCODE_DISCONNECTED_FROM_PEER:
-		INFO_LOG(NETWORK, "Disconnected from peer %d", info->u.disconnected.player);
+	{
+		const s64 deadline = reconnectDeadlineMs.exchange(0);
+		NOTICE_LOG(NETWORK, "Disconnected from peer %d", info->u.disconnected.player);
+		if (deadline < 0)
+			throw FlycastException("");
+		if (deadline > 0)
+			throw FlycastException(Ts("Reconnect timed out"));
 		throw FlycastException(Ts("Disconnected from peer"));
-		break;
+	}
 	case GGPO_EVENTCODE_TIMESYNC:
 		INFO_LOG(NETWORK, "Timesync: %d frames ahead", info->u.timesync.frames_ahead);
 		timesyncOccurred += 5;
 		std::this_thread::sleep_for(std::chrono::milliseconds(1000 / (msPerFrameAvg >= 25 ? 30 : 60)));
 		break;
 	case GGPO_EVENTCODE_CONNECTION_INTERRUPTED:
-		INFO_LOG(NETWORK, "Connection interrupted with player %d", info->u.connection_interrupted.player);
-		os_notify(T("Connection interrupted"), 2000);
+		WARN_LOG(NETWORK, "Connection interrupted with player %d", info->u.connection_interrupted.player);
+		adaptiveDelay.interrupted = true;
+		adaptiveDelay.pendingChange = 0;
+		resumeBarrier.begin();
+		reconnectCountdownEndMs = 0;
+		{
+			s64 idle = 0;
+			reconnectDeadlineMs.compare_exchange_strong(idle,
+					monotonicMilliseconds() + info->u.connection_interrupted.disconnect_timeout);
+		}
 		break;
 	case GGPO_EVENTCODE_CONNECTION_RESUMED:
-		INFO_LOG(NETWORK, "Connection resumed with player %d", info->u.connection_resumed.player);
-		os_notify(T("Connection resumed"), 2000);
+		NOTICE_LOG(NETWORK, "Connection reachable again for player %d", info->u.connection_resumed.player);
+		adaptiveDelay.interrupted = false;
 		break;
 	}
 	return true;
@@ -744,6 +859,23 @@ static void on_message(u8 *msg, int len)
 		setRfidCardData(event->u.card.playerNum, event->u.card.data);
 		break;
 
+	case GameEvent::DelayFeedback:
+		if (len == sizeof(event->type) + sizeof(event->u.delay) && startupProbeActive && synchronized && !mouseGame
+				&& !adaptiveDelay.interrupted
+				&& event->u.delay.stallMs <= AdaptiveDelayWindow::WindowMs && event->u.delay.quiet <= 1
+				&& (!event->u.delay.quiet || (event->u.delay.stallMs == 0 && event->u.delay.episodes == 0)))
+		{
+			adaptiveDelay.lastFeedback = steady_clock::now();
+			adaptiveDelay.peerStallMs = event->u.delay.stallMs;
+			adaptiveDelay.pendingChange = adaptiveDelay.policy.observe(adaptiveDelay.lastFeedback, event->u.delay.stallMs,
+					event->u.delay.episodes, event->u.delay.quiet != 0, sessionFrameDelay.load());
+		}
+		break;
+	case GameEvent::ResumeStatus:
+		if (synchronized && len == sizeof(event->type) + sizeof(event->u.resume))
+			resumeBarrier.receive({ event->u.resume.generation, event->u.resume.acknowledged, event->u.resume.flags },
+					steady_clock::now());
+		break;
 	default:
 		WARN_LOG(NETWORK, "Unknown app message type %d", event->type);
 		break;
@@ -978,8 +1110,26 @@ static void syncSessionState(int localPort, int playerNum, const std::string& pe
 	}
 }
 
+static void resetReconnectState()
+{
+	reconnectDeadlineMs = 0;
+	reconnectCountdownEndMs = 0;
+	reconnectInputPending = false;
+	canHoldSession = false;
+	libraryHoldRequested = false;
+	libraryHoldAtBoundary = false;
+	libraryHoldApplied = false;
+	resumeBarrier = {};
+	nextResumeStatus = {};
+}
+
 void startSession(int localPort, int localPlayerNum)
 {
+	sessionFrameDelay = config::GGPODelay.get();
+	resetReconnectState();
+	sessionStopRequested = false;
+	startupProbeActive = false;
+	adaptiveDelay = {};
 	resetChecksumState();
 	lastSavedFrame = -1;
 	// A previous arcade session may have used a different wire layout.
@@ -1125,10 +1275,16 @@ void startSession(int localPort, int localPlayerNum)
 	// automatically disconnect clients after 3000 ms and start our count-down timer
 	// for disconnects after 1000 ms.   To completely disable disconnects, simply use
 	// a value of 0 for ggpo_set_disconnect_timeout.
-	ggpo_set_disconnect_timeout(ggpoSession, 3000);
-	ggpo_set_disconnect_notify_start(ggpoSession, 1000);
+	ggpo_set_disconnect_timeout(ggpoSession, INTERRUPT_NOTICE_MS + RECONNECT_GRACE_MS);
+	ggpo_set_disconnect_notify_start(ggpoSession, INTERRUPT_NOTICE_MS);
 
 	ggpo::localPlayerNum = localPlayerNum;
+	startupProbeActive = localPlayerNum == 0 && config::GGPOAutoDelay;
+	if (startupProbeActive && ggpo_set_auto_frame_delay(ggpoSession, true) != GGPO_OK)
+	{
+		stopSession();
+		throw FlycastException("GGPO network test initialization failed");
+	}
 	GGPOPlayer player{ sizeof(GGPOPlayer), GGPO_PLAYERTYPE_LOCAL, localPlayerNum + 1 };
 	result = ggpo_add_player(ggpoSession, &player, &localPlayer);
 	if (result != GGPO_OK)
@@ -1137,7 +1293,7 @@ void startSession(int localPort, int localPlayerNum)
 		stopSession();
 		throw FlycastException("GGPO cannot add local player");
 	}
-	ggpo_set_frame_delay(ggpoSession, localPlayer, config::GGPODelay.get());
+	ggpo_set_frame_delay(ggpoSession, localPlayer, sessionFrameDelay.load());
 
 	player.type = GGPO_PLAYERTYPE_REMOTE;
 	// GGPO expects a numeric IPv4 address, so resolve configured host names first.
@@ -1175,8 +1331,11 @@ void startSession(int localPort, int localPlayerNum)
 
 void stopSession()
 {
+	sessionStopRequested = true;
+	canHoldSession = false;
 	stopSessionStateServer();
 	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
+	resetReconnectState();
 	resetChecksumState();
 	lastSavedFrame = -1;
 #ifdef HOLLYCAST_GGPO_FRAME_TRACE
@@ -1289,15 +1448,111 @@ void getInput(MapleInputState inputState[4])
 #endif
 }
 
+static void sampleAdaptiveDelay(time_point<steady_clock> now, int predicted, steady_clock::duration waited, bool newStall)
+{
+	const auto report = adaptiveDelay.window.observe(now, waited, newStall, predicted >= GGPO_MAX_PREDICTION_FRAMES - 3);
+	if (!report || adaptiveDelay.interrupted)
+		return;
+
+	// The peer owns the input stream that can arrive earlier when delayed.
+	GameEvent event;
+	event.type = GameEvent::DelayFeedback;
+	event.u.delay.stallMs = static_cast<u16>(report->stallMs);
+	event.u.delay.episodes = static_cast<u8>(std::min(report->episodes, 255));
+	event.u.delay.quiet = report->quiet;
+	ggpo_send_message(ggpoSession, &event, sizeof(event.type) + sizeof(event.u.delay), false);
+}
+
+static void updateReconnect()
+{
+	const auto now = steady_clock::now();
+	const s64 nowMs = duration_cast<milliseconds>(now.time_since_epoch()).count();
+	const bool holdInLibrary = libraryHoldRequested;
+	if (holdInLibrary && !libraryHoldApplied)
+	{
+		resumeBarrier.begin();
+		NOTICE_LOG(NETWORK, "GGPO match held for return from library");
+	}
+	libraryHoldApplied = holdInLibrary;
+
+	// Check expiry before allowing a newly received packet to finish recovery.
+	const s64 waitDeadline = reconnectDeadlineMs.load();
+	const s64 previousCountdown = reconnectCountdownEndMs.load();
+	if (waitDeadline > 0 && nowMs >= std::max(waitDeadline, previousCountdown > 0 ? previousCountdown + 2000 : 0))
+		throw FlycastException(i18n::Ts("Reconnect timed out"));
+
+	resumeBarrier.update(now, !holdInLibrary && !adaptiveDelay.interrupted);
+	if (resumeBarrier.waiting())
+	{
+		s64 idle = 0;
+		reconnectDeadlineMs.compare_exchange_strong(idle, nowMs + RECONNECT_GRACE_MS);
+		const s64 countdown = duration_cast<milliseconds>(resumeBarrier.countdownEnd().time_since_epoch()).count();
+		if (countdown > 0 && previousCountdown == 0)
+			NOTICE_LOG(NETWORK, "GGPO reconnected, starting five-second countdown");
+		reconnectCountdownEndMs = countdown;
+	}
+	else if (waitDeadline > 0)
+	{
+		s64 waiting = waitDeadline;
+		if (reconnectDeadlineMs.compare_exchange_strong(waiting, 0))
+			NOTICE_LOG(NETWORK, "GGPO resuming play after reconnect countdown");
+		reconnectCountdownEndMs = 0;
+	}
+
+	if (resumeBarrier.shouldSend(now) && now >= nextResumeStatus)
+	{
+		const auto status = resumeBarrier.status();
+		GameEvent event{};
+		event.type = GameEvent::ResumeStatus;
+		event.u.resume = { status.generation, status.acknowledged, status.flags };
+		ggpo_send_message(ggpoSession, &event, sizeof(event.type) + sizeof(event.u.resume), false);
+		nextResumeStatus = now + milliseconds(100);
+	}
+}
+
+static bool readyAfterReconnect()
+{
+	for (;;)
+	{
+		if (sessionStopRequested)
+			return false;
+		updateReconnect();
+		const s64 deadline = reconnectDeadlineMs.load();
+		if (deadline == 0)
+		{
+			libraryHoldAtBoundary = false;
+			return true;
+		}
+		if (deadline < 0)
+		{
+			NOTICE_LOG(NETWORK, "Reconnect canceled");
+			// Let the UI unload and close the session after the emulation thread exits.
+			throw FlycastException("");
+		}
+		if (libraryHoldApplied)
+			libraryHoldAtBoundary = true;
+		if (!config::ThreadedRendering)
+			return false;
+
+		std::this_thread::sleep_for(milliseconds(5));
+		if (ggpo_idle(ggpoSession, 0) != GGPO_OK)
+		{
+			stopSession();
+			throw FlycastException("GGPO error");
+		}
+	}
+}
+
 bool nextFrame()
 {
-	if (!_endOfFrame)
+	const bool pendingInput = reconnectInputPending.load();
+	if (!_endOfFrame && !pendingInput)
 		return false;
 	_endOfFrame = false;
 	if (inRollback)
 		return true;
 	auto now = std::chrono::steady_clock::now();
-	if (lastFrameTime != time_point<steady_clock>())
+	if (!pendingInput && lastFrameTime != time_point<steady_clock>())
 	{
 		msPerFrame[msPerFrameIndex++] = duration_cast<milliseconds>(now - lastFrameTime).count();
 		if (msPerFrameIndex >= (int)msPerFrame.size())
@@ -1331,7 +1586,9 @@ bool nextFrame()
 	if (ggpoSession == nullptr)
 		return false;
 	// will call save_game_state
-	GGPOErrorCode error = ggpo_advance_frame(ggpoSession);
+	// Shared-thread rendering may return to the UI with this frame's input
+	// still pending. Poll again on the next pass without advancing twice.
+	GGPOErrorCode error = pendingInput ? GGPO_OK : ggpo_advance_frame(ggpoSession);
 
 	// may rollback
 	if (error == GGPO_OK)
@@ -1380,11 +1637,22 @@ bool nextFrame()
 		}
 	}
 
+	// Relative mouse samples are movement deltas. Repeating a prior sample to
+	// bridge an increase would inject extra movement.
+	const bool adaptDelay = startupProbeActive && !mouseGame;
+	bool retriedInput = false;
 	// may call save_game_state
 	do {
+		if (!readyAfterReconnect())
+		{
+			if (sessionStopRequested)
+				return false;
+			reconnectInputPending = true;
+			return true;
+		}
 		if (!config::ThreadedRendering)
 			os_UpdateInputState();
-		Inputs inputs;
+		Inputs inputs{};
 		inputs.kcode = ~kcode[0];
 		if (rt[0] >= 0x4000)
 			inputs.kcode |= BTN_TRIGGER_RIGHT;
@@ -1423,9 +1691,45 @@ bool nextFrame()
 			mo_y_delta[0] -= inputs.u.relPos.y;
 			mo_wheel_delta[0] -= inputs.u.relPos.wheel;
 		}
+		int delayChange = 0;
+		if (adaptDelay && !adaptiveDelay.interrupted)
+		{
+			const auto sampleTime = steady_clock::now();
+			GGPONetworkStats stats{};
+			if (ggpo_get_network_stats(ggpoSession, remotePlayer, &stats) == GGPO_OK)
+			{
+				sampleAdaptiveDelay(sampleTime, stats.sync.predicted_frames, {}, false);
+				const int pending = adaptiveDelay.pendingChange;
+				// Reduce only at a forward input boundary with a duplicate sample.
+				// GGPO skips that duplicate to close the one-frame gap.
+				if (pending != 0 && adaptiveDelay.hasPreviousInput
+						&& sampleTime - adaptiveDelay.lastFeedback <= 2 * AdaptiveDelayWindow::SamplePeriod
+						&& stats.sync.predicted_frames < GGPO_MAX_PREDICTION_FRAMES
+						&& (pending > 0 || memcmp(&inputs, &adaptiveDelay.previousInput, inputSize) == 0)
+						&& ggpo_set_frame_delay(ggpoSession, localPlayer, sessionFrameDelay.load() + pending) == GGPO_OK)
+					delayChange = pending;
+			}
+		}
 		error = ggpo_add_local_input(ggpoSession, localPlayer, &inputs, inputSize);
 		if (error == GGPO_OK)
+		{
+			reconnectInputPending = false;
+			if (adaptDelay)
+			{
+				adaptiveDelay.previousInput = inputs;
+				adaptiveDelay.hasPreviousInput = true;
+				if (delayChange != 0)
+				{
+					const int nextDelay = sessionFrameDelay.load() + delayChange;
+					sessionFrameDelay = nextDelay;
+					adaptiveDelay.policy.applied(steady_clock::now(), delayChange, adaptiveDelay.peerStallMs);
+					adaptiveDelay.pendingChange = 0;
+					NOTICE_LOG(NETWORK, "GGPO adaptive delay: local delay %d -> %d frames (peer waited %d ms in 5 s)",
+							nextDelay - delayChange, nextDelay, adaptiveDelay.peerStallMs);
+				}
+			}
 			break;
+		}
 		if (error != GGPO_ERRORCODE_PREDICTION_THRESHOLD)
 		{
 			WARN_LOG(NETWORK, "ggpo_add_local_input failed %d", error);
@@ -1433,12 +1737,22 @@ bool nextFrame()
 			throw FlycastException("GGPO error");
 		}
 		DEBUG_LOG(NETWORK, "ggpo_add_local_input prediction barrier reached");
+		const auto beforeWait = adaptDelay ? steady_clock::now() : time_point<steady_clock>{};
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		const auto afterWait = adaptDelay ? steady_clock::now() : time_point<steady_clock>{};
 		error = ggpo_idle(ggpoSession, 0);
 		if (error != GGPO_OK)
 		{
 			stopSession();
 			throw FlycastException("GGPO error");
+		}
+		if (adaptDelay && active())
+		{
+			// Measure the time spent waiting beyond the prediction limit.
+			// Polling can run rollback work, so exclude it and cap sleep overshoot.
+			const auto waited = std::min(afterWait - beforeWait, duration_cast<steady_clock::duration>(milliseconds(25)));
+			sampleAdaptiveDelay(steady_clock::now(), GGPO_MAX_PREDICTION_FRAMES, waited, !retriedInput);
+			retriedInput = true;
 		}
 	} while (active());
 #ifdef SYNC_TEST
@@ -1509,8 +1823,28 @@ std::future<bool> startNetwork()
 					throw FlycastException("GGPO error");
 				}
 			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			if (!synchronized)
+				std::this_thread::sleep_for(std::chrono::milliseconds(startupProbeActive ? 2 : 20));
 		}
+#ifndef SYNC_TEST
+		{
+			std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
+			GGPONetworkStats stats{};
+			if (synchronized && startupProbeActive && ggpoSession != nullptr
+					&& ggpo_get_network_stats(ggpoSession, remotePlayer, &stats) == GGPO_OK
+					&& stats.network.auto_frame_delay && stats.network.startup_rtt_ms >= 0)
+			{
+				const int rtt = stats.network.startup_rtt_ms;
+				// Estimate one-way latency, rounded to a 60 Hz frame and capped at eight frames.
+				const int delay = std::min((std::min(rtt, 1000) * 60 + 1000) / 2000, AdaptiveDelayPolicy::MaxDelay);
+				if (ggpo_set_frame_delay(ggpoSession, localPlayer, delay) == GGPO_OK)
+				{
+					sessionFrameDelay = delay;
+					NOTICE_LOG(NETWORK, "GGPO connection test: RTT %d ms, local delay %d frames", rtt, delay);
+				}
+			}
+		}
+#endif
 #ifdef SYNC_TEST
 		// save initial state (frame 0)
 		if (active())
@@ -1541,10 +1875,11 @@ std::future<bool> startNetwork()
 
 void displayStats()
 {
-	if (ggpoSession == nullptr)
+	if (ggpoSession == nullptr || reconnectDeadlineMs.load() != 0)
 		return;
-	GGPONetworkStats stats;
-	ggpo_get_network_stats(ggpoSession, remotePlayer, &stats);
+	GGPONetworkStats stats{};
+	if (ggpo_get_network_stats(ggpoSession, remotePlayer, &stats) != GGPO_OK)
+		return;
 
 	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
@@ -1560,7 +1895,7 @@ void displayStats()
 
 	// Frame Delay
 	ImGui::Text("Delay");
-	std::string delay = std::to_string(config::GGPODelay.get());
+	std::string delay = std::to_string(sessionFrameDelay.load());
 	ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(delay.c_str()).x);
 	ImGui::Text("%s", delay.c_str());
 
@@ -1643,6 +1978,32 @@ bool nextFrame() {
 
 bool active() {
 	return false;
+}
+
+int reconnectSecondsRemaining() {
+	return -1;
+}
+
+int reconnectUnpauseSecondsRemaining() {
+	return -1;
+}
+
+void cancelReconnect() {
+}
+
+bool reconnectFramePending() {
+	return false;
+}
+
+bool holdSessionForLibrary() {
+	return false;
+}
+
+bool sessionHeldForLibrary() {
+	return false;
+}
+
+void returnToHeldSession() {
 }
 
 std::future<bool> startNetwork() {

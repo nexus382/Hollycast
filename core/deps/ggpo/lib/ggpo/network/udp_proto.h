@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -17,6 +18,7 @@
 #include "ring_buffer.h"
 #include <vector>
 #include <mutex>
+#include <queue>
 
 class UdpProtocol : public IPollSink
 {
@@ -98,6 +100,7 @@ public:
 
    void SetDisconnectTimeout(int timeout);
    void SetDisconnectNotifyStart(int timeout);
+   void SetAutoFrameDelay(bool enabled) { _local_auto_frame_delay = enabled; }
 
 protected:
    enum State {
@@ -161,6 +164,9 @@ protected:
     * Stats
     */
    int            _round_trip_time;
+   int            _startup_rtt_ms = -1;
+   bool           _local_auto_frame_delay = false;
+   bool           _peer_auto_frame_delay = false;
    int            _packets_sent;
    int            _bytes_sent;
    int            _kbps_sent;
@@ -177,6 +183,7 @@ protected:
       struct {
          uint32   roundtrips_remaining;
          uint32   random;
+         uint32   request_time_ms;
       } sync;
       struct {
          uint32   last_quality_report_time;
@@ -217,7 +224,7 @@ protected:
    /*
     * Event queue
     */
-   RingBuffer<UdpProtocol::Event, 64>  _event_queue;
+   std::queue<UdpProtocol::Event> _event_queue;
 };
 
 #endif

@@ -23,6 +23,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/serialize_test.cpp
         src/LibretroHelpersTest.cpp
         src/MapleGgpoTest.cpp
+        src/GgpoAdaptiveDelayTest.cpp
+        src/GgpoResumeBarrierTest.cpp
         src/SessionStateTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
@@ -72,6 +74,7 @@ endif()
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/DcnetProbeTest.cpp
+        src/network/GgpoProtocolTest.cpp
         src/network/HttpTimeoutTest.cpp
         src/ui/SetupChecklistPopupTest.cpp
         src/ui/SettingsPopupTest.cpp
