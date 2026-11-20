@@ -51,8 +51,17 @@
 #include <thread>
 #include <unordered_map>
 
+#ifndef _WIN32
+#include <poll.h>
+#endif
+
 namespace remoteplay {
 namespace {
+
+using Clock = std::chrono::steady_clock;
+constexpr auto joinTimeout = std::chrono::seconds(10);
+constexpr auto pingInterval = std::chrono::seconds(3);
+constexpr auto pongTimeout = std::chrono::seconds(8);
 
 std::atomic<bool> running { false };
 sock_t listenSocket = INVALID_SOCKET;
@@ -62,7 +71,12 @@ std::thread captureThread;
 std::mutex stateMutex;
 std::string sessionPin;
 std::string startError;
-std::unordered_map<std::string, int> sessions;	// token -> player slot
+struct PlayerSession
+{
+	int player;
+	Clock::time_point joinDeadline;
+};
+std::unordered_map<std::string, PlayerSession> sessions;
 PlayerSlots slots;
 std::array<std::shared_ptr<RemoteGamepad>, 4> pads;
 
@@ -71,6 +85,7 @@ std::mutex loginMutex;
 std::unordered_map<std::string, LoginGuard> loginGuards;
 
 std::mutex clientsMutex;
+std::condition_variable clientsCv;
 std::set<sock_t> clientSockets;
 std::atomic<int> streamViewers { 0 };
 
@@ -91,9 +106,14 @@ std::shared_ptr<CaptureRequest> pendingCapture;
 
 bool sendAll(sock_t sock, const char *data, size_t len)
 {
+#ifdef MSG_NOSIGNAL
+	constexpr int flags = MSG_NOSIGNAL;
+#else
+	constexpr int flags = 0;
+#endif
 	while (len > 0)
 	{
-		int sent = (int)send(sock, data, (int)std::min<size_t>(len, 1 << 20), 0);
+		int sent = (int)send(sock, data, (int)std::min<size_t>(len, 1 << 20), flags);
 		if (sent <= 0)
 			return false;
 		data += sent;
@@ -220,18 +240,37 @@ void sendResponse(sock_t sock, int code, const char *status, const std::string& 
 		sendAll(sock, body);
 }
 
-int sessionPlayer(const HttpRequest& req)
+std::string sessionToken(const HttpRequest& req)
 {
 	std::string cookie = headerValue(req, "cookie");
 	size_t p = cookie.find("rp_session=");
 	if (p == std::string::npos)
-		return -1;
+		return {};
 	std::string token = cookie.substr(p + 11);
-	size_t end = token.find_first_of("; \t");
-	token = token.substr(0, end);
+	return token.substr(0, token.find_first_of("; \t"));
+}
+
+// Must be called with stateMutex held so expiration and seat reuse are atomic.
+void expireJoiningSessions(Clock::time_point now)
+{
+	for (auto it = sessions.begin(); it != sessions.end();)
+	{
+		if (it->second.joinDeadline <= now)
+		{
+			slots.release(it->second.player);
+			it = sessions.erase(it);
+		}
+		else
+			++it;
+	}
+}
+
+int sessionPlayer(const HttpRequest& req)
+{
+	const std::string token = sessionToken(req);
 	std::lock_guard<std::mutex> lock(stateMutex);
 	auto it = sessions.find(token);
-	return it == sessions.end() ? -1 : it->second;
+	return it == sessions.end() || it->second.joinDeadline <= Clock::now() ? -1 : it->second.player;
 }
 
 void handleLogin(sock_t sock, const HttpRequest& req)
@@ -268,18 +307,22 @@ void handleLogin(sock_t sock, const HttpRequest& req)
 		sendResponse(sock, 403, "Forbidden", "application/json", "{\"error\":\"Wrong PIN.\"}");
 		return;
 	}
-	int slot = slots.claim(requested);
+	const std::string token = makeToken();
+	int slot;
+	{
+		std::lock_guard<std::mutex> lock(stateMutex);
+		const auto now = Clock::now();
+		expireJoiningSessions(now);
+		slot = slots.claim(requested);
+		if (slot >= 0)
+			sessions.emplace(token, PlayerSession { slot, now + joinTimeout });
+	}
 	if (slot < 0)
 	{
 		sendResponse(sock, 409, "Conflict", "application/json",
-			requested >= 0 ? "{\"error\":\"That controller is already in use. Pick another.\"}"
+			requested >= 0 ? "{\"error\":\"That controller is in use. If you just disconnected, retry in a few seconds.\"}"
 						   : "{\"error\":\"All four controller slots are in use.\"}");
 		return;
-	}
-	std::string token = makeToken();
-	{
-		std::lock_guard<std::mutex> lock(stateMutex);
-		sessions[token] = slot;
 	}
 	{
 		std::lock_guard<std::mutex> lock(loginMutex);
@@ -343,7 +386,7 @@ void releasePlayerSession(int player)
 	std::lock_guard<std::mutex> lock(stateMutex);
 	for (auto it = sessions.begin(); it != sessions.end();)
 	{
-		if (it->second == player)
+		if (it->second.player == player)
 			it = sessions.erase(it);
 		else
 			++it;
@@ -351,7 +394,7 @@ void releasePlayerSession(int player)
 	slots.release(player);
 }
 
-void handleWebSocket(sock_t sock, const HttpRequest& req, int player)
+void handleWebSocket(sock_t sock, const HttpRequest& req)
 {
 	std::string key = headerValue(req, "sec-websocket-key");
 	if (key.empty())
@@ -359,7 +402,27 @@ void handleWebSocket(sock_t sock, const HttpRequest& req, int player)
 		sendResponse(sock, 400, "Bad Request", "text/plain", "Missing Sec-WebSocket-Key");
 		return;
 	}
-	if (!slots.connect(player))
+	const std::string token = sessionToken(req);
+	int player = -1;
+	bool attached = false;
+	{
+		std::lock_guard<std::mutex> lock(stateMutex);
+		expireJoiningSessions(Clock::now());
+		auto it = sessions.find(token);
+		if (it != sessions.end())
+		{
+			player = it->second.player;
+			attached = slots.connect(player);
+			if (attached)
+				it->second.joinDeadline = Clock::time_point::max();
+		}
+	}
+	if (player < 0)
+	{
+		sendResponse(sock, 401, "Unauthorized", "text/plain", "Log in first.");
+		return;
+	}
+	if (!attached)
 	{
 		sendResponse(sock, 409, "Conflict", "text/plain", "Controller already connected");
 		return;
@@ -384,11 +447,18 @@ void handleWebSocket(sock_t sock, const HttpRequest& req, int player)
 		RemoteInputEvent event;
 		if (*alive && pad && parseRemoteInputMessage(message, event)) pad->applyEvent(event);
 	};
-	auto sendText = [sock, sendMutex, alive](const std::string& text) {
-		if (!*alive)
-			return;
+	auto sendFrame = [sock, sendMutex, alive](WsOpcode opcode, const std::string& payload) {
 		std::lock_guard<std::mutex> lock(*sendMutex);
-		sendAll(sock, wsEncodeFrame(WsOpcode::Text, text));
+		if (!*alive)
+			return false;
+		if (sendAll(sock, wsEncodeFrame(opcode, payload)))
+			return true;
+		*alive = false;
+		shutdown(sock, SHUT_RDWR);
+		return false;
+	};
+	auto sendText = [sendFrame](const std::string& text) {
+		sendFrame(WsOpcode::Text, text);
 	};
 	if (webrtcAvailable())
 	{
@@ -397,9 +467,47 @@ void handleWebSocket(sock_t sock, const HttpRequest& req, int player)
 	}
 	std::string buffer;
 	std::string message;
+	// A lost Wi-Fi path can leave TCP open. Browser Pong replies do not
+	// depend on JavaScript timers, even when input is sent over WebRTC.
+	auto nextPing = Clock::now() + pingInterval;
+	auto pongDeadline = Clock::time_point::max();
+	unsigned pingSequence = 0;
+	std::string pendingPing;
 	char buf[4096];
-	while (running)
+	while (running && *alive)
 	{
+		const auto now = Clock::now();
+		if (now >= pongDeadline)
+			break;
+		if (pendingPing.empty() && now >= nextPing)
+		{
+			pendingPing = std::to_string(++pingSequence);
+			if (!sendFrame(WsOpcode::Ping, pendingPing))
+				break;
+			pongDeadline = now + pongTimeout;
+		}
+		// Wake for the next heartbeat without timing out a blocking recv on
+		// a healthy socket. Winsock does not guarantee reuse after that timeout.
+		const auto wakeAt = pendingPing.empty() ? nextPing : pongDeadline;
+		const auto wait = std::chrono::ceil<std::chrono::milliseconds>(wakeAt - Clock::now());
+		if (wait.count() <= 0)
+			continue;
+#ifdef _WIN32
+		fd_set readSet;
+		FD_ZERO(&readSet);
+		FD_SET(sock, &readSet);
+		timeval timeout { (long)(wait.count() / 1000), (long)(wait.count() % 1000 * 1000) };
+		const int ready = select(0, &readSet, nullptr, nullptr, &timeout);
+#else
+		pollfd readSocket { sock, POLLIN, 0 };
+		const int ready = poll(&readSocket, 1, (int)wait.count());
+		if (ready < 0 && errno == EINTR)
+			continue;
+#endif
+		if (ready == 0)
+			continue;
+		if (ready < 0)
+			break;
 		int n = (int)recv(sock, buf, sizeof(buf), 0);
 		if (n <= 0)
 			break;
@@ -416,8 +524,17 @@ void handleWebSocket(sock_t sock, const HttpRequest& req, int player)
 			if (frame.opcode == WsOpcode::Close) { dead = true; break; }
 			if (frame.opcode == WsOpcode::Ping)
 			{
-				std::lock_guard<std::mutex> lock(*sendMutex);
-				if (!sendAll(sock, wsEncodeFrame(WsOpcode::Pong, frame.payload))) { dead = true; break; }
+				if (!sendFrame(WsOpcode::Pong, frame.payload)) { dead = true; break; }
+				continue;
+			}
+			if (frame.opcode == WsOpcode::Pong)
+			{
+				if (!pendingPing.empty() && frame.payload == pendingPing && Clock::now() < pongDeadline)
+				{
+					pendingPing.clear();
+					pongDeadline = Clock::time_point::max();
+					nextPing = Clock::now() + pingInterval;
+				}
 				continue;
 			}
 			if (frame.opcode != WsOpcode::Text && frame.opcode != WsOpcode::Continuation)
@@ -446,7 +563,10 @@ void handleWebSocket(sock_t sock, const HttpRequest& req, int player)
 		if (dead)
 			break;
 	}
-	*alive = false;
+	{
+		std::lock_guard<std::mutex> lock(*sendMutex);
+		*alive = false;
+	}
 	rtcSessionStop(player);
 	if (pad != nullptr)
 	{
@@ -608,21 +728,17 @@ void captureLoop()
 
 void handleClient(sock_t sock, std::string clientIp)
 {
-	{
-		std::lock_guard<std::mutex> lock(clientsMutex);
-		clientSockets.insert(sock);
-	}
 	HttpRequest req;
 	req.clientIp = clientIp;
 	if (readRequest(sock, req))
 	{
-		int player = sessionPlayer(req);
 		if (req.method == "GET" && req.path == "/")
 			sendResponse(sock, 200, "OK", "text/html; charset=utf-8", remotePlayPage());
 		else if (req.method == "POST" && req.path == "/api/login")
 			handleLogin(sock, req);
 		else if (req.method == "GET" && req.path == "/api/status")
 		{
+			const int player = sessionPlayer(req);
 			if (player < 0)
 				sendResponse(sock, 401, "Unauthorized", "application/json", "{\"error\":\"Not logged in.\"}");
 			else
@@ -631,26 +747,22 @@ void handleClient(sock_t sock, std::string clientIp)
 		}
 		else if (req.method == "GET" && req.path == "/stream.mjpg")
 		{
-			if (player < 0)
+			if (sessionPlayer(req) < 0)
 				sendResponse(sock, 401, "Unauthorized", "text/plain", "Log in first.");
 			else
 				handleStream(sock);
 		}
 		else if (req.method == "GET" && req.path == "/ws")
-		{
-			if (player < 0)
-				sendResponse(sock, 401, "Unauthorized", "text/plain", "Log in first.");
-			else
-				handleWebSocket(sock, req, player);
-		}
+			handleWebSocket(sock, req);
 		else
 			sendResponse(sock, 404, "Not Found", "text/plain", "Not found.");
 	}
 	{
 		std::lock_guard<std::mutex> lock(clientsMutex);
+		closesocket(sock);
 		clientSockets.erase(sock);
+		clientsCv.notify_all();
 	}
-	closesocket(sock);
 }
 
 void acceptLoop()
@@ -672,6 +784,19 @@ void acceptLoop()
 		}
 		char ip[INET_ADDRSTRLEN] = {};
 		inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
+#if !defined(MSG_NOSIGNAL) && defined(SO_NOSIGPIPE)
+		const int noSigPipe = 1;
+		setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
+		if (!set_send_timeout(client, 2000))
+		{
+			closesocket(client);
+			continue;
+		}
+		{
+			std::lock_guard<std::mutex> lock(clientsMutex);
+			clientSockets.insert(client);
+		}
 		std::thread(handleClient, client, std::string(ip)).detach();
 	}
 }
@@ -768,16 +893,19 @@ void serverStop()
 	frameCv.notify_all();
 	if (VALID(listenSocket))
 	{
+		shutdown(listenSocket, SHUT_RDWR);
 		closesocket(listenSocket);
-		listenSocket = INVALID_SOCKET;
-	}
-	{
-		std::lock_guard<std::mutex> lock(clientsMutex);
-		for (sock_t client : clientSockets)
-			closesocket(client);
 	}
 	if (acceptThread.joinable())
 		acceptThread.join();
+	listenSocket = INVALID_SOCKET;
+	{
+		// Handlers own the close and must finish releasing pads before restart.
+		std::unique_lock<std::mutex> lock(clientsMutex);
+		for (sock_t client : clientSockets)
+			shutdown(client, SHUT_RDWR);
+		clientsCv.wait(lock, [] { return clientSockets.empty(); });
+	}
 	if (captureThread.joinable())
 		captureThread.join();
 	for (int i = 0; i < 4; i++)
@@ -806,9 +934,10 @@ ServerStatus serverStatus()
 	out.port = (int)config::RemotePlayPort;
 	out.localUrl = "http://127.0.0.1:" + std::to_string(out.port);
 	out.streamViewers = streamViewers;
-	out.players = slots.snapshot();
 	{
 		std::lock_guard<std::mutex> lock(stateMutex);
+		expireJoiningSessions(Clock::now());
+		out.players = slots.snapshot();
 		if (running)
 			out.pin = sessionPin;
 		out.error = startError;
