@@ -1,0 +1,38 @@
+# Portions Copyright 2026 The Hollycast Authors
+name: Full build batch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dispatch:
+    name: Queue all builds and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the full batch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          if ($env:GITHUB_REF -cnotin @('refs/heads/master', 'refs/heads/dev')) {
+            Write-Output '::error::Select the master or dev branch.'
+            exit 1
+          }
+
+          # Keep each run on its original workflow so the downloads publisher can find it.
+          $workflows = 'c-cpp', 'android', 'bsd', 'switch', 'uwp', 'linux-arm64', 'text-shaping', 'vmu-regressions'
+          $failed = $false
+          foreach ($workflow in $workflows) {
+            gh api --method POST "repos/$env:GITHUB_REPOSITORY/actions/workflows/$workflow.yml/dispatches" -f "ref=$env:GITHUB_REF_NAME" --silent
+            if ($LASTEXITCODE -eq 0) {
+              Write-Output "Queued $workflow on $env:GITHUB_REF_NAME."
+            } else {
+              Write-Output "::error::Could not queue $workflow on $env:GITHUB_REF_NAME."
+              $failed = $true
+            }
+          }
+          exit [int]$failed
