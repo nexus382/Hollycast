@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include <cstdint>
 #include <string>
@@ -24,6 +25,7 @@ void parseCommandLine(int argc, const char * const argv[]);
 
 void setAutoSave(bool autoSave);
 bool hasSection(const std::string& section);
+bool hasEntry(const std::string& section, const std::string& key);
 void deleteSection(const std::string& section);
 void deleteEntry(const std::string& section, const std::string& key);
 

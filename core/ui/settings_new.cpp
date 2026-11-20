@@ -95,6 +95,7 @@
 #include <cstdio>
 #include <ctime>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -6974,13 +6975,79 @@ struct ShaderPreviewState
 	postprocess::ShaderChain chain;
 	std::vector<postprocess::ShaderParameter> defaults;
 	std::string error;
-	uint64_t activationStatusGeneration = 0;
-	bool activationPending = false;
+	uint64_t activationGeneration = 0;
+};
+
+struct ShaderSettingsSnapshot
+{
+	std::vector<std::string> paths = config::PostProcessShaders.get();
+	std::string singlePath = config::PostProcessShader.get();
+	std::string technique = config::PostProcessShaderTechnique.get();
+	std::string overrides = config::PostProcessShaderParameters.get();
+
+	void restore()
+	{
+		config::PostProcessShaders.get() = std::move(paths);
+		config::PostProcessShader.get() = std::move(singlePath);
+		config::PostProcessShaderTechnique.get() = std::move(technique);
+		config::PostProcessShaderParameters.get() = std::move(overrides);
+	}
+};
+
+struct PendingShaderSettings
+{
+	ShaderSettingsSnapshot previous;
+	uint64_t generation;
+	bool perGame;
 };
 
 static ShaderPreviewState g_shaderPreview;
 static std::atomic_bool g_shaderLiveTune { false };
 static std::function<void()> g_shaderAction;
+static uint64_t g_shaderActionGeneration = 0;
+static bool g_shaderActionQueuedLive = false;
+static std::optional<PendingShaderSettings> g_pendingShaderSettings;
+
+static void deferShaderSettingsSave(bool defer)
+{
+	config::PostProcessShaders.deferSave(defer);
+	config::PostProcessShader.deferSave(defer);
+	config::PostProcessShaderTechnique.deferSave(defer);
+	config::PostProcessShaderParameters.deferSave(defer);
+}
+
+static void finishPendingShaderSettings()
+{
+	if (!g_pendingShaderSettings)
+		return;
+	auto& pending = *g_pendingShaderSettings;
+	if (pending.generation != postprocess::shaderChainReloadGeneration()
+			|| pending.perGame != config::Settings::instance().hasPerGameConfig()) {
+		// Scope changes have already loaded their own settings.
+		deferShaderSettingsSave(false);
+		g_pendingShaderSettings.reset();
+		g_shaderPreview.initialized = false;
+		return;
+	}
+	const auto status = postprocess::getShaderChainStatusSummary();
+	const bool acknowledged = status.reloadGeneration == pending.generation;
+	if (!acknowledged && g_shaderLiveTune && !gui_is_open())
+		return;
+	const bool rejected = acknowledged && !status.error.empty() && !status.frameError;
+	if (!acknowledged || rejected) {
+		pending.previous.restore();
+		g_shaderPreview.initialized = false;
+		// Reload even when the file path is unchanged. A rejected technique
+		// must restore the working shader's controls as well as its settings.
+		postprocess::requestShaderChainReload();
+	}
+	deferShaderSettingsSave(false);
+	g_pendingShaderSettings.reset();
+	if (rejected)
+		gui_error(status.error);
+	else if (acknowledged)
+		SaveSettings();
+}
 
 static bool shaderRendererSupported()
 {
@@ -6996,8 +7063,11 @@ static bool shaderPreviewBlockedByNetwork()
 
 static void queueShaderAction(std::function<void()> action)
 {
-	if (g_shaderAction) return;
+	if (g_shaderAction || g_pendingShaderSettings)
+		return;
 	g_shaderAction = std::move(action);
+	g_shaderActionGeneration = postprocess::shaderChainReloadGeneration();
+	g_shaderActionQueuedLive = g_shaderLiveTune;
 	postprocess::prepareShaderCompilation();
 }
 
@@ -7005,8 +7075,15 @@ void processShaderLoading()
 {
 	// Called at the beginning of the next platform frame, after the previous
 	// frame was presented. Never run expensive work merely after ImGui::Render.
+	finishPendingShaderSettings();
 	postprocess::advanceShaderCompilationFrame();
 	if (g_shaderAction) {
+		if (g_shaderActionGeneration != postprocess::shaderChainReloadGeneration()
+				|| (g_shaderActionQueuedLive && !g_shaderLiveTune)) {
+			g_shaderAction = {};
+			postprocess::finishShaderCompilation();
+			return;
+		}
 		if (!postprocess::prepareShaderCompilation()) return;
 		const uint64_t previousReload = postprocess::shaderChainReloadGeneration();
 		auto action = std::move(g_shaderAction);
@@ -7317,21 +7394,33 @@ static void ensureShaderPreview()
 
 static void requestShaderActivation()
 {
-	// The renderer publishes a new status after it has processed this request.
-	// Keeping the status generation avoids treating the previous stack as the
-	// newly selected one while the game is paused between rendered frames.
-	g_shaderPreview.activationStatusGeneration = postprocess::shaderChainStatusGeneration();
-	g_shaderPreview.activationPending = true;
-	postprocess::requestShaderChainReload(g_shaderPreview.error.empty() ? &g_shaderPreview.chain : nullptr);
+	g_shaderPreview.activationGeneration =
+			postprocess::requestShaderChainReload(g_shaderPreview.error.empty() ? &g_shaderPreview.chain : nullptr);
 	for (auto& texture : g_shaderPreview.chain.textures) texture.decoded.reset();
 }
 
 static bool shaderActivationPending()
 {
-	if (g_shaderPreview.activationPending
-			&& postprocess::shaderChainStatusGeneration() != g_shaderPreview.activationStatusGeneration)
-		g_shaderPreview.activationPending = false;
-	return g_shaderPreview.activationPending;
+	auto& generation = g_shaderPreview.activationGeneration;
+	if (generation != 0 && (postprocess::shaderChainReloadGeneration() != generation
+			|| postprocess::getShaderChainStatusSummary().reloadGeneration == generation))
+		generation = 0;
+	return generation != 0;
+}
+
+static void applyShaderSettings(ShaderSettingsSnapshot previous)
+{
+	requestShaderActivation();
+	if (g_shaderLiveTune && !g_shaderPreview.paths.empty()) {
+		// A settings save from another panel must also skip the untested choice.
+		deferShaderSettingsSave(true);
+		g_pendingShaderSettings = PendingShaderSettings { std::move(previous), g_shaderPreview.activationGeneration,
+				config::Settings::instance().hasPerGameConfig() };
+	} else {
+		// Clearing effects needs no GPU validation. Paused settings also work
+		// before a title is running, so they retain their ordinary save behavior.
+		SaveSettings();
+	}
 }
 
 static bool previewMatchesActiveShader()
@@ -7445,20 +7534,19 @@ static void renderShaderActivationStatus(bool compact = false)
 
 static void applyShaderTechniqueSelection(std::string technique)
 {
-	const std::string previousTechnique = config::PostProcessShaderTechnique.get();
+	ShaderSettingsSnapshot previous;
 	ShaderPreviewState previousPreview = std::move(g_shaderPreview);
 	config::PostProcessShaderTechnique.get() = std::move(technique);
 	if (!rebuildShaderPreview()) {
 		// Keep the working technique and its controls when a consumer is chosen
 		// without the producer layer it requires.
 		const std::string error = g_shaderPreview.error;
-		config::PostProcessShaderTechnique.get() = previousTechnique;
+		previous.restore();
 		g_shaderPreview = std::move(previousPreview);
 		gui_error(error);
 		return;
 	}
-	requestShaderActivation();
-	SaveSettings();
+	applyShaderSettings(std::move(previous));
 }
 
 static void renderShaderParameterControls()
@@ -7654,10 +7742,7 @@ static void applyShaderSelection(const std::vector<std::string>& paths,
 				techniques.back().layerIndex = layer;
 				break;
 			}
-	const auto previousConfiguredPaths = config::PostProcessShaders.get();
-	const std::string previousSinglePath = config::PostProcessShader.get();
-	const std::string previousTechnique = config::PostProcessShaderTechnique.get();
-	const std::string previousOverrides = config::PostProcessShaderParameters.get();
+	ShaderSettingsSnapshot previousSettings;
 	ShaderPreviewState previousPreview = std::move(g_shaderPreview);
 	config::PostProcessShaders.get() = paths;
 	// Keep old single-path configurations interoperable with older builds.
@@ -7671,10 +7756,7 @@ static void applyShaderSelection(const std::vector<std::string>& paths,
 	if (!rebuildShaderPreview()) {
 		// An invalid ordering must not erase settings from the working stack.
 		const std::string error = g_shaderPreview.error;
-		config::PostProcessShaders.get() = previousConfiguredPaths;
-		config::PostProcessShader.get() = previousSinglePath;
-		config::PostProcessShaderTechnique.get() = previousTechnique;
-		config::PostProcessShaderParameters.get() = previousOverrides;
+		previousSettings.restore();
 		g_shaderPreview = std::move(previousPreview);
 		gui_error(error);
 		return;
@@ -7701,8 +7783,7 @@ static void applyShaderSelection(const std::vector<std::string>& paths,
 	}
 	config::PostProcessShaderParameters.get() = postprocess::serializeShaderChainParameterValues(g_shaderPreview.chain.parameters);
 	g_shaderPreview.overrides = config::PostProcessShaderParameters.get();
-	requestShaderActivation();
-	SaveSettings();
+	applyShaderSettings(std::move(previousSettings));
 }
 
 static void requestShaderSelection(std::vector<std::string> paths, std::vector<size_t> previousLayers = {})
@@ -12063,6 +12144,8 @@ void renderAboutTab()
 			{"Noto Sans CJK (SIL Open Font License)", "fonts/NotoSansCJK-LICENSE.txt"},
 			{"Noto Sans Devanagari (SIL Open Font License)", "fonts/NotoSansDevanagari-LICENSE.txt"},
 			{"HarfBuzz", "fonts/HarfBuzz-LICENSE.txt"},
+			{"ReShadeFX", "licenses/reshadefx/LICENSE.md"},
+			{"SPIRV-Cross", "licenses/spirv-cross/LICENSE"},
 		};
 		for (const auto& bundledLicense : bundledLicenses)
 		{

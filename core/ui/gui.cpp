@@ -263,6 +263,8 @@ static void emuEventCallback(Event event, void *)
 	case Event::Start:
 		SettingsNew::stopTextureFilterLiveTune();
 		SettingsNew::closeShaderLiveTune();
+		// Renderer contexts can outlive a title, even when the shader paths match.
+		postprocess::requestShaderChainReload();
 		performance_overlay::reset();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
@@ -275,6 +277,7 @@ static void emuEventCallback(Event event, void *)
 		GamepadDevice::load_system_mappings();
 		game_started = false;
 		SettingsNew::closeShaderLiveTune();
+		postprocess::requestShaderChainReload();
 		break;
 	case Event::Pause:
 		performance_overlay::reset();

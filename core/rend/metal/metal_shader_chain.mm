@@ -501,15 +501,15 @@ Program MetalShaderChain::Impl::compile(const ShaderChain& chain, size_t index)
 
 bool MetalShaderChain::Impl::update()
 {
-	const auto requested = configuredShaderPaths();
 	const uint64_t generation = shaderChainReloadGeneration();
+	const auto requested = configuredShaderPaths();
 	if (requested == configuredPaths && generation == configuredGeneration) return !programs.empty();
 	if (!requested.empty() && !prepareShaderCompilation()) return !programs.empty();
 	configuredPaths = requested; configuredGeneration = generation;
 	if (requested.empty()) {
 		programs.clear(); lookups.clear(); parameters.clear(); resetTargets(); activePath.clear();
 		renderedFrames = 0;
-		reportShaderChainStatus({}, {});
+		reportShaderChainStatus(generation, {}, {});
 		return false;
 	}
 	try {
@@ -578,10 +578,10 @@ bool MetalShaderChain::Impl::update()
 		resetTargets();
 		renderedFrames = 0;
 		activePath = shaderSelectionLabel(requested);
-		reportShaderChainStatus(activePath, {}, parameters, chain.techniques, chain.selectedTechnique);
+		reportShaderChainStatus(generation, activePath, {}, parameters, chain.techniques, chain.selectedTechnique);
 		parameterGeneration = shaderChainStatusGeneration();
 	} catch (const std::exception& error) {
-		reportShaderChainStatus(activePath, error.what());
+		reportShaderChainStatus(generation, activePath, error.what());
 		WARN_LOG(RENDERER, "Metal shader activation failed: %s", error.what());
 	}
 	return !programs.empty();

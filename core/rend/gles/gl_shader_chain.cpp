@@ -1086,8 +1086,8 @@ bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string&
 
 void GlShaderChain::updateConfiguredChain()
 {
-	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
 	const uint64_t generation = postprocess::shaderChainReloadGeneration();
+	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
 	if (requestedPaths == configuredPaths && generation == configuredGeneration)
 		return;
 	const std::string requestedLabel = postprocess::shaderSelectionLabel(requestedPaths);
@@ -1107,25 +1107,25 @@ void GlShaderChain::updateConfiguredChain()
 		mipmapInput.reset();
 		sourceHistory.clear();
 		activePath.clear();
-		postprocess::reportShaderChainStatus({}, {});
+		postprocess::reportShaderChainStatus(generation, {}, {});
 		return;
 	}
 
 	std::string error;
 	postprocess::ShaderChain candidate;
 	if (!postprocess::loadConfiguredShaderChain(requestedPaths, generation, candidate, error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not loaded: %s", requestedLabel.c_str(), error.c_str());
 		return;
 	}
 	postprocess::applyShaderChainParameterValues(candidate, config::PostProcessShaderParameters.get());
 	if (!activate(candidate, error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 		return;
 	}
 	activePath = requestedLabel;
-	postprocess::reportShaderChainStatus(activePath, {}, candidate.parameters,
+	postprocess::reportShaderChainStatus(generation, activePath, {}, candidate.parameters,
 			candidate.techniques, candidate.selectedTechnique);
 	parameterGeneration = postprocess::shaderChainStatusGeneration();
 }

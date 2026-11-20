@@ -74,6 +74,17 @@ TEST_F(ShaderLayerTest, InstallsTheCompleteReleaseShaderLibrary)
 	EXPECT_TRUE(std::filesystem::is_regular_file(library / "LICENSES.txt"));
 }
 
+TEST(ShaderDependencyNotices, BundlesOriginalLicenseTexts)
+{
+	for (const char *path : { "licenses/reshadefx/LICENSE.md", "licenses/spirv-cross/LICENSE" }) {
+		SCOPED_TRACE(path);
+		size_t size = 0;
+		const auto notice = resource::load(path, size);
+		ASSERT_TRUE(notice);
+		EXPECT_GT(size, 0u);
+	}
+}
+
 TEST_F(ShaderLayerTest, LibraryInstallationLeavesFreshDefaultsOffAndPreservesSelections)
 {
 	config::PostProcessShader.reset();

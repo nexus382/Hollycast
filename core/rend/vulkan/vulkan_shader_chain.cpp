@@ -19,6 +19,7 @@
 #include "vulkan_context.h"
 
 #include <algorithm>
+#include <cstring>
 #include <regex>
 #include <stdexcept>
 #include <unordered_map>
@@ -777,10 +778,10 @@ bool VulkanShaderChain::compileCandidate(const postprocess::ShaderChain& chain, 
 	return true;
 }
 
-bool VulkanShaderChain::updateConfiguredChain()
+bool VulkanShaderChain::updateConfiguredChain(vk::CommandBuffer commandBuffer)
 {
-	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
 	const uint64_t generation = postprocess::shaderChainReloadGeneration();
+	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
 	if (requestedPaths == configuredPaths && generation == configuredGeneration)
 		return !programs.empty();
 	const std::string requestedLabel = postprocess::shaderSelectionLabel(requestedPaths);
@@ -816,13 +817,13 @@ bool VulkanShaderChain::updateConfiguredChain()
 		releaseActiveResources();
 		parameters.clear();
 		activePath.clear();
-		postprocess::reportShaderChainStatus({}, {});
+		postprocess::reportShaderChainStatus(generation, {}, {});
 		return false;
 	}
 	std::string error;
 	postprocess::ShaderChain chain;
 	if (!postprocess::loadConfiguredShaderChain(requestedPaths, generation, chain, error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not loaded: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
@@ -831,13 +832,13 @@ bool VulkanShaderChain::updateConfiguredChain()
 	try {
 		ensureResources();
 		if (!compileCandidate(chain, candidate, error)) {
-			postprocess::reportShaderChainStatus(activePath, error);
+			postprocess::reportShaderChainStatus(generation, activePath, error);
 			WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 			return !programs.empty();
 		}
 	} catch (const std::exception& exception) {
 		error = exception.what();
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
@@ -848,7 +849,7 @@ bool VulkanShaderChain::updateConfiguredChain()
 					&& (binding.input.sourcePass >= candidate.size()
 							|| binding.input.sourceOutput >= candidate[binding.input.sourcePass].outputs.size())) {
 				error = "Vulkan post-processing input references an unavailable render target output.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderChainStatus(generation, activePath, error);
 				return !programs.empty();
 			}
 	const std::vector<std::vector<bool>> mipmapRequirements = postprocess::resolveShaderPassOutputMipmaps(chain);
@@ -861,15 +862,15 @@ bool VulkanShaderChain::updateConfiguredChain()
 		for (const Program::Output& output : program.outputs)
 			if (output.needsMipmaps && !output.supportsMipmaps) {
 				error = "Vulkan post-processing mipmaps require linear blit support for every sampled render target.";
-				postprocess::reportShaderChainStatus(activePath, error);
+				postprocess::reportShaderChainStatus(generation, activePath, error);
 				return !programs.empty();
 			}
 	std::vector<LookupTexture> candidateLookupTextures;
 	candidateLookupTextures.reserve(chain.textures.size());
 	for (const postprocess::ShaderPresetTexture& texture : chain.textures)
 		candidateLookupTextures.push_back({ texture });
-	if (!validateLookupTextures(candidateLookupTextures, error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+	if (!prepareLookupTextures(candidateLookupTextures, error)) {
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
@@ -895,8 +896,9 @@ bool VulkanShaderChain::updateConfiguredChain()
 			if (output.previousFrame && output.previousPass != postprocess::InvalidShaderPass)
 				programs[output.previousPass].historyDepth = std::max(2u, programs[output.previousPass].historyDepth);
 	lookupTextures = std::move(candidateLookupTextures);
+	recordLookupUploads(commandBuffer);
 	activePath = requestedLabel;
-	postprocess::reportShaderChainStatus(activePath, {}, parameters,
+	postprocess::reportShaderChainStatus(generation, activePath, {}, parameters,
 			chain.techniques, chain.selectedTechnique);
 	parameterGeneration = postprocess::shaderChainStatusGeneration();
 	return true;
@@ -1063,90 +1065,149 @@ void VulkanShaderChain::generateMipmaps(vk::CommandBuffer commandBuffer, const T
 			{}, nullptr, nullptr, lastBarrier);
 }
 
-bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commandBuffer, std::string& error)
-{
-	return ensureLookupTextures(commandBuffer, lookupTextures, error);
-}
-
-bool VulkanShaderChain::validateLookupTextures(std::vector<LookupTexture>& textures, std::string& error) const
-{
-	uint64_t bytes = 0;
-	for (auto& lookup : textures) {
-		const auto decoded = postprocess::loadShaderTextureData(lookup.config, error);
-		if (!decoded) return false;
-		const auto& data = *decoded;
-		// Upload storage remains alive until the chain retires, so account for it.
-		if (data.pixels.size() > (postprocess::MaxShaderChainTargetBytes - bytes) / 2) { error = "Shader lookup GPU/upload storage exceeds the chain budget."; return false; }
-		bytes += data.pixels.size() * 2;
-		lookup.config.decoded = decoded;
-	}
-	return true;
-}
-
-bool VulkanShaderChain::ensureLookupTextures(vk::CommandBuffer commands, std::vector<LookupTexture>& textures, std::string& error)
+bool VulkanShaderChain::prepareLookupTextures(std::vector<LookupTexture>& textures, std::string& error) const
 {
 	auto *context = VulkanContext::Instance();
+	uint64_t bytes = 0;
 	for (auto& lookup : textures) {
-		if (lookup.image.image) continue;
-		const auto decoded = postprocess::loadShaderTextureData(lookup.config, error);
-		if (!decoded) return false;
-		const auto& data = *decoded;
-		if (lookup.config.numericType != postprocess::ShaderNumericType::Float && (lookup.config.linearFilter || lookup.config.useMipmaps)) { error = "Integer textures require nearest filtering without generated mipmaps."; return false; }
 		try {
+			const auto decoded = postprocess::loadShaderTextureData(lookup.config, error);
+			if (!decoded)
+				return false;
+			const auto& data = *decoded;
+			// Keep staging storage alive until the chain retires.
+			if (data.pixels.size() > (postprocess::MaxShaderChainTargetBytes - bytes) / 2) {
+				error = "Shader lookup GPU/upload storage exceeds the chain budget.";
+				return false;
+			}
+			bytes += data.pixels.size() * 2;
+
+			const bool integer = lookup.config.numericType != postprocess::ShaderNumericType::Float;
+			if (integer && (lookup.config.linearFilter || lookup.config.useMipmaps)) {
+				error = "Integer textures require nearest filtering without generated mipmaps.";
+				return false;
+			}
+
 			auto& image = lookup.image;
 			image.format = resolveTargetFormat(postprocess::ShaderTargetFormat::Default, data.formatName, error);
-			if (image.format == vk::Format::eUndefined) return false;
-			const auto features = context->GetPhysicalDevice().getFormatProperties(image.format).optimalTilingFeatures;
-			if (!(features & vk::FormatFeatureFlagBits::eSampledImage) || (lookup.config.linearFilter && !(features & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))) { error = "Vulkan does not support the requested lookup texture format/filter."; return false; }
+			if (image.format == vk::Format::eUndefined)
+				return false;
+			const auto physicalDevice = context->GetPhysicalDevice();
+			const auto features = physicalDevice.getFormatProperties(image.format).optimalTilingFeatures;
+			if (!(features & vk::FormatFeatureFlagBits::eSampledImage)
+					|| (lookup.config.linearFilter && !(features & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))) {
+				error = "Vulkan does not support the requested lookup texture format/filter.";
+				return false;
+			}
+			image.extent = vk::Extent2D(data.width, data.height);
+			image.depth = data.depth;
+			image.layers = data.layers;
+			image.type = data.type;
+			image.mipLevels = 1;
+			for (uint32_t n = std::max({data.width, data.height, data.depth}); lookup.config.useMipmaps && n > 1; n >>= 1)
+				++image.mipLevels;
+			vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+			if (image.mipLevels > 1) {
+				const auto blitFeatures = vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst
+						| vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
+				if ((features & blitFeatures) != blitFeatures) {
+					error = "Vulkan cannot generate the requested lookup mip chain.";
+					return false;
+				}
+				usage |= vk::ImageUsageFlagBits::eTransferSrc;
+			}
+
 			const bool volume = data.type == postprocess::SlangResourceType::Sampler3D || data.type == postprocess::SlangResourceType::Texture3D;
 			const bool line = data.type == postprocess::SlangResourceType::Sampler1D || data.type == postprocess::SlangResourceType::Texture1D;
 			const bool cube = data.type == postprocess::SlangResourceType::SamplerCube || data.type == postprocess::SlangResourceType::TextureCube;
-			image.extent = vk::Extent2D(data.width, data.height); image.depth = data.depth; image.layers = data.layers; image.type = data.type;
-			image.mipLevels = 1; if (lookup.config.useMipmaps) for (uint32_t n = std::max({data.width, data.height, data.depth}); n > 1; n >>= 1) ++image.mipLevels;
-			if (image.mipLevels > 1 && (!(features & vk::FormatFeatureFlagBits::eBlitSrc) || !(features & vk::FormatFeatureFlagBits::eBlitDst) || !(features & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))) { error = "Vulkan cannot generate the requested lookup mip chain."; return false; }
+			const bool array = data.type == postprocess::SlangResourceType::Sampler2DArray || data.type == postprocess::SlangResourceType::Texture2DArray;
 			const vk::ImageType type = volume ? vk::ImageType::e3D : line ? vk::ImageType::e1D : vk::ImageType::e2D;
-			const vk::ImageViewType view = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D : cube ? vk::ImageViewType::eCube : (data.type == postprocess::SlangResourceType::Sampler2DArray || data.type == postprocess::SlangResourceType::Texture2DArray) ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
-			image.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo(cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags(), type, image.format,
-					vk::Extent3D(data.width, data.height, data.depth), image.mipLevels, data.layers, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
-					vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc));
+			const vk::ImageViewType view = volume ? vk::ImageViewType::e3D : line ? vk::ImageViewType::e1D
+					: cube ? vk::ImageViewType::eCube : array ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+			const vk::ImageCreateFlags flags = cube ? vk::ImageCreateFlagBits::eCubeCompatible : vk::ImageCreateFlags();
+			vk::ImageFormatProperties properties;
+			if (physicalDevice.getImageFormatProperties(image.format, type, vk::ImageTiling::eOptimal, usage, flags,
+						&properties) != vk::Result::eSuccess
+					|| data.width > properties.maxExtent.width || data.height > properties.maxExtent.height
+					|| data.depth > properties.maxExtent.depth || data.layers > properties.maxArrayLayers
+					|| image.mipLevels > properties.maxMipLevels) {
+				error = "Vulkan does not support the requested lookup texture dimensions, format, or mip levels.";
+				return false;
+			}
+			image.image = context->GetDevice().createImageUnique(vk::ImageCreateInfo(flags, type, image.format,
+					vk::Extent3D(data.width, data.height, data.depth), image.mipLevels, data.layers, vk::SampleCountFlagBits::e1,
+					vk::ImageTiling::eOptimal, usage));
 			VmaAllocationCreateInfo allocationInfo { {}, VMA_MEMORY_USAGE_GPU_ONLY };
-			image.allocation = context->GetAllocator().AllocateForImage(image.image.get(), allocationInfo);
+			image.allocation = context->GetAllocator().AllocateForImage(image.image.get(), allocationInfo, /*checkBindResult=*/true);
 			const vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, image.mipLevels, 0, data.layers);
 			image.sampleView = context->GetDevice().createImageViewUnique(vk::ImageViewCreateInfo({}, image.image.get(), view, image.format, {}, range));
-			lookup.staging = std::make_unique<BufferData>(data.pixels.size(), vk::BufferUsageFlagBits::eTransferSrc);
-			lookup.staging->upload(static_cast<u32>(data.pixels.size()), data.pixels.data());
-			commands.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
-					vk::ImageMemoryBarrier({}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), range));
-			const vk::BufferImageCopy copy(0, 0, 0, vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, data.layers), {}, vk::Extent3D(data.width, data.height, data.depth));
-			commands.copyBufferToImage(lookup.staging->buffer.get(), image.image.get(), vk::ImageLayout::eTransferDstOptimal, copy);
-			vk::Extent3D extent(data.width, data.height, data.depth);
-			for (uint32_t level = 1; level < image.mipLevels; ++level) {
-				const vk::ImageSubresourceRange previous(vk::ImageAspectFlagBits::eColor, level - 1, 1, 0, data.layers);
-				commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
-						vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), previous));
-				const vk::Extent3D next(std::max(1u, extent.width / 2), std::max(1u, extent.height / 2), std::max(1u, extent.depth / 2));
-				const std::array<vk::Offset3D,2> from { vk::Offset3D(), vk::Offset3D(extent.width, extent.height, extent.depth) };
-				const std::array<vk::Offset3D,2> to { vk::Offset3D(), vk::Offset3D(next.width, next.height, next.depth) };
-				const vk::ImageBlit blit(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level - 1, 0, data.layers), from,
-						vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, level, 0, data.layers), to);
-				commands.blitImage(image.image.get(), vk::ImageLayout::eTransferSrcOptimal, image.image.get(), vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
-				commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
-						vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), previous));
-				extent = next;
-			}
-			commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
-					vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, image.mipLevels - 1, 1, 0, data.layers)));
+
 			vk::SamplerCreateInfo sampler;
 			sampler.magFilter = sampler.minFilter = lookup.config.linearFilter ? vk::Filter::eLinear : vk::Filter::eNearest;
 			sampler.mipmapMode = lookup.config.linearFilter ? vk::SamplerMipmapMode::eLinear : vk::SamplerMipmapMode::eNearest;
 			sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = samplerAddressMode(lookup.config.wrapMode);
 			sampler.maxLod = static_cast<float>(image.mipLevels - 1);
-			sampler.borderColor = lookup.config.numericType == postprocess::ShaderNumericType::Float ? vk::BorderColor::eFloatTransparentBlack : vk::BorderColor::eIntTransparentBlack;
+			sampler.borderColor = integer ? vk::BorderColor::eIntTransparentBlack : vk::BorderColor::eFloatTransparentBlack;
 			lookup.sampler = context->GetDevice().createSamplerUnique(sampler);
+
+			lookup.staging = std::make_unique<BufferData>(data.pixels.size(), vk::BufferUsageFlagBits::eTransferSrc,
+					vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, /*checkBindResult=*/true);
+			auto& staging = lookup.staging->allocation;
+			std::memcpy(staging.MapMemory(false), data.pixels.data(), data.pixels.size());
+			try {
+				staging.FlushMemory(0, data.pixels.size());
+			} catch (...) {
+				staging.UnmapMemory(false);
+				throw;
+			}
+			staging.UnmapMemory(false);
 			lookup.config.decoded.reset();
-		} catch (const std::exception& exception) { error = exception.what(); return false; }
+		} catch (const std::exception& exception) {
+			error = "Vulkan lookup texture '" + lookup.config.name + "': " + exception.what();
+			return false;
+		}
 	}
 	return true;
+}
+
+void VulkanShaderChain::recordLookupUploads(vk::CommandBuffer commands) const
+{
+	// Every texture has been prepared and installed before this command buffer can reference it.
+	for (const auto& lookup : lookupTextures) {
+		const auto& image = lookup.image;
+		const auto aspect = vk::ImageAspectFlagBits::eColor;
+		const vk::ImageSubresourceRange range(aspect, 0, image.mipLevels, 0, image.layers);
+		commands.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+				vk::ImageMemoryBarrier({}, vk::AccessFlagBits::eTransferWrite, vk::ImageLayout::eUndefined,
+						vk::ImageLayout::eTransferDstOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), range));
+		vk::Extent3D extent(image.extent.width, image.extent.height, image.depth);
+		const vk::BufferImageCopy copy(0, 0, 0, vk::ImageSubresourceLayers(aspect, 0, 0, image.layers), {}, extent);
+		commands.copyBufferToImage(lookup.staging->buffer.get(), image.image.get(), vk::ImageLayout::eTransferDstOptimal, copy);
+		for (uint32_t level = 1; level < image.mipLevels; ++level) {
+			const vk::ImageSubresourceRange previous(aspect, level - 1, 1, 0, image.layers);
+			commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead,
+							vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal,
+							VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), previous));
+			const vk::Extent3D next(std::max(1u, extent.width / 2), std::max(1u, extent.height / 2), std::max(1u, extent.depth / 2));
+			const std::array<vk::Offset3D, 2> from { vk::Offset3D(), vk::Offset3D(extent.width, extent.height, extent.depth) };
+			const std::array<vk::Offset3D, 2> to { vk::Offset3D(), vk::Offset3D(next.width, next.height, next.depth) };
+			const vk::ImageBlit blit(vk::ImageSubresourceLayers(aspect, level - 1, 0, image.layers), from,
+					vk::ImageSubresourceLayers(aspect, level, 0, image.layers), to);
+			commands.blitImage(image.image.get(), vk::ImageLayout::eTransferSrcOptimal, image.image.get(),
+					vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
+			commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
+					vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eShaderRead,
+							vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+							VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), previous));
+			extent = next;
+		}
+		const vk::ImageSubresourceRange last(aspect, image.mipLevels - 1, 1, 0, image.layers);
+		commands.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, shaderReadStages(), {}, nullptr, nullptr,
+				vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
+						vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image.image.get(), last));
+	}
 }
 
 bool VulkanShaderChain::needsSceneDepth() const
@@ -1184,7 +1245,9 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	postprocess::ShaderFrameInfo frame = inputFrame;
 	presentationTransformApplied = false;
 	bool composedDisplayInput = false;
-	if (!updateConfiguredChain() || !sourceImage || !sourceView || extent.width == 0 || extent.height == 0)
+	VulkanContext *context = VulkanContext::Instance();
+	vk::CommandBuffer commandBuffer = context->GetCurrentCommandBuffer();
+	if (!updateConfiguredChain(commandBuffer) || !sourceImage || !sourceView || extent.width == 0 || extent.height == 0)
 		return false;
 	postprocess::prepareShaderPresentation(frame, startsInDisplaySpace());
 	const std::array<int,4> currentStencilSize { frame.sourceWidth, frame.sourceHeight, frame.viewportWidth, frame.viewportHeight };
@@ -1198,8 +1261,6 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 	}
 
 	frame.frameCount = renderedFrames;
-	VulkanContext *context = VulkanContext::Instance();
-	vk::CommandBuffer commandBuffer = context->GetCurrentCommandBuffer();
 	const bool needsDepth = needsSceneDepth();
 	if (needsDepth && (!depthImage || !depthView)) {
 		postprocess::reportShaderFrameStatus(activePath, "This frame has no scene depth available for the selected shader.");
@@ -1244,12 +1305,6 @@ bool VulkanShaderChain::renderInternal(vk::Image sourceImage, vk::ImageView sour
 		targets[imageIndex].resize(programs.size());
 	if (sourceTargets.size() <= imageIndex)
 		sourceTargets.resize(imageIndex + 1);
-	std::string lookupError;
-	if (!ensureLookupTextures(commandBuffer, lookupError)) {
-		postprocess::reportShaderFrameStatus(activePath, lookupError);
-		WARN_LOG(RENDERER, "Post-processing lookup texture failed: %s", lookupError.c_str());
-		return false;
-	}
 	const vk::ImageMemoryBarrier sourceBarrier(vk::AccessFlagBits::eColorAttachmentWrite, vk::AccessFlagBits::eShaderRead,
 			vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
 			VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, sourceImage,

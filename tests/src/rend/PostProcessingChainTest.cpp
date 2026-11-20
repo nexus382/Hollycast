@@ -2950,6 +2950,22 @@ TEST(PostProcessingChainTest, ProvisionsInputMipmapsForConsumersAfterAuxiliaryPa
 	EXPECT_FALSE(postprocess::shaderInputNeedsMipmaps(passes, 2));
 }
 
+TEST(PostProcessingChainTest, IgnoresResultsFromAnOlderShaderActivation)
+{
+	struct ResetStatus {
+		~ResetStatus() { postprocess::reportShaderChainStatus({}, {}); }
+	} reset;
+	const uint64_t previous = postprocess::requestShaderChainReload();
+	const uint64_t current = postprocess::requestShaderChainReload();
+	postprocess::reportShaderChainStatus(current, "working", {});
+	postprocess::reportShaderChainStatus(previous, "working", "Late rejection");
+
+	const auto status = postprocess::getShaderChainStatusSummary();
+	EXPECT_EQ(current, status.reloadGeneration);
+	EXPECT_EQ("working", status.activePath);
+	EXPECT_TRUE(status.error.empty());
+}
+
 TEST(PostProcessingChainTest, WaitsForTheLoadingNoticeToReachAPreviousFrame)
 {
 	postprocess::finishShaderCompilation();

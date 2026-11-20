@@ -320,6 +320,7 @@ struct ShaderChainStatus {
 	std::vector<ShaderParameter> parameters;
 	std::vector<std::string> techniques;
 	int selectedTechnique = -1;
+	uint64_t reloadGeneration = 0;
 };
 
 // Status labels do not need to copy every control, range and choice label.
@@ -328,6 +329,7 @@ struct ShaderChainStatusSummary {
 	std::string error;
 	bool frameError = false;
 	size_t parameterCount = 0;
+	uint64_t reloadGeneration = 0;
 };
 
 // One cache belongs to one immutable compiled pass. Only successful geometry
@@ -455,6 +457,9 @@ uint64_t shaderChainStatusGeneration();
 void reportShaderChainStatus(const std::string& activePath, const std::string& error,
 		const std::vector<ShaderParameter>& parameters = {},
 		const std::vector<std::string>& techniques = {}, int selectedTechnique = -1);
+void reportShaderChainStatus(uint64_t generation, const std::string& activePath, const std::string& error,
+		const std::vector<ShaderParameter>& parameters = {},
+		const std::vector<std::string>& techniques = {}, int selectedTechnique = -1);
 void reportShaderFrameStatus(const std::string& activePath, const std::string& error);
 bool setShaderChainParameter(const std::string& name, float value);
 bool setShaderChainParameterComponents(const std::string& name, const float *values, uint32_t componentCount);
@@ -466,7 +471,7 @@ bool shaderCompilationPending();
 void markShaderCompilationDrawn();
 void advanceShaderCompilationFrame();
 void finishShaderCompilation();
-void requestShaderChainReload(const ShaderChain* prepared = nullptr);
+uint64_t requestShaderChainReload(const ShaderChain* prepared = nullptr);
 // Consumes a matching UI preflight once; explicit reloads always discard it.
 bool loadConfiguredShaderChain(const std::vector<std::string>& paths, uint64_t generation,
 		ShaderChain& chain, std::string& error);

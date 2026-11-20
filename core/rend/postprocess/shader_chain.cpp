@@ -1454,7 +1454,7 @@ ShaderChainStatus getShaderChainStatus()
 ShaderChainStatusSummary getShaderChainStatusSummary()
 {
 	std::lock_guard<std::mutex> lock(statusMutex);
-	return { status.activePath, status.error, status.frameError, status.parameters.size() };
+	return { status.activePath, status.error, status.frameError, status.parameters.size(), status.reloadGeneration };
 }
 
 uint64_t shaderChainStatusGeneration()
@@ -1466,7 +1466,16 @@ void reportShaderChainStatus(const std::string& activePath, const std::string& e
 		const std::vector<ShaderParameter>& parameters,
 		const std::vector<std::string>& techniques, int selectedTechnique)
 {
+	reportShaderChainStatus(0, activePath, error, parameters, techniques, selectedTechnique);
+}
+
+void reportShaderChainStatus(uint64_t generation, const std::string& activePath, const std::string& error,
+		const std::vector<ShaderParameter>& parameters,
+		const std::vector<std::string>& techniques, int selectedTechnique)
+{
 	std::lock_guard<std::mutex> lock(statusMutex);
+	if (generation != 0 && generation != reloadGeneration.load(std::memory_order_relaxed))
+		return;
 	if (!error.empty() || activePath.empty())
 		finishShaderCompilation();
 	else {
@@ -1481,6 +1490,7 @@ void reportShaderChainStatus(const std::string& activePath, const std::string& e
 	status.parameters = parameters;
 	status.techniques = techniques;
 	status.selectedTechnique = selectedTechnique;
+	status.reloadGeneration = generation;
 	statusGeneration.fetch_add(1, std::memory_order_release);
 }
 
@@ -1569,14 +1579,14 @@ void finishShaderCompilation()
 	compilationProgress.store(CompilationProgress::Idle);
 }
 
-void requestShaderChainReload(const ShaderChain* prepared)
+uint64_t requestShaderChainReload(const ShaderChain* prepared)
 {
 	std::lock_guard<std::mutex> lock(statusMutex);
 	preparedChain = prepared ? std::make_unique<ShaderChain>(*prepared) : nullptr;
 	preparedPaths = prepared ? configuredShaderPaths() : std::vector<std::string>();
-	preparedTechnique = config::PostProcessShaderTechnique.get();
-	preparedDirectory = shaderLibraryDirectory();
-	preparedGeneration = reloadGeneration.fetch_add(1, std::memory_order_release) + 1;
+	preparedTechnique = prepared ? config::PostProcessShaderTechnique.get() : std::string();
+	preparedDirectory = prepared ? shaderLibraryDirectory() : std::string();
+	return preparedGeneration = reloadGeneration.fetch_add(1, std::memory_order_release) + 1;
 }
 
 bool loadConfiguredShaderChain(const std::vector<std::string>& paths, uint64_t generation,

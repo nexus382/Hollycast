@@ -97,6 +97,7 @@ private:
 		postprocess::ShaderPassGeometry geometry;
 		std::vector<bool> outputNeedsMipmaps;
 		std::vector<DXGI_FORMAT> outputFormats;
+		bool inputNeedsMipmaps = false;
 		bool displayGlsl = false;
 		bool nativeFxStages = false;
 		uint32_t historyDepth = 1;

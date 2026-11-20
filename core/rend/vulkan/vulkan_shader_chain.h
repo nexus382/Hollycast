@@ -121,7 +121,7 @@ private:
 		vk::UniqueSampler sampler;
 	};
 
-	bool updateConfiguredChain();
+	bool updateConfiguredChain(vk::CommandBuffer commandBuffer);
 	bool renderInternal(vk::Image sourceImage, vk::ImageView sourceView, const vk::Extent2D& extent,
 			const postprocess::ShaderFrameInfo& frame, vk::ImageView& outputView,
 			bool& presentationTransformApplied, vk::Image depthImage, vk::ImageView depthView, vk::ImageAspectFlags depthAspects);
@@ -134,10 +134,8 @@ private:
 	vk::UniquePipeline createPipeline(vk::ShaderModule vertexShader, vk::ShaderModule fragmentShader, vk::RenderPass renderPass,
 			const postprocess::ShaderPass& pass, size_t colorAttachmentCount) const;
 	vk::UniqueRenderPass createRenderPass(const std::vector<vk::Format>& formats, bool preserveContents = false, bool stencil = false, bool clear = false) const;
-	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::string& error);
-	bool ensureLookupTextures(vk::CommandBuffer commandBuffer, std::vector<LookupTexture>& textures,
-			std::string& error);
-	bool validateLookupTextures(std::vector<LookupTexture>& textures, std::string& error) const;
+	bool prepareLookupTextures(std::vector<LookupTexture>& textures, std::string& error) const;
+	void recordLookupUploads(vk::CommandBuffer commandBuffer) const;
 	void ensureResources();
 
 	struct StencilTarget {

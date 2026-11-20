@@ -43,6 +43,11 @@ cmrc_add_resources(Hollycast-resources
         fonts/printer_kanji24x24.bin.zip)
 
 if(NOT LIBRETRO)
+    # Embed the original shader dependency notices in every standalone package.
+    cmrc_add_resources(Hollycast-resources
+            WHENCE core/deps PREFIX licenses
+            core/deps/reshadefx/LICENSE.md
+            core/deps/spirv-cross/LICENSE)
     cmrc_add_resources(Hollycast-resources
             fonts/NotoSansCJK-Regular.ttc.zip
             fonts/NotoSansCJK-LICENSE.txt

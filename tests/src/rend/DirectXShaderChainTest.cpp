@@ -272,6 +272,62 @@ TEST_F(DirectXShaderChainTest, ComposesAndFiltersTheWholePresentation)
 	});
 }
 
+TEST_F(DirectXShaderChainTest, SamplesOriginalMipmapsAfterSourceChanges)
+{
+	runInGraphicsProcess([&] {
+		writeShader("replace.slang", "#version 450\n"
+				"void main() { FragColor = vec4(0.0, 0.25, 0.0, 1.0); }\n");
+		writeShader("original.slang", "#version 450\n"
+				"layout(binding = 0) uniform sampler2D Original;\n"
+				"layout(binding = 1) uniform sampler2D Source;\n"
+				"void main() {\n"
+				"    vec2 uv = vec2(8.5 / 320.0, 8.5 / 240.0);\n"
+				"    FragColor = vec4(0.0, texture(Source, uv).g, textureLod(Original, uv, 5.0).b, 1.0);\n"
+				"}\n");
+		const auto preset = writeShader("original.slangp", "shaders = 2\n"
+				"shader0 = replace.slang\nshader1 = original.slang\nmipmap_input1 = true\n");
+		// At LOD 5 the blue checker averages to 128. Its base texel is 32.
+		checkPattern({ preset }, false, std::array<int, 3>{ 0, 64, 128 });
+	});
+}
+
+TEST_F(DirectXShaderChainTest, RejectsIntegerPresentationAndKeepsActiveChain)
+{
+	runInGraphicsProcess([&] {
+		const auto copy = writeShader("active.glsl", "void main() { SetOutput(Sample()); }\n");
+		const auto integerOutput = writeShader("integer.slang", "#version 450\n"
+				"#pragma format R32G32B32A32_UINT\n"
+				"layout(location = 0) out uvec4 FragColor;\n"
+				"void main() { FragColor = uvec4(1); }\n");
+		auto context = DX11Context::Instance();
+		Dx11ShaderChain chain;
+		chain.init(context->getDevice(), context->getDeviceContext(), quad.get());
+		auto selectShader = [](const std::string& path) {
+			config::PostProcessShaders.get() = { path };
+			config::PostProcessShader.get() = path;
+			postprocess::requestShaderChainReload();
+			postprocess::prepareShaderCompilation();
+			postprocess::markShaderCompilationDrawn();
+			postprocess::advanceShaderCompilationFrame();
+		};
+		selectShader(copy);
+		ComPtr<ID3D11ShaderResourceView> output;
+		bool transformed = false;
+		postprocess::ShaderFrameInfo frame { 320, 240, 640, 480, 0 };
+		ASSERT_TRUE(chain.render(inputView, frame, output, transformed, depthView))
+				<< postprocess::getShaderChainStatus().error;
+		const auto active = postprocess::getShaderChainStatus().activePath;
+		auto previousOutput = output;
+		selectShader(integerOutput);
+		frame = { 320, 240, 640, 480, 1 };
+		ASSERT_TRUE(chain.render(inputView, frame, output, transformed, depthView));
+		const auto status = postprocess::getShaderChainStatus();
+		EXPECT_EQ(active, status.activePath);
+		EXPECT_EQ(previousOutput.get(), output.get());
+		EXPECT_NE(std::string::npos, status.error.find("DirectX 11 cannot present an integer shader output"));
+	});
+}
+
 TEST_F(DirectXShaderChainTest, FragmentOnlyStagesPreservePixelCoordinates)
 {
 	runInGraphicsProcess([&] {

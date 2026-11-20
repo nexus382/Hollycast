@@ -157,6 +157,16 @@ bool Dx11ShaderChain::ensurePassSamplers(std::string& error)
 bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, std::vector<Program>& candidate,
 		std::string& error) const
 {
+	const auto finalSourcePass = std::find_if(chain.passes.rbegin(), chain.passes.rend(),
+			[](const postprocess::ShaderPass& pass) { return pass.updatesSource; });
+	if (finalSourcePass != chain.passes.rend()) {
+		const auto& pass = *finalSourcePass;
+		const std::string& formatName = pass.outputs.empty() ? pass.targetFormatName : pass.outputs.front().targetFormatName;
+		if (postprocess::shaderFormatNumericType(formatName) != postprocess::ShaderNumericType::Float) {
+			error = "DirectX 11 cannot present an integer shader output. Add an explicit final pass that outputs a normalized or floating-point format.";
+			return false;
+		}
+	}
 	const pD3DCompile compiler = DX11Context::Instance()->getCompiler();
 	if (compiler == nullptr) {
 		error = "DirectX 11 shader compiler is unavailable.";
@@ -372,15 +382,17 @@ bool Dx11ShaderChain::compileCandidate(const postprocess::ShaderChain& chain, st
 		candidate.push_back(std::move(program));
 	}
 	const std::vector<std::vector<bool>> mipmapRequirements = postprocess::resolveShaderPassOutputMipmaps(chain);
-	for (size_t passIndex = 0; passIndex < candidate.size(); ++passIndex)
+	for (size_t passIndex = 0; passIndex < candidate.size(); ++passIndex) {
+		candidate[passIndex].inputNeedsMipmaps = postprocess::shaderInputNeedsMipmaps(chain.passes, passIndex);
 		candidate[passIndex].outputNeedsMipmaps = mipmapRequirements[passIndex];
+	}
 	return true;
 }
 
 bool Dx11ShaderChain::updateConfiguredChain()
 {
-	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
 	const uint64_t generation = postprocess::shaderChainReloadGeneration();
+	const std::vector<std::string> requestedPaths = postprocess::configuredShaderPaths();
 	if (requestedPaths == configuredPaths && generation == configuredGeneration)
 		return !programs.empty();
 	const std::string requestedLabel = postprocess::shaderSelectionLabel(requestedPaths);
@@ -400,25 +412,25 @@ bool Dx11ShaderChain::updateConfiguredChain()
 		displayDepthInput = {};
 		mipmapSource = {};
 		activePath.clear();
-		postprocess::reportShaderChainStatus({}, {});
+		postprocess::reportShaderChainStatus(generation, {}, {});
 		return false;
 	}
 	std::string error;
 	postprocess::ShaderChain chain;
 	if (!postprocess::loadConfiguredShaderChain(requestedPaths, generation, chain, error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not loaded: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
 	postprocess::applyShaderChainParameterValues(chain, config::PostProcessShaderParameters.get());
 	if (!ensurePassSamplers(error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
 	std::vector<Program> candidate;
 	if (!compileCandidate(chain, candidate, error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
@@ -427,7 +439,7 @@ bool Dx11ShaderChain::updateConfiguredChain()
 	for (const postprocess::ShaderPresetTexture& texture : chain.textures)
 		candidateLookupTextures.push_back({ texture });
 	if (!ensureLookupTextures(candidateLookupTextures, error)) {
-		postprocess::reportShaderChainStatus(activePath, error);
+		postprocess::reportShaderChainStatus(generation, activePath, error);
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
@@ -461,7 +473,7 @@ bool Dx11ShaderChain::updateConfiguredChain()
 	sourceHistory.clear();
 	lookupTextures = std::move(candidateLookupTextures);
 	activePath = requestedLabel;
-	postprocess::reportShaderChainStatus(activePath, {}, parameters,
+	postprocess::reportShaderChainStatus(generation, activePath, {}, parameters,
 			chain.techniques, chain.selectedTechnique);
 	parameterGeneration = postprocess::shaderChainStatusGeneration();
 	return true;
@@ -648,6 +660,7 @@ bool Dx11ShaderChain::prepareMipmappedSource(ComPtr<ID3D11ShaderResourceView>& s
 	deviceContext->OMSetBlendState(nullptr, nullptr, 0xffffffff);
 	quad->draw(sourceView, DX11Context::Instance()->getSamplers().getSampler(false));
 	unbindPixelShaderSource();
+	deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
 	deviceContext->GenerateMips(mipmapSource.shaderView);
 	mipmappedView = mipmapSource.shaderView;
 	return true;
@@ -778,10 +791,11 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 	ComPtr<ID3D11ShaderResourceView> inputView = sourceView;
 	ComPtr<ID3D11ShaderResourceView> originalView = sourceView;
 	bool inputHasMipChain = false;
+	bool originalHasMipChain = false;
 	bool displaySpaceReached = false;
 	int originalWidth = passFrame.sourceWidth;
 	int originalHeight = passFrame.sourceHeight;
-	auto composeDisplayInput = [&]() {
+	auto composeDisplayInput = [&](bool needsMipmaps) {
 		if (displaySpaceReached)
 			return true;
 		displaySpaceReached = true;
@@ -791,14 +805,14 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 			uint64_t bytes = depthTargetBytes;
 			std::string error;
 			if (!postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
-					postprocess::ShaderTargetFormat::Default, {}, false, 1, bytes, error)
+					postprocess::ShaderTargetFormat::Default, {}, needsMipmaps, 1, bytes, error)
 					|| (needsDepth && !postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
 							postprocess::ShaderTargetFormat::Default, "R32_SFLOAT", false, 1, bytes, error))) {
 				postprocess::reportShaderFrameStatus(activePath, error);
 				return false;
 			}
 		}
-		if (!ensureTarget(displayInput, frame.viewportWidth, frame.viewportHeight, DXGI_FORMAT_B8G8R8A8_UNORM, false))
+		if (!ensureTarget(displayInput, frame.viewportWidth, frame.viewportHeight, DXGI_FORMAT_B8G8R8A8_UNORM, needsMipmaps))
 			return false;
 		D3D11_VIEWPORT viewport {};
 		viewport.Width = static_cast<float>(frame.viewportWidth);
@@ -827,9 +841,13 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		quad->draw(inputView, DX11Context::Instance()->getSamplers().getSampler(config::LinearInterpolation),
 				nullptr, x, y, w, h, frame.rotationPending);
 		unbindPixelShaderSource();
+		if (needsMipmaps) {
+			deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+			deviceContext->GenerateMips(displayInput.shaderView);
+		}
 		inputView = displayInput.shaderView;
 		originalView = inputView;
-		inputHasMipChain = false;
+		originalHasMipChain = inputHasMipChain = needsMipmaps;
 		passFrame.sourceWidth = frame.viewportWidth;
 		passFrame.sourceHeight = frame.viewportHeight;
 		originalWidth = passFrame.sourceWidth;
@@ -855,8 +873,9 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		composedDisplayInput = true;
 		return true;
 	};
-	if (programs.front().pass.composeDisplayInput && !composeDisplayInput())
+	if (programs.front().pass.composeDisplayInput && !composeDisplayInput(programs.front().inputNeedsMipmaps))
 		return false;
+	const bool sourceNeedsMipmaps = programs.front().inputNeedsMipmaps && !inputHasMipChain;
 	if (targets.size() != programs.size())
 		targets.resize(programs.size());
 	postprocess::ShaderFrameInfo sizeFrame = frame;
@@ -869,16 +888,16 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		return false;
 	}
-	if (std::any_of(programs.begin(), programs.end(), [](const Program& program) {
-			return program.pass.composeDisplayInput;
-		}) && postprocess::shouldComposeDisplayInput(frame, false)
+	const auto firstDisplayPass = std::find_if(programs.begin(), programs.end(),
+			[](const Program& program) { return program.pass.composeDisplayInput; });
+	if (firstDisplayPass != programs.end() && postprocess::shouldComposeDisplayInput(frame, false)
 			&& !postprocess::accumulateShaderTargetBytes(frame.viewportWidth, frame.viewportHeight,
-					postprocess::ShaderTargetFormat::Default, {}, false, 1, targetBytes, targetBudgetError)) {
+					postprocess::ShaderTargetFormat::Default, {}, firstDisplayPass->inputNeedsMipmaps, 1, targetBytes, targetBudgetError)) {
 		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
 		WARN_LOG(RENDERER, "%s", targetBudgetError.c_str());
 		return false;
 	}
-	if (programs.front().pass.useMipmaps
+	if (sourceNeedsMipmaps
 			&& !postprocess::accumulateShaderTargetBytes(passFrame.sourceWidth, passFrame.sourceHeight,
 					postprocess::ShaderTargetFormat::Default, {}, true, 1, targetBytes, targetBudgetError)) {
 		postprocess::reportShaderFrameStatus(activePath, targetBudgetError);
@@ -977,12 +996,22 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		sourceHistory[currentSourceTarget].renderedFrame = frame.frameCount;
 		sourceHistory[currentSourceTarget].initialized = true;
 	}
+	if (sourceNeedsMipmaps) {
+		if (!prepareMipmappedSource(inputView, passFrame.sourceWidth, passFrame.sourceHeight, inputView)) {
+			const std::string error = "DirectX 11 post-processing mip source creation failed.";
+			postprocess::reportShaderFrameStatus(activePath, error);
+			WARN_LOG(RENDERER, "%s", error.c_str());
+			return false;
+		}
+		inputHasMipChain = true;
+	}
 	for (size_t index = 0; index < programs.size(); ++index) {
 		Program& program = programs[index];
-		if (program.pass.composeDisplayInput && !composeDisplayInput())
+		if (program.pass.composeDisplayInput && !composeDisplayInput(program.inputNeedsMipmaps))
 			return false;
 		if (index == 0 || program.pass.layerIndex != programs[index - 1].pass.layerIndex) {
 			originalView = inputView;
+			originalHasMipChain = inputHasMipChain;
 			originalWidth = passFrame.sourceWidth;
 			originalHeight = passFrame.sourceHeight;
 		}
@@ -993,15 +1022,6 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		const uint32_t outputCount = program.pass.outputs.empty() ? 1u : static_cast<uint32_t>(program.pass.outputs.size());
 		PassTargets& passTargets = targets[index];
 		Target& target = passTargets[0][currentTarget];
-		if (program.pass.useMipmaps && !inputHasMipChain) {
-			if (!prepareMipmappedSource(inputView, passFrame.sourceWidth, passFrame.sourceHeight, inputView)) {
-				error = "DirectX 11 post-processing mip source creation failed.";
-				postprocess::reportShaderFrameStatus(activePath, error);
-				WARN_LOG(RENDERER, "%s", error.c_str());
-				return false;
-			}
-			inputHasMipChain = true;
-		}
 		D3D11_VIEWPORT viewport {};
 		viewport.Width = static_cast<float>(outputWidth);
 		viewport.Height = static_cast<float>(outputHeight);
@@ -1123,6 +1143,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 				break;
 			case postprocess::ShaderInputKind::Original:
 				view = originalView;
+				resourceHasMipmaps = originalHasMipChain;
 				break;
 			case postprocess::ShaderInputKind::Depth:
 				view = effectiveDepthView;
@@ -1234,6 +1255,10 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 		}
 
 		unbindPixelShaderSource(static_cast<UINT>(program.resourceViews.size()));
+		if (program.pass.renderState.generateMipmaps
+				&& std::find(program.outputNeedsMipmaps.begin(), program.outputNeedsMipmaps.end(), true)
+						!= program.outputNeedsMipmaps.end())
+			deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
 		for (uint32_t output = 0; output < outputCount; ++output) {
 			if (program.outputNeedsMipmaps[output] && program.pass.renderState.generateMipmaps)
 				deviceContext->GenerateMips(passTargets[output][currentTarget].shaderView);

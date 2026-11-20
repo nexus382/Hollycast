@@ -76,6 +76,7 @@ struct Boxart { void resumePlaytime() {} void startPlaytime(const std::string&, 
 struct GamepadDevice { static void load_system_mappings() {} };
 namespace vgamepad { void startGame() {} }
 namespace SettingsNew { void stopTextureFilterLiveTune() {} void closeShaderLiveTune() {} }
+namespace postprocess { unsigned shaderReloads = 0; void requestShaderChainReload() { ++shaderReloads; } }
 void markLibraryGameBooted(const std::string&, const std::string&) {}
 '''
 stdincludes = overlay[overlay.index('#include <algorithm>'):overlay.index('namespace performance_overlay')]
@@ -135,7 +136,9 @@ int main() {
     assert(metrics.gameFps > 58 && metrics.gameFps < 60 && metrics.hostProcessCpuHistory.count == 3);
     std::cout << "PASS VBlank lifecycle: " << cpuQueries << " host queries per collector, FPS=" << metrics.gameFps << ", CPU graph samples=" << metrics.hostProcessCpuHistory.count << '\n';
     for (auto event : {Event::Pause, Event::Resume, Event::Terminate, Event::Start}) {
+        const auto previousShaderReloads = postprocess::shaderReloads;
         emuEventCallback(event, nullptr);
+        assert(postprocess::shaderReloads == previousShaderReloads + (event == Event::Start || event == Event::Terminate));
         assert(!isCollectionEnabled());
         drawSample();
         assert(metrics.gameFps == 0 && metrics.hostProcessCpuHistory.count == 0);
