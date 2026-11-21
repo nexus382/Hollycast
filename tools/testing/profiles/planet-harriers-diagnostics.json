@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "planet-harriers-game-renderer-diagnostics-v1",
+  "platform": "hikaru",
+  "game_id": "pharrier",
+  "content_sha256": "eb390ab90d80f4e48f2059e4441a5f834343a4d9d1d5725b9c7907e2873f93b7",
+  "rom_crc32": [1029009668, 1904040450, 2564174796],
+  "watches": [
+    { "name": "texture_update_end_raw", "region": "master_ram", "offset": 2609340, "type": "s32", "unit": "guest_raw" },
+    { "name": "command_analysis_end_raw", "region": "master_ram", "offset": 2609344, "type": "s32", "unit": "guest_raw" },
+    { "name": "polygon_output_end_raw", "region": "master_ram", "offset": 2609348, "type": "s32", "unit": "guest_raw" },
+    { "name": "plot_end_raw", "region": "master_ram", "offset": 2609352, "type": "s32", "unit": "guest_raw" },
+    { "name": "total_primitive_count", "region": "master_ram", "offset": 2944708, "type": "s32", "unit": "count" },
+    { "name": "opacity_count", "region": "master_ram", "offset": 61744, "type": "s32", "unit": "count" },
+    { "name": "shadow_a_count", "region": "master_ram", "offset": 61748, "type": "s32", "unit": "count" },
+    { "name": "shadow_b_count", "region": "master_ram", "offset": 61752, "type": "s32", "unit": "count" },
+    { "name": "transparency_count", "region": "master_ram", "offset": 61756, "type": "s32", "unit": "count" },
+    { "name": "background_count", "region": "master_ram", "offset": 61760, "type": "s32", "unit": "count" },
+    { "name": "translucency_count", "region": "master_ram", "offset": 61764, "type": "s32", "unit": "count" },
+    { "name": "set_primitive_count", "region": "master_ram", "offset": 61768, "type": "s32", "unit": "count" },
+    { "name": "render_primitive_count", "region": "master_ram", "offset": 61772, "type": "s32", "unit": "count" },
+    { "name": "texture_header_count", "region": "master_ram", "offset": 61776, "type": "s32", "unit": "count" },
+    { "name": "material_count", "region": "master_ram", "offset": 61780, "type": "s32", "unit": "count" },
+    { "name": "light_count", "region": "master_ram", "offset": 61784, "type": "s32", "unit": "count" }
+  ]
+}

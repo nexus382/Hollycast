@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 namespace phone_vmu {
@@ -171,7 +172,7 @@ canvas[height="40"] + .lcd-icons { display: none; }
   box-shadow: none;
   color: var(--print);
 }
-.system button { width: 48%; height: 76px; }
+.system button { flex: 1; min-width: 44px; height: 76px; }
 .key-label { display: block; pointer-events: none; }
 .system .key-label {
   position: absolute;
@@ -292,6 +293,10 @@ canvas[height="40"] + .lcd-icons { display: none; }
 }
 #controls[hidden], button[hidden], label[hidden] { display: none; }
 #controls p, #controls details { margin: 0; width: 100%; font-size: 14px; line-height: 1.5; }
+#vmu-invite-label { width: 100%; }
+#vmu-invite { display: block; width: 100%; }
+#vmu-invite-qr { width: min(100%, 220px, 42dvh); height: auto; background: white; }
+#vmu-invite-qr[hidden] { display: none; }
 #status {
   position: fixed;
   z-index: 1;
@@ -353,7 +358,7 @@ body.lcd-only canvas { width: 100%; height: 100%; }
   .screen-bezel { padding: 11px; }
   .hardware { grid-area: 1 / 2 / 3 / 3; }
   .dpad { width: 132px; top: 56%; }
-  .system { top: 10%; width: 48%; }
+  .system { top: 10%; width: 54%; }
   .system button { height: 70px; }
   .system .key-label { font-size: 13px; }
   .system button::before { width: 25px; height: 25px; top: 26px; }
@@ -382,6 +387,7 @@ R"HTML(<svg viewBox="0 0 64 64" fill="none"><path d="M32.00,30.80 L32.13,30.63 L
 <div class="system">
 <button type="button" data-key="7" aria-label="Sleep or wake VMU"><span class="key-label">Sleep</span></button>
 <button type="button" data-key="6" aria-label="VMU Mode"><span class="key-label">Mode</span></button>
+<button id="ff" type="button" aria-label="Toggle selected mini-game speed" aria-pressed="false" disabled><span class="key-label">FF</span></button>
 </div>
 <div class="pad"><div class="dpad" role="group" aria-label="Directional pad">
 <svg class="dpad-face" viewBox="0 0 100 100" aria-hidden="true">
@@ -400,29 +406,50 @@ R"HTML(<svg viewBox="0 0 64 64" fill="none"><path d="M32.00,30.80 L32.13,30.63 L
 <p id="status" role="status" aria-live="polite">Connecting to Hollycast…</p>
 <button id="menu" type="button" aria-controls="controls" aria-expanded="true">Controls</button>
 <aside id="controls" aria-label="VMU controls">
+<p id="vmu-link-status" role="status" hidden></p>
+<svg id="vmu-invite-qr" role="img" aria-label="Scan to join the VMU link" shape-rendering="crispEdges" hidden><path id="vmu-invite-path" fill="black"/></svg>
+<label id="vmu-invite-label" hidden>Copy invite <input id="vmu-invite" type="url" readonly></label>
+<button id="close-vmu-link" type="button" hidden>Disconnect VMU link</button>
 <label for="slot">VMU <select id="slot"><option value="0">A1</option><option value="1">A2</option><option value="2">B1</option><option value="3">B2</option><option value="4">C1</option><option value="5">C2</option><option value="6">D1</option><option value="7">D2</option></select></label>
 <button id="layout" type="button">LCD only</button><button id="rotate" type="button" aria-pressed="false">Rotate LCD</button><button id="fullscreen" type="button" hidden>Fullscreen</button>
 <button id="awake" type="button" aria-pressed="true">Keep awake: On</button>
 <p id="awake-status" role="status">Tap the VMU to keep this screen awake.</p>
 <button id="play" type="button">Play mini-game on this card</button>
 <label class="file">Open VMU game<input id="game-file" type="file" accept=".vms,.bin,.vmu"></label>
-<button id="mirror" type="button" hidden>Dreamcast display</button><button id="restart" type="button" hidden>Restart mini-game</button><button id="download" type="button" hidden>Download VMU copy</button>
+<button id="mirror" type="button" hidden>Return to Dreamcast</button><button id="restart" type="button" hidden>Restart mini-game</button><button id="download" type="button" hidden>Download VMU copy</button>
+<button id="create-vmu-link" type="button" hidden>Create VMU link</button>
+<button id="join-vmu-link" type="button" hidden>Join VMU link</button>
+<p id="sync-status" role="status" aria-live="polite"></p>
+<div id="conflict" hidden><p id="conflict-text"></p><button id="keep-phone" type="button">Keep my phone copy</button> <button id="use-desktop" type="button">Use Hollycast copy</button></div>
+<details id="card-manager"><summary>Card files</summary><p id="card-summary">Open a mini-game to manage its card.</p><div id="card-files"></div><label>Import as <select id="card-import-type"><option value="data" selected>Save data</option><option value="game">Mini-game</option></select></label><label class="file">Import file<input id="card-import" type="file" accept=".vms,.bin"></label></details>
 <button id="sound" type="button" aria-pressed="false">Sound off</button>
+<label for="speed">FF speed <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1× (Normal)</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="5">5×</option><option value="6">6×</option><option value="7">7×</option><option value="8">8×</option><option value="9">9×</option><option value="10">10×</option></select></label>
+<p>FF toggles between the selected mini-game speed and normal speed.</p>
 <label class="file">Load VMU BIOS<input id="bios-file" type="file" accept=".bin"></label>
-<p>Mode opens the card's mini-game. The D-pad and A/B control the VMU game. Mini-games run on a copy; download it to keep your progress.</p>
+<p>Mode opens the card's mini-game. Progress syncs to Hollycast automatically. Choose Return to Dreamcast to reconnect the card. Games opened from your phone stay local.</p>
 <p>Game files: .vms, .bin or .vmu. Optional BIOS: your own 64 KiB VMU firmware dump.</p>
 <details><summary>Credits and license</summary>VMU core: Bucanero's JavaScript port of Marcus Comstedt's SoftVMS 1.10. <a href="vmu-core.js">Source</a> · <a href="vmu-core.LICENSE">GPLv3 license</a>. Not cycle exact; some games may need the original VMU BIOS. Keep-awake media: Rich Tibbett's <a href="wake-media.js">NoSleep.js assets and MIT license</a>.</details>
 <button id="hide" type="button">Hide controls</button></aside>
-<script src="vmu-core.js"></script><script src="vmu-player.js"></script><script src="wake-media.js"></script>
+<script src="vmu-core.js"></script><script src="vmu-player.js"></script><script src="vmu-sync.js"></script><script src="vmu-link.js"></script><script src="wake-media.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
 const lcd=$('lcd'),ctx=lcd.getContext('2d'),slot=$('slot'),status=$('status'),controls=$('controls'),menu=$('menu');
 let controlsTimeout,bios=null,mirrorSleeping=false,loading=false,audio,oscillator,gain,muted=true;
-function hideControls(){controls.hidden=true;menu.setAttribute('aria-expanded','false');document.body.classList.add('controls-hidden');}
-function showControls(){controls.hidden=false;menu.setAttribute('aria-expanded','true');document.body.classList.remove('controls-hidden');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(hideControls,4000);}
+const frameEtags=new Map();
+function hideControls(){clearTimeout(controlsTimeout);controls.hidden=true;menu.setAttribute('aria-expanded','false');document.body.classList.add('controls-hidden');}
+function keepControlsOpen(){
+ clearTimeout(controlsTimeout);
+ controlsTimeout=setTimeout(hideControls,$('vmu-invite-label').hidden?4000:10000);
+}
+function showControls(){
+ const reopening=controls.hidden;
+ controls.hidden=false;menu.setAttribute('aria-expanded','true');document.body.classList.remove('controls-hidden');
+ if(reopening)controls.scrollTop=0;
+ keepControlsOpen();
+}
 function notice(message,connected=false){status.textContent=message;document.body.classList.toggle('connected',connected);}
-function blank(height=32){if(lcd.height!==height)lcd.height=height;ctx.fillStyle='#9eb3a5';ctx.fillRect(0,0,48,height);}
+function blank(height=32){frameEtags.delete(slot.value);if(lcd.height!==height)lcd.height=height;ctx.fillStyle='#9eb3a5';ctx.fillRect(0,0,48,height);}
 function draw(pixels,height){
  if(lcd.height!==height)lcd.height=height;
  const image=ctx.createImageData(48,height);
@@ -444,6 +471,93 @@ function startAudio(){
  }catch(_){audio=oscillator=gain=null;}
 }
 const player=new PhoneVmuPlayer(VMS,pixels=>draw(pixels,40),message=>notice(message,player.active&&!player.sleeping&&!VMS.halted),tone);
+let selectedSpeed=1,speedEnabled=false,currentGame='',checkoutRevision='',cardEdited=false,resolvingConflict=false;
+// Per-game setup (speed, sound, FF) and the BIOS persist in browser storage,
+// keyed by the VMU game entry or by the imported file name.
+let localStore=null;try{localStore=window.localStorage;}catch(_){}
+function storeGet(key){try{return localStore?.getItem(key);}catch(_){return null;}}
+function storeSet(key,value){try{localStore?.setItem(key,value);}catch(_){}}
+function encode64(bytes){let text='';for(const b of bytes)text+=String.fromCharCode(b);return btoa(text);}
+function decode64(text){return Uint8Array.from(atob(text),c=>c.charCodeAt(0));}
+function gameSettingsKey(bytes,name){
+ if(bytes.length===131072){
+  const game=PhoneVmuPlayer.listFiles(bytes)?.files.find(file=>file.game&&file.first===0);
+  if(game){
+   const contents=PhoneVmuPlayer.extractFile(bytes,game);
+   if(contents?.length>=0x240){let hash=2166136261;for(const byte of contents.subarray(0x230,0x240))hash=Math.imul(hash^byte,16777619);return 'card:'+game.name+':'+contents.length+':'+(hash>>>0).toString(16);}
+  }
+ }
+ return 'file:'+name.toLowerCase();
+}
+function saveGameSettings(){
+ if(!currentGame)return;
+ storeSet('hollycast-vmu-game:'+currentGame,JSON.stringify({speed:selectedSpeed,sound:!muted,ff:speedEnabled}));
+}
+function applyGameSettings(key){
+ selectedSpeed=1;speedEnabled=false;muted=true;$('speed').value='1';$('sound').textContent='Sound off';$('sound').setAttribute('aria-pressed','false');tone(-1);setSpeedEnabled(false);
+ try{
+  const saved=JSON.parse(storeGet('hollycast-vmu-game:'+key)||'null');if(!saved)return;
+  if([0.25,0.5,1,2,3,4,5,6,7,8,9,10].includes(saved.speed)){selectedSpeed=saved.speed;$('speed').value=String(saved.speed);}
+  muted=!saved.sound;$('sound').textContent=muted?'Sound off':'Sound on';$('sound').setAttribute('aria-pressed',String(!muted));
+  setSpeedEnabled(!!saved.ff&&saved.speed!==1);
+ }catch(_){}
+}
+try{const savedBios=storeGet('hollycast-vmu-bios');if(savedBios){const stored=decode64(savedBios);if(stored.length===65536)bios=stored;}}catch(_){bios=null;}
+function setSpeedEnabled(enabled){
+ speedEnabled=enabled&&selectedSpeed!==1;player.setSpeed(speedEnabled?selectedSpeed:1);
+ $('ff').setAttribute('aria-pressed',String(speedEnabled));$('ff').classList.toggle('pressed',speedEnabled);
+}
+let progressStorage=null;try{progressStorage=window.sessionStorage;}catch(_){}
+)HTML"
+R"HTML(
+const readInviteRoom=()=>window.location?.hash?.match(/^#vmu-link=([0-9a-f]{32})$/)?.[1];
+let inviteRoom=readInviteRoom();
+const pairingUrl=window.location?.href?.split('#')[0];
+const progressKey='hollycast-vmu-progress:'+pairingUrl;
+// New invite tabs can inherit sessionStorage from the host. Keep their cards
+// separate and retain the owning tab's recovery key across same-page invites.
+let recoveryRoom=window.history?.state?.vmuRecoveryRoom??inviteRoom;
+const recoveryKey=()=>progressKey+(recoveryRoom?'#vmu-link='+recoveryRoom:'');
+const cardSync=new PhoneVmuSync(VMS,message=>{$('sync-status').textContent=message;updateMode();if(cardSync.blocked)showConflict();},progressStorage,recoveryKey());
+function changeInvite(room,consumed=false){
+ inviteRoom=room;
+ if(!cardSync.owner){recoveryRoom=room;cardSync.key=recoveryKey();}
+ window.history?.replaceState({...window.history.state,vmuRecoveryRoom:recoveryRoom||''},'',consumed?pairingUrl:window.location.href);
+}
+let linkTimer=null;
+const vmuLink=new PhoneVmuLink(VMS,message=>{
+ $('vmu-link-status').textContent=message;
+ $('vmu-link-status').hidden=false;
+ if(vmuLink.state!=='waiting'){
+  $('vmu-invite-label').hidden=true;
+  $('vmu-invite').value='';
+  $('vmu-invite-qr').setAttribute('hidden','');
+  $('vmu-invite-path').removeAttribute('d');
+ }
+ if(vmuLink.state==='linked'){
+  setSpeedEnabled(false);
+  if(inviteRoom)changeInvite(undefined,true);
+ }
+ controls.scrollTop=0;
+ updateLinkTimer();updateMode();showControls();
+},()=>player.applyInput());
+function linkAvailable(){
+ return player.active&&!player.sleeping&&!VMS.halted&&!cardOpening()&&!cardSync.returning
+  &&!cardSync.blocked&&!cardSync.resolution&&!cardEdited&&!resolvingConflict;
+}
+function closeVmuLink(){if(vmuLink.state!=='closed')vmuLink.close('VMU link disconnected.');}
+function cardEditsAllowed(){return vmuLink.state==='closed'&&player.active&&!cardOpening()&&!cardSync.returning&&!cardSync.blocked&&!cardSync.resolution&&!resolvingConflict;}
+function miniGamePaused(){
+ return (document.hidden&&vmuLink.state!=='linked')||cardOpening()||cardSync.returning||cardEdited
+  ||cardSync.resolution||resolvingConflict;
+}
+function updateLinkTimer(){
+ // A second tab on the same device can be hidden. Animation frames stop
+ // there, so use a timer while that tab is actively participating in a link.
+ if(document.hidden&&vmuLink.state==='linked'){
+  if(linkTimer===null)linkTimer=setInterval(()=>tickMiniGame(performance.now()),50);
+ }else if(linkTimer!==null){clearInterval(linkTimer);linkTimer=null;}
+}
 let keepAwake=true,wakeLock=null,wakeVideo=null,wakePending=false,wakeGeneration=0,wakeInteracted=false,pageVisible=true;
 const awakeStatus=$('awake-status');
 function wantsWakeLock(){return keepAwake&&pageVisible&&!document.hidden&&!mirrorSleeping&&!(player.active&&player.sleeping);}
@@ -490,30 +604,54 @@ async function keepScreenAwake(){
  }
 }
 function wakeInteraction(){wakeInteracted=true;keepScreenAwake();}
-document.addEventListener('pointerdown',wakeInteraction);
+document.addEventListener('pointerdown',event=>{
+ wakeInteraction();
+ if(event.target.closest('#controls, #menu'))return;
+ // Handle LCD opening and outside dismissal together so one tap cannot do both.
+ if(!controls.hidden)hideControls();else if(event.target===lcd)showControls();
+});
 $('awake').addEventListener('click',()=>{keepAwake=!keepAwake;$('awake').textContent=keepAwake?'Keep awake: On':'Keep awake: Off';$('awake').setAttribute('aria-pressed',String(keepAwake));wakeInteracted=true;keepScreenAwake();showControls();});
 const hardware=Array.from(document.querySelectorAll('[data-key]')),held=new Map();
 function releaseAll(){held.clear();player.releaseAll();hardware.forEach(button=>button.classList.remove('pressed'));}
-function updateMode(){slot.disabled=player.active;for(const id of ['mirror','restart','download'])$(id).hidden=!player.active;$('play').hidden=player.active;hardware.forEach(button=>{button.disabled=+button.dataset.key<6&&!player.active;});}
-function openGame(bytes,name){releaseAll();player.load(bytes,name,bios);mirrorSleeping=false;updateMode();showControls();startAudio();keepScreenAwake();}
+)HTML"
+R"HTML(
+function updateMode(){const resolving=!!cardSync.resolution||resolvingConflict;slot.disabled=player.active||loading;$('game-file').disabled=!!cardSync.owner||loading||cardEdited;$('mirror').disabled=cardOpening()||cardSync.returning||resolving;$('restart').disabled=cardOpening()||cardSync.returning||cardEdited||resolving;$('ff').disabled=vmuLink.state==='linked'||!player.active||cardOpening()||cardSync.returning||cardEdited||resolving||selectedSpeed===1;$('bios-file').disabled=cardOpening()||cardSync.returning||cardSync.blocked||cardEdited||resolving;$('card-import').disabled=!cardEditsAllowed();$('card-import-type').disabled=!cardEditsAllowed();$('keep-phone').disabled=!cardSync.blocked||resolving;$('use-desktop').disabled=!cardSync.blocked||resolving;if(!player.active&&speedEnabled)setSpeedEnabled(false);for(const id of ['mirror','restart','download'])$(id).hidden=!player.active;$('play').hidden=player.active;hardware.forEach(button=>{button.disabled=cardEdited||resolving||cardOpening()||cardSync.returning||(+button.dataset.key<6&&!player.active);});document.querySelectorAll('[data-card-edit]').forEach(button=>{button.disabled=!cardEditsAllowed();});
+ const ready=linkAvailable()&&vmuLink.state==='closed';
+ $('mirror').textContent=cardSync.owner||loading?'Return to Dreamcast':'Close local game';
+ $('create-vmu-link').hidden=!ready||!!inviteRoom;
+ $('join-vmu-link').hidden=!ready||!inviteRoom;
+ $('close-vmu-link').hidden=vmuLink.state==='closed';
+}
+function openGame(bytes,name,settingsKey=gameSettingsKey(bytes,name)){closeVmuLink();cardEdited=false;releaseAll();player.load(bytes,name,bios);currentGame=settingsKey;applyGameSettings(settingsKey);mirrorSleeping=false;updateMode();renderCardFiles();showControls();startAudio();keepScreenAwake();}
+function returnToDisplay(){closeVmuLink();cardSync.returned=false;releaseAll();player.stop();cardEdited=false;mirrorSleeping=false;updateMode();blank();notice('Connecting to Hollycast…');showControls();keepScreenAwake();}
+function cardOpening(){return loading||cardSync.needsRecoveryLease||!!(cardSync.owner&&!cardSync.owner.ready);}
 async function playCard(){
 )HTML"
-R"HTML( if(loading)return;loading=true;$('play').disabled=true;notice('Opening the VMU mini-game…');
+R"HTML( if(loading||player.active)return;loading=true;updateMode();$('play').disabled=true;notice('Opening the VMU mini-game…');
  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);
  try{
   const response=await fetch('card/'+slot.value,{cache:'no-store',signal:controller.signal});
   if(!response.ok)throw new Error('No VMU card is available in this slot. Start a game or open a VMU game file.');
+  const revision=response.headers.get('ETag');if(!revision)throw new Error('Update Hollycast to enable automatic VMU progress sync.');
+  checkoutRevision=revision;
   openGame(new Uint8Array(await response.arrayBuffer()),'hollycast-'+slot.selectedOptions[0].text+'.bin');
- }catch(error){notice(error.name==='AbortError'?'Hollycast did not respond. Check the connection and try again.':error.message);showControls();}
- finally{clearTimeout(timeout);loading=false;$('play').disabled=false;}
+  await cardSync.checkout(slot.value,revision,PhoneVmuSync.token());
+ }catch(error){
+  // A checkout conflict before ownership starts closes the fresh copy; the
+  // resolution panel is only for mid-session conflicts with phone progress.
+  if(player.active&&!cardSync.owner){returnToDisplay();$('sync-status').textContent='The VMU mini-game did not start. '+error.message;}
+  notice(error.name==='AbortError'?'Hollycast did not respond. Check the connection and try again.':error.message);showControls();
+ }
+ finally{clearTimeout(timeout);loading=false;$('play').disabled=false;updateMode();}
 }
 function key(index,pressed,source){
+ if(cardOpening()||cardSync.returning||cardEdited||cardSync.resolution||resolvingConflict)return;
  let sources=held.get(index);if(!sources){sources=new Set();held.set(index,sources);}
  const was=sources.size>0;if(pressed)sources.add(source);else sources.delete(source);
  const down=sources.size>0;if(was===down)return;
  const button=hardware.find(button=>+button.dataset.key===index);if(button)button.classList.toggle('pressed',down);
  if(pressed)startAudio();
- if(index===7){if(pressed){if(player.active)player.sleep();else{mirrorSleeping=!mirrorSleeping;if(mirrorSleeping)blank();notice(mirrorSleeping?'Sleeping. Press Sleep to wake the VMU.':'VMU waking…');}keepScreenAwake();}}
+ if(index===7){if(pressed){if(player.active){closeVmuLink();player.sleep();cardSync.checkpoint();updateMode();}else{mirrorSleeping=!mirrorSleeping;blank();notice(mirrorSleeping?'Sleeping. Press Sleep to wake the VMU.':'VMU waking…');}keepScreenAwake();}}
  else if(index===6&&!player.active){if(pressed)playCard();}
  else player.key(index,down);
 }
@@ -530,32 +668,87 @@ document.addEventListener('keydown',event=>{
  wakeInteraction();
  if(event.defaultPrevented)return;
  if(event.key==='Escape'){hideControls();return;}if(event.key==='Tab'){showControls();return;}
- if(event.target.closest&&event.target.closest('#controls'))return;
+ if(event.target.closest?.('#controls, #menu, #ff'))return;
  const index=keys[event.key.length===1?event.key.toLowerCase():event.key];
  if(index!==undefined){event.preventDefault();if(!event.repeat)key(index,true,'key:'+event.code);}
 });
-document.addEventListener('keyup',event=>{if(event.defaultPrevented)return;const index=keys[event.key.length===1?event.key.toLowerCase():event.key];if(index!==undefined){event.preventDefault();key(index,false,'key:'+event.code);}});
-window.addEventListener('blur',()=>{releaseAll();tone(-1);});window.addEventListener('pagehide',()=>{pageVisible=false;releaseAll();tone(-1);keepScreenAwake();});
-window.addEventListener('pageshow',()=>{pageVisible=true;keepScreenAwake();});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){releaseAll();tone(-1);}keepScreenAwake();});
-lcd.addEventListener('pointerdown',showControls);menu.addEventListener('click',showControls);menu.addEventListener('focus',showControls);
-controls.addEventListener('pointerdown',showControls);controls.addEventListener('focusin',()=>clearTimeout(controlsTimeout));controls.addEventListener('focusout',()=>{if(!controls.hidden)showControls();});
+document.addEventListener('keyup',event=>{
+ const index=keys[event.key.length===1?event.key.toLowerCase():event.key],source='key:'+event.code;
+ if(!event.defaultPrevented&&held.get(index)?.has(source)){event.preventDefault();key(index,false,source);}
+});
+window.addEventListener('hashchange',()=>{
+ const nextRoom=readInviteRoom();
+ if(nextRoom===inviteRoom)return;
+ closeVmuLink();changeInvite(nextRoom);updateMode();
+});
+window.addEventListener('blur',()=>{releaseAll();tone(-1);});window.addEventListener('pagehide',()=>{pageVisible=false;closeVmuLink();releaseAll();tone(-1);cardSync.remember();keepScreenAwake();});
+window.addEventListener('pageshow',()=>{pageVisible=true;frameEtags.delete(slot.value);keepScreenAwake();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){releaseAll();tone(-1);if(!loading)cardSync.checkpoint();}else frameEtags.delete(slot.value);updateLinkTimer();keepScreenAwake();});
+menu.addEventListener('click',showControls);menu.addEventListener('focus',showControls);
+// Renew the idle deadline on interaction even when a field keeps focus.
+for(const event of ['pointerdown','focusin','keydown','scroll'])
+ controls.addEventListener(event,()=>{if(!controls.hidden)keepControlsOpen();});
 $('hide').addEventListener('click',hideControls);$('play').addEventListener('click',playCard);
-$('mirror').addEventListener('click',()=>{releaseAll();player.stop();mirrorSleeping=false;updateMode();blank();notice('Connecting to Hollycast…');showControls();keepScreenAwake();});
-$('restart').addEventListener('click',()=>{releaseAll();player.reset();showControls();keepScreenAwake();});
+$('mirror').addEventListener('click',async()=>{
+ if(!player.active||cardOpening()||cardSync.returning||cardSync.resolution||resolvingConflict)return;
+ if(!cardSync.owner&&!confirm('Close this local game? To keep your progress, cancel and choose Download VMU copy first.'))return;
+ closeVmuLink();releaseAll();$('mirror').disabled=true;
+ try{if(await cardSync.checkpoint(true))returnToDisplay();else showControls();}
+ finally{$('mirror').disabled=false;}
+});
+$('restart').addEventListener('click',()=>{if(cardOpening()||cardSync.returning||cardEdited||cardSync.resolution||resolvingConflict)return;closeVmuLink();releaseAll();player.reset();updateMode();showControls();keepScreenAwake();});
+$('create-vmu-link').addEventListener('click',async()=>{
+ if(!linkAvailable()||vmuLink.state!=='closed')return;
+ const room=PhoneVmuSync.token();
+ vmuLink.start(room,true);
+ const session=vmuLink.session;
+ if(!session||vmuLink.state!=='waiting')return;
+ $('vmu-invite').value=window.location.href.split('#')[0]+'#vmu-link='+room;
+ $('vmu-invite-label').hidden=false;
+ keepControlsOpen();
+ try{
+  const response=await fetch('link/qr/'+room);
+  if(!response.ok)return;
+  const {url,size,path}=await response.json();
+  if(vmuLink.session!==session||vmuLink.state!=='waiting')return;
+  const invite=$('vmu-invite');
+  if(typeof url==='string'&&url&&invite.value!==url)invite.value=url;
+  if(!Number.isInteger(size)||size<=0||typeof path!=='string'||!path)return;
+  const qr=$('vmu-invite-qr');
+  qr.setAttribute('viewBox',`-4 -4 ${size+8} ${size+8}`);
+  $('vmu-invite-path').setAttribute('d',path);
+  qr.removeAttribute('hidden');
+ }catch(_){/* Keep the copyable LAN invite if the QR is unavailable. */}
+});
+$('vmu-invite').addEventListener('focus',()=>$('vmu-invite').select());
+$('join-vmu-link').addEventListener('click',()=>{
+ if(inviteRoom&&linkAvailable()&&vmuLink.state==='closed')vmuLink.start(inviteRoom,false);
+});
+$('close-vmu-link').addEventListener('click',closeVmuLink);
 $('layout').addEventListener('click',()=>{const only=document.body.classList.toggle('lcd-only');$('layout').textContent=only?'Show buttons':'LCD only';showControls();});
 $('rotate').addEventListener('click',()=>{$('rotate').setAttribute('aria-pressed',String(lcd.classList.toggle('rotated')));showControls();});
-$('sound').addEventListener('click',()=>{muted=!muted;$('sound').textContent=muted?'Sound off':'Sound on';$('sound').setAttribute('aria-pressed',String(!muted));if(muted)tone(-1);else startAudio();showControls();});
+$('sound').addEventListener('click',()=>{muted=!muted;$('sound').textContent=muted?'Sound off':'Sound on';$('sound').setAttribute('aria-pressed',String(!muted));if(muted)tone(-1);else startAudio();saveGameSettings();showControls();});
+$('speed').addEventListener('change',()=>{selectedSpeed=Number($('speed').value);setSpeedEnabled(speedEnabled);updateMode();saveGameSettings();showControls();});
+$('ff').addEventListener('click',()=>{if($('ff').disabled)return;setSpeedEnabled(!speedEnabled);saveGameSettings();});
 slot.addEventListener('change',()=>{releaseAll();blank();notice('Connecting to VMU '+slot.selectedOptions[0].text+'…');showControls();});
 $('game-file').addEventListener('change',async event=>{
+ if(cardSync.owner||cardEdited||cardSync.blocked||cardSync.resolution||resolvingConflict){event.target.value='';return;}
  const file=event.target.files[0];if(!file)return;
+ loading=true;updateMode();
  try{if(!/\.(vms|bin|vmu)$/i.test(file.name)||file.size>131072)throw new Error('Choose a .vms game or a 128 KiB .bin/.vmu card.');openGame(new Uint8Array(await file.arrayBuffer()),file.name);}
- catch(error){notice(error.message);showControls();}event.target.value='';
+ catch(error){notice(error.message);showControls();}
+ finally{event.target.value='';loading=false;updateMode();}
 });
 $('bios-file').addEventListener('change',async event=>{
- const file=event.target.files[0];if(!file)return;
- try{if(file.size!==65536)throw new Error('A VMU BIOS must be exactly 64 KiB.');bios=new Uint8Array(await file.arrayBuffer());notice('VMU BIOS loaded for this tab. Open a mini-game to use it.');showControls();if(player.active){player.core.setBios(bios);player.reset();keepScreenAwake();}}
- catch(error){notice(error.message);showControls();}event.target.value='';
+ if(cardOpening()||cardSync.returning||cardSync.blocked||cardSync.resolution||cardEdited||resolvingConflict){event.target.value='';return;}
+ const file=event.target.files[0];event.target.value='';if(!file)return;
+ try{
+  if(file.size!==65536)throw new Error('A VMU BIOS must be exactly 64 KiB.');
+  const nextBios=new Uint8Array(await file.arrayBuffer());
+  if(cardOpening()||cardSync.returning||cardSync.blocked||cardSync.resolution||cardEdited||resolvingConflict)return;
+  closeVmuLink();bios=nextBios;storeSet('hollycast-vmu-bios',encode64(bios));notice('VMU BIOS loaded and remembered on this device. Open a mini-game to use it.');showControls();if(player.active){player.core.setBios(bios);player.reset();updateMode();keepScreenAwake();}
+ }
+ catch(error){notice(error.message);showControls();}
 });
 $('download').addEventListener('click',()=>{const url=URL.createObjectURL(new Blob([player.core.flash],{type:'application/octet-stream'}));const link=document.createElement('a');link.href=url;link.download='hollycast-vmu-copy.bin';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);showControls();});
 if(document.documentElement.requestFullscreen){
@@ -563,12 +756,82 @@ if(document.documentElement.requestFullscreen){
  $('fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch(_){notice('Fullscreen is unavailable in this browser.');}showControls();});
  document.addEventListener('fullscreenchange',()=>{$('fullscreen').textContent=document.fullscreenElement?'Exit fullscreen':'Fullscreen';});
 }
+)HTML"
+R"HTML(function showConflict(){
+ closeVmuLink();
+ let when='on this phone';
+ try{const saved=JSON.parse(progressStorage?.getItem(cardSync.key)||'null');if(saved?.savedAt)when='saved '+new Date(saved.savedAt).toLocaleTimeString();}catch(_){}
+ $('conflict-text').textContent='This VMU changed in Hollycast and on this phone. Phone copy: 128 KiB, '+when+'. Hollycast copy changed since checkout revision '+(checkoutRevision||'unknown')+'. Keeping the phone copy replaces the Hollycast card (a backup snapshot is kept first).';
+ $('conflict').hidden=false;showControls();
+}
+$('keep-phone').addEventListener('click',async()=>{
+ if(resolvingConflict||!cardSync.blocked)return;
+ resolvingConflict=true;updateMode();
+ try{if(!await cardSync.forceTakeover())throw new Error('The phone copy was not saved.');$('conflict').hidden=true;$('sync-status').textContent='Phone copy kept and synced to Hollycast.';}
+ catch(error){$('sync-status').textContent='Could not keep the phone copy. '+error.message;}
+ finally{resolvingConflict=false;updateMode();showControls();}
+});
+$('use-desktop').addEventListener('click',async()=>{
+ if(resolvingConflict||!cardSync.blocked)return;
+ resolvingConflict=true;updateMode();
+ try{
+  if(!await cardSync.discard())throw new Error('The phone copy was not discarded.');$('conflict').hidden=true;returnToDisplay();
+  $('sync-status').textContent='Phone copy discarded. Reopen the mini-game to use the Hollycast card.';
+ }catch(error){$('sync-status').textContent='Could not discard the phone copy. '+error.message;}
+ finally{resolvingConflict=false;updateMode();showControls();}
+});
+function renderCardFiles(){
+ const summary=$('card-summary'),list=$('card-files');list.textContent='';
+ if(!player.active){summary.textContent='Open a mini-game to manage its card.';return;}
+ const result=PhoneVmuPlayer.listFiles(player.core.flash);
+ if(!result){summary.textContent='This card has no readable VMU file system.';return;}
+ summary.textContent=result.files.length+' file(s), '+result.freeBlocks+' free blocks (of 200). Changes sync like game progress.';
+ if(cardEdited)summary.textContent+=' Card changed. Return to Dreamcast and reopen the mini-game before playing.';
+ for(const file of result.files){
+  const row=document.createElement('p');
+  const label=document.createElement('span');
+  label.textContent=file.name+' — '+(file.game?'Game':'Data')+', '+file.blocks+' block(s)  ';
+  const get=document.createElement('button');get.type='button';get.textContent='Export';
+  get.addEventListener('click',()=>{
+   const data=PhoneVmuPlayer.extractFile(player.core.flash,file);
+   if(!data){$('card-summary').textContent='This file has an invalid block chain and cannot be exported.';return;}
+   const url=URL.createObjectURL(new Blob([data],{type:'application/octet-stream'}));
+   const link=document.createElement('a');link.href=url;link.download=file.name+'.vms';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  const del=document.createElement('button');del.type='button';del.textContent='Delete';del.dataset.cardEdit='';del.disabled=!cardEditsAllowed();
+  del.addEventListener('click',async()=>{
+   if(!cardEditsAllowed()||!confirm('Delete '+file.name+' from this VMU card?')||!cardEditsAllowed())return;
+   if(PhoneVmuPlayer.deleteFile(player.core.flash,file)){cardEdited=true;releaseAll();tone(-1);updateMode();renderCardFiles();try{await cardSync.checkpoint();}catch(error){$('sync-status').textContent='Card changed on phone, but sync failed. '+error.message;}}
+   else $('card-summary').textContent='That file changed before it could be deleted. Reopen the card manager.';
+  });
+  row.append(label,get,document.createTextNode(' '),del);list.append(row);
+ }
+}
+$('card-import').addEventListener('change',async event=>{
+ const file=event.target.files[0];event.target.value='';if(!file||!player.active)return;
+ if(!cardEditsAllowed())return;
+ try{
+  const data=new Uint8Array(await file.arrayBuffer());
+  if(data.length===0||data.length>200*512)throw new Error('Choose a non-empty .vms or .bin file up to 100 KiB.');
+  if(!cardEditsAllowed())return;
+  const name=file.name.replace(/\.(vms|bin)$/i,'');
+  if(!PhoneVmuPlayer.importFile(player.core.flash,name,data,$('card-import-type').value==='game'))throw new Error('Not enough free blocks or directory space on this card.');
+  cardEdited=true;releaseAll();tone(-1);updateMode();renderCardFiles();
+  try{await cardSync.checkpoint();}catch(error){$('sync-status').textContent='Card changed on phone, but sync failed. '+error.message;}
+ }catch(error){$('card-summary').textContent=error.message;}
+ showControls();
+});
 async function poll(){
  let delay=player.active?1000:50;
+ if(player.active&&!loading)cardSync.checkpoint();
  if(!document.hidden){
   const selected=slot.value,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),2500);
   try{
-   const response=await fetch('frame/'+selected,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('Disconnected');
+   const known=frameEtags.get(selected);
+   const response=await fetch('frame/'+selected,{cache:'no-store',signal:controller.signal,headers:known?{'If-None-Match':known}:{}});
+   if(response.status===304){setTimeout(poll,delay);return;}
+   if(!response.ok)throw new Error('Disconnected');
+   const etag=response.headers.get('ETag');if(etag)frameEtags.set(selected,etag);else frameEtags.delete(selected);
    const bytes=new Uint8Array(await response.arrayBuffer());if(bytes.length!==193)throw new Error('Invalid frame');
    if(!player.active&&slot.value===selected&&!mirrorSleeping&&!loading){
     const active=bytes[0]!==0,pixels=new Uint8Array(48*32);
@@ -580,7 +843,55 @@ async function poll(){
  }else delay=500;
  setTimeout(poll,delay);
 }
-function animate(time){player.tick(time,document.hidden);requestAnimationFrame(animate);}
+function tickMiniGame(time){
+ if(cardSync.returned)returnToDisplay();
+ const paused=miniGamePaused();
+ if(vmuLink.state==='linked'){
+  if(!paused)vmuLink.tick(time);
+  if(VMS.halted)player.finishIfHalted();
+ }else player.tick(time,paused);
+ if(VMS.halted)closeVmuLink();
+}
+function animate(time){tickMiniGame(time);requestAnimationFrame(animate);}
+// Duplicated tabs inherit their opener's card. Let an active tab keep it.
+// If a suspended tab cannot answer, the server rejects writes under its old lease.
+let ownerChannel,recoveryProbe;
+try{ownerChannel=new BroadcastChannel(progressKey);}catch(_){}
+if(ownerChannel)ownerChannel.onmessage=({data})=>{
+ if(!data||typeof data.lease!=='string')return;
+ if(data.probe){
+  if(pageVisible&&cardSync.owner?.lease===data.lease)
+   ownerChannel.postMessage({lease:data.lease,busy:data.probe});
+ }else if(data.busy===vmuLink.client&&recoveryProbe?.lease===data.lease)recoveryProbe.finish(true);
+};
+async function recoverCard(){
+ const key=cardSync.key;
+ let lease;
+ try{lease=JSON.parse(progressStorage?.getItem(key)||'null')?.owner?.lease;}catch(_){}
+ if(!lease)return;
+ if(ownerChannel){
+  loading=true;
+  const busy=await new Promise(resolve=>{
+   const timer=setTimeout(()=>resolve(false),350);
+   recoveryProbe={lease,finish:inUse=>{clearTimeout(timer);resolve(inUse);}};
+   ownerChannel.postMessage({lease,probe:vmuLink.client});
+  });
+  recoveryProbe=null;loading=false;
+  if(key!==cardSync.key){updateMode();return recoverCard();}
+  if(busy){
+   try{progressStorage.removeItem(key);}catch(_){}
+   $('sync-status').textContent='This card is open in another tab. Choose a different VMU slot.';
+   updateMode();return;
+  }
+ }
+ const recovered=cardSync.restore();
+ if(recovered){
+  try{slot.value=cardSync.owner.slot;openGame(recovered,'recovered-vmu.bin');$('sync-status').textContent='Recovered phone progress. Reconnecting to Hollycast…';}
+  catch(_){$('sync-status').textContent='Phone progress could not be reopened. Keep this page open.';}
+ }
+ updateMode();
+}
+recoverCard();
 blank();updateMode();showControls();keepScreenAwake();poll();requestAnimationFrame(animate);
 </script></body></html>)HTML";
 }

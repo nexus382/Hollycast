@@ -116,9 +116,14 @@ TEST_F(LibraryImageTest, RefreshDiscardsPendingPixelsAndReplacesTheSamePath)
 	ImguiFileTexture(path).getId();
 	ImguiFileTexture::invalidateFileImages();
 	nextFrame();
+	// Loading a second image on the serial worker proves the stale read has
+	// finished, so Windows can reopen the original file for writing.
+	const auto next = writeImage("next.png");
+	ASSERT_NE(ImTextureID{}, waitForImage(ImguiFileTexture(next)));
+	EXPECT_EQ(0u, gpu->images.count(path));
 	writeImage("cover.png", 80);
 	waitForImage(ImguiFileTexture(path));
-	ASSERT_EQ(1u, gpu->images.size());
+	ASSERT_EQ(2u, gpu->images.size());
 	EXPECT_EQ(80, gpu->images.at(path).red);
 	writeImage("cover.png", 100, 16, 32);
 	ImguiFileTexture::invalidateFileImages();

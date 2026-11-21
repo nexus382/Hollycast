@@ -75,8 +75,9 @@ bool game_started = false;
 struct Boxart { void resumePlaytime() {} void startPlaytime(const std::string&, const std::string&) {} void checkpointPlaytime(bool) {} } boxart;
 struct GamepadDevice { static void load_system_mappings() {} };
 namespace vgamepad { void startGame() {} }
+namespace SettingsNew { void stopTextureFilterLiveTune() {} void closeShaderLiveTune() {} }
+namespace postprocess { unsigned shaderReloads = 0; void requestShaderChainReload() { ++shaderReloads; } }
 void markLibraryGameBooted(const std::string&, const std::string&) {}
-namespace SettingsNew { void stopTextureFilterLiveTune() {} }
 '''
 stdincludes = overlay[overlay.index('#include <algorithm>'):overlay.index('namespace performance_overlay')]
 declarations = overlay[overlay.index('namespace performance_overlay'):overlay.index('std::uint32_t visibleItems')]
@@ -97,7 +98,7 @@ for signature in ['bool isCollectionEnabled(', 'bool isPvrWorkRequested(',
                   'std::uint32_t getPresentationTimingEpoch(', 'void recordPresentedFrameAt(',
                   'void recordPresentedFrame(',
                   'void recordRenderedResolution(', 'void recordOutputViewport(', 'void reset(',
-                  'void recordSh4Vblank(', 'void recordPvrWork(', 'void recordPvrScene(',
+                  'void recordSh4Vblank(', 'void recordPvrWork(', 'void recordGuestFrame(', 'void recordPvrScene(',
                   'void recordRendererPass(', 'void recordPvrRenderSchedule(',
                   'void recordPvrFrameBudget(']:
     # Keep presentation intervals deterministic without sleeping between frames.
@@ -135,7 +136,9 @@ int main() {
     assert(metrics.gameFps > 58 && metrics.gameFps < 60 && metrics.hostProcessCpuHistory.count == 3);
     std::cout << "PASS VBlank lifecycle: " << cpuQueries << " host queries per collector, FPS=" << metrics.gameFps << ", CPU graph samples=" << metrics.hostProcessCpuHistory.count << '\n';
     for (auto event : {Event::Pause, Event::Resume, Event::Terminate, Event::Start}) {
+        const auto previousShaderReloads = postprocess::shaderReloads;
         emuEventCallback(event, nullptr);
+        assert(postprocess::shaderReloads == previousShaderReloads + (event == Event::Start || event == Event::Terminate));
         assert(!isCollectionEnabled());
         drawSample();
         assert(metrics.gameFps == 0 && metrics.hostProcessCpuHistory.count == 0);
@@ -163,6 +166,14 @@ int main() {
     assert(pvrScheduledRenderCycles == 1000 && pvrVideoFrameCycles == 2000);
     assert(rawRenderWidth == 640 && outputViewportWidth == 1440);
     std::cout << "PASS requested producers and RTT-excluded game FPS\n";
+    reset();
+    auditItems = Fps | RendererStats;
+    drawSample();
+    recordGuestFrame();
+    recordSh4Vblank();
+    assert(gameFrameCount == 1 && vblankCount == 1);
+    assert(rendererSceneCount == 0 && pvrPrimitiveCount == 0 && pvrVertexCount == 0);
+    std::cout << "PASS guest frame without fabricated PVR scene statistics\n";
     auditItems = PvrWork;
     drawSample();
     recordPvrWork(5000);

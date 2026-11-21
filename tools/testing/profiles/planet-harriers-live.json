@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "id": "planet-harriers-live-state-v1",
+  "platform": "hikaru",
+  "game_id": "pharrier",
+  "content_sha256": "eb390ab90d80f4e48f2059e4441a5f834343a4d9d1d5725b9c7907e2873f93b7",
+  "rom_crc32": [1029009668, 1904040450, 2564174796],
+  "watches": [
+    {
+      "name": "main_mode", "region": "master_ram", "offset": 2609416, "type": "u8",
+      "labels": { "1": "character_selection", "3": "game" }
+    },
+    { "name": "sub_mode_raw", "region": "master_ram", "offset": 2609417, "type": "u8" },
+    { "name": "player_position_x", "region": "master_ram", "offset": 2575692, "type": "f32", "unit": "guest_world" },
+    { "name": "player_position_y", "region": "master_ram", "offset": 2575696, "type": "f32", "unit": "guest_world" },
+    { "name": "player_position_z", "region": "master_ram", "offset": 2575700, "type": "f32", "unit": "guest_world" },
+    { "name": "player_energy", "region": "master_ram", "offset": 2576200, "type": "s16", "unit": "guest_energy" },
+    { "name": "player_stage_rate_raw", "region": "master_ram", "offset": 2576012, "type": "f32", "unit": "guest_raw" }
+  ]
+}

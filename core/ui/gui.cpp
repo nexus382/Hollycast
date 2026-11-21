@@ -32,6 +32,7 @@
 #include "network/net_handshake.h"
 #include "network/ice.h"
 #include "input/gamepad_device.h"
+#include "test_harness.h"
 #include "input/keyboard_device.h"
 #include "input/mouse.h"
 #include "readiness.h"
@@ -44,6 +45,11 @@
 #include "gui_font.h"
 #include "imgread/common.h"
 #include "emulator.h"
+#include "wsi/context.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/roms.h"
+#include "hw/hikaru/frontend.h"
+#endif
 #include "mainui.h"
 #include "lua/lua.h"
 #include "gui_chat.h"
@@ -75,6 +81,9 @@
 #include "vgamepad.h"
 #include "settings.h"
 #include "settings_new.h"
+#ifndef LIBRETRO
+#include "rend/postprocess/shader_chain.h"
+#endif
 #include "oslib/i18n.h"
 #include "gui_font.h"
 using namespace i18n;
@@ -256,6 +265,9 @@ static void emuEventCallback(Event event, void *)
 		break;
 	case Event::Start:
 		SettingsNew::stopTextureFilterLiveTune();
+		SettingsNew::closeShaderLiveTune();
+		// Renderer contexts can outlive a title, even when the shader paths match.
+		postprocess::requestShaderChainReload();
 		performance_overlay::reset();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
@@ -267,6 +279,8 @@ static void emuEventCallback(Event event, void *)
 		boxart.checkpointPlaytime(true);
 		GamepadDevice::load_system_mappings();
 		game_started = false;
+		SettingsNew::closeShaderLiveTune();
+		postprocess::requestShaderChainReload();
 		break;
 	case Event::Pause:
 		performance_overlay::reset();
@@ -412,6 +426,8 @@ void gui_requestStyleReload() { styleReloadRequested = true; }
 
 void gui_keyboard_input(u32 wc)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	ImGuiIO& io = ImGui::GetIO();
 	if (io.WantCaptureKeyboard)
 		io.AddInputCharacter(wc);
@@ -419,6 +435,8 @@ void gui_keyboard_input(u32 wc)
 
 void gui_keyboard_inputUTF8(const std::string& s)
 {
+	if (test_harness::controllerInputOwned())
+		return;
 	ImGuiIO& io = ImGui::GetIO();
 	if (io.WantCaptureKeyboard)
 		io.AddInputCharactersUTF8(s.c_str());
@@ -426,6 +444,11 @@ void gui_keyboard_inputUTF8(const std::string& s)
 
 void gui_keyboard_key(u8 keyCode, bool pressed)
 {
+	if (test_harness::controllerInputOwned())
+		return;
+#ifndef LIBRETRO
+	postprocess::setShaderHostKey(keyCode, pressed);
+#endif
 	if (!inited)
 		return;
 	ImGuiKey key = keycodeToImGuiKey(keyCode);
@@ -450,34 +473,53 @@ bool gui_mouse_captured() {
 	return io.WantCaptureMouse;
 }
 
-void gui_set_mouse_position(int x, int y, bool touchscreen)
+void gui_set_mouse_position(int x, int y, bool touchscreen, bool harnessInput)
 {
-	mouseX = std::round(x * settings.display.pointScale);
-	mouseY = std::round(y * settings.display.pointScale);
+	// Keep desktop activity outside disposable native sessions. The harness
+	// marks its own UI events explicitly; ordinary builds accept normal input.
+	if (test_harness::controllerInputOwned() && !harnessInput)
+		return;
+	// Native UI observations already use the framebuffer coordinates ImGui consumes.
+	const float scale = harnessInput ? 1.f : settings.display.pointScale;
+	mouseX = std::round(x * scale);
+	mouseY = std::round(y * scale);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 bool gui_is_menu_touch_target(float x, float y)
 {
 	// Reuse Android's gesture capture so virtual controls never consume panel taps.
-	return SettingsNew::textureFilterLiveTuneActive()
+	return SettingsNew::liveTuneActive()
 			|| (!ggpo::sessionHeldForLibrary()
 					&& (ggpo::reconnectSecondsRemaining() >= 0 || ggpo::reconnectUnpauseSecondsRemaining() >= 0))
 			|| GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
 			std::round(y * settings.display.pointScale));
 }
 
-void gui_set_mouse_button(int button, bool pressed, bool touchscreen)
+void gui_set_mouse_button(int button, bool pressed, bool touchscreen, bool harnessInput)
 {
+	if (test_harness::controllerInputOwned() && !harnessInput)
+		return;
 	if (pressed)
 		mouseButtons |= 1 << button;
 	else
 		mouseButtons &= ~(1 << button);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 void gui_set_mouse_wheel(float delta) {
+	if (test_harness::controllerInputOwned())
+		return;
 	mouseWheel += delta;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons, delta);
+#endif
 	mouseTouchscreen = false;
 }
 
@@ -506,22 +548,26 @@ static void gui_newFrame()
 
 	// shows a popup navigation window even in game because of the OSD
 	//io.AddKeyEvent(ImGuiKey_GamepadFaceLeft, ((kcode[0] & DC_BTN_X) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, ((kcode[0] & DC_BTN_B) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceUp, ((kcode[0] & DC_BTN_Y) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadFaceDown, ((kcode[0] & DC_BTN_A) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, ((kcode[0] & DC_DPAD_LEFT) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadRight, ((kcode[0] & DC_DPAD_RIGHT) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadUp, ((kcode[0] & DC_DPAD_UP) == 0));
-	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, ((kcode[0] & DC_DPAD_DOWN) == 0));
+	// A harness cabinet input must not also navigate the always-visible menu
+	// bar while playing. Explicit native UI keys/mouse remain independent, and
+	// controller navigation is available after opening the emulator menu.
+	const bool padNavigation = !test_harness::controllerInputOwned() || gui_is_open();
+	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, padNavigation && ((kcode[0] & DC_BTN_B) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadFaceUp, padNavigation && ((kcode[0] & DC_BTN_Y) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadFaceDown, padNavigation && ((kcode[0] & DC_BTN_A) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, padNavigation && ((kcode[0] & DC_DPAD_LEFT) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadRight, padNavigation && ((kcode[0] & DC_DPAD_RIGHT) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadUp, padNavigation && ((kcode[0] & DC_DPAD_UP) == 0));
+	io.AddKeyEvent(ImGuiKey_GamepadDpadDown, padNavigation && ((kcode[0] & DC_DPAD_DOWN) == 0));
 
 	float analog;
-	analog = joyx[0] < 0 ? -(float)joyx[0] / 32768.f : 0.f;
+	analog = padNavigation && joyx[0] < 0 ? -(float)joyx[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, analog > 0.1f, analog);
-	analog = joyx[0] > 0 ? (float)joyx[0] / 32768.f : 0.f;
+	analog = padNavigation && joyx[0] > 0 ? (float)joyx[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, analog > 0.1f, analog);
-	analog = joyy[0] < 0 ? -(float)joyy[0] / 32768.f : 0.f;
+	analog = padNavigation && joyy[0] < 0 ? -(float)joyy[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, analog > 0.1f, analog);
-	analog = joyy[0] > 0 ? (float)joyy[0] / 32768.f : 0.f;
+	analog = padNavigation && joyy[0] > 0 ? (float)joyy[0] / 32768.f : 0.f;
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, analog > 0.1f, analog);
 
 	// Emergency quit: Shift+Esc or Ctrl+Shift+Esc to force quit (bypasses save dialog)
@@ -645,6 +691,24 @@ void gui_open_settings()
 	else if (gui_state == GuiState::GameInfo)
 	{
 		gui_setState(GuiState::Main);
+	}
+}
+
+void gui_open_shader_settings()
+{
+	const LockGuard lock(guiMutex);
+	if (gui_state != GuiState::Closed || !game_started || settings.network.online
+			|| ggpo::active() || !achievements::canPause())
+		return;
+
+	try {
+		SettingsNew::stopTextureFilterLiveTune();
+		vgamepad::hide();
+		emu.stop();
+		SettingsNew::openTab(SettingsNew::SettingsTab::Shader);
+		gui_setState(GuiState::Settings);
+	} catch (const FlycastException& e) {
+		gui_stop_game(e.what());
 	}
 }
 
@@ -902,6 +966,9 @@ static void appendVectorData(void *context, void *data, int size)
 static void getScreenshot(std::vector<u8>& data, int width = 0)
 {
 	data.clear();
+	// Hikaru has its own presenter; the Dreamcast renderer retains unrelated
+	// pixels. Leave the optional thumbnail empty until that presenter supplies it.
+	if (settings.platform.isHikaru()) return;
 	std::vector<u8> rawData;
 	int height = 0;
 	if (renderer == nullptr || !renderer->GetLastFrame(rawData, width, height))
@@ -1163,6 +1230,15 @@ static void gui_display_commands()
 			if (IconButton(ICON_FA_TROPHY, T("Achievements"), ScaledVec2(buttonWidth, 50)).realize() && achievements::isActive())
 				gui_setState(GuiState::Achievements);
 		}
+#ifdef USE_HIKARU
+        if (hikaru::frontend::cardReaderAvailable()) {
+            if (ImGui::Button(T("Cards"), ScaledVec2(buttonWidth, 50))) ImGui::OpenPopup("HikaruCards");
+            if (ImGui::BeginPopup("HikaruCards")) {
+                GuiMenu::renderCardsMenu();
+                ImGui::EndPopup();
+            }
+        }
+#endif
 		// Barcode
 		if (card_reader::barcodeAvailable())
 		{
@@ -2372,6 +2448,12 @@ static GameBoxart getLibraryDisplayArtwork(const GameMedia& game, double animati
 	// standalone path for arcade scraping and local-only disc-header discovery.
 	art = game.arcade || !config::FetchBoxart
 		? boxart.getBoxartAndLoad(game, false) : boxart.getBoxart(game);
+#ifdef USE_HIKARU
+	// Cached artwork can retain a title from an older scanner. Use the
+	// current library title while keeping the cached artwork and metadata.
+	if (game.arcade && !game.name.empty() && hikaru::findGame(get_file_basename(game.fileName)))
+		art.name = game.name;
+#endif
 	const std::string localCoverOverride = boxart.getLibraryCoverMediaPath(game);
 	if (!localCoverOverride.empty())
 		art.boxartPath = localCoverOverride;
@@ -4855,10 +4937,10 @@ void gui_display_ui()
 	if (gui_state == GuiState::Settings)
 		SettingsNew::prepareControllerNavigation();
 	ImGui::NewFrame();
-	app_updates::draw(!game_started && (gui_state == GuiState::Main || gui_state == GuiState::Settings));
 	error_msg_shown = false;
 	bool gui_open = gui_is_open();
 	auto finishFrame = [&]() {
+		SettingsNew::renderShaderLoadingOverlay();
 		ImGui::Render();
 		gui_endFrame(gui_open);
 		uiThreadRunner.execTasks(std::chrono::steady_clock::now());
@@ -4881,6 +4963,9 @@ void gui_display_ui()
 		finishFrame();
 		return;
 	}
+	// The UI renders during the final fade, so wait until the splash is fully cleared.
+	if (!launchScreenPending)
+		app_updates::draw(!game_started && (gui_state == GuiState::Main || gui_state == GuiState::Settings));
 
 	// Render menu bar BEFORE any early returns.
 	// Hide it for the full-screen GameInfo screen on Android.
@@ -5054,8 +5139,9 @@ void gui_draw_osd()
 	if (!settings.raHardcoreMode)
 		lua::overlay();
 	SettingsNew::renderTextureFilterLiveTuneOverlay();
-	if (!SettingsNew::textureFilterLiveTuneActive())
+	if (!SettingsNew::liveTuneActive())
 		vgamepad::draw();
+	SettingsNew::renderShaderLiveTuneOverlay();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
 	app_updates::draw(false);
@@ -5066,6 +5152,7 @@ void gui_draw_osd()
 	vmu_window::drawInApp();
 #endif
 
+	SettingsNew::renderShaderLoadingOverlay();
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
 	if (openingHeldNetplayLibrary && ggpo::sessionHeldForLibrary())
@@ -5078,9 +5165,9 @@ void gui_draw_osd()
 	uiThreadRunner.execTasks(std::chrono::steady_clock::now());
 }
 
-void gui_display_osd() {
+void gui_display_osd(bool redrawGame) {
 	gui_draw_osd();
-	gui_endFrame(gui_is_open());
+	gui_endFrame(gui_is_open() || redrawGame);
 }
 
 void gui_display_profiler()
@@ -5143,6 +5230,16 @@ void gui_term()
 		librarySavestateCache.stop();
 		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
+#ifdef USE_HIKARU
+		// Hikaru may replace a GLES context when entering or leaving a game.
+		// Its old atlas must not survive that replacement through font globals.
+		if (settings.platform.isHikaru()
+				|| (GraphicsContext::Instance() != nullptr && GraphicsContext::Instance()->isHikaruContext()))
+		{
+			boldFont = largeFont = aboutAsciiFont = nullptr;
+			settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
+		}
+#endif
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
 		EventManager::unlisten(Event::Pause, emuEventCallback);
@@ -5223,7 +5320,7 @@ void gui_loadState(int slot)
 	{
 		// User feedback when load not allowed
 		WARN_LOG(COMMON, "Load state not allowed: network=%d, multiboard=%d",
-				 settings.network.online, settings.naomi.multiboard);
+				 settings.network.online.load(), settings.naomi.multiboard);
 		os_notify(T("Cannot load state during online play"), 3000);
 	}
 }
@@ -5328,6 +5425,8 @@ void gui_setState(GuiState newState)
 		resetLibraryGameInfoHover();
 	}
 	gui_state = newState;
+	if (newState != GuiState::Closed && newState != GuiState::Loading)
+		SettingsNew::closeShaderLiveTune();
 	if (newState == GuiState::Closed)
 	{
 		clearThumbnailCache();

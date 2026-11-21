@@ -26,6 +26,13 @@
 #include "hw/pvr/Renderer_if.h"
 #include "emulator.h"
 #include "dx11_driver.h"
+#include "dx11_quad.h"
+#ifdef USE_HIKARU
+#include "dx11_shader_chain.h"
+#include "hw/hikaru/frontend.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
+#endif
 #include "imgui_impl_dx11.h"
 #include "ui/performance_overlay.h"
 #include <dxgi1_6.h>
@@ -214,6 +221,13 @@ bool DX11Context::init(bool keepCurrentWindow)
 void DX11Context::term()
 {
 	NOTICE_LOG(RENDERER, "DX11 Context terminating");
+#ifdef USE_HIKARU
+	// Release native board resources before device loss/recreation or API switch.
+	if (settings.platform.isHikaru() || isHikaruContext())
+		hikaru::frontend::suspendGraphics();
+	resetHikaruPresentation();
+	externalQuad.reset();
+#endif
 	overlay.term();
 	gpuTimingActive = false;
 	gpuTimingAvailable = false;
@@ -374,6 +388,108 @@ void DX11Context::Present()
 	}
 }
 
+#ifdef USE_HIKARU
+void DX11Context::drawExternalFrame(unsigned sourceWidth, unsigned sourceHeight)
+{
+	if (!externalFrame || !renderTargetView)
+		return;
+	const int topInset = std::max(0, getScaledTopInset());
+	int width = settings.display.width;
+	int height = settings.display.height - topInset;
+	const bool preview = SettingsNew::shaderLiveTuneActive();
+	if (preview) {
+		const auto layout = SettingsNew::shaderPreviewLayout(width, settings.display.height, topInset);
+		width = layout.gameWidth;
+		height = layout.gameHeight;
+	}
+	if (width <= 0 || height <= 0)
+		return;
+	const D3D11_VIEWPORT viewport { 0.f, float(topInset), float(width), float(height), 0.f, 1.f };
+	if (!externalQuad) {
+		externalQuad = std::make_unique<Quad>();
+		externalQuad->init(pDevice, pDeviceContext, &shaders);
+	}
+	// Pause and menu redraws reuse the last completed frame without advancing a temporal shader.
+	const bool newFrame = sourceWidth != 0 && sourceHeight != 0;
+	if (newFrame) {
+		if (postprocess::hasConfiguredShaderSelection()) {
+			if (!externalShaderChain) {
+				externalShaderChain = std::make_unique<Dx11ShaderChain>();
+				externalShaderChain->init(pDevice, pDeviceContext, externalQuad.get());
+			}
+			postprocess::ShaderFrameInfo frame;
+			frame.sourceWidth = static_cast<int>(sourceWidth);
+			frame.sourceHeight = static_cast<int>(sourceHeight);
+			frame.viewportWidth = width;
+			frame.viewportHeight = height;
+			bool presentationTransformApplied = false;
+			externalShaderGeneration = postprocess::shaderChainReloadGeneration();
+			if (externalShaderChain->render(externalFrame, frame, externalShaderFrame, presentationTransformApplied,
+					externalDepth))
+				externalShaderViewport = viewport;
+			else
+				externalShaderFrame.reset();
+		}
+		else if (externalShaderChain) {
+			externalShaderChain->term();
+			externalShaderChain.reset();
+		}
+	}
+	pDeviceContext->OMSetRenderTargets(1, &renderTargetView.get(), nullptr);
+	pDeviceContext->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+	if (preview && newFrame) {
+		const FLOAT black[4] { 0.f, 0.f, 0.f, 1.f };
+		pDeviceContext->ClearRenderTargetView(renderTargetView, black);
+	}
+	// Hikaru has already fitted the game inside this canvas, including its borders.
+	pDeviceContext->RSSetViewports(1, &viewport);
+	const bool filtered = externalShaderFrame && viewport.Width == externalShaderViewport.Width
+			&& viewport.Height == externalShaderViewport.Height && viewport.TopLeftY == externalShaderViewport.TopLeftY
+			&& postprocess::hasConfiguredShaderSelection()
+			&& postprocess::shaderChainReloadGeneration() == externalShaderGeneration;
+	externalQuad->draw(filtered ? externalShaderFrame : externalFrame, samplers.getSampler(false));
+}
+
+bool DX11Context::hikaruNeedsSceneDepth() const
+{
+	return externalShaderChain && postprocess::hasConfiguredShaderSelection()
+			&& externalShaderGeneration == postprocess::shaderChainReloadGeneration()
+			&& externalShaderChain->needsSceneDepth();
+}
+
+void DX11Context::presentHikaruFrame(const ComPtr<ID3D11ShaderResourceView>& image, unsigned width, unsigned height,
+		const ComPtr<ID3D11ShaderResourceView>& depth)
+{
+	externalFrame = image;
+	externalDepth = image ? depth : ComPtr<ID3D11ShaderResourceView>{};
+	externalShaderFrame.reset();
+	if (!externalFrame)
+		return;
+	drawExternalFrame(width, height);
+	const bool previousOverlay = overlayOnly;
+	overlayOnly = true;
+	try {
+		gui_display_osd();
+	} catch (...) {
+		overlayOnly = previousOverlay;
+		throw;
+	}
+	overlayOnly = previousOverlay;
+	frameRendered = true;
+}
+
+void DX11Context::resetHikaruPresentation()
+{
+	externalFrame.reset();
+	externalDepth.reset();
+	externalShaderFrame.reset();
+	if (externalShaderChain) {
+		externalShaderChain->term();
+		externalShaderChain.reset();
+	}
+}
+#endif
+
 void DX11Context::EndImGuiFrame()
 {
 	if (pDevice && pDeviceContext && renderTargetView)
@@ -386,6 +502,11 @@ void DX11Context::EndImGuiFrame()
 			pDeviceContext->OMSetRenderTargets(1, &renderTargetView.get(), nullptr);
 			const FLOAT black[4] { 0.f, 0.f, 0.f, 1.f };
 			pDeviceContext->ClearRenderTargetView(renderTargetView, black);
+#ifdef USE_HIKARU
+			if (externalFrame)
+				drawExternalFrame();
+			else
+#endif
 			if (renderer != nullptr)
 				renderer->RenderLastFrame();
 		}

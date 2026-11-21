@@ -22,6 +22,12 @@ final class PlayAppUpdater {
     private static WeakReference<Activity> foreground = new WeakReference<>(null);
     private static volatile String snapshot = BuildConfig.GITHUB_UPDATES
             ? "{\"source\":\"github\"}" : "{\"source\":\"play\"}";
+    private static Runnable snapshotListener = () -> {};
+
+    static void observe(Runnable listener) {
+        snapshotListener = listener;
+        listener.run();
+    }
     // These fields are accessed only on the Android UI thread. Native rendering reads snapshot.
     private static boolean checking, launching;
     private static long revision;
@@ -37,6 +43,7 @@ final class PlayAppUpdater {
             value.put("availableCode", availableCode); value.put("installedCode", installedCode);
             value.put("installedName", installedName); value.put("error", error); value.put("message", message);
             snapshot = value.toString();
+            snapshotListener.run();
         } catch (org.json.JSONException e) { throw new IllegalStateException(e); }
     }
 

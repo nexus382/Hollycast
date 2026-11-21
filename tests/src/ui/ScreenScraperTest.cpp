@@ -248,6 +248,103 @@ TEST_F(ScreenScraperTest, FilenamePunctuationAndWholeWordSearchRecoverPreviously
 	}
 }
 
+TEST_F(ScreenScraperTest, ShortSearchFallsBackToFullFilenameAndKeepsSessionHealthy)
+{
+	std::vector<std::string> queries;
+	auto session = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const auto search = url.find("&recherche=");
+		EXPECT_NE(search, std::string::npos);
+		if (search == std::string::npos)
+			return 500;
+		const std::string query = url.substr(search + 11);
+		queries.push_back(query);
+		if (query == "F1")
+		{
+			const std::string body = "Erreur : informations obligatoires manquantes !  \r\n";
+			bytes.assign(body.begin(), body.end());
+			return 200;
+		}
+		if (query == http::urlEncode("F1 World Grand Prix"))
+		{
+			auto found = game();
+			found["id"] = "1234";
+			found["noms"] = json::array({{{"region", "us"}, {"text", "F1 World Grand Prix"}}});
+			return reply(bytes, {{"jeux", json::array({found})}});
+		}
+		return reply(bytes, {{"jeux", json::array()}});
+	});
+	session->login();
+	ScreenScraper scraper(session);
+	ASSERT_TRUE(scraper.initialize(root.u8string() + '/'));
+	auto art = item();
+	art.fileName = "F1 World Grand Prix (USA).chd";
+	art.name = "F1";
+	art.searchName = "F1";
+	art.requestedMedia = artwork::metadataMedia;
+	scraper.scrape(art);
+
+	EXPECT_EQ(std::find(queries.begin(), queries.end(), "F1"), queries.end());
+	EXPECT_NE(std::find(queries.begin(), queries.end(), http::urlEncode("F1 World Grand Prix")), queries.end());
+	EXPECT_EQ(art.screenScraperId, 1234u);
+	EXPECT_TRUE(session->ready());
+	EXPECT_EQ(session->status().message, "Signed in to ScreenScraper.");
+}
+
+TEST_F(ScreenScraperTest, SkipsAllShortSearchesAndStillSearchesThreeCharacterNames)
+{
+	int shortSearches = 0;
+	auto shortSession = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		if (url.find("jeuRecherche.php") != std::string::npos)
+			++shortSearches;
+		return reply(bytes, {{"jeux", json::array()}});
+	});
+	shortSession->login();
+	ScreenScraper shortScraper(shortSession);
+	ASSERT_TRUE(shortScraper.initialize(root.u8string() + '/'));
+	auto shortTitle = item();
+	shortTitle.fileName = "F1.chd";
+	shortTitle.name = "F1";
+	shortTitle.searchName = "F1";
+	shortTitle.requestedMedia = artwork::metadataMedia;
+	shortScraper.scrape(shortTitle);
+	EXPECT_EQ(shortSearches, 0);
+	EXPECT_TRUE(shortTitle.screenScraperSearched);
+	EXPECT_TRUE(shortSession->ready());
+	EXPECT_EQ(shortSession->status().message, "Signed in to ScreenScraper.");
+
+	std::vector<std::string> queries;
+	auto fullSession = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const auto search = url.find("&recherche=");
+		EXPECT_NE(search, std::string::npos);
+		if (search == std::string::npos)
+			return 500;
+		queries.push_back(url.substr(search + 11));
+		auto found = game();
+		found["id"] = "1234";
+		found["noms"] = json::array({{{"region", "us"}, {"text", "F16 Fighter Pilot"}}});
+		return reply(bytes, {{"jeux", json::array({found})}});
+	});
+	fullSession->login();
+	ScreenScraper fullScraper(fullSession);
+	ASSERT_TRUE(fullScraper.initialize(root.u8string() + '/'));
+	auto fullTitle = item();
+	fullTitle.fileName = "F16 Fighter Pilot (USA).chd";
+	fullTitle.name = "F16";
+	fullTitle.searchName = "F16";
+	fullTitle.requestedMedia = artwork::metadataMedia;
+	fullScraper.scrape(fullTitle);
+	ASSERT_FALSE(queries.empty());
+	EXPECT_EQ(queries.front(), "F16");
+	EXPECT_EQ(fullTitle.screenScraperId, 1234u);
+	EXPECT_TRUE(fullSession->ready());
+}
+
 TEST_F(ScreenScraperTest, WordSearchNeverAcceptsAnUnrelatedTopResult)
 {
 	auto session = std::make_shared<Session>(credentials(), [](const std::string& url, std::vector<u8>& bytes, std::string&) {
@@ -496,13 +593,194 @@ TEST(ScreenScraperAccountTest, RefusesGuestFallbackAndDoesNotExposeTransportSecr
 	});
 	EXPECT_THROW(guest.login(), std::runtime_error);
 	EXPECT_FALSE(guest.ready());
-	Session failure(credentials(), [](const std::string& url, std::vector<u8>&, std::string&) -> int {
-		throw std::runtime_error(url);
+	auto diagnosticCredentials = Credentials{"diagnostic-developer-id", "diagnostic-developer-password",
+		"diagnostic-user-id", "diagnostic-user-password"};
+	Session failure(diagnosticCredentials, [](const std::string& url, std::vector<u8>&, std::string&) -> int {
+		throw std::runtime_error(url + "&exception=diagnostic-exception-detail");
 	});
 	try { failure.login(); FAIL(); }
-	catch (const std::runtime_error& error) { EXPECT_EQ(std::string(error.what()).find("secret"), std::string::npos); }
-	EXPECT_EQ(failure.status().message.find("secret"), std::string::npos);
+	catch (const std::runtime_error& error)
+	{
+		const std::string message = error.what();
+		EXPECT_NE(message.find("login"), std::string::npos);
+		EXPECT_NE(message.find("transport failure"), std::string::npos);
+		for (const std::string& privateValue : {"ssuserInfos.php", "diagnostic-developer-id",
+				"diagnostic-developer-password", "diagnostic-user-id", "diagnostic-user-password",
+				"diagnostic-exception-detail"})
+			EXPECT_EQ(message.find(privateValue), std::string::npos);
+		EXPECT_EQ(message, failure.status().message);
+	}
+	EXPECT_EQ(failure.status().message.find("diagnostic-user-password"), std::string::npos);
 	EXPECT_EQ(failure.status().activeRequests, 0);
+}
+
+TEST(ScreenScraperAccountTest, ReportsSafeHttpAndInvalidJsonDiagnostics)
+{
+	const auto diagnosticCredentials = Credentials{"diagnostic-developer-id", "diagnostic-developer-password",
+		"tester", "diagnostic-user-password"};
+	auto expectSafe = [&](const std::string& message, const std::string& category,
+			const std::string& endpoint, const std::string& parameter, const std::string& body) {
+		EXPECT_NE(message.find(category), std::string::npos);
+		for (const std::string& privateValue : std::initializer_list<std::string>{endpoint, parameter, body, "diagnostic-developer-id",
+				"diagnostic-developer-password", "tester", "diagnostic-user-password"})
+			if (!privateValue.empty())
+				EXPECT_EQ(message.find(privateValue), std::string::npos);
+	};
+
+	const std::string privateEndpoint = "internal-private-endpoint.php";
+	const std::string privateParameter = "diagnostic-request-parameter";
+	Session httpFailure(diagnosticCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		return 500;
+	});
+	httpFailure.login();
+	std::string httpMessage;
+	try { httpFailure.requestJson(privateEndpoint, "&needle=" + privateParameter); FAIL(); }
+	catch (const std::runtime_error& error) { httpMessage = error.what(); }
+	expectSafe(httpMessage, "HTTP status 500 or network error", privateEndpoint, privateParameter, "");
+	EXPECT_NE(httpMessage.find("other"), std::string::npos);
+	EXPECT_EQ(httpMessage, httpFailure.status().message);
+
+	const std::string knownEndpoint = "jeuRecherche.php";
+	const std::string privateBody = "diagnostic-response-body";
+	Session invalidJson(diagnosticCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		const std::string body = "invalid " + privateBody;
+		bytes.assign(body.begin(), body.end());
+		return 200;
+	});
+	invalidJson.login();
+	std::string jsonMessage;
+	try { invalidJson.requestJson(knownEndpoint, "&recherche=" + privateParameter); FAIL(); }
+	catch (const std::runtime_error& error) { jsonMessage = error.what(); }
+	expectSafe(jsonMessage, "invalid or oversized JSON", knownEndpoint, privateParameter, privateBody);
+	EXPECT_NE(jsonMessage.find("game search"), std::string::npos);
+	EXPECT_EQ(jsonMessage, invalidJson.status().message);
+}
+
+TEST(ScreenScraperAccountTest, RecoversTransientFailuresAfterValidatedReplies)
+{
+	int personalRequests = 0;
+	Session personal(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		return ++personalRequests == 1 ? 500 : reply(bytes, json::object());
+	}, std::chrono::milliseconds(0));
+	personal.login();
+	EXPECT_THROW(personal.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_NE(personal.status().message.find("HTTP status 500 or network error"), std::string::npos);
+	EXPECT_EQ(personal.requestJson("jeuRecherche.php", ""), json::object());
+	EXPECT_EQ(personal.status().message, "Signed in to ScreenScraper.");
+
+	auto guestCredentials = credentials();
+	guestCredentials.username.clear();
+	guestCredentials.password.clear();
+	int guestRequests = 0;
+	Session guest(guestCredentials, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssinfraInfos.php") != std::string::npos)
+			return reply(bytes, {{"serveurs", {{"closefornomember", "0"}}}});
+		return ++guestRequests == 1 ? 500 : 404;
+	}, std::chrono::milliseconds(0));
+	guest.login();
+	EXPECT_THROW(guest.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_EQ(guest.requestJson("jeuRecherche.php", ""), json::object());
+	EXPECT_EQ(guest.status().message, "Using ScreenScraper guest access.");
+}
+
+TEST(ScreenScraperAccountTest, ClearsArtworkFailureOnlyAfterValidOrMissingMedia)
+{
+	for (int result : {0, 1, 2, 3})
+	{
+		SCOPED_TRACE(result);
+		int requests = 0;
+		Session session(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+			if (url.find("ssuserInfos.php") != std::string::npos)
+				return reply(bytes, {{"ssuser", user()}});
+			if (++requests == 1) return 500;
+			if (result == 2) return 404;
+			if (result == 0) bytes = png();
+			else
+			{
+				const std::string body = result == 1 ? "NOMEDIA" : "invalid image";
+				bytes.assign(body.begin(), body.end());
+			}
+			return 200;
+		}, std::chrono::milliseconds(0));
+		session.login();
+		EXPECT_THROW(session.requestImage(1234, "box-2D", "us"), std::runtime_error);
+		if (result == 3)
+		{
+			EXPECT_THROW(session.requestImage(1234, "box-2D", "us"), std::runtime_error);
+			EXPECT_NE(session.status().message.find("artwork response is invalid"), std::string::npos);
+		}
+		else
+		{
+			EXPECT_NO_THROW(session.requestImage(1234, "box-2D", "us"));
+			EXPECT_EQ(session.status().message, "Signed in to ScreenScraper.");
+		}
+	}
+}
+
+TEST(ScreenScraperAccountTest, KeepsInvalidResponseAndPausedErrorMessagesAfterSuccess)
+{
+	int invalidRequests = 0;
+	Session invalidJson(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		if (++invalidRequests == 1)
+			return 500;
+		const std::string body = "invalid response";
+		bytes.assign(body.begin(), body.end());
+		return 200;
+	}, std::chrono::milliseconds(0));
+	invalidJson.login();
+	EXPECT_THROW(invalidJson.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_THROW(invalidJson.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	EXPECT_NE(invalidJson.status().message.find("invalid or oversized JSON"), std::string::npos);
+
+	const std::string writeFailure = "ScreenScraper could not save artwork. Check the writable data folder.";
+	Session paused(credentials(), [](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		return reply(bytes, json::object());
+	}, std::chrono::milliseconds(0));
+	paused.login();
+	paused.pause(writeFailure);
+	EXPECT_EQ(paused.requestJson("jeuRecherche.php", ""), json::object());
+	EXPECT_EQ(paused.status().message, writeFailure);
+}
+
+TEST(ScreenScraperAccountTest, OlderInFlightSuccessCannotClearNewerFailure)
+{
+	BlockedRequest blocked;
+	int requests = 0;
+	Session session(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		if (++requests == 1)
+		{
+			blocked.wait();
+			return reply(bytes, json::object());
+		}
+		return 500;
+	}, std::chrono::milliseconds(0));
+	session.login();
+	auto olderRequest = std::async(std::launch::async, [&] {
+		session.requestJson("jeuRecherche.php", "");
+	});
+	const bool olderRequestEntered = blocked.waitForEntry(std::chrono::seconds(1));
+	if (!olderRequestEntered)
+		blocked.release();
+	ASSERT_TRUE(olderRequestEntered);
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	EXPECT_THROW(session.requestJson("jeuRecherche.php", ""), std::runtime_error);
+	const std::string failureMessage = session.status().message;
+	EXPECT_NE(failureMessage.find("HTTP status 500 or network error"), std::string::npos);
+	blocked.release();
+	EXPECT_NO_THROW(olderRequest.get());
+	EXPECT_EQ(session.status().message, failureMessage);
 }
 
 TEST(ScreenScraperAccountTest, EnforcesDailyReservationsAndHandlesApiLimits)

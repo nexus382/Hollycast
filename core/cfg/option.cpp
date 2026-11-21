@@ -81,8 +81,28 @@ Option<bool> AutoLatency("aica.AutoLatency",
 		);
 
 OptionString AudioBackend("backend", "auto", "audio");
+#ifdef USE_HIKARU
+Option<HikaruSortingMode> HikaruSorting("HikaruSorting", HikaruSortingMode::PerTriangle);
+Option<int> HikaruMaxLayers("HikaruMaxLayers", 32);
+Option<bool> HikaruAudioPacing("HikaruAudioPacing", true);
+Option<bool> HikaruBraveMouseAim("HikaruBraveMouseAim", false, "input");
+Option<bool> HikaruBraveGamepad("HikaruBraveGamepad", true, "input");
+Option<bool> HikaruAirTrixDpadBoard("HikaruAirTrixDpadBoard", false, "input");
+Option<bool> HikaruPlanetDpadStick("HikaruPlanetDpadStick", true, "input");
+Option<int, false> HikaruAirTrixRegion("HikaruAirTrixRegion", -1, "input");
+Option<int, false> HikaruBraveRegion("HikaruBraveRegion", -1, "input");
+Option<int, false> HikaruPlanetRegion("HikaruPlanetRegion", -1, "input");
+Option<int, false> HikaruVirtualOn4Region("HikaruVirtualOn4Region", -1, "input");
+Option<int, false> HikaruNascarRegion("HikaruNascarRegion", -1, "input");
+Option<int, false> HikaruStarWarsRacerRegion("HikaruStarWarsRacerRegion", -1, "input");
+Option<bool> HikaruStarWarsRacerGamepad("HikaruStarWarsRacerGamepad", true, "input");
+Option<bool> HikaruNascarGamepad("HikaruNascarGamepad", true, "input");
+Option<bool> HikaruVirtualOn4TwinStick("HikaruVirtualOn4TwinStick", true, "input");
+#endif
 AudioVolumeOption AudioVolume;
 Option<bool> VmuSound("VmuSound", false, "audio");
+Option<int, false> PhoneVmuPort("PhoneVmuPort", 28743, "network");
+Option<std::string, false> PhoneVmuToken("PhoneVmuToken", "", "network");
 
 // Rendering
 
@@ -135,6 +155,11 @@ Option<int> AutoSkipFrame("pvr.AutoSkipFrame", 0);
 Option<int> RenderResolution("rend.Resolution", 480);
 Option<bool> IntegerScale("rend.IntegerScale", false);
 Option<bool> LinearInterpolation("rend.LinearInterpolation", true);
+OptionString PostProcessShader("rend.PostProcessShader");
+Option<std::vector<std::string>> PostProcessShaders("rend.PostProcessShaders");
+Option<std::string, false> PostProcessShaderDirectory("rend.PostProcessShaderDirectory");
+OptionString PostProcessShaderParameters("rend.PostProcessShaderParameters");
+OptionString PostProcessShaderTechnique("rend.PostProcessShaderTechnique");
 Option<bool> VSync("rend.vsync", true);
 Option<int64_t> PixelBufferSize("rend.PixelBufferSize", 512_MB);
 Option<int> AnisotropicFiltering("rend.AnisotropicFiltering", 1);

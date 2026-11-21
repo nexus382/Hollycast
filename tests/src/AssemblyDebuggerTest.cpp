@@ -247,15 +247,29 @@ TEST_F(AssemblyDebuggerTest, ClosePreservesDisabledDynarecPreference)
     EXPECT_EQ(emu.getSh4Executor(), interpreter);
 }
 
+TEST_F(AssemblyDebuggerTest, RejectsHikaruAndReopensForDreamcast)
+{
+    assembly_debugger::close();
+    const auto previousSystem = settings.platform.system;
+    settings.platform.system = DC_PLATFORM_HIKARU;
+    EXPECT_FALSE(assembly_debugger::available());
+    EXPECT_FALSE(assembly_debugger::open());
+    EXPECT_FALSE(assembly_debugger::active());
+    settings.platform.system = previousSystem;
+    EXPECT_TRUE(assembly_debugger::open());
+}
+
 TEST_F(AssemblyDebuggerTest, BlocksConflictingDebuggerAndOnlineModes)
 {
     assembly_debugger::close();
-    for (bool* restricted : {&settings.raHardcoreMode, &settings.network.online, &settings.naomi.multiboard})
-    {
-        *restricted = true;
+    const auto verifyRestricted = [](auto& restricted) {
+        restricted = true;
         EXPECT_FALSE(assembly_debugger::open());
-        *restricted = false;
-    }
+        restricted = false;
+    };
+    verifyRestricted(settings.raHardcoreMode);
+    verifyRestricted(settings.network.online);
+    verifyRestricted(settings.naomi.multiboard);
 #ifdef GDB_SERVER
     config::GDB = true;
     EXPECT_FALSE(assembly_debugger::open());
@@ -269,21 +283,23 @@ TEST_F(AssemblyDebuggerTest, BlocksConflictingDebuggerAndOnlineModes)
 #ifndef LIBRETRO
 TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoFrames)
 {
-    // Model the DX/OpenGL presentation contract without a GPU: drawing an OSD
-    // with gui_open=false does not make a frame eligible for presentation.
+    // Model the DX/OpenGL presentation contract without a GPU. The driver is
+    // eligible to present after a full game-background redraw or a GUI frame.
     class NoVideoDriver final : public ImGuiDriver
     {
     public:
         NoVideoDriver() : ImGuiDriver(false) {}
         void newFrame() override {}
-        void renderDrawData(ImDrawData*, bool guiOpen) override
+        void renderDrawData(ImDrawData*, bool fullRedraw) override
         {
             ++draws;
-            frameReady |= guiOpen;
+            lastFullRedraw = fullRedraw;
+            frameReady |= fullRedraw;
         }
         void setFrameRendered() override { frameReady = true; }
         void present() override
         {
+            ++presentCalls;
             if (frameReady)
                 ++presents;
             frameReady = false;
@@ -292,15 +308,49 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         ImTextureID updateTexture(const std::string&, const u8*, int, int, bool) override { return {}; }
         void deleteTexture(const std::string&) override {}
         int draws = 0;
+        int presentCalls = 0;
         int presents = 0;
         bool frameReady = false;
+        bool lastFullRedraw = false;
     };
 
-    ImGuiContext* previousContext = ImGui::GetCurrentContext();
-    const auto previousDisplay = settings.display;
-    const GuiState previousState = gui_state;
-    auto previousDriver = std::move(imguiDriver);
-    ImGui::CreateContext();
+    // Restore process-wide UI state even when a fatal assertion exits early.
+    class ScopedUiState
+    {
+    public:
+        ScopedUiState()
+            : previousContext(ImGui::GetCurrentContext()), previousDisplay(settings.display), previousState(gui_state),
+              previousThreadedRendering(config::ThreadedRendering), previousDupeFrames(config::DupeFrames),
+              previousDynarecEnabled(config::DynarecEnabled),
+              previousDriver(std::move(imguiDriver)) {}
+
+        ~ScopedUiState()
+        {
+            emu.stop();
+            imguiDriver = std::move(previousDriver);
+            settings.display = previousDisplay;
+            gui_state = previousState;
+            if (testContext != nullptr)
+                ImGui::DestroyContext(testContext);
+            ImGui::SetCurrentContext(previousContext);
+            config::ThreadedRendering = previousThreadedRendering;
+            config::DupeFrames = previousDupeFrames;
+            config::DynarecEnabled = previousDynarecEnabled;
+        }
+
+        ImGuiContext* testContext = nullptr;
+
+    private:
+        ImGuiContext* previousContext;
+        decltype(settings.display) previousDisplay;
+        GuiState previousState;
+        bool previousThreadedRendering;
+        bool previousDupeFrames;
+        bool previousDynarecEnabled;
+        std::unique_ptr<ImGuiDriver> previousDriver;
+    } scopedUiState;
+
+    scopedUiState.testContext = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1280, 800);
@@ -314,6 +364,7 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
     imguiDriver = std::make_unique<NoVideoDriver>();
     auto* driver = static_cast<NoVideoDriver*>(imguiDriver.get());
     program({0xaffe, 0x0009}); // bra pc; nop: no framebuffer or PVR commands.
+    config::DupeFrames = false;
 
     for (bool threaded : {true, false})
     {
@@ -322,6 +373,7 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         assembly_debugger::resume();
         gui_state = GuiState::Closed;
         const int previousDraws = driver->draws;
+        const int previousPresentCalls = driver->presentCalls;
         const int previousPresents = driver->presents;
         EXPECT_TRUE(mainui_rend_frame());
         // On x86 Linux fegetround() only reports x87 state; nearbyint also
@@ -329,17 +381,56 @@ TEST_F(AssemblyDebuggerTest, PresentsDebuggerControlsWhenProgramProducesNoVideoF
         volatile double roundingProbe = 1.75;
         EXPECT_EQ(std::nearbyint(roundingProbe), 2.0);
         EXPECT_EQ(driver->draws, previousDraws + 1);
+        EXPECT_TRUE(driver->lastFullRedraw);
         EXPECT_TRUE(driver->frameReady);
         driver->present();
+        EXPECT_EQ(driver->presentCalls, previousPresentCalls + 1);
         EXPECT_EQ(driver->presents, previousPresents + 1);
         emu.stop();
     }
 
-    imguiDriver = std::move(previousDriver);
-    settings.display = previousDisplay;
-    gui_state = previousState;
-    ImGui::DestroyContext();
-    ImGui::SetCurrentContext(previousContext);
+    // A running game that times out waiting for a PVR frame must not present
+    // an OSD-only redraw over the stale backbuffer when the debugger is closed.
+    assembly_debugger::close();
+    // Keep this synthetic presentation fixture on its interpreter instead of
+    // also switching CPU engines when the debugger is closed.
+    config::DynarecEnabled = false;
+    gui_state = GuiState::Closed;
+    for (bool threaded : {true, false})
+    {
+        SCOPED_TRACE(threaded);
+        config::ThreadedRendering = threaded;
+        const int previousDraws = driver->draws;
+        const int previousPresentCalls = driver->presentCalls;
+        const int previousPresents = driver->presents;
+        emu.start();
+        ASSERT_TRUE(emu.running());
+        const bool frameRendered = mainui_rend_frame();
+        if (frameRendered)
+            driver->present();
+        EXPECT_EQ(frameRendered, !threaded);
+        EXPECT_TRUE(emu.running());
+        EXPECT_EQ(driver->draws, previousDraws);
+        EXPECT_FALSE(driver->frameReady);
+        EXPECT_EQ(driver->presentCalls, previousPresentCalls + static_cast<int>(frameRendered));
+        EXPECT_EQ(driver->presents, previousPresents);
+        emu.stop();
+    }
+
+    // The open-menu path must continue requesting a full redraw and presentation.
+    gui_state = GuiState::Commands;
+    const int menuDraws = driver->draws;
+    const int menuPresentCalls = driver->presentCalls;
+    const int menuPresents = driver->presents;
+    const bool menuFrameRendered = mainui_rend_frame();
+    EXPECT_TRUE(menuFrameRendered);
+    EXPECT_EQ(driver->draws, menuDraws + 1);
+    EXPECT_TRUE(driver->lastFullRedraw);
+    EXPECT_TRUE(driver->frameReady);
+    if (menuFrameRendered)
+        driver->present();
+    EXPECT_EQ(driver->presentCalls, menuPresentCalls + 1);
+    EXPECT_EQ(driver->presents, menuPresents + 1);
 }
 
 TEST_F(AssemblyDebuggerTest, BrowserKeepsScrollPositionAndCanReturnToCurrentInstruction)

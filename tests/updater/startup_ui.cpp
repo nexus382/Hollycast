@@ -20,6 +20,10 @@ std::atomic<bool> completed{false}, sawCancellation{false};
 bool startupEnabled = true;
 bool installSeen = false, installDisabled = true;
 int playInstalls = 0;
+int snapshotReads = 0;
+bool snapshotDirty = true;
+bool snapshotFailure = false, malformedSnapshot = false, deferPlayCheck = false;
+std::string playSnapshot = "{\"source\":\"play\"}";
 ImVec2 installPosition;
 constexpr const char* popup = "Hollycast Updates###app-updates";
 void expect(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -45,10 +49,22 @@ void ImGuiTestEngineHook_Log(ImGuiContext*, const char*, ...) {}
 const char* ImGuiTestEngine_FindItemDebugLabel(ImGuiContext*, ImGuiID) { return ""; }
 
 std::string androidAppUpdates(const std::string& action) {
-    static std::string snapshot = "{\"source\":\"play\"}";
-    if (action == "check") snapshot = "{\"source\":\"play\",\"availableCode\":11,\"installedCode\":10,\"revision\":1}";
+    if (action.empty()) {
+        ++snapshotReads;
+        if (snapshotFailure) throw std::runtime_error("Transient bridge failure");
+        if (malformedSnapshot) return "{";
+    }
+    if (action == "check" && !deferPlayCheck) {
+        playSnapshot = "{\"source\":\"play\",\"availableCode\":11,\"installedCode\":10,\"revision\":1}";
+        snapshotDirty = true;
+    }
     if (action == "install") ++playInstalls;
-    return snapshot;
+    return playSnapshot;
+}
+bool androidAppUpdatesChanged() {
+    const bool changed = snapshotDirty;
+    snapshotDirty = false;
+    return changed;
 }
 std::string get_writable_data_path(const std::string&) { return "unused-test-data"; }
 namespace config {
@@ -83,7 +99,9 @@ std::string install(const Package&) { throw std::runtime_error("Unexpected insta
 int main(int argc, char** argv) {
     try {
         const std::string mode = argc > 1 ? argv[1] : "startup";
-        startupEnabled = mode != "disabled" && mode != "manual-game";
+        deferPlayCheck = mode == "play-queued";
+        if (deferPlayCheck) playSnapshot = "{\"source\":\"play\",\"availableCode\":11}";
+        startupEnabled = mode != "disabled" && mode != "manual-game" && mode != "play-count";
         const bool defer = mode == "defer";
         const bool manualGame = mode == "manual-game";
         ImGui::CreateContext();
@@ -94,6 +112,67 @@ int main(int argc, char** argv) {
         io.DeltaTime = 1.0f / 60;
         unsigned char* pixels; int width, height;
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        if (mode == "play-queued") {
+            app_updates::open();
+            frame();
+            expect(installSeen && installDisabled, "Initial snapshot cleared a queued manual check");
+            expect(!checked, "Initial availability started notes before the queued check finished");
+            snapshotDirty = true;
+            frame();
+            expect(installDisabled && !checked, "Reattaching to the same snapshot cleared the queued check");
+            playSnapshot = "{\"source\":\"play\",\"availableCode\":11,\"checking\":false}";
+            snapshotDirty = true;
+            frame();
+            expect(!installDisabled, "Completed queued check did not enable installation");
+            app_updates::stop();
+            ImGui::DestroyContext();
+            return 0;
+        }
+        if (mode == "play-count") {
+            frame(false);
+            expect(snapshotReads == 1, "Source selection did not read exactly one snapshot");
+            for (int i = 0; i < 120; ++i) frame(false);
+            expect(snapshotReads == 1, "Unchanged gameplay frames queried the Java snapshot");
+            app_updates::open();
+            frame(false);
+            expect(snapshotReads == 2, "Manual check did not consume its changed snapshot");
+            expect(installSeen && installDisabled, "Play installation was enabled during gameplay");
+            frame(true);
+            expect(installSeen && !installDisabled, "Optional notes blocked the Play install action");
+            snapshotFailure = snapshotDirty = true;
+            frame();
+            const auto failedReads = snapshotReads;
+            snapshotFailure = false;
+            frame();
+            expect(snapshotReads == failedReads + 1, "Transient bridge failure was not retried without publication");
+            malformedSnapshot = snapshotDirty = true;
+            frame();
+            const auto malformedReads = snapshotReads;
+            malformedSnapshot = false;
+            frame();
+            expect(snapshotReads == malformedReads + 1, "Transient parse failure was not retried without publication");
+            playSnapshot = "{\"source\":\"play\",\"availableCode\":11,\"launching\":true}";
+            snapshotDirty = true;
+            frame();
+            expect(installDisabled, "Published launching state did not disable installation");
+            playSnapshot = "{\"source\":\"play\",\"availableCode\":11,\"launching\":false,\"message\":\"Update cancelled\"}";
+            snapshotDirty = true;
+            frame();
+            expect(!installDisabled, "Cancellation did not permit a consented retry");
+            playSnapshot = "{\"source\":\"play\",\"availableCode\":0,\"error\":\"offline\"}";
+            snapshotDirty = true;
+            frame();
+            expect(installDisabled, "Failed check retained an unavailable install action");
+            const auto reads = snapshotReads;
+            for (int i = 0; i < 120; ++i) frame();
+            expect(snapshotReads == reads, "Unchanged popup frames queried the Java snapshot");
+            app_updates::stop();
+            frame();
+            expect(installDisabled, "Stale asynchronous notes restored unavailable installation");
+            ImGui::DestroyContext();
+            std::cout << "240 unchanged frames: 0 bridge reads; manual check, gameplay, launching, cancellation and failure passed\n";
+            return 0;
+        }
         // Exercise several real BeginPopupModal calls before a background result exists.
         for (int i = 0; i < 3; ++i) {
             const bool opened = frame(!defer && !manualGame);

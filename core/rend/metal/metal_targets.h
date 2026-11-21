@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "metal_common.h"
@@ -10,6 +11,7 @@ public:
     id<MTLTexture> output = nil;
     id<MTLTexture> depth = nil;
     id<MTLTexture> frameOutput = nil;
+    id<MTLTexture> frameDepth = nil;
 
     bool begin(id<MTLDevice> device, int width, int height, bool rtt)
     {
@@ -19,7 +21,7 @@ public:
             output = makeTexture(device, width, height, MTLPixelFormatRGBA8Unorm,
                     MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
             depth = makeTexture(device, width, height, MTLPixelFormatDepth32Float_Stencil8,
-                    MTLTextureUsageRenderTarget);
+                    MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
             if (!rtt) { screenOutput = output; screenDepth = depth; }
         } else {
             output = screenOutput; depth = screenDepth;
@@ -27,8 +29,8 @@ public:
         return fresh;
     }
     void end(bool rtt) { if (rtt) { output = nil; depth = nil; } }
-    void setFramebuffer(id<MTLTexture> texture) { frameOutput = texture; }
-    void clear() { output = nil; depth = nil; screenOutput = nil; screenDepth = nil; frameOutput = nil; }
+    void setFramebuffer(id<MTLTexture> texture) { frameOutput = texture; frameDepth = nil; }
+    void clear() { output = nil; depth = nil; screenOutput = nil; screenDepth = nil; frameOutput = nil; frameDepth = nil; }
 private:
     id<MTLTexture> screenOutput = nil, screenDepth = nil;
     static id<MTLTexture> makeTexture(id<MTLDevice> device, int width, int height,

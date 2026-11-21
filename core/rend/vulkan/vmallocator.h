@@ -2,6 +2,7 @@
 	Created on: Nov 24, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -65,27 +66,49 @@ public:
 		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
 		return flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
 	}
-	void *MapMemory() const
+	// Hikaru controls visibility around submissions and readbacks explicitly;
+	// other callers retain the legacy implicit map/unmap cache operations.
+	void *MapMemory(bool invalidate = true) const
 	{
 		if (allocInfo.pMappedData != nullptr)
 			return allocInfo.pMappedData;
 		void *p;
 		VkResult res = vmaMapMemory(allocator, allocation, &p);
 		vk::detail::resultCheck(static_cast<vk::Result>(res), "vmaMapMemory failed");
-		VkMemoryPropertyFlags flags;
-		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
-		if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
-			vmaInvalidateAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
+		if (invalidate)
+		{
+			VkMemoryPropertyFlags flags;
+			vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
+			if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
+				vmaInvalidateAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
+		}
 		return p;
 	}
-	void UnmapMemory() const
+    // Explicit readback invalidation is needed even for uncached host-visible
+    // heaps when they are not coherent. Call after mapping and GPU completion.
+    void InvalidateMemory(VkDeviceSize offset, VkDeviceSize size) const
+    {
+        const VkResult result = vmaInvalidateAllocation(allocator, allocation, offset, size);
+        vk::detail::resultCheck(static_cast<vk::Result>(result), "vmaInvalidateAllocation failed");
+    }
+    // VMA ranges are allocation-relative; it handles coherent heaps and atom
+    // alignment. Native streaming buffers stay mapped and flush before submit.
+    void FlushMemory(VkDeviceSize offset, VkDeviceSize size) const
+    {
+        const VkResult result = vmaFlushAllocation(allocator, allocation, offset, size);
+        vk::detail::resultCheck(static_cast<vk::Result>(result), "vmaFlushAllocation failed");
+    }
+	void UnmapMemory(bool flush = true) const
 	{
 		if (allocInfo.pMappedData != nullptr)
 			return;
-		VkMemoryPropertyFlags flags;
-		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
-		if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
-			vmaFlushAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
+		if (flush)
+		{
+			VkMemoryPropertyFlags flags;
+			vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
+			if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
+				vmaFlushAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
+		}
 		vmaUnmapMemory(allocator, allocation);
 	}
 
@@ -125,26 +148,32 @@ public:
 		return Allocation(allocator, vmaAllocation, allocInfo);
 	}
 
-	Allocation AllocateForImage(const vk::Image image, const VmaAllocationCreateInfo& allocCreateInfo) const
+	Allocation AllocateForImage(const vk::Image image, const VmaAllocationCreateInfo& allocCreateInfo,
+			bool checkBindResult = false) const
 	{
 		VmaAllocation vmaAllocation;
 		VmaAllocationInfo allocInfo;
 		VkResult rc = vmaAllocateMemoryForImage(allocator, (VkImage)image, &allocCreateInfo, &vmaAllocation, &allocInfo);
 		vk::detail::resultCheck(static_cast<vk::Result>(rc), "vmaAllocateMemoryForImage failed");
-		vmaBindImageMemory(allocator, vmaAllocation, (VkImage)image);
-
-		return Allocation(allocator, vmaAllocation, allocInfo);
+		Allocation allocation(allocator, vmaAllocation, allocInfo);
+		rc = vmaBindImageMemory(allocator, vmaAllocation, (VkImage)image);
+		if (checkBindResult)
+			vk::detail::resultCheck(static_cast<vk::Result>(rc), "vmaBindImageMemory failed");
+		return allocation;
 	}
 
-	Allocation AllocateForBuffer(const vk::Buffer buffer, const VmaAllocationCreateInfo& allocCreateInfo) const
+	Allocation AllocateForBuffer(const vk::Buffer buffer, const VmaAllocationCreateInfo& allocCreateInfo,
+			bool checkBindResult = false) const
 	{
 		VmaAllocation vmaAllocation;
 		VmaAllocationInfo allocInfo;
 		VkResult rc = vmaAllocateMemoryForBuffer(allocator, (VkBuffer)buffer, &allocCreateInfo, &vmaAllocation, &allocInfo);
 		vk::detail::resultCheck(static_cast<vk::Result>(rc), "vmaAllocateMemoryForBuffer failed");
-		vmaBindBufferMemory(allocator, vmaAllocation, (VkBuffer)buffer);
-
-		return Allocation(allocator, vmaAllocation, allocInfo);
+		Allocation allocation(allocator, vmaAllocation, allocInfo);
+		rc = vmaBindBufferMemory(allocator, vmaAllocation, (VkBuffer)buffer);
+		if (checkBindResult)
+			vk::detail::resultCheck(static_cast<vk::Result>(rc), "vmaBindBufferMemory failed");
+		return allocation;
 	}
 
 private:

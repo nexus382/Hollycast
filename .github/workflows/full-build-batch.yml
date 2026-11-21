@@ -1,0 +1,136 @@
+# Portions Copyright 2026 The Hollycast Authors
+name: Full build batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Same-repo PR number to build from its GitHub merge commit'
+        required: false
+        type: string
+
+jobs:
+  dispatch:
+    name: Queue all builds and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Dispatch the full batch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          if ($env:GITHUB_REF -cnotin @('refs/heads/master', 'refs/heads/dev')) {
+            Write-Output '::error::Select the master or dev branch.'
+            exit 1
+          }
+
+          $ref = $env:GITHUB_REF_NAME
+          if ($env:PR_NUMBER) {
+            if ($env:PR_NUMBER -cnotmatch '\A[1-9][0-9]*\z') {
+              throw 'Enter a positive PR number.'
+            }
+
+            $repo = "repos/$env:GITHUB_REPOSITORY"
+            $prPath = "$repo/pulls/$env:PR_NUMBER"
+            $mergePath = "$repo/git/ref/pull/$env:PR_NUMBER/merge"
+            $baseSha = $env:GITHUB_SHA
+            $headSha = $null
+            $candidateSha = $null
+
+            function Assert-LauncherBase {
+              $currentBase = gh api "$repo/git/ref/heads/$env:GITHUB_REF_NAME" --jq '.object.sha'
+              if ($LASTEXITCODE -ne 0 -or $currentBase -cne $baseSha) {
+                throw 'The selected target branch changed. Dispatch a fresh batch from that branch.'
+              }
+            }
+
+            function Read-CandidatePullRequest {
+              $response = gh api $prPath
+              if ($LASTEXITCODE -ne 0) {
+                throw 'Could not read the pull request.'
+              }
+              $pr = $response | ConvertFrom-Json
+              if ($pr.state -cne 'open' -or $pr.head.repo.full_name -ine $env:GITHUB_REPOSITORY -or
+                  $pr.base.repo.full_name -ine $env:GITHUB_REPOSITORY -or $pr.base.ref -cne $env:GITHUB_REF_NAME) {
+                throw 'Select an open same-repository PR targeting the selected branch.'
+              }
+              if ($headSha -and $pr.head.sha -cne $headSha) {
+                throw 'The PR head changed. Dispatch a fresh batch from the target branch.'
+              }
+              if ($pr.mergeable -eq $false) {
+                throw 'GitHub cannot merge the pull request.'
+              }
+              return $pr
+            }
+
+            Assert-LauncherBase
+            # The PR API triggers GitHub's asynchronous mergeability calculation.
+            for ($attempt = 0; $attempt -lt 10; $attempt++) {
+              $pr = Read-CandidatePullRequest
+              $headSha = $pr.head.sha
+              if ($pr.mergeable -eq $true -and $pr.merge_commit_sha -cmatch '\A[0-9a-f]{40}\z') {
+                $mergeRef = gh api $mergePath --jq '.object.sha' 2>$null
+                if ($LASTEXITCODE -eq 0 -and $mergeRef -ceq $pr.merge_commit_sha) {
+                  $response = gh api "$repo/git/commits/$mergeRef"
+                  if ($LASTEXITCODE -ne 0) {
+                    throw 'Could not read the merge commit.'
+                  }
+                  $commit = $response | ConvertFrom-Json
+                  if ($commit.parents.Count -eq 2 -and $commit.parents[0].sha -ceq $baseSha -and
+                      $commit.parents[1].sha -ceq $headSha) {
+                    $candidateSha = $mergeRef
+                    break
+                  }
+                }
+              }
+              if ($attempt -lt 9) {
+                Start-Sleep -Seconds 3
+              }
+            }
+            if (-not $candidateSha) {
+              throw 'GitHub did not produce a merge commit for the selected base and PR head. Retry the dispatch.'
+            }
+
+            $candidateRef = "ci-candidate/pr-$env:PR_NUMBER-$candidateSha"
+            $candidatePath = "$repo/git/ref/heads/$candidateRef"
+            # The name encodes the commit. Reuse the ref on retry without ever updating it.
+            gh api --method POST "$repo/git/refs" -f "ref=refs/heads/$candidateRef" -f "sha=$candidateSha" --silent 2>$null
+            $storedSha = gh api $candidatePath --jq '.object.sha'
+            if ($LASTEXITCODE -ne 0 -or $storedSha -cne $candidateSha) {
+              throw 'Could not verify the candidate branch at the expected commit.'
+            }
+
+            $pr = Read-CandidatePullRequest
+            $mergeRef = gh api $mergePath --jq '.object.sha'
+            if ($LASTEXITCODE -ne 0 -or $pr.mergeable -ne $true -or
+                $pr.merge_commit_sha -cne $candidateSha -or $mergeRef -cne $candidateSha) {
+              throw 'The GitHub merge candidate changed before dispatch. Start a fresh batch.'
+            }
+            Assert-LauncherBase
+
+            $ref = $candidateRef
+            $filter = [Uri]::EscapeDataString("branch:$ref")
+            $runs = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions?query=$filter"
+            'PR #{0} candidate `{1}` on `{2}`. [View candidate runs]({3})' -f $env:PR_NUMBER, $candidateSha, $ref, $runs >> $env:GITHUB_STEP_SUMMARY
+          }
+
+          # Keep each run on its original workflow so the downloads publisher can find it.
+          $workflows = 'c-cpp', 'android', 'bsd', 'switch', 'uwp', 'linux-arm64', 'text-shaping', 'vmu-regressions'
+          $failed = $false
+          foreach ($workflow in $workflows) {
+            gh api --method POST "repos/$env:GITHUB_REPOSITORY/actions/workflows/$workflow.yml/dispatches" -f "ref=$ref" --silent
+            if ($LASTEXITCODE -eq 0) {
+              Write-Output "Queued $workflow on $ref."
+            } else {
+              Write-Output "::error::Could not queue $workflow on $ref."
+              $failed = $true
+            }
+          }
+          exit [int]$failed

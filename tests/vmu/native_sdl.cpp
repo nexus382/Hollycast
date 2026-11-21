@@ -28,6 +28,7 @@ void testWarning(const char *, ...) {}
 
 bool failCreate = false, failPaint = false, pretendWayland = false;
 int creates = 0;
+int dpiQueries = 0;
 int workAreaWidth = 0;
 float requestedOpacity = -1.f;
 Uint64 ticks = 1000;
@@ -46,6 +47,11 @@ int setOpacity(SDL_Window *window, float alpha)
 SDL_Window *keyboardFocus() { return testFocus; }
 Uint64 getTicks() { return ticks; }
 const char *videoDriver() { return pretendWayland ? "wayland" : SDL_GetCurrentVideoDriver(); }
+int displayDPI(int display, float *diagonal, float *horizontal, float *vertical)
+{
+	++dpiQueries;
+	return SDL_GetDisplayDPI(display, diagonal, horizontal, vertical);
+}
 int usableBounds(int display, SDL_Rect *area)
 {
 	const int result = SDL_GetDisplayUsableBounds(display, area);
@@ -60,6 +66,7 @@ int usableBounds(int display, SDL_Rect *area)
 #define SDL_GetKeyboardFocus keyboardFocus
 #define SDL_GetTicks64 getTicks
 #define SDL_GetCurrentVideoDriver videoDriver
+#define SDL_GetDisplayDPI displayDPI
 #define SDL_GetDisplayUsableBounds usableBounds
 #include "../../core/sdl/vmu_window.cpp"
 #undef SDL_CreateWindow
@@ -68,6 +75,7 @@ int usableBounds(int display, SDL_Rect *area)
 #undef SDL_GetKeyboardFocus
 #undef SDL_GetTicks64
 #undef SDL_GetCurrentVideoDriver
+#undef SDL_GetDisplayDPI
 #undef SDL_GetDisplayUsableBounds
 
 int checks = 0;
@@ -255,6 +263,34 @@ int main()
 	ticks += 1000;
 	update(parent, true);
 	require(ownsScreen(0), "failed drawing retries successfully");
+	update(parent, true);
+	testFocus = windows[0].window;
+	event = windowEvent(testFocus, SDL_WINDOWEVENT_MOVED, 370, 260);
+	handleEvent(event);
+	testFocus = parent;
+	config::FloatVMUs = false;
+	const int enabledQueries = dpiQueries;
+	update(parent, true);
+	require(!ownsScreen(0) && windows[0].window == nullptr, "disabling VMUs releases the native window");
+	require(SDL_GL_GetCurrentContext() == context, "disabling VMUs preserves the game GL context");
+	ticks += 250;
+	update(parent, true);
+	require(config::values["vmu-sdl/0.left"] == 370 && config::values["vmu-sdl/0.top"] == 260,
+		"pending placement is saved while VMUs are disabled");
+	require(dpiQueries == enabledQueries, "disabled VMUs skip display DPI queries");
+	pixels.fill(0xff00ff00);
+	publishScreen(0, pixels.data(), true);
+	ticks += 750;
+	config::FloatVMUs = true;
+	update(parent, true);
+	require(ownsScreen(0), "re-enabling VMUs displays the last published frame");
+	surface = SDL_GetWindowSurface(windows[0].window);
+	require(surface != nullptr && SDL_LockSurface(surface) == 0, "re-enabled LCD has a readable surface");
+	std::memcpy(&top, surface->pixels, sizeof(top));
+	SDL_UnlockSurface(surface);
+	SDL_GetRGB(top, surface->format, &r, &g, &b);
+	require(r == 0 && g == 255 && b == 0, "re-enabled LCD paints the frame published while disabled");
+	require(dpiQueries > enabledQueries, "enabled VMUs query the display DPI");
 	testFocus = nullptr;
 	update(parent, true);
 	require(!ownsScreen(0), "background application does not leave topmost VMUs over other apps");

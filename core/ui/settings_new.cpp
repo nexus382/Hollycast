@@ -18,6 +18,8 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "settings_new.h"
+#include "shader_preview_layout.h"
+#include "gui_menu.h"
 #include "app_update_package.h"
 #ifdef USE_METAL
 #include "rend/metal/metal_api.h"
@@ -26,6 +28,10 @@
 #include "theme.h"
 #include "theme_browser.h"
 #include "gui_util.h"
+#ifdef HOLLYCAST_TEST_HARNESS
+#include "test_harness.h"
+#include "test_harness_ui.h"
+#endif
 #include "imgui.h"
 #include "imgui_stdlib.h"
 #include "audio/audiostream.h"
@@ -37,17 +43,21 @@
 #include "widgets/widgets.h"
 #include "version.h"
 #include "wsi/context.h"
-#include "input/dreampotato.h"
+#include "input/dreamlink/dreampotato.h"
 #include "input/gamepad_device.h"
 #include "input/keyboard_device.h"
-#include "input/maplelinkregistry.h"
+#include "input/dreamlink/maplelinkregistry.h"
 #include "input/mouse.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/pvr/Renderer_if.h"
+#ifdef USE_HIKARU
+#include "hw/hikaru/frontend.h"
+#include "hw/hikaru/roms.h"
+#endif
 #ifdef USE_DREAMLINK_DEVICES
-#include "sdl/dreamlink/dreamlinkgamepad.h"
+#include "sdl/dreamlink/dreamlink_sdl_gamepad.h"
 #endif
 #include "log/LogManager.h"
 #include "hw/mem/addrspace.h"
@@ -63,6 +73,8 @@
 #include "oslib/oslib.h"
 #include "oslib/resources.h"
 #include "oslib/storage.h"
+#include "rend/postprocess/shader_chain.h"
+#include "json.hpp"
 #include "stdclass.h"
 #include "achievements/achievements.h"
 #include "vgamepad.h"
@@ -72,15 +84,26 @@
 #include "deps/qrcodegen/qrcodegen.hpp"
 #endif
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstring>
 #include <cfloat>
+#include <future>
+#include <functional>
+#include <cstdio>
+#include <ctime>
 #include <memory>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 #ifdef __ANDROID__
 #if HOST_CPU == CPU_ARM64 && USE_VULKAN
 #include "rend/vulkan/adreno.h"
@@ -97,6 +120,83 @@ namespace SettingsNew {
 
 static bool g_applyThemeAfterSettings = false;
 static bool g_reloadThemeFontsAfterSettings = false;
+
+#ifdef HOLLYCAST_TEST_HARNESS
+static void annotateTestToggle(const char* prefix, const char* id, const char* label, bool value)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "toggle"}, {"value", value}});
+}
+
+static void annotateTestFloat(const char* prefix, const char* id, const char* label,
+		float value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value_type", "float32"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestInteger(const char* prefix, const char* id, const char* label,
+		int value, int minimum, int maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "slider"}, {"value", value},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+}
+
+static void annotateTestVector2(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const ImVec2& value, float minimum, float maximum)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID groupId = ImGui::GetID(widgetLabel);
+	const std::string semanticId = std::string(prefix) + "." + id;
+	for (int component = 0; component < 2; ++component)
+	{
+		const ImGuiID componentId = ImGui::GetIDWithSeed(component, groupId);
+		const ImGuiID itemId = ImGui::GetIDWithSeed("", nullptr, componentId);
+		const char axis = component == 0 ? 'X' : 'Y';
+		const std::string componentLabel = std::string(label ? label : "") + " " + axis;
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", semanticId + (component == 0 ? ".x" : ".y")},
+			{"semantic_label", componentLabel}, {"kind", "slider"}, {"value_type", "float32"}, {"value", component == 0 ? value.x : value.y},
+			{"range", {{"min", minimum}, {"max", maximum}}}});
+	}
+}
+
+static void annotateTestColor(const char* prefix, const char* id, const char* label,
+		const char* widgetLabel, const float value[4])
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const ImGuiID colorEditId = ImGui::GetID(widgetLabel);
+	const ImGuiID colorButtonId = ImGui::GetIDWithSeed("##ColorButton", nullptr, colorEditId);
+	test_harness::ui::annotateItem(colorButtonId, {{"semantic_id", std::string(prefix) + "." + id},
+		{"semantic_label", label ? label : ""}, {"kind", "color"},
+		{"value", {value[0], value[1], value[2], value[3]}}});
+}
+
+static void annotateTestText(const char* prefix, const char* id, const char* label)
+{
+	if (!test_harness::ui::collectingInspection())
+		return;
+	const auto itemId = test_harness::ui::lastItemId();
+	if (itemId != 0)
+		test_harness::ui::annotateItem(itemId, {{"semantic_id", std::string(prefix) + "." + id},
+			{"semantic_label", label ? label : ""}, {"kind", "text"}});
+}
+#endif
 
 struct ThemeEditorState {
 	bool open = false;
@@ -479,6 +579,8 @@ static const char* GetTabHelpText(SettingsTab tab)
 		return T("Library layout, artwork, scraped media, game metadata, and VMU save icons. Highlight or select a setting to see a fuller explanation here.");
 	case SettingsTab::Video:
 		return T("Graphics quality, renderer behavior, scaling, and performance tuning. Highlight or select a setting to see what it changes and why it matters.");
+	case SettingsTab::Shader:
+		return T("Choose, order, and adjust display shader layers. Every selected layer must compile before the active stack is replaced.");
 	case SettingsTab::OnScreenDisplay:
 		return T("In-game information, VMU displays, performance metrics, and overlay appearance. Highlight or select a setting to see what it changes and why it matters.");
 	case SettingsTab::Audio:
@@ -902,6 +1004,9 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 	}
 
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		const char* popupId = GetPopupId(popupCfg);
@@ -927,6 +1032,71 @@ static bool RenderGeneralPopupSettingRow(const char* id, const char* description
 		DisabledScope _(disabled);
 		SettingsUI::SettingPopup(popupCfg);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+	{
+		using test_harness::Json;
+		Json metadata = {{"semantic_id", id ? id : ""}, {"semantic_label", popupCfg.type == SettingsUI::PopupType::Options
+			? (popupCfg.options.label ? popupCfg.options.label : "")
+			: (popupCfg.slider.label ? popupCfg.slider.label : "")}};
+		if (popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.currentValue != nullptr)
+		{
+			const auto& options = popupCfg.options;
+			const int currentValue = *options.currentValue;
+			metadata["kind"] = options.multiSelect ? "multi_select" : "options";
+			metadata["value"] = currentValue;
+			metadata["requires_apply"] = options.multiSelect;
+			Json entries = Json::array();
+			const int optionCount = std::min(options.optionCount, 128);
+			for (int i = 0; i < optionCount && options.options != nullptr; ++i)
+			{
+				const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+				const bool selected = options.multiSelect
+					? storageValue >= 0 && storageValue < 31 && (currentValue & (1 << storageValue)) != 0
+					: currentValue == storageValue;
+				entries.push_back({{"value", storageValue}, {"label", options.options[i] ? options.options[i] : ""},
+					{"selected", selected}});
+			}
+			metadata["options"] = std::move(entries);
+			if (options.valueToString)
+			{
+				const char* valueLabel = options.valueToString(currentValue);
+				if (valueLabel != nullptr)
+					metadata["value_label"] = valueLabel;
+			}
+			else if (!options.multiSelect && options.options != nullptr)
+			{
+				for (int i = 0; i < optionCount; ++i)
+				{
+					const int storageValue = options.storageIndexMap ? options.storageIndexMap(i) : i;
+					if (storageValue == currentValue && options.options[i] != nullptr)
+					{
+						metadata["value_label"] = options.options[i];
+						break;
+					}
+				}
+			}
+		}
+		else if (popupCfg.type == SettingsUI::PopupType::Slider && popupCfg.slider.currentValue != nullptr)
+		{
+			const auto& slider = popupCfg.slider;
+			const int currentValue = *slider.currentValue;
+			metadata["kind"] = "slider";
+			metadata["value"] = currentValue;
+			metadata["range"] = {{"min", slider.minValue}, {"max", slider.maxValue}};
+			metadata["requires_apply"] = slider.onApply != nullptr;
+			if (slider.valueFormatter)
+				metadata["value_label"] = slider.valueFormatter(currentValue);
+			else
+			{
+				char valueLabel[128];
+				std::snprintf(valueLabel, sizeof(valueLabel), slider.format ? slider.format : "%d", currentValue);
+				metadata["value_label"] = valueLabel;
+			}
+		}
+		test_harness::ui::annotateItem(rowItemId, metadata);
+	}
+#endif
 	if (infoMarker && settingsIconFont != nullptr && largeFont != nullptr
 			&& popupCfg.type == SettingsUI::PopupType::Options && popupCfg.options.label != nullptr)
 	{
@@ -956,11 +1126,19 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	const bool rowActivated = BeginTwoLineSettingRow("##row", rowTooltip, disabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	if (rowActivated)
 	{
 		value = !value;
 		onToggle(value);
 	}
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""}, {"semantic_label", label ? label : ""},
+			{"kind", "toggle"}, {"value", value}});
+#endif
 
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
@@ -991,7 +1169,7 @@ static bool RenderGeneralToggleSettingRow(const char* id, const char* icon, cons
 template <typename DrawInput>
 static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, const char* label,
 	const char* description, DrawInput&& drawInput, const char* tooltip = nullptr, bool disabled = false,
-	float inputWidthPx = 220.0f)
+	float inputWidthPx = 220.0f, const char* controlKind = "text")
 {
 	ImGui::PushID(id);
 
@@ -1013,6 +1191,11 @@ static void RenderGeneralTextInputSettingRow(const char* id, const char* icon, c
 			ImGui::SetKeyboardFocusHere();
 		ImGui::SetNextItemWidth(inputWidth);
 		drawInput();
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : ""},
+				{"semantic_label", label ? label : ""}, {"kind", controlKind ? controlKind : "text"}});
+#endif
 	}
 
 	RenderTwoLineSettingDescription(line1Start, description);
@@ -1094,28 +1277,43 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			return;
 		}
 		ImGui::NewLine();
-		if (gamepad->is_rumble_enabled())
+		if (gamepad->has_force_feedback() || gamepad->is_rumble_enabled())
 		{
-			header(T("Rumble"));
+			header(gamepad->has_force_feedback() ? T("Force Feedback") : T("Rumble"));
 			int power = gamepad->get_rumble_power();
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%"))
+			const bool powerChanged = ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".rumble_power").c_str(), T("Power"), power, 0, 100);
+#endif
+			if (powerChanged)
 				gamepad->set_rumble_power(power);
 			ImGui::SameLine();
-			ShowFooterHelpMarker(T("Rumble power"));
+			ShowFooterHelpMarker(gamepad->has_force_feedback() ? T("Force-feedback strength") : T("Rumble power"));
 		}
 		if (gamepad->has_analog_stick())
 		{
 			header(T("Thumbsticks"));
 			int deadzone = std::round(gamepad->get_dead_zone() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%"))
+			const bool deadzoneChanged = ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".dead_zone").c_str(), T("Dead zone"), deadzone, 0, 100);
+#endif
+			if (deadzoneChanged)
 				gamepad->set_dead_zone(deadzone / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Minimum deflection to register as input"));
 			int saturation = std::round(gamepad->get_saturation() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			if (ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%"))
+			const bool saturationChanged = ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%");
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".saturation").c_str(), T("Saturation"), saturation, 50, 200);
+#endif
+			if (saturationChanged)
 				gamepad->set_saturation(saturation / 100.f);
 			ImGui::SameLine();
 			ShowFooterHelpMarker(T("Value sent to the game at 100% thumbstick deflection. "
@@ -1516,7 +1714,13 @@ static void displayMappedControl(const std::shared_ptr<GamepadDevice>& gamepad, 
 			ImguiStyleVar checkboxBorder(ImGuiStyleVar_FrameBorderSize, 1.0f);
 			ImguiStyleColor checkboxBorderColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_Text));
 			ImguiStyleColor checkboxCheckColor(ImGuiCol_CheckMark, ImGui::GetStyleColorVec4(ImGuiCol_Text));
-			if (ImGui::Checkbox(T("Sequential"), &(combo.sequential)))
+			const bool sequentialChanged = ImGui::Checkbox(T("Sequential"), &(combo.sequential));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+				annotateTestToggle("controls.mapping.sequential", (gamepad->unique_id() + "." + std::to_string(static_cast<int>(key))).c_str(),
+					T("Sequential"), combo.sequential);
+#endif
+			if (sequentialChanged)
 				input_mapping->set_button(g_gamepad_port_for_mapping, key, combo);
 		}
 		ImGui::SameLine();
@@ -1684,11 +1888,23 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 			if (g_arcade_button_mode)
 			{
 				ImGui::Text("%s", T("Controller Type:"));
-				if (ImGui::RadioButton(T("Gamepad"), !hitbox))
+				const bool gamepadSelected = ImGui::RadioButton(T("Gamepad"), !hitbox);
+				if (gamepadSelected)
 					hitbox = false;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.gamepad"},
+						{"semantic_label", T("Gamepad")}, {"kind", "radio"}, {"value", !hitbox}});
+#endif
 				ImGui::SameLine();
-				if (ImGui::RadioButton(T("Arcade / Hit Box"), hitbox))
+				const bool arcadeSelected = ImGui::RadioButton(T("Arcade / Hit Box"), hitbox);
+				if (arcadeSelected)
 					hitbox = true;
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.reset.type.arcade"},
+						{"semantic_label", T("Arcade / Hit Box")}, {"kind", "radio"}, {"value", hitbox}});
+#endif
 			}
 			ImGui::NewLine();
 			{
@@ -1717,6 +1933,17 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
 		ImVec2(ImGui::GetStyle().FramePadding.x, (SettingsLayoutScaled(30) - ImGui::GetFontSize()) / 2));
 	ImGui::Combo("##arcadeMode", &item_current_map_idx, items, IM_ARRAYSIZE(items));
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+	{
+		test_harness::Json options = test_harness::Json::array();
+		for (int i = 0; i < IM_ARRAYSIZE(items); ++i)
+			options.push_back({{"value", i}, {"label", items[i]}, {"selected", item_current_map_idx == i}});
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "controls.mapping.mode." + gamepad->unique_id()},
+			{"semantic_label", "Controller mappings"}, {"kind", "options"}, {"value", item_current_map_idx},
+			{"value_label", items[item_current_map_idx]}, {"options", std::move(options)}});
+	}
+#endif
 	ImGui::PopStyleVar();
 	if (last_item_current_map_idx != 2 && item_current_map_idx != last_item_current_map_idx)
 		gamepad->save_mapping(map_system);
@@ -1860,6 +2087,9 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	ImGui::PushID(id);
 	const char* rowTooltip = tooltip != nullptr ? tooltip : description;
 	BeginTwoLineSettingRow("##row", rowTooltip, true);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(icon, SettingsLayoutSize(20.0f, 20.0f));
@@ -1870,6 +2100,11 @@ static void RenderGeneralInfoRow(const char* id, const char* icon, const char* l
 	RenderGeneralRightValue(value, 280.0f, 0.0f, disabledValue);
 	RenderTwoLineSettingDescription(line1Start, description);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", id ? id : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "info"}, {"value", value}});
+#endif
 
 	ImGui::PopID();
 }
@@ -1879,6 +2114,9 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 {
 	ImGui::PushID(label);
 	const bool rowActivated = BeginTwoLineSettingRow("##row", helpText);
+#ifdef HOLLYCAST_TEST_HARNESS
+	const std::uint32_t rowItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 	const ImVec2 line1Start = BeginTwoLineSettingRowContent();
 
 	SettingIcon(ICON_FA_FOLDER_OPEN, SettingsLayoutSize(20.0f, 20.0f));
@@ -1903,7 +2141,13 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 		ImGui::SameLine(RightColumnX(buttonWidth));
 		ImVec2 buttonPos = ImGui::GetCursorPos();
 		ImGui::SetCursorPos(ImVec2(buttonPos.x, buttonPos.y + verticalOffset));
-		if (SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight)))
+		const bool clearPath = SettingsIconButton("##ClearPath", ICON_FA_TRASH_CAN, ImVec2(buttonWidth, buttonHeight));
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (test_harness::ui::collectingInspection())
+			test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", std::string(label) + ".clear"},
+				{"semantic_label", std::string("Clear ") + label}, {"kind", "button"}});
+#endif
+		if (clearPath)
 		{
 			pathOption.get().clear();
 			openPopup = false;
@@ -1916,6 +2160,11 @@ static void manageSinglePath(const char* label, config::Option<std::string, fals
 
 	RenderTwoLineSettingDescription(line1Start, helpText);
 	EndTwoLineSettingRow();
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (rowItemId != 0)
+		test_harness::ui::annotateItem(rowItemId, {{"semantic_id", label ? label : ""},
+			{"semantic_label", label ? label : ""}, {"kind", "path"}, {"value", pathOption.get()}});
+#endif
 	ImGui::PopID();
 
 	const std::string popupName = std::string(T("Select ")) + label;
@@ -2273,6 +2522,7 @@ static const SettingsTabInfo kSettingsTabs[] = {
 	{ "General", ICON_FA_GEAR, "Make Hollycast feel right for you." },
 	{ "Game library", ICON_FA_FOLDER, "Your games, artwork and library layout." },
 	{ "Video", ICON_FA_DISPLAY, "Graphics quality, scaling and performance." },
+	{ "Shader", ICON_FA_WAND_MAGIC, "Shader Configuration" },
 	{ "On-screen display", ICON_FA_RECTANGLE_LIST, "Overlays, VMU screens and in-game information." },
 	{ "Audio", ICON_FA_VOLUME_HIGH, "Sound output, mixing and latency." },
 	{ "Controls", ICON_FA_GAMEPAD, "Controllers, mappings and input behavior." },
@@ -2518,6 +2768,7 @@ static const char* kSettingsTabKeywords[] = {
 	"language region broadcast cable interface theme content folder data home ui system tv",
 	"library games boxart artwork cover metadata scan vmu folders scrape",
 	"video graphics resolution render texture quality preset scaling fps display",
+	"shader post processing effects filter layers preview parameters",
 	"osd overlay vmu screen notification display performance connect phone wifi remote",
 	"audio sound volume latency mixing output speakers",
 	"controls controller gamepad mapping keyboard buttons sensitivity input",
@@ -2732,6 +2983,9 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(accent.x, accent.y, accent.z, 0.55f));
 		}
 		const bool tabClicked = ImGui::Selectable(tabLabel.c_str(), isSelected, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x, 0));
+#ifdef HOLLYCAST_TEST_HARNESS
+		const std::uint32_t tabItemId = test_harness::ui::collectingInspection() ? test_harness::ui::lastItemId() : 0;
+#endif
 		if (isSelected)
 			ImGui::PopStyleColor(3);
 		if (settingsIconFont != nullptr)
@@ -2758,6 +3012,11 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			g_tabSlideStart = -1.0;
 			ResetSettingsFooter();
 		}
+#ifdef HOLLYCAST_TEST_HARNESS
+		if (tabItemId != 0)
+			test_harness::ui::annotateItem(tabItemId, {{"semantic_id", "settings.tab." + std::to_string(i)},
+				{"semantic_label", tabName ? tabName : ""}, {"kind", "tab"}, {"value", g_state.currentTab == tab}});
+#endif
 		if (focusSelectedTab && isSelected)
 			FocusCurrentSettingsItem();
 		if (ImGui::IsItemHovered() || ImGui::IsItemFocused())
@@ -2841,6 +3100,9 @@ static void renderContentArea()
 		break;
 	case SettingsTab::Video:
 		renderVideoTab();
+		break;
+	case SettingsTab::Shader:
+		renderShaderTab();
 		break;
 	case SettingsTab::OnScreenDisplay:
 		renderOnScreenDisplayTab();
@@ -2954,6 +3216,11 @@ static bool RenderCollapsingHeader(
 
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(SettingsLayoutScaled(8.0f), SettingsLayoutScaled(10.0f)));
 	bool open = ImGui::CollapsingHeader(labelStr.c_str(), flags);
+#ifdef HOLLYCAST_TEST_HARNESS
+	if (test_harness::ui::collectingInspection())
+		test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", id ? id : labelText},
+			{"semantic_label", labelText ? labelText : ""}, {"kind", "section"}, {"value", open}});
+#endif
 	if (labelIcon && *labelIcon != '\0')
 	{
 		ImFont* iconFont = settingsIconFont != nullptr ? settingsIconFont : ImGui::GetFont();
@@ -3725,9 +3992,27 @@ static void renderSettingsContentTab(SettingsTab tab)
 			} else {
 				ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
 				ImGui::InputText(T("Theme name"), &g_themeEditor.newFilename);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestText("theme.editor", "new_name", T("Theme name"));
+#endif
 			}
 			ImGui::SetNextItemWidth(std::max(1.0f, ImGui::GetContentRegionAvail().x * 0.56f));
-			if (ImGui::Combo(T("Base theme"), &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()))) {
+			const char* baseThemeLabel = T("Base theme");
+			const bool baseThemeChanged = ImGui::Combo(baseThemeLabel, &baseIndex, baseNames.data(), static_cast<int>(baseNames.size()));
+#ifdef HOLLYCAST_TEST_HARNESS
+			if (test_harness::ui::collectingInspection())
+			{
+				test_harness::Json options = test_harness::Json::array();
+				for (int i = 0; i < static_cast<int>(baseNames.size()); ++i)
+					options.push_back({{"value", i}, {"label", baseNames[i]}, {"selected", baseIndex == i}});
+				test_harness::Json metadata = {{"semantic_id", "theme.editor.base"}, {"semantic_label", baseThemeLabel},
+					{"kind", "options"}, {"value", baseIndex}, {"options", std::move(options)}, {"requires_apply", true}};
+				if (baseIndex >= 0 && baseIndex < static_cast<int>(baseNames.size()))
+					metadata["value_label"] = baseNames[baseIndex];
+				test_harness::ui::annotateItem(test_harness::ui::lastItemId(), metadata);
+			}
+#endif
+			if (baseThemeChanged) {
 				g_themeEditor.draft.base = baseIndex;
 				g_themeEditor.previewing = true;
 			}
@@ -3774,7 +4059,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								ImGui::PushID(role);
 								auto found = g_themeEditor.draft.roles.find(role);
 								bool enabled = found != g_themeEditor.draft.roles.end();
-								if (ImGui::Checkbox(labels[i], &enabled)) {
+								const bool enabledChanged = ImGui::Checkbox(labels[i], &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestToggle("theme.role", role, labels[i], enabled);
+#endif
+								if (enabledChanged) {
 									if (enabled) {
 										auto inherited = baseTheme.roles.find(role);
 										g_themeEditor.draft.roles[role] = inherited != baseTheme.roles.end() ? inherited->second : suggestions[i];
@@ -3784,7 +4073,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								found = g_themeEditor.draft.roles.find(role);
 								if (found != g_themeEditor.draft.roles.end()) {
 									ImVec4 value = found->second;
-									if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) {
+									const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									annotateTestColor("theme.role.color", role, labels[i], "##color", &value.x);
+#endif
+									if (colorChanged) {
 										found->second = value;
 										g_themeEditor.previewing = true;
 									}
@@ -3798,6 +4091,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 						if (ImGui::CollapsingHeader(T("Advanced interface colors"))) {
 							ImGui::SetNextItemWidth(-FLT_MIN);
 							ImGui::InputTextWithHint("##colorSearch", T("Search colors"), &g_themeEditor.colorSearch);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestText("theme.colors", "search", T("Search colors"));
+#endif
 							std::string query = g_themeEditor.colorSearch;
 							std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 							for (int i = 0; i < ImGuiCol_COUNT; ++i) {
@@ -3806,7 +4102,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 								std::transform(searchable.begin(), searchable.end(), searchable.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 								if (!query.empty() && searchable.find(query) == std::string::npos) continue;
 								ImVec4 value = previewStyle.Colors[i];
-								if (ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar)) {
+								const bool colorChanged = ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+								annotateTestColor("theme.interface_color", name, name, name, &value.x);
+#endif
+								if (colorChanged) {
 									auto found = std::find_if(g_themeEditor.draft.colors.begin(), g_themeEditor.draft.colors.end(), [i](const auto& c) { return c.first == i; });
 									if (found == g_themeEditor.draft.colors.end()) g_themeEditor.draft.colors.emplace_back(i, value); else found->second = value;
 									g_themeEditor.previewing = true;
@@ -3824,7 +4124,16 @@ static void renderSettingsContentTab(SettingsTab tab)
 									bool enabled = found != roles.end();
 									ImGui::PushID(widget);
 									ImGui::PushID(role);
-									if (ImGui::Checkbox(role, &enabled)) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					const bool collectThemeMetadata = test_harness::ui::collectingInspection();
+					const std::string widgetRoleId = collectThemeMetadata ? std::string(widget) + "." + role : std::string();
+#endif
+									const bool enabledChanged = ImGui::Checkbox(role, &enabled);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (collectThemeMetadata)
+						annotateTestToggle("theme.widget_role", widgetRoleId.c_str(), role, enabled);
+#endif
+									if (enabledChanged) {
 										if (enabled) {
 											auto global = g_themeEditor.draft.roles.find(role);
 											auto inherited = baseTheme.roles.find(role);
@@ -3836,7 +4145,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 									found = roles.find(role);
 									if (found != roles.end()) {
 										ImVec4 value = found->second;
-										if (ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar)) { found->second = value; g_themeEditor.previewing = true; }
+										const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+#ifdef HOLLYCAST_TEST_HARNESS
+									if (collectThemeMetadata)
+										annotateTestColor("theme.widget_role.color", widgetRoleId.c_str(), role, "##color", &value.x);
+#endif
+										if (colorChanged) { found->second = value; g_themeEditor.previewing = true; }
 									}
 									ImGui::PopID();
 									ImGui::PopID();
@@ -3853,7 +4167,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					auto scalar = [&](const char* name, float ImGuiStyle::*member, float max) {
 						float value = previewStyle.*member;
 						const float upper = std::strstr(name, "BorderSize") != nullptr ? 20.f : max;
-						if (ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.style", name, name, value, 0.f, upper);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3861,7 +4179,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					};
 					auto vector = [&](const char* name, ImVec2 ImGuiStyle::*member, float max) {
 						ImVec2 value = previewStyle.*member;
-						if (ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+						const bool changed = ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestVector2("theme.style", name, name, name, value, 0.f, max);
+#endif
+						if (changed) {
 							auto it = std::find_if(g_themeEditor.draft.vectors.begin(), g_themeEditor.draft.vectors.end(), [&](const auto& v) { return v.first == member; });
 							if (it == g_themeEditor.draft.vectors.end()) g_themeEditor.draft.vectors.emplace_back(member, value); else it->second = value;
 							g_themeEditor.previewing = true;
@@ -3879,7 +4201,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 					for (const auto& item : scalars) {
 						if (item.second == &ImGuiStyle::Alpha) {
 							float value = previewStyle.*item.second;
-							if (ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+							const bool changed = ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+							annotateTestFloat("theme.style", item.first, item.first, value, 0.2f, 1.f);
+#endif
+							if (changed) {
 								auto it = std::find_if(g_themeEditor.draft.scalars.begin(), g_themeEditor.draft.scalars.end(), [&](const auto& v) { return v.first == item.second; });
 								if (it == g_themeEditor.draft.scalars.end()) g_themeEditor.draft.scalars.emplace_back(item.second, value); else it->second = value;
 								g_themeEditor.previewing = true;
@@ -3898,7 +4224,11 @@ static void renderSettingsContentTab(SettingsTab tab)
 						ImGui::TextDisabled("%s", T("Hollycast layout"));
 					auto layoutSlider = [&](const char* name, float& value, float minimum, float maximum, float fallback, bool& present) {
 						float shown = present ? value : fallback;
-						if (ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { value = shown; present = true; g_themeEditor.previewing = true; }
+						const bool changed = ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestFloat("theme.layout", name, name, shown, minimum, maximum);
+#endif
+						if (changed) { value = shown; present = true; g_themeEditor.previewing = true; }
 					};
 					layoutSlider("Density", g_themeEditor.draft.layout.density, 0.75f, 1.5f, 1.f, g_themeEditor.draft.layout.hasDensity);
 					layoutSlider("Settings sidebar width", g_themeEditor.draft.layout.settingsSidebarWidth, 136.f, 310.f, 225.f, g_themeEditor.draft.layout.hasSettingsSidebarWidth);
@@ -3913,33 +4243,67 @@ static void renderSettingsContentTab(SettingsTab tab)
 					if (ImGui::BeginChild("ThemeAssetsList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
 					ImGui::TextWrapped("%s", T("Use paths relative to the custom theme folder. Copy files there first; import and export copy referenced files automatically."));
 					ImGui::Spacing();
-					auto assetInput = [&](const char* label, std::string& value, bool font = false) {
+					auto assetInput = [&](const char* id, const char* label, std::string& value, bool font = false) {
 						const bool changed = ImGui::InputText(label, &value);
 						const bool editCommitted = font && ImGui::IsItemDeactivatedAfterEdit();
+#ifdef HOLLYCAST_TEST_HARNESS
+						annotateTestText("theme.asset", id, label);
+#endif
 						if (changed) { g_themeEditor.previewing = true; g_themeEditor.fontChanged |= font; }
 						if (editCommitted) { g_themeEditor.previewing = true; g_themeEditor.fontReloadPending = true; }
 					};
-					assetInput(T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
-					assetInput(T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
-					assetInput(T("Background image path"), g_themeEditor.draft.assets.background);
+					assetInput("body_font", T("Body font path"), g_themeEditor.draft.assets.bodyFont, true);
+					assetInput("bold_font", T("Bold font path"), g_themeEditor.draft.assets.boldFont, true);
+					assetInput("background_image", T("Background image path"), g_themeEditor.draft.assets.background);
 					std::string settingsIconPath;
 					auto settingsIcon = g_themeEditor.draft.assets.icons.find("settings");
 					if (settingsIcon != g_themeEditor.draft.assets.icons.end()) settingsIconPath = settingsIcon->second;
-					if (ImGui::InputText(T("Settings icon path"), &settingsIconPath)) {
+					const bool settingsIconChanged = ImGui::InputText(T("Settings icon path"), &settingsIconPath);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "settings_icon", T("Settings icon path"));
+#endif
+					if (settingsIconChanged) {
 						if (settingsIconPath.empty()) g_themeEditor.draft.assets.icons.erase("settings");
 						else g_themeEditor.draft.assets.icons["settings"] = settingsIconPath;
 						g_themeEditor.previewing = true;
 					}
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
-					if (ImGui::SliderFloat(T("Background opacity"), &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
+					const char* opacityLabel = T("Background opacity");
+					const bool opacityChanged = ImGui::SliderFloat(opacityLabel, &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestFloat("theme.asset", "background_opacity", opacityLabel, opacity, 0.f, 1.f);
+#endif
+					if (opacityChanged) { g_themeEditor.draft.assets.backgroundOpacity = opacity; g_themeEditor.previewing = true; }
 					const char* fits[] = {"cover", "contain", "stretch"};
 					// Keep the JSON values independent of the translated option labels.
 					const char* fitLabels[] = {i18n::translateCtx("Background fit", "Cover"),
 						i18n::translateCtx("Background fit", "Contain"), i18n::translateCtx("Background fit", "Stretch")};
 					int fit = g_themeEditor.draft.assets.backgroundFit == "contain" ? 1 : g_themeEditor.draft.assets.backgroundFit == "stretch" ? 2 : 0;
-					if (ImGui::Combo(T("Background fit"), &fit, fitLabels, IM_ARRAYSIZE(fitLabels))) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
+					const char* fitLabel = T("Background fit");
+					const bool fitChanged = ImGui::Combo(fitLabel, &fit, fitLabels, IM_ARRAYSIZE(fitLabels));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						test_harness::Json options = test_harness::Json::array();
+						for (int i = 0; i < IM_ARRAYSIZE(fitLabels); ++i)
+							options.push_back({{"value", fits[i]}, {"label", fitLabels[i]}, {"selected", fit == i}});
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.background_fit"},
+							{"semantic_label", fitLabel}, {"kind", "options"}, {"value", fits[fit]},
+							{"value_label", fitLabels[fit]}, {"options", std::move(options)}});
+					}
+#endif
+					if (fitChanged) { g_themeEditor.draft.assets.backgroundFit = fits[fit]; g_themeEditor.previewing = true; }
 					ImGui::InputText(T("Export folder"), &g_themeEditor.exportFolder);
-					if (ImGui::Button(T("Export theme and assets"))) {
+#ifdef HOLLYCAST_TEST_HARNESS
+					annotateTestText("theme.asset", "export_folder", T("Export folder"));
+#endif
+					const bool exportClicked = ImGui::Button(T("Export theme and assets"));
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "theme.asset.export"},
+							{"semantic_label", T("Export theme and assets")}, {"kind", "button"}});
+#endif
+					if (exportClicked) {
 						const std::string exportName = themeFilenameWithExtension(g_themeEditor.editing ? g_themeEditor.filename : g_themeEditor.newFilename);
 						if (CustomTheme::exportToDirectory(g_themeEditor.draft, exportName, g_themeEditor.exportFolder, g_themeEditor.error))
 							g_themeEditor.error = strprintf(T("Exported %s and its referenced assets."), exportName.c_str());
@@ -5247,6 +5611,11 @@ void renderVideoTab()
 #ifdef USE_METAL
 	const bool metalAvailable = metalIsAvailable();
 #endif
+	const bool hikaruPlatform = settings.platform.isHikaru();
+#ifdef USE_HIKARU
+	if (hikaruPlatform)
+		perPixel = config::HikaruSorting.get() == config::HikaruSortingMode::PerPixel;
+#endif
 	const int apiCount = 0
 #ifdef USE_METAL
 		+ (metalAvailable ? 1 : 0)
@@ -5255,7 +5624,7 @@ void renderVideoTab()
 		+ 1
 #endif
 #ifdef USE_DX9
-		+ 1
+		+ (hikaruPlatform ? 0 : 1)
 #endif
 #ifdef USE_OPENGL
 		+ 1
@@ -5285,8 +5654,10 @@ void renderVideoTab()
 			apiValues[apiOptionCount++] = 1;
 #endif
 #ifdef USE_DX9
-			apiLabels[apiOptionCount] = "DirectX 9";
-			apiValues[apiOptionCount++] = 2;
+			if (!hikaruPlatform) {
+				apiLabels[apiOptionCount] = "DirectX 9";
+				apiValues[apiOptionCount++] = 2;
+			}
 #endif
 #ifdef USE_DX11
 			apiLabels[apiOptionCount] = "DirectX 11";
@@ -5374,7 +5745,7 @@ void renderVideoTab()
 				if (renderApi == 2)
 					perPixel = false;
 #ifdef USE_METAL
-				if (renderApi == 4 && !metalSupportsPerPixel())
+				if (renderApi == 4 && !settings.platform.isHikaru() && !metalSupportsPerPixel())
 					perPixel = false;
 #endif
 				return true;
@@ -5398,12 +5769,15 @@ void renderVideoTab()
 	if (RenderCollapsingHeader("TransparentSortingSection", ICON_FA_WAND_SPARKLES, T("Transparent Sorting"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
 		{
-			bool has_per_pixel = GraphicsContext::Instance()->hasPerPixel();
+			bool has_per_pixel = hikaruPlatform || GraphicsContext::Instance()->hasPerPixel();
 #ifdef USE_METAL
-			if (renderApi == 4)
+			if (renderApi == 4 && !hikaruPlatform)
 				has_per_pixel = metalSupportsPerPixel();
 #endif
 			int renderer = perPixel ? 2 : config::PerStripSorting ? 1 : 0;
+#ifdef USE_HIKARU
+			if (hikaruPlatform) renderer = static_cast<int>(config::HikaruSorting.get());
+#endif
 
 			std::array<const char*, 3> sortingLabels {};
 			std::array<int, 3> sortingValues {};
@@ -5479,6 +5853,13 @@ void renderVideoTab()
 				if (selectedIndex < 0 || selectedIndex >= sortingOptionCount)
 					return false;
 				const int selectedRenderer = sortingValues[selectedIndex];
+#ifdef USE_HIKARU
+				if (hikaruPlatform) {
+					config::HikaruSorting.set(static_cast<config::HikaruSortingMode>(selectedRenderer));
+					perPixel = selectedRenderer == 2;
+					return true;
+				}
+#endif
 				switch (selectedRenderer)
 				{
 				case 0:
@@ -5534,7 +5915,7 @@ void renderVideoTab()
 			const int configuredRenderResolution = config::RenderResolution.get();
 			// Read both toggles every frame so labels also preview widescreen cheats before a game is loaded.
 			float widthScale = 1.f;
-			if ((config::Widescreen || config::WidescreenGameHacks)
+			if (!settings.platform.isHikaru() && (config::Widescreen || config::WidescreenGameHacks)
 					&& !config::Rotate90 && !config::EmulateFramebuffer)
 			{
 				widthScale = config::Widescreen && config::SuperWidescreen
@@ -5897,35 +6278,44 @@ void renderVideoTab()
 			Tnop("PixelBufferSizeSetting"),
 			T("Memory budget for Per-Pixel transparency rendering."),
 			pixelBufferCfg,
-			T(
-				"Pixel Buffer Size\n"
-				"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
-				"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
-				"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes."
-			)
+			hikaruPlatform
+				? T("Pixel Buffer Size\n"
+					"Controls the memory budget for Hikaru per-pixel transparency. Targets are allocated as needed.\n"
+					"Higher resolutions and overlapping effects require more memory. Increase this budget if transparency is missing or the renderer falls back to depth peeling.")
+				: T("Pixel Buffer Size\n"
+					"Controls the memory budget for Per-Pixel (OIT) transparency rendering.\n"
+					"If you increase Internal Resolution a lot or see missing or incorrect transparency in complex scenes, you may need a larger buffer.\n"
+					"Lower values reduce memory usage, but can limit transparency accuracy in heavier scenes.")
 		);
 
-		static int perPixelLayersTemp = config::PerPixelLayers.get();
+#ifdef USE_HIKARU
+		auto& maximumLayers = hikaruPlatform ? config::HikaruMaxLayers : config::PerPixelLayers;
+#else
+		auto& maximumLayers = config::PerPixelLayers;
+#endif
+		static int perPixelLayersTemp = maximumLayers.get();
 		if (!ImGui::IsPopupOpen("PerPixelMaximumLayersPopup"))
-			perPixelLayersTemp = config::PerPixelLayers.get();
+			perPixelLayersTemp = maximumLayers.get();
 
 		SettingsUI::PopupSliderConfig perPixelLayersCfg {};
 		perPixelLayersCfg.label = T("Maximum Layers");
 		perPixelLayersCfg.icon = ICON_FA_LAYER_GROUP;
 		perPixelLayersCfg.popupID = Tnop("PerPixelMaximumLayersPopup");
-		perPixelLayersCfg.description = renderApi == 4
+		perPixelLayersCfg.description = hikaruPlatform
+			? T("Limits Hikaru depth-peeling layers. Supported OpenGL and Vulkan fragment lists use Pixel Buffer Size instead; this limit still applies to their peeling fallback.")
+			: renderApi == 4
 			? T("Controls how many transparent layers are resolved per pixel. Metal retains the nearest layers when the limit is exceeded. Lower values can improve performance.")
 			: T("Controls how many transparent layers can be resolved per pixel in complex scenes.\n"
 				"Increase this if you see missing transparency or incorrect layering.\n"
 				"Lower values reduce memory pressure and can improve performance.");
 		perPixelLayersCfg.currentValue = &perPixelLayersTemp;
-		perPixelLayersCfg.minValue = 8;
+		perPixelLayersCfg.minValue = hikaruPlatform ? 1 : 8;
 		perPixelLayersCfg.maxValue = 128;
 		perPixelLayersCfg.format = "%d";
 		perPixelLayersCfg.valueWidth = 220.0f;
 		perPixelLayersCfg.sliderWidth = 320.0f;
 		perPixelLayersCfg.onValueChange = [&]() {
-			config::PerPixelLayers.set(perPixelLayersTemp);
+			maximumLayers.set(perPixelLayersTemp);
 		};
 
 		SettingsUI::PopupConfig perPixelLayersPopupCfg {};
@@ -5936,7 +6326,9 @@ void renderVideoTab()
 			Tnop("PerPixelMaximumLayersSetting"),
 			T("Maximum transparent layers resolved per pixel."),
 			perPixelLayersPopupCfg,
-			renderApi == 4
+			hikaruPlatform
+				? T("Per-Pixel Maximum Layers\nLimits depth peeling and its fallback paths. Successful OpenGL and Vulkan fragment lists retain fragments within Pixel Buffer Size, without a fixed layer count.")
+				: renderApi == 4
 				? T("Per-Pixel Maximum Layers\nMetal retains the nearest layers when the limit is exceeded. Increase the limit if transparency is missing; lower it to reduce resolve work.")
 				: T("Per-Pixel Maximum Layers\n"
 					"Limits how many transparent layers can be resolved per pixel in complex scenes.\n"
@@ -6365,6 +6757,7 @@ void renderVideoTab()
 		{
 			applyPendingSettings();
 			GamepadDevice::load_system_mappings();
+			closeShaderLiveTune();
 			g_textureFilterLiveTune.store(true, std::memory_order_relaxed);
 			// Resume through Loading when replacement textures need a refresh or preload.
 			gui_resume_game();
@@ -6509,25 +6902,1242 @@ void renderVideoTab()
 	}
 #endif
 
-	// Update renderer type based on selections
+	// Changing Hikaru sorting must not overwrite Dreamcast/Naomi's OIT choice.
+	// The API remains a shared preference; the sorting modes are independent.
+	const bool hostPerPixel = hikaruPlatform ? isPerPixel(config::RendererType) : perPixel;
 	switch (renderApi)
 	{
 	case 0:
-		config::RendererType = perPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
+		config::RendererType = hostPerPixel ? RenderType::OpenGL_OIT : RenderType::OpenGL;
 		break;
 	case 1:
-		config::RendererType = perPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
+		config::RendererType = hostPerPixel ? RenderType::Vulkan_OIT : RenderType::Vulkan;
 		break;
 	case 4:
-		config::RendererType = perPixel ? RenderType::Metal_OIT : RenderType::Metal;
+		config::RendererType = hostPerPixel ? RenderType::Metal_OIT : RenderType::Metal;
 		break;
 	case 2:
 		config::RendererType = RenderType::DirectX9;
 		break;
 		case 3:
-			config::RendererType = perPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
+			config::RendererType = hostPerPixel ? RenderType::DirectX11_OIT : RenderType::DirectX11;
 			break;
 	}
+}
+
+struct ShaderBrowserEntry
+{
+	std::string path;
+	std::string displayPath;
+	std::string catalogKey;
+	std::string searchText;
+	postprocess::ShaderFormat format = postprocess::ShaderFormat::Unknown;
+};
+
+struct ShaderBrowserMetadata
+{
+	std::string name;
+	std::string description;
+	std::string author;
+	std::string performance;
+	bool mobileRecommended = false;
+};
+
+static std::vector<ShaderBrowserEntry> g_shaderBrowserEntries;
+static std::unordered_map<std::string, ShaderBrowserMetadata> g_shaderBrowserMetadata;
+static std::string g_shaderBrowserDirectory;
+static std::string g_shaderBrowserError;
+static std::string g_shaderCatalogWarning;
+static std::string g_shaderFilter;
+static bool g_shaderBrowserInitialized = false;
+static std::vector<size_t> g_shaderVisibleEntries;
+static std::string g_shaderAppliedFilter;
+static uint64_t g_shaderBrowserGeneration = 0;
+static uint64_t g_shaderVisibleGeneration = 0;
+
+struct ShaderScanResult
+{
+	std::string directory;
+	std::vector<ShaderBrowserEntry> entries;
+	std::string error;
+};
+
+static std::future<ShaderScanResult> g_shaderScanFuture;
+static bool g_shaderScanPending = false;
+static std::string g_shaderPendingDirectory;
+
+struct ShaderPreviewState
+{
+	bool initialized = false;
+	std::vector<std::string> paths;
+	std::string technique;
+	std::string overrides;
+	postprocess::ShaderChain chain;
+	std::vector<postprocess::ShaderParameter> defaults;
+	std::string error;
+	uint64_t activationGeneration = 0;
+};
+
+struct ShaderSettingsSnapshot
+{
+	std::vector<std::string> paths = config::PostProcessShaders.get();
+	std::string singlePath = config::PostProcessShader.get();
+	std::string technique = config::PostProcessShaderTechnique.get();
+	std::string overrides = config::PostProcessShaderParameters.get();
+
+	void restore()
+	{
+		config::PostProcessShaders.get() = std::move(paths);
+		config::PostProcessShader.get() = std::move(singlePath);
+		config::PostProcessShaderTechnique.get() = std::move(technique);
+		config::PostProcessShaderParameters.get() = std::move(overrides);
+	}
+};
+
+struct PendingShaderSettings
+{
+	ShaderSettingsSnapshot previous;
+	uint64_t generation;
+	bool perGame;
+};
+
+static ShaderPreviewState g_shaderPreview;
+static std::atomic_bool g_shaderLiveTune { false };
+static std::function<void()> g_shaderAction;
+static uint64_t g_shaderActionGeneration = 0;
+static bool g_shaderActionQueuedLive = false;
+static std::optional<PendingShaderSettings> g_pendingShaderSettings;
+
+static void deferShaderSettingsSave(bool defer)
+{
+	config::PostProcessShaders.deferSave(defer);
+	config::PostProcessShader.deferSave(defer);
+	config::PostProcessShaderTechnique.deferSave(defer);
+	config::PostProcessShaderParameters.deferSave(defer);
+}
+
+static void finishPendingShaderSettings()
+{
+	if (!g_pendingShaderSettings)
+		return;
+	auto& pending = *g_pendingShaderSettings;
+	if (pending.generation != postprocess::shaderChainReloadGeneration()
+			|| pending.perGame != config::Settings::instance().hasPerGameConfig()) {
+		// Scope changes have already loaded their own settings.
+		deferShaderSettingsSave(false);
+		g_pendingShaderSettings.reset();
+		g_shaderPreview.initialized = false;
+		return;
+	}
+	const auto status = postprocess::getShaderChainStatusSummary();
+	const bool acknowledged = status.reloadGeneration == pending.generation;
+	if (!acknowledged && g_shaderLiveTune && !gui_is_open())
+		return;
+	const bool rejected = acknowledged && !status.error.empty() && !status.frameError;
+	if (!acknowledged || rejected) {
+		pending.previous.restore();
+		g_shaderPreview.initialized = false;
+		// Reload even when the file path is unchanged. A rejected technique
+		// must restore the working shader's controls as well as its settings.
+		postprocess::requestShaderChainReload();
+	}
+	deferShaderSettingsSave(false);
+	g_pendingShaderSettings.reset();
+	if (rejected)
+		gui_error(status.error);
+	else if (acknowledged)
+		SaveSettings();
+}
+
+static bool shaderRendererSupported()
+{
+	return isOpenGL(config::RendererType) || isVulkan(config::RendererType)
+			|| isMetal(config::RendererType)
+			|| config::RendererType == RenderType::DirectX11 || config::RendererType == RenderType::DirectX11_OIT;
+}
+
+static bool shaderPreviewBlockedByNetwork()
+{
+	return settings.network.online || ggpo::active();
+}
+
+static void queueShaderAction(std::function<void()> action)
+{
+	if (g_shaderAction || g_pendingShaderSettings)
+		return;
+	g_shaderAction = std::move(action);
+	g_shaderActionGeneration = postprocess::shaderChainReloadGeneration();
+	g_shaderActionQueuedLive = g_shaderLiveTune;
+	postprocess::prepareShaderCompilation();
+}
+
+void processShaderLoading()
+{
+	// Called at the beginning of the next platform frame, after the previous
+	// frame was presented. Never run expensive work merely after ImGui::Render.
+	finishPendingShaderSettings();
+	postprocess::advanceShaderCompilationFrame();
+	if (g_shaderAction) {
+		if (g_shaderActionGeneration != postprocess::shaderChainReloadGeneration()
+				|| (g_shaderActionQueuedLive && !g_shaderLiveTune)) {
+			g_shaderAction = {};
+			postprocess::finishShaderCompilation();
+			return;
+		}
+		if (!postprocess::prepareShaderCompilation()) return;
+		const uint64_t previousReload = postprocess::shaderChainReloadGeneration();
+		auto action = std::move(g_shaderAction);
+		g_shaderAction = {};
+		try {
+			action();
+		} catch (const std::exception& error) {
+			gui_error(error.what());
+		}
+		// A live checkbox change is one loading operation through CPU preparation,
+		// GPU compilation, and the first rendered preview. Do not reopen the popup
+		// between stages or dismiss it as soon as the files have been parsed.
+		if (!g_shaderLiveTune || !shaderRendererSupported()
+				|| postprocess::shaderChainReloadGeneration() == previousReload)
+			postprocess::finishShaderCompilation();
+	}
+	else if (gui_is_open()) {
+		// Pausing can postpone renderer activation. Do not block the settings
+		// screen waiting for a pipeline that will compile only after resuming.
+		postprocess::finishShaderCompilation();
+	}
+}
+
+void renderShaderLoadingOverlay()
+{
+	const bool loading = postprocess::shaderCompilationPending();
+	if (!loading && !ImGui::IsPopupOpen("##ShaderCompilation")) return;
+	if (loading) ImGui::OpenPopup("##ShaderCompilation");
+	const char* title = T("Compiling shader pipeline...");
+	const char* detail = T("This may take a few seconds.");
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const ImVec2 display = ImGui::GetIO().DisplaySize;
+	const float width = std::max(1.f, std::min(display.x - 2.f * style.WindowPadding.x,
+			std::max(ImGui::CalcTextSize(title).x, ImGui::CalcTextSize(detail).x) + 2.f * style.WindowPadding.x));
+	const float wrapWidth = std::max(1.f, width - 2.f * style.WindowPadding.x);
+	const float titleHeight = ImGui::CalcTextSize(title, nullptr, false, wrapWidth).y;
+	const float height = titleHeight + ImGui::CalcTextSize(detail, nullptr, false, wrapWidth).y
+			+ style.ItemSpacing.y + 2.f * style.WindowPadding.y;
+	ImGui::SetNextWindowPos(display * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	// The foreground fallback below shares these dimensions with the modal so
+	// its first visible frame does not jump when ImGui finishes measuring it.
+	ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
+	if (ImGui::BeginPopupModal("##ShaderCompilation", nullptr, ImGuiWindowFlags_NoTitleBar
+			| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+		if (loading) {
+			ImGui::TextWrapped("%s", title);
+			ImGui::TextWrapped("%s", detail);
+			if (ImGui::GetCurrentWindow()->Hidden) {
+				// ImGui hides even explicitly sized popups on their opening frame.
+				// Draw the same notice directly now; waiting for the modal's next
+				// frame would let the checkbox appear to freeze before any message.
+				ImDrawList* draw = ImGui::GetForegroundDrawList();
+				const ImVec2 position = (display - ImVec2(width, height)) * 0.5f;
+				draw->AddRectFilled(ImVec2(0, 0), display, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
+				draw->AddRectFilled(position, position + ImVec2(width, height), ImGui::GetColorU32(ImGuiCol_PopupBg), style.PopupRounding);
+				draw->AddRect(position, position + ImVec2(width, height), ImGui::GetColorU32(ImGuiCol_Border), style.PopupRounding, 0, style.PopupBorderSize);
+				draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), position + style.WindowPadding,
+						ImGui::GetColorU32(ImGuiCol_Text), title, nullptr, wrapWidth);
+				draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), position + style.WindowPadding + ImVec2(0, titleHeight + style.ItemSpacing.y),
+						ImGui::GetColorU32(ImGuiCol_Text), detail, nullptr, wrapWidth);
+			}
+			postprocess::markShaderCompilationDrawn();
+		}
+		else ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+	}
+}
+
+static std::string configuredShaderDirectory()
+{
+	return postprocess::shaderLibraryDirectory();
+}
+
+static std::string lowercaseAscii(std::string value)
+{
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+		return static_cast<char>(std::tolower(character));
+	});
+	return value;
+}
+
+static std::string shaderCatalogKey(std::string path)
+{
+	std::replace(path.begin(), path.end(), '\\', '/');
+	while (path.rfind("./", 0) == 0)
+		path.erase(0, 2);
+#ifdef _WIN32
+	path = lowercaseAscii(std::move(path));
+#endif
+	return path;
+}
+
+static void loadShaderCatalog(const std::string& directory)
+{
+	constexpr size_t MaxCatalogBytes = 1024 * 1024;
+	g_shaderBrowserMetadata.clear();
+	g_shaderCatalogWarning.clear();
+	const std::string catalogPath = hostfs::storage().getSubPath(directory, "shader-catalog.json");
+	if (!hostfs::storage().exists(catalogPath))
+		return;
+
+	try {
+		std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(catalogPath, "rb"));
+		if (file == nullptr || file->size() < 0 || static_cast<uint64_t>(file->size()) > MaxCatalogBytes) {
+			g_shaderCatalogWarning = T("shader-catalog.json is unavailable or exceeds the 1 MiB safety limit.");
+			return;
+		}
+		std::string text(static_cast<size_t>(file->size()), '\0');
+		if (!text.empty() && file->read(text.data(), 1, text.size()) != text.size()) {
+			g_shaderCatalogWarning = T("shader-catalog.json could not be read.");
+			return;
+		}
+		const nlohmann::json catalog = nlohmann::json::parse(text, nullptr, false);
+		if (catalog.is_discarded() || !catalog.is_object() || !catalog.contains("shaders")
+				|| !catalog["shaders"].is_object()) {
+			g_shaderCatalogWarning = T("shader-catalog.json is malformed.");
+			return;
+		}
+		for (auto entry = catalog["shaders"].begin(); entry != catalog["shaders"].end(); ++entry) {
+			if (!entry.value().is_object())
+				continue;
+			ShaderBrowserMetadata metadata;
+			metadata.name = entry.value().value("name", std::string());
+			metadata.description = entry.value().value("description", std::string());
+			metadata.author = entry.value().value("author", std::string());
+			metadata.performance = entry.value().value("performance", std::string());
+			metadata.mobileRecommended = entry.value().value("mobile_recommended", false);
+			g_shaderBrowserMetadata.emplace(shaderCatalogKey(entry.key()), std::move(metadata));
+		}
+	}
+	catch (const std::exception& exception) {
+		g_shaderCatalogWarning = exception.what();
+	}
+	for (ShaderBrowserEntry& entry : g_shaderBrowserEntries) {
+		entry.searchText = lowercaseAscii(entry.displayPath);
+		if (const auto metadata = g_shaderBrowserMetadata.find(entry.catalogKey);
+				metadata != g_shaderBrowserMetadata.end())
+			entry.searchText += '\n' + lowercaseAscii(metadata->second.name) + '\n'
+					+ lowercaseAscii(metadata->second.description) + '\n' + lowercaseAscii(metadata->second.author);
+	}
+}
+
+static std::string shaderDisplayPath(const std::string& root, const std::string& path)
+{
+	std::string normalizedRoot = root;
+	std::string normalizedPath = path;
+	std::replace(normalizedRoot.begin(), normalizedRoot.end(), '\\', '/');
+	std::replace(normalizedPath.begin(), normalizedPath.end(), '\\', '/');
+	while (!normalizedRoot.empty() && normalizedRoot.back() == '/')
+		normalizedRoot.pop_back();
+#ifdef _WIN32
+	const bool insideRoot = lowercaseAscii(normalizedPath).compare(0, normalizedRoot.size(), lowercaseAscii(normalizedRoot)) == 0;
+#else
+	const bool insideRoot = normalizedPath.compare(0, normalizedRoot.size(), normalizedRoot) == 0;
+#endif
+	if (insideRoot && normalizedPath.size() > normalizedRoot.size()
+			&& normalizedPath[normalizedRoot.size()] == '/')
+		return normalizedPath.substr(normalizedRoot.size() + 1);
+	return normalizedPath;
+}
+
+static ShaderScanResult scanShaderDirectory(std::string directory)
+{
+	constexpr size_t MaxDirectories = 4096;
+	constexpr size_t MaxFiles = 16384;
+	constexpr size_t MaxDepth = 64;
+	ShaderScanResult result;
+	result.directory = std::move(directory);
+	try {
+		std::vector<std::pair<std::string, size_t>> pendingDirectories {
+			{ result.directory, 0 }
+		};
+		std::unordered_set<std::string> visitedDirectories;
+		while (!pendingDirectories.empty() && result.entries.size() < MaxFiles
+				&& visitedDirectories.size() < MaxDirectories) {
+			auto [directory, depth] = std::move(pendingDirectories.back());
+			pendingDirectories.pop_back();
+			if (!visitedDirectories.emplace(directory).second)
+				continue;
+			for (const hostfs::FileInfo& entry : hostfs::storage().listContent(directory)) {
+				if (entry.isDirectory) {
+					if (depth < MaxDepth)
+						pendingDirectories.emplace_back(entry.path, depth + 1);
+					continue;
+				}
+				const postprocess::ShaderFormat format = postprocess::detectFormat(entry.path);
+				if (format == postprocess::ShaderFormat::Unknown)
+					continue;
+				const std::string displayPath = shaderDisplayPath(result.directory, entry.path);
+				result.entries.push_back({ entry.path, displayPath, shaderCatalogKey(displayPath),
+						lowercaseAscii(displayPath), format });
+				if (result.entries.size() == MaxFiles)
+					break;
+			}
+		}
+		if (!pendingDirectories.empty())
+			result.error = "The shader scan reached its safety limit. Choose a smaller shader folder.";
+		std::sort(result.entries.begin(), result.entries.end(), [](const ShaderBrowserEntry& left,
+				const ShaderBrowserEntry& right) {
+			return left.searchText < right.searchText;
+		});
+	}
+	catch (const std::exception& exception) {
+		result.error = exception.what();
+	}
+	return result;
+}
+
+static void startShaderBrowserScan(const std::string& directory)
+{
+	g_shaderBrowserDirectory = directory;
+	g_shaderBrowserInitialized = true;
+	g_shaderBrowserEntries.clear();
+	g_shaderVisibleEntries.clear();
+	g_shaderBrowserError.clear();
+	g_shaderCatalogWarning.clear();
+	if (config::PostProcessShaderDirectory.get().empty()
+			&& !hostfs::storage().exists(directory) && !make_directory(directory)) {
+		g_shaderBrowserError = T("The default Data/shaders folder could not be created.");
+		return;
+	}
+	if (!hostfs::storage().exists(directory)) {
+		g_shaderBrowserError = T("The selected shader folder does not exist or is unavailable.");
+		return;
+	}
+	g_shaderScanFuture = std::async(std::launch::async, [directory] {
+		return scanShaderDirectory(directory);
+	});
+}
+
+static void refreshShaderBrowser()
+{
+	const std::string directory = configuredShaderDirectory();
+	if (g_shaderScanFuture.valid()) {
+		g_shaderScanPending = true;
+		g_shaderPendingDirectory = directory;
+		return;
+	}
+	startShaderBrowserScan(directory);
+}
+
+static void pollShaderBrowserScan()
+{
+	if (!g_shaderScanFuture.valid()
+			|| g_shaderScanFuture.wait_for(std::chrono::seconds::zero()) != std::future_status::ready)
+		return;
+	ShaderScanResult result;
+	try {
+		result = g_shaderScanFuture.get();
+	}
+	catch (const std::exception& exception) {
+		result.directory = g_shaderBrowserDirectory;
+		result.error = exception.what();
+	}
+	if (g_shaderScanPending) {
+		g_shaderScanPending = false;
+		startShaderBrowserScan(g_shaderPendingDirectory);
+		g_shaderPendingDirectory.clear();
+		return;
+	}
+	if (result.directory != g_shaderBrowserDirectory)
+		return;
+	g_shaderBrowserEntries = std::move(result.entries);
+	g_shaderBrowserError = std::move(result.error);
+	loadShaderCatalog(g_shaderBrowserDirectory);
+	++g_shaderBrowserGeneration;
+}
+
+static bool rebuildShaderPreview()
+{
+	g_shaderPreview.initialized = true;
+	g_shaderPreview.paths = postprocess::configuredShaderPaths();
+	g_shaderPreview.technique = config::PostProcessShaderTechnique.get();
+	g_shaderPreview.overrides = config::PostProcessShaderParameters.get();
+	g_shaderPreview.chain = {};
+	g_shaderPreview.defaults.clear();
+	g_shaderPreview.error.clear();
+	if (g_shaderPreview.paths.empty())
+		return true;
+
+	postprocess::ShaderChain candidate;
+	if (!postprocess::loadShaderChain(g_shaderPreview.paths, candidate, g_shaderPreview.error)
+			|| !postprocess::preflightShaderAssets(candidate, g_shaderPreview.error))
+		return false;
+	g_shaderPreview.defaults = candidate.parameters;
+	postprocess::applyShaderChainParameterValues(candidate, g_shaderPreview.overrides);
+	g_shaderPreview.chain = std::move(candidate);
+	return true;
+}
+
+static void ensureShaderPreview()
+{
+	const std::vector<std::string> paths = postprocess::configuredShaderPaths();
+	if (!g_shaderPreview.initialized || paths != g_shaderPreview.paths
+			|| config::PostProcessShaderTechnique.get() != g_shaderPreview.technique
+			|| config::PostProcessShaderParameters.get() != g_shaderPreview.overrides) {
+		if (paths.empty()) {
+			rebuildShaderPreview();
+			return;
+		}
+		queueShaderAction([] {
+			rebuildShaderPreview();
+			// Merely inspecting controls does not need CPU image copies afterward.
+			for (auto& texture : g_shaderPreview.chain.textures) texture.decoded.reset();
+		});
+	}
+}
+
+static void requestShaderActivation()
+{
+	g_shaderPreview.activationGeneration =
+			postprocess::requestShaderChainReload(g_shaderPreview.error.empty() ? &g_shaderPreview.chain : nullptr);
+	for (auto& texture : g_shaderPreview.chain.textures) texture.decoded.reset();
+}
+
+static bool shaderActivationPending()
+{
+	auto& generation = g_shaderPreview.activationGeneration;
+	if (generation != 0 && (postprocess::shaderChainReloadGeneration() != generation
+			|| postprocess::getShaderChainStatusSummary().reloadGeneration == generation))
+		generation = 0;
+	return generation != 0;
+}
+
+static void applyShaderSettings(ShaderSettingsSnapshot previous)
+{
+	requestShaderActivation();
+	if (g_shaderLiveTune && !g_shaderPreview.paths.empty()) {
+		// A settings save from another panel must also skip the untested choice.
+		deferShaderSettingsSave(true);
+		g_pendingShaderSettings = PendingShaderSettings { std::move(previous), g_shaderPreview.activationGeneration,
+				config::Settings::instance().hasPerGameConfig() };
+	} else {
+		// Clearing effects needs no GPU validation. Paused settings also work
+		// before a title is running, so they retain their ordinary save behavior.
+		SaveSettings();
+	}
+}
+
+static bool previewMatchesActiveShader()
+{
+	if (shaderActivationPending() || g_shaderPreview.paths.empty())
+		return false;
+	const postprocess::ShaderChainStatusSummary status = postprocess::getShaderChainStatusSummary();
+	return (status.error.empty() || status.frameError) && !status.activePath.empty()
+			&& status.activePath == postprocess::shaderSelectionLabel(g_shaderPreview.paths)
+			&& status.parameterCount == g_shaderPreview.chain.parameters.size();
+}
+
+static void shaderTextWrapped(const ImVec4& color, const char *format, ...)
+{
+	va_list arguments;
+	va_start(arguments, format);
+	ImGui::PushStyleColor(ImGuiCol_Text, color);
+	ImGui::TextWrappedV(format, arguments);
+	ImGui::PopStyleColor();
+	va_end(arguments);
+}
+
+static bool setPreviewParameter(const std::string& name, const float *values, uint32_t componentCount)
+{
+	if (values == nullptr || componentCount == 0 || componentCount > 16)
+		return false;
+	auto parameter = std::find_if(g_shaderPreview.chain.parameters.begin(), g_shaderPreview.chain.parameters.end(),
+			[&](const postprocess::ShaderParameter& candidate) {
+				return postprocess::shaderParameterKey(candidate) == name;
+			});
+	if (parameter == g_shaderPreview.chain.parameters.end() || parameter->componentCount != componentCount)
+		return false;
+	for (uint32_t component = 0; component < componentCount; ++component) {
+		const float minimum = componentCount == 1 ? parameter->minimum : parameter->minimumValues[component];
+		const float maximum = componentCount == 1 ? parameter->maximum : parameter->maximumValues[component];
+		if (!std::isfinite(values[component])
+				|| (minimum < maximum && (values[component] < minimum || values[component] > maximum)))
+			return false;
+	}
+
+	std::copy_n(values, componentCount, parameter->values.begin());
+	parameter->value = parameter->values[0];
+	config::PostProcessShaderParameters.get() =
+			postprocess::serializeShaderChainParameterValues(g_shaderPreview.chain.parameters);
+	g_shaderPreview.overrides = config::PostProcessShaderParameters.get();
+	if (previewMatchesActiveShader()) {
+		if (componentCount == 1)
+			postprocess::setShaderChainParameter(name, values[0]);
+		else
+			postprocess::setShaderChainParameterComponents(name, values, componentCount);
+	}
+	return true;
+}
+
+static void resetShaderParameters()
+{
+	if (g_shaderPreview.defaults.size() != g_shaderPreview.chain.parameters.size())
+		return;
+	g_shaderPreview.chain.parameters = g_shaderPreview.defaults;
+	config::PostProcessShaderParameters.get().clear();
+	g_shaderPreview.overrides.clear();
+	if (previewMatchesActiveShader()) {
+		for (const postprocess::ShaderParameter& parameter : g_shaderPreview.chain.parameters) {
+			if (parameter.componentCount == 1)
+				postprocess::setShaderChainParameter(postprocess::shaderParameterKey(parameter), parameter.values[0]);
+			else
+				postprocess::setShaderChainParameterComponents(postprocess::shaderParameterKey(parameter),
+						parameter.values.data(), parameter.componentCount);
+		}
+	}
+	SaveSettings();
+}
+
+static void renderShaderActivationStatus(bool compact = false)
+{
+	if (!shaderRendererSupported()) {
+		ImGui::TextWrapped("%s", T("Display shaders require OpenGL, Vulkan, DirectX 11, or Metal. Select a supported graphics API in Video settings."));
+		return;
+	}
+	if (g_shaderPreview.paths.empty()) {
+		ImGui::TextDisabled("%s", T("No display shader selected."));
+		return;
+	}
+	if (!g_shaderPreview.error.empty()) {
+		shaderTextWrapped(ImVec4(1.f, .35f, .35f, 1.f), T("Invalid: %s"), g_shaderPreview.error.c_str());
+		return;
+	}
+	if (shaderActivationPending()) {
+		shaderTextWrapped(ImVec4(1.f, .75f, .25f, 1.f), "%s",
+				g_shaderLiveTune ? T("Loading on the current graphics API...")
+						: T("Ready. Start Live Tune or return to the game to activate it."));
+		return;
+	}
+
+	const postprocess::ShaderChainStatusSummary status = postprocess::getShaderChainStatusSummary();
+	if (!status.error.empty())
+		shaderTextWrapped(ImVec4(1.f, .35f, .35f, 1.f), status.frameError ? T("Frame unavailable: %s") : T("Rejected: %s"), status.error.c_str());
+	else if (status.activePath == postprocess::shaderSelectionLabel(g_shaderPreview.paths)) {
+		if (compact) {
+			shaderTextWrapped(ImVec4(.35f, 1.f, .55f, 1.f), T("Active: %u layer(s), %u pass(es)"),
+					static_cast<unsigned>(g_shaderPreview.paths.size()), static_cast<unsigned>(g_shaderPreview.chain.passes.size()));
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", status.activePath.c_str());
+		}
+		else
+			shaderTextWrapped(ImVec4(.35f, 1.f, .55f, 1.f), T("Active: %s"), status.activePath.c_str());
+	}
+	else
+		shaderTextWrapped(ImVec4(1.f, .75f, .25f, 1.f), "%s", T("Parsed successfully; waiting for gameplay to activate."));
+}
+
+static void applyShaderTechniqueSelection(std::string technique)
+{
+	ShaderSettingsSnapshot previous;
+	ShaderPreviewState previousPreview = std::move(g_shaderPreview);
+	config::PostProcessShaderTechnique.get() = std::move(technique);
+	if (!rebuildShaderPreview()) {
+		// Keep the working technique and its controls when a consumer is chosen
+		// without the producer layer it requires.
+		const std::string error = g_shaderPreview.error;
+		previous.restore();
+		g_shaderPreview = std::move(previousPreview);
+		gui_error(error);
+		return;
+	}
+	applyShaderSettings(std::move(previous));
+}
+
+static void renderShaderParameterControls()
+{
+	for (postprocess::ShaderTechniqueGroup& group : g_shaderPreview.chain.techniqueGroups) {
+		if (group.techniques.size() < 2)
+			continue;
+		const int selectedTechnique = group.selectedTechnique >= 0
+				&& group.selectedTechnique < static_cast<int>(group.techniques.size())
+				? group.selectedTechnique : 0;
+		ImGui::PushID(static_cast<int>(group.layerIndex));
+		std::string selection;
+		if (ImGui::BeginCombo(group.label.c_str(), group.techniques[selectedTechnique].c_str())) {
+			for (size_t index = 0; index < group.techniques.size(); ++index) {
+				const bool selected = static_cast<int>(index) == selectedTechnique;
+				if (ImGui::Selectable(group.techniques[index].c_str(), selected) && !selected) {
+					const int previousIndex = group.selectedTechnique;
+					group.selectedTechnique = static_cast<int>(index);
+					selection = postprocess::serializeShaderTechniqueSelections(g_shaderPreview.chain.techniqueGroups);
+					group.selectedTechnique = previousIndex;
+				}
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::PopID();
+		if (!selection.empty()) {
+			queueShaderAction([selection = std::move(selection)] { applyShaderTechniqueSelection(selection); });
+			break;
+		}
+	}
+	if (g_shaderPreview.chain.techniqueGroups.empty() && g_shaderPreview.chain.techniques.size() > 1) {
+		const int selectedTechnique = g_shaderPreview.chain.selectedTechnique >= 0
+				&& g_shaderPreview.chain.selectedTechnique < static_cast<int>(g_shaderPreview.chain.techniques.size())
+				? g_shaderPreview.chain.selectedTechnique : 0;
+		std::string selection;
+		if (ImGui::BeginCombo(T("Technique"), g_shaderPreview.chain.techniques[selectedTechnique].c_str())) {
+			for (size_t index = 0; index < g_shaderPreview.chain.techniques.size(); ++index) {
+				const bool selected = static_cast<int>(index) == selectedTechnique;
+				if (ImGui::Selectable(g_shaderPreview.chain.techniques[index].c_str(), selected) && !selected)
+					selection = g_shaderPreview.chain.techniques[index];
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
+		}
+		if (!selection.empty())
+			queueShaderAction([selection = std::move(selection)] { applyShaderTechniqueSelection(selection); });
+	}
+	if (g_shaderPreview.chain.parameters.empty()) {
+		ImGui::TextDisabled("%s", T("This shader stack exposes no adjustable parameters."));
+		return;
+	}
+	if (ImGui::SmallButton(T("Reset All Parameters")))
+		resetShaderParameters();
+	ImGui::Separator();
+
+	for (postprocess::ShaderParameter& parameter : g_shaderPreview.chain.parameters) {
+		if (!parameter.hostSource.empty())
+			continue;
+		ImGui::PushID(postprocess::shaderParameterKey(parameter).c_str());
+		if (!parameter.key.empty())
+			ImGui::TextDisabled(T("Layer %u"), parameter.layerIndex + 1);
+		bool changed = false;
+		bool saveAfterEdit = false;
+		if (parameter.componentCount <= 1) {
+			float value = parameter.value;
+			if (parameter.type == postprocess::SlangParameterType::Bool) {
+				ImGui::TextWrapped("%s", parameter.label.c_str());
+				bool enabled = value != 0.f;
+				changed = ImGui::Checkbox(T("Enabled"), &enabled);
+				value = enabled ? 1.f : 0.f;
+				saveAfterEdit = changed;
+			}
+			else if (!parameter.choiceLabels.empty()) {
+				const int selected = static_cast<int>(std::clamp(std::round(static_cast<double>(value)),
+						0.0, static_cast<double>(parameter.choiceLabels.size() - 1)));
+				ImGui::TextWrapped("%s", parameter.label.c_str());
+				ImGui::SetNextItemWidth(-1.f);
+				if (ImGui::BeginCombo("##choice", parameter.choiceLabels[selected].c_str())) {
+					ImGui::GetCurrentWindow()->Flags |= ImGuiWindowFlags_DragScrolling;
+					for (size_t index = 0; index < parameter.choiceLabels.size(); ++index) {
+						const bool isSelected = static_cast<int>(index) == selected;
+						if (ImGui::Selectable(parameter.choiceLabels[index].c_str(), isSelected) && !isSelected) {
+							value = static_cast<float>(index);
+							changed = true;
+							saveAfterEdit = true;
+						}
+						if (isSelected)
+							ImGui::SetItemDefaultFocus();
+					}
+					scrollWhenDraggingOnVoid();
+					windowDragScroll(false);
+					ImGui::EndCombo();
+				}
+			}
+			else if (parameter.minimum < parameter.maximum) {
+				const double range = static_cast<double>(parameter.maximum) - parameter.minimum;
+				if (parameter.type == postprocess::SlangParameterType::Int) {
+					// Shader annotations are external data. Bound the slider before
+					// converting to int so large ranges cannot overflow the UI.
+					const double minimum = std::ceil(static_cast<double>(parameter.minimum));
+					const double maximum = std::max(minimum, std::floor(static_cast<double>(parameter.maximum)));
+					const double step = parameter.step > 0.f ? std::max(1.0, std::round(static_cast<double>(parameter.step)))
+							: std::max(1.0, std::ceil((maximum - minimum) / 100.0));
+					const int stepCount = static_cast<int>(std::clamp(std::ceil((maximum - minimum) / step), 1.0, 1000000.0));
+					int stepIndex = static_cast<int>(std::clamp(std::round((value - minimum) / step), 0.0, static_cast<double>(stepCount)));
+					ImGui::TextWrapped("%s: %.0f", parameter.label.c_str(), static_cast<double>(value));
+					ImGui::SetNextItemWidth(-1.f);
+					changed = ImGui::SliderInt("##value", &stepIndex, 0, stepCount, "");
+					value = static_cast<float>(std::min(maximum, minimum + stepIndex * step));
+				}
+				else {
+					const double step = parameter.step > 0.f ? parameter.step : range / 100.0;
+					const int stepCount = static_cast<int>(std::clamp(std::ceil(range / step), 1.0, 1000000.0));
+					int stepIndex = static_cast<int>(std::clamp(std::round((value - parameter.minimum) / step), 0.0, static_cast<double>(stepCount)));
+					ImGui::TextWrapped("%s: %.3f", parameter.label.c_str(), value);
+					ImGui::SetNextItemWidth(-1.f);
+					changed = ImGui::SliderInt("##value", &stepIndex, 0, stepCount, "");
+					value = static_cast<float>(std::clamp(parameter.minimum + stepIndex * step,
+							static_cast<double>(parameter.minimum), static_cast<double>(parameter.maximum)));
+				}
+				saveAfterEdit = ImGui::IsItemDeactivatedAfterEdit();
+			}
+			else
+				ImGui::TextDisabled("%s: %.3f", parameter.label.c_str(), parameter.value);
+			if (changed)
+				setPreviewParameter(postprocess::shaderParameterKey(parameter), &value, 1);
+		}
+		else {
+			ImGui::TextWrapped("%s", parameter.label.c_str());
+			float values[16] {};
+			std::copy(parameter.values.begin(), parameter.values.end(), values);
+			for (uint32_t component = 0; component < parameter.componentCount; ++component) {
+				ImGui::PushID(static_cast<int>(component));
+				const float minimum = parameter.minimumValues[component];
+				const float maximum = parameter.maximumValues[component];
+				const float step = parameter.stepValues[component] > 0.f ? parameter.stepValues[component] : 0.01f;
+				ImGui::TextDisabled("%u", component + 1);
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(-1.f);
+				changed = ImGui::DragFloat("##component", &values[component],
+						step,
+						minimum < maximum ? minimum : 0.f, minimum < maximum ? maximum : 0.f) || changed;
+				if (ImGui::IsItemEdited() && minimum < maximum)
+					values[component] = std::clamp(minimum + std::round((values[component] - minimum) / step) * step,
+							minimum, maximum);
+				saveAfterEdit = ImGui::IsItemDeactivatedAfterEdit() || saveAfterEdit;
+				ImGui::PopID();
+			}
+			if (changed)
+				setPreviewParameter(postprocess::shaderParameterKey(parameter), values, parameter.componentCount);
+		}
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+			ImGui::BeginTooltip();
+			ImGui::Text("%s", parameter.label.c_str());
+			ImGui::TextDisabled("%s", parameter.name.c_str());
+			ImGui::EndTooltip();
+		}
+		if (saveAfterEdit)
+			SaveSettings();
+		ImGui::PopID();
+	}
+}
+
+static void applyShaderSelection(const std::vector<std::string>& paths,
+		std::vector<size_t> previousLayers = {})
+{
+	const std::vector<std::string> previousPaths = g_shaderPreview.paths;
+	const std::vector<postprocess::ShaderParameter> previousParameters = g_shaderPreview.chain.parameters;
+	// Explicit indices preserve identity when two layers use the same effect.
+	// Browser changes match each old occurrence once; new layers start at defaults.
+	if (previousLayers.size() != paths.size()) {
+		previousLayers.assign(paths.size(), previousPaths.size());
+		std::vector<bool> used(previousPaths.size(), false);
+		for (size_t layer = 0; layer < paths.size(); ++layer)
+			for (size_t previous = 0; previous < previousPaths.size(); ++previous)
+				if (!used[previous] && previousPaths[previous] == paths[layer]) {
+					previousLayers[layer] = previous;
+					used[previous] = true;
+					break;
+				}
+	}
+	std::vector<postprocess::ShaderTechniqueGroup> previousTechniques = g_shaderPreview.chain.techniqueGroups;
+	if (previousTechniques.empty() && previousPaths.size() == 1 && !g_shaderPreview.chain.techniques.empty())
+		previousTechniques.push_back({ 0, {}, g_shaderPreview.chain.techniques, g_shaderPreview.chain.selectedTechnique });
+	std::vector<postprocess::ShaderTechniqueGroup> techniques;
+	for (size_t layer = 0; layer < paths.size(); ++layer)
+		for (const auto& previous : previousTechniques)
+			if (previous.layerIndex == previousLayers[layer]) {
+				techniques.push_back(previous);
+				techniques.back().layerIndex = layer;
+				break;
+			}
+	ShaderSettingsSnapshot previousSettings;
+	ShaderPreviewState previousPreview = std::move(g_shaderPreview);
+	config::PostProcessShaders.get() = paths;
+	// Keep old single-path configurations interoperable with older builds.
+	config::PostProcessShader.get() = paths.size() == 1 ? paths.front() : std::string();
+	if (paths.size() == 1 && !techniques.empty() && techniques.front().selectedTechnique >= 0
+			&& techniques.front().selectedTechnique < static_cast<int>(techniques.front().techniques.size()))
+		config::PostProcessShaderTechnique.get() = techniques.front().techniques[techniques.front().selectedTechnique];
+	else
+		config::PostProcessShaderTechnique.get() = postprocess::serializeShaderTechniqueSelections(techniques);
+	config::PostProcessShaderParameters.get().clear();
+	if (!rebuildShaderPreview()) {
+		// An invalid ordering must not erase settings from the working stack.
+		const std::string error = g_shaderPreview.error;
+		previousSettings.restore();
+		g_shaderPreview = std::move(previousPreview);
+		gui_error(error);
+		return;
+	}
+	for (postprocess::ShaderParameter& parameter : g_shaderPreview.chain.parameters) {
+		if (!parameter.hostSource.empty())
+			continue;
+		if (parameter.layerIndex >= previousLayers.size())
+			continue;
+		const size_t previousLayer = previousLayers[parameter.layerIndex];
+		const auto previous = std::find_if(previousParameters.begin(), previousParameters.end(), [&](const auto& value) {
+			return value.layerIndex == previousLayer && value.name == parameter.name
+					&& value.type == parameter.type && value.componentCount == parameter.componentCount;
+		});
+		if (previous == previousParameters.end())
+			continue;
+		for (uint32_t component = 0; component < parameter.componentCount; ++component) {
+			const float minimum = parameter.componentCount == 1 ? parameter.minimum : parameter.minimumValues[component];
+			const float maximum = parameter.componentCount == 1 ? parameter.maximum : parameter.maximumValues[component];
+			parameter.values[component] = minimum < maximum
+					? std::clamp(previous->values[component], minimum, maximum) : previous->values[component];
+		}
+		parameter.value = parameter.values[0];
+	}
+	config::PostProcessShaderParameters.get() = postprocess::serializeShaderChainParameterValues(g_shaderPreview.chain.parameters);
+	g_shaderPreview.overrides = config::PostProcessShaderParameters.get();
+	applyShaderSettings(std::move(previousSettings));
+}
+
+static void requestShaderSelection(std::vector<std::string> paths, std::vector<size_t> previousLayers = {})
+{
+	queueShaderAction([paths = std::move(paths), previousLayers = std::move(previousLayers)] {
+		applyShaderSelection(paths, previousLayers);
+	});
+}
+
+static std::string selectedShaderLabel(const std::string& path)
+{
+	const auto entry = std::find_if(g_shaderBrowserEntries.begin(), g_shaderBrowserEntries.end(),
+			[&](const ShaderBrowserEntry& value) { return value.path == path; });
+	if (entry == g_shaderBrowserEntries.end())
+		return path;
+	const auto metadata = g_shaderBrowserMetadata.find(entry->catalogKey);
+	return metadata != g_shaderBrowserMetadata.end() && !metadata->second.name.empty()
+			? metadata->second.name : entry->displayPath;
+}
+
+void renderShaderTab()
+{
+	ImGui::TextDisabled("%s", T("Shader Configuration"));
+	ImGui::Separator();
+	ensureShaderPreview();
+	if (g_shaderAction) return;
+	if (!shaderLiveTuneActive()) {
+		const bool online = shaderPreviewBlockedByNetwork();
+		const bool canLiveTune = !online && shaderRendererSupported() && game_started
+				&& (!emu.running() || achievements::canPause());
+		if (!canLiveTune)
+			ImGui::BeginDisabled();
+		if (ImGui::Button(T("Preview and Adjust"))) {
+			applyPendingSettings();
+			GamepadDevice::load_system_mappings();
+			stopTextureFilterLiveTune();
+			g_shaderLiveTune = true;
+			gui_resume_game();
+		}
+		if (!canLiveTune)
+			ImGui::EndDisabled();
+		if (online)
+			ImGui::TextWrapped("%s", T("Live shader preview is unavailable during online play."));
+		else if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("%s", !shaderRendererSupported() ? T("Select OpenGL, Vulkan, DirectX 11, or Metal in Video settings to preview shaders.")
+					: !game_started ? T("Start a game to preview shader changes.")
+					: T("See shader changes beside the running game. Gameplay must be pausable."));
+		ImGui::Separator();
+	}
+
+	const std::string directory = configuredShaderDirectory();
+	if (!g_shaderBrowserInitialized || directory != g_shaderBrowserDirectory)
+		refreshShaderBrowser();
+	pollShaderBrowserScan();
+
+	if (RenderCollapsingHeader("ShaderLibrarySection", ICON_FA_FOLDER_OPEN, T("Shader Library"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::TextWrapped("%s", T("Hollycast scans this folder recursively for GLSL, GLSLP, Slang, Slang presets, and supported ReShade FX files."));
+		ImGui::TextWrapped(T("Folder: %s"), directory.c_str());
+
+		const char *folderPopup = T("Select Shader Folder");
+		const auto folderSelected = [](bool cancelled, const std::string& selection) {
+			if (!cancelled && !selection.empty()) {
+				config::PostProcessShaderDirectory.get() = selection;
+				refreshShaderBrowser();
+			}
+			return true;
+		};
+		const bool changeFolder = ImGui::Button(T("Change Folder"));
+#ifdef __ANDROID__
+		if (changeFolder && select_storage_popup(true, false, folderPopup, folderSelected)
+				== StoragePopupResult::Unsupported)
+			ImGui::OpenPopup(folderPopup);
+#else
+		if (changeFolder)
+			ImGui::OpenPopup(folderPopup);
+#endif
+		ImGui::SameLine();
+		if (ImGui::Button(T("Refresh List")))
+			refreshShaderBrowser();
+		if (!config::PostProcessShaderDirectory.get().empty()) {
+			ImGui::SameLine();
+			if (ImGui::Button(T("Use Default Folder"))) {
+				config::PostProcessShaderDirectory.get().clear();
+				refreshShaderBrowser();
+			}
+		}
+		select_file_popup(folderPopup, folderSelected, false);
+
+		std::vector<std::string> selectedPaths = postprocess::configuredShaderPaths();
+		ImGui::Text(T("Recognized: %u    Selected layers: %u / %u"),
+				static_cast<unsigned>(g_shaderBrowserEntries.size()), static_cast<unsigned>(selectedPaths.size()),
+				static_cast<unsigned>(postprocess::MaxShaderLayers));
+		if (!g_shaderBrowserError.empty())
+			ImGui::TextColored(ImVec4(1.f, .55f, .25f, 1.f), "%s", g_shaderBrowserError.c_str());
+		if (!g_shaderCatalogWarning.empty())
+			ImGui::TextColored(ImVec4(1.f, .75f, .25f, 1.f), "%s", g_shaderCatalogWarning.c_str());
+		if (g_shaderScanFuture.valid())
+			ImGui::TextDisabled("%s", T("Scanning shader folder..."));
+
+		ImGui::SetNextItemWidth(-1.f);
+		ImGui::InputTextWithHint("##ShaderFilter", T("Filter recognized shaders..."), &g_shaderFilter);
+		if (g_shaderAppliedFilter != g_shaderFilter || g_shaderVisibleGeneration != g_shaderBrowserGeneration) {
+			g_shaderAppliedFilter = g_shaderFilter;
+			g_shaderVisibleGeneration = g_shaderBrowserGeneration;
+			g_shaderVisibleEntries.clear();
+			g_shaderVisibleEntries.reserve(g_shaderBrowserEntries.size());
+			const std::string loweredFilter = lowercaseAscii(g_shaderFilter);
+			for (size_t index = 0; index < g_shaderBrowserEntries.size(); ++index)
+				if (loweredFilter.empty()
+						|| g_shaderBrowserEntries[index].searchText.find(loweredFilter) != std::string::npos)
+					g_shaderVisibleEntries.push_back(index);
+		}
+
+		ImGui::BeginChild("RecognizedShaderList", ImVec2(0.f, SettingsLayoutScaled(260.f)),
+				ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_DragScrolling);
+		if (g_shaderVisibleEntries.empty())
+			ImGui::TextDisabled("%s", g_shaderBrowserEntries.empty()
+					? T("No recognized shaders were found in this folder.") : T("No shaders match the current filter."));
+		ImGuiListClipper clipper;
+		clipper.Begin(static_cast<int>(g_shaderVisibleEntries.size()));
+		while (clipper.Step()) {
+			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+				const ShaderBrowserEntry& entry = g_shaderBrowserEntries[g_shaderVisibleEntries[row]];
+				ImGui::PushID(entry.path.c_str());
+				const auto selected = std::find(selectedPaths.begin(), selectedPaths.end(), entry.path);
+				bool enabled = selected != selectedPaths.end();
+				const bool canEnable = enabled || selectedPaths.size() < postprocess::MaxShaderLayers;
+				if (!canEnable)
+					ImGui::BeginDisabled();
+				if (ImGui::Checkbox("##Selected", &enabled)) {
+					if (enabled)
+						selectedPaths.push_back(entry.path);
+					else
+						selectedPaths.erase(std::remove(selectedPaths.begin(), selectedPaths.end(), entry.path), selectedPaths.end());
+					requestShaderSelection(selectedPaths);
+				}
+				if (!canEnable)
+					ImGui::EndDisabled();
+				ImGui::SameLine();
+				const auto metadata = g_shaderBrowserMetadata.find(entry.catalogKey);
+				const bool hasDisplayName = metadata != g_shaderBrowserMetadata.end() && !metadata->second.name.empty();
+				ImGui::TextUnformatted(hasDisplayName ? metadata->second.name.c_str() : entry.displayPath.c_str());
+				ImGui::SameLine();
+				ImGui::TextDisabled("(%s)", postprocess::formatName(entry.format));
+				if (ImGui::IsItemHovered()) {
+					ImGui::BeginTooltip();
+					if (hasDisplayName)
+						ImGui::TextUnformatted(metadata->second.name.c_str());
+					ImGui::TextWrapped("%s", entry.displayPath.c_str());
+					ImGui::TextDisabled(T("Format: %s"), postprocess::formatName(entry.format));
+					if (metadata != g_shaderBrowserMetadata.end()) {
+						if (!metadata->second.description.empty())
+							ImGui::TextWrapped("%s", metadata->second.description.c_str());
+						if (!metadata->second.author.empty())
+							ImGui::TextDisabled(T("Author: %s"), metadata->second.author.c_str());
+						if (!metadata->second.performance.empty())
+							ImGui::TextDisabled(T("Performance: %s"), metadata->second.performance.c_str());
+						if (metadata->second.mobileRecommended)
+							ImGui::TextColored(ImVec4(.35f, 1.f, .55f, 1.f), "%s", T("Recommended for mobile GPUs"));
+					}
+					ImGui::Separator();
+					ImGui::TextDisabled("%s", enabled
+							? T("Selected. Stack compatibility is shown below.")
+							: T("Graphics API compatibility is checked when selected and activated."));
+					ImGui::EndTooltip();
+				}
+				ImGui::PopID();
+			}
+		}
+		if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+			scrollWhenDraggingOnVoid();
+#if defined(__ANDROID__)
+		windowDragScroll(false);
+#else
+		windowDragScroll();
+#endif
+		ImGui::EndChild();
+	}
+
+	std::vector<std::string> selectedPaths = postprocess::configuredShaderPaths();
+	if (RenderCollapsingHeader("ShaderLayersSection", ICON_FA_WAND_MAGIC, T("Active Shader Layers"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::TextWrapped("%s", T("Layers run from top to bottom. A preset remains one selectable layer even when it contains several internal passes."));
+		if (selectedPaths.size() > 1)
+			ImGui::TextDisabled("%s", T("Each layer keeps its own parameter settings."));
+		if (selectedPaths.empty())
+			ImGui::TextDisabled("%s", T("No shader layers selected."));
+		else if (ImGui::BeginTable("SelectedShaderLayers", 4,
+				ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
+			ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, SettingsLayoutScaled(28.f));
+			ImGui::TableSetupColumn(T("Shader"), ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn(T("Order"), ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableSetupColumn(T("Remove"), ImGuiTableColumnFlags_WidthFixed);
+			int moveFrom = -1;
+			int moveTo = -1;
+			int removeIndex = -1;
+			int duplicateIndex = -1;
+			for (size_t index = 0; index < selectedPaths.size(); ++index) {
+				ImGui::PushID(static_cast<int>(index));
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::Text("%u", static_cast<unsigned>(index + 1));
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TextWrapped("%s", selectedShaderLabel(selectedPaths[index]).c_str());
+				ImGui::TableSetColumnIndex(2);
+				if (index == 0)
+					ImGui::BeginDisabled();
+				if (ImGui::SmallButton(T("Up"))) {
+					moveFrom = static_cast<int>(index);
+					moveTo = static_cast<int>(index - 1);
+				}
+				if (index == 0)
+					ImGui::EndDisabled();
+				ImGui::SameLine();
+				if (index + 1 == selectedPaths.size())
+					ImGui::BeginDisabled();
+				if (ImGui::SmallButton(T("Down"))) {
+					moveFrom = static_cast<int>(index);
+					moveTo = static_cast<int>(index + 1);
+				}
+				if (index + 1 == selectedPaths.size())
+					ImGui::EndDisabled();
+				ImGui::TableSetColumnIndex(3);
+				if (selectedPaths.size() >= postprocess::MaxShaderLayers)
+					ImGui::BeginDisabled();
+				if (ImGui::SmallButton(T("Duplicate")))
+					duplicateIndex = static_cast<int>(index);
+				if (selectedPaths.size() >= postprocess::MaxShaderLayers)
+					ImGui::EndDisabled();
+				ImGui::SameLine();
+				if (ImGui::SmallButton(T("Remove")))
+					removeIndex = static_cast<int>(index);
+				ImGui::PopID();
+			}
+			ImGui::EndTable();
+			std::vector<size_t> previousLayers(selectedPaths.size());
+			for (size_t layer = 0; layer < previousLayers.size(); ++layer)
+				previousLayers[layer] = layer;
+			if (removeIndex >= 0) {
+				selectedPaths.erase(selectedPaths.begin() + removeIndex);
+				previousLayers.erase(previousLayers.begin() + removeIndex);
+				requestShaderSelection(selectedPaths, previousLayers);
+			}
+			else if (moveFrom >= 0 && moveTo >= 0) {
+				std::swap(selectedPaths[moveFrom], selectedPaths[moveTo]);
+				std::swap(previousLayers[moveFrom], previousLayers[moveTo]);
+				requestShaderSelection(selectedPaths, previousLayers);
+			}
+			else if (duplicateIndex >= 0) {
+				selectedPaths.insert(selectedPaths.begin() + duplicateIndex + 1, selectedPaths[duplicateIndex]);
+				previousLayers.insert(previousLayers.begin() + duplicateIndex + 1, duplicateIndex);
+				requestShaderSelection(selectedPaths, previousLayers);
+			}
+		}
+
+		if (!selectedPaths.empty()) {
+			if (ImGui::Button(T("Reload Active Stack"))) {
+				queueShaderAction([] {
+					rebuildShaderPreview();
+					requestShaderActivation();
+				});
+			}
+			ImGui::SameLine();
+			if (ImGui::Button(T("Clear All")))
+				requestShaderSelection({});
+		}
+	}
+
+	if (RenderCollapsingHeader("ShaderStatusSection", ICON_FA_SLIDERS, T("Status and Parameters"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		renderShaderActivationStatus();
+		renderShaderParameterControls();
+	}
+}
+
+void renderShaderLiveTuneOverlay()
+{
+	if (!g_shaderLiveTune)
+		return;
+	if (!game_started || shaderPreviewBlockedByNetwork() || !shaderRendererSupported()) {
+		closeShaderLiveTune();
+		postprocess::finishShaderCompilation();
+		return;
+	}
+	ensureShaderPreview();
+	if (g_shaderAction) return;
+
+	const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+	const ShaderPreviewLayout layout = shaderPreviewLayout(static_cast<int>(displaySize.x),
+			static_cast<int>(displaySize.y), static_cast<int>(GuiMenu::mainMenuBarHeight()));
+	if (layout.controlsWidth <= 0 || layout.controlsHeight <= 0)
+		return;
+	ImGui::SetNextWindowPos(ImVec2(layout.controlsX, layout.controlsY), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(layout.controlsWidth, layout.controlsHeight), ImGuiCond_Always);
+	bool open = true;
+	bool returnToSettings = false;
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove
+			| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_DragScrolling;
+	if (ImGui::Begin(T("Shader Preview###ShaderLiveTune"), &open, flags)) {
+		if (ImGui::Button(T("Back to Settings")))
+			returnToSettings = true;
+		ImGui::SameLine();
+		if (ImGui::Button(T("Done")))
+			open = false;
+		ImGui::TextWrapped("%s", T("Live game preview. Changes apply as you adjust the controls."));
+		ImGui::TextWrapped("%s", T("Game inputs are held while this editor is open."));
+		ImGui::Separator();
+		if (ImGui::BeginTabBar("ShaderPreviewTabs")) {
+			if (ImGui::BeginTabItem(T("Parameters"))) {
+				renderShaderActivationStatus(true);
+				ImGui::Separator();
+				renderShaderParameterControls();
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem(T("Shader Stack"))) {
+				renderShaderTab();
+				ImGui::EndTabItem();
+			}
+			ImGui::EndTabBar();
+		}
+		// Use Settings touch gestures while nested lists and popups scroll independently.
+		if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+			scrollWhenDraggingOnVoid();
+#if defined(__ANDROID__)
+		windowDragScroll(false);
+#else
+		windowDragScroll();
+#endif
+	}
+	ImGui::End();
+
+	if (returnToSettings) {
+		g_shaderLiveTune = false;
+		gui_open_shader_settings();
+	}
+	else if (!open)
+		g_shaderLiveTune = false;
+}
+
+bool shaderLiveTuneActive()
+{
+	return g_shaderLiveTune.load(std::memory_order_relaxed)
+			&& !settings.network.online.load(std::memory_order_relaxed);
+}
+
+bool liveTuneActive()
+{
+	return textureFilterLiveTuneActive() || shaderLiveTuneActive();
+}
+
+void closeShaderLiveTune()
+{
+	g_shaderLiveTune = false;
 }
 
 #ifdef HAVE_PHONE_VMU
@@ -6540,10 +8150,16 @@ static void renderPhoneVmuSettings()
 		T("Connect Phone"), T("Use your phone as a VMU display and play VMU mini-games."),
 		phone_vmu::status().running, [](bool enabled) {
 			if (enabled)
+			{
+				phone_vmu::setPairing(config::PhoneVmuToken.get(), config::PhoneVmuPort.get());
 				phone_vmu::start();
+				// Persist a first-time generated token so the address survives restarts.
+				if (config::PhoneVmuToken.get() != phone_vmu::pairingToken())
+					config::PhoneVmuToken.set(phone_vmu::pairingToken());
+			}
 			else
 				phone_vmu::stop();
-		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a mini-game from a copy of the selected VMU card. Turn this off to stop sharing."));
+		}, T("Connect Phone\nScan the QR code with your phone's camera on the same network. Mirror the LCD or play a VMU mini-game with automatic progress sync. The card is unplugged while the phone uses it; choose Return to Dreamcast to reconnect it. Turn this off to stop sharing."));
 
 	const auto connection = phone_vmu::status();
 	if (!connection.error.empty())
@@ -6552,6 +8168,174 @@ static void renderPhoneVmuSettings()
 		return;
 
 	ImGui::TextUnformatted(connection.connected ? T("Phone connected") : T("Waiting for phone"));
+	if (connection.lastSyncSlot >= 0 && connection.lastSyncSlot < 8 && !connection.lastSyncTime.empty())
+	{
+		const char slotLabel[] = { static_cast<char>('A' + connection.lastSyncSlot / 2),
+				static_cast<char>('1' + connection.lastSyncSlot % 2), '\0' };
+		ImGui::TextWrapped("%s: VMU %s at %s", T("Last phone save synced"), slotLabel, connection.lastSyncTime.c_str());
+	}
+	ImGui::TextWrapped("%s", T("This address stays the same when Hollycast restarts, so a paired phone can reconnect without a new scan."));
+	if (ImGui::Button(T("New pairing address")))
+		config::PhoneVmuToken.set(phone_vmu::regeneratePairing());
+	ImGui::SameLine();
+	ImGui::TextWrapped("%s", T("Disconnects all paired phones. Scan the new code to pair again."));
+	// Phone save-back keeps timestamped snapshots next to each VMU file.
+	// Restoring replaces that VMU, so only offer it while no game is loaded.
+	{
+		static std::string phoneRestoreMessage;
+		namespace fs = std::filesystem;
+		const char *ports[] = { "A1", "A2", "B1", "B2", "C1", "C2", "D1", "D2" };
+		struct PhoneVmuBackup { fs::path card; fs::path snapshot; };
+		static std::vector<PhoneVmuBackup> newestBackups;
+		static double lastBackupScan = -1.0;
+		constexpr char backupMarker[] = ".phone-backup-";
+		constexpr std::size_t backupMarkerLength = sizeof(backupMarker) - 1;
+		const double now = ImGui::GetTime();
+		if (!game_started && (lastBackupScan < 0.0 || now - lastBackupScan >= 1.0))
+		{
+			newestBackups.clear();
+			std::vector<fs::path> directories;
+			for (const char *port : ports)
+			{
+				const fs::path vmuPath = fs::u8path(hostfs::getVmuPath(port, true));
+				const fs::path dir = vmuPath.parent_path().empty() ? fs::path(".") : vmuPath.parent_path();
+				if (std::find(directories.begin(), directories.end(), dir) == directories.end())
+					directories.push_back(dir);
+			}
+			for (const fs::path& dir : directories)
+			{
+				std::error_code fsError;
+				fs::directory_iterator entry(dir, fsError), end;
+				for (; !fsError && entry != end; entry.increment(fsError))
+				{
+					const std::string filename = entry->path().filename().u8string();
+					const std::size_t marker = filename.rfind(backupMarker);
+					if (marker == std::string::npos || marker == 0)
+						continue;
+					const std::string stamp = filename.substr(marker + backupMarkerLength);
+					auto isDigits = [](auto first, auto last) {
+						return std::all_of(first, last, [](char c) { return c >= '0' && c <= '9'; });
+					};
+					const bool validStamp = stamp.size() == 15 && stamp[8] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.end());
+					const bool validCollisionStamp = stamp.size() == 22 && stamp[8] == '-' && stamp[15] == '-'
+							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.begin() + 15)
+							&& isDigits(stamp.begin() + 16, stamp.end());
+					if (!validStamp && !validCollisionStamp)
+						continue;
+					std::error_code fileError;
+					if (!entry->is_regular_file(fileError) || fileError)
+						continue;
+					const fs::path card = dir / fs::u8path(filename.substr(0, marker));
+					auto backup = std::find_if(newestBackups.begin(), newestBackups.end(), [&](const PhoneVmuBackup& item) {
+						return item.card == card;
+					});
+					if (backup == newestBackups.end())
+						newestBackups.push_back({ card, entry->path() });
+					else if (entry->path() > backup->snapshot)
+						backup->snapshot = entry->path();
+				}
+			}
+			std::sort(newestBackups.begin(), newestBackups.end(), [](const PhoneVmuBackup& a, const PhoneVmuBackup& b) {
+				return a.card < b.card;
+			});
+			lastBackupScan = now;
+		}
+		for (const PhoneVmuBackup& backup : newestBackups)
+		{
+			const fs::path& vmuPath = backup.card;
+			const fs::path& newest = backup.snapshot;
+			if (game_started)
+				continue;
+			const std::string label = std::string(T("Restore VMU backup for ")) + vmuPath.filename().u8string();
+			if (ImGui::Button(label.c_str()))
+			{
+				constexpr std::size_t VmuSize = 128 * 1024;
+				std::error_code fsError;
+				fsError.clear();
+				if (fs::file_size(newest, fsError) != VmuSize || fsError)
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				std::string data(VmuSize, '\0');
+				std::ifstream in(newest, std::ios::binary);
+				if (!in || !in.read(data.data(), data.size())
+						|| in.peek() != std::ifstream::traits_type::eof())
+				{
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				fs::path tempPath = vmuPath;
+				tempPath += ".phone-restore.tmp";
+				const std::string tempPathUtf8 = tempPath.u8string();
+				const std::string vmuPathUtf8 = vmuPath.u8string();
+				FILE *out = nowide::fopen(tempPathUtf8.c_str(), "wb");
+				bool tempWritten = out != nullptr;
+				if (out != nullptr)
+				{
+					tempWritten = std::fwrite(data.data(), 1, data.size(), out) == data.size()
+							&& std::fflush(out) == 0;
+					if (std::fclose(out) != 0)
+						tempWritten = false;
+				}
+				if (!tempWritten)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+
+				bool snapshotOk = true;
+				fsError.clear();
+				if (fs::exists(vmuPath, fsError))
+				{
+					std::time_t now = std::time(nullptr);
+					std::tm local {};
+					bool timeReady = false;
+#ifdef _WIN32
+					timeReady = localtime_s(&local, &now) == 0;
+#else
+					timeReady = localtime_r(&now, &local) != nullptr;
+#endif
+					char timestamp[16] = {};
+					timeReady = timeReady && std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &local) != 0;
+					snapshotOk = timeReady && !fsError;
+					bool snapshotCreated = false;
+					for (unsigned suffix = 0; snapshotOk && suffix < 100; ++suffix)
+					{
+						fs::path snapshotPath = vmuPath;
+						const std::string suffixText = std::to_string(suffix);
+						snapshotPath += backupMarker + std::string(timestamp)
+								+ (suffix == 0 ? "" : "-" + std::string(6 - suffixText.size(), '0') + suffixText);
+						fsError.clear();
+						snapshotCreated = fs::copy_file(vmuPath, snapshotPath, fs::copy_options::none, fsError);
+						if (snapshotCreated)
+							break;
+						if (fsError != std::errc::file_exists)
+							snapshotOk = false;
+					}
+					snapshotOk = snapshotOk && snapshotCreated;
+				}
+				else if (fsError)
+					snapshotOk = false;
+				if (!snapshotOk || nowide::rename(tempPathUtf8.c_str(), vmuPathUtf8.c_str()) != 0)
+				{
+					nowide::remove(tempPathUtf8.c_str());
+					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
+					continue;
+				}
+				lastBackupScan = -1.0;
+				phoneRestoreMessage = std::string(T("Restored VMU ")) + vmuPath.filename().u8string() + ".";
+			}
+		}
+		if (!newestBackups.empty() && game_started)
+			ImGui::TextWrapped("%s", T("Phone VMU backups found. Stop emulation to restore one."));
+		if (!phoneRestoreMessage.empty())
+			ImGui::TextWrapped("%s", phoneRestoreMessage.c_str());
+	}
 	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi, then scan this code or open the address below in its browser. Choose a VMU slot on your phone, then return to your game."));
 	static int selectedAddress = 0;
 	selectedAddress = std::clamp(selectedAddress, 0, static_cast<int>(connection.urls.size()) - 1);
@@ -6743,7 +8527,7 @@ void renderOnScreenDisplayTab()
 				bool defaultValue;
 			};
 			const std::array<OverlayMetric, 15> overlayMetrics {{
-				{ "OverlayShowFPS", T("Show Game FPS and VPS"), T("FPS counts completed non-render-to-texture PVR scenes: the game's internal rendered-frame rate, matching DuckStation's FPS meaning. VPS counts Dreamcast video blanks. A 30 FPS game normally shows 30 FPS and about 60 VPS on NTSC."), true },
+				{ "OverlayShowFPS", T("Show Game FPS and VPS"), T("FPS counts completed non-render-to-texture PVR scenes: the game's internal rendered-frame rate. VPS counts Dreamcast video blanks. A 30 FPS game normally shows 30 FPS and about 60 VPS on NTSC."), true },
 				{ "OverlayShowOutputFPS", T("Show Output FPS"), T("Counts successful frames presented to the screen. Compare it with Game FPS to identify repeated or omitted host output frames; it is display cadence, not the game's internal rendered-frame rate."), false },
 				{ "OverlayShowEmulationSpeed", T("Show Emulation Speed"), T("Shows current VPS relative to the active PAL or NTSC target and the configured speed limit. This is overall pace, not a CPU or GPU utilization meter."), true },
 				{ "OverlayShowThreadingState", T("Show Threading State"), T("Shows whether SH4 emulation and PVR rendering run on separate host threads. Threaded mode changes which thread can become the limiting host CPU core."), true },
@@ -6909,13 +8693,17 @@ void renderOnScreenDisplayTab()
 			T("Text Color"),
 			T("Choose the overlay text color."),
 			[&]() {
-				if (ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs))
+				const bool colorChanged = ImGui::ColorEdit4("##OverlayColor", overlayColor, ImGuiColorEditFlags_NoInputs);
+#ifdef HOLLYCAST_TEST_HARNESS
+				annotateTestColor("settings.overlay", "OverlayColor", T("Text Color"), "##OverlayColor", overlayColor);
+#endif
+				if (colorChanged)
 					cfgSaveInt("rend", "OverlayColor", static_cast<int>(std::round(overlayColor[0] * 255.f))
 						| (static_cast<int>(std::round(overlayColor[1] * 255.f)) << 8)
 						| (static_cast<int>(std::round(overlayColor[2] * 255.f)) << 16)
 						| (static_cast<int>(std::round(overlayColor[3] * 255.f)) << 24));
 			},
-			T("Text Color\nControls the overlay text color."));
+			T("Text Color\nControls the overlay text color."), false, 220.0f, "color");
 	}
 }
 
@@ -6927,6 +8715,15 @@ void renderAudioTab()
 	// Audio Playback Section
 	if (RenderCollapsingHeader("PlaybackSection", ICON_FA_VOLUME_HIGH, T("Playback"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+	#ifdef USE_HIKARU
+		if (settings.platform.isHikaru())
+			RenderGeneralToggleSettingRow(
+				"HikaruAudioPacing", ICON_FA_VOLUME_HIGH,
+				T("Match audio to game speed"), T("Keep pitch steady when the game runs slowly"),
+				static_cast<bool>(config::HikaruAudioPacing),
+				[](bool enabled) { config::HikaruAudioPacing.set(enabled); },
+				T("Match audio to game speed\nWhen the game runs slowly, slows audio to match while keeping its pitch. Adds some audio latency."));
+	#endif
 
 		RenderGeneralToggleSettingRow(
 			"EnableDSP",
@@ -8008,7 +9805,7 @@ void renderControlsTab()
 
 				ImGui::TableSetColumnIndex(2);
 #if defined(USE_DREAMLINK_DEVICES)
-				DreamLinkGamepad* dreamLinkGamepad = dynamic_cast<DreamLinkGamepad*>(gamepad.get());
+				DreamLinkSDLGamepad* dreamLinkGamepad = dynamic_cast<DreamLinkSDLGamepad*>(gamepad.get());
 				if (dreamLinkGamepad != nullptr) {
 					ImGui::Text("%s", dreamLinkGamepad->dreamLinkStatus());
 				}
@@ -8022,7 +9819,39 @@ void renderControlsTab()
 
 				// Port selection combo (None, A, B, C, D, All)
 				const char* current_port = kMaplePorts[gamepad->maple_port() + 1];
-				if (ImGui::BeginCombo(port_name, current_port))
+#ifdef HOLLYCAST_TEST_HARNESS
+				const bool mappingOnlyTestDevice = gamepad->remappable()
+					&& gamepad->api_name() == test_harness::ControllerApiName
+					&& gamepad->unique_id() == "hollycast-test-mapping-device";
+				if (mappingOnlyTestDevice)
+					ImGui::BeginDisabled(true);
+#endif
+				const bool portPopupOpen = ImGui::BeginCombo(port_name, current_port);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+				{
+					const auto portItemId = test_harness::ui::lastItemId();
+					if (portItemId != 0)
+					{
+						using test_harness::Json;
+						Json options = Json::array();
+						for (int port = -1; port <= 4; ++port)
+							options.push_back({{"value", port}, {"label", kMaplePorts[port + 1]},
+								{"selected", gamepad->maple_port() == port}});
+						const std::string semanticId = "controls.physical.port." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Port";
+						test_harness::ui::annotateItem(portItemId, {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "options"}, {"value", gamepad->maple_port()},
+							{"value_label", current_port}, {"options", std::move(options)},
+							{"requires_apply", !mappingOnlyTestDevice}});
+					}
+				}
+#endif
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (mappingOnlyTestDevice)
+					ImGui::EndDisabled();
+#endif
+				if (portPopupOpen)
 				{
 					for (int j = -1; j < IM_ARRAYSIZE(kMaplePorts) - 1; j++)
 					{
@@ -8042,13 +9871,26 @@ void renderControlsTab()
 				ImGui::SameLine(0, SettingsLayoutScaled(8.0f));
 
 				// Map button for controller mapping
-				if (gamepad->remappable() && ImGui::Button(T("Map"), deviceButtonSize))
+				if (gamepad->remappable())
 				{
-					ResetControllerMappingRuntime();
-					g_currentGamepadForMapping = gamepad;
-					g_currentGamepadForMapping->listenButtons(buttonListener);
-					g_gamepad_port_for_mapping = 0;
-					ImGui::OpenPopup(T("Controller Mapping"));
+					const bool mapClicked = ImGui::Button(T("Map"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.mapping." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Mapping";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (mapClicked)
+					{
+						ResetControllerMappingRuntime();
+						g_currentGamepadForMapping = gamepad;
+						g_currentGamepadForMapping->listenButtons(buttonListener);
+						g_gamepad_port_for_mapping = 0;
+						ImGui::OpenPopup(T("Controller Mapping"));
+					}
 				}
 
 				// Virtual controllers open the live editor; physical controllers keep
@@ -8056,7 +9898,17 @@ void renderControlsTab()
 				if (gamepad->is_rumble_enabled() || gamepad->has_analog_stick() || gamepad->is_virtual_gamepad())
 				{
 					ImGui::SameLine(0, SettingsLayoutScaled(16.0f));
-					if (ImGui::Button(T("Settings"), deviceButtonSize))
+					const bool settingsClicked = ImGui::Button(T("Settings"), deviceButtonSize);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+					{
+						const std::string semanticId = "controls.device.settings." + gamepad->unique_id();
+						const std::string semanticLabel = std::string(gamepad->name()) + " Settings";
+						test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", semanticId},
+							{"semantic_label", semanticLabel}, {"kind", "button"}});
+					}
+#endif
+					if (settingsClicked)
 					{
 						if (gamepad->is_virtual_gamepad())
 						{
@@ -8097,6 +9949,95 @@ void renderControlsTab()
 	}
 
 	ImGui::Spacing();
+
+#ifdef USE_HIKARU
+	// Platform alone stays Hikaru after unload. Gate cabinet controls on the
+	// published loaded descriptor so another title never exposes these options.
+	const auto* hikaruGame = hikaru::frontend::loadedGame();
+	if (hikaruGame && RenderCollapsingHeader("HikaruCompatibilityBindings", ICON_FA_GAMEPAD,
+		T("Game compatibility controls"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		ImGui::TextUnformatted(hikaruGame->title);
+		ImGui::TextWrapped("%s", T("Enabled gamepad controls use a built-in preset. Disable them to use your saved mapping. Wheels keep their mapped axes. L3 inserts a coin, R3 opens cabinet test, and Back opens the menu."));
+		auto* regionOption = hikaruGame == &hikaru::StarWarsRacerGame ? &config::HikaruStarWarsRacerRegion
+			: hikaruGame == &hikaru::SegaNascarGame ? &config::HikaruNascarRegion
+			: hikaruGame == &hikaru::AirTrixGame ? &config::HikaruAirTrixRegion
+			: hikaruGame == &hikaru::BraveFirefightersGame ? &config::HikaruBraveRegion
+			: hikaruGame == &hikaru::VirtualOn4Game ? &config::HikaruVirtualOn4Region : &config::HikaruPlanetRegion;
+		const char* regionLabels[] = {T("Keep saved region"), T("Japan"), T("USA (English)"), T("Export")};
+		int regionSelection = std::clamp(regionOption->get(), -1, 2) + 1;
+		SettingsUI::PopupConfig regionCfg {};
+		regionCfg.type = SettingsUI::PopupType::Options;
+		regionCfg.options.label = T("Cabinet region");
+		regionCfg.options.icon = ICON_FA_GLOBE;
+		regionCfg.options.popupID = Tnop("HikaruCabinetRegionPopup");
+		regionCfg.options.options = regionLabels;
+		regionCfg.options.optionCount = 4;
+		regionCfg.options.currentValue = &regionSelection;
+		regionCfg.options.valueWidth = 220.0f;
+		regionCfg.options.onChange = [regionOption](int selectedIndex) {
+			if (selectedIndex < 0 || selectedIndex > 3 || regionOption->get() == selectedIndex - 1) return false;
+			regionOption->set(selectedIndex - 1);
+			hikaru::frontend::requestCabinetRegion();
+			return true;
+		};
+		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
+			T("Choose a region for this game. Changing it restarts the cabinet; calibration and saved records are retained. A backup is kept before the first change."), regionCfg);
+		ImGui::TextWrapped("%s", T("USA selects the English cabinet configuration. Export uses the game's export language options. New cabinets must finish creating their settings before the region can apply."));
+		if (hikaruGame == &hikaru::StarWarsRacerGame) {
+			RenderGeneralToggleSettingRow("HikaruStarWarsRacerGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad pod controls"), T("Use triggers and shoulders while both thumbs operate the pod levers"),
+				bool(config::HikaruStarWarsRacerGamepad),
+				[](bool enabled) { config::HikaruStarWarsRacerGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to use only the individually mapped cabinet buttons. The two analog levers keep their assignments."));
+			ImGui::TextWrapped("%s", T("Push the left and right sticks forward to advance their respective pod levers. A is boost, B is brake, and X/Y are the left/right buttons."));
+			ImGui::TextWrapped("%s", T("With the default arcade gamepad layout, this option also maps LT to boost, RT to brake, and the left/right shoulders or D-pad to the corresponding left/right buttons. Coin and Start use their normal arcade bindings."));
+		} else if (hikaruGame == &hikaru::SegaNascarGame) {
+			RenderGeneralToggleSettingRow("HikaruNascarGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad driving controls"), T("Keep the selected gear engaged and allow D-pad steering"),
+				bool(config::HikaruNascarGamepad),
+				[](bool enabled) { config::HikaruNascarGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable for a physical shifter whose gear buttons remain held. Analog steering and pedals always keep their cabinet assignments."));
+			ImGui::TextWrapped("%s", T("Standard cabinet: left stick steers, RT is gas, LT is brake. With the preset enabled, A/B/X/Y select gears 1/2/3/4, right shoulder changes view, and left shoulder selects neutral. L3 inserts a coin and Start begins the race."));
+			ImGui::TextWrapped("%s", T("Map Steering wheel, Gas pedal and Brake pedal above. Use Game Test > Input Assignments for calibration; select Automatic transmission in the game if you do not want to shift manually."));
+		} else if (hikaruGame == &hikaru::AirTrixGame) {
+			RenderGeneralToggleSettingRow("HikaruAirTrixDpadBoard", ICON_FA_GAMEPAD,
+				T("D-pad board steering"), T("Use the D-pad for board yaw and roll, alongside the analog stick"),
+				bool(config::HikaruAirTrixDpadBoard),
+				[](bool enabled) { config::HikaruAirTrixDpadBoard.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("When disabled, D-pad up/down operate the original nose/tail kick switches. Action buttons always provide separate kicks."));
+			ImGui::TextWrapped("%s", T("Map Tail kick, Nose kick, Cabinet left/right, Coin, Yaw and Roll using Controller Mapping above. With the default arcade gamepad layout: A is tail kick, B is nose kick, X/Y are cabinet left/right, and the right shoulder inserts a coin."));
+			ImGui::TextWrapped("%s", T("Tricks combine board motion and kick timing. If steering is ignored, calibrate both axes in Game Test Mode > Calibration > Volume Calibration, then return to the center and save."));
+		} else if (hikaruGame == &hikaru::BraveFirefightersGame) {
+			RenderGeneralToggleSettingRow("HikaruBraveGamepad", ICON_FA_GAMEPAD,
+				T("Gamepad hose controls"), T("Use the built-in gamepad layout for this cabinet"),
+				bool(config::HikaruBraveGamepad),
+				[](bool enabled) { config::HikaruBraveGamepad.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to use your saved controller mapping."));
+			RenderGeneralToggleSettingRow("HikaruBraveMouseAim", ICON_FA_CROSSHAIRS,
+				T("Mouse aim (Brave Firefighters)"), T("Pointer aims the hose; left sprays, right is fog, middle is Start, wheel up inserts a coin"),
+				bool(config::HikaruBraveMouseAim),
+				[](bool enabled) { config::HikaruBraveMouseAim.set(enabled); },
+				T("Uses the pointer position as the hose aim, like touch. Existing keyboard and gamepad bindings keep working."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Spray, Fog, Horizontal aim and Vertical aim for this cabinet."));
+		} else if (hikaruGame == &hikaru::VirtualOn4Game) {
+			RenderGeneralToggleSettingRow("HikaruVirtualOn4TwinStick", ICON_FA_GAMEPAD,
+				T("Single-controller bindings"), T("Use both sticks and triggers of controller A for one cabinet"),
+				bool(config::HikaruVirtualOn4TwinStick),
+				[](bool enabled) { config::HikaruVirtualOn4TwinStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("When disabled, controllers A and B each provide one lever. These are the two levers of one player, not linked cabinets."));
+			ImGui::TextWrapped("%s", T("Left/right sticks move the two levers. LT/RT fire. X/Y activate left/right turbo, L3 inserts a coin, and Start begins the game. Right shoulder opens personal information."));
+		} else if (hikaruGame == &hikaru::PlanetHarriersGame) {
+			RenderGeneralToggleSettingRow("HikaruPlanetDpadStick", ICON_FA_GAMEPAD,
+				T("D-pad flight controls"), T("Use the D-pad for full-range flight movement, alongside the analog stick"),
+				bool(config::HikaruPlanetDpadStick),
+				[](bool enabled) { config::HikaruPlanetDpadStick.set(enabled); GamepadDevice::RefreshGamepadPresets(); },
+				T("Disable to steer only with the mapped analog stick. Bullet, Missile, Bomb and View buttons keep their existing bindings."));
+			ImGui::TextWrapped("%s", T("Controller Mapping provides Bullet, Missile, Bomb, View left/right and Stick horizontal/vertical for this cabinet."));
+		}
+		ImGui::Spacing();
+	}
+#endif
 
 	if (RenderCollapsingHeader("Mouse&RawInputSection", ICON_FA_CROSSHAIRS, T("Mouse & Raw Input"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -8460,6 +10401,10 @@ void renderControlsTab()
 							config::CrosshairColor[bus] = 0;
 						}
 					}
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestToggle("controls.crosshair", std::to_string(bus).c_str(), T("Crosshair"), enabled);
+#endif
 
 					ImGui::SameLine(0, 0);
 
@@ -8483,6 +10428,11 @@ void renderControlsTab()
 					bool colorChanged = ImGui::ColorEdit4("##crosshair_color", xhairColor,
 						ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf
 						| ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoLabel);
+#ifdef HOLLYCAST_TEST_HARNESS
+					if (test_harness::ui::collectingInspection())
+						annotateTestColor("controls.crosshair.color", std::to_string(bus).c_str(), T("Crosshair color"),
+							"##crosshair_color", xhairColor);
+#endif
 
 					if (colorChanged)
 					{
@@ -9246,12 +11196,37 @@ void renderAdvancedTab()
 {
 	ScopedTwoLineRowStyle advancedRowStyle(12.0f, true, 0.5f);
 
+	// Updates Section
+	ImGui::Spacing();
+	if (RenderCollapsingHeader("UpdatesSection", ICON_FA_DOWNLOAD, T("Updates"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderGeneralToggleSettingRow(
+			"CheckForUpdatesOnStartup",
+			ICON_FA_DOWNLOAD,
+			T("Check for updates on startup"),
+			T("Automatically check after the startup animation"),
+			cfgLoadBool("updates", "startup", true),
+			[](bool enabled) {
+				cfgSaveBool("updates", "startup", enabled);
+				SaveSettings();
+			},
+			T(
+				"Check for updates on startup\n"
+				"Checks Hollycast's selected update track after the startup intro.\n\n"
+				"If an update is available, Hollycast shows its details. Download and installation start only after you confirm."
+			));
+	}
 
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
+		if (settings.platform.isHikaru()) {
+			RenderGeneralInfoRow("CpuModeSetting", ICON_FA_MICROCHIP, T("CPU Mode"),
+				T("Hikaru uses the interpreter; CPU mode applies to Dreamcast."), T("Interpreter"));
+		}
 #if FEAT_SHREC != DYNAREC_NONE
 		// CPU Mode
+		if (!settings.platform.isHikaru())
 		{
 			const char* cpuModeLabels[] = { T("Dynarec"), T("Interpreter") };
 			int cpuModeSelection = config::DynarecEnabled.get() ? 0 : 1;
@@ -9302,15 +11277,27 @@ void renderAdvancedTab()
 				));
 		}
 
+#endif
+#if FEAT_SHREC == DYNAREC_NONE
+		if (settings.platform.isHikaru())
+#endif
 		// SH4 Clock
 		{
+			const bool hikaru = settings.platform.isHikaru();
 			static int sh4ClockTemp = config::Sh4Clock.get();
+			if (hikaru) {
+				sh4ClockTemp = std::clamp(config::Sh4Clock.get(), 100, 300);
+				if (sh4ClockTemp != config::Sh4Clock.get())
+					config::Sh4Clock.set(sh4ClockTemp);
+			}
 
 			SettingsUI::PopupSliderConfig sh4ClockCfg {};
 			sh4ClockCfg.label = T("SH4 Clock");
 			sh4ClockCfg.icon = ICON_FA_GAUGE_HIGH;
 			sh4ClockCfg.popupID = Tnop("Sh4ClockPopup");
-			sh4ClockCfg.description = T(
+			sh4ClockCfg.description = hikaru ? T(
+				"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n"
+				"Higher settings require more CPU work and can change game timing.") : T(
 				"Adjusts the emulated SH4 CPU clock. Default is 200 MHz.\n"
 				"Higher values may reduce CPU-side frame drops in some games, but can also break timing.\n"
 				"Lower values can reduce CPU load, but may cause slowdowns or audio/video instability.");
@@ -9331,9 +11318,13 @@ void renderAdvancedTab()
 
 			RenderGeneralPopupSettingRow(
 				Tnop("Sh4ClockSetting"),
-				T("Over/Underclock the main SH4 CPU."),
+				hikaru ? T("Adjust both Hikaru SH4 CPU clocks; audio and video clocks stay unchanged.")
+				       : T("Over/Underclock the main SH4 CPU."),
 				sh4ClockPopupCfg,
-				T(
+				hikaru ? T(
+					"SH4 Clock\n"
+					"Adjust both Hikaru SH4 CPU clocks. Video and audio clocks stay unchanged.\n\n"
+					"The default is 200 MHz. Higher settings require more CPU work and can change game timing.") : T(
 					"SH4 Clock\n"
 					"Overclocks/underclocks the emulated Dreamcast CPU.\n\n"
 					"Default is 200 MHz.\n"
@@ -9343,6 +11334,7 @@ void renderAdvancedTab()
 				));
 		}
 
+#if FEAT_SHREC != DYNAREC_NONE
 		// Fast-Forward Speed Limit
 		{
 			static int fastForwardLimitTemp = config::FastForwardSpeedLimit.get();
@@ -9423,7 +11415,6 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		// Multi-threaded emulation
 		ImGui::BeginDisabled(gui_has_held_netplay_session());
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
@@ -9541,7 +11532,14 @@ void renderAdvancedTab()
 					ImGui::SetKeyboardFocusHere();
 				ImGui::SetNextItemWidth(inputWidth);
 				static int gdbport = config::GDBPort;
-				if (ImGui::InputInt("##GDBPortInput", &gdbport))
+				const bool gdbPortChanged = ImGui::InputInt("##GDBPortInput", &gdbport);
+#ifdef HOLLYCAST_TEST_HARNESS
+				if (test_harness::ui::collectingInspection())
+					test_harness::ui::annotateItem(test_harness::ui::lastItemId(), {{"semantic_id", "settings.debug.gdb_port"},
+						{"semantic_label", T("GDB Port")}, {"kind", "number"}, {"value", gdbport},
+						{"read_only", false}});
+#endif
+				if (gdbPortChanged)
 					config::GDBPort = gdbport;
 
 				RenderTwoLineSettingDescription(line1Start, T("Default port is 3263"));
@@ -10158,6 +12156,8 @@ void renderAboutTab()
 			{"Noto Sans CJK (SIL Open Font License)", "fonts/NotoSansCJK-LICENSE.txt"},
 			{"Noto Sans Devanagari (SIL Open Font License)", "fonts/NotoSansDevanagari-LICENSE.txt"},
 			{"HarfBuzz", "fonts/HarfBuzz-LICENSE.txt"},
+			{"ReShadeFX", "licenses/reshadefx/LICENSE.md"},
+			{"SPIRV-Cross", "licenses/spirv-cross/LICENSE"},
 		};
 		for (const auto& bundledLicense : bundledLicenses)
 		{

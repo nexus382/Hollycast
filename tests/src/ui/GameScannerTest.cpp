@@ -52,6 +52,26 @@ protected:
 	bool oldHideLegacy;
 };
 
+#ifdef USE_HIKARU
+TEST_F(GameScannerTest, EnrichesHikaruArchivesAndRetainsTheArcadeSystem)
+{
+	std::ofstream(directory / "PHARRIER.zip", std::ios::binary) << "fixture";
+	std::ofstream(directory / "gamelist.xml") << "<gameList><game><path>PHARRIER.zip</path>"
+			"<name>My Planet Harriers</name></game></gameList>";
+	config::GameListPath = (directory / "gamelist.xml").string();
+	scanner.fetch_game_list_sync();
+	const auto scanned = games();
+	ASSERT_EQ(1u, scanned.size());
+	const auto& game = scanned.front();
+	EXPECT_EQ("My Planet Harriers", game.name);
+	EXPECT_EQ("PHARRIER.zip", game.fileName);
+	EXPECT_EQ("Planet Harriers", game.gameName);
+	EXPECT_EQ("Hikaru", game.system);
+	EXPECT_TRUE(game.arcade);
+	EXPECT_EQ(7u, game.size);
+}
+#endif
+
 TEST_F(GameScannerTest, RefreshFindsNewAndRemovedGamesEvenWhenTheCountIsUnchanged)
 {
 	std::ofstream(directory / "Alpha.chd") << "fixture";

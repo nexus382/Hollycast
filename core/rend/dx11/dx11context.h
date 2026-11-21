@@ -32,6 +32,11 @@
 #include "dx11_overlay.h"
 #include "wsi/context.h"
 
+class Quad;
+#ifdef USE_HIKARU
+class Dx11ShaderChain;
+#endif
+
 class DX11Context : public GraphicsContext
 {
 public:
@@ -39,6 +44,13 @@ public:
 	static DX11Context *Instance() { return static_cast<DX11Context *>(GraphicsContext::Instance()); }
 
 	void EndImGuiFrame();
+#ifdef USE_HIKARU
+	// An empty view invalidates the retained Hikaru frame when its canvas is replaced.
+	bool hikaruNeedsSceneDepth() const;
+	void presentHikaruFrame(const ComPtr<ID3D11ShaderResourceView>& image, unsigned width = 0, unsigned height = 0,
+			const ComPtr<ID3D11ShaderResourceView>& depth = {});
+	void resetHikaruPresentation();
+#endif
 	void Present();
 	void BeginGpuTiming();
 	void EndGpuTiming();
@@ -88,6 +100,9 @@ private:
 	DX11Context(void *window, void *display);
 	~DX11Context();
 	bool init(bool keepCurrentWindow = false);
+#ifdef USE_HIKARU
+	void drawExternalFrame(unsigned sourceWidth = 0, unsigned sourceHeight = 0);
+#endif
 	void term();
 	void handleDeviceLost();
 	bool checkTextureSupport();
@@ -100,6 +115,15 @@ private:
 	ComPtr<IDXGISwapChain1> swapchain1;
 	ComPtr<ID3D11RenderTargetView> renderTargetView;
 	bool overlayOnly = false;
+#ifdef USE_HIKARU
+	ComPtr<ID3D11ShaderResourceView> externalFrame;
+	ComPtr<ID3D11ShaderResourceView> externalDepth;
+	ComPtr<ID3D11ShaderResourceView> externalShaderFrame;
+	std::unique_ptr<Quad> externalQuad;
+	std::unique_ptr<Dx11ShaderChain> externalShaderChain;
+	D3D11_VIEWPORT externalShaderViewport {};
+	uint64_t externalShaderGeneration = 0;
+#endif
 	DX11Overlay overlay;
 	bool allowTearing = false;
 	bool swapOnVSync = false;

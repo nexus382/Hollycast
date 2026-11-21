@@ -1,4 +1,5 @@
 // Copyright 2026 The Hollycast Authors
+// Portions Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "hw/pvr/ta.h"
@@ -9,6 +10,7 @@
 #include "metal_targets.h"
 #include "metal_framebuffer.h"
 #include "metal_shaders.h"
+#include "metal_shader_chain.h"
 #include "metal_modvol.h"
 #include "metal_oit.h"
 #include "metal_oit_shaders.h"
@@ -16,7 +18,11 @@
 #include "rend/transform_matrix.h"
 #include "rend/CustomTexture.h"
 #include "rend/sample_filter.h"
+#include "rend/osd.h"
 #include "ui/performance_overlay.h"
+#include "ui/settings_new.h"
+#include "ui/shader_preview_layout.h"
+#include "ui/gui.h"
 #include "cfg/option.h"
 #include <simd/simd.h>
 #include <algorithm>
@@ -93,6 +99,7 @@ private:
     id<MTLLibrary> library = nil, oitLibrary = nil;
     const bool perPixel;
     MetalRenderTargets targets;
+    std::unique_ptr<MetalShaderChain> shaderChain;
     id<MTLTexture> white = nil;
     id<MTLTexture> regularSecondary = nil, regularSecondaryCopy = nil;
     id<MTLTexture> palette = nil, fog = nil;
@@ -131,12 +138,15 @@ bool MetalRenderer::Init() {
     performance_overlay::setGpuTimingSupported(false);
     if (!white || !pipeline(1, 0)) return false;
     if (!perPixel) pipeline(4, 5);
+    shaderChain = std::make_unique<MetalShaderChain>(device, MetalContext::Instance()->GetQueue());
     NOTICE_LOG(RENDERER, "%s", perPixel ? "Native Metal per-pixel renderer initialized" : "Native Metal regular renderer initialized");
     return true;
     }
 }
 void MetalRenderer::Term() {
     MetalContext::Instance()->WaitIdle();
+    MetalContext::Instance()->SetShaderOutput(nil, false, false);
+    shaderChain.reset();
     modifiers.Term(); clearTextureCache(); clearGpuPreloadedTextures();
     geometryUploads.clear();
     performance_overlay::setGpuTimingSupported(false);
@@ -413,8 +423,11 @@ bool MetalRenderer::Render() {
     [enc setVertexBuffer:vertices offset:0 atIndex:0];
     id<MTLTexture> destination = targets.output;
     bool secondaryInitialized = false;
+    const bool presentsScene = !renderContext->isRTT && !config::EmulateFramebuffer;
+    // A pending chain can activate at presentation and sample this frame.
+    const bool preserveSceneDepth = presentsScene && shaderChain && postprocess::hasConfiguredShaderSelection();
     const auto endEncoder = [&](bool final = false) {
-        [enc setDepthStoreAction:final ? MTLStoreActionDontCare : MTLStoreActionStore];
+        [enc setDepthStoreAction:final && !preserveSceneDepth ? MTLStoreActionDontCare : MTLStoreActionStore];
         [enc setStencilStoreAction:final ? MTLStoreActionDontCare : MTLStoreActionStore];
         [enc endEncoding];
         enc = nil;
@@ -532,10 +545,13 @@ bool MetalRenderer::Render() {
     else [command commit];
     if (renderContext->isRTT) { targets.end(true); return false; }
     if (config::EmulateFramebuffer) {
+        targets.frameDepth = nil;
         if (timing) pvrTimingEvidence.submitted(epoch);
         return true;
     }
-    aspect = getOutputFramebufferAspectRatio(); targets.frameOutput = targets.output; frameReady = true; clearLastFrame = false;
+    aspect = getOutputFramebufferAspectRatio(); targets.frameOutput = targets.output;
+    targets.frameDepth = preserveSceneDepth ? targets.depth : nil;
+    frameReady = true; clearLastFrame = false;
     return true;
     }
 }
@@ -684,7 +700,7 @@ bool MetalRenderer::renderPerPixel() {
             command = newCommand(); enc = [command renderCommandEncoderWithDescriptor:makePass(false, false)];
             modifiers.ClearStencil(enc,w,h); [enc endEncoding]; [command commit];
         }
-        if (!cur.autosort) {
+        if (!cur.autosort && cur.tr_count > prev.tr_count) {
             // Keep the opaque modifier stencil snapshot while translucent depth
             // writes advance independently of the prepass attachment.
             command = newCommand();
@@ -780,7 +796,7 @@ bool MetalRenderer::renderPerPixel() {
     }
     if (renderContext->isRTT) { targets.end(true); return false; }
     int rawW,rawH; getPvrFramebufferSize(*renderContext,rawW,rawH); performance_overlay::recordRenderedResolution(rawW,rawH,w,h);
-    if (!config::EmulateFramebuffer) { aspect=getOutputFramebufferAspectRatio(); targets.frameOutput=targets.output; frameReady=true; clearLastFrame=false; }
+    if (!config::EmulateFramebuffer) { aspect=getOutputFramebufferAspectRatio(); targets.frameOutput=targets.output; targets.frameDepth=targets.depth; frameReady=true; clearLastFrame=false; }
     else if (timing) pvrTimingEvidence.submitted(timing->epoch);
     return true;
     }
@@ -875,7 +891,27 @@ bool MetalRenderer::Present() {
     return true;
 }
 bool MetalRenderer::RenderLastFrame() {
-    return !clearLastFrame;
+    if (clearLastFrame || !targets.frameOutput) return false;
+    if (shaderChain) {
+        int width = settings.display.width;
+        int height = std::max(1, settings.display.height - getScaledTopInset());
+        if (SettingsNew::shaderLiveTuneActive()) {
+            const auto layout = SettingsNew::shaderPreviewLayout(width, settings.display.height, getScaledTopInset());
+            width = layout.gameWidth; height = layout.gameHeight;
+        }
+        int dx = 0, dy = 0;
+        getWindowboxDimensions(width, height, aspect, dx, dy, config::Rotate90);
+        postprocess::ShaderFrameInfo frame { (int)targets.frameOutput.width, (int)targets.frameOutput.height,
+                std::max(1, width - 2 * dx), std::max(1, height - 2 * dy), 0, config::Rotate90,
+                config::Rotate90 ? 1.f / aspect : aspect };
+        frame.presentation = { width, height, dx, dy, frame.viewportWidth, frame.viewportHeight,
+                { VO_BORDER_COL.red(), VO_BORDER_COL.green(), VO_BORDER_COL.blue(), 1.f } };
+        id<MTLTexture> output = nil;
+        bool transformed = false, fullPresentation = false;
+        shaderChain->render(targets.frameOutput, targets.frameDepth, frame, output, transformed, fullPresentation);
+        MetalContext::Instance()->SetShaderOutput(output, transformed, fullPresentation, { 0, getScaledTopInset(), width, height });
+    }
+    return true;
 }
 } // namespace
 

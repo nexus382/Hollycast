@@ -116,6 +116,7 @@ public:
 	void reset() override {
 		set(defaultValue);
 		overridden = false;
+		saveDeferred = false;
 	}
 
 	void load() override {
@@ -131,6 +132,8 @@ public:
 
 	void save() const override
 	{
+		if (saveDeferred)
+			return;
 		if (overridden) {
 			if (value == overriddenDefault)
 				return;
@@ -155,6 +158,7 @@ public:
 
 	T& get() { return value; }
 	void set(T v) { value = v; }
+	void deferSave(bool defer) { saveDeferred = defer; }
 
 	void override(T v)
 	{
@@ -213,7 +217,19 @@ protected:
 	{
 		std::string paths = loadStr(section, name);
 		if (paths.empty())
-			return value;
+		{
+			if constexpr (PerGameOption)
+			{
+				// An explicitly empty game list clears the inherited global list.
+				if (hasEntry(section, name))
+					return {};
+				if (name != this->name)
+					return doLoad(this->section, this->name);
+				return defaultValue;
+			}
+			else
+				return value;
+		}
 		std::string::size_type start = 0;
 		std::vector<std::string> newValue;
 		while (true)
@@ -343,6 +359,7 @@ protected:
 	T defaultValue;
 	T overriddenDefault = T();
 	bool overridden = false;
+	bool saveDeferred = false;
 	Settings& settings;
 };
 #endif
@@ -441,6 +458,25 @@ extern Option<int, false> MenuBarVisibility;
 constexpr bool LimitFPS = true;
 extern Option<bool> DSPEnabled;
 extern Option<int> AudioBufferSize;	//In samples ,*4 for bytes
+#ifdef USE_HIKARU
+enum class HikaruSortingMode { PerTriangle, PerStrip, PerPixel };
+extern Option<HikaruSortingMode> HikaruSorting;
+extern Option<int> HikaruMaxLayers;
+extern Option<bool> HikaruAudioPacing;
+extern Option<bool> HikaruBraveMouseAim;
+extern Option<bool> HikaruBraveGamepad;
+extern Option<bool> HikaruAirTrixDpadBoard;
+extern Option<bool> HikaruPlanetDpadStick;
+extern Option<int, false> HikaruAirTrixRegion;
+extern Option<int, false> HikaruBraveRegion;
+extern Option<int, false> HikaruPlanetRegion;
+extern Option<int, false> HikaruVirtualOn4Region;
+extern Option<int, false> HikaruNascarRegion;
+extern Option<int, false> HikaruStarWarsRacerRegion;
+extern Option<bool> HikaruStarWarsRacerGamepad;
+extern Option<bool> HikaruNascarGamepad;
+extern Option<bool> HikaruVirtualOn4TwinStick;
+#endif
 extern Option<bool> AutoLatency;
 
 extern OptionString AudioBackend;
@@ -469,6 +505,10 @@ public:
 };
 extern AudioVolumeOption AudioVolume;
 extern Option<bool> VmuSound;
+// Persistent Phone VMU pairing: a stable address lets a paired phone reconnect
+// after Hollycast restarts instead of expiring with each server session.
+extern Option<int, false> PhoneVmuPort;
+extern Option<std::string, false> PhoneVmuToken;
 
 // Rendering
 
@@ -492,6 +532,19 @@ public:
 #endif
 		) {}
 
+	void set(RenderType v) {
+#if defined(GLES2) || defined(__APPLE__)
+		// Older Hikaru settings could persist this unsupported host renderer.
+		// Normalize it only while loading Hikaru; other systems retain their
+		// existing renderer selection behavior.
+		if (::settings.platform.isHikaru() && v == RenderType::OpenGL_OIT) v = RenderType::OpenGL;
+#endif
+		Option<RenderType>::set(v);
+	}
+	void load() override {
+		Option<RenderType>::load();
+		set(value);
+	}
 	RenderType& operator=(const RenderType& v) { set(v); return value; }
 
 	void reset() override {
@@ -549,6 +602,11 @@ extern Option<int> AutoSkipFrame;		// 0: none, 1: some, 2: more
 extern Option<int> RenderResolution;
 extern Option<bool> IntegerScale;
 extern Option<bool> LinearInterpolation;
+extern OptionString PostProcessShader;
+extern Option<std::vector<std::string>> PostProcessShaders;
+extern Option<std::string, false> PostProcessShaderDirectory;
+extern OptionString PostProcessShaderParameters;
+extern OptionString PostProcessShaderTechnique;
 extern Option<bool> VSync;
 extern Option<int64_t> PixelBufferSize;
 extern Option<int> AnisotropicFiltering;

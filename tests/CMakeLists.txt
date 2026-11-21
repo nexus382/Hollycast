@@ -33,6 +33,13 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/MmuTest.cpp
         src/HttpTest.cpp
         src/IniFileTest.cpp
+        src/rend/PostProcessingChainTest.cpp
+        src/rend/MetalShaderCompilerTest.cpp
+        src/rend/ShaderLayerTest.cpp
+        src/rend/ReShadeCompilerTest.cpp
+        src/rend/OpenGLShaderChainTest.cpp
+        src/rend/DirectXShaderChainTest.cpp
+		src/rend/SlangFrontendTest.cpp
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp
         src/network/NetworkServiceTest.cpp
@@ -42,6 +49,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/imgread/GdiTest.cpp
         src/input/ButtonComboTest.cpp
         src/input/GamepadInputHandlingTest.cpp
+        src/input/HikaruGamepadPresetTest.cpp
         src/input/MultiBindMappingTest.cpp
         src/input/InputDefTest.cpp
         src/input/InputMappingConfigFileTest.cpp
@@ -71,6 +79,23 @@ if(LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
 endif()
 
+if(USE_HIKARU)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruStateTest.cpp src/HikaruCardStateTest.cpp src/HikaruAudioPacerTest.cpp src/HikaruSoundFrameTest.cpp src/HikaruAuditTest.cpp src/HikaruInputBindingsTest.cpp src/HikaruCabinetSettingsTest.cpp src/HikaruFrameWorkerTest.cpp)
+endif()
+
+if(USE_HIKARU AND USE_VULKAN AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruVulkanTest.cpp)
+    # Expose the generic-shader oracle only in the native test executable.
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/vulkan.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
+if(USE_HIKARU AND USE_DX11 AND WIN32 AND NOT LIBRETRO)
+    target_sources(${PROJECT_NAME} PRIVATE src/HikaruDx11Test.cpp)
+    set_property(SOURCE "${PROJECT_SOURCE_DIR}/core/hw/hikaru/graphics/dx11.cpp"
+        DIRECTORY "${PROJECT_SOURCE_DIR}" APPEND PROPERTY COMPILE_DEFINITIONS HIKARU_NATIVE_TESTING)
+endif()
+
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/DcnetProbeTest.cpp
@@ -87,5 +112,14 @@ if(NOT LIBRETRO)
         src/ui/ThemeInstallTest.cpp
         src/ui/ThemeRepositoryTest.cpp
         src/ui/VideoPresetTest.cpp
-        src/ui/AndroidMenuPopupTest.cpp)
+        src/ui/AndroidMenuPopupTest.cpp
+        src/ui/ShaderPreviewLayoutTest.cpp)
 endif()
+
+if(USE_METAL)
+    target_sources(${PROJECT_NAME} PRIVATE src/rend/MetalShaderChainTest.mm)
+    set_source_files_properties(src/rend/MetalShaderChainTest.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
+
+# Hikaru bring-up checks also run without the rest of the emulator's dependencies.
+add_subdirectory(hikaru)

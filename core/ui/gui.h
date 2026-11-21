@@ -28,12 +28,14 @@ void gui_init();
 void gui_updateStyle();
 void gui_requestStyleReload();
 void gui_open_settings();
+void gui_open_shader_settings();
 void gui_open_texture_filter_settings();
 // Selects Loading when custom textures need refreshing; otherwise closes the UI.
 bool gui_resume_game();
 void gui_display_ui();
 void gui_draw_osd();
-void gui_display_osd();
+// Redraw the completed game background when no new game image was rendered.
+void gui_display_osd(bool redrawGame = false);
 void gui_display_profiler();
 void gui_open_onboarding();
 void gui_open_setup_checklist();
@@ -46,10 +48,10 @@ void gui_keyboard_inputUTF8(const std::string& s);
 void gui_keyboard_key(u8 keyCode, bool pressed);
 bool gui_keyboard_captured();
 bool gui_mouse_captured();
-void gui_set_mouse_position(int x, int y, bool touchscreen);
+void gui_set_mouse_position(int x, int y, bool touchscreen, bool harnessInput = false);
 bool gui_is_menu_touch_target(float x, float y);
 // 0: left, 1: right, 2: middle/wheel, 3: button 4
-void gui_set_mouse_button(int button, bool pressed, bool touchscreen);
+void gui_set_mouse_button(int button, bool pressed, bool touchscreen, bool harnessInput = false);
 void gui_set_mouse_wheel(float delta);
 void gui_set_insets(int left, int right, int top, int bottom);
 void gui_stop_game(const std::string& message = "", bool allowAutoSave = true);

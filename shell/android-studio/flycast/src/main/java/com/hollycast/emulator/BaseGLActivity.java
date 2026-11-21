@@ -135,6 +135,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Log.i("hollycast", "Initializing input devices");
         InputDeviceManager.getInstance().startListening(getApplicationContext());
         register(this);
+        PlayAppUpdater.observe(BaseGLActivity::appUpdateSnapshotChanged);
         audioBackend = new AudioBackend();
         onConfigurationChanged(getResources().getConfiguration());
 
@@ -505,6 +506,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     }
 
     private static native void register(BaseGLActivity activity);
+    private static native void appUpdateSnapshotChanged();
 
 	public String getNativeLibDir() {
         return getApplicationContext().getApplicationInfo().nativeLibraryDir;
