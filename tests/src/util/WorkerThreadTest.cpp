@@ -3,29 +3,21 @@
 #include <atomic>
 #include <chrono>
 #include <future>
-#include <thread>
 
 class WorkerThreadTest : public ::testing::Test
 {
 };
 
-TEST_F(WorkerThreadTest, Basic)
+TEST_F(WorkerThreadTest, RunsTasksBeforeAndAfterRestart)
 {
+	std::promise<void> first, restarted;
 	WorkerThread worker{"Test"};
-	std::atomic<bool> done = false;
-	const auto& task = [&]() {
-		done = true;
-	};
-	worker.run(task);
-	std::this_thread::sleep_for(std::chrono::milliseconds(100));
-	ASSERT_TRUE(done);
+	worker.run([&] { first.set_value(); });
+	ASSERT_EQ(std::future_status::ready, first.get_future().wait_for(std::chrono::seconds(2)));
 
-	// test restart
 	worker.stop();
-	done = false;
-	worker.run(task);
-	std::this_thread::sleep_for(std::chrono::milliseconds(100));
-	ASSERT_TRUE(done);
+	worker.run([&] { restarted.set_value(); });
+	EXPECT_EQ(std::future_status::ready, restarted.get_future().wait_for(std::chrono::seconds(2)));
 }
 
 TEST_F(WorkerThreadTest, MultiThread)
@@ -53,13 +45,9 @@ TEST_F(WorkerThreadTest, MultiThread)
 TEST_F(WorkerThreadTest, StartStop)
 {
 	WorkerThread worker{"Test"};
-	std::atomic<int> counter = 0;
-	const auto& task = [&]() {
-		++counter;
-	};
 	const auto& consumer = [&]() {
 		for (int i = 0; i < 100; i++)
-			worker.run(task);
+			worker.run([] {});
 	};
 	std::future<void> future = std::async(std::launch::async, consumer);
 	std::future<void> future2 = std::async(std::launch::async, [&]() {
@@ -69,7 +57,6 @@ TEST_F(WorkerThreadTest, StartStop)
 	future.get();
 	future2.get();
 	worker.stop();
-	//ASSERT_EQ(100, counter);
 }
 
 TEST_F(WorkerThreadTest, Future)

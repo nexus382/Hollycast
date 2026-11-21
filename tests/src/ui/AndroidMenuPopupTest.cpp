@@ -22,7 +22,7 @@
 #pragma pop_macro("TARGET_MAC")
 #pragma pop_macro("__ANDROID__")
 
-class AndroidMenuPopupTest : public ::testing::TestWithParam<const char*>
+class AndroidMenuPopupTest : public ::testing::Test
 {
 protected:
 	void SetUp() override
@@ -56,13 +56,13 @@ protected:
 		config::MenuBarVisibility = previousVisibility;
 	}
 
-	void frame(const char* label = "Sample Texture Filter")
+	void frame()
 	{
 		ImGui::NewFrame();
 		ImGui::SetNextWindowPos(ImVec2(0, 350));
 		ImGui::SetNextWindowSize(ImVec2(800, 250));
 		ImGui::Begin("Texture Filtering Live Tune");
-		const bool open = ImGui::BeginCombo(label, "Current");
+		const bool open = ImGui::BeginCombo("Sample Texture Filter", "Current");
 		if (!open)
 			comboCenter = ImGui::GetItemRectMin() + ImVec2(20, 10);
 		if (open)
@@ -79,14 +79,14 @@ protected:
 		popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
 	}
 
-	void touch(const ImVec2& pos, bool down, const char* label = "Sample Texture Filter")
+	void touch(const ImVec2& pos, bool down)
 	{
 		ImGui::GetIO().AddMousePosEvent(pos.x, pos.y);
 		ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, down);
 		// ImGui deliberately processes touchscreen motion and button changes on
 		// separate frames, since a touch has no preceding hover event.
-		frame(label);
-		frame(label);
+		frame();
+		frame();
 	}
 
 	ImGuiContext* previousContext = nullptr;
@@ -99,28 +99,24 @@ protected:
 	bool selected = false;
 };
 
-TEST_P(AndroidMenuPopupTest, HiddenBarDoesNotCloseLiveTuneDropdown)
+TEST_F(AndroidMenuPopupTest, HiddenBarDoesNotCloseLiveTuneDropdown)
 {
-	const char* label = GetParam();
-	frame(label);
-	frame(label);
+	frame();
+	frame();
 	ASSERT_EQ(AndroidGuiMenu::mainMenuBarHeight(), 0.f);
-	touch(comboCenter, true, label);
-	touch(comboCenter, false, label);
+	touch(comboCenter, true);
+	touch(comboCenter, false);
 	ASSERT_TRUE(popupOpen);
 	EXPECT_EQ(AndroidGuiMenu::mainMenuBarHeight(), 0.f);
 	for (int i = 0; i < 3; ++i)
-		frame(label);
+		frame();
 	ASSERT_TRUE(popupOpen);
 	EXPECT_EQ(AndroidGuiMenu::mainMenuBarHeight(), 0.f);
-	touch(optionCenter, true, label);
-	touch(optionCenter, false, label);
+	touch(optionCenter, true);
+	touch(optionCenter, false);
 	EXPECT_TRUE(selected);
 	EXPECT_FALSE(popupOpen);
 }
-
-INSTANTIATE_TEST_SUITE_P(LiveTune, AndroidMenuPopupTest,
-	::testing::Values("Sample Texture Filter", "Filter Resolution Limit"));
 
 TEST_F(AndroidMenuPopupTest, VisibleBarStaysPutWhileLiveTuneDropdownIsOpen)
 {

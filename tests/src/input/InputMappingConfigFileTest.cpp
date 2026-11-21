@@ -1,42 +1,36 @@
 #include "gtest/gtest.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 
 #include "input/mapping.h"
+#include "stdclass.h"
 
 class InputMappingConfigFileTest : public ::testing::Test
 {
 protected:
-    static constexpr const char* CONFIG_FILE_NAME = "InputMappingConfigFileTest";
-    static constexpr const char* CONFIG_SAVE_DIR = "mappings";
+    const std::string fileName = "InputMappingConfigFileTest-"
+        + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 
-    std::filesystem::path getConfigFilepath()
+    std::filesystem::path getConfigFilepath() const
     {
-        return std::filesystem::path(CONFIG_SAVE_DIR) / CONFIG_FILE_NAME;
-    }
-
-    void removeConfigFile()
-    {
-        std::filesystem::remove(getConfigFilepath());
+        return std::filesystem::u8path(get_writable_config_path("mappings/" + fileName));
     }
 
     void writeConfigFile(const std::string& contents)
     {
+        std::filesystem::create_directories(getConfigFilepath().parent_path());
         std::ofstream configFile(getConfigFilepath());
         configFile << contents;
         configFile.close();
-    }
-
-    void SetUp() override
-    {
-        removeConfigFile();
+        ASSERT_TRUE(configFile) << getConfigFilepath();
     }
 
     void TearDown() override
     {
-        removeConfigFile();
+        InputMapping::DeleteMapping(fileName);
     }
 };
 
@@ -86,7 +80,7 @@ TEST_F(InputMappingConfigFileTest, save)
     inputMapping.saturation = 0.50;
 
     // Act
-    inputMapping.save(CONFIG_FILE_NAME);
+    ASSERT_TRUE(inputMapping.save(fileName));
 
     // Assert
     std::ifstream configFile(getConfigFilepath());
@@ -145,9 +139,10 @@ version = 4)";
     writeConfigFile(fileData);
 
     // Act
-    std::shared_ptr<InputMapping> inputMapping = InputMapping::LoadMapping(CONFIG_FILE_NAME);
+    std::shared_ptr<InputMapping> inputMapping = InputMapping::LoadMapping(fileName);
 
     // Assert
+    ASSERT_NE(inputMapping, nullptr);
     const DreamcastKey mappedKey1 = DreamcastKey::EMU_BTN_MENU;
     const InputMapping::ButtonCombo combo1{
         InputMapping::InputSet{
@@ -190,38 +185,24 @@ version = 4)";
     EXPECT_NEAR(inputMapping->saturation, 0.50, 1e-3);
 }
 
-// This doesn't really belong here but too lazy to make a new test
 TEST_F(InputMappingConfigFileTest, clear_makes_dirty)
 {
-    const std::string fileData = R"([analog]
-bind0 = 1+:btn_trigger_left
-bind1 = 2+:btn_trigger_right
-bind2 = 3-:btn_analog_down
-bind3 = 3+:btn_analog_up
+    writeConfigFile("[emulator]\nversion = 4\n"
+                    "[digital]\nbind0 = 100:btn_a\n"
+                    "[analog]\nbind0 = 3+:btn_analog_up\n");
+    auto mapping = InputMapping::LoadMapping(fileName);
+    ASSERT_NE(mapping, nullptr);
+    ASSERT_FALSE(mapping->is_dirty());
+    ASSERT_EQ(100u, mapping->get_button_code(0, DC_BTN_A));
 
-[combo]
-bind0 = 321,789+,1-:btn_quick_save:0
-bind1 = 987+,123,191-:btn_jump_state:1
-bind2 = 191-,123,987+:btn_menu:1
+    mapping->clear_button(0, DC_BTN_A);
+    EXPECT_EQ(InputMapping::InputDef::INVALID_CODE, mapping->get_button_code(0, DC_BTN_A));
+    EXPECT_TRUE(mapping->is_dirty());
 
-[digital]
-bind0 = 100:btn_a
-bind1 = 200:btn_b
-
-[emulator]
-dead_zone = 33
-mapping_name = clear test case
-rumble_power = 98
-saturation = 50
-version = 4)";
-
-    writeConfigFile(fileData);
-    std::shared_ptr<InputMapping> inputMapping = InputMapping::LoadMapping(CONFIG_FILE_NAME);
-    inputMapping->clear_button(0, DreamcastKey::DC_BTN_A);
-    EXPECT_TRUE(inputMapping->is_dirty());
-
-    InputMapping::ClearMappings();
-    inputMapping = InputMapping::LoadMapping(CONFIG_FILE_NAME);
-    inputMapping->clear_axis(0, DreamcastKey::DC_AXIS_UP);
-    EXPECT_TRUE(inputMapping->is_dirty());
+    ASSERT_TRUE(mapping->save(fileName));
+    ASSERT_FALSE(mapping->is_dirty());
+    ASSERT_EQ(3u, mapping->get_axis_code(0, DC_AXIS_UP).first);
+    mapping->clear_axis(0, DC_AXIS_UP);
+    EXPECT_EQ(InputMapping::InputDef::INVALID_CODE, mapping->get_axis_code(0, DC_AXIS_UP).first);
+    EXPECT_TRUE(mapping->is_dirty());
 }

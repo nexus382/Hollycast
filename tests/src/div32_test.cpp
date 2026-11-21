@@ -121,33 +121,28 @@ protected:
 
 	void div32s(u32 n1, u32 n2, u32 n3)
 	{
-		const long long int dividend = (long long)n3 << 32 | n1;
-		//printf("%lld / %d = ", dividend, n2);
-		int r1s = n1;
-		int r2 = n2;
-		int r3s = n3;
-		int r1f = r1s;
-		int r3f = r3s;
-		div32s_slow((u32&)r1s, r2, (u32&)r3s);
-		div32s_fast((u32&)r1f, r2, (u32&)r3f);
-		//printf("%d %% %d\n", (r1s << 1) | sr.T, r3s);
-		ASSERT_EQ(r1s, r1f);
-		ASSERT_EQ(r3s, r3f);
+		SCOPED_TRACE(::testing::Message() << "R1=" << n1 << " R2=" << n2 << " R3=" << n3);
+		u32 slowR1 = n1, slowR3 = n3;
+		u32 fastR1 = n1, fastR3 = n3;
+		div32s_slow(slowR1, n2, slowR3);
+		const u32 slowT = Sh4cntx.sr.T;
+		div32s_fast(fastR1, n2, fastR3);
+		EXPECT_EQ(slowR1, fastR1);
+		EXPECT_EQ(slowT, Sh4cntx.sr.T);
+		EXPECT_EQ(slowR3, fastR3);
 	}
 
 	void div32u(u32 n1, u32 n2, u32 n3)
 	{
-		const long long int dividend = (long long)n3 << 32 | n1;
-		//printf("%lld / %d = ", dividend, n2);
-		int r1s = n1;
-		int r2 = n2;
-		int r3s = n3;
-		int r1f = r1s;
-		int r3f = r3s;
-		div32u_slow((u32&)r1s, r2, (u32&)r3s);
-		div32u_fast((u32&)r1f, r2, (u32&)r3f);
-		//printf("%d %% %d\n", (r1s << 1) | sr.T, r3s);
-		ASSERT_EQ(r3s, r3f);
+		SCOPED_TRACE(::testing::Message() << "R1=" << n1 << " R2=" << n2 << " R3=" << n3);
+		u32 slowR1 = n1, slowR3 = n3;
+		u32 fastR1 = n1, fastR3 = n3;
+		div32u_slow(slowR1, n2, slowR3);
+		const u32 slowT = Sh4cntx.sr.T;
+		div32u_fast(fastR1, n2, fastR3);
+		EXPECT_EQ(slowR1, fastR1);
+		EXPECT_EQ(slowT, Sh4cntx.sr.T);
+		EXPECT_EQ(slowR3, fastR3);
 	}
 };
 
