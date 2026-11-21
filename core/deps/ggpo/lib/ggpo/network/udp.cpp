@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -71,14 +72,29 @@ Udp::Init(uint16 port, Poll *poll, Callbacks *callbacks)
 void
 Udp::SendTo(char *buffer, int len, int flags, struct sockaddr *dst, int destlen)
 {
-   struct sockaddr_in *to = (struct sockaddr_in *)dst;
-
    int res = sendto(_socket, buffer, len, flags, dst, destlen);
    if (res == SOCKET_ERROR) {
-	  int err = WSAGetLastError();
-      Log("unknown error in sendto (erro: %d  wsaerr: %d).", res, err);
-      ASSERT(false && "Unknown error in sendto");
+      const int error = WSAGetLastError();
+      // Keep the bound socket through temporary failures. The protocol will
+      // retransmit pending inputs and send fresh keepalives as needed.
+#ifdef _WIN32
+      if (error == WSAEWOULDBLOCK || error == WSAEINTR || error == WSAENOBUFS ||
+          error == WSAEADDRNOTAVAIL || error == WSAENETDOWN || error == WSAENETUNREACH ||
+          error == WSAEHOSTDOWN || error == WSAEHOSTUNREACH || error == WSAENETRESET ||
+          error == WSAECONNRESET || error == WSAECONNREFUSED)
+#else
+      if (error == EAGAIN || error == EWOULDBLOCK || error == EINTR || error == ENOBUFS ||
+          error == EADDRNOTAVAIL || error == ENODEV || error == ENETDOWN || error == ENETUNREACH ||
+          error == EHOSTDOWN || error == EHOSTUNREACH || error == ENETRESET ||
+          error == ECONNRESET || error == ECONNREFUSED)
+#endif
+         return;
+
+      Log("Unexpected UDP sendto error %d.", error);
+      ASSERT(false && "Unexpected UDP sendto error");
+      return;
    }
+   struct sockaddr_in *to = (struct sockaddr_in *)dst;
    char dst_ip[1024];
    Log("sent packet length %d to %s:%d (ret:%d).", len, inet_ntop(AF_INET, (void *)&to->sin_addr, dst_ip, ARRAY_SIZE(dst_ip)), ntohs(to->sin_port), res);
 }

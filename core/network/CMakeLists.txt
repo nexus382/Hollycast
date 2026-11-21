@@ -25,6 +25,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         output.h
         picoppp.cpp
         picoppp.h
+        session_state.cpp
+        session_state.h
         netservice.cpp
         netservice.h
         dcnet.cpp

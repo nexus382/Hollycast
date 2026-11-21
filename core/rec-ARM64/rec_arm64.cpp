@@ -1,5 +1,6 @@
 /*
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of reicast.
 
@@ -31,6 +32,7 @@ using namespace vixl::aarch64;
 
 //#define NO_BLOCK_LINKING
 
+#include "cfg/option.h"
 #include "hw/sh4/sh4_opcode_list.h"
 
 #include "hw/sh4/sh4_mmr.h"
@@ -268,7 +270,8 @@ public:
 		Ldr(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
 		Cmp(w1, 0);
 		Label cycles_remaining;
-		B(&cycles_remaining, pl);
+		// Match x64 in GGPO: a zero cycle budget has exhausted the timeslice.
+		B(&cycles_remaining, config::GGPOEnable ? gt : pl);
 		Mov(w0, block->vaddr);
 		GenCall(arm64_intc_sched);
 		Mov(w1, w0);
@@ -1516,10 +1519,12 @@ public:
 		// Add timeslice to cycle counter
 		Add(w1, w1, SH4_TIMESLICE);
 		Str(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
-		Ldr(w0, sh4_context_mem_operand(&sh4ctx.CpuRunning));
-		Cbz(w0, &end_mainloop);
 		Mov(x29, lr);				// Save link register in case we return
 		GenCallRuntime(UpdateSystem_INTC);
+		// Account for the expired slice before stopping, whether the stop
+		// came from the last guest block or a scheduler callback.
+		Ldr(w1, sh4_context_mem_operand(&sh4ctx.CpuRunning));
+		Cbz(w1, &end_mainloop);
 		Cbnz(w0, &do_interrupts);
 		Mov(lr, x29);
 		Ldr(w0, sh4_context_mem_operand(&sh4ctx.cycle_counter));

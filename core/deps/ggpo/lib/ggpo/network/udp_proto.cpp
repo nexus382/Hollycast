@@ -10,6 +10,7 @@
 
 #include "../ggpo_types.h"
 #include "bitvector.h"
+#include <climits>
 
 static const int UDP_HEADER_SIZE = 28;     /* Size of IP + UDP headers */
 static const int NUM_SYNC_PACKETS = 5;
@@ -239,7 +240,7 @@ UdpProtocol::OnLoopPoll(void *cookie)
       }
 
       if (_disconnect_timeout && _disconnect_notify_start && 
-         !_disconnect_notify_sent && (_last_recv_time + _disconnect_notify_start < now)) {
+         !_disconnect_notify_sent && now - _last_recv_time >= static_cast<unsigned int>(_disconnect_notify_start)) {
          Log("udpproto%d | Endpoint has stopped receiving packets for %d ms.  Sending notification.", _queue, _disconnect_notify_start);
          Event e(Event::NetworkInterrupted);
          e.u.network_interrupted.disconnect_timeout = _disconnect_timeout - _disconnect_notify_start;
@@ -247,7 +248,7 @@ UdpProtocol::OnLoopPoll(void *cookie)
          _disconnect_notify_sent = true;
       }
 
-      if (_disconnect_timeout && (_last_recv_time + _disconnect_timeout < now)) {
+      if (_disconnect_timeout && now - _last_recv_time >= static_cast<unsigned int>(_disconnect_timeout)) {
          if (!_disconnect_event_sent) {
             Log("udpproto%d | Endpoint has stopped receiving packets for %d ms.  Disconnecting.", _queue, _disconnect_timeout);
             QueueEvent(Event(Event::Disconnected));
@@ -288,6 +289,7 @@ UdpProtocol::SendSyncRequest()
    msg->verification_size = verification.size();
    if (!verification.empty())
 	   memcpy(&msg->u.sync_request.verification[0], &verification[0], verification.size());
+   _state.sync.request_time_ms = GGPOPlatform::GetCurrentTimeMS();
    SendMsg(msg);
 }
 
@@ -332,6 +334,14 @@ UdpProtocol::OnMsg(UdpMsg *msg, int len)
 {
    if (len < (int)sizeof(msg->hdr)) {
       return;
+   }
+   if (msg->hdr.type == UdpMsg::SyncReply) {
+      // Legacy failure replies end just before the policy byte.
+      const int reply_size = msg->PacketSize();
+      const int legacy_size = reply_size - sizeof(msg->u.sync_reply.auto_frame_delay);
+      if (len < legacy_size || msg->u.sync_reply.verification_failure > 1
+          || (len >= reply_size && msg->u.sync_reply.auto_frame_delay > 1))
+         return;
    }
    if (msg->hdr.type == UdpMsg::AppData && !IsValidAppData(msg, len)) {
       return;
@@ -424,6 +434,8 @@ UdpProtocol::Synchronize()
    if (_udp) {
       _current_state = Syncing;
       _state.sync.roundtrips_remaining = NUM_SYNC_PACKETS;
+      _startup_rtt_ms = -1;
+      _peer_auto_frame_delay = false;
       if (_peer_addr.sin_addr.s_addr != 0)
     	  SendSyncRequest();
    }
@@ -495,6 +507,7 @@ UdpProtocol::OnSyncRequest(UdpMsg *msg, int len)
    }
    UdpMsg *reply = new UdpMsg(UdpMsg::SyncReply);
    reply->u.sync_reply.random_reply = msg->u.sync_request.random_request;
+   reply->u.sync_reply.auto_frame_delay = 0;
    // Calculate incoming verif data size
    msg->verification_size = 0;
    int msgVerifSize = len - msg->PacketSize();
@@ -513,6 +526,7 @@ UdpProtocol::OnSyncRequest(UdpMsg *msg, int len)
    }
 
    reply->u.sync_reply.verification_failure = 0;
+   reply->u.sync_reply.auto_frame_delay = _local_auto_frame_delay;
    SendMsg(reply);
 
    return true;
@@ -533,6 +547,18 @@ UdpProtocol::OnSyncReply(UdpMsg *msg, int len)
    }
    if (msg->u.sync_reply.verification_failure == 1)
 	   throw GGPOException("Peer reported verification failure", GGPO_ERRORCODE_VERIFICATION_ERROR);
+
+   if (len < msg->PacketSize())
+      throw GGPOException("Peer sync reply is missing the frame-delay policy", GGPO_ERRORCODE_VERIFICATION_ERROR);
+
+   _peer_auto_frame_delay = msg->u.sync_reply.auto_frame_delay != 0;
+   // The initial exchange can include peer setup and slower startup polling.
+   if (_state.sync.roundtrips_remaining < NUM_SYNC_PACKETS) {
+      const uint32 elapsed = GGPOPlatform::GetCurrentTimeMS() - _state.sync.request_time_ms;
+      const int rtt_ms = elapsed > static_cast<uint32>(INT_MAX) ? INT_MAX : static_cast<int>(elapsed);
+      if (rtt_ms > _startup_rtt_ms)
+         _startup_rtt_ms = rtt_ms;
+   }
 
    if (!_connected) {
       QueueEvent(Event(Event::Connected));
@@ -712,6 +738,8 @@ UdpProtocol::GetNetworkStats(struct GGPONetworkStats *s)
    s->network.ping = _round_trip_time;
    s->network.send_queue_len = _pending_output.size();
    s->network.kbps_sent = _kbps_sent;
+   s->network.auto_frame_delay = _local_auto_frame_delay || _peer_auto_frame_delay;
+   s->network.startup_rtt_ms = _startup_rtt_ms;
    s->timesync.remote_frames_behind = _remote_frame_advantage;
    s->timesync.local_frames_behind = _local_frame_advantage;
 }
