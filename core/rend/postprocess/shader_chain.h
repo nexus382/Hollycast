@@ -502,8 +502,11 @@ bool parseSlangShader(const std::string& shaderText, SlangShaderSource& shader, 
 // Loads and validates a .slangp preset from HollyCast's platform-neutral storage.
 bool loadSlangPreset(const std::string& presetPath, ShaderChain& chain, std::string& error);
 
-// Returns the output mip-chain requirements for every pass. This keeps target
-// allocation and generation identical across the renderer backends.
+struct ShaderHistoryRequirements {
+	uint32_t sourceFrames = 0;
+	std::vector<uint32_t> passFrames;
+};
+ShaderHistoryRequirements resolveShaderHistory(const ShaderChain& chain);
 std::vector<std::vector<bool>> resolveShaderPassOutputMipmaps(const ShaderChain& chain);
 bool shaderInputNeedsMipmaps(const std::vector<ShaderPass>& passes, size_t firstPass = 0);
 

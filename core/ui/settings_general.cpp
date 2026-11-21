@@ -27,12 +27,13 @@
 #include "theme.h"
 #include "gui_util.h"
 #include <map>
+#include <set>
 
 namespace {
 
 CustomTheme::Theme previewTheme;
 bool hasPreviewTheme = false;
-bool initialThemeMigrationAttempted = false;
+std::set<std::string> migrationAttemptedDirectories;
 
 void addContentPathCallback(const std::string& path)
 {
@@ -91,9 +92,9 @@ void applyCurrentTheme()
 #if defined(__ANDROID__) || defined(TARGET_IPHONE) || defined(__SWITCH__)
 	style.TouchExtraPadding = ImVec2(1, 1);
 #endif
-	if (!hasPreviewTheme && !initialThemeMigrationAttempted) {
-		initialThemeMigrationAttempted = true;
-		const std::string themeDirectory = CustomTheme::directory();
+	const std::string themeDirectory = CustomTheme::directory();
+	if (!hasPreviewTheme && !get_writable_config_path("").empty()
+			&& migrationAttemptedDirectories.insert(themeDirectory).second) {
 		const int initiallySelectedTheme = config::UITheme.get();
 		std::string migrationError;
 		int pendingId = -1;
@@ -191,7 +192,7 @@ void applyCurrentTheme()
 		if (custom)
 			WARN_LOG(COMMON, "Cannot load custom UI theme '%s': %s", config::UICustomTheme.get().c_str(), error.c_str());
 		const bool loaded = custom ? CustomTheme::loadBundled(0, theme, error)
-				: CustomTheme::loadBuiltinFromDirectory(CustomTheme::directory(), config::UITheme.get(), theme, error);
+				: CustomTheme::loadBuiltinFromDirectory(themeDirectory, config::UITheme.get(), theme, error);
 		if (loaded)
 			CustomTheme::apply(theme, style);
 		CustomTheme::setActiveAssets(loaded ? theme.assets : CustomTheme::Theme::Assets{});

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <map>
 #include <set>
 
 class GameScannerTest : public ::testing::Test
@@ -51,6 +52,21 @@ protected:
 	std::string oldGamelist, oldArtwork, oldHideDrives;
 	bool oldHideLegacy;
 };
+
+TEST_F(GameScannerTest, LabelsGamesByTheHardwareTheyRunOn)
+{
+	const std::map<std::string, std::string> expected {
+		{"ikaruga.zip", "Naomi"}, {"vf4.zip", "Naomi 2"}, {"fotns.zip", "Atomiswave"},
+		{"dinoking.zip", "System SP"}, {"Disc.cdi", "Dreamcast"}
+	};
+	for (const auto& entry : expected)
+		std::ofstream(directory / entry.first) << "fixture";
+	scanner.fetch_game_list_sync();
+	std::map<std::string, std::string> labels;
+	for (const auto& game : games())
+		labels.emplace(game.fileName, game.system);
+	EXPECT_EQ(expected, labels);
+}
 
 #ifdef USE_HIKARU
 TEST_F(GameScannerTest, EnrichesHikaruArchivesAndRetainsTheArcadeSystem)

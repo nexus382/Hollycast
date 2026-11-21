@@ -154,7 +154,7 @@ test('fill verifies readable fields while redacting text action payloads', async
   assert.equal(textEvent.result.text_redacted, true);
   assert.equal(textEvent.error, null);
   assert.equal(observations.includes('replacement-value'), false);
-  assert.match(events, /text_redacted/);
+  assert.equal(events.includes('replacement-value'), false);
 });
 
 test('fill clears empty values, rejects read-only items, and stops when focus changes', async t => {

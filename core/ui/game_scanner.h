@@ -19,8 +19,7 @@
  */
 #pragma once
 #include "types.h"
-#include "hw/naomi/naomi_roms.h"
-#include <string_view>
+#include <string>
 #include <vector>
 #include <mutex>
 #include <memory>
@@ -64,17 +63,7 @@ struct GameMedia
 	size_t size = 0;		// ROM size, including referenced GDI/CUE tracks when available
 };
 
-// The arcade board a known ROM set runs on; follows naomi_cart_GetPlatform.
-inline const char* arcadeSystemName(const Game& game)
-{
-	if (game.cart_type == AW)
-		return "Atomiswave";
-	if (game.bios != nullptr && std::string_view(game.bios) == "naomi2")
-		return "Naomi 2";
-	if (game.bios != nullptr && std::string_view(game.bios) == "segasp")
-		return "System SP";
-	return "Naomi";
-}
+struct Game;
 
 class GameScanner
 {

@@ -19,6 +19,7 @@
  */
 #pragma once
 #include "netservice.h"
+#include "dcnet_endpoint.h"
 
 namespace net::modbba
 {
@@ -26,7 +27,7 @@ namespace net::modbba
 class RawModemService : public Service
 {
 public:
-	RawModemService(uint16_t port = 7657)
+	RawModemService(uint16_t port = dcnet::SegaRallyPort)
 		: port(port)
 	{}
 
@@ -36,8 +37,6 @@ public:
 	void writeModem(u8 b) override;
 	int readModem() override;
 	int modemAvailable() override;
-
-	void receiveEthFrame(const u8 *frame, u32 size) override {};
 
 private:
 	uint16_t port;

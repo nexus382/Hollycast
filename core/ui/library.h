@@ -32,7 +32,7 @@ class LibrarySavestateCache;
 
 namespace library {
 
-enum class View { All, ContinuePlaying, Favourites };
+enum class View { All, ContinuePlaying, Favourites, Discs };
 enum class LaunchMode { Default, Resume, Fresh };
 enum class AutoLoadAction { StartFresh, Load, Ask, StartNetwork, RejectResume };
 
@@ -81,11 +81,7 @@ inline void setFavourite(const std::string& path, bool value, std::vector<std::s
 	}
 }
 
-inline bool matchesView(const Entry& entry, View view, const std::vector<std::string>& favourites)
-{
-	return view == View::All || (!entry.device && !entry.path.empty()
-			&& (view == View::ContinuePlaying ? entry.latestStateDate > 0 : isFavourite(entry.path, favourites)));
-}
+bool matchesView(const Entry& entry, View view, const std::vector<std::string>& favourites);
 
 inline bool entryBefore(size_t left, size_t right, const std::vector<Entry>& entries, View view)
 {

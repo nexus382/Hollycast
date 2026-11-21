@@ -443,31 +443,13 @@ bool Dx11ShaderChain::updateConfiguredChain()
 		WARN_LOG(RENDERER, "Post-processing shader '%s' was not activated: %s", requestedLabel.c_str(), error.c_str());
 		return !programs.empty();
 	}
+	const auto history = postprocess::resolveShaderHistory(chain);
+	for (size_t index = 0; index < candidate.size(); ++index)
+		candidate[index].historyDepth = history.passFrames[index];
 	programs = std::move(candidate);
 	renderedFrames = 0;
 	parameters = std::move(chain.parameters);
-	sourceHistoryDepth = 1;
-	needsSourceHistory = false;
-	for (const postprocess::ShaderPass& pass : chain.passes)
-		for (const postprocess::ShaderPassInput& input : pass.inputs) {
-			if (input.kind != postprocess::ShaderInputKind::History
-					&& input.kind != postprocess::ShaderInputKind::Feedback)
-				continue;
-			const uint32_t requiredDepth = input.kind == postprocess::ShaderInputKind::Feedback
-					? 2u : input.historyOffset + 1;
-			if (input.sourcePass == postprocess::InvalidShaderPass) {
-				sourceHistoryDepth = std::max(sourceHistoryDepth, requiredDepth);
-				needsSourceHistory = true;
-			}
-			else {
-				programs[input.sourcePass].historyDepth =
-						std::max(programs[input.sourcePass].historyDepth, requiredDepth);
-			}
-		}
-	for (const auto& program : programs)
-		for (const auto& output : program.pass.outputs)
-			if (output.previousFrame && output.previousPass != postprocess::InvalidShaderPass)
-				programs[output.previousPass].historyDepth = std::max(2u, programs[output.previousPass].historyDepth);
+	sourceHistoryDepth = history.sourceFrames;
 	targets.clear();
 	stencilTargets.clear();
 	sourceHistory.clear();
@@ -963,7 +945,7 @@ float main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 			}
 		}
 	}
-	if (needsSourceHistory) {
+	if (sourceHistoryDepth != 0) {
 		if (!postprocess::accumulateShaderTargetBytes(passFrame.sourceWidth, passFrame.sourceHeight,
 				postprocess::ShaderTargetFormat::Default, {}, false, sourceHistoryDepth,
 				targetBytes, targetBudgetError)) {
@@ -1301,8 +1283,7 @@ void Dx11ShaderChain::term()
 	configuredGeneration = 0;
 	parameterGeneration = 0;
 	activePath.clear();
-	sourceHistoryDepth = 1;
-	needsSourceHistory = false;
+	sourceHistoryDepth = 0;
 	quad = nullptr;
 	deviceContext.reset();
 	device.reset();

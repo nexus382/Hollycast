@@ -73,7 +73,7 @@ void retro_audio_init(void)
 	 * many samples are sent during a single call of retro_run().
 	 * We therefore (arbitrarily) choose to allow up to 10 frames
 	 * worth of 'worst case' stereo samples... */
-	size_t audio_buffer_size = (44100 / 25) * 2 * 10;
+	size_t audio_buffer_size = (audio::OutputSampleRate / 25) * 2 * 10;
 
 	audio_buffer.resize(audio_buffer_size);
 	audio_buffer_idx = 0;

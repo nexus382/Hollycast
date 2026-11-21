@@ -854,21 +854,13 @@ int naomi_cart_GetPlatform(const char *path)
 	const Game *game = FindGame(path);
 	if (game == nullptr)
 		return DC_PLATFORM_NAOMI;
-	else if (game->cart_type == AW)
-		return DC_PLATFORM_ATOMISWAVE;
-	else if (game->bios != nullptr && !strcmp("naomi2", game->bios))
-		return DC_PLATFORM_NAOMI2;
-	else if (game->bios != nullptr && !strcmp("segasp", game->bios))
-		return DC_PLATFORM_SYSTEMSP;
-	else
-	{
+	const int platform = game->platform();
 #ifdef NAOMI_MULTIBOARD
-		if (game->multiboard > 0
-				&& (!strncmp("f355", game->name, 4) || config::MultiboardSlaves == 2))
-			settings.naomi.multiboard = true;
+	if (platform == DC_PLATFORM_NAOMI && game->multiboard > 0
+			&& (!strncmp("f355", game->name, 4) || config::MultiboardSlaves == 2))
+		settings.naomi.multiboard = true;
 #endif
-		return DC_PLATFORM_NAOMI;
-	}
+	return platform;
 }
 
 Cartridge::Cartridge(u32 size)

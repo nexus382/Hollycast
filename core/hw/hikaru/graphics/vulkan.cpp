@@ -25,6 +25,19 @@
 #include <limits>
 
 namespace hikaru::graphics {
+const char* vulkanFragmentListDeviceLimitation(VulkanContext& context) {
+    const auto physical = context.GetPhysicalDevice();
+    if (!physical.getFeatures().geometryShader)
+        return "Hikaru fragment-list primitive ordering requires Vulkan geometryShader for gl_PrimitiveID";
+    if (!context.hasPerPixel())
+        return "Hikaru fragment-list collection requires fragment stores and atomics";
+    const auto limits = physical.getProperties().limits;
+    if (limits.maxPerStageDescriptorStorageBuffers < 6 || limits.maxDescriptorSetStorageBuffers < 7
+            || limits.maxBoundDescriptorSets < 2 || limits.maxPushConstantsSize < sizeof(HikaruFragmentListParameters))
+        return "Vulkan device descriptor or push-constant limits do not fit the Hikaru fragment-list collector";
+    return nullptr;
+}
+
 namespace {
 bool diagnosticFlagEnabled(const char* name) {
     const char* value=std::getenv(name);
@@ -49,7 +62,7 @@ vk::Format depthFormat(GLenum format, bool sampled = false) {
     case GL_DEPTH_COMPONENT16: requested = vk::Format::eD16Unorm; break;
     case GL_DEPTH_COMPONENT24: requested = vk::Format::eD24UnormS8Uint; break;
     case GL_DEPTH24_STENCIL8: requested = vk::Format::eD24UnormS8Uint; break;
-    case GL_DEPTH_COMPONENT32F: case GL_DEPTH_COMPONENT: requested = vk::Format::eD32Sfloat; break;
+    case GL_DEPTH_COMPONENT32: case GL_DEPTH_COMPONENT32F: case GL_DEPTH_COMPONENT: requested = vk::Format::eD32Sfloat; break;
     default: requested = VulkanContext::Instance()->GetDepthFormat(); break;
     }
     if (supported(requested)) return requested;
@@ -113,7 +126,6 @@ class VulkanBackend final : public Backend {
         std::vector<bool> initializedLevels;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
         bool depth = false, sampleable = true;
-        uint64_t revision = 0;
     };
     static constexpr unsigned BatchDraws = 256, BatchSlots = 8;
     // Four-component UNORM fields include the neighboring alpha/selector bytes.
@@ -1268,9 +1280,7 @@ public:
         packedVerticesSupported=std::all_of(PackedFormats.begin(),PackedFormats.end(),[&](vk::Format format) {
             return bool(physical.getFormatProperties(format).bufferFeatures&vk::FormatFeatureFlagBits::eVertexBuffer);
         });
-        fragmentListSupported=ctx->hasPerPixel()&&physical.getFeatures().geometryShader&&
-            limits.maxPerStageDescriptorStorageBuffers>=6&&limits.maxDescriptorSetStorageBuffers>=7&&
-            limits.maxBoundDescriptorSets>=2&&limits.maxPushConstantsSize>=sizeof(HikaruFragmentListParameters);
+        fragmentListSupported = vulkanFragmentListDeviceLimitation(*ctx) == nullptr;
         // The base texture aliases palette slot zero; the other three inputs
         // remain depth/metadata or bitmap layers. No descriptor-indexing feature
         // is needed, and small mobile sampler limits keep the scalar texture path.
@@ -1321,7 +1331,9 @@ public:
     void texture(unsigned id,const Texture& info,unsigned level,TextureUpload upload,const void* pixels,size_t bytes) override {
         if(timing.enabled)++timing.uploads;
         const bool fullUpdate=upload==TextureUpload::FullUpdate;
-        const bool depth=(id&0x80000000u)!=0||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8||info.format==GL_DEPTH_COMPONENT;
+        const bool depth = info.isDepth();
+        const bool sampleable = !info.renderbuffer;
+        const bool sampleDepth = depth && sampleable;
         if(fullUpdate&&(!info.width||!info.height||level!=0||!pixels||bytes==0||depth))throw std::runtime_error("Hikaru Vulkan full texture update requires level-zero color pixel data");
         unsigned levels=info.maxLevel==1000?1u+unsigned(std::floor(std::log2(std::max(info.width,info.height)))):std::max(1u,info.maxLevel+1);
         const unsigned uploadWidth=std::max(1u,info.width>>level),uploadHeight=std::max(1u,info.height>>level);
@@ -1330,12 +1342,15 @@ public:
             if(bytes!=size_t(uploadWidth)*uploadHeight*4)throw std::runtime_error("Hikaru Vulkan full texture update has an invalid byte count");
         }
         auto i=images.find(id);
-        auto fmt=depth?depthFormat(info.format,(id&0x80000000u)==0):colorFormat(info.format);
-        const bool compatible=i!=images.end()&&i->second.extent.width==info.width&&i->second.extent.height==info.height&&i->second.format==fmt&&i->second.levels==(depth?1:levels);
+        auto fmt=depth?depthFormat(info.format,sampleDepth):colorFormat(info.format);
+        const bool compatible = i != images.end() && i->second.extent.width == info.width
+            && i->second.extent.height == info.height && i->second.format == fmt
+            && i->second.sampleable == sampleable && i->second.levels == (depth ? 1 : levels);
         if(fullUpdate&&!compatible)throw std::runtime_error("Hikaru Vulkan full texture update has no compatible allocation");
         reapCompletedDraws();
         if(!compatible) {
-            retireImage(id); auto fresh=makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,depth&&(id&0x80000000u)==0);fresh.revision=info.revision;images.emplace(id,std::move(fresh));
+            retireImage(id);
+            images.emplace(id,makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,sampleDepth));
         }
         imageInfo[id]=info;
         Image& im=image(id); if(level>=im.levels)throw std::runtime_error("Hikaru Vulkan mip level exceeds allocated image");

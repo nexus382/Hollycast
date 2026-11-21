@@ -116,8 +116,7 @@ public:
 			return false;
 		}
 
-		// 44100 samples/second
-		rc = snd_pcm_hw_params_set_rate(handle, params, 44100, 0);
+		rc = snd_pcm_hw_params_set_rate(handle, params, audio::OutputSampleRate, 0);
 		if (rc < 0)
 		{
 			ERROR_LOG(AUDIO, "ALSA: Error:snd_pcm_hw_params_set_rate %s", snd_strerror(rc));

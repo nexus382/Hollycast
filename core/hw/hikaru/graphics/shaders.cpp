@@ -270,6 +270,7 @@ std::string metalShaderSource() {
     meshArgs.replace(meshArgs.find(texture3),texture3.size(),"texture2d<uint> tex3");
     s+="struct MeshValue{vec4 color;float depth;uint2 metadata;};\n";
     s+="struct MeshFragment{vec4 color [[color(0)]];float depth [[depth(any)]];};\n";
+    s+="struct FamilyColors{vec4 color [[color(0)]];uint2 metadata [[color(1)]];};\n";
     s+="struct FamilyFragment{vec4 color [[color(0)]];uint2 metadata [[color(1)]];float depth [[depth(any)]];};\n";
     s+="float meshWindowDepth(float z,constant Uniforms& u){";s+=depthFunctionBody;s+="}\n";
     s+="MeshValue shadeMesh(Output o,constant Uniforms& u,texture2d<float> tex0,depth2d<float> tex1,depth2d<float> tex2,texture2d<uint> tex3,sampler samp0,sampler samp1,sampler samp2,sampler samp3){MeshValue result={};\n";
@@ -277,6 +278,8 @@ std::string metalShaderSource() {
     s+=meshFragmentBody;
     s+="}\n#undef RETURN_COLOR\n#define RETURN_COLOR(color) return color\n";
     const std::string invoke="auto value=shadeMesh(o,u,tex0,tex1,tex2,tex3,samp0,samp1,samp2,samp3);";
+    s+="fragment vec4 meshColorFragment"+meshArgs+invoke+"return value.color;}\n";
+    s+="fragment FamilyColors familyMeshColorFragment"+meshArgs+invoke+"return {value.color,value.metadata};}\n";
     s+="fragment MeshFragment meshFragment"+meshArgs+invoke+"return {value.color,value.depth};}\n";
     s+="fragment FamilyFragment familyMeshFragment"+meshArgs+invoke+"return {value.color,value.metadata,value.depth};}\n";
     s+="fragment vec4 bitmapFragment"+args+bitmapCoordinates+bitmapBody+"}\n";

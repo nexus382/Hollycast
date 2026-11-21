@@ -5,7 +5,6 @@
 #include <unistd.h>
 
 #define PORT_INDEX 100
-#define OUTPUT_FREQ 44100
 
 class OMXAudioBackend : public AudioBackend
 {
@@ -75,7 +74,7 @@ class OMXAudioBackend : public AudioBackend
 		if(error != OMX_ErrorNone)
 			WARN_LOG(AUDIO, "OMX: failed to get OMX configuration (OMX_IndexConfigAudioRenderingLatency). Error 0x%X", error);
 
-		return param.nU32 * 1000 / OUTPUT_FREQ;
+		return param.nU32 * 1000 / audio::OutputSampleRate;
 	}
 
 public:
@@ -96,7 +95,7 @@ public:
 		// Initialize settings
 		latency_max = config::OmxAudioLatency;
 		buffer_size = config::AudioBufferSize * 4;
-		buffer_count = 2 + OUTPUT_FREQ * latency_max / (buffer_size * 1000);
+		buffer_count = 2 + audio::OutputSampleRate * latency_max / (buffer_size * 1000);
 
 		OMX_CALLBACKTYPE callbacks;
 		callbacks.EventHandler = eventHandler;
@@ -136,7 +135,7 @@ public:
 		pcm.nChannels = 2;
 		pcm.eNumData = OMX_NumericalDataSigned;
 		pcm.eEndian = OMX_EndianLittle;
-		pcm.nSamplingRate = OUTPUT_FREQ;
+		pcm.nSamplingRate = audio::OutputSampleRate;
 		pcm.bInterleaved = OMX_TRUE;
 		pcm.nBitPerSample = 16;
 		pcm.ePCMMode = OMX_AUDIO_PCMModeLinear;

@@ -425,15 +425,7 @@ bool LaunchBox::ready() const
 bool LaunchBox::needsMedia(const GameBoxart& item, u32 selection)
 {
  if ((selection & artwork::metadataMedia) && !item.launchboxSearched) return true;
- selection &= supportedMedia;
- for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
- {
-  if (!(selection & (1u << i))) continue;
-  const auto cached = item.launchboxMedia.find(artwork::mediaTypes[i].name);
-  if (!(item.launchboxCheckedMedia & (1u << i))
-    || (cached != item.launchboxMedia.end() && !file_exists(cached->second))) return true;
- }
- return false;
+ return artwork::needsImages(selection & supportedMedia, item.launchboxCheckedMedia, item.launchboxMedia);
 }
 
 void LaunchBox::scrape(GameBoxart& item)
