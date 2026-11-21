@@ -2,6 +2,7 @@
  *  Created on: Oct 3, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -27,7 +28,8 @@ struct BufferData
 {
 	BufferData(vk::DeviceSize size, vk::BufferUsageFlags usage,
 			vk::MemoryPropertyFlags propertyFlags =
-				vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+				vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+			bool checkBindResult = false);
 	~BufferData()
 	{
 		buffer.reset();

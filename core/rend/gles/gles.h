@@ -171,7 +171,9 @@ class GlFramebuffer
 public:
 	GlFramebuffer(int width, int height, bool withDepth = false, GLuint texture = 0);
 	GlFramebuffer(int width, int height, bool withDepth, bool withTexture);
-	explicit GlFramebuffer(int width, int height, GLuint depthBuffer);
+	GlFramebuffer(int width, int height, bool withDepth, GLuint texture, GLenum internalFormat,
+			GLenum pixelFormat, GLenum pixelType);
+	explicit GlFramebuffer(int width, int height, GLuint depthBuffer, GLuint depthTexture = 0);
 	~GlFramebuffer();
 
 	void bind(GLenum type = GL_FRAMEBUFFER) const {
@@ -182,6 +184,7 @@ public:
 	int getHeight() const { return height; }
 
 	GLuint getTexture() const { return texture; }
+	GLuint getDepthTexture() const { return depthTexture; }
 	GLuint detachTexture() {
 		GLuint t = texture;
 		texture = 0;
@@ -200,7 +203,8 @@ protected:
 	GLuint framebuffer = 0;
 	GLuint colorBuffer = 0;
 	GLuint depthBuffer = 0;
-	bool ownsDepthBuffer = true;
+	GLuint depthTexture = 0;
+	bool ownsDepthAttachment = true;
 };
 
 class GlVertexArray
@@ -232,6 +236,9 @@ protected:
 };
 
 class GlQuadDrawer;
+#ifndef LIBRETRO
+class GlShaderChain;
+#endif
 
 struct gl_ctx
 {
@@ -309,6 +316,12 @@ struct gl_ctx
 	std::unique_ptr<GlFramebuffer> secondaryBuffer;
 
 	std::unique_ptr<GlQuadDrawer> quadDrawer;
+#ifndef LIBRETRO
+	std::unique_ptr<GlShaderChain> shaderChain;
+	GLuint postProcessDepthTexture = 0;
+	int postProcessDepthWidth = 0;
+	int postProcessDepthHeight = 0;
+#endif
 	const char *gl_version;
 	const char *glsl_version_header;
 	int gl_major;
@@ -407,8 +420,9 @@ PipelineShader *GetProgram(bool cp_AlphaTest, bool pp_InsideClipping,
 		u32 pp_FogCtrl, bool pp_Gouraud, bool pp_BumpMap, bool fog_clamping, bool trilinear,
 		int palette, int sampleTextureFilter, int maxFilteredTextureSize, bool naomi2, bool dithering, bool secAccum);
 
-GLuint gl_CompileShader(const char* shader, GLuint type);
-GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader);
+GLuint gl_CompileShader(const char* shader, GLuint type, std::string *diagnostics = nullptr);
+GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader,
+		std::string *diagnostics = nullptr);
 bool CompilePipelineShader(PipelineShader* s);
 extern const char* GouraudSource;
 
@@ -607,11 +621,12 @@ protected:
 		verify(primaryFB != nullptr);
 		if (secAccum == nullptr || secAccum->getWidth() != primaryFB->getWidth()
 				|| secAccum->getHeight() != primaryFB->getHeight()
-				|| secAccum->getDepthBuffer() != primaryFB->getDepthBuffer())
+				|| secAccum->getDepthBuffer() != primaryFB->getDepthBuffer()
+				|| secAccum->getDepthTexture() != primaryFB->getDepthTexture())
 		{
 			secAccum.reset();
 			secAccum = std::make_unique<GlFramebuffer>(primaryFB->getWidth(), primaryFB->getHeight(),
-					primaryFB->getDepthBuffer());
+					primaryFB->getDepthBuffer(), primaryFB->getDepthTexture());
 			glcache.Disable(GL_SCISSOR_TEST);
 			glcache.ClearColor(0.f, 0.f, 0.f, 0.f);
 			glClear(GL_COLOR_BUFFER_BIT);

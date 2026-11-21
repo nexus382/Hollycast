@@ -116,6 +116,7 @@ public:
 	void reset() override {
 		set(defaultValue);
 		overridden = false;
+		saveDeferred = false;
 	}
 
 	void load() override {
@@ -131,6 +132,8 @@ public:
 
 	void save() const override
 	{
+		if (saveDeferred)
+			return;
 		if (overridden) {
 			if (value == overriddenDefault)
 				return;
@@ -155,6 +158,7 @@ public:
 
 	T& get() { return value; }
 	void set(T v) { value = v; }
+	void deferSave(bool defer) { saveDeferred = defer; }
 
 	void override(T v)
 	{
@@ -213,7 +217,19 @@ protected:
 	{
 		std::string paths = loadStr(section, name);
 		if (paths.empty())
-			return value;
+		{
+			if constexpr (PerGameOption)
+			{
+				// An explicitly empty game list clears the inherited global list.
+				if (hasEntry(section, name))
+					return {};
+				if (name != this->name)
+					return doLoad(this->section, this->name);
+				return defaultValue;
+			}
+			else
+				return value;
+		}
 		std::string::size_type start = 0;
 		std::vector<std::string> newValue;
 		while (true)
@@ -343,6 +359,7 @@ protected:
 	T defaultValue;
 	T overriddenDefault = T();
 	bool overridden = false;
+	bool saveDeferred = false;
 	Settings& settings;
 };
 #endif
@@ -585,6 +602,11 @@ extern Option<int> AutoSkipFrame;		// 0: none, 1: some, 2: more
 extern Option<int> RenderResolution;
 extern Option<bool> IntegerScale;
 extern Option<bool> LinearInterpolation;
+extern OptionString PostProcessShader;
+extern Option<std::vector<std::string>> PostProcessShaders;
+extern Option<std::string, false> PostProcessShaderDirectory;
+extern OptionString PostProcessShaderParameters;
+extern OptionString PostProcessShaderTechnique;
 extern Option<bool> VSync;
 extern Option<int64_t> PixelBufferSize;
 extern Option<int> AnisotropicFiltering;

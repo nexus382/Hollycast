@@ -262,12 +262,14 @@ TEST_F(AssemblyDebuggerTest, RejectsHikaruAndReopensForDreamcast)
 TEST_F(AssemblyDebuggerTest, BlocksConflictingDebuggerAndOnlineModes)
 {
     assembly_debugger::close();
-    for (bool* restricted : {&settings.raHardcoreMode, &settings.network.online, &settings.naomi.multiboard})
-    {
-        *restricted = true;
+    const auto verifyRestricted = [](auto& restricted) {
+        restricted = true;
         EXPECT_FALSE(assembly_debugger::open());
-        *restricted = false;
-    }
+        restricted = false;
+    };
+    verifyRestricted(settings.raHardcoreMode);
+    verifyRestricted(settings.network.online);
+    verifyRestricted(settings.naomi.multiboard);
 #ifdef GDB_SERVER
     config::GDB = true;
     EXPECT_FALSE(assembly_debugger::open());

@@ -119,12 +119,13 @@ const char* meshFragmentBody=R"(
     if(u.blend.y!=0.0)color.a=1.0;
     RETURN_COLOR(color);
 )";
-const char* bitmapBody=R"(
+const char* bitmapCoordinates=R"(
     // Match the GL compositor: centre bitmap planes without stretching them,
     // including when a plane is selected as front/back or has its key disabled.
     vec2 inv=vec2((o.uv.x-0.5)/u.factors.w+0.5,1.0-o.uv.y);
     float visible=step(0.0,inv.x)*step(inv.x,1.0);
-    vec4 front=SAMPLE0(u.inverted.x==0.0?o.uv:inv)*u.factors.y*(u.inverted.x==0.0?1.0:visible);
+)";
+const char* bitmapBody=R"(    vec4 front=SAMPLE0(u.inverted.x==0.0?o.uv:inv)*u.factors.y*(u.inverted.x==0.0?1.0:visible);
     vec4 back=SAMPLE1(u.inverted.y==0.0?o.uv:inv)*u.factors.z*(u.inverted.y==0.0?1.0:visible);
     vec4 layer1=SAMPLE2(inv),layer2=SAMPLE3(inv);
     vec4 scene=mix(front,back,u.factors.x);
@@ -199,13 +200,40 @@ const char* depthFunctionBody=R"(
     float encoded=clamp(log2(1.0+z)/log2(100001.0),0.0,1.0);
     return ROUND_EVEN(mix(u.depth.z,u.depth.w,encoded)*16777215.0)/16777215.0;
 )";
-const char* familyResolveBody=R"(
+const char* familySelection=R"(
     uint2 first=META2(o.position.xy),second=META3(o.position.xy);
     if(first.y==0u&&second.y==0u)DISCARD;
     bool chooseFirst=second.y==0u||(first.y!=0u&&
         (first.x<second.x||(first.x==second.x&&first.y>second.y)));
-    RETURN_COLOR(chooseFirst?COLOR0(o.position.xy):COLOR1(o.position.xy));
 )";
+const char* familyResolveBody=R"(    RETURN_COLOR(chooseFirst?COLOR0(o.position.xy):COLOR1(o.position.xy));
+)";
+const char* captureDepthBody=R"(    uint code=chooseFirst?first.x:second.x;
+    RETURN_COLOR(vec4(float(code>>16u),float((code>>8u)&255u),float(code&255u),255.0)/255.0);
+)";
+const char* profileDepthFunction=R"(
+float profileDepthCode(vec4 profile){
+    return profile.a>0.0?dot(ROUND_EVEN(profile.rgb*255.0),vec3(65536.0,256.0,1.0)):16777215.0;
+}
+)";
+const char* composeDepthBody=R"(    float nearestCode=16777215.0;
+    if(u.inverted.x==0.0&&u.factors.x<1.0&&u.factors.y!=0.0)
+        nearestCode=profileDepthCode(SAMPLE0(o.uv));
+    if(u.inverted.y==0.0&&u.factors.x>0.0&&u.factors.z!=0.0)
+        nearestCode=min(nearestCode,profileDepthCode(SAMPLE1(o.uv)));
+    vec4 layer1=SAMPLE2(inv),layer2=SAMPLE3(inv);
+    bool cover1=u.multipliers.x!=0.0&&u.direct.x!=0.0&&(u.keyed.x==0.0||layer1.a>=0.1);
+    bool cover2=u.multipliers.y!=0.0&&u.direct.y!=0.0&&(u.keyed.y==0.0||layer2.a>=0.1);
+    if(visible!=0.0&&(cover1||cover2))nearestCode=16777215.0;
+    // Reverse the integer code before normalization to preserve detail near the host far plane.
+    RETURN_DEPTH((16777215.0-nearestCode)/16777215.0);
+)";
+std::string bitmapFragmentBody(bool familyResolve, bool peelComposite, DepthPass depthPass) {
+    if(familyResolve)
+        return std::string(familySelection)+(depthPass==DepthPass::Capture?captureDepthBody:familyResolveBody);
+    if(peelComposite)return peelCompositeBody;
+    return std::string(bitmapCoordinates)+(depthPass==DepthPass::Compose?composeDepthBody:bitmapBody);
+}
 const char* outputStruct=R"(
 struct Output {vec4 position,viewPosition;vec3 normal,diffuse,ambient;vec4 specular;vec3 unknown;vec2 uv;float alpha;};
 )";
@@ -251,7 +279,7 @@ std::string metalShaderSource() {
     const std::string invoke="auto value=shadeMesh(o,u,tex0,tex1,tex2,tex3,samp0,samp1,samp2,samp3);";
     s+="fragment MeshFragment meshFragment"+meshArgs+invoke+"return {value.color,value.depth};}\n";
     s+="fragment FamilyFragment familyMeshFragment"+meshArgs+invoke+"return {value.color,value.metadata,value.depth};}\n";
-    s+="fragment vec4 bitmapFragment"+args+bitmapBody+"}\n";
+    s+="fragment vec4 bitmapFragment"+args+bitmapCoordinates+bitmapBody+"}\n";
     std::string peelArgs=args;
     const std::string peelTexture="texture2d<float> tex2";
     peelArgs.replace(peelArgs.find(peelTexture),peelTexture.size(),"texture2d<uint> tex2");
@@ -261,7 +289,11 @@ std::string metalShaderSource() {
         const std::string from="texture2d<float> tex"+std::to_string(index);
         resolveArgs.replace(resolveArgs.find(from),from.size(),"texture2d<uint> tex"+std::to_string(index));
     }
-    s+="fragment vec4 familyResolveFragment"+resolveArgs+familyResolveBody+"}\n";
+    s+="fragment vec4 familyResolveFragment"+resolveArgs+familySelection+familyResolveBody+"}\n";
+    s+="fragment vec4 familyCaptureDepthFragment"+resolveArgs+familySelection+captureDepthBody+"}\n";
+    s+=profileDepthFunction;
+    s+="struct ComposedDepth{float depth [[depth(any)]];};\n#define RETURN_DEPTH(value) return {value}\n";
+    s+="fragment ComposedDepth composeDepthFragment"+args+bitmapCoordinates+composeDepthBody+"}\n";
     return s;
 }
 namespace {
@@ -327,8 +359,9 @@ layout(location=7) in float i_drawIndex;
     for(auto name:outNames)s+=std::string(name)+"=o."+name+";";
     return s+"}";
 }
-std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, unsigned textureSlots, bool peelComposite, bool fragmentList) {
+std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, unsigned textureSlots, bool peelComposite, bool fragmentList, DepthPass depthPass) {
     if(textureSlots!=1&&textureSlots!=16)throw std::invalid_argument("Invalid Hikaru Vulkan texture palette size");
+    if(depthPass==DepthPass::Capture)familyResolve=true;
     std::string s=glslPrelude;s+="mat3 mat3of(mat4 m){return mat3(m);}";s+=structures;s+="layout(set=0,binding=0,std140)uniform Constants{Uniforms u;};\n";
     s+=outputStruct;
     std::string inputs=fragmentInput;
@@ -399,8 +432,12 @@ std::string vulkanFragmentSource(bool bitmap, bool familyResolve, bool palette, 
 #define RETURN_COLOR(value) collectListFragment(value,depthCode,uint(u.blend.z+0.5));return
 )";
     }
+    if(depthPass==DepthPass::Compose) {
+        s+=profileDepthFunction;
+        s+="#define RETURN_DEPTH(value) gl_FragDepth=value;return\n";
+    }
     s+="void main(){Output o=Output(gl_FragCoord,viewPosition,normal,diffuse,ambient,specular,unknown,uv,alpha);";
-    if(bitmap)s+=familyResolve?familyResolveBody:peelComposite?peelCompositeBody:bitmapBody;
+    if(bitmap)s+=bitmapFragmentBody(familyResolve,peelComposite,depthPass);
     else {
         const std::string textureMode=palette?"drawModes.z":"u.material.y";
         const std::string shadingMode=palette?"drawModes.w":"u.flags.y";
@@ -654,7 +691,8 @@ const char* dx11FragmentListResolveTail=R"(
 )";
 } // namespace
 
-std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed, unsigned passFlags, bool peelComposite, bool fragmentList) {
+std::string dx11ShaderSource(bool bitmap, bool familyResolve, bool palette, const MeshShaderSpecialization& specialization, bool packed, unsigned passFlags, bool peelComposite, bool fragmentList, DepthPass depthPass) {
+    if(depthPass==DepthPass::Capture)familyResolve=true;
     if(fragmentList&&(bitmap||familyResolve||palette||peelComposite))
         throw std::invalid_argument("Invalid Hikaru DX11 fragment-list collector");
     // Uniforms and DrawRecord contain only column-major matrices and 16-byte
@@ -747,8 +785,11 @@ float loadDepth(Texture2D<float> source,vec2 coordinate){
     s+="#define COLOR0(pixel) tex0[0].Load(int3(int2(pixel),0))\n#define COLOR1(pixel) tex1.Load(int3(int2(pixel),0))\n";
     s+="#define META2(pixel) tex2.Load(int3(int2(pixel),0)).xy\n#define META3(pixel) tex3.Load(int3(int2(pixel),0)).xy\n";
     if(bitmap) {
-        s+="#define RETURN_COLOR(value) return value\nfloat4 pixelMain(Output o):SV_Target0{\n";
-        std::string body=familyResolve?familyResolveBody:peelComposite?peelCompositeBody:bitmapBody;
+        if(depthPass==DepthPass::Compose) {
+            s+=profileDepthFunction;
+            s+="#define RETURN_DEPTH(value) return value\nfloat pixelMain(Output o):SV_Depth{\n";
+        } else s+="#define RETURN_COLOR(value) return value\nfloat4 pixelMain(Output o):SV_Target0{\n";
+        std::string body=bitmapFragmentBody(familyResolve,peelComposite,depthPass);
         replaceAll(body,"vec4(0.0)","vec4(0.0,0.0,0.0,0.0)");
         s+=body;return s+"}\n";
     }

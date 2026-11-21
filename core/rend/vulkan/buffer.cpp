@@ -2,6 +2,7 @@
  *  Created on: Oct 3, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -21,7 +22,8 @@
 #include "buffer.h"
 #include "vulkan_context.h"
 
-BufferData::BufferData(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags propertyFlags)
+BufferData::BufferData(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags propertyFlags,
+		bool checkBindResult)
 	: bufferSize(size), m_usage(usage)
 {
 	VulkanContext *context = VulkanContext::Instance();
@@ -49,7 +51,7 @@ BufferData::BufferData(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::Memo
 				allocInfo.preferredFlags |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 		}
 	}
-	allocation = context->GetAllocator().AllocateForBuffer(*buffer, allocInfo);
+	allocation = context->GetAllocator().AllocateForBuffer(*buffer, allocInfo, checkBindResult);
 }
 
 BufferPacker::BufferPacker()

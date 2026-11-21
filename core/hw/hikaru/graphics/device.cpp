@@ -149,7 +149,7 @@ void Device::queueDraw(Draw draw) {
     // Triangle sorting replays individual triangles. Merge only adjacent,
     // identical draws, preserving their order and bounding staging memory.
     auto key=[](const Draw& d) {
-        return std::tie(d.color,d.depth,d.metadata,d.familyResolve,d.peelComposite,d.textures,d.viewport,d.scissor,
+        return std::tie(d.color,d.depth,d.metadata,d.familyResolve,d.peelComposite,d.depthPass,d.textures,d.viewport,d.scissor,
             d.scissorEnabled,d.depthTest,d.depthWrite,d.blend,d.cull,d.bitmap,
             d.depthFunc,d.cullFace,d.frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,
             d.equationRGB,d.equationAlpha,d.topology,d.colorMask,d.biasFactor,
@@ -182,7 +182,12 @@ void Device::queueDraw(Draw draw) {
 void Device::begin(unsigned w,unsigned h) {
     if (w!=width || h!=height) { flushDraw();width=w;height=h; Texture t; t.width=w;t.height=h;t.revision=++textures[0].revision; textures[0]=t; backend->texture(0,t,0,TextureUpload::Definition,nullptr,0); }
 }
-void Device::present() { checkError(); backend->present(width,height);invalidateGeometry(); }
+void Device::present(unsigned depthTexture) {
+    checkError();
+    backend->presentedDepthTexture = depthTexture;
+    backend->present(width, height);
+    invalidateGeometry();
+}
 Draw Device::drawState() const {
     Draw d=state;
     const auto& target=targets.at(framebuffer);
@@ -426,6 +431,7 @@ void Device::DrawArrays(GLenum mode,GLint first,GLsizei count){
     if(!count)return;
     auto d=drawState();auto& p=programs.at(program);d.bitmap=p.bitmap;d.familyResolve=p.familyResolve;d.uniforms=uniforms(p);d.topology=mode;d.uniforms.inverted[2]=d.color?1.f:0.f;
     d.peelComposite=p.peelComposite;
+    d.depthPass=p.depthPass;
     // Fragment depth is already in window coordinates, so viewport range must
     // be applied in the shader. Range changes do not invalidate program uniforms.
     d.uniforms.depth[2]=d.nearDepth;d.uniforms.depth[3]=d.farDepth;
@@ -692,18 +698,28 @@ GLboolean Device::IsVertexArray(GLuint id){return arrays.count(id);}
 void Device::LinkProgram(GLuint id) {
     auto& p=programs.at(id);p.cachedUniforms.reset();p.cachedLights.reset();
     p.bitmap=p.familyResolve=p.peelComposite=false;
+    p.depthPass=DepthPass::None;
     p.definitions.clear();
     for(auto s:p.shaders) {
         const auto& text=shaders.at(s);
         p.bitmap|=text.find("u_front")!=std::string::npos;
         p.familyResolve|=text.find("#define FAMILY_RESOLVE 1")!=std::string::npos;
         p.peelComposite|=text.find("#define PEEL_COMPOSITE 1")!=std::string::npos;
+        if (text.find("#define HIKARU_CAPTURE_DEPTH 1")!=std::string::npos)
+            p.depthPass=DepthPass::Capture;
+        if (text.find("#define HIKARU_COMPOSE_DEPTH 1")!=std::string::npos)
+            p.depthPass=DepthPass::Compose;
         std::istringstream input(text);std::string line;
         while(std::getline(input,line)) {
             std::istringstream words(line);std::string directive,name;int value;
             if(words>>directive>>name>>value && directive=="#define")p.definitions[name]=value;
         }
     }
+    if (p.depthPass == DepthPass::Capture) {
+        p.bitmap = true;
+        p.familyResolve = true;
+    } else if (p.depthPass == DepthPass::Compose)
+        p.bitmap = true;
 }
 void Device::PixelStorei(GLenum name,GLint v){pixelStore[name]=v;}
 void Device::PolygonOffset(GLfloat f,GLfloat u){state.biasFactor=f;state.biasUnits=u;}
