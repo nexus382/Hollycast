@@ -24,7 +24,12 @@
 #ifdef _WIN32
 #include <ws2tcpip.h>
 #else
+#ifdef __ANDROID__
+#include "types.h"
+#include "net_platform.h" // Uses the bundled getifaddrs fallback before Android API 24.
+#else
 #include <ifaddrs.h>
+#endif
 #include <net/if.h>
 #endif
 
@@ -355,7 +360,7 @@ private:
 struct LinkRoom
 {
 	Reply::status_type handle(const Request& req, Reply& rep, bool offerRoute,
-			const std::string& roomCode, const std::string& client)
+			const std::string& roomCode, const std::string& client, bool advertiseA1)
 	{
 		const auto now = Clock::now();
 		if (!code.empty() && now >= expires)
@@ -370,7 +375,7 @@ struct LinkRoom
 		{
 			if (code.empty() || cancelled)
 			{
-				*this = { roomCode, client, {}, req.content, {}, now + std::chrono::seconds(120) };
+				*this = { roomCode, client, {}, req.content, {}, now + std::chrono::seconds(120), advertiseA1 };
 				return Reply::ok;
 			}
 			return code == roomCode && offerClient == client && offer == req.content ? Reply::ok : Reply::conflict;
@@ -421,6 +426,7 @@ struct LinkRoom
 	std::string offer;
 	std::string answer;
 	Clock::time_point expires;
+	bool a1Offer = false;
 	bool answerRead = false;
 };
 
@@ -437,7 +443,7 @@ public:
 		for (const std::string& address : localAddresses())
 			urls.push_back("http://" + address + ":" + std::to_string(server->port()) + path);
 		if (urls.empty())
-			throw std::runtime_error("No local network address found. Connect this computer to Wi-Fi or Ethernet and try again.");
+			throw std::runtime_error("No local network address found. Connect this device to Wi-Fi or Ethernet and try again.");
 		server->addUriHandler("/", [this, &frames, &cards, path, qrPrefix = path + "link/qr/"](const Request& req, Reply& rep) {
 			rep.addHeader("Cache-Control", "no-store");
 			rep.addHeader("X-Content-Type-Options", "nosniff");
@@ -459,6 +465,23 @@ public:
 				}
 				return std::string();
 			};
+			if (req.uri == path + "link/pending")
+			{
+				const std::string origin = header("origin");
+				if (req.method == "GET" && (origin.empty() || origin == "http://" + header("host"))
+						&& linkRoom.a1Offer && Clock::now() < linkRoom.expires
+						&& linkRoom.answerClient.empty() && !linkRoom.answerRead)
+				{
+					rep.setContent(linkRoom.code, "text/plain; charset=utf-8");
+					rep.status = Reply::ok;
+				}
+				else
+				{
+					rep.setContent("");
+					rep.status = Reply::not_found;
+				}
+				return;
+			}
 			const bool linkOffer = req.uri == path + "link/offer";
 			if (linkOffer || req.uri == path + "link/answer")
 			{
@@ -477,7 +500,8 @@ public:
 						|| req.content.empty() || req.content.size() > 16 * 1024))
 					result = Reply::bad_request;
 				else
-					result = linkRoom.handle(req, rep, linkOffer, roomCode, client);
+					result = linkRoom.handle(req, rep, linkOffer, roomCode, client,
+							linkOffer && req.method == "POST" && header("x-vmu-slot") == "0");
 				if (result != Reply::ok || req.method != "GET")
 					rep.setContent("");
 				rep.status = result;
