@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -104,9 +105,10 @@ Sync::GetConfirmedInputs(void *values, int size, int frame)
 }
 
 int
-Sync::SynchronizeInputs(void *values, int size)
+Sync::SynchronizeInputs(void *values, int size, int *predicted_flags)
 {
    int disconnect_flags = 0;
+   int predictions = 0;
    char *output = (char *)values;
 
    ASSERT(size >= _config.num_players * _config.input_size);
@@ -117,11 +119,13 @@ Sync::SynchronizeInputs(void *values, int size)
       if (_local_connect_status[i].disconnected && _framecount > _local_connect_status[i].last_frame) {
          disconnect_flags |= (1 << i);
          input.erase();
-      } else {
-         _input_queues[i].GetInput(_framecount, &input);
+      } else if (!_input_queues[i].GetInput(_framecount, &input)) {
+         predictions |= 1 << i;
       }
       memcpy(output + (i * _config.input_size), input.bits, _config.input_size);
    }
+   if (predicted_flags)
+      *predicted_flags = predictions;
    return disconnect_flags;
 }
 

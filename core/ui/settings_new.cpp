@@ -10659,6 +10659,16 @@ void renderNetworkTab()
 							"Use this when connecting directly without matchmaking."
 						));
 
+					if (config::ActAsServer)
+						RenderGeneralToggleSettingRow(
+							"GGPOAutoDelay",
+							ICON_FA_CLOCK,
+							T("Test Connection and Set Delay"),
+							T("Measure the connection before play and adjust frame delay based on how often the game waits for peer inputs."),
+							static_cast<bool>(config::GGPOAutoDelay),
+							[](bool enabled) { config::GGPOAutoDelay = enabled; },
+							T("Player 1 controls this option. Each player keeps their saved manual delay for sessions that do not use the test."));
+
 					// Frame Delay
 					{
 						static int ggpoDelayTemp = config::GGPODelay.get();
@@ -11405,6 +11415,7 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
+		ImGui::BeginDisabled(gui_has_held_netplay_session());
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
 			ICON_FA_GEAR,
@@ -11419,6 +11430,7 @@ void renderAdvancedTab()
 				"On some drivers/devices it can introduce instability or odd timing issues.\n\n"
 				"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
 			));
+		ImGui::EndDisabled();
 
 		ImGui::Spacing();
 
@@ -12257,16 +12269,17 @@ void renderSettingsNew()
 		if (pushedSettingsFont)
 			ImGui::PushFont(settingsTitleFont);
 
+		const bool fromGame = game_started && !gui_has_held_netplay_session();
 		const std::function<void()> exitSettings = [&]() {
 			applyPendingSettings();
 
-			if (game_started)
+			if (fromGame)
 				gui_setState(GuiState::Commands);
 			else
 				gui_setState(GuiState::Main);
 		};
 
-		const char* backLabel = game_started ? T("Back to Game") : T("Back to library");
+		const char* backLabel = fromGame ? T("Back to Game") : T("Back to library");
 
 		// Split into left navigation rail and right content area
 		renderNavigationRail(exitSettings, backLabel);

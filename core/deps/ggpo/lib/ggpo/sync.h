@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -48,8 +49,12 @@ public:
    void SetFrameDelay(int queue, int delay);
    bool AddLocalInput(int queue, GameInput &input);
    void AddRemoteInput(int queue, GameInput &input);
+   bool GetConfirmedInput(int queue, int frame, GameInput *input) {
+      return _input_queues[queue].GetConfirmedInput(frame, input);
+   }
    int GetConfirmedInputs(void *values, int size, int frame);
-   int SynchronizeInputs(void *values, int size);
+   int SynchronizeInputs(void *values, int size, int *predicted_flags);
+   int GetLastConfirmedFrame() const { return _last_confirmed_frame; }
 
    void CheckSimulation(int timeout);
    void AdjustSimulation(int seek_to);

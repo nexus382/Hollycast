@@ -677,6 +677,7 @@ extern Option<bool> EmulateBBA;
 extern Option<bool> EnableUPnP;
 extern Option<bool> GGPOEnable;
 extern Option<int> GGPODelay;
+extern Option<bool> GGPOAutoDelay;
 extern Option<bool> NetworkStats;
 extern Option<int> GGPOAnalogAxes;
 extern Option<bool> GGPOChat;

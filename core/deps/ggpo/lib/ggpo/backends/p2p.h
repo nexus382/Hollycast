@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -27,10 +28,13 @@ public:
    GGPOErrorCode AddPlayer(GGPOPlayer *player, GGPOPlayerHandle *handle) override;
    GGPOErrorCode AddLocalInput(GGPOPlayerHandle player, void *values, int size) override;
    GGPOErrorCode SyncInput(void *values, int size, int *disconnect_flags) override;
+   GGPOErrorCode SyncInputWithPrediction(void *values, int size, int *predicted_flags) override;
+   int GetLastConfirmedFrame() const override { return _sync.GetLastConfirmedFrame(); }
    GGPOErrorCode IncrementFrame(void) override;
    GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) override;
    GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle) override;
    GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay) override;
+   GGPOErrorCode SetAutoFrameDelay(bool enabled) override;
    GGPOErrorCode SetDisconnectTimeout(int timeout) override;
    GGPOErrorCode SetDisconnectNotifyStart(int timeout) override;
    GGPOErrorCode SendMessage(const void *msg, int len, bool spectators) override;
@@ -39,6 +43,7 @@ public:
    void OnMsg(sockaddr_in &from, UdpMsg *msg, int len) override;
 
 protected:
+   GGPOErrorCode SyncInput(void *values, int size, int *disconnect_flags, int *predicted_flags);
    GGPOErrorCode PlayerHandleToQueue(GGPOPlayerHandle player, int *queue);
    GGPOPlayerHandle QueueToPlayerHandle(int queue) { return (GGPOPlayerHandle)(queue + 1); }
    GGPOPlayerHandle QueueToSpectatorHandle(int queue) { return (GGPOPlayerHandle)(queue + 1000); } /* out of range of the player array, basically */
@@ -67,6 +72,8 @@ protected:
 
    bool                  _synchronizing;
    int                   _num_players;
+   int                   _registered_players = 0;
+   bool                  _auto_frame_delay = false;
    int                   _next_recommended_sleep;
 
    int                   _next_spectator_frame;

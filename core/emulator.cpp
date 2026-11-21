@@ -27,6 +27,7 @@
 #include "reios/reios.h"
 #include "hw/sh4/modules/mmu.h"
 #include "hw/sh4/modules/modules.h"
+#include "hw/sh4/sh4_core.h"
 #include "hw/sh4/sh4_if.h"
 #include "hw/sh4/sh4_mem.h"
 #include "hw/sh4/sh4_sched.h"
@@ -1155,10 +1156,15 @@ void EventManager::broadcastEvent(Event event)
 void Emulator::run()
 {
 	verify(state == Running);
-	startTime = sh4_sched_now64();
-	if (!singleStep && stepRangeTo == 0)
-		getSh4Executor()->Start();
 	try {
+		if (ggpo::reconnectFramePending())
+		{
+			ggpo::nextFrame();
+			return;
+		}
+		startTime = sh4_sched_now64();
+		if (!singleStep && stepRangeTo == 0)
+			getSh4Executor()->Start();
 		runInternal();
 		if (ggpo::active())
 			ggpo::nextFrame();
@@ -1269,6 +1275,17 @@ bool Emulator::checkStatus(bool wait)
 		EventManager::event(Event::Pause);
 		state = Error;
 		throw;
+	}
+}
+
+void Emulator::pollHeldNetplay()
+{
+	if (config::ThreadedRendering)
+		checkStatus();
+	else if (state == Running && ggpo::reconnectFramePending())
+	{
+		run();
+		setDefaultRoundingMode();
 	}
 }
 
