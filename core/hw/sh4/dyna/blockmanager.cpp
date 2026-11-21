@@ -9,6 +9,7 @@
 #include <map>
 #include "blockmanager.h"
 #include "ngen.h"
+#include "profiler/sh4_loop_profiler.h"
 
 #include "hw/sh4/sh4_core.h"
 #include "hw/sh4/sh4_interrupts.h"
@@ -216,6 +217,7 @@ RuntimeBlockInfoPtr bm_GetStaleBlock(void* dynarec_code)
 
 void bm_AddBlock(RuntimeBlockInfo* blk)
 {
+	sh4_loop_register(blk);
 	RuntimeBlockInfoPtr block(blk);
 	if (block->temp_block)
 		all_temp_blocks.insert(block);
@@ -247,6 +249,7 @@ void bm_AddBlock(RuntimeBlockInfo* blk)
 
 void bm_DiscardBlock(RuntimeBlockInfo* block)
 {
+	sh4_loop_retire(block);
 	// Remove from block map
 	auto it = blkmap.find((void*)block->code);
 	verify(it != blkmap.end());
@@ -339,6 +342,7 @@ void bm_ResetCache()
 	for (const auto& it : blkmap)
 	{
 		RuntimeBlockInfoPtr block = it.second;
+		sh4_loop_retire(block.get());
 		block->relink_data = 0;
 		block->pNextBlock = NULL;
 		block->pBranchBlock = NULL;
@@ -378,6 +382,7 @@ void bm_ResetTempCache(bool full)
 	{
 		for (const auto& block : all_temp_blocks)
 		{
+			sh4_loop_retire(block.get());
 			FPCA(block->addr) = ngen_FailedToFindBlock;
 			blkmap.erase((void*)block->code);
 		}
@@ -403,6 +408,7 @@ void bm_Init()
 
 void bm_Term()
 {
+	sh4_loop_finish();
 #ifdef DYNA_OPROF
 	if (oprofHandle) op_close_agent(oprofHandle);
 	
